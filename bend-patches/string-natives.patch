@@ -1,0 +1,1302 @@
+diff --git a/bend2/base.bend b/bend2/base.bend
+index 3304cf8..f2e4c78 100644
+--- a/bend2/base.bend
++++ b/bend2/base.bend
+@@ -1866,6 +1866,38 @@ def String.length(s: String) -> Nat:
+     case SCon{h, t}:
+       1n+String.length(t)
+ 
++# FNV-1a over the code points: a 32-bit hash for tables keyed by Strings
++def String.hash.go(s: String, h: U32) -> U32:
++  match s:
++    case SNil{}:
++      h
++    case SCon{c, t}:
++      String.hash.go(t, U32.mul(U32.xor(h, Char.to_u32(c)), 16777619))
++
++def String.hash(s: String) -> U32:
++  String.hash.go(s, 2166136261)
++
++# the code point of s's char at index i, or 4294967295 past its end
++def String.code_at(s: String, i: Nat) -> U32:
++  match s i:
++    case SNil{} _:
++      4294967295
++    case SCon{Chr{x}, t} 0n:
++      x
++    case SCon{h, t} 1n+p:
++      String.code_at(t, p)
++
++def String.find.go(s: String, +c: Char, +i: Nat, +k: Nat) -> Nat:
++  match s:
++    case SNil{}:
++      k
++    case SCon{h, t}:
++      Bool.pick(Nat, Bool.and(Nat.is_le(i, k), Char.is_eq(h, c)), k, String.find.go(t, c, i, 1n+k))
++
++# the index of the first c in s at or after index i, or s's length
++def String.find(s: String, +c: Char, i: Nat) -> Nat:
++  String.find.go(s, c, i, 0n)
++
+ def String.is_empty(s: String) -> Bool:
+   match s:
+     case SNil{}:
+@@ -1961,6 +1993,10 @@ def String.drop(s: String, n: Nat) -> String:
+     case SCon{h, t} 1n+p:
+       String.drop(t, p)
+ 
++# s's n chars from index i on (fewer where s ends first)
++def String.slice(s: String, i: Nat, n: Nat) -> String:
++  String.take(String.drop(s, i), n)
++
+ def String.get(s: String, n: Nat) -> Maybe<&2, Char>:
+   match s n:
+     case SNil{} _:
+diff --git a/bend2/comp.ts b/bend2/comp.ts
+index f250e87..f49a0a9 100644
+--- a/bend2/comp.ts
++++ b/bend2/comp.ts
+@@ -55,6 +55,7 @@ type File = {
+   book: Bend.Book;
+   js: boolean;
+   bangs: Set<Name>;
++  booked: boolean;
+   sites: Map<Name, number>;
+   hot: Set<Name>;
+   stat: Set<Name>;
+@@ -115,7 +116,7 @@ type Of<K> = Extract<HTerm, { $: K }>;
+ 
+ type Row = [HTerm, number, number, number];
+ 
+-type Intr = { C?: string | string[] | null; JS: string };
++type Intr = { C?: string | string[] | null; JS: string; brw?: boolean[] };
+ 
+ type Dom = [Bend.Quant, Name, HTerm];
+ 
+@@ -251,8 +252,18 @@ const OPERATIONS: Record<string, Intr> = Object.setPrototypeOf({
+     JS: "nat_divmod($0, $1)",
+   },
+   ...tpl_ops("bool_", "or:|:|| xor:^:!==", "(($0) $o ($1))", "($0 $o $1)"),
+-  string_append: { JS: "($0 + $1)" },
+-  string_length: { JS: "[...$0].length" },
++  string_append: { C: "str_append(e, $0, $1)", JS: "($0 + $1)" },
++  string_length: { C: "str_len(e.mem, $0)", JS: "[...$0].length",
++    brw: [true] },
++  string_eq: { C: "str_eq(e.mem, $0, $1)", brw: [true, true] },
++  string_take: { C: "str_take_n(e, $0, $1)", brw: [true, false] },
++  string_drop: { C: "str_drop_n(e, $0, $1)" },
++  string_to_upper: { C: "str_upper(e, $0)" },
++  string_hash: { C: "str_hash(e.mem, $0)", brw: [true] },
++  string_code_at: { C: "str_code_at(e.mem, $0, $1)", brw: [true, false] },
++  string_find: { C: "str_find(e.mem, $0, $1, $2)", brw: [true, false, false] },
++  string_slice: { C: "str_slice(e, $0, $1, $2)", brw: [true, false, false] },
++  nat_show: { C: "nat_show_str(e, $0)" },
+   ...Object.fromEntries(Object.entries({
+     new: "array_new($0, $1)", set: "($0[$1 % $0.length] = $2, $0)",
+     get: "{$: \"Tuple\", fst: $0, snd: $0[$1 % $0.length]}",
+@@ -274,6 +285,10 @@ const OPERATIONS: Record<string, Intr> = Object.setPrototypeOf({
+   }])),
+ }, null);
+ 
++const STR_NATIVES = new Set(("string_append string_length string_eq"
++  + " string_take string_drop string_to_upper string_hash string_code_at"
++  + " string_find string_slice nat_show").split(" "));
++
+ // Optimized
+ // ---------
+ 
+@@ -825,10 +840,18 @@ function quant_live(q: Bend.Quant): boolean {
+ // Intr
+ // ====
+ 
++// A String native (STR_NATIVES) runs on packed Strings, so only a
++// CPU-only program takes it, and only once the book is read: file_book
++// reads its definition, which a bang's program still runs.
+ function intr_of(k: Name, js = false): Intr | undefined {
+   const tld = FL.book.tlds[k];
++  const op = op_name(k);
+   const it = tld?.$ === "Def" && tld.i === undefined && tld.b
+-    ? OPERATIONS[op_name(k)] : undefined;
++    ? OPERATIONS[op] : undefined;
++  if (it !== undefined && STR_NATIVES.has(op)) {
++    return js ? it.JS === undefined ? undefined : { JS: it.JS }
++      : FL.booked && str_pack() ? it : undefined;
++  }
+   return it && (js || it.C !== undefined) ? it : undefined;
+ }
+ 
+@@ -1312,7 +1335,8 @@ function flat_of(k: Name): boolean {
+   return memo(FL.flats, k, () => {
+     const deps = FL.srcs.get(k);
+     FL.flats.set(k, false);
+-    return deps != null && [...deps].every(flat_of);
++    return deps != null
++      && [...deps].every((d) => intr_of(d) !== undefined || flat_of(d));
+   });
+ }
+ 
+@@ -1364,6 +1388,7 @@ function file_new(book: Bend.Book, js: boolean): File {
+     book,
+     js,
+     bangs: new Set(),
++    booked: false,
+     sites: new Map(),
+     hot: new Set(),
+     stat: new Set(),
+@@ -2355,10 +2380,20 @@ function emit_dst(sc: Scope, lay: Lay, k = "v"): Val {
+   return val_new(emit_hold(sc, lay.ks.map(() => "0"), k, lay.ks), lay);
+ }
+ 
++// A native that reads an argument (brw) borrows it: a variable lends its
++// value and loses a use, a value it held last (or a computed argument)
++// sinks after the call, which a local holds.
+ function emit_intr(sc: Scope, it: Intr, m: Spine, ty: HTerm | null): Val {
+   const k = (m.t as Of<"Ref">).k;
+-  const args = emit_each(sc, m.args);
++  if (it.brw !== undefined && typeof it.C === "string") {
++    return emit_intr_brw(sc, it, m, ty);
++  }
+   const op = op_name(k);
++  const app = op === "string_append" ? emit_append(sc, m, ty) : null;
++  if (app !== null) {
++    return app;
++  }
++  const args = emit_each(sc, m.args);
+   if ("array_get array_new array_clone".includes(op)
+     && lay_el(m.all[0]).ks.includes("box")
+     && !(op === "array_new" && facts_packed(m.all[2]))) {
+@@ -2380,6 +2415,133 @@ function emit_intr(sc: Scope, it: Intr, m: Spine, ty: HTerm | null): Val {
+   return val_new([tpl(C, as)], lay.ks.length === 1 ? lay : BOX);
+ }
+ 
++// a byte string as a C string literal
++function str_lit_c(cs: number[]): string {
++  return `"${cs.map((c) => "\\x" + c.toString(16).padStart(2, "0"))
++    .join("")}"`;
++}
++
++// a literal's bytes, if the compiler folds t to a String of chars below 256
++function str_bytes_of(t: HTerm): number[] | null {
++  const cs = str_lit_of(t);
++  return cs !== null && cs.every((c) => c < 256) ? cs : null;
++}
++
++// the chars of a String the compiler folds to a constant, else null
++function str_lit_of(t: HTerm): number[] | null {
++  const cs: number[] = [];
++  let s = term_strip(emit_fold(t) ?? t);
++  while (s.$ === "Ctr" && s.k === "SCon") {
++    const [h, rest] = ctr_flds(s.k, s.x);
++    const c = term_strip(h);
++    const u = c.$ === "Ctr" && c.k === "Chr"
++      ? Bend.u32_from_term(ctr_flds(c.k, c.x)[0]) : null;
++    if (u === null) {
++      return null;
++    }
++    cs.push(u);
++    s = term_strip(rest);
++  }
++  return s.$ === "Ctr" && s.k === "SNil" ? cs : null;
++}
++
++// a ++ b with a literal a of bytes copies them into b's room, the compiler
++// giving them (str_append_lit); Nat.show(n) ++ b writes n's digits there
++// (nat_show_into): no chunk for a, and no walk over its cells
++function emit_append(sc: Scope, m: Spine, ty: HTerm | null): Val | null {
++  const k = (m.t as Of<"Ref">).k;
++  const lay = lay_of(ty);
++  const out = lay.ks.length === 1 ? lay : BOX;
++  const cs = str_bytes_of(m.args[0]);
++  const x = term_strip(m.args[0]);
++  const show = x.$ === "App" ? term_spine(x) : null;
++  const n = show !== null && show.t.$ === "Ref"
++    && op_name(show.t.k) === "nat_show" && show.args.length === 1
++    && intr_of(show.t.k) !== undefined ? show : null;
++  const own = (xs: HTerm[], lays: Lay[]) => emit_each(sc, xs).map((v, i) => {
++    const w = val_own(sc, val_to(sc, v, lays[i]))[0];
++    return tpl_deep(w) ? emit_alias(sc, w, "a") : w;
++  });
++  if (cs !== null && cs.length > 0) {
++    const ws = own(m.args, fun_of(k).lays);
++    return val_new([`str_append_lit(e, ${ws[0]}, ${str_lit_c(cs)}, `
++      + `${cs.length}, ${ws[1]})`], out);
++  }
++  if (n !== null) {
++    const ws = own([n.args[0], m.args[1]],
++      [fun_of((n.t as Of<"Ref">).k).lays[0], fun_of(k).lays[1]]);
++    return val_new([`nat_show_into(e, ${ws[0]}, ${ws[1]})`], out);
++  }
++  return null;
++}
++
++// String.eq against a literal compares a chunk's run with the literal's
++// bytes, the compiler giving them (str_eq_lit)
++function intr_lit(k: Name, it: Intr, m: Spine): string {
++  if (op_name(k) !== "string_eq") {
++    return it.C as string;
++  }
++  const [a, b] = m.args.map(str_bytes_of);
++  const [x, l, y] = b !== null ? ["$0", b, "$1"] : ["$1", a, "$0"];
++  return l === null ? it.C as string : l.length >= 1 && l.length <= 6
++    ? `str_eq_imm(e.mem, ${x}, ${str_imm_word(l)}ull, ${y})`
++    : `str_eq_lit(e.mem, ${x}, ${str_lit_c(l)}, ${l.length}, ${y})`;
++}
++
++// the immediate String (str_imm) of 1 to 6 bytes: bit 55, the length at
++// bit 48, the bytes from bit 0 up
++function str_imm_word(cs: number[]): string {
++  const w = cs.reduce((acc, c, i) => acc | (BigInt(c) << BigInt(8 * i)),
++    (1n << 55n) | (BigInt(cs.length) << 48n));
++  return "0x" + w.toString(16);
++}
++
++function emit_intr_brw(sc: Scope, it: Intr, m: Spine, ty: HTerm | null): Val {
++  const lays = fun_of((m.t as Of<"Ref">).k).lays;
++  const C = intr_lit((m.t as Of<"Ref">).k, it, m);
++  const xs = m.args.map(term_strip);
++  const vars = xs.filter((x) => x.$ === "Var");
++  const sinks: Val[] = [];
++  const vs: (string[] | null)[] = m.args.map((a, i) => {
++    if (xs[i].$ === "Var") {
++      return null;
++    }
++    const v = val_to(sc, emit_expr({ ...sc, rest: [...xs.slice(i + 1)
++      .filter((x) => x.$ !== "Var"), ...vars, ...sc.rest] }, a, null,
++    lays[i]), lays[i]);
++    if (it.brw![i]) {
++      const h = val_hold(sc, v, "a");
++      sinks.push(h);
++      return h.ws;
++    }
++    return val_own(sc, v);
++  });
++  xs.forEach((x, i) => {
++    if (vs[i] !== null) {
++      return;
++    }
++    if (!it.brw![i]) {
++      vs[i] = val_own(sc, val_to(sc, bind_pop(sc, x), lays[i]));
++      return;
++    }
++    const p = probe_of(x);
++    const bd = sc.uses.get(p)!;
++    if (bd.n <= 1) {
++      sc.uses.delete(p);
++      sinks.push(bd.val);
++    } else {
++      sc.uses.set(p, { ...bd, n: bd.n - 1 });
++    }
++    vs[i] = val_to(sc, bd.val, lays[i]).ws;
++  });
++  const lay = lay_of(ty);
++  const out = lay.ks.length === 1 ? lay : BOX;
++  const as = vs.map((ws) => emit_alias(sc, ws![0], "a"));
++  const r = emit_hold(sc, [tpl(C, as)], "n", out.ks);
++  sinks.forEach((v) => val_sink(sc, v));
++  return val_new(r, out);
++}
++
+ function emit_clo(sc: Scope, x: HTerm, ty: HTerm | null): Val {
+   const u = term_uses(x);
+   const live = [...sc.uses].filter(([p]) => term_use(u, p) > 0)
+@@ -2763,7 +2925,7 @@ function emit_row(sc: Scope, t: HTerm, ty: HTerm | null): string | null {
+   }
+   const m = term_spine(s);
+   const it = m.t.$ === "Ref" ? intr_of(m.t.k) : undefined;
+-  if (it === undefined || TAB_BAD.test(it.JS)) {
++  if (it === undefined || it.JS === undefined || TAB_BAD.test(it.JS)) {
+     return null;
+   }
+   const xs = m.args.map((a) => emit_row(sc, a, null));
+@@ -2917,6 +3079,8 @@ export function compile_book(book: Bend.Book): string {
+   const fams = (show ?? []).flatMap((c) =>
+     typeof c === "string" ? [Bend.book_fam(FL.book, c)] : []);
+   file_book(["main", ...RUNTIME_ADTS, ...fams]);
++  FL.booked = true;
++  memo_gc();
+   const facts = () => FL.own.size + FL.hot.size + FL.stat.size
+     + FL.keeps.size;
+   let was: number;
+@@ -4158,6 +4322,17 @@ FAR void term_drop(Env e, Term t) {
+ }
+ 
+ INLINE void term_sink(Env e, Term t) {
++#if STR_PACK && !DEVICE
++  if ((t >> 40) == ((TAG_CTR << 16) | STR_CID)) {
++    u64  n = term_loc(t);
++    Term b = e.mem[n];
++    if ((b >> 56) == TAG_BUF && term_tag(e.mem[n + 1]) == TAG_PAK) {
++      heap_free(e, buf_wcls(blk_cls(b)), term_loc(b));
++      heap_free(e, cls_fit(2), n);
++      return;
++    }
++  }
++#endif
+   if (!term_triv(t)) {
+     term_drop(e, t);
+   }
+@@ -4295,7 +4470,11 @@ INLINE Term term_word(Env e, Term w) {
+ // str_cons writes below pos in a chunk it solely owns, else starts a chunk
+ // before the tail: twice the size of a full chunk it solely owned. A
+ // borrowed match reads views (str_vhead, str_vtail): pos << 40 | chunk, a
+-// raw word (tag 0, so trivial) that no owned value ever holds.
++// raw word (tag 0, so trivial) that no owned value ever holds. A String of
++// 1 to 6 bytes may also be one word, an immediate (str_imm): tag 0 with
++// bit 55 set (no view has it: a pos is below 2048), its length in bits
++// 48..50 and its bytes from bit 0 up. It is trivial, so an owned one is
++// copied and dropped for free, and it is always a String's last run.
+ 
+ #if STR_PACK && !DEVICE
+ 
+@@ -4326,6 +4505,37 @@ INLINE u8* str_mem(u64* H, Term b) {
+   return (u8*)(H + term_peek(H, b));
+ }
+ 
++#define STR_IMM_MAX 6
++#define STR_IMM_BYTES ((1ull << 48) - 1)
++
++INLINE bool str_imm(Term t) {
++  return (t >> 55) == 1;
++}
++
++INLINE u32 str_imm_len(Term t) {
++  return (u32)(t >> 48) & 7;
++}
++
++// the immediate of n bytes (1 to 6) whose word holds them from bit 0 up
++INLINE Term str_imm_of(u64 w, u32 n) {
++  return (1ull << 55) | ((u64)n << 48) | (w & STR_IMM_BYTES);
++}
++
++INLINE Term str_imm_make(const u8* p, u32 n) {
++  u64 w = 0;
++  for (u32 i = 0; i < n; i += 1) {
++    w |= (u64)p[i] << (8 * i);
++  }
++  return str_imm_of(w, n);
++}
++
++// an immediate without its first k bytes (k below its length), or SNil
++INLINE Term str_imm_drop(Term t, u32 k) {
++  u32 n = str_imm_len(t);
++  return k < n ? str_imm_of((t & STR_IMM_BYTES) >> (8 * k), n - k)
++    : term_pak(CID(SNil), 0);
++}
++
+ // A chunk of class c before t, its bytes from pos up left to write.
+ OUTLINE Term str_chunk(Env e, u32 c, u32 pos, Term t) {
+   u64 l = heap_alloc(e, buf_wcls(c));
+@@ -4342,6 +4552,23 @@ OUTLINE Term str_cons_new(Env e, u32 h, Term t) {
+     e.mem[n + 1] = t;
+     return term_ctr(CID(SCon), n);
+   }
++  if (str_nil(t)) {
++    return str_imm_of(h, 1);
++  }
++  if (str_imm(t)) {
++    u32 n = str_imm_len(t);
++    u64 w = (t & STR_IMM_BYTES) << 8 | h;
++    if (n < STR_IMM_MAX) {
++      return str_imm_of(w, n + 1);
++    }
++    u32  p  = (4u << STR_MIN) - (n + 1);
++    Term ch = str_chunk(e, STR_MIN, p, term_pak(CID(SNil), 0));
++    u8*  d  = str_mem(e.mem, e.mem[term_loc(ch)]) + p;
++    for (u32 i = 0; i <= n; i += 1) {
++      d[i] = (u8)(w >> (8 * i));
++    }
++    return ch;
++  }
+   u32 c = STR_MIN;
+   if (str_buf(t) && !term_rfc(t) && !term_rfc(e.mem[term_loc(t)])) {
+     c = blk_cls(e.mem[term_loc(t)]) + 1;
+@@ -4378,6 +4605,9 @@ typedef struct {
+ } StrHT;
+ 
+ OUTLINE StrHT str_take_slow(Env e, Term t) {
++  if (str_imm(t)) {
++    return (StrHT){ str_imm_drop(t, 1), (u8)t };
++  }
+   Term f[2];
+   u64  n = ctr_take(e, t, 2, f);
+   if (!str_buf(t)) {
+@@ -4425,6 +4655,9 @@ INLINE u64 str_node(u64* H, Term t) {
+ }
+ 
+ INLINE u32 str_vhead(u64* H, Term t) {
++  if (str_imm(t)) {
++    return (u8)t;
++  }
+   u64  n = str_node(H, t);
+   Term b = H[n];
+   if (term_tag(t) != 0 && !str_buf(t)) {
+@@ -4434,6 +4667,9 @@ INLINE u32 str_vhead(u64* H, Term t) {
+ }
+ 
+ INLINE Term str_vtail(u64* H, Term t) {
++  if (str_imm(t)) {
++    return str_imm_drop(t, 1);
++  }
+   u64 n = str_node(H, t);
+   if (term_tag(t) != 0 && !str_buf(t)) {
+     return H[n + 1];
+@@ -4443,6 +4679,732 @@ INLINE Term str_vtail(u64* H, Term t) {
+   return p < str_cap(b) ? term_make(0, p, n) : H[n + 1];
+ }
+ 
++// Base's String functions, native (comp.ts STR_NATIVES): each reads a
++// String a run at a time (a chunk's bytes, or a cell's one char) where its
++// definition reads a char at a time, answers what the definition answers,
++// and consumes its arguments, as a call to the definition does. A copy
++// fills full chunks but its first, which keeps room for str_cons to write
++// below it; a String with a char past 255 is copied through str_cons.
++
++typedef struct {
++  const u8* p;
++  Term      t;
++  u32       n;
++  u32       c;
++  u64       w;
++} StrRun;
++
++// the run at t, false at SNil: its bytes p[0..n), or a cell's char c (p
++// NULL, n 1); t the rest. An immediate's bytes are copied to w, so p is
++// good until the next str_run into r.
++INLINE bool str_run(u64* H, Term t, StrRun* r) {
++  if (str_nil(t)) {
++    return false;
++  }
++  if (str_imm(t)) {
++    r->w = t & STR_IMM_BYTES;
++    r->p = (const u8*)&r->w;
++    r->n = str_imm_len(t);
++    r->t = term_pak(CID(SNil), 0);
++    return true;
++  }
++  u64 n = str_node(H, t);
++  if (term_tag(t) == 0 || str_buf(t)) {
++    Term b = H[n];
++    u32  p = term_tag(t) == 0 ? (u32)term_aux(t) : str_pos(b);
++    r->p = str_mem(H, b) + p;
++    r->n = str_cap(b) - p;
++  } else {
++    r->p = NULL;
++    r->n = 1;
++    r->c = (u32)H[n];
++  }
++  r->t = H[n + 1];
++  return true;
++}
++
++INLINE u32 str_cls_for(u64 m) {
++  u32 c = STR_MIN;
++  while ((4ull << c) < m) {
++    c += 1;
++  }
++  return c;
++}
++
++// how many of s's first max chars there are; *wide when one passes 255
++static u64 str_scan(u64* H, Term s, u64 max, u32* wide) {
++  u64    len = 0;
++  StrRun r;
++  for (Term t = s; len < max && str_run(H, t, &r); t = r.t) {
++    *wide |= r.p == NULL && r.c > 255;
++    len += r.n < max - len ? r.n : max - len;
++  }
++  return len;
++}
++
++// s's first len chars, all below 256, to d
++static void str_put(u64* H, Term s, u8* d, u64 len) {
++  StrRun r;
++  for (Term t = s; len > 0 && str_run(H, t, &r); t = r.t) {
++    u32 w = r.n < len ? r.n : (u32)len;
++    if (r.p != NULL) {
++      memcpy(d, r.p, w);
++    } else {
++      *d = (u8)r.c;
++    }
++    d += w;
++    len -= w;
++  }
++}
++
++// s's last node, when no one shares s's heap nodes down to its SNil; else 0
++static u64 str_sole_last(u64* H, Term s) {
++  u64 last = 0;
++  for (Term t = s; !str_nil(t); t = H[last + 1]) {
++    if (str_imm(t) || term_rfc(t) || term_loc(t) < HEAP_OFF) {
++      return 0;
++    }
++    last = term_loc(t);
++  }
++  return last;
++}
++
++// s's first len chars, all below 256, before tail; up maps a..z to A..Z.
++// The first chunk keeps room bytes below them for str_prepend to fill.
++static Term str_copy(Env e, Term s, u64 len, Term tail, u32 up, u32 room) {
++  if (len == 0) {
++    return tail;
++  }
++  if (len <= STR_IMM_MAX && room == 0 && str_nil(tail)) {
++    u8 b[STR_IMM_MAX];
++    str_put(e.mem, s, b, len);
++    for (u32 q = 0; up && q < len; q += 1) {
++      b[q] -= (u8)((b[q] >= 97 && b[q] <= 122) << 5);
++    }
++    return str_imm_make(b, (u32)len);
++  }
++  u64*   H    = e.mem;
++  u32    full = 4u << STR_MAX;
++  u64    nch  = (len + full - 1) / full;
++  Term   out  = tail;
++  u64    prev = 0;
++  u32    i    = 0;
++  StrRun r;
++  str_run(H, s, &r);
++  for (u64 k = 0; k < nch; k += 1) {
++    u32  m  = (u32)(k == 0 ? len - (nch - 1) * full : full);
++    u32  c  = str_cls_for(k == 0 && m + room < full ? m + room : m);
++    u32  at = (4u << c) - m;
++    Term ch = str_chunk(e, c, at, tail);
++    u64  nd = term_loc(ch);
++    u8*  d  = str_mem(H, H[nd]) + at;
++    for (u32 j = 0; j < m;) {
++      u32 w = r.n - i < m - j ? r.n - i : m - j;
++      if (r.p != NULL) {
++        memcpy(d + j, r.p + i, w);
++      } else {
++        d[j] = (u8)r.c;
++      }
++      for (u32 q = j; up && q < j + w; q += 1) {
++        d[q] -= (u8)((d[q] >= 97 && d[q] <= 122) << 5);
++      }
++      j += w;
++      i += w;
++      if (i == r.n) {
++        str_run(H, r.t, &r);
++        i = 0;
++      }
++    }
++    if (prev != 0) {
++      H[prev + 1] = ch;
++    } else {
++      out = ch;
++    }
++    prev = nd;
++  }
++  return out;
++}
++
++// s's first len chars before tail, any char
++static Term str_copy_wide(Env e, Term s, u64 len, Term tail, u32 up) {
++  u32    one[64];
++  u32*   cs = len <= 64 ? one : (u32*)malloc(len * sizeof(u32));
++  u64    k  = 0;
++  StrRun r;
++  if (cs == NULL) {
++    err_post(e.mem, ERR_HEAP);
++    return tail;
++  }
++  for (Term t = s; k < len && str_run(e.mem, t, &r); t = r.t) {
++    for (u32 j = 0; j < r.n && k < len; j += 1) {
++      u32 c = r.p != NULL ? r.p[j] : r.c;
++      cs[k++] = up && c >= 97 && c <= 122 ? c - 32 : c;
++    }
++  }
++  while (k > 0) {
++    k -= 1;
++    tail = str_cons(e, cs[k], tail);
++  }
++  if (cs != one) {
++    free(cs);
++  }
++  return tail;
++}
++
++INLINE Term str_copy_any(Env e, Term s, u64 max, Term tail, u32 up) {
++  u32 wide = 0;
++  u64 len  = str_scan(e.mem, s, max, &wide);
++  return wide ? str_copy_wide(e, s, len, tail, up)
++    : str_copy(e, s, len, tail, up, 0);
++}
++
++// the room below a sole chunk b's bytes (str_cons writes there); 0 for
++// anything else
++INLINE u32 str_room(u64* H, Term b) {
++  if ((b >> 40) != STR_KEY) {
++    return 0;
++  }
++  Term bb = H[term_loc(b)];
++  return (bb >> 56) == TAG_BUF ? str_pos(bb) : 0;
++}
++
++// moves a sole chunk b's start len bytes down into its room; where they go
++INLINE u8* str_room_take(u64* H, Term b, u32 len) {
++  u64  n  = term_loc(b);
++  Term bb = H[n];
++  u32  p  = str_pos(bb) - len;
++  H[n] = str_at(bb, p);
++  return str_mem(H, bb) + p;
++}
++
++// the room a chunk that str_prepend starts keeps: what follows a String
++// being built from its end (a reply, a batch of replies) goes there
++#define STR_ROOM 256
++
++// s's chars before b, which s gives up: in the room of a sole chunk b if
++// they fit, as str_cons writes one, else in a new chunk
++static Term str_prepend(Env e, Term s, Term b) {
++  u64* H    = e.mem;
++  u32  wide = 0;
++  u64  len  = str_scan(H, s, ~0ull, &wide);
++  Term out  = 0;
++  if (!wide && (b >> 40) == STR_KEY) {
++    u64  n  = term_loc(b);
++    Term bb = H[n];
++    u32  p  = str_pos(bb);
++    if ((bb >> 56) == TAG_BUF && len <= p) {
++      str_put(H, s, (u8*)(H + term_loc(bb)) + p - len, len);
++      H[n] = str_at(bb, p - (u32)len);
++      out  = b;
++    }
++  }
++  if (out == 0) {
++    out = wide ? str_copy_wide(e, s, len, b, 0)
++      : str_copy(e, s, len, b, 0, STR_ROOM);
++  }
++  term_sink(e, s);
++  return out;
++}
++
++// a's nodes no one shares (on the heap, down from a) keep their bytes and
++// take b, after what follows them (a shared or static rest) went before it
++FAR Term str_append_far(Env e, Term a, Term b) {
++  u64* H    = e.mem;
++  u64  last = 0;
++  Term t    = a;
++  while (!str_nil(t) && !str_imm(t) && !term_rfc(t)
++    && term_loc(t) >= HEAP_OFF) {
++    last = term_loc(t);
++    t    = H[last + 1];
++  }
++  if (!str_nil(t)) {
++    b = str_prepend(e, t, b);
++  }
++  if (last == 0) {
++    return b;
++  }
++  H[last + 1] = b;
++  return a;
++}
++
++// n bytes from s to d, apart: up to 16 as two overlapping words or
++// halves, not a call
++INLINE void str_mov(u8* d, const u8* s, u64 n) {
++  if (n > 16) {
++    memcpy(d, s, n);
++  } else if (n >= 8) {
++    u64 x;
++    u64 y;
++    memcpy(&x, s, 8);
++    memcpy(&y, s + n - 8, 8);
++    memcpy(d, &x, 8);
++    memcpy(d + n - 8, &y, 8);
++  } else if (n >= 4) {
++    u32 x;
++    u32 y;
++    memcpy(&x, s, 4);
++    memcpy(&y, s + n - 4, 4);
++    memcpy(d, &x, 4);
++    memcpy(d + n - 4, &y, 4);
++  } else if (n > 0) {
++    u8 x = s[0];
++    u8 y = s[n >> 1];
++    u8 z = s[n - 1];
++    d[0]      = x;
++    d[n >> 1] = y;
++    d[n - 1]  = z;
++  }
++}
++
++// an a that fits in b's room goes there, and b stays one chunk: a chunk's
++// one run or a few cells (a literal), the cases a reply is built of
++INLINE Term str_append(Env e, Term a, Term b) {
++  u64* H    = e.mem;
++  u32  room = str_room(H, b);
++  if (room != 0 && !str_nil(a)) {
++    u8*    d = NULL;
++    StrRun r;
++    if (term_tag(a) == 0 || str_buf(a)) {
++      str_run(H, a, &r);
++      if (str_nil(r.t) && r.n <= room) {
++        d = str_room_take(H, b, r.n);
++        str_mov(d, r.p, r.n);
++      }
++    } else {
++      u8   tmp[16];
++      u32  len = 0;
++      Term t   = a;
++      while (len < 16 && !str_nil(t) && term_tag(t) != 0 && !str_buf(t)) {
++        u64 n = str_node(H, t);
++        if (H[n] > 255) {
++          break;
++        }
++        tmp[len++] = (u8)H[n];
++        t = H[n + 1];
++      }
++      if (str_nil(t) && len <= room) {
++        d = str_room_take(H, b, len);
++        str_mov(d, tmp, len);
++      }
++    }
++    if (d != NULL) {
++      term_sink(e, a);
++      return b;
++    }
++  }
++  return str_append_far(e, a, b);
++}
++
++// a ++ b for a literal a, whose bytes the compiler gives as s[0..n): in
++// b's room when they fit, else as str_append_far takes a static String
++INLINE Term str_append_lit(Env e, Term a, const char* s, u32 n, Term b) {
++  if (str_room(e.mem, b) >= n) {
++    memcpy(str_room_take(e.mem, b, n), s, n);
++    return b;
++  }
++  return str_append_far(e, a, b);
++}
++
++// a borrowed s (a view too), as the readers below; past NAT_IMM the
++// definition fail-stops building the successor
++FAR u64 str_len_far(u64* H, Term s) {
++  u32 wide = 0;
++  u64 len  = str_scan(H, s, ~0ull, &wide);
++  if (len > NAT_IMM) {
++    err_post(H, ERR_NATS);
++    return NAT_IMM;
++  }
++  return len;
++}
++
++// one chunk (or a view into one) is its run's length
++INLINE u64 str_len(u64* H, Term s) {
++  if (str_imm(s)) {
++    return str_imm_len(s);
++  }
++  if (!str_nil(s) && (term_tag(s) == 0 || str_buf(s))) {
++    u64 n = str_node(H, s);
++    if (str_nil(H[n + 1])) {
++      Term b = H[n];
++      return str_cap(b) - (term_tag(s) == 0 ? (u32)term_aux(s) : str_pos(b));
++    }
++  }
++  return str_len_far(H, s);
++}
++
++FAR u64 str_eq_far(u64* H, Term a, Term b) {
++  StrRun x;
++  StrRun y;
++  u32    i  = 0;
++  u32    j  = 0;
++  bool   eq = true;
++  bool   hx = str_run(H, a, &x);
++  bool   hy = str_run(H, b, &y);
++  while (eq && hx && hy) {
++    if (x.p != NULL && y.p != NULL) {
++      u32 w = x.n - i < y.n - j ? x.n - i : y.n - j;
++      eq = memcmp(x.p + i, y.p + j, w) == 0;
++      i += w;
++      j += w;
++    } else {
++      eq = (x.p != NULL ? x.p[i] : x.c) == (y.p != NULL ? y.p[j] : y.c);
++      i += 1;
++      j += 1;
++    }
++    if (i == x.n) {
++      hx = str_run(H, x.t, &x);
++      i  = 0;
++    }
++    if (j == y.n) {
++      hy = str_run(H, y.t, &y);
++      j  = 0;
++    }
++  }
++  return eq && !hx && !hy;
++}
++
++// a borrowed s's bytes when they are one run: an immediate's (copied to
++// *w), or one chunk's or a view's into one with nothing after it; else NULL
++INLINE const u8* str_one_run(u64* H, Term s, u64* w, u32* n) {
++  if (str_imm(s)) {
++    *w = s & STR_IMM_BYTES;
++    *n = str_imm_len(s);
++    return (const u8*)w;
++  }
++  if (!str_nil(s) && (term_tag(s) == 0 || str_buf(s))) {
++    u64 nd = str_node(H, s);
++    if (str_nil(H[nd + 1])) {
++      Term b = H[nd];
++      u32  p = term_tag(s) == 0 ? (u32)term_aux(s) : str_pos(b);
++      *n = str_cap(b) - p;
++      return str_mem(H, b) + p;
++    }
++  }
++  return NULL;
++}
++
++// two borrowed Strings of one run each (a key against a stored key) are
++// one compare of lengths and bytes
++INLINE u64 str_eq(u64* H, Term a, Term b) {
++  u64       wa;
++  u64       wb;
++  u32       m;
++  u32       n;
++  const u8* p = str_one_run(H, a, &wa, &m);
++  const u8* q = p == NULL ? NULL : str_one_run(H, b, &wb, &n);
++  if (q != NULL) {
++    return m == n && memcmp(p, q, m) == 0;
++  }
++  return str_eq_far(H, a, b);
++}
++
++// a borrowed s (a view too) against a literal lt, whose bytes the compiler
++// gives as l[0..n): one chunk's run is compared directly (inlined, so the
++// compare of n bytes is a few loads)
++static inline __attribute__((always_inline))
++u64 str_eq_lit(u64* H, Term s, const char* l, u32 n, Term lt) {
++  if (str_imm(s)) {
++    u64 w = s & STR_IMM_BYTES;
++    return str_imm_len(s) == n && memcmp(&w, l, n) == 0;
++  }
++  if (!str_nil(s) && (term_tag(s) == 0 || str_buf(s))) {
++    u64 nd = str_node(H, s);
++    if (str_nil(H[nd + 1])) {
++      Term b = H[nd];
++      u32  p = term_tag(s) == 0 ? (u32)term_aux(s) : str_pos(b);
++      return str_cap(b) - p == n && memcmp(str_mem(H, b) + p, l, n) == 0;
++    }
++  }
++  return str_eq(H, s, lt);
++}
++
++// against a literal of at most 6 bytes, which the compiler gives as the
++// immediate w it would be: an immediate s is equal to it if it is w
++INLINE u64 str_eq_imm(u64* H, Term s, Term w, Term lt) {
++  return str_imm(s) ? s == w : str_eq(H, s, lt);
++}
++
++FAR Term str_take_n(Env e, Term s, u64 n) {
++  StrRun r;
++  if (n > 0 && n <= STR_IMM_MAX && str_run(e.mem, s, &r) && r.p != NULL
++    && r.n >= n) {
++    return str_imm_make(r.p, (u32)n);
++  }
++  if (n > 0 && str_run(e.mem, s, &r) && r.p != NULL && r.n >= n) {
++    u32  c  = str_cls_for(n);
++    u32  at = (4u << c) - (u32)n;
++    Term ch = str_chunk(e, c, at, term_pak(CID(SNil), 0));
++    str_mov(str_mem(e.mem, e.mem[term_loc(ch)]) + at, r.p, n);
++    return ch;
++  }
++  return str_copy_any(e, s, n, term_pak(CID(SNil), 0), 0);
++}
++
++// as str_take_slow takes a char: a sole owner's nodes go to the free list,
++// a co-owner's chunk is taken as ctr_take does and pointed past n
++FAR Term str_drop_n(Env e, Term s, u64 n) {
++  Term t = s;
++  while (n > 0 && !str_nil(t)) {
++    if (str_imm(t)) {
++      return n < str_imm_len(t) ? str_imm_drop(t, (u32)n)
++        : term_pak(CID(SNil), 0);
++    }
++    Term f[2];
++    bool buf = str_buf(t);
++    u64  nd  = ctr_take(e, t, 2, f);
++    if (buf) {
++      Term b   = f[0];
++      u32  p   = str_pos(b);
++      u64  len = str_cap(b) - p;
++      if (n < len) {
++        nd = nd ? nd : heap_alloc(e, 1);
++        e.mem[nd]     = str_at(b, p + (u32)n);
++        e.mem[nd + 1] = f[1];
++        return term_ctr(STR_CID, nd);
++      }
++      n -= len;
++      if (term_rfc(b)) {
++        term_drop(e, b);
++      } else {
++        heap_free(e, buf_wcls(blk_cls(b)), term_loc(b));
++      }
++    } else {
++      n -= 1;
++    }
++    spare_free(e, cls_fit(2), nd);
++    t = f[1];
++  }
++  return t;
++}
++
++// a sole s's bytes and cells change in place
++FAR Term str_upper_far(Env e, Term s) {
++  u64* H    = e.mem;
++  bool sole = str_sole_last(H, s) != 0;
++  for (Term t = s; sole && !str_nil(t); t = H[term_loc(t) + 1]) {
++    sole = !str_buf(t) || (H[term_loc(t)] >> 56) == TAG_BUF;
++  }
++  if (!sole) {
++    Term out = str_copy_any(e, s, ~0ull, term_pak(CID(SNil), 0), 1);
++    term_sink(e, s);
++    return out;
++  }
++  StrRun r;
++  for (Term t = s; str_run(H, t, &r); t = r.t) {
++    u64 n = term_loc(t);
++    if (r.p == NULL) {
++      H[n] -= (H[n] >= 97 && H[n] <= 122) << 5;
++    }
++    for (u32 j = 0; r.p != NULL && j < r.n; j += 1) {
++      u8* q = (u8*)r.p + j;
++      *q -= (u8)((*q >= 97 && *q <= 122) << 5);
++    }
++  }
++  return s;
++}
++
++// the code point at index i of a borrowed s (a view too), 2^32-1 past its
++// end: one chunk's byte directly, else run by run
++FAR u64 str_code_at_far(u64* H, Term s, u64 i) {
++  StrRun r;
++  for (Term t = s; str_run(H, t, &r); t = r.t) {
++    if (i < r.n) {
++      return r.p != NULL ? r.p[i] : r.c;
++    }
++    i -= r.n;
++  }
++  return 4294967295u;
++}
++
++// a sole chunk with its own buffer: its bytes at H[buf][pos..cap), or NULL
++INLINE const u8* str_sole_run(u64* H, Term s, u32* n) {
++  if ((s >> 40) == STR_KEY) {
++    Term b = H[term_loc(s)];
++    if ((b >> 56) == TAG_BUF) {
++      u32 p = str_pos(b);
++      *n = str_cap(b) - p;
++      return (const u8*)(H + term_loc(b)) + p;
++    }
++  }
++  return NULL;
++}
++
++// a sole chunk with its own buffer, and nothing after it, in place; an
++// immediate is a new one
++INLINE Term str_upper(Env e, Term s) {
++  if (str_imm(s)) {
++    u64 w = s;
++    for (u32 i = 0; i < str_imm_len(s); i += 1) {
++      u32 c = (u8)(s >> (8 * i));
++      w -= (u64)((c - 97u < 26u) << 5) << (8 * i);
++    }
++    return w;
++  }
++  u32 n;
++  u8* q = (u8*)str_sole_run(e.mem, s, &n);
++  if (q == NULL || !str_nil(e.mem[term_loc(s) + 1])) {
++    return str_upper_far(e, s);
++  }
++  for (u32 j = 0; j < n; j += 1) {
++    q[j] -= (u8)(((u32)q[j] - 97u < 26u) << 5);
++  }
++  return s;
++}
++
++INLINE u64 str_code_at(u64* H, Term s, u64 i) {
++  u32       n;
++  const u8* q = str_sole_run(H, s, &n);
++  if (q != NULL && i < n && str_nil(H[term_loc(s) + 1])) {
++    return q[i];
++  }
++  return str_code_at_far(H, s, i);
++}
++
++// the index of the first c at or after index i of a borrowed s, or its
++// length: memchr a run at a time
++FAR u64 str_find_far(u64* H, Term s, u64 c, u64 i) {
++  u64    k = 0;
++  StrRun r;
++  for (Term t = s; str_run(H, t, &r); t = r.t) {
++    if (k + r.n > i) {
++      u64 at = i > k ? i - k : 0;
++      if (r.p == NULL) {
++        if (r.c == c) {
++          return k;
++        }
++      } else if (c < 256) {
++        const u8* q = memchr(r.p + at, (int)c, r.n - at);
++        if (q != NULL) {
++          return k + (u64)(q - r.p);
++        }
++      }
++    }
++    k += r.n;
++  }
++  return k;
++}
++
++// the n chars from index i of a borrowed s, copied: one run's bytes
++// directly, else from a view of the run where they start
++FAR Term str_slice_far(Env e, Term s, u64 i, u64 n) {
++  u64*   H = e.mem;
++  StrRun r;
++  for (Term t = s; n > 0 && str_run(H, t, &r); t = r.t) {
++    if (i >= r.n) {
++      i -= r.n;
++      continue;
++    }
++    if (r.p != NULL && r.n - i >= n && n <= STR_IMM_MAX) {
++      return str_imm_make(r.p + i, (u32)n);
++    }
++    if (r.p != NULL && r.n - i >= n) {
++      u32  c  = str_cls_for(n);
++      u32  at = (4u << c) - (u32)n;
++      Term ch = str_chunk(e, c, at, term_pak(CID(SNil), 0));
++      memcpy(str_mem(H, H[term_loc(ch)]) + at, r.p + i, n);
++      return ch;
++    }
++    Term v = t;
++    if (str_imm(t)) {
++      v = str_imm_drop(t, (u32)i);
++    } else if (r.p != NULL) {
++      u64 nd = str_node(H, t);
++      u32 p0 = term_tag(t) == 0 ? (u32)term_aux(t) : str_pos(H[nd]);
++      v      = term_make(0, p0 + (u32)i, nd);
++    }
++    return str_copy_any(e, v, n, term_pak(CID(SNil), 0), 0);
++  }
++  return term_pak(CID(SNil), 0);
++}
++
++INLINE u64 str_find(u64* H, Term s, u64 c, u64 i) {
++  u32       n;
++  const u8* q = str_sole_run(H, s, &n);
++  if (q != NULL && c < 256 && str_nil(H[term_loc(s) + 1])) {
++    const u8* f = i < n ? memchr(q + i, (int)c, n - i) : NULL;
++    return f != NULL ? (u64)(f - q) : n;
++  }
++  return str_find_far(H, s, c, i);
++}
++
++INLINE Term str_slice(Env e, Term s, u64 i, u64 n) {
++  u32       m;
++  const u8* q = str_sole_run(e.mem, s, &m);
++  if (q != NULL && n > 0 && i < m && n <= m - i && n <= STR_IMM_MAX) {
++    return str_imm_make(q + i, (u32)n);
++  }
++  if (q != NULL && n > 0 && i < m && n <= m - i) {
++    u32  c  = str_cls_for(n);
++    u32  at = (4u << c) - (u32)n;
++    Term ch = str_chunk(e, c, at, term_pak(CID(SNil), 0));
++    str_mov(str_mem(e.mem, e.mem[term_loc(ch)]) + at, q + i, n);
++    return ch;
++  }
++  return str_slice_far(e, s, i, n);
++}
++
++FAR u64 str_hash(u64* H, Term s) {
++  u32    h = 2166136261u;
++  StrRun r;
++  for (Term t = s; str_run(H, t, &r); t = r.t) {
++    if (r.p == NULL) {
++      h = (h ^ r.c) * 16777619u;
++    }
++    for (u32 j = 0; r.p != NULL && j < r.n; j += 1) {
++      h = (h ^ r.p[j]) * 16777619u;
++    }
++  }
++  return h;
++}
++
++// past NAT_IMM the definition fail-stops building the successor it matched
++FAR Term nat_show_str(Env e, u64 n) {
++  u8  d[24];
++  u32 k = 0;
++  if (n > NAT_IMM) {
++    err_post(e.mem, ERR_NATS);
++    return term_pak(CID(SNil), 0);
++  }
++  do {
++    d[k++] = (u8)(48 + n % 10);
++    n /= 10;
++  } while (n != 0);
++  if (k <= STR_IMM_MAX) {
++    u64 w = 0;
++    for (u32 i = 0; i < k; i += 1) {
++      w |= (u64)d[k - 1 - i] << (8 * i);
++    }
++    return str_imm_of(w, k);
++  }
++  u32  c  = str_cls_for(k);
++  u32  at = (4u << c) - k;
++  Term ch = str_chunk(e, c, at, term_pak(CID(SNil), 0));
++  u8*  m  = str_mem(e.mem, e.mem[term_loc(ch)]) + at;
++  for (u32 i = 0; i < k; i += 1) {
++    m[i] = d[k - 1 - i];
++  }
++  return ch;
++}
++
++// Nat.show(n) ++ b: the digits go right into b's room when it has room for
++// any Nat's, else as the two calls
++INLINE Term nat_show_into(Env e, u64 n, Term b) {
++  u64* H = e.mem;
++  if (n <= NAT_IMM && str_room(H, b) >= 20) {
++    u64  nd = term_loc(b);
++    Term bb = H[nd];
++    u8*  d  = str_mem(H, bb) + str_pos(bb);
++    u8*  q  = d;
++    do {
++      *--q = (u8)(48 + n % 10);
++      n /= 10;
++    } while (n != 0);
++    H[nd] = str_at(bb, str_pos(bb) - (u32)(d - q));
++    return b;
++  }
++  return str_append(e, nat_show_str(e, n), b);
++}
++
+ #endif
+ 
+ // Blk
+@@ -5845,6 +6807,23 @@ OUTLINE char* io_cbuf(Env e, Term s, u64* len, u64 cons) {
+   cons = raw ? CID(SCon) : cons;
+   for (;;) {
+ #if STR_PACK
++    if ((utf || raw) && str_imm(s)) {
++      u32 m = str_imm_len(s);
++      while (n + 2 * (u64)m + 5 > cap) {
++        cap *= 2;
++        buf = io_mem(realloc(buf, cap));
++      }
++      for (u32 i = 0; i < m; i += 1) {
++        u8 c = (u8)(s >> (8 * i));
++        if (raw) {
++          buf[n++] = (char)c;
++        } else {
++          n += io_utf8(buf + n, c);
++        }
++      }
++      s = term_pak(CID(SNil), 0);
++      continue;
++    }
+     if ((utf || raw) && str_buf(s)) {
+       Term fb[2];
+       spare_free(e, cls_fit(2), ctr_take(e, s, 2, fb));
+@@ -5954,8 +6933,12 @@ static u64 io_dec(u32* cs, const char* p, u64 n) {
+ 
+ #if STR_PACK
+ 
+-// The bytes p[0..n), a char each, in chunks before t (the last one full).
++// The bytes p[0..n), a char each, in chunks before t (the last one full);
++// a few bytes and nothing after them, an immediate.
+ static Term io_chunks(Env e, const u8* p, u64 n, Term t) {
++  if (n > 0 && n <= STR_IMM_MAX && str_nil(t)) {
++    return str_imm_make(p, (u32)n);
++  }
+   while (n > 0) {
+     u32 m = n < (4u << STR_MAX) ? (u32)n : 4u << STR_MAX;
+     u32 c = STR_MIN;
+diff --git a/bend2/effs/tcp_recv.c b/bend2/effs/tcp_recv.c
+index 74946c4..2be2fa7 100644
+--- a/bend2/effs/tcp_recv.c
++++ b/bend2/effs/tcp_recv.c
+@@ -4,6 +4,32 @@
+ // A recv that finds nothing (the socket is non-blocking) parks on more
+ // until the socket is readable. What it finds, read makes a String (io_str),
+ // a List of bytes (io_list) or a String of bytes (io_raw).
++
++// A recv's buffer, kept for the next recv on this thread: one malloc and
++// free of the max (64 KiB, say) per recv let glibc trim and regrow the
++// heap's top (brk), and fault its pages back in.
++static _Thread_local char* tcp_rbuf;
++static _Thread_local u64   tcp_rcap;
++
++static char* tcp_rbuf_take(u64 n) {
++  if (tcp_rbuf != NULL && tcp_rcap >= n) {
++    char* p  = tcp_rbuf;
++    tcp_rbuf = NULL;
++    return p;
++  }
++  return io_mem(malloc((size_t)n));
++}
++
++static void tcp_rbuf_give(char* p, u64 n) {
++  if (tcp_rbuf == NULL || tcp_rcap < n) {
++    free(tcp_rbuf);
++    tcp_rbuf = p;
++    tcp_rcap = n;
++  } else {
++    free(p);
++  }
++}
++
+ static Term tcp_recv_with(Env e, IoWork* w, IoPack more,
+   Term (*read)(Env, const char*, u64)) {
+   int fd  = (int)w->hand;
+@@ -12,7 +38,7 @@ static Term tcp_recv_with(Env e, IoWork* w, IoPack more,
+     return io_wait_on(w, fd, POLLIN, 0, more);
+   }
+   Term r = io_res(e, w, read(e, w->data, w->size));
+-  free(w->data);
++  tcp_rbuf_give(w->data, (u64)w->made);
+   return io_tup(e, io_hand(w->hand), r);
+ }
+ 
+@@ -22,7 +48,7 @@ static Term tcp_recv_start(Env e, Term* f, IoWork* w, IoPack more) {
+     return io_tup(e, io_hand(w->hand), io_fail(e, EINVAL, NULL));
+   }
+   w->made = f[1] < INT32_MAX ? (intptr_t)f[1] : INT32_MAX;
+-  w->data = io_mem(malloc((size_t)w->made));
++  w->data = tcp_rbuf_take((u64)w->made);
+   return more(e, w);
+ }
+ 
+diff --git a/tests/base/string_index.bend b/tests/base/string_index.bend
+new file mode 100644
+index 0000000..1d85493
+--- /dev/null
++++ b/tests/base/string_index.bend
+@@ -0,0 +1,28 @@
++# String by index, and String ops the C lane specializes: code_at, find
++# and slice on a String of more than one piece; eq and ++ with a literal
++# on either side; Nat.show before a String; to_upper of a String no one
++# else holds and of one that is shared
++import Base
++
++def show_find(+s: String, +c: Char, i: Nat) -> String:
++  Nat.show(String.find(s, c, i))
++
++def flag(b: Bool) -> String:
++  match b:
++    case True{}:
++      "T"
++    case False{}:
++      "F"
++
++def main() -> String:
++  +s = "hello\r\nworld\r\n" ++ "tail"
++  +a = U32.show(String.code_at(s, 0n)) ++ "," ++ U32.show(String.code_at(s, 5n)) ++ "," ++ U32.show(String.code_at(s, 17n)) ++ "," ++ U32.show(String.code_at(s, 18n))
++  +b = show_find(s, '\r', 0n) ++ "," ++ show_find(s, '\r', 6n) ++ "," ++ show_find(s, 'z', 0n) ++ "," ++ show_find(s, 'w', 7n) ++ "," ++ show_find(s, 'w', 8n)
++  +c = String.slice(s, 7n, 5n) ++ "|" ++ String.slice(s, 12n, 10n) ++ "|" ++ String.slice(s, 30n, 3n) ++ "|" ++ String.slice(s, 0n, 0n)
++  +w = String.slice(s, 7n, 5n)
++  +d = flag(String.eq(w, "world")) ++ flag(String.eq("world", w)) ++ flag(String.eq(w, "worl")) ++ flag(String.eq(w, "")) ++ flag(String.eq(String.slice(s, 0n, 0n), ""))
++  +e = Nat.show(String.length(w)) ++ "/" ++ Nat.show(12345678n) ++ "\r\n" ++ w
++  +u = String.to_upper(String.slice(s, 0n, 5n)) ++ "," ++ String.to_upper(w) ++ "," ++ w
++  a ++ ";" ++ b ++ ";" ++ c ++ ";" ++ d ++ ";" ++ e ++ ";" ++ u
++
++#|"104,13,108,4294967295;5,12,18,7,18;world|\r\ntail||;TTFFT;5/12345678\r\nworld;HELLO,WORLD,world"
