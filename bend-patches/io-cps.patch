@@ -1,0 +1,306 @@
+diff --git a/bend2/comp.ts b/bend2/comp.ts
+index 3c42239..a210048 100644
+--- a/bend2/comp.ts
++++ b/bend2/comp.ts
+@@ -1284,7 +1284,7 @@ function fun_of(k: Name): Fun {
+       return { n: 0, h: null, live: [], lays: [BOX, BOX], ret: BOX };
+     }
+     const doms = tele_unbind(tld.T).doms;
+-    const h = tld.e ? Bend.term_higher(tld.e) : null;
++    const h = tld.e ? io_def(k, tld, Bend.term_higher(tld.e)) : null;
+     const n = tld.n + (h === null ? 0
+       : Math.min(def_raise(h, tld.n), doms.length - tld.n));
+     const live = doms.slice(0, n).filter(dom_live);
+@@ -1389,6 +1389,176 @@ function io_base(book: Bend.Book, t: HTerm): HTerm[] | null {
+   return h.$ === "Ref" && h.k === "IO" ? xs : null;
+ }
+ 
++// A def whose type ends in IO(A), a function of R and k (Base's IO),
++// takes R and k as parameters of its own, and its body runs with them
++// (io_cps): IO.bind(m, f) is m run with the continuation x => f(x) run
++// with k, IO.pure(x) is k(x), a let or a match runs its body or each arm
++// with them, and any other IO value is applied to them. A do block then
++// calls the effects and defs it binds with a continuation that holds the
++// rest of the block, instead of building IO values that IO.bind applies
++// through closures. A def whose body already takes R and k (IO.bind) is
++// left as it is, and so is main, which the runtime runs for its IO value.
++function io_def(k: Name, tld: Bend.Def, h: HTerm): HTerm {
++  const ret = Bend.tele_fill(FL.book, tld.T, Array(tld.n).fill(DUMMY),
++    Bend.ctx_nil());
++  if (k === "main" || io_base(FL.book, ret) === null
++    || def_raise(h, tld.n) > 0 || !io_opens(h, tld.n)) {
++    return h;
++  }
++  return io_under(h, tld.n, null, null, tld.T);
++}
++
++// whether io_under opens t: lambdas and matches down to its IO result
++function io_opens(t: HTerm, left: number): boolean {
++  const s = term_force(t);
++  if (s.$ === "Ann") {
++    return io_opens(s.x, left);
++  }
++  if (left === 0 || s.$ === "Efq") {
++    return true;
++  }
++  return s.$ === "Lam" ? io_opens(s.f(DUMMY), left - 1)
++    : s.$ === "Mat" && io_opens(s.h, left - 1 + FL.book.ctrs[s.k].n)
++      && io_opens(s.m, left);
++}
++
++// t, a function of left more arguments (lambdas, or a match on the next)
++// whose result is IO, its result run with R and k; with k null, its result
++// takes R and k as two more lambdas. T is t's type, when known. t opens
++// (io_opens).
++function io_under(t: HTerm, left: number, R: HTerm | null,
++  k: HTerm | null, T: HTerm | null): HTerm {
++  const s = term_force(t);
++  if (s.$ === "Ann") {
++    return Bend.Ann(io_under(s.x, left, R, k, s.T),
++      k === null ? s.T : io_retype(s.T, left, R!), s.s);
++  }
++  if (left === 0) {
++    return k !== null ? io_cps(s, R!, k, T) : Bend.Lam("R", 0, (r: HTerm) =>
++      Bend.Lam("k", 0, (c: HTerm) => io_cps(s, r, c, T)), s.s, Bend.None());
++  }
++  switch (s.$) {
++    case "Lam": {
++      const all = T === null ? null : Bend.tele_open(FL.book, T);
++      return Bend.Lam(s.k, s.i, (x: HTerm) => io_under(s.f(x), left - 1, R,
++        k, all === null ? null : all.B(x)), s.s, s.q);
++    }
++    case "Mat": {
++      return Bend.Mat(s.k, io_under(s.h, left - 1 + FL.book.ctrs[s.k].n, R,
++        k, null), io_under(s.m, left, R, k, T), s.s);
++    }
++    default: {
++      return s;
++    }
++  }
++}
++
++// T, the type of a function of left more arguments whose result is IO,
++// its result IO.OP<R>
++function io_retype(T: HTerm, left: number, R: HTerm): HTerm {
++  if (left === 0) {
++    return io_op(R);
++  }
++  const all = Bend.tele_open(FL.book, T);
++  return all === null ? T : Bend.All(all.q, all.k, all.i, all.A,
++    (x: HTerm) => io_retype(all.B(x), left - 1, R), all.s);
++}
++
++function io_op(R: HTerm): HTerm {
++  return { $: "ADT", k: "IO.OP", x: [R], r: [] } as HTerm;
++}
++
++// the head of t and its arguments, through the annotations of its
++// applications; f is the function the first argument applies to
++function io_spine(t: HTerm): { f: HTerm; head: HTerm; args: HTerm[] } {
++  const args: HTerm[] = [];
++  let f = t;
++  let c = term_force(t);
++  while (c.$ === "Ann" || c.$ === "App") {
++    if (c.$ === "App") {
++      args.unshift(c.x);
++      f = c.f;
++    }
++    c = term_force(c.$ === "App" ? c.f : c.x);
++  }
++  return { f, head: c, args };
++}
++
++// the IO value t (of type T, when known) run with R and k: a term of type
++// IO.OP<R>
++function io_cps(t: HTerm, R: HTerm, k: HTerm, T: HTerm | null): HTerm {
++  const [x, ty] = ty_peel(t, T);
++  const sp = io_spine(x);
++  const ref = sp.head.$ === "Ref" ? sp.head.k : null;
++  if (ref === "IO.bind" && sp.args.length === 4) {
++    const [A, B, m, f] = sp.args;
++    const all = Bend.tele_open(FL.book, ty_peel(f, null)[1] ?? DUMMY);
++    const q = all?.q ?? Bend.Lone();
++    return io_cps(m, R, Bend.Ann(Bend.Lam("x", 0, (y: HTerm) =>
++      io_then(f, y, R, k, io_of(B)), undefined, q), Bend.All(q, "x", 0, A,
++      () => io_op(R))), io_of(A));
++  }
++  if (ref === "IO.pure" && sp.args.length === 2) {
++    return io_ret(k, sp.args[0], sp.args[1]);
++  }
++  if (x.$ === "Let") {
++    return Bend.Let(x.k, x.i, x.v, (xs: HTerm[]) => io_cps(x.f(xs), R, k,
++      ty), x.s, x.q);
++  }
++  if (sp.args.length === 1 && "Mat Efq".includes(term_force(ty_peel(sp.f,
++    null)[0]).$) && io_opens(sp.f, 1)) {
++    return io_let(k, (c) => Bend.Ann(Bend.App(io_under(sp.f, 1, R, c,
++      ty_peel(sp.f, null)[1]), sp.args[0]), io_op(R)));
++  }
++  // with no type, a value not a def's call takes k alone: the compiler then
++  // counts every argument live, and R is erased anyway
++  if (ty === null && ref === null) {
++    return Bend.Ann(Bend.App(x, k), io_op(R));
++  }
++  return Bend.Ann(Bend.App(io_app(ty === null ? x : Bend.Ann(x, ty), ty, R),
++    k), io_op(R));
++}
++
++// IO(A), as the type of an IO value
++function io_of(A: HTerm): HTerm {
++  return Bend.App(Bend.Ref("IO"), A);
++}
++
++// t of type T applied to x, annotated with its type as an elaborated
++// application is: a spine over a variable drops its erased arguments
++// (anf), and its live ones keep their places by these types
++function io_app(t: HTerm, T: HTerm | null, x: HTerm): HTerm {
++  const all = T === null ? null : Bend.tele_open(FL.book, T);
++  return all === null ? Bend.App(t, x) : Bend.Ann(Bend.App(t, x), all.B(x));
++}
++
++// f, an IO continuation, applied to x and run with R and k; its result is
++// of type IO
++function io_then(f: HTerm, x: HTerm, R: HTerm, k: HTerm, IO: HTerm): HTerm {
++  const [g, T] = ty_peel(f, null);
++  return g.$ === "Lam" ? io_cps(g.f(x), R, k, IO)
++    : io_cps(io_app(f, T, x), R, k, IO);
++}
++
++// k given x of type A: a continuation the compiler built takes x as a let
++function io_ret(k: HTerm, A: HTerm, x: HTerm): HTerm {
++  const g = ty_peel(k, null)[0];
++  if (g.$ !== "Lam") {
++    return Bend.App(k, x);
++  }
++  const v = term_force(x);
++  return v.$ === "Var" ? g.f(v) : Bend.Let(["x"], [0], [Bend.Ann(x, A)],
++    (xs: HTerm[]) => g.f(xs[0]), undefined, [g.q ?? Bend.Lone()]);
++}
++
++// a continuation k shared by the arms of a match: one the compiler built
++// is held in a let, so each arm takes the closure instead of a copy of it
++function io_let(k: HTerm, f: (c: HTerm) => HTerm): HTerm {
++  return ty_peel(k, null)[0].$ !== "Lam" ? f(k)
++    : Bend.Let(["k"], [0], [k], (xs: HTerm[]) => f(xs[0]), undefined,
++      [Bend.Lone()]);
++}
++
+ export function io_type(book: Bend.Book): HTerm | null {
+   const main = book.tlds["main"];
+   const xs = main?.$ === "Def" ? io_base(book, main.T) : null;
+diff --git a/tests/io/io_cps.bend b/tests/io/io_cps.bend
+new file mode 100644
+index 0000000..cda81b5
+--- /dev/null
++++ b/tests/io/io_cps.bend
+@@ -0,0 +1,110 @@
++# io (io_cps): a def whose type ends in IO takes its continuation as a
++# parameter and runs its do block on it (comp.ts: io_def): binds, a
++# return, a let, a block that ends in a def whose arms bind effects, an
++# arm under a nested pattern, an IO value from a parameter run with the
++# continuation, IO.try, a block bound inside a block, IO values kept in a
++# list and run in turn, a recursion through effects, and main's own
++# block. Prints each step's result.
++import Base
++
++def twice(+n: Nat) -> IO(Nat):
++  do IO<Nat>:
++    +a : Nat <- IO.pure(Nat, Nat.add(n, n))
++    b : Nat = Nat.add(a, 1n)
++    return Nat.sub(b, 1n)
++
++def pick.arm(c: Bool, +x: Nat) -> IO(Nat):
++  match c:
++    case True{}:
++      do IO<Nat>:
++        Unit <- IO.print("pick true " ++ Nat.show(x))
++        return Nat.add(x, 100n)
++    case False{}:
++      do IO<Nat>:
++        Unit <- IO.print("pick false " ++ Nat.show(x))
++        return x
++
++def pick(c: Bool, +n: Nat) -> IO(Nat):
++  do IO<Nat>:
++    x : Nat <- twice(n)
++    pick.arm(c, x)
++
++# a nested pattern: the arm's body matches the pair inside Some
++def sum_pair(m: Maybe<&1, Nat & Nat>) -> IO(Nat):
++  match m:
++    case Some{(a, +b)}:
++      do IO<Nat>:
++        Unit <- IO.print("pair " ++ Nat.show(b))
++        return Nat.add(a, b)
++    case None{}:
++      IO.pure(Nat, 0n)
++
++def of_maybe(m: Maybe<&1, Nat>) -> IO(Nat):
++  match m:
++    case Some{x}:
++      IO.pure(Nat, x)
++    case None{}:
++      do IO<Nat>:
++        Unit <- IO.print("none")
++        return 0n
++
++def run(act: IO(Nat), +tag: String) -> IO(Nat):
++  do IO<Nat>:
++    +x : Nat <- act
++    Unit <- IO.print(tag ++ " " ++ Nat.show(x))
++    return Nat.add(x, 1n)
++
++def bad() -> IO(Result<&1, &1, U32 & String, Nat>):
++  IO.pure(Result<&1, &1, U32 & String, Nat>, Done{7n})
++
++def nest(+n: Nat) -> IO(Nat):
++  do IO<Nat>:
++    y : Nat <- do IO<Nat>:
++      +a : Nat <- twice(n)
++      b : Nat <- twice(a)
++      return Nat.add(a, b)
++    return Nat.add(y, 1n)
++
++def all(acts: List<&1, IO(Nat)>, acc: Nat) -> IO(Nat):
++  match acts:
++    case Nil{}:
++      IO.pure(Nat, acc)
++    case Con{a, rest}:
++      do IO<Nat>:
++        x : Nat <- a
++        all(rest, Nat.add(acc, x))
++
++def count(+n: Nat) -> IO(Unit):
++  match n:
++    case 0n:
++      IO.print("count done")
++    case 1n+m:
++      do IO<Unit>:
++        t : Nat <- IO.now()
++        Unit <- IO.print("count " ++ Nat.show(m))
++        count(m)
++
++def main() -> IO(Unit):
++  do IO<Unit>:
++    a : Nat <- pick(True{}, 3n)
++    b : Nat <- pick(False{}, 4n)
++    c : Nat <- of_maybe(Some{5n})
++    d : Nat <- of_maybe(None{})
++    p : Nat <- sum_pair(Some{(2n, 3n)})
++    e : Nat <- run(twice(10n), "run")
++    f : Nat <- IO.try(Nat, bad())
++    g : Nat <- nest(1n)
++    h : Nat <- all(twice(1n) <> twice(2n) <> run(IO.pure(Nat, 9n), "all") <> Nil{}, 0n)
++    Unit <- count(2n)
++    IO.print(Nat.show(a) ++ "," ++ Nat.show(b) ++ "," ++ Nat.show(c) ++ "," ++ Nat.show(d) ++ "," ++ Nat.show(p) ++ "," ++ Nat.show(e) ++ "," ++ Nat.show(f) ++ "," ++ Nat.show(g) ++ "," ++ Nat.show(h))
++
++#|pick true 6
++#|pick false 8
++#|none
++#|pair 3
++#|run 20
++#|all 9
++#|count 1
++#|count 0
++#|count done
++#|106,8,5,0,5,21,7,7,16

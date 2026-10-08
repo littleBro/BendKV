@@ -1,0 +1,36 @@
+diff --git a/bend2/comp.ts b/bend2/comp.ts
+index e2dc3dd..13e6f04 100644
+--- a/bend2/comp.ts
++++ b/bend2/comp.ts
+@@ -6585,6 +6585,15 @@ static void cube_run(u64* H, bool gpu) {
+ 
+ static u64 corpus_size;
+ 
++// Random reads over a large corpus miss the TLB on 4 KiB pages; 2 MiB pages
++// cover it with few entries. Under the kernel's "madvise" THP mode only an
++// advised span gets them.
++static void corpus_huge(void* p, u64 size) {
++#ifdef MADV_HUGEPAGE
++  madvise(p, size, MADV_HUGEPAGE);
++#endif
++}
++
+ static void* corpus_map(u64 size) {
+   u64   hint = 1ull << 45;
+   void* p    = pool_try((void*)hint, size);
+@@ -6598,6 +6607,7 @@ static void* corpus_map(u64 size) {
+   if (p == MAP_FAILED) {
+     err_fail("reservation failed");
+   }
++  corpus_huge(p, size);
+   return p;
+ }
+ 
+@@ -6629,6 +6639,7 @@ static bool corpus_grow(u64* H, u64 need) {
+       : pool_try(at, more);
+     ok = got == at;
+     if (ok) {
++      corpus_huge(at, more);
+       corpus_lay(H, more * 2);
+     } else if (got != MAP_FAILED) {
+       munmap(got, more);

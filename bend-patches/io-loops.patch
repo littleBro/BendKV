@@ -1,0 +1,1635 @@
+diff --git a/bend2/base.bend b/bend2/base.bend
+index 98decef..80ae4a2 100644
+--- a/bend2/base.bend
++++ b/bend2/base.bend
+@@ -206,6 +206,14 @@ def IO.spawn(-A: Type, act: IO(A)) -> IO(Unit):
+   import "./effs/spawn.c"
+   import "./effs/spawn.js"
+ 
++# IO.spawn on event loop at (modulo 64). On the C lane loop 0 is the main
++# thread's and every other loop runs on a thread of its own, so
++# computations on different loops run in parallel and talk over channels;
++# elsewhere there is one loop, and this is IO.spawn.
++def IO.spawn_on(-A: Type, at: U32, act: IO(A)) -> IO(Unit):
++  import "./effs/spawn_on.c"
++  import "./effs/spawn_on.js"
++
+ def IO.sleep(ms: U32) -> IO(Unit):
+   import "./effs/sleep.c"
+   import "./effs/sleep.js"
+@@ -234,6 +242,15 @@ def Chan.close(-A: Type, chan: Chan(A)) -> IO(Unit):
+   import "./effs/chan.c"
+   import "./effs/chan.js"
+ 
++# Chan.send of every pair at once, without waiting: two send_alls (or
++# sends) that share channels order their values alike on each. A waiting
++# receiver takes its value at once; the rest wait in the channel, past its
++# room if need be, after the senders already waiting there. A closed
++# channel drops its value.
++def Chan.send_all(-A: Data, sends: List<&2, Sigma<&2, &2, Chan(A), _ => A>>) -> IO(Unit):
++  import "./effs/chan.c"
++  import "./effs/chan.js"
++
+ def IO.fork.go(-A: Type, act: IO(A), chan: Chan(A)) -> IO(Chan(A)):
+   +c = chan
+   sent = IO.bind(A, Bool, act, x => Chan.send(A, c, x))
+@@ -347,6 +364,16 @@ def TCP.send_raw(sock: Socket, data: String) ->
+   import "./effs/tcp_send.c"
+   import "./effs/tcp_send.js"
+ 
++# TCP.send_raw without waiting: on the C lane the bytes go to a writer
++# thread of this event loop, which sends them in order, and the socket comes
++# back at once (elsewhere the send is TCP.send_raw's, and the socket comes
++# back once it is done). A failed send is not reported: a dead peer shows on
++# the next recv. Socket.close of a socket with posted bytes closes it after
++# they are sent.
++def TCP.post(sock: Socket, data: String) -> IO(Socket):
++  import "./effs/tcp_post.c"
++  import "./effs/tcp_post.js"
++
+ def TCP.recv_raw(sock: Socket, max: U32) ->
+   IO(Socket & Result<&1, &1, U32 & String, String>):
+   import "./effs/tcp_recv.c"
+diff --git a/bend2/comp.ts b/bend2/comp.ts
+index 2eadcd3..b6b57ae 100644
+--- a/bend2/comp.ts
++++ b/bend2/comp.ts
+@@ -4124,6 +4124,7 @@ typedef u32 __attribute__((may_alias)) u32a;
+ #define NCLS      8
+ #define NCLS_ALL  32
+ #define IO_HELP   64
++#define IO_LOOPS  64
+ 
+ #define TG_HOLD   2304
+ #define CHUNK     256
+@@ -4159,7 +4160,7 @@ typedef u32 __attribute__((may_alias)) u32a;
+ #if !DEVICE
+ 
+ static u64*    CORPUS;
+-static u64    ALC[CUBE_T + 1][3 * NCLS_ALL] __attribute__((aligned(128)));
++static u64    ALC[CUBE_T + IO_LOOPS][3 * NCLS_ALL] __attribute__((aligned(128)));
+ static u32    KEEP_WORDS;
+ static u32    CUBE_LOG = 7;
+ static u32    bank_lock;
+@@ -4190,7 +4191,11 @@ static CUmodule   gpu_lib;
+ static CUfunction gpu_pso;
+ #endif
+ static bool io_gpu;
+-static DEV Term*  io_stk;
++// Each event loop's thread has its own work stack and allocator row (see
++// IoLoop): loop 0, the main thread's, ALC[0]; loop i past it ALC[CUBE_T + i],
++// clear of the pool's rows.
++static _Thread_local DEV Term* io_stk;
++static _Thread_local u32       io_alc;
+ 
+ static const char* CLI_HELP =
+   "usage: %s [options] [arguments]\n"
+@@ -6074,15 +6079,28 @@ INLINE u64 task_tail(Term t) {
+   return term_loc(t) + fid_arity((u32)term_aux(t));
+ }
+ 
++// A delivery to the root lands on ROOT_WORD and raises ROOT_DONE: the main
++// thread's and its pool's at H_ROOT_WORD. An event loop past 0 evaluates at
++// the same time, sequentially, and has a pair of its own (see IoLoop).
++#if DEVICE
++#define ROOT_WORD H_ROOT_WORD
++#define ROOT_DONE H_ROOT_DONE
++#else
++static _Thread_local u64 root_word = H_ROOT_WORD;
++static _Thread_local u64 root_flag = H_ROOT_DONE;
++#define ROOT_WORD root_word
++#define ROOT_DONE root_flag
++#endif
++
+ INLINE Term task_deliver(DEV u64* H, Term cont, u32 idx, THR Term* v, u32 n) {
+-  u64 at = cont == TERM_HOLE ? H_ROOT_WORD : term_loc(cont) + idx;
++  u64 at = cont == TERM_HOLE ? ROOT_WORD : term_loc(cont) + idx;
+   for (u32 j = 0; j < WL_RESW; j += 1) {
+     if (j < n) {
+       H[at + j] = v[j];
+     }
+   }
+   if (cont == TERM_HOLE) {
+-    a32_store_rel(a32_at(H, H_ROOT_DONE), n + 1);
++    a32_store_rel(a32_at(H, ROOT_DONE), n + 1);
+     return 0;
+   }
+   u64 tl = task_tail(cont);
+@@ -6121,15 +6139,15 @@ INLINE void task_deal(DEV u64* H, Term join, u32 base, u32 stride, TG u32* cur)
+ // ====
+ 
+ INLINE bool root_done(DEV u64* H) {
+-  return a32_load_acq(a32_at(H, H_ROOT_DONE)) != 0;
++  return a32_load_acq(a32_at(H, ROOT_DONE)) != 0;
+ }
+ 
+ static u32 root_take(DEV u64* H, THR Term* v) {
+-  u32 n = a32_load_acq(a32_at(H, H_ROOT_DONE)) - 1;
++  u32 n = a32_load_acq(a32_at(H, ROOT_DONE)) - 1;
+   for (u32 j = 0; j < n; j += 1) {
+-    v[j] = H[H_ROOT_WORD + j];
++    v[j] = H[ROOT_WORD + j];
+   }
+-  a32_store(a32_at(H, H_ROOT_DONE), 0);
++  a32_store(a32_at(H, ROOT_DONE), 0);
+   return n;
+ }
+ 
+@@ -7101,9 +7119,10 @@ static u64* corpus_setup(bool gpu, long threads, u64 bytes) {
+ }
+ 
+ OUTLINE Term corpus_eval(u64* H, Term t) {
+-  Env  e = { H, ALC[0] };
++  Env  e = { H, ALC[io_alc] };
+   Term rv[WL_RESW];
+-  while ((t = work_loop(e, io_stk, t, !BANGS && pool_size == 1)) != 0) {
++  bool seq = io_alc != 0 || (!BANGS && pool_size == 1);
++  while ((t = work_loop(e, io_stk, t, seq)) != 0) {
+     u64 tl = task_tail(t);
+     if ((u32)H[tl + 1] != 0) {
+       task_deal(H, t, 0, 0, NULL);
+@@ -7111,7 +7130,7 @@ OUTLINE Term corpus_eval(u64* H, Term t) {
+       cube_run(H, false);
+       break;
+     }
+-    if (io_gpu && fid_bangs((u32)term_aux(t))) {
++    if (io_gpu && io_alc == 0 && fid_bangs((u32)term_aux(t))) {
+       Term cont = H[tl];
+       u32  idx  = (u32)(H[tl + 1] >> 32) & 0xFFFF;
+       H[tl]     = TERM_HOLE;
+@@ -7174,13 +7193,69 @@ typedef struct IoWork {
+   u64            time;
+   short          evts;
+   struct IoWork* next;
++  struct IoLoop* home;
+ } IoWork;
+ 
+ typedef Term (*Effect)(Env e, Term* f, IoWork* w);
+ 
+ Effect io_eff_rows[1 << 16];
++
++// The computations alive on every loop (atomic); loop 0 ends the process
++// with the last.
+ static u32    io_live;
+ 
++// Event loops. Loop 0 runs on the main thread; IO.spawn_on starts loop i
++// (modulo IO_LOOPS) on a thread of its own when a computation first goes
++// there. A loop owns its computations: the runnable (io_runs), the parked
++// on an fd or a timer (io_park) and the ones out on a helper (io_busy).
++// Another thread hands one over through the loop's inbox, under its lock,
++// and writes a NULL to its wake pipe if it sleeps in select; a loop with
++// nothing to run spins on its inbox a while first (io_linger). A loop past
++// 0 runs pure code sequentially, on an allocator row and a root of its own.
++
++typedef struct IoLoop {
++  u32              lock;
++  IoWork*          inbox;
++  int              wake[2];
++  u32              id;
++  u32              up;
++  u32              sleep;
++  struct IoWriter* post;
++} IoLoop;
++
++static IoLoop                io_loops[IO_LOOPS];
++static pthread_mutex_t       io_loops_lock = PTHREAD_MUTEX_INITIALIZER;
++static u32                   io_multi;
++static _Thread_local IoLoop* io_me;
++
++// A spin's pause: a hint to the core that this thread waits
++static void io_pause(void) {
++#if defined(__x86_64__) || defined(__i386__)
++  __builtin_ia32_pause();
++#elif defined(__aarch64__)
++  __asm__ volatile("yield");
++#endif
++}
++
++// A lock between loops, held for a few instructions: a loop that finds it
++// taken spins, and yields its core now and then in case the holder waits
++// for one.
++static void io_hold(u32* l) {
++  for (u32 n = 1; __atomic_exchange_n(l, 1, __ATOMIC_ACQUIRE); n += 1) {
++    while (__atomic_load_n(l, __ATOMIC_RELAXED)) {
++      n += 1;
++      if ((n & 1023) == 0) {
++        sched_yield();
++      }
++      io_pause();
++    }
++  }
++}
++
++static void io_let(u32* l) {
++  __atomic_store_n(l, 0, __ATOMIC_RELEASE);
++}
++
+ static u64 io_tick(void) {
+   struct timespec ts;
+   clock_gettime(CLOCK_MONOTONIC, &ts);
+@@ -7194,6 +7269,122 @@ OUTLINE void* io_mem(void* mem) {
+   return mem;
+ }
+ 
++// Posted sends (TCP.post). A loop that posts bytes hands them to a writer
++// thread of its own, which sends them in order: the loop's core does not
++// pay for the send's work in the kernel, which is most of a server's. The
++// loop puts posts on a ring and the writer takes them off, each side moving
++// its own index; a writer with nothing to do spins a while, then sleeps on
++// its bell, with its sleep flag up for the loop to ring it. A post of NULL
++// closes the fd, after what was posted before.
++#define IO_POSTS 4096
++
++typedef struct IoPost {
++  char* buf;
++  u64   len;
++  int   fd;
++} IoPost;
++
++typedef struct IoWriter {
++  IoPost          ring[IO_POSTS];
++  u32             head;
++  u32             tail;
++  u32             sleep;
++  pthread_mutex_t lock;
++  pthread_cond_t  bell;
++} IoWriter;
++
++static void io_post_do(IoPost* p) {
++  if (p->buf == NULL) {
++    close(p->fd);
++    return;
++  }
++  u64 at = 0;
++  while (at < p->len) {
++    ssize_t n = send(p->fd, p->buf + at, p->len - at, MSG_NOSIGNAL);
++    if (n > 0) {
++      at += (u64)n;
++    } else if (n < 0 && errno == EAGAIN) {
++      struct pollfd q = { p->fd, POLLOUT, 0 };
++      poll(&q, 1, 100);
++    } else if (!(n < 0 && errno == EINTR)) {
++      break;
++    }
++  }
++  free(p->buf);
++}
++
++static void* io_writer_run(void* arg) {
++  IoWriter* W = arg;
++  for (;;) {
++    u32 h = W->head;
++    if (h != __atomic_load_n(&W->tail, __ATOMIC_ACQUIRE)) {
++      io_post_do(&W->ring[h % IO_POSTS]);
++      __atomic_store_n(&W->head, h + 1, __ATOMIC_RELEASE);
++      continue;
++    }
++    u64  until = io_tick() + 50000;
++    bool more  = false;
++    for (u32 n = 1; !more; n += 1) {
++      more = __atomic_load_n(&W->tail, __ATOMIC_ACQUIRE) != h;
++      if (!more && (n & 31) == 0 && io_tick() >= until) {
++        break;
++      }
++      io_pause();
++    }
++    if (more) {
++      continue;
++    }
++    pthread_mutex_lock(&W->lock);
++    __atomic_store_n(&W->sleep, 1, __ATOMIC_SEQ_CST);
++    while (__atomic_load_n(&W->tail, __ATOMIC_SEQ_CST) == h) {
++      pthread_cond_wait(&W->bell, &W->lock);
++    }
++    __atomic_store_n(&W->sleep, 0, __ATOMIC_SEQ_CST);
++    pthread_mutex_unlock(&W->lock);
++  }
++  return NULL;
++}
++
++// Posts len bytes of buf (malloc'd; the writer frees it) to fd, or a close
++// of fd for a NULL buf, on this loop's writer, which starts on first use.
++static void io_post(int fd, char* buf, u64 len) {
++  IoWriter* W = io_me->post;
++  if (W == NULL) {
++    pthread_t tid;
++    W = io_mem(calloc(1, sizeof(IoWriter)));
++    pthread_mutex_init(&W->lock, NULL);
++    pthread_cond_init(&W->bell, NULL);
++    if (pthread_create(&tid, NULL, io_writer_run, W)) {
++      err_fail("a writer thread failed to start");
++    }
++    pthread_detach(tid);
++    io_me->post = W;
++  }
++  u32 t = W->tail;
++  for (u32 n = 1; t - __atomic_load_n(&W->head, __ATOMIC_ACQUIRE) >= IO_POSTS; n += 1) {
++    if ((n & 1023) == 0) {
++      sched_yield();
++    }
++    io_pause();
++  }
++  W->ring[t % IO_POSTS] = (IoPost){ buf, len, fd };
++  __atomic_store_n(&W->tail, t + 1, __ATOMIC_SEQ_CST);
++  if (__atomic_load_n(&W->sleep, __ATOMIC_SEQ_CST)) {
++    pthread_mutex_lock(&W->lock);
++    pthread_cond_signal(&W->bell);
++    pthread_mutex_unlock(&W->lock);
++  }
++}
++
++// Closes fd after what this loop posted to it.
++static void io_close(int fd) {
++  if (io_me != NULL && io_me->post != NULL) {
++    io_post(fd, NULL, 0);
++  } else {
++    close(fd);
++  }
++}
++
+ static int io_sys_addr(const char* host, u32 port, struct sockaddr_in* at) {
+   memset(at, 0, sizeof(*at));
+   at->sin_family = AF_INET;
+@@ -7223,9 +7414,9 @@ static u64 io_sys_end(IoWork* w, ssize_t n) {
+   return n < 0 ? 0 : (u64)n;
+ }
+ 
+-static IoWork* io_runs;
+-static IoWork* io_park;
+-static IoWork* io_jobs;
++static _Thread_local IoWork* io_runs;
++static _Thread_local IoWork* io_park;
++static IoWork*               io_jobs;
+ 
+ static void io_push(IoWork** q, IoWork* a) {
+   IoWork* l = *q != NULL ? *q : a;
+@@ -7245,8 +7436,118 @@ static void io_spawn(Term m) {
+   IoWork* a = io_mem(calloc(1, sizeof(IoWork)));
+   a->cont  = m;
+   a->item  = term_clo(FID(IO~emit), 0);
++  a->home  = io_me;
+   io_push(&io_runs, a);
+-  io_live += 1;
++  __atomic_add_fetch(&io_live, 1, __ATOMIC_RELAXED);
++}
++
++// Wakes loop L if it sleeps in select: a NULL down its wake pipe.
++static void io_poke(IoLoop* L, u32 poke) {
++  IoWork* z = NULL;
++  while (poke && write(L->wake[1], &z, sizeof z) != sizeof z) {
++  }
++}
++
++// Hands a over to loop L, another thread's: onto its inbox (a NULL hands
++// nothing, and only wakes L).
++static void io_give(IoLoop* L, IoWork* a) {
++  io_hold(&L->lock);
++  if (a != NULL) {
++    io_push(&L->inbox, a);
++  }
++  u32 poke = L->sleep;
++  L->sleep = 0;
++  io_let(&L->lock);
++  io_poke(L, poke);
++}
++
++// Moves what other threads handed this loop onto its run queue.
++static void io_adopt(void) {
++  IoLoop* L = io_me;
++  if (__atomic_load_n(&L->inbox, __ATOMIC_RELAXED) == NULL) {
++    return;
++  }
++  io_hold(&L->lock);
++  while (L->inbox != NULL) {
++    io_push(&io_runs, io_pop(&L->inbox));
++  }
++  io_let(&L->lock);
++}
++
++// Before the loop blocks in select: true with its sleep flag up if its
++// inbox is empty, so that a hand-over pokes it; else it adopts the inbox.
++// Loop 0 rests only while a computation lives: the last to end, on another
++// loop, pokes it after its count drops, under this lock.
++static bool io_rest(void) {
++  IoLoop* L = io_me;
++  io_hold(&L->lock);
++  bool rest = L->inbox == NULL
++    && (L->id != 0 || __atomic_load_n(&io_live, __ATOMIC_ACQUIRE) != 0);
++  L->sleep  = rest;
++  io_let(&L->lock);
++  if (!rest) {
++    io_adopt();
++  }
++  return rest;
++}
++
++static void io_awake(void) {
++  io_hold(&io_me->lock);
++  io_me->sleep = 0;
++  io_let(&io_me->lock);
++}
++
++// Before a loop with others sleeps, it waits a while for a hand-over from
++// them, spinning on its inbox: a reply from another loop often comes within
++// microseconds, and then neither side pays a wake-up through the pipe.
++static bool io_linger(void) {
++  u64 until = io_tick() + 30000;
++  for (u32 n = 1;; n += 1) {
++    if (__atomic_load_n(&io_me->inbox, __ATOMIC_RELAXED) != NULL) {
++      return true;
++    }
++    if ((n & 31) == 0 && io_tick() >= until) {
++      return false;
++    }
++    io_pause();
++  }
++}
++
++static void* io_loop_run(void* arg);
++
++static IoLoop* io_loop_at(u32 i) {
++  IoLoop* L = &io_loops[i % IO_LOOPS];
++  if (__atomic_load_n(&L->up, __ATOMIC_ACQUIRE)) {
++    return L;
++  }
++  pthread_mutex_lock(&io_loops_lock);
++  if (!L->up) {
++    pthread_t tid;
++    __atomic_store_n(&io_multi, 1, __ATOMIC_RELAXED);
++    if (pipe(L->wake) | fcntl(L->wake[0], F_SETFL, O_NONBLOCK)
++      || pthread_create(&tid, NULL, io_loop_run, L)) {
++      err_fail("an event loop failed to open");
++    }
++    pthread_detach(tid);
++    __atomic_store_n(&L->up, 1, __ATOMIC_RELEASE);
++  }
++  pthread_mutex_unlock(&io_loops_lock);
++  return L;
++}
++
++// Spawns m on loop i: this one's run queue, or another loop's inbox.
++static void io_spawn_at(u32 i, Term m) {
++  IoLoop* L = io_loop_at(i);
++  if (L == io_me) {
++    io_spawn(m);
++    return;
++  }
++  IoWork* a = io_mem(calloc(1, sizeof(IoWork)));
++  a->cont  = m;
++  a->item  = term_clo(FID(IO~emit), 0);
++  a->home  = L;
++  __atomic_add_fetch(&io_live, 1, __ATOMIC_RELAXED);
++  io_give(L, a);
+ }
+ 
+ // io_park stays in deadline order (time 0, none, sorts last; ties keep
+@@ -7299,19 +7600,25 @@ static u64 io_utf8(char* buf, u64 c) {
+ // 255. A packed chunk goes whole.
+ #define IO_RAW (1ull << 32)
+ 
+-OUTLINE char* io_cbuf(Env e, Term s, u64* len, u64 cons) {
+-  u64   cap = 64;
++// The bytes of s into *into, a buffer of *room bytes from malloc that grows
++// as it fills (it may be NULL with a room of 0); NULL for a value past 255.
++OUTLINE char* io_cbuf_in(Env e, Term s, u64* len, u64 cons, char** into, u64* room) {
++  u64   cap = *room;
+   u64   n   = 0;
+   u64   bad = 0;
+   bool  raw = cons == IO_RAW;
+   bool  utf = cons == CID(SCon);
+-  char* buf = io_mem(malloc(cap));
++  char* buf = *into;
++  if (cap < 64) {
++    cap = 64;
++    buf = io_mem(realloc(buf, cap));
++  }
+   cons = raw ? CID(SCon) : cons;
+   for (;;) {
+ #if STR_PACK
+     if ((utf || raw) && str_imm(s)) {
+       u32 m = str_imm_len(s);
+-      while (n + 2 * (u64)m + 5 > cap) {
++      while (n + (raw ? (u64)m + 1 : 2 * (u64)m + 5) > cap) {
+         cap *= 2;
+         buf = io_mem(realloc(buf, cap));
+       }
+@@ -7329,7 +7636,7 @@ OUTLINE char* io_cbuf(Env e, Term s, u64* len, u64 cons) {
+     if ((utf || raw) && str_blob(s)) {
+       u32       m;
+       const u8* src = str_brun(e.mem, s, &m);
+-      while (n + 2 * (u64)m + 5 > cap) {
++      while (n + (raw ? (u64)m + 1 : 2 * (u64)m + 5) > cap) {
+         cap *= 2;
+         buf = io_mem(realloc(buf, cap));
+       }
+@@ -7350,7 +7657,7 @@ OUTLINE char* io_cbuf(Env e, Term s, u64* len, u64 cons) {
+       spare_free(e, cls_fit(2), ctr_take(e, s, 2, fb));
+       u32 p = str_pos(fb[0]);
+       u32 m = str_cap(fb[0]) - p;
+-      while (n + 2 * (u64)m + 5 > cap) {
++      while (n + (raw ? (u64)m + 1 : 2 * (u64)m + 5) > cap) {
+         cap *= 2;
+         buf = io_mem(realloc(buf, cap));
+       }
+@@ -7386,12 +7693,20 @@ OUTLINE char* io_cbuf(Env e, Term s, u64* len, u64 cons) {
+     s = fb[1];
+   }
+   buf[n] = 0;
+-  *len = n;
+-  if (bad) {
++  *len  = n;
++  *into = buf;
++  *room = cap;
++  return bad ? NULL : buf;
++}
++
++OUTLINE char* io_cbuf(Env e, Term s, u64* len, u64 cons) {
++  char* buf  = NULL;
++  u64   room = 0;
++  char* got  = io_cbuf_in(e, s, len, cons, &buf, &room);
++  if (got == NULL) {
+     free(buf);
+-    return NULL;
+   }
+-  return buf;
++  return got;
+ }
+ 
+ #define io_cstr(e, s, len) io_cbuf(e, s, len, CID(SCon))
+@@ -7566,18 +7881,21 @@ static Term io_fail(Env e, u32 code, const char* text) {
+   return io_box(e, CID(Fail), t);
+ }
+ 
+-static pthread_mutex_t io_gate = PTHREAD_MUTEX_INITIALIZER;
+-static pthread_cond_t  io_bell = PTHREAD_COND_INITIALIZER;
+-static u32             io_busy;
+-static u32             io_size;
+-static int             io_wake_fd[2];
++static pthread_mutex_t   io_gate = PTHREAD_MUTEX_INITIALIZER;
++static pthread_cond_t    io_bell = PTHREAD_COND_INITIALIZER;
++static _Thread_local u32 io_busy;
++static u32               io_size;
+ 
++// Reads the wake pipe: helpers' finished requests, and NULL pokes.
+ static void io_take(Env e) {
+   IoWork* acts[64];
+   ssize_t n;
+-  while ((n = read(io_wake_fd[0], acts, sizeof acts)) > 0) {
++  while ((n = read(io_me->wake[0], acts, sizeof acts)) > 0) {
+     for (u32 i = 0; i < (u32)n / sizeof(IoWork*); i += 1) {
+       IoWork* a = acts[i];
++      if (a == NULL) {
++        continue;
++      }
+       a->item   = a->pack(e, a);
+       io_push(&io_runs, a);
+       io_busy -= 1;
+@@ -7594,7 +7912,7 @@ static void* io_help(void* arg) {
+     IoWork* a = io_pop(&io_jobs);
+     pthread_mutex_unlock(&io_gate);
+     a->call(a);
+-    while (write(io_wake_fd[1], &a, sizeof a) != sizeof a) {
++    while (write(a->home->wake[1], &a, sizeof a) != sizeof a) {
+     }
+   }
+ }
+@@ -7603,6 +7921,7 @@ static Term io_work(IoWork* w, IoCall call, IoPack pack) {
+   w->call  = call;
+   w->pack  = pack;
+   io_busy += 1;
++  pthread_mutex_lock(&io_gate);
+   if (io_busy > io_size && io_size < IO_HELP) {
+     pthread_t tid;
+     if (pthread_create(&tid, NULL, io_help, NULL)) {
+@@ -7611,7 +7930,6 @@ static Term io_work(IoWork* w, IoCall call, IoPack pack) {
+     pthread_detach(tid);
+     io_size += 1;
+   }
+-  pthread_mutex_lock(&io_gate);
+   io_push(&io_jobs, w);
+   pthread_cond_signal(&io_bell);
+   pthread_mutex_unlock(&io_gate);
+@@ -7625,7 +7943,7 @@ static bool io_bit(u8* set, int fd, bool put) {
+ }
+ 
+ static void io_wait(Env e, bool block) {
+-  int top  = io_wake_fd[0];
++  int top  = io_me->wake[0];
+   u64 soon = io_park != NULL ? io_park->next->time : 0;
+   for (IoWork* a = io_park; a != NULL;
+     a = a->next != io_park ? a->next : NULL) {
+@@ -7636,7 +7954,7 @@ static void io_wait(Env e, bool block) {
+   u64 len = (u64)top / 64 * 8 + 8;
+   u8* set[2] = { io_mem(calloc(2, len)), NULL };
+   set[1] = set[0] + len;
+-  io_bit(set[0], io_wake_fd[0], true);
++  io_bit(set[0], io_me->wake[0], true);
+   for (IoWork* a = io_park; a != NULL;
+     a = a->next != io_park ? a->next : NULL) {
+     if (a->evts != 0) {
+@@ -7654,7 +7972,7 @@ static void io_wait(Env e, bool block) {
+     }
+     memset(set[0], 0, 2 * len);
+   }
+-  if (io_bit(set[0], io_wake_fd[0], false)) {
++  if (io_bit(set[0], io_me->wake[0], false)) {
+     io_take(e);
+   }
+   u64     now  = io_tick();
+@@ -7828,7 +8146,10 @@ static void io_step(Env e, IoWork* a) {
+     if (c == CID(Emit)) {
+       term_drop(e, req);
+       free(a);
+-      io_live -= 1;
++      if (__atomic_sub_fetch(&io_live, 1, __ATOMIC_ACQ_REL) == 0
++        && io_me != &io_loops[0]) {
++        io_give(&io_loops[0], NULL);
++      }
+       return;
+     }
+     Term fs[256];
+@@ -7850,32 +8171,28 @@ static void io_step(Env e, IoWork* a) {
+   }
+ }
+ 
+-OUTLINE void io_loop(u64* H) {
+-  Env e = { H, ALC[0] };
+-  io_stk = pool_stack();
+-  signal(SIGPIPE, SIG_IGN);
+-  if (pipe(io_wake_fd) | fcntl(io_wake_fd[0], F_SETFL, O_NONBLOCK)) {
+-    err_fail("the event loop failed to open");
+-  }
+-  Term m = corpus_eval(H, term_tsk(MAIN_FID, task_node(e, MAIN_FID,
+-    TERM_HOLE, 0, 0)));
+-#if MAIN_PURE
+-  show_val(e, 0, H + H_ROOT_WORD, 0);
+-  putchar('\n');
+-  return;
+-#endif
+-  io_spawn(m);
++// Runs this thread's loop: what is runnable, a step at a time, else a
++// wait in select. Loop 0 returns when no computation is left anywhere.
++static void io_run(Env e) {
+   u64 look = 0;
+   for (u32 n = 0;; n += 1) {
++    io_adopt();
+     if (io_runs == NULL) {
+-      if (io_live == 0) {
++      if (io_me->id == 0 && __atomic_load_n(&io_live, __ATOMIC_ACQUIRE) == 0) {
+         return;
+       }
+-      if (io_park == NULL && io_busy == 0) {
++      if (!__atomic_load_n(&io_multi, __ATOMIC_RELAXED) && io_park == NULL
++        && io_busy == 0) {
+         io_sync();
+         err_fail("deadlock: every computation waits on a channel");
+       }
+-      io_wait(e, true);
++      if (__atomic_load_n(&io_multi, __ATOMIC_RELAXED) && io_linger()) {
++        continue;
++      }
++      if (io_rest()) {
++        io_wait(e, true);
++        io_awake();
++      }
+       continue;
+     }
+     if ((n & 63) == 0 && io_busy != 0) {
+@@ -7893,6 +8210,42 @@ OUTLINE void io_loop(u64* H) {
+   }
+ }
+ 
++static void* io_loop_run(void* arg) {
++  io_me  = arg;
++  io_alc = CUBE_T + io_me->id;
++  io_stk = pool_stack();
++  Env e  = { CORPUS, ALC[io_alc] };
++  u64 r  = heap_alloc(e, cls_fit(WL_RESW + 1));
++  e.mem[r]  = 0;
++  root_flag = r;
++  root_word = r + 1;
++  io_run(e);
++  return NULL;
++}
++
++OUTLINE void io_loop(u64* H) {
++  Env e = { H, ALC[0] };
++  io_stk = pool_stack();
++  signal(SIGPIPE, SIG_IGN);
++  for (u32 i = 0; i < IO_LOOPS; i += 1) {
++    io_loops[i].id = i;
++  }
++  io_me     = &io_loops[0];
++  io_me->up = 1;
++  if (pipe(io_me->wake) | fcntl(io_me->wake[0], F_SETFL, O_NONBLOCK)) {
++    err_fail("the event loop failed to open");
++  }
++  Term m = corpus_eval(H, term_tsk(MAIN_FID, task_node(e, MAIN_FID,
++    TERM_HOLE, 0, 0)));
++#if MAIN_PURE
++  show_val(e, 0, H + H_ROOT_WORD, 0);
++  putchar('\n');
++  return;
++#endif
++  io_spawn(m);
++  io_run(e);
++}
++
+ // Requests
+ // ========
+ 
+diff --git a/bend2/effs/chan.c b/bend2/effs/chan.c
+index 8a56904..717109c 100644
+--- a/bend2/effs/chan.c
++++ b/bend2/effs/chan.c
+@@ -8,6 +8,7 @@ typedef struct {
+   u32   gen;
+   u32   next;
+   u32   room;
++  u32   cap;
+   u32   size;
+   u32   head;
+   u32   live;
+@@ -23,6 +24,12 @@ static ChanRow* chan_rows;
+ static u32      chan_len;
+ static u32      chan_idle = ~0u;
+ 
++// Computations on different event loops share channels: every effect here
++// holds chan_lock, and a waiter wakes on its own loop (IoWork.home). The
++// lock is held for a few hundred instructions at most, so a loop that
++// finds it taken spins (io_hold) rather than sleeps.
++static u32 chan_lock;
++
+ #define chan_some(e, v) io_box(e, CID(Some), v)
+ #define chan_bool(b)    term_pak((b) ? CID(True) : CID(False), 0)
+ 
+@@ -43,7 +50,7 @@ static Term chan_open(u32 room) {
+     chan_rows[i].gen = 0;
+   }
+   ChanRow* row = &chan_rows[i];
+-  *row = (ChanRow){ .gen = row->gen + 1, .room = room, .live = 1,
++  *row = (ChanRow){ .gen = row->gen + 1, .room = room, .cap = room, .live = 1,
+     .ring = room == 0 ? NULL : io_mem(malloc(room * sizeof(Term))) };
+   return io_hand(((u64)row->gen << 24) | i);
+ }
+@@ -67,17 +74,24 @@ static Term chan_wake(ChanRow* row, Term x) {
+   IoWork* a = io_pop(&row->wait);
+   Term item = a->item;
+   a->item   = x;
+-  io_push(&io_runs, a);
++  if (a->home == io_me) {
++    io_push(&io_runs, a);
++  } else {
++    io_give(a->home, a);
++  }
+   return item;
+ }
+ 
++// The buffer holds size values from head on, in a ring of cap cells: room
++// of them, or more after Chan.send_all went past the room. A sender parked
++// on a full buffer moves in once it holds fewer than room.
+ static Term chan_take(ChanRow* row) {
+   Term v = row->ring[row->head];
+-  row->head = (row->head + 1) % row->room;
++  row->head = (row->head + 1) % row->cap;
+   row->size -= 1;
+-  if (row->wait != NULL) {
++  if (row->wait != NULL && row->size < row->room) {
+     Term item = chan_wake(row, chan_bool(true));
+-    row->ring[(row->head + row->size) % row->room] = item;
++    row->ring[(row->head + row->size) % row->cap] = item;
+     row->size += 1;
+   }
+   return v;
+@@ -104,10 +118,17 @@ static void chan_shut(Env e, ChanRow* row) {
+ 
+ #ifdef CID(Chan.new)
+ 
+-Term chan_new_run(Env e, Term* f, IoWork* w) {
++static Term chan_new_locked(Env e, Term* f, IoWork* w) {
+   return chan_open((u32)f[0]);
+ }
+ 
++Term chan_new_run(Env e, Term* f, IoWork* w) {
++  io_hold(&chan_lock);
++  Term x = chan_new_locked(e, f, w);
++  io_let(&chan_lock);
++  return x;
++}
++
+ static void __attribute__((constructor)) chan_new_use(void) {
+   io_eff(CID(Chan.new), chan_new_run);
+ }
+@@ -116,7 +137,7 @@ static void __attribute__((constructor)) chan_new_use(void) {
+ 
+ #ifdef CID(Chan.send)
+ 
+-Term chan_send_run(Env e, Term* f, IoWork* w) {
++static Term chan_send_locked(Env e, Term* f, IoWork* w) {
+   ChanRow* row = chan_at(f[0]);
+   if (row == NULL || row->shut) {
+     term_drop(e, f[1]);
+@@ -127,13 +148,20 @@ Term chan_send_run(Env e, Term* f, IoWork* w) {
+     return chan_bool(true);
+   }
+   if (row->size < row->room) {
+-    row->ring[(row->head + row->size) % row->room] = f[1];
++    row->ring[(row->head + row->size) % row->cap] = f[1];
+     row->size += 1;
+     return chan_bool(true);
+   }
+   return chan_park(row, w, f[1]);
+ }
+ 
++Term chan_send_run(Env e, Term* f, IoWork* w) {
++  io_hold(&chan_lock);
++  Term x = chan_send_locked(e, f, w);
++  io_let(&chan_lock);
++  return x;
++}
++
+ static void __attribute__((constructor)) chan_send_use(void) {
+   io_eff(CID(Chan.send), chan_send_run);
+ }
+@@ -142,7 +170,7 @@ static void __attribute__((constructor)) chan_send_use(void) {
+ 
+ #ifdef CID(Chan.recv)
+ 
+-Term chan_recv_run(Env e, Term* f, IoWork* w) {
++static Term chan_recv_locked(Env e, Term* f, IoWork* w) {
+   ChanRow* row = chan_at(f[0]);
+   if (row == NULL) {
+     return term_pak(CID(None), 0);
+@@ -164,15 +192,110 @@ Term chan_recv_run(Env e, Term* f, IoWork* w) {
+   return chan_park(row, w, TERM_HOLE);
+ }
+ 
++Term chan_recv_run(Env e, Term* f, IoWork* w) {
++  io_hold(&chan_lock);
++  Term x = chan_recv_locked(e, f, w);
++  io_let(&chan_lock);
++  return x;
++}
++
+ static void __attribute__((constructor)) chan_recv_use(void) {
+   io_eff(CID(Chan.recv), chan_recv_run);
+ }
+ 
+ #endif
+ 
++#ifdef CID(Chan.send_all)
++
++// Makes the ring hold one more value than it does, past the room.
++static void chan_grow(ChanRow* row) {
++  if (row->size < row->cap) {
++    return;
++  }
++  u32   cap  = row->cap == 0 ? 4 : 2 * row->cap;
++  Term* ring = io_mem(malloc(cap * sizeof(Term)));
++  for (u32 i = 0; i < row->size; i += 1) {
++    ring[i] = row->ring[(row->head + i) % row->cap];
++  }
++  free(row->ring);
++  row->ring = ring;
++  row->head = 0;
++  row->cap  = cap;
++}
++
++// x onto row's channel without waiting: a parked receiver takes it at
++// once; else the senders parked on a full buffer move in first, in their
++// order, and x after them, past the room if need be.
++static void chan_put(Env e, ChanRow* row, Term x) {
++  if (row->wait != NULL && row->wait->next->item == TERM_HOLE) {
++    chan_wake(row, chan_some(e, x));
++    return;
++  }
++  while (row->wait != NULL) {
++    chan_grow(row);
++    Term item = chan_wake(row, chan_bool(true));
++    row->ring[(row->head + row->size) % row->cap] = item;
++    row->size += 1;
++  }
++  chan_grow(row);
++  row->ring[(row->head + row->size) % row->cap] = x;
++  row->size += 1;
++}
++
++// Every pair's value onto its channel in one hold of chan_lock: two
++// send_alls (or sends) that share channels order their values alike on
++// each. The list comes apart before the lock, and the values a closed
++// channel drops are dropped after it.
++Term chan_send_all_run(Env e, Term* f, IoWork* w) {
++  Term  one[32];
++  Term* xs  = one;
++  u32   n   = 0;
++  u32   cap = 16;
++  for (Term t = f[0]; term_aux(t) == CID(Con);) {
++    Term cell[2];
++    spare_free(e, cls_fit(2), ctr_take(e, t, 2, cell));
++    if (n == cap) {
++      cap *= 2;
++      Term* more = io_mem(malloc(2 * cap * sizeof(Term)));
++      memcpy(more, xs, 2 * n * sizeof(Term));
++      if (xs != one) {
++        free(xs);
++      }
++      xs = more;
++    }
++    spare_free(e, cls_fit(2), ctr_take(e, cell[0], 2, xs + 2 * n));
++    n += 1;
++    t  = cell[1];
++  }
++  io_hold(&chan_lock);
++  for (u32 i = 0; i < n; i += 1) {
++    ChanRow* row = chan_at(xs[2 * i]);
++    if (row != NULL && !row->shut) {
++      chan_put(e, row, xs[2 * i + 1]);
++      xs[2 * i + 1] = 0;
++    }
++  }
++  io_let(&chan_lock);
++  for (u32 i = 0; i < n; i += 1) {
++    if (xs[2 * i + 1] != 0) {
++      term_drop(e, xs[2 * i + 1]);
++    }
++  }
++  if (xs != one) {
++    free(xs);
++  }
++  return term_pak(CID(Unit), 0);
++}
++
++static void __attribute__((constructor)) chan_send_all_use(void) {
++  io_eff(CID(Chan.send_all), chan_send_all_run);
++}
++
++#endif
++
+ #ifdef CID(Chan.close)
+ 
+-Term chan_close_run(Env e, Term* f, IoWork* w) {
++static Term chan_close_locked(Env e, Term* f, IoWork* w) {
+   ChanRow* row = chan_at(f[0]);
+   if (row != NULL && !row->shut) {
+     chan_shut(e, row);
+@@ -180,6 +303,13 @@ Term chan_close_run(Env e, Term* f, IoWork* w) {
+   return term_pak(CID(Unit), 0);
+ }
+ 
++Term chan_close_run(Env e, Term* f, IoWork* w) {
++  io_hold(&chan_lock);
++  Term x = chan_close_locked(e, f, w);
++  io_let(&chan_lock);
++  return x;
++}
++
+ static void __attribute__((constructor)) chan_close_use(void) {
+   io_eff(CID(Chan.close), chan_close_run);
+ }
+diff --git a/bend2/effs/chan.js b/bend2/effs/chan.js
+index b57d473..a446fbd 100644
+--- a/bend2/effs/chan.js
++++ b/bend2/effs/chan.js
+@@ -13,9 +13,11 @@ function chan_wake(row, x) {
+   return w.item;
+ }
+ 
++// The ring may hold more than the room after chan_send_all; a sender
++// parked on a full ring moves in once it holds fewer.
+ function chan_take(row) {
+   const v = row.ring.shift();
+-  if (row.wait.length > 0) {
++  if (row.wait.length > 0 && row.ring.length < row.room) {
+     row.ring.push(chan_wake(row, true));
+   }
+   return v;
+@@ -63,6 +65,28 @@ function chan_recv(row, k) {
+   return;
+ }
+ 
++// value onto row without waiting: a parked receiver takes it, else the
++// parked senders move in first and value after them, past the room.
++function chan_put(row, value) {
++  if (row.wait.length > 0 && row.wait[0].item === CHAN_RECV) {
++    chan_wake(row, { $: CID(Some), value: value });
++    return;
++  }
++  while (row.wait.length > 0) {
++    row.ring.push(chan_wake(row, true));
++  }
++  row.ring.push(value);
++}
++
++function chan_send_all(sends) {
++  for (let xs = sends; xs.$ === CID(Con); xs = xs.tail) {
++    if (!xs.head.fst.shut) {
++      chan_put(xs.head.fst, xs.head.snd);
++    }
++  }
++  return { $: CID(Unit) };
++}
++
+ function chan_close(row) {
+   if (!row.shut) {
+     chan_shut(row);
+@@ -74,3 +98,4 @@ io_eff(CID(Chan.new), chan_new);
+ io_eff(CID(Chan.send), chan_send);
+ io_eff(CID(Chan.recv), chan_recv);
+ io_eff(CID(Chan.close), chan_close);
++io_eff(CID(Chan.send_all), chan_send_all);
+diff --git a/bend2/effs/socket_close.c b/bend2/effs/socket_close.c
+index 9de5a50..6c9e241 100644
+--- a/bend2/effs/socket_close.c
++++ b/bend2/effs/socket_close.c
+@@ -1,8 +1,9 @@
+ // Socket
+ // ======
+ 
++// A socket with bytes posted to it (TCP.post) closes after they are sent.
+ Term socket_close_run(Env e, Term* f, IoWork* w) {
+-  close((int)io_hand_v(f[0]));
++  io_close((int)io_hand_v(f[0]));
+   return term_pak(CID(Unit), 0);
+ }
+ 
+diff --git a/bend2/effs/spawn_on.c b/bend2/effs/spawn_on.c
+new file mode 100644
+index 0000000..d0df166
+--- /dev/null
++++ b/bend2/effs/spawn_on.c
+@@ -0,0 +1,13 @@
++// IO
++// ==
++
++// act on event loop i (modulo IO_LOOPS): loop 0 is the main thread's, and
++// a loop past it starts on a thread of its own the first time.
++Term io_spawn_on_run(Env e, Term* f, IoWork* w) {
++  io_spawn_at((u32)f[0], f[1]);
++  return term_pak(CID(Unit), 0);
++}
++
++static void __attribute__((constructor)) io_spawn_on_use(void) {
++  io_eff(CID(IO.spawn_on), io_spawn_on_run);
++}
+diff --git a/bend2/effs/spawn_on.js b/bend2/effs/spawn_on.js
+new file mode 100644
+index 0000000..1df0e87
+--- /dev/null
++++ b/bend2/effs/spawn_on.js
+@@ -0,0 +1,10 @@
++// IO
++// ==
++
++// One event loop here: act runs as IO.spawn runs it.
++function io_spawn_on(at, act) {
++  io_push(act, (x) => ({ $: CID(Emit), value: x }), true);
++  return { $: CID(Unit) };
++}
++
++io_eff(CID(IO.spawn_on), io_spawn_on);
+diff --git a/bend2/effs/tcp_post.c b/bend2/effs/tcp_post.c
+new file mode 100644
+index 0000000..ddaa130
+--- /dev/null
++++ b/bend2/effs/tcp_post.c
+@@ -0,0 +1,20 @@
++// TCP
++// ===
++
++// The bytes go to this loop's writer thread (io_post), which sends them in
++// order; the socket comes back at once. A Char past 255 sends nothing.
++Term tcp_post_run(Env e, Term* f, IoWork* w) {
++  u64   room = str_len(e.mem, f[1]) + 1;
++  char* buf  = io_mem(malloc(room));
++  u64   len  = 0;
++  if (io_cbuf_in(e, f[1], &len, IO_RAW, &buf, &room) == NULL) {
++    free(buf);
++  } else {
++    io_post((int)io_hand_v(f[0]), buf, len);
++  }
++  return f[0];
++}
++
++static void __attribute__((constructor)) tcp_post_use(void) {
++  io_eff(CID(TCP.post), tcp_post_run);
++}
+diff --git a/bend2/effs/tcp_post.js b/bend2/effs/tcp_post.js
+new file mode 100644
+index 0000000..2707647
+--- /dev/null
++++ b/bend2/effs/tcp_post.js
+@@ -0,0 +1,35 @@
++// TCP
++// ===
++
++// One loop here, and no writer: the bytes go out as TCP.send_raw sends them,
++// and the socket comes back once they have. A Char past 255 sends nothing.
++function tcp_post(socket, data, k) {
++  const b = new Uint8Array(data.length);
++  for (let i = 0; i < data.length; i += 1) {
++    const c = data.charCodeAt(i);
++    if (c > 255) {
++      return socket;
++    }
++    b[i] = c;
++  }
++  const sys = io_sys();
++  const again = sys.mac ? 35 : 11;
++  const go = (at) => {
++    while (at < b.length) {
++      const part = b.subarray(at);
++      const n = Number(sys.send(socket, sys.ptr(part), part.length, 0));
++      if (n < 0) {
++        if (sys.errno() === again) {
++          io_park_on(socket, true, k, () => go(at));
++          return undefined;
++        }
++        return socket;
++      }
++      at += n;
++    }
++    return socket;
++  };
++  return go(0);
++}
++
++io_eff(CID(TCP.post), tcp_post);
+diff --git a/bend2/effs/tcp_recv.c b/bend2/effs/tcp_recv.c
+index 2be2fa7..1c76f16 100644
+--- a/bend2/effs/tcp_recv.c
++++ b/bend2/effs/tcp_recv.c
+@@ -7,7 +7,9 @@
+ 
+ // A recv's buffer, kept for the next recv on this thread: one malloc and
+ // free of the max (64 KiB, say) per recv let glibc trim and regrow the
+-// heap's top (brk), and fault its pages back in.
++// heap's top (brk, or madvise on a thread's own arena), and fault its pages
++// back in. A recv that finds nothing gives the buffer back before it
++// parks, so many connections waiting at once hold none.
+ static _Thread_local char* tcp_rbuf;
+ static _Thread_local u64   tcp_rcap;
+ 
+@@ -33,8 +35,13 @@ static void tcp_rbuf_give(char* p, u64 n) {
+ static Term tcp_recv_with(Env e, IoWork* w, IoPack more,
+   Term (*read)(Env, const char*, u64)) {
+   int fd  = (int)w->hand;
++  if (w->data == NULL) {
++    w->data = tcp_rbuf_take((u64)w->made);
++  }
+   w->size = io_sys_end(w, recv(fd, w->data, (size_t)w->made, 0));
+   if (w->code == EAGAIN) {
++    tcp_rbuf_give(w->data, (u64)w->made);
++    w->data = NULL;
+     return io_wait_on(w, fd, POLLIN, 0, more);
+   }
+   Term r = io_res(e, w, read(e, w->data, w->size));
+@@ -48,7 +55,7 @@ static Term tcp_recv_start(Env e, Term* f, IoWork* w, IoPack more) {
+     return io_tup(e, io_hand(w->hand), io_fail(e, EINVAL, NULL));
+   }
+   w->made = f[1] < INT32_MAX ? (intptr_t)f[1] : INT32_MAX;
+-  w->data = tcp_rbuf_take((u64)w->made);
++  w->data = NULL;
+   return more(e, w);
+ }
+ 
+diff --git a/bend2/effs/tcp_send.c b/bend2/effs/tcp_send.c
+index c6a8201..2b7a2d7 100644
+--- a/bend2/effs/tcp_send.c
++++ b/bend2/effs/tcp_send.c
+@@ -1,6 +1,12 @@
+ // TCP
+ // ===
+ 
++// TCP.send_raw's bytes go out from a buffer kept for the next send on this
++// thread, which most sends finish at once; one that must wait first takes
++// what is left into a buffer of its own.
++static _Thread_local char* tcp_sbuf;
++static _Thread_local u64   tcp_scap;
++
+ // Sends what is left; a full socket (non-blocking, so EAGAIN) parks the
+ // computation until the socket is writable, and the loop resumes here.
+ static Term tcp_send_more(Env e, IoWork* w) {
+@@ -8,12 +14,22 @@ static Term tcp_send_more(Env e, IoWork* w) {
+   while (w->code == 0 && (u64)w->made < w->size) {
+     ssize_t n = send(fd, w->data + w->made, w->size - (u64)w->made, 0);
+     if (n < 0 && errno == EAGAIN) {
++      if (w->data != NULL && w->data == tcp_sbuf) {
++        u64   left = w->size - (u64)w->made;
++        char* own  = io_mem(malloc(left + 1));
++        memcpy(own, w->data + w->made, left);
++        w->data = own;
++        w->size = left;
++        w->made = 0;
++      }
+       return io_wait_on(w, fd, POLLOUT, 0, tcp_send_more);
+     }
+     w->made += io_sys_end(w, n);
+   }
+   Term r = io_res(e, w, term_pak(CID(Unit), 0));
+-  free(w->data);
++  if (w->data != tcp_sbuf) {
++    free(w->data);
++  }
+   return io_tup(e, io_hand(w->hand), r);
+ }
+ 
+@@ -55,7 +71,7 @@ static void __attribute__((constructor)) tcp_send_bytes_use(void) {
+ // A Char past 255 fails with EINVAL before any byte is sent.
+ Term tcp_send_raw_run(Env e, Term* f, IoWork* w) {
+   w->hand = (intptr_t)io_hand_v(f[0]);
+-  w->data = io_craw(e, f[1], &w->size);
++  w->data = io_cbuf_in(e, f[1], &w->size, IO_RAW, &tcp_sbuf, &tcp_scap);
+   w->made = 0;
+   w->code = w->data == NULL ? EINVAL : 0;
+   return tcp_send_more(e, w);
+diff --git a/tests/io/chan_send_all.bend b/tests/io/chan_send_all.bend
+new file mode 100644
+index 0000000..97d8f77
+--- /dev/null
++++ b/tests/io/chan_send_all.bend
+@@ -0,0 +1,138 @@
++# io (io_chan_send_all): Chan.send_all puts several values on their
++# channels at once, without waiting. Two values go past a room of one
++# and a third onto a channel with no room, and come out in order (1 2
++# 3). A receiver parked before the send takes its value at once (7). A
++# closed channel drops its value. Last, two computations on loops 1 and
++# 2 each send 100 pairs, one value on x and one on y at a time: the
++# values come out of x and y in the same order (same).
++import Base
++
++law got:
++  for m: Maybe<&1, U32>
++  U32
++
++def got(m):
++  match m:
++    case None{}:
++      0
++    case Some{value}:
++      value
++
++law show:
++  for +c: Chan(U32)
++  IO(Unit)
++
++def show(c):
++  do IO<Unit>:
++    m : Maybe<&1, U32> <- Chan.recv(U32, c)
++    IO.print(U32.show(got(m)))
++
++law pairs:
++  for n: Nat
++  for +x: Chan(U32)
++  for +y: Chan(U32)
++  for +k: U32
++  for +done: Chan(U32)
++  IO(Unit)
++
++def pairs(n, x, y, k, done):
++  match n:
++    case 0n:
++      do IO<Unit>:
++        Bool <- Chan.send(U32, done, k)
++        return Unit{}
++    case 1n+p:
++      do IO<Unit>:
++        Unit <- Chan.send_all(U32, [(x, k), (y, k)])
++        pairs(p, x, y, k, done)
++
++law drain:
++  for n: Nat
++  for +c: Chan(U32)
++  for acc: List<&2, U32>
++  IO(List<&2, U32>)
++
++def drain(n, c, acc):
++  match n:
++    case 0n:
++      IO.pure(List<&2, U32>, acc)
++    case 1n+p:
++      do IO<List<&2, U32>>:
++        m : Maybe<&1, U32> <- Chan.recv(U32, c)
++        drain(p, c, got(m) <> acc)
++
++law same:
++  for xs: List<&2, U32>
++  for ys: List<&2, U32>
++  Bool
++
++def same(xs, ys):
++  match xs ys:
++    case Nil{} Nil{}:
++      True{}
++    case Con{a, as} Con{b, bs}:
++      Bool.and(U32.is_eq(a, b), same(as, bs))
++    case _ _:
++      False{}
++
++law verdict:
++  for b: Bool
++  String
++
++def verdict(b):
++  match b:
++    case True{}:
++      "same"
++    case False{}:
++      "differ"
++
++law main.go:
++  for +a: Chan(U32)
++  for +b: Chan(U32)
++  for +c: Chan(U32)
++  for +d: Chan(U32)
++  for +x: Chan(U32)
++  for +y: Chan(U32)
++  for +done: Chan(U32)
++  IO(U32)
++
++def main.go(a, b, c, d, x, y, done):
++  do IO<U32>:
++    Unit <- Chan.send_all(U32, [(a, 1), (a, 2), (b, 3)])
++    Unit <- show(a)
++    Unit <- show(a)
++    Unit <- show(b)
++    Unit <- IO.spawn(Unit, show(c))
++    Unit <- IO.sleep(20)
++    Unit <- Chan.send_all(U32, [(c, 7)])
++    Unit <- Chan.close(U32, d)
++    Unit <- Chan.send_all(U32, [(d, 9)])
++    Unit <- IO.sleep(20)
++    Unit <- IO.spawn_on(Unit, 1, pairs(100n, x, y, 1, done))
++    Unit <- IO.spawn_on(Unit, 2, pairs(100n, x, y, 2, done))
++    Maybe<&1, U32> <- Chan.recv(U32, done)
++    Maybe<&1, U32> <- Chan.recv(U32, done)
++    xs : List<&2, U32> <- drain(200n, x, Nil{})
++    ys : List<&2, U32> <- drain(200n, y, Nil{})
++    Unit <- IO.print(verdict(same(xs, ys)))
++    return 0
++
++law main:
++  IO(U32)
++
++def main():
++  do IO<U32>:
++    a : Chan(U32) <- Chan.new(U32, 1)
++    b : Chan(U32) <- Chan.new(U32, 0)
++    c : Chan(U32) <- Chan.new(U32, 0)
++    d : Chan(U32) <- Chan.new(U32, 1)
++    x : Chan(U32) <- Chan.new(U32, 4)
++    y : Chan(U32) <- Chan.new(U32, 4)
++    done : Chan(U32) <- Chan.new(U32, 2)
++    main.go(a, b, c, d, x, y, done)
++
++#|1
++#|2
++#|3
++#|7
++#|same
+diff --git a/tests/io/spawn_on_loops.bend b/tests/io/spawn_on_loops.bend
+new file mode 100644
+index 0000000..1e028a7
+--- /dev/null
++++ b/tests/io/spawn_on_loops.bend
+@@ -0,0 +1,135 @@
++# io (io_spawn_on_loops): computations on several event loops talk
++# over channels. Three workers on loops 1, 2 and 3 each send k * 10
++# into one channel; main sums what it receives (60). An echo on loop 2
++# answers each of main's 100 values with its successor, so each round
++# wakes a waiter on the other loop (5050). A relay on loop 3 spawns its
++# sender back on loop 0 (7). Last, a waiter on loop 1 prints late once
++# main closes its channel: the process ends with that loop's last
++# computation, after main has answered.
++import Base
++
++law work:
++  for +c: Chan(U32)
++  for k: U32
++  IO(Unit)
++
++def work(c, k):
++  do IO<Unit>:
++    Bool <- Chan.send(U32, c, (k * 10 : U32))
++    return Unit{}
++
++law echo.got:
++  for +b: Chan(U32)
++  for rest: IO(Unit)
++  for m: Maybe<&1, U32>
++  IO(Unit)
++
++def echo.got(b, rest, m):
++  match m:
++    case None{}:
++      IO.pure(Unit, Unit{})
++    case Some{value}:
++      do IO<Unit>:
++        Bool <- Chan.send(U32, b, (value + 1 : U32))
++        rest
++
++law echo:
++  for +a: Chan(U32)
++  for +b: Chan(U32)
++  for n: Nat
++  IO(Unit)
++
++def echo(a, b, n):
++  match n:
++    case 0n:
++      IO.pure(Unit, Unit{})
++    case 1n+p:
++      rest = echo(a, b, p)
++      IO.bind(Maybe<&1, U32>, Unit, Chan.recv(U32, a), echo.got(b, rest))
++
++law got:
++  for m: Maybe<&1, U32>
++  U32
++
++def got(m):
++  match m:
++    case None{}:
++      0
++    case Some{value}:
++      value
++
++law drive:
++  for n: Nat
++  for +a: Chan(U32)
++  for +b: Chan(U32)
++  for +i: U32
++  for acc: U32
++  IO(U32)
++
++def drive(n, a, b, i, acc):
++  match n:
++    case 0n:
++      IO.pure(U32, acc)
++    case 1n+p:
++      do IO<U32>:
++        Bool <- Chan.send(U32, a, i)
++        r : Maybe<&1, U32> <- Chan.recv(U32, b)
++        drive(p, a, b, (i + 1 : U32), (acc + got(r) : U32))
++
++law relay:
++  for +d: Chan(U32)
++  IO(Unit)
++
++def relay(d):
++  IO.spawn_on(Unit, 0, work(d, 0))
++
++law late:
++  for +z: Chan(U32)
++  IO(Unit)
++
++def late(z):
++  do IO<Unit>:
++    Maybe<&1, U32> <- Chan.recv(U32, z)
++    IO.print("late")
++
++law main.go:
++  for +c: Chan(U32)
++  for +a: Chan(U32)
++  for +b: Chan(U32)
++  for +z: Chan(U32)
++  IO(U32)
++
++def main.go(c, a, b, z):
++  do IO<U32>:
++    Unit <- IO.spawn_on(Unit, 1, work(c, 1))
++    Unit <- IO.spawn_on(Unit, 2, work(c, 2))
++    Unit <- IO.spawn_on(Unit, 3, work(c, 3))
++    x : Maybe<&1, U32> <- Chan.recv(U32, c)
++    y : Maybe<&1, U32> <- Chan.recv(U32, c)
++    w : Maybe<&1, U32> <- Chan.recv(U32, c)
++    Unit <- IO.print(U32.show((got(x) + got(y) + got(w) : U32)))
++    Unit <- IO.spawn_on(Unit, 2, echo(a, b, 100n))
++    s : U32 <- drive(100n, a, b, 0, 0)
++    Unit <- IO.print(U32.show(s))
++    Unit <- IO.spawn_on(Unit, 3, relay(c))
++    v : Maybe<&1, U32> <- Chan.recv(U32, c)
++    Unit <- IO.print(U32.show((got(v) + 7 : U32)))
++    Unit <- IO.spawn_on(Unit, 1, late(z))
++    Unit <- Chan.close(U32, z)
++    return 0
++
++law main:
++  IO(U32)
++
++def main():
++  do IO<U32>:
++    c : Chan(U32) <- Chan.new(U32, 4)
++    a : Chan(U32) <- Chan.new(U32, 0)
++    b : Chan(U32) <- Chan.new(U32, 0)
++    z : Chan(U32) <- Chan.new(U32, 0)
++    main.go(c, a, b, z)
++
++#|60
++#|5050
++#|7
++#|late
+diff --git a/tests/io/tcp_post.bend b/tests/io/tcp_post.bend
+new file mode 100644
+index 0000000..86f18ed
+--- /dev/null
++++ b/tests/io/tcp_post.bend
+@@ -0,0 +1,100 @@
++# io (io_tcp_post): TCP.post hands bytes over and returns the socket at
++# once; they go out in order, and a Socket.close right after the posts
++# closes the socket only once they are sent. The client posts "hel", "lo",
++# a String with a Char past 255 (nothing goes out for it) and 5000 bytes,
++# then closes; the server reads to the end and finds all 5005 bytes, in
++# order (their first five and their sum).
++import Base
++
++def count(s: String, n: U32, k: U32) -> U32 & U32:
++  match s:
++    case "":
++      (n, k)
++    case SCon{c, rest}:
++      count(rest, (n + 1 : U32), (k + Char.to_u32(c) : U32))
++
++def bulk.go(n: Nat, acc: String) -> String:
++  match n:
++    case 0n:
++      acc
++    case 1n++p:
++      bulk.go(p, SCon{Char.from_u32(U32.mod(U32.from_nat(p), 256)), acc})
++
++def count_on(xs: String, nk: U32 & U32) -> U32 & U32:
++  (n, k) = nk
++  count(xs, n, k)
++
++def done(nk: U32 & U32, head: String, s: Socket) -> IO(Unit):
++  (n, k) = nk
++  do IO<Unit>:
++    Unit <- IO.print(String.take(head, 5n) ++ " " ++ U32.show(n) ++ " " ++ U32.show(k))
++    Socket.close(s)
++
++def step(eof: Bool, s: Socket, xs: String, nk: U32 & U32, head: String, next: Socket -> U32 & U32 -> String -> IO(Unit)) -> IO(Unit):
++  match eof:
++    case True{}:
++      done(nk, head, s)
++    case False{}:
++      +x = xs
++      next(s, count_on(x, nk), head ++ x)
++
++def got(m: Socket & Result<&1, &1, U32 & String, String>, nk: U32 & U32, head: String, next: Socket -> U32 & U32 -> String -> IO(Unit)) -> IO(Unit):
++  (s, r) = m
++  match r:
++    case Done{+xs}:
++      step(String.is_empty(xs), s, xs, nk, head, next)
++    case Fail{e}:
++      done(nk, head, s)
++
++def drain(fuel: Nat, s: Socket, nk: U32 & U32, head: String) -> IO(Unit):
++  match fuel:
++    case 0n:
++      done(nk, head, s)
++    case 1n+f:
++      do IO<Unit>:
++        m : Socket & Result<&1, &1, U32 & String, String> <- TCP.recv_raw(s, 4096)
++        got(m, nk, head, s2 => nk2 => h2 => drain(f, s2, nk2, h2))
++
++def talk(c: Socket, p: Listener & Result<&1, &1, U32 & String, Socket>) -> IO(Unit):
++  (l2, ar) = p
++  do IO<Unit>:
++    a  : Socket <- IO.pass(Socket, ar)
++    c1 : Socket <- TCP.post(c, "hel")
++    c2 : Socket <- TCP.post(c1, "lo")
++    c3 : Socket <- TCP.post(c2, "a\u{100}")
++    c4 : Socket <- TCP.post(c3, bulk.go(5000n, ""))
++    Unit <- Socket.close(c4)
++    Unit <- drain(64n, a, (0, 0), "")
++    Listener.close(l2)
++
++def main_go(b: Listener & U32) -> IO(Unit):
++  (l, port) = b
++  do IO<Unit>:
++    c : Socket <- IO.try(Socket, TCP.connect("127.0.0.1", port))
++    p : Listener & Result<&1, &1, U32 & String, Socket> <- TCP.accept(l)
++    talk(c, p)
++
++def tcp_retry(port: U32, r: Result<&1, &1, U32 & String, Listener>, rest: IO(Listener & U32)) ->
++  IO(Listener & U32):
++  match r:
++    case Done{l}:
++      IO.pure(Listener & U32, (l, port))
++    case Fail{e}:
++      rest
++
++def tcp_listen_any(tries: Nat, +port: U32) -> IO(Listener & U32):
++  match tries:
++    case 0n:
++      IO.die(Listener & U32, 1, "no free tcp port")
++    case 1n+t:
++      rest = tcp_listen_any(t, (port + 1 : U32))
++      do IO<Listener & U32>:
++        r : Result<&1, &1, U32 & String, Listener> <- TCP.listen("127.0.0.1", port)
++        tcp_retry(port, r, rest)
++
++def main() -> IO(Unit):
++  do IO<Unit>:
++    b : Listener & U32 <- tcp_listen_any(32n, 19987)
++    main_go(b)
++
++#|hello 5005 629872

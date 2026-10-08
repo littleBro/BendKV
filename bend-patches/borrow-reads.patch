@@ -1,0 +1,567 @@
+diff --git a/bend2/comp.ts b/bend2/comp.ts
+index 25d7837..f250e87 100644
+--- a/bend2/comp.ts
++++ b/bend2/comp.ts
+@@ -60,6 +60,8 @@ type File = {
+   stat: Set<Name>;
+   own: Set<string>;
+   lend: Set<string>;
++  keeps: Set<string>;
++  kheat: [Name, HTerm][];
+   segs: Seg[];
+   spins: Seg[];
+   spun: Map<string, string>;
+@@ -95,6 +97,10 @@ type Scope = {
+   seg: Seg;
+   fresh: Map<string, number>;
+   brwl: Map<string, string>;
++  path: Map<string, string>;
++  orig: Map<string, string[]>;
++  reads: Map<string, number>;
++  slot: Map<string, { seg: Seg; at: string; A: HTerm; def: Name }>;
+   spares: { words: number; name: string; z: boolean }[];
+   uses: Map<Of<"Var">, Bind>;
+   rest: HTerm[];
+@@ -115,6 +121,8 @@ type Dom = [Bend.Quant, Name, HTerm];
+ 
+ type Fun = { n: number; h: HTerm | null; live: Dom[]; lays: Lay[]; ret: Lay };
+ 
++type Key = { id: string; A: HTerm; kept: boolean };
++
+ // Constants
+ // =========
+ 
+@@ -898,6 +906,19 @@ function ty_clo(A: HTerm | null): boolean {
+     : !["Typ", "Qua", "Min", "Eql"].includes(t?.$ ?? ""));
+ }
+ 
++// A datatype is Data when its kind, at its arguments, is Kind(&2): its
++// fields own nothing (no closure, array, file or socket), so any may be
++// shared.
++function ty_data(adt: Of<"ADT">): boolean {
++  const tld = FL.book.tlds[adt.k];
++  if (tld?.$ !== "ADT") {
++    return false;
++  }
++  const K = ty_wnf(Bend.tele_fill(FL.book, tld.T, adt.x, Bend.ctx_nil()));
++  const q = K?.$ === "Typ" ? ty_wnf(K.g) : null;
++  return q?.$ === "Qua" && q.q.$ === "Many";
++}
++
+ function type_adts(T: HTerm): Name[] {
+   const t = ty_wnf(T);
+   switch (t?.$) {
+@@ -1330,7 +1351,9 @@ export function io_run(book: Bend.Book, args: string[]): number {
+ // A File is the book being compiled (FL): its facts, its output and its
+ // caches. The emitter is the analysis: a boxed parameter starts borrowed
+ // (its scope's brwl) and becomes owned (own) when owned or unlent; a lend is
+-// asked by a holder or passed on from a lent root (k~i<j~q). A shared value
++// asked by a holder or passed on from a lent root (k~i<j~q). A field read
++// from a borrowed Data node that is owned keeps its slot (keeps, by its
++// path from the root) instead of owning the root. A shared value
+ // heats its type (hot); a family stuck on an open index heats its arms'
+ // types once, its arguments at every instantiation. compile_book emits until
+ // a pass changes no fact.
+@@ -1346,6 +1369,8 @@ function file_new(book: Bend.Book, js: boolean): File {
+     stat: new Set(),
+     own: new Set(),
+     lend: new Set(),
++    keeps: new Set(),
++    kheat: [],
+     segs: [],
+     spins: [],
+     spun: new Map(),
+@@ -1386,6 +1411,10 @@ function scope_new(): Scope {
+     seg: seg_new("", BOX, []),
+     fresh: new Map(),
+     brwl: new Map(),
++    path: new Map(),
++    orig: new Map(),
++    reads: new Map(),
++    slot: new Map(),
+     spares: [],
+     uses: new Map(),
+     rest: [],
+@@ -1592,6 +1621,12 @@ function seg_open(sc: Scope, name: string, ret: Lay, frame: Seg["frame"],
+     if (sc.brwl.has(w)) {
+       sc.brwl.set(news[i], sc.brwl.get(w)!);
+     }
++    if (sc.path.has(w)) {
++      sc.path.set(news[i], sc.path.get(w)!);
++    }
++    if (sc.orig.has(w)) {
++      sc.orig.set(news[i], sc.orig.get(w)!);
++    }
+   });
+   let i = 0;
+   live.forEach(([p, b]) => bind_uses(sc, p,
+@@ -1612,7 +1647,8 @@ function node_fill(sc: Scope, k: string, alloc: string,
+   return nd;
+ }
+ 
+-function node_fields(sc: Scope, t: string, k: Name, tail = false): Val[] {
++function node_fields(sc: Scope, t: string, k: Name, tail = false,
++  adt: Of<"ADT"> | null = null): Val[] {
+   const node = lay_node(k);
+   const n = node.ks.length;
+   if (lay_packed(node)) {
+@@ -1631,11 +1667,20 @@ function node_fields(sc: Scope, t: string, k: Name, tail = false): Val[] {
+     fb += "[";
+   }
+   file_push(sc, `u64 ${sp} = ${at};`);
+-  const ws = emit_hold(sc, node.ks.map((_, j) => `${fb}${j}]`), "f", node.ks);
++  const keys = r === undefined ? [] : node_keys(sc, t, k, adt);
++  const ws = emit_hold(sc, node.ks.map((_, j) => keys[j]?.kept
++    ? `slot_keep(e, ${sp} + ${j})` : `${fb}${j}]`), "f", node.ks);
+   if (r !== undefined) {
+     ws.forEach((w, j) => {
+-      if (node.ks[j] === "box") {
++      const key = keys[j];
++      if (node.ks[j] === "box" && !key?.kept) {
+         sc.brwl.set(w, r);
++        if (key) {
++          sc.path.set(w, key.id);
++          sc.orig.set(w, [key.id]);
++          sc.slot.set(w, { seg: sc.seg, at: `${sp} + ${j}`, A: key.A,
++            def: sc.def });
++        }
+       }
+     });
+   } else if (tail) {
+@@ -1646,13 +1691,54 @@ function node_fields(sc: Scope, t: string, k: Name, tail = false): Val[] {
+   return val_arm(val_new(ws, node));
+ }
+ 
++// A borrowed node's box words keyed by their paths from the root, each
++// read of a path numbered in its emission (two arms read one path apart).
++// A rooted word owned in its read's segment keeps its slot there (val_own:
++// slot_keep seals it in place, as a co-owner's take does); owned past it, it
++// keeps its key (keeps), and the next pass reads it with slot_keep, owned.
++// Either heats its type, as a shared value's, once a pass changes no
++// ownership (kheat): an early pass reads a parameter that ends up owned as
++// borrowed, and its keeps would leave their types hot for nothing. A
++// datatype that is not Data (a closure or an array cannot be shared), a
++// program that seals eagerly (its nodes may sit on a device) or a word of
++// no known path keys none.
++function node_keys(sc: Scope, t: string, k: Name,
++  adt: Of<"ADT"> | null): (Key | null)[] {
++  const node = lay_node(k);
++  const base = sc.path.get(t);
++  const keys: (Key | null)[] = node.ks.map(() => null);
++  if (base === undefined || adt === null || FL.bangs.size > 0
++    || !ty_data(adt)) {
++    return keys;
++  }
++  const doms = ctr_doms(FL.book.ctrs[k], adt.x);
++  const id = base + "/" + k;
++  const nth = sc.reads.get(id) ?? 0;
++  sc.reads.set(id, nth + 1);
++  let j = 0;
++  node.arms![k].forEach((lay, i) => lay.ks.forEach((kd) => {
++    const key = `${id}#${nth}.${j}`;
++    if (kd === "box") {
++      keys[j] = { id: key, A: doms[i], kept: FL.keeps.has(key) };
++      if (keys[j]!.kept) {
++        FL.kheat.push([sc.def, doms[i]]);
++      }
++    }
++    j += 1;
++  }));
++  return keys;
++}
++
+ // Val
+ // ===
+ 
+ // A word rooted in a borrowed parameter (brwl) is not owned. val_own is
+-// the one gate: at an owned position a rooted word owns its root; lent
+-// at `at`, a rooted word passes its lend on, and an unheld owned box
+-// owns `at`. A destination every arm fills from one root stays rooted.
++// the one gate: at an owned position a rooted word keeps its slot (in the
++// segment that read it) or its keys (past it: orig), or owns its root when
++// it has neither; lent at `at`, a rooted word passes its lend on, and an
++// unheld owned box owns `at`. A destination every arm fills from one root
++// stays rooted. A closure's capture keeps no slot: its segment would take
++// the kept word for a rooted one.
+ 
+ function val_new(ws: string[], lay: Lay, stat = false): Val {
+   return { ws, lay, stat };
+@@ -1670,17 +1756,23 @@ function val_hold(sc: Scope, v: Val, k: string): Val {
+ }
+ 
+ function val_own(sc: Scope, v: Val, at: string | null = null,
+-  held = false): string[] {
+-  v.ws.forEach((w, j) => {
++  held = false, slot = true): string[] {
++  return v.ws.map((w, j) => {
+     const r = sc.brwl.get(w);
++    const s = sc.slot.get(w);
+     if (r !== undefined && at !== null) {
+       FL.lend.add(at + "<" + r);
++    } else if (r !== undefined && slot && s?.seg === sc.seg) {
++      FL.kheat.push([s.def, s.A]);
++      return emit_hold(sc, [`slot_keep(e, ${s.at})`], "kp", ["box"])[0];
++    } else if (r !== undefined && sc.orig.has(w)) {
++      sc.orig.get(w)!.forEach((key) => FL.keeps.add(key));
+     } else if (r !== undefined
+       || (at !== null && !held && v.lay.ks[j] === "box")) {
+       FL.own.add(r ?? at!);
+     }
++    return w;
+   });
+-  return v.ws;
+ }
+ 
+ function val_owned(sc: Scope, v: Val): string[] {
+@@ -1695,9 +1787,10 @@ function val_sink(sc: Scope, v: Val): void {
+   val_owned(sc, v).forEach((w) => file_push(sc, `term_sink(e, ${w});`));
+ }
+ 
+-function val_to(sc: Scope, v: Val, lay: Lay): Val {
++function val_to(sc: Scope, v: Val, lay: Lay,
++  adt: Of<"ADT"> | null = null): Val {
+   return lay_eq(v.lay, lay) ? v : lay_box(lay) ? val_new([val_box(sc, v)], BOX)
+-    : lay_box(v.lay) ? val_unbox(sc, v, lay)
++    : lay_box(v.lay) ? val_unbox(sc, v, lay, adt)
+     : val_arms(sc, lay, v.ws[0], (k) => val_arm(v, k));
+ }
+ 
+@@ -1712,18 +1805,29 @@ function val_arms(sc: Scope, lay: Lay, sel: string, read: (k: Name) => Val[],
+   const out = emit_dst(sc, lay, "o").ws;
+   const t = emit_alias(sc, sel, "t");
+   const rs: string[][] = out.map(() => []);
++  const os: (string[] | undefined)[][] = out.map(() => []);
+   emit_chain(sc, (i) => cond(t, i), arms.map((k, i) => () => {
+     file_push(sc, `${out[0]} = ${i};`);
+     ws({ ...sc, spares: [] }, k).forEach((w, n) => {
+       rs[1 + n].push(sc.brwl.get(w) ?? "");
++      os[1 + n].push(sc.orig.get(w));
+       file_push(sc, `${out[1 + n]} = ${w};`);
+     });
+   }));
+   rs.forEach((r, k) => {
+     if (r[0] && r.every((x) => x === r[0])) {
+       sc.brwl.set(out[k], r[0]);
++      if (os[k].every((o) => o !== undefined)) {
++        sc.orig.set(out[k], os[k].flatMap((o) => o!));
++      }
+     } else {
+-      r.filter((x) => x).forEach((x) => FL.own.add(x));
++      r.forEach((x, i) => {
++        if (os[k][i] !== undefined) {
++          os[k][i]!.forEach((y) => FL.keeps.add(y));
++        } else if (x) {
++          FL.own.add(x);
++        }
++      });
+     }
+   });
+   return val_new(out, lay);
+@@ -1746,13 +1850,14 @@ function val_box(sc: Scope, v: Val): string {
+   return out;
+ }
+ 
+-function val_unbox(sc: Scope, v: Val, lay: Lay): Val {
++function val_unbox(sc: Scope, v: Val, lay: Lay,
++  adt: Of<"ADT"> | null = null): Val {
+   if (lay.arms === null) {
+     return val_new(v.ws, lay);
+   }
+   const t = emit_alias(sc, v.ws[0], "u");
+-  return val_arms(sc, lay, t, (k) => node_fields(sc, t, k), (_, i) =>
+-    `term_aux(${t}) == ${cid_mac(Object.keys(lay.arms!)[i])}`);
++  return val_arms(sc, lay, t, (k) => node_fields(sc, t, k, false, adt),
++    (_, i) => `term_aux(${t}) == ${cid_mac(Object.keys(lay.arms!)[i])}`);
+ }
+ 
+ // Arr
+@@ -2211,11 +2316,13 @@ function emit_open(sc: Scope, k: Name): [Scope, Val[]] {
+   brw_of(k).forEach((b, i) => vals[i].ws.forEach((w, j) => {
+     if (b && lays[i].ks[j] === "box") {
+       sc.brwl.set(w, k + "~" + i);
++      sc.path.set(w, k + "~" + i + ":" + j);
+     }
+   }));
+   const seg = seg_new(k, ret, vals.flatMap((v) => v.ws),
+     vals.flatMap((v) => v.lay.ks));
+-  return [{ ...sc, seg, spares: [], uses: new Map(), def: k }, vals];
++  return [{ ...sc, seg, spares: [], uses: new Map(), reads: new Map(),
++    def: k }, vals];
+ }
+ 
+ function emit_native(sc: Scope, k: Name, ers: HTerm[]): string {
+@@ -2280,7 +2387,8 @@ function emit_clo(sc: Scope, x: HTerm, ty: HTerm | null): Val {
+       sc.uses.set(p, { ...b, n: b.n - term_use(u, p) + 1 });
+       return [p, { ...b, val: bind_pop(sc, p) }];
+     });
+-  const words = live.flatMap(([, b]) => val_own(sc, b.val));
++  const words = live.flatMap(([, b]) => val_own(sc, b.val, null, false,
++    false));
+   const name = seg_name(sc, "c");
+   const clo = seg_clo(sc, seg_fid(name), words);
+   const arg = val_new([name_local(sc, "x")], BOX);
+@@ -2517,7 +2625,7 @@ function emit_body(sc: Scope, tm: HTerm, ty0: HTerm | null,
+       }
+       const o = term_open(x);
+       bind_uses(sc, o.ps[0], val_hold(sc, val_to(sc, args[0],
+-        lay_of(all.A)), x.k), [o.b], all.A);
++        lay_of(all.A), ty_adt(all.A)), x.k), [o.b], all.A);
+       return emit_body(sc, o.b, all.B(DUMMY), ers, args.slice(1), dst);
+     }
+     case "Mat":
+@@ -2688,7 +2796,8 @@ function emit_match(sc: Scope, x: Of<"Mat"> | Of<"Efq">,
+   const { adt, ret, rows, cells } = mat_rows(sc, x, ty);
+   const word = WORDS[adt.k] === W32;
+   const lay = word ? lay_node(adt.k) : lay_of(adt);
+-  const u = val_hold(sc, val_to(sc, args[0], word ? W32 : lay), "s");
++  const u = val_hold(sc, val_to(sc, args[0], word ? W32 : lay,
++    word ? null : adt), "s");
+   const sw = u.ws[0];
+   const tab = emit_tab(sc, cells, ret, sw);
+   if (tab !== null) {
+@@ -2728,7 +2837,7 @@ function emit_match(sc: Scope, x: Of<"Mat"> | Of<"Efq">,
+           : [`!str_nil(${sw})`, h, (al) => str_fields(al, sw)];
+       }
+       return lay_box(lay) ? [`term_aux(${sw}) == ${cid_mac(k)}`, h,
+-        (al) => node_fields(al, sw, k, true)]
++        (al) => node_fields(al, sw, k, true, adt)]
+         : [`${sw} == ${Object.keys(lay.arms!).indexOf(k)}`, h,
+           () => val_arm(u, k)];
+     });
+@@ -2808,12 +2917,15 @@ export function compile_book(book: Bend.Book): string {
+   const fams = (show ?? []).flatMap((c) =>
+     typeof c === "string" ? [Bend.book_fam(FL.book, c)] : []);
+   file_book(["main", ...RUNTIME_ADTS, ...fams]);
+-  const facts = () => FL.own.size + FL.hot.size + FL.stat.size;
++  const facts = () => FL.own.size + FL.hot.size + FL.stat.size
++    + FL.keeps.size;
+   let was: number;
+   do {
+     was = facts();
++    const owns = FL.own.size + FL.keeps.size;
+     [FL.lend, FL.spun, FL.clos, FL.tabs, FL.lits, FL.consts, FL.brws]
+       .forEach((m) => m.clear());
++    FL.kheat = [];
+     FL.segs = [];
+     FL.spins = [];
+     FL.img = [];
+@@ -2838,6 +2950,10 @@ export function compile_book(book: Bend.Book): string {
+         FL.own.add(k + "~" + i);
+       }
+     }));
++    if (FL.own.size + FL.keeps.size === owns) {
++      FL.kheat.forEach(([def, A]) => facts_hot({ ...scope_new(), def }, A,
++        true));
++    }
+   } while (was !== facts());
+   const edges = [...FL.segs, ...FL.spins].flatMap((s) =>
+     [...s.refs].map((r) => [s.fid, r]));
+@@ -4122,6 +4238,36 @@ INLINE u64 ctr_take(Env e, Term t, u32 n, THR Term* out) {
+   return 0;
+ }
+ 
++// A field read out of a borrowed node to be owned (SEAL_LAZY): the node
++// keeps its reference and the reader gets its own, the field sealed in
++// place as span_fade seals it, by CAS as co-owners may race to seal it.
++#if SEAL_LAZY && !DEVICE
++INLINE Term slot_keep(Env e, u64 at) {
++  Term f = atomic_load_explicit((_Atomic u64*)&e.mem[at],
++    memory_order_acquire);
++  if (term_rfc(f)) {
++    rfc_bump(e, term_loc(f), 1);
++    return f;
++  }
++  if (term_triv(f)) {
++    return f;
++  }
++  if (term_tag(f) != TAG_CTR && !(STR_PACK && term_tag(f) == TAG_BUF)) {
++    err_post(e.mem, ERR_RFCS);
++    return f;
++  }
++  Term w = rfc_wrap(e, f, 2);
++  Term x = f;
++  if (atomic_compare_exchange_strong_explicit((_Atomic u64*)&e.mem[at], &x,
++      w, memory_order_acq_rel, memory_order_acquire)) {
++    return w;
++  }
++  heap_free(e, 0, term_loc(w));
++  rfc_bump(e, term_loc(x), 1);
++  return x;
++}
++#endif
++
+ INLINE Term term_word(Env e, Term w) {
+   u32 x = 0;
+   Term t = w;
+diff --git a/tests/reg/brw_field_store.bend b/tests/reg/brw_field_store.bend
+index 15dd4ec..c5437cd 100644
+--- a/tests/reg/brw_field_store.bend
++++ b/tests/reg/brw_field_store.bend
+@@ -1,7 +1,8 @@
+ # borrow witness: a borrower passing a field to a storing position. Xs.rev
+ # stores v, a word: rev~0 stays borrowed (term_peek in its spin) and F has
+-# no term_keep. Ys.rev stores v, a box field of its rooted parameter: the
+-# root is owned, Ys.rev takes its nodes, and G keeps ys once.
++# no term_keep. Ys.rev stores v, a box field of its rooted parameter: it
++# keeps v in its slot (slot_keep), so its root stays borrowed too, G keeps
++# nothing, and only the stored Xs are shared, not ys.
+ import Base
+ 
+ type Xs is Data:
+diff --git a/tests/reg/brw_fork_cross.bend b/tests/reg/brw_fork_cross.bend
+index 858ef45..25b8fd9 100644
+--- a/tests/reg/brw_fork_cross.bend
++++ b/tests/reg/brw_fork_cross.bend
+@@ -1,8 +1,8 @@
+-# borrow witness: a fork whose kids read (cnt~0 borrowed) and consume
+-# (tail~0 owned: it returns a field) one list. The reader's use still
+-# counts when the consumer pops, so tail gets a kept copy (a term_keep on
+-# each path, parallel and sequential; Xs hot), both tasks see a live list,
+-# and the join holds it and sinks it after both. Correct at 8 threads.
++# borrow witness: a fork whose kids both borrow one list: cnt~0 reads it,
++# and tail~0 returns a field, which it keeps in its slot (slot_keep; Xs
++# hot) instead of owning the list. Neither path keeps the list (no
++# term_keep, parallel or sequential), both tasks see it live, and the join
++# holds it and sinks it after both. Correct at 8 threads.
+ import Base
+ 
+ type Xs is Data:
+diff --git a/tests/reg/brw_twins.bend b/tests/reg/brw_twins.bend
+index cd9f1aa..792f714 100644
+--- a/tests/reg/brw_twins.bend
++++ b/tests/reg/brw_twins.bend
+@@ -1,10 +1,10 @@
+ # borrow witness: one value twice in one call. Both reads its twins, so F
+ # lends xs to both and keeps nothing (the continuation sinks the list after
+-# the call). Mixed hands b to Xs.tail, which returns a field and so owns
+-# its parameter: Mixed~1 is owned, Mixed~0 borrowed, and G must keep xs
+-# (one term_keep). A compiler that moves the twin into Mixed~1 has sum
+-# walk the cell tail freed (the free list overwrites v: a wrong sum; a
+-# poisoned heap_free faults).
++# the call). Mixed hands b to Xs.tail, which returns a field: it keeps the
++# field in its slot (slot_keep), so its parameter stays borrowed, Mixed
++# lends both twins and G keeps nothing either. A compiler that moves the
++# twin into Mixed~1 has sum walk the cell tail freed (the free list
++# overwrites v: a wrong sum; a poisoned heap_free faults).
+ import Base
+ 
+ type Xs is Data:
+diff --git a/tests/rfc/borrow_field.bend b/tests/rfc/borrow_field.bend
+new file mode 100644
+index 0000000..df98dda
+--- /dev/null
++++ b/tests/rfc/borrow_field.bend
+@@ -0,0 +1,113 @@
++# rfc (rfc_borrow_field): a field read out of a borrowed tree and owned
++# keeps its slot instead of owning the tree. pick walks a lent tree and
++# answers a field (kept where it escapes: slot_keep in the read's
++# segment); late answers it after a call (kept where it is read, from a
++# fact of the pass before); firsts merges a Maybe's field through the
++# arms of an unboxed match; grab hands one to a closure; many races 2^12
++# forked readers to keep one field. The tree is used again after every
++# read, so a lost count, a double free or a rooted word left owned shows
++# as a wrong sum or a "bend: error". Expect 3,ab12,4ab12,abcde,ab12,16384
++# on every lane.
++import Base
++
++type T is Data:
++  L{}
++  N{x: String, l: T, r: T}
++
++def len(s: String) -> U32:
++  match s:
++    case SNil{}:
++      0
++    case SCon{c, r}:
++      U32.add(1, len(r))
++
++def pick(n: Nat, t: T) -> String:
++  match n t:
++    case 0n N{x, l, r}:
++      x
++    case 1n+p N{x, l, r}:
++      pick(p, l)
++    case _ L{}:
++      ""
++
++def late.k(g: Bool, x: String) -> String:
++  match g:
++    case True{}:
++      x
++    case False{}:
++      "-"
++
++def late(n: U32, t: T) -> String:
++  match t:
++    case L{}:
++      ""
++    case N{+x, l, r}:
++      late.k(U32.is_gt(len(x), n), x)
++
++def lx(t: T) -> String:
++  match t:
++    case L{}:
++      ""
++    case N{+x, l, r}:
++      String.append(U32.show(len(x)), x)
++
++def firsts(xs: List<&2, Maybe<&2, String>>) -> String:
++  match xs:
++    case Nil{}:
++      ""
++    case h <> t:
++      match h:
++        case None{}:
++          firsts(t)
++        case Some{v}:
++          String.append(v, firsts(t))
++
++def grab(t: T) -> (U32 -> String) & U32:
++  match t:
++    case L{}:
++      (n => "", 0)
++    case N{x, l, r}:
++      (n => x, 1)
++
++def call(p: (U32 -> String) & U32) -> String:
++  (f, k) = p
++  f(k)
++
++def get(t: T) -> String:
++  match t:
++    case L{}:
++      ""
++    case N{x, l, r}:
++      x
++
++def many(d: Nat, +t: T) -> U32:
++  match d:
++    case 0n:
++      len(get(t))
++    case 1n++p:
++      a b = many(p, t) many(p, t)
++      U32.add(a, b)
++
++def build(n: Nat) -> T:
++  match n:
++    case 0n:
++      L{}
++    case 1n++p:
++      N{String.append("ab", Nat.show(n)), build(p), L{}}
++
++def sep(a: String, b: String) -> String:
++  String.append(a, String.append(",", b))
++
++def go(+t: T, +xs: List<&2, Maybe<&2, String>>) -> String:
++  a = U32.show(len(pick(9n, t)))
++  b = late(3, t)
++  c = lx(t)
++  d = firsts(xs)
++  e = call(grab(t))
++  f = U32.show(many(12n, t))
++  sep(a, sep(b, sep(c, sep(d, sep(e, f)))))
++
++def main() -> IO(Unit):
++  IO.print(go(build(12n), [Some{"a"}, None{}, Some{"bc"}, Some{String.append("d", "e")}]))
++
++#|3,ab12,4ab12,abcde,ab12,16384

@@ -1,0 +1,609 @@
+diff --git a/bend2/comp.ts b/bend2/comp.ts
+index 13e6f04..0e5e458 100644
+--- a/bend2/comp.ts
++++ b/bend2/comp.ts
+@@ -104,11 +104,18 @@ type Scope = {
+   slot: Map<string, { seg: Seg; at: string; A: HTerm; def: Name }>;
+   spares: { words: number; name: string; z: boolean }[];
+   fld: Map<string, { sp: string; j: number }>;
++  src: Map<string, { pre: string; j: number; k: Name }>;
++  perm: Perm | null;
+   uses: Map<Of<"Var">, Bind>;
+   rest: HTerm[];
+   def: Name;
+ };
+ 
++// A digit select in force (sel_find): in def, k nodes swap slots off and
++// off + x for slots below off + n.
++type Perm = { k: Name; off: number; n: number; x: string; sp: string | null;
++  def: Name };
++
+ type Tpl = string | ((xs: string[]) => string);
+ 
+ type Native = Record<Name, { intr: Tpl; elim?: string[]; cond?: string }>;
+@@ -1087,7 +1094,7 @@ function ctr_build(sc: Scope, k: Name, exprs: string[], stat = false): string {
+   if (lay_node(k).ks.join() === "w32" || exprs.length === 0) {
+     return `term_pak(${cid}, ${exprs[0] ?? 0})`;
+   }
+-  if (stat) {
++  if (stat && !perm_on(sc, k)) {
+     FL.stat.add(k);
+     const at = memo(FL.lits, exprs.join(", "), () =>
+       FL.img.push(...exprs) - exprs.length);
+@@ -1105,7 +1112,21 @@ function ctr_build(sc: Scope, k: Name, exprs: string[], stat = false): string {
+   const same = (w: string, j: number) => s !== null && !s.z
+     && sc.fld.get(w)?.sp === s.name && sc.fld.get(w)?.j === j;
+   return `term_ctr(${cid}, ${node_fill(sc, "nd", got, exprs,
+-    FL.hot.has(k) && FL.bangs.size > 0, same)})`;
++    FL.hot.has(k) && FL.bangs.size > 0, same, (j) => perm_at(sc, k, j))})`;
++}
++
++function perm_on(sc: Scope, k: Name): boolean {
++  return sc.perm !== null && sc.perm.k === k && sc.perm.def === sc.def;
++}
++
++// slot j of a k node under a digit select: slots off and off + x swap
++function perm_at(sc: Scope, k: Name, j: number): string {
++  const p = sc.perm!;
++  if (!perm_on(sc, k) || j < p.off || j >= p.off + p.n) {
++    return String(j);
++  }
++  return j === p.off ? `${p.off} + ${p.x}`
++    : `(${p.x} == ${j - p.off} ? ${p.off} : ${j})`;
+ }
+ 
+ // A program with no bang call runs on the CPU alone, as SEAL_LAZY: its
+@@ -1448,6 +1469,8 @@ function scope_new(): Scope {
+     slot: new Map(),
+     spares: [],
+     fld: new Map(),
++    src: new Map(),
++    perm: null,
+     uses: new Map(),
+     rest: [],
+     def: "",
+@@ -1643,16 +1666,20 @@ function seg_name(sc: Scope, stem: string): string {
+ 
+ function seg_open(sc: Scope, name: string, ret: Lay, frame: Seg["frame"],
+   live: [Of<"Var">, Bind][], res: Val, rest: HTerm[],
+-  carry: Scope["spares"] = []): Scope {
++  carry: Scope["spares"] = [], keep = false): Scope {
+   const olds = live.flatMap(([, b]) => b.val.ws);
+   const news = olds.map((w) => name_local(sc, w.replace(/_\d+$/, "")));
+   const sps = carry.map(() => name_local(sc, "sp"));
+-  const seg = seg_new(name, ret, [...news, ...sps, ...res.ws],
++  const pm = keep ? sc.perm : null;
++  const xs = pm ? [name_local(sc, "x")] : [];
++  const seg = seg_new(name, ret, [...news, ...sps, ...xs, ...res.ws],
+     [...live.flatMap(([, b]) => b.val.lay.ks), ...sps.map((): Kind => "w64"),
+-      ...res.lay.ks], frame);
++      ...xs.map((): Kind => "w32"), ...res.lay.ks], frame);
+   FL.segs.push(seg);
++  const ci = carry.findIndex((s) => s.name === pm?.sp);
+   sc = { ...sc, seg, uses: new Map(),
+-    spares: carry.map((s, i) => ({ ...s, name: sps[i] })) };
++    spares: carry.map((s, i) => ({ ...s, name: sps[i] })),
++    perm: pm && { ...pm, x: xs[0], sp: ci < 0 ? null : sps[ci] } };
+   olds.forEach((w, i) => {
+     if (sc.brwl.has(w)) {
+       sc.brwl.set(news[i], sc.brwl.get(w)!);
+@@ -1677,11 +1704,12 @@ function seg_open(sc: Scope, name: string, ret: Lay, frame: Seg["frame"],
+ // skip(w, j): word w is already in slot j of the reused node
+ function node_fill(sc: Scope, k: string, alloc: string,
+   exprs: string[], shr = false,
+-  skip: (w: string, j: number) => boolean = () => false): string {
++  skip: (w: string, j: number) => boolean = () => false,
++  at: (j: number) => string = String): string {
+   const nd = name_local(sc, k);
+   file_push(sc, `u64 ${nd} = ${alloc};`);
+   exprs.forEach((w, j) => skip(w, j) || file_push(sc,
+-    `e.mem[${nd} + ${j}] = ${shr ? `rfc_seal(e, ${w})` : w};`));
++    `e.mem[${nd} + ${at(j)}] = ${shr ? `rfc_seal(e, ${w})` : w};`));
+   return nd;
+ }
+ 
+@@ -1713,6 +1741,7 @@ function node_fields(sc: Scope, t: string, k: Name, tail = false,
+   const keys = r === undefined ? [] : node_keys(sc, t, k, adt);
+   const ws = emit_hold(sc, node.ks.map((_, j) => keys[j]?.kept
+     ? `slot_keep(e, ${sp} + ${j})` : `${fb}${j}]`), "f", node.ks);
++  ws.forEach((w, j) => keys[j]?.kept || sc.src.set(w, { pre: fb, j, k }));
+   if (r !== undefined) {
+     ws.forEach((w, j) => {
+       const key = keys[j];
+@@ -2368,7 +2397,7 @@ function emit_open(sc: Scope, k: Name): [Scope, Val[]] {
+   const seg = seg_new(k, ret, vals.flatMap((v) => v.ws),
+     vals.flatMap((v) => v.lay.ks));
+   return [{ ...sc, seg, spares: [], uses: new Map(), reads: new Map(),
+-    def: k }, vals];
++    perm: null, def: k }, vals];
+ }
+ 
+ function emit_native(sc: Scope, k: Name, ers: HTerm[]): string {
+@@ -2612,7 +2641,8 @@ function emit_ctr(sc: Scope, x: Of<"Ctr">, ty: HTerm | null,
+     facts_ctr(sc, FL.book.ctrs[x.k], adt.x);
+   }
+   const pos = at ?? lay_of(adt);
+-  const seen = memo(FL.consts, pos, () => new Map());
++  const seen = perm_on(sc, x.k) ? new Map<HTerm, Val>()
++    : memo(FL.consts, pos, () => new Map());
+   const got = seen.get(x);
+   if (got !== undefined) {
+     return got;
+@@ -2624,10 +2654,11 @@ function emit_ctr(sc: Scope, x: Of<"Ctr">, ty: HTerm | null,
+     ...vs.flatMap((f, j) => val_to(sc, f, lay.arms![x.k][j]).ws)];
+   const v = val_new(lay.ks.map((_, j) => ws[j] ?? "0"), lay,
+     vs.every((f) => f.stat));
++  const stat = v.stat && !perm_on(sc, x.k);
+   const out = lay === pos ? v
+     : val_new([x.k === "SCon" && !v.stat && str_pack()
+       ? str_build(sc, val_own(sc, v))
+-      : ctr_build(sc, x.k, val_own(sc, v), v.stat)], BOX, v.stat);
++      : ctr_build(sc, x.k, val_own(sc, v), stat)], BOX, stat);
+   if (out.stat) {
+     seen.set(x, out);
+   }
+@@ -2859,6 +2890,9 @@ function emit_fork(sc: Scope, x: Of<"Let">, ers: HTerm[]): void {
+   const o = term_open(x);
+   const calls = x.v.map((v) => term_spine(v));
+   const fork = calls.length > 1;
++  if (fork && sc.perm !== null) {
++    die("a fork under a digit select");
++  }
+   const name = seg_name(sc, "j");
+   let hold: Of<"Var">[] = [];
+   if (fork) {
+@@ -2905,10 +2939,12 @@ function emit_fork(sc: Scope, x: Of<"Let">, ers: HTerm[]): void {
+     const vv = all.filter(([, b]) => virt(b));
+     sc.spares = sc.spares.filter((s) => !carry.includes(s));
+     spare_flush(sc);
++    const px = sc.perm;
+     const ws = [...vs.flatMap(([p, b]) =>
+       (pos.set(p, depth), depth += b.val.ws.length, b.val.ws)),
+-      ...carry.map((s) => (depth += 1, s.name))];
+-    const cpos = depth - carry.length;
++      ...carry.map((s) => (depth += 1, s.name)),
++      ...px ? [(depth += 1, px.x)] : []];
++    const cpos = depth - carry.length - (px ? 1 : 0);
+     emit_chain(sc, () => "seq", [() => {
+       const fr = [...ws, seg_ref(sc, seg_fid(kn))];
+       file_push(sc, `WL_ROOM(${fr.length});`);
+@@ -2924,19 +2960,22 @@ function emit_fork(sc: Scope, x: Of<"Let">, ers: HTerm[]): void {
+     const held = [...sc.uses].filter(([p]) => pos.has(p));
+     const at = [...held.flatMap(([p, b]) => b.val.ws.map((_, j) =>
+       pos.get(p)! + j - (last ? 0 : depth))),
+-      ...carry.map((_, j) => cpos + j - (last ? 0 : depth))];
++      ...carry.map((_, j) => cpos + j - (last ? 0 : depth)),
++      ...px ? [cpos + carry.length - (last ? 0 : depth)] : []];
+     const ret = fun_of(c.k!).ret;
+     const rest = [...hold, chain[i]];
+     const rs = val_new(ret.ks.map(() => name_local(sc, o.ps[i].k)), ret);
+     const back = vv.filter(([p]) => sc.uses.has(p));
+     const old = carry.map((s) => s.name);
+     sc = seg_open(sc, kn, sc.seg.ret, { pop: last ? depth : 0, at }, held, rs,
+-      rest, carry);
++      rest, carry, true);
+     back.forEach(([p, b]) => {
+       const ws = b.val.ws.map((w, j) => {
+         const f = sc.fld.get(w)!;
+         const sp = sc.spares[old.indexOf(f.sp)].name;
+-        const nw = emit_hold(sc, [`e.mem[${sp} + ${f.j}]`], "f",
++        const at = px !== null && f.sp === px.sp ? perm_at(sc, px.k, f.j)
++          : f.j;
++        const nw = emit_hold(sc, [`e.mem[${sp} + ${at}]`], "f",
+           [b.val.lay.ks[j]])[0];
+         sc.fld.set(nw, { sp, j: f.j });
+         return nw;
+@@ -3011,6 +3050,20 @@ function emit_match(sc: Scope, x: Of<"Mat"> | Of<"Efq">,
+     bind_dead(sc, []);
+     return emit_put(sc, dst, val_new([tab], lay_of(ret)));
+   }
++  const sel = rows === null && !word && !lay_box(lay)
++    ? sel_find(sc, mat_ctrs(x, adt), lay) : null;
++  if (sel !== null) {
++    const al = { ...sc, uses: new Map(sc.uses), spares: sc.spares.slice(),
++      perm: { ...sel.perm, x: sw } };
++    sel_bind(al, sel.ps, sel.pre);
++    bind_dead(al, [sel.h]);
++    emit_body(al, sel.h, null, ers, args.slice(1), dst);
++    if (dst !== null) {
++      spare_flush(al);
++      sc.spares.splice(0);
++    }
++    return;
++  }
+   const lv: [string, HTerm, (al: Scope) => Val[]][] = rows !== null
+     ? rows.map(([h, j, n, e]) => [lits_cond(sw, j, n), h, () => {
+       if (!word) {
+@@ -3074,6 +3127,235 @@ function emit_chain(sc: Scope, cond: (i: number) => string,
+   file_push(sc, "}");
+ }
+ 
++// Digit select
++// ============
++
++// A match on a digit (an enum of fieldless constructors) whose arm i takes
++// field off + i of a node matched above and differs from arm 0 in nothing
++// else: arm i is arm 0 with fields off and off + i swapped, as variables
++// and as slots of each node of that constructor it builds (sel_same). Arm
++// 0 then serves every digit x: it reads field off + x (sel_bind), builds
++// with slots off and off + x swapped (perm_at), and its continuations save
++// x (emit_fork). A trie's walk takes no indirect jump on the digit, and a
++// rebuild returns to one continuation. An arm that could make a closure or
++// a fork is left alone (sel_plain): neither would carry x.
++
++function sel_find(sc: Scope, ctrs: [Name, HTerm][], lay: Lay) {
++  const ks = Object.keys(lay.arms ?? {});
++  const n = ks.length;
++  if (n < 3 || ctrs.length !== n || sc.perm !== null || str_pack() === false
++    || ctrs.some(([k]) => !ks.includes(k) || lay.arms![k].length > 0)) {
++    return null;
++  }
++  const arm = (i: number) => ctrs.find(([k]) => ks.indexOf(k) === i)![1];
++  const h = arm(0);
++  const reads = new Map<string, { k: Name; ps: Of<"Var">[] }>();
++  for (const [p, b] of sc.uses) {
++    const s = b.val.ws.length === 1 ? sc.src.get(b.val.ws[0]) : undefined;
++    if (s !== undefined) {
++      const r = reads.get(s.pre) ?? { k: s.k, ps: [] };
++      r.ps[s.j] = p;
++      reads.set(s.pre, r);
++    }
++  }
++  for (const [pre, { k, ps }] of reads) {
++    if (lay_node(k).arms![k].some((l) => l.ks.length !== 1)) {
++      continue;
++    }
++    for (let off = 0; off + n <= ps.length; off += 1) {
++      const fs = [...Array(n)].map((_, i) => ps[off + i]);
++      if (fs.every((p) => p !== undefined) && sel_plain(h)
++        && fs.slice(1).every((p, i) =>
++          sel_same(h, arm(i + 1), fs[0].i, p.i, k, off, off + i + 1))) {
++        const sp = sc.fld.get(sc.uses.get(fs[0])!.val.ws[0])?.sp ?? null;
++        return { h, pre, ps: fs,
++          perm: { k, off, n, x: "", sp, def: sc.def } as Perm };
++      }
++    }
++  }
++  for (const k of sel_ctrs(h, n)) {
++    const m = lay_node(k).arms![k].length;
++    for (let off = 0; off + n <= m; off += 1) {
++      if (sel_plain(h) && [...Array(n - 1)].every((_, i) =>
++        sel_same(h, arm(i + 1), -1, -1, k, off, off + i + 1))) {
++        return { h, pre: "", ps: [] as Of<"Var">[],
++          perm: { k, off, n, x: "", sp: null, def: sc.def } as Perm };
++      }
++    }
++  }
++  return null;
++}
++
++// The constructors of at least n one-word fields an arm builds: a digit
++// select with no field to read (an arm that only builds, as a walk into an
++// empty trie does) permutes the slots of one of them.
++function sel_ctrs(h: HTerm, n: number): Name[] {
++  const ks = new Set<Name>();
++  const go = (t: HTerm): void => {
++    const s = Bend.term_force(t);
++    switch (s.$) {
++      case "App":
++        return (go(s.f), go(s.x));
++      case "Mat":
++        return (go(s.h), go(s.m));
++      case "Lam":
++      case "Let":
++        if (s.$ === "Let") {
++          s.v.forEach(go);
++        }
++        return go(term_open(s).b);
++      case "Ann":
++        return go(s.x);
++      case "Ctr": {
++        const arms = FL.book.ctrs[s.k] ? lay_node(s.k).arms![s.k] : [];
++        if (arms.length >= n && arms.every((l) => l.ks.length === 1)) {
++          ks.add(s.k);
++        }
++        return s.x.forEach(go);
++      }
++    }
++  };
++  go(h);
++  return [...ks];
++}
++
++// Field off + i (fields ps from pre) re-read for digit x: off + x for
++// field off, off for field off + x.
++function sel_bind(sc: Scope, ps: Of<"Var">[], pre: string): void {
++  const p = sc.perm!;
++  ps.forEach((v, i) => {
++    const b = sc.uses.get(v)!;
++    const w = b.val.ws[0];
++    const at = perm_at(sc, p.k, p.off + i);
++    const nw = emit_hold(sc, [`${pre}${at}]`], "f", b.val.lay.ks)[0];
++    const cp = <V>(m: Map<string, V>) => m.has(w) && m.set(nw, m.get(w)!);
++    cp(sc.brwl);
++    cp(sc.path);
++    cp(sc.orig);
++    cp(sc.fld);
++    const sl = sc.slot.get(w);
++    if (sl !== undefined) {
++      sc.slot.set(nw, { ...sl, at: sl.at.replace(/\d+$/, `(${at})`) });
++    }
++    sc.uses.set(v, { ...b, val: val_new([nw], b.val.lay) });
++  });
++}
++
++// Whether an arm makes no closure (no function in a value's place) and at
++// most one call to a def that is not flat, so no fork.
++function sel_plain(h: HTerm): boolean {
++  let calls = 0;
++  const val = (t: HTerm): boolean => {
++    const s = Bend.term_strip(t);
++    return s.$ !== "Lam" && s.$ !== "Mat" && go(t);
++  };
++  const go = (t: HTerm): boolean => {
++    const s = Bend.term_force(t);
++    switch (s.$) {
++      case "App":
++      case "Ref": {
++        const ck = term_spine(s);
++        calls += Number(ck.k !== null && (ck.k === CLO_APPLY || ck.b === true
++          || !flat_of(ck.k)));
++        const hd = Bend.term_strip(ck.t);
++        return calls <= 1 && (hd.$ !== "Mat" || go(hd))
++          && ck.all.every(val);
++      }
++      case "Mat":
++        return go(s.h) && go(s.m);
++      case "Lam":
++        return go(term_open(s).b);
++      case "Let":
++        return s.v.length === 1 && s.v.every(val) && go(term_open(s).b);
++      case "Ctr":
++        return s.x.every(val);
++      case "Ann":
++        return go(s.x);
++      default:
++        return true;
++    }
++  };
++  return go(h);
++}
++
++// Whether b is a with the variables (probes) p and q swapped and, in each
++// k node a builds, fields i and j swapped. Binders of a and b pair up.
++function sel_same(a: HTerm, b: HTerm, p: number, q: number, k: Name,
++  i: number, j: number): boolean {
++  const bound = new Map<number, number>();
++  const ds = ctr_tail(FL.book.ctrs[k]);
++  const go = (a: HTerm, b: HTerm): boolean => {
++    a = Bend.term_force(a);
++    b = Bend.term_force(b);
++    if (a.$ !== b.$) {
++      return false;
++    }
++    const y = b as typeof a;
++    switch (a.$) {
++      case "Var": {
++        const v = (y as Of<"Var">).i;
++        return bound.has(a.i) ? bound.get(a.i) === v
++          : (a.i === p ? q : a.i === q ? p : a.i) === v;
++      }
++      case "Ref":
++        return a.k === (y as Of<"Ref">).k && a.b === (y as Of<"Ref">).b;
++      case "Lit":
++        return a.k === (y as Of<"Lit">).k && a.v === (y as Of<"Lit">).v;
++      case "App":
++        return go(a.f, (y as Of<"App">).f) && go(a.x, (y as Of<"App">).x);
++      case "Ann":
++        return go(a.x, (y as Of<"Ann">).x) && go(a.T, (y as Of<"Ann">).T);
++      case "Ctr": {
++        const c = y as Of<"Ctr">;
++        const lv = a.x.map((_, n) => n).filter((n) =>
++          a.k !== k || !ds[n] || dom_live(ds[n]));
++        const sw = (n: number) => a.k !== k ? n
++          : n === lv[i] ? lv[j] : n === lv[j] ? lv[i] : n;
++        return a.k === c.k && a.x.length === c.x.length
++          && c.x.every((t, n) => go(a.x[sw(n)], t));
++      }
++      case "Mat": {
++        const m = y as Of<"Mat">;
++        return a.k === m.k && go(a.h, m.h) && go(a.m, m.m);
++      }
++      case "Lam":
++      case "Let": {
++        const oa = term_open(a);
++        const ob = term_open(y as typeof a);
++        if (a.$ === "Let" && (a.v.length !== (y as Of<"Let">).v.length
++          || !a.v.every((t, n) => go(t, (y as Of<"Let">).v[n])))) {
++          return false;
++        }
++        oa.ps.forEach((v, n) => bound.set(v.i, ob.ps[n].i));
++        return go(oa.b, ob.b);
++      }
++      case "All": {
++        const v = probe(a.k);
++        const z = y as Of<"All">;
++        return a.q.$ === z.q.$ && go(a.A, z.A) && go(a.B(v), z.B(v));
++      }
++      case "ADT": {
++        const z = y as Of<"ADT">;
++        return a.k === z.k && a.x.length === z.x.length
++          && a.x.every((t, n) => go(t, z.x[n]));
++      }
++      case "Typ":
++        return go(a.g, (y as Of<"Typ">).g);
++      case "Qua":
++        return a.q.$ === (y as Of<"Qua">).q.$;
++      case "Hol":
++        return a.k === (y as Of<"Hol">).k;
++      case "Qnt":
++      case "Rfl":
++      case "Efq":
++        return true;
++      default:
++        return false;
++    }
++  };
++  return go(a, b);
++}
++
+ // Compile
+ // =======
+ 
+diff --git a/tests/rfc/digit_select.bend b/tests/rfc/digit_select.bend
+new file mode 100644
+index 0000000..ecdfc5f
+--- /dev/null
++++ b/tests/rfc/digit_select.bend
+@@ -0,0 +1,151 @@
++# rfc (rfc_digit_select): a match on a digit (an enum of fieldless
++# constructors) whose arms take field off + i of a node for digit i and
++# differ in nothing else compiles to one arm that reads field off + x and
++# builds with slots off and off + x swapped. get walks a tree of four-way
++# nodes without owning it; put rebuilds a path under a call (its
++# continuation saves the digit) and grows a node where a path meets a leaf
++# or an empty subtree (arms that only build); tag sits before the subtrees,
++# so off is 1. odd's arm for D2 differs, so its match stays a chain. t0 and
++# t1 are shared, so their updates copy the path and leave them as they
++# were. A field read or written at the wrong slot shows as a wrong sum.
++# Expect 3130,3230,4230,3135,28845,26617,39503 on every lane.
++import Base
++
++type D is Data:
++  D0{}
++  D1{}
++  D2{}
++  D3{}
++
++type T is Data:
++  E{}
++  L{v: U32}
++  N{tag: U32, a: T, b: T, c: T, d: T}
++
++def dig.of(n: U32) -> D:
++  match n:
++    case 0:
++      D0{}
++    case 1:
++      D1{}
++    case 2:
++      D2{}
++    case _:
++      D3{}
++
++def dig(+p: U32) -> D:
++  dig.of(U32.and(p, 3))
++
++def full(d: Nat, +x: U32) -> T:
++  match d:
++    case 0n:
++      L{x}
++    case 1n++e:
++      N{x, full(e, U32.add(x, 1)), full(e, U32.add(x, 2)), full(e, U32.add(x, 3)), full(e, U32.add(x, 4))}
++
++# the leaf on path p (2 bits a level, x the first digit), 0 when none
++def get(d: Nat, +t: T, x: D, +p: U32) -> U32:
++  match d t x:
++    case 0n L{v} _:
++      v
++    case 1n++e N{g, a, b, c, f} D0{}:
++      get(e, a, dig(p), U32.shrn(p, 2n))
++    case 1n++e N{g, a, b, c, f} D1{}:
++      get(e, b, dig(p), U32.shrn(p, 2n))
++    case 1n++e N{g, a, b, c, f} D2{}:
++      get(e, c, dig(p), U32.shrn(p, 2n))
++    case 1n++e N{g, a, b, c, f} D3{}:
++      get(e, f, dig(p), U32.shrn(p, 2n))
++    case _ _ _:
++      0
++
++# get, but the leaves under digit 2 count 1000 more
++def odd(d: Nat, +t: T, x: D, +p: U32) -> U32:
++  match d t x:
++    case 0n L{v} _:
++      v
++    case 1n++e N{g, a, b, c, f} D0{}:
++      odd(e, a, dig(p), U32.shrn(p, 2n))
++    case 1n++e N{g, a, b, c, f} D1{}:
++      odd(e, b, dig(p), U32.shrn(p, 2n))
++    case 1n++e N{g, a, b, c, f} D2{}:
++      U32.add(1000, odd(e, c, dig(p), U32.shrn(p, 2n)))
++    case 1n++e N{g, a, b, c, f} D3{}:
++      odd(e, f, dig(p), U32.shrn(p, 2n))
++    case _ _ _:
++      0
++
++# the tree with the leaf on path p set to v plus what was there; a node
++# where a leaf belongs stays (an arm that returns the node it matched
++# makes put own its tree, so the path is rebuilt in place)
++def put(d: Nat, t: T, x: D, +p: U32, v: U32) -> T:
++  match d t x:
++    case 0n L{w} _:
++      L{U32.add(w, v)}
++    case 0n E{} _:
++      L{v}
++    case 0n other _:
++      other
++    case 1n++e N{g, a, b, c, f} D0{}:
++      N{g, put(e, a, dig(p), U32.shrn(p, 2n), v), b, c, f}
++    case 1n++e N{g, a, b, c, f} D1{}:
++      N{g, a, put(e, b, dig(p), U32.shrn(p, 2n), v), c, f}
++    case 1n++e N{g, a, b, c, f} D2{}:
++      N{g, a, b, put(e, c, dig(p), U32.shrn(p, 2n), v), f}
++    case 1n++e N{g, a, b, c, f} D3{}:
++      N{g, a, b, c, put(e, f, dig(p), U32.shrn(p, 2n), v)}
++    case 1n++e other D0{}:
++      N{7, put(e, E{}, dig(p), U32.shrn(p, 2n), v), E{}, E{}, E{}}
++    case 1n++e other D1{}:
++      N{7, E{}, put(e, E{}, dig(p), U32.shrn(p, 2n), v), E{}, E{}}
++    case 1n++e other D2{}:
++      N{7, E{}, E{}, put(e, E{}, dig(p), U32.shrn(p, 2n), v), E{}}
++    case 1n++e other D3{}:
++      N{7, E{}, E{}, E{}, put(e, E{}, dig(p), U32.shrn(p, 2n), v)}
++
++def up(t: T, +p: U32, v: U32) -> T:
++  put(4n, t, dig(p), U32.shrn(p, 2n), v)
++
++def at(+t: T, +p: U32) -> U32:
++  get(4n, t, dig(p), U32.shrn(p, 2n))
++
++# leaves plus tags
++def sum(+t: T) -> U32:
++  match t:
++    case E{}:
++      0
++    case L{v}:
++      v
++    case N{g, a, b, c, f}:
++      U32.add(g, U32.add(U32.add(sum(a), sum(b)), U32.add(sum(c), sum(f))))
++
++# the leaves on paths 0..i-1, read by get and by odd
++def reads(i: Nat, +t: T, acc: U32) -> U32:
++  match i:
++    case 0n:
++      acc
++    case 1n++j:
++      +p = U32.from_nat(j)
++      reads(j, t, U32.add(acc, U32.add(at(t, p), odd(4n, t, dig(p), U32.shrn(p, 2n)))))
++
++def many(i: Nat, t: T, acc: U32) -> U32 & T:
++  match i:
++    case 0n:
++      (acc, t)
++    case 1n++j:
++      +t2 = up(t, U32.mul(U32.from_nat(i), 37), U32.from_nat(i))
++      many(j, t2, U32.add(acc, U32.and(sum(t2), 255)))
++
++def fst(r: U32 & T) -> U32:
++  (a, t) = r
++  a
++
++def main() -> String:
++  +t0 = full(4n, 0)
++  +t1 = up(t0, 7, 100)
++  +t2 = up(t1, 7, 1000)
++  +t3 = up(t0, 255, 5)
++  +t4 = up(L{3}, 6, 9)
++  U32.show(sum(t0)) ++ "," ++ U32.show(sum(t1)) ++ "," ++ U32.show(sum(t2)) ++ "," ++ U32.show(sum(t3)) ++ "," ++ U32.show(U32.add(sum(t4), reads(40n, t2, 0))) ++ "," ++ U32.show(U32.add(at(t4, 6), reads(40n, t3, 0))) ++ "," ++ U32.show(fst(many(300n, up(E{}, 1, 1), 0)))
++
++#|"3130,3230,4230,3135,28845,26617,39503"

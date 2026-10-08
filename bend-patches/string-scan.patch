@@ -1,0 +1,350 @@
+diff --git a/bend2/base.bend b/bend2/base.bend
+index 6d76ef3..0d3d99e 100644
+--- a/bend2/base.bend
++++ b/bend2/base.bend
+@@ -2063,6 +2063,73 @@ def String.drop(s: String, n: Nat) -> String:
+ def String.slice(s: String, i: Nat, n: Nat) -> String:
+   String.take(String.drop(s, i), n)
+ 
++# String.hash of s's n chars from index i on: the C runtime reads them
++# where they lie, without the slice
++def String.hash_at(s: String, i: Nat, n: Nat) -> U32:
++  String.hash(String.slice(s, i, n))
++
++def String.digits.go(s: String, +n: Nat) -> Nat:
++  match s:
++    case SNil{}:
++      n
++    case SCon{Chr{x}, t}:
++      Bool.pick(Nat, U32.is_le(U32.sub(x, 48), 9), String.digits.go(t, 1n+n), n)
++
++# how many decimal digits ('0' to '9') run in s from index i on
++def String.digits_at(s: String, i: Nat) -> Nat:
++  String.digits.go(String.drop(s, i), 0n)
++
++def String.dec_line.cr(cr: Bool, s: String, n: Nat) -> Nat:
++  match cr s:
++    case False{} _:
++      0n
++    case True{} SNil{}:
++      1n
++    case True{} SCon{Chr{x}, _}:
++      Bool.pick(Nat, U32.is_eq(x, 10), 2n+n, 0n)
++
++def String.dec_line.end(s: String, n: Nat) -> Nat:
++  match s n:
++    case SNil{} _:
++      1n
++    case SCon{_, _} 0n:
++      0n
++    case SCon{Chr{x}, t} 1n+k:
++      String.dec_line.cr(U32.is_eq(x, 13), t, 1n+k)
++
++def String.dec_line.of(ok: Bool, v: Nat, r: Nat) -> Nat & Nat:
++  match ok r:
++    case False{} _:
++      (0n, 0n)
++    case True{} 0n:
++      (0n, 0n)
++    case True{} 1n:
++      (0n, 1n)
++    case True{} 2n+k:
++      (v, 2n+k)
++
++def String.dec.go(n: Nat, s: String, acc: Nat) -> Nat:
++  match n s:
++    case 0n _:
++      acc
++    case 1n+m SNil{}:
++      acc
++    case 1n+m SCon{Chr{x}, t}:
++      String.dec.go(m, t, Nat.add(Nat.mul(acc, 10n), U32.to_nat(U32.sub(x, 48))))
++
++# the number s's n chars from index i on spell in decimal (fewer where s
++# ends first): each adds its code point less 48, the value of a digit
++def String.dec_at(s: String, i: Nat, n: Nat) -> Nat:
++  String.dec.go(n, String.drop(s, i), 0n)
++
++# the line of 1 to 10 decimal digits at index i of s, ended by "\r\n": its
++# number and its length with the "\r\n" (3 to 12); a length of 0 when s
++# holds no such line there (no digit, more than 10, another char), of 1
++# when s ends before that is known, each with a number of 0
++def String.dec_line_at(+s: String, +i: Nat) -> Nat & Nat:
++  +n = String.digits_at(s, i)
++  String.dec_line.of(Nat.is_le(n, 10n), String.dec_at(s, i, n), String.dec_line.end(String.drop(s, Nat.add(i, n)), n))
++
+ def String.get(s: String, n: Nat) -> Maybe<&2, Char>:
+   match s n:
+     case SNil{} _:
+diff --git a/bend2/comp.ts b/bend2/comp.ts
+index 311eb37..3c42239 100644
+--- a/bend2/comp.ts
++++ b/bend2/comp.ts
+@@ -270,6 +270,11 @@ const OPERATIONS: Record<string, Intr> = Object.setPrototypeOf({
+   string_hash: { C: "str_hash(e.mem, $0)", brw: [true] },
+   string_code_at: { C: "str_code_at(e.mem, $0, $1)", brw: [true, false] },
+   string_find: { C: "str_find(e.mem, $0, $1, $2)", brw: [true, false, false] },
++  string_hash_at: { C: "str_hash_at(e.mem, $0, $1, $2)", brw: [true, false, false] },
++  string_digits_at: { C: "str_digits_at(e.mem, $0, $1)", brw: [true, false] },
++  string_dec_line_at: { C: ["str_dec_line_at(e.mem, $0, $1)", "($2 >> 4)",
++    "($2 & 15)"], brw: [true, false] },
++  string_dec_at: { C: "str_dec_at(e, $0, $1, $2)", brw: [true, false, false] },
+   string_slice: { C: "str_slice(e, $0, $1, $2)", brw: [true, false, false] },
+   mem_prefetch: { C: "mem_prefetch(e.mem, $0, $1)", JS: "$1",
+     brw: [true, false] },
+@@ -297,7 +302,8 @@ const OPERATIONS: Record<string, Intr> = Object.setPrototypeOf({
+ 
+ const STR_NATIVES = new Set(("string_append string_length string_eq"
+   + " string_take string_drop string_to_upper string_hash string_code_at"
+-  + " string_find string_slice nat_show").split(" "));
++  + " string_find string_slice nat_show string_hash_at string_digits_at"
++  + " string_dec_line_at string_dec_at").split(" "));
+ 
+ // Optimized
+ // ---------
+@@ -2434,10 +2440,12 @@ function emit_dst(sc: Scope, lay: Lay, k = "v"): Val {
+ 
+ // A native that reads an argument (brw) borrows it: a variable lends its
+ // value and loses a use, a value it held last (or a computed argument)
+-// sinks after the call, which a local holds.
++// sinks after the call, which a local holds. A native of several C parts
++// gives the last ones as its words; the parts before them are locals that
++// the later parts read ($n past the arguments).
+ function emit_intr(sc: Scope, it: Intr, m: Spine, ty: HTerm | null): Val {
+   const k = (m.t as Of<"Ref">).k;
+-  if (it.brw !== undefined && typeof it.C === "string") {
++  if (it.brw !== undefined && it.C !== undefined && it.C !== null) {
+     return emit_intr_brw(sc, it, m, ty);
+   }
+   const op = op_name(k);
+@@ -2462,7 +2470,7 @@ function emit_intr(sc: Scope, it: Intr, m: Spine, ty: HTerm | null): Val {
+   const as = ws.map((w) => all || tpl_deep(w) ? emit_alias(sc, w, "a") : w);
+   if (Array.isArray(C)) {
+     C.forEach((p) => as.push(emit_alias(sc, tpl(p, as), "a")));
+-    return val_new(as.slice(ws.length), lay);
++    return val_new(as.slice(as.length - lay.ks.length), lay);
+   }
+   return val_new([tpl(C, as)], lay.ks.length === 1 ? lay : BOX);
+ }
+@@ -2530,7 +2538,7 @@ function emit_append(sc: Scope, m: Spine, ty: HTerm | null): Val | null {
+ // String.eq against a literal compares a chunk's run with the literal's
+ // bytes, the compiler giving them (str_eq_lit)
+ function intr_lit(k: Name, it: Intr, m: Spine): string {
+-  if (op_name(k) !== "string_eq") {
++  if (op_name(k) !== "string_eq" || Array.isArray(it.C)) {
+     return it.C as string;
+   }
+   const [a, b] = m.args.map(str_bytes_of);
+@@ -2589,6 +2597,11 @@ function emit_intr_brw(sc: Scope, it: Intr, m: Spine, ty: HTerm | null): Val {
+   const lay = lay_of(ty);
+   const out = lay.ks.length === 1 ? lay : BOX;
+   const as = vs.map((ws) => emit_alias(sc, ws![0], "a"));
++  if (Array.isArray(it.C)) {
++    it.C.forEach((p) => as.push(emit_alias(sc, tpl(p, as), "a")));
++    sinks.forEach((v) => val_sink(sc, v));
++    return val_new(as.slice(as.length - lay.ks.length), lay);
++  }
+   const r = emit_hold(sc, [tpl(C, as)], "n", out.ks);
+   sinks.forEach((v) => val_sink(sc, v));
+   return val_new(r, out);
+@@ -5725,14 +5738,16 @@ INLINE const u8* str_sole_run(u64* H, Term s, u32* n) {
+ 
+ // a sole chunk with its own buffer, and nothing after it, in place; an
+ // immediate is a new one
++// an immediate's bytes at once: a byte of 'a' to 'z' is one whose low 7
++// bits reach 'a' (bit 7 of them plus 0x1F) and do not pass 'z' (plus
++// 0x05), with bit 7 clear; it loses 0x20
+ INLINE Term str_upper(Env e, Term s) {
+   if (str_imm(s)) {
+-    u64 w = s;
+-    for (u32 i = 0; i < str_imm_len(s); i += 1) {
+-      u32 c = (u8)(s >> (8 * i));
+-      w -= (u64)((c - 97u < 26u) << 5) << (8 * i);
+-    }
+-    return w;
++    u64 x = s & 0xFFFFFFFFFFFFull;
++    u64 h = x & 0x7F7F7F7F7F7Full;
++    u64 m = (h + 0x1F1F1F1F1F1Full) & ~(h + 0x050505050505ull) & ~x
++      & 0x808080808080ull & ((1ull << (8 * str_imm_len(s))) - 1);
++    return s - (m >> 2);
+   }
+   u32 n;
+   u8* q = (s >> 56) == TAG_BUF ? str_brun(e.mem, s, &n)
+@@ -5863,6 +5878,129 @@ FAR u64 str_hash(u64* H, Term s) {
+   return h;
+ }
+ 
++// The bytes of s from index i to its end, when s lies in one run: a blob,
++// a blob view, or a node over one buffer with nothing after it, as most
++// buffers are (*n of them); else NULL, and the callers read s by
++// str_code_at.
++INLINE const u8* str_flat_at(u64* H, Term s, u64 i, u64* n) {
++  u32       m;
++  const u8* q;
++  if (str_blob(s) || str_bview(s)) {
++    q = str_brun(H, s, &m);
++  } else {
++    q = str_sole_run(H, s, &m);
++    if (q == NULL || !str_nil(H[term_loc(s) + 1])) {
++      return NULL;
++    }
++  }
++  *n = i < m ? m - i : 0;
++  return q + (i < m ? i : m);
++}
++
++// String.hash_at: String.hash of the n chars of s from index i on
++FAR u64 str_hash_at(u64* H, Term s, u64 i, u64 n) {
++  u32       h = 2166136261u;
++  u64       m;
++  const u8* q = str_flat_at(H, s, i, &m);
++  if (q != NULL) {
++    for (u64 k = 0; k < n && k < m; k += 1) {
++      h = (h ^ q[k]) * 16777619u;
++    }
++    return h;
++  }
++  for (u64 k = 0; k < n; k += 1) {
++    u64 c = str_code_at(H, s, i + k);
++    if (c == 4294967295u) {
++      break;
++    }
++    h = (h ^ (u32)c) * 16777619u;
++  }
++  return h;
++}
++
++// String.digits_at: how many decimal digits run in s from index i on
++INLINE u64 str_digits_at(u64* H, Term s, u64 i) {
++  u64       m;
++  const u8* q = str_flat_at(H, s, i, &m);
++  u64       k = 0;
++  if (q != NULL) {
++    while (k < m && (u8)(q[k] - '0') <= 9) {
++      k += 1;
++    }
++    return k;
++  }
++  while (str_code_at(H, s, i + k) - 48 <= 9) {
++    k += 1;
++  }
++  return k;
++}
++
++FAR u64 str_dec_line_far(u64* H, Term s, u64 i) {
++  u64 k = 0;
++  u64 v = 0;
++  u64 c;
++  for (; (c = str_code_at(H, s, i + k)) - 48 <= 9; k += 1) {
++    if (k == 10) {
++      return 0;
++    }
++    v = v * 10 + (c - 48);
++  }
++  if (c == 4294967295u) {
++    return 1;
++  }
++  if (k == 0 || c != 13) {
++    return 0;
++  }
++  u64 d = str_code_at(H, s, i + k + 1);
++  return d == 4294967295u ? 1 : d == 10 ? v << 4 | (k + 2) : 0;
++}
++
++// String.dec_line_at as one word: the number of the line of 1 to 10
++// decimal digits at index i of s over 4 bits of the line's length with its
++// "\r\n" (3 to 12); a word of 0 when s holds no such line there, of 1 when
++// s ends before that is known
++INLINE u64 str_dec_line_at(u64* H, Term s, u64 i) {
++  u64       m;
++  const u8* q = str_flat_at(H, s, i, &m);
++  u64       k = 0;
++  u64       v = 0;
++  if (q == NULL) {
++    return str_dec_line_far(H, s, i);
++  }
++  for (; k < m && (u8)(q[k] - '0') <= 9; k += 1) {
++    if (k == 10) {
++      return 0;
++    }
++    v = v * 10 + (u8)(q[k] - '0');
++  }
++  if (k + 2 <= m) {
++    return k > 0 && q[k] == '\r' && q[k + 1] == '\n' ? v << 4 | (k + 2) : 0;
++  }
++  return k < m && (k == 0 || q[k] != '\r') ? 0 : 1;
++}
++
++// String.dec_at: the number the n chars of s from index i on spell in
++// decimal, each its code point less 48, as Nats (nat_chk)
++INLINE u64 str_dec_at(Env e, Term s, u64 i, u64 n) {
++  u64       m;
++  const u8* q = str_flat_at(e.mem, s, i, &m);
++  u64       v = 0;
++  if (q != NULL) {
++    for (u64 k = 0; k < n && k < m; k += 1) {
++      v = nat_chk(e, v * 10 + (u32)(q[k] - 48u));
++    }
++    return v;
++  }
++  for (u64 k = 0; k < n; k += 1) {
++    u64 c = str_code_at(e.mem, s, i + k);
++    if (c == 4294967295u) {
++      break;
++    }
++    v = nat_chk(e, v * 10 + (u32)((u32)c - 48u));
++  }
++  return v;
++}
++
+ // past NAT_IMM the definition fail-stops building the successor it matched
+ FAR Term nat_show_str(Env e, u64 n) {
+   u8  d[24];
+diff --git a/tests/base/string_scan.bend b/tests/base/string_scan.bend
+new file mode 100644
+index 0000000..98960a4
+--- /dev/null
++++ b/tests/base/string_scan.bend
+@@ -0,0 +1,42 @@
++# String.digits_at, String.dec_at, String.dec_line_at and String.hash_at,
++# which the C runtime reads in place: on a String of one chunk ("x1234..."
++# built by ++), on a slice of it, on a String built by String.reverse, on
++# immediate Strings (slices of up to 6 bytes), and on Strings longer than a
++# chunk holds, across the end of its first chunk. Digits from index 1 and
++# 0, a number of 5 digits, the digits of the slice from 3, a number cut by
++# the slice's end, the digits and number of the reversed String, two
++# hashes of a span next to String.hash of its slice, the digits past the
++# end; then the long String's digits from 2040, a number across its first
++# chunk's end, and a hash across it. Then number lines (number/length):
++# of 1, 2 and 10 digits (zeros first, as the interpreter's Nats are slow
++# to build big), 11 digits, a "\r" without its "\n", a "\r" with
++# no digit, a char not a digit, the end, an immediate "9\r" that ends
++# after its "\r", an immediate whole line, the reversed String's line,
++# and a line across a chunk's end. Last, String.to_upper of an immediate
++# String: of its bytes only 'a' to 'z' change.
++import Base
++
++def big(n: Nat, +s: String) -> String:
++  match n:
++    case 0n:
++      SNil{}
++    case 1n+m:
++      s ++ big(m, s)
++
++def line(p: Nat & Nat) -> String:
++  (v, r) = p
++  Nat.show(v) ++ "/" ++ Nat.show(r)
++
++def main() -> String:
++  +s = "x12345678901" ++ "234567890\r\n7"
++  +t = String.slice(s, 1n, 9n)
++  +u = String.reverse({"x24" : String})
++  +w = big(300n, "0123456789")
++  +d = "*2\r\n$13\r\n0000000042\r\n00000000001\r\n9\r" ++ "x"
++  +v = String.reverse({"\n\r42$" : String})
++  +p = big(204n, "abcdefghij") ++ "abcde12345\r\n"
++  +a = Nat.show(String.digits_at(s, 1n)) ++ "," ++ Nat.show(String.digits_at(s, 0n)) ++ "," ++ Nat.show(String.dec_at(s, 1n, 5n)) ++ "," ++ Nat.show(String.digits_at(t, 3n)) ++ "," ++ Nat.show(String.dec_at(t, 6n, 9n)) ++ "," ++ Nat.show(String.digits_at(u, 0n)) ++ "," ++ Nat.show(String.dec_at(u, 0n, 2n)) ++ "," ++ U32.show(String.hash_at(s, 2n, 6n)) ++ "," ++ U32.show(String.hash(String.slice(s, 2n, 6n))) ++ "," ++ U32.show(String.hash_at(t, 7n, 10n)) ++ "," ++ U32.show(String.hash(String.slice(t, 7n, 10n))) ++ "," ++ Nat.show(String.digits_at(s, 40n)) ++ ";" ++ Nat.show(String.digits_at(w, 2040n)) ++ "," ++ Nat.show(String.dec_at(w, 2045n, 6n)) ++ "," ++ U32.show(String.hash_at(w, 2046n, 4n)) ++ "," ++ U32.show(String.hash(String.slice(w, 2046n, 4n)))
++  +b = line(String.dec_line_at(d, 1n)) ++ "," ++ line(String.dec_line_at(d, 5n)) ++ "," ++ line(String.dec_line_at(d, 9n)) ++ "," ++ line(String.dec_line_at(d, 21n)) ++ "," ++ line(String.dec_line_at(d, 34n)) ++ "," ++ line(String.dec_line_at(d, 35n)) ++ "," ++ line(String.dec_line_at(d, 4n)) ++ "," ++ line(String.dec_line_at(d, 37n)) ++ "," ++ line(String.dec_line_at(String.slice(d, 34n, 2n), 0n)) ++ "," ++ line(String.dec_line_at(String.slice(d, 1n, 3n), 0n)) ++ "," ++ line(String.dec_line_at(v, 1n)) ++ "," ++ line(String.dec_line_at(p, 2045n))
++  a ++ ";" ++ b ++ ";" ++ String.to_upper(String.slice("aZ{`@z" ++ "xyz", 0n, 6n))
++
++#|"20,0,12345,6,789,2,42,781365242,781365242,2567026010,2567026010,0;960,567890,576755117,576755117;2/3,13/4,42/12,0/0,0/0,0/0,0/0,0/1,0/1,2/3,24/4,12345/7;AZ{`@Z"

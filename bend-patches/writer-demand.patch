@@ -1,0 +1,200 @@
+diff --git a/bend2/comp.ts b/bend2/comp.ts
+index c61d8d2..311eb37 100644
+--- a/bend2/comp.ts
++++ b/bend2/comp.ts
+@@ -7290,28 +7290,88 @@ OUTLINE void* io_mem(void* mem) {
+ // its bell, with its sleep flag up for the loop to ring it. A post of NULL
+ // closes the fd, after what was posted before.
+ //
+-// The loop also sends posts itself, sharing the sends with the writer by
+-// how busy each is. Each measures the share of its time it works, in
+-// windows of IO_UTIL_WIN ns: the loop all but its waits for events, the
+-// writer its sends. A loop less busy than its writer by more than
+-// IO_POST_SLACK points sends (the writer is the bottleneck: many
++// The loop also sends posts itself, and does all the sends while it keeps
++// up with its sockets. It counts the sockets its waits for events find
++// ready, over spans of IO_POST_SPAN windows of IO_UTIL_WIN ns: a loop that
++// keeps up finds one or two a wait, and a send from the loop costs it less
++// than the hand-over (the socket's state moving to the writer's core, a
++// futex call to wake the writer) and returns the reply sooner; many
++// connections without a pipeline under a client that waits for each reply
++// are this case. A loop that finds IO_POST_BACKLOG or more a wait over two
++// spans in a row, or never waits in them, falls behind: it posts, and the
++// writer's core pays for the sends. It sends them all itself again after
++// IO_POST_CALM spans in a row in which it and its writer together are busy
++// less than IO_POST_LOW percent of the time: the loop alone would keep up.
++// A single span says little: a client that waits for each reply sends in
++// bursts, and so does one that has just had many replies. Each side measures
++// the share of its time it works, the loop all but its waits for events,
++// the writer its sends. While it posts, the loop still sends a post itself
++// when its writer is busier than it by more than IO_POST_SLACK points (many
+ // connections without a pipeline, where a send costs more than the
+-// request); else it posts (with a pipeline the loop is the bottleneck, and
+-// the writer's core pays for the sends). While the writer sleeps the loop
+-// sends too (ringing it is a futex call, and it wakes up later), but after
+-// IO_POST_SOLO such sends in a row its next post rings the writer: the
+-// load is back. The loop sends a post only if the writer has sent all that
+-// was posted to fd before (ends[fd], the ring index past fd's last post, is
+-// not ahead of the writer's head), so fd's bytes stay in order; bytes the
+-// socket does not take at once go to the writer.
+-#define IO_POSTS      4096
+-#define IO_POST_SOLO  4
+-#define IO_POST_SLACK 10
+-#define IO_UTIL_WIN   200000
++// request). The loop sends a post only if the writer has sent all that was
++// posted to fd before (ends[fd], the ring index past fd's last post, is not
++// ahead of the writer's head), so fd's bytes stay in order; bytes the socket
++// does not take at once go to the writer.
++#define IO_POSTS        4096
++#define IO_POST_SPAN    32
++#define IO_POST_BACKLOG 4
++#define IO_POST_CALM    3
++#define IO_POST_LOW     60
++#define IO_POST_SLACK   10
++#define IO_UTIL_WIN     200000
++
++typedef struct IoPost {
++  char* buf;
++  u64   len;
++  int   fd;
++} IoPost;
++
++typedef struct IoWriter {
++  IoPost          ring[IO_POSTS];
++  u32             head;
++  u32             tail;
++  u32             sleep;
++  pthread_mutex_t lock;
++  pthread_cond_t  bell;
++  u32*            ends;
++  u32             nends;
++  u32             util;
++  u32             direct;
++  u32             turns;
++  u32             span;
++  u64             waits;
++  u64             ready;
++  u64             busy;
++} IoWriter;
+ 
+ static _Thread_local u64 io_idle;
+ static _Thread_local u64 io_win;
+ static _Thread_local u32 io_util;
++static _Thread_local u64 io_waits;
++static _Thread_local u64 io_ready;
++
++// whether this loop sends its posts itself, after a window of busy share
++// util in which its waits found ready sockets a time
++static void io_post_mode(IoWriter* W, u32 util, u64 waits, u64 ready) {
++  W->waits += waits;
++  W->ready += ready;
++  W->busy  += util + __atomic_load_n(&W->util, __ATOMIC_RELAXED);
++  W->span  += 1;
++  if (W->span < IO_POST_SPAN) {
++    return;
++  }
++  bool turn = W->direct ? W->waits == 0 || W->ready >= IO_POST_BACKLOG * W->waits
++    : W->busy < IO_POST_LOW * IO_POST_SPAN;
++  W->turns = turn ? W->turns + 1 : 0;
++  if (W->turns >= (W->direct ? 2 : IO_POST_CALM)) {
++    W->direct = !W->direct;
++    W->turns  = 0;
++  }
++  W->span  = 0;
++  W->waits = 0;
++  W->ready = 0;
++  W->busy  = 0;
++}
+ 
+ // the loop's busy share in percent, a window at a time: io_idle is what
+ // it waited for events in the window that started at io_win
+@@ -7319,8 +7379,13 @@ static void io_util_at(u64 now) {
+   u64 span = now - io_win;
+   if (span >= IO_UTIL_WIN) {
+     io_util = io_idle >= span ? 0 : (u32)(100 - io_idle * 100 / span);
+-    io_win  = now;
+-    io_idle = 0;
++    if (io_me != NULL && io_me->post != NULL) {
++      io_post_mode(io_me->post, io_util, io_waits, io_ready);
++    }
++    io_win   = now;
++    io_idle  = 0;
++    io_waits = 0;
++    io_ready = 0;
+   }
+ }
+ 
+@@ -7330,25 +7395,6 @@ static void io_idle_since(u64 t0) {
+   io_util_at(now);
+ }
+ 
+-typedef struct IoPost {
+-  char* buf;
+-  u64   len;
+-  int   fd;
+-} IoPost;
+-
+-typedef struct IoWriter {
+-  IoPost          ring[IO_POSTS];
+-  u32             head;
+-  u32             tail;
+-  u32             sleep;
+-  pthread_mutex_t lock;
+-  pthread_cond_t  bell;
+-  u32*            ends;
+-  u32             nends;
+-  u32             solo;
+-  u32             util;
+-} IoWriter;
+-
+ // the writer's busy share in percent, a window at a time: busy is the time
+ // its sends took in the window that started at win
+ static void io_writer_util(IoWriter* W, u64 now, u64* win, u64* busy) {
+@@ -7432,6 +7478,7 @@ static void io_post(int fd, char* buf, u64 len) {
+   if (W == NULL) {
+     pthread_t tid;
+     W = io_mem(calloc(1, sizeof(IoWriter)));
++    W->direct = 1;
+     pthread_mutex_init(&W->lock, NULL);
+     pthread_cond_init(&W->bell, NULL);
+     if (pthread_create(&tid, NULL, io_writer_run, W)) {
+@@ -7450,14 +7497,17 @@ static void io_post(int fd, char* buf, u64 len) {
+     }
+     W->nends = n;
+   }
+-  if (buf != NULL && (int32_t)(W->ends[fd] - h) <= 0) {
+-    bool share  = io_util + IO_POST_SLACK < __atomic_load_n(&W->util, __ATOMIC_RELAXED);
+-    bool asleep = __atomic_load_n(&W->sleep, __ATOMIC_SEQ_CST);
+-    if (share || (asleep && W->solo < IO_POST_SOLO)) {
++  if ((int32_t)(W->ends[fd] - h) <= 0) {
++    if (buf == NULL && W->direct) {
++      close(fd);
++      return;
++    }
++    bool own = buf != NULL
++      && (W->direct || io_util + IO_POST_SLACK < __atomic_load_n(&W->util, __ATOMIC_RELAXED));
++    if (own) {
+       ssize_t n = send(fd, buf, len, MSG_NOSIGNAL | MSG_DONTWAIT);
+       if (n == (ssize_t)len) {
+         free(buf);
+-        W->solo += !share;
+         return;
+       }
+       if (n < 0 && errno != EAGAIN && errno != EWOULDBLOCK && errno != EINTR) {
+@@ -7470,7 +7520,6 @@ static void io_post(int fd, char* buf, u64 len) {
+       }
+     }
+   }
+-  W->solo = 0;
+   for (u32 n = 1; t - __atomic_load_n(&W->head, __ATOMIC_ACQUIRE) >= IO_POSTS; n += 1) {
+     if ((n & 1023) == 0) {
+       sched_yield();
+@@ -8334,6 +8383,8 @@ static void io_wait(Env e, bool block) {
+     }
+     n = 0;
+   }
++  io_waits += 1;
++  io_ready += (u64)n;
+   for (int i = 0; i < n; i += 1) {
+     u64 d = evs[i].data.u64;
+     if (d == IO_WAKE) {

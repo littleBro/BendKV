@@ -1,0 +1,77 @@
+diff --git a/bend2/comp.ts b/bend2/comp.ts
+index a210048..c5dc206 100644
+--- a/bend2/comp.ts
++++ b/bend2/comp.ts
+@@ -4712,15 +4712,22 @@ INLINE bool term_triv(Term t) {
+ }
+ 
+ // Mem.prefetch(x, k) is k; it also starts loading the lines of x's node:
+-// all of a constructor's fields, a buffer's first 64 bytes, a shared
+-// node's seal. It reads no word, so it never waits.
++// all of a constructor's fields, a buffer's bytes from its pos to its end
++// (at most 4 lines), a shared node's seal. It reads no word, so it never
++// waits.
+ INLINE u64 mem_prefetch(DEV u64* H, Term t, u64 k) {
+ #if !DEVICE
+   if (!term_triv(t)) {
+-    uintptr_t p = (uintptr_t)&H[term_loc(t)];
+-    u32       n = term_rfc(t) ? 1 : term_tag(t) == TAG_CTR
+-      ? cid_arity((u32)term_aux(t)) : term_tag(t) == TAG_BUF ? 8 : 1;
+-    for (uintptr_t a = p & ~(uintptr_t)63; a < p + 8 * (uintptr_t)n; a += 64) {
++    uintptr_t a = (uintptr_t)&H[term_loc(t)];
++    uintptr_t z = a + 8;
++    if (!term_rfc(t) && term_tag(t) == TAG_CTR) {
++      z = a + 8 * (uintptr_t)cid_arity((u32)term_aux(t));
++    } else if (!term_rfc(t) && term_tag(t) == TAG_BUF) {
++      z = a + ((uintptr_t)4 << (term_aux(t) & 31));
++      a = a + ((u32)term_aux(t) >> 5);
++      z = z < a + 256 ? z : a + 256;
++    }
++    for (a &= ~(uintptr_t)63; a < z; a += 64) {
+       __builtin_prefetch((const void*)a);
+     }
+   }
+@@ -5792,6 +5799,9 @@ INLINE u64 str_eq_imm(u64* H, Term s, Term w, Term lt) {
+ 
+ FAR Term str_take_n(Env e, Term s, u64 n) {
+   StrRun r;
++  if (str_imm(s) && n >= str_imm_len(s)) {
++    return s;
++  }
+   if (n > 0 && n <= STR_IMM_MAX && str_run(e.mem, s, &r) && r.p != NULL
+     && r.n >= n) {
+     return str_imm_make(r.p, (u32)n);
+diff --git a/tests/base/value_reads.bend b/tests/base/value_reads.bend
+new file mode 100644
+index 0000000..e2818b3
+--- /dev/null
++++ b/tests/base/value_reads.bend
+@@ -0,0 +1,28 @@
++# String.take of a String's whole length is the String: on the C lane a
++# String in the term word (up to six bytes) gives back the word itself,
++# and a longer one a copy. Mem.prefetch of Strings of one chunk, of 7,
++# 100 and 300 bytes, owned and shared, hints the lines of their bytes and
++# is k. Each check is "1" when the copy equals the String, then its first
++# two chars. Expect the same on every lane.
++import Base
++
++def whole(+s: String) -> String:
++  String.take(s, String.length(s))
++
++def check(+s: String) -> String:
++  +w = whole(s)
++  Bool.pick(String, String.eq(w, s), "1", "0") ++ String.take(w, 2n)
++
++def main() -> String:
++  +s = "x0123456789" ++ String.repeat("y", 300n)
++  +a = String.slice(s, 1n, 0n)
++  +b = String.slice(s, 1n, 3n)
++  +c = String.slice(s, 1n, 6n)
++  +d = String.slice(s, 1n, 7n)
++  +e = String.slice(s, 1n, 100n)
++  +f = String.slice(s, 1n, 300n)
++  +g = f
++  +k = Mem.prefetch(String, e, Mem.prefetch(String, f, Mem.prefetch(String, g, Mem.prefetch(String, d, 7))))
++  check(a) ++ "," ++ check(b) ++ "," ++ check(c) ++ "," ++ check(d) ++ "," ++ check(e) ++ "," ++ check(f) ++ "," ++ U32.show(k) ++ "," ++ Nat.show(String.length(whole(g)))
++
++#|"1,101,101,101,101,101,7,300"

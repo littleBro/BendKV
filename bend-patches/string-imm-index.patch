@@ -1,0 +1,34 @@
+diff --git a/bend2/comp.ts b/bend2/comp.ts
+index f3ca89a..d11d0cf 100644
+--- a/bend2/comp.ts
++++ b/bend2/comp.ts
+@@ -5751,6 +5751,9 @@ INLINE u64 str_code_at(u64* H, Term s, u64 i) {
+     u32 p = str_pos(s);
+     return i < str_cap(s) - p ? str_mem(H, s)[p + i] : 4294967295u;
+   }
++  if (str_imm(s)) {
++    return i < str_imm_len(s) ? (u8)(s >> (8 * i)) : 4294967295u;
++  }
+   u32       n;
+   const u8* q = str_sole_run(H, s, &n);
+   if (q != NULL && i < n && str_nil(H[term_loc(s) + 1])) {
+diff --git a/tests/base/string_imm_index.bend b/tests/base/string_imm_index.bend
+new file mode 100644
+index 0000000..30c35b4
+--- /dev/null
++++ b/tests/base/string_imm_index.bend
+@@ -0,0 +1,14 @@
++# String.code_at of Strings short enough to live in one word (up to six
++# bytes, made here by slices): each byte by its index, and 2^32-1 past
++# the end, as for any String. "123" at 0, 2 and 3; "abcdef" at 5 and 6;
++# "" at 0.
++import Base
++
++def main() -> String:
++  +s = "x123" ++ "zabcdef"
++  +a = String.slice(s, 1n, 3n)
++  +b = String.slice(s, 5n, 6n)
++  +c = String.slice(s, 0n, 0n)
++  U32.show(String.code_at(a, 0n)) ++ "," ++ U32.show(String.code_at(a, 2n)) ++ "," ++ U32.show(String.code_at(a, 3n)) ++ "," ++ U32.show(String.code_at(b, 5n)) ++ "," ++ U32.show(String.code_at(b, 6n)) ++ "," ++ U32.show(String.code_at(c, 0n))
++
++#|"49,51,4294967295,102,4294967295,4294967295"
