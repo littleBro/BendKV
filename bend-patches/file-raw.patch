@@ -1,0 +1,352 @@
+diff --git a/bend2/base.bend b/bend2/base.bend
+index 3c42597..e0f80b5 100644
+--- a/bend2/base.bend
++++ b/bend2/base.bend
+@@ -313,6 +313,36 @@ def File.write_bytes(file: File, data: List<&2, U32>) ->
+   import "./effs/file_write.c"
+   import "./effs/file_write.js"
+ 
++# The bytes of a String as they are, one Char (0..255) each, as
++# TCP.send_raw sends them: a CPU-only program packs it, so a byte costs a
++# byte. A Char past 255 fails with EINVAL before any byte is written. The
++# write runs on the loop's own thread (a write to the page cache rarely
++# waits), File.sync on a helper thread.
++def File.write_raw(file: File, data: String) ->
++  IO(File & Result<&1, &1, U32 & String, Unit>):
++  import "./effs/file_write.c"
++  import "./effs/file_write.js"
++
++# Up to max bytes as they are, a Char each, as TCP.recv_raw reads them
++def File.read_raw(file: File, max: U32) ->
++  IO(File & Result<&1, &1, U32 & String, String>):
++  import "./effs/file_read.c"
++  import "./effs/file_read.js"
++
++# The file's bytes written so far are on the disk when it answers
++# (fdatasync where the host has it, else fsync), as a log needs before it
++# tells anyone they are kept
++def File.sync(file: File) ->
++  IO(File & Result<&1, &1, U32 & String, Unit>):
++  import "./effs/file_sync.c"
++  import "./effs/file_sync.js"
++
++# The file cut to its first size bytes (ftruncate)
++def File.truncate(file: File, size: U32) ->
++  IO(File & Result<&1, &1, U32 & String, Unit>):
++  import "./effs/file_sync.c"
++  import "./effs/file_sync.js"
++
+ def File.close(file: File) -> IO(Unit):
+   import "./effs/file_close.c"
+   import "./effs/file_close.js"
+diff --git a/bend2/effs/file_read.c b/bend2/effs/file_read.c
+index f7b8f56..8943181 100644
+--- a/bend2/effs/file_read.c
++++ b/bend2/effs/file_read.c
+@@ -73,3 +73,22 @@ static void __attribute__((constructor)) file_read_at_use(void) {
+ }
+ 
+ #endif
++
++#ifdef CID(File.read_raw)
++
++// The bytes as they are, a Char each (io_raw), as TCP.recv_raw makes them.
++static Term file_read_raw_pack(Env e, IoWork* w) {
++  Term r = io_res(e, w, io_raw(e, w->data, w->size));
++  free(w->data);
++  return io_tup(e, io_hand(w->hand), r);
++}
++
++Term file_read_raw_run(Env e, Term* f, IoWork* w) {
++  return file_read_start(f[0], f[1], w, file_read_call, file_read_raw_pack);
++}
++
++static void __attribute__((constructor)) file_read_raw_use(void) {
++  io_eff(CID(File.read_raw), file_read_raw_run);
++}
++
++#endif
+diff --git a/bend2/effs/file_read.js b/bend2/effs/file_read.js
+index 812bcae..ad219ea 100644
+--- a/bend2/effs/file_read.js
++++ b/bend2/effs/file_read.js
+@@ -22,6 +22,20 @@ function file_read_at(file, offset, max) {
+   return file_read_with(file, max, offset, io_list);
+ }
+ 
++// One Char per byte, as it is (0..255), a slice at a time
++function file_raw_text(b, n) {
++  let s = "";
++  for (let i = 0; i < n; i += 8192) {
++    s += String.fromCharCode(...b.subarray(i, Math.min(n, i + 8192)));
++  }
++  return s;
++}
++
++function file_read_raw(file, max) {
++  return file_read_with(file, max, null, file_raw_text);
++}
++
+ io_eff(CID(File.read), file_read);
++io_eff(CID(File.read_raw), file_read_raw);
+ io_eff(CID(File.read_bytes), file_read_bytes);
+ io_eff(CID(File.read_at), file_read_at);
+diff --git a/bend2/effs/file_sync.c b/bend2/effs/file_sync.c
+new file mode 100644
+index 0000000..370acb2
+--- /dev/null
++++ b/bend2/effs/file_sync.c
+@@ -0,0 +1,51 @@
++// File
++// ====
++
++#if defined(CID(File.sync)) || defined(CID(File.truncate))
++
++static Term file_sync_pack(Env e, IoWork* w) {
++  return io_tup(e, io_hand(w->hand), io_res(e, w, term_pak(CID(Unit), 0)));
++}
++
++#endif
++
++#ifdef CID(File.sync)
++
++// The data and what reading it back needs, not the times (fdatasync), on
++// a helper thread: the loop goes on with its other computations meanwhile.
++static void file_sync_call(IoWork* w) {
++#if defined(__linux__)
++  io_sys_end(w, fdatasync((int)w->hand));
++#else
++  io_sys_end(w, fsync((int)w->hand));
++#endif
++}
++
++Term file_sync_run(Env e, Term* f, IoWork* w) {
++  w->hand = (intptr_t)io_hand_v(f[0]);
++  return io_work(w, file_sync_call, file_sync_pack);
++}
++
++static void __attribute__((constructor)) file_sync_use(void) {
++  io_eff(CID(File.sync), file_sync_run);
++}
++
++#endif
++
++#ifdef CID(File.truncate)
++
++static void file_truncate_call(IoWork* w) {
++  io_sys_end(w, ftruncate((int)w->hand, (off_t)w->word));
++}
++
++Term file_truncate_run(Env e, Term* f, IoWork* w) {
++  w->hand = (intptr_t)io_hand_v(f[0]);
++  w->word = (u32)f[1];
++  return io_work(w, file_truncate_call, file_sync_pack);
++}
++
++static void __attribute__((constructor)) file_truncate_use(void) {
++  io_eff(CID(File.truncate), file_truncate_run);
++}
++
++#endif
+diff --git a/bend2/effs/file_sync.js b/bend2/effs/file_sync.js
+new file mode 100644
+index 0000000..9c52eaa
+--- /dev/null
++++ b/bend2/effs/file_sync.js
+@@ -0,0 +1,25 @@
++// File
++// ====
++
++function file_sync(file) {
++  const fs = require("fs");
++  try {
++    fs.fdatasyncSync(file);
++    return io_tup(file, io_done({ $: CID(Unit) }));
++  } catch (e) {
++    return io_tup(file, io_fail(Math.abs(e.errno ?? 5)));
++  }
++}
++
++function file_truncate(file, size) {
++  const fs = require("fs");
++  try {
++    fs.ftruncateSync(file, size);
++    return io_tup(file, io_done({ $: CID(Unit) }));
++  } catch (e) {
++    return io_tup(file, io_fail(Math.abs(e.errno ?? 5)));
++  }
++}
++
++io_eff(CID(File.sync), file_sync);
++io_eff(CID(File.truncate), file_truncate);
+diff --git a/bend2/effs/file_write.c b/bend2/effs/file_write.c
+index 48fb9f8..02c1e74 100644
+--- a/bend2/effs/file_write.c
++++ b/bend2/effs/file_write.c
+@@ -46,3 +46,26 @@ static void __attribute__((constructor)) file_write_bytes_use(void) {
+ }
+ 
+ #endif
++
++#ifdef CID(File.write_raw)
++
++// A Char past 255 fails with EINVAL before any byte is written. The bytes
++// go out from the loop's own thread, as Redis appends to its log: a write
++// to the page cache rarely waits (File.sync is what waits for the disk),
++// and a log appended to after each batch saves the hop to a helper thread
++// and back.
++Term file_write_raw_run(Env e, Term* f, IoWork* w) {
++  w->hand = (intptr_t)io_hand_v(f[0]);
++  w->data = io_craw(e, f[1], &w->size);
++  w->code = w->data == NULL ? EINVAL : 0;
++  if (w->code == 0) {
++    file_write_call(w);
++  }
++  return file_write_pack(e, w);
++}
++
++static void __attribute__((constructor)) file_write_raw_use(void) {
++  io_eff(CID(File.write_raw), file_write_raw_run);
++}
++
++#endif
+diff --git a/bend2/effs/file_write.js b/bend2/effs/file_write.js
+index 539c64c..17920e8 100644
+--- a/bend2/effs/file_write.js
++++ b/bend2/effs/file_write.js
+@@ -23,5 +23,19 @@ function file_write_bytes(file, data) {
+   return b === null ? io_tup(file, io_fail(22)) : file_write_buffer(file, b);
+ }
+ 
++// A Char past 255 fails with EINVAL before any byte is written.
++function file_write_raw(file, data) {
++  const b = new Uint8Array(data.length);
++  for (let i = 0; i < data.length; i += 1) {
++    const c = data.charCodeAt(i);
++    if (c > 255) {
++      return io_tup(file, io_fail(22));
++    }
++    b[i] = c;
++  }
++  return file_write_buffer(file, b);
++}
++
+ io_eff(CID(File.write), file_write);
++io_eff(CID(File.write_raw), file_write_raw);
+ io_eff(CID(File.write_bytes), file_write_bytes);
+diff --git a/tests/io/file_raw.bend b/tests/io/file_raw.bend
+new file mode 100644
+index 0000000..215aef1
+--- /dev/null
++++ b/tests/io/file_raw.bend
+@@ -0,0 +1,110 @@
++# io (io_file_raw): File.write_raw writes a String's bytes as they are,
++# one Char (0..255) each, with no UTF-8; a Char past 255 fails with EINVAL
++# and writes nothing. File.read_raw reads them back as they are. File.sync
++# answers once the bytes are on the disk; File.truncate cuts the file to a
++# size. The file gets all 256 byte values, a failed write, an append of
++# "ab", a sync, and a cut to 100 bytes, read back each time.
++import Base
++
++def bytes(n: Nat, +at: U32) -> String:
++  match n:
++    case 0n:
++      SNil{}
++    case 1n+p:
++      SCon{Char.from_u32(at), bytes(p, U32.add(at, 1))}
++
++def check(name: String, ok: Bool) -> IO(Unit):
++  match ok:
++    case True{}:
++      IO.print(name)
++    case False{}:
++      IO.die(Unit, 1, "FAIL " ++ name)
++
++def done(pair: File & Result<&1, &1, U32 & String, Unit>, name: String) -> IO(File):
++  (file, result) = pair
++  do IO<File>:
++    IO.pass(Unit, result)
++    IO.print(name)
++    return file
++
++def failed(pair: File & Result<&1, &1, U32 & String, Unit>, want: U32, name: String) -> IO(File):
++  (file, result) = pair
++  match result:
++    case Done{u}:
++      do IO<File>:
++        IO.die(Unit, 1, "unexpected success: " ++ name)
++        return file
++    case Fail{error}:
++      (code, message) = error
++      do IO<File>:
++        check(name, U32.is_eq(code, want))
++        return file
++
++def sized(pair: File & Result<&1, &1, U32 & String, U32>, want: U32, name: String) -> IO(File):
++  (file, result) = pair
++  do IO<File>:
++    got : U32 <- IO.pass(U32, result)
++    check(name, U32.is_eq(got, want))
++    return file
++
++def read(pair: File & Result<&1, &1, U32 & String, String>, +want: String, name: String) -> IO(File):
++  (file, result) = pair
++  do IO<File>:
++    got : String <- IO.pass(String, result)
++    check(name, String.eq(got, want))
++    return file
++
++def write() -> IO(Unit):
++  do IO<Unit>:
++    f : File <- IO.try(File, File.open("/tmp/bend_io_file_raw", "w"))
++    p : File & Result<&1, &1, U32 & String, Unit> <- File.write_raw(f, bytes(256n, 0))
++    f : File <- done(p, "all 256 byte values written")
++    p : File & Result<&1, &1, U32 & String, Unit> <- File.write_raw(f, "a" ++ SCon{Char.from_u32(256), SNil{}})
++    f : File <- failed(p, 22, "a Char past 255 is not a byte")
++    p : File & Result<&1, &1, U32 & String, U32> <- File.size(f)
++    f : File <- sized(p, 256, "nothing written by the failed write")
++    File.close(f)
++
++def append() -> IO(Unit):
++  do IO<Unit>:
++    f : File <- IO.try(File, File.open("/tmp/bend_io_file_raw", "a"))
++    p : File & Result<&1, &1, U32 & String, Unit> <- File.write_raw(f, "ab")
++    f : File <- done(p, "appended")
++    p : File & Result<&1, &1, U32 & String, Unit> <- File.sync(f)
++    f : File <- done(p, "synced")
++    p : File & Result<&1, &1, U32 & String, U32> <- File.size(f)
++    f : File <- sized(p, 258, "size after append")
++    p : File & Result<&1, &1, U32 & String, Unit> <- File.truncate(f, 100)
++    f : File <- done(p, "truncated")
++    p : File & Result<&1, &1, U32 & String, U32> <- File.size(f)
++    f : File <- sized(p, 100, "size after truncate")
++    File.close(f)
++
++def read_back(+want: String, name: String) -> IO(Unit):
++  do IO<Unit>:
++    f : File <- IO.try(File, File.open("/tmp/bend_io_file_raw", "r"))
++    p : File & Result<&1, &1, U32 & String, String> <- File.read_raw(f, 1000)
++    f : File <- read(p, want, name)
++    p : File & Result<&1, &1, U32 & String, String> <- File.read_raw(f, 1000)
++    f : File <- read(p, "", "then the end")
++    File.close(f)
++
++def main() -> IO(Unit):
++  do IO<Unit>:
++    write()
++    read_back(bytes(256n, 0), "all 256 byte values read back")
++    append()
++    read_back(bytes(100n, 0), "the first 100 bytes read back")
++
++#|all 256 byte values written
++#|a Char past 255 is not a byte
++#|nothing written by the failed write
++#|all 256 byte values read back
++#|then the end
++#|appended
++#|synced
++#|size after append
++#|truncated
++#|size after truncate
++#|the first 100 bytes read back
++#|then the end

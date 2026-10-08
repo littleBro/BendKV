@@ -1,0 +1,765 @@
+diff --git a/bend2/base.bend b/bend2/base.bend
+index 0edba82..3304cf8 100644
+--- a/bend2/base.bend
++++ b/bend2/base.bend
+@@ -338,6 +338,20 @@ def TCP.recv_bytes(sock: Socket, max: U32) ->
+   import "./effs/tcp_recv.c"
+   import "./effs/tcp_recv.js"
+ 
++# The bytes as they are, as send_bytes and recv_bytes carry them, but in a
++# String, one Char (0..255) each: a CPU-only program packs it, so a byte
++# costs a byte, not a cell. A Char past 255 fails with EINVAL before any
++# byte is sent.
++def TCP.send_raw(sock: Socket, data: String) ->
++  IO(Socket & Result<&1, &1, U32 & String, Unit>):
++  import "./effs/tcp_send.c"
++  import "./effs/tcp_send.js"
++
++def TCP.recv_raw(sock: Socket, max: U32) ->
++  IO(Socket & Result<&1, &1, U32 & String, String>):
++  import "./effs/tcp_recv.c"
++  import "./effs/tcp_recv.js"
++
+ def TCP.poll(sock: Socket, max: U32, ms: U32) ->
+   IO(Socket & Result<&1, &1, U32 & String, Maybe<&1, String>>):
+   import "./effs/tcp_poll.c"
+diff --git a/bend2/comp.ts b/bend2/comp.ts
+index 0199412..25d7837 100644
+--- a/bend2/comp.ts
++++ b/bend2/comp.ts
+@@ -130,6 +130,10 @@ const CLO_APPLY = "Clo~apply";
+ 
+ const IO_EMIT = "IO~emit";
+ 
++// STR_BUF is the runtime's own String constructor, a chunk of bytes (see
++// Str in the runtime); a CPU-only program packs its Strings into chunks.
++const STR_BUF = "Str~buf";
++
+ const ATOM   = /^(?:[A-Za-z_$][A-Za-z0-9_$]*|\d+|\d+\.\d+)$/;
+ const STRLIT = /^"(?:[^"\\]|\\.)*"$/;
+ 
+@@ -1054,6 +1058,32 @@ function ctr_build(sc: Scope, k: Name, exprs: string[], stat = false): string {
+     FL.hot.has(k) && FL.bangs.size > 0)})`;
+ }
+ 
++// A program with no bang call runs on the CPU alone, as SEAL_LAZY: its
++// Strings are packed: str_cons builds one; an owned match splits it with
++// str_take, a borrowed one reads it with str_vhead and str_vtail.
++function str_pack(): boolean {
++  return FL.bangs.size === 0;
++}
++
++function str_build(sc: Scope, ws: string[]): string {
++  return emit_hold(sc, [`str_cons(e, ${ws[0]}, ${ws[1]})`], "s", ["box"])[0];
++}
++
++function str_fields(sc: Scope, t: string): Val[] {
++  const node = lay_node("SCon");
++  const r = sc.brwl.get(t);
++  if (r !== undefined) {
++    const ws = emit_hold(sc, [`str_vhead(e.mem, ${t})`,
++      `str_vtail(e.mem, ${t})`], "f", node.ks);
++    sc.brwl.set(ws[1], r);
++    return val_arm(val_new(ws, node));
++  }
++  const x = name_local(sc, "x");
++  file_push(sc, `StrHT ${x} = str_take(e, ${t});`);
++  return val_arm(val_new(emit_hold(sc, [`(u32)${x}.h`, `${x}.t`], "f",
++    node.ks), node));
++}
++
+ function facts_packed(t: HTerm): boolean {
+   const s = term_strip(t);
+   return s.$ === "Ctr" && lay_packed(lay_node(s.k));
+@@ -2304,7 +2334,9 @@ function emit_ctr(sc: Scope, x: Of<"Ctr">, ty: HTerm | null,
+   const v = val_new(lay.ks.map((_, j) => ws[j] ?? "0"), lay,
+     vs.every((f) => f.stat));
+   const out = lay === pos ? v
+-    : val_new([ctr_build(sc, x.k, val_own(sc, v), v.stat)], BOX, v.stat);
++    : val_new([x.k === "SCon" && !v.stat && str_pack()
++      ? str_build(sc, val_own(sc, v))
++      : ctr_build(sc, x.k, val_own(sc, v), v.stat)], BOX, v.stat);
+   if (out.stat) {
+     seen.set(x, out);
+   }
+@@ -2691,6 +2723,10 @@ function emit_match(sc: Scope, x: Of<"Mat"> | Of<"Efq">,
+               .map((w) => val_new([w], BOX));
+           }];
+       }
++      if (adt.k === "String" && str_pack()) {
++        return k === "SNil" ? [`str_nil(${sw})`, h, () => []]
++          : [`!str_nil(${sw})`, h, (al) => str_fields(al, sw)];
++      }
+       return lay_box(lay) ? [`term_aux(${sw}) == ${cid_mac(k)}`, h,
+         (al) => node_fields(al, sw, k, true)]
+         : [`${sw} == ${Object.keys(lay.arms!).indexOf(k)}`, h,
+@@ -2830,6 +2866,9 @@ export function compile_book(book: Bend.Book): string {
+   for (const [k] of done_defs(def_foreign)) {
+     cids.set(k, fun_of(k).lays.length);
+   }
++  if (str_pack()) {
++    cids.set(STR_BUF, 2);
++  }
+   const forky = graph_close(new Set(FL.segs.filter((s) => s.fork)
+     .map((s) => s.fid)), [...FL.segs, { fid: seg_fid(CLO_APPLY),
+     refs: FL.clos }].flatMap((s) => [...s.refs].map((r) => [r, s.fid])));
+@@ -2854,7 +2893,9 @@ export function compile_book(book: Bend.Book): string {
+     `{ ${ars[i]}, ${Number(FL.hot.has(k))} }`).join(", ")} };`,
+   `#define STAT_LEN ${FL.img.length}`, "",
+   `#define WL_RESW ${resw}`, `#define BANGS   ${FL.bangs.size}`,
+-  `#define SEAL_LAZY ${Number(FL.bangs.size === 0)}`, "",
++  `#define SEAL_LAZY ${Number(FL.bangs.size === 0)}`,
++  `#define STR_PACK ${Number(str_pack())}`,
++  ...str_pack() ? [`#define STR_CID ${cid_mac(STR_BUF)}`] : [], "",
+   `#define WL_BANK Term ${ws.join(", ")};`, "",
+   `#define WL_LOAD(A, N) \\\n  do { \\\n${rs.map((r, i) =>
+     `    if ((N) <= ${i}) break; ${r} = e.mem[(A) + ${i}]; \\\n`).join("")
+@@ -4026,7 +4067,7 @@ OUTLINE void span_fade(Env e, Term t, u64 src, u32 n) {
+       rfc_bump(e, term_loc(f), 1);
+     } else if (!term_triv(f)) {
+ #if SEAL_LAZY && !DEVICE
+-      if (term_tag(f) == TAG_CTR) {
++      if (term_tag(f) == TAG_CTR || (STR_PACK && term_tag(f) == TAG_BUF)) {
+         Term w = rfc_wrap(e, f, 2);
+         Term x = f;
+         if (!atomic_compare_exchange_strong_explicit(
+@@ -4093,6 +4134,171 @@ INLINE Term term_word(Env e, Term w) {
+   return x;
+ }
+ 
++// Str
++// ===
++
++// A CPU-only program (STR_PACK) packs its Strings. A String is SNil, an
++// SCon cell [char, tail], or a chunk STR_CID [buf, next]: the bytes
++// buf[pos..cap) are its first chars, each below 256, and next the rest.
++// buf is a BUF term with its class c in aux bits 0..4 (cap is 4 << c
++// bytes, and a drop frees it as any BUF) and pos in bits 5..15, so a chunk
++// holds at most 2048 bytes. Statics, chars past 255 and a program with a
++// bang (it may run on a GPU) keep cells. An owned match splits a String
++// with str_take: a sole owner moves pos up in place; a co-owner takes the
++// chunk as ctr_take does (span_fade seals its BUF too) and makes its own.
++// str_cons writes below pos in a chunk it solely owns, else starts a chunk
++// before the tail: twice the size of a full chunk it solely owned. A
++// borrowed match reads views (str_vhead, str_vtail): pos << 40 | chunk, a
++// raw word (tag 0, so trivial) that no owned value ever holds.
++
++#if STR_PACK && !DEVICE
++
++#define STR_MIN 2
++#define STR_MAX 9
++
++INLINE bool str_nil(Term t) {
++  return term_tag(t) == TAG_PAK;
++}
++
++INLINE bool str_buf(Term t) {
++  return term_tag(t) == TAG_CTR && term_aux(t) == STR_CID;
++}
++
++INLINE u32 str_pos(Term b) {
++  return (u32)term_aux(b) >> 5;
++}
++
++INLINE u32 str_cap(Term b) {
++  return 4u << blk_cls(b);
++}
++
++INLINE Term str_at(Term b, u32 pos) {
++  return (b & ~(0x7FFull << 45)) | ((u64)pos << 45);
++}
++
++INLINE u8* str_mem(u64* H, Term b) {
++  return (u8*)(H + term_peek(H, b));
++}
++
++// A chunk of class c before t, its bytes from pos up left to write.
++OUTLINE Term str_chunk(Env e, u32 c, u32 pos, Term t) {
++  u64 l = heap_alloc(e, buf_wcls(c));
++  u64 n = heap_alloc(e, 1);
++  e.mem[n]     = term_buf(c | (pos << 5), l);
++  e.mem[n + 1] = t;
++  return term_ctr(STR_CID, n);
++}
++
++OUTLINE Term str_cons_new(Env e, u32 h, Term t) {
++  if (h > 255) {
++    u64 n = heap_alloc(e, 1);
++    e.mem[n]     = h;
++    e.mem[n + 1] = t;
++    return term_ctr(CID(SCon), n);
++  }
++  u32 c = STR_MIN;
++  if (str_buf(t) && !term_rfc(t) && !term_rfc(e.mem[term_loc(t)])) {
++    c = blk_cls(e.mem[term_loc(t)]) + 1;
++    c = c < STR_MAX ? c : STR_MAX;
++  }
++  u32  p = (4u << c) - 1;
++  Term s = str_chunk(e, c, p, t);
++  str_mem(e.mem, e.mem[term_loc(s)])[p] = (u8)h;
++  return s;
++}
++
++// The top 24 bits of a chunk no one shares; a BUF's top byte, unshared.
++#define STR_KEY ((TAG_CTR << 16) | STR_CID)
++
++INLINE Term str_cons(Env e, u32 h, Term t) {
++  if (h < 256 && (t >> 40) == STR_KEY) {
++    u64  n = term_loc(t);
++    Term b = e.mem[n];
++    if ((b >> 56) == TAG_BUF && (b & (0x7FFull << 45)) != 0) {
++      b -= 1ull << 45;
++      ((u8*)(e.mem + term_loc(b)))[str_pos(b)] = (u8)h;
++      e.mem[n] = b;
++      return t;
++    }
++  }
++  return str_cons_new(e, h, t);
++}
++
++// str_take splits t, which it consumes, into its head and tail. A shared
++// String and a chunk's last byte take the slow path.
++typedef struct {
++  Term t;
++  u64  h;
++} StrHT;
++
++OUTLINE StrHT str_take_slow(Env e, Term t) {
++  Term f[2];
++  u64  n = ctr_take(e, t, 2, f);
++  if (!str_buf(t)) {
++    spare_free(e, cls_fit(2), n);
++    return (StrHT){ f[1], f[0] };
++  }
++  Term b = f[0];
++  u32  p = str_pos(b);
++  u32  h = str_mem(e.mem, b)[p];
++  if (p + 1 < str_cap(b)) {
++    n = n ? n : heap_alloc(e, 1);
++    e.mem[n]     = str_at(b, p + 1);
++    e.mem[n + 1] = f[1];
++    return (StrHT){ term_ctr(STR_CID, n), h };
++  }
++  if (term_rfc(b)) {
++    term_drop(e, b);
++  } else {
++    heap_free(e, buf_wcls(blk_cls(b)), term_loc(b));
++  }
++  spare_free(e, cls_fit(2), n);
++  return (StrHT){ f[1], h };
++}
++
++INLINE StrHT str_take(Env e, Term t) {
++  u64 n = term_loc(t);
++  if ((t >> 40) == STR_KEY) {
++    Term b = e.mem[n];
++    u64  a = b >> 40;
++    u32  p = (u32)(a >> 5) & 0x7FF;
++    if (p + 1 < (4u << (a & 31))) {
++      e.mem[n] = b + (1ull << 45);
++      return (StrHT){ t, str_mem(e.mem, b)[p] };
++    }
++  } else if ((t >> 40) == ((TAG_CTR << 16) | CID(SCon))) {
++    StrHT r = { e.mem[n + 1], e.mem[n] };
++    spare_free(e, cls_fit(2), n);
++    return r;
++  }
++  return str_take_slow(e, t);
++}
++
++INLINE u64 str_node(u64* H, Term t) {
++  return term_tag(t) == 0 ? term_loc(t) : term_peek(H, t);
++}
++
++INLINE u32 str_vhead(u64* H, Term t) {
++  u64  n = str_node(H, t);
++  Term b = H[n];
++  if (term_tag(t) != 0 && !str_buf(t)) {
++    return (u32)b;
++  }
++  return str_mem(H, b)[term_tag(t) == 0 ? (u32)term_aux(t) : str_pos(b)];
++}
++
++INLINE Term str_vtail(u64* H, Term t) {
++  u64 n = str_node(H, t);
++  if (term_tag(t) != 0 && !str_buf(t)) {
++    return H[n + 1];
++  }
++  Term b = H[n];
++  u32  p = (term_tag(t) == 0 ? (u32)term_aux(t) : str_pos(b)) + 1;
++  return p < str_cap(b) ? term_make(0, p, n) : H[n + 1];
++}
++
++#endif
++
+ // Blk
+ // ===
+ 
+@@ -5478,21 +5684,54 @@ static u64 io_utf8(char* buf, u64 c) {
+   return k;
+ }
+ 
+-// io_cbuf writes a String (cons SCon) as UTF-8, or a List (cons Con) as
+-// its bytes, with no UTF-8: NULL if a value is past 255.
++// io_cbuf writes a String (cons SCon) as UTF-8, or a List (cons Con) or a
++// String (IO_RAW) as its bytes, with no UTF-8: NULL if a value is past
++// 255. A packed chunk goes whole.
++#define IO_RAW (1ull << 32)
++
+ OUTLINE char* io_cbuf(Env e, Term s, u64* len, u64 cons) {
+   u64   cap = 64;
+   u64   n   = 0;
+   u64   bad = 0;
++  bool  raw = cons == IO_RAW;
++  bool  utf = cons == CID(SCon);
+   char* buf = io_mem(malloc(cap));
+-  while (term_aux(s) == cons) {
++  cons = raw ? CID(SCon) : cons;
++  for (;;) {
++#if STR_PACK
++    if ((utf || raw) && str_buf(s)) {
++      Term fb[2];
++      spare_free(e, cls_fit(2), ctr_take(e, s, 2, fb));
++      u32 p = str_pos(fb[0]);
++      u32 m = str_cap(fb[0]) - p;
++      while (n + 2 * (u64)m + 5 > cap) {
++        cap *= 2;
++        buf = io_mem(realloc(buf, cap));
++      }
++      const u8* src = str_mem(e.mem, fb[0]) + p;
++      if (raw) {
++        memcpy(buf + n, src, m);
++        n += m;
++      } else {
++        for (u32 i = 0; i < m; i += 1) {
++          n += io_utf8(buf + n, src[i]);
++        }
++      }
++      term_drop(e, fb[0]);
++      s = fb[1];
++      continue;
++    }
++#endif
++    if (term_aux(s) != cons) {
++      break;
++    }
+     Term fb[2];
+     spare_free(e, cls_fit(2), ctr_take(e, s, 2, fb));
+     if (n + 5 > cap) {
+       cap *= 2;
+       buf = io_mem(realloc(buf, cap));
+     }
+-    if (cons == CID(SCon)) {
++    if (utf) {
+       n += io_utf8(buf + n, fb[0]);
+     } else {
+       bad |= fb[0] > 255;
+@@ -5511,6 +5750,8 @@ OUTLINE char* io_cbuf(Env e, Term s, u64* len, u64 cons) {
+ 
+ #define io_cstr(e, s, len) io_cbuf(e, s, len, CID(SCon))
+ 
++#define io_craw(e, s, len) io_cbuf(e, s, len, IO_RAW)
++
+ OUTLINE void io_errs(Env e, Term s) {
+   u64   n    = 0;
+   char* text = io_cstr(e, s, &n);
+@@ -5532,10 +5773,10 @@ static Term io_node(Env e, u64 cid, Term a, Term b) {
+   return term_ctr(cid, l);
+ }
+ 
+-static Term io_str(Env e, const char* p, u64 n) {
+-  Term s    = term_pak(CID(SNil), 0);
+-  Term* hole = &s;
+-  u64  c = 0, need = 0, lo = 0x80, hi = 0xBF;
++// io_dec decodes p[0..n) into cs, at most n code points, and counts them.
++static u64 io_dec(u32* cs, const char* p, u64 n) {
++  u64 m = 0;
++  u64 c = 0, need = 0, lo = 0x80, hi = 0xBF;
+   for (u64 i = 0; i < n || need > 0; i += 1) {
+     u64 b = i < n ? (uint8_t)p[i] : 0x100;
+     if (need > 0 && (b < lo || b > hi)) {
+@@ -5560,13 +5801,88 @@ static Term io_str(Env e, const char* p, u64 n) {
+       c    = b & (0x3F >> need);
+       continue;
+     }
++    cs[m++] = (u32)c;
++  }
++  return m;
++}
++
++#if STR_PACK
++
++// The bytes p[0..n), a char each, in chunks before t (the last one full).
++static Term io_chunks(Env e, const u8* p, u64 n, Term t) {
++  while (n > 0) {
++    u32 m = n < (4u << STR_MAX) ? (u32)n : 4u << STR_MAX;
++    u32 c = STR_MIN;
++    while ((4u << c) < m) {
++      c += 1;
++    }
++    t = str_chunk(e, c, (4u << c) - m, t);
++    memcpy(str_mem(e.mem, e.mem[term_loc(t)]) + (4u << c) - m, p + n - m, m);
++    n -= m;
++  }
++  return t;
++}
++
++#endif
++
++// io_raw makes a String of bytes as they are (0..255), a char each.
++static Term io_raw(Env e, const char* p, u64 n) {
++  Term s = term_pak(CID(SNil), 0);
++#if STR_PACK
++  s = io_chunks(e, (const u8*)p, n, s);
++#else
++  for (u64 i = n; i > 0; i -= 1) {
++    s = io_node(e, CID(SCon), (uint8_t)p[i - 1], s);
++  }
++#endif
++  return s;
++}
++
++static Term io_str(Env e, const char* p, u64 n) {
++  u64 a = 0;
++  while (STR_PACK && a < n && (uint8_t)p[a] < 0x80) {
++    a += 1;
++  }
++  if (STR_PACK && a == n) {
++    return io_raw(e, p, n);
++  }
++  u32* cs = io_mem(malloc((n + 1) * sizeof(u32)));
++  u64  m  = io_dec(cs, p, n);
++  Term s  = term_pak(CID(SNil), 0);
++#if STR_PACK
++  u8* bs = io_mem(malloc(m + 1));
++  for (u64 i = m; i > 0;) {
++    if (cs[i - 1] > 255) {
++      u64 l = heap_alloc(e, 1);
++      e.mem[l]     = cs[i - 1];
++      e.mem[l + 1] = s;
++      s = term_ctr(CID(SCon), l);
++      i -= 1;
++      continue;
++    }
++    u64 j = i;
++    while (j > 0 && cs[j - 1] < 256) {
++      j -= 1;
++    }
++    for (u64 k = j; k < i; k += 1) {
++      bs[k] = (u8)cs[k];
++    }
++    s = io_chunks(e, bs + j, i - j, s);
++    i = j;
++  }
++  free(bs);
++#else
++  Term* hole = &s;
++  for (u64 i = 0; i < m; i += 1) {
+     u64  l = heap_alloc(e, 1);
+     Term t = term_ctr(CID(SCon), l);
+-    e.mem[l] = c;
++    e.mem[l] = cs[i];
+     *hole = hole == &s ? t : io_seal(e, t, CID(SCon));
+     hole = &e.mem[l + 1];
+   }
+   *hole = io_seal(e, term_pak(CID(SNil), 0), CID(SCon));
++#endif
++  free(cs);
+   return s;
+ }
+ 
+@@ -5777,11 +6093,17 @@ static void show_val(Env e, u32 d, const Term* w, char chain) {
+       break;
+     case 4:
+       putchar('"');
++#if STR_PACK
++      for (Term s = w[0]; !str_nil(s); s = str_vtail(e.mem, s)) {
++        show_chr(str_vhead(e.mem, s), '"');
++      }
++#else
+       for (Term s = w[0]; term_aux(s) == CID(SCon);) {
+         u64 l = term_peek(e.mem, s);
+         show_chr(e.mem[l], '"');
+         s = e.mem[l + 1];
+       }
++#endif
+       putchar('"');
+       break;
+     case 5:
+diff --git a/bend2/effs/tcp_recv.c b/bend2/effs/tcp_recv.c
+index e994d5e..74946c4 100644
+--- a/bend2/effs/tcp_recv.c
++++ b/bend2/effs/tcp_recv.c
+@@ -2,8 +2,8 @@
+ // ===
+ 
+ // A recv that finds nothing (the socket is non-blocking) parks on more
+-// until the socket is readable. What it finds, read makes a String (io_str)
+-// or a List of bytes (io_list).
++// until the socket is readable. What it finds, read makes a String (io_str),
++// a List of bytes (io_list) or a String of bytes (io_raw).
+ static Term tcp_recv_with(Env e, IoWork* w, IoPack more,
+   Term (*read)(Env, const char*, u64)) {
+   int fd  = (int)w->hand;
+@@ -57,3 +57,19 @@ static void __attribute__((constructor)) tcp_recv_bytes_use(void) {
+ }
+ 
+ #endif
++
++#ifdef CID(TCP.recv_raw)
++
++static Term tcp_recv_raw_more(Env e, IoWork* w) {
++  return tcp_recv_with(e, w, tcp_recv_raw_more, io_raw);
++}
++
++Term tcp_recv_raw_run(Env e, Term* f, IoWork* w) {
++  return tcp_recv_start(e, f, w, tcp_recv_raw_more);
++}
++
++static void __attribute__((constructor)) tcp_recv_raw_use(void) {
++  io_eff(CID(TCP.recv_raw), tcp_recv_raw_run);
++}
++
++#endif
+diff --git a/bend2/effs/tcp_recv.js b/bend2/effs/tcp_recv.js
+index 806dddc..86c3d2d 100644
+--- a/bend2/effs/tcp_recv.js
++++ b/bend2/effs/tcp_recv.js
+@@ -2,8 +2,8 @@
+ // ===
+ 
+ // A recv that finds nothing (the socket is non-blocking) parks until the
+-// socket is readable. What it finds, read makes a String (io_text) or a
+-// List of bytes (io_list).
++// socket is readable. What it finds, read makes a String (io_text), a
++// List of bytes (io_list) or a String of bytes (io_raw).
+ function tcp_recv_with(socket, max, k, read) {
+   if (Number(max) === 0) {
+     return io_tup(socket, io_fail(22));
+@@ -27,6 +27,15 @@ function tcp_recv_with(socket, max, k, read) {
+   return go();
+ }
+ 
++// One Char per byte, as it is (0..255): Latin-1, a slice at a time.
++function io_raw(b, n) {
++  let s = "";
++  for (let i = 0; i < n; i += 8192) {
++    s += String.fromCharCode(...b.subarray(i, Math.min(n, i + 8192)));
++  }
++  return s;
++}
++
+ function tcp_recv(socket, max, k) {
+   return tcp_recv_with(socket, max, k, io_text);
+ }
+@@ -35,5 +44,10 @@ function tcp_recv_bytes(socket, max, k) {
+   return tcp_recv_with(socket, max, k, io_list);
+ }
+ 
++function tcp_recv_raw(socket, max, k) {
++  return tcp_recv_with(socket, max, k, io_raw);
++}
++
+ io_eff(CID(TCP.recv), tcp_recv);
++io_eff(CID(TCP.recv_raw), tcp_recv_raw);
+ io_eff(CID(TCP.recv_bytes), tcp_recv_bytes);
+diff --git a/bend2/effs/tcp_send.c b/bend2/effs/tcp_send.c
+index 4862db8..c6a8201 100644
+--- a/bend2/effs/tcp_send.c
++++ b/bend2/effs/tcp_send.c
+@@ -49,3 +49,20 @@ static void __attribute__((constructor)) tcp_send_bytes_use(void) {
+ }
+ 
+ #endif
++
++#ifdef CID(TCP.send_raw)
++
++// A Char past 255 fails with EINVAL before any byte is sent.
++Term tcp_send_raw_run(Env e, Term* f, IoWork* w) {
++  w->hand = (intptr_t)io_hand_v(f[0]);
++  w->data = io_craw(e, f[1], &w->size);
++  w->made = 0;
++  w->code = w->data == NULL ? EINVAL : 0;
++  return tcp_send_more(e, w);
++}
++
++static void __attribute__((constructor)) tcp_send_raw_use(void) {
++  io_eff(CID(TCP.send_raw), tcp_send_raw_run);
++}
++
++#endif
+diff --git a/bend2/effs/tcp_send.js b/bend2/effs/tcp_send.js
+index bdf2668..791f24c 100644
+--- a/bend2/effs/tcp_send.js
++++ b/bend2/effs/tcp_send.js
+@@ -36,5 +36,19 @@ function tcp_send_bytes(socket, data, k) {
+   return b === null ? io_tup(socket, io_fail(22)) : tcp_send_with(socket, b, k);
+ }
+ 
++// A Char past 255 fails with EINVAL before any byte is sent.
++function tcp_send_raw(socket, data, k) {
++  const b = new Uint8Array(data.length);
++  for (let i = 0; i < data.length; i += 1) {
++    const c = data.charCodeAt(i);
++    if (c > 255) {
++      return io_tup(socket, io_fail(22));
++    }
++    b[i] = c;
++  }
++  return tcp_send_with(socket, b, k);
++}
++
+ io_eff(CID(TCP.send), tcp_send);
++io_eff(CID(TCP.send_raw), tcp_send_raw);
+ io_eff(CID(TCP.send_bytes), tcp_send_bytes);
+diff --git a/tests/io/tcp_raw.bend b/tests/io/tcp_raw.bend
+new file mode 100644
+index 0000000..6f84b23
+--- /dev/null
++++ b/tests/io/tcp_raw.bend
+@@ -0,0 +1,145 @@
++# io (io_tcp_raw): TCP.send_raw and TCP.recv_raw carry bytes as they are,
++# one Char (0..255) each, in a String. The client sends "O", the two bytes
++# of "á" (C3 A1), 255 and 0; the server reads 2 bytes, which split the
++# "á", then the rest, and every byte survives. Then 5000 bytes go out in
++# one send and come back over reads of at most 4096, past a chunk's 2048;
++# their count and sum survive. A Char past 255 fails with EINVAL (22)
++# before any byte is sent.
++import Base
++
++def codes_line(s: String) -> String:
++  match s:
++    case "":
++      ""
++    case SCon{c, ""}:
++      U32.show(Char.to_u32(c))
++    case SCon{c, rest}:
++      U32.show(Char.to_u32(c)) ++ " " ++ codes_line(rest)
++
++def count(s: String, n: U32, k: U32) -> U32 & U32:
++  match s:
++    case "":
++      (n, k)
++    case SCon{c, rest}:
++      count(rest, (n + 1 : U32), (k + Char.to_u32(c) : U32))
++
++def bulk.go(n: Nat, acc: String) -> String:
++  match n:
++    case 0n:
++      acc
++    case 1n++p:
++      bulk.go(p, SCon{Char.from_u32(U32.mod(U32.from_nat(p), 256)), acc})
++
++def recv_go(m: Socket & Result<&1, &1, U32 & String, String>) -> IO(Socket):
++  (s, r) = m
++  do IO<Socket>:
++    xs : String <- IO.pass(String, r)
++    u : Unit <- IO.print(codes_line(xs))
++    return s
++
++def recv_done(nk: U32 & U32, s: Socket) -> IO(Socket):
++  (n, k) = nk
++  do IO<Socket>:
++    u : Unit <- IO.print(U32.show(n) ++ " " ++ U32.show(k))
++    return s
++
++def count_on(xs: String, nk: U32 & U32) -> U32 & U32:
++  (n, k) = nk
++  count(xs, n, k)
++
++def recv_got(m: Socket & Result<&1, &1, U32 & String, String>, nk: U32 & U32, next: Socket -> U32 & U32 -> IO(Socket)) -> IO(Socket):
++  (s, r) = m
++  match r:
++    case Done{xs}:
++      next(s, count_on(xs, nk))
++    case Fail{e}:
++      recv_done(nk, s)
++
++def recv_if(more: Bool, s: Socket, nk: U32 & U32, next: Socket -> U32 & U32 -> IO(Socket)) -> IO(Socket):
++  match more:
++    case True{}:
++      do IO<Socket>:
++        r : Socket & Result<&1, &1, U32 & String, String> <- TCP.recv_raw(s, 4096)
++        recv_got(r, nk, next)
++    case False{}:
++      recv_done(nk, s)
++
++def recv_loop(fuel: Nat, s: Socket, nk: U32 & U32) -> IO(Socket):
++  match fuel:
++    case 0n:
++      recv_done(nk, s)
++    case 1n+f:
++      (+n, k) = nk
++      recv_if(U32.is_lt(n, 5000), s, (n, k), s2 => nk2 => recv_loop(f, s2, nk2))
++
++def send_go(m: Socket & Result<&1, &1, U32 & String, Unit>) -> IO(Socket):
++  (s, r) = m
++  do IO<Socket>:
++    u : Unit <- IO.pass(Unit, r)
++    return s
++
++def send_bad(m: Socket & Result<&1, &1, U32 & String, Unit>) -> IO(Socket):
++  (s, r) = m
++  match r:
++    case Done{u}:
++      do IO<Socket>:
++        v : Unit <- IO.print("unexpected send")
++        return s
++    case Fail{(code, message)}:
++      do IO<Socket>:
++        v : Unit <- IO.print(U32.show(code))
++        return s
++
++def talk(c: Socket, p: Listener & Result<&1, &1, U32 & String, Socket>) -> IO(Unit):
++  (l2, ar) = p
++  do IO<Unit>:
++    a  : Socket <- IO.pass(Socket, ar)
++    s1 : Socket & Result<&1, &1, U32 & String, Unit> <- TCP.send_raw(c, "O\u{C3}\u{A1}\u{FF}\u{0}")
++    c1 : Socket <- send_go(s1)
++    r1 : Socket & Result<&1, &1, U32 & String, String> <- TCP.recv_raw(a, 2)
++    a1 : Socket <- recv_go(r1)
++    r2 : Socket & Result<&1, &1, U32 & String, String> <- TCP.recv_raw(a1, 64)
++    a2 : Socket <- recv_go(r2)
++    s2 : Socket & Result<&1, &1, U32 & String, Unit> <- TCP.send_raw(c1, bulk.go(5000n, ""))
++    c2 : Socket <- send_go(s2)
++    a3 : Socket <- recv_loop(64n, a2, (0, 0))
++    s3 : Socket & Result<&1, &1, U32 & String, Unit> <- TCP.send_raw(c2, "a\u{100}")
++    c3 : Socket <- send_bad(s3)
++    x  : Unit <- Socket.close(a3)
++    y  : Unit <- Socket.close(c3)
++    Listener.close(l2)
++
++def main_go(b: Listener & U32) -> IO(Unit):
++  (l, port) = b
++  do IO<Unit>:
++    c : Socket <- IO.try(Socket, TCP.connect("127.0.0.1", port))
++    p : Listener & Result<&1, &1, U32 & String, Socket> <- TCP.accept(l)
++    talk(c, p)
++
++def tcp_retry(port: U32, r: Result<&1, &1, U32 & String, Listener>, rest: IO(Listener & U32)) ->
++  IO(Listener & U32):
++  match r:
++    case Done{l}:
++      IO.pure(Listener & U32, (l, port))
++    case Fail{e}:
++      rest
++
++def tcp_listen_any(tries: Nat, +port: U32) -> IO(Listener & U32):
++  match tries:
++    case 0n:
++      IO.die(Listener & U32, 1, "no free tcp port")
++    case 1n+t:
++      rest = tcp_listen_any(t, (port + 1 : U32))
++      do IO<Listener & U32>:
++        r : Result<&1, &1, U32 & String, Listener> <- TCP.listen("127.0.0.1", port)
++        tcp_retry(port, r, rest)
++
++def main() -> IO(Unit):
++  do IO<Unit>:
++    b : Listener & U32 <- tcp_listen_any(32n, 19957)
++    main_go(b)
++
++#|79 195
++#|161 255 0
++#|5000 629340
++#|22

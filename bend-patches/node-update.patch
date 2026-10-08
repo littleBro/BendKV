@@ -1,0 +1,266 @@
+diff --git a/bend2/comp.ts b/bend2/comp.ts
+index f49a0a9..e2dc3dd 100644
+--- a/bend2/comp.ts
++++ b/bend2/comp.ts
+@@ -103,6 +103,7 @@ type Scope = {
+   reads: Map<string, number>;
+   slot: Map<string, { seg: Seg; at: string; A: HTerm; def: Name }>;
+   spares: { words: number; name: string; z: boolean }[];
++  fld: Map<string, { sp: string; j: number }>;
+   uses: Map<Of<"Var">, Bind>;
+   rest: HTerm[];
+   def: Name;
+@@ -1093,13 +1094,18 @@ function ctr_build(sc: Scope, k: Name, exprs: string[], stat = false): string {
+     return `term_ctr(${cid}, STAT_OFF + ${at})`;
+   }
+   const alloc = `heap_alloc(e, cls_fit(${exprs.length}))`;
+-  const at = sc.spares.findIndex((s) =>
+-    cls_fit(s.words) === cls_fit(exprs.length));
+-  const s = at < 0 ? null : sc.spares.splice(at, 1)[0];
++  const kept = (s: Scope["spares"][0]) => s.z ? 0 : exprs.filter((w, j) =>
++    sc.fld.get(w)?.sp === s.name && sc.fld.get(w)?.j === j).length;
++  const fit = sc.spares.map((s, i) => [i, kept(s)]).filter(([i]) =>
++    cls_fit(sc.spares[i].words) === cls_fit(exprs.length))
++    .sort((a, b) => b[1] - a[1]);
++  const s = fit.length === 0 ? null : sc.spares.splice(fit[0][0], 1)[0];
+   const got = s === null ? alloc
+     : s.z ? `${s.name} >= HEAP_OFF ? ${s.name} : ${alloc}` : s.name;
++  const same = (w: string, j: number) => s !== null && !s.z
++    && sc.fld.get(w)?.sp === s.name && sc.fld.get(w)?.j === j;
+   return `term_ctr(${cid}, ${node_fill(sc, "nd", got, exprs,
+-    FL.hot.has(k) && FL.bangs.size > 0)})`;
++    FL.hot.has(k) && FL.bangs.size > 0, same)})`;
+ }
+ 
+ // A program with no bang call runs on the CPU alone, as SEAL_LAZY: its
+@@ -1441,6 +1447,7 @@ function scope_new(): Scope {
+     reads: new Map(),
+     slot: new Map(),
+     spares: [],
++    fld: new Map(),
+     uses: new Map(),
+     rest: [],
+     def: "",
+@@ -1635,13 +1642,17 @@ function seg_name(sc: Scope, stem: string): string {
+ }
+ 
+ function seg_open(sc: Scope, name: string, ret: Lay, frame: Seg["frame"],
+-  live: [Of<"Var">, Bind][], res: Val, rest: HTerm[]): Scope {
++  live: [Of<"Var">, Bind][], res: Val, rest: HTerm[],
++  carry: Scope["spares"] = []): Scope {
+   const olds = live.flatMap(([, b]) => b.val.ws);
+   const news = olds.map((w) => name_local(sc, w.replace(/_\d+$/, "")));
+-  const seg = seg_new(name, ret, [...news, ...res.ws],
+-    [...live.flatMap(([, b]) => b.val.lay.ks), ...res.lay.ks], frame);
++  const sps = carry.map(() => name_local(sc, "sp"));
++  const seg = seg_new(name, ret, [...news, ...sps, ...res.ws],
++    [...live.flatMap(([, b]) => b.val.lay.ks), ...sps.map((): Kind => "w64"),
++      ...res.lay.ks], frame);
+   FL.segs.push(seg);
+-  sc = { ...sc, seg, spares: [], uses: new Map() };
++  sc = { ...sc, seg, uses: new Map(),
++    spares: carry.map((s, i) => ({ ...s, name: sps[i] })) };
+   olds.forEach((w, i) => {
+     if (sc.brwl.has(w)) {
+       sc.brwl.set(news[i], sc.brwl.get(w)!);
+@@ -1663,11 +1674,13 @@ function seg_open(sc: Scope, name: string, ret: Lay, frame: Seg["frame"],
+ // Node
+ // ====
+ 
++// skip(w, j): word w is already in slot j of the reused node
+ function node_fill(sc: Scope, k: string, alloc: string,
+-  exprs: string[], shr = false): string {
++  exprs: string[], shr = false,
++  skip: (w: string, j: number) => boolean = () => false): string {
+   const nd = name_local(sc, k);
+   file_push(sc, `u64 ${nd} = ${alloc};`);
+-  exprs.forEach((w, j) => file_push(sc,
++  exprs.forEach((w, j) => skip(w, j) || file_push(sc,
+     `e.mem[${nd} + ${j}] = ${shr ? `rfc_seal(e, ${w})` : w};`));
+   return nd;
+ }
+@@ -1681,10 +1694,15 @@ function node_fields(sc: Scope, t: string, k: Name, tail = false,
+       val_new(lay.ks.map(() => `term_loc(${t})`), lay));
+   }
+   const r = sc.brwl.get(t);
+-  const z = r === undefined && (FL.hot.has(k) || FL.stat.has(k));
++  const own = r === undefined && tail && str_pack() && !FL.stat.has(k)
++    && n <= 64;
++  const z = r === undefined && !own && (FL.hot.has(k) || FL.stat.has(k));
+   const sp = name_local(sc, "sp");
+   let fb = `e.mem[${sp} + `;
+   let at = (r === undefined ? "term_loc(" : "term_peek(e.mem, ") + t + ")";
++  if (own && FL.hot.has(k)) {
++    at = `ctr_own(e, ${t}, ${n})`;
++  }
+   if (z) {
+     fb = name_local(sc, "fb");
+     file_push(sc, `Term ${fb}[${n}];`);
+@@ -1710,6 +1728,9 @@ function node_fields(sc: Scope, t: string, k: Name, tail = false,
+     });
+   } else if (tail) {
+     sc.spares.push({ words: n, name: sp, z });
++    if (own) {
++      ws.forEach((w, j) => sc.fld.set(w, { sp, j }));
++    }
+   } else {
+     spare_free(sc, { words: n, name: sp, z });
+   }
+@@ -2872,12 +2893,22 @@ function emit_fork(sc: Scope, x: Of<"Let">, ers: HTerm[]): void {
+   let depth = 0;
+   calls.forEach((c, i) => {
+     const cargs = emit_args({ ...sc, rest: [chain[i]] }, c);
+-    const vs = i === 0 ? [...sc.uses]
++    const all = i === 0 ? [...sc.uses]
+       : [[o.ps[i - 1], sc.uses.get(o.ps[i - 1])!] as [Of<"Var">, Bind]];
+     const kn = seg_name(sc, "k");
++    const lone = !fork && calls.length === 1;
++    const virt = (b: Bind) => lone && b.val.ws.length > 0 && b.val.ws.every(
++      (w) => sc.spares.some((s) => !s.z && sc.fld.get(w)?.sp === s.name));
++    const carry = sc.spares.filter((s) => !s.z && all.some(([, b]) =>
++      virt(b) && b.val.ws.some((w) => sc.fld.get(w)?.sp === s.name)));
++    const vs = all.filter(([, b]) => !virt(b));
++    const vv = all.filter(([, b]) => virt(b));
++    sc.spares = sc.spares.filter((s) => !carry.includes(s));
+     spare_flush(sc);
+-    const ws = vs.flatMap(([p, b]) =>
+-      (pos.set(p, depth), depth += b.val.ws.length, b.val.ws));
++    const ws = [...vs.flatMap(([p, b]) =>
++      (pos.set(p, depth), depth += b.val.ws.length, b.val.ws)),
++      ...carry.map((s) => (depth += 1, s.name))];
++    const cpos = depth - carry.length;
+     emit_chain(sc, () => "seq", [() => {
+       const fr = [...ws, seg_ref(sc, seg_fid(kn))];
+       file_push(sc, `WL_ROOM(${fr.length});`);
+@@ -2891,13 +2922,27 @@ function emit_fork(sc: Scope, x: Of<"Let">, ers: HTerm[]): void {
+     emit_jump(sc, cargs, c.k!, !fork && c.b);
+     const last = i === calls.length - 1;
+     const held = [...sc.uses].filter(([p]) => pos.has(p));
+-    const at = held.flatMap(([p, b]) => b.val.ws.map((_, j) =>
+-      pos.get(p)! + j - (last ? 0 : depth)));
++    const at = [...held.flatMap(([p, b]) => b.val.ws.map((_, j) =>
++      pos.get(p)! + j - (last ? 0 : depth))),
++      ...carry.map((_, j) => cpos + j - (last ? 0 : depth))];
+     const ret = fun_of(c.k!).ret;
+     const rest = [...hold, chain[i]];
+     const rs = val_new(ret.ks.map(() => name_local(sc, o.ps[i].k)), ret);
++    const back = vv.filter(([p]) => sc.uses.has(p));
++    const old = carry.map((s) => s.name);
+     sc = seg_open(sc, kn, sc.seg.ret, { pop: last ? depth : 0, at }, held, rs,
+-      rest);
++      rest, carry);
++    back.forEach(([p, b]) => {
++      const ws = b.val.ws.map((w, j) => {
++        const f = sc.fld.get(w)!;
++        const sp = sc.spares[old.indexOf(f.sp)].name;
++        const nw = emit_hold(sc, [`e.mem[${sp} + ${f.j}]`], "f",
++          [b.val.lay.ks[j]])[0];
++        sc.fld.set(nw, { sp, j: f.j });
++        return nw;
++      });
++      bind_uses(sc, p, val_new(ws, b.val.lay), rest, b.A, false);
++    });
+     bind_uses(sc, o.ps[i], rs, rest, ty_ann(x.v[i])!);
+   });
+   if (fork) {
+@@ -4413,6 +4458,24 @@ INLINE u64 ctr_take(Env e, Term t, u32 n, THR Term* out) {
+   return 0;
+ }
+ 
++// t's node, owned by the caller alone: t's own if no one else holds it,
++// else a copy holding what ctr_take shares out to it. A match that keeps
++// the node as a spare reads its fields in place, and a rebuild of it
++// writes only the fields that change.
++OUTLINE u64 ctr_own_slow(Env e, Term t, u32 n) {
++  u64 nd = heap_alloc(e, cls_fit(n));
++  u64 sp = ctr_take(e, t, n, (THR Term*)(e.mem + nd));
++  if (sp != 0) {
++    heap_free(e, cls_fit(n), nd);
++    return sp;
++  }
++  return nd;
++}
++
++INLINE u64 ctr_own(Env e, Term t, u32 n) {
++  return term_rfc(t) ? ctr_own_slow(e, t, n) : term_loc(t);
++}
++
+ // A field read out of a borrowed node to be owned (SEAL_LAZY): the node
+ // keeps its reference and the reader gets its own, the field sealed in
+ // place as span_fade seals it, by CAS as co-owners may race to seal it.
+diff --git a/tests/rfc/node_update.bend b/tests/rfc/node_update.bend
+new file mode 100644
+index 0000000..a934e86
+--- /dev/null
++++ b/tests/rfc/node_update.bend
+@@ -0,0 +1,70 @@
++# rfc (rfc_node_update): a node rebuilt with one field changed under a
++# call keeps its node: the match holds it as a spare across the call,
++# saving it instead of the fields that pass through, and the rebuild
++# writes the changed field only. up rebuilds a path in a tree of four-way
++# nodes; t0 and t1 are shared, so their updates copy the path and leave
++# them as they were; many updates its own tree in place 200 times. A
++# field written to the wrong node, or a shared node changed, shows as a
++# wrong sum. Expect
++# 12800,12900,13900,12805,5451500 on every lane.
++import Base
++
++type T is Data:
++  L{v: U32}
++  N{a: T, b: T, c: T, d: T}
++
++def full(d: Nat, +x: U32) -> T:
++  match d:
++    case 0n:
++      L{x}
++    case 1n++e:
++      N{full(e, U32.add(x, 1)), full(e, U32.add(x, 2)), full(e, U32.add(x, 3)), full(e, U32.add(x, 4))}
++
++# the tree with the leaf on path p (2 bits a level, k the first) set to v
++def upd(d: Nat, t: T, k: U32, +p: U32, v: U32) -> T:
++  match d t k:
++    case 0n L{x} _:
++      L{U32.add(x, v)}
++    case 0n other _:
++      other
++    case 1n++e L{x} _:
++      L{U32.add(x, v)}
++    case 1n++e N{a, b, c, f} 0:
++      N{upd(e, a, U32.and(p, 3), U32.shrn(p, 2n), v), b, c, f}
++    case 1n++e N{a, b, c, f} 1:
++      N{a, upd(e, b, U32.and(p, 3), U32.shrn(p, 2n), v), c, f}
++    case 1n++e N{a, b, c, f} 2:
++      N{a, b, upd(e, c, U32.and(p, 3), U32.shrn(p, 2n), v), f}
++    case 1n++e N{a, b, c, f} _:
++      N{a, b, c, upd(e, f, U32.and(p, 3), U32.shrn(p, 2n), v)}
++
++def up(t: T, +p: U32, v: U32) -> T:
++  upd(5n, t, U32.and(p, 3), U32.shrn(p, 2n), v)
++
++def sum(+t: T) -> U32:
++  match t:
++    case L{v}:
++      v
++    case N{a, b, c, f}:
++      U32.add(U32.add(sum(a), sum(b)), U32.add(sum(c), sum(f)))
++
++def many(i: Nat, t: T, acc: U32) -> U32 & T:
++  match i:
++    case 0n:
++      (acc, t)
++    case 1n++j:
++      +t2 = up(t, U32.mul(U32.from_nat(i), 37), U32.from_nat(i))
++      many(j, t2, U32.add(acc, sum(t2)))
++
++def fst(r: U32 & T) -> U32:
++  (a, t) = r
++  a
++
++def main() -> String:
++  +t0 = full(5n, 0)
++  +t1 = up(t0, 7, 100)
++  +t2 = up(t1, 7, 1000)
++  +t3 = up(t0, 1023, 5)
++  U32.show(sum(t0)) ++ "," ++ U32.show(sum(t1)) ++ "," ++ U32.show(sum(t2)) ++ "," ++ U32.show(sum(t3)) ++ "," ++ U32.show(fst(many(200n, full(5n, 1), 0)))
++
++#|"12800,12900,13900,12805,5451500"

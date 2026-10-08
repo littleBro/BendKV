@@ -1,0 +1,103 @@
+diff --git a/bend2/base.bend b/bend2/base.bend
+index f2e4c78..98decef 100644
+--- a/bend2/base.bend
++++ b/bend2/base.bend
+@@ -2289,6 +2289,16 @@ def List.show(~a: Quant, ~A: Kind(a), ~f: A -> String, xs: List<a, A>) ->
+     case h <> t:
+       "[" ++ f(h) ++ List.show.go(~a, ~A, ~f, t)
+ 
++# Mem
++# ---
++
++# Mem.prefetch(A, x, k) is k. On the C lane it also starts bringing the
++# heap node of x into the cache and waits for nothing, so that a read of
++# x soon after need not stall: a hint for overlapping the cache misses of
++# independent reads, with no effect on any value.
++def Mem.prefetch(-A: Data, +x: A, k: U32) -> U32:
++  k
++
+ # Array
+ # -----
+ 
+diff --git a/bend2/comp.ts b/bend2/comp.ts
+index abad57f..2eadcd3 100644
+--- a/bend2/comp.ts
++++ b/bend2/comp.ts
+@@ -271,6 +271,8 @@ const OPERATIONS: Record<string, Intr> = Object.setPrototypeOf({
+   string_code_at: { C: "str_code_at(e.mem, $0, $1)", brw: [true, false] },
+   string_find: { C: "str_find(e.mem, $0, $1, $2)", brw: [true, false, false] },
+   string_slice: { C: "str_slice(e, $0, $1, $2)", brw: [true, false, false] },
++  mem_prefetch: { C: "mem_prefetch(e.mem, $0, $1)", JS: "$1",
++    brw: [true, false] },
+   nat_show: { C: "nat_show_str(e, $0)" },
+   ...Object.fromEntries(Object.entries({
+     new: "array_new($0, $1)", set: "($0[$1 % $0.length] = $2, $0)",
+@@ -4514,6 +4516,23 @@ INLINE bool term_triv(Term t) {
+   return term_tag(t) <= TAG_PAK || t == TERM_HOLE || term_loc(t) < HEAP_OFF;
+ }
+ 
++// Mem.prefetch(x, k) is k; it also starts loading the lines of x's node:
++// all of a constructor's fields, a buffer's first 64 bytes, a shared
++// node's seal. It reads no word, so it never waits.
++INLINE u64 mem_prefetch(DEV u64* H, Term t, u64 k) {
++#if !DEVICE
++  if (!term_triv(t)) {
++    uintptr_t p = (uintptr_t)&H[term_loc(t)];
++    u32       n = term_rfc(t) ? 1 : term_tag(t) == TAG_CTR
++      ? cid_arity((u32)term_aux(t)) : term_tag(t) == TAG_BUF ? 8 : 1;
++    for (uintptr_t a = p & ~(uintptr_t)63; a < p + 8 * (uintptr_t)n; a += 64) {
++      __builtin_prefetch((const void*)a);
++    }
++  }
++#endif
++  return k;
++}
++
+ OUTLINE Term rfc_wrap(Env e, Term t, u32 cnt) {
+   if (term_tag(t) == TAG_CLO || term_tag(t) == TAG_TSK) {
+     err_post(e.mem, ERR_RFCS);
+diff --git a/tests/base/mem_prefetch.bend b/tests/base/mem_prefetch.bend
+new file mode 100644
+index 0000000..120c08a
+--- /dev/null
++++ b/tests/base/mem_prefetch.bend
+@@ -0,0 +1,39 @@
++# Mem.prefetch(A, x, k) is k on every lane; on the C lane it also starts
++# loading x's node. Hinted here: a constructor of 17 fields, owned and
++# shared, list cells while a list is walked, Strings of one chunk, of
++# several and of up to 6 bytes (in the term word), numbers, and an empty
++# list. Expect the same sums on every lane.
++import Base
++
++type Big is Data:
++  Big{a: Nat, b: Nat, c: Nat, d: Nat, e: Nat, f: Nat, g: Nat, h: Nat, i: Nat, j: Nat, k: Nat, l: Nat, m: Nat, n: Nat, o: Nat, p: Nat, q: Nat}
++
++def big(n: Nat) -> Big:
++  Big{n, 1n, 2n, 3n, 4n, 5n, 6n, 7n, 8n, 9n, 10n, 11n, 12n, 13n, 14n, 15n, 16n}
++
++def first(+b: Big) -> Nat:
++  match b:
++    case Big{a, b1, c, d, e, f, g, h, i, j, k, l, m, n, o, p, q}:
++      Nat.add(a, q)
++
++# the hashes of xs, each String and the rest of the list hinted first
++def walk(+xs: List<&2, String>, acc: U32) -> U32:
++  match xs:
++    case Nil{}:
++      Mem.prefetch(List<&2, String>, xs, acc)
++    case Con{x, +rest}:
++      +h = Mem.prefetch(String, x, String.hash(x))
++      walk(rest, Mem.prefetch(List<&2, String>, rest, U32.add(acc, h)))
++
++def strs() -> List<&2, String>:
++  Con{"abc", Con{"a String of one chunk, longer than six bytes", Con{"x" ++ String.repeat("y", 40n) ++ "z", Con{"", Nil{}}}}}
++
++def main() -> String:
++  +b = big(40n)
++  +c = b
++  +xs = strs()
++  +n = Mem.prefetch(Big, b, 7)
++  +m = Mem.prefetch(Big, c, Mem.prefetch(Nat, first(c), n))
++  U32.show(m) ++ "," ++ Nat.show(first(b)) ++ "," ++ U32.show(walk(xs, Mem.prefetch(U32, m, 0)))
++
++#|"7,56,1652566037"

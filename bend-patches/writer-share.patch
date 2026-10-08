@@ -1,0 +1,193 @@
+diff --git a/bend2/comp.ts b/bend2/comp.ts
+index d11d0cf..c61d8d2 100644
+--- a/bend2/comp.ts
++++ b/bend2/comp.ts
+@@ -7289,7 +7289,46 @@ OUTLINE void* io_mem(void* mem) {
+ // its own index; a writer with nothing to do spins a while, then sleeps on
+ // its bell, with its sleep flag up for the loop to ring it. A post of NULL
+ // closes the fd, after what was posted before.
+-#define IO_POSTS 4096
++//
++// The loop also sends posts itself, sharing the sends with the writer by
++// how busy each is. Each measures the share of its time it works, in
++// windows of IO_UTIL_WIN ns: the loop all but its waits for events, the
++// writer its sends. A loop less busy than its writer by more than
++// IO_POST_SLACK points sends (the writer is the bottleneck: many
++// connections without a pipeline, where a send costs more than the
++// request); else it posts (with a pipeline the loop is the bottleneck, and
++// the writer's core pays for the sends). While the writer sleeps the loop
++// sends too (ringing it is a futex call, and it wakes up later), but after
++// IO_POST_SOLO such sends in a row its next post rings the writer: the
++// load is back. The loop sends a post only if the writer has sent all that
++// was posted to fd before (ends[fd], the ring index past fd's last post, is
++// not ahead of the writer's head), so fd's bytes stay in order; bytes the
++// socket does not take at once go to the writer.
++#define IO_POSTS      4096
++#define IO_POST_SOLO  4
++#define IO_POST_SLACK 10
++#define IO_UTIL_WIN   200000
++
++static _Thread_local u64 io_idle;
++static _Thread_local u64 io_win;
++static _Thread_local u32 io_util;
++
++// the loop's busy share in percent, a window at a time: io_idle is what
++// it waited for events in the window that started at io_win
++static void io_util_at(u64 now) {
++  u64 span = now - io_win;
++  if (span >= IO_UTIL_WIN) {
++    io_util = io_idle >= span ? 0 : (u32)(100 - io_idle * 100 / span);
++    io_win  = now;
++    io_idle = 0;
++  }
++}
++
++static void io_idle_since(u64 t0) {
++  u64 now  = io_tick();
++  io_idle += now - t0;
++  io_util_at(now);
++}
+ 
+ typedef struct IoPost {
+   char* buf;
+@@ -7304,8 +7343,23 @@ typedef struct IoWriter {
+   u32             sleep;
+   pthread_mutex_t lock;
+   pthread_cond_t  bell;
++  u32*            ends;
++  u32             nends;
++  u32             solo;
++  u32             util;
+ } IoWriter;
+ 
++// the writer's busy share in percent, a window at a time: busy is the time
++// its sends took in the window that started at win
++static void io_writer_util(IoWriter* W, u64 now, u64* win, u64* busy) {
++  u64 span = now - *win;
++  if (span >= IO_UTIL_WIN) {
++    __atomic_store_n(&W->util, (u32)(*busy >= span ? 100 : *busy * 100 / span), __ATOMIC_RELAXED);
++    *win  = now;
++    *busy = 0;
++  }
++}
++
+ static void io_post_do(IoPost* p) {
+   if (p->buf == NULL) {
+     close(p->fd);
+@@ -7327,20 +7381,30 @@ static void io_post_do(IoPost* p) {
+ }
+ 
+ static void* io_writer_run(void* arg) {
+-  IoWriter* W = arg;
++  IoWriter* W    = arg;
++  u64       win  = io_tick();
++  u64       busy = 0;
+   for (;;) {
+     u32 h = W->head;
+     if (h != __atomic_load_n(&W->tail, __ATOMIC_ACQUIRE)) {
++      u64 t0 = io_tick();
+       io_post_do(&W->ring[h % IO_POSTS]);
+       __atomic_store_n(&W->head, h + 1, __ATOMIC_RELEASE);
++      u64 t1 = io_tick();
++      busy  += t1 - t0;
++      io_writer_util(W, t1, &win, &busy);
+       continue;
+     }
+     u64  until = io_tick() + 50000;
+     bool more  = false;
+     for (u32 n = 1; !more; n += 1) {
+       more = __atomic_load_n(&W->tail, __ATOMIC_ACQUIRE) != h;
+-      if (!more && (n & 31) == 0 && io_tick() >= until) {
+-        break;
++      if (!more && (n & 31) == 0) {
++        u64 now = io_tick();
++        io_writer_util(W, now, &win, &busy);
++        if (now >= until) {
++          break;
++        }
+       }
+       io_pause();
+     }
+@@ -7348,12 +7412,15 @@ static void* io_writer_run(void* arg) {
+       continue;
+     }
+     pthread_mutex_lock(&W->lock);
++    __atomic_store_n(&W->util, 0, __ATOMIC_RELAXED);
+     __atomic_store_n(&W->sleep, 1, __ATOMIC_SEQ_CST);
+     while (__atomic_load_n(&W->tail, __ATOMIC_SEQ_CST) == h) {
+       pthread_cond_wait(&W->bell, &W->lock);
+     }
+     __atomic_store_n(&W->sleep, 0, __ATOMIC_SEQ_CST);
+     pthread_mutex_unlock(&W->lock);
++    win  = io_tick();
++    busy = 0;
+   }
+   return NULL;
+ }
+@@ -7374,6 +7441,36 @@ static void io_post(int fd, char* buf, u64 len) {
+     io_me->post = W;
+   }
+   u32 t = W->tail;
++  u32 h = __atomic_load_n(&W->head, __ATOMIC_ACQUIRE);
++  if ((u32)fd >= W->nends) {
++    u32 n    = W->nends * 2 > (u32)fd ? W->nends * 2 : (u32)fd + 64;
++    W->ends  = io_mem(realloc(W->ends, (size_t)n * sizeof(u32)));
++    for (u32 i = W->nends; i < n; i += 1) {
++      W->ends[i] = h;
++    }
++    W->nends = n;
++  }
++  if (buf != NULL && (int32_t)(W->ends[fd] - h) <= 0) {
++    bool share  = io_util + IO_POST_SLACK < __atomic_load_n(&W->util, __ATOMIC_RELAXED);
++    bool asleep = __atomic_load_n(&W->sleep, __ATOMIC_SEQ_CST);
++    if (share || (asleep && W->solo < IO_POST_SOLO)) {
++      ssize_t n = send(fd, buf, len, MSG_NOSIGNAL | MSG_DONTWAIT);
++      if (n == (ssize_t)len) {
++        free(buf);
++        W->solo += !share;
++        return;
++      }
++      if (n < 0 && errno != EAGAIN && errno != EWOULDBLOCK && errno != EINTR) {
++        free(buf);
++        return;
++      }
++      if (n > 0) {
++        memmove(buf, buf + n, len - (u64)n);
++        len -= (u64)n;
++      }
++    }
++  }
++  W->solo = 0;
+   for (u32 n = 1; t - __atomic_load_n(&W->head, __ATOMIC_ACQUIRE) >= IO_POSTS; n += 1) {
+     if ((n & 1023) == 0) {
+       sched_yield();
+@@ -7381,6 +7478,7 @@ static void io_post(int fd, char* buf, u64 len) {
+     io_pause();
+   }
+   W->ring[t % IO_POSTS] = (IoPost){ buf, len, fd };
++  W->ends[fd] = t + 1;
+   __atomic_store_n(&W->tail, t + 1, __ATOMIC_SEQ_CST);
+   if (__atomic_load_n(&W->sleep, __ATOMIC_SEQ_CST)) {
+     pthread_mutex_lock(&W->lock);
+@@ -8532,15 +8630,21 @@ static void io_run(Env e) {
+         io_sync();
+         err_fail("deadlock: every computation waits on a channel");
+       }
++      u64 t0 = io_tick();
+       if (__atomic_load_n(&io_multi, __ATOMIC_RELAXED) && io_linger()) {
++        io_idle_since(t0);
+         continue;
+       }
+       if (io_rest()) {
+         io_wait(e, true);
+         io_awake();
+       }
++      io_idle_since(t0);
+       continue;
+     }
++    if ((n & 63) == 0) {
++      io_util_at(io_tick());
++    }
+     if ((n & 63) == 0 && io_busy != 0) {
+       io_take(e);
+     }

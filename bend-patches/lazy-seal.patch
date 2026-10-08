@@ -1,0 +1,102 @@
+diff --git a/bend2/comp.ts b/bend2/comp.ts
+index a7885f2..0199412 100644
+--- a/bend2/comp.ts
++++ b/bend2/comp.ts
+@@ -1051,7 +1051,7 @@ function ctr_build(sc: Scope, k: Name, exprs: string[], stat = false): string {
+   const got = s === null ? alloc
+     : s.z ? `${s.name} >= HEAP_OFF ? ${s.name} : ${alloc}` : s.name;
+   return `term_ctr(${cid}, ${node_fill(sc, "nd", got, exprs,
+-    FL.hot.has(k))})`;
++    FL.hot.has(k) && FL.bangs.size > 0)})`;
+ }
+ 
+ function facts_packed(t: HTerm): boolean {
+@@ -2853,7 +2853,8 @@ export function compile_book(book: Bend.Book): string {
+   `CONSTV u8 CID_T[][2] = { ${[...cids.keys()].map((k, i) =>
+     `{ ${ars[i]}, ${Number(FL.hot.has(k))} }`).join(", ")} };`,
+   `#define STAT_LEN ${FL.img.length}`, "",
+-  `#define WL_RESW ${resw}`, `#define BANGS   ${FL.bangs.size}`, "",
++  `#define WL_RESW ${resw}`, `#define BANGS   ${FL.bangs.size}`,
++  `#define SEAL_LAZY ${Number(FL.bangs.size === 0)}`, "",
+   `#define WL_BANK Term ${ws.join(", ")};`, "",
+   `#define WL_LOAD(A, N) \\\n  do { \\\n${rs.map((r, i) =>
+     `    if ((N) <= ${i}) break; ${r} = e.mem[(A) + ${i}]; \\\n`).join("")
+@@ -4005,16 +4006,46 @@ INLINE void term_sink(Env e, Term t) {
+   }
+ }
+ 
++// A field may be raw in a shared node when the program seals lazily
++// (SEAL_LAZY, a CPU-only program): its constructors skip rfc_seal, so a
++// value pays for a redirect only once it is shared. The first co-owner to
++// take the node seals the field in place: a redirect of count 2 (the
++// node's and its own), installed by CAS, as other co-owners may race to
++// seal the same field; a loser frees its redirect and bumps the winner's.
++// Sealed, a field never changes again, so ctr_take reads it back after
++// the fade and only then lets the node go.
+ OUTLINE void span_fade(Env e, Term t, u64 src, u32 n) {
+   for (u32 j = 0; j < n; j += 1) {
++#if SEAL_LAZY && !DEVICE
++    Term f = atomic_load_explicit((_Atomic u64*)&e.mem[src + j],
++      memory_order_acquire);
++#else
+     Term f = e.mem[src + j];
++#endif
+     if (term_rfc(f)) {
+       rfc_bump(e, term_loc(f), 1);
+     } else if (!term_triv(f)) {
++#if SEAL_LAZY && !DEVICE
++      if (term_tag(f) == TAG_CTR) {
++        Term w = rfc_wrap(e, f, 2);
++        Term x = f;
++        if (!atomic_compare_exchange_strong_explicit(
++            (_Atomic u64*)&e.mem[src + j], &x, w,
++            memory_order_acq_rel, memory_order_acquire)) {
++          heap_free(e, 0, term_loc(w));
++          rfc_bump(e, term_loc(x), 1);
++        }
++      } else {
++        err_post(e.mem, ERR_RFCS);
++      }
++#else
+       err_post(e.mem, ERR_RFCS);
++#endif
+     }
+   }
++#if !(SEAL_LAZY && !DEVICE)
+   term_drop(e, t);
++#endif
+ }
+ 
+ INLINE u64 ctr_take(Env e, Term t, u32 n, THR Term* out) {
+@@ -4032,10 +4063,21 @@ INLINE u64 ctr_take(Env e, Term t, u32 n, THR Term* out) {
+   DEV u32* c = a32_at(H, term_loc(t));
+   if ((a32_load(c) & RFC_CNT) == 1) {
+     a32_acq(c);
++#if SEAL_LAZY
++    for (u32 j = 0; j < n; j += 1) {
++      out[j] = H[src + j];
++    }
++#endif
+     heap_free(e, 0, term_loc(t));
+     return src;
+   }
+   span_fade(e, t, src, n);
++#if SEAL_LAZY && !DEVICE
++  for (u32 j = 0; j < n; j += 1) {
++    out[j] = H[src + j];
++  }
++  term_drop(e, t);
++#endif
+   return 0;
+ }
+ 
+@@ -5480,7 +5522,8 @@ OUTLINE void io_errs(Env e, Term s) {
+ 
+ #define io_nul(s, n) (strlen(s) != (n))
+ 
+-#define io_seal(e, t, cid) (cid_hot(cid) ? rfc_seal(e, t) : (t))
++#define io_seal(e, t, cid) \
++  (!SEAL_LAZY && cid_hot(cid) ? rfc_seal(e, t) : (t))
+ 
+ static Term io_node(Env e, u64 cid, Term a, Term b) {
+   u64 l = heap_alloc(e, 1);

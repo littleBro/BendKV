@@ -1,0 +1,575 @@
+diff --git a/bend2/comp.ts b/bend2/comp.ts
+index 0e5e458..abad57f 100644
+--- a/bend2/comp.ts
++++ b/bend2/comp.ts
+@@ -4819,7 +4819,15 @@ INLINE Term term_word(Env e, Term w) {
+ // 1 to 6 bytes may also be one word, an immediate (str_imm): tag 0 with
+ // bit 55 set (no view has it: a pos is below 2048), its length in bits
+ // 48..50 and its bytes from bit 0 up. It is trivial, so an owned one is
+-// copied and dropped for free, and it is always a String's last run.
++// copied and dropped for free, and it is always a String's last run. A
++// String of one chunk with nothing after it may also be a blob: the BUF
++// term itself, with no node (a slice, a short copy, a stored key), its
++// bytes buf[pos..cap). Shared, it carries RFC_BIT as any term, and since
++// pos lives in each owner's own word, an owned match moves it up whether
++// or not others hold the buffer. A borrowed match reads a blob through a
++// blob view (str_bview): tag 0 as a chunk's view, pos in bits 40..50, the
++// class in bits 51..54 (a chunk's view has them clear) and the buffer's
++// location for the node's.
+ 
+ #if STR_PACK && !DEVICE
+ 
+@@ -4850,6 +4858,41 @@ INLINE u8* str_mem(u64* H, Term b) {
+   return (u8*)(H + term_peek(H, b));
+ }
+ 
++INLINE bool str_blob(Term t) {
++  return term_tag(t) == TAG_BUF;
++}
++
++INLINE bool str_bview(Term t) {
++  return term_tag(t) == 0 && ((t >> 51) & 15) != 0;
++}
++
++// a blob's or a blob view's bytes p[0..*n)
++INLINE u8* str_brun(u64* H, Term t, u32* n) {
++  if (term_tag(t) == 0) {
++    u32 a = (u32)term_aux(t);
++    u32 p = a & 0x7FF;
++    *n = (4u << (a >> 11)) - p;
++    return (u8*)(H + term_loc(t)) + p;
++  }
++  u32 p = str_pos(t);
++  *n = str_cap(t) - p;
++  return str_mem(H, t) + p;
++}
++
++// a view of a blob or of a blob view, k bytes further in (k below its
++// length)
++INLINE Term str_bview_of(u64* H, Term t, u32 k) {
++  if (term_tag(t) == 0) {
++    return t + ((u64)k << 40);
++  }
++  return term_make(0, (str_pos(t) + k) | (blk_cls(t) << 11), term_peek(H, t));
++}
++
++// a chunk's or a blob's BUF term
++INLINE Term str_bufof(u64* H, Term t) {
++  return str_blob(t) ? t : H[term_loc(t)];
++}
++
+ #define STR_IMM_MAX 6
+ #define STR_IMM_BYTES ((1ull << 48) - 1)
+ 
+@@ -4884,6 +4927,9 @@ INLINE Term str_imm_drop(Term t, u32 k) {
+ // A chunk of class c before t, its bytes from pos up left to write.
+ OUTLINE Term str_chunk(Env e, u32 c, u32 pos, Term t) {
+   u64 l = heap_alloc(e, buf_wcls(c));
++  if (str_nil(t)) {
++    return term_buf(c | (pos << 5), l);
++  }
+   u64 n = heap_alloc(e, 1);
+   e.mem[n]     = term_buf(c | (pos << 5), l);
+   e.mem[n + 1] = t;
+@@ -4908,7 +4954,7 @@ OUTLINE Term str_cons_new(Env e, u32 h, Term t) {
+     }
+     u32  p  = (4u << STR_MIN) - (n + 1);
+     Term ch = str_chunk(e, STR_MIN, p, term_pak(CID(SNil), 0));
+-    u8*  d  = str_mem(e.mem, e.mem[term_loc(ch)]) + p;
++    u8*  d  = str_mem(e.mem, ch) + p;
+     for (u32 i = 0; i <= n; i += 1) {
+       d[i] = (u8)(w >> (8 * i));
+     }
+@@ -4918,10 +4964,13 @@ OUTLINE Term str_cons_new(Env e, u32 h, Term t) {
+   if (str_buf(t) && !term_rfc(t) && !term_rfc(e.mem[term_loc(t)])) {
+     c = blk_cls(e.mem[term_loc(t)]) + 1;
+     c = c < STR_MAX ? c : STR_MAX;
++  } else if ((t >> 56) == TAG_BUF) {
++    c = blk_cls(t) + 1;
++    c = c < STR_MAX ? c : STR_MAX;
+   }
+   u32  p = (4u << c) - 1;
+   Term s = str_chunk(e, c, p, t);
+-  str_mem(e.mem, e.mem[term_loc(s)])[p] = (u8)h;
++  str_mem(e.mem, str_bufof(e.mem, s))[p] = (u8)h;
+   return s;
+ }
+ 
+@@ -4929,6 +4978,11 @@ OUTLINE Term str_cons_new(Env e, u32 h, Term t) {
+ #define STR_KEY ((TAG_CTR << 16) | STR_CID)
+ 
+ INLINE Term str_cons(Env e, u32 h, Term t) {
++  if (h < 256 && (t >> 56) == TAG_BUF && (t & (0x7FFull << 45)) != 0) {
++    t -= 1ull << 45;
++    str_mem(e.mem, t)[str_pos(t)] = (u8)h;
++    return t;
++  }
+   if (h < 256 && (t >> 40) == STR_KEY) {
+     u64  n = term_loc(t);
+     Term b = e.mem[n];
+@@ -4953,6 +5007,15 @@ OUTLINE StrHT str_take_slow(Env e, Term t) {
+   if (str_imm(t)) {
+     return (StrHT){ str_imm_drop(t, 1), (u8)t };
+   }
++  if (str_blob(t)) {
++    u32 p = str_pos(t);
++    u32 h = str_mem(e.mem, t)[p];
++    if (p + 1 < str_cap(t)) {
++      return (StrHT){ t + (1ull << 45), h };
++    }
++    term_drop(e, t);
++    return (StrHT){ term_pak(CID(SNil), 0), h };
++  }
+   Term f[2];
+   u64  n = ctr_take(e, t, 2, f);
+   if (!str_buf(t)) {
+@@ -4979,7 +5042,12 @@ OUTLINE StrHT str_take_slow(Env e, Term t) {
+ 
+ INLINE StrHT str_take(Env e, Term t) {
+   u64 n = term_loc(t);
+-  if ((t >> 40) == STR_KEY) {
++  if ((t >> 56) == TAG_BUF) {
++    u32 p = str_pos(t);
++    if (p + 1 < str_cap(t)) {
++      return (StrHT){ t + (1ull << 45), ((u8*)(e.mem + n))[p] };
++    }
++  } else if ((t >> 40) == STR_KEY) {
+     Term b = e.mem[n];
+     u64  a = b >> 40;
+     u32  p = (u32)(a >> 5) & 0x7FF;
+@@ -5003,6 +5071,10 @@ INLINE u32 str_vhead(u64* H, Term t) {
+   if (str_imm(t)) {
+     return (u8)t;
+   }
++  if (str_blob(t) || str_bview(t)) {
++    u32 m;
++    return *str_brun(H, t, &m);
++  }
+   u64  n = str_node(H, t);
+   Term b = H[n];
+   if (term_tag(t) != 0 && !str_buf(t)) {
+@@ -5015,6 +5087,11 @@ INLINE Term str_vtail(u64* H, Term t) {
+   if (str_imm(t)) {
+     return str_imm_drop(t, 1);
+   }
++  if (str_blob(t) || str_bview(t)) {
++    u32 m;
++    str_brun(H, t, &m);
++    return m > 1 ? str_bview_of(H, t, 1) : term_pak(CID(SNil), 0);
++  }
+   u64 n = str_node(H, t);
+   if (term_tag(t) != 0 && !str_buf(t)) {
+     return H[n + 1];
+@@ -5053,6 +5130,11 @@ INLINE bool str_run(u64* H, Term t, StrRun* r) {
+     r->t = term_pak(CID(SNil), 0);
+     return true;
+   }
++  if (str_blob(t) || str_bview(t)) {
++    r->p = str_brun(H, t, &r->n);
++    r->t = term_pak(CID(SNil), 0);
++    return true;
++  }
+   u64 n = str_node(H, t);
+   if (term_tag(t) == 0 || str_buf(t)) {
+     Term b = H[n];
+@@ -5106,7 +5188,7 @@ static void str_put(u64* H, Term s, u8* d, u64 len) {
+ static u64 str_sole_last(u64* H, Term s) {
+   u64 last = 0;
+   for (Term t = s; !str_nil(t); t = H[last + 1]) {
+-    if (str_imm(t) || term_rfc(t) || term_loc(t) < HEAP_OFF) {
++    if (str_imm(t) || str_blob(t) || term_rfc(t) || term_loc(t) < HEAP_OFF) {
+       return 0;
+     }
+     last = term_loc(t);
+@@ -5140,9 +5222,11 @@ static Term str_copy(Env e, Term s, u64 len, Term tail, u32 up, u32 room) {
+     u32  m  = (u32)(k == 0 ? len - (nch - 1) * full : full);
+     u32  c  = str_cls_for(k == 0 && m + room < full ? m + room : m);
+     u32  at = (4u << c) - m;
+-    Term ch = str_chunk(e, c, at, tail);
++    // a chunk before another is a node (its next, 1 for now, is linked
++    // below); the last one before SNil is a blob
++    Term ch = str_chunk(e, c, at, k + 1 < nch ? (Term)1 : tail);
+     u64  nd = term_loc(ch);
+-    u8*  d  = str_mem(H, H[nd]) + at;
++    u8*  d  = str_mem(H, str_bufof(H, ch)) + at;
+     for (u32 j = 0; j < m;) {
+       u32 w = r.n - i < m - j ? r.n - i : m - j;
+       if (r.p != NULL) {
+@@ -5206,6 +5290,9 @@ INLINE Term str_copy_any(Env e, Term s, u64 max, Term tail, u32 up) {
+ // the room below a sole chunk b's bytes (str_cons writes there); 0 for
+ // anything else
+ INLINE u32 str_room(u64* H, Term b) {
++  if ((b >> 56) == TAG_BUF) {
++    return str_pos(b);
++  }
+   if ((b >> 40) != STR_KEY) {
+     return 0;
+   }
+@@ -5213,9 +5300,15 @@ INLINE u32 str_room(u64* H, Term b) {
+   return (bb >> 56) == TAG_BUF ? str_pos(bb) : 0;
+ }
+ 
+-// moves a sole chunk b's start len bytes down into its room; where they go
+-INLINE u8* str_room_take(u64* H, Term b, u32 len) {
+-  u64  n  = term_loc(b);
++// moves a sole chunk's or blob's (*b's) start len bytes down into its
++// room, a blob's in *b itself; where they go
++INLINE u8* str_room_take(u64* H, Term* b, u32 len) {
++  if ((*b >> 56) == TAG_BUF) {
++    u32 p = str_pos(*b) - len;
++    *b = str_at(*b, p);
++    return str_mem(H, *b) + p;
++  }
++  u64  n  = term_loc(*b);
+   Term bb = H[n];
+   u32  p  = str_pos(bb) - len;
+   H[n] = str_at(bb, p);
+@@ -5233,15 +5326,9 @@ static Term str_prepend(Env e, Term s, Term b) {
+   u32  wide = 0;
+   u64  len  = str_scan(H, s, ~0ull, &wide);
+   Term out  = 0;
+-  if (!wide && (b >> 40) == STR_KEY) {
+-    u64  n  = term_loc(b);
+-    Term bb = H[n];
+-    u32  p  = str_pos(bb);
+-    if ((bb >> 56) == TAG_BUF && len <= p) {
+-      str_put(H, s, (u8*)(H + term_loc(bb)) + p - len, len);
+-      H[n] = str_at(bb, p - (u32)len);
+-      out  = b;
+-    }
++  if (!wide && str_room(H, b) >= len && len > 0) {
++    str_put(H, s, str_room_take(H, &b, (u32)len), len);
++    out = b;
+   }
+   if (out == 0) {
+     out = wide ? str_copy_wide(e, s, len, b, 0)
+@@ -5257,12 +5344,19 @@ FAR Term str_append_far(Env e, Term a, Term b) {
+   u64* H    = e.mem;
+   u64  last = 0;
+   Term t    = a;
+-  while (!str_nil(t) && !str_imm(t) && !term_rfc(t)
++  while (!str_nil(t) && !str_imm(t) && !str_blob(t) && !term_rfc(t)
+     && term_loc(t) >= HEAP_OFF) {
+     last = term_loc(t);
+     t    = H[last + 1];
+   }
+-  if (!str_nil(t)) {
++  if (str_blob(t) && !str_nil(b)) {
++    u64 n = heap_alloc(e, 1);
++    H[n]     = t;
++    H[n + 1] = b;
++    b = term_ctr(STR_CID, n);
++  } else if (str_blob(t)) {
++    b = t;
++  } else if (!str_nil(t)) {
+     b = str_prepend(e, t, b);
+   }
+   if (last == 0) {
+@@ -5309,10 +5403,10 @@ INLINE Term str_append(Env e, Term a, Term b) {
+   if (room != 0 && !str_nil(a)) {
+     u8*    d = NULL;
+     StrRun r;
+-    if (term_tag(a) == 0 || str_buf(a)) {
++    if (term_tag(a) == 0 || str_buf(a) || str_blob(a)) {
+       str_run(H, a, &r);
+       if (str_nil(r.t) && r.n <= room) {
+-        d = str_room_take(H, b, r.n);
++        d = str_room_take(H, &b, r.n);
+         str_mov(d, r.p, r.n);
+       }
+     } else {
+@@ -5328,7 +5422,7 @@ INLINE Term str_append(Env e, Term a, Term b) {
+         t = H[n + 1];
+       }
+       if (str_nil(t) && len <= room) {
+-        d = str_room_take(H, b, len);
++        d = str_room_take(H, &b, len);
+         str_mov(d, tmp, len);
+       }
+     }
+@@ -5344,7 +5438,7 @@ INLINE Term str_append(Env e, Term a, Term b) {
+ // b's room when they fit, else as str_append_far takes a static String
+ INLINE Term str_append_lit(Env e, Term a, const char* s, u32 n, Term b) {
+   if (str_room(e.mem, b) >= n) {
+-    memcpy(str_room_take(e.mem, b, n), s, n);
++    memcpy(str_room_take(e.mem, &b, n), s, n);
+     return b;
+   }
+   return str_append_far(e, a, b);
+@@ -5367,6 +5461,11 @@ INLINE u64 str_len(u64* H, Term s) {
+   if (str_imm(s)) {
+     return str_imm_len(s);
+   }
++  if (str_blob(s) || str_bview(s)) {
++    u32 n;
++    str_brun(H, s, &n);
++    return n;
++  }
+   if (!str_nil(s) && (term_tag(s) == 0 || str_buf(s))) {
+     u64 n = str_node(H, s);
+     if (str_nil(H[n + 1])) {
+@@ -5416,6 +5515,9 @@ INLINE const u8* str_one_run(u64* H, Term s, u64* w, u32* n) {
+     *n = str_imm_len(s);
+     return (const u8*)w;
+   }
++  if (str_blob(s) || str_bview(s)) {
++    return str_brun(H, s, n);
++  }
+   if (!str_nil(s) && (term_tag(s) == 0 || str_buf(s))) {
+     u64 nd = str_node(H, s);
+     if (str_nil(H[nd + 1])) {
+@@ -5452,6 +5554,11 @@ u64 str_eq_lit(u64* H, Term s, const char* l, u32 n, Term lt) {
+     u64 w = s & STR_IMM_BYTES;
+     return str_imm_len(s) == n && memcmp(&w, l, n) == 0;
+   }
++  if (str_blob(s) || str_bview(s)) {
++    u32 m;
++    const u8* p = str_brun(H, s, &m);
++    return m == n && memcmp(p, l, n) == 0;
++  }
+   if (!str_nil(s) && (term_tag(s) == 0 || str_buf(s))) {
+     u64 nd = str_node(H, s);
+     if (str_nil(H[nd + 1])) {
+@@ -5479,7 +5586,7 @@ FAR Term str_take_n(Env e, Term s, u64 n) {
+     u32  c  = str_cls_for(n);
+     u32  at = (4u << c) - (u32)n;
+     Term ch = str_chunk(e, c, at, term_pak(CID(SNil), 0));
+-    str_mov(str_mem(e.mem, e.mem[term_loc(ch)]) + at, r.p, n);
++    str_mov(str_mem(e.mem, ch) + at, r.p, n);
+     return ch;
+   }
+   return str_copy_any(e, s, n, term_pak(CID(SNil), 0), 0);
+@@ -5494,6 +5601,14 @@ FAR Term str_drop_n(Env e, Term s, u64 n) {
+       return n < str_imm_len(t) ? str_imm_drop(t, (u32)n)
+         : term_pak(CID(SNil), 0);
+     }
++    if (str_blob(t)) {
++      u64 len = str_cap(t) - str_pos(t);
++      if (n < len) {
++        return t + (n << 45);
++      }
++      term_drop(e, t);
++      return term_pak(CID(SNil), 0);
++    }
+     Term f[2];
+     bool buf = str_buf(t);
+     u64  nd  = ctr_take(e, t, 2, f);
+@@ -5525,10 +5640,13 @@ FAR Term str_drop_n(Env e, Term s, u64 n) {
+ // a sole s's bytes and cells change in place
+ FAR Term str_upper_far(Env e, Term s) {
+   u64* H    = e.mem;
+-  bool sole = str_sole_last(H, s) != 0;
+-  for (Term t = s; sole && !str_nil(t); t = H[term_loc(t) + 1]) {
+-    sole = !str_buf(t) || (H[term_loc(t)] >> 56) == TAG_BUF;
++  bool sole = !str_nil(s);
++  Term t    = s;
++  for (; sole && !str_nil(t) && !str_blob(t); t = H[term_loc(t) + 1]) {
++    sole = !str_imm(t) && !term_rfc(t) && term_loc(t) >= HEAP_OFF
++      && (!str_buf(t) || (H[term_loc(t)] >> 56) == TAG_BUF);
+   }
++  sole = sole && (str_nil(t) || (t >> 56) == TAG_BUF);
+   if (!sole) {
+     Term out = str_copy_any(e, s, ~0ull, term_pak(CID(SNil), 0), 1);
+     term_sink(e, s);
+@@ -5586,8 +5704,9 @@ INLINE Term str_upper(Env e, Term s) {
+     return w;
+   }
+   u32 n;
+-  u8* q = (u8*)str_sole_run(e.mem, s, &n);
+-  if (q == NULL || !str_nil(e.mem[term_loc(s) + 1])) {
++  u8* q = (s >> 56) == TAG_BUF ? str_brun(e.mem, s, &n)
++    : (u8*)str_sole_run(e.mem, s, &n);
++  if (q == NULL || ((s >> 56) != TAG_BUF && !str_nil(e.mem[term_loc(s) + 1]))) {
+     return str_upper_far(e, s);
+   }
+   for (u32 j = 0; j < n; j += 1) {
+@@ -5597,6 +5716,10 @@ INLINE Term str_upper(Env e, Term s) {
+ }
+ 
+ INLINE u64 str_code_at(u64* H, Term s, u64 i) {
++  if (str_blob(s)) {
++    u32 p = str_pos(s);
++    return i < str_cap(s) - p ? str_mem(H, s)[p + i] : 4294967295u;
++  }
+   u32       n;
+   const u8* q = str_sole_run(H, s, &n);
+   if (q != NULL && i < n && str_nil(H[term_loc(s) + 1])) {
+@@ -5646,12 +5769,14 @@ FAR Term str_slice_far(Env e, Term s, u64 i, u64 n) {
+       u32  c  = str_cls_for(n);
+       u32  at = (4u << c) - (u32)n;
+       Term ch = str_chunk(e, c, at, term_pak(CID(SNil), 0));
+-      memcpy(str_mem(H, H[term_loc(ch)]) + at, r.p + i, n);
++      memcpy(str_mem(H, ch) + at, r.p + i, n);
+       return ch;
+     }
+     Term v = t;
+     if (str_imm(t)) {
+       v = str_imm_drop(t, (u32)i);
++    } else if (str_blob(t) || str_bview(t)) {
++      v = str_bview_of(H, t, (u32)i);
+     } else if (r.p != NULL) {
+       u64 nd = str_node(H, t);
+       u32 p0 = term_tag(t) == 0 ? (u32)term_aux(t) : str_pos(H[nd]);
+@@ -5664,8 +5789,9 @@ FAR Term str_slice_far(Env e, Term s, u64 i, u64 n) {
+ 
+ INLINE u64 str_find(u64* H, Term s, u64 c, u64 i) {
+   u32       n;
+-  const u8* q = str_sole_run(H, s, &n);
+-  if (q != NULL && c < 256 && str_nil(H[term_loc(s) + 1])) {
++  bool      b = str_blob(s);
++  const u8* q = b ? str_brun(H, s, &n) : str_sole_run(H, s, &n);
++  if (q != NULL && c < 256 && (b || str_nil(H[term_loc(s) + 1]))) {
+     const u8* f = i < n ? memchr(q + i, (int)c, n - i) : NULL;
+     return f != NULL ? (u64)(f - q) : n;
+   }
+@@ -5674,7 +5800,8 @@ INLINE u64 str_find(u64* H, Term s, u64 c, u64 i) {
+ 
+ INLINE Term str_slice(Env e, Term s, u64 i, u64 n) {
+   u32       m;
+-  const u8* q = str_sole_run(e.mem, s, &m);
++  const u8* q = str_blob(s) ? str_brun(e.mem, s, &m)
++    : str_sole_run(e.mem, s, &m);
+   if (q != NULL && n > 0 && i < m && n <= m - i && n <= STR_IMM_MAX) {
+     return str_imm_make(q + i, (u32)n);
+   }
+@@ -5682,7 +5809,7 @@ INLINE Term str_slice(Env e, Term s, u64 i, u64 n) {
+     u32  c  = str_cls_for(n);
+     u32  at = (4u << c) - (u32)n;
+     Term ch = str_chunk(e, c, at, term_pak(CID(SNil), 0));
+-    str_mov(str_mem(e.mem, e.mem[term_loc(ch)]) + at, q + i, n);
++    str_mov(str_mem(e.mem, ch) + at, q + i, n);
+     return ch;
+   }
+   return str_slice_far(e, s, i, n);
+@@ -5724,7 +5851,7 @@ FAR Term nat_show_str(Env e, u64 n) {
+   u32  c  = str_cls_for(k);
+   u32  at = (4u << c) - k;
+   Term ch = str_chunk(e, c, at, term_pak(CID(SNil), 0));
+-  u8*  m  = str_mem(e.mem, e.mem[term_loc(ch)]) + at;
++  u8*  m  = str_mem(e.mem, ch) + at;
+   for (u32 i = 0; i < k; i += 1) {
+     m[i] = d[k - 1 - i];
+   }
+@@ -5736,15 +5863,15 @@ FAR Term nat_show_str(Env e, u64 n) {
+ INLINE Term nat_show_into(Env e, u64 n, Term b) {
+   u64* H = e.mem;
+   if (n <= NAT_IMM && str_room(H, b) >= 20) {
+-    u64  nd = term_loc(b);
+-    Term bb = H[nd];
+-    u8*  d  = str_mem(H, bb) + str_pos(bb);
+-    u8*  q  = d;
++    u32 k = 1;
++    for (u64 x = n; x >= 10; x /= 10) {
++      k += 1;
++    }
++    u8* q = str_room_take(H, &b, k) + k;
+     do {
+       *--q = (u8)(48 + n % 10);
+       n /= 10;
+     } while (n != 0);
+-    H[nd] = str_at(bb, str_pos(bb) - (u32)(d - q));
+     return b;
+   }
+   return str_append(e, nat_show_str(e, n), b);
+@@ -7180,6 +7307,25 @@ OUTLINE char* io_cbuf(Env e, Term s, u64* len, u64 cons) {
+       s = term_pak(CID(SNil), 0);
+       continue;
+     }
++    if ((utf || raw) && str_blob(s)) {
++      u32       m;
++      const u8* src = str_brun(e.mem, s, &m);
++      while (n + 2 * (u64)m + 5 > cap) {
++        cap *= 2;
++        buf = io_mem(realloc(buf, cap));
++      }
++      if (raw) {
++        memcpy(buf + n, src, m);
++        n += m;
++      } else {
++        for (u32 i = 0; i < m; i += 1) {
++          n += io_utf8(buf + n, src[i]);
++        }
++      }
++      term_drop(e, s);
++      s = term_pak(CID(SNil), 0);
++      continue;
++    }
+     if ((utf || raw) && str_buf(s)) {
+       Term fb[2];
+       spare_free(e, cls_fit(2), ctr_take(e, s, 2, fb));
+@@ -7302,7 +7448,7 @@ static Term io_chunks(Env e, const u8* p, u64 n, Term t) {
+       c += 1;
+     }
+     t = str_chunk(e, c, (4u << c) - m, t);
+-    memcpy(str_mem(e.mem, e.mem[term_loc(t)]) + (4u << c) - m, p + n - m, m);
++    memcpy(str_mem(e.mem, str_bufof(e.mem, t)) + (4u << c) - m, p + n - m, m);
+     n -= m;
+   }
+   return t;
+diff --git a/tests/base/string_blob.bend b/tests/base/string_blob.bend
+new file mode 100644
+index 0000000..f1c7edb
+--- /dev/null
++++ b/tests/base/string_blob.bend
+@@ -0,0 +1,61 @@
++# Strings of one chunk and nothing after it (on the C lane, the chunk's
++# buffer term itself, a blob): slices 0 to 40 bytes long of a String of
++# several pieces, each read, compared, hashed, cut, matched char by char
++# owned and borrowed, joined on either side and with itself, upper-cased
++# and grown char by char past its room, owned and shared. Nat.show of a
++# long number is one too. Expect the same summary on every lane.
++import Base
++
++def flag(b: Bool) -> String:
++  match b:
++    case True{}:
++      "T"
++    case False{}:
++      "F"
++
++# chars taken off one by one, owned: how many are c
++def count(s: String, +c: Char, acc: Nat) -> Nat:
++  match s:
++    case SNil{}:
++      acc
++    case SCon{x, t}:
++      count(t, c, Nat.add(acc, Bool.pick(Nat, Char.is_eq(x, c), 1n, 0n)))
++
++# chars read in place, borrowed: their sum
++def sum(+s: String, acc: U32) -> U32:
++  match s:
++    case SNil{}:
++      acc
++    case SCon{Chr{x}, t}:
++      sum(t, U32.add(acc, x))
++
++# k chars put before s one by one
++def grow(k: Nat, s: String) -> String:
++  match k:
++    case 0n:
++      s
++    case 1n+j:
++      grow(j, SCon{'z', s})
++
++def sig(+p: String, +q: String) -> String:
++  +n = String.length(p)
++  +a = Nat.show(n) ++ "," ++ U32.show(String.hash(p)) ++ "," ++ flag(String.eq(p, q)) ++ flag(String.eq(q, p)) ++ flag(String.eq(p, "fghij")) ++ flag(String.eq(p, "fghijklmnopqrs"))
++  +b = U32.show(String.code_at(p, 0n)) ++ "," ++ U32.show(String.code_at(p, Nat.sub(n, 1n))) ++ "," ++ Nat.show(String.find(p, 'k', 0n)) ++ "," ++ Nat.show(String.find(p, 'k', 6n))
++  +c = String.slice(p, 1n, Nat.sub(n, 2n)) ++ "|" ++ String.take(p, 3n) ++ "|" ++ String.drop(p, 3n)
++  +d = Nat.show(count(p, 'g', 0n)) ++ "," ++ U32.show(sum(p, 0)) ++ "," ++ ("<" ++ p) ++ (p ++ ">") ++ (p ++ p)
++  +e = String.to_upper(p) ++ "," ++ p ++ "," ++ grow(3n, p) ++ "," ++ grow(9n, String.slice(q, 0n, n))
++  a ++ ";" ++ b ++ ";" ++ c ++ ";" ++ d ++ ";" ++ e ++ "\n"
++
++def sigs(i: Nat, +src: String, acc: String) -> String:
++  match i:
++    case 0n:
++      acc
++    case 1n++j:
++      sigs(j, src, sig(String.slice(src, 5n, j), String.slice(src, 31n, j)) ++ acc)
++
++def main() -> String:
++  +src = "abcdefghijklmnopqrstuvwxyz" ++ "abcdefghijklmnopqrstuvwxyz" ++ "0123456789"
++  +out = sigs(41n, src, "") ++ Nat.show(Nat.add(Nat.mul(123456n, 1000000n), 789012n)) ++ "," ++ String.to_upper(Nat.show(987654321n))
++  Nat.show(String.length(out)) ++ ":" ++ U32.show(String.hash(out)) ++ ":" ++ String.slice(out, 0n, 60n) ++ "~" ++ String.slice(out, Nat.sub(String.length(out), 60n), 60n)
++
++#|"10573:607262091:0,2166136261,TTFF;4294967295,4294967295,0,0;||;0,0,<>;,,zzz,~zzzzzzfghijklmnopqrstuvwxyz0123456789\n123456789012,987654321"

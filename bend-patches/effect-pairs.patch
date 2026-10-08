@@ -1,0 +1,379 @@
+diff --git a/bend2/base.bend b/bend2/base.bend
+index a201a49..0588868 100644
+--- a/bend2/base.bend
++++ b/bend2/base.bend
+@@ -260,6 +260,15 @@ def Chan.send_all(-A: Data, sends: List<&2, Sigma<&2, &2, Chan(A), _ => A>>) ->
+   import "./effs/chan.c"
+   import "./effs/chan.js"
+ 
++# Chan.send_all of x to chan, then Chan.recv of back, in one step: x goes
++# onto chan without waiting (past its room if need be; a closed channel
++# drops it), and the computation waits for back's next value. A client
++# hands an actor a request that names back, and waits for the answer:
++# one effect instead of two.
++def Chan.call(-A: Type, -B: Type, chan: Chan(A), x: A, back: Chan(B)) -> IO(Maybe<&1, B>):
++  import "./effs/chan.c"
++  import "./effs/chan.js"
++
+ def IO.fork.go(-A: Type, act: IO(A), chan: Chan(A)) -> IO(Chan(A)):
+   +c = chan
+   sent = IO.bind(A, Bool, act, x => Chan.send(A, c, x))
+@@ -426,6 +435,14 @@ def TCP.recv_raw(sock: Socket, max: U32) ->
+   import "./effs/tcp_recv.c"
+   import "./effs/tcp_recv.js"
+ 
++# TCP.post of data, then TCP.recv_raw of max bytes, in one step: a server
++# hands its reply to the writer and waits for the next request at once,
++# one effect instead of two.
++def TCP.post_recv_raw(sock: Socket, data: String, max: U32) ->
++  IO(Socket & Result<&1, &1, U32 & String, String>):
++  import "./effs/tcp_recv.c"
++  import "./effs/tcp_recv.js"
++
+ def TCP.poll(sock: Socket, max: U32, ms: U32) ->
+   IO(Socket & Result<&1, &1, U32 & String, Maybe<&1, String>>):
+   import "./effs/tcp_poll.c"
+diff --git a/bend2/effs/chan.c b/bend2/effs/chan.c
+index 95d67ca..8f1d57d 100644
+--- a/bend2/effs/chan.c
++++ b/bend2/effs/chan.c
+@@ -168,7 +168,7 @@ static void __attribute__((constructor)) chan_send_use(void) {
+ 
+ #endif
+ 
+-#ifdef CID(Chan.recv)
++#if defined(CID(Chan.recv)) || defined(CID(Chan.call))
+ 
+ static Term chan_recv_locked(Env e, Term* f, IoWork* w) {
+   ChanRow* row = chan_at(f[0]);
+@@ -192,6 +192,10 @@ static Term chan_recv_locked(Env e, Term* f, IoWork* w) {
+   return chan_park(row, w, TERM_HOLE);
+ }
+ 
++#endif
++
++#ifdef CID(Chan.recv)
++
+ Term chan_recv_run(Env e, Term* f, IoWork* w) {
+   io_hold(&chan_lock);
+   Term x = chan_recv_locked(e, f, w);
+@@ -263,7 +267,7 @@ static void __attribute__((constructor)) chan_drain_use(void) {
+ 
+ #endif
+ 
+-#ifdef CID(Chan.send_all)
++#if defined(CID(Chan.send_all)) || defined(CID(Chan.call))
+ 
+ // Makes the ring hold one more value than it does, past the room.
+ static void chan_grow(ChanRow* row) {
+@@ -300,6 +304,10 @@ static void chan_put(Env e, ChanRow* row, Term x) {
+   row->size += 1;
+ }
+ 
++#endif
++
++#ifdef CID(Chan.send_all)
++
+ // Every pair's value onto its channel in one hold of chan_lock: two
+ // send_alls (or sends) that share channels order their values alike on
+ // each. The list comes apart before the lock, and the values a closed
+@@ -373,3 +381,29 @@ static void __attribute__((constructor)) chan_close_use(void) {
+ }
+ 
+ #endif
++
++#ifdef CID(Chan.call)
++
++// x onto chan as Chan.send_all puts it (a closed channel drops it, after
++// the lock), then back's next value as Chan.recv takes it, parked on back
++// until it comes: both in one hold of chan_lock.
++Term chan_call_run(Env e, Term* f, IoWork* w) {
++  io_hold(&chan_lock);
++  ChanRow* row  = chan_at(f[0]);
++  bool     kept = row != NULL && !row->shut;
++  if (kept) {
++    chan_put(e, row, f[1]);
++  }
++  Term x = chan_recv_locked(e, f + 2, w);
++  io_let(&chan_lock);
++  if (!kept) {
++    term_drop(e, f[1]);
++  }
++  return x;
++}
++
++static void __attribute__((constructor)) chan_call_use(void) {
++  io_eff(CID(Chan.call), chan_call_run);
++}
++
++#endif
+diff --git a/bend2/effs/chan.js b/bend2/effs/chan.js
+index f16800e..3fc733c 100644
+--- a/bend2/effs/chan.js
++++ b/bend2/effs/chan.js
+@@ -107,6 +107,15 @@ function chan_drain(row, max) {
+   return xs;
+ }
+ 
++// value onto row as chan_send_all puts it, then back's next value as
++// chan_recv takes it, waiting for it if need be.
++function chan_call(row, value, back, k) {
++  if (!row.shut) {
++    chan_put(row, value);
++  }
++  return chan_recv(back, k);
++}
++
+ function chan_close(row) {
+   if (!row.shut) {
+     chan_shut(row);
+@@ -120,3 +129,4 @@ io_eff(CID(Chan.recv), chan_recv);
+ io_eff(CID(Chan.close), chan_close);
+ io_eff(CID(Chan.send_all), chan_send_all);
+ io_eff(CID(Chan.drain), chan_drain);
++io_eff(CID(Chan.call), chan_call);
+diff --git a/bend2/effs/tcp_recv.c b/bend2/effs/tcp_recv.c
+index 2b5e641..c5d8950 100644
+--- a/bend2/effs/tcp_recv.c
++++ b/bend2/effs/tcp_recv.c
+@@ -114,3 +114,30 @@ static void __attribute__((constructor)) tcp_recv_raw_use(void) {
+ }
+ 
+ #endif
++
++#ifdef CID(TCP.post_recv_raw)
++
++static Term tcp_post_recv_raw_more(Env e, IoWork* w) {
++  return tcp_recv_with(e, w, tcp_post_recv_raw_more, io_raw);
++}
++
++// data's bytes to this loop's writer, as TCP.post hands them (a Char past
++// 255 posts nothing), then a recv as TCP.recv_raw's
++Term tcp_post_recv_raw_run(Env e, Term* f, IoWork* w) {
++  u64   room = str_len(e.mem, f[1]) + 1;
++  char* buf  = io_mem(malloc(room));
++  u64   len  = 0;
++  if (io_cbuf_in(e, f[1], &len, IO_RAW, &buf, &room) == NULL || len == 0) {
++    free(buf);
++  } else {
++    io_post((int)io_hand_v(f[0]), buf, len);
++  }
++  Term g[2] = { f[0], f[2] };
++  return tcp_recv_start(e, g, w, tcp_post_recv_raw_more);
++}
++
++static void __attribute__((constructor)) tcp_post_recv_raw_use(void) {
++  io_eff(CID(TCP.post_recv_raw), tcp_post_recv_raw_run);
++}
++
++#endif
+diff --git a/bend2/effs/tcp_recv.js b/bend2/effs/tcp_recv.js
+index 86c3d2d..8087b0d 100644
+--- a/bend2/effs/tcp_recv.js
++++ b/bend2/effs/tcp_recv.js
+@@ -48,6 +48,39 @@ function tcp_recv_raw(socket, max, k) {
+   return tcp_recv_with(socket, max, k, io_raw);
+ }
+ 
++// TCP.post's send (one loop, no writer: the bytes go out as TCP.send_raw
++// sends them; a Char past 255 sends nothing), then tcp_recv_raw.
++function tcp_post_recv_raw(socket, data, max, k) {
++  let b = new Uint8Array(data.length);
++  for (let i = 0; i < data.length; i += 1) {
++    const c = data.charCodeAt(i);
++    if (c > 255) {
++      b = new Uint8Array(0);
++      break;
++    }
++    b[i] = c;
++  }
++  const sys = io_sys();
++  const again = sys.mac ? 35 : 11;
++  const go = (at) => {
++    while (at < b.length) {
++      const part = b.subarray(at);
++      const n = Number(sys.send(socket, sys.ptr(part), part.length, 0));
++      if (n < 0) {
++        if (sys.errno() === again) {
++          io_park_on(socket, true, k, () => go(at));
++          return undefined;
++        }
++        break;
++      }
++      at += n;
++    }
++    return tcp_recv_raw(socket, max, k);
++  };
++  return go(0);
++}
++
+ io_eff(CID(TCP.recv), tcp_recv);
+ io_eff(CID(TCP.recv_raw), tcp_recv_raw);
+ io_eff(CID(TCP.recv_bytes), tcp_recv_bytes);
++io_eff(CID(TCP.post_recv_raw), tcp_post_recv_raw);
+diff --git a/tests/io/chan_call.bend b/tests/io/chan_call.bend
+new file mode 100644
+index 0000000..85e0331
+--- /dev/null
++++ b/tests/io/chan_call.bend
+@@ -0,0 +1,50 @@
++# io (io_chan_call): Chan.call sends a value and waits for the answer on a
++# channel of its own, in one step. An actor doubles what it gets and
++# answers on the channel each request names. Three calls get 2, 4 and 6.
++# A call to a closed channel drops its value and waits on back: a value
++# sent there first is its answer.
++import Base
++
++type Ask is Data:
++  Ask{n: U32, back: Chan(U32)}
++
++@unsafe
++def actor(+c: Chan(Ask)) -> IO(Unit):
++  do IO<Unit>:
++    m : Maybe<&1, Ask> <- Chan.recv(Ask, c)
++    actor.go(c, m)
++
++@unsafe
++def actor.go(+c: Chan(Ask), m: Maybe<&1, Ask>) -> IO(Unit):
++  match m:
++    case None{}:
++      IO.pure(Unit, Unit{})
++    case Some{Ask{n, back}}:
++      do IO<Unit>:
++        ok : Bool <- Chan.send(U32, back, (n * 2 : U32))
++        actor(c)
++
++def got(m: Maybe<&1, U32>) -> String:
++  match m:
++    case None{}:
++      "none"
++    case Some{x}:
++      U32.show(x)
++
++@unsafe
++def main() -> IO(Unit):
++  do IO<Unit>:
++    +c : Chan(Ask) <- Chan.new(Ask, 4)
++    +b : Chan(U32) <- Chan.new(U32, 1)
++    Unit <- IO.spawn(Unit, actor(c))
++    x : Maybe<&1, U32> <- Chan.call(Ask, U32, c, Ask{1, b}, b)
++    y : Maybe<&1, U32> <- Chan.call(Ask, U32, c, Ask{2, b}, b)
++    z : Maybe<&1, U32> <- Chan.call(Ask, U32, c, Ask{3, b}, b)
++    IO.print(got(x) ++ " " ++ got(y) ++ " " ++ got(z))
++    Unit <- Chan.close(Ask, c)
++    ok : Bool <- Chan.send(U32, b, 7)
++    w : Maybe<&1, U32> <- Chan.call(Ask, U32, c, Ask{4, b}, b)
++    IO.print(got(w))
++
++#|2 4 6
++#|7
+diff --git a/tests/io/tcp_post_recv.bend b/tests/io/tcp_post_recv.bend
+new file mode 100644
+index 0000000..188fc69
+--- /dev/null
++++ b/tests/io/tcp_post_recv.bend
+@@ -0,0 +1,104 @@
++# io (io_tcp_post_recv): TCP.post_recv_raw posts bytes and reads at once,
++# as TCP.post then TCP.recv_raw. A server answers each read with "re:"
++# and what it read, and reads on, in one step each time; a client asks
++# "ping" and "bye" the same way and prints the two answers.
++import Base
++
++def text(m: Socket & Result<&1, &1, U32 & String, String>) -> String:
++  (s, r) = m
++  match r:
++    case Done{x}:
++      x
++    case Fail{e}:
++      "fail"
++
++@unsafe
++def serve(m: Socket & Result<&1, &1, U32 & String, String>) -> IO(Unit):
++  (s, r) = m
++  match r:
++    case Done{x}:
++      serve.on(s, x)
++    case Fail{e}:
++      Socket.close(s)
++
++@unsafe
++def serve.on(s: Socket, x: String) -> IO(Unit):
++  match x:
++    case SNil{}:
++      Socket.close(s)
++    case SCon{c, t}:
++      do IO<Unit>:
++        m : Socket & Result<&1, &1, U32 & String, String> <- TCP.post_recv_raw(s, "re:" ++ SCon{c, t}, 64)
++        serve(m)
++
++@unsafe
++def server.go(p: Listener & Result<&1, &1, U32 & String, Socket>) -> IO(Unit):
++  (l2, ar) = p
++  do IO<Unit>:
++    a : Socket <- IO.pass(Socket, ar)
++    m : Socket & Result<&1, &1, U32 & String, String> <- TCP.recv_raw(a, 64)
++    Unit <- serve(m)
++    Listener.close(l2)
++
++@unsafe
++def server(l: Listener) -> IO(Unit):
++  do IO<Unit>:
++    p : Listener & Result<&1, &1, U32 & String, Socket> <- TCP.accept(l)
++    server.go(p)
++
++@unsafe
++def client.bye(m: Socket & Result<&1, &1, U32 & String, String>) -> IO(Unit):
++  (s, r) = m
++  match r:
++    case Done{x}:
++      do IO<Unit>:
++        n : Socket & Result<&1, &1, U32 & String, String> <- TCP.post_recv_raw(s, "bye", 64)
++        client.end(x, n)
++    case Fail{e}:
++      Socket.close(s)
++
++@unsafe
++def client.end(first: String, m: Socket & Result<&1, &1, U32 & String, String>) -> IO(Unit):
++  (s, r) = m
++  match r:
++    case Done{x}:
++      do IO<Unit>:
++        Unit <- IO.print(first ++ " " ++ x)
++        Socket.close(s)
++    case Fail{e}:
++      Socket.close(s)
++
++def tcp_retry(port: U32, r: Result<&1, &1, U32 & String, Listener>, rest: IO(Listener & U32)) ->
++  IO(Listener & U32):
++  match r:
++    case Done{l}:
++      IO.pure(Listener & U32, (l, port))
++    case Fail{e}:
++      rest
++
++def tcp_listen_any(tries: Nat, +port: U32) -> IO(Listener & U32):
++  match tries:
++    case 0n:
++      IO.die(Listener & U32, 1, "no free tcp port")
++    case 1n+t:
++      rest = tcp_listen_any(t, (port + 1 : U32))
++      do IO<Listener & U32>:
++        r : Result<&1, &1, U32 & String, Listener> <- TCP.listen("127.0.0.1", port)
++        tcp_retry(port, r, rest)
++
++@unsafe
++def main_go(b: Listener & U32) -> IO(Unit):
++  (l, port) = b
++  do IO<Unit>:
++    Unit <- IO.spawn(Unit, server(l))
++    c : Socket <- IO.try(Socket, TCP.connect("127.0.0.1", port))
++    m : Socket & Result<&1, &1, U32 & String, String> <- TCP.post_recv_raw(c, "ping", 64)
++    client.bye(m)
++
++@unsafe
++def main() -> IO(Unit):
++  do IO<Unit>:
++    b : Listener & U32 <- tcp_listen_any(32n, 19977)
++    main_go(b)
++
++#|re:ping re:bye

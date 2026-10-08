@@ -1,0 +1,181 @@
+diff --git a/bend2/base.bend b/bend2/base.bend
+index e0f80b5..a201a49 100644
+--- a/bend2/base.bend
++++ b/bend2/base.bend
+@@ -242,6 +242,15 @@ def Chan.close(-A: Type, chan: Chan(A)) -> IO(Unit):
+   import "./effs/chan.c"
+   import "./effs/chan.js"
+ 
++# The values the channel holds now, oldest first, at most max of them,
++# without waiting (none when it holds none), as that many Chan.recvs that
++# each find a value would take them: a receiver that got one value takes
++# the others that came meanwhile in one step, as an actor does to answer a
++# group of requests after one write to the disk.
++def Chan.drain(-A: Type, chan: Chan(A), max: U32) -> IO(List<&1, A>):
++  import "./effs/chan.c"
++  import "./effs/chan.js"
++
+ # Chan.send of every pair at once, without waiting: two send_alls (or
+ # sends) that share channels order their values alike on each. A waiting
+ # receiver takes its value at once; the rest wait in the channel, past its
+diff --git a/bend2/effs/chan.c b/bend2/effs/chan.c
+index 717109c..95d67ca 100644
+--- a/bend2/effs/chan.c
++++ b/bend2/effs/chan.c
+@@ -205,6 +205,64 @@ static void __attribute__((constructor)) chan_recv_use(void) {
+ 
+ #endif
+ 
++#ifdef CID(Chan.drain)
++
++// Values off the row while it has them, up to max: from its buffer (a
++// sender parked on a full one moves in as a value leaves), else from a
++// sender parked on a channel of no room. A shut row left empty is freed,
++// as Chan.recv frees it.
++static Term* chan_drain_locked(ChanRow* row, u32 max, Term* xs, u32* n, u32* cap, Term* one) {
++  while (row != NULL && *n < max) {
++    Term v;
++    if (row->size > 0) {
++      v = chan_take(row);
++    } else if (row->wait != NULL && row->wait->next->item != TERM_HOLE) {
++      v = chan_wake(row, chan_bool(true));
++    } else {
++      break;
++    }
++    if (*n == *cap) {
++      *cap *= 2;
++      Term* more = io_mem(malloc(*cap * sizeof(Term)));
++      memcpy(more, xs, *n * sizeof(Term));
++      if (xs != one) {
++        free(xs);
++      }
++      xs = more;
++    }
++    xs[*n] = v;
++    *n += 1;
++  }
++  if (row != NULL && row->shut && row->size == 0) {
++    chan_free(row);
++  }
++  return xs;
++}
++
++Term chan_drain_run(Env e, Term* f, IoWork* w) {
++  Term  one[64];
++  Term* xs  = one;
++  u32   n   = 0;
++  u32   cap = 64;
++  io_hold(&chan_lock);
++  xs = chan_drain_locked(chan_at(f[0]), (u32)f[1], xs, &n, &cap, one);
++  io_let(&chan_lock);
++  Term list = term_pak(CID(Nil), 0);
++  for (u32 i = n; i > 0; i -= 1) {
++    list = io_node(e, CID(Con), xs[i - 1], list);
++  }
++  if (xs != one) {
++    free(xs);
++  }
++  return list;
++}
++
++static void __attribute__((constructor)) chan_drain_use(void) {
++  io_eff(CID(Chan.drain), chan_drain_run);
++}
++
++#endif
++
+ #ifdef CID(Chan.send_all)
+ 
+ // Makes the ring hold one more value than it does, past the room.
+diff --git a/bend2/effs/chan.js b/bend2/effs/chan.js
+index a446fbd..f16800e 100644
+--- a/bend2/effs/chan.js
++++ b/bend2/effs/chan.js
+@@ -87,6 +87,26 @@ function chan_send_all(sends) {
+   return { $: CID(Unit) };
+ }
+ 
++// Values off the row while it has them, up to max, as chan_recv takes
++// them, without waiting.
++function chan_drain(row, max) {
++  const got = [];
++  while (got.length < Number(max)) {
++    if (row.ring.length > 0) {
++      got.push(chan_take(row));
++    } else if (row.wait.length > 0 && row.wait[0].item !== CHAN_RECV) {
++      got.push(chan_wake(row, true));
++    } else {
++      break;
++    }
++  }
++  let xs = { $: CID(Nil) };
++  for (let i = got.length; i > 0; i -= 1) {
++    xs = { $: CID(Con), head: got[i - 1], tail: xs };
++  }
++  return xs;
++}
++
+ function chan_close(row) {
+   if (!row.shut) {
+     chan_shut(row);
+@@ -99,3 +119,4 @@ io_eff(CID(Chan.send), chan_send);
+ io_eff(CID(Chan.recv), chan_recv);
+ io_eff(CID(Chan.close), chan_close);
+ io_eff(CID(Chan.send_all), chan_send_all);
++io_eff(CID(Chan.drain), chan_drain);
+diff --git a/tests/io/chan_drain.bend b/tests/io/chan_drain.bend
+new file mode 100644
+index 0000000..c7912d8
+--- /dev/null
++++ b/tests/io/chan_drain.bend
+@@ -0,0 +1,50 @@
++# io (io_chan_drain): Chan.drain takes the values a channel holds now,
++# oldest first, at most max of them, without waiting. Five values in a
++# channel of room 8: a drain of 3 takes 1 2 3, one of 10 takes 4 5, one
++# more takes none. With a channel of room 1 that holds 6 and a sender
++# parked behind it with 7, a drain takes 6, then 7 as it moves in; the
++# sender's next value, 8, comes once it runs again, after the drain. A
++# drain of a closed channel takes what is left in it.
++import Base
++
++def show(xs: List<&1, U32>) -> String:
++  match xs:
++    case Nil{}:
++      "."
++    case Con{x, rest}:
++      U32.show(x) ++ " " ++ show(rest)
++
++def sends(+c: Chan(U32), xs: List<&2, U32>) -> IO(Unit):
++  match xs:
++    case Nil{}:
++      IO.pure(Unit, Unit{})
++    case Con{x, rest}:
++      do IO<Unit>:
++        ok : Bool <- Chan.send(U32, c, x)
++        sends(c, rest)
++
++def main() -> IO(Unit):
++  do IO<Unit>:
++    +c : Chan(U32) <- Chan.new(U32, 8)
++    Unit <- sends(c, [1, 2, 3, 4, 5])
++    a : List<&1, U32> <- Chan.drain(U32, c, 3)
++    IO.print(show(a))
++    b : List<&1, U32> <- Chan.drain(U32, c, 10)
++    IO.print(show(b))
++    n : List<&1, U32> <- Chan.drain(U32, c, 10)
++    IO.print(show(n))
++    +d : Chan(U32) <- Chan.new(U32, 1)
++    Unit <- IO.spawn(Unit, sends(d, [6, 7, 8]))
++    Unit <- IO.sleep(50)
++    p : List<&1, U32> <- Chan.drain(U32, d, 10)
++    IO.print(show(p))
++    Unit <- sends(c, [9, 10])
++    Unit <- Chan.close(U32, c)
++    q : List<&1, U32> <- Chan.drain(U32, c, 10)
++    IO.print(show(q))
++
++#|1 2 3 .
++#|4 5 .
++#|.
++#|6 7 .
++#|9 10 .

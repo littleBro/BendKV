@@ -1,0 +1,874 @@
+diff --git a/bend2/base.bend b/bend2/base.bend
+index 80ae4a2..3c42597 100644
+--- a/bend2/base.bend
++++ b/bend2/base.bend
+@@ -374,6 +374,14 @@ def TCP.post(sock: Socket, data: String) -> IO(Socket):
+   import "./effs/tcp_post.c"
+   import "./effs/tcp_post.js"
+ 
++# TCP.post of the Strings of a list, one after another, in one post: an
++# iolist. Each String's bytes go once into the post's buffer, so a reply
++# made of pieces (a header, a value kept in a map, a "\r\n") needs no String
++# that glues them first. A Char past 255 anywhere posts nothing.
++def TCP.post_list(sock: Socket, data: List<&2, String>) -> IO(Socket):
++  import "./effs/tcp_post.c"
++  import "./effs/tcp_post.js"
++
+ def TCP.recv_raw(sock: Socket, max: U32) ->
+   IO(Socket & Result<&1, &1, U32 & String, String>):
+   import "./effs/tcp_recv.c"
+diff --git a/bend2/comp.ts b/bend2/comp.ts
+index b6b57ae..f3ca89a 100644
+--- a/bend2/comp.ts
++++ b/bend2/comp.ts
+@@ -3930,6 +3930,13 @@ using namespace metal;
+ #include <time.h>
+ #include <poll.h>
+ #include <sys/select.h>
++#ifdef __linux__
++#include <sys/epoll.h>
++#include <sys/resource.h>
++#define IO_EPOLL 1
++#else
++#define IO_EPOLL 0
++#endif
+ #ifdef __APPLE__
+ #include <mach-o/dyld.h>
+ #endif
+@@ -7160,13 +7167,15 @@ OUTLINE Term corpus_eval(u64* H, Term t) {
+ // resumes, IO_PARK parks again. The edge is UTF-8, decoded as WHATWG does: a
+ // broken sequence yields one U+FFFD and its breaking byte is read again as a
+ // lead. inet_aton reads a leading zero as octal, so io_sys_addr refuses it.
+-// macOS poll misses FIFO EOF, so io_wait selects, its sets sized to the
+-// highest fd (_DARWIN_UNLIMITED_SELECT allows fds past FD_SETSIZE).
++// On Linux a loop waits in epoll (see IoFd). Elsewhere io_wait selects:
++// macOS poll misses FIFO EOF, so its sets are sized to the highest fd
++// (_DARWIN_UNLIMITED_SELECT allows fds past FD_SETSIZE).
+ 
+ #include <arpa/inet.h>
+ #include <errno.h>
+ #include <fcntl.h>
+ #include <netinet/in.h>
++#include <netinet/tcp.h>
+ #include <sys/socket.h>
+ 
+ #define IO_PARK TERM_HOLE
+@@ -7217,6 +7226,7 @@ typedef struct IoLoop {
+   u32              lock;
+   IoWork*          inbox;
+   int              wake[2];
++  int              ep;
+   u32              id;
+   u32              up;
+   u32              sleep;
+@@ -7376,8 +7386,11 @@ static void io_post(int fd, char* buf, u64 len) {
+   }
+ }
+ 
++static void io_fd_forget(int fd);
++
+ // Closes fd after what this loop posted to it.
+ static void io_close(int fd) {
++  io_fd_forget(fd);
+   if (io_me != NULL && io_me->post != NULL) {
+     io_post(fd, NULL, 0);
+   } else {
+@@ -7418,6 +7431,108 @@ static _Thread_local IoWork* io_runs;
+ static _Thread_local IoWork* io_park;
+ static IoWork*               io_jobs;
+ 
++// The computations this loop's fd slots hold (epoll; io_park holds the
++// rest, and with select all), and the ones the next poll resumes at once
++// (io_wait_first).
++static _Thread_local u32     io_fdwaits;
++static _Thread_local IoWork* io_soon;
++
++#if IO_EPOLL
++
++// epoll. Each loop has an epoll set. A socket the runtime made (TCP.accept,
++// TCP.connect, TCP.listen, UDP.bind: io_fd_new) joins the set of the loop
++// that first waits on it, once, edge-triggered: an edge comes when bytes or
++// room arrive, not while they stay. The loop's slot for the fd (io_fdt, by
++// fd) holds the computation waiting to read it and the one waiting to
++// write, and whether an edge came with none waiting (rd_ok, wr_ok: the next
++// wait tries at once). A wait comes after an EAGAIN, so it clears the flag
++// and waits for the next edge; and a recv that read less than it asked for
++// ran the socket dry, so the next recv waits for an edge without trying (it
++// would find EAGAIN): a request costs one recv, as in Redis. A socket whose
++// peer closed (an edge with EPOLLRDHUP, HUP or ERR, maybe before the reads
++// that drained it) never runs dry: its next recv finds the end. Any other fd an
++// effect waits on (a FIFO, a pipe) is armed for one event at each wait
++// (EPOLLONESHOT), as an effect may close it itself and its number come back
++// as another fd's. io_fdown holds, for each fd, 1 + the loop whose set holds
++// it (0: none), with IO_SOCK for a runtime socket; a socket that moves to
++// another loop leaves the old set when it first waits on the new, and
++// Socket.close and the like clear its entry.
++typedef struct IoFd {
++  IoWork* rd;
++  IoWork* wr;
++  u8      rd_ok;
++  u8      wr_ok;
++  u8      rd_end;
++} IoFd;
++
++#define IO_WAKE (~0ull)
++#define IO_SOCK 0x80
++
++static u8*                 io_fdown;
++static u32                 io_fdcap;
++static _Thread_local IoFd* io_fdt;
++static _Thread_local u32   io_fdn;
++
++static void io_ep_open(IoLoop* L);
++
++static u8 io_fd_own(int fd) {
++  return fd >= 0 && (u32)fd < io_fdcap && io_fdown != NULL
++    ? __atomic_load_n(&io_fdown[fd], __ATOMIC_ACQUIRE) : 0;
++}
++
++// fd waits in this loop's set (as a socket or not)
++static bool io_fd_here(int fd) {
++  return (io_fd_own(fd) & ~IO_SOCK) == io_me->id + 1 && (u32)fd < io_fdn;
++}
++
++// Whether a read (POLLIN) or a write (POLLOUT) on fd might not find
++// EAGAIN: false only for a socket of this loop that ran dry since its last
++// edge.
++static bool io_fd_ready(int fd, short evts) {
++  if (io_fd_own(fd) != (IO_SOCK | (io_me->id + 1)) || (u32)fd >= io_fdn) {
++    return true;
++  }
++  return evts == POLLOUT ? io_fdt[fd].wr_ok : io_fdt[fd].rd_ok | io_fdt[fd].rd_end;
++}
++
++// fd ran dry for evts: its next wait waits for an edge.
++static void io_fd_dry(int fd, short evts) {
++  if (io_fd_here(fd)) {
++    *(evts == POLLOUT ? &io_fdt[fd].wr_ok : &io_fdt[fd].rd_ok) = 0;
++  }
++}
++
++// fd is a socket the runtime just made.
++static void io_fd_new(int fd) {
++  if (fd >= 0 && (u32)fd < io_fdcap && io_fdown != NULL) {
++    __atomic_store_n(&io_fdown[fd], IO_SOCK, __ATOMIC_RELEASE);
++  }
++}
++
++// fd is about to close.
++static void io_fd_forget(int fd) {
++  if (fd >= 0 && (u32)fd < io_fdcap && io_fdown != NULL) {
++    __atomic_store_n(&io_fdown[fd], 0, __ATOMIC_RELEASE);
++  }
++}
++
++#else
++
++static bool io_fd_ready(int fd, short evts) {
++  return true;
++}
++
++static void io_fd_dry(int fd, short evts) {
++}
++
++static void io_fd_new(int fd) {
++}
++
++static void io_fd_forget(int fd) {
++}
++
++#endif
++
+ static void io_push(IoWork** q, IoWork* a) {
+   IoWork* l = *q != NULL ? *q : a;
+   a->next = l->next;
+@@ -7524,8 +7639,13 @@ static IoLoop* io_loop_at(u32 i) {
+   if (!L->up) {
+     pthread_t tid;
+     __atomic_store_n(&io_multi, 1, __ATOMIC_RELAXED);
+-    if (pipe(L->wake) | fcntl(L->wake[0], F_SETFL, O_NONBLOCK)
+-      || pthread_create(&tid, NULL, io_loop_run, L)) {
++    if (pipe(L->wake) | fcntl(L->wake[0], F_SETFL, O_NONBLOCK)) {
++      err_fail("an event loop failed to open");
++    }
++#if IO_EPOLL
++    io_ep_open(L);
++#endif
++    if (pthread_create(&tid, NULL, io_loop_run, L)) {
+       err_fail("an event loop failed to open");
+     }
+     pthread_detach(tid);
+@@ -7564,15 +7684,160 @@ static void io_park_add(IoWork* w) {
+   io_push(&p, w);
+ }
+ 
++// Takes w off io_park, if it is there.
++static void io_park_del(IoWork* w) {
++  IoWork* p = io_park;
++  if (p == NULL) {
++    return;
++  }
++  while (p->next != w) {
++    p = p->next;
++    if (p == io_park) {
++      return;
++    }
++  }
++  p->next = w->next;
++  if (w == io_park) {
++    io_park = p == w ? NULL : p;
++  }
++}
++
++#if IO_EPOLL
++
++static void io_ep_open(IoLoop* L) {
++  struct epoll_event ev = { .events = EPOLLIN, .data.u64 = IO_WAKE };
++  L->ep = epoll_create1(EPOLL_CLOEXEC);
++  if (L->ep < 0 || epoll_ctl(L->ep, EPOLL_CTL_ADD, L->wake[0], &ev) < 0) {
++    err_fail("an event loop failed to open");
++  }
++}
++
++// This loop's slot for fd.
++static IoFd* io_fd_slot(int fd) {
++  if (fd < 0 || (u32)fd >= io_fdcap) {
++    err_fail("an fd past the process's limit");
++  }
++  if ((u32)fd >= io_fdn) {
++    u32 n  = io_fdn * 2 > (u32)fd ? io_fdn * 2 : (u32)fd + 64;
++    io_fdt = io_mem(realloc(io_fdt, (size_t)n * sizeof(IoFd)));
++    memset(io_fdt + io_fdn, 0, (size_t)(n - io_fdn) * sizeof(IoFd));
++    io_fdn = n;
++  }
++  return &io_fdt[fd];
++}
++
++// Puts fd in this loop's set with the given events, or changes them; a MOD
++// of an fd not in the set adds it.
++static void io_ep_set(int fd, u32 events, bool mod) {
++  struct epoll_event ev = { .events = events, .data.u64 = (u64)fd };
++  int r = epoll_ctl(io_me->ep, mod ? EPOLL_CTL_MOD : EPOLL_CTL_ADD, fd, &ev);
++  if (r < 0 && errno == (mod ? ENOENT : EEXIST)) {
++    r = epoll_ctl(io_me->ep, mod ? EPOLL_CTL_ADD : EPOLL_CTL_MOD, fd, &ev);
++  }
++  if (r < 0) {
++    err_fail("the poller failed");
++  }
++}
++
++// Arms a fd that is not a runtime socket for one event its waiters want.
++static void io_ep_arm(int fd, IoFd* f) {
++  io_ep_set(fd, EPOLLONESHOT | EPOLLRDHUP | (f->rd != NULL ? EPOLLIN : 0)
++    | (f->wr != NULL ? EPOLLOUT : 0), true);
++}
++
++// This loop's slot for fd, with fd in this loop's set: a runtime socket
++// joins it once, any other fd is armed at each wait (io_wait_on).
++static IoFd* io_fd_at(int fd) {
++  IoFd* f   = io_fd_slot(fd);
++  u8    me  = (u8)(io_me->id + 1);
++  u8    was = __atomic_load_n(&io_fdown[fd], __ATOMIC_ACQUIRE);
++  if ((was & ~IO_SOCK) != me) {
++    if (was & IO_SOCK) {
++      if ((was & ~IO_SOCK) != 0) {
++        epoll_ctl(io_loops[(was & ~IO_SOCK) - 1].ep, EPOLL_CTL_DEL, fd, NULL);
++      }
++      io_ep_set(fd, EPOLLIN | EPOLLOUT | EPOLLRDHUP | EPOLLET, false);
++    }
++    *f = (IoFd){ NULL, NULL, 1, 1, 0 };
++    __atomic_store_n(&io_fdown[fd], (u8)((was & IO_SOCK) | me), __ATOMIC_RELEASE);
++  }
++  return f;
++}
++
++#endif
++
++// Takes w out of its fd's slot, if it waits in one.
++static void io_fd_unwait(IoWork* w) {
++#if IO_EPOLL
++  int fd = (int)w->word;
++  if (w->evts != 0 && io_fd_here(fd)) {
++    IoWork** at = w->evts == POLLOUT ? &io_fdt[fd].wr : &io_fdt[fd].rd;
++    if (*at == w) {
++      *at         = NULL;
++      io_fdwaits -= 1;
++    }
++  }
++#endif
++}
++
++// Parks w until fd is ready for evts (after an EAGAIN), or until time (a
++// deadline; 0 for none), whichever comes first; the loop then calls more.
+ static Term io_wait_on(IoWork* w, int fd, short evts, u64 time, IoPack more) {
+   w->word = (u32)fd;
+   w->pack = more;
+   w->time = time;
+   w->evts = evts;
++#if IO_EPOLL
++  if (evts != 0) {
++    IoFd*    f  = io_fd_at(fd);
++    IoWork** at = evts == POLLOUT ? &f->wr : &f->rd;
++    if (*at != NULL) {
++      err_fail("two waits on one fd");
++    }
++    *at = w;
++    *(evts == POLLOUT ? &f->wr_ok : &f->rd_ok) = 0;
++    io_fdwaits += 1;
++    if ((io_fdown[fd] & IO_SOCK) == 0) {
++      io_ep_arm(fd, f);
++    }
++    if (time == 0) {
++      return IO_PARK;
++    }
++  }
++#endif
+   io_park_add(w);
+   return IO_PARK;
+ }
+ 
++// Parks w until the loop polls next, and then until fd is ready for evts,
++// as io_wait_on: a request that waits before it tries (an accept, say)
++// passes through a poll, where due timers fire, even when its fd is ready
++// all along. Under epoll a socket whose last edge came with none waiting
++// has its computation resumed by the next poll, edge or not.
++static Term io_wait_first(IoWork* w, int fd, short evts, u64 time, IoPack more) {
++#if IO_EPOLL
++  IoFd* f = io_fd_at(fd);
++  if ((io_fdown[fd] & IO_SOCK) != 0 && (evts == POLLOUT ? f->wr_ok : f->rd_ok)) {
++    w->word = (u32)fd;
++    w->pack = more;
++    w->time = time;
++    w->evts = 0;
++    io_push(&io_soon, w);
++    return IO_PARK;
++  }
++#endif
++  return io_wait_on(w, fd, evts, time, more);
++}
++
++// The loop's call to a parked computation: its next item, or it parks again.
++static void io_resume(Env e, IoWork* a) {
++  Term x = a->pack(e, a);
++  if (x != IO_PARK) {
++    a->item = x;
++    io_push(&io_runs, a);
++  }
++}
++
+ OUTLINE void io_out(FILE* h, const char* data, u64 len) {
+   if (fwrite(data, 1, len, h) != len) {
+     err_fail("a short write on a standard stream");
+@@ -7600,11 +7865,12 @@ static u64 io_utf8(char* buf, u64 c) {
+ // 255. A packed chunk goes whole.
+ #define IO_RAW (1ull << 32)
+ 
+-// The bytes of s into *into, a buffer of *room bytes from malloc that grows
+-// as it fills (it may be NULL with a room of 0); NULL for a value past 255.
+-OUTLINE char* io_cbuf_in(Env e, Term s, u64* len, u64 cons, char** into, u64* room) {
++// The bytes of s into *into from *len on, a buffer of *room bytes from
++// malloc that grows as it fills (it may be NULL with a room of 0); NULL for
++// a value past 255.
++OUTLINE char* io_cbuf_add(Env e, Term s, u64* len, u64 cons, char** into, u64* room) {
+   u64   cap = *room;
+-  u64   n   = 0;
++  u64   n   = *len;
+   u64   bad = 0;
+   bool  raw = cons == IO_RAW;
+   bool  utf = cons == CID(SCon);
+@@ -7699,6 +7965,12 @@ OUTLINE char* io_cbuf_in(Env e, Term s, u64* len, u64 cons, char** into, u64* ro
+   return bad ? NULL : buf;
+ }
+ 
++// The bytes of s into *into, from its start.
++OUTLINE char* io_cbuf_in(Env e, Term s, u64* len, u64 cons, char** into, u64* room) {
++  *len = 0;
++  return io_cbuf_add(e, s, len, cons, into, room);
++}
++
+ OUTLINE char* io_cbuf(Env e, Term s, u64* len, u64 cons) {
+   char* buf  = NULL;
+   u64   room = 0;
+@@ -7942,6 +8214,79 @@ static bool io_bit(u8* set, int fd, bool put) {
+   return *at >> fd % 8 & 1;
+ }
+ 
++#if IO_EPOLL
++
++// Waits in epoll for an edge on this loop's sockets or its wake pipe, up to
++// the first deadline (or not at all, unless block), then calls back each
++// computation whose fd is ready or whose deadline passed.
++static void io_wait(Env e, bool block) {
++  struct epoll_event evs[256];
++  u64 soon = io_park != NULL ? io_park->next->time : 0;
++  u64 tick = io_tick();
++  int ms   = !block || io_soon != NULL ? 0 : soon == 0 ? -1
++    : soon > tick ? (int)((soon - tick) / 1000000 + 1) : 0;
++  io_sync();
++  int n = epoll_wait(io_me->ep, evs, 256, ms);
++  if (n < 0) {
++    if (errno != EINTR) {
++      err_fail("the poller failed");
++    }
++    n = 0;
++  }
++  for (int i = 0; i < n; i += 1) {
++    u64 d = evs[i].data.u64;
++    if (d == IO_WAKE) {
++      io_take(e);
++      continue;
++    }
++    int fd = (int)d;
++    if (!io_fd_here(fd)) {
++      continue;
++    }
++    u32 ev = evs[i].events;
++    if (ev & (EPOLLRDHUP | EPOLLHUP | EPOLLERR)) {
++      io_fdt[fd].rd_end = 1;
++    }
++    for (u32 k = 0; k < 2; k += 1) {
++      u32 on = k == 0 ? EPOLLIN | EPOLLRDHUP | EPOLLHUP | EPOLLERR
++        : EPOLLOUT | EPOLLHUP | EPOLLERR;
++      if ((ev & on) == 0) {
++        continue;
++      }
++      IoFd*    f  = &io_fdt[fd];
++      IoWork** at = k == 0 ? &f->rd : &f->wr;
++      IoWork*  a  = *at;
++      *(k == 0 ? &f->rd_ok : &f->wr_ok) = 1;
++      if (a != NULL) {
++        *at         = NULL;
++        io_fdwaits -= 1;
++        if (a->time != 0) {
++          io_park_del(a);
++        }
++        io_resume(e, a);
++      }
++    }
++    IoFd* f = &io_fdt[fd];
++    if ((io_fdown[fd] & IO_SOCK) == 0 && io_fd_here(fd)
++      && (f->rd != NULL || f->wr != NULL)) {
++      io_ep_arm(fd, f);
++    }
++  }
++  u64 now = io_tick();
++  while (io_park != NULL && io_park->next->time - 1 < now) {
++    IoWork* a = io_pop(&io_park);
++    io_fd_unwait(a);
++    io_resume(e, a);
++  }
++  IoWork* todo = io_soon;
++  io_soon = NULL;
++  while (todo != NULL) {
++    io_resume(e, io_pop(&todo));
++  }
++}
++
++#else
++
+ static void io_wait(Env e, bool block) {
+   int top  = io_me->wake[0];
+   u64 soon = io_park != NULL ? io_park->next->time : 0;
+@@ -7987,15 +8332,13 @@ static void io_wait(Env e, bool block) {
+       io_park_add(a);
+       continue;
+     }
+-    Term x = a->pack(e, a);
+-    if (x != IO_PARK) {
+-      a->item = x;
+-      io_push(&io_runs, a);
+-    }
++    io_resume(e, a);
+   }
+   free(set[0]);
+ }
+ 
++#endif
++
+ ${NATIVE.IO}
+ 
+ // Show
+@@ -8182,7 +8525,7 @@ static void io_run(Env e) {
+         return;
+       }
+       if (!__atomic_load_n(&io_multi, __ATOMIC_RELAXED) && io_park == NULL
+-        && io_busy == 0) {
++        && io_fdwaits == 0 && io_soon == NULL && io_busy == 0) {
+         io_sync();
+         err_fail("deadlock: every computation waits on a channel");
+       }
+@@ -8199,9 +8542,10 @@ static void io_run(Env e) {
+       io_take(e);
+     }
+     // A busy loop still checks due timers, and fds periodically.
+-    if ((n & 63) == 0 && io_park != NULL) {
++    if ((n & 63) == 0 && (io_park != NULL || io_fdwaits != 0 || io_soon != NULL)) {
+       u64 now = io_tick();
+-      if (now >= look || io_park->next->time - 1 < now) {
++      if (now >= look || io_soon != NULL
++        || (io_park != NULL && io_park->next->time - 1 < now)) {
+         look = now + 10000000;
+         io_wait(e, false);
+       }
+@@ -8235,6 +8579,14 @@ OUTLINE void io_loop(u64* H) {
+   if (pipe(io_me->wake) | fcntl(io_me->wake[0], F_SETFL, O_NONBLOCK)) {
+     err_fail("the event loop failed to open");
+   }
++#if IO_EPOLL
++  struct rlimit nof;
++  u64 cap = getrlimit(RLIMIT_NOFILE, &nof) == 0 ? (u64)nof.rlim_max : 0;
++  cap      = cap < 65536 ? 65536 : cap > (1u << 22) ? (1u << 22) : cap;
++  io_fdown = io_mem(calloc(cap, 1));
++  io_fdcap = (u32)cap;
++  io_ep_open(io_me);
++#endif
+   Term m = corpus_eval(H, term_tsk(MAIN_FID, task_node(e, MAIN_FID,
+     TERM_HOLE, 0, 0)));
+ #if MAIN_PURE
+diff --git a/bend2/effs/file_close.c b/bend2/effs/file_close.c
+index 8262305..f5d14a9 100644
+--- a/bend2/effs/file_close.c
++++ b/bend2/effs/file_close.c
+@@ -2,6 +2,7 @@
+ // ====
+ 
+ Term file_close_run(Env e, Term* f, IoWork* w) {
++  io_fd_forget((int)io_hand_v(f[0]));
+   close((int)io_hand_v(f[0]));
+   return term_pak(CID(Unit), 0);
+ }
+diff --git a/bend2/effs/listener_close.c b/bend2/effs/listener_close.c
+index 75e923d..e8305e0 100644
+--- a/bend2/effs/listener_close.c
++++ b/bend2/effs/listener_close.c
+@@ -2,6 +2,7 @@
+ // ========
+ 
+ Term listener_close_run(Env e, Term* f, IoWork* w) {
++  io_fd_forget((int)io_hand_v(f[0]));
+   close((int)io_hand_v(f[0]));
+   return term_pak(CID(Unit), 0);
+ }
+diff --git a/bend2/effs/tcp_accept.c b/bend2/effs/tcp_accept.c
+index 60d3e5a..b8f44da 100644
+--- a/bend2/effs/tcp_accept.c
++++ b/bend2/effs/tcp_accept.c
+@@ -4,15 +4,22 @@
+ // The request parks until the listener is readable, so a backlog never
+ // keeps the loop from its timers; an accept that still finds no connection
+ // (the listener is non-blocking) parks again. The accepted socket is
+-// non-blocking for life.
++// non-blocking for life, and sends at once (TCP_NODELAY), as servers do: a
++// reply that left in two writes would otherwise wait for the peer's
++// delayed ack of the first, 40 ms on Linux.
+ static Term tcp_accept_more(Env e, IoWork* w) {
+   int fd  = (int)w->hand;
+   int got = accept(fd, NULL, NULL);
++  int one = 1;
+   if (got >= 0 && fcntl(got, F_SETFL, fcntl(got, F_GETFL) | O_NONBLOCK) < 0) {
+     close(got);
+     got = -1;
+   }
++  if (got >= 0) {
++    setsockopt(got, IPPROTO_TCP, TCP_NODELAY, &one, sizeof one);
++  }
+   io_sys_end(w, got);
++  io_fd_new(got);
+   if (w->code == EAGAIN) {
+     return io_wait_on(w, fd, POLLIN, 0, tcp_accept_more);
+   }
+@@ -21,7 +28,7 @@ static Term tcp_accept_more(Env e, IoWork* w) {
+ 
+ Term tcp_accept_run(Env e, Term* f, IoWork* w) {
+   w->hand = (intptr_t)io_hand_v(f[0]);
+-  return io_wait_on(w, (int)w->hand, POLLIN, 0, tcp_accept_more);
++  return io_wait_first(w, (int)w->hand, POLLIN, 0, tcp_accept_more);
+ }
+ 
+ static void __attribute__((constructor)) tcp_accept_use(void) {
+diff --git a/bend2/effs/tcp_connect.c b/bend2/effs/tcp_connect.c
+index 99d1aca..03d85df 100644
+--- a/bend2/effs/tcp_connect.c
++++ b/bend2/effs/tcp_connect.c
+@@ -12,6 +12,7 @@ static Term tcp_connect_more(Env e, IoWork* w) {
+     err = errno;
+   }
+   if (err != 0 && fd >= 0) {
++    io_fd_forget(fd);
+     close(fd);
+   }
+   free(w->data);
+@@ -31,6 +32,7 @@ Term tcp_connect_run(Env e, Term* f, IoWork* w) {
+     fd = -1;
+   }
+   w->made = fd;
++  io_fd_new(fd);
+   io_sys_end(w, fd < 0 ? fd : connect(fd, (struct sockaddr*)&at, sizeof(at)));
+   return w->code == EINPROGRESS
+     ? io_wait_on(w, fd, POLLOUT, 0, tcp_connect_more) : tcp_connect_more(e, w);
+diff --git a/bend2/effs/tcp_listen.c b/bend2/effs/tcp_listen.c
+index 5623b3c..2c1ad22 100644
+--- a/bend2/effs/tcp_listen.c
++++ b/bend2/effs/tcp_listen.c
+@@ -23,6 +23,7 @@ Term tcp_listen_run(Env e, Term* f, IoWork* w) {
+     close(fd);
+     return io_fail(e, code, NULL);
+   }
++  io_fd_new(fd);
+   return io_done(e, io_hand(fd));
+ }
+ 
+diff --git a/bend2/effs/tcp_poll.c b/bend2/effs/tcp_poll.c
+index 5d5f03b..94bcfdf 100644
+--- a/bend2/effs/tcp_poll.c
++++ b/bend2/effs/tcp_poll.c
+@@ -29,7 +29,7 @@ Term tcp_poll_run(Env e, Term* f, IoWork* w) {
+   }
+   w->made = f[1] < INT32_MAX ? (intptr_t)f[1] : INT32_MAX;
+   w->data = io_mem(malloc((size_t)w->made));
+-  return io_wait_on(w, (int)w->hand, POLLIN,
++  return io_wait_first(w, (int)w->hand, POLLIN,
+     io_tick() + (u64)f[2] * 1000000ull, tcp_poll_more);
+ }
+ 
+diff --git a/bend2/effs/tcp_post.c b/bend2/effs/tcp_post.c
+index ddaa130..1555960 100644
+--- a/bend2/effs/tcp_post.c
++++ b/bend2/effs/tcp_post.c
+@@ -1,6 +1,8 @@
+ // TCP
+ // ===
+ 
++#ifdef CID(TCP.post)
++
+ // The bytes go to this loop's writer thread (io_post), which sends them in
+ // order; the socket comes back at once. A Char past 255 sends nothing.
+ Term tcp_post_run(Env e, Term* f, IoWork* w) {
+@@ -18,3 +20,41 @@ Term tcp_post_run(Env e, Term* f, IoWork* w) {
+ static void __attribute__((constructor)) tcp_post_use(void) {
+   io_eff(CID(TCP.post), tcp_post_run);
+ }
++
++#endif
++
++#ifdef CID(TCP.post_list)
++
++// The Strings of the list go one after another into one post's buffer,
++// sized first by their lengths, so it is allocated once.
++Term tcp_post_list_run(Env e, Term* f, IoWork* w) {
++  Term  l    = f[1];
++  u64   room = 1;
++  u64   len  = 0;
++  bool  ok   = true;
++  for (Term t = l; term_aux(t) == CID(Con);) {
++    u64 nd = term_peek(e.mem, t);
++    room  += str_len(e.mem, e.mem[nd]);
++    t      = e.mem[nd + 1];
++  }
++  char* buf = io_mem(malloc(room));
++  while (term_aux(l) == CID(Con)) {
++    Term fb[2];
++    spare_free(e, cls_fit(2), ctr_take(e, l, 2, fb));
++    ok = io_cbuf_add(e, fb[0], &len, IO_RAW, &buf, &room) != NULL && ok;
++    l  = fb[1];
++  }
++  term_drop(e, l);
++  if (!ok || len == 0) {
++    free(buf);
++  } else {
++    io_post((int)io_hand_v(f[0]), buf, len);
++  }
++  return f[0];
++}
++
++static void __attribute__((constructor)) tcp_post_list_use(void) {
++  io_eff(CID(TCP.post_list), tcp_post_list_run);
++}
++
++#endif
+diff --git a/bend2/effs/tcp_post.js b/bend2/effs/tcp_post.js
+index 2707647..50b368f 100644
+--- a/bend2/effs/tcp_post.js
++++ b/bend2/effs/tcp_post.js
+@@ -32,4 +32,14 @@ function tcp_post(socket, data, k) {
+   return go(0);
+ }
+ 
++// The Strings of the list one after another, as one post.
++function tcp_post_list(socket, data, k) {
++  let s = "";
++  for (let xs = data; xs.$ === CID(Con); xs = xs.tail) {
++    s += xs.head;
++  }
++  return tcp_post(socket, s, k);
++}
++
+ io_eff(CID(TCP.post), tcp_post);
++io_eff(CID(TCP.post_list), tcp_post_list);
+diff --git a/bend2/effs/tcp_recv.c b/bend2/effs/tcp_recv.c
+index 1c76f16..2b5e641 100644
+--- a/bend2/effs/tcp_recv.c
++++ b/bend2/effs/tcp_recv.c
+@@ -3,7 +3,9 @@
+ 
+ // A recv that finds nothing (the socket is non-blocking) parks on more
+ // until the socket is readable. What it finds, read makes a String (io_str),
+-// a List of bytes (io_list) or a String of bytes (io_raw).
++// a List of bytes (io_list) or a String of bytes (io_raw). A recv that reads
++// less than it asks for drains the socket: the next one waits for bytes
++// to come before it tries (io_fd_dry, under epoll).
+ 
+ // A recv's buffer, kept for the next recv on this thread: one malloc and
+ // free of the max (64 KiB, say) per recv let glibc trim and regrow the
+@@ -35,6 +37,9 @@ static void tcp_rbuf_give(char* p, u64 n) {
+ static Term tcp_recv_with(Env e, IoWork* w, IoPack more,
+   Term (*read)(Env, const char*, u64)) {
+   int fd  = (int)w->hand;
++  if (!io_fd_ready(fd, POLLIN)) {
++    return io_wait_on(w, fd, POLLIN, 0, more);
++  }
+   if (w->data == NULL) {
+     w->data = tcp_rbuf_take((u64)w->made);
+   }
+@@ -44,6 +49,9 @@ static Term tcp_recv_with(Env e, IoWork* w, IoPack more,
+     w->data = NULL;
+     return io_wait_on(w, fd, POLLIN, 0, more);
+   }
++  if (w->code == 0 && w->size != 0 && w->size < (u64)w->made) {
++    io_fd_dry(fd, POLLIN);
++  }
+   Term r = io_res(e, w, read(e, w->data, w->size));
+   tcp_rbuf_give(w->data, (u64)w->made);
+   return io_tup(e, io_hand(w->hand), r);
+diff --git a/bend2/effs/udp_bind.c b/bend2/effs/udp_bind.c
+index df28790..347cb99 100644
+--- a/bend2/effs/udp_bind.c
++++ b/bend2/effs/udp_bind.c
+@@ -20,6 +20,7 @@ Term udp_bind_run(Env e, Term* f, IoWork* w) {
+     close(fd);
+     return io_fail(e, code, NULL);
+   }
++  io_fd_new(fd);
+   return io_done(e, io_hand(fd));
+ }
+ 
+diff --git a/bend2/effs/udp_recv_from.c b/bend2/effs/udp_recv_from.c
+index 92ded2e..f07a151 100644
+--- a/bend2/effs/udp_recv_from.c
++++ b/bend2/effs/udp_recv_from.c
+@@ -25,7 +25,7 @@ Term udp_recv_from_run(Env e, Term* f, IoWork* w) {
+   w->hand = (intptr_t)io_hand_v(f[0]);
+   w->made = f[1] < INT32_MAX ? (intptr_t)f[1] : INT32_MAX;
+   w->data = io_mem(malloc((size_t)w->made + 1));
+-  return io_wait_on(w, (int)w->hand, POLLIN, 0, udp_recv_from_more);
++  return io_wait_first(w, (int)w->hand, POLLIN, 0, udp_recv_from_more);
+ }
+ 
+ static void __attribute__((constructor)) udp_recv_from_use(void) {
+diff --git a/tests/io/tcp_post_list.bend b/tests/io/tcp_post_list.bend
+new file mode 100644
+index 0000000..6130fa7
+--- /dev/null
++++ b/tests/io/tcp_post_list.bend
+@@ -0,0 +1,101 @@
++# io (io_tcp_post_list): TCP.post_list posts a list of pieces as one post:
++# they go out in order, glued once into the post's buffer. A list with a
++# piece that has a Char past 255 posts nothing, as TCP.post does for such a
++# String; an empty list posts nothing. The client posts ["hel", "lo"],
++# ["a\u{100}", "zz"], 3000 bytes and 2000 bytes as two pieces, and [], then
++# closes; the server reads to the end and finds 5005 bytes, in order (their
++# first five and their sum).
++import Base
++
++def count(s: String, n: U32, k: U32) -> U32 & U32:
++  match s:
++    case "":
++      (n, k)
++    case SCon{c, rest}:
++      count(rest, (n + 1 : U32), (k + Char.to_u32(c) : U32))
++
++def bulk.go(n: Nat, acc: String) -> String:
++  match n:
++    case 0n:
++      acc
++    case 1n++p:
++      bulk.go(p, SCon{Char.from_u32(U32.mod(U32.from_nat(p), 256)), acc})
++
++def count_on(xs: String, nk: U32 & U32) -> U32 & U32:
++  (n, k) = nk
++  count(xs, n, k)
++
++def done(nk: U32 & U32, head: String, s: Socket) -> IO(Unit):
++  (n, k) = nk
++  do IO<Unit>:
++    Unit <- IO.print(String.take(head, 5n) ++ " " ++ U32.show(n) ++ " " ++ U32.show(k))
++    Socket.close(s)
++
++def step(eof: Bool, s: Socket, xs: String, nk: U32 & U32, head: String, next: Socket -> U32 & U32 -> String -> IO(Unit)) -> IO(Unit):
++  match eof:
++    case True{}:
++      done(nk, head, s)
++    case False{}:
++      +x = xs
++      next(s, count_on(x, nk), head ++ x)
++
++def got(m: Socket & Result<&1, &1, U32 & String, String>, nk: U32 & U32, head: String, next: Socket -> U32 & U32 -> String -> IO(Unit)) -> IO(Unit):
++  (s, r) = m
++  match r:
++    case Done{+xs}:
++      step(String.is_empty(xs), s, xs, nk, head, next)
++    case Fail{e}:
++      done(nk, head, s)
++
++def drain(fuel: Nat, s: Socket, nk: U32 & U32, head: String) -> IO(Unit):
++  match fuel:
++    case 0n:
++      done(nk, head, s)
++    case 1n+f:
++      do IO<Unit>:
++        m : Socket & Result<&1, &1, U32 & String, String> <- TCP.recv_raw(s, 4096)
++        got(m, nk, head, s2 => nk2 => h2 => drain(f, s2, nk2, h2))
++
++def talk(c: Socket, p: Listener & Result<&1, &1, U32 & String, Socket>) -> IO(Unit):
++  (l2, ar) = p
++  do IO<Unit>:
++    a  : Socket <- IO.pass(Socket, ar)
++    c1 : Socket <- TCP.post_list(c, ["hel", "lo"])
++    c2 : Socket <- TCP.post_list(c1, ["a\u{100}", "zz"])
++    c3 : Socket <- TCP.post_list(c2, [bulk.go(3000n, ""), bulk.go(2000n, "")])
++    c4 : Socket <- TCP.post_list(c3, [])
++    Unit <- Socket.close(c4)
++    Unit <- drain(64n, a, (0, 0), "")
++    Listener.close(l2)
++
++def main_go(b: Listener & U32) -> IO(Unit):
++  (l, port) = b
++  do IO<Unit>:
++    c : Socket <- IO.try(Socket, TCP.connect("127.0.0.1", port))
++    p : Listener & Result<&1, &1, U32 & String, Socket> <- TCP.accept(l)
++    talk(c, p)
++
++def tcp_retry(port: U32, r: Result<&1, &1, U32 & String, Listener>, rest: IO(Listener & U32)) ->
++  IO(Listener & U32):
++  match r:
++    case Done{l}:
++      IO.pure(Listener & U32, (l, port))
++    case Fail{e}:
++      rest
++
++def tcp_listen_any(tries: Nat, +port: U32) -> IO(Listener & U32):
++  match tries:
++    case 0n:
++      IO.die(Listener & U32, 1, "no free tcp port")
++    case 1n+t:
++      rest = tcp_listen_any(t, (port + 1 : U32))
++      do IO<Listener & U32>:
++        r : Result<&1, &1, U32 & String, Listener> <- TCP.listen("127.0.0.1", port)
++        tcp_retry(port, r, rest)
++
++def main() -> IO(Unit):
++  do IO<Unit>:
++    b : Listener & U32 <- tcp_listen_any(32n, 20087)
++    main_go(b)
++
++#|hello 5005 626416
