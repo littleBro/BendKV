@@ -7,9 +7,10 @@ moment (versions, modes, parameters, replication, the keyspace) the same;
 and the counts after CONFIG RESETSTAT (connections taken, commands run)
 the same for the same commands on the same connections.
 
-Left out until BendKV counts per command (the COMMAND table): the lines
-of commandstats, errorstats and latencystats, which Redis fills and
-BendKV leaves empty.
+Left out: the lines of commandstats and errorstats, which Redis lists in
+the order of a hash table with a random seed (tests/stats_test.py
+compares them as maps), and of latencystats, which BendKV, timing no
+command, leaves empty.
 
     python3 tests/info_test.py --bendkv 6380 --redis 6390
 """

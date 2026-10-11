@@ -18,17 +18,24 @@
 # src/command.bend from the JSON.
 #
 #   python3 tools/gen_commands.py --extract    # redis-server -> JSON
-#   python3 tools/gen_commands.py              # JSON -> src/command.bend
+#   python3 tools/gen_commands.py              # JSON -> src/command.bend, src/redis.bend
 #   python3 tools/gen_commands.py --check      # fails if out of date
+#
+# The same JSON gives the arity of each command and subcommand to INFO's
+# statistics, which count a call with the wrong number of arguments as
+# refused only when it fails Redis's own check of the arity: the third
+# step writes the block between "# BEGIN gen_commands: arity" and "# END
+# gen_commands: arity" in src/redis.bend, for the keys of R.stat.name.
 #
 # The descriptions are data from Redis 7.0.15 (src/commands/*.json, BSD
 # 3-clause, Copyright (c) 2009-2012 Salvatore Sanfilippo and Redis
 # contributors).
-import json, os, socket, subprocess, sys, time, pathlib
+import json, os, re, socket, subprocess, sys, time, pathlib
 
 HERE = pathlib.Path(__file__).resolve().parent.parent
 JSON = HERE / "tools" / "data" / "redis-commands.json"
 BEND = HERE / "src" / "command.bend"
+REDIS = HERE / "src" / "redis.bend"
 
 # BendKV's commands, and of a command with subcommands the ones BendKV has
 COMMANDS = {
@@ -224,13 +231,51 @@ def generate():
     a, b = src.index(BEGIN) + len(BEGIN), src.index(END)
     return src[:a] + block(json.loads(JSON.read_text())) + src[b:]
 
+# Step 3: facts -> the arities of INFO's keys
+# -------------------------------------------
+
+ABEGIN, AEND = "# BEGIN gen_commands: arity\n", "# END gen_commands: arity\n"
+
+# the keys of R.stat.name and their names
+def stat_names(src):
+    a = src.index("def stat.name(+key: Nat) -> String:")
+    b = src.index("\n\n", a)
+    return [(int(k), n) for k, n in re.findall(r'case (\d+)n:\n\s+"([^"]+)"', src[a:b])]
+
+def arities(facts):
+    out = {}
+    for name, c in facts["commands"].items():
+        out[name] = c["info"][1]
+        for sub in c["info"][9]:
+            out[sub[0]] = sub[1]
+    return out
+
+def arity_block(src, facts):
+    ar = arities(facts)
+    out = ["def stat.arity(+key: Nat) -> Nat:", "  match key:"]
+    for k, name in stat_names(src):
+        if name not in ar:
+            raise SystemExit("gen_commands.py: no arity for " + name)
+        a = ar[name]
+        out += ["    case %dn:" % k, "      %dn" % (2 * a if a >= 0 else -2 * a + 1)]
+    out += ["    case _:", "      1n"]
+    return "\n".join(out) + "\n"
+
+def generate_arity():
+    src = REDIS.read_text()
+    a, b = src.index(ABEGIN) + len(ABEGIN), src.index(AEND)
+    return src[:a] + arity_block(src, json.loads(JSON.read_text())) + src[b:]
+
 if __name__ == "__main__":
     if sys.argv[1:] == ["--extract"]:
         extract()
     elif sys.argv[1:] == ["--check"]:
         if generate() != BEND.read_text():
             raise SystemExit("gen_commands.py: src/command.bend is out of date; run tools/gen_commands.py")
+        if generate_arity() != REDIS.read_text():
+            raise SystemExit("gen_commands.py: src/redis.bend is out of date; run tools/gen_commands.py")
     elif sys.argv[1:] == []:
         BEND.write_text(generate())
+        REDIS.write_text(generate_arity())
     else:
         raise SystemExit("usage: gen_commands.py [--extract | --check]")

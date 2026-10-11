@@ -5162,6 +5162,22 @@ def plain_run(b: Bool, conn: S.Conn, +srv: S.Srv, cs: List<&2, R.Cmd>, +hs: List
     case True{} S.Conn{id, a, n, S.MSkip{}, False{}} Con{c, rest}:
       eb => ep => Empty.absurd({S.run.plain(True{}, S.Conn{id, a, n, S.MSkip{}, False{}}, srv, Con{c, rest}, hs, db) == S.done.gen(S.gen(S.Conn{id, a, n, S.MSkip{}, False{}}, srv, Con{c, rest}, db)) : S.Fin}, true_false(eb))
 
+# a batch with a command of the connection or of the server runs the
+# general way, its commands in order, whatever its hashes
+def mixed_gen(+conn: S.Conn, +srv: S.Srv, rs: List<&2, B.Req>, +cs: List<&2, R.Cmd>, +hs: List<&2, U32>, +db: KV.Trie<String>) -> {S.run(conn, srv, B.mixed_of(rs, cs, hs), db) == S.done.gen(S.gen(conn, srv, B.cmds_of(rs, cs), db)) : S.Fin}:
+  match rs:
+    case Nil{}:
+      {==}
+    case Con{B.Req{c, h}, rest}:
+      mixed_gen(conn, srv, rest, c <> cs, h <> hs, db)
+
+def mixed_gen_log(+conn: S.Conn, +srv: S.Srv, rs: List<&2, B.Req>, +cs: List<&2, R.Cmd>, +hs: List<&2, U32>, +db: KV.Trie<String>) -> {S.run_log(conn, srv, B.mixed_of(rs, cs, hs), db) == S.logged.gen(S.gen(conn, srv, B.cmds_of(rs, cs), db)) : S.Logged}:
+  match rs:
+    case Nil{}:
+      {==}
+    case Con{B.Req{c, h}, rest}:
+      mixed_gen_log(conn, srv, rest, c <> cs, h <> hs, db)
+
 # the server's unzip hands gen a batch's commands in order, and takes the
 # fast way only for database commands
 
@@ -5204,7 +5220,7 @@ def unzip_gen(+conn: S.Conn, +srv: S.Srv, rs: List<&2, B.Req>, +cs: List<&2, R.C
     case Con{B.Req{R.Peek{x0, x1}, h}, rest}:
       e => unzip_gen(conn, srv, rest, R.Peek{x0, x1} <> cs, h <> hs, db)(e)
     case Con{B.Req{R.Own{x0}, h}, rest}:
-      e => {==}
+      e => mixed_gen(conn, srv, rest, R.Own{x0} <> cs, h <> hs, db)
     case Con{B.Req{R.Bad{x0}, h}, rest}:
       e => unzip_gen(conn, srv, rest, R.Bad{x0} <> cs, h <> hs, db)(e)
 
@@ -5300,7 +5316,7 @@ def unzip_gen_log(+conn: S.Conn, +srv: S.Srv, rs: List<&2, B.Req>, +cs: List<&2,
     case Con{B.Req{R.Peek{x0, x1}, h}, rest}:
       e => unzip_gen_log(conn, srv, rest, R.Peek{x0, x1} <> cs, h <> hs, db)(e)
     case Con{B.Req{R.Own{x0}, h}, rest}:
-      e => {==}
+      e => mixed_gen_log(conn, srv, rest, R.Own{x0} <> cs, h <> hs, db)
     case Con{B.Req{R.Bad{x0}, h}, rest}:
       e => unzip_gen_log(conn, srv, rest, R.Bad{x0} <> cs, h <> hs, db)(e)
 

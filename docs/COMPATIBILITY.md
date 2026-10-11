@@ -33,11 +33,11 @@ make suite REDIS_SRC=../redis      # both runs and the table, in build/suite/
 ## The result
 
 Redis 7.0.15, October 2026. Of the 1,656 tests Redis passes in this mode, BendKV passes
-**124 (7.5%)**; of the 256 in the units of what BendKV has, 103 (40%).
+**127 (7.7%)**; of the 256 in the units of what BendKV has, 106 (41%).
 
 | area | units | Redis passes | BendKV passes |
 |---|---|---:|---:|
-| what BendKV has: the protocol, connections, the keyspace, strings, counters, introspection | protocol, quit, keyspace, type/string, type/incr, introspection, introspection-2, other, info-command | 256 | **103** |
+| what BendKV has: the protocol, connections, the keyspace, strings, counters, introspection | protocol, quit, keyspace, type/string, type/incr, introspection, introspection-2, other, info-command | 256 | **106** |
 | data types and expiry, not yet | type/hash, type/list, list-2, list-3, type/set, type/zset, geo, hyperloglog, bitops, bitfield, sort, scan, expire, dump, lazyfree, violations | 969 | 17 |
 | transactions, pub/sub, client-side caching, CLIENT PAUSE, the latency monitor, the slow log, the query buffer, not yet | multi, pubsub, tracking, pause, latency-monitor, slowlog, querybuf | 127 | 0 |
 | out of scope: Lua scripts, functions, streams | scripting, functions, type/stream, type/stream-cgroups | 304 | 4 |
@@ -60,7 +60,7 @@ pubsubshard, shutdown, tls, type/list-common, wait):
 | unit/functions | 94 | 90 | 2 |
 | unit/geo | 59 | 59 | 0 |
 | unit/hyperloglog | 20 | 20 | 0 |
-| unit/info-command | 3 | 3 | 0 |
+| unit/info-command | 3 | 3 | 3 |
 | unit/introspection | 28 | 28 | 14 |
 | unit/introspection-2 | 43 | 43 | 17 |
 | unit/keyspace | 43 | 42 | 18 |
@@ -90,9 +90,9 @@ pubsubshard, shutdown, tls, type/list-common, wait):
 | unit/type/string | 77 | 77 | 17 |
 | unit/type/zset | 291 | 289 | 10 |
 | unit/violations | 1 | 1 | 0 |
-| **all** | **1729** | **1656** | **124 (7.5%)** |
+| **all** | **1729** | **1656** | **127 (7.7%)** |
 
-## Why the other 1,532 fail
+## Why the other 1,529 fail
 
 - **867 stop on a command BendKV does not have.** By the number of tests each one stops:
   FUNCTION LOAD 121, ZADD 117, XADD 60, GEOADD 37, SADD 31, EXPIRE 23, MULTI 23, LPUSH 20,
@@ -107,11 +107,12 @@ pubsubshard, shutdown, tls, type/list-common, wait):
   comes because the command before it is missing (pubsub: PSUBSCRIBE after CLIENT REPLY
   OFF; scripting: the second line of FUNCTION LOAD's reply, read raw). One test runs
   only on a server that names jemalloc as its allocator.
-- **76 fail with another error**, all of them in what BendKV does not have yet: SET's
+- **73 fail with another error**, all of them in what BendKV does not have yet: SET's
   options NX, XX, GET, EX, PX, EXAT, PXAT and KEEPTTL, and GETEX's (30 tests, answered
   `ERR syntax error`), COMMAND GETKEYS and COMMAND INFO of commands BendKV does not have
-  (19), RESP3 (16), INFO's statistics per command (3: `info-command` looks for
-  `rejected_calls`), and 8 that fail because a command before them is missing.
+  (19), RESP3 (16), and 8 that fail because a command before them is missing. (INFO's
+  statistics per command, which `info-command` looked for, came with the next step: 3
+  more tests pass.)
 
 So the tests are where the plan goes next: SET's options and expiry, then the data types
 one by one (969 tests), RESP3, which two units need before their second half runs, and
