@@ -7,6 +7,7 @@ import ../src/redis.bend as R
 import ../src/batch.bend as B
 import ../src/aof.bend as A
 import ../src/session.bend as S
+import ../src/config.bend as C
 
 # The map
 # =======
@@ -645,3 +646,52 @@ law noauth:
   for  e2: {S.nopass(srv) == False{} : Bool}
   for  e3: {no_login(cmds) == True{} : Bool}
   {all_bad(S.plan(cmds, conn, srv)) == True{} : Bool}
+
+# Configuration
+# =============
+# CONFIG GET and CONFIG SET (config.bend). A CONFIG SET that fails leaves
+# the server as it was; one that succeeds leaves it with the new
+# parameters, whose requirepass is the password; and after a CONFIG SET
+# of a parameter that succeeds, the parameter holds the value its check
+# gave, which CONFIG GET reads back by the same name.
+
+# LAW: a CONFIG SET that fails leaves the server as it was (Redis sets the
+# parameters before the failing one and puts them back; BendKV sets none)
+law config_fail:
+  for  args: List<&2, String>
+  for  conn: S.Conn
+  for +srv: S.Srv
+  for  r: R.Reply
+  for  e: {C.config.set(args, S.srv.cfg(srv)) == Fail{r} : Result<&2, &2, R.Reply, List<&2, C.CItem>>}
+  {S.own_srv(R.SConfigSet{args}, conn, srv) == srv : S.Srv}
+
+# LAW: one that succeeds leaves the server with the new parameters, and
+# their requirepass is the password from then on
+law config_pass:
+  for  args: List<&2, String>
+  for  conn: S.Conn
+  for +srv: S.Srv
+  for  cfg: List<&2, C.CItem>
+  for  e: {C.config.set(args, S.srv.cfg(srv)) == Done{cfg} : Result<&2, &2, R.Reply, List<&2, C.CItem>>}
+  {S.own_srv(R.SConfigSet{args}, conn, srv) == S.Srv{C.config.get_value(cfg, "requirepass"), cfg} : S.Srv}
+
+# a parameter with another value
+def with(it: C.CItem, v: String) -> C.CItem:
+  match it:
+    case C.CItem{p, old}:
+      C.CItem{p, v}
+
+# LAW: after a CONFIG SET of one parameter that succeeds, the parameter
+# holds the value its check gave (C.item.set), and a CONFIG GET of the
+# same name finds it there
+law config_set_get:
+  for +n: String
+  for +v: String
+  for +items: List<&2, C.CItem>
+  for +it: C.CItem
+  for  nv: String
+  for  items2: List<&2, C.CItem>
+  for  e1: {C.item.find(items, String.to_lower(n)) == Some{it} : Maybe<&2, C.CItem>}
+  for  e2: {C.item.set(it, v) == Done{nv} : Result<&2, &2, String, String>}
+  for  e3: {C.config.set([n, v], items) == Done{items2} : Result<&2, &2, R.Reply, List<&2, C.CItem>>}
+  {C.item.find(items2, String.to_lower(n)) == Some{with(it, nv)} : Maybe<&2, C.CItem>}

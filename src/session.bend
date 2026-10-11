@@ -23,6 +23,7 @@ import ./map.bend as KV
 import ./redis.bend as R
 import ./batch.bend as B
 import ./aof.bend as A
+import ./config.bend as C
 
 # Types
 # -----
@@ -40,15 +41,32 @@ type Mute is Data:
 type Conn is Data:
   Conn{id: Nat, auth: Bool, name: String, mode: Mute, quit: Bool}
 
-# the server, besides its database: its password (empty for none)
+# the server, besides its database: its password (empty for none) and its
+# parameters (config.bend), of which requirepass is the password
 type Srv is Data:
-  Srv{pass: String}
+  Srv{pass: String, cfg: List<&2, C.CItem>}
 
 def conn_new(id: Nat) -> Conn:
   Conn{id, False{}, "", MOn{}, False{}}
 
+# the server with these parameters: its password is requirepass
+def srv_of(+cfg: List<&2, C.CItem>) -> Srv:
+  Srv{C.config.get_value(cfg, "requirepass"), cfg}
+
+def srv.puts(sets: List<&2, String>, cfg: List<&2, C.CItem>) -> List<&2, C.CItem>:
+  match sets:
+    case Con{+n, Con{+v, rest}}:
+      srv.puts(rest, C.items.put(cfg, n, v))
+    case _:
+      cfg
+
+# the server at its start: the table's values, with the values it was
+# started with (a name and a value, and so on), which the shell checked
+def srv_start(sets: List<&2, String>) -> Srv:
+  srv_of(srv.puts(sets, C.config.table()))
+
 def srv_new(pass: String) -> Srv:
-  Srv{pass}
+  srv_start(["requirepass", pass])
 
 def conn.auth(+c: Conn) -> Bool:
   match c:
@@ -77,8 +95,13 @@ def conn.quit(+c: Conn) -> Bool:
 
 def srv.pass(+s: Srv) -> String:
   match s:
-    case Srv{pass}:
+    case Srv{pass, cfg}:
       pass
+
+def srv.cfg(+s: Srv) -> List<&2, C.CItem>:
+  match s:
+    case Srv{pass, cfg}:
+      cfg
 
 # Authentication
 # --------------
@@ -410,6 +433,12 @@ def own_reply(+o: R.SessOp, +c: Conn, +s: Srv, +db: KV.Trie<String>) -> Maybe<&2
       say(conn.mode(c), Bool.pick(R.Reply, name_ok(n), R.r_ok(), e_name()))
     case R.SClientReply{m}:
       reply.out(reply_word(m), conn.mode(c))
+    case R.SConfigGet{args}:
+      say(conn.mode(c), C.config.get(args, srv.cfg(s)))
+    case R.SConfigSet{args}:
+      say(conn.mode(c), C.config.set.reply(C.config.set(args, srv.cfg(s))))
+    case R.SConfigResetStat{}:
+      say(conn.mode(c), R.r_ok())
     case R.SReply{r}:
       say(conn.mode(c), r)
     case R.SBad{r}:
@@ -436,14 +465,32 @@ def own_conn(+o: R.SessOp, +c: Conn, +s: Srv) -> Conn:
       setname.conn(name_ok(n), n, c, s)
     case R.SClientReply{+m}:
       mode.conn(reply.mode(reply_word(m), conn.mode(c)), c, s)
+    case R.SConfigGet{a}:
+      step_conn(c, s)
+    case R.SConfigSet{a}:
+      step_conn(c, s)
+    case R.SConfigResetStat{}:
+      step_conn(c, s)
     case R.SReply{r}:
       step_conn(c, s)
     case R.SBad{r}:
       step_conn(c, s)
 
-# the server after a session command: no command here changes it yet
-def own_srv(+o: R.SessOp, +c: Conn, s: Srv) -> Srv:
-  s
+def srv.set(r: Result<&2, &2, R.Reply, List<&2, C.CItem>>, s: Srv) -> Srv:
+  match r:
+    case Done{cfg}:
+      srv_of(cfg)
+    case Fail{e}:
+      s
+
+# the server after a session command: CONFIG SET changes it when it
+# succeeds
+def own_srv(+o: R.SessOp, +c: Conn, +s: Srv) -> Srv:
+  match o:
+    case R.SConfigSet{args}:
+      srv.set(C.config.set(args, srv.cfg(s)), s)
+    case _:
+      s
 
 # A batch
 # -------
