@@ -12,6 +12,7 @@
 
 import Base
 import ./map.bend as KV
+import ./redis.bend as R
 import ./config.bend as C
 
 # Counts
@@ -70,6 +71,275 @@ def big.diff(+a: Big, +b: Big) -> Nat:
     case IBig{ah, al} IBig{bh, bl}:
       Nat.sub(Nat.add(al, Nat.mul(Nat.sub(ah, bh), big.lim())), bl)
 
+def big.is_zero(+b: Big) -> Bool:
+  match b:
+    case IBig{+hi, +lo}:
+      Bool.and(Nat.is_eq(hi, 0n), Nat.is_eq(lo, 0n))
+
+# Statistics per command and per error
+# ------------------------------------
+# As Redis 7.0.15 keeps them: for each command and subcommand (by its key,
+# R.stat.key), the calls that ran, the calls refused before they ran (a
+# number of arguments its arity does not allow, a client that must
+# authenticate first) and the calls that ran and answered an error; for each error code (the first
+# word of an error reply, as afterErrorReply takes it), how many replies
+# had it; and all the error replies. A batch only puts its runs of calls
+# (R.Tally) with the others not yet counted (cur, pend); they are counted
+# in the entries, kept last used first, at the cron's tick (every 100 ms)
+# and whenever INFO shows them, which lists them by name. BendKV does not
+# time its commands: usec stays 0, and latencystats is empty.
+
+type Ent is Data:
+  Ent{key: Nat, calls: Big, rej: Big, fail: Big}
+
+type ErrN is Data:
+  ErrN{code: String, n: Big}
+
+type Stats is Data:
+  Stats{ents: List<&2, Ent>, cur: Nat, pend: List<&2, Nat>, errs: List<&2, ErrN>, total: Big}
+
+def stats.zero() -> Stats:
+  Stats{Nil{}, 0n, Nil{}, Nil{}, big.zero()}
+
+def ent.add(e: Ent, +c: Nat, +r: Nat, +f: Nat) -> Ent:
+  match e:
+    case Ent{k, calls, rej, fail}:
+      Ent{k, big.add(calls, c), big.add(rej, r), big.add(fail, f)}
+
+def ent.is(+k: Nat, +es: List<&2, Ent>) -> Bool:
+  match es:
+    case Con{Ent{+j, calls, rej, fail}, rest}:
+      Nat.is_eq(j, k)
+    case Nil{}:
+      False{}
+
+# the entry of key k taken out of es, a new one when there is none; same
+# says whether the first entry is k's
+type Pick is Data:
+  Pick{e: Ent, rest: List<&2, Ent>}
+
+def pick.keep(e: Ent, p: Pick) -> Pick:
+  match p:
+    case Pick{x, rest}:
+      Pick{x, e <> rest}
+
+def ents.pick(+k: Nat, es: List<&2, Ent>, same: Bool) -> Pick:
+  match es same:
+    case Nil{} _:
+      Pick{Ent{k, big.zero(), big.zero(), big.zero()}, Nil{}}
+    case Con{e, rest} True{}:
+      Pick{e, rest}
+    case Con{e, +rest} False{}:
+      pick.keep(e, ents.pick(k, rest, ent.is(k, rest)))
+
+def ents.front(p: Pick, +c: Nat, +r: Nat, +f: Nat) -> List<&2, Ent>:
+  match p:
+    case Pick{e, rest}:
+      ent.add(e, c, r, f) <> rest
+
+# what calls of key k add: c that ran, r refused, f failed; the entry
+# goes first. A call of the last command used costs one comparison.
+def ents.add.if(same: Bool, es: List<&2, Ent>, +k: Nat, +c: Nat, +r: Nat, +f: Nat) -> List<&2, Ent>:
+  match same es:
+    case True{} Con{e, rest}:
+      ent.add(e, c, r, f) <> rest
+    case _ _:
+      ents.front(ents.pick(k, es, False{}), c, r, f)
+
+def ents.add(+es: List<&2, Ent>, +k: Nat, +c: Nat, +r: Nat, +f: Nat) -> List<&2, Ent>:
+  ents.add.if(ent.is(k, es), es, k, c, r, f)
+
+# the error code of an error reply: its first word, when it ends in the
+# first 31 bytes, else ERR (Redis looks for the space in "-" and the 31
+# bytes after it)
+def err.code(+m: String) -> String:
+  +at = String.find(m, ' ', 0n)
+  Bool.pick(String, Bool.and(Nat.is_lt(at, 31n), Nat.is_lt(at, String.length(m))), String.take(m, at), "ERR")
+
+# where error code c goes among es: its own (EQ), before the first (LT,
+# or the end), or after it (GT)
+def errs.cmp(+c: String, +es: List<&2, ErrN>) -> Cmp:
+  match es:
+    case Con{ErrN{+x, n}, rest}:
+      String.order(c, x)
+    case Nil{}:
+      LT{}
+
+# one more reply with error code c (o is errs.cmp(c, es)); the codes are
+# kept in order
+def errs.add(es: List<&2, ErrN>, +c: String, o: Cmp) -> List<&2, ErrN>:
+  match es o:
+    case Con{ErrN{x, n}, rest} EQ{}:
+      ErrN{x, big.add(n, 1n)} <> rest
+    case Con{e, +rest} GT{}:
+      e <> errs.add(rest, c, errs.cmp(c, rest))
+    case _ _:
+      ErrN{c, big.add(big.zero(), 1n)} <> es
+
+# a run of calls (R.Tally): its key's entry; key 0, an unknown command
+# or subcommand, has none
+def stats.run.at(es: List<&2, Ent>, +key: Nat, +class: Nat, +n: Nat) -> List<&2, Ent>:
+  match class:
+    case 0n:
+      ents.add(es, key, n, 0n, 0n)
+    case 1n:
+      ents.add(es, key, 0n, n, 0n)
+    case _:
+      ents.add(es, key, n, 0n, n)
+
+def stats.run.if(none: Bool, es: List<&2, Ent>, +code: Nat, +n: Nat) -> List<&2, Ent>:
+  match none:
+    case True{}:
+      es
+    case False{}:
+      stats.run.at(es, Nat.div(code, 4n), Nat.mod(code, 4n), n)
+
+def stats.runs(rs: List<&2, Nat>, es: List<&2, Ent>) -> List<&2, Ent>:
+  match rs:
+    case Nil{}:
+      es
+    case Con{+r, rest}:
+      +code = R.run.code(r)
+      stats.runs(rest, stats.run.if(Nat.is_lt(code, 4n), es, code, R.run.n(r)))
+
+# an error reply of a call of code k: one more of its error code, and of
+# all; a call that ran (class 0) failed with it (the parser's errors are
+# counted with their runs)
+def stats.err.ent(ran: Bool, es: List<&2, Ent>, +k: Nat) -> List<&2, Ent>:
+  match ran:
+    case True{}:
+      ents.add(es, Nat.div(k, 4n), 0n, 0n, 1n)
+    case False{}:
+      es
+
+def stats.err(st: Stats, +k: Nat, +m: String) -> Stats:
+  match st:
+    case Stats{es, cur, pend, +errs, total}:
+      +c = err.code(m)
+      Stats{stats.err.ent(Bool.and(Nat.is_eq(Nat.mod(k, 4n), 0n), Nat.is_lt(3n, k)), es, k), cur, pend, errs.add(errs, c, errs.cmp(c, errs)), big.add(total, 1n)}
+
+def stats.errs(xs: List<&2, R.Erred>, st: Stats) -> Stats:
+  match xs:
+    case Nil{}:
+      st
+    case Con{R.Erred{+k, +m}, rest}:
+      stats.errs(rest, stats.err(st, k, m))
+
+# a batch's runs of calls, put with those not yet counted: the run of a
+# batch of one code (r, 0 for none: R.Tally) goes into the newest run of
+# them (cur) when it has its code, or else takes its place, cur going
+# before the others (pend); the runs of any other batch (rs) go before
+# those
+def stats.cur(same: Bool, es: List<&2, Ent>, +cur: Nat, +r: Nat, pend: List<&2, Nat>, errs: List<&2, ErrN>, total: Big) -> Stats:
+  match same:
+    case True{}:
+      Stats{es, Nat.add(cur, R.run.n(r)), pend, errs, total}
+    case False{}:
+      Stats{es, r, cur <> pend, errs, total}
+
+def stats.add(st: Stats, +r: Nat, rs: List<&2, Nat>) -> Stats:
+  match st rs:
+    case Stats{es, +cur, pend, errs, total} Nil{}:
+      stats.cur(Bool.or(Nat.is_lt(r, 1n), U32.is_eq(U32.from_nat(R.run.code(cur)), U32.from_nat(R.run.code(r)))), es, cur, r, pend, errs, total)
+    case Stats{es, cur, pend, errs, total} _:
+      Stats{es, cur, List.reverse.go(&2, Nat, List.reverse(&2, Nat, rs), pend), errs, total}
+
+# the runs not yet counted, the ones of one code next to each other put
+# together first (a run per batch, of one command most of the time)
+def runs.merge.if(same: Bool, acc: List<&2, Nat>, +k: Nat, +n: Nat) -> List<&2, Nat>:
+  match same acc:
+    case True{} Con{r, rest}:
+      Nat.add(r, n) <> rest
+    case _ _:
+      R.run.of(k, n) <> acc
+
+def runs.merge.at(+acc: List<&2, Nat>, +k: Nat, +n: Nat) -> List<&2, Nat>:
+  match acc:
+    case Con{+r, rest}:
+      runs.merge.if(Nat.is_eq(R.run.code(r), k), acc, k, n)
+    case Nil{}:
+      [R.run.of(k, n)]
+
+def runs.merge(rs: List<&2, Nat>, acc: List<&2, Nat>) -> List<&2, Nat>:
+  match rs:
+    case Nil{}:
+      acc
+    case Con{+r, rest}:
+      runs.merge(rest, runs.merge.at(acc, R.run.code(r), R.run.n(r)))
+
+def stats.fold(st: Stats) -> Stats:
+  match st:
+    case Stats{es, cur, pend, errs, total}:
+      Stats{stats.runs(runs.merge(cur <> pend, Nil{}), es), 0n, Nil{}, errs, total}
+
+# Commandstats and Errorstats, as INFO writes them
+def ent.name(+e: Ent) -> String:
+  match e:
+    case Ent{+k, calls, rej, fail}:
+      R.stat.name(k)
+
+def ent.shown(+e: Ent) -> Bool:
+  match e:
+    case Ent{k, +calls, +rej, +fail}:
+      Bool.not(Bool.and(big.is_zero(calls), Bool.and(big.is_zero(rej), big.is_zero(fail))))
+
+# es in order of their names (an insertion sort: there are a few dozen);
+# first says whether e goes before the first of es
+def ent.first(+e: Ent, +es: List<&2, Ent>) -> Bool:
+  match es:
+    case Con{+x, rest}:
+      String.is_le(ent.name(e), ent.name(x))
+    case Nil{}:
+      True{}
+
+def ents.insert(+e: Ent, es: List<&2, Ent>, first: Bool) -> List<&2, Ent>:
+  match es first:
+    case Con{x, +rest} False{}:
+      x <> ents.insert(e, rest, ent.first(e, rest))
+    case _ _:
+      e <> es
+
+def ents.sort(es: List<&2, Ent>, +acc: List<&2, Ent>) -> List<&2, Ent>:
+  match es:
+    case Nil{}:
+      acc
+    case Con{+e, rest}:
+      ents.sort(rest, ents.insert(e, acc, ent.first(e, acc)))
+
+def ent.line(+e: Ent) -> String:
+  match e:
+    case Ent{+k, +calls, +rej, +fail}:
+      Bool.pick(String, ent.shown(e), "cmdstat_" ++ R.stat.name(k) ++ ":calls=" ++ big.show(calls) ++ ",usec=0,usec_per_call=0.00,rejected_calls=" ++ big.show(rej) ++ ",failed_calls=" ++ big.show(fail) ++ "\r\n", "")
+
+def ents.lines(es: List<&2, Ent>) -> String:
+  match es:
+    case Nil{}:
+      ""
+    case Con{+e, rest}:
+      ent.line(e) ++ ents.lines(rest)
+
+def errs.lines(es: List<&2, ErrN>) -> String:
+  match es:
+    case Nil{}:
+      ""
+    case Con{ErrN{+c, +n}, rest}:
+      "errorstat_" ++ c ++ ":count=" ++ big.show(n) ++ "\r\n" ++ errs.lines(rest)
+
+def stats.cmds(+st: Stats) -> String:
+  match st:
+    case Stats{+es, +cur, +pend, errs, total}:
+      ents.lines(ents.sort(stats.runs(runs.merge(cur <> pend, Nil{}), es), Nil{}))
+
+def stats.errors(+st: Stats) -> String:
+  match st:
+    case Stats{es, cur, pend, +errs, total}:
+      errs.lines(errs)
+
+def stats.total(+st: Stats) -> String:
+  match st:
+    case Stats{es, cur, pend, errs, +total}:
+      big.show(total)
+
 # Facts
 # -----
 
@@ -100,10 +370,11 @@ type Inst is Data:
 
 # everything INFO shows that the parameters and the keys do not: the
 # start, the last facts, the counts, the rates, the peak of memory, the
-# connections taken before the last CONFIG RESETSTAT, and the size of the
-# append-only file at the start and now
+# connections taken before the last CONFIG RESETSTAT, the size of the
+# append-only file at the start and now, and the statistics per command
+# and per error
 type Info is Data:
-  IInfo{boot: Boot, live: Live, cnt: Count, inst: Inst, peak: Nat, conns0: Nat, aof0: Nat, aof: Nat}
+  IInfo{boot: Boot, live: Live, cnt: Count, inst: Inst, peak: Nat, conns0: Nat, aof0: Nat, aof: Nat, st: Stats}
 
 def count.zero() -> Count:
   ICount{big.zero(), big.zero(), big.zero()}
@@ -128,13 +399,13 @@ def live.conns(+l: Live) -> Nat:
 
 # the server's facts at its start
 def info.new(b: Boot, +l: Live) -> Info:
-  IInfo{b, l, count.zero(), IInst{live.ms(l), count.zero(), samples.zero(), samples.zero(), samples.zero()}, live.rss(l), 0n, 0n, 0n}
+  IInfo{b, l, count.zero(), IInst{live.ms(l), count.zero(), samples.zero(), samples.zero(), samples.zero()}, live.rss(l), 0n, 0n, 0n, stats.zero()}
 
 # the append-only file the server restored at its start, of size bytes
 def info.restored(i: Info, +size: Nat) -> Info:
   match i:
-    case IInfo{b, l, c, inst, pk, c0, a0, a}:
-      IInfo{b, l, c, inst, pk, c0, size, size}
+    case IInfo{b, l, c, inst, pk, c0, a0, a, st}:
+      IInfo{b, l, c, inst, pk, c0, size, size, st}
 
 # a batch's commands, the bytes it came in and the bytes of its replies
 def count.add(c: Count, +n: Nat, +inb: Nat, +outb: Nat) -> Count:
@@ -142,22 +413,37 @@ def count.add(c: Count, +n: Nat, +inb: Nat, +outb: Nat) -> Count:
     case ICount{x, y, z}:
       ICount{big.add(x, n), big.add(y, inb), big.add(z, outb)}
 
-def info.ran(i: Info, +n: Nat, +inb: Nat, +outb: Nat) -> Info:
+# a batch's calls that ran (Redis's total_commands_processed counts no
+# others), its runs of calls (R.Tally), the bytes it came in and the
+# bytes of its replies
+def info.ran(i: Info, +calls: Nat, +r: Nat, rs: List<&2, Nat>, +inb: Nat, +outb: Nat) -> Info:
   match i:
-    case IInfo{b, l, c, inst, pk, c0, a0, a}:
-      IInfo{b, l, count.add(c, n, inb, outb), inst, pk, c0, a0, a}
+    case IInfo{b, l, c, inst, pk, c0, a0, a, st}:
+      IInfo{b, l, count.add(c, calls, inb, outb), inst, pk, c0, a0, a, stats.add(st, r, rs)}
+
+# a batch's error replies
+def info.errs(i: Info, xs: List<&2, R.Erred>) -> Info:
+  match i:
+    case IInfo{b, l, c, inst, pk, c0, a0, a, st}:
+      IInfo{b, l, c, inst, pk, c0, a0, a, stats.errs(xs, st)}
+
+# an error reply the shell sent itself (a protocol error)
+def info.erred(i: Info, +m: String) -> Info:
+  match i:
+    case IInfo{b, l, c, inst, pk, c0, a0, a, st}:
+      IInfo{b, l, c, inst, pk, c0, a0, a, stats.err(st, 1n, m)}
 
 # bytes appended to the append-only file
 def info.aof(i: Info, +n: Nat) -> Info:
   match i:
-    case IInfo{b, l, c, inst, pk, c0, a0, a}:
-      IInfo{b, l, c, inst, pk, c0, a0, Nat.add(a, n)}
+    case IInfo{b, l, c, inst, pk, c0, a0, a, st}:
+      IInfo{b, l, c, inst, pk, c0, a0, Nat.add(a, n), st}
 
 # new facts from the shell; the peak of memory follows them
 def info.live(i: Info, +l: Live) -> Info:
   match i:
-    case IInfo{b, old, c, inst, pk, c0, a0, a}:
-      IInfo{b, l, c, inst, Nat.max(pk, live.rss(l)), c0, a0, a}
+    case IInfo{b, old, c, inst, pk, c0, a0, a, st}:
+      IInfo{b, l, c, inst, Nat.max(pk, live.rss(l)), c0, a0, a, st}
 
 def take15(n: Nat, xs: List<&2, Nat>) -> List<&2, Nat>:
   match n xs:
@@ -183,18 +469,20 @@ def inst.tick(inst: Inst, +c: Count, +ms: Nat) -> Inst:
     case IInst{lms, +last, sc, si, so}:
       inst.go(c, last, Nat.sub(ms, lms), ms, sc, si, so)
 
-# the cron's sample, at ms since 1970
+# the cron's sample, at ms since 1970; the runs of calls not yet counted
+# are counted
 def info.tick(i: Info, +ms: Nat) -> Info:
   match i:
-    case IInfo{b, l, +c, inst, pk, c0, a0, a}:
-      IInfo{b, l, c, inst.tick(inst, c, ms), pk, c0, a0, a}
+    case IInfo{b, l, +c, inst, pk, c0, a0, a, st}:
+      IInfo{b, l, c, inst.tick(inst, c, ms), pk, c0, a0, a, stats.fold(st)}
 
-# CONFIG RESETSTAT: the counts and rates start again, as Redis's
-# resetServerStats starts them
+# CONFIG RESETSTAT: the counts, the rates and the statistics start again,
+# as Redis's resetServerStats, resetCommandTableStats and
+# resetErrorTableStats start them
 def info.reset(i: Info) -> Info:
   match i:
-    case IInfo{b, +l, c, inst, pk, c0, a0, a}:
-      IInfo{b, l, count.zero(), IInst{live.ms(l), count.zero(), samples.zero(), samples.zero(), samples.zero()}, pk, live.conns(l), a0, a}
+    case IInfo{b, +l, c, inst, pk, c0, a0, a, st}:
+      IInfo{b, l, count.zero(), IInst{live.ms(l), count.zero(), samples.zero(), samples.zero(), samples.zero()}, pk, live.conns(l), a0, a, stats.zero()}
 
 # Numbers as printf writes them
 # ----------------------------
@@ -387,7 +675,7 @@ def sec.persistence(+items: List<&2, C.CItem>, +start: U32, +a0: Nat, +a: Nat) -
   kv("aof_last_cow_size", "0") ++ kv("module_fork_in_progress", "0") ++ kv("module_fork_last_cow_size", "0") ++
   sec.aof(on, a0, a)
 
-def sec.stats.go(c: Count, inst: Inst, +conns: Nat) -> String:
+def sec.stats.go(c: Count, inst: Inst, +conns: Nat, +errs: String) -> String:
   match c inst:
     case ICount{+cmds, +inb, +outb} IInst{ms, last, +sc, +si, +so}:
       "# Stats\r\n" ++ kv("total_connections_received", Nat.show(conns)) ++ kv("total_commands_processed", big.show(cmds)) ++
@@ -405,7 +693,7 @@ def sec.stats.go(c: Count, inst: Inst, +conns: Nat) -> String:
       kv("active_defrag_misses", "0") ++ kv("active_defrag_key_hits", "0") ++ kv("active_defrag_key_misses", "0") ++
       kv("total_active_defrag_time", "0") ++ kv("current_active_defrag_time", "0") ++ kv("tracking_total_keys", "0") ++
       kv("tracking_total_items", "0") ++ kv("tracking_total_prefixes", "0") ++ kv("unexpected_error_replies", "0") ++
-      kv("total_error_replies", "0") ++ kv("dump_payload_sanitizations", "0") ++ kv("total_reads_processed", "0") ++
+      kv("total_error_replies", errs) ++ kv("dump_payload_sanitizations", "0") ++ kv("total_reads_processed", "0") ++
       kv("total_writes_processed", "0") ++ kv("io_threaded_reads_processed", "0") ++ kv("io_threaded_writes_processed", "0") ++
       kv("reply_buffer_shrinks", "0") ++ kv("reply_buffer_expands", "0")
 
@@ -486,21 +774,21 @@ def join(xs: List<&2, String>, +acc: String) -> String:
 
 def on.server(on: Bool, +items: List<&2, C.CItem>, +i: Info) -> String:
   match on i:
-    case True{} IInfo{+b, +l, c, inst, pk, c0, a0, a}:
+    case True{} IInfo{+b, +l, c, inst, pk, c0, a0, a, st}:
       sec.server(items, b, l)
     case False{} _:
       ""
 
 def on.clients(on: Bool, +items: List<&2, C.CItem>, +i: Info) -> String:
   match on i:
-    case True{} IInfo{b, +l, c, inst, pk, c0, a0, a}:
+    case True{} IInfo{b, +l, c, inst, pk, c0, a0, a, st}:
       sec.clients(items, l)
     case False{} _:
       ""
 
 def on.memory(on: Bool, +items: List<&2, C.CItem>, +i: Info) -> String:
   match on i:
-    case True{} IInfo{+b, +l, c, inst, +pk, c0, a0, a}:
+    case True{} IInfo{+b, +l, c, inst, +pk, c0, a0, a, st}:
       sec.memory(items, b, l, pk)
     case False{} _:
       ""
@@ -517,28 +805,28 @@ def boot.replid(+b: Boot) -> String:
 
 def on.persistence(on: Bool, +items: List<&2, C.CItem>, +i: Info) -> String:
   match on i:
-    case True{} IInfo{+b, l, c, inst, pk, c0, +a0, +a}:
+    case True{} IInfo{+b, l, c, inst, pk, c0, +a0, +a, st}:
       sec.persistence(items, boot.start(b), a0, a)
     case False{} _:
       ""
 
 def on.stats(on: Bool, +i: Info) -> String:
   match on i:
-    case True{} IInfo{b, +l, +c, +inst, pk, +c0, a0, a}:
-      sec.stats.go(c, inst, Nat.sub(live.conns(l), c0))
+    case True{} IInfo{b, +l, +c, +inst, pk, +c0, a0, a, +st}:
+      sec.stats.go(c, inst, Nat.sub(live.conns(l), c0), stats.total(st))
     case False{} _:
       ""
 
 def on.replication(on: Bool, +items: List<&2, C.CItem>, +i: Info) -> String:
   match on i:
-    case True{} IInfo{+b, l, c, inst, pk, c0, a0, a}:
+    case True{} IInfo{+b, l, c, inst, pk, c0, a0, a, st}:
       sec.replication(items, boot.replid(b))
     case False{} _:
       ""
 
 def on.cpu(on: Bool, +i: Info) -> String:
   match on i:
-    case True{} IInfo{b, +l, c, inst, pk, c0, a0, a}:
+    case True{} IInfo{b, +l, c, inst, pk, c0, a0, a, st}:
       sec.cpu(l)
     case False{} _:
       ""
@@ -548,6 +836,20 @@ def on.keyspace(on: Bool, +db: KV.Trie<String>) -> String:
     case True{}:
       sec.keyspace(KV.size(String, db))
     case False{}:
+      ""
+
+def on.cmdstats(on: Bool, +i: Info) -> String:
+  match on i:
+    case True{} IInfo{b, l, c, inst, pk, c0, a0, a, +st}:
+      "# Commandstats\r\n" ++ stats.cmds(st)
+    case False{} _:
+      ""
+
+def on.errstats(on: Bool, +i: Info) -> String:
+  match on i:
+    case True{} IInfo{b, l, c, inst, pk, c0, a0, a, +st}:
+      "# Errorstats\r\n" ++ stats.errors(st)
+    case False{} _:
       ""
 
 def on.head(on: Bool, +head: String) -> String:
@@ -569,8 +871,8 @@ def text(args: List<&2, String>, +items: List<&2, C.CItem>, +i: Info, +db: KV.Tr
     on.replication(sel.has(s, "replication"), items, i),
     on.cpu(sel.has(s, "cpu"), i),
     on.head(Bool.or(sel.has(s, "module_list"), sel.has(s, "modules")), "# Modules\r\n"),
-    on.head(sel.has(s, "commandstats"), "# Commandstats\r\n"),
-    on.head(sel.has(s, "errorstats"), "# Errorstats\r\n"),
+    on.cmdstats(sel.has(s, "commandstats"), i),
+    on.errstats(sel.has(s, "errorstats"), i),
     on.head(sel.has(s, "latencystats"), "# Latencystats\r\n"),
     on.head(sel.has(s, "cluster"), "# Cluster\r\n" ++ kv("cluster_enabled", "0")),
     on.keyspace(sel.has(s, "keyspace"), db)], "")

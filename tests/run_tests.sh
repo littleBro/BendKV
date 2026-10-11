@@ -1,22 +1,22 @@
 #!/bin/sh
 # First the start: the command line and the configuration file, each
-# case on BendKV and on redis-server (tests/start_test.py). Then starts a
-# reference Redis (with one database, as BendKV has, and on the
-# loopback, as BendKV listens) and BendKV
-# on spare ports: BendKV with its defaults, then posting its replies to
-# its writer thread (post), then sending them from its loop (send), then
-# with an append-only file, and runs against each the robustness checks,
-# the differential test against Redis (a fresh Redis database for each
-# run) and the consistency checks under concurrent clients, and against
-# the first the protocol's edge cases, the commands of a connection and
-# CONFIG, byte for byte against Redis, INFO's sections and fields, and
-# COMMAND; then stops them. Then the append-only file: a
-# random stream, a restart from the file, the keyspace compared; then the
-# file's last entry cut short, as a crash in a write leaves it, a restart
-# that cuts it back, and the keyspace compared again. Last, the disk
-# failing under the file (tests/fail_io.c injects it): a file that is
-# there but cannot be read must stop the start, and a failed fsync must
-# stop the server, with everysec as with always.
+# case on BendKV and on redis-server (tests/start_test.py). Then starts
+# a reference Redis (with one database, as BendKV has, and on the
+# loopback, as BendKV listens) and BendKV on spare ports: BendKV with
+# its defaults, then posting its replies to its writer thread (post),
+# then sending them from its loop (send), then with an append-only file,
+# and runs against each the robustness checks, the differential test
+# against Redis (a fresh Redis database for each run) and the
+# consistency checks under concurrent clients, and against the first the
+# protocol's edge cases, the commands of a connection and CONFIG, byte
+# for byte against Redis, INFO's sections and fields, its statistics per
+# command, and COMMAND; then stops them. Then the append-only file: a
+# random stream, a restart from the file, the keyspace compared; then
+# the file's last entry cut short, as a crash in a write leaves it, a
+# restart that cuts it back, and the keyspace compared again. Last, the
+# disk failing under the file (tests/fail_io.c injects it): a file that
+# is there but cannot be read must stop the start, and a failed fsync
+# must stop the server, with everysec as with always.
 set -e
 cd "$(dirname "$0")/.."
 PORT=${PORT:-6380}
@@ -40,6 +40,7 @@ for n in "" post send "post build/test.aof everysec"; do
     python3 tests/session_test.py --bendkv "$PORT" --redis "$REDIS_PORT"
     python3 tests/config_test.py --bendkv "$PORT" --redis "$REDIS_PORT" --rounds "$ROUNDS"
     python3 tests/info_test.py --bendkv "$PORT" --redis "$REDIS_PORT"
+    python3 tests/stats_test.py --bendkv "$PORT" --redis "$REDIS_PORT"
     python3 tests/command_test.py --bendkv "$PORT" --redis "$REDIS_PORT"
   fi
   for seed in 1 2 3; do

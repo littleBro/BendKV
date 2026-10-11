@@ -40,9 +40,10 @@ type Args is Data:
   ArgsMore{need: Nat}
   ArgsBad{msg: String}
 
-# one request: its command, with the hash of its key for the hints (B.Req),
-# or none for an empty one (*0, or a blank inline line), which Redis skips
-# without a reply
+# one request: its command, with the hash of its key for the hints and
+# its code for INFO's statistics in the hash's high byte (B.Req,
+# R.stat.hash); or none for an empty one (*0, or a blank inline line),
+# which Redis skips without a reply
 type One is Data:
   OneOk{req: B.Req, next: Nat}
   OneNone{next: Nat}
@@ -52,11 +53,12 @@ type One is Data:
 # a buffer's worth of requests: the complete ones, newest first (as the
 # parser meets them, each put before the ones it read already; the server
 # puts them in order in the same pass that takes their commands and
-# hashes apart, B.unzip), and how many they are (for INFO), the unparsed
-# tail, a protocol error that ends the connection, if any, and how many
-# bytes the tail needs at least before a parse can make progress
+# hashes apart, B.unzip), how many they are and the marks of their codes
+# together (R.tl.add: whether they all have one code, and which), the
+# unparsed tail, a protocol error that ends the connection, if any, and
+# how many bytes the tail needs at least before a parse can make progress
 type Batch is Data:
-  Batch{reqs: List<&2, B.Req>, n: U32, rest: String, err: Maybe<&2, String>, need: Nat}
+  Batch{reqs: List<&2, B.Req>, tl: U32, rest: String, err: Maybe<&2, String>, need: Nat}
 
 # Lexing
 # ------
@@ -190,20 +192,26 @@ def args.at(m: Nat, +s: String, +l: Nat, +j: Nat) -> Args:
     case 1n+k:
       bulks(k, s, l, bulk_at(s, j, l), Nil{})
 
+# a request, its hash marked with its code: its key and what its
+# command counts as
+def req.ok(+c: R.Cmd, h: U32, +key: Nat, +args: List<&2, String>, j: Nat) -> One:
+  +code = R.stat.code(key, R.stat.class(c, key, args))
+  OneOk{B.Req{c, R.stat.hash(h, code)}, j}
+
 # a command of number id named nm (as the client spelled it, for an
 # unknown one), from its arguments: from id 40 on, a command of the
 # connection or of the server (R.parse_sess)
-def req.mk(own: Bool, +id: Nat, +nm: String, +args: List<&2, String>) -> B.Req:
+def req.mk(own: Bool, +id: Nat, +nm: String, +args: List<&2, String>, +key: Nat, j: Nat) -> One:
   match own:
     case True{}:
-      B.Req{R.Own{R.parse_sess(id, nm, args)}, 0}
+      req.ok(R.Own{R.parse_sess(id, nm, args)}, 0, key, args, j)
     case False{}:
-      B.Req{R.parse_id(id, nm, args), B.args_hash(args)}
+      req.ok(R.parse_id(id, nm, args), B.args_hash(args), key, args, j)
 
 def req.of(+id: Nat, +nm: String, a: Args) -> One:
   match a:
     case ArgsOk{+args, j}:
-      OneOk{req.mk(Nat.is_le(40n, id), id, nm, args), j}
+      req.mk(Nat.is_le(40n, id), id, nm, args, R.stat.key(id, args), j)
     case ArgsMore{k}:
       OneMore{k}
     case ArgsBad{msg}:
@@ -213,7 +221,7 @@ def req.of(+id: Nat, +nm: String, a: Args) -> One:
 def get.of(b: Key) -> One:
   match b:
     case KeyOk{k, h, j}:
-      OneOk{B.Req{R.Get{k}, h}, j}
+      OneOk{B.Req{R.Get{k}, U32.add(U32.and(h, 16777215), 201326592)}, j}
     case KeyMore{n}:
       OneMore{n}
     case KeyBad{msg}:
@@ -223,7 +231,7 @@ def get.of(b: Key) -> One:
 def set.val(k: String, h: U32, b: Bulk) -> One:
   match b:
     case BulkOk{v, j}:
-      OneOk{B.Req{R.Set{k, v}, h}, j}
+      OneOk{B.Req{R.Set{k, v}, U32.add(U32.and(h, 16777215), 268435456)}, j}
     case BulkMore{n}:
       OneMore{n}
     case BulkBad{msg}:
@@ -242,7 +250,7 @@ def set.of(+s: String, +l: Nat, b: Key) -> One:
 def incr.of(b: Key) -> One:
   match b:
     case KeyOk{k, h, j}:
-      OneOk{B.Req{R.IncrBy{k, R.IPos{1n}}, h}, j}
+      OneOk{B.Req{R.IncrBy{k, R.IPos{1n}}, U32.add(U32.and(h, 16777215), 671088640)}, j}
     case KeyMore{n}:
       OneMore{n}
     case KeyBad{msg}:
@@ -517,40 +525,42 @@ def one(+s: String, +i: Nat, +l: Nat) -> One:
   +c = String.code_at(s, i)
   one.head(s, i, l, U32.is_eq(c, 42), U32.is_eq(c, 4294967295))
 
-# a batch's requests before its tail is cut off, newest first, and how
-# many they are: at is the index where the tail starts, the first request
-# not parsed on
+# a batch's requests before its tail is cut off, newest first, how many
+# they are and their marks (R.tl.add): at is the index where the tail
+# starts, the first request not parsed on
 type Cut is Data:
-  Cut{reqs: List<&2, B.Req>, n: U32, at: Nat, err: Maybe<&2, String>, need: Nat}
+  Cut{reqs: List<&2, B.Req>, tl: U32, at: Nat, err: Maybe<&2, String>, need: Nat}
 
-# every complete request of s from index i on, put before acc (n of
-# them): o is the parse of the one at i; each request takes at least one
-# byte, so the length of the buffer is enough fuel
-def batch.go(fuel: Nat, +s: String, +l: Nat, +i: Nat, o: One, acc: List<&2, B.Req>, n: U32) -> Cut:
+# every complete request of s from index i on, put before acc, and
+# counted with its mark in tl: o is the parse of the one at i; each
+# request takes at least one byte, so the length of the buffer is enough
+# fuel. The request is taken apart for its hash, whose high byte is its
+# code: its words are in registers already.
+def batch.go(fuel: Nat, +s: String, +l: Nat, +i: Nat, o: One, acc: List<&2, B.Req>, tl: U32) -> Cut:
   match fuel o:
     case 0n _:
-      Cut{acc, n, i, None{}, 1n}
+      Cut{acc, tl, i, None{}, 1n}
     case 1n+f OneNone{+j}:
-      batch.go(f, s, l, j, one(s, j, l), acc, n)
-    case 1n+f OneOk{req, +j}:
-      batch.go(f, s, l, j, one(s, j, l), req <> acc, U32.add(n, 1))
+      batch.go(f, s, l, j, one(s, j, l), acc, tl)
+    case 1n+f OneOk{B.Req{c, +h}, +j}:
+      batch.go(f, s, l, j, one(s, j, l), B.Req{c, h} <> acc, R.tl.add(tl, h))
     case 1n+f OneMore{k}:
-      Cut{acc, n, i, None{}, k}
+      Cut{acc, tl, i, None{}, k}
     case 1n+f OneBad{m}:
-      Cut{acc, n, l, Some{m}, 0n}
+      Cut{acc, tl, l, Some{m}, 0n}
 
 # the tail is what follows the parsed requests: s is dropped up to it
 def batch.fin(c: Cut, s: String) -> Batch:
   match c:
-    case Cut{reqs, n, at, err, need}:
-      Batch{reqs, n, String.drop(s, at), err, need}
+    case Cut{reqs, tl, at, err, need}:
+      Batch{reqs, tl, String.drop(s, at), err, need}
 
-# the requests of s put before acc (n requests read before them, newest
-# first): fuel must be at least the number of requests in s, which a
-# reader that knows how many bytes it has passes; parse counts them itself
-def parse_onto(fuel: Nat, +s: String, acc: List<&2, B.Req>, n: U32) -> Batch:
+# the requests of s put before acc, counted in tl with those read before
+# them: fuel must be at least the number of requests in s, which a reader
+# that knows how many bytes it has passes; parse counts them itself
+def parse_onto(fuel: Nat, +s: String, acc: List<&2, B.Req>, tl: U32) -> Batch:
   +l = String.length(s)
-  batch.fin(batch.go(fuel, s, l, 0n, one(s, 0n, l), acc, n), s)
+  batch.fin(batch.go(fuel, s, l, 0n, one(s, 0n, l), acc, tl), s)
 
 def parse(+s: String) -> Batch:
   parse_onto(1n+String.length(s), s, Nil{}, 0)
@@ -572,40 +582,40 @@ def win.max() -> Nat:
 # a window's parse, judged: the last one (the buffer's end, or a protocol
 # error), one that parsed nothing (a request longer than a window: the
 # rest of the buffer is parsed whole from at), or one to go on after; the
-# requests of the windows so far, newest first, and how many they are,
-# are in each
+# requests of the windows so far, newest first, and their count and
+# marks (R.tl.add), are in each
 type Win is Data:
   WinLast{b: Batch}
-  WinBig{reqs: List<&2, B.Req>, n: U32, at: Nat}
-  WinOn{reqs: List<&2, B.Req>, n: U32, next: Nat}
+  WinBig{reqs: List<&2, B.Req>, tl: U32, at: Nat}
+  WinOn{reqs: List<&2, B.Req>, tl: U32, next: Nat}
 
-def win.on(reqs: List<&2, B.Req>, n: U32, +at: Nat, +done: Nat, stuck: Bool) -> Win:
+def win.on(reqs: List<&2, B.Req>, tl: U32, +at: Nat, +done: Nat, stuck: Bool) -> Win:
   match stuck:
     case True{}:
-      WinBig{reqs, n, at}
+      WinBig{reqs, tl, at}
     case False{}:
-      WinOn{reqs, n, Nat.add(at, done)}
+      WinOn{reqs, tl, Nat.add(at, done)}
 
-def win.judge(reqs: List<&2, B.Req>, n: U32, rest: String, err: Maybe<&2, String>, need: Nat, +at: Nat, +done: Nat, last: Bool) -> Win:
+def win.judge(reqs: List<&2, B.Req>, tl: U32, rest: String, err: Maybe<&2, String>, need: Nat, +at: Nat, +done: Nat, last: Bool) -> Win:
   match err last:
     case Some{m} _:
-      WinLast{Batch{reqs, n, rest, Some{m}, need}}
+      WinLast{Batch{reqs, tl, rest, Some{m}, need}}
     case None{} True{}:
-      WinLast{Batch{reqs, n, rest, None{}, need}}
+      WinLast{Batch{reqs, tl, rest, None{}, need}}
     case None{} False{}:
-      win.on(reqs, n, at, done, Nat.is_eq(done, 0n))
+      win.on(reqs, tl, at, done, Nat.is_eq(done, 0n))
 
 # the window of w bytes at index at, of a buffer of l bytes, and its parse
 def win.of(b: Batch, +at: Nat, +w: Nat, +l: Nat) -> Win:
   match b:
-    case Batch{reqs, n, +rest, err, need}:
-      win.judge(reqs, n, rest, err, need, at, Nat.sub(w, String.length(rest)), Nat.is_le(l, Nat.add(at, w)))
+    case Batch{reqs, tl, +rest, err, need}:
+      win.judge(reqs, tl, rest, err, need, at, Nat.sub(w, String.length(rest)), Nat.is_le(l, Nat.add(at, w)))
 
-# the window at index at, its requests put before acc, the n of the
-# windows before it
-def win.at(+s: String, +at: Nat, +l: Nat, acc: List<&2, B.Req>, n: U32) -> Win:
+# the window at index at, its requests put before acc, counted with
+# those of the windows before it (tl)
+def win.at(+s: String, +at: Nat, +l: Nat, acc: List<&2, B.Req>, tl: U32) -> Win:
   +w = Nat.min(win.max(), Nat.sub(l, at))
-  win.of(parse_onto(1n+w, String.slice(s, at, w), acc, n), at, w, l)
+  win.of(parse_onto(1n+w, String.slice(s, at, w), acc, tl), at, w, l)
 
 # the windows of s from the one judged in w on; each window parses one
 # byte or more, so the length of s is enough fuel
@@ -613,12 +623,12 @@ def win.go(n: Nat, +s: String, +l: Nat, w: Win) -> Batch:
   match n w:
     case _ WinLast{b}:
       b
-    case _ WinBig{reqs, c, +at}:
-      parse_onto(1n+Nat.sub(l, at), String.drop(s, at), reqs, c)
-    case 0n WinOn{reqs, c, +at}:
-      parse_onto(1n+Nat.sub(l, at), String.drop(s, at), reqs, c)
-    case 1n+m WinOn{reqs, c, +at}:
-      win.go(m, s, l, win.at(s, at, l, reqs, c))
+    case _ WinBig{reqs, tl, +at}:
+      parse_onto(1n+Nat.sub(l, at), String.drop(s, at), reqs, tl)
+    case 0n WinOn{reqs, tl, +at}:
+      parse_onto(1n+Nat.sub(l, at), String.drop(s, at), reqs, tl)
+    case 1n+m WinOn{reqs, tl, +at}:
+      win.go(m, s, l, win.at(s, at, l, reqs, tl))
 
 # the requests of s, which may be made of several runs (a long read, or
 # the tail of the last read and a new one), in windows of one run each

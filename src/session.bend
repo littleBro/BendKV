@@ -83,6 +83,13 @@ def conn.mode(+c: Conn) -> Mute:
     case Conn{id, auth, name, mode, quit}:
       mode
 
+# the connection with every reply on (for INFO's statistics, which count
+# the replies a client does not get)
+def conn.on(c: Conn) -> Conn:
+  match c:
+    case Conn{id, auth, name, mode, quit}:
+      Conn{id, auth, name, MOn{}, quit}
+
 def conn.quit(+c: Conn) -> Bool:
   match c:
     case Conn{id, auth, name, mode, quit}:
@@ -103,13 +110,24 @@ def srv.info(+s: Srv) -> I.Info:
     case Srv{pass, cfg, info}:
       info
 
-# what the shell adds to INFO's account (info.bend): a batch's commands
-# and bytes, bytes appended to the append-only file, new facts, a sample
-# of the rates
-def srv.ran(s: Srv, +n: Nat, +inb: Nat, +outb: Nat) -> Srv:
+# what the shell adds to INFO's account (info.bend): a batch's calls (the
+# ones that ran, and runs of codes, R.Tally), its error replies and its
+# bytes, an error reply the shell sent itself, bytes appended to the
+# append-only file, new facts, a sample of the rates
+def srv.ran(s: Srv, +calls: Nat, +r: Nat, rs: List<&2, Nat>, +inb: Nat, +outb: Nat) -> Srv:
   match s:
     case Srv{pass, cfg, info}:
-      Srv{pass, cfg, I.info.ran(info, n, inb, outb)}
+      Srv{pass, cfg, I.info.ran(info, calls, r, rs, inb, outb)}
+
+def srv.errs(s: Srv, xs: List<&2, R.Erred>) -> Srv:
+  match s:
+    case Srv{pass, cfg, info}:
+      Srv{pass, cfg, I.info.errs(info, xs)}
+
+def srv.erred(s: Srv, +m: String) -> Srv:
+  match s:
+    case Srv{pass, cfg, info}:
+      Srv{pass, cfg, I.info.erred(info, m)}
 
 def srv.aof(s: Srv, +n: Nat) -> Srv:
   match s:
@@ -751,7 +769,7 @@ def run(conn: Conn, srv: Srv, job: B.Job, db: KV.Trie<String>) -> Fin:
       +c = conn
       +s = srv
       run.plain(ready(c, s), c, s, cmds, hs, db)
-    case B.Mixed{cmds}:
+    case B.Mixed{cmds, hs}:
       done.gen(gen(conn, srv, cmds, db))
 
 # a batch's outcome with its effects, in order, for the append-only file
@@ -787,5 +805,5 @@ def run_log(conn: Conn, srv: Srv, job: B.Job, db: KV.Trie<String>) -> Logged:
       +c = conn
       +s = srv
       run_log.plain(ready(c, s), c, s, cmds, hs, db)
-    case B.Mixed{cmds}:
+    case B.Mixed{cmds, hs}:
       logged.gen(gen(conn, srv, cmds, db))

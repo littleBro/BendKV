@@ -296,8 +296,8 @@ Where performance and proof meet: **batched execution under proved laws.**
    the connection commands clients send on connect (HELLO, SELECT, CLIENT, AUTH, INFO,
    COMMAND, CONFIG), SCAN, and the log's rewrite, measured by Redis's own test suite
    run against BendKV and by client libraries' tests. Lua, streams, cluster,
-   replication and modules are out of scope. The suite's first count: of the 1,656
-   tests Redis 7.0.15 passes against a server it did not start, BendKV passes 124, 103
+   replication and modules are out of scope. The suite's count: of the 1,656
+   tests Redis 7.0.15 passes against a server it did not start, BendKV passes 127, 106
    of the 256 in what it has ([COMPATIBILITY.md](COMPATIBILITY.md)).
 
 After that comes proving the native strings (section 5, step 1): a small piece of

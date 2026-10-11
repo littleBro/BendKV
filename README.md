@@ -13,7 +13,7 @@ throughput of Redis 7.0.15 on the same machine, with half its memory for small v
 > **Status: research prototype.** BendKV implements a subset of Redis (strings, the
 > keyspace, connection commands, an append-only file). The goal now is a drop-in
 > replacement for a single Redis node, measured by Redis's own test suite: of the 1,656
-> tests Redis 7.0.15 passes against a server it did not start, BendKV passes 124, and 103
+> tests Redis 7.0.15 passes against a server it did not start, BendKV passes 127, and 106
 > of the 256 in what it implements ([docs/COMPATIBILITY.md](docs/COMPATIBILITY.md)). Do
 > not use it for data you cannot lose.
 
@@ -91,7 +91,12 @@ translation stays in the trusted base.
   process, its parameters, its connections, commands and bytes (with the instantaneous
   rates sampled every 100 ms, as Redis's cron samples them), its resident memory, its
   keys, its append-only file; for what BendKV does not have (replication, forks,
-  scripts, eviction, expiry) they are what Redis shows when it has none. CONFIG
+  scripts, eviction, expiry) they are what Redis shows when it has none. The statistics
+  per command count as Redis counts them: each command's and subcommand's calls, the
+  calls refused before they run (a wrong number of arguments by Redis's arity, a client
+  that must authenticate first) and the calls that fail as they run, and the error
+  replies by their code, held-back replies included (CLIENT REPLY OFF); BendKV does not
+  time its commands, so their usec is 0 and latencystats is empty. CONFIG
   RESETSTAT starts the counts again. COMMAND (with INFO, DOCS, COUNT, LIST and its
   filters, GETKEYS, GETKEYSANDFLAGS, HELP) describes each command BendKV has, and each
   subcommand it has, as Redis 7.0.15 describes it: `tools/gen_commands.py` takes the
@@ -110,10 +115,9 @@ translation stays in the trusted base.
 - **Persistence:** an append-only file in Redis's own format (`redis-check-aof` accepts
   it, and Redis loads it), fsync `always`, `everysec` or `no`.
 
-Not yet: other data types, expiry, multiple databases, MULTI/EXEC, pub/sub, statistics
-per command (INFO commandstats, errorstats and latencystats are empty), CONFIG REWRITE
-(it answers as Redis does without a configuration file), RDB files. Integers are limited
-to 14 digits.
+Not yet: other data types, expiry, multiple databases, MULTI/EXEC, pub/sub, timing of
+commands (usec in INFO commandstats, latencystats), CONFIG REWRITE (it answers as Redis
+does without a configuration file), RDB files. Integers are limited to 14 digits.
 
 ## Performance
 
@@ -175,7 +179,10 @@ command streams compared byte for byte, the protocol edge cases of Redis's
 `tests/unit/protocol.tcl`, the connection commands, CONFIG (every parameter, a list of
 cases and thousands of random values, set and read back on both servers), INFO (the
 sections and fields for 31 ways of picking them, the values that do not depend on the
-machine, the counts after CONFIG RESETSTAT), COMMAND (each command's description and
+machine, the counts after CONFIG RESETSTAT), the statistics per command (commandstats,
+errorstats and the totals after the same requests, one at a time and pipelined, with
+refused, failed, held-back and protocol errors, compared as maps), COMMAND (each
+command's description and
 documentation, the lists and their filters, the keys of command lines, random ones
 too), robustness and concurrency checks,
 restarts from the append-only file (including a truncated tail), and disk failures

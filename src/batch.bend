@@ -28,10 +28,13 @@ type Req is Data:
 # a batch: of database commands only, with the hashes of their keys (most
 # batches; they run as exec_batch runs them), or one with a command of
 # the connection or of the server (R.Own) in it, which runs a command at
-# a time (session.bend: gen)
+# a time (session.bend: gen). A hash's high byte is what INFO's
+# statistics count its request as (R.stat.hash); the hints read only its
+# low five hex digits, and a mixed batch keeps its hashes for that byte
+# alone.
 type Job is Data:
   Plain{cmds: List<&2, R.Cmd>, hs: List<&2, U32>}
-  Mixed{cmds: List<&2, R.Cmd>}
+  Mixed{cmds: List<&2, R.Cmd>, hs: List<&2, U32>}
 
 # The parser keeps a batch's requests newest first (resp.bend: Batch):
 # putting each one before those that came after it, in one pass, puts
@@ -49,26 +52,36 @@ def cmds_of(rs: List<&2, Req>, cs: List<&2, R.Cmd>) -> List<&2, R.Cmd>:
 # while every request is a database command, its commands and the hashes
 # of their keys, put in order before cs and hs (UPlain); at the first
 # command of the connection or of the server, the requests not yet taken
-# apart and the commands so far (USplit), which job puts together
+# apart and the commands and hashes so far (USplit), which job puts
+# together
 type Unz is Data:
   UPlain{cs: List<&2, R.Cmd>, hs: List<&2, U32>}
-  USplit{rest: List<&2, Req>, cs: List<&2, R.Cmd>}
+  USplit{rest: List<&2, Req>, cs: List<&2, R.Cmd>, hs: List<&2, U32>}
 
 def unzip(rs: List<&2, Req>, cs: List<&2, R.Cmd>, hs: List<&2, U32>) -> Unz:
   match rs:
     case Nil{}:
       UPlain{cs, hs}
     case Con{Req{R.Own{o}, h}, rest}:
-      USplit{rest, R.Own{o} <> cs}
+      USplit{rest, R.Own{o} <> cs, h <> hs}
     case Con{Req{c, h}, rest}:
       unzip(rest, c <> cs, h <> hs)
+
+# a batch with a command of the connection or of the server: the requests
+# not yet taken apart put in order before the commands and hashes so far
+def mixed_of(rs: List<&2, Req>, cs: List<&2, R.Cmd>, hs: List<&2, U32>) -> Job:
+  match rs:
+    case Nil{}:
+      Mixed{cs, hs}
+    case Con{Req{c, h}, rest}:
+      mixed_of(rest, c <> cs, h <> hs)
 
 def job(u: Unz) -> Job:
   match u:
     case UPlain{cs, hs}:
       Plain{cs, hs}
-    case USplit{rest, cs}:
-      Mixed{cmds_of(rest, cs)}
+    case USplit{rest, cs, hs}:
+      mixed_of(rest, cs, hs)
 
 # the hash of a request's first argument after its name (0 for none)
 def args_hash(args: List<&2, String>) -> U32:

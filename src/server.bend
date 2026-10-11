@@ -43,15 +43,18 @@ import ./startup.bend as T
 import ./info.bend as I
 
 # a batch from a connection in the state cn (B.Job: its commands, and
-# the hashes of their keys, for the hints of batch.bend), the channel its
-# answer goes back on, and how many commands it has and how many bytes it
-# came in (for INFO); the shell's facts (info.bend: Live), which a
-# connection sends before a batch that asks INFO or CONFIG RESETSTAT; or
-# the cron's tick, at ms since 1970, for INFO's rates
+# the hashes of their keys, for the hints of batch.bend, with the codes
+# of INFO's statistics in their high bytes), the channel its answer goes
+# back on, how many requests it has and their marks (R.tl.add), and how
+# many bytes it came in; the shell's facts (info.bend:
+# Live), which a connection sends before a batch that asks INFO or CONFIG
+# RESETSTAT; the cron's tick, at ms since 1970, for INFO's rates; or a
+# protocol error a connection answered, for errorstats
 type Req is Data:
-  Req{cn: S.Conn, job: B.Job, back: Chan(Ans), n: Nat, inb: Nat}
+  Req{cn: S.Conn, job: B.Job, back: Chan(Ans), tl: U32, inb: Nat}
   Facts{live: I.Live}
   Tick{ms: Nat}
+  Oops{}
 
 # a batch's answer: its replies, encoded (none when CLIENT REPLY held
 # them all back), and the connection's state after it
@@ -73,37 +76,273 @@ def ans.len(+a: Ans) -> Nat:
     case Ans{None{}, cn}:
       0n
 
+# The error replies of a batch of one code k, from its bytes: each reply
+# of such a batch is a line (INCR's integers and errors, or the errors of
+# calls the parser refused or failed), and an error reply's begins with
+# '-'. Bytes without a '-', as most batches of INCR have, have none.
+def ans.err(err: Bool, +out: String, +i: Nat, +j: Nat, +k: Nat, acc: List<&2, R.Erred>) -> List<&2, R.Erred>:
+  match err:
+    case True{}:
+      R.Erred{k, String.slice(out, Nat.add(i, 1n), Nat.sub(Nat.sub(j, i), 2n))} <> acc
+    case False{}:
+      acc
+
+def ans.errs.go(fuel: Nat, more: Bool, +out: String, +l: Nat, +i: Nat, +k: Nat, acc: List<&2, R.Erred>) -> List<&2, R.Erred>:
+  match fuel more:
+    case 1n+f True{}:
+      +j = String.find(out, '\n', i)
+      ans.errs.go(f, Nat.is_lt(Nat.add(j, 1n), l), out, l, Nat.add(j, 1n), k, ans.err(U32.is_eq(String.code_at(out, i), 45), out, i, j, k, acc))
+    case _ _:
+      acc
+
+def ans.errs(+a: Ans, +k: Nat) -> List<&2, R.Erred>:
+  match a:
+    case Ans{Some{+out}, cn}:
+      +l = String.length(out)
+      ans.errs.go(l, Nat.is_lt(0n, l), out, l, 0n, k, Nil{})
+    case Ans{None{}, cn}:
+      Nil{}
+
+# whether an answer of l bytes has a '-'
+def ans.dash(+a: Ans, +l: Nat) -> Bool:
+  match a:
+    case Ans{Some{+out}, cn}:
+      Nat.is_lt(String.find(out, '-', 0n), l)
+    case Ans{None{}, cn}:
+      False{}
+
+# Statistics of a batch
+# ---------------------
+# INFO counts each call as Redis does (info.bend, Statistics): what it
+# counts as comes in the high byte of its hash (R.stat.hash). A batch
+# that runs the fast way (S.run.plain: database commands only, from a
+# client that may run them and gets every reply) gives each call one
+# reply, in order, so its hashes count it whole (R.tally), and its
+# replies are looked at for errors only where a call may have one
+# (run_put). Any other batch runs a command at a time (S.run of one
+# command runs it as the batch would: gen takes a command at a time), so
+# that each is counted as it runs: dropped after a QUIT, refused when its
+# client must authenticate first, or with the reply it gave, which is
+# looked at even when CLIENT REPLY holds it back, as Redis counts every
+# error reply. A later command of the batch (INFO) sees the counts of
+# those before it.
+
+# the message of an error the parser found (Bad, a session command's SBad)
+def gen.bad(+c: R.Cmd) -> String:
+  match c:
+    case R.Bad{R.RError{+m}}:
+      m
+    case R.Own{R.SBad{R.RError{+m}}}:
+      m
+    case _:
+      ""
+
+def mute.on(+m: S.Mute) -> Bool:
+  match m:
+    case S.MOn{}:
+      True{}
+    case _:
+      False{}
+
+# what a call counts as before it runs, and its error reply when that is
+# known without its replies: a call refused for its client (NOAUTH), or
+# one the parser refused or failed (its message). None: its error, if
+# any, is among the replies of its run.
+type Pre is Data:
+  Pre{code: Nat, xs: Maybe<&2, List<&2, R.Erred>>}
+
+def gen.pre.ran(ran: Bool, +c: R.Cmd, +code: Nat) -> Pre:
+  match ran:
+    case True{}:
+      Pre{code, None{}}
+    case False{}:
+      Pre{code, Some{[R.Erred{code, gen.bad(c)}]}}
+
+def gen.pre(ok: Bool, +c: R.Cmd, +code: Nat) -> Pre:
+  match ok:
+    case False{}:
+      +refused = Nat.add(Nat.mul(Nat.div(code, 4n), 4n), 1n)
+      Pre{refused, Some{[R.Erred{refused, "NOAUTH Authentication required."}]}}
+    case True{}:
+      gen.pre.ran(Nat.is_eq(Nat.mod(code, 4n), 0n), c, code)
+
+# whether a call runs while its client's replies are held back (CLIENT
+# REPLY OFF or SKIP): its reply counts all the same
+def gen.muted(+ok: Bool, +code: Nat, +conn: S.Conn) -> Bool:
+  Bool.and(ok, Bool.and(Nat.is_eq(Nat.mod(code, 4n), 0n), Bool.not(mute.on(S.conn.mode(conn)))))
+
+def gen.errs(xs: Maybe<&2, List<&2, R.Erred>>, +rs1: List<&2, R.Reply>, +code: Nat) -> List<&2, R.Erred>:
+  match xs:
+    case Some{ys}:
+      ys
+    case None{}:
+      R.errs.zip(rs1, [code], Nil{})
+
+# one call's counts: whether it ran, its run, its error replies
+def gen.count(srv: S.Srv, +code: Nat, ys: List<&2, R.Erred>) -> S.Srv:
+  S.srv.errs(S.srv.ran(srv, R.code.calls(code, 1n), R.run.of(code, 1n), Nil{}, 0n, 0n), ys)
+
+# a batch on the general way so far: its replies (newest first), and the
+# connection, the server and the database after its commands so far
+type GRun is Data:
+  GRun{rs: List<&2, R.Reply>, conn: S.Conn, srv: S.Srv, db: KV.Trie<String>}
+
+def gen.done(d: S.Fin, p: Pre, rs: List<&2, R.Reply>) -> GRun:
+  match d p:
+    case S.Fin{+rs1, conn, srv, db} Pre{+code, xs}:
+      +ys = gen.errs(xs, rs1, code)
+      GRun{List.reverse.go(&2, R.Reply, rs1, rs), conn, gen.count(srv, code, ys), db}
+
+# A call that runs while its client's replies are held back has its reply
+# counted as Redis has it. A command of the database runs with them on,
+# for its reply, which is counted and dropped (its client gets none), the
+# connection after it being the one its run with them held back gives
+# (S.next_conn: the replies are all that the mode changes); its run is its
+# only one, so the database goes on unshared. A command of the connection
+# or of the server runs as it is (CLIENT REPLY ON and RESET answer all the
+# same), its reply as Redis has it taken from S.own_reply before.
+def gen.held(d: S.Fin, conn: S.Conn, +code: Nat, rs: List<&2, R.Reply>) -> GRun:
+  match d:
+    case S.Fin{+rs1, c1, srv, db}:
+      GRun{rs, conn, gen.count(srv, code, R.errs.zip(rs1, [code], Nil{})), db}
+
+def gen.err.of(m: Maybe<&2, R.Reply>, +code: Nat) -> List<&2, R.Erred>:
+  match m:
+    case Some{R.RError{x}}:
+      [R.Erred{code, x}]
+    case _:
+      Nil{}
+
+def gen.pre.own(+o: R.SessOp, +code: Nat, +conn: S.Conn, +srv: S.Srv, +db: KV.Trie<String>) -> Pre:
+  Pre{code, Some{gen.err.of(S.own_reply(o, S.conn.on(conn), srv, db), code)}}
+
+def gen.held.k(+k: S.Role, +c: R.Cmd, +code: Nat, rs: List<&2, R.Reply>, +conn: S.Conn, +srv: S.Srv, db: KV.Trie<String>) -> GRun:
+  match k:
+    case S.KSess{+o}:
+      +d = db
+      +p = gen.pre.own(o, code, conn, srv, d)
+      gen.done(S.run(conn, srv, B.Mixed{[c], Nil{}}, d), p, rs)
+    case _:
+      gen.held(S.run(S.conn.on(conn), srv, B.Mixed{[c], Nil{}}, db), S.next_conn(False{}, c, conn, srv), code, rs)
+
+def gen.run(held: Bool, +ok: Bool, +k: S.Role, +c: R.Cmd, +code: Nat, rs: List<&2, R.Reply>, +conn: S.Conn, +srv: S.Srv, db: KV.Trie<String>) -> GRun:
+  match held:
+    case True{}:
+      gen.held.k(k, c, code, rs, conn, srv, db)
+    case False{}:
+      gen.done(S.run(conn, srv, B.Mixed{[c], Nil{}}, db), gen.pre(ok, c, code), rs)
+
+# one command, unless a QUIT before it dropped it
+def gen.one(q: Bool, +c: R.Cmd, +code: Nat, rs: List<&2, R.Reply>, +conn: S.Conn, +srv: S.Srv, db: KV.Trie<String>) -> GRun:
+  match q:
+    case True{}:
+      GRun{rs, conn, srv, db}
+    case False{}:
+      +k = S.kind(c)
+      +ok = S.may(k, conn, srv)
+      gen.run(gen.muted(ok, code, conn), ok, k, c, code, rs, conn, srv, db)
+
+def gen.step(c: R.Cmd, +code: Nat, g: GRun) -> GRun:
+  match g:
+    case GRun{rs, +conn, srv, db}:
+      gen.one(S.conn.quit(conn), c, code, rs, conn, srv, db)
+
+def gen.go(cs: List<&2, R.Cmd>, ks: List<&2, Nat>, g: GRun) -> GRun:
+  match cs ks:
+    case Con{c, rest} Con{+k, more}:
+      gen.go(rest, more, gen.step(c, k, g))
+    case _ _:
+      g
+
 # The database actor
 # ------------------
 
 # The actor takes a request, and with it those that came meanwhile
 # (Chan.drain, up to group_max): it runs their batches one after another,
-# in the order they came (S.run: session.bend), and answers them all at
-# once (Chan.send_all). A group is its answers so far, newest first, the
-# server's state and the database. Each batch adds its commands and bytes
-# to the server's counts for INFO, the shell's facts go in the server's
-# state, and a tick takes a sample of the rates.
+# in the order they came, and answers them all at once (Chan.send_all). A
+# batch of database commands only, from a client that may run them, runs
+# the fast way (S.run.plain, as S.run runs it); any other a command at a
+# time, as gen does (Statistics). A group is its answers so far, newest
+# first, the server's state and the database. Each batch adds its calls,
+# errors and bytes to the server's counts for INFO, the shell's facts go
+# in the server's state, and a tick takes a sample of the rates.
 type Run is Data:
   Run{outs: List<&2, Sigma<&2, &2, Chan(Ans), _ => Ans>>, srv: S.Srv, db: KV.Trie<String>}
 
 def group_max() -> U32:
   255
 
-def run_put(outs: List<&2, Sigma<&2, &2, Chan(Ans), _ => Ans>>, back: Chan(Ans), +n: Nat, +inb: Nat, d: S.Fin) -> Run:
-  match d:
-    case S.Fin{rs, cn, srv, db}:
+# a batch's error replies, counted (most batches have none)
+def errs.put(xs: List<&2, R.Erred>, srv: S.Srv) -> S.Srv:
+  match xs:
+    case Nil{}:
+      srv
+    case _:
+      S.srv.errs(srv, xs)
+
+# a batch of one code run the fast way, its replies looked at for errors
+# when they have a '-' (ans.errs)
+def run_put.one(dash: Bool, outs: List<&2, Sigma<&2, &2, Chan(Ans), _ => Ans>>, back: Chan(Ans), a: Ans, +calls: Nat, +run: Nat, +inb: Nat, +outb: Nat, srv: S.Srv, db: KV.Trie<String>) -> Run:
+  match dash:
+    case False{}:
+      Run{(back, a) <> outs, S.srv.ran(srv, calls, run, Nil{}, inb, outb), db}
+    case True{}:
+      +b = a
+      +xs = ans.errs(b, R.run.code(run))
+      Run{(back, b) <> outs, errs.put(xs, S.srv.ran(srv, calls, run, Nil{}, inb, outb)), db}
+
+# a batch run the fast way: its calls counted, and its replies looked at
+# for errors only where a call may have one (R.Tally): those of a batch
+# of one code in its bytes (ans.errs), those of any other as they are,
+# before they are encoded (each call has one reply, in order)
+def run_put(outs: List<&2, Sigma<&2, &2, Chan(Ans), _ => Ans>>, back: Chan(Ans), t: R.Tally, +inb: Nat, d: S.Fin) -> Run:
+  match t d:
+    case R.Tally{+calls, False{}, +run, runs} S.Fin{rs, cn, srv, db}:
       +a = ans_of(rs, cn)
       +outb = ans.len(a)
-      Run{(back, a) <> outs, S.srv.ran(srv, n, inb, outb), db}
+      Run{(back, a) <> outs, S.srv.ran(srv, calls, run, runs, inb, outb), db}
+    case R.Tally{+calls, True{}, +run, Nil{}} S.Fin{rs, cn, srv, db}:
+      +a = ans_of(rs, cn)
+      +outb = ans.len(a)
+      run_put.one(ans.dash(a, outb), outs, back, a, calls, run, inb, outb, srv, db)
+    case R.Tally{+calls, True{}, +run, +runs} S.Fin{+rs, cn, srv, db}:
+      +xs = R.errs.zip(rs, R.codes.runs(runs, Nil{}), Nil{})
+      +a = ans_of(rs, cn)
+      +outb = ans.len(a)
+      Run{(back, a) <> outs, errs.put(xs, S.srv.ran(srv, calls, run, runs, inb, outb)), db}
+
+def run_gen(outs: List<&2, Sigma<&2, &2, Chan(Ans), _ => Ans>>, back: Chan(Ans), +inb: Nat, g: GRun) -> Run:
+  match g:
+    case GRun{rs, conn, srv, db}:
+      +a = ans_of(List.reverse(&2, R.Reply, rs), conn)
+      +outb = ans.len(a)
+      Run{(back, a) <> outs, S.srv.ran(srv, 0n, 0n, Nil{}, inb, outb), db}
+
+def run_plain(ready: Bool, outs: List<&2, Sigma<&2, &2, Chan(Ans), _ => Ans>>, cn: S.Conn, cmds: List<&2, R.Cmd>, +hs: List<&2, U32>, back: Chan(Ans), +tl: U32, +inb: Nat, srv: S.Srv, db: KV.Trie<String>) -> Run:
+  match ready:
+    case True{}:
+      +t = R.tally(tl, inb, hs)
+      run_put(outs, back, t, inb, S.run.plain(True{}, cn, srv, cmds, hs, db))
+    case False{}:
+      run_gen(outs, back, inb, gen.go(cmds, R.codes.of(hs), GRun{Nil{}, cn, srv, db}))
+
+def run_job(job: B.Job, outs: List<&2, Sigma<&2, &2, Chan(Ans), _ => Ans>>, +cn: S.Conn, back: Chan(Ans), +tl: U32, +inb: Nat, +srv: S.Srv, db: KV.Trie<String>) -> Run:
+  match job:
+    case B.Plain{cmds, hs}:
+      run_plain(S.ready(cn, srv), outs, cn, cmds, hs, back, tl, inb, srv, db)
+    case B.Mixed{cmds, +hs}:
+      run_gen(outs, back, inb, gen.go(cmds, R.codes.of(hs), GRun{Nil{}, cn, srv, db}))
 
 def run_req(q: Req, outs: List<&2, Sigma<&2, &2, Chan(Ans), _ => Ans>>, srv: S.Srv, db: KV.Trie<String>) -> Run:
   match q:
-    case Req{cn, job, back, +n, +inb}:
-      run_put(outs, back, n, inb, S.run(cn, srv, job, db))
+    case Req{cn, job, back, +tl, +inb}:
+      run_job(job, outs, cn, back, tl, inb, srv, db)
     case Facts{live}:
       Run{outs, S.srv.live(srv, live), db}
     case Tick{+ms}:
       Run{outs, S.srv.tick(srv, ms), db}
+    case Oops{}:
+      Run{outs, S.srv.erred(srv, "ERR Protocol error"), db}
 
 def run_step(q: Req, g: Run) -> Run:
   match g:
@@ -276,16 +515,16 @@ def conn_more(s: Socket, rest: String, +got: List<&2, String>, have: Nat, need: 
 @unsafe
 def conn_batch(s: Socket, batch: P.Batch, +inb: Nat, +ln: Link, cn: S.Conn) -> IO(Unit):
   match batch:
-    case P.Batch{reqs, +n, rest, err, need}:
-      conn_send(s, ln, cn, reqs, U32.to_nat(n), err, rest, need, inb)
+    case P.Batch{reqs, tl, rest, err, need}:
+      conn_send(s, ln, cn, reqs, tl, err, rest, need, inb)
 
 @unsafe
-def conn_send(s: Socket, +ln: Link, cn: S.Conn, reqs: List<&2, B.Req>, +n: Nat, err: Maybe<&2, String>, rest: String, need: Nat, +inb: Nat) -> IO(Unit):
+def conn_send(s: Socket, +ln: Link, cn: S.Conn, reqs: List<&2, B.Req>, tl: U32, err: Maybe<&2, String>, rest: String, need: Nat, +inb: Nat) -> IO(Unit):
   match reqs:
     case Nil{}:
       conn_err(s, ln, cn, err, rest, need)
     case Con{r, rs}:
-      conn_ask(s, ln, cn, r <> rs, n, err, rest, need, inb)
+      conn_ask(s, ln, cn, r <> rs, tl, err, rest, need, inb)
 
 # whether a batch asks for the shell's facts: INFO, or CONFIG RESETSTAT
 # (which counts the connections from then on); only a batch with a
@@ -310,14 +549,14 @@ def live.wants(+job: B.Job) -> Bool:
   match job:
     case B.Plain{cs, hs}:
       False{}
-    case B.Mixed{+cs}:
+    case B.Mixed{+cs, hs}:
       live.any(cs)
 
 # the batch to the actor, the answer back; first the shell's facts, for
 # a batch that wants them. Each arm sends and waits itself: a step both
 # called would be a segment of its own, entered on every batch.
 @unsafe
-def conn_job(live: Bool, s: Socket, +ln: Link, job: B.Job, cn: S.Conn, +n: Nat, +inb: Nat, err: Maybe<&2, String>, rest: String, need: Nat) -> IO(Unit):
+def conn_job(live: Bool, s: Socket, +ln: Link, job: B.Job, cn: S.Conn, n: U32, +inb: Nat, err: Maybe<&2, String>, rest: String, need: Nat) -> IO(Unit):
   match live ln:
     case False{} Link{db, +back, post, tl}:
       do IO<Unit>:
@@ -333,11 +572,11 @@ def conn_job(live: Bool, s: Socket, +ln: Link, job: B.Job, cn: S.Conn, +n: Nat, 
         conn_ans(s, ln, got, err, rest, need)
 
 # a batch: the parsed requests (newest first) put in order, how many they
-# are, and the bytes they came in
+# are and their marks (R.tl.add), and the bytes they came in
 @unsafe
-def conn_ask(s: Socket, +ln: Link, cn: S.Conn, rs: List<&2, B.Req>, +n: Nat, err: Maybe<&2, String>, rest: String, need: Nat, +inb: Nat) -> IO(Unit):
+def conn_ask(s: Socket, +ln: Link, cn: S.Conn, rs: List<&2, B.Req>, tl: U32, err: Maybe<&2, String>, rest: String, need: Nat, +inb: Nat) -> IO(Unit):
   +job = B.job(B.unzip(rs, Nil{}, Nil{}))
-  conn_job(live.wants(job), s, ln, job, cn, n, inb, err, rest, need)
+  conn_job(live.wants(job), s, ln, job, cn, tl, inb, err, rest, need)
 
 @unsafe
 def conn_ans(s: Socket, +ln: Link, got: Maybe<&1, Ans>, err: Maybe<&2, String>, rest: String, need: Nat) -> IO(Unit):
@@ -384,15 +623,18 @@ def conn_quit.if(quit: Bool, s: Socket, +ln: Link, cn: S.Conn, err: Maybe<&2, St
     case False{}:
       conn_err(s, ln, cn, err, rest, need)
 
-# a protocol error is answered, then the connection closes, as in Redis;
-# without one, the connection reads on
+# a protocol error is answered, and counted among the error replies for
+# INFO, then the connection closes, as in Redis; without one, the
+# connection reads on
 @unsafe
 def conn_err(s: Socket, +ln: Link, cn: S.Conn, err: Maybe<&2, String>, rest: String, need: Nat) -> IO(Unit):
-  match err:
-    case None{}:
+  match ln err:
+    case _ None{}:
       conn_loop(s, rest, Nil{}, 0n, need, ln, cn)
-    case Some{msg}:
-      put_out(s, link.post(ln), "-ERR " ++ msg ++ "\r\n", s2 => Socket.close(s2))
+    case Link{db, back, post, tl} Some{msg}:
+      do IO<Unit>:
+        sent : Bool <- Chan.send(Req, db, Oops{})
+        put_out(s, post, "-ERR " ++ msg ++ "\r\n", s2 => Socket.close(s2))
 
 # Accepting
 # ---------
@@ -785,21 +1027,116 @@ type St is Data:
 type Grp is Data:
   Grp{outs: List<&2, Sigma<&2, &2, Chan(Ans), _ => Ans>>, es: List<&2, R.Cmd>, st: St}
 
-def group_put(outs: List<&2, Sigma<&2, &2, Chan(Ans), _ => Ans>>, es: List<&2, R.Cmd>, back: Chan(Ans), +n: Nat, +inb: Nat, d: S.Logged) -> Grp:
-  match d:
-    case S.Logged{rs, e, cn, srv, db}:
+def group_put.one(dash: Bool, outs: List<&2, Sigma<&2, &2, Chan(Ans), _ => Ans>>, es: List<&2, R.Cmd>, back: Chan(Ans), a: Ans, +calls: Nat, +run: Nat, +inb: Nat, +outb: Nat, srv: S.Srv, db: KV.Trie<String>) -> Grp:
+  match dash:
+    case False{}:
+      Grp{(back, a) <> outs, es, St{S.srv.ran(srv, calls, run, Nil{}, inb, outb), db}}
+    case True{}:
+      +b = a
+      +xs = ans.errs(b, R.run.code(run))
+      Grp{(back, b) <> outs, es, St{errs.put(xs, S.srv.ran(srv, calls, run, Nil{}, inb, outb)), db}}
+
+def group_put(outs: List<&2, Sigma<&2, &2, Chan(Ans), _ => Ans>>, es: List<&2, R.Cmd>, back: Chan(Ans), t: R.Tally, +inb: Nat, d: S.Logged) -> Grp:
+  match t d:
+    case R.Tally{+calls, False{}, +run, runs} S.Logged{rs, e, cn, srv, db}:
       +a = ans_of(rs, cn)
       +outb = ans.len(a)
-      Grp{(back, a) <> outs, List.reverse.go(&2, R.Cmd, e, es), St{S.srv.ran(srv, n, inb, outb), db}}
+      Grp{(back, a) <> outs, List.reverse.go(&2, R.Cmd, e, es), St{S.srv.ran(srv, calls, run, runs, inb, outb), db}}
+    case R.Tally{+calls, True{}, +run, Nil{}} S.Logged{rs, e, cn, srv, db}:
+      +a = ans_of(rs, cn)
+      +outb = ans.len(a)
+      group_put.one(ans.dash(a, outb), outs, List.reverse.go(&2, R.Cmd, e, es), back, a, calls, run, inb, outb, srv, db)
+    case R.Tally{+calls, True{}, +run, +runs} S.Logged{+rs, e, cn, srv, db}:
+      +xs = R.errs.zip(rs, R.codes.runs(runs, Nil{}), Nil{})
+      +a = ans_of(rs, cn)
+      +outb = ans.len(a)
+      Grp{(back, a) <> outs, List.reverse.go(&2, R.Cmd, e, es), St{errs.put(xs, S.srv.ran(srv, calls, run, runs, inb, outb)), db}}
+
+# a batch the general way, a command at a time (gen.go), with the effects
+# of each, put in front of the ones before reversed as a batch's are
+type LRun is Data:
+  LRun{rs: List<&2, R.Reply>, es: List<&2, R.Cmd>, conn: S.Conn, srv: S.Srv, db: KV.Trie<String>}
+
+def lgen.done(d: S.Logged, p: Pre, rs: List<&2, R.Reply>, es: List<&2, R.Cmd>) -> LRun:
+  match d p:
+    case S.Logged{+rs1, e, conn, srv, db} Pre{+code, xs}:
+      +ys = gen.errs(xs, rs1, code)
+      LRun{List.reverse.go(&2, R.Reply, rs1, rs), List.reverse.go(&2, R.Cmd, e, es), conn, gen.count(srv, code, ys), db}
+
+def lgen.held(d: S.Logged, conn: S.Conn, +code: Nat, rs: List<&2, R.Reply>, es: List<&2, R.Cmd>) -> LRun:
+  match d:
+    case S.Logged{+rs1, e, c1, srv, db}:
+      LRun{rs, List.reverse.go(&2, R.Cmd, e, es), conn, gen.count(srv, code, R.errs.zip(rs1, [code], Nil{})), db}
+
+def lgen.held.k(+k: S.Role, +c: R.Cmd, +code: Nat, rs: List<&2, R.Reply>, es: List<&2, R.Cmd>, +conn: S.Conn, +srv: S.Srv, db: KV.Trie<String>) -> LRun:
+  match k:
+    case S.KSess{+o}:
+      +d = db
+      +p = gen.pre.own(o, code, conn, srv, d)
+      lgen.done(S.run_log(conn, srv, B.Mixed{[c], Nil{}}, d), p, rs, es)
+    case _:
+      lgen.held(S.run_log(S.conn.on(conn), srv, B.Mixed{[c], Nil{}}, db), S.next_conn(False{}, c, conn, srv), code, rs, es)
+
+def lgen.run(held: Bool, +ok: Bool, +k: S.Role, +c: R.Cmd, +code: Nat, rs: List<&2, R.Reply>, es: List<&2, R.Cmd>, +conn: S.Conn, +srv: S.Srv, db: KV.Trie<String>) -> LRun:
+  match held:
+    case True{}:
+      lgen.held.k(k, c, code, rs, es, conn, srv, db)
+    case False{}:
+      lgen.done(S.run_log(conn, srv, B.Mixed{[c], Nil{}}, db), gen.pre(ok, c, code), rs, es)
+
+def lgen.one(q: Bool, +c: R.Cmd, +code: Nat, rs: List<&2, R.Reply>, es: List<&2, R.Cmd>, +conn: S.Conn, +srv: S.Srv, db: KV.Trie<String>) -> LRun:
+  match q:
+    case True{}:
+      LRun{rs, es, conn, srv, db}
+    case False{}:
+      +k = S.kind(c)
+      +ok = S.may(k, conn, srv)
+      lgen.run(gen.muted(ok, code, conn), ok, k, c, code, rs, es, conn, srv, db)
+
+def lgen.step(c: R.Cmd, +code: Nat, g: LRun) -> LRun:
+  match g:
+    case LRun{rs, es, +conn, srv, db}:
+      lgen.one(S.conn.quit(conn), c, code, rs, es, conn, srv, db)
+
+def lgen.go(cs: List<&2, R.Cmd>, ks: List<&2, Nat>, g: LRun) -> LRun:
+  match cs ks:
+    case Con{c, rest} Con{+k, more}:
+      lgen.go(rest, more, lgen.step(c, k, g))
+    case _ _:
+      g
+
+def group_gen(outs: List<&2, Sigma<&2, &2, Chan(Ans), _ => Ans>>, back: Chan(Ans), +inb: Nat, g: LRun) -> Grp:
+  match g:
+    case LRun{rs, es, conn, srv, db}:
+      +a = ans_of(List.reverse(&2, R.Reply, rs), conn)
+      +outb = ans.len(a)
+      Grp{(back, a) <> outs, es, St{S.srv.ran(srv, 0n, 0n, Nil{}, inb, outb), db}}
+
+def group_plain(ready: Bool, outs: List<&2, Sigma<&2, &2, Chan(Ans), _ => Ans>>, es: List<&2, R.Cmd>, cn: S.Conn, cmds: List<&2, R.Cmd>, +hs: List<&2, U32>, back: Chan(Ans), +tl: U32, +inb: Nat, srv: S.Srv, db: KV.Trie<String>) -> Grp:
+  match ready:
+    case True{}:
+      +t = R.tally(tl, inb, hs)
+      group_put(outs, es, back, t, inb, S.run_log.plain(True{}, cn, srv, cmds, hs, db))
+    case False{}:
+      group_gen(outs, back, inb, lgen.go(cmds, R.codes.of(hs), LRun{Nil{}, es, cn, srv, db}))
+
+def group_job(job: B.Job, outs: List<&2, Sigma<&2, &2, Chan(Ans), _ => Ans>>, es: List<&2, R.Cmd>, +cn: S.Conn, back: Chan(Ans), +tl: U32, +inb: Nat, +srv: S.Srv, db: KV.Trie<String>) -> Grp:
+  match job:
+    case B.Plain{cmds, hs}:
+      group_plain(S.ready(cn, srv), outs, es, cn, cmds, hs, back, tl, inb, srv, db)
+    case B.Mixed{cmds, +hs}:
+      group_gen(outs, back, inb, lgen.go(cmds, R.codes.of(hs), LRun{Nil{}, es, cn, srv, db}))
 
 def group_req(q: Req, outs: List<&2, Sigma<&2, &2, Chan(Ans), _ => Ans>>, es: List<&2, R.Cmd>, st: St) -> Grp:
   match q st:
-    case Req{cn, job, back, +n, +inb} St{srv, db}:
-      group_put(outs, es, back, n, inb, S.run_log(cn, srv, job, db))
+    case Req{cn, job, back, +tl, +inb} St{srv, db}:
+      group_job(job, outs, es, cn, back, tl, inb, srv, db)
     case Facts{live} St{srv, db}:
       Grp{outs, es, St{S.srv.live(srv, live), db}}
     case Tick{+ms} St{srv, db}:
       Grp{outs, es, St{S.srv.tick(srv, ms), db}}
+    case Oops{} St{srv, db}:
+      Grp{outs, es, St{S.srv.erred(srv, "ERR Protocol error"), db}}
 
 def group_step(q: Req, g: Grp) -> Grp:
   match g:
@@ -951,7 +1288,7 @@ def read_next(f: File, eof: Bool, x: String, got: List<&2, String>) -> IO(File &
 # parser waits for more of it
 def cut_short.of(b: P.Batch) -> Bool:
   match b:
-    case P.Batch{reqs, n, rest, err, need}:
+    case P.Batch{reqs, tl, rest, err, need}:
       Bool.and(List.is_empty(&2, B.Req, reqs), Maybe.is_none(&2, String, err))
 
 def cut_short(s: String) -> Bool:

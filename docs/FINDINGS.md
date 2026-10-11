@@ -1276,8 +1276,8 @@ only the shell can see, the connection that asks INFO (or CONFIG RESETSTAT) read
 and sends to the actor as a message of its own (`Facts`), just before its batch; other
 requests carry only their counts.
 
-Left out until BendKV counts per command (with COMMAND, next): commandstats, errorstats
-and latencystats are there but empty. `tests/info_test.py` checks 31 ways of picking
+Commandstats and errorstats came later (section 3s); latencystats stays empty, since
+BendKV does not time its commands. `tests/info_test.py` checks 31 ways of picking
 sections against Redis (the same sections, the same fields, the same order), the values
 that do not depend on the machine or the moment, the keyspace, and the counts after
 CONFIG RESETSTAT for the same commands on the same connections.
@@ -1391,11 +1391,11 @@ with options for servers that are compatible without being Redis (`--singledb`,
 unit of Redis 7.0.15's `tests/unit` that way, on several instances of the server at
 once, against Redis and against BendKV, and counts only the tests Redis passes: 1,656 of
 the 1,729 that run in this mode (most of the others need `DEBUG`, off by default in
-7.0). BendKV passes 124 (7.5%), and 103 of the 256 in the units of what it has (the
-protocol, connections, the keyspace, strings, counters, introspection). Of the rest,
-867 stop on a command BendKV does not have (FUNCTION LOAD, ZADD, XADD, GEOADD, SADD,
-EXPIRE, MULTI lead), 589 never run because their unit stopped earlier, and 76 fail on
-SET's options, RESP3 or INFO's statistics per command. The unit-by-unit table and the
+7.0). BendKV passed 124 (7.5%), and 103 of the 256 in the units of what it has (the
+protocol, connections, the keyspace, strings, counters, introspection); with the
+statistics per command (section 3s), 127 and 106. Of the rest, 867 stop on a command
+BendKV does not have (FUNCTION LOAD, ZADD, XADD, GEOADD, SADD, EXPIRE, MULTI lead), 589
+never run because their unit stopped earlier, and 73 fail on SET's options or RESP3. The unit-by-unit table and the
 reasons are in [COMPATIBILITY.md](COMPATIBILITY.md).
 
 The suite found one bug in what BendKV has: KEYS hung the server. Its glob tried, for
@@ -1411,6 +1411,104 @@ already (moved into `redis.bend`, where all three reach it): one function with a
 explicit mode, Redis's cut-off for a rest that matches nowhere, and Redis's shortcut for
 `*` alone. The pattern answers at once; `tests/robust_test.py` times it, and the
 differential test draws patterns with classes, ranges, escapes and random bytes.
+
+## 3s. Statistics per command
+
+INFO's commandstats and errorstats count as Redis 7.0.15 counts them. For each command
+and subcommand: `calls`, the calls that ran; `rejected_calls`, the calls refused before
+they ran (a wrong number of arguments by the arity of Redis's command table, a client
+that must authenticate first); `failed_calls`, the calls that ran and answered an error.
+For each error code, the first word of an error reply as Redis's `afterErrorReply` takes
+it, how many replies had it, and `total_error_replies` in the stats section. An unknown
+command or subcommand counts in errorstats only, an error reply counts even when CLIENT
+REPLY holds it back, a protocol error counts, and the commands after a QUIT, which never
+run, do not; `total_commands_processed` is the calls that ran. BendKV does not time its
+commands: `usec` and `usec_per_call` stay 0, and latencystats is empty.
+
+What a request counts as is known where it is parsed: its command and subcommand (from
+its name and first argument), and whether the parser found an error in it, and which.
+The parser writes it as a code (the command's key, a number below 64, times four, plus 0
+for a call that runs, 1 for one refused, 2 for one that fails as it parses) in the high
+byte of the request's hash, of which the hints read only the low 20 bits. It also ors
+each request's mark, the code and its complement (`code × 257 xor 0xFF00`), into the
+word that already counted the batch's requests. When all the requests of a batch have
+one code, the marks have each bit of it once, itself or complemented, and the actor
+counts the batch (one command, as most batches are) from that word in a few operations,
+without a look at its requests; any other batch it counts a hash at a time. A batch's
+run (code and count) goes into the newest run the server holds when it has its code, and
+the runs go into the entries per command, kept last used first, at the cron's tick and
+whenever INFO shows them.
+
+Errors are looked for only where a call may have one: calls the parser refused or
+failed, and INCR, DECR, INCRBY and DECRBY, which meet strings that are not integers. A
+batch of one code answers a line per call (an integer or an error), so its errors are
+its lines that begin with `-`, and a batch whose bytes have no `-` at all (most batches
+of INCR; one `memchr`) has none. A batch of several codes walks its replies before they
+are encoded. A batch with a command of the connection or of the server runs a command at
+a time, each counted as it runs, so an INFO in the batch sees the commands before it.
+
+Two of Redis's rules showed up only when the counts were compared. Redis refuses a call
+(`rejectCommand`) only when it fails the declared arity or authentication, so PING with
+two arguments and MSET with a key and no value, which pass their arity (−1, −3) and fail
+inside the command, count as failed calls: BendKV takes the arities from the JSON its
+COMMAND comes from (`tools/gen_commands.py` writes them into `redis.bend`). And CLIENT
+REPLY ON and RESET answer even while replies are off, so a call held back runs with
+replies on only when it is a command of the database, whose reply its client never gets.
+
+`tests/stats_test.py` runs the same requests on BendKV and Redis after CONFIG RESETSTAT
+and compares commandstats, errorstats and the totals as maps: commands one at a time,
+errors one at a time, pipelines of one command and of several with errors among them, a
+pipeline over 64 KB (more requests than the word can count, so its hashes are walked),
+replies held back by CLIENT REPLY OFF and SKIP, NOAUTH and WRONGPASS, commands after
+QUIT, protocol errors, and random pipelines: 40 checks. Redis's own `info-command` unit
+now passes too (3 tests).
+
+**Cost.** The first version cost +2.9% per GET and +2.8% per INCR. Each row is the next
+step (callgrind, as in `make perfcheck`):
+
+| step | GET | SET | INCR |
+|---|---:|---:|---:|
+| before (section 3r) | 3,039 | 3,619 | 3,926 |
+| the code in the parser's result, runs counted in the parser | 3,126 | 3,699 | 4,037 |
+| codes in the hash's high byte, the actor walking the hashes | 3,146 | 3,717 | 4,053 |
+| marks or-ed by the parser into the batch's count | 3,075 | 3,653 | 3,997 |
+| the account in word operations; INCR's bytes looked at, not its replies | 3,071 | 3,644 | 3,965 |
+| a batch's run as one number, not a list | 3,067 | 3,639 | 3,959 |
+| the database unshared on the general path | 3,055 | 3,639 | 3,957 |
+| the mark in two operations fewer; INCR's check before the account | 3,053 | 3,637 | 3,947 |
+
+What remains, ~+0.5% each: ~12 instructions per request in the parser's loop (the mark,
+and the register it keeps busy), ~2 to write the code, ~10 in the actor (the batch's
+run and count; for INCR, the `memchr`). Without a pipeline, where a batch's cost falls on
+each request, GET goes from 8,605 to 8,699 (+1.1%), SET from 9,133 to 9,273 (+1.5%)
+and INCR from 9,447 to 9,671 (+2.4%): ~95–140 instructions a batch, ~60 of them the
+account's update (the run, the calls, in counts of two `Nat`s) and the rest the actor's
+frames, which now carry the batch's word and tally; INCR's look at its bytes is ~100
+more. What the steps between taught:
+
+- Every word the parser's loop carries costs about 15 instructions per request: the mark
+  as a field of the parse result and a parameter of the loop cost 31; or-ed into the word
+  that already counted, 12.
+- A borrowed walk of a batch's replies costs about 30 instructions per reply (`slot_keep`,
+  the compare, the step): 31 per INCR. The encoded bytes are one buffer, and `memchr`
+  over them costs 2.
+- A list held both by the encoder and for a look after it is shared: the encoder reads
+  it through reference counts and the last drop walks it (INCR 4,647).
+- A run of a held-back call before its run, on a borrowed database, to see its reply,
+  made the database a shared value for the whole program: the compiler's ownership
+  analysis then took it owned in INFO's keyspace and `KV.size`, the session kept it on
+  every CONFIG GET, and the database's root stayed wrapped in a reference count until
+  the next write. In a run of GETs (redis-benchmark sends CONFIG GET as it starts) every
+  hint and every lookup followed the redirect: 9 instructions per GET in the hints,
+  three per hash and pass (`mov; mov; shr $24`). Comparing callgrind's counts per
+  instruction of the same machine code in both builds found it. A held-back call runs
+  once now.
+- The newest run as one number saves a list cell taken and freed on every batch (~4 per
+  request under valgrind, whose slow clock lets more batches pile up between ticks).
+
+`make perfcheck`: GET 3,053, SET 3,637, INCR 3,947, +2.7%, +2.0% and +3.0% over the
+baseline of 2,972, 3,566 and 3,833, which has stood since before INFO; it is rewritten to
+the new counts (`UPDATE=1`), so that the next 3% is measured from here.
 
 ## 4. Where a request's time goes, and hiding the memory waits
 

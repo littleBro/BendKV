@@ -913,6 +913,494 @@ def parse(args: List<&2, String>) -> Cmd:
     case Con{name, rest}:
       parse_named(name, rest)
 
+# Statistics
+# ----------
+# INFO commandstats counts each command and subcommand by its name, as the
+# client called it (INCR and INCRBY apart, though both parse to IncrBy).
+# Its key here is a number below 64: a command's number (cmd_id) up to 21,
+# then TYPE and the commands of the connection and of the server (22 to
+# 32), then the subcommands of CLIENT (33 to 42), FUNCTION (43, 44), CONFIG
+# (45 to 49) and COMMAND (50 to 56); 0 is an unknown command or
+# subcommand, which Redis counts nowhere but in errorstats. With the key
+# comes what a call counts as (stat.code: 4 times the key plus that): 0
+# when it runs; 1 when it is refused before it runs, as Redis refuses an
+# unknown command or subcommand and a number of arguments its arity does
+# not allow; 2 when it fails on an error that BendKV's parser finds and
+# Redis's command finds as it runs (a syntax error, a value that is not
+# an integer), which is a call that failed (stat.class). The code rides
+# in the high byte of the request's hash (stat.hash), which the hints of
+# batch.bend do not read.
+
+def stat.sub(base: Nat, +sub: Nat) -> Nat:
+  Bool.pick(Nat, Nat.is_eq(sub, 0n), 0n, Nat.add(base, sub))
+
+def stat.sub.of(id: Nat, +up: String) -> Nat:
+  match id:
+    case 45n:
+      stat.sub(32n, client_id(up, String.length(up)))
+    case 46n:
+      stat.sub(42n, function_id(up, String.length(up)))
+    case 47n:
+      stat.sub(44n, config_id(up, String.length(up)))
+    case _:
+      stat.sub(49n, command_id(up, String.length(up)))
+
+# a container (CLIENT, FUNCTION, CONFIG, COMMAND) by its first argument;
+# alone, the container itself (top)
+def stat.key.args(top: Nat, id: Nat, +args: List<&2, String>) -> Nat:
+  match args:
+    case Nil{}:
+      top
+    case Con{+a, rest}:
+      stat.sub.of(id, String.to_upper(a))
+
+# the key of a command of number id with these arguments
+def stat.key(+id: Nat, +args: List<&2, String>) -> Nat:
+  match id:
+    case 25n:
+      22n
+    case 45n:
+      stat.key.args(28n, 45n, args)
+    case 46n:
+      stat.key.args(29n, 46n, args)
+    case 47n:
+      stat.key.args(30n, 47n, args)
+    case 49n:
+      stat.key.args(32n, 49n, args)
+    case _:
+      Bool.pick(Nat, Nat.is_le(40n, id), Nat.sub(id, 17n), id)
+
+# Redis's arity of the command or subcommand of a key: 2a when it takes
+# exactly a arguments (its name included), 2a + 1 when it takes a or more
+# BEGIN gen_commands: arity
+def stat.arity(+key: Nat) -> Nat:
+  match key:
+    case 1n:
+      3n
+    case 2n:
+      4n
+    case 3n:
+      4n
+    case 4n:
+      7n
+    case 5n:
+      6n
+    case 6n:
+      6n
+    case 7n:
+      5n
+    case 8n:
+      5n
+    case 9n:
+      5n
+    case 10n:
+      4n
+    case 11n:
+      4n
+    case 12n:
+      6n
+    case 13n:
+      6n
+    case 14n:
+      6n
+    case 15n:
+      4n
+    case 16n:
+      5n
+    case 17n:
+      7n
+    case 18n:
+      2n
+    case 19n:
+      3n
+    case 20n:
+      3n
+    case 21n:
+      4n
+    case 22n:
+      4n
+    case 23n:
+      4n
+    case 24n:
+      3n
+    case 25n:
+      5n
+    case 26n:
+      3n
+    case 27n:
+      2n
+    case 28n:
+      5n
+    case 29n:
+      5n
+    case 30n:
+      5n
+    case 31n:
+      3n
+    case 32n:
+      3n
+    case 33n:
+      4n
+    case 34n:
+      4n
+    case 35n:
+      6n
+    case 36n:
+      4n
+    case 37n:
+      6n
+    case 38n:
+      6n
+    case 39n:
+      7n
+    case 40n:
+      4n
+    case 41n:
+      6n
+    case 42n:
+      4n
+    case 43n:
+      5n
+    case 44n:
+      4n
+    case 45n:
+      7n
+    case 46n:
+      9n
+    case 47n:
+      4n
+    case 48n:
+      4n
+    case 49n:
+      4n
+    case 50n:
+      5n
+    case 51n:
+      5n
+    case 52n:
+      5n
+    case 53n:
+      4n
+    case 54n:
+      4n
+    case 55n:
+      9n
+    case 56n:
+      9n
+    case _:
+      1n
+# END gen_commands: arity
+
+# whether argc arguments (the name included) pass Redis's check of the
+# arity of the command or subcommand of key
+def stat.arity.ok(+key: Nat, +argc: Nat) -> Bool:
+  +a = stat.arity(key)
+  +n = Nat.div(a, 2n)
+  Bool.pick(Bool, Nat.is_eq(Nat.mod(a, 2n), 0n), Nat.is_eq(argc, n), Nat.is_le(n, argc))
+
+def stat.refused(+m: String) -> Bool:
+  Bool.or(String.starts_with(m, "ERR unknown command '"), String.starts_with(m, "ERR unknown subcommand '"))
+
+# what an error the parser found counts as: a wrong number of arguments
+# is refused when Redis's check of the arity refuses it, and fails as the
+# command runs otherwise (PING with two arguments, MSET with a key and no
+# value: the command checks them itself); an unknown command or
+# subcommand is refused; any other error fails
+def stat.class.args(arity: Bool, refused: Bool, +key: Nat, +args: List<&2, String>) -> Nat:
+  match arity refused:
+    case True{} _:
+      Bool.pick(Nat, stat.arity.ok(key, Nat.add(List.length(&2, String, args), 1n)), 2n, 1n)
+    case False{} True{}:
+      1n
+    case False{} False{}:
+      2n
+
+def stat.class.err(+r: Reply, +key: Nat, +args: List<&2, String>) -> Nat:
+  match r:
+    case RError{+m}:
+      stat.class.args(String.starts_with(m, "ERR wrong number of arguments for "), stat.refused(m), key, args)
+    case _:
+      2n
+
+# what a parsed command of key with arguments args counts as: an error
+# the parser found (Bad, and a session command's SBad) is refused or
+# failed; anything else runs
+def stat.class(+c: Cmd, +key: Nat, +args: List<&2, String>) -> Nat:
+  match c:
+    case Bad{+r}:
+      stat.class.err(r, key, args)
+    case Own{SBad{+r}}:
+      stat.class.err(r, key, args)
+    case _:
+      0n
+
+def stat.code(+key: Nat, +class: Nat) -> Nat:
+  Nat.add(Nat.mul(key, 4n), class)
+
+# a hint's hash with code in its high byte
+def stat.hash(+h: U32, +code: Nat) -> U32:
+  U32.add(U32.and(h, 16777215), U32.mul(U32.from_nat(code), 16777216))
+
+# the code in a hash's high byte
+def code.of(+h: U32) -> Nat:
+  U32.to_nat(U32.shrn(h, 24n))
+
+# A batch's calls are counted as runs of one code each: a run is
+# code * 2^32 + how many calls in a row have it.
+def run.top() -> Nat:
+  Nat.mul(65536n, 65536n)
+
+def run.code(+r: Nat) -> Nat:
+  Nat.div(r, run.top())
+
+def run.n(+r: Nat) -> Nat:
+  Nat.mod(r, run.top())
+
+def run.of(+code: Nat, +n: Nat) -> Nat:
+  Nat.add(Nat.mul(code, run.top()), n)
+
+# the calls of n of code k that ran (0 and 2; key 0 is never one)
+def code.calls(+k: Nat, +n: Nat) -> Nat:
+  Bool.pick(Nat, Nat.is_eq(Nat.mod(k, 4n), 1n), 0n, n)
+
+# whether replies of calls of code k need a look for errors: calls
+# refused or failed by the parser, or calls that can fail as they run
+# (INCR, DECR, INCRBY and DECRBY meet values that are not integers, and
+# overflows)
+def code.risky(+k: Nat) -> Bool:
+  +key = Nat.div(k, 4n)
+  Bool.or(Nat.is_lt(0n, Nat.mod(k, 4n)), Bool.and(Nat.is_le(10n, key), Nat.is_le(key, 13n)))
+
+# A code's mark: the code, and its complement in the byte above (the code
+# times 257 is the code twice; the xor complements the upper one). The
+# marks of a batch's requests or-ed together have each bit of a code
+# once, itself or complemented, exactly when all of them have that code:
+# a batch of one command, most of them, is counted without a look at its
+# requests. The parser keeps a batch's count and marks in one word (tl):
+# the count in its high 16 bits, and the marks in its low 16.
+def tl.add(tl: U32, +h: U32) -> U32:
+  U32.or(U32.add(tl, 65536), U32.xor(U32.mul(U32.shrn(h, 24n), 257), 65280))
+
+# What a batch that runs the fast way counts: the calls that ran, whether
+# its replies need a look for errors, and its runs: the one run of a
+# batch of one code (run; 0 for none), or the runs of any other, newest
+# first (runs), which is taken a hash at a time.
+type Tally is Data:
+  Tally{calls: Nat, risky: Bool, run: Nat, runs: List<&2, Nat>}
+
+# a call of code k after the runs rs: one more in the first run when it
+# has k, else a run of its own
+def runs.add.if(same: Bool, rs: List<&2, Nat>, +k: Nat) -> List<&2, Nat>:
+  match same rs:
+    case True{} Con{r, rest}:
+      Nat.add(r, 1n) <> rest
+    case _ _:
+      run.of(k, 1n) <> rs
+
+def runs.add(+rs: List<&2, Nat>, +k: Nat) -> List<&2, Nat>:
+  match rs:
+    case Con{+r, rest}:
+      runs.add.if(Nat.is_eq(run.code(r), k), rs, k)
+    case Nil{}:
+      [run.of(k, 1n)]
+
+def tally.step(t: Tally, +k: Nat) -> Tally:
+  match t:
+    case Tally{calls, risky, r, rs}:
+      Tally{Nat.add(calls, code.calls(k, 1n)), Bool.or(risky, code.risky(k)), r, runs.add(rs, k)}
+
+def tally.each(+hs: List<&2, U32>, t: Tally) -> Tally:
+  match hs:
+    case Nil{}:
+      t
+    case Con{+h, +rest}:
+      tally.each(rest, tally.step(t, code.of(h)))
+
+# A batch of one code k (tl's low byte), n calls (its high 16 bits), is
+# counted as code.calls and code.risky count, in a word's operations:
+# with c its class, n calls ran unless c is 1 (((c xor 1) + 3) / 4 is 1,
+# 0 and 1 for c of 0, 1 and 2); its replies need a look when c is not 0
+# or its key (k / 4) is 10 to 13. It is one only when tl counts all its
+# requests: when it came in fewer than 65536 bytes, it has 32768 at most
+# (the tail of a request before them, then two bytes or more each).
+def tally.if(one: Bool, small: Bool, +tl: U32, +hs: List<&2, U32>) -> Tally:
+  match one small:
+    case True{} True{}:
+      +k = U32.and(tl, 255)
+      +n = U32.shrn(tl, 16n)
+      +c = U32.and(tl, 3)
+      Tally{U32.to_nat(U32.mul(n, U32.shrn(U32.add(U32.xor(c, 1), 3), 2n))), Bool.or(U32.is_ne(c, 0), U32.is_lt(U32.sub(U32.shrn(k, 2n), 10), 4)), run.of(U32.to_nat(k), U32.to_nat(n)), Nil{}}
+    case _ _:
+      tally.each(hs, Tally{0n, False{}, 0n, Nil{}})
+
+# what a batch counts, from its count and marks (tl), the bytes it came in
+# and its hashes: its marks have one code when their low byte and the
+# byte above share no bit
+def tally(+tl: U32, +inb: Nat, +hs: List<&2, U32>) -> Tally:
+  tally.if(U32.is_eq(U32.and(U32.and(tl, U32.shrn(tl, 8n)), 255), 0), Nat.is_lt(inb, 65536n), tl, hs)
+
+# the codes of a batch's calls, from its hashes, in order
+def codes.of(+hs: List<&2, U32>) -> List<&2, Nat>:
+  match hs:
+    case Nil{}:
+      Nil{}
+    case Con{+h, +rest}:
+      code.of(h) <> codes.of(rest)
+
+# the codes of the calls of runs (newest first), one each, in order,
+# before acc
+def codes.rep(n: Nat, +k: Nat, acc: List<&2, Nat>) -> List<&2, Nat>:
+  match n:
+    case 0n:
+      acc
+    case 1n+m:
+      codes.rep(m, k, k <> acc)
+
+def codes.runs(+rs: List<&2, Nat>, acc: List<&2, Nat>) -> List<&2, Nat>:
+  match rs:
+    case Nil{}:
+      acc
+    case Con{+r, +rest}:
+      codes.runs(rest, codes.rep(run.n(r), run.code(r), acc))
+
+# an error reply, and the code of the call that gave it
+type Erred is Data:
+  Erred{code: Nat, msg: String}
+
+def err.put(+r: Reply, +k: Nat, acc: List<&2, Erred>) -> List<&2, Erred>:
+  match r:
+    case RError{+m}:
+      Erred{k, m} <> acc
+    case _:
+      acc
+
+# the error replies among replies, each with the code of its call (ks, in
+# the same order)
+def errs.zip(+rs: List<&2, Reply>, ks: List<&2, Nat>, acc: List<&2, Erred>) -> List<&2, Erred>:
+  match rs ks:
+    case Con{+r, +rest} Con{+k, more}:
+      errs.zip(rest, more, err.put(r, k, acc))
+    case _ _:
+      acc
+
+# the name INFO gives a key (as COMMAND names it); "" for none
+def stat.name(+key: Nat) -> String:
+  match key:
+    case 1n:
+      "ping"
+    case 2n:
+      "echo"
+    case 3n:
+      "get"
+    case 4n:
+      "set"
+    case 5n:
+      "setnx"
+    case 6n:
+      "getset"
+    case 7n:
+      "del"
+    case 8n:
+      "unlink"
+    case 9n:
+      "exists"
+    case 10n:
+      "incr"
+    case 11n:
+      "decr"
+    case 12n:
+      "incrby"
+    case 13n:
+      "decrby"
+    case 14n:
+      "append"
+    case 15n:
+      "strlen"
+    case 16n:
+      "mget"
+    case 17n:
+      "mset"
+    case 18n:
+      "dbsize"
+    case 19n:
+      "flushall"
+    case 20n:
+      "flushdb"
+    case 21n:
+      "keys"
+    case 22n:
+      "type"
+    case 23n:
+      "select"
+    case 24n:
+      "hello"
+    case 25n:
+      "auth"
+    case 26n:
+      "quit"
+    case 27n:
+      "reset"
+    case 28n:
+      "client"
+    case 29n:
+      "function"
+    case 30n:
+      "config"
+    case 31n:
+      "info"
+    case 32n:
+      "command"
+    case 33n:
+      "client|id"
+    case 34n:
+      "client|help"
+    case 35n:
+      "client|reply"
+    case 36n:
+      "client|getname"
+    case 37n:
+      "client|setname"
+    case 38n:
+      "client|caching"
+    case 39n:
+      "client|unblock"
+    case 40n:
+      "client|getredir"
+    case 41n:
+      "client|no-evict"
+    case 42n:
+      "client|trackinginfo"
+    case 43n:
+      "function|flush"
+    case 44n:
+      "function|help"
+    case 45n:
+      "config|get"
+    case 46n:
+      "config|set"
+    case 47n:
+      "config|resetstat"
+    case 48n:
+      "config|rewrite"
+    case 49n:
+      "config|help"
+    case 50n:
+      "command|info"
+    case 51n:
+      "command|docs"
+    case 52n:
+      "command|list"
+    case 53n:
+      "command|help"
+    case 54n:
+      "command|count"
+    case 55n:
+      "command|getkeys"
+    case 56n:
+      "command|getkeysandflags"
+    case _:
+      ""
+
 # ASCII lower case, as C's tolower
 def byte.lower(+x: U32) -> U32:
   U32.add(x, U32.mul(Bool.to_u32(Bool.and(U32.is_ge(x, 65), U32.is_le(x, 90))), 32))
