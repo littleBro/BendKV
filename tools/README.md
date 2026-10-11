@@ -10,6 +10,8 @@ and, for profiles, `valgrind`.
 | tool | what it does |
 |---|---|
 | `gen_trie.py` | writes the 16-way parts of `src/map.bend` and `proof/PROOF.bend` (between `BEGIN gen_trie` and `END gen_trie`); `--check` fails if one is out of date |
+| `gen_config.py` | writes the table of parameters in `src/config.bend` from `data/redis-configs.json`, the facts of Redis 7.0.15's own table (`--extract ../redis` reads them from Redis's `src/config.c`); `--check` fails if it is out of date |
+| `gen_commands.py` | writes the table of commands in `src/command.bend` from `data/redis-commands.json`, Redis 7.0.15's descriptions of BendKV's commands (`--extract` starts a `redis-server` and asks it COMMAND INFO, COMMAND DOCS and ACL CAT); `--check` fails if it is out of date |
 | `bench_pairs.sh` | paired throughput runs of several servers (and Redis) on fresh processes, with the server's CPU time per request; `PIPE`, `CLIENTS`, `SCPU`, `CCPU` and `SARGS` change the load and the pinning |
 | `pair_ratios.py` | medians and geometric means of per-trial ratios from `bench_pairs.sh` (or `memtier_hits.sh`), against Redis or any variant; `--cpu` for CPU per request. Builds named `NAME_s1`, `NAME_s2`, ... count as one variant `NAME` |
 | `layouts.sh` | builds one generated C file once per seed, each with its functions in a different shuffled order (`NAME_s1`, `NAME_s2`, ...), so that a variant is timed over several code layouts rather than one |

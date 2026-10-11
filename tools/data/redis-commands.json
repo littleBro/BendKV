@@ -1,0 +1,3971 @@
+{
+ "categories": [
+  "keyspace",
+  "read",
+  "write",
+  "set",
+  "sortedset",
+  "list",
+  "hash",
+  "string",
+  "bitmap",
+  "hyperloglog",
+  "geo",
+  "stream",
+  "pubsub",
+  "admin",
+  "fast",
+  "slow",
+  "blocking",
+  "dangerous",
+  "connection",
+  "transaction",
+  "scripting"
+ ],
+ "commands": {
+  "append": {
+   "docs": [
+    "summary",
+    "Append a value to a key",
+    "since",
+    "2.0.0",
+    "group",
+    "string",
+    "complexity",
+    "O(1). The amortized time complexity is O(1) assuming the appended value is small and the already present value is of any size, since the dynamic string library used by Redis will double the free space available on every reallocation.",
+    "arguments",
+    [
+     [
+      "name",
+      "key",
+      "type",
+      "key",
+      "key_spec_index",
+      0
+     ],
+     [
+      "name",
+      "value",
+      "type",
+      "string"
+     ]
+    ]
+   ],
+   "info": [
+    "append",
+    3,
+    [
+     {
+      "+": "write"
+     },
+     {
+      "+": "denyoom"
+     },
+     {
+      "+": "fast"
+     }
+    ],
+    1,
+    1,
+    1,
+    [
+     {
+      "+": "@write"
+     },
+     {
+      "+": "@string"
+     },
+     {
+      "+": "@fast"
+     }
+    ],
+    [],
+    [
+     [
+      "flags",
+      [
+       {
+        "+": "RW"
+       },
+       {
+        "+": "insert"
+       }
+      ],
+      "begin_search",
+      [
+       "type",
+       "index",
+       "spec",
+       [
+        "index",
+        1
+       ]
+      ],
+      "find_keys",
+      [
+       "type",
+       "range",
+       "spec",
+       [
+        "lastkey",
+        0,
+        "keystep",
+        1,
+        "limit",
+        0
+       ]
+      ]
+     ]
+    ],
+    []
+   ]
+  },
+  "auth": {
+   "docs": [
+    "summary",
+    "Authenticate to the server",
+    "since",
+    "1.0.0",
+    "group",
+    "connection",
+    "complexity",
+    "O(N) where N is the number of passwords defined for the user",
+    "history",
+    [
+     [
+      "6.0.0",
+      "Added ACL style (username and password)."
+     ]
+    ],
+    "arguments",
+    [
+     [
+      "name",
+      "username",
+      "type",
+      "string",
+      "since",
+      "6.0.0",
+      "flags",
+      [
+       {
+        "+": "optional"
+       }
+      ]
+     ],
+     [
+      "name",
+      "password",
+      "type",
+      "string"
+     ]
+    ]
+   ],
+   "info": [
+    "auth",
+    -2,
+    [
+     {
+      "+": "noscript"
+     },
+     {
+      "+": "loading"
+     },
+     {
+      "+": "stale"
+     },
+     {
+      "+": "fast"
+     },
+     {
+      "+": "no_auth"
+     },
+     {
+      "+": "allow_busy"
+     }
+    ],
+    0,
+    0,
+    0,
+    [
+     {
+      "+": "@fast"
+     },
+     {
+      "+": "@connection"
+     }
+    ],
+    [],
+    [],
+    []
+   ]
+  },
+  "client": {
+   "docs": [
+    "summary",
+    "A container for client connection commands",
+    "since",
+    "2.4.0",
+    "group",
+    "connection",
+    "complexity",
+    "Depends on subcommand.",
+    "subcommands",
+    [
+     "client|caching",
+     [
+      "summary",
+      "Instruct the server about tracking or not keys in the next request",
+      "since",
+      "6.0.0",
+      "group",
+      "connection",
+      "complexity",
+      "O(1)",
+      "arguments",
+      [
+       [
+        "name",
+        "mode",
+        "type",
+        "oneof",
+        "arguments",
+        [
+         [
+          "name",
+          "yes",
+          "type",
+          "pure-token",
+          "token",
+          "YES"
+         ],
+         [
+          "name",
+          "no",
+          "type",
+          "pure-token",
+          "token",
+          "NO"
+         ]
+        ]
+       ]
+      ]
+     ],
+     "client|getname",
+     [
+      "summary",
+      "Get the current connection name",
+      "since",
+      "2.6.9",
+      "group",
+      "connection",
+      "complexity",
+      "O(1)"
+     ],
+     "client|getredir",
+     [
+      "summary",
+      "Get tracking notifications redirection client ID if any",
+      "since",
+      "6.0.0",
+      "group",
+      "connection",
+      "complexity",
+      "O(1)"
+     ],
+     "client|help",
+     [
+      "summary",
+      "Show helpful text about the different subcommands",
+      "since",
+      "5.0.0",
+      "group",
+      "connection",
+      "complexity",
+      "O(1)"
+     ],
+     "client|id",
+     [
+      "summary",
+      "Returns the client ID for the current connection",
+      "since",
+      "5.0.0",
+      "group",
+      "connection",
+      "complexity",
+      "O(1)"
+     ],
+     "client|no-evict",
+     [
+      "summary",
+      "Set client eviction mode for the current connection",
+      "since",
+      "7.0.0",
+      "group",
+      "connection",
+      "complexity",
+      "O(1)",
+      "arguments",
+      [
+       [
+        "name",
+        "enabled",
+        "type",
+        "oneof",
+        "arguments",
+        [
+         [
+          "name",
+          "on",
+          "type",
+          "pure-token",
+          "token",
+          "ON"
+         ],
+         [
+          "name",
+          "off",
+          "type",
+          "pure-token",
+          "token",
+          "OFF"
+         ]
+        ]
+       ]
+      ]
+     ],
+     "client|reply",
+     [
+      "summary",
+      "Instruct the server whether to reply to commands",
+      "since",
+      "3.2.0",
+      "group",
+      "connection",
+      "complexity",
+      "O(1)",
+      "arguments",
+      [
+       [
+        "name",
+        "on_off_skip",
+        "type",
+        "oneof",
+        "arguments",
+        [
+         [
+          "name",
+          "on",
+          "type",
+          "pure-token",
+          "token",
+          "ON"
+         ],
+         [
+          "name",
+          "off",
+          "type",
+          "pure-token",
+          "token",
+          "OFF"
+         ],
+         [
+          "name",
+          "skip",
+          "type",
+          "pure-token",
+          "token",
+          "SKIP"
+         ]
+        ]
+       ]
+      ]
+     ],
+     "client|setname",
+     [
+      "summary",
+      "Set the current connection name",
+      "since",
+      "2.6.9",
+      "group",
+      "connection",
+      "complexity",
+      "O(1)",
+      "arguments",
+      [
+       [
+        "name",
+        "connection-name",
+        "type",
+        "string"
+       ]
+      ]
+     ],
+     "client|trackinginfo",
+     [
+      "summary",
+      "Return information about server assisted client side caching for the current connection",
+      "since",
+      "6.2.0",
+      "group",
+      "connection",
+      "complexity",
+      "O(1)"
+     ],
+     "client|unblock",
+     [
+      "summary",
+      "Unblock a client blocked in a blocking command from a different connection",
+      "since",
+      "5.0.0",
+      "group",
+      "connection",
+      "complexity",
+      "O(log N) where N is the number of client connections",
+      "arguments",
+      [
+       [
+        "name",
+        "client-id",
+        "type",
+        "integer"
+       ],
+       [
+        "name",
+        "timeout_error",
+        "type",
+        "oneof",
+        "flags",
+        [
+         {
+          "+": "optional"
+         }
+        ],
+        "arguments",
+        [
+         [
+          "name",
+          "timeout",
+          "type",
+          "pure-token",
+          "token",
+          "TIMEOUT"
+         ],
+         [
+          "name",
+          "error",
+          "type",
+          "pure-token",
+          "token",
+          "ERROR"
+         ]
+        ]
+       ]
+      ]
+     ]
+    ]
+   ],
+   "info": [
+    "client",
+    -2,
+    [],
+    0,
+    0,
+    0,
+    [
+     {
+      "+": "@slow"
+     }
+    ],
+    [],
+    [],
+    [
+     [
+      "client|caching",
+      3,
+      [
+       {
+        "+": "noscript"
+       },
+       {
+        "+": "loading"
+       },
+       {
+        "+": "stale"
+       }
+      ],
+      0,
+      0,
+      0,
+      [
+       {
+        "+": "@slow"
+       },
+       {
+        "+": "@connection"
+       }
+      ],
+      [],
+      [],
+      []
+     ],
+     [
+      "client|getname",
+      2,
+      [
+       {
+        "+": "noscript"
+       },
+       {
+        "+": "loading"
+       },
+       {
+        "+": "stale"
+       }
+      ],
+      0,
+      0,
+      0,
+      [
+       {
+        "+": "@slow"
+       },
+       {
+        "+": "@connection"
+       }
+      ],
+      [],
+      [],
+      []
+     ],
+     [
+      "client|getredir",
+      2,
+      [
+       {
+        "+": "noscript"
+       },
+       {
+        "+": "loading"
+       },
+       {
+        "+": "stale"
+       }
+      ],
+      0,
+      0,
+      0,
+      [
+       {
+        "+": "@slow"
+       },
+       {
+        "+": "@connection"
+       }
+      ],
+      [],
+      [],
+      []
+     ],
+     [
+      "client|help",
+      2,
+      [
+       {
+        "+": "loading"
+       },
+       {
+        "+": "stale"
+       }
+      ],
+      0,
+      0,
+      0,
+      [
+       {
+        "+": "@slow"
+       },
+       {
+        "+": "@connection"
+       }
+      ],
+      [],
+      [],
+      []
+     ],
+     [
+      "client|id",
+      2,
+      [
+       {
+        "+": "noscript"
+       },
+       {
+        "+": "loading"
+       },
+       {
+        "+": "stale"
+       }
+      ],
+      0,
+      0,
+      0,
+      [
+       {
+        "+": "@slow"
+       },
+       {
+        "+": "@connection"
+       }
+      ],
+      [],
+      [],
+      []
+     ],
+     [
+      "client|no-evict",
+      3,
+      [
+       {
+        "+": "admin"
+       },
+       {
+        "+": "noscript"
+       },
+       {
+        "+": "loading"
+       },
+       {
+        "+": "stale"
+       }
+      ],
+      0,
+      0,
+      0,
+      [
+       {
+        "+": "@admin"
+       },
+       {
+        "+": "@slow"
+       },
+       {
+        "+": "@dangerous"
+       },
+       {
+        "+": "@connection"
+       }
+      ],
+      [],
+      [],
+      []
+     ],
+     [
+      "client|reply",
+      3,
+      [
+       {
+        "+": "noscript"
+       },
+       {
+        "+": "loading"
+       },
+       {
+        "+": "stale"
+       }
+      ],
+      0,
+      0,
+      0,
+      [
+       {
+        "+": "@slow"
+       },
+       {
+        "+": "@connection"
+       }
+      ],
+      [],
+      [],
+      []
+     ],
+     [
+      "client|setname",
+      3,
+      [
+       {
+        "+": "noscript"
+       },
+       {
+        "+": "loading"
+       },
+       {
+        "+": "stale"
+       }
+      ],
+      0,
+      0,
+      0,
+      [
+       {
+        "+": "@slow"
+       },
+       {
+        "+": "@connection"
+       }
+      ],
+      [],
+      [],
+      []
+     ],
+     [
+      "client|trackinginfo",
+      2,
+      [
+       {
+        "+": "noscript"
+       },
+       {
+        "+": "loading"
+       },
+       {
+        "+": "stale"
+       }
+      ],
+      0,
+      0,
+      0,
+      [
+       {
+        "+": "@slow"
+       },
+       {
+        "+": "@connection"
+       }
+      ],
+      [],
+      [],
+      []
+     ],
+     [
+      "client|unblock",
+      -3,
+      [
+       {
+        "+": "admin"
+       },
+       {
+        "+": "noscript"
+       },
+       {
+        "+": "loading"
+       },
+       {
+        "+": "stale"
+       }
+      ],
+      0,
+      0,
+      0,
+      [
+       {
+        "+": "@admin"
+       },
+       {
+        "+": "@slow"
+       },
+       {
+        "+": "@dangerous"
+       },
+       {
+        "+": "@connection"
+       }
+      ],
+      [],
+      [],
+      []
+     ]
+    ]
+   ]
+  },
+  "command": {
+   "docs": [
+    "summary",
+    "Get array of Redis command details",
+    "since",
+    "2.8.13",
+    "group",
+    "server",
+    "complexity",
+    "O(N) where N is the total number of Redis commands",
+    "subcommands",
+    [
+     "command|count",
+     [
+      "summary",
+      "Get total number of Redis commands",
+      "since",
+      "2.8.13",
+      "group",
+      "server",
+      "complexity",
+      "O(1)"
+     ],
+     "command|docs",
+     [
+      "summary",
+      "Get array of specific Redis command documentation",
+      "since",
+      "7.0.0",
+      "group",
+      "server",
+      "complexity",
+      "O(N) where N is the number of commands to look up",
+      "arguments",
+      [
+       [
+        "name",
+        "command-name",
+        "type",
+        "string",
+        "flags",
+        [
+         {
+          "+": "optional"
+         },
+         {
+          "+": "multiple"
+         }
+        ]
+       ]
+      ]
+     ],
+     "command|getkeys",
+     [
+      "summary",
+      "Extract keys given a full Redis command",
+      "since",
+      "2.8.13",
+      "group",
+      "server",
+      "complexity",
+      "O(N) where N is the number of arguments to the command"
+     ],
+     "command|getkeysandflags",
+     [
+      "summary",
+      "Extract keys and access flags given a full Redis command",
+      "since",
+      "7.0.0",
+      "group",
+      "server",
+      "complexity",
+      "O(N) where N is the number of arguments to the command"
+     ],
+     "command|help",
+     [
+      "summary",
+      "Show helpful text about the different subcommands",
+      "since",
+      "5.0.0",
+      "group",
+      "server",
+      "complexity",
+      "O(1)"
+     ],
+     "command|info",
+     [
+      "summary",
+      "Get array of specific Redis command details, or all when no argument is given.",
+      "since",
+      "2.8.13",
+      "group",
+      "server",
+      "complexity",
+      "O(N) where N is the number of commands to look up",
+      "history",
+      [
+       [
+        "7.0.0",
+        "Allowed to be called with no argument to get info on all commands."
+       ]
+      ],
+      "arguments",
+      [
+       [
+        "name",
+        "command-name",
+        "type",
+        "string",
+        "flags",
+        [
+         {
+          "+": "optional"
+         },
+         {
+          "+": "multiple"
+         }
+        ]
+       ]
+      ]
+     ],
+     "command|list",
+     [
+      "summary",
+      "Get an array of Redis command names",
+      "since",
+      "7.0.0",
+      "group",
+      "server",
+      "complexity",
+      "O(N) where N is the total number of Redis commands",
+      "arguments",
+      [
+       [
+        "name",
+        "filterby",
+        "type",
+        "oneof",
+        "token",
+        "FILTERBY",
+        "flags",
+        [
+         {
+          "+": "optional"
+         }
+        ],
+        "arguments",
+        [
+         [
+          "name",
+          "module-name",
+          "type",
+          "string",
+          "token",
+          "MODULE"
+         ],
+         [
+          "name",
+          "category",
+          "type",
+          "string",
+          "token",
+          "ACLCAT"
+         ],
+         [
+          "name",
+          "pattern",
+          "type",
+          "pattern",
+          "token",
+          "PATTERN"
+         ]
+        ]
+       ]
+      ]
+     ]
+    ]
+   ],
+   "info": [
+    "command",
+    -1,
+    [
+     {
+      "+": "loading"
+     },
+     {
+      "+": "stale"
+     }
+    ],
+    0,
+    0,
+    0,
+    [
+     {
+      "+": "@slow"
+     },
+     {
+      "+": "@connection"
+     }
+    ],
+    [
+     "nondeterministic_output_order"
+    ],
+    [],
+    [
+     [
+      "command|count",
+      2,
+      [
+       {
+        "+": "loading"
+       },
+       {
+        "+": "stale"
+       }
+      ],
+      0,
+      0,
+      0,
+      [
+       {
+        "+": "@slow"
+       },
+       {
+        "+": "@connection"
+       }
+      ],
+      [],
+      [],
+      []
+     ],
+     [
+      "command|docs",
+      -2,
+      [
+       {
+        "+": "loading"
+       },
+       {
+        "+": "stale"
+       }
+      ],
+      0,
+      0,
+      0,
+      [
+       {
+        "+": "@slow"
+       },
+       {
+        "+": "@connection"
+       }
+      ],
+      [
+       "nondeterministic_output_order"
+      ],
+      [],
+      []
+     ],
+     [
+      "command|getkeys",
+      -4,
+      [
+       {
+        "+": "loading"
+       },
+       {
+        "+": "stale"
+       }
+      ],
+      0,
+      0,
+      0,
+      [
+       {
+        "+": "@slow"
+       },
+       {
+        "+": "@connection"
+       }
+      ],
+      [],
+      [],
+      []
+     ],
+     [
+      "command|getkeysandflags",
+      -4,
+      [
+       {
+        "+": "loading"
+       },
+       {
+        "+": "stale"
+       }
+      ],
+      0,
+      0,
+      0,
+      [
+       {
+        "+": "@slow"
+       },
+       {
+        "+": "@connection"
+       }
+      ],
+      [],
+      [],
+      []
+     ],
+     [
+      "command|help",
+      2,
+      [
+       {
+        "+": "loading"
+       },
+       {
+        "+": "stale"
+       }
+      ],
+      0,
+      0,
+      0,
+      [
+       {
+        "+": "@slow"
+       },
+       {
+        "+": "@connection"
+       }
+      ],
+      [],
+      [],
+      []
+     ],
+     [
+      "command|info",
+      -2,
+      [
+       {
+        "+": "loading"
+       },
+       {
+        "+": "stale"
+       }
+      ],
+      0,
+      0,
+      0,
+      [
+       {
+        "+": "@slow"
+       },
+       {
+        "+": "@connection"
+       }
+      ],
+      [
+       "nondeterministic_output_order"
+      ],
+      [],
+      []
+     ],
+     [
+      "command|list",
+      -2,
+      [
+       {
+        "+": "loading"
+       },
+       {
+        "+": "stale"
+       }
+      ],
+      0,
+      0,
+      0,
+      [
+       {
+        "+": "@slow"
+       },
+       {
+        "+": "@connection"
+       }
+      ],
+      [
+       "nondeterministic_output_order"
+      ],
+      [],
+      []
+     ]
+    ]
+   ]
+  },
+  "config": {
+   "docs": [
+    "summary",
+    "A container for server configuration commands",
+    "since",
+    "2.0.0",
+    "group",
+    "server",
+    "complexity",
+    "Depends on subcommand.",
+    "subcommands",
+    [
+     "config|get",
+     [
+      "summary",
+      "Get the values of configuration parameters",
+      "since",
+      "2.0.0",
+      "group",
+      "server",
+      "complexity",
+      "O(N) when N is the number of configuration parameters provided",
+      "history",
+      [
+       [
+        "7.0.0",
+        "Added the ability to pass multiple pattern parameters in one call"
+       ]
+      ],
+      "arguments",
+      [
+       [
+        "name",
+        "parameter",
+        "type",
+        "block",
+        "flags",
+        [
+         {
+          "+": "multiple"
+         }
+        ],
+        "arguments",
+        [
+         [
+          "name",
+          "parameter",
+          "type",
+          "string"
+         ]
+        ]
+       ]
+      ]
+     ],
+     "config|help",
+     [
+      "summary",
+      "Show helpful text about the different subcommands",
+      "since",
+      "5.0.0",
+      "group",
+      "server",
+      "complexity",
+      "O(1)"
+     ],
+     "config|resetstat",
+     [
+      "summary",
+      "Reset the stats returned by INFO",
+      "since",
+      "2.0.0",
+      "group",
+      "server",
+      "complexity",
+      "O(1)"
+     ],
+     "config|rewrite",
+     [
+      "summary",
+      "Rewrite the configuration file with the in memory configuration",
+      "since",
+      "2.8.0",
+      "group",
+      "server",
+      "complexity",
+      "O(1)"
+     ],
+     "config|set",
+     [
+      "summary",
+      "Set configuration parameters to the given values",
+      "since",
+      "2.0.0",
+      "group",
+      "server",
+      "complexity",
+      "O(N) when N is the number of configuration parameters provided",
+      "history",
+      [
+       [
+        "7.0.0",
+        "Added the ability to set multiple parameters in one call."
+       ]
+      ],
+      "arguments",
+      [
+       [
+        "name",
+        "parameter_value",
+        "type",
+        "block",
+        "flags",
+        [
+         {
+          "+": "multiple"
+         }
+        ],
+        "arguments",
+        [
+         [
+          "name",
+          "parameter",
+          "type",
+          "string"
+         ],
+         [
+          "name",
+          "value",
+          "type",
+          "string"
+         ]
+        ]
+       ]
+      ]
+     ]
+    ]
+   ],
+   "info": [
+    "config",
+    -2,
+    [],
+    0,
+    0,
+    0,
+    [
+     {
+      "+": "@slow"
+     }
+    ],
+    [],
+    [],
+    [
+     [
+      "config|get",
+      -3,
+      [
+       {
+        "+": "admin"
+       },
+       {
+        "+": "noscript"
+       },
+       {
+        "+": "loading"
+       },
+       {
+        "+": "stale"
+       }
+      ],
+      0,
+      0,
+      0,
+      [
+       {
+        "+": "@admin"
+       },
+       {
+        "+": "@slow"
+       },
+       {
+        "+": "@dangerous"
+       }
+      ],
+      [],
+      [],
+      []
+     ],
+     [
+      "config|help",
+      2,
+      [
+       {
+        "+": "loading"
+       },
+       {
+        "+": "stale"
+       }
+      ],
+      0,
+      0,
+      0,
+      [
+       {
+        "+": "@slow"
+       }
+      ],
+      [],
+      [],
+      []
+     ],
+     [
+      "config|resetstat",
+      2,
+      [
+       {
+        "+": "admin"
+       },
+       {
+        "+": "noscript"
+       },
+       {
+        "+": "loading"
+       },
+       {
+        "+": "stale"
+       }
+      ],
+      0,
+      0,
+      0,
+      [
+       {
+        "+": "@admin"
+       },
+       {
+        "+": "@slow"
+       },
+       {
+        "+": "@dangerous"
+       }
+      ],
+      [],
+      [],
+      []
+     ],
+     [
+      "config|rewrite",
+      2,
+      [
+       {
+        "+": "admin"
+       },
+       {
+        "+": "noscript"
+       },
+       {
+        "+": "loading"
+       },
+       {
+        "+": "stale"
+       }
+      ],
+      0,
+      0,
+      0,
+      [
+       {
+        "+": "@admin"
+       },
+       {
+        "+": "@slow"
+       },
+       {
+        "+": "@dangerous"
+       }
+      ],
+      [],
+      [],
+      []
+     ],
+     [
+      "config|set",
+      -4,
+      [
+       {
+        "+": "admin"
+       },
+       {
+        "+": "noscript"
+       },
+       {
+        "+": "loading"
+       },
+       {
+        "+": "stale"
+       }
+      ],
+      0,
+      0,
+      0,
+      [
+       {
+        "+": "@admin"
+       },
+       {
+        "+": "@slow"
+       },
+       {
+        "+": "@dangerous"
+       }
+      ],
+      [
+       "request_policy:all_nodes",
+       "response_policy:all_succeeded"
+      ],
+      [],
+      []
+     ]
+    ]
+   ]
+  },
+  "dbsize": {
+   "docs": [
+    "summary",
+    "Return the number of keys in the selected database",
+    "since",
+    "1.0.0",
+    "group",
+    "server",
+    "complexity",
+    "O(1)"
+   ],
+   "info": [
+    "dbsize",
+    1,
+    [
+     {
+      "+": "readonly"
+     },
+     {
+      "+": "fast"
+     }
+    ],
+    0,
+    0,
+    0,
+    [
+     {
+      "+": "@keyspace"
+     },
+     {
+      "+": "@read"
+     },
+     {
+      "+": "@fast"
+     }
+    ],
+    [
+     "request_policy:all_shards",
+     "response_policy:agg_sum"
+    ],
+    [],
+    []
+   ]
+  },
+  "decr": {
+   "docs": [
+    "summary",
+    "Decrement the integer value of a key by one",
+    "since",
+    "1.0.0",
+    "group",
+    "string",
+    "complexity",
+    "O(1)",
+    "arguments",
+    [
+     [
+      "name",
+      "key",
+      "type",
+      "key",
+      "key_spec_index",
+      0
+     ]
+    ]
+   ],
+   "info": [
+    "decr",
+    2,
+    [
+     {
+      "+": "write"
+     },
+     {
+      "+": "denyoom"
+     },
+     {
+      "+": "fast"
+     }
+    ],
+    1,
+    1,
+    1,
+    [
+     {
+      "+": "@write"
+     },
+     {
+      "+": "@string"
+     },
+     {
+      "+": "@fast"
+     }
+    ],
+    [],
+    [
+     [
+      "flags",
+      [
+       {
+        "+": "RW"
+       },
+       {
+        "+": "access"
+       },
+       {
+        "+": "update"
+       }
+      ],
+      "begin_search",
+      [
+       "type",
+       "index",
+       "spec",
+       [
+        "index",
+        1
+       ]
+      ],
+      "find_keys",
+      [
+       "type",
+       "range",
+       "spec",
+       [
+        "lastkey",
+        0,
+        "keystep",
+        1,
+        "limit",
+        0
+       ]
+      ]
+     ]
+    ],
+    []
+   ]
+  },
+  "decrby": {
+   "docs": [
+    "summary",
+    "Decrement the integer value of a key by the given number",
+    "since",
+    "1.0.0",
+    "group",
+    "string",
+    "complexity",
+    "O(1)",
+    "arguments",
+    [
+     [
+      "name",
+      "key",
+      "type",
+      "key",
+      "key_spec_index",
+      0
+     ],
+     [
+      "name",
+      "decrement",
+      "type",
+      "integer"
+     ]
+    ]
+   ],
+   "info": [
+    "decrby",
+    3,
+    [
+     {
+      "+": "write"
+     },
+     {
+      "+": "denyoom"
+     },
+     {
+      "+": "fast"
+     }
+    ],
+    1,
+    1,
+    1,
+    [
+     {
+      "+": "@write"
+     },
+     {
+      "+": "@string"
+     },
+     {
+      "+": "@fast"
+     }
+    ],
+    [],
+    [
+     [
+      "flags",
+      [
+       {
+        "+": "RW"
+       },
+       {
+        "+": "access"
+       },
+       {
+        "+": "update"
+       }
+      ],
+      "begin_search",
+      [
+       "type",
+       "index",
+       "spec",
+       [
+        "index",
+        1
+       ]
+      ],
+      "find_keys",
+      [
+       "type",
+       "range",
+       "spec",
+       [
+        "lastkey",
+        0,
+        "keystep",
+        1,
+        "limit",
+        0
+       ]
+      ]
+     ]
+    ],
+    []
+   ]
+  },
+  "del": {
+   "docs": [
+    "summary",
+    "Delete a key",
+    "since",
+    "1.0.0",
+    "group",
+    "generic",
+    "complexity",
+    "O(N) where N is the number of keys that will be removed. When a key to remove holds a value other than a string, the individual complexity for this key is O(M) where M is the number of elements in the list, set, sorted set or hash. Removing a single key that holds a string value is O(1).",
+    "arguments",
+    [
+     [
+      "name",
+      "key",
+      "type",
+      "key",
+      "key_spec_index",
+      0,
+      "flags",
+      [
+       {
+        "+": "multiple"
+       }
+      ]
+     ]
+    ]
+   ],
+   "info": [
+    "del",
+    -2,
+    [
+     {
+      "+": "write"
+     }
+    ],
+    1,
+    -1,
+    1,
+    [
+     {
+      "+": "@keyspace"
+     },
+     {
+      "+": "@write"
+     },
+     {
+      "+": "@slow"
+     }
+    ],
+    [
+     "request_policy:multi_shard",
+     "response_policy:agg_sum"
+    ],
+    [
+     [
+      "flags",
+      [
+       {
+        "+": "RM"
+       },
+       {
+        "+": "delete"
+       }
+      ],
+      "begin_search",
+      [
+       "type",
+       "index",
+       "spec",
+       [
+        "index",
+        1
+       ]
+      ],
+      "find_keys",
+      [
+       "type",
+       "range",
+       "spec",
+       [
+        "lastkey",
+        -1,
+        "keystep",
+        1,
+        "limit",
+        0
+       ]
+      ]
+     ]
+    ],
+    []
+   ]
+  },
+  "echo": {
+   "docs": [
+    "summary",
+    "Echo the given string",
+    "since",
+    "1.0.0",
+    "group",
+    "connection",
+    "complexity",
+    "O(1)",
+    "arguments",
+    [
+     [
+      "name",
+      "message",
+      "type",
+      "string"
+     ]
+    ]
+   ],
+   "info": [
+    "echo",
+    2,
+    [
+     {
+      "+": "loading"
+     },
+     {
+      "+": "stale"
+     },
+     {
+      "+": "fast"
+     }
+    ],
+    0,
+    0,
+    0,
+    [
+     {
+      "+": "@fast"
+     },
+     {
+      "+": "@connection"
+     }
+    ],
+    [],
+    [],
+    []
+   ]
+  },
+  "exists": {
+   "docs": [
+    "summary",
+    "Determine if a key exists",
+    "since",
+    "1.0.0",
+    "group",
+    "generic",
+    "complexity",
+    "O(N) where N is the number of keys to check.",
+    "history",
+    [
+     [
+      "3.0.3",
+      "Accepts multiple `key` arguments."
+     ]
+    ],
+    "arguments",
+    [
+     [
+      "name",
+      "key",
+      "type",
+      "key",
+      "key_spec_index",
+      0,
+      "flags",
+      [
+       {
+        "+": "multiple"
+       }
+      ]
+     ]
+    ]
+   ],
+   "info": [
+    "exists",
+    -2,
+    [
+     {
+      "+": "readonly"
+     },
+     {
+      "+": "fast"
+     }
+    ],
+    1,
+    -1,
+    1,
+    [
+     {
+      "+": "@keyspace"
+     },
+     {
+      "+": "@read"
+     },
+     {
+      "+": "@fast"
+     }
+    ],
+    [
+     "request_policy:multi_shard",
+     "response_policy:agg_sum"
+    ],
+    [
+     [
+      "flags",
+      [
+       {
+        "+": "RO"
+       }
+      ],
+      "begin_search",
+      [
+       "type",
+       "index",
+       "spec",
+       [
+        "index",
+        1
+       ]
+      ],
+      "find_keys",
+      [
+       "type",
+       "range",
+       "spec",
+       [
+        "lastkey",
+        -1,
+        "keystep",
+        1,
+        "limit",
+        0
+       ]
+      ]
+     ]
+    ],
+    []
+   ]
+  },
+  "flushall": {
+   "docs": [
+    "summary",
+    "Remove all keys from all databases",
+    "since",
+    "1.0.0",
+    "group",
+    "server",
+    "complexity",
+    "O(N) where N is the total number of keys in all databases",
+    "history",
+    [
+     [
+      "4.0.0",
+      "Added the `ASYNC` flushing mode modifier."
+     ],
+     [
+      "6.2.0",
+      "Added the `SYNC` flushing mode modifier."
+     ]
+    ],
+    "arguments",
+    [
+     [
+      "name",
+      "async",
+      "type",
+      "oneof",
+      "flags",
+      [
+       {
+        "+": "optional"
+       }
+      ],
+      "arguments",
+      [
+       [
+        "name",
+        "async",
+        "type",
+        "pure-token",
+        "token",
+        "ASYNC",
+        "since",
+        "4.0.0"
+       ],
+       [
+        "name",
+        "sync",
+        "type",
+        "pure-token",
+        "token",
+        "SYNC",
+        "since",
+        "6.2.0"
+       ]
+      ]
+     ]
+    ]
+   ],
+   "info": [
+    "flushall",
+    -1,
+    [
+     {
+      "+": "write"
+     }
+    ],
+    0,
+    0,
+    0,
+    [
+     {
+      "+": "@keyspace"
+     },
+     {
+      "+": "@write"
+     },
+     {
+      "+": "@slow"
+     },
+     {
+      "+": "@dangerous"
+     }
+    ],
+    [
+     "request_policy:all_shards",
+     "response_policy:all_succeeded"
+    ],
+    [],
+    []
+   ]
+  },
+  "flushdb": {
+   "docs": [
+    "summary",
+    "Remove all keys from the current database",
+    "since",
+    "1.0.0",
+    "group",
+    "server",
+    "complexity",
+    "O(N) where N is the number of keys in the selected database",
+    "history",
+    [
+     [
+      "4.0.0",
+      "Added the `ASYNC` flushing mode modifier."
+     ],
+     [
+      "6.2.0",
+      "Added the `SYNC` flushing mode modifier."
+     ]
+    ],
+    "arguments",
+    [
+     [
+      "name",
+      "async",
+      "type",
+      "oneof",
+      "flags",
+      [
+       {
+        "+": "optional"
+       }
+      ],
+      "arguments",
+      [
+       [
+        "name",
+        "async",
+        "type",
+        "pure-token",
+        "token",
+        "ASYNC",
+        "since",
+        "4.0.0"
+       ],
+       [
+        "name",
+        "sync",
+        "type",
+        "pure-token",
+        "token",
+        "SYNC",
+        "since",
+        "6.2.0"
+       ]
+      ]
+     ]
+    ]
+   ],
+   "info": [
+    "flushdb",
+    -1,
+    [
+     {
+      "+": "write"
+     }
+    ],
+    0,
+    0,
+    0,
+    [
+     {
+      "+": "@keyspace"
+     },
+     {
+      "+": "@write"
+     },
+     {
+      "+": "@slow"
+     },
+     {
+      "+": "@dangerous"
+     }
+    ],
+    [
+     "request_policy:all_shards",
+     "response_policy:all_succeeded"
+    ],
+    [],
+    []
+   ]
+  },
+  "function": {
+   "docs": [
+    "summary",
+    "A container for function commands",
+    "since",
+    "7.0.0",
+    "group",
+    "scripting",
+    "complexity",
+    "Depends on subcommand.",
+    "subcommands",
+    [
+     "function|flush",
+     [
+      "summary",
+      "Deleting all functions",
+      "since",
+      "7.0.0",
+      "group",
+      "scripting",
+      "complexity",
+      "O(N) where N is the number of functions deleted",
+      "arguments",
+      [
+       [
+        "name",
+        "async",
+        "type",
+        "oneof",
+        "flags",
+        [
+         {
+          "+": "optional"
+         }
+        ],
+        "arguments",
+        [
+         [
+          "name",
+          "async",
+          "type",
+          "pure-token",
+          "token",
+          "ASYNC"
+         ],
+         [
+          "name",
+          "sync",
+          "type",
+          "pure-token",
+          "token",
+          "SYNC"
+         ]
+        ]
+       ]
+      ]
+     ],
+     "function|help",
+     [
+      "summary",
+      "Show helpful text about the different subcommands",
+      "since",
+      "7.0.0",
+      "group",
+      "scripting",
+      "complexity",
+      "O(1)"
+     ]
+    ]
+   ],
+   "info": [
+    "function",
+    -2,
+    [],
+    0,
+    0,
+    0,
+    [
+     {
+      "+": "@slow"
+     }
+    ],
+    [],
+    [],
+    [
+     [
+      "function|flush",
+      -2,
+      [
+       {
+        "+": "write"
+       },
+       {
+        "+": "noscript"
+       }
+      ],
+      0,
+      0,
+      0,
+      [
+       {
+        "+": "@write"
+       },
+       {
+        "+": "@slow"
+       },
+       {
+        "+": "@scripting"
+       }
+      ],
+      [
+       "request_policy:all_shards",
+       "response_policy:all_succeeded"
+      ],
+      [],
+      []
+     ],
+     [
+      "function|help",
+      2,
+      [
+       {
+        "+": "loading"
+       },
+       {
+        "+": "stale"
+       }
+      ],
+      0,
+      0,
+      0,
+      [
+       {
+        "+": "@slow"
+       },
+       {
+        "+": "@scripting"
+       }
+      ],
+      [],
+      [],
+      []
+     ]
+    ]
+   ]
+  },
+  "get": {
+   "docs": [
+    "summary",
+    "Get the value of a key",
+    "since",
+    "1.0.0",
+    "group",
+    "string",
+    "complexity",
+    "O(1)",
+    "arguments",
+    [
+     [
+      "name",
+      "key",
+      "type",
+      "key",
+      "key_spec_index",
+      0
+     ]
+    ]
+   ],
+   "info": [
+    "get",
+    2,
+    [
+     {
+      "+": "readonly"
+     },
+     {
+      "+": "fast"
+     }
+    ],
+    1,
+    1,
+    1,
+    [
+     {
+      "+": "@read"
+     },
+     {
+      "+": "@string"
+     },
+     {
+      "+": "@fast"
+     }
+    ],
+    [],
+    [
+     [
+      "flags",
+      [
+       {
+        "+": "RO"
+       },
+       {
+        "+": "access"
+       }
+      ],
+      "begin_search",
+      [
+       "type",
+       "index",
+       "spec",
+       [
+        "index",
+        1
+       ]
+      ],
+      "find_keys",
+      [
+       "type",
+       "range",
+       "spec",
+       [
+        "lastkey",
+        0,
+        "keystep",
+        1,
+        "limit",
+        0
+       ]
+      ]
+     ]
+    ],
+    []
+   ]
+  },
+  "getset": {
+   "docs": [
+    "summary",
+    "Set the string value of a key and return its old value",
+    "since",
+    "1.0.0",
+    "group",
+    "string",
+    "complexity",
+    "O(1)",
+    "doc_flags",
+    [
+     {
+      "+": "deprecated"
+     }
+    ],
+    "deprecated_since",
+    "6.2.0",
+    "replaced_by",
+    "`SET` with the `!GET` argument",
+    "arguments",
+    [
+     [
+      "name",
+      "key",
+      "type",
+      "key",
+      "key_spec_index",
+      0
+     ],
+     [
+      "name",
+      "value",
+      "type",
+      "string"
+     ]
+    ]
+   ],
+   "info": [
+    "getset",
+    3,
+    [
+     {
+      "+": "write"
+     },
+     {
+      "+": "denyoom"
+     },
+     {
+      "+": "fast"
+     }
+    ],
+    1,
+    1,
+    1,
+    [
+     {
+      "+": "@write"
+     },
+     {
+      "+": "@string"
+     },
+     {
+      "+": "@fast"
+     }
+    ],
+    [],
+    [
+     [
+      "flags",
+      [
+       {
+        "+": "RW"
+       },
+       {
+        "+": "access"
+       },
+       {
+        "+": "update"
+       }
+      ],
+      "begin_search",
+      [
+       "type",
+       "index",
+       "spec",
+       [
+        "index",
+        1
+       ]
+      ],
+      "find_keys",
+      [
+       "type",
+       "range",
+       "spec",
+       [
+        "lastkey",
+        0,
+        "keystep",
+        1,
+        "limit",
+        0
+       ]
+      ]
+     ]
+    ],
+    []
+   ]
+  },
+  "hello": {
+   "docs": [
+    "summary",
+    "Handshake with Redis",
+    "since",
+    "6.0.0",
+    "group",
+    "connection",
+    "complexity",
+    "O(1)",
+    "history",
+    [
+     [
+      "6.2.0",
+      "`protover` made optional; when called without arguments the command reports the current connection's context."
+     ]
+    ],
+    "arguments",
+    [
+     [
+      "name",
+      "arguments",
+      "type",
+      "block",
+      "flags",
+      [
+       {
+        "+": "optional"
+       }
+      ],
+      "arguments",
+      [
+       [
+        "name",
+        "protover",
+        "type",
+        "integer"
+       ],
+       [
+        "name",
+        "username_password",
+        "type",
+        "block",
+        "token",
+        "AUTH",
+        "flags",
+        [
+         {
+          "+": "optional"
+         }
+        ],
+        "arguments",
+        [
+         [
+          "name",
+          "username",
+          "type",
+          "string"
+         ],
+         [
+          "name",
+          "password",
+          "type",
+          "string"
+         ]
+        ]
+       ],
+       [
+        "name",
+        "clientname",
+        "type",
+        "string",
+        "token",
+        "SETNAME",
+        "flags",
+        [
+         {
+          "+": "optional"
+         }
+        ]
+       ]
+      ]
+     ]
+    ]
+   ],
+   "info": [
+    "hello",
+    -1,
+    [
+     {
+      "+": "noscript"
+     },
+     {
+      "+": "loading"
+     },
+     {
+      "+": "stale"
+     },
+     {
+      "+": "fast"
+     },
+     {
+      "+": "no_auth"
+     },
+     {
+      "+": "allow_busy"
+     }
+    ],
+    0,
+    0,
+    0,
+    [
+     {
+      "+": "@fast"
+     },
+     {
+      "+": "@connection"
+     }
+    ],
+    [],
+    [],
+    []
+   ]
+  },
+  "incr": {
+   "docs": [
+    "summary",
+    "Increment the integer value of a key by one",
+    "since",
+    "1.0.0",
+    "group",
+    "string",
+    "complexity",
+    "O(1)",
+    "arguments",
+    [
+     [
+      "name",
+      "key",
+      "type",
+      "key",
+      "key_spec_index",
+      0
+     ]
+    ]
+   ],
+   "info": [
+    "incr",
+    2,
+    [
+     {
+      "+": "write"
+     },
+     {
+      "+": "denyoom"
+     },
+     {
+      "+": "fast"
+     }
+    ],
+    1,
+    1,
+    1,
+    [
+     {
+      "+": "@write"
+     },
+     {
+      "+": "@string"
+     },
+     {
+      "+": "@fast"
+     }
+    ],
+    [],
+    [
+     [
+      "flags",
+      [
+       {
+        "+": "RW"
+       },
+       {
+        "+": "access"
+       },
+       {
+        "+": "update"
+       }
+      ],
+      "begin_search",
+      [
+       "type",
+       "index",
+       "spec",
+       [
+        "index",
+        1
+       ]
+      ],
+      "find_keys",
+      [
+       "type",
+       "range",
+       "spec",
+       [
+        "lastkey",
+        0,
+        "keystep",
+        1,
+        "limit",
+        0
+       ]
+      ]
+     ]
+    ],
+    []
+   ]
+  },
+  "incrby": {
+   "docs": [
+    "summary",
+    "Increment the integer value of a key by the given amount",
+    "since",
+    "1.0.0",
+    "group",
+    "string",
+    "complexity",
+    "O(1)",
+    "arguments",
+    [
+     [
+      "name",
+      "key",
+      "type",
+      "key",
+      "key_spec_index",
+      0
+     ],
+     [
+      "name",
+      "increment",
+      "type",
+      "integer"
+     ]
+    ]
+   ],
+   "info": [
+    "incrby",
+    3,
+    [
+     {
+      "+": "write"
+     },
+     {
+      "+": "denyoom"
+     },
+     {
+      "+": "fast"
+     }
+    ],
+    1,
+    1,
+    1,
+    [
+     {
+      "+": "@write"
+     },
+     {
+      "+": "@string"
+     },
+     {
+      "+": "@fast"
+     }
+    ],
+    [],
+    [
+     [
+      "flags",
+      [
+       {
+        "+": "RW"
+       },
+       {
+        "+": "access"
+       },
+       {
+        "+": "update"
+       }
+      ],
+      "begin_search",
+      [
+       "type",
+       "index",
+       "spec",
+       [
+        "index",
+        1
+       ]
+      ],
+      "find_keys",
+      [
+       "type",
+       "range",
+       "spec",
+       [
+        "lastkey",
+        0,
+        "keystep",
+        1,
+        "limit",
+        0
+       ]
+      ]
+     ]
+    ],
+    []
+   ]
+  },
+  "info": {
+   "docs": [
+    "summary",
+    "Get information and statistics about the server",
+    "since",
+    "1.0.0",
+    "group",
+    "server",
+    "complexity",
+    "O(1)",
+    "history",
+    [
+     [
+      "7.0.0",
+      "Added support for taking multiple section arguments."
+     ]
+    ],
+    "arguments",
+    [
+     [
+      "name",
+      "section",
+      "type",
+      "string",
+      "flags",
+      [
+       {
+        "+": "optional"
+       },
+       {
+        "+": "multiple"
+       }
+      ]
+     ]
+    ]
+   ],
+   "info": [
+    "info",
+    -1,
+    [
+     {
+      "+": "loading"
+     },
+     {
+      "+": "stale"
+     }
+    ],
+    0,
+    0,
+    0,
+    [
+     {
+      "+": "@slow"
+     },
+     {
+      "+": "@dangerous"
+     }
+    ],
+    [
+     "nondeterministic_output",
+     "request_policy:all_shards",
+     "response_policy:special"
+    ],
+    [],
+    []
+   ]
+  },
+  "keys": {
+   "docs": [
+    "summary",
+    "Find all keys matching the given pattern",
+    "since",
+    "1.0.0",
+    "group",
+    "generic",
+    "complexity",
+    "O(N) with N being the number of keys in the database, under the assumption that the key names in the database and the given pattern have limited length.",
+    "arguments",
+    [
+     [
+      "name",
+      "pattern",
+      "type",
+      "pattern"
+     ]
+    ]
+   ],
+   "info": [
+    "keys",
+    2,
+    [
+     {
+      "+": "readonly"
+     }
+    ],
+    0,
+    0,
+    0,
+    [
+     {
+      "+": "@keyspace"
+     },
+     {
+      "+": "@read"
+     },
+     {
+      "+": "@slow"
+     },
+     {
+      "+": "@dangerous"
+     }
+    ],
+    [
+     "request_policy:all_shards",
+     "nondeterministic_output_order"
+    ],
+    [],
+    []
+   ]
+  },
+  "mget": {
+   "docs": [
+    "summary",
+    "Get the values of all the given keys",
+    "since",
+    "1.0.0",
+    "group",
+    "string",
+    "complexity",
+    "O(N) where N is the number of keys to retrieve.",
+    "arguments",
+    [
+     [
+      "name",
+      "key",
+      "type",
+      "key",
+      "key_spec_index",
+      0,
+      "flags",
+      [
+       {
+        "+": "multiple"
+       }
+      ]
+     ]
+    ]
+   ],
+   "info": [
+    "mget",
+    -2,
+    [
+     {
+      "+": "readonly"
+     },
+     {
+      "+": "fast"
+     }
+    ],
+    1,
+    -1,
+    1,
+    [
+     {
+      "+": "@read"
+     },
+     {
+      "+": "@string"
+     },
+     {
+      "+": "@fast"
+     }
+    ],
+    [
+     "request_policy:multi_shard"
+    ],
+    [
+     [
+      "flags",
+      [
+       {
+        "+": "RO"
+       },
+       {
+        "+": "access"
+       }
+      ],
+      "begin_search",
+      [
+       "type",
+       "index",
+       "spec",
+       [
+        "index",
+        1
+       ]
+      ],
+      "find_keys",
+      [
+       "type",
+       "range",
+       "spec",
+       [
+        "lastkey",
+        -1,
+        "keystep",
+        1,
+        "limit",
+        0
+       ]
+      ]
+     ]
+    ],
+    []
+   ]
+  },
+  "mset": {
+   "docs": [
+    "summary",
+    "Set multiple keys to multiple values",
+    "since",
+    "1.0.1",
+    "group",
+    "string",
+    "complexity",
+    "O(N) where N is the number of keys to set.",
+    "arguments",
+    [
+     [
+      "name",
+      "key_value",
+      "type",
+      "block",
+      "flags",
+      [
+       {
+        "+": "multiple"
+       }
+      ],
+      "arguments",
+      [
+       [
+        "name",
+        "key",
+        "type",
+        "key",
+        "key_spec_index",
+        0
+       ],
+       [
+        "name",
+        "value",
+        "type",
+        "string"
+       ]
+      ]
+     ]
+    ]
+   ],
+   "info": [
+    "mset",
+    -3,
+    [
+     {
+      "+": "write"
+     },
+     {
+      "+": "denyoom"
+     }
+    ],
+    1,
+    -1,
+    2,
+    [
+     {
+      "+": "@write"
+     },
+     {
+      "+": "@string"
+     },
+     {
+      "+": "@slow"
+     }
+    ],
+    [
+     "request_policy:multi_shard",
+     "response_policy:all_succeeded"
+    ],
+    [
+     [
+      "flags",
+      [
+       {
+        "+": "OW"
+       },
+       {
+        "+": "update"
+       }
+      ],
+      "begin_search",
+      [
+       "type",
+       "index",
+       "spec",
+       [
+        "index",
+        1
+       ]
+      ],
+      "find_keys",
+      [
+       "type",
+       "range",
+       "spec",
+       [
+        "lastkey",
+        -1,
+        "keystep",
+        2,
+        "limit",
+        0
+       ]
+      ]
+     ]
+    ],
+    []
+   ]
+  },
+  "ping": {
+   "docs": [
+    "summary",
+    "Ping the server",
+    "since",
+    "1.0.0",
+    "group",
+    "connection",
+    "complexity",
+    "O(1)",
+    "arguments",
+    [
+     [
+      "name",
+      "message",
+      "type",
+      "string",
+      "flags",
+      [
+       {
+        "+": "optional"
+       }
+      ]
+     ]
+    ]
+   ],
+   "info": [
+    "ping",
+    -1,
+    [
+     {
+      "+": "fast"
+     }
+    ],
+    0,
+    0,
+    0,
+    [
+     {
+      "+": "@fast"
+     },
+     {
+      "+": "@connection"
+     }
+    ],
+    [
+     "request_policy:all_shards",
+     "response_policy:all_succeeded"
+    ],
+    [],
+    []
+   ]
+  },
+  "quit": {
+   "docs": [
+    "summary",
+    "Close the connection",
+    "since",
+    "1.0.0",
+    "group",
+    "connection",
+    "complexity",
+    "O(1)"
+   ],
+   "info": [
+    "quit",
+    -1,
+    [
+     {
+      "+": "noscript"
+     },
+     {
+      "+": "loading"
+     },
+     {
+      "+": "stale"
+     },
+     {
+      "+": "fast"
+     },
+     {
+      "+": "no_auth"
+     },
+     {
+      "+": "allow_busy"
+     }
+    ],
+    0,
+    0,
+    0,
+    [
+     {
+      "+": "@fast"
+     },
+     {
+      "+": "@connection"
+     }
+    ],
+    [],
+    [],
+    []
+   ]
+  },
+  "reset": {
+   "docs": [
+    "summary",
+    "Reset the connection",
+    "since",
+    "6.2.0",
+    "group",
+    "connection",
+    "complexity",
+    "O(1)"
+   ],
+   "info": [
+    "reset",
+    1,
+    [
+     {
+      "+": "noscript"
+     },
+     {
+      "+": "loading"
+     },
+     {
+      "+": "stale"
+     },
+     {
+      "+": "fast"
+     },
+     {
+      "+": "no_auth"
+     },
+     {
+      "+": "allow_busy"
+     }
+    ],
+    0,
+    0,
+    0,
+    [
+     {
+      "+": "@fast"
+     },
+     {
+      "+": "@connection"
+     }
+    ],
+    [],
+    [],
+    []
+   ]
+  },
+  "select": {
+   "docs": [
+    "summary",
+    "Change the selected database for the current connection",
+    "since",
+    "1.0.0",
+    "group",
+    "connection",
+    "complexity",
+    "O(1)",
+    "arguments",
+    [
+     [
+      "name",
+      "index",
+      "type",
+      "integer"
+     ]
+    ]
+   ],
+   "info": [
+    "select",
+    2,
+    [
+     {
+      "+": "loading"
+     },
+     {
+      "+": "stale"
+     },
+     {
+      "+": "fast"
+     }
+    ],
+    0,
+    0,
+    0,
+    [
+     {
+      "+": "@fast"
+     },
+     {
+      "+": "@connection"
+     }
+    ],
+    [],
+    [],
+    []
+   ]
+  },
+  "set": {
+   "docs": [
+    "summary",
+    "Set the string value of a key",
+    "since",
+    "1.0.0",
+    "group",
+    "string",
+    "complexity",
+    "O(1)",
+    "history",
+    [
+     [
+      "2.6.12",
+      "Added the `EX`, `PX`, `NX` and `XX` options."
+     ],
+     [
+      "6.0.0",
+      "Added the `KEEPTTL` option."
+     ],
+     [
+      "6.2.0",
+      "Added the `GET`, `EXAT` and `PXAT` option."
+     ],
+     [
+      "7.0.0",
+      "Allowed the `NX` and `GET` options to be used together."
+     ]
+    ],
+    "arguments",
+    [
+     [
+      "name",
+      "key",
+      "type",
+      "key",
+      "key_spec_index",
+      0
+     ],
+     [
+      "name",
+      "value",
+      "type",
+      "string"
+     ],
+     [
+      "name",
+      "condition",
+      "type",
+      "oneof",
+      "since",
+      "2.6.12",
+      "flags",
+      [
+       {
+        "+": "optional"
+       }
+      ],
+      "arguments",
+      [
+       [
+        "name",
+        "nx",
+        "type",
+        "pure-token",
+        "token",
+        "NX"
+       ],
+       [
+        "name",
+        "xx",
+        "type",
+        "pure-token",
+        "token",
+        "XX"
+       ]
+      ]
+     ],
+     [
+      "name",
+      "get",
+      "type",
+      "pure-token",
+      "token",
+      "GET",
+      "since",
+      "6.2.0",
+      "flags",
+      [
+       {
+        "+": "optional"
+       }
+      ]
+     ],
+     [
+      "name",
+      "expiration",
+      "type",
+      "oneof",
+      "flags",
+      [
+       {
+        "+": "optional"
+       }
+      ],
+      "arguments",
+      [
+       [
+        "name",
+        "seconds",
+        "type",
+        "integer",
+        "token",
+        "EX",
+        "since",
+        "2.6.12"
+       ],
+       [
+        "name",
+        "milliseconds",
+        "type",
+        "integer",
+        "token",
+        "PX",
+        "since",
+        "2.6.12"
+       ],
+       [
+        "name",
+        "unix-time-seconds",
+        "type",
+        "unix-time",
+        "token",
+        "EXAT",
+        "since",
+        "6.2.0"
+       ],
+       [
+        "name",
+        "unix-time-milliseconds",
+        "type",
+        "unix-time",
+        "token",
+        "PXAT",
+        "since",
+        "6.2.0"
+       ],
+       [
+        "name",
+        "keepttl",
+        "type",
+        "pure-token",
+        "token",
+        "KEEPTTL",
+        "since",
+        "6.0.0"
+       ]
+      ]
+     ]
+    ]
+   ],
+   "info": [
+    "set",
+    -3,
+    [
+     {
+      "+": "write"
+     },
+     {
+      "+": "denyoom"
+     }
+    ],
+    1,
+    1,
+    1,
+    [
+     {
+      "+": "@write"
+     },
+     {
+      "+": "@string"
+     },
+     {
+      "+": "@slow"
+     }
+    ],
+    [],
+    [
+     [
+      "notes",
+      "RW and ACCESS due to the optional `GET` argument",
+      "flags",
+      [
+       {
+        "+": "RW"
+       },
+       {
+        "+": "access"
+       },
+       {
+        "+": "update"
+       },
+       {
+        "+": "variable_flags"
+       }
+      ],
+      "begin_search",
+      [
+       "type",
+       "index",
+       "spec",
+       [
+        "index",
+        1
+       ]
+      ],
+      "find_keys",
+      [
+       "type",
+       "range",
+       "spec",
+       [
+        "lastkey",
+        0,
+        "keystep",
+        1,
+        "limit",
+        0
+       ]
+      ]
+     ]
+    ],
+    []
+   ]
+  },
+  "setnx": {
+   "docs": [
+    "summary",
+    "Set the value of a key, only if the key does not exist",
+    "since",
+    "1.0.0",
+    "group",
+    "string",
+    "complexity",
+    "O(1)",
+    "arguments",
+    [
+     [
+      "name",
+      "key",
+      "type",
+      "key",
+      "key_spec_index",
+      0
+     ],
+     [
+      "name",
+      "value",
+      "type",
+      "string"
+     ]
+    ]
+   ],
+   "info": [
+    "setnx",
+    3,
+    [
+     {
+      "+": "write"
+     },
+     {
+      "+": "denyoom"
+     },
+     {
+      "+": "fast"
+     }
+    ],
+    1,
+    1,
+    1,
+    [
+     {
+      "+": "@write"
+     },
+     {
+      "+": "@string"
+     },
+     {
+      "+": "@fast"
+     }
+    ],
+    [],
+    [
+     [
+      "flags",
+      [
+       {
+        "+": "OW"
+       },
+       {
+        "+": "insert"
+       }
+      ],
+      "begin_search",
+      [
+       "type",
+       "index",
+       "spec",
+       [
+        "index",
+        1
+       ]
+      ],
+      "find_keys",
+      [
+       "type",
+       "range",
+       "spec",
+       [
+        "lastkey",
+        0,
+        "keystep",
+        1,
+        "limit",
+        0
+       ]
+      ]
+     ]
+    ],
+    []
+   ]
+  },
+  "strlen": {
+   "docs": [
+    "summary",
+    "Get the length of the value stored in a key",
+    "since",
+    "2.2.0",
+    "group",
+    "string",
+    "complexity",
+    "O(1)",
+    "arguments",
+    [
+     [
+      "name",
+      "key",
+      "type",
+      "key",
+      "key_spec_index",
+      0
+     ]
+    ]
+   ],
+   "info": [
+    "strlen",
+    2,
+    [
+     {
+      "+": "readonly"
+     },
+     {
+      "+": "fast"
+     }
+    ],
+    1,
+    1,
+    1,
+    [
+     {
+      "+": "@read"
+     },
+     {
+      "+": "@string"
+     },
+     {
+      "+": "@fast"
+     }
+    ],
+    [],
+    [
+     [
+      "flags",
+      [
+       {
+        "+": "RO"
+       }
+      ],
+      "begin_search",
+      [
+       "type",
+       "index",
+       "spec",
+       [
+        "index",
+        1
+       ]
+      ],
+      "find_keys",
+      [
+       "type",
+       "range",
+       "spec",
+       [
+        "lastkey",
+        0,
+        "keystep",
+        1,
+        "limit",
+        0
+       ]
+      ]
+     ]
+    ],
+    []
+   ]
+  },
+  "type": {
+   "docs": [
+    "summary",
+    "Determine the type stored at key",
+    "since",
+    "1.0.0",
+    "group",
+    "generic",
+    "complexity",
+    "O(1)",
+    "arguments",
+    [
+     [
+      "name",
+      "key",
+      "type",
+      "key",
+      "key_spec_index",
+      0
+     ]
+    ]
+   ],
+   "info": [
+    "type",
+    2,
+    [
+     {
+      "+": "readonly"
+     },
+     {
+      "+": "fast"
+     }
+    ],
+    1,
+    1,
+    1,
+    [
+     {
+      "+": "@keyspace"
+     },
+     {
+      "+": "@read"
+     },
+     {
+      "+": "@fast"
+     }
+    ],
+    [],
+    [
+     [
+      "flags",
+      [
+       {
+        "+": "RO"
+       }
+      ],
+      "begin_search",
+      [
+       "type",
+       "index",
+       "spec",
+       [
+        "index",
+        1
+       ]
+      ],
+      "find_keys",
+      [
+       "type",
+       "range",
+       "spec",
+       [
+        "lastkey",
+        0,
+        "keystep",
+        1,
+        "limit",
+        0
+       ]
+      ]
+     ]
+    ],
+    []
+   ]
+  },
+  "unlink": {
+   "docs": [
+    "summary",
+    "Delete a key asynchronously in another thread. Otherwise it is just as DEL, but non blocking.",
+    "since",
+    "4.0.0",
+    "group",
+    "generic",
+    "complexity",
+    "O(1) for each key removed regardless of its size. Then the command does O(N) work in a different thread in order to reclaim memory, where N is the number of allocations the deleted objects where composed of.",
+    "arguments",
+    [
+     [
+      "name",
+      "key",
+      "type",
+      "key",
+      "key_spec_index",
+      0,
+      "flags",
+      [
+       {
+        "+": "multiple"
+       }
+      ]
+     ]
+    ]
+   ],
+   "info": [
+    "unlink",
+    -2,
+    [
+     {
+      "+": "write"
+     },
+     {
+      "+": "fast"
+     }
+    ],
+    1,
+    -1,
+    1,
+    [
+     {
+      "+": "@keyspace"
+     },
+     {
+      "+": "@write"
+     },
+     {
+      "+": "@fast"
+     }
+    ],
+    [
+     "request_policy:multi_shard",
+     "response_policy:agg_sum"
+    ],
+    [
+     [
+      "flags",
+      [
+       {
+        "+": "RM"
+       },
+       {
+        "+": "delete"
+       }
+      ],
+      "begin_search",
+      [
+       "type",
+       "index",
+       "spec",
+       [
+        "index",
+        1
+       ]
+      ],
+      "find_keys",
+      [
+       "type",
+       "range",
+       "spec",
+       [
+        "lastkey",
+        -1,
+        "keystep",
+        1,
+        "limit",
+        0
+       ]
+      ]
+     ]
+    ],
+    []
+   ]
+  }
+ },
+ "redis": "7.0.15"
+}

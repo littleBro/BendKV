@@ -25,6 +25,7 @@ import ./batch.bend as B
 import ./aof.bend as A
 import ./config.bend as C
 import ./info.bend as I
+import ./command.bend as K
 
 # Types
 # -----
@@ -465,6 +466,8 @@ def own_reply(+o: R.SessOp, +c: Conn, +s: Srv, +db: KV.Trie<String>) -> Maybe<&2
       say(conn.mode(c), R.r_ok())
     case R.SInfo{args}:
       say(conn.mode(c), R.RBulk{I.text(args, srv.cfg(s), srv.info(s), db)})
+    case R.SCommand{args}:
+      say(conn.mode(c), K.reply(args))
     case R.SReply{r}:
       say(conn.mode(c), r)
     case R.SBad{r}:
@@ -498,6 +501,8 @@ def own_conn(+o: R.SessOp, +c: Conn, +s: Srv) -> Conn:
     case R.SConfigResetStat{}:
       step_conn(c, s)
     case R.SInfo{a}:
+      step_conn(c, s)
+    case R.SCommand{a}:
       step_conn(c, s)
     case R.SReply{r}:
       step_conn(c, s)
