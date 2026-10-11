@@ -35,7 +35,7 @@ def replies(r: List<&2, R.Reply> & KV.Trie<String>) -> List<&2, R.Reply>:
 
 def run(b: P.Batch) -> String:
   match b:
-    case P.Batch{reqs, rest, err, need}:
+    case P.Batch{reqs, n, rest, err, need}:
       lines(replies(R.exec_all(B.cmds_of(reqs, Nil{}), KV.empty(String)))) ++ "rest: " ++ escape(rest)
 
 def buf() -> String:

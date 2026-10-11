@@ -24,7 +24,7 @@ def batch16.go(i: Nat, +base: Nat, +space: Nat, acc: String) -> String:
 
 def batch_cmds(b: P.Batch) -> List<&2, R.Cmd>:
   match b:
-    case P.Batch{rs, rest, err, need}:
+    case P.Batch{rs, k, rest, err, need}:
       B.cmds_of(rs, Nil{})
 
 def serve.out(r: List<&2, R.Reply> & KV.Trie<String>, acc: Nat) -> Nat & KV.Trie<String>:

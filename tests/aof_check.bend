@@ -14,7 +14,7 @@ import ../src/aof.bend as A
 
 def batch_of(b: P.Batch) -> List<&2, R.Cmd>:
   match b:
-    case P.Batch{reqs, rest, err, need}:
+    case P.Batch{reqs, n, rest, err, need}:
       B.cmds_of(reqs, Nil{})
 
 def buf() -> String:

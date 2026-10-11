@@ -1,0 +1,111 @@
+diff --git a/bend2/comp.ts b/bend2/comp.ts
+index e147ed1..1cfd381 100644
+--- a/bend2/comp.ts
++++ b/bend2/comp.ts
+@@ -140,8 +140,12 @@ type Key = { id: string; A: HTerm; kept: boolean };
+ // add to a segment, so a literal-bounded loop does not unroll into its
+ // caller. A spin of SPIN_FAR lines is a call (at 128, raytrace lost
+ // 31% on PAR-CPU). WIDE is the widest flat layout or segment; a node past
+-// it pads to its size class and keeps 240 plus log2 of it in CID_T. An
+-// argument nested past TPL_DEEP brackets goes to a local (clang allows 256).
++// it pads to its size class and keeps 240 plus log2 of it in CID_T. A
++// datatype whose flat layout is wider than FLAT words is a node of its
++// own: flat, it would take that many words in every call, result and
++// frame that carries it, and the widest result or frameless parameter
++// list is every segment's signature. An argument nested past TPL_DEEP
++// brackets goes to a local (clang allows 256).
+ 
+ const CLO_APPLY = "Clo~apply";
+ 
+@@ -179,6 +183,8 @@ const WORDS: Record<string, Lay> = Object.setPrototypeOf(
+ 
+ const WIDE = 247;
+ 
++const FLAT = 32;
++
+ const ERRS = ("|*|*|out of memory: run again with a bigger span, as in"
+   + " --gpu 8GB|a function the device does not hold|a Nat past the"
+   + " largest immediate 2^48-1|*|memory fault (machine stack overflow?)|an"
+@@ -1001,7 +1007,7 @@ function lay_of(A: HTerm | null): Lay {
+     FL.lays.set(key, BOX);
+     const lay = lay_pack(tld.c.map((c) =>
+       [c.k, ctr_doms(c, t.x).map((A) => lay_of(A))]));
+-    return lay.ks.length > WIDE ? BOX : lay;
++    return lay.ks.length > FLAT ? BOX : lay;
+   });
+ }
+ 
+diff --git a/tests/rfc/flat_limit.bend b/tests/rfc/flat_limit.bend
+new file mode 100644
+index 0000000..4e21222
+--- /dev/null
++++ b/tests/rfc/flat_limit.bend
+@@ -0,0 +1,68 @@
++# rfc (rfc_flat_limit): a datatype wider than 32 words is a node of its
++# own on the C lane, not 36 words in every call that carries it. W (four
++# records of nine words) is built, returned, picked by a branch, bumped
++# in place by a loop 1000 times, copied when shared (the original stays),
++# and kept in a list. A field lost or mixed up shows as a wrong sum.
++# Expect 1036,36,2108,37 on every lane.
++import Base
++
++type Nine is Data:
++  Nine{a: U32, b: U32, c: U32, d: U32, e: U32, f: U32, g: U32, h: U32, i: U32}
++
++type W is Data:
++  W{p: Nine, q: Nine, r: Nine, s: Nine}
++
++def nine(+x: U32) -> Nine:
++  Nine{x, x, x, x, x, x, x, x, x}
++
++def sum9(+n: Nine) -> U32:
++  match n:
++    case Nine{a, b, c, d, e, f, g, h, i}:
++      U32.add(a, U32.add(b, U32.add(c, U32.add(d, U32.add(e, U32.add(f, U32.add(g, U32.add(h, i))))))))
++
++def sum(+w: W) -> U32:
++  match w:
++    case W{+p, +q, +r, +s}:
++      U32.add(sum9(p), U32.add(sum9(q), U32.add(sum9(r), sum9(s))))
++
++def sums(xs: List<&2, W>, acc: U32) -> U32:
++  match xs:
++    case Nil{}:
++      acc
++    case Con{+x, rest}:
++      sums(rest, U32.add(acc, sum(x)))
++
++def bump9(n: Nine) -> Nine:
++  match n:
++    case Nine{a, b, c, d, e, f, g, h, i}:
++      Nine{a, b, c, d, e, f, g, h, U32.add(i, 1)}
++
++def bump(w: W) -> W:
++  match w:
++    case W{p, q, r, s}:
++      W{p, q, r, bump9(s)}
++
++def loop(n: Nat, w: W) -> W:
++  match n:
++    case 0n:
++      w
++    case 1n+m:
++      loop(m, bump(w))
++
++def ones() -> W:
++  W{nine(1), nine(1), nine(1), nine(1)}
++
++def pick(b: Bool, x: W, y: W) -> W:
++  match b:
++    case True{}:
++      x
++    case False{}:
++      y
++
++def main() -> String:
++  +w = ones()
++  +v = loop(1000n, w)
++  +u = bump(pick(U32.is_lt(sum(v), sum(w)), v, w))
++  U32.show(sum(v)) ++ "," ++ U32.show(sum(w)) ++ "," ++ U32.show(sums([v, w, v], 0)) ++ "," ++ U32.show(sum(u))
++
++#|"1036,36,2108,37"

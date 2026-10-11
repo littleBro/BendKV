@@ -40,12 +40,18 @@ import ./aof.bend as A
 import ./session.bend as S
 import ./config.bend as C
 import ./startup.bend as T
+import ./info.bend as I
 
 # a batch from a connection in the state cn (B.Job: its commands, and
-# the hashes of their keys, for the hints of batch.bend), and the channel
-# its answer goes back on
+# the hashes of their keys, for the hints of batch.bend), the channel its
+# answer goes back on, and how many commands it has and how many bytes it
+# came in (for INFO); the shell's facts (info.bend: Live), which a
+# connection sends before a batch that asks INFO or CONFIG RESETSTAT; or
+# the cron's tick, at ms since 1970, for INFO's rates
 type Req is Data:
-  Req{cn: S.Conn, job: B.Job, back: Chan(Ans)}
+  Req{cn: S.Conn, job: B.Job, back: Chan(Ans), n: Nat, inb: Nat}
+  Facts{live: I.Live}
+  Tick{ms: Nat}
 
 # a batch's answer: its replies, encoded (none when CLIENT REPLY held
 # them all back), and the connection's state after it
@@ -59,6 +65,14 @@ def ans_of(rs: List<&2, R.Reply>, cn: S.Conn) -> Ans:
     case Con{r, rest}:
       Ans{Some{P.encode_all(r <> rest)}, cn}
 
+# the bytes of an answer's replies
+def ans.len(+a: Ans) -> Nat:
+  match a:
+    case Ans{Some{+out}, cn}:
+      String.length(out)
+    case Ans{None{}, cn}:
+      0n
+
 # The database actor
 # ------------------
 
@@ -66,22 +80,30 @@ def ans_of(rs: List<&2, R.Reply>, cn: S.Conn) -> Ans:
 # (Chan.drain, up to group_max): it runs their batches one after another,
 # in the order they came (S.run: session.bend), and answers them all at
 # once (Chan.send_all). A group is its answers so far, newest first, the
-# server's state and the database.
+# server's state and the database. Each batch adds its commands and bytes
+# to the server's counts for INFO, the shell's facts go in the server's
+# state, and a tick takes a sample of the rates.
 type Run is Data:
   Run{outs: List<&2, Sigma<&2, &2, Chan(Ans), _ => Ans>>, srv: S.Srv, db: KV.Trie<String>}
 
 def group_max() -> U32:
   255
 
-def run_put(outs: List<&2, Sigma<&2, &2, Chan(Ans), _ => Ans>>, back: Chan(Ans), d: S.Fin) -> Run:
+def run_put(outs: List<&2, Sigma<&2, &2, Chan(Ans), _ => Ans>>, back: Chan(Ans), +n: Nat, +inb: Nat, d: S.Fin) -> Run:
   match d:
     case S.Fin{rs, cn, srv, db}:
-      Run{(back, ans_of(rs, cn)) <> outs, srv, db}
+      +a = ans_of(rs, cn)
+      +outb = ans.len(a)
+      Run{(back, a) <> outs, S.srv.ran(srv, n, inb, outb), db}
 
 def run_req(q: Req, outs: List<&2, Sigma<&2, &2, Chan(Ans), _ => Ans>>, srv: S.Srv, db: KV.Trie<String>) -> Run:
   match q:
-    case Req{cn, job, back}:
-      run_put(outs, back, S.run(cn, srv, job, db))
+    case Req{cn, job, back, +n, +inb}:
+      run_put(outs, back, n, inb, S.run(cn, srv, job, db))
+    case Facts{live}:
+      Run{outs, S.srv.live(srv, live), db}
+    case Tick{+ms}:
+      Run{outs, S.srv.tick(srv, ms), db}
 
 def run_step(q: Req, g: Run) -> Run:
   match g:
@@ -122,10 +144,6 @@ def db_group(g: Run, +reqs: Chan(Req)) -> IO(Unit):
 # Connections
 # -----------
 
-# a batch to send: the parsed requests (newest first) put in order
-def batch_req(cn: S.Conn, rs: List<&2, B.Req>, back: Chan(Ans)) -> Req:
-  Req{cn, B.job(B.unzip(rs, Nil{}, Nil{})), back}
-
 def sent_ok(m: Socket & Result<&1, &1, U32 & String, Unit>, next: Socket -> IO(Unit)) -> IO(Unit):
   (s, r) = m
   match r:
@@ -148,14 +166,21 @@ def put_out(s: Socket, post: Bool, str: String, next: Socket -> IO(Unit)) -> IO(
         m : Socket & Result<&1, &1, U32 & String, Unit> <- TCP.send_raw(s, str)
         sent_ok(m, next)
 
+# the connections: how many were taken since the start (the last client
+# id given, from 1, as Redis's CLIENT ID) and how many are open. The count
+# waits in a channel the listeners and the connections share.
+type Tally is Data:
+  Tally{taken: Nat, open: Nat}
+
 # a connection's way to the actor: the actor's channel, the channel its
-# answers come back on, and whether replies are posted
+# answers come back on, whether replies are posted, and the channel of the
+# count of connections (for INFO's facts)
 type Link is Data:
-  Link{db: Chan(Req), back: Chan(Ans), post: Bool}
+  Link{db: Chan(Req), back: Chan(Ans), post: Bool, tl: Chan(Tally)}
 
 def link.post(+ln: Link) -> Bool:
   match ln:
-    case Link{db, back, post}:
+    case Link{db, back, post, tl}:
       post
 
 # x before s; an empty s costs nothing, so the newest piece is not copied
@@ -183,6 +208,14 @@ def count_upto(n: Nat, s: String) -> Nat:
       0n
     case 1n+m SCon{c, t}:
       1n+count_upto(m, t)
+
+# the bytes of the pieces read, for INFO
+def got.bytes(+xs: List<&2, String>, +acc: Nat) -> Nat:
+  match xs:
+    case Nil{}:
+      acc
+    case Con{+x, +rest}:
+      got.bytes(rest, Nat.add(acc, String.length(x)))
 
 # the requests read so far: a lone new piece is one run when it is short
 # (resp.bend reads longer ones in windows), and the tail of the last
@@ -226,12 +259,13 @@ def conn_data(s: Socket, eof: Bool, +x: String, rest: String, got: List<&2, Stri
       conn_more(s, rest, x <> got, h, need, ln, cn, Nat.is_lt(h, need))
 
 @unsafe
-def conn_more(s: Socket, rest: String, got: List<&2, String>, have: Nat, need: Nat, +ln: Link, cn: S.Conn, wait: Bool) -> IO(Unit):
+def conn_more(s: Socket, rest: String, +got: List<&2, String>, have: Nat, need: Nat, +ln: Link, cn: S.Conn, wait: Bool) -> IO(Unit):
   match wait:
     case True{}:
       conn_loop(s, rest, got, have, need, ln, cn)
     case False{}:
-      conn_batch(s, parse_in(rest, got), ln, cn)
+      +inb = got.bytes(got, 0n)
+      conn_batch(s, parse_in(rest, got), inb, ln, cn)
 
 # A parsed batch goes to the actor, its replies go out, then the
 # protocol error the requests ended in, if any, and the next read: rest
@@ -240,27 +274,70 @@ def conn_more(s: Socket, rest: String, got: List<&2, String>, have: Nat, need: N
 # other and conn_loop directly, as the loop's own steps do, rather than
 # through a continuation.
 @unsafe
-def conn_batch(s: Socket, batch: P.Batch, +ln: Link, cn: S.Conn) -> IO(Unit):
+def conn_batch(s: Socket, batch: P.Batch, +inb: Nat, +ln: Link, cn: S.Conn) -> IO(Unit):
   match batch:
-    case P.Batch{reqs, rest, err, need}:
-      conn_send(s, ln, cn, reqs, err, rest, need)
+    case P.Batch{reqs, +n, rest, err, need}:
+      conn_send(s, ln, cn, reqs, U32.to_nat(n), err, rest, need, inb)
 
 @unsafe
-def conn_send(s: Socket, +ln: Link, cn: S.Conn, reqs: List<&2, B.Req>, err: Maybe<&2, String>, rest: String, need: Nat) -> IO(Unit):
+def conn_send(s: Socket, +ln: Link, cn: S.Conn, reqs: List<&2, B.Req>, +n: Nat, err: Maybe<&2, String>, rest: String, need: Nat, +inb: Nat) -> IO(Unit):
   match reqs:
     case Nil{}:
       conn_err(s, ln, cn, err, rest, need)
     case Con{r, rs}:
-      conn_ask(s, ln, cn, r <> rs, err, rest, need)
+      conn_ask(s, ln, cn, r <> rs, n, err, rest, need, inb)
 
+# whether a batch asks for the shell's facts: INFO, or CONFIG RESETSTAT
+# (which counts the connections from then on); only a batch with a
+# command of the connection or of the server (B.Mixed) can
+def live.cmd(+c: R.Cmd) -> Bool:
+  match c:
+    case R.Own{R.SInfo{a}}:
+      True{}
+    case R.Own{R.SConfigResetStat{}}:
+      True{}
+    case _:
+      False{}
+
+def live.any(+cs: List<&2, R.Cmd>) -> Bool:
+  match cs:
+    case Nil{}:
+      False{}
+    case Con{+c, +rest}:
+      Bool.or(live.cmd(c), live.any(rest))
+
+def live.wants(+job: B.Job) -> Bool:
+  match job:
+    case B.Plain{cs, hs}:
+      False{}
+    case B.Mixed{+cs}:
+      live.any(cs)
+
+# the batch to the actor, the answer back; first the shell's facts, for
+# a batch that wants them. Each arm sends and waits itself: a step both
+# called would be a segment of its own, entered on every batch.
 @unsafe
-def conn_ask(s: Socket, +ln: Link, cn: S.Conn, rs: List<&2, B.Req>, err: Maybe<&2, String>, rest: String, need: Nat) -> IO(Unit):
-  match ln:
-    case Link{db, +back, post}:
+def conn_job(live: Bool, s: Socket, +ln: Link, job: B.Job, cn: S.Conn, +n: Nat, +inb: Nat, err: Maybe<&2, String>, rest: String, need: Nat) -> IO(Unit):
+  match live ln:
+    case False{} Link{db, +back, post, tl}:
       do IO<Unit>:
-        sent : Bool <- Chan.send(Req, db, batch_req(cn, rs, back))
+        sent : Bool <- Chan.send(Req, db, Req{cn, job, back, n, inb})
         got : Maybe<&1, Ans> <- Chan.recv(Ans, back)
         conn_ans(s, ln, got, err, rest, need)
+    case True{} Link{+db, +back, post, +tl}:
+      do IO<Unit>:
+        l : I.Live <- live.read(tl)
+        sent1 : Bool <- Chan.send(Req, db, Facts{l})
+        sent2 : Bool <- Chan.send(Req, db, Req{cn, job, back, n, inb})
+        got : Maybe<&1, Ans> <- Chan.recv(Ans, back)
+        conn_ans(s, ln, got, err, rest, need)
+
+# a batch: the parsed requests (newest first) put in order, how many they
+# are, and the bytes they came in
+@unsafe
+def conn_ask(s: Socket, +ln: Link, cn: S.Conn, rs: List<&2, B.Req>, +n: Nat, err: Maybe<&2, String>, rest: String, need: Nat, +inb: Nat) -> IO(Unit):
+  +job = B.job(B.unzip(rs, Nil{}, Nil{}))
+  conn_job(live.wants(job), s, ln, job, cn, n, inb, err, rest, need)
 
 @unsafe
 def conn_ans(s: Socket, +ln: Link, got: Maybe<&1, Ans>, err: Maybe<&2, String>, rest: String, need: Nat) -> IO(Unit):
@@ -320,53 +397,242 @@ def conn_err(s: Socket, +ln: Link, cn: S.Conn, err: Maybe<&2, String>, rest: Str
 # Accepting
 # ---------
 # Each connection gets the next id, from 1, as in Redis (CLIENT ID): the
-# next one waits in a channel the listeners share.
+# count of connections taken (Tally) waits in a channel the listeners and
+# the connections share.
 
 @unsafe
-def conn_start(s: Socket, db: Chan(Req), post: Bool, id: Nat) -> IO(Unit):
+def conn_start(s: Socket, db: Chan(Req), post: Bool, tl: Chan(Tally), id: Nat) -> IO(Unit):
   do IO<Unit>:
     back : Chan(Ans) <- Chan.new(Ans, 1)
-    conn_loop(s, SNil{}, Nil{}, 0n, 1n, Link{db, back, post}, S.conn_new(id))
+    conn_loop(s, SNil{}, Nil{}, 0n, 1n, Link{db, back, post, tl}, S.conn_new(id))
 
 @unsafe
-def next_id(m: Maybe<&1, Nat>, +ids: Chan(Nat)) -> IO(Nat):
+def tally.took(m: Maybe<&1, Tally>, +tl: Chan(Tally)) -> IO(Nat):
   match m:
-    case Some{+id}:
+    case Some{Tally{+t, o}}:
       do IO<Nat>:
-        ok : Bool <- Chan.send(Nat, ids, 1n+id)
-        return id
+        ok : Bool <- Chan.send(Tally, tl, Tally{1n+t, 1n+o})
+        return 1n+t
     case None{}:
       IO.pure(Nat, 0n)
 
+# a connection taken: one more open, and its id
 @unsafe
-def accept_next(m: Listener & Result<&1, &1, U32 & String, Socket>, +db: Chan(Req), +post: Bool, +ids: Chan(Nat)) -> IO(Listener):
+def tally.take(+tl: Chan(Tally)) -> IO(Nat):
+  do IO<Nat>:
+    m : Maybe<&1, Tally> <- Chan.recv(Tally, tl)
+    tally.took(m, tl)
+
+@unsafe
+def tally.closed(m: Maybe<&1, Tally>, +tl: Chan(Tally)) -> IO(Unit):
+  match m:
+    case Some{Tally{t, o}}:
+      do IO<Unit>:
+        ok : Bool <- Chan.send(Tally, tl, Tally{t, Nat.sub(o, 1n)})
+        return Unit{}
+    case None{}:
+      IO.pure(Unit, Unit{})
+
+# a connection closed: one less open
+@unsafe
+def tally.close(+tl: Chan(Tally)) -> IO(Unit):
+  do IO<Unit>:
+    m : Maybe<&1, Tally> <- Chan.recv(Tally, tl)
+    tally.closed(m, tl)
+
+@unsafe
+def tally.back(m: Maybe<&1, Tally>, +tl: Chan(Tally)) -> IO(Tally):
+  match m:
+    case Some{+c}:
+      do IO<Tally>:
+        ok : Bool <- Chan.send(Tally, tl, c)
+        return c
+    case None{}:
+      IO.pure(Tally, Tally{0n, 0n})
+
+# the count, left as it is
+@unsafe
+def tally.peek(+tl: Chan(Tally)) -> IO(Tally):
+  do IO<Tally>:
+    m : Maybe<&1, Tally> <- Chan.recv(Tally, tl)
+    tally.back(m, tl)
+
+# a connection, counted open until it ends
+@unsafe
+def conn_life(s: Socket, +db: Chan(Req), +post: Bool, +tl: Chan(Tally), id: Nat) -> IO(Unit):
+  do IO<Unit>:
+    Unit <- conn_start(s, db, post, tl, id)
+    tally.close(tl)
+
+@unsafe
+def accept_next(m: Listener & Result<&1, &1, U32 & String, Socket>, +db: Chan(Req), +post: Bool, +tl: Chan(Tally)) -> IO(Listener):
   (l, r) = m
   match r:
     case Done{s}:
       do IO<Listener>:
-        g : Maybe<&1, Nat> <- Chan.recv(Nat, ids)
-        id : Nat <- next_id(g, ids)
-        IO.spawn(Unit, conn_start(s, db, post, id))
+        id : Nat <- tally.take(tl)
+        IO.spawn(Unit, conn_life(s, db, post, tl, id))
         return l
     case Fail{e}:
       IO.pure(Listener, l)
 
 @unsafe
-def accept_loop(l: Listener, +db: Chan(Req), +post: Bool, +ids: Chan(Nat)) -> IO(Unit):
+def accept_loop(l: Listener, +db: Chan(Req), +post: Bool, +tl: Chan(Tally)) -> IO(Unit):
   do IO<Unit>:
     m : Listener & Result<&1, &1, U32 & String, Socket> <- TCP.accept(l)
-    l2 : Listener <- accept_next(m, db, post, ids)
-    accept_loop(l2, db, post, ids)
+    l2 : Listener <- accept_next(m, db, post, tl)
+    accept_loop(l2, db, post, tl)
 
 @unsafe
-def accept_each(ls: List<&1, Listener>, +db: Chan(Req), +post: Bool, +ids: Chan(Nat)) -> IO(Unit):
+def accept_each(ls: List<&1, Listener>, +db: Chan(Req), +post: Bool, +tl: Chan(Tally)) -> IO(Unit):
   match ls:
     case Nil{}:
       IO.pure(Unit, Unit{})
     case Con{l, rest}:
       do IO<Unit>:
-        IO.spawn(Unit, accept_loop(l, db, post, ids))
-        accept_each(rest, db, post, ids)
+        IO.spawn(Unit, accept_loop(l, db, post, tl))
+        accept_each(rest, db, post, tl)
+
+# INFO's facts
+# ------------
+# What only the shell can see, read where Linux shows it (/proc) as Redis
+# reads its own with uname, getrusage and its allocator: the system, the
+# machine's memory, the resident memory, the processor time of the
+# process and of its main thread (in clock ticks of 10 ms); the clock;
+# and the connections, from the channel their count waits in.
+
+def words.keep(empty: Bool, +w: String, rest: List<&2, String>) -> List<&2, String>:
+  match empty:
+    case True{}:
+      rest
+    case False{}:
+      w <> rest
+
+def words.go(ws: List<&2, String>) -> List<&2, String>:
+  match ws:
+    case Nil{}:
+      Nil{}
+    case Con{+w, rest}:
+      words.keep(String.is_empty(w), w, words.go(rest))
+
+# the words of a line, at its spaces
+def words.of(+s: String) -> List<&2, String>:
+  words.go(String.split(T.trim(s), ' '))
+
+def nth(n: Nat, xs: List<&2, String>) -> String:
+  match n xs:
+    case 0n Con{x, rest}:
+      x
+    case 1n+m Con{x, rest}:
+      nth(m, rest)
+    case _ Nil{}:
+      ""
+
+def last(xs: List<&2, String>, +d: String) -> String:
+  match xs:
+    case Nil{}:
+      d
+    case Con{x, rest}:
+      last(rest, x)
+
+def nat.of(+s: String) -> Nat:
+  Bool.pick(Nat, C.text.digits(s), C.dec.small(s, 0n), 0n)
+
+# a field of /proc/.../stat, counted from the one after the command's
+# name (which may hold spaces): 11 is utime, 12 stime
+def stat.field(+s: String, +k: Nat) -> Nat:
+  nat.of(nth(k, words.of(last(String.split(s, ')'), ""))))
+
+def clock.ms(t: U32 & U32) -> Nat:
+  (secs, us) = t
+  Nat.add(Nat.mul(U32.to_nat(secs), 1000n), U32.to_nat(U32.div(us, 1000)))
+
+def live.of(t: U32 & U32, +ps: String, +ts: String, +sm: String, c: Tally) -> I.Live:
+  (secs, us) = t
+  match c:
+    case Tally{taken, open}:
+      I.ILive{secs, us, stat.field(ps, 11n), stat.field(ps, 12n), stat.field(ts, 11n), stat.field(ts, 12n), Nat.mul(nat.of(nth(1n, words.of(sm))), 4096n), taken, open}
+
+def hex8.go(n: Nat, +x: U32, acc: String) -> String:
+  match n:
+    case 0n:
+      acc
+    case 1n+m:
+      hex8.go(m, U32.div(x, 16), SCon{T.hex.digit(U32.and(x, 15)), acc})
+
+def hex.word(r: Result<&1, &1, U32 & String, U32>) -> String:
+  match r:
+    case Done{+x}:
+      hex8.go(8n, x, "")
+    case Fail{e}:
+      "00000000"
+
+def boot.of(+o1: String, +o2: String, +o3: String, +mem: String, +sm: String, run: String, rep: String, t: U32 & U32, +pid: U32, exe: String, conf: String) -> I.Boot:
+  (secs, us) = t
+  I.IBoot{T.trim(o1) ++ " " ++ T.trim(o2) ++ " " ++ T.trim(o3), U32.show(pid), run, rep, exe, conf, Nat.mul(nat.of(nth(1n, words.of(T.first(String.split(mem, '\n'))))), 1024n), secs, Nat.mul(nat.of(nth(1n, words.of(sm))), 4096n)}
+
+@unsafe
+def proc.got(m: Result<&1, &1, U32 & String, File>) -> IO(String):
+  match m:
+    case Done{f}:
+      do IO<String>:
+        p : File & String <- text.all(f, Nil{})
+        text.closed(p)
+    case Fail{e}:
+      IO.pure(String, "")
+
+# a file of /proc ("" if it cannot be read)
+@unsafe
+def proc.text(+path: String) -> IO(String):
+  do IO<String>:
+    m : Result<&1, &1, U32 & String, File> <- File.open(path, "r")
+    proc.got(m)
+
+# 40 hex digits at random, as Redis's run and replication ids
+@unsafe
+def hex40() -> IO(String):
+  do IO<String>:
+    a : Result<&1, &1, U32 & String, U32> <- IO.random_u32()
+    b : Result<&1, &1, U32 & String, U32> <- IO.random_u32()
+    c : Result<&1, &1, U32 & String, U32> <- IO.random_u32()
+    d : Result<&1, &1, U32 & String, U32> <- IO.random_u32()
+    e : Result<&1, &1, U32 & String, U32> <- IO.random_u32()
+    return hex.word(a) ++ hex.word(b) ++ hex.word(c) ++ hex.word(d) ++ hex.word(e)
+
+# the facts now (the main thread's id is the pid)
+@unsafe
+def live.read(+tl: Chan(Tally)) -> IO(I.Live):
+  do IO<I.Live>:
+    t : U32 & U32 <- IO.clock()
+    pid : U32 <- IO.pid()
+    ps : String <- proc.text("/proc/self/stat")
+    ts : String <- proc.text("/proc/self/task/" ++ U32.show(pid) ++ "/stat")
+    sm : String <- proc.text("/proc/self/statm")
+    c : Tally <- tally.peek(tl)
+    return live.of(t, ps, ts, sm, c)
+
+# the facts of the start: the program's and the configuration file's
+# absolute paths come from the start's own reading
+@unsafe
+def boot.read(+pid: U32, +exe: String, +conf: String) -> IO(I.Boot):
+  do IO<I.Boot>:
+    o1 : String <- proc.text("/proc/sys/kernel/ostype")
+    o2 : String <- proc.text("/proc/sys/kernel/osrelease")
+    o3 : String <- proc.text("/proc/sys/kernel/arch")
+    mem : String <- proc.text("/proc/meminfo")
+    sm : String <- proc.text("/proc/self/statm")
+    run : String <- hex40()
+    rep : String <- hex40()
+    t : U32 & U32 <- IO.clock()
+    return boot.of(o1, o2, o3, mem, sm, run, rep, t, pid, exe, conf)
+
+# INFO's account at the start, before the append-only file is read
+@unsafe
+def info.read(+pid: U32, +exe: String, +conf: String, +tl: Chan(Tally)) -> IO(I.Info):
+  do IO<I.Info>:
+    boot : I.Boot <- boot.read(pid, exe, conf)
+    live : I.Live <- live.read(tl)
+    return I.info.new(boot, live)
 
 # The log
 # -------
@@ -519,15 +785,21 @@ type St is Data:
 type Grp is Data:
   Grp{outs: List<&2, Sigma<&2, &2, Chan(Ans), _ => Ans>>, es: List<&2, R.Cmd>, st: St}
 
-def group_put(outs: List<&2, Sigma<&2, &2, Chan(Ans), _ => Ans>>, es: List<&2, R.Cmd>, back: Chan(Ans), d: S.Logged) -> Grp:
+def group_put(outs: List<&2, Sigma<&2, &2, Chan(Ans), _ => Ans>>, es: List<&2, R.Cmd>, back: Chan(Ans), +n: Nat, +inb: Nat, d: S.Logged) -> Grp:
   match d:
     case S.Logged{rs, e, cn, srv, db}:
-      Grp{(back, ans_of(rs, cn)) <> outs, List.reverse.go(&2, R.Cmd, e, es), St{srv, db}}
+      +a = ans_of(rs, cn)
+      +outb = ans.len(a)
+      Grp{(back, a) <> outs, List.reverse.go(&2, R.Cmd, e, es), St{S.srv.ran(srv, n, inb, outb), db}}
 
 def group_req(q: Req, outs: List<&2, Sigma<&2, &2, Chan(Ans), _ => Ans>>, es: List<&2, R.Cmd>, st: St) -> Grp:
   match q st:
-    case Req{cn, job, back} St{srv, db}:
-      group_put(outs, es, back, S.run_log(cn, srv, job, db))
+    case Req{cn, job, back, +n, +inb} St{srv, db}:
+      group_put(outs, es, back, n, inb, S.run_log(cn, srv, job, db))
+    case Facts{live} St{srv, db}:
+      Grp{outs, es, St{S.srv.live(srv, live), db}}
+    case Tick{+ms} St{srv, db}:
+      Grp{outs, es, St{S.srv.tick(srv, ms), db}}
 
 def group_step(q: Req, g: Grp) -> Grp:
   match g:
@@ -563,15 +835,22 @@ def aof_group(g: Grp, f: File, +sync: Sync, +reqs: Chan(Req)) -> IO(Unit):
     case Grp{outs, es, st}:
       aof_put(List.reverse(&2, Sigma<&2, &2, Chan(Ans), _ => Ans>, outs), List.reverse(&2, R.Cmd, es), st, f, sync, reqs)
 
+# the bytes appended to the file, for INFO
+def st.aof(st: St, +n: Nat) -> St:
+  match st:
+    case St{srv, db}:
+      St{S.srv.aof(srv, n), db}
+
 @unsafe
 def aof_put(outs: List<&2, Sigma<&2, &2, Chan(Ans), _ => Ans>>, es: List<&2, R.Cmd>, st: St, f: File, +sync: Sync, +reqs: Chan(Req)) -> IO(Unit):
   match es:
     case Nil{}:
       aof_reply(outs, st, f, sync, reqs)
     case Con{e, more}:
+      +bytes = A.encode(A.args_all(e <> more))
       do IO<Unit>:
-        p : File & Result<&1, &1, U32 & String, Unit> <- File.write_raw(f, A.encode(A.args_all(e <> more)))
-        aof_wrote(p, outs, st, sync, reqs)
+        p : File & Result<&1, &1, U32 & String, Unit> <- File.write_raw(f, bytes)
+        aof_wrote(p, outs, st.aof(st, String.length(bytes)), sync, reqs)
 
 @unsafe
 def aof_wrote(p: File & Result<&1, &1, U32 & String, Unit>, outs: List<&2, Sigma<&2, &2, Chan(Ans), _ => Ans>>, st: St, +sync: Sync, +reqs: Chan(Req)) -> IO(Unit):
@@ -672,7 +951,7 @@ def read_next(f: File, eof: Bool, x: String, got: List<&2, String>) -> IO(File &
 # parser waits for more of it
 def cut_short.of(b: P.Batch) -> Bool:
   match b:
-    case P.Batch{reqs, rest, err, need}:
+    case P.Batch{reqs, n, rest, err, need}:
       Bool.and(List.is_empty(&2, B.Req, reqs), Maybe.is_none(&2, String, err))
 
 def cut_short(s: String) -> Bool:
@@ -705,41 +984,41 @@ def cut_file(+lg: Log, +path: String, keep: Nat, +cut: Nat) -> IO(Unit):
 
 # a file that ends in an entry cut short is cut back to its last whole
 # entry, unless aof-load-truncated is no: then it stops the start, as in
-# Redis
+# Redis. What a start gives is the database and the file's size.
 @unsafe
-def restore_cut(trunc: Bool, +lg: Log, +path: String, +size: Nat, +n: Nat, +db: KV.Trie<String>, +rest: String) -> IO(KV.Trie<String>):
+def restore_cut(trunc: Bool, +lg: Log, +path: String, +size: Nat, +n: Nat, +db: KV.Trie<String>, +rest: String) -> IO(KV.Trie<String> & Nat):
   match trunc:
     case True{}:
-      do IO<KV.Trie<String>>:
+      do IO<KV.Trie<String> & Nat>:
         Unit <- cut_file(lg, path, Nat.sub(size, String.length(rest)), String.length(rest))
         Unit <- log(lg, 2, restored(n, db, path))
-        return db
+        return (db, Nat.sub(size, String.length(rest)))
     case False{}:
-      log.die(KV.Trie<String>, lg, "Unexpected end of file reading the append only file " ++ path ++ ". You can: 1) Make a backup of your AOF file, then use ./redis-check-aof --fix <filename>. 2) Alternatively you can set the 'aof-load-truncated' configuration option to yes and restart the server.")
+      log.die(KV.Trie<String> & Nat, lg, "Unexpected end of file reading the append only file " ++ path ++ ". You can: 1) Make a backup of your AOF file, then use ./redis-check-aof --fix <filename>. 2) Alternatively you can set the 'aof-load-truncated' configuration option to yes and restart the server.")
 
 # the database of the entries, once the file is fit to append to: whole,
 # or cut back to its last whole entry
 @unsafe
-def restore_fix(+lg: Log, +trunc: Bool, +path: String, +size: Nat, +n: Nat, +db: KV.Trie<String>, +rest: String, whole: Bool, cut: Bool) -> IO(KV.Trie<String>):
+def restore_fix(+lg: Log, +trunc: Bool, +path: String, +size: Nat, +n: Nat, +db: KV.Trie<String>, +rest: String, whole: Bool, cut: Bool) -> IO(KV.Trie<String> & Nat):
   match whole cut:
     case True{} _:
-      do IO<KV.Trie<String>>:
+      do IO<KV.Trie<String> & Nat>:
         Unit <- log(lg, 2, restored(n, db, path))
-        return db
+        return (db, size)
     case False{} True{}:
       restore_cut(trunc, lg, path, size, n, db, rest)
     case False{} False{}:
-      log.die(KV.Trie<String>, lg, "Bad file format reading the append only file " ++ path ++ ": no entry at byte " ++ Nat.show(Nat.sub(size, String.length(rest))))
+      log.die(KV.Trie<String> & Nat, lg, "Bad file format reading the append only file " ++ path ++ ": no entry at byte " ++ Nat.show(Nat.sub(size, String.length(rest))))
 
 @unsafe
-def restore_load(+lg: Log, +trunc: Bool, +path: String, +size: Nat, l: List<&2, List<&2, String>> & String) -> IO(KV.Trie<String>):
+def restore_load(+lg: Log, +trunc: Bool, +path: String, +size: Nat, l: List<&2, List<&2, String>> & String) -> IO(KV.Trie<String> & Nat):
   (+reqs, +rest) = l
   restore_fix(lg, trunc, path, size, List.length(&2, List<&2, String>, reqs), A.replay(reqs), rest, String.is_empty(rest), cut_short(rest))
 
 @unsafe
-def restore_read(+lg: Log, +trunc: Bool, +path: String, p: File & String) -> IO(KV.Trie<String>):
+def restore_read(+lg: Log, +trunc: Bool, +path: String, p: File & String) -> IO(KV.Trie<String> & Nat):
   (f, +s) = p
-  do IO<KV.Trie<String>>:
+  do IO<KV.Trie<String> & Nat>:
     Unit <- File.close(f)
     restore_load(lg, trunc, path, String.length(s), A.load(s))
 
@@ -754,32 +1033,33 @@ def open_fail(+path: String, msg: String) -> String:
 # permission, an I/O error, no descriptor left) stops the start: serving
 # an empty database would append to a file that holds another
 @unsafe
-def restore_none(none: Bool, +lg: Log, +path: String, msg: String) -> IO(KV.Trie<String>):
+def restore_none(none: Bool, +lg: Log, +path: String, msg: String) -> IO(KV.Trie<String> & Nat):
   match none:
     case True{}:
-      IO.pure(KV.Trie<String>, KV.empty(String))
+      IO.pure(KV.Trie<String> & Nat, (KV.empty(String), 0n))
     case False{}:
-      log.die(KV.Trie<String>, lg, open_fail(path, msg))
+      log.die(KV.Trie<String> & Nat, lg, open_fail(path, msg))
 
 @unsafe
-def restore_fail(+lg: Log, +path: String, e: U32 & String) -> IO(KV.Trie<String>):
+def restore_fail(+lg: Log, +path: String, e: U32 & String) -> IO(KV.Trie<String> & Nat):
   (code, msg) = e
   restore_none(U32.is_eq(code, enoent()), lg, path, msg)
 
 @unsafe
-def restore_open(+lg: Log, +trunc: Bool, +path: String, m: Result<&1, &1, U32 & String, File>) -> IO(KV.Trie<String>):
+def restore_open(+lg: Log, +trunc: Bool, +path: String, m: Result<&1, &1, U32 & String, File>) -> IO(KV.Trie<String> & Nat):
   match m:
     case Fail{e}:
       restore_fail(lg, path, e)
     case Done{f}:
-      do IO<KV.Trie<String>>:
+      do IO<KV.Trie<String> & Nat>:
         p : File & String <- read_all(f, Nil{})
         restore_read(lg, trunc, path, p)
 
-# the database a file holds; none for a file not there yet
+# the database a file holds, and the file's size; none for a file not
+# there yet
 @unsafe
-def restore(+lg: Log, +trunc: Bool, +path: String) -> IO(KV.Trie<String>):
-  do IO<KV.Trie<String>>:
+def restore(+lg: Log, +trunc: Bool, +path: String) -> IO(KV.Trie<String> & Nat):
+  do IO<KV.Trie<String> & Nat>:
     m : Result<&1, &1, U32 & String, File> <- File.open(path, "r")
     restore_open(lg, trunc, path, m)
 
@@ -798,27 +1078,50 @@ def open_aof(+path: String, +sync: Sync, srv: S.Srv, db: KV.Trie<String>) -> IO(
 # The actor on its database (restored from the append-only file, with
 # one), then a loop on each listener; then the server is ready.
 
+# Redis's serverCron samples its rates every 100 ms: so does the cron,
+# with a tick to the actor
 @unsafe
-def accept_all(ls: List<&1, Listener>, +reqs: Chan(Req), +post: Bool, +lg: Log) -> IO(Unit):
+def cron.next(ok: Bool, +reqs: Chan(Req)) -> IO(Unit):
+  match ok:
+    case True{}:
+      cron(reqs)
+    case False{}:
+      IO.pure(Unit, Unit{})
+
+@unsafe
+def cron(+reqs: Chan(Req)) -> IO(Unit):
   do IO<Unit>:
-    +ids : Chan(Nat) <- Chan.new(Nat, 1)
-    ok : Bool <- Chan.send(Nat, ids, 1n)
-    Unit <- accept_each(ls, reqs, post, ids)
+    Unit <- IO.sleep(100)
+    t : U32 & U32 <- IO.clock()
+    ok : Bool <- Chan.send(Req, reqs, Tick{clock.ms(t)})
+    cron.next(ok, reqs)
+
+@unsafe
+def accept_all(ls: List<&1, Listener>, +reqs: Chan(Req), +post: Bool, +lg: Log, +tl: Chan(Tally)) -> IO(Unit):
+  do IO<Unit>:
+    Unit <- IO.spawn(Unit, cron(reqs))
+    Unit <- accept_each(ls, reqs, post, tl)
     log(lg, 2, "Ready to accept connections")
 
 @unsafe
-def serve(aof: Maybe<&2, String>, ls: List<&1, Listener>, +post: Bool, +sync: Sync, +trunc: Bool, srv: S.Srv, +lg: Log) -> IO(Unit):
+def serve.aof(p: KV.Trie<String> & Nat, +path: String, +sync: Sync, +items: List<&2, C.CItem>, info: I.Info, ls: List<&1, Listener>, +post: Bool, +lg: Log, +tl: Chan(Tally)) -> IO(Unit):
+  (db, +size) = p
+  do IO<Unit>:
+    +reqs : Chan(Req) <- open_aof(path, sync, S.srv_of(items, I.info.restored(info, size)), db)
+    accept_all(ls, reqs, post, lg, tl)
+
+@unsafe
+def serve(aof: Maybe<&2, String>, ls: List<&1, Listener>, +post: Bool, +sync: Sync, +trunc: Bool, +items: List<&2, C.CItem>, info: I.Info, +lg: Log, +tl: Chan(Tally)) -> IO(Unit):
   match aof:
     case None{}:
       do IO<Unit>:
         +reqs : Chan(Req) <- Chan.new(Req, 1024)
-        Unit <- IO.spawn(Unit, db_loop(srv, KV.empty(String), reqs))
-        accept_all(ls, reqs, post, lg)
+        Unit <- IO.spawn(Unit, db_loop(S.srv_of(items, info), KV.empty(String), reqs))
+        accept_all(ls, reqs, post, lg, tl)
     case Some{+path}:
       do IO<Unit>:
-        db : KV.Trie<String> <- restore(lg, trunc, path)
-        reqs : Chan(Req) <- open_aof(path, sync, srv, db)
-        accept_all(ls, reqs, post, lg)
+        p : KV.Trie<String> & Nat <- restore(lg, trunc, path)
+        serve.aof(p, path, sync, items, info, ls, post, lg, tl)
 
 # Listening
 # ---------
@@ -999,18 +1302,24 @@ def env.set(r: Result<&1, &1, U32 & String, String>) -> Bool:
     case Fail{e}:
       False{}
 
+# supervised, as its environment shows it (upstart, systemd)
+@unsafe
+def start.sup.env(+items: List<&2, C.CItem>, +lg: Log) -> IO(Unit):
+  do IO<Unit>:
+    up : Result<&1, &1, U32 & String, String> <- IO.get_env("UPSTART_JOB")
+    sd : Result<&1, &1, U32 & String, String> <- IO.get_env("NOTIFY_SOCKET")
+    start.sup(T.sup.kind(T.cfg(items, "supervised"), env.set(up), env.set(sd)), lg)
+
 # the server as the configuration asks: up to listening, then serving;
 # checks: the data checks (not in the short form); mod and mcfg: what
 # startup.bend found of modules
 @unsafe
-def run(+items: List<&2, C.CItem>, +post: Bool, +aof: Maybe<&2, String>, +sync: Sync, +bare: Bool, +prog: String, +pid: U32, +checks: Bool, +mod: String, +mcfg: Bool) -> IO(Unit):
+def run(+items: List<&2, C.CItem>, +post: Bool, +aof: Maybe<&2, String>, +sync: Sync, +bare: Bool, +prog: String, +pid: U32, +checks: Bool, +mod: String, +mcfg: Bool, +exe: String, +conf: String) -> IO(Unit):
   +lg = log.of(items, pid)
   +lm = log.up(log.of(items, pid))
   +port = port_or(T.cfg(items, "port"))
   do IO<Unit>:
-    up : Result<&1, &1, U32 & String, String> <- IO.get_env("UPSTART_JOB")
-    sd : Result<&1, &1, U32 & String, String> <- IO.get_env("NOTIFY_SOCKET")
-    Unit <- start.sup(T.sup.kind(T.cfg(items, "supervised"), env.set(up), env.set(sd)), lg)
+    Unit <- start.sup.env(items, lg)
     Unit <- start.refused(String.is_empty(T.refusal(items, False{})), T.refusal(items, False{}), lg)
     Unit <- log(lg, 3, "oO0OoO0OoO0Oo BendKV is starting oO0OoO0OoO0Oo")
     Unit <- log(lg, 3, "BendKV version=" ++ T.version() ++ ", Redis 7.0.15 commands, bits=64, pid=" ++ U32.show(pid) ++ ", just started")
@@ -1023,7 +1332,10 @@ def run(+items: List<&2, C.CItem>, +post: Bool, +aof: Maybe<&2, String>, +sync: 
     Unit <- log(lm, 3, "Server initialized")
     Unit <- modules(Bool.not(String.is_empty(mod)), mcfg, mod, lm)
     Unit <- data.check(checks, Maybe.is_some(&2, String, aof), items, lm)
-    serve(aof, ls, post, sync, String.eq(T.cfg(items, "aof-load-truncated"), "yes"), S.srv_of(C.items.put(items, "databases", "1")), lm)
+    +tl : Chan(Tally) <- Chan.new(Tally, 1)
+    ok : Bool <- Chan.send(Tally, tl, Tally{0n, 0n})
+    info : I.Info <- info.read(pid, exe, conf, tl)
+    serve(aof, ls, post, sync, String.eq(T.cfg(items, "aof-load-truncated"), "yes"), C.items.put(items, "databases", "1"), info, lm, tl)
 
 # The short form
 # --------------
@@ -1081,8 +1393,8 @@ def start.short(s: Short, +port: U32, cpus: U32, +prog: String, +pid: U32) -> IO
   match s:
     case Short{post, +aof, +sync}:
       do IO<Unit>:
-        d : Result<&1, &1, U32 & String, String> <- IO.cwd()
-        run(S.srv.puts(start_sets(port, env_or(d), aof, sync), C.config.table()), Maybe.default(&2, Bool, post, post_default(cpus)), aof, sync, False{}, prog, pid, False{}, "", False{})
+        +d : Result<&1, &1, U32 & String, String> <- IO.cwd()
+        run(S.srv.puts(start_sets(port, env_or(d), aof, sync), C.config.table()), Maybe.default(&2, Bool, post, post_default(cpus)), aof, sync, False{}, prog, pid, False{}, "", False{}, T.abs(env_or(d), prog), "")
 
 # The configuration
 # -----------------
@@ -1091,7 +1403,8 @@ def start.short(s: Short, +port: U32, cpus: U32, +prog: String, +pid: U32) -> IO
 # and an include reads its file then and there.
 
 # the bytes of a file, up to the first read that fails or comes back
-# empty (Redis reads a directory as an empty file)
+# empty (Redis reads a directory as an empty file), 64 kB at a time
+# (Linux refuses a read of more than 4 MB from /proc/sys)
 @unsafe
 def text.next(f: File, eof: Bool, x: String, got: List<&2, String>) -> IO(File & String):
   match eof:
@@ -1112,7 +1425,7 @@ def text.more(p: File & Result<&1, &1, U32 & String, String>, got: List<&2, Stri
 @unsafe
 def text.all(f: File, got: List<&2, String>) -> IO(File & String):
   do IO<File & String>:
-    p : File & Result<&1, &1, U32 & String, String> <- File.read_raw(f, 16777216)
+    p : File & Result<&1, &1, U32 & String, String> <- File.read_raw(f, 65536)
     text.more(p, got)
 
 @unsafe
@@ -1277,20 +1590,29 @@ def conf.aof(+items: List<&2, C.CItem>) -> Maybe<&2, String>:
   Bool.pick(Maybe<&2, String>, String.eq(T.cfg(items, "appendonly"), "yes"), Some{T.cfg(items, "appendfilename")}, None{})
 
 @unsafe
-def conf.ready(st: T.Load, +dir: String, cpus: U32, +bare: Bool, +prog: String, +pid: U32) -> IO(Unit):
+def conf.ready(st: T.Load, +dir: String, cpus: U32, +bare: Bool, +prog: String, +pid: U32, +exe: String, +conf: String) -> IO(Unit):
   match st:
     case T.Load{+items, saved, reading, io, +mod, +mcfg}:
-      run(C.items.put(items, "dir", dir), conf.post(io, items, cpus), conf.aof(items), sync_or(T.cfg(items, "appendfsync")), bare, prog, pid, True{}, mod, mcfg)
+      run(C.items.put(items, "dir", dir), conf.post(io, items, cpus), conf.aof(items), sync_or(T.cfg(items, "appendfsync")), bare, prog, pid, True{}, mod, mcfg, exe, conf)
+
+# the configuration file's absolute path, as Redis keeps it (INFO's
+# config_file); "" for none
+def conf.path(+file: Maybe<&2, String>, +cwd: String) -> String:
+  match file:
+    case Some{+f}:
+      T.abs(cwd, f)
+    case None{}:
+      ""
 
 @unsafe
-def start.conf(file: Maybe<&2, String>, stdin: Bool, +opts: String, +bare: Bool, cpus: U32, +prog: String, +pid: U32) -> IO(Unit):
+def start.conf(+file: Maybe<&2, String>, stdin: Bool, +opts: String, +bare: Bool, cpus: U32, +prog: String, +pid: U32) -> IO(Unit):
   +lg = log.boot(pid)
   do IO<Unit>:
-    c : Result<&1, &1, U32 & String, String> <- IO.cwd()
+    +c : Result<&1, &1, U32 & String, String> <- IO.cwd()
     text : String <- conf.text(file, stdin, opts, env_or(c), lg)
     st : T.Load <- conf.all(bare, text, lg)
     d : Result<&1, &1, U32 & String, String> <- IO.cwd()
-    conf.ready(st, env_or(d), cpus, bare, prog, pid)
+    conf.ready(st, env_or(d), cpus, bare, prog, pid, T.abs(env_or(c), prog), conf.path(file, env_or(c)))
 
 # Main
 # ----
