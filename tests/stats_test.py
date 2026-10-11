@@ -14,11 +14,12 @@ before they run (a wrong number of arguments by the command's arity,
 NOAUTH), unknown commands and subcommands (errorstats only), calls that
 fail as they run (INCR of a string; PING with two arguments and MSET with
 a key and no value, which pass the arity and fail in the command) or as
-they parse (a syntax error); errors with
-codes other than ERR (WRONGPASS, NOAUTH); calls while CLIENT REPLY holds
+they parse (a syntax error, SCAN's invalid cursor); errors with codes
+other than ERR (WRONGPASS, NOAUTH); calls while CLIENT REPLY holds
 replies back (counted all the same); commands after a QUIT (dropped); a
 protocol error (counted, then the connection closes); and random
-pipelines mixing all of these.
+pipelines mixing all of these. SCAN and RANDOMKEY answer keys of their
+own choice: their replies are compared by their kind.
 
     python3 tests/stats_test.py --bendkv 6380 --redis 6390 [--rounds 200]
 """
@@ -138,9 +139,11 @@ def one_at_a_time(c, port):
                  ["SETNX", "a", "3"], ["GETSET", "a", "4"], ["TYPE", "a"], ["DBSIZE"], ["KEYS", "*"],
                  ["PING"], ["PING", "x"], ["ECHO", "e"], ["CLIENT", "ID"], ["CLIENT", "SETNAME", "nm"],
                  ["CLIENT", "GETNAME"], ["CONFIG", "GET", "maxmemory"], ["COMMAND", "COUNT"], ["SELECT", "0"],
-                 ["FLUSHDB"], ["FLUSHALL"]):
+                 ["SCAN", "0"], ["SCAN", "0", "MATCH", "a*", "COUNT", "5", "TYPE", "string"], ["RANDOMKEY"],
+                 ["FLUSHDB"], ["RANDOMKEY"], ["FLUSHALL"]):
         r = c.ask(*args)
-        out.append(r if args[0] not in ("CLIENT", "COMMAND", "CONFIG", "DBSIZE", "KEYS") else type(r))
+        out.append(r if args[0] not in ("CLIENT", "COMMAND", "CONFIG", "DBSIZE", "KEYS", "SCAN", "RANDOMKEY")
+                   else type(r))
     return out
 
 
@@ -152,7 +155,9 @@ def errors_at_a_time(c, port):
                  ["DECRBY", "n", "x"], ["MSET", "a", "1", "b"], ["PING", "a", "b"],
                  ["SET", "k", "v", "foo"], ["SELECT", "1"], ["SELECT", "x"], ["AUTH", "pw"],
                  ["AUTH", "u", "pw"], ["ECHO"], ["PING", "a", "b"], ["MSET", "a"], ["MGET"], ["DEL"],
-                 ["CLIENT", "REPLY", "MAYBE"], ["FUNCTION", "FLUSH", "NOW"], ["HELLO", "4"]):
+                 ["CLIENT", "REPLY", "MAYBE"], ["FUNCTION", "FLUSH", "NOW"], ["HELLO", "4"], ["SCAN"],
+                 ["SCAN", "x"], ["SCAN", "0", "COUNT", "0"], ["SCAN", "0", "COUNT", "x"], ["SCAN", "0", "FOO"],
+                 ["SCAN", "0", "MATCH"], ["RANDOMKEY", "x"]):
         out.append(c.ask(*args))
     return out
 
@@ -170,6 +175,12 @@ def pipelines(c, port):
     out += c.pipe([["GET", "p1"], ["INCR", "p1"], ["GET"], ["NOSUCH"], ["PING"], ["INCR", "q1"],
                    ["CLIENT", "NOSUCH"], ["MGET", "p1", "p2"], ["DECR", "p2"], ["ECHO", "x"]])
     out += c.pipe([["INCR", "q1"], ["INCR", "q1"], ["GET", "q1"], ["INCR", "p3"]])
+    out += c.pipe([["SCAN", "0", "COUNT", "1000", "MATCH", "nomatch*"] for i in range(16)])
+    out += c.pipe([["SCAN", "x"] for i in range(16)])                 # every one failed as it parsed
+    out += c.pipe([["RANDOMKEY", "x"] for i in range(16)])            # every one refused
+    out += c.pipe([["SCAN", "0", "COUNT", "0"], ["RANDOMKEY", "x"], ["SCAN"], ["GET", "p1"],
+                   ["SCAN", "0", "COUNT", "1000", "TYPE", "list"]])
+    out += [type(x) for x in c.pipe([["RANDOMKEY"] for i in range(16)])]
     return out
 
 
@@ -226,7 +237,9 @@ def random_pipelines(rounds, seed):
     pool = [["GET", "k"], ["SET", "k", "v"], ["INCR", "n"], ["INCR", "k"], ["DECRBY", "n", "x"], ["GET"],
             ["SET", "k"], ["NOSUCH"], ["PING"], ["ECHO", "e"], ["MGET", "k", "n"], ["DEL", "z"],
             ["CLIENT", "NOSUCH"], ["CONFIG", "GET"], ["SET", "k", "v", "foo"], ["APPEND", "k", "x"],
-            ["SELECT", "1"], ["EXISTS", "k"], ["STRLEN", "k"], ["SET", "n", "1"], ["TYPE", "k"]]
+            ["SELECT", "1"], ["EXISTS", "k"], ["STRLEN", "k"], ["SET", "n", "1"], ["TYPE", "k"],
+            ["SCAN", "0", "COUNT", "1000", "MATCH", "nomatch"], ["SCAN", "x"], ["SCAN", "0", "COUNT", "0"],
+            ["RANDOMKEY"], ["RANDOMKEY", "x"]]
 
     def case(c, port):
         rnd = random.Random(seed)
@@ -237,7 +250,8 @@ def random_pipelines(rounds, seed):
                 cmds = [rnd.choice(pool)] * n
             else:
                 cmds = [rnd.choice(pool) for _ in range(n)]
-            out += c.pipe(cmds)
+            # RANDOMKEY's pick is its own: a key, or nil
+            out += [type(x) if cmd == ["RANDOMKEY"] else x for cmd, x in zip(cmds, c.pipe(cmds))]
         return out
     return case
 

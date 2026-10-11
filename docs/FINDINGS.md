@@ -1397,7 +1397,8 @@ once, against Redis and against BendKV, and counts only the tests Redis passes: 
 the 1,729 that run in this mode (most of the others need `DEBUG`, off by default in
 7.0). BendKV passed 124 (7.5%), and 103 of the 256 in the units of what it has (the
 protocol, connections, the keyspace, strings, counters, introspection); with the
-statistics per command (section 3s), 127 and 106. Of the rest, 867 stop on a command
+statistics per command (section 3s), 127 and 106; with SCAN and RANDOMKEY (section 3t),
+135 and 109. Of the rest, 867 stop on a command
 BendKV does not have (FUNCTION LOAD, ZADD, XADD, GEOADD, SADD, EXPIRE, MULTI lead), 589
 never run because their unit stopped earlier, and 73 fail on SET's options or RESP3. The unit-by-unit table and the
 reasons are in [COMPATIBILITY.md](COMPATIBILITY.md).
@@ -1513,6 +1514,99 @@ more. What the steps between taught:
 `make perfcheck`: GET 3,053, SET 3,637, INCR 3,947, +2.7%, +2.0% and +3.0% over the
 baseline of 2,972, 3,566 and 3,833, which has stood since before INFO; it is rewritten to
 the new counts (`UPDATE=1`), so that the next 3% is measured from here.
+
+## 3t. SCAN and RANDOMKEY on the trie
+
+Redis's SCAN walks a hash table that grows and shrinks as keys come and go. Its cursor
+counts the buckets with the bits reversed, so that a key there from the first call of an
+iteration to the last is returned whatever the table does meanwhile, possibly more than
+once. BendKV's trie never rehashes: it is 2^20 buckets, each the end of a path of five
+hex digits of the key's hash. Read with the first digit highest, the paths number the
+buckets in order (KEYS's order), and a cursor is the index of the next bucket to read: a
+call reads the buckets from the cursor on, each whole, until it has found COUNT keys,
+and answers the next bucket's index, or 0 when it read to the end. A key there for the
+whole iteration stays in one bucket, and an iteration reads each bucket once, so it
+returns the key once, never twice. Keys added or deleted meanwhile may or may not come,
+as in Redis. A subtrie that lies wholly before the cursor is skipped without a look
+inside, and an empty one costs a step.
+
+COUNT counts keys before MATCH and TYPE filter them, as Redis's COUNT bounds the work
+and not the reply; each call but the last returns COUNT keys at least (a bucket read
+whole can add a few), so an iteration takes at most keys / COUNT + 1 calls. Redis also
+stops a call after 10 × COUNT buckets, for a sparse table; the trie skips empty subtries
+for nothing and needs no such bound. The arguments are read as Redis 7.0.15 reads them.
+The cursor goes through `strtoul`: a sign and digits up to the end of the string or its
+first NUL, 2^64 − 1 at most; a blank first or anything after the digits is "ERR invalid
+cursor", and the empty string is 0. (Redis 7.2 reads it with `string2ull`, which refuses
+a negative number; 7.0 takes one modulo 2^64.) COUNT is a long long, and less than 1 is
+a syntax error; MATCH, COUNT and TYPE come in any order, a later one over an earlier,
+and an option without its value is a syntax error. BendKV holds strings only, so TYPE
+`string` (any case) keeps every key and any other name none; Redis 7.0 does not refuse
+an unknown name either. A cursor means nothing to another server, as between two Redis
+servers: BendKV's are below 2^20, and any other, a negative one included, ends the
+iteration (for Redis, an invalid cursor is undefined behavior).
+
+RANDOMKEY picks as Redis's `dictGetFairRandomKey` does: from a random bucket on, the
+keys of the buckets until 16 are found (past the last bucket, from the first one up to
+the random one), and one of them, each as likely. A first version walked down the trie,
+taking at each node one of its nonempty subtries, each as likely. It reads 5 nodes, but
+a key alone in a subtrie beside fuller ones comes up far more often than the others:
+of 1,000 keys and 20,000 picks (a mean of 20 each), the commonest came up 102 times, the
+rarest once, and one never. With the window, the rarest and the commonest came up 0.25
+and 2.2 times as often as the mean (Redis: 0.30 and 2.25); of 20,000 keys and 400,000
+picks, 0.15 and 2.65 (Redis 0.05 and 2.8). A window of 32 keys was fairer still and cost
+twice as much. The random numbers are a state in the server, seeded from the hash of
+its run id, that each RANDOMKEY moves on by the golden ratio's 32 bits (a Weyl
+sequence) and murmur3's finalizer scrambles; so a pipeline of RANDOMKEYs picks anew each
+time. RANDOMKEY is a command of the server (R.Own), so its run moves the state;
+`own_srv` says so, and the proofs that a client not yet authenticated changes nothing
+cover it. In a pipeline of 20,000 from one Python client, a RANDOMKEY takes 7 µs and
+Redis's 3.5–5, a CLIENT ID 2 µs on both: about 5 µs of BendKV's own, most of it the walk,
+which works out the bounds of the 16 children of each node it passes.
+
+SCAN is a read of the whole database for the laws, as KEYS is: it changes nothing
+(`reads_keep_db`, `frame`), any write may change its reply (`disturbs`), and its reply
+depends on the trie and not only on what keys read (`keywise`), so the swaps of a batch
+leave it out. The proofs that list every command take it as they take KEYS. RANDOMKEY,
+a command of the server (R.Own), reads the database and changes nothing in it, as INFO
+does.
+
+`tests/keyspace_test.py` compares both with Redis where Redis promises something: the
+arguments (37 cursors and 34 command lines, errors byte for byte); full iterations of 0
+to 5,000 keys, binary and empty ones among them, with COUNT from 1 to more than the
+keys, MATCH and TYPE, whose keys must be Redis's, each once, with the call counts above;
+an iteration while another client deletes and adds keys, which must find every key that
+stayed; RANDOMKEY on an empty database, on one key, on a few (each of them in 100 picks
+a key), on 1,000 (none more than four times as often as the mean), in a pipeline that
+empties and fills the database, and inline: 1,012 checks. The differential test draws
+SCANs that cover the database in one call and RANDOMKEYs (whether nil, compared), the
+statistics test counts them, and the robustness test times SCAN's MATCH with the
+pattern that hung KEYS. Redis's own suite: all five tests of SCAN on keys pass (basic,
+COUNT, MATCH, TYPE, the guarantee under a load of writes), and all three of RANDOMKEY;
+the other twelve of `unit/scan` are SSCAN, HSCAN and ZSCAN. In all, 135 of 1,656 (8.2%),
+109 of the 256 in what BendKV has.
+
+**The statistics' codes outgrew a byte.** The keys of INFO commandstats are now
+numbered by `tools/gen_commands.py` from the parser's own numbers (the commands by
+`cmd_id`, then the subcommands of CLIENT, FUNCTION, CONFIG and COMMAND): 58 of them with
+SCAN and RANDOMKEY, 236 codes, close to the 256 of a byte, which the data types to come
+would pass. A code now rides in the hash's high twelve bits as a word with six bits set
+(there are 924 such words, room for 231 keys): two different words or-ed have seven bits
+or more, so the words of a batch or-ed together have six exactly when all of them are
+one. The parser ors each request's word into the low twelve bits of the batch's count
+word (three operations, where the byte's mark and its complement took five), whose high
+twenty bits count the requests: a batch is counted from it up to 1 MB of requests (64 KB
+before). The word of a code and the code of a word are generated tables, and the
+commands whose calls may fail as they run (INCR, DECR, INCRBY, DECRBY) a generated set.
+
+**Cost.** GET, SET and INCR take 8, 7 and 14 instructions more per request than before
+the step (3,062, 3,643 and 3,959; +0.2–0.4%, `make perfcheck` allows 3%); MSET, whose
+name goes through `cmd_id` and its one more comparison, 12 fewer (27,028). The tables of
+the statistics compile to arrays.
+
+**Found on the way.** DBSIZE folds the whole trie: 15 µs at 40 keys, 256 µs at 1,000
+(Redis: 2 µs, a counter), and so INFO's keyspace line. The count of keys will go into
+the database when it changes shape, for several databases and for expiry.
 
 ## 4. Where a request's time goes, and hiding the memory waits
 
@@ -1719,7 +1813,7 @@ What got in the way:
 - No tactics: every rewrite step is written by hand. The proofs are about as long as
   the code, and checking them is fast.
 - In a proof, `case other` does not refine the goal: the variable stays abstract ("`c`,
-  but not `Get`"), and functions of it do not reduce. Lemmas about commands list all 19
+  but not `Get`"), and functions of it do not reduce. Lemmas about commands list all 20
   constructors, most of them as refutations; so commands come in groups (`Own` for those
   of a connection, `Peek` for the reads of one key), one constructor each (section 3m).
 - No 64-bit integers, few effects (stock files have no `fsync`; patch 12 adds it), and

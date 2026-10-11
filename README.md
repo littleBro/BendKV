@@ -13,7 +13,7 @@ throughput of Redis 7.0.15 on the same machine, with half its memory for small v
 > **Status: research prototype.** BendKV implements a subset of Redis (strings, the
 > keyspace, connection commands, an append-only file). The goal now is a drop-in
 > replacement for a single Redis node, measured by Redis's own test suite: of the 1,656
-> tests Redis 7.0.15 passes against a server it did not start, BendKV passes 127, and 106
+> tests Redis 7.0.15 passes against a server it did not start, BendKV passes 135, and 109
 > of the 256 in what it implements ([docs/COMPATIBILITY.md](docs/COMPATIBILITY.md)). Do
 > not use it for data you cannot lose.
 
@@ -71,7 +71,9 @@ translation stays in the trusted base.
 
 - **Strings and keys:** GET, SET, SETNX, GETSET, DEL, UNLINK, EXISTS, INCR, DECR, INCRBY,
   DECRBY, APPEND, STRLEN, MGET, MSET, DBSIZE, FLUSHALL, FLUSHDB (with ASYNC/SYNC), KEYS
-  (Redis's patterns: `*`, `?`, `[...]` classes, `\` escapes), TYPE.
+  (Redis's patterns: `*`, `?`, `[...]` classes, `\` escapes), TYPE, SCAN (MATCH, COUNT,
+  TYPE, with Redis's guarantee: a key there for a whole iteration is found, however the
+  database changes meanwhile) and RANDOMKEY (picked as Redis picks one).
 - **Connection:** PING, ECHO, HELLO (RESP2, with AUTH and SETNAME), AUTH, SELECT (one
   database, as Redis with `databases 1`), QUIT, RESET, CLIENT (ID, GETNAME, SETNAME,
   REPLY ON/OFF/SKIP, NO-EVICT, GETREDIR, TRACKINGINFO, CACHING, UNBLOCK, HELP),
@@ -185,7 +187,9 @@ errorstats and the totals after the same requests, one at a time and pipelined, 
 refused, failed, held-back and protocol errors, compared as maps), COMMAND (each
 command's description and
 documentation, the lists and their filters, the keys of command lines, random ones
-too), robustness and concurrency checks,
+too), SCAN and RANDOMKEY (their arguments, full iterations with COUNT, MATCH and TYPE
+finding Redis's keys, each once, an iteration while other clients write, RANDOMKEY's
+picks), robustness and concurrency checks,
 restarts from the append-only file (including a truncated tail), and disk failures
 under the file, injected with an `LD_PRELOAD` shim. `make suite` runs Redis's own test
 suite in its mode for a server already started, on Redis and on BendKV, and counts the
@@ -207,7 +211,7 @@ src/        the server
   startup.bend  the command line and the configuration file        tested
   server.bend   TCP, connections, the database actor, the log      tested
 proof/      LAWS.bend (the laws) and PROOF.bend (their proofs)
-tests/      start, differential, protocol, session, CONFIG, INFO, COMMAND, robustness, concurrency, AOF tests
+tests/      start, differential, protocol, session, CONFIG, INFO, COMMAND, SCAN, robustness, concurrency, AOF tests
 bench/      in-process benchmarks of the map, the core and channels
 tools/      measurement scripts, the runner of Redis's test suite, and the generators of
             the trie, of the parameter table and of the command table, with the facts

@@ -549,6 +549,98 @@ def tsize(-V: Data, t: Trie<V>) -> Nat:
       1n+tsize(V, rest)
 # END gen_trie: folds
 
+# Scans
+# -----
+# SCAN and RANDOMKEY read the buckets in the order of their paths: a
+# bucket's index is its path read as five hex digits, the first digit the
+# highest, so the trie is buckets 0 to 2^20 - 1 in order (tkeys's order).
+# A scan from index from reads the buckets from it on until it has found
+# want keys (a bucket is read whole), and says where to go on: Stop with
+# the index of the next bucket, or Scan when it read to the end. The trie
+# never rehashes, so a key that stays in the map from the first scan of
+# an iteration to its last is found by one of them. A subtrie that lies
+# before the cursor, or at or past the bound to (RANDOMKEY's), is
+# skipped whole.
+type Scan is Data:
+  Scan{want: Nat, acc: List<&2, String>}
+  Stop{at: Nat, acc: List<&2, String>}
+
+def bscan.end(done: Bool, +base: Nat, want: Nat, acc: List<&2, String>) -> Scan:
+  match done:
+    case True{}:
+      Stop{Nat.add(base, 1n), acc}
+    case False{}:
+      Scan{want, acc}
+
+# the keys of the bucket b of index base before acc, counted off want
+def bscan(-V: Data, +b: Trie<V>, +base: Nat, +want: Nat, acc: List<&2, String>) -> Scan:
+  match b:
+    case Ent{+k, v, +rest}:
+      bscan(V, rest, base, Nat.sub(want, 1n), k <> acc)
+    case _:
+      bscan.end(Nat.is_eq(want, 0n), base, want, acc)
+
+# BEGIN gen_trie: scan
+def tscan(-V: Data, +d: Nat, +t: Trie<V>, skip: Bool, +base: Nat, +span: Nat, +from: Nat, +to: Nat, s: Scan) -> Scan:
+  match d t skip s:
+    case _ _ True{} s:
+      s
+    case _ _ False{} Stop{at, acc}:
+      Stop{at, acc}
+    case 0n b False{} Scan{want, acc}:
+      bscan(V, b, base, want, acc)
+    case 1n+p Tip{} False{} s:
+      s
+    case 1n+p Node{c0, c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13, c14, c15} False{} s:
+      +q = Nat.div(span, 16n)
+      tscan(V, p, c15, Bool.or(Nat.is_le(Nat.add(base, Nat.mul(16n, q)), from), Nat.is_le(to, Nat.add(base, Nat.mul(15n, q)))), Nat.add(base, Nat.mul(15n, q)), q, from, to, tscan(V, p, c14, Bool.or(Nat.is_le(Nat.add(base, Nat.mul(15n, q)), from), Nat.is_le(to, Nat.add(base, Nat.mul(14n, q)))), Nat.add(base, Nat.mul(14n, q)), q, from, to, tscan(V, p, c13, Bool.or(Nat.is_le(Nat.add(base, Nat.mul(14n, q)), from), Nat.is_le(to, Nat.add(base, Nat.mul(13n, q)))), Nat.add(base, Nat.mul(13n, q)), q, from, to, tscan(V, p, c12, Bool.or(Nat.is_le(Nat.add(base, Nat.mul(13n, q)), from), Nat.is_le(to, Nat.add(base, Nat.mul(12n, q)))), Nat.add(base, Nat.mul(12n, q)), q, from, to, tscan(V, p, c11, Bool.or(Nat.is_le(Nat.add(base, Nat.mul(12n, q)), from), Nat.is_le(to, Nat.add(base, Nat.mul(11n, q)))), Nat.add(base, Nat.mul(11n, q)), q, from, to, tscan(V, p, c10, Bool.or(Nat.is_le(Nat.add(base, Nat.mul(11n, q)), from), Nat.is_le(to, Nat.add(base, Nat.mul(10n, q)))), Nat.add(base, Nat.mul(10n, q)), q, from, to, tscan(V, p, c9, Bool.or(Nat.is_le(Nat.add(base, Nat.mul(10n, q)), from), Nat.is_le(to, Nat.add(base, Nat.mul(9n, q)))), Nat.add(base, Nat.mul(9n, q)), q, from, to, tscan(V, p, c8, Bool.or(Nat.is_le(Nat.add(base, Nat.mul(9n, q)), from), Nat.is_le(to, Nat.add(base, Nat.mul(8n, q)))), Nat.add(base, Nat.mul(8n, q)), q, from, to, tscan(V, p, c7, Bool.or(Nat.is_le(Nat.add(base, Nat.mul(8n, q)), from), Nat.is_le(to, Nat.add(base, Nat.mul(7n, q)))), Nat.add(base, Nat.mul(7n, q)), q, from, to, tscan(V, p, c6, Bool.or(Nat.is_le(Nat.add(base, Nat.mul(7n, q)), from), Nat.is_le(to, Nat.add(base, Nat.mul(6n, q)))), Nat.add(base, Nat.mul(6n, q)), q, from, to, tscan(V, p, c5, Bool.or(Nat.is_le(Nat.add(base, Nat.mul(6n, q)), from), Nat.is_le(to, Nat.add(base, Nat.mul(5n, q)))), Nat.add(base, Nat.mul(5n, q)), q, from, to, tscan(V, p, c4, Bool.or(Nat.is_le(Nat.add(base, Nat.mul(5n, q)), from), Nat.is_le(to, Nat.add(base, Nat.mul(4n, q)))), Nat.add(base, Nat.mul(4n, q)), q, from, to, tscan(V, p, c3, Bool.or(Nat.is_le(Nat.add(base, Nat.mul(4n, q)), from), Nat.is_le(to, Nat.add(base, Nat.mul(3n, q)))), Nat.add(base, Nat.mul(3n, q)), q, from, to, tscan(V, p, c2, Bool.or(Nat.is_le(Nat.add(base, Nat.mul(3n, q)), from), Nat.is_le(to, Nat.add(base, Nat.mul(2n, q)))), Nat.add(base, Nat.mul(2n, q)), q, from, to, tscan(V, p, c1, Bool.or(Nat.is_le(Nat.add(base, Nat.mul(2n, q)), from), Nat.is_le(to, Nat.add(base, Nat.mul(1n, q)))), Nat.add(base, Nat.mul(1n, q)), q, from, to, tscan(V, p, c0, Bool.or(Nat.is_le(Nat.add(base, Nat.mul(1n, q)), from), Nat.is_le(to, base)), base, q, from, to, s))))))))))))))))
+    case 1n+p Ent{k, v, rest} False{} s:
+      s
+# END gen_trie: scan
+
+# Random picks
+# ------------
+# RANDOMKEY's key, as Redis's dictGetFairRandomKey picks one: the keys of
+# the buckets from a random one on, 16 of them at least (past the last
+# bucket, from the first one up to the random one), and of those one, each
+# as likely. A key is about as likely as another (as Redis's are): as
+# likely as the buckets before it and the 15 keys before it are many.
+
+# murmur3's finalizer: each bit of h changes each bit of the result
+def mix(+h: U32) -> U32:
+  +a = U32.mul(U32.xor(h, U32.shrn(h, 16n)), 2246822507)
+  +b = U32.mul(U32.xor(a, U32.shrn(a, 13n)), 3266489909)
+  U32.xor(b, U32.shrn(b, 16n))
+
+def nth(+ks: List<&2, String>, i: Nat) -> Maybe<&2, String>:
+  match ks i:
+    case Con{+k, +rest} 0n:
+      Some{k}
+    case Con{+k, +rest} 1n+j:
+      nth(rest, j)
+    case Nil{} _:
+      None{}
+
+# one of the keys ks, by r
+def pick.of(+ks: List<&2, String>, +r: U32) -> Maybe<&2, String>:
+  nth(ks, Nat.mod(U32.to_nat(r), Nat.max(List.length(&2, String, ks), 1n)))
+
+def scan.acc(s: Scan) -> List<&2, String>:
+  match s:
+    case Scan{want, acc}:
+      acc
+    case Stop{at, acc}:
+      acc
+
+# the keys a scan from bucket b found, with those from the first bucket
+# up to b when it ran past the last one before it found enough
+def pick.wrap(-V: Data, +t: Trie<V>, +b: Nat, +r: U32, s: Scan) -> Maybe<&2, String>:
+  match s:
+    case Stop{at, acc}:
+      pick.of(acc, r)
+    case Scan{want, acc}:
+      pick.of(scan.acc(tscan(V, 5n, t, False{}, 0n, 1048576n, 0n, b, Scan{want, acc})), r)
+
 # API
 # ---
 
@@ -599,3 +691,13 @@ def keys(-V: Data, t: Trie<V>) -> List<&2, String>:
 
 def size(-V: Data, t: Trie<V>) -> Nat:
   tsize(V, t)
+
+# the keys of the buckets from index from on, until want keys are found
+# (Scans); the keys newest first
+def scan(-V: Data, +t: Trie<V>, +from: Nat, want: Nat) -> Scan:
+  tscan(V, 5n, t, False{}, 0n, 1048576n, from, 1048576n, Scan{want, Nil{}})
+
+# a key of t, by r (Random picks), None when t is empty
+def pick(-V: Data, +t: Trie<V>, +r: U32) -> Maybe<&2, String>:
+  +b = U32.to_nat(U32.and(r, 1048575))
+  pick.wrap(V, t, b, mix(r), tscan(V, 5n, t, False{}, 0n, 1048576n, b, 1048576n, Scan{16n, Nil{}}))

@@ -150,6 +150,31 @@ def block_folds():
             "    case Ent{k, v, rest}:",
             "      1n+tsize(V, rest)"]
 
+# the scan of a node: its 16 subtries in order, each skipped whole when
+# it lies before the cursor
+def block_scan():
+    s = "s"
+    for i, c in enumerate(cs):
+        base = "base" if i == 0 else f"Nat.add(base, Nat.mul({i}n, q))"
+        skip = f"Nat.is_le(Nat.add(base, Nat.mul({i + 1}n, q)), from)"
+        skip = f"Bool.or({skip}, Nat.is_le(to, {base}))"
+        s = f"tscan(V, p, {c}, {skip}, {base}, q, from, to, {s})"
+    return ["def tscan(-V: Data, +d: Nat, +t: Trie<V>, skip: Bool, +base: Nat, +span: Nat, +from: Nat, +to: Nat, s: Scan) -> Scan:",
+            "  match d t skip s:",
+            "    case _ _ True{} s:",
+            "      s",
+            "    case _ _ False{} Stop{at, acc}:",
+            "      Stop{at, acc}",
+            "    case 0n b False{} Scan{want, acc}:",
+            "      bscan(V, b, base, want, acc)",
+            "    case 1n+p Tip{} False{} s:",
+            "      s",
+            f"    case 1n+p {node(cs)} False{{}} s:",
+            "      +q = Nat.div(span, 16n)",
+            f"      {s}",
+            "    case 1n+p Ent{k, v, rest} False{} s:",
+            "      s"]
+
 # Proofs (PROOF.bend)
 # ------------------
 
@@ -285,7 +310,7 @@ def block_other():
     return out
 
 BLOCKS = {"src/map.bend": {"types": block_types, "hex": block_hex,
-                       "walks": block_walks, "folds": block_folds},
+                       "walks": block_walks, "folds": block_folds, "scan": block_scan},
           "proof/PROOF.bend": {"digits": block_digits, "tget_k": block_tget_k, "tget_kc": block_tget_kc,
                          "same": block_same, "walk_same": block_walk_same,
                          "other": block_other}}

@@ -63,6 +63,7 @@ type SessOp is Data:
   SConfigResetStat{}
   SInfo{args: List<&2, String>}
   SCommand{args: List<&2, String>}
+  SRandomKey{}
   SReply{r: Reply}
   SBad{r: Reply}
 
@@ -84,6 +85,7 @@ type Cmd is Data:
   DbSize{}
   FlushAll{}
   Keys{pattern: String}
+  Scan{args: List<&2, String>}
   Peek{key: String, c: PeekOp}
   Own{op: SessOp}
   Bad{reply: Reply}
@@ -666,6 +668,175 @@ def parse_flush(args: List<&2, String>) -> Cmd:
     case _:
       e_syntax()
 
+# SCAN
+# ----
+# SCAN cursor [MATCH pattern] [COUNT count] [TYPE type], as Redis 7.0.15
+# reads it: the cursor first ("ERR invalid cursor"), then the options in
+# any order, a later one over an earlier one, each with its value (an
+# option without one, or another word, is a syntax error); COUNT a long
+# integer (not one: "ERR value is not an integer or out of range"), 1 or
+# more (else a syntax error). The parser checks them, and the command
+# keeps its arguments as they came (one word in Cmd); exec reads them
+# again. The cursor is the index of a bucket (KV.scan): the reply is the
+# next one, 0 at the end, and the keys of the buckets read, COUNT of
+# them at least, then filtered by the pattern and the type.
+
+# Long decimals: the digits of s from index i to index e, as Redis's
+# string2ll and strtoul read them past what a Nat holds: whether all were
+# digits, how many there were, whether the first was 0, how many came
+# after the leading zeros, and of those the first ten (hi) and the next
+# ten (lo).
+type Dec is Data:
+  Dec{ok: Bool, n: Nat, zero: Bool, sig: Nat, hi: Nat, lo: Nat}
+
+# a digit d after n others: a leading zero (lead) counts in n only
+def dec.lead(lead: Bool, +d: Nat, +n: Nat, z: Bool, +sig: Nat, +hi: Nat, +lo: Nat) -> Dec:
+  match lead:
+    case True{}:
+      Dec{True{}, Nat.add(n, 1n), Bool.or(z, Nat.is_eq(n, 0n)), sig, hi, lo}
+    case False{}:
+      Dec{True{}, Nat.add(n, 1n), z, Nat.add(sig, 1n),
+        Bool.pick(Nat, Nat.is_lt(sig, 10n), Nat.add(Nat.mul(hi, 10n), d), hi),
+        Bool.pick(Nat, Bool.and(Nat.is_le(10n, sig), Nat.is_lt(sig, 20n)), Nat.add(Nat.mul(lo, 10n), d), lo)}
+
+def dec.next(digit: Bool, +c: U32, +n: Nat, z: Bool, +sig: Nat, +hi: Nat, +lo: Nat) -> Dec:
+  match digit:
+    case True{}:
+      +d = U32.to_nat(U32.sub(c, 48))
+      dec.lead(Bool.and(Nat.is_eq(d, 0n), Nat.is_eq(sig, 0n)), d, n, z, sig, hi, lo)
+    case False{}:
+      Dec{False{}, n, z, sig, hi, lo}
+
+def dec.go(fuel: Nat, +s: String, +i: Nat, d: Dec) -> Dec:
+  match fuel d:
+    case 0n d:
+      d
+    case 1n+f Dec{False{}, n, z, sig, hi, lo}:
+      Dec{False{}, n, z, sig, hi, lo}
+    case 1n+f Dec{True{}, +n, z, +sig, +hi, +lo}:
+      +c = String.code_at(s, i)
+      dec.go(f, s, Nat.add(i, 1n), dec.next(U32.is_lt(U32.sub(c, 48), 10), c, n, z, sig, hi, lo))
+
+# the digits of s from index i to index e
+def dec.of(+s: String, +i: Nat, +e: Nat) -> Dec:
+  dec.go(Nat.sub(e, i), s, i, Dec{True{}, 0n, False{}, 0n, 0n, 0n})
+
+# whether a magnitude of sig significant digits (hi, then lo) is at most
+# the one of msig digits (19 or 20) whose first ten are mh and the rest ml
+def dec.le(+sig: Nat, +hi: Nat, +lo: Nat, +msig: Nat, +mh: Nat, +ml: Nat) -> Bool:
+  Bool.or(Nat.is_lt(sig, msig), Bool.and(Nat.is_eq(sig, msig), Bool.or(Nat.is_lt(hi, mh), Bool.and(Nat.is_eq(hi, mh), Nat.is_le(lo, ml)))))
+
+# the first ten digits of 2^63 - 1 and of 2^63
+def dec.llmax() -> Nat:
+  Nat.add(Nat.mul(922337n, 10000n), 2036n)
+
+# a magnitude of sig significant digits, at most cap: the cap when it
+# has more than ten digits (cap is 10^10 at most)
+def dec.cap(+sig: Nat, +hi: Nat, +cap: Nat) -> Nat:
+  Bool.pick(Nat, Nat.is_le(sig, 10n), Nat.min(hi, cap), cap)
+
+# the blanks of C's isspace
+def is_blank(+c: U32) -> Bool:
+  Bool.or(U32.is_eq(c, 32), U32.is_lt(U32.sub(c, 9), 5))
+
+# SCAN's cursor, as Redis 7.0.15 reads it (strtoul): no blank first, a
+# sign, then digits up to the end of the string or its first NUL, 2^64 - 1
+# at most; the empty string is 0. None when it is no cursor. A cursor past
+# the last bucket, or a negative one, reads as 2^20, where a scan finds
+# nothing.
+def cur.of(+d: Dec, blank: Bool, +neg: Bool, empty: Bool) -> Maybe<&2, Nat>:
+  match d:
+    case Dec{+ok, +n, +zero, +sig, +hi, +lo}:
+      +fits = dec.le(sig, hi, lo, 20n, 1844674407n, 3709551615n)
+      Bool.pick(Maybe<&2, Nat>, Bool.and(Bool.and(Bool.not(blank), Bool.and(ok, fits)), Bool.or(Nat.is_lt(0n, n), empty)),
+        Some{Bool.pick(Nat, Bool.and(neg, Nat.is_lt(0n, sig)), 1048576n, dec.cap(sig, hi, 1048576n))}, None{})
+
+def scan.cursor(+s: String) -> Maybe<&2, Nat>:
+  +c = String.code_at(s, 0n)
+  +e = String.find(s, Chr{0}, 0n)
+  +at = Bool.pick(Nat, Bool.or(U32.is_eq(c, 43), U32.is_eq(c, 45)), 1n, 0n)
+  cur.of(dec.of(s, Nat.min(at, e), e), is_blank(c), U32.is_eq(c, 45), Nat.is_eq(e, 0n))
+
+# COUNT, as Redis's string2ll reads a long long: an optional '-', then
+# digits with no leading zero (or 0 alone); None when it is not one. Past
+# ten digits it reads as 10^10, more keys than BendKV holds.
+def scan.count.of(+d: Dec, +neg: Bool) -> Maybe<&2, Int>:
+  match d:
+    case Dec{+ok, +n, +zero, +sig, +hi, +lo}:
+      +canon = Bool.or(Bool.not(zero), Bool.and(Nat.is_eq(n, 1n), Bool.not(neg)))
+      +fits = dec.le(sig, hi, lo, 19n, dec.llmax(), Bool.pick(Nat, neg, 854775808n, 854775807n))
+      +v = dec.cap(sig, hi, Nat.mul(100000n, 100000n))
+      Bool.pick(Maybe<&2, Int>, Bool.and(Bool.and(Bool.and(ok, Nat.is_lt(0n, n)), canon), fits),
+        Some{Bool.pick(Int, Bool.and(neg, Nat.is_lt(0n, v)), INeg{Nat.sub(v, 1n)}, IPos{v})}, None{})
+
+def scan.count(+s: String) -> Maybe<&2, Int>:
+  +neg = U32.is_eq(String.code_at(s, 0n), 45)
+  scan.count.of(dec.of(s, Bool.pick(Nat, neg, 1n, 0n), String.length(s)), neg)
+
+# SCAN's arguments read
+type ScanArgs is Data:
+  ScanArgs{cur: Nat, count: Nat, pat: Maybe<&2, String>, typ: Maybe<&2, String>}
+  ScanBad{r: Reply}
+
+def scan.count.set(m: Maybe<&2, Int>, +cur: Nat, pat: Maybe<&2, String>, typ: Maybe<&2, String>) -> ScanArgs:
+  match m:
+    case Some{IPos{+n}}:
+      Bool.pick(ScanArgs, Nat.is_lt(0n, n), ScanArgs{cur, n, pat, typ}, ScanBad{RError{"ERR syntax error"}})
+    case Some{INeg{n}}:
+      ScanBad{RError{"ERR syntax error"}}
+    case None{}:
+      ScanBad{e_int()}
+
+# an option and its value: COUNT (1), MATCH (2), TYPE (3), another word (0)
+def scan.word(+w: String) -> Nat:
+  Bool.pick(Nat, is_word(w, "COUNT"), 1n, Bool.pick(Nat, is_word(w, "MATCH"), 2n, Bool.pick(Nat, is_word(w, "TYPE"), 3n, 0n)))
+
+def scan.set(o: Nat, v: String, +cur: Nat, +n: Nat, pat: Maybe<&2, String>, typ: Maybe<&2, String>) -> ScanArgs:
+  match o:
+    case 1n:
+      scan.count.set(scan.count(v), cur, pat, typ)
+    case 2n:
+      ScanArgs{cur, n, Some{v}, typ}
+    case 3n:
+      ScanArgs{cur, n, pat, Some{v}}
+    case _:
+      ScanBad{RError{"ERR syntax error"}}
+
+def scan.opts(xs: List<&2, String>, a: ScanArgs) -> ScanArgs:
+  match xs a:
+    case _ ScanBad{r}:
+      ScanBad{r}
+    case Nil{} a:
+      a
+    case Con{+w, Con{v, rest}} ScanArgs{+cur, +n, pat, typ}:
+      scan.opts(rest, scan.set(scan.word(w), v, cur, n, pat, typ))
+    case Con{w, Nil{}} ScanArgs{cur, n, pat, typ}:
+      ScanBad{RError{"ERR syntax error"}}
+
+def scan.args.of(c: Maybe<&2, Nat>, rest: List<&2, String>) -> ScanArgs:
+  match c:
+    case Some{+cur}:
+      scan.opts(rest, ScanArgs{cur, 10n, None{}, None{}})
+    case None{}:
+      ScanBad{RError{"ERR invalid cursor"}}
+
+def scan.args(args: List<&2, String>) -> ScanArgs:
+  match args:
+    case Con{+c, rest}:
+      scan.args.of(scan.cursor(c), rest)
+    case Nil{}:
+      ScanBad{RError{"ERR invalid cursor"}}
+
+def scan.check(a: ScanArgs, args: List<&2, String>) -> Cmd:
+  match a:
+    case ScanBad{r}:
+      Bad{r}
+    case _:
+      Scan{args}
+
+def scan.parse(+args: List<&2, String>) -> Cmd:
+  scan.check(scan.args(args), args)
+
 # A command's name, in upper case, picks how its arguments parse. The
 # name's length narrows it down to a few names, which cmd_id compares with
 # it whole: String.eq with a literal is one memcmp, cheap enough that
@@ -686,10 +857,11 @@ def cmd_id(+n: String, len: Nat) -> Nat:
       Bool.pick(Nat, String.eq(n, "MGET"), 16n,
       Bool.pick(Nat, String.eq(n, "MSET"), 17n,
       Bool.pick(Nat, String.eq(n, "KEYS"), 21n,
+      Bool.pick(Nat, String.eq(n, "SCAN"), 22n,
       Bool.pick(Nat, String.eq(n, "TYPE"), 25n,
       Bool.pick(Nat, String.eq(n, "AUTH"), 42n,
       Bool.pick(Nat, String.eq(n, "QUIT"), 43n,
-      Bool.pick(Nat, String.eq(n, "INFO"), 48n, 0n)))))))))))
+      Bool.pick(Nat, String.eq(n, "INFO"), 48n, 0n))))))))))))
     case 5n:
       Bool.pick(Nat, String.eq(n, "SETNX"), 5n,
       Bool.pick(Nat, String.eq(n, "HELLO"), 41n,
@@ -712,6 +884,8 @@ def cmd_id(+n: String, len: Nat) -> Nat:
     case 8n:
       Bool.pick(Nat, String.eq(n, "FLUSHALL"), 19n,
       Bool.pick(Nat, String.eq(n, "FUNCTION"), 46n, 0n))
+    case 9n:
+      Bool.pick(Nat, String.eq(n, "RANDOMKEY"), 50n, 0n)
     case _:
       0n
 
@@ -835,6 +1009,12 @@ def parse_id(id: Nat, name: String, args: List<&2, String>) -> Cmd:
           Keys{p}
         case _:
           e_arity("keys")
+    case 22n:  # SCAN
+      match args:
+        case Nil{}:
+          e_arity("scan")
+        case Con{c, rest}:
+          scan.parse(Con{c, rest})
     case 25n:  # TYPE
       match args:
         case Con{k, Nil{}}:
@@ -899,6 +1079,12 @@ def parse_sess(id: Nat, name: String, args: List<&2, String>) -> SessOp:
         case Con{+sub, rest}:
           +up = String.to_upper(sub)
           parse_command(command_id(up, String.length(up)), sub, rest)
+    case 50n:  # RANDOMKEY
+      match args:
+        case Nil{}:
+          SRandomKey{}
+        case _:
+          s_arity("randomkey")
     case _:
       SBad{RError{no_newlines("ERR unknown command '" ++ String.take(name, 128n) ++ "', with args beginning with: " ++ unknown.args(args, ""))}}
 
@@ -917,371 +1103,166 @@ def parse(args: List<&2, String>) -> Cmd:
 # ----------
 # INFO commandstats counts each command and subcommand by its name, as the
 # client called it (INCR and INCRBY apart, though both parse to IncrBy).
-# Its key here is a number below 64: a command's number (cmd_id) up to 21,
-# then TYPE and the commands of the connection and of the server (22 to
-# 32), then the subcommands of CLIENT (33 to 42), FUNCTION (43, 44), CONFIG
-# (45 to 49) and COMMAND (50 to 56); 0 is an unknown command or
-# subcommand, which Redis counts nowhere but in errorstats. With the key
-# comes what a call counts as (stat.code: 4 times the key plus that): 0
-# when it runs; 1 when it is refused before it runs, as Redis refuses an
-# unknown command or subcommand and a number of arguments its arity does
-# not allow; 2 when it fails on an error that BendKV's parser finds and
-# Redis's command finds as it runs (a syntax error, a value that is not
-# an integer), which is a call that failed (stat.class). The code rides
-# in the high byte of the request's hash (stat.hash), which the hints of
-# batch.bend do not read.
+# Its key here is a number (tools/gen_commands.py writes the keys, below):
+# the commands in the order of their numbers (cmd_id), then the
+# subcommands of CLIENT, FUNCTION, CONFIG and COMMAND; 0 is an unknown
+# command or subcommand, which Redis counts nowhere but in errorstats.
+# With the key comes what a call counts as (stat.code: 4 times the key
+# plus that): 0 when it runs; 1 when it is refused before it runs, as
+# Redis refuses an unknown command or subcommand and a number of
+# arguments its arity does not allow; 2 when it fails on an error that
+# BendKV's parser finds and Redis's command finds as it runs (a syntax
+# error, a value that is not an integer), which is a call that failed
+# (stat.class). The code rides in the high twelve bits of the request's
+# hash as its word (stat.cw: twelve bits, six of them set), and the hints
+# of batch.bend read only the low twenty.
 
-def stat.sub(base: Nat, +sub: Nat) -> Nat:
-  Bool.pick(Nat, Nat.is_eq(sub, 0n), 0n, Nat.add(base, sub))
-
-def stat.sub.of(id: Nat, +up: String) -> Nat:
+# BEGIN gen_commands: stats
+# a command's key, by its number in the parser (cmd_id); 0 for none
+def stat.top(+id: Nat) -> Nat:
   match id:
-    case 45n:
-      stat.sub(32n, client_id(up, String.length(up)))
-    case 46n:
-      stat.sub(42n, function_id(up, String.length(up)))
-    case 47n:
-      stat.sub(44n, config_id(up, String.length(up)))
-    case _:
-      stat.sub(49n, command_id(up, String.length(up)))
-
-# a container (CLIENT, FUNCTION, CONFIG, COMMAND) by its first argument;
-# alone, the container itself (top)
-def stat.key.args(top: Nat, id: Nat, +args: List<&2, String>) -> Nat:
-  match args:
-    case Nil{}:
-      top
-    case Con{+a, rest}:
-      stat.sub.of(id, String.to_upper(a))
-
-# the key of a command of number id with these arguments
-def stat.key(+id: Nat, +args: List<&2, String>) -> Nat:
-  match id:
-    case 25n:
-      22n
-    case 45n:
-      stat.key.args(28n, 45n, args)
-    case 46n:
-      stat.key.args(29n, 46n, args)
-    case 47n:
-      stat.key.args(30n, 47n, args)
-    case 49n:
-      stat.key.args(32n, 49n, args)
-    case _:
-      Bool.pick(Nat, Nat.is_le(40n, id), Nat.sub(id, 17n), id)
-
-# Redis's arity of the command or subcommand of a key: 2a when it takes
-# exactly a arguments (its name included), 2a + 1 when it takes a or more
-# BEGIN gen_commands: arity
-def stat.arity(+key: Nat) -> Nat:
-  match key:
     case 1n:
-      3n
+      1n
     case 2n:
-      4n
+      2n
     case 3n:
-      4n
+      3n
     case 4n:
-      7n
+      4n
     case 5n:
-      6n
+      5n
     case 6n:
       6n
     case 7n:
-      5n
+      7n
     case 8n:
-      5n
+      8n
     case 9n:
-      5n
+      9n
     case 10n:
-      4n
+      10n
     case 11n:
-      4n
+      11n
     case 12n:
-      6n
+      12n
     case 13n:
-      6n
+      13n
     case 14n:
-      6n
+      14n
     case 15n:
-      4n
+      15n
     case 16n:
-      5n
+      16n
     case 17n:
-      7n
+      17n
     case 18n:
-      2n
+      18n
     case 19n:
-      3n
+      19n
     case 20n:
-      3n
+      20n
     case 21n:
-      4n
+      21n
     case 22n:
-      4n
-    case 23n:
-      4n
-    case 24n:
-      3n
+      22n
     case 25n:
-      5n
-    case 26n:
-      3n
-    case 27n:
-      2n
-    case 28n:
-      5n
-    case 29n:
-      5n
-    case 30n:
-      5n
-    case 31n:
-      3n
-    case 32n:
-      3n
-    case 33n:
-      4n
-    case 34n:
-      4n
-    case 35n:
-      6n
-    case 36n:
-      4n
-    case 37n:
-      6n
-    case 38n:
-      6n
-    case 39n:
-      7n
+      23n
     case 40n:
-      4n
+      24n
     case 41n:
-      6n
+      25n
     case 42n:
-      4n
+      26n
     case 43n:
-      5n
+      27n
     case 44n:
-      4n
+      28n
     case 45n:
-      7n
+      29n
     case 46n:
-      9n
+      30n
     case 47n:
-      4n
+      31n
     case 48n:
-      4n
+      32n
     case 49n:
-      4n
+      33n
     case 50n:
-      5n
-    case 51n:
-      5n
-    case 52n:
-      5n
-    case 53n:
-      4n
-    case 54n:
-      4n
-    case 55n:
-      9n
-    case 56n:
-      9n
-    case _:
-      1n
-# END gen_commands: arity
-
-# whether argc arguments (the name included) pass Redis's check of the
-# arity of the command or subcommand of key
-def stat.arity.ok(+key: Nat, +argc: Nat) -> Bool:
-  +a = stat.arity(key)
-  +n = Nat.div(a, 2n)
-  Bool.pick(Bool, Nat.is_eq(Nat.mod(a, 2n), 0n), Nat.is_eq(argc, n), Nat.is_le(n, argc))
-
-def stat.refused(+m: String) -> Bool:
-  Bool.or(String.starts_with(m, "ERR unknown command '"), String.starts_with(m, "ERR unknown subcommand '"))
-
-# what an error the parser found counts as: a wrong number of arguments
-# is refused when Redis's check of the arity refuses it, and fails as the
-# command runs otherwise (PING with two arguments, MSET with a key and no
-# value: the command checks them itself); an unknown command or
-# subcommand is refused; any other error fails
-def stat.class.args(arity: Bool, refused: Bool, +key: Nat, +args: List<&2, String>) -> Nat:
-  match arity refused:
-    case True{} _:
-      Bool.pick(Nat, stat.arity.ok(key, Nat.add(List.length(&2, String, args), 1n)), 2n, 1n)
-    case False{} True{}:
-      1n
-    case False{} False{}:
-      2n
-
-def stat.class.err(+r: Reply, +key: Nat, +args: List<&2, String>) -> Nat:
-  match r:
-    case RError{+m}:
-      stat.class.args(String.starts_with(m, "ERR wrong number of arguments for "), stat.refused(m), key, args)
-    case _:
-      2n
-
-# what a parsed command of key with arguments args counts as: an error
-# the parser found (Bad, and a session command's SBad) is refused or
-# failed; anything else runs
-def stat.class(+c: Cmd, +key: Nat, +args: List<&2, String>) -> Nat:
-  match c:
-    case Bad{+r}:
-      stat.class.err(r, key, args)
-    case Own{SBad{+r}}:
-      stat.class.err(r, key, args)
+      34n
     case _:
       0n
 
-def stat.code(+key: Nat, +class: Nat) -> Nat:
-  Nat.add(Nat.mul(key, 4n), class)
-
-# a hint's hash with code in its high byte
-def stat.hash(+h: U32, +code: Nat) -> U32:
-  U32.add(U32.and(h, 16777215), U32.mul(U32.from_nat(code), 16777216))
-
-# the code in a hash's high byte
-def code.of(+h: U32) -> Nat:
-  U32.to_nat(U32.shrn(h, 24n))
-
-# A batch's calls are counted as runs of one code each: a run is
-# code * 2^32 + how many calls in a row have it.
-def run.top() -> Nat:
-  Nat.mul(65536n, 65536n)
-
-def run.code(+r: Nat) -> Nat:
-  Nat.div(r, run.top())
-
-def run.n(+r: Nat) -> Nat:
-  Nat.mod(r, run.top())
-
-def run.of(+code: Nat, +n: Nat) -> Nat:
-  Nat.add(Nat.mul(code, run.top()), n)
-
-# the calls of n of code k that ran (0 and 2; key 0 is never one)
-def code.calls(+k: Nat, +n: Nat) -> Nat:
-  Bool.pick(Nat, Nat.is_eq(Nat.mod(k, 4n), 1n), 0n, n)
-
-# whether replies of calls of code k need a look for errors: calls
-# refused or failed by the parser, or calls that can fail as they run
-# (INCR, DECR, INCRBY and DECRBY meet values that are not integers, and
-# overflows)
-def code.risky(+k: Nat) -> Bool:
-  +key = Nat.div(k, 4n)
-  Bool.or(Nat.is_lt(0n, Nat.mod(k, 4n)), Bool.and(Nat.is_le(10n, key), Nat.is_le(key, 13n)))
-
-# A code's mark: the code, and its complement in the byte above (the code
-# times 257 is the code twice; the xor complements the upper one). The
-# marks of a batch's requests or-ed together have each bit of a code
-# once, itself or complemented, exactly when all of them have that code:
-# a batch of one command, most of them, is counted without a look at its
-# requests. The parser keeps a batch's count and marks in one word (tl):
-# the count in its high 16 bits, and the marks in its low 16.
-def tl.add(tl: U32, +h: U32) -> U32:
-  U32.or(U32.add(tl, 65536), U32.xor(U32.mul(U32.shrn(h, 24n), 257), 65280))
-
-# What a batch that runs the fast way counts: the calls that ran, whether
-# its replies need a look for errors, and its runs: the one run of a
-# batch of one code (run; 0 for none), or the runs of any other, newest
-# first (runs), which is taken a hash at a time.
-type Tally is Data:
-  Tally{calls: Nat, risky: Bool, run: Nat, runs: List<&2, Nat>}
-
-# a call of code k after the runs rs: one more in the first run when it
-# has k, else a run of its own
-def runs.add.if(same: Bool, rs: List<&2, Nat>, +k: Nat) -> List<&2, Nat>:
-  match same rs:
-    case True{} Con{r, rest}:
-      Nat.add(r, 1n) <> rest
-    case _ _:
-      run.of(k, 1n) <> rs
-
-def runs.add(+rs: List<&2, Nat>, +k: Nat) -> List<&2, Nat>:
-  match rs:
-    case Con{+r, rest}:
-      runs.add.if(Nat.is_eq(run.code(r), k), rs, k)
-    case Nil{}:
-      [run.of(k, 1n)]
-
-def tally.step(t: Tally, +k: Nat) -> Tally:
-  match t:
-    case Tally{calls, risky, r, rs}:
-      Tally{Nat.add(calls, code.calls(k, 1n)), Bool.or(risky, code.risky(k)), r, runs.add(rs, k)}
-
-def tally.each(+hs: List<&2, U32>, t: Tally) -> Tally:
-  match hs:
-    case Nil{}:
-      t
-    case Con{+h, +rest}:
-      tally.each(rest, tally.step(t, code.of(h)))
-
-# A batch of one code k (tl's low byte), n calls (its high 16 bits), is
-# counted as code.calls and code.risky count, in a word's operations:
-# with c its class, n calls ran unless c is 1 (((c xor 1) + 3) / 4 is 1,
-# 0 and 1 for c of 0, 1 and 2); its replies need a look when c is not 0
-# or its key (k / 4) is 10 to 13. It is one only when tl counts all its
-# requests: when it came in fewer than 65536 bytes, it has 32768 at most
-# (the tail of a request before them, then two bytes or more each).
-def tally.if(one: Bool, small: Bool, +tl: U32, +hs: List<&2, U32>) -> Tally:
-  match one small:
-    case True{} True{}:
-      +k = U32.and(tl, 255)
-      +n = U32.shrn(tl, 16n)
-      +c = U32.and(tl, 3)
-      Tally{U32.to_nat(U32.mul(n, U32.shrn(U32.add(U32.xor(c, 1), 3), 2n))), Bool.or(U32.is_ne(c, 0), U32.is_lt(U32.sub(U32.shrn(k, 2n), 10), 4)), run.of(U32.to_nat(k), U32.to_nat(n)), Nil{}}
-    case _ _:
-      tally.each(hs, Tally{0n, False{}, 0n, Nil{}})
-
-# what a batch counts, from its count and marks (tl), the bytes it came in
-# and its hashes: its marks have one code when their low byte and the
-# byte above share no bit
-def tally(+tl: U32, +inb: Nat, +hs: List<&2, U32>) -> Tally:
-  tally.if(U32.is_eq(U32.and(U32.and(tl, U32.shrn(tl, 8n)), 255), 0), Nat.is_lt(inb, 65536n), tl, hs)
-
-# the codes of a batch's calls, from its hashes, in order
-def codes.of(+hs: List<&2, U32>) -> List<&2, Nat>:
-  match hs:
-    case Nil{}:
-      Nil{}
-    case Con{+h, +rest}:
-      code.of(h) <> codes.of(rest)
-
-# the codes of the calls of runs (newest first), one each, in order,
-# before acc
-def codes.rep(n: Nat, +k: Nat, acc: List<&2, Nat>) -> List<&2, Nat>:
-  match n:
-    case 0n:
-      acc
-    case 1n+m:
-      codes.rep(m, k, k <> acc)
-
-def codes.runs(+rs: List<&2, Nat>, acc: List<&2, Nat>) -> List<&2, Nat>:
-  match rs:
-    case Nil{}:
-      acc
-    case Con{+r, +rest}:
-      codes.runs(rest, codes.rep(run.n(r), run.code(r), acc))
-
-# an error reply, and the code of the call that gave it
-type Erred is Data:
-  Erred{code: Nat, msg: String}
-
-def err.put(+r: Reply, +k: Nat, acc: List<&2, Erred>) -> List<&2, Erred>:
-  match r:
-    case RError{+m}:
-      Erred{k, m} <> acc
+# a subcommand of CLIENT's key, by its number; 0 for none
+def stat.sub.client(+sub: Nat) -> Nat:
+  match sub:
+    case 1n:
+      35n
+    case 2n:
+      36n
+    case 3n:
+      37n
+    case 4n:
+      38n
+    case 5n:
+      39n
+    case 6n:
+      40n
+    case 7n:
+      41n
+    case 8n:
+      42n
+    case 9n:
+      43n
+    case 10n:
+      44n
     case _:
-      acc
+      0n
 
-# the error replies among replies, each with the code of its call (ks, in
-# the same order)
-def errs.zip(+rs: List<&2, Reply>, ks: List<&2, Nat>, acc: List<&2, Erred>) -> List<&2, Erred>:
-  match rs ks:
-    case Con{+r, +rest} Con{+k, more}:
-      errs.zip(rest, more, err.put(r, k, acc))
-    case _ _:
-      acc
+# a subcommand of FUNCTION's key, by its number; 0 for none
+def stat.sub.function(+sub: Nat) -> Nat:
+  match sub:
+    case 1n:
+      45n
+    case 2n:
+      46n
+    case _:
+      0n
+
+# a subcommand of CONFIG's key, by its number; 0 for none
+def stat.sub.config(+sub: Nat) -> Nat:
+  match sub:
+    case 1n:
+      47n
+    case 2n:
+      48n
+    case 3n:
+      49n
+    case 4n:
+      50n
+    case 5n:
+      51n
+    case _:
+      0n
+
+# a subcommand of COMMAND's key, by its number; 0 for none
+def stat.sub.command(+sub: Nat) -> Nat:
+  match sub:
+    case 1n:
+      52n
+    case 2n:
+      53n
+    case 3n:
+      54n
+    case 4n:
+      55n
+    case 5n:
+      56n
+    case 6n:
+      57n
+    case 7n:
+      58n
+    case _:
+      0n
 
 # the name INFO gives a key (as COMMAND names it); "" for none
 def stat.name(+key: Nat) -> String:
@@ -1329,77 +1310,1416 @@ def stat.name(+key: Nat) -> String:
     case 21n:
       "keys"
     case 22n:
-      "type"
+      "scan"
     case 23n:
-      "select"
+      "type"
     case 24n:
-      "hello"
+      "select"
     case 25n:
-      "auth"
+      "hello"
     case 26n:
-      "quit"
+      "auth"
     case 27n:
-      "reset"
+      "quit"
     case 28n:
-      "client"
+      "reset"
     case 29n:
-      "function"
+      "client"
     case 30n:
-      "config"
+      "function"
     case 31n:
-      "info"
+      "config"
     case 32n:
-      "command"
+      "info"
     case 33n:
-      "client|id"
+      "command"
     case 34n:
-      "client|help"
+      "randomkey"
     case 35n:
-      "client|reply"
+      "client|id"
     case 36n:
-      "client|getname"
+      "client|help"
     case 37n:
-      "client|setname"
+      "client|reply"
     case 38n:
-      "client|caching"
+      "client|getname"
     case 39n:
-      "client|unblock"
+      "client|setname"
     case 40n:
-      "client|getredir"
+      "client|caching"
     case 41n:
-      "client|no-evict"
+      "client|unblock"
     case 42n:
-      "client|trackinginfo"
+      "client|getredir"
     case 43n:
-      "function|flush"
+      "client|no-evict"
     case 44n:
-      "function|help"
+      "client|trackinginfo"
     case 45n:
-      "config|get"
+      "function|flush"
     case 46n:
-      "config|set"
+      "function|help"
     case 47n:
-      "config|resetstat"
+      "config|get"
     case 48n:
-      "config|rewrite"
+      "config|set"
     case 49n:
-      "config|help"
+      "config|resetstat"
     case 50n:
-      "command|info"
+      "config|rewrite"
     case 51n:
-      "command|docs"
+      "config|help"
     case 52n:
-      "command|list"
+      "command|info"
     case 53n:
-      "command|help"
+      "command|docs"
     case 54n:
-      "command|count"
+      "command|list"
     case 55n:
-      "command|getkeys"
+      "command|help"
     case 56n:
+      "command|count"
+    case 57n:
+      "command|getkeys"
+    case 58n:
       "command|getkeysandflags"
     case _:
       ""
+
+# Redis's arity of the command or subcommand of a key: 2a when it takes
+# exactly a arguments (its name included), 2a + 1 when it takes a or more
+def stat.arity(+key: Nat) -> Nat:
+  match key:
+    case 1n:
+      3n
+    case 2n:
+      4n
+    case 3n:
+      4n
+    case 4n:
+      7n
+    case 5n:
+      6n
+    case 6n:
+      6n
+    case 7n:
+      5n
+    case 8n:
+      5n
+    case 9n:
+      5n
+    case 10n:
+      4n
+    case 11n:
+      4n
+    case 12n:
+      6n
+    case 13n:
+      6n
+    case 14n:
+      6n
+    case 15n:
+      4n
+    case 16n:
+      5n
+    case 17n:
+      7n
+    case 18n:
+      2n
+    case 19n:
+      3n
+    case 20n:
+      3n
+    case 21n:
+      4n
+    case 22n:
+      5n
+    case 23n:
+      4n
+    case 24n:
+      4n
+    case 25n:
+      3n
+    case 26n:
+      5n
+    case 27n:
+      3n
+    case 28n:
+      2n
+    case 29n:
+      5n
+    case 30n:
+      5n
+    case 31n:
+      5n
+    case 32n:
+      3n
+    case 33n:
+      3n
+    case 34n:
+      2n
+    case 35n:
+      4n
+    case 36n:
+      4n
+    case 37n:
+      6n
+    case 38n:
+      4n
+    case 39n:
+      6n
+    case 40n:
+      6n
+    case 41n:
+      7n
+    case 42n:
+      4n
+    case 43n:
+      6n
+    case 44n:
+      4n
+    case 45n:
+      5n
+    case 46n:
+      4n
+    case 47n:
+      7n
+    case 48n:
+      9n
+    case 49n:
+      4n
+    case 50n:
+      4n
+    case 51n:
+      4n
+    case 52n:
+      5n
+    case 53n:
+      5n
+    case 54n:
+      5n
+    case 55n:
+      4n
+    case 56n:
+      4n
+    case 57n:
+      9n
+    case 58n:
+      9n
+    case _:
+      1n
+
+# whether a call of the command of a key can fail as it runs
+def stat.risky(+key: Nat) -> Bool:
+  match key:
+    case 10n:
+      True{}
+    case 11n:
+      True{}
+    case 12n:
+      True{}
+    case 13n:
+      True{}
+    case _:
+      False{}
+
+# a code's word
+def stat.cw(+code: Nat) -> U32:
+  match code:
+    case 0n:
+      63
+    case 1n:
+      95
+    case 2n:
+      111
+    case 3n:
+      119
+    case 4n:
+      123
+    case 5n:
+      125
+    case 6n:
+      126
+    case 7n:
+      159
+    case 8n:
+      175
+    case 9n:
+      183
+    case 10n:
+      187
+    case 11n:
+      189
+    case 12n:
+      190
+    case 13n:
+      207
+    case 14n:
+      215
+    case 15n:
+      219
+    case 16n:
+      221
+    case 17n:
+      222
+    case 18n:
+      231
+    case 19n:
+      235
+    case 20n:
+      237
+    case 21n:
+      238
+    case 22n:
+      243
+    case 23n:
+      245
+    case 24n:
+      246
+    case 25n:
+      249
+    case 26n:
+      250
+    case 27n:
+      252
+    case 28n:
+      287
+    case 29n:
+      303
+    case 30n:
+      311
+    case 31n:
+      315
+    case 32n:
+      317
+    case 33n:
+      318
+    case 34n:
+      335
+    case 35n:
+      343
+    case 36n:
+      347
+    case 37n:
+      349
+    case 38n:
+      350
+    case 39n:
+      359
+    case 40n:
+      363
+    case 41n:
+      365
+    case 42n:
+      366
+    case 43n:
+      371
+    case 44n:
+      373
+    case 45n:
+      374
+    case 46n:
+      377
+    case 47n:
+      378
+    case 48n:
+      380
+    case 49n:
+      399
+    case 50n:
+      407
+    case 51n:
+      411
+    case 52n:
+      413
+    case 53n:
+      414
+    case 54n:
+      423
+    case 55n:
+      427
+    case 56n:
+      429
+    case 57n:
+      430
+    case 58n:
+      435
+    case 59n:
+      437
+    case 60n:
+      438
+    case 61n:
+      441
+    case 62n:
+      442
+    case 63n:
+      444
+    case 64n:
+      455
+    case 65n:
+      459
+    case 66n:
+      461
+    case 67n:
+      462
+    case 68n:
+      467
+    case 69n:
+      469
+    case 70n:
+      470
+    case 71n:
+      473
+    case 72n:
+      474
+    case 73n:
+      476
+    case 74n:
+      483
+    case 75n:
+      485
+    case 76n:
+      486
+    case 77n:
+      489
+    case 78n:
+      490
+    case 79n:
+      492
+    case 80n:
+      497
+    case 81n:
+      498
+    case 82n:
+      500
+    case 83n:
+      504
+    case 84n:
+      543
+    case 85n:
+      559
+    case 86n:
+      567
+    case 87n:
+      571
+    case 88n:
+      573
+    case 89n:
+      574
+    case 90n:
+      591
+    case 91n:
+      599
+    case 92n:
+      603
+    case 93n:
+      605
+    case 94n:
+      606
+    case 95n:
+      615
+    case 96n:
+      619
+    case 97n:
+      621
+    case 98n:
+      622
+    case 99n:
+      627
+    case 100n:
+      629
+    case 101n:
+      630
+    case 102n:
+      633
+    case 103n:
+      634
+    case 104n:
+      636
+    case 105n:
+      655
+    case 106n:
+      663
+    case 107n:
+      667
+    case 108n:
+      669
+    case 109n:
+      670
+    case 110n:
+      679
+    case 111n:
+      683
+    case 112n:
+      685
+    case 113n:
+      686
+    case 114n:
+      691
+    case 115n:
+      693
+    case 116n:
+      694
+    case 117n:
+      697
+    case 118n:
+      698
+    case 119n:
+      700
+    case 120n:
+      711
+    case 121n:
+      715
+    case 122n:
+      717
+    case 123n:
+      718
+    case 124n:
+      723
+    case 125n:
+      725
+    case 126n:
+      726
+    case 127n:
+      729
+    case 128n:
+      730
+    case 129n:
+      732
+    case 130n:
+      739
+    case 131n:
+      741
+    case 132n:
+      742
+    case 133n:
+      745
+    case 134n:
+      746
+    case 135n:
+      748
+    case 136n:
+      753
+    case 137n:
+      754
+    case 138n:
+      756
+    case 139n:
+      760
+    case 140n:
+      783
+    case 141n:
+      791
+    case 142n:
+      795
+    case 143n:
+      797
+    case 144n:
+      798
+    case 145n:
+      807
+    case 146n:
+      811
+    case 147n:
+      813
+    case 148n:
+      814
+    case 149n:
+      819
+    case 150n:
+      821
+    case 151n:
+      822
+    case 152n:
+      825
+    case 153n:
+      826
+    case 154n:
+      828
+    case 155n:
+      839
+    case 156n:
+      843
+    case 157n:
+      845
+    case 158n:
+      846
+    case 159n:
+      851
+    case 160n:
+      853
+    case 161n:
+      854
+    case 162n:
+      857
+    case 163n:
+      858
+    case 164n:
+      860
+    case 165n:
+      867
+    case 166n:
+      869
+    case 167n:
+      870
+    case 168n:
+      873
+    case 169n:
+      874
+    case 170n:
+      876
+    case 171n:
+      881
+    case 172n:
+      882
+    case 173n:
+      884
+    case 174n:
+      888
+    case 175n:
+      903
+    case 176n:
+      907
+    case 177n:
+      909
+    case 178n:
+      910
+    case 179n:
+      915
+    case 180n:
+      917
+    case 181n:
+      918
+    case 182n:
+      921
+    case 183n:
+      922
+    case 184n:
+      924
+    case 185n:
+      931
+    case 186n:
+      933
+    case 187n:
+      934
+    case 188n:
+      937
+    case 189n:
+      938
+    case 190n:
+      940
+    case 191n:
+      945
+    case 192n:
+      946
+    case 193n:
+      948
+    case 194n:
+      952
+    case 195n:
+      963
+    case 196n:
+      965
+    case 197n:
+      966
+    case 198n:
+      969
+    case 199n:
+      970
+    case 200n:
+      972
+    case 201n:
+      977
+    case 202n:
+      978
+    case 203n:
+      980
+    case 204n:
+      984
+    case 205n:
+      993
+    case 206n:
+      994
+    case 207n:
+      996
+    case 208n:
+      1000
+    case 209n:
+      1008
+    case 210n:
+      1055
+    case 211n:
+      1071
+    case 212n:
+      1079
+    case 213n:
+      1083
+    case 214n:
+      1085
+    case 215n:
+      1086
+    case 216n:
+      1103
+    case 217n:
+      1111
+    case 218n:
+      1115
+    case 219n:
+      1117
+    case 220n:
+      1118
+    case 221n:
+      1127
+    case 222n:
+      1131
+    case 223n:
+      1133
+    case 224n:
+      1134
+    case 225n:
+      1139
+    case 226n:
+      1141
+    case 227n:
+      1142
+    case 228n:
+      1145
+    case 229n:
+      1146
+    case 230n:
+      1148
+    case 231n:
+      1167
+    case 232n:
+      1175
+    case 233n:
+      1179
+    case 234n:
+      1181
+    case 235n:
+      1182
+    case _:
+      63
+
+# a word's code (0 for one no code has)
+def stat.code.cw(+w: Nat) -> Nat:
+  match w:
+    case 63n:
+      0n
+    case 95n:
+      1n
+    case 111n:
+      2n
+    case 119n:
+      3n
+    case 123n:
+      4n
+    case 125n:
+      5n
+    case 126n:
+      6n
+    case 159n:
+      7n
+    case 175n:
+      8n
+    case 183n:
+      9n
+    case 187n:
+      10n
+    case 189n:
+      11n
+    case 190n:
+      12n
+    case 207n:
+      13n
+    case 215n:
+      14n
+    case 219n:
+      15n
+    case 221n:
+      16n
+    case 222n:
+      17n
+    case 231n:
+      18n
+    case 235n:
+      19n
+    case 237n:
+      20n
+    case 238n:
+      21n
+    case 243n:
+      22n
+    case 245n:
+      23n
+    case 246n:
+      24n
+    case 249n:
+      25n
+    case 250n:
+      26n
+    case 252n:
+      27n
+    case 287n:
+      28n
+    case 303n:
+      29n
+    case 311n:
+      30n
+    case 315n:
+      31n
+    case 317n:
+      32n
+    case 318n:
+      33n
+    case 335n:
+      34n
+    case 343n:
+      35n
+    case 347n:
+      36n
+    case 349n:
+      37n
+    case 350n:
+      38n
+    case 359n:
+      39n
+    case 363n:
+      40n
+    case 365n:
+      41n
+    case 366n:
+      42n
+    case 371n:
+      43n
+    case 373n:
+      44n
+    case 374n:
+      45n
+    case 377n:
+      46n
+    case 378n:
+      47n
+    case 380n:
+      48n
+    case 399n:
+      49n
+    case 407n:
+      50n
+    case 411n:
+      51n
+    case 413n:
+      52n
+    case 414n:
+      53n
+    case 423n:
+      54n
+    case 427n:
+      55n
+    case 429n:
+      56n
+    case 430n:
+      57n
+    case 435n:
+      58n
+    case 437n:
+      59n
+    case 438n:
+      60n
+    case 441n:
+      61n
+    case 442n:
+      62n
+    case 444n:
+      63n
+    case 455n:
+      64n
+    case 459n:
+      65n
+    case 461n:
+      66n
+    case 462n:
+      67n
+    case 467n:
+      68n
+    case 469n:
+      69n
+    case 470n:
+      70n
+    case 473n:
+      71n
+    case 474n:
+      72n
+    case 476n:
+      73n
+    case 483n:
+      74n
+    case 485n:
+      75n
+    case 486n:
+      76n
+    case 489n:
+      77n
+    case 490n:
+      78n
+    case 492n:
+      79n
+    case 497n:
+      80n
+    case 498n:
+      81n
+    case 500n:
+      82n
+    case 504n:
+      83n
+    case 543n:
+      84n
+    case 559n:
+      85n
+    case 567n:
+      86n
+    case 571n:
+      87n
+    case 573n:
+      88n
+    case 574n:
+      89n
+    case 591n:
+      90n
+    case 599n:
+      91n
+    case 603n:
+      92n
+    case 605n:
+      93n
+    case 606n:
+      94n
+    case 615n:
+      95n
+    case 619n:
+      96n
+    case 621n:
+      97n
+    case 622n:
+      98n
+    case 627n:
+      99n
+    case 629n:
+      100n
+    case 630n:
+      101n
+    case 633n:
+      102n
+    case 634n:
+      103n
+    case 636n:
+      104n
+    case 655n:
+      105n
+    case 663n:
+      106n
+    case 667n:
+      107n
+    case 669n:
+      108n
+    case 670n:
+      109n
+    case 679n:
+      110n
+    case 683n:
+      111n
+    case 685n:
+      112n
+    case 686n:
+      113n
+    case 691n:
+      114n
+    case 693n:
+      115n
+    case 694n:
+      116n
+    case 697n:
+      117n
+    case 698n:
+      118n
+    case 700n:
+      119n
+    case 711n:
+      120n
+    case 715n:
+      121n
+    case 717n:
+      122n
+    case 718n:
+      123n
+    case 723n:
+      124n
+    case 725n:
+      125n
+    case 726n:
+      126n
+    case 729n:
+      127n
+    case 730n:
+      128n
+    case 732n:
+      129n
+    case 739n:
+      130n
+    case 741n:
+      131n
+    case 742n:
+      132n
+    case 745n:
+      133n
+    case 746n:
+      134n
+    case 748n:
+      135n
+    case 753n:
+      136n
+    case 754n:
+      137n
+    case 756n:
+      138n
+    case 760n:
+      139n
+    case 783n:
+      140n
+    case 791n:
+      141n
+    case 795n:
+      142n
+    case 797n:
+      143n
+    case 798n:
+      144n
+    case 807n:
+      145n
+    case 811n:
+      146n
+    case 813n:
+      147n
+    case 814n:
+      148n
+    case 819n:
+      149n
+    case 821n:
+      150n
+    case 822n:
+      151n
+    case 825n:
+      152n
+    case 826n:
+      153n
+    case 828n:
+      154n
+    case 839n:
+      155n
+    case 843n:
+      156n
+    case 845n:
+      157n
+    case 846n:
+      158n
+    case 851n:
+      159n
+    case 853n:
+      160n
+    case 854n:
+      161n
+    case 857n:
+      162n
+    case 858n:
+      163n
+    case 860n:
+      164n
+    case 867n:
+      165n
+    case 869n:
+      166n
+    case 870n:
+      167n
+    case 873n:
+      168n
+    case 874n:
+      169n
+    case 876n:
+      170n
+    case 881n:
+      171n
+    case 882n:
+      172n
+    case 884n:
+      173n
+    case 888n:
+      174n
+    case 903n:
+      175n
+    case 907n:
+      176n
+    case 909n:
+      177n
+    case 910n:
+      178n
+    case 915n:
+      179n
+    case 917n:
+      180n
+    case 918n:
+      181n
+    case 921n:
+      182n
+    case 922n:
+      183n
+    case 924n:
+      184n
+    case 931n:
+      185n
+    case 933n:
+      186n
+    case 934n:
+      187n
+    case 937n:
+      188n
+    case 938n:
+      189n
+    case 940n:
+      190n
+    case 945n:
+      191n
+    case 946n:
+      192n
+    case 948n:
+      193n
+    case 952n:
+      194n
+    case 963n:
+      195n
+    case 965n:
+      196n
+    case 966n:
+      197n
+    case 969n:
+      198n
+    case 970n:
+      199n
+    case 972n:
+      200n
+    case 977n:
+      201n
+    case 978n:
+      202n
+    case 980n:
+      203n
+    case 984n:
+      204n
+    case 993n:
+      205n
+    case 994n:
+      206n
+    case 996n:
+      207n
+    case 1000n:
+      208n
+    case 1008n:
+      209n
+    case 1055n:
+      210n
+    case 1071n:
+      211n
+    case 1079n:
+      212n
+    case 1083n:
+      213n
+    case 1085n:
+      214n
+    case 1086n:
+      215n
+    case 1103n:
+      216n
+    case 1111n:
+      217n
+    case 1115n:
+      218n
+    case 1117n:
+      219n
+    case 1118n:
+      220n
+    case 1127n:
+      221n
+    case 1131n:
+      222n
+    case 1133n:
+      223n
+    case 1134n:
+      224n
+    case 1139n:
+      225n
+    case 1141n:
+      226n
+    case 1142n:
+      227n
+    case 1145n:
+      228n
+    case 1146n:
+      229n
+    case 1148n:
+      230n
+    case 1167n:
+      231n
+    case 1175n:
+      232n
+    case 1179n:
+      233n
+    case 1181n:
+      234n
+    case 1182n:
+      235n
+    case _:
+      0n
+
+# the high twelve bits of the hash of a call of GET, SET and INCR that
+# runs, as the parser writes them
+def stat.mark.get() -> U32:
+  199229440
+
+def stat.mark.set() -> U32:
+  231735296
+
+def stat.mark.incr() -> U32:
+  380633088
+# END gen_commands: stats
+
+# a container (CLIENT, FUNCTION, CONFIG, COMMAND) by its first argument;
+# alone, the container itself (top)
+def stat.sub.of(id: Nat, +up: String) -> Nat:
+  match id:
+    case 45n:
+      stat.sub.client(client_id(up, String.length(up)))
+    case 46n:
+      stat.sub.function(function_id(up, String.length(up)))
+    case 47n:
+      stat.sub.config(config_id(up, String.length(up)))
+    case _:
+      stat.sub.command(command_id(up, String.length(up)))
+
+def stat.key.args(top: Nat, id: Nat, +args: List<&2, String>) -> Nat:
+  match args:
+    case Nil{}:
+      top
+    case Con{+a, rest}:
+      stat.sub.of(id, String.to_upper(a))
+
+# the key of a command of number id with these arguments
+def stat.key(+id: Nat, +args: List<&2, String>) -> Nat:
+  match id:
+    case 45n:
+      stat.key.args(stat.top(45n), 45n, args)
+    case 46n:
+      stat.key.args(stat.top(46n), 46n, args)
+    case 47n:
+      stat.key.args(stat.top(47n), 47n, args)
+    case 49n:
+      stat.key.args(stat.top(49n), 49n, args)
+    case _:
+      stat.top(id)
+
+# whether argc arguments (the name included) pass Redis's check of the
+# arity of the command or subcommand of key
+def stat.arity.ok(+key: Nat, +argc: Nat) -> Bool:
+  +a = stat.arity(key)
+  +n = Nat.div(a, 2n)
+  Bool.pick(Bool, Nat.is_eq(Nat.mod(a, 2n), 0n), Nat.is_eq(argc, n), Nat.is_le(n, argc))
+
+def stat.refused(+m: String) -> Bool:
+  Bool.or(String.starts_with(m, "ERR unknown command '"), String.starts_with(m, "ERR unknown subcommand '"))
+
+# what an error the parser found counts as: a wrong number of arguments
+# is refused when Redis's check of the arity refuses it, and fails as the
+# command runs otherwise (PING with two arguments, MSET with a key and no
+# value: the command checks them itself); an unknown command or
+# subcommand is refused; any other error fails
+def stat.class.args(arity: Bool, refused: Bool, +key: Nat, +args: List<&2, String>) -> Nat:
+  match arity refused:
+    case True{} _:
+      Bool.pick(Nat, stat.arity.ok(key, Nat.add(List.length(&2, String, args), 1n)), 2n, 1n)
+    case False{} True{}:
+      1n
+    case False{} False{}:
+      2n
+
+def stat.class.err(+r: Reply, +key: Nat, +args: List<&2, String>) -> Nat:
+  match r:
+    case RError{+m}:
+      stat.class.args(String.starts_with(m, "ERR wrong number of arguments for "), stat.refused(m), key, args)
+    case _:
+      2n
+
+# what a parsed command of key with arguments args counts as: an error
+# the parser found (Bad, and a session command's SBad) is refused or
+# failed; anything else runs
+def stat.class(+c: Cmd, +key: Nat, +args: List<&2, String>) -> Nat:
+  match c:
+    case Bad{+r}:
+      stat.class.err(r, key, args)
+    case Own{SBad{+r}}:
+      stat.class.err(r, key, args)
+    case _:
+      0n
+
+def stat.code(+key: Nat, +class: Nat) -> Nat:
+  Nat.add(Nat.mul(key, 4n), class)
+
+# a hint's hash with code's word in its high twelve bits
+def stat.hash(+h: U32, +code: Nat) -> U32:
+  U32.or(U32.and(h, 1048575), U32.shln(stat.cw(code), 20n))
+
+# the code of the word in a hash's high twelve bits
+def code.of(+h: U32) -> Nat:
+  stat.code.cw(U32.to_nat(U32.shrn(h, 20n)))
+
+# A batch's calls are counted as runs of one code each: a run is
+# code * 2^32 + how many calls in a row have it.
+def run.top() -> Nat:
+  Nat.mul(65536n, 65536n)
+
+def run.code(+r: Nat) -> Nat:
+  Nat.div(r, run.top())
+
+def run.n(+r: Nat) -> Nat:
+  Nat.mod(r, run.top())
+
+def run.of(+code: Nat, +n: Nat) -> Nat:
+  Nat.add(Nat.mul(code, run.top()), n)
+
+# the calls of n of code k that ran (0 and 2; key 0 is never one)
+def code.calls(+k: Nat, +n: Nat) -> Nat:
+  Bool.pick(Nat, Nat.is_eq(Nat.mod(k, 4n), 1n), 0n, n)
+
+# whether replies of calls of code k need a look for errors: calls
+# refused or failed by the parser, or calls that can fail as they run
+# (stat.risky: INCR, DECR, INCRBY and DECRBY meet values that are not
+# integers, and overflows)
+def code.risky(+k: Nat) -> Bool:
+  Bool.or(Nat.is_lt(0n, Nat.mod(k, 4n)), stat.risky(Nat.div(k, 4n)))
+
+# The words of a batch's requests or-ed together have six bits set
+# exactly when all of them are one word: two words of six bits each that
+# differ have seven or more between them. So a batch of one command, most
+# of them, is counted without a look at its requests. The parser keeps a
+# batch's count and words in one word (tl): the count in its high twenty
+# bits, the words in its low twelve.
+def tl.add(tl: U32, +h: U32) -> U32:
+  U32.or(U32.add(tl, 4096), U32.shrn(h, 20n))
+
+# the bits set in a word of twelve bits
+def bits12(+w: U32) -> U32:
+  +a = U32.sub(w, U32.and(U32.shrn(w, 1n), 1365))
+  +b = U32.add(U32.and(a, 819), U32.and(U32.shrn(a, 2n), 819))
+  +c = U32.and(U32.add(b, U32.shrn(b, 4n)), 3855)
+  U32.and(U32.add(c, U32.shrn(c, 8n)), 31)
+
+# What a batch that runs the fast way counts: the calls that ran, whether
+# its replies need a look for errors, and its runs: the one run of a
+# batch of one code (run; 0 for none), or the runs of any other, newest
+# first (runs), which is taken a hash at a time.
+type Tally is Data:
+  Tally{calls: Nat, risky: Bool, run: Nat, runs: List<&2, Nat>}
+
+# a call of code k after the runs rs: one more in the first run when it
+# has k, else a run of its own
+def runs.add.if(same: Bool, rs: List<&2, Nat>, +k: Nat) -> List<&2, Nat>:
+  match same rs:
+    case True{} Con{r, rest}:
+      Nat.add(r, 1n) <> rest
+    case _ _:
+      run.of(k, 1n) <> rs
+
+def runs.add(+rs: List<&2, Nat>, +k: Nat) -> List<&2, Nat>:
+  match rs:
+    case Con{+r, rest}:
+      runs.add.if(Nat.is_eq(run.code(r), k), rs, k)
+    case Nil{}:
+      [run.of(k, 1n)]
+
+def tally.step(t: Tally, +k: Nat) -> Tally:
+  match t:
+    case Tally{calls, risky, r, rs}:
+      Tally{Nat.add(calls, code.calls(k, 1n)), Bool.or(risky, code.risky(k)), r, runs.add(rs, k)}
+
+def tally.each(+hs: List<&2, U32>, t: Tally) -> Tally:
+  match hs:
+    case Nil{}:
+      t
+    case Con{+h, +rest}:
+      tally.each(rest, tally.step(t, code.of(h)))
+
+# A batch of one code k (the code of tl's low twelve bits), n calls (its
+# high twenty bits), is counted as code.calls and code.risky count: with
+# c its class, n calls ran unless c is 1 (((c xor 1) + 3) / 4 is 1, 0 and
+# 1 for c of 0, 1 and 2). It is one only when tl counts all its requests:
+# when it came in fewer than 2^20 bytes, it has 2^19 + 1 at most (the
+# tail of a request before them, then two bytes or more each).
+def tally.one(+k: Nat, +n: U32) -> Tally:
+  +c = U32.and(U32.from_nat(k), 3)
+  Tally{U32.to_nat(U32.mul(n, U32.shrn(U32.add(U32.xor(c, 1), 3), 2n))), code.risky(k), run.of(k, U32.to_nat(n)), Nil{}}
+
+def tally.if(one: Bool, small: Bool, +tl: U32, +hs: List<&2, U32>) -> Tally:
+  match one small:
+    case True{} True{}:
+      tally.one(stat.code.cw(U32.to_nat(U32.and(tl, 4095))), U32.shrn(tl, 12n))
+    case _ _:
+      tally.each(hs, Tally{0n, False{}, 0n, Nil{}})
+
+# what a batch counts, from its count and words (tl), the bytes it came in
+# and its hashes
+def tally(+tl: U32, +inb: Nat, +hs: List<&2, U32>) -> Tally:
+  tally.if(U32.is_eq(bits12(U32.and(tl, 4095)), 6), Nat.is_lt(inb, 1048576n), tl, hs)
+
+# the codes of a batch's calls, from its hashes, in order
+def codes.of(+hs: List<&2, U32>) -> List<&2, Nat>:
+  match hs:
+    case Nil{}:
+      Nil{}
+    case Con{+h, +rest}:
+      code.of(h) <> codes.of(rest)
+
+# the codes of the calls of runs (newest first), one each, in order,
+# before acc
+def codes.rep(n: Nat, +k: Nat, acc: List<&2, Nat>) -> List<&2, Nat>:
+  match n:
+    case 0n:
+      acc
+    case 1n+m:
+      codes.rep(m, k, k <> acc)
+
+def codes.runs(+rs: List<&2, Nat>, acc: List<&2, Nat>) -> List<&2, Nat>:
+  match rs:
+    case Nil{}:
+      acc
+    case Con{+r, +rest}:
+      codes.runs(rest, codes.rep(run.n(r), run.code(r), acc))
+
+# an error reply, and the code of the call that gave it
+type Erred is Data:
+  Erred{code: Nat, msg: String}
+
+def err.put(+r: Reply, +k: Nat, acc: List<&2, Erred>) -> List<&2, Erred>:
+  match r:
+    case RError{+m}:
+      Erred{k, m} <> acc
+    case _:
+      acc
+
+# the error replies among replies, each with the code of its call (ks, in
+# the same order)
+def errs.zip(+rs: List<&2, Reply>, ks: List<&2, Nat>, acc: List<&2, Erred>) -> List<&2, Erred>:
+  match rs ks:
+    case Con{+r, +rest} Con{+k, more}:
+      errs.zip(rest, more, err.put(r, k, acc))
+    case _ _:
+      acc
 
 # ASCII lower case, as C's tolower
 def byte.lower(+x: U32) -> U32:
@@ -1653,6 +2973,48 @@ def glob_go(+all: Bool, +p: String, ks: List<&2, String>) -> List<&2, Reply>:
 def glob_filter(+p: String, ks: List<&2, String>) -> List<&2, Reply>:
   glob_go(String.eq(p, "*"), p, ks)
 
+# SCAN's reply: the scan's keys, filtered (the parser is above parse_id)
+# the keys a scan found, by the pattern ("*" when there is none), then by
+# the type: BendKV holds strings only, so a type other than "string"
+# keeps none
+def scan.match(ks: List<&2, String>, pat: Maybe<&2, String>) -> List<&2, Reply>:
+  match pat:
+    case Some{+p}:
+      glob_filter(p, ks)
+    case None{}:
+      glob_filter("*", ks)
+
+def scan.typed(ks: List<&2, String>, pat: Maybe<&2, String>, ok: Bool) -> List<&2, Reply>:
+  match ok:
+    case True{}:
+      scan.match(ks, pat)
+    case False{}:
+      Nil{}
+
+def scan.keep(ks: List<&2, String>, pat: Maybe<&2, String>, typ: Maybe<&2, String>) -> List<&2, Reply>:
+  match typ:
+    case Some{+t}:
+      scan.typed(ks, pat, is_word(t, "STRING"))
+    case None{}:
+      scan.match(ks, pat)
+
+def scan.rep(+next: Nat, ks: List<&2, String>, pat: Maybe<&2, String>, typ: Maybe<&2, String>) -> Reply:
+  RArray{[RBulk{Nat.show(next)}, RArray{scan.keep(ks, pat, typ)}]}
+
+def scan.out(sc: KV.Scan, pat: Maybe<&2, String>, typ: Maybe<&2, String>) -> Reply:
+  match sc:
+    case KV.Stop{+at, acc}:
+      scan.rep(Bool.pick(Nat, Nat.is_lt(at, 1048576n), at, 0n), List.reverse(&2, String, acc), pat, typ)
+    case KV.Scan{w, acc}:
+      scan.rep(0n, List.reverse(&2, String, acc), pat, typ)
+
+def scan.reply(a: ScanArgs, +d: KV.Trie<String>) -> Reply:
+  match a:
+    case ScanArgs{+cur, +n, pat, typ}:
+      scan.out(KV.scan(String, d, cur, n), pat, typ)
+    case ScanBad{r}:
+      r
+
 # Execution
 # ---------
 
@@ -1817,6 +3179,9 @@ def exec(cmd: Cmd, db: KV.Trie<String>) -> Reply & KV.Trie<String>:
     case Keys{p}:
       +d = db
       (RArray{glob_filter(p, KV.keys(String, d))}, d)
+    case Scan{args}:
+      +d = db
+      (scan.reply(scan.args(args), d), d)
     case Peek{+k, c}:
       +d = db
       (peek(c, KV.get(String, d, k)), d)

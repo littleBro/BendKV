@@ -41,7 +41,7 @@ type Args is Data:
   ArgsBad{msg: String}
 
 # one request: its command, with the hash of its key for the hints and
-# its code for INFO's statistics in the hash's high byte (B.Req,
+# its code for INFO's statistics in the hash's high twelve bits (B.Req,
 # R.stat.hash); or none for an empty one (*0, or a blank inline line),
 # which Redis skips without a reply
 type One is Data:
@@ -53,7 +53,7 @@ type One is Data:
 # a buffer's worth of requests: the complete ones, newest first (as the
 # parser meets them, each put before the ones it read already; the server
 # puts them in order in the same pass that takes their commands and
-# hashes apart, B.unzip), how many they are and the marks of their codes
+# hashes apart, B.unzip), how many they are and the words of their codes
 # together (R.tl.add: whether they all have one code, and which), the
 # unparsed tail, a protocol error that ends the connection, if any, and
 # how many bytes the tail needs at least before a parse can make progress
@@ -221,7 +221,7 @@ def req.of(+id: Nat, +nm: String, a: Args) -> One:
 def get.of(b: Key) -> One:
   match b:
     case KeyOk{k, h, j}:
-      OneOk{B.Req{R.Get{k}, U32.add(U32.and(h, 16777215), 201326592)}, j}
+      OneOk{B.Req{R.Get{k}, U32.or(U32.and(h, 1048575), R.stat.mark.get())}, j}
     case KeyMore{n}:
       OneMore{n}
     case KeyBad{msg}:
@@ -231,7 +231,7 @@ def get.of(b: Key) -> One:
 def set.val(k: String, h: U32, b: Bulk) -> One:
   match b:
     case BulkOk{v, j}:
-      OneOk{B.Req{R.Set{k, v}, U32.add(U32.and(h, 16777215), 268435456)}, j}
+      OneOk{B.Req{R.Set{k, v}, U32.or(U32.and(h, 1048575), R.stat.mark.set())}, j}
     case BulkMore{n}:
       OneMore{n}
     case BulkBad{msg}:
@@ -250,7 +250,7 @@ def set.of(+s: String, +l: Nat, b: Key) -> One:
 def incr.of(b: Key) -> One:
   match b:
     case KeyOk{k, h, j}:
-      OneOk{B.Req{R.IncrBy{k, R.IPos{1n}}, U32.add(U32.and(h, 16777215), 671088640)}, j}
+      OneOk{B.Req{R.IncrBy{k, R.IPos{1n}}, U32.or(U32.and(h, 1048575), R.stat.mark.incr())}, j}
     case KeyMore{n}:
       OneMore{n}
     case KeyBad{msg}:
@@ -526,16 +526,16 @@ def one(+s: String, +i: Nat, +l: Nat) -> One:
   one.head(s, i, l, U32.is_eq(c, 42), U32.is_eq(c, 4294967295))
 
 # a batch's requests before its tail is cut off, newest first, how many
-# they are and their marks (R.tl.add): at is the index where the tail
-# starts, the first request not parsed on
+# they are and the words of their codes (R.tl.add): at is the index where
+# the tail starts, the first request not parsed on
 type Cut is Data:
   Cut{reqs: List<&2, B.Req>, tl: U32, at: Nat, err: Maybe<&2, String>, need: Nat}
 
 # every complete request of s from index i on, put before acc, and
-# counted with its mark in tl: o is the parse of the one at i; each
-# request takes at least one byte, so the length of the buffer is enough
-# fuel. The request is taken apart for its hash, whose high byte is its
-# code: its words are in registers already.
+# counted with its code's word in tl: o is the parse of the one at i;
+# each request takes at least one byte, so the length of the buffer is
+# enough fuel. The request is taken apart for its hash, whose high twelve
+# bits are its code's word: its words are in registers already.
 def batch.go(fuel: Nat, +s: String, +l: Nat, +i: Nat, o: One, acc: List<&2, B.Req>, tl: U32) -> Cut:
   match fuel o:
     case 0n _:
@@ -582,8 +582,8 @@ def win.max() -> Nat:
 # a window's parse, judged: the last one (the buffer's end, or a protocol
 # error), one that parsed nothing (a request longer than a window: the
 # rest of the buffer is parsed whole from at), or one to go on after; the
-# requests of the windows so far, newest first, and their count and
-# marks (R.tl.add), are in each
+# requests of the windows so far, newest first, and their count and the
+# words of their codes (R.tl.add), are in each
 type Win is Data:
   WinLast{b: Batch}
   WinBig{reqs: List<&2, B.Req>, tl: U32, at: Nat}

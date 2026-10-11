@@ -43,13 +43,13 @@ import ./startup.bend as T
 import ./info.bend as I
 
 # a batch from a connection in the state cn (B.Job: its commands, and
-# the hashes of their keys, for the hints of batch.bend, with the codes
-# of INFO's statistics in their high bytes), the channel its answer goes
-# back on, how many requests it has and their marks (R.tl.add), and how
-# many bytes it came in; the shell's facts (info.bend:
-# Live), which a connection sends before a batch that asks INFO or CONFIG
-# RESETSTAT; the cron's tick, at ms since 1970, for INFO's rates; or a
-# protocol error a connection answered, for errorstats
+# the hashes of their keys, for the hints of batch.bend, with the words
+# of the codes of INFO's statistics in their high twelve bits), the
+# channel its answer goes back on, how many requests it has and the words
+# of their codes (R.tl.add), and how many bytes it came in; the shell's
+# facts (info.bend: Live), which a connection sends before a batch that
+# asks INFO or CONFIG RESETSTAT; the cron's tick, at ms since 1970, for
+# INFO's rates; or a protocol error a connection answered, for errorstats
 type Req is Data:
   Req{cn: S.Conn, job: B.Job, back: Chan(Ans), tl: U32, inb: Nat}
   Facts{live: I.Live}
@@ -114,18 +114,18 @@ def ans.dash(+a: Ans, +l: Nat) -> Bool:
 # Statistics of a batch
 # ---------------------
 # INFO counts each call as Redis does (info.bend, Statistics): what it
-# counts as comes in the high byte of its hash (R.stat.hash). A batch
-# that runs the fast way (S.run.plain: database commands only, from a
-# client that may run them and gets every reply) gives each call one
-# reply, in order, so its hashes count it whole (R.tally), and its
+# counts as comes in the high twelve bits of its hash (R.stat.hash). A
+# batch that runs the fast way (S.run.plain: database commands only,
+# from a client that may run them and gets every reply) gives each call
+# one reply, in order, so its hashes count it whole (R.tally), and its
 # replies are looked at for errors only where a call may have one
 # (run_put). Any other batch runs a command at a time (S.run of one
 # command runs it as the batch would: gen takes a command at a time), so
-# that each is counted as it runs: dropped after a QUIT, refused when its
-# client must authenticate first, or with the reply it gave, which is
-# looked at even when CLIENT REPLY holds it back, as Redis counts every
-# error reply. A later command of the batch (INFO) sees the counts of
-# those before it.
+# that each is counted as it runs: dropped after a QUIT, refused when
+# its client must authenticate first, or with the reply it gave, which
+# is looked at even when CLIENT REPLY holds it back, as Redis counts
+# every error reply. A later command of the batch (INFO) sees the counts
+# of those before it.
 
 # the message of an error the parser found (Bad, a session command's SBad)
 def gen.bad(+c: R.Cmd) -> String:
@@ -572,7 +572,7 @@ def conn_job(live: Bool, s: Socket, +ln: Link, job: B.Job, cn: S.Conn, n: U32, +
         conn_ans(s, ln, got, err, rest, need)
 
 # a batch: the parsed requests (newest first) put in order, how many they
-# are and their marks (R.tl.add), and the bytes they came in
+# are and the words of their codes (R.tl.add), and the bytes they came in
 @unsafe
 def conn_ask(s: Socket, +ln: Link, cn: S.Conn, rs: List<&2, B.Req>, tl: U32, err: Maybe<&2, String>, rest: String, need: Nat, +inb: Nat) -> IO(Unit):
   +job = B.job(B.unzip(rs, Nil{}, Nil{}))

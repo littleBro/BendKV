@@ -3267,6 +3267,47 @@
     []
    ]
   },
+  "randomkey": {
+   "docs": [
+    "summary",
+    "Return a random key from the keyspace",
+    "since",
+    "1.0.0",
+    "group",
+    "generic",
+    "complexity",
+    "O(1)"
+   ],
+   "info": [
+    "randomkey",
+    1,
+    [
+     {
+      "+": "readonly"
+     }
+    ],
+    0,
+    0,
+    0,
+    [
+     {
+      "+": "@keyspace"
+     },
+     {
+      "+": "@read"
+     },
+     {
+      "+": "@slow"
+     }
+    ],
+    [
+     "request_policy:all_shards",
+     "nondeterministic_output"
+    ],
+    [],
+    []
+   ]
+  },
   "reset": {
    "docs": [
     "summary",
@@ -3313,6 +3354,107 @@
      }
     ],
     [],
+    [],
+    []
+   ]
+  },
+  "scan": {
+   "docs": [
+    "summary",
+    "Incrementally iterate the keys space",
+    "since",
+    "2.8.0",
+    "group",
+    "generic",
+    "complexity",
+    "O(1) for every call. O(N) for a complete iteration, including enough command calls for the cursor to return back to 0. N is the number of elements inside the collection.",
+    "history",
+    [
+     [
+      "6.0.0",
+      "Added the `TYPE` subcommand."
+     ]
+    ],
+    "arguments",
+    [
+     [
+      "name",
+      "cursor",
+      "type",
+      "integer"
+     ],
+     [
+      "name",
+      "pattern",
+      "type",
+      "pattern",
+      "token",
+      "MATCH",
+      "flags",
+      [
+       {
+        "+": "optional"
+       }
+      ]
+     ],
+     [
+      "name",
+      "count",
+      "type",
+      "integer",
+      "token",
+      "COUNT",
+      "flags",
+      [
+       {
+        "+": "optional"
+       }
+      ]
+     ],
+     [
+      "name",
+      "type",
+      "type",
+      "string",
+      "token",
+      "TYPE",
+      "since",
+      "6.0.0",
+      "flags",
+      [
+       {
+        "+": "optional"
+       }
+      ]
+     ]
+    ]
+   ],
+   "info": [
+    "scan",
+    -2,
+    [
+     {
+      "+": "readonly"
+     }
+    ],
+    0,
+    0,
+    0,
+    [
+     {
+      "+": "@keyspace"
+     },
+     {
+      "+": "@read"
+     },
+     {
+      "+": "@slow"
+     }
+    ],
+    [
+     "nondeterministic_output",
+     "request_policy:special"
+    ],
     [],
     []
    ]

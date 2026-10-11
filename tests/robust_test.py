@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Robustness checks for a RESP server: requests split into single bytes,
-a large value, a pattern that is slow to match, protocol garbage, many
-connections at once.
+a large value, a pattern that is slow to match (KEYS and SCAN's MATCH),
+protocol garbage, many connections at once.
 
     python3 tests/robust_test.py --port 6380
 """
@@ -77,6 +77,11 @@ def main():
     s.sendall(resp(b"KEYS", b"a*" * 20 + b"b"))
     got = read_until(s, end=b"\r\n", timeout=30)
     ok &= check("KEYS a*a*...a*b (%.0f ms)" % ((time.time() - t0) * 1000), (got, time.time() - t0 < 2), (b"*0\r\n", True))
+    t0 = time.time()
+    s.sendall(resp(b"SCAN", b"0", b"MATCH", b"a*" * 20 + b"b", b"COUNT", b"1000000"))
+    got = read_until(s, end=b"*0\r\n", timeout=30)
+    ok &= check("SCAN 0 MATCH a*a*...a*b (%.0f ms)" % ((time.time() - t0) * 1000), (got, time.time() - t0 < 2),
+                (b"*2\r\n$1\r\n0\r\n*0\r\n", True))
     s.sendall(resp(b"DEL", b"a" * 40))
     read_until(s, end=b"\r\n")
 

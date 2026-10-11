@@ -169,7 +169,9 @@ def missing(why):
     m = re.search(r"unknown subcommand '([^']*)'\. Try (\S+) HELP", why)
     if m:
         return (m.group(2) + " " + m.group(1)).lower()
-    m = re.search(r"unknown command '([^']*)'", why)
+    # the error's start may be cut off (a message of random bytes splits
+    # into lines): its tail names the command still
+    m = re.search(r"command '([^']*)', with args beginning with", why)
     return m.group(1).lower() if m else None
 
 def main_report(a):
