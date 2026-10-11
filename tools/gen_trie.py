@@ -78,8 +78,18 @@ def block_walks():
         out += [f"    case 1n+p {node(cs)} {H[i]}{{}}:",
                 f"      tget_k(V, p, {cs[i]}, {STEP}, k)"]
     out += ["    case 1n+p other _:", "      None{}", ""]
+    out += ["# tget_k answering only whether the bucket holds k (bhas): a write that",
+            "# counts the keys asks it first",
+            "def tget_kh(-V: Data, d: Nat, +t: Trie<V>, x: Hex, +h: U32, +k: String) -> Bool:",
+            "  match d t x:",
+            "    case 0n t0 _:",
+            "      bhas(V, k, t0)"]
+    for i in range(N):
+        out += [f"    case 1n+p {node(cs)} {H[i]}{{}}:",
+                f"      tget_kh(V, p, {cs[i]}, {STEP}, k)"]
+    out += ["    case 1n+p other _:", "      False{}", ""]
     out += ["# tget_k for String values, answering a copy of the value (bget_c)",
-            "def tget_kc(d: Nat, t: Trie<String>, x: Hex, +h: U32, +k: String) -> Maybe<&2, String>:",
+            "def tget_kc(d: Nat, +t: Trie<String>, x: Hex, +h: U32, +k: String) -> Maybe<&2, String>:",
             "  match d t x:",
             "    case 0n t0 _:",
             "      bget_c(k, t0)"]
@@ -236,6 +246,20 @@ def block_tget_kc():
             "    case 1n+p KV.Ent{a, b, c} _:", "      {==}"]
     return out
 
+def block_tget_kh():
+    out = ["# a write that counts the keys asks tget_kh whether the trie holds a",
+           "# key: whether tget_k finds a value (bhas_eq), by induction on the depth",
+           "def tget_kh_eq(-V: Data, d: Nat, t: KV.Trie<V>, x: KV.Hex, +h: U32, +k: String) -> {Maybe.is_some(&2, V, KV.tget_k(V, d, t, x, h, k)) == KV.tget_kh(V, d, t, x, h, k) : Bool}:",
+           "  match d t x:",
+           "    case 0n t0 _:",
+           "      bhas_eq(V, k, t0)"]
+    for i in range(N):
+        out += [f"    case 1n+p {kv_node(cs)} {K[i]}:",
+                f"      tget_kh_eq(V, p, {cs[i]}, {nxt('h')}, k)"]
+    out += ["    case 1n+p KV.Tip{} _:", "      {==}",
+            "    case 1n+p KV.Ent{a, b, c} _:", "      {==}"]
+    return out
+
 def block_same():
     m = f"KV.tget_h(V, p, KV.tmod_h(V, p, KV.Tip{{}}, {nxt('h')}, op), {nxt('h')})"
     tip_body = [f"      %tget_h_tip(V, p, {nxt('h')}) : {{KV.bapply(V, op, _) == {m} : KV.Trie<V>}}",
@@ -311,7 +335,7 @@ def block_other():
 
 BLOCKS = {"src/map.bend": {"types": block_types, "hex": block_hex,
                        "walks": block_walks, "folds": block_folds, "scan": block_scan},
-          "proof/PROOF.bend": {"digits": block_digits, "tget_k": block_tget_k, "tget_kc": block_tget_kc,
+          "proof/PROOF.bend": {"digits": block_digits, "tget_k": block_tget_k, "tget_kc": block_tget_kc, "tget_kh": block_tget_kh,
                          "same": block_same, "walk_same": block_walk_same,
                          "other": block_other}}
 

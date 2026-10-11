@@ -10,9 +10,16 @@ import ./map.bend as KV
 # -----
 
 # the database: string keys to string values (Redis strings are bytes;
-# BendKV keeps one byte per Char)
-def DB() -> Data:
-  KV.Trie<String>
+# BendKV keeps one byte per Char) in a trie (t), and beside it how many
+# keys the trie holds (n: kept as the commands change the trie, so that
+# DBSIZE and INFO's keyspace do not count them), how many of them have a
+# time to live (x) and the time at which a batch's commands run (now, ms
+# since 1970). x and now are 0 until keys expire. rr is always None: a
+# field of the record's own type makes the compiler box the record (a
+# record of plain fields travels as separate registers, and each call
+# that passes the database on would pass every field).
+type Db is Data:
+  Db{t: KV.Trie<String>, n: Nat, x: Nat, now: Nat, rr: Maybe<&2, Db>}
 
 # an integer: IPos{n} is n, INeg{n} is -(n+1), so each integer has one form
 type Int is Data:
@@ -3018,12 +3025,44 @@ def scan.reply(a: ScanArgs, +d: KV.Trie<String>) -> Reply:
 # Execution
 # ---------
 
-def setnx.if(db: KV.Trie<String>, +k: String, v: String, +h: U32, had: Bool) -> Reply & KV.Trie<String>:
+# the empty database
+def db.empty() -> Db:
+  Db{KV.empty(String), 0n, 0n, 0n, None{}}
+
+# the trie of a database, and how many keys it counts (for the laws, and
+# for INFO's keyspace)
+def db.t(d: Db) -> KV.Trie<String>:
+  match d:
+    case Db{t, n, x, now, rr}:
+      t
+
+def db.n(+d: Db) -> Nat:
+  match d:
+    case Db{t, +n, x, now, rr}:
+      n
+
+# SET of k to v, counted: whether the trie held k is asked first, while
+# the trie is lent (KV.has.at), so the count grows by a new key only
+def db.set(db: Db, +k: String, v: String) -> Db:
+  match db:
+    case Db{t, +n, x, now, rr}:
+      +u = t
+      +h = KV.hash(k)
+      had = KV.has.at(String, u, k, h)
+      Db{KV.set.at(String, u, k, v, h), Bool.pick(Nat, had, n, 1n+n), x, now, rr}
+
+# a read of the trie of a database it lends
+def db.get_copy(+d: Db, +k: String) -> Maybe<&2, String>:
+  match d:
+    case Db{+t, n, x, now, rr}:
+      KV.get_copy(t, k)
+
+def setnx.if(t: KV.Trie<String>, +k: String, v: String, +h: U32, +n: Nat, x: Nat, now: Nat, rr: Maybe<&2, Db>, had: Bool) -> Reply & Db:
   match had:
     case True{}:
-      (r_int(0n), db)
+      (r_int(0n), Db{t, n, x, now, rr})
     case False{}:
-      (r_int(1n), KV.set.at(String, db, k, v, h))
+      (r_int(1n), Db{KV.set.at(String, t, k, v, h), 1n+n, x, now, rr})
 
 def del_keys.put(had: Bool, r: Nat & KV.Trie<String>) -> Nat & KV.Trie<String>:
   match had:
@@ -3057,35 +3096,57 @@ def mget_keys(ks: List<&2, String>, +db: KV.Trie<String>) -> List<&2, Reply>:
     case Con{+k, rest}:
       i_get(KV.get(String, db, k)) <> mget_keys(rest, db)
 
-def mset_pairs(ps: List<&2, KVPair>, db: KV.Trie<String>) -> KV.Trie<String>:
+def mset_pairs(ps: List<&2, KVPair>, db: Db) -> Db:
   match ps:
     case Nil{}:
       db
     case Con{KP{k, v}, rest}:
-      mset_pairs(rest, KV.set(String, db, k, v))
+      mset_pairs(rest, db.set(db, k, v))
 
-# INCRBY: the stored value must read as an integer, and the sum must fit
-def incr.fit(db: KV.Trie<String>, +k: String, +h: U32, +n: Int, ok: Bool) -> Reply & KV.Trie<String>:
+# INCRBY: the stored value must read as an integer, and the sum must fit;
+# m is the count of keys once the sum is stored, n before
+def incr.fit(t: KV.Trie<String>, +k: String, +h: U32, +i: Int, ok: Bool, m: Nat, n: Nat, x: Nat, now: Nat, rr: Maybe<&2, Db>) -> Reply & Db:
   match ok:
     case True{}:
-      (RInt{n}, KV.set.at(String, db, k, int_show(n), h))
+      (RInt{i}, Db{KV.set.at(String, t, k, int_show(i), h), m, x, now, rr})
     case False{}:
-      (RError{"ERR increment or decrement would overflow"}, db)
+      (RError{"ERR increment or decrement would overflow"}, Db{t, n, x, now, rr})
 
-def incr.got(db: KV.Trie<String>, +k: String, +h: U32, by: Int, cur: Maybe<&2, Int>) -> Reply & KV.Trie<String>:
+# the integer a present key holds, or none
+def incr.num(t: KV.Trie<String>, +k: String, +h: U32, by: Int, +n: Nat, x: Nat, now: Nat, rr: Maybe<&2, Db>, cur: Maybe<&2, Int>) -> Reply & Db:
   match cur:
-    case Some{x}:
-      +n = int_add(x, by)
-      incr.fit(db, k, h, n, int_fits(n))
+    case Some{i}:
+      +s = int_add(i, by)
+      incr.fit(t, k, h, s, int_fits(s), n, n, x, now, rr)
     case None{}:
-      (e_int(), db)
+      (e_int(), Db{t, n, x, now, rr})
 
-def incr.old(m: Maybe<&2, String>) -> Maybe<&2, Int>:
-  match m:
+# the old value of INCRBY's key: a missing key reads as 0, and counts once
+# the sum is stored
+def incr.got(t: KV.Trie<String>, +k: String, +h: U32, +by: Int, +n: Nat, x: Nat, now: Nat, rr: Maybe<&2, Db>, old: Maybe<&2, String>) -> Reply & Db:
+  match old:
     case Some{s}:
-      int_read(s)
+      incr.num(t, k, h, by, n, x, now, rr, int_read(s))
     case None{}:
-      Some{IPos{0n}}
+      incr.fit(t, k, h, by, int_fits(by), 1n+n, n, x, now, rr)
+
+# GETSET: the old value, and the new one stored
+def getset.go(t: KV.Trie<String>, +k: String, v: String, +h: U32, +n: Nat, x: Nat, now: Nat, rr: Maybe<&2, Db>, old: Maybe<&2, String>) -> Reply & Db:
+  match old:
+    case Some{s}:
+      (RBulk{s}, Db{KV.set.at(String, t, k, v, h), n, x, now, rr})
+    case None{}:
+      (RNull{}, Db{KV.set.at(String, t, k, v, h), 1n+n, x, now, rr})
+
+# APPEND: the old value with v after it, or v
+def append.go(t: KV.Trie<String>, +k: String, v: String, +h: U32, +n: Nat, x: Nat, now: Nat, rr: Maybe<&2, Db>, old: Maybe<&2, String>) -> Reply & Db:
+  match old:
+    case Some{s}:
+      +w = s ++ v
+      (r_int(String.length(w)), Db{KV.set.at(String, t, k, w, h), n, x, now, rr})
+    case None{}:
+      +w = v
+      (r_int(String.length(w)), Db{KV.set.at(String, t, k, w, h), 1n+n, x, now, rr})
 
 def append_to(m: Maybe<&2, String>, v: String) -> String:
   match m:
@@ -3107,30 +3168,80 @@ def peek(c: PeekOp, m: Maybe<&2, String>) -> Reply:
     case PType{}:
       Bool.pick(Reply, Maybe.is_some(&2, String, m), RStatus{"string"}, RStatus{"none"})
 
-def del_reply(r: Nat & KV.Trie<String>) -> Reply & KV.Trie<String>:
-  (n, db) = r
-  (r_int(n), db)
+# DEL: the keys removed, counted off
+def del.db(+c: Nat, t: KV.Trie<String>, +n: Nat, x: Nat, now: Nat, rr: Maybe<&2, Db>) -> Reply & Db:
+  (r_int(c), Db{t, Nat.sub(n, c), x, now, rr})
 
-def reply_of(r: Reply & KV.Trie<String>) -> Reply:
+def del_reply(r: Nat & KV.Trie<String>, +n: Nat, x: Nat, now: Nat, rr: Maybe<&2, Db>) -> Reply & Db:
+  (c, t) = r
+  del.db(c, t, n, x, now, rr)
+
+# the trie of a database it lends, for a read
+def db.trie(+d: Db) -> KV.Trie<String>:
+  match d:
+    case Db{+t, n, x, now, rr}:
+      t
+
+def db.setnx(db: Db, +k: String, v: String) -> Reply & Db:
+  match db:
+    case Db{t, n, x, now, rr}:
+      +u = t
+      +h = KV.hash(k)
+      setnx.if(u, k, v, h, n, x, now, rr, KV.has.at(String, u, k, h))
+
+def db.getset(db: Db, +k: String, v: String) -> Reply & Db:
+  match db:
+    case Db{t, n, x, now, rr}:
+      +u = t
+      +h = KV.hash(k)
+      getset.go(u, k, v, h, n, x, now, rr, KV.get.at(String, u, k, h))
+
+def db.del(db: Db, ks: List<&2, String>) -> Reply & Db:
+  match db:
+    case Db{t, n, x, now, rr}:
+      del_reply(del_keys(ks, t), n, x, now, rr)
+
+def db.incr(db: Db, +k: String, by: Int) -> Reply & Db:
+  match db:
+    case Db{t, n, x, now, rr}:
+      +u = t
+      +h = KV.hash(k)
+      incr.got(u, k, h, by, n, x, now, rr, KV.get.at(String, u, k, h))
+
+def db.append(db: Db, +k: String, v: String) -> Reply & Db:
+  match db:
+    case Db{t, n, x, now, rr}:
+      +u = t
+      +h = KV.hash(k)
+      append.go(u, k, v, h, n, x, now, rr, KV.get.at(String, u, k, h))
+
+def db.flush(db: Db) -> Db:
+  match db:
+    case Db{t, n, x, now, rr}:
+      Db{KV.empty(String), 0n, 0n, now, rr}
+
+def reply_of(r: Reply & Db) -> Reply:
   (x, db) = r
   x
 
-def db_of(r: Reply & KV.Trie<String>) -> KV.Trie<String>:
+def db_of(r: Reply & Db) -> Db:
   (x, db) = r
   db
 
 # one command: its reply and the database after it. The database is
 # passed on, not shared, so a write rebuilds only the path it changes.
-# A key read only reads the trie: the compiler lends d to KV.get and then
-# hands d back, and the value it answers is kept in place, shared with the
+# A key read only reads the trie: the compiler lends t to KV.get and then
+# hands t back, and the value it answers is kept in place, shared with the
 # trie (Bend with bend-patches/borrow-reads.patch). GET answers a copy of
 # the value instead, made while the trie is lent (KV.get_copy): the value
 # in the trie stays unshared, so a read puts no seal on its entry, and the
-# batch hints reach the value's bytes. DBSIZE and KEYS fold the whole
-# trie, so they share it. A command that reads a key and then writes it
-# hashes the key once (KV.get.at, KV.set.at: KV.get and KV.set with the
-# hash given, as they compute it).
-def exec(cmd: Cmd, db: KV.Trie<String>) -> Reply & KV.Trie<String>:
+# batch hints reach the value's bytes. KEYS and SCAN fold the whole trie,
+# so they share it. A command that reads a key and then writes it hashes
+# the key once (KV.get.at, KV.set.at: KV.get and KV.set with the hash
+# given, as they compute it); a write that does not read the key (SET,
+# MSET) asks whether the trie holds it (KV.has.at), so that the count of
+# keys grows by new keys only, and DBSIZE answers the count.
+def exec(cmd: Cmd, db: Db) -> Reply & Db:
   match cmd:
     case Ping{}:
       (RStatus{"PONG"}, db)
@@ -3138,53 +3249,44 @@ def exec(cmd: Cmd, db: KV.Trie<String>) -> Reply & KV.Trie<String>:
       (RBulk{m}, db)
     case Get{+k}:
       +d = db
-      (r_get(KV.get_copy(d, k)), d)
+      (r_get(db.get_copy(d, k)), d)
     case Set{+k, v}:
-      (r_ok(), KV.set(String, db, k, v))
+      (r_ok(), db.set(db, k, v))
     case SetNX{+k, v}:
-      +d = db
-      +h = KV.hash(k)
-      setnx.if(d, k, v, h, Maybe.is_some(&2, String, KV.get.at(String, d, k, h)))
+      db.setnx(db, k, v)
     case GetSet{+k, v}:
-      +d = db
-      +h = KV.hash(k)
-      (r_get(KV.get.at(String, d, k, h)), KV.set.at(String, d, k, v, h))
+      db.getset(db, k, v)
     case Del{ks}:
-      del_reply(del_keys(ks, db))
+      db.del(db, ks)
     case Exists{ks}:
       +d = db
-      (r_int(exists_keys(ks, d)), d)
+      (r_int(exists_keys(ks, db.trie(d))), d)
     case IncrBy{+k, by}:
-      +d = db
-      +h = KV.hash(k)
-      incr.got(d, k, h, by, incr.old(KV.get.at(String, d, k, h)))
+      db.incr(db, k, by)
     case Append{+k, v}:
-      +d = db
-      +h = KV.hash(k)
-      +s = append_to(KV.get.at(String, d, k, h), v)
-      (r_int(String.length(s)), KV.set.at(String, d, k, s, h))
+      db.append(db, k, v)
     case Strlen{+k}:
       +d = db
-      (r_int(strlen_of(KV.get(String, d, k))), d)
+      (r_int(strlen_of(KV.get(String, db.trie(d), k))), d)
     case MGet{ks}:
       +d = db
-      (RArray{mget_keys(ks, d)}, d)
+      (RArray{mget_keys(ks, db.trie(d))}, d)
     case MSet{ps}:
       (r_ok(), mset_pairs(ps, db))
     case DbSize{}:
       +d = db
-      (r_int(KV.size(String, d)), d)
+      (r_int(db.n(d)), d)
     case FlushAll{}:
-      (r_ok(), KV.empty(String))
+      (r_ok(), db.flush(db))
     case Keys{p}:
       +d = db
-      (RArray{glob_filter(p, KV.keys(String, d))}, d)
+      (RArray{glob_filter(p, KV.keys(String, db.trie(d)))}, d)
     case Scan{args}:
       +d = db
-      (scan.reply(scan.args(args), d), d)
+      (scan.reply(scan.args(args), db.trie(d)), d)
     case Peek{+k, c}:
       +d = db
-      (peek(c, KV.get(String, d, k)), d)
+      (peek(c, KV.get(String, db.trie(d), k)), d)
     case Own{o}:
       (RError{"ERR a command of the connection, not of the database"}, db)
     case Bad{r}:
@@ -3192,29 +3294,29 @@ def exec(cmd: Cmd, db: KV.Trie<String>) -> Reply & KV.Trie<String>:
 
 # a batch of commands, in order: the replies in order, and the database
 # after the last
-def exec_all.put(rs: List<&2, Reply>, r: Reply & KV.Trie<String>) -> List<&2, Reply> & KV.Trie<String>:
+def exec_all.put(rs: List<&2, Reply>, r: Reply & Db) -> List<&2, Reply> & Db:
   (x, db) = r
   (x <> rs, db)
 
-def exec_all.step(c: Cmd, st: List<&2, Reply> & KV.Trie<String>) -> List<&2, Reply> & KV.Trie<String>:
+def exec_all.step(c: Cmd, st: List<&2, Reply> & Db) -> List<&2, Reply> & Db:
   (rs, db) = st
   exec_all.put(rs, exec(c, db))
 
-def exec_all.go(cmds: List<&2, Cmd>, st: List<&2, Reply> & KV.Trie<String>) -> List<&2, Reply> & KV.Trie<String>:
+def exec_all.go(cmds: List<&2, Cmd>, st: List<&2, Reply> & Db) -> List<&2, Reply> & Db:
   match cmds:
     case Nil{}:
       st
     case Con{c, rest}:
       exec_all.go(rest, exec_all.step(c, st))
 
-def exec_all.fin(st: List<&2, Reply> & KV.Trie<String>) -> List<&2, Reply> & KV.Trie<String>:
+def exec_all.fin(st: List<&2, Reply> & Db) -> List<&2, Reply> & Db:
   (rs, db) = st
   (List.reverse(&2, Reply, rs), db)
 
 # a reply in front of a batch's replies (the spec of exec_all uses it)
-def exec_all.cons(r: Reply, rest: List<&2, Reply> & KV.Trie<String>) -> List<&2, Reply> & KV.Trie<String>:
+def exec_all.cons(r: Reply, rest: List<&2, Reply> & Db) -> List<&2, Reply> & Db:
   (rs, db) = rest
   (r <> rs, db)
 
-def exec_all(cmds: List<&2, Cmd>, db: KV.Trie<String>) -> List<&2, Reply> & KV.Trie<String>:
+def exec_all(cmds: List<&2, Cmd>, db: Db) -> List<&2, Reply> & Db:
   exec_all.fin(exec_all.go(cmds, (Nil{}, db)))

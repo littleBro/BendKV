@@ -29,14 +29,14 @@ def lines(rs: List<&2, R.Reply>) -> String:
     case Con{r, rest}:
       escape(P.encode(r)) ++ "\n" ++ lines(rest)
 
-def replies(r: List<&2, R.Reply> & KV.Trie<String>) -> List<&2, R.Reply>:
+def replies(r: List<&2, R.Reply> & R.Db) -> List<&2, R.Reply>:
   (rs, db) = r
   rs
 
 def run(b: P.Batch) -> String:
   match b:
     case P.Batch{reqs, tl, rest, err, need}:
-      lines(replies(R.exec_all(B.cmds_of(reqs, Nil{}), KV.empty(String)))) ++ "rest: " ++ escape(rest)
+      lines(replies(R.exec_all(B.cmds_of(reqs, Nil{}), R.db.empty()))) ++ "rest: " ++ escape(rest)
 
 def buf() -> String:
   "*3\r\n$3\r\nSET\r\n$3\r\nfoo\r\n$3\r\nbar\r\n" ++

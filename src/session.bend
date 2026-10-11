@@ -463,9 +463,15 @@ def mode.conn(m: Mute, +c: Conn, +s: Srv) -> Conn:
     case Conn{id, a, name, mode, quit}:
       Conn{id, authed(c, s), name, m, quit}
 
+# RANDOMKEY's reply: a key of the database's trie, by r, or nil
+def randomkey.of(+db: R.Db, +r: U32) -> R.Reply:
+  match db:
+    case R.Db{+t, n, x, now, rr}:
+      R.r_get(KV.pick(String, t, r))
+
 # a session command's reply, sent or not; the database is there for the
 # commands that read it
-def own_reply(+o: R.SessOp, +c: Conn, +s: Srv, +db: KV.Trie<String>) -> Maybe<&2, R.Reply>:
+def own_reply(+o: R.SessOp, +c: Conn, +s: Srv, +db: R.Db) -> Maybe<&2, R.Reply>:
   match o:
     case R.SHello{args}:
       say(conn.mode(c), hello.fin(hello.run(s, c, args), conn.id(c), nopass(s)))
@@ -496,7 +502,7 @@ def own_reply(+o: R.SessOp, +c: Conn, +s: Srv, +db: KV.Trie<String>) -> Maybe<&2
     case R.SCommand{args}:
       say(conn.mode(c), K.reply(args))
     case R.SRandomKey{}:
-      say(conn.mode(c), R.r_get(KV.pick(String, db, KV.mix(srv.rng(s)))))
+      say(conn.mode(c), randomkey.of(db, KV.mix(srv.rng(s))))
     case R.SReply{r}:
       say(conn.mode(c), r)
     case R.SBad{r}:
@@ -624,21 +630,21 @@ def may(+k: Role, +c: Conn, +s: Srv) -> Bool:
 # a batch so far on the general path: its replies and its effects
 # (newest first), the connection, the server and the database
 type Gen is Data:
-  Gen{rs: List<&2, R.Reply>, es: List<&2, R.Cmd>, conn: Conn, srv: Srv, db: KV.Trie<String>}
+  Gen{rs: List<&2, R.Reply>, es: List<&2, R.Cmd>, conn: Conn, srv: Srv, db: R.Db}
 
 # the replies, the effects and the database after a command; the
 # connection and the server after it come apart (next_conn, next_srv),
 # for they do not depend on the database
 type Out is Data:
-  Out{rs: List<&2, R.Reply>, es: List<&2, R.Cmd>, db: KV.Trie<String>}
+  Out{rs: List<&2, R.Reply>, es: List<&2, R.Cmd>, db: R.Db}
 
 # a database command run: its reply, sent or not, and its effects
 # (aof.bend), put before those of the commands before it
-def out.data(c: R.Cmd, rs: List<&2, R.Reply>, es: List<&2, R.Cmd>, m: Mute, r: R.Reply & KV.Trie<String>) -> Out:
+def out.data(c: R.Cmd, rs: List<&2, R.Reply>, es: List<&2, R.Cmd>, m: Mute, r: R.Reply & R.Db) -> Out:
   (+x, db) = r
   Out{put(say(m, x), rs), List.reverse.go(&2, R.Cmd, A.effect(c, x), es), db}
 
-def out.k(+k: Role, ok: Bool, +c: R.Cmd, rs: List<&2, R.Reply>, es: List<&2, R.Cmd>, +conn: Conn, +srv: Srv, +db: KV.Trie<String>) -> Out:
+def out.k(+k: Role, ok: Bool, +c: R.Cmd, rs: List<&2, R.Reply>, es: List<&2, R.Cmd>, +conn: Conn, +srv: Srv, +db: R.Db) -> Out:
   match k ok:
     case KSess{o} True{}:
       Out{put(own_reply(o, conn, srv, db), rs), es, db}
@@ -649,7 +655,7 @@ def out.k(+k: Role, ok: Bool, +c: R.Cmd, rs: List<&2, R.Reply>, es: List<&2, R.C
     case _ False{}:
       Out{put(say(conn.mode(conn), e_noauth()), rs), es, db}
 
-def out.q(quit: Bool, +c: R.Cmd, rs: List<&2, R.Reply>, es: List<&2, R.Cmd>, +conn: Conn, +srv: Srv, db: KV.Trie<String>) -> Out:
+def out.q(quit: Bool, +c: R.Cmd, rs: List<&2, R.Reply>, es: List<&2, R.Cmd>, +conn: Conn, +srv: Srv, db: R.Db) -> Out:
   match quit:
     case True{}:
       Out{rs, es, db}
@@ -705,7 +711,7 @@ def gen.go(cmds: List<&2, R.Cmd>, st: Gen) -> Gen:
     case Con{c, rest}:
       gen.go(rest, gen.step(c, st))
 
-def gen(conn: Conn, srv: Srv, cmds: List<&2, R.Cmd>, db: KV.Trie<String>) -> Gen:
+def gen(conn: Conn, srv: Srv, cmds: List<&2, R.Cmd>, db: R.Db) -> Gen:
   gen.go(cmds, Gen{Nil{}, Nil{}, conn, srv, db})
 
 # whether a command runs on the database (as exec runs it)
@@ -764,9 +770,9 @@ def conn_ok(c: Conn) -> Conn:
 # a batch's outcome: its replies in order, the connection and the server
 # after it, and the database
 type Fin is Data:
-  Fin{rs: List<&2, R.Reply>, conn: Conn, srv: Srv, db: KV.Trie<String>}
+  Fin{rs: List<&2, R.Reply>, conn: Conn, srv: Srv, db: R.Db}
 
-def done.fast(conn: Conn, srv: Srv, r: List<&2, R.Reply> & KV.Trie<String>) -> Fin:
+def done.fast(conn: Conn, srv: Srv, r: List<&2, R.Reply> & R.Db) -> Fin:
   (rs, db) = r
   Fin{rs, conn_ok(conn), srv, db}
 
@@ -775,7 +781,7 @@ def done.gen(st: Gen) -> Fin:
     case Gen{rs, es, conn, srv, db}:
       Fin{List.reverse(&2, R.Reply, rs), conn, srv, db}
 
-def run.plain(fast: Bool, conn: Conn, srv: Srv, cmds: List<&2, R.Cmd>, hs: List<&2, U32>, db: KV.Trie<String>) -> Fin:
+def run.plain(fast: Bool, conn: Conn, srv: Srv, cmds: List<&2, R.Cmd>, hs: List<&2, U32>, db: R.Db) -> Fin:
   match fast cmds:
     case _ Nil{}:
       Fin{Nil{}, conn, srv, db}
@@ -785,7 +791,7 @@ def run.plain(fast: Bool, conn: Conn, srv: Srv, cmds: List<&2, R.Cmd>, hs: List<
       done.gen(gen(conn, srv, c <> cs, db))
 
 # a batch, as the server without an append-only file runs it
-def run(conn: Conn, srv: Srv, job: B.Job, db: KV.Trie<String>) -> Fin:
+def run(conn: Conn, srv: Srv, job: B.Job, db: R.Db) -> Fin:
   match job:
     case B.Plain{cmds, hs}:
       +c = conn
@@ -796,13 +802,13 @@ def run(conn: Conn, srv: Srv, job: B.Job, db: KV.Trie<String>) -> Fin:
 
 # a batch's outcome with its effects, in order, for the append-only file
 type Logged is Data:
-  Logged{rs: List<&2, R.Reply>, es: List<&2, R.Cmd>, conn: Conn, srv: Srv, db: KV.Trie<String>}
+  Logged{rs: List<&2, R.Reply>, es: List<&2, R.Cmd>, conn: Conn, srv: Srv, db: R.Db}
 
-def logged.fast2(conn: Conn, srv: Srv, rs: List<&2, R.Reply>, q: List<&2, R.Cmd> & KV.Trie<String>) -> Logged:
+def logged.fast2(conn: Conn, srv: Srv, rs: List<&2, R.Reply>, q: List<&2, R.Cmd> & R.Db) -> Logged:
   (es, db) = q
   Logged{rs, es, conn_ok(conn), srv, db}
 
-def logged.fast(conn: Conn, srv: Srv, r: List<&2, R.Reply> & (List<&2, R.Cmd> & KV.Trie<String>)) -> Logged:
+def logged.fast(conn: Conn, srv: Srv, r: List<&2, R.Reply> & (List<&2, R.Cmd> & R.Db)) -> Logged:
   (rs, q) = r
   logged.fast2(conn, srv, rs, q)
 
@@ -811,7 +817,7 @@ def logged.gen(st: Gen) -> Logged:
     case Gen{rs, es, conn, srv, db}:
       Logged{List.reverse(&2, R.Reply, rs), List.reverse(&2, R.Cmd, es), conn, srv, db}
 
-def run_log.plain(fast: Bool, conn: Conn, srv: Srv, cmds: List<&2, R.Cmd>, hs: List<&2, U32>, db: KV.Trie<String>) -> Logged:
+def run_log.plain(fast: Bool, conn: Conn, srv: Srv, cmds: List<&2, R.Cmd>, hs: List<&2, U32>, db: R.Db) -> Logged:
   match fast cmds:
     case _ Nil{}:
       Logged{Nil{}, Nil{}, conn, srv, db}
@@ -821,7 +827,7 @@ def run_log.plain(fast: Bool, conn: Conn, srv: Srv, cmds: List<&2, R.Cmd>, hs: L
       logged.gen(gen(conn, srv, c <> cs, db))
 
 # a batch, as the server with an append-only file runs it
-def run_log(conn: Conn, srv: Srv, job: B.Job, db: KV.Trie<String>) -> Logged:
+def run_log(conn: Conn, srv: Srv, job: B.Job, db: R.Db) -> Logged:
   match job:
     case B.Plain{cmds, hs}:
       +c = conn

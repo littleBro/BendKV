@@ -31,10 +31,11 @@ make perfcheck BEND="$B"   # no more than 3% more instructions per request
 ## How changes are made
 
 - **A new command or behavior** comes with: its semantics in `src/redis.bend` (or
-  `src/session.bend` for the state of a connection), the existing laws extended to it
-  in `proof/PROOF.bend` (the `frame` law covers every command), a new law in
-  `proof/LAWS.bend` when it promises something new, and a case in the tests under
-  `tests/` that compares it with Redis byte for byte.
+  `src/session.bend` for the state of a connection), the same on the trie alone in the
+  specification `proof/SPEC.bend` with its case of the bridge (`bridge_go`, `bt_go`),
+  the existing laws extended to it in `proof/PROOF.bend` (the `frame` law covers every
+  command), a new law in `proof/LAWS.bend` when it promises something new, and a case in
+  the tests under `tests/` that compares it with Redis byte for byte.
 - **Laws are stated by people.** A change to `proof/LAWS.bend` that weakens a law needs
   a reason in the pull request.
 - **The 16-way parts** of `src/map.bend` and `proof/PROOF.bend`, between

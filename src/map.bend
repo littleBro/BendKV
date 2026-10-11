@@ -176,6 +176,21 @@ def bget(-V: Data, +k: String, +b: Trie<V>) -> Maybe<&2, V>:
   s = bhead(V, k, b)
   bget.go(V, k, b, s)
 
+# whether the bucket holds an entry for k: bget's walk, answering no value
+def bhas.go(-V: Data, +k: String, +b: Trie<V>, same: Bool) -> Bool:
+  match b same:
+    case Ent{key, v, rest} True{}:
+      True{}
+    case Ent{key, v, +rest} False{}:
+      s = bhead(V, k, rest)
+      bhas.go(V, k, rest, s)
+    case other _:
+      False{}
+
+def bhas(-V: Data, +k: String, +b: Trie<V>) -> Bool:
+  s = bhead(V, k, b)
+  bhas.go(V, k, b, s)
+
 # bget for String values, answering a copy of the value made where it
 # lies: the value is only read, so the trie never shares it (bget answers
 # the value itself, which the trie and the answer then share, under a
@@ -330,8 +345,49 @@ def tget_k(-V: Data, d: Nat, t: Trie<V>, x: Hex, +h: U32, +k: String) -> Maybe<&
     case 1n+p other _:
       None{}
 
+# tget_k answering only whether the bucket holds k (bhas): a write that
+# counts the keys asks it first
+def tget_kh(-V: Data, d: Nat, +t: Trie<V>, x: Hex, +h: U32, +k: String) -> Bool:
+  match d t x:
+    case 0n t0 _:
+      bhas(V, k, t0)
+    case 1n+p Node{c0, c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13, c14, c15} H0{}:
+      tget_kh(V, p, c0, hex(shr4(h)), shr4(h), k)
+    case 1n+p Node{c0, c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13, c14, c15} H1{}:
+      tget_kh(V, p, c1, hex(shr4(h)), shr4(h), k)
+    case 1n+p Node{c0, c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13, c14, c15} H2{}:
+      tget_kh(V, p, c2, hex(shr4(h)), shr4(h), k)
+    case 1n+p Node{c0, c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13, c14, c15} H3{}:
+      tget_kh(V, p, c3, hex(shr4(h)), shr4(h), k)
+    case 1n+p Node{c0, c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13, c14, c15} H4{}:
+      tget_kh(V, p, c4, hex(shr4(h)), shr4(h), k)
+    case 1n+p Node{c0, c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13, c14, c15} H5{}:
+      tget_kh(V, p, c5, hex(shr4(h)), shr4(h), k)
+    case 1n+p Node{c0, c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13, c14, c15} H6{}:
+      tget_kh(V, p, c6, hex(shr4(h)), shr4(h), k)
+    case 1n+p Node{c0, c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13, c14, c15} H7{}:
+      tget_kh(V, p, c7, hex(shr4(h)), shr4(h), k)
+    case 1n+p Node{c0, c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13, c14, c15} H8{}:
+      tget_kh(V, p, c8, hex(shr4(h)), shr4(h), k)
+    case 1n+p Node{c0, c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13, c14, c15} H9{}:
+      tget_kh(V, p, c9, hex(shr4(h)), shr4(h), k)
+    case 1n+p Node{c0, c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13, c14, c15} H10{}:
+      tget_kh(V, p, c10, hex(shr4(h)), shr4(h), k)
+    case 1n+p Node{c0, c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13, c14, c15} H11{}:
+      tget_kh(V, p, c11, hex(shr4(h)), shr4(h), k)
+    case 1n+p Node{c0, c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13, c14, c15} H12{}:
+      tget_kh(V, p, c12, hex(shr4(h)), shr4(h), k)
+    case 1n+p Node{c0, c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13, c14, c15} H13{}:
+      tget_kh(V, p, c13, hex(shr4(h)), shr4(h), k)
+    case 1n+p Node{c0, c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13, c14, c15} H14{}:
+      tget_kh(V, p, c14, hex(shr4(h)), shr4(h), k)
+    case 1n+p Node{c0, c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13, c14, c15} H15{}:
+      tget_kh(V, p, c15, hex(shr4(h)), shr4(h), k)
+    case 1n+p other _:
+      False{}
+
 # tget_k for String values, answering a copy of the value (bget_c)
-def tget_kc(d: Nat, t: Trie<String>, x: Hex, +h: U32, +k: String) -> Maybe<&2, String>:
+def tget_kc(d: Nat, +t: Trie<String>, x: Hex, +h: U32, +k: String) -> Maybe<&2, String>:
   match d t x:
     case 0n t0 _:
       bget_c(k, t0)
@@ -667,7 +723,7 @@ def get(-V: Data, t: Trie<V>, +k: String) -> Maybe<&2, V>:
 
 # get for String values, answering a copy of the value (bget_c): GET
 # reads with it, so the value a read finds stays unshared in the trie
-def get_copy(t: Trie<String>, +k: String) -> Maybe<&2, String>:
+def get_copy(+t: Trie<String>, +k: String) -> Maybe<&2, String>:
   +h = hash(k)
   tget_kc(5n, t, hex(h), h, k)
 
@@ -685,6 +741,11 @@ def del(-V: Data, t: Trie<V>, +k: String) -> Trie<V>:
 
 def has(-V: Data, t: Trie<V>, k: String) -> Bool:
   Maybe.is_some(&2, V, get(V, t, k))
+
+# whether t holds k, h being k's hash: get's walk, answering no value (a
+# write that counts the keys asks it first)
+def has.at(-V: Data, +t: Trie<V>, +k: String, +h: U32) -> Bool:
+  tget_kh(V, 5n, t, hex(h), h, k)
 
 def keys(-V: Data, t: Trie<V>) -> List<&2, String>:
   tkeys(V, t, Nil{})

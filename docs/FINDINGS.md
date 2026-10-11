@@ -9,8 +9,8 @@ showed us. Where the work goes next, and why, is in [DIRECTIONS.md](DIRECTIONS.m
 **Correctness.** About 1,100 lines of core code (with the parsing of commands and
 Redis's pattern matching), about 500 lines of sessions (a connection's state and the
 server's), about 70 lines of batch hints, about 220 lines of append-only file, about
-3,200 lines of handwritten proofs, and about 1,600 lines of 16-way case splits written
-by a script ([`tools/gen_trie.py`](../tools/gen_trie.py)), not counting comments and
+3,900 lines of handwritten proofs with a specification of about 130 that they bridge to
+(section 3u), and about 1,600 lines of 16-way case splits written by a script ([`tools/gen_trie.py`](../tools/gen_trie.py)), not counting comments and
 blank lines. Bend checks the 41 laws in about a second; the BendTT kernel, whose
 soundness is proved in Lean, rechecks them in about 8 s. Among them: after any history,
 the server restores from its append-only file exactly the database it held, and from a
@@ -1603,6 +1603,75 @@ the statistics compile to arrays.
 **Found on the way.** DBSIZE folds the whole trie: 15 µs at 40 keys, 256 µs at 1,000
 (Redis: 2 µs, a counter), and so INFO's keyspace line. The count of keys will go into
 the database when it changes shape, for several databases and for expiry.
+
+## 3u. The database as a record, with its count of keys
+
+Until this step the database was the trie: `exec` took a trie and gave one back. Expiry
+and several databases need more beside the keys, so the database is now a record,
+`Db{t, n, x, now, rr}`: the trie; how many keys it holds; how many of them have a time
+to live; the time at which a batch runs; and a field that is always None (below). x and
+now stay 0 until keys can expire. No reply changes, but DBSIZE and INFO's keyspace now
+read n instead of folding the trie. In a pipeline of 2,000 DBSIZEs from one client, a
+DBSIZE takes 0.15 µs at 40, 1,000 or 10,000 keys; before, 13.9 µs, 214 µs and 1.8 ms;
+Redis, 0.30 µs.
+
+**Keeping the count.** SETNX, GETSET, INCR and APPEND read their key before they write
+it, so they know whether it was there, and count it when it was not. SET and MSET do
+not read the key: they now ask the trie first, with a walk of the same path that
+answers a Bool and copies nothing (`KV.has.at`), and count a key that was not there.
+Redis also looks the key up before it adds or overwrites it. DEL takes off the keys it
+removed and FLUSHALL sets 0.
+
+**Cost.** In instructions per request (`make perfcheck`): GET 3,075 (+22, +0.7%), SET
+3,977 (+340, +9.3%), INCR 4,119 (+170, +4.3%). The new baseline of
+`tools/perf_baseline.txt` holds these. SET pays for the second walk (120 to 150
+instructions) and for rebuilding the record; INCR for the record and its fields passed
+through three helpers. Four arrangements cost more:
+
+- **The record flat.** The compiler passes a value whose type is not recursive and
+  whose fields fit in 32 words as separate registers. Five fields went through every
+  call that passes the database, and GET cost 66 more instead of 22. A field of the
+  record's own type (`rr: Maybe<Db>`, always None) makes the type recursive, so the
+  record is boxed and passed as one pointer.
+- **The presence walk beside the write.** `KV.set.at(String, t, k, v, h)` and
+  `KV.has.at(String, t, k, h)` as sibling arguments share the trie between the two
+  calls, and the write then copies its path: 12,500 instructions per SET. The walk
+  must run first, on a lent trie, as a local of its own.
+- **One walk that answers both.** A write that also answers whether the key was there
+  returns a pair at every level of the path: 211 instructions more than the two walks.
+- **INCR through a type of its own.** An `Inc` type with `Bool.pick` over its two
+  outcomes cost 4,153, against 4,115 to 4,120 for the three helpers, which match on
+  the old value and on whether the sum fits.
+
+**The proofs.** The laws spoke of `exec` on a trie, and most of them still do: their
+proofs stay as they were, about the old `exec`, which is now a specification of the
+commands on the trie alone (`proof/SPEC.bend`). A bridge (`bridge_go`, a case per
+command) proves that the server's `exec`, on a record that holds the trie t, answers as
+the specification does on t and leaves the trie it leaves. DBSIZE is the exception: its
+reply is the count. The trie part holds for every command (`bt`). Through the bridge:
+
+- the laws about what keys read (`frame`, `del_effect`, `commute_reads`, `swap_reads`)
+  follow from the specification's;
+- the laws about replies (`get_after_set`, `del_one_count`, `commute_reply`,
+  `swap_replies`) follow too. `commute_reply` takes DBSIZE, KEYS and SCAN apart: only
+  reads leave them alone, and a read changes nothing. `swap_replies` already excludes
+  them from the rest of a batch (`keywise`), so a batch of the others answers as the
+  specification's batch.
+
+The laws about the whole database are proved on the record directly, the count with
+them: reads keep it (`reads_keep_db`), and so do the batch, persistence and session
+laws. Three laws now say how the count changes: APPEND, SETNX and INCR of a key that was
+missing count it (`append_effect`, `setnx_missing`, `incr_missing`). One new lemma
+carries the counting: the walk that answers a Bool says whether the key reads as a value
+(`has_at_eq`; a generated induction on the depth, `tget_kh_eq`). It is also why INCR's
+effect in the append-only file, SET of the sum, counts the key as INCR did. A
+fine point: DEL of no keys leaves the count as n − 0, which is n only once n is split
+into 0 and a successor.
+
+Not proved yet: that the count is the trie's size. That needs a well-formed trie, with
+each key at most once in its bucket: `bdel` removes every entry for its key, so a
+duplicate would make the count drift. It also needs the arithmetic of a sum over 16
+children. The proof will come with the count of keys that can expire.
 
 ## 4. Where a request's time goes, and hiding the memory waits
 

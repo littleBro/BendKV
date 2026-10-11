@@ -34,13 +34,18 @@ that gives it the process's directory, id and clock).
 ## What is proved
 
 The laws are stated by hand in [`proof/LAWS.bend`](proof/LAWS.bend) and proved in
-[`proof/PROOF.bend`](proof/PROOF.bend).
+[`proof/PROOF.bend`](proof/PROOF.bend). The database is a record: the trie, the count of
+its keys (which DBSIZE answers) and fields for expiry. The laws about what keys read and
+what commands answer are proved of a specification, the commands on the trie alone
+([`proof/SPEC.bend`](proof/SPEC.bend)), and a bridge proves that the server's commands
+answer as it does (DBSIZE answers the count) and leave the trie it leaves. That the count
+is the trie's size is not proved yet.
 
 | group | laws | what they say |
 |---|---:|---|
 | Map | 5 | the trie is a finite map: after any sequence of SET/DEL, every key reads as determined, with no stale, lost or foreign values |
 | Keys | 2 | key comparison is exactly string equality, down to the bits of `U32` |
-| Commands | 13 | no command changes a key it does not write (`frame`); reads keep the database; GET/DEL/APPEND/SETNX/INCR behave as specified; a pipelined batch runs exactly as its commands in order; the cache hints before a batch change nothing |
+| Commands | 13 | no command changes a key it does not write (`frame`); reads keep the database; GET/DEL/APPEND/SETNX/INCR behave as specified, a key they add counted; a pipelined batch runs exactly as its commands in order; the cache hints before a batch change nothing |
 | Commuting | 5 | commands on different keys commute: replies and key contents are the same in either order, and adjacent independent commands in a batch can be swapped |
 | Persistence | 8 | logging changes no reply; the file reads back as written; after any history the server restores exactly the database it held; a file cut by a crash at any byte restores the database after some prefix of its commands, never a partial command |
 | Sessions | 5 | however the server dispatches a batch, it runs as its commands in order; a batch changes the database and the log as its executed commands do; a client that has not authenticated against a password cannot read or change any key |
@@ -209,7 +214,7 @@ src/        the server
   command.bend  COMMAND, with Redis's table of BendKV's commands     tested
   startup.bend  the command line and the configuration file        tested
   server.bend   TCP, connections, the database actor, the log      tested
-proof/      LAWS.bend (the laws) and PROOF.bend (their proofs)
+proof/      LAWS.bend (the laws), PROOF.bend (their proofs), SPEC.bend (the commands on the trie alone)
 tests/      start, differential, protocol, session, CONFIG, INFO, COMMAND, SCAN, robustness, concurrency, AOF tests
 bench/      in-process benchmarks of the map, the core and channels
 tools/      measurement scripts, the runner of Redis's test suite, and the generators of

@@ -129,14 +129,20 @@ def touch_if(many: Bool, hs: List<&2, U32>, +db: KV.Trie<String>) -> U32:
 
 # the batch run once the hints are done: u is their result, and both arms
 # run the batch alike, so the hints come first and change nothing
-def exec_hinted(u: Bool, cmds: List<&2, R.Cmd>, db: KV.Trie<String>) -> List<&2, R.Reply> & KV.Trie<String>:
+def exec_hinted(u: Bool, cmds: List<&2, R.Cmd>, db: R.Db) -> List<&2, R.Reply> & R.Db:
   match u:
     case True{}:
       R.exec_all(cmds, db)
     case False{}:
       R.exec_all(cmds, db)
 
-def exec_batch(cmds: List<&2, R.Cmd>, hs: List<&2, U32>, db: KV.Trie<String>) -> List<&2, R.Reply> & KV.Trie<String>:
+# the hints of a batch, on the trie of a database it lends
+def touch_db(many: Bool, hs: List<&2, U32>, +d: R.Db) -> U32:
+  match d:
+    case R.Db{+t, n, x, now, rr}:
+      touch_if(many, hs, t)
+
+def exec_batch(cmds: List<&2, R.Cmd>, hs: List<&2, U32>, db: R.Db) -> List<&2, R.Reply> & R.Db:
   +d = db
   +h = hs
-  exec_hinted(U32.is_eq(touch_if(many(h), h, d), 0), cmds, d)
+  exec_hinted(U32.is_eq(touch_db(many(h), h, d), 0), cmds, d)

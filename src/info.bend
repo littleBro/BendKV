@@ -839,10 +839,10 @@ def on.cpu(on: Bool, +i: Info) -> String:
     case False{} _:
       ""
 
-def on.keyspace(on: Bool, +db: KV.Trie<String>) -> String:
+def on.keyspace(on: Bool, +db: R.Db) -> String:
   match on:
     case True{}:
-      sec.keyspace(KV.size(String, db))
+      sec.keyspace(R.db.n(db))
     case False{}:
       ""
 
@@ -868,7 +868,7 @@ def on.head(on: Bool, +head: String) -> String:
       ""
 
 # INFO [section ...]: the text of the sections asked for
-def text(args: List<&2, String>, +items: List<&2, C.CItem>, +i: Info, +db: KV.Trie<String>) -> String:
+def text(args: List<&2, String>, +items: List<&2, C.CItem>, +i: Info, +db: R.Db) -> String:
   +s = sel.of(args)
   join([
     on.server(sel.has(s, "server"), items, i),
