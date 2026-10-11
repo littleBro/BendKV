@@ -5357,6 +5357,8 @@ def srv_same.o(o: R.SessOp, +conn: S.Conn, +srv: S.Srv, +ef: {S.authed(conn, srv
       e => Empty.absurd({S.own_srv(R.SConfigResetStat{}, conn, srv) == srv : S.Srv}, true_false(Equal.trans(Bool, True{}, S.authed(conn, srv), False{}, e, ef)))
     case R.SInfo{y0}:
       e => Empty.absurd({S.own_srv(R.SInfo{y0}, conn, srv) == srv : S.Srv}, true_false(Equal.trans(Bool, True{}, S.authed(conn, srv), False{}, e, ef)))
+    case R.SCommand{y0}:
+      e => Empty.absurd({S.own_srv(R.SCommand{y0}, conn, srv) == srv : S.Srv}, true_false(Equal.trans(Bool, True{}, S.authed(conn, srv), False{}, e, ef)))
     case R.SReply{y0}:
       e => Empty.absurd({S.own_srv(R.SReply{y0}, conn, srv) == srv : S.Srv}, true_false(Equal.trans(Bool, True{}, S.authed(conn, srv), False{}, e, ef)))
     case R.SBad{y0}:
@@ -5508,6 +5510,10 @@ def auth_own(o: R.SessOp, +id: Nat, +a: Bool, +n: String, +m: S.Mute, +srv: S.Sr
     case R.SInfo{y0}:
       el =>
         %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}}, srv), False{}, ef) : {S.conn.auth(S.next_conn.k(S.KSess{R.SInfo{y0}}, _, S.Conn{id, a, n, m, False{}}, srv)) == False{} : Bool}
+        ef
+    case R.SCommand{y0}:
+      el =>
+        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}}, srv), False{}, ef) : {S.conn.auth(S.next_conn.k(S.KSess{R.SCommand{y0}}, _, S.Conn{id, a, n, m, False{}}, srv)) == False{} : Bool}
         ef
     case R.SReply{y0}:
       el =>

@@ -9,8 +9,8 @@
 # the differential test against Redis (a fresh Redis database for each
 # run) and the consistency checks under concurrent clients, and against
 # the first the protocol's edge cases, the commands of a connection and
-# CONFIG, byte for byte against Redis, and INFO's sections and fields;
-# then stops them. Then the append-only file: a
+# CONFIG, byte for byte against Redis, INFO's sections and fields, and
+# COMMAND; then stops them. Then the append-only file: a
 # random stream, a restart from the file, the keyspace compared; then the
 # file's last entry cut short, as a crash in a write leaves it, a restart
 # that cuts it back, and the keyspace compared again. Last, the disk
@@ -40,6 +40,7 @@ for n in "" post send "post build/test.aof everysec"; do
     python3 tests/session_test.py --bendkv "$PORT" --redis "$REDIS_PORT"
     python3 tests/config_test.py --bendkv "$PORT" --redis "$REDIS_PORT" --rounds "$ROUNDS"
     python3 tests/info_test.py --bendkv "$PORT" --redis "$REDIS_PORT"
+    python3 tests/command_test.py --bendkv "$PORT" --redis "$REDIS_PORT"
   fi
   for seed in 1 2 3; do
     redis-cli -p "$REDIS_PORT" flushall > /dev/null

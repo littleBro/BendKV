@@ -1348,6 +1348,45 @@ is now read in a segment of its own, `conn_ans`, which both arms call; the count
 `Link` one word wider) and ~140 the actor's counting, less the ~150 the new `nopass`
 saves.
 
+## 3q. COMMAND from Redis itself
+
+COMMAND describes each command BendKV has, and of CLIENT, CONFIG, FUNCTION and COMMAND
+the subcommands it has, as Redis 7.0.15 describes them: COMMAND and COMMAND INFO (name,
+arity, flags, first and last key and step, ACL categories, tips, key specifications,
+subcommands), COMMAND DOCS (summary, since, group, complexity, history, deprecation, the
+arguments down to their tokens), COMMAND COUNT, COMMAND LIST with Redis's filters (by
+module, by ACL category, by pattern, case aside), and COMMAND GETKEYS and
+GETKEYSANDFLAGS, the keys of a command line with their access flags.
+
+Redis does not keep that description in one place: it builds it at its start from
+`src/commands/*.json` and rules of its own (ACL categories implied by flags, the
+movable-keys flag, a legacy first-last-step range computed from the key specifications,
+flags hidden from the reply). Rather than port those rules, `tools/gen_commands.py
+--extract` starts a `redis-server` and takes its answers to COMMAND INFO, COMMAND DOCS
+and ACL CAT for BendKV's commands, kept in `tools/data/redis-commands.json`; the second
+step writes them into `src/command.bend` as data, each entry ready to send, with the key
+specifications and categories beside it for GETKEYS and LIST. Redis lists commands and
+subcommands in the order of a hash table with a random seed, so no order is Redis's own;
+BendKV lists them by name. Its keys of a command line follow Redis's
+`getKeysUsingKeySpecs`, and SET's, whose key is read as well as written when the line
+has GET, follow Redis's own function for it.
+
+`tests/command_test.py` compares every answer with Redis's, restricted to BendKV's
+commands and put in order of names: each command's and subcommand's description and
+documentation, alone and together, by other cases of their names, unknown and
+impossible names (`get|key`, `config|get|key`); the lists, filtered by every ACL
+category and by patterns; the keys of lines of every command, a few thousand random ones
+among them; the errors. 601 checks with the default count, byte for byte where Redis's
+order is not the hash table's.
+
+**Cost.** None, after a first try cost 0.9%. COMMAND's subcommands first went to the
+session as a parsed query of two words, and the widest variant of a datatype sets the
+width of all of its values: the session's operations, one word wide until then, became
+two, and every parsed command, which holds one, a word wider on its way through the
+parser, the batch and the executor (+27 instructions per GET). The operation now holds
+COMMAND's arguments as they came, one word, and `command.bend` reads the subcommand again.
+`make perfcheck`: GET 3,037, SET 3,620, INCR 3,924 (3,031, 3,614 and 3,921 before).
+
 ## 4. Where a request's time goes, and hiding the memory waits
 
 With the eight patches, BendKV ran fewer instructions on GET and SET than Redis, missed
@@ -1586,6 +1625,9 @@ What got in the way:
   match keeps the parameter borrowed (section 3p).
 - A def called from two places is a segment of its own, entered through the work loop;
   the same steps written out in both callers stay in their segments.
+- The widest variant of a datatype sets the width of all of its values: one command of
+  the session with a field of two words made every parsed command a word wider, and a
+  GET 27 instructions dearer (section 3q).
 - Every file read (and `IO.random_u32`) runs on a helper thread of the runtime; the first
   one makes the process multi-threaded for good, and glibc's cancellable system calls
   then take their longer path, ~50 instructions each.

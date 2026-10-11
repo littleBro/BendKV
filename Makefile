@@ -73,11 +73,13 @@ perfcheck: build
 	sh tools/perf_guard.sh build/bendkv
 
 # the generated blocks are up to date: the 16-way parts of src/map.bend
-# and proof/PROOF.bend (tools/gen_trie.py), and the table of parameters
-# in src/config.bend (tools/gen_config.py)
+# and proof/PROOF.bend (tools/gen_trie.py), the table of parameters in
+# src/config.bend (tools/gen_config.py), and the table of commands in
+# src/command.bend (tools/gen_commands.py)
 gencheck:
 	python3 tools/gen_trie.py --check
 	python3 tools/gen_config.py --check
+	python3 tools/gen_commands.py --check
 
 clean:
 	rm -rf build

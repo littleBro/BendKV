@@ -47,6 +47,7 @@ type PeekOp is Data:
 # HELP) is SReply; one the parser found wrong (an unknown subcommand, a
 # wrong number of arguments) is SBad, answered as Redis answers those,
 # before it asks a client to authenticate.
+
 type SessOp is Data:
   SHello{args: List<&2, String>}
   SAuth{args: List<&2, String>}
@@ -61,6 +62,7 @@ type SessOp is Data:
   SConfigSet{args: List<&2, String>}
   SConfigResetStat{}
   SInfo{args: List<&2, String>}
+  SCommand{args: List<&2, String>}
   SReply{r: Reply}
   SBad{r: Reply}
 
@@ -515,6 +517,82 @@ def parse_function(id: Nat, sub: String, args: List<&2, String>) -> SessOp:
     case _:
       e_unknown_sub(sub, "FUNCTION")
 
+# COMMAND: Redis's description of each command BendKV has (command.bend)
+def command_id(+n: String, len: Nat) -> Nat:
+  match len:
+    case 4n:
+      Bool.pick(Nat, String.eq(n, "INFO"), 1n,
+      Bool.pick(Nat, String.eq(n, "DOCS"), 2n,
+      Bool.pick(Nat, String.eq(n, "LIST"), 3n,
+      Bool.pick(Nat, String.eq(n, "HELP"), 4n, 0n))))
+    case 5n:
+      Bool.pick(Nat, String.eq(n, "COUNT"), 5n, 0n)
+    case 7n:
+      Bool.pick(Nat, String.eq(n, "GETKEYS"), 6n, 0n)
+    case 15n:
+      Bool.pick(Nat, String.eq(n, "GETKEYSANDFLAGS"), 7n, 0n)
+    case _:
+      0n
+
+def command_help() -> List<&2, String>:
+  ["(no subcommand)",
+   "    Return details about all Redis commands.",
+   "COUNT",
+   "    Return the total number of commands in this Redis server.",
+   "LIST",
+   "    Return a list of all commands in this Redis server.",
+   "INFO [<command-name> ...]",
+   "    Return details about multiple Redis commands.",
+   "    If no command names are given, documentation details for all",
+   "    commands are returned.",
+   "DOCS [<command-name> ...]",
+   "    Return documentation details about multiple Redis commands.",
+   "    If no command names are given, documentation details for all",
+   "    commands are returned.",
+   "GETKEYS <full-command>",
+   "    Return the keys from a full Redis command.",
+   "GETKEYSANDFLAGS <full-command>",
+   "    Return the keys and the access flags from a full Redis command."]
+
+# GETKEYS and GETKEYSANDFLAGS take a command and at least one argument
+def command_keys(+sub: String, args: List<&2, String>, name: String) -> SessOp:
+  match args:
+    case Con{c, Con{a, rest}}:
+      SCommand{sub <> (c <> (a <> rest))}
+    case _:
+      s_arity(name)
+
+# the subcommands with a wrong number of arguments, the unknown ones and
+# HELP are answered here; command.bend answers the others (SCommand holds
+# COMMAND's arguments as they came, so that a command is a word wider
+# for none of them)
+def parse_command(id: Nat, +sub: String, args: List<&2, String>) -> SessOp:
+  match id:
+    case 1n:  # INFO
+      SCommand{sub <> args}
+    case 2n:  # DOCS
+      SCommand{sub <> args}
+    case 3n:  # LIST
+      SCommand{sub <> args}
+    case 4n:  # HELP
+      match args:
+        case Nil{}:
+          help("COMMAND", command_help())
+        case _:
+          s_arity("command|help")
+    case 5n:  # COUNT
+      match args:
+        case Nil{}:
+          SCommand{[sub]}
+        case _:
+          s_arity("command|count")
+    case 6n:  # GETKEYS
+      command_keys(sub, args, "command|getkeys")
+    case 7n:  # GETKEYSANDFLAGS
+      command_keys(sub, args, "command|getkeysandflags")
+    case _:
+      e_unknown_sub(sub, "COMMAND")
+
 # CONFIG: GET and SET of the server's parameters (config.bend), RESETSTAT,
 # and REWRITE, which fails as Redis fails without a config file
 def config_id(+n: String, len: Nat) -> Nat:
@@ -630,7 +708,7 @@ def cmd_id(+n: String, len: Nat) -> Nat:
       Bool.pick(Nat, String.eq(n, "CLIENT"), 45n, 0n)))))))))))
     case 7n:
       Bool.pick(Nat, String.eq(n, "FLUSHDB"), 20n,
-      Bool.pick(Nat, String.eq(n, "COMMAND"), 22n, 0n))
+      Bool.pick(Nat, String.eq(n, "COMMAND"), 49n, 0n))
     case 8n:
       Bool.pick(Nat, String.eq(n, "FLUSHALL"), 19n,
       Bool.pick(Nat, String.eq(n, "FUNCTION"), 46n, 0n))
@@ -757,8 +835,6 @@ def parse_id(id: Nat, name: String, args: List<&2, String>) -> Cmd:
           Keys{p}
         case _:
           e_arity("keys")
-    case 22n:  # COMMAND
-      Bad{RArray{Nil{}}}
     case 25n:  # TYPE
       match args:
         case Con{k, Nil{}}:
@@ -816,6 +892,13 @@ def parse_sess(id: Nat, name: String, args: List<&2, String>) -> SessOp:
           parse_config(config_id(up, String.length(up)), sub, rest)
     case 48n:  # INFO
       SInfo{args}
+    case 49n:  # COMMAND
+      match args:
+        case Nil{}:
+          SCommand{Nil{}}
+        case Con{+sub, rest}:
+          +up = String.to_upper(sub)
+          parse_command(command_id(up, String.length(up)), sub, rest)
     case _:
       SBad{RError{no_newlines("ERR unknown command '" ++ String.take(name, 128n) ++ "', with args beginning with: " ++ unknown.args(args, ""))}}
 

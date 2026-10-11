@@ -90,7 +90,10 @@ translation stays in the trusted base.
   rates sampled every 100 ms, as Redis's cron samples them), its resident memory, its
   keys, its append-only file; for what BendKV does not have (replication, forks,
   scripts, eviction, expiry) they are what Redis shows when it has none. CONFIG
-  RESETSTAT starts the counts again.
+  RESETSTAT starts the counts again. COMMAND (with INFO, DOCS, COUNT, LIST and its
+  filters, GETKEYS, GETKEYSANDFLAGS, HELP) describes each command BendKV has, and each
+  subcommand it has, as Redis 7.0.15 describes it: `tools/gen_commands.py` takes the
+  descriptions from Redis itself.
 - **Start:** as `redis-server` starts: a configuration file, `--name value` options and
   `-` for the standard input, read line by line as Redis reads them (includes, `dir`
   changing the directory at once, save points that add up, the same errors at the same
@@ -105,10 +108,10 @@ translation stays in the trusted base.
 - **Persistence:** an append-only file in Redis's own format (`redis-check-aof` accepts
   it, and Redis loads it), fsync `always`, `everysec` or `no`.
 
-Not yet: other data types, expiry, multiple databases, MULTI/EXEC, pub/sub, COMMAND (a
-placeholder so that `redis-cli` works) and the statistics per command it brings (INFO
-commandstats, errorstats and latencystats are empty), CONFIG REWRITE (it answers as
-Redis does without a configuration file), RDB files. Integers are limited to 14 digits.
+Not yet: other data types, expiry, multiple databases, MULTI/EXEC, pub/sub, statistics
+per command (INFO commandstats, errorstats and latencystats are empty), CONFIG REWRITE
+(it answers as Redis does without a configuration file), RDB files. Integers are limited
+to 14 digits.
 
 ## Performance
 
@@ -159,7 +162,7 @@ event loop with `io-threads 1`. `./build/bendkv --help` lists the forms. The sho
 make smoke     BEND="$B"   # the pure path end to end and the append-only file, no network
 make test      BEND="$B"   # needs redis-server, redis-cli and a C compiler
 make perfcheck BEND="$B"   # instructions per request against a baseline (needs valgrind)
-make gencheck              # the generated parts (trie, its proofs, the parameter table) are up to date
+make gencheck              # the generated parts (trie, its proofs, the parameter and command tables) are up to date
 make bench     BEND="$B"   # redis-benchmark: BendKV against Redis
 ```
 
@@ -170,7 +173,9 @@ command streams compared byte for byte, the protocol edge cases of Redis's
 `tests/unit/protocol.tcl`, the connection commands, CONFIG (every parameter, a list of
 cases and thousands of random values, set and read back on both servers), INFO (the
 sections and fields for 31 ways of picking them, the values that do not depend on the
-machine, the counts after CONFIG RESETSTAT), robustness and concurrency checks,
+machine, the counts after CONFIG RESETSTAT), COMMAND (each command's description and
+documentation, the lists and their filters, the keys of command lines, random ones
+too), robustness and concurrency checks,
 restarts from the append-only file (including a truncated tail), and disk failures
 under the file, injected with an `LD_PRELOAD` shim.
 
@@ -186,13 +191,14 @@ src/        the server
   config.bend   the parameters, CONFIG GET and SET                 verified
   resp.bend     RESP2 parser and reply encoder                     tested
   info.bend     INFO's sections and fields                         tested
+  command.bend  COMMAND, with Redis's table of BendKV's commands     tested
   startup.bend  the command line and the configuration file        tested
   server.bend   TCP, connections, the database actor, the log      tested
 proof/      LAWS.bend (the laws) and PROOF.bend (their proofs)
-tests/      start, differential, protocol, session, CONFIG, INFO, robustness, concurrency, AOF tests
+tests/      start, differential, protocol, session, CONFIG, INFO, COMMAND, robustness, concurrency, AOF tests
 bench/      in-process benchmarks of the map, the core and channels
-tools/      measurement scripts and the generators of the trie and of the parameter
-            table, with the facts it takes from Redis (tools/data/)
+tools/      measurement scripts and the generators of the trie, of the parameter table
+            and of the command table, with the facts they take from Redis (tools/data/)
 bend-patches/  the 21 patches to the Bend compiler and runtime
 docs/       FINDINGS.md, DIRECTIONS.md (English), PERFORMANCE.md (Russian)
 ```
