@@ -1435,6 +1435,88 @@ def item.set(it: CItem, +v: String) -> Result<&2, &2, String, String>:
     case CItem{CParam{name, alias, imm, hidden, prot, multi, ty, app}, old}:
       ty.set(ty, app, old, v)
 
+# A value at the start
+# --------------------
+# A line of the configuration file, or an option of the command line,
+# sets a parameter as CONFIG SET does, with the differences Redis has: a
+# parameter of several words takes the words of the line as they are
+# (CONFIG SET splits its value at each space); nothing is done with the
+# new value but hz's cap; and the immutable and protected parameters may
+# be set too. startup.bend reads the lines; dir and save's pairs added to
+# the ones before are its own.
+
+# replicaof: "no one", or a host and a port, read as strtol reads one
+def replicaof.port(+h: String, m: Maybe<&2, String>) -> Result<&2, &2, String, String>:
+  match m:
+    case Some{+p}:
+      Bool.pick(Result<&2, &2, String, String>, Bool.and(dec.sle("0", p), dec.sle(p, "65535")), Done{h ++ " " ++ p}, Fail{"Invalid master port"})
+    case None{}:
+      Fail{"Invalid master port"}
+
+def replicaof.load(ws: List<&2, String>) -> Result<&2, &2, String, String>:
+  match ws:
+    case Con{+h, Con{+p, Nil{}}}:
+      Bool.pick(Result<&2, &2, String, String>, Bool.and(text.same(h, "no"), text.same(p, "one")), Done{""}, replicaof.port(h, ll.loose(p)))
+    case _:
+      Fail{"wrong number of arguments"}
+
+# one empty word is no words, for the parameters Redis reads so
+def words.none(ws: List<&2, String>) -> List<&2, String>:
+  match ws:
+    case Con{SNil{}, Nil{}}:
+      Nil{}
+    case other:
+      other
+
+def spec.load(x: XSpec, +old: String, ws: List<&2, String>) -> Result<&2, &2, String, String>:
+  match x:
+    case XDir{}:
+      Done{old}
+    case XSave{}:
+      save.set(words.none(ws))
+    case XObuf{}:
+      obuf.set(ws, old)
+    case XOom{}:
+      oom.set(ws)
+    case XNotify{}:
+      notify.set(unwords(ws))
+    case XBind{}:
+      bind.set(words.none(ws))
+    case XReplicaof{}:
+      replicaof.load(ws)
+    case XPct{}:
+      pct.set(words.none(ws))
+
+# what a new value does at the start: hz is capped, the rest is kept
+def app.load(app: CApp) -> CApp:
+  match app:
+    case AppHz{}:
+      AppHz{}
+    case _:
+      AppNone{}
+
+def ty.load(ty: CTy, app: CApp, +old: String, ws: List<&2, String>) -> Result<&2, &2, String, String>:
+  match ty:
+    case CEnum{+names, +vals, +bits, vet}:
+      enum.got(enum.read(ws, names, vals), names, vals, bits, vet)
+    case CSpec{x}:
+      spec.load(x, old, ws)
+    case other:
+      ty.set(other, app.load(app), old, unwords(ws))
+
+# the value a parameter takes from the words after its name: one word,
+# but for a parameter of several
+def item.load(it: CItem, ws: List<&2, String>) -> Result<&2, &2, String, String>:
+  match it:
+    case CItem{CParam{name, alias, imm, hidden, prot, multi, ty, app}, old}:
+      ty.load(ty, app, old, ws)
+
+# whether a parameter's value is words
+def item.multi(+it: CItem) -> Bool:
+  match it:
+    case CItem{CParam{name, alias, imm, hidden, prot, multi, ty, app}, v}:
+      multi
+
 # Parameters by name
 # ------------------
 
