@@ -151,45 +151,45 @@ def is_read(c: R.Cmd) -> Bool:
 # corrupt an unrelated key)
 law frame:
   for  c: R.Cmd
-  for +db: KV.Trie<String>
+  for +db: R.Db
   for +j: String
   for  e: {writes(c, j) == False{} : Bool}
-  {KV.get(String, R.db_of(R.exec(c, db)), j) == KV.get(String, db, j) : Maybe<&2, String>}
+  {KV.get(String, R.db.t(R.db_of(R.exec(c, db))), j) == KV.get(String, R.db.t(db), j) : Maybe<&2, String>}
 
 # LAW: reads leave the whole database as it was
 law reads_keep_db:
   for  c: R.Cmd
-  for +db: KV.Trie<String>
+  for +db: R.Db
   for  e: {is_read(c) == True{} : Bool}
-  {R.db_of(R.exec(c, db)) == db : KV.Trie<String>}
+  {R.db_of(R.exec(c, db)) == db : R.Db}
 
 # LAW: GET after SET answers the value set
 law get_after_set:
-  for +db: KV.Trie<String>
+  for +db: R.Db
   for +k: String
   for +v: String
   {R.reply_of(R.exec(R.Get{k}, R.db_of(R.exec(R.Set{k, v}, db)))) == R.RBulk{v} : R.Reply}
 
 # LAW: GET of a missing key answers nil
 law get_missing:
-  for +db: KV.Trie<String>
+  for +db: R.Db
   for +k: String
-  for  e: {KV.get(String, db, k) == None{} : Maybe<&2, String>}
-  {R.exec(R.Get{k}, db) == (R.RNull{}, db) : R.Reply & KV.Trie<String>}
+  for  e: {KV.get(String, R.db.t(db), k) == None{} : Maybe<&2, String>}
+  {R.exec(R.Get{k}, db) == (R.RNull{}, db) : R.Reply & R.Db}
 
 # LAW: DEL removes every key it names
 law del_effect:
   for +ks: List<&2, String>
-  for +db: KV.Trie<String>
+  for +db: R.Db
   for +j: String
   for  e: {any_key(j, ks) == True{} : Bool}
-  {KV.get(String, R.db_of(R.exec(R.Del{ks}, db)), j) == None{} : Maybe<&2, String>}
+  {KV.get(String, R.db.t(R.db_of(R.exec(R.Del{ks}, db))), j) == None{} : Maybe<&2, String>}
 
 # LAW: DEL of one key answers 1 when it was there, 0 when it was not
 law del_one_count:
-  for +db: KV.Trie<String>
+  for +db: R.Db
   for +k: String
-  {R.reply_of(R.exec(R.Del{[k]}, db)) == R.r_int(Bool.pick(Nat, KV.has(String, db, k), 1n, 0n)) : R.Reply}
+  {R.reply_of(R.exec(R.Del{[k]}, db)) == R.r_int(Bool.pick(Nat, KV.has(String, R.db.t(db), k), 1n, 0n)) : R.Reply}
 
 # the value APPEND extends: the old one, or nothing
 def old_or_empty(m: Maybe<&2, String>) -> String:
@@ -200,36 +200,48 @@ def old_or_empty(m: Maybe<&2, String>) -> String:
       ""
 
 # LAW: APPEND stores the old value followed by the new bytes, and
-# answers the new length
+# answers the new length; a new key counts
 law append_effect:
-  for +db: KV.Trie<String>
+  for +t: KV.Trie<String>
+  for +n: Nat
+  for +x: Nat
+  for +now: Nat
+  for +rr: Maybe<&2, R.Db>
   for +k: String
   for +s: String
-  {R.exec(R.Append{k, s}, db) == (R.r_int(String.length(old_or_empty(KV.get(String, db, k)) ++ s)), KV.set(String, db, k, old_or_empty(KV.get(String, db, k)) ++ s)) : R.Reply & KV.Trie<String>}
+  {R.exec(R.Append{k, s}, R.Db{t, n, x, now, rr}) == (R.r_int(String.length(old_or_empty(KV.get(String, t, k)) ++ s)), R.Db{KV.set(String, t, k, old_or_empty(KV.get(String, t, k)) ++ s), Bool.pick(Nat, KV.has(String, t, k), n, 1n+n), x, now, rr}) : R.Reply & R.Db}
 
-# LAW: SETNX sets a missing key and answers 1
+# LAW: SETNX sets a missing key, which counts, and answers 1
 law setnx_missing:
-  for +db: KV.Trie<String>
+  for +t: KV.Trie<String>
+  for +n: Nat
+  for +x: Nat
+  for +now: Nat
+  for +rr: Maybe<&2, R.Db>
   for +k: String
   for +v: String
-  for  e: {KV.get(String, db, k) == None{} : Maybe<&2, String>}
-  {R.exec(R.SetNX{k, v}, db) == (R.r_int(1n), KV.set(String, db, k, v)) : R.Reply & KV.Trie<String>}
+  for  e: {KV.get(String, t, k) == None{} : Maybe<&2, String>}
+  {R.exec(R.SetNX{k, v}, R.Db{t, n, x, now, rr}) == (R.r_int(1n), R.Db{KV.set(String, t, k, v), 1n+n, x, now, rr}) : R.Reply & R.Db}
 
 # LAW: SETNX leaves a present key alone and answers 0
 law setnx_present:
-  for +db: KV.Trie<String>
+  for +db: R.Db
   for +k: String
   for +v: String
   for +x: String
-  for  e: {KV.get(String, db, k) == Some{x} : Maybe<&2, String>}
-  {R.exec(R.SetNX{k, v}, db) == (R.r_int(0n), db) : R.Reply & KV.Trie<String>}
+  for  e: {KV.get(String, R.db.t(db), k) == Some{x} : Maybe<&2, String>}
+  {R.exec(R.SetNX{k, v}, db) == (R.r_int(0n), db) : R.Reply & R.Db}
 
-# LAW: INCR of a missing key stores "1" and answers 1
+# LAW: INCR of a missing key stores "1", which counts, and answers 1
 law incr_missing:
-  for +db: KV.Trie<String>
+  for +t: KV.Trie<String>
+  for +n: Nat
+  for +x: Nat
+  for +now: Nat
+  for +rr: Maybe<&2, R.Db>
   for +k: String
-  for  e: {KV.get(String, db, k) == None{} : Maybe<&2, String>}
-  {R.exec(R.IncrBy{k, R.IPos{1n}}, db) == (R.RInt{R.IPos{1n}}, KV.set(String, db, k, "1")) : R.Reply & KV.Trie<String>}
+  for  e: {KV.get(String, t, k) == None{} : Maybe<&2, String>}
+  {R.exec(R.IncrBy{k, R.IPos{1n}}, R.Db{t, n, x, now, rr}) == (R.RInt{R.IPos{1n}}, R.Db{KV.set(String, t, k, "1"), 1n+n, x, now, rr}) : R.Reply & R.Db}
 
 # LAW: a batch runs as its commands one after another: the server runs
 # pipelined requests through exec_all, and this law makes that the same
@@ -237,13 +249,13 @@ law incr_missing:
 law batch_step:
   for +c: R.Cmd
   for +cs: List<&2, R.Cmd>
-  for +db: KV.Trie<String>
-  {R.exec_all(c <> cs, db) == R.exec_all.cons(R.reply_of(R.exec(c, db)), R.exec_all(cs, R.db_of(R.exec(c, db)))) : List<&2, R.Reply> & KV.Trie<String>}
+  for +db: R.Db
+  {R.exec_all(c <> cs, db) == R.exec_all.cons(R.reply_of(R.exec(c, db)), R.exec_all(cs, R.db_of(R.exec(c, db)))) : List<&2, R.Reply> & R.Db}
 
 # LAW: an empty batch answers nothing and changes nothing
 law batch_nil:
-  for +db: KV.Trie<String>
-  {R.exec_all(Nil{}, db) == (Nil{}, db) : List<&2, R.Reply> & KV.Trie<String>}
+  for +db: R.Db
+  {R.exec_all(Nil{}, db) == (Nil{}, db) : List<&2, R.Reply> & R.Db}
 
 # LAW: hints change nothing: the server runs each batch through
 # batch.bend, which first starts loading the trie paths of its keys into
@@ -251,15 +263,15 @@ law batch_nil:
 law batch_hints:
   for +cs: List<&2, R.Cmd>
   for +hs: List<&2, U32>
-  for +db: KV.Trie<String>
-  {B.exec_batch(cs, hs, db) == R.exec_all(cs, db) : List<&2, R.Reply> & KV.Trie<String>}
+  for +db: R.Db
+  {B.exec_batch(cs, hs, db) == R.exec_all(cs, db) : List<&2, R.Reply> & R.Db}
 
 # a batch's replies, and the database after it
-def replies(r: List<&2, R.Reply> & KV.Trie<String>) -> List<&2, R.Reply>:
+def replies(r: List<&2, R.Reply> & R.Db) -> List<&2, R.Reply>:
   (rs, db) = r
   rs
 
-def final(r: List<&2, R.Reply> & KV.Trie<String>) -> KV.Trie<String>:
+def final(r: List<&2, R.Reply> & R.Db) -> R.Db:
   (rs, db) = r
   db
 
@@ -321,7 +333,7 @@ def disturbs(+c2: R.Cmd, c1: R.Cmd) -> Bool:
 law commute_reply:
   for  c1: R.Cmd
   for +c2: R.Cmd
-  for +db: KV.Trie<String>
+  for +db: R.Db
   for  e: {disturbs(c2, c1) == False{} : Bool}
   {R.reply_of(R.exec(c1, R.db_of(R.exec(c2, db)))) == R.reply_of(R.exec(c1, db)) : R.Reply}
 
@@ -330,17 +342,17 @@ law commute_reply:
 law commute_reads:
   for +c1: R.Cmd
   for +c2: R.Cmd
-  for +db: KV.Trie<String>
+  for +db: R.Db
   for +j: String
   for  e: {Bool.and(writes(c1, j), writes(c2, j)) == False{} : Bool}
-  {KV.get(String, R.db_of(R.exec(c2, R.db_of(R.exec(c1, db)))), j) == KV.get(String, R.db_of(R.exec(c1, R.db_of(R.exec(c2, db)))), j) : Maybe<&2, String>}
+  {KV.get(String, R.db.t(R.db_of(R.exec(c2, R.db_of(R.exec(c1, db))))), j) == KV.get(String, R.db.t(R.db_of(R.exec(c1, R.db_of(R.exec(c2, db))))), j) : Maybe<&2, String>}
 
 # LAW: two commands that do not disturb each other answer the same in
 # either order
 law commute:
   for +c1: R.Cmd
   for +c2: R.Cmd
-  for +db: KV.Trie<String>
+  for +db: R.Db
   for  e: {Bool.or(disturbs(c1, c2), disturbs(c2, c1)) == False{} : Bool}
   {replies(R.exec_all([c2, c1], db)) == List.reverse(&2, R.Reply, replies(R.exec_all([c1, c2], db))) : List<&2, R.Reply>}
 
@@ -420,7 +432,7 @@ law swap_replies:
   for +c1: R.Cmd
   for +c2: R.Cmd
   for +cs: List<&2, R.Cmd>
-  for +db: KV.Trie<String>
+  for +db: R.Db
   for  e1: {interferes(c1, c2) == False{} : Bool}
   for  e2: {keywise_all(cs) == True{} : Bool}
   {replies(R.exec_all(Con{c2, Con{c1, cs}}, db)) == swap2(replies(R.exec_all(Con{c1, Con{c2, cs}}, db))) : List<&2, R.Reply>}
@@ -431,10 +443,10 @@ law swap_reads:
   for +c1: R.Cmd
   for +c2: R.Cmd
   for +cs: List<&2, R.Cmd>
-  for +db: KV.Trie<String>
+  for +db: R.Db
   for +j: String
   for  e: {clash(c2, c1) == False{} : Bool}
-  {KV.get(String, final(R.exec_all(Con{c2, Con{c1, cs}}, db)), j) == KV.get(String, final(R.exec_all(Con{c1, Con{c2, cs}}, db)), j) : Maybe<&2, String>}
+  {KV.get(String, R.db.t(final(R.exec_all(Con{c2, Con{c1, cs}}, db))), j) == KV.get(String, R.db.t(final(R.exec_all(Con{c1, Con{c2, cs}}, db))), j) : Maybe<&2, String>}
 
 # Persistence
 # ===========
@@ -453,19 +465,19 @@ law swap_reads:
 # hints of batch.bend (log_batch), which change nothing.
 
 # a batch run with its effects, without them; and the effects
-def log_out(r: List<&2, R.Reply> & (List<&2, R.Cmd> & KV.Trie<String>)) -> List<&2, R.Reply> & KV.Trie<String>:
+def log_out(r: List<&2, R.Reply> & (List<&2, R.Cmd> & R.Db)) -> List<&2, R.Reply> & R.Db:
   (rs, q) = r
-  (rs, Pair.snd(List<&2, R.Cmd>, KV.Trie<String>, q))
+  (rs, Pair.snd(List<&2, R.Cmd>, R.Db, q))
 
-def effects(r: List<&2, R.Reply> & (List<&2, R.Cmd> & KV.Trie<String>)) -> List<&2, R.Cmd>:
+def effects(r: List<&2, R.Reply> & (List<&2, R.Cmd> & R.Db)) -> List<&2, R.Cmd>:
   (rs, q) = r
-  Pair.fst(List<&2, R.Cmd>, KV.Trie<String>, q)
+  Pair.fst(List<&2, R.Cmd>, R.Db, q)
 
 # LAW: exec_log answers and leaves the database as exec_all does
 law log_exec:
   for +cs: List<&2, R.Cmd>
-  for +db: KV.Trie<String>
-  {log_out(A.exec_log(cs, db)) == R.exec_all(cs, db) : List<&2, R.Reply> & KV.Trie<String>}
+  for +db: R.Db
+  {log_out(A.exec_log(cs, db)) == R.exec_all(cs, db) : List<&2, R.Reply> & R.Db}
 
 # LAW: hints change nothing here either: the actor runs each batch with
 # log_batch, which first starts loading the trie paths of its keys into
@@ -473,20 +485,20 @@ law log_exec:
 law log_hints:
   for +cs: List<&2, R.Cmd>
   for +hs: List<&2, U32>
-  for +db: KV.Trie<String>
-  {A.log_batch(cs, hs, db) == A.exec_log(cs, db) : List<&2, R.Reply> & (List<&2, R.Cmd> & KV.Trie<String>)}
+  for +db: R.Db
+  {A.log_batch(cs, hs, db) == A.exec_log(cs, db) : List<&2, R.Reply> & (List<&2, R.Cmd> & R.Db)}
 
 # LAW: a batch's effects, run on the database the batch ran on, leave the
 # database the batch left
 law log_replay:
   for +cs: List<&2, R.Cmd>
-  for +db: KV.Trie<String>
-  {final(R.exec_all(effects(A.exec_log(cs, db)), db)) == final(R.exec_all(cs, db)) : KV.Trie<String>}
+  for +db: R.Db
+  {final(R.exec_all(effects(A.exec_log(cs, db)), db)) == final(R.exec_all(cs, db)) : R.Db}
 
 # LAW: a batch's effects, written as entries, parse back to them
 law log_args:
   for +cs: List<&2, R.Cmd>
-  for +db: KV.Trie<String>
+  for +db: R.Db
   {A.parse_all(A.args_all(effects(A.exec_log(cs, db)))) == effects(A.exec_log(cs, db)) : List<&2, R.Cmd>}
 
 # LAW: a file loads as the entries written to it, with nothing left over
@@ -496,10 +508,10 @@ law aof_load:
 
 # a history, the batches the server has run since it started, newest
 # first, run from an empty database
-def single(hist: List<&2, List<&2, R.Cmd>>) -> KV.Trie<String>:
+def single(hist: List<&2, List<&2, R.Cmd>>) -> R.Db:
   match hist:
     case Nil{}:
-      KV.empty(String)
+      R.db.empty()
     case Con{cs, older}:
       final(R.exec_all(cs, single(older)))
 
@@ -516,7 +528,7 @@ def aof(hist: List<&2, List<&2, R.Cmd>>) -> String:
 # it held, and nothing is left over
 law recover:
   for +hist: List<&2, List<&2, R.Cmd>>
-  {A.restore(aof(hist)) == (single(hist), "") : KV.Trie<String> & String}
+  {A.restore(aof(hist)) == (single(hist), "") : R.Db & String}
 
 # A crash in the middle of a write leaves the file cut anywhere: c is
 # what reached the disk, d what did not. The server loads what it can
@@ -531,8 +543,8 @@ def commands(hist: List<&2, List<&2, R.Cmd>>) -> List<&2, R.Cmd>:
       List.append(&2, R.Cmd, commands(older), cs)
 
 # the database after the first j commands of a history
-def held(hist: List<&2, List<&2, R.Cmd>>, j: Nat) -> KV.Trie<String>:
-  final(R.exec_all(List.take(&2, R.Cmd, commands(hist), j), KV.empty(String)))
+def held(hist: List<&2, List<&2, R.Cmd>>, j: Nat) -> R.Db:
+  final(R.exec_all(List.take(&2, R.Cmd, commands(hist), j), R.db.empty()))
 
 # LAW: a file cut anywhere restores the database the server held after
 # some prefix of its commands: no command is applied in part, none is
@@ -542,7 +554,7 @@ law recover_cut:
   for +c: String
   for -d: String
   for  e: {c ++ d == aof(hist) : String}
-  Exists(Nat, j => {Pair.fst(KV.Trie<String>, String, A.restore(c)) == held(hist, j) : KV.Trie<String>})
+  Exists(Nat, j => {Pair.fst(R.Db, String, A.restore(c)) == held(hist, j) : R.Db})
 
 # LAW: and what the loader reads, written again, followed by what it
 # leaves, is the cut file: cutting the leftover off leaves whole entries
@@ -573,7 +585,7 @@ law run_gen:
   for  conn: S.Conn
   for  srv: S.Srv
   for +rs: List<&2, B.Req>
-  for  db: KV.Trie<String>
+  for  db: R.Db
   {S.run(conn, srv, B.job(B.unzip(rs, Nil{}, Nil{})), db) == S.done.gen(S.gen(conn, srv, B.cmds_of(rs, Nil{}), db)) : S.Fin}
 
 # LAW: and so with an append-only file
@@ -581,7 +593,7 @@ law run_log_gen:
   for  conn: S.Conn
   for  srv: S.Srv
   for +rs: List<&2, B.Req>
-  for  db: KV.Trie<String>
+  for  db: R.Db
   {S.run_log(conn, srv, B.job(B.unzip(rs, Nil{}, Nil{})), db) == S.logged.gen(S.gen(conn, srv, B.cmds_of(rs, Nil{}), db)) : S.Logged}
 
 def logged_es(l: S.Logged) -> List<&2, R.Cmd>:
@@ -589,7 +601,7 @@ def logged_es(l: S.Logged) -> List<&2, R.Cmd>:
     case S.Logged{rs, es, conn, srv, db}:
       es
 
-def logged_db(l: S.Logged) -> KV.Trie<String>:
+def logged_db(l: S.Logged) -> R.Db:
   match l:
     case S.Logged{rs, es, conn, srv, db}:
       db
@@ -600,8 +612,8 @@ law gen_db:
   for +conn: S.Conn
   for +srv: S.Srv
   for +cmds: List<&2, R.Cmd>
-  for +db: KV.Trie<String>
-  {logged_db(S.logged.gen(S.gen(conn, srv, cmds, db))) == final(R.exec_all(S.plan(cmds, conn, srv), db)) : KV.Trie<String>}
+  for +db: R.Db
+  {logged_db(S.logged.gen(S.gen(conn, srv, cmds, db))) == final(R.exec_all(S.plan(cmds, conn, srv), db)) : R.Db}
 
 # LAW: and logs the effects exec_log gives them: the append-only file
 # holds the history of the commands that ran, as the Persistence laws
@@ -610,7 +622,7 @@ law gen_log:
   for +conn: S.Conn
   for +srv: S.Srv
   for +cmds: List<&2, R.Cmd>
-  for +db: KV.Trie<String>
+  for +db: R.Db
   {logged_es(S.logged.gen(S.gen(conn, srv, cmds, db))) == effects(A.exec_log(S.plan(cmds, conn, srv), db)) : List<&2, R.Cmd>}
 
 # whether a command logs a client in: AUTH, or HELLO, which may carry an

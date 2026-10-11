@@ -52,50 +52,50 @@ def effect(c: R.Cmd, r: R.Reply) -> List<&2, R.Cmd>:
 
 # a batch run with its effects: the replies, what the batch did, in
 # order, and the database after it, as exec_all runs it
-def log.put(rs: List<&2, R.Reply>, es: List<&2, R.Cmd>, c: R.Cmd, r: R.Reply & KV.Trie<String>) -> List<&2, R.Reply> & (List<&2, R.Cmd> & KV.Trie<String>):
+def log.put(rs: List<&2, R.Reply>, es: List<&2, R.Cmd>, c: R.Cmd, r: R.Reply & R.Db) -> List<&2, R.Reply> & (List<&2, R.Cmd> & R.Db):
   (+x, db) = r
   (x <> rs, (List.reverse.go(&2, R.Cmd, effect(c, x), es), db))
 
-def log.run(rs: List<&2, R.Reply>, +c: R.Cmd, q: List<&2, R.Cmd> & KV.Trie<String>) -> List<&2, R.Reply> & (List<&2, R.Cmd> & KV.Trie<String>):
+def log.run(rs: List<&2, R.Reply>, +c: R.Cmd, q: List<&2, R.Cmd> & R.Db) -> List<&2, R.Reply> & (List<&2, R.Cmd> & R.Db):
   (es, db) = q
   log.put(rs, es, c, R.exec(c, db))
 
-def log.step(c: R.Cmd, st: List<&2, R.Reply> & (List<&2, R.Cmd> & KV.Trie<String>)) -> List<&2, R.Reply> & (List<&2, R.Cmd> & KV.Trie<String>):
+def log.step(c: R.Cmd, st: List<&2, R.Reply> & (List<&2, R.Cmd> & R.Db)) -> List<&2, R.Reply> & (List<&2, R.Cmd> & R.Db):
   (rs, q) = st
   log.run(rs, c, q)
 
-def log.go(cs: List<&2, R.Cmd>, st: List<&2, R.Reply> & (List<&2, R.Cmd> & KV.Trie<String>)) -> List<&2, R.Reply> & (List<&2, R.Cmd> & KV.Trie<String>):
+def log.go(cs: List<&2, R.Cmd>, st: List<&2, R.Reply> & (List<&2, R.Cmd> & R.Db)) -> List<&2, R.Reply> & (List<&2, R.Cmd> & R.Db):
   match cs:
     case Nil{}:
       st
     case Con{c, rest}:
       log.go(rest, log.step(c, st))
 
-def log.fin2(q: List<&2, R.Cmd> & KV.Trie<String>) -> List<&2, R.Cmd> & KV.Trie<String>:
+def log.fin2(q: List<&2, R.Cmd> & R.Db) -> List<&2, R.Cmd> & R.Db:
   (es, db) = q
   (List.reverse(&2, R.Cmd, es), db)
 
-def log.fin(st: List<&2, R.Reply> & (List<&2, R.Cmd> & KV.Trie<String>)) -> List<&2, R.Reply> & (List<&2, R.Cmd> & KV.Trie<String>):
+def log.fin(st: List<&2, R.Reply> & (List<&2, R.Cmd> & R.Db)) -> List<&2, R.Reply> & (List<&2, R.Cmd> & R.Db):
   (rs, q) = st
   (List.reverse(&2, R.Reply, rs), log.fin2(q))
 
-def exec_log(cs: List<&2, R.Cmd>, db: KV.Trie<String>) -> List<&2, R.Reply> & (List<&2, R.Cmd> & KV.Trie<String>):
+def exec_log(cs: List<&2, R.Cmd>, db: R.Db) -> List<&2, R.Reply> & (List<&2, R.Cmd> & R.Db):
   log.fin(log.go(cs, (Nil{}, (Nil{}, db))))
 
 # a batch run with its effects after the hints of batch.bend (the trie
 # paths of its keys start loading into the cache first), as exec_batch
 # runs one; LAWS.bend (log_hints) makes it exec_log
-def log_hinted(u: Bool, cs: List<&2, R.Cmd>, db: KV.Trie<String>) -> List<&2, R.Reply> & (List<&2, R.Cmd> & KV.Trie<String>):
+def log_hinted(u: Bool, cs: List<&2, R.Cmd>, db: R.Db) -> List<&2, R.Reply> & (List<&2, R.Cmd> & R.Db):
   match u:
     case True{}:
       exec_log(cs, db)
     case False{}:
       exec_log(cs, db)
 
-def log_batch(cs: List<&2, R.Cmd>, hs: List<&2, U32>, db: KV.Trie<String>) -> List<&2, R.Reply> & (List<&2, R.Cmd> & KV.Trie<String>):
+def log_batch(cs: List<&2, R.Cmd>, hs: List<&2, U32>, db: R.Db) -> List<&2, R.Reply> & (List<&2, R.Cmd> & R.Db):
   +d = db
   +h = hs
-  log_hinted(U32.is_eq(B.touch_if(B.many(h), h, d), 0), cs, d)
+  log_hinted(U32.is_eq(B.touch_db(B.many(h), h, d), 0), cs, d)
 
 # Entries
 # -------
@@ -300,18 +300,18 @@ def load(+s: String) -> List<&2, List<&2, String>> & String:
 # Restoring
 # ---------
 
-def db_after(r: List<&2, R.Reply> & KV.Trie<String>) -> KV.Trie<String>:
+def db_after(r: List<&2, R.Reply> & R.Db) -> R.Db:
   (rs, db) = r
   db
 
 # the database the entries leave, run from an empty one
-def replay(reqs: List<&2, List<&2, String>>) -> KV.Trie<String>:
-  db_after(R.exec_all(parse_all(reqs), KV.empty(String)))
+def replay(reqs: List<&2, List<&2, String>>) -> R.Db:
+  db_after(R.exec_all(parse_all(reqs), R.db.empty()))
 
-def restore.of(l: List<&2, List<&2, String>> & String) -> KV.Trie<String> & String:
+def restore.of(l: List<&2, List<&2, String>> & String) -> R.Db & String:
   (reqs, rest) = l
   (replay(reqs), rest)
 
 # the database a file holds, and what is left after its last whole entry
-def restore(s: String) -> KV.Trie<String> & String:
+def restore(s: String) -> R.Db & String:
   restore.of(load(s))

@@ -38,17 +38,23 @@ def dump.go(+db: KV.Trie<String>, ks: List<&2, String>) -> String:
     case Con{+k, rest}:
       k ++ "=" ++ Maybe.default(&2, String, KV.get(String, db, k), "?") ++ " " ++ dump.go(db, rest)
 
-def dump(+db: KV.Trie<String>) -> String:
-  dump.go(db, KV.keys(String, db))
+def dump.of(+t: KV.Trie<String>, +n: Nat) -> String:
+  dump.go(t, KV.keys(String, t)) ++ "(" ++ Nat.show(n) ++ " keys counted)"
 
-def db_of(r: List<&2, R.Reply> & KV.Trie<String>) -> KV.Trie<String>:
+# and the count of keys the database keeps
+def dump(+db: R.Db) -> String:
+  match db:
+    case R.Db{+t, +n, x, now, rr}:
+      dump.of(t, n)
+
+def db_of(r: List<&2, R.Reply> & R.Db) -> R.Db:
   (rs, db) = r
   db
 
 # the database the entries of a file leave, from an empty one
-def replay(f: List<&2, List<&2, String>> & String) -> KV.Trie<String>:
+def replay(f: List<&2, List<&2, String>> & String) -> R.Db:
   (reqs, rest) = f
-  db_of(R.exec_all(A.parse_all(reqs), KV.empty(String)))
+  db_of(R.exec_all(A.parse_all(reqs), R.db.empty()))
 
 def same(+got: String, +want: String) -> String:
   Bool.pick(String, String.eq(got, want), "same", "differ: " ++ got ++ " vs " ++ want)
@@ -74,11 +80,11 @@ def cuts(+f: String, k: Nat, +n: Nat) -> String:
       +c = String.take(f, n)
       Bool.pick(String, cut_ok(c, A.load(c)), cuts(f, m, 1n+n), "cut at " ++ Nat.show(n) ++ " fails")
 
-def report.of(+cs: List<&2, R.Cmd>, q: List<&2, R.Cmd> & KV.Trie<String>) -> IO(Unit):
+def report.of(+cs: List<&2, R.Cmd>, q: List<&2, R.Cmd> & R.Db) -> IO(Unit):
   (es, +db) = q
   +f = A.encode(A.args_all(es))
   +want = dump(db)
-  +one = dump(db_of(R.exec_all(cs, KV.empty(String))))
+  +one = dump(db_of(R.exec_all(cs, R.db.empty())))
   do IO<Unit>:
     Unit <- IO.print("file: " ++ Nat.show(String.length(f)) ++ " bytes, " ++ Nat.show(List.length(&2, List<&2, String>, Pair.fst(List<&2, List<&2, String>>, String, A.load(f)))) ++ " entries")
     Unit <- IO.print("exec_log's database is exec_all's: " ++ same(want, one))
@@ -86,10 +92,10 @@ def report.of(+cs: List<&2, R.Cmd>, q: List<&2, R.Cmd> & KV.Trie<String>) -> IO(
     Unit <- IO.print("database: " ++ want)
     IO.print(cuts(f, 1n+String.length(f), 0n))
 
-def report(+cs: List<&2, R.Cmd>, r: List<&2, R.Reply> & (List<&2, R.Cmd> & KV.Trie<String>)) -> IO(Unit):
+def report(+cs: List<&2, R.Cmd>, r: List<&2, R.Reply> & (List<&2, R.Cmd> & R.Db)) -> IO(Unit):
   (rs, q) = r
   report.of(cs, q)
 
 def main() -> IO(Unit):
   +cs = batch_of(P.parse(buf()))
-  report(cs, A.exec_log(cs, KV.empty(String)))
+  report(cs, A.exec_log(cs, R.db.empty()))
