@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """Restart test for the append-only file: a random command stream (the
 differential test's) against BendKV, with one FLUSHALL halfway, then the
-whole keyspace saved; after the server restarts from its file, the
-keyspace must read back the same.
+whole keyspace saved, each key with its value and the time it expires at;
+after the server restarts from its file, the keyspace must read back the
+same.
 
     python3 tests/aof_test.py --port 6380 --write build/aof_dump.txt --rounds 1000
     (restart BendKV with the same file)
@@ -12,7 +13,7 @@ import argparse
 import random
 import sys
 
-from diff_test import Conn, rnd_cmd
+from diff_test import NOW_S, Conn, rnd_cmd
 
 
 def keyspace(c):
@@ -20,14 +21,17 @@ def keyspace(c):
     kind, items = c.reply()
     keys = sorted(data for kind, data in items)
     vals = []
+    times = []
     if keys:
         c.send([[b"MGET"] + keys])
         kind, vals = c.reply()
-    return [(k.hex(), v[1].hex()) for k, v in zip(keys, vals)]
+        c.send([[b"PEXPIRETIME", k] for k in keys])
+        times = [c.reply()[1] for k in keys]
+    return [(k.hex(), v[1].hex(), t.decode()) for k, v, t in zip(keys, vals, times)]
 
 
 def show(ks):
-    return "\n".join("%s %s" % kv for kv in ks) + "\n"
+    return "\n".join("%s %s %s" % kv for kv in ks) + "\n"
 
 
 def main():
@@ -55,11 +59,19 @@ def main():
                 c.reply()
             n += len(batch)
         # and many keys, so that the trie is deep: SETs and MSETs of
-        # random bytes, 100 to a batch
+        # random bytes, 100 to a batch; a key in 5 with a time to expire
+        # at, and then times changed, taken away, or in the past (which
+        # deletes the key)
         for i in range(0, a.keys, 100):
-            batch = [[b"SET", b"key:%d" % j, bytes(r.randrange(256) for _ in range(r.randint(0, 40)))]
+            batch = [[b"SET", b"key:%d" % j, bytes(r.randrange(256) for _ in range(r.randint(0, 40)))] +
+                     ([b"EX", b"%d" % r.randint(1000, 10**6)] if j % 5 == 0 else [])
                      for j in range(i, min(i + 100, a.keys))]
             batch.append([b"MSET", b"m:%d" % i, b"x" * r.randint(0, 9), b"m:%d:2" % i, b"%d" % i])
+            batch.append([b"PEXPIREAT", b"key:%d" % (i + 3), b"%d" % (NOW_S * 1000 + r.randint(10**6, 10**9))])
+            batch.append([b"EXPIRE", b"key:%d" % (i + 10), b"%d" % r.randint(10**6, 10**7), b"GT"])
+            batch.append([b"PERSIST", b"key:%d" % (i + 20)])
+            batch.append([b"EXPIREAT", b"key:%d" % (i + 7), b"%d" % r.randint(1, 10**6)])
+            batch.append([b"GETEX", b"m:%d" % i, b"PX", b"%d" % r.randint(10**6, 10**9)])
             c.send(batch)
             for _ in batch:
                 c.reply()

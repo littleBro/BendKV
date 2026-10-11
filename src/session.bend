@@ -463,11 +463,12 @@ def mode.conn(m: Mute, +c: Conn, +s: Srv) -> Conn:
     case Conn{id, a, name, mode, quit}:
       Conn{id, authed(c, s), name, m, quit}
 
-# RANDOMKEY's reply: a key of the database's trie, by r, or nil
+# RANDOMKEY's reply: a key there at now in the database's trie, by r, or
+# nil
 def randomkey.of(+db: R.Db, +r: U32) -> R.Reply:
   match db:
-    case R.Db{+t, n, x, now, rr}:
-      R.r_get(KV.pick(String, t, r))
+    case R.Db{+t, n, x, +now, rr}:
+      R.r_get(KV.pick(String, t, r, now))
 
 # a session command's reply, sent or not; the database is there for the
 # commands that read it
@@ -638,11 +639,12 @@ type Gen is Data:
 type Out is Data:
   Out{rs: List<&2, R.Reply>, es: List<&2, R.Cmd>, db: R.Db}
 
-# a database command run: its reply, sent or not, and its effects
-# (aof.bend), put before those of the commands before it
-def out.data(c: R.Cmd, rs: List<&2, R.Reply>, es: List<&2, R.Cmd>, m: Mute, r: R.Reply & R.Db) -> Out:
-  (+x, db) = r
-  Out{put(say(m, x), rs), List.reverse.go(&2, R.Cmd, A.effect(c, x), es), db}
+# a database command run with its effects (A.run): its reply, sent or
+# not, and its effects, put before those of the commands before it
+def out.data(rs: List<&2, R.Reply>, es: List<&2, R.Cmd>, m: Mute, r: R.Reply & (List<&2, R.Cmd> & R.Db)) -> Out:
+  (+x, q) = r
+  (e, d) = q
+  Out{put(say(m, x), rs), List.reverse.go(&2, R.Cmd, e, es), d}
 
 def out.k(+k: Role, ok: Bool, +c: R.Cmd, rs: List<&2, R.Reply>, es: List<&2, R.Cmd>, +conn: Conn, +srv: Srv, +db: R.Db) -> Out:
   match k ok:
@@ -651,7 +653,7 @@ def out.k(+k: Role, ok: Bool, +c: R.Cmd, rs: List<&2, R.Reply>, es: List<&2, R.C
     case KSess{o} False{}:
       Out{put(say(conn.mode(conn), e_noauth()), rs), es, db}
     case _ True{}:
-      out.data(c, rs, es, conn.mode(conn), R.exec(c, db))
+      out.data(rs, es, conn.mode(conn), A.run(c, db))
     case _ False{}:
       Out{put(say(conn.mode(conn), e_noauth()), rs), es, db}
 

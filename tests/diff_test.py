@@ -6,13 +6,20 @@ and command semantics are all exercised.
 
     python3 tests/diff_test.py --bendkv 6380 --redis 6390 --rounds 2000
 
-Known, documented divergence that the generator avoids: BendKV's
-integers have at most 14 digits (Redis allows int64).
+Known, documented divergences that the generator avoids: BendKV's
+integers have at most 14 digits (Redis allows int64), and so have its
+times: a time at or past 10^14 ms (the year 5138) gives a key no time at
+all, as it would never come, where Redis keeps any int64 time. Times are
+relative ones of 100 s and more, or absolute
+ones far in the past or the future, so no key expires while the test
+runs; TTL, PTTL, EXPIRETIME and PEXPIRETIME, which read the clock of each
+server, are compared within a second.
 """
 import argparse
 import random
 import socket
 import sys
+import time
 
 
 class Conn:
@@ -74,6 +81,113 @@ def rnd_value(r):
     return r.choice([b"a", b"bar", b"hello world", b"\xd0\xbc\xd0\xb8\xd1\x80", b"x" * r.randint(0, 300)])
 
 
+NOW_S = int(time.time())
+
+
+LLONG_MAX = 2**63 - 1
+EMAX = 10**14 - 1
+
+
+def string2ll(v):
+    # Redis's string2ll: an optional '-', then digits with no leading zero
+    t = v[1:] if v[:1] == b"-" else v
+    if not t.isdigit() or (t[:1] == b"0" and len(t) > 1) or (v[:1] == b"-" and t == b"0"):
+        return None
+    n = int(v)
+    return n if -2**63 <= n <= LLONG_MAX else None
+
+
+# the time Redis keys a value of SET or GETEX (set) or of EXPIRE (not set)
+# to, in ms from 1970, or None for an error
+def redis_when(v, ms, absolute, set):
+    n = string2ll(v)
+    if n is None:
+        return None
+    base = 0 if absolute else NOW_S * 1000
+    if set:
+        if n <= 0 or (not ms and n > LLONG_MAX // 1000):
+            return None
+        n = n if ms else n * 1000
+        return n + base if n + base <= LLONG_MAX else None
+    if not ms:
+        if n > LLONG_MAX // 1000 or n < -(2**63 // 1000):
+            return None
+        n *= 1000
+    return n + base if n <= LLONG_MAX - base else None
+
+
+# a time of an option or a command: relative (s or ms), or absolute (from
+# 1970, in s or ms), or a bad one: 0 or less, not a number, or past int64
+# once in ms. Not one Redis takes past 10^14 - 1 ms, where BendKV keeps its
+# times; and for SET (not past), not one in the past, which leaves an
+# expired key that Redis deletes when it comes to it (GETEX and EXPIRE
+# delete the key then)
+def rnd_time(r, ms, absolute, set=False, past=True):
+    while True:
+        v = rnd_time1(r, ms, absolute)
+        w = redis_when(v, ms, absolute, set)
+        if w is None or (w <= EMAX and (past or w > NOW_S * 1000 + 10**8)):
+            return v
+
+
+def rnd_time1(r, ms, absolute):
+    c = r.random()
+    if c < 0.12:
+        return r.choice([b"0", b"-1", b"-100", b"x", b"1.5", b"", b" 5", b"+5", b"007", b"-0",
+                         b"9223372036854775807", b"9223370399119966", b"-9223372036854776",
+                         b"10000000000000000", b"18446744073709561", b"9223372036854770000",
+                         b"-9223372036854770000", b"-9223372036854775808"])
+    if absolute:
+        if c < 0.3:
+            return str(r.randint(1, 10**6)).encode()
+        t = NOW_S + r.randint(10**5, 10**8)
+        return str(t * 1000 + r.randint(0, 999) if ms else t).encode()
+    t = r.randint(100, 10**6)
+    return str(t * 1000 + r.randint(0, 999) if ms else t).encode()
+
+
+# SET's options: a condition, GET, and a time or KEEPTTL; now and then in
+# another case, twice, clashing, or another word
+def rnd_set_opts(r):
+    os = []
+    if r.random() < 0.3:
+        os.append(r.choice([b"NX", b"XX", b"nx", b"xx"]))
+    if r.random() < 0.2:
+        os.append(r.choice([b"GET", b"get"]))
+    c = r.random()
+    if c < 0.5:
+        w = r.choice([b"EX", b"PX", b"EXAT", b"PXAT", b"ex", b"pxat"])
+        os += [w, rnd_time(r, w.upper() in (b"PX", b"PXAT"), w.upper() in (b"EXAT", b"PXAT"), True, False)]
+    elif c < 0.6:
+        os.append(r.choice([b"KEEPTTL", b"keepttl"]))
+    if r.random() < 0.08:
+        os.append(r.choice([b"NX", b"XX", b"KEEPTTL", b"EX", b"PX", b"FOO", b"PERSIST", b"GET"]))
+    if r.random() < 0.05:
+        r.shuffle(os)
+    return os
+
+
+def rnd_getex_opts(r):
+    c = r.random()
+    if c < 0.3:
+        return []
+    if c < 0.45:
+        return [r.choice([b"PERSIST", b"persist"])]
+    if c < 0.9:
+        w = r.choice([b"EX", b"PX", b"EXAT", b"PXAT", b"px"])
+        return [w, rnd_time(r, w.upper() in (b"PX", b"PXAT"), w.upper() in (b"EXAT", b"PXAT"), True)]
+    return r.choice([[b"EX"], [b"PERSIST", b"EX", b"100"], [b"EX", b"100", b"PX", b"100"],
+                     [b"KEEPTTL"], [b"NX"], [b"FOO"], [b"EX", b"100", b"EX", b"200"]])
+
+
+def rnd_expire(r):
+    name = r.choice([b"EXPIRE", b"PEXPIRE", b"EXPIREAT", b"PEXPIREAT"])
+    os = [r.choice([b"NX", b"XX", b"GT", b"LT", b"nx", b"gt"]) for _ in range(r.choice([0, 0, 1, 1, 2]))]
+    if r.random() < 0.03:
+        os.append(r.choice([b"FOO", b"KEEPTTL"]))
+    return [name, None, rnd_time(r, name.startswith(b"P"), name.endswith(b"AT"))] + os
+
+
 # patterns of Redis's glob: stars, '?', classes with ranges, '^' and
 # escapes, unclosed classes, escapes; and random ones of those bytes
 def rnd_pattern(r):
@@ -117,7 +231,18 @@ def rnd_cmd(r):
         (0.02, lambda: [r.choice([b"get", b"Get", b"sEt", b"incr"]), k()] + ([rnd_value(r)] if r.random() < 0.5 else [])),
         (0.02, lambda: [r.choice([b"GET", b"SET", b"INCR", b"STRLEN", b"GETSET"])] + [k() for _ in range(r.choice([0, 3]))]),
         (0.01, lambda: [b"FLUSHALL"]),
+        (0.05, lambda: [b"SET", k(), rnd_value(r)] + rnd_set_opts(r)),
+        (0.02, lambda: [b"SETEX", k(), rnd_time(r, False, False, True, False), rnd_value(r)]),
+        (0.02, lambda: [b"PSETEX", k(), rnd_time(r, True, False, True, False), rnd_value(r)]),
+        (0.03, lambda: [b"GETEX", k()] + rnd_getex_opts(r)),
+        (0.02, lambda: [b"GETDEL", k()]),
+        (0.05, lambda: [x if x is not None else k() for x in rnd_expire(r)]),
+        (0.04, lambda: [r.choice([b"TTL", b"PTTL", b"EXPIRETIME", b"PEXPIRETIME"]), k()]),
+        (0.02, lambda: [b"PERSIST", k()]),
+        (0.01, lambda: [r.choice([b"SETEX", b"PSETEX", b"GETEX", b"GETDEL", b"EXPIRE", b"TTL", b"PERSIST"])] +
+                       [k() for _ in range(r.choice([0, 3, 4]))]),
     ]
+    c *= sum(p for p, f in table)
     acc = 0.0
     for p, f in table:
         acc += p
@@ -137,6 +262,18 @@ def normalize(cmd, rep):
     if cmd[0].upper() == b"RANDOMKEY" and rep[0] == b"$":
         return (rep[0], rep[1] is not None)
     return rep
+
+
+# replies that read the clock: within a second (or 2 s, as TTL rounds)
+CLOCK = {b"TTL": 2, b"EXPIRETIME": 2, b"PTTL": 1000, b"PEXPIRETIME": 1000}
+
+
+def close(cmd, got, want):
+    tol = CLOCK.get(cmd[0].upper())
+    if tol is None or got[0] != b":" or want[0] != b":":
+        return False
+    g, w = int(got[1]), int(want[1])
+    return g >= 0 and w >= 0 and abs(g - w) <= tol
 
 
 def known_divergence(got, want):
@@ -176,7 +313,7 @@ def main():
             if diverged:
                 continue
             total += 1
-            if got != want:
+            if got != want and not close(cmd, got, want):
                 if known_divergence(got, want):
                     # the states now differ on one key: compare no more of
                     # this batch, and start the next from empty databases

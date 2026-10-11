@@ -32,14 +32,16 @@ def block_types():
     out += ["",
             "# a 16-way trie: Tip is the empty trie, and a Node holds the subtries",
             "# for the 16 values of the next digit. Where a path ends, the trie is",
-            "# the bucket of that path: a chain of Ent cells, each a key, its value",
-            "# and the rest of the bucket, which ends in Tip. A Node inside a bucket",
-            "# and an Ent above the end of a path are never built; they read as",
-            "# empty.",
+            "# the bucket of that path: a chain of Ent cells, each a key, its value,",
+            "# the time it expires at (ms since 1970; 0 when it does not) and the",
+            "# rest of the bucket, which ends in Tip. A Node inside a bucket and an",
+            "# Ent above the end of a path are never built; they read as empty. An",
+            "# Ent of four words fills its block, as one of three did (the",
+            "# allocator's blocks are powers of two).",
             "type Trie<-V: Data> is Data:",
             "  Tip{}",
             "  Node{" + fields(f"{c}: Trie<V>" for c in cs) + "}",
-            "  Ent{key: String, val: V, rest: Trie<V>}"]
+            "  Ent{key: String, val: V, exp: Nat, rest: Trie<V>}"]
     return out
 
 def block_hex():
@@ -78,24 +80,43 @@ def block_walks():
         out += [f"    case 1n+p {node(cs)} {H[i]}{{}}:",
                 f"      tget_k(V, p, {cs[i]}, {STEP}, k)"]
     out += ["    case 1n+p other _:", "      None{}", ""]
-    out += ["# tget_k answering only whether the bucket holds k (bhas): a write that",
-            "# counts the keys asks it first",
-            "def tget_kh(-V: Data, d: Nat, +t: Trie<V>, x: Hex, +h: U32, +k: String) -> Bool:",
+    out += ["# tget_k answering the code of k's entry (bcode): 0 when there is none,",
+            "# else 1 plus the time it expires at (a write that counts the keys asks",
+            "# it first)",
+            "def tget_kx(-V: Data, d: Nat, +t: Trie<V>, x: Hex, +h: U32, +k: String) -> Nat:",
             "  match d t x:",
             "    case 0n t0 _:",
-            "      bhas(V, k, t0)"]
+            "      bcode(V, k, t0)"]
     for i in range(N):
         out += [f"    case 1n+p {node(cs)} {H[i]}{{}}:",
-                f"      tget_kh(V, p, {cs[i]}, {STEP}, k)"]
-    out += ["    case 1n+p other _:", "      False{}", ""]
-    out += ["# tget_k for String values, answering a copy of the value (bget_c)",
-            "def tget_kc(d: Nat, +t: Trie<String>, x: Hex, +h: U32, +k: String) -> Maybe<&2, String>:",
+                f"      tget_kx(V, p, {cs[i]}, {STEP}, k)"]
+    out += ["    case 1n+p other _:", "      0n", ""]
+    out += ["# tget_k answering k's entry, its value and its time (bent)",
+            "def tget_ke(-V: Data, d: Nat, +t: Trie<V>, x: Hex, +h: U32, +k: String) -> Maybe<&2, Item<V>>:",
             "  match d t x:",
             "    case 0n t0 _:",
-            "      bget_c(k, t0)"]
+            "      bent(V, k, t0)"]
     for i in range(N):
         out += [f"    case 1n+p {node(cs)} {H[i]}{{}}:",
-                f"      tget_kc(p, {cs[i]}, {STEP}, k)"]
+                f"      tget_ke(V, p, {cs[i]}, {STEP}, k)"]
+    out += ["    case 1n+p other _:", "      None{}", ""]
+    out += ["# tget_k answering the value when the key is there at now (blive)",
+            "def tget_kl(-V: Data, d: Nat, +t: Trie<V>, x: Hex, +h: U32, +k: String, +now: Nat) -> Maybe<&2, V>:",
+            "  match d t x:",
+            "    case 0n t0 _:",
+            "      blive(V, k, t0, now)"]
+    for i in range(N):
+        out += [f"    case 1n+p {node(cs)} {H[i]}{{}}:",
+                f"      tget_kl(V, p, {cs[i]}, {STEP}, k, now)"]
+    out += ["    case 1n+p other _:", "      None{}", ""]
+    out += ["# tget_kl for String values, answering a copy of the value (bget_c)",
+            "def tget_kc(d: Nat, +t: Trie<String>, x: Hex, +h: U32, +k: String, +now: Nat) -> Maybe<&2, String>:",
+            "  match d t x:",
+            "    case 0n t0 _:",
+            "      bget_c(k, t0, now)"]
+    for i in range(N):
+        out += [f"    case 1n+p {node(cs)} {H[i]}{{}}:",
+                f"      tget_kc(p, {cs[i]}, {STEP}, k, now)"]
     out += ["    case 1n+p other _:", "      None{}", ""]
     out += ["# hints for a walk to come (Mem.prefetch): ttouch is acc, after starting",
             "# to load the subtrie where a walk of depth d ends (a bucket at depth",
@@ -138,18 +159,19 @@ def block_walks():
 def block_folds():
     acc = "acc"
     for c in reversed(cs):
-        acc = f"tkeys(V, {c}, {acc})"
+        acc = f"tkeys(V, {c}, now, {acc})"
     size = "0n"
     for c in reversed(cs):
         size = f"tsize(V, {c})" if size == "0n" else f"Nat.add(tsize(V, {c}), {size})"
-    return ["def tkeys(-V: Data, t: Trie<V>, acc: List<&2, String>) -> List<&2, String>:",
+    return ["# the keys of t there at now, before acc; and how many entries t holds",
+            "def tkeys(-V: Data, t: Trie<V>, +now: Nat, acc: List<&2, String>) -> List<&2, String>:",
             "  match t:",
             "    case Tip{}:",
             "      acc",
             f"    case {node(cs)}:",
             f"      {acc}",
-            "    case Ent{k, v, rest}:",
-            "      k <> tkeys(V, rest, acc)",
+            "    case Ent{k, v, +e, rest}:",
+            "      kput(live(now, e), k, tkeys(V, rest, now, acc))",
             "",
             "def tsize(-V: Data, t: Trie<V>) -> Nat:",
             "  match t:",
@@ -157,7 +179,7 @@ def block_folds():
             "      0n",
             f"    case {node(cs)}:",
             f"      {size}",
-            "    case Ent{k, v, rest}:",
+            "    case Ent{k, v, e, rest}:",
             "      1n+tsize(V, rest)"]
 
 # the scan of a node: its 16 subtries in order, each skipped whole when
@@ -168,21 +190,21 @@ def block_scan():
         base = "base" if i == 0 else f"Nat.add(base, Nat.mul({i}n, q))"
         skip = f"Nat.is_le(Nat.add(base, Nat.mul({i + 1}n, q)), from)"
         skip = f"Bool.or({skip}, Nat.is_le(to, {base}))"
-        s = f"tscan(V, p, {c}, {skip}, {base}, q, from, to, {s})"
-    return ["def tscan(-V: Data, +d: Nat, +t: Trie<V>, skip: Bool, +base: Nat, +span: Nat, +from: Nat, +to: Nat, s: Scan) -> Scan:",
+        s = f"tscan(V, p, {c}, {skip}, {base}, q, from, to, now, all, {s})"
+    return ["def tscan(-V: Data, +d: Nat, +t: Trie<V>, skip: Bool, +base: Nat, +span: Nat, +from: Nat, +to: Nat, +now: Nat, +all: Bool, s: Scan) -> Scan:",
             "  match d t skip s:",
             "    case _ _ True{} s:",
             "      s",
             "    case _ _ False{} Stop{at, acc}:",
             "      Stop{at, acc}",
             "    case 0n b False{} Scan{want, acc}:",
-            "      bscan(V, b, base, want, acc)",
+            "      bscan(V, b, base, want, acc, now, all)",
             "    case 1n+p Tip{} False{} s:",
             "      s",
             f"    case 1n+p {node(cs)} False{{}} s:",
             "      +q = Nat.div(span, 16n)",
             f"      {s}",
-            "    case 1n+p Ent{k, v, rest} False{} s:",
+            "    case 1n+p Ent{k, v, e, rest} False{} s:",
             "      s"]
 
 # Proofs (PROOF.bend)
@@ -218,6 +240,17 @@ def block_digits():
                        f"      e => Empty.absurd({{{K[i]} == {K[j]} : KV.Hex}}, false_true(e))")
     return out
 
+# the cases of a walk lemma past depth 0: a node goes on into the
+# child of the digit, an empty trie or a misplaced entry ends the walk
+def walk_cases(name, args):
+    out = []
+    for i in range(N):
+        out += [f"    case 1n+p {kv_node(cs)} {K[i]}:",
+                f"      {name}({args.replace('CHILD', cs[i])})"]
+    out += ["    case 1n+p KV.Tip{} _:", "      {==}",
+            "    case 1n+p KV.Ent{a, b, e, c} _:", "      {==}"]
+    return out
+
 def block_tget_k():
     out = ["# get walks with tget_k, which reads the bucket where the walk ends: the",
            "# bucket lookup after tget_h, by induction on the depth",
@@ -225,40 +258,44 @@ def block_tget_k():
            "  match d t x:",
            "    case 0n t0 _:",
            "      {==}"]
-    for i in range(N):
-        out += [f"    case 1n+p {kv_node(cs)} {K[i]}:",
-                f"      tget_k_eq(V, p, {cs[i]}, {nxt('h')}, k)"]
-    out += ["    case 1n+p KV.Tip{} _:", "      {==}",
-            "    case 1n+p KV.Ent{a, b, c} _:", "      {==}"]
-    return out
+    return out + walk_cases("tget_k_eq", f"V, p, CHILD, {nxt('h')}, k")
+
+def block_tget_kx():
+    out = ["# a write that counts the keys asks tget_kx for its key's code: bcode",
+           "# of the bucket where the walk ends, by induction on the depth",
+           "def tget_kx_eq(-V: Data, d: Nat, t: KV.Trie<V>, x: KV.Hex, +h: U32, +k: String) -> {KV.bcode(V, k, KV.tget_h(V, d, t, x, h)) == KV.tget_kx(V, d, t, x, h, k) : Nat}:",
+           "  match d t x:",
+           "    case 0n t0 _:",
+           "      {==}"]
+    return out + walk_cases("tget_kx_eq", f"V, p, CHILD, {nxt('h')}, k")
+
+def block_tget_ke():
+    out = ["# an update reads its key's entry with tget_ke: bent of the bucket where",
+           "# the walk ends, by induction on the depth",
+           "def tget_ke_eq(-V: Data, d: Nat, t: KV.Trie<V>, x: KV.Hex, +h: U32, +k: String) -> {KV.bent(V, k, KV.tget_h(V, d, t, x, h)) == KV.tget_ke(V, d, t, x, h, k) : Maybe<&2, KV.Item<V>>}:",
+           "  match d t x:",
+           "    case 0n t0 _:",
+           "      {==}"]
+    return out + walk_cases("tget_ke_eq", f"V, p, CHILD, {nxt('h')}, k")
+
+def block_tget_kl():
+    out = ["# a read of a key there at now walks with tget_kl: blive of the bucket",
+           "# where the walk ends, by induction on the depth",
+           "def tget_kl_eq(-V: Data, d: Nat, t: KV.Trie<V>, x: KV.Hex, +h: U32, +k: String, +now: Nat) -> {KV.blive(V, k, KV.tget_h(V, d, t, x, h), now) == KV.tget_kl(V, d, t, x, h, k, now) : Maybe<&2, V>}:",
+           "  match d t x:",
+           "    case 0n t0 _:",
+           "      {==}"]
+    return out + walk_cases("tget_kl_eq", f"V, p, CHILD, {nxt('h')}, k, now")
 
 def block_tget_kc():
     out = ["# GET reads with tget_kc, which answers a copy of the value: the same",
-           "# answer as tget_k (bget_c_eq), by induction on the depth",
-           "def tget_kc_eq(d: Nat, t: KV.Trie<String>, x: KV.Hex, +h: U32, +k: String) -> {KV.tget_k(String, d, t, x, h, k) == KV.tget_kc(d, t, x, h, k) : Maybe<&2, String>}:",
+           "# answer as blive of the bucket where the walk ends (bget_c_eq), by",
+           "# induction on the depth",
+           "def tget_kc_eq(d: Nat, t: KV.Trie<String>, x: KV.Hex, +h: U32, +k: String, +now: Nat) -> {KV.blive(String, k, KV.tget_h(String, d, t, x, h), now) == KV.tget_kc(d, t, x, h, k, now) : Maybe<&2, String>}:",
            "  match d t x:",
            "    case 0n t0 _:",
-           "      bget_c_eq(k, t0)"]
-    for i in range(N):
-        out += [f"    case 1n+p {kv_node(cs)} {K[i]}:",
-                f"      tget_kc_eq(p, {cs[i]}, {nxt('h')}, k)"]
-    out += ["    case 1n+p KV.Tip{} _:", "      {==}",
-            "    case 1n+p KV.Ent{a, b, c} _:", "      {==}"]
-    return out
-
-def block_tget_kh():
-    out = ["# a write that counts the keys asks tget_kh whether the trie holds a",
-           "# key: whether tget_k finds a value (bhas_eq), by induction on the depth",
-           "def tget_kh_eq(-V: Data, d: Nat, t: KV.Trie<V>, x: KV.Hex, +h: U32, +k: String) -> {Maybe.is_some(&2, V, KV.tget_k(V, d, t, x, h, k)) == KV.tget_kh(V, d, t, x, h, k) : Bool}:",
-           "  match d t x:",
-           "    case 0n t0 _:",
-           "      bhas_eq(V, k, t0)"]
-    for i in range(N):
-        out += [f"    case 1n+p {kv_node(cs)} {K[i]}:",
-                f"      tget_kh_eq(V, p, {cs[i]}, {nxt('h')}, k)"]
-    out += ["    case 1n+p KV.Tip{} _:", "      {==}",
-            "    case 1n+p KV.Ent{a, b, c} _:", "      {==}"]
-    return out
+           "      bget_c_eq(k, t0, now)"]
+    return out + walk_cases("tget_kc_eq", f"p, CHILD, {nxt('h')}, k, now")
 
 def block_same():
     m = f"KV.tget_h(V, p, KV.tmod_h(V, p, KV.Tip{{}}, {nxt('h')}, op), {nxt('h')})"
@@ -272,7 +309,7 @@ def block_same():
     for i in range(N):
         out += [f"    case 1n++p {kv_node(cs)} {K[i]}:",
                 f"      tget_tmod_same(V, p, {cs[i]}, {nxt('h')}, op)"]
-    for pat in ["KV.Tip{}", "KV.Ent{a, b, c}"]:
+    for pat in ["KV.Tip{}", "KV.Ent{a, b, e, c}"]:
         for i in range(N):
             out += [f"    case 1n++p {pat} {K[i]}:"] + tip_body
     return out
@@ -286,7 +323,7 @@ def block_walk_same():
     for i in range(N):
         out += [f"    case {kv_node(cs)} {K[i]}:", f"      e => ih({cs[i]})(e)"]
     out += ["    case KV.Tip{} _:", "      e => {==}",
-            "    case KV.Ent{a, b, c} _:", "      e => {==}"]
+            "    case KV.Ent{a, b, x0, c} _:", "      e => {==}"]
     return out
 
 def block_other():
@@ -299,7 +336,7 @@ def block_other():
     for i in range(N):
         out += [f"    case {kv_node(cs)} {K[i]}:", f"      e => ih({cs[i]})(e)"]
     m = f"KV.tget_h(V, p, KV.tmod_h(V, p, KV.Tip{{}}, {nxt('h1')}, op), {nxt('h2')})"
-    for pat in ["KV.Tip{}", "KV.Ent{a, b, c}"]:
+    for pat in ["KV.Tip{}", "KV.Ent{a, b, x0, c}"]:
         for i in range(N):
             out += [f"    case {pat} {K[i]}:",
                     f"      e => %tget_h_tip(V, p, {nxt('h2')}) : {{{m} == _ : KV.Trie<V>}}",
@@ -310,7 +347,7 @@ def block_other():
             "  match x:"]
     for i in range(N):
         out += [f"    case {K[i]}:", "      {==}"]
-    out += ["", f"def n1_ent(-V: Data, -p: Nat, -a: String, -b: V, -c: KV.Trie<V>, x: KV.Hex, -h: U32, -op: KV.Op<V>) -> {{KV.tmod_h(V, 1n+p, {tips}, x, h, op) == KV.tmod_h(V, 1n+p, KV.Ent{{a, b, c}}, x, h, op) : KV.Trie<V>}}:",
+    out += ["", f"def n1_ent(-V: Data, -p: Nat, -a: String, -b: V, -e: Nat, -c: KV.Trie<V>, x: KV.Hex, -h: U32, -op: KV.Op<V>) -> {{KV.tmod_h(V, 1n+p, {tips}, x, h, op) == KV.tmod_h(V, 1n+p, KV.Ent{{a, b, e, c}}, x, h, op) : KV.Trie<V>}}:",
             "  match x:"]
     for i in range(N):
         out += [f"    case {K[i]}:", "      {==}"]
@@ -335,7 +372,8 @@ def block_other():
 
 BLOCKS = {"src/map.bend": {"types": block_types, "hex": block_hex,
                        "walks": block_walks, "folds": block_folds, "scan": block_scan},
-          "proof/PROOF.bend": {"digits": block_digits, "tget_k": block_tget_k, "tget_kc": block_tget_kc, "tget_kh": block_tget_kh,
+          "proof/PROOF.bend": {"digits": block_digits, "tget_k": block_tget_k, "tget_kx": block_tget_kx,
+                         "tget_ke": block_tget_ke, "tget_kl": block_tget_kl, "tget_kc": block_tget_kc,
                          "same": block_same, "walk_same": block_walk_same,
                          "other": block_other}}
 

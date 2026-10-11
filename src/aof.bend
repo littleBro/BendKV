@@ -16,31 +16,40 @@ import ./batch.bend as B
 # Effects
 # -------
 # What a command did, as commands that do it again on the database it ran
-# on: none for one that only reads or fails, the command itself for the
-# other writes, and for an INCRBY that stored n the SET of n (as Redis logs
-# INCRBYFLOAT), so that no number is ever read back from text. The reply
-# tells which: an effect needs no second look at the database, which the
-# command alone owns.
+# on, at time 0 (a file loads at time 0, when no key has expired): none
+# for one that only reads or fails, the command itself for SET, DEL, MSET
+# and FLUSHALL, and for an update (R.Upd, and INCRBY, run here as one)
+# what its change left of its key: SET of the value it holds (with PXAT
+# and the time it expires at, when it does), PEXPIREAT for a time alone,
+# PERSIST for none, DEL for a key gone, SET with KEEPTTL for a value set
+# with the time kept (an INCRBY logs the SET of the sum, as Redis logs
+# INCRBYFLOAT), and APPEND again for an APPEND to a key that was there, so
+# that the file does not hold the whole value again. Every time is from
+# 1970, so the effects mean the same whenever they run, and a time is one
+# a key may keep, of 14 digits at most (KV.small): no number but such a
+# time is ever read back from text.
 
-def incr.effect(k: String, r: R.Reply) -> List<&2, R.Cmd>:
-  match r:
-    case R.RInt{n}:
-      [R.Set{k, R.int_show(n)}]
-    case _:
-      Nil{}
+# a key left with v and time e (0: none)
+def put.effect(+k: String, v: String, +e: Nat) -> List<&2, R.Cmd>:
+  match e:
+    case 0n:
+      [R.Set{k, v}]
+    case 1n+p:
+      [R.Upd{k, R.USet{v, 0n, R.TAt{R.TmN{True{}, 1n+p}}, "set"}}]
 
-def effect(c: R.Cmd, r: R.Reply) -> List<&2, R.Cmd>:
+# a key left with its value and time e
+def exp.effect(+k: String, +e: Nat) -> List<&2, R.Cmd>:
+  match e:
+    case 0n:
+      [R.Upd{k, R.UPersist{}}]
+    case 1n+p:
+      [R.Upd{k, R.UExpire{R.TmN{True{}, 1n+p}, R.ExpIf{False{}, False{}, False{}, False{}}, "pexpireat"}}]
+
+# the effects of a command but an update
+def effect(c: R.Cmd) -> List<&2, R.Cmd>:
   match c:
     case R.Set{k, v}:
       [R.Set{k, v}]
-    case R.SetNX{k, v}:
-      [R.SetNX{k, v}]
-    case R.GetSet{k, v}:
-      [R.GetSet{k, v}]
-    case R.IncrBy{k, by}:
-      incr.effect(k, r)
-    case R.Append{k, v}:
-      [R.Append{k, v}]
     case R.Del{Con{k, ks}}:
       [R.Del{k <> ks}]
     case R.MSet{Con{p, ps}}:
@@ -50,15 +59,68 @@ def effect(c: R.Cmd, r: R.Reply) -> List<&2, R.Cmd>:
     case _:
       Nil{}
 
+# the effects of an update, from the change it made to its key
+def ch.effect(+k: String, +ch: R.Change) -> List<&2, R.Cmd>:
+  match ch:
+    case R.CKeep{}:
+      Nil{}
+    case R.CDel{}:
+      [R.Del{[k]}]
+    case R.CExp{+e}:
+      exp.effect(k, e)
+    case R.CPut{+v, +e}:
+      put.effect(k, v, e)
+    case R.CKeepT{+v}:
+      [R.Upd{k, R.USet{v, 0n, R.TKeep{}, "set"}}]
+    case R.CApp{+a, v}:
+      [R.Upd{k, R.UAppend{a}}]
+
+def upd.effect(+k: String, +o: R.Out) -> List<&2, R.Cmd>:
+  match o:
+    case R.Out{r, +ch}:
+      ch.effect(k, ch)
+
+# A command run with its effects: its reply, what it did (effects) and
+# the database after it. An update reads its key's entry, makes its
+# change (R.upd, as R.db.upd does) and gives the change's effects; so
+# does INCRBY, as the update UIncr (which R.db.incr runs the same way);
+# any other command runs as R.exec runs it.
+def run.out(r: R.Reply & R.Db, es: List<&2, R.Cmd>) -> R.Reply & (List<&2, R.Cmd> & R.Db):
+  (x, db) = r
+  (x, (es, db))
+
+def run.upd(db: R.Db, +k: String, +op: R.UpdOp) -> R.Reply & (List<&2, R.Cmd> & R.Db):
+  match db:
+    case R.Db{t, +n, +x, +now, rr}:
+      +u = t
+      +h = KV.hash(k)
+      +m = KV.entry.at(String, u, k, h)
+      +o = R.upd(op, now, R.ent.live(now, m))
+      run.out(R.upd.put(u, k, h, n, x, now, rr, R.ent.code(m), o), upd.effect(k, o))
+
+def run.put(c: R.Cmd, r: R.Reply & R.Db) -> R.Reply & (List<&2, R.Cmd> & R.Db):
+  (x, db) = r
+  (x, (effect(c), db))
+
+def run(+c: R.Cmd, db: R.Db) -> R.Reply & (List<&2, R.Cmd> & R.Db):
+  match c:
+    case R.Upd{+k, +op}:
+      run.upd(db, k, op)
+    case R.IncrBy{+k, +by}:
+      run.upd(db, k, R.UIncr{by})
+    case _:
+      run.put(c, R.exec(c, db))
+
 # a batch run with its effects: the replies, what the batch did, in
 # order, and the database after it, as exec_all runs it
-def log.put(rs: List<&2, R.Reply>, es: List<&2, R.Cmd>, c: R.Cmd, r: R.Reply & R.Db) -> List<&2, R.Reply> & (List<&2, R.Cmd> & R.Db):
-  (+x, db) = r
-  (x <> rs, (List.reverse.go(&2, R.Cmd, effect(c, x), es), db))
+def log.put(rs: List<&2, R.Reply>, es: List<&2, R.Cmd>, r: R.Reply & (List<&2, R.Cmd> & R.Db)) -> List<&2, R.Reply> & (List<&2, R.Cmd> & R.Db):
+  (x, q) = r
+  (e, d) = q
+  (x <> rs, (List.reverse.go(&2, R.Cmd, e, es), d))
 
-def log.run(rs: List<&2, R.Reply>, +c: R.Cmd, q: List<&2, R.Cmd> & R.Db) -> List<&2, R.Reply> & (List<&2, R.Cmd> & R.Db):
+def log.run(rs: List<&2, R.Reply>, c: R.Cmd, q: List<&2, R.Cmd> & R.Db) -> List<&2, R.Reply> & (List<&2, R.Cmd> & R.Db):
   (es, db) = q
-  log.put(rs, es, c, R.exec(c, db))
+  log.put(rs, es, run(c, db))
 
 def log.step(c: R.Cmd, st: List<&2, R.Reply> & (List<&2, R.Cmd> & R.Db)) -> List<&2, R.Reply> & (List<&2, R.Cmd> & R.Db):
   (rs, q) = st
@@ -107,18 +169,46 @@ def pair_args(ps: List<&2, R.KVPair>) -> List<&2, String>:
     case Con{R.KP{k, v}, rest}:
       k <> v <> pair_args(rest)
 
+# the strings of an Upd an effect is: SET with PXAT or KEEPTTL,
+# PEXPIREAT, PERSIST, APPEND (a time is a TmN from 1970, written as
+# Nat.show writes it)
+def tm.arg(t: R.Tm) -> String:
+  match t:
+    case R.TmN{at, ms}:
+      Nat.show(ms)
+    case R.TmB{at, neg, hi, lo}:
+      ""
+
+def ttl.args(+k: String, v: String, ttl: R.SetTtl) -> List<&2, String>:
+  match ttl:
+    case R.TAt{t}:
+      ["SET", k, v, "PXAT", tm.arg(t)]
+    case R.TKeep{}:
+      ["SET", k, v, "KEEPTTL"]
+    case R.TNone{}:
+      ["SET", k, v]
+
+def upd.args(+k: String, op: R.UpdOp) -> List<&2, String>:
+  match op:
+    case R.USet{v, cond, ttl, name}:
+      ttl.args(k, v, ttl)
+    case R.UExpire{t, c, name}:
+      ["PEXPIREAT", k, tm.arg(t)]
+    case R.UPersist{}:
+      ["PERSIST", k]
+    case R.UAppend{v}:
+      ["APPEND", k, v]
+    case _:
+      Nil{}
+
 # a logged command as the strings of a request that parses back to it
 # (none for a command no effect is: they are never logged)
 def args(c: R.Cmd) -> List<&2, String>:
   match c:
     case R.Set{k, v}:
       ["SET", k, v]
-    case R.SetNX{k, v}:
-      ["SETNX", k, v]
-    case R.GetSet{k, v}:
-      ["GETSET", k, v]
-    case R.Append{k, v}:
-      ["APPEND", k, v]
+    case R.Upd{+k, op}:
+      upd.args(k, op)
     case R.Del{ks}:
       "DEL" <> ks
     case R.MSet{ps}:

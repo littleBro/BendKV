@@ -41,19 +41,29 @@ type Hex is Data:
 
 # a 16-way trie: Tip is the empty trie, and a Node holds the subtries
 # for the 16 values of the next digit. Where a path ends, the trie is
-# the bucket of that path: a chain of Ent cells, each a key, its value
-# and the rest of the bucket, which ends in Tip. A Node inside a bucket
-# and an Ent above the end of a path are never built; they read as
-# empty.
+# the bucket of that path: a chain of Ent cells, each a key, its value,
+# the time it expires at (ms since 1970; 0 when it does not) and the
+# rest of the bucket, which ends in Tip. A Node inside a bucket and an
+# Ent above the end of a path are never built; they read as empty. An
+# Ent of four words fills its block, as one of three did (the
+# allocator's blocks are powers of two).
 type Trie<-V: Data> is Data:
   Tip{}
   Node{c0: Trie<V>, c1: Trie<V>, c2: Trie<V>, c3: Trie<V>, c4: Trie<V>, c5: Trie<V>, c6: Trie<V>, c7: Trie<V>, c8: Trie<V>, c9: Trie<V>, c10: Trie<V>, c11: Trie<V>, c12: Trie<V>, c13: Trie<V>, c14: Trie<V>, c15: Trie<V>}
-  Ent{key: String, val: V, rest: Trie<V>}
+  Ent{key: String, val: V, exp: Nat, rest: Trie<V>}
 # END gen_trie: types
 
-# a change to one bucket
+# what a key holds: its value and the time it expires at (0: never)
+type Item<-V: Data> is Data:
+  Item{val: V, exp: Nat}
+
+# a change to one bucket: set a key's value and the time it expires at
+# (OSet), set its value and keep its time (OKeep), set its time and keep
+# its value (OExp), or delete it (ODel)
 type Op<-V: Data> is Data:
-  OSet{key: String, val: V}
+  OSet{key: String, val: V, exp: Nat}
+  OKeep{key: String, val: V}
+  OExp{key: String, exp: Nat}
   ODel{key: String}
 
 # Keys
@@ -150,23 +160,72 @@ def shr4(+h: U32) -> U32:
 # A bucket is a chain of Ent cells. Each step takes the comparison of k
 # with the entry's key as a parameter (bhead), computed ahead, so that
 # the step can match on it: a read stops at the first entry for k, and a
-# write builds only the bucket it returns.
+# write builds only the bucket it returns. An entry holds the time its key
+# expires at, in ms since 1970, or 0 when it does not expire (exp).
+
+# whether e has at most k decimal digits (e is below 10^k): k divisions
+# by 10 leave 0
+def digits.le(k: Nat, +e: Nat) -> Bool:
+  match k:
+    case 0n:
+      Nat.is_eq(e, 0n)
+    case 1n+j:
+      digits.le(j, Nat.div(e, 10n))
+
+# whether a time is below 10^14 ms (the year 5138): the times an entry
+# keeps, which the append-only file writes in 14 digits or fewer (a Nat
+# holds 2^48 - 1 at most). The test counts digits: the proofs never build
+# 10^14, which the checker would unfold one by one.
+def small(+e: Nat) -> Bool:
+  digits.le(14n, e)
+
+# the time a key keeps for e: e when it is small, else none (a key whose
+# time is past the year 5138 does not expire). The map stores a time as
+# it is given; redis.bend clamps every time a command gives a key.
+def clamp.go(ok: Bool, +e: Nat) -> Nat:
+  match ok:
+    case True{}:
+      e
+    case False{}:
+      0n
+
+def clamp(+e: Nat) -> Nat:
+  match e:
+    case 0n:
+      0n
+    case 1n+p:
+      clamp.go(small(1n+p), 1n+p)
 
 # whether a bucket's first entry is for k
 def bhead(-V: Data, +k: String, b: Trie<V>) -> Bool:
   match b:
-    case Ent{key, v, rest}:
+    case Ent{key, v, e, rest}:
       str_eq(k, key)
     case other:
       False{}
+
+# whether an entry that expires at e is there at now: a key expires once
+# now is past its time (Redis's keyIsExpired), and at now 0, as while a
+# file loads, every key is there
+def live(+now: Nat, +e: Nat) -> Bool:
+  Bool.or(Nat.is_eq(e, 0n), Nat.is_le(now, e))
+
+# a key before acc when it is there (ok): the folds of KEYS, SCAN and
+# RANDOMKEY skip the keys that expired
+def kput(ok: Bool, +k: String, acc: List<&2, String>) -> List<&2, String>:
+  match ok:
+    case True{}:
+      k <> acc
+    case False{}:
+      acc
 
 # the value of the first entry for k; same is bhead(V, k, b), computed
 # before b is passed on, so that b is not shared
 def bget.go(-V: Data, +k: String, b: Trie<V>, same: Bool) -> Maybe<&2, V>:
   match b same:
-    case Ent{key, v, rest} True{}:
+    case Ent{key, v, e, rest} True{}:
       Some{v}
-    case Ent{key, v, +rest} False{}:
+    case Ent{key, v, e, +rest} False{}:
       s = bhead(V, k, rest)
       bget.go(V, k, rest, s)
     case other _:
@@ -176,65 +235,145 @@ def bget(-V: Data, +k: String, +b: Trie<V>) -> Maybe<&2, V>:
   s = bhead(V, k, b)
   bget.go(V, k, b, s)
 
-# whether the bucket holds an entry for k: bget's walk, answering no value
-def bhas.go(-V: Data, +k: String, +b: Trie<V>, same: Bool) -> Bool:
+# the first entry for k: its value and the time it expires at (the laws
+# speak of it)
+def bent.go(-V: Data, +k: String, b: Trie<V>, same: Bool) -> Maybe<&2, Item<V>>:
   match b same:
-    case Ent{key, v, rest} True{}:
-      True{}
-    case Ent{key, v, +rest} False{}:
+    case Ent{key, v, e, rest} True{}:
+      Some{Item{v, e}}
+    case Ent{key, v, e, +rest} False{}:
       s = bhead(V, k, rest)
-      bhas.go(V, k, rest, s)
-    case other _:
-      False{}
-
-def bhas(-V: Data, +k: String, +b: Trie<V>) -> Bool:
-  s = bhead(V, k, b)
-  bhas.go(V, k, b, s)
-
-# bget for String values, answering a copy of the value made where it
-# lies: the value is only read, so the trie never shares it (bget answers
-# the value itself, which the trie and the answer then share, under a
-# seal). A copy of the whole string is the string (PROOF.bend: take_len).
-def bget_c.go(+k: String, b: Trie<String>, same: Bool) -> Maybe<&2, String>:
-  match b same:
-    case Ent{key, +v, rest} True{}:
-      Some{String.take(v, String.length(v))}
-    case Ent{key, v, +rest} False{}:
-      s = bhead(String, k, rest)
-      bget_c.go(k, rest, s)
+      bent.go(V, k, rest, s)
     case other _:
       None{}
 
-def bget_c(+k: String, +b: Trie<String>) -> Maybe<&2, String>:
-  s = bhead(String, k, b)
-  bget_c.go(k, b, s)
-
-# the bucket with the first entry for k set to v, or k appended. The
-# bucket's end goes back into the result (a Tip, or a Node that reads as
-# empty), so that bset.go owns the bucket and rebuilds it in place.
-def bset.go(-V: Data, +k: String, v: V, b: Trie<V>, same: Bool) -> Trie<V>:
-  match b same:
-    case Ent{key, val, rest} True{}:
-      Ent{key, v, rest}
-    case Ent{key, val, +rest} False{}:
-      s = bhead(V, k, rest)
-      Ent{key, val, bset.go(V, k, v, rest, s)}
-    case other _:
-      Ent{k, v, other}
-
-def bset(-V: Data, +k: String, v: V, +b: Trie<V>) -> Trie<V>:
+def bent(-V: Data, +k: String, +b: Trie<V>) -> Maybe<&2, Item<V>>:
   s = bhead(V, k, b)
-  bset.go(V, k, v, b, s)
+  bent.go(V, k, b, s)
+
+# the code of the first entry for k: 0 when there is none, else 1 plus the
+# time it expires at, so that one walk tells whether the key is there,
+# whether it expires and when (a write that counts the keys asks it)
+def bcode.go(-V: Data, +k: String, +b: Trie<V>, same: Bool) -> Nat:
+  match b same:
+    case Ent{key, v, +e, rest} True{}:
+      1n+e
+    case Ent{key, v, e, +rest} False{}:
+      s = bhead(V, k, rest)
+      bcode.go(V, k, rest, s)
+    case other _:
+      0n
+
+def bcode(-V: Data, +k: String, +b: Trie<V>) -> Nat:
+  s = bhead(V, k, b)
+  bcode.go(V, k, b, s)
+
+# the value of the first entry for k, when it is there at now
+def blive.ent(-V: Data, ok: Bool, v: V) -> Maybe<&2, V>:
+  match ok:
+    case True{}:
+      Some{v}
+    case False{}:
+      None{}
+
+def blive.go(-V: Data, +k: String, b: Trie<V>, same: Bool, +now: Nat) -> Maybe<&2, V>:
+  match b same:
+    case Ent{key, v, +e, rest} True{}:
+      blive.ent(V, live(now, e), v)
+    case Ent{key, v, e, +rest} False{}:
+      s = bhead(V, k, rest)
+      blive.go(V, k, rest, s, now)
+    case other _:
+      None{}
+
+def blive(-V: Data, +k: String, +b: Trie<V>, +now: Nat) -> Maybe<&2, V>:
+  s = bhead(V, k, b)
+  blive.go(V, k, b, s, now)
+
+# blive for String values, answering a copy of the value made where it
+# lies: the value is only read, so the trie never shares it (blive answers
+# the value itself, which the trie and the answer then share, under a
+# seal). A copy of the whole string is the string (PROOF.bend: take_len).
+def bget_c.ent(ok: Bool, +v: String) -> Maybe<&2, String>:
+  match ok:
+    case True{}:
+      Some{String.take(v, String.length(v))}
+    case False{}:
+      None{}
+
+def bget_c.go(+k: String, b: Trie<String>, same: Bool, +now: Nat) -> Maybe<&2, String>:
+  match b same:
+    case Ent{key, +v, +e, rest} True{}:
+      bget_c.ent(live(now, e), v)
+    case Ent{key, v, e, +rest} False{}:
+      s = bhead(String, k, rest)
+      bget_c.go(k, rest, s, now)
+    case other _:
+      None{}
+
+def bget_c(+k: String, +b: Trie<String>, +now: Nat) -> Maybe<&2, String>:
+  s = bhead(String, k, b)
+  bget_c.go(k, b, s, now)
+
+# the bucket with the first entry for k set to v, expiring at e, or k
+# appended. The bucket's end goes back into the
+# result (a Tip, or a Node that reads as empty), so that bset.go owns the
+# bucket and rebuilds it in place.
+def bset.go(-V: Data, +k: String, v: V, +e: Nat, b: Trie<V>, same: Bool) -> Trie<V>:
+  match b same:
+    case Ent{key, val, ex, rest} True{}:
+      Ent{key, v, e, rest}
+    case Ent{key, val, ex, +rest} False{}:
+      s = bhead(V, k, rest)
+      Ent{key, val, ex, bset.go(V, k, v, e, rest, s)}
+    case other _:
+      Ent{k, v, e, other}
+
+def bset(-V: Data, +k: String, v: V, +e: Nat, +b: Trie<V>) -> Trie<V>:
+  s = bhead(V, k, b)
+  bset.go(V, k, v, e, b, s)
+
+# the bucket with the first entry for k set to v, its time kept, or k
+# appended with none (KEEPTTL, and a write of a key that is there)
+def bkeep.go(-V: Data, +k: String, v: V, b: Trie<V>, same: Bool) -> Trie<V>:
+  match b same:
+    case Ent{key, val, ex, rest} True{}:
+      Ent{key, v, ex, rest}
+    case Ent{key, val, ex, +rest} False{}:
+      s = bhead(V, k, rest)
+      Ent{key, val, ex, bkeep.go(V, k, v, rest, s)}
+    case other _:
+      Ent{k, v, 0n, other}
+
+def bkeep(-V: Data, +k: String, v: V, +b: Trie<V>) -> Trie<V>:
+  s = bhead(V, k, b)
+  bkeep.go(V, k, v, b, s)
+
+# the bucket with the first entry for k expiring at e instead, its value
+# kept; without an entry for k, the bucket as it was
+def bexp.go(-V: Data, +k: String, +e: Nat, b: Trie<V>, same: Bool) -> Trie<V>:
+  match b same:
+    case Ent{key, val, ex, rest} True{}:
+      Ent{key, val, e, rest}
+    case Ent{key, val, ex, +rest} False{}:
+      s = bhead(V, k, rest)
+      Ent{key, val, ex, bexp.go(V, k, e, rest, s)}
+    case other _:
+      other
+
+def bexp(-V: Data, +k: String, +e: Nat, +b: Trie<V>) -> Trie<V>:
+  s = bhead(V, k, b)
+  bexp.go(V, k, e, b, s)
 
 # the bucket without any entry for k; its end goes back, as in bset.go
 def bdel.go(-V: Data, +k: String, b: Trie<V>, same: Bool) -> Trie<V>:
   match b same:
-    case Ent{key, val, +rest} True{}:
+    case Ent{key, val, ex, +rest} True{}:
       s = bhead(V, k, rest)
       bdel.go(V, k, rest, s)
-    case Ent{key, val, +rest} False{}:
+    case Ent{key, val, ex, +rest} False{}:
       s = bhead(V, k, rest)
-      Ent{key, val, bdel.go(V, k, rest, s)}
+      Ent{key, val, ex, bdel.go(V, k, rest, s)}
     case other _:
       other
 
@@ -246,15 +385,19 @@ def bdel(-V: Data, +k: String, +b: Trie<V>) -> Trie<V>:
 # load the key and the value of its first entry
 def btouch(-V: Data, b: Trie<V>, acc: U32) -> U32:
   match b:
-    case Ent{key, v, rest}:
+    case Ent{key, v, e, rest}:
       Mem.prefetch(String, key, Mem.prefetch(V, v, acc))
     case other:
       acc
 
 def bapply(-V: Data, op: Op<V>, b: Trie<V>) -> Trie<V>:
   match op:
-    case OSet{k, v}:
-      bset(V, k, v, b)
+    case OSet{k, v, e}:
+      bset(V, k, v, e, b)
+    case OKeep{k, v}:
+      bkeep(V, k, v, b)
+    case OExp{k, e}:
+      bexp(V, k, e, b)
     case ODel{k}:
       bdel(V, k, b)
 
@@ -345,84 +488,165 @@ def tget_k(-V: Data, d: Nat, t: Trie<V>, x: Hex, +h: U32, +k: String) -> Maybe<&
     case 1n+p other _:
       None{}
 
-# tget_k answering only whether the bucket holds k (bhas): a write that
-# counts the keys asks it first
-def tget_kh(-V: Data, d: Nat, +t: Trie<V>, x: Hex, +h: U32, +k: String) -> Bool:
+# tget_k answering the code of k's entry (bcode): 0 when there is none,
+# else 1 plus the time it expires at (a write that counts the keys asks
+# it first)
+def tget_kx(-V: Data, d: Nat, +t: Trie<V>, x: Hex, +h: U32, +k: String) -> Nat:
   match d t x:
     case 0n t0 _:
-      bhas(V, k, t0)
+      bcode(V, k, t0)
     case 1n+p Node{c0, c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13, c14, c15} H0{}:
-      tget_kh(V, p, c0, hex(shr4(h)), shr4(h), k)
+      tget_kx(V, p, c0, hex(shr4(h)), shr4(h), k)
     case 1n+p Node{c0, c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13, c14, c15} H1{}:
-      tget_kh(V, p, c1, hex(shr4(h)), shr4(h), k)
+      tget_kx(V, p, c1, hex(shr4(h)), shr4(h), k)
     case 1n+p Node{c0, c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13, c14, c15} H2{}:
-      tget_kh(V, p, c2, hex(shr4(h)), shr4(h), k)
+      tget_kx(V, p, c2, hex(shr4(h)), shr4(h), k)
     case 1n+p Node{c0, c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13, c14, c15} H3{}:
-      tget_kh(V, p, c3, hex(shr4(h)), shr4(h), k)
+      tget_kx(V, p, c3, hex(shr4(h)), shr4(h), k)
     case 1n+p Node{c0, c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13, c14, c15} H4{}:
-      tget_kh(V, p, c4, hex(shr4(h)), shr4(h), k)
+      tget_kx(V, p, c4, hex(shr4(h)), shr4(h), k)
     case 1n+p Node{c0, c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13, c14, c15} H5{}:
-      tget_kh(V, p, c5, hex(shr4(h)), shr4(h), k)
+      tget_kx(V, p, c5, hex(shr4(h)), shr4(h), k)
     case 1n+p Node{c0, c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13, c14, c15} H6{}:
-      tget_kh(V, p, c6, hex(shr4(h)), shr4(h), k)
+      tget_kx(V, p, c6, hex(shr4(h)), shr4(h), k)
     case 1n+p Node{c0, c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13, c14, c15} H7{}:
-      tget_kh(V, p, c7, hex(shr4(h)), shr4(h), k)
+      tget_kx(V, p, c7, hex(shr4(h)), shr4(h), k)
     case 1n+p Node{c0, c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13, c14, c15} H8{}:
-      tget_kh(V, p, c8, hex(shr4(h)), shr4(h), k)
+      tget_kx(V, p, c8, hex(shr4(h)), shr4(h), k)
     case 1n+p Node{c0, c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13, c14, c15} H9{}:
-      tget_kh(V, p, c9, hex(shr4(h)), shr4(h), k)
+      tget_kx(V, p, c9, hex(shr4(h)), shr4(h), k)
     case 1n+p Node{c0, c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13, c14, c15} H10{}:
-      tget_kh(V, p, c10, hex(shr4(h)), shr4(h), k)
+      tget_kx(V, p, c10, hex(shr4(h)), shr4(h), k)
     case 1n+p Node{c0, c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13, c14, c15} H11{}:
-      tget_kh(V, p, c11, hex(shr4(h)), shr4(h), k)
+      tget_kx(V, p, c11, hex(shr4(h)), shr4(h), k)
     case 1n+p Node{c0, c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13, c14, c15} H12{}:
-      tget_kh(V, p, c12, hex(shr4(h)), shr4(h), k)
+      tget_kx(V, p, c12, hex(shr4(h)), shr4(h), k)
     case 1n+p Node{c0, c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13, c14, c15} H13{}:
-      tget_kh(V, p, c13, hex(shr4(h)), shr4(h), k)
+      tget_kx(V, p, c13, hex(shr4(h)), shr4(h), k)
     case 1n+p Node{c0, c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13, c14, c15} H14{}:
-      tget_kh(V, p, c14, hex(shr4(h)), shr4(h), k)
+      tget_kx(V, p, c14, hex(shr4(h)), shr4(h), k)
     case 1n+p Node{c0, c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13, c14, c15} H15{}:
-      tget_kh(V, p, c15, hex(shr4(h)), shr4(h), k)
+      tget_kx(V, p, c15, hex(shr4(h)), shr4(h), k)
     case 1n+p other _:
-      False{}
+      0n
 
-# tget_k for String values, answering a copy of the value (bget_c)
-def tget_kc(d: Nat, +t: Trie<String>, x: Hex, +h: U32, +k: String) -> Maybe<&2, String>:
+# tget_k answering k's entry, its value and its time (bent)
+def tget_ke(-V: Data, d: Nat, +t: Trie<V>, x: Hex, +h: U32, +k: String) -> Maybe<&2, Item<V>>:
   match d t x:
     case 0n t0 _:
-      bget_c(k, t0)
+      bent(V, k, t0)
     case 1n+p Node{c0, c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13, c14, c15} H0{}:
-      tget_kc(p, c0, hex(shr4(h)), shr4(h), k)
+      tget_ke(V, p, c0, hex(shr4(h)), shr4(h), k)
     case 1n+p Node{c0, c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13, c14, c15} H1{}:
-      tget_kc(p, c1, hex(shr4(h)), shr4(h), k)
+      tget_ke(V, p, c1, hex(shr4(h)), shr4(h), k)
     case 1n+p Node{c0, c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13, c14, c15} H2{}:
-      tget_kc(p, c2, hex(shr4(h)), shr4(h), k)
+      tget_ke(V, p, c2, hex(shr4(h)), shr4(h), k)
     case 1n+p Node{c0, c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13, c14, c15} H3{}:
-      tget_kc(p, c3, hex(shr4(h)), shr4(h), k)
+      tget_ke(V, p, c3, hex(shr4(h)), shr4(h), k)
     case 1n+p Node{c0, c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13, c14, c15} H4{}:
-      tget_kc(p, c4, hex(shr4(h)), shr4(h), k)
+      tget_ke(V, p, c4, hex(shr4(h)), shr4(h), k)
     case 1n+p Node{c0, c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13, c14, c15} H5{}:
-      tget_kc(p, c5, hex(shr4(h)), shr4(h), k)
+      tget_ke(V, p, c5, hex(shr4(h)), shr4(h), k)
     case 1n+p Node{c0, c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13, c14, c15} H6{}:
-      tget_kc(p, c6, hex(shr4(h)), shr4(h), k)
+      tget_ke(V, p, c6, hex(shr4(h)), shr4(h), k)
     case 1n+p Node{c0, c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13, c14, c15} H7{}:
-      tget_kc(p, c7, hex(shr4(h)), shr4(h), k)
+      tget_ke(V, p, c7, hex(shr4(h)), shr4(h), k)
     case 1n+p Node{c0, c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13, c14, c15} H8{}:
-      tget_kc(p, c8, hex(shr4(h)), shr4(h), k)
+      tget_ke(V, p, c8, hex(shr4(h)), shr4(h), k)
     case 1n+p Node{c0, c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13, c14, c15} H9{}:
-      tget_kc(p, c9, hex(shr4(h)), shr4(h), k)
+      tget_ke(V, p, c9, hex(shr4(h)), shr4(h), k)
     case 1n+p Node{c0, c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13, c14, c15} H10{}:
-      tget_kc(p, c10, hex(shr4(h)), shr4(h), k)
+      tget_ke(V, p, c10, hex(shr4(h)), shr4(h), k)
     case 1n+p Node{c0, c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13, c14, c15} H11{}:
-      tget_kc(p, c11, hex(shr4(h)), shr4(h), k)
+      tget_ke(V, p, c11, hex(shr4(h)), shr4(h), k)
     case 1n+p Node{c0, c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13, c14, c15} H12{}:
-      tget_kc(p, c12, hex(shr4(h)), shr4(h), k)
+      tget_ke(V, p, c12, hex(shr4(h)), shr4(h), k)
     case 1n+p Node{c0, c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13, c14, c15} H13{}:
-      tget_kc(p, c13, hex(shr4(h)), shr4(h), k)
+      tget_ke(V, p, c13, hex(shr4(h)), shr4(h), k)
     case 1n+p Node{c0, c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13, c14, c15} H14{}:
-      tget_kc(p, c14, hex(shr4(h)), shr4(h), k)
+      tget_ke(V, p, c14, hex(shr4(h)), shr4(h), k)
     case 1n+p Node{c0, c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13, c14, c15} H15{}:
-      tget_kc(p, c15, hex(shr4(h)), shr4(h), k)
+      tget_ke(V, p, c15, hex(shr4(h)), shr4(h), k)
+    case 1n+p other _:
+      None{}
+
+# tget_k answering the value when the key is there at now (blive)
+def tget_kl(-V: Data, d: Nat, +t: Trie<V>, x: Hex, +h: U32, +k: String, +now: Nat) -> Maybe<&2, V>:
+  match d t x:
+    case 0n t0 _:
+      blive(V, k, t0, now)
+    case 1n+p Node{c0, c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13, c14, c15} H0{}:
+      tget_kl(V, p, c0, hex(shr4(h)), shr4(h), k, now)
+    case 1n+p Node{c0, c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13, c14, c15} H1{}:
+      tget_kl(V, p, c1, hex(shr4(h)), shr4(h), k, now)
+    case 1n+p Node{c0, c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13, c14, c15} H2{}:
+      tget_kl(V, p, c2, hex(shr4(h)), shr4(h), k, now)
+    case 1n+p Node{c0, c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13, c14, c15} H3{}:
+      tget_kl(V, p, c3, hex(shr4(h)), shr4(h), k, now)
+    case 1n+p Node{c0, c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13, c14, c15} H4{}:
+      tget_kl(V, p, c4, hex(shr4(h)), shr4(h), k, now)
+    case 1n+p Node{c0, c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13, c14, c15} H5{}:
+      tget_kl(V, p, c5, hex(shr4(h)), shr4(h), k, now)
+    case 1n+p Node{c0, c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13, c14, c15} H6{}:
+      tget_kl(V, p, c6, hex(shr4(h)), shr4(h), k, now)
+    case 1n+p Node{c0, c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13, c14, c15} H7{}:
+      tget_kl(V, p, c7, hex(shr4(h)), shr4(h), k, now)
+    case 1n+p Node{c0, c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13, c14, c15} H8{}:
+      tget_kl(V, p, c8, hex(shr4(h)), shr4(h), k, now)
+    case 1n+p Node{c0, c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13, c14, c15} H9{}:
+      tget_kl(V, p, c9, hex(shr4(h)), shr4(h), k, now)
+    case 1n+p Node{c0, c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13, c14, c15} H10{}:
+      tget_kl(V, p, c10, hex(shr4(h)), shr4(h), k, now)
+    case 1n+p Node{c0, c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13, c14, c15} H11{}:
+      tget_kl(V, p, c11, hex(shr4(h)), shr4(h), k, now)
+    case 1n+p Node{c0, c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13, c14, c15} H12{}:
+      tget_kl(V, p, c12, hex(shr4(h)), shr4(h), k, now)
+    case 1n+p Node{c0, c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13, c14, c15} H13{}:
+      tget_kl(V, p, c13, hex(shr4(h)), shr4(h), k, now)
+    case 1n+p Node{c0, c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13, c14, c15} H14{}:
+      tget_kl(V, p, c14, hex(shr4(h)), shr4(h), k, now)
+    case 1n+p Node{c0, c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13, c14, c15} H15{}:
+      tget_kl(V, p, c15, hex(shr4(h)), shr4(h), k, now)
+    case 1n+p other _:
+      None{}
+
+# tget_kl for String values, answering a copy of the value (bget_c)
+def tget_kc(d: Nat, +t: Trie<String>, x: Hex, +h: U32, +k: String, +now: Nat) -> Maybe<&2, String>:
+  match d t x:
+    case 0n t0 _:
+      bget_c(k, t0, now)
+    case 1n+p Node{c0, c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13, c14, c15} H0{}:
+      tget_kc(p, c0, hex(shr4(h)), shr4(h), k, now)
+    case 1n+p Node{c0, c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13, c14, c15} H1{}:
+      tget_kc(p, c1, hex(shr4(h)), shr4(h), k, now)
+    case 1n+p Node{c0, c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13, c14, c15} H2{}:
+      tget_kc(p, c2, hex(shr4(h)), shr4(h), k, now)
+    case 1n+p Node{c0, c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13, c14, c15} H3{}:
+      tget_kc(p, c3, hex(shr4(h)), shr4(h), k, now)
+    case 1n+p Node{c0, c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13, c14, c15} H4{}:
+      tget_kc(p, c4, hex(shr4(h)), shr4(h), k, now)
+    case 1n+p Node{c0, c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13, c14, c15} H5{}:
+      tget_kc(p, c5, hex(shr4(h)), shr4(h), k, now)
+    case 1n+p Node{c0, c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13, c14, c15} H6{}:
+      tget_kc(p, c6, hex(shr4(h)), shr4(h), k, now)
+    case 1n+p Node{c0, c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13, c14, c15} H7{}:
+      tget_kc(p, c7, hex(shr4(h)), shr4(h), k, now)
+    case 1n+p Node{c0, c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13, c14, c15} H8{}:
+      tget_kc(p, c8, hex(shr4(h)), shr4(h), k, now)
+    case 1n+p Node{c0, c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13, c14, c15} H9{}:
+      tget_kc(p, c9, hex(shr4(h)), shr4(h), k, now)
+    case 1n+p Node{c0, c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13, c14, c15} H10{}:
+      tget_kc(p, c10, hex(shr4(h)), shr4(h), k, now)
+    case 1n+p Node{c0, c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13, c14, c15} H11{}:
+      tget_kc(p, c11, hex(shr4(h)), shr4(h), k, now)
+    case 1n+p Node{c0, c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13, c14, c15} H12{}:
+      tget_kc(p, c12, hex(shr4(h)), shr4(h), k, now)
+    case 1n+p Node{c0, c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13, c14, c15} H13{}:
+      tget_kc(p, c13, hex(shr4(h)), shr4(h), k, now)
+    case 1n+p Node{c0, c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13, c14, c15} H14{}:
+      tget_kc(p, c14, hex(shr4(h)), shr4(h), k, now)
+    case 1n+p Node{c0, c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13, c14, c15} H15{}:
+      tget_kc(p, c15, hex(shr4(h)), shr4(h), k, now)
     case 1n+p other _:
       None{}
 
@@ -586,14 +810,15 @@ def tmod_h(-V: Data, d: Nat, t: Trie<V>, x: Hex, +h: U32, op: Op<V>) -> Trie<V>:
 # -----
 
 # BEGIN gen_trie: folds
-def tkeys(-V: Data, t: Trie<V>, acc: List<&2, String>) -> List<&2, String>:
+# the keys of t there at now, before acc; and how many entries t holds
+def tkeys(-V: Data, t: Trie<V>, +now: Nat, acc: List<&2, String>) -> List<&2, String>:
   match t:
     case Tip{}:
       acc
     case Node{c0, c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13, c14, c15}:
-      tkeys(V, c0, tkeys(V, c1, tkeys(V, c2, tkeys(V, c3, tkeys(V, c4, tkeys(V, c5, tkeys(V, c6, tkeys(V, c7, tkeys(V, c8, tkeys(V, c9, tkeys(V, c10, tkeys(V, c11, tkeys(V, c12, tkeys(V, c13, tkeys(V, c14, tkeys(V, c15, acc))))))))))))))))
-    case Ent{k, v, rest}:
-      k <> tkeys(V, rest, acc)
+      tkeys(V, c0, now, tkeys(V, c1, now, tkeys(V, c2, now, tkeys(V, c3, now, tkeys(V, c4, now, tkeys(V, c5, now, tkeys(V, c6, now, tkeys(V, c7, now, tkeys(V, c8, now, tkeys(V, c9, now, tkeys(V, c10, now, tkeys(V, c11, now, tkeys(V, c12, now, tkeys(V, c13, now, tkeys(V, c14, now, tkeys(V, c15, now, acc))))))))))))))))
+    case Ent{k, v, +e, rest}:
+      kput(live(now, e), k, tkeys(V, rest, now, acc))
 
 def tsize(-V: Data, t: Trie<V>) -> Nat:
   match t:
@@ -601,7 +826,7 @@ def tsize(-V: Data, t: Trie<V>) -> Nat:
       0n
     case Node{c0, c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13, c14, c15}:
       Nat.add(tsize(V, c0), Nat.add(tsize(V, c1), Nat.add(tsize(V, c2), Nat.add(tsize(V, c3), Nat.add(tsize(V, c4), Nat.add(tsize(V, c5), Nat.add(tsize(V, c6), Nat.add(tsize(V, c7), Nat.add(tsize(V, c8), Nat.add(tsize(V, c9), Nat.add(tsize(V, c10), Nat.add(tsize(V, c11), Nat.add(tsize(V, c12), Nat.add(tsize(V, c13), Nat.add(tsize(V, c14), tsize(V, c15))))))))))))))))
-    case Ent{k, v, rest}:
+    case Ent{k, v, e, rest}:
       1n+tsize(V, rest)
 # END gen_trie: folds
 
@@ -628,29 +853,33 @@ def bscan.end(done: Bool, +base: Nat, want: Nat, acc: List<&2, String>) -> Scan:
     case False{}:
       Scan{want, acc}
 
-# the keys of the bucket b of index base before acc, counted off want
-def bscan(-V: Data, +b: Trie<V>, +base: Nat, +want: Nat, acc: List<&2, String>) -> Scan:
+# the keys of the bucket b of index base that are there at now, before
+# acc, counted off want: every entry when all (SCAN's COUNT bounds the
+# entries it reads, as Redis's bounds the work), else the keys there only
+# (RANDOMKEY's window)
+def bscan(-V: Data, +b: Trie<V>, +base: Nat, +want: Nat, acc: List<&2, String>, +now: Nat, +all: Bool) -> Scan:
   match b:
-    case Ent{+k, v, +rest}:
-      bscan(V, rest, base, Nat.sub(want, 1n), k <> acc)
+    case Ent{+k, v, +e, +rest}:
+      +ok = live(now, e)
+      bscan(V, rest, base, Nat.sub(want, Bool.pick(Nat, Bool.or(all, ok), 1n, 0n)), kput(ok, k, acc), now, all)
     case _:
       bscan.end(Nat.is_eq(want, 0n), base, want, acc)
 
 # BEGIN gen_trie: scan
-def tscan(-V: Data, +d: Nat, +t: Trie<V>, skip: Bool, +base: Nat, +span: Nat, +from: Nat, +to: Nat, s: Scan) -> Scan:
+def tscan(-V: Data, +d: Nat, +t: Trie<V>, skip: Bool, +base: Nat, +span: Nat, +from: Nat, +to: Nat, +now: Nat, +all: Bool, s: Scan) -> Scan:
   match d t skip s:
     case _ _ True{} s:
       s
     case _ _ False{} Stop{at, acc}:
       Stop{at, acc}
     case 0n b False{} Scan{want, acc}:
-      bscan(V, b, base, want, acc)
+      bscan(V, b, base, want, acc, now, all)
     case 1n+p Tip{} False{} s:
       s
     case 1n+p Node{c0, c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13, c14, c15} False{} s:
       +q = Nat.div(span, 16n)
-      tscan(V, p, c15, Bool.or(Nat.is_le(Nat.add(base, Nat.mul(16n, q)), from), Nat.is_le(to, Nat.add(base, Nat.mul(15n, q)))), Nat.add(base, Nat.mul(15n, q)), q, from, to, tscan(V, p, c14, Bool.or(Nat.is_le(Nat.add(base, Nat.mul(15n, q)), from), Nat.is_le(to, Nat.add(base, Nat.mul(14n, q)))), Nat.add(base, Nat.mul(14n, q)), q, from, to, tscan(V, p, c13, Bool.or(Nat.is_le(Nat.add(base, Nat.mul(14n, q)), from), Nat.is_le(to, Nat.add(base, Nat.mul(13n, q)))), Nat.add(base, Nat.mul(13n, q)), q, from, to, tscan(V, p, c12, Bool.or(Nat.is_le(Nat.add(base, Nat.mul(13n, q)), from), Nat.is_le(to, Nat.add(base, Nat.mul(12n, q)))), Nat.add(base, Nat.mul(12n, q)), q, from, to, tscan(V, p, c11, Bool.or(Nat.is_le(Nat.add(base, Nat.mul(12n, q)), from), Nat.is_le(to, Nat.add(base, Nat.mul(11n, q)))), Nat.add(base, Nat.mul(11n, q)), q, from, to, tscan(V, p, c10, Bool.or(Nat.is_le(Nat.add(base, Nat.mul(11n, q)), from), Nat.is_le(to, Nat.add(base, Nat.mul(10n, q)))), Nat.add(base, Nat.mul(10n, q)), q, from, to, tscan(V, p, c9, Bool.or(Nat.is_le(Nat.add(base, Nat.mul(10n, q)), from), Nat.is_le(to, Nat.add(base, Nat.mul(9n, q)))), Nat.add(base, Nat.mul(9n, q)), q, from, to, tscan(V, p, c8, Bool.or(Nat.is_le(Nat.add(base, Nat.mul(9n, q)), from), Nat.is_le(to, Nat.add(base, Nat.mul(8n, q)))), Nat.add(base, Nat.mul(8n, q)), q, from, to, tscan(V, p, c7, Bool.or(Nat.is_le(Nat.add(base, Nat.mul(8n, q)), from), Nat.is_le(to, Nat.add(base, Nat.mul(7n, q)))), Nat.add(base, Nat.mul(7n, q)), q, from, to, tscan(V, p, c6, Bool.or(Nat.is_le(Nat.add(base, Nat.mul(7n, q)), from), Nat.is_le(to, Nat.add(base, Nat.mul(6n, q)))), Nat.add(base, Nat.mul(6n, q)), q, from, to, tscan(V, p, c5, Bool.or(Nat.is_le(Nat.add(base, Nat.mul(6n, q)), from), Nat.is_le(to, Nat.add(base, Nat.mul(5n, q)))), Nat.add(base, Nat.mul(5n, q)), q, from, to, tscan(V, p, c4, Bool.or(Nat.is_le(Nat.add(base, Nat.mul(5n, q)), from), Nat.is_le(to, Nat.add(base, Nat.mul(4n, q)))), Nat.add(base, Nat.mul(4n, q)), q, from, to, tscan(V, p, c3, Bool.or(Nat.is_le(Nat.add(base, Nat.mul(4n, q)), from), Nat.is_le(to, Nat.add(base, Nat.mul(3n, q)))), Nat.add(base, Nat.mul(3n, q)), q, from, to, tscan(V, p, c2, Bool.or(Nat.is_le(Nat.add(base, Nat.mul(3n, q)), from), Nat.is_le(to, Nat.add(base, Nat.mul(2n, q)))), Nat.add(base, Nat.mul(2n, q)), q, from, to, tscan(V, p, c1, Bool.or(Nat.is_le(Nat.add(base, Nat.mul(2n, q)), from), Nat.is_le(to, Nat.add(base, Nat.mul(1n, q)))), Nat.add(base, Nat.mul(1n, q)), q, from, to, tscan(V, p, c0, Bool.or(Nat.is_le(Nat.add(base, Nat.mul(1n, q)), from), Nat.is_le(to, base)), base, q, from, to, s))))))))))))))))
-    case 1n+p Ent{k, v, rest} False{} s:
+      tscan(V, p, c15, Bool.or(Nat.is_le(Nat.add(base, Nat.mul(16n, q)), from), Nat.is_le(to, Nat.add(base, Nat.mul(15n, q)))), Nat.add(base, Nat.mul(15n, q)), q, from, to, now, all, tscan(V, p, c14, Bool.or(Nat.is_le(Nat.add(base, Nat.mul(15n, q)), from), Nat.is_le(to, Nat.add(base, Nat.mul(14n, q)))), Nat.add(base, Nat.mul(14n, q)), q, from, to, now, all, tscan(V, p, c13, Bool.or(Nat.is_le(Nat.add(base, Nat.mul(14n, q)), from), Nat.is_le(to, Nat.add(base, Nat.mul(13n, q)))), Nat.add(base, Nat.mul(13n, q)), q, from, to, now, all, tscan(V, p, c12, Bool.or(Nat.is_le(Nat.add(base, Nat.mul(13n, q)), from), Nat.is_le(to, Nat.add(base, Nat.mul(12n, q)))), Nat.add(base, Nat.mul(12n, q)), q, from, to, now, all, tscan(V, p, c11, Bool.or(Nat.is_le(Nat.add(base, Nat.mul(12n, q)), from), Nat.is_le(to, Nat.add(base, Nat.mul(11n, q)))), Nat.add(base, Nat.mul(11n, q)), q, from, to, now, all, tscan(V, p, c10, Bool.or(Nat.is_le(Nat.add(base, Nat.mul(11n, q)), from), Nat.is_le(to, Nat.add(base, Nat.mul(10n, q)))), Nat.add(base, Nat.mul(10n, q)), q, from, to, now, all, tscan(V, p, c9, Bool.or(Nat.is_le(Nat.add(base, Nat.mul(10n, q)), from), Nat.is_le(to, Nat.add(base, Nat.mul(9n, q)))), Nat.add(base, Nat.mul(9n, q)), q, from, to, now, all, tscan(V, p, c8, Bool.or(Nat.is_le(Nat.add(base, Nat.mul(9n, q)), from), Nat.is_le(to, Nat.add(base, Nat.mul(8n, q)))), Nat.add(base, Nat.mul(8n, q)), q, from, to, now, all, tscan(V, p, c7, Bool.or(Nat.is_le(Nat.add(base, Nat.mul(8n, q)), from), Nat.is_le(to, Nat.add(base, Nat.mul(7n, q)))), Nat.add(base, Nat.mul(7n, q)), q, from, to, now, all, tscan(V, p, c6, Bool.or(Nat.is_le(Nat.add(base, Nat.mul(7n, q)), from), Nat.is_le(to, Nat.add(base, Nat.mul(6n, q)))), Nat.add(base, Nat.mul(6n, q)), q, from, to, now, all, tscan(V, p, c5, Bool.or(Nat.is_le(Nat.add(base, Nat.mul(6n, q)), from), Nat.is_le(to, Nat.add(base, Nat.mul(5n, q)))), Nat.add(base, Nat.mul(5n, q)), q, from, to, now, all, tscan(V, p, c4, Bool.or(Nat.is_le(Nat.add(base, Nat.mul(5n, q)), from), Nat.is_le(to, Nat.add(base, Nat.mul(4n, q)))), Nat.add(base, Nat.mul(4n, q)), q, from, to, now, all, tscan(V, p, c3, Bool.or(Nat.is_le(Nat.add(base, Nat.mul(4n, q)), from), Nat.is_le(to, Nat.add(base, Nat.mul(3n, q)))), Nat.add(base, Nat.mul(3n, q)), q, from, to, now, all, tscan(V, p, c2, Bool.or(Nat.is_le(Nat.add(base, Nat.mul(3n, q)), from), Nat.is_le(to, Nat.add(base, Nat.mul(2n, q)))), Nat.add(base, Nat.mul(2n, q)), q, from, to, now, all, tscan(V, p, c1, Bool.or(Nat.is_le(Nat.add(base, Nat.mul(2n, q)), from), Nat.is_le(to, Nat.add(base, Nat.mul(1n, q)))), Nat.add(base, Nat.mul(1n, q)), q, from, to, now, all, tscan(V, p, c0, Bool.or(Nat.is_le(Nat.add(base, Nat.mul(1n, q)), from), Nat.is_le(to, base)), base, q, from, to, now, all, s))))))))))))))))
+    case 1n+p Ent{k, v, e, rest} False{} s:
       s
 # END gen_trie: scan
 
@@ -690,15 +919,20 @@ def scan.acc(s: Scan) -> List<&2, String>:
 
 # the keys a scan from bucket b found, with those from the first bucket
 # up to b when it ran past the last one before it found enough
-def pick.wrap(-V: Data, +t: Trie<V>, +b: Nat, +r: U32, s: Scan) -> Maybe<&2, String>:
+def pick.wrap(-V: Data, +t: Trie<V>, +b: Nat, +r: U32, +now: Nat, s: Scan) -> Maybe<&2, String>:
   match s:
     case Stop{at, acc}:
       pick.of(acc, r)
     case Scan{want, acc}:
-      pick.of(scan.acc(tscan(V, 5n, t, False{}, 0n, 1048576n, 0n, b, Scan{want, acc})), r)
+      pick.of(scan.acc(tscan(V, 5n, t, False{}, 0n, 1048576n, 0n, b, now, False{}, Scan{want, acc})), r)
 
 # API
 # ---
+# A key's entry is its value and the time it expires at (0: never); the
+# laws of the map speak of entries (entry). A key is there at now when its
+# entry is and has not expired (live): read, live.at and get_copy read
+# only such keys, get any. Writes set the time (set.at: none; setx.at: e),
+# keep it (keep.at) or change it alone (expire.at).
 
 def empty(-V: Data) -> Trie<V>:
   Tip{}
@@ -715,23 +949,66 @@ def touch.node(-V: Data, t: Trie<V>, +h: U32, d: Nat, acc: U32) -> U32:
 def touch.entry(-V: Data, t: Trie<V>, +h: U32, acc: U32) -> U32:
   tetouch(V, 5n, t, hex(h), h, acc)
 
+def entry(-V: Data, t: Trie<V>, +k: String) -> Maybe<&2, Item<V>>:
+  +h = hash(k)
+  bent(V, k, tget_h(V, 5n, t, hex(h), h))
+
+# k's entry, h being k's hash
+def entry.at(-V: Data, +t: Trie<V>, +k: String, +h: U32) -> Maybe<&2, Item<V>>:
+  tget_ke(V, 5n, t, hex(h), h, k)
+
 def get.at(-V: Data, t: Trie<V>, +k: String, +h: U32) -> Maybe<&2, V>:
   tget_k(V, 5n, t, hex(h), h, k)
 
 def get(-V: Data, t: Trie<V>, +k: String) -> Maybe<&2, V>:
   get.at(V, t, k, hash(k))
 
-# get for String values, answering a copy of the value (bget_c): GET
+# whether t holds k, there at now or not
+def has(-V: Data, t: Trie<V>, k: String) -> Bool:
+  Maybe.is_some(&2, V, get(V, t, k))
+
+# the code of k's entry, h being k's hash: 0 when t does not hold k, else
+# 1 plus the time it expires at (a write that counts the keys asks it
+# first)
+def code.at(-V: Data, +t: Trie<V>, +k: String, +h: U32) -> Nat:
+  tget_kx(V, 5n, t, hex(h), h, k)
+
+# the value of k when it is there at now
+def live.at(-V: Data, +t: Trie<V>, +k: String, +h: U32, +now: Nat) -> Maybe<&2, V>:
+  tget_kl(V, 5n, t, hex(h), h, k, now)
+
+def read(-V: Data, +t: Trie<V>, +k: String, +now: Nat) -> Maybe<&2, V>:
+  live.at(V, t, k, hash(k), now)
+
+# read for String values, answering a copy of the value (bget_c): GET
 # reads with it, so the value a read finds stays unshared in the trie
-def get_copy(+t: Trie<String>, +k: String) -> Maybe<&2, String>:
+def get_copy(+t: Trie<String>, +k: String, +now: Nat) -> Maybe<&2, String>:
   +h = hash(k)
-  tget_kc(5n, t, hex(h), h, k)
+  tget_kc(5n, t, hex(h), h, k, now)
 
 def set.at(-V: Data, t: Trie<V>, +k: String, v: V, +h: U32) -> Trie<V>:
-  tmod_h(V, 5n, t, hex(h), h, OSet{k, v})
+  tmod_h(V, 5n, t, hex(h), h, OSet{k, v, 0n})
 
 def set(-V: Data, t: Trie<V>, +k: String, v: V) -> Trie<V>:
   set.at(V, t, k, v, hash(k))
+
+def setx.at(-V: Data, t: Trie<V>, +k: String, v: V, +e: Nat, +h: U32) -> Trie<V>:
+  tmod_h(V, 5n, t, hex(h), h, OSet{k, v, e})
+
+def setx(-V: Data, t: Trie<V>, +k: String, v: V, +e: Nat) -> Trie<V>:
+  setx.at(V, t, k, v, e, hash(k))
+
+def keep.at(-V: Data, t: Trie<V>, +k: String, v: V, +h: U32) -> Trie<V>:
+  tmod_h(V, 5n, t, hex(h), h, OKeep{k, v})
+
+def keep(-V: Data, t: Trie<V>, +k: String, v: V) -> Trie<V>:
+  keep.at(V, t, k, v, hash(k))
+
+def expire.at(-V: Data, t: Trie<V>, +k: String, +e: Nat, +h: U32) -> Trie<V>:
+  tmod_h(V, 5n, t, hex(h), h, OExp{k, e})
+
+def expire(-V: Data, t: Trie<V>, +k: String, +e: Nat) -> Trie<V>:
+  expire.at(V, t, k, e, hash(k))
 
 def del.at(-V: Data, t: Trie<V>, +k: String, +h: U32) -> Trie<V>:
   tmod_h(V, 5n, t, hex(h), h, ODel{k})
@@ -739,26 +1016,20 @@ def del.at(-V: Data, t: Trie<V>, +k: String, +h: U32) -> Trie<V>:
 def del(-V: Data, t: Trie<V>, +k: String) -> Trie<V>:
   del.at(V, t, k, hash(k))
 
-def has(-V: Data, t: Trie<V>, k: String) -> Bool:
-  Maybe.is_some(&2, V, get(V, t, k))
+# the keys there at now
+def keys(-V: Data, t: Trie<V>, +now: Nat) -> List<&2, String>:
+  tkeys(V, t, now, Nil{})
 
-# whether t holds k, h being k's hash: get's walk, answering no value (a
-# write that counts the keys asks it first)
-def has.at(-V: Data, +t: Trie<V>, +k: String, +h: U32) -> Bool:
-  tget_kh(V, 5n, t, hex(h), h, k)
-
-def keys(-V: Data, t: Trie<V>) -> List<&2, String>:
-  tkeys(V, t, Nil{})
-
+# how many entries t holds, there at now or not
 def size(-V: Data, t: Trie<V>) -> Nat:
   tsize(V, t)
 
-# the keys of the buckets from index from on, until want keys are found
-# (Scans); the keys newest first
-def scan(-V: Data, +t: Trie<V>, +from: Nat, want: Nat) -> Scan:
-  tscan(V, 5n, t, False{}, 0n, 1048576n, from, 1048576n, Scan{want, Nil{}})
+# the keys there at now of the buckets from index from on, until want
+# entries are read (Scans); the keys newest first
+def scan(-V: Data, +t: Trie<V>, +from: Nat, want: Nat, +now: Nat) -> Scan:
+  tscan(V, 5n, t, False{}, 0n, 1048576n, from, 1048576n, now, True{}, Scan{want, Nil{}})
 
-# a key of t, by r (Random picks), None when t is empty
-def pick(-V: Data, +t: Trie<V>, +r: U32) -> Maybe<&2, String>:
+# a key of t there at now, by r (Random picks), None when there is none
+def pick(-V: Data, +t: Trie<V>, +r: U32, +now: Nat) -> Maybe<&2, String>:
   +b = U32.to_nat(U32.and(r, 1048575))
-  pick.wrap(V, t, b, mix(r), tscan(V, 5n, t, False{}, 0n, 1048576n, b, 1048576n, Scan{16n, Nil{}}))
+  pick.wrap(V, t, b, mix(r), now, tscan(V, 5n, t, False{}, 0n, 1048576n, b, 1048576n, now, False{}, Scan{16n, Nil{}}))
