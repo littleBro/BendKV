@@ -913,32 +913,231 @@ def parse(args: List<&2, String>) -> Cmd:
     case Con{name, rest}:
       parse_named(name, rest)
 
-# Glob patterns (KEYS)
-# --------------------
-# '*' matches any run, '?' any one byte; other bytes match themselves
+# ASCII lower case, as C's tolower
+def byte.lower(+x: U32) -> U32:
+  U32.add(x, U32.mul(Bool.to_u32(Bool.and(U32.is_ge(x, 65), U32.is_le(x, 90))), 32))
 
-def glob(+p: String, +s: String) -> Bool:
+# Patterns
+# --------
+# KEYS, CONFIG GET and COMMAND LIST match as Redis's stringmatchlen does
+# (the last two with case aside): '*' any run of bytes, '?' any byte,
+# '[...]' a class (with '^', ranges and '\'), '\' the byte after it. A '*'
+# whose rest matches nowhere in the rest of the string ends the search
+# (Redis's skipLongerMatches): a longer run for an earlier '*' could only
+# start the rest later, so a pattern costs polynomial time, not
+# exponential. A '*' does not match an empty string, as in Redis, where
+# the empty string never enters the loop.
+
+type Sm is Data:
+  SmYes{}
+  SmNo{}
+  SmStop{}
+
+def sm.eq(nc: Bool, +a: U32, +c: U32) -> Bool:
+  match nc:
+    case True{}:
+      U32.is_eq(byte.lower(a), byte.lower(c))
+    case False{}:
+      U32.is_eq(a, c)
+
+# bytes compare in a range as C's signed chars do: flipping the top bit
+# puts -128..127 in the order of 0..255
+def sm.sgn(x: U32) -> U32:
+  U32.xor(x, 128)
+
+def sm.in(+lo: U32, +hi: U32, +c: U32) -> Bool:
+  Bool.and(U32.is_le(sm.sgn(lo), sm.sgn(c)), U32.is_le(sm.sgn(c), sm.sgn(hi)))
+
+def sm.cased(+nc: Bool, +lo: U32, +hi: U32, +c: U32) -> Bool:
+  match nc:
+    case True{}:
+      sm.in(byte.lower(lo), byte.lower(hi), byte.lower(c))
+    case False{}:
+      sm.in(lo, hi, c)
+
+# a-b: the ends swapped when a > b, then lowered when case is aside
+def sm.range(+nc: Bool, +a: U32, +z: U32, +c: U32) -> Bool:
+  Bool.pick(Bool, U32.is_gt(sm.sgn(a), sm.sgn(z)), sm.cased(nc, z, a, c), sm.cased(nc, a, z, c))
+
+# The elements of a class after its '[' and '^': its end, a byte after a
+# '\', its ']', a range a-z, or one byte; each with the class after it.
+# They are told apart by comparing bytes, not by patterns of literal
+# bytes nested in a String: those make the kernel's decision trees
+# explode (a Char is a 32-bit word there).
+type ClsTok is Data:
+  TEnd{}
+  TEsc{x: U32, rest: String}
+  TClose{rest: String}
+  TRange{a: U32, z: U32, rest: String}
+  TOne{a: U32, rest: String}
+
+# an element that is not an escape or the end: a range when a '-' and
+# another byte follow
+def cls.three(+a: U32, +t: String) -> ClsTok:
+  match t:
+    case SCon{Chr{+d}, SCon{Chr{+z}, +r}}:
+      Bool.pick(ClsTok, U32.is_eq(d, 45), TRange{a, z, r}, TOne{a, SCon{Chr{d}, SCon{Chr{z}, r}}})
+    case _:
+      TOne{a, t}
+
+# after a '\': the byte it escapes, or itself when it ends the pattern
+def cls.esc(t: String) -> ClsTok:
+  match t:
+    case SCon{Chr{+x}, r}:
+      TEsc{x, r}
+    case SNil{}:
+      TOne{92, SNil{}}
+
+def cls.kind(+q: String) -> ClsTok:
+  match q:
+    case SNil{}:
+      TEnd{}
+    case SCon{Chr{+a}, +t}:
+      Bool.pick(ClsTok, U32.is_eq(a, 92), cls.esc(t), Bool.pick(ClsTok, U32.is_eq(a, 93), TClose{t}, cls.three(a, t)))
+
+# whether byte c is in a class, and the pattern after its ']' (none left
+# when no ']' ends it); f bounds the steps (each takes a byte at least)
+def sm.cls(f: Nat, tok: ClsTok, +nc: Bool, +c: U32, m: Bool) -> Bool & String:
+  match f:
+    case 0n:
+      (m, SNil{})
+    case 1n+g:
+      match tok:
+        case TEnd{}:
+          (m, SNil{})
+        case TEsc{x, rest}:
+          sm.cls(g, cls.kind(rest), nc, c, Bool.or(m, U32.is_eq(x, c)))
+        case TClose{rest}:
+          (m, rest)
+        case TRange{a, z, rest}:
+          sm.cls(g, cls.kind(rest), nc, c, Bool.or(m, sm.range(nc, a, z, c)))
+        case TOne{a, rest}:
+          sm.cls(g, cls.kind(rest), nc, c, Bool.or(m, sm.eq(nc, a, c)))
+
+def sm.cls.of(+q: String, +nc: Bool, +c: U32) -> Bool & String:
+  sm.cls(1n+String.length(q), cls.kind(q), nc, c, False{})
+
+# what the matcher does next: a step of the pattern on a string that is
+# not empty; the bottom of Redis's loop (the string may be used up); the
+# step after a byte or a class, which matched or not; a run of stars
+# done (the pattern is what follows it); the rest after a '*' tried at s
+# and then at each later byte; and what that try gave
+type SmMode is Data:
+  SmStep{}
+  SmNext{}
+  SmLit{ok: Bool}
+  SmCls{ok: Bool, rest: String}
+  SmStars{}
+  SmStar{}
+  SmTry{r: Sm}
+
+def sm.cls.mode(neg: Bool, r: Bool & String) -> SmMode:
+  (m, rest) = r
+  SmCls{Bool.xor(neg, m), rest}
+
+def sm.class(+q: String, +nc: Bool, +c: U32) -> SmMode:
+  match q:
+    case SCon{Chr{+h}, +t}:
+      Bool.pick(SmMode, U32.is_eq(h, 94), sm.cls.mode(True{}, sm.cls.of(t, nc, c)), sm.cls.mode(False{}, sm.cls.of(SCon{Chr{h}, t}, nc, c)))
+    case SNil{}:
+      sm.cls.mode(False{}, sm.cls.of(SNil{}, nc, c))
+
+def sm.unstar(p: String) -> String:
+  match p:
+    case SCon{'*', t}:
+      sm.unstar(t)
+    case _:
+      p
+
+# the end of the pattern once the string is used up: stars only
+def sm.ends(p: String) -> Sm:
   match p:
     case SNil{}:
-      String.is_empty(s)
-    case SCon{'*', pt}:
-      match s:
-        case SNil{}:
-          glob(pt, SNil{})
-        case SCon{c, st}:
-          Bool.or(glob(pt, SCon{c, st}), glob(p, st))
-    case SCon{'?', pt}:
-      match s:
-        case SNil{}:
-          False{}
-        case SCon{c, st}:
-          glob(pt, st)
-    case SCon{c, pt}:
-      match s:
-        case SNil{}:
-          False{}
-        case SCon{d, st}:
-          Bool.and(Char.is_eq(c, d), glob(pt, st))
+      SmYes{}
+    case SCon{'*', t}:
+      sm.ends(t)
+    case _:
+      SmNo{}
+
+def sm.yes(r: Sm) -> Bool:
+  match r:
+    case SmYes{}:
+      True{}
+    case _:
+      False{}
+
+# one function, so that a decision can recurse: f bounds the depth (each
+# call goes one level down)
+def sm.go(f: Nat, mode: SmMode, +p: String, +s: String, +nc: Bool) -> Sm:
+  match f:
+    case 0n:
+      SmNo{}
+    case 1n++g:
+      match mode:
+        case SmNext{}:
+          match s:
+            case SNil{}:
+              sm.ends(p)
+            case SCon{c, t}:
+              sm.go(g, SmStep{}, p, SCon{c, t}, nc)
+        case SmLit{ok}:
+          match ok s:
+            case True{} SCon{c, t}:
+              sm.go(g, SmNext{}, p, t, nc)
+            case _ _:
+              SmNo{}
+        case SmCls{ok, rest}:
+          match ok s:
+            case True{} SCon{c, t}:
+              sm.go(g, SmNext{}, rest, t, nc)
+            case _ _:
+              SmNo{}
+        case SmStars{}:
+          match p:
+            case SNil{}:
+              SmYes{}
+            case SCon{a, q}:
+              sm.go(g, SmStar{}, SCon{a, q}, s, nc)
+        case SmStar{}:
+          match s:
+            case SNil{}:
+              SmStop{}
+            case SCon{+c, +t}:
+              sm.go(g, SmTry{sm.go(g, SmStep{}, p, SCon{c, t}, nc)}, p, SCon{c, t}, nc)
+        case SmTry{r}:
+          match r s:
+            case SmYes{} _:
+              SmYes{}
+            case SmStop{} _:
+              SmStop{}
+            case SmNo{} SNil{}:
+              SmStop{}
+            case SmNo{} SCon{c, t}:
+              sm.go(g, SmStar{}, p, t, nc)
+        case SmStep{}:
+          match p s:
+            case SNil{} _:
+              SmNo{}
+            case _ SNil{}:
+              SmNo{}
+            case SCon{'*', pt} SCon{c, t}:
+              sm.go(g, SmStars{}, sm.unstar(pt), SCon{c, t}, nc)
+            case SCon{'?', pt} SCon{c, t}:
+              sm.go(g, SmNext{}, pt, t, nc)
+            case SCon{'[', pt} SCon{Chr{+x}, t}:
+              sm.go(g, sm.class(pt, nc, x), pt, SCon{Chr{x}, t}, nc)
+            case SCon{'\\', SCon{Chr{+y}, pt}} SCon{Chr{+x}, t}:
+              sm.go(g, SmLit{sm.eq(nc, y, x)}, pt, SCon{Chr{x}, t}, nc)
+            case SCon{Chr{+y}, pt} SCon{Chr{+x}, t}:
+              sm.go(g, SmLit{sm.eq(nc, y, x)}, pt, SCon{Chr{x}, t}, nc)
+
+# whether pattern p matches string s, case aside when nc
+def stringmatch(+p: String, +s: String, nc: Bool) -> Bool:
+  match s:
+    case SNil{}:
+      String.is_empty(p)
+    case SCon{c, t}:
+      sm.yes(sm.go(Nat.mul(4n, Nat.add(4n, Nat.add(String.length(p), String.length(s)))), SmStep{}, p, SCon{c, t}, nc))
 
 def glob_keep(+k: String, ks: List<&2, Reply>, hit: Bool) -> List<&2, Reply>:
   match hit:
@@ -947,12 +1146,24 @@ def glob_keep(+k: String, ks: List<&2, Reply>, hit: Bool) -> List<&2, Reply>:
     case False{}:
       ks
 
-def glob_filter(+p: String, ks: List<&2, String>) -> List<&2, Reply>:
+# whether KEYS lists a key: all of them for "*", the empty key too, as
+# Redis takes them without matching
+def glob_hit(all: Bool, +p: String, +k: String) -> Bool:
+  match all:
+    case True{}:
+      True{}
+    case False{}:
+      stringmatch(p, k, False{})
+
+def glob_go(+all: Bool, +p: String, ks: List<&2, String>) -> List<&2, Reply>:
   match ks:
     case Nil{}:
       Nil{}
     case Con{+k, rest}:
-      glob_keep(k, glob_filter(p, rest), glob(p, k))
+      glob_keep(k, glob_go(all, p, rest), glob_hit(all, p, k))
+
+def glob_filter(+p: String, ks: List<&2, String>) -> List<&2, Reply>:
+  glob_go(String.eq(p, "*"), p, ks)
 
 # Execution
 # ---------

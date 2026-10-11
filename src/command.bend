@@ -10,7 +10,6 @@
 
 import Base
 import ./redis.bend as R
-import ./config.bend as C
 
 # Types
 # -----
@@ -543,7 +542,7 @@ def filt.ok(+f: Filt, +d: Desc) -> Bool:
     case FCat{+c} Desc{name, arity, cats, specs, way, nokeys, info, docs}:
       has(c, cats)
     case FPat{+p} Desc{+name, arity, cats, specs, way, nokeys, info, docs}:
-      C.stringmatch(p, name, True{})
+      R.stringmatch(p, name, True{})
 
 def names.keep.if(ok: Bool, +d: Desc, rest: List<&2, R.Reply>) -> List<&2, R.Reply>:
   match ok:
