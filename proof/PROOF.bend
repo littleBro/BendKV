@@ -2253,6 +2253,8 @@ def reads_go(c: R.Cmd, +db: KV.Trie<String>) -> {Laws.is_read(c) == True{} : Boo
       e => {==}
     case R.Keys{p}:
       e => {==}
+    case R.Scan{p}:
+      e => {==}
     case R.Peek{k, o}:
       e => {==}
     case R.Own{o}:
@@ -2463,6 +2465,8 @@ def frame_go(c: R.Cmd, +db: KV.Trie<String>, +j: String) -> {Laws.writes(c, j) =
     case R.DbSize{}:
       e => {==}
     case R.Keys{p}:
+      e => {==}
+    case R.Scan{p}:
       e => {==}
     case R.Bad{r}:
       e => {==}
@@ -2703,6 +2707,8 @@ def loc_reply(c: R.Cmd, +t: KV.Trie<String>, +u: KV.Trie<String>) -> {keyed(c) =
       kd => e => Empty.absurd({R.reply_of(R.exec(R.FlushAll{}, t)) == R.reply_of(R.exec(R.FlushAll{}, u)) : R.Reply}, false_true(kd))
     case R.Keys{p}:
       kd => e => Empty.absurd({R.reply_of(R.exec(R.Keys{p}, t)) == R.reply_of(R.exec(R.Keys{p}, u)) : R.Reply}, false_true(kd))
+    case R.Scan{p}:
+      kd => e => Empty.absurd({R.reply_of(R.exec(R.Scan{p}, t)) == R.reply_of(R.exec(R.Scan{p}, u)) : R.Reply}, false_true(kd))
     case R.Bad{r}:
       kd => e => Empty.absurd({R.reply_of(R.exec(R.Bad{r}, t)) == R.reply_of(R.exec(R.Bad{r}, u)) : R.Reply}, false_true(kd))
     case R.Own{o}:
@@ -2800,6 +2806,8 @@ def loc_key(c: R.Cmd, +t: KV.Trie<String>, +u: KV.Trie<String>) -> {keyed(c) == 
       kd => e => Empty.absurd({KV.get(String, R.db_of(R.exec(R.FlushAll{}, t)), "") == KV.get(String, R.db_of(R.exec(R.FlushAll{}, u)), "") : Maybe<&2, String>}, false_true(kd))
     case R.Keys{p}:
       kd => e => Empty.absurd({KV.get(String, R.db_of(R.exec(R.Keys{p}, t)), "") == KV.get(String, R.db_of(R.exec(R.Keys{p}, u)), "") : Maybe<&2, String>}, false_true(kd))
+    case R.Scan{p}:
+      kd => e => Empty.absurd({KV.get(String, R.db_of(R.exec(R.Scan{p}, t)), "") == KV.get(String, R.db_of(R.exec(R.Scan{p}, u)), "") : Maybe<&2, String>}, false_true(kd))
     case R.Bad{r}:
       kd => e => Empty.absurd({KV.get(String, R.db_of(R.exec(R.Bad{r}, t)), "") == KV.get(String, R.db_of(R.exec(R.Bad{r}, u)), "") : Maybe<&2, String>}, false_true(kd))
     case R.Own{o}:
@@ -2851,6 +2859,8 @@ def writes_one(c: R.Cmd, +j: String) -> {keyed(c) == True{} : Bool} -> {False{} 
       kd => nb => Empty.absurd({Laws.writes(R.FlushAll{}, j) == False{} : Bool}, false_true(kd))
     case R.Keys{p}:
       kd => nb => Empty.absurd({Laws.writes(R.Keys{p}, j) == False{} : Bool}, false_true(kd))
+    case R.Scan{p}:
+      kd => nb => Empty.absurd({Laws.writes(R.Scan{p}, j) == False{} : Bool}, false_true(kd))
     case R.Bad{r}:
       kd => nb => Empty.absurd({Laws.writes(R.Bad{r}, j) == False{} : Bool}, false_true(kd))
     case R.Own{o}:
@@ -2960,6 +2970,8 @@ def point_cmd(c: R.Cmd, +t: KV.Trie<String>, +u: KV.Trie<String>, +j: String) ->
     case R.FlushAll{}:
       e => {==}
     case R.Keys{p}:
+      e => e
+    case R.Scan{p}:
       e => e
     case R.Bad{r}:
       e => e
@@ -3093,6 +3105,9 @@ def reply_after(c1: R.Cmd, +c2: R.Cmd, +db: KV.Trie<String>) -> {Laws.disturbs(c
     case R.Keys{p}:
       e => %Equal.sym(KV.Trie<String>, R.db_of(R.exec(c2, db)), db, Laws.reads_keep_db(c2, db, not_false(Laws.is_read(c2))(e))) : {R.reply_of(R.exec(R.Keys{p}, _)) == R.reply_of(R.exec(R.Keys{p}, db)) : R.Reply}
            {==}
+    case R.Scan{p}:
+      e => %Equal.sym(KV.Trie<String>, R.db_of(R.exec(c2, db)), db, Laws.reads_keep_db(c2, db, not_false(Laws.is_read(c2))(e))) : {R.reply_of(R.exec(R.Scan{p}, _)) == R.reply_of(R.exec(R.Scan{p}, db)) : R.Reply}
+           {==}
     case R.Bad{r}:
       e => {==}
     case R.Own{o}:
@@ -3181,6 +3196,8 @@ def read_writes(c: R.Cmd, +j: String) -> {Laws.is_read(c) == True{} : Bool} -> {
       e => Empty.absurd({Laws.writes(R.FlushAll{}, j) == False{} : Bool}, false_true(e))
     case R.Keys{p}:
       e => {==}
+    case R.Scan{p}:
+      e => {==}
     case R.Bad{r}:
       e => {==}
     case R.Own{o}:
@@ -3238,6 +3255,8 @@ def clash_at(c1: R.Cmd, +c2: R.Cmd, +j: String) -> {Laws.clash(c2, c1) == False{
     case R.FlushAll{}:
       e => read_writes(c2, j)(not_false(Laws.is_read(c2))(e))
     case R.Keys{p}:
+      e => {==}
+    case R.Scan{p}:
       e => {==}
     case R.Bad{r}:
       e => {==}
@@ -3325,6 +3344,8 @@ def rep_tw(+c1: R.Cmd, +c2: R.Cmd, +db: KV.Trie<String>, +H: List<&2, R.Cmd>, +e
       kw => {==}
     case R.Keys{p}:
       kw => Empty.absurd({R.reply_of(R.exec(R.Keys{p}, tw(H, R.db_of(R.exec(c2, R.db_of(R.exec(c1, db))))))) == R.reply_of(R.exec(R.Keys{p}, tw(H, R.db_of(R.exec(c1, R.db_of(R.exec(c2, db))))))) : R.Reply}, false_true(kw))
+    case R.Scan{p}:
+      kw => Empty.absurd({R.reply_of(R.exec(R.Scan{p}, tw(H, R.db_of(R.exec(c2, R.db_of(R.exec(c1, db))))))) == R.reply_of(R.exec(R.Scan{p}, tw(H, R.db_of(R.exec(c1, R.db_of(R.exec(c2, db))))))) : R.Reply}, false_true(kw))
     case R.Bad{r}:
       kw => {==}
     case R.Own{o}:
@@ -3936,6 +3957,8 @@ def effect_db(c: R.Cmd, +db: KV.Trie<String>) -> {R.db_of(R.exec(c, db)) == Laws
       fin_cons(R.FlushAll{}, Nil{}, db)
     case R.Keys{p}:
       {==}
+    case R.Scan{p}:
+      {==}
     case R.Bad{r}:
       {==}
     case R.Own{o}:
@@ -4026,6 +4049,8 @@ def effect_args(c: R.Cmd, r: R.Reply) -> {A.effect(c, r) == A.parse_all(A.args_a
     case R.FlushAll{}:
       {==}
     case R.Keys{p}:
+      {==}
+    case R.Scan{p}:
       {==}
     case R.Bad{b}:
       {==}
@@ -4641,6 +4666,8 @@ def effect_one(c: R.Cmd, r: R.Reply) -> Or({A.effect(c, r) == Nil{} : List<&2, R
       Inr{(R.FlushAll{}, {==})}
     case R.Keys{p}:
       Inl{{==}}
+    case R.Scan{p}:
+      Inl{{==}}
     case R.Bad{b}:
       Inl{{==}}
     case R.Own{o}:
@@ -5217,6 +5244,8 @@ def unzip_gen(+conn: S.Conn, +srv: S.Srv, rs: List<&2, B.Req>, +cs: List<&2, R.C
       e => unzip_gen(conn, srv, rest, R.FlushAll{} <> cs, h <> hs, db)(e)
     case Con{B.Req{R.Keys{x0}, h}, rest}:
       e => unzip_gen(conn, srv, rest, R.Keys{x0} <> cs, h <> hs, db)(e)
+    case Con{B.Req{R.Scan{x0}, h}, rest}:
+      e => unzip_gen(conn, srv, rest, R.Scan{x0} <> cs, h <> hs, db)(e)
     case Con{B.Req{R.Peek{x0, x1}, h}, rest}:
       e => unzip_gen(conn, srv, rest, R.Peek{x0, x1} <> cs, h <> hs, db)(e)
     case Con{B.Req{R.Own{x0}, h}, rest}:
@@ -5313,6 +5342,8 @@ def unzip_gen_log(+conn: S.Conn, +srv: S.Srv, rs: List<&2, B.Req>, +cs: List<&2,
       e => unzip_gen_log(conn, srv, rest, R.FlushAll{} <> cs, h <> hs, db)(e)
     case Con{B.Req{R.Keys{x0}, h}, rest}:
       e => unzip_gen_log(conn, srv, rest, R.Keys{x0} <> cs, h <> hs, db)(e)
+    case Con{B.Req{R.Scan{x0}, h}, rest}:
+      e => unzip_gen_log(conn, srv, rest, R.Scan{x0} <> cs, h <> hs, db)(e)
     case Con{B.Req{R.Peek{x0, x1}, h}, rest}:
       e => unzip_gen_log(conn, srv, rest, R.Peek{x0, x1} <> cs, h <> hs, db)(e)
     case Con{B.Req{R.Own{x0}, h}, rest}:
@@ -5375,6 +5406,8 @@ def srv_same.o(o: R.SessOp, +conn: S.Conn, +srv: S.Srv, +ef: {S.authed(conn, srv
       e => Empty.absurd({S.own_srv(R.SInfo{y0}, conn, srv) == srv : S.Srv}, true_false(Equal.trans(Bool, True{}, S.authed(conn, srv), False{}, e, ef)))
     case R.SCommand{y0}:
       e => Empty.absurd({S.own_srv(R.SCommand{y0}, conn, srv) == srv : S.Srv}, true_false(Equal.trans(Bool, True{}, S.authed(conn, srv), False{}, e, ef)))
+    case R.SRandomKey{}:
+      e => Empty.absurd({S.own_srv(R.SRandomKey{}, conn, srv) == srv : S.Srv}, true_false(Equal.trans(Bool, True{}, S.authed(conn, srv), False{}, e, ef)))
     case R.SReply{y0}:
       e => Empty.absurd({S.own_srv(R.SReply{y0}, conn, srv) == srv : S.Srv}, true_false(Equal.trans(Bool, True{}, S.authed(conn, srv), False{}, e, ef)))
     case R.SBad{y0}:
@@ -5470,6 +5503,10 @@ def ran_bad(c: R.Cmd, +ps: List<&2, R.Cmd>, +id: Nat, +a: Bool, +n: String, +m: 
       ih =>
         %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}}, srv), False{}, ef) : {Laws.all_bad(List.append(&2, R.Cmd, S.keep(_, R.Keys{x0}), ps)) == True{} : Bool}
         ih
+    case R.Scan{x0}:
+      ih =>
+        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}}, srv), False{}, ef) : {Laws.all_bad(List.append(&2, R.Cmd, S.keep(_, R.Scan{x0}), ps)) == True{} : Bool}
+        ih
     case R.Peek{x0, x1}:
       ih =>
         %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}}, srv), False{}, ef) : {Laws.all_bad(List.append(&2, R.Cmd, S.keep(_, R.Peek{x0, x1}), ps)) == True{} : Bool}
@@ -5531,6 +5568,10 @@ def auth_own(o: R.SessOp, +id: Nat, +a: Bool, +n: String, +m: S.Mute, +srv: S.Sr
       el =>
         %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}}, srv), False{}, ef) : {S.conn.auth(S.next_conn.k(S.KSess{R.SCommand{y0}}, _, S.Conn{id, a, n, m, False{}}, srv)) == False{} : Bool}
         ef
+    case R.SRandomKey{}:
+      el =>
+        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}}, srv), False{}, ef) : {S.conn.auth(S.next_conn.k(S.KSess{R.SRandomKey{}}, _, S.Conn{id, a, n, m, False{}}, srv)) == False{} : Bool}
+        ef
     case R.SReply{y0}:
       el =>
         %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}}, srv), False{}, ef) : {S.conn.auth(S.next_conn.k(S.KSess{R.SReply{y0}}, _, S.Conn{id, a, n, m, False{}}, srv)) == False{} : Bool}
@@ -5575,6 +5616,8 @@ def auth_nc(c: R.Cmd, +id: Nat, +a: Bool, +n: String, +m: S.Mute, +srv: S.Srv, +
       el => ef
     case R.Keys{x0}:
       el => ef
+    case R.Scan{x0}:
+      el => ef
     case R.Peek{x0, x1}:
       el => ef
     case R.Own{x0}:
@@ -5604,7 +5647,7 @@ def Laws.config_fail(args, conn, srv, r, e):
   {==}
 
 def Laws.config_pass(args, conn, srv, cfg, e):
-  %Equal.sym(Result<&2, &2, R.Reply, List<&2, C.CItem>>, C.config.set(args, S.srv.cfg(srv)), Done{cfg}, e) : {S.srv.set(_, srv) == S.Srv{C.config.get_value(cfg, "requirepass"), cfg, S.srv.info(srv)} : S.Srv}
+  %Equal.sym(Result<&2, &2, R.Reply, List<&2, C.CItem>>, C.config.set(args, S.srv.cfg(srv)), Done{cfg}, e) : {S.srv.set(_, srv) == S.Srv{C.config.get_value(cfg, "requirepass"), cfg, S.srv.info(srv), S.srv.rng(srv)} : S.Srv}
   {==}
 
 def cfg_some_val(m: Maybe<&2, C.CItem>, d: C.CItem) -> C.CItem:

@@ -44,17 +44,21 @@ type Conn is Data:
   Conn{id: Nat, auth: Bool, name: String, mode: Mute, quit: Bool}
 
 # the server, besides its database: its password (empty for none), its
-# parameters (config.bend), of which requirepass is the password, and
-# what INFO shows of it that they do not (info.bend)
+# parameters (config.bend), of which requirepass is the password, what
+# INFO shows of it that they do not (info.bend), and the state of its
+# random numbers (RANDOMKEY's)
 type Srv is Data:
-  Srv{pass: String, cfg: List<&2, C.CItem>, info: I.Info}
+  Srv{pass: String, cfg: List<&2, C.CItem>, info: I.Info, rng: U32}
 
 def conn_new(id: Nat) -> Conn:
   Conn{id, False{}, "", MOn{}, False{}}
 
-# the server with these parameters: its password is requirepass
+# the server with these parameters: its password is requirepass; its
+# random numbers start from its run id
 def srv_of(+cfg: List<&2, C.CItem>, info: I.Info) -> Srv:
-  Srv{C.config.get_value(cfg, "requirepass"), cfg, info}
+  +i = info
+  +r = I.info.seed(i)
+  Srv{C.config.get_value(cfg, "requirepass"), cfg, i, r}
 
 def srv.puts(sets: List<&2, String>, cfg: List<&2, C.CItem>) -> List<&2, C.CItem>:
   match sets:
@@ -97,18 +101,23 @@ def conn.quit(+c: Conn) -> Bool:
 
 def srv.pass(+s: Srv) -> String:
   match s:
-    case Srv{pass, cfg, info}:
+    case Srv{pass, cfg, info, rng}:
       pass
 
 def srv.cfg(+s: Srv) -> List<&2, C.CItem>:
   match s:
-    case Srv{pass, cfg, info}:
+    case Srv{pass, cfg, info, rng}:
       cfg
 
 def srv.info(+s: Srv) -> I.Info:
   match s:
-    case Srv{pass, cfg, info}:
+    case Srv{pass, cfg, info, rng}:
       info
+
+def srv.rng(+s: Srv) -> U32:
+  match s:
+    case Srv{pass, cfg, info, rng}:
+      rng
 
 # what the shell adds to INFO's account (info.bend): a batch's calls (the
 # ones that ran, and runs of codes, R.Tally), its error replies and its
@@ -116,33 +125,33 @@ def srv.info(+s: Srv) -> I.Info:
 # append-only file, new facts, a sample of the rates
 def srv.ran(s: Srv, +calls: Nat, +r: Nat, rs: List<&2, Nat>, +inb: Nat, +outb: Nat) -> Srv:
   match s:
-    case Srv{pass, cfg, info}:
-      Srv{pass, cfg, I.info.ran(info, calls, r, rs, inb, outb)}
+    case Srv{pass, cfg, info, rng}:
+      Srv{pass, cfg, I.info.ran(info, calls, r, rs, inb, outb), rng}
 
 def srv.errs(s: Srv, xs: List<&2, R.Erred>) -> Srv:
   match s:
-    case Srv{pass, cfg, info}:
-      Srv{pass, cfg, I.info.errs(info, xs)}
+    case Srv{pass, cfg, info, rng}:
+      Srv{pass, cfg, I.info.errs(info, xs), rng}
 
 def srv.erred(s: Srv, +m: String) -> Srv:
   match s:
-    case Srv{pass, cfg, info}:
-      Srv{pass, cfg, I.info.erred(info, m)}
+    case Srv{pass, cfg, info, rng}:
+      Srv{pass, cfg, I.info.erred(info, m), rng}
 
 def srv.aof(s: Srv, +n: Nat) -> Srv:
   match s:
-    case Srv{pass, cfg, info}:
-      Srv{pass, cfg, I.info.aof(info, n)}
+    case Srv{pass, cfg, info, rng}:
+      Srv{pass, cfg, I.info.aof(info, n), rng}
 
 def srv.live(s: Srv, l: I.Live) -> Srv:
   match s:
-    case Srv{pass, cfg, info}:
-      Srv{pass, cfg, I.info.live(info, l)}
+    case Srv{pass, cfg, info, rng}:
+      Srv{pass, cfg, I.info.live(info, l), rng}
 
 def srv.tick(s: Srv, +ms: Nat) -> Srv:
   match s:
-    case Srv{pass, cfg, info}:
-      Srv{pass, cfg, I.info.tick(info, ms)}
+    case Srv{pass, cfg, info, rng}:
+      Srv{pass, cfg, I.info.tick(info, ms), rng}
 
 # Authentication
 # --------------
@@ -155,7 +164,7 @@ def srv.tick(s: Srv, +ms: Nat) -> Srv:
 # String where it lies; String.is_empty would take it apart)
 def nopass(+s: Srv) -> Bool:
   match s:
-    case Srv{+pass, cfg, info}:
+    case Srv{+pass, cfg, info, rng}:
       Nat.is_eq(String.length(pass), 0n)
 
 def authed(+c: Conn, +s: Srv) -> Bool:
@@ -486,6 +495,8 @@ def own_reply(+o: R.SessOp, +c: Conn, +s: Srv, +db: KV.Trie<String>) -> Maybe<&2
       say(conn.mode(c), R.RBulk{I.text(args, srv.cfg(s), srv.info(s), db)})
     case R.SCommand{args}:
       say(conn.mode(c), K.reply(args))
+    case R.SRandomKey{}:
+      say(conn.mode(c), R.r_get(KV.pick(String, db, KV.mix(srv.rng(s)))))
     case R.SReply{r}:
       say(conn.mode(c), r)
     case R.SBad{r}:
@@ -522,6 +533,8 @@ def own_conn(+o: R.SessOp, +c: Conn, +s: Srv) -> Conn:
       step_conn(c, s)
     case R.SCommand{a}:
       step_conn(c, s)
+    case R.SRandomKey{}:
+      step_conn(c, s)
     case R.SReply{r}:
       step_conn(c, s)
     case R.SBad{r}:
@@ -529,25 +542,34 @@ def own_conn(+o: R.SessOp, +c: Conn, +s: Srv) -> Conn:
 
 def srv.set(r: Result<&2, &2, R.Reply, List<&2, C.CItem>>, +s: Srv) -> Srv:
   match r:
-    case Done{cfg}:
-      srv_of(cfg, srv.info(s))
+    case Done{+cfg}:
+      Srv{C.config.get_value(cfg, "requirepass"), cfg, srv.info(s), srv.rng(s)}
     case Fail{e}:
       s
 
 # CONFIG RESETSTAT: INFO's counts start again
 def srv.reset(s: Srv) -> Srv:
   match s:
-    case Srv{pass, cfg, info}:
-      Srv{pass, cfg, I.info.reset(info)}
+    case Srv{pass, cfg, info, rng}:
+      Srv{pass, cfg, I.info.reset(info), rng}
+
+# RANDOMKEY: the next state of the random numbers (a Weyl sequence, that
+# KV.mix scrambles)
+def srv.rand(s: Srv) -> Srv:
+  match s:
+    case Srv{pass, cfg, info, rng}:
+      Srv{pass, cfg, info, U32.add(rng, 2654435769)}
 
 # the server after a session command: CONFIG SET changes it when it
-# succeeds, and CONFIG RESETSTAT its counts
+# succeeds, CONFIG RESETSTAT its counts, and RANDOMKEY its random numbers
 def own_srv(+o: R.SessOp, +c: Conn, +s: Srv) -> Srv:
   match o:
     case R.SConfigSet{args}:
       srv.set(C.config.set(args, srv.cfg(s)), s)
     case R.SConfigResetStat{}:
       srv.reset(s)
+    case R.SRandomKey{}:
+      srv.rand(s)
     case _:
       s
 

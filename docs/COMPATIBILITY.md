@@ -33,18 +33,20 @@ make suite REDIS_SRC=../redis      # both runs and the table, in build/suite/
 ## The result
 
 Redis 7.0.15, October 2026. Of the 1,656 tests Redis passes in this mode, BendKV passes
-**127 (7.7%)**; of the 256 in the units of what BendKV has, 106 (41%).
+**135 (8.2%)**; of the 256 in the units of what BendKV has, 109 (43%).
 
 | area | units | Redis passes | BendKV passes |
 |---|---|---:|---:|
-| what BendKV has: the protocol, connections, the keyspace, strings, counters, introspection | protocol, quit, keyspace, type/string, type/incr, introspection, introspection-2, other, info-command | 256 | **106** |
-| data types and expiry, not yet | type/hash, type/list, list-2, list-3, type/set, type/zset, geo, hyperloglog, bitops, bitfield, sort, scan, expire, dump, lazyfree, violations | 969 | 17 |
+| what BendKV has: the protocol, connections, the keyspace, strings, counters, introspection | protocol, quit, keyspace, type/string, type/incr, introspection, introspection-2, other, info-command | 256 | **109** |
+| data types and expiry, not yet | type/hash, type/list, list-2, list-3, type/set, type/zset, geo, hyperloglog, bitops, bitfield, sort, scan, expire, dump, lazyfree, violations | 969 | 22 |
 | transactions, pub/sub, client-side caching, CLIENT PAUSE, the latency monitor, the slow log, the query buffer, not yet | multi, pubsub, tracking, pause, latency-monitor, slowlog, querybuf | 127 | 0 |
 | out of scope: Lua scripts, functions, streams | scripting, functions, type/stream, type/stream-cgroups | 304 | 4 |
 
-Most of the 21 passes outside the first row pass without the feature they test: they
-expect an error and take BendKV's "unknown command" for one, catch every error and only
-check that the server still answers, or wait for a key to expire that was never set.
+Of the 26 passes outside the first row, 5 are the tests of SCAN in unit/scan, all of
+them (the unit's other 12 scan sets, hashes and sorted sets: SSCAN, HSCAN, ZSCAN). Most
+of the others pass without the feature they test: they expect an error and take
+BendKV's "unknown command" for one, catch every error and only check that the server
+still answers, or wait for a key to expire that was never set.
 
 By unit (units where every test needs a server of its own are left out: acl, acl-v2,
 aofrw, auth, client-eviction, cluster, cluster-scripting, info, limits, maxmemory,
@@ -63,7 +65,7 @@ pubsubshard, shutdown, tls, type/list-common, wait):
 | unit/info-command | 3 | 3 | 3 |
 | unit/introspection | 28 | 28 | 14 |
 | unit/introspection-2 | 43 | 43 | 17 |
-| unit/keyspace | 43 | 42 | 18 |
+| unit/keyspace | 43 | 42 | 21 |
 | unit/latency-monitor | 14 | 13 | 0 |
 | unit/lazyfree | 4 | 4 | 0 |
 | unit/multi | 53 | 49 | 0 |
@@ -74,7 +76,7 @@ pubsubshard, shutdown, tls, type/list-common, wait):
 | unit/querybuf | 2 | 2 | 0 |
 | unit/quit | 3 | 3 | 3 |
 | unit/replybufsize | 1 | 0 | 0 |
-| unit/scan | 17 | 17 | 0 |
+| unit/scan | 17 | 17 | 5 |
 | unit/scripting | 109 | 108 | 0 |
 | unit/slowlog | 16 | 9 | 0 |
 | unit/sort | 52 | 52 | 0 |
@@ -90,12 +92,12 @@ pubsubshard, shutdown, tls, type/list-common, wait):
 | unit/type/string | 77 | 77 | 17 |
 | unit/type/zset | 291 | 289 | 10 |
 | unit/violations | 1 | 1 | 0 |
-| **all** | **1729** | **1656** | **127 (7.7%)** |
+| **all** | **1729** | **1656** | **135 (8.2%)** |
 
-## Why the other 1,529 fail
+## Why the other 1,521 fail
 
-- **867 stop on a command BendKV does not have.** By the number of tests each one stops:
-  FUNCTION LOAD 121, ZADD 117, XADD 60, GEOADD 37, SADD 31, EXPIRE 23, MULTI 23, LPUSH 20,
+- **859 stop on a command BendKV does not have.** By the number of tests each one stops:
+  FUNCTION LOAD 121, ZADD 117, XADD 60, GEOADD 37, SADD 32, EXPIRE 23, MULTI 23, LPUSH 19,
   PFADD 19, BITFIELD 16, SYNC 16 (tests that read the replication stream), RPUSH 16,
   BITCOUNT 15, BITPOS 14, WATCH 14, BITOP 12, XGROUP 12, GEORADIUS 10, INCRBYFLOAT 10,
   and about a hundred more below ten.
@@ -112,7 +114,9 @@ pubsubshard, shutdown, tls, type/list-common, wait):
   `ERR syntax error`), COMMAND GETKEYS and COMMAND INFO of commands BendKV does not have
   (19), RESP3 (16), and 8 that fail because a command before them is missing. (INFO's
   statistics per command, which `info-command` looked for, came with the next step: 3
-  more tests pass.)
+  more tests pass. SCAN and RANDOMKEY, the step after it, pass all their tests on keys:
+  SCAN's basic iteration, COUNT, MATCH, TYPE, and its guarantee under a load of writes,
+  and RANDOMKEY's three.)
 
 So the tests are where the plan goes next: SET's options and expiry, then the data types
 one by one (969 tests), RESP3, which two units need before their second half runs, and

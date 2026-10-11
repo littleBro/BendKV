@@ -105,6 +105,13 @@ def rnd_cmd(r):
         (0.04, lambda: [b"GETSET", k(), rnd_value(r)]),
         (0.03, lambda: [b"DBSIZE"]),
         (0.03, lambda: [b"KEYS", rnd_pattern(r)]),
+        (0.02, lambda: [b"SCAN", b"0", b"COUNT", b"1000"] + ([b"MATCH", rnd_pattern(r)] if r.random() < 0.7 else []) +
+                       ([b"TYPE", r.choice([b"string", b"STRING", b"list", b"none"])] if r.random() < 0.3 else [])),
+        (0.01, lambda: [b"SCAN"] + r.choice([[], [b"x"], [b"-"], [b" 0"], [b"0", b"COUNT"], [b"0", b"COUNT", b"0"],
+                                             [b"0", b"COUNT", b"x"], [b"0", b"MATCH"], [b"0", b"TYPE"],
+                                             [b"0", b"FOO", b"bar"], [b"", b"COUNT", b"-1"],
+                                             [b"0", b"COUNT", b"1", b"x"], [b"18446744073709551616"]])),
+        (0.02, lambda: [b"RANDOMKEY"] + ([rnd_value(r)] if r.random() < 0.2 else [])),
         (0.02, lambda: [b"PING"]),
         (0.02, lambda: [b"ECHO", rnd_value(r)]),
         (0.02, lambda: [r.choice([b"get", b"Get", b"sEt", b"incr"]), k()] + ([rnd_value(r)] if r.random() < 0.5 else [])),
@@ -120,9 +127,15 @@ def rnd_cmd(r):
 
 
 def normalize(cmd, rep):
-    # KEYS answers in an unspecified order
+    # KEYS answers in an unspecified order, and so does SCAN, whose COUNT
+    # of 1000 here is past every key: the whole database in one call
     if cmd[0].upper() == b"KEYS" and rep[0] == b"*":
         return (rep[0], sorted(rep[1]))
+    if cmd[0].upper() == b"SCAN" and rep[0] == b"*":
+        return (rep[0], [rep[1][0], (rep[1][1][0], sorted(rep[1][1][1]))])
+    # RANDOMKEY picks a key of its own choice: nil or not is compared
+    if cmd[0].upper() == b"RANDOMKEY" and rep[0] == b"$":
+        return (rep[0], rep[1] is not None)
     return rep
 
 

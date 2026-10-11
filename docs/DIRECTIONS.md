@@ -294,11 +294,11 @@ Where performance and proof meet: **batched execution under proved laws.**
 6. **Next: a drop-in Redis for one node.** Strings, hashes, lists, sets and sorted sets
    with WRONGTYPE, TTL with a model of time in the state, MULTI/EXEC/WATCH, pub/sub,
    the connection commands clients send on connect (HELLO, SELECT, CLIENT, AUTH, INFO,
-   COMMAND, CONFIG), SCAN, and the log's rewrite, measured by Redis's own test suite
-   run against BendKV and by client libraries' tests. Lua, streams, cluster,
-   replication and modules are out of scope. The suite's count: of the 1,656
-   tests Redis 7.0.15 passes against a server it did not start, BendKV passes 127, 106
-   of the 256 in what it has ([COMPATIBILITY.md](COMPATIBILITY.md)).
+   COMMAND, CONFIG; done), SCAN and RANDOMKEY (done), and the log's rewrite, measured by
+   Redis's own test suite run against BendKV and by client libraries' tests. Lua,
+   streams, cluster, replication and modules are out of scope. The suite's count: of
+   the 1,656 tests Redis 7.0.15 passes against a server it did not start, BendKV passes
+   135, 109 of the 256 in what it has ([COMPATIBILITY.md](COMPATIBILITY.md)).
 
 After that comes proving the native strings (section 5, step 1): a small piece of
 work that makes the word "verified" much stronger.

@@ -241,10 +241,22 @@ def cmd.quit() -> Top:
     [R.RBulk{"summary"}, R.RBulk{"Close the connection"}, R.RBulk{"since"}, R.RBulk{"1.0.0"}, R.RBulk{"group"}, R.RBulk{"connection"}, R.RBulk{"complexity"}, R.RBulk{"O(1)"}]},
   []}
 
+def cmd.randomkey() -> Top:
+  Top{Desc{"randomkey", R.IPos{1n}, ["keyspace", "read", "slow"], [], KBySpecs{}, False{},
+    [R.RBulk{"randomkey"}, R.RInt{R.IPos{1n}}, R.RArray{[R.RStatus{"readonly"}]}, R.RInt{R.IPos{0n}}, R.RInt{R.IPos{0n}}, R.RInt{R.IPos{0n}}, R.RArray{[R.RStatus{"@keyspace"}, R.RStatus{"@read"}, R.RStatus{"@slow"}]}, R.RArray{[R.RBulk{"request_policy:all_shards"}, R.RBulk{"nondeterministic_output"}]}, R.RArray{[]}],
+    [R.RBulk{"summary"}, R.RBulk{"Return a random key from the keyspace"}, R.RBulk{"since"}, R.RBulk{"1.0.0"}, R.RBulk{"group"}, R.RBulk{"generic"}, R.RBulk{"complexity"}, R.RBulk{"O(1)"}]},
+  []}
+
 def cmd.reset() -> Top:
   Top{Desc{"reset", R.IPos{1n}, ["fast", "connection"], [], KBySpecs{}, False{},
     [R.RBulk{"reset"}, R.RInt{R.IPos{1n}}, R.RArray{[R.RStatus{"noscript"}, R.RStatus{"loading"}, R.RStatus{"stale"}, R.RStatus{"fast"}, R.RStatus{"no_auth"}, R.RStatus{"allow_busy"}]}, R.RInt{R.IPos{0n}}, R.RInt{R.IPos{0n}}, R.RInt{R.IPos{0n}}, R.RArray{[R.RStatus{"@fast"}, R.RStatus{"@connection"}]}, R.RArray{[]}, R.RArray{[]}],
     [R.RBulk{"summary"}, R.RBulk{"Reset the connection"}, R.RBulk{"since"}, R.RBulk{"6.2.0"}, R.RBulk{"group"}, R.RBulk{"connection"}, R.RBulk{"complexity"}, R.RBulk{"O(1)"}]},
+  []}
+
+def cmd.scan() -> Top:
+  Top{Desc{"scan", R.INeg{1n}, ["keyspace", "read", "slow"], [], KBySpecs{}, False{},
+    [R.RBulk{"scan"}, R.RInt{R.INeg{1n}}, R.RArray{[R.RStatus{"readonly"}]}, R.RInt{R.IPos{0n}}, R.RInt{R.IPos{0n}}, R.RInt{R.IPos{0n}}, R.RArray{[R.RStatus{"@keyspace"}, R.RStatus{"@read"}, R.RStatus{"@slow"}]}, R.RArray{[R.RBulk{"nondeterministic_output"}, R.RBulk{"request_policy:special"}]}, R.RArray{[]}],
+    [R.RBulk{"summary"}, R.RBulk{"Incrementally iterate the keys space"}, R.RBulk{"since"}, R.RBulk{"2.8.0"}, R.RBulk{"group"}, R.RBulk{"generic"}, R.RBulk{"complexity"}, R.RBulk{"O(1) for every call. O(N) for a complete iteration, including enough command calls for the cursor to return back to 0. N is the number of elements inside the collection."}, R.RBulk{"history"}, R.RArray{[R.RArray{[R.RBulk{"6.0.0"}, R.RBulk{"Added the `TYPE` subcommand."}]}]}, R.RBulk{"arguments"}, R.RArray{[R.RArray{[R.RBulk{"name"}, R.RBulk{"cursor"}, R.RBulk{"type"}, R.RBulk{"integer"}]}, R.RArray{[R.RBulk{"name"}, R.RBulk{"pattern"}, R.RBulk{"type"}, R.RBulk{"pattern"}, R.RBulk{"token"}, R.RBulk{"MATCH"}, R.RBulk{"flags"}, R.RArray{[R.RStatus{"optional"}]}]}, R.RArray{[R.RBulk{"name"}, R.RBulk{"count"}, R.RBulk{"type"}, R.RBulk{"integer"}, R.RBulk{"token"}, R.RBulk{"COUNT"}, R.RBulk{"flags"}, R.RArray{[R.RStatus{"optional"}]}]}, R.RArray{[R.RBulk{"name"}, R.RBulk{"type"}, R.RBulk{"type"}, R.RBulk{"string"}, R.RBulk{"token"}, R.RBulk{"TYPE"}, R.RBulk{"since"}, R.RBulk{"6.0.0"}, R.RBulk{"flags"}, R.RArray{[R.RStatus{"optional"}]}]}]}]},
   []}
 
 def cmd.select() -> Top:
@@ -285,7 +297,7 @@ def cmd.unlink() -> Top:
 
 # the commands, by name
 def table() -> List<&2, Top>:
-  [cmd.append(), cmd.auth(), cmd.client(), cmd.command(), cmd.config(), cmd.dbsize(), cmd.decr(), cmd.decrby(), cmd.del(), cmd.echo(), cmd.exists(), cmd.flushall(), cmd.flushdb(), cmd.function(), cmd.get(), cmd.getset(), cmd.hello(), cmd.incr(), cmd.incrby(), cmd.info(), cmd.keys(), cmd.mget(), cmd.mset(), cmd.ping(), cmd.quit(), cmd.reset(), cmd.select(), cmd.set(), cmd.setnx(), cmd.strlen(), cmd.type(), cmd.unlink()]
+  [cmd.append(), cmd.auth(), cmd.client(), cmd.command(), cmd.config(), cmd.dbsize(), cmd.decr(), cmd.decrby(), cmd.del(), cmd.echo(), cmd.exists(), cmd.flushall(), cmd.flushdb(), cmd.function(), cmd.get(), cmd.getset(), cmd.hello(), cmd.incr(), cmd.incrby(), cmd.info(), cmd.keys(), cmd.mget(), cmd.mset(), cmd.ping(), cmd.quit(), cmd.randomkey(), cmd.reset(), cmd.scan(), cmd.select(), cmd.set(), cmd.setnx(), cmd.strlen(), cmd.type(), cmd.unlink()]
 
 # Redis's ACL categories (ACL CAT)
 def categories() -> List<&2, String>:

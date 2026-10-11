@@ -28,9 +28,9 @@ type Req is Data:
 # a batch: of database commands only, with the hashes of their keys (most
 # batches; they run as exec_batch runs them), or one with a command of
 # the connection or of the server (R.Own) in it, which runs a command at
-# a time (session.bend: gen). A hash's high byte is what INFO's
+# a time (session.bend: gen). A hash's high twelve bits are what INFO's
 # statistics count its request as (R.stat.hash); the hints read only its
-# low five hex digits, and a mixed batch keeps its hashes for that byte
+# low five hex digits, and a mixed batch keeps its hashes for those bits
 # alone.
 type Job is Data:
   Plain{cmds: List<&2, R.Cmd>, hs: List<&2, U32>}

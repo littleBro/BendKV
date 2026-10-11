@@ -21,11 +21,12 @@
 #   python3 tools/gen_commands.py              # JSON -> src/command.bend, src/redis.bend
 #   python3 tools/gen_commands.py --check      # fails if out of date
 #
-# The same JSON gives the arity of each command and subcommand to INFO's
-# statistics, which count a call with the wrong number of arguments as
-# refused only when it fails Redis's own check of the arity: the third
-# step writes the block between "# BEGIN gen_commands: arity" and "# END
-# gen_commands: arity" in src/redis.bend, for the keys of R.stat.name.
+# The third step writes INFO's keys into src/redis.bend (Step 3 below):
+# a key for each command and subcommand, numbered from the parser's own
+# numbers, its name, its arity from the same JSON (the statistics count a
+# call with the wrong number of arguments as refused only when it fails
+# Redis's own check of the arity), whether its calls may fail as they run,
+# and the word each code rides in (twelve bits, six of them set).
 #
 # The descriptions are data from Redis 7.0.15 (src/commands/*.json, BSD
 # 3-clause, Copyright (c) 2009-2012 Salvatore Sanfilippo and Redis
@@ -46,7 +47,7 @@ COMMANDS = {
     "echo": [], "exists": [], "flushall": [], "flushdb": [], "function": ["flush", "help"],
     "get": [], "getset": [], "hello": [], "incr": [], "incrby": [], "info": [], "keys": [],
     "mget": [], "mset": [], "ping": [], "quit": [], "reset": [], "select": [], "set": [],
-    "setnx": [], "strlen": [], "type": [], "unlink": []}
+    "randomkey": [], "scan": [], "setnx": [], "strlen": [], "type": [], "unlink": []}
 
 # Step 1: redis-server -> facts
 # -----------------------------
@@ -231,16 +232,42 @@ def generate():
     a, b = src.index(BEGIN) + len(BEGIN), src.index(END)
     return src[:a] + block(json.loads(JSON.read_text())) + src[b:]
 
-# Step 3: facts -> the arities of INFO's keys
-# -------------------------------------------
+# Step 3: facts -> INFO's keys
+# ----------------------------
+# INFO's statistics count each command and subcommand by a key: the
+# commands in the order of their numbers in the parser (redis.bend:
+# cmd_id), then the subcommands of each container in the order of their
+# own (client_id, function_id, config_id, command_id); 0 is none. What a
+# call counts as is a code, 4 times its key plus its class (0 runs, 1 is
+# refused, 2 fails as it parses), and a request carries its code as a
+# word of twelve bits with six of them set (the code-th such word, in
+# increasing order): the words or-ed together over a batch have six bits
+# set exactly when all of them are one word. The block between "# BEGIN
+# gen_commands: stats" and "# END gen_commands: stats" in src/redis.bend
+# holds the keys, their names and arities (from the JSON), the keys whose
+# calls can fail as they run (RISKY), and the words.
 
-ABEGIN, AEND = "# BEGIN gen_commands: arity\n", "# END gen_commands: arity\n"
+SBEGIN, SEND = "# BEGIN gen_commands: stats\n", "# END gen_commands: stats\n"
 
-# the keys of R.stat.name and their names
-def stat_names(src):
-    a = src.index("def stat.name(+key: Nat) -> String:")
+# the commands whose calls can fail as they run, on what the database
+# holds: INCR and its kin meet values that are not integers, and overflows
+RISKY = {"incr", "decr", "incrby", "decrby"}
+
+# the parser's commands with subcommands, by the function that numbers
+# their subcommands
+CONTAINERS = {"client": "client_id", "function": "function_id", "config": "config_id",
+              "command": "command_id"}
+
+# the names a numbering def of redis.bend gives its numbers
+def numbering(src, fn):
+    a = src.index("def %s(" % fn)
     b = src.index("\n\n", a)
-    return [(int(k), n) for k, n in re.findall(r'case (\d+)n:\n\s+"([^"]+)"', src[a:b])]
+    out = {}
+    for name, n in re.findall(r'String\.eq\(n, "([^"]+)"\), (\d+)n', src[a:b]):
+        if int(n) in out.values():
+            raise SystemExit("gen_commands.py: %s gives %s twice" % (fn, n))
+        out[name.lower()] = int(n)
+    return out
 
 def arities(facts):
     out = {}
@@ -250,21 +277,77 @@ def arities(facts):
             out[sub[0]] = sub[1]
     return out
 
-def arity_block(src, facts):
+# twelve-bit words with six bits set, in increasing order
+WORDS = [w for w in range(1 << 12) if bin(w).count("1") == 6]
+
+def stats_keys(src):
+    tops = numbering(src, "cmd_id")
+    keys = [(n, "top", i) for n, i in sorted(tops.items(), key=lambda x: x[1])]
+    for cont, fn in CONTAINERS.items():
+        if cont not in tops:
+            raise SystemExit("gen_commands.py: no command " + cont)
+        subs = numbering(src, fn)
+        keys += [(cont + "|" + n, cont, i) for n, i in sorted(subs.items(), key=lambda x: x[1])]
+    return tops, keys
+
+def stats_block(src, facts):
     ar = arities(facts)
-    out = ["def stat.arity(+key: Nat) -> Nat:", "  match key:"]
-    for k, name in stat_names(src):
+    tops, keys = stats_keys(src)
+    if 4 * (len(keys) + 1) > len(WORDS):
+        raise SystemExit("gen_commands.py: more codes than words")
+    out = ["# a command's key, by its number in the parser (cmd_id); 0 for none",
+           "def stat.top(+id: Nat) -> Nat:", "  match id:"]
+    for k, (name, kind, i) in enumerate(keys, 1):
+        if kind == "top":
+            out += ["    case %dn:" % i, "      %dn" % k]
+    out += ["    case _:", "      0n", ""]
+    for cont in CONTAINERS:
+        out += ["# a subcommand of %s's key, by its number; 0 for none" % cont.upper(),
+                "def stat.sub.%s(+sub: Nat) -> Nat:" % cont, "  match sub:"]
+        for k, (name, kind, i) in enumerate(keys, 1):
+            if kind == cont:
+                out += ["    case %dn:" % i, "      %dn" % k]
+        out += ["    case _:", "      0n", ""]
+    out += ["# the name INFO gives a key (as COMMAND names it); \"\" for none",
+            "def stat.name(+key: Nat) -> String:", "  match key:"]
+    for k, (name, kind, i) in enumerate(keys, 1):
+        out += ["    case %dn:" % k, "      %s" % bstr(name)]
+    out += ["    case _:", "      \"\"", ""]
+    out += ["# Redis's arity of the command or subcommand of a key: 2a when it takes",
+            "# exactly a arguments (its name included), 2a + 1 when it takes a or more",
+            "def stat.arity(+key: Nat) -> Nat:", "  match key:"]
+    for k, (name, kind, i) in enumerate(keys, 1):
         if name not in ar:
             raise SystemExit("gen_commands.py: no arity for " + name)
         a = ar[name]
         out += ["    case %dn:" % k, "      %dn" % (2 * a if a >= 0 else -2 * a + 1)]
-    out += ["    case _:", "      1n"]
-    return "\n".join(out) + "\n"
+    out += ["    case _:", "      1n", ""]
+    out += ["# whether a call of the command of a key can fail as it runs",
+            "def stat.risky(+key: Nat) -> Bool:", "  match key:"]
+    for k, (name, kind, i) in enumerate(keys, 1):
+        if name in RISKY:
+            out += ["    case %dn:" % k, "      True{}"]
+    out += ["    case _:", "      False{}", ""]
+    ncodes = 4 * (len(keys) + 1)
+    out += ["# a code's word", "def stat.cw(+code: Nat) -> U32:", "  match code:"]
+    for c in range(ncodes):
+        out += ["    case %dn:" % c, "      %d" % WORDS[c]]
+    out += ["    case _:", "      %d" % WORDS[0], ""]
+    out += ["# a word's code (0 for one no code has)", "def stat.code.cw(+w: Nat) -> Nat:", "  match w:"]
+    for c in range(ncodes):
+        out += ["    case %dn:" % WORDS[c], "      %dn" % c]
+    out += ["    case _:", "      0n", ""]
+    out += ["# the high twelve bits of the hash of a call of GET, SET and INCR that",
+            "# runs, as the parser writes them"]
+    for name in ("get", "set", "incr"):
+        k = [x[0] for x in keys].index(name) + 1
+        out += ["def stat.mark.%s() -> U32:" % name, "  %d" % (WORDS[4 * k] << 20), ""]
+    return "\n".join(out[:-1]) + "\n"
 
-def generate_arity():
+def generate_stats():
     src = REDIS.read_text()
-    a, b = src.index(ABEGIN) + len(ABEGIN), src.index(AEND)
-    return src[:a] + arity_block(src, json.loads(JSON.read_text())) + src[b:]
+    a, b = src.index(SBEGIN) + len(SBEGIN), src.index(SEND)
+    return src[:a] + stats_block(src, json.loads(JSON.read_text())) + src[b:]
 
 if __name__ == "__main__":
     if sys.argv[1:] == ["--extract"]:
@@ -272,10 +355,10 @@ if __name__ == "__main__":
     elif sys.argv[1:] == ["--check"]:
         if generate() != BEND.read_text():
             raise SystemExit("gen_commands.py: src/command.bend is out of date; run tools/gen_commands.py")
-        if generate_arity() != REDIS.read_text():
+        if generate_stats() != REDIS.read_text():
             raise SystemExit("gen_commands.py: src/redis.bend is out of date; run tools/gen_commands.py")
     elif sys.argv[1:] == []:
         BEND.write_text(generate())
-        REDIS.write_text(generate_arity())
+        REDIS.write_text(generate_stats())
     else:
         raise SystemExit("usage: gen_commands.py [--extract | --check]")

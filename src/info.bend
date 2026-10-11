@@ -803,6 +803,14 @@ def boot.replid(+b: Boot) -> String:
     case IBoot{os, pid, run, replid, exe, conf, sysmem, start, rss0}:
       replid
 
+# a seed for the server's random numbers: its run id hashed
+def info.seed(+i: Info) -> U32:
+  match i:
+    case IInfo{b, l, c, inst, pk, c0, a0, a, st}:
+      match b:
+        case IBoot{os, pid, +run, replid, exe, conf, sysmem, start, rss0}:
+          String.hash(run)
+
 def on.persistence(on: Bool, +items: List<&2, C.CItem>, +i: Info) -> String:
   match on i:
     case True{} IInfo{+b, l, c, inst, pk, c0, +a0, +a, st}:

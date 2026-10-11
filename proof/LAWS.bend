@@ -136,6 +136,8 @@ def is_read(c: R.Cmd) -> Bool:
       True{}
     case R.Keys{p}:
       True{}
+    case R.Scan{a}:
+      True{}
     case R.Peek{k, o}:
       True{}
     case R.Own{o}:
@@ -281,7 +283,8 @@ def writes_any(+c: R.Cmd, ks: List<&2, String>) -> Bool:
       Bool.or(writes(c, k), writes_any(c, rest))
 
 # whether c2, run first, may change what c1 answers: c2 writes a key c1
-# reads, or c1 reads the whole database (DBSIZE, KEYS) and c2 writes at all
+# reads, or c1 reads the whole database (DBSIZE, KEYS, SCAN) and c2 writes
+# at all
 def disturbs(+c2: R.Cmd, c1: R.Cmd) -> Bool:
   match c1:
     case R.Get{+k}:
@@ -307,6 +310,8 @@ def disturbs(+c2: R.Cmd, c1: R.Cmd) -> Bool:
     case R.DbSize{}:
       Bool.not(is_read(c2))
     case R.Keys{p}:
+      Bool.not(is_read(c2))
+    case R.Scan{a}:
       Bool.not(is_read(c2))
     case _:
       False{}
@@ -381,12 +386,14 @@ def interferes(+c1: R.Cmd, +c2: R.Cmd) -> Bool:
   Bool.or(Bool.or(disturbs(c1, c2), disturbs(c2, c1)), clash(c2, c1))
 
 # the commands whose replies depend only on what keys read: all but
-# DBSIZE and KEYS, which see the trie itself
+# DBSIZE, KEYS and SCAN, which see the trie itself
 def keywise(c: R.Cmd) -> Bool:
   match c:
     case R.DbSize{}:
       False{}
     case R.Keys{p}:
+      False{}
+    case R.Scan{a}:
       False{}
     case _:
       True{}
@@ -666,14 +673,15 @@ law config_fail:
   {S.own_srv(R.SConfigSet{args}, conn, srv) == srv : S.Srv}
 
 # LAW: one that succeeds leaves the server with the new parameters, and
-# their requirepass is the password from then on (what INFO counts stays)
+# their requirepass is the password from then on (what INFO counts stays,
+# and so do the random numbers)
 law config_pass:
   for  args: List<&2, String>
   for  conn: S.Conn
   for +srv: S.Srv
   for  cfg: List<&2, C.CItem>
   for  e: {C.config.set(args, S.srv.cfg(srv)) == Done{cfg} : Result<&2, &2, R.Reply, List<&2, C.CItem>>}
-  {S.own_srv(R.SConfigSet{args}, conn, srv) == S.Srv{C.config.get_value(cfg, "requirepass"), cfg, S.srv.info(srv)} : S.Srv}
+  {S.own_srv(R.SConfigSet{args}, conn, srv) == S.Srv{C.config.get_value(cfg, "requirepass"), cfg, S.srv.info(srv), S.srv.rng(srv)} : S.Srv}
 
 # a parameter with another value
 def with(it: C.CItem, v: String) -> C.CItem:
