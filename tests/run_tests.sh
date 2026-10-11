@@ -1,12 +1,13 @@
 #!/bin/sh
-# Starts a reference Redis (with one database, as BendKV has) and BendKV
+# Starts a reference Redis (with one database, as BendKV has, and on the
+# loopback, as BendKV listens) and BendKV
 # on spare ports: BendKV with its defaults, then posting its replies to
 # its writer thread (post), then sending them from its loop (send), then
 # with an append-only file, and runs against each the robustness checks,
 # the differential test against Redis (a fresh Redis database for each
 # run) and the consistency checks under concurrent clients, and against
-# the first the protocol's edge cases and the commands of a connection,
-# byte for byte against Redis; then stops them. Then the append-only file: a
+# the first the protocol's edge cases, the commands of a connection and
+# CONFIG, byte for byte against Redis; then stops them. Then the append-only file: a
 # random stream, a restart from the file, the keyspace compared; then the
 # file's last entry cut short, as a crash in a write leaves it, a restart
 # that cuts it back, and the keyspace compared again. Last, the disk
@@ -18,7 +19,7 @@ cd "$(dirname "$0")/.."
 PORT=${PORT:-6380}
 REDIS_PORT=${REDIS_PORT:-6390}
 ROUNDS=${ROUNDS:-1000}
-redis-server --port "$REDIS_PORT" --save '' --appendonly no --databases 1 > build/redis.log 2>&1 &
+redis-server --port "$REDIS_PORT" --save '' --appendonly no --databases 1 --bind 127.0.0.1 > build/redis.log 2>&1 &
 RDS=$!
 BKV=
 trap 'kill $BKV $RDS 2>/dev/null || true' EXIT
@@ -32,6 +33,7 @@ for n in "" post send "post build/test.aof everysec"; do
   if [ -z "$n" ]; then
     python3 tests/protocol_test.py --bendkv "$PORT" --redis "$REDIS_PORT"
     python3 tests/session_test.py --bendkv "$PORT" --redis "$REDIS_PORT"
+    python3 tests/config_test.py --bendkv "$PORT" --redis "$REDIS_PORT" --rounds "$ROUNDS"
   fi
   for seed in 1 2 3; do
     redis-cli -p "$REDIS_PORT" flushall > /dev/null

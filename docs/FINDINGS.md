@@ -1,7 +1,7 @@
 # BendKV: what we found
 
 BendKV is a Redis-compatible key-value store written in Bend2, with its core proved
-against 38 laws. This file sums up in English what building it and making it fast
+against 41 laws. This file sums up in English what building it and making it fast
 showed us. The detailed record, with every table and measurement, is in Russian:
 [PERFORMANCE.md](PERFORMANCE.md) (performance, section by section) and
 [README.ru.md](../README.ru.md) (the project, the proofs, how to run). Where the work goes
@@ -14,8 +14,8 @@ lines of sessions (a connection's state and the server's), about 70 lines of bat
 hints, about 220 lines of append-only file, about 3,200 lines of handwritten proofs, and
 about 1,600 lines of 16-way case splits written by a script
 ([`tools/gen_trie.py`](../tools/gen_trie.py)), not counting comments and blank lines.
-Bend checks the 38 laws in about a second; the BendTT kernel, whose soundness is proved
-in Lean, rechecks them in about 4 s. Among them: after any history, the server restores
+Bend checks the 41 laws in about a second; the BendTT kernel, whose soundness is proved
+in Lean, rechecks them in about 8 s. Among them: after any history, the server restores
 from its append-only file exactly the database it held, and from a file cut by a crash
 at any byte, the database it held after some prefix of its commands (section 3e). On
 about 266 thousand random commands the replies matched real Redis 7 byte for byte; the
@@ -1117,6 +1117,68 @@ TYPE.
   and FUNCTION HELP list only what BendKV has; CLIENT LIST, KILL, INFO, PAUSE and TRACKING
   need a registry of clients and their addresses. The password cannot be set yet: CONFIG
   SET and the server's options come next, with INFO and COMMAND.
+
+## 3n. CONFIG from Redis's own table
+
+CONFIG GET and CONFIG SET serve all 178 parameters of Redis 7.0.15 (as distributions
+build it, with TLS). `tools/gen_config.py` reads `static_configs[]` in Redis's
+`src/config.c`, resolves the constants of its enums from `server.h`, and keeps the
+facts in `tools/data/redis-configs.json`; from that file it writes the table in
+`src/config.bend`, so the check that the table is current (`make gencheck`) needs no
+Redis source. Each parameter carries its type (yes/no, names or bit flags, a number
+with its bounds, memory units, percents or octal, a string with its check, or one of
+eight with a syntax of their own: save, client-output-buffer-limit, bind,
+notify-keyspace-events, latency percentiles and the like), whether it may change while
+the server runs, whether patterns skip it, and its other name. BendKV's defaults differ
+from Redis's in three: one database, no snapshots, the loopback address.
+
+CONFIG SET runs as Redis's `configSetCommand` does: every name first (an unknown one,
+one that cannot change, a protected one and one named twice fail, the first in order);
+then every value, checked as Redis checks it and kept as Redis prints it; then what the
+new values do; a failure anywhere leaves every parameter as it was. Numbers reach
+2^64-1, past what a Nat holds in the runtime, so they stay decimal strings, compared by
+length and digit, multiplied a digit at a time, and wrapped around 2^64 as Redis's
+`memtoull` wraps a memory value with a unit. Some details came from the differential
+test rather than from reading the source: Redis keeps a parameter's other name as a
+parameter of its own, so `CONFIG SET replica-priority 1 slave-priority 2` is not a
+duplicate and an error names the spelling used; repl-backlog-size never goes below 16 kB;
+and the reference build refuses `activedefrag yes`. CONFIG GET matches patterns with a
+port of Redis's `stringmatchlen` (classes, ranges, escapes, case aside), checked against
+Redis's own on 1,400 random patterns; a run of stars stops as Redis's does once the rest
+of the pattern matches nowhere, so a pattern costs polynomial time.
+
+What a value does: requirepass is the password (the session's state holds it next to the
+table), hz is capped to 1..500. The port, the addresses, TLS and the append-only file
+cannot change while BendKV runs: a new value fails with the error Redis gives when it
+cannot apply one ("Unable to listen on this port. Check server logs.", and so on).
+The other parameters are kept and read back but tune nothing; BendKV has no eviction,
+no replication and no encodings.
+
+Three laws: a CONFIG SET that fails leaves the server as it was; one that succeeds
+leaves it with the new parameters, whose requirepass is the password; and after a
+CONFIG SET of a parameter that succeeds, a lookup by the same name finds the value its
+check gave. The last needs a lemma on lookups after an update (a parameter found by a
+name is found again, with its new value; the others keep theirs) and walks the whole
+path of CONFIG SET, each decision split with the equation that says what it is.
+
+The test (`tests/config_test.py`) compares all 191 keys of `CONFIG GET *` at start, 146
+listed cases and thousands of random values, set and read back on both servers: no
+difference. Redis's own `unit/introspection` CONFIG tests (sanity, multiple args,
+rollback on a set error and on an apply error, duplicates, immutable, hidden configs,
+multiple args of GET) all pass.
+
+**A trap for `--verdict`.** The first version of the pattern matcher took the kernel
+from 4 s to 11 minutes. The cause was one function, the class matcher, whose patterns
+put literal characters inside a String two levels deep
+(`SCon{a, SCon{'-', SCon{z, rest}}}`): in the kernel a Char is a 32-bit word, and a
+literal is a decision on its bits, so nested literals multiply decision trees. Telling
+the elements of a class apart by comparing bytes (`U32.is_eq`) brought the whole
+recheck back to 8 s. A literal at the head of a match costs nothing noticeable.
+
+**Cost.** CONFIG GET of one name walks the table until the name (an early-exit search:
+a `Bool.pick` would compute the rest of the walk too): 38k to 85k instructions.
+redis-benchmark sends two at its start, which shows in `make perfcheck` as 3 to 6
+instructions per request; the requests themselves did not change.
 
 ## 4. Where a request's time goes, and hiding the memory waits
 

@@ -57,6 +57,9 @@ type SessOp is Data:
   SClientGetName{}
   SClientSetName{name: String}
   SClientReply{mode: String}
+  SConfigGet{args: List<&2, String>}
+  SConfigSet{args: List<&2, String>}
+  SConfigResetStat{}
   SReply{r: Reply}
   SBad{r: Reply}
 
@@ -511,6 +514,69 @@ def parse_function(id: Nat, sub: String, args: List<&2, String>) -> SessOp:
     case _:
       e_unknown_sub(sub, "FUNCTION")
 
+# CONFIG: GET and SET of the server's parameters (config.bend), RESETSTAT,
+# and REWRITE, which fails as Redis fails without a config file
+def config_id(+n: String, len: Nat) -> Nat:
+  match len:
+    case 3n:
+      Bool.pick(Nat, String.eq(n, "GET"), 1n, Bool.pick(Nat, String.eq(n, "SET"), 2n, 0n))
+    case 4n:
+      Bool.pick(Nat, String.eq(n, "HELP"), 5n, 0n)
+    case 7n:
+      Bool.pick(Nat, String.eq(n, "REWRITE"), 4n, 0n)
+    case 9n:
+      Bool.pick(Nat, String.eq(n, "RESETSTAT"), 3n, 0n)
+    case _:
+      0n
+
+def config_help() -> List<&2, String>:
+  ["GET <pattern>",
+   "    Return parameters matching the glob-like <pattern> and their values.",
+   "SET <directive> <value>",
+   "    Set the configuration <directive> to <value>.",
+   "RESETSTAT",
+   "    Reset statistics reported by the INFO command.",
+   "REWRITE",
+   "    Rewrite the configuration file."]
+
+def config_set(args: List<&2, String>) -> SessOp:
+  match args:
+    case Con{n, Con{v, +rest}}:
+      Bool.pick(SessOp, Nat.is_eq(Nat.mod(List.length(&2, String, rest), 2n), 0n), SConfigSet{Con{n, Con{v, rest}}}, sess_reply(RError{"ERR syntax error"}))
+    case _:
+      s_arity("config|set")
+
+def parse_config(id: Nat, sub: String, args: List<&2, String>) -> SessOp:
+  match id:
+    case 1n:  # GET
+      match args:
+        case Nil{}:
+          s_arity("config|get")
+        case Con{a, rest}:
+          SConfigGet{a <> rest}
+    case 2n:  # SET
+      config_set(args)
+    case 3n:  # RESETSTAT
+      match args:
+        case Nil{}:
+          SConfigResetStat{}
+        case _:
+          s_arity("config|resetstat")
+    case 4n:  # REWRITE
+      match args:
+        case Nil{}:
+          sess_reply(RError{"ERR The server is running without a config file"})
+        case _:
+          s_arity("config|rewrite")
+    case 5n:  # HELP
+      match args:
+        case Nil{}:
+          help("CONFIG", config_help())
+        case _:
+          s_arity("config|help")
+    case _:
+      e_unknown_sub(sub, "CONFIG")
+
 # FLUSHALL and FLUSHDB take ASYNC or SYNC, which change nothing here
 def parse_flush(args: List<&2, String>) -> Cmd:
   match args:
@@ -557,7 +623,7 @@ def cmd_id(+n: String, len: Nat) -> Nat:
       Bool.pick(Nat, String.eq(n, "APPEND"), 14n,
       Bool.pick(Nat, String.eq(n, "STRLEN"), 15n,
       Bool.pick(Nat, String.eq(n, "DBSIZE"), 18n,
-      Bool.pick(Nat, String.eq(n, "CONFIG"), 23n,
+      Bool.pick(Nat, String.eq(n, "CONFIG"), 47n,
       Bool.pick(Nat, String.eq(n, "SELECT"), 40n,
       Bool.pick(Nat, String.eq(n, "CLIENT"), 45n, 0n)))))))))))
     case 7n:
@@ -691,8 +757,6 @@ def parse_id(id: Nat, name: String, args: List<&2, String>) -> Cmd:
           e_arity("keys")
     case 22n:  # COMMAND
       Bad{RArray{Nil{}}}
-    case 23n:  # CONFIG
-      Bad{RArray{Nil{}}}
     case 25n:  # TYPE
       match args:
         case Con{k, Nil{}}:
@@ -741,6 +805,13 @@ def parse_sess(id: Nat, name: String, args: List<&2, String>) -> SessOp:
         case Con{+sub, rest}:
           +up = String.to_upper(sub)
           parse_function(function_id(up, String.length(up)), sub, rest)
+    case 47n:  # CONFIG
+      match args:
+        case Nil{}:
+          s_arity("config")
+        case Con{+sub, rest}:
+          +up = String.to_upper(sub)
+          parse_config(config_id(up, String.length(up)), sub, rest)
     case _:
       SBad{RError{no_newlines("ERR unknown command '" ++ String.take(name, 128n) ++ "', with args beginning with: " ++ unknown.args(args, ""))}}
 

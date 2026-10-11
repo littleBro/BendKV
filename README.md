@@ -2,7 +2,8 @@
 
 A Redis-compatible key-value server written in [Bend2](https://github.com/bendlang/bend),
 whose core is formally verified: the command semantics, the hash trie behind them, the
-append-only file and the connection state are proved against 38 laws, checked by Bend
+append-only file, the connection state and the configuration are proved against 41 laws,
+checked by Bend
 and rechecked by the BendTT kernel, whose soundness is proved in Lean.
 
 BendKV speaks RESP2, so `redis-cli`, `redis-benchmark` and `memtier_benchmark` work
@@ -40,16 +41,27 @@ The laws are stated by hand in [`proof/LAWS.bend`](proof/LAWS.bend) and proved i
 | Commuting | 5 | commands on different keys commute: replies and key contents are the same in either order, and adjacent independent commands in a batch can be swapped |
 | Persistence | 8 | logging changes no reply; the file reads back as written; after any history the server restores exactly the database it held; a file cut by a crash at any byte restores the database after some prefix of its commands, never a partial command |
 | Sessions | 5 | however the server dispatches a batch, it runs as its commands in order; a batch changes the database and the log as its executed commands do; a client that has not authenticated against a password cannot read or change any key |
+| Configuration | 3 | a CONFIG SET that fails changes nothing; one that succeeds makes the new requirepass the password; after a CONFIG SET of a parameter, CONFIG GET finds the value its check gave |
 
 `make check` takes about a second; `make verdict` rechecks every proof in the BendTT
-kernel in about 4 s.
+kernel in about 8 s.
 
 **Trust boundary.** The proofs cover `src/map.bend`, `src/redis.bend`, `src/batch.bend`,
-`src/aof.bend` and `src/session.bend`. Trusted without proof: the Bend compiler and its
-C runtime (with the patches), the RESP parser and the network shell (`src/resp.bend`,
-`src/server.bend`, tested only), clang, libc and the OS. This is not end-to-end
-verification in the sense of CompCert or seL4; see
+`src/aof.bend`, `src/session.bend` and `src/config.bend`. Trusted without proof: the Bend
+compiler and its C runtime (with the patches), the RESP parser and the network shell
+(`src/resp.bend`, `src/server.bend`, tested only), clang, libc and the OS. This is not
+end-to-end verification in the sense of CompCert or seL4; see
 [docs/FINDINGS.md](docs/FINDINGS.md), section 1.
+
+The BendTT kernel is proved sound in Lean, but the translation from Bend to the kernel
+is not, and since Bend 2's release several bugs were reported in which `--verdict`
+passes while the kernel checked something other than the source says
+([#1186](https://github.com/bendlang/bend/issues/1186),
+[#1236](https://github.com/bendlang/bend/issues/1236),
+[#1247](https://github.com/bendlang/bend/issues/1247), open as of October 2026). None
+of their triggers occurs in BendKV's proofs (no specialized parameters over empty types,
+no law helpers named like Base constructors, no colon/dot name clashes), but the
+translation stays in the trusted base.
 
 ## Commands
 
@@ -60,14 +72,21 @@ verification in the sense of CompCert or seL4; see
   database, as Redis with `databases 1`), QUIT, RESET, CLIENT (ID, GETNAME, SETNAME,
   REPLY ON/OFF/SKIP, NO-EVICT, GETREDIR, TRACKINGINFO, CACHING, UNBLOCK, HELP),
   FUNCTION FLUSH.
+- **Configuration:** CONFIG GET (names, aliases and glob patterns), SET (several
+  parameters at once, all or none), RESETSTAT, REWRITE, HELP, over all 178 parameters of
+  Redis 7.0.15, taken from Redis's own table by `tools/gen_config.py`: every value is
+  checked as Redis checks it and read back as Redis prints it. requirepass is the
+  password and hz is capped as in Redis; the port, the addresses, TLS and the append-only
+  file cannot change while BendKV runs (a new value fails as it does when Redis cannot
+  apply it); the other parameters are kept and read back but tune nothing, since BendKV
+  has no eviction, replication or encodings for them to tune.
 - **Protocol:** pipelining, partial packets, inline commands with quoting,
   binary-safe values, Redis's protocol errors.
 - **Persistence:** an append-only file in Redis's own format (`redis-check-aof` accepts
   it, and Redis loads it), fsync `always`, `everysec` or `no`.
 
-Not yet: other data types, expiry, multiple databases, MULTI/EXEC, pub/sub, CONFIG,
-INFO, COMMAND (CONFIG and COMMAND are placeholders so that `redis-cli` and
-`redis-benchmark` work). Integers are limited to 14 digits.
+Not yet: other data types, expiry, multiple databases, MULTI/EXEC, pub/sub, INFO,
+COMMAND (a placeholder so that `redis-cli` works). Integers are limited to 14 digits.
 
 ## Performance
 
@@ -115,13 +134,15 @@ event loop; `FILE` turns on the append-only file.
 make smoke     BEND="$B"   # the pure path end to end and the append-only file, no network
 make test      BEND="$B"   # needs redis-server, redis-cli and a C compiler
 make perfcheck BEND="$B"   # instructions per request against a baseline (needs valgrind)
-make gencheck              # the generated parts of the trie and its proofs are up to date
+make gencheck              # the generated parts (trie, its proofs, the parameter table) are up to date
 make bench     BEND="$B"   # redis-benchmark: BendKV against Redis
 ```
 
 `make test` runs, against a reference `redis-server`: a differential test of random
 command streams compared byte for byte, the protocol edge cases of Redis's
-`tests/unit/protocol.tcl`, the connection commands, robustness and concurrency checks,
+`tests/unit/protocol.tcl`, the connection commands, CONFIG (every parameter, a list of
+cases and thousands of random values, set and read back on both servers), robustness and
+concurrency checks,
 restarts from the append-only file (including a truncated tail), and disk failures
 under the file, injected with an `LD_PRELOAD` shim.
 
@@ -134,12 +155,14 @@ src/        the server
   batch.bend    a pipelined batch with cache hints                 verified
   aof.bend      append-only file: effects, encoding, loading       verified
   session.bend  connection and server state, whole batches         verified
+  config.bend   the parameters, CONFIG GET and SET                 verified
   resp.bend     RESP2 parser and reply encoder                     tested
   server.bend   TCP, connections, the database actor               tested
 proof/      LAWS.bend (the laws) and PROOF.bend (their proofs)
-tests/      differential, protocol, session, robustness, concurrency, AOF tests
+tests/      differential, protocol, session, CONFIG, robustness, concurrency, AOF tests
 bench/      in-process benchmarks of the map, the core and channels
-tools/      measurement scripts and the trie generator (tools/README.md)
+tools/      measurement scripts and the generators of the trie and of the parameter
+            table, with the facts it takes from Redis (tools/data/)
 bend-patches/  the 19 patches to the Bend compiler and runtime
 docs/       FINDINGS.md, DIRECTIONS.md (English), PERFORMANCE.md (Russian)
 ```

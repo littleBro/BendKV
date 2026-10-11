@@ -9,6 +9,7 @@ import ../src/batch.bend as B
 import ../src/resp.bend as P
 import ../src/aof.bend as A
 import ../src/session.bend as S
+import ../src/config.bend as C
 import ./LAWS.bend as Laws
 
 # Kit
@@ -5323,24 +5324,61 @@ def not_true(b: Bool) -> {Bool.not(b) == True{} : Bool} -> {b == False{} : Bool}
     case False{}:
       e => {==}
 
-# no command here changes the server
-def srv_same.k(k: S.Role, ok: Bool, +conn: S.Conn, +srv: S.Srv) -> {S.next_srv.k(k, ok, conn, srv) == srv : S.Srv}:
+# a client that may not run commands changes the server with none of its
+# commands: it may run only those that need no login, and those leave the
+# server as it was (CONFIG SET, which changes it, needs one)
+def srv_same.o(o: R.SessOp, +conn: S.Conn, +srv: S.Srv, +ef: {S.authed(conn, srv) == False{} : Bool})
+  -> {True{} == S.may(S.KSess{o}, conn, srv) : Bool}
+  -> {S.own_srv(o, conn, srv) == srv : S.Srv}:
+  match o:
+    case R.SHello{y0}:
+      e => {==}
+    case R.SAuth{y0}:
+      e => {==}
+    case R.SSelect{y0}:
+      e => Empty.absurd({S.own_srv(R.SSelect{y0}, conn, srv) == srv : S.Srv}, true_false(Equal.trans(Bool, True{}, S.authed(conn, srv), False{}, e, ef)))
+    case R.SQuit{}:
+      e => {==}
+    case R.SReset{}:
+      e => {==}
+    case R.SClientId{}:
+      e => Empty.absurd({S.own_srv(R.SClientId{}, conn, srv) == srv : S.Srv}, true_false(Equal.trans(Bool, True{}, S.authed(conn, srv), False{}, e, ef)))
+    case R.SClientGetName{}:
+      e => Empty.absurd({S.own_srv(R.SClientGetName{}, conn, srv) == srv : S.Srv}, true_false(Equal.trans(Bool, True{}, S.authed(conn, srv), False{}, e, ef)))
+    case R.SClientSetName{y0}:
+      e => Empty.absurd({S.own_srv(R.SClientSetName{y0}, conn, srv) == srv : S.Srv}, true_false(Equal.trans(Bool, True{}, S.authed(conn, srv), False{}, e, ef)))
+    case R.SClientReply{y0}:
+      e => Empty.absurd({S.own_srv(R.SClientReply{y0}, conn, srv) == srv : S.Srv}, true_false(Equal.trans(Bool, True{}, S.authed(conn, srv), False{}, e, ef)))
+    case R.SConfigGet{y0}:
+      e => Empty.absurd({S.own_srv(R.SConfigGet{y0}, conn, srv) == srv : S.Srv}, true_false(Equal.trans(Bool, True{}, S.authed(conn, srv), False{}, e, ef)))
+    case R.SConfigSet{y0}:
+      e => Empty.absurd({S.own_srv(R.SConfigSet{y0}, conn, srv) == srv : S.Srv}, true_false(Equal.trans(Bool, True{}, S.authed(conn, srv), False{}, e, ef)))
+    case R.SConfigResetStat{}:
+      e => Empty.absurd({S.own_srv(R.SConfigResetStat{}, conn, srv) == srv : S.Srv}, true_false(Equal.trans(Bool, True{}, S.authed(conn, srv), False{}, e, ef)))
+    case R.SReply{y0}:
+      e => Empty.absurd({S.own_srv(R.SReply{y0}, conn, srv) == srv : S.Srv}, true_false(Equal.trans(Bool, True{}, S.authed(conn, srv), False{}, e, ef)))
+    case R.SBad{y0}:
+      e => {==}
+
+def srv_same.k(k: S.Role, ok: Bool, +conn: S.Conn, +srv: S.Srv, +ef: {S.authed(conn, srv) == False{} : Bool})
+  -> {ok == S.may(k, conn, srv) : Bool}
+  -> {S.next_srv.k(k, ok, conn, srv) == srv : S.Srv}:
   match k ok:
     case S.KSess{o} True{}:
-      {==}
+      e => srv_same.o(o, conn, srv, ef)(e)
     case S.KSess{o} False{}:
-      {==}
+      e => {==}
     case S.KData{} _:
-      {==}
+      e => {==}
     case S.KBad{} _:
-      {==}
+      e => {==}
 
-def srv_same(q: Bool, +c: R.Cmd, +conn: S.Conn, +srv: S.Srv) -> {S.next_srv(q, c, conn, srv) == srv : S.Srv}:
+def srv_same(q: Bool, +c: R.Cmd, +conn: S.Conn, +srv: S.Srv, +ef: {S.authed(conn, srv) == False{} : Bool}) -> {S.next_srv(q, c, conn, srv) == srv : S.Srv}:
   match q:
     case True{}:
       {==}
     case False{}:
-      srv_same.k(S.kind(c), S.may(S.kind(c), conn, srv), conn, srv)
+      srv_same.k(S.kind(c), S.may(S.kind(c), conn, srv), conn, srv, ef)({==})
 
 # a command a client that may not run commands sends runs on the database
 # only when it is an error the parser found
@@ -5453,6 +5491,18 @@ def auth_own(o: R.SessOp, +id: Nat, +a: Bool, +n: String, +m: S.Mute, +srv: S.Sr
       el =>
         %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}}, srv), False{}, ef) : {S.conn.auth(S.next_conn.k(S.KSess{R.SClientReply{y0}}, _, S.Conn{id, a, n, m, False{}}, srv)) == False{} : Bool}
         ef
+    case R.SConfigGet{y0}:
+      el =>
+        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}}, srv), False{}, ef) : {S.conn.auth(S.next_conn.k(S.KSess{R.SConfigGet{y0}}, _, S.Conn{id, a, n, m, False{}}, srv)) == False{} : Bool}
+        ef
+    case R.SConfigSet{y0}:
+      el =>
+        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}}, srv), False{}, ef) : {S.conn.auth(S.next_conn.k(S.KSess{R.SConfigSet{y0}}, _, S.Conn{id, a, n, m, False{}}, srv)) == False{} : Bool}
+        ef
+    case R.SConfigResetStat{}:
+      el =>
+        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}}, srv), False{}, ef) : {S.conn.auth(S.next_conn.k(S.KSess{R.SConfigResetStat{}}, _, S.Conn{id, a, n, m, False{}}, srv)) == False{} : Bool}
+        ef
     case R.SReply{y0}:
       el =>
         %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}}, srv), False{}, ef) : {S.conn.auth(S.next_conn.k(S.KSess{R.SReply{y0}}, _, S.Conn{id, a, n, m, False{}}, srv)) == False{} : Bool}
@@ -5513,7 +5563,181 @@ def noauth_go(cmds: List<&2, R.Cmd>, conn: S.Conn, +srv: S.Srv) -> {S.conn.auth(
     case Con{+c, +rest} S.Conn{+id, +a, +n, +m, False{}}:
       +ea => +ep => +el =>
         ran_bad(c, S.plan(rest, S.next_conn(False{}, c, S.Conn{id, a, n, m, False{}}, srv), S.next_srv(False{}, c, S.Conn{id, a, n, m, False{}}, srv)), id, a, n, m, srv, or_ff(a, S.nopass(srv))(ea)(ep))(
-          noauth_go(rest, S.next_conn(False{}, c, S.Conn{id, a, n, m, False{}}, srv), S.next_srv(False{}, c, S.Conn{id, a, n, m, False{}}, srv))(auth_nc(c, id, a, n, m, srv, or_ff(a, S.nopass(srv))(ea)(ep), ep)(not_true(Laws.logs_in(c))(and_l(Bool.not(Laws.logs_in(c)), Laws.no_login(rest))(el))))(Equal.trans(Bool, S.nopass(S.next_srv(False{}, c, S.Conn{id, a, n, m, False{}}, srv)), S.nopass(srv), False{}, Equal.cong(S.Srv, Bool, z => S.nopass(z), S.next_srv(False{}, c, S.Conn{id, a, n, m, False{}}, srv), srv, srv_same(False{}, c, S.Conn{id, a, n, m, False{}}, srv)), ep))(and_r(Bool.not(Laws.logs_in(c)), Laws.no_login(rest))(el)))
+          noauth_go(rest, S.next_conn(False{}, c, S.Conn{id, a, n, m, False{}}, srv), S.next_srv(False{}, c, S.Conn{id, a, n, m, False{}}, srv))(auth_nc(c, id, a, n, m, srv, or_ff(a, S.nopass(srv))(ea)(ep), ep)(not_true(Laws.logs_in(c))(and_l(Bool.not(Laws.logs_in(c)), Laws.no_login(rest))(el))))(Equal.trans(Bool, S.nopass(S.next_srv(False{}, c, S.Conn{id, a, n, m, False{}}, srv)), S.nopass(srv), False{}, Equal.cong(S.Srv, Bool, z => S.nopass(z), S.next_srv(False{}, c, S.Conn{id, a, n, m, False{}}, srv), srv, srv_same(False{}, c, S.Conn{id, a, n, m, False{}}, srv, or_ff(a, S.nopass(srv))(ea)(ep))), ep))(and_r(Bool.not(Laws.logs_in(c)), Laws.no_login(rest))(el)))
 
 def Laws.noauth(conn, srv, cmds, e1, e2, e3):
   noauth_go(cmds, conn, srv)(e1)(e2)(e3)
+
+# Configuration
+# =============
+
+def Laws.config_fail(args, conn, srv, r, e):
+  %Equal.sym(Result<&2, &2, R.Reply, List<&2, C.CItem>>, C.config.set(args, S.srv.cfg(srv)), Fail{r}, e) : {S.srv.set(_, srv) == srv : S.Srv}
+  {==}
+
+def Laws.config_pass(args, conn, srv, cfg, e):
+  %Equal.sym(Result<&2, &2, R.Reply, List<&2, C.CItem>>, C.config.set(args, S.srv.cfg(srv)), Done{cfg}, e) : {S.srv.set(_, srv) == S.Srv{C.config.get_value(cfg, "requirepass"), cfg} : S.Srv}
+  {==}
+
+def cfg_some_val(m: Maybe<&2, C.CItem>, d: C.CItem) -> C.CItem:
+  match m:
+    case Some{x}:
+      x
+    case None{}:
+      d
+
+def cfg_is_none(m: Maybe<&2, C.CItem>) -> Bool:
+  match m:
+    case Some{x}:
+      False{}
+    case None{}:
+      True{}
+
+def cfg_none_some(-x: C.CItem, e: {None{} == Some{x} : Maybe<&2, C.CItem>}) -> Empty:
+  true_false(Equal.cong(Maybe<&2, C.CItem>, Bool, z => cfg_is_none(z), None{}, Some{x}, e))
+
+def cfg_some_inj(+x: C.CItem, +y: C.CItem, e: {Some{x} == Some{y} : Maybe<&2, C.CItem>}) -> {x == y : C.CItem}:
+  Equal.cong(Maybe<&2, C.CItem>, C.CItem, z => cfg_some_val(z, x), Some{x}, Some{y}, e)
+
+def cfg_done_val(r: Result<&2, &2, R.Reply, List<&2, C.CItem>>, d: List<&2, C.CItem>) -> List<&2, C.CItem>:
+  match r:
+    case Done{x}:
+      x
+    case Fail{e}:
+      d
+
+def cfg_is_done(r: Result<&2, &2, R.Reply, List<&2, C.CItem>>) -> Bool:
+  match r:
+    case Done{x}:
+      True{}
+    case Fail{e}:
+      False{}
+
+def cfg_fail_done(-r: R.Reply, -x: List<&2, C.CItem>, e: {Fail{r} == Done{x} : Result<&2, &2, R.Reply, List<&2, C.CItem>>}) -> Empty:
+  false_true(Equal.cong(Result<&2, &2, R.Reply, List<&2, C.CItem>>, Bool, z => cfg_is_done(z), Fail{r}, Done{x}, e))
+
+def cfg_done_inj(+x: List<&2, C.CItem>, +y: List<&2, C.CItem>, e: {Done{x} == Done{y} : Result<&2, &2, R.Reply, List<&2, C.CItem>>}) -> {x == y : List<&2, C.CItem>}:
+  Equal.cong(Result<&2, &2, R.Reply, List<&2, C.CItem>>, List<&2, C.CItem>, z => cfg_done_val(z, x), Done{x}, Done{y}, e)
+
+# a parameter found by a name keeps being found by it once its value
+# changes: with its new value, when the change is to it, and as it was,
+# when the change is to another; b is whether the first parameter is the
+# one called l
+def find_put.k(b: Bool, +n: String, +a: String, +i: Bool, +h: Bool, +pr: Bool, +m: Bool, +t: C.CTy, +ap: C.CApp, +v: String, +rest: List<&2, C.CItem>, +l: String, +it: C.CItem, +name: String, +nv: String,
+  ih: {C.item.find(rest, l) == Some{it} : Maybe<&2, C.CItem>} -> {C.item.name(it) == name : String} -> {C.item.find(C.items.put(rest, name, nv), l) == Some{Laws.with(it, nv)} : Maybe<&2, C.CItem>})
+  -> {b == C.item.is(l, C.CItem{C.CParam{n, a, i, h, pr, m, t, ap}, v}) : Bool}
+  -> {C.item.find(Con{C.CItem{C.CParam{n, a, i, h, pr, m, t, ap}, v}, rest}, l) == Some{it} : Maybe<&2, C.CItem>}
+  -> {C.item.name(it) == name : String}
+  -> {C.item.find(C.items.put(Con{C.CItem{C.CParam{n, a, i, h, pr, m, t, ap}, v}, rest}, name, nv), l) == Some{Laws.with(it, nv)} : Maybe<&2, C.CItem>}:
+  match b:
+    case True{}:
+      +eb => +e1 => en =>
+        %eb : {C.item.find.go(Con{C.CItem{C.CParam{n, a, i, h, pr, m, t, ap}, Bool.pick(String, String.eq(n, name), nv, v)}, C.items.put(rest, name, nv)}, l, _) == Some{Laws.with(it, nv)} : Maybe<&2, C.CItem>}
+        %cfg_some_inj(C.CItem{C.CParam{n, a, i, h, pr, m, t, ap}, v}, it, Equal.trans(Maybe<&2, C.CItem>, C.item.find.go(Con{C.CItem{C.CParam{n, a, i, h, pr, m, t, ap}, v}, rest}, l, True{}), C.item.find(Con{C.CItem{C.CParam{n, a, i, h, pr, m, t, ap}, v}, rest}, l), Some{it}, Equal.cong(Bool, Maybe<&2, C.CItem>, z => C.item.find.go(Con{C.CItem{C.CParam{n, a, i, h, pr, m, t, ap}, v}, rest}, l, z), True{}, C.item.is(l, C.CItem{C.CParam{n, a, i, h, pr, m, t, ap}, v}), eb), e1)) : {Some{C.CItem{C.CParam{n, a, i, h, pr, m, t, ap}, Bool.pick(String, String.eq(n, name), nv, v)}} == Some{Laws.with(_, nv)} : Maybe<&2, C.CItem>}
+        %Equal.sym(String, name, n, Equal.trans(String, name, C.item.name(it), n, Equal.sym(String, C.item.name(it), name, en), Equal.cong(C.CItem, String, z => C.item.name(z), it, C.CItem{C.CParam{n, a, i, h, pr, m, t, ap}, v}, Equal.sym(C.CItem, C.CItem{C.CParam{n, a, i, h, pr, m, t, ap}, v}, it, cfg_some_inj(C.CItem{C.CParam{n, a, i, h, pr, m, t, ap}, v}, it, Equal.trans(Maybe<&2, C.CItem>, C.item.find.go(Con{C.CItem{C.CParam{n, a, i, h, pr, m, t, ap}, v}, rest}, l, True{}), C.item.find(Con{C.CItem{C.CParam{n, a, i, h, pr, m, t, ap}, v}, rest}, l), Some{it}, Equal.cong(Bool, Maybe<&2, C.CItem>, z => C.item.find.go(Con{C.CItem{C.CParam{n, a, i, h, pr, m, t, ap}, v}, rest}, l, z), True{}, C.item.is(l, C.CItem{C.CParam{n, a, i, h, pr, m, t, ap}, v}), eb), e1)))))) : {Some{C.CItem{C.CParam{n, a, i, h, pr, m, t, ap}, Bool.pick(String, String.eq(n, _), nv, v)}} == Some{C.CItem{C.CParam{n, a, i, h, pr, m, t, ap}, nv}} : Maybe<&2, C.CItem>}
+        %str_eq_self(n) : {Some{C.CItem{C.CParam{n, a, i, h, pr, m, t, ap}, Bool.pick(String, _, nv, v)}} == Some{C.CItem{C.CParam{n, a, i, h, pr, m, t, ap}, nv}} : Maybe<&2, C.CItem>}
+        {==}
+    case False{}:
+      +eb => e1 => en =>
+        %eb : {C.item.find.go(Con{C.CItem{C.CParam{n, a, i, h, pr, m, t, ap}, Bool.pick(String, String.eq(n, name), nv, v)}, C.items.put(rest, name, nv)}, l, _) == Some{Laws.with(it, nv)} : Maybe<&2, C.CItem>}
+        ih(Equal.trans(Maybe<&2, C.CItem>, C.item.find.go(Con{C.CItem{C.CParam{n, a, i, h, pr, m, t, ap}, v}, rest}, l, False{}), C.item.find(Con{C.CItem{C.CParam{n, a, i, h, pr, m, t, ap}, v}, rest}, l), Some{it}, Equal.cong(Bool, Maybe<&2, C.CItem>, z => C.item.find.go(Con{C.CItem{C.CParam{n, a, i, h, pr, m, t, ap}, v}, rest}, l, z), False{}, C.item.is(l, C.CItem{C.CParam{n, a, i, h, pr, m, t, ap}, v}), eb), e1))(en)
+
+def find_put(items: List<&2, C.CItem>, +l: String, +it: C.CItem, +name: String, +nv: String)
+  -> {C.item.find(items, l) == Some{it} : Maybe<&2, C.CItem>}
+  -> {C.item.name(it) == name : String}
+  -> {C.item.find(C.items.put(items, name, nv), l) == Some{Laws.with(it, nv)} : Maybe<&2, C.CItem>}:
+  match items:
+    case Nil{}:
+      e1 => en => Empty.absurd({C.item.find(C.items.put(Nil{}, name, nv), l) == Some{Laws.with(it, nv)} : Maybe<&2, C.CItem>}, cfg_none_some(it, e1))
+    case Con{C.CItem{C.CParam{+n, +a, +i, +h, +pr, +m, +t, +ap}, +v}, +rest}:
+      find_put.k(C.item.is(l, C.CItem{C.CParam{n, a, i, h, pr, m, t, ap}, v}), n, a, i, h, pr, m, t, ap, v, rest, l, it, name, nv, find_put(rest, l, it, name, nv))({==})
+
+# A CONFIG SET of one parameter that succeeds got past the checks of its
+# name, of its value (e2) and of what the value does; so it stored the
+# checked value in the parameter, where a CONFIG GET finds it
+
+# the end: the parameters are the old ones with the new value
+def sg.end(+n: String, +v: String, +items: List<&2, C.CItem>, +name: String, +alias: String, +imm: Bool, +hidden: Bool, +prot: Bool, +multi: Bool, +ty: C.CTy, +app: C.CApp, +old: String, +nv: String, +items2: List<&2, C.CItem>, e1: {C.item.find(items, String.to_lower(n)) == Some{C.CItem{C.CParam{name, alias, imm, hidden, prot, multi, ty, app}, old}} : Maybe<&2, C.CItem>})
+  -> {Done{C.items.put(items, name, nv)} == Done{items2} : Result<&2, &2, R.Reply, List<&2, C.CItem>>}
+  -> {C.item.find(items2, String.to_lower(n)) == Some{Laws.with(C.CItem{C.CParam{name, alias, imm, hidden, prot, multi, ty, app}, old}, nv)} : Maybe<&2, C.CItem>}:
+  e =>
+    %cfg_done_inj(C.items.put(items, name, nv), items2, e) : {C.item.find(_, String.to_lower(n)) == Some{Laws.with(C.CItem{C.CParam{name, alias, imm, hidden, prot, multi, ty, app}, old}, nv)} : Maybe<&2, C.CItem>}
+    find_put(items, String.to_lower(n), C.CItem{C.CParam{name, alias, imm, hidden, prot, multi, ty, app}, old}, name, nv)(e1)({==})
+
+# a parameter that cannot change while the server runs: same is whether
+# the new value is the old one
+def sg.same(same: Bool, +msg: String, +n: String, +v: String, +items: List<&2, C.CItem>, +name: String, +alias: String, +imm: Bool, +hidden: Bool, +prot: Bool, +multi: Bool, +ty: C.CTy, +old: String, +nv: String, +items2: List<&2, C.CItem>, e1: {C.item.find(items, String.to_lower(n)) == Some{C.CItem{C.CParam{name, alias, imm, hidden, prot, multi, ty, C.AppFixed{msg}}, old}} : Maybe<&2, C.CItem>})
+  -> {same == String.eq(old, nv) : Bool}
+  -> {C.set.fixed(Maybe.or(&2, String, C.fixed.of(C.AppFixed{msg}, String.to_lower(n), String.eq(old, nv)), None{}), [C.VOk{C.CItem{C.CParam{name, alias, imm, hidden, prot, multi, ty, C.AppFixed{msg}}, old}, String.to_lower(n), nv}], items) == Done{items2} : Result<&2, &2, R.Reply, List<&2, C.CItem>>}
+  -> {C.item.find(items2, String.to_lower(n)) == Some{Laws.with(C.CItem{C.CParam{name, alias, imm, hidden, prot, multi, ty, C.AppFixed{msg}}, old}, nv)} : Maybe<&2, C.CItem>}:
+  match same:
+    case True{}:
+      es => e => sg.end(n, v, items, name, alias, imm, hidden, prot, multi, ty, C.AppFixed{msg}, old, nv, items2, e1)(Equal.trans(Result<&2, &2, R.Reply, List<&2, C.CItem>>, C.set.fixed(Maybe.or(&2, String, C.fixed.of(C.AppFixed{msg}, String.to_lower(n), True{}), None{}), [C.VOk{C.CItem{C.CParam{name, alias, imm, hidden, prot, multi, ty, C.AppFixed{msg}}, old}, String.to_lower(n), nv}], items), C.set.fixed(Maybe.or(&2, String, C.fixed.of(C.AppFixed{msg}, String.to_lower(n), String.eq(old, nv)), None{}), [C.VOk{C.CItem{C.CParam{name, alias, imm, hidden, prot, multi, ty, C.AppFixed{msg}}, old}, String.to_lower(n), nv}], items), Done{items2}, Equal.cong(Bool, Result<&2, &2, R.Reply, List<&2, C.CItem>>, z => C.set.fixed(Maybe.or(&2, String, C.fixed.of(C.AppFixed{msg}, String.to_lower(n), z), None{}), [C.VOk{C.CItem{C.CParam{name, alias, imm, hidden, prot, multi, ty, C.AppFixed{msg}}, old}, String.to_lower(n), nv}], items), True{}, String.eq(old, nv), es), e))
+    case False{}:
+      es => e => Empty.absurd({C.item.find(items2, String.to_lower(n)) == Some{Laws.with(C.CItem{C.CParam{name, alias, imm, hidden, prot, multi, ty, C.AppFixed{msg}}, old}, nv)} : Maybe<&2, C.CItem>}, cfg_fail_done(R.RError{C.e.set(String.to_lower(n), msg)}, items2, Equal.trans(Result<&2, &2, R.Reply, List<&2, C.CItem>>, C.set.fixed(Maybe.or(&2, String, C.fixed.of(C.AppFixed{msg}, String.to_lower(n), False{}), None{}), [C.VOk{C.CItem{C.CParam{name, alias, imm, hidden, prot, multi, ty, C.AppFixed{msg}}, old}, String.to_lower(n), nv}], items), C.set.fixed(Maybe.or(&2, String, C.fixed.of(C.AppFixed{msg}, String.to_lower(n), String.eq(old, nv)), None{}), [C.VOk{C.CItem{C.CParam{name, alias, imm, hidden, prot, multi, ty, C.AppFixed{msg}}, old}, String.to_lower(n), nv}], items), Done{items2}, Equal.cong(Bool, Result<&2, &2, R.Reply, List<&2, C.CItem>>, z => C.set.fixed(Maybe.or(&2, String, C.fixed.of(C.AppFixed{msg}, String.to_lower(n), z), None{}), [C.VOk{C.CItem{C.CParam{name, alias, imm, hidden, prot, multi, ty, C.AppFixed{msg}}, old}, String.to_lower(n), nv}], items), False{}, String.eq(old, nv), es), e)))
+
+# what the new value does: only a parameter that cannot change may fail
+def sg.app(+n: String, +v: String, +items: List<&2, C.CItem>, +name: String, +alias: String, +imm: Bool, +hidden: Bool, +prot: Bool, +multi: Bool, +ty: C.CTy, +app: C.CApp, +old: String, +nv: String, +items2: List<&2, C.CItem>, e1: {C.item.find(items, String.to_lower(n)) == Some{C.CItem{C.CParam{name, alias, imm, hidden, prot, multi, ty, app}, old}} : Maybe<&2, C.CItem>})
+  -> {C.set.fixed(C.fixed.first([C.VOk{C.CItem{C.CParam{name, alias, imm, hidden, prot, multi, ty, app}, old}, String.to_lower(n), nv}]), [C.VOk{C.CItem{C.CParam{name, alias, imm, hidden, prot, multi, ty, app}, old}, String.to_lower(n), nv}], items) == Done{items2} : Result<&2, &2, R.Reply, List<&2, C.CItem>>}
+  -> {C.item.find(items2, String.to_lower(n)) == Some{Laws.with(C.CItem{C.CParam{name, alias, imm, hidden, prot, multi, ty, app}, old}, nv)} : Maybe<&2, C.CItem>}:
+  match app:
+    case C.AppNone{}:
+      e => sg.end(n, v, items, name, alias, imm, hidden, prot, multi, ty, C.AppNone{}, old, nv, items2, e1)(e)
+    case C.AppHz{}:
+      e => sg.end(n, v, items, name, alias, imm, hidden, prot, multi, ty, C.AppHz{}, old, nv, items2, e1)(e)
+    case C.AppMin{+x}:
+      e => sg.end(n, v, items, name, alias, imm, hidden, prot, multi, ty, C.AppMin{x}, old, nv, items2, e1)(e)
+    case C.AppPass{}:
+      e => sg.end(n, v, items, name, alias, imm, hidden, prot, multi, ty, C.AppPass{}, old, nv, items2, e1)(e)
+    case C.AppFixed{+msg}:
+      e => sg.same(String.eq(old, nv), msg, n, v, items, name, alias, imm, hidden, prot, multi, ty, old, nv, items2, e1)({==})(e)
+
+# past the checks of its name: its value is checked (e2)
+def sg.ok(+n: String, +v: String, +items: List<&2, C.CItem>, +name: String, +alias: String, +imm: Bool, +hidden: Bool, +prot: Bool, +multi: Bool, +ty: C.CTy, +app: C.CApp, +old: String, +nv: String, +items2: List<&2, C.CItem>, e1: {C.item.find(items, String.to_lower(n)) == Some{C.CItem{C.CParam{name, alias, imm, hidden, prot, multi, ty, app}, old}} : Maybe<&2, C.CItem>}, e2: {C.item.set(C.CItem{C.CParam{name, alias, imm, hidden, prot, multi, ty, app}, old}, v) == Done{nv} : Result<&2, &2, String, String>})
+  -> {C.set.go([C.LOk{C.CItem{C.CParam{name, alias, imm, hidden, prot, multi, ty, app}, old}, String.to_lower(n), v}], items) == Done{items2} : Result<&2, &2, R.Reply, List<&2, C.CItem>>}
+  -> {C.item.find(items2, String.to_lower(n)) == Some{Laws.with(C.CItem{C.CParam{name, alias, imm, hidden, prot, multi, ty, app}, old}, nv)} : Maybe<&2, C.CItem>}:
+  e =>
+    sg.app(n, v, items, name, alias, imm, hidden, prot, multi, ty, app, old, nv, items2, e1)(Equal.trans(Result<&2, &2, R.Reply, List<&2, C.CItem>>, C.set.vals([C.val.mk(Done{nv}, C.CItem{C.CParam{name, alias, imm, hidden, prot, multi, ty, app}, old}, String.to_lower(n))], items), C.set.vals([C.val.mk(C.item.set(C.CItem{C.CParam{name, alias, imm, hidden, prot, multi, ty, app}, old}, v), C.CItem{C.CParam{name, alias, imm, hidden, prot, multi, ty, app}, old}, String.to_lower(n))], items), Done{items2},
+      Equal.cong(Result<&2, &2, String, String>, Result<&2, &2, R.Reply, List<&2, C.CItem>>, z => C.set.vals([C.val.mk(z, C.CItem{C.CParam{name, alias, imm, hidden, prot, multi, ty, app}, old}, String.to_lower(n))], items), Done{nv}, C.item.set(C.CItem{C.CParam{name, alias, imm, hidden, prot, multi, ty, app}, old}, v), Equal.sym(Result<&2, &2, String, String>, C.item.set(C.CItem{C.CParam{name, alias, imm, hidden, prot, multi, ty, app}, old}, v), Done{nv}, e2)), e))
+
+# a protected parameter: p is whether enable-protected-configs lets it change
+def sg.p(p: Bool, +n: String, +v: String, +items: List<&2, C.CItem>, +name: String, +alias: String, +hidden: Bool, +multi: Bool, +ty: C.CTy, +app: C.CApp, +old: String, +nv: String, +items2: List<&2, C.CItem>, e1: {C.item.find(items, String.to_lower(n)) == Some{C.CItem{C.CParam{name, alias, False{}, hidden, True{}, multi, ty, app}, old}} : Maybe<&2, C.CItem>}, e2: {C.item.set(C.CItem{C.CParam{name, alias, False{}, hidden, True{}, multi, ty, app}, old}, v) == Done{nv} : Result<&2, &2, String, String>})
+  -> {p == C.prot_ok(items) : Bool}
+  -> {C.set.go([C.look.deny(False{}, Bool.not(C.prot_ok(items)), False{}, n, C.LOk{C.CItem{C.CParam{name, alias, False{}, hidden, True{}, multi, ty, app}, old}, String.to_lower(n), v})], items) == Done{items2} : Result<&2, &2, R.Reply, List<&2, C.CItem>>}
+  -> {C.item.find(items2, String.to_lower(n)) == Some{Laws.with(C.CItem{C.CParam{name, alias, False{}, hidden, True{}, multi, ty, app}, old}, nv)} : Maybe<&2, C.CItem>}:
+  match p:
+    case True{}:
+      ep => e => sg.ok(n, v, items, name, alias, False{}, hidden, True{}, multi, ty, app, old, nv, items2, e1, e2)(Equal.trans(Result<&2, &2, R.Reply, List<&2, C.CItem>>, C.set.go([C.look.deny(False{}, Bool.not(True{}), False{}, n, C.LOk{C.CItem{C.CParam{name, alias, False{}, hidden, True{}, multi, ty, app}, old}, String.to_lower(n), v})], items), C.set.go([C.look.deny(False{}, Bool.not(C.prot_ok(items)), False{}, n, C.LOk{C.CItem{C.CParam{name, alias, False{}, hidden, True{}, multi, ty, app}, old}, String.to_lower(n), v})], items), Done{items2}, Equal.cong(Bool, Result<&2, &2, R.Reply, List<&2, C.CItem>>, z => C.set.go([C.look.deny(False{}, Bool.not(z), False{}, n, C.LOk{C.CItem{C.CParam{name, alias, False{}, hidden, True{}, multi, ty, app}, old}, String.to_lower(n), v})], items), True{}, C.prot_ok(items), ep), e))
+    case False{}:
+      ep => e => Empty.absurd({C.item.find(items2, String.to_lower(n)) == Some{Laws.with(C.CItem{C.CParam{name, alias, False{}, hidden, True{}, multi, ty, app}, old}, nv)} : Maybe<&2, C.CItem>}, cfg_fail_done(R.RError{C.e.set(n, "can't set protected config")}, items2, Equal.trans(Result<&2, &2, R.Reply, List<&2, C.CItem>>, C.set.go([C.look.deny(False{}, Bool.not(False{}), False{}, n, C.LOk{C.CItem{C.CParam{name, alias, False{}, hidden, True{}, multi, ty, app}, old}, String.to_lower(n), v})], items), C.set.go([C.look.deny(False{}, Bool.not(C.prot_ok(items)), False{}, n, C.LOk{C.CItem{C.CParam{name, alias, False{}, hidden, True{}, multi, ty, app}, old}, String.to_lower(n), v})], items), Done{items2}, Equal.cong(Bool, Result<&2, &2, R.Reply, List<&2, C.CItem>>, z => C.set.go([C.look.deny(False{}, Bool.not(z), False{}, n, C.LOk{C.CItem{C.CParam{name, alias, False{}, hidden, True{}, multi, ty, app}, old}, String.to_lower(n), v})], items), False{}, C.prot_ok(items), ep), e)))
+
+def sg.prot(+n: String, +v: String, +items: List<&2, C.CItem>, +name: String, +alias: String, +hidden: Bool, +prot: Bool, +multi: Bool, +ty: C.CTy, +app: C.CApp, +old: String, +nv: String, +items2: List<&2, C.CItem>, e1: {C.item.find(items, String.to_lower(n)) == Some{C.CItem{C.CParam{name, alias, False{}, hidden, prot, multi, ty, app}, old}} : Maybe<&2, C.CItem>}, e2: {C.item.set(C.CItem{C.CParam{name, alias, False{}, hidden, prot, multi, ty, app}, old}, v) == Done{nv} : Result<&2, &2, String, String>})
+  -> {C.set.go([C.look.deny(False{}, Bool.and(prot, Bool.not(C.prot_ok(items))), False{}, n, C.LOk{C.CItem{C.CParam{name, alias, False{}, hidden, prot, multi, ty, app}, old}, String.to_lower(n), v})], items) == Done{items2} : Result<&2, &2, R.Reply, List<&2, C.CItem>>}
+  -> {C.item.find(items2, String.to_lower(n)) == Some{Laws.with(C.CItem{C.CParam{name, alias, False{}, hidden, prot, multi, ty, app}, old}, nv)} : Maybe<&2, C.CItem>}:
+  match prot:
+    case True{}:
+      e => sg.p(C.prot_ok(items), n, v, items, name, alias, hidden, multi, ty, app, old, nv, items2, e1, e2)({==})(e)
+    case False{}:
+      e => sg.ok(n, v, items, name, alias, False{}, hidden, False{}, multi, ty, app, old, nv, items2, e1, e2)(e)
+
+def sg.imm(+n: String, +v: String, +items: List<&2, C.CItem>, +name: String, +alias: String, +imm: Bool, +hidden: Bool, +prot: Bool, +multi: Bool, +ty: C.CTy, +app: C.CApp, +old: String, +nv: String, +items2: List<&2, C.CItem>, e1: {C.item.find(items, String.to_lower(n)) == Some{C.CItem{C.CParam{name, alias, imm, hidden, prot, multi, ty, app}, old}} : Maybe<&2, C.CItem>}, e2: {C.item.set(C.CItem{C.CParam{name, alias, imm, hidden, prot, multi, ty, app}, old}, v) == Done{nv} : Result<&2, &2, String, String>})
+  -> {C.set.go([C.look.deny(imm, Bool.and(prot, Bool.not(C.prot_ok(items))), False{}, n, C.LOk{C.CItem{C.CParam{name, alias, imm, hidden, prot, multi, ty, app}, old}, String.to_lower(n), v})], items) == Done{items2} : Result<&2, &2, R.Reply, List<&2, C.CItem>>}
+  -> {C.item.find(items2, String.to_lower(n)) == Some{Laws.with(C.CItem{C.CParam{name, alias, imm, hidden, prot, multi, ty, app}, old}, nv)} : Maybe<&2, C.CItem>}:
+  match imm:
+    case True{}:
+      e => Empty.absurd({C.item.find(items2, String.to_lower(n)) == Some{Laws.with(C.CItem{C.CParam{name, alias, True{}, hidden, prot, multi, ty, app}, old}, nv)} : Maybe<&2, C.CItem>}, cfg_fail_done(R.RError{C.e.set(n, "can't set immutable config")}, items2, e))
+    case False{}:
+      e => sg.prot(n, v, items, name, alias, hidden, prot, multi, ty, app, old, nv, items2, e1, e2)(e)
+
+def sg.top(+n: String, +v: String, +items: List<&2, C.CItem>, it: C.CItem, +nv: String, +items2: List<&2, C.CItem>)
+  -> {C.item.find(items, String.to_lower(n)) == Some{it} : Maybe<&2, C.CItem>}
+  -> {C.item.set(it, v) == Done{nv} : Result<&2, &2, String, String>}
+  -> {C.config.set([n, v], items) == Done{items2} : Result<&2, &2, R.Reply, List<&2, C.CItem>>}
+  -> {C.item.find(items2, String.to_lower(n)) == Some{Laws.with(it, nv)} : Maybe<&2, C.CItem>}:
+  match it:
+    case C.CItem{C.CParam{+name, +alias, +imm, +hidden, +prot, +multi, +ty, +app}, +old}:
+      +e1 => e2 => e3 =>
+        sg.imm(n, v, items, name, alias, imm, hidden, prot, multi, ty, app, old, nv, items2, e1, e2)(Equal.trans(Result<&2, &2, R.Reply, List<&2, C.CItem>>, C.set.go([C.look.mk(Some{C.CItem{C.CParam{name, alias, imm, hidden, prot, multi, ty, app}, old}}, n, v, Nil{}, C.prot_ok(items))], items), C.set.go([C.look.mk(C.item.find(items, String.to_lower(n)), n, v, Nil{}, C.prot_ok(items))], items), Done{items2}, Equal.cong(Maybe<&2, C.CItem>, Result<&2, &2, R.Reply, List<&2, C.CItem>>, z => C.set.go([C.look.mk(z, n, v, Nil{}, C.prot_ok(items))], items), Some{C.CItem{C.CParam{name, alias, imm, hidden, prot, multi, ty, app}, old}}, C.item.find(items, String.to_lower(n)), Equal.sym(Maybe<&2, C.CItem>, C.item.find(items, String.to_lower(n)), Some{C.CItem{C.CParam{name, alias, imm, hidden, prot, multi, ty, app}, old}}, e1)), e3))
+
+def Laws.config_set_get(n, v, items, it, nv, items2, e1, e2, e3):
+  sg.top(n, v, items, it, nv, items2)(e1)(e2)(e3)

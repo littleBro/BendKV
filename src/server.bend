@@ -33,6 +33,7 @@ import ./resp.bend as P
 import ./batch.bend as B
 import ./aof.bend as A
 import ./session.bend as S
+import ./config.bend as C
 
 # a batch from a connection in the state cn (B.Job: its commands, and
 # the hashes of their keys, for the hints of batch.bend), and the channel
@@ -642,19 +643,19 @@ def restore(+path: String) -> IO(KV.Trie<String>):
 
 # the actor appending to the file, on the database the file held
 @unsafe
-def open_aof(+path: String, +sync: Sync, db: KV.Trie<String>) -> IO(Chan(Req)):
+def open_aof(+path: String, +sync: Sync, srv: S.Srv, db: KV.Trie<String>) -> IO(Chan(Req)):
   do IO<Chan(Req)>:
     f : File <- IO.try(File, File.open(path, "a"))
     Unit <- syncer(sync, path)
     +reqs : Chan(Req) <- Chan.new(Req, 1024)
-    Unit <- IO.spawn(Unit, aof_loop(St{S.srv_new(""), db}, f, sync, reqs))
+    Unit <- IO.spawn(Unit, aof_loop(St{srv, db}, f, sync, reqs))
     return reqs
 
 @unsafe
-def serve_aof(+port: U32, +post: Bool, +path: String, +sync: Sync) -> IO(Unit):
+def serve_aof(+port: U32, +post: Bool, +path: String, +sync: Sync, srv: S.Srv) -> IO(Unit):
   do IO<Unit>:
     db : KV.Trie<String> <- restore(path)
-    reqs : Chan(Req) <- open_aof(path, sync, db)
+    reqs : Chan(Req) <- open_aof(path, sync, srv, db)
     l : Listener <- IO.try(Listener, TCP.listen("127.0.0.1", port))
     IO.print("BendKV listening on 127.0.0.1:" ++ U32.show(port) ++ " (" ++ post_note(post) ++ ", append-only file " ++ path ++ ", fsync " ++ sync_note(sync) ++ ")")
     accept_loop(l, reqs, post, 1n)
@@ -697,30 +698,50 @@ def post_note(post: Bool) -> String:
   Bool.pick(String, post, "post", "send")
 
 @unsafe
-def serve_mem(+port: U32, +post: Bool) -> IO(Unit):
+def serve_mem(+port: U32, +post: Bool, srv: S.Srv) -> IO(Unit):
   do IO<Unit>:
     +reqs : Chan(Req) <- Chan.new(Req, 1024)
-    Unit <- IO.spawn(Unit, db_loop(S.srv_new(""), KV.empty(String), reqs))
+    Unit <- IO.spawn(Unit, db_loop(srv, KV.empty(String), reqs))
     l : Listener <- IO.try(Listener, TCP.listen("127.0.0.1", port))
     IO.print("BendKV listening on 127.0.0.1:" ++ U32.show(port) ++ " (" ++ post_note(post) ++ ")")
     accept_loop(l, reqs, post, 1n)
 
-@unsafe
-def serve_on(+port: U32, +post: Bool, aof: Maybe<&2, String>, sync: Sync) -> IO(Unit):
+# the parameters the server starts with (config.bend): its port, its
+# directory, and its append-only file and how it is synced
+def aof_sets(aof: Maybe<&2, String>, +sync: Sync) -> List<&2, String>:
   match aof:
     case None{}:
-      serve_mem(port, post)
-    case Some{path}:
-      serve_aof(port, post, path, sync)
+      ["appendonly", "no", "appendfsync", sync_note(sync)]
+    case Some{+path}:
+      List.append(&2, String, ["appendonly", "yes", "appendfsync", sync_note(sync)], Bool.pick(List<&2, String>, C.text.path(path), Nil{}, ["appendfilename", path]))
+
+def start_sets(+port: U32, dir: String, aof: Maybe<&2, String>, +sync: Sync) -> List<&2, String>:
+  List.append(&2, String, ["port", U32.show(port), "dir", dir], aof_sets(aof, sync))
+
+def env_or(r: Result<&1, &1, U32 & String, String>) -> String:
+  match r:
+    case Done{v}:
+      v
+    case Fail{e}:
+      ""
 
 @unsafe
-def serve(o: Opts, cpus: U32) -> IO(Unit):
+def serve_on(+port: U32, +post: Bool, aof: Maybe<&2, String>, +sync: Sync, srv: S.Srv) -> IO(Unit):
+  match aof:
+    case None{}:
+      serve_mem(port, post, srv)
+    case Some{path}:
+      serve_aof(port, post, path, sync, srv)
+
+@unsafe
+def serve(o: Opts, cpus: U32, dir: String) -> IO(Unit):
   match o:
-    case Opts{+port, post, aof, sync}:
-      serve_on(port, Maybe.default(&2, Bool, post, post_default(cpus)), aof, sync)
+    case Opts{+port, post, +aof, +sync}:
+      serve_on(port, Maybe.default(&2, Bool, post, post_default(cpus)), aof, sync, S.srv_start(start_sets(port, dir, aof, sync)))
 
 def main() -> IO(Unit):
   do IO<Unit>:
     args : List<String> <- IO.args()
     cpus : U32 <- IO.thread_count()
-    serve(opts_of(args), cpus)
+    pwd : Result<&1, &1, U32 & String, String> <- IO.get_env("PWD")
+    serve(opts_of(args), cpus, env_or(pwd))
