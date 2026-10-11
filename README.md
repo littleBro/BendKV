@@ -12,8 +12,10 @@ throughput of Redis 7.0.15 on the same machine, with half its memory for small v
 
 > **Status: research prototype.** BendKV implements a subset of Redis (strings, the
 > keyspace, connection commands, an append-only file). The goal now is a drop-in
-> replacement for a single Redis node, measured by Redis's own test suite. Do not use
-> it for data you cannot lose.
+> replacement for a single Redis node, measured by Redis's own test suite: of the 1,656
+> tests Redis 7.0.15 passes against a server it did not start, BendKV passes 124, and 103
+> of the 256 in what it implements ([docs/COMPATIBILITY.md](docs/COMPATIBILITY.md)). Do
+> not use it for data you cannot lose.
 
 BendKV is an independent project. It is not affiliated with Higher Order Company or the
 Bend project, nor with Redis Ltd. Redis is a trademark of Redis Ltd.
@@ -69,7 +71,7 @@ translation stays in the trusted base.
 
 - **Strings and keys:** GET, SET, SETNX, GETSET, DEL, UNLINK, EXISTS, INCR, DECR, INCRBY,
   DECRBY, APPEND, STRLEN, MGET, MSET, DBSIZE, FLUSHALL, FLUSHDB (with ASYNC/SYNC), KEYS
-  (glob with `*` and `?`), TYPE.
+  (Redis's patterns: `*`, `?`, `[...]` classes, `\` escapes), TYPE.
 - **Connection:** PING, ECHO, HELLO (RESP2, with AUTH and SETNAME), AUTH, SELECT (one
   database, as Redis with `databases 1`), QUIT, RESET, CLIENT (ID, GETNAME, SETNAME,
   REPLY ON/OFF/SKIP, NO-EVICT, GETREDIR, TRACKINGINFO, CACHING, UNBLOCK, HELP),
@@ -163,6 +165,7 @@ make test      BEND="$B"   # needs redis-server, redis-cli and a C compiler
 make perfcheck BEND="$B"   # instructions per request against a baseline (needs valgrind)
 make gencheck              # the generated parts (trie, its proofs, the parameter and command tables) are up to date
 make bench     BEND="$B"   # redis-benchmark: BendKV against Redis
+make suite     BEND="$B" REDIS_SRC=../redis   # Redis's own test suite, on Redis and on BendKV (needs tclsh)
 ```
 
 `make test` runs, against a reference `redis-server`: the start (about a hundred command
@@ -176,7 +179,9 @@ machine, the counts after CONFIG RESETSTAT), COMMAND (each command's description
 documentation, the lists and their filters, the keys of command lines, random ones
 too), robustness and concurrency checks,
 restarts from the append-only file (including a truncated tail), and disk failures
-under the file, injected with an `LD_PRELOAD` shim.
+under the file, injected with an `LD_PRELOAD` shim. `make suite` runs Redis's own test
+suite in its mode for a server already started, on Redis and on BendKV, and counts the
+tests Redis passes that BendKV passes ([docs/COMPATIBILITY.md](docs/COMPATIBILITY.md)).
 
 ## Layout
 
@@ -196,10 +201,11 @@ src/        the server
 proof/      LAWS.bend (the laws) and PROOF.bend (their proofs)
 tests/      start, differential, protocol, session, CONFIG, INFO, COMMAND, robustness, concurrency, AOF tests
 bench/      in-process benchmarks of the map, the core and channels
-tools/      measurement scripts and the generators of the trie, of the parameter table
-            and of the command table, with the facts they take from Redis (tools/data/)
+tools/      measurement scripts, the runner of Redis's test suite, and the generators of
+            the trie, of the parameter table and of the command table, with the facts
+            they take from Redis (tools/data/)
 bend-patches/  the 21 patches to the Bend compiler and runtime
-docs/       FINDINGS.md, DIRECTIONS.md
+docs/       FINDINGS.md, DIRECTIONS.md, COMPATIBILITY.md
 ```
 
 ## Documentation
@@ -207,6 +213,8 @@ docs/       FINDINGS.md, DIRECTIONS.md
 - [docs/FINDINGS.md](docs/FINDINGS.md): what building BendKV and making it fast showed.
 - [docs/DIRECTIONS.md](docs/DIRECTIONS.md): verified databases, compilers, parallelism,
   and where the work goes next.
+- [docs/COMPATIBILITY.md](docs/COMPATIBILITY.md): Redis's own test suite against BendKV,
+  unit by unit, and why the tests it fails fail.
 - [tools/README.md](tools/README.md): how it was measured.
 
 ## History

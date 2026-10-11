@@ -6,20 +6,20 @@ showed us. Where the work goes next, and why, is in [DIRECTIONS.md](DIRECTIONS.m
 
 ## 1. The result
 
-**Correctness.** About 920 lines of core code (with the parsing of commands), about 500
-lines of sessions (a connection's state and the server's), about 70 lines of batch
-hints, about 220 lines of append-only file, about 3,200 lines of handwritten proofs, and
-about 1,600 lines of 16-way case splits written by a script
-([`tools/gen_trie.py`](../tools/gen_trie.py)), not counting comments and blank lines.
-Bend checks the 41 laws in about a second; the BendTT kernel, whose soundness is proved
-in Lean, rechecks them in about 8 s. Among them: after any history, the server restores
-from its append-only file exactly the database it held, and from a file cut by a crash
-at any byte, the database it held after some prefix of its commands (section 3e). On
-about 266 thousand random commands the replies matched real Redis 7 byte for byte; the
-versions with the 16-way trie passed about 300 thousand more, the current one about 70
-thousand. Shards across cores and a key hashed once were built and proved too (sections
-3a–3c, 3g, 3h), and taken out again because they paid too little for what they cost
-(section 3l): 38% less code and 38% fewer lines of proof.
+**Correctness.** About 1,100 lines of core code (with the parsing of commands and
+Redis's pattern matching), about 500 lines of sessions (a connection's state and the
+server's), about 70 lines of batch hints, about 220 lines of append-only file, about
+3,200 lines of handwritten proofs, and about 1,600 lines of 16-way case splits written
+by a script ([`tools/gen_trie.py`](../tools/gen_trie.py)), not counting comments and
+blank lines. Bend checks the 41 laws in about a second; the BendTT kernel, whose
+soundness is proved in Lean, rechecks them in about 8 s. Among them: after any history,
+the server restores from its append-only file exactly the database it held, and from a
+file cut by a crash at any byte, the database it held after some prefix of its commands
+(section 3e). On about 266 thousand random commands the replies matched real Redis 7
+byte for byte; the versions with the 16-way trie passed about 300 thousand more, the
+current one about 70 thousand. Shards across cores and a key hashed once were built and
+proved too (sections 3a–3c, 3g, 3h), and taken out again because they paid too little
+for what they cost (section 3l): 38% less code and 38% fewer lines of proof.
 
 **Speed and memory** (Redis 7.0.15 on the same VM; pipeline depth 16, 20 clients,
 filled database):
@@ -1383,6 +1383,35 @@ parser, the batch and the executor (+27 instructions per GET). The operation now
 COMMAND's arguments as they came, one word, and `command.bend` reads the subcommand again.
 `make perfcheck`: GET 3,037, SET 3,620, INCR 3,924 (3,031, 3,614 and 3,921 before).
 
+## 3r. Redis's own test suite
+
+Redis's tests can run against a server they did not start (`./runtest --host --port`),
+with options for servers that are compatible without being Redis (`--singledb`,
+`--ignore-encoding`, `--ignore-digest`). `tools/redis_suite.py` (`make suite`) runs every
+unit of Redis 7.0.15's `tests/unit` that way, on several instances of the server at
+once, against Redis and against BendKV, and counts only the tests Redis passes: 1,656 of
+the 1,729 that run in this mode (most of the others need `DEBUG`, off by default in
+7.0). BendKV passes 124 (7.5%), and 103 of the 256 in the units of what it has (the
+protocol, connections, the keyspace, strings, counters, introspection). Of the rest,
+867 stop on a command BendKV does not have (FUNCTION LOAD, ZADD, XADD, GEOADD, SADD,
+EXPIRE, MULTI lead), 589 never run because their unit stopped earlier, and 76 fail on
+SET's options, RESP3 or INFO's statistics per command. The unit-by-unit table and the
+reasons are in [COMPATIBILITY.md](COMPATIBILITY.md).
+
+The suite found one bug in what BendKV has: KEYS hung the server. Its glob tried, for
+each `*`, the rest of the pattern at every later position of the key, remembering
+nothing of what had failed, so a pattern that matches nowhere costs a number of tries
+exponential in its stars: twenty of them against a key of forty bytes ("Regression for
+pattern matching long nested loops") ran for minutes on the database's only thread. (And
+since it was written `Bool.or(glob(rest, s), glob(p, tail))`, whose arguments Bend
+evaluates both, even a pattern that matched explored every split.) It also lacked
+`[...]` classes and `\` escapes.
+KEYS now uses the port of Redis's `stringmatchlen` that CONFIG GET and COMMAND LIST had
+already (moved into `redis.bend`, where all three reach it): one function with an
+explicit mode, Redis's cut-off for a rest that matches nowhere, and Redis's shortcut for
+`*` alone. The pattern answers at once; `tests/robust_test.py` times it, and the
+differential test draws patterns with classes, ranges, escapes and random bytes.
+
 ## 4. Where a request's time goes, and hiding the memory waits
 
 With the eight patches, BendKV ran fewer instructions on GET and SET than Redis, missed
@@ -1575,6 +1604,10 @@ What got in the way:
   mutual recursion; a function can only call functions defined above it. Branches
   become helper functions, and arguments are evaluated strictly, so the parser takes
   fuel.
+- Strict arguments make `Bool.or` and `Bool.and` evaluate both sides, so a search
+  written with them never stops at its first success: KEYS's old glob explored every
+  split of the key even for a pattern that matched at once (section 3r). A choice that
+  may stop early has to be a `match`.
 - Affinity: a hypothesis (`∀k. …` or a refutation `a != b`) can be used once, while
   equalities are data and can be copied. Refutations become equalities of boolean
   verdicts.

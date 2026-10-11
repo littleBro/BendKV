@@ -74,8 +74,14 @@ def rnd_value(r):
     return r.choice([b"a", b"bar", b"hello world", b"\xd0\xbc\xd0\xb8\xd1\x80", b"x" * r.randint(0, 300)])
 
 
+# patterns of Redis's glob: stars, '?', classes with ranges, '^' and
+# escapes, unclosed classes, escapes; and random ones of those bytes
 def rnd_pattern(r):
-    return r.choice([b"*", b"k*", b"k?", b"user:*", b"*1", b"?", b"", b"k[", b"*:*"])
+    if r.random() < 0.5:
+        return r.choice([b"*", b"k*", b"k?", b"user:*", b"*1", b"?", b"", b"k[", b"*:*", b"k[0-3]",
+                         b"k[^0-3]", b"k[3-0]", b"[ku]*", b"\\k*", b"k\\*", b"user:[12]", b"*[",
+                         b"k[\\]]", b"k[a-]", b"**", b"*?*", b"[^k]*", b"k[0-9", b"\\", b"k[^]"])
+    return bytes(r.choice(b"k01u:*?[]^-\\\xd0") for _ in range(r.randint(0, 6)))
 
 
 def rnd_cmd(r):

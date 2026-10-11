@@ -5,7 +5,9 @@
 # redis-server, redis-cli, python3 and a C compiler for the disk-failure
 # shim, tests/fail_io.c; redis-check-aof if there is one),
 # make bench (needs redis-benchmark), make perfcheck (instructions per
-# request against a baseline; needs valgrind). Everything needs Bend with
+# request against a baseline; needs valgrind), make suite (Redis's own
+# test suite; needs a Redis 7.0.15 source tree in REDIS_SRC, its
+# redis-server on the PATH, and tclsh). Everything needs Bend with
 # bend-patches/ applied (src/map.bend hashes with String.hash, which the fourth
 # patch adds to Base, and hints with Mem.prefetch, which the ninth adds;
 # replies are posted to the tenth's writer thread (TCP.post), and the
@@ -25,10 +27,11 @@ BEND       ?= bend
 BEND_CC    ?= clang-19
 PORT       ?= 6380
 REDIS_PORT ?= 6390
+REDIS_SRC  ?= ../redis
 
 SRC = $(wildcard src/*.bend)
 
-.PHONY: check verdict build pgo smoke run test bench perfcheck gencheck clean
+.PHONY: check verdict build pgo smoke run test bench perfcheck suite gencheck clean
 
 check:
 	CC=$(BEND_CC) $(BEND) proof/PROOF.bend
@@ -71,6 +74,14 @@ bench: build
 # tools/perf_baseline.txt (needs valgrind and redis-benchmark)
 perfcheck: build
 	sh tools/perf_guard.sh build/bendkv
+
+# Redis's own test suite, the units that run against a server already
+# started (tools/redis_suite.py), on redis-server and on BendKV, and the
+# table of the tests Redis passes that BendKV passes (docs/COMPATIBILITY.md)
+suite: build
+	python3 tools/redis_suite.py --redis-src $(REDIS_SRC) --server redis-server --port 6600 --out build/suite/redis.json --logs build/suite/redis-logs
+	python3 tools/redis_suite.py --redis-src $(REDIS_SRC) --server build/bendkv --port 6700 --out build/suite/bendkv.json --logs build/suite/bendkv-logs
+	python3 tools/redis_suite.py --report build/suite/redis.json build/suite/bendkv.json | tee build/suite/report.md
 
 # the generated blocks are up to date: the 16-way parts of src/map.bend
 # and proof/PROOF.bend (tools/gen_trie.py), the table of parameters in
