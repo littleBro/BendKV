@@ -126,7 +126,7 @@ represented data:
   reader an owner of the whole value: O(depth) reference-count operations per read.
 - **A deep trie.** The first map was a binary trie of 20 levels: 20 dependent loads.
 
-## 3. Nineteen patches to the Bend compiler
+## 3. Twenty patches to the Bend compiler
 
 All live in [`bend-patches/`](../bend-patches/) (against `bendlang/bend` at `1cce499`,
 Bend 2.0.35). The first eight switch on by themselves for programs without GPU calls;
@@ -134,10 +134,12 @@ the ninth and tenth work where a program calls them; the eleventh changes every
 program's event loop on Linux; the twelfth and thirteenth only add effects; the
 fourteenth speeds up `String.code_at` everywhere; the fifteenth and sixteenth work where
 a program calls `TCP.post`; the seventeenth adds string functions; the eighteenth
-changes how every program's `IO` compiles; and the nineteenth speeds up `Mem.prefetch` of
-a buffer and `String.take` of a short string everywhere. There were twenty: the table
-keeps the numbers the sections before 3l use, where patch 16 is effect pairs, taken out
-in 3l with `TCP.post_list` of patch 11, and patches 17–20 are today's 16–19. None changes the theory: `String`
+changes how every program's `IO` compiles; the nineteenth speeds up `Mem.prefetch` of
+a buffer and `String.take` of a short string everywhere; and the twentieth adds the
+process's id, working directory and wall clock (section 3o). The sections before 3l
+number the patches as they were then: patch 16 was effect pairs, taken out in 3l with
+`TCP.post_list` of patch 11, and their patches 17–20 are today's 16–19. None changes the
+theory: `String`
 is still a list of characters to the checker, a native operation is proved (or defined)
 to agree with the list definition, and `IO` is still a function of `R` and `k`.
 
@@ -1179,6 +1181,69 @@ recheck back to 8 s. A literal at the head of a match costs nothing noticeable.
 a `Bool.pick` would compute the rest of the walk too): 38k to 85k instructions.
 redis-benchmark sends two at its start, which shows in `make perfcheck` as 3 to 6
 instructions per request; the requests themselves did not change.
+
+## 3o. Starting as redis-server starts
+
+`bendkv [/path/to/redis.conf] [--name value ...] [-]` starts as `redis-server` 7.0.15
+does, so that a Redis configuration file, a command line from a service file and the
+test suite's generated configurations start BendKV unchanged. `src/startup.bend` holds
+the rules, pure; `src/server.bend` reads the files, changes the directory and writes the
+log when they say so. The command line follows Redis's `main`: a first argument that does
+not start with `-` is the file; each `--name` starts a line of its own, and the arguments
+after it are appended quoted as `sdscatrepr` quotes them, unless the name already came
+with a value in the same argument; a `--save` followed by another option or by nothing is
+`save ""`; `-` first or last reads the standard input after the file. The configuration
+follows `loadServerConfigFromString`: lines trimmed, comments and blank lines skipped,
+words split by `sdssplitargs` (the splitter of inline commands in `resp.bend`, reused),
+the name lowered, then the parameter's own check (`config.bend`), with the differences
+Redis has at start: the words of the line as they are (CONFIG SET splits at each space),
+immutable and protected parameters allowed, and nothing done with a new value but hz's
+cap. The errors are Redis's, in its report, at the same line of the same file.
+
+Some rules came out of the differential test rather than from a first reading of the
+source. Redis appends a newline and the options to the file, so an option's line number
+depends on whether the file ends in a newline. Save points add up within the
+configuration, the first `save` line taking the defaults away; but a static flag in
+`config.c` says whether a file is being read, and the end of an `include` clears it, so
+after an include each `save` line replaces the points. `dir` changes the directory at
+once, and the includes, the log file and the append-only file after it are found from
+there. A directory given as the configuration file reads as an empty one. hz is capped
+at the end of each file, while repl-backlog-size is raised to 16 kB only by CONFIG SET.
+`dir` and the log needed four effects the runtime did not have: the twentieth patch adds
+`IO.chdir` and `IO.cwd` (for `dir` and `CONFIG GET dir`), `IO.pid` and `IO.clock` (the
+log's pid and date), and lets `IO.die` with an empty message exit silently, so that a
+start that fails says so in the log only, as Redis does.
+
+At start BendKV writes Redis's log lines (pid, role, date in UTC, level), the logo with
+its "PID:" when asked, "Ready to accept connections", and on a busy port "Failed
+listening on port N (TCP), aborting.": Redis's test suite reads the last two, the second
+to try another port. It listens on each address of `bind` with Redis's rules: a `-` makes
+an address optional, and an address lost for a reason Redis lets go is a warning. Two
+things it cannot do as Redis does. It listens on IPv4 only, so an IPv6 address is let go,
+as on a host without IPv6. And it cannot see a client's address, so protected mode with
+no password (where Redis takes only clients on the loopback) listens on the loopback only:
+`*` and `0.0.0.0` become `127.0.0.1`, other addresses are left out, each with a warning.
+Client ids stay one sequence over all the listeners, through a channel they share.
+
+What BendKV cannot do stops the start with a line saying so, rather than a start that
+silently differs: modules, ACL users, renamed commands, the background, a cluster, a
+replica, TLS, a supervisor it would have to signal; and data it cannot read, an RDB file
+(when the data is not in an append-only file) or Redis 7's multi-part append-only file,
+since starting empty there would lose data. What it keeps and does nothing with
+(databases, snapshots, maxmemory, a Unix socket, syslog) is said once in the log.
+`aof-load-truncated no` now stops a start on a file cut short, as in Redis.
+
+`tests/start_test.py` starts both servers on each case: 49 cases Redis refuses (each
+type of value, quotes, counts, `dir`, `logfile`, `include`, an error inside an include at
+its own line, a busy port, port 0, no address), with the same exit code and report; 32
+cases both start, with the same CONFIG GET after; then BendKV's 15 refusals and its own
+behavior. The start is pure but not proved; a law could say that a configuration of
+parameters gives the table CONFIG SET of them would give, immutable ones aside.
+
+**Cost.** None on requests: `make perfcheck` shows +0.2 to +0.3% against the CONFIG
+version (GET 2994 to 3002, SET 3573 to 3583, INCR 3871 to 3878 instructions); the
+requests' code did not change, and the counted window holds redis-benchmark's 20 new
+connections, which now take their ids from the shared channel.
 
 ## 4. Where a request's time goes, and hiding the memory waits
 

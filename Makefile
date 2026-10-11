@@ -13,8 +13,9 @@
 # file is written with the twelfth's File.write_raw and File.sync, a group
 # at a time with the thirteenth's Chan.drain; the parser reads number
 # lines and key hashes by index with the seventeenth's String.dec_line_at
-# and String.hash_at; the others only speed up the runtime and the
-# code):
+# and String.hash_at; the start changes the directory and logs the pid
+# and the date with the twentieth's IO.chdir, IO.cwd, IO.pid and
+# IO.clock; the others only speed up the runtime and the code):
 #   make build BEND="bun <patched bend>/bend2/main.ts"
 # Bend compiles with $(BEND_CC) when it has one: clang 19 honors the
 # preserve_none calling convention of the runtime's segments, clang 18

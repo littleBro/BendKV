@@ -26,7 +26,8 @@ well. BendKV asks how far one can get writing a real, fast server in a language 
 the code that runs is the code that is proved, without a separate model and a
 refinement proof. The answer so far: the verified core is not what makes it slow;
 the data representation of the runtime was, and most of the work went into fixing it
-(19 patches to the Bend compiler, in [`bend-patches/`](bend-patches/)).
+(19 patches to the Bend compiler, in [`bend-patches/`](bend-patches/), and a twentieth
+that gives it the process's directory, id and clock).
 
 ## What is proved
 
@@ -49,7 +50,8 @@ kernel in about 8 s.
 **Trust boundary.** The proofs cover `src/map.bend`, `src/redis.bend`, `src/batch.bend`,
 `src/aof.bend`, `src/session.bend` and `src/config.bend`. Trusted without proof: the Bend
 compiler and its C runtime (with the patches), the RESP parser and the network shell
-(`src/resp.bend`, `src/server.bend`, tested only), clang, libc and the OS. This is not
+(`src/resp.bend`, `src/server.bend`, tested only), the start (`src/startup.bend`, tested
+against `redis-server`), clang, libc and the OS. This is not
 end-to-end verification in the sense of CompCert or seL4; see
 [docs/FINDINGS.md](docs/FINDINGS.md), section 1.
 
@@ -80,13 +82,23 @@ translation stays in the trusted base.
   file cannot change while BendKV runs (a new value fails as it does when Redis cannot
   apply it); the other parameters are kept and read back but tune nothing, since BendKV
   has no eviction, replication or encodings for them to tune.
+- **Start:** as `redis-server` starts: a configuration file, `--name value` options and
+  `-` for the standard input, read line by line as Redis reads them (includes, `dir`
+  changing the directory at once, save points that add up, the same errors at the same
+  lines), and a log in Redis's form, on the standard output or in `logfile`. The port,
+  `bind` (IPv4), `requirepass`, `protected-mode`, the append-only file (`appendonly`,
+  `appendfilename`, `appendfsync`, `aof-load-truncated`), `logfile`, `loglevel` and
+  `pidfile` act; what BendKV cannot do (modules, ACL users, renamed commands, the
+  background, a cluster, a replica, TLS, a supervisor to signal, an RDB file or Redis 7's
+  multi-part append-only file to load) stops the start with a line saying so.
 - **Protocol:** pipelining, partial packets, inline commands with quoting,
   binary-safe values, Redis's protocol errors.
 - **Persistence:** an append-only file in Redis's own format (`redis-check-aof` accepts
   it, and Redis loads it), fsync `always`, `everysec` or `no`.
 
 Not yet: other data types, expiry, multiple databases, MULTI/EXEC, pub/sub, INFO,
-COMMAND (a placeholder so that `redis-cli` works). Integers are limited to 14 digits.
+COMMAND (a placeholder so that `redis-cli` works), CONFIG REWRITE (it answers as Redis
+does without a configuration file), RDB files. Integers are limited to 14 digits.
 
 ## Performance
 
@@ -114,7 +126,7 @@ also needs Lean 4.34.0 (through elan).
 
 ```bash
 git clone https://github.com/bendlang/bend ../bend-patched
-sh bend-patches/apply.sh ../bend-patched      # Bend 2.0.35 + 19 patches
+sh bend-patches/apply.sh ../bend-patched      # Bend 2.0.35 + 20 patches
 B="bun ../bend-patched/bend2/main.ts"
 
 make check   BEND="$B"   # check the proofs
@@ -124,9 +136,12 @@ make run                 # ./build/bendkv 6380
 redis-cli -p 6380 set foo bar
 ```
 
-`./build/bendkv PORT [post|send [FILE [always|everysec|no]]]`: `post` sends replies from
-a writer thread (the default when the process has two cores or more), `send` from the
-event loop; `FILE` turns on the append-only file.
+`./build/bendkv [/path/to/redis.conf] [--name value ...] [-]` starts as `redis-server`
+does (`./build/bendkv --port 7777 --appendonly yes`, `./build/bendkv /etc/redis/redis.conf`);
+replies go out from a writer thread when the process has two cores or more, and from the
+event loop with `io-threads 1`. `./build/bendkv --help` lists the forms. The short form
+`./build/bendkv PORT [post|send [FILE [always|everysec|no]]]` is BendKV's own: `post` or
+`send` picks how replies go out, `FILE` (any path) turns on the append-only file.
 
 ## Testing
 
@@ -138,7 +153,9 @@ make gencheck              # the generated parts (trie, its proofs, the paramete
 make bench     BEND="$B"   # redis-benchmark: BendKV against Redis
 ```
 
-`make test` runs, against a reference `redis-server`: a differential test of random
+`make test` runs, against a reference `redis-server`: the start (about a hundred command
+lines and configuration files, each on both servers, with the same errors and the same
+parameters after them), a differential test of random
 command streams compared byte for byte, the protocol edge cases of Redis's
 `tests/unit/protocol.tcl`, the connection commands, CONFIG (every parameter, a list of
 cases and thousands of random values, set and read back on both servers), robustness and
@@ -157,13 +174,14 @@ src/        the server
   session.bend  connection and server state, whole batches         verified
   config.bend   the parameters, CONFIG GET and SET                 verified
   resp.bend     RESP2 parser and reply encoder                     tested
-  server.bend   TCP, connections, the database actor               tested
+  startup.bend  the command line and the configuration file        tested
+  server.bend   TCP, connections, the database actor, the log      tested
 proof/      LAWS.bend (the laws) and PROOF.bend (their proofs)
-tests/      differential, protocol, session, CONFIG, robustness, concurrency, AOF tests
+tests/      start, differential, protocol, session, CONFIG, robustness, concurrency, AOF tests
 bench/      in-process benchmarks of the map, the core and channels
 tools/      measurement scripts and the generators of the trie and of the parameter
             table, with the facts it takes from Redis (tools/data/)
-bend-patches/  the 19 patches to the Bend compiler and runtime
+bend-patches/  the 20 patches to the Bend compiler and runtime
 docs/       FINDINGS.md, DIRECTIONS.md (English), PERFORMANCE.md (Russian)
 ```
 
