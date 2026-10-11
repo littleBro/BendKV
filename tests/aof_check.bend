@@ -28,24 +28,39 @@ def buf() -> String:
   "KEYS *\r\nKEYS f?o\r\nPING\r\nECHO hi\r\nNOPE 1 2\r\nSET k\r\nINCRBY n x\r\n" ++
   "SET big 9223372036854775807\r\nINCR big\r\nINCRBY m -5\r\nSET e \"\"\r\n" ++
   "FLUSHALL\r\nDBSIZE\r\nSET q 1\r\nMGET q q\r\nDEL q q\r\nKEYS *\r\n" ++
-  "SET a 1\r\nINCRBY a 99\r\nAPPEND a 0\r\nMSET x 1 y 2\r\nDEL y\r\nSETNX z 3\r\nGETSET z 4\r\n"
+  "SET a 1\r\nINCRBY a 99\r\nAPPEND a 0\r\nMSET x 1 y 2\r\nDEL y\r\nSETNX z 3\r\nGETSET z 4\r\n" ++
+  "SET t 1 EX 100\r\nSETEX u 10 v\r\nPSETEX w 5 w\r\nPEXPIRE a 5000\r\nEXPIRE x 7 NX\r\nEXPIRE x 9 NX\r\n" ++
+  "EXPIRE x 8 GT\r\nEXPIRE x 9 LT\r\nPERSIST t\r\nPERSIST t\r\nINCR a\r\nAPPEND a 1\r\nGETEX u PX 300\r\n" ++
+  "GETEX w PERSIST\r\nGETDEL z\r\nGETDEL z\r\nEXPIREAT n 2\r\nPEXPIREAT m 1\r\nSET g h KEEPTTL\r\n" ++
+  "SET u v2 KEEPTTL GET\r\nSET p 1 PXAT 99999999999999999\r\nSET o 1 EXAT 1\r\nEXPIRE o -1\r\nSET o2 1 NX PX 10\r\n" ++
+  "SET o2 2 XX\r\nTTL u\r\nPTTL a\r\nEXPIRETIME x\r\nPEXPIRETIME p\r\nTTL nope\r\nSET bad 1 EX 0\r\n" ++
+  "SET bad 1 EX x\r\nSET bad 1 NX XX\r\nEXPIRE x 1 NX XX\r\nEXPIRE x 1 GT LT\r\nEXPIRE x 1 FOO\r\n"
 
-# a database as its keys and values, in its own order
+# an entry as its value, and the time it expires at when it has one
+def dump.ent(m: Maybe<&2, KV.Item<String>>) -> String:
+  match m:
+    case Some{KV.Item{v, +e}}:
+      v ++ Bool.pick(String, Nat.is_eq(e, 0n), "", "@" ++ Nat.show(e))
+    case None{}:
+      "?"
+
+# a database as its keys and entries, in its own order (all keys are
+# there at time 0)
 def dump.go(+db: KV.Trie<String>, ks: List<&2, String>) -> String:
   match ks:
     case Nil{}:
       SNil{}
     case Con{+k, rest}:
-      k ++ "=" ++ Maybe.default(&2, String, KV.get(String, db, k), "?") ++ " " ++ dump.go(db, rest)
+      k ++ "=" ++ dump.ent(KV.entry(String, db, k)) ++ " " ++ dump.go(db, rest)
 
-def dump.of(+t: KV.Trie<String>, +n: Nat) -> String:
-  dump.go(t, KV.keys(String, t)) ++ "(" ++ Nat.show(n) ++ " keys counted)"
+def dump.of(+t: KV.Trie<String>, +n: Nat, +x: Nat) -> String:
+  dump.go(t, KV.keys(String, t, 0n)) ++ "(" ++ Nat.show(n) ++ " keys counted, " ++ Nat.show(x) ++ " with a time)"
 
-# and the count of keys the database keeps
+# and the counts of keys the database keeps
 def dump(+db: R.Db) -> String:
   match db:
-    case R.Db{+t, +n, x, now, rr}:
-      dump.of(t, n)
+    case R.Db{+t, +n, +x, now, rr}:
+      dump.of(t, n, x)
 
 def db_of(r: List<&2, R.Reply> & R.Db) -> R.Db:
   (rs, db) = r

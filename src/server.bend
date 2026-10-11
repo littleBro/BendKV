@@ -349,6 +349,11 @@ def run_step(q: Req, g: Run) -> Run:
     case Run{outs, srv, db}:
       run_req(q, outs, srv, db)
 
+# the clock (IO.clock: s and us since 1970) in ms
+def clock.ms(t: U32 & U32) -> Nat:
+  (secs, us) = t
+  Nat.add(Nat.mul(U32.to_nat(secs), 1000n), U32.to_nat(U32.div(us, 1000)))
+
 def run_group(qs: List<&1, Req>, g: Run) -> Run:
   match qs:
     case Nil{}:
@@ -370,7 +375,8 @@ def db_serve(srv: S.Srv, db: R.Db, +reqs: Chan(Req), m: Maybe<&1, Req>) -> IO(Un
     case Some{q}:
       do IO<Unit>:
         more : List<&1, Req> <- Chan.drain(Req, reqs, group_max())
-        db_group(run_group(q <> more, Run{Nil{}, srv, db}), reqs)
+        t : U32 & U32 <- IO.clock()
+        db_group(run_group(q <> more, Run{Nil{}, srv, R.db.at(clock.ms(t), db)}), reqs)
 
 @unsafe
 def db_group(g: Run, +reqs: Chan(Req)) -> IO(Unit):
@@ -785,10 +791,6 @@ def nat.of(+s: String) -> Nat:
 def stat.field(+s: String, +k: Nat) -> Nat:
   nat.of(nth(k, words.of(last(String.split(s, ')'), ""))))
 
-def clock.ms(t: U32 & U32) -> Nat:
-  (secs, us) = t
-  Nat.add(Nat.mul(U32.to_nat(secs), 1000n), U32.to_nat(U32.div(us, 1000)))
-
 def live.of(t: U32 & U32, +ps: String, +ts: String, +sm: String, c: Tally) -> I.Live:
   (secs, us) = t
   match c:
@@ -1024,6 +1026,13 @@ def aof_fail(e: U32 & String) -> String:
 type St is Data:
   St{srv: S.Srv, db: R.Db}
 
+# the state at the time now (a group's batches run at the time the actor
+# took them)
+def st.at(+now: Nat, st: St) -> St:
+  match st:
+    case St{srv, db}:
+      St{srv, R.db.at(now, db)}
+
 type Grp is Data:
   Grp{outs: List<&2, Sigma<&2, &2, Chan(Ans), _ => Ans>>, es: List<&2, R.Cmd>, st: St}
 
@@ -1164,7 +1173,8 @@ def aof_more(st: St, f: File, +sync: Sync, +reqs: Chan(Req), m: Maybe<&1, Req>) 
     case Some{q}:
       do IO<Unit>:
         more : List<&1, Req> <- Chan.drain(Req, reqs, group_max())
-        aof_group(group_run(q <> more, Grp{Nil{}, Nil{}, st}), f, sync, reqs)
+        t : U32 & U32 <- IO.clock()
+        aof_group(group_run(q <> more, Grp{Nil{}, Nil{}, st.at(clock.ms(t), st)}), f, sync, reqs)
 
 @unsafe
 def aof_group(g: Grp, f: File, +sync: Sync, +reqs: Chan(Req)) -> IO(Unit):

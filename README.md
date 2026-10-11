@@ -2,7 +2,7 @@
 
 A Redis-compatible key-value server written in [Bend2](https://github.com/bendlang/bend),
 whose core is formally verified: the command semantics, the hash trie behind them, the
-append-only file, the connection state and the configuration are proved against 41 laws,
+append-only file, the connection state and the configuration are proved against 52 laws,
 checked by Bend
 and rechecked by the BendTT kernel, whose soundness is proved in Lean.
 
@@ -10,11 +10,11 @@ BendKV speaks RESP2, so `redis-cli`, `redis-benchmark` and `memtier_benchmark` w
 with it. Under pipelined load it serves GET at 1.6×, SET at 1.8× and INCR at 1.45× the
 throughput of Redis 7.0.15 on the same machine, with half its memory for small values.
 
-> **Status: research prototype.** BendKV implements a subset of Redis (strings, the
-> keyspace, connection commands, an append-only file). The goal now is a drop-in
+> **Status: research prototype.** BendKV implements a subset of Redis (strings and their
+> times to live, the keyspace, connection commands, an append-only file). The goal now is a drop-in
 > replacement for a single Redis node, measured by Redis's own test suite: of the 1,656
-> tests Redis 7.0.15 passes against a server it did not start, BendKV passes 135, and 109
-> of the 256 in what it implements ([docs/COMPATIBILITY.md](docs/COMPATIBILITY.md)). Do
+> tests Redis 7.0.15 passes against a server it did not start, BendKV passes 212, and 188
+> of the 315 in what it implements ([docs/COMPATIBILITY.md](docs/COMPATIBILITY.md)). Do
 > not use it for data you cannot lose.
 
 BendKV is an independent project. It is not affiliated with Higher Order Company or the
@@ -34,25 +34,27 @@ that gives it the process's directory, id and clock).
 ## What is proved
 
 The laws are stated by hand in [`proof/LAWS.bend`](proof/LAWS.bend) and proved in
-[`proof/PROOF.bend`](proof/PROOF.bend). The database is a record: the trie, the count of
-its keys (which DBSIZE answers) and fields for expiry. The laws about what keys read and
-what commands answer are proved of a specification, the commands on the trie alone
+[`proof/PROOF.bend`](proof/PROOF.bend). The database is a record: the trie, whose
+entries hold each key's value and the time it expires at; how many keys it holds (which
+DBSIZE answers) and how many of them have a time; and the time its batch runs at. A key
+whose time has passed is there for no command. The laws about what keys read and what
+commands answer are proved of a specification, the commands on the trie alone at a time
 ([`proof/SPEC.bend`](proof/SPEC.bend)), and a bridge proves that the server's commands
 answer as it does (DBSIZE answers the count) and leave the trie it leaves. That the count
 is the trie's size is not proved yet.
 
 | group | laws | what they say |
 |---|---:|---|
-| Map | 5 | the trie is a finite map: after any sequence of SET/DEL, every key reads as determined, with no stale, lost or foreign values |
+| Map | 11 | the trie is a finite map from keys to a value and a time: after any sequence of writes (a value with a time, a value with its time kept, a time alone, a deletion), every key holds what was last written to it, with no stale, lost or foreign entries; a read sees a key only until its time |
 | Keys | 2 | key comparison is exactly string equality, down to the bits of `U32` |
-| Commands | 13 | no command changes a key it does not write (`frame`); reads keep the database; GET/DEL/APPEND/SETNX/INCR behave as specified, a key they add counted; a pipelined batch runs exactly as its commands in order; the cache hints before a batch change nothing |
+| Commands | 18 | no command changes a key it does not write, neither its value nor its time (`frame`); reads keep the database; a key whose time has passed is there for no command; GET, DEL, APPEND, SETNX, INCR, GETDEL, PERSIST, PTTL and SET with KEEPTTL behave as specified, a key they add counted; a pipelined batch runs exactly as its commands in order; the cache hints before a batch change nothing |
 | Commuting | 5 | commands on different keys commute: replies and key contents are the same in either order, and adjacent independent commands in a batch can be swapped |
-| Persistence | 8 | logging changes no reply; the file reads back as written; after any history the server restores exactly the database it held; a file cut by a crash at any byte restores the database after some prefix of its commands, never a partial command |
+| Persistence | 8 | logging changes no reply; the file reads back as written, times included; after any history, each batch at its own time, the server restores exactly the database it held; a file cut by a crash at any byte restores the database after some prefix of its commands, never a partial command |
 | Sessions | 5 | however the server dispatches a batch, it runs as its commands in order; a batch changes the database and the log as its executed commands do; a client that has not authenticated against a password cannot read or change any key |
 | Configuration | 3 | a CONFIG SET that fails changes nothing; one that succeeds makes the new requirepass the password; after a CONFIG SET of a parameter, CONFIG GET finds the value its check gave |
 
-`make check` takes about a second; `make verdict` rechecks every proof in the BendTT
-kernel in about 8 s.
+`make check` takes about 3 s; `make verdict` rechecks every proof in the BendTT kernel
+in about 30 s.
 
 **Trust boundary.** The proofs cover `src/map.bend`, `src/redis.bend`, `src/batch.bend`,
 `src/aof.bend`, `src/session.bend` and `src/config.bend`. Trusted without proof: the Bend
@@ -79,6 +81,13 @@ translation stays in the trusted base.
   (Redis's patterns: `*`, `?`, `[...]` classes, `\` escapes), TYPE, SCAN (MATCH, COUNT,
   TYPE, with Redis's guarantee: a key there for a whole iteration is found, however the
   database changes meanwhile) and RANDOMKEY (picked as Redis picks one).
+- **Times to live:** EXPIRE, PEXPIRE, EXPIREAT and PEXPIREAT (with NX, XX, GT, LT), TTL,
+  PTTL, EXPIRETIME, PEXPIRETIME, PERSIST; SET with NX, XX, GET, EX, PX, EXAT, PXAT and
+  KEEPTTL; SETEX, PSETEX, GETEX (EX, PX, EXAT, PXAT, PERSIST) and GETDEL. Times are read
+  as Redis reads them, with its errors, and a key expires at its time for every command.
+  Unlike Redis, a key whose time has passed stays in the database until a write sets it
+  again or deletes it (DBSIZE and INFO's keyspace count it until then), and a time at or
+  past 10^14 ms (the year 5138) gives a key no time at all.
 - **Connection:** PING, ECHO, HELLO (RESP2, with AUTH and SETNAME), AUTH, SELECT (one
   database, as Redis with `databases 1`), QUIT, RESET, CLIENT (ID, GETNAME, SETNAME,
   REPLY ON/OFF/SKIP, NO-EVICT, GETREDIR, TRACKINGINFO, CACHING, UNBLOCK, HELP),
@@ -98,7 +107,7 @@ translation stays in the trusted base.
   process, its parameters, its connections, commands and bytes (with the instantaneous
   rates sampled every 100 ms, as Redis's cron samples them), its resident memory, its
   keys, its append-only file; for what BendKV does not have (replication, forks,
-  scripts, eviction, expiry) they are what Redis shows when it has none. The statistics
+  scripts, eviction, active expiry) they are what Redis shows when it has none. The statistics
   per command count as Redis counts them: each command's and subcommand's calls, the
   calls refused before they run (a wrong number of arguments by Redis's arity, a client
   that must authenticate first) and the calls that fail as they run, and the error
@@ -122,9 +131,10 @@ translation stays in the trusted base.
 - **Persistence:** an append-only file in Redis's own format (`redis-check-aof` accepts
   it, and Redis loads it), fsync `always`, `everysec` or `no`.
 
-Not yet: other data types, expiry, multiple databases, MULTI/EXEC, pub/sub, timing of
-commands (usec in INFO commandstats, latencystats), CONFIG REWRITE (it answers as Redis
-does without a configuration file), RDB files. Integers are limited to 14 digits.
+Not yet: other data types, active expiry (Redis's sweep of expired keys), multiple
+databases, MULTI/EXEC, pub/sub, timing of commands (usec in INFO commandstats,
+latencystats), CONFIG REWRITE (it answers as Redis does without a configuration file),
+RDB files. Integers, and times in ms, are limited to 14 digits.
 
 ## Performance
 
@@ -183,7 +193,9 @@ make suite     BEND="$B" REDIS_SRC=../redis   # Redis's own test suite, on Redis
 `make test` runs, against a reference `redis-server`: the start (about a hundred command
 lines and configuration files, each on both servers, with the same errors and the same
 parameters after them), a differential test of random
-command streams compared byte for byte, the protocol edge cases of Redis's
+command streams compared byte for byte (times to live and SET's options among them),
+keys that expire (set with short times on both servers, then read once the times have
+passed), the protocol edge cases of Redis's
 `tests/unit/protocol.tcl`, the connection commands, CONFIG (every parameter, a list of
 cases and thousands of random values, set and read back on both servers), INFO (the
 sections and fields for 31 ways of picking them, the values that do not depend on the
@@ -216,7 +228,7 @@ src/        the server
   startup.bend  the command line and the configuration file        tested
   server.bend   TCP, connections, the database actor, the log      tested
 proof/      LAWS.bend (the laws), PROOF.bend (their proofs), SPEC.bend (the commands on the trie alone)
-tests/      start, differential, protocol, session, CONFIG, INFO, COMMAND, SCAN, robustness, concurrency, AOF tests
+tests/      start, differential, expiry, protocol, session, CONFIG, INFO, COMMAND, SCAN, robustness, concurrency, AOF tests
 bench/      in-process benchmarks of the map, the core and channels
 tools/      measurement scripts, the runner of Redis's test suite, and the generators of
             the trie, of the parameter table and of the command table, with the facts

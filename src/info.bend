@@ -718,8 +718,8 @@ def sec.cpu(+l: Live) -> String:
       "# CPU\r\n" ++ kv("used_cpu_sys", cpu(st)) ++ kv("used_cpu_user", cpu(ut)) ++ kv("used_cpu_sys_children", "0.000000") ++
       kv("used_cpu_user_children", "0.000000") ++ kv("used_cpu_sys_main_thread", cpu(mst)) ++ kv("used_cpu_user_main_thread", cpu(mut))
 
-def sec.keyspace(+n: Nat) -> String:
-  "# Keyspace\r\n" ++ Bool.pick(String, Nat.is_lt(0n, n), "db0:keys=" ++ Nat.show(n) ++ ",expires=0,avg_ttl=0\r\n", "")
+def sec.keyspace(+n: Nat, +x: Nat) -> String:
+  "# Keyspace\r\n" ++ Bool.pick(String, Nat.is_lt(0n, n), "db0:keys=" ++ Nat.show(n) ++ ",expires=" ++ Nat.show(x) ++ ",avg_ttl=0\r\n", "")
 
 # Which sections
 # --------------
@@ -842,7 +842,7 @@ def on.cpu(on: Bool, +i: Info) -> String:
 def on.keyspace(on: Bool, +db: R.Db) -> String:
   match on:
     case True{}:
-      sec.keyspace(R.db.n(db))
+      sec.keyspace(R.db.n(db), R.db.x(db))
     case False{}:
       ""
 

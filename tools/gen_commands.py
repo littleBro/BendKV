@@ -47,7 +47,10 @@ COMMANDS = {
     "echo": [], "exists": [], "flushall": [], "flushdb": [], "function": ["flush", "help"],
     "get": [], "getset": [], "hello": [], "incr": [], "incrby": [], "info": [], "keys": [],
     "mget": [], "mset": [], "ping": [], "quit": [], "reset": [], "select": [], "set": [],
-    "randomkey": [], "scan": [], "setnx": [], "strlen": [], "type": [], "unlink": []}
+    "randomkey": [], "scan": [], "setnx": [], "strlen": [], "type": [], "unlink": [],
+    "setex": [], "psetex": [], "getex": [], "getdel": [], "expire": [], "pexpire": [],
+    "expireat": [], "pexpireat": [], "ttl": [], "pttl": [], "expiretime": [],
+    "pexpiretime": [], "persist": []}
 
 # Step 1: redis-server -> facts
 # -----------------------------
@@ -250,8 +253,12 @@ def generate():
 SBEGIN, SEND = "# BEGIN gen_commands: stats\n", "# END gen_commands: stats\n"
 
 # the commands whose calls can fail as they run, on what the database
-# holds: INCR and its kin meet values that are not integers, and overflows
-RISKY = {"incr", "decr", "incrby", "decrby"}
+# holds: INCR and its kin meet values that are not integers, and overflows;
+# a time from now can overflow LLONG_MAX (EXPIRE, PEXPIRE, SETEX, PSETEX),
+# and GETEX reads its time only once it finds its key. (SET's time can
+# overflow too, past 9 * 10^18 ms only: SET is left out, so that a batch
+# of SETs needs no look at its replies.)
+RISKY = {"incr", "decr", "incrby", "decrby", "expire", "pexpire", "setex", "psetex", "getex"}
 
 # the parser's commands with subcommands, by the function that numbers
 # their subcommands

@@ -1,7 +1,7 @@
 # BendKV: what we found
 
 BendKV is a Redis-compatible key-value store written in Bend2, with its core proved
-against 41 laws. This file sums up in English what building it and making it fast
+against 52 laws. This file sums up in English what building it and making it fast
 showed us. The detailed record, with every table and measurement, is in Russian:
 [PERFORMANCE.md](PERFORMANCE.md) (performance, section by section) and
 [README.ru.md](../README.ru.md) (the project, the proofs, how to run). Where the work goes
@@ -9,13 +9,14 @@ next, and why, is in [DIRECTIONS.md](DIRECTIONS.md).
 
 ## 1. The result
 
-**Correctness.** About 1,100 lines of core code (with the parsing of commands and
-Redis's pattern matching), about 500 lines of sessions (a connection's state and the
-server's), about 70 lines of batch hints, about 220 lines of append-only file, about
-3,900 lines of handwritten proofs with a specification of about 130 that they bridge to
-(section 3u), and about 1,600 lines of 16-way case splits written by a script ([`tools/gen_trie.py`](../tools/gen_trie.py)), not counting comments and
-blank lines. Bend checks the 41 laws in about a second; the BendTT kernel, whose
-soundness is proved in Lean, rechecks them in about 8 s. Among them: after any history,
+**Correctness.** About 1,900 lines of core code (with the parsing of commands, of their
+times and options, and Redis's pattern matching), about 500 lines of sessions (a
+connection's state and the server's), about 70 lines of batch hints, about 280 lines of
+append-only file, about 4,850 lines of handwritten proofs with a specification of about
+130 that they bridge to (section 3u), and about 1,700 lines of 16-way case splits written
+by a script ([`tools/gen_trie.py`](../tools/gen_trie.py)), not counting comments and
+blank lines. Bend checks the 52 laws in about 3 s; the BendTT kernel, whose soundness is
+proved in Lean, rechecks them in about 30 s. Among them: after any history,
 the server restores from its append-only file exactly the database it held, and from a
 file cut by a crash at any byte, the database it held after some prefix of its commands
 (section 3e). On about 266 thousand random commands the replies matched real Redis 7
@@ -1398,9 +1399,11 @@ the 1,729 that run in this mode (most of the others need `DEBUG`, off by default
 7.0). BendKV passed 124 (7.5%), and 103 of the 256 in the units of what it has (the
 protocol, connections, the keyspace, strings, counters, introspection); with the
 statistics per command (section 3s), 127 and 106; with SCAN and RANDOMKEY (section 3t),
-135 and 109. Of the rest, 867 stop on a command
-BendKV does not have (FUNCTION LOAD, ZADD, XADD, GEOADD, SADD, EXPIRE, MULTI lead), 589
-never run because their unit stopped earlier, and 73 fail on SET's options or RESP3. The unit-by-unit table and the
+135 and 109; with times to live (section 3v), 212, and 188 of the 315 in the units of
+what it has, `unit/expire` among them. Of the rest, 813 stop on a command BendKV does
+not have (FUNCTION LOAD, ZADD, XADD, GEOADD, SADD, MULTI, LPUSH lead), 589 never run
+because their unit stopped earlier, and 42 fail on COMMAND GETKEYS of commands BendKV
+does not have or on RESP3. The unit-by-unit table and the
 reasons are in [COMPATIBILITY.md](COMPATIBILITY.md).
 
 The suite found one bug in what BendKV has: KEYS hung the server. Its glob tried, for
@@ -1676,6 +1679,94 @@ Not proved yet: that the count is the trie's size. That needs a well-formed trie
 each key at most once in its bucket: `bdel` removes every entry for its key, so a
 duplicate would make the count drift. It also needs the arithmetic of a sum over 16
 children. The proof will come with the count of keys that can expire.
+
+## 3v. Keys that expire
+
+**What it does.** BendKV has Redis 7.0.15's times to live: EXPIRE, PEXPIRE, EXPIREAT and
+PEXPIREAT with NX, XX, GT and LT; TTL, PTTL, EXPIRETIME, PEXPIRETIME; PERSIST; SET with
+NX, XX, GET, EX, PX, EXAT, PXAT and KEEPTTL; SETEX, PSETEX, GETEX and GETDEL. Their
+arguments are read as Redis reads them: a time is a long long as `string2ll` reads one,
+a time in seconds that overflows once in milliseconds is Redis's error, and the options
+are read as `parseExtendedStringArgumentsOrReply` and
+`parseExtendedExpireArgumentsOrReply` read them, with the same errors in the same order.
+In Redis's test suite the step made 77 more tests pass (212 in all): `unit/expire` passes
+54 of the 59 that Redis passes (the other five need replication, LPUSH, TIME and the
+sweep below), `unit/type/string` 41 of 77 (the rest need GETRANGE, SETRANGE, the bit
+commands, LCS, MSETNX or other types).
+
+**The model.** An entry of the trie holds its key, its value and the time it expires at,
+in ms since 1970 (0: never). The record of section 3u counts the keys with a time
+(INFO's `expires`) and holds the time its batch runs at, which the database actor takes
+from the clock before each group of batches. A key whose time has passed is there for no
+command: GET answers nil, EXISTS does not count it, SETNX sets it anew, KEYS, SCAN and
+RANDOMKEY skip it. No read deletes it: its entry stays until a write sets the key again
+or deletes it, and DBSIZE counts it until then. Redis deletes such a key when any
+command comes to it, and in a sweep from its cron; BendKV has no sweep yet. Reads that
+change nothing keep the laws of reads (`reads_keep_db`) and of commuting commands as
+they were.
+
+**Fourteen digits.** BendKV's integers have at most 14 digits, since a Nat holds
+2^48 − 1, and so do its times: a time from 1970 at or past 10^14 ms (the year 5138)
+gives a key no time at all, as it would never come, where Redis keeps any int64. A short
+time is read digit by digit as a Nat (14 digits at most, no leading zero), a long one as
+a decimal kept as hi·10^9 + lo, so that Redis's checks near 2^63 come out exactly. The
+bound never appears as a number: neither the code nor the proofs build 10^13 or 10^14;
+they count digits instead. The checker unfolds a number literal one successor at a time,
+and a proof that meets 10^14 does not finish.
+
+**Updates, and the changes they make.** A command that reads one key and then writes it
+(SETNX, APPEND, SET with options, GETSET, GETEX, GETDEL, EXPIRE and its kin, PERSIST) is
+one command for the laws, an update: from the key's entry as it stands at now it
+computes its reply and a change (none, delete, set the time alone, put a value with a
+time, put a value and keep the time, append), and the database makes the change where
+the key lies, after one walk to it. A new command of this kind is one update more, with
+no new case in most proofs. The append-only file logs the change rather than the
+command, as a command that makes it again at time 0, when no key has expired: DEL,
+PEXPIREAT with the absolute time, PERSIST, SET or SET with PXAT, SET with KEEPTTL,
+APPEND. Every time it names is absolute, so a file means the same whenever it loads;
+Redis also logs absolute times.
+
+**The proofs.** The map's laws are now about entries, for its four writes (a value with
+a time, a value that keeps the time, the time alone, a deletion), and a read sees a key
+until its time: 11 laws, the axioms of finite maps for each write. Five laws of commands
+are new: an expired key is there for no command (`expired`), PTTL answers the time left,
+SET with KEEPTTL keeps the time, PERSIST takes it away, GETDEL answers and deletes.
+Histories carry time: each batch runs at its own, and recovery gives back the database
+at time 0 (the server sets its time again before its next batch). Recovery rests on
+three facts. A change a command makes is a good one (`upd_good`): it deletes a key, sets
+its time alone or keeps its time only when the key is there; it takes a time away only
+from a key that has one; and a time it gives is one a key may keep. A good change is made again by its
+effects at time 0 (`ch_replay`), because what Nat.show writes of such a time the parser
+of times reads back (`num14_show`, by induction on the digits Nat.show writes, with fuel
+that runs out counted as too many digits). And a command leaves the time it ran at
+(`exec_at`), so a history's commands, run each at its own time, leave its database
+(`single_cmds`), and the first k entries of a file cut short leave the database of its
+first j commands, at time 0, for some j.
+
+**Exact replay.** The laws hold for any database, also one whose entries hold times no
+command gives (10^14 ms or more). So the map keeps a time as it is given, the commands
+clamp the times they give, and a change that keeps a key's time is logged as SET with
+KEEPTTL or as APPEND, which keep the time on replay too. Logged as SET with PXAT and the
+old time, as a first version had it, a far time came back as none, and the count of keys
+with a time with it.
+
+**What it cost, and what did not pay.** In instructions per request (`make perfcheck`):
+GET 3,082 (+7, +0.2%), SET 4,024 (+47, +1.2%), INCR 4,171 (+52, +1.3%) against section
+3u's; `tools/perf_baseline.txt` holds the new numbers. An entry has a field more, and SET
+and INCR count the keys with a time.
+- **INCR as an update.** The first version ran INCRBY as an update too, one path for the
+  server and the file: 8.8% more instructions per INCR (4,482 against 4,119). INCRBY
+  keeps its own path in the server; the file runs it as the update `UIncr`, and a lemma
+  (`incr_upd_eq`) proves the two the same, so the persistence proofs see one kind of
+  write.
+- **A recursive type for updates.** `UGet` (SET's GET option, and GETSET) holds an
+  update, so the type of updates is recursive and the compiler makes an update a node of
+  its own. A command travels in registers as wide as its widest form, and an update's
+  options are many: flat, they would have widened every command (the record's `rr` does
+  the same for the database, section 3u).
+- **A proof the checker could not hold.** A pair of proofs written in place, `({==}, e)`,
+  for a pair of equalities ran the checker out of memory; the same pair with its first
+  half a named lemma checks at once.
 
 ## 4. Where a request's time goes, and hiding the memory waits
 

@@ -40,11 +40,69 @@ type Reply is Data:
 type KVPair is Data:
   KP{key: String, val: String}
 
-# A read of one key whose reply depends on the key's value alone. The
-# laws see them as one command, Peek (LAWS.bend: disturbs), so one more
-# needs no more proof.
+# A read of one key whose reply depends on what the key holds at now
+# alone (its value and the time it expires at, when it is there): its
+# type (TYPE), its length (STRLEN), its time to live in s or ms (TTL,
+# PTTL) or the time it expires at (EXPIRETIME, PEXPIRETIME). The laws see
+# them as one command, Peek (LAWS.bend: disturbs), so one more needs no
+# more proof. Each is a constructor of its own, with no fields: a command
+# travels in registers as wide as its widest form.
 type PeekOp is Data:
   PType{}
+  PStrlen{}
+  PTtl{}
+  PPttl{}
+  PExpTime{}
+  PPExpTime{}
+
+# A time a command names, in ms (a time in s, times 1000; Times, below):
+# a short one (TmN, below 10^14) or any other long long (TmB: its sign and
+# its magnitude hi * 10^9 + lo); at says whether it counts from 1970
+# (EXAT, PXAT, EXPIREAT, PEXPIREAT) or from now
+type Tm is Data:
+  TmN{at: Bool, ms: Nat}
+  TmB{at: Bool, neg: Bool, hi: Nat, lo: Nat}
+
+# the time to live SET leaves: none (TNone), the one the key had (TKeep:
+# KEEPTTL), or a time (TAt; checked as SET reads it)
+type SetTtl is Data:
+  TNone{}
+  TKeep{}
+  TAt{t: Tm}
+
+# GETEX's option: none, PERSIST, or a time, kept as it came (at: EXAT or
+# PXAT; ms: PX or PXAT), as GETEX reads it only once it finds the key
+type ExOpt is Data:
+  XNone{}
+  XPersist{}
+  XAt{at: Bool, ms: Bool, v: String}
+
+# EXPIRE's conditions: NX, XX, GT, LT (NX goes with none of the others,
+# nor GT with LT)
+type ExpIf is Data:
+  ExpIf{nx: Bool, xx: Bool, gt: Bool, lt: Bool}
+
+# A write of one key whose reply and change depend on what the key holds
+# at now alone: SETNX, APPEND, SET with options (and SETEX, PSETEX: cond 0
+# none, 1 NX, 2 XX; name is the command's, for its errors), an update
+# whose reply is the old value (UGet: SET's GET option, and GETSET, which
+# is SET with GET), GETEX, GETDEL, EXPIRE and its kin (t from now or from
+# 1970), PERSIST, and INCRBY (UIncr: as the append-only file sees it,
+# aof.bend; the server runs INCRBY as its own command, IncrBy, the same
+# way, faster). The laws see them as one command, Upd, so one more needs
+# no more proof. UGet holds an update, so the compiler makes an update a
+# node of its own: a command travels in registers as wide as its widest
+# form, and an update's options are many.
+type UpdOp is Data:
+  USetNx{v: String}
+  UGet{op: UpdOp}
+  UAppend{v: String}
+  USet{v: String, cond: Nat, ttl: SetTtl, name: String}
+  UGetEx{o: ExOpt}
+  UGetDel{}
+  UExpire{t: Tm, c: ExpIf, name: String}
+  UPersist{}
+  UIncr{by: Int}
 
 # The commands of a connection and of the server: session.bend runs
 # them, with the state of the connection and of the server, and none of
@@ -80,13 +138,9 @@ type Cmd is Data:
   Echo{msg: String}
   Get{key: String}
   Set{key: String, val: String}
-  SetNX{key: String, val: String}
-  GetSet{key: String, val: String}
   Del{keys: List<&2, String>}
   Exists{keys: List<&2, String>}
   IncrBy{key: String, by: Int}
-  Append{key: String, val: String}
-  Strlen{key: String}
   MGet{keys: List<&2, String>}
   MSet{pairs: List<&2, KVPair>}
   DbSize{}
@@ -94,6 +148,7 @@ type Cmd is Data:
   Keys{pattern: String}
   Scan{args: List<&2, String>}
   Peek{key: String, c: PeekOp}
+  Upd{key: String, op: UpdOp}
   Own{op: SessOp}
   Bad{reply: Reply}
 
@@ -260,6 +315,37 @@ def no_newlines(s: String) -> String:
     case SCon{c, t}:
       SCon{c, no_newlines(t)}
 
+# a string as C's functions read it: up to its first NUL. Redis compares
+# option words with strcasecmp and formats errors with %s, which stop
+# there
+def cstr(+s: String) -> String:
+  String.take(s, String.find(s, Chr{0}, 0n))
+
+def crlf.last(c: Char) -> String:
+  match c:
+    case Chr{+x}:
+      Bool.pick(String, Bool.or(U32.is_eq(x, 13), U32.is_eq(x, 10)), SNil{}, SCon{Chr{x}, SNil{}})
+
+def crlf.drop(c: Char, t: String) -> String:
+  match t:
+    case SNil{}:
+      crlf.last(c)
+    case SCon{h, u}:
+      SCon{c, SCon{h, u}}
+
+# a string without the CRs and LFs it ends with
+def trim_crlf(s: String) -> String:
+  match s:
+    case SNil{}:
+      SNil{}
+    case SCon{c, t}:
+      crlf.drop(c, trim_crlf(t))
+
+# an error as addReplyErrorFormat sends it: the CRs and LFs it ends with
+# dropped, the others as spaces
+def e_fmt(s: String) -> String:
+  no_newlines(trim_crlf(s))
+
 # Redis's reply to an unknown command: the name as it was sent (up to 128
 # bytes) and its first arguments, each quoted and followed by a space,
 # while they make less than 128 bytes, each cut to what is left
@@ -383,8 +469,10 @@ def function_help() -> List<&2, String>:
 def sess_reply(r: Reply) -> SessOp:
   SReply{r}
 
+# whether s is the word w (in upper case) in any case, as strcasecmp
+# finds it: up to s's first NUL
 def is_word(+s: String, w: String) -> Bool:
-  String.eq(String.to_upper(s), w)
+  String.eq(String.to_upper(cstr(s)), w)
 
 # CLIENT: BendKV has no client tracking and no blocking commands, so the
 # subcommands about them answer as Redis does when none is in use
@@ -844,6 +932,469 @@ def scan.check(a: ScanArgs, args: List<&2, String>) -> Cmd:
 def scan.parse(+args: List<&2, String>) -> Cmd:
   scan.check(scan.args(args), args)
 
+# Times
+# -----
+# A time a command names is a long long, read as Redis's string2ll reads
+# one. Most are short: no sign, no leading zero, below 10^14 (all the
+# times the append-only file holds, as PXAT and PEXPIREAT give them). A
+# short one reads digit by digit as a Nat (num14), as the file's lengths
+# do, and PROOF.bend shows that what Nat.show writes reads back so
+# (num14_show); any other goes through Dec, which keeps its magnitude as
+# hi * 10^9 + lo, so that Redis's checks of overflow near 2^63 come out
+# exactly. A time in s counts as 1000 times as many ms. A time from 1970
+# at or past 10^14 ms (the year 5138) is far (AtFar): a key gets no time
+# for it, as it would never come (a Nat holds 2^48 - 1 at most). No
+# number here is built from 10^13 or 10^14: digits are counted instead,
+# as the proofs never build such numbers.
+
+# what a char is to a short number: a digit and its value, or not one
+type NCh is Data:
+  NDig{d: Nat}
+  NOther{}
+
+def nch.of(+x: U32, dig: Bool) -> NCh:
+  match dig:
+    case True{}:
+      NDig{U32.to_nat(U32.sub(x, 48))}
+    case False{}:
+      NOther{}
+
+def nch(s: String) -> NCh:
+  match s:
+    case SCon{Chr{+x}, t}:
+      nch.of(x, U32.is_lt(U32.sub(x, 48), 10))
+    case SNil{}:
+      NOther{}
+
+# the next char, when a digit may come after the number a of n digits:
+# a has 13 digits at most and no leading 0 (a number that is 0 takes no
+# more digits)
+def n14.next(+n: Nat, +a: Nat, c: NCh) -> NCh:
+  match c:
+    case NDig{d}:
+      Bool.pick(NCh, Bool.and(Nat.is_lt(n, 14n), Nat.is_lt(0n, a)), NDig{d}, NOther{})
+    case NOther{}:
+      NOther{}
+
+def num14.end(lead: Bool, acc: Nat) -> Maybe<&2, Nat>:
+  match lead:
+    case True{}:
+      Some{acc}
+    case False{}:
+      None{}
+
+# the number the digits of s make after acc (of n digits), when s holds
+# digits only, one at least (lead: a digit came), with no leading 0, and
+# the number has 14 digits at most (is below 10^14); c is what s's first
+# char is
+def num14(s: String, acc: Nat, +n: Nat, lead: Bool, c: NCh) -> Maybe<&2, Nat>:
+  match s c:
+    case SCon{h, +t} NDig{d}:
+      +a = Nat.add(Nat.mul(acc, 10n), d)
+      num14(t, a, 1n+n, True{}, n14.next(1n+n, a, nch(t)))
+    case SNil{} _:
+      num14.end(lead, acc)
+    case _ _:
+      None{}
+
+# a long long as Redis's string2ll reads one, past what num14 reads: its
+# sign and its magnitude (hi * 10^9 + lo), or none
+type LL is Data:
+  LL{neg: Bool, hi: Nat, lo: Nat}
+  LLBad{}
+
+def pow10(k: Nat) -> Nat:
+  match k:
+    case 0n:
+      1n
+    case 1n+j:
+      Nat.mul(10n, pow10(j))
+
+# a magnitude of sig significant digits (the first ten hi, the next ten
+# lo, as Dec keeps them), split at 10^9: with j digits in lo, hi's last
+# 9 - j digits go before lo
+def ll.mk(+neg: Bool, +sig: Nat, +hi: Nat, +lo: Nat) -> LL:
+  +j = Nat.sub(sig, 10n)
+  +p = pow10(Nat.sub(9n, j))
+  Bool.pick(LL, Nat.is_le(sig, 10n), LL{neg, Nat.div(hi, 1000000000n), Nat.mod(hi, 1000000000n)},
+    LL{neg, Nat.div(hi, p), Nat.add(Nat.mul(Nat.mod(hi, p), pow10(j)), lo)})
+
+def ll.of(+d: Dec, +neg: Bool) -> LL:
+  match d:
+    case Dec{+ok, +n, +zero, +sig, +hi, +lo}:
+      +canon = Bool.or(Bool.not(zero), Bool.and(Nat.is_eq(n, 1n), Bool.not(neg)))
+      +fits = dec.le(sig, hi, lo, 19n, dec.llmax(), Bool.pick(Nat, neg, 854775808n, 854775807n))
+      Bool.pick(LL, Bool.and(Bool.and(Bool.and(ok, Nat.is_lt(0n, n)), canon), fits), ll.mk(neg, sig, hi, lo), LLBad{})
+
+def ll.read(+s: String) -> LL:
+  +neg = U32.is_eq(String.code_at(s, 0n), 45)
+  ll.of(dec.of(s, Bool.pick(Nat, neg, 1n, 0n), String.length(s)), neg)
+
+# whether a magnitude hi * 10^9 + lo is at most hb * 10^9 + lb
+def ll.le(+hi: Nat, +lo: Nat, +hb: Nat, +lb: Nat) -> Bool:
+  Bool.or(Nat.is_lt(hi, hb), Bool.and(Nat.is_eq(hi, hb), Nat.is_le(lo, lb)))
+
+# a time in s as ms: its magnitude times 1000, at most LLONG_MAX / 1000
+# (9223372036854775) before
+def ll.ms(+hi: Nat, +lo: Nat) -> Nat & Nat:
+  (Nat.add(Nat.mul(hi, 1000n), Nat.div(lo, 1000000n)), Nat.mul(Nat.mod(lo, 1000000n), 1000n))
+
+# a time as a command reads it, or the error it answers
+type TmR is Data:
+  TOk{t: Tm}
+  TBad{r: Reply}
+
+def e_time(+name: String) -> Reply:
+  RError{"ERR invalid expire time in '" ++ name ++ "' command"}
+
+def tm.big.ms(+at: Bool, secs: Bool, +neg: Bool, ms: Nat & Nat, +hi: Nat, +lo: Nat) -> Tm:
+  (+mh, +ml) = ms
+  Bool.pick(Tm, secs, TmB{at, neg, mh, ml}, TmB{at, neg, hi, lo})
+
+# a long time: in s, its magnitude past LLONG_MAX / 1000 is an error; one
+# that is 0 or less is when pos (SET's and GETEX's)
+def tm.big(+at: Bool, +secs: Bool, +pos: Bool, +name: String, l: LL) -> TmR:
+  match l:
+    case LL{+neg, +hi, +lo}:
+      +zero = Bool.and(Nat.is_eq(hi, 0n), Nat.is_eq(lo, 0n))
+      +bad = Bool.or(Bool.and(pos, Bool.or(neg, zero)), Bool.and(secs, Bool.not(ll.le(hi, lo, 9223372n, 36854775n))))
+      Bool.pick(TmR, bad, TBad{e_time(name)}, TOk{tm.big.ms(at, secs, neg, ll.ms(hi, lo), hi, lo)})
+    case LLBad{}:
+      TBad{e_int()}
+
+def tm.pair(+at: Bool, ms: Nat & Nat) -> Tm:
+  (+h, +l) = ms
+  TmB{at, False{}, h, l}
+
+# a short time in s: as ms, a TmN below 10^11 s (small), else a TmB (the
+# ms past 10^14 would not fit a Nat). A def, not a Bool.pick, so that the
+# product is made only when it fits; so in the defs below.
+def tm.short.s(small: Bool, +at: Bool, +n: Nat) -> Tm:
+  match small:
+    case True{}:
+      TmN{at, Nat.mul(n, 1000n)}
+    case False{}:
+      tm.pair(at, ll.ms(Nat.div(n, 1000000000n), Nat.mod(n, 1000000000n)))
+
+# a short time: in ms below 10^14 a TmN, in s as tm.short.s makes it; 0
+# is an error when pos
+def tm.short(+at: Bool, +secs: Bool, +pos: Bool, +name: String, +n: Nat) -> TmR:
+  Bool.pick(TmR, Bool.and(pos, Nat.is_eq(n, 0n)), TBad{e_time(name)},
+    TOk{Bool.pick(Tm, secs, tm.short.s(KV.digits.le(11n, n), at, n), TmN{at, n})})
+
+def tm.of.go(m: Maybe<&2, Nat>, +s: String, +at: Bool, +secs: Bool, +pos: Bool, +name: String) -> TmR:
+  match m:
+    case Some{n}:
+      tm.short(at, secs, pos, name, n)
+    case None{}:
+      tm.big(at, secs, pos, name, ll.read(s))
+
+# a time s names: from 1970 (at) or from now, in s or ms; pos when it must
+# be more than 0 (SET, SETEX, PSETEX, GETEX), and name the command's
+def tm.of(+s: String, +at: Bool, +secs: Bool, +pos: Bool, +name: String) -> TmR:
+  tm.of.go(num14(s, 0n, 0n, False{}, nch(s)), s, at, secs, pos, name)
+
+# The time a command's time comes to at now: before or at 1970 (AtPast),
+# at ms (AtMs, below 10^14: KV.small), or at 10^14 ms or later (AtFar, a
+# time that never comes); None when a time from now overflows LLONG_MAX
+# (Redis: "invalid expire time")
+type At is Data:
+  AtPast{}
+  AtMs{ms: Nat}
+  AtFar{}
+
+def at.ms(+m: Nat) -> At:
+  Bool.pick(At, KV.small(m), AtMs{m}, AtFar{})
+
+# a time from now of m ms less
+def at.sub(+m: Nat, +now: Nat) -> At:
+  Bool.pick(At, Nat.is_le(m, now), AtMs{Nat.sub(now, m)}, AtPast{})
+
+# a time of hi * 10^9 + lo ms from 1970, made only when hi is below 10^5
+# (small); and that many ms before now
+def at.big(small: Bool, +hi: Nat, +lo: Nat) -> At:
+  match small:
+    case True{}:
+      at.ms(Nat.add(Nat.mul(hi, 1000000000n), lo))
+    case False{}:
+      AtFar{}
+
+def at.big.sub(small: Bool, +hi: Nat, +lo: Nat, +now: Nat) -> At:
+  match small:
+    case True{}:
+      at.sub(Nat.add(Nat.mul(hi, 1000000000n), lo), now)
+    case False{}:
+      AtPast{}
+
+# a time from now of hi * 10^9 + lo ms more: past LLONG_MAX
+# (9223372036 * 10^9 + 854775807) is an overflow
+def at.add(+hi: Nat, +lo: Nat, +now: Nat) -> Maybe<&2, At>:
+  +l = Nat.add(lo, Nat.mod(now, 1000000000n))
+  +h = Nat.add(Nat.add(hi, Nat.div(now, 1000000000n)), Nat.div(l, 1000000000n))
+  +l2 = Nat.mod(l, 1000000000n)
+  Bool.pick(Maybe<&2, At>, ll.le(h, l2, dec.llmax(), 854775807n), Some{at.big(Nat.is_lt(h, 100000n), h, l2)}, None{})
+
+def at.of(t: Tm, +now: Nat) -> Maybe<&2, At>:
+  match t:
+    case TmN{at, +ms}:
+      match at:
+        case True{}:
+          Some{at.ms(ms)}
+        case False{}:
+          Some{at.ms(Nat.add(ms, now))}
+    case TmB{at, neg, +hi, +lo}:
+      match at neg:
+        case True{} True{}:
+          Some{AtPast{}}
+        case True{} False{}:
+          Some{at.big(Nat.is_lt(hi, 100000n), hi, lo)}
+        case False{} True{}:
+          Some{at.big.sub(Nat.is_lt(hi, 100000n), hi, lo, now)}
+        case False{} False{}:
+          at.add(hi, lo, now)
+
+# whether a time is past at now (Redis's checkAlreadyExpired: at or
+# before now)
+def at.past(+a: At, +now: Nat) -> Bool:
+  match a:
+    case AtPast{}:
+      True{}
+    case AtMs{+m}:
+      Nat.is_le(m, now)
+    case AtFar{}:
+      False{}
+
+# the time a key keeps for a time that is not past: none for a far one
+def at.exp(+a: At) -> Nat:
+  match a:
+    case AtPast{}:
+      1n
+    case AtMs{+m}:
+      Nat.max(m, 1n)
+    case AtFar{}:
+      0n
+
+# whether a time is after, and before, a key's time e (not 0)
+def at.gt(+a: At, +e: Nat) -> Bool:
+  match a:
+    case AtPast{}:
+      False{}
+    case AtMs{+m}:
+      Nat.is_lt(e, m)
+    case AtFar{}:
+      True{}
+
+def at.lt(+a: At, +e: Nat) -> Bool:
+  match a:
+    case AtPast{}:
+      True{}
+    case AtMs{+m}:
+      Nat.is_lt(m, e)
+    case AtFar{}:
+      False{}
+
+# Options of SET, GETEX and EXPIRE
+# --------------------------------
+# SET's and GETEX's options as Redis's parseExtendedStringArgumentsOrReply
+# reads them: SET takes NX, XX, GET and KEEPTTL, GETEX PERSIST, and both a
+# time (EX, PX, EXAT, PXAT, with its value; the last one counts, of one
+# kind only). Any word in any case; any other word, or one that clashes
+# with those before it, is a syntax error. The time is read once the
+# options are (tk: 0 none, 1 EX, 2 PX, 3 EXAT, 4 PXAT; tv its value).
+type SetSt is Data:
+  SetSt{nx: Bool, xx: Bool, get: Bool, keep: Bool, persist: Bool, tk: Nat, tv: String}
+  SetBad{}
+
+# NX 1, XX 2, GET 3, KEEPTTL 4, PERSIST 5, EX 6, PX 7, EXAT 8, PXAT 9,
+# another word 0
+def set.word(+w: String) -> Nat:
+  Bool.pick(Nat, is_word(w, "NX"), 1n, Bool.pick(Nat, is_word(w, "XX"), 2n,
+  Bool.pick(Nat, is_word(w, "GET"), 3n, Bool.pick(Nat, is_word(w, "KEEPTTL"), 4n,
+  Bool.pick(Nat, is_word(w, "PERSIST"), 5n, Bool.pick(Nat, is_word(w, "EX"), 6n,
+  Bool.pick(Nat, is_word(w, "PX"), 7n, Bool.pick(Nat, is_word(w, "EXAT"), 8n,
+  Bool.pick(Nat, is_word(w, "PXAT"), 9n, 0n)))))))))
+
+# a time option t (1 to 4) with its value, when ok
+def set.time(+t: Nat, next: Maybe<&2, String>, ok: Bool, +nx: Bool, +xx: Bool, +get: Bool, +keep: Bool, +persist: Bool) -> SetSt:
+  match next ok:
+    case Some{v} True{}:
+      SetSt{nx, xx, get, keep, persist, t, v}
+    case _ _:
+      SetBad{}
+
+# whether a time option t may come: no KEEPTTL or PERSIST before it, and
+# no time of another kind
+def set.tok(+keep: Bool, +persist: Bool, +tk: Nat, +t: Nat) -> Bool:
+  Bool.and(Bool.and(Bool.not(keep), Bool.not(persist)), Bool.or(Nat.is_eq(tk, 0n), Nat.is_eq(tk, t)))
+
+def set.one.go(+set: Bool, +k: Nat, next: Maybe<&2, String>, +nx: Bool, +xx: Bool, +get: Bool, +keep: Bool, +persist: Bool, +tk: Nat, +tv: String) -> SetSt:
+  match k:
+    case 1n:
+      Bool.pick(SetSt, Bool.and(set, Bool.not(xx)), SetSt{True{}, xx, get, keep, persist, tk, tv}, SetBad{})
+    case 2n:
+      Bool.pick(SetSt, Bool.and(set, Bool.not(nx)), SetSt{nx, True{}, get, keep, persist, tk, tv}, SetBad{})
+    case 3n:
+      Bool.pick(SetSt, set, SetSt{nx, xx, True{}, keep, persist, tk, tv}, SetBad{})
+    case 4n:
+      Bool.pick(SetSt, Bool.and(set, Bool.and(Bool.not(persist), Nat.is_eq(tk, 0n))), SetSt{nx, xx, get, True{}, persist, tk, tv}, SetBad{})
+    case 5n:
+      Bool.pick(SetSt, Bool.and(Bool.not(set), Bool.and(Nat.is_eq(tk, 0n), Bool.not(keep))), SetSt{nx, xx, get, keep, True{}, tk, tv}, SetBad{})
+    case 6n:
+      set.time(1n, next, set.tok(keep, persist, tk, 1n), nx, xx, get, keep, persist)
+    case 7n:
+      set.time(2n, next, set.tok(keep, persist, tk, 2n), nx, xx, get, keep, persist)
+    case 8n:
+      set.time(3n, next, set.tok(keep, persist, tk, 3n), nx, xx, get, keep, persist)
+    case 9n:
+      set.time(4n, next, set.tok(keep, persist, tk, 4n), nx, xx, get, keep, persist)
+    case _:
+      SetBad{}
+
+def set.one(+set: Bool, +k: Nat, next: Maybe<&2, String>, st: SetSt) -> SetSt:
+  match st:
+    case SetSt{+nx, +xx, +get, +keep, +persist, +tk, +tv}:
+      set.one.go(set, k, next, nx, xx, get, keep, persist, tk, tv)
+    case SetBad{}:
+      SetBad{}
+
+def set.next(+xs: List<&2, String>) -> Maybe<&2, String>:
+  match xs:
+    case Con{+v, +rest}:
+      Some{v}
+    case Nil{}:
+      None{}
+
+# the options after option k: a time option took its value
+def set.drop.go(drop: Bool, v: String, rest: List<&2, String>) -> List<&2, String>:
+  match drop:
+    case True{}:
+      rest
+    case False{}:
+      v <> rest
+
+def set.drop(+k: Nat, xs: List<&2, String>) -> List<&2, String>:
+  match xs:
+    case Con{v, rest}:
+      set.drop.go(Nat.is_lt(5n, k), v, rest)
+    case Nil{}:
+      Nil{}
+
+def set.opts(fuel: Nat, +set: Bool, xs: List<&2, String>, st: SetSt) -> SetSt:
+  match fuel:
+    case 0n:
+      st
+    case 1n+f:
+      match xs:
+        case Nil{}:
+          st
+        case Con{+w, rest}:
+          +k = set.word(w)
+          +r = rest
+          next = set.next(r)
+          set.opts(f, set, set.drop(k, r), set.one(set, k, next, st))
+
+def set.init() -> SetSt:
+  SetSt{False{}, False{}, False{}, False{}, False{}, 0n, ""}
+
+# a time option's value read: from 1970 for EXAT and PXAT, in s for EX
+# and EXAT, more than 0 (pos) as SET and GETEX read it
+def set.tm(+tk: Nat, +tv: String, +name: String) -> TmR:
+  tm.of(tv, Nat.is_lt(2n, tk), Bool.or(Nat.is_eq(tk, 1n), Nat.is_eq(tk, 3n)), True{}, name)
+
+# SET's update, under GET when the option asks
+def set.upd(get: Bool, op: UpdOp) -> UpdOp:
+  match get:
+    case True{}:
+      UGet{op}
+    case False{}:
+      op
+
+def set.ttl.cmd(+k: String, +v: String, +cond: Nat, +get: Bool, r: TmR, +name: String) -> Cmd:
+  match r:
+    case TOk{t}:
+      Upd{k, set.upd(get, USet{v, cond, TAt{t}, name})}
+    case TBad{e}:
+      Bad{e}
+
+def set.cmd(+k: String, +v: String, st: SetSt) -> Cmd:
+  match st:
+    case SetSt{+nx, +xx, +get, +keep, persist, +tk, +tv}:
+      +cond = Bool.pick(Nat, nx, 1n, Bool.pick(Nat, xx, 2n, 0n))
+      Bool.pick(Cmd, Nat.is_eq(tk, 0n), Upd{k, set.upd(get, USet{v, cond, Bool.pick(SetTtl, keep, TKeep{}, TNone{}), "set"})},
+        set.ttl.cmd(k, v, cond, get, set.tm(tk, tv, "set"), "set"))
+    case SetBad{}:
+      e_syntax()
+
+# SET key value with options
+def parse_set(+k: String, +v: String, +os: List<&2, String>) -> Cmd:
+  set.cmd(k, v, set.opts(List.length(&2, String, os), True{}, os, set.init()))
+
+# SETEX and PSETEX: SET with EX or PX
+def parse_setex(+k: String, +s: String, +v: String, +secs: Bool, +name: String) -> Cmd:
+  set.ttl.cmd(k, v, 0n, False{}, tm.of(s, False{}, secs, True{}, name), name)
+
+def getex.opt(st: SetSt) -> Maybe<&2, ExOpt>:
+  match st:
+    case SetSt{nx, xx, get, keep, +persist, +tk, tv}:
+      Some{Bool.pick(ExOpt, persist, XPersist{}, Bool.pick(ExOpt, Nat.is_eq(tk, 0n), XNone{}, XAt{Nat.is_lt(2n, tk), Bool.or(Nat.is_eq(tk, 2n), Nat.is_eq(tk, 4n)), tv}))}
+    case SetBad{}:
+      None{}
+
+def getex.cmd(+k: String, m: Maybe<&2, ExOpt>) -> Cmd:
+  match m:
+    case Some{o}:
+      Upd{k, UGetEx{o}}
+    case None{}:
+      e_syntax()
+
+# GETEX key with options: the time is read once the key is found
+def parse_getex(+k: String, +os: List<&2, String>) -> Cmd:
+  getex.cmd(k, getex.opt(set.opts(List.length(&2, String, os), False{}, os, set.init())))
+
+# EXPIRE's options, as Redis's parseExtendedExpireArgumentsOrReply reads
+# them: NX, XX, GT and LT in any case, any of them again; another word is
+# an error; then NX goes with none of the others, nor GT with LT
+type ExpSt is Data:
+  ExpSt{nx: Bool, xx: Bool, gt: Bool, lt: Bool}
+  ExpBad{r: Reply}
+
+def exp.word(+w: String, +nx: Bool, +xx: Bool, +gt: Bool, +lt: Bool) -> ExpSt:
+  Bool.pick(ExpSt, is_word(w, "NX"), ExpSt{True{}, xx, gt, lt},
+  Bool.pick(ExpSt, is_word(w, "XX"), ExpSt{nx, True{}, gt, lt},
+  Bool.pick(ExpSt, is_word(w, "GT"), ExpSt{nx, xx, True{}, lt},
+  Bool.pick(ExpSt, is_word(w, "LT"), ExpSt{nx, xx, gt, True{}},
+    ExpBad{RError{e_fmt("ERR Unsupported option " ++ cstr(w))}}))))
+
+def exp.opts(xs: List<&2, String>, st: ExpSt) -> ExpSt:
+  match xs st:
+    case _ ExpBad{r}:
+      ExpBad{r}
+    case Nil{} st:
+      st
+    case Con{+w, rest} ExpSt{+nx, +xx, +gt, +lt}:
+      exp.opts(rest, exp.word(w, nx, xx, gt, lt))
+
+def exp.ttl.cmd(+k: String, +c: ExpIf, r: TmR, +name: String) -> Cmd:
+  match r:
+    case TOk{t}:
+      Upd{k, UExpire{t, c, name}}
+    case TBad{e}:
+      Bad{e}
+
+def exp.cmd(+k: String, +s: String, +at: Bool, +secs: Bool, +name: String, st: ExpSt) -> Cmd:
+  match st:
+    case ExpSt{+nx, +xx, +gt, +lt}:
+      Bool.pick(Cmd, Bool.and(nx, Bool.or(xx, Bool.or(gt, lt))), Bad{RError{"ERR NX and XX, GT or LT options at the same time are not compatible"}},
+      Bool.pick(Cmd, Bool.and(gt, lt), Bad{RError{"ERR GT and LT options at the same time are not compatible"}},
+        exp.ttl.cmd(k, ExpIf{nx, xx, gt, lt}, tm.of(s, at, secs, False{}, name), name)))
+    case ExpBad{r}:
+      Bad{r}
+
+# EXPIRE, PEXPIRE, EXPIREAT and PEXPIREAT key time [options]: the options
+# are read first, then the time
+def parse_expire(+k: String, +s: String, +os: List<&2, String>, +at: Bool, +secs: Bool, +name: String) -> Cmd:
+  exp.cmd(k, s, at, secs, name, exp.opts(os, ExpSt{False{}, False{}, False{}, False{}}))
+
 # A command's name, in upper case, picks how its arguments parse. The
 # name's length narrows it down to a few names, which cmd_id compares with
 # it whole: String.eq with a literal is one memcmp, cheap enough that
@@ -855,7 +1406,8 @@ def cmd_id(+n: String, len: Nat) -> Nat:
     case 3n:
       Bool.pick(Nat, String.eq(n, "GET"), 3n,
       Bool.pick(Nat, String.eq(n, "SET"), 4n,
-      Bool.pick(Nat, String.eq(n, "DEL"), 7n, 0n)))
+      Bool.pick(Nat, String.eq(n, "DEL"), 7n,
+      Bool.pick(Nat, String.eq(n, "TTL"), 32n, 0n))))
     case 4n:
       Bool.pick(Nat, String.eq(n, "PING"), 1n,
       Bool.pick(Nat, String.eq(n, "ECHO"), 2n,
@@ -868,11 +1420,14 @@ def cmd_id(+n: String, len: Nat) -> Nat:
       Bool.pick(Nat, String.eq(n, "TYPE"), 25n,
       Bool.pick(Nat, String.eq(n, "AUTH"), 42n,
       Bool.pick(Nat, String.eq(n, "QUIT"), 43n,
-      Bool.pick(Nat, String.eq(n, "INFO"), 48n, 0n))))))))))))
+      Bool.pick(Nat, String.eq(n, "INFO"), 48n,
+      Bool.pick(Nat, String.eq(n, "PTTL"), 33n, 0n)))))))))))))
     case 5n:
       Bool.pick(Nat, String.eq(n, "SETNX"), 5n,
       Bool.pick(Nat, String.eq(n, "HELLO"), 41n,
-      Bool.pick(Nat, String.eq(n, "RESET"), 44n, 0n)))
+      Bool.pick(Nat, String.eq(n, "RESET"), 44n,
+      Bool.pick(Nat, String.eq(n, "SETEX"), 23n,
+      Bool.pick(Nat, String.eq(n, "GETEX"), 26n, 0n)))))
     case 6n:
       Bool.pick(Nat, String.eq(n, "GETSET"), 6n,
       Bool.pick(Nat, String.eq(n, "UNLINK"), 8n,
@@ -884,15 +1439,26 @@ def cmd_id(+n: String, len: Nat) -> Nat:
       Bool.pick(Nat, String.eq(n, "DBSIZE"), 18n,
       Bool.pick(Nat, String.eq(n, "CONFIG"), 47n,
       Bool.pick(Nat, String.eq(n, "SELECT"), 40n,
-      Bool.pick(Nat, String.eq(n, "CLIENT"), 45n, 0n)))))))))))
+      Bool.pick(Nat, String.eq(n, "CLIENT"), 45n,
+      Bool.pick(Nat, String.eq(n, "PSETEX"), 24n,
+      Bool.pick(Nat, String.eq(n, "GETDEL"), 27n,
+      Bool.pick(Nat, String.eq(n, "EXPIRE"), 28n, 0n))))))))))))))
     case 7n:
       Bool.pick(Nat, String.eq(n, "FLUSHDB"), 20n,
-      Bool.pick(Nat, String.eq(n, "COMMAND"), 49n, 0n))
+      Bool.pick(Nat, String.eq(n, "COMMAND"), 49n,
+      Bool.pick(Nat, String.eq(n, "PEXPIRE"), 29n,
+      Bool.pick(Nat, String.eq(n, "PERSIST"), 36n, 0n))))
     case 8n:
       Bool.pick(Nat, String.eq(n, "FLUSHALL"), 19n,
-      Bool.pick(Nat, String.eq(n, "FUNCTION"), 46n, 0n))
+      Bool.pick(Nat, String.eq(n, "FUNCTION"), 46n,
+      Bool.pick(Nat, String.eq(n, "EXPIREAT"), 30n, 0n)))
     case 9n:
-      Bool.pick(Nat, String.eq(n, "RANDOMKEY"), 50n, 0n)
+      Bool.pick(Nat, String.eq(n, "RANDOMKEY"), 50n,
+      Bool.pick(Nat, String.eq(n, "PEXPIREAT"), 31n, 0n))
+    case 10n:
+      Bool.pick(Nat, String.eq(n, "EXPIRETIME"), 34n, 0n)
+    case 11n:
+      Bool.pick(Nat, String.eq(n, "PEXPIRETIME"), 35n, 0n)
     case _:
       0n
 
@@ -923,19 +1489,19 @@ def parse_id(id: Nat, name: String, args: List<&2, String>) -> Cmd:
         case Con{k, Con{v, Nil{}}}:
           Set{k, v}
         case Con{k, Con{v, Con{o, os}}}:
-          e_syntax()
+          parse_set(k, v, o <> os)
         case _:
           e_arity("set")
     case 5n:  # SETNX
       match args:
         case Con{k, Con{v, Nil{}}}:
-          SetNX{k, v}
+          Upd{k, USetNx{v}}
         case _:
           e_arity("setnx")
     case 6n:  # GETSET
       match args:
         case Con{k, Con{v, Nil{}}}:
-          GetSet{k, v}
+          Upd{k, UGet{USet{v, 0n, TNone{}, "getset"}}}
         case _:
           e_arity("getset")
     case 7n:  # DEL
@@ -983,13 +1549,13 @@ def parse_id(id: Nat, name: String, args: List<&2, String>) -> Cmd:
     case 14n:  # APPEND
       match args:
         case Con{k, Con{v, Nil{}}}:
-          Append{k, v}
+          Upd{k, UAppend{v}}
         case _:
           e_arity("append")
     case 15n:  # STRLEN
       match args:
         case Con{k, Nil{}}:
-          Strlen{k}
+          Peek{k, PStrlen{}}
         case _:
           e_arity("strlen")
     case 16n:  # MGET
@@ -1022,12 +1588,90 @@ def parse_id(id: Nat, name: String, args: List<&2, String>) -> Cmd:
           e_arity("scan")
         case Con{c, rest}:
           scan.parse(Con{c, rest})
+    case 23n:  # SETEX
+      match args:
+        case Con{k, Con{s, Con{v, Nil{}}}}:
+          parse_setex(k, s, v, True{}, "setex")
+        case _:
+          e_arity("setex")
+    case 24n:  # PSETEX
+      match args:
+        case Con{k, Con{s, Con{v, Nil{}}}}:
+          parse_setex(k, s, v, False{}, "psetex")
+        case _:
+          e_arity("psetex")
     case 25n:  # TYPE
       match args:
         case Con{k, Nil{}}:
           Peek{k, PType{}}
         case _:
           e_arity("type")
+    case 26n:  # GETEX
+      match args:
+        case Con{k, os}:
+          parse_getex(k, os)
+        case _:
+          e_arity("getex")
+    case 27n:  # GETDEL
+      match args:
+        case Con{k, Nil{}}:
+          Upd{k, UGetDel{}}
+        case _:
+          e_arity("getdel")
+    case 28n:  # EXPIRE
+      match args:
+        case Con{k, Con{s, os}}:
+          parse_expire(k, s, os, False{}, True{}, "expire")
+        case _:
+          e_arity("expire")
+    case 29n:  # PEXPIRE
+      match args:
+        case Con{k, Con{s, os}}:
+          parse_expire(k, s, os, False{}, False{}, "pexpire")
+        case _:
+          e_arity("pexpire")
+    case 30n:  # EXPIREAT
+      match args:
+        case Con{k, Con{s, os}}:
+          parse_expire(k, s, os, True{}, True{}, "expireat")
+        case _:
+          e_arity("expireat")
+    case 31n:  # PEXPIREAT
+      match args:
+        case Con{k, Con{s, os}}:
+          parse_expire(k, s, os, True{}, False{}, "pexpireat")
+        case _:
+          e_arity("pexpireat")
+    case 32n:  # TTL
+      match args:
+        case Con{k, Nil{}}:
+          Peek{k, PTtl{}}
+        case _:
+          e_arity("ttl")
+    case 33n:  # PTTL
+      match args:
+        case Con{k, Nil{}}:
+          Peek{k, PPttl{}}
+        case _:
+          e_arity("pttl")
+    case 34n:  # EXPIRETIME
+      match args:
+        case Con{k, Nil{}}:
+          Peek{k, PExpTime{}}
+        case _:
+          e_arity("expiretime")
+    case 35n:  # PEXPIRETIME
+      match args:
+        case Con{k, Nil{}}:
+          Peek{k, PPExpTime{}}
+        case _:
+          e_arity("pexpiretime")
+    case 36n:  # PERSIST
+      match args:
+        case Con{k, Nil{}}:
+          Upd{k, UPersist{}}
+        case _:
+          e_arity("persist")
     case _:
       e_unknown(name, args)
 
@@ -1172,30 +1816,56 @@ def stat.top(+id: Nat) -> Nat:
       21n
     case 22n:
       22n
-    case 25n:
+    case 23n:
       23n
-    case 40n:
+    case 24n:
       24n
-    case 41n:
+    case 25n:
       25n
-    case 42n:
+    case 26n:
       26n
-    case 43n:
+    case 27n:
       27n
-    case 44n:
+    case 28n:
       28n
-    case 45n:
+    case 29n:
       29n
-    case 46n:
+    case 30n:
       30n
-    case 47n:
+    case 31n:
       31n
-    case 48n:
+    case 32n:
       32n
-    case 49n:
+    case 33n:
       33n
-    case 50n:
+    case 34n:
       34n
+    case 35n:
+      35n
+    case 36n:
+      36n
+    case 40n:
+      37n
+    case 41n:
+      38n
+    case 42n:
+      39n
+    case 43n:
+      40n
+    case 44n:
+      41n
+    case 45n:
+      42n
+    case 46n:
+      43n
+    case 47n:
+      44n
+    case 48n:
+      45n
+    case 49n:
+      46n
+    case 50n:
+      47n
     case _:
       0n
 
@@ -1203,25 +1873,25 @@ def stat.top(+id: Nat) -> Nat:
 def stat.sub.client(+sub: Nat) -> Nat:
   match sub:
     case 1n:
-      35n
+      48n
     case 2n:
-      36n
+      49n
     case 3n:
-      37n
+      50n
     case 4n:
-      38n
+      51n
     case 5n:
-      39n
+      52n
     case 6n:
-      40n
+      53n
     case 7n:
-      41n
+      54n
     case 8n:
-      42n
+      55n
     case 9n:
-      43n
+      56n
     case 10n:
-      44n
+      57n
     case _:
       0n
 
@@ -1229,9 +1899,9 @@ def stat.sub.client(+sub: Nat) -> Nat:
 def stat.sub.function(+sub: Nat) -> Nat:
   match sub:
     case 1n:
-      45n
+      58n
     case 2n:
-      46n
+      59n
     case _:
       0n
 
@@ -1239,15 +1909,15 @@ def stat.sub.function(+sub: Nat) -> Nat:
 def stat.sub.config(+sub: Nat) -> Nat:
   match sub:
     case 1n:
-      47n
+      60n
     case 2n:
-      48n
+      61n
     case 3n:
-      49n
+      62n
     case 4n:
-      50n
+      63n
     case 5n:
-      51n
+      64n
     case _:
       0n
 
@@ -1255,19 +1925,19 @@ def stat.sub.config(+sub: Nat) -> Nat:
 def stat.sub.command(+sub: Nat) -> Nat:
   match sub:
     case 1n:
-      52n
+      65n
     case 2n:
-      53n
+      66n
     case 3n:
-      54n
+      67n
     case 4n:
-      55n
+      68n
     case 5n:
-      56n
+      69n
     case 6n:
-      57n
+      70n
     case 7n:
-      58n
+      71n
     case _:
       0n
 
@@ -1319,76 +1989,102 @@ def stat.name(+key: Nat) -> String:
     case 22n:
       "scan"
     case 23n:
-      "type"
+      "setex"
     case 24n:
-      "select"
+      "psetex"
     case 25n:
-      "hello"
+      "type"
     case 26n:
-      "auth"
+      "getex"
     case 27n:
-      "quit"
+      "getdel"
     case 28n:
-      "reset"
+      "expire"
     case 29n:
-      "client"
+      "pexpire"
     case 30n:
-      "function"
+      "expireat"
     case 31n:
-      "config"
+      "pexpireat"
     case 32n:
-      "info"
+      "ttl"
     case 33n:
-      "command"
+      "pttl"
     case 34n:
-      "randomkey"
+      "expiretime"
     case 35n:
-      "client|id"
+      "pexpiretime"
     case 36n:
-      "client|help"
+      "persist"
     case 37n:
-      "client|reply"
+      "select"
     case 38n:
-      "client|getname"
+      "hello"
     case 39n:
-      "client|setname"
+      "auth"
     case 40n:
-      "client|caching"
+      "quit"
     case 41n:
-      "client|unblock"
+      "reset"
     case 42n:
-      "client|getredir"
+      "client"
     case 43n:
-      "client|no-evict"
+      "function"
     case 44n:
-      "client|trackinginfo"
+      "config"
     case 45n:
-      "function|flush"
+      "info"
     case 46n:
-      "function|help"
+      "command"
     case 47n:
-      "config|get"
+      "randomkey"
     case 48n:
-      "config|set"
+      "client|id"
     case 49n:
-      "config|resetstat"
+      "client|help"
     case 50n:
-      "config|rewrite"
+      "client|reply"
     case 51n:
-      "config|help"
+      "client|getname"
     case 52n:
-      "command|info"
+      "client|setname"
     case 53n:
-      "command|docs"
+      "client|caching"
     case 54n:
-      "command|list"
+      "client|unblock"
     case 55n:
-      "command|help"
+      "client|getredir"
     case 56n:
-      "command|count"
+      "client|no-evict"
     case 57n:
-      "command|getkeys"
+      "client|trackinginfo"
     case 58n:
+      "function|flush"
+    case 59n:
+      "function|help"
+    case 60n:
+      "config|get"
+    case 61n:
+      "config|set"
+    case 62n:
+      "config|resetstat"
+    case 63n:
+      "config|rewrite"
+    case 64n:
+      "config|help"
+    case 65n:
+      "command|info"
+    case 66n:
+      "command|docs"
+    case 67n:
+      "command|list"
+    case 68n:
+      "command|help"
+    case 69n:
+      "command|count"
+    case 70n:
+      "command|getkeys"
+    case 71n:
       "command|getkeysandflags"
     case _:
       ""
@@ -1442,76 +2138,102 @@ def stat.arity(+key: Nat) -> Nat:
     case 22n:
       5n
     case 23n:
-      4n
+      8n
     case 24n:
-      4n
+      8n
     case 25n:
-      3n
+      4n
     case 26n:
       5n
     case 27n:
-      3n
+      4n
     case 28n:
-      2n
+      7n
     case 29n:
-      5n
+      7n
     case 30n:
-      5n
+      7n
     case 31n:
-      5n
+      7n
     case 32n:
-      3n
+      4n
     case 33n:
-      3n
+      4n
     case 34n:
-      2n
+      4n
     case 35n:
       4n
     case 36n:
       4n
     case 37n:
-      6n
+      4n
     case 38n:
-      4n
+      3n
     case 39n:
-      6n
-    case 40n:
-      6n
-    case 41n:
-      7n
-    case 42n:
-      4n
-    case 43n:
-      6n
-    case 44n:
-      4n
-    case 45n:
       5n
+    case 40n:
+      3n
+    case 41n:
+      2n
+    case 42n:
+      5n
+    case 43n:
+      5n
+    case 44n:
+      5n
+    case 45n:
+      3n
     case 46n:
-      4n
+      3n
     case 47n:
-      7n
+      2n
     case 48n:
-      9n
+      4n
     case 49n:
       4n
     case 50n:
-      4n
+      6n
     case 51n:
       4n
     case 52n:
-      5n
+      6n
     case 53n:
-      5n
+      6n
     case 54n:
-      5n
+      7n
     case 55n:
       4n
     case 56n:
-      4n
+      6n
     case 57n:
-      9n
+      4n
     case 58n:
+      5n
+    case 59n:
+      4n
+    case 60n:
+      7n
+    case 61n:
+      9n
+    case 62n:
+      4n
+    case 63n:
+      4n
+    case 64n:
+      4n
+    case 65n:
+      5n
+    case 66n:
+      5n
+    case 67n:
+      5n
+    case 68n:
+      4n
+    case 69n:
+      4n
+    case 70n:
+      9n
+    case 71n:
       9n
     case _:
       1n
@@ -1526,6 +2248,16 @@ def stat.risky(+key: Nat) -> Bool:
     case 12n:
       True{}
     case 13n:
+      True{}
+    case 23n:
+      True{}
+    case 24n:
+      True{}
+    case 26n:
+      True{}
+    case 28n:
+      True{}
+    case 29n:
       True{}
     case _:
       False{}
@@ -2005,6 +2737,110 @@ def stat.cw(+code: Nat) -> U32:
       1181
     case 235n:
       1182
+    case 236n:
+      1191
+    case 237n:
+      1195
+    case 238n:
+      1197
+    case 239n:
+      1198
+    case 240n:
+      1203
+    case 241n:
+      1205
+    case 242n:
+      1206
+    case 243n:
+      1209
+    case 244n:
+      1210
+    case 245n:
+      1212
+    case 246n:
+      1223
+    case 247n:
+      1227
+    case 248n:
+      1229
+    case 249n:
+      1230
+    case 250n:
+      1235
+    case 251n:
+      1237
+    case 252n:
+      1238
+    case 253n:
+      1241
+    case 254n:
+      1242
+    case 255n:
+      1244
+    case 256n:
+      1251
+    case 257n:
+      1253
+    case 258n:
+      1254
+    case 259n:
+      1257
+    case 260n:
+      1258
+    case 261n:
+      1260
+    case 262n:
+      1265
+    case 263n:
+      1266
+    case 264n:
+      1268
+    case 265n:
+      1272
+    case 266n:
+      1295
+    case 267n:
+      1303
+    case 268n:
+      1307
+    case 269n:
+      1309
+    case 270n:
+      1310
+    case 271n:
+      1319
+    case 272n:
+      1323
+    case 273n:
+      1325
+    case 274n:
+      1326
+    case 275n:
+      1331
+    case 276n:
+      1333
+    case 277n:
+      1334
+    case 278n:
+      1337
+    case 279n:
+      1338
+    case 280n:
+      1340
+    case 281n:
+      1351
+    case 282n:
+      1355
+    case 283n:
+      1357
+    case 284n:
+      1358
+    case 285n:
+      1363
+    case 286n:
+      1365
+    case 287n:
+      1366
     case _:
       63
 
@@ -2483,6 +3319,110 @@ def stat.code.cw(+w: Nat) -> Nat:
       234n
     case 1182n:
       235n
+    case 1191n:
+      236n
+    case 1195n:
+      237n
+    case 1197n:
+      238n
+    case 1198n:
+      239n
+    case 1203n:
+      240n
+    case 1205n:
+      241n
+    case 1206n:
+      242n
+    case 1209n:
+      243n
+    case 1210n:
+      244n
+    case 1212n:
+      245n
+    case 1223n:
+      246n
+    case 1227n:
+      247n
+    case 1229n:
+      248n
+    case 1230n:
+      249n
+    case 1235n:
+      250n
+    case 1237n:
+      251n
+    case 1238n:
+      252n
+    case 1241n:
+      253n
+    case 1242n:
+      254n
+    case 1244n:
+      255n
+    case 1251n:
+      256n
+    case 1253n:
+      257n
+    case 1254n:
+      258n
+    case 1257n:
+      259n
+    case 1258n:
+      260n
+    case 1260n:
+      261n
+    case 1265n:
+      262n
+    case 1266n:
+      263n
+    case 1268n:
+      264n
+    case 1272n:
+      265n
+    case 1295n:
+      266n
+    case 1303n:
+      267n
+    case 1307n:
+      268n
+    case 1309n:
+      269n
+    case 1310n:
+      270n
+    case 1319n:
+      271n
+    case 1323n:
+      272n
+    case 1325n:
+      273n
+    case 1326n:
+      274n
+    case 1331n:
+      275n
+    case 1333n:
+      276n
+    case 1334n:
+      277n
+    case 1337n:
+      278n
+    case 1338n:
+      279n
+    case 1340n:
+      280n
+    case 1351n:
+      281n
+    case 1355n:
+      282n
+    case 1357n:
+      283n
+    case 1358n:
+      284n
+    case 1363n:
+      285n
+    case 1365n:
+      286n
+    case 1366n:
+      287n
     case _:
       0n
 
@@ -3015,22 +3955,38 @@ def scan.out(sc: KV.Scan, pat: Maybe<&2, String>, typ: Maybe<&2, String>) -> Rep
     case KV.Scan{w, acc}:
       scan.rep(0n, List.reverse(&2, String, acc), pat, typ)
 
-def scan.reply(a: ScanArgs, +d: KV.Trie<String>) -> Reply:
+def scan.reply(a: ScanArgs, +d: KV.Trie<String>, +now: Nat) -> Reply:
   match a:
     case ScanArgs{+cur, +n, pat, typ}:
-      scan.out(KV.scan(String, d, cur, n), pat, typ)
+      scan.out(KV.scan(String, d, cur, n, now), pat, typ)
     case ScanBad{r}:
       r
 
 # Execution
 # ---------
+# A key whose time has passed is not there for any command (Redis's keys
+# expire at their time), but its entry stays in the trie until a write
+# puts the key anew or deletes it, as a Redis replica keeps such a key
+# until its master deletes it (Redis itself also deletes it when a read
+# comes to it, and in a sweep of expired keys, which BendKV has not yet).
+# A read changes nothing, so the laws of reads and of commuting commands
+# hold with time as without. DBSIZE and INFO's keyspace count the
+# entries, as Redis counts the keys it has not deleted yet.
 
 # the empty database
 def db.empty() -> Db:
   Db{KV.empty(String), 0n, 0n, 0n, None{}}
 
-# the trie of a database, and how many keys it counts (for the laws, and
-# for INFO's keyspace)
+# the database at the time now (ms since 1970): the server sets it before
+# each group of batches, and while a file loads it is 0, when no key has
+# expired (Redis expires nothing while it loads)
+def db.at(+now: Nat, db: Db) -> Db:
+  match db:
+    case Db{t, n, x, old, rr}:
+      Db{t, n, x, now, rr}
+
+# the trie of a database, and how many keys it counts and how many of
+# them have a time (for the laws, and for INFO's keyspace)
 def db.t(d: Db) -> KV.Trie<String>:
   match d:
     case Db{t, n, x, now, rr}:
@@ -3041,60 +3997,100 @@ def db.n(+d: Db) -> Nat:
     case Db{t, +n, x, now, rr}:
       n
 
-# SET of k to v, counted: whether the trie held k is asked first, while
-# the trie is lent (KV.has.at), so the count grows by a new key only
-def db.set(db: Db, +k: String, v: String) -> Db:
-  match db:
-    case Db{t, +n, x, now, rr}:
-      +u = t
-      +h = KV.hash(k)
-      had = KV.has.at(String, u, k, h)
-      Db{KV.set.at(String, u, k, v, h), Bool.pick(Nat, had, n, 1n+n), x, now, rr}
+def db.x(+d: Db) -> Nat:
+  match d:
+    case Db{t, n, +x, now, rr}:
+      x
 
-# a read of the trie of a database it lends
-def db.get_copy(+d: Db, +k: String) -> Maybe<&2, String>:
+def db.now(+d: Db) -> Nat:
+  match d:
+    case Db{t, n, x, +now, rr}:
+      now
+
+# the trie of a database it lends, for a read
+def db.trie(+d: Db) -> KV.Trie<String>:
   match d:
     case Db{+t, n, x, now, rr}:
-      KV.get_copy(t, k)
+      t
 
-def setnx.if(t: KV.Trie<String>, +k: String, v: String, +h: U32, +n: Nat, x: Nat, now: Nat, rr: Maybe<&2, Db>, had: Bool) -> Reply & Db:
-  match had:
-    case True{}:
-      (r_int(0n), Db{t, n, x, now, rr})
-    case False{}:
-      (r_int(1n), Db{KV.set.at(String, t, k, v, h), 1n+n, x, now, rr})
+# The counts after a write of a key whose code was c (KV.code.at: 0 when
+# the trie did not hold the key, else 1 plus its time): one more key for a
+# new one, and of keys with a time, one more when its time e is one and
+# one less when it had one
+def cnt.n(+c: Nat, +n: Nat) -> Nat:
+  Bool.pick(Nat, Nat.is_eq(c, 0n), 1n+n, n)
 
-def del_keys.put(had: Bool, r: Nat & KV.Trie<String>) -> Nat & KV.Trie<String>:
-  match had:
-    case True{}:
-      (n, db) = r
-      (1n+n, db)
-    case False{}:
-      r
+def cnt.x(+c: Nat, +e: Nat, +x: Nat) -> Nat:
+  Nat.sub(Nat.add(x, Bool.pick(Nat, Nat.is_eq(e, 0n), 0n, 1n)), Bool.pick(Nat, Nat.is_lt(1n, c), 1n, 0n))
 
-# DEL: the keys removed in order, and how many of them were present
-def del_keys(ks: List<&2, String>, +db: KV.Trie<String>) -> Nat & KV.Trie<String>:
+# whether a key of code c is there at now
+def code.live(+c: Nat, +now: Nat) -> Bool:
+  Bool.and(Nat.is_lt(0n, c), KV.live(now, Nat.sub(c, 1n)))
+
+# SET of k to v, counted: the key's code is asked first, while the trie is
+# lent (KV.code.at), so that a new key counts and a key that had a time
+# loses it
+def db.set(db: Db, +k: String, v: String) -> Db:
+  match db:
+    case Db{t, +n, +x, now, rr}:
+      +u = t
+      +h = KV.hash(k)
+      +c = KV.code.at(String, u, k, h)
+      Db{KV.set.at(String, u, k, v, h), cnt.n(c, n), cnt.x(c, 0n, x), now, rr}
+
+# GET's read of a database it lends: k's value when the key is there at
+# now, copied (KV.get_copy)
+def db.get_copy(+d: Db, +k: String) -> Maybe<&2, String>:
+  match d:
+    case Db{+t, n, x, +now, rr}:
+      KV.get_copy(t, k, now)
+
+# DEL: the keys removed in order; how many of them were there at now (the
+# reply), how many entries went and how many of those had a time (for the
+# counts)
+type Dels is Data:
+  Dels{live: Nat, gone: Nat, gonex: Nat, t: KV.Trie<String>}
+
+def del_keys.put(+c: Nat, +now: Nat, r: Dels) -> Dels:
+  match r:
+    case Dels{+live, +gone, +gonex, t}:
+      Dels{Nat.add(live, Bool.pick(Nat, code.live(c, now), 1n, 0n)), Nat.add(gone, Bool.pick(Nat, Nat.is_eq(c, 0n), 0n, 1n)), Nat.add(gonex, Bool.pick(Nat, Nat.is_lt(1n, c), 1n, 0n)), t}
+
+def del_keys(ks: List<&2, String>, +now: Nat, db: KV.Trie<String>) -> Dels:
   match ks:
     case Nil{}:
-      (0n, db)
+      Dels{0n, 0n, 0n, db}
     case Con{+k, rest}:
-      del_keys.put(KV.has(String, db, k), del_keys(rest, KV.del(String, db, k)))
+      +u = db
+      +h = KV.hash(k)
+      +c = KV.code.at(String, u, k, h)
+      del_keys.put(c, now, del_keys(rest, now, KV.del.at(String, u, k, h)))
 
+def del.db(r: Dels, +n: Nat, +x: Nat, now: Nat, rr: Maybe<&2, Db>) -> Reply & Db:
+  match r:
+    case Dels{+live, +gone, +gonex, t}:
+      (r_int(live), Db{t, Nat.sub(n, gone), Nat.sub(x, gonex), now, rr})
 
-# EXISTS: how many of the keys are present (a repeated key counts again)
-def exists_keys(ks: List<&2, String>, +db: KV.Trie<String>) -> Nat:
+def db.del(db: Db, ks: List<&2, String>) -> Reply & Db:
+  match db:
+    case Db{t, +n, +x, +now, rr}:
+      del.db(del_keys(ks, now, t), n, x, now, rr)
+
+# EXISTS: how many of the keys are there at now (a repeated key counts
+# again)
+def exists_keys(ks: List<&2, String>, +now: Nat, +db: KV.Trie<String>) -> Nat:
   match ks:
     case Nil{}:
       0n
     case Con{+k, rest}:
-      Nat.add(Bool.pick(Nat, Maybe.is_some(&2, String, KV.get(String, db, k)), 1n, 0n), exists_keys(rest, db))
+      Nat.add(Bool.pick(Nat, Maybe.is_some(&2, String, KV.read(String, db, k, now)), 1n, 0n), exists_keys(rest, now, db))
 
-def mget_keys(ks: List<&2, String>, +db: KV.Trie<String>) -> List<&2, Reply>:
+def mget_keys(ks: List<&2, String>, +now: Nat, +db: KV.Trie<String>) -> List<&2, Reply>:
   match ks:
     case Nil{}:
       Nil{}
     case Con{+k, rest}:
-      i_get(KV.get(String, db, k)) <> mget_keys(rest, db)
+      i_get(KV.read(String, db, k, now)) <> mget_keys(rest, now, db)
 
 def mset_pairs(ps: List<&2, KVPair>, db: Db) -> Db:
   match ps:
@@ -3103,117 +4099,388 @@ def mset_pairs(ps: List<&2, KVPair>, db: Db) -> Db:
     case Con{KP{k, v}, rest}:
       mset_pairs(rest, db.set(db, k, v))
 
-# INCRBY: the stored value must read as an integer, and the sum must fit;
-# m is the count of keys once the sum is stored, n before
-def incr.fit(t: KV.Trie<String>, +k: String, +h: U32, +i: Int, ok: Bool, m: Nat, n: Nat, x: Nat, now: Nat, rr: Maybe<&2, Db>) -> Reply & Db:
+# INCRBY: the stored value must read as an integer, and the sum must fit.
+# A key there at now keeps its time (keep); a new one, or one whose time
+# has passed, gets none: m and y are the counts once the sum is stored, n
+# and x before.
+def incr.put(keep: Bool, t: KV.Trie<String>, +k: String, v: String, +h: U32) -> KV.Trie<String>:
+  match keep:
+    case True{}:
+      KV.keep.at(String, t, k, v, h)
+    case False{}:
+      KV.set.at(String, t, k, v, h)
+
+def incr.fit(t: KV.Trie<String>, +k: String, +h: U32, +i: Int, ok: Bool, keep: Bool, m: Nat, n: Nat, y: Nat, x: Nat, now: Nat, rr: Maybe<&2, Db>) -> Reply & Db:
   match ok:
     case True{}:
-      (RInt{i}, Db{KV.set.at(String, t, k, int_show(i), h), m, x, now, rr})
+      (RInt{i}, Db{incr.put(keep, t, k, int_show(i), h), m, y, now, rr})
     case False{}:
       (RError{"ERR increment or decrement would overflow"}, Db{t, n, x, now, rr})
 
-# the integer a present key holds, or none
-def incr.num(t: KV.Trie<String>, +k: String, +h: U32, by: Int, +n: Nat, x: Nat, now: Nat, rr: Maybe<&2, Db>, cur: Maybe<&2, Int>) -> Reply & Db:
+# the integer a key there holds, or none
+def incr.num(t: KV.Trie<String>, +k: String, +h: U32, by: Int, +n: Nat, +x: Nat, now: Nat, rr: Maybe<&2, Db>, cur: Maybe<&2, Int>) -> Reply & Db:
   match cur:
     case Some{i}:
       +s = int_add(i, by)
-      incr.fit(t, k, h, s, int_fits(s), n, n, x, now, rr)
+      incr.fit(t, k, h, s, int_fits(s), True{}, n, n, x, x, now, rr)
     case None{}:
       (e_int(), Db{t, n, x, now, rr})
 
-# the old value of INCRBY's key: a missing key reads as 0, and counts once
-# the sum is stored
-def incr.got(t: KV.Trie<String>, +k: String, +h: U32, +by: Int, +n: Nat, x: Nat, now: Nat, rr: Maybe<&2, Db>, old: Maybe<&2, String>) -> Reply & Db:
+# a key that is not there reads as 0: the sum is by; c is its code
+def incr.new(t: KV.Trie<String>, +k: String, +h: U32, +by: Int, +n: Nat, +x: Nat, now: Nat, rr: Maybe<&2, Db>, +c: Nat) -> Reply & Db:
+  incr.fit(t, k, h, by, int_fits(by), False{}, cnt.n(c, n), n, cnt.x(c, 0n, x), x, now, rr)
+
+# the value of INCRBY's key there at now (old), or none
+def incr.got(t: KV.Trie<String>, +k: String, +h: U32, +by: Int, +n: Nat, +x: Nat, now: Nat, rr: Maybe<&2, Db>, old: Maybe<&2, String>) -> Reply & Db:
   match old:
     case Some{s}:
       incr.num(t, k, h, by, n, x, now, rr, int_read(s))
     case None{}:
-      incr.fit(t, k, h, by, int_fits(by), 1n+n, n, x, now, rr)
-
-# GETSET: the old value, and the new one stored
-def getset.go(t: KV.Trie<String>, +k: String, v: String, +h: U32, +n: Nat, x: Nat, now: Nat, rr: Maybe<&2, Db>, old: Maybe<&2, String>) -> Reply & Db:
-  match old:
-    case Some{s}:
-      (RBulk{s}, Db{KV.set.at(String, t, k, v, h), n, x, now, rr})
-    case None{}:
-      (RNull{}, Db{KV.set.at(String, t, k, v, h), 1n+n, x, now, rr})
-
-# APPEND: the old value with v after it, or v
-def append.go(t: KV.Trie<String>, +k: String, v: String, +h: U32, +n: Nat, x: Nat, now: Nat, rr: Maybe<&2, Db>, old: Maybe<&2, String>) -> Reply & Db:
-  match old:
-    case Some{s}:
-      +w = s ++ v
-      (r_int(String.length(w)), Db{KV.set.at(String, t, k, w, h), n, x, now, rr})
-    case None{}:
-      +w = v
-      (r_int(String.length(w)), Db{KV.set.at(String, t, k, w, h), 1n+n, x, now, rr})
-
-def append_to(m: Maybe<&2, String>, v: String) -> String:
-  match m:
-    case Some{s}:
-      s ++ v
-    case None{}:
-      v
-
-def strlen_of(m: Maybe<&2, String>) -> Nat:
-  match m:
-    case Some{s}:
-      String.length(s)
-    case None{}:
-      0n
-
-# the reply of a Peek, from the value of its key
-def peek(c: PeekOp, m: Maybe<&2, String>) -> Reply:
-  match c:
-    case PType{}:
-      Bool.pick(Reply, Maybe.is_some(&2, String, m), RStatus{"string"}, RStatus{"none"})
-
-# DEL: the keys removed, counted off
-def del.db(+c: Nat, t: KV.Trie<String>, +n: Nat, x: Nat, now: Nat, rr: Maybe<&2, Db>) -> Reply & Db:
-  (r_int(c), Db{t, Nat.sub(n, c), x, now, rr})
-
-def del_reply(r: Nat & KV.Trie<String>, +n: Nat, x: Nat, now: Nat, rr: Maybe<&2, Db>) -> Reply & Db:
-  (c, t) = r
-  del.db(c, t, n, x, now, rr)
-
-# the trie of a database it lends, for a read
-def db.trie(+d: Db) -> KV.Trie<String>:
-  match d:
-    case Db{+t, n, x, now, rr}:
-      t
-
-def db.setnx(db: Db, +k: String, v: String) -> Reply & Db:
-  match db:
-    case Db{t, n, x, now, rr}:
       +u = t
-      +h = KV.hash(k)
-      setnx.if(u, k, v, h, n, x, now, rr, KV.has.at(String, u, k, h))
-
-def db.getset(db: Db, +k: String, v: String) -> Reply & Db:
-  match db:
-    case Db{t, n, x, now, rr}:
-      +u = t
-      +h = KV.hash(k)
-      getset.go(u, k, v, h, n, x, now, rr, KV.get.at(String, u, k, h))
-
-def db.del(db: Db, ks: List<&2, String>) -> Reply & Db:
-  match db:
-    case Db{t, n, x, now, rr}:
-      del_reply(del_keys(ks, t), n, x, now, rr)
+      incr.new(u, k, h, by, n, x, now, rr, KV.code.at(String, u, k, h))
 
 def db.incr(db: Db, +k: String, by: Int) -> Reply & Db:
   match db:
-    case Db{t, n, x, now, rr}:
+    case Db{t, n, x, +now, rr}:
       +u = t
       +h = KV.hash(k)
-      incr.got(u, k, h, by, n, x, now, rr, KV.get.at(String, u, k, h))
+      incr.got(u, k, h, by, n, x, now, rr, KV.live.at(String, u, k, h, now))
 
-def db.append(db: Db, +k: String, v: String) -> Reply & Db:
+# A key's entry, when it is there at now; and the code of an entry
+def ent.live(+now: Nat, m: Maybe<&2, KV.Item<String>>) -> Maybe<&2, KV.Item<String>>:
+  match m:
+    case Some{KV.Item{v, +e}}:
+      Bool.pick(Maybe<&2, KV.Item<String>>, KV.live(now, e), Some{KV.Item{v, e}}, None{})
+    case None{}:
+      None{}
+
+def ent.code(+m: Maybe<&2, KV.Item<String>>) -> Nat:
+  match m:
+    case Some{KV.Item{v, +e}}:
+      1n+e
+    case None{}:
+      0n
+
+# k's entry in a database it lends, there at now or not
+def db.entry(+d: Db, +k: String) -> Maybe<&2, KV.Item<String>>:
+  match d:
+    case Db{+t, n, x, now, rr}:
+      KV.entry.at(String, t, k, KV.hash(k))
+
+# k's entry in a database it lends, when the key is there at now
+def db.ent(+d: Db, +k: String) -> Maybe<&2, KV.Item<String>>:
+  match d:
+    case Db{+t, n, x, +now, rr}:
+      ent.live(now, KV.entry.at(String, t, k, KV.hash(k)))
+
+def strlen_of(m: Maybe<&2, KV.Item<String>>) -> Nat:
+  match m:
+    case Some{KV.Item{v, e}}:
+      String.length(v)
+    case None{}:
+      0n
+
+# TTL and its kin: -2 for a key that is not there, -1 for one with no
+# time, else the time left (or, abs, the time it expires at), in ms or in
+# s rounded to the nearest
+def ttl.e(ms: Bool, abs: Bool, +now: Nat, +e: Nat) -> Reply:
+  match e:
+    case 0n:
+      RInt{INeg{0n}}
+    case 1n+p:
+      +t = Bool.pick(Nat, abs, e, Nat.sub(e, now))
+      RInt{IPos{Bool.pick(Nat, ms, t, Nat.div(Nat.add(t, 500n), 1000n))}}
+
+def ttl.of(ms: Bool, abs: Bool, +now: Nat, m: Maybe<&2, KV.Item<String>>) -> Reply:
+  match m:
+    case Some{KV.Item{v, +e}}:
+      ttl.e(ms, abs, now, e)
+    case None{}:
+      RInt{INeg{1n}}
+
+# the reply of a Peek, from the entry of its key there at now
+def peek(c: PeekOp, +now: Nat, m: Maybe<&2, KV.Item<String>>) -> Reply:
+  match c:
+    case PType{}:
+      Bool.pick(Reply, Maybe.is_some(&2, KV.Item<String>, m), RStatus{"string"}, RStatus{"none"})
+    case PStrlen{}:
+      r_int(strlen_of(m))
+    case PTtl{}:
+      ttl.of(False{}, False{}, now, m)
+    case PPttl{}:
+      ttl.of(True{}, False{}, now, m)
+    case PExpTime{}:
+      ttl.of(False{}, True{}, now, m)
+    case PPExpTime{}:
+      ttl.of(True{}, True{}, now, m)
+
+# What a write of one key does to it: nothing, delete it, set its time
+# alone, set its value and its time (0: none), or set its value and keep
+# its time, for a key that is there (CKeepT; CApp for an APPEND of s,
+# which leaves v). An Upd's reply and change come from the key's entry
+# there at now alone. A time a change gives a key is one the key may keep
+# (KV.clamp: a time at or past the year 5138 is none), and a key without
+# a time is never given none again (exp.to): so the change the
+# append-only file logs for it (aof.bend) makes it again, on any
+# database.
+type Change is Data:
+  CKeep{}
+  CDel{}
+  CExp{e: Nat}
+  CPut{v: String, e: Nat}
+  CKeepT{v: String}
+  CApp{s: String, v: String}
+
+type Out is Data:
+  Out{r: Reply, ch: Change}
+
+def setnx.of(v: String, m: Maybe<&2, KV.Item<String>>) -> Out:
+  match m:
+    case Some{x}:
+      Out{r_int(0n), CKeep{}}
+    case None{}:
+      Out{r_int(1n), CPut{v, 0n}}
+
+# APPEND: the old value with v after it, keeping the key's time, or v
+def append.of(+v: String, m: Maybe<&2, KV.Item<String>>) -> Out:
+  match m:
+    case Some{KV.Item{w, e}}:
+      +s = w ++ v
+      Out{r_int(String.length(s)), CApp{v, s}}
+    case None{}:
+      +s = v
+      Out{r_int(String.length(s)), CPut{s, 0n}}
+
+# INCRBY as an update (as db.incr runs it): the integer the key holds
+# plus by, keeping the key's time (keep), or by for a key that is not
+# there; the value must read as an integer, and the sum must fit
+def uincr.ch(keep: Bool, v: String) -> Change:
+  match keep:
+    case True{}:
+      CKeepT{v}
+    case False{}:
+      CPut{v, 0n}
+
+def uincr.fit(+i: Int, ok: Bool, keep: Bool) -> Out:
+  match ok:
+    case True{}:
+      Out{RInt{i}, uincr.ch(keep, int_show(i))}
+    case False{}:
+      Out{RError{"ERR increment or decrement would overflow"}, CKeep{}}
+
+def uincr.num(by: Int, cur: Maybe<&2, Int>) -> Out:
+  match cur:
+    case Some{i}:
+      +s = int_add(i, by)
+      uincr.fit(s, int_fits(s), True{})
+    case None{}:
+      Out{e_int(), CKeep{}}
+
+def uincr.of(+by: Int, m: Maybe<&2, KV.Item<String>>) -> Out:
+  match m:
+    case Some{KV.Item{+w, e}}:
+      uincr.num(by, int_read(w))
+    case None{}:
+      uincr.fit(by, int_fits(by), False{})
+
+# the value and the time of an entry
+def ent.val(+m: Maybe<&2, KV.Item<String>>) -> Maybe<&2, String>:
+  match m:
+    case Some{KV.Item{+v, e}}:
+      Some{v}
+    case None{}:
+      None{}
+
+def ent.exp(+m: Maybe<&2, KV.Item<String>>) -> Nat:
+  match m:
+    case Some{KV.Item{v, +e}}:
+      e
+    case None{}:
+      0n
+
+# SET with options: NX (cond 1) sets a key that is not there, XX (2) one
+# that is (ch, the change it makes); the key's time is none, the one it
+# had (KEEPTTL, for a key that is there), or the one given, past or not
+# (Redis then sets a key that has expired)
+def set.do(+cond: Nat, ch: Change, +m: Maybe<&2, KV.Item<String>>) -> Out:
+  +there = Maybe.is_some(&2, KV.Item<String>, m)
+  Bool.pick(Out, Bool.or(Bool.and(Nat.is_eq(cond, 1n), there), Bool.and(Nat.is_eq(cond, 2n), Bool.not(there))), Out{RNull{}, CKeep{}},
+    Out{r_ok(), ch})
+
+def set.at(+cond: Nat, v: String, +name: String, a: Maybe<&2, At>, +m: Maybe<&2, KV.Item<String>>) -> Out:
+  match a:
+    case Some{+t}:
+      set.do(cond, CPut{v, KV.clamp(at.exp(t))}, m)
+    case None{}:
+      Out{e_time(name), CKeep{}}
+
+def set.kept(v: String, +m: Maybe<&2, KV.Item<String>>) -> Change:
+  match m:
+    case Some{x}:
+      CKeepT{v}
+    case None{}:
+      CPut{v, 0n}
+
+def set.of(v: String, +cond: Nat, ttl: SetTtl, +name: String, +now: Nat, +m: Maybe<&2, KV.Item<String>>) -> Out:
+  match ttl:
+    case TNone{}:
+      set.do(cond, CPut{v, 0n}, m)
+    case TKeep{}:
+      set.do(cond, set.kept(v, m), m)
+    case TAt{t}:
+      set.at(cond, v, name, at.of(t, now), m)
+
+# an error reply
+def r_is_err(+r: Reply) -> Bool:
+  match r:
+    case RError{s}:
+      True{}
+    case _:
+      False{}
+
+# GET of an update: the reply is the old value (nil for none) whether the
+# key is set or not, unless the update fails (a time Redis cannot keep)
+def get.out(+old: Reply, o: Out) -> Out:
+  match o:
+    case Out{+r, ch}:
+      Out{Bool.pick(Reply, r_is_err(r), r, old), ch}
+
+# a key's new time f (0: none), when it had e: nothing to do when it had
+# none and gets none
+def exp.to(+f: Nat, +e: Nat) -> Change:
+  Bool.pick(Change, Bool.and(Nat.is_eq(f, 0n), Nat.is_eq(e, 0n)), CKeep{}, CExp{f})
+
+# GETEX: the value of a key there (w, with time e); with PERSIST the key
+# loses its time, with a time it expires then, or goes now when that
+# time, from 1970, has passed. The time is read only for a key that is
+# there, as Redis reads it.
+def getex.at(+w: String, at: Bool, +now: Nat, +e: Nat, a: Maybe<&2, At>) -> Out:
+  match a:
+    case Some{+t}:
+      Out{RBulk{w}, Bool.pick(Change, Bool.and(at, at.past(t, now)), CDel{}, exp.to(KV.clamp(at.exp(t)), e))}
+    case None{}:
+      Out{e_time("getex"), CKeep{}}
+
+def getex.tm(+w: String, +at: Bool, +now: Nat, +e: Nat, r: TmR) -> Out:
+  match r:
+    case TOk{t}:
+      getex.at(w, at, now, e, at.of(t, now))
+    case TBad{x}:
+      Out{x, CKeep{}}
+
+def getex.ent(o: ExOpt, +now: Nat, +w: String, +e: Nat) -> Out:
+  match o:
+    case XNone{}:
+      Out{RBulk{w}, CKeep{}}
+    case XPersist{}:
+      Out{RBulk{w}, Bool.pick(Change, Nat.is_eq(e, 0n), CKeep{}, CExp{0n})}
+    case XAt{+at, ms, s}:
+      getex.tm(w, at, now, e, tm.of(s, at, Bool.not(ms), True{}, "getex"))
+
+def getex.of(o: ExOpt, +now: Nat, m: Maybe<&2, KV.Item<String>>) -> Out:
+  match m:
+    case Some{KV.Item{+w, +e}}:
+      getex.ent(o, now, w, e)
+    case None{}:
+      Out{RNull{}, CKeep{}}
+
+def getdel.of(m: Maybe<&2, KV.Item<String>>) -> Out:
+  match m:
+    case Some{KV.Item{w, e}}:
+      Out{RBulk{w}, CDel{}}
+    case None{}:
+      Out{RNull{}, CKeep{}}
+
+# EXPIRE's conditions on a key with time e (0: none): NX, none yet; XX,
+# one; GT, one before the new time; LT, none or one after it
+def expire.ok(c: ExpIf, +a: At, +e: Nat) -> Bool:
+  match c:
+    case ExpIf{+nx, +xx, +gt, +lt}:
+      +none = Nat.is_eq(e, 0n)
+      +gok = Bool.and(Bool.not(none), at.gt(a, e))
+      +lok = Bool.or(none, at.lt(a, e))
+      Bool.and(Bool.and(Bool.not(Bool.and(nx, Bool.not(none))), Bool.not(Bool.and(xx, none))), Bool.and(Bool.or(Bool.not(gt), gok), Bool.or(Bool.not(lt), lok)))
+
+# EXPIRE and its kin: a key there gets the time, or goes when the time has
+# passed (Redis's checkAlreadyExpired), if the conditions hold
+def expire.do(+now: Nat, +e: Nat, a: At, ok: Bool) -> Out:
+  match ok:
+    case True{}:
+      +t = a
+      Out{r_int(1n), Bool.pick(Change, at.past(t, now), CDel{}, exp.to(KV.clamp(at.exp(t)), e))}
+    case False{}:
+      Out{r_int(0n), CKeep{}}
+
+def expire.at(c: ExpIf, +name: String, +now: Nat, a: Maybe<&2, At>, m: Maybe<&2, KV.Item<String>>) -> Out:
+  match a m:
+    case None{} _:
+      Out{e_time(name), CKeep{}}
+    case Some{t} None{}:
+      Out{r_int(0n), CKeep{}}
+    case Some{+t} Some{KV.Item{w, +e}}:
+      expire.do(now, e, t, expire.ok(c, t, e))
+
+def persist.of(m: Maybe<&2, KV.Item<String>>) -> Out:
+  match m:
+    case Some{KV.Item{w, +e}}:
+      Bool.pick(Out, Nat.is_eq(e, 0n), Out{r_int(0n), CKeep{}}, Out{r_int(1n), CExp{0n}})
+    case None{}:
+      Out{r_int(0n), CKeep{}}
+
+def upd(op: UpdOp, +now: Nat, m: Maybe<&2, KV.Item<String>>) -> Out:
+  match op:
+    case USetNx{v}:
+      setnx.of(v, m)
+    case UGet{o}:
+      +u = m
+      +old = r_get(ent.val(u))
+      get.out(old, upd(o, now, u))
+    case UAppend{v}:
+      append.of(v, m)
+    case USet{v, +cond, ttl, +name}:
+      set.of(v, cond, ttl, name, now, m)
+    case UGetEx{o}:
+      getex.of(o, now, m)
+    case UGetDel{}:
+      getdel.of(m)
+    case UExpire{t, c, +name}:
+      expire.at(c, name, now, at.of(t, now), m)
+    case UPersist{}:
+      persist.of(m)
+    case UIncr{+by}:
+      uincr.of(by, m)
+
+# the change done to key k, whose code was c (a deleted key, or one whose
+# time alone changes, was there)
+def upd.ch(t: KV.Trie<String>, +k: String, +h: U32, +n: Nat, +x: Nat, now: Nat, rr: Maybe<&2, Db>, +c: Nat, r: Reply, ch: Change) -> Reply & Db:
+  match ch:
+    case CKeep{}:
+      (r, Db{t, n, x, now, rr})
+    case CDel{}:
+      (r, Db{KV.del.at(String, t, k, h), Nat.sub(n, 1n), cnt.x(c, 0n, x), now, rr})
+    case CExp{+e}:
+      (r, Db{KV.expire.at(String, t, k, e, h), n, cnt.x(c, e, x), now, rr})
+    case CPut{v, +e}:
+      (r, Db{KV.setx.at(String, t, k, v, e, h), cnt.n(c, n), cnt.x(c, e, x), now, rr})
+    case CKeepT{v}:
+      (r, Db{KV.keep.at(String, t, k, v, h), cnt.n(c, n), x, now, rr})
+    case CApp{s, v}:
+      (r, Db{KV.keep.at(String, t, k, v, h), cnt.n(c, n), x, now, rr})
+
+def upd.put(t: KV.Trie<String>, +k: String, +h: U32, +n: Nat, +x: Nat, now: Nat, rr: Maybe<&2, Db>, +c: Nat, o: Out) -> Reply & Db:
+  match o:
+    case Out{r, ch}:
+      upd.ch(t, k, h, n, x, now, rr, c, r, ch)
+
+# an Upd of k: k's entry is read while the trie is lent, then the change
+# is made where it lies
+def db.upd(db: Db, +k: String, op: UpdOp) -> Reply & Db:
   match db:
-    case Db{t, n, x, now, rr}:
+    case Db{t, +n, +x, +now, rr}:
       +u = t
       +h = KV.hash(k)
-      append.go(u, k, v, h, n, x, now, rr, KV.get.at(String, u, k, h))
+      +m = KV.entry.at(String, u, k, h)
+      upd.put(u, k, h, n, x, now, rr, ent.code(m), upd(op, now, ent.live(now, m)))
 
 def db.flush(db: Db) -> Db:
   match db:
@@ -3230,17 +4497,16 @@ def db_of(r: Reply & Db) -> Db:
 
 # one command: its reply and the database after it. The database is
 # passed on, not shared, so a write rebuilds only the path it changes.
-# A key read only reads the trie: the compiler lends t to KV.get and then
-# hands t back, and the value it answers is kept in place, shared with the
-# trie (Bend with bend-patches/borrow-reads.patch). GET answers a copy of
-# the value instead, made while the trie is lent (KV.get_copy): the value
-# in the trie stays unshared, so a read puts no seal on its entry, and the
-# batch hints reach the value's bytes. KEYS and SCAN fold the whole trie,
-# so they share it. A command that reads a key and then writes it hashes
-# the key once (KV.get.at, KV.set.at: KV.get and KV.set with the hash
-# given, as they compute it); a write that does not read the key (SET,
-# MSET) asks whether the trie holds it (KV.has.at), so that the count of
-# keys grows by new keys only, and DBSIZE answers the count.
+# A key read only reads the trie: the compiler lends t to the read and
+# then hands t back, and the value it answers is kept in place, shared
+# with the trie (Bend with bend-patches/borrow-reads.patch). GET answers a
+# copy of the value instead, made while the trie is lent (KV.get_copy):
+# the value in the trie stays unshared, so a read puts no seal on its
+# entry, and the batch hints reach the value's bytes. KEYS and SCAN fold
+# the whole trie, so they share it. A command that reads a key and then
+# writes it hashes the key once (the .at walks: the walks with the hash
+# given). A write that does not read the key (SET, MSET) asks the key's
+# code first (KV.code.at), so that the counts change by what the key was.
 def exec(cmd: Cmd, db: Db) -> Reply & Db:
   match cmd:
     case Ping{}:
@@ -3252,25 +4518,16 @@ def exec(cmd: Cmd, db: Db) -> Reply & Db:
       (r_get(db.get_copy(d, k)), d)
     case Set{+k, v}:
       (r_ok(), db.set(db, k, v))
-    case SetNX{+k, v}:
-      db.setnx(db, k, v)
-    case GetSet{+k, v}:
-      db.getset(db, k, v)
     case Del{ks}:
       db.del(db, ks)
     case Exists{ks}:
       +d = db
-      (r_int(exists_keys(ks, db.trie(d))), d)
+      (r_int(exists_keys(ks, db.now(d), db.trie(d))), d)
     case IncrBy{+k, by}:
       db.incr(db, k, by)
-    case Append{+k, v}:
-      db.append(db, k, v)
-    case Strlen{+k}:
-      +d = db
-      (r_int(strlen_of(KV.get(String, db.trie(d), k))), d)
     case MGet{ks}:
       +d = db
-      (RArray{mget_keys(ks, db.trie(d))}, d)
+      (RArray{mget_keys(ks, db.now(d), db.trie(d))}, d)
     case MSet{ps}:
       (r_ok(), mset_pairs(ps, db))
     case DbSize{}:
@@ -3280,13 +4537,15 @@ def exec(cmd: Cmd, db: Db) -> Reply & Db:
       (r_ok(), db.flush(db))
     case Keys{p}:
       +d = db
-      (RArray{glob_filter(p, KV.keys(String, db.trie(d)))}, d)
+      (RArray{glob_filter(p, KV.keys(String, db.trie(d), db.now(d)))}, d)
     case Scan{args}:
       +d = db
-      (scan.reply(scan.args(args), db.trie(d)), d)
+      (scan.reply(scan.args(args), db.trie(d), db.now(d)), d)
     case Peek{+k, c}:
       +d = db
-      (peek(c, KV.get(String, db.trie(d), k)), d)
+      (peek(c, db.now(d), db.ent(d, k)), d)
+    case Upd{+k, op}:
+      db.upd(db, k, op)
     case Own{o}:
       (RError{"ERR a command of the connection, not of the database"}, db)
     case Bad{r}:
