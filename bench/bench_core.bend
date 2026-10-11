@@ -45,7 +45,7 @@ def batch16(+base: Nat, get: Bool) -> String:
 
 def batch_cmds(b: P.Batch) -> List<&2, R.Cmd>:
   match b:
-    case P.Batch{rs, rest, err, need}:
+    case P.Batch{rs, k, rest, err, need}:
       B.cmds_of(rs, Nil{})
 
 # what the server does with one read: bytes in, bytes out, db threaded
@@ -76,7 +76,7 @@ def build_only(i: Nat, +get: Bool, acc: Nat) -> Nat:
 
 def n_reqs(b: P.Batch) -> Nat:
   match b:
-    case P.Batch{rs, rest, err, need}:
+    case P.Batch{rs, k, rest, err, need}:
       List.length(&2, B.Req, rs)
 
 def parse_only(i: Nat, +get: Bool, acc: Nat) -> Nat:

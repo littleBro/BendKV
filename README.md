@@ -26,7 +26,7 @@ well. BendKV asks how far one can get writing a real, fast server in a language 
 the code that runs is the code that is proved, without a separate model and a
 refinement proof. The answer so far: the verified core is not what makes it slow;
 the data representation of the runtime was, and most of the work went into fixing it
-(19 patches to the Bend compiler, in [`bend-patches/`](bend-patches/), and a twentieth
+(20 patches to the Bend compiler, in [`bend-patches/`](bend-patches/), and one more
 that gives it the process's directory, id and clock).
 
 ## What is proved
@@ -82,6 +82,15 @@ translation stays in the trusted base.
   file cannot change while BendKV runs (a new value fails as it does when Redis cannot
   apply it); the other parameters are kept and read back but tune nothing, since BendKV
   has no eviction, replication or encodings for them to tune.
+- **Introspection:** INFO with Redis 7.0.15's sections and fields, in Redis's order,
+  picked as Redis picks them (none, `default`, `all`, `everything`, any names in any
+  case): server, clients, memory, persistence, stats, replication, CPU, modules,
+  errorstats, cluster, keyspace. The values are BendKV's own where it has them: its
+  process, its parameters, its connections, commands and bytes (with the instantaneous
+  rates sampled every 100 ms, as Redis's cron samples them), its resident memory, its
+  keys, its append-only file; for what BendKV does not have (replication, forks,
+  scripts, eviction, expiry) they are what Redis shows when it has none. CONFIG
+  RESETSTAT starts the counts again.
 - **Start:** as `redis-server` starts: a configuration file, `--name value` options and
   `-` for the standard input, read line by line as Redis reads them (includes, `dir`
   changing the directory at once, save points that add up, the same errors at the same
@@ -96,9 +105,10 @@ translation stays in the trusted base.
 - **Persistence:** an append-only file in Redis's own format (`redis-check-aof` accepts
   it, and Redis loads it), fsync `always`, `everysec` or `no`.
 
-Not yet: other data types, expiry, multiple databases, MULTI/EXEC, pub/sub, INFO,
-COMMAND (a placeholder so that `redis-cli` works), CONFIG REWRITE (it answers as Redis
-does without a configuration file), RDB files. Integers are limited to 14 digits.
+Not yet: other data types, expiry, multiple databases, MULTI/EXEC, pub/sub, COMMAND (a
+placeholder so that `redis-cli` works) and the statistics per command it brings (INFO
+commandstats, errorstats and latencystats are empty), CONFIG REWRITE (it answers as
+Redis does without a configuration file), RDB files. Integers are limited to 14 digits.
 
 ## Performance
 
@@ -126,7 +136,7 @@ also needs Lean 4.34.0 (through elan).
 
 ```bash
 git clone https://github.com/bendlang/bend ../bend-patched
-sh bend-patches/apply.sh ../bend-patched      # Bend 2.0.35 + 20 patches
+sh bend-patches/apply.sh ../bend-patched      # Bend 2.0.35 + 21 patches
 B="bun ../bend-patched/bend2/main.ts"
 
 make check   BEND="$B"   # check the proofs
@@ -158,8 +168,9 @@ lines and configuration files, each on both servers, with the same errors and th
 parameters after them), a differential test of random
 command streams compared byte for byte, the protocol edge cases of Redis's
 `tests/unit/protocol.tcl`, the connection commands, CONFIG (every parameter, a list of
-cases and thousands of random values, set and read back on both servers), robustness and
-concurrency checks,
+cases and thousands of random values, set and read back on both servers), INFO (the
+sections and fields for 31 ways of picking them, the values that do not depend on the
+machine, the counts after CONFIG RESETSTAT), robustness and concurrency checks,
 restarts from the append-only file (including a truncated tail), and disk failures
 under the file, injected with an `LD_PRELOAD` shim.
 
@@ -174,14 +185,15 @@ src/        the server
   session.bend  connection and server state, whole batches         verified
   config.bend   the parameters, CONFIG GET and SET                 verified
   resp.bend     RESP2 parser and reply encoder                     tested
+  info.bend     INFO's sections and fields                         tested
   startup.bend  the command line and the configuration file        tested
   server.bend   TCP, connections, the database actor, the log      tested
 proof/      LAWS.bend (the laws) and PROOF.bend (their proofs)
-tests/      start, differential, protocol, session, CONFIG, robustness, concurrency, AOF tests
+tests/      start, differential, protocol, session, CONFIG, INFO, robustness, concurrency, AOF tests
 bench/      in-process benchmarks of the map, the core and channels
 tools/      measurement scripts and the generators of the trie and of the parameter
             table, with the facts it takes from Redis (tools/data/)
-bend-patches/  the 20 patches to the Bend compiler and runtime
+bend-patches/  the 21 patches to the Bend compiler and runtime
 docs/       FINDINGS.md, DIRECTIONS.md (English), PERFORMANCE.md (Russian)
 ```
 

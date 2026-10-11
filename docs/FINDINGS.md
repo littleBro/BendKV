@@ -126,7 +126,7 @@ represented data:
   reader an owner of the whole value: O(depth) reference-count operations per read.
 - **A deep trie.** The first map was a binary trie of 20 levels: 20 dependent loads.
 
-## 3. Twenty patches to the Bend compiler
+## 3. Twenty-one patches to the Bend compiler
 
 All live in [`bend-patches/`](../bend-patches/) (against `bendlang/bend` at `1cce499`,
 Bend 2.0.35). The first eight switch on by themselves for programs without GPU calls;
@@ -135,8 +135,10 @@ program's event loop on Linux; the twelfth and thirteenth only add effects; the
 fourteenth speeds up `String.code_at` everywhere; the fifteenth and sixteenth work where
 a program calls `TCP.post`; the seventeenth adds string functions; the eighteenth
 changes how every program's `IO` compiles; the nineteenth speeds up `Mem.prefetch` of
-a buffer and `String.take` of a short string everywhere; and the twentieth adds the
-process's id, working directory and wall clock (section 3o). The sections before 3l
+a buffer and `String.take` of a short string everywhere; the twentieth adds the
+process's id, working directory and wall clock (section 3o); and the twenty-first lays
+out a datatype wider than 32 words as a node of its own, in every program (section 3p).
+The sections before 3l
 number the patches as they were then: patch 16 was effect pairs, taken out in 3l with
 `TCP.post_list` of patch 11, and their patches 17–20 are today's 16–19. None changes the
 theory: `String`
@@ -165,6 +167,7 @@ to agree with the list definition, and `IO` is still a function of `R` and `k`.
 | 18. string scan | `String.dec_line_at` (a line of digits and its `"\r\n"`: number and length in one pass), `hash_at`, `dec_at` and `digits_at` read a string where it lies; a borrowing native may return several words; `String.to_upper` of a short string a word at a time | a number line 212 → 89 instructions; with BendKV's new parser, GET 3,414 → 3,028 (section 3j) |
 | 19. io cps | a def whose type ends in `IO` takes its continuation as a parameter, and its `do` blocks call effects and defs directly with a continuation that holds the rest of the block, instead of building `IO` values that `IO.bind` applies through closures | closure applications per request without a pipeline 14.5 → 7.1 (send) and 2.3 (post); 8% fewer instructions per request (section 3j) |
 | 20. value reads | `Mem.prefetch` of a buffer loads its bytes to its end (four cache lines at most), not its first 64 bytes; `String.take` of a string in the term word at its whole length gives the word back | lets a GET answer a copy of the value with its bytes hinted: +1.5–2% on GET hits, memory no longer grows with reads (section 3k) |
+| flat limit (today's 21st) | a datatype whose flat layout is wider than 32 words is a node of its own, instead of that many words in every call, result and frame that carries it | INFO's state in the server's: the actor's calls back from 50–67 words to under 25, and every segment's signature from 67 registers to 24 (section 3p) |
 
 The ratios in the last column come from different series and drift by ±0.06–0.08
 between series; PERFORMANCE.md gives each one with its pairs.
@@ -174,7 +177,7 @@ slower than lists on one thread and 1.7 times on four: short strings built and t
 apart character by character are their worst case. The other 16 runtime benchmarks
 do not change (geometric mean ×0.99). Huge pages add about 0.4 ms to the start of a
 short program and 0.4–0.9 s of kernel time to programs whose heaps reach hundreds of
-megabytes. The patches grow `bend2/comp.ts` from 62,940 to 97,653 tokens, over the
+megabytes. The patches grow `bend2/comp.ts` from 62,940 to 97,828 tokens, over the
 repository's 64,000 cap, so upstreaming them means making them smaller first. With all
 sixteen, the C lane of Bend's own test suite passes exactly the tests it passes with
 thirteen, plus the three new ones; with nineteen, its C and JS lanes pass exactly the
@@ -183,7 +186,8 @@ nineteen plus the new one on both lanes (`io_stack_fault_trap`, which overflows 
 stack, once missed the runner's 5 s under load and passes alone in 1–6 s, as before);
 with the nineteen of section 3l, exactly the tests they pass with twenty, less the six
 tests of what was taken out (`chan_call`, `tcp_post_recv` and `tcp_post_list`, on both
-lanes).
+lanes); with today's twenty-one, exactly the tests they pass with twenty, plus the new
+one (`flat_limit`) on both lanes: 1,487 of 1,746.
 
 **BendKV's own changes.** A 16-way trie (5 levels instead of 20) whose leaves are
 buckets inside the trie; laws reproved for it. Requests parsed by index, with no
@@ -1245,6 +1249,105 @@ version (GET 2994 to 3002, SET 3573 to 3583, INCR 3871 to 3878 instructions); th
 requests' code did not change, and the counted window holds redis-benchmark's 20 new
 connections, which now take their ids from the shared channel.
 
+## 3p. INFO, and what carrying its state cost
+
+INFO answers with Redis 7.0.15's sections and fields, in Redis's order, picked as
+`genInfoSectionDict` picks them: no argument or `default` is the eleven default
+sections, `all` adds the ones per command, `everything` the modules' too, names are
+taken in any case and a repeat once, an unknown name adds nothing, and a blank line
+separates the sections as Redis's `"\r\n"` does. `src/info.bend` holds the sections,
+pure, over three things: the parameters (CONFIG's table), the keys (their count, read
+only when the keyspace section is asked for) and INFO's own account (`Info`). That holds
+the facts of the start (the system as `uname` names it, from `/proc/sys/kernel`; the
+machine's memory; run and replication ids of 40 hex digits from `IO.random_u32`; the
+start time and the resident memory then), the shell's last facts (`Live`: the wall
+clock, the processor time of the process and of its main thread from `/proc/self/stat`
+and `/proc/self/task/<pid>/stat`, the resident memory, the connections taken and open),
+the counts (commands, bytes in, bytes out), the instantaneous rates and the size of the
+append-only file. The values are BendKV's own where it has them; for what it has not
+(replication, forks, scripts, eviction, expiry, defragmentation, I/O threads) they are
+what Redis shows when it has none of it.
+
+The counts follow Redis's: commands by the batch (the parser counts the requests it
+reads), bytes read by the connection, bytes of replies by the actor, all added a batch
+at a time. They may pass 2^48, where a `Nat` stops the runtime, so each is two `Nat`s (a
+count of 10^12s and the rest). Redis's `serverCron` samples its rates every 100 ms into
+16 slots and INFO shows their mean; a cron of BendKV sends the actor a tick every 100 ms
+that does the same, so `instantaneous_ops_per_sec` and the kbps fields come out of
+Redis's arithmetic (integer rates, the mean of 16, `%.2f` of kilobytes). CONFIG RESETSTAT
+clears what Redis's `resetServerStats` clears, and connections count from it on. What
+only the shell can see, the connection that asks INFO (or CONFIG RESETSTAT) reads first
+and sends to the actor as a message of its own (`Facts`), just before its batch; other
+requests carry only their counts.
+
+Left out until BendKV counts per command (with COMMAND, next): commandstats, errorstats
+and latencystats are there but empty. `tests/info_test.py` checks 31 ways of picking
+sections against Redis (the same sections, the same fields, the same order), the values
+that do not depend on the machine or the moment, the keyspace, and the counts after
+CONFIG RESETSTAT for the same commands on the same connections.
+
+**Why it first cost a quarter more.** The first version passed every test and cost 28%
+more instructions per GET (3,000 → 3,842, in builds with `-g`) and 24% more per SET
+(3,584 → 4,454). None of it was INFO's own work; it was how its state got around. A
+profile of both versions by function (`tools/phases.py`) showed each cause:
+
+- *Flat records.* Bend lays out a non-recursive datatype flat, up to 247 words: a
+  function that takes or returns one takes or returns every word, in registers and stack
+  frames. INFO's account is 38 words; inside the server's state it made `Srv` 40 words,
+  the actor's group 43, a batch's outcome 47, and the actor's functions took 50–67 words
+  each. The widest result (48) and the widest frameless parameter list (67) are the
+  signature of every segment of the program, so every jump between segments passed 67
+  registers and every return copied 48 words (`WL_FID_EXIT`: 9.6 → 109.5 instructions per
+  request). The twenty-first patch lays out a datatype wider than 32 words as a node of its
+  own; 32 is the widest flat layout the server had before, so the server of section 3o
+  compiles to the same C, byte for byte. 3,842 → 3,611.
+- *A shared list taken over.* The batch's requests were counted with `List.length` after
+  `B.unzip` had taken the list over, with a `+` binder to allow both. The compiler copied
+  the list, `List.length` dropped its copy request by request (300 instructions per
+  request in `term_drop`), and every field the executor read from a shared request went
+  through a reference count (`rfc_wrap`, `slot_keep`). Counting first, with a borrowed
+  walk, while the list was still the connection's own: 3,611 → 3,133. Counting in the
+  parser instead of a walk (`P.Batch` has `n`) took 11 more.
+- *A borrowed field that escapes.* `srv.pass` returned the password from a borrowed
+  `Srv`, which makes its parameter owned, and so `nopass`, `authed` and `ready` owned
+  theirs; `S.run`, which still needs the server's state after `ready`, kept
+  (`term_keep`) each of its fields on every batch. While those were the password and the
+  parameter list, a keep was a count increment. INFO's node, rebuilt on every batch, was
+  wrapped in a reference count each time, and the next update copied all its words back
+  out (`ctr_own_slow`). `nopass` now compares inside its match, so the state stays
+  borrowed, and the size of the replies is read before the answer is filed rather than
+  after: 3,133 → 3,081.
+- *Wide messages.* INFO's facts in the request (a variant `ReqLive` with the 9 words of
+  `Live`) and three more words of channels in each connection's `Link` made a request 21
+  words and the step that sends it 33 parameters. Facts as a message of their own, and the
+  count of connections in one channel (`Tally`: taken and open) instead of two channels
+  and the pid: 3,081 → 3,052. The start's continuations, with two environment reads moved
+  into a def of their own, are narrower too: the widest frameless list is now 24 words,
+  one less than before INFO.
+- *A step called from two places.* A def called from two places is a segment of its own,
+  entered through the work loop: the step that sends the batch and takes the answer,
+  after the arm with facts and the one without, cost 22 instructions per request; written
+  out in both arms, 3,052 → 3,043. Joining the arms with an `IO` step that returns at
+  once when there are no facts costs 12 more: its continuation is a closure built on
+  every batch.
+
+**Cost.** What remains is +1.1% per GET and +0.8% per SET against section 3o (3,032 and
+3,614 with `-g`): the counts (the parser's add and the actor's two-`Nat` sums, ~3 per
+request), the request's two more fields, the cron's ticks (more of them per request
+under valgrind's slow clock, ~1.5), and ~7 instructions per request in glibc. The facts
+read at the start go through the runtime's helper threads, as every file read does, and
+the first one makes the process multi-threaded for good, so glibc's cancellable system
+calls (`recv`, `send`) take their longer path. A start from a configuration file did so
+before (the file is read the same way), and a server that posts its replies has its
+writer thread anyway. `make perfcheck`: GET 3,031, SET 3,614, INCR 3,921 instructions per
+request, +2.0%, +1.3% and +2.3% over the baseline of 2,972, 3,566 and 3,833 (section 3o
+measured 3,002, 3,583 and 3,878). Without a pipeline, where a batch's cost falls on each
+request, GET goes from 8,178 to 8,602 (+5.2%) and SET from 8,701 to 9,128 (+4.9%): ~425
+instructions a batch, of which ~104 are glibc's, ~250 the connection's path (the answer
+is now read in a segment of its own, `conn_ans`, which both arms call; the counts; a
+`Link` one word wider) and ~140 the actor's counting, less the ~150 the new `nopass`
+saves.
+
 ## 4. Where a request's time goes, and hiding the memory waits
 
 With the eight patches, BendKV ran fewer instructions on GET and SET than Redis, missed
@@ -1470,7 +1573,22 @@ What got in the way:
   function returns travels in registers and through stack frames word by word: a parsed
   request (`B.Fit`, eight words) cost more to pass through a non-tail recursion than to
   build. Keeping a list newest first, so that the consumer's tail loop restores the order,
-  avoided it.
+  avoided it. A large one (INFO's 38 words) widened every call that carried it, and the
+  widest result or frameless parameter list is the signature of every segment of the
+  program; patch 21 makes a datatype wider than 32 words a node (section 3p).
+- A `+` binder lets a value be used twice, and when a later use takes it over the
+  compiler copies it: a list counted after a call took it over cost a copy, a drop of
+  the copy element by element, and a reference count on every field read after. The same
+  count made first is a borrowed walk.
+- A function that returns a field of a borrowed parameter owns that parameter, and so
+  does every caller that lends it on: one accessor returning the password made the
+  server's state be kept field by field on every batch. Computing the answer inside the
+  match keeps the parameter borrowed (section 3p).
+- A def called from two places is a segment of its own, entered through the work loop;
+  the same steps written out in both callers stay in their segments.
+- Every file read (and `IO.random_u32`) runs on a helper thread of the runtime; the first
+  one makes the process multi-threaded for good, and glibc's cancellable system calls
+  then take their longer path, ~50 instructions each.
 - The C compiler reads types off annotations: an application chain over a variable drops
   its erased arguments and places the live ones by the head's type, so a term built by a
   compiler pass needs the same annotations the elaborator writes (section 3j).
@@ -1517,7 +1635,7 @@ scale. The gain is the best reliable measurement
 on the load the change was made for: time, or, where time stays in the noise (±5–15%),
 instructions or memory. The cost is what the change adds to `comp.ts` in `ttok` tokens
 (the Bend repository caps the file at 64 thousand; the original has 62,940, with our
-patches 97,653), BendKV's lines of code and proof, and what lines do not show: a new
+patches 97,828), BendKV's lines of code and proof, and what lines do not show: a new
 representation of data, threads, heuristics with tuned thresholds, effects at a
 distance. The tokens were counted on the patch branch, commit by commit:
 
@@ -1534,7 +1652,9 @@ distance. The tokens were counted on the patch branch, commit by commit:
 | 6. 2 MiB pages | 108 | 18. strings read in place | 1,708 |
 | 7. digit select | 3,209 | 19. `IO` in continuations | 2,221 |
 | 8. string blobs | 1,618 | 20. value reads | 97 |
-| 9. memory prefetch | 248 | **all** | **34,713** |
+| 9. memory prefetch | 248 | 21. process and clock (today's 20th) | 108 |
+| | | 22. flat limit (today's 21st) | 67 |
+| | | **all** | **34,888** |
 
 ```
           cheap                                  costly
@@ -1590,7 +1710,7 @@ worse     iolist                                 hints over a group (taken out),
 
 What follows. The best ratios came from removing a whole class of memory or disk work:
 allocations, trie levels, waits on misses, a sync per request; together they cost the
-compiler 690 tokens of 34,713. Strings are half the growth of `comp.ts` (17,153 tokens)
+compiler 690 tokens of 34,888. Strings are half the growth of `comp.ts` (17,153 tokens)
 and most of the single-core speed. Since 7.22, fewer instructions have rarely meant less
 time: the kernel is half of a request's CPU with a pipeline and two thirds without one,
 and what paid was work on the path through it (patches 15 and 17) or cutting half the

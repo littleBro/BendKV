@@ -60,6 +60,7 @@ type SessOp is Data:
   SConfigGet{args: List<&2, String>}
   SConfigSet{args: List<&2, String>}
   SConfigResetStat{}
+  SInfo{args: List<&2, String>}
   SReply{r: Reply}
   SBad{r: Reply}
 
@@ -609,7 +610,8 @@ def cmd_id(+n: String, len: Nat) -> Nat:
       Bool.pick(Nat, String.eq(n, "KEYS"), 21n,
       Bool.pick(Nat, String.eq(n, "TYPE"), 25n,
       Bool.pick(Nat, String.eq(n, "AUTH"), 42n,
-      Bool.pick(Nat, String.eq(n, "QUIT"), 43n, 0n))))))))))
+      Bool.pick(Nat, String.eq(n, "QUIT"), 43n,
+      Bool.pick(Nat, String.eq(n, "INFO"), 48n, 0n)))))))))))
     case 5n:
       Bool.pick(Nat, String.eq(n, "SETNX"), 5n,
       Bool.pick(Nat, String.eq(n, "HELLO"), 41n,
@@ -812,6 +814,8 @@ def parse_sess(id: Nat, name: String, args: List<&2, String>) -> SessOp:
         case Con{+sub, rest}:
           +up = String.to_upper(sub)
           parse_config(config_id(up, String.length(up)), sub, rest)
+    case 48n:  # INFO
+      SInfo{args}
     case _:
       SBad{RError{no_newlines("ERR unknown command '" ++ String.take(name, 128n) ++ "', with args beginning with: " ++ unknown.args(args, ""))}}
 

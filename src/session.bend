@@ -24,6 +24,7 @@ import ./redis.bend as R
 import ./batch.bend as B
 import ./aof.bend as A
 import ./config.bend as C
+import ./info.bend as I
 
 # Types
 # -----
@@ -41,17 +42,18 @@ type Mute is Data:
 type Conn is Data:
   Conn{id: Nat, auth: Bool, name: String, mode: Mute, quit: Bool}
 
-# the server, besides its database: its password (empty for none) and its
-# parameters (config.bend), of which requirepass is the password
+# the server, besides its database: its password (empty for none), its
+# parameters (config.bend), of which requirepass is the password, and
+# what INFO shows of it that they do not (info.bend)
 type Srv is Data:
-  Srv{pass: String, cfg: List<&2, C.CItem>}
+  Srv{pass: String, cfg: List<&2, C.CItem>, info: I.Info}
 
 def conn_new(id: Nat) -> Conn:
   Conn{id, False{}, "", MOn{}, False{}}
 
 # the server with these parameters: its password is requirepass
-def srv_of(+cfg: List<&2, C.CItem>) -> Srv:
-  Srv{C.config.get_value(cfg, "requirepass"), cfg}
+def srv_of(+cfg: List<&2, C.CItem>, info: I.Info) -> Srv:
+  Srv{C.config.get_value(cfg, "requirepass"), cfg, info}
 
 def srv.puts(sets: List<&2, String>, cfg: List<&2, C.CItem>) -> List<&2, C.CItem>:
   match sets:
@@ -59,14 +61,6 @@ def srv.puts(sets: List<&2, String>, cfg: List<&2, C.CItem>) -> List<&2, C.CItem
       srv.puts(rest, C.items.put(cfg, n, v))
     case _:
       cfg
-
-# the server at its start: the table's values, with the values it was
-# started with (a name and a value, and so on), which the shell checked
-def srv_start(sets: List<&2, String>) -> Srv:
-  srv_of(srv.puts(sets, C.config.table()))
-
-def srv_new(pass: String) -> Srv:
-  srv_start(["requirepass", pass])
 
 def conn.auth(+c: Conn) -> Bool:
   match c:
@@ -95,13 +89,41 @@ def conn.quit(+c: Conn) -> Bool:
 
 def srv.pass(+s: Srv) -> String:
   match s:
-    case Srv{pass, cfg}:
+    case Srv{pass, cfg, info}:
       pass
 
 def srv.cfg(+s: Srv) -> List<&2, C.CItem>:
   match s:
-    case Srv{pass, cfg}:
+    case Srv{pass, cfg, info}:
       cfg
+
+def srv.info(+s: Srv) -> I.Info:
+  match s:
+    case Srv{pass, cfg, info}:
+      info
+
+# what the shell adds to INFO's account (info.bend): a batch's commands
+# and bytes, bytes appended to the append-only file, new facts, a sample
+# of the rates
+def srv.ran(s: Srv, +n: Nat, +inb: Nat, +outb: Nat) -> Srv:
+  match s:
+    case Srv{pass, cfg, info}:
+      Srv{pass, cfg, I.info.ran(info, n, inb, outb)}
+
+def srv.aof(s: Srv, +n: Nat) -> Srv:
+  match s:
+    case Srv{pass, cfg, info}:
+      Srv{pass, cfg, I.info.aof(info, n)}
+
+def srv.live(s: Srv, l: I.Live) -> Srv:
+  match s:
+    case Srv{pass, cfg, info}:
+      Srv{pass, cfg, I.info.live(info, l)}
+
+def srv.tick(s: Srv, +ms: Nat) -> Srv:
+  match s:
+    case Srv{pass, cfg, info}:
+      Srv{pass, cfg, I.info.tick(info, ms)}
 
 # Authentication
 # --------------
@@ -113,7 +135,9 @@ def srv.cfg(+s: Srv) -> List<&2, C.CItem>:
 # whether the server has no password (String.length reads a packed
 # String where it lies; String.is_empty would take it apart)
 def nopass(+s: Srv) -> Bool:
-  Nat.is_eq(String.length(srv.pass(s)), 0n)
+  match s:
+    case Srv{+pass, cfg, info}:
+      Nat.is_eq(String.length(pass), 0n)
 
 def authed(+c: Conn, +s: Srv) -> Bool:
   Bool.or(conn.auth(c), nopass(s))
@@ -439,6 +463,8 @@ def own_reply(+o: R.SessOp, +c: Conn, +s: Srv, +db: KV.Trie<String>) -> Maybe<&2
       say(conn.mode(c), C.config.set.reply(C.config.set(args, srv.cfg(s))))
     case R.SConfigResetStat{}:
       say(conn.mode(c), R.r_ok())
+    case R.SInfo{args}:
+      say(conn.mode(c), R.RBulk{I.text(args, srv.cfg(s), srv.info(s), db)})
     case R.SReply{r}:
       say(conn.mode(c), r)
     case R.SBad{r}:
@@ -471,24 +497,34 @@ def own_conn(+o: R.SessOp, +c: Conn, +s: Srv) -> Conn:
       step_conn(c, s)
     case R.SConfigResetStat{}:
       step_conn(c, s)
+    case R.SInfo{a}:
+      step_conn(c, s)
     case R.SReply{r}:
       step_conn(c, s)
     case R.SBad{r}:
       step_conn(c, s)
 
-def srv.set(r: Result<&2, &2, R.Reply, List<&2, C.CItem>>, s: Srv) -> Srv:
+def srv.set(r: Result<&2, &2, R.Reply, List<&2, C.CItem>>, +s: Srv) -> Srv:
   match r:
     case Done{cfg}:
-      srv_of(cfg)
+      srv_of(cfg, srv.info(s))
     case Fail{e}:
       s
 
+# CONFIG RESETSTAT: INFO's counts start again
+def srv.reset(s: Srv) -> Srv:
+  match s:
+    case Srv{pass, cfg, info}:
+      Srv{pass, cfg, I.info.reset(info)}
+
 # the server after a session command: CONFIG SET changes it when it
-# succeeds
+# succeeds, and CONFIG RESETSTAT its counts
 def own_srv(+o: R.SessOp, +c: Conn, +s: Srv) -> Srv:
   match o:
     case R.SConfigSet{args}:
       srv.set(C.config.set(args, srv.cfg(s)), s)
+    case R.SConfigResetStat{}:
+      srv.reset(s)
     case _:
       s
 
