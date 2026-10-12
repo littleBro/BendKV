@@ -125,7 +125,7 @@ represented data:
   reader an owner of the whole value: O(depth) reference-count operations per read.
 - **A deep trie.** The first map was a binary trie of 20 levels: 20 dependent loads.
 
-## 3. Twenty-two patches to the Bend compiler
+## 3. Twenty-three patches to the Bend compiler
 
 All live in [`bend-patches/`](../bend-patches/) (against `bendlang/bend` at `1cce499`,
 Bend 2.0.35). The first eight switch on by themselves for programs without GPU calls;
@@ -137,7 +137,9 @@ changes how every program's `IO` compiles; the nineteenth speeds up `Mem.prefetc
 a buffer and `String.take` of a short string everywhere; the twentieth adds the
 process's id, working directory and wall clock (section 3o); the twenty-first lays
 out a datatype wider than 32 words as a node of its own, in every program (section 3p);
-and the twenty-second makes `String.order` native, everywhere (section 3zn).
+the twenty-second makes `String.order` native, everywhere (section 3zn); and the
+twenty-third keeps a socket with no room from holding up the writer, where a program
+calls `TCP.post` (section 3zo).
 The sections before 3l
 number the patches as they were then: patch 16 was effect pairs, taken out in 3l with
 `TCP.post_list` of patch 11, and their patches 17–20 are today's 16–19. None changes the
@@ -169,6 +171,7 @@ to agree with the list definition, and `IO` is still a function of `R` and `k`.
 | 20. value reads | `Mem.prefetch` of a buffer loads its bytes to its end (four cache lines at most), not its first 64 bytes; `String.take` of a string in the term word at its whole length gives the word back | lets a GET answer a copy of the value with its bytes hinted: +1.5–2% on GET hits, memory no longer grows with reads (section 3k) |
 | flat limit (today's 21st) | a datatype whose flat layout is wider than 32 words is a node of its own, instead of that many words in every call, result and frame that carries it | INFO's state in the server's: the actor's calls back from 50–67 words to under 25, and every segment's signature from 67 registers to 24 (section 3p) |
 | string order (today's 22nd) | `String.order` compares runs of bytes with `memcmp`, a prefix first, instead of a char at a time through `String.cmp` | ZRANK of a member of 100,000 of one score 76,861 → 9,028 instructions, of their own scores 15,877 → 7,515 (section 3zn) |
+| writer hold (today's 23rd) | the writer never waits for a socket: what a socket has no room for, and what is posted to it after, it holds in order and sends once its own epoll says the socket has room; the queue grows by blocks, so a post never waits for room | a client that stops reading holds up only its own replies, not the others', the timers or the accepts (section 3zo); instructions per request as before, within what moves between runs |
 
 The ratios in the last column come from different series and drift by ±0.06–0.08
 between series; PERFORMANCE.md gives each one with its pairs.
@@ -178,7 +181,7 @@ slower than lists on one thread and 1.7 times on four: short strings built and t
 apart character by character are their worst case. The other 16 runtime benchmarks
 do not change (geometric mean ×0.99). Huge pages add about 0.4 ms to the start of a
 short program and 0.4–0.9 s of kernel time to programs whose heaps reach hundreds of
-megabytes. The patches grow `bend2/comp.ts` from 62,940 to 98,445 tokens, over the
+megabytes. The patches grow `bend2/comp.ts` from 62,940 to 101,094 tokens, over the
 repository's 64,000 cap, so upstreaming them means making them smaller first. With all
 sixteen, the C lane of Bend's own test suite passes exactly the tests it passes with
 thirteen, plus the three new ones; with nineteen, its C and JS lanes pass exactly the
@@ -190,7 +193,11 @@ tests of what was taken out (`chan_call`, `tcp_post_recv` and `tcp_post_list`, o
 lanes); with twenty-one, exactly the tests they pass with twenty, plus the new one
 (`flat_limit`) on both lanes: 1,487 of 1,746; with today's twenty-two, exactly those,
 plus the new one (`string_order`) on both lanes: 1,489 of 1,748 (1,488 in a run under
-load, where `io_stack_fault_trap` missed the 5 s again; alone it passes in 1.2 s).
+load, where `io_stack_fault_trap` missed the 5 s again; alone it passes in 1.2 s); with today's twenty-three, the tests of
+`tests/io` pass on both lanes exactly as with twenty-two, plus the new one
+(`tcp_post_stall`, which hangs on the C lane without the patch): 231 of 238 (the seven
+others need ALSA's headers, build a test that fails to build, or print to two streams in
+an order that varies); the rest of the suite was not run again.
 
 **BendKV's own changes.** A 16-way trie (5 levels instead of 20) whose leaves are
 buckets inside the trie; laws reproved for it. Requests parsed by index, with no
@@ -255,7 +262,10 @@ sends it on the other core: one contiguous buffer per batch crosses cores, not t
 per command. The loop runs at ~90%, the writer at ~78%. This is now the default. The
 costs: more CPU per operation (1.39 µs instead of 0.97 for GET with pipeline 10), and
 a failed send is no longer reported to the program; a dead client shows on the next
-read.
+read. (The writer also waited on a socket that had no room, so a client that stopped
+reading held up every reply queued after its own, and once the ring filled, the loop
+too; since the twenty-third patch the writer keeps such a socket's bytes and goes on,
+section 3zo.)
 
 **One more fix along the way.** Each connection waiting in `recv` used to hold a 64 KiB
 buffer from `malloc`. With a hundred connections glibc kept handing that memory back
@@ -370,7 +380,8 @@ three cores) beat two without by 13–17%; three with writers (six threads) lose
 server takes a third argument, `post` or `send`, and defaults to a writer for one shard
 and to sending from the loop for more. On three server cores one shard with a writer is
 still the fastest with pipelining: 897 thousand GETs a second, 2.06 times Redis with
-three io-threads. Three shards reach 816.
+three io-threads. Three shards reach 816. (A writer serves all of its loop's sockets;
+since section 3zo one that has no room no longer holds up the others.)
 
 **iolists lose here.** `TCP.post_list` (eleventh patch) posts a list of pieces as one
 buffer, so a GET reply can be its header, the value straight from the trie, and
@@ -2892,6 +2903,67 @@ the new `string_order` on both.
 visits (section 3zm): of its instructions, `term_drop`, `span_fade`, `ctr_take` and
 `ctr_own_slow` take two fifths, `str_order` 3%.
 
+## 3zo. A client that stops reading
+
+A review of the first commit (issue #3) traced how one client could stop the server
+when its replies are posted (`TCP.post`, the default with two cores or more), and it
+still held after twenty-two patches. The writer sent each post to its end: on `EAGAIN`
+it polled the same socket for 100 ms and tried again, with no limit, and it took the
+next post off its ring only once that one was sent. So a client that stopped reading
+held the writer, and every reply and close queued behind its own waited. The loop
+sends a post itself only when the writer has sent all that was posted to that socket
+before (patches 15 and 17), so the clients that kept up still got the replies the loop
+sent them, until one needed the writer: a reply bigger than its socket's room, or the
+loop gone over to posting under load. And once the ring's 4,096 posts were taken, the
+loop spun on it: no request, accept or timer ran. Both happened as traced. With one
+client that did not read 32 MiB of replies, another client's 8 MiB reply stopped at the
+5.1 MiB the loop had sent itself; after 4,600 more requests from the stalled client,
+one a batch, a PING from another client and a new connection went unanswered.
+
+Redis keeps each client's output in a buffer of its own (normal clients have no limit
+by default, `client-output-buffer-limit normal 0 0 0`), so no client's backlog delays
+another's. The twenty-third patch does the same in the writer, which now never waits
+for a socket. What a socket has no room for, and what is posted to it after, the writer
+holds in order, and it goes on with the other sockets' posts; it sends what it holds once
+the socket has room, which its own epoll set tells it (`poll` on other systems). It looks
+there once per 200 µs window while it has posts to send, and while it holds any it
+sleeps there instead of on its condition variable, woken by a byte down a pipe. A close
+posted after held bytes closes the socket once they are sent. The loop sends a post
+itself only when the writer holds nothing for the socket either (`held[fd]`), so a
+socket's bytes stay in order. And the ring became a chain of blocks of 4,096 posts:
+when one fills, the loop links the next (the one the writer emptied last, or a new
+one), so a post never waits for room. A client that stops reading grows only its own
+backlog, as in Redis; no limit was added.
+
+[`tests/writer_test.py`](../tests/writer_test.py) runs in `make test` against each
+mode of the server. A client asks for 32 MiB of replies and reads none; another then
+gets an 8 MiB reply (in 22–26 ms) and a PING (under a millisecond); the stalled client
+sends 4,600 requests more, one a batch, more than the old ring held; a new connection
+is served and closed by QUIT; the cron's sweep deletes a key whose time has passed,
+which nothing reads; a client that asks for 4 MiB and QUIT and reads late gets the
+whole reply, then the close; and the stalled client reads its backlog while it sends
+2,000 ECHOs, and gets every byte in order, the ECHOs' replies after the rest. The build
+before the patch fails at the 8 MiB reply; a build whose loop sends a post itself
+without asking `held[fd]` fails too, its ECHOs' replies out of order or the QUIT's close
+cutting the reply short. In the compiler,
+`tests/io/tcp_post_stall.bend` posts 8 MB and 5,000 short posts to a socket whose peer
+reads nothing yet, and 8 MB to another: a timer fires, the second peer gets its bytes
+and its end, then the first its own, in order, and its end. Before the patch it hangs:
+its loop spins on the full ring, and with 100 short posts instead the timer fires but
+the second peer's bytes wait behind the first's; a writer that closes a socket at once,
+though it holds bytes for it, fails it too.
+
+The patch adds 2,649 tokens to `comp.ts`. On the path of a post the loop also reads
+`held[fd]` before it sends a post itself, and for each post the pointer to the block it
+fills, and it no longer reads the writer's head a second time to look for room; the
+writer tests its count of held sockets for each post, and moves to the next block at
+each block's end. Under callgrind, with replies posted, a request costs what it did,
+within what moves between runs: at pipeline 16, GET, SET and INCR take 3,434, 4,375 and
+4,519 instructions against 3,390, 4,377 and 4,578 without the patch; without a pipeline,
+10,849–10,992, 12,355–12,812 and 12,350–13,113 against 10,976–11,592, 12,364–12,389 and
+12,640–12,756 (how many requests a wake finds moves a run by up to 6%). Throughput on a
+quiet machine is still to be measured.
+
 ## 4. Where a request's time goes, and hiding the memory waits
 
 With the eight patches, BendKV ran fewer instructions on GET and SET than Redis, missed
@@ -3180,13 +3252,13 @@ These are compared in more detail, with what else to borrow, in
 
 ## 10. What each change gave, and what it cost
 
-Every change since the start, the patches to Bend (p1 to p23, numbered as before
+Every change since the start, the patches to Bend (p1 to p24, numbered as before
 section 3l, which took p16 out) and BendKV's own (sections 7.N of PERFORMANCE.md), on one
 scale. The gain is the best reliable measurement
 on the load the change was made for: time, or, where time stays in the noise (±5–15%),
 instructions or memory. The cost is what the change adds to `comp.ts` in `ttok` tokens
 (the Bend repository caps the file at 64 thousand; the original has 62,940, with our
-patches 98,445), BendKV's lines of code and proof, and what lines do not show: a new
+patches 101,094), BendKV's lines of code and proof, and what lines do not show: a new
 representation of data, threads, heuristics with tuned thresholds, effects at a
 distance. The tokens were counted on the patch branch, commit by commit:
 
@@ -3206,7 +3278,8 @@ distance. The tokens were counted on the patch branch, commit by commit:
 | 9. memory prefetch | 248 | 21. process and clock (today's 20th) | 108 |
 | | | 22. flat limit (today's 21st) | 67 |
 | | | 23. native `String.order` (today's 22nd) | 617 |
-| | | **all** | **35,505** |
+| | | 24. writer hold (today's 23rd) | 2,649 |
+| | | **all** | **38,154** |
 
 ```
           cheap                                  costly
@@ -3264,15 +3337,15 @@ worse     iolist                                 hints over a group (taken out),
 
 What follows. The best ratios came from removing a whole class of memory or disk work:
 allocations, trie levels, waits on misses, a sync per request; together they cost the
-compiler 690 tokens of 35,505. Strings are half the growth of `comp.ts` (17,770 tokens)
-and most of the single-core speed. Since 7.22, fewer instructions have rarely meant less
-time: the kernel is half of a request's CPU with a pipeline and two thirds without one,
-and what paid was work on the path through it (patches 15 and 17) or cutting half the
-instructions (the windows). The send rules carry eight constants tuned on one VM and
-should become one rule. For upstream, patch 1 is the best ratio, stands alone and fits
-the 1,060 tokens left under the cap, so it should go first, before patch 19; patches 5,
-7, 15, 4c and 18 are the candidates to drop or shrink (8,721 tokens), but even without
-them ~27 thousand tokens remain, so `comp.ts` itself has to get simpler.
+compiler 690 tokens of 38,154. Strings are nearly half the growth of `comp.ts` (17,770
+tokens) and most of the single-core speed. Since 7.22, fewer instructions have rarely
+meant less time: the kernel is half of a request's CPU with a pipeline and two thirds
+without one, and what paid was work on the path through it (patches 15 and 17) or
+cutting half the instructions (the windows). The send rules carry eight constants tuned
+on one VM and should become one rule. For upstream, patch 1 is the best ratio, stands
+alone and fits the 1,060 tokens left under the cap, so it should go first, before patch
+19; patches 5, 7, 15, 4c and 18 are the candidates to drop or shrink (8,721 tokens), but
+even without them ~29 thousand tokens remain, so `comp.ts` itself has to get simpler.
 
 ## 11. An outside review
 

@@ -1,0 +1,637 @@
+diff --git a/bend2/comp.ts b/bend2/comp.ts
+index 55fd1d3..ce52dd8 100644
+--- a/bend2/comp.ts
++++ b/bend2/comp.ts
+@@ -7664,11 +7664,26 @@ OUTLINE void* io_mem(void* mem) {
+ // Posted sends (TCP.post). A loop that posts bytes hands them to a writer
+ // thread of its own, which sends them in order: the loop's core does not
+ // pay for the send's work in the kernel, which is most of a server's. The
+-// loop puts posts on a ring and the writer takes them off, each side moving
++// loop puts posts on a queue and the writer takes them off, each side moving
+ // its own index; a writer with nothing to do spins a while, then sleeps on
+ // its bell, with its sleep flag up for the loop to ring it. A post of NULL
+ // closes the fd, after what was posted before.
+ //
++// No socket holds up another's posts, and the loop never waits for its
++// writer. The queue is a chain of blocks of IO_POSTS posts: the loop links
++// a block when the last one fills (the one the writer emptied last, kept
++// spare, or a new one), so a post never waits for room. The writer never
++// waits for a socket: what a socket has no room for (and what is posted to
++// it after) the writer holds, in order (IoHeld), and it goes on with the
++// other sockets' posts; it sends what it holds once the socket has room,
++// which a poll of its own tells it (epoll on Linux). It looks there once a
++// window while it has posts to send, and while it holds any it sleeps
++// there instead of on its bell, with a pipe for the loop to ring (sleep
++// 2). A held close closes the socket once what was held before it is sent.
++// So a client that stops reading grows only its own backlog, as a Redis
++// client's output buffer grows (by default normal clients have no limit),
++// and the others' replies, the loop's timers and its accepts go on.
++//
+ // The loop also sends posts itself, and does all the sends while it keeps
+ // up with its sockets. It counts the sockets its waits for events find
+ // ready, over spans of IO_POST_SPAN windows of IO_UTIL_WIN ns: a loop that
+@@ -7688,9 +7703,12 @@ OUTLINE void* io_mem(void* mem) {
+ // when its writer is busier than it by more than IO_POST_SLACK points (many
+ // connections without a pipeline, where a send costs more than the
+ // request). The loop sends a post only if the writer has sent all that was
+-// posted to fd before (ends[fd], the ring index past fd's last post, is not
+-// ahead of the writer's head), so fd's bytes stay in order; bytes the socket
+-// does not take at once go to the writer.
++// posted to fd before (ends[fd], the queue index past fd's last post, is
++// not ahead of the writer's head, and held[fd] is 0: the writer holds none
++// of them), so fd's bytes stay in order; bytes the socket does not take at
++// once go to the writer. held has room for the fds the loops' tables hold
++// (io_fdcap, under epoll); a post to an fd past it always goes to the
++// writer.
+ #define IO_POSTS        4096
+ #define IO_POST_SPAN    32
+ #define IO_POST_BACKLOG 4
+@@ -7699,14 +7717,36 @@ OUTLINE void* io_mem(void* mem) {
+ #define IO_POST_SLACK   10
+ #define IO_UTIL_WIN     200000
+ 
++#if IO_EPOLL
++static u32 io_fdcap;
++#endif
++
+ typedef struct IoPost {
+   char* buf;
+   u64   len;
+   int   fd;
+ } IoPost;
+ 
++// A block of the queue, and the block after it.
++typedef struct IoPosts {
++  IoPost          at[IO_POSTS];
++  struct IoPosts* next;
++} IoPosts;
++
++// A post the writer holds: its bytes from at to len, or a close (buf
++// NULL). An fd's held posts make a ring kept by its last, as io_push keeps
++// a queue.
++typedef struct IoHeld {
++  char*          buf;
++  u64            at;
++  u64            len;
++  struct IoHeld* next;
++} IoHeld;
++
+ typedef struct IoWriter {
+-  IoPost          ring[IO_POSTS];
++  IoPosts*        in;
++  IoPosts*        out;
++  IoPosts*        spare;
+   u32             head;
+   u32             tail;
+   u32             sleep;
+@@ -7714,6 +7754,13 @@ typedef struct IoWriter {
+   pthread_cond_t  bell;
+   u32*            ends;
+   u32             nends;
++  u8*             held;
++  u32             room;
++  IoHeld**        holds;
++  u32             nholds;
++  u32             nheld;
++  int             ep;
++  int             wake[2];
+   u32             util;
+   u32             direct;
+   u32             turns;
+@@ -7785,36 +7832,158 @@ static void io_writer_util(IoWriter* W, u64 now, u64* win, u64* busy) {
+   }
+ }
+ 
+-static void io_post_do(IoPost* p) {
+-  if (p->buf == NULL) {
+-    close(p->fd);
+-    return;
+-  }
+-  u64 at = 0;
+-  while (at < p->len) {
+-    ssize_t n = send(p->fd, p->buf + at, p->len - at, MSG_NOSIGNAL);
++// Sends buf from *at to len on fd without waiting: false if fd has no room
++// for the rest (*at is how far it got), true once it is sent or the send
++// failed (a failed post is dropped).
++static bool io_post_send(int fd, char* buf, u64* at, u64 len) {
++  while (*at < len) {
++    ssize_t n = send(fd, buf + *at, len - *at, MSG_NOSIGNAL | MSG_DONTWAIT);
+     if (n > 0) {
+-      at += (u64)n;
+-    } else if (n < 0 && errno == EAGAIN) {
+-      struct pollfd q = { p->fd, POLLOUT, 0 };
+-      poll(&q, 1, 100);
++      *at += (u64)n;
++    } else if (n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
++      return false;
+     } else if (!(n < 0 && errno == EINTR)) {
+-      break;
++      return true;
++    }
++  }
++  return true;
++}
++
++// fd's posts wait for room at the writer (on), or go out as they come
++// again (off); held[fd] tells the loop, once the poll has changed.
++static void io_held_watch(IoWriter* W, int fd, bool on) {
++#if IO_EPOLL
++  struct epoll_event ev = { .events = EPOLLOUT, .data.u64 = (u64)fd };
++  if (epoll_ctl(W->ep, on ? EPOLL_CTL_ADD : EPOLL_CTL_DEL, fd, &ev) < 0 && on) {
++    err_fail("a writer's poll failed");
++  }
++#endif
++  W->nheld = on ? W->nheld + 1 : W->nheld - 1;
++  if ((u32)fd < W->room) {
++    __atomic_store_n(&W->held[fd], (u8)on, __ATOMIC_RELEASE);
++  }
++}
++
++// Holds a post to fd (its bytes from at on, or a close) after the ones
++// held before it.
++static void io_held_add(IoWriter* W, int fd, char* buf, u64 at, u64 len) {
++  if ((u32)fd >= W->nholds) {
++    u32 n     = W->nholds * 2 > (u32)fd ? W->nholds * 2 : (u32)fd + 64;
++    W->holds  = io_mem(realloc(W->holds, (size_t)n * sizeof(IoHeld*)));
++    memset(W->holds + W->nholds, 0, (size_t)(n - W->nholds) * sizeof(IoHeld*));
++    W->nholds = n;
++  }
++  IoHeld* a = io_mem(malloc(sizeof(IoHeld)));
++  IoHeld* l = W->holds[fd];
++  *a = (IoHeld){ buf, at, len, l != NULL ? l->next : a };
++  if (l != NULL) {
++    l->next = a;
++  } else {
++    io_held_watch(W, fd, true);
++  }
++  W->holds[fd] = a;
++}
++
++// Sends what fd holds while it has room. Once all of it is gone, fd's
++// posts go out as they come again; a close is the last held (nothing is
++// posted to a closed socket, and its number comes back only once the
++// writer closes it), and closes fd.
++static void io_held_send(IoWriter* W, int fd) {
++  IoHeld* l    = W->holds[fd];
++  bool    shut = false;
++  while (l != NULL) {
++    IoHeld* a = l->next;
++    if (a->buf != NULL && !io_post_send(fd, a->buf, &a->at, a->len)) {
++      return;
++    }
++    shut    = a->buf == NULL;
++    l->next = a->next;
++    l       = a != l ? l : NULL;
++    free(a->buf);
++    free(a);
++  }
++  W->holds[fd] = NULL;
++  io_held_watch(W, fd, false);
++  if (shut) {
++    close(fd);
++  }
++}
++
++// Waits up to ms (-1: as long as it takes) for room on a held fd or for the
++// loop to ring, and sends what each fd with room holds.
++static void io_held_poll(IoWriter* W, int ms) {
++  char z[64];
++#if IO_EPOLL
++  struct epoll_event evs[64];
++  int n = epoll_wait(W->ep, evs, 64, ms);
++  for (int i = 0; i < n; i += 1) {
++    u64 d = evs[i].data.u64;
++    if (d == ~0ull) {
++      while (read(W->wake[0], z, sizeof z) > 0) {
++      }
++    } else if (d < W->nholds && W->holds[d] != NULL) {
++      io_held_send(W, (int)d);
++    }
++  }
++#else
++  struct pollfd* q = io_mem(malloc((W->nheld + 1) * sizeof(struct pollfd)));
++  u32            n = 1;
++  q[0] = (struct pollfd){ W->wake[0], POLLIN, 0 };
++  for (u32 fd = 0; fd < W->nholds; fd += 1) {
++    if (W->holds[fd] != NULL) {
++      q[n] = (struct pollfd){ (int)fd, POLLOUT, 0 };
++      n   += 1;
++    }
++  }
++  if (poll(q, n, ms) > 0) {
++    while (q[0].revents != 0 && read(W->wake[0], z, sizeof z) > 0) {
++    }
++    for (u32 i = 1; i < n; i += 1) {
++      if (q[i].revents != 0 && W->holds[q[i].fd] != NULL) {
++        io_held_send(W, q[i].fd);
++      }
+     }
+   }
+-  free(p->buf);
++  free(q);
++#endif
++}
++
++// Sends a post, or holds it: fd holds posts already, or has no room for
++// all of it.
++static void io_post_do(IoWriter* W, IoPost* p) {
++  int fd = p->fd;
++  u64 at = 0;
++  if (W->nheld != 0 && (u32)fd < W->nholds && W->holds[fd] != NULL) {
++    io_held_add(W, fd, p->buf, 0, p->len);
++  } else if (p->buf == NULL) {
++    close(fd);
++  } else if (io_post_send(fd, p->buf, &at, p->len)) {
++    free(p->buf);
++  } else {
++    io_held_add(W, fd, p->buf, at, p->len);
++  }
+ }
+ 
+ static void* io_writer_run(void* arg) {
+   IoWriter* W    = arg;
+   u64       win  = io_tick();
+   u64       busy = 0;
++  u64       look = 0;
+   for (;;) {
+     u32 h = W->head;
+     if (h != __atomic_load_n(&W->tail, __ATOMIC_ACQUIRE)) {
+-      u64 t0 = io_tick();
+-      io_post_do(&W->ring[h % IO_POSTS]);
++      u64      t0 = io_tick();
++      IoPosts* b  = W->out;
++      io_post_do(W, &b->at[h % IO_POSTS]);
++      if (h % IO_POSTS == IO_POSTS - 1) {
++        W->out = b->next;
++        free(__atomic_exchange_n(&W->spare, b, __ATOMIC_ACQ_REL));
++      }
+       __atomic_store_n(&W->head, h + 1, __ATOMIC_RELEASE);
++      if (W->nheld != 0 && t0 >= look) {
++        look = t0 + IO_UTIL_WIN;
++        io_held_poll(W, 0);
++      }
+       u64 t1 = io_tick();
+       busy  += t1 - t0;
+       io_writer_util(W, t1, &win, &busy);
+@@ -7836,35 +8005,98 @@ static void* io_writer_run(void* arg) {
+     if (more) {
+       continue;
+     }
+-    pthread_mutex_lock(&W->lock);
+-    __atomic_store_n(&W->util, 0, __ATOMIC_RELAXED);
+-    __atomic_store_n(&W->sleep, 1, __ATOMIC_SEQ_CST);
+-    while (__atomic_load_n(&W->tail, __ATOMIC_SEQ_CST) == h) {
+-      pthread_cond_wait(&W->bell, &W->lock);
++    if (W->nheld != 0) {
++      __atomic_store_n(&W->util, 0, __ATOMIC_RELAXED);
++      __atomic_store_n(&W->sleep, 2, __ATOMIC_SEQ_CST);
++      if (__atomic_load_n(&W->tail, __ATOMIC_SEQ_CST) == h) {
++        io_held_poll(W, -1);
++      }
++      __atomic_store_n(&W->sleep, 0, __ATOMIC_SEQ_CST);
++    } else {
++      pthread_mutex_lock(&W->lock);
++      __atomic_store_n(&W->util, 0, __ATOMIC_RELAXED);
++      __atomic_store_n(&W->sleep, 1, __ATOMIC_SEQ_CST);
++      while (__atomic_load_n(&W->tail, __ATOMIC_SEQ_CST) == h) {
++        pthread_cond_wait(&W->bell, &W->lock);
++      }
++      __atomic_store_n(&W->sleep, 0, __ATOMIC_SEQ_CST);
++      pthread_mutex_unlock(&W->lock);
+     }
+-    __atomic_store_n(&W->sleep, 0, __ATOMIC_SEQ_CST);
+-    pthread_mutex_unlock(&W->lock);
+     win  = io_tick();
+     busy = 0;
+   }
+   return NULL;
+ }
+ 
++// This loop's writer, started at its first post, with its poll: the pipe
++// the loop rings it through while it sleeps there, and under epoll a set
++// of that pipe and of the held fds, watched for room (elsewhere a poll
++// takes them from holds).
++OUTLINE IoWriter* io_writer_new(void) {
++  pthread_t tid;
++  IoWriter* W = io_mem(calloc(1, sizeof(IoWriter)));
++  W->in     = io_mem(malloc(sizeof(IoPosts)));
++  W->out    = W->in;
++  W->direct = 1;
++  pthread_mutex_init(&W->lock, NULL);
++  pthread_cond_init(&W->bell, NULL);
++  if (pipe(W->wake) | fcntl(W->wake[0], F_SETFL, O_NONBLOCK)
++    | fcntl(W->wake[1], F_SETFL, O_NONBLOCK)) {
++    err_fail("a writer thread failed to start");
++  }
++#if IO_EPOLL
++  struct epoll_event ev = { .events = EPOLLIN, .data.u64 = ~0ull };
++  W->room = io_fdcap;
++  W->ep   = epoll_create1(EPOLL_CLOEXEC);
++  if (W->ep < 0 || epoll_ctl(W->ep, EPOLL_CTL_ADD, W->wake[0], &ev) < 0) {
++    err_fail("a writer thread failed to start");
++  }
++#else
++  W->room = 1u << 16;
++#endif
++  W->held = io_mem(calloc(W->room, 1));
++  if (pthread_create(&tid, NULL, io_writer_run, W)) {
++    err_fail("a writer thread failed to start");
++  }
++  pthread_detach(tid);
++  io_me->post = W;
++  return W;
++}
++
++// Whether fd's posts wait for the writer: it holds some, or fd is past
++// held's room.
++static bool io_post_held(IoWriter* W, int fd) {
++  return (u32)fd >= W->room || __atomic_load_n(&W->held[fd], __ATOMIC_ACQUIRE);
++}
++
++// The loop filled its block of the queue: the next one is the writer's
++// spare, or a new one.
++OUTLINE void io_post_block(IoWriter* W) {
++  IoPosts* b  = __atomic_exchange_n(&W->spare, NULL, __ATOMIC_ACQ_REL);
++  W->in->next = b != NULL ? b : io_mem(malloc(sizeof(IoPosts)));
++  W->in       = W->in->next;
++}
++
++// The loop rings its writer, asleep on its bell (sleep 1) or in its poll
++// (sleep 2: a byte down its pipe; a full pipe wakes it already).
++OUTLINE void io_post_wake(IoWriter* W, u32 sleep) {
++  char z = 0;
++  if (sleep == 2) {
++    while (write(W->wake[1], &z, 1) < 0 && errno == EINTR) {
++    }
++    return;
++  }
++  pthread_mutex_lock(&W->lock);
++  pthread_cond_signal(&W->bell);
++  pthread_mutex_unlock(&W->lock);
++}
++
+ // Posts len bytes of buf (malloc'd; the writer frees it) to fd, or a close
+ // of fd for a NULL buf, on this loop's writer, which starts on first use.
+ static void io_post(int fd, char* buf, u64 len) {
+   IoWriter* W = io_me->post;
+   if (W == NULL) {
+-    pthread_t tid;
+-    W = io_mem(calloc(1, sizeof(IoWriter)));
+-    W->direct = 1;
+-    pthread_mutex_init(&W->lock, NULL);
+-    pthread_cond_init(&W->bell, NULL);
+-    if (pthread_create(&tid, NULL, io_writer_run, W)) {
+-      err_fail("a writer thread failed to start");
+-    }
+-    pthread_detach(tid);
+-    io_me->post = W;
++    W = io_writer_new();
+   }
+   u32 t = W->tail;
+   u32 h = __atomic_load_n(&W->head, __ATOMIC_ACQUIRE);
+@@ -7876,7 +8108,7 @@ static void io_post(int fd, char* buf, u64 len) {
+     }
+     W->nends = n;
+   }
+-  if ((int32_t)(W->ends[fd] - h) <= 0) {
++  if ((int32_t)(W->ends[fd] - h) <= 0 && !io_post_held(W, fd)) {
+     if (buf == NULL && W->direct) {
+       close(fd);
+       return;
+@@ -7899,19 +8131,16 @@ static void io_post(int fd, char* buf, u64 len) {
+       }
+     }
+   }
+-  for (u32 n = 1; t - __atomic_load_n(&W->head, __ATOMIC_ACQUIRE) >= IO_POSTS; n += 1) {
+-    if ((n & 1023) == 0) {
+-      sched_yield();
+-    }
+-    io_pause();
++  IoPosts* b = W->in;
++  b->at[t % IO_POSTS] = (IoPost){ buf, len, fd };
++  if (t % IO_POSTS == IO_POSTS - 1) {
++    io_post_block(W);
+   }
+-  W->ring[t % IO_POSTS] = (IoPost){ buf, len, fd };
+   W->ends[fd] = t + 1;
+   __atomic_store_n(&W->tail, t + 1, __ATOMIC_SEQ_CST);
+-  if (__atomic_load_n(&W->sleep, __ATOMIC_SEQ_CST)) {
+-    pthread_mutex_lock(&W->lock);
+-    pthread_cond_signal(&W->bell);
+-    pthread_mutex_unlock(&W->lock);
++  u32 sleep = __atomic_load_n(&W->sleep, __ATOMIC_SEQ_CST);
++  if (sleep != 0) {
++    io_post_wake(W, sleep);
+   }
+ }
+ 
+diff --git a/tests/io/tcp_post_stall.bend b/tests/io/tcp_post_stall.bend
+new file mode 100644
+index 0000000..1560630
+--- /dev/null
++++ b/tests/io/tcp_post_stall.bend
+@@ -0,0 +1,204 @@
++# io (io_tcp_post_stall): a socket whose peer stops reading holds up only
++# its own posts. One poster posts 8 MB to a1, whose peer c1 reads nothing
++# yet (twice what the loopback's buffers take), then 5,000 short posts
++# (more than a block of the writer's queue) and a close; another posts the
++# 8 MB to a2 and closes it. A timer fires meanwhile; c2 gets a2's bytes
++# and its end, then c1 gets a1's, in order, and its end. On the C lane
++# the writer used to wait on a1's full socket, a2's bytes waited behind
++# it, and once 4,096 posts waited the loop waited for room in the writer's
++# ring, its timers too. Elsewhere a post waits for its own socket, so each
++# poster is a computation of its own.
++import Base
++
++def dbl(n: Nat, s: String) -> String:
++  match n:
++    case 0n:
++      s
++    case 1n+p:
++      +x = s
++      dbl(p, x ++ x)
++
++def post_smalls(n: Nat, +k: Nat, s: Socket) -> IO(Socket):
++  match n:
++    case 0n:
++      IO.pure(Socket, s)
++    case 1n+p:
++      do IO<Socket>:
++        s2 : Socket <- TCP.post(s, Nat.show(k) ++ ",")
++        post_smalls(p, 1n+k, s2)
++
++def poster1(a: Socket, big: String) -> IO(Unit):
++  do IO<Unit>:
++    a2 : Socket <- TCP.post(a, big)
++    a3 : Socket <- post_smalls(5000n, 0n, a2)
++    Socket.close(a3)
++
++def poster2(a: Socket, big: String) -> IO(Unit):
++  do IO<Unit>:
++    a2 : Socket <- TCP.post(a, big)
++    Socket.close(a2)
++
++# s read until left more bytes came (a read at most 65,536 of them), or
++# its end: how many did not come. Only String.length looks at them, which
++# is native on both lanes.
++def skip.more(eof: Bool, s: Socket, left: Nat, next: Socket -> Nat -> IO(Socket & Nat)) -> IO(Socket & Nat):
++  match eof:
++    case True{}:
++      IO.pure(Socket & Nat, (s, left))
++    case False{}:
++      next(s, left)
++
++def skip.got(m: Socket & Result<&1, &1, U32 & String, String>, +left: Nat, next: Socket -> Nat -> IO(Socket & Nat)) -> IO(Socket & Nat):
++  (s, r) = m
++  match r:
++    case Done{+xs}:
++      skip.more(String.is_empty(xs), s, Nat.sub(left, String.length(xs)), next)
++    case Fail{e}:
++      IO.pure(Socket & Nat, (s, left))
++
++def skip.go(done: Bool, s: Socket, +left: Nat, next: Socket -> Nat -> IO(Socket & Nat)) -> IO(Socket & Nat):
++  match done:
++    case True{}:
++      IO.pure(Socket & Nat, (s, left))
++    case False{}:
++      do IO<Socket & Nat>:
++        m : Socket & Result<&1, &1, U32 & String, String> <- TCP.recv_raw(s, U32.from_nat(Nat.min(65536n, left)))
++        skip.got(m, left, next)
++
++def skip(fuel: Nat, s: Socket, +left: Nat) -> IO(Socket & Nat):
++  match fuel:
++    case 0n:
++      IO.pure(Socket & Nat, (s, left))
++    case 1n+f:
++      skip.go(Nat.is_eq(left, 0n), s, left, s2 => l2 => skip(f, s2, l2))
++
++# s read until want's bytes came, whether they were want's (a few bytes)
++def tail.more(same: Bool, s: Socket, want: String, next: Socket -> String -> IO(Socket & Bool)) -> IO(Socket & Bool):
++  match same:
++    case True{}:
++      next(s, want)
++    case False{}:
++      IO.pure(Socket & Bool, (s, False{}))
++
++def tail.got(m: Socket & Result<&1, &1, U32 & String, String>, +want: String, next: Socket -> String -> IO(Socket & Bool)) -> IO(Socket & Bool):
++  (s, r) = m
++  match r:
++    case Done{+xs}:
++      +k = String.length(xs)
++      tail.more(Bool.and(Bool.not(String.is_empty(xs)), String.eq(xs, String.take(want, k))), s, String.drop(want, k), next)
++    case Fail{e}:
++      IO.pure(Socket & Bool, (s, False{}))
++
++def tail.go(done: Bool, s: Socket, +want: String, next: Socket -> String -> IO(Socket & Bool)) -> IO(Socket & Bool):
++  match done:
++    case True{}:
++      IO.pure(Socket & Bool, (s, True{}))
++    case False{}:
++      do IO<Socket & Bool>:
++        m : Socket & Result<&1, &1, U32 & String, String> <- TCP.recv_raw(s, U32.from_nat(String.length(want)))
++        tail.got(m, want, next)
++
++def tail(fuel: Nat, s: Socket, +want: String) -> IO(Socket & Bool):
++  match fuel:
++    case 0n:
++      IO.pure(Socket & Bool, (s, False{}))
++    case 1n+f:
++      tail.go(String.is_empty(want), s, want, s2 => w2 => tail(f, s2, w2))
++
++def at_end.got(m: Socket & Result<&1, &1, U32 & String, String>, ok: Bool) -> IO(Socket & Bool):
++  (s, r) = m
++  match r:
++    case Done{xs}:
++      IO.pure(Socket & Bool, (s, Bool.and(ok, String.is_empty(xs))))
++    case Fail{e}:
++      IO.pure(Socket & Bool, (s, False{}))
++
++def at_end(t: Socket & Bool, ok: Bool) -> IO(Socket & Bool):
++  (s, same) = t
++  do IO<Socket & Bool>:
++    m : Socket & Result<&1, &1, U32 & String, String> <- TCP.recv_raw(s, 1)
++    at_end.got(m, Bool.and(ok, same))
++
++def read_tail(k: Socket & Nat, last: String) -> IO(Socket & Bool):
++  (s, left) = k
++  do IO<Socket & Bool>:
++    t : Socket & Bool <- tail(100n, s, last)
++    at_end(t, Nat.is_eq(left, 0n))
++
++# c read whole: n bytes, last the last of them, then its end
++def read_all(c: Socket, n: Nat, +last: String) -> IO(Socket & Bool):
++  do IO<Socket & Bool>:
++    k : Socket & Nat <- skip(100000n, c, Nat.sub(n, String.length(last)))
++    read_tail(k, last)
++
++def said(ok: Bool) -> String:
++  match ok:
++    case True{}:
++      "in order"
++    case False{}:
++      "WRONG"
++
++def report(name: String, n: Nat, d: Socket & Bool) -> IO(Unit):
++  (s, ok) = d
++  do IO<Unit>:
++    Unit <- IO.print(name ++ " " ++ Nat.show(n) ++ " " ++ said(ok))
++    Socket.close(s)
++
++def talk(c1: Socket, a1: Socket, c2: Socket, m2: Listener & Result<&1, &1, U32 & String, Socket>) -> IO(Unit):
++  (l, r2) = m2
++  +big = dbl(17n, "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ-")
++  do IO<Unit>:
++    a2 : Socket <- IO.pass(Socket, r2)
++    Unit <- IO.spawn(Unit, poster1(a1, big))
++    Unit <- IO.sleep(5)
++    Unit <- IO.spawn(Unit, poster2(a2, big))
++    Unit <- IO.sleep(5)
++    Unit <- IO.print("tick")
++    d2 : Socket & Bool <- read_all(c2, 8257536n, "RSTUVWXYZ-")
++    Unit <- report("c2", 8257536n, d2)
++    d1 : Socket & Bool <- read_all(c1, 8281426n, "4998,4999,")
++    Unit <- report("c1", 8281426n, d1)
++    Listener.close(l)
++
++def two(c1: Socket, m1: Listener & Result<&1, &1, U32 & String, Socket>, +port: U32) -> IO(Unit):
++  (l, r1) = m1
++  do IO<Unit>:
++    a1 : Socket <- IO.pass(Socket, r1)
++    c2 : Socket <- IO.try(Socket, TCP.connect("127.0.0.1", port))
++    m2 : Listener & Result<&1, &1, U32 & String, Socket> <- TCP.accept(l)
++    talk(c1, a1, c2, m2)
++
++def main_go(b: Listener & U32) -> IO(Unit):
++  (l, port) = b
++  +p = port
++  do IO<Unit>:
++    c1 : Socket <- IO.try(Socket, TCP.connect("127.0.0.1", p))
++    m1 : Listener & Result<&1, &1, U32 & String, Socket> <- TCP.accept(l)
++    two(c1, m1, p)
++
++def tcp_retry(port: U32, r: Result<&1, &1, U32 & String, Listener>, rest: IO(Listener & U32)) ->
++  IO(Listener & U32):
++  match r:
++    case Done{l}:
++      IO.pure(Listener & U32, (l, port))
++    case Fail{e}:
++      rest
++
++def tcp_listen_any(tries: Nat, +port: U32) -> IO(Listener & U32):
++  match tries:
++    case 0n:
++      IO.die(Listener & U32, 1, "no free tcp port")
++    case 1n+t:
++      rest = tcp_listen_any(t, (port + 1 : U32))
++      do IO<Listener & U32>:
++        r : Result<&1, &1, U32 & String, Listener> <- TCP.listen("127.0.0.1", port)
++        tcp_retry(port, r, rest)
++
++def main() -> IO(Unit):
++  do IO<Unit>:
++    b : Listener & U32 <- tcp_listen_any(32n, 19927)
++    main_go(b)
++
++#|tick
++#|c2 8257536 in order
++#|c1 8281426 in order
