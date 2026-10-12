@@ -109,15 +109,15 @@ def block_walks():
         out += [f"    case 1n+p {node(cs)} {H[i]}{{}}:",
                 f"      tget_kl(V, p, {cs[i]}, {STEP}, k, now)"]
     out += ["    case 1n+p other _:", "      None{}", ""]
-    out += ["# tget_kl for String values, answering a copy of the value (bget_c)",
-            "def tget_kc(d: Nat, +t: Trie<String>, x: Hex, +h: U32, +k: String, +now: Nat) -> Maybe<&2, String>:",
+    out += ["# tget_kl for the keys' values, answering a copy of a string (bget_c)",
+            "def tget_kc(d: Nat, +t: Trie<Val>, x: Hex, +h: U32, +k: String, +now: Nat) -> Got:",
             "  match d t x:",
             "    case 0n t0 _:",
             "      bget_c(k, t0, now)"]
     for i in range(N):
         out += [f"    case 1n+p {node(cs)} {H[i]}{{}}:",
                 f"      tget_kc(p, {cs[i]}, {STEP}, k, now)"]
-    out += ["    case 1n+p other _:", "      None{}", ""]
+    out += ["    case 1n+p other _:", "      GNone{}", ""]
     out += ["# hints for a walk to come (Mem.prefetch): ttouch is acc, after starting",
             "# to load the subtrie where a walk of depth d ends (a bucket at depth",
             "# 5); tetouch is acc, after starting to load the key and the value of",
@@ -291,7 +291,7 @@ def block_tget_kc():
     out = ["# GET reads with tget_kc, which answers a copy of the value: the same",
            "# answer as blive of the bucket where the walk ends (bget_c_eq), by",
            "# induction on the depth",
-           "def tget_kc_eq(d: Nat, t: KV.Trie<String>, x: KV.Hex, +h: U32, +k: String, +now: Nat) -> {KV.blive(String, k, KV.tget_h(String, d, t, x, h), now) == KV.tget_kc(d, t, x, h, k, now) : Maybe<&2, String>}:",
+           "def tget_kc_eq(d: Nat, t: KV.Trie<KV.Val>, x: KV.Hex, +h: U32, +k: String, +now: Nat) -> {KV.got_of(KV.blive(KV.Val, k, KV.tget_h(KV.Val, d, t, x, h), now)) == KV.tget_kc(d, t, x, h, k, now) : KV.Got}:",
            "  match d t x:",
            "    case 0n t0 _:",
            "      bget_c_eq(k, t0, now)"]

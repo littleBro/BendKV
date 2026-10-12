@@ -562,27 +562,35 @@ def take_len(s: String) -> {s == String.take(s, String.length(s)) : String}:
     case SCon{h, r}:
       Equal.cong(String, String, x => SCon{h, x}, r, String.take(r, String.length(r)), take_len(r))
 
-# bget_c answers as blive: the copy is the value
-def bget_c_ent_eq(ok: Bool, +v: String) -> {KV.blive.ent(String, ok, v) == KV.bget_c.ent(ok, v) : Maybe<&2, String>}:
+# bget_c answers as blive does, seen as got_of sees it: the copy of a
+# string is the string
+def bget_c_val_eq(+v: KV.Val) -> {KV.got_of(Some{v}) == KV.bget_c.val(v) : KV.Got}:
+  match v:
+    case KV.VStr{+w}:
+      Equal.cong(String, KV.Got, x => KV.GStr{x}, w, String.take(w, String.length(w)), take_len(w))
+    case KV.VColl{c}:
+      {==}
+
+def bget_c_ent_eq(ok: Bool, +v: KV.Val) -> {KV.got_of(KV.blive.ent(KV.Val, ok, v)) == KV.bget_c.ent(ok, v) : KV.Got}:
   match ok:
     case True{}:
-      Equal.cong(String, Maybe<&2, String>, x => Some{x}, v, String.take(v, String.length(v)), take_len(v))
+      bget_c_val_eq(v)
     case False{}:
       {==}
 
-def bget_c_go_eq(+k: String, b: KV.Trie<String>, same: Bool, +now: Nat) -> {KV.blive.go(String, k, b, same, now) == KV.bget_c.go(k, b, same, now) : Maybe<&2, String>}:
+def bget_c_go_eq(+k: String, b: KV.Trie<KV.Val>, same: Bool, +now: Nat) -> {KV.got_of(KV.blive.go(KV.Val, k, b, same, now)) == KV.bget_c.go(k, b, same, now) : KV.Got}:
   match b same:
     case KV.Ent{key, +v, +ex, rest} True{}:
       bget_c_ent_eq(KV.live(now, ex), v)
     case KV.Ent{key, v, ex, +rest} False{}:
-      bget_c_go_eq(k, rest, KV.bhead(String, k, rest), now)
+      bget_c_go_eq(k, rest, KV.bhead(KV.Val, k, rest), now)
     case KV.Tip{} _:
       {==}
     case KV.Node{c0, c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13, c14, c15} _:
       {==}
 
-def bget_c_eq(+k: String, +b: KV.Trie<String>, +now: Nat) -> {KV.blive(String, k, b, now) == KV.bget_c(k, b, now) : Maybe<&2, String>}:
-  bget_c_go_eq(k, b, KV.bhead(String, k, b), now)
+def bget_c_eq(+k: String, +b: KV.Trie<KV.Val>, +now: Nat) -> {KV.got_of(KV.blive(KV.Val, k, b, now)) == KV.bget_c(k, b, now) : KV.Got}:
+  bget_c_go_eq(k, b, KV.bhead(KV.Val, k, b), now)
 
 # Digits
 # ======
@@ -1248,7 +1256,7 @@ def tget_k_eq(-V: Data, d: Nat, t: KV.Trie<V>, x: KV.Hex, +h: U32, +k: String) -
 # GET reads with tget_kc, which answers a copy of the value: the same
 # answer as blive of the bucket where the walk ends (bget_c_eq), by
 # induction on the depth
-def tget_kc_eq(d: Nat, t: KV.Trie<String>, x: KV.Hex, +h: U32, +k: String, +now: Nat) -> {KV.blive(String, k, KV.tget_h(String, d, t, x, h), now) == KV.tget_kc(d, t, x, h, k, now) : Maybe<&2, String>}:
+def tget_kc_eq(d: Nat, t: KV.Trie<KV.Val>, x: KV.Hex, +h: U32, +k: String, +now: Nat) -> {KV.got_of(KV.blive(KV.Val, k, KV.tget_h(KV.Val, d, t, x, h), now)) == KV.tget_kc(d, t, x, h, k, now) : KV.Got}:
   match d t x:
     case 0n t0 _:
       bget_c_eq(k, t0, now)
@@ -2487,9 +2495,10 @@ def code_eq(-V: Data, +t: KV.Trie<V>, +k: String) -> {Laws.item_code(V, KV.entry
 def entry_at_eq(-V: Data, +t: KV.Trie<V>, +k: String) -> {KV.entry(V, t, k) == KV.entry.at(V, t, k, KV.hash(k)) : Maybe<&2, KV.Item<V>>}:
   tget_ke_eq(V, 5n, t, KV.hex(KV.hash(k)), KV.hash(k), k)
 
-def get_copy_eq(+t: KV.Trie<String>, +k: String, +now: Nat) -> {KV.read(String, t, k, now) == KV.get_copy(t, k, now) : Maybe<&2, String>}:
-  Equal.trans(Maybe<&2, String>, KV.read(String, t, k, now), KV.blive(String, k, KV.tget_h(String, 5n, t, KV.hex(KV.hash(k)), KV.hash(k)), now), KV.get_copy(t, k, now),
-    Equal.sym(Maybe<&2, String>, KV.blive(String, k, KV.tget_h(String, 5n, t, KV.hex(KV.hash(k)), KV.hash(k)), now), KV.tget_kl(String, 5n, t, KV.hex(KV.hash(k)), KV.hash(k), k, now), tget_kl_eq(String, 5n, t, KV.hex(KV.hash(k)), KV.hash(k), k, now)),
+def get_copy_eq(+t: KV.Trie<KV.Val>, +k: String, +now: Nat) -> {KV.got_of(KV.read(KV.Val, t, k, now)) == KV.get_copy(t, k, now) : KV.Got}:
+  Equal.trans(KV.Got, KV.got_of(KV.read(KV.Val, t, k, now)), KV.got_of(KV.blive(KV.Val, k, KV.tget_h(KV.Val, 5n, t, KV.hex(KV.hash(k)), KV.hash(k)), now)), KV.get_copy(t, k, now),
+    Equal.cong(Maybe<&2, KV.Val>, KV.Got, x => KV.got_of(x), KV.read(KV.Val, t, k, now), KV.blive(KV.Val, k, KV.tget_h(KV.Val, 5n, t, KV.hex(KV.hash(k)), KV.hash(k)), now),
+      Equal.sym(Maybe<&2, KV.Val>, KV.blive(KV.Val, k, KV.tget_h(KV.Val, 5n, t, KV.hex(KV.hash(k)), KV.hash(k)), now), KV.tget_kl(KV.Val, 5n, t, KV.hex(KV.hash(k)), KV.hash(k), k, now), tget_kl_eq(KV.Val, 5n, t, KV.hex(KV.hash(k)), KV.hash(k), k, now))),
     tget_kc_eq(5n, t, KV.hex(KV.hash(k)), KV.hash(k), k, now))
 
 # Keys
@@ -2511,22 +2520,22 @@ def Laws.key_eq_false(a, b, e):
 # map's laws say.
 
 # a key's entry after SET: the value, with no time
-def e_set(+t: KV.Trie<String>, +k: String, +v: String) -> {KV.entry(String, KV.set(String, t, k, v), k) == Some{KV.Item{v, 0n}} : Maybe<&2, KV.Item<String>>}:
-  Laws.entry_setx_same(String, t, k, v, 0n)
+def e_set(+t: KV.Trie<KV.Val>, +k: String, +v: String) -> {KV.entry(KV.Val, KV.set(KV.Val, t, k, KV.VStr{v}), k) == Some{KV.Item{KV.VStr{v}, 0n}} : Maybe<&2, KV.Item<KV.Val>>}:
+  Laws.entry_setx_same(KV.Val, t, k, KV.VStr{v}, 0n)
 
 # GET and the other reads at now see the entry's value when the key is
 # there at now
-def get_read(+t: KV.Trie<String>, +k: String, +now: Nat) -> {Laws.live_val(String, KV.entry(String, t, k), now) == KV.get_copy(t, k, now) : Maybe<&2, String>}:
-  Equal.trans(Maybe<&2, String>, Laws.live_val(String, KV.entry(String, t, k), now), KV.read(String, t, k, now), KV.get_copy(t, k, now),
-    Equal.sym(Maybe<&2, String>, KV.read(String, t, k, now), Laws.live_val(String, KV.entry(String, t, k), now), Laws.read_entry(String, t, k, now)),
+def read_eq(+t: KV.Trie<KV.Val>, +k: String, +now: Nat) -> {Laws.live_val(KV.Val, KV.entry(KV.Val, t, k), now) == KV.read(KV.Val, t, k, now) : Maybe<&2, KV.Val>}:
+  Equal.sym(Maybe<&2, KV.Val>, KV.read(KV.Val, t, k, now), Laws.live_val(KV.Val, KV.entry(KV.Val, t, k), now), Laws.read_entry(KV.Val, t, k, now))
+
+def get_read(+t: KV.Trie<KV.Val>, +k: String, +now: Nat) -> {KV.got_of(Laws.live_val(KV.Val, KV.entry(KV.Val, t, k), now)) == KV.get_copy(t, k, now) : KV.Got}:
+  Equal.trans(KV.Got, KV.got_of(Laws.live_val(KV.Val, KV.entry(KV.Val, t, k), now)), KV.got_of(KV.read(KV.Val, t, k, now)), KV.get_copy(t, k, now),
+    Equal.cong(Maybe<&2, KV.Val>, KV.Got, x => KV.got_of(x), Laws.live_val(KV.Val, KV.entry(KV.Val, t, k), now), KV.read(KV.Val, t, k, now), read_eq(t, k, now)),
     get_copy_eq(t, k, now))
 
-def read_eq(+t: KV.Trie<String>, +k: String, +now: Nat) -> {Laws.live_val(String, KV.entry(String, t, k), now) == KV.read(String, t, k, now) : Maybe<&2, String>}:
-  Equal.sym(Maybe<&2, String>, KV.read(String, t, k, now), Laws.live_val(String, KV.entry(String, t, k), now), Laws.read_entry(String, t, k, now))
-
-def t_get_after_set(+db: KV.Trie<String>, +k: String, +v: String, +now: Nat) -> {T.reply_of(T.exec(R.Get{k}, T.db_of(T.exec(R.Set{k, v}, db, now)), now)) == R.RBulk{v} : R.Reply}:
-  %get_read(KV.set(String, db, k, v), k, now) : {R.r_get(_) == R.RBulk{v} : R.Reply}
-  %Equal.sym(Maybe<&2, KV.Item<String>>, KV.entry(String, KV.set(String, db, k, v), k), Some{KV.Item{v, 0n}}, e_set(db, k, v)) : {R.r_get(Laws.live_val(String, _, now)) == R.RBulk{v} : R.Reply}
+def t_get_after_set(+db: KV.Trie<KV.Val>, +k: String, +v: String, +now: Nat) -> {T.reply_of(T.exec(R.Get{k}, T.db_of(T.exec(R.Set{k, v}, db, now)), now)) == R.RBulk{v} : R.Reply}:
+  %get_read(KV.set(KV.Val, db, k, KV.VStr{v}), k, now) : {R.r_getv(_) == R.RBulk{v} : R.Reply}
+  %Equal.sym(Maybe<&2, KV.Item<KV.Val>>, KV.entry(KV.Val, KV.set(KV.Val, db, k, KV.VStr{v}), k), Some{KV.Item{KV.VStr{v}, 0n}}, e_set(db, k, v)) : {R.r_getv(KV.got_of(Laws.live_val(KV.Val, _, now))) == R.RBulk{v} : R.Reply}
   {==}
 
 # a key is there at now as its code says
@@ -2537,30 +2546,30 @@ def sub_zero(n: Nat) -> {Nat.sub(n, 0n) == n : Nat}:
     case 1n+p:
       {==}
 
-def pick_some(b: Bool, -v: String, -e: Nat) -> {b == Maybe.is_some(&2, KV.Item<String>, Bool.pick(Maybe<&2, KV.Item<String>>, b, Some{KV.Item{v, e}}, None{})) : Bool}:
+def pick_some(b: Bool, -v: KV.Val, -e: Nat) -> {b == Maybe.is_some(&2, KV.Item<KV.Val>, Bool.pick(Maybe<&2, KV.Item<KV.Val>>, b, Some{KV.Item{v, e}}, None{})) : Bool}:
   match b:
     case True{}:
       {==}
     case False{}:
       {==}
 
-def live_code(m: Maybe<&2, KV.Item<String>>, +now: Nat) -> {R.code.live(Laws.item_code(String, m), now) == Maybe.is_some(&2, KV.Item<String>, R.ent.live(now, m)) : Bool}:
+def live_code(m: Maybe<&2, KV.Item<KV.Val>>, +now: Nat) -> {R.code.live(Laws.item_code(KV.Val, m), now) == Maybe.is_some(&2, KV.Item<KV.Val>, R.ent.live(now, m)) : Bool}:
   match m:
     case Some{KV.Item{v, +e}}:
-      %Equal.sym(Nat, Nat.sub(e, 0n), e, sub_zero(e)) : {KV.live(now, _) == Maybe.is_some(&2, KV.Item<String>, R.ent.live(now, Some{KV.Item{v, e}})) : Bool}
+      %Equal.sym(Nat, Nat.sub(e, 0n), e, sub_zero(e)) : {KV.live(now, _) == Maybe.is_some(&2, KV.Item<KV.Val>, R.ent.live(now, Some{KV.Item{v, e}})) : Bool}
       pick_some(KV.live(now, e), v, e)
     case None{}:
       {==}
 
 # DEL of one key answers whether the key was there at now
-def t_del_one_count(+db: KV.Trie<String>, +k: String, +now: Nat) -> {T.reply_of(T.exec(R.Del{[k]}, db, now)) == R.r_int(Bool.pick(Nat, Maybe.is_some(&2, KV.Item<String>, R.ent.live(now, KV.entry(String, db, k))), 1n, 0n)) : R.Reply}:
-  %code_eq(String, db, k) : {R.r_int(Bool.pick(Nat, R.code.live(_, now), 1n, 0n)) == R.r_int(Bool.pick(Nat, Maybe.is_some(&2, KV.Item<String>, R.ent.live(now, KV.entry(String, db, k))), 1n, 0n)) : R.Reply}
-  Equal.cong(Bool, R.Reply, b => R.r_int(Bool.pick(Nat, b, 1n, 0n)), R.code.live(Laws.item_code(String, KV.entry(String, db, k)), now), Maybe.is_some(&2, KV.Item<String>, R.ent.live(now, KV.entry(String, db, k))), live_code(KV.entry(String, db, k), now))
+def t_del_one_count(+db: KV.Trie<KV.Val>, +k: String, +now: Nat) -> {T.reply_of(T.exec(R.Del{[k]}, db, now)) == R.r_int(Bool.pick(Nat, Maybe.is_some(&2, KV.Item<KV.Val>, R.ent.live(now, KV.entry(KV.Val, db, k))), 1n, 0n)) : R.Reply}:
+  %code_eq(KV.Val, db, k) : {R.r_int(Bool.pick(Nat, R.code.live(_, now), 1n, 0n)) == R.r_int(Bool.pick(Nat, Maybe.is_some(&2, KV.Item<KV.Val>, R.ent.live(now, KV.entry(KV.Val, db, k))), 1n, 0n)) : R.Reply}
+  Equal.cong(Bool, R.Reply, b => R.r_int(Bool.pick(Nat, b, 1n, 0n)), R.code.live(Laws.item_code(KV.Val, KV.entry(KV.Val, db, k)), now), Maybe.is_some(&2, KV.Item<KV.Val>, R.ent.live(now, KV.entry(KV.Val, db, k))), live_code(KV.entry(KV.Val, db, k), now))
 
 # Reads
 # -----
 
-def t_reads_go(c: R.Cmd, +db: KV.Trie<String>, +now: Nat) -> {Laws.is_read(c) == True{} : Bool} -> {T.db_of(T.exec(c, db, now)) == db : KV.Trie<String>}:
+def t_reads_go(c: R.Cmd, +db: KV.Trie<KV.Val>, +now: Nat) -> {Laws.is_read(c) == True{} : Bool} -> {T.db_of(T.exec(c, db, now)) == db : KV.Trie<KV.Val>}:
   match c:
     case R.Ping{}:
       e => {==}
@@ -2569,21 +2578,21 @@ def t_reads_go(c: R.Cmd, +db: KV.Trie<String>, +now: Nat) -> {Laws.is_read(c) ==
     case R.Get{k}:
       e => {==}
     case R.Set{k, v}:
-      e => Empty.absurd({T.db_of(T.exec(R.Set{k, v}, db, now)) == db : KV.Trie<String>}, false_true(e))
+      e => Empty.absurd({T.db_of(T.exec(R.Set{k, v}, db, now)) == db : KV.Trie<KV.Val>}, false_true(e))
     case R.Del{ks}:
-      e => Empty.absurd({T.db_of(T.exec(R.Del{ks}, db, now)) == db : KV.Trie<String>}, false_true(e))
+      e => Empty.absurd({T.db_of(T.exec(R.Del{ks}, db, now)) == db : KV.Trie<KV.Val>}, false_true(e))
     case R.Exists{ks}:
       e => {==}
     case R.IncrBy{k, by}:
-      e => Empty.absurd({T.db_of(T.exec(R.IncrBy{k, by}, db, now)) == db : KV.Trie<String>}, false_true(e))
+      e => Empty.absurd({T.db_of(T.exec(R.IncrBy{k, by}, db, now)) == db : KV.Trie<KV.Val>}, false_true(e))
     case R.MGet{ks}:
       e => {==}
     case R.MSet{ps}:
-      e => Empty.absurd({T.db_of(T.exec(R.MSet{ps}, db, now)) == db : KV.Trie<String>}, false_true(e))
+      e => Empty.absurd({T.db_of(T.exec(R.MSet{ps}, db, now)) == db : KV.Trie<KV.Val>}, false_true(e))
     case R.DbSize{}:
       e => {==}
     case R.FlushDb{}:
-      e => Empty.absurd({T.db_of(T.exec(R.FlushDb{}, db, now)) == db : KV.Trie<String>}, false_true(e))
+      e => Empty.absurd({T.db_of(T.exec(R.FlushDb{}, db, now)) == db : KV.Trie<KV.Val>}, false_true(e))
     case R.Keys{p}:
       e => {==}
     case R.Scan{a}:
@@ -2591,19 +2600,19 @@ def t_reads_go(c: R.Cmd, +db: KV.Trie<String>, +now: Nat) -> {Laws.is_read(c) ==
     case R.Peek{k, o}:
       e => {==}
     case R.Upd{k, op}:
-      e => Empty.absurd({T.db_of(T.exec(R.Upd{k, op}, db, now)) == db : KV.Trie<String>}, false_true(e))
+      e => Empty.absurd({T.db_of(T.exec(R.Upd{k, op}, db, now)) == db : KV.Trie<KV.Val>}, false_true(e))
     case R.MSetNx{ps}:
-      e => Empty.absurd({T.db_of(T.exec(R.MSetNx{ps}, db, now)) == db : KV.Trie<String>}, false_true(e))
+      e => Empty.absurd({T.db_of(T.exec(R.MSetNx{ps}, db, now)) == db : KV.Trie<KV.Val>}, false_true(e))
     case R.Rename{s, d, nx}:
-      e => Empty.absurd({T.db_of(T.exec(R.Rename{s, d, nx}, db, now)) == db : KV.Trie<String>}, false_true(e))
+      e => Empty.absurd({T.db_of(T.exec(R.Rename{s, d, nx}, db, now)) == db : KV.Trie<KV.Val>}, false_true(e))
     case R.BitOp{op, d, srcs}:
-      e => Empty.absurd({T.db_of(T.exec(R.BitOp{op, d, srcs}, db, now)) == db : KV.Trie<String>}, false_true(e))
+      e => Empty.absurd({T.db_of(T.exec(R.BitOp{op, d, srcs}, db, now)) == db : KV.Trie<KV.Val>}, false_true(e))
     case R.Own{o}:
       e => {==}
     case R.Bad{r}:
       e => {==}
 
-def t_reads_keep_db(c: R.Cmd, +db: KV.Trie<String>, +now: Nat, e: {Laws.is_read(c) == True{} : Bool}) -> {T.db_of(T.exec(c, db, now)) == db : KV.Trie<String>}:
+def t_reads_keep_db(c: R.Cmd, +db: KV.Trie<KV.Val>, +now: Nat, e: {Laws.is_read(c) == True{} : Bool}) -> {T.db_of(T.exec(c, db, now)) == db : KV.Trie<KV.Val>}:
   t_reads_go(c, db, now)(e)
 
 # Multi-key writes
@@ -2613,23 +2622,23 @@ def t_reads_keep_db(c: R.Cmd, +db: KV.Trie<String>, +now: Nat, e: {Laws.is_read(
 # (KV.code.at) before it deletes it: the count of the keys there at now.
 
 # what DEL leaves, spelled as a fold
-def del_all(ks: List<&2, String>, db: KV.Trie<String>) -> KV.Trie<String>:
+def del_all(ks: List<&2, String>, db: KV.Trie<KV.Val>) -> KV.Trie<KV.Val>:
   match ks:
     case Nil{}:
       db
     case Con{+k, rest}:
-      del_all(rest, KV.del(String, db, k))
+      del_all(rest, KV.del(KV.Val, db, k))
 
 # and how many of its keys were there at now, a deleted key counting no
 # more
-def del_count(ks: List<&2, String>, +now: Nat, +db: KV.Trie<String>) -> Nat:
+def del_count(ks: List<&2, String>, +now: Nat, +db: KV.Trie<KV.Val>) -> Nat:
   match ks:
     case Nil{}:
       0n
     case Con{+k, rest}:
-      Nat.add(del_count(rest, now, KV.del(String, db, k)), Bool.pick(Nat, R.code.live(Laws.item_code(String, KV.entry(String, db, k)), now), 1n, 0n))
+      Nat.add(del_count(rest, now, KV.del(KV.Val, db, k)), Bool.pick(Nat, R.code.live(Laws.item_code(KV.Val, KV.entry(KV.Val, db, k)), now), 1n, 0n))
 
-def dels_t(r: R.Dels) -> KV.Trie<String>:
+def dels_t(r: R.Dels) -> KV.Trie<KV.Val>:
   match r:
     case R.Dels{l, g, x, t}:
       t
@@ -2639,7 +2648,7 @@ def dels_live(r: R.Dels) -> Nat:
     case R.Dels{l, g, x, t}:
       l
 
-def put_t(+c: Nat, +now: Nat, r: R.Dels) -> {dels_t(R.del_keys.put(c, now, r)) == dels_t(r) : KV.Trie<String>}:
+def put_t(+c: Nat, +now: Nat, r: R.Dels) -> {dels_t(R.del_keys.put(c, now, r)) == dels_t(r) : KV.Trie<KV.Val>}:
   match r:
     case R.Dels{l, g, x, t}:
       {==}
@@ -2649,26 +2658,26 @@ def put_live(+c: Nat, +now: Nat, r: R.Dels) -> {dels_live(R.del_keys.put(c, now,
     case R.Dels{l, g, x, t}:
       {==}
 
-def del_keys_t(ks: List<&2, String>, +now: Nat, +db: KV.Trie<String>) -> {dels_t(R.del_keys(ks, now, db)) == del_all(ks, db) : KV.Trie<String>}:
+def del_keys_t(ks: List<&2, String>, +now: Nat, +db: KV.Trie<KV.Val>) -> {dels_t(R.del_keys(ks, now, db)) == del_all(ks, db) : KV.Trie<KV.Val>}:
   match ks:
     case Nil{}:
       {==}
     case Con{+k, +rest}:
-      Equal.trans(KV.Trie<String>, dels_t(R.del_keys.put(KV.code.at(String, db, k, KV.hash(k)), now, R.del_keys(rest, now, KV.del(String, db, k)))), dels_t(R.del_keys(rest, now, KV.del(String, db, k))), del_all(rest, KV.del(String, db, k)),
-        put_t(KV.code.at(String, db, k, KV.hash(k)), now, R.del_keys(rest, now, KV.del(String, db, k))),
-        del_keys_t(rest, now, KV.del(String, db, k)))
+      Equal.trans(KV.Trie<KV.Val>, dels_t(R.del_keys.put(KV.code.at(KV.Val, db, k, KV.hash(k)), now, R.del_keys(rest, now, KV.del(KV.Val, db, k)))), dels_t(R.del_keys(rest, now, KV.del(KV.Val, db, k))), del_all(rest, KV.del(KV.Val, db, k)),
+        put_t(KV.code.at(KV.Val, db, k, KV.hash(k)), now, R.del_keys(rest, now, KV.del(KV.Val, db, k))),
+        del_keys_t(rest, now, KV.del(KV.Val, db, k)))
 
-def del_keys_live(ks: List<&2, String>, +now: Nat, +db: KV.Trie<String>) -> {dels_live(R.del_keys(ks, now, db)) == del_count(ks, now, db) : Nat}:
+def del_keys_live(ks: List<&2, String>, +now: Nat, +db: KV.Trie<KV.Val>) -> {dels_live(R.del_keys(ks, now, db)) == del_count(ks, now, db) : Nat}:
   match ks:
     case Nil{}:
       {==}
     case Con{+k, +rest}:
-      %code_eq(String, db, k) : {dels_live(R.del_keys.put(_, now, R.del_keys(rest, now, KV.del(String, db, k)))) == del_count(Con{k, rest}, now, db) : Nat}
-      Equal.trans(Nat, dels_live(R.del_keys.put(Laws.item_code(String, KV.entry(String, db, k)), now, R.del_keys(rest, now, KV.del(String, db, k)))), Nat.add(dels_live(R.del_keys(rest, now, KV.del(String, db, k))), Bool.pick(Nat, R.code.live(Laws.item_code(String, KV.entry(String, db, k)), now), 1n, 0n)), del_count(Con{k, rest}, now, db),
-        put_live(Laws.item_code(String, KV.entry(String, db, k)), now, R.del_keys(rest, now, KV.del(String, db, k))),
-        Equal.cong(Nat, Nat, z => Nat.add(z, Bool.pick(Nat, R.code.live(Laws.item_code(String, KV.entry(String, db, k)), now), 1n, 0n)), dels_live(R.del_keys(rest, now, KV.del(String, db, k))), del_count(rest, now, KV.del(String, db, k)), del_keys_live(rest, now, KV.del(String, db, k))))
+      %code_eq(KV.Val, db, k) : {dels_live(R.del_keys.put(_, now, R.del_keys(rest, now, KV.del(KV.Val, db, k)))) == del_count(Con{k, rest}, now, db) : Nat}
+      Equal.trans(Nat, dels_live(R.del_keys.put(Laws.item_code(KV.Val, KV.entry(KV.Val, db, k)), now, R.del_keys(rest, now, KV.del(KV.Val, db, k)))), Nat.add(dels_live(R.del_keys(rest, now, KV.del(KV.Val, db, k))), Bool.pick(Nat, R.code.live(Laws.item_code(KV.Val, KV.entry(KV.Val, db, k)), now), 1n, 0n)), del_count(Con{k, rest}, now, db),
+        put_live(Laws.item_code(KV.Val, KV.entry(KV.Val, db, k)), now, R.del_keys(rest, now, KV.del(KV.Val, db, k))),
+        Equal.cong(Nat, Nat, z => Nat.add(z, Bool.pick(Nat, R.code.live(Laws.item_code(KV.Val, KV.entry(KV.Val, db, k)), now), 1n, 0n)), dels_live(R.del_keys(rest, now, KV.del(KV.Val, db, k))), del_count(rest, now, KV.del(KV.Val, db, k)), del_keys_live(rest, now, KV.del(KV.Val, db, k))))
 
-def del_reply_t(r: R.Dels) -> {T.db_of(T.del_reply(r)) == dels_t(r) : KV.Trie<String>}:
+def del_reply_t(r: R.Dels) -> {T.db_of(T.del_reply(r)) == dels_t(r) : KV.Trie<KV.Val>}:
   match r:
     case R.Dels{l, g, x, t}:
       {==}
@@ -2679,11 +2688,11 @@ def del_reply_r(r: R.Dels) -> {T.reply_of(T.del_reply(r)) == R.r_int(dels_live(r
       {==}
 
 # DEL changes the trie as del_all does, and answers del_count
-def exec_del(+ks: List<&2, String>, +db: KV.Trie<String>, +now: Nat) -> {del_all(ks, db) == T.db_of(T.exec(R.Del{ks}, db, now)) : KV.Trie<String>}:
-  Equal.sym(KV.Trie<String>, T.db_of(T.del_reply(R.del_keys(ks, now, db))), del_all(ks, db),
-    Equal.trans(KV.Trie<String>, T.db_of(T.del_reply(R.del_keys(ks, now, db))), dels_t(R.del_keys(ks, now, db)), del_all(ks, db), del_reply_t(R.del_keys(ks, now, db)), del_keys_t(ks, now, db)))
+def exec_del(+ks: List<&2, String>, +db: KV.Trie<KV.Val>, +now: Nat) -> {del_all(ks, db) == T.db_of(T.exec(R.Del{ks}, db, now)) : KV.Trie<KV.Val>}:
+  Equal.sym(KV.Trie<KV.Val>, T.db_of(T.del_reply(R.del_keys(ks, now, db))), del_all(ks, db),
+    Equal.trans(KV.Trie<KV.Val>, T.db_of(T.del_reply(R.del_keys(ks, now, db))), dels_t(R.del_keys(ks, now, db)), del_all(ks, db), del_reply_t(R.del_keys(ks, now, db)), del_keys_t(ks, now, db)))
 
-def exec_del_r(+ks: List<&2, String>, +db: KV.Trie<String>, +now: Nat) -> {R.r_int(del_count(ks, now, db)) == T.reply_of(T.exec(R.Del{ks}, db, now)) : R.Reply}:
+def exec_del_r(+ks: List<&2, String>, +db: KV.Trie<KV.Val>, +now: Nat) -> {R.r_int(del_count(ks, now, db)) == T.reply_of(T.exec(R.Del{ks}, db, now)) : R.Reply}:
   Equal.sym(R.Reply, T.reply_of(T.del_reply(R.del_keys(ks, now, db))), R.r_int(del_count(ks, now, db)),
     Equal.trans(R.Reply, T.reply_of(T.del_reply(R.del_keys(ks, now, db))), R.r_int(dels_live(R.del_keys(ks, now, db))), R.r_int(del_count(ks, now, db)), del_reply_r(R.del_keys(ks, now, db)),
       Equal.cong(Nat, R.Reply, z => R.r_int(z), dels_live(R.del_keys(ks, now, db)), del_count(ks, now, db), del_keys_live(ks, now, db))))
@@ -2704,59 +2713,59 @@ def or_false_r(a: Bool, -b: Bool) -> {Bool.or(a, b) == False{} : Bool} -> {b == 
       e => e
 
 # deleting keys other than j leaves j's entry as it was
-def del_all_frame(ks: List<&2, String>, +db: KV.Trie<String>, +j: String) -> {Laws.any_key(j, ks) == False{} : Bool} -> {KV.entry(String, del_all(ks, db), j) == KV.entry(String, db, j) : Maybe<&2, KV.Item<String>>}:
+def del_all_frame(ks: List<&2, String>, +db: KV.Trie<KV.Val>, +j: String) -> {Laws.any_key(j, ks) == False{} : Bool} -> {KV.entry(KV.Val, del_all(ks, db), j) == KV.entry(KV.Val, db, j) : Maybe<&2, KV.Item<KV.Val>>}:
   match ks:
     case Nil{}:
       e => {==}
     case Con{+k, +rest}:
-      +e => Equal.trans(Maybe<&2, KV.Item<String>>, KV.entry(String, del_all(rest, KV.del(String, db, k)), j), KV.entry(String, KV.del(String, db, k), j), KV.entry(String, db, j),
-              del_all_frame(rest, KV.del(String, db, k), j)(or_false_r(KV.str_eq(j, k), Laws.any_key(j, rest))(e)),
-              Laws.entry_del_other(String, db, k, j, Laws.key_eq_false(j, k, or_false_l(KV.str_eq(j, k), Laws.any_key(j, rest))(e))))
+      +e => Equal.trans(Maybe<&2, KV.Item<KV.Val>>, KV.entry(KV.Val, del_all(rest, KV.del(KV.Val, db, k)), j), KV.entry(KV.Val, KV.del(KV.Val, db, k), j), KV.entry(KV.Val, db, j),
+              del_all_frame(rest, KV.del(KV.Val, db, k), j)(or_false_r(KV.str_eq(j, k), Laws.any_key(j, rest))(e)),
+              Laws.entry_del_other(KV.Val, db, k, j, Laws.key_eq_false(j, k, or_false_l(KV.str_eq(j, k), Laws.any_key(j, rest))(e))))
 
-def del_none(+db: KV.Trie<String>, +k: String, +j: String, c: Bool) -> Reflect(String, j, k, c) -> {KV.entry(String, db, j) == None{} : Maybe<&2, KV.Item<String>>} -> {KV.entry(String, KV.del(String, db, k), j) == None{} : Maybe<&2, KV.Item<String>>}:
+def del_none(+db: KV.Trie<KV.Val>, +k: String, +j: String, c: Bool) -> Reflect(String, j, k, c) -> {KV.entry(KV.Val, db, j) == None{} : Maybe<&2, KV.Item<KV.Val>>} -> {KV.entry(KV.Val, KV.del(KV.Val, db, k), j) == None{} : Maybe<&2, KV.Item<KV.Val>>}:
   match c:
     case True{}:
-      ejk => e => %ejk : {KV.entry(String, KV.del(String, db, _), j) == None{} : Maybe<&2, KV.Item<String>>}
-                  Laws.entry_del_same(String, db, j)
+      ejk => e => %ejk : {KV.entry(KV.Val, KV.del(KV.Val, db, _), j) == None{} : Maybe<&2, KV.Item<KV.Val>>}
+                  Laws.entry_del_same(KV.Val, db, j)
     case False{}:
-      ne => e => Equal.trans(Maybe<&2, KV.Item<String>>, KV.entry(String, KV.del(String, db, k), j), KV.entry(String, db, j), None{}, Laws.entry_del_other(String, db, k, j, ne), e)
+      ne => e => Equal.trans(Maybe<&2, KV.Item<KV.Val>>, KV.entry(KV.Val, KV.del(KV.Val, db, k), j), KV.entry(KV.Val, db, j), None{}, Laws.entry_del_other(KV.Val, db, k, j, ne), e)
 
 # a key with no entry stays so through any deletes
-def del_all_none(ks: List<&2, String>, +db: KV.Trie<String>, +j: String) -> {KV.entry(String, db, j) == None{} : Maybe<&2, KV.Item<String>>} -> {KV.entry(String, del_all(ks, db), j) == None{} : Maybe<&2, KV.Item<String>>}:
+def del_all_none(ks: List<&2, String>, +db: KV.Trie<KV.Val>, +j: String) -> {KV.entry(KV.Val, db, j) == None{} : Maybe<&2, KV.Item<KV.Val>>} -> {KV.entry(KV.Val, del_all(ks, db), j) == None{} : Maybe<&2, KV.Item<KV.Val>>}:
   match ks:
     case Nil{}:
       e => e
     case Con{+k, +rest}:
-      e => del_all_none(rest, KV.del(String, db, k), j)(del_none(db, k, j, KV.str_eq(j, k), str_refl(j, k), e))
+      e => del_all_none(rest, KV.del(KV.Val, db, k), j)(del_none(db, k, j, KV.str_eq(j, k), str_refl(j, k), e))
 
 # a deleted key has no entry, under any name equal to it
-def entry_del_eq(+db: KV.Trie<String>, -k: String, +j: String, ejk: {j == k : String}) -> {KV.entry(String, KV.del(String, db, k), j) == None{} : Maybe<&2, KV.Item<String>>}:
-  %ejk : {KV.entry(String, KV.del(String, db, _), j) == None{} : Maybe<&2, KV.Item<String>>}
-  Laws.entry_del_same(String, db, j)
+def entry_del_eq(+db: KV.Trie<KV.Val>, -k: String, +j: String, ejk: {j == k : String}) -> {KV.entry(KV.Val, KV.del(KV.Val, db, k), j) == None{} : Maybe<&2, KV.Item<KV.Val>>}:
+  %ejk : {KV.entry(KV.Val, KV.del(KV.Val, db, _), j) == None{} : Maybe<&2, KV.Item<KV.Val>>}
+  Laws.entry_del_same(KV.Val, db, j)
 
-def del_eff_step(+db: KV.Trie<String>, +k: String, +rest: List<&2, String>, +j: String, c1: Bool, c2: Bool)
+def del_eff_step(+db: KV.Trie<KV.Val>, +k: String, +rest: List<&2, String>, +j: String, c1: Bool, c2: Bool)
   -> Reflect(String, j, k, c1)
-  -> ({c2 == True{} : Bool} -> {KV.entry(String, del_all(rest, KV.del(String, db, k)), j) == None{} : Maybe<&2, KV.Item<String>>})
+  -> ({c2 == True{} : Bool} -> {KV.entry(KV.Val, del_all(rest, KV.del(KV.Val, db, k)), j) == None{} : Maybe<&2, KV.Item<KV.Val>>})
   -> {Bool.or(c1, c2) == True{} : Bool}
-  -> {KV.entry(String, del_all(rest, KV.del(String, db, k)), j) == None{} : Maybe<&2, KV.Item<String>>}:
+  -> {KV.entry(KV.Val, del_all(rest, KV.del(KV.Val, db, k)), j) == None{} : Maybe<&2, KV.Item<KV.Val>>}:
   match c1 c2:
     case True{} _:
-      ejk => ih => e => del_all_none(rest, KV.del(String, db, k), j)(entry_del_eq(db, k, j, ejk))
+      ejk => ih => e => del_all_none(rest, KV.del(KV.Val, db, k), j)(entry_del_eq(db, k, j, ejk))
     case False{} True{}:
       ne => ih => e => ih({==})
     case False{} False{}:
-      ne => ih => e => Empty.absurd({KV.entry(String, del_all(rest, KV.del(String, db, k)), j) == None{} : Maybe<&2, KV.Item<String>>}, false_true(e))
+      ne => ih => e => Empty.absurd({KV.entry(KV.Val, del_all(rest, KV.del(KV.Val, db, k)), j) == None{} : Maybe<&2, KV.Item<KV.Val>>}, false_true(e))
 
 # every key DEL names has no entry afterwards
-def del_all_effect(ks: List<&2, String>, +db: KV.Trie<String>, +j: String) -> {Laws.any_key(j, ks) == True{} : Bool} -> {KV.entry(String, del_all(ks, db), j) == None{} : Maybe<&2, KV.Item<String>>}:
+def del_all_effect(ks: List<&2, String>, +db: KV.Trie<KV.Val>, +j: String) -> {Laws.any_key(j, ks) == True{} : Bool} -> {KV.entry(KV.Val, del_all(ks, db), j) == None{} : Maybe<&2, KV.Item<KV.Val>>}:
   match ks:
     case Nil{}:
-      e => Empty.absurd({KV.entry(String, db, j) == None{} : Maybe<&2, KV.Item<String>>}, false_true(e))
+      e => Empty.absurd({KV.entry(KV.Val, db, j) == None{} : Maybe<&2, KV.Item<KV.Val>>}, false_true(e))
     case Con{+k, +rest}:
-      del_eff_step(db, k, rest, j, KV.str_eq(j, k), Laws.any_key(j, rest))(str_refl(j, k), del_all_effect(rest, KV.del(String, db, k), j))
+      del_eff_step(db, k, rest, j, KV.str_eq(j, k), Laws.any_key(j, rest))(str_refl(j, k), del_all_effect(rest, KV.del(KV.Val, db, k), j))
 
-def t_del_effect(+ks: List<&2, String>, +db: KV.Trie<String>, +j: String, +now: Nat, e: {Laws.any_key(j, ks) == True{} : Bool}) -> {KV.entry(String, T.db_of(T.exec(R.Del{ks}, db, now)), j) == None{} : Maybe<&2, KV.Item<String>>}:
-  %exec_del(ks, db, now) : {KV.entry(String, _, j) == None{} : Maybe<&2, KV.Item<String>>}
+def t_del_effect(+ks: List<&2, String>, +db: KV.Trie<KV.Val>, +j: String, +now: Nat, e: {Laws.any_key(j, ks) == True{} : Bool}) -> {KV.entry(KV.Val, T.db_of(T.exec(R.Del{ks}, db, now)), j) == None{} : Maybe<&2, KV.Item<KV.Val>>}:
+  %exec_del(ks, db, now) : {KV.entry(KV.Val, _, j) == None{} : Maybe<&2, KV.Item<KV.Val>>}
   del_all_effect(ks, db, j)(e)
 
 # The frame law
@@ -2764,72 +2773,74 @@ def t_del_effect(+ks: List<&2, String>, +db: KV.Trie<String>, +j: String, +now: 
 # a write of another key leaves j's entry as it was: INCRBY's, MSET's and
 # an update's, whatever they read
 
-def incr_fit_frame(+db: KV.Trie<String>, +k: String, +n: R.Int, +j: String, ok: Bool, keep: Bool, ne: {j != k : String}) -> {KV.entry(String, T.db_of(T.incr.fit(db, k, KV.hash(k), n, ok, keep)), j) == KV.entry(String, db, j) : Maybe<&2, KV.Item<String>>}:
+def incr_fit_frame(+db: KV.Trie<KV.Val>, +k: String, +n: R.Int, +j: String, ok: Bool, keep: Bool, ne: {j != k : String}) -> {KV.entry(KV.Val, T.db_of(T.incr.fit(db, k, KV.hash(k), n, ok, keep)), j) == KV.entry(KV.Val, db, j) : Maybe<&2, KV.Item<KV.Val>>}:
   match ok keep:
     case True{} True{}:
-      Laws.entry_keep_other(String, db, k, j, R.int_show(n), ne)
+      Laws.entry_keep_other(KV.Val, db, k, j, KV.VStr{R.int_show(n)}, ne)
     case True{} False{}:
-      Laws.entry_setx_other(String, db, k, j, R.int_show(n), 0n, ne)
+      Laws.entry_setx_other(KV.Val, db, k, j, KV.VStr{R.int_show(n)}, 0n, ne)
     case False{} True{}:
       {==}
     case False{} False{}:
       {==}
 
-def incr_num_frame(+db: KV.Trie<String>, +k: String, +by: R.Int, +j: String, cur: Maybe<&2, R.Int>, ne: {j != k : String}) -> {KV.entry(String, T.db_of(T.incr.num(db, k, KV.hash(k), by, cur)), j) == KV.entry(String, db, j) : Maybe<&2, KV.Item<String>>}:
+def incr_num_frame(+db: KV.Trie<KV.Val>, +k: String, +by: R.Int, +j: String, cur: Maybe<&2, R.Int>, ne: {j != k : String}) -> {KV.entry(KV.Val, T.db_of(T.incr.num(db, k, KV.hash(k), by, cur)), j) == KV.entry(KV.Val, db, j) : Maybe<&2, KV.Item<KV.Val>>}:
   match cur:
     case Some{+i}:
       incr_fit_frame(db, k, R.int_add(i, by), j, R.int_fits(R.int_add(i, by)), True{}, ne)
     case None{}:
       {==}
 
-def incr_frame(+db: KV.Trie<String>, +k: String, +by: R.Int, +j: String, old: Maybe<&2, String>, ne: {j != k : String}) -> {KV.entry(String, T.db_of(T.incr.got(db, k, KV.hash(k), by, old)), j) == KV.entry(String, db, j) : Maybe<&2, KV.Item<String>>}:
+def incr_frame(+db: KV.Trie<KV.Val>, +k: String, +by: R.Int, +j: String, old: KV.Got, ne: {j != k : String}) -> {KV.entry(KV.Val, T.db_of(T.incr.got(db, k, KV.hash(k), by, old)), j) == KV.entry(KV.Val, db, j) : Maybe<&2, KV.Item<KV.Val>>}:
   match old:
-    case Some{s}:
+    case KV.GStr{s}:
       incr_num_frame(db, k, by, j, R.int_read(s), ne)
-    case None{}:
+    case KV.GColl{}:
+      {==}
+    case KV.GNone{}:
       incr_fit_frame(db, k, by, j, R.int_fits(by), False{}, ne)
 
-def upd_ch_frame(+t: KV.Trie<String>, +k: String, +j: String, r: R.Reply, ch: R.Change, ne: {j != k : String}) -> {KV.entry(String, T.db_of(T.upd.ch(t, k, KV.hash(k), r, ch)), j) == KV.entry(String, t, j) : Maybe<&2, KV.Item<String>>}:
+def upd_ch_frame(+t: KV.Trie<KV.Val>, +k: String, +j: String, r: R.Reply, ch: R.Change, ne: {j != k : String}) -> {KV.entry(KV.Val, T.db_of(T.upd.ch(t, k, KV.hash(k), r, ch)), j) == KV.entry(KV.Val, t, j) : Maybe<&2, KV.Item<KV.Val>>}:
   match ch:
     case R.CKeep{}:
       {==}
     case R.CDel{}:
-      Laws.entry_del_other(String, t, k, j, ne)
+      Laws.entry_del_other(KV.Val, t, k, j, ne)
     case R.CExp{+e}:
-      Laws.entry_expire_other(String, t, k, j, e, ne)
+      Laws.entry_expire_other(KV.Val, t, k, j, e, ne)
     case R.CPut{+v, +e}:
-      Laws.entry_setx_other(String, t, k, j, v, e, ne)
+      Laws.entry_setx_other(KV.Val, t, k, j, KV.VStr{v}, e, ne)
     case R.CKeepT{+v}:
-      Laws.entry_keep_other(String, t, k, j, v, ne)
+      Laws.entry_keep_other(KV.Val, t, k, j, KV.VStr{v}, ne)
     case R.CApp{a, +v}:
-      Laws.entry_keep_other(String, t, k, j, v, ne)
+      Laws.entry_keep_other(KV.Val, t, k, j, KV.VStr{v}, ne)
     case R.CRange{o, a, +v}:
-      Laws.entry_keep_other(String, t, k, j, v, ne)
+      Laws.entry_keep_other(KV.Val, t, k, j, KV.VStr{v}, ne)
 
-def upd_frame(+t: KV.Trie<String>, +k: String, +j: String, o: R.Out, ne: {j != k : String}) -> {KV.entry(String, T.db_of(T.upd.put(t, k, KV.hash(k), o)), j) == KV.entry(String, t, j) : Maybe<&2, KV.Item<String>>}:
+def upd_frame(+t: KV.Trie<KV.Val>, +k: String, +j: String, o: R.Out, ne: {j != k : String}) -> {KV.entry(KV.Val, T.db_of(T.upd.put(t, k, KV.hash(k), o)), j) == KV.entry(KV.Val, t, j) : Maybe<&2, KV.Item<KV.Val>>}:
   match o:
     case R.Out{+r, +ch}:
       upd_ch_frame(t, k, j, r, ch, ne)
 
-def mset_frame(ps: List<&2, R.KVPair>, +db: KV.Trie<String>, +j: String) -> {Laws.any_pair(j, ps) == False{} : Bool} -> {KV.entry(String, T.mset_pairs(ps, db), j) == KV.entry(String, db, j) : Maybe<&2, KV.Item<String>>}:
+def mset_frame(ps: List<&2, R.KVPair>, +db: KV.Trie<KV.Val>, +j: String) -> {Laws.any_pair(j, ps) == False{} : Bool} -> {KV.entry(KV.Val, T.mset_pairs(ps, db), j) == KV.entry(KV.Val, db, j) : Maybe<&2, KV.Item<KV.Val>>}:
   match ps:
     case Nil{}:
       e => {==}
     case Con{R.KP{+k, +v}, +rest}:
-      +e => Equal.trans(Maybe<&2, KV.Item<String>>, KV.entry(String, T.mset_pairs(rest, KV.set(String, db, k, v)), j), KV.entry(String, KV.set(String, db, k, v), j), KV.entry(String, db, j),
-              mset_frame(rest, KV.set(String, db, k, v), j)(or_false_r(KV.str_eq(j, k), Laws.any_pair(j, rest))(e)),
-              Laws.entry_setx_other(String, db, k, j, v, 0n, Laws.key_eq_false(j, k, or_false_l(KV.str_eq(j, k), Laws.any_pair(j, rest))(e))))
+      +e => Equal.trans(Maybe<&2, KV.Item<KV.Val>>, KV.entry(KV.Val, T.mset_pairs(rest, KV.set(KV.Val, db, k, KV.VStr{v})), j), KV.entry(KV.Val, KV.set(KV.Val, db, k, KV.VStr{v}), j), KV.entry(KV.Val, db, j),
+              mset_frame(rest, KV.set(KV.Val, db, k, KV.VStr{v}), j)(or_false_r(KV.str_eq(j, k), Laws.any_pair(j, rest))(e)),
+              Laws.entry_setx_other(KV.Val, db, k, j, KV.VStr{v}, 0n, Laws.key_eq_false(j, k, or_false_l(KV.str_eq(j, k), Laws.any_pair(j, rest))(e))))
 
 # MSETNX's and RENAME's writes, whatever they found, leave a key they do
 # not write as it was
-def msetnx_frame(b: Bool, ps: List<&2, R.KVPair>, +db: KV.Trie<String>, +j: String) -> {Laws.any_pair(j, ps) == False{} : Bool} -> {KV.entry(String, T.db_of(T.msetnx(b, ps, db)), j) == KV.entry(String, db, j) : Maybe<&2, KV.Item<String>>}:
+def msetnx_frame(b: Bool, ps: List<&2, R.KVPair>, +db: KV.Trie<KV.Val>, +j: String) -> {Laws.any_pair(j, ps) == False{} : Bool} -> {KV.entry(KV.Val, T.db_of(T.msetnx(b, ps, db)), j) == KV.entry(KV.Val, db, j) : Maybe<&2, KV.Item<KV.Val>>}:
   match b:
     case True{}:
       e => {==}
     case False{}:
       mset_frame(ps, db, j)
 
-def ren_frame(r: R.Ren, +nx: Bool, +s: String, +d: String, +db: KV.Trie<String>, +j: String) -> {Laws.any_key(j, [s, d]) == False{} : Bool} -> {KV.entry(String, T.db_of(T.ren(r, nx, s, d, db)), j) == KV.entry(String, db, j) : Maybe<&2, KV.Item<String>>}:
+def ren_frame(r: R.Ren, +nx: Bool, +s: String, +d: String, +db: KV.Trie<KV.Val>, +j: String) -> {Laws.any_key(j, [s, d]) == False{} : Bool} -> {KV.entry(KV.Val, T.db_of(T.ren(r, nx, s, d, db)), j) == KV.entry(KV.Val, db, j) : Maybe<&2, KV.Item<KV.Val>>}:
   match r:
     case R.RnNone{}:
       e => {==}
@@ -2838,20 +2849,27 @@ def ren_frame(r: R.Ren, +nx: Bool, +s: String, +d: String, +db: KV.Trie<String>,
     case R.RnHeld{}:
       e => {==}
     case R.RnMove{+v, +x}:
-      +e => Equal.trans(Maybe<&2, KV.Item<String>>, KV.entry(String, KV.del(String, KV.setx(String, db, d, v, x), s), j), KV.entry(String, KV.setx(String, db, d, v, x), j), KV.entry(String, db, j),
-              Laws.entry_del_other(String, KV.setx(String, db, d, v, x), s, j, Laws.key_eq_false(j, s, or_false_l(KV.str_eq(j, s), Laws.any_key(j, [d]))(e))),
-              Laws.entry_setx_other(String, db, d, j, v, x, Laws.key_eq_false(j, d, or_false_l(KV.str_eq(j, d), Laws.any_key(j, Nil{}))(or_false_r(KV.str_eq(j, s), Laws.any_key(j, [d]))(e)))))
+      +e => Equal.trans(Maybe<&2, KV.Item<KV.Val>>, KV.entry(KV.Val, KV.del(KV.Val, KV.setx(KV.Val, db, d, v, x), s), j), KV.entry(KV.Val, KV.setx(KV.Val, db, d, v, x), j), KV.entry(KV.Val, db, j),
+              Laws.entry_del_other(KV.Val, KV.setx(KV.Val, db, d, v, x), s, j, Laws.key_eq_false(j, s, or_false_l(KV.str_eq(j, s), Laws.any_key(j, [d]))(e))),
+              Laws.entry_setx_other(KV.Val, db, d, j, v, x, Laws.key_eq_false(j, d, or_false_l(KV.str_eq(j, d), Laws.any_key(j, Nil{}))(or_false_r(KV.str_eq(j, s), Laws.any_key(j, [d]))(e)))))
 
 # BITOP's write, for a given value: the destination set or deleted, every
 # other key as it was
-def bitop_frame(e: Bool, +v: String, +d: String, +db: KV.Trie<String>, +j: String) -> {KV.str_eq(j, d) == False{} : Bool} -> {KV.entry(String, T.bitop.t(e, v, d, db), j) == KV.entry(String, db, j) : Maybe<&2, KV.Item<String>>}:
+def bitop_frame(e: Bool, +v: String, +d: String, +db: KV.Trie<KV.Val>, +j: String) -> {KV.str_eq(j, d) == False{} : Bool} -> {KV.entry(KV.Val, T.bitop.t(e, v, d, db), j) == KV.entry(KV.Val, db, j) : Maybe<&2, KV.Item<KV.Val>>}:
   match e:
     case True{}:
-      ne => Laws.entry_del_other(String, db, d, j, Laws.key_eq_false(j, d, ne))
+      ne => Laws.entry_del_other(KV.Val, db, d, j, Laws.key_eq_false(j, d, ne))
     case False{}:
-      ne => Laws.entry_setx_other(String, db, d, j, v, 0n, Laws.key_eq_false(j, d, ne))
+      ne => Laws.entry_setx_other(KV.Val, db, d, j, KV.VStr{v}, 0n, Laws.key_eq_false(j, d, ne))
 
-def frame_go(c: R.Cmd, +db: KV.Trie<String>, +j: String, +now: Nat) -> {Laws.writes(c, j) == False{} : Bool} -> {KV.entry(String, T.db_of(T.exec(c, db, now)), j) == KV.entry(String, db, j) : Maybe<&2, KV.Item<String>>}:
+def bitop_go_frame(w: Bool, +op: R.BitK, +srcs: List<&2, String>, +d: String, +db: KV.Trie<KV.Val>, +j: String, +now: Nat) -> {KV.str_eq(j, d) == False{} : Bool} -> {KV.entry(KV.Val, T.db_of(T.bitop.go(w, op, srcs, d, db, now)), j) == KV.entry(KV.Val, db, j) : Maybe<&2, KV.Item<KV.Val>>}:
+  match w:
+    case True{}:
+      e => {==}
+    case False{}:
+      e => bitop_frame(String.is_empty(R.bitop.val(op, srcs, now, db)), R.bitop.val(op, srcs, now, db), d, db, j)(e)
+
+def frame_go(c: R.Cmd, +db: KV.Trie<KV.Val>, +j: String, +now: Nat) -> {Laws.writes(c, j) == False{} : Bool} -> {KV.entry(KV.Val, T.db_of(T.exec(c, db, now)), j) == KV.entry(KV.Val, db, j) : Maybe<&2, KV.Item<KV.Val>>}:
   match c:
     case R.Ping{}:
       e => {==}
@@ -2860,14 +2878,14 @@ def frame_go(c: R.Cmd, +db: KV.Trie<String>, +j: String, +now: Nat) -> {Laws.wri
     case R.Get{k}:
       e => {==}
     case R.Set{+k, +v}:
-      e => Laws.entry_setx_other(String, db, k, j, v, 0n, Laws.key_eq_false(j, k, e))
+      e => Laws.entry_setx_other(KV.Val, db, k, j, KV.VStr{v}, 0n, Laws.key_eq_false(j, k, e))
     case R.Del{+ks}:
-      e => %exec_del(ks, db, now) : {KV.entry(String, _, j) == KV.entry(String, db, j) : Maybe<&2, KV.Item<String>>}
+      e => %exec_del(ks, db, now) : {KV.entry(KV.Val, _, j) == KV.entry(KV.Val, db, j) : Maybe<&2, KV.Item<KV.Val>>}
            del_all_frame(ks, db, j)(e)
     case R.Exists{ks}:
       e => {==}
     case R.IncrBy{+k, +by}:
-      e => incr_frame(db, k, by, j, KV.live.at(String, db, k, KV.hash(k), now), Laws.key_eq_false(j, k, e))
+      e => incr_frame(db, k, by, j, KV.get_copy.at(db, k, KV.hash(k), now), Laws.key_eq_false(j, k, e))
     case R.MGet{ks}:
       e => {==}
     case R.MSet{+ps}:
@@ -2875,7 +2893,7 @@ def frame_go(c: R.Cmd, +db: KV.Trie<String>, +j: String, +now: Nat) -> {Laws.wri
     case R.DbSize{}:
       e => {==}
     case R.FlushDb{}:
-      e => Empty.absurd({KV.entry(String, KV.empty(String), j) == KV.entry(String, db, j) : Maybe<&2, KV.Item<String>>}, true_false(e))
+      e => Empty.absurd({KV.entry(KV.Val, KV.empty(KV.Val), j) == KV.entry(KV.Val, db, j) : Maybe<&2, KV.Item<KV.Val>>}, true_false(e))
     case R.Keys{p}:
       e => {==}
     case R.Scan{a}:
@@ -2883,19 +2901,19 @@ def frame_go(c: R.Cmd, +db: KV.Trie<String>, +j: String, +now: Nat) -> {Laws.wri
     case R.Peek{k, o}:
       e => {==}
     case R.Upd{+k, +op}:
-      e => upd_frame(db, k, j, R.upd(op, now, R.ent.live(now, KV.entry.at(String, db, k, KV.hash(k)))), Laws.key_eq_false(j, k, e))
+      e => upd_frame(db, k, j, R.upd.v(op, now, R.ent.live(now, KV.entry.at(KV.Val, db, k, KV.hash(k)))), Laws.key_eq_false(j, k, e))
     case R.MSetNx{+ps}:
       e => msetnx_frame(R.pairs.live(ps, now, db), ps, db, j)(e)
     case R.Rename{+s, +d, +nx}:
       e => ren_frame(T.ren.find(db, s, d, nx, now), nx, s, d, db, j)(e)
     case R.BitOp{+op, +d, +srcs}:
-      e => bitop_frame(String.is_empty(R.bitop.val(op, srcs, now, db)), R.bitop.val(op, srcs, now, db), d, db, j)(e)
+      e => bitop_go_frame(R.bitop.wrong(srcs, now, db), op, srcs, d, db, j, now)(e)
     case R.Own{o}:
       e => {==}
     case R.Bad{r}:
       e => {==}
 
-def t_frame(c: R.Cmd, +db: KV.Trie<String>, +j: String, +now: Nat, e: {Laws.writes(c, j) == False{} : Bool}) -> {KV.entry(String, T.db_of(T.exec(c, db, now)), j) == KV.entry(String, db, j) : Maybe<&2, KV.Item<String>>}:
+def t_frame(c: R.Cmd, +db: KV.Trie<KV.Val>, +j: String, +now: Nat, e: {Laws.writes(c, j) == False{} : Bool}) -> {KV.entry(KV.Val, T.db_of(T.exec(c, db, now)), j) == KV.entry(KV.Val, db, j) : Maybe<&2, KV.Item<KV.Val>>}:
   frame_go(c, db, j, now)(e)
 
 # Batches
@@ -2973,43 +2991,43 @@ def Laws.batch_hints(cs, hs, db):
 # -------------------
 # the helpers above, for the spec's exec on the trie alone, at a time now
 
-def t_rfst(r: List<&2, R.Reply> & KV.Trie<String>) -> List<&2, R.Reply>:
+def t_rfst(r: List<&2, R.Reply> & KV.Trie<KV.Val>) -> List<&2, R.Reply>:
   (rs, db) = r
   rs
 
-def t_rsnd(r: List<&2, R.Reply> & KV.Trie<String>) -> KV.Trie<String>:
+def t_rsnd(r: List<&2, R.Reply> & KV.Trie<KV.Val>) -> KV.Trie<KV.Val>:
   (rs, db) = r
   db
 
-def t_eta_r(p: R.Reply & KV.Trie<String>) -> {(T.reply_of(p), T.db_of(p)) == p : R.Reply & KV.Trie<String>}:
+def t_eta_r(p: R.Reply & KV.Trie<KV.Val>) -> {(T.reply_of(p), T.db_of(p)) == p : R.Reply & KV.Trie<KV.Val>}:
   (x, db) = p
   {==}
 
-def t_eta_l(p: List<&2, R.Reply> & KV.Trie<String>) -> {(t_rfst(p), t_rsnd(p)) == p : List<&2, R.Reply> & KV.Trie<String>}:
+def t_eta_l(p: List<&2, R.Reply> & KV.Trie<KV.Val>) -> {(t_rfst(p), t_rsnd(p)) == p : List<&2, R.Reply> & KV.Trie<KV.Val>}:
   (rs, db) = p
   {==}
 
-def t_run(cs: List<&2, R.Cmd>, +db: KV.Trie<String>, +now: Nat) -> List<&2, R.Reply> & KV.Trie<String>:
+def t_run(cs: List<&2, R.Cmd>, +db: KV.Trie<KV.Val>, +now: Nat) -> List<&2, R.Reply> & KV.Trie<KV.Val>:
   match cs:
     case Nil{}:
       (Nil{}, db)
     case Con{+c, rest}:
       T.exec_all.cons(T.reply_of(T.exec(c, db, now)), t_run(rest, T.db_of(T.exec(c, db, now)), now))
 
-def t_batch_go(cs: List<&2, R.Cmd>, +acc: List<&2, R.Reply>, +d: KV.Trie<String>, +now: Nat)
-  -> {(List.reverse.go(&2, R.Reply, acc, t_rfst(t_run(cs, d, now))), t_rsnd(t_run(cs, d, now))) == T.exec_all.fin(T.exec_all.go(cs, now, (acc, d))) : List<&2, R.Reply> & KV.Trie<String>}:
+def t_batch_go(cs: List<&2, R.Cmd>, +acc: List<&2, R.Reply>, +d: KV.Trie<KV.Val>, +now: Nat)
+  -> {(List.reverse.go(&2, R.Reply, acc, t_rfst(t_run(cs, d, now))), t_rsnd(t_run(cs, d, now))) == T.exec_all.fin(T.exec_all.go(cs, now, (acc, d))) : List<&2, R.Reply> & KV.Trie<KV.Val>}:
   match cs:
     case Nil{}:
       {==}
     case Con{+c, +rest}:
-      %t_eta_r(T.exec(c, d, now)) : {(List.reverse.go(&2, R.Reply, acc, t_rfst(t_run(Con{c, rest}, d, now))), t_rsnd(t_run(Con{c, rest}, d, now))) == T.exec_all.fin(T.exec_all.go(rest, now, T.exec_all.put(acc, _))) : List<&2, R.Reply> & KV.Trie<String>}
-      %t_batch_go(rest, Con{T.reply_of(T.exec(c, d, now)), acc}, T.db_of(T.exec(c, d, now)), now) : {(List.reverse.go(&2, R.Reply, acc, t_rfst(t_run(Con{c, rest}, d, now))), t_rsnd(t_run(Con{c, rest}, d, now))) == _ : List<&2, R.Reply> & KV.Trie<String>}
-      %t_eta_l(t_run(rest, T.db_of(T.exec(c, d, now)), now)) : {(List.reverse.go(&2, R.Reply, acc, t_rfst(T.exec_all.cons(T.reply_of(T.exec(c, d, now)), _))), t_rsnd(T.exec_all.cons(T.reply_of(T.exec(c, d, now)), _))) == (List.reverse.go(&2, R.Reply, Con{T.reply_of(T.exec(c, d, now)), acc}, t_rfst(t_run(rest, T.db_of(T.exec(c, d, now)), now))), t_rsnd(t_run(rest, T.db_of(T.exec(c, d, now)), now))) : List<&2, R.Reply> & KV.Trie<String>}
+      %t_eta_r(T.exec(c, d, now)) : {(List.reverse.go(&2, R.Reply, acc, t_rfst(t_run(Con{c, rest}, d, now))), t_rsnd(t_run(Con{c, rest}, d, now))) == T.exec_all.fin(T.exec_all.go(rest, now, T.exec_all.put(acc, _))) : List<&2, R.Reply> & KV.Trie<KV.Val>}
+      %t_batch_go(rest, Con{T.reply_of(T.exec(c, d, now)), acc}, T.db_of(T.exec(c, d, now)), now) : {(List.reverse.go(&2, R.Reply, acc, t_rfst(t_run(Con{c, rest}, d, now))), t_rsnd(t_run(Con{c, rest}, d, now))) == _ : List<&2, R.Reply> & KV.Trie<KV.Val>}
+      %t_eta_l(t_run(rest, T.db_of(T.exec(c, d, now)), now)) : {(List.reverse.go(&2, R.Reply, acc, t_rfst(T.exec_all.cons(T.reply_of(T.exec(c, d, now)), _))), t_rsnd(T.exec_all.cons(T.reply_of(T.exec(c, d, now)), _))) == (List.reverse.go(&2, R.Reply, Con{T.reply_of(T.exec(c, d, now)), acc}, t_rfst(t_run(rest, T.db_of(T.exec(c, d, now)), now))), t_rsnd(t_run(rest, T.db_of(T.exec(c, d, now)), now))) : List<&2, R.Reply> & KV.Trie<KV.Val>}
       {==}
 
-def t_exec_all_run(+cs: List<&2, R.Cmd>, +d: KV.Trie<String>, +now: Nat) -> {t_run(cs, d, now) == T.exec_all(cs, d, now) : List<&2, R.Reply> & KV.Trie<String>}:
-  Equal.trans(List<&2, R.Reply> & KV.Trie<String>, t_run(cs, d, now), (t_rfst(t_run(cs, d, now)), t_rsnd(t_run(cs, d, now))), T.exec_all(cs, d, now),
-    Equal.sym(List<&2, R.Reply> & KV.Trie<String>, (t_rfst(t_run(cs, d, now)), t_rsnd(t_run(cs, d, now))), t_run(cs, d, now), t_eta_l(t_run(cs, d, now))),
+def t_exec_all_run(+cs: List<&2, R.Cmd>, +d: KV.Trie<KV.Val>, +now: Nat) -> {t_run(cs, d, now) == T.exec_all(cs, d, now) : List<&2, R.Reply> & KV.Trie<KV.Val>}:
+  Equal.trans(List<&2, R.Reply> & KV.Trie<KV.Val>, t_run(cs, d, now), (t_rfst(t_run(cs, d, now)), t_rsnd(t_run(cs, d, now))), T.exec_all(cs, d, now),
+    Equal.sym(List<&2, R.Reply> & KV.Trie<KV.Val>, (t_rfst(t_run(cs, d, now)), t_rsnd(t_run(cs, d, now))), t_run(cs, d, now), t_eta_l(t_run(cs, d, now))),
     t_batch_go(cs, Nil{}, d, now))
 
 # Locality
@@ -3073,28 +3091,30 @@ def keyed(c: R.Cmd) -> Bool:
 
 # INCRBY's and an update's replies depend on what they read, not on the
 # trie they write
-def incr_fit_rep(ok: Bool, -keep: Bool, -t: KV.Trie<String>, -u: KV.Trie<String>, -k: String, -h: U32, -n: R.Int) -> {T.reply_of(T.incr.fit(t, k, h, n, ok, keep)) == T.reply_of(T.incr.fit(u, k, h, n, ok, keep)) : R.Reply}:
+def incr_fit_rep(ok: Bool, -keep: Bool, -t: KV.Trie<KV.Val>, -u: KV.Trie<KV.Val>, -k: String, -h: U32, -n: R.Int) -> {T.reply_of(T.incr.fit(t, k, h, n, ok, keep)) == T.reply_of(T.incr.fit(u, k, h, n, ok, keep)) : R.Reply}:
   match ok:
     case True{}:
       {==}
     case False{}:
       {==}
 
-def incr_num_rep(cur: Maybe<&2, R.Int>, -t: KV.Trie<String>, -u: KV.Trie<String>, -k: String, -h: U32, +by: R.Int) -> {T.reply_of(T.incr.num(t, k, h, by, cur)) == T.reply_of(T.incr.num(u, k, h, by, cur)) : R.Reply}:
+def incr_num_rep(cur: Maybe<&2, R.Int>, -t: KV.Trie<KV.Val>, -u: KV.Trie<KV.Val>, -k: String, -h: U32, +by: R.Int) -> {T.reply_of(T.incr.num(t, k, h, by, cur)) == T.reply_of(T.incr.num(u, k, h, by, cur)) : R.Reply}:
   match cur:
     case Some{+i}:
       incr_fit_rep(R.int_fits(R.int_add(i, by)), True{}, t, u, k, h, R.int_add(i, by))
     case None{}:
       {==}
 
-def incr_rep(old: Maybe<&2, String>, -t: KV.Trie<String>, -u: KV.Trie<String>, -k: String, -h: U32, +by: R.Int) -> {T.reply_of(T.incr.got(t, k, h, by, old)) == T.reply_of(T.incr.got(u, k, h, by, old)) : R.Reply}:
+def incr_rep(old: KV.Got, -t: KV.Trie<KV.Val>, -u: KV.Trie<KV.Val>, -k: String, -h: U32, +by: R.Int) -> {T.reply_of(T.incr.got(t, k, h, by, old)) == T.reply_of(T.incr.got(u, k, h, by, old)) : R.Reply}:
   match old:
-    case Some{s}:
+    case KV.GStr{s}:
       incr_num_rep(R.int_read(s), t, u, k, h, by)
-    case None{}:
+    case KV.GColl{}:
+      {==}
+    case KV.GNone{}:
       incr_fit_rep(R.int_fits(by), False{}, t, u, k, h, by)
 
-def upd_ch_rep(ch: R.Change, -r: R.Reply, -t: KV.Trie<String>, -u: KV.Trie<String>, -k: String, -h: U32) -> {T.reply_of(T.upd.ch(t, k, h, r, ch)) == T.reply_of(T.upd.ch(u, k, h, r, ch)) : R.Reply}:
+def upd_ch_rep(ch: R.Change, -r: R.Reply, -t: KV.Trie<KV.Val>, -u: KV.Trie<KV.Val>, -k: String, -h: U32) -> {T.reply_of(T.upd.ch(t, k, h, r, ch)) == T.reply_of(T.upd.ch(u, k, h, r, ch)) : R.Reply}:
   match ch:
     case R.CKeep{}:
       {==}
@@ -3111,45 +3131,45 @@ def upd_ch_rep(ch: R.Change, -r: R.Reply, -t: KV.Trie<String>, -u: KV.Trie<Strin
     case R.CRange{o, a, v}:
       {==}
 
-def upd_rep(o: R.Out, -t: KV.Trie<String>, -u: KV.Trie<String>, -k: String, -h: U32) -> {T.reply_of(T.upd.put(t, k, h, o)) == T.reply_of(T.upd.put(u, k, h, o)) : R.Reply}:
+def upd_rep(o: R.Out, -t: KV.Trie<KV.Val>, -u: KV.Trie<KV.Val>, -k: String, -h: U32) -> {T.reply_of(T.upd.put(t, k, h, o)) == T.reply_of(T.upd.put(u, k, h, o)) : R.Reply}:
   match o:
     case R.Out{r, ch}:
       upd_ch_rep(ch, r, t, u, k, h)
 
-def loc_reply_del(ks: List<&2, String>, +t: KV.Trie<String>, +u: KV.Trie<String>, +now: Nat) -> {keyed(R.Del{ks}) == True{} : Bool} -> {KV.entry(String, t, key_of(R.Del{ks})) == KV.entry(String, u, key_of(R.Del{ks})) : Maybe<&2, KV.Item<String>>} -> {T.reply_of(T.exec(R.Del{ks}, t, now)) == T.reply_of(T.exec(R.Del{ks}, u, now)) : R.Reply}:
+def loc_reply_del(ks: List<&2, String>, +t: KV.Trie<KV.Val>, +u: KV.Trie<KV.Val>, +now: Nat) -> {keyed(R.Del{ks}) == True{} : Bool} -> {KV.entry(KV.Val, t, key_of(R.Del{ks})) == KV.entry(KV.Val, u, key_of(R.Del{ks})) : Maybe<&2, KV.Item<KV.Val>>} -> {T.reply_of(T.exec(R.Del{ks}, t, now)) == T.reply_of(T.exec(R.Del{ks}, u, now)) : R.Reply}:
   match ks:
     case Nil{}:
       kd => e => Empty.absurd({T.reply_of(T.exec(R.Del{Nil{}}, t, now)) == T.reply_of(T.exec(R.Del{Nil{}}, u, now)) : R.Reply}, false_true(kd))
     case Con{+k, Nil{}}:
-      kd => e => Equal.trans(R.Reply, T.reply_of(T.exec(R.Del{[k]}, t, now)), R.r_int(Bool.pick(Nat, Maybe.is_some(&2, KV.Item<String>, R.ent.live(now, KV.entry(String, t, k))), 1n, 0n)), T.reply_of(T.exec(R.Del{[k]}, u, now)),
+      kd => e => Equal.trans(R.Reply, T.reply_of(T.exec(R.Del{[k]}, t, now)), R.r_int(Bool.pick(Nat, Maybe.is_some(&2, KV.Item<KV.Val>, R.ent.live(now, KV.entry(KV.Val, t, k))), 1n, 0n)), T.reply_of(T.exec(R.Del{[k]}, u, now)),
                    t_del_one_count(t, k, now),
-                   Equal.trans(R.Reply, R.r_int(Bool.pick(Nat, Maybe.is_some(&2, KV.Item<String>, R.ent.live(now, KV.entry(String, t, k))), 1n, 0n)), R.r_int(Bool.pick(Nat, Maybe.is_some(&2, KV.Item<String>, R.ent.live(now, KV.entry(String, u, k))), 1n, 0n)), T.reply_of(T.exec(R.Del{[k]}, u, now)),
-                     Equal.cong(Maybe<&2, KV.Item<String>>, R.Reply, m => R.r_int(Bool.pick(Nat, Maybe.is_some(&2, KV.Item<String>, R.ent.live(now, m)), 1n, 0n)), KV.entry(String, t, k), KV.entry(String, u, k), e),
-                     Equal.sym(R.Reply, T.reply_of(T.exec(R.Del{[k]}, u, now)), R.r_int(Bool.pick(Nat, Maybe.is_some(&2, KV.Item<String>, R.ent.live(now, KV.entry(String, u, k))), 1n, 0n)), t_del_one_count(u, k, now))))
+                   Equal.trans(R.Reply, R.r_int(Bool.pick(Nat, Maybe.is_some(&2, KV.Item<KV.Val>, R.ent.live(now, KV.entry(KV.Val, t, k))), 1n, 0n)), R.r_int(Bool.pick(Nat, Maybe.is_some(&2, KV.Item<KV.Val>, R.ent.live(now, KV.entry(KV.Val, u, k))), 1n, 0n)), T.reply_of(T.exec(R.Del{[k]}, u, now)),
+                     Equal.cong(Maybe<&2, KV.Item<KV.Val>>, R.Reply, m => R.r_int(Bool.pick(Nat, Maybe.is_some(&2, KV.Item<KV.Val>, R.ent.live(now, m)), 1n, 0n)), KV.entry(KV.Val, t, k), KV.entry(KV.Val, u, k), e),
+                     Equal.sym(R.Reply, T.reply_of(T.exec(R.Del{[k]}, u, now)), R.r_int(Bool.pick(Nat, Maybe.is_some(&2, KV.Item<KV.Val>, R.ent.live(now, KV.entry(KV.Val, u, k))), 1n, 0n)), t_del_one_count(u, k, now))))
     case Con{k, Con{j, rest}}:
       kd => e => Empty.absurd({T.reply_of(T.exec(R.Del{Con{k, Con{j, rest}}}, t, now)) == T.reply_of(T.exec(R.Del{Con{k, Con{j, rest}}}, u, now)) : R.Reply}, false_true(kd))
 
-def loc_reply_ex(ks: List<&2, String>, +t: KV.Trie<String>, +u: KV.Trie<String>, +now: Nat) -> {keyed(R.Exists{ks}) == True{} : Bool} -> {KV.entry(String, t, key_of(R.Exists{ks})) == KV.entry(String, u, key_of(R.Exists{ks})) : Maybe<&2, KV.Item<String>>} -> {T.reply_of(T.exec(R.Exists{ks}, t, now)) == T.reply_of(T.exec(R.Exists{ks}, u, now)) : R.Reply}:
+def loc_reply_ex(ks: List<&2, String>, +t: KV.Trie<KV.Val>, +u: KV.Trie<KV.Val>, +now: Nat) -> {keyed(R.Exists{ks}) == True{} : Bool} -> {KV.entry(KV.Val, t, key_of(R.Exists{ks})) == KV.entry(KV.Val, u, key_of(R.Exists{ks})) : Maybe<&2, KV.Item<KV.Val>>} -> {T.reply_of(T.exec(R.Exists{ks}, t, now)) == T.reply_of(T.exec(R.Exists{ks}, u, now)) : R.Reply}:
   match ks:
     case Nil{}:
       kd => e => Empty.absurd({T.reply_of(T.exec(R.Exists{Nil{}}, t, now)) == T.reply_of(T.exec(R.Exists{Nil{}}, u, now)) : R.Reply}, false_true(kd))
     case Con{+k, Nil{}}:
-      kd => e => %read_eq(t, k, now) : {R.r_int(Nat.add(Bool.pick(Nat, Maybe.is_some(&2, String, _), 1n, 0n), 0n)) == R.r_int(Nat.add(Bool.pick(Nat, Maybe.is_some(&2, String, KV.read(String, u, k, now)), 1n, 0n), 0n)) : R.Reply}
-                 %read_eq(u, k, now) : {R.r_int(Nat.add(Bool.pick(Nat, Maybe.is_some(&2, String, Laws.live_val(String, KV.entry(String, t, k), now)), 1n, 0n), 0n)) == R.r_int(Nat.add(Bool.pick(Nat, Maybe.is_some(&2, String, _), 1n, 0n), 0n)) : R.Reply}
-                 Equal.cong(Maybe<&2, KV.Item<String>>, R.Reply, m => R.r_int(Nat.add(Bool.pick(Nat, Maybe.is_some(&2, String, Laws.live_val(String, m, now)), 1n, 0n), 0n)), KV.entry(String, t, k), KV.entry(String, u, k), e)
+      kd => e => %read_eq(t, k, now) : {R.r_int(Nat.add(Bool.pick(Nat, Maybe.is_some(&2, KV.Val, _), 1n, 0n), 0n)) == R.r_int(Nat.add(Bool.pick(Nat, Maybe.is_some(&2, KV.Val, KV.read(KV.Val, u, k, now)), 1n, 0n), 0n)) : R.Reply}
+                 %read_eq(u, k, now) : {R.r_int(Nat.add(Bool.pick(Nat, Maybe.is_some(&2, KV.Val, Laws.live_val(KV.Val, KV.entry(KV.Val, t, k), now)), 1n, 0n), 0n)) == R.r_int(Nat.add(Bool.pick(Nat, Maybe.is_some(&2, KV.Val, _), 1n, 0n), 0n)) : R.Reply}
+                 Equal.cong(Maybe<&2, KV.Item<KV.Val>>, R.Reply, m => R.r_int(Nat.add(Bool.pick(Nat, Maybe.is_some(&2, KV.Val, Laws.live_val(KV.Val, m, now)), 1n, 0n), 0n)), KV.entry(KV.Val, t, k), KV.entry(KV.Val, u, k), e)
     case Con{k, Con{j, rest}}:
       kd => e => Empty.absurd({T.reply_of(T.exec(R.Exists{Con{k, Con{j, rest}}}, t, now)) == T.reply_of(T.exec(R.Exists{Con{k, Con{j, rest}}}, u, now)) : R.Reply}, false_true(kd))
 
-def loc_reply(c: R.Cmd, +t: KV.Trie<String>, +u: KV.Trie<String>, +now: Nat) -> {keyed(c) == True{} : Bool} -> {KV.entry(String, t, key_of(c)) == KV.entry(String, u, key_of(c)) : Maybe<&2, KV.Item<String>>} -> {T.reply_of(T.exec(c, t, now)) == T.reply_of(T.exec(c, u, now)) : R.Reply}:
+def loc_reply(c: R.Cmd, +t: KV.Trie<KV.Val>, +u: KV.Trie<KV.Val>, +now: Nat) -> {keyed(c) == True{} : Bool} -> {KV.entry(KV.Val, t, key_of(c)) == KV.entry(KV.Val, u, key_of(c)) : Maybe<&2, KV.Item<KV.Val>>} -> {T.reply_of(T.exec(c, t, now)) == T.reply_of(T.exec(c, u, now)) : R.Reply}:
   match c:
     case R.Ping{}:
       kd => e => Empty.absurd({T.reply_of(T.exec(R.Ping{}, t, now)) == T.reply_of(T.exec(R.Ping{}, u, now)) : R.Reply}, false_true(kd))
     case R.Echo{m}:
       kd => e => Empty.absurd({T.reply_of(T.exec(R.Echo{m}, t, now)) == T.reply_of(T.exec(R.Echo{m}, u, now)) : R.Reply}, false_true(kd))
     case R.Get{+k}:
-      kd => e => %get_read(t, k, now) : {R.r_get(_) == R.r_get(KV.get_copy(u, k, now)) : R.Reply}
-                 %get_read(u, k, now) : {R.r_get(Laws.live_val(String, KV.entry(String, t, k), now)) == R.r_get(_) : R.Reply}
-                 Equal.cong(Maybe<&2, KV.Item<String>>, R.Reply, m => R.r_get(Laws.live_val(String, m, now)), KV.entry(String, t, k), KV.entry(String, u, k), e)
+      kd => e => %get_read(t, k, now) : {R.r_getv(_) == R.r_getv(KV.get_copy(u, k, now)) : R.Reply}
+                 %get_read(u, k, now) : {R.r_getv(KV.got_of(Laws.live_val(KV.Val, KV.entry(KV.Val, t, k), now))) == R.r_getv(_) : R.Reply}
+                 Equal.cong(Maybe<&2, KV.Item<KV.Val>>, R.Reply, m => R.r_getv(KV.got_of(Laws.live_val(KV.Val, m, now))), KV.entry(KV.Val, t, k), KV.entry(KV.Val, u, k), e)
     case R.Set{+k, +v}:
       kd => e => {==}
     case R.Del{ks}:
@@ -3157,10 +3177,10 @@ def loc_reply(c: R.Cmd, +t: KV.Trie<String>, +u: KV.Trie<String>, +now: Nat) -> 
     case R.Exists{ks}:
       loc_reply_ex(ks, t, u, now)
     case R.IncrBy{+k, +by}:
-      kd => e => %read_eq(t, k, now) : {T.reply_of(T.incr.got(t, k, KV.hash(k), by, _)) == T.reply_of(T.incr.got(u, k, KV.hash(k), by, KV.read(String, u, k, now))) : R.Reply}
-                 %read_eq(u, k, now) : {T.reply_of(T.incr.got(t, k, KV.hash(k), by, Laws.live_val(String, KV.entry(String, t, k), now))) == T.reply_of(T.incr.got(u, k, KV.hash(k), by, _)) : R.Reply}
-                 %e : {T.reply_of(T.incr.got(t, k, KV.hash(k), by, Laws.live_val(String, KV.entry(String, t, k), now))) == T.reply_of(T.incr.got(u, k, KV.hash(k), by, Laws.live_val(String, _, now))) : R.Reply}
-                 incr_rep(Laws.live_val(String, KV.entry(String, t, k), now), t, u, k, KV.hash(k), by)
+      kd => e => %get_read(t, k, now) : {T.reply_of(T.incr.got(t, k, KV.hash(k), by, _)) == T.reply_of(T.incr.got(u, k, KV.hash(k), by, KV.get_copy(u, k, now))) : R.Reply}
+                 %get_read(u, k, now) : {T.reply_of(T.incr.got(t, k, KV.hash(k), by, KV.got_of(Laws.live_val(KV.Val, KV.entry(KV.Val, t, k), now)))) == T.reply_of(T.incr.got(u, k, KV.hash(k), by, _)) : R.Reply}
+                 %e : {T.reply_of(T.incr.got(t, k, KV.hash(k), by, KV.got_of(Laws.live_val(KV.Val, KV.entry(KV.Val, t, k), now)))) == T.reply_of(T.incr.got(u, k, KV.hash(k), by, KV.got_of(Laws.live_val(KV.Val, _, now)))) : R.Reply}
+                 incr_rep(KV.got_of(Laws.live_val(KV.Val, KV.entry(KV.Val, t, k), now)), t, u, k, KV.hash(k), by)
     case R.MGet{ks}:
       kd => e => Empty.absurd({T.reply_of(T.exec(R.MGet{ks}, t, now)) == T.reply_of(T.exec(R.MGet{ks}, u, now)) : R.Reply}, false_true(kd))
     case R.MSet{ps}:
@@ -3174,14 +3194,14 @@ def loc_reply(c: R.Cmd, +t: KV.Trie<String>, +u: KV.Trie<String>, +now: Nat) -> 
     case R.Scan{a}:
       kd => e => Empty.absurd({T.reply_of(T.exec(R.Scan{a}, t, now)) == T.reply_of(T.exec(R.Scan{a}, u, now)) : R.Reply}, false_true(kd))
     case R.Peek{+k, +o}:
-      kd => e => %entry_at_eq(String, t, k) : {R.peek(o, now, R.ent.live(now, _)) == R.peek(o, now, R.ent.live(now, KV.entry.at(String, u, k, KV.hash(k)))) : R.Reply}
-                 %entry_at_eq(String, u, k) : {R.peek(o, now, R.ent.live(now, KV.entry(String, t, k))) == R.peek(o, now, R.ent.live(now, _)) : R.Reply}
-                 Equal.cong(Maybe<&2, KV.Item<String>>, R.Reply, m => R.peek(o, now, R.ent.live(now, m)), KV.entry(String, t, k), KV.entry(String, u, k), e)
+      kd => e => %entry_at_eq(KV.Val, t, k) : {R.peek.v(o, now, R.ent.live(now, _)) == R.peek.v(o, now, R.ent.live(now, KV.entry.at(KV.Val, u, k, KV.hash(k)))) : R.Reply}
+                 %entry_at_eq(KV.Val, u, k) : {R.peek.v(o, now, R.ent.live(now, KV.entry(KV.Val, t, k))) == R.peek.v(o, now, R.ent.live(now, _)) : R.Reply}
+                 Equal.cong(Maybe<&2, KV.Item<KV.Val>>, R.Reply, m => R.peek.v(o, now, R.ent.live(now, m)), KV.entry(KV.Val, t, k), KV.entry(KV.Val, u, k), e)
     case R.Upd{+k, +op}:
-      kd => e => %entry_at_eq(String, t, k) : {T.reply_of(T.upd.put(t, k, KV.hash(k), R.upd(op, now, R.ent.live(now, _)))) == T.reply_of(T.upd.put(u, k, KV.hash(k), R.upd(op, now, R.ent.live(now, KV.entry.at(String, u, k, KV.hash(k)))))) : R.Reply}
-                 %entry_at_eq(String, u, k) : {T.reply_of(T.upd.put(t, k, KV.hash(k), R.upd(op, now, R.ent.live(now, KV.entry(String, t, k))))) == T.reply_of(T.upd.put(u, k, KV.hash(k), R.upd(op, now, R.ent.live(now, _)))) : R.Reply}
-                 %e : {T.reply_of(T.upd.put(t, k, KV.hash(k), R.upd(op, now, R.ent.live(now, KV.entry(String, t, k))))) == T.reply_of(T.upd.put(u, k, KV.hash(k), R.upd(op, now, R.ent.live(now, _)))) : R.Reply}
-                 upd_rep(R.upd(op, now, R.ent.live(now, KV.entry(String, t, k))), t, u, k, KV.hash(k))
+      kd => e => %entry_at_eq(KV.Val, t, k) : {T.reply_of(T.upd.put(t, k, KV.hash(k), R.upd.v(op, now, R.ent.live(now, _)))) == T.reply_of(T.upd.put(u, k, KV.hash(k), R.upd.v(op, now, R.ent.live(now, KV.entry.at(KV.Val, u, k, KV.hash(k)))))) : R.Reply}
+                 %entry_at_eq(KV.Val, u, k) : {T.reply_of(T.upd.put(t, k, KV.hash(k), R.upd.v(op, now, R.ent.live(now, KV.entry(KV.Val, t, k))))) == T.reply_of(T.upd.put(u, k, KV.hash(k), R.upd.v(op, now, R.ent.live(now, _)))) : R.Reply}
+                 %e : {T.reply_of(T.upd.put(t, k, KV.hash(k), R.upd.v(op, now, R.ent.live(now, KV.entry(KV.Val, t, k))))) == T.reply_of(T.upd.put(u, k, KV.hash(k), R.upd.v(op, now, R.ent.live(now, _)))) : R.Reply}
+                 upd_rep(R.upd.v(op, now, R.ent.live(now, KV.entry(KV.Val, t, k))), t, u, k, KV.hash(k))
     case R.MSetNx{ps}:
       kd => e => Empty.absurd({T.reply_of(T.exec(R.MSetNx{ps}, t, now)) == T.reply_of(T.exec(R.MSetNx{ps}, u, now)) : R.Reply}, false_true(kd))
     case R.Rename{s, d, nx}:
@@ -3196,19 +3216,19 @@ def loc_reply(c: R.Cmd, +t: KV.Trie<String>, +u: KV.Trie<String>, +now: Nat) -> 
 # A command's effect on its key
 # -----------------------------
 
-def set_key(+t: KV.Trie<String>, +u: KV.Trie<String>, +k: String, +v: String) -> {KV.entry(String, KV.set(String, t, k, v), k) == KV.entry(String, KV.set(String, u, k, v), k) : Maybe<&2, KV.Item<String>>}:
-  Equal.trans(Maybe<&2, KV.Item<String>>, KV.entry(String, KV.set(String, t, k, v), k), Some{KV.Item{v, 0n}}, KV.entry(String, KV.set(String, u, k, v), k), e_set(t, k, v), Equal.sym(Maybe<&2, KV.Item<String>>, KV.entry(String, KV.set(String, u, k, v), k), Some{KV.Item{v, 0n}}, e_set(u, k, v)))
+def set_key(+t: KV.Trie<KV.Val>, +u: KV.Trie<KV.Val>, +k: String, +v: String) -> {KV.entry(KV.Val, KV.set(KV.Val, t, k, KV.VStr{v}), k) == KV.entry(KV.Val, KV.set(KV.Val, u, k, KV.VStr{v}), k) : Maybe<&2, KV.Item<KV.Val>>}:
+  Equal.trans(Maybe<&2, KV.Item<KV.Val>>, KV.entry(KV.Val, KV.set(KV.Val, t, k, KV.VStr{v}), k), Some{KV.Item{KV.VStr{v}, 0n}}, KV.entry(KV.Val, KV.set(KV.Val, u, k, KV.VStr{v}), k), e_set(t, k, v), Equal.sym(Maybe<&2, KV.Item<KV.Val>>, KV.entry(KV.Val, KV.set(KV.Val, u, k, KV.VStr{v}), k), Some{KV.Item{KV.VStr{v}, 0n}}, e_set(u, k, v)))
 
-def keep_key(+t: KV.Trie<String>, +u: KV.Trie<String>, +k: String, +v: String) -> {KV.entry(String, t, k) == KV.entry(String, u, k) : Maybe<&2, KV.Item<String>>} -> {KV.entry(String, KV.keep(String, t, k, v), k) == KV.entry(String, KV.keep(String, u, k, v), k) : Maybe<&2, KV.Item<String>>}:
-  e => Equal.trans(Maybe<&2, KV.Item<String>>, KV.entry(String, KV.keep(String, t, k, v), k), Some{KV.Item{v, Laws.keep_exp(String, KV.entry(String, t, k))}}, KV.entry(String, KV.keep(String, u, k, v), k), Laws.entry_keep_same(String, t, k, v),
-         Equal.trans(Maybe<&2, KV.Item<String>>, Some{KV.Item{v, Laws.keep_exp(String, KV.entry(String, t, k))}}, Some{KV.Item{v, Laws.keep_exp(String, KV.entry(String, u, k))}}, KV.entry(String, KV.keep(String, u, k, v), k),
-           Equal.cong(Maybe<&2, KV.Item<String>>, Maybe<&2, KV.Item<String>>, m => Some{KV.Item{v, Laws.keep_exp(String, m)}}, KV.entry(String, t, k), KV.entry(String, u, k), e),
-           Equal.sym(Maybe<&2, KV.Item<String>>, KV.entry(String, KV.keep(String, u, k, v), k), Some{KV.Item{v, Laws.keep_exp(String, KV.entry(String, u, k))}}, Laws.entry_keep_same(String, u, k, v))))
+def keep_key(+t: KV.Trie<KV.Val>, +u: KV.Trie<KV.Val>, +k: String, +v: KV.Val) -> {KV.entry(KV.Val, t, k) == KV.entry(KV.Val, u, k) : Maybe<&2, KV.Item<KV.Val>>} -> {KV.entry(KV.Val, KV.keep(KV.Val, t, k, v), k) == KV.entry(KV.Val, KV.keep(KV.Val, u, k, v), k) : Maybe<&2, KV.Item<KV.Val>>}:
+  e => Equal.trans(Maybe<&2, KV.Item<KV.Val>>, KV.entry(KV.Val, KV.keep(KV.Val, t, k, v), k), Some{KV.Item{v, Laws.keep_exp(KV.Val, KV.entry(KV.Val, t, k))}}, KV.entry(KV.Val, KV.keep(KV.Val, u, k, v), k), Laws.entry_keep_same(KV.Val, t, k, v),
+         Equal.trans(Maybe<&2, KV.Item<KV.Val>>, Some{KV.Item{v, Laws.keep_exp(KV.Val, KV.entry(KV.Val, t, k))}}, Some{KV.Item{v, Laws.keep_exp(KV.Val, KV.entry(KV.Val, u, k))}}, KV.entry(KV.Val, KV.keep(KV.Val, u, k, v), k),
+           Equal.cong(Maybe<&2, KV.Item<KV.Val>>, Maybe<&2, KV.Item<KV.Val>>, m => Some{KV.Item{v, Laws.keep_exp(KV.Val, m)}}, KV.entry(KV.Val, t, k), KV.entry(KV.Val, u, k), e),
+           Equal.sym(Maybe<&2, KV.Item<KV.Val>>, KV.entry(KV.Val, KV.keep(KV.Val, u, k, v), k), Some{KV.Item{v, Laws.keep_exp(KV.Val, KV.entry(KV.Val, u, k))}}, Laws.entry_keep_same(KV.Val, u, k, v))))
 
-def incr_fit_key(ok: Bool, keep: Bool, +t: KV.Trie<String>, +u: KV.Trie<String>, +k: String, +n: R.Int) -> {KV.entry(String, t, k) == KV.entry(String, u, k) : Maybe<&2, KV.Item<String>>} -> {KV.entry(String, T.db_of(T.incr.fit(t, k, KV.hash(k), n, ok, keep)), k) == KV.entry(String, T.db_of(T.incr.fit(u, k, KV.hash(k), n, ok, keep)), k) : Maybe<&2, KV.Item<String>>}:
+def incr_fit_key(ok: Bool, keep: Bool, +t: KV.Trie<KV.Val>, +u: KV.Trie<KV.Val>, +k: String, +n: R.Int) -> {KV.entry(KV.Val, t, k) == KV.entry(KV.Val, u, k) : Maybe<&2, KV.Item<KV.Val>>} -> {KV.entry(KV.Val, T.db_of(T.incr.fit(t, k, KV.hash(k), n, ok, keep)), k) == KV.entry(KV.Val, T.db_of(T.incr.fit(u, k, KV.hash(k), n, ok, keep)), k) : Maybe<&2, KV.Item<KV.Val>>}:
   match ok keep:
     case True{} True{}:
-      e => keep_key(t, u, k, R.int_show(n))(e)
+      e => keep_key(t, u, k, KV.VStr{R.int_show(n)})(e)
     case True{} False{}:
       e => set_key(t, u, k, R.int_show(n))
     case False{} True{}:
@@ -3216,41 +3236,43 @@ def incr_fit_key(ok: Bool, keep: Bool, +t: KV.Trie<String>, +u: KV.Trie<String>,
     case False{} False{}:
       e => e
 
-def incr_num_key(cur: Maybe<&2, R.Int>, +t: KV.Trie<String>, +u: KV.Trie<String>, +k: String, +by: R.Int) -> {KV.entry(String, t, k) == KV.entry(String, u, k) : Maybe<&2, KV.Item<String>>} -> {KV.entry(String, T.db_of(T.incr.num(t, k, KV.hash(k), by, cur)), k) == KV.entry(String, T.db_of(T.incr.num(u, k, KV.hash(k), by, cur)), k) : Maybe<&2, KV.Item<String>>}:
+def incr_num_key(cur: Maybe<&2, R.Int>, +t: KV.Trie<KV.Val>, +u: KV.Trie<KV.Val>, +k: String, +by: R.Int) -> {KV.entry(KV.Val, t, k) == KV.entry(KV.Val, u, k) : Maybe<&2, KV.Item<KV.Val>>} -> {KV.entry(KV.Val, T.db_of(T.incr.num(t, k, KV.hash(k), by, cur)), k) == KV.entry(KV.Val, T.db_of(T.incr.num(u, k, KV.hash(k), by, cur)), k) : Maybe<&2, KV.Item<KV.Val>>}:
   match cur:
     case Some{+i}:
       incr_fit_key(R.int_fits(R.int_add(i, by)), True{}, t, u, k, R.int_add(i, by))
     case None{}:
       e => e
 
-def incr_key(old: Maybe<&2, String>, +t: KV.Trie<String>, +u: KV.Trie<String>, +k: String, +by: R.Int) -> {KV.entry(String, t, k) == KV.entry(String, u, k) : Maybe<&2, KV.Item<String>>} -> {KV.entry(String, T.db_of(T.incr.got(t, k, KV.hash(k), by, old)), k) == KV.entry(String, T.db_of(T.incr.got(u, k, KV.hash(k), by, old)), k) : Maybe<&2, KV.Item<String>>}:
+def incr_key(old: KV.Got, +t: KV.Trie<KV.Val>, +u: KV.Trie<KV.Val>, +k: String, +by: R.Int) -> {KV.entry(KV.Val, t, k) == KV.entry(KV.Val, u, k) : Maybe<&2, KV.Item<KV.Val>>} -> {KV.entry(KV.Val, T.db_of(T.incr.got(t, k, KV.hash(k), by, old)), k) == KV.entry(KV.Val, T.db_of(T.incr.got(u, k, KV.hash(k), by, old)), k) : Maybe<&2, KV.Item<KV.Val>>}:
   match old:
-    case Some{s}:
+    case KV.GStr{s}:
       incr_num_key(R.int_read(s), t, u, k, by)
-    case None{}:
+    case KV.GColl{}:
+      e => e
+    case KV.GNone{}:
       incr_fit_key(R.int_fits(by), False{}, t, u, k, by)
 
-def upd_ch_key(ch: R.Change, -r: R.Reply, +t: KV.Trie<String>, +u: KV.Trie<String>, +k: String) -> {KV.entry(String, t, k) == KV.entry(String, u, k) : Maybe<&2, KV.Item<String>>} -> {KV.entry(String, T.db_of(T.upd.ch(t, k, KV.hash(k), r, ch)), k) == KV.entry(String, T.db_of(T.upd.ch(u, k, KV.hash(k), r, ch)), k) : Maybe<&2, KV.Item<String>>}:
+def upd_ch_key(ch: R.Change, -r: R.Reply, +t: KV.Trie<KV.Val>, +u: KV.Trie<KV.Val>, +k: String) -> {KV.entry(KV.Val, t, k) == KV.entry(KV.Val, u, k) : Maybe<&2, KV.Item<KV.Val>>} -> {KV.entry(KV.Val, T.db_of(T.upd.ch(t, k, KV.hash(k), r, ch)), k) == KV.entry(KV.Val, T.db_of(T.upd.ch(u, k, KV.hash(k), r, ch)), k) : Maybe<&2, KV.Item<KV.Val>>}:
   match ch:
     case R.CKeep{}:
       e => e
     case R.CDel{}:
-      e => Equal.trans(Maybe<&2, KV.Item<String>>, KV.entry(String, KV.del(String, t, k), k), None{}, KV.entry(String, KV.del(String, u, k), k), Laws.entry_del_same(String, t, k), Equal.sym(Maybe<&2, KV.Item<String>>, KV.entry(String, KV.del(String, u, k), k), None{}, Laws.entry_del_same(String, u, k)))
+      e => Equal.trans(Maybe<&2, KV.Item<KV.Val>>, KV.entry(KV.Val, KV.del(KV.Val, t, k), k), None{}, KV.entry(KV.Val, KV.del(KV.Val, u, k), k), Laws.entry_del_same(KV.Val, t, k), Equal.sym(Maybe<&2, KV.Item<KV.Val>>, KV.entry(KV.Val, KV.del(KV.Val, u, k), k), None{}, Laws.entry_del_same(KV.Val, u, k)))
     case R.CExp{+x}:
-      e => Equal.trans(Maybe<&2, KV.Item<String>>, KV.entry(String, KV.expire(String, t, k, x), k), Laws.with_exp(String, KV.entry(String, t, k), x), KV.entry(String, KV.expire(String, u, k, x), k), Laws.entry_expire_same(String, t, k, x),
-             Equal.trans(Maybe<&2, KV.Item<String>>, Laws.with_exp(String, KV.entry(String, t, k), x), Laws.with_exp(String, KV.entry(String, u, k), x), KV.entry(String, KV.expire(String, u, k, x), k),
-               Equal.cong(Maybe<&2, KV.Item<String>>, Maybe<&2, KV.Item<String>>, m => Laws.with_exp(String, m, x), KV.entry(String, t, k), KV.entry(String, u, k), e),
-               Equal.sym(Maybe<&2, KV.Item<String>>, KV.entry(String, KV.expire(String, u, k, x), k), Laws.with_exp(String, KV.entry(String, u, k), x), Laws.entry_expire_same(String, u, k, x))))
+      e => Equal.trans(Maybe<&2, KV.Item<KV.Val>>, KV.entry(KV.Val, KV.expire(KV.Val, t, k, x), k), Laws.with_exp(KV.Val, KV.entry(KV.Val, t, k), x), KV.entry(KV.Val, KV.expire(KV.Val, u, k, x), k), Laws.entry_expire_same(KV.Val, t, k, x),
+             Equal.trans(Maybe<&2, KV.Item<KV.Val>>, Laws.with_exp(KV.Val, KV.entry(KV.Val, t, k), x), Laws.with_exp(KV.Val, KV.entry(KV.Val, u, k), x), KV.entry(KV.Val, KV.expire(KV.Val, u, k, x), k),
+               Equal.cong(Maybe<&2, KV.Item<KV.Val>>, Maybe<&2, KV.Item<KV.Val>>, m => Laws.with_exp(KV.Val, m, x), KV.entry(KV.Val, t, k), KV.entry(KV.Val, u, k), e),
+               Equal.sym(Maybe<&2, KV.Item<KV.Val>>, KV.entry(KV.Val, KV.expire(KV.Val, u, k, x), k), Laws.with_exp(KV.Val, KV.entry(KV.Val, u, k), x), Laws.entry_expire_same(KV.Val, u, k, x))))
     case R.CPut{+v, +x}:
-      e => Equal.trans(Maybe<&2, KV.Item<String>>, KV.entry(String, KV.setx(String, t, k, v, x), k), Some{KV.Item{v, x}}, KV.entry(String, KV.setx(String, u, k, v, x), k), Laws.entry_setx_same(String, t, k, v, x), Equal.sym(Maybe<&2, KV.Item<String>>, KV.entry(String, KV.setx(String, u, k, v, x), k), Some{KV.Item{v, x}}, Laws.entry_setx_same(String, u, k, v, x)))
+      e => Equal.trans(Maybe<&2, KV.Item<KV.Val>>, KV.entry(KV.Val, KV.setx(KV.Val, t, k, KV.VStr{v}, x), k), Some{KV.Item{KV.VStr{v}, x}}, KV.entry(KV.Val, KV.setx(KV.Val, u, k, KV.VStr{v}, x), k), Laws.entry_setx_same(KV.Val, t, k, KV.VStr{v}, x), Equal.sym(Maybe<&2, KV.Item<KV.Val>>, KV.entry(KV.Val, KV.setx(KV.Val, u, k, KV.VStr{v}, x), k), Some{KV.Item{KV.VStr{v}, x}}, Laws.entry_setx_same(KV.Val, u, k, KV.VStr{v}, x)))
     case R.CKeepT{+v}:
-      e => keep_key(t, u, k, v)(e)
+      e => keep_key(t, u, k, KV.VStr{v})(e)
     case R.CApp{a, +v}:
-      e => keep_key(t, u, k, v)(e)
+      e => keep_key(t, u, k, KV.VStr{v})(e)
     case R.CRange{o, a, +v}:
-      e => keep_key(t, u, k, v)(e)
+      e => keep_key(t, u, k, KV.VStr{v})(e)
 
-def upd_key(o: R.Out, +t: KV.Trie<String>, +u: KV.Trie<String>, +k: String) -> {KV.entry(String, t, k) == KV.entry(String, u, k) : Maybe<&2, KV.Item<String>>} -> {KV.entry(String, T.db_of(T.upd.put(t, k, KV.hash(k), o)), k) == KV.entry(String, T.db_of(T.upd.put(u, k, KV.hash(k), o)), k) : Maybe<&2, KV.Item<String>>}:
+def upd_key(o: R.Out, +t: KV.Trie<KV.Val>, +u: KV.Trie<KV.Val>, +k: String) -> {KV.entry(KV.Val, t, k) == KV.entry(KV.Val, u, k) : Maybe<&2, KV.Item<KV.Val>>} -> {KV.entry(KV.Val, T.db_of(T.upd.put(t, k, KV.hash(k), o)), k) == KV.entry(KV.Val, T.db_of(T.upd.put(u, k, KV.hash(k), o)), k) : Maybe<&2, KV.Item<KV.Val>>}:
   match o:
     case R.Out{+r, +ch}:
       upd_ch_key(ch, r, t, u, k)
@@ -3260,21 +3282,21 @@ def any_self(+k: String) -> {Laws.any_key(k, [k]) == True{} : Bool}:
   %str_eq_self(k) : {Bool.or(_, False{}) == True{} : Bool}
   {==}
 
-def loc_key_del(ks: List<&2, String>, +t: KV.Trie<String>, +u: KV.Trie<String>, +now: Nat) -> {keyed(R.Del{ks}) == True{} : Bool} -> {KV.entry(String, t, key_of(R.Del{ks})) == KV.entry(String, u, key_of(R.Del{ks})) : Maybe<&2, KV.Item<String>>} -> {KV.entry(String, T.db_of(T.exec(R.Del{ks}, t, now)), key_of(R.Del{ks})) == KV.entry(String, T.db_of(T.exec(R.Del{ks}, u, now)), key_of(R.Del{ks})) : Maybe<&2, KV.Item<String>>}:
+def loc_key_del(ks: List<&2, String>, +t: KV.Trie<KV.Val>, +u: KV.Trie<KV.Val>, +now: Nat) -> {keyed(R.Del{ks}) == True{} : Bool} -> {KV.entry(KV.Val, t, key_of(R.Del{ks})) == KV.entry(KV.Val, u, key_of(R.Del{ks})) : Maybe<&2, KV.Item<KV.Val>>} -> {KV.entry(KV.Val, T.db_of(T.exec(R.Del{ks}, t, now)), key_of(R.Del{ks})) == KV.entry(KV.Val, T.db_of(T.exec(R.Del{ks}, u, now)), key_of(R.Del{ks})) : Maybe<&2, KV.Item<KV.Val>>}:
   match ks:
     case Nil{}:
-      kd => e => Empty.absurd({KV.entry(String, T.db_of(T.exec(R.Del{Nil{}}, t, now)), "") == KV.entry(String, T.db_of(T.exec(R.Del{Nil{}}, u, now)), "") : Maybe<&2, KV.Item<String>>}, false_true(kd))
+      kd => e => Empty.absurd({KV.entry(KV.Val, T.db_of(T.exec(R.Del{Nil{}}, t, now)), "") == KV.entry(KV.Val, T.db_of(T.exec(R.Del{Nil{}}, u, now)), "") : Maybe<&2, KV.Item<KV.Val>>}, false_true(kd))
     case Con{+k, Nil{}}:
-      kd => e => Equal.trans(Maybe<&2, KV.Item<String>>, KV.entry(String, T.db_of(T.exec(R.Del{[k]}, t, now)), k), None{}, KV.entry(String, T.db_of(T.exec(R.Del{[k]}, u, now)), k), t_del_effect([k], t, k, now, any_self(k)), Equal.sym(Maybe<&2, KV.Item<String>>, KV.entry(String, T.db_of(T.exec(R.Del{[k]}, u, now)), k), None{}, t_del_effect([k], u, k, now, any_self(k))))
+      kd => e => Equal.trans(Maybe<&2, KV.Item<KV.Val>>, KV.entry(KV.Val, T.db_of(T.exec(R.Del{[k]}, t, now)), k), None{}, KV.entry(KV.Val, T.db_of(T.exec(R.Del{[k]}, u, now)), k), t_del_effect([k], t, k, now, any_self(k)), Equal.sym(Maybe<&2, KV.Item<KV.Val>>, KV.entry(KV.Val, T.db_of(T.exec(R.Del{[k]}, u, now)), k), None{}, t_del_effect([k], u, k, now, any_self(k))))
     case Con{+k, Con{j, rest}}:
-      kd => e => Empty.absurd({KV.entry(String, T.db_of(T.exec(R.Del{Con{k, Con{j, rest}}}, t, now)), k) == KV.entry(String, T.db_of(T.exec(R.Del{Con{k, Con{j, rest}}}, u, now)), k) : Maybe<&2, KV.Item<String>>}, false_true(kd))
+      kd => e => Empty.absurd({KV.entry(KV.Val, T.db_of(T.exec(R.Del{Con{k, Con{j, rest}}}, t, now)), k) == KV.entry(KV.Val, T.db_of(T.exec(R.Del{Con{k, Con{j, rest}}}, u, now)), k) : Maybe<&2, KV.Item<KV.Val>>}, false_true(kd))
 
-def loc_key(c: R.Cmd, +t: KV.Trie<String>, +u: KV.Trie<String>, +now: Nat) -> {keyed(c) == True{} : Bool} -> {KV.entry(String, t, key_of(c)) == KV.entry(String, u, key_of(c)) : Maybe<&2, KV.Item<String>>} -> {KV.entry(String, T.db_of(T.exec(c, t, now)), key_of(c)) == KV.entry(String, T.db_of(T.exec(c, u, now)), key_of(c)) : Maybe<&2, KV.Item<String>>}:
+def loc_key(c: R.Cmd, +t: KV.Trie<KV.Val>, +u: KV.Trie<KV.Val>, +now: Nat) -> {keyed(c) == True{} : Bool} -> {KV.entry(KV.Val, t, key_of(c)) == KV.entry(KV.Val, u, key_of(c)) : Maybe<&2, KV.Item<KV.Val>>} -> {KV.entry(KV.Val, T.db_of(T.exec(c, t, now)), key_of(c)) == KV.entry(KV.Val, T.db_of(T.exec(c, u, now)), key_of(c)) : Maybe<&2, KV.Item<KV.Val>>}:
   match c:
     case R.Ping{}:
-      kd => e => Empty.absurd({KV.entry(String, T.db_of(T.exec(R.Ping{}, t, now)), "") == KV.entry(String, T.db_of(T.exec(R.Ping{}, u, now)), "") : Maybe<&2, KV.Item<String>>}, false_true(kd))
+      kd => e => Empty.absurd({KV.entry(KV.Val, T.db_of(T.exec(R.Ping{}, t, now)), "") == KV.entry(KV.Val, T.db_of(T.exec(R.Ping{}, u, now)), "") : Maybe<&2, KV.Item<KV.Val>>}, false_true(kd))
     case R.Echo{m}:
-      kd => e => Empty.absurd({KV.entry(String, T.db_of(T.exec(R.Echo{m}, t, now)), "") == KV.entry(String, T.db_of(T.exec(R.Echo{m}, u, now)), "") : Maybe<&2, KV.Item<String>>}, false_true(kd))
+      kd => e => Empty.absurd({KV.entry(KV.Val, T.db_of(T.exec(R.Echo{m}, t, now)), "") == KV.entry(KV.Val, T.db_of(T.exec(R.Echo{m}, u, now)), "") : Maybe<&2, KV.Item<KV.Val>>}, false_true(kd))
     case R.Get{+k}:
       kd => e => e
     case R.Set{+k, +v}:
@@ -3284,39 +3306,39 @@ def loc_key(c: R.Cmd, +t: KV.Trie<String>, +u: KV.Trie<String>, +now: Nat) -> {k
     case R.Exists{ks}:
       kd => e => e
     case R.IncrBy{+k, +by}:
-      kd => +e => %read_eq(t, k, now) : {KV.entry(String, T.db_of(T.incr.got(t, k, KV.hash(k), by, _)), k) == KV.entry(String, T.db_of(T.incr.got(u, k, KV.hash(k), by, KV.read(String, u, k, now))), k) : Maybe<&2, KV.Item<String>>}
-                  %read_eq(u, k, now) : {KV.entry(String, T.db_of(T.incr.got(t, k, KV.hash(k), by, Laws.live_val(String, KV.entry(String, t, k), now))), k) == KV.entry(String, T.db_of(T.incr.got(u, k, KV.hash(k), by, _)), k) : Maybe<&2, KV.Item<String>>}
-                  %e : {KV.entry(String, T.db_of(T.incr.got(t, k, KV.hash(k), by, Laws.live_val(String, KV.entry(String, t, k), now))), k) == KV.entry(String, T.db_of(T.incr.got(u, k, KV.hash(k), by, Laws.live_val(String, _, now))), k) : Maybe<&2, KV.Item<String>>}
-                  incr_key(Laws.live_val(String, KV.entry(String, t, k), now), t, u, k, by)(e)
+      kd => +e => %get_read(t, k, now) : {KV.entry(KV.Val, T.db_of(T.incr.got(t, k, KV.hash(k), by, _)), k) == KV.entry(KV.Val, T.db_of(T.incr.got(u, k, KV.hash(k), by, KV.get_copy(u, k, now))), k) : Maybe<&2, KV.Item<KV.Val>>}
+                  %get_read(u, k, now) : {KV.entry(KV.Val, T.db_of(T.incr.got(t, k, KV.hash(k), by, KV.got_of(Laws.live_val(KV.Val, KV.entry(KV.Val, t, k), now)))), k) == KV.entry(KV.Val, T.db_of(T.incr.got(u, k, KV.hash(k), by, _)), k) : Maybe<&2, KV.Item<KV.Val>>}
+                  %e : {KV.entry(KV.Val, T.db_of(T.incr.got(t, k, KV.hash(k), by, KV.got_of(Laws.live_val(KV.Val, KV.entry(KV.Val, t, k), now)))), k) == KV.entry(KV.Val, T.db_of(T.incr.got(u, k, KV.hash(k), by, KV.got_of(Laws.live_val(KV.Val, _, now)))), k) : Maybe<&2, KV.Item<KV.Val>>}
+                  incr_key(KV.got_of(Laws.live_val(KV.Val, KV.entry(KV.Val, t, k), now)), t, u, k, by)(e)
     case R.MGet{ks}:
-      kd => e => Empty.absurd({KV.entry(String, T.db_of(T.exec(R.MGet{ks}, t, now)), "") == KV.entry(String, T.db_of(T.exec(R.MGet{ks}, u, now)), "") : Maybe<&2, KV.Item<String>>}, false_true(kd))
+      kd => e => Empty.absurd({KV.entry(KV.Val, T.db_of(T.exec(R.MGet{ks}, t, now)), "") == KV.entry(KV.Val, T.db_of(T.exec(R.MGet{ks}, u, now)), "") : Maybe<&2, KV.Item<KV.Val>>}, false_true(kd))
     case R.MSet{ps}:
-      kd => e => Empty.absurd({KV.entry(String, T.db_of(T.exec(R.MSet{ps}, t, now)), "") == KV.entry(String, T.db_of(T.exec(R.MSet{ps}, u, now)), "") : Maybe<&2, KV.Item<String>>}, false_true(kd))
+      kd => e => Empty.absurd({KV.entry(KV.Val, T.db_of(T.exec(R.MSet{ps}, t, now)), "") == KV.entry(KV.Val, T.db_of(T.exec(R.MSet{ps}, u, now)), "") : Maybe<&2, KV.Item<KV.Val>>}, false_true(kd))
     case R.DbSize{}:
-      kd => e => Empty.absurd({KV.entry(String, T.db_of(T.exec(R.DbSize{}, t, now)), "") == KV.entry(String, T.db_of(T.exec(R.DbSize{}, u, now)), "") : Maybe<&2, KV.Item<String>>}, false_true(kd))
+      kd => e => Empty.absurd({KV.entry(KV.Val, T.db_of(T.exec(R.DbSize{}, t, now)), "") == KV.entry(KV.Val, T.db_of(T.exec(R.DbSize{}, u, now)), "") : Maybe<&2, KV.Item<KV.Val>>}, false_true(kd))
     case R.FlushDb{}:
-      kd => e => Empty.absurd({KV.entry(String, T.db_of(T.exec(R.FlushDb{}, t, now)), "") == KV.entry(String, T.db_of(T.exec(R.FlushDb{}, u, now)), "") : Maybe<&2, KV.Item<String>>}, false_true(kd))
+      kd => e => Empty.absurd({KV.entry(KV.Val, T.db_of(T.exec(R.FlushDb{}, t, now)), "") == KV.entry(KV.Val, T.db_of(T.exec(R.FlushDb{}, u, now)), "") : Maybe<&2, KV.Item<KV.Val>>}, false_true(kd))
     case R.Keys{p}:
-      kd => e => Empty.absurd({KV.entry(String, T.db_of(T.exec(R.Keys{p}, t, now)), "") == KV.entry(String, T.db_of(T.exec(R.Keys{p}, u, now)), "") : Maybe<&2, KV.Item<String>>}, false_true(kd))
+      kd => e => Empty.absurd({KV.entry(KV.Val, T.db_of(T.exec(R.Keys{p}, t, now)), "") == KV.entry(KV.Val, T.db_of(T.exec(R.Keys{p}, u, now)), "") : Maybe<&2, KV.Item<KV.Val>>}, false_true(kd))
     case R.Scan{a}:
-      kd => e => Empty.absurd({KV.entry(String, T.db_of(T.exec(R.Scan{a}, t, now)), "") == KV.entry(String, T.db_of(T.exec(R.Scan{a}, u, now)), "") : Maybe<&2, KV.Item<String>>}, false_true(kd))
+      kd => e => Empty.absurd({KV.entry(KV.Val, T.db_of(T.exec(R.Scan{a}, t, now)), "") == KV.entry(KV.Val, T.db_of(T.exec(R.Scan{a}, u, now)), "") : Maybe<&2, KV.Item<KV.Val>>}, false_true(kd))
     case R.Peek{+k, o}:
       kd => e => e
     case R.Upd{+k, +op}:
-      kd => +e => %entry_at_eq(String, t, k) : {KV.entry(String, T.db_of(T.upd.put(t, k, KV.hash(k), R.upd(op, now, R.ent.live(now, _)))), k) == KV.entry(String, T.db_of(T.upd.put(u, k, KV.hash(k), R.upd(op, now, R.ent.live(now, KV.entry.at(String, u, k, KV.hash(k)))))), k) : Maybe<&2, KV.Item<String>>}
-                  %entry_at_eq(String, u, k) : {KV.entry(String, T.db_of(T.upd.put(t, k, KV.hash(k), R.upd(op, now, R.ent.live(now, KV.entry(String, t, k))))), k) == KV.entry(String, T.db_of(T.upd.put(u, k, KV.hash(k), R.upd(op, now, R.ent.live(now, _)))), k) : Maybe<&2, KV.Item<String>>}
-                  %e : {KV.entry(String, T.db_of(T.upd.put(t, k, KV.hash(k), R.upd(op, now, R.ent.live(now, KV.entry(String, t, k))))), k) == KV.entry(String, T.db_of(T.upd.put(u, k, KV.hash(k), R.upd(op, now, R.ent.live(now, _)))), k) : Maybe<&2, KV.Item<String>>}
-                  upd_key(R.upd(op, now, R.ent.live(now, KV.entry(String, t, k))), t, u, k)(e)
+      kd => +e => %entry_at_eq(KV.Val, t, k) : {KV.entry(KV.Val, T.db_of(T.upd.put(t, k, KV.hash(k), R.upd.v(op, now, R.ent.live(now, _)))), k) == KV.entry(KV.Val, T.db_of(T.upd.put(u, k, KV.hash(k), R.upd.v(op, now, R.ent.live(now, KV.entry.at(KV.Val, u, k, KV.hash(k)))))), k) : Maybe<&2, KV.Item<KV.Val>>}
+                  %entry_at_eq(KV.Val, u, k) : {KV.entry(KV.Val, T.db_of(T.upd.put(t, k, KV.hash(k), R.upd.v(op, now, R.ent.live(now, KV.entry(KV.Val, t, k))))), k) == KV.entry(KV.Val, T.db_of(T.upd.put(u, k, KV.hash(k), R.upd.v(op, now, R.ent.live(now, _)))), k) : Maybe<&2, KV.Item<KV.Val>>}
+                  %e : {KV.entry(KV.Val, T.db_of(T.upd.put(t, k, KV.hash(k), R.upd.v(op, now, R.ent.live(now, KV.entry(KV.Val, t, k))))), k) == KV.entry(KV.Val, T.db_of(T.upd.put(u, k, KV.hash(k), R.upd.v(op, now, R.ent.live(now, _)))), k) : Maybe<&2, KV.Item<KV.Val>>}
+                  upd_key(R.upd.v(op, now, R.ent.live(now, KV.entry(KV.Val, t, k))), t, u, k)(e)
     case R.MSetNx{ps}:
-      kd => e => Empty.absurd({KV.entry(String, T.db_of(T.exec(R.MSetNx{ps}, t, now)), "") == KV.entry(String, T.db_of(T.exec(R.MSetNx{ps}, u, now)), "") : Maybe<&2, KV.Item<String>>}, false_true(kd))
+      kd => e => Empty.absurd({KV.entry(KV.Val, T.db_of(T.exec(R.MSetNx{ps}, t, now)), "") == KV.entry(KV.Val, T.db_of(T.exec(R.MSetNx{ps}, u, now)), "") : Maybe<&2, KV.Item<KV.Val>>}, false_true(kd))
     case R.Rename{s, d, nx}:
-      kd => e => Empty.absurd({KV.entry(String, T.db_of(T.exec(R.Rename{s, d, nx}, t, now)), "") == KV.entry(String, T.db_of(T.exec(R.Rename{s, d, nx}, u, now)), "") : Maybe<&2, KV.Item<String>>}, false_true(kd))
+      kd => e => Empty.absurd({KV.entry(KV.Val, T.db_of(T.exec(R.Rename{s, d, nx}, t, now)), "") == KV.entry(KV.Val, T.db_of(T.exec(R.Rename{s, d, nx}, u, now)), "") : Maybe<&2, KV.Item<KV.Val>>}, false_true(kd))
     case R.BitOp{op, d, srcs}:
-      kd => e => Empty.absurd({KV.entry(String, T.db_of(T.exec(R.BitOp{op, d, srcs}, t, now)), "") == KV.entry(String, T.db_of(T.exec(R.BitOp{op, d, srcs}, u, now)), "") : Maybe<&2, KV.Item<String>>}, false_true(kd))
+      kd => e => Empty.absurd({KV.entry(KV.Val, T.db_of(T.exec(R.BitOp{op, d, srcs}, t, now)), "") == KV.entry(KV.Val, T.db_of(T.exec(R.BitOp{op, d, srcs}, u, now)), "") : Maybe<&2, KV.Item<KV.Val>>}, false_true(kd))
     case R.Own{o}:
-      kd => e => Empty.absurd({KV.entry(String, T.db_of(T.exec(R.Own{o}, t, now)), "") == KV.entry(String, T.db_of(T.exec(R.Own{o}, u, now)), "") : Maybe<&2, KV.Item<String>>}, false_true(kd))
+      kd => e => Empty.absurd({KV.entry(KV.Val, T.db_of(T.exec(R.Own{o}, t, now)), "") == KV.entry(KV.Val, T.db_of(T.exec(R.Own{o}, u, now)), "") : Maybe<&2, KV.Item<KV.Val>>}, false_true(kd))
     case R.Bad{r}:
-      kd => e => Empty.absurd({KV.entry(String, T.db_of(T.exec(R.Bad{r}, t, now)), "") == KV.entry(String, T.db_of(T.exec(R.Bad{r}, u, now)), "") : Maybe<&2, KV.Item<String>>}, false_true(kd))
+      kd => e => Empty.absurd({KV.entry(KV.Val, T.db_of(T.exec(R.Bad{r}, t, now)), "") == KV.entry(KV.Val, T.db_of(T.exec(R.Bad{r}, u, now)), "") : Maybe<&2, KV.Item<KV.Val>>}, false_true(kd))
 
 def writes_del(ks: List<&2, String>, +j: String) -> {keyed(R.Del{ks}) == True{} : Bool} -> {False{} == KV.str_eq(j, key_of(R.Del{ks})) : Bool} -> {Laws.writes(R.Del{ks}, j) == False{} : Bool}:
   match ks:
@@ -3372,104 +3394,104 @@ def writes_one(c: R.Cmd, +j: String) -> {keyed(c) == True{} : Bool} -> {False{} 
       kd => nb => Empty.absurd({Laws.writes(R.Bad{r}, j) == False{} : Bool}, false_true(kd))
 
 # a hypothesis about a key, for a key equal to it
-def entry_at(+t: KV.Trie<String>, +u: KV.Trie<String>, -j: String, -k: String, ejk: {j == k : String}, e: {KV.entry(String, t, j) == KV.entry(String, u, j) : Maybe<&2, KV.Item<String>>}) -> {KV.entry(String, t, k) == KV.entry(String, u, k) : Maybe<&2, KV.Item<String>>}:
-  %ejk : {KV.entry(String, t, _) == KV.entry(String, u, _) : Maybe<&2, KV.Item<String>>}
+def entry_at(+t: KV.Trie<KV.Val>, +u: KV.Trie<KV.Val>, -j: String, -k: String, ejk: {j == k : String}, e: {KV.entry(KV.Val, t, j) == KV.entry(KV.Val, u, j) : Maybe<&2, KV.Item<KV.Val>>}) -> {KV.entry(KV.Val, t, k) == KV.entry(KV.Val, u, k) : Maybe<&2, KV.Item<KV.Val>>}:
+  %ejk : {KV.entry(KV.Val, t, _) == KV.entry(KV.Val, u, _) : Maybe<&2, KV.Item<KV.Val>>}
   e
 
-def point_same(+c: R.Cmd, +t: KV.Trie<String>, +u: KV.Trie<String>, +j: String, +now: Nat, +kd: {keyed(c) == True{} : Bool}, +ejk: {j == key_of(c) : String}, e: {KV.entry(String, t, j) == KV.entry(String, u, j) : Maybe<&2, KV.Item<String>>}) -> {KV.entry(String, T.db_of(T.exec(c, t, now)), j) == KV.entry(String, T.db_of(T.exec(c, u, now)), j) : Maybe<&2, KV.Item<String>>}:
-  %Equal.sym(String, j, key_of(c), ejk) : {KV.entry(String, T.db_of(T.exec(c, t, now)), _) == KV.entry(String, T.db_of(T.exec(c, u, now)), _) : Maybe<&2, KV.Item<String>>}
+def point_same(+c: R.Cmd, +t: KV.Trie<KV.Val>, +u: KV.Trie<KV.Val>, +j: String, +now: Nat, +kd: {keyed(c) == True{} : Bool}, +ejk: {j == key_of(c) : String}, e: {KV.entry(KV.Val, t, j) == KV.entry(KV.Val, u, j) : Maybe<&2, KV.Item<KV.Val>>}) -> {KV.entry(KV.Val, T.db_of(T.exec(c, t, now)), j) == KV.entry(KV.Val, T.db_of(T.exec(c, u, now)), j) : Maybe<&2, KV.Item<KV.Val>>}:
+  %Equal.sym(String, j, key_of(c), ejk) : {KV.entry(KV.Val, T.db_of(T.exec(c, t, now)), _) == KV.entry(KV.Val, T.db_of(T.exec(c, u, now)), _) : Maybe<&2, KV.Item<KV.Val>>}
   loc_key(c, t, u, now)(kd)(entry_at(t, u, j, key_of(c), ejk, e))
 
 # a command on one key: a key j's entry after it depends only on j's
 # entry before it
-def point_key(+c: R.Cmd, +t: KV.Trie<String>, +u: KV.Trie<String>, +j: String, +now: Nat, +kd: {keyed(c) == True{} : Bool}, b: Bool)
+def point_key(+c: R.Cmd, +t: KV.Trie<KV.Val>, +u: KV.Trie<KV.Val>, +j: String, +now: Nat, +kd: {keyed(c) == True{} : Bool}, b: Bool)
   -> {b == KV.str_eq(j, key_of(c)) : Bool}
   -> Reflect(String, j, key_of(c), b)
-  -> {KV.entry(String, t, j) == KV.entry(String, u, j) : Maybe<&2, KV.Item<String>>}
-  -> {KV.entry(String, T.db_of(T.exec(c, t, now)), j) == KV.entry(String, T.db_of(T.exec(c, u, now)), j) : Maybe<&2, KV.Item<String>>}:
+  -> {KV.entry(KV.Val, t, j) == KV.entry(KV.Val, u, j) : Maybe<&2, KV.Item<KV.Val>>}
+  -> {KV.entry(KV.Val, T.db_of(T.exec(c, t, now)), j) == KV.entry(KV.Val, T.db_of(T.exec(c, u, now)), j) : Maybe<&2, KV.Item<KV.Val>>}:
   match b:
     case True{}:
       eb => ejk => e => point_same(c, t, u, j, now, kd, ejk, e)
     case False{}:
-      +eb => ne => e => Equal.trans(Maybe<&2, KV.Item<String>>, KV.entry(String, T.db_of(T.exec(c, t, now)), j), KV.entry(String, t, j), KV.entry(String, T.db_of(T.exec(c, u, now)), j),
+      +eb => ne => e => Equal.trans(Maybe<&2, KV.Item<KV.Val>>, KV.entry(KV.Val, T.db_of(T.exec(c, t, now)), j), KV.entry(KV.Val, t, j), KV.entry(KV.Val, T.db_of(T.exec(c, u, now)), j),
                           t_frame(c, t, j, now, writes_one(c, j)(kd)(eb)),
-                          Equal.trans(Maybe<&2, KV.Item<String>>, KV.entry(String, t, j), KV.entry(String, u, j), KV.entry(String, T.db_of(T.exec(c, u, now)), j), e,
-                            Equal.sym(Maybe<&2, KV.Item<String>>, KV.entry(String, T.db_of(T.exec(c, u, now)), j), KV.entry(String, u, j), t_frame(c, u, j, now, writes_one(c, j)(kd)(eb)))))
+                          Equal.trans(Maybe<&2, KV.Item<KV.Val>>, KV.entry(KV.Val, t, j), KV.entry(KV.Val, u, j), KV.entry(KV.Val, T.db_of(T.exec(c, u, now)), j), e,
+                            Equal.sym(Maybe<&2, KV.Item<KV.Val>>, KV.entry(KV.Val, T.db_of(T.exec(c, u, now)), j), KV.entry(KV.Val, u, j), t_frame(c, u, j, now, writes_one(c, j)(kd)(eb)))))
 
 # a delete, or a set, of one key: a key with one entry in two tries has
 # one entry after it
-def del_same(+t: KV.Trie<String>, +u: KV.Trie<String>, -k: String, +j: String, +ejk: {j == k : String}) -> {KV.entry(String, KV.del(String, t, k), j) == KV.entry(String, KV.del(String, u, k), j) : Maybe<&2, KV.Item<String>>}:
-  Equal.trans(Maybe<&2, KV.Item<String>>, KV.entry(String, KV.del(String, t, k), j), None{}, KV.entry(String, KV.del(String, u, k), j), entry_del_eq(t, k, j, ejk), Equal.sym(Maybe<&2, KV.Item<String>>, KV.entry(String, KV.del(String, u, k), j), None{}, entry_del_eq(u, k, j, ejk)))
+def del_same(+t: KV.Trie<KV.Val>, +u: KV.Trie<KV.Val>, -k: String, +j: String, +ejk: {j == k : String}) -> {KV.entry(KV.Val, KV.del(KV.Val, t, k), j) == KV.entry(KV.Val, KV.del(KV.Val, u, k), j) : Maybe<&2, KV.Item<KV.Val>>}:
+  Equal.trans(Maybe<&2, KV.Item<KV.Val>>, KV.entry(KV.Val, KV.del(KV.Val, t, k), j), None{}, KV.entry(KV.Val, KV.del(KV.Val, u, k), j), entry_del_eq(t, k, j, ejk), Equal.sym(Maybe<&2, KV.Item<KV.Val>>, KV.entry(KV.Val, KV.del(KV.Val, u, k), j), None{}, entry_del_eq(u, k, j, ejk)))
 
-def del_one_point(+t: KV.Trie<String>, +u: KV.Trie<String>, +k: String, +j: String, c: Bool) -> {c == KV.str_eq(j, k) : Bool} -> Reflect(String, j, k, c) -> {KV.entry(String, t, j) == KV.entry(String, u, j) : Maybe<&2, KV.Item<String>>} -> {KV.entry(String, KV.del(String, t, k), j) == KV.entry(String, KV.del(String, u, k), j) : Maybe<&2, KV.Item<String>>}:
+def del_one_point(+t: KV.Trie<KV.Val>, +u: KV.Trie<KV.Val>, +k: String, +j: String, c: Bool) -> {c == KV.str_eq(j, k) : Bool} -> Reflect(String, j, k, c) -> {KV.entry(KV.Val, t, j) == KV.entry(KV.Val, u, j) : Maybe<&2, KV.Item<KV.Val>>} -> {KV.entry(KV.Val, KV.del(KV.Val, t, k), j) == KV.entry(KV.Val, KV.del(KV.Val, u, k), j) : Maybe<&2, KV.Item<KV.Val>>}:
   match c:
     case True{}:
       eb => ejk => e => del_same(t, u, k, j, ejk)
     case False{}:
-      +eb => ne => e => Equal.trans(Maybe<&2, KV.Item<String>>, KV.entry(String, KV.del(String, t, k), j), KV.entry(String, t, j), KV.entry(String, KV.del(String, u, k), j), Laws.entry_del_other(String, t, k, j, Laws.key_eq_false(j, k, Equal.sym(Bool, False{}, KV.str_eq(j, k), eb))),
-                          Equal.trans(Maybe<&2, KV.Item<String>>, KV.entry(String, t, j), KV.entry(String, u, j), KV.entry(String, KV.del(String, u, k), j), e, Equal.sym(Maybe<&2, KV.Item<String>>, KV.entry(String, KV.del(String, u, k), j), KV.entry(String, u, j), Laws.entry_del_other(String, u, k, j, Laws.key_eq_false(j, k, Equal.sym(Bool, False{}, KV.str_eq(j, k), eb))))))
+      +eb => ne => e => Equal.trans(Maybe<&2, KV.Item<KV.Val>>, KV.entry(KV.Val, KV.del(KV.Val, t, k), j), KV.entry(KV.Val, t, j), KV.entry(KV.Val, KV.del(KV.Val, u, k), j), Laws.entry_del_other(KV.Val, t, k, j, Laws.key_eq_false(j, k, Equal.sym(Bool, False{}, KV.str_eq(j, k), eb))),
+                          Equal.trans(Maybe<&2, KV.Item<KV.Val>>, KV.entry(KV.Val, t, j), KV.entry(KV.Val, u, j), KV.entry(KV.Val, KV.del(KV.Val, u, k), j), e, Equal.sym(Maybe<&2, KV.Item<KV.Val>>, KV.entry(KV.Val, KV.del(KV.Val, u, k), j), KV.entry(KV.Val, u, j), Laws.entry_del_other(KV.Val, u, k, j, Laws.key_eq_false(j, k, Equal.sym(Bool, False{}, KV.str_eq(j, k), eb))))))
 
-def set_same(+t: KV.Trie<String>, +u: KV.Trie<String>, +k: String, +v: String, +j: String, +ejk: {j == k : String}) -> {KV.entry(String, KV.set(String, t, k, v), j) == KV.entry(String, KV.set(String, u, k, v), j) : Maybe<&2, KV.Item<String>>}:
-  %Equal.sym(String, j, k, ejk) : {KV.entry(String, KV.set(String, t, k, v), _) == KV.entry(String, KV.set(String, u, k, v), _) : Maybe<&2, KV.Item<String>>}
+def set_same(+t: KV.Trie<KV.Val>, +u: KV.Trie<KV.Val>, +k: String, +v: String, +j: String, +ejk: {j == k : String}) -> {KV.entry(KV.Val, KV.set(KV.Val, t, k, KV.VStr{v}), j) == KV.entry(KV.Val, KV.set(KV.Val, u, k, KV.VStr{v}), j) : Maybe<&2, KV.Item<KV.Val>>}:
+  %Equal.sym(String, j, k, ejk) : {KV.entry(KV.Val, KV.set(KV.Val, t, k, KV.VStr{v}), _) == KV.entry(KV.Val, KV.set(KV.Val, u, k, KV.VStr{v}), _) : Maybe<&2, KV.Item<KV.Val>>}
   set_key(t, u, k, v)
 
-def set_one_point(+t: KV.Trie<String>, +u: KV.Trie<String>, +k: String, +v: String, +j: String, c: Bool) -> {c == KV.str_eq(j, k) : Bool} -> Reflect(String, j, k, c) -> {KV.entry(String, t, j) == KV.entry(String, u, j) : Maybe<&2, KV.Item<String>>} -> {KV.entry(String, KV.set(String, t, k, v), j) == KV.entry(String, KV.set(String, u, k, v), j) : Maybe<&2, KV.Item<String>>}:
+def set_one_point(+t: KV.Trie<KV.Val>, +u: KV.Trie<KV.Val>, +k: String, +v: String, +j: String, c: Bool) -> {c == KV.str_eq(j, k) : Bool} -> Reflect(String, j, k, c) -> {KV.entry(KV.Val, t, j) == KV.entry(KV.Val, u, j) : Maybe<&2, KV.Item<KV.Val>>} -> {KV.entry(KV.Val, KV.set(KV.Val, t, k, KV.VStr{v}), j) == KV.entry(KV.Val, KV.set(KV.Val, u, k, KV.VStr{v}), j) : Maybe<&2, KV.Item<KV.Val>>}:
   match c:
     case True{}:
       eb => ejk => e => set_same(t, u, k, v, j, ejk)
     case False{}:
-      +eb => ne => e => Equal.trans(Maybe<&2, KV.Item<String>>, KV.entry(String, KV.set(String, t, k, v), j), KV.entry(String, t, j), KV.entry(String, KV.set(String, u, k, v), j), Laws.entry_setx_other(String, t, k, j, v, 0n, Laws.key_eq_false(j, k, Equal.sym(Bool, False{}, KV.str_eq(j, k), eb))),
-                          Equal.trans(Maybe<&2, KV.Item<String>>, KV.entry(String, t, j), KV.entry(String, u, j), KV.entry(String, KV.set(String, u, k, v), j), e, Equal.sym(Maybe<&2, KV.Item<String>>, KV.entry(String, KV.set(String, u, k, v), j), KV.entry(String, u, j), Laws.entry_setx_other(String, u, k, j, v, 0n, Laws.key_eq_false(j, k, Equal.sym(Bool, False{}, KV.str_eq(j, k), eb))))))
+      +eb => ne => e => Equal.trans(Maybe<&2, KV.Item<KV.Val>>, KV.entry(KV.Val, KV.set(KV.Val, t, k, KV.VStr{v}), j), KV.entry(KV.Val, t, j), KV.entry(KV.Val, KV.set(KV.Val, u, k, KV.VStr{v}), j), Laws.entry_setx_other(KV.Val, t, k, j, KV.VStr{v}, 0n, Laws.key_eq_false(j, k, Equal.sym(Bool, False{}, KV.str_eq(j, k), eb))),
+                          Equal.trans(Maybe<&2, KV.Item<KV.Val>>, KV.entry(KV.Val, t, j), KV.entry(KV.Val, u, j), KV.entry(KV.Val, KV.set(KV.Val, u, k, KV.VStr{v}), j), e, Equal.sym(Maybe<&2, KV.Item<KV.Val>>, KV.entry(KV.Val, KV.set(KV.Val, u, k, KV.VStr{v}), j), KV.entry(KV.Val, u, j), Laws.entry_setx_other(KV.Val, u, k, j, KV.VStr{v}, 0n, Laws.key_eq_false(j, k, Equal.sym(Bool, False{}, KV.str_eq(j, k), eb))))))
 
-def del_point(ks: List<&2, String>, +t: KV.Trie<String>, +u: KV.Trie<String>, +j: String) -> {KV.entry(String, t, j) == KV.entry(String, u, j) : Maybe<&2, KV.Item<String>>} -> {KV.entry(String, del_all(ks, t), j) == KV.entry(String, del_all(ks, u), j) : Maybe<&2, KV.Item<String>>}:
+def del_point(ks: List<&2, String>, +t: KV.Trie<KV.Val>, +u: KV.Trie<KV.Val>, +j: String) -> {KV.entry(KV.Val, t, j) == KV.entry(KV.Val, u, j) : Maybe<&2, KV.Item<KV.Val>>} -> {KV.entry(KV.Val, del_all(ks, t), j) == KV.entry(KV.Val, del_all(ks, u), j) : Maybe<&2, KV.Item<KV.Val>>}:
   match ks:
     case Nil{}:
       e => e
     case Con{+k, +rest}:
-      e => del_point(rest, KV.del(String, t, k), KV.del(String, u, k), j)(del_one_point(t, u, k, j, KV.str_eq(j, k))({==})(str_refl(j, k))(e))
+      e => del_point(rest, KV.del(KV.Val, t, k), KV.del(KV.Val, u, k), j)(del_one_point(t, u, k, j, KV.str_eq(j, k))({==})(str_refl(j, k))(e))
 
-def mset_point(ps: List<&2, R.KVPair>, +t: KV.Trie<String>, +u: KV.Trie<String>, +j: String) -> {KV.entry(String, t, j) == KV.entry(String, u, j) : Maybe<&2, KV.Item<String>>} -> {KV.entry(String, T.mset_pairs(ps, t), j) == KV.entry(String, T.mset_pairs(ps, u), j) : Maybe<&2, KV.Item<String>>}:
+def mset_point(ps: List<&2, R.KVPair>, +t: KV.Trie<KV.Val>, +u: KV.Trie<KV.Val>, +j: String) -> {KV.entry(KV.Val, t, j) == KV.entry(KV.Val, u, j) : Maybe<&2, KV.Item<KV.Val>>} -> {KV.entry(KV.Val, T.mset_pairs(ps, t), j) == KV.entry(KV.Val, T.mset_pairs(ps, u), j) : Maybe<&2, KV.Item<KV.Val>>}:
   match ps:
     case Nil{}:
       e => e
     case Con{R.KP{+k, +v}, +rest}:
-      e => mset_point(rest, KV.set(String, t, k, v), KV.set(String, u, k, v), j)(set_one_point(t, u, k, v, j, KV.str_eq(j, k))({==})(str_refl(j, k))(e))
+      e => mset_point(rest, KV.set(KV.Val, t, k, KV.VStr{v}), KV.set(KV.Val, u, k, KV.VStr{v}), j)(set_one_point(t, u, k, v, j, KV.str_eq(j, k))({==})(str_refl(j, k))(e))
 
 # Keys that agree
 # ---------------
 # A command's writes depend on what its key holds, and on what the keys
 # of deps hold (MSETNX's keys, RENAME's two keys). Agree(t, u, ks): the
 # keys of ks have one entry in t and in u.
-def Agree(t: KV.Trie<String>, u: KV.Trie<String>, ks: List<&2, String>) -> Data:
+def Agree(t: KV.Trie<KV.Val>, u: KV.Trie<KV.Val>, ks: List<&2, String>) -> Data:
   match ks:
     case Nil{}:
       Unit
     case Con{k, rest}:
-      Sigma<&2, &2, {KV.entry(String, t, k) == KV.entry(String, u, k) : Maybe<&2, KV.Item<String>>}, _ => Agree(t, u, rest)>
+      Sigma<&2, &2, {KV.entry(KV.Val, t, k) == KV.entry(KV.Val, u, k) : Maybe<&2, KV.Item<KV.Val>>}, _ => Agree(t, u, rest)>
 
-def ag_head(-t: KV.Trie<String>, -u: KV.Trie<String>, -k: String, -rest: List<&2, String>, ag: Agree(t, u, Con{k, rest})) -> {KV.entry(String, t, k) == KV.entry(String, u, k) : Maybe<&2, KV.Item<String>>}:
+def ag_head(-t: KV.Trie<KV.Val>, -u: KV.Trie<KV.Val>, -k: String, -rest: List<&2, String>, ag: Agree(t, u, Con{k, rest})) -> {KV.entry(KV.Val, t, k) == KV.entry(KV.Val, u, k) : Maybe<&2, KV.Item<KV.Val>>}:
   (h, r) = ag
   h
 
-def ag_tail(-t: KV.Trie<String>, -u: KV.Trie<String>, -k: String, -rest: List<&2, String>, ag: Agree(t, u, Con{k, rest})) -> Agree(t, u, rest):
+def ag_tail(-t: KV.Trie<KV.Val>, -u: KV.Trie<KV.Val>, -k: String, -rest: List<&2, String>, ag: Agree(t, u, Con{k, rest})) -> Agree(t, u, rest):
   (h, r) = ag
   r
 
 # a key's entry through the walk with its hash given
-def at_agree(+t: KV.Trie<String>, +u: KV.Trie<String>, +k: String, e: {KV.entry(String, t, k) == KV.entry(String, u, k) : Maybe<&2, KV.Item<String>>}) -> {KV.entry.at(String, t, k, KV.hash(k)) == KV.entry.at(String, u, k, KV.hash(k)) : Maybe<&2, KV.Item<String>>}:
-  Equal.trans(Maybe<&2, KV.Item<String>>, KV.entry.at(String, t, k, KV.hash(k)), KV.entry(String, t, k), KV.entry.at(String, u, k, KV.hash(k)),
-    Equal.sym(Maybe<&2, KV.Item<String>>, KV.entry(String, t, k), KV.entry.at(String, t, k, KV.hash(k)), entry_at_eq(String, t, k)),
-    Equal.trans(Maybe<&2, KV.Item<String>>, KV.entry(String, t, k), KV.entry(String, u, k), KV.entry.at(String, u, k, KV.hash(k)), e, entry_at_eq(String, u, k)))
+def at_agree(+t: KV.Trie<KV.Val>, +u: KV.Trie<KV.Val>, +k: String, e: {KV.entry(KV.Val, t, k) == KV.entry(KV.Val, u, k) : Maybe<&2, KV.Item<KV.Val>>}) -> {KV.entry.at(KV.Val, t, k, KV.hash(k)) == KV.entry.at(KV.Val, u, k, KV.hash(k)) : Maybe<&2, KV.Item<KV.Val>>}:
+  Equal.trans(Maybe<&2, KV.Item<KV.Val>>, KV.entry.at(KV.Val, t, k, KV.hash(k)), KV.entry(KV.Val, t, k), KV.entry.at(KV.Val, u, k, KV.hash(k)),
+    Equal.sym(Maybe<&2, KV.Item<KV.Val>>, KV.entry(KV.Val, t, k), KV.entry.at(KV.Val, t, k, KV.hash(k)), entry_at_eq(KV.Val, t, k)),
+    Equal.trans(Maybe<&2, KV.Item<KV.Val>>, KV.entry(KV.Val, t, k), KV.entry(KV.Val, u, k), KV.entry.at(KV.Val, u, k, KV.hash(k)), e, entry_at_eq(KV.Val, u, k)))
 
 # MSETNX's verdict, in two tries that agree on its keys
-def live_step(+k: String, -rest: List<&2, R.KVPair>, +t: KV.Trie<String>, +u: KV.Trie<String>, +now: Nat, h: {KV.entry(String, t, k) == KV.entry(String, u, k) : Maybe<&2, KV.Item<String>>}, ih: {R.pairs.live(rest, now, t) == R.pairs.live(rest, now, u) : Bool}) -> {Bool.or(Maybe.is_some(&2, String, KV.read(String, t, k, now)), R.pairs.live(rest, now, t)) == Bool.or(Maybe.is_some(&2, String, KV.read(String, u, k, now)), R.pairs.live(rest, now, u)) : Bool}:
-  %read_eq(t, k, now) : {Bool.or(Maybe.is_some(&2, String, _), R.pairs.live(rest, now, t)) == Bool.or(Maybe.is_some(&2, String, KV.read(String, u, k, now)), R.pairs.live(rest, now, u)) : Bool}
-  %read_eq(u, k, now) : {Bool.or(Maybe.is_some(&2, String, Laws.live_val(String, KV.entry(String, t, k), now)), R.pairs.live(rest, now, t)) == Bool.or(Maybe.is_some(&2, String, _), R.pairs.live(rest, now, u)) : Bool}
-  %h : {Bool.or(Maybe.is_some(&2, String, Laws.live_val(String, KV.entry(String, t, k), now)), R.pairs.live(rest, now, t)) == Bool.or(Maybe.is_some(&2, String, Laws.live_val(String, _, now)), R.pairs.live(rest, now, u)) : Bool}
-  %ih : {Bool.or(Maybe.is_some(&2, String, Laws.live_val(String, KV.entry(String, t, k), now)), R.pairs.live(rest, now, t)) == Bool.or(Maybe.is_some(&2, String, Laws.live_val(String, KV.entry(String, t, k), now)), _) : Bool}
+def live_step(+k: String, -rest: List<&2, R.KVPair>, +t: KV.Trie<KV.Val>, +u: KV.Trie<KV.Val>, +now: Nat, h: {KV.entry(KV.Val, t, k) == KV.entry(KV.Val, u, k) : Maybe<&2, KV.Item<KV.Val>>}, ih: {R.pairs.live(rest, now, t) == R.pairs.live(rest, now, u) : Bool}) -> {Bool.or(Maybe.is_some(&2, KV.Val, KV.read(KV.Val, t, k, now)), R.pairs.live(rest, now, t)) == Bool.or(Maybe.is_some(&2, KV.Val, KV.read(KV.Val, u, k, now)), R.pairs.live(rest, now, u)) : Bool}:
+  %read_eq(t, k, now) : {Bool.or(Maybe.is_some(&2, KV.Val, _), R.pairs.live(rest, now, t)) == Bool.or(Maybe.is_some(&2, KV.Val, KV.read(KV.Val, u, k, now)), R.pairs.live(rest, now, u)) : Bool}
+  %read_eq(u, k, now) : {Bool.or(Maybe.is_some(&2, KV.Val, Laws.live_val(KV.Val, KV.entry(KV.Val, t, k), now)), R.pairs.live(rest, now, t)) == Bool.or(Maybe.is_some(&2, KV.Val, _), R.pairs.live(rest, now, u)) : Bool}
+  %h : {Bool.or(Maybe.is_some(&2, KV.Val, Laws.live_val(KV.Val, KV.entry(KV.Val, t, k), now)), R.pairs.live(rest, now, t)) == Bool.or(Maybe.is_some(&2, KV.Val, Laws.live_val(KV.Val, _, now)), R.pairs.live(rest, now, u)) : Bool}
+  %ih : {Bool.or(Maybe.is_some(&2, KV.Val, Laws.live_val(KV.Val, KV.entry(KV.Val, t, k), now)), R.pairs.live(rest, now, t)) == Bool.or(Maybe.is_some(&2, KV.Val, Laws.live_val(KV.Val, KV.entry(KV.Val, t, k), now)), _) : Bool}
   {==}
 
-def live_agree(ps: List<&2, R.KVPair>, +t: KV.Trie<String>, +u: KV.Trie<String>, +now: Nat) -> Agree(t, u, Laws.pair_keys(ps)) -> {R.pairs.live(ps, now, t) == R.pairs.live(ps, now, u) : Bool}:
+def live_agree(ps: List<&2, R.KVPair>, +t: KV.Trie<KV.Val>, +u: KV.Trie<KV.Val>, +now: Nat) -> Agree(t, u, Laws.pair_keys(ps)) -> {R.pairs.live(ps, now, t) == R.pairs.live(ps, now, u) : Bool}:
   match ps:
     case Nil{}:
       ag => {==}
@@ -3477,26 +3499,26 @@ def live_agree(ps: List<&2, R.KVPair>, +t: KV.Trie<String>, +u: KV.Trie<String>,
       +ag => live_step(k, rest, t, u, now, ag_head(t, u, k, Laws.pair_keys(rest), ag), live_agree(rest, t, u, now)(ag_tail(t, u, k, Laws.pair_keys(rest), ag)))
 
 # RENAME's verdict, in two tries that agree on its keys
-def pick_eq(-ms1: Maybe<&2, KV.Item<String>>, -ms2: Maybe<&2, KV.Item<String>>, -md1: Maybe<&2, KV.Item<String>>, -md2: Maybe<&2, KV.Item<String>>, +s: String, +d: String, +nx: Bool, +now: Nat, es: {ms1 == ms2 : Maybe<&2, KV.Item<String>>}, ed: {md1 == md2 : Maybe<&2, KV.Item<String>>}) -> {T.ren.pick(ms1, md1, s, d, nx, now) == T.ren.pick(ms2, md2, s, d, nx, now) : R.Ren}:
+def pick_eq(-ms1: Maybe<&2, KV.Item<KV.Val>>, -ms2: Maybe<&2, KV.Item<KV.Val>>, -md1: Maybe<&2, KV.Item<KV.Val>>, -md2: Maybe<&2, KV.Item<KV.Val>>, +s: String, +d: String, +nx: Bool, +now: Nat, es: {ms1 == ms2 : Maybe<&2, KV.Item<KV.Val>>}, ed: {md1 == md2 : Maybe<&2, KV.Item<KV.Val>>}) -> {T.ren.pick(ms1, md1, s, d, nx, now) == T.ren.pick(ms2, md2, s, d, nx, now) : R.Ren}:
   %es : {T.ren.pick(ms1, md1, s, d, nx, now) == T.ren.pick(_, md2, s, d, nx, now) : R.Ren}
   %ed : {T.ren.pick(ms1, md1, s, d, nx, now) == T.ren.pick(ms1, _, s, d, nx, now) : R.Ren}
   {==}
 
-def ren_find_eq(+t: KV.Trie<String>, +u: KV.Trie<String>, +s: String, +d: String, +nx: Bool, +now: Nat) -> Agree(t, u, [s, d]) -> {T.ren.find(t, s, d, nx, now) == T.ren.find(u, s, d, nx, now) : R.Ren}:
-  +ag => pick_eq(KV.entry.at(String, t, s, KV.hash(s)), KV.entry.at(String, u, s, KV.hash(s)), KV.entry.at(String, t, d, KV.hash(d)), KV.entry.at(String, u, d, KV.hash(d)), s, d, nx, now,
+def ren_find_eq(+t: KV.Trie<KV.Val>, +u: KV.Trie<KV.Val>, +s: String, +d: String, +nx: Bool, +now: Nat) -> Agree(t, u, [s, d]) -> {T.ren.find(t, s, d, nx, now) == T.ren.find(u, s, d, nx, now) : R.Ren}:
+  +ag => pick_eq(KV.entry.at(KV.Val, t, s, KV.hash(s)), KV.entry.at(KV.Val, u, s, KV.hash(s)), KV.entry.at(KV.Val, t, d, KV.hash(d)), KV.entry.at(KV.Val, u, d, KV.hash(d)), s, d, nx, now,
            at_agree(t, u, s, ag_head(t, u, s, [d], ag)),
            at_agree(t, u, d, ag_head(t, u, d, Nil{}, ag_tail(t, u, s, [d], ag))))
 
 # MSETNX's and RENAME's replies, for a given verdict, are the same in any
 # trie
-def msetnx_rep(b: Bool, -ps: List<&2, R.KVPair>, -t: KV.Trie<String>, -u: KV.Trie<String>) -> {T.reply_of(T.msetnx(b, ps, t)) == T.reply_of(T.msetnx(b, ps, u)) : R.Reply}:
+def msetnx_rep(b: Bool, -ps: List<&2, R.KVPair>, -t: KV.Trie<KV.Val>, -u: KV.Trie<KV.Val>) -> {T.reply_of(T.msetnx(b, ps, t)) == T.reply_of(T.msetnx(b, ps, u)) : R.Reply}:
   match b:
     case True{}:
       {==}
     case False{}:
       {==}
 
-def ren_rep(r: R.Ren, +nx: Bool, -s: String, -d: String, -t: KV.Trie<String>, -u: KV.Trie<String>) -> {T.reply_of(T.ren(r, nx, s, d, t)) == T.reply_of(T.ren(r, nx, s, d, u)) : R.Reply}:
+def ren_rep(r: R.Ren, +nx: Bool, -s: String, -d: String, -t: KV.Trie<KV.Val>, -u: KV.Trie<KV.Val>) -> {T.reply_of(T.ren(r, nx, s, d, t)) == T.reply_of(T.ren(r, nx, s, d, u)) : R.Reply}:
   match r:
     case R.RnNone{}:
       {==}
@@ -3509,28 +3531,28 @@ def ren_rep(r: R.Ren, +nx: Bool, -s: String, -d: String, -t: KV.Trie<String>, -u
 
 # a set of one key with a time: a key with one entry in two tries has one
 # entry after it
-def setx_same(+t: KV.Trie<String>, +u: KV.Trie<String>, +k: String, +v: String, +x: Nat, +j: String, +ejk: {j == k : String}) -> {KV.entry(String, KV.setx(String, t, k, v, x), j) == KV.entry(String, KV.setx(String, u, k, v, x), j) : Maybe<&2, KV.Item<String>>}:
-  %Equal.sym(String, j, k, ejk) : {KV.entry(String, KV.setx(String, t, k, v, x), _) == KV.entry(String, KV.setx(String, u, k, v, x), _) : Maybe<&2, KV.Item<String>>}
-  Equal.trans(Maybe<&2, KV.Item<String>>, KV.entry(String, KV.setx(String, t, k, v, x), k), Some{KV.Item{v, x}}, KV.entry(String, KV.setx(String, u, k, v, x), k), Laws.entry_setx_same(String, t, k, v, x), Equal.sym(Maybe<&2, KV.Item<String>>, KV.entry(String, KV.setx(String, u, k, v, x), k), Some{KV.Item{v, x}}, Laws.entry_setx_same(String, u, k, v, x)))
+def setx_same(+t: KV.Trie<KV.Val>, +u: KV.Trie<KV.Val>, +k: String, +v: KV.Val, +x: Nat, +j: String, +ejk: {j == k : String}) -> {KV.entry(KV.Val, KV.setx(KV.Val, t, k, v, x), j) == KV.entry(KV.Val, KV.setx(KV.Val, u, k, v, x), j) : Maybe<&2, KV.Item<KV.Val>>}:
+  %Equal.sym(String, j, k, ejk) : {KV.entry(KV.Val, KV.setx(KV.Val, t, k, v, x), _) == KV.entry(KV.Val, KV.setx(KV.Val, u, k, v, x), _) : Maybe<&2, KV.Item<KV.Val>>}
+  Equal.trans(Maybe<&2, KV.Item<KV.Val>>, KV.entry(KV.Val, KV.setx(KV.Val, t, k, v, x), k), Some{KV.Item{v, x}}, KV.entry(KV.Val, KV.setx(KV.Val, u, k, v, x), k), Laws.entry_setx_same(KV.Val, t, k, v, x), Equal.sym(Maybe<&2, KV.Item<KV.Val>>, KV.entry(KV.Val, KV.setx(KV.Val, u, k, v, x), k), Some{KV.Item{v, x}}, Laws.entry_setx_same(KV.Val, u, k, v, x)))
 
-def setx_one_point(+t: KV.Trie<String>, +u: KV.Trie<String>, +k: String, +v: String, +x: Nat, +j: String, c: Bool) -> {c == KV.str_eq(j, k) : Bool} -> Reflect(String, j, k, c) -> {KV.entry(String, t, j) == KV.entry(String, u, j) : Maybe<&2, KV.Item<String>>} -> {KV.entry(String, KV.setx(String, t, k, v, x), j) == KV.entry(String, KV.setx(String, u, k, v, x), j) : Maybe<&2, KV.Item<String>>}:
+def setx_one_point(+t: KV.Trie<KV.Val>, +u: KV.Trie<KV.Val>, +k: String, +v: KV.Val, +x: Nat, +j: String, c: Bool) -> {c == KV.str_eq(j, k) : Bool} -> Reflect(String, j, k, c) -> {KV.entry(KV.Val, t, j) == KV.entry(KV.Val, u, j) : Maybe<&2, KV.Item<KV.Val>>} -> {KV.entry(KV.Val, KV.setx(KV.Val, t, k, v, x), j) == KV.entry(KV.Val, KV.setx(KV.Val, u, k, v, x), j) : Maybe<&2, KV.Item<KV.Val>>}:
   match c:
     case True{}:
       eb => ejk => e => setx_same(t, u, k, v, x, j, ejk)
     case False{}:
-      +eb => ne => e => Equal.trans(Maybe<&2, KV.Item<String>>, KV.entry(String, KV.setx(String, t, k, v, x), j), KV.entry(String, t, j), KV.entry(String, KV.setx(String, u, k, v, x), j), Laws.entry_setx_other(String, t, k, j, v, x, Laws.key_eq_false(j, k, Equal.sym(Bool, False{}, KV.str_eq(j, k), eb))),
-                          Equal.trans(Maybe<&2, KV.Item<String>>, KV.entry(String, t, j), KV.entry(String, u, j), KV.entry(String, KV.setx(String, u, k, v, x), j), e, Equal.sym(Maybe<&2, KV.Item<String>>, KV.entry(String, KV.setx(String, u, k, v, x), j), KV.entry(String, u, j), Laws.entry_setx_other(String, u, k, j, v, x, Laws.key_eq_false(j, k, Equal.sym(Bool, False{}, KV.str_eq(j, k), eb))))))
+      +eb => ne => e => Equal.trans(Maybe<&2, KV.Item<KV.Val>>, KV.entry(KV.Val, KV.setx(KV.Val, t, k, v, x), j), KV.entry(KV.Val, t, j), KV.entry(KV.Val, KV.setx(KV.Val, u, k, v, x), j), Laws.entry_setx_other(KV.Val, t, k, j, v, x, Laws.key_eq_false(j, k, Equal.sym(Bool, False{}, KV.str_eq(j, k), eb))),
+                          Equal.trans(Maybe<&2, KV.Item<KV.Val>>, KV.entry(KV.Val, t, j), KV.entry(KV.Val, u, j), KV.entry(KV.Val, KV.setx(KV.Val, u, k, v, x), j), e, Equal.sym(Maybe<&2, KV.Item<KV.Val>>, KV.entry(KV.Val, KV.setx(KV.Val, u, k, v, x), j), KV.entry(KV.Val, u, j), Laws.entry_setx_other(KV.Val, u, k, j, v, x, Laws.key_eq_false(j, k, Equal.sym(Bool, False{}, KV.str_eq(j, k), eb))))))
 
 # MSETNX's and RENAME's writes, for a given verdict: a key with one entry
 # in two tries has one entry after them
-def msetnx_point(b: Bool, ps: List<&2, R.KVPair>, +t: KV.Trie<String>, +u: KV.Trie<String>, +j: String) -> {KV.entry(String, t, j) == KV.entry(String, u, j) : Maybe<&2, KV.Item<String>>} -> {KV.entry(String, T.db_of(T.msetnx(b, ps, t)), j) == KV.entry(String, T.db_of(T.msetnx(b, ps, u)), j) : Maybe<&2, KV.Item<String>>}:
+def msetnx_point(b: Bool, ps: List<&2, R.KVPair>, +t: KV.Trie<KV.Val>, +u: KV.Trie<KV.Val>, +j: String) -> {KV.entry(KV.Val, t, j) == KV.entry(KV.Val, u, j) : Maybe<&2, KV.Item<KV.Val>>} -> {KV.entry(KV.Val, T.db_of(T.msetnx(b, ps, t)), j) == KV.entry(KV.Val, T.db_of(T.msetnx(b, ps, u)), j) : Maybe<&2, KV.Item<KV.Val>>}:
   match b:
     case True{}:
       e => e
     case False{}:
       mset_point(ps, t, u, j)
 
-def ren_point(r: R.Ren, +nx: Bool, +s: String, +d: String, +t: KV.Trie<String>, +u: KV.Trie<String>, +j: String) -> {KV.entry(String, t, j) == KV.entry(String, u, j) : Maybe<&2, KV.Item<String>>} -> {KV.entry(String, T.db_of(T.ren(r, nx, s, d, t)), j) == KV.entry(String, T.db_of(T.ren(r, nx, s, d, u)), j) : Maybe<&2, KV.Item<String>>}:
+def ren_point(r: R.Ren, +nx: Bool, +s: String, +d: String, +t: KV.Trie<KV.Val>, +u: KV.Trie<KV.Val>, +j: String) -> {KV.entry(KV.Val, t, j) == KV.entry(KV.Val, u, j) : Maybe<&2, KV.Item<KV.Val>>} -> {KV.entry(KV.Val, T.db_of(T.ren(r, nx, s, d, t)), j) == KV.entry(KV.Val, T.db_of(T.ren(r, nx, s, d, u)), j) : Maybe<&2, KV.Item<KV.Val>>}:
   match r:
     case R.RnNone{}:
       e => e
@@ -3539,16 +3561,16 @@ def ren_point(r: R.Ren, +nx: Bool, +s: String, +d: String, +t: KV.Trie<String>, 
     case R.RnHeld{}:
       e => e
     case R.RnMove{+v, +x}:
-      e => del_one_point(KV.setx(String, t, d, v, x), KV.setx(String, u, d, v, x), s, j, KV.str_eq(j, s))({==})(str_refl(j, s))(setx_one_point(t, u, d, v, x, j, KV.str_eq(j, d))({==})(str_refl(j, d))(e))
+      e => del_one_point(KV.setx(KV.Val, t, d, v, x), KV.setx(KV.Val, u, d, v, x), s, j, KV.str_eq(j, s))({==})(str_refl(j, s))(setx_one_point(t, u, d, v, x, j, KV.str_eq(j, d))({==})(str_refl(j, d))(e))
 
 # BITOP's value, in two tries that agree on its sources
-def bitop_src_eq(+t: KV.Trie<String>, +u: KV.Trie<String>, +k: String, +now: Nat, h: {KV.entry(String, t, k) == KV.entry(String, u, k) : Maybe<&2, KV.Item<String>>}) -> {R.bitop.src(t, now, k) == R.bitop.src(u, now, k) : String}:
-  %read_eq(t, k, now) : {R.bitop.or_empty(_) == R.bitop.or_empty(KV.read(String, u, k, now)) : String}
-  %read_eq(u, k, now) : {R.bitop.or_empty(Laws.live_val(String, KV.entry(String, t, k), now)) == R.bitop.or_empty(_) : String}
-  %h : {R.bitop.or_empty(Laws.live_val(String, KV.entry(String, t, k), now)) == R.bitop.or_empty(Laws.live_val(String, _, now)) : String}
+def bitop_src_eq(+t: KV.Trie<KV.Val>, +u: KV.Trie<KV.Val>, +k: String, +now: Nat, h: {KV.entry(KV.Val, t, k) == KV.entry(KV.Val, u, k) : Maybe<&2, KV.Item<KV.Val>>}) -> {R.bitop.src(t, now, k) == R.bitop.src(u, now, k) : String}:
+  %read_eq(t, k, now) : {R.bitop.or_empty(_) == R.bitop.or_empty(KV.read(KV.Val, u, k, now)) : String}
+  %read_eq(u, k, now) : {R.bitop.or_empty(Laws.live_val(KV.Val, KV.entry(KV.Val, t, k), now)) == R.bitop.or_empty(_) : String}
+  %h : {R.bitop.or_empty(Laws.live_val(KV.Val, KV.entry(KV.Val, t, k), now)) == R.bitop.or_empty(Laws.live_val(KV.Val, _, now)) : String}
   {==}
 
-def bitop_fold_eq(+op: R.BitK, srcs: List<&2, String>, +t: KV.Trie<String>, +u: KV.Trie<String>, +now: Nat, +acc: String) -> Agree(t, u, srcs) -> {R.bitop.fold(op, srcs, now, t, acc) == R.bitop.fold(op, srcs, now, u, acc) : String}:
+def bitop_fold_eq(+op: R.BitK, srcs: List<&2, String>, +t: KV.Trie<KV.Val>, +u: KV.Trie<KV.Val>, +now: Nat, +acc: String) -> Agree(t, u, srcs) -> {R.bitop.fold(op, srcs, now, t, acc) == R.bitop.fold(op, srcs, now, u, acc) : String}:
   match srcs:
     case Nil{}:
       ag => {==}
@@ -3556,7 +3578,7 @@ def bitop_fold_eq(+op: R.BitK, srcs: List<&2, String>, +t: KV.Trie<String>, +u: 
       +ag => %bitop_src_eq(t, u, k, now, ag_head(t, u, k, rest, ag)) : {R.bitop.fold(op, rest, now, t, R.bitop.zip(op, acc, R.bitop.src(t, now, k), "")) == R.bitop.fold(op, rest, now, u, R.bitop.zip(op, acc, _, "")) : String}
              bitop_fold_eq(op, rest, t, u, now, R.bitop.zip(op, acc, R.bitop.src(t, now, k), ""))(ag_tail(t, u, k, rest, ag))
 
-def bitop_val_eq(+op: R.BitK, srcs: List<&2, String>, +t: KV.Trie<String>, +u: KV.Trie<String>, +now: Nat) -> Agree(t, u, srcs) -> {R.bitop.val(op, srcs, now, t) == R.bitop.val(op, srcs, now, u) : String}:
+def bitop_val_eq(+op: R.BitK, srcs: List<&2, String>, +t: KV.Trie<KV.Val>, +u: KV.Trie<KV.Val>, +now: Nat) -> Agree(t, u, srcs) -> {R.bitop.val(op, srcs, now, t) == R.bitop.val(op, srcs, now, u) : String}:
   match srcs:
     case Nil{}:
       ag => {==}
@@ -3564,18 +3586,50 @@ def bitop_val_eq(+op: R.BitK, srcs: List<&2, String>, +t: KV.Trie<String>, +u: K
       +ag => %bitop_src_eq(t, u, k, now, ag_head(t, u, k, rest, ag)) : {R.bitop.fold(op, rest, now, t, R.bitop.first(op, R.bitop.src(t, now, k))) == R.bitop.fold(op, rest, now, u, R.bitop.first(op, _)) : String}
              bitop_fold_eq(op, rest, t, u, now, R.bitop.first(op, R.bitop.src(t, now, k)))(ag_tail(t, u, k, rest, ag))
 
+# BITOP's verdict on its sources' types, in two tries that agree on them
+def bitop_wrong_step(+k: String, -rest: List<&2, String>, +t: KV.Trie<KV.Val>, +u: KV.Trie<KV.Val>, +now: Nat, h: {KV.entry(KV.Val, t, k) == KV.entry(KV.Val, u, k) : Maybe<&2, KV.Item<KV.Val>>}, ih: {R.bitop.wrong(rest, now, t) == R.bitop.wrong(rest, now, u) : Bool}) -> {Bool.or(R.is_coll(KV.read(KV.Val, t, k, now)), R.bitop.wrong(rest, now, t)) == Bool.or(R.is_coll(KV.read(KV.Val, u, k, now)), R.bitop.wrong(rest, now, u)) : Bool}:
+  %read_eq(t, k, now) : {Bool.or(R.is_coll(_), R.bitop.wrong(rest, now, t)) == Bool.or(R.is_coll(KV.read(KV.Val, u, k, now)), R.bitop.wrong(rest, now, u)) : Bool}
+  %read_eq(u, k, now) : {Bool.or(R.is_coll(Laws.live_val(KV.Val, KV.entry(KV.Val, t, k), now)), R.bitop.wrong(rest, now, t)) == Bool.or(R.is_coll(_), R.bitop.wrong(rest, now, u)) : Bool}
+  %h : {Bool.or(R.is_coll(Laws.live_val(KV.Val, KV.entry(KV.Val, t, k), now)), R.bitop.wrong(rest, now, t)) == Bool.or(R.is_coll(Laws.live_val(KV.Val, _, now)), R.bitop.wrong(rest, now, u)) : Bool}
+  %ih : {Bool.or(R.is_coll(Laws.live_val(KV.Val, KV.entry(KV.Val, t, k), now)), R.bitop.wrong(rest, now, t)) == Bool.or(R.is_coll(Laws.live_val(KV.Val, KV.entry(KV.Val, t, k), now)), _) : Bool}
+  {==}
+
+def bitop_wrong_eq(srcs: List<&2, String>, +t: KV.Trie<KV.Val>, +u: KV.Trie<KV.Val>, +now: Nat) -> Agree(t, u, srcs) -> {R.bitop.wrong(srcs, now, t) == R.bitop.wrong(srcs, now, u) : Bool}:
+  match srcs:
+    case Nil{}:
+      ag => {==}
+    case Con{+k, +rest}:
+      +ag => bitop_wrong_step(k, rest, t, u, now, ag_head(t, u, k, rest, ag), bitop_wrong_eq(rest, t, u, now)(ag_tail(t, u, k, rest, ag)))
+
 # BITOP's write, for a given value: a key with one entry in two tries has
 # one entry after it
-def bitop_point(e: Bool, +v: String, +d: String, +t: KV.Trie<String>, +u: KV.Trie<String>, +j: String) -> {KV.entry(String, t, j) == KV.entry(String, u, j) : Maybe<&2, KV.Item<String>>} -> {KV.entry(String, T.bitop.t(e, v, d, t), j) == KV.entry(String, T.bitop.t(e, v, d, u), j) : Maybe<&2, KV.Item<String>>}:
+def bitop_point(e: Bool, +v: String, +d: String, +t: KV.Trie<KV.Val>, +u: KV.Trie<KV.Val>, +j: String) -> {KV.entry(KV.Val, t, j) == KV.entry(KV.Val, u, j) : Maybe<&2, KV.Item<KV.Val>>} -> {KV.entry(KV.Val, T.bitop.t(e, v, d, t), j) == KV.entry(KV.Val, T.bitop.t(e, v, d, u), j) : Maybe<&2, KV.Item<KV.Val>>}:
   match e:
     case True{}:
       h => del_one_point(t, u, d, j, KV.str_eq(j, d))({==})(str_refl(j, d))(h)
     case False{}:
-      h => setx_one_point(t, u, d, v, 0n, j, KV.str_eq(j, d))({==})(str_refl(j, d))(h)
+      h => setx_one_point(t, u, d, KV.VStr{v}, 0n, j, KV.str_eq(j, d))({==})(str_refl(j, d))(h)
+
+# BITOP's writes, for a given verdict on its sources' types
+def bitop_go_point(w: Bool, +op: R.BitK, +srcs: List<&2, String>, +d: String, +t: KV.Trie<KV.Val>, +u: KV.Trie<KV.Val>, +j: String, +now: Nat) -> Agree(t, u, srcs) -> {KV.entry(KV.Val, t, j) == KV.entry(KV.Val, u, j) : Maybe<&2, KV.Item<KV.Val>>} -> {KV.entry(KV.Val, T.db_of(T.bitop.go(w, op, srcs, d, t, now)), j) == KV.entry(KV.Val, T.db_of(T.bitop.go(w, op, srcs, d, u, now)), j) : Maybe<&2, KV.Item<KV.Val>>}:
+  match w:
+    case True{}:
+      ag => e => e
+    case False{}:
+      ag => e => %bitop_val_eq(op, srcs, t, u, now)(ag) : {KV.entry(KV.Val, T.bitop.t(String.is_empty(R.bitop.val(op, srcs, now, t)), R.bitop.val(op, srcs, now, t), d, t), j) == KV.entry(KV.Val, T.bitop.t(String.is_empty(_), _, d, u), j) : Maybe<&2, KV.Item<KV.Val>>}
+                 bitop_point(String.is_empty(R.bitop.val(op, srcs, now, t)), R.bitop.val(op, srcs, now, t), d, t, u, j)(e)
+
+def bitop_go_rep(w: Bool, +op: R.BitK, +srcs: List<&2, String>, +d: String, +t: KV.Trie<KV.Val>, +u: KV.Trie<KV.Val>, +now: Nat) -> Agree(t, u, srcs) -> {T.reply_of(T.bitop.go(w, op, srcs, d, t, now)) == T.reply_of(T.bitop.go(w, op, srcs, d, u, now)) : R.Reply}:
+  match w:
+    case True{}:
+      ag => {==}
+    case False{}:
+      ag => %bitop_val_eq(op, srcs, t, u, now)(ag) : {T.reply_of(T.bitop(R.bitop.val(op, srcs, now, t), d, t)) == T.reply_of(T.bitop(_, d, u)) : R.Reply}
+            {==}
 
 # any command, run on two tries that agree on the keys its writes depend
 # on: a key j's entry after it depends only on j's entry before it
-def point_cmd(c: R.Cmd, +t: KV.Trie<String>, +u: KV.Trie<String>, +j: String, +now: Nat) -> Agree(t, u, Laws.deps(c)) -> {KV.entry(String, t, j) == KV.entry(String, u, j) : Maybe<&2, KV.Item<String>>} -> {KV.entry(String, T.db_of(T.exec(c, t, now)), j) == KV.entry(String, T.db_of(T.exec(c, u, now)), j) : Maybe<&2, KV.Item<String>>}:
+def point_cmd(c: R.Cmd, +t: KV.Trie<KV.Val>, +u: KV.Trie<KV.Val>, +j: String, +now: Nat) -> Agree(t, u, Laws.deps(c)) -> {KV.entry(KV.Val, t, j) == KV.entry(KV.Val, u, j) : Maybe<&2, KV.Item<KV.Val>>} -> {KV.entry(KV.Val, T.db_of(T.exec(c, t, now)), j) == KV.entry(KV.Val, T.db_of(T.exec(c, u, now)), j) : Maybe<&2, KV.Item<KV.Val>>}:
   match c:
     case R.Ping{}:
       ag => e => e
@@ -3586,8 +3640,8 @@ def point_cmd(c: R.Cmd, +t: KV.Trie<String>, +u: KV.Trie<String>, +j: String, +n
     case R.Set{+k, +v}:
       ag => point_key(R.Set{k, v}, t, u, j, now, {==}, KV.str_eq(j, k))({==})(str_refl(j, k))
     case R.Del{+ks}:
-      ag => e => %exec_del(ks, t, now) : {KV.entry(String, _, j) == KV.entry(String, T.db_of(T.exec(R.Del{ks}, u, now)), j) : Maybe<&2, KV.Item<String>>}
-                 %exec_del(ks, u, now) : {KV.entry(String, del_all(ks, t), j) == KV.entry(String, _, j) : Maybe<&2, KV.Item<String>>}
+      ag => e => %exec_del(ks, t, now) : {KV.entry(KV.Val, _, j) == KV.entry(KV.Val, T.db_of(T.exec(R.Del{ks}, u, now)), j) : Maybe<&2, KV.Item<KV.Val>>}
+                 %exec_del(ks, u, now) : {KV.entry(KV.Val, del_all(ks, t), j) == KV.entry(KV.Val, _, j) : Maybe<&2, KV.Item<KV.Val>>}
                  del_point(ks, t, u, j)(e)
     case R.Exists{ks}:
       ag => e => e
@@ -3610,14 +3664,14 @@ def point_cmd(c: R.Cmd, +t: KV.Trie<String>, +u: KV.Trie<String>, +j: String, +n
     case R.Upd{+k, +op}:
       ag => point_key(R.Upd{k, op}, t, u, j, now, {==}, KV.str_eq(j, k))({==})(str_refl(j, k))
     case R.MSetNx{+ps}:
-      ag => e => %live_agree(ps, t, u, now)(ag) : {KV.entry(String, T.db_of(T.msetnx(R.pairs.live(ps, now, t), ps, t)), j) == KV.entry(String, T.db_of(T.msetnx(_, ps, u)), j) : Maybe<&2, KV.Item<String>>}
+      ag => e => %live_agree(ps, t, u, now)(ag) : {KV.entry(KV.Val, T.db_of(T.msetnx(R.pairs.live(ps, now, t), ps, t)), j) == KV.entry(KV.Val, T.db_of(T.msetnx(_, ps, u)), j) : Maybe<&2, KV.Item<KV.Val>>}
                  msetnx_point(R.pairs.live(ps, now, t), ps, t, u, j)(e)
     case R.Rename{+s, +d, +nx}:
-      ag => e => %ren_find_eq(t, u, s, d, nx, now)(ag) : {KV.entry(String, T.db_of(T.ren(T.ren.find(t, s, d, nx, now), nx, s, d, t)), j) == KV.entry(String, T.db_of(T.ren(_, nx, s, d, u)), j) : Maybe<&2, KV.Item<String>>}
+      ag => e => %ren_find_eq(t, u, s, d, nx, now)(ag) : {KV.entry(KV.Val, T.db_of(T.ren(T.ren.find(t, s, d, nx, now), nx, s, d, t)), j) == KV.entry(KV.Val, T.db_of(T.ren(_, nx, s, d, u)), j) : Maybe<&2, KV.Item<KV.Val>>}
                  ren_point(T.ren.find(t, s, d, nx, now), nx, s, d, t, u, j)(e)
     case R.BitOp{+op, +d, +srcs}:
-      ag => e => %bitop_val_eq(op, srcs, t, u, now)(ag) : {KV.entry(String, T.bitop.t(String.is_empty(R.bitop.val(op, srcs, now, t)), R.bitop.val(op, srcs, now, t), d, t), j) == KV.entry(String, T.bitop.t(String.is_empty(_), _, d, u), j) : Maybe<&2, KV.Item<String>>}
-                 bitop_point(String.is_empty(R.bitop.val(op, srcs, now, t)), R.bitop.val(op, srcs, now, t), d, t, u, j)(e)
+      +ag => e => %bitop_wrong_eq(srcs, t, u, now)(ag) : {KV.entry(KV.Val, T.db_of(T.bitop.go(R.bitop.wrong(srcs, now, t), op, srcs, d, t, now)), j) == KV.entry(KV.Val, T.db_of(T.bitop.go(_, op, srcs, d, u, now)), j) : Maybe<&2, KV.Item<KV.Val>>}
+                  bitop_go_point(R.bitop.wrong(srcs, now, t), op, srcs, d, t, u, j, now)(ag)(e)
     case R.Own{o}:
       ag => e => e
     case R.Bad{r}:
@@ -3643,7 +3697,7 @@ def and_true_false(a: Bool) -> {Bool.and(a, True{}) == False{} : Bool} -> {a == 
 
 # a command that writes none of ks leaves each of them with the entry it
 # had
-def frame_agree(+c: R.Cmd, +db: KV.Trie<String>, ks: List<&2, String>, +now: Nat) -> {Laws.writes_any(c, ks) == False{} : Bool} -> Agree(T.db_of(T.exec(c, db, now)), db, ks):
+def frame_agree(+c: R.Cmd, +db: KV.Trie<KV.Val>, ks: List<&2, String>, +now: Nat) -> {Laws.writes_any(c, ks) == False{} : Bool} -> Agree(T.db_of(T.exec(c, db, now)), db, ks):
   match ks:
     case Nil{}:
       e => Unit{}
@@ -3653,20 +3707,20 @@ def frame_agree(+c: R.Cmd, +db: KV.Trie<String>, ks: List<&2, String>, +now: Nat
 # a key that c2 does not write holds after c1 then c2 as after c1, and
 # after c2 then c1 as after c1 too, c2 writing no key c1's writes depend
 # on; a key that c2 writes, c1 does not
-def commute_at(+c1: R.Cmd, +c2: R.Cmd, +db: KV.Trie<String>, +j: String, +now: Nat, d12: {Laws.spoils(c1, c2) == False{} : Bool}, d21: {Laws.spoils(c2, c1) == False{} : Bool}, b: Bool) -> {b == Laws.writes(c2, j) : Bool} -> {Bool.and(Laws.writes(c1, j), b) == False{} : Bool} -> {KV.entry(String, T.db_of(T.exec(c2, T.db_of(T.exec(c1, db, now)), now)), j) == KV.entry(String, T.db_of(T.exec(c1, T.db_of(T.exec(c2, db, now)), now)), j) : Maybe<&2, KV.Item<String>>}:
+def commute_at(+c1: R.Cmd, +c2: R.Cmd, +db: KV.Trie<KV.Val>, +j: String, +now: Nat, d12: {Laws.spoils(c1, c2) == False{} : Bool}, d21: {Laws.spoils(c2, c1) == False{} : Bool}, b: Bool) -> {b == Laws.writes(c2, j) : Bool} -> {Bool.and(Laws.writes(c1, j), b) == False{} : Bool} -> {KV.entry(KV.Val, T.db_of(T.exec(c2, T.db_of(T.exec(c1, db, now)), now)), j) == KV.entry(KV.Val, T.db_of(T.exec(c1, T.db_of(T.exec(c2, db, now)), now)), j) : Maybe<&2, KV.Item<KV.Val>>}:
   match b:
     case False{}:
       eb => e =>
         +w2 = Equal.sym(Bool, False{}, Laws.writes(c2, j), eb)
-        Equal.trans(Maybe<&2, KV.Item<String>>, KV.entry(String, T.db_of(T.exec(c2, T.db_of(T.exec(c1, db, now)), now)), j), KV.entry(String, T.db_of(T.exec(c1, db, now)), j), KV.entry(String, T.db_of(T.exec(c1, T.db_of(T.exec(c2, db, now)), now)), j), t_frame(c2, T.db_of(T.exec(c1, db, now)), j, now, w2),
-          Equal.sym(Maybe<&2, KV.Item<String>>, KV.entry(String, T.db_of(T.exec(c1, T.db_of(T.exec(c2, db, now)), now)), j), KV.entry(String, T.db_of(T.exec(c1, db, now)), j), point_cmd(c1, T.db_of(T.exec(c2, db, now)), db, j, now)(frame_agree(c2, db, Laws.deps(c1), now)(d21))(t_frame(c2, db, j, now, w2))))
+        Equal.trans(Maybe<&2, KV.Item<KV.Val>>, KV.entry(KV.Val, T.db_of(T.exec(c2, T.db_of(T.exec(c1, db, now)), now)), j), KV.entry(KV.Val, T.db_of(T.exec(c1, db, now)), j), KV.entry(KV.Val, T.db_of(T.exec(c1, T.db_of(T.exec(c2, db, now)), now)), j), t_frame(c2, T.db_of(T.exec(c1, db, now)), j, now, w2),
+          Equal.sym(Maybe<&2, KV.Item<KV.Val>>, KV.entry(KV.Val, T.db_of(T.exec(c1, T.db_of(T.exec(c2, db, now)), now)), j), KV.entry(KV.Val, T.db_of(T.exec(c1, db, now)), j), point_cmd(c1, T.db_of(T.exec(c2, db, now)), db, j, now)(frame_agree(c2, db, Laws.deps(c1), now)(d21))(t_frame(c2, db, j, now, w2))))
     case True{}:
       eb => e =>
         +w1 = and_true_false(Laws.writes(c1, j))(e)
-        Equal.trans(Maybe<&2, KV.Item<String>>, KV.entry(String, T.db_of(T.exec(c2, T.db_of(T.exec(c1, db, now)), now)), j), KV.entry(String, T.db_of(T.exec(c2, db, now)), j), KV.entry(String, T.db_of(T.exec(c1, T.db_of(T.exec(c2, db, now)), now)), j), point_cmd(c2, T.db_of(T.exec(c1, db, now)), db, j, now)(frame_agree(c1, db, Laws.deps(c2), now)(d12))(t_frame(c1, db, j, now, w1)),
-          Equal.sym(Maybe<&2, KV.Item<String>>, KV.entry(String, T.db_of(T.exec(c1, T.db_of(T.exec(c2, db, now)), now)), j), KV.entry(String, T.db_of(T.exec(c2, db, now)), j), t_frame(c1, T.db_of(T.exec(c2, db, now)), j, now, w1)))
+        Equal.trans(Maybe<&2, KV.Item<KV.Val>>, KV.entry(KV.Val, T.db_of(T.exec(c2, T.db_of(T.exec(c1, db, now)), now)), j), KV.entry(KV.Val, T.db_of(T.exec(c2, db, now)), j), KV.entry(KV.Val, T.db_of(T.exec(c1, T.db_of(T.exec(c2, db, now)), now)), j), point_cmd(c2, T.db_of(T.exec(c1, db, now)), db, j, now)(frame_agree(c1, db, Laws.deps(c2), now)(d12))(t_frame(c1, db, j, now, w1)),
+          Equal.sym(Maybe<&2, KV.Item<KV.Val>>, KV.entry(KV.Val, T.db_of(T.exec(c1, T.db_of(T.exec(c2, db, now)), now)), j), KV.entry(KV.Val, T.db_of(T.exec(c2, db, now)), j), t_frame(c1, T.db_of(T.exec(c2, db, now)), j, now, w1)))
 
-def t_commute_reads(+c1: R.Cmd, +c2: R.Cmd, +db: KV.Trie<String>, +j: String, +now: Nat, e: {Bool.and(Laws.writes(c1, j), Laws.writes(c2, j)) == False{} : Bool}, +d: {Bool.or(Laws.spoils(c1, c2), Laws.spoils(c2, c1)) == False{} : Bool}) -> {KV.entry(String, T.db_of(T.exec(c2, T.db_of(T.exec(c1, db, now)), now)), j) == KV.entry(String, T.db_of(T.exec(c1, T.db_of(T.exec(c2, db, now)), now)), j) : Maybe<&2, KV.Item<String>>}:
+def t_commute_reads(+c1: R.Cmd, +c2: R.Cmd, +db: KV.Trie<KV.Val>, +j: String, +now: Nat, e: {Bool.and(Laws.writes(c1, j), Laws.writes(c2, j)) == False{} : Bool}, +d: {Bool.or(Laws.spoils(c1, c2), Laws.spoils(c2, c1)) == False{} : Bool}) -> {KV.entry(KV.Val, T.db_of(T.exec(c2, T.db_of(T.exec(c1, db, now)), now)), j) == KV.entry(KV.Val, T.db_of(T.exec(c1, T.db_of(T.exec(c2, db, now)), now)), j) : Maybe<&2, KV.Item<KV.Val>>}:
   commute_at(c1, c2, db, j, now, or_false_l(Laws.spoils(c1, c2), Laws.spoils(c2, c1))(d), or_false_r(Laws.spoils(c1, c2), Laws.spoils(c2, c1))(d), Laws.writes(c2, j))({==})(e)
 
 # A command's reply after another
@@ -3679,65 +3733,65 @@ def not_false(a: Bool) -> {Bool.not(a) == False{} : Bool} -> {a == True{} : Bool
     case False{}:
       e => Empty.absurd({False{} == True{} : Bool}, true_false(e))
 
-def exists_after(ks: List<&2, String>, +c2: R.Cmd, +db: KV.Trie<String>, +now: Nat) -> {Laws.writes_any(c2, ks) == False{} : Bool} -> {R.exists_keys(ks, now, T.db_of(T.exec(c2, db, now))) == R.exists_keys(ks, now, db) : Nat}:
+def exists_after(ks: List<&2, String>, +c2: R.Cmd, +db: KV.Trie<KV.Val>, +now: Nat) -> {Laws.writes_any(c2, ks) == False{} : Bool} -> {R.exists_keys(ks, now, T.db_of(T.exec(c2, db, now))) == R.exists_keys(ks, now, db) : Nat}:
   match ks:
     case Nil{}:
       e => {==}
     case Con{+k, +rest}:
-      +e => %read_eq(T.db_of(T.exec(c2, db, now)), k, now) : {Nat.add(Bool.pick(Nat, Maybe.is_some(&2, String, _), 1n, 0n), R.exists_keys(rest, now, T.db_of(T.exec(c2, db, now)))) == Nat.add(Bool.pick(Nat, Maybe.is_some(&2, String, KV.read(String, db, k, now)), 1n, 0n), R.exists_keys(rest, now, db)) : Nat}
-            %read_eq(db, k, now) : {Nat.add(Bool.pick(Nat, Maybe.is_some(&2, String, Laws.live_val(String, KV.entry(String, T.db_of(T.exec(c2, db, now)), k), now)), 1n, 0n), R.exists_keys(rest, now, T.db_of(T.exec(c2, db, now)))) == Nat.add(Bool.pick(Nat, Maybe.is_some(&2, String, _), 1n, 0n), R.exists_keys(rest, now, db)) : Nat}
-            %t_frame(c2, db, k, now, or_false_l(Laws.writes(c2, k), Laws.writes_any(c2, rest))(e)) : {Nat.add(Bool.pick(Nat, Maybe.is_some(&2, String, Laws.live_val(String, KV.entry(String, T.db_of(T.exec(c2, db, now)), k), now)), 1n, 0n), R.exists_keys(rest, now, T.db_of(T.exec(c2, db, now)))) == Nat.add(Bool.pick(Nat, Maybe.is_some(&2, String, Laws.live_val(String, _, now)), 1n, 0n), R.exists_keys(rest, now, db)) : Nat}
-            Equal.cong(Nat, Nat, z => Nat.add(Bool.pick(Nat, Maybe.is_some(&2, String, Laws.live_val(String, KV.entry(String, T.db_of(T.exec(c2, db, now)), k), now)), 1n, 0n), z), R.exists_keys(rest, now, T.db_of(T.exec(c2, db, now))), R.exists_keys(rest, now, db), exists_after(rest, c2, db, now)(or_false_r(Laws.writes(c2, k), Laws.writes_any(c2, rest))(e)))
+      +e => %read_eq(T.db_of(T.exec(c2, db, now)), k, now) : {Nat.add(Bool.pick(Nat, Maybe.is_some(&2, KV.Val, _), 1n, 0n), R.exists_keys(rest, now, T.db_of(T.exec(c2, db, now)))) == Nat.add(Bool.pick(Nat, Maybe.is_some(&2, KV.Val, KV.read(KV.Val, db, k, now)), 1n, 0n), R.exists_keys(rest, now, db)) : Nat}
+            %read_eq(db, k, now) : {Nat.add(Bool.pick(Nat, Maybe.is_some(&2, KV.Val, Laws.live_val(KV.Val, KV.entry(KV.Val, T.db_of(T.exec(c2, db, now)), k), now)), 1n, 0n), R.exists_keys(rest, now, T.db_of(T.exec(c2, db, now)))) == Nat.add(Bool.pick(Nat, Maybe.is_some(&2, KV.Val, _), 1n, 0n), R.exists_keys(rest, now, db)) : Nat}
+            %t_frame(c2, db, k, now, or_false_l(Laws.writes(c2, k), Laws.writes_any(c2, rest))(e)) : {Nat.add(Bool.pick(Nat, Maybe.is_some(&2, KV.Val, Laws.live_val(KV.Val, KV.entry(KV.Val, T.db_of(T.exec(c2, db, now)), k), now)), 1n, 0n), R.exists_keys(rest, now, T.db_of(T.exec(c2, db, now)))) == Nat.add(Bool.pick(Nat, Maybe.is_some(&2, KV.Val, Laws.live_val(KV.Val, _, now)), 1n, 0n), R.exists_keys(rest, now, db)) : Nat}
+            Equal.cong(Nat, Nat, z => Nat.add(Bool.pick(Nat, Maybe.is_some(&2, KV.Val, Laws.live_val(KV.Val, KV.entry(KV.Val, T.db_of(T.exec(c2, db, now)), k), now)), 1n, 0n), z), R.exists_keys(rest, now, T.db_of(T.exec(c2, db, now))), R.exists_keys(rest, now, db), exists_after(rest, c2, db, now)(or_false_r(Laws.writes(c2, k), Laws.writes_any(c2, rest))(e)))
 
-def mget_after(ks: List<&2, String>, +c2: R.Cmd, +db: KV.Trie<String>, +now: Nat) -> {Laws.writes_any(c2, ks) == False{} : Bool} -> {R.mget_keys(ks, now, T.db_of(T.exec(c2, db, now))) == R.mget_keys(ks, now, db) : List<&2, R.Reply>}:
+def mget_after(ks: List<&2, String>, +c2: R.Cmd, +db: KV.Trie<KV.Val>, +now: Nat) -> {Laws.writes_any(c2, ks) == False{} : Bool} -> {R.mget_keys(ks, now, T.db_of(T.exec(c2, db, now))) == R.mget_keys(ks, now, db) : List<&2, R.Reply>}:
   match ks:
     case Nil{}:
       e => {==}
     case Con{+k, +rest}:
-      +e => %read_eq(T.db_of(T.exec(c2, db, now)), k, now) : {R.i_get(_) <> R.mget_keys(rest, now, T.db_of(T.exec(c2, db, now))) == R.i_get(KV.read(String, db, k, now)) <> R.mget_keys(rest, now, db) : List<&2, R.Reply>}
-            %read_eq(db, k, now) : {R.i_get(Laws.live_val(String, KV.entry(String, T.db_of(T.exec(c2, db, now)), k), now)) <> R.mget_keys(rest, now, T.db_of(T.exec(c2, db, now))) == R.i_get(_) <> R.mget_keys(rest, now, db) : List<&2, R.Reply>}
-            %t_frame(c2, db, k, now, or_false_l(Laws.writes(c2, k), Laws.writes_any(c2, rest))(e)) : {R.i_get(Laws.live_val(String, KV.entry(String, T.db_of(T.exec(c2, db, now)), k), now)) <> R.mget_keys(rest, now, T.db_of(T.exec(c2, db, now))) == R.i_get(Laws.live_val(String, _, now)) <> R.mget_keys(rest, now, db) : List<&2, R.Reply>}
-            Equal.cong(List<&2, R.Reply>, List<&2, R.Reply>, z => R.i_get(Laws.live_val(String, KV.entry(String, T.db_of(T.exec(c2, db, now)), k), now)) <> z, R.mget_keys(rest, now, T.db_of(T.exec(c2, db, now))), R.mget_keys(rest, now, db), mget_after(rest, c2, db, now)(or_false_r(Laws.writes(c2, k), Laws.writes_any(c2, rest))(e)))
+      +e => %read_eq(T.db_of(T.exec(c2, db, now)), k, now) : {R.i_getv(_) <> R.mget_keys(rest, now, T.db_of(T.exec(c2, db, now))) == R.i_getv(KV.read(KV.Val, db, k, now)) <> R.mget_keys(rest, now, db) : List<&2, R.Reply>}
+            %read_eq(db, k, now) : {R.i_getv(Laws.live_val(KV.Val, KV.entry(KV.Val, T.db_of(T.exec(c2, db, now)), k), now)) <> R.mget_keys(rest, now, T.db_of(T.exec(c2, db, now))) == R.i_getv(_) <> R.mget_keys(rest, now, db) : List<&2, R.Reply>}
+            %t_frame(c2, db, k, now, or_false_l(Laws.writes(c2, k), Laws.writes_any(c2, rest))(e)) : {R.i_getv(Laws.live_val(KV.Val, KV.entry(KV.Val, T.db_of(T.exec(c2, db, now)), k), now)) <> R.mget_keys(rest, now, T.db_of(T.exec(c2, db, now))) == R.i_getv(Laws.live_val(KV.Val, _, now)) <> R.mget_keys(rest, now, db) : List<&2, R.Reply>}
+            Equal.cong(List<&2, R.Reply>, List<&2, R.Reply>, z => R.i_getv(Laws.live_val(KV.Val, KV.entry(KV.Val, T.db_of(T.exec(c2, db, now)), k), now)) <> z, R.mget_keys(rest, now, T.db_of(T.exec(c2, db, now))), R.mget_keys(rest, now, db), mget_after(rest, c2, db, now)(or_false_r(Laws.writes(c2, k), Laws.writes_any(c2, rest))(e)))
 
 # deleting a key after deleting the keys of done
-def del_snoc(done: List<&2, String>, -k: String, +x: KV.Trie<String>) -> {del_all(List.append(&2, String, done, [k]), x) == KV.del(String, del_all(done, x), k) : KV.Trie<String>}:
+def del_snoc(done: List<&2, String>, -k: String, +x: KV.Trie<KV.Val>) -> {del_all(List.append(&2, String, done, [k]), x) == KV.del(KV.Val, del_all(done, x), k) : KV.Trie<KV.Val>}:
   match done:
     case Nil{}:
       {==}
     case Con{+d, +ds}:
-      del_snoc(ds, k, KV.del(String, x, d))
+      del_snoc(ds, k, KV.del(KV.Val, x, d))
 
 # after the same deletes on both sides, a key c2 does not write has one
 # entry in c2's trie and in the one before it
-def del_agree(+c2: R.Cmd, +db: KV.Trie<String>, +done: List<&2, String>, +k: String, +now: Nat, +w: {Laws.writes(c2, k) == False{} : Bool}, b: Bool) -> {b == Laws.any_key(k, done) : Bool} -> {KV.entry(String, del_all(done, T.db_of(T.exec(c2, db, now))), k) == KV.entry(String, del_all(done, db), k) : Maybe<&2, KV.Item<String>>}:
+def del_agree(+c2: R.Cmd, +db: KV.Trie<KV.Val>, +done: List<&2, String>, +k: String, +now: Nat, +w: {Laws.writes(c2, k) == False{} : Bool}, b: Bool) -> {b == Laws.any_key(k, done) : Bool} -> {KV.entry(KV.Val, del_all(done, T.db_of(T.exec(c2, db, now))), k) == KV.entry(KV.Val, del_all(done, db), k) : Maybe<&2, KV.Item<KV.Val>>}:
   match b:
     case True{}:
-      +eb => Equal.trans(Maybe<&2, KV.Item<String>>, KV.entry(String, del_all(done, T.db_of(T.exec(c2, db, now))), k), None{}, KV.entry(String, del_all(done, db), k), del_all_effect(done, T.db_of(T.exec(c2, db, now)), k)(Equal.sym(Bool, True{}, Laws.any_key(k, done), eb)), Equal.sym(Maybe<&2, KV.Item<String>>, KV.entry(String, del_all(done, db), k), None{}, del_all_effect(done, db, k)(Equal.sym(Bool, True{}, Laws.any_key(k, done), eb))))
+      +eb => Equal.trans(Maybe<&2, KV.Item<KV.Val>>, KV.entry(KV.Val, del_all(done, T.db_of(T.exec(c2, db, now))), k), None{}, KV.entry(KV.Val, del_all(done, db), k), del_all_effect(done, T.db_of(T.exec(c2, db, now)), k)(Equal.sym(Bool, True{}, Laws.any_key(k, done), eb)), Equal.sym(Maybe<&2, KV.Item<KV.Val>>, KV.entry(KV.Val, del_all(done, db), k), None{}, del_all_effect(done, db, k)(Equal.sym(Bool, True{}, Laws.any_key(k, done), eb))))
     case False{}:
-      +eb => Equal.trans(Maybe<&2, KV.Item<String>>, KV.entry(String, del_all(done, T.db_of(T.exec(c2, db, now))), k), KV.entry(String, T.db_of(T.exec(c2, db, now)), k), KV.entry(String, del_all(done, db), k), del_all_frame(done, T.db_of(T.exec(c2, db, now)), k)(Equal.sym(Bool, False{}, Laws.any_key(k, done), eb)),
-               Equal.trans(Maybe<&2, KV.Item<String>>, KV.entry(String, T.db_of(T.exec(c2, db, now)), k), KV.entry(String, db, k), KV.entry(String, del_all(done, db), k), t_frame(c2, db, k, now, w), Equal.sym(Maybe<&2, KV.Item<String>>, KV.entry(String, del_all(done, db), k), KV.entry(String, db, k), del_all_frame(done, db, k)(Equal.sym(Bool, False{}, Laws.any_key(k, done), eb)))))
+      +eb => Equal.trans(Maybe<&2, KV.Item<KV.Val>>, KV.entry(KV.Val, del_all(done, T.db_of(T.exec(c2, db, now))), k), KV.entry(KV.Val, T.db_of(T.exec(c2, db, now)), k), KV.entry(KV.Val, del_all(done, db), k), del_all_frame(done, T.db_of(T.exec(c2, db, now)), k)(Equal.sym(Bool, False{}, Laws.any_key(k, done), eb)),
+               Equal.trans(Maybe<&2, KV.Item<KV.Val>>, KV.entry(KV.Val, T.db_of(T.exec(c2, db, now)), k), KV.entry(KV.Val, db, k), KV.entry(KV.Val, del_all(done, db), k), t_frame(c2, db, k, now, w), Equal.sym(Maybe<&2, KV.Item<KV.Val>>, KV.entry(KV.Val, del_all(done, db), k), KV.entry(KV.Val, db, k), del_all_frame(done, db, k)(Equal.sym(Bool, False{}, Laws.any_key(k, done), eb)))))
 
 # DEL counts the same keys after c2, when c2 writes none of them: the
 # keys of done are deleted on both sides
-def dcount(+c2: R.Cmd, +db: KV.Trie<String>, ks: List<&2, String>, +done: List<&2, String>, +now: Nat) -> {Laws.writes_any(c2, ks) == False{} : Bool} -> {del_count(ks, now, del_all(done, T.db_of(T.exec(c2, db, now)))) == del_count(ks, now, del_all(done, db)) : Nat}:
+def dcount(+c2: R.Cmd, +db: KV.Trie<KV.Val>, ks: List<&2, String>, +done: List<&2, String>, +now: Nat) -> {Laws.writes_any(c2, ks) == False{} : Bool} -> {del_count(ks, now, del_all(done, T.db_of(T.exec(c2, db, now)))) == del_count(ks, now, del_all(done, db)) : Nat}:
   match ks:
     case Nil{}:
       e => {==}
     case Con{+k, +rest}:
       +e =>
         +ag = del_agree(c2, db, done, k, now, or_false_l(Laws.writes(c2, k), Laws.writes_any(c2, rest))(e), Laws.any_key(k, done))({==})
-        %ag : {Nat.add(del_count(rest, now, KV.del(String, del_all(done, T.db_of(T.exec(c2, db, now))), k)), Bool.pick(Nat, R.code.live(Laws.item_code(String, KV.entry(String, del_all(done, T.db_of(T.exec(c2, db, now))), k)), now), 1n, 0n)) == Nat.add(del_count(rest, now, KV.del(String, del_all(done, db), k)), Bool.pick(Nat, R.code.live(Laws.item_code(String, _), now), 1n, 0n)) : Nat}
-        %del_snoc(done, k, T.db_of(T.exec(c2, db, now))) : {Nat.add(del_count(rest, now, _), Bool.pick(Nat, R.code.live(Laws.item_code(String, KV.entry(String, del_all(done, T.db_of(T.exec(c2, db, now))), k)), now), 1n, 0n)) == Nat.add(del_count(rest, now, KV.del(String, del_all(done, db), k)), Bool.pick(Nat, R.code.live(Laws.item_code(String, KV.entry(String, del_all(done, T.db_of(T.exec(c2, db, now))), k)), now), 1n, 0n)) : Nat}
-        %del_snoc(done, k, db) : {Nat.add(del_count(rest, now, del_all(List.append(&2, String, done, [k]), T.db_of(T.exec(c2, db, now)))), Bool.pick(Nat, R.code.live(Laws.item_code(String, KV.entry(String, del_all(done, T.db_of(T.exec(c2, db, now))), k)), now), 1n, 0n)) == Nat.add(del_count(rest, now, _), Bool.pick(Nat, R.code.live(Laws.item_code(String, KV.entry(String, del_all(done, T.db_of(T.exec(c2, db, now))), k)), now), 1n, 0n)) : Nat}
-        Equal.cong(Nat, Nat, z => Nat.add(z, Bool.pick(Nat, R.code.live(Laws.item_code(String, KV.entry(String, del_all(done, T.db_of(T.exec(c2, db, now))), k)), now), 1n, 0n)), del_count(rest, now, del_all(List.append(&2, String, done, [k]), T.db_of(T.exec(c2, db, now)))), del_count(rest, now, del_all(List.append(&2, String, done, [k]), db)), dcount(c2, db, rest, List.append(&2, String, done, [k]), now)(or_false_r(Laws.writes(c2, k), Laws.writes_any(c2, rest))(e)))
+        %ag : {Nat.add(del_count(rest, now, KV.del(KV.Val, del_all(done, T.db_of(T.exec(c2, db, now))), k)), Bool.pick(Nat, R.code.live(Laws.item_code(KV.Val, KV.entry(KV.Val, del_all(done, T.db_of(T.exec(c2, db, now))), k)), now), 1n, 0n)) == Nat.add(del_count(rest, now, KV.del(KV.Val, del_all(done, db), k)), Bool.pick(Nat, R.code.live(Laws.item_code(KV.Val, _), now), 1n, 0n)) : Nat}
+        %del_snoc(done, k, T.db_of(T.exec(c2, db, now))) : {Nat.add(del_count(rest, now, _), Bool.pick(Nat, R.code.live(Laws.item_code(KV.Val, KV.entry(KV.Val, del_all(done, T.db_of(T.exec(c2, db, now))), k)), now), 1n, 0n)) == Nat.add(del_count(rest, now, KV.del(KV.Val, del_all(done, db), k)), Bool.pick(Nat, R.code.live(Laws.item_code(KV.Val, KV.entry(KV.Val, del_all(done, T.db_of(T.exec(c2, db, now))), k)), now), 1n, 0n)) : Nat}
+        %del_snoc(done, k, db) : {Nat.add(del_count(rest, now, del_all(List.append(&2, String, done, [k]), T.db_of(T.exec(c2, db, now)))), Bool.pick(Nat, R.code.live(Laws.item_code(KV.Val, KV.entry(KV.Val, del_all(done, T.db_of(T.exec(c2, db, now))), k)), now), 1n, 0n)) == Nat.add(del_count(rest, now, _), Bool.pick(Nat, R.code.live(Laws.item_code(KV.Val, KV.entry(KV.Val, del_all(done, T.db_of(T.exec(c2, db, now))), k)), now), 1n, 0n)) : Nat}
+        Equal.cong(Nat, Nat, z => Nat.add(z, Bool.pick(Nat, R.code.live(Laws.item_code(KV.Val, KV.entry(KV.Val, del_all(done, T.db_of(T.exec(c2, db, now))), k)), now), 1n, 0n)), del_count(rest, now, del_all(List.append(&2, String, done, [k]), T.db_of(T.exec(c2, db, now)))), del_count(rest, now, del_all(List.append(&2, String, done, [k]), db)), dcount(c2, db, rest, List.append(&2, String, done, [k]), now)(or_false_r(Laws.writes(c2, k), Laws.writes_any(c2, rest))(e)))
 
-def del_reply_after(+ks: List<&2, String>, +c2: R.Cmd, +db: KV.Trie<String>, +now: Nat) -> {Laws.writes_any(c2, ks) == False{} : Bool} -> {T.reply_of(T.exec(R.Del{ks}, T.db_of(T.exec(c2, db, now)), now)) == T.reply_of(T.exec(R.Del{ks}, db, now)) : R.Reply}:
+def del_reply_after(+ks: List<&2, String>, +c2: R.Cmd, +db: KV.Trie<KV.Val>, +now: Nat) -> {Laws.writes_any(c2, ks) == False{} : Bool} -> {T.reply_of(T.exec(R.Del{ks}, T.db_of(T.exec(c2, db, now)), now)) == T.reply_of(T.exec(R.Del{ks}, db, now)) : R.Reply}:
   e => %exec_del_r(ks, T.db_of(T.exec(c2, db, now)), now) : {_ == T.reply_of(T.exec(R.Del{ks}, db, now)) : R.Reply}
        %exec_del_r(ks, db, now) : {R.r_int(del_count(ks, now, T.db_of(T.exec(c2, db, now)))) == _ : R.Reply}
        Equal.cong(Nat, R.Reply, n => R.r_int(n), del_count(ks, now, T.db_of(T.exec(c2, db, now))), del_count(ks, now, db), dcount(c2, db, ks, Nil{}, now)(e))
 
 # a command answers the same after c2 when c2 writes nothing it reads
-def reply_after(c1: R.Cmd, +c2: R.Cmd, +db: KV.Trie<String>, +now: Nat) -> {Laws.disturbs(c2, c1) == False{} : Bool} -> {T.reply_of(T.exec(c1, T.db_of(T.exec(c2, db, now)), now)) == T.reply_of(T.exec(c1, db, now)) : R.Reply}:
+def reply_after(c1: R.Cmd, +c2: R.Cmd, +db: KV.Trie<KV.Val>, +now: Nat) -> {Laws.disturbs(c2, c1) == False{} : Bool} -> {T.reply_of(T.exec(c1, T.db_of(T.exec(c2, db, now)), now)) == T.reply_of(T.exec(c1, db, now)) : R.Reply}:
   match c1:
     case R.Ping{}:
       e => {==}
@@ -3758,15 +3812,15 @@ def reply_after(c1: R.Cmd, +c2: R.Cmd, +db: KV.Trie<String>, +now: Nat) -> {Laws
     case R.MSet{ps}:
       e => {==}
     case R.DbSize{}:
-      e => %Equal.sym(KV.Trie<String>, T.db_of(T.exec(c2, db, now)), db, t_reads_keep_db(c2, db, now, not_false(Laws.is_read(c2))(e))) : {T.reply_of(T.exec(R.DbSize{}, _, now)) == T.reply_of(T.exec(R.DbSize{}, db, now)) : R.Reply}
+      e => %Equal.sym(KV.Trie<KV.Val>, T.db_of(T.exec(c2, db, now)), db, t_reads_keep_db(c2, db, now, not_false(Laws.is_read(c2))(e))) : {T.reply_of(T.exec(R.DbSize{}, _, now)) == T.reply_of(T.exec(R.DbSize{}, db, now)) : R.Reply}
            {==}
     case R.FlushDb{}:
       e => {==}
     case R.Keys{p}:
-      e => %Equal.sym(KV.Trie<String>, T.db_of(T.exec(c2, db, now)), db, t_reads_keep_db(c2, db, now, not_false(Laws.is_read(c2))(e))) : {T.reply_of(T.exec(R.Keys{p}, _, now)) == T.reply_of(T.exec(R.Keys{p}, db, now)) : R.Reply}
+      e => %Equal.sym(KV.Trie<KV.Val>, T.db_of(T.exec(c2, db, now)), db, t_reads_keep_db(c2, db, now, not_false(Laws.is_read(c2))(e))) : {T.reply_of(T.exec(R.Keys{p}, _, now)) == T.reply_of(T.exec(R.Keys{p}, db, now)) : R.Reply}
            {==}
     case R.Scan{a}:
-      e => %Equal.sym(KV.Trie<String>, T.db_of(T.exec(c2, db, now)), db, t_reads_keep_db(c2, db, now, not_false(Laws.is_read(c2))(e))) : {T.reply_of(T.exec(R.Scan{a}, _, now)) == T.reply_of(T.exec(R.Scan{a}, db, now)) : R.Reply}
+      e => %Equal.sym(KV.Trie<KV.Val>, T.db_of(T.exec(c2, db, now)), db, t_reads_keep_db(c2, db, now, not_false(Laws.is_read(c2))(e))) : {T.reply_of(T.exec(R.Scan{a}, _, now)) == T.reply_of(T.exec(R.Scan{a}, db, now)) : R.Reply}
            {==}
     case R.Peek{+k, +o}:
       e => loc_reply(R.Peek{k, o}, T.db_of(T.exec(c2, db, now)), db, now)({==})(t_frame(c2, db, k, now, e))
@@ -3779,8 +3833,8 @@ def reply_after(c1: R.Cmd, +c2: R.Cmd, +db: KV.Trie<String>, +now: Nat) -> {Laws
       e => %ren_find_eq(T.db_of(T.exec(c2, db, now)), db, s, d, nx, now)(frame_agree(c2, db, [s, d], now)(e)) : {T.reply_of(T.ren(T.ren.find(T.db_of(T.exec(c2, db, now)), s, d, nx, now), nx, s, d, T.db_of(T.exec(c2, db, now)))) == T.reply_of(T.ren(_, nx, s, d, db)) : R.Reply}
            ren_rep(T.ren.find(T.db_of(T.exec(c2, db, now)), s, d, nx, now), nx, s, d, T.db_of(T.exec(c2, db, now)), db)
     case R.BitOp{+op, +d, +srcs}:
-      e => %bitop_val_eq(op, srcs, T.db_of(T.exec(c2, db, now)), db, now)(frame_agree(c2, db, srcs, now)(e)) : {T.reply_of(T.bitop(R.bitop.val(op, srcs, now, T.db_of(T.exec(c2, db, now))), d, T.db_of(T.exec(c2, db, now)))) == T.reply_of(T.bitop(_, d, db)) : R.Reply}
-           {==}
+      +e => %bitop_wrong_eq(srcs, T.db_of(T.exec(c2, db, now)), db, now)(frame_agree(c2, db, srcs, now)(e)) : {T.reply_of(T.bitop.go(R.bitop.wrong(srcs, now, T.db_of(T.exec(c2, db, now))), op, srcs, d, T.db_of(T.exec(c2, db, now)), now)) == T.reply_of(T.bitop.go(_, op, srcs, d, db, now)) : R.Reply}
+            bitop_go_rep(R.bitop.wrong(srcs, now, T.db_of(T.exec(c2, db, now))), op, srcs, d, T.db_of(T.exec(c2, db, now)), db, now)(frame_agree(c2, db, srcs, now)(e))
     case R.Own{o}:
       e => {==}
     case R.Bad{r}:
@@ -3929,7 +3983,7 @@ def clash_at(+c1: R.Cmd, +c2: R.Cmd, +j: String) -> {Laws.clash(c2, c1) == False
 def clash_sp(+c1: R.Cmd, +c2: R.Cmd, e: {Laws.clash(c2, c1) == False{} : Bool}) -> {Bool.or(Laws.spoils(c1, c2), Laws.spoils(c2, c1)) == False{} : Bool}:
   or_false_r(Laws.clash_w(c2, c1), Bool.or(Laws.spoils(c1, c2), Laws.spoils(c2, c1)))(e)
 
-def tw(H: List<&2, R.Cmd>, d: KV.Trie<String>, +now: Nat) -> KV.Trie<String>:
+def tw(H: List<&2, R.Cmd>, d: KV.Trie<KV.Val>, +now: Nat) -> KV.Trie<KV.Val>:
   match H:
     case Nil{}:
       d
@@ -3937,7 +3991,7 @@ def tw(H: List<&2, R.Cmd>, d: KV.Trie<String>, +now: Nat) -> KV.Trie<String>:
       T.db_of(T.exec(c, tw(older, d, now), now))
 
 # right after the two, the keys of ks have one entry on both sides
-def base_ag(+c1: R.Cmd, +c2: R.Cmd, +db: KV.Trie<String>, ks: List<&2, String>, +now: Nat, +e: {Laws.clash(c2, c1) == False{} : Bool}) -> Agree(T.db_of(T.exec(c2, T.db_of(T.exec(c1, db, now)), now)), T.db_of(T.exec(c1, T.db_of(T.exec(c2, db, now)), now)), ks):
+def base_ag(+c1: R.Cmd, +c2: R.Cmd, +db: KV.Trie<KV.Val>, ks: List<&2, String>, +now: Nat, +e: {Laws.clash(c2, c1) == False{} : Bool}) -> Agree(T.db_of(T.exec(c2, T.db_of(T.exec(c1, db, now)), now)), T.db_of(T.exec(c1, T.db_of(T.exec(c2, db, now)), now)), ks):
   match ks:
     case Nil{}:
       Unit{}
@@ -3946,7 +4000,7 @@ def base_ag(+c1: R.Cmd, +c2: R.Cmd, +db: KV.Trie<String>, ks: List<&2, String>, 
 
 # a command run on two tries that agree on the keys its writes depend on,
 # and on the keys of ks: they agree on ks after it
-def step_ag(+c: R.Cmd, +t: KV.Trie<String>, +u: KV.Trie<String>, ks: List<&2, String>, +now: Nat, +agd: Agree(t, u, Laws.deps(c))) -> Agree(t, u, ks) -> Agree(T.db_of(T.exec(c, t, now)), T.db_of(T.exec(c, u, now)), ks):
+def step_ag(+c: R.Cmd, +t: KV.Trie<KV.Val>, +u: KV.Trie<KV.Val>, ks: List<&2, String>, +now: Nat, +agd: Agree(t, u, Laws.deps(c))) -> Agree(t, u, ks) -> Agree(T.db_of(T.exec(c, t, now)), T.db_of(T.exec(c, u, now)), ks):
   match ks:
     case Nil{}:
       agk => Unit{}
@@ -3954,7 +4008,7 @@ def step_ag(+c: R.Cmd, +t: KV.Trie<String>, +u: KV.Trie<String>, ks: List<&2, St
       +agk => (point_cmd(c, t, u, k, now)(agd)(ag_head(t, u, k, rest, agk)), step_ag(c, t, u, rest, now, agd)(ag_tail(t, u, k, rest, agk)))
 
 # after any run H, the keys of ks have one entry on both sides
-def eq_gen(+c1: R.Cmd, +c2: R.Cmd, +db: KV.Trie<String>, H: List<&2, R.Cmd>, +ks: List<&2, String>, +now: Nat, +e: {Laws.clash(c2, c1) == False{} : Bool}) -> Agree(tw(H, T.db_of(T.exec(c2, T.db_of(T.exec(c1, db, now)), now)), now), tw(H, T.db_of(T.exec(c1, T.db_of(T.exec(c2, db, now)), now)), now), ks):
+def eq_gen(+c1: R.Cmd, +c2: R.Cmd, +db: KV.Trie<KV.Val>, H: List<&2, R.Cmd>, +ks: List<&2, String>, +now: Nat, +e: {Laws.clash(c2, c1) == False{} : Bool}) -> Agree(tw(H, T.db_of(T.exec(c2, T.db_of(T.exec(c1, db, now)), now)), now), tw(H, T.db_of(T.exec(c1, T.db_of(T.exec(c2, db, now)), now)), now), ks):
   match H:
     case Nil{}:
       base_ag(c1, c2, db, ks, now, e)
@@ -3962,42 +4016,42 @@ def eq_gen(+c1: R.Cmd, +c2: R.Cmd, +db: KV.Trie<String>, H: List<&2, R.Cmd>, +ks
       step_ag(c, tw(older, T.db_of(T.exec(c2, T.db_of(T.exec(c1, db, now)), now)), now), tw(older, T.db_of(T.exec(c1, T.db_of(T.exec(c2, db, now)), now)), now), ks, now, eq_gen(c1, c2, db, older, Laws.deps(c), now, e))(eq_gen(c1, c2, db, older, ks, now, e))
 
 # and so every key has one entry on both sides
-def eq_at(+c1: R.Cmd, +c2: R.Cmd, +db: KV.Trie<String>, +H: List<&2, R.Cmd>, +j: String, +now: Nat, +e: {Laws.clash(c2, c1) == False{} : Bool}) -> {KV.entry(String, tw(H, T.db_of(T.exec(c2, T.db_of(T.exec(c1, db, now)), now)), now), j) == KV.entry(String, tw(H, T.db_of(T.exec(c1, T.db_of(T.exec(c2, db, now)), now)), now), j) : Maybe<&2, KV.Item<String>>}:
+def eq_at(+c1: R.Cmd, +c2: R.Cmd, +db: KV.Trie<KV.Val>, +H: List<&2, R.Cmd>, +j: String, +now: Nat, +e: {Laws.clash(c2, c1) == False{} : Bool}) -> {KV.entry(KV.Val, tw(H, T.db_of(T.exec(c2, T.db_of(T.exec(c1, db, now)), now)), now), j) == KV.entry(KV.Val, tw(H, T.db_of(T.exec(c1, T.db_of(T.exec(c2, db, now)), now)), now), j) : Maybe<&2, KV.Item<KV.Val>>}:
   ag_head(tw(H, T.db_of(T.exec(c2, T.db_of(T.exec(c1, db, now)), now)), now), tw(H, T.db_of(T.exec(c1, T.db_of(T.exec(c2, db, now)), now)), now), j, Nil{}, eq_gen(c1, c2, db, H, [j], now, e))
 
-def exists_tw(+c1: R.Cmd, +c2: R.Cmd, +db: KV.Trie<String>, +H: List<&2, R.Cmd>, +now: Nat, +e: {Laws.clash(c2, c1) == False{} : Bool}, ks: List<&2, String>) -> {R.exists_keys(ks, now, tw(H, T.db_of(T.exec(c2, T.db_of(T.exec(c1, db, now)), now)), now)) == R.exists_keys(ks, now, tw(H, T.db_of(T.exec(c1, T.db_of(T.exec(c2, db, now)), now)), now)) : Nat}:
+def exists_tw(+c1: R.Cmd, +c2: R.Cmd, +db: KV.Trie<KV.Val>, +H: List<&2, R.Cmd>, +now: Nat, +e: {Laws.clash(c2, c1) == False{} : Bool}, ks: List<&2, String>) -> {R.exists_keys(ks, now, tw(H, T.db_of(T.exec(c2, T.db_of(T.exec(c1, db, now)), now)), now)) == R.exists_keys(ks, now, tw(H, T.db_of(T.exec(c1, T.db_of(T.exec(c2, db, now)), now)), now)) : Nat}:
   match ks:
     case Nil{}:
       {==}
     case Con{+k, +rest}:
-      %read_eq(tw(H, T.db_of(T.exec(c2, T.db_of(T.exec(c1, db, now)), now)), now), k, now) : {Nat.add(Bool.pick(Nat, Maybe.is_some(&2, String, _), 1n, 0n), R.exists_keys(rest, now, tw(H, T.db_of(T.exec(c2, T.db_of(T.exec(c1, db, now)), now)), now))) == Nat.add(Bool.pick(Nat, Maybe.is_some(&2, String, KV.read(String, tw(H, T.db_of(T.exec(c1, T.db_of(T.exec(c2, db, now)), now)), now), k, now)), 1n, 0n), R.exists_keys(rest, now, tw(H, T.db_of(T.exec(c1, T.db_of(T.exec(c2, db, now)), now)), now))) : Nat}
-      %read_eq(tw(H, T.db_of(T.exec(c1, T.db_of(T.exec(c2, db, now)), now)), now), k, now) : {Nat.add(Bool.pick(Nat, Maybe.is_some(&2, String, Laws.live_val(String, KV.entry(String, tw(H, T.db_of(T.exec(c2, T.db_of(T.exec(c1, db, now)), now)), now), k), now)), 1n, 0n), R.exists_keys(rest, now, tw(H, T.db_of(T.exec(c2, T.db_of(T.exec(c1, db, now)), now)), now))) == Nat.add(Bool.pick(Nat, Maybe.is_some(&2, String, _), 1n, 0n), R.exists_keys(rest, now, tw(H, T.db_of(T.exec(c1, T.db_of(T.exec(c2, db, now)), now)), now))) : Nat}
-      %eq_at(c1, c2, db, H, k, now, e) : {Nat.add(Bool.pick(Nat, Maybe.is_some(&2, String, Laws.live_val(String, KV.entry(String, tw(H, T.db_of(T.exec(c2, T.db_of(T.exec(c1, db, now)), now)), now), k), now)), 1n, 0n), R.exists_keys(rest, now, tw(H, T.db_of(T.exec(c2, T.db_of(T.exec(c1, db, now)), now)), now))) == Nat.add(Bool.pick(Nat, Maybe.is_some(&2, String, Laws.live_val(String, _, now)), 1n, 0n), R.exists_keys(rest, now, tw(H, T.db_of(T.exec(c1, T.db_of(T.exec(c2, db, now)), now)), now))) : Nat}
-      Equal.cong(Nat, Nat, z => Nat.add(Bool.pick(Nat, Maybe.is_some(&2, String, Laws.live_val(String, KV.entry(String, tw(H, T.db_of(T.exec(c2, T.db_of(T.exec(c1, db, now)), now)), now), k), now)), 1n, 0n), z), R.exists_keys(rest, now, tw(H, T.db_of(T.exec(c2, T.db_of(T.exec(c1, db, now)), now)), now)), R.exists_keys(rest, now, tw(H, T.db_of(T.exec(c1, T.db_of(T.exec(c2, db, now)), now)), now)), exists_tw(c1, c2, db, H, now, e, rest))
+      %read_eq(tw(H, T.db_of(T.exec(c2, T.db_of(T.exec(c1, db, now)), now)), now), k, now) : {Nat.add(Bool.pick(Nat, Maybe.is_some(&2, KV.Val, _), 1n, 0n), R.exists_keys(rest, now, tw(H, T.db_of(T.exec(c2, T.db_of(T.exec(c1, db, now)), now)), now))) == Nat.add(Bool.pick(Nat, Maybe.is_some(&2, KV.Val, KV.read(KV.Val, tw(H, T.db_of(T.exec(c1, T.db_of(T.exec(c2, db, now)), now)), now), k, now)), 1n, 0n), R.exists_keys(rest, now, tw(H, T.db_of(T.exec(c1, T.db_of(T.exec(c2, db, now)), now)), now))) : Nat}
+      %read_eq(tw(H, T.db_of(T.exec(c1, T.db_of(T.exec(c2, db, now)), now)), now), k, now) : {Nat.add(Bool.pick(Nat, Maybe.is_some(&2, KV.Val, Laws.live_val(KV.Val, KV.entry(KV.Val, tw(H, T.db_of(T.exec(c2, T.db_of(T.exec(c1, db, now)), now)), now), k), now)), 1n, 0n), R.exists_keys(rest, now, tw(H, T.db_of(T.exec(c2, T.db_of(T.exec(c1, db, now)), now)), now))) == Nat.add(Bool.pick(Nat, Maybe.is_some(&2, KV.Val, _), 1n, 0n), R.exists_keys(rest, now, tw(H, T.db_of(T.exec(c1, T.db_of(T.exec(c2, db, now)), now)), now))) : Nat}
+      %eq_at(c1, c2, db, H, k, now, e) : {Nat.add(Bool.pick(Nat, Maybe.is_some(&2, KV.Val, Laws.live_val(KV.Val, KV.entry(KV.Val, tw(H, T.db_of(T.exec(c2, T.db_of(T.exec(c1, db, now)), now)), now), k), now)), 1n, 0n), R.exists_keys(rest, now, tw(H, T.db_of(T.exec(c2, T.db_of(T.exec(c1, db, now)), now)), now))) == Nat.add(Bool.pick(Nat, Maybe.is_some(&2, KV.Val, Laws.live_val(KV.Val, _, now)), 1n, 0n), R.exists_keys(rest, now, tw(H, T.db_of(T.exec(c1, T.db_of(T.exec(c2, db, now)), now)), now))) : Nat}
+      Equal.cong(Nat, Nat, z => Nat.add(Bool.pick(Nat, Maybe.is_some(&2, KV.Val, Laws.live_val(KV.Val, KV.entry(KV.Val, tw(H, T.db_of(T.exec(c2, T.db_of(T.exec(c1, db, now)), now)), now), k), now)), 1n, 0n), z), R.exists_keys(rest, now, tw(H, T.db_of(T.exec(c2, T.db_of(T.exec(c1, db, now)), now)), now)), R.exists_keys(rest, now, tw(H, T.db_of(T.exec(c1, T.db_of(T.exec(c2, db, now)), now)), now)), exists_tw(c1, c2, db, H, now, e, rest))
 
-def mget_tw(+c1: R.Cmd, +c2: R.Cmd, +db: KV.Trie<String>, +H: List<&2, R.Cmd>, +now: Nat, +e: {Laws.clash(c2, c1) == False{} : Bool}, ks: List<&2, String>) -> {R.mget_keys(ks, now, tw(H, T.db_of(T.exec(c2, T.db_of(T.exec(c1, db, now)), now)), now)) == R.mget_keys(ks, now, tw(H, T.db_of(T.exec(c1, T.db_of(T.exec(c2, db, now)), now)), now)) : List<&2, R.Reply>}:
+def mget_tw(+c1: R.Cmd, +c2: R.Cmd, +db: KV.Trie<KV.Val>, +H: List<&2, R.Cmd>, +now: Nat, +e: {Laws.clash(c2, c1) == False{} : Bool}, ks: List<&2, String>) -> {R.mget_keys(ks, now, tw(H, T.db_of(T.exec(c2, T.db_of(T.exec(c1, db, now)), now)), now)) == R.mget_keys(ks, now, tw(H, T.db_of(T.exec(c1, T.db_of(T.exec(c2, db, now)), now)), now)) : List<&2, R.Reply>}:
   match ks:
     case Nil{}:
       {==}
     case Con{+k, +rest}:
-      %read_eq(tw(H, T.db_of(T.exec(c2, T.db_of(T.exec(c1, db, now)), now)), now), k, now) : {R.i_get(_) <> R.mget_keys(rest, now, tw(H, T.db_of(T.exec(c2, T.db_of(T.exec(c1, db, now)), now)), now)) == R.i_get(KV.read(String, tw(H, T.db_of(T.exec(c1, T.db_of(T.exec(c2, db, now)), now)), now), k, now)) <> R.mget_keys(rest, now, tw(H, T.db_of(T.exec(c1, T.db_of(T.exec(c2, db, now)), now)), now)) : List<&2, R.Reply>}
-      %read_eq(tw(H, T.db_of(T.exec(c1, T.db_of(T.exec(c2, db, now)), now)), now), k, now) : {R.i_get(Laws.live_val(String, KV.entry(String, tw(H, T.db_of(T.exec(c2, T.db_of(T.exec(c1, db, now)), now)), now), k), now)) <> R.mget_keys(rest, now, tw(H, T.db_of(T.exec(c2, T.db_of(T.exec(c1, db, now)), now)), now)) == R.i_get(_) <> R.mget_keys(rest, now, tw(H, T.db_of(T.exec(c1, T.db_of(T.exec(c2, db, now)), now)), now)) : List<&2, R.Reply>}
-      %eq_at(c1, c2, db, H, k, now, e) : {R.i_get(Laws.live_val(String, KV.entry(String, tw(H, T.db_of(T.exec(c2, T.db_of(T.exec(c1, db, now)), now)), now), k), now)) <> R.mget_keys(rest, now, tw(H, T.db_of(T.exec(c2, T.db_of(T.exec(c1, db, now)), now)), now)) == R.i_get(Laws.live_val(String, _, now)) <> R.mget_keys(rest, now, tw(H, T.db_of(T.exec(c1, T.db_of(T.exec(c2, db, now)), now)), now)) : List<&2, R.Reply>}
-      Equal.cong(List<&2, R.Reply>, List<&2, R.Reply>, z => R.i_get(Laws.live_val(String, KV.entry(String, tw(H, T.db_of(T.exec(c2, T.db_of(T.exec(c1, db, now)), now)), now), k), now)) <> z, R.mget_keys(rest, now, tw(H, T.db_of(T.exec(c2, T.db_of(T.exec(c1, db, now)), now)), now)), R.mget_keys(rest, now, tw(H, T.db_of(T.exec(c1, T.db_of(T.exec(c2, db, now)), now)), now)), mget_tw(c1, c2, db, H, now, e, rest))
+      %read_eq(tw(H, T.db_of(T.exec(c2, T.db_of(T.exec(c1, db, now)), now)), now), k, now) : {R.i_getv(_) <> R.mget_keys(rest, now, tw(H, T.db_of(T.exec(c2, T.db_of(T.exec(c1, db, now)), now)), now)) == R.i_getv(KV.read(KV.Val, tw(H, T.db_of(T.exec(c1, T.db_of(T.exec(c2, db, now)), now)), now), k, now)) <> R.mget_keys(rest, now, tw(H, T.db_of(T.exec(c1, T.db_of(T.exec(c2, db, now)), now)), now)) : List<&2, R.Reply>}
+      %read_eq(tw(H, T.db_of(T.exec(c1, T.db_of(T.exec(c2, db, now)), now)), now), k, now) : {R.i_getv(Laws.live_val(KV.Val, KV.entry(KV.Val, tw(H, T.db_of(T.exec(c2, T.db_of(T.exec(c1, db, now)), now)), now), k), now)) <> R.mget_keys(rest, now, tw(H, T.db_of(T.exec(c2, T.db_of(T.exec(c1, db, now)), now)), now)) == R.i_getv(_) <> R.mget_keys(rest, now, tw(H, T.db_of(T.exec(c1, T.db_of(T.exec(c2, db, now)), now)), now)) : List<&2, R.Reply>}
+      %eq_at(c1, c2, db, H, k, now, e) : {R.i_getv(Laws.live_val(KV.Val, KV.entry(KV.Val, tw(H, T.db_of(T.exec(c2, T.db_of(T.exec(c1, db, now)), now)), now), k), now)) <> R.mget_keys(rest, now, tw(H, T.db_of(T.exec(c2, T.db_of(T.exec(c1, db, now)), now)), now)) == R.i_getv(Laws.live_val(KV.Val, _, now)) <> R.mget_keys(rest, now, tw(H, T.db_of(T.exec(c1, T.db_of(T.exec(c2, db, now)), now)), now)) : List<&2, R.Reply>}
+      Equal.cong(List<&2, R.Reply>, List<&2, R.Reply>, z => R.i_getv(Laws.live_val(KV.Val, KV.entry(KV.Val, tw(H, T.db_of(T.exec(c2, T.db_of(T.exec(c1, db, now)), now)), now), k), now)) <> z, R.mget_keys(rest, now, tw(H, T.db_of(T.exec(c2, T.db_of(T.exec(c1, db, now)), now)), now)), R.mget_keys(rest, now, tw(H, T.db_of(T.exec(c1, T.db_of(T.exec(c2, db, now)), now)), now)), mget_tw(c1, c2, db, H, now, e, rest))
 
-def dcount_tw(+c1: R.Cmd, +c2: R.Cmd, +db: KV.Trie<String>, +H: List<&2, R.Cmd>, +now: Nat, +e: {Laws.clash(c2, c1) == False{} : Bool}, ks: List<&2, String>, +done: List<&2, String>) -> {del_count(ks, now, del_all(done, tw(H, T.db_of(T.exec(c2, T.db_of(T.exec(c1, db, now)), now)), now))) == del_count(ks, now, del_all(done, tw(H, T.db_of(T.exec(c1, T.db_of(T.exec(c2, db, now)), now)), now))) : Nat}:
+def dcount_tw(+c1: R.Cmd, +c2: R.Cmd, +db: KV.Trie<KV.Val>, +H: List<&2, R.Cmd>, +now: Nat, +e: {Laws.clash(c2, c1) == False{} : Bool}, ks: List<&2, String>, +done: List<&2, String>) -> {del_count(ks, now, del_all(done, tw(H, T.db_of(T.exec(c2, T.db_of(T.exec(c1, db, now)), now)), now))) == del_count(ks, now, del_all(done, tw(H, T.db_of(T.exec(c1, T.db_of(T.exec(c2, db, now)), now)), now))) : Nat}:
   match ks:
     case Nil{}:
       {==}
     case Con{+k, +rest}:
-      %del_point(done, tw(H, T.db_of(T.exec(c2, T.db_of(T.exec(c1, db, now)), now)), now), tw(H, T.db_of(T.exec(c1, T.db_of(T.exec(c2, db, now)), now)), now), k)(eq_at(c1, c2, db, H, k, now, e)) : {Nat.add(del_count(rest, now, KV.del(String, del_all(done, tw(H, T.db_of(T.exec(c2, T.db_of(T.exec(c1, db, now)), now)), now)), k)), Bool.pick(Nat, R.code.live(Laws.item_code(String, KV.entry(String, del_all(done, tw(H, T.db_of(T.exec(c2, T.db_of(T.exec(c1, db, now)), now)), now)), k)), now), 1n, 0n)) == Nat.add(del_count(rest, now, KV.del(String, del_all(done, tw(H, T.db_of(T.exec(c1, T.db_of(T.exec(c2, db, now)), now)), now)), k)), Bool.pick(Nat, R.code.live(Laws.item_code(String, _), now), 1n, 0n)) : Nat}
-      %del_snoc(done, k, tw(H, T.db_of(T.exec(c2, T.db_of(T.exec(c1, db, now)), now)), now)) : {Nat.add(del_count(rest, now, _), Bool.pick(Nat, R.code.live(Laws.item_code(String, KV.entry(String, del_all(done, tw(H, T.db_of(T.exec(c2, T.db_of(T.exec(c1, db, now)), now)), now)), k)), now), 1n, 0n)) == Nat.add(del_count(rest, now, KV.del(String, del_all(done, tw(H, T.db_of(T.exec(c1, T.db_of(T.exec(c2, db, now)), now)), now)), k)), Bool.pick(Nat, R.code.live(Laws.item_code(String, KV.entry(String, del_all(done, tw(H, T.db_of(T.exec(c2, T.db_of(T.exec(c1, db, now)), now)), now)), k)), now), 1n, 0n)) : Nat}
-      %del_snoc(done, k, tw(H, T.db_of(T.exec(c1, T.db_of(T.exec(c2, db, now)), now)), now)) : {Nat.add(del_count(rest, now, del_all(List.append(&2, String, done, [k]), tw(H, T.db_of(T.exec(c2, T.db_of(T.exec(c1, db, now)), now)), now))), Bool.pick(Nat, R.code.live(Laws.item_code(String, KV.entry(String, del_all(done, tw(H, T.db_of(T.exec(c2, T.db_of(T.exec(c1, db, now)), now)), now)), k)), now), 1n, 0n)) == Nat.add(del_count(rest, now, _), Bool.pick(Nat, R.code.live(Laws.item_code(String, KV.entry(String, del_all(done, tw(H, T.db_of(T.exec(c2, T.db_of(T.exec(c1, db, now)), now)), now)), k)), now), 1n, 0n)) : Nat}
-      Equal.cong(Nat, Nat, z => Nat.add(z, Bool.pick(Nat, R.code.live(Laws.item_code(String, KV.entry(String, del_all(done, tw(H, T.db_of(T.exec(c2, T.db_of(T.exec(c1, db, now)), now)), now)), k)), now), 1n, 0n)), del_count(rest, now, del_all(List.append(&2, String, done, [k]), tw(H, T.db_of(T.exec(c2, T.db_of(T.exec(c1, db, now)), now)), now))), del_count(rest, now, del_all(List.append(&2, String, done, [k]), tw(H, T.db_of(T.exec(c1, T.db_of(T.exec(c2, db, now)), now)), now))), dcount_tw(c1, c2, db, H, now, e, rest, List.append(&2, String, done, [k])))
+      %del_point(done, tw(H, T.db_of(T.exec(c2, T.db_of(T.exec(c1, db, now)), now)), now), tw(H, T.db_of(T.exec(c1, T.db_of(T.exec(c2, db, now)), now)), now), k)(eq_at(c1, c2, db, H, k, now, e)) : {Nat.add(del_count(rest, now, KV.del(KV.Val, del_all(done, tw(H, T.db_of(T.exec(c2, T.db_of(T.exec(c1, db, now)), now)), now)), k)), Bool.pick(Nat, R.code.live(Laws.item_code(KV.Val, KV.entry(KV.Val, del_all(done, tw(H, T.db_of(T.exec(c2, T.db_of(T.exec(c1, db, now)), now)), now)), k)), now), 1n, 0n)) == Nat.add(del_count(rest, now, KV.del(KV.Val, del_all(done, tw(H, T.db_of(T.exec(c1, T.db_of(T.exec(c2, db, now)), now)), now)), k)), Bool.pick(Nat, R.code.live(Laws.item_code(KV.Val, _), now), 1n, 0n)) : Nat}
+      %del_snoc(done, k, tw(H, T.db_of(T.exec(c2, T.db_of(T.exec(c1, db, now)), now)), now)) : {Nat.add(del_count(rest, now, _), Bool.pick(Nat, R.code.live(Laws.item_code(KV.Val, KV.entry(KV.Val, del_all(done, tw(H, T.db_of(T.exec(c2, T.db_of(T.exec(c1, db, now)), now)), now)), k)), now), 1n, 0n)) == Nat.add(del_count(rest, now, KV.del(KV.Val, del_all(done, tw(H, T.db_of(T.exec(c1, T.db_of(T.exec(c2, db, now)), now)), now)), k)), Bool.pick(Nat, R.code.live(Laws.item_code(KV.Val, KV.entry(KV.Val, del_all(done, tw(H, T.db_of(T.exec(c2, T.db_of(T.exec(c1, db, now)), now)), now)), k)), now), 1n, 0n)) : Nat}
+      %del_snoc(done, k, tw(H, T.db_of(T.exec(c1, T.db_of(T.exec(c2, db, now)), now)), now)) : {Nat.add(del_count(rest, now, del_all(List.append(&2, String, done, [k]), tw(H, T.db_of(T.exec(c2, T.db_of(T.exec(c1, db, now)), now)), now))), Bool.pick(Nat, R.code.live(Laws.item_code(KV.Val, KV.entry(KV.Val, del_all(done, tw(H, T.db_of(T.exec(c2, T.db_of(T.exec(c1, db, now)), now)), now)), k)), now), 1n, 0n)) == Nat.add(del_count(rest, now, _), Bool.pick(Nat, R.code.live(Laws.item_code(KV.Val, KV.entry(KV.Val, del_all(done, tw(H, T.db_of(T.exec(c2, T.db_of(T.exec(c1, db, now)), now)), now)), k)), now), 1n, 0n)) : Nat}
+      Equal.cong(Nat, Nat, z => Nat.add(z, Bool.pick(Nat, R.code.live(Laws.item_code(KV.Val, KV.entry(KV.Val, del_all(done, tw(H, T.db_of(T.exec(c2, T.db_of(T.exec(c1, db, now)), now)), now)), k)), now), 1n, 0n)), del_count(rest, now, del_all(List.append(&2, String, done, [k]), tw(H, T.db_of(T.exec(c2, T.db_of(T.exec(c1, db, now)), now)), now))), del_count(rest, now, del_all(List.append(&2, String, done, [k]), tw(H, T.db_of(T.exec(c1, T.db_of(T.exec(c2, db, now)), now)), now))), dcount_tw(c1, c2, db, H, now, e, rest, List.append(&2, String, done, [k])))
 
 # a command whose reply depends only on the entries of keys answers alike
 # on both sides
-def rep_tw(+c1: R.Cmd, +c2: R.Cmd, +db: KV.Trie<String>, +H: List<&2, R.Cmd>, +now: Nat, +e: {Laws.clash(c2, c1) == False{} : Bool}, c: R.Cmd) -> {Laws.keywise(c) == True{} : Bool} -> {T.reply_of(T.exec(c, tw(H, T.db_of(T.exec(c2, T.db_of(T.exec(c1, db, now)), now)), now), now)) == T.reply_of(T.exec(c, tw(H, T.db_of(T.exec(c1, T.db_of(T.exec(c2, db, now)), now)), now), now)) : R.Reply}:
+def rep_tw(+c1: R.Cmd, +c2: R.Cmd, +db: KV.Trie<KV.Val>, +H: List<&2, R.Cmd>, +now: Nat, +e: {Laws.clash(c2, c1) == False{} : Bool}, c: R.Cmd) -> {Laws.keywise(c) == True{} : Bool} -> {T.reply_of(T.exec(c, tw(H, T.db_of(T.exec(c2, T.db_of(T.exec(c1, db, now)), now)), now), now)) == T.reply_of(T.exec(c, tw(H, T.db_of(T.exec(c1, T.db_of(T.exec(c2, db, now)), now)), now), now)) : R.Reply}:
   match c:
     case R.Ping{}:
       kw => {==}
@@ -4038,15 +4092,15 @@ def rep_tw(+c1: R.Cmd, +c2: R.Cmd, +db: KV.Trie<String>, +H: List<&2, R.Cmd>, +n
       kw => %ren_find_eq(tw(H, T.db_of(T.exec(c2, T.db_of(T.exec(c1, db, now)), now)), now), tw(H, T.db_of(T.exec(c1, T.db_of(T.exec(c2, db, now)), now)), now), s, d, nx, now)(eq_gen(c1, c2, db, H, [s, d], now, e)) : {T.reply_of(T.ren(T.ren.find(tw(H, T.db_of(T.exec(c2, T.db_of(T.exec(c1, db, now)), now)), now), s, d, nx, now), nx, s, d, tw(H, T.db_of(T.exec(c2, T.db_of(T.exec(c1, db, now)), now)), now))) == T.reply_of(T.ren(_, nx, s, d, tw(H, T.db_of(T.exec(c1, T.db_of(T.exec(c2, db, now)), now)), now))) : R.Reply}
             ren_rep(T.ren.find(tw(H, T.db_of(T.exec(c2, T.db_of(T.exec(c1, db, now)), now)), now), s, d, nx, now), nx, s, d, tw(H, T.db_of(T.exec(c2, T.db_of(T.exec(c1, db, now)), now)), now), tw(H, T.db_of(T.exec(c1, T.db_of(T.exec(c2, db, now)), now)), now))
     case R.BitOp{+op, +d, +srcs}:
-      kw => %bitop_val_eq(op, srcs, tw(H, T.db_of(T.exec(c2, T.db_of(T.exec(c1, db, now)), now)), now), tw(H, T.db_of(T.exec(c1, T.db_of(T.exec(c2, db, now)), now)), now), now)(eq_gen(c1, c2, db, H, srcs, now, e)) : {T.reply_of(T.bitop(R.bitop.val(op, srcs, now, tw(H, T.db_of(T.exec(c2, T.db_of(T.exec(c1, db, now)), now)), now)), d, tw(H, T.db_of(T.exec(c2, T.db_of(T.exec(c1, db, now)), now)), now))) == T.reply_of(T.bitop(_, d, tw(H, T.db_of(T.exec(c1, T.db_of(T.exec(c2, db, now)), now)), now))) : R.Reply}
-            {==}
+      kw => %bitop_wrong_eq(srcs, tw(H, T.db_of(T.exec(c2, T.db_of(T.exec(c1, db, now)), now)), now), tw(H, T.db_of(T.exec(c1, T.db_of(T.exec(c2, db, now)), now)), now), now)(eq_gen(c1, c2, db, H, srcs, now, e)) : {T.reply_of(T.bitop.go(R.bitop.wrong(srcs, now, tw(H, T.db_of(T.exec(c2, T.db_of(T.exec(c1, db, now)), now)), now)), op, srcs, d, tw(H, T.db_of(T.exec(c2, T.db_of(T.exec(c1, db, now)), now)), now), now)) == T.reply_of(T.bitop.go(_, op, srcs, d, tw(H, T.db_of(T.exec(c1, T.db_of(T.exec(c2, db, now)), now)), now), now)) : R.Reply}
+            bitop_go_rep(R.bitop.wrong(srcs, now, tw(H, T.db_of(T.exec(c2, T.db_of(T.exec(c1, db, now)), now)), now)), op, srcs, d, tw(H, T.db_of(T.exec(c2, T.db_of(T.exec(c1, db, now)), now)), now), tw(H, T.db_of(T.exec(c1, T.db_of(T.exec(c2, db, now)), now)), now), now)(eq_gen(c1, c2, db, H, srcs, now, e))
     case R.Own{o}:
       kw => {==}
     case R.Bad{r}:
       kw => {==}
 
 # the rest of the batch answers alike on both sides
-def rep_run(+c1: R.Cmd, +c2: R.Cmd, +db: KV.Trie<String>, +now: Nat, +e: {Laws.clash(c2, c1) == False{} : Bool}, cs: List<&2, R.Cmd>, +H: List<&2, R.Cmd>) -> {Laws.keywise_all(cs) == True{} : Bool} -> {t_rfst(t_run(cs, tw(H, T.db_of(T.exec(c2, T.db_of(T.exec(c1, db, now)), now)), now), now)) == t_rfst(t_run(cs, tw(H, T.db_of(T.exec(c1, T.db_of(T.exec(c2, db, now)), now)), now), now)) : List<&2, R.Reply>}:
+def rep_run(+c1: R.Cmd, +c2: R.Cmd, +db: KV.Trie<KV.Val>, +now: Nat, +e: {Laws.clash(c2, c1) == False{} : Bool}, cs: List<&2, R.Cmd>, +H: List<&2, R.Cmd>) -> {Laws.keywise_all(cs) == True{} : Bool} -> {t_rfst(t_run(cs, tw(H, T.db_of(T.exec(c2, T.db_of(T.exec(c1, db, now)), now)), now), now)) == t_rfst(t_run(cs, tw(H, T.db_of(T.exec(c1, T.db_of(T.exec(c2, db, now)), now)), now), now)) : List<&2, R.Reply>}:
   match cs:
     case Nil{}:
       kw => {==}
@@ -4058,22 +4112,22 @@ def rep_run(+c1: R.Cmd, +c2: R.Cmd, +db: KV.Trie<String>, +now: Nat, +e: {Laws.c
         Equal.cong(List<&2, R.Reply>, List<&2, R.Reply>, z => T.reply_of(T.exec(c, tw(H, T.db_of(T.exec(c2, T.db_of(T.exec(c1, db, now)), now)), now), now)) <> z, t_rfst(t_run(rest, tw(Con{c, H}, T.db_of(T.exec(c2, T.db_of(T.exec(c1, db, now)), now)), now), now)), t_rfst(t_run(rest, tw(Con{c, H}, T.db_of(T.exec(c1, T.db_of(T.exec(c2, db, now)), now)), now), now)), rep_run(c1, c2, db, now, e, rest, Con{c, H})(and_r(Laws.keywise(c), Laws.keywise_all(rest))(kw)))
 
 # the trie after a run of cs after H on d
-def tw_rev(cs: List<&2, R.Cmd>, +H: List<&2, R.Cmd>, +d: KV.Trie<String>, +now: Nat) -> {t_rsnd(t_run(cs, tw(H, d, now), now)) == tw(List.reverse.go(&2, R.Cmd, cs, H), d, now) : KV.Trie<String>}:
+def tw_rev(cs: List<&2, R.Cmd>, +H: List<&2, R.Cmd>, +d: KV.Trie<KV.Val>, +now: Nat) -> {t_rsnd(t_run(cs, tw(H, d, now), now)) == tw(List.reverse.go(&2, R.Cmd, cs, H), d, now) : KV.Trie<KV.Val>}:
   match cs:
     case Nil{}:
       {==}
     case Con{+c, +rest}:
-      %t_eta_l(t_run(rest, T.db_of(T.exec(c, tw(H, d, now), now)), now)) : {t_rsnd(T.exec_all.cons(T.reply_of(T.exec(c, tw(H, d, now), now)), _)) == tw(List.reverse.go(&2, R.Cmd, rest, Con{c, H}), d, now) : KV.Trie<String>}
+      %t_eta_l(t_run(rest, T.db_of(T.exec(c, tw(H, d, now), now)), now)) : {t_rsnd(T.exec_all.cons(T.reply_of(T.exec(c, tw(H, d, now), now)), _)) == tw(List.reverse.go(&2, R.Cmd, rest, Con{c, H}), d, now) : KV.Trie<KV.Val>}
       tw_rev(rest, Con{c, H}, d, now)
 
-def t_swap_reads(+c1: R.Cmd, +c2: R.Cmd, +cs: List<&2, R.Cmd>, +db: KV.Trie<String>, +j: String, +now: Nat, e: {Laws.clash(c2, c1) == False{} : Bool}) -> {KV.entry(String, T.final(T.exec_all(Con{c2, Con{c1, cs}}, db, now)), j) == KV.entry(String, T.final(T.exec_all(Con{c1, Con{c2, cs}}, db, now)), j) : Maybe<&2, KV.Item<String>>}:
-  %t_exec_all_run(Con{c2, Con{c1, cs}}, db, now) : {KV.entry(String, T.final(_), j) == KV.entry(String, T.final(T.exec_all(Con{c1, Con{c2, cs}}, db, now)), j) : Maybe<&2, KV.Item<String>>}
-  %t_exec_all_run(Con{c1, Con{c2, cs}}, db, now) : {KV.entry(String, T.final(t_run(Con{c2, Con{c1, cs}}, db, now)), j) == KV.entry(String, T.final(_), j) : Maybe<&2, KV.Item<String>>}
-  %t_eta_l(t_run(cs, T.db_of(T.exec(c1, T.db_of(T.exec(c2, db, now)), now)), now)) : {KV.entry(String, T.final(T.exec_all.cons(T.reply_of(T.exec(c2, db, now)), T.exec_all.cons(T.reply_of(T.exec(c1, T.db_of(T.exec(c2, db, now)), now)), _))), j) == KV.entry(String, T.final(t_run(Con{c1, Con{c2, cs}}, db, now)), j) : Maybe<&2, KV.Item<String>>}
-  %t_eta_l(t_run(cs, T.db_of(T.exec(c2, T.db_of(T.exec(c1, db, now)), now)), now)) : {KV.entry(String, t_rsnd(t_run(cs, T.db_of(T.exec(c1, T.db_of(T.exec(c2, db, now)), now)), now)), j) == KV.entry(String, T.final(T.exec_all.cons(T.reply_of(T.exec(c1, db, now)), T.exec_all.cons(T.reply_of(T.exec(c2, T.db_of(T.exec(c1, db, now)), now)), _))), j) : Maybe<&2, KV.Item<String>>}
-  %Equal.sym(KV.Trie<String>, t_rsnd(t_run(cs, T.db_of(T.exec(c1, T.db_of(T.exec(c2, db, now)), now)), now)), tw(List.reverse.go(&2, R.Cmd, cs, Nil{}), T.db_of(T.exec(c1, T.db_of(T.exec(c2, db, now)), now)), now), tw_rev(cs, Nil{}, T.db_of(T.exec(c1, T.db_of(T.exec(c2, db, now)), now)), now)) : {KV.entry(String, _, j) == KV.entry(String, t_rsnd(t_run(cs, T.db_of(T.exec(c2, T.db_of(T.exec(c1, db, now)), now)), now)), j) : Maybe<&2, KV.Item<String>>}
-  %Equal.sym(KV.Trie<String>, t_rsnd(t_run(cs, T.db_of(T.exec(c2, T.db_of(T.exec(c1, db, now)), now)), now)), tw(List.reverse.go(&2, R.Cmd, cs, Nil{}), T.db_of(T.exec(c2, T.db_of(T.exec(c1, db, now)), now)), now), tw_rev(cs, Nil{}, T.db_of(T.exec(c2, T.db_of(T.exec(c1, db, now)), now)), now)) : {KV.entry(String, tw(List.reverse.go(&2, R.Cmd, cs, Nil{}), T.db_of(T.exec(c1, T.db_of(T.exec(c2, db, now)), now)), now), j) == KV.entry(String, _, j) : Maybe<&2, KV.Item<String>>}
-  Equal.sym(Maybe<&2, KV.Item<String>>, KV.entry(String, tw(List.reverse.go(&2, R.Cmd, cs, Nil{}), T.db_of(T.exec(c2, T.db_of(T.exec(c1, db, now)), now)), now), j), KV.entry(String, tw(List.reverse.go(&2, R.Cmd, cs, Nil{}), T.db_of(T.exec(c1, T.db_of(T.exec(c2, db, now)), now)), now), j), eq_at(c1, c2, db, List.reverse.go(&2, R.Cmd, cs, Nil{}), j, now, e))
+def t_swap_reads(+c1: R.Cmd, +c2: R.Cmd, +cs: List<&2, R.Cmd>, +db: KV.Trie<KV.Val>, +j: String, +now: Nat, e: {Laws.clash(c2, c1) == False{} : Bool}) -> {KV.entry(KV.Val, T.final(T.exec_all(Con{c2, Con{c1, cs}}, db, now)), j) == KV.entry(KV.Val, T.final(T.exec_all(Con{c1, Con{c2, cs}}, db, now)), j) : Maybe<&2, KV.Item<KV.Val>>}:
+  %t_exec_all_run(Con{c2, Con{c1, cs}}, db, now) : {KV.entry(KV.Val, T.final(_), j) == KV.entry(KV.Val, T.final(T.exec_all(Con{c1, Con{c2, cs}}, db, now)), j) : Maybe<&2, KV.Item<KV.Val>>}
+  %t_exec_all_run(Con{c1, Con{c2, cs}}, db, now) : {KV.entry(KV.Val, T.final(t_run(Con{c2, Con{c1, cs}}, db, now)), j) == KV.entry(KV.Val, T.final(_), j) : Maybe<&2, KV.Item<KV.Val>>}
+  %t_eta_l(t_run(cs, T.db_of(T.exec(c1, T.db_of(T.exec(c2, db, now)), now)), now)) : {KV.entry(KV.Val, T.final(T.exec_all.cons(T.reply_of(T.exec(c2, db, now)), T.exec_all.cons(T.reply_of(T.exec(c1, T.db_of(T.exec(c2, db, now)), now)), _))), j) == KV.entry(KV.Val, T.final(t_run(Con{c1, Con{c2, cs}}, db, now)), j) : Maybe<&2, KV.Item<KV.Val>>}
+  %t_eta_l(t_run(cs, T.db_of(T.exec(c2, T.db_of(T.exec(c1, db, now)), now)), now)) : {KV.entry(KV.Val, t_rsnd(t_run(cs, T.db_of(T.exec(c1, T.db_of(T.exec(c2, db, now)), now)), now)), j) == KV.entry(KV.Val, T.final(T.exec_all.cons(T.reply_of(T.exec(c1, db, now)), T.exec_all.cons(T.reply_of(T.exec(c2, T.db_of(T.exec(c1, db, now)), now)), _))), j) : Maybe<&2, KV.Item<KV.Val>>}
+  %Equal.sym(KV.Trie<KV.Val>, t_rsnd(t_run(cs, T.db_of(T.exec(c1, T.db_of(T.exec(c2, db, now)), now)), now)), tw(List.reverse.go(&2, R.Cmd, cs, Nil{}), T.db_of(T.exec(c1, T.db_of(T.exec(c2, db, now)), now)), now), tw_rev(cs, Nil{}, T.db_of(T.exec(c1, T.db_of(T.exec(c2, db, now)), now)), now)) : {KV.entry(KV.Val, _, j) == KV.entry(KV.Val, t_rsnd(t_run(cs, T.db_of(T.exec(c2, T.db_of(T.exec(c1, db, now)), now)), now)), j) : Maybe<&2, KV.Item<KV.Val>>}
+  %Equal.sym(KV.Trie<KV.Val>, t_rsnd(t_run(cs, T.db_of(T.exec(c2, T.db_of(T.exec(c1, db, now)), now)), now)), tw(List.reverse.go(&2, R.Cmd, cs, Nil{}), T.db_of(T.exec(c2, T.db_of(T.exec(c1, db, now)), now)), now), tw_rev(cs, Nil{}, T.db_of(T.exec(c2, T.db_of(T.exec(c1, db, now)), now)), now)) : {KV.entry(KV.Val, tw(List.reverse.go(&2, R.Cmd, cs, Nil{}), T.db_of(T.exec(c1, T.db_of(T.exec(c2, db, now)), now)), now), j) == KV.entry(KV.Val, _, j) : Maybe<&2, KV.Item<KV.Val>>}
+  Equal.sym(Maybe<&2, KV.Item<KV.Val>>, KV.entry(KV.Val, tw(List.reverse.go(&2, R.Cmd, cs, Nil{}), T.db_of(T.exec(c2, T.db_of(T.exec(c1, db, now)), now)), now), j), KV.entry(KV.Val, tw(List.reverse.go(&2, R.Cmd, cs, Nil{}), T.db_of(T.exec(c1, T.db_of(T.exec(c2, db, now)), now)), now), j), eq_at(c1, c2, db, List.reverse.go(&2, R.Cmd, cs, Nil{}), j, now, e))
 
 # The server's database
 # =====================
@@ -4087,11 +4141,11 @@ def t_swap_reads(+c1: R.Cmd, +c2: R.Cmd, +cs: List<&2, R.Cmd>, +db: KV.Trie<Stri
 # through the bridge, those about the whole database directly.
 
 # a reply and a database, as a reply and its trie
-def proj(p: R.Reply & R.Db) -> R.Reply & KV.Trie<String>:
+def proj(p: R.Reply & R.Db) -> R.Reply & KV.Trie<KV.Val>:
   (y, d) = p
   (y, R.db.t(d))
 
-def proj_db(p: R.Reply & R.Db) -> {T.db_of(proj(p)) == R.db.t(R.db_of(p)) : KV.Trie<String>}:
+def proj_db(p: R.Reply & R.Db) -> {T.db_of(proj(p)) == R.db.t(R.db_of(p)) : KV.Trie<KV.Val>}:
   (y, d) = p
   {==}
 
@@ -4105,40 +4159,42 @@ def proj_rep(p: R.Reply & R.Db) -> {T.reply_of(proj(p)) == R.reply_of(p) : R.Rep
 # read, as the spec's does: each step, whatever it read, answers and
 # leaves the trie as the spec's step, and keeps the time.
 
-def del_br(r: R.Dels, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>) -> {proj(R.del.db(r, n, x, now, rr)) == T.del_reply(r) : R.Reply & KV.Trie<String>}:
+def del_br(r: R.Dels, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>) -> {proj(R.del.db(r, n, x, now, rr)) == T.del_reply(r) : R.Reply & KV.Trie<KV.Val>}:
   match r:
     case R.Dels{live, gone, gonex, t}:
       {==}
 
-def incr_fit_br(+t: KV.Trie<String>, +k: String, +h: U32, +i: R.Int, ok: Bool, +keep: Bool, +m: Nat, +n: Nat, +y: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>) -> {proj(R.incr.fit(t, k, h, i, ok, keep, m, n, y, x, now, rr)) == T.incr.fit(t, k, h, i, ok, keep) : R.Reply & KV.Trie<String>}:
+def incr_fit_br(+t: KV.Trie<KV.Val>, +k: String, +h: U32, +i: R.Int, ok: Bool, +keep: Bool, +m: Nat, +n: Nat, +y: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>) -> {proj(R.incr.fit(t, k, h, i, ok, keep, m, n, y, x, now, rr)) == T.incr.fit(t, k, h, i, ok, keep) : R.Reply & KV.Trie<KV.Val>}:
   match ok:
     case True{}:
       {==}
     case False{}:
       {==}
 
-def incr_num_br(+t: KV.Trie<String>, +k: String, +h: U32, +by: R.Int, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>, cur: Maybe<&2, R.Int>) -> {proj(R.incr.num(t, k, h, by, n, x, now, rr, cur)) == T.incr.num(t, k, h, by, cur) : R.Reply & KV.Trie<String>}:
+def incr_num_br(+t: KV.Trie<KV.Val>, +k: String, +h: U32, +by: R.Int, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>, cur: Maybe<&2, R.Int>) -> {proj(R.incr.num(t, k, h, by, n, x, now, rr, cur)) == T.incr.num(t, k, h, by, cur) : R.Reply & KV.Trie<KV.Val>}:
   match cur:
     case Some{+i}:
       incr_fit_br(t, k, h, R.int_add(i, by), R.int_fits(R.int_add(i, by)), True{}, n, n, x, x, now, rr)
     case None{}:
       {==}
 
-def incr_br(+t: KV.Trie<String>, +k: String, +h: U32, +by: R.Int, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>, old: Maybe<&2, String>) -> {proj(R.incr.got(t, k, h, by, n, x, now, rr, old)) == T.incr.got(t, k, h, by, old) : R.Reply & KV.Trie<String>}:
+def incr_br(+t: KV.Trie<KV.Val>, +k: String, +h: U32, +by: R.Int, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>, old: KV.Got) -> {proj(R.incr.got(t, k, h, by, n, x, now, rr, old)) == T.incr.got(t, k, h, by, old) : R.Reply & KV.Trie<KV.Val>}:
   match old:
-    case Some{+s}:
+    case KV.GStr{+s}:
       incr_num_br(t, k, h, by, n, x, now, rr, R.int_read(s))
-    case None{}:
-      incr_fit_br(t, k, h, by, R.int_fits(by), False{}, R.cnt.n(KV.code.at(String, t, k, h), n), n, R.cnt.x(KV.code.at(String, t, k, h), 0n, x), x, now, rr)
+    case KV.GColl{}:
+      {==}
+    case KV.GNone{}:
+      incr_fit_br(t, k, h, by, R.int_fits(by), False{}, R.cnt.n(KV.code.at(KV.Val, t, k, h), n), n, R.cnt.x(KV.code.at(KV.Val, t, k, h), 0n, x), x, now, rr)
 
-def mset_br(ps: List<&2, R.KVPair>, +t: KV.Trie<String>, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>) -> {R.db.t(R.mset_pairs(ps, R.Db{t, n, x, now, rr})) == T.mset_pairs(ps, t) : KV.Trie<String>}:
+def mset_br(ps: List<&2, R.KVPair>, +t: KV.Trie<KV.Val>, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>) -> {R.db.t(R.mset_pairs(ps, R.Db{t, n, x, now, rr})) == T.mset_pairs(ps, t) : KV.Trie<KV.Val>}:
   match ps:
     case Nil{}:
       {==}
     case Con{R.KP{+k, +v}, +rest}:
-      mset_br(rest, KV.set(String, t, k, v), R.cnt.n(KV.code.at(String, t, k, KV.hash(k)), n), R.cnt.x(KV.code.at(String, t, k, KV.hash(k)), 0n, x), now, rr)
+      mset_br(rest, KV.set(KV.Val, t, k, KV.VStr{v}), R.cnt.n(KV.code.at(KV.Val, t, k, KV.hash(k)), n), R.cnt.x(KV.code.at(KV.Val, t, k, KV.hash(k)), 0n, x), now, rr)
 
-def upd_ch_br(+t: KV.Trie<String>, +k: String, +h: U32, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>, +c: Nat, r: R.Reply, ch: R.Change) -> {proj(R.upd.ch(t, k, h, n, x, now, rr, c, r, ch)) == T.upd.ch(t, k, h, r, ch) : R.Reply & KV.Trie<String>}:
+def upd_ch_br(+t: KV.Trie<KV.Val>, +k: String, +h: U32, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>, +c: Nat, r: R.Reply, ch: R.Change) -> {proj(R.upd.ch(t, k, h, n, x, now, rr, c, r, ch)) == T.upd.ch(t, k, h, r, ch) : R.Reply & KV.Trie<KV.Val>}:
   match ch:
     case R.CKeep{}:
       {==}
@@ -4155,20 +4211,20 @@ def upd_ch_br(+t: KV.Trie<String>, +k: String, +h: U32, +n: Nat, +x: Nat, +now: 
     case R.CRange{o, a, v}:
       {==}
 
-def upd_br(+t: KV.Trie<String>, +k: String, +h: U32, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>, +c: Nat, o: R.Out) -> {proj(R.upd.put(t, k, h, n, x, now, rr, c, o)) == T.upd.put(t, k, h, o) : R.Reply & KV.Trie<String>}:
+def upd_br(+t: KV.Trie<KV.Val>, +k: String, +h: U32, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>, +c: Nat, o: R.Out) -> {proj(R.upd.put(t, k, h, n, x, now, rr, c, o)) == T.upd.put(t, k, h, o) : R.Reply & KV.Trie<KV.Val>}:
   match o:
     case R.Out{r, ch}:
       upd_ch_br(t, k, h, n, x, now, rr, c, r, ch)
 
 # MSETNX and RENAME, for a given verdict, as the spec's
-def msetnx_br(b: Bool, ps: List<&2, R.KVPair>, +t: KV.Trie<String>, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>) -> {proj(R.msetnx.of(b, ps, R.Db{t, n, x, now, rr})) == T.msetnx(b, ps, t) : R.Reply & KV.Trie<String>}:
+def msetnx_br(b: Bool, ps: List<&2, R.KVPair>, +t: KV.Trie<KV.Val>, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>) -> {proj(R.msetnx.of(b, ps, R.Db{t, n, x, now, rr})) == T.msetnx(b, ps, t) : R.Reply & KV.Trie<KV.Val>}:
   match b:
     case True{}:
       {==}
     case False{}:
-      Equal.cong(KV.Trie<String>, R.Reply & KV.Trie<String>, z => (R.r_int(1n), z), R.db.t(R.mset_pairs(ps, R.Db{t, n, x, now, rr})), T.mset_pairs(ps, t), mset_br(ps, t, n, x, now, rr))
+      Equal.cong(KV.Trie<KV.Val>, R.Reply & KV.Trie<KV.Val>, z => (R.r_int(1n), z), R.db.t(R.mset_pairs(ps, R.Db{t, n, x, now, rr})), T.mset_pairs(ps, t), mset_br(ps, t, n, x, now, rr))
 
-def ren_br(r: R.Ren, +nx: Bool, +s: String, +d: String, +t: KV.Trie<String>, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>) -> {proj(R.ren.do(r, nx, s, d, R.Db{t, n, x, now, rr})) == T.ren(r, nx, s, d, t) : R.Reply & KV.Trie<String>}:
+def ren_br(r: R.Ren, +nx: Bool, +s: String, +d: String, +t: KV.Trie<KV.Val>, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>) -> {proj(R.ren.do(r, nx, s, d, R.Db{t, n, x, now, rr})) == T.ren(r, nx, s, d, t) : R.Reply & KV.Trie<KV.Val>}:
   match r:
     case R.RnNone{}:
       {==}
@@ -4180,19 +4236,26 @@ def ren_br(r: R.Ren, +nx: Bool, +s: String, +d: String, +t: KV.Trie<String>, +n:
       {==}
 
 # BITOP's write on the record leaves the spec's trie
-def bitop_br.t(e: Bool, +v: String, +d: String, +t: KV.Trie<String>, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>) -> {R.db.t(R.bitop.db(e, v, d, R.Db{t, n, x, now, rr})) == T.bitop.t(e, v, d, t) : KV.Trie<String>}:
+def bitop_br.t(e: Bool, +v: String, +d: String, +t: KV.Trie<KV.Val>, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>) -> {R.db.t(R.bitop.db(e, v, d, R.Db{t, n, x, now, rr})) == T.bitop.t(e, v, d, t) : KV.Trie<KV.Val>}:
   match e:
     case True{}:
       {==}
     case False{}:
       {==}
 
-def bitop_br(+v: String, +d: String, +t: KV.Trie<String>, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>) -> {proj((R.r_int(String.length(v)), R.bitop.db(String.is_empty(v), v, d, R.Db{t, n, x, now, rr}))) == T.bitop(v, d, t) : R.Reply & KV.Trie<String>}:
-  Equal.cong(KV.Trie<String>, R.Reply & KV.Trie<String>, z => (R.r_int(String.length(v)), z), R.db.t(R.bitop.db(String.is_empty(v), v, d, R.Db{t, n, x, now, rr})), T.bitop.t(String.is_empty(v), v, d, t), bitop_br.t(String.is_empty(v), v, d, t, n, x, now, rr))
+def bitop_br(+v: String, +d: String, +t: KV.Trie<KV.Val>, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>) -> {proj((R.r_int(String.length(v)), R.bitop.db(String.is_empty(v), v, d, R.Db{t, n, x, now, rr}))) == T.bitop(v, d, t) : R.Reply & KV.Trie<KV.Val>}:
+  Equal.cong(KV.Trie<KV.Val>, R.Reply & KV.Trie<KV.Val>, z => (R.r_int(String.length(v)), z), R.db.t(R.bitop.db(String.is_empty(v), v, d, R.Db{t, n, x, now, rr})), T.bitop.t(String.is_empty(v), v, d, t), bitop_br.t(String.is_empty(v), v, d, t, n, x, now, rr))
+
+def bitop_do_br(w: Bool, +op: R.BitK, +d: String, +srcs: List<&2, String>, +t: KV.Trie<KV.Val>, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>) -> {proj(R.bitop.do(w, op, d, srcs, R.Db{t, n, x, now, rr})) == T.bitop.go(w, op, srcs, d, t, now) : R.Reply & KV.Trie<KV.Val>}:
+  match w:
+    case True{}:
+      {==}
+    case False{}:
+      bitop_br(R.bitop.val(op, srcs, now, t), d, t, n, x, now, rr)
 
 # a command answers as the spec's at the database's now, DBSIZE but, and
 # leaves the trie the spec's leaves
-def bridge_go(c: R.Cmd, +t: KV.Trie<String>, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>) -> {Laws.keywise(c) == True{} : Bool} -> {proj(R.exec(c, R.Db{t, n, x, now, rr})) == T.exec(c, t, now) : R.Reply & KV.Trie<String>}:
+def bridge_go(c: R.Cmd, +t: KV.Trie<KV.Val>, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>) -> {Laws.keywise(c) == True{} : Bool} -> {proj(R.exec(c, R.Db{t, n, x, now, rr})) == T.exec(c, t, now) : R.Reply & KV.Trie<KV.Val>}:
   match c:
     case R.Ping{}:
       kw => {==}
@@ -4207,13 +4270,13 @@ def bridge_go(c: R.Cmd, +t: KV.Trie<String>, +n: Nat, +x: Nat, +now: Nat, +rr: M
     case R.Exists{ks}:
       kw => {==}
     case R.IncrBy{+k, +by}:
-      kw => incr_br(t, k, KV.hash(k), by, n, x, now, rr, KV.live.at(String, t, k, KV.hash(k), now))
+      kw => incr_br(t, k, KV.hash(k), by, n, x, now, rr, KV.get_copy.at(t, k, KV.hash(k), now))
     case R.MGet{ks}:
       kw => {==}
     case R.MSet{+ps}:
-      kw => Equal.cong(KV.Trie<String>, R.Reply & KV.Trie<String>, z => (R.r_ok(), z), R.db.t(R.mset_pairs(ps, R.Db{t, n, x, now, rr})), T.mset_pairs(ps, t), mset_br(ps, t, n, x, now, rr))
+      kw => Equal.cong(KV.Trie<KV.Val>, R.Reply & KV.Trie<KV.Val>, z => (R.r_ok(), z), R.db.t(R.mset_pairs(ps, R.Db{t, n, x, now, rr})), T.mset_pairs(ps, t), mset_br(ps, t, n, x, now, rr))
     case R.DbSize{}:
-      kw => Empty.absurd({proj(R.exec(R.DbSize{}, R.Db{t, n, x, now, rr})) == T.exec(R.DbSize{}, t, now) : R.Reply & KV.Trie<String>}, false_true(kw))
+      kw => Empty.absurd({proj(R.exec(R.DbSize{}, R.Db{t, n, x, now, rr})) == T.exec(R.DbSize{}, t, now) : R.Reply & KV.Trie<KV.Val>}, false_true(kw))
     case R.FlushDb{}:
       kw => {==}
     case R.Keys{p}:
@@ -4223,13 +4286,13 @@ def bridge_go(c: R.Cmd, +t: KV.Trie<String>, +n: Nat, +x: Nat, +now: Nat, +rr: M
     case R.Peek{k, o}:
       kw => {==}
     case R.Upd{+k, +op}:
-      kw => upd_br(t, k, KV.hash(k), n, x, now, rr, R.ent.code(KV.entry.at(String, t, k, KV.hash(k))), R.upd(op, now, R.ent.live(now, KV.entry.at(String, t, k, KV.hash(k)))))
+      kw => upd_br(t, k, KV.hash(k), n, x, now, rr, R.ent.code(KV.entry.at(KV.Val, t, k, KV.hash(k))), R.upd.v(op, now, R.ent.live(now, KV.entry.at(KV.Val, t, k, KV.hash(k)))))
     case R.MSetNx{+ps}:
       kw => msetnx_br(R.pairs.live(ps, now, t), ps, t, n, x, now, rr)
     case R.Rename{+s, +d, +nx}:
       kw => ren_br(T.ren.find(t, s, d, nx, now), nx, s, d, t, n, x, now, rr)
     case R.BitOp{+op, +d, +srcs}:
-      kw => bitop_br(R.bitop.val(op, srcs, now, t), d, t, n, x, now, rr)
+      kw => bitop_do_br(R.bitop.wrong(srcs, now, t), op, d, srcs, t, n, x, now, rr)
     case R.Own{o}:
       kw => {==}
     case R.Bad{r}:
@@ -4241,35 +4304,37 @@ def del_now(r: R.Dels, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>) -> {R.
     case R.Dels{live, gone, gonex, t}:
       {==}
 
-def incr_fit_now(+t: KV.Trie<String>, +k: String, +h: U32, +i: R.Int, ok: Bool, +keep: Bool, +m: Nat, +n: Nat, +y: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>) -> {R.db.now(R.db_of(R.incr.fit(t, k, h, i, ok, keep, m, n, y, x, now, rr))) == now : Nat}:
+def incr_fit_now(+t: KV.Trie<KV.Val>, +k: String, +h: U32, +i: R.Int, ok: Bool, +keep: Bool, +m: Nat, +n: Nat, +y: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>) -> {R.db.now(R.db_of(R.incr.fit(t, k, h, i, ok, keep, m, n, y, x, now, rr))) == now : Nat}:
   match ok:
     case True{}:
       {==}
     case False{}:
       {==}
 
-def incr_num_now(+t: KV.Trie<String>, +k: String, +h: U32, +by: R.Int, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>, cur: Maybe<&2, R.Int>) -> {R.db.now(R.db_of(R.incr.num(t, k, h, by, n, x, now, rr, cur))) == now : Nat}:
+def incr_num_now(+t: KV.Trie<KV.Val>, +k: String, +h: U32, +by: R.Int, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>, cur: Maybe<&2, R.Int>) -> {R.db.now(R.db_of(R.incr.num(t, k, h, by, n, x, now, rr, cur))) == now : Nat}:
   match cur:
     case Some{+i}:
       incr_fit_now(t, k, h, R.int_add(i, by), R.int_fits(R.int_add(i, by)), True{}, n, n, x, x, now, rr)
     case None{}:
       {==}
 
-def incr_now(+t: KV.Trie<String>, +k: String, +h: U32, +by: R.Int, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>, old: Maybe<&2, String>) -> {R.db.now(R.db_of(R.incr.got(t, k, h, by, n, x, now, rr, old))) == now : Nat}:
+def incr_now(+t: KV.Trie<KV.Val>, +k: String, +h: U32, +by: R.Int, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>, old: KV.Got) -> {R.db.now(R.db_of(R.incr.got(t, k, h, by, n, x, now, rr, old))) == now : Nat}:
   match old:
-    case Some{+s}:
+    case KV.GStr{+s}:
       incr_num_now(t, k, h, by, n, x, now, rr, R.int_read(s))
-    case None{}:
-      incr_fit_now(t, k, h, by, R.int_fits(by), False{}, R.cnt.n(KV.code.at(String, t, k, h), n), n, R.cnt.x(KV.code.at(String, t, k, h), 0n, x), x, now, rr)
+    case KV.GColl{}:
+      {==}
+    case KV.GNone{}:
+      incr_fit_now(t, k, h, by, R.int_fits(by), False{}, R.cnt.n(KV.code.at(KV.Val, t, k, h), n), n, R.cnt.x(KV.code.at(KV.Val, t, k, h), 0n, x), x, now, rr)
 
-def mset_now(ps: List<&2, R.KVPair>, +t: KV.Trie<String>, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>) -> {R.db.now(R.mset_pairs(ps, R.Db{t, n, x, now, rr})) == now : Nat}:
+def mset_now(ps: List<&2, R.KVPair>, +t: KV.Trie<KV.Val>, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>) -> {R.db.now(R.mset_pairs(ps, R.Db{t, n, x, now, rr})) == now : Nat}:
   match ps:
     case Nil{}:
       {==}
     case Con{R.KP{+k, +v}, +rest}:
-      mset_now(rest, KV.set(String, t, k, v), R.cnt.n(KV.code.at(String, t, k, KV.hash(k)), n), R.cnt.x(KV.code.at(String, t, k, KV.hash(k)), 0n, x), now, rr)
+      mset_now(rest, KV.set(KV.Val, t, k, KV.VStr{v}), R.cnt.n(KV.code.at(KV.Val, t, k, KV.hash(k)), n), R.cnt.x(KV.code.at(KV.Val, t, k, KV.hash(k)), 0n, x), now, rr)
 
-def upd_ch_now(+t: KV.Trie<String>, +k: String, +h: U32, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>, +c: Nat, r: R.Reply, ch: R.Change) -> {R.db.now(R.db_of(R.upd.ch(t, k, h, n, x, now, rr, c, r, ch))) == now : Nat}:
+def upd_ch_now(+t: KV.Trie<KV.Val>, +k: String, +h: U32, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>, +c: Nat, r: R.Reply, ch: R.Change) -> {R.db.now(R.db_of(R.upd.ch(t, k, h, n, x, now, rr, c, r, ch))) == now : Nat}:
   match ch:
     case R.CKeep{}:
       {==}
@@ -4286,19 +4351,19 @@ def upd_ch_now(+t: KV.Trie<String>, +k: String, +h: U32, +n: Nat, +x: Nat, +now:
     case R.CRange{o, a, v}:
       {==}
 
-def upd_now(+t: KV.Trie<String>, +k: String, +h: U32, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>, +c: Nat, o: R.Out) -> {R.db.now(R.db_of(R.upd.put(t, k, h, n, x, now, rr, c, o))) == now : Nat}:
+def upd_now(+t: KV.Trie<KV.Val>, +k: String, +h: U32, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>, +c: Nat, o: R.Out) -> {R.db.now(R.db_of(R.upd.put(t, k, h, n, x, now, rr, c, o))) == now : Nat}:
   match o:
     case R.Out{r, ch}:
       upd_ch_now(t, k, h, n, x, now, rr, c, r, ch)
 
-def msetnx_now(b: Bool, ps: List<&2, R.KVPair>, +t: KV.Trie<String>, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>) -> {R.db.now(R.db_of(R.msetnx.of(b, ps, R.Db{t, n, x, now, rr}))) == now : Nat}:
+def msetnx_now(b: Bool, ps: List<&2, R.KVPair>, +t: KV.Trie<KV.Val>, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>) -> {R.db.now(R.db_of(R.msetnx.of(b, ps, R.Db{t, n, x, now, rr}))) == now : Nat}:
   match b:
     case True{}:
       {==}
     case False{}:
       mset_now(ps, t, n, x, now, rr)
 
-def ren_now(r: R.Ren, +nx: Bool, +s: String, +d: String, +t: KV.Trie<String>, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>) -> {R.db.now(R.db_of(R.ren.do(r, nx, s, d, R.Db{t, n, x, now, rr}))) == now : Nat}:
+def ren_now(r: R.Ren, +nx: Bool, +s: String, +d: String, +t: KV.Trie<KV.Val>, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>) -> {R.db.now(R.db_of(R.ren.do(r, nx, s, d, R.Db{t, n, x, now, rr}))) == now : Nat}:
   match r:
     case R.RnNone{}:
       {==}
@@ -4309,14 +4374,21 @@ def ren_now(r: R.Ren, +nx: Bool, +s: String, +d: String, +t: KV.Trie<String>, +n
     case R.RnMove{v, e}:
       {==}
 
-def bitop_now(e: Bool, +v: String, +d: String, +t: KV.Trie<String>, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>) -> {R.db.now(R.bitop.db(e, v, d, R.Db{t, n, x, now, rr})) == now : Nat}:
+def bitop_now(e: Bool, +v: String, +d: String, +t: KV.Trie<KV.Val>, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>) -> {R.db.now(R.bitop.db(e, v, d, R.Db{t, n, x, now, rr})) == now : Nat}:
   match e:
     case True{}:
       {==}
     case False{}:
       {==}
 
-def now_go(c: R.Cmd, +t: KV.Trie<String>, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>) -> {R.db.now(R.db_of(R.exec(c, R.Db{t, n, x, now, rr}))) == now : Nat}:
+def bitop_do_now(w: Bool, +op: R.BitK, +d: String, +srcs: List<&2, String>, +t: KV.Trie<KV.Val>, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>) -> {R.db.now(R.db_of(R.bitop.do(w, op, d, srcs, R.Db{t, n, x, now, rr}))) == now : Nat}:
+  match w:
+    case True{}:
+      {==}
+    case False{}:
+      bitop_now(String.is_empty(R.bitop.val(op, srcs, now, t)), R.bitop.val(op, srcs, now, t), d, t, n, x, now, rr)
+
+def now_go(c: R.Cmd, +t: KV.Trie<KV.Val>, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>) -> {R.db.now(R.db_of(R.exec(c, R.Db{t, n, x, now, rr}))) == now : Nat}:
   match c:
     case R.Ping{}:
       {==}
@@ -4331,7 +4403,7 @@ def now_go(c: R.Cmd, +t: KV.Trie<String>, +n: Nat, +x: Nat, +now: Nat, +rr: Mayb
     case R.Exists{ks}:
       {==}
     case R.IncrBy{+k, +by}:
-      incr_now(t, k, KV.hash(k), by, n, x, now, rr, KV.live.at(String, t, k, KV.hash(k), now))
+      incr_now(t, k, KV.hash(k), by, n, x, now, rr, KV.get_copy.at(t, k, KV.hash(k), now))
     case R.MGet{ks}:
       {==}
     case R.MSet{+ps}:
@@ -4347,28 +4419,28 @@ def now_go(c: R.Cmd, +t: KV.Trie<String>, +n: Nat, +x: Nat, +now: Nat, +rr: Mayb
     case R.Peek{k, o}:
       {==}
     case R.Upd{+k, +op}:
-      upd_now(t, k, KV.hash(k), n, x, now, rr, R.ent.code(KV.entry.at(String, t, k, KV.hash(k))), R.upd(op, now, R.ent.live(now, KV.entry.at(String, t, k, KV.hash(k)))))
+      upd_now(t, k, KV.hash(k), n, x, now, rr, R.ent.code(KV.entry.at(KV.Val, t, k, KV.hash(k))), R.upd.v(op, now, R.ent.live(now, KV.entry.at(KV.Val, t, k, KV.hash(k)))))
     case R.MSetNx{+ps}:
       msetnx_now(R.pairs.live(ps, now, t), ps, t, n, x, now, rr)
     case R.Rename{+s, +d, +nx}:
       ren_now(T.ren.find(t, s, d, nx, now), nx, s, d, t, n, x, now, rr)
     case R.BitOp{+op, +d, +srcs}:
-      bitop_now(String.is_empty(R.bitop.val(op, srcs, now, t)), R.bitop.val(op, srcs, now, t), d, t, n, x, now, rr)
+      bitop_do_now(R.bitop.wrong(srcs, now, t), op, d, srcs, t, n, x, now, rr)
     case R.Own{o}:
       {==}
     case R.Bad{r}:
       {==}
 
-def br_go(+c: R.Cmd, +t: KV.Trie<String>, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>, kw: {Laws.keywise(c) == True{} : Bool}) -> {T.reply_of(T.exec(c, t, now)) == R.reply_of(R.exec(c, R.Db{t, n, x, now, rr})) : R.Reply}:
+def br_go(+c: R.Cmd, +t: KV.Trie<KV.Val>, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>, kw: {Laws.keywise(c) == True{} : Bool}) -> {T.reply_of(T.exec(c, t, now)) == R.reply_of(R.exec(c, R.Db{t, n, x, now, rr})) : R.Reply}:
   %bridge_go(c, t, n, x, now, rr)(kw) : {T.reply_of(_) == R.reply_of(R.exec(c, R.Db{t, n, x, now, rr})) : R.Reply}
   proj_rep(R.exec(c, R.Db{t, n, x, now, rr}))
 
-def bt_kw(+c: R.Cmd, +t: KV.Trie<String>, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>, kw: {Laws.keywise(c) == True{} : Bool}) -> {T.db_of(T.exec(c, t, now)) == R.db.t(R.db_of(R.exec(c, R.Db{t, n, x, now, rr}))) : KV.Trie<String>}:
-  %bridge_go(c, t, n, x, now, rr)(kw) : {T.db_of(_) == R.db.t(R.db_of(R.exec(c, R.Db{t, n, x, now, rr}))) : KV.Trie<String>}
+def bt_kw(+c: R.Cmd, +t: KV.Trie<KV.Val>, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>, kw: {Laws.keywise(c) == True{} : Bool}) -> {T.db_of(T.exec(c, t, now)) == R.db.t(R.db_of(R.exec(c, R.Db{t, n, x, now, rr}))) : KV.Trie<KV.Val>}:
+  %bridge_go(c, t, n, x, now, rr)(kw) : {T.db_of(_) == R.db.t(R.db_of(R.exec(c, R.Db{t, n, x, now, rr}))) : KV.Trie<KV.Val>}
   proj_db(R.exec(c, R.Db{t, n, x, now, rr}))
 
 # every command leaves the spec's trie: DBSIZE, KEYS and SCAN only read
-def bt_go(c: R.Cmd, +t: KV.Trie<String>, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>) -> {T.db_of(T.exec(c, t, now)) == R.db.t(R.db_of(R.exec(c, R.Db{t, n, x, now, rr}))) : KV.Trie<String>}:
+def bt_go(c: R.Cmd, +t: KV.Trie<KV.Val>, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>) -> {T.db_of(T.exec(c, t, now)) == R.db.t(R.db_of(R.exec(c, R.Db{t, n, x, now, rr}))) : KV.Trie<KV.Val>}:
   match c:
     case R.Ping{}:
       {==}
@@ -4413,13 +4485,13 @@ def bt_go(c: R.Cmd, +t: KV.Trie<String>, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe
 
 # the bridge on any database: bt and tb for the trie, br for the reply,
 # now_eq and eq_now for the time
-def bt(+c: R.Cmd, +db: R.Db) -> {T.db_of(T.exec(c, R.db.t(db), R.db.now(db))) == R.db.t(R.db_of(R.exec(c, db))) : KV.Trie<String>}:
+def bt(+c: R.Cmd, +db: R.Db) -> {T.db_of(T.exec(c, R.db.t(db), R.db.now(db))) == R.db.t(R.db_of(R.exec(c, db))) : KV.Trie<KV.Val>}:
   match db:
     case R.Db{+t, +n, +x, +now, +rr}:
       bt_go(c, t, n, x, now, rr)
 
-def tb(+c: R.Cmd, +db: R.Db) -> {R.db.t(R.db_of(R.exec(c, db))) == T.db_of(T.exec(c, R.db.t(db), R.db.now(db))) : KV.Trie<String>}:
-  Equal.sym(KV.Trie<String>, T.db_of(T.exec(c, R.db.t(db), R.db.now(db))), R.db.t(R.db_of(R.exec(c, db))), bt(c, db))
+def tb(+c: R.Cmd, +db: R.Db) -> {R.db.t(R.db_of(R.exec(c, db))) == T.db_of(T.exec(c, R.db.t(db), R.db.now(db))) : KV.Trie<KV.Val>}:
+  Equal.sym(KV.Trie<KV.Val>, T.db_of(T.exec(c, R.db.t(db), R.db.now(db))), R.db.t(R.db_of(R.exec(c, db))), bt(c, db))
 
 def br(+c: R.Cmd, +db: R.Db, kw: {Laws.keywise(c) == True{} : Bool}) -> {T.reply_of(T.exec(c, R.db.t(db), R.db.now(db))) == R.reply_of(R.exec(c, db)) : R.Reply}:
   match db:
@@ -4449,29 +4521,29 @@ def run_r(cs: List<&2, R.Cmd>, +db: R.Db) -> {Laws.keywise_all(cs) == True{} : B
         %now_eq(c, db) : {T.reply_of(T.exec(c, R.db.t(db), R.db.now(db))) <> t_rfst(t_run(rest, R.db.t(R.db_of(R.exec(c, db))), _)) == T.reply_of(T.exec(c, R.db.t(db), R.db.now(db))) <> rfst(run(rest, R.db_of(R.exec(c, db)))) : List<&2, R.Reply>}
         Equal.cong(List<&2, R.Reply>, List<&2, R.Reply>, z => T.reply_of(T.exec(c, R.db.t(db), R.db.now(db))) <> z, t_rfst(t_run(rest, R.db.t(R.db_of(R.exec(c, db))), R.db.now(R.db_of(R.exec(c, db))))), rfst(run(rest, R.db_of(R.exec(c, db)))), run_r(rest, R.db_of(R.exec(c, db)))(and_r(Laws.keywise(c), Laws.keywise_all(rest))(kw)))
 
-def run_t(cs: List<&2, R.Cmd>, +db: R.Db) -> {t_rsnd(t_run(cs, R.db.t(db), R.db.now(db))) == R.db.t(rsnd(run(cs, db))) : KV.Trie<String>}:
+def run_t(cs: List<&2, R.Cmd>, +db: R.Db) -> {t_rsnd(t_run(cs, R.db.t(db), R.db.now(db))) == R.db.t(rsnd(run(cs, db))) : KV.Trie<KV.Val>}:
   match cs:
     case Nil{}:
       {==}
     case Con{+c, +rest}:
-      %t_eta_l(t_run(rest, T.db_of(T.exec(c, R.db.t(db), R.db.now(db))), R.db.now(db))) : {t_rsnd(T.exec_all.cons(T.reply_of(T.exec(c, R.db.t(db), R.db.now(db))), _)) == R.db.t(rsnd(R.exec_all.cons(R.reply_of(R.exec(c, db)), run(rest, R.db_of(R.exec(c, db)))))) : KV.Trie<String>}
-      %eta_l(run(rest, R.db_of(R.exec(c, db)))) : {t_rsnd(t_run(rest, T.db_of(T.exec(c, R.db.t(db), R.db.now(db))), R.db.now(db))) == R.db.t(rsnd(R.exec_all.cons(R.reply_of(R.exec(c, db)), _))) : KV.Trie<String>}
-      %tb(c, db) : {t_rsnd(t_run(rest, _, R.db.now(db))) == R.db.t(rsnd(run(rest, R.db_of(R.exec(c, db))))) : KV.Trie<String>}
-      %now_eq(c, db) : {t_rsnd(t_run(rest, R.db.t(R.db_of(R.exec(c, db))), _)) == R.db.t(rsnd(run(rest, R.db_of(R.exec(c, db))))) : KV.Trie<String>}
+      %t_eta_l(t_run(rest, T.db_of(T.exec(c, R.db.t(db), R.db.now(db))), R.db.now(db))) : {t_rsnd(T.exec_all.cons(T.reply_of(T.exec(c, R.db.t(db), R.db.now(db))), _)) == R.db.t(rsnd(R.exec_all.cons(R.reply_of(R.exec(c, db)), run(rest, R.db_of(R.exec(c, db)))))) : KV.Trie<KV.Val>}
+      %eta_l(run(rest, R.db_of(R.exec(c, db)))) : {t_rsnd(t_run(rest, T.db_of(T.exec(c, R.db.t(db), R.db.now(db))), R.db.now(db))) == R.db.t(rsnd(R.exec_all.cons(R.reply_of(R.exec(c, db)), _))) : KV.Trie<KV.Val>}
+      %tb(c, db) : {t_rsnd(t_run(rest, _, R.db.now(db))) == R.db.t(rsnd(run(rest, R.db_of(R.exec(c, db))))) : KV.Trie<KV.Val>}
+      %now_eq(c, db) : {t_rsnd(t_run(rest, R.db.t(R.db_of(R.exec(c, db))), _)) == R.db.t(rsnd(run(rest, R.db_of(R.exec(c, db))))) : KV.Trie<KV.Val>}
       run_t(rest, R.db_of(R.exec(c, db)))
 
-def fin_t(+cs: List<&2, R.Cmd>, +db: R.Db) -> {T.final(T.exec_all(cs, R.db.t(db), R.db.now(db))) == R.db.t(Laws.final(R.exec_all(cs, db))) : KV.Trie<String>}:
-  %t_exec_all_run(cs, R.db.t(db), R.db.now(db)) : {T.final(_) == R.db.t(Laws.final(R.exec_all(cs, db))) : KV.Trie<String>}
-  %exec_all_run(cs, db) : {T.final(t_run(cs, R.db.t(db), R.db.now(db))) == R.db.t(Laws.final(_)) : KV.Trie<String>}
-  %t_eta_l(t_run(cs, R.db.t(db), R.db.now(db))) : {T.final(_) == R.db.t(Laws.final(run(cs, db))) : KV.Trie<String>}
-  %eta_l(run(cs, db)) : {t_rsnd(t_run(cs, R.db.t(db), R.db.now(db))) == R.db.t(Laws.final(_)) : KV.Trie<String>}
+def fin_t(+cs: List<&2, R.Cmd>, +db: R.Db) -> {T.final(T.exec_all(cs, R.db.t(db), R.db.now(db))) == R.db.t(Laws.final(R.exec_all(cs, db))) : KV.Trie<KV.Val>}:
+  %t_exec_all_run(cs, R.db.t(db), R.db.now(db)) : {T.final(_) == R.db.t(Laws.final(R.exec_all(cs, db))) : KV.Trie<KV.Val>}
+  %exec_all_run(cs, db) : {T.final(t_run(cs, R.db.t(db), R.db.now(db))) == R.db.t(Laws.final(_)) : KV.Trie<KV.Val>}
+  %t_eta_l(t_run(cs, R.db.t(db), R.db.now(db))) : {T.final(_) == R.db.t(Laws.final(run(cs, db))) : KV.Trie<KV.Val>}
+  %eta_l(run(cs, db)) : {t_rsnd(t_run(cs, R.db.t(db), R.db.now(db))) == R.db.t(Laws.final(_)) : KV.Trie<KV.Val>}
   run_t(cs, db)
 
 # The laws of the server's exec
 # -----------------------------
 
-def frame_db(+c: R.Cmd, +db: R.Db, +j: String, e: {Laws.writes(c, j) == False{} : Bool}) -> {KV.entry(String, R.db.t(R.db_of(R.exec(c, db))), j) == KV.entry(String, R.db.t(db), j) : Maybe<&2, KV.Item<String>>}:
-  %bt(c, db) : {KV.entry(String, _, j) == KV.entry(String, R.db.t(db), j) : Maybe<&2, KV.Item<String>>}
+def frame_db(+c: R.Cmd, +db: R.Db, +j: String, e: {Laws.writes(c, j) == False{} : Bool}) -> {KV.entry(KV.Val, R.db.t(R.db_of(R.exec(c, db))), j) == KV.entry(KV.Val, R.db.t(db), j) : Maybe<&2, KV.Item<KV.Val>>}:
+  %bt(c, db) : {KV.entry(KV.Val, _, j) == KV.entry(KV.Val, R.db.t(db), j) : Maybe<&2, KV.Item<KV.Val>>}
   t_frame(c, R.db.t(db), j, R.db.now(db), e)
 
 def Laws.frame(c, db, j, e):
@@ -4542,19 +4614,27 @@ def lt_not_le(a: Nat, b: Nat) -> {Nat.is_lt(a, b) == True{} : Bool} -> {False{} 
       e => lt_not_le(ap, bp)(e)
 
 def Laws.expired(db, k, v, e, h, p):
-  %Equal.sym(Maybe<&2, KV.Item<String>>, KV.entry(String, R.db.t(db), k), Some{KV.Item{v, 1n+e}}, h) : {R.ent.live(R.db.now(db), _) == None{} : Maybe<&2, KV.Item<String>>}
-  %lt_not_le(1n+e, R.db.now(db))(p) : {Bool.pick(Maybe<&2, KV.Item<String>>, Bool.or(Nat.is_eq(1n+e, 0n), _), Some{KV.Item{v, 1n+e}}, None{}) == None{} : Maybe<&2, KV.Item<String>>}
+  %Equal.sym(Maybe<&2, KV.Item<KV.Val>>, KV.entry(KV.Val, R.db.t(db), k), Some{KV.Item{v, 1n+e}}, h) : {R.ent.live(R.db.now(db), _) == None{} : Maybe<&2, KV.Item<KV.Val>>}
+  %lt_not_le(1n+e, R.db.now(db))(p) : {Bool.pick(Maybe<&2, KV.Item<KV.Val>>, Bool.or(Nat.is_eq(1n+e, 0n), _), Some{KV.Item{v, 1n+e}}, None{}) == None{} : Maybe<&2, KV.Item<KV.Val>>}
   {==}
 
+# the value of an entry
+def item_val(m: Maybe<&2, KV.Item<KV.Val>>) -> Maybe<&2, KV.Val>:
+  match m:
+    case Some{KV.Item{+v, e}}:
+      Some{v}
+    case None{}:
+      None{}
+
 # a value read at now is the value of the entry there at now
-def live_val_b(b: Bool, -v: String, -e: Nat) -> {R.ent.val(Bool.pick(Maybe<&2, KV.Item<String>>, b, Some{KV.Item{v, e}}, None{})) == KV.blive.ent(String, b, v) : Maybe<&2, String>}:
+def live_val_b(b: Bool, -v: KV.Val, -e: Nat) -> {item_val(Bool.pick(Maybe<&2, KV.Item<KV.Val>>, b, Some{KV.Item{v, e}}, None{})) == KV.blive.ent(KV.Val, b, v) : Maybe<&2, KV.Val>}:
   match b:
     case True{}:
       {==}
     case False{}:
       {==}
 
-def live_val_ent(m: Maybe<&2, KV.Item<String>>, +now: Nat) -> {R.ent.val(R.ent.live(now, m)) == Laws.live_val(String, m, now) : Maybe<&2, String>}:
+def live_val_ent(m: Maybe<&2, KV.Item<KV.Val>>, +now: Nat) -> {item_val(R.ent.live(now, m)) == Laws.live_val(KV.Val, m, now) : Maybe<&2, KV.Val>}:
   match m:
     case Some{KV.Item{v, +e}}:
       live_val_b(KV.live(now, e), v, e)
@@ -4562,166 +4642,217 @@ def live_val_ent(m: Maybe<&2, KV.Item<String>>, +now: Nat) -> {R.ent.val(R.ent.l
       {==}
 
 # an entry there at now is the key's entry
-def none_some(-y: KV.Item<String>, e: {None{} == Some{y} : Maybe<&2, KV.Item<String>>}) -> Empty:
-  false_true(Equal.cong(Maybe<&2, KV.Item<String>>, Bool, z => Maybe.is_some(&2, KV.Item<String>, z), None{}, Some{y}, e))
+def none_some(-y: KV.Item<KV.Val>, e: {None{} == Some{y} : Maybe<&2, KV.Item<KV.Val>>}) -> Empty:
+  false_true(Equal.cong(Maybe<&2, KV.Item<KV.Val>>, Bool, z => Maybe.is_some(&2, KV.Item<KV.Val>, z), None{}, Some{y}, e))
 
-def live_some_b(b: Bool, -v: String, -e: Nat, -y: KV.Item<String>) -> {Bool.pick(Maybe<&2, KV.Item<String>>, b, Some{KV.Item{v, e}}, None{}) == Some{y} : Maybe<&2, KV.Item<String>>} -> {Some{KV.Item{v, e}} == Some{y} : Maybe<&2, KV.Item<String>>}:
+def live_some_b(b: Bool, -v: KV.Val, -e: Nat, -y: KV.Item<KV.Val>) -> {Bool.pick(Maybe<&2, KV.Item<KV.Val>>, b, Some{KV.Item{v, e}}, None{}) == Some{y} : Maybe<&2, KV.Item<KV.Val>>} -> {Some{KV.Item{v, e}} == Some{y} : Maybe<&2, KV.Item<KV.Val>>}:
   match b:
     case True{}:
       h => h
     case False{}:
-      h => Empty.absurd({Some{KV.Item{v, e}} == Some{y} : Maybe<&2, KV.Item<String>>}, none_some(y, h))
+      h => Empty.absurd({Some{KV.Item{v, e}} == Some{y} : Maybe<&2, KV.Item<KV.Val>>}, none_some(y, h))
 
-def live_some(m: Maybe<&2, KV.Item<String>>, +now: Nat, -y: KV.Item<String>) -> {R.ent.live(now, m) == Some{y} : Maybe<&2, KV.Item<String>>} -> {m == Some{y} : Maybe<&2, KV.Item<String>>}:
+def live_some(m: Maybe<&2, KV.Item<KV.Val>>, +now: Nat, -y: KV.Item<KV.Val>) -> {R.ent.live(now, m) == Some{y} : Maybe<&2, KV.Item<KV.Val>>} -> {m == Some{y} : Maybe<&2, KV.Item<KV.Val>>}:
   match m:
     case Some{KV.Item{v, +e}}:
       live_some_b(KV.live(now, e), v, e, y)
     case None{}:
-      h => Empty.absurd({None{} == Some{y} : Maybe<&2, KV.Item<String>>}, none_some(y, h))
+      h => Empty.absurd({None{} == Some{y} : Maybe<&2, KV.Item<KV.Val>>}, none_some(y, h))
 
-def get_missing_db(+db: R.Db, +k: String) -> {Laws.there(db, k) == None{} : Maybe<&2, KV.Item<String>>} -> {R.exec(R.Get{k}, db) == (R.RNull{}, db) : R.Reply & R.Db}:
+def get_missing_db(+db: R.Db, +k: String) -> {Laws.there(db, k) == None{} : Maybe<&2, KV.Item<KV.Val>>} -> {R.exec(R.Get{k}, db) == (R.RNull{}, db) : R.Reply & R.Db}:
   match db:
     case R.Db{+t, +n, +x, +now, +rr}:
-      e => %get_read(t, k, now) : {(R.r_get(_), R.Db{t, n, x, now, rr}) == (R.RNull{}, R.Db{t, n, x, now, rr}) : R.Reply & R.Db}
-           %live_val_ent(KV.entry(String, t, k), now) : {(R.r_get(_), R.Db{t, n, x, now, rr}) == (R.RNull{}, R.Db{t, n, x, now, rr}) : R.Reply & R.Db}
-           Equal.cong(Maybe<&2, KV.Item<String>>, R.Reply & R.Db, z => (R.r_get(R.ent.val(z)), R.Db{t, n, x, now, rr}), R.ent.live(now, KV.entry(String, t, k)), None{}, e)
+      e => %get_read(t, k, now) : {(R.r_getv(_), R.Db{t, n, x, now, rr}) == (R.RNull{}, R.Db{t, n, x, now, rr}) : R.Reply & R.Db}
+           %live_val_ent(KV.entry(KV.Val, t, k), now) : {(R.r_getv(KV.got_of(_)), R.Db{t, n, x, now, rr}) == (R.RNull{}, R.Db{t, n, x, now, rr}) : R.Reply & R.Db}
+           Equal.cong(Maybe<&2, KV.Item<KV.Val>>, R.Reply & R.Db, z => (R.r_getv(KV.got_of(item_val(z))), R.Db{t, n, x, now, rr}), R.ent.live(now, KV.entry(KV.Val, t, k)), None{}, e)
 
 def Laws.get_missing(db, k, e):
   get_missing_db(db, k)(e)
 
 def Laws.del_effect(ks, db, j, e):
-  %bt(R.Del{ks}, db) : {KV.entry(String, _, j) == None{} : Maybe<&2, KV.Item<String>>}
+  %bt(R.Del{ks}, db) : {KV.entry(KV.Val, _, j) == None{} : Maybe<&2, KV.Item<KV.Val>>}
   t_del_effect(ks, R.db.t(db), j, R.db.now(db), e)
 
 def Laws.del_one_count(db, k):
-  %br(R.Del{[k]}, db, {==}) : {_ == R.r_int(Bool.pick(Nat, Maybe.is_some(&2, KV.Item<String>, Laws.there(db, k)), 1n, 0n)) : R.Reply}
+  %br(R.Del{[k]}, db, {==}) : {_ == R.r_int(Bool.pick(Nat, Maybe.is_some(&2, KV.Item<KV.Val>, Laws.there(db, k)), 1n, 0n)) : R.Reply}
   t_del_one_count(R.db.t(db), k, R.db.now(db))
 
 # APPEND, by the entry of its key: of a key not there, a SET; of one
-# there, the value with s after it and the time kept
-def app_put(+t: KV.Trie<String>, +k: String, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>, +c: Nat, +s: String) -> {Laws.at_key(R.upd.put(t, k, KV.hash(k), n, x, now, rr, c, R.append.of(s, None{})), k) == (R.r_int(String.length(Laws.old_val(None{}) ++ s)), Some{KV.Item{Laws.old_val(None{}) ++ s, Laws.old_exp(None{})}}) : R.Reply & Maybe<&2, KV.Item<String>>}:
-  %Equal.sym(Maybe<&2, KV.Item<String>>, KV.entry(String, KV.setx(String, t, k, s, 0n), k), Some{KV.Item{s, 0n}}, Laws.entry_setx_same(String, t, k, s, 0n)) : {(R.r_int(String.length(s)), _) == (R.r_int(String.length(s)), Some{KV.Item{s, 0n}}) : R.Reply & Maybe<&2, KV.Item<String>>}
+# there, the value with s after it and the time kept (a key there holds a
+# string: one that holds a collection is WRONGTYPE)
+def app_put(+t: KV.Trie<KV.Val>, +k: String, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>, +c: Nat, +s: String) -> {Laws.at_key(R.upd.put(t, k, KV.hash(k), n, x, now, rr, c, R.upd.v(R.UAppend{s}, now, None{})), k) == (R.r_int(String.length(Laws.old_val(None{}) ++ s)), Some{KV.Item{KV.VStr{Laws.old_val(None{}) ++ s}, Laws.old_exp(None{})}}) : R.Reply & Maybe<&2, KV.Item<KV.Val>>}:
+  %Equal.sym(Maybe<&2, KV.Item<KV.Val>>, KV.entry(KV.Val, KV.setx(KV.Val, t, k, KV.VStr{s}, 0n), k), Some{KV.Item{KV.VStr{s}, 0n}}, Laws.entry_setx_same(KV.Val, t, k, KV.VStr{s}, 0n)) : {(R.r_int(String.length(s)), _) == (R.r_int(String.length(s)), Some{KV.Item{KV.VStr{s}, 0n}}) : R.Reply & Maybe<&2, KV.Item<KV.Val>>}
   {==}
 
-def app_b(b: Bool, +t: KV.Trie<String>, +k: String, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>, +s: String, +w: String, +e: Nat, +eq: {KV.entry(String, t, k) == Some{KV.Item{w, e}} : Maybe<&2, KV.Item<String>>}) -> {Laws.at_key(R.upd.put(t, k, KV.hash(k), n, x, now, rr, 1n+e, R.append.of(s, Bool.pick(Maybe<&2, KV.Item<String>>, b, Some{KV.Item{w, e}}, None{}))), k) == (R.r_int(String.length(Laws.old_val(Bool.pick(Maybe<&2, KV.Item<String>>, b, Some{KV.Item{w, e}}, None{})) ++ s)), Some{KV.Item{Laws.old_val(Bool.pick(Maybe<&2, KV.Item<String>>, b, Some{KV.Item{w, e}}, None{})) ++ s, Laws.old_exp(Bool.pick(Maybe<&2, KV.Item<String>>, b, Some{KV.Item{w, e}}, None{}))}}) : R.Reply & Maybe<&2, KV.Item<String>>}:
+def app_w(w: KV.Val, +t: KV.Trie<KV.Val>, +k: String, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>, +s: String, +e: Nat) -> {KV.entry(KV.Val, t, k) == Some{KV.Item{w, e}} : Maybe<&2, KV.Item<KV.Val>>} -> {Laws.holds_coll(Some{KV.Item{w, e}}) == False{} : Bool} -> {Laws.at_key(R.upd.put(t, k, KV.hash(k), n, x, now, rr, 1n+e, R.upd.v(R.UAppend{s}, now, Some{KV.Item{w, e}})), k) == (R.r_int(String.length(Laws.old_val(Some{KV.Item{w, e}}) ++ s)), Some{KV.Item{KV.VStr{Laws.old_val(Some{KV.Item{w, e}}) ++ s}, Laws.old_exp(Some{KV.Item{w, e}})}}) : R.Reply & Maybe<&2, KV.Item<KV.Val>>}:
+  match w:
+    case KV.VStr{+v}:
+      eq => nc =>
+        %Equal.sym(Maybe<&2, KV.Item<KV.Val>>, KV.entry(KV.Val, KV.keep(KV.Val, t, k, KV.VStr{v ++ s}), k), Some{KV.Item{KV.VStr{v ++ s}, Laws.keep_exp(KV.Val, KV.entry(KV.Val, t, k))}}, Laws.entry_keep_same(KV.Val, t, k, KV.VStr{v ++ s})) : {(R.r_int(String.length(v ++ s)), _) == (R.r_int(String.length(v ++ s)), Some{KV.Item{KV.VStr{v ++ s}, e}}) : R.Reply & Maybe<&2, KV.Item<KV.Val>>}
+        %Equal.sym(Maybe<&2, KV.Item<KV.Val>>, KV.entry(KV.Val, t, k), Some{KV.Item{KV.VStr{v}, e}}, eq) : {(R.r_int(String.length(v ++ s)), Some{KV.Item{KV.VStr{v ++ s}, Laws.keep_exp(KV.Val, _)}}) == (R.r_int(String.length(v ++ s)), Some{KV.Item{KV.VStr{v ++ s}, e}}) : R.Reply & Maybe<&2, KV.Item<KV.Val>>}
+        {==}
+    case KV.VColl{c}:
+      eq => nc => Empty.absurd({Laws.at_key(R.upd.put(t, k, KV.hash(k), n, x, now, rr, 1n+e, R.upd.v(R.UAppend{s}, now, Some{KV.Item{KV.VColl{c}, e}})), k) == (R.r_int(String.length(Laws.old_val(Some{KV.Item{KV.VColl{c}, e}}) ++ s)), Some{KV.Item{KV.VStr{Laws.old_val(Some{KV.Item{KV.VColl{c}, e}}) ++ s}, Laws.old_exp(Some{KV.Item{KV.VColl{c}, e}})}}) : R.Reply & Maybe<&2, KV.Item<KV.Val>>}, true_false(nc))
+
+def app_b(b: Bool, +t: KV.Trie<KV.Val>, +k: String, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>, +s: String, +w: KV.Val, +e: Nat, +eq: {KV.entry(KV.Val, t, k) == Some{KV.Item{w, e}} : Maybe<&2, KV.Item<KV.Val>>}) -> {Laws.holds_coll(Bool.pick(Maybe<&2, KV.Item<KV.Val>>, b, Some{KV.Item{w, e}}, None{})) == False{} : Bool} -> {Laws.at_key(R.upd.put(t, k, KV.hash(k), n, x, now, rr, 1n+e, R.upd.v(R.UAppend{s}, now, Bool.pick(Maybe<&2, KV.Item<KV.Val>>, b, Some{KV.Item{w, e}}, None{}))), k) == (R.r_int(String.length(Laws.old_val(Bool.pick(Maybe<&2, KV.Item<KV.Val>>, b, Some{KV.Item{w, e}}, None{})) ++ s)), Some{KV.Item{KV.VStr{Laws.old_val(Bool.pick(Maybe<&2, KV.Item<KV.Val>>, b, Some{KV.Item{w, e}}, None{})) ++ s}, Laws.old_exp(Bool.pick(Maybe<&2, KV.Item<KV.Val>>, b, Some{KV.Item{w, e}}, None{}))}}) : R.Reply & Maybe<&2, KV.Item<KV.Val>>}:
   match b:
     case True{}:
-      %Equal.sym(Maybe<&2, KV.Item<String>>, KV.entry(String, KV.keep(String, t, k, w ++ s), k), Some{KV.Item{w ++ s, Laws.keep_exp(String, KV.entry(String, t, k))}}, Laws.entry_keep_same(String, t, k, w ++ s)) : {(R.r_int(String.length(w ++ s)), _) == (R.r_int(String.length(w ++ s)), Some{KV.Item{w ++ s, e}}) : R.Reply & Maybe<&2, KV.Item<String>>}
-      %Equal.sym(Maybe<&2, KV.Item<String>>, KV.entry(String, t, k), Some{KV.Item{w, e}}, eq) : {(R.r_int(String.length(w ++ s)), Some{KV.Item{w ++ s, Laws.keep_exp(String, _)}}) == (R.r_int(String.length(w ++ s)), Some{KV.Item{w ++ s, e}}) : R.Reply & Maybe<&2, KV.Item<String>>}
-      {==}
+      nc => app_w(w, t, k, n, x, now, rr, s, e)(eq)(nc)
     case False{}:
-      app_put(t, k, n, x, now, rr, 1n+e, s)
+      nc => app_put(t, k, n, x, now, rr, 1n+e, s)
 
-def app_m(m: Maybe<&2, KV.Item<String>>, +t: KV.Trie<String>, +k: String, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>, +s: String) -> {KV.entry(String, t, k) == m : Maybe<&2, KV.Item<String>>} -> {Laws.at_key(R.upd.put(t, k, KV.hash(k), n, x, now, rr, R.ent.code(m), R.append.of(s, R.ent.live(now, m))), k) == (R.r_int(String.length(Laws.old_val(R.ent.live(now, m)) ++ s)), Some{KV.Item{Laws.old_val(R.ent.live(now, m)) ++ s, Laws.old_exp(R.ent.live(now, m))}}) : R.Reply & Maybe<&2, KV.Item<String>>}:
+def app_m(m: Maybe<&2, KV.Item<KV.Val>>, +t: KV.Trie<KV.Val>, +k: String, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>, +s: String) -> {KV.entry(KV.Val, t, k) == m : Maybe<&2, KV.Item<KV.Val>>} -> {Laws.holds_coll(R.ent.live(now, m)) == False{} : Bool} -> {Laws.at_key(R.upd.put(t, k, KV.hash(k), n, x, now, rr, R.ent.code(m), R.upd.v(R.UAppend{s}, now, R.ent.live(now, m))), k) == (R.r_int(String.length(Laws.old_val(R.ent.live(now, m)) ++ s)), Some{KV.Item{KV.VStr{Laws.old_val(R.ent.live(now, m)) ++ s}, Laws.old_exp(R.ent.live(now, m))}}) : R.Reply & Maybe<&2, KV.Item<KV.Val>>}:
   match m:
     case None{}:
-      eq => app_put(t, k, n, x, now, rr, 0n, s)
+      eq => nc => app_put(t, k, n, x, now, rr, 0n, s)
     case Some{KV.Item{+w, +e}}:
-      eq => app_b(KV.live(now, e), t, k, n, x, now, rr, s, w, e, eq)
+      eq => nc => app_b(KV.live(now, e), t, k, n, x, now, rr, s, w, e, eq)(nc)
 
-def append_db(+db: R.Db, +k: String, +s: String) -> {Laws.at_key(R.exec(R.Upd{k, R.UAppend{s}}, db), k) == (R.r_int(String.length(Laws.old_val(Laws.there(db, k)) ++ s)), Some{KV.Item{Laws.old_val(Laws.there(db, k)) ++ s, Laws.old_exp(Laws.there(db, k))}}) : R.Reply & Maybe<&2, KV.Item<String>>}:
+def append_db(+db: R.Db, +k: String, +s: String) -> {Laws.holds_coll(Laws.there(db, k)) == False{} : Bool} -> {Laws.at_key(R.exec(R.Upd{k, R.UAppend{s}}, db), k) == (R.r_int(String.length(Laws.old_val(Laws.there(db, k)) ++ s)), Some{KV.Item{KV.VStr{Laws.old_val(Laws.there(db, k)) ++ s}, Laws.old_exp(Laws.there(db, k))}}) : R.Reply & Maybe<&2, KV.Item<KV.Val>>}:
   match db:
     case R.Db{+t, +n, +x, +now, +rr}:
-      %entry_at_eq(String, t, k) : {Laws.at_key(R.upd.put(t, k, KV.hash(k), n, x, now, rr, R.ent.code(_), R.upd(R.UAppend{s}, now, R.ent.live(now, _))), k) == (R.r_int(String.length(Laws.old_val(R.ent.live(now, KV.entry(String, t, k))) ++ s)), Some{KV.Item{Laws.old_val(R.ent.live(now, KV.entry(String, t, k))) ++ s, Laws.old_exp(R.ent.live(now, KV.entry(String, t, k)))}}) : R.Reply & Maybe<&2, KV.Item<String>>}
-      app_m(KV.entry(String, t, k), t, k, n, x, now, rr, s)({==})
+      nc =>
+        %entry_at_eq(KV.Val, t, k) : {Laws.at_key(R.upd.put(t, k, KV.hash(k), n, x, now, rr, R.ent.code(_), R.upd.v(R.UAppend{s}, now, R.ent.live(now, _))), k) == (R.r_int(String.length(Laws.old_val(R.ent.live(now, KV.entry(KV.Val, t, k))) ++ s)), Some{KV.Item{KV.VStr{Laws.old_val(R.ent.live(now, KV.entry(KV.Val, t, k))) ++ s}, Laws.old_exp(R.ent.live(now, KV.entry(KV.Val, t, k)))}}) : R.Reply & Maybe<&2, KV.Item<KV.Val>>}
+        app_m(KV.entry(KV.Val, t, k), t, k, n, x, now, rr, s)({==})(nc)
 
-def Laws.append_effect(db, k, s):
-  append_db(db, k, s)
+def Laws.append_effect(db, k, s, nc):
+  append_db(db, k, s)(nc)
 
-def setnx_missing_db(+db: R.Db, +k: String, +v: String) -> {Laws.there(db, k) == None{} : Maybe<&2, KV.Item<String>>} -> {Laws.at_key(R.exec(R.Upd{k, R.USetNx{v}}, db), k) == (R.r_int(1n), Some{KV.Item{v, 0n}}) : R.Reply & Maybe<&2, KV.Item<String>>}:
+def setnx_missing_db(+db: R.Db, +k: String, +v: String) -> {Laws.there(db, k) == None{} : Maybe<&2, KV.Item<KV.Val>>} -> {Laws.at_key(R.exec(R.Upd{k, R.USetNx{v}}, db), k) == (R.r_int(1n), Some{KV.Item{KV.VStr{v}, 0n}}) : R.Reply & Maybe<&2, KV.Item<KV.Val>>}:
   match db:
     case R.Db{+t, +n, +x, +now, +rr}:
       h =>
-        %entry_at_eq(String, t, k) : {Laws.at_key(R.upd.put(t, k, KV.hash(k), n, x, now, rr, R.ent.code(_), R.upd(R.USetNx{v}, now, R.ent.live(now, _))), k) == (R.r_int(1n), Some{KV.Item{v, 0n}}) : R.Reply & Maybe<&2, KV.Item<String>>}
-        %Equal.sym(Maybe<&2, KV.Item<String>>, R.ent.live(now, KV.entry(String, t, k)), None{}, h) : {Laws.at_key(R.upd.put(t, k, KV.hash(k), n, x, now, rr, R.ent.code(KV.entry(String, t, k)), R.upd(R.USetNx{v}, now, _)), k) == (R.r_int(1n), Some{KV.Item{v, 0n}}) : R.Reply & Maybe<&2, KV.Item<String>>}
-        %Equal.sym(Maybe<&2, KV.Item<String>>, KV.entry(String, KV.setx(String, t, k, v, 0n), k), Some{KV.Item{v, 0n}}, Laws.entry_setx_same(String, t, k, v, 0n)) : {(R.r_int(1n), _) == (R.r_int(1n), Some{KV.Item{v, 0n}}) : R.Reply & Maybe<&2, KV.Item<String>>}
+        %entry_at_eq(KV.Val, t, k) : {Laws.at_key(R.upd.put(t, k, KV.hash(k), n, x, now, rr, R.ent.code(_), R.upd.v(R.USetNx{v}, now, R.ent.live(now, _))), k) == (R.r_int(1n), Some{KV.Item{KV.VStr{v}, 0n}}) : R.Reply & Maybe<&2, KV.Item<KV.Val>>}
+        %Equal.sym(Maybe<&2, KV.Item<KV.Val>>, R.ent.live(now, KV.entry(KV.Val, t, k)), None{}, h) : {Laws.at_key(R.upd.put(t, k, KV.hash(k), n, x, now, rr, R.ent.code(KV.entry(KV.Val, t, k)), R.upd.v(R.USetNx{v}, now, _)), k) == (R.r_int(1n), Some{KV.Item{KV.VStr{v}, 0n}}) : R.Reply & Maybe<&2, KV.Item<KV.Val>>}
+        %Equal.sym(Maybe<&2, KV.Item<KV.Val>>, KV.entry(KV.Val, KV.setx(KV.Val, t, k, KV.VStr{v}, 0n), k), Some{KV.Item{KV.VStr{v}, 0n}}, Laws.entry_setx_same(KV.Val, t, k, KV.VStr{v}, 0n)) : {(R.r_int(1n), _) == (R.r_int(1n), Some{KV.Item{KV.VStr{v}, 0n}}) : R.Reply & Maybe<&2, KV.Item<KV.Val>>}
         {==}
 
 def Laws.setnx_missing(db, k, v, h):
   setnx_missing_db(db, k, v)(h)
 
-def setnx_present_db(+db: R.Db, +k: String, +v: String, +y: KV.Item<String>) -> {Laws.there(db, k) == Some{y} : Maybe<&2, KV.Item<String>>} -> {R.exec(R.Upd{k, R.USetNx{v}}, db) == (R.r_int(0n), db) : R.Reply & R.Db}:
+# SETNX of a key there, of any kind, finds it there
+def setnx_w(+w: KV.Val, +e: Nat, +v: String, +now: Nat) -> {R.upd.v(R.USetNx{v}, now, Some{KV.Item{w, e}}) == R.Out{R.r_int(0n), R.CKeep{}} : R.Out}:
+  match w:
+    case KV.VStr{u}:
+      {==}
+    case KV.VColl{c}:
+      {==}
+
+def setnx_some(+y: KV.Item<KV.Val>, +v: String, +now: Nat) -> {R.upd.v(R.USetNx{v}, now, Some{y}) == R.Out{R.r_int(0n), R.CKeep{}} : R.Out}:
+  match y:
+    case KV.Item{+w, +e}:
+      setnx_w(w, e, v, now)
+
+def setnx_present_db(+db: R.Db, +k: String, +v: String, +y: KV.Item<KV.Val>) -> {Laws.there(db, k) == Some{y} : Maybe<&2, KV.Item<KV.Val>>} -> {R.exec(R.Upd{k, R.USetNx{v}}, db) == (R.r_int(0n), db) : R.Reply & R.Db}:
   match db:
     case R.Db{+t, +n, +x, +now, +rr}:
       h =>
-        %entry_at_eq(String, t, k) : {R.upd.put(t, k, KV.hash(k), n, x, now, rr, R.ent.code(_), R.upd(R.USetNx{v}, now, R.ent.live(now, _))) == (R.r_int(0n), R.Db{t, n, x, now, rr}) : R.Reply & R.Db}
-        %Equal.sym(Maybe<&2, KV.Item<String>>, R.ent.live(now, KV.entry(String, t, k)), Some{y}, h) : {R.upd.put(t, k, KV.hash(k), n, x, now, rr, R.ent.code(KV.entry(String, t, k)), R.upd(R.USetNx{v}, now, _)) == (R.r_int(0n), R.Db{t, n, x, now, rr}) : R.Reply & R.Db}
+        %entry_at_eq(KV.Val, t, k) : {R.upd.put(t, k, KV.hash(k), n, x, now, rr, R.ent.code(_), R.upd.v(R.USetNx{v}, now, R.ent.live(now, _))) == (R.r_int(0n), R.Db{t, n, x, now, rr}) : R.Reply & R.Db}
+        %Equal.sym(Maybe<&2, KV.Item<KV.Val>>, R.ent.live(now, KV.entry(KV.Val, t, k)), Some{y}, h) : {R.upd.put(t, k, KV.hash(k), n, x, now, rr, R.ent.code(KV.entry(KV.Val, t, k)), R.upd.v(R.USetNx{v}, now, _)) == (R.r_int(0n), R.Db{t, n, x, now, rr}) : R.Reply & R.Db}
+        %Equal.sym(R.Out, R.upd.v(R.USetNx{v}, now, Some{y}), R.Out{R.r_int(0n), R.CKeep{}}, setnx_some(y, v, now)) : {R.upd.put(t, k, KV.hash(k), n, x, now, rr, R.ent.code(KV.entry(KV.Val, t, k)), _) == (R.r_int(0n), R.Db{t, n, x, now, rr}) : R.Reply & R.Db}
         {==}
 
 def Laws.setnx_present(db, k, v, y, h):
   setnx_present_db(db, k, v, y)(h)
 
-def incr_missing_db(+db: R.Db, +k: String) -> {Laws.there(db, k) == None{} : Maybe<&2, KV.Item<String>>} -> {Laws.at_key(R.exec(R.IncrBy{k, R.IPos{1n}}, db), k) == (R.RInt{R.IPos{1n}}, Some{KV.Item{"1", 0n}}) : R.Reply & Maybe<&2, KV.Item<String>>}:
+def incr_missing_db(+db: R.Db, +k: String) -> {Laws.there(db, k) == None{} : Maybe<&2, KV.Item<KV.Val>>} -> {Laws.at_key(R.exec(R.IncrBy{k, R.IPos{1n}}, db), k) == (R.RInt{R.IPos{1n}}, Some{KV.Item{KV.VStr{"1"}, 0n}}) : R.Reply & Maybe<&2, KV.Item<KV.Val>>}:
   match db:
     case R.Db{+t, +n, +x, +now, +rr}:
       h =>
-        %read_eq(t, k, now) : {Laws.at_key(R.incr.got(t, k, KV.hash(k), R.IPos{1n}, n, x, now, rr, _), k) == (R.RInt{R.IPos{1n}}, Some{KV.Item{"1", 0n}}) : R.Reply & Maybe<&2, KV.Item<String>>}
-        %live_val_ent(KV.entry(String, t, k), now) : {Laws.at_key(R.incr.got(t, k, KV.hash(k), R.IPos{1n}, n, x, now, rr, _), k) == (R.RInt{R.IPos{1n}}, Some{KV.Item{"1", 0n}}) : R.Reply & Maybe<&2, KV.Item<String>>}
-        %Equal.sym(Maybe<&2, KV.Item<String>>, R.ent.live(now, KV.entry(String, t, k)), None{}, h) : {Laws.at_key(R.incr.got(t, k, KV.hash(k), R.IPos{1n}, n, x, now, rr, R.ent.val(_)), k) == (R.RInt{R.IPos{1n}}, Some{KV.Item{"1", 0n}}) : R.Reply & Maybe<&2, KV.Item<String>>}
-        %Equal.sym(Maybe<&2, KV.Item<String>>, KV.entry(String, KV.set(String, t, k, "1"), k), Some{KV.Item{"1", 0n}}, e_set(t, k, "1")) : {(R.RInt{R.IPos{1n}}, _) == (R.RInt{R.IPos{1n}}, Some{KV.Item{"1", 0n}}) : R.Reply & Maybe<&2, KV.Item<String>>}
+        %get_read(t, k, now) : {Laws.at_key(R.incr.got(t, k, KV.hash(k), R.IPos{1n}, n, x, now, rr, _), k) == (R.RInt{R.IPos{1n}}, Some{KV.Item{KV.VStr{"1"}, 0n}}) : R.Reply & Maybe<&2, KV.Item<KV.Val>>}
+        %live_val_ent(KV.entry(KV.Val, t, k), now) : {Laws.at_key(R.incr.got(t, k, KV.hash(k), R.IPos{1n}, n, x, now, rr, KV.got_of(_)), k) == (R.RInt{R.IPos{1n}}, Some{KV.Item{KV.VStr{"1"}, 0n}}) : R.Reply & Maybe<&2, KV.Item<KV.Val>>}
+        %Equal.sym(Maybe<&2, KV.Item<KV.Val>>, R.ent.live(now, KV.entry(KV.Val, t, k)), None{}, h) : {Laws.at_key(R.incr.got(t, k, KV.hash(k), R.IPos{1n}, n, x, now, rr, KV.got_of(item_val(_))), k) == (R.RInt{R.IPos{1n}}, Some{KV.Item{KV.VStr{"1"}, 0n}}) : R.Reply & Maybe<&2, KV.Item<KV.Val>>}
+        %Equal.sym(Maybe<&2, KV.Item<KV.Val>>, KV.entry(KV.Val, KV.set(KV.Val, t, k, KV.VStr{"1"}), k), Some{KV.Item{KV.VStr{"1"}, 0n}}, e_set(t, k, "1")) : {(R.RInt{R.IPos{1n}}, _) == (R.RInt{R.IPos{1n}}, Some{KV.Item{KV.VStr{"1"}, 0n}}) : R.Reply & Maybe<&2, KV.Item<KV.Val>>}
         {==}
 
 def Laws.incr_missing(db, k, h):
   incr_missing_db(db, k)(h)
 
-def pttl_db(+db: R.Db, +k: String, +v: String, +e: Nat) -> {Laws.there(db, k) == Some{KV.Item{v, 1n+e}} : Maybe<&2, KV.Item<String>>} -> {R.exec(R.Peek{k, R.PPttl{}}, db) == (R.RInt{R.IPos{Nat.sub(1n+e, R.db.now(db))}}, db) : R.Reply & R.Db}:
+# PTTL of a key there, of any kind, with a time
+def pttl_v(+v: KV.Val, +e: Nat, +now: Nat) -> {R.peek.v(R.PPttl{}, now, Some{KV.Item{v, 1n+e}}) == R.RInt{R.IPos{Nat.sub(1n+e, now)}} : R.Reply}:
+  match v:
+    case KV.VStr{w}:
+      {==}
+    case KV.VColl{c}:
+      {==}
+
+def pttl_db(+db: R.Db, +k: String, +v: KV.Val, +e: Nat) -> {Laws.there(db, k) == Some{KV.Item{v, 1n+e}} : Maybe<&2, KV.Item<KV.Val>>} -> {R.exec(R.Peek{k, R.PPttl{}}, db) == (R.RInt{R.IPos{Nat.sub(1n+e, R.db.now(db))}}, db) : R.Reply & R.Db}:
   match db:
     case R.Db{+t, +n, +x, +now, +rr}:
       h =>
-        %entry_at_eq(String, t, k) : {(R.peek(R.PPttl{}, now, R.ent.live(now, _)), R.Db{t, n, x, now, rr}) == (R.RInt{R.IPos{Nat.sub(1n+e, now)}}, R.Db{t, n, x, now, rr}) : R.Reply & R.Db}
-        %Equal.sym(Maybe<&2, KV.Item<String>>, R.ent.live(now, KV.entry(String, t, k)), Some{KV.Item{v, 1n+e}}, h) : {(R.peek(R.PPttl{}, now, _), R.Db{t, n, x, now, rr}) == (R.RInt{R.IPos{Nat.sub(1n+e, now)}}, R.Db{t, n, x, now, rr}) : R.Reply & R.Db}
+        %entry_at_eq(KV.Val, t, k) : {(R.peek.v(R.PPttl{}, now, R.ent.live(now, _)), R.Db{t, n, x, now, rr}) == (R.RInt{R.IPos{Nat.sub(1n+e, now)}}, R.Db{t, n, x, now, rr}) : R.Reply & R.Db}
+        %Equal.sym(Maybe<&2, KV.Item<KV.Val>>, R.ent.live(now, KV.entry(KV.Val, t, k)), Some{KV.Item{v, 1n+e}}, h) : {(R.peek.v(R.PPttl{}, now, _), R.Db{t, n, x, now, rr}) == (R.RInt{R.IPos{Nat.sub(1n+e, now)}}, R.Db{t, n, x, now, rr}) : R.Reply & R.Db}
+        %Equal.sym(R.Reply, R.peek.v(R.PPttl{}, now, Some{KV.Item{v, 1n+e}}), R.RInt{R.IPos{Nat.sub(1n+e, now)}}, pttl_v(v, e, now)) : {(_, R.Db{t, n, x, now, rr}) == (R.RInt{R.IPos{Nat.sub(1n+e, now)}}, R.Db{t, n, x, now, rr}) : R.Reply & R.Db}
         {==}
 
 def Laws.pttl_left(db, k, v, e, h):
   pttl_db(db, k, v, e)(h)
 
-def keepttl_db(+db: R.Db, +k: String, +v: String, +w: String, +e: Nat) -> {Laws.there(db, k) == Some{KV.Item{w, e}} : Maybe<&2, KV.Item<String>>} -> {Laws.at_key(R.exec(R.Upd{k, R.USet{v, 0n, R.TKeep{}, "set"}}, db), k) == (R.r_ok(), Some{KV.Item{v, e}}) : R.Reply & Maybe<&2, KV.Item<String>>}:
+# SET with KEEPTTL of a key there, of any kind, keeps its time
+def keepttl_v(+w: KV.Val, +e: Nat, +now: Nat, +v: String) -> {R.upd.v(R.USet{v, 0n, R.TKeep{}, "set"}, now, Some{KV.Item{w, e}}) == R.Out{R.r_ok(), R.CKeepT{v}} : R.Out}:
+  match w:
+    case KV.VStr{u}:
+      {==}
+    case KV.VColl{c}:
+      {==}
+
+def keepttl_db(+db: R.Db, +k: String, +v: String, +w: KV.Val, +e: Nat) -> {Laws.there(db, k) == Some{KV.Item{w, e}} : Maybe<&2, KV.Item<KV.Val>>} -> {Laws.at_key(R.exec(R.Upd{k, R.USet{v, 0n, R.TKeep{}, "set"}}, db), k) == (R.r_ok(), Some{KV.Item{KV.VStr{v}, e}}) : R.Reply & Maybe<&2, KV.Item<KV.Val>>}:
   match db:
     case R.Db{+t, +n, +x, +now, +rr}:
       +h =>
-        %entry_at_eq(String, t, k) : {Laws.at_key(R.upd.put(t, k, KV.hash(k), n, x, now, rr, R.ent.code(_), R.upd(R.USet{v, 0n, R.TKeep{}, "set"}, now, R.ent.live(now, _))), k) == (R.r_ok(), Some{KV.Item{v, e}}) : R.Reply & Maybe<&2, KV.Item<String>>}
-        %Equal.sym(Maybe<&2, KV.Item<String>>, R.ent.live(now, KV.entry(String, t, k)), Some{KV.Item{w, e}}, h) : {Laws.at_key(R.upd.put(t, k, KV.hash(k), n, x, now, rr, R.ent.code(KV.entry(String, t, k)), R.upd(R.USet{v, 0n, R.TKeep{}, "set"}, now, _)), k) == (R.r_ok(), Some{KV.Item{v, e}}) : R.Reply & Maybe<&2, KV.Item<String>>}
-        %Equal.sym(Maybe<&2, KV.Item<String>>, KV.entry(String, KV.keep(String, t, k, v), k), Some{KV.Item{v, Laws.keep_exp(String, KV.entry(String, t, k))}}, Laws.entry_keep_same(String, t, k, v)) : {(R.r_ok(), _) == (R.r_ok(), Some{KV.Item{v, e}}) : R.Reply & Maybe<&2, KV.Item<String>>}
-        %Equal.sym(Maybe<&2, KV.Item<String>>, KV.entry(String, t, k), Some{KV.Item{w, e}}, live_some(KV.entry(String, t, k), now, KV.Item{w, e})(h)) : {(R.r_ok(), Some{KV.Item{v, Laws.keep_exp(String, _)}}) == (R.r_ok(), Some{KV.Item{v, e}}) : R.Reply & Maybe<&2, KV.Item<String>>}
+        %entry_at_eq(KV.Val, t, k) : {Laws.at_key(R.upd.put(t, k, KV.hash(k), n, x, now, rr, R.ent.code(_), R.upd.v(R.USet{v, 0n, R.TKeep{}, "set"}, now, R.ent.live(now, _))), k) == (R.r_ok(), Some{KV.Item{KV.VStr{v}, e}}) : R.Reply & Maybe<&2, KV.Item<KV.Val>>}
+        %Equal.sym(Maybe<&2, KV.Item<KV.Val>>, R.ent.live(now, KV.entry(KV.Val, t, k)), Some{KV.Item{w, e}}, h) : {Laws.at_key(R.upd.put(t, k, KV.hash(k), n, x, now, rr, R.ent.code(KV.entry(KV.Val, t, k)), R.upd.v(R.USet{v, 0n, R.TKeep{}, "set"}, now, _)), k) == (R.r_ok(), Some{KV.Item{KV.VStr{v}, e}}) : R.Reply & Maybe<&2, KV.Item<KV.Val>>}
+        %Equal.sym(R.Out, R.upd.v(R.USet{v, 0n, R.TKeep{}, "set"}, now, Some{KV.Item{w, e}}), R.Out{R.r_ok(), R.CKeepT{v}}, keepttl_v(w, e, now, v)) : {Laws.at_key(R.upd.put(t, k, KV.hash(k), n, x, now, rr, R.ent.code(KV.entry(KV.Val, t, k)), _), k) == (R.r_ok(), Some{KV.Item{KV.VStr{v}, e}}) : R.Reply & Maybe<&2, KV.Item<KV.Val>>}
+        %Equal.sym(Maybe<&2, KV.Item<KV.Val>>, KV.entry(KV.Val, KV.keep(KV.Val, t, k, KV.VStr{v}), k), Some{KV.Item{KV.VStr{v}, Laws.keep_exp(KV.Val, KV.entry(KV.Val, t, k))}}, Laws.entry_keep_same(KV.Val, t, k, KV.VStr{v})) : {(R.r_ok(), _) == (R.r_ok(), Some{KV.Item{KV.VStr{v}, e}}) : R.Reply & Maybe<&2, KV.Item<KV.Val>>}
+        %Equal.sym(Maybe<&2, KV.Item<KV.Val>>, KV.entry(KV.Val, t, k), Some{KV.Item{w, e}}, live_some(KV.entry(KV.Val, t, k), now, KV.Item{w, e})(h)) : {(R.r_ok(), Some{KV.Item{KV.VStr{v}, Laws.keep_exp(KV.Val, _)}}) == (R.r_ok(), Some{KV.Item{KV.VStr{v}, e}}) : R.Reply & Maybe<&2, KV.Item<KV.Val>>}
         {==}
 
 def Laws.set_keepttl(db, k, v, w, e, h):
   keepttl_db(db, k, v, w, e)(h)
 
-def setrange_db(+db: R.Db, +k: String, +o: Nat, +s: String, +w: String, +e: Nat) -> {Laws.there(db, k) == Some{KV.Item{w, e}} : Maybe<&2, KV.Item<String>>} -> {R.range.go(o, s) == True{} : Bool} -> {Laws.at_key(R.exec(R.Upd{k, R.URange{o, s}}, db), k) == (R.r_int(String.length(R.range.put(w, o, s))), Some{KV.Item{R.range.put(w, o, s), e}}) : R.Reply & Maybe<&2, KV.Item<String>>}:
+def setrange_db(+db: R.Db, +k: String, +o: Nat, +s: String, +w: String, +e: Nat) -> {Laws.there(db, k) == Some{KV.Item{KV.VStr{w}, e}} : Maybe<&2, KV.Item<KV.Val>>} -> {R.range.go(o, s) == True{} : Bool} -> {Laws.at_key(R.exec(R.Upd{k, R.URange{o, s}}, db), k) == (R.r_int(String.length(R.range.put(w, o, s))), Some{KV.Item{KV.VStr{R.range.put(w, o, s)}, e}}) : R.Reply & Maybe<&2, KV.Item<KV.Val>>}:
   match db:
     case R.Db{+t, +n, +x, +now, +rr}:
       +h => ok =>
-        %entry_at_eq(String, t, k) : {Laws.at_key(R.upd.put(t, k, KV.hash(k), n, x, now, rr, R.ent.code(_), R.upd(R.URange{o, s}, now, R.ent.live(now, _))), k) == (R.r_int(String.length(R.range.put(w, o, s))), Some{KV.Item{R.range.put(w, o, s), e}}) : R.Reply & Maybe<&2, KV.Item<String>>}
-        %Equal.sym(Maybe<&2, KV.Item<String>>, R.ent.live(now, KV.entry(String, t, k)), Some{KV.Item{w, e}}, h) : {Laws.at_key(R.upd.put(t, k, KV.hash(k), n, x, now, rr, R.ent.code(KV.entry(String, t, k)), R.upd(R.URange{o, s}, now, _)), k) == (R.r_int(String.length(R.range.put(w, o, s))), Some{KV.Item{R.range.put(w, o, s), e}}) : R.Reply & Maybe<&2, KV.Item<String>>}
-        %Equal.sym(Bool, R.range.go(o, s), True{}, ok) : {Laws.at_key(R.upd.put(t, k, KV.hash(k), n, x, now, rr, R.ent.code(KV.entry(String, t, k)), R.range.some(_, o, s, w, String.is_empty(s))), k) == (R.r_int(String.length(R.range.put(w, o, s))), Some{KV.Item{R.range.put(w, o, s), e}}) : R.Reply & Maybe<&2, KV.Item<String>>}
-        %Equal.sym(Maybe<&2, KV.Item<String>>, KV.entry(String, KV.keep(String, t, k, R.range.put(w, o, s)), k), Some{KV.Item{R.range.put(w, o, s), Laws.keep_exp(String, KV.entry(String, t, k))}}, Laws.entry_keep_same(String, t, k, R.range.put(w, o, s))) : {(R.r_int(String.length(R.range.put(w, o, s))), _) == (R.r_int(String.length(R.range.put(w, o, s))), Some{KV.Item{R.range.put(w, o, s), e}}) : R.Reply & Maybe<&2, KV.Item<String>>}
-        %Equal.sym(Maybe<&2, KV.Item<String>>, KV.entry(String, t, k), Some{KV.Item{w, e}}, live_some(KV.entry(String, t, k), now, KV.Item{w, e})(h)) : {(R.r_int(String.length(R.range.put(w, o, s))), Some{KV.Item{R.range.put(w, o, s), Laws.keep_exp(String, _)}}) == (R.r_int(String.length(R.range.put(w, o, s))), Some{KV.Item{R.range.put(w, o, s), e}}) : R.Reply & Maybe<&2, KV.Item<String>>}
+        %entry_at_eq(KV.Val, t, k) : {Laws.at_key(R.upd.put(t, k, KV.hash(k), n, x, now, rr, R.ent.code(_), R.upd.v(R.URange{o, s}, now, R.ent.live(now, _))), k) == (R.r_int(String.length(R.range.put(w, o, s))), Some{KV.Item{KV.VStr{R.range.put(w, o, s)}, e}}) : R.Reply & Maybe<&2, KV.Item<KV.Val>>}
+        %Equal.sym(Maybe<&2, KV.Item<KV.Val>>, R.ent.live(now, KV.entry(KV.Val, t, k)), Some{KV.Item{KV.VStr{w}, e}}, h) : {Laws.at_key(R.upd.put(t, k, KV.hash(k), n, x, now, rr, R.ent.code(KV.entry(KV.Val, t, k)), R.upd.v(R.URange{o, s}, now, _)), k) == (R.r_int(String.length(R.range.put(w, o, s))), Some{KV.Item{KV.VStr{R.range.put(w, o, s)}, e}}) : R.Reply & Maybe<&2, KV.Item<KV.Val>>}
+        %Equal.sym(Bool, R.range.go(o, s), True{}, ok) : {Laws.at_key(R.upd.put(t, k, KV.hash(k), n, x, now, rr, R.ent.code(KV.entry(KV.Val, t, k)), R.range.some(_, o, s, w, String.is_empty(s))), k) == (R.r_int(String.length(R.range.put(w, o, s))), Some{KV.Item{KV.VStr{R.range.put(w, o, s)}, e}}) : R.Reply & Maybe<&2, KV.Item<KV.Val>>}
+        %Equal.sym(Maybe<&2, KV.Item<KV.Val>>, KV.entry(KV.Val, KV.keep(KV.Val, t, k, KV.VStr{R.range.put(w, o, s)}), k), Some{KV.Item{KV.VStr{R.range.put(w, o, s)}, Laws.keep_exp(KV.Val, KV.entry(KV.Val, t, k))}}, Laws.entry_keep_same(KV.Val, t, k, KV.VStr{R.range.put(w, o, s)})) : {(R.r_int(String.length(R.range.put(w, o, s))), _) == (R.r_int(String.length(R.range.put(w, o, s))), Some{KV.Item{KV.VStr{R.range.put(w, o, s)}, e}}) : R.Reply & Maybe<&2, KV.Item<KV.Val>>}
+        %Equal.sym(Maybe<&2, KV.Item<KV.Val>>, KV.entry(KV.Val, t, k), Some{KV.Item{KV.VStr{w}, e}}, live_some(KV.entry(KV.Val, t, k), now, KV.Item{KV.VStr{w}, e})(h)) : {(R.r_int(String.length(R.range.put(w, o, s))), Some{KV.Item{KV.VStr{R.range.put(w, o, s)}, Laws.keep_exp(KV.Val, _)}}) == (R.r_int(String.length(R.range.put(w, o, s))), Some{KV.Item{KV.VStr{R.range.put(w, o, s)}, e}}) : R.Reply & Maybe<&2, KV.Item<KV.Val>>}
         {==}
 
 def Laws.setrange_effect(db, k, o, s, w, e, h, ok):
   setrange_db(db, k, o, s, w, e)(h)(ok)
 
-def persist_db(+db: R.Db, +k: String, +v: String, +e: Nat) -> {Laws.there(db, k) == Some{KV.Item{v, 1n+e}} : Maybe<&2, KV.Item<String>>} -> {Laws.at_key(R.exec(R.Upd{k, R.UPersist{}}, db), k) == (R.r_int(1n), Some{KV.Item{v, 0n}}) : R.Reply & Maybe<&2, KV.Item<String>>}:
+# PERSIST of a key there, of any kind, with a time
+def persist_v(+v: KV.Val, +e: Nat, +now: Nat) -> {R.upd.v(R.UPersist{}, now, Some{KV.Item{v, 1n+e}}) == R.Out{R.r_int(1n), R.CExp{0n}} : R.Out}:
+  match v:
+    case KV.VStr{w}:
+      {==}
+    case KV.VColl{c}:
+      {==}
+
+def persist_db(+db: R.Db, +k: String, +v: KV.Val, +e: Nat) -> {Laws.there(db, k) == Some{KV.Item{v, 1n+e}} : Maybe<&2, KV.Item<KV.Val>>} -> {Laws.at_key(R.exec(R.Upd{k, R.UPersist{}}, db), k) == (R.r_int(1n), Some{KV.Item{v, 0n}}) : R.Reply & Maybe<&2, KV.Item<KV.Val>>}:
   match db:
     case R.Db{+t, +n, +x, +now, +rr}:
       +h =>
-        %entry_at_eq(String, t, k) : {Laws.at_key(R.upd.put(t, k, KV.hash(k), n, x, now, rr, R.ent.code(_), R.upd(R.UPersist{}, now, R.ent.live(now, _))), k) == (R.r_int(1n), Some{KV.Item{v, 0n}}) : R.Reply & Maybe<&2, KV.Item<String>>}
-        %Equal.sym(Maybe<&2, KV.Item<String>>, R.ent.live(now, KV.entry(String, t, k)), Some{KV.Item{v, 1n+e}}, h) : {Laws.at_key(R.upd.put(t, k, KV.hash(k), n, x, now, rr, R.ent.code(KV.entry(String, t, k)), R.upd(R.UPersist{}, now, _)), k) == (R.r_int(1n), Some{KV.Item{v, 0n}}) : R.Reply & Maybe<&2, KV.Item<String>>}
-        %Equal.sym(Maybe<&2, KV.Item<String>>, KV.entry(String, KV.expire(String, t, k, 0n), k), Laws.with_exp(String, KV.entry(String, t, k), 0n), Laws.entry_expire_same(String, t, k, 0n)) : {(R.r_int(1n), _) == (R.r_int(1n), Some{KV.Item{v, 0n}}) : R.Reply & Maybe<&2, KV.Item<String>>}
-        %Equal.sym(Maybe<&2, KV.Item<String>>, KV.entry(String, t, k), Some{KV.Item{v, 1n+e}}, live_some(KV.entry(String, t, k), now, KV.Item{v, 1n+e})(h)) : {(R.r_int(1n), Laws.with_exp(String, _, 0n)) == (R.r_int(1n), Some{KV.Item{v, 0n}}) : R.Reply & Maybe<&2, KV.Item<String>>}
+        %entry_at_eq(KV.Val, t, k) : {Laws.at_key(R.upd.put(t, k, KV.hash(k), n, x, now, rr, R.ent.code(_), R.upd.v(R.UPersist{}, now, R.ent.live(now, _))), k) == (R.r_int(1n), Some{KV.Item{v, 0n}}) : R.Reply & Maybe<&2, KV.Item<KV.Val>>}
+        %Equal.sym(Maybe<&2, KV.Item<KV.Val>>, R.ent.live(now, KV.entry(KV.Val, t, k)), Some{KV.Item{v, 1n+e}}, h) : {Laws.at_key(R.upd.put(t, k, KV.hash(k), n, x, now, rr, R.ent.code(KV.entry(KV.Val, t, k)), R.upd.v(R.UPersist{}, now, _)), k) == (R.r_int(1n), Some{KV.Item{v, 0n}}) : R.Reply & Maybe<&2, KV.Item<KV.Val>>}
+        %Equal.sym(R.Out, R.upd.v(R.UPersist{}, now, Some{KV.Item{v, 1n+e}}), R.Out{R.r_int(1n), R.CExp{0n}}, persist_v(v, e, now)) : {Laws.at_key(R.upd.put(t, k, KV.hash(k), n, x, now, rr, R.ent.code(KV.entry(KV.Val, t, k)), _), k) == (R.r_int(1n), Some{KV.Item{v, 0n}}) : R.Reply & Maybe<&2, KV.Item<KV.Val>>}
+        %Equal.sym(Maybe<&2, KV.Item<KV.Val>>, KV.entry(KV.Val, KV.expire(KV.Val, t, k, 0n), k), Laws.with_exp(KV.Val, KV.entry(KV.Val, t, k), 0n), Laws.entry_expire_same(KV.Val, t, k, 0n)) : {(R.r_int(1n), _) == (R.r_int(1n), Some{KV.Item{v, 0n}}) : R.Reply & Maybe<&2, KV.Item<KV.Val>>}
+        %Equal.sym(Maybe<&2, KV.Item<KV.Val>>, KV.entry(KV.Val, t, k), Some{KV.Item{v, 1n+e}}, live_some(KV.entry(KV.Val, t, k), now, KV.Item{v, 1n+e})(h)) : {(R.r_int(1n), Laws.with_exp(KV.Val, _, 0n)) == (R.r_int(1n), Some{KV.Item{v, 0n}}) : R.Reply & Maybe<&2, KV.Item<KV.Val>>}
         {==}
 
 def Laws.persist_effect(db, k, v, e, h):
   persist_db(db, k, v, e)(h)
 
-def getdel_db(+db: R.Db, +k: String, +v: String, +e: Nat) -> {Laws.there(db, k) == Some{KV.Item{v, e}} : Maybe<&2, KV.Item<String>>} -> {Laws.at_key(R.exec(R.Upd{k, R.UGetDel{}}, db), k) == (R.RBulk{v}, None{}) : R.Reply & Maybe<&2, KV.Item<String>>}:
+def getdel_db(+db: R.Db, +k: String, +v: String, +e: Nat) -> {Laws.there(db, k) == Some{KV.Item{KV.VStr{v}, e}} : Maybe<&2, KV.Item<KV.Val>>} -> {Laws.at_key(R.exec(R.Upd{k, R.UGetDel{}}, db), k) == (R.RBulk{v}, None{}) : R.Reply & Maybe<&2, KV.Item<KV.Val>>}:
   match db:
     case R.Db{+t, +n, +x, +now, +rr}:
       h =>
-        %entry_at_eq(String, t, k) : {Laws.at_key(R.upd.put(t, k, KV.hash(k), n, x, now, rr, R.ent.code(_), R.upd(R.UGetDel{}, now, R.ent.live(now, _))), k) == (R.RBulk{v}, None{}) : R.Reply & Maybe<&2, KV.Item<String>>}
-        %Equal.sym(Maybe<&2, KV.Item<String>>, R.ent.live(now, KV.entry(String, t, k)), Some{KV.Item{v, e}}, h) : {Laws.at_key(R.upd.put(t, k, KV.hash(k), n, x, now, rr, R.ent.code(KV.entry(String, t, k)), R.upd(R.UGetDel{}, now, _)), k) == (R.RBulk{v}, None{}) : R.Reply & Maybe<&2, KV.Item<String>>}
-        %Equal.sym(Maybe<&2, KV.Item<String>>, KV.entry(String, KV.del(String, t, k), k), None{}, Laws.entry_del_same(String, t, k)) : {(R.RBulk{v}, _) == (R.RBulk{v}, None{}) : R.Reply & Maybe<&2, KV.Item<String>>}
+        %entry_at_eq(KV.Val, t, k) : {Laws.at_key(R.upd.put(t, k, KV.hash(k), n, x, now, rr, R.ent.code(_), R.upd.v(R.UGetDel{}, now, R.ent.live(now, _))), k) == (R.RBulk{v}, None{}) : R.Reply & Maybe<&2, KV.Item<KV.Val>>}
+        %Equal.sym(Maybe<&2, KV.Item<KV.Val>>, R.ent.live(now, KV.entry(KV.Val, t, k)), Some{KV.Item{KV.VStr{v}, e}}, h) : {Laws.at_key(R.upd.put(t, k, KV.hash(k), n, x, now, rr, R.ent.code(KV.entry(KV.Val, t, k)), R.upd.v(R.UGetDel{}, now, _)), k) == (R.RBulk{v}, None{}) : R.Reply & Maybe<&2, KV.Item<KV.Val>>}
+        %Equal.sym(Maybe<&2, KV.Item<KV.Val>>, KV.entry(KV.Val, KV.del(KV.Val, t, k), k), None{}, Laws.entry_del_same(KV.Val, t, k)) : {(R.RBulk{v}, _) == (R.RBulk{v}, None{}) : R.Reply & Maybe<&2, KV.Item<KV.Val>>}
         {==}
 
 def Laws.getdel_effect(db, k, v, e, h):
@@ -4734,17 +4865,17 @@ def ne_sym(+s: String, +d: String, +ne: {KV.str_eq(s, d) == False{} : Bool}) -> 
 # RENAME of a key there to another one: the verdict is the move (the
 # entry read at now is the key's entry), then the source is deleted and
 # the destination holds the entry
-def rename_go(+t: KV.Trie<String>, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>, +s: String, +d: String, +v: String, +e: Nat, h: {R.ent.live(now, KV.entry(String, t, s)) == Some{KV.Item{v, e}} : Maybe<&2, KV.Item<String>>}, +ne: {KV.str_eq(s, d) == False{} : Bool}) -> {Laws.at_keys(R.exec(R.Rename{s, d, False{}}, R.Db{t, n, x, now, rr}), s, d) == (R.r_ok(), (None{}, Some{KV.Item{v, e}})) : R.Reply & (Maybe<&2, KV.Item<String>> & Maybe<&2, KV.Item<String>>)}:
+def rename_go(+t: KV.Trie<KV.Val>, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>, +s: String, +d: String, +v: KV.Val, +e: Nat, h: {R.ent.live(now, KV.entry(KV.Val, t, s)) == Some{KV.Item{v, e}} : Maybe<&2, KV.Item<KV.Val>>}, +ne: {KV.str_eq(s, d) == False{} : Bool}) -> {Laws.at_keys(R.exec(R.Rename{s, d, False{}}, R.Db{t, n, x, now, rr}), s, d) == (R.r_ok(), (None{}, Some{KV.Item{v, e}})) : R.Reply & (Maybe<&2, KV.Item<KV.Val>> & Maybe<&2, KV.Item<KV.Val>>)}:
   nds = ne_sym(s, d, ne)
-  %entry_at_eq(String, t, s) : {Laws.at_keys(R.ren.do(R.ren.of(R.ent.live(now, _), KV.str_eq(s, d), False{}), False{}, s, d, R.Db{t, n, x, now, rr}), s, d) == (R.r_ok(), (None{}, Some{KV.Item{v, e}})) : R.Reply & (Maybe<&2, KV.Item<String>> & Maybe<&2, KV.Item<String>>)}
-  %Equal.sym(Maybe<&2, KV.Item<String>>, R.ent.live(now, KV.entry(String, t, s)), Some{KV.Item{v, e}}, h) : {Laws.at_keys(R.ren.do(R.ren.of(_, KV.str_eq(s, d), False{}), False{}, s, d, R.Db{t, n, x, now, rr}), s, d) == (R.r_ok(), (None{}, Some{KV.Item{v, e}})) : R.Reply & (Maybe<&2, KV.Item<String>> & Maybe<&2, KV.Item<String>>)}
-  %Equal.sym(Bool, KV.str_eq(s, d), False{}, ne) : {Laws.at_keys(R.ren.do(R.ren.of(Some{KV.Item{v, e}}, _, False{}), False{}, s, d, R.Db{t, n, x, now, rr}), s, d) == (R.r_ok(), (None{}, Some{KV.Item{v, e}})) : R.Reply & (Maybe<&2, KV.Item<String>> & Maybe<&2, KV.Item<String>>)}
-  %Equal.sym(Maybe<&2, KV.Item<String>>, KV.entry(String, KV.del(String, KV.setx(String, t, d, v, e), s), s), None{}, Laws.entry_del_same(String, KV.setx(String, t, d, v, e), s)) : {(R.r_ok(), (_, KV.entry(String, KV.del(String, KV.setx(String, t, d, v, e), s), d))) == (R.r_ok(), (None{}, Some{KV.Item{v, e}})) : R.Reply & (Maybe<&2, KV.Item<String>> & Maybe<&2, KV.Item<String>>)}
-  %Equal.sym(Maybe<&2, KV.Item<String>>, KV.entry(String, KV.del(String, KV.setx(String, t, d, v, e), s), d), KV.entry(String, KV.setx(String, t, d, v, e), d), Laws.entry_del_other(String, KV.setx(String, t, d, v, e), s, d, nds)) : {(R.r_ok(), (None{}, _)) == (R.r_ok(), (None{}, Some{KV.Item{v, e}})) : R.Reply & (Maybe<&2, KV.Item<String>> & Maybe<&2, KV.Item<String>>)}
-  %Equal.sym(Maybe<&2, KV.Item<String>>, KV.entry(String, KV.setx(String, t, d, v, e), d), Some{KV.Item{v, e}}, Laws.entry_setx_same(String, t, d, v, e)) : {(R.r_ok(), (None{}, _)) == (R.r_ok(), (None{}, Some{KV.Item{v, e}})) : R.Reply & (Maybe<&2, KV.Item<String>> & Maybe<&2, KV.Item<String>>)}
+  %entry_at_eq(KV.Val, t, s) : {Laws.at_keys(R.ren.do(R.ren.of(R.ent.live(now, _), KV.str_eq(s, d), False{}), False{}, s, d, R.Db{t, n, x, now, rr}), s, d) == (R.r_ok(), (None{}, Some{KV.Item{v, e}})) : R.Reply & (Maybe<&2, KV.Item<KV.Val>> & Maybe<&2, KV.Item<KV.Val>>)}
+  %Equal.sym(Maybe<&2, KV.Item<KV.Val>>, R.ent.live(now, KV.entry(KV.Val, t, s)), Some{KV.Item{v, e}}, h) : {Laws.at_keys(R.ren.do(R.ren.of(_, KV.str_eq(s, d), False{}), False{}, s, d, R.Db{t, n, x, now, rr}), s, d) == (R.r_ok(), (None{}, Some{KV.Item{v, e}})) : R.Reply & (Maybe<&2, KV.Item<KV.Val>> & Maybe<&2, KV.Item<KV.Val>>)}
+  %Equal.sym(Bool, KV.str_eq(s, d), False{}, ne) : {Laws.at_keys(R.ren.do(R.ren.of(Some{KV.Item{v, e}}, _, False{}), False{}, s, d, R.Db{t, n, x, now, rr}), s, d) == (R.r_ok(), (None{}, Some{KV.Item{v, e}})) : R.Reply & (Maybe<&2, KV.Item<KV.Val>> & Maybe<&2, KV.Item<KV.Val>>)}
+  %Equal.sym(Maybe<&2, KV.Item<KV.Val>>, KV.entry(KV.Val, KV.del(KV.Val, KV.setx(KV.Val, t, d, v, e), s), s), None{}, Laws.entry_del_same(KV.Val, KV.setx(KV.Val, t, d, v, e), s)) : {(R.r_ok(), (_, KV.entry(KV.Val, KV.del(KV.Val, KV.setx(KV.Val, t, d, v, e), s), d))) == (R.r_ok(), (None{}, Some{KV.Item{v, e}})) : R.Reply & (Maybe<&2, KV.Item<KV.Val>> & Maybe<&2, KV.Item<KV.Val>>)}
+  %Equal.sym(Maybe<&2, KV.Item<KV.Val>>, KV.entry(KV.Val, KV.del(KV.Val, KV.setx(KV.Val, t, d, v, e), s), d), KV.entry(KV.Val, KV.setx(KV.Val, t, d, v, e), d), Laws.entry_del_other(KV.Val, KV.setx(KV.Val, t, d, v, e), s, d, nds)) : {(R.r_ok(), (None{}, _)) == (R.r_ok(), (None{}, Some{KV.Item{v, e}})) : R.Reply & (Maybe<&2, KV.Item<KV.Val>> & Maybe<&2, KV.Item<KV.Val>>)}
+  %Equal.sym(Maybe<&2, KV.Item<KV.Val>>, KV.entry(KV.Val, KV.setx(KV.Val, t, d, v, e), d), Some{KV.Item{v, e}}, Laws.entry_setx_same(KV.Val, t, d, v, e)) : {(R.r_ok(), (None{}, _)) == (R.r_ok(), (None{}, Some{KV.Item{v, e}})) : R.Reply & (Maybe<&2, KV.Item<KV.Val>> & Maybe<&2, KV.Item<KV.Val>>)}
   {==}
 
-def rename_db(+db: R.Db, +s: String, +d: String, +v: String, +e: Nat) -> {Laws.there(db, s) == Some{KV.Item{v, e}} : Maybe<&2, KV.Item<String>>} -> {KV.str_eq(s, d) == False{} : Bool} -> {Laws.at_keys(R.exec(R.Rename{s, d, False{}}, db), s, d) == (R.r_ok(), (None{}, Some{KV.Item{v, e}})) : R.Reply & (Maybe<&2, KV.Item<String>> & Maybe<&2, KV.Item<String>>)}:
+def rename_db(+db: R.Db, +s: String, +d: String, +v: KV.Val, +e: Nat) -> {Laws.there(db, s) == Some{KV.Item{v, e}} : Maybe<&2, KV.Item<KV.Val>>} -> {KV.str_eq(s, d) == False{} : Bool} -> {Laws.at_keys(R.exec(R.Rename{s, d, False{}}, db), s, d) == (R.r_ok(), (None{}, Some{KV.Item{v, e}})) : R.Reply & (Maybe<&2, KV.Item<KV.Val>> & Maybe<&2, KV.Item<KV.Val>>)}:
   match db:
     case R.Db{+t, +n, +x, +now, +rr}:
       h => ne => rename_go(t, n, x, now, rr, s, d, v, e, h, ne)
@@ -4753,31 +4884,31 @@ def Laws.rename_effect(db, s, d, v, e, h, ne):
   rename_db(db, s, d, v, e)(h)(ne)
 
 # MSETNX's verdict is whether a key of its pairs is there
-def some_live_b(b: Bool, -v: String, -e: Nat) -> {Maybe.is_some(&2, String, KV.blive.ent(String, b, v)) == Maybe.is_some(&2, KV.Item<String>, Bool.pick(Maybe<&2, KV.Item<String>>, b, Some{KV.Item{v, e}}, None{})) : Bool}:
+def some_live_b(b: Bool, -v: KV.Val, -e: Nat) -> {Maybe.is_some(&2, KV.Val, KV.blive.ent(KV.Val, b, v)) == Maybe.is_some(&2, KV.Item<KV.Val>, Bool.pick(Maybe<&2, KV.Item<KV.Val>>, b, Some{KV.Item{v, e}}, None{})) : Bool}:
   match b:
     case True{}:
       {==}
     case False{}:
       {==}
 
-def some_live(m: Maybe<&2, KV.Item<String>>, +now: Nat) -> {Maybe.is_some(&2, String, Laws.live_val(String, m, now)) == Maybe.is_some(&2, KV.Item<String>, R.ent.live(now, m)) : Bool}:
+def some_live(m: Maybe<&2, KV.Item<KV.Val>>, +now: Nat) -> {Maybe.is_some(&2, KV.Val, Laws.live_val(KV.Val, m, now)) == Maybe.is_some(&2, KV.Item<KV.Val>, R.ent.live(now, m)) : Bool}:
   match m:
     case Some{KV.Item{v, +e}}:
       some_live_b(KV.live(now, e), v, e)
     case None{}:
       {==}
 
-def live_there(ps: List<&2, R.KVPair>, +t: KV.Trie<String>, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>) -> {R.pairs.live(ps, now, t) == Laws.any_there(R.Db{t, n, x, now, rr}, Laws.pair_keys(ps)) : Bool}:
+def live_there(ps: List<&2, R.KVPair>, +t: KV.Trie<KV.Val>, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>) -> {R.pairs.live(ps, now, t) == Laws.any_there(R.Db{t, n, x, now, rr}, Laws.pair_keys(ps)) : Bool}:
   match ps:
     case Nil{}:
       {==}
     case Con{R.KP{+k, +v}, +rest}:
-      %read_eq(t, k, now) : {Bool.or(Maybe.is_some(&2, String, _), R.pairs.live(rest, now, t)) == Laws.any_there(R.Db{t, n, x, now, rr}, k <> Laws.pair_keys(rest)) : Bool}
-      %Equal.sym(Bool, Maybe.is_some(&2, String, Laws.live_val(String, KV.entry(String, t, k), now)), Maybe.is_some(&2, KV.Item<String>, R.ent.live(now, KV.entry(String, t, k))), some_live(KV.entry(String, t, k), now)) : {Bool.or(_, R.pairs.live(rest, now, t)) == Laws.any_there(R.Db{t, n, x, now, rr}, k <> Laws.pair_keys(rest)) : Bool}
-      %Equal.sym(Bool, R.pairs.live(rest, now, t), Laws.any_there(R.Db{t, n, x, now, rr}, Laws.pair_keys(rest)), live_there(rest, t, n, x, now, rr)) : {Bool.or(Maybe.is_some(&2, KV.Item<String>, R.ent.live(now, KV.entry(String, t, k))), _) == Laws.any_there(R.Db{t, n, x, now, rr}, k <> Laws.pair_keys(rest)) : Bool}
+      %read_eq(t, k, now) : {Bool.or(Maybe.is_some(&2, KV.Val, _), R.pairs.live(rest, now, t)) == Laws.any_there(R.Db{t, n, x, now, rr}, k <> Laws.pair_keys(rest)) : Bool}
+      %Equal.sym(Bool, Maybe.is_some(&2, KV.Val, Laws.live_val(KV.Val, KV.entry(KV.Val, t, k), now)), Maybe.is_some(&2, KV.Item<KV.Val>, R.ent.live(now, KV.entry(KV.Val, t, k))), some_live(KV.entry(KV.Val, t, k), now)) : {Bool.or(_, R.pairs.live(rest, now, t)) == Laws.any_there(R.Db{t, n, x, now, rr}, k <> Laws.pair_keys(rest)) : Bool}
+      %Equal.sym(Bool, R.pairs.live(rest, now, t), Laws.any_there(R.Db{t, n, x, now, rr}, Laws.pair_keys(rest)), live_there(rest, t, n, x, now, rr)) : {Bool.or(Maybe.is_some(&2, KV.Item<KV.Val>, R.ent.live(now, KV.entry(KV.Val, t, k))), _) == Laws.any_there(R.Db{t, n, x, now, rr}, k <> Laws.pair_keys(rest)) : Bool}
       {==}
 
-def msetnx_db(+t: KV.Trie<String>, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>, +ps: List<&2, R.KVPair>, -b: Bool, e: {Laws.any_there(R.Db{t, n, x, now, rr}, Laws.pair_keys(ps)) == b : Bool}) -> {R.exec(R.MSetNx{ps}, R.Db{t, n, x, now, rr}) == R.msetnx.of(b, ps, R.Db{t, n, x, now, rr}) : R.Reply & R.Db}:
+def msetnx_db(+t: KV.Trie<KV.Val>, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>, +ps: List<&2, R.KVPair>, -b: Bool, e: {Laws.any_there(R.Db{t, n, x, now, rr}, Laws.pair_keys(ps)) == b : Bool}) -> {R.exec(R.MSetNx{ps}, R.Db{t, n, x, now, rr}) == R.msetnx.of(b, ps, R.Db{t, n, x, now, rr}) : R.Reply & R.Db}:
   %Equal.sym(Bool, R.pairs.live(ps, now, t), b, Equal.trans(Bool, R.pairs.live(ps, now, t), Laws.any_there(R.Db{t, n, x, now, rr}, Laws.pair_keys(ps)), b, live_there(ps, t, n, x, now, rr), e)) : {R.msetnx.of(_, ps, R.Db{t, n, x, now, rr}) == R.msetnx.of(b, ps, R.Db{t, n, x, now, rr}) : R.Reply & R.Db}
   {==}
 
@@ -4800,22 +4931,24 @@ def Laws.msetnx_missing(db, ps, e):
 
 # BITOP's destination after it: deleted for an empty value, else the value
 # with no time
-def bitop_store_go(e: Bool, +v: String, +d: String, +t: KV.Trie<String>, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>) -> {Laws.at_key((R.r_int(String.length(v)), R.bitop.db(e, v, d, R.Db{t, n, x, now, rr})), d) == (R.r_int(String.length(v)), Laws.stored(e, v)) : R.Reply & Maybe<&2, KV.Item<String>>}:
+def bitop_store_go(e: Bool, +v: String, +d: String, +t: KV.Trie<KV.Val>, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>) -> {Laws.at_key((R.r_int(String.length(v)), R.bitop.db(e, v, d, R.Db{t, n, x, now, rr})), d) == (R.r_int(String.length(v)), Laws.stored(e, v)) : R.Reply & Maybe<&2, KV.Item<KV.Val>>}:
   match e:
     case True{}:
-      %Laws.entry_del_same(String, t, d) : {Laws.at_key((R.r_int(String.length(v)), R.bitop.db(True{}, v, d, R.Db{t, n, x, now, rr})), d) == (R.r_int(String.length(v)), _) : R.Reply & Maybe<&2, KV.Item<String>>}
+      %Laws.entry_del_same(KV.Val, t, d) : {Laws.at_key((R.r_int(String.length(v)), R.bitop.db(True{}, v, d, R.Db{t, n, x, now, rr})), d) == (R.r_int(String.length(v)), _) : R.Reply & Maybe<&2, KV.Item<KV.Val>>}
       {==}
     case False{}:
-      %Laws.entry_setx_same(String, t, d, v, 0n) : {Laws.at_key((R.r_int(String.length(v)), R.bitop.db(False{}, v, d, R.Db{t, n, x, now, rr})), d) == (R.r_int(String.length(v)), _) : R.Reply & Maybe<&2, KV.Item<String>>}
+      %Laws.entry_setx_same(KV.Val, t, d, KV.VStr{v}, 0n) : {Laws.at_key((R.r_int(String.length(v)), R.bitop.db(False{}, v, d, R.Db{t, n, x, now, rr})), d) == (R.r_int(String.length(v)), _) : R.Reply & Maybe<&2, KV.Item<KV.Val>>}
       {==}
 
-def bitop_store_db(+op: R.BitK, +d: String, +srcs: List<&2, String>, +db: R.Db) -> {Laws.at_key(R.exec(R.BitOp{op, d, srcs}, db), d) == (R.r_int(String.length(Laws.bitop_val(op, srcs, db))), Laws.stored(String.is_empty(Laws.bitop_val(op, srcs, db)), Laws.bitop_val(op, srcs, db))) : R.Reply & Maybe<&2, KV.Item<String>>}:
+def bitop_store_db(+op: R.BitK, +d: String, +srcs: List<&2, String>, +db: R.Db) -> {R.bitop.wrong(srcs, R.db.now(db), R.db.trie(db)) == False{} : Bool} -> {Laws.at_key(R.exec(R.BitOp{op, d, srcs}, db), d) == (R.r_int(String.length(Laws.bitop_val(op, srcs, db))), Laws.stored(String.is_empty(Laws.bitop_val(op, srcs, db)), Laws.bitop_val(op, srcs, db))) : R.Reply & Maybe<&2, KV.Item<KV.Val>>}:
   match db:
     case R.Db{+t, +n, +x, +now, +rr}:
-      bitop_store_go(String.is_empty(R.bitop.val(op, srcs, now, t)), R.bitop.val(op, srcs, now, t), d, t, n, x, now, rr)
+      nw => %Equal.sym(Bool, R.bitop.wrong(srcs, now, t), False{}, nw) : {Laws.at_key(R.bitop.do(_, op, d, srcs, R.Db{t, n, x, now, rr}), d) == (R.r_int(String.length(R.bitop.val(op, srcs, now, t))), Laws.stored(String.is_empty(R.bitop.val(op, srcs, now, t)), R.bitop.val(op, srcs, now, t))) : R.Reply & Maybe<&2, KV.Item<KV.Val>>}
+            bitop_store_go(String.is_empty(R.bitop.val(op, srcs, now, t)), R.bitop.val(op, srcs, now, t), d, t, n, x, now, rr)
 
-def Laws.bitop_store(op, d, srcs, db):
-  bitop_store_db(op, d, srcs, db)
+def Laws.bitop_store(op, d, srcs, db, nw):
+  bitop_store_db(op, d, srcs, db)(nw)
+
 def Laws.batch_nil(db):
   {==}
 
@@ -4880,12 +5013,12 @@ def Laws.commute_reply(c1, c2, db, e):
   reply_after_db(c1, c2, db)(e)
 
 def Laws.commute_reads(c1, c2, db, j, e, d):
-  %bt(c2, R.db_of(R.exec(c1, db))) : {KV.entry(String, _, j) == KV.entry(String, R.db.t(R.db_of(R.exec(c1, R.db_of(R.exec(c2, db))))), j) : Maybe<&2, KV.Item<String>>}
-  %bt(c1, R.db_of(R.exec(c2, db))) : {KV.entry(String, T.db_of(T.exec(c2, R.db.t(R.db_of(R.exec(c1, db))), R.db.now(R.db_of(R.exec(c1, db))))), j) == KV.entry(String, _, j) : Maybe<&2, KV.Item<String>>}
-  %bt(c1, db) : {KV.entry(String, T.db_of(T.exec(c2, _, R.db.now(R.db_of(R.exec(c1, db))))), j) == KV.entry(String, T.db_of(T.exec(c1, R.db.t(R.db_of(R.exec(c2, db))), R.db.now(R.db_of(R.exec(c2, db))))), j) : Maybe<&2, KV.Item<String>>}
-  %bt(c2, db) : {KV.entry(String, T.db_of(T.exec(c2, T.db_of(T.exec(c1, R.db.t(db), R.db.now(db))), R.db.now(R.db_of(R.exec(c1, db))))), j) == KV.entry(String, T.db_of(T.exec(c1, _, R.db.now(R.db_of(R.exec(c2, db))))), j) : Maybe<&2, KV.Item<String>>}
-  %eq_now(c1, db) : {KV.entry(String, T.db_of(T.exec(c2, T.db_of(T.exec(c1, R.db.t(db), R.db.now(db))), _)), j) == KV.entry(String, T.db_of(T.exec(c1, T.db_of(T.exec(c2, R.db.t(db), R.db.now(db))), R.db.now(R.db_of(R.exec(c2, db))))), j) : Maybe<&2, KV.Item<String>>}
-  %eq_now(c2, db) : {KV.entry(String, T.db_of(T.exec(c2, T.db_of(T.exec(c1, R.db.t(db), R.db.now(db))), R.db.now(db))), j) == KV.entry(String, T.db_of(T.exec(c1, T.db_of(T.exec(c2, R.db.t(db), R.db.now(db))), _)), j) : Maybe<&2, KV.Item<String>>}
+  %bt(c2, R.db_of(R.exec(c1, db))) : {KV.entry(KV.Val, _, j) == KV.entry(KV.Val, R.db.t(R.db_of(R.exec(c1, R.db_of(R.exec(c2, db))))), j) : Maybe<&2, KV.Item<KV.Val>>}
+  %bt(c1, R.db_of(R.exec(c2, db))) : {KV.entry(KV.Val, T.db_of(T.exec(c2, R.db.t(R.db_of(R.exec(c1, db))), R.db.now(R.db_of(R.exec(c1, db))))), j) == KV.entry(KV.Val, _, j) : Maybe<&2, KV.Item<KV.Val>>}
+  %bt(c1, db) : {KV.entry(KV.Val, T.db_of(T.exec(c2, _, R.db.now(R.db_of(R.exec(c1, db))))), j) == KV.entry(KV.Val, T.db_of(T.exec(c1, R.db.t(R.db_of(R.exec(c2, db))), R.db.now(R.db_of(R.exec(c2, db))))), j) : Maybe<&2, KV.Item<KV.Val>>}
+  %bt(c2, db) : {KV.entry(KV.Val, T.db_of(T.exec(c2, T.db_of(T.exec(c1, R.db.t(db), R.db.now(db))), R.db.now(R.db_of(R.exec(c1, db))))), j) == KV.entry(KV.Val, T.db_of(T.exec(c1, _, R.db.now(R.db_of(R.exec(c2, db))))), j) : Maybe<&2, KV.Item<KV.Val>>}
+  %eq_now(c1, db) : {KV.entry(KV.Val, T.db_of(T.exec(c2, T.db_of(T.exec(c1, R.db.t(db), R.db.now(db))), _)), j) == KV.entry(KV.Val, T.db_of(T.exec(c1, T.db_of(T.exec(c2, R.db.t(db), R.db.now(db))), R.db.now(R.db_of(R.exec(c2, db))))), j) : Maybe<&2, KV.Item<KV.Val>>}
+  %eq_now(c2, db) : {KV.entry(KV.Val, T.db_of(T.exec(c2, T.db_of(T.exec(c1, R.db.t(db), R.db.now(db))), R.db.now(db))), j) == KV.entry(KV.Val, T.db_of(T.exec(c1, T.db_of(T.exec(c2, R.db.t(db), R.db.now(db))), _)), j) : Maybe<&2, KV.Item<KV.Val>>}
   t_commute_reads(c1, c2, R.db.t(db), j, R.db.now(db), e, d)
 
 # so two commands that do not disturb each other answer the same in
@@ -4931,8 +5064,8 @@ def Laws.swap_replies(c1, c2, cs, db, e1, e2):
   swap_go(c1, c2, cs, db, e1, e2)
 
 def Laws.swap_reads(c1, c2, cs, db, j, e):
-  %fin_t(Con{c2, Con{c1, cs}}, db) : {KV.entry(String, _, j) == KV.entry(String, R.db.t(Laws.final(R.exec_all(Con{c1, Con{c2, cs}}, db))), j) : Maybe<&2, KV.Item<String>>}
-  %fin_t(Con{c1, Con{c2, cs}}, db) : {KV.entry(String, T.final(T.exec_all(Con{c2, Con{c1, cs}}, R.db.t(db), R.db.now(db))), j) == KV.entry(String, _, j) : Maybe<&2, KV.Item<String>>}
+  %fin_t(Con{c2, Con{c1, cs}}, db) : {KV.entry(KV.Val, _, j) == KV.entry(KV.Val, R.db.t(Laws.final(R.exec_all(Con{c1, Con{c2, cs}}, db))), j) : Maybe<&2, KV.Item<KV.Val>>}
+  %fin_t(Con{c1, Con{c2, cs}}, db) : {KV.entry(KV.Val, T.final(T.exec_all(Con{c2, Con{c1, cs}}, R.db.t(db), R.db.now(db))), j) == KV.entry(KV.Val, _, j) : Maybe<&2, KV.Item<KV.Val>>}
   t_swap_reads(c1, c2, cs, R.db.t(db), j, R.db.now(db), e)
 
 # Persistence
@@ -5382,7 +5515,7 @@ def Laws.aof_load(reqs):
 def upd_eff(+db: R.Db, +k: String, op: R.UpdOp) -> List<&2, R.Cmd>:
   match db:
     case R.Db{+t, +n, +x, +now, +rr}:
-      A.upd.effect(k, R.upd(op, now, R.ent.live(now, KV.entry.at(String, t, k, KV.hash(k)))))
+      A.upd.effect(k, R.upd.v(op, now, R.ent.live(now, KV.entry.at(KV.Val, t, k, KV.hash(k)))))
 
 # a command's effects, run on db
 def eff(c: R.Cmd, +db: R.Db) -> List<&2, R.Cmd>:
@@ -5422,7 +5555,7 @@ def eff(c: R.Cmd, +db: R.Db) -> List<&2, R.Cmd>:
     case R.Rename{+s, +d, +nx}:
       A.ren.effect(R.ren.find(db, s, d, nx), s, d)
     case R.BitOp{+op, +d, +srcs}:
-      A.bitop.effect(String.is_empty(R.bitop.val(op, srcs, R.db.now(db), R.db.trie(db))), R.bitop.val(op, srcs, R.db.now(db), R.db.trie(db)), d)
+      A.bitop.eff(R.bitop.wrong(srcs, R.db.now(db), R.db.trie(db)), op, d, srcs, db)
     case R.Own{o}:
       A.effect(R.Own{o})
     case R.Bad{r}:
@@ -5430,47 +5563,55 @@ def eff(c: R.Cmd, +db: R.Db) -> List<&2, R.Cmd>:
 
 # INCRBY runs as the update UIncr: its value read and its reply, the
 # entry it leaves and the counts (code_m: a key's code is its entry's)
-def ent_code_item(m: Maybe<&2, KV.Item<String>>) -> {R.ent.code(m) == Laws.item_code(String, m) : Nat}:
+def ent_code_item(m: Maybe<&2, KV.Item<KV.Val>>) -> {R.ent.code(m) == Laws.item_code(KV.Val, m) : Nat}:
   match m:
     case Some{KV.Item{v, e}}:
       {==}
     case None{}:
       {==}
 
-def code_m(+t: KV.Trie<String>, +k: String, -m: Maybe<&2, KV.Item<String>>, eq: {KV.entry(String, t, k) == m : Maybe<&2, KV.Item<String>>}) -> {R.ent.code(m) == KV.code.at(String, t, k, KV.hash(k)) : Nat}:
-  %eq : {R.ent.code(_) == KV.code.at(String, t, k, KV.hash(k)) : Nat}
-  Equal.trans(Nat, R.ent.code(KV.entry(String, t, k)), Laws.item_code(String, KV.entry(String, t, k)), KV.code.at(String, t, k, KV.hash(k)), ent_code_item(KV.entry(String, t, k)), code_eq(String, t, k))
+def code_m(+t: KV.Trie<KV.Val>, +k: String, -m: Maybe<&2, KV.Item<KV.Val>>, eq: {KV.entry(KV.Val, t, k) == m : Maybe<&2, KV.Item<KV.Val>>}) -> {R.ent.code(m) == KV.code.at(KV.Val, t, k, KV.hash(k)) : Nat}:
+  %eq : {R.ent.code(_) == KV.code.at(KV.Val, t, k, KV.hash(k)) : Nat}
+  Equal.trans(Nat, R.ent.code(KV.entry(KV.Val, t, k)), Laws.item_code(KV.Val, KV.entry(KV.Val, t, k)), KV.code.at(KV.Val, t, k, KV.hash(k)), ent_code_item(KV.entry(KV.Val, t, k)), code_eq(KV.Val, t, k))
 
-def incr_none(ok: Bool, +t: KV.Trie<String>, +k: String, +by: R.Int, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>, +c: Nat) -> {R.incr.fit(t, k, KV.hash(k), by, ok, False{}, R.cnt.n(c, n), n, R.cnt.x(c, 0n, x), x, now, rr) == R.upd.put(t, k, KV.hash(k), n, x, now, rr, c, R.uincr.fit(by, ok, False{})) : R.Reply & R.Db}:
+def incr_none(ok: Bool, +t: KV.Trie<KV.Val>, +k: String, +by: R.Int, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>, +c: Nat) -> {R.incr.fit(t, k, KV.hash(k), by, ok, False{}, R.cnt.n(c, n), n, R.cnt.x(c, 0n, x), x, now, rr) == R.upd.put(t, k, KV.hash(k), n, x, now, rr, c, R.uincr.fit(by, ok, False{})) : R.Reply & R.Db}:
   match ok:
     case True{}:
       {==}
     case False{}:
       {==}
 
-def incr_some(ok: Bool, +t: KV.Trie<String>, +k: String, +i: R.Int, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>, +e: Nat) -> {R.incr.fit(t, k, KV.hash(k), i, ok, True{}, n, n, x, x, now, rr) == R.upd.put(t, k, KV.hash(k), n, x, now, rr, 1n+e, R.uincr.fit(i, ok, True{})) : R.Reply & R.Db}:
+def incr_some(ok: Bool, +t: KV.Trie<KV.Val>, +k: String, +i: R.Int, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>, +e: Nat) -> {R.incr.fit(t, k, KV.hash(k), i, ok, True{}, n, n, x, x, now, rr) == R.upd.put(t, k, KV.hash(k), n, x, now, rr, 1n+e, R.uincr.fit(i, ok, True{})) : R.Reply & R.Db}:
   match ok:
     case True{}:
       {==}
     case False{}:
       {==}
 
-def incr_cur(cur: Maybe<&2, R.Int>, +t: KV.Trie<String>, +k: String, +by: R.Int, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>, +e: Nat) -> {R.incr.num(t, k, KV.hash(k), by, n, x, now, rr, cur) == R.upd.put(t, k, KV.hash(k), n, x, now, rr, 1n+e, R.uincr.num(by, cur)) : R.Reply & R.Db}:
+def incr_cur(cur: Maybe<&2, R.Int>, +t: KV.Trie<KV.Val>, +k: String, +by: R.Int, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>, +e: Nat) -> {R.incr.num(t, k, KV.hash(k), by, n, x, now, rr, cur) == R.upd.put(t, k, KV.hash(k), n, x, now, rr, 1n+e, R.uincr.num(by, cur)) : R.Reply & R.Db}:
   match cur:
     case Some{+i}:
       incr_some(R.int_fits(R.int_add(i, by)), t, k, R.int_add(i, by), n, x, now, rr, e)
     case None{}:
       {==}
 
-def incr_b(b: Bool, +t: KV.Trie<String>, +k: String, +by: R.Int, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>, +w: String, +e: Nat, +eq: {KV.entry(String, t, k) == Some{KV.Item{w, e}} : Maybe<&2, KV.Item<String>>}) -> {R.incr.got(t, k, KV.hash(k), by, n, x, now, rr, R.ent.val(Bool.pick(Maybe<&2, KV.Item<String>>, b, Some{KV.Item{w, e}}, None{}))) == R.upd.put(t, k, KV.hash(k), n, x, now, rr, 1n+e, R.uincr.of(by, Bool.pick(Maybe<&2, KV.Item<String>>, b, Some{KV.Item{w, e}}, None{}))) : R.Reply & R.Db}:
+# INCRBY of a key there: a string's value read, a collection WRONGTYPE
+def incr_w(w: KV.Val, +t: KV.Trie<KV.Val>, +k: String, +by: R.Int, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>, +e: Nat) -> {R.incr.got(t, k, KV.hash(k), by, n, x, now, rr, KV.got_of(Some{w})) == R.upd.put(t, k, KV.hash(k), n, x, now, rr, 1n+e, R.upd.v(R.UIncr{by}, now, Some{KV.Item{w, e}})) : R.Reply & R.Db}:
+  match w:
+    case KV.VStr{+v}:
+      incr_cur(R.int_read(v), t, k, by, n, x, now, rr, e)
+    case KV.VColl{c}:
+      {==}
+
+def incr_b(b: Bool, +t: KV.Trie<KV.Val>, +k: String, +by: R.Int, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>, +w: KV.Val, +e: Nat, +eq: {KV.entry(KV.Val, t, k) == Some{KV.Item{w, e}} : Maybe<&2, KV.Item<KV.Val>>}) -> {R.incr.got(t, k, KV.hash(k), by, n, x, now, rr, KV.got_of(item_val(Bool.pick(Maybe<&2, KV.Item<KV.Val>>, b, Some{KV.Item{w, e}}, None{})))) == R.upd.put(t, k, KV.hash(k), n, x, now, rr, 1n+e, R.upd.v(R.UIncr{by}, now, Bool.pick(Maybe<&2, KV.Item<KV.Val>>, b, Some{KV.Item{w, e}}, None{}))) : R.Reply & R.Db}:
   match b:
     case True{}:
-      incr_cur(R.int_read(w), t, k, by, n, x, now, rr, e)
+      incr_w(w, t, k, by, n, x, now, rr, e)
     case False{}:
       %code_m(t, k, Some{KV.Item{w, e}}, eq) : {R.incr.fit(t, k, KV.hash(k), by, R.int_fits(by), False{}, R.cnt.n(_, n), n, R.cnt.x(_, 0n, x), x, now, rr) == R.upd.put(t, k, KV.hash(k), n, x, now, rr, 1n+e, R.uincr.fit(by, R.int_fits(by), False{})) : R.Reply & R.Db}
       incr_none(R.int_fits(by), t, k, by, n, x, now, rr, 1n+e)
 
-def incr_m(m: Maybe<&2, KV.Item<String>>, +t: KV.Trie<String>, +k: String, +by: R.Int, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>) -> {KV.entry(String, t, k) == m : Maybe<&2, KV.Item<String>>} -> {R.incr.got(t, k, KV.hash(k), by, n, x, now, rr, R.ent.val(R.ent.live(now, m))) == R.upd.put(t, k, KV.hash(k), n, x, now, rr, R.ent.code(m), R.uincr.of(by, R.ent.live(now, m))) : R.Reply & R.Db}:
+def incr_m(m: Maybe<&2, KV.Item<KV.Val>>, +t: KV.Trie<KV.Val>, +k: String, +by: R.Int, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>) -> {KV.entry(KV.Val, t, k) == m : Maybe<&2, KV.Item<KV.Val>>} -> {R.incr.got(t, k, KV.hash(k), by, n, x, now, rr, KV.got_of(item_val(R.ent.live(now, m)))) == R.upd.put(t, k, KV.hash(k), n, x, now, rr, R.ent.code(m), R.upd.v(R.UIncr{by}, now, R.ent.live(now, m))) : R.Reply & R.Db}:
   match m:
     case None{}:
       eq => %code_m(t, k, None{}, eq) : {R.incr.fit(t, k, KV.hash(k), by, R.int_fits(by), False{}, R.cnt.n(_, n), n, R.cnt.x(_, 0n, x), x, now, rr) == R.upd.put(t, k, KV.hash(k), n, x, now, rr, 0n, R.uincr.fit(by, R.int_fits(by), False{})) : R.Reply & R.Db}
@@ -5479,11 +5620,11 @@ def incr_m(m: Maybe<&2, KV.Item<String>>, +t: KV.Trie<String>, +k: String, +by: 
       eq => incr_b(KV.live(now, e), t, k, by, n, x, now, rr, w, e, eq)
 
 # INCRBY on a database record is the update UIncr
-def incr_upd_eq(+t: KV.Trie<String>, +k: String, +by: R.Int, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>) -> {R.exec(R.IncrBy{k, by}, R.Db{t, n, x, now, rr}) == R.upd.put(t, k, KV.hash(k), n, x, now, rr, R.ent.code(KV.entry.at(String, t, k, KV.hash(k))), R.upd(R.UIncr{by}, now, R.ent.live(now, KV.entry.at(String, t, k, KV.hash(k))))) : R.Reply & R.Db}:
-  %read_eq(t, k, now) : {R.incr.got(t, k, KV.hash(k), by, n, x, now, rr, _) == R.upd.put(t, k, KV.hash(k), n, x, now, rr, R.ent.code(KV.entry.at(String, t, k, KV.hash(k))), R.uincr.of(by, R.ent.live(now, KV.entry.at(String, t, k, KV.hash(k))))) : R.Reply & R.Db}
-  %live_val_ent(KV.entry(String, t, k), now) : {R.incr.got(t, k, KV.hash(k), by, n, x, now, rr, _) == R.upd.put(t, k, KV.hash(k), n, x, now, rr, R.ent.code(KV.entry.at(String, t, k, KV.hash(k))), R.uincr.of(by, R.ent.live(now, KV.entry.at(String, t, k, KV.hash(k))))) : R.Reply & R.Db}
-  %entry_at_eq(String, t, k) : {R.incr.got(t, k, KV.hash(k), by, n, x, now, rr, R.ent.val(R.ent.live(now, KV.entry(String, t, k)))) == R.upd.put(t, k, KV.hash(k), n, x, now, rr, R.ent.code(_), R.uincr.of(by, R.ent.live(now, _))) : R.Reply & R.Db}
-  incr_m(KV.entry(String, t, k), t, k, by, n, x, now, rr)({==})
+def incr_upd_eq(+t: KV.Trie<KV.Val>, +k: String, +by: R.Int, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>) -> {R.exec(R.IncrBy{k, by}, R.Db{t, n, x, now, rr}) == R.upd.put(t, k, KV.hash(k), n, x, now, rr, R.ent.code(KV.entry.at(KV.Val, t, k, KV.hash(k))), R.upd.v(R.UIncr{by}, now, R.ent.live(now, KV.entry.at(KV.Val, t, k, KV.hash(k))))) : R.Reply & R.Db}:
+  %get_read(t, k, now) : {R.incr.got(t, k, KV.hash(k), by, n, x, now, rr, _) == R.upd.put(t, k, KV.hash(k), n, x, now, rr, R.ent.code(KV.entry.at(KV.Val, t, k, KV.hash(k))), R.upd.v(R.UIncr{by}, now, R.ent.live(now, KV.entry.at(KV.Val, t, k, KV.hash(k))))) : R.Reply & R.Db}
+  %live_val_ent(KV.entry(KV.Val, t, k), now) : {R.incr.got(t, k, KV.hash(k), by, n, x, now, rr, KV.got_of(_)) == R.upd.put(t, k, KV.hash(k), n, x, now, rr, R.ent.code(KV.entry.at(KV.Val, t, k, KV.hash(k))), R.upd.v(R.UIncr{by}, now, R.ent.live(now, KV.entry.at(KV.Val, t, k, KV.hash(k))))) : R.Reply & R.Db}
+  %entry_at_eq(KV.Val, t, k) : {R.incr.got(t, k, KV.hash(k), by, n, x, now, rr, KV.got_of(item_val(R.ent.live(now, KV.entry(KV.Val, t, k))))) == R.upd.put(t, k, KV.hash(k), n, x, now, rr, R.ent.code(_), R.upd.v(R.UIncr{by}, now, R.ent.live(now, _))) : R.Reply & R.Db}
+  incr_m(KV.entry(KV.Val, t, k), t, k, by, n, x, now, rr)({==})
 
 # A.run splits into the reply, the effects and the database
 def put_split(+c: R.Cmd, p: R.Reply & R.Db) -> {(R.reply_of(p), (A.effect(c), R.db_of(p))) == A.run.put(c, p) : R.Reply & (List<&2, R.Cmd> & R.Db)}:
@@ -5497,13 +5638,13 @@ def out_split(p: R.Reply & R.Db, -es: List<&2, R.Cmd>) -> {(R.reply_of(p), (es, 
 def upd_split(+db: R.Db, +k: String, +op: R.UpdOp) -> {(R.reply_of(R.exec(R.Upd{k, op}, db)), (upd_eff(db, k, op), R.db_of(R.exec(R.Upd{k, op}, db)))) == A.run(R.Upd{k, op}, db) : R.Reply & (List<&2, R.Cmd> & R.Db)}:
   match db:
     case R.Db{+t, +n, +x, +now, +rr}:
-      out_split(R.upd.put(t, k, KV.hash(k), n, x, now, rr, R.ent.code(KV.entry.at(String, t, k, KV.hash(k))), R.upd(op, now, R.ent.live(now, KV.entry.at(String, t, k, KV.hash(k))))), A.upd.effect(k, R.upd(op, now, R.ent.live(now, KV.entry.at(String, t, k, KV.hash(k))))))
+      out_split(R.upd.put(t, k, KV.hash(k), n, x, now, rr, R.ent.code(KV.entry.at(KV.Val, t, k, KV.hash(k))), R.upd.v(op, now, R.ent.live(now, KV.entry.at(KV.Val, t, k, KV.hash(k))))), A.upd.effect(k, R.upd.v(op, now, R.ent.live(now, KV.entry.at(KV.Val, t, k, KV.hash(k))))))
 
 def incr_split(+db: R.Db, +k: String, +by: R.Int) -> {(R.reply_of(R.exec(R.IncrBy{k, by}, db)), (upd_eff(db, k, R.UIncr{by}), R.db_of(R.exec(R.IncrBy{k, by}, db)))) == A.run(R.IncrBy{k, by}, db) : R.Reply & (List<&2, R.Cmd> & R.Db)}:
   match db:
     case R.Db{+t, +n, +x, +now, +rr}:
-      %Equal.sym(R.Reply & R.Db, R.exec(R.IncrBy{k, by}, R.Db{t, n, x, now, rr}), R.upd.put(t, k, KV.hash(k), n, x, now, rr, R.ent.code(KV.entry.at(String, t, k, KV.hash(k))), R.upd(R.UIncr{by}, now, R.ent.live(now, KV.entry.at(String, t, k, KV.hash(k))))), incr_upd_eq(t, k, by, n, x, now, rr)) : {(R.reply_of(_), (upd_eff(R.Db{t, n, x, now, rr}, k, R.UIncr{by}), R.db_of(_))) == A.run(R.IncrBy{k, by}, R.Db{t, n, x, now, rr}) : R.Reply & (List<&2, R.Cmd> & R.Db)}
-      out_split(R.upd.put(t, k, KV.hash(k), n, x, now, rr, R.ent.code(KV.entry.at(String, t, k, KV.hash(k))), R.upd(R.UIncr{by}, now, R.ent.live(now, KV.entry.at(String, t, k, KV.hash(k))))), A.upd.effect(k, R.upd(R.UIncr{by}, now, R.ent.live(now, KV.entry.at(String, t, k, KV.hash(k))))))
+      %Equal.sym(R.Reply & R.Db, R.exec(R.IncrBy{k, by}, R.Db{t, n, x, now, rr}), R.upd.put(t, k, KV.hash(k), n, x, now, rr, R.ent.code(KV.entry.at(KV.Val, t, k, KV.hash(k))), R.upd.v(R.UIncr{by}, now, R.ent.live(now, KV.entry.at(KV.Val, t, k, KV.hash(k))))), incr_upd_eq(t, k, by, n, x, now, rr)) : {(R.reply_of(_), (upd_eff(R.Db{t, n, x, now, rr}, k, R.UIncr{by}), R.db_of(_))) == A.run(R.IncrBy{k, by}, R.Db{t, n, x, now, rr}) : R.Reply & (List<&2, R.Cmd> & R.Db)}
+      out_split(R.upd.put(t, k, KV.hash(k), n, x, now, rr, R.ent.code(KV.entry.at(KV.Val, t, k, KV.hash(k))), R.upd.v(R.UIncr{by}, now, R.ent.live(now, KV.entry.at(KV.Val, t, k, KV.hash(k))))), A.upd.effect(k, R.upd.v(R.UIncr{by}, now, R.ent.live(now, KV.entry.at(KV.Val, t, k, KV.hash(k))))))
 
 def run_split(c: R.Cmd, +db: R.Db) -> {(R.reply_of(R.exec(c, db)), (eff(c, db), R.db_of(R.exec(c, db)))) == A.run(c, db) : R.Reply & (List<&2, R.Cmd> & R.Db)}:
   match c:
@@ -5542,7 +5683,7 @@ def run_split(c: R.Cmd, +db: R.Db) -> {(R.reply_of(R.exec(c, db)), (eff(c, db), 
     case R.Rename{+s, +d, +nx}:
       out_split(R.exec(R.Rename{s, d, nx}, db), A.ren.effect(R.ren.find(db, s, d, nx), s, d))
     case R.BitOp{+op, +d, +srcs}:
-      out_split(R.exec(R.BitOp{op, d, srcs}, db), A.bitop.effect(String.is_empty(R.bitop.val(op, srcs, R.db.now(db), R.db.trie(db))), R.bitop.val(op, srcs, R.db.now(db), R.db.trie(db)), d))
+      out_split(R.exec(R.BitOp{op, d, srcs}, db), A.bitop.eff(R.bitop.wrong(srcs, R.db.now(db), R.db.trie(db)), op, d, srcs, db))
     case R.Own{+o}:
       put_split(R.Own{o}, R.exec(R.Own{o}, db))
     case R.Bad{+r}:
@@ -5616,10 +5757,10 @@ def live0(e: Nat) -> {KV.live(0n, e) == True{} : Bool}:
     case 1n+p:
       {==}
 
-def live0_ent(m: Maybe<&2, KV.Item<String>>) -> {R.ent.live(0n, m) == m : Maybe<&2, KV.Item<String>>}:
+def live0_ent(m: Maybe<&2, KV.Item<KV.Val>>) -> {R.ent.live(0n, m) == m : Maybe<&2, KV.Item<KV.Val>>}:
   match m:
     case Some{KV.Item{v, +e}}:
-      %Equal.sym(Bool, KV.live(0n, e), True{}, live0(e)) : {Bool.pick(Maybe<&2, KV.Item<String>>, _, Some{KV.Item{v, e}}, None{}) == Some{KV.Item{v, e}} : Maybe<&2, KV.Item<String>>}
+      %Equal.sym(Bool, KV.live(0n, e), True{}, live0(e)) : {Bool.pick(Maybe<&2, KV.Item<KV.Val>>, _, Some{KV.Item{v, e}}, None{}) == Some{KV.Item{v, e}} : Maybe<&2, KV.Item<KV.Val>>}
       {==}
     case None{}:
       {==}
@@ -5670,132 +5811,183 @@ def exp_ms(+p: Nat) -> {R.at.exp(R.AtMs{1n+p}) == 1n+p : Nat}:
   {==}
 
 # a key's code is its entry's
-def code_at(+t: KV.Trie<String>, +k: String, -m: Maybe<&2, KV.Item<String>>, eq: {KV.entry.at(String, t, k, KV.hash(k)) == m : Maybe<&2, KV.Item<String>>}) -> {R.ent.code(m) == KV.code.at(String, t, k, KV.hash(k)) : Nat}:
-  code_m(t, k, m, Equal.trans(Maybe<&2, KV.Item<String>>, KV.entry(String, t, k), KV.entry.at(String, t, k, KV.hash(k)), m, entry_at_eq(String, t, k), eq))
+def code_at(+t: KV.Trie<KV.Val>, +k: String, -m: Maybe<&2, KV.Item<KV.Val>>, eq: {KV.entry.at(KV.Val, t, k, KV.hash(k)) == m : Maybe<&2, KV.Item<KV.Val>>}) -> {R.ent.code(m) == KV.code.at(KV.Val, t, k, KV.hash(k)) : Nat}:
+  code_m(t, k, m, Equal.trans(Maybe<&2, KV.Item<KV.Val>>, KV.entry(KV.Val, t, k), KV.entry.at(KV.Val, t, k, KV.hash(k)), m, entry_at_eq(KV.Val, t, k), eq))
+
+# the string an update that acts on a key of any kind sees: a string's
+# own, and for a collection "" (none of those updates reads it)
+def sview(w: KV.Val) -> String:
+  match w:
+    case KV.VStr{u}:
+      u
+    case KV.VColl{c}:
+      ""
+
+def sv_ent(m: Maybe<&2, KV.Item<KV.Val>>) -> Maybe<&2, KV.Item<String>>:
+  match m:
+    case Some{KV.Item{w, e}}:
+      Some{KV.Item{sview(w), e}}
+    case None{}:
+      None{}
+
+# such an update (SETNX, SET, EXPIRE and its kin, PERSIST) acts on the
+# string view of the entry
+def any_v(+op: R.UpdOp, +now: Nat, w: KV.Val, +e: Nat) -> {R.upd.any(op) == True{} : Bool} -> {R.upd.v(op, now, Some{KV.Item{w, e}}) == R.upd(op, now, Some{KV.Item{sview(w), e}}) : R.Out}:
+  match w:
+    case KV.VStr{u}:
+      a => {==}
+    case KV.VColl{c}:
+      a => %Equal.sym(Bool, R.upd.any(op), True{}, a) : {R.upd.coll(_, op, now, e) == R.upd(op, now, Some{KV.Item{"", e}}) : R.Out}
+           {==}
+
+def any_ent(+op: R.UpdOp, +now: Nat, m: Maybe<&2, KV.Item<KV.Val>>) -> {R.upd.any(op) == True{} : Bool} -> {R.upd.v(op, now, m) == R.upd(op, now, sv_ent(m)) : R.Out}:
+  match m:
+    case Some{KV.Item{w, +e}}:
+      a => any_v(op, now, w, e)(a)
+    case None{}:
+      a => {==}
 
 # a good change of a key whose entry is m
-def GoodExp(m: Maybe<&2, KV.Item<String>>, f: Nat) -> Type:
+def GoodExp(m: Maybe<&2, KV.Item<KV.Val>>, f: Nat) -> Type:
   match m:
     case Some{KV.Item{w, e}}:
       {KV.clamp(f) == f : Nat} & {Bool.and(Nat.is_eq(f, 0n), Nat.is_eq(e, 0n)) == False{} : Bool}
     case None{}:
       Empty
 
-def GoodApp(m: Maybe<&2, KV.Item<String>>, s: String, v: String) -> Type:
+def GoodAppV(w: KV.Val, s: String, v: String) -> Type:
+  match w:
+    case KV.VStr{u}:
+      {v == u ++ s : String}
+    case KV.VColl{c}:
+      Empty
+
+def GoodApp(m: Maybe<&2, KV.Item<KV.Val>>, s: String, v: String) -> Type:
   match m:
     case Some{KV.Item{w, e}}:
-      {v == w ++ s : String}
+      GoodAppV(w, s, v)
     case None{}:
       Empty
 
 # a SETRANGE of s at o (or a SETBIT, as one) of a key there: one that
 # changes it (R.range.go), whose value v is the old one w with s at o
-def GoodRange(m: Maybe<&2, KV.Item<String>>, o: Nat, s: String, v: String) -> Type:
+def GoodRangeV(w: KV.Val, o: Nat, s: String, v: String) -> Type:
+  match w:
+    case KV.VStr{u}:
+      {R.range.go(o, s) == True{} : Bool} & {v == R.range.put(u, o, s) : String}
+    case KV.VColl{c}:
+      Empty
+
+def GoodRange(m: Maybe<&2, KV.Item<KV.Val>>, o: Nat, s: String, v: String) -> Type:
   match m:
     case Some{KV.Item{w, e}}:
-      {R.range.go(o, s) == True{} : Bool} & {v == R.range.put(w, o, s) : String}
+      GoodRangeV(w, o, s, v)
     case None{}:
       Empty
 
-def Good(m: Maybe<&2, KV.Item<String>>, ch: R.Change) -> Type:
+def Good(m: Maybe<&2, KV.Item<KV.Val>>, ch: R.Change) -> Type:
   match ch:
     case R.CKeep{}:
       {True{} == True{} : Bool}
     case R.CDel{}:
-      {Maybe.is_some(&2, KV.Item<String>, m) == True{} : Bool}
+      {Maybe.is_some(&2, KV.Item<KV.Val>, m) == True{} : Bool}
     case R.CExp{f}:
       GoodExp(m, f)
     case R.CPut{v, f}:
       {KV.clamp(f) == f : Nat}
     case R.CKeepT{v}:
-      {Maybe.is_some(&2, KV.Item<String>, m) == True{} : Bool}
+      {Maybe.is_some(&2, KV.Item<KV.Val>, m) == True{} : Bool}
     case R.CApp{s, v}:
       GoodApp(m, s, v)
     case R.CRange{o, s, v}:
       GoodRange(m, o, s, v)
 
 # a change, made again by its effects at time 0
-def del_replay(+t: KV.Trie<String>, +k: String, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>, +r: R.Reply, +w: String, +e: Nat, eq: {KV.entry.at(String, t, k, KV.hash(k)) == Some{KV.Item{w, e}} : Maybe<&2, KV.Item<String>>}) -> {Laws.final(R.exec_all([R.Del{[k]}], R.Db{t, n, x, 0n, rr})) == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, 1n+e, r, R.CDel{}))) : R.Db}:
-  %code_at(t, k, Some{KV.Item{w, e}}, eq) : {R.db_of(R.del.db(R.del_keys.put(_, 0n, R.Dels{0n, 0n, 0n, KV.del.at(String, t, k, KV.hash(k))}), n, x, 0n, rr)) == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, 1n+e, r, R.CDel{}))) : R.Db}
-  %add_zero(x) : {R.db_of(R.del.db(R.del_keys.put(1n+e, 0n, R.Dels{0n, 0n, 0n, KV.del.at(String, t, k, KV.hash(k))}), n, x, 0n, rr)) == R.Db{KV.del.at(String, t, k, KV.hash(k)), Nat.sub(n, 1n), Nat.sub(_, Bool.pick(Nat, Nat.is_lt(1n, 1n+e), 1n, 0n)), 0n, rr} : R.Db}
+def del_replay(+t: KV.Trie<KV.Val>, +k: String, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>, +r: R.Reply, +w: KV.Val, +e: Nat, eq: {KV.entry.at(KV.Val, t, k, KV.hash(k)) == Some{KV.Item{w, e}} : Maybe<&2, KV.Item<KV.Val>>}) -> {Laws.final(R.exec_all([R.Del{[k]}], R.Db{t, n, x, 0n, rr})) == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, 1n+e, r, R.CDel{}))) : R.Db}:
+  %code_at(t, k, Some{KV.Item{w, e}}, eq) : {R.db_of(R.del.db(R.del_keys.put(_, 0n, R.Dels{0n, 0n, 0n, KV.del.at(KV.Val, t, k, KV.hash(k))}), n, x, 0n, rr)) == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, 1n+e, r, R.CDel{}))) : R.Db}
+  %add_zero(x) : {R.db_of(R.del.db(R.del_keys.put(1n+e, 0n, R.Dels{0n, 0n, 0n, KV.del.at(KV.Val, t, k, KV.hash(k))}), n, x, 0n, rr)) == R.Db{KV.del.at(KV.Val, t, k, KV.hash(k)), Nat.sub(n, 1n), Nat.sub(_, Bool.pick(Nat, Nat.is_lt(1n, 1n+e), 1n, 0n)), 0n, rr} : R.Db}
   {==}
 
-def exp0_replay(+t: KV.Trie<String>, +k: String, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>, +r: R.Reply, +w: String, +e: Nat, eq: {KV.entry.at(String, t, k, KV.hash(k)) == Some{KV.Item{w, e}} : Maybe<&2, KV.Item<String>>}, nz: {Bool.and(Nat.is_eq(0n, 0n), Nat.is_eq(e, 0n)) == False{} : Bool}) -> {Laws.final(R.exec_all(A.ch.effect(k, R.CExp{0n}), R.Db{t, n, x, 0n, rr})) == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, 1n+e, r, R.CExp{0n}))) : R.Db}:
+def exp0_replay(+t: KV.Trie<KV.Val>, +k: String, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>, +r: R.Reply, +w: KV.Val, +e: Nat, eq: {KV.entry.at(KV.Val, t, k, KV.hash(k)) == Some{KV.Item{w, e}} : Maybe<&2, KV.Item<KV.Val>>}, nz: {Bool.and(Nat.is_eq(0n, 0n), Nat.is_eq(e, 0n)) == False{} : Bool}) -> {Laws.final(R.exec_all(A.ch.effect(k, R.CExp{0n}), R.Db{t, n, x, 0n, rr})) == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, 1n+e, r, R.CExp{0n}))) : R.Db}:
   %fin_cons(R.Upd{k, R.UPersist{}}, Nil{}, R.Db{t, n, x, 0n, rr}) : {_ == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, 1n+e, r, R.CExp{0n}))) : R.Db}
-  %Equal.sym(Maybe<&2, KV.Item<String>>, KV.entry.at(String, t, k, KV.hash(k)), Some{KV.Item{w, e}}, eq) : {R.db_of(R.upd.put(t, k, KV.hash(k), n, x, 0n, rr, R.ent.code(_), R.upd(R.UPersist{}, 0n, R.ent.live(0n, _)))) == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, 1n+e, r, R.CExp{0n}))) : R.Db}
-  %Equal.sym(Maybe<&2, KV.Item<String>>, R.ent.live(0n, Some{KV.Item{w, e}}), Some{KV.Item{w, e}}, live0_ent(Some{KV.Item{w, e}})) : {R.db_of(R.upd.put(t, k, KV.hash(k), n, x, 0n, rr, 1n+e, R.upd(R.UPersist{}, 0n, _))) == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, 1n+e, r, R.CExp{0n}))) : R.Db}
+  %Equal.sym(Maybe<&2, KV.Item<KV.Val>>, KV.entry.at(KV.Val, t, k, KV.hash(k)), Some{KV.Item{w, e}}, eq) : {R.db_of(R.upd.put(t, k, KV.hash(k), n, x, 0n, rr, R.ent.code(_), R.upd.v(R.UPersist{}, 0n, R.ent.live(0n, _)))) == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, 1n+e, r, R.CExp{0n}))) : R.Db}
+  %Equal.sym(Maybe<&2, KV.Item<KV.Val>>, R.ent.live(0n, Some{KV.Item{w, e}}), Some{KV.Item{w, e}}, live0_ent(Some{KV.Item{w, e}})) : {R.db_of(R.upd.put(t, k, KV.hash(k), n, x, 0n, rr, 1n+e, R.upd.v(R.UPersist{}, 0n, _))) == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, 1n+e, r, R.CExp{0n}))) : R.Db}
+  %Equal.sym(R.Out, R.upd.v(R.UPersist{}, 0n, Some{KV.Item{w, e}}), R.upd(R.UPersist{}, 0n, Some{KV.Item{sview(w), e}}), any_v(R.UPersist{}, 0n, w, e)({==})) : {R.db_of(R.upd.put(t, k, KV.hash(k), n, x, 0n, rr, 1n+e, _)) == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, 1n+e, r, R.CExp{0n}))) : R.Db}
   %Equal.sym(Bool, Nat.is_eq(e, 0n), False{}, nz) : {R.db_of(R.upd.put(t, k, KV.hash(k), n, x, 0n, rr, 1n+e, Bool.pick(R.Out, _, R.Out{R.r_int(0n), R.CKeep{}}, R.Out{R.r_int(1n), R.CExp{0n}}))) == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, 1n+e, r, R.CExp{0n}))) : R.Db}
   {==}
 
-def expp_replay(+t: KV.Trie<String>, +k: String, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>, +r: R.Reply, +w: String, +e: Nat, +p: Nat, eq: {KV.entry.at(String, t, k, KV.hash(k)) == Some{KV.Item{w, e}} : Maybe<&2, KV.Item<String>>}, +fx: {KV.clamp(1n+p) == 1n+p : Nat}) -> {Laws.final(R.exec_all(A.ch.effect(k, R.CExp{1n+p}), R.Db{t, n, x, 0n, rr})) == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, 1n+e, r, R.CExp{1n+p}))) : R.Db}:
+def expp_replay(+t: KV.Trie<KV.Val>, +k: String, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>, +r: R.Reply, +w: KV.Val, +e: Nat, +p: Nat, eq: {KV.entry.at(KV.Val, t, k, KV.hash(k)) == Some{KV.Item{w, e}} : Maybe<&2, KV.Item<KV.Val>>}, +fx: {KV.clamp(1n+p) == 1n+p : Nat}) -> {Laws.final(R.exec_all(A.ch.effect(k, R.CExp{1n+p}), R.Db{t, n, x, 0n, rr})) == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, 1n+e, r, R.CExp{1n+p}))) : R.Db}:
   %fin_cons(R.Upd{k, R.UExpire{R.TmN{True{}, 1n+p}, R.ExpIf{False{}, False{}, False{}, False{}}, "pexpireat"}}, Nil{}, R.Db{t, n, x, 0n, rr}) : {_ == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, 1n+e, r, R.CExp{1n+p}))) : R.Db}
-  %Equal.sym(Maybe<&2, KV.Item<String>>, KV.entry.at(String, t, k, KV.hash(k)), Some{KV.Item{w, e}}, eq) : {R.db_of(R.upd.put(t, k, KV.hash(k), n, x, 0n, rr, R.ent.code(_), R.upd(R.UExpire{R.TmN{True{}, 1n+p}, R.ExpIf{False{}, False{}, False{}, False{}}, "pexpireat"}, 0n, R.ent.live(0n, _)))) == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, 1n+e, r, R.CExp{1n+p}))) : R.Db}
-  %Equal.sym(Maybe<&2, KV.Item<String>>, R.ent.live(0n, Some{KV.Item{w, e}}), Some{KV.Item{w, e}}, live0_ent(Some{KV.Item{w, e}})) : {R.db_of(R.upd.put(t, k, KV.hash(k), n, x, 0n, rr, 1n+e, R.upd(R.UExpire{R.TmN{True{}, 1n+p}, R.ExpIf{False{}, False{}, False{}, False{}}, "pexpireat"}, 0n, _))) == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, 1n+e, r, R.CExp{1n+p}))) : R.Db}
-  %Equal.sym(R.At, R.at.ms(1n+p), R.AtMs{1n+p}, ms_fixed(p, fx)) : {R.db_of(R.upd.put(t, k, KV.hash(k), n, x, 0n, rr, 1n+e, R.expire.at(R.ExpIf{False{}, False{}, False{}, False{}}, "pexpireat", 0n, Some{_}, Some{KV.Item{w, e}}))) == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, 1n+e, r, R.CExp{1n+p}))) : R.Db}
+  %Equal.sym(Maybe<&2, KV.Item<KV.Val>>, KV.entry.at(KV.Val, t, k, KV.hash(k)), Some{KV.Item{w, e}}, eq) : {R.db_of(R.upd.put(t, k, KV.hash(k), n, x, 0n, rr, R.ent.code(_), R.upd.v(R.UExpire{R.TmN{True{}, 1n+p}, R.ExpIf{False{}, False{}, False{}, False{}}, "pexpireat"}, 0n, R.ent.live(0n, _)))) == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, 1n+e, r, R.CExp{1n+p}))) : R.Db}
+  %Equal.sym(Maybe<&2, KV.Item<KV.Val>>, R.ent.live(0n, Some{KV.Item{w, e}}), Some{KV.Item{w, e}}, live0_ent(Some{KV.Item{w, e}})) : {R.db_of(R.upd.put(t, k, KV.hash(k), n, x, 0n, rr, 1n+e, R.upd.v(R.UExpire{R.TmN{True{}, 1n+p}, R.ExpIf{False{}, False{}, False{}, False{}}, "pexpireat"}, 0n, _))) == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, 1n+e, r, R.CExp{1n+p}))) : R.Db}
+  %Equal.sym(R.Out, R.upd.v(R.UExpire{R.TmN{True{}, 1n+p}, R.ExpIf{False{}, False{}, False{}, False{}}, "pexpireat"}, 0n, Some{KV.Item{w, e}}), R.upd(R.UExpire{R.TmN{True{}, 1n+p}, R.ExpIf{False{}, False{}, False{}, False{}}, "pexpireat"}, 0n, Some{KV.Item{sview(w), e}}), any_v(R.UExpire{R.TmN{True{}, 1n+p}, R.ExpIf{False{}, False{}, False{}, False{}}, "pexpireat"}, 0n, w, e)({==})) : {R.db_of(R.upd.put(t, k, KV.hash(k), n, x, 0n, rr, 1n+e, _)) == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, 1n+e, r, R.CExp{1n+p}))) : R.Db}
+  %Equal.sym(R.At, R.at.ms(1n+p), R.AtMs{1n+p}, ms_fixed(p, fx)) : {R.db_of(R.upd.put(t, k, KV.hash(k), n, x, 0n, rr, 1n+e, R.expire.at(R.ExpIf{False{}, False{}, False{}, False{}}, "pexpireat", 0n, Some{_}, Some{KV.Item{sview(w), e}}))) == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, 1n+e, r, R.CExp{1n+p}))) : R.Db}
   %Equal.sym(Nat, R.at.exp(R.AtMs{1n+p}), 1n+p, exp_ms(p)) : {R.db_of(R.upd.put(t, k, KV.hash(k), n, x, 0n, rr, 1n+e, R.Out{R.r_int(1n), R.exp.to(KV.clamp(_), e)})) == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, 1n+e, r, R.CExp{1n+p}))) : R.Db}
   %Equal.sym(Nat, KV.clamp(1n+p), 1n+p, fx) : {R.db_of(R.upd.put(t, k, KV.hash(k), n, x, 0n, rr, 1n+e, R.Out{R.r_int(1n), R.exp.to(_, e)})) == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, 1n+e, r, R.CExp{1n+p}))) : R.Db}
   {==}
 
-def exp0_go(+t: KV.Trie<String>, +k: String, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>, +r: R.Reply, +w: String, +e: Nat, eq: {KV.entry.at(String, t, k, KV.hash(k)) == Some{KV.Item{w, e}} : Maybe<&2, KV.Item<String>>}, g: GoodExp(Some{KV.Item{w, e}}, 0n)) -> {Laws.final(R.exec_all(A.ch.effect(k, R.CExp{0n}), R.Db{t, n, x, 0n, rr})) == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, 1n+e, r, R.CExp{0n}))) : R.Db}:
+def exp0_go(+t: KV.Trie<KV.Val>, +k: String, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>, +r: R.Reply, +w: KV.Val, +e: Nat, eq: {KV.entry.at(KV.Val, t, k, KV.hash(k)) == Some{KV.Item{w, e}} : Maybe<&2, KV.Item<KV.Val>>}, g: GoodExp(Some{KV.Item{w, e}}, 0n)) -> {Laws.final(R.exec_all(A.ch.effect(k, R.CExp{0n}), R.Db{t, n, x, 0n, rr})) == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, 1n+e, r, R.CExp{0n}))) : R.Db}:
   (fx, nz) = g
   exp0_replay(t, k, n, x, now, rr, r, w, e, eq, nz)
 
-def expp_go(+t: KV.Trie<String>, +k: String, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>, +r: R.Reply, +w: String, +e: Nat, +p: Nat, eq: {KV.entry.at(String, t, k, KV.hash(k)) == Some{KV.Item{w, e}} : Maybe<&2, KV.Item<String>>}, g: GoodExp(Some{KV.Item{w, e}}, 1n+p)) -> {Laws.final(R.exec_all(A.ch.effect(k, R.CExp{1n+p}), R.Db{t, n, x, 0n, rr})) == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, 1n+e, r, R.CExp{1n+p}))) : R.Db}:
+def expp_go(+t: KV.Trie<KV.Val>, +k: String, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>, +r: R.Reply, +w: KV.Val, +e: Nat, +p: Nat, eq: {KV.entry.at(KV.Val, t, k, KV.hash(k)) == Some{KV.Item{w, e}} : Maybe<&2, KV.Item<KV.Val>>}, g: GoodExp(Some{KV.Item{w, e}}, 1n+p)) -> {Laws.final(R.exec_all(A.ch.effect(k, R.CExp{1n+p}), R.Db{t, n, x, 0n, rr})) == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, 1n+e, r, R.CExp{1n+p}))) : R.Db}:
   (fx, nz) = g
   expp_replay(t, k, n, x, now, rr, r, w, e, p, eq, fx)
 
-def exp_replay(f: Nat, +t: KV.Trie<String>, +k: String, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>, +r: R.Reply, +w: String, +e: Nat, +eq: {KV.entry.at(String, t, k, KV.hash(k)) == Some{KV.Item{w, e}} : Maybe<&2, KV.Item<String>>}) -> GoodExp(Some{KV.Item{w, e}}, f) -> {Laws.final(R.exec_all(A.ch.effect(k, R.CExp{f}), R.Db{t, n, x, 0n, rr})) == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, 1n+e, r, R.CExp{f}))) : R.Db}:
+def exp_replay(f: Nat, +t: KV.Trie<KV.Val>, +k: String, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>, +r: R.Reply, +w: KV.Val, +e: Nat, +eq: {KV.entry.at(KV.Val, t, k, KV.hash(k)) == Some{KV.Item{w, e}} : Maybe<&2, KV.Item<KV.Val>>}) -> GoodExp(Some{KV.Item{w, e}}, f) -> {Laws.final(R.exec_all(A.ch.effect(k, R.CExp{f}), R.Db{t, n, x, 0n, rr})) == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, 1n+e, r, R.CExp{f}))) : R.Db}:
   match f:
     case 0n:
       g => exp0_go(t, k, n, x, now, rr, r, w, e, eq, g)
     case 1n++p:
       g => expp_go(t, k, n, x, now, rr, r, w, e, p, eq, g)
 
-def put0_replay(+t: KV.Trie<String>, +k: String, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>, +r: R.Reply, +v: String, +m: Maybe<&2, KV.Item<String>>, eq: {KV.entry.at(String, t, k, KV.hash(k)) == m : Maybe<&2, KV.Item<String>>}) -> {Laws.final(R.exec_all(A.ch.effect(k, R.CPut{v, 0n}), R.Db{t, n, x, 0n, rr})) == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, R.ent.code(m), r, R.CPut{v, 0n}))) : R.Db}:
-  %Equal.sym(Nat, R.ent.code(m), KV.code.at(String, t, k, KV.hash(k)), code_at(t, k, m, eq)) : {Laws.final(R.exec_all(A.ch.effect(k, R.CPut{v, 0n}), R.Db{t, n, x, 0n, rr})) == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, _, r, R.CPut{v, 0n}))) : R.Db}
+def put0_replay(+t: KV.Trie<KV.Val>, +k: String, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>, +r: R.Reply, +v: String, +m: Maybe<&2, KV.Item<KV.Val>>, eq: {KV.entry.at(KV.Val, t, k, KV.hash(k)) == m : Maybe<&2, KV.Item<KV.Val>>}) -> {Laws.final(R.exec_all(A.ch.effect(k, R.CPut{v, 0n}), R.Db{t, n, x, 0n, rr})) == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, R.ent.code(m), r, R.CPut{v, 0n}))) : R.Db}:
+  %Equal.sym(Nat, R.ent.code(m), KV.code.at(KV.Val, t, k, KV.hash(k)), code_at(t, k, m, eq)) : {Laws.final(R.exec_all(A.ch.effect(k, R.CPut{v, 0n}), R.Db{t, n, x, 0n, rr})) == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, _, r, R.CPut{v, 0n}))) : R.Db}
   {==}
 
-def putp_replay(+t: KV.Trie<String>, +k: String, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>, +r: R.Reply, +v: String, +m: Maybe<&2, KV.Item<String>>, +p: Nat, eq: {KV.entry.at(String, t, k, KV.hash(k)) == m : Maybe<&2, KV.Item<String>>}, +fx: {KV.clamp(1n+p) == 1n+p : Nat}) -> {Laws.final(R.exec_all(A.ch.effect(k, R.CPut{v, 1n+p}), R.Db{t, n, x, 0n, rr})) == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, R.ent.code(m), r, R.CPut{v, 1n+p}))) : R.Db}:
+def putp_replay(+t: KV.Trie<KV.Val>, +k: String, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>, +r: R.Reply, +v: String, +m: Maybe<&2, KV.Item<KV.Val>>, +p: Nat, eq: {KV.entry.at(KV.Val, t, k, KV.hash(k)) == m : Maybe<&2, KV.Item<KV.Val>>}, +fx: {KV.clamp(1n+p) == 1n+p : Nat}) -> {Laws.final(R.exec_all(A.ch.effect(k, R.CPut{v, 1n+p}), R.Db{t, n, x, 0n, rr})) == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, R.ent.code(m), r, R.CPut{v, 1n+p}))) : R.Db}:
   %fin_cons(R.Upd{k, R.USet{v, 0n, R.TAt{R.TmN{True{}, 1n+p}}, "set"}}, Nil{}, R.Db{t, n, x, 0n, rr}) : {_ == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, R.ent.code(m), r, R.CPut{v, 1n+p}))) : R.Db}
-  %Equal.sym(R.At, R.at.ms(1n+p), R.AtMs{1n+p}, ms_fixed(p, fx)) : {R.db_of(R.upd.put(t, k, KV.hash(k), n, x, 0n, rr, R.ent.code(KV.entry.at(String, t, k, KV.hash(k))), R.set.at(0n, v, "set", Some{_}, R.ent.live(0n, KV.entry.at(String, t, k, KV.hash(k)))))) == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, R.ent.code(m), r, R.CPut{v, 1n+p}))) : R.Db}
-  %Equal.sym(Nat, R.at.exp(R.AtMs{1n+p}), 1n+p, exp_ms(p)) : {R.db_of(R.upd.put(t, k, KV.hash(k), n, x, 0n, rr, R.ent.code(KV.entry.at(String, t, k, KV.hash(k))), R.set.do(0n, R.CPut{v, KV.clamp(_)}, R.ent.live(0n, KV.entry.at(String, t, k, KV.hash(k)))))) == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, R.ent.code(m), r, R.CPut{v, 1n+p}))) : R.Db}
-  %Equal.sym(Nat, KV.clamp(1n+p), 1n+p, fx) : {R.db_of(R.upd.put(t, k, KV.hash(k), n, x, 0n, rr, R.ent.code(KV.entry.at(String, t, k, KV.hash(k))), R.set.do(0n, R.CPut{v, _}, R.ent.live(0n, KV.entry.at(String, t, k, KV.hash(k)))))) == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, R.ent.code(m), r, R.CPut{v, 1n+p}))) : R.Db}
-  %Equal.sym(Maybe<&2, KV.Item<String>>, KV.entry.at(String, t, k, KV.hash(k)), m, eq) : {R.db_of(R.upd.put(t, k, KV.hash(k), n, x, 0n, rr, R.ent.code(_), R.set.do(0n, R.CPut{v, 1n+p}, R.ent.live(0n, KV.entry.at(String, t, k, KV.hash(k)))))) == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, R.ent.code(m), r, R.CPut{v, 1n+p}))) : R.Db}
+  %Equal.sym(R.Out, R.upd.v(R.USet{v, 0n, R.TAt{R.TmN{True{}, 1n+p}}, "set"}, 0n, R.ent.live(0n, KV.entry.at(KV.Val, t, k, KV.hash(k)))), R.upd(R.USet{v, 0n, R.TAt{R.TmN{True{}, 1n+p}}, "set"}, 0n, sv_ent(R.ent.live(0n, KV.entry.at(KV.Val, t, k, KV.hash(k))))), any_ent(R.USet{v, 0n, R.TAt{R.TmN{True{}, 1n+p}}, "set"}, 0n, R.ent.live(0n, KV.entry.at(KV.Val, t, k, KV.hash(k))))({==})) : {R.db_of(R.upd.put(t, k, KV.hash(k), n, x, 0n, rr, R.ent.code(KV.entry.at(KV.Val, t, k, KV.hash(k))), _)) == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, R.ent.code(m), r, R.CPut{v, 1n+p}))) : R.Db}
+  %Equal.sym(R.At, R.at.ms(1n+p), R.AtMs{1n+p}, ms_fixed(p, fx)) : {R.db_of(R.upd.put(t, k, KV.hash(k), n, x, 0n, rr, R.ent.code(KV.entry.at(KV.Val, t, k, KV.hash(k))), R.set.at(0n, v, "set", Some{_}, sv_ent(R.ent.live(0n, KV.entry.at(KV.Val, t, k, KV.hash(k))))))) == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, R.ent.code(m), r, R.CPut{v, 1n+p}))) : R.Db}
+  %Equal.sym(Nat, R.at.exp(R.AtMs{1n+p}), 1n+p, exp_ms(p)) : {R.db_of(R.upd.put(t, k, KV.hash(k), n, x, 0n, rr, R.ent.code(KV.entry.at(KV.Val, t, k, KV.hash(k))), R.set.do(0n, R.CPut{v, KV.clamp(_)}, sv_ent(R.ent.live(0n, KV.entry.at(KV.Val, t, k, KV.hash(k))))))) == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, R.ent.code(m), r, R.CPut{v, 1n+p}))) : R.Db}
+  %Equal.sym(Nat, KV.clamp(1n+p), 1n+p, fx) : {R.db_of(R.upd.put(t, k, KV.hash(k), n, x, 0n, rr, R.ent.code(KV.entry.at(KV.Val, t, k, KV.hash(k))), R.set.do(0n, R.CPut{v, _}, sv_ent(R.ent.live(0n, KV.entry.at(KV.Val, t, k, KV.hash(k))))))) == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, R.ent.code(m), r, R.CPut{v, 1n+p}))) : R.Db}
+  %Equal.sym(Maybe<&2, KV.Item<KV.Val>>, KV.entry.at(KV.Val, t, k, KV.hash(k)), m, eq) : {R.db_of(R.upd.put(t, k, KV.hash(k), n, x, 0n, rr, R.ent.code(_), R.set.do(0n, R.CPut{v, 1n+p}, sv_ent(R.ent.live(0n, KV.entry.at(KV.Val, t, k, KV.hash(k))))))) == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, R.ent.code(m), r, R.CPut{v, 1n+p}))) : R.Db}
   {==}
 
-def put_replay(f: Nat, +t: KV.Trie<String>, +k: String, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>, +r: R.Reply, +v: String, +m: Maybe<&2, KV.Item<String>>, +eq: {KV.entry.at(String, t, k, KV.hash(k)) == m : Maybe<&2, KV.Item<String>>}) -> {KV.clamp(f) == f : Nat} -> {Laws.final(R.exec_all(A.ch.effect(k, R.CPut{v, f}), R.Db{t, n, x, 0n, rr})) == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, R.ent.code(m), r, R.CPut{v, f}))) : R.Db}:
+def put_replay(f: Nat, +t: KV.Trie<KV.Val>, +k: String, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>, +r: R.Reply, +v: String, +m: Maybe<&2, KV.Item<KV.Val>>, +eq: {KV.entry.at(KV.Val, t, k, KV.hash(k)) == m : Maybe<&2, KV.Item<KV.Val>>}) -> {KV.clamp(f) == f : Nat} -> {Laws.final(R.exec_all(A.ch.effect(k, R.CPut{v, f}), R.Db{t, n, x, 0n, rr})) == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, R.ent.code(m), r, R.CPut{v, f}))) : R.Db}:
   match f:
     case 0n:
       fx => put0_replay(t, k, n, x, now, rr, r, v, m, eq)
     case 1n++p:
       fx => putp_replay(t, k, n, x, now, rr, r, v, m, p, eq, fx)
 
-def keept_replay(+t: KV.Trie<String>, +k: String, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>, +r: R.Reply, +v: String, +w: String, +e: Nat, eq: {KV.entry.at(String, t, k, KV.hash(k)) == Some{KV.Item{w, e}} : Maybe<&2, KV.Item<String>>}) -> {Laws.final(R.exec_all(A.ch.effect(k, R.CKeepT{v}), R.Db{t, n, x, 0n, rr})) == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, R.ent.code(Some{KV.Item{w, e}}), r, R.CKeepT{v}))) : R.Db}:
+def keept_replay(+t: KV.Trie<KV.Val>, +k: String, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>, +r: R.Reply, +v: String, +w: KV.Val, +e: Nat, eq: {KV.entry.at(KV.Val, t, k, KV.hash(k)) == Some{KV.Item{w, e}} : Maybe<&2, KV.Item<KV.Val>>}) -> {Laws.final(R.exec_all(A.ch.effect(k, R.CKeepT{v}), R.Db{t, n, x, 0n, rr})) == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, R.ent.code(Some{KV.Item{w, e}}), r, R.CKeepT{v}))) : R.Db}:
   %fin_cons(R.Upd{k, R.USet{v, 0n, R.TKeep{}, "set"}}, Nil{}, R.Db{t, n, x, 0n, rr}) : {_ == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, R.ent.code(Some{KV.Item{w, e}}), r, R.CKeepT{v}))) : R.Db}
-  %Equal.sym(Maybe<&2, KV.Item<String>>, KV.entry.at(String, t, k, KV.hash(k)), Some{KV.Item{w, e}}, eq) : {R.db_of(R.upd.put(t, k, KV.hash(k), n, x, 0n, rr, R.ent.code(_), R.upd(R.USet{v, 0n, R.TKeep{}, "set"}, 0n, R.ent.live(0n, _)))) == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, R.ent.code(Some{KV.Item{w, e}}), r, R.CKeepT{v}))) : R.Db}
-  %Equal.sym(Maybe<&2, KV.Item<String>>, R.ent.live(0n, Some{KV.Item{w, e}}), Some{KV.Item{w, e}}, live0_ent(Some{KV.Item{w, e}})) : {R.db_of(R.upd.put(t, k, KV.hash(k), n, x, 0n, rr, R.ent.code(Some{KV.Item{w, e}}), R.upd(R.USet{v, 0n, R.TKeep{}, "set"}, 0n, _))) == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, R.ent.code(Some{KV.Item{w, e}}), r, R.CKeepT{v}))) : R.Db}
+  %Equal.sym(Maybe<&2, KV.Item<KV.Val>>, KV.entry.at(KV.Val, t, k, KV.hash(k)), Some{KV.Item{w, e}}, eq) : {R.db_of(R.upd.put(t, k, KV.hash(k), n, x, 0n, rr, R.ent.code(_), R.upd.v(R.USet{v, 0n, R.TKeep{}, "set"}, 0n, R.ent.live(0n, _)))) == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, R.ent.code(Some{KV.Item{w, e}}), r, R.CKeepT{v}))) : R.Db}
+  %Equal.sym(Maybe<&2, KV.Item<KV.Val>>, R.ent.live(0n, Some{KV.Item{w, e}}), Some{KV.Item{w, e}}, live0_ent(Some{KV.Item{w, e}})) : {R.db_of(R.upd.put(t, k, KV.hash(k), n, x, 0n, rr, R.ent.code(Some{KV.Item{w, e}}), R.upd.v(R.USet{v, 0n, R.TKeep{}, "set"}, 0n, _))) == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, R.ent.code(Some{KV.Item{w, e}}), r, R.CKeepT{v}))) : R.Db}
+  %Equal.sym(R.Out, R.upd.v(R.USet{v, 0n, R.TKeep{}, "set"}, 0n, Some{KV.Item{w, e}}), R.upd(R.USet{v, 0n, R.TKeep{}, "set"}, 0n, Some{KV.Item{sview(w), e}}), any_v(R.USet{v, 0n, R.TKeep{}, "set"}, 0n, w, e)({==})) : {R.db_of(R.upd.put(t, k, KV.hash(k), n, x, 0n, rr, R.ent.code(Some{KV.Item{w, e}}), _)) == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, R.ent.code(Some{KV.Item{w, e}}), r, R.CKeepT{v}))) : R.Db}
   {==}
 
-def app_replay(+t: KV.Trie<String>, +k: String, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>, +r: R.Reply, +s: String, +v: String, +w: String, +e: Nat, eq: {KV.entry.at(String, t, k, KV.hash(k)) == Some{KV.Item{w, e}} : Maybe<&2, KV.Item<String>>}, gv: {v == w ++ s : String}) -> {Laws.final(R.exec_all(A.ch.effect(k, R.CApp{s, v}), R.Db{t, n, x, 0n, rr})) == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, R.ent.code(Some{KV.Item{w, e}}), r, R.CApp{s, v}))) : R.Db}:
-  %fin_cons(R.Upd{k, R.UAppend{s}}, Nil{}, R.Db{t, n, x, 0n, rr}) : {_ == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, R.ent.code(Some{KV.Item{w, e}}), r, R.CApp{s, v}))) : R.Db}
-  %Equal.sym(Maybe<&2, KV.Item<String>>, KV.entry.at(String, t, k, KV.hash(k)), Some{KV.Item{w, e}}, eq) : {R.db_of(R.upd.put(t, k, KV.hash(k), n, x, 0n, rr, R.ent.code(_), R.upd(R.UAppend{s}, 0n, R.ent.live(0n, _)))) == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, R.ent.code(Some{KV.Item{w, e}}), r, R.CApp{s, v}))) : R.Db}
-  %Equal.sym(Maybe<&2, KV.Item<String>>, R.ent.live(0n, Some{KV.Item{w, e}}), Some{KV.Item{w, e}}, live0_ent(Some{KV.Item{w, e}})) : {R.db_of(R.upd.put(t, k, KV.hash(k), n, x, 0n, rr, R.ent.code(Some{KV.Item{w, e}}), R.upd(R.UAppend{s}, 0n, _))) == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, R.ent.code(Some{KV.Item{w, e}}), r, R.CApp{s, v}))) : R.Db}
-  %Equal.sym(String, v, w ++ s, gv) : {R.db_of(R.upd.put(t, k, KV.hash(k), n, x, 0n, rr, R.ent.code(Some{KV.Item{w, e}}), R.append.of(s, Some{KV.Item{w, e}}))) == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, R.ent.code(Some{KV.Item{w, e}}), r, R.CApp{s, _}))) : R.Db}
+def app_replay(+t: KV.Trie<KV.Val>, +k: String, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>, +r: R.Reply, +s: String, +v: String, +w: String, +e: Nat, eq: {KV.entry.at(KV.Val, t, k, KV.hash(k)) == Some{KV.Item{KV.VStr{w}, e}} : Maybe<&2, KV.Item<KV.Val>>}, gv: {v == w ++ s : String}) -> {Laws.final(R.exec_all(A.ch.effect(k, R.CApp{s, v}), R.Db{t, n, x, 0n, rr})) == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, R.ent.code(Some{KV.Item{KV.VStr{w}, e}}), r, R.CApp{s, v}))) : R.Db}:
+  %fin_cons(R.Upd{k, R.UAppend{s}}, Nil{}, R.Db{t, n, x, 0n, rr}) : {_ == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, R.ent.code(Some{KV.Item{KV.VStr{w}, e}}), r, R.CApp{s, v}))) : R.Db}
+  %Equal.sym(Maybe<&2, KV.Item<KV.Val>>, KV.entry.at(KV.Val, t, k, KV.hash(k)), Some{KV.Item{KV.VStr{w}, e}}, eq) : {R.db_of(R.upd.put(t, k, KV.hash(k), n, x, 0n, rr, R.ent.code(_), R.upd.v(R.UAppend{s}, 0n, R.ent.live(0n, _)))) == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, R.ent.code(Some{KV.Item{KV.VStr{w}, e}}), r, R.CApp{s, v}))) : R.Db}
+  %Equal.sym(Maybe<&2, KV.Item<KV.Val>>, R.ent.live(0n, Some{KV.Item{KV.VStr{w}, e}}), Some{KV.Item{KV.VStr{w}, e}}, live0_ent(Some{KV.Item{KV.VStr{w}, e}})) : {R.db_of(R.upd.put(t, k, KV.hash(k), n, x, 0n, rr, R.ent.code(Some{KV.Item{KV.VStr{w}, e}}), R.upd.v(R.UAppend{s}, 0n, _))) == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, R.ent.code(Some{KV.Item{KV.VStr{w}, e}}), r, R.CApp{s, v}))) : R.Db}
+  %Equal.sym(String, v, w ++ s, gv) : {R.db_of(R.upd.put(t, k, KV.hash(k), n, x, 0n, rr, R.ent.code(Some{KV.Item{KV.VStr{w}, e}}), R.append.of(s, Some{KV.Item{w, e}}))) == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, R.ent.code(Some{KV.Item{KV.VStr{w}, e}}), r, R.CApp{s, _}))) : R.Db}
   {==}
 
-def range_replay(+t: KV.Trie<String>, +k: String, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>, +r: R.Reply, +o: Nat, +s: String, +v: String, +w: String, +e: Nat, eq: {KV.entry.at(String, t, k, KV.hash(k)) == Some{KV.Item{w, e}} : Maybe<&2, KV.Item<String>>}, ok: {R.range.go(o, s) == True{} : Bool}, gv: {v == R.range.put(w, o, s) : String}) -> {Laws.final(R.exec_all(A.ch.effect(k, R.CRange{o, s, v}), R.Db{t, n, x, 0n, rr})) == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, R.ent.code(Some{KV.Item{w, e}}), r, R.CRange{o, s, v}))) : R.Db}:
-  %fin_cons(R.Upd{k, R.URange{o, s}}, Nil{}, R.Db{t, n, x, 0n, rr}) : {_ == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, R.ent.code(Some{KV.Item{w, e}}), r, R.CRange{o, s, v}))) : R.Db}
-  %Equal.sym(Maybe<&2, KV.Item<String>>, KV.entry.at(String, t, k, KV.hash(k)), Some{KV.Item{w, e}}, eq) : {R.db_of(R.upd.put(t, k, KV.hash(k), n, x, 0n, rr, R.ent.code(_), R.upd(R.URange{o, s}, 0n, R.ent.live(0n, _)))) == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, R.ent.code(Some{KV.Item{w, e}}), r, R.CRange{o, s, v}))) : R.Db}
-  %Equal.sym(Maybe<&2, KV.Item<String>>, R.ent.live(0n, Some{KV.Item{w, e}}), Some{KV.Item{w, e}}, live0_ent(Some{KV.Item{w, e}})) : {R.db_of(R.upd.put(t, k, KV.hash(k), n, x, 0n, rr, R.ent.code(Some{KV.Item{w, e}}), R.upd(R.URange{o, s}, 0n, _))) == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, R.ent.code(Some{KV.Item{w, e}}), r, R.CRange{o, s, v}))) : R.Db}
-  %Equal.sym(Bool, R.range.go(o, s), True{}, ok) : {R.db_of(R.upd.put(t, k, KV.hash(k), n, x, 0n, rr, R.ent.code(Some{KV.Item{w, e}}), R.range.some(_, o, s, w, String.is_empty(s)))) == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, R.ent.code(Some{KV.Item{w, e}}), r, R.CRange{o, s, v}))) : R.Db}
-  %Equal.sym(String, v, R.range.put(w, o, s), gv) : {R.db_of(R.upd.put(t, k, KV.hash(k), n, x, 0n, rr, R.ent.code(Some{KV.Item{w, e}}), R.range.some(True{}, o, s, w, String.is_empty(s)))) == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, R.ent.code(Some{KV.Item{w, e}}), r, R.CRange{o, s, _}))) : R.Db}
+def range_replay(+t: KV.Trie<KV.Val>, +k: String, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>, +r: R.Reply, +o: Nat, +s: String, +v: String, +w: String, +e: Nat, eq: {KV.entry.at(KV.Val, t, k, KV.hash(k)) == Some{KV.Item{KV.VStr{w}, e}} : Maybe<&2, KV.Item<KV.Val>>}, ok: {R.range.go(o, s) == True{} : Bool}, gv: {v == R.range.put(w, o, s) : String}) -> {Laws.final(R.exec_all(A.ch.effect(k, R.CRange{o, s, v}), R.Db{t, n, x, 0n, rr})) == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, R.ent.code(Some{KV.Item{KV.VStr{w}, e}}), r, R.CRange{o, s, v}))) : R.Db}:
+  %fin_cons(R.Upd{k, R.URange{o, s}}, Nil{}, R.Db{t, n, x, 0n, rr}) : {_ == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, R.ent.code(Some{KV.Item{KV.VStr{w}, e}}), r, R.CRange{o, s, v}))) : R.Db}
+  %Equal.sym(Maybe<&2, KV.Item<KV.Val>>, KV.entry.at(KV.Val, t, k, KV.hash(k)), Some{KV.Item{KV.VStr{w}, e}}, eq) : {R.db_of(R.upd.put(t, k, KV.hash(k), n, x, 0n, rr, R.ent.code(_), R.upd.v(R.URange{o, s}, 0n, R.ent.live(0n, _)))) == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, R.ent.code(Some{KV.Item{KV.VStr{w}, e}}), r, R.CRange{o, s, v}))) : R.Db}
+  %Equal.sym(Maybe<&2, KV.Item<KV.Val>>, R.ent.live(0n, Some{KV.Item{KV.VStr{w}, e}}), Some{KV.Item{KV.VStr{w}, e}}, live0_ent(Some{KV.Item{KV.VStr{w}, e}})) : {R.db_of(R.upd.put(t, k, KV.hash(k), n, x, 0n, rr, R.ent.code(Some{KV.Item{KV.VStr{w}, e}}), R.upd.v(R.URange{o, s}, 0n, _))) == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, R.ent.code(Some{KV.Item{KV.VStr{w}, e}}), r, R.CRange{o, s, v}))) : R.Db}
+  %Equal.sym(Bool, R.range.go(o, s), True{}, ok) : {R.db_of(R.upd.put(t, k, KV.hash(k), n, x, 0n, rr, R.ent.code(Some{KV.Item{KV.VStr{w}, e}}), R.range.some(_, o, s, w, String.is_empty(s)))) == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, R.ent.code(Some{KV.Item{KV.VStr{w}, e}}), r, R.CRange{o, s, v}))) : R.Db}
+  %Equal.sym(String, v, R.range.put(w, o, s), gv) : {R.db_of(R.upd.put(t, k, KV.hash(k), n, x, 0n, rr, R.ent.code(Some{KV.Item{KV.VStr{w}, e}}), R.range.some(True{}, o, s, w, String.is_empty(s)))) == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, R.ent.code(Some{KV.Item{KV.VStr{w}, e}}), r, R.CRange{o, s, _}))) : R.Db}
   {==}
 
-def range_go(+t: KV.Trie<String>, +k: String, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>, +r: R.Reply, +o: Nat, +s: String, +v: String, +w: String, +e: Nat, eq: {KV.entry.at(String, t, k, KV.hash(k)) == Some{KV.Item{w, e}} : Maybe<&2, KV.Item<String>>}, g: GoodRange(Some{KV.Item{w, e}}, o, s, v)) -> {Laws.final(R.exec_all(A.ch.effect(k, R.CRange{o, s, v}), R.Db{t, n, x, 0n, rr})) == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, R.ent.code(Some{KV.Item{w, e}}), r, R.CRange{o, s, v}))) : R.Db}:
+def range_go(+t: KV.Trie<KV.Val>, +k: String, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>, +r: R.Reply, +o: Nat, +s: String, +v: String, +w: String, +e: Nat, eq: {KV.entry.at(KV.Val, t, k, KV.hash(k)) == Some{KV.Item{KV.VStr{w}, e}} : Maybe<&2, KV.Item<KV.Val>>}, g: GoodRange(Some{KV.Item{KV.VStr{w}, e}}, o, s, v)) -> {Laws.final(R.exec_all(A.ch.effect(k, R.CRange{o, s, v}), R.Db{t, n, x, 0n, rr})) == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, R.ent.code(Some{KV.Item{KV.VStr{w}, e}}), r, R.CRange{o, s, v}))) : R.Db}:
   (ok, gv) = g
   range_replay(t, k, n, x, now, rr, r, o, s, v, w, e, eq, ok, gv)
 
-def ch_replay(ch: R.Change, m: Maybe<&2, KV.Item<String>>, +t: KV.Trie<String>, +k: String, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>, +r: R.Reply) -> {KV.entry.at(String, t, k, KV.hash(k)) == m : Maybe<&2, KV.Item<String>>} -> Good(m, ch) -> {Laws.final(R.exec_all(A.ch.effect(k, ch), R.Db{t, n, x, 0n, rr})) == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, R.ent.code(m), r, ch))) : R.Db}:
+def ch_replay(ch: R.Change, m: Maybe<&2, KV.Item<KV.Val>>, +t: KV.Trie<KV.Val>, +k: String, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>, +r: R.Reply) -> {KV.entry.at(KV.Val, t, k, KV.hash(k)) == m : Maybe<&2, KV.Item<KV.Val>>} -> Good(m, ch) -> {Laws.final(R.exec_all(A.ch.effect(k, ch), R.Db{t, n, x, 0n, rr})) == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, R.ent.code(m), r, ch))) : R.Db}:
   match ch m:
     case R.CKeep{} _:
       eq => g => {==}
@@ -5813,12 +6005,16 @@ def ch_replay(ch: R.Change, m: Maybe<&2, KV.Item<String>>, +t: KV.Trie<String>, 
       eq => g => keept_replay(t, k, n, x, now, rr, r, v, w, e, eq)
     case R.CKeepT{v} None{}:
       eq => g => Empty.absurd({Laws.final(R.exec_all(A.ch.effect(k, R.CKeepT{v}), R.Db{t, n, x, 0n, rr})) == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, R.ent.code(None{}), r, R.CKeepT{v}))) : R.Db}, false_true(g))
-    case R.CApp{s, v} Some{KV.Item{w, e}}:
+    case R.CApp{s, v} Some{KV.Item{KV.VStr{w}, e}}:
       eq => g => app_replay(t, k, n, x, now, rr, r, s, v, w, e, eq, g)
+    case R.CApp{s, v} Some{KV.Item{KV.VColl{c}, e}}:
+      eq => g => Empty.absurd({Laws.final(R.exec_all(A.ch.effect(k, R.CApp{s, v}), R.Db{t, n, x, 0n, rr})) == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, R.ent.code(Some{KV.Item{KV.VColl{c}, e}}), r, R.CApp{s, v}))) : R.Db}, g)
     case R.CApp{s, v} None{}:
       eq => g => Empty.absurd({Laws.final(R.exec_all(A.ch.effect(k, R.CApp{s, v}), R.Db{t, n, x, 0n, rr})) == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, R.ent.code(None{}), r, R.CApp{s, v}))) : R.Db}, g)
-    case R.CRange{o, s, v} Some{KV.Item{w, e}}:
+    case R.CRange{o, s, v} Some{KV.Item{KV.VStr{w}, e}}:
       eq => g => range_go(t, k, n, x, now, rr, r, o, s, v, w, e, eq, g)
+    case R.CRange{o, s, v} Some{KV.Item{KV.VColl{c}, e}}:
+      eq => g => Empty.absurd({Laws.final(R.exec_all(A.ch.effect(k, R.CRange{o, s, v}), R.Db{t, n, x, 0n, rr})) == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, R.ent.code(Some{KV.Item{KV.VColl{c}, e}}), r, R.CRange{o, s, v}))) : R.Db}, g)
     case R.CRange{o, s, v} None{}:
       eq => g => Empty.absurd({Laws.final(R.exec_all(A.ch.effect(k, R.CRange{o, s, v}), R.Db{t, n, x, 0n, rr})) == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, R.ent.code(None{}), r, R.CRange{o, s, v}))) : R.Db}, g)
 
@@ -5828,7 +6024,7 @@ def ch_of(o: R.Out) -> R.Change:
       ch
 
 # an update's effects make its change again
-def out_replay(o: R.Out, +m: Maybe<&2, KV.Item<String>>, +t: KV.Trie<String>, +k: String, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>) -> {KV.entry.at(String, t, k, KV.hash(k)) == m : Maybe<&2, KV.Item<String>>} -> Good(m, ch_of(o)) -> {Laws.final(R.exec_all(A.upd.effect(k, o), R.Db{t, n, x, 0n, rr})) == R.db.at(0n, R.db_of(R.upd.put(t, k, KV.hash(k), n, x, now, rr, R.ent.code(m), o))) : R.Db}:
+def out_replay(o: R.Out, +m: Maybe<&2, KV.Item<KV.Val>>, +t: KV.Trie<KV.Val>, +k: String, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>) -> {KV.entry.at(KV.Val, t, k, KV.hash(k)) == m : Maybe<&2, KV.Item<KV.Val>>} -> Good(m, ch_of(o)) -> {Laws.final(R.exec_all(A.upd.effect(k, o), R.Db{t, n, x, 0n, rr})) == R.db.at(0n, R.db_of(R.upd.put(t, k, KV.hash(k), n, x, now, rr, R.ent.code(m), o))) : R.Db}:
   match o:
     case R.Out{+r, ch}:
       ch_replay(ch, m, t, k, n, x, now, rr, r)
@@ -5842,21 +6038,21 @@ def get_ch(+old: R.Reply, o: R.Out) -> {ch_of(R.get.out(old, o)) == ch_of(o) : R
       {==}
 
 # SET's change, under its conditions
-def setdo_good(b: Bool, -m: Maybe<&2, KV.Item<String>>, -ch: R.Change, g: Good(m, ch)) -> Good(m, ch_of(Bool.pick(R.Out, b, R.Out{R.RNull{}, R.CKeep{}}, R.Out{R.r_ok(), ch}))):
+def setdo_good(b: Bool, -m: Maybe<&2, KV.Item<KV.Val>>, -ch: R.Change, g: Good(m, ch)) -> Good(m, ch_of(Bool.pick(R.Out, b, R.Out{R.RNull{}, R.CKeep{}}, R.Out{R.r_ok(), ch}))):
   match b:
     case True{}:
       {==}
     case False{}:
       g
 
-def setat_good(a: Maybe<&2, R.At>, +cond: Nat, +v: String, +name: String, +l: Maybe<&2, KV.Item<String>>, -m: Maybe<&2, KV.Item<String>>) -> Good(m, ch_of(R.set.at(cond, v, name, a, l))):
+def setat_good(a: Maybe<&2, R.At>, +cond: Nat, +v: String, +name: String, +l: Maybe<&2, KV.Item<String>>, -m: Maybe<&2, KV.Item<KV.Val>>) -> Good(m, ch_of(R.set.at(cond, v, name, a, l))):
   match a:
     case Some{+tt}:
       setdo_good(Bool.or(Bool.and(Nat.is_eq(cond, 1n), Maybe.is_some(&2, KV.Item<String>, l)), Bool.and(Nat.is_eq(cond, 2n), Bool.not(Maybe.is_some(&2, KV.Item<String>, l)))), m, R.CPut{v, KV.clamp(R.at.exp(tt))}, clamp_idem(R.at.exp(tt)))
     case None{}:
       {==}
 
-def uset_none(ttl: R.SetTtl, +v: String, +cond: Nat, +name: String, +now: Nat, -m: Maybe<&2, KV.Item<String>>) -> Good(m, ch_of(R.set.of(v, cond, ttl, name, now, None{}))):
+def uset_none(ttl: R.SetTtl, +v: String, +cond: Nat, +name: String, +now: Nat, -m: Maybe<&2, KV.Item<KV.Val>>) -> Good(m, ch_of(R.set.of(v, cond, ttl, name, now, None{}))):
   match ttl:
     case R.TNone{}:
       setdo_good(Bool.or(Bool.and(Nat.is_eq(cond, 1n), Maybe.is_some(&2, KV.Item<String>, None{})), Bool.and(Nat.is_eq(cond, 2n), Bool.not(Maybe.is_some(&2, KV.Item<String>, None{})))), m, R.CPut{v, 0n}, {==})
@@ -5865,23 +6061,23 @@ def uset_none(ttl: R.SetTtl, +v: String, +cond: Nat, +name: String, +now: Nat, -
     case R.TAt{+tt}:
       setat_good(R.at.of(tt, now), cond, v, name, None{}, m)
 
-def uset_some(ttl: R.SetTtl, +v: String, +cond: Nat, +name: String, +now: Nat, +w: String, +e: Nat) -> Good(Some{KV.Item{w, e}}, ch_of(R.set.of(v, cond, ttl, name, now, Some{KV.Item{w, e}}))):
+def uset_some(ttl: R.SetTtl, +v: String, +cond: Nat, +name: String, +now: Nat, +w: String, -y: KV.Val, +e: Nat) -> Good(Some{KV.Item{y, e}}, ch_of(R.set.of(v, cond, ttl, name, now, Some{KV.Item{w, e}}))):
   match ttl:
     case R.TNone{}:
-      setdo_good(Bool.or(Bool.and(Nat.is_eq(cond, 1n), Maybe.is_some(&2, KV.Item<String>, Some{KV.Item{w, e}})), Bool.and(Nat.is_eq(cond, 2n), Bool.not(Maybe.is_some(&2, KV.Item<String>, Some{KV.Item{w, e}})))), Some{KV.Item{w, e}}, R.CPut{v, 0n}, {==})
+      setdo_good(Bool.or(Bool.and(Nat.is_eq(cond, 1n), Maybe.is_some(&2, KV.Item<String>, Some{KV.Item{w, e}})), Bool.and(Nat.is_eq(cond, 2n), Bool.not(Maybe.is_some(&2, KV.Item<String>, Some{KV.Item{w, e}})))), Some{KV.Item{y, e}}, R.CPut{v, 0n}, {==})
     case R.TKeep{}:
-      setdo_good(Bool.or(Bool.and(Nat.is_eq(cond, 1n), Maybe.is_some(&2, KV.Item<String>, Some{KV.Item{w, e}})), Bool.and(Nat.is_eq(cond, 2n), Bool.not(Maybe.is_some(&2, KV.Item<String>, Some{KV.Item{w, e}})))), Some{KV.Item{w, e}}, R.CKeepT{v}, {==})
+      setdo_good(Bool.or(Bool.and(Nat.is_eq(cond, 1n), Maybe.is_some(&2, KV.Item<String>, Some{KV.Item{w, e}})), Bool.and(Nat.is_eq(cond, 2n), Bool.not(Maybe.is_some(&2, KV.Item<String>, Some{KV.Item{w, e}})))), Some{KV.Item{y, e}}, R.CKeepT{v}, {==})
     case R.TAt{+tt}:
-      setat_good(R.at.of(tt, now), cond, v, name, Some{KV.Item{w, e}}, Some{KV.Item{w, e}})
+      setat_good(R.at.of(tt, now), cond, v, name, Some{KV.Item{w, e}}, Some{KV.Item{y, e}})
 
-def expire_none(a: Maybe<&2, R.At>, c: R.ExpIf, +name: String, +now: Nat, -m: Maybe<&2, KV.Item<String>>) -> Good(m, ch_of(R.expire.at(c, name, now, a, None{}))):
+def expire_none(a: Maybe<&2, R.At>, c: R.ExpIf, +name: String, +now: Nat, -m: Maybe<&2, KV.Item<KV.Val>>) -> Good(m, ch_of(R.expire.at(c, name, now, a, None{}))):
   match a:
     case Some{tt}:
       {==}
     case None{}:
       {==}
 
-def incr_fit_none(ok: Bool, +by: R.Int, -m: Maybe<&2, KV.Item<String>>) -> Good(m, ch_of(R.uincr.fit(by, ok, False{}))):
+def incr_fit_none(ok: Bool, +by: R.Int, -m: Maybe<&2, KV.Item<KV.Val>>) -> Good(m, ch_of(R.uincr.fit(by, ok, False{}))):
   match ok:
     case True{}:
       {==}
@@ -5890,14 +6086,14 @@ def incr_fit_none(ok: Bool, +by: R.Int, -m: Maybe<&2, KV.Item<String>>) -> Good(
 
 # SETRANGE, and SETBIT as the SETRANGE of its byte: of a key not there a
 # put of a value with no time, of a key there a SETRANGE that changes it
-def range_none_good(b: Bool, +o: Nat, +a: String, +em: Bool, -m: Maybe<&2, KV.Item<String>>) -> Good(m, ch_of(R.range.none(b, o, a, em))):
+def range_none_good(b: Bool, +o: Nat, +a: String, +em: Bool, -m: Maybe<&2, KV.Item<KV.Val>>) -> Good(m, ch_of(R.range.none(b, o, a, em))):
   match b:
     case True{}:
       {==}
     case False{}:
       {==}
 
-def range_some_good(b: Bool, +o: Nat, +a: String, +w: String, -e: Nat, +em: Bool) -> {b == R.range.go(o, a) : Bool} -> Good(Some{KV.Item{w, e}}, ch_of(R.range.some(b, o, a, w, em))):
+def range_some_good(b: Bool, +o: Nat, +a: String, +w: String, -e: Nat, +em: Bool) -> {b == R.range.go(o, a) : Bool} -> Good(Some{KV.Item{KV.VStr{w}, e}}, ch_of(R.range.some(b, o, a, w, em))):
   match b:
     case True{}:
       eb => (Equal.sym(Bool, True{}, R.range.go(o, a), eb), {==})
@@ -5909,21 +6105,21 @@ def setbit_ch(+r: R.Reply, o: R.Out) -> {ch_of(R.setbit.out(r, o)) == ch_of(o) :
     case R.Out{x, ch}:
       {==}
 
-def setbit_none(+o: Nat, +on: Bool, -m: Maybe<&2, KV.Item<String>>) -> Good(m, ch_of(R.setbit.of(o, on, None{}))):
+def setbit_none(+o: Nat, +on: Bool, -m: Maybe<&2, KV.Item<KV.Val>>) -> Good(m, ch_of(R.setbit.of(o, on, None{}))):
   %Equal.sym(R.Change, ch_of(R.setbit.out(R.r_int(0n), R.range.of(Nat.div(o, 8n), R.setbit.byte(o, on, 0), None{}))), ch_of(R.range.of(Nat.div(o, 8n), R.setbit.byte(o, on, 0), None{})), setbit_ch(R.r_int(0n), R.range.of(Nat.div(o, 8n), R.setbit.byte(o, on, 0), None{}))) : Good(m, _)
   range_none_good(R.range.go(Nat.div(o, 8n), R.setbit.byte(o, on, 0)), Nat.div(o, 8n), R.setbit.byte(o, on, 0), String.is_empty(R.setbit.byte(o, on, 0)), m)
 
-def setbit_some_good(b: Bool, +o: Nat, +on: Bool, +w: String, +e: Nat) -> Good(Some{KV.Item{w, e}}, ch_of(R.setbit.some(b, o, on, w, e))):
+def setbit_some_good(b: Bool, +o: Nat, +on: Bool, +w: String, +e: Nat) -> Good(Some{KV.Item{KV.VStr{w}, e}}, ch_of(R.setbit.some(b, o, on, w, e))):
   match b:
     case True{}:
       {==}
     case False{}:
-      %Equal.sym(R.Change, ch_of(R.setbit.out(R.setbit.r(o, w), R.range.of(Nat.div(o, 8n), R.setbit.byte(o, on, R.setbit.x(o, w)), Some{KV.Item{w, e}}))), ch_of(R.range.of(Nat.div(o, 8n), R.setbit.byte(o, on, R.setbit.x(o, w)), Some{KV.Item{w, e}})), setbit_ch(R.setbit.r(o, w), R.range.of(Nat.div(o, 8n), R.setbit.byte(o, on, R.setbit.x(o, w)), Some{KV.Item{w, e}}))) : Good(Some{KV.Item{w, e}}, _)
+      %Equal.sym(R.Change, ch_of(R.setbit.out(R.setbit.r(o, w), R.range.of(Nat.div(o, 8n), R.setbit.byte(o, on, R.setbit.x(o, w)), Some{KV.Item{w, e}}))), ch_of(R.range.of(Nat.div(o, 8n), R.setbit.byte(o, on, R.setbit.x(o, w)), Some{KV.Item{w, e}})), setbit_ch(R.setbit.r(o, w), R.range.of(Nat.div(o, 8n), R.setbit.byte(o, on, R.setbit.x(o, w)), Some{KV.Item{w, e}}))) : Good(Some{KV.Item{KV.VStr{w}, e}}, _)
       range_some_good(R.range.go(Nat.div(o, 8n), R.setbit.byte(o, on, R.setbit.x(o, w))), Nat.div(o, 8n), R.setbit.byte(o, on, R.setbit.x(o, w)), w, e, String.is_empty(R.setbit.byte(o, on, R.setbit.x(o, w))))({==})
 
 # BITFIELD: nothing, an error that changes nothing, or the SETRANGE of
 # its span (of a key not there a put)
-def bf_put_none(ok: Bool, +r: R.Reply, +lo: Nat, +sp: String, -m: Maybe<&2, KV.Item<String>>) -> Good(m, ch_of(R.bf.put(ok, r, lo, sp, None{}))):
+def bf_put_none(ok: Bool, +r: R.Reply, +lo: Nat, +sp: String, -m: Maybe<&2, KV.Item<KV.Val>>) -> Good(m, ch_of(R.bf.put(ok, r, lo, sp, None{}))):
   match ok:
     case True{}:
       %Equal.sym(R.Change, ch_of(R.setbit.out(r, R.range.of(lo, sp, None{}))), ch_of(R.range.of(lo, sp, None{})), setbit_ch(r, R.range.of(lo, sp, None{}))) : Good(m, _)
@@ -5931,40 +6127,40 @@ def bf_put_none(ok: Bool, +r: R.Reply, +lo: Nat, +sp: String, -m: Maybe<&2, KV.I
     case False{}:
       {==}
 
-def bf_res_none(ch: Bool, +r: R.Reply, +lo: Nat, +sp: String, -m: Maybe<&2, KV.Item<String>>) -> Good(m, ch_of(R.bf.res(ch, r, lo, sp, None{}))):
+def bf_res_none(ch: Bool, +r: R.Reply, +lo: Nat, +sp: String, -m: Maybe<&2, KV.Item<KV.Val>>) -> Good(m, ch_of(R.bf.res(ch, r, lo, sp, None{}))):
   match ch:
     case True{}:
       bf_put_none(R.range.go(lo, sp), r, lo, sp, m)
     case False{}:
       {==}
 
-def bf_none(st: R.BfRun, +lo: Nat, -m: Maybe<&2, KV.Item<String>>) -> Good(m, ch_of(R.bf.fin(st, lo, None{}))):
+def bf_none(st: R.BfRun, +lo: Nat, -m: Maybe<&2, KV.Item<KV.Val>>) -> Good(m, ch_of(R.bf.fin(st, lo, None{}))):
   match st:
     case R.BfRun{+sp, ch, rs}:
       bf_res_none(ch, R.RArray{List.reverse(&2, R.Reply, rs)}, lo, sp, m)
 
-def bf_put_some(ok: Bool, +r: R.Reply, +lo: Nat, +sp: String, +w: String, +e: Nat) -> Good(Some{KV.Item{w, e}}, ch_of(R.bf.put(ok, r, lo, sp, Some{KV.Item{w, e}}))):
+def bf_put_some(ok: Bool, +r: R.Reply, +lo: Nat, +sp: String, +w: String, +e: Nat) -> Good(Some{KV.Item{KV.VStr{w}, e}}, ch_of(R.bf.put(ok, r, lo, sp, Some{KV.Item{w, e}}))):
   match ok:
     case True{}:
-      %Equal.sym(R.Change, ch_of(R.setbit.out(r, R.range.of(lo, sp, Some{KV.Item{w, e}}))), ch_of(R.range.of(lo, sp, Some{KV.Item{w, e}})), setbit_ch(r, R.range.of(lo, sp, Some{KV.Item{w, e}}))) : Good(Some{KV.Item{w, e}}, _)
+      %Equal.sym(R.Change, ch_of(R.setbit.out(r, R.range.of(lo, sp, Some{KV.Item{w, e}}))), ch_of(R.range.of(lo, sp, Some{KV.Item{w, e}})), setbit_ch(r, R.range.of(lo, sp, Some{KV.Item{w, e}}))) : Good(Some{KV.Item{KV.VStr{w}, e}}, _)
       range_some_good(R.range.go(lo, sp), lo, sp, w, e, String.is_empty(sp))({==})
     case False{}:
       {==}
 
-def bf_res_some(ch: Bool, +r: R.Reply, +lo: Nat, +sp: String, +w: String, +e: Nat) -> Good(Some{KV.Item{w, e}}, ch_of(R.bf.res(ch, r, lo, sp, Some{KV.Item{w, e}}))):
+def bf_res_some(ch: Bool, +r: R.Reply, +lo: Nat, +sp: String, +w: String, +e: Nat) -> Good(Some{KV.Item{KV.VStr{w}, e}}, ch_of(R.bf.res(ch, r, lo, sp, Some{KV.Item{w, e}}))):
   match ch:
     case True{}:
       bf_put_some(R.range.go(lo, sp), r, lo, sp, w, e)
     case False{}:
       {==}
 
-def bf_some(st: R.BfRun, +lo: Nat, +w: String, +e: Nat) -> Good(Some{KV.Item{w, e}}, ch_of(R.bf.fin(st, lo, Some{KV.Item{w, e}}))):
+def bf_some(st: R.BfRun, +lo: Nat, +w: String, +e: Nat) -> Good(Some{KV.Item{KV.VStr{w}, e}}, ch_of(R.bf.fin(st, lo, Some{KV.Item{w, e}}))):
   match st:
     case R.BfRun{+sp, ch, rs}:
       bf_res_some(ch, R.RArray{List.reverse(&2, R.Reply, rs)}, lo, sp, w, e)
 
 # of a key that is not there: none or a put
-def good_none(op: R.UpdOp, +now: Nat, -m: Maybe<&2, KV.Item<String>>) -> Good(m, ch_of(R.upd(op, now, None{}))):
+def good_none(op: R.UpdOp, +now: Nat, -m: Maybe<&2, KV.Item<KV.Val>>) -> Good(m, ch_of(R.upd(op, now, None{}))):
   match op:
     case R.USetNx{v}:
       {==}
@@ -5994,18 +6190,18 @@ def good_none(op: R.UpdOp, +now: Nat, -m: Maybe<&2, KV.Item<String>>) -> Good(m,
 
 # a time set alone, to f, of a key there with e: none given none is
 # nothing
-def etg(b: Bool, +f: Nat, +e: Nat, -w: String, fx: {KV.clamp(f) == f : Nat}) -> {b == Bool.and(Nat.is_eq(f, 0n), Nat.is_eq(e, 0n)) : Bool} -> Good(Some{KV.Item{w, e}}, Bool.pick(R.Change, b, R.CKeep{}, R.CExp{f})):
+def etg(b: Bool, +f: Nat, +e: Nat, -w: KV.Val, fx: {KV.clamp(f) == f : Nat}) -> {b == Bool.and(Nat.is_eq(f, 0n), Nat.is_eq(e, 0n)) : Bool} -> Good(Some{KV.Item{w, e}}, Bool.pick(R.Change, b, R.CKeep{}, R.CExp{f})):
   match b:
     case True{}:
       eb => {==}
     case False{}:
       eb => (fx, Equal.sym(Bool, False{}, Bool.and(Nat.is_eq(f, 0n), Nat.is_eq(e, 0n)), eb))
 
-def exp_to_good(+f: Nat, +e: Nat, -w: String, fx: {KV.clamp(f) == f : Nat}) -> Good(Some{KV.Item{w, e}}, R.exp.to(f, e)):
+def exp_to_good(+f: Nat, +e: Nat, -w: KV.Val, fx: {KV.clamp(f) == f : Nat}) -> Good(Some{KV.Item{w, e}}, R.exp.to(f, e)):
   etg(Bool.and(Nat.is_eq(f, 0n), Nat.is_eq(e, 0n)), f, e, w, fx)({==})
 
 # deleted, or its time set alone
-def dexp_good(b: Bool, +f: Nat, +e: Nat, -w: String, fx: {KV.clamp(f) == f : Nat}) -> Good(Some{KV.Item{w, e}}, Bool.pick(R.Change, b, R.CDel{}, R.exp.to(f, e))):
+def dexp_good(b: Bool, +f: Nat, +e: Nat, -w: KV.Val, fx: {KV.clamp(f) == f : Nat}) -> Good(Some{KV.Item{w, e}}, Bool.pick(R.Change, b, R.CDel{}, R.exp.to(f, e))):
   match b:
     case True{}:
       {==}
@@ -6016,65 +6212,65 @@ def dexp_good(b: Bool, +f: Nat, +e: Nat, -w: String, fx: {KV.clamp(f) == f : Nat
 def fixed0() -> {KV.clamp(0n) == 0n : Nat}:
   {==}
 
-def pers_go(b: Bool, -w: String, +e: Nat) -> {b == Nat.is_eq(e, 0n) : Bool} -> Good(Some{KV.Item{w, e}}, Bool.pick(R.Change, b, R.CKeep{}, R.CExp{0n})):
+def pers_go(b: Bool, -w: KV.Val, +e: Nat) -> {b == Nat.is_eq(e, 0n) : Bool} -> Good(Some{KV.Item{w, e}}, Bool.pick(R.Change, b, R.CKeep{}, R.CExp{0n})):
   match b:
     case True{}:
       eb => {==}
     case False{}:
       eb => (fixed0(), Equal.sym(Bool, False{}, Nat.is_eq(e, 0n), eb))
 
-def persist_go(b: Bool, -w: String, +e: Nat) -> {b == Nat.is_eq(e, 0n) : Bool} -> Good(Some{KV.Item{w, e}}, ch_of(Bool.pick(R.Out, b, R.Out{R.r_int(0n), R.CKeep{}}, R.Out{R.r_int(1n), R.CExp{0n}}))):
+def persist_go(b: Bool, -w: KV.Val, +e: Nat) -> {b == Nat.is_eq(e, 0n) : Bool} -> Good(Some{KV.Item{w, e}}, ch_of(Bool.pick(R.Out, b, R.Out{R.r_int(0n), R.CKeep{}}, R.Out{R.r_int(1n), R.CExp{0n}}))):
   match b:
     case True{}:
       eb => {==}
     case False{}:
       eb => (fixed0(), Equal.sym(Bool, False{}, Nat.is_eq(e, 0n), eb))
 
-def getex_at_good(a: Maybe<&2, R.At>, +ww: String, +at: Bool, +now: Nat, +w: String, +e: Nat) -> Good(Some{KV.Item{w, e}}, ch_of(R.getex.at(ww, at, now, e, a))):
+def getex_at_good(a: Maybe<&2, R.At>, +ww: String, +at: Bool, +now: Nat, +w: String, +e: Nat) -> Good(Some{KV.Item{KV.VStr{w}, e}}, ch_of(R.getex.at(ww, at, now, e, a))):
   match a:
     case Some{+tt}:
-      dexp_good(Bool.and(at, R.at.past(tt, now)), KV.clamp(R.at.exp(tt)), e, w, clamp_idem(R.at.exp(tt)))
+      dexp_good(Bool.and(at, R.at.past(tt, now)), KV.clamp(R.at.exp(tt)), e, KV.VStr{w}, clamp_idem(R.at.exp(tt)))
     case None{}:
       {==}
 
-def getex_tm_good(r: R.TmR, +at: Bool, +now: Nat, +w: String, +e: Nat) -> Good(Some{KV.Item{w, e}}, ch_of(R.getex.tm(w, at, now, e, r))):
+def getex_tm_good(r: R.TmR, +at: Bool, +now: Nat, +w: String, +e: Nat) -> Good(Some{KV.Item{KV.VStr{w}, e}}, ch_of(R.getex.tm(w, at, now, e, r))):
   match r:
     case R.TOk{+tt}:
       getex_at_good(R.at.of(tt, now), w, at, now, w, e)
     case R.TBad{z}:
       {==}
 
-def getex_good(o: R.ExOpt, +now: Nat, +w: String, +e: Nat) -> Good(Some{KV.Item{w, e}}, ch_of(R.getex.ent(o, now, w, e))):
+def getex_good(o: R.ExOpt, +now: Nat, +w: String, +e: Nat) -> Good(Some{KV.Item{KV.VStr{w}, e}}, ch_of(R.getex.ent(o, now, w, e))):
   match o:
     case R.XNone{}:
       {==}
     case R.XPersist{}:
-      pers_go(Nat.is_eq(e, 0n), w, e)({==})
+      pers_go(Nat.is_eq(e, 0n), KV.VStr{w}, e)({==})
     case R.XAt{+at, +ms, +s}:
       getex_tm_good(R.tm.of(s, at, Bool.not(ms), True{}, "getex"), at, now, w, e)
 
-def expire_do_good(ok: Bool, +now: Nat, +tt: R.At, +w: String, +e: Nat) -> Good(Some{KV.Item{w, e}}, ch_of(R.expire.do(now, e, tt, ok))):
+def expire_do_good(ok: Bool, +now: Nat, +tt: R.At, -y: KV.Val, +e: Nat) -> Good(Some{KV.Item{y, e}}, ch_of(R.expire.do(now, e, tt, ok))):
   match ok:
     case True{}:
-      dexp_good(R.at.past(tt, now), KV.clamp(R.at.exp(tt)), e, w, clamp_idem(R.at.exp(tt)))
+      dexp_good(R.at.past(tt, now), KV.clamp(R.at.exp(tt)), e, y, clamp_idem(R.at.exp(tt)))
     case False{}:
       {==}
 
-def expire_some(a: Maybe<&2, R.At>, +c: R.ExpIf, +name: String, +now: Nat, +w: String, +e: Nat) -> Good(Some{KV.Item{w, e}}, ch_of(R.expire.at(c, name, now, a, Some{KV.Item{w, e}}))):
+def expire_some(a: Maybe<&2, R.At>, +c: R.ExpIf, +name: String, +now: Nat, +w: String, -y: KV.Val, +e: Nat) -> Good(Some{KV.Item{y, e}}, ch_of(R.expire.at(c, name, now, a, Some{KV.Item{w, e}}))):
   match a:
     case Some{+tt}:
-      expire_do_good(R.expire.ok(c, tt, e), now, tt, w, e)
+      expire_do_good(R.expire.ok(c, tt, e), now, tt, y, e)
     case None{}:
       {==}
 
-def incr_fit_some(ok: Bool, +i: R.Int, -w: String, -e: Nat) -> Good(Some{KV.Item{w, e}}, ch_of(R.uincr.fit(i, ok, True{}))):
+def incr_fit_some(ok: Bool, +i: R.Int, -w: KV.Val, -e: Nat) -> Good(Some{KV.Item{w, e}}, ch_of(R.uincr.fit(i, ok, True{}))):
   match ok:
     case True{}:
       {==}
     case False{}:
       {==}
 
-def incr_num_some(cur: Maybe<&2, R.Int>, +by: R.Int, -w: String, -e: Nat) -> Good(Some{KV.Item{w, e}}, ch_of(R.uincr.num(by, cur))):
+def incr_num_some(cur: Maybe<&2, R.Int>, +by: R.Int, -w: KV.Val, -e: Nat) -> Good(Some{KV.Item{w, e}}, ch_of(R.uincr.num(by, cur))):
   match cur:
     case Some{+i}:
       incr_fit_some(R.int_fits(R.int_add(i, by)), R.int_add(i, by), w, e)
@@ -6082,27 +6278,27 @@ def incr_num_some(cur: Maybe<&2, R.Int>, +by: R.Int, -w: String, -e: Nat) -> Goo
       {==}
 
 # of a key there, with value w and time e
-def good_some(op: R.UpdOp, +now: Nat, +w: String, +e: Nat) -> Good(Some{KV.Item{w, e}}, ch_of(R.upd(op, now, Some{KV.Item{w, e}}))):
+def good_some(op: R.UpdOp, +now: Nat, +w: String, +e: Nat) -> Good(Some{KV.Item{KV.VStr{w}, e}}, ch_of(R.upd(op, now, Some{KV.Item{w, e}}))):
   match op:
     case R.USetNx{v}:
       {==}
     case R.UGet{+o}:
-      %Equal.sym(R.Change, ch_of(R.get.out(R.RBulk{w}, R.upd(o, now, Some{KV.Item{w, e}}))), ch_of(R.upd(o, now, Some{KV.Item{w, e}})), get_ch(R.RBulk{w}, R.upd(o, now, Some{KV.Item{w, e}}))) : Good(Some{KV.Item{w, e}}, _)
+      %Equal.sym(R.Change, ch_of(R.get.out(R.RBulk{w}, R.upd(o, now, Some{KV.Item{w, e}}))), ch_of(R.upd(o, now, Some{KV.Item{w, e}})), get_ch(R.RBulk{w}, R.upd(o, now, Some{KV.Item{w, e}}))) : Good(Some{KV.Item{KV.VStr{w}, e}}, _)
       good_some(o, now, w, e)
     case R.UAppend{s}:
       {==}
     case R.USet{+v, +cond, ttl, +name}:
-      uset_some(ttl, v, cond, name, now, w, e)
+      uset_some(ttl, v, cond, name, now, w, KV.VStr{w}, e)
     case R.UGetEx{o}:
       getex_good(o, now, w, e)
     case R.UGetDel{}:
       {==}
     case R.UExpire{+tt, +c, +name}:
-      expire_some(R.at.of(tt, now), c, name, now, w, e)
+      expire_some(R.at.of(tt, now), c, name, now, w, KV.VStr{w}, e)
     case R.UPersist{}:
-      persist_go(Nat.is_eq(e, 0n), w, e)({==})
+      persist_go(Nat.is_eq(e, 0n), KV.VStr{w}, e)({==})
     case R.UIncr{+by}:
-      incr_num_some(R.int_read(w), by, w, e)
+      incr_num_some(R.int_read(w), by, KV.VStr{w}, e)
     case R.URange{+o, +a}:
       range_some_good(R.range.go(o, a), o, a, w, e, String.is_empty(a))({==})
     case R.USetBit{+o, +on}:
@@ -6110,14 +6306,50 @@ def good_some(op: R.UpdOp, +now: Nat, +w: String, +e: Nat) -> Good(Some{KV.Item{
     case R.UBitfield{+ops}:
       bf_some(R.bf.run0(ops, w), R.bf.lo0(ops), w, e)
 
-def ug_b(b: Bool, op: R.UpdOp, +now: Nat, +w: String, +e: Nat) -> Good(Some{KV.Item{w, e}}, ch_of(R.upd(op, now, Bool.pick(Maybe<&2, KV.Item<String>>, b, Some{KV.Item{w, e}}, None{})))):
+# of a key there that holds a collection: SET, SETNX, EXPIRE and its kin
+# and PERSIST act on it as on a string, any other changes nothing
+def good_coll(op: R.UpdOp, +now: Nat, -c: KV.Coll, +e: Nat) -> Good(Some{KV.Item{KV.VColl{c}, e}}, ch_of(R.upd.coll(R.upd.any(op), op, now, e))):
+  match op:
+    case R.USetNx{v}:
+      {==}
+    case R.UGet{o}:
+      {==}
+    case R.UAppend{a}:
+      {==}
+    case R.USet{+v, +cond, ttl, +name}:
+      uset_some(ttl, v, cond, name, now, "", KV.VColl{c}, e)
+    case R.UGetEx{o}:
+      {==}
+    case R.UGetDel{}:
+      {==}
+    case R.UExpire{+tt, +x, +name}:
+      expire_some(R.at.of(tt, now), x, name, now, "", KV.VColl{c}, e)
+    case R.UPersist{}:
+      persist_go(Nat.is_eq(e, 0n), KV.VColl{c}, e)({==})
+    case R.UIncr{by}:
+      {==}
+    case R.URange{o, a}:
+      {==}
+    case R.USetBit{o, on}:
+      {==}
+    case R.UBitfield{ops}:
+      {==}
+
+def ug_v(w: KV.Val, op: R.UpdOp, +now: Nat, +e: Nat) -> Good(Some{KV.Item{w, e}}, ch_of(R.upd.v(op, now, Some{KV.Item{w, e}}))):
+  match w:
+    case KV.VStr{+u}:
+      good_some(op, now, u, e)
+    case KV.VColl{c}:
+      good_coll(op, now, c, e)
+
+def ug_b(b: Bool, op: R.UpdOp, +now: Nat, +w: KV.Val, +e: Nat) -> Good(Some{KV.Item{w, e}}, ch_of(R.upd.v(op, now, Bool.pick(Maybe<&2, KV.Item<KV.Val>>, b, Some{KV.Item{w, e}}, None{})))):
   match b:
     case True{}:
-      good_some(op, now, w, e)
+      ug_v(w, op, now, e)
     case False{}:
       good_none(op, now, Some{KV.Item{w, e}})
 
-def upd_good(op: R.UpdOp, +now: Nat, m: Maybe<&2, KV.Item<String>>) -> Good(m, ch_of(R.upd(op, now, R.ent.live(now, m)))):
+def upd_good(op: R.UpdOp, +now: Nat, m: Maybe<&2, KV.Item<KV.Val>>) -> Good(m, ch_of(R.upd.v(op, now, R.ent.live(now, m)))):
   match m:
     case Some{KV.Item{+w, +e}}:
       ug_b(KV.live(now, e), op, now, w, e)
@@ -6143,33 +6375,33 @@ def comp(xs: List<&2, R.Cmd>, +ys: List<&2, R.Cmd>, +d: R.Db) -> {Laws.final(R.e
 # DEL's database: the entries it took away, how many of them had a time,
 # and the trie it left; none of them depends on the time (only the reply
 # does, which counts the keys there at now)
-def dc(r: R.Dels) -> Nat & (Nat & KV.Trie<String>):
+def dc(r: R.Dels) -> Nat & (Nat & KV.Trie<KV.Val>):
   match r:
     case R.Dels{live, gone, gonex, t}:
       (gone, (gonex, t))
 
-def dput(+c: Nat, q: Nat & (Nat & KV.Trie<String>)) -> Nat & (Nat & KV.Trie<String>):
+def dput(+c: Nat, q: Nat & (Nat & KV.Trie<KV.Val>)) -> Nat & (Nat & KV.Trie<KV.Val>):
   (g, p) = q
   (gx, t) = p
   (Nat.add(g, Bool.pick(Nat, Nat.is_eq(c, 0n), 0n, 1n)), (Nat.add(gx, Bool.pick(Nat, Nat.is_lt(1n, c), 1n, 0n)), t))
 
-def dc_put(+c: Nat, +now: Nat, r: R.Dels) -> {dput(c, dc(r)) == dc(R.del_keys.put(c, now, r)) : Nat & (Nat & KV.Trie<String>)}:
+def dc_put(+c: Nat, +now: Nat, r: R.Dels) -> {dput(c, dc(r)) == dc(R.del_keys.put(c, now, r)) : Nat & (Nat & KV.Trie<KV.Val>)}:
   match r:
     case R.Dels{live, gone, gonex, t}:
       {==}
 
-def dc_now(ks: List<&2, String>, +now: Nat, +t: KV.Trie<String>) -> {dc(R.del_keys(ks, 0n, t)) == dc(R.del_keys(ks, now, t)) : Nat & (Nat & KV.Trie<String>)}:
+def dc_now(ks: List<&2, String>, +now: Nat, +t: KV.Trie<KV.Val>) -> {dc(R.del_keys(ks, 0n, t)) == dc(R.del_keys(ks, now, t)) : Nat & (Nat & KV.Trie<KV.Val>)}:
   match ks:
     case Nil{}:
       {==}
     case Con{+k, +rest}:
-      %dc_put(KV.code.at(String, t, k, KV.hash(k)), 0n, R.del_keys(rest, 0n, KV.del.at(String, t, k, KV.hash(k)))) : {_ == dc(R.del_keys.put(KV.code.at(String, t, k, KV.hash(k)), now, R.del_keys(rest, now, KV.del.at(String, t, k, KV.hash(k))))) : Nat & (Nat & KV.Trie<String>)}
-      %dc_put(KV.code.at(String, t, k, KV.hash(k)), now, R.del_keys(rest, now, KV.del.at(String, t, k, KV.hash(k)))) : {dput(KV.code.at(String, t, k, KV.hash(k)), dc(R.del_keys(rest, 0n, KV.del.at(String, t, k, KV.hash(k))))) == _ : Nat & (Nat & KV.Trie<String>)}
-      %dc_now(rest, now, KV.del.at(String, t, k, KV.hash(k))) : {dput(KV.code.at(String, t, k, KV.hash(k)), dc(R.del_keys(rest, 0n, KV.del.at(String, t, k, KV.hash(k))))) == dput(KV.code.at(String, t, k, KV.hash(k)), _) : Nat & (Nat & KV.Trie<String>)}
+      %dc_put(KV.code.at(KV.Val, t, k, KV.hash(k)), 0n, R.del_keys(rest, 0n, KV.del.at(KV.Val, t, k, KV.hash(k)))) : {_ == dc(R.del_keys.put(KV.code.at(KV.Val, t, k, KV.hash(k)), now, R.del_keys(rest, now, KV.del.at(KV.Val, t, k, KV.hash(k))))) : Nat & (Nat & KV.Trie<KV.Val>)}
+      %dc_put(KV.code.at(KV.Val, t, k, KV.hash(k)), now, R.del_keys(rest, now, KV.del.at(KV.Val, t, k, KV.hash(k)))) : {dput(KV.code.at(KV.Val, t, k, KV.hash(k)), dc(R.del_keys(rest, 0n, KV.del.at(KV.Val, t, k, KV.hash(k))))) == _ : Nat & (Nat & KV.Trie<KV.Val>)}
+      %dc_now(rest, now, KV.del.at(KV.Val, t, k, KV.hash(k))) : {dput(KV.code.at(KV.Val, t, k, KV.hash(k)), dc(R.del_keys(rest, 0n, KV.del.at(KV.Val, t, k, KV.hash(k))))) == dput(KV.code.at(KV.Val, t, k, KV.hash(k)), _) : Nat & (Nat & KV.Trie<KV.Val>)}
       {==}
 
 # DEL's database at time 0, from what it took away
-def ddb(q: Nat & (Nat & KV.Trie<String>), +n: Nat, +x: Nat, rr: Maybe<&2, R.Db>) -> R.Db:
+def ddb(q: Nat & (Nat & KV.Trie<KV.Val>), +n: Nat, +x: Nat, rr: Maybe<&2, R.Db>) -> R.Db:
   (g, p) = q
   (gx, t) = p
   R.Db{t, Nat.sub(n, g), Nat.sub(x, gx), 0n, rr}
@@ -6185,23 +6417,23 @@ def ddb_eq0(r: R.Dels, +n: Nat, +x: Nat, +rr: Maybe<&2, R.Db>) -> {ddb(dc(r), n,
       {==}
 
 # DEL at time 0 leaves the database DEL leaves at any time, at time 0
-def del_at0(+ks: List<&2, String>, +t: KV.Trie<String>, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>) -> {R.db_of(R.del.db(R.del_keys(ks, 0n, t), n, x, 0n, rr)) == R.db.at(0n, R.db_of(R.del.db(R.del_keys(ks, now, t), n, x, now, rr))) : R.Db}:
+def del_at0(+ks: List<&2, String>, +t: KV.Trie<KV.Val>, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>) -> {R.db_of(R.del.db(R.del_keys(ks, 0n, t), n, x, 0n, rr)) == R.db.at(0n, R.db_of(R.del.db(R.del_keys(ks, now, t), n, x, now, rr))) : R.Db}:
   %ddb_eq0(R.del_keys(ks, 0n, t), n, x, rr) : {_ == R.db.at(0n, R.db_of(R.del.db(R.del_keys(ks, now, t), n, x, now, rr))) : R.Db}
   %ddb_eq(R.del_keys(ks, now, t), n, x, now, rr) : {ddb(dc(R.del_keys(ks, 0n, t)), n, x, rr) == _ : R.Db}
   %dc_now(ks, now, t) : {ddb(dc(R.del_keys(ks, 0n, t)), n, x, rr) == ddb(_, n, x, rr) : R.Db}
   {==}
 
 # and so does MSET
-def mset_at0(ps: List<&2, R.KVPair>, +t: KV.Trie<String>, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>) -> {R.mset_pairs(ps, R.Db{t, n, x, 0n, rr}) == R.db.at(0n, R.mset_pairs(ps, R.Db{t, n, x, now, rr})) : R.Db}:
+def mset_at0(ps: List<&2, R.KVPair>, +t: KV.Trie<KV.Val>, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>) -> {R.mset_pairs(ps, R.Db{t, n, x, 0n, rr}) == R.db.at(0n, R.mset_pairs(ps, R.Db{t, n, x, now, rr})) : R.Db}:
   match ps:
     case Nil{}:
       {==}
     case Con{R.KP{+k, +v}, +rest}:
-      mset_at0(rest, KV.set.at(String, t, k, v, KV.hash(k)), R.cnt.n(KV.code.at(String, t, k, KV.hash(k)), n), R.cnt.x(KV.code.at(String, t, k, KV.hash(k)), 0n, x), now, rr)
+      mset_at0(rest, KV.set.at(KV.Val, t, k, KV.VStr{v}, KV.hash(k)), R.cnt.n(KV.code.at(KV.Val, t, k, KV.hash(k)), n), R.cnt.x(KV.code.at(KV.Val, t, k, KV.hash(k)), 0n, x), now, rr)
 
 # MSETNX's effects, run at time 0, leave the database MSETNX left, at
 # time 0: none when it set nothing, else its MSET (mset_at0)
-def msetnx_at0(b: Bool, ps: List<&2, R.KVPair>, +t: KV.Trie<String>, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>) -> {Laws.final(R.exec_all(A.msetnx.effect(b, ps), R.Db{t, n, x, 0n, rr})) == R.db.at(0n, R.db_of(R.msetnx.of(b, ps, R.Db{t, n, x, now, rr}))) : R.Db}:
+def msetnx_at0(b: Bool, ps: List<&2, R.KVPair>, +t: KV.Trie<KV.Val>, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>) -> {Laws.final(R.exec_all(A.msetnx.effect(b, ps), R.Db{t, n, x, 0n, rr})) == R.db.at(0n, R.db_of(R.msetnx.of(b, ps, R.Db{t, n, x, now, rr}))) : R.Db}:
   match b:
     case True{}:
       {==}
@@ -6215,13 +6447,13 @@ def msetnx_at0(b: Bool, ps: List<&2, R.KVPair>, +t: KV.Trie<String>, +n: Nat, +x
 # RENAME's effect, run at time 0, leaves the database RENAME left, at time
 # 0: none when it moved nothing, else a RENAME, which finds at time 0 the
 # entry RENAME moved (an entry there at now is there at 0)
-def ren_find0(+t: KV.Trie<String>, +n: Nat, +x: Nat, +rr: Maybe<&2, R.Db>, +s: String, +d: String, +v: String, +e: Nat, em: {KV.entry.at(String, t, s, KV.hash(s)) == Some{KV.Item{v, e}} : Maybe<&2, KV.Item<String>>}, es: {KV.str_eq(s, d) == False{} : Bool}) -> {R.ren.find(R.Db{t, n, x, 0n, rr}, s, d, False{}) == R.RnMove{v, e} : R.Ren}:
-  %Equal.sym(Maybe<&2, KV.Item<String>>, KV.entry.at(String, t, s, KV.hash(s)), Some{KV.Item{v, e}}, em) : {R.ren.of(R.ent.live(0n, _), KV.str_eq(s, d), False{}) == R.RnMove{v, e} : R.Ren}
+def ren_find0(+t: KV.Trie<KV.Val>, +n: Nat, +x: Nat, +rr: Maybe<&2, R.Db>, +s: String, +d: String, +v: KV.Val, +e: Nat, em: {KV.entry.at(KV.Val, t, s, KV.hash(s)) == Some{KV.Item{v, e}} : Maybe<&2, KV.Item<KV.Val>>}, es: {KV.str_eq(s, d) == False{} : Bool}) -> {R.ren.find(R.Db{t, n, x, 0n, rr}, s, d, False{}) == R.RnMove{v, e} : R.Ren}:
+  %Equal.sym(Maybe<&2, KV.Item<KV.Val>>, KV.entry.at(KV.Val, t, s, KV.hash(s)), Some{KV.Item{v, e}}, em) : {R.ren.of(R.ent.live(0n, _), KV.str_eq(s, d), False{}) == R.RnMove{v, e} : R.Ren}
   %Equal.sym(Bool, KV.str_eq(s, d), False{}, es) : {R.ren.of(R.ent.live(0n, Some{KV.Item{v, e}}), _, False{}) == R.RnMove{v, e} : R.Ren}
-  %Equal.sym(Maybe<&2, KV.Item<String>>, R.ent.live(0n, Some{KV.Item{v, e}}), Some{KV.Item{v, e}}, live0_ent(Some{KV.Item{v, e}})) : {R.ren.of(_, False{}, False{}) == R.RnMove{v, e} : R.Ren}
+  %Equal.sym(Maybe<&2, KV.Item<KV.Val>>, R.ent.live(0n, Some{KV.Item{v, e}}), Some{KV.Item{v, e}}, live0_ent(Some{KV.Item{v, e}})) : {R.ren.of(_, False{}, False{}) == R.RnMove{v, e} : R.Ren}
   {==}
 
-def ren_at0_b(b: Bool, same: Bool, held: Bool, +nx: Bool, +s: String, +d: String, +v: String, +e: Nat, +t: KV.Trie<String>, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>, em: {KV.entry.at(String, t, s, KV.hash(s)) == Some{KV.Item{v, e}} : Maybe<&2, KV.Item<String>>}) -> {KV.str_eq(s, d) == same : Bool} -> {Laws.final(R.exec_all(A.ren.effect(R.ren.of(Bool.pick(Maybe<&2, KV.Item<String>>, b, Some{KV.Item{v, e}}, None{}), same, held), s, d), R.Db{t, n, x, 0n, rr})) == R.db.at(0n, R.db_of(R.ren.do(R.ren.of(Bool.pick(Maybe<&2, KV.Item<String>>, b, Some{KV.Item{v, e}}, None{}), same, held), nx, s, d, R.Db{t, n, x, now, rr}))) : R.Db}:
+def ren_at0_b(b: Bool, same: Bool, held: Bool, +nx: Bool, +s: String, +d: String, +v: KV.Val, +e: Nat, +t: KV.Trie<KV.Val>, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>, em: {KV.entry.at(KV.Val, t, s, KV.hash(s)) == Some{KV.Item{v, e}} : Maybe<&2, KV.Item<KV.Val>>}) -> {KV.str_eq(s, d) == same : Bool} -> {Laws.final(R.exec_all(A.ren.effect(R.ren.of(Bool.pick(Maybe<&2, KV.Item<KV.Val>>, b, Some{KV.Item{v, e}}, None{}), same, held), s, d), R.Db{t, n, x, 0n, rr})) == R.db.at(0n, R.db_of(R.ren.do(R.ren.of(Bool.pick(Maybe<&2, KV.Item<KV.Val>>, b, Some{KV.Item{v, e}}, None{}), same, held), nx, s, d, R.Db{t, n, x, now, rr}))) : R.Db}:
   match b same held:
     case False{} _ _:
       es => {==}
@@ -6235,7 +6467,7 @@ def ren_at0_b(b: Bool, same: Bool, held: Bool, +nx: Bool, +s: String, +d: String
         %Equal.sym(R.Ren, R.ren.find(R.Db{t, n, x, 0n, rr}, s, d, False{}), R.RnMove{v, e}, ren_find0(t, n, x, rr, s, d, v, e, em, es)) : {R.db_of(R.ren.do(_, False{}, s, d, R.Db{t, n, x, 0n, rr})) == R.db.at(0n, R.db.renamed(R.Db{t, n, x, now, rr}, s, d, v, e)) : R.Db}
         {==}
 
-def ren_at0(m: Maybe<&2, KV.Item<String>>, same: Bool, held: Bool, +nx: Bool, +s: String, +d: String, +t: KV.Trie<String>, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>) -> {KV.entry.at(String, t, s, KV.hash(s)) == m : Maybe<&2, KV.Item<String>>} -> {KV.str_eq(s, d) == same : Bool} -> {Laws.final(R.exec_all(A.ren.effect(R.ren.of(R.ent.live(now, m), same, held), s, d), R.Db{t, n, x, 0n, rr})) == R.db.at(0n, R.db_of(R.ren.do(R.ren.of(R.ent.live(now, m), same, held), nx, s, d, R.Db{t, n, x, now, rr}))) : R.Db}:
+def ren_at0(m: Maybe<&2, KV.Item<KV.Val>>, same: Bool, held: Bool, +nx: Bool, +s: String, +d: String, +t: KV.Trie<KV.Val>, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>) -> {KV.entry.at(KV.Val, t, s, KV.hash(s)) == m : Maybe<&2, KV.Item<KV.Val>>} -> {KV.str_eq(s, d) == same : Bool} -> {Laws.final(R.exec_all(A.ren.effect(R.ren.of(R.ent.live(now, m), same, held), s, d), R.Db{t, n, x, 0n, rr})) == R.db.at(0n, R.db_of(R.ren.do(R.ren.of(R.ent.live(now, m), same, held), nx, s, d, R.Db{t, n, x, now, rr}))) : R.Db}:
   match m:
     case None{}:
       em => es => {==}
@@ -6244,7 +6476,7 @@ def ren_at0(m: Maybe<&2, KV.Item<String>>, same: Bool, held: Bool, +nx: Bool, +s
 
 # BITOP's effect, the SET of its value or the DEL of its destination,
 # replays at time 0 as BITOP ran
-def bitop_at0(e: Bool, +v: String, +d: String, +t: KV.Trie<String>, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>) -> {Laws.final(R.exec_all(A.bitop.effect(e, v, d), R.Db{t, n, x, 0n, rr})) == R.db.at(0n, R.bitop.db(e, v, d, R.Db{t, n, x, now, rr})) : R.Db}:
+def bitop_at0(e: Bool, +v: String, +d: String, +t: KV.Trie<KV.Val>, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>) -> {Laws.final(R.exec_all(A.bitop.effect(e, v, d), R.Db{t, n, x, 0n, rr})) == R.db.at(0n, R.bitop.db(e, v, d, R.Db{t, n, x, now, rr})) : R.Db}:
   match e:
     case True{}:
       %fin_cons(R.Del{[d]}, Nil{}, R.Db{t, n, x, 0n, rr}) : {_ == R.db.at(0n, R.bitop.db(True{}, v, d, R.Db{t, n, x, now, rr})) : R.Db}
@@ -6252,10 +6484,18 @@ def bitop_at0(e: Bool, +v: String, +d: String, +t: KV.Trie<String>, +n: Nat, +x:
     case False{}:
       {==}
 
+# none when a source holds a collection
+def bitop_do_at0(w: Bool, +op: R.BitK, +d: String, +srcs: List<&2, String>, +t: KV.Trie<KV.Val>, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>) -> {Laws.final(R.exec_all(A.bitop.eff(w, op, d, srcs, R.Db{t, n, x, now, rr}), R.Db{t, n, x, 0n, rr})) == R.db.at(0n, R.db_of(R.bitop.do(w, op, d, srcs, R.Db{t, n, x, now, rr}))) : R.Db}:
+  match w:
+    case True{}:
+      {==}
+    case False{}:
+      bitop_at0(String.is_empty(R.bitop.val(op, srcs, now, t)), R.bitop.val(op, srcs, now, t), d, t, n, x, now, rr)
+
 # a command's effects, run at time 0 on the database it ran on, leave the
 # database it left, at time 0: an update's (and INCRBY's) by its change
 # (out_replay), as the change is a good one (upd_good)
-def effect_go(c: R.Cmd, +t: KV.Trie<String>, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>) -> {Laws.final(R.exec_all(eff(c, R.Db{t, n, x, now, rr}), R.Db{t, n, x, 0n, rr})) == R.db.at(0n, R.db_of(R.exec(c, R.Db{t, n, x, now, rr}))) : R.Db}:
+def effect_go(c: R.Cmd, +t: KV.Trie<KV.Val>, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>) -> {Laws.final(R.exec_all(eff(c, R.Db{t, n, x, now, rr}), R.Db{t, n, x, 0n, rr})) == R.db.at(0n, R.db_of(R.exec(c, R.Db{t, n, x, now, rr}))) : R.Db}:
   match c:
     case R.Ping{}:
       {==}
@@ -6277,8 +6517,8 @@ def effect_go(c: R.Cmd, +t: KV.Trie<String>, +n: Nat, +x: Nat, +now: Nat, +rr: M
     case R.Exists{ks}:
       {==}
     case R.IncrBy{+k, +by}:
-      %Equal.sym(R.Reply & R.Db, R.exec(R.IncrBy{k, by}, R.Db{t, n, x, now, rr}), R.upd.put(t, k, KV.hash(k), n, x, now, rr, R.ent.code(KV.entry.at(String, t, k, KV.hash(k))), R.upd(R.UIncr{by}, now, R.ent.live(now, KV.entry.at(String, t, k, KV.hash(k))))), incr_upd_eq(t, k, by, n, x, now, rr)) : {Laws.final(R.exec_all(eff(R.IncrBy{k, by}, R.Db{t, n, x, now, rr}), R.Db{t, n, x, 0n, rr})) == R.db.at(0n, R.db_of(_)) : R.Db}
-      out_replay(R.upd(R.UIncr{by}, now, R.ent.live(now, KV.entry.at(String, t, k, KV.hash(k)))), KV.entry.at(String, t, k, KV.hash(k)), t, k, n, x, now, rr)({==})(upd_good(R.UIncr{by}, now, KV.entry.at(String, t, k, KV.hash(k))))
+      %Equal.sym(R.Reply & R.Db, R.exec(R.IncrBy{k, by}, R.Db{t, n, x, now, rr}), R.upd.put(t, k, KV.hash(k), n, x, now, rr, R.ent.code(KV.entry.at(KV.Val, t, k, KV.hash(k))), R.upd.v(R.UIncr{by}, now, R.ent.live(now, KV.entry.at(KV.Val, t, k, KV.hash(k))))), incr_upd_eq(t, k, by, n, x, now, rr)) : {Laws.final(R.exec_all(eff(R.IncrBy{k, by}, R.Db{t, n, x, now, rr}), R.Db{t, n, x, 0n, rr})) == R.db.at(0n, R.db_of(_)) : R.Db}
+      out_replay(R.upd.v(R.UIncr{by}, now, R.ent.live(now, KV.entry.at(KV.Val, t, k, KV.hash(k)))), KV.entry.at(KV.Val, t, k, KV.hash(k)), t, k, n, x, now, rr)({==})(upd_good(R.UIncr{by}, now, KV.entry.at(KV.Val, t, k, KV.hash(k))))
     case R.MGet{ks}:
       {==}
     case R.MSet{ps}:
@@ -6298,13 +6538,13 @@ def effect_go(c: R.Cmd, +t: KV.Trie<String>, +n: Nat, +x: Nat, +now: Nat, +rr: M
     case R.Peek{k, o}:
       {==}
     case R.Upd{+k, +op}:
-      out_replay(R.upd(op, now, R.ent.live(now, KV.entry.at(String, t, k, KV.hash(k)))), KV.entry.at(String, t, k, KV.hash(k)), t, k, n, x, now, rr)({==})(upd_good(op, now, KV.entry.at(String, t, k, KV.hash(k))))
+      out_replay(R.upd.v(op, now, R.ent.live(now, KV.entry.at(KV.Val, t, k, KV.hash(k)))), KV.entry.at(KV.Val, t, k, KV.hash(k)), t, k, n, x, now, rr)({==})(upd_good(op, now, KV.entry.at(KV.Val, t, k, KV.hash(k))))
     case R.MSetNx{+ps}:
       msetnx_at0(R.pairs.live(ps, now, t), ps, t, n, x, now, rr)
     case R.Rename{+s, +d, +nx}:
-      ren_at0(KV.entry.at(String, t, s, KV.hash(s)), KV.str_eq(s, d), Bool.and(nx, Maybe.is_some(&2, KV.Item<String>, R.ent.live(now, KV.entry.at(String, t, d, KV.hash(d))))), nx, s, d, t, n, x, now, rr)({==})({==})
+      ren_at0(KV.entry.at(KV.Val, t, s, KV.hash(s)), KV.str_eq(s, d), Bool.and(nx, Maybe.is_some(&2, KV.Item<KV.Val>, R.ent.live(now, KV.entry.at(KV.Val, t, d, KV.hash(d))))), nx, s, d, t, n, x, now, rr)({==})({==})
     case R.BitOp{+op, +d, +srcs}:
-      bitop_at0(String.is_empty(R.bitop.val(op, srcs, now, t)), R.bitop.val(op, srcs, now, t), d, t, n, x, now, rr)
+      bitop_do_at0(R.bitop.wrong(srcs, now, t), op, d, srcs, t, n, x, now, rr)
     case R.Own{o}:
       {==}
     case R.Bad{r}:
@@ -6455,7 +6695,7 @@ def exp_args(f: Nat, +k: String) -> {KV.clamp(f) == f : Nat} -> {A.ch.effect(k, 
         %num14_show(p, fixed_small(p, fx)) : {[R.Upd{k, R.UExpire{R.TmN{True{}, 1n+p}, R.ExpIf{False{}, False{}, False{}, False{}}, "pexpireat"}}] == [R.exp.ttl.cmd(k, R.ExpIf{False{}, False{}, False{}, False{}}, R.tm.of.go(_, Nat.show(1n+p), True{}, False{}, False{}, "pexpireat"), "pexpireat")] : List<&2, R.Cmd>}
         {==}
 
-def expg_args(f: Nat, +k: String, -w: String, -e: Nat, g: GoodExp(Some{KV.Item{w, e}}, f)) -> {A.ch.effect(k, R.CExp{f}) == A.parse_all(A.args_all(A.ch.effect(k, R.CExp{f}))) : List<&2, R.Cmd>}:
+def expg_args(f: Nat, +k: String, -w: KV.Val, -e: Nat, g: GoodExp(Some{KV.Item{w, e}}, f)) -> {A.ch.effect(k, R.CExp{f}) == A.parse_all(A.args_all(A.ch.effect(k, R.CExp{f}))) : List<&2, R.Cmd>}:
   (fx, nz) = g
   exp_args(f, k)(fx)
 
@@ -6481,11 +6721,11 @@ def range_args(o: Nat, +k: String, +a: String, -v: String) -> {KV.small(o) == Tr
         %num14_show(p, sm) : {[R.Upd{k, R.URange{1n+p, a}}] == [R.setrange.of(k, _, Nat.show(1n+p), a)] : List<&2, R.Cmd>}
         {==}
 
-def range_args_go(+o: Nat, +k: String, +a: String, -v: String, -w: String, -e: Nat, g: GoodRange(Some{KV.Item{w, e}}, o, a, v)) -> {A.ch.effect(k, R.CRange{o, a, v}) == A.parse_all(A.args_all(A.ch.effect(k, R.CRange{o, a, v}))) : List<&2, R.Cmd>}:
+def range_args_go(+o: Nat, +k: String, +a: String, -v: String, -w: String, -e: Nat, g: GoodRange(Some{KV.Item{KV.VStr{w}, e}}, o, a, v)) -> {A.ch.effect(k, R.CRange{o, a, v}) == A.parse_all(A.args_all(A.ch.effect(k, R.CRange{o, a, v}))) : List<&2, R.Cmd>}:
   (ok, gv) = g
   range_args(o, k, a, v)(range_small(o, a, ok))
 
-def ch_args(ch: R.Change, m: Maybe<&2, KV.Item<String>>, +k: String) -> Good(m, ch) -> {A.ch.effect(k, ch) == A.parse_all(A.args_all(A.ch.effect(k, ch))) : List<&2, R.Cmd>}:
+def ch_args(ch: R.Change, m: Maybe<&2, KV.Item<KV.Val>>, +k: String) -> Good(m, ch) -> {A.ch.effect(k, ch) == A.parse_all(A.args_all(A.ch.effect(k, ch))) : List<&2, R.Cmd>}:
   match ch m:
     case R.CKeep{} _:
       g => {==}
@@ -6501,12 +6741,14 @@ def ch_args(ch: R.Change, m: Maybe<&2, KV.Item<String>>, +k: String) -> Good(m, 
       g => {==}
     case R.CApp{s, v} _:
       g => {==}
-    case R.CRange{o, a, v} Some{KV.Item{w, e}}:
+    case R.CRange{o, a, v} Some{KV.Item{KV.VStr{w}, e}}:
       g => range_args_go(o, k, a, v, w, e, g)
+    case R.CRange{o, a, v} Some{KV.Item{KV.VColl{c}, e}}:
+      g => Empty.absurd({A.ch.effect(k, R.CRange{o, a, v}) == A.parse_all(A.args_all(A.ch.effect(k, R.CRange{o, a, v}))) : List<&2, R.Cmd>}, g)
     case R.CRange{o, a, v} None{}:
       g => Empty.absurd({A.ch.effect(k, R.CRange{o, a, v}) == A.parse_all(A.args_all(A.ch.effect(k, R.CRange{o, a, v}))) : List<&2, R.Cmd>}, g)
 
-def out_args(o: R.Out, m: Maybe<&2, KV.Item<String>>, +k: String) -> Good(m, ch_of(o)) -> {A.upd.effect(k, o) == A.parse_all(A.args_all(A.upd.effect(k, o))) : List<&2, R.Cmd>}:
+def out_args(o: R.Out, m: Maybe<&2, KV.Item<KV.Val>>, +k: String) -> Good(m, ch_of(o)) -> {A.upd.effect(k, o) == A.parse_all(A.args_all(A.upd.effect(k, o))) : List<&2, R.Cmd>}:
   match o:
     case R.Out{r, ch}:
       g => ch_args(ch, m, k)(g)
@@ -6542,8 +6784,15 @@ def bitop_args(e: Bool, +v: String, +d: String) -> {A.bitop.effect(e, v, d) == A
     case False{}:
       {==}
 
+def bitop_do_args(w: Bool, +op: R.BitK, +d: String, +srcs: List<&2, String>, +x: R.Db) -> {A.bitop.eff(w, op, d, srcs, x) == A.parse_all(A.args_all(A.bitop.eff(w, op, d, srcs, x))) : List<&2, R.Cmd>}:
+  match w:
+    case True{}:
+      {==}
+    case False{}:
+      bitop_args(String.is_empty(R.bitop.val(op, srcs, R.db.now(x), R.db.trie(x))), R.bitop.val(op, srcs, R.db.now(x), R.db.trie(x)), d)
+
 # a command's effects parse back to themselves
-def args_go(c: R.Cmd, +t: KV.Trie<String>, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>) -> {eff(c, R.Db{t, n, x, now, rr}) == A.parse_all(A.args_all(eff(c, R.Db{t, n, x, now, rr}))) : List<&2, R.Cmd>}:
+def args_go(c: R.Cmd, +t: KV.Trie<KV.Val>, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>) -> {eff(c, R.Db{t, n, x, now, rr}) == A.parse_all(A.args_all(eff(c, R.Db{t, n, x, now, rr}))) : List<&2, R.Cmd>}:
   match c:
     case R.Ping{}:
       {==}
@@ -6562,7 +6811,7 @@ def args_go(c: R.Cmd, +t: KV.Trie<String>, +n: Nat, +x: Nat, +now: Nat, +rr: May
     case R.Exists{ks}:
       {==}
     case R.IncrBy{+k, +by}:
-      out_args(R.upd(R.UIncr{by}, now, R.ent.live(now, KV.entry.at(String, t, k, KV.hash(k)))), KV.entry.at(String, t, k, KV.hash(k)), k)(upd_good(R.UIncr{by}, now, KV.entry.at(String, t, k, KV.hash(k))))
+      out_args(R.upd.v(R.UIncr{by}, now, R.ent.live(now, KV.entry.at(KV.Val, t, k, KV.hash(k)))), KV.entry.at(KV.Val, t, k, KV.hash(k)), k)(upd_good(R.UIncr{by}, now, KV.entry.at(KV.Val, t, k, KV.hash(k))))
     case R.MGet{ks}:
       {==}
     case R.MSet{ps}:
@@ -6583,13 +6832,13 @@ def args_go(c: R.Cmd, +t: KV.Trie<String>, +n: Nat, +x: Nat, +now: Nat, +rr: May
     case R.Peek{k, o}:
       {==}
     case R.Upd{+k, +op}:
-      out_args(R.upd(op, now, R.ent.live(now, KV.entry.at(String, t, k, KV.hash(k)))), KV.entry.at(String, t, k, KV.hash(k)), k)(upd_good(op, now, KV.entry.at(String, t, k, KV.hash(k))))
+      out_args(R.upd.v(op, now, R.ent.live(now, KV.entry.at(KV.Val, t, k, KV.hash(k)))), KV.entry.at(KV.Val, t, k, KV.hash(k)), k)(upd_good(op, now, KV.entry.at(KV.Val, t, k, KV.hash(k))))
     case R.MSetNx{+ps}:
       msetnx_args(R.pairs.live(ps, now, t), ps)
     case R.Rename{+s, +d, +nx}:
       ren_args(T.ren.find(t, s, d, nx, now), s, d)
     case R.BitOp{+op, +d, +srcs}:
-      bitop_args(String.is_empty(R.bitop.val(op, srcs, now, t)), R.bitop.val(op, srcs, now, t), d)
+      bitop_do_args(R.bitop.wrong(srcs, now, t), op, d, srcs, R.Db{t, n, x, now, rr})
     case R.Own{o}:
       {==}
     case R.Bad{r}:
@@ -6869,7 +7118,14 @@ def bitop_one(e: Bool, +v: String, +d: String) -> OneEff(A.bitop.effect(e, v, d)
     case False{}:
       Inr{(R.Set{d, v}, {==})}
 
-def eff_one_go(c: R.Cmd, +t: KV.Trie<String>, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>) -> OneEff(eff(c, R.Db{t, n, x, now, rr})):
+def bitop_do_one(w: Bool, +op: R.BitK, +d: String, +srcs: List<&2, String>, +x: R.Db) -> OneEff(A.bitop.eff(w, op, d, srcs, x)):
+  match w:
+    case True{}:
+      Inl{{==}}
+    case False{}:
+      bitop_one(String.is_empty(R.bitop.val(op, srcs, R.db.now(x), R.db.trie(x))), R.bitop.val(op, srcs, R.db.now(x), R.db.trie(x)), d)
+
+def eff_one_go(c: R.Cmd, +t: KV.Trie<KV.Val>, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>) -> OneEff(eff(c, R.Db{t, n, x, now, rr})):
   match c:
     case R.Ping{}:
       Inl{{==}}
@@ -6888,7 +7144,7 @@ def eff_one_go(c: R.Cmd, +t: KV.Trie<String>, +n: Nat, +x: Nat, +now: Nat, +rr: 
     case R.Exists{ks}:
       Inl{{==}}
     case R.IncrBy{+k, +by}:
-      out_one(k, R.upd(R.UIncr{by}, now, R.ent.live(now, KV.entry.at(String, t, k, KV.hash(k)))))
+      out_one(k, R.upd.v(R.UIncr{by}, now, R.ent.live(now, KV.entry.at(KV.Val, t, k, KV.hash(k)))))
     case R.MGet{ks}:
       Inl{{==}}
     case R.MSet{ps}:
@@ -6908,13 +7164,13 @@ def eff_one_go(c: R.Cmd, +t: KV.Trie<String>, +n: Nat, +x: Nat, +now: Nat, +rr: 
     case R.Peek{k, o}:
       Inl{{==}}
     case R.Upd{+k, +op}:
-      out_one(k, R.upd(op, now, R.ent.live(now, KV.entry.at(String, t, k, KV.hash(k)))))
+      out_one(k, R.upd.v(op, now, R.ent.live(now, KV.entry.at(KV.Val, t, k, KV.hash(k)))))
     case R.MSetNx{+ps}:
       msetnx_one(R.pairs.live(ps, now, t), ps)
     case R.Rename{+s, +d, +nx}:
       ren_one(T.ren.find(t, s, d, nx, now), s, d)
     case R.BitOp{+op, +d, +srcs}:
-      bitop_one(String.is_empty(R.bitop.val(op, srcs, now, t)), R.bitop.val(op, srcs, now, t), d)
+      bitop_do_one(R.bitop.wrong(srcs, now, t), op, d, srcs, R.Db{t, n, x, now, rr})
     case R.Own{o}:
       Inl{{==}}
     case R.Bad{r}:
@@ -7344,12 +7600,12 @@ def del0(d: R.Db, +ks: List<&2, String>) -> {R.db.at(0n, R.db_of(R.db.del(d, ks)
     case R.Db{+t, +n, +x, +now, +rr}:
       Equal.sym(R.Db, R.db_of(R.del.db(R.del_keys(ks, 0n, t), n, x, 0n, rr)), R.db.at(0n, R.db_of(R.del.db(R.del_keys(ks, now, t), n, x, now, rr))), del_at0(ks, t, n, x, now, rr))
 
-def setx0(d: R.Db, +k: String, -v: String, +e: Nat) -> {R.db.at(0n, R.db.setx(d, k, v, e)) == R.db.setx(R.db.at(0n, d), k, v, e) : R.Db}:
+def setx0(d: R.Db, +k: String, -v: KV.Val, +e: Nat) -> {R.db.at(0n, R.db.setx(d, k, v, e)) == R.db.setx(R.db.at(0n, d), k, v, e) : R.Db}:
   match d:
     case R.Db{t, n, x, now, rr}:
       {==}
 
-def entry_at0(d: R.Db, +k: String) -> {R.db.entry(R.db.at(0n, d), k) == R.db.entry(d, k) : Maybe<&2, KV.Item<String>>}:
+def entry_at0(d: R.Db, +k: String) -> {R.db.entry(R.db.at(0n, d), k) == R.db.entry(d, k) : Maybe<&2, KV.Item<KV.Val>>}:
   match d:
     case R.Db{t, n, x, now, rr}:
       {==}
@@ -7492,19 +7748,19 @@ def purge_spec(+k: String, +j: Nat, +o: R.Ds) -> PurgeOk(k, j, o, R.ds.purge(k, 
   purge_of(k, j, R.ds.nth(j, R.ds.list(o)), o)({==})
 
 def MoveOk(k: String, j: Nat, o: R.Ds, p: Bool & R.Ds) -> Type:
-  Or({p == (False{}, o) : Bool & R.Ds}, Exists(R.Db, y => Exists(String, v => Exists(Nat, e => {R.ds.nth(j, R.ds.list(o)) == Some{y} : Maybe<&2, R.Db>} & ({Nat.is_ne(j, R.ds.index(o)) == True{} : Bool} & ({R.db.entry(y, k) == None{} : Maybe<&2, KV.Item<String>>} & ({R.ds.ent(o, k) == Some{KV.Item{v, e}} : Maybe<&2, KV.Item<String>>} & {p == (True{}, R.ds.moved(k, j, R.db.setx(y, k, v, e), o)) : Bool & R.Ds})))))))
+  Or({p == (False{}, o) : Bool & R.Ds}, Exists(R.Db, y => Exists(KV.Val, v => Exists(Nat, e => {R.ds.nth(j, R.ds.list(o)) == Some{y} : Maybe<&2, R.Db>} & ({Nat.is_ne(j, R.ds.index(o)) == True{} : Bool} & ({R.db.entry(y, k) == None{} : Maybe<&2, KV.Item<KV.Val>>} & ({R.ds.ent(o, k) == Some{KV.Item{v, e}} : Maybe<&2, KV.Item<KV.Val>>} & {p == (True{}, R.ds.moved(k, j, R.db.setx(y, k, v, e), o)) : Bool & R.Ds})))))))
 
-def none_of(m: Maybe<&2, KV.Item<String>>) -> {Maybe.is_none(&2, KV.Item<String>, m) == True{} : Bool} -> {m == None{} : Maybe<&2, KV.Item<String>>}:
+def none_of(m: Maybe<&2, KV.Item<KV.Val>>) -> {Maybe.is_none(&2, KV.Item<KV.Val>, m) == True{} : Bool} -> {m == None{} : Maybe<&2, KV.Item<KV.Val>>}:
   match m:
     case Some{x}:
-      e => Empty.absurd({Some{x} == None{} : Maybe<&2, KV.Item<String>>}, false_true(e))
+      e => Empty.absurd({Some{x} == None{} : Maybe<&2, KV.Item<KV.Val>>}, false_true(e))
     case None{}:
       e => {==}
 
-def move_if(ok: Bool, m: Maybe<&2, KV.Item<String>>, +k: String, +j: Nat, +y: R.Db, +o: R.Ds, ey: {R.ds.nth(j, R.ds.list(o)) == Some{y} : Maybe<&2, R.Db>}) -> {ok == Bool.and(Nat.is_ne(j, R.ds.index(o)), Maybe.is_none(&2, KV.Item<String>, R.db.entry(y, k))) : Bool} -> {m == R.ds.ent(o, k) : Maybe<&2, KV.Item<String>>} -> MoveOk(k, j, o, R.ds.move.if(ok, k, j, y, m, o)):
+def move_if(ok: Bool, m: Maybe<&2, KV.Item<KV.Val>>, +k: String, +j: Nat, +y: R.Db, +o: R.Ds, ey: {R.ds.nth(j, R.ds.list(o)) == Some{y} : Maybe<&2, R.Db>}) -> {ok == Bool.and(Nat.is_ne(j, R.ds.index(o)), Maybe.is_none(&2, KV.Item<KV.Val>, R.db.entry(y, k))) : Bool} -> {m == R.ds.ent(o, k) : Maybe<&2, KV.Item<KV.Val>>} -> MoveOk(k, j, o, R.ds.move.if(ok, k, j, y, m, o)):
   match ok m:
     case True{} Some{KV.Item{v, e}}:
-      +eo => em => Inr{(y, (v, (e, (ey, (and_l(Nat.is_ne(j, R.ds.index(o)), Maybe.is_none(&2, KV.Item<String>, R.db.entry(y, k)))(Equal.sym(Bool, True{}, Bool.and(Nat.is_ne(j, R.ds.index(o)), Maybe.is_none(&2, KV.Item<String>, R.db.entry(y, k))), eo)), (none_of(R.db.entry(y, k))(and_r(Nat.is_ne(j, R.ds.index(o)), Maybe.is_none(&2, KV.Item<String>, R.db.entry(y, k)))(Equal.sym(Bool, True{}, Bool.and(Nat.is_ne(j, R.ds.index(o)), Maybe.is_none(&2, KV.Item<String>, R.db.entry(y, k))), eo))), (Equal.sym(Maybe<&2, KV.Item<String>>, Some{KV.Item{v, e}}, R.ds.ent(o, k), em), {==})))))))}
+      +eo => em => Inr{(y, (v, (e, (ey, (and_l(Nat.is_ne(j, R.ds.index(o)), Maybe.is_none(&2, KV.Item<KV.Val>, R.db.entry(y, k)))(Equal.sym(Bool, True{}, Bool.and(Nat.is_ne(j, R.ds.index(o)), Maybe.is_none(&2, KV.Item<KV.Val>, R.db.entry(y, k))), eo)), (none_of(R.db.entry(y, k))(and_r(Nat.is_ne(j, R.ds.index(o)), Maybe.is_none(&2, KV.Item<KV.Val>, R.db.entry(y, k)))(Equal.sym(Bool, True{}, Bool.and(Nat.is_ne(j, R.ds.index(o)), Maybe.is_none(&2, KV.Item<KV.Val>, R.db.entry(y, k))), eo))), (Equal.sym(Maybe<&2, KV.Item<KV.Val>>, Some{KV.Item{v, e}}, R.ds.ent(o, k), em), {==})))))))}
     case True{} None{}:
       eo => em => Inl{{==}}
     case False{} _:
@@ -7513,18 +7769,18 @@ def move_if(ok: Bool, m: Maybe<&2, KV.Item<String>>, +k: String, +j: Nat, +y: R.
 def move_of(+k: String, +j: Nat, my: Maybe<&2, R.Db>, +o: R.Ds) -> {my == R.ds.nth(j, R.ds.list(o)) : Maybe<&2, R.Db>} -> MoveOk(k, j, o, R.ds.move.of(k, j, my, o)):
   match my:
     case Some{+y}:
-      e => move_if(Bool.and(Nat.is_ne(j, R.ds.index(o)), Maybe.is_none(&2, KV.Item<String>, R.db.entry(y, k))), R.ds.ent(o, k), k, j, y, o, Equal.sym(Maybe<&2, R.Db>, Some{y}, R.ds.nth(j, R.ds.list(o)), e))({==})({==})
+      e => move_if(Bool.and(Nat.is_ne(j, R.ds.index(o)), Maybe.is_none(&2, KV.Item<KV.Val>, R.db.entry(y, k))), R.ds.ent(o, k), k, j, y, o, Equal.sym(Maybe<&2, R.Db>, Some{y}, R.ds.nth(j, R.ds.list(o)), e))({==})({==})
     case None{}:
       e => Inl{{==}}
 
 def move_spec(+k: String, +j: Nat, +o: R.Ds) -> MoveOk(k, j, o, R.ds.move(k, j, o)):
   move_of(k, j, R.ds.nth(j, R.ds.list(o)), o)({==})
 
-def move_some(+k: String, +j: Nat, +f: R.Ds, -y: R.Db, -v: String, -e: Nat, ey: {R.ds.nth(j, R.ds.list(f)) == Some{y} : Maybe<&2, R.Db>}, ene: {Nat.is_ne(j, R.ds.index(f)) == True{} : Bool}, eno: {R.db.entry(y, k) == None{} : Maybe<&2, KV.Item<String>>}, eent: {R.ds.ent(f, k) == Some{KV.Item{v, e}} : Maybe<&2, KV.Item<String>>}) -> {R.ds.move(k, j, f) == (True{}, R.ds.moved(k, j, R.db.setx(y, k, v, e), f)) : Bool & R.Ds}:
+def move_some(+k: String, +j: Nat, +f: R.Ds, -y: R.Db, -v: KV.Val, -e: Nat, ey: {R.ds.nth(j, R.ds.list(f)) == Some{y} : Maybe<&2, R.Db>}, ene: {Nat.is_ne(j, R.ds.index(f)) == True{} : Bool}, eno: {R.db.entry(y, k) == None{} : Maybe<&2, KV.Item<KV.Val>>}, eent: {R.ds.ent(f, k) == Some{KV.Item{v, e}} : Maybe<&2, KV.Item<KV.Val>>}) -> {R.ds.move(k, j, f) == (True{}, R.ds.moved(k, j, R.db.setx(y, k, v, e), f)) : Bool & R.Ds}:
   %Equal.sym(Maybe<&2, R.Db>, R.ds.nth(j, R.ds.list(f)), Some{y}, ey) : {R.ds.move.of(k, j, _, f) == (True{}, R.ds.moved(k, j, R.db.setx(y, k, v, e), f)) : Bool & R.Ds}
-  %Equal.sym(Bool, Nat.is_ne(j, R.ds.index(f)), True{}, ene) : {R.ds.move.if(Bool.and(_, Maybe.is_none(&2, KV.Item<String>, R.db.entry(y, k))), k, j, y, R.ds.ent(f, k), f) == (True{}, R.ds.moved(k, j, R.db.setx(y, k, v, e), f)) : Bool & R.Ds}
-  %Equal.sym(Maybe<&2, KV.Item<String>>, R.db.entry(y, k), None{}, eno) : {R.ds.move.if(Bool.and(True{}, Maybe.is_none(&2, KV.Item<String>, _)), k, j, y, R.ds.ent(f, k), f) == (True{}, R.ds.moved(k, j, R.db.setx(y, k, v, e), f)) : Bool & R.Ds}
-  %Equal.sym(Maybe<&2, KV.Item<String>>, R.ds.ent(f, k), Some{KV.Item{v, e}}, eent) : {R.ds.move.if(True{}, k, j, y, _, f) == (True{}, R.ds.moved(k, j, R.db.setx(y, k, v, e), f)) : Bool & R.Ds}
+  %Equal.sym(Bool, Nat.is_ne(j, R.ds.index(f)), True{}, ene) : {R.ds.move.if(Bool.and(_, Maybe.is_none(&2, KV.Item<KV.Val>, R.db.entry(y, k))), k, j, y, R.ds.ent(f, k), f) == (True{}, R.ds.moved(k, j, R.db.setx(y, k, v, e), f)) : Bool & R.Ds}
+  %Equal.sym(Maybe<&2, KV.Item<KV.Val>>, R.db.entry(y, k), None{}, eno) : {R.ds.move.if(Bool.and(True{}, Maybe.is_none(&2, KV.Item<KV.Val>, _)), k, j, y, R.ds.ent(f, k), f) == (True{}, R.ds.moved(k, j, R.db.setx(y, k, v, e), f)) : Bool & R.Ds}
+  %Equal.sym(Maybe<&2, KV.Item<KV.Val>>, R.ds.ent(f, k), Some{KV.Item{v, e}}, eent) : {R.ds.move.if(True{}, k, j, y, _, f) == (True{}, R.ds.moved(k, j, R.db.setx(y, k, v, e), f)) : Bool & R.Ds}
   {==}
 
 # The replay
@@ -7818,12 +8074,12 @@ def fa_of(e: R.Cmd) -> {R.parse(A.args(e)) == e : R.Cmd} -> {A.file.act(e) == R.
 # database it names is there, the key's entry set to the destination key
 # in that database
 def CopyOk(s: String, d: String, j: Nat, rep: Bool, o: R.Ds, p: Bool & R.Ds) -> Type:
-  Or({p == (False{}, o) : Bool & R.Ds}, Exists(R.Db, y => Exists(String, v => Exists(Nat, e => {R.ds.nth(j, R.ds.list(o)) == Some{y} : Maybe<&2, R.Db>} & ({R.ds.ent(o, s) == Some{KV.Item{v, e}} : Maybe<&2, KV.Item<String>>} & {p == (True{}, R.ds.with(R.ds.put(j, R.db.setx(y, d, v, e), R.ds.list(o)), o)) : Bool & R.Ds})))))
+  Or({p == (False{}, o) : Bool & R.Ds}, Exists(R.Db, y => Exists(KV.Val, v => Exists(Nat, e => {R.ds.nth(j, R.ds.list(o)) == Some{y} : Maybe<&2, R.Db>} & ({R.ds.ent(o, s) == Some{KV.Item{v, e}} : Maybe<&2, KV.Item<KV.Val>>} & {p == (True{}, R.ds.with(R.ds.put(j, R.db.setx(y, d, v, e), R.ds.list(o)), o)) : Bool & R.Ds})))))
 
-def copy_if(ok: Bool, m: Maybe<&2, KV.Item<String>>, +s: String, +d: String, +j: Nat, +rep: Bool, +y: R.Db, +o: R.Ds, ey: {R.ds.nth(j, R.ds.list(o)) == Some{y} : Maybe<&2, R.Db>}) -> {m == R.ds.ent(o, s) : Maybe<&2, KV.Item<String>>} -> CopyOk(s, d, j, rep, o, R.ds.copy.if(ok, m, d, j, y, o)):
+def copy_if(ok: Bool, m: Maybe<&2, KV.Item<KV.Val>>, +s: String, +d: String, +j: Nat, +rep: Bool, +y: R.Db, +o: R.Ds, ey: {R.ds.nth(j, R.ds.list(o)) == Some{y} : Maybe<&2, R.Db>}) -> {m == R.ds.ent(o, s) : Maybe<&2, KV.Item<KV.Val>>} -> CopyOk(s, d, j, rep, o, R.ds.copy.if(ok, m, d, j, y, o)):
   match ok m:
     case True{} Some{KV.Item{v, e}}:
-      em => Inr{(y, (v, (e, (ey, (Equal.sym(Maybe<&2, KV.Item<String>>, Some{KV.Item{v, e}}, R.ds.ent(o, s), em), {==})))))}
+      em => Inr{(y, (v, (e, (ey, (Equal.sym(Maybe<&2, KV.Item<KV.Val>>, Some{KV.Item{v, e}}, R.ds.ent(o, s), em), {==})))))}
     case True{} None{}:
       em => Inl{{==}}
     case False{} _:
@@ -7832,7 +8088,7 @@ def copy_if(ok: Bool, m: Maybe<&2, KV.Item<String>>, +s: String, +d: String, +j:
 def copy_of(+s: String, +d: String, +j: Nat, +rep: Bool, my: Maybe<&2, R.Db>, +o: R.Ds) -> {my == R.ds.nth(j, R.ds.list(o)) : Maybe<&2, R.Db>} -> CopyOk(s, d, j, rep, o, R.ds.copy.of(s, d, j, rep, my, o)):
   match my:
     case Some{+y}:
-      e => copy_if(Bool.or(rep, Bool.not(Maybe.is_some(&2, KV.Item<String>, R.ent.live(R.ds.now(o), R.db.entry(y, d))))), R.ds.ent(o, s), s, d, j, rep, y, o, Equal.sym(Maybe<&2, R.Db>, Some{y}, R.ds.nth(j, R.ds.list(o)), e))({==})
+      e => copy_if(Bool.or(rep, Bool.not(Maybe.is_some(&2, KV.Item<KV.Val>, R.ent.live(R.ds.now(o), R.db.entry(y, d))))), R.ds.ent(o, s), s, d, j, rep, y, o, Equal.sym(Maybe<&2, R.Db>, Some{y}, R.ds.nth(j, R.ds.list(o)), e))({==})
     case None{}:
       e => Inl{{==}}
 
@@ -7841,10 +8097,10 @@ def copy_spec(+s: String, +d: String, +j: Nat, +rep: Bool, +o: R.Ds) -> CopyOk(s
 
 # COPY copies when the key is there, the database is there, and REPLACE
 # is given or the destination is not there
-def copy_some(+s: String, +d: String, +j: Nat, +rep: Bool, +f: R.Ds, -y: R.Db, -v: String, -e: Nat, ey: {R.ds.nth(j, R.ds.list(f)) == Some{y} : Maybe<&2, R.Db>}, eent: {R.ds.ent(f, s) == Some{KV.Item{v, e}} : Maybe<&2, KV.Item<String>>}, ok: {Bool.or(rep, Bool.not(Maybe.is_some(&2, KV.Item<String>, R.ent.live(R.ds.now(f), R.db.entry(y, d))))) == True{} : Bool}) -> {R.ds.copy(s, d, j, rep, f) == (True{}, R.ds.with(R.ds.put(j, R.db.setx(y, d, v, e), R.ds.list(f)), f)) : Bool & R.Ds}:
+def copy_some(+s: String, +d: String, +j: Nat, +rep: Bool, +f: R.Ds, -y: R.Db, -v: KV.Val, -e: Nat, ey: {R.ds.nth(j, R.ds.list(f)) == Some{y} : Maybe<&2, R.Db>}, eent: {R.ds.ent(f, s) == Some{KV.Item{v, e}} : Maybe<&2, KV.Item<KV.Val>>}, ok: {Bool.or(rep, Bool.not(Maybe.is_some(&2, KV.Item<KV.Val>, R.ent.live(R.ds.now(f), R.db.entry(y, d))))) == True{} : Bool}) -> {R.ds.copy(s, d, j, rep, f) == (True{}, R.ds.with(R.ds.put(j, R.db.setx(y, d, v, e), R.ds.list(f)), f)) : Bool & R.Ds}:
   %Equal.sym(Maybe<&2, R.Db>, R.ds.nth(j, R.ds.list(f)), Some{y}, ey) : {R.ds.copy.of(s, d, j, rep, _, f) == (True{}, R.ds.with(R.ds.put(j, R.db.setx(y, d, v, e), R.ds.list(f)), f)) : Bool & R.Ds}
-  %Equal.sym(Maybe<&2, KV.Item<String>>, R.ds.ent(f, s), Some{KV.Item{v, e}}, eent) : {R.ds.copy.if(Bool.or(rep, Bool.not(Maybe.is_some(&2, KV.Item<String>, R.ent.live(R.ds.now(f), R.db.entry(y, d))))), _, d, j, y, f) == (True{}, R.ds.with(R.ds.put(j, R.db.setx(y, d, v, e), R.ds.list(f)), f)) : Bool & R.Ds}
-  %Equal.sym(Bool, Bool.or(rep, Bool.not(Maybe.is_some(&2, KV.Item<String>, R.ent.live(R.ds.now(f), R.db.entry(y, d))))), True{}, ok) : {R.ds.copy.if(_, Some{KV.Item{v, e}}, d, j, y, f) == (True{}, R.ds.with(R.ds.put(j, R.db.setx(y, d, v, e), R.ds.list(f)), f)) : Bool & R.Ds}
+  %Equal.sym(Maybe<&2, KV.Item<KV.Val>>, R.ds.ent(f, s), Some{KV.Item{v, e}}, eent) : {R.ds.copy.if(Bool.or(rep, Bool.not(Maybe.is_some(&2, KV.Item<KV.Val>, R.ent.live(R.ds.now(f), R.db.entry(y, d))))), _, d, j, y, f) == (True{}, R.ds.with(R.ds.put(j, R.db.setx(y, d, v, e), R.ds.list(f)), f)) : Bool & R.Ds}
+  %Equal.sym(Bool, Bool.or(rep, Bool.not(Maybe.is_some(&2, KV.Item<KV.Val>, R.ent.live(R.ds.now(f), R.db.entry(y, d))))), True{}, ok) : {R.ds.copy.if(_, Some{KV.Item{v, e}}, d, j, y, f) == (True{}, R.ds.with(R.ds.put(j, R.db.setx(y, d, v, e), R.ds.list(f)), f)) : Bool & R.Ds}
   {==}
 
 # a command that wrote nothing leaves its database reading the same at
@@ -7959,17 +8215,17 @@ def post_purge(+k: String, +j: Nat, +o: R.Ds, +r: R.Ds, +sel: Nat, +n: Nat, -p: 
       purge_yes(k, j, o, r, sel, n, y, ey, ln, sm, ez, ei, en)
 
 # k's entry in a focus at time 0 is its entry in the database there
-def dbent0(d: R.Db, +k: String) -> {R.db.now(d) == 0n : Nat} -> {R.db.ent(d, k) == R.db.entry(d, k) : Maybe<&2, KV.Item<String>>}:
+def dbent0(d: R.Db, +k: String) -> {R.db.now(d) == 0n : Nat} -> {R.db.ent(d, k) == R.db.entry(d, k) : Maybe<&2, KV.Item<KV.Val>>}:
   match d:
     case R.Db{+t, n, x, w, rr}:
       e =>
-        %Equal.sym(Nat, w, 0n, e) : {R.ent.live(_, KV.entry.at(String, t, k, KV.hash(k))) == KV.entry.at(String, t, k, KV.hash(k)) : Maybe<&2, KV.Item<String>>}
-        live0_ent(KV.entry.at(String, t, k, KV.hash(k)))
+        %Equal.sym(Nat, w, 0n, e) : {R.ent.live(_, KV.entry.at(KV.Val, t, k, KV.hash(k))) == KV.entry.at(KV.Val, t, k, KV.hash(k)) : Maybe<&2, KV.Item<KV.Val>>}
+        live0_ent(KV.entry.at(KV.Val, t, k, KV.hash(k)))
 
-def dbent_some(d: R.Db, +k: String, -w: KV.Item<String>) -> {R.db.ent(d, k) == Some{w} : Maybe<&2, KV.Item<String>>} -> {R.db.entry(d, k) == Some{w} : Maybe<&2, KV.Item<String>>}:
+def dbent_some(d: R.Db, +k: String, -w: KV.Item<KV.Val>) -> {R.db.ent(d, k) == Some{w} : Maybe<&2, KV.Item<KV.Val>>} -> {R.db.entry(d, k) == Some{w} : Maybe<&2, KV.Item<KV.Val>>}:
   match d:
     case R.Db{+t, n, x, +now, rr}:
-      e => live_some(KV.entry.at(String, t, k, KV.hash(k)), now, w)(e)
+      e => live_some(KV.entry.at(KV.Val, t, k, KV.hash(k)), now, w)(e)
 
 # zippers focused on the same number, reading the same at time 0, have
 # focuses that read the same at time 0
@@ -7983,16 +8239,16 @@ def foc_eq(+dF: R.Db, +pF: List<&2, R.Db>, +qF: List<&2, R.Db>, +dO: R.Db, +pO: 
       znth(dO, pO, qO))))
 
 # such zippers hold the same entry for a key in their focus
-def ent_eq(F: R.Ds, o: R.Ds, +k: String, -w: KV.Item<String>) -> {R.ds.now(F) == 0n : Nat} -> {R.ds.index(F) == R.ds.index(o) : Nat} -> {Laws.zero(F) == Laws.zero(o) : List<&2, R.Db>} -> {R.ds.ent(o, k) == Some{w} : Maybe<&2, KV.Item<String>>} -> {R.ds.ent(F, k) == Some{w} : Maybe<&2, KV.Item<String>>}:
+def ent_eq(F: R.Ds, o: R.Ds, +k: String, -w: KV.Item<KV.Val>) -> {R.ds.now(F) == 0n : Nat} -> {R.ds.index(F) == R.ds.index(o) : Nat} -> {Laws.zero(F) == Laws.zero(o) : List<&2, R.Db>} -> {R.ds.ent(o, k) == Some{w} : Maybe<&2, KV.Item<KV.Val>>} -> {R.ds.ent(F, k) == Some{w} : Maybe<&2, KV.Item<KV.Val>>}:
   match F:
     case R.Ds{+dF, +pF, +qF}:
       match o:
         case R.Ds{+dO, +pO, +qO}:
           en => ei => ez => eo =>
-            Equal.trans(Maybe<&2, KV.Item<String>>, R.db.ent(dF, k), R.db.entry(dF, k), Some{w}, dbent0(dF, k)(en),
-              Equal.trans(Maybe<&2, KV.Item<String>>, R.db.entry(dF, k), R.db.entry(R.db.at(0n, dF), k), Some{w}, Equal.sym(Maybe<&2, KV.Item<String>>, R.db.entry(R.db.at(0n, dF), k), R.db.entry(dF, k), entry_at0(dF, k)),
-                Equal.trans(Maybe<&2, KV.Item<String>>, R.db.entry(R.db.at(0n, dF), k), R.db.entry(R.db.at(0n, dO), k), Some{w}, Equal.cong(R.Db, Maybe<&2, KV.Item<String>>, z => R.db.entry(z, k), R.db.at(0n, dF), R.db.at(0n, dO), foc_eq(dF, pF, qF, dO, pO, qO, ei, ez)),
-                  Equal.trans(Maybe<&2, KV.Item<String>>, R.db.entry(R.db.at(0n, dO), k), R.db.entry(dO, k), Some{w}, entry_at0(dO, k), dbent_some(dO, k, w)(eo)))))
+            Equal.trans(Maybe<&2, KV.Item<KV.Val>>, R.db.ent(dF, k), R.db.entry(dF, k), Some{w}, dbent0(dF, k)(en),
+              Equal.trans(Maybe<&2, KV.Item<KV.Val>>, R.db.entry(dF, k), R.db.entry(R.db.at(0n, dF), k), Some{w}, Equal.sym(Maybe<&2, KV.Item<KV.Val>>, R.db.entry(R.db.at(0n, dF), k), R.db.entry(dF, k), entry_at0(dF, k)),
+                Equal.trans(Maybe<&2, KV.Item<KV.Val>>, R.db.entry(R.db.at(0n, dF), k), R.db.entry(R.db.at(0n, dO), k), Some{w}, Equal.cong(R.Db, Maybe<&2, KV.Item<KV.Val>>, z => R.db.entry(z, k), R.db.at(0n, dF), R.db.at(0n, dO), foc_eq(dF, pF, qF, dO, pO, qO, ei, ez)),
+                  Equal.trans(Maybe<&2, KV.Item<KV.Val>>, R.db.entry(R.db.at(0n, dO), k), R.db.entry(dO, k), Some{w}, entry_at0(dO, k), dbent_some(dO, k, w)(eo)))))
 
 # and the same databases at time 0 once the key is deleted from the focus
 def unset_eq(+k: String, F: R.Ds, o: R.Ds) -> {R.ds.index(F) == R.ds.index(o) : Nat} -> {Laws.zero(F) == Laws.zero(o) : List<&2, R.Db>} -> {Laws.zero(R.ds.unset(k, F)) == Laws.zero(R.ds.unset(k, o)) : List<&2, R.Db>}:
@@ -8024,13 +8280,13 @@ def put1_eq(+j: Nat, -a1: R.Db, -a2: R.Db, -l1: List<&2, R.Db>, -l2: List<&2, R.
   {==}
 
 # MOVE that moved the key
-def move_yes2(+k: String, +j: Nat, +o: R.Ds, +r: R.Ds, +sel: Nat, +n: Nat, +y: R.Db, +v: String, +e: Nat, +y2: R.Db, +ey: {R.ds.nth(j, R.ds.list(o)) == Some{y} : Maybe<&2, R.Db>}, +ene: {Nat.is_ne(j, R.ds.index(o)) == True{} : Bool}, +eno: {R.db.entry(y, k) == None{} : Maybe<&2, KV.Item<String>>}, +eent: {R.ds.ent(o, k) == Some{KV.Item{v, e}} : Maybe<&2, KV.Item<String>>}, +ey2: {R.ds.nth(j, R.ds.list(R.ds.focus(R.ds.index(o), r))) == Some{y2} : Maybe<&2, R.Db>}, +eyy: {R.db.at(0n, y2) == R.db.at(0n, y) : R.Db}, +ln: {List.length(&2, R.Db, Laws.zero(o)) == 1n+n : Nat}, +sm: {KV.small(n) == True{} : Bool}, +ez: {Laws.zero(r) == Laws.zero(o) : List<&2, R.Db>}, +ei: {R.ds.index(r) == sel : Nat}, +en: {R.ds.now(r) == 0n : Nat}) -> Inv(rp([A.EMove{k, R.ds.index(o), j}], sel, r), R.ds.moved(k, j, R.db.setx(y, k, v, e), o), R.ds.index(o)) & Len(R.ds.moved(k, j, R.db.setx(y, k, v, e), o), n):
+def move_yes2(+k: String, +j: Nat, +o: R.Ds, +r: R.Ds, +sel: Nat, +n: Nat, +y: R.Db, +v: KV.Val, +e: Nat, +y2: R.Db, +ey: {R.ds.nth(j, R.ds.list(o)) == Some{y} : Maybe<&2, R.Db>}, +ene: {Nat.is_ne(j, R.ds.index(o)) == True{} : Bool}, +eno: {R.db.entry(y, k) == None{} : Maybe<&2, KV.Item<KV.Val>>}, +eent: {R.ds.ent(o, k) == Some{KV.Item{v, e}} : Maybe<&2, KV.Item<KV.Val>>}, +ey2: {R.ds.nth(j, R.ds.list(R.ds.focus(R.ds.index(o), r))) == Some{y2} : Maybe<&2, R.Db>}, +eyy: {R.db.at(0n, y2) == R.db.at(0n, y) : R.Db}, +ln: {List.length(&2, R.Db, Laws.zero(o)) == 1n+n : Nat}, +sm: {KV.small(n) == True{} : Bool}, +ez: {Laws.zero(r) == Laws.zero(o) : List<&2, R.Db>}, +ei: {R.ds.index(r) == sel : Nat}, +en: {R.ds.now(r) == 0n : Nat}) -> Inv(rp([A.EMove{k, R.ds.index(o), j}], sel, r), R.ds.moved(k, j, R.db.setx(y, k, v, e), o), R.ds.index(o)) & Len(R.ds.moved(k, j, R.db.setx(y, k, v, e), o), n):
   +eiF = focus_i(R.ds.index(o), r, bound_r(R.ds.index(o), r, o, n, ez, ln, lidx(o, n, ln)))
   +enF = Equal.trans(Nat, R.ds.now(R.ds.focus(R.ds.index(o), r)), R.ds.now(r), 0n, focus_n(R.ds.index(o), r), en)
   +ezF = Equal.trans(List<&2, R.Db>, Laws.zero(R.ds.focus(R.ds.index(o), r)), Laws.zero(r), Laws.zero(o), focus_z(R.ds.index(o), r), ez)
   +es = Equal.trans(R.Db, R.db.at(0n, R.db.setx(y2, k, v, e)), R.db.setx(R.db.at(0n, y2), k, v, e), R.db.at(0n, R.db.setx(y, k, v, e)), setx0(y2, k, v, e), Equal.trans(R.Db, R.db.setx(R.db.at(0n, y2), k, v, e), R.db.setx(R.db.at(0n, y), k, v, e), R.db.at(0n, R.db.setx(y, k, v, e)), Equal.cong(R.Db, R.Db, z => R.db.setx(z, k, v, e), R.db.at(0n, y2), R.db.at(0n, y), eyy), Equal.sym(R.Db, R.db.at(0n, R.db.setx(y, k, v, e)), R.db.setx(R.db.at(0n, y), k, v, e), setx0(y, k, v, e))))
   +ene2 = Equal.trans(Bool, Nat.is_ne(j, R.ds.index(R.ds.focus(R.ds.index(o), r))), Nat.is_ne(j, R.ds.index(o)), True{}, Equal.cong(Nat, Bool, z => Nat.is_ne(j, z), R.ds.index(R.ds.focus(R.ds.index(o), r)), R.ds.index(o), eiF), ene)
-  +eno2 = Equal.trans(Maybe<&2, KV.Item<String>>, R.db.entry(y2, k), R.db.entry(R.db.at(0n, y2), k), None{}, Equal.sym(Maybe<&2, KV.Item<String>>, R.db.entry(R.db.at(0n, y2), k), R.db.entry(y2, k), entry_at0(y2, k)), Equal.trans(Maybe<&2, KV.Item<String>>, R.db.entry(R.db.at(0n, y2), k), R.db.entry(R.db.at(0n, y), k), None{}, Equal.cong(R.Db, Maybe<&2, KV.Item<String>>, z => R.db.entry(z, k), R.db.at(0n, y2), R.db.at(0n, y), eyy), Equal.trans(Maybe<&2, KV.Item<String>>, R.db.entry(R.db.at(0n, y), k), R.db.entry(y, k), None{}, entry_at0(y, k), eno)))
+  +eno2 = Equal.trans(Maybe<&2, KV.Item<KV.Val>>, R.db.entry(y2, k), R.db.entry(R.db.at(0n, y2), k), None{}, Equal.sym(Maybe<&2, KV.Item<KV.Val>>, R.db.entry(R.db.at(0n, y2), k), R.db.entry(y2, k), entry_at0(y2, k)), Equal.trans(Maybe<&2, KV.Item<KV.Val>>, R.db.entry(R.db.at(0n, y2), k), R.db.entry(R.db.at(0n, y), k), None{}, Equal.cong(R.Db, Maybe<&2, KV.Item<KV.Val>>, z => R.db.entry(z, k), R.db.at(0n, y2), R.db.at(0n, y), eyy), Equal.trans(Maybe<&2, KV.Item<KV.Val>>, R.db.entry(R.db.at(0n, y), k), R.db.entry(y, k), None{}, entry_at0(y, k), eno)))
   +eent2 = ent_eq(R.ds.focus(R.ds.index(o), r), o, k, KV.Item{v, e})(enF)(eiF)(ezF)(eent)
   %Equal.sym(R.Ds, rp([A.EMove{k, R.ds.index(o), j}], sel, r), R.ds_of(R.act(R.AMove{k, j}, R.ds.focus(R.ds.index(o), r))), rp_emove(k, R.ds.index(o), j, sel, r, small_le(R.ds.index(o), n, lidx(o, n, ln), sm), small_le(j, n, lnth(j, o, n, ln, y, ey), sm), ei)) : Inv(_, R.ds.moved(k, j, R.db.setx(y, k, v, e), o), R.ds.index(o)) & Len(R.ds.moved(k, j, R.db.setx(y, k, v, e), o), n)
   %Equal.sym(Bool & R.Ds, R.ds.move(k, j, R.ds.focus(R.ds.index(o), r)), (True{}, R.ds.moved(k, j, R.db.setx(y2, k, v, e), R.ds.focus(R.ds.index(o), r))), move_some(k, j, R.ds.focus(R.ds.index(o), r), y2, v, e, ey2, ene2, eno2, eent2)) : Inv(R.ds_of(R.act.moved(_)), R.ds.moved(k, j, R.db.setx(y, k, v, e), o), R.ds.index(o)) & Len(R.ds.moved(k, j, R.db.setx(y, k, v, e), o), n)
@@ -8045,12 +8301,12 @@ def move_yes2(+k: String, +j: Nat, +o: R.Ds, +r: R.Ds, +sel: Nat, +n: Nat, +y: R
      Equal.cong(List<&2, R.Db>, Nat, z => List.length(&2, R.Db, z), Laws.zero(R.ds.moved(k, j, R.db.setx(y, k, v, e), o)), R.ds.put(j, R.db.at(0n, R.db.setx(y, k, v, e)), Laws.zero(R.ds.unset(k, o))), z_with1(j, R.db.setx(y, k, v, e), R.ds.unset(k, o))),
      Equal.trans(Nat, List.length(&2, R.Db, R.ds.put(j, R.db.at(0n, R.db.setx(y, k, v, e)), Laws.zero(R.ds.unset(k, o)))), List.length(&2, R.Db, Laws.zero(R.ds.unset(k, o))), 1n+n, len_put(j, R.db.at(0n, R.db.setx(y, k, v, e)), Laws.zero(R.ds.unset(k, o))), Equal.trans(Nat, List.length(&2, R.Db, Laws.zero(R.ds.unset(k, o))), List.length(&2, R.Db, Laws.zero(o)), 1n+n, len_unset(k, o), ln))))
 
-def move_yes1(+k: String, +j: Nat, +o: R.Ds, +r: R.Ds, +sel: Nat, +n: Nat, +y: R.Db, +v: String, +e: Nat, +ey: {R.ds.nth(j, R.ds.list(o)) == Some{y} : Maybe<&2, R.Db>}, +ene: {Nat.is_ne(j, R.ds.index(o)) == True{} : Bool}, +eno: {R.db.entry(y, k) == None{} : Maybe<&2, KV.Item<String>>}, +eent: {R.ds.ent(o, k) == Some{KV.Item{v, e}} : Maybe<&2, KV.Item<String>>}, my: Exists(R.Db, z => {R.ds.nth(j, R.ds.list(R.ds.focus(R.ds.index(o), r))) == Some{z} : Maybe<&2, R.Db>} & {R.db.at(0n, z) == R.db.at(0n, y) : R.Db}), +ln: {List.length(&2, R.Db, Laws.zero(o)) == 1n+n : Nat}, +sm: {KV.small(n) == True{} : Bool}, +ez: {Laws.zero(r) == Laws.zero(o) : List<&2, R.Db>}, +ei: {R.ds.index(r) == sel : Nat}, +en: {R.ds.now(r) == 0n : Nat}) -> Inv(rp([A.EMove{k, R.ds.index(o), j}], sel, r), R.ds.moved(k, j, R.db.setx(y, k, v, e), o), R.ds.index(o)) & Len(R.ds.moved(k, j, R.db.setx(y, k, v, e), o), n):
+def move_yes1(+k: String, +j: Nat, +o: R.Ds, +r: R.Ds, +sel: Nat, +n: Nat, +y: R.Db, +v: KV.Val, +e: Nat, +ey: {R.ds.nth(j, R.ds.list(o)) == Some{y} : Maybe<&2, R.Db>}, +ene: {Nat.is_ne(j, R.ds.index(o)) == True{} : Bool}, +eno: {R.db.entry(y, k) == None{} : Maybe<&2, KV.Item<KV.Val>>}, +eent: {R.ds.ent(o, k) == Some{KV.Item{v, e}} : Maybe<&2, KV.Item<KV.Val>>}, my: Exists(R.Db, z => {R.ds.nth(j, R.ds.list(R.ds.focus(R.ds.index(o), r))) == Some{z} : Maybe<&2, R.Db>} & {R.db.at(0n, z) == R.db.at(0n, y) : R.Db}), +ln: {List.length(&2, R.Db, Laws.zero(o)) == 1n+n : Nat}, +sm: {KV.small(n) == True{} : Bool}, +ez: {Laws.zero(r) == Laws.zero(o) : List<&2, R.Db>}, +ei: {R.ds.index(r) == sel : Nat}, +en: {R.ds.now(r) == 0n : Nat}) -> Inv(rp([A.EMove{k, R.ds.index(o), j}], sel, r), R.ds.moved(k, j, R.db.setx(y, k, v, e), o), R.ds.index(o)) & Len(R.ds.moved(k, j, R.db.setx(y, k, v, e), o), n):
   (y2, q) = my
   (ey2, eyy) = q
   move_yes2(k, j, o, r, sel, n, y, v, e, y2, ey, ene, eno, eent, ey2, eyy, ln, sm, ez, ei, en)
 
-def move_yes(+k: String, +j: Nat, +o: R.Ds, +r: R.Ds, +sel: Nat, +n: Nat, +y: R.Db, +v: String, +e: Nat, +ey: {R.ds.nth(j, R.ds.list(o)) == Some{y} : Maybe<&2, R.Db>}, +ene: {Nat.is_ne(j, R.ds.index(o)) == True{} : Bool}, +eno: {R.db.entry(y, k) == None{} : Maybe<&2, KV.Item<String>>}, +eent: {R.ds.ent(o, k) == Some{KV.Item{v, e}} : Maybe<&2, KV.Item<String>>}, +ln: {List.length(&2, R.Db, Laws.zero(o)) == 1n+n : Nat}, +sm: {KV.small(n) == True{} : Bool}, +ez: {Laws.zero(r) == Laws.zero(o) : List<&2, R.Db>}, +ei: {R.ds.index(r) == sel : Nat}, +en: {R.ds.now(r) == 0n : Nat}) -> Inv(rp([A.EMove{k, R.ds.index(o), j}], sel, r), R.ds.moved(k, j, R.db.setx(y, k, v, e), o), R.ds.index(o)) & Len(R.ds.moved(k, j, R.db.setx(y, k, v, e), o), n):
+def move_yes(+k: String, +j: Nat, +o: R.Ds, +r: R.Ds, +sel: Nat, +n: Nat, +y: R.Db, +v: KV.Val, +e: Nat, +ey: {R.ds.nth(j, R.ds.list(o)) == Some{y} : Maybe<&2, R.Db>}, +ene: {Nat.is_ne(j, R.ds.index(o)) == True{} : Bool}, +eno: {R.db.entry(y, k) == None{} : Maybe<&2, KV.Item<KV.Val>>}, +eent: {R.ds.ent(o, k) == Some{KV.Item{v, e}} : Maybe<&2, KV.Item<KV.Val>>}, +ln: {List.length(&2, R.Db, Laws.zero(o)) == 1n+n : Nat}, +sm: {KV.small(n) == True{} : Bool}, +ez: {Laws.zero(r) == Laws.zero(o) : List<&2, R.Db>}, +ei: {R.ds.index(r) == sel : Nat}, +en: {R.ds.now(r) == 0n : Nat}) -> Inv(rp([A.EMove{k, R.ds.index(o), j}], sel, r), R.ds.moved(k, j, R.db.setx(y, k, v, e), o), R.ds.index(o)) & Len(R.ds.moved(k, j, R.db.setx(y, k, v, e), o), n):
   move_yes1(k, j, o, r, sel, n, y, v, e, ey, ene, eno, eent, mat0_some(R.ds.nth(j, R.ds.list(R.ds.focus(R.ds.index(o), r))), R.db.at(0n, y))(nth_r(j, R.ds.focus(R.ds.index(o), r), o, Equal.trans(List<&2, R.Db>, Laws.zero(R.ds.focus(R.ds.index(o), r)), Laws.zero(r), Laws.zero(o), focus_z(R.ds.index(o), r), ez), y, ey)), ln, sm, ez, ei, en)
 
 def post_move(+k: String, +j: Nat, +o: R.Ds, +r: R.Ds, +sel: Nat, +n: Nat, -p: Bool & R.Ds, sp: MoveOk(k, j, o, p), +ln: {List.length(&2, R.Db, Laws.zero(o)) == 1n+n : Nat}, +sm: {KV.small(n) == True{} : Bool}, +ez: {Laws.zero(r) == Laws.zero(o) : List<&2, R.Db>}, +ei: {R.ds.index(r) == sel : Nat}, +en: {R.ds.now(r) == 0n : Nat}) -> Inv(rp(tmid(A.act.move(k, R.ds.index(o), j, p)), sel, r), R.ds_of(R.act.moved(p)), A.effs.sel(tmid(A.act.move(k, R.ds.index(o), j, p)), sel)) & Len(R.ds_of(R.act.moved(p)), n):
@@ -8070,7 +8326,7 @@ def post_move(+k: String, +j: Nat, +o: R.Ds, +r: R.Ds, +sel: Nat, +n: Nat, -p: B
       move_yes(k, j, o, r, sel, n, y, v, e, ey, ene, eno, eent, ln, sm, ez, ei, en)
 
 # COPY that copied the key
-def copy_yes2(+s: String, +d: String, +j: Nat, +o: R.Ds, +r: R.Ds, +sel: Nat, +n: Nat, +y: R.Db, +v: String, +e: Nat, +y2: R.Db, +ey: {R.ds.nth(j, R.ds.list(o)) == Some{y} : Maybe<&2, R.Db>}, +eent: {R.ds.ent(o, s) == Some{KV.Item{v, e}} : Maybe<&2, KV.Item<String>>}, +ey2: {R.ds.nth(j, R.ds.list(R.ds.focus(R.ds.index(o), r))) == Some{y2} : Maybe<&2, R.Db>}, +eyy: {R.db.at(0n, y2) == R.db.at(0n, y) : R.Db}, +ln: {List.length(&2, R.Db, Laws.zero(o)) == 1n+n : Nat}, +sm: {KV.small(n) == True{} : Bool}, +ez: {Laws.zero(r) == Laws.zero(o) : List<&2, R.Db>}, +ei: {R.ds.index(r) == sel : Nat}, +en: {R.ds.now(r) == 0n : Nat}) -> Inv(rp([A.ECopy{s, d, R.ds.index(o), j}], sel, r), R.ds.with(R.ds.put(j, R.db.setx(y, d, v, e), R.ds.list(o)), o), R.ds.index(o)) & Len(R.ds.with(R.ds.put(j, R.db.setx(y, d, v, e), R.ds.list(o)), o), n):
+def copy_yes2(+s: String, +d: String, +j: Nat, +o: R.Ds, +r: R.Ds, +sel: Nat, +n: Nat, +y: R.Db, +v: KV.Val, +e: Nat, +y2: R.Db, +ey: {R.ds.nth(j, R.ds.list(o)) == Some{y} : Maybe<&2, R.Db>}, +eent: {R.ds.ent(o, s) == Some{KV.Item{v, e}} : Maybe<&2, KV.Item<KV.Val>>}, +ey2: {R.ds.nth(j, R.ds.list(R.ds.focus(R.ds.index(o), r))) == Some{y2} : Maybe<&2, R.Db>}, +eyy: {R.db.at(0n, y2) == R.db.at(0n, y) : R.Db}, +ln: {List.length(&2, R.Db, Laws.zero(o)) == 1n+n : Nat}, +sm: {KV.small(n) == True{} : Bool}, +ez: {Laws.zero(r) == Laws.zero(o) : List<&2, R.Db>}, +ei: {R.ds.index(r) == sel : Nat}, +en: {R.ds.now(r) == 0n : Nat}) -> Inv(rp([A.ECopy{s, d, R.ds.index(o), j}], sel, r), R.ds.with(R.ds.put(j, R.db.setx(y, d, v, e), R.ds.list(o)), o), R.ds.index(o)) & Len(R.ds.with(R.ds.put(j, R.db.setx(y, d, v, e), R.ds.list(o)), o), n):
   +eiF = focus_i(R.ds.index(o), r, bound_r(R.ds.index(o), r, o, n, ez, ln, lidx(o, n, ln)))
   +enF = Equal.trans(Nat, R.ds.now(R.ds.focus(R.ds.index(o), r)), R.ds.now(r), 0n, focus_n(R.ds.index(o), r), en)
   +ezF = Equal.trans(List<&2, R.Db>, Laws.zero(R.ds.focus(R.ds.index(o), r)), Laws.zero(r), Laws.zero(o), focus_z(R.ds.index(o), r), ez)
@@ -8089,12 +8345,12 @@ def copy_yes2(+s: String, +d: String, +j: Nat, +o: R.Ds, +r: R.Ds, +sel: Nat, +n
      Equal.cong(List<&2, R.Db>, Nat, z => List.length(&2, R.Db, z), Laws.zero(R.ds.with(R.ds.put(j, R.db.setx(y, d, v, e), R.ds.list(o)), o)), R.ds.put(j, R.db.at(0n, R.db.setx(y, d, v, e)), Laws.zero(o)), z_with1(j, R.db.setx(y, d, v, e), o)),
      Equal.trans(Nat, List.length(&2, R.Db, R.ds.put(j, R.db.at(0n, R.db.setx(y, d, v, e)), Laws.zero(o))), List.length(&2, R.Db, Laws.zero(o)), 1n+n, len_put(j, R.db.at(0n, R.db.setx(y, d, v, e)), Laws.zero(o)), ln)))
 
-def copy_yes1(+s: String, +d: String, +j: Nat, +o: R.Ds, +r: R.Ds, +sel: Nat, +n: Nat, +y: R.Db, +v: String, +e: Nat, +ey: {R.ds.nth(j, R.ds.list(o)) == Some{y} : Maybe<&2, R.Db>}, +eent: {R.ds.ent(o, s) == Some{KV.Item{v, e}} : Maybe<&2, KV.Item<String>>}, my: Exists(R.Db, z => {R.ds.nth(j, R.ds.list(R.ds.focus(R.ds.index(o), r))) == Some{z} : Maybe<&2, R.Db>} & {R.db.at(0n, z) == R.db.at(0n, y) : R.Db}), +ln: {List.length(&2, R.Db, Laws.zero(o)) == 1n+n : Nat}, +sm: {KV.small(n) == True{} : Bool}, +ez: {Laws.zero(r) == Laws.zero(o) : List<&2, R.Db>}, +ei: {R.ds.index(r) == sel : Nat}, +en: {R.ds.now(r) == 0n : Nat}) -> Inv(rp([A.ECopy{s, d, R.ds.index(o), j}], sel, r), R.ds.with(R.ds.put(j, R.db.setx(y, d, v, e), R.ds.list(o)), o), R.ds.index(o)) & Len(R.ds.with(R.ds.put(j, R.db.setx(y, d, v, e), R.ds.list(o)), o), n):
+def copy_yes1(+s: String, +d: String, +j: Nat, +o: R.Ds, +r: R.Ds, +sel: Nat, +n: Nat, +y: R.Db, +v: KV.Val, +e: Nat, +ey: {R.ds.nth(j, R.ds.list(o)) == Some{y} : Maybe<&2, R.Db>}, +eent: {R.ds.ent(o, s) == Some{KV.Item{v, e}} : Maybe<&2, KV.Item<KV.Val>>}, my: Exists(R.Db, z => {R.ds.nth(j, R.ds.list(R.ds.focus(R.ds.index(o), r))) == Some{z} : Maybe<&2, R.Db>} & {R.db.at(0n, z) == R.db.at(0n, y) : R.Db}), +ln: {List.length(&2, R.Db, Laws.zero(o)) == 1n+n : Nat}, +sm: {KV.small(n) == True{} : Bool}, +ez: {Laws.zero(r) == Laws.zero(o) : List<&2, R.Db>}, +ei: {R.ds.index(r) == sel : Nat}, +en: {R.ds.now(r) == 0n : Nat}) -> Inv(rp([A.ECopy{s, d, R.ds.index(o), j}], sel, r), R.ds.with(R.ds.put(j, R.db.setx(y, d, v, e), R.ds.list(o)), o), R.ds.index(o)) & Len(R.ds.with(R.ds.put(j, R.db.setx(y, d, v, e), R.ds.list(o)), o), n):
   (y2, q) = my
   (ey2, eyy) = q
   copy_yes2(s, d, j, o, r, sel, n, y, v, e, y2, ey, eent, ey2, eyy, ln, sm, ez, ei, en)
 
-def copy_yes(+s: String, +d: String, +j: Nat, +o: R.Ds, +r: R.Ds, +sel: Nat, +n: Nat, +y: R.Db, +v: String, +e: Nat, +ey: {R.ds.nth(j, R.ds.list(o)) == Some{y} : Maybe<&2, R.Db>}, +eent: {R.ds.ent(o, s) == Some{KV.Item{v, e}} : Maybe<&2, KV.Item<String>>}, +ln: {List.length(&2, R.Db, Laws.zero(o)) == 1n+n : Nat}, +sm: {KV.small(n) == True{} : Bool}, +ez: {Laws.zero(r) == Laws.zero(o) : List<&2, R.Db>}, +ei: {R.ds.index(r) == sel : Nat}, +en: {R.ds.now(r) == 0n : Nat}) -> Inv(rp([A.ECopy{s, d, R.ds.index(o), j}], sel, r), R.ds.with(R.ds.put(j, R.db.setx(y, d, v, e), R.ds.list(o)), o), R.ds.index(o)) & Len(R.ds.with(R.ds.put(j, R.db.setx(y, d, v, e), R.ds.list(o)), o), n):
+def copy_yes(+s: String, +d: String, +j: Nat, +o: R.Ds, +r: R.Ds, +sel: Nat, +n: Nat, +y: R.Db, +v: KV.Val, +e: Nat, +ey: {R.ds.nth(j, R.ds.list(o)) == Some{y} : Maybe<&2, R.Db>}, +eent: {R.ds.ent(o, s) == Some{KV.Item{v, e}} : Maybe<&2, KV.Item<KV.Val>>}, +ln: {List.length(&2, R.Db, Laws.zero(o)) == 1n+n : Nat}, +sm: {KV.small(n) == True{} : Bool}, +ez: {Laws.zero(r) == Laws.zero(o) : List<&2, R.Db>}, +ei: {R.ds.index(r) == sel : Nat}, +en: {R.ds.now(r) == 0n : Nat}) -> Inv(rp([A.ECopy{s, d, R.ds.index(o), j}], sel, r), R.ds.with(R.ds.put(j, R.db.setx(y, d, v, e), R.ds.list(o)), o), R.ds.index(o)) & Len(R.ds.with(R.ds.put(j, R.db.setx(y, d, v, e), R.ds.list(o)), o), n):
   copy_yes1(s, d, j, o, r, sel, n, y, v, e, ey, eent, mat0_some(R.ds.nth(j, R.ds.list(R.ds.focus(R.ds.index(o), r))), R.db.at(0n, y))(nth_r(j, R.ds.focus(R.ds.index(o), r), o, Equal.trans(List<&2, R.Db>, Laws.zero(R.ds.focus(R.ds.index(o), r)), Laws.zero(r), Laws.zero(o), focus_z(R.ds.index(o), r), ez), y, ey)), ln, sm, ez, ei, en)
 
 def post_copy(+s: String, +d: String, +j: Nat, +rep: Bool, +o: R.Ds, +r: R.Ds, +sel: Nat, +n: Nat, -p: Bool & R.Ds, sp: CopyOk(s, d, j, rep, o, p), +ln: {List.length(&2, R.Db, Laws.zero(o)) == 1n+n : Nat}, +sm: {KV.small(n) == True{} : Bool}, +ez: {Laws.zero(r) == Laws.zero(o) : List<&2, R.Db>}, +ei: {R.ds.index(r) == sel : Nat}, +en: {R.ds.now(r) == 0n : Nat}) -> Inv(rp(tmid(A.act.copy(s, d, R.ds.index(o), j, p)), sel, r), R.ds_of(R.act.moved(p)), A.effs.sel(tmid(A.act.copy(s, d, R.ds.index(o), j, p)), sel)) & Len(R.ds_of(R.act.moved(p)), n):
@@ -10254,29 +10510,29 @@ def Laws.config_set_get(n, v, items, it, nv, items2, e1, e2, e3):
 # was (frame).
 
 # a key that is there, and a key equal to it, is there
-def reap_there(+t: KV.Trie<String>, +k: String, +j: String, +now: Nat, -y: KV.Item<String>, jk: {j == k : String}, e: {R.ent.live(now, KV.entry(String, t, j)) == Some{y} : Maybe<&2, KV.Item<String>>}) -> {Maybe.is_some(&2, KV.Item<String>, R.ent.live(now, KV.entry.at(String, t, k, KV.hash(k)))) == True{} : Bool}:
-  %entry_at_eq(String, t, k) : {Maybe.is_some(&2, KV.Item<String>, R.ent.live(now, _)) == True{} : Bool}
-  %jk : {Maybe.is_some(&2, KV.Item<String>, R.ent.live(now, KV.entry(String, t, _))) == True{} : Bool}
-  %Equal.sym(Maybe<&2, KV.Item<String>>, R.ent.live(now, KV.entry(String, t, j)), Some{y}, e) : {Maybe.is_some(&2, KV.Item<String>, _) == True{} : Bool}
+def reap_there(+t: KV.Trie<KV.Val>, +k: String, +j: String, +now: Nat, -y: KV.Item<KV.Val>, jk: {j == k : String}, e: {R.ent.live(now, KV.entry(KV.Val, t, j)) == Some{y} : Maybe<&2, KV.Item<KV.Val>>}) -> {Maybe.is_some(&2, KV.Item<KV.Val>, R.ent.live(now, KV.entry.at(KV.Val, t, k, KV.hash(k)))) == True{} : Bool}:
+  %entry_at_eq(KV.Val, t, k) : {Maybe.is_some(&2, KV.Item<KV.Val>, R.ent.live(now, _)) == True{} : Bool}
+  %jk : {Maybe.is_some(&2, KV.Item<KV.Val>, R.ent.live(now, KV.entry(KV.Val, t, _))) == True{} : Bool}
+  %Equal.sym(Maybe<&2, KV.Item<KV.Val>>, R.ent.live(now, KV.entry(KV.Val, t, j)), Some{y}, e) : {Maybe.is_some(&2, KV.Item<KV.Val>, _) == True{} : Bool}
   {==}
 
 # a key the sweep keeps is not j, which is there
-def reap_ne(c: Bool, +t: KV.Trie<String>, +k: String, +j: String, +now: Nat, -y: KV.Item<String>, -r: Bool)
+def reap_ne(c: Bool, +t: KV.Trie<KV.Val>, +k: String, +j: String, +now: Nat, -y: KV.Item<KV.Val>, -r: Bool)
   -> {c == KV.str_eq(j, k) : Bool}
-  -> {False{} == Maybe.is_some(&2, KV.Item<String>, R.ent.live(now, KV.entry.at(String, t, k, KV.hash(k)))) : Bool}
-  -> {R.ent.live(now, KV.entry(String, t, j)) == Some{y} : Maybe<&2, KV.Item<String>>}
+  -> {False{} == Maybe.is_some(&2, KV.Item<KV.Val>, R.ent.live(now, KV.entry.at(KV.Val, t, k, KV.hash(k)))) : Bool}
+  -> {R.ent.live(now, KV.entry(KV.Val, t, j)) == Some{y} : Maybe<&2, KV.Item<KV.Val>>}
   -> {r == False{} : Bool}
   -> {Bool.or(c, r) == False{} : Bool}:
   match c:
     case False{}:
       ec => eb => e => ih => ih
     case True{}:
-      ec => eb => e => ih => Empty.absurd({Bool.or(True{}, r) == False{} : Bool}, false_true(Equal.trans(Bool, False{}, Maybe.is_some(&2, KV.Item<String>, R.ent.live(now, KV.entry.at(String, t, k, KV.hash(k)))), True{}, eb, reap_there(t, k, j, now, y, Laws.key_eq_true(j, k, Equal.sym(Bool, True{}, KV.str_eq(j, k), ec)), e))))
+      ec => eb => e => ih => Empty.absurd({Bool.or(True{}, r) == False{} : Bool}, false_true(Equal.trans(Bool, False{}, Maybe.is_some(&2, KV.Item<KV.Val>, R.ent.live(now, KV.entry.at(KV.Val, t, k, KV.hash(k)))), True{}, eb, reap_there(t, k, j, now, y, Laws.key_eq_true(j, k, Equal.sym(Bool, True{}, KV.str_eq(j, k), ec)), e))))
 
-def reap_k(b: Bool, +k: String, +j: String, +t: KV.Trie<String>, +now: Nat, -y: KV.Item<String>, -ks: List<&2, String>)
-  -> {b == Maybe.is_some(&2, KV.Item<String>, R.ent.live(now, KV.entry.at(String, t, k, KV.hash(k)))) : Bool}
+def reap_k(b: Bool, +k: String, +j: String, +t: KV.Trie<KV.Val>, +now: Nat, -y: KV.Item<KV.Val>, -ks: List<&2, String>)
+  -> {b == Maybe.is_some(&2, KV.Item<KV.Val>, R.ent.live(now, KV.entry.at(KV.Val, t, k, KV.hash(k)))) : Bool}
   -> {Laws.any_key(j, ks) == False{} : Bool}
-  -> {R.ent.live(now, KV.entry(String, t, j)) == Some{y} : Maybe<&2, KV.Item<String>>}
+  -> {R.ent.live(now, KV.entry(KV.Val, t, j)) == Some{y} : Maybe<&2, KV.Item<KV.Val>>}
   -> {Laws.any_key(j, R.reap.put(b, k, ks)) == False{} : Bool}:
   match b:
     case True{}:
@@ -10285,12 +10541,12 @@ def reap_k(b: Bool, +k: String, +j: String, +t: KV.Trie<String>, +now: Nat, -y: 
       eb => ih => e => reap_ne(KV.str_eq(j, k), t, k, j, now, y, Laws.any_key(j, ks))({==})(eb)(e)(ih)
 
 # none of the keys the sweep keeps is j, which is there
-def reap_none(ks: List<&2, String>, +t: KV.Trie<String>, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>, +j: String, -y: KV.Item<String>) -> {R.ent.live(now, KV.entry(String, t, j)) == Some{y} : Maybe<&2, KV.Item<String>>} -> {Laws.any_key(j, R.reap.keys(ks, R.Db{t, n, x, now, rr})) == False{} : Bool}:
+def reap_none(ks: List<&2, String>, +t: KV.Trie<KV.Val>, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>, +j: String, -y: KV.Item<KV.Val>) -> {R.ent.live(now, KV.entry(KV.Val, t, j)) == Some{y} : Maybe<&2, KV.Item<KV.Val>>} -> {Laws.any_key(j, R.reap.keys(ks, R.Db{t, n, x, now, rr})) == False{} : Bool}:
   match ks:
     case Nil{}:
       e => {==}
     case Con{+k, +rest}:
-      +e => reap_k(Maybe.is_some(&2, KV.Item<String>, R.ent.live(now, KV.entry.at(String, t, k, KV.hash(k)))), k, j, t, now, y, R.reap.keys(rest, R.Db{t, n, x, now, rr}))({==})(reap_none(rest, t, n, x, now, rr, j, y)(e))(e)
+      +e => reap_k(Maybe.is_some(&2, KV.Item<KV.Val>, R.ent.live(now, KV.entry.at(KV.Val, t, k, KV.hash(k)))), k, j, t, now, y, R.reap.keys(rest, R.Db{t, n, x, now, rr}))({==})(reap_none(rest, t, n, x, now, rr, j, y)(e))(e)
 
 def Laws.reap_keeps(ks, db, j, y, e):
   match db:

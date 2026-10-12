@@ -105,8 +105,8 @@ def run.upd(db: R.Db, +k: String, +op: R.UpdOp) -> R.Reply & (List<&2, R.Cmd> & 
     case R.Db{t, +n, +x, +now, rr}:
       +u = t
       +h = KV.hash(k)
-      +m = KV.entry.at(String, u, k, h)
-      +o = R.upd(op, now, R.ent.live(now, m))
+      +m = KV.entry.at(KV.Val, u, k, h)
+      +o = R.upd.v(op, now, R.ent.live(now, m))
       run.out(R.upd.put(u, k, h, n, x, now, rr, R.ent.code(m), o), upd.effect(k, o))
 
 def run.put(c: R.Cmd, r: R.Reply & R.Db) -> R.Reply & (List<&2, R.Cmd> & R.Db):
@@ -149,10 +149,18 @@ def bitop.effect(e: Bool, +v: String, +d: String) -> List<&2, R.Cmd>:
     case False{}:
       [R.Set{d, v}]
 
+# none when a source holds a collection (WRONGTYPE)
+def bitop.eff(wrong: Bool, +op: R.BitK, +d: String, +srcs: List<&2, String>, +x: R.Db) -> List<&2, R.Cmd>:
+  match wrong:
+    case True{}:
+      Nil{}
+    case False{}:
+      +v = R.bitop.val(op, srcs, R.db.now(x), R.db.trie(x))
+      bitop.effect(String.is_empty(v), v, d)
+
 def run.bitop(+op: R.BitK, +d: String, +srcs: List<&2, String>, db: R.Db) -> R.Reply & (List<&2, R.Cmd> & R.Db):
   +x = db
-  +v = R.bitop.val(op, srcs, R.db.now(x), R.db.trie(x))
-  run.out(R.exec(R.BitOp{op, d, srcs}, x), bitop.effect(String.is_empty(v), v, d))
+  run.out(R.exec(R.BitOp{op, d, srcs}, x), bitop.eff(R.bitop.wrong(srcs, R.db.now(x), R.db.trie(x)), op, d, srcs, x))
 
 def run(+c: R.Cmd, db: R.Db) -> R.Reply & (List<&2, R.Cmd> & R.Db):
   match c:

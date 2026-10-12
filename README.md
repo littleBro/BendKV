@@ -37,7 +37,7 @@ that gives it the process's directory, id and clock).
 
 The laws are stated by hand in [`proof/LAWS.bend`](proof/LAWS.bend) and proved in
 [`proof/PROOF.bend`](proof/PROOF.bend). A database is a record: the trie, whose
-entries hold each key's value and the time it expires at; how many keys it holds (which
+entries hold each key's value (a string, or a collection) and the time it expires at; how many keys it holds (which
 DBSIZE answers) and how many of them have a time; and the time its batch runs at. The
 server holds several (16, as Redis), with the one a connection selected in focus while
 its batch runs. A key whose time has passed is there for no command. The laws about what keys read and what
@@ -50,7 +50,7 @@ is the trie's size is not proved yet.
 |---|---:|---|
 | Map | 11 | the trie is a finite map from keys to a value and a time: after any sequence of writes (a value with a time, a value with its time kept, a time alone, a deletion), every key holds what was last written to it, with no stale, lost or foreign entries; a read sees a key only until its time |
 | Keys | 2 | key comparison is exactly string equality, down to the bits of `U32` |
-| Commands | 24 | no command changes a key it does not write, neither its value nor its time (`frame`); reads keep the database; a key whose time has passed is there for no command, and the sweep of expired keys deletes no key that is there; GET, DEL, APPEND, SETRANGE, SETNX, INCR, GETDEL, PERSIST, PTTL, SET with KEEPTTL, RENAME, MSETNX and BITOP behave as specified, a key they add counted; a pipelined batch runs exactly as its commands in order; the cache hints before a batch change nothing |
+| Commands | 24 | no command changes a key it does not write, neither its value nor its time (`frame`); reads keep the database; a key whose time has passed is there for no command, and the sweep of expired keys deletes no key that is there; GET, DEL, APPEND, SETRANGE, SETNX, INCR, GETDEL, PERSIST, PTTL, SET with KEEPTTL, RENAME, MSETNX and BITOP behave as specified, on keys of the types they take (SET, SETNX, the times and the key commands take any), a key they add counted; a pipelined batch runs exactly as its commands in order; the cache hints before a batch change nothing |
 | Commuting | 5 | commands on different keys commute: replies and key contents are the same in either order, and adjacent independent commands in a batch can be swapped, when neither writes a key the other's writes depend on (RENAME moves a value from one key to another, MSETNX sets its keys only when none is there, BITOP sets its destination from its sources) |
 | Persistence | 8 | logging changes no reply; the file reads back as written, times included; after any history, each batch at its own time, on any of the databases, the server restores exactly the databases it held; a file cut by a crash at any byte restores the databases after some prefix of its acts, never a partial one |
 | Databases | 6 | SELECT changes no database and focuses the one it names; SWAPDB puts each of two databases in the other's place; FLUSHALL empties them all; MOVE takes a key's entry, its value and its time, out of the selected database and sets it in the other; COPY sets a key's entry at another key, in the selected database or another, when that key is not there or REPLACE is given |

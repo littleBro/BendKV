@@ -9,8 +9,9 @@ import ./map.bend as KV
 # Types
 # -----
 
-# the database: string keys to string values (Redis strings are bytes;
-# BendKV keeps one byte per Char) in a trie (t), and beside it how many
+# the database: string keys to values (KV.Val: a string, or a collection;
+# Redis strings are bytes, BendKV keeps one byte per Char) in a trie (t),
+# and beside it how many
 # keys the trie holds (n: kept as the commands change the trie, so that
 # DBSIZE and INFO's keyspace do not count them), how many of them have a
 # time to live (x) and the time at which a batch's commands run (now, ms
@@ -19,7 +20,7 @@ import ./map.bend as KV
 # record of plain fields travels as separate registers, and each call
 # that passes the database on would pass every field).
 type Db is Data:
-  Db{t: KV.Trie<String>, n: Nat, x: Nat, now: Nat, rr: Maybe<&2, Db>}
+  Db{t: KV.Trie<KV.Val>, n: Nat, x: Nat, now: Nat, rr: Maybe<&2, Db>}
 
 # an integer: IPos{n} is n, INeg{n} is -(n+1), so each integer has one form
 type Int is Data:
@@ -352,6 +353,42 @@ def i_get(m: Maybe<&2, String>) -> Reply:
       RBulk{s}
     case None{}:
       RNull{}
+
+def e_wrongtype() -> Reply:
+  RError{"WRONGTYPE Operation against a key holding the wrong kind of value"}
+
+# GET's reply from what it finds (KV.get_copy): a string, or WRONGTYPE
+# for another kind of value; MGET's answers nil for one
+def r_getv(m: KV.Got) -> Reply:
+  match m:
+    case KV.GStr{s}:
+      RBulk{s}
+    case KV.GColl{}:
+      e_wrongtype()
+    case KV.GNone{}:
+      RNull{}
+
+def i_getv(m: Maybe<&2, KV.Val>) -> Reply:
+  match m:
+    case Some{KV.VStr{s}}:
+      RBulk{s}
+    case Some{KV.VColl{c}}:
+      RNull{}
+    case None{}:
+      RNull{}
+
+# the name TYPE gives a value's kind
+def coll.type(+c: KV.Coll) -> String:
+  match c:
+    case KV.CHash{h}:
+      "hash"
+
+def val.type(+v: KV.Val) -> String:
+  match v:
+    case KV.VStr{s}:
+      "string"
+    case KV.VColl{+c}:
+      coll.type(c)
 
 def e_arity(name: String) -> Cmd:
   Bad{RError{"ERR wrong number of arguments for '" ++ String.to_lower(name) ++ "' command"}}
@@ -5310,9 +5347,9 @@ def glob_filter(+p: String, ks: List<&2, String>) -> List<&2, Reply>:
   glob_go(String.eq(p, "*"), p, ks)
 
 # SCAN's reply: the scan's keys, filtered (the parser is above parse_id)
-# the keys a scan found, by the pattern ("*" when there is none), then by
-# the type: BendKV holds strings only, so a type other than "string"
-# keeps none
+# the keys a scan found, by the type (the name TYPE gives a key's kind,
+# in any case: "none" for a key gone since), then by the pattern ("*"
+# when there is none)
 def scan.match(ks: List<&2, String>, pat: Maybe<&2, String>) -> List<&2, Reply>:
   match pat:
     case Some{+p}:
@@ -5320,34 +5357,48 @@ def scan.match(ks: List<&2, String>, pat: Maybe<&2, String>) -> List<&2, Reply>:
     case None{}:
       glob_filter("*", ks)
 
-def scan.typed(ks: List<&2, String>, pat: Maybe<&2, String>, ok: Bool) -> List<&2, Reply>:
+def scan.tname(m: Maybe<&2, KV.Val>) -> String:
+  match m:
+    case Some{+v}:
+      val.type(v)
+    case None{}:
+      "none"
+
+def scan.typed.put(ok: Bool, k: String, ks: List<&2, String>) -> List<&2, String>:
   match ok:
     case True{}:
-      scan.match(ks, pat)
+      k <> ks
     case False{}:
-      Nil{}
+      ks
 
-def scan.keep(ks: List<&2, String>, pat: Maybe<&2, String>, typ: Maybe<&2, String>) -> List<&2, Reply>:
+def scan.typed(ks: List<&2, String>, +t: String, +d: KV.Trie<KV.Val>, +now: Nat) -> List<&2, String>:
+  match ks:
+    case Nil{}:
+      Nil{}
+    case Con{+k, rest}:
+      scan.typed.put(String.eq(t, scan.tname(KV.read(KV.Val, d, k, now))), k, scan.typed(rest, t, d, now))
+
+def scan.keep(ks: List<&2, String>, pat: Maybe<&2, String>, typ: Maybe<&2, String>, +d: KV.Trie<KV.Val>, +now: Nat) -> List<&2, Reply>:
   match typ:
     case Some{+t}:
-      scan.typed(ks, pat, is_word(t, "STRING"))
+      scan.match(scan.typed(ks, String.to_lower(cstr(t)), d, now), pat)
     case None{}:
       scan.match(ks, pat)
 
-def scan.rep(+next: Nat, ks: List<&2, String>, pat: Maybe<&2, String>, typ: Maybe<&2, String>) -> Reply:
-  RArray{[RBulk{Nat.show(next)}, RArray{scan.keep(ks, pat, typ)}]}
+def scan.rep(+next: Nat, ks: List<&2, String>, pat: Maybe<&2, String>, typ: Maybe<&2, String>, +d: KV.Trie<KV.Val>, +now: Nat) -> Reply:
+  RArray{[RBulk{Nat.show(next)}, RArray{scan.keep(ks, pat, typ, d, now)}]}
 
-def scan.out(sc: KV.Scan, pat: Maybe<&2, String>, typ: Maybe<&2, String>) -> Reply:
+def scan.out(sc: KV.Scan, pat: Maybe<&2, String>, typ: Maybe<&2, String>, +d: KV.Trie<KV.Val>, +now: Nat) -> Reply:
   match sc:
     case KV.Stop{+at, acc}:
-      scan.rep(Bool.pick(Nat, Nat.is_lt(at, 1048576n), at, 0n), List.reverse(&2, String, acc), pat, typ)
+      scan.rep(Bool.pick(Nat, Nat.is_lt(at, 1048576n), at, 0n), List.reverse(&2, String, acc), pat, typ, d, now)
     case KV.Scan{w, acc}:
-      scan.rep(0n, List.reverse(&2, String, acc), pat, typ)
+      scan.rep(0n, List.reverse(&2, String, acc), pat, typ, d, now)
 
-def scan.reply(a: ScanArgs, +d: KV.Trie<String>, +now: Nat) -> Reply:
+def scan.reply(a: ScanArgs, +d: KV.Trie<KV.Val>, +now: Nat) -> Reply:
   match a:
     case ScanArgs{+cur, +n, pat, typ}:
-      scan.out(KV.scan(String, d, cur, n, now), pat, typ)
+      scan.out(KV.scan(KV.Val, d, cur, n, now), pat, typ, d, now)
     case ScanBad{r}:
       r
 
@@ -5364,7 +5415,7 @@ def scan.reply(a: ScanArgs, +d: KV.Trie<String>, +now: Nat) -> Reply:
 
 # the empty database
 def db.empty() -> Db:
-  Db{KV.empty(String), 0n, 0n, 0n, None{}}
+  Db{KV.empty(KV.Val), 0n, 0n, 0n, None{}}
 
 # the database at the time now (ms since 1970): the server sets it before
 # each group of batches, and while a file loads it is 0, when no key has
@@ -5376,7 +5427,7 @@ def db.at(+now: Nat, db: Db) -> Db:
 
 # the trie of a database, and how many keys it counts and how many of
 # them have a time (for the laws, and for INFO's keyspace)
-def db.t(d: Db) -> KV.Trie<String>:
+def db.t(d: Db) -> KV.Trie<KV.Val>:
   match d:
     case Db{t, n, x, now, rr}:
       t
@@ -5397,7 +5448,7 @@ def db.now(+d: Db) -> Nat:
       now
 
 # the trie of a database it lends, for a read
-def db.trie(+d: Db) -> KV.Trie<String>:
+def db.trie(+d: Db) -> KV.Trie<KV.Val>:
   match d:
     case Db{+t, n, x, now, rr}:
       t
@@ -5416,20 +5467,21 @@ def cnt.x(+c: Nat, +e: Nat, +x: Nat) -> Nat:
 def code.live(+c: Nat, +now: Nat) -> Bool:
   Bool.and(Nat.is_lt(0n, c), KV.live(now, Nat.sub(c, 1n)))
 
-# SET of k to v, counted: the key's code is asked first, while the trie is
-# lent (KV.code.at), so that a new key counts and a key that had a time
-# loses it
+# SET of k to the string v, counted: the key's code is asked first, while
+# the trie is lent (KV.code.at), so that a new key counts and a key that
+# had a time loses it; a value of another kind is replaced, as SET
+# replaces any
 def db.set(db: Db, +k: String, v: String) -> Db:
   match db:
     case Db{t, +n, +x, now, rr}:
       +u = t
       +h = KV.hash(k)
-      +c = KV.code.at(String, u, k, h)
-      Db{KV.set.at(String, u, k, v, h), cnt.n(c, n), cnt.x(c, 0n, x), now, rr}
+      +c = KV.code.at(KV.Val, u, k, h)
+      Db{KV.set.at(KV.Val, u, k, KV.VStr{v}, h), cnt.n(c, n), cnt.x(c, 0n, x), now, rr}
 
 # GET's read of a database it lends: k's value when the key is there at
-# now, copied (KV.get_copy)
-def db.get_copy(+d: Db, +k: String) -> Maybe<&2, String>:
+# now, a string copied (KV.get_copy)
+def db.get_copy(+d: Db, +k: String) -> KV.Got:
   match d:
     case Db{+t, n, x, +now, rr}:
       KV.get_copy(t, k, now)
@@ -5438,22 +5490,22 @@ def db.get_copy(+d: Db, +k: String) -> Maybe<&2, String>:
 # reply), how many entries went and how many of those had a time (for the
 # counts)
 type Dels is Data:
-  Dels{live: Nat, gone: Nat, gonex: Nat, t: KV.Trie<String>}
+  Dels{live: Nat, gone: Nat, gonex: Nat, t: KV.Trie<KV.Val>}
 
 def del_keys.put(+c: Nat, +now: Nat, r: Dels) -> Dels:
   match r:
     case Dels{+live, +gone, +gonex, t}:
       Dels{Nat.add(live, Bool.pick(Nat, code.live(c, now), 1n, 0n)), Nat.add(gone, Bool.pick(Nat, Nat.is_eq(c, 0n), 0n, 1n)), Nat.add(gonex, Bool.pick(Nat, Nat.is_lt(1n, c), 1n, 0n)), t}
 
-def del_keys(ks: List<&2, String>, +now: Nat, db: KV.Trie<String>) -> Dels:
+def del_keys(ks: List<&2, String>, +now: Nat, db: KV.Trie<KV.Val>) -> Dels:
   match ks:
     case Nil{}:
       Dels{0n, 0n, 0n, db}
     case Con{+k, rest}:
       +u = db
       +h = KV.hash(k)
-      +c = KV.code.at(String, u, k, h)
-      del_keys.put(c, now, del_keys(rest, now, KV.del.at(String, u, k, h)))
+      +c = KV.code.at(KV.Val, u, k, h)
+      del_keys.put(c, now, del_keys(rest, now, KV.del.at(KV.Val, u, k, h)))
 
 def del.db(r: Dels, +n: Nat, +x: Nat, now: Nat, rr: Maybe<&2, Db>) -> Reply & Db:
   match r:
@@ -5467,19 +5519,19 @@ def db.del(db: Db, ks: List<&2, String>) -> Reply & Db:
 
 # EXISTS: how many of the keys are there at now (a repeated key counts
 # again)
-def exists_keys(ks: List<&2, String>, +now: Nat, +db: KV.Trie<String>) -> Nat:
+def exists_keys(ks: List<&2, String>, +now: Nat, +db: KV.Trie<KV.Val>) -> Nat:
   match ks:
     case Nil{}:
       0n
     case Con{+k, rest}:
-      Nat.add(Bool.pick(Nat, Maybe.is_some(&2, String, KV.read(String, db, k, now)), 1n, 0n), exists_keys(rest, now, db))
+      Nat.add(Bool.pick(Nat, Maybe.is_some(&2, KV.Val, KV.read(KV.Val, db, k, now)), 1n, 0n), exists_keys(rest, now, db))
 
-def mget_keys(ks: List<&2, String>, +now: Nat, +db: KV.Trie<String>) -> List<&2, Reply>:
+def mget_keys(ks: List<&2, String>, +now: Nat, +db: KV.Trie<KV.Val>) -> List<&2, Reply>:
   match ks:
     case Nil{}:
       Nil{}
     case Con{+k, rest}:
-      i_get(KV.read(String, db, k, now)) <> mget_keys(rest, now, db)
+      i_getv(KV.read(KV.Val, db, k, now)) <> mget_keys(rest, now, db)
 
 def mset_pairs(ps: List<&2, KVPair>, db: Db) -> Db:
   match ps:
@@ -5492,14 +5544,14 @@ def mset_pairs(ps: List<&2, KVPair>, db: Db) -> Db:
 # A key there at now keeps its time (keep); a new one, or one whose time
 # has passed, gets none: m and y are the counts once the sum is stored, n
 # and x before.
-def incr.put(keep: Bool, t: KV.Trie<String>, +k: String, v: String, +h: U32) -> KV.Trie<String>:
+def incr.put(keep: Bool, t: KV.Trie<KV.Val>, +k: String, v: String, +h: U32) -> KV.Trie<KV.Val>:
   match keep:
     case True{}:
-      KV.keep.at(String, t, k, v, h)
+      KV.keep.at(KV.Val, t, k, KV.VStr{v}, h)
     case False{}:
-      KV.set.at(String, t, k, v, h)
+      KV.set.at(KV.Val, t, k, KV.VStr{v}, h)
 
-def incr.fit(t: KV.Trie<String>, +k: String, +h: U32, +i: Int, ok: Bool, keep: Bool, m: Nat, n: Nat, y: Nat, x: Nat, now: Nat, rr: Maybe<&2, Db>) -> Reply & Db:
+def incr.fit(t: KV.Trie<KV.Val>, +k: String, +h: U32, +i: Int, ok: Bool, keep: Bool, m: Nat, n: Nat, y: Nat, x: Nat, now: Nat, rr: Maybe<&2, Db>) -> Reply & Db:
   match ok:
     case True{}:
       (RInt{i}, Db{incr.put(keep, t, k, int_show(i), h), m, y, now, rr})
@@ -5507,7 +5559,7 @@ def incr.fit(t: KV.Trie<String>, +k: String, +h: U32, +i: Int, ok: Bool, keep: B
       (RError{"ERR increment or decrement would overflow"}, Db{t, n, x, now, rr})
 
 # the integer a key there holds, or none
-def incr.num(t: KV.Trie<String>, +k: String, +h: U32, by: Int, +n: Nat, +x: Nat, now: Nat, rr: Maybe<&2, Db>, cur: Maybe<&2, Int>) -> Reply & Db:
+def incr.num(t: KV.Trie<KV.Val>, +k: String, +h: U32, by: Int, +n: Nat, +x: Nat, now: Nat, rr: Maybe<&2, Db>, cur: Maybe<&2, Int>) -> Reply & Db:
   match cur:
     case Some{i}:
       +s = int_add(i, by)
@@ -5516,34 +5568,37 @@ def incr.num(t: KV.Trie<String>, +k: String, +h: U32, by: Int, +n: Nat, +x: Nat,
       (e_int(), Db{t, n, x, now, rr})
 
 # a key that is not there reads as 0: the sum is by; c is its code
-def incr.new(t: KV.Trie<String>, +k: String, +h: U32, +by: Int, +n: Nat, +x: Nat, now: Nat, rr: Maybe<&2, Db>, +c: Nat) -> Reply & Db:
+def incr.new(t: KV.Trie<KV.Val>, +k: String, +h: U32, +by: Int, +n: Nat, +x: Nat, now: Nat, rr: Maybe<&2, Db>, +c: Nat) -> Reply & Db:
   incr.fit(t, k, h, by, int_fits(by), False{}, cnt.n(c, n), n, cnt.x(c, 0n, x), x, now, rr)
 
-# the value of INCRBY's key there at now (old), or none
-def incr.got(t: KV.Trie<String>, +k: String, +h: U32, +by: Int, +n: Nat, +x: Nat, now: Nat, rr: Maybe<&2, Db>, old: Maybe<&2, String>) -> Reply & Db:
+# the value of INCRBY's key there at now (old), or none; a value of
+# another kind is WRONGTYPE
+def incr.got(t: KV.Trie<KV.Val>, +k: String, +h: U32, +by: Int, +n: Nat, +x: Nat, now: Nat, rr: Maybe<&2, Db>, old: KV.Got) -> Reply & Db:
   match old:
-    case Some{s}:
+    case KV.GStr{s}:
       incr.num(t, k, h, by, n, x, now, rr, int_read(s))
-    case None{}:
+    case KV.GColl{}:
+      (e_wrongtype(), Db{t, n, x, now, rr})
+    case KV.GNone{}:
       +u = t
-      incr.new(u, k, h, by, n, x, now, rr, KV.code.at(String, u, k, h))
+      incr.new(u, k, h, by, n, x, now, rr, KV.code.at(KV.Val, u, k, h))
 
 def db.incr(db: Db, +k: String, by: Int) -> Reply & Db:
   match db:
     case Db{t, n, x, +now, rr}:
       +u = t
       +h = KV.hash(k)
-      incr.got(u, k, h, by, n, x, now, rr, KV.live.at(String, u, k, h, now))
+      incr.got(u, k, h, by, n, x, now, rr, KV.get_copy.at(u, k, h, now))
 
 # A key's entry, when it is there at now; and the code of an entry
-def ent.live(+now: Nat, m: Maybe<&2, KV.Item<String>>) -> Maybe<&2, KV.Item<String>>:
+def ent.live(+now: Nat, m: Maybe<&2, KV.Item<KV.Val>>) -> Maybe<&2, KV.Item<KV.Val>>:
   match m:
     case Some{KV.Item{v, +e}}:
-      Bool.pick(Maybe<&2, KV.Item<String>>, KV.live(now, e), Some{KV.Item{v, e}}, None{})
+      Bool.pick(Maybe<&2, KV.Item<KV.Val>>, KV.live(now, e), Some{KV.Item{v, e}}, None{})
     case None{}:
       None{}
 
-def ent.code(+m: Maybe<&2, KV.Item<String>>) -> Nat:
+def ent.code(+m: Maybe<&2, KV.Item<KV.Val>>) -> Nat:
   match m:
     case Some{KV.Item{v, +e}}:
       1n+e
@@ -5551,16 +5606,16 @@ def ent.code(+m: Maybe<&2, KV.Item<String>>) -> Nat:
       0n
 
 # k's entry in a database it lends, there at now or not
-def db.entry(+d: Db, +k: String) -> Maybe<&2, KV.Item<String>>:
+def db.entry(+d: Db, +k: String) -> Maybe<&2, KV.Item<KV.Val>>:
   match d:
     case Db{+t, n, x, now, rr}:
-      KV.entry.at(String, t, k, KV.hash(k))
+      KV.entry.at(KV.Val, t, k, KV.hash(k))
 
 # k's entry in a database it lends, when the key is there at now
-def db.ent(+d: Db, +k: String) -> Maybe<&2, KV.Item<String>>:
+def db.ent(+d: Db, +k: String) -> Maybe<&2, KV.Item<KV.Val>>:
   match d:
     case Db{+t, n, x, +now, rr}:
-      ent.live(now, KV.entry.at(String, t, k, KV.hash(k)))
+      ent.live(now, KV.entry.at(KV.Val, t, k, KV.hash(k)))
 
 def strlen_of(m: Maybe<&2, KV.Item<String>>) -> Nat:
   match m:
@@ -5999,6 +6054,34 @@ def peek(c: PeekOp, +now: Nat, m: Maybe<&2, KV.Item<String>>) -> Reply:
       bitpos.peek(args, m)
     case PBitfield{ops}:
       bf.peek(ops, m)
+
+# a Peek of a key that holds a collection: its type, its time, or
+# WRONGTYPE for a read of a string
+def peek.coll(c: PeekOp, +now: Nat, +cl: KV.Coll, +e: Nat) -> Reply:
+  match c:
+    case PType{}:
+      RStatus{coll.type(cl)}
+    case PTtl{}:
+      ttl.of(False{}, False{}, now, Some{KV.Item{"", e}})
+    case PPttl{}:
+      ttl.of(True{}, False{}, now, Some{KV.Item{"", e}})
+    case PExpTime{}:
+      ttl.of(False{}, True{}, now, Some{KV.Item{"", e}})
+    case PPExpTime{}:
+      ttl.of(True{}, True{}, now, Some{KV.Item{"", e}})
+    case _:
+      e_wrongtype()
+
+# the reply of a Peek, from the entry of its key there at now: a string
+# is read as above
+def peek.v(c: PeekOp, +now: Nat, m: Maybe<&2, KV.Item<KV.Val>>) -> Reply:
+  match m:
+    case Some{KV.Item{KV.VStr{w}, e}}:
+      peek(c, now, Some{KV.Item{w, e}})
+    case Some{KV.Item{KV.VColl{+cl}, +e}}:
+      peek.coll(c, now, cl, e)
+    case None{}:
+      peek(c, now, None{})
 
 # What a write of one key does to it: nothing, delete it, set its time
 # alone, set its value and its time (0: none), or set its value and keep
@@ -6552,26 +6635,63 @@ def upd(op: UpdOp, +now: Nat, m: Maybe<&2, KV.Item<String>>) -> Out:
     case UBitfield{ops}:
       bitfield.of(ops, m)
 
+# An update of a key that holds a collection: SET (and SETEX, PSETEX)
+# replaces it, SETNX finds it there, EXPIRE and its kin and PERSIST set
+# its time; they see it as a key there with its time (and an empty
+# string, which none of them reads). Any other is WRONGTYPE, as Redis
+# answers it, the key left as it was.
+def upd.any(op: UpdOp) -> Bool:
+  match op:
+    case USetNx{v}:
+      True{}
+    case USet{v, cond, ttl, name}:
+      True{}
+    case UExpire{t, c, name}:
+      True{}
+    case UPersist{}:
+      True{}
+    case _:
+      False{}
+
+def upd.coll(any: Bool, op: UpdOp, +now: Nat, +e: Nat) -> Out:
+  match any:
+    case True{}:
+      upd(op, now, Some{KV.Item{"", e}})
+    case False{}:
+      Out{e_wrongtype(), CKeep{}}
+
+# an update of a key, from its entry there at now: a string is updated as
+# above
+def upd.v(op: UpdOp, +now: Nat, m: Maybe<&2, KV.Item<KV.Val>>) -> Out:
+  match m:
+    case Some{KV.Item{KV.VStr{w}, e}}:
+      upd(op, now, Some{KV.Item{w, e}})
+    case Some{KV.Item{KV.VColl{cl}, +e}}:
+      +o = op
+      upd.coll(upd.any(o), o, now, e)
+    case None{}:
+      upd(op, now, None{})
+
 # the change done to key k, whose code was c (a deleted key, or one whose
-# time alone changes, was there)
-def upd.ch(t: KV.Trie<String>, +k: String, +h: U32, +n: Nat, +x: Nat, now: Nat, rr: Maybe<&2, Db>, +c: Nat, r: Reply, ch: Change) -> Reply & Db:
+# time alone changes, was there); a value set is a string
+def upd.ch(t: KV.Trie<KV.Val>, +k: String, +h: U32, +n: Nat, +x: Nat, now: Nat, rr: Maybe<&2, Db>, +c: Nat, r: Reply, ch: Change) -> Reply & Db:
   match ch:
     case CKeep{}:
       (r, Db{t, n, x, now, rr})
     case CDel{}:
-      (r, Db{KV.del.at(String, t, k, h), Nat.sub(n, 1n), cnt.x(c, 0n, x), now, rr})
+      (r, Db{KV.del.at(KV.Val, t, k, h), Nat.sub(n, 1n), cnt.x(c, 0n, x), now, rr})
     case CExp{+e}:
-      (r, Db{KV.expire.at(String, t, k, e, h), n, cnt.x(c, e, x), now, rr})
+      (r, Db{KV.expire.at(KV.Val, t, k, e, h), n, cnt.x(c, e, x), now, rr})
     case CPut{v, +e}:
-      (r, Db{KV.setx.at(String, t, k, v, e, h), cnt.n(c, n), cnt.x(c, e, x), now, rr})
+      (r, Db{KV.setx.at(KV.Val, t, k, KV.VStr{v}, e, h), cnt.n(c, n), cnt.x(c, e, x), now, rr})
     case CKeepT{v}:
-      (r, Db{KV.keep.at(String, t, k, v, h), cnt.n(c, n), x, now, rr})
+      (r, Db{KV.keep.at(KV.Val, t, k, KV.VStr{v}, h), cnt.n(c, n), x, now, rr})
     case CApp{s, v}:
-      (r, Db{KV.keep.at(String, t, k, v, h), cnt.n(c, n), x, now, rr})
+      (r, Db{KV.keep.at(KV.Val, t, k, KV.VStr{v}, h), cnt.n(c, n), x, now, rr})
     case CRange{o, s, v}:
-      (r, Db{KV.keep.at(String, t, k, v, h), cnt.n(c, n), x, now, rr})
+      (r, Db{KV.keep.at(KV.Val, t, k, KV.VStr{v}, h), cnt.n(c, n), x, now, rr})
 
-def upd.put(t: KV.Trie<String>, +k: String, +h: U32, +n: Nat, +x: Nat, now: Nat, rr: Maybe<&2, Db>, +c: Nat, o: Out) -> Reply & Db:
+def upd.put(t: KV.Trie<KV.Val>, +k: String, +h: U32, +n: Nat, +x: Nat, now: Nat, rr: Maybe<&2, Db>, +c: Nat, o: Out) -> Reply & Db:
   match o:
     case Out{r, ch}:
       upd.ch(t, k, h, n, x, now, rr, c, r, ch)
@@ -6583,22 +6703,22 @@ def db.upd(db: Db, +k: String, op: UpdOp) -> Reply & Db:
     case Db{t, +n, +x, +now, rr}:
       +u = t
       +h = KV.hash(k)
-      +m = KV.entry.at(String, u, k, h)
-      upd.put(u, k, h, n, x, now, rr, ent.code(m), upd(op, now, ent.live(now, m)))
+      +m = KV.entry.at(KV.Val, u, k, h)
+      upd.put(u, k, h, n, x, now, rr, ent.code(m), upd.v(op, now, ent.live(now, m)))
 
 def db.flush(db: Db) -> Db:
   match db:
     case Db{t, n, x, now, rr}:
-      Db{KV.empty(String), 0n, 0n, now, rr}
+      Db{KV.empty(KV.Val), 0n, 0n, now, rr}
 
 # MSETNX: when a key of the pairs is there at now it sets none and
 # answers 0, else it sets them all, as MSET does, and answers 1
-def pairs.live(+ps: List<&2, KVPair>, +now: Nat, +t: KV.Trie<String>) -> Bool:
+def pairs.live(+ps: List<&2, KVPair>, +now: Nat, +t: KV.Trie<KV.Val>) -> Bool:
   match ps:
     case Nil{}:
       False{}
     case Con{KP{+k, v}, +rest}:
-      Bool.or(Maybe.is_some(&2, String, KV.read(String, t, k, now)), pairs.live(rest, now, t))
+      Bool.or(Maybe.is_some(&2, KV.Val, KV.read(KV.Val, t, k, now)), pairs.live(rest, now, t))
 
 def msetnx.of(any: Bool, ps: List<&2, KVPair>, db: Db) -> Reply & Db:
   match any:
@@ -6621,9 +6741,9 @@ type Ren is Data:
   RnNone{}
   RnSame{}
   RnHeld{}
-  RnMove{v: String, e: Nat}
+  RnMove{v: KV.Val, e: Nat}
 
-def ren.of(m: Maybe<&2, KV.Item<String>>, same: Bool, held: Bool) -> Ren:
+def ren.of(m: Maybe<&2, KV.Item<KV.Val>>, same: Bool, held: Bool) -> Ren:
   match m same held:
     case None{} _ _:
       RnNone{}
@@ -6637,7 +6757,7 @@ def ren.of(m: Maybe<&2, KV.Item<String>>, same: Bool, held: Bool) -> Ren:
 # what RENAME finds: src's entry there at now, whether dst is src, and
 # whether RENAMENX finds dst there
 def ren.find(+d: Db, +src: String, +dst: String, nx: Bool) -> Ren:
-  ren.of(db.ent(d, src), KV.str_eq(src, dst), Bool.and(nx, Maybe.is_some(&2, KV.Item<String>, db.ent(d, dst))))
+  ren.of(db.ent(d, src), KV.str_eq(src, dst), Bool.and(nx, Maybe.is_some(&2, KV.Item<KV.Val>, db.ent(d, dst))))
 
 def ren.ok(nx: Bool, +n: Nat) -> Reply:
   match nx:
@@ -6648,13 +6768,13 @@ def ren.ok(nx: Bool, +n: Nat) -> Reply:
 
 # src's entry, v with the time e, moved to dst: dst set and counted as
 # SET with PXAT counts it, then src deleted
-def db.renamed(db: Db, +src: String, +dst: String, v: String, +e: Nat) -> Db:
+def db.renamed(db: Db, +src: String, +dst: String, v: KV.Val, +e: Nat) -> Db:
   match db:
     case Db{t, +n, +x, now, rr}:
       +u = t
       +h = KV.hash(dst)
-      +c = KV.code.at(String, u, dst, h)
-      Db{KV.del.at(String, KV.setx.at(String, u, dst, v, e, h), src, KV.hash(src)), Nat.sub(cnt.n(c, n), 1n), cnt.x(1n+e, 0n, cnt.x(c, e, x)), now, rr}
+      +c = KV.code.at(KV.Val, u, dst, h)
+      Db{KV.del.at(KV.Val, KV.setx.at(KV.Val, u, dst, v, e, h), src, KV.hash(src)), Nat.sub(cnt.n(c, n), 1n), cnt.x(1n+e, 0n, cnt.x(c, e, x)), now, rr}
 
 def ren.do(r: Ren, nx: Bool, +src: String, +dst: String, db: Db) -> Reply & Db:
   match r:
@@ -6695,7 +6815,7 @@ def reap.keys(ks: List<&2, String>, +d: Db) -> List<&2, String>:
     case Nil{}:
       Nil{}
     case Con{+k, rest}:
-      reap.put(Maybe.is_some(&2, KV.Item<String>, db.ent(d, k)), k, reap.keys(rest, d))
+      reap.put(Maybe.is_some(&2, KV.Item<KV.Val>, db.ent(d, k)), k, reap.keys(rest, d))
 
 # a sweep: the bucket the next one starts at (0 once it read the last
 # bucket), and the keys it deletes
@@ -6711,7 +6831,7 @@ def reap.of(s: KV.Scan, +d: Db) -> Reap:
 
 # the sweep of d from the bucket from on, until want entries are read
 def reap(+d: Db, +from: Nat, +want: Nat) -> Reap:
-  reap.of(KV.reap(String, db.trie(d), from, want, db.now(d)), d)
+  reap.of(KV.reap(KV.Val, db.trie(d), from, want, db.now(d)), d)
 
 def reply_of(r: Reply & Db) -> Reply:
   (x, db) = r
@@ -6725,7 +6845,8 @@ def db_of(r: Reply & Db) -> Db:
 # no bytes) combined byte by byte, AND, OR or XOR, a source shorter than
 # another padded with zero bytes, or the one source's bytes complemented
 # (NOT). The value is set at dst as SET sets it, its time gone, or dst is
-# deleted when the value is empty; the reply is the value's length.
+# deleted when the value is empty; the reply is the value's length. A
+# source that holds a collection makes it WRONGTYPE, nothing set.
 def bitop.byte(+op: BitK, +x: U32, +y: U32) -> U32:
   match op:
     case BAnd{}:
@@ -6758,18 +6879,20 @@ def bitop.zip(+op: BitK, a: String, b: String, acc: String) -> String:
         case SCon{Chr{+y}, t}:
           bitop.zip(op, s, t, SCon{Chr{bitop.byte(op, x, y)}, acc})
 
-def bitop.or_empty(m: Maybe<&2, String>) -> String:
+def bitop.or_empty(m: Maybe<&2, KV.Val>) -> String:
   match m:
-    case Some{v}:
+    case Some{KV.VStr{v}}:
       v
+    case Some{KV.VColl{c}}:
+      ""
     case None{}:
       ""
 
-def bitop.src(+t: KV.Trie<String>, +now: Nat, +k: String) -> String:
-  bitop.or_empty(KV.read(String, t, k, now))
+def bitop.src(+t: KV.Trie<KV.Val>, +now: Nat, +k: String) -> String:
+  bitop.or_empty(KV.read(KV.Val, t, k, now))
 
 # the value so far, acc, combined with each source after the first
-def bitop.fold(+op: BitK, srcs: List<&2, String>, +now: Nat, +t: KV.Trie<String>, acc: String) -> String:
+def bitop.fold(+op: BitK, srcs: List<&2, String>, +now: Nat, +t: KV.Trie<KV.Val>, acc: String) -> String:
   match srcs:
     case Nil{}:
       acc
@@ -6788,7 +6911,7 @@ def bitop.first(+op: BitK, v: String) -> String:
     case BXor{}:
       v
 
-def bitop.val(+op: BitK, srcs: List<&2, String>, +now: Nat, +t: KV.Trie<String>) -> String:
+def bitop.val(+op: BitK, srcs: List<&2, String>, +now: Nat, +t: KV.Trie<KV.Val>) -> String:
   match srcs:
     case Nil{}:
       ""
@@ -6802,10 +6925,34 @@ def bitop.db(e: Bool, +v: String, +d: String, db: Db) -> Db:
     case False{}:
       db.set(db, d, v)
 
+# whether a source holds a collection
+def is_coll(m: Maybe<&2, KV.Val>) -> Bool:
+  match m:
+    case Some{KV.VColl{c}}:
+      True{}
+    case _:
+      False{}
+
+def bitop.wrong(srcs: List<&2, String>, +now: Nat, +t: KV.Trie<KV.Val>) -> Bool:
+  match srcs:
+    case Nil{}:
+      False{}
+    case Con{+k, rest}:
+      Bool.or(is_coll(KV.read(KV.Val, t, k, now)), bitop.wrong(rest, now, t))
+
+def bitop.do(wrong: Bool, +op: BitK, +d: String, srcs: List<&2, String>, db: Db) -> Reply & Db:
+  match wrong:
+    case True{}:
+      (e_wrongtype(), db)
+    case False{}:
+      +x = db
+      +v = bitop.val(op, srcs, db.now(x), db.trie(x))
+      (r_int(String.length(v)), bitop.db(String.is_empty(v), v, d, x))
+
 def db.bitop(db: Db, +op: BitK, +d: String, srcs: List<&2, String>) -> Reply & Db:
   +x = db
-  +v = bitop.val(op, srcs, db.now(x), db.trie(x))
-  (r_int(String.length(v)), bitop.db(String.is_empty(v), v, d, x))
+  +ss = srcs
+  bitop.do(bitop.wrong(ss, db.now(x), db.trie(x)), op, d, ss, x)
 
 # one command: its reply and the database after it. The database is
 # passed on, not shared, so a write rebuilds only the path it changes.
@@ -6827,7 +6974,7 @@ def exec(cmd: Cmd, db: Db) -> Reply & Db:
       (RBulk{m}, db)
     case Get{+k}:
       +d = db
-      (r_get(db.get_copy(d, k)), d)
+      (r_getv(db.get_copy(d, k)), d)
     case Set{+k, v}:
       (r_ok(), db.set(db, k, v))
     case Del{ks}:
@@ -6849,13 +6996,13 @@ def exec(cmd: Cmd, db: Db) -> Reply & Db:
       (r_ok(), db.flush(db))
     case Keys{p}:
       +d = db
-      (RArray{glob_filter(p, KV.keys(String, db.trie(d), db.now(d)))}, d)
+      (RArray{glob_filter(p, KV.keys(KV.Val, db.trie(d), db.now(d)))}, d)
     case Scan{args}:
       +d = db
       (scan.reply(scan.args(args), db.trie(d), db.now(d)), d)
     case Peek{+k, c}:
       +d = db
-      (peek(c, db.now(d), db.ent(d, k)), d)
+      (peek.v(c, db.now(d), db.ent(d, k)), d)
     case Upd{+k, op}:
       db.upd(db, k, op)
     case MSetNx{ps}:
@@ -7054,7 +7201,7 @@ def ds.wipe(ds: Ds) -> Ds:
 # as the first left them (LAWS.bend: recover_cut).
 
 # whether a key's entry is one whose time has passed at now
-def ent.dead(+now: Nat, +m: Maybe<&2, KV.Item<String>>) -> Bool:
+def ent.dead(+now: Nat, +m: Maybe<&2, KV.Item<KV.Val>>) -> Bool:
   match m:
     case Some{KV.Item{v, +e}}:
       Bool.not(KV.live(now, e))
@@ -7065,10 +7212,10 @@ def ent.dead(+now: Nat, +m: Maybe<&2, KV.Item<String>>) -> Bool:
 def ds.has(+ds: Ds, +k: String) -> Bool:
   match ds:
     case Ds{+d, pre, post}:
-      Maybe.is_some(&2, KV.Item<String>, db.ent(d, k))
+      Maybe.is_some(&2, KV.Item<KV.Val>, db.ent(d, k))
 
 # k's entry in the focus, when it is there
-def ds.ent(+ds: Ds, +k: String) -> Maybe<&2, KV.Item<String>>:
+def ds.ent(+ds: Ds, +k: String) -> Maybe<&2, KV.Item<KV.Val>>:
   match ds:
     case Ds{+d, pre, post}:
       db.ent(d, k)
@@ -7096,14 +7243,15 @@ def ds.purge(+k: String, +j: Nat, ds: Ds) -> Bool & Ds:
   +xs = ds.list(x)
   ds.purge.of(k, j, ds.nth(j, xs), xs, x)
 
-# k to v with the time e, counted, as SET with PXAT leaves it
-def db.setx(db: Db, +k: String, v: String, +e: Nat) -> Db:
+# k to v (of any kind) with the time e, counted, as SET with PXAT leaves
+# a string
+def db.setx(db: Db, +k: String, v: KV.Val, +e: Nat) -> Db:
   match db:
     case Db{t, +n, +x, now, rr}:
       +u = t
       +h = KV.hash(k)
-      +c = KV.code.at(String, u, k, h)
-      Db{KV.setx.at(String, u, k, v, e, h), cnt.n(c, n), cnt.x(c, e, x), now, rr}
+      +c = KV.code.at(KV.Val, u, k, h)
+      Db{KV.setx.at(KV.Val, u, k, v, e, h), cnt.n(c, n), cnt.x(c, e, x), now, rr}
 
 # the databases with k deleted from the focus
 def ds.unset(+k: String, ds: Ds) -> Ds:
@@ -7115,7 +7263,7 @@ def ds.moved(+k: String, +j: Nat, y: Db, ds: Ds) -> Ds:
   +x = ds.unset(k, ds)
   ds.with(ds.put(j, y, ds.list(x)), x)
 
-def ds.move.if(ok: Bool, +k: String, +j: Nat, y: Db, m: Maybe<&2, KV.Item<String>>, ds: Ds) -> Bool & Ds:
+def ds.move.if(ok: Bool, +k: String, +j: Nat, y: Db, m: Maybe<&2, KV.Item<KV.Val>>, ds: Ds) -> Bool & Ds:
   match ok m:
     case True{} Some{KV.Item{v, +e}}:
       (True{}, ds.moved(k, j, db.setx(y, k, v, e), ds))
@@ -7126,7 +7274,7 @@ def ds.move.of(+k: String, +j: Nat, my: Maybe<&2, Db>, ds: Ds) -> Bool & Ds:
   match my:
     case Some{+y}:
       +x = ds
-      ds.move.if(Bool.and(Nat.is_ne(j, ds.index(x)), Maybe.is_none(&2, KV.Item<String>, db.entry(y, k))), k, j, y, ds.ent(x, k), x)
+      ds.move.if(Bool.and(Nat.is_ne(j, ds.index(x)), Maybe.is_none(&2, KV.Item<KV.Val>, db.entry(y, k))), k, j, y, ds.ent(x, k), x)
     case None{}:
       (False{}, ds)
 
@@ -7144,7 +7292,7 @@ def ds.move(+k: String, +j: Nat, ds: Ds) -> Bool & Ds:
 # it; whether it was set, and the databases after. COPY to the same key
 # of the same database the session refuses before (Redis's "source and
 # destination objects are the same").
-def ds.copy.if(ok: Bool, m: Maybe<&2, KV.Item<String>>, +dst: String, +j: Nat, y: Db, ds: Ds) -> Bool & Ds:
+def ds.copy.if(ok: Bool, m: Maybe<&2, KV.Item<KV.Val>>, +dst: String, +j: Nat, y: Db, ds: Ds) -> Bool & Ds:
   match ok m:
     case True{} Some{KV.Item{v, +e}}:
       +x = ds
@@ -7156,7 +7304,7 @@ def ds.copy.of(+src: String, +dst: String, +j: Nat, rep: Bool, my: Maybe<&2, Db>
   match my:
     case Some{+y}:
       +x = ds
-      ds.copy.if(Bool.or(rep, Bool.not(Maybe.is_some(&2, KV.Item<String>, ent.live(ds.now(x), db.entry(y, dst))))), ds.ent(x, src), dst, j, y, x)
+      ds.copy.if(Bool.or(rep, Bool.not(Maybe.is_some(&2, KV.Item<KV.Val>, ent.live(ds.now(x), db.entry(y, dst))))), ds.ent(x, src), dst, j, y, x)
     case None{}:
       (False{}, ds)
 
