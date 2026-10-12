@@ -70,6 +70,34 @@ def upd.put(t: KV.Trie<String>, +k: String, +h: U32, o: R.Out) -> R.Reply & KV.T
     case R.Out{r, ch}:
       upd.ch(t, k, h, r, ch)
 
+# MSETNX: none set when a key of the pairs is there at now (0), else all
+# set as MSET sets them (1)
+def msetnx(any: Bool, ps: List<&2, R.KVPair>, db: KV.Trie<String>) -> R.Reply & KV.Trie<String>:
+  match any:
+    case True{}:
+      (R.r_int(0n), db)
+    case False{}:
+      (R.r_int(1n), mset_pairs(ps, db))
+
+# what RENAME finds, from the entries of its keys, ms and md
+def ren.pick(ms: Maybe<&2, KV.Item<String>>, md: Maybe<&2, KV.Item<String>>, +src: String, +dst: String, nx: Bool, +now: Nat) -> R.Ren:
+  R.ren.of(R.ent.live(now, ms), KV.str_eq(src, dst), Bool.and(nx, Maybe.is_some(&2, KV.Item<String>, R.ent.live(now, md))))
+
+def ren.find(+t: KV.Trie<String>, +src: String, +dst: String, nx: Bool, +now: Nat) -> R.Ren:
+  ren.pick(KV.entry.at(String, t, src, KV.hash(src)), KV.entry.at(String, t, dst, KV.hash(dst)), src, dst, nx, now)
+
+# RENAME's reply, and the trie with src's entry moved to dst when it moves
+def ren(r: R.Ren, nx: Bool, +src: String, +dst: String, db: KV.Trie<String>) -> R.Reply & KV.Trie<String>:
+  match r:
+    case R.RnNone{}:
+      (R.RError{"ERR no such key"}, db)
+    case R.RnSame{}:
+      (R.ren.ok(nx, 0n), db)
+    case R.RnHeld{}:
+      (R.r_int(0n), db)
+    case R.RnMove{v, +e}:
+      (R.ren.ok(nx, 1n), KV.del(String, KV.setx(String, db, dst, v, e), src))
+
 def reply_of(r: R.Reply & KV.Trie<String>) -> R.Reply:
   (x, db) = r
   x
@@ -122,6 +150,12 @@ def exec(cmd: R.Cmd, db: KV.Trie<String>, +now: Nat) -> R.Reply & KV.Trie<String
       +h = KV.hash(k)
       +m = KV.entry.at(String, d, k, h)
       upd.put(d, k, h, R.upd(op, now, R.ent.live(now, m)))
+    case R.MSetNx{+ps}:
+      +d = db
+      msetnx(R.pairs.live(ps, now, d), ps, d)
+    case R.Rename{+src, +dst, +nx}:
+      +d = db
+      ren(ren.find(d, src, dst, nx, now), nx, src, dst, d)
     case R.Own{o}:
       (R.RError{"ERR a command of the connection, not of the database"}, db)
     case R.Bad{r}:

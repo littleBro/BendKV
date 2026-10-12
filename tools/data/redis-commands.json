@@ -4404,6 +4404,118 @@
     []
    ]
   },
+  "msetnx": {
+   "docs": [
+    "summary",
+    "Set multiple keys to multiple values, only if none of the keys exist",
+    "since",
+    "1.0.1",
+    "group",
+    "string",
+    "complexity",
+    "O(N) where N is the number of keys to set.",
+    "arguments",
+    [
+     [
+      "name",
+      "key_value",
+      "type",
+      "block",
+      "flags",
+      [
+       {
+        "+": "multiple"
+       }
+      ],
+      "arguments",
+      [
+       [
+        "name",
+        "key",
+        "type",
+        "key",
+        "key_spec_index",
+        0
+       ],
+       [
+        "name",
+        "value",
+        "type",
+        "string"
+       ]
+      ]
+     ]
+    ]
+   ],
+   "info": [
+    "msetnx",
+    -3,
+    [
+     {
+      "+": "write"
+     },
+     {
+      "+": "denyoom"
+     }
+    ],
+    1,
+    -1,
+    2,
+    [
+     {
+      "+": "@write"
+     },
+     {
+      "+": "@string"
+     },
+     {
+      "+": "@slow"
+     }
+    ],
+    [
+     "request_policy:multi_shard",
+     "response_policy:agg_min"
+    ],
+    [
+     [
+      "flags",
+      [
+       {
+        "+": "OW"
+       },
+       {
+        "+": "insert"
+       }
+      ],
+      "begin_search",
+      [
+       "type",
+       "index",
+       "spec",
+       [
+        "index",
+        1
+       ]
+      ],
+      "find_keys",
+      [
+       "type",
+       "range",
+       "spec",
+       [
+        "lastkey",
+        -1,
+        "keystep",
+        2,
+        "limit",
+        0
+       ]
+      ]
+     ]
+    ],
+    []
+   ]
+  },
   "object": {
    "docs": [
     "summary",
@@ -5619,6 +5731,278 @@
      "nondeterministic_output"
     ],
     [],
+    []
+   ]
+  },
+  "rename": {
+   "docs": [
+    "summary",
+    "Rename a key",
+    "since",
+    "1.0.0",
+    "group",
+    "generic",
+    "complexity",
+    "O(1)",
+    "arguments",
+    [
+     [
+      "name",
+      "key",
+      "type",
+      "key",
+      "key_spec_index",
+      0
+     ],
+     [
+      "name",
+      "newkey",
+      "type",
+      "key",
+      "key_spec_index",
+      1
+     ]
+    ]
+   ],
+   "info": [
+    "rename",
+    3,
+    [
+     {
+      "+": "write"
+     }
+    ],
+    1,
+    2,
+    1,
+    [
+     {
+      "+": "@keyspace"
+     },
+     {
+      "+": "@write"
+     },
+     {
+      "+": "@slow"
+     }
+    ],
+    [],
+    [
+     [
+      "flags",
+      [
+       {
+        "+": "RW"
+       },
+       {
+        "+": "access"
+       },
+       {
+        "+": "delete"
+       }
+      ],
+      "begin_search",
+      [
+       "type",
+       "index",
+       "spec",
+       [
+        "index",
+        1
+       ]
+      ],
+      "find_keys",
+      [
+       "type",
+       "range",
+       "spec",
+       [
+        "lastkey",
+        0,
+        "keystep",
+        1,
+        "limit",
+        0
+       ]
+      ]
+     ],
+     [
+      "flags",
+      [
+       {
+        "+": "OW"
+       },
+       {
+        "+": "update"
+       }
+      ],
+      "begin_search",
+      [
+       "type",
+       "index",
+       "spec",
+       [
+        "index",
+        2
+       ]
+      ],
+      "find_keys",
+      [
+       "type",
+       "range",
+       "spec",
+       [
+        "lastkey",
+        0,
+        "keystep",
+        1,
+        "limit",
+        0
+       ]
+      ]
+     ]
+    ],
+    []
+   ]
+  },
+  "renamenx": {
+   "docs": [
+    "summary",
+    "Rename a key, only if the new key does not exist",
+    "since",
+    "1.0.0",
+    "group",
+    "generic",
+    "complexity",
+    "O(1)",
+    "history",
+    [
+     [
+      "3.2.0",
+      "The command no longer returns an error when source and destination names are the same."
+     ]
+    ],
+    "arguments",
+    [
+     [
+      "name",
+      "key",
+      "type",
+      "key",
+      "key_spec_index",
+      0
+     ],
+     [
+      "name",
+      "newkey",
+      "type",
+      "key",
+      "key_spec_index",
+      1
+     ]
+    ]
+   ],
+   "info": [
+    "renamenx",
+    3,
+    [
+     {
+      "+": "write"
+     },
+     {
+      "+": "fast"
+     }
+    ],
+    1,
+    2,
+    1,
+    [
+     {
+      "+": "@keyspace"
+     },
+     {
+      "+": "@write"
+     },
+     {
+      "+": "@fast"
+     }
+    ],
+    [],
+    [
+     [
+      "flags",
+      [
+       {
+        "+": "RW"
+       },
+       {
+        "+": "access"
+       },
+       {
+        "+": "delete"
+       }
+      ],
+      "begin_search",
+      [
+       "type",
+       "index",
+       "spec",
+       [
+        "index",
+        1
+       ]
+      ],
+      "find_keys",
+      [
+       "type",
+       "range",
+       "spec",
+       [
+        "lastkey",
+        0,
+        "keystep",
+        1,
+        "limit",
+        0
+       ]
+      ]
+     ],
+     [
+      "flags",
+      [
+       {
+        "+": "OW"
+       },
+       {
+        "+": "insert"
+       }
+      ],
+      "begin_search",
+      [
+       "type",
+       "index",
+       "spec",
+       [
+        "index",
+        2
+       ]
+      ],
+      "find_keys",
+      [
+       "type",
+       "range",
+       "spec",
+       [
+        "lastkey",
+        0,
+        "keystep",
+        1,
+        "limit",
+        0
+       ]
+      ]
+     ]
+    ],
     []
    ]
   },

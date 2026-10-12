@@ -167,6 +167,8 @@ type Cmd is Data:
   Scan{args: List<&2, String>}
   Peek{key: String, c: PeekOp}
   Upd{key: String, op: UpdOp}
+  MSetNx{pairs: List<&2, KVPair>}
+  Rename{src: String, dst: String, nx: Bool}
   Own{op: SessOp}
   Bad{reply: Reply}
 
@@ -417,6 +419,15 @@ def parse_mset(ps: Maybe<&2, List<&2, KVPair>>) -> Cmd:
       MSet{p <> rest}
     case None{}:
       e_arity("mset")
+
+def parse_msetnx(ps: Maybe<&2, List<&2, KVPair>>) -> Cmd:
+  match ps:
+    case Some{Nil{}}:
+      e_arity("msetnx")
+    case Some{Con{p, rest}}:
+      MSetNx{p <> rest}
+    case None{}:
+      e_arity("msetnx")
 
 def parse_incrby(k: String, by: Maybe<&2, Int>) -> Cmd:
   match by:
@@ -1617,7 +1628,9 @@ def cmd_id(+n: String, len: Nat) -> Nat:
       Bool.pick(Nat, String.eq(n, "GETBIT"), 40n,
       Bool.pick(Nat, String.eq(n, "SETBIT"), 41n,
       Bool.pick(Nat, String.eq(n, "BITPOS"), 43n,
-      Bool.pick(Nat, String.eq(n, "OBJECT"), 114n, 0n))))))))))))))))))))
+      Bool.pick(Nat, String.eq(n, "OBJECT"), 114n,
+      Bool.pick(Nat, String.eq(n, "MSETNX"), 45n,
+      Bool.pick(Nat, String.eq(n, "RENAME"), 46n, 0n))))))))))))))))))))))
     case 7n:
       Bool.pick(Nat, String.eq(n, "FLUSHDB"), 20n,
       Bool.pick(Nat, String.eq(n, "COMMAND"), 109n,
@@ -1629,7 +1642,8 @@ def cmd_id(+n: String, len: Nat) -> Nat:
       Bool.pick(Nat, String.eq(n, "EXPIREAT"), 30n,
       Bool.pick(Nat, String.eq(n, "GETRANGE"), 37n,
       Bool.pick(Nat, String.eq(n, "SETRANGE"), 39n,
-      Bool.pick(Nat, String.eq(n, "BITCOUNT"), 42n, 0n))))))
+      Bool.pick(Nat, String.eq(n, "BITCOUNT"), 42n,
+      Bool.pick(Nat, String.eq(n, "RENAMENX"), 47n, 0n)))))))
     case 9n:
       Bool.pick(Nat, String.eq(n, "RANDOMKEY"), 110n,
       Bool.pick(Nat, String.eq(n, "PEXPIREAT"), 31n, 0n))
@@ -1899,6 +1913,20 @@ def parse_id(id: Nat, name: String, args: List<&2, String>) -> Cmd:
           e_arity("touch")
         case Con{k, ks}:
           Exists{k <> ks}
+    case 45n:  # MSETNX
+      parse_msetnx(pairs(args))
+    case 46n:  # RENAME
+      match args:
+        case Con{a, Con{b, Nil{}}}:
+          Rename{a, b, False{}}
+        case _:
+          e_arity("rename")
+    case 47n:  # RENAMENX
+      match args:
+        case Con{a, Con{b, Nil{}}}:
+          Rename{a, b, True{}}
+        case _:
+          e_arity("renamenx")
     case _:
       e_unknown(name, args)
 
@@ -2122,36 +2150,42 @@ def stat.top(+id: Nat) -> Nat:
       43n
     case 44n:
       44n
-    case 100n:
+    case 45n:
       45n
-    case 101n:
+    case 46n:
       46n
-    case 102n:
+    case 47n:
       47n
-    case 103n:
+    case 100n:
       48n
-    case 104n:
+    case 101n:
       49n
-    case 105n:
+    case 102n:
       50n
-    case 106n:
+    case 103n:
       51n
-    case 107n:
+    case 104n:
       52n
-    case 108n:
+    case 105n:
       53n
-    case 109n:
+    case 106n:
       54n
-    case 110n:
+    case 107n:
       55n
-    case 111n:
+    case 108n:
       56n
-    case 112n:
+    case 109n:
       57n
-    case 113n:
+    case 110n:
       58n
-    case 114n:
+    case 111n:
       59n
+    case 112n:
+      60n
+    case 113n:
+      61n
+    case 114n:
+      62n
     case _:
       0n
 
@@ -2159,25 +2193,25 @@ def stat.top(+id: Nat) -> Nat:
 def stat.sub.client(+sub: Nat) -> Nat:
   match sub:
     case 1n:
-      60n
-    case 2n:
-      61n
-    case 3n:
-      62n
-    case 4n:
       63n
-    case 5n:
+    case 2n:
       64n
-    case 6n:
+    case 3n:
       65n
-    case 7n:
+    case 4n:
       66n
-    case 8n:
+    case 5n:
       67n
-    case 9n:
+    case 6n:
       68n
-    case 10n:
+    case 7n:
       69n
+    case 8n:
+      70n
+    case 9n:
+      71n
+    case 10n:
+      72n
     case _:
       0n
 
@@ -2185,9 +2219,9 @@ def stat.sub.client(+sub: Nat) -> Nat:
 def stat.sub.function(+sub: Nat) -> Nat:
   match sub:
     case 1n:
-      70n
+      73n
     case 2n:
-      71n
+      74n
     case _:
       0n
 
@@ -2195,15 +2229,15 @@ def stat.sub.function(+sub: Nat) -> Nat:
 def stat.sub.config(+sub: Nat) -> Nat:
   match sub:
     case 1n:
-      72n
-    case 2n:
-      73n
-    case 3n:
-      74n
-    case 4n:
       75n
-    case 5n:
+    case 2n:
       76n
+    case 3n:
+      77n
+    case 4n:
+      78n
+    case 5n:
+      79n
     case _:
       0n
 
@@ -2211,19 +2245,19 @@ def stat.sub.config(+sub: Nat) -> Nat:
 def stat.sub.command(+sub: Nat) -> Nat:
   match sub:
     case 1n:
-      77n
-    case 2n:
-      78n
-    case 3n:
-      79n
-    case 4n:
       80n
-    case 5n:
+    case 2n:
       81n
-    case 6n:
+    case 3n:
       82n
-    case 7n:
+    case 4n:
       83n
+    case 5n:
+      84n
+    case 6n:
+      85n
+    case 7n:
+      86n
     case _:
       0n
 
@@ -2231,15 +2265,15 @@ def stat.sub.command(+sub: Nat) -> Nat:
 def stat.sub.object(+sub: Nat) -> Nat:
   match sub:
     case 1n:
-      84n
-    case 2n:
-      85n
-    case 3n:
-      86n
-    case 4n:
       87n
-    case 5n:
+    case 2n:
       88n
+    case 3n:
+      89n
+    case 4n:
+      90n
+    case 5n:
+      91n
     case _:
       0n
 
@@ -2335,92 +2369,98 @@ def stat.name(+key: Nat) -> String:
     case 44n:
       "touch"
     case 45n:
-      "select"
+      "msetnx"
     case 46n:
-      "hello"
+      "rename"
     case 47n:
-      "auth"
+      "renamenx"
     case 48n:
-      "quit"
+      "select"
     case 49n:
-      "reset"
+      "hello"
     case 50n:
-      "client"
+      "auth"
     case 51n:
-      "function"
+      "quit"
     case 52n:
-      "config"
+      "reset"
     case 53n:
-      "info"
+      "client"
     case 54n:
-      "command"
+      "function"
     case 55n:
-      "randomkey"
+      "config"
     case 56n:
-      "swapdb"
+      "info"
     case 57n:
-      "move"
+      "command"
     case 58n:
-      "time"
+      "randomkey"
     case 59n:
-      "object"
+      "swapdb"
     case 60n:
-      "client|id"
+      "move"
     case 61n:
-      "client|help"
+      "time"
     case 62n:
-      "client|reply"
+      "object"
     case 63n:
-      "client|getname"
+      "client|id"
     case 64n:
-      "client|setname"
+      "client|help"
     case 65n:
-      "client|caching"
+      "client|reply"
     case 66n:
-      "client|unblock"
+      "client|getname"
     case 67n:
-      "client|getredir"
+      "client|setname"
     case 68n:
-      "client|no-evict"
+      "client|caching"
     case 69n:
-      "client|trackinginfo"
+      "client|unblock"
     case 70n:
-      "function|flush"
+      "client|getredir"
     case 71n:
-      "function|help"
+      "client|no-evict"
     case 72n:
-      "config|get"
+      "client|trackinginfo"
     case 73n:
-      "config|set"
+      "function|flush"
     case 74n:
-      "config|resetstat"
+      "function|help"
     case 75n:
-      "config|rewrite"
+      "config|get"
     case 76n:
-      "config|help"
+      "config|set"
     case 77n:
-      "command|info"
+      "config|resetstat"
     case 78n:
-      "command|docs"
+      "config|rewrite"
     case 79n:
-      "command|list"
+      "config|help"
     case 80n:
-      "command|help"
+      "command|info"
     case 81n:
-      "command|count"
+      "command|docs"
     case 82n:
-      "command|getkeys"
+      "command|list"
     case 83n:
-      "command|getkeysandflags"
+      "command|help"
     case 84n:
-      "object|help"
+      "command|count"
     case 85n:
-      "object|freq"
+      "command|getkeys"
     case 86n:
-      "object|encoding"
+      "command|getkeysandflags"
     case 87n:
-      "object|refcount"
+      "object|help"
     case 88n:
+      "object|freq"
+    case 89n:
+      "object|encoding"
+    case 90n:
+      "object|refcount"
+    case 91n:
       "object|idletime"
     case _:
       ""
@@ -2518,92 +2558,98 @@ def stat.arity(+key: Nat) -> Nat:
     case 44n:
       5n
     case 45n:
-      4n
+      7n
     case 46n:
-      3n
+      6n
     case 47n:
-      5n
+      6n
     case 48n:
-      3n
+      4n
     case 49n:
-      2n
+      3n
     case 50n:
       5n
     case 51n:
-      5n
+      3n
     case 52n:
-      5n
-    case 53n:
-      3n
-    case 54n:
-      3n
-    case 55n:
       2n
+    case 53n:
+      5n
+    case 54n:
+      5n
+    case 55n:
+      5n
     case 56n:
-      6n
+      3n
     case 57n:
-      6n
+      3n
     case 58n:
       2n
     case 59n:
-      5n
-    case 60n:
-      4n
-    case 61n:
-      4n
-    case 62n:
       6n
+    case 60n:
+      6n
+    case 61n:
+      2n
+    case 62n:
+      5n
     case 63n:
       4n
     case 64n:
-      6n
+      4n
     case 65n:
       6n
     case 66n:
-      7n
-    case 67n:
       4n
+    case 67n:
+      6n
     case 68n:
       6n
     case 69n:
-      4n
-    case 70n:
-      5n
-    case 71n:
-      4n
-    case 72n:
       7n
+    case 70n:
+      4n
+    case 71n:
+      6n
+    case 72n:
+      4n
     case 73n:
-      9n
+      5n
     case 74n:
       4n
     case 75n:
-      4n
+      7n
     case 76n:
-      4n
+      9n
     case 77n:
-      5n
+      4n
     case 78n:
-      5n
+      4n
     case 79n:
-      5n
+      4n
     case 80n:
-      4n
+      5n
     case 81n:
-      4n
+      5n
     case 82n:
-      9n
+      5n
     case 83n:
-      9n
+      4n
     case 84n:
       4n
     case 85n:
-      6n
+      9n
     case 86n:
-      6n
+      9n
     case 87n:
-      6n
+      4n
     case 88n:
+      6n
+    case 89n:
+      6n
+    case 90n:
+      6n
+    case 91n:
       6n
     case _:
       1n
@@ -2635,9 +2681,13 @@ def stat.risky(+key: Nat) -> Bool:
       True{}
     case 43n:
       True{}
-    case 85n:
+    case 46n:
+      True{}
+    case 47n:
       True{}
     case 88n:
+      True{}
+    case 91n:
       True{}
     case _:
       False{}
@@ -3357,6 +3407,30 @@ def stat.cw(+code: Nat) -> U32:
       1614
     case 355n:
       1619
+    case 356n:
+      1621
+    case 357n:
+      1622
+    case 358n:
+      1625
+    case 359n:
+      1626
+    case 360n:
+      1628
+    case 361n:
+      1635
+    case 362n:
+      1637
+    case 363n:
+      1638
+    case 364n:
+      1641
+    case 365n:
+      1642
+    case 366n:
+      1644
+    case 367n:
+      1649
     case _:
       63
 
@@ -4075,6 +4149,30 @@ def stat.code.cw(+w: Nat) -> Nat:
       354n
     case 1619n:
       355n
+    case 1621n:
+      356n
+    case 1622n:
+      357n
+    case 1625n:
+      358n
+    case 1626n:
+      359n
+    case 1628n:
+      360n
+    case 1635n:
+      361n
+    case 1637n:
+      362n
+    case 1638n:
+      363n
+    case 1641n:
+      364n
+    case 1642n:
+      365n
+    case 1644n:
+      366n
+    case 1649n:
+      367n
     case _:
       0n
 
@@ -5578,6 +5676,86 @@ def db.flush(db: Db) -> Db:
     case Db{t, n, x, now, rr}:
       Db{KV.empty(String), 0n, 0n, now, rr}
 
+# MSETNX: when a key of the pairs is there at now it sets none and
+# answers 0, else it sets them all, as MSET does, and answers 1
+def pairs.live(+ps: List<&2, KVPair>, +now: Nat, +t: KV.Trie<String>) -> Bool:
+  match ps:
+    case Nil{}:
+      False{}
+    case Con{KP{+k, v}, +rest}:
+      Bool.or(Maybe.is_some(&2, String, KV.read(String, t, k, now)), pairs.live(rest, now, t))
+
+def msetnx.of(any: Bool, ps: List<&2, KVPair>, db: Db) -> Reply & Db:
+  match any:
+    case True{}:
+      (r_int(0n), db)
+    case False{}:
+      (r_int(1n), mset_pairs(ps, db))
+
+def db.msetnx(db: Db, ps: List<&2, KVPair>) -> Reply & Db:
+  +d = db
+  +p = ps
+  msetnx.of(pairs.live(p, db.now(d), db.trie(d)), p, d)
+
+# RENAME src dst: src's entry, its value and its time, moves to dst,
+# whatever dst held; RENAMENX moves it only when dst is not there, and
+# answers 0 when it is. An error when src is not there; when dst is src
+# the entry stays where it is (OK, and 0 for RENAMENX, as Redis answers).
+# What RENAME finds (Ren) comes first, read from the database it lends.
+type Ren is Data:
+  RnNone{}
+  RnSame{}
+  RnHeld{}
+  RnMove{v: String, e: Nat}
+
+def ren.of(m: Maybe<&2, KV.Item<String>>, same: Bool, held: Bool) -> Ren:
+  match m same held:
+    case None{} _ _:
+      RnNone{}
+    case Some{it} True{} _:
+      RnSame{}
+    case Some{it} False{} True{}:
+      RnHeld{}
+    case Some{KV.Item{v, e}} False{} False{}:
+      RnMove{v, e}
+
+# what RENAME finds: src's entry there at now, whether dst is src, and
+# whether RENAMENX finds dst there
+def ren.find(+d: Db, +src: String, +dst: String, nx: Bool) -> Ren:
+  ren.of(db.ent(d, src), KV.str_eq(src, dst), Bool.and(nx, Maybe.is_some(&2, KV.Item<String>, db.ent(d, dst))))
+
+def ren.ok(nx: Bool, +n: Nat) -> Reply:
+  match nx:
+    case True{}:
+      r_int(n)
+    case False{}:
+      r_ok()
+
+# src's entry, v with the time e, moved to dst: dst set and counted as
+# SET with PXAT counts it, then src deleted
+def db.renamed(db: Db, +src: String, +dst: String, v: String, +e: Nat) -> Db:
+  match db:
+    case Db{t, +n, +x, now, rr}:
+      +u = t
+      +h = KV.hash(dst)
+      +c = KV.code.at(String, u, dst, h)
+      Db{KV.del.at(String, KV.setx.at(String, u, dst, v, e, h), src, KV.hash(src)), Nat.sub(cnt.n(c, n), 1n), cnt.x(1n+e, 0n, cnt.x(c, e, x)), now, rr}
+
+def ren.do(r: Ren, nx: Bool, +src: String, +dst: String, db: Db) -> Reply & Db:
+  match r:
+    case RnNone{}:
+      (RError{"ERR no such key"}, db)
+    case RnSame{}:
+      (ren.ok(nx, 0n), db)
+    case RnHeld{}:
+      (r_int(0n), db)
+    case RnMove{v, +e}:
+      (ren.ok(nx, 1n), db.renamed(db, src, dst, v, e))
+
+def db.rename(db: Db, +src: String, +dst: String, +nx: Bool) -> Reply & Db:
+  +d = db
+  ren.do(ren.find(d, src, dst, nx), nx, src, dst, d)
+
 # The sweep of expired keys
 # -------------------------
 # Redis deletes the keys whose time has passed when a command comes to
@@ -5679,6 +5857,10 @@ def exec(cmd: Cmd, db: Db) -> Reply & Db:
       (peek(c, db.now(d), db.ent(d, k)), d)
     case Upd{+k, op}:
       db.upd(db, k, op)
+    case MSetNx{ps}:
+      db.msetnx(db, ps)
+    case Rename{+src, +dst, +nx}:
+      db.rename(db, src, dst, nx)
     case Own{o}:
       (RError{"ERR a command of the connection, not of the database"}, db)
     case Bad{r}:

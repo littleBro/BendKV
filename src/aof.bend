@@ -23,17 +23,19 @@ import ./batch.bend as B
 # What a command did, as commands that do it again on the database it ran
 # on, at time 0 (a file loads at time 0, when no key has expired): none
 # for one that only reads or fails, the command itself for SET, DEL, MSET
-# and FLUSHDB, and for an update (R.Upd, and INCRBY, run here as one)
-# what its change left of its key: SET of the value it holds (with PXAT
-# and the time it expires at, when it does), PEXPIREAT for a time alone,
-# PERSIST for none, DEL for a key gone, SET with KEEPTTL for a value set
-# with the time kept (an INCRBY logs the SET of the sum, as Redis logs
-# INCRBYFLOAT), and APPEND or SETRANGE again for an APPEND or a SETRANGE
-# (or a SETBIT: the SETRANGE of its byte) to a key that was there, so that
-# the file does not hold the whole value again. Every time is from 1970,
-# so the effects mean the same whenever they run, and a time, or an
-# offset, is of 14 digits at most (KV.small): no number but such a time
-# or offset, or a database's number, is ever read back from text.
+# and FLUSHDB, the MSET of its pairs for an MSETNX that set them, RENAME
+# for a RENAME or RENAMENX that moved its entry, and for an update (R.Upd,
+# and INCRBY, run here as one) what its change left of its key: SET of
+# the value it holds (with PXAT and the time it expires at, when it
+# does), PEXPIREAT for a time alone, PERSIST for none, DEL for a key
+# gone, SET with KEEPTTL for a value set with the time kept (an INCRBY
+# logs the SET of the sum, as Redis logs INCRBYFLOAT), and APPEND or
+# SETRANGE again for an APPEND or a SETRANGE (or a SETBIT: the SETRANGE
+# of its byte) to a key that was there, so that the file does not hold
+# the whole value again. Every time is from 1970, so the effects mean the
+# same whenever they run, and a time, or an offset, is of 14 digits at
+# most (KV.small): no number but such a time or offset, or a database's
+# number, is ever read back from text.
 
 # a key left with v and time e (0: none)
 def put.effect(+k: String, v: String, +e: Nat) -> List<&2, R.Cmd>:
@@ -110,12 +112,43 @@ def run.put(c: R.Cmd, r: R.Reply & R.Db) -> R.Reply & (List<&2, R.Cmd> & R.Db):
   (x, db) = r
   (x, (effect(c), db))
 
+# MSETNX's effect: the MSET of its pairs, when it set them
+def msetnx.effect(any: Bool, ps: List<&2, R.KVPair>) -> List<&2, R.Cmd>:
+  match any:
+    case True{}:
+      Nil{}
+    case False{}:
+      effect(R.MSet{ps})
+
+def run.msetnx(+ps: List<&2, R.KVPair>, db: R.Db) -> R.Reply & (List<&2, R.Cmd> & R.Db):
+  +d = db
+  es = msetnx.effect(R.pairs.live(ps, R.db.now(d), R.db.trie(d)), ps)
+  run.out(R.exec(R.MSetNx{ps}, d), es)
+
+# RENAME's and RENAMENX's effect: the RENAME of src to dst, when the
+# entry moved
+def ren.effect(r: R.Ren, +src: String, +dst: String) -> List<&2, R.Cmd>:
+  match r:
+    case R.RnMove{v, e}:
+      [R.Rename{src, dst, False{}}]
+    case _:
+      Nil{}
+
+def run.rename(+src: String, +dst: String, +nx: Bool, db: R.Db) -> R.Reply & (List<&2, R.Cmd> & R.Db):
+  +d = db
+  es = ren.effect(R.ren.find(d, src, dst, nx), src, dst)
+  run.out(R.exec(R.Rename{src, dst, nx}, d), es)
+
 def run(+c: R.Cmd, db: R.Db) -> R.Reply & (List<&2, R.Cmd> & R.Db):
   match c:
     case R.Upd{+k, +op}:
       run.upd(db, k, op)
     case R.IncrBy{+k, +by}:
       run.upd(db, k, R.UIncr{by})
+    case R.MSetNx{+ps}:
+      run.msetnx(ps, db)
+    case R.Rename{+src, +dst, +nx}:
+      run.rename(src, dst, nx, db)
     case _:
       run.put(c, R.exec(c, db))
 
@@ -309,6 +342,8 @@ def args(c: R.Cmd) -> List<&2, String>:
       "MSET" <> pair_args(ps)
     case R.FlushDb{}:
       ["FLUSHDB"]
+    case R.Rename{src, dst, nx}:
+      ["RENAME", src, dst]
     case _:
       Nil{}
 

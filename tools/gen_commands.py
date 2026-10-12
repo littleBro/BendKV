@@ -52,7 +52,8 @@ COMMANDS = {
     "expireat": [], "pexpireat": [], "ttl": [], "pttl": [], "expiretime": [],
     "pexpiretime": [], "persist": [], "swapdb": [], "move": [], "getrange": [], "substr": [],
     "setrange": [], "getbit": [], "setbit": [], "bitcount": [], "bitpos": [], "touch": [],
-    "time": [], "object": ["encoding", "freq", "help", "idletime", "refcount"]}
+    "time": [], "object": ["encoding", "freq", "help", "idletime", "refcount"], "msetnx": [],
+    "rename": [], "renamenx": []}
 
 # Step 1: redis-server -> facts
 # -----------------------------
@@ -258,12 +259,13 @@ SBEGIN, SEND = "# BEGIN gen_commands: stats\n", "# END gen_commands: stats\n"
 # holds: INCR and its kin meet values that are not integers, and overflows;
 # a time from now can overflow LLONG_MAX (EXPIRE, PEXPIRE, SETEX, PSETEX),
 # GETEX reads its time only once it finds its key, as BITCOUNT and BITPOS
-# read their ranges, SETRANGE can make a value past 512MB, and OBJECT FREQ
-# and IDLETIME depend on the policy of eviction. (SET's time
+# read their ranges, SETRANGE can make a value past 512MB, OBJECT FREQ
+# and IDLETIME depend on the policy of eviction, and RENAME and RENAMENX
+# fail when their source key is not there. (SET's time
 # can overflow too, past 9 * 10^18 ms only: SET is left out, so that a
 # batch of SETs needs no look at its replies.)
 RISKY = {"incr", "decr", "incrby", "decrby", "expire", "pexpire", "setex", "psetex", "getex",
-         "setrange", "bitcount", "bitpos", "object|freq", "object|idletime"}
+         "setrange", "bitcount", "bitpos", "object|freq", "object|idletime", "rename", "renamenx"}
 
 # the parser's commands with subcommands, by the function that numbers
 # their subcommands

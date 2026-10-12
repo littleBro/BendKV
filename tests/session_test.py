@@ -97,6 +97,12 @@ CASES = [
                                          b"OBJECT IDLETIME o1", b"OBJECT IDLETIME nope",
                                          b"CONFIG SET maxmemory-policy noeviction", b"FLUSHALL"), False),
     ("time: arity", lines(b"TIME x", b"TIME a b"), False),
+    ("msetnx", lines(b"MSETNX m1 a m2 b", b"MSETNX m2 c m3 d", b"MGET m1 m2 m3", b"MSETNX m4 x m4 y", b"GET m4",
+                     b"MSETNX", b"MSETNX m5", b"MSETNX m5 a m6", b"FLUSHALL"), False),
+    ("rename", lines(b"SET r1 a", b"PEXPIRE r1 100000", b"RENAME r1 r2", b"EXISTS r1", b"GET r2", b"TTL r2",
+                     b"SET r3 b", b"RENAME r3 r2", b"TTL r2", b"GET r2", b"RENAME r2 r2", b"RENAMENX r2 r2",
+                     b"RENAME nope x", b"RENAME nope nope", b"RENAMENX nope x", b"SET r4 c", b"RENAMENX r2 r4",
+                     b"RENAMENX r2 r5", b"MGET r2 r4 r5", b"RENAME", b"RENAME a", b"RENAMENX a b c", b"FLUSHALL"), False),
     # a pipeline of both kinds
     ("mixed pipeline", lines(b"SET m 1", b"CLIENT SETNAME pipe", b"INCR m", b"CLIENT GETNAME", b"GET m", b"TYPE m"), False),
 ]

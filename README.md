@@ -3,7 +3,7 @@
 A Redis-compatible key-value server written in [Bend2](https://github.com/bendlang/bend),
 whose core is formally verified: the command semantics, the hash trie behind them, the
 append-only file, the databases, the connection state and the configuration are proved
-against 59 laws,
+against 62 laws,
 checked by Bend
 and rechecked by the BendTT kernel, whose soundness is proved in Lean.
 
@@ -15,7 +15,7 @@ throughput of Redis 7.0.15 on the same machine, with half its memory for small v
 > times to live, the keyspace, several databases, connection commands, an append-only
 > file). The goal now is a drop-in
 > replacement for a single Redis node, measured by Redis's own test suite: of the 1,673
-> tests Redis 7.0.15 passes against a server it did not start, BendKV passes 272, and 248
+> tests Redis 7.0.15 passes against a server it did not start, BendKV passes 285, and 261
 > of the 370 in what it implements ([docs/COMPATIBILITY.md](docs/COMPATIBILITY.md)). Do
 > not use it for data you cannot lose.
 
@@ -50,8 +50,8 @@ is the trie's size is not proved yet.
 |---|---:|---|
 | Map | 11 | the trie is a finite map from keys to a value and a time: after any sequence of writes (a value with a time, a value with its time kept, a time alone, a deletion), every key holds what was last written to it, with no stale, lost or foreign entries; a read sees a key only until its time |
 | Keys | 2 | key comparison is exactly string equality, down to the bits of `U32` |
-| Commands | 20 | no command changes a key it does not write, neither its value nor its time (`frame`); reads keep the database; a key whose time has passed is there for no command, and the sweep of expired keys deletes no key that is there; GET, DEL, APPEND, SETRANGE, SETNX, INCR, GETDEL, PERSIST, PTTL and SET with KEEPTTL behave as specified, a key they add counted; a pipelined batch runs exactly as its commands in order; the cache hints before a batch change nothing |
-| Commuting | 5 | commands on different keys commute: replies and key contents are the same in either order, and adjacent independent commands in a batch can be swapped |
+| Commands | 23 | no command changes a key it does not write, neither its value nor its time (`frame`); reads keep the database; a key whose time has passed is there for no command, and the sweep of expired keys deletes no key that is there; GET, DEL, APPEND, SETRANGE, SETNX, INCR, GETDEL, PERSIST, PTTL, SET with KEEPTTL, RENAME and MSETNX behave as specified, a key they add counted; a pipelined batch runs exactly as its commands in order; the cache hints before a batch change nothing |
+| Commuting | 5 | commands on different keys commute: replies and key contents are the same in either order, and adjacent independent commands in a batch can be swapped, when neither writes a key the other's writes depend on (RENAME moves a value from one key to another, MSETNX sets its keys only when none is there) |
 | Persistence | 8 | logging changes no reply; the file reads back as written, times included; after any history, each batch at its own time, on any of the databases, the server restores exactly the databases it held; a file cut by a crash at any byte restores the databases after some prefix of its acts, never a partial one |
 | Databases | 5 | SELECT changes no database and focuses the one it names; SWAPDB puts each of two databases in the other's place; FLUSHALL empties them all; MOVE takes a key's entry, its value and its time, out of the selected database and sets it in the other |
 | Sessions | 5 | however the server dispatches a batch, it runs as its commands in order; a batch changes the databases and the log as its executed commands do; a client that has not authenticated against a password cannot read or change any key |
@@ -81,7 +81,8 @@ translation stays in the trusted base.
 ## Commands
 
 - **Strings and keys:** GET, SET, SETNX, GETSET, DEL, UNLINK, EXISTS, INCR, DECR, INCRBY,
-  DECRBY, APPEND, STRLEN, MGET, MSET, DBSIZE, KEYS
+  DECRBY, APPEND, STRLEN, MGET, MSET, MSETNX, RENAME, RENAMENX (the key's time moves with
+  it), DBSIZE, KEYS
   (Redis's patterns: `*`, `?`, `[...]` classes, `\` escapes), TYPE, TOUCH, SCAN (MATCH,
   COUNT, TYPE, with Redis's guarantee: a key there for a whole iteration is found, however
   the database changes meanwhile) and RANDOMKEY (picked as Redis picks one). OBJECT

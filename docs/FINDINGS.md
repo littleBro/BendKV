@@ -1,7 +1,7 @@
 # BendKV: what we found
 
 BendKV is a Redis-compatible key-value store written in Bend2, with its core proved
-against 59 laws. This file sums up in English what building it and making it fast
+against 62 laws. This file sums up in English what building it and making it fast
 showed us. The detailed record, with every table and measurement, is in Russian:
 [PERFORMANCE.md](PERFORMANCE.md) (performance, section by section) and
 [README.ru.md](../README.ru.md) (the project, the proofs, how to run). Where the work goes
@@ -9,20 +9,20 @@ next, and why, is in [DIRECTIONS.md](DIRECTIONS.md).
 
 ## 1. The result
 
-**Correctness.** About 2,550 lines of core code (with the parsing of commands, of their
+**Correctness.** About 2,640 lines of core code (with the parsing of commands, of their
 times and options, Redis's pattern matching, several databases and the ranges and bits
 of strings), about 650 lines of
 sessions (a connection's state and the server's), about 70 lines of batch hints, about
-410 lines of append-only file, about 6,240 lines of handwritten proofs with a
+435 lines of append-only file, about 6,650 lines of handwritten proofs with a
 specification of about 130 that they bridge to (section 3u), and about 1,700 lines of
 16-way case splits written by a script ([`tools/gen_trie.py`](../tools/gen_trie.py)), not
-counting comments and blank lines. Bend checks the 59 laws in about 4 s; the BendTT
+counting comments and blank lines. Bend checks the 62 laws in about 4 s; the BendTT
 kernel, whose soundness is proved in Lean, rechecks them in about 40 s. Among them: after
 any history, the server restores from its append-only file exactly the databases it
 held, and from a file cut by a crash at any byte, the databases it held after some prefix
 of its acts (sections 3e and 3x). On about 266 thousand random commands the replies
-matched real Redis 7 byte for byte; the versions with the 16-way trie passed about 550
-thousand more, the current one, with the ranges and bits of strings, about 138 thousand. Shards across cores and a key hashed once were built and
+matched real Redis 7 byte for byte; the versions with the 16-way trie passed about 670
+thousand more, the current one, with MSETNX and RENAME, about 120 thousand. Shards across cores and a key hashed once were built and
 proved too (sections 3a–3c, 3g, 3h), and taken out again because they paid too little
 for what they cost (section 3l): 38% less code and 38% fewer lines of proof.
 
@@ -1965,6 +1965,53 @@ BendKV passes 272 of the 1,673 tests Redis passes and 248 of the 370 in what it 
 two tests, a PEXPIREAT at a time TIME gave, and INCR's shared integers seen by OBJECT
 REFCOUNT); one test now fails on the time of last access rather than on a missing
 command.
+
+## 3za. MSETNX and RENAME: commands whose writes read other keys
+
+MSETNX sets its pairs only when none of its keys is there (and answers 0 otherwise);
+RENAME moves its source key's entry, its value and its time, to the destination,
+whatever the destination held; RENAMENX moves it only when the destination is not
+there. The errors and the replies for a key renamed to itself are Redis 7.0.15's ("no
+such key"; OK, and 0 for RENAMENX).
+
+**They broke a lemma the commuting laws stood on.** The laws said two commands on
+different keys commute, and their proof rested on "a command changes a key only as a
+function of that key's entry" (`point_cmd`): with frame, it gives that a key written by
+at most one of two commands reads the same after both orders. RENAME changes its
+destination as a function of its source, and MSETNX's verdict for each key depends on all
+of its keys, so a key written by one command can still read differently after the other:
+SET s 1 then RENAME s d leaves d = 1, RENAME s d then SET s 1 leaves d as s was. The fix
+is a set of keys per command, `deps` (MSETNX's keys, RENAME's two), whose entries its
+writes depend on besides the key written: `point_cmd` now holds of two tries that agree
+on `deps(c)`, `commute_reads` takes the hypothesis that neither command writes a key the
+other's writes depend on (`spoils`), and `clash`, which says when two adjacent commands
+of a batch may not trade places, includes it. For every older command `deps` is empty,
+and their proofs only take one more, ignored, argument. The induction that carries the
+agreement through the rest of a batch now proves agreement on a list of keys at once
+(the deps of each command, from the run before it, and the keys asked), since the per-key
+version would have needed mutual recursion, which Bend refuses.
+
+**A pair of proofs that can be used twice.** The agreement on a list of keys is a type
+built by recursion on the list, a pair of an equality and the agreement on the rest. The
+induction passes one agreement to every key of a list, so it must be reusable (`+`),
+that is, of kind Data. `A & B` is Bend's `Pair`, `Sigma<&1, &1, A, _ => B>`, a Type;
+`Sigma<&2, &2, A, _ => B>` is the same pair at kind Data, and equalities are Data, so
+the agreement is spelled with it.
+
+**The log.** MSETNX logs the MSET of its pairs when it set them, nothing otherwise.
+RENAME, and RENAMENX that moved, log `RENAME src dst`, which replays at time 0 as it ran:
+the entry RENAME found there at now is there at time 0, and RENAME does not look at the
+destination. RENAMENX is logged as RENAME because replayed at time 0, a destination
+whose time had passed would read as there, and the RENAMENX would fail. The replay is the
+same code path on the same trie, so the counts of keys come out the same. Three laws pin
+the commands down: `rename_effect` (the source is gone, the destination holds its entry,
+the reply is OK), `msetnx_present` and `msetnx_missing`: 62 laws.
+
+**Cost.** GET 3,144, SET 4,070 and INCR 4,229 instructions per request (the baseline's
+3,141, 4,070 and 4,226): the same. Redis's test suite: BendKV passes 285 of the 1,673
+tests Redis passes (17.0%) and 261 of the 370 in what it has; unit/keyspace 35 (was 27),
+unit/type/string 65 (was 60). The differential tests ran about 120 thousand commands with
+MSETNX and RENAME among them, every reply identical to Redis's.
 
 ## 4. Where a request's time goes, and hiding the memory waits
 
