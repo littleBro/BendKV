@@ -125,7 +125,7 @@ represented data:
   reader an owner of the whole value: O(depth) reference-count operations per read.
 - **A deep trie.** The first map was a binary trie of 20 levels: 20 dependent loads.
 
-## 3. Twenty-one patches to the Bend compiler
+## 3. Twenty-two patches to the Bend compiler
 
 All live in [`bend-patches/`](../bend-patches/) (against `bendlang/bend` at `1cce499`,
 Bend 2.0.35). The first eight switch on by themselves for programs without GPU calls;
@@ -135,8 +135,9 @@ fourteenth speeds up `String.code_at` everywhere; the fifteenth and sixteenth wo
 a program calls `TCP.post`; the seventeenth adds string functions; the eighteenth
 changes how every program's `IO` compiles; the nineteenth speeds up `Mem.prefetch` of
 a buffer and `String.take` of a short string everywhere; the twentieth adds the
-process's id, working directory and wall clock (section 3o); and the twenty-first lays
-out a datatype wider than 32 words as a node of its own, in every program (section 3p).
+process's id, working directory and wall clock (section 3o); the twenty-first lays
+out a datatype wider than 32 words as a node of its own, in every program (section 3p);
+and the twenty-second makes `String.order` native, everywhere (section 3zn).
 The sections before 3l
 number the patches as they were then: patch 16 was effect pairs, taken out in 3l with
 `TCP.post_list` of patch 11, and their patches 17–20 are today's 16–19. None changes the
@@ -167,6 +168,7 @@ to agree with the list definition, and `IO` is still a function of `R` and `k`.
 | 19. io cps | a def whose type ends in `IO` takes its continuation as a parameter, and its `do` blocks call effects and defs directly with a continuation that holds the rest of the block, instead of building `IO` values that `IO.bind` applies through closures | closure applications per request without a pipeline 14.5 → 7.1 (send) and 2.3 (post); 8% fewer instructions per request (section 3j) |
 | 20. value reads | `Mem.prefetch` of a buffer loads its bytes to its end (four cache lines at most), not its first 64 bytes; `String.take` of a string in the term word at its whole length gives the word back | lets a GET answer a copy of the value with its bytes hinted: +1.5–2% on GET hits, memory no longer grows with reads (section 3k) |
 | flat limit (today's 21st) | a datatype whose flat layout is wider than 32 words is a node of its own, instead of that many words in every call, result and frame that carries it | INFO's state in the server's: the actor's calls back from 50–67 words to under 25, and every segment's signature from 67 registers to 24 (section 3p) |
+| string order (today's 22nd) | `String.order` compares runs of bytes with `memcmp`, a prefix first, instead of a char at a time through `String.cmp` | ZRANK of a member of 100,000 of one score 76,861 → 9,028 instructions, of their own scores 15,877 → 7,515 (section 3zn) |
 
 The ratios in the last column come from different series and drift by ±0.06–0.08
 between series; PERFORMANCE.md gives each one with its pairs.
@@ -176,7 +178,7 @@ slower than lists on one thread and 1.7 times on four: short strings built and t
 apart character by character are their worst case. The other 16 runtime benchmarks
 do not change (geometric mean ×0.99). Huge pages add about 0.4 ms to the start of a
 short program and 0.4–0.9 s of kernel time to programs whose heaps reach hundreds of
-megabytes. The patches grow `bend2/comp.ts` from 62,940 to 97,828 tokens, over the
+megabytes. The patches grow `bend2/comp.ts` from 62,940 to 98,445 tokens, over the
 repository's 64,000 cap, so upstreaming them means making them smaller first. With all
 sixteen, the C lane of Bend's own test suite passes exactly the tests it passes with
 thirteen, plus the three new ones; with nineteen, its C and JS lanes pass exactly the
@@ -185,8 +187,10 @@ nineteen plus the new one on both lanes (`io_stack_fault_trap`, which overflows 
 stack, once missed the runner's 5 s under load and passes alone in 1–6 s, as before);
 with the nineteen of section 3l, exactly the tests they pass with twenty, less the six
 tests of what was taken out (`chan_call`, `tcp_post_recv` and `tcp_post_list`, on both
-lanes); with today's twenty-one, exactly the tests they pass with twenty, plus the new
-one (`flat_limit`) on both lanes: 1,487 of 1,746.
+lanes); with twenty-one, exactly the tests they pass with twenty, plus the new one
+(`flat_limit`) on both lanes: 1,487 of 1,746; with today's twenty-two, exactly those,
+plus the new one (`string_order`) on both lanes: 1,489 of 1,748 (1,488 in a run under
+load, where `io_stack_fault_trap` missed the 5 s again; alone it passes in 1.2 s).
 
 **BendKV's own changes.** A 16-way trie (5 levels instead of 20) whose leaves are
 buckets inside the trie; laws reproved for it. Requests parsed by index, with no
@@ -2773,8 +2777,9 @@ sizes a write reads, as each rebalancing asks for them, 126 copied a node the tr
 shares), and ZUNIONSTORE of two of 10 583,000, most of them the same copies, the rest
 scores written as text and read back (a STORE makes its sorted set as the ZADD the file
 logs would). Section 3zm tells why the reads owned the nodes, and how they no longer do
-(77,600 and 401,400 instructions now). BendKV compares members char by char in Bend,
-where Redis's memcmp compares words: a native `String.order` comes next.
+(77,600 and 401,400 instructions after it). BendKV compared members char by char in
+Bend, where Redis's memcmp compares words; section 3zn makes `String.order` native
+(ZINCRBY 61,200 instructions).
 
 **Where BendKV differs.** A STORE (or ZRANGESTORE) of more than 128 elements: Redis
 makes a skiplist of them, and a score of `-0` stays one, where BendKV makes them as the
@@ -2839,10 +2844,53 @@ callee own it. The remedy is in the compiler, and it is not a global rule: count
 value that a caller keeps past a call as lent to the callee, the first try, made GET,
 SET and INCR 37%, 30% and 27% dearer in instructions, so the rule stays as it is, and
 the zset reads stay as this change leaves them until a narrower one is found. A native
-`String.order` comes first. What a write of a sorted set costs past that
+`String.order` came first (section 3zn). What a write of a sorted set costs past that
 is mostly its path, copied because the keyspace still holds the old one, and the old
 path's drop: an update in place (take the value out, change it, put it back) would save
 both.
+
+## 3zn. Members compared a run at a time
+
+**What callgrind showed.** After section 3zm, ZRANK of a member of a sorted set of
+100,000 with scores of their own still took 15,900 instructions, and half of them went to
+one comparison: the member against the element the descent stops at, which has the same
+score. `String.order` is Base's `String.cmp`, which takes a char off each String at each
+step and hands both Strings back; on a packed String each step makes a view of the rest
+and drops it (`str_take_slow`, `str_cons_new`, `term_drop`), so two equal members of 14
+bytes cost about 8,000 instructions. Where the scores are equal, as in a sorted set of
+score 0 read by member (ZRANGEBYLEX and its kin, a common use), every node of a descent
+compares members: ZRANK of one of 100,000 took 76,900.
+
+**The change.** The twenty-second patch makes `String.order` native on the C lane, as
+the fourth made `String.eq`. Two Strings of one run each (a member kept in the tree, a
+member where the request holds it) are one `memcmp` of their common length, then a
+compare of their lengths; others are walked run by run (`memcmp` of bytes, a cell's char
+by its code point). A byte is a char below 256 and `memcmp` reads bytes unsigned, so the
+order is the definition's: by code point, a prefix first. `String.is_lt` and its kin go
+through it. BendKV's code does not change, and the proofs see `String.order` as Base
+defines it.
+
+**The numbers.** Instructions per request (callgrind, pipelines of 16):
+
+| command | before | after |
+|---|---:|---:|
+| ZRANK of 100,000 of score 0 | 76,861 | 9,028 |
+| ZRANGEBYLEX of 100,000 of score 0, LIMIT 10 | 129,345 | 55,144 |
+| ZLEXCOUNT of 100,000 of score 0 | 160,302 | 21,435 |
+| ZINCRBY of 100,000 of score 0 | 186,381 | 61,449 |
+| ZRANK of 100,000 of their own scores | 15,877 | 7,515 |
+| ZINCRBY of 100,000 of their own scores | 77,674 | 61,168 |
+| ZRANGE of 10 with their scores | 56,715 | 56,708 |
+
+A ZADD of a member with the score it has does not go down the tree (12,368 and 12,361),
+and a range by rank compares no member. GET, SET and INCR: 3,301, 4,306 and 4,491
+(3,301, 4,295 and 4,479 before, within the ±15 between runs). The patch adds 617 tokens
+to `comp.ts`; with it, the C and JS lanes of Bend's own tests pass what they passed, plus
+the new `string_order` on both.
+
+**What is left.** ZRANGEBYLEX's 55,000 are now mostly the walk that owns the nodes it
+visits (section 3zm): of its instructions, `term_drop`, `span_fade`, `ctr_take` and
+`ctr_own_slow` take two fifths, `str_order` 3%.
 
 ## 4. Where a request's time goes, and hiding the memory waits
 
@@ -3132,13 +3180,13 @@ These are compared in more detail, with what else to borrow, in
 
 ## 10. What each change gave, and what it cost
 
-Every change since the start, the twenty patches to Bend (p1 to p20, numbered as before
+Every change since the start, the patches to Bend (p1 to p23, numbered as before
 section 3l, which took p16 out) and BendKV's own (sections 7.N of PERFORMANCE.md), on one
 scale. The gain is the best reliable measurement
 on the load the change was made for: time, or, where time stays in the noise (±5–15%),
 instructions or memory. The cost is what the change adds to `comp.ts` in `ttok` tokens
 (the Bend repository caps the file at 64 thousand; the original has 62,940, with our
-patches 97,828), BendKV's lines of code and proof, and what lines do not show: a new
+patches 98,445), BendKV's lines of code and proof, and what lines do not show: a new
 representation of data, threads, heuristics with tuned thresholds, effects at a
 distance. The tokens were counted on the patch branch, commit by commit:
 
@@ -3157,12 +3205,13 @@ distance. The tokens were counted on the patch branch, commit by commit:
 | 8. string blobs | 1,618 | 20. value reads | 97 |
 | 9. memory prefetch | 248 | 21. process and clock (today's 20th) | 108 |
 | | | 22. flat limit (today's 21st) | 67 |
-| | | **all** | **34,888** |
+| | | 23. native `String.order` (today's 22nd) | 617 |
+| | | **all** | **35,505** |
 
 ```
           cheap                                  costly
 ×N        p1 lazy seal, p9 hints,                p2 packed strings
-          7.6 16-way trie, group commit
+          7.6 16-way trie, group commit, p23
 +20-50%   7.7 parse and reply, 7.23 windows, p17 p4a/p4b natives, p8 blobs, p10 writer
 +5-20%    p6 2 MiB pages, 7.20 groups            p11 epoll, p4c word strings, p7, p15
 noise     clang 19, PGO, p14, p4d, 7.23 RESP,    p5, p16, p18 + 7.24B, p19, 7.22, shards
@@ -3178,7 +3227,9 @@ worse     iolist                                 hints over a group (taken out),
   mostly writes, under the same laws. Group commit of the journal: `always` ×8.5,
   `everysec` ×2.7 without a pipeline. Parsing and replies (7.7): +12–36%. Long reads in
   windows (7.23): +27% at pipeline 100. Patch 17: +21–26% without a pipeline, though a
-  second heuristic on top of patch 15.
+  second heuristic on top of patch 15. Patch 23, a native `String.order`: ZRANK of a
+  member among equal scores 8.5 times fewer instructions, among their own 2.1 times,
+  for 617 tokens and 50 lines of C that must agree with Base's definition.
 - **Large gains, high cost.** Packed strings (×2.2–2.9 with BendKV's buffer IO; 3,232
   tokens, a second representation of `String` across the runtime, `lexer` 1.3–1.7 times
   slower), the string natives (GET +17%, INCR +26%, 1 MB values 3.6–11 times faster; 4,327
@@ -3213,7 +3264,7 @@ worse     iolist                                 hints over a group (taken out),
 
 What follows. The best ratios came from removing a whole class of memory or disk work:
 allocations, trie levels, waits on misses, a sync per request; together they cost the
-compiler 690 tokens of 34,888. Strings are half the growth of `comp.ts` (17,153 tokens)
+compiler 690 tokens of 35,505. Strings are half the growth of `comp.ts` (17,770 tokens)
 and most of the single-core speed. Since 7.22, fewer instructions have rarely meant less
 time: the kernel is half of a request's CPU with a pipeline and two thirds without one,
 and what paid was work on the path through it (patches 15 and 17) or cutting half the
@@ -3221,7 +3272,7 @@ instructions (the windows). The send rules carry eight constants tuned on one VM
 should become one rule. For upstream, patch 1 is the best ratio, stands alone and fits
 the 1,060 tokens left under the cap, so it should go first, before patch 19; patches 5,
 7, 15, 4c and 18 are the candidates to drop or shrink (8,721 tokens), but even without
-them ~26 thousand tokens remain, so `comp.ts` itself has to get simpler.
+them ~27 thousand tokens remain, so `comp.ts` itself has to get simpler.
 
 ## 11. An outside review
 
