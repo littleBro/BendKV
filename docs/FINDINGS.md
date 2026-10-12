@@ -2470,6 +2470,125 @@ whose length held five names, stay where they were (3,295 and 4,289): a lookup b
 costs about what four comparisons of words did. The proofs check as before (`make
 verdict`, 26.5 s): `R.parse` of a literal name reduces through the new matches.
 
+## 3zj. Sets
+
+**What there is.** SADD, SREM, SCARD, SISMEMBER, SMISMEMBER, SMEMBERS, SSCAN, SPOP and
+SRANDMEMBER (with a count), SMOVE, SINTER, SUNION, SDIFF, their STOREs, and SINTERCARD
+with LIMIT. A set is an intset or a hashtable, as in Redis 7.0 (which has no listpack
+sets yet). An intset holds canonical 64-bit integers alone (as Redis's `string2ll` reads
+them: no sign but a minus, no leading zero, no `-0`), at most 512 of them, as a list of
+their strings in numeric order; any other member, or a 513th, turns the set into a
+hashtable for good, a trie of its members (`Trie<Unit>`, the keyspace's own map). An
+intset answers its members in numeric order, as Redis's does, and SSCAN gives it whole
+with cursor 0; a hashtable answers in the order of its trie, where Redis answers in the
+order of its dict, so the tests compare a hashtable's members as a set. A key never holds
+an empty set. OBJECT ENCODING reads set-max-intset-entries; the set itself turns a
+hashtable at 512 whatever the parameter says.
+
+**Arguments where Redis reads them.** SPOP's and SRANDMEMBER's counts before the key is
+looked for (SPOP: "must be positive", for a word too; SRANDMEMBER: any long long but
+LLONG_MIN); SINTERCARD's numkeys and LIMIT with their own four errors; every key of an
+operation of several sets checked for its type, even after one that is not there (SINTER
+then answers an empty set); SMOVE answering 0 for a source that is not there before it
+looks at the destination's type; SDIFF picking between Redis's two ways by the same costs,
+and SDIFF of a set with itself empty at once.
+
+**Picks at random.** SPOP and SRANDMEMBER take the server's random number (as HRANDFIELD
+does) and the numbers of a Weyl sequence after it, each scrambled by `KV.mix`: a member of
+an intset by its index, of a hashtable as RANDOMKEY picks a key. For k different members
+of n, k below n, BendKV follows Redis's ways: an intset's picked and dropped in turn; a
+hashtable's, when k is more than a third of n, by n − k members dropped at random (Redis's
+third way), else picked until k different ones come (its fourth). The picks pass Redis's
+own tests of them, the chi-square of `SRANDMEMBER histogram distribution` among them.
+The persistence proof needs acts that do not depend on the
+data, so SPOP's act carries its random number, and its log entry is the SREM of the
+members it took (Redis propagates SPOP so too), or the DEL of the key when it took the
+last ones.
+
+**Operations of several sets.** A STORE writes its destination as the update SWNew of the
+members it made, or deletes it when there are none; SMOVE takes a member out of its
+source and adds it to its destination by the updates SREM and SADD make. Both are
+commands whose writes depend on other keys (section 3za): `deps` names a STORE's sources
+and SMOVE's two keys, and the commuting laws cover them with no change to a law. A STORE
+is logged as the members it made, not as the command: the SADD of them where the trie held
+no entry for its destination, else the hash's script with the SADD (one entry: the script
+deletes the key first). The file then replays without its sources. SMOVE is logged as
+itself, and onto a key whose time had passed as one EVAL of a third fixed script,
+`redis.call('del',KEYS[2]) return redis.call('smove',KEYS[1],KEYS[2],ARGV[1])`, which
+BendKV parses back as `SMv` with the member's New form, as LMOVE's (section 3zh).
+
+**Two changes the proofs asked for.** The replay of a new set made where no entry lay
+runs SADD of its members on a key not there, and that had to make the same change as the
+first run, a new set. SADD decided "no change" by the count it added, so the proof needed
+that adding one member or more to an empty set makes it nonempty: a lemma on sizes over
+both encodings. SADD of a new set now decides by whether it has members at all (the same
+answer), and the lemma is not needed. SMOVE read its keys' values (`KV.read`); its replay
+at time 0 then needed to relate values read at 0 and at now. It now reads their entries
+there at now (`db.ent`), as LMOVE does, and its replay follows LMOVE's: the source there
+at now is there at 0, a destination whose time had passed is one the New form takes as
+not there, and the update of the destination makes the same change at 0 as at now, a new
+set of the member, whether SADD made it on a key not there or SWNew where the dead entry
+lay.
+
+**A bug the differential test found.** SET with GET of a key that holds a collection
+answered WRONGTYPE at once; Redis checks the time first, so `SET k v XX EX
+9223370399119966 GET` answers "invalid expire time" there. The set commands made such
+keys common in the random stream. The order is now Redis's, and the proof that this
+SET changes nothing on a collection follows the code.
+
+**The proofs.** Of the 1,212 definitions of the proof, the spec and the laws, 60 changed
+and 111 came in; no law changed. The set commands are reads (`SOp`) and updates (`Upd`)
+of their key, and the STOREs and SMOVE commands of their own in the spec
+(`sstore`, `smv.find`, `smove.do`), with their lemmas of frame, of a key's entry after
+them, of their replies, of the bridge to the server's records and of time. `Good` for the
+two changes of a set: a set changed, whose SADD or SREM, replayed on the set the key held,
+makes the same change, and has members (SPOP's change is the SREM of what it took, so it
+needs no case of its own); a new set, its members made into one. SMOVE's and the STOREs'
+replays at time 0, the parse back of each write and of the third script, one effect per
+command.
+
+**Cost.** Instructions per request (`make perfcheck`): GET 3,296, SET 4,292, INCR 4,473,
+as before sets (3,295, 4,289, 4,475): a command of sets keeps two fields at most, and
+`Cmd` stays as wide as it was. Against Redis 7.0.15 (redis-benchmark, pipelines of 16, 20
+clients), a member at a time is about as fast: SISMEMBER of a small set 1.38 M/s against
+1.18 (of a set of 100,000, 0.72 against 0.78), SREM 1.23 against 1.06, SMOVE 1.34 against
+1.18, SCARD 1.32 against 1.28, SRANDMEMBER of an intset 0.95 against 0.89; SADD of random
+members up to 100,000, 0.65 against 0.80. A whole hashtable is read by a walk of its trie,
+which costs by the trie's nodes: SMEMBERS of 10 members 0.22 against 0.53 (of an intset
+0.60 against 0.64), SINTER of two sets of 10 0.23 against 0.62, SUNION 0.09 against 0.21,
+SDIFF 0.19 against 0.38, SINTERSTORE 0.14 against 0.54. Picks from a hashtable are slow:
+they scan the trie's buckets from a random one for 16 members, as RANDOMKEY does, and a
+delete leaves the trie's nodes in place, so a trie drained by deletions costs as much to
+scan as a full one: SRANDMEMBER of a set of 100,000, 41,000/s against 714,000; of 10
+members, 111,000 against 1.1 M; SPOP of all of 100,000 members, 7,240/s against 709,000,
+falling as the set empties. A delete that gives back empty nodes, and a pick that goes
+down the trie by counts, are the remedy, a change of the map and of its laws, which comes
+next among the costs.
+
+**Where BendKV differs.** A hashtable's order; the picks themselves; MEMORY USAGE, an
+estimate; set-max-intset-entries, read by OBJECT ENCODING alone; SRANDMEMBER of a negative
+count past what memory holds, which both servers try to build (`SRANDMEMBER key
+-2147483649` stopped BendKV, out of memory, as it fills Redis's: the tests leave it out);
+the move script with one key at both ends, as LMOVE's (no file BendKV writes holds it).
+
+**Redis's test suite and the tests.** BendKV passes 528 of the 1,673 tests Redis passes
+(31.6%; 424 before) and 512 of the 800 in what it has. Sets brought 104: 92 of the 94 of
+unit/type/set (the other two need ZADD and WATCH), five of unit/scan (SSCAN's four and
+SCAN's regression test of issue #4906, which makes sets), two COPY tests of sets in
+unit/keyspace, three of unit/protocol (raw protocol replies, read from SRANDMEMBER), MGET
+against a set in unit/type/string, and the last test of unit/sort, which the unit now
+reaches past its SADD (named for SETRANGE, it runs SORT_RO and catches every error). The
+tests: `tests/set_test.py` in `make test` (a script of commands at their edges, intsets on
+both sides of 512 members and hashtables of up to 20,000, an intset grown past 512 one
+member at a time, keys whose time has passed as sources, destinations and operands, then
+3,000 random commands on a few keys, each reply compared with Redis's: a hashtable's
+members as a set, each random pick checked against the set it came from and SPOP's set
+after it against the set less the picks, the key then made again on both servers), sets in
+the differential test (SPOP only where its picks are the whole set), in the numbers test,
+in both append-only files (the third script and the SADD script among them) and in the
+restarts, in `tests/aof_check.bend`, and COMMAND GETKEYS of SINTERCARD, SMOVE and the
+STOREs in the test of COMMAND.
+
 ## 4. Where a request's time goes, and hiding the memory waits
 
 With the eight patches, BendKV ran fewer instructions on GET and SET than Redis, missed

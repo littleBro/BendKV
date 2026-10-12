@@ -794,12 +794,21 @@ def obj.hash.enc(+h: KV.Hash, +cfg: List<&2, C.CItem>) -> String:
     case KV.HBig{n, t}:
       "hashtable"
 
+def obj.mems.enc(+m: KV.Mems, +cfg: List<&2, C.CItem>) -> String:
+  match m:
+    case KV.MInts{+n, xs}:
+      Bool.pick(String, Nat.is_le(n, cfg.nat(cfg, "set-max-intset-entries")), "intset", "hashtable")
+    case KV.MBig{n, t}:
+      "hashtable"
+
 def obj.coll.enc(+c: KV.Coll, +cfg: List<&2, C.CItem>) -> String:
   match c:
     case KV.CHash{+h}:
       obj.hash.enc(h, cfg)
     case KV.CList{l}:
       "quicklist"
+    case KV.CMems{+m}:
+      obj.mems.enc(m, cfg)
 
 def obj.coll(+sub: Nat, +c: KV.Coll, +cfg: List<&2, C.CItem>) -> R.Reply:
   match sub:
@@ -961,6 +970,8 @@ def hr.one(m: Maybe<&2, KV.Item<KV.Val>>, +r: U32) -> R.Reply:
       hr.first(hp.nth(KV.hash.pairs(h), hr.at(hr.next(r), KV.hash.len(h))))
     case Some{KV.Item{KV.VColl{KV.CList{l}}, e}}:
       R.e_wrongtype()
+    case Some{KV.Item{KV.VColl{KV.CMems{l}}, e}}:
+      R.e_wrongtype()
     case Some{KV.Item{KV.VStr{s}, e}}:
       R.e_wrongtype()
     case None{}:
@@ -971,6 +982,8 @@ def hr.many(m: Maybe<&2, KV.Item<KV.Val>>, +neg: Bool, +k: Nat, +wv: Bool, +r: U
     case Some{KV.Item{KV.VColl{KV.CHash{+h}}, e}}:
       R.RArray{hr.of(neg, k, wv, KV.hash.pairs(h), KV.hash.len(h), r)}
     case Some{KV.Item{KV.VColl{KV.CList{l}}, e}}:
+      R.e_wrongtype()
+    case Some{KV.Item{KV.VColl{KV.CMems{l}}, e}}:
       R.e_wrongtype()
     case Some{KV.Item{KV.VStr{s}, e}}:
       R.e_wrongtype()
@@ -985,6 +998,107 @@ def hr.reply(a: HrArgs, m: Maybe<&2, KV.Item<KV.Val>>, +r: U32) -> R.Reply:
       hr.many(m, neg, k, wv, r)
     case HrBad{e}:
       e
+
+# SRANDMEMBER key [count] and SPOP key [count]: members of a set at
+# random, by r (the server's random number, as HRANDFIELD's; R.srand
+# picks them), the count read as Redis 7.0.15 reads it, before the key is
+# looked for: one word after the key at most (else a syntax error),
+# SRANDMEMBER's a long long other than LLONG_MIN, SPOP's a long at least
+# 0. A key not there answers a nil (no count) or an empty array, one of
+# another kind WRONGTYPE. SRANDMEMBER with a negative count picks that
+# many members, each anew; with a positive one that many different
+# members, all of them in the set's order when it is at least the set's
+# size. SPOP takes the members it answers: it is the write R.SWPop (or
+# R.SWPopN, with a count) on the database it acts on, and answers as that
+# write answers there.
+type SrArgs is Data:
+  SrOne{}
+  SrCount{neg: Bool, n: Nat}
+  SrBad{r: R.Reply}
+
+def sr.count(l: R.LL) -> SrArgs:
+  match l:
+    case R.LL{+neg, +hi, +lo}:
+      Bool.pick(SrArgs, Bool.and(neg, Bool.and(Nat.is_eq(hi, R.dec.llmax()), Nat.is_eq(lo, 854775808n))), SrBad{R.RError{"ERR value is out of range, value must between -9223372036854775807 and 9223372036854775807"}}, SrCount{neg, hr.cap(hi, lo)})
+    case R.LLBad{}:
+      SrBad{R.RError{"ERR value is not an integer or out of range"}}
+
+def sr.args(args: List<&2, String>) -> SrArgs:
+  match args:
+    case Nil{}:
+      SrOne{}
+    case Con{+c, Nil{}}:
+      sr.count(R.ll.read(c))
+    case _:
+      SrBad{R.RError{"ERR syntax error"}}
+
+def sr.pick(neg: Bool, +k: Nat, +s: KV.Mems, +r: U32) -> List<&2, String>:
+  match neg:
+    case True{}:
+      R.srand.rep(k, s, r)
+    case False{}:
+      R.srand.many(k, s, r)
+
+def sr.one(m: Maybe<&2, KV.Item<KV.Val>>, +r: U32) -> R.Reply:
+  match m:
+    case Some{KV.Item{KV.VColl{KV.CMems{+s}}, e}}:
+      R.r_get(R.srand.pick(s, R.srand.next(r)))
+    case None{}:
+      R.RNull{}
+    case _:
+      R.e_wrongtype()
+
+def sr.many(m: Maybe<&2, KV.Item<KV.Val>>, +neg: Bool, +k: Nat, +r: U32) -> R.Reply:
+  match m:
+    case Some{KV.Item{KV.VColl{KV.CMems{+s}}, e}}:
+      R.RArray{R.lbulks(sr.pick(neg, k, s, r))}
+    case None{}:
+      R.RArray{Nil{}}
+    case _:
+      R.e_wrongtype()
+
+def sr.reply(a: SrArgs, m: Maybe<&2, KV.Item<KV.Val>>, +r: U32) -> R.Reply:
+  match a:
+    case SrOne{}:
+      sr.one(m, r)
+    case SrCount{+neg, +k}:
+      sr.many(m, neg, k, r)
+    case SrBad{e}:
+      e
+
+def sp.count(l: R.LL) -> SrArgs:
+  match l:
+    case R.LL{+neg, +hi, +lo}:
+      Bool.pick(SrArgs, neg, SrBad{R.RError{"ERR value is out of range, must be positive"}}, SrCount{False{}, hr.cap(hi, lo)})
+    case R.LLBad{}:
+      SrBad{R.RError{"ERR value is out of range, must be positive"}}
+
+def sp.args(args: List<&2, String>) -> SrArgs:
+  match args:
+    case Nil{}:
+      SrOne{}
+    case Con{+c, Nil{}}:
+      sp.count(R.ll.read(c))
+    case _:
+      SrBad{R.RError{"ERR syntax error"}}
+
+def sp.reply(a: SrArgs, +k: String, +r: U32, db: R.Db) -> R.Reply:
+  match a:
+    case SrOne{}:
+      R.reply_of(R.exec(R.Upd{k, R.UMems{R.SWPop{r}}}, db))
+    case SrCount{neg, +n}:
+      R.reply_of(R.exec(R.Upd{k, R.UMems{R.SWPopN{n, r}}}, db))
+    case SrBad{e}:
+      e
+
+def sp.acts(a: SrArgs, +k: String, +r: U32) -> List<&2, R.Act>:
+  match a:
+    case SrOne{}:
+      [R.ARun{R.Upd{k, R.UMems{R.SWPop{r}}}}]
+    case SrCount{neg, +n}:
+      [R.ARun{R.Upd{k, R.UMems{R.SWPopN{n, r}}}}]
+    case SrBad{e}:
+      Nil{}
 
 # MEMORY USAGE key [SAMPLES count]: about how many bytes the key's entry
 # takes: the key, the value (a string's bytes, a hash's fields and
@@ -1040,6 +1154,8 @@ def mem.val(+v: KV.Val) -> Nat:
       mem.pairs(KV.hash.pairs(h), 48n)
     case KV.VColl{KV.CList{+l}}:
       mem.elems(KV.deq.all(l), 48n)
+    case KV.VColl{KV.CMems{+m}}:
+      mem.elems(KV.mems.all(m), 48n)
 
 def mem.size(+k: String, m: Maybe<&2, KV.Item<KV.Val>>) -> R.Reply:
   match m:
@@ -1437,6 +1553,10 @@ def own_reply(+o: R.SessOp, +c: Conn, +s: Srv, +ds: R.Ds) -> Maybe<&2, R.Reply>:
       say(conn.mode(c), r)
     case R.SBad{r}:
       say(conn.mode(c), r)
+    case R.SSPop{+k, args}:
+      say(conn.mode(c), sp.reply(sp.args(args), k, KV.mix(srv.rng(s)), R.ds.focused(ds)))
+    case R.SSRandMember{+k, args}:
+      say(conn.mode(c), sr.reply(sr.args(args), R.db.ent(R.ds.focused(ds), k), KV.mix(srv.rng(s))))
 
 # the connection after a session command
 def own_conn(+o: R.SessOp, +c: Conn, +s: Srv) -> Conn:
@@ -1493,6 +1613,10 @@ def own_conn(+o: R.SessOp, +c: Conn, +s: Srv) -> Conn:
       step_conn(c, s)
     case R.SBad{r}:
       step_conn(c, s)
+    case R.SSPop{k, a}:
+      step_conn(c, s)
+    case R.SSRandMember{k, a}:
+      step_conn(c, s)
 
 # what a session command does to the databases: SELECT and RESET move the
 # focus to the connection's new database, SWAPDB, MOVE, COPY and FLUSHALL
@@ -1511,6 +1635,8 @@ def own_acts(+o: R.SessOp, +c: Conn, +s: Srv) -> List<&2, R.Act>:
       copy.acts(copy.of(args, c, s))
     case R.SFlushAll{}:
       [R.AWipe{}]
+    case R.SSPop{+k, args}:
+      sp.acts(sp.args(args), k, KV.mix(srv.rng(s)))
     case _:
       Nil{}
 
@@ -1546,6 +1672,10 @@ def own_srv(+o: R.SessOp, +c: Conn, +s: Srv) -> Srv:
     case R.SRandomKey{}:
       srv.rand(s)
     case R.SHRandField{k, a}:
+      srv.rand(s)
+    case R.SSPop{k, a}:
+      srv.rand(s)
+    case R.SSRandMember{k, a}:
       srv.rand(s)
     case _:
       s

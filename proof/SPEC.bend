@@ -74,6 +74,10 @@ def upd.ch(t: KV.Trie<KV.Val>, +k: String, +h: U32, r: R.Reply, ch: R.Change) ->
       (r, KV.keep.at(KV.Val, t, k, KV.VColl{KV.CList{lv}}, h))
     case R.CListNew{left, xs, lv}:
       (r, KV.setx.at(KV.Val, t, k, KV.VColl{KV.CList{lv}}, 0n, h))
+    case R.CMems{op, sv}:
+      (r, KV.keep.at(KV.Val, t, k, KV.VColl{KV.CMems{sv}}, h))
+    case R.CMemsNew{ms, sv}:
+      (r, KV.setx.at(KV.Val, t, k, KV.VColl{KV.CMems{sv}}, 0n, h))
 
 def upd.put(t: KV.Trie<KV.Val>, +k: String, +h: U32, o: R.Out) -> R.Reply & KV.Trie<KV.Val>:
   match o:
@@ -229,6 +233,53 @@ def db_of(r: R.Reply & KV.Trie<KV.Val>) -> KV.Trie<KV.Val>:
   (x, db) = r
   db
 
+# SINTERSTORE, SUNIONSTORE, SDIFFSTORE: the members the operation makes
+# of the sets at the keys there at now set at dst as the update SWNew
+# sets them, or dst deleted as DEL deletes it when there are none; the
+# reply counts them. A key of another kind makes it WRONGTYPE.
+def sstore.put(+ms: List<&2, String>, +d: String, db: KV.Trie<KV.Val>, +now: Nat) -> R.Reply & KV.Trie<KV.Val>:
+  (R.r_int(List.length(&2, String, ms)), db_of(upd.run(db, d, R.UMems{R.SWNew{ms}}, now)))
+
+def sstore.of(xs: List<&2, String>, +d: String, db: KV.Trie<KV.Val>, +now: Nat) -> R.Reply & KV.Trie<KV.Val>:
+  match xs:
+    case Nil{}:
+      (R.r_int(0n), db_of(del_reply(R.del_keys([d], now, db))))
+    case Con{x, rest}:
+      sstore.put(x <> rest, d, db, now)
+
+def sstore.do(g: R.SGot, op: R.SetK, ks: List<&2, String>, +d: String, db: KV.Trie<KV.Val>, +now: Nat) -> R.Reply & KV.Trie<KV.Val>:
+  match g:
+    case R.SGot{ss}:
+      sstore.of(R.sop.members(op, ks, ss), d, db, now)
+    case R.SGotWrong{}:
+      (R.e_wrongtype(), db)
+
+def sstore(db: KV.Trie<KV.Val>, op: R.SetK, +d: String, ks: List<&2, String>, +now: Nat) -> R.Reply & KV.Trie<KV.Val>:
+  +x = db
+  +k = ks
+  sstore.do(R.sets.at(k, now, x), op, k, d, x, now)
+
+# SMOVE: what it finds, from its keys' entries there at now (dst none for
+# a New form); then the member taken out of src and added to dst, by the
+# updates SREM and SADD (or SWNew) make
+def smv.find(+db: KV.Trie<KV.Val>, +s: String, +d: String, +w: R.SMem, +now: Nat) -> R.Smv:
+  R.smv.find(R.ent.live(now, KV.entry.at(KV.Val, db, s, KV.hash(s))), R.mv.dst.ent(R.smv.fresh(w), R.ent.live(now, KV.entry.at(KV.Val, db, d, KV.hash(d)))), KV.str_eq(s, d), R.smv.member(w))
+
+def smove.do(f: R.Smv, +s: String, +d: String, +w: R.SMem, db: KV.Trie<KV.Val>, +now: Nat) -> R.Reply & KV.Trie<KV.Val>:
+  match f:
+    case R.SmvZero{}:
+      (R.r_int(0n), db)
+    case R.SmvWrong{}:
+      (R.e_wrongtype(), db)
+    case R.SmvSame{had}:
+      (R.r_int(Bool.pick(Nat, had, 1n, 0n)), db)
+    case R.SmvGo{}:
+      (R.r_int(1n), db_of(upd.run(db_of(upd.run(db, s, R.UMems{R.SWRem{[R.smv.member(w)]}}, now)), d, R.UMems{R.smv.add(w)}, now)))
+
+def smove(db: KV.Trie<KV.Val>, +s: String, +d: String, +w: R.SMem, +now: Nat) -> R.Reply & KV.Trie<KV.Val>:
+  +x = db
+  smove.do(smv.find(x, s, d, w, now), s, d, w, x, now)
+
 def exec(cmd: R.Cmd, db: KV.Trie<KV.Val>, +now: Nat) -> R.Reply & KV.Trie<KV.Val>:
   match cmd:
     case R.Ping{}:
@@ -291,6 +342,13 @@ def exec(cmd: R.Cmd, db: KV.Trie<KV.Val>, +now: Nat) -> R.Reply & KV.Trie<KV.Val
       lmove(db, s, t, e, now)
     case R.LMPop{ks, +left, c}:
       lmpop(db, ks, left, c, now)
+    case R.SOp{op, +ks}:
+      +d = db
+      (R.sop.reply(op, ks, R.sets.at(ks, now, d)), d)
+    case R.SStore{op, +d, ks}:
+      sstore(db, op, d, ks, now)
+    case R.SMv{+s, +d, +w}:
+      smove(db, s, d, w, now)
 
 # a batch's replies, and the trie after it
 def replies(r: List<&2, R.Reply> & KV.Trie<KV.Val>) -> List<&2, R.Reply>:

@@ -74,11 +74,12 @@ type Val is Data:
   VStr{s: String}
   VColl{c: Coll}
 
-# a collection: a hash, its fields and their values (Hash), or a list,
-# its elements in order (Deq)
+# a collection: a hash, its fields and their values (Hash), a list, its
+# elements in order (Deq), or a set, its members (Mems)
 type Coll is Data:
   CHash{h: Hash}
   CList{l: Deq}
+  CMems{s: Mems}
 
 # a hash: a field and its value
 type HPair is Data:
@@ -98,6 +99,16 @@ type Hash is Data:
 # (Lists, below)
 type Deq is Data:
   Deq{nf: Nat, f: List<&2, String>, nb: Nat, b: List<&2, String>}
+
+# A set, as Redis 7.0 keeps one: one whose members all read as 64-bit
+# integers in the form Redis writes them (ints.ok), at most
+# set-max-intset-entries of them (512), as the list of its n members in
+# increasing order (an intset: SMEMBERS answers them so); any other as a
+# trie of its members (a hashtable, in no order), which it stays (Sets,
+# below)
+type Mems is Data:
+  MInts{n: Nat, xs: List<&2, String>}
+  MBig{n: Nat, t: Trie<Unit>}
 
 # Keys
 # ----
@@ -1505,3 +1516,223 @@ def deq.dropr(+k: Nat, d: Deq) -> Deq:
 # the list of n elements xs, in order
 def deq.of(+n: Nat, xs: List<&2, String>) -> Deq:
   deq.deal(n, xs)
+
+# Sets
+# ----
+# A set's members (Mems, above): a small set of integers is the list of
+# its members in increasing order, any other a trie of its members, each
+# with no time. Redis 7.0 keeps a set as an intset while its members all
+# read as 64-bit integers and they are at most set-max-intset-entries
+# (512), as a hashtable from the first write that passes either, for
+# good. BendKV turns an intset into a hashtable at that default, whatever
+# the parameter says, as it does a hash (Hashes, above); OBJECT ENCODING
+# reads the parameter as it is (session.bend). A key never holds an empty
+# set: a write that takes its last member deletes it.
+
+# whether s's d chars from index a on, all digits and the first not 0,
+# are at most 9223372036854775807 (with a = 1, after a '-': at most
+# 9223372036854775808); 19 digits pass 2^48, where a Nat stops, so the
+# number is read in two parts, the first ten digits and the other nine
+# the first ten digits of 9223372036854775807 (a literal stops at 2^32)
+def ints.max.hi() -> Nat:
+  Nat.add(Nat.mul(92233n, 100000n), 72036n)
+
+def ints.fits(ok: Bool, +s: String, +a: Nat, +d: Nat) -> Bool:
+  match ok:
+    case True{}:
+      +hi = String.dec_at(s, a, 10n)
+      +top = ints.max.hi()
+      +last = Bool.pick(Nat, Nat.is_eq(a, 1n), 854775808n, 854775807n)
+      Bool.or(Nat.is_lt(d, 19n), Bool.or(Nat.is_lt(hi, top), Bool.and(Nat.is_eq(hi, top), Nat.is_le(String.dec_at(s, Nat.add(a, 10n), 9n), last))))
+    case False{}:
+      False{}
+
+def ints.ok.of(+s: String, +n: Nat, +a: Nat) -> Bool:
+  +d = Nat.sub(n, a)
+  +digits = Bool.and(Nat.is_eq(String.digits_at(s, a), d), U32.is_ne(String.code_at(s, a), 48))
+  Bool.or(String.eq(s, "0"), ints.fits(Bool.and(Bool.and(Nat.is_lt(0n, d), Nat.is_le(d, 19n)), digits), s, a, d))
+
+# whether s reads as a 64-bit integer in the form Redis writes one (as
+# its string2ll reads it): an optional '-', then digits with no leading
+# zero, or 0 alone ("-0" is not one)
+def ints.ok(+s: String) -> Bool:
+  ints.ok.of(s, String.length(s), Bool.pick(Nat, U32.is_eq(String.code_at(s, 0n), 45), 1n, 0n))
+
+# whether the digits of integers a and b (of ints.ok, a's from index i,
+# b's from j, each l of them) are fewer for a, or as many and smaller:
+# read as two parts of at most ten digits, each below 2^48
+def ints.mag_lt(+a: String, +i: Nat, +la: Nat, +b: String, +j: Nat, +lb: Nat) -> Bool:
+  +ha = String.dec_at(a, i, 10n)
+  +hb = String.dec_at(b, j, 10n)
+  Bool.or(Nat.is_lt(la, lb), Bool.and(Nat.is_eq(la, lb), Bool.or(Nat.is_lt(ha, hb), Bool.and(Nat.is_eq(ha, hb), Nat.is_lt(String.dec_at(a, Nat.add(i, 10n), 10n), String.dec_at(b, Nat.add(j, 10n), 10n))))))
+
+def ints.lt.of(na: Bool, nb: Bool, +a: String, +b: String) -> Bool:
+  match na nb:
+    case True{} False{}:
+      True{}
+    case False{} True{}:
+      False{}
+    case False{} False{}:
+      ints.mag_lt(a, 0n, String.length(a), b, 0n, String.length(b))
+    case True{} True{}:
+      ints.mag_lt(b, 1n, String.length(b), a, 1n, String.length(a))
+
+# whether integer a (of ints.ok) is below integer b
+def ints.lt(+a: String, +b: String) -> Bool:
+  ints.lt.of(U32.is_eq(String.code_at(a, 0n), 45), U32.is_eq(String.code_at(b, 0n), 45), a, b)
+
+# where integer m falls against the first of xs: 0 before it, 1 at it,
+# 2 after it (or xs is empty)
+def ints.at(+m: String, xs: List<&2, String>) -> Nat:
+  match xs:
+    case Con{+x, rest}:
+      Bool.pick(Nat, str_eq(m, x), 1n, Bool.pick(Nat, ints.lt(m, x), 0n, 2n))
+    case Nil{}:
+      2n
+
+# whether xs (increasing) holds integer m; c is ints.at(m, xs), computed
+# before xs is passed on
+def ints.has.go(+m: String, xs: List<&2, String>, c: Nat) -> Bool:
+  match xs c:
+    case Con{x, +rest} 2n:
+      c2 = ints.at(m, rest)
+      ints.has.go(m, rest, c2)
+    case Con{x, rest} 1n:
+      True{}
+    case _ _:
+      False{}
+
+def ints.has(+m: String, +xs: List<&2, String>) -> Bool:
+  c = ints.at(m, xs)
+  ints.has.go(m, xs, c)
+
+# xs with integer m in its place (xs does not hold it)
+def ints.put.go(+m: String, xs: List<&2, String>, c: Nat) -> List<&2, String>:
+  match xs c:
+    case Con{x, +rest} 2n:
+      c2 = ints.at(m, rest)
+      Con{x, ints.put.go(m, rest, c2)}
+    case Nil{} _:
+      [m]
+    case Con{x, rest} _:
+      m <> Con{x, rest}
+
+def ints.put(+m: String, +xs: List<&2, String>) -> List<&2, String>:
+  c = ints.at(m, xs)
+  ints.put.go(m, xs, c)
+
+# xs without integer m (xs holds it)
+def ints.del.go(+m: String, xs: List<&2, String>, c: Nat) -> List<&2, String>:
+  match xs c:
+    case Con{x, +rest} 2n:
+      c2 = ints.at(m, rest)
+      Con{x, ints.del.go(m, rest, c2)}
+    case Con{x, rest} 1n:
+      rest
+    case ys _:
+      ys
+
+def ints.del(+m: String, +xs: List<&2, String>) -> List<&2, String>:
+  c = ints.at(m, xs)
+  ints.del.go(m, xs, c)
+
+# the members xs added to the trie t
+def ints.trie(xs: List<&2, String>, t: Trie<Unit>) -> Trie<Unit>:
+  match xs:
+    case Nil{}:
+      t
+    case Con{+x, rest}:
+      ints.trie(rest, set(Unit, t, x, Unit{}))
+
+def mems.empty() -> Mems:
+  MInts{0n, Nil{}}
+
+def mems.len(+s: Mems) -> Nat:
+  match s:
+    case MInts{+n, xs}:
+      n
+    case MBig{+n, t}:
+      n
+
+def mems.ints.has(int: Bool, +m: String, +xs: List<&2, String>) -> Bool:
+  match int:
+    case True{}:
+      ints.has(m, xs)
+    case False{}:
+      False{}
+
+# whether s holds m
+def mems.has(+m: String, +s: Mems) -> Bool:
+  match s:
+    case MInts{n, +xs}:
+      mems.ints.has(ints.ok(m), m, xs)
+    case MBig{n, +t}:
+      has(Unit, t, m)
+
+# n members xs of an intset, and m, which they do not hold, as a
+# hashtable
+def mems.grow(+n: Nat, xs: List<&2, String>, +m: String) -> Mems:
+  MBig{1n+n, set(Unit, ints.trie(xs, empty(Unit)), m, Unit{})}
+
+def mems.ints.put(fits: Bool, +n: Nat, xs: List<&2, String>, +m: String) -> Mems:
+  match fits:
+    case True{}:
+      MInts{1n+n, ints.put(m, xs)}
+    case False{}:
+      mems.grow(n, xs, m)
+
+def mems.ints.add(had: Bool, int: Bool, +n: Nat, xs: List<&2, String>, +m: String) -> Mems:
+  match had int:
+    case True{} _:
+      MInts{n, xs}
+    case False{} True{}:
+      mems.ints.put(Nat.is_lt(n, 512n), n, xs, m)
+    case False{} False{}:
+      mems.grow(n, xs, m)
+
+def mems.big.add(had: Bool, +n: Nat, t: Trie<Unit>, +m: String) -> Mems:
+  match had:
+    case True{}:
+      MBig{n, t}
+    case False{}:
+      MBig{1n+n, set(Unit, t, m, Unit{})}
+
+# s with m added (s may hold it already): an integer joins an intset in
+# its place, while it holds at most 512; any other member makes it a
+# hashtable
+def mems.add(s: Mems, +m: String) -> Mems:
+  match s:
+    case MInts{+n, +xs}:
+      +int = ints.ok(m)
+      mems.ints.add(mems.ints.has(int, m, xs), int, n, xs, m)
+    case MBig{+n, +t}:
+      +had = has(Unit, t, m)
+      mems.big.add(had, n, t, m)
+
+# the members xs added in turn to s
+def mems.adds(xs: List<&2, String>, s: Mems) -> Mems:
+  match xs:
+    case Nil{}:
+      s
+    case Con{+x, rest}:
+      mems.adds(rest, mems.add(s, x))
+
+# the set of the members xs (a member may come twice)
+def mems.of(xs: List<&2, String>) -> Mems:
+  mems.adds(xs, mems.empty())
+
+# s without m, which it holds
+def mems.del(s: Mems, +m: String) -> Mems:
+  match s:
+    case MInts{+n, xs}:
+      MInts{Nat.sub(n, 1n), ints.del(m, xs)}
+    case MBig{+n, t}:
+      MBig{Nat.sub(n, 1n), del(Unit, t, m)}
+
+# the members of s, in its order (an intset's, increasing)
+def mems.all(+s: Mems) -> List<&2, String>:
+  match s:
+    case MInts{n, +xs}:
+      xs
+    case MBig{n, +t}:
+      keys(Unit, t, 0n)

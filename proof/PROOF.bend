@@ -2611,6 +2611,12 @@ def t_reads_go(c: R.Cmd, +db: KV.Trie<KV.Val>, +now: Nat) -> {Laws.is_read(c) ==
       e => Empty.absurd({T.db_of(T.exec(R.LMove{op, d, srcs}, db, now)) == db : KV.Trie<KV.Val>}, false_true(e))
     case R.LMPop{op, d, srcs}:
       e => Empty.absurd({T.db_of(T.exec(R.LMPop{op, d, srcs}, db, now)) == db : KV.Trie<KV.Val>}, false_true(e))
+    case R.SOp{op, ks}:
+      e => {==}
+    case R.SStore{op, d, srcs}:
+      e => Empty.absurd({T.db_of(T.exec(R.SStore{op, d, srcs}, db, now)) == db : KV.Trie<KV.Val>}, false_true(e))
+    case R.SMv{s, d, w}:
+      e => Empty.absurd({T.db_of(T.exec(R.SMv{s, d, w}, db, now)) == db : KV.Trie<KV.Val>}, false_true(e))
     case R.Own{o}:
       e => {==}
     case R.Bad{r}:
@@ -2828,6 +2834,10 @@ def upd_ch_frame(+t: KV.Trie<KV.Val>, +k: String, +j: String, r: R.Reply, ch: R.
       Laws.entry_keep_other(KV.Val, t, k, j, KV.VColl{KV.CList{hv}}, ne)
     case R.CListNew{lf, ps, +hv}:
       Laws.entry_setx_other(KV.Val, t, k, j, KV.VColl{KV.CList{hv}}, 0n, ne)
+    case R.CMems{op, +sv}:
+      Laws.entry_keep_other(KV.Val, t, k, j, KV.VColl{KV.CMems{sv}}, ne)
+    case R.CMemsNew{ms, +sv}:
+      Laws.entry_setx_other(KV.Val, t, k, j, KV.VColl{KV.CMems{sv}}, 0n, ne)
 
 def upd_frame(+t: KV.Trie<KV.Val>, +k: String, +j: String, o: R.Out, ne: {j != k : String}) -> {KV.entry(KV.Val, T.db_of(T.upd.put(t, k, KV.hash(k), o)), j) == KV.entry(KV.Val, t, j) : Maybe<&2, KV.Item<KV.Val>>}:
   match o:
@@ -2968,6 +2978,50 @@ def bitop_go_frame(w: Bool, +op: R.BitK, +srcs: List<&2, String>, +d: String, +d
     case False{}:
       e => bitop_frame(String.is_empty(R.bitop.val(op, srcs, now, db)), R.bitop.val(op, srcs, now, db), d, db, j)(e)
 
+# a STORE of a set operation writes its destination alone: the DEL of it,
+# or the update SWNew
+def any_one(+j: String, +d: String, e: {KV.str_eq(j, d) == False{} : Bool}) -> {Laws.any_key(j, [d]) == False{} : Bool}:
+  %Equal.sym(Bool, KV.str_eq(j, d), False{}, e) : {Bool.or(_, False{}) == False{} : Bool}
+  {==}
+
+def sstore_of_frame(xs: List<&2, String>, +d: String, +db: KV.Trie<KV.Val>, +j: String, +now: Nat, e: {KV.str_eq(j, d) == False{} : Bool}) -> {KV.entry(KV.Val, T.db_of(T.sstore.of(xs, d, db, now)), j) == KV.entry(KV.Val, db, j) : Maybe<&2, KV.Item<KV.Val>>}:
+  match xs:
+    case Nil{}:
+      %exec_del([d], db, now) : {KV.entry(KV.Val, _, j) == KV.entry(KV.Val, db, j) : Maybe<&2, KV.Item<KV.Val>>}
+      del_all_frame([d], db, j)(any_one(j, d, e))
+    case Con{+x, +rest}:
+      upd_frame(db, d, j, R.upd.v(R.UMems{R.SWNew{x <> rest}}, now, R.ent.live(now, KV.entry.at(KV.Val, db, d, KV.hash(d)))), Laws.key_eq_false(j, d, e))
+
+def sstore_do_frame(g: R.SGot, +op: R.SetK, +ks: List<&2, String>, +d: String, +db: KV.Trie<KV.Val>, +j: String, +now: Nat, e: {KV.str_eq(j, d) == False{} : Bool}) -> {KV.entry(KV.Val, T.db_of(T.sstore.do(g, op, ks, d, db, now)), j) == KV.entry(KV.Val, db, j) : Maybe<&2, KV.Item<KV.Val>>}:
+  match g:
+    case R.SGot{ss}:
+      sstore_of_frame(R.sop.members(op, ks, ss), d, db, j, now, e)
+    case R.SGotWrong{}:
+      {==}
+
+def sstore_frame(+op: R.SetK, +d: String, +ks: List<&2, String>, +db: KV.Trie<KV.Val>, +j: String, +now: Nat) -> {KV.str_eq(j, d) == False{} : Bool} -> {KV.entry(KV.Val, T.db_of(T.sstore(db, op, d, ks, now)), j) == KV.entry(KV.Val, db, j) : Maybe<&2, KV.Item<KV.Val>>}:
+  e => sstore_do_frame(R.sets.at(ks, now, db), op, ks, d, db, j, now, e)
+
+# SMOVE writes its source and its destination alone, each by an update
+def smove_do_frame(f: R.Smv, +s: String, +d: String, +w: R.SMem, +db: KV.Trie<KV.Val>, +j: String, +now: Nat, ns: {j != s : String}, nd: {j != d : String}) -> {KV.entry(KV.Val, T.db_of(T.smove.do(f, s, d, w, db, now)), j) == KV.entry(KV.Val, db, j) : Maybe<&2, KV.Item<KV.Val>>}:
+  match f:
+    case R.SmvZero{}:
+      {==}
+    case R.SmvWrong{}:
+      {==}
+    case R.SmvSame{had}:
+      {==}
+    case R.SmvGo{}:
+      +u = T.db_of(T.upd.run(db, s, R.UMems{R.SWRem{[R.smv.member(w)]}}, now))
+      Equal.trans(Maybe<&2, KV.Item<KV.Val>>, KV.entry(KV.Val, T.db_of(T.upd.run(u, d, R.UMems{R.smv.add(w)}, now)), j), KV.entry(KV.Val, u, j), KV.entry(KV.Val, db, j),
+        upd_frame(u, d, j, R.upd.v(R.UMems{R.smv.add(w)}, now, R.ent.live(now, KV.entry.at(KV.Val, u, d, KV.hash(d)))), nd),
+        upd_frame(db, s, j, R.upd.v(R.UMems{R.SWRem{[R.smv.member(w)]}}, now, R.ent.live(now, KV.entry.at(KV.Val, db, s, KV.hash(s)))), ns))
+
+def smove_frame(+s: String, +d: String, +w: R.SMem, +db: KV.Trie<KV.Val>, +j: String, +now: Nat) -> {Laws.any_key(j, [s, d]) == False{} : Bool} -> {KV.entry(KV.Val, T.db_of(T.smove(db, s, d, w, now)), j) == KV.entry(KV.Val, db, j) : Maybe<&2, KV.Item<KV.Val>>}:
+  +ee => smove_do_frame(T.smv.find(db, s, d, w, now), s, d, w, db, j, now,
+    Laws.key_eq_false(j, s, or_false_l(KV.str_eq(j, s), Laws.any_key(j, [d]))(ee)),
+    Laws.key_eq_false(j, d, or_false_l(KV.str_eq(j, d), Laws.any_key(j, Nil{}))(or_false_r(KV.str_eq(j, s), Laws.any_key(j, [d]))(ee))))
+
 def frame_go(c: R.Cmd, +db: KV.Trie<KV.Val>, +j: String, +now: Nat) -> {Laws.writes(c, j) == False{} : Bool} -> {KV.entry(KV.Val, T.db_of(T.exec(c, db, now)), j) == KV.entry(KV.Val, db, j) : Maybe<&2, KV.Item<KV.Val>>}:
   match c:
     case R.Ping{}:
@@ -3011,6 +3065,12 @@ def frame_go(c: R.Cmd, +db: KV.Trie<KV.Val>, +j: String, +now: Nat) -> {Laws.wri
       ee => lmove_frame(s, t, e, db, j, now)(ee)
     case R.LMPop{+ks, +left, +c}:
       ee => lmpop_frame(ks, left, c, db, j, now)(ee)
+    case R.SOp{op, ks}:
+      e => {==}
+    case R.SStore{+op, +d, +ks}:
+      e => sstore_frame(op, d, ks, db, j, now)(e)
+    case R.SMv{+s, +d, +w}:
+      e => smove_frame(s, d, w, db, j, now)(e)
     case R.Own{o}:
       e => {==}
     case R.Bad{r}:
@@ -3241,6 +3301,10 @@ def upd_ch_rep(ch: R.Change, -r: R.Reply, -t: KV.Trie<KV.Val>, -u: KV.Trie<KV.Va
       {==}
     case R.CListNew{lf, ps, hv}:
       {==}
+    case R.CMems{op, sv}:
+      {==}
+    case R.CMemsNew{ms, sv}:
+      {==}
 
 def upd_rep(o: R.Out, -t: KV.Trie<KV.Val>, -u: KV.Trie<KV.Val>, -k: String, -h: U32) -> {T.reply_of(T.upd.put(t, k, h, o)) == T.reply_of(T.upd.put(u, k, h, o)) : R.Reply}:
   match o:
@@ -3323,6 +3387,14 @@ def loc_reply(c: R.Cmd, +t: KV.Trie<KV.Val>, +u: KV.Trie<KV.Val>, +now: Nat) -> 
       kd => e => Empty.absurd({T.reply_of(T.exec(R.LMove{op, d, srcs}, t, now)) == T.reply_of(T.exec(R.LMove{op, d, srcs}, u, now)) : R.Reply}, false_true(kd))
     case R.LMPop{op, d, srcs}:
       kd => e => Empty.absurd({T.reply_of(T.exec(R.LMPop{op, d, srcs}, t, now)) == T.reply_of(T.exec(R.LMPop{op, d, srcs}, u, now)) : R.Reply}, false_true(kd))
+    case R.SOp{op, d}:
+      kd => e => Empty.absurd({T.reply_of(T.exec(R.SOp{op, d}, t, now)) == T.reply_of(T.exec(R.SOp{op, d}, u, now)) : R.Reply}, false_true(kd))
+
+    case R.SStore{op, d, srcs}:
+      kd => e => Empty.absurd({T.reply_of(T.exec(R.SStore{op, d, srcs}, t, now)) == T.reply_of(T.exec(R.SStore{op, d, srcs}, u, now)) : R.Reply}, false_true(kd))
+
+    case R.SMv{op, d, srcs}:
+      kd => e => Empty.absurd({T.reply_of(T.exec(R.SMv{op, d, srcs}, t, now)) == T.reply_of(T.exec(R.SMv{op, d, srcs}, u, now)) : R.Reply}, false_true(kd))
     case R.Own{o}:
       kd => e => Empty.absurd({T.reply_of(T.exec(R.Own{o}, t, now)) == T.reply_of(T.exec(R.Own{o}, u, now)) : R.Reply}, false_true(kd))
     case R.Bad{r}:
@@ -3394,6 +3466,10 @@ def upd_ch_key(ch: R.Change, -r: R.Reply, +t: KV.Trie<KV.Val>, +u: KV.Trie<KV.Va
       e => keep_key(t, u, k, KV.VColl{KV.CList{hv}})(e)
     case R.CListNew{lf, ps, +hv}:
       e => Equal.trans(Maybe<&2, KV.Item<KV.Val>>, KV.entry(KV.Val, KV.setx(KV.Val, t, k, KV.VColl{KV.CList{hv}}, 0n), k), Some{KV.Item{KV.VColl{KV.CList{hv}}, 0n}}, KV.entry(KV.Val, KV.setx(KV.Val, u, k, KV.VColl{KV.CList{hv}}, 0n), k), Laws.entry_setx_same(KV.Val, t, k, KV.VColl{KV.CList{hv}}, 0n), Equal.sym(Maybe<&2, KV.Item<KV.Val>>, KV.entry(KV.Val, KV.setx(KV.Val, u, k, KV.VColl{KV.CList{hv}}, 0n), k), Some{KV.Item{KV.VColl{KV.CList{hv}}, 0n}}, Laws.entry_setx_same(KV.Val, u, k, KV.VColl{KV.CList{hv}}, 0n)))
+    case R.CMems{op, +sv}:
+      e => keep_key(t, u, k, KV.VColl{KV.CMems{sv}})(e)
+    case R.CMemsNew{ms, +sv}:
+      e => Equal.trans(Maybe<&2, KV.Item<KV.Val>>, KV.entry(KV.Val, KV.setx(KV.Val, t, k, KV.VColl{KV.CMems{sv}}, 0n), k), Some{KV.Item{KV.VColl{KV.CMems{sv}}, 0n}}, KV.entry(KV.Val, KV.setx(KV.Val, u, k, KV.VColl{KV.CMems{sv}}, 0n), k), Laws.entry_setx_same(KV.Val, t, k, KV.VColl{KV.CMems{sv}}, 0n), Equal.sym(Maybe<&2, KV.Item<KV.Val>>, KV.entry(KV.Val, KV.setx(KV.Val, u, k, KV.VColl{KV.CMems{sv}}, 0n), k), Some{KV.Item{KV.VColl{KV.CMems{sv}}, 0n}}, Laws.entry_setx_same(KV.Val, u, k, KV.VColl{KV.CMems{sv}}, 0n)))
 
 def upd_key(o: R.Out, +t: KV.Trie<KV.Val>, +u: KV.Trie<KV.Val>, +k: String) -> {KV.entry(KV.Val, t, k) == KV.entry(KV.Val, u, k) : Maybe<&2, KV.Item<KV.Val>>} -> {KV.entry(KV.Val, T.db_of(T.upd.put(t, k, KV.hash(k), o)), k) == KV.entry(KV.Val, T.db_of(T.upd.put(u, k, KV.hash(k), o)), k) : Maybe<&2, KV.Item<KV.Val>>}:
   match o:
@@ -3462,6 +3538,14 @@ def loc_key(c: R.Cmd, +t: KV.Trie<KV.Val>, +u: KV.Trie<KV.Val>, +now: Nat) -> {k
       kd => e => Empty.absurd({KV.entry(KV.Val, T.db_of(T.exec(R.LMove{op, d, srcs}, t, now)), "") == KV.entry(KV.Val, T.db_of(T.exec(R.LMove{op, d, srcs}, u, now)), "") : Maybe<&2, KV.Item<KV.Val>>}, false_true(kd))
     case R.LMPop{op, d, srcs}:
       kd => e => Empty.absurd({KV.entry(KV.Val, T.db_of(T.exec(R.LMPop{op, d, srcs}, t, now)), "") == KV.entry(KV.Val, T.db_of(T.exec(R.LMPop{op, d, srcs}, u, now)), "") : Maybe<&2, KV.Item<KV.Val>>}, false_true(kd))
+    case R.SOp{op, d}:
+      kd => e => Empty.absurd({KV.entry(KV.Val, T.db_of(T.exec(R.SOp{op, d}, t, now)), "") == KV.entry(KV.Val, T.db_of(T.exec(R.SOp{op, d}, u, now)), "") : Maybe<&2, KV.Item<KV.Val>>}, false_true(kd))
+
+    case R.SStore{op, d, srcs}:
+      kd => e => Empty.absurd({KV.entry(KV.Val, T.db_of(T.exec(R.SStore{op, d, srcs}, t, now)), "") == KV.entry(KV.Val, T.db_of(T.exec(R.SStore{op, d, srcs}, u, now)), "") : Maybe<&2, KV.Item<KV.Val>>}, false_true(kd))
+
+    case R.SMv{op, d, srcs}:
+      kd => e => Empty.absurd({KV.entry(KV.Val, T.db_of(T.exec(R.SMv{op, d, srcs}, t, now)), "") == KV.entry(KV.Val, T.db_of(T.exec(R.SMv{op, d, srcs}, u, now)), "") : Maybe<&2, KV.Item<KV.Val>>}, false_true(kd))
     case R.Own{o}:
       kd => e => Empty.absurd({KV.entry(KV.Val, T.db_of(T.exec(R.Own{o}, t, now)), "") == KV.entry(KV.Val, T.db_of(T.exec(R.Own{o}, u, now)), "") : Maybe<&2, KV.Item<KV.Val>>}, false_true(kd))
     case R.Bad{r}:
@@ -3519,6 +3603,14 @@ def writes_one(c: R.Cmd, +j: String) -> {keyed(c) == True{} : Bool} -> {False{} 
       kd => nb => Empty.absurd({Laws.writes(R.LMove{op, d, srcs}, j) == False{} : Bool}, false_true(kd))
     case R.LMPop{op, d, srcs}:
       kd => nb => Empty.absurd({Laws.writes(R.LMPop{op, d, srcs}, j) == False{} : Bool}, false_true(kd))
+    case R.SOp{op, d}:
+      kd => nb => Empty.absurd({Laws.writes(R.SOp{op, d}, j) == False{} : Bool}, false_true(kd))
+
+    case R.SStore{op, d, srcs}:
+      kd => nb => Empty.absurd({Laws.writes(R.SStore{op, d, srcs}, j) == False{} : Bool}, false_true(kd))
+
+    case R.SMv{op, d, srcs}:
+      kd => nb => Empty.absurd({Laws.writes(R.SMv{op, d, srcs}, j) == False{} : Bool}, false_true(kd))
     case R.Own{o}:
       kd => nb => Empty.absurd({Laws.writes(R.Own{o}, j) == False{} : Bool}, false_true(kd))
     case R.Bad{r}:
@@ -3859,6 +3951,61 @@ def lmpop_at_point(m: Maybe<&2, String>, +left: Bool, +n: String, +t: KV.Trie<KV
     case None{}:
       e => e
 
+# a key's value there at now, in two tries that agree on it
+def read_agree(+t: KV.Trie<KV.Val>, +u: KV.Trie<KV.Val>, +k: String, +now: Nat, h: {KV.entry(KV.Val, t, k) == KV.entry(KV.Val, u, k) : Maybe<&2, KV.Item<KV.Val>>}) -> {KV.read(KV.Val, t, k, now) == KV.read(KV.Val, u, k, now) : Maybe<&2, KV.Val>}:
+  %read_eq(t, k, now) : {_ == KV.read(KV.Val, u, k, now) : Maybe<&2, KV.Val>}
+  %read_eq(u, k, now) : {Laws.live_val(KV.Val, KV.entry(KV.Val, t, k), now) == _ : Maybe<&2, KV.Val>}
+  %h : {Laws.live_val(KV.Val, KV.entry(KV.Val, t, k), now) == Laws.live_val(KV.Val, _, now) : Maybe<&2, KV.Val>}
+  {==}
+
+# the sets at the keys of a set operation, in two tries that agree on them
+def sets_at_eq(ks: List<&2, String>, +t: KV.Trie<KV.Val>, +u: KV.Trie<KV.Val>, +now: Nat) -> Agree(t, u, ks) -> {R.sets.at(ks, now, t) == R.sets.at(ks, now, u) : R.SGot}:
+  match ks:
+    case Nil{}:
+      ag => {==}
+    case Con{+k, +rest}:
+      +ag => %Equal.sym(Maybe<&2, KV.Val>, KV.read(KV.Val, t, k, now), KV.read(KV.Val, u, k, now), read_agree(t, u, k, now, ag_head(t, u, k, rest, ag))) : {R.sget.one(_, R.sets.at(rest, now, t)) == R.sget.one(KV.read(KV.Val, u, k, now), R.sets.at(rest, now, u)) : R.SGot}
+             %Equal.sym(R.SGot, R.sets.at(rest, now, t), R.sets.at(rest, now, u), sets_at_eq(rest, t, u, now)(ag_tail(t, u, k, rest, ag))) : {R.sget.one(KV.read(KV.Val, u, k, now), _) == R.sget.one(KV.read(KV.Val, u, k, now), R.sets.at(rest, now, u)) : R.SGot}
+             {==}
+
+# a STORE's write, for given members: the DEL of its destination, or the
+# update SWNew of it
+def sstore_of_point(xs: List<&2, String>, +d: String, +t: KV.Trie<KV.Val>, +u: KV.Trie<KV.Val>, +j: String, +now: Nat) -> {KV.entry(KV.Val, t, j) == KV.entry(KV.Val, u, j) : Maybe<&2, KV.Item<KV.Val>>} -> {KV.entry(KV.Val, T.db_of(T.sstore.of(xs, d, t, now)), j) == KV.entry(KV.Val, T.db_of(T.sstore.of(xs, d, u, now)), j) : Maybe<&2, KV.Item<KV.Val>>}:
+  match xs:
+    case Nil{}:
+      e => %exec_del([d], t, now) : {KV.entry(KV.Val, _, j) == KV.entry(KV.Val, T.db_of(T.exec(R.Del{[d]}, u, now)), j) : Maybe<&2, KV.Item<KV.Val>>}
+           %exec_del([d], u, now) : {KV.entry(KV.Val, del_all([d], t), j) == KV.entry(KV.Val, _, j) : Maybe<&2, KV.Item<KV.Val>>}
+           del_point([d], t, u, j)(e)
+    case Con{+x, +rest}:
+      e => point_key(R.Upd{d, R.UMems{R.SWNew{x <> rest}}}, t, u, j, now, {==}, KV.str_eq(j, d))({==})(str_refl(j, d))(e)
+
+def sstore_do_point(g: R.SGot, +op: R.SetK, +ks: List<&2, String>, +d: String, +t: KV.Trie<KV.Val>, +u: KV.Trie<KV.Val>, +j: String, +now: Nat) -> {KV.entry(KV.Val, t, j) == KV.entry(KV.Val, u, j) : Maybe<&2, KV.Item<KV.Val>>} -> {KV.entry(KV.Val, T.db_of(T.sstore.do(g, op, ks, d, t, now)), j) == KV.entry(KV.Val, T.db_of(T.sstore.do(g, op, ks, d, u, now)), j) : Maybe<&2, KV.Item<KV.Val>>}:
+  match g:
+    case R.SGot{+ss}:
+      sstore_of_point(R.sop.members(op, ks, ss), d, t, u, j, now)
+    case R.SGotWrong{}:
+      e => e
+
+# SMOVE's verdict, in two tries that agree on its keys
+def smv_find_eq(+t: KV.Trie<KV.Val>, +u: KV.Trie<KV.Val>, +s: String, +d: String, +w: R.SMem, +now: Nat) -> Agree(t, u, [s, d]) -> {T.smv.find(t, s, d, w, now) == T.smv.find(u, s, d, w, now) : R.Smv}:
+  +ag => %at_agree(t, u, s, ag_head(t, u, s, [d], ag)) : {T.smv.find(t, s, d, w, now) == R.smv.find(R.ent.live(now, _), R.mv.dst.ent(R.smv.fresh(w), R.ent.live(now, KV.entry.at(KV.Val, u, d, KV.hash(d)))), KV.str_eq(s, d), R.smv.member(w)) : R.Smv}
+         %at_agree(t, u, d, ag_head(t, u, d, Nil{}, ag_tail(t, u, s, [d], ag))) : {T.smv.find(t, s, d, w, now) == R.smv.find(R.ent.live(now, KV.entry.at(KV.Val, t, s, KV.hash(s))), R.mv.dst.ent(R.smv.fresh(w), R.ent.live(now, _)), KV.str_eq(s, d), R.smv.member(w)) : R.Smv}
+         {==}
+
+# SMOVE's writes, for a given verdict: the updates of its source and of
+# its destination
+def smove_do_point(f: R.Smv, +s: String, +d: String, +w: R.SMem, +t: KV.Trie<KV.Val>, +u: KV.Trie<KV.Val>, +j: String, +now: Nat) -> {KV.entry(KV.Val, t, j) == KV.entry(KV.Val, u, j) : Maybe<&2, KV.Item<KV.Val>>} -> {KV.entry(KV.Val, T.db_of(T.smove.do(f, s, d, w, t, now)), j) == KV.entry(KV.Val, T.db_of(T.smove.do(f, s, d, w, u, now)), j) : Maybe<&2, KV.Item<KV.Val>>}:
+  match f:
+    case R.SmvZero{}:
+      e => e
+    case R.SmvWrong{}:
+      e => e
+    case R.SmvSame{had}:
+      e => e
+    case R.SmvGo{}:
+      e => point_key(R.Upd{d, R.UMems{R.smv.add(w)}}, T.db_of(T.upd.run(t, s, R.UMems{R.SWRem{[R.smv.member(w)]}}, now)), T.db_of(T.upd.run(u, s, R.UMems{R.SWRem{[R.smv.member(w)]}}, now)), j, now, {==}, KV.str_eq(j, d))({==})(str_refl(j, d))(
+             point_key(R.Upd{s, R.UMems{R.SWRem{[R.smv.member(w)]}}}, t, u, j, now, {==}, KV.str_eq(j, s))({==})(str_refl(j, s))(e))
+
 # any command, run on two tries that agree on the keys its writes depend
 # on: a key j's entry after it depends only on j's entry before it
 def point_cmd(c: R.Cmd, +t: KV.Trie<KV.Val>, +u: KV.Trie<KV.Val>, +j: String, +now: Nat) -> Agree(t, u, Laws.deps(c)) -> {KV.entry(KV.Val, t, j) == KV.entry(KV.Val, u, j) : Maybe<&2, KV.Item<KV.Val>>} -> {KV.entry(KV.Val, T.db_of(T.exec(c, t, now)), j) == KV.entry(KV.Val, T.db_of(T.exec(c, u, now)), j) : Maybe<&2, KV.Item<KV.Val>>}:
@@ -3910,6 +4057,14 @@ def point_cmd(c: R.Cmd, +t: KV.Trie<KV.Val>, +u: KV.Trie<KV.Val>, +j: String, +n
     case R.LMPop{+ks, +left, +n}:
       ag => e => %lmpop_first_eq(ks, t, u, now)(ag) : {KV.entry(KV.Val, T.db_of(T.lmpop.at(T.lmpop.first(ks, T.lmpop.head(ks, t, now), t, now), left, n, t, now)), j) == KV.entry(KV.Val, T.db_of(T.lmpop.at(_, left, n, u, now)), j) : Maybe<&2, KV.Item<KV.Val>>}
                  lmpop_at_point(T.lmpop.first(ks, T.lmpop.head(ks, t, now), t, now), left, n, t, u, j, now)(e)
+    case R.SOp{op, ks}:
+      ag => e => e
+    case R.SStore{+op, +d, +srcs}:
+      ag => e => %sets_at_eq(srcs, t, u, now)(ag) : {KV.entry(KV.Val, T.db_of(T.sstore.do(R.sets.at(srcs, now, t), op, srcs, d, t, now)), j) == KV.entry(KV.Val, T.db_of(T.sstore.do(_, op, srcs, d, u, now)), j) : Maybe<&2, KV.Item<KV.Val>>}
+                 sstore_do_point(R.sets.at(srcs, now, t), op, srcs, d, t, u, j, now)(e)
+    case R.SMv{+s, +d, +w}:
+      ag => e => %smv_find_eq(t, u, s, d, w, now)(ag) : {KV.entry(KV.Val, T.db_of(T.smove.do(T.smv.find(t, s, d, w, now), s, d, w, t, now)), j) == KV.entry(KV.Val, T.db_of(T.smove.do(_, s, d, w, u, now)), j) : Maybe<&2, KV.Item<KV.Val>>}
+                 smove_do_point(T.smv.find(t, s, d, w, now), s, d, w, t, u, j, now)(e)
     case R.Own{o}:
       ag => e => e
     case R.Bad{r}:
@@ -4090,6 +4245,34 @@ def lmpop_at_rep(m: Maybe<&2, String>, +left: Bool, +n: String, +t: KV.Trie<KV.V
     case None{}:
       h => {==}
 
+# a STORE of a set operation answers with the count of what it makes,
+# whatever the trie it writes
+def sstore_of_rep(xs: List<&2, String>, -d: String, -t: KV.Trie<KV.Val>, -u: KV.Trie<KV.Val>, -now: Nat) -> {T.reply_of(T.sstore.of(xs, d, t, now)) == T.reply_of(T.sstore.of(xs, d, u, now)) : R.Reply}:
+  match xs:
+    case Nil{}:
+      {==}
+    case Con{x, rest}:
+      {==}
+
+def sstore_do_rep(g: R.SGot, +op: R.SetK, +ks: List<&2, String>, -d: String, -t: KV.Trie<KV.Val>, -u: KV.Trie<KV.Val>, -now: Nat) -> {T.reply_of(T.sstore.do(g, op, ks, d, t, now)) == T.reply_of(T.sstore.do(g, op, ks, d, u, now)) : R.Reply}:
+  match g:
+    case R.SGot{+ss}:
+      sstore_of_rep(R.sop.members(op, ks, ss), d, t, u, now)
+    case R.SGotWrong{}:
+      {==}
+
+# SMOVE's reply is its verdict's
+def smove_do_rep(f: R.Smv, -s: String, -d: String, -w: R.SMem, -t: KV.Trie<KV.Val>, -u: KV.Trie<KV.Val>, -now: Nat) -> {T.reply_of(T.smove.do(f, s, d, w, t, now)) == T.reply_of(T.smove.do(f, s, d, w, u, now)) : R.Reply}:
+  match f:
+    case R.SmvZero{}:
+      {==}
+    case R.SmvWrong{}:
+      {==}
+    case R.SmvSame{had}:
+      {==}
+    case R.SmvGo{}:
+      {==}
+
 # a command answers the same after c2 when c2 writes nothing it reads
 def reply_after(c1: R.Cmd, +c2: R.Cmd, +db: KV.Trie<KV.Val>, +now: Nat) -> {Laws.disturbs(c2, c1) == False{} : Bool} -> {T.reply_of(T.exec(c1, T.db_of(T.exec(c2, db, now)), now)) == T.reply_of(T.exec(c1, db, now)) : R.Reply}:
   match c1:
@@ -4141,6 +4324,14 @@ def reply_after(c1: R.Cmd, +c2: R.Cmd, +db: KV.Trie<KV.Val>, +now: Nat) -> {Laws
     case R.LMPop{+ks, +left, +n}:
       +e => %lmpop_first_eq(ks, T.db_of(T.exec(c2, db, now)), db, now)(frame_agree(c2, db, ks, now)(e)) : {T.reply_of(T.lmpop.at(T.lmpop.first(ks, T.lmpop.head(ks, T.db_of(T.exec(c2, db, now)), now), T.db_of(T.exec(c2, db, now)), now), left, n, T.db_of(T.exec(c2, db, now)), now)) == T.reply_of(T.lmpop.at(_, left, n, db, now)) : R.Reply}
             lmpop_at_rep(T.lmpop.first(ks, T.lmpop.head(ks, T.db_of(T.exec(c2, db, now)), now), T.db_of(T.exec(c2, db, now)), now), left, n, T.db_of(T.exec(c2, db, now)), db, now)(first_agree(ks, T.lmpop.head(ks, T.db_of(T.exec(c2, db, now)), now), T.db_of(T.exec(c2, db, now)), T.db_of(T.exec(c2, db, now)), db, now)(frame_agree(c2, db, ks, now)(e)))
+    case R.SOp{+op, +ks}:
+      +e => Equal.cong(R.SGot, R.Reply, z => R.sop.reply(op, ks, z), R.sets.at(ks, now, T.db_of(T.exec(c2, db, now))), R.sets.at(ks, now, db), sets_at_eq(ks, T.db_of(T.exec(c2, db, now)), db, now)(frame_agree(c2, db, ks, now)(e)))
+    case R.SStore{+op, +d, +srcs}:
+      +e => %sets_at_eq(srcs, T.db_of(T.exec(c2, db, now)), db, now)(frame_agree(c2, db, srcs, now)(e)) : {T.reply_of(T.sstore.do(R.sets.at(srcs, now, T.db_of(T.exec(c2, db, now))), op, srcs, d, T.db_of(T.exec(c2, db, now)), now)) == T.reply_of(T.sstore.do(_, op, srcs, d, db, now)) : R.Reply}
+            sstore_do_rep(R.sets.at(srcs, now, T.db_of(T.exec(c2, db, now))), op, srcs, d, T.db_of(T.exec(c2, db, now)), db, now)
+    case R.SMv{+s, +d, +w}:
+      e => %smv_find_eq(T.db_of(T.exec(c2, db, now)), db, s, d, w, now)(frame_agree(c2, db, [s, d], now)(e)) : {T.reply_of(T.smove.do(T.smv.find(T.db_of(T.exec(c2, db, now)), s, d, w, now), s, d, w, T.db_of(T.exec(c2, db, now)), now)) == T.reply_of(T.smove.do(_, s, d, w, db, now)) : R.Reply}
+           smove_do_rep(T.smv.find(T.db_of(T.exec(c2, db, now)), s, d, w, now), s, d, w, T.db_of(T.exec(c2, db, now)), db, now)
     case R.Own{o}:
       e => {==}
     case R.Bad{r}:
@@ -4221,6 +4412,12 @@ def read_writes(c: R.Cmd, +j: String) -> {Laws.is_read(c) == True{} : Bool} -> {
       e => Empty.absurd({Laws.writes(R.LMove{op, d, srcs}, j) == False{} : Bool}, false_true(e))
     case R.LMPop{op, d, srcs}:
       e => Empty.absurd({Laws.writes(R.LMPop{op, d, srcs}, j) == False{} : Bool}, false_true(e))
+    case R.SOp{op, ks}:
+      e => {==}
+    case R.SStore{op, d, srcs}:
+      e => Empty.absurd({Laws.writes(R.SStore{op, d, srcs}, j) == False{} : Bool}, false_true(e))
+    case R.SMv{s, d, w}:
+      e => Empty.absurd({Laws.writes(R.SMv{s, d, w}, j) == False{} : Bool}, false_true(e))
     case R.Own{o}:
       e => {==}
     case R.Bad{r}:
@@ -4285,6 +4482,12 @@ def clash_w_at(c1: R.Cmd, +c2: R.Cmd, +j: String) -> {Laws.clash_w(c2, c1) == Fa
       any_clash(c2, j, [s, d])
     case R.LMPop{+ks, left, n}:
       any_clash(c2, j, ks)
+    case R.SOp{op, ks}:
+      e => {==}
+    case R.SStore{op, +d, srcs}:
+      e => key_clash(c2, j, d, e, KV.str_eq(j, d))({==})(str_refl(j, d))
+    case R.SMv{+s, +d, w}:
+      any_clash(c2, j, [s, d])
     case R.Own{o}:
       e => {==}
     case R.Bad{r}:
@@ -4414,6 +4617,14 @@ def rep_tw(+c1: R.Cmd, +c2: R.Cmd, +db: KV.Trie<KV.Val>, +H: List<&2, R.Cmd>, +n
     case R.LMPop{+ks, +left, +n}:
       kw => %lmpop_first_eq(ks, tw(H, T.db_of(T.exec(c2, T.db_of(T.exec(c1, db, now)), now)), now), tw(H, T.db_of(T.exec(c1, T.db_of(T.exec(c2, db, now)), now)), now), now)(eq_gen(c1, c2, db, H, ks, now, e)) : {T.reply_of(T.lmpop.at(T.lmpop.first(ks, T.lmpop.head(ks, tw(H, T.db_of(T.exec(c2, T.db_of(T.exec(c1, db, now)), now)), now), now), tw(H, T.db_of(T.exec(c2, T.db_of(T.exec(c1, db, now)), now)), now), now), left, n, tw(H, T.db_of(T.exec(c2, T.db_of(T.exec(c1, db, now)), now)), now), now)) == T.reply_of(T.lmpop.at(_, left, n, tw(H, T.db_of(T.exec(c1, T.db_of(T.exec(c2, db, now)), now)), now), now)) : R.Reply}
             lmpop_at_rep(T.lmpop.first(ks, T.lmpop.head(ks, tw(H, T.db_of(T.exec(c2, T.db_of(T.exec(c1, db, now)), now)), now), now), tw(H, T.db_of(T.exec(c2, T.db_of(T.exec(c1, db, now)), now)), now), now), left, n, tw(H, T.db_of(T.exec(c2, T.db_of(T.exec(c1, db, now)), now)), now), tw(H, T.db_of(T.exec(c1, T.db_of(T.exec(c2, db, now)), now)), now), now)(first_agree(ks, T.lmpop.head(ks, tw(H, T.db_of(T.exec(c2, T.db_of(T.exec(c1, db, now)), now)), now), now), tw(H, T.db_of(T.exec(c2, T.db_of(T.exec(c1, db, now)), now)), now), tw(H, T.db_of(T.exec(c2, T.db_of(T.exec(c1, db, now)), now)), now), tw(H, T.db_of(T.exec(c1, T.db_of(T.exec(c2, db, now)), now)), now), now)(eq_gen(c1, c2, db, H, ks, now, e)))
+    case R.SOp{+op, +ks}:
+      kw => Equal.cong(R.SGot, R.Reply, z => R.sop.reply(op, ks, z), R.sets.at(ks, now, tw(H, T.db_of(T.exec(c2, T.db_of(T.exec(c1, db, now)), now)), now)), R.sets.at(ks, now, tw(H, T.db_of(T.exec(c1, T.db_of(T.exec(c2, db, now)), now)), now)), sets_at_eq(ks, tw(H, T.db_of(T.exec(c2, T.db_of(T.exec(c1, db, now)), now)), now), tw(H, T.db_of(T.exec(c1, T.db_of(T.exec(c2, db, now)), now)), now), now)(eq_gen(c1, c2, db, H, ks, now, e)))
+    case R.SStore{+op, +d, +srcs}:
+      kw => %sets_at_eq(srcs, tw(H, T.db_of(T.exec(c2, T.db_of(T.exec(c1, db, now)), now)), now), tw(H, T.db_of(T.exec(c1, T.db_of(T.exec(c2, db, now)), now)), now), now)(eq_gen(c1, c2, db, H, srcs, now, e)) : {T.reply_of(T.sstore.do(R.sets.at(srcs, now, tw(H, T.db_of(T.exec(c2, T.db_of(T.exec(c1, db, now)), now)), now)), op, srcs, d, tw(H, T.db_of(T.exec(c2, T.db_of(T.exec(c1, db, now)), now)), now), now)) == T.reply_of(T.sstore.do(_, op, srcs, d, tw(H, T.db_of(T.exec(c1, T.db_of(T.exec(c2, db, now)), now)), now), now)) : R.Reply}
+            sstore_do_rep(R.sets.at(srcs, now, tw(H, T.db_of(T.exec(c2, T.db_of(T.exec(c1, db, now)), now)), now)), op, srcs, d, tw(H, T.db_of(T.exec(c2, T.db_of(T.exec(c1, db, now)), now)), now), tw(H, T.db_of(T.exec(c1, T.db_of(T.exec(c2, db, now)), now)), now), now)
+    case R.SMv{+s, +d, +w}:
+      kw => %smv_find_eq(tw(H, T.db_of(T.exec(c2, T.db_of(T.exec(c1, db, now)), now)), now), tw(H, T.db_of(T.exec(c1, T.db_of(T.exec(c2, db, now)), now)), now), s, d, w, now)(eq_gen(c1, c2, db, H, [s, d], now, e)) : {T.reply_of(T.smove.do(T.smv.find(tw(H, T.db_of(T.exec(c2, T.db_of(T.exec(c1, db, now)), now)), now), s, d, w, now), s, d, w, tw(H, T.db_of(T.exec(c2, T.db_of(T.exec(c1, db, now)), now)), now), now)) == T.reply_of(T.smove.do(_, s, d, w, tw(H, T.db_of(T.exec(c1, T.db_of(T.exec(c2, db, now)), now)), now), now)) : R.Reply}
+            smove_do_rep(T.smv.find(tw(H, T.db_of(T.exec(c2, T.db_of(T.exec(c1, db, now)), now)), now), s, d, w, now), s, d, w, tw(H, T.db_of(T.exec(c2, T.db_of(T.exec(c1, db, now)), now)), now), tw(H, T.db_of(T.exec(c1, T.db_of(T.exec(c2, db, now)), now)), now), now)
     case R.Own{o}:
       kw => {==}
     case R.Bad{r}:
@@ -4537,6 +4748,10 @@ def upd_ch_br(+t: KV.Trie<KV.Val>, +k: String, +h: U32, +n: Nat, +x: Nat, +now: 
     case R.CList{op, hv}:
       {==}
     case R.CListNew{lf, ps, hv}:
+      {==}
+    case R.CMems{op, sv}:
+      {==}
+    case R.CMemsNew{ms, sv}:
       {==}
 
 def upd_br(+t: KV.Trie<KV.Val>, +k: String, +h: U32, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>, +c: Nat, o: R.Out) -> {proj(R.upd.put(t, k, h, n, x, now, rr, c, o)) == T.upd.put(t, k, h, o) : R.Reply & KV.Trie<KV.Val>}:
@@ -4680,6 +4895,89 @@ def lmpop_at_br(m: Maybe<&2, String>, +left: Bool, +c: String, +t: KV.Trie<KV.Va
     case None{}:
       {==}
 
+# SINTERSTORE and the rest, and SMOVE, on the record as the spec's: each
+# write is DEL's or an update's, an update on a record leaves the spec's
+# trie at the record's time, and keeps the time
+def upd_ch_now(+t: KV.Trie<KV.Val>, +k: String, +h: U32, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>, +c: Nat, r: R.Reply, ch: R.Change) -> {R.db.now(R.db_of(R.upd.ch(t, k, h, n, x, now, rr, c, r, ch))) == now : Nat}:
+  match ch:
+    case R.CKeep{}:
+      {==}
+    case R.CDel{}:
+      {==}
+    case R.CExp{e}:
+      {==}
+    case R.CPut{v, e}:
+      {==}
+    case R.CKeepT{v}:
+      {==}
+    case R.CApp{a, v}:
+      {==}
+    case R.CRange{o, a, v}:
+      {==}
+    case R.CHash{op, hv}:
+      {==}
+    case R.CHashNew{ps, hv}:
+      {==}
+    case R.CList{op, hv}:
+      {==}
+    case R.CListNew{lf, ps, hv}:
+      {==}
+    case R.CMems{op, sv}:
+      {==}
+    case R.CMemsNew{ms, sv}:
+      {==}
+
+def upd_now(+t: KV.Trie<KV.Val>, +k: String, +h: U32, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>, +c: Nat, o: R.Out) -> {R.db.now(R.db_of(R.upd.put(t, k, h, n, x, now, rr, c, o))) == now : Nat}:
+  match o:
+    case R.Out{r, ch}:
+      upd_ch_now(t, k, h, n, x, now, rr, c, r, ch)
+
+def upd_t(d: R.Db, +k: String, +op: R.UpdOp) -> {R.db.t(R.db_of(R.db.upd(d, k, op))) == T.db_of(T.upd.run(R.db.t(d), k, op, R.db.now(d))) : KV.Trie<KV.Val>}:
+  match d:
+    case R.Db{+t, +n, +x, +now, +rr}:
+      Equal.trans(KV.Trie<KV.Val>, R.db.t(R.db_of(R.db.upd(R.Db{t, n, x, now, rr}, k, op))), T.db_of(proj(R.db.upd(R.Db{t, n, x, now, rr}, k, op))), T.db_of(T.upd.run(t, k, op, now)),
+        Equal.sym(KV.Trie<KV.Val>, T.db_of(proj(R.db.upd(R.Db{t, n, x, now, rr}, k, op))), R.db.t(R.db_of(R.db.upd(R.Db{t, n, x, now, rr}, k, op))), proj_db(R.db.upd(R.Db{t, n, x, now, rr}, k, op))),
+        Equal.cong(R.Reply & KV.Trie<KV.Val>, KV.Trie<KV.Val>, z => T.db_of(z), proj(R.db.upd(R.Db{t, n, x, now, rr}, k, op)), T.upd.run(t, k, op, now),
+          upd_br(t, k, KV.hash(k), n, x, now, rr, R.ent.code(KV.entry.at(KV.Val, t, k, KV.hash(k))), R.upd.v(op, now, R.ent.live(now, KV.entry.at(KV.Val, t, k, KV.hash(k)))))))
+
+def upd_now_d(d: R.Db, +k: String, +op: R.UpdOp) -> {R.db.now(R.db_of(R.db.upd(d, k, op))) == R.db.now(d) : Nat}:
+  match d:
+    case R.Db{+t, +n, +x, +now, +rr}:
+      upd_now(t, k, KV.hash(k), n, x, now, rr, R.ent.code(KV.entry.at(KV.Val, t, k, KV.hash(k))), R.upd.v(op, now, R.ent.live(now, KV.entry.at(KV.Val, t, k, KV.hash(k)))))
+
+def sstore_del_br(r: R.Dels, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>) -> {proj((R.r_int(0n), R.db_of(R.del.db(r, n, x, now, rr)))) == (R.r_int(0n), T.db_of(T.del_reply(r))) : R.Reply & KV.Trie<KV.Val>}:
+  match r:
+    case R.Dels{live, gone, gonex, t}:
+      {==}
+
+def sstore_of_br(xs: List<&2, String>, +d: String, +t: KV.Trie<KV.Val>, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>) -> {proj(R.sstore.of(xs, d, R.Db{t, n, x, now, rr})) == T.sstore.of(xs, d, t, now) : R.Reply & KV.Trie<KV.Val>}:
+  match xs:
+    case Nil{}:
+      sstore_del_br(R.del_keys([d], now, t), n, x, now, rr)
+    case Con{+y, +rest}:
+      Equal.cong(KV.Trie<KV.Val>, R.Reply & KV.Trie<KV.Val>, z => (R.r_int(List.length(&2, String, y <> rest)), z), R.db.t(R.db_of(R.db.upd(R.Db{t, n, x, now, rr}, d, R.UMems{R.SWNew{y <> rest}}))), T.db_of(T.upd.run(t, d, R.UMems{R.SWNew{y <> rest}}, now)), upd_t(R.Db{t, n, x, now, rr}, d, R.UMems{R.SWNew{y <> rest}}))
+
+def sstore_do_br(g: R.SGot, +op: R.SetK, +ks: List<&2, String>, +d: String, +t: KV.Trie<KV.Val>, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>) -> {proj(R.sstore.do(g, op, ks, d, R.Db{t, n, x, now, rr})) == T.sstore.do(g, op, ks, d, t, now) : R.Reply & KV.Trie<KV.Val>}:
+  match g:
+    case R.SGot{+ss}:
+      sstore_of_br(R.sop.members(op, ks, ss), d, t, n, x, now, rr)
+    case R.SGotWrong{}:
+      {==}
+
+def smove_do_br(f: R.Smv, +s: String, +dk: String, +w: R.SMem, +d: R.Db) -> {proj(R.smove.do(f, s, dk, w, d)) == T.smove.do(f, s, dk, w, R.db.t(d), R.db.now(d)) : R.Reply & KV.Trie<KV.Val>}:
+  match f:
+    case R.SmvZero{}:
+      {==}
+    case R.SmvWrong{}:
+      {==}
+    case R.SmvSame{had}:
+      {==}
+    case R.SmvGo{}:
+      +u = R.db_of(R.db.upd(d, s, R.UMems{R.SWRem{[R.smv.member(w)]}}))
+      %upd_now_d(d, s, R.UMems{R.SWRem{[R.smv.member(w)]}}) : {proj((R.r_int(1n), R.db_of(R.db.upd(u, dk, R.UMems{R.smv.add(w)})))) == (R.r_int(1n), T.db_of(T.upd.run(T.db_of(T.upd.run(R.db.t(d), s, R.UMems{R.SWRem{[R.smv.member(w)]}}, R.db.now(d))), dk, R.UMems{R.smv.add(w)}, _))) : R.Reply & KV.Trie<KV.Val>}
+      %upd_t(d, s, R.UMems{R.SWRem{[R.smv.member(w)]}}) : {proj((R.r_int(1n), R.db_of(R.db.upd(u, dk, R.UMems{R.smv.add(w)})))) == (R.r_int(1n), T.db_of(T.upd.run(_, dk, R.UMems{R.smv.add(w)}, R.db.now(u)))) : R.Reply & KV.Trie<KV.Val>}
+      Equal.cong(KV.Trie<KV.Val>, R.Reply & KV.Trie<KV.Val>, z => (R.r_int(1n), z), R.db.t(R.db_of(R.db.upd(u, dk, R.UMems{R.smv.add(w)}))), T.db_of(T.upd.run(R.db.t(u), dk, R.UMems{R.smv.add(w)}, R.db.now(u))), upd_t(u, dk, R.UMems{R.smv.add(w)}))
+
 # a command answers as the spec's at the database's now, DBSIZE but, and
 # leaves the trie the spec's leaves
 def bridge_go(c: R.Cmd, +t: KV.Trie<KV.Val>, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>) -> {Laws.keywise(c) == True{} : Bool} -> {proj(R.exec(c, R.Db{t, n, x, now, rr})) == T.exec(c, t, now) : R.Reply & KV.Trie<KV.Val>}:
@@ -4725,6 +5023,12 @@ def bridge_go(c: R.Cmd, +t: KV.Trie<KV.Val>, +n: Nat, +x: Nat, +now: Nat, +rr: M
     case R.LMPop{+ks, +left, +cnt}:
       kw => %first_br(ks, t, n, x, now, rr) : {proj(R.lmpop.at(R.lmpop.first(ks, R.lmpop.head(ks, R.Db{t, n, x, now, rr}), R.Db{t, n, x, now, rr}), left, cnt, R.Db{t, n, x, now, rr})) == T.lmpop.at(_, left, cnt, t, now) : R.Reply & KV.Trie<KV.Val>}
             lmpop_at_br(R.lmpop.first(ks, R.lmpop.head(ks, R.Db{t, n, x, now, rr}), R.Db{t, n, x, now, rr}), left, cnt, t, n, x, now, rr)
+    case R.SOp{op, ks}:
+      kw => {==}
+    case R.SStore{+op, +d, +srcs}:
+      kw => sstore_do_br(R.sets.at(srcs, now, t), op, srcs, d, t, n, x, now, rr)
+    case R.SMv{+s, +d, +w}:
+      kw => smove_do_br(T.smv.find(t, s, d, w, now), s, d, w, R.Db{t, n, x, now, rr})
     case R.Own{o}:
       kw => {==}
     case R.Bad{r}:
@@ -4765,36 +5069,6 @@ def mset_now(ps: List<&2, R.KVPair>, +t: KV.Trie<KV.Val>, +n: Nat, +x: Nat, +now
       {==}
     case Con{R.KP{+k, +v}, +rest}:
       mset_now(rest, KV.set(KV.Val, t, k, KV.VStr{v}), R.cnt.n(KV.code.at(KV.Val, t, k, KV.hash(k)), n), R.cnt.x(KV.code.at(KV.Val, t, k, KV.hash(k)), 0n, x), now, rr)
-
-def upd_ch_now(+t: KV.Trie<KV.Val>, +k: String, +h: U32, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>, +c: Nat, r: R.Reply, ch: R.Change) -> {R.db.now(R.db_of(R.upd.ch(t, k, h, n, x, now, rr, c, r, ch))) == now : Nat}:
-  match ch:
-    case R.CKeep{}:
-      {==}
-    case R.CDel{}:
-      {==}
-    case R.CExp{e}:
-      {==}
-    case R.CPut{v, e}:
-      {==}
-    case R.CKeepT{v}:
-      {==}
-    case R.CApp{a, v}:
-      {==}
-    case R.CRange{o, a, v}:
-      {==}
-    case R.CHash{op, hv}:
-      {==}
-    case R.CHashNew{ps, hv}:
-      {==}
-    case R.CList{op, hv}:
-      {==}
-    case R.CListNew{lf, ps, hv}:
-      {==}
-
-def upd_now(+t: KV.Trie<KV.Val>, +k: String, +h: U32, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>, +c: Nat, o: R.Out) -> {R.db.now(R.db_of(R.upd.put(t, k, h, n, x, now, rr, c, o))) == now : Nat}:
-  match o:
-    case R.Out{r, ch}:
-      upd_ch_now(t, k, h, n, x, now, rr, c, r, ch)
 
 def msetnx_now(b: Bool, ps: List<&2, R.KVPair>, +t: KV.Trie<KV.Val>, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>) -> {R.db.now(R.db_of(R.msetnx.of(b, ps, R.Db{t, n, x, now, rr}))) == now : Nat}:
   match b:
@@ -4895,6 +5169,32 @@ def lmpop_at_now(m: Maybe<&2, String>, +left: Bool, +c: String, +t: KV.Trie<KV.V
     case None{}:
       {==}
 
+def sstore_of_now(xs: List<&2, String>, +d: String, +t: KV.Trie<KV.Val>, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>) -> {R.db.now(R.db_of(R.sstore.of(xs, d, R.Db{t, n, x, now, rr}))) == now : Nat}:
+  match xs:
+    case Nil{}:
+      del_now(R.del_keys([d], now, t), n, x, now, rr)
+    case Con{+y, +rest}:
+      upd_now_d(R.Db{t, n, x, now, rr}, d, R.UMems{R.SWNew{y <> rest}})
+
+def sstore_do_now(g: R.SGot, +op: R.SetK, +ks: List<&2, String>, +d: String, +t: KV.Trie<KV.Val>, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>) -> {R.db.now(R.db_of(R.sstore.do(g, op, ks, d, R.Db{t, n, x, now, rr}))) == now : Nat}:
+  match g:
+    case R.SGot{+ss}:
+      sstore_of_now(R.sop.members(op, ks, ss), d, t, n, x, now, rr)
+    case R.SGotWrong{}:
+      {==}
+
+def smove_do_now(f: R.Smv, +s: String, +dk: String, +w: R.SMem, +d: R.Db) -> {R.db.now(R.db_of(R.smove.do(f, s, dk, w, d))) == R.db.now(d) : Nat}:
+  match f:
+    case R.SmvZero{}:
+      {==}
+    case R.SmvWrong{}:
+      {==}
+    case R.SmvSame{had}:
+      {==}
+    case R.SmvGo{}:
+      +u = R.db_of(R.db.upd(d, s, R.UMems{R.SWRem{[R.smv.member(w)]}}))
+      Equal.trans(Nat, R.db.now(R.db_of(R.db.upd(u, dk, R.UMems{R.smv.add(w)}))), R.db.now(u), R.db.now(d), upd_now_d(u, dk, R.UMems{R.smv.add(w)}), upd_now_d(d, s, R.UMems{R.SWRem{[R.smv.member(w)]}}))
+
 def now_go(c: R.Cmd, +t: KV.Trie<KV.Val>, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>) -> {R.db.now(R.db_of(R.exec(c, R.Db{t, n, x, now, rr}))) == now : Nat}:
   match c:
     case R.Ping{}:
@@ -4937,6 +5237,12 @@ def now_go(c: R.Cmd, +t: KV.Trie<KV.Val>, +n: Nat, +x: Nat, +now: Nat, +rr: Mayb
       mv_do_now(T.mv.find(t, s, d, w, now), w, s, d, R.Db{t, n, x, now, rr})
     case R.LMPop{+ks, +left, +cnt}:
       lmpop_at_now(R.lmpop.first(ks, R.lmpop.head(ks, R.Db{t, n, x, now, rr}), R.Db{t, n, x, now, rr}), left, cnt, t, n, x, now, rr)
+    case R.SOp{op, ks}:
+      {==}
+    case R.SStore{+op, +d, +srcs}:
+      sstore_do_now(R.sets.at(srcs, now, t), op, srcs, d, t, n, x, now, rr)
+    case R.SMv{+s, +d, +w}:
+      smove_do_now(T.smv.find(t, s, d, w, now), s, d, w, R.Db{t, n, x, now, rr})
     case R.Own{o}:
       {==}
     case R.Bad{r}:
@@ -4993,6 +5299,12 @@ def bt_go(c: R.Cmd, +t: KV.Trie<KV.Val>, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe
       bt_kw(R.LMove{op, d, srcs}, t, n, x, now, rr, {==})
     case R.LMPop{+op, +d, +srcs}:
       bt_kw(R.LMPop{op, d, srcs}, t, n, x, now, rr, {==})
+    case R.SOp{+op, +ks}:
+      bt_kw(R.SOp{op, ks}, t, n, x, now, rr, {==})
+    case R.SStore{+op, +d, +srcs}:
+      bt_kw(R.SStore{op, d, srcs}, t, n, x, now, rr, {==})
+    case R.SMv{+s, +d, +w}:
+      bt_kw(R.SMv{s, d, w}, t, n, x, now, rr, {==})
     case R.Own{o}:
       {==}
     case R.Bad{r}:
@@ -5106,6 +5418,12 @@ def reads_go(c: R.Cmd, +db: R.Db) -> {Laws.is_read(c) == True{} : Bool} -> {R.db
       e => Empty.absurd({R.db_of(R.exec(R.LMove{op, d, srcs}, db)) == db : R.Db}, false_true(e))
     case R.LMPop{op, d, srcs}:
       e => Empty.absurd({R.db_of(R.exec(R.LMPop{op, d, srcs}, db)) == db : R.Db}, false_true(e))
+    case R.SOp{op, ks}:
+      e => {==}
+    case R.SStore{op, d, srcs}:
+      e => Empty.absurd({R.db_of(R.exec(R.SStore{op, d, srcs}, db)) == db : R.Db}, false_true(e))
+    case R.SMv{s, d, w}:
+      e => Empty.absurd({R.db_of(R.exec(R.SMv{s, d, w}, db)) == db : R.Db}, false_true(e))
     case R.Own{o}:
       e => {==}
     case R.Bad{r}:
@@ -5527,6 +5845,12 @@ def reply_after_db(c1: R.Cmd, +c2: R.Cmd, +db: R.Db) -> {Laws.disturbs(c2, c1) =
       e => reply_via(R.LMove{op, d, srcs}, c2, db, {==}, e)
     case R.LMPop{op, d, srcs}:
       e => reply_via(R.LMPop{op, d, srcs}, c2, db, {==}, e)
+    case R.SOp{op, ks}:
+      e => reply_via(R.SOp{op, ks}, c2, db, {==}, e)
+    case R.SStore{op, d, srcs}:
+      e => reply_via(R.SStore{op, d, srcs}, c2, db, {==}, e)
+    case R.SMv{s, d, w}:
+      e => reply_via(R.SMv{s, d, w}, c2, db, {==}, e)
     case R.Own{o}:
       e => reply_via(R.Own{o}, c2, db, {==}, e)
     case R.Bad{r}:
@@ -6048,6 +6372,21 @@ def lmpop_eff(m: Maybe<&2, String>, +left: Bool, cnt: String, +db: R.Db) -> List
     case None{}:
       Nil{}
 
+# a STORE's effects: the DEL of its destination, or its update SWNew
+def sstore_eff_of(xs: List<&2, String>, +d: String, +db: R.Db) -> List<&2, R.Cmd>:
+  match xs:
+    case Nil{}:
+      A.effect(R.Del{[d]})
+    case Con{+x, +rest}:
+      upd_eff(db, d, R.UMems{R.SWNew{x <> rest}})
+
+def sstore_eff(g: R.SGot, op: R.SetK, ks: List<&2, String>, +d: String, +db: R.Db) -> List<&2, R.Cmd>:
+  match g:
+    case R.SGot{ss}:
+      sstore_eff_of(R.sop.members(op, ks, ss), d, db)
+    case R.SGotWrong{}:
+      Nil{}
+
 # a command's effects, run on db
 def eff(c: R.Cmd, +db: R.Db) -> List<&2, R.Cmd>:
   match c:
@@ -6091,6 +6430,12 @@ def eff(c: R.Cmd, +db: R.Db) -> List<&2, R.Cmd>:
       A.lmove.effect(A.lmove.moved(R.mv.find(db, s, d, w)), R.ent.dead(R.db.now(db), R.db.entry(db, d)), s, d, w)
     case R.LMPop{+ks, +left, +cnt}:
       lmpop_eff(R.lmpop.first(ks, R.lmpop.head(ks, db), db), left, cnt, db)
+    case R.SOp{op, ks}:
+      A.effect(R.SOp{op, ks})
+    case R.SStore{+op, +d, +srcs}:
+      sstore_eff(R.sets.at(srcs, R.db.now(db), R.db.trie(db)), op, srcs, d, db)
+    case R.SMv{+s, +d, +w}:
+      A.smove.effect(A.smove.moved(R.smv.of(db, s, d, w)), R.ent.dead(R.db.now(db), R.db.entry(db, d)), s, d, w)
     case R.Own{o}:
       A.effect(R.Own{o})
     case R.Bad{r}:
@@ -6197,6 +6542,20 @@ def lmpop_split(m: Maybe<&2, String>, +left: Bool, +cnt: String, +db: R.Db) -> {
     case None{}:
       {==}
 
+def sstore_of_split(xs: List<&2, String>, +d: String, +db: R.Db) -> {(R.reply_of(R.sstore.of(xs, d, db)), (sstore_eff_of(xs, d, db), R.db_of(R.sstore.of(xs, d, db)))) == A.sstore.eff(xs, d, db) : R.Reply & (List<&2, R.Cmd> & R.Db)}:
+  match xs:
+    case Nil{}:
+      Equal.cong(R.Reply & (List<&2, R.Cmd> & R.Db), R.Reply & (List<&2, R.Cmd> & R.Db), z => A.sstore.ans(0n, z), (R.reply_of(R.exec(R.Del{[d]}, db)), (A.effect(R.Del{[d]}), R.db_of(R.exec(R.Del{[d]}, db)))), A.run.put(R.Del{[d]}, R.exec(R.Del{[d]}, db)), put_split(R.Del{[d]}, R.exec(R.Del{[d]}, db)))
+    case Con{+x, +rest}:
+      Equal.cong(R.Reply & (List<&2, R.Cmd> & R.Db), R.Reply & (List<&2, R.Cmd> & R.Db), z => A.sstore.ans(List.length(&2, String, x <> rest), z), (R.reply_of(R.exec(R.Upd{d, R.UMems{R.SWNew{x <> rest}}}, db)), (upd_eff(db, d, R.UMems{R.SWNew{x <> rest}}), R.db_of(R.exec(R.Upd{d, R.UMems{R.SWNew{x <> rest}}}, db)))), A.run(R.Upd{d, R.UMems{R.SWNew{x <> rest}}}, db), upd_split(db, d, R.UMems{R.SWNew{x <> rest}}))
+
+def sstore_split(g: R.SGot, +op: R.SetK, +ks: List<&2, String>, +d: String, +db: R.Db) -> {(R.reply_of(R.sstore.do(g, op, ks, d, db)), (sstore_eff(g, op, ks, d, db), R.db_of(R.sstore.do(g, op, ks, d, db)))) == A.sstore.run(g, op, ks, d, db) : R.Reply & (List<&2, R.Cmd> & R.Db)}:
+  match g:
+    case R.SGot{+ss}:
+      sstore_of_split(R.sop.members(op, ks, ss), d, db)
+    case R.SGotWrong{}:
+      {==}
+
 def run_split(c: R.Cmd, +db: R.Db) -> {(R.reply_of(R.exec(c, db)), (eff(c, db), R.db_of(R.exec(c, db)))) == A.run(c, db) : R.Reply & (List<&2, R.Cmd> & R.Db)}:
   match c:
     case R.Ping{}:
@@ -6239,6 +6598,12 @@ def run_split(c: R.Cmd, +db: R.Db) -> {(R.reply_of(R.exec(c, db)), (eff(c, db), 
       out_split(R.exec(R.LMove{s, d, w}, db), A.lmove.effect(A.lmove.moved(R.mv.find(db, s, d, w)), R.ent.dead(R.db.now(db), R.db.entry(db, d)), s, d, w))
     case R.LMPop{+ks, +left, +cnt}:
       lmpop_split(R.lmpop.first(ks, R.lmpop.head(ks, db), db), left, cnt, db)
+    case R.SOp{+op, +ks}:
+      put_split(R.SOp{op, ks}, R.exec(R.SOp{op, ks}, db))
+    case R.SStore{+op, +d, +srcs}:
+      sstore_split(R.sets.at(srcs, R.db.now(db), R.db.trie(db)), op, srcs, d, db)
+    case R.SMv{+s, +d, +w}:
+      out_split(R.exec(R.SMv{s, d, w}, db), A.smove.effect(A.smove.moved(R.smv.of(db, s, d, w)), R.ent.dead(R.db.now(db), R.db.entry(db, d)), s, d, w))
     case R.Own{+o}:
       put_split(R.Own{o}, R.exec(R.Own{o}, db))
     case R.Bad{+r}:
@@ -6483,6 +6848,8 @@ def GoodHashV(w: KV.Val, op: R.HWrite, hv: KV.Hash) -> Type:
       {ch_of(R.hwrite(op, False{}, h0)) == R.CHash{op, hv} : R.Change} & GoodOp(op)
     case KV.VColl{KV.CList{l0}}:
       Empty
+    case KV.VColl{KV.CMems{s0}}:
+      Empty
     case KV.VStr{u}:
       Empty
 
@@ -6532,6 +6899,8 @@ def GoodListV(w: KV.Val, op: R.LWrite, l: KV.Deq) -> Type:
       {ch_of(R.lwrite(op, False{}, l0)) == R.CList{op, l} : R.Change} & GoodLOp(op)
     case KV.VColl{KV.CHash{h0}}:
       Empty
+    case KV.VColl{KV.CMems{s0}}:
+      Empty
     case KV.VStr{u}:
       Empty
 
@@ -6544,6 +6913,41 @@ def GoodList(m: Maybe<&2, KV.Item<KV.Val>>, op: R.LWrite, l: KV.Deq) -> Type:
 
 def GoodNewL(left: Bool, xs: List<&2, String>, l: KV.Deq) -> Type:
   {KV.deq.pushes(left, xs, KV.deq.empty()) == l : KV.Deq} & NeS(xs)
+
+# A write of a set: its change replayed. A set changed is one the key
+# held (s0), and the write the change keeps, replayed on s0, makes the
+# same change: an SADD or an SREM of members, none of them empty (SPOP's
+# change is the SREM of what it took). A new set is its members added to
+# an empty set, none at all being no change.
+def GoodSOp(op: R.SWrite) -> Type:
+  match op:
+    case R.SWAdd{ms}:
+      NeS(ms)
+    case R.SWRem{ms}:
+      NeS(ms)
+    case _:
+      Empty
+
+def GoodMemsV(w: KV.Val, op: R.SWrite, sv: KV.Mems) -> Type:
+  match w:
+    case KV.VColl{KV.CMems{s0}}:
+      {ch_of(R.swrite(op, False{}, s0)) == R.CMems{op, sv} : R.Change} & GoodSOp(op)
+    case KV.VColl{KV.CHash{h0}}:
+      Empty
+    case KV.VColl{KV.CList{l0}}:
+      Empty
+    case KV.VStr{u}:
+      Empty
+
+def GoodMems(m: Maybe<&2, KV.Item<KV.Val>>, op: R.SWrite, sv: KV.Mems) -> Type:
+  match m:
+    case Some{KV.Item{w, e}}:
+      GoodMemsV(w, op, sv)
+    case None{}:
+      Empty
+
+def GoodNewM(ms: List<&2, String>, sv: KV.Mems) -> Type:
+  {KV.mems.of(ms) == sv : KV.Mems} & NeS(ms)
 
 def Good(m: Maybe<&2, KV.Item<KV.Val>>, ch: R.Change) -> Type:
   match ch:
@@ -6569,6 +6973,10 @@ def Good(m: Maybe<&2, KV.Item<KV.Val>>, ch: R.Change) -> Type:
       GoodList(m, op, l)
     case R.CListNew{left, xs, l}:
       GoodNewL(left, xs, l)
+    case R.CMems{op, sv}:
+      GoodMems(m, op, sv)
+    case R.CMemsNew{ms, sv}:
+      GoodNewM(ms, sv)
 
 # a change, made again by its effects at time 0
 def del_replay(+t: KV.Trie<KV.Val>, +k: String, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>, +r: R.Reply, +w: KV.Val, +e: Nat, eq: {KV.entry.at(KV.Val, t, k, KV.hash(k)) == Some{KV.Item{w, e}} : Maybe<&2, KV.Item<KV.Val>>}) -> {Laws.final(R.exec_all([R.Del{[k]}], R.Db{t, n, x, 0n, rr})) == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, 1n+e, r, R.CDel{}))) : R.Db}:
@@ -6680,6 +7088,10 @@ def ch_db(ch: R.Change, +t: KV.Trie<KV.Val>, +k: String, +h: U32, +n: Nat, +x: N
       {==}
     case R.CListNew{left, xs, l}:
       {==}
+    case R.CMems{op, sv}:
+      {==}
+    case R.CMemsNew{ms, sv}:
+      {==}
 
 def put_db(+t: KV.Trie<KV.Val>, +k: String, +h: U32, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>, +c: Nat, o: R.Out) -> {R.db_of(R.upd.ch(t, k, h, n, x, now, rr, c, R.RNull{}, ch_of(o))) == R.db_of(R.upd.put(t, k, h, n, x, now, rr, c, o)) : R.Db}:
   match o:
@@ -6716,6 +7128,8 @@ def hash_replay_v(w: KV.Val, +t: KV.Trie<KV.Val>, +k: String, +n: Nat, +x: Nat, 
       eq => g => hash_replay_g(t, k, n, x, now, rr, r, op, hv, h0, e, eq, g)
     case KV.VColl{KV.CList{l0}}:
       eq => g => Empty.absurd({Laws.final(R.exec_all(A.ch.effect(k, 1n+e, R.CHash{op, hv}), R.Db{t, n, x, 0n, rr})) == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, 1n+e, r, R.CHash{op, hv}))) : R.Db}, g)
+    case KV.VColl{KV.CMems{s0}}:
+      eq => g => Empty.absurd({Laws.final(R.exec_all(A.ch.effect(k, 1n+e, R.CHash{op, hv}), R.Db{t, n, x, 0n, rr})) == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, 1n+e, r, R.CHash{op, hv}))) : R.Db}, g)
     case KV.VStr{u}:
       eq => g => Empty.absurd({Laws.final(R.exec_all(A.ch.effect(k, 1n+e, R.CHash{op, hv}), R.Db{t, n, x, 0n, rr})) == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, 1n+e, r, R.CHash{op, hv}))) : R.Db}, g)
 
@@ -6737,6 +7151,8 @@ def hnew_v(w: KV.Val, +ps: List<&2, KV.HPair>, +e: Nat) -> {R.hnew.out(R.hset.go
     case KV.VColl{KV.CHash{h0}}:
       {==}
     case KV.VColl{KV.CList{l0}}:
+      {==}
+    case KV.VColl{KV.CMems{s0}}:
       {==}
 
 def hnew_eval(+t: KV.Trie<KV.Val>, +k: String, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>, +r: R.Reply, +ps: List<&2, KV.HPair>, +hv: KV.Hash, +w: KV.Val, +e: Nat, eq: {KV.entry.at(KV.Val, t, k, KV.hash(k)) == Some{KV.Item{w, e}} : Maybe<&2, KV.Item<KV.Val>>}, gn: {R.hset.ch(True{}, ps, hput.h(R.hset.go(ps, R.HPut{KV.hash.empty(), 0n}))) == R.CHashNew{ps, hv} : R.Change}) -> {Laws.final(R.exec_all([R.Upd{k, R.UHash{R.HWNew{ps}}}], R.Db{t, n, x, 0n, rr})) == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, 1n+e, r, R.CHashNew{ps, hv}))) : R.Db}:
@@ -6783,6 +7199,8 @@ def list_replay_v(w: KV.Val, +t: KV.Trie<KV.Val>, +k: String, +n: Nat, +x: Nat, 
       eq => g => list_replay_g(t, k, n, x, now, rr, r, op, l, l0, e, eq, g)
     case KV.VColl{KV.CHash{h0}}:
       eq => g => Empty.absurd({Laws.final(R.exec_all(A.ch.effect(k, 1n+e, R.CList{op, l}), R.Db{t, n, x, 0n, rr})) == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, 1n+e, r, R.CList{op, l}))) : R.Db}, g)
+    case KV.VColl{KV.CMems{s0}}:
+      eq => g => Empty.absurd({Laws.final(R.exec_all(A.ch.effect(k, 1n+e, R.CList{op, l}), R.Db{t, n, x, 0n, rr})) == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, 1n+e, r, R.CList{op, l}))) : R.Db}, g)
     case KV.VStr{u}:
       eq => g => Empty.absurd({Laws.final(R.exec_all(A.ch.effect(k, 1n+e, R.CList{op, l}), R.Db{t, n, x, 0n, rr})) == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, 1n+e, r, R.CList{op, l}))) : R.Db}, g)
 
@@ -6811,6 +7229,8 @@ def lnew_v(w: KV.Val, +left: Bool, +xs: List<&2, String>, +e: Nat) -> {R.lnew.of
       {==}
     case KV.VColl{KV.CList{l0}}:
       {==}
+    case KV.VColl{KV.CMems{s0}}:
+      {==}
 
 def lnew_eval(+t: KV.Trie<KV.Val>, +k: String, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>, +r: R.Reply, +left: Bool, +xs: List<&2, String>, +l: KV.Deq, +w: KV.Val, +e: Nat, eq: {KV.entry.at(KV.Val, t, k, KV.hash(k)) == Some{KV.Item{w, e}} : Maybe<&2, KV.Item<KV.Val>>}, gn: {KV.deq.pushes(left, xs, KV.deq.empty()) == l : KV.Deq}, ne: {List.is_empty(&2, String, xs) == False{} : Bool}) -> {Laws.final(R.exec_all([R.Upd{k, R.UList{R.LWNew{left, xs}}}], R.Db{t, n, x, 0n, rr})) == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, 1n+e, r, R.CListNew{left, xs, l}))) : R.Db}:
   %fin_cons(R.Upd{k, R.UList{R.LWNew{left, xs}}}, Nil{}, R.Db{t, n, x, 0n, rr}) : {_ == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, 1n+e, r, R.CListNew{left, xs, l}))) : R.Db}
@@ -6835,6 +7255,75 @@ def lnew_replay(m: Maybe<&2, KV.Item<KV.Val>>, +t: KV.Trie<KV.Val>, +k: String, 
       eq => g => lnew_eval_g(t, k, n, x, now, rr, r, left, xs, l, w, e, eq, g)
     case None{}:
       eq => g => lnew_push_g(t, k, n, x, now, rr, r, left, xs, l, eq, g)
+
+# a set changed, made again by its write (SADD or SREM) at time 0
+def mems_replay(+t: KV.Trie<KV.Val>, +k: String, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>, +r: R.Reply, +op: R.SWrite, +sv: KV.Mems, +s0: KV.Mems, +e: Nat, eq: {KV.entry.at(KV.Val, t, k, KV.hash(k)) == Some{KV.Item{KV.VColl{KV.CMems{s0}}, e}} : Maybe<&2, KV.Item<KV.Val>>}, gs: {ch_of(R.swrite(op, False{}, s0)) == R.CMems{op, sv} : R.Change}) -> {Laws.final(R.exec_all(A.ch.effect(k, 1n+e, R.CMems{op, sv}), R.Db{t, n, x, 0n, rr})) == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, 1n+e, r, R.CMems{op, sv}))) : R.Db}:
+  %fin_cons(R.Upd{k, R.UMems{op}}, Nil{}, R.Db{t, n, x, 0n, rr}) : {_ == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, 1n+e, r, R.CMems{op, sv}))) : R.Db}
+  %Equal.sym(Maybe<&2, KV.Item<KV.Val>>, KV.entry.at(KV.Val, t, k, KV.hash(k)), Some{KV.Item{KV.VColl{KV.CMems{s0}}, e}}, eq) : {R.db_of(R.upd.put(t, k, KV.hash(k), n, x, 0n, rr, R.ent.code(_), R.upd.v(R.UMems{op}, 0n, R.ent.live(0n, _)))) == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, 1n+e, r, R.CMems{op, sv}))) : R.Db}
+  %Equal.sym(Maybe<&2, KV.Item<KV.Val>>, R.ent.live(0n, Some{KV.Item{KV.VColl{KV.CMems{s0}}, e}}), Some{KV.Item{KV.VColl{KV.CMems{s0}}, e}}, live0_ent(Some{KV.Item{KV.VColl{KV.CMems{s0}}, e}})) : {R.db_of(R.upd.put(t, k, KV.hash(k), n, x, 0n, rr, 1n+e, R.upd.v(R.UMems{op}, 0n, _))) == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, 1n+e, r, R.CMems{op, sv}))) : R.Db}
+  %put_db(t, k, KV.hash(k), n, x, 0n, rr, 1n+e, R.swrite(op, False{}, s0)) : {_ == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, 1n+e, r, R.CMems{op, sv}))) : R.Db}
+  %Equal.sym(R.Change, ch_of(R.swrite(op, False{}, s0)), R.CMems{op, sv}, gs) : {R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, 0n, rr, 1n+e, R.RNull{}, _)) == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, 1n+e, r, R.CMems{op, sv}))) : R.Db}
+  {==}
+
+def mems_replay_g(+t: KV.Trie<KV.Val>, +k: String, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>, +r: R.Reply, +op: R.SWrite, +sv: KV.Mems, +s0: KV.Mems, +e: Nat, eq: {KV.entry.at(KV.Val, t, k, KV.hash(k)) == Some{KV.Item{KV.VColl{KV.CMems{s0}}, e}} : Maybe<&2, KV.Item<KV.Val>>}, g: {ch_of(R.swrite(op, False{}, s0)) == R.CMems{op, sv} : R.Change} & GoodSOp(op)) -> {Laws.final(R.exec_all(A.ch.effect(k, 1n+e, R.CMems{op, sv}), R.Db{t, n, x, 0n, rr})) == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, 1n+e, r, R.CMems{op, sv}))) : R.Db}:
+  (gs, go) = g
+  mems_replay(t, k, n, x, now, rr, r, op, sv, s0, e, eq, gs)
+
+def mems_replay_v(w: KV.Val, +t: KV.Trie<KV.Val>, +k: String, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>, +r: R.Reply, +op: R.SWrite, +sv: KV.Mems, +e: Nat) -> {KV.entry.at(KV.Val, t, k, KV.hash(k)) == Some{KV.Item{w, e}} : Maybe<&2, KV.Item<KV.Val>>} -> GoodMemsV(w, op, sv) -> {Laws.final(R.exec_all(A.ch.effect(k, 1n+e, R.CMems{op, sv}), R.Db{t, n, x, 0n, rr})) == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, 1n+e, r, R.CMems{op, sv}))) : R.Db}:
+  match w:
+    case KV.VColl{KV.CMems{+s0}}:
+      eq => g => mems_replay_g(t, k, n, x, now, rr, r, op, sv, s0, e, eq, g)
+    case KV.VColl{KV.CHash{h0}}:
+      eq => g => Empty.absurd({Laws.final(R.exec_all(A.ch.effect(k, 1n+e, R.CMems{op, sv}), R.Db{t, n, x, 0n, rr})) == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, 1n+e, r, R.CMems{op, sv}))) : R.Db}, g)
+    case KV.VColl{KV.CList{l0}}:
+      eq => g => Empty.absurd({Laws.final(R.exec_all(A.ch.effect(k, 1n+e, R.CMems{op, sv}), R.Db{t, n, x, 0n, rr})) == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, 1n+e, r, R.CMems{op, sv}))) : R.Db}, g)
+    case KV.VStr{u}:
+      eq => g => Empty.absurd({Laws.final(R.exec_all(A.ch.effect(k, 1n+e, R.CMems{op, sv}), R.Db{t, n, x, 0n, rr})) == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, 1n+e, r, R.CMems{op, sv}))) : R.Db}, g)
+
+# a new set, made again at time 0: by an SADD where the trie held no
+# entry for the key, by the script of a new set where it held one
+def snew_sadd(+t: KV.Trie<KV.Val>, +k: String, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>, +r: R.Reply, +ms: List<&2, String>, +sv: KV.Mems, eq: {KV.entry.at(KV.Val, t, k, KV.hash(k)) == None{} : Maybe<&2, KV.Item<KV.Val>>}, gn: {KV.mems.of(ms) == sv : KV.Mems}, ne: {List.is_empty(&2, String, ms) == False{} : Bool}) -> {Laws.final(R.exec_all([R.Upd{k, R.UMems{R.SWAdd{ms}}}], R.Db{t, n, x, 0n, rr})) == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, 0n, r, R.CMemsNew{ms, sv}))) : R.Db}:
+  %fin_cons(R.Upd{k, R.UMems{R.SWAdd{ms}}}, Nil{}, R.Db{t, n, x, 0n, rr}) : {_ == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, 0n, r, R.CMemsNew{ms, sv}))) : R.Db}
+  %Equal.sym(Maybe<&2, KV.Item<KV.Val>>, KV.entry.at(KV.Val, t, k, KV.hash(k)), None{}, eq) : {R.db_of(R.upd.put(t, k, KV.hash(k), n, x, 0n, rr, R.ent.code(_), R.upd.v(R.UMems{R.SWAdd{ms}}, 0n, R.ent.live(0n, _)))) == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, 0n, r, R.CMemsNew{ms, sv}))) : R.Db}
+  %Equal.sym(Bool, List.is_empty(&2, String, ms), False{}, ne) : {R.db_of(R.upd.put(t, k, KV.hash(k), n, x, 0n, rr, 0n, R.sadd.of(_, True{}, ms, KV.mems.adds(ms, KV.mems.empty()), Nat.sub(KV.mems.len(KV.mems.adds(ms, KV.mems.empty())), 0n)))) == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, 0n, r, R.CMemsNew{ms, sv}))) : R.Db}
+  %gn : {R.db_of(R.upd.put(t, k, KV.hash(k), n, x, 0n, rr, 0n, R.sadd.of(False{}, True{}, ms, KV.mems.adds(ms, KV.mems.empty()), Nat.sub(KV.mems.len(KV.mems.adds(ms, KV.mems.empty())), 0n)))) == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, 0n, r, R.CMemsNew{ms, _}))) : R.Db}
+  {==}
+
+# the script's write, of a key that holds w: a new set of the members
+def snew_v(w: KV.Val, +ms: List<&2, String>, +e: Nat) -> {R.snew.of(List.is_empty(&2, String, ms), ms) == R.upd.v(R.UMems{R.SWNew{ms}}, 0n, Some{KV.Item{w, e}}) : R.Out}:
+  match w:
+    case KV.VStr{u}:
+      {==}
+    case KV.VColl{KV.CHash{h0}}:
+      {==}
+    case KV.VColl{KV.CList{l0}}:
+      {==}
+    case KV.VColl{KV.CMems{s0}}:
+      {==}
+
+def snew_eval(+t: KV.Trie<KV.Val>, +k: String, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>, +r: R.Reply, +ms: List<&2, String>, +sv: KV.Mems, +w: KV.Val, +e: Nat, eq: {KV.entry.at(KV.Val, t, k, KV.hash(k)) == Some{KV.Item{w, e}} : Maybe<&2, KV.Item<KV.Val>>}, gn: {KV.mems.of(ms) == sv : KV.Mems}, ne: {List.is_empty(&2, String, ms) == False{} : Bool}) -> {Laws.final(R.exec_all([R.Upd{k, R.UMems{R.SWNew{ms}}}], R.Db{t, n, x, 0n, rr})) == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, 1n+e, r, R.CMemsNew{ms, sv}))) : R.Db}:
+  %fin_cons(R.Upd{k, R.UMems{R.SWNew{ms}}}, Nil{}, R.Db{t, n, x, 0n, rr}) : {_ == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, 1n+e, r, R.CMemsNew{ms, sv}))) : R.Db}
+  %Equal.sym(Maybe<&2, KV.Item<KV.Val>>, KV.entry.at(KV.Val, t, k, KV.hash(k)), Some{KV.Item{w, e}}, eq) : {R.db_of(R.upd.put(t, k, KV.hash(k), n, x, 0n, rr, R.ent.code(_), R.upd.v(R.UMems{R.SWNew{ms}}, 0n, R.ent.live(0n, _)))) == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, 1n+e, r, R.CMemsNew{ms, sv}))) : R.Db}
+  %Equal.sym(Maybe<&2, KV.Item<KV.Val>>, R.ent.live(0n, Some{KV.Item{w, e}}), Some{KV.Item{w, e}}, live0_ent(Some{KV.Item{w, e}})) : {R.db_of(R.upd.put(t, k, KV.hash(k), n, x, 0n, rr, 1n+e, R.upd.v(R.UMems{R.SWNew{ms}}, 0n, _))) == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, 1n+e, r, R.CMemsNew{ms, sv}))) : R.Db}
+  %snew_v(w, ms, e) : {R.db_of(R.upd.put(t, k, KV.hash(k), n, x, 0n, rr, 1n+e, _)) == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, 1n+e, r, R.CMemsNew{ms, sv}))) : R.Db}
+  %Equal.sym(Bool, List.is_empty(&2, String, ms), False{}, ne) : {R.db_of(R.upd.put(t, k, KV.hash(k), n, x, 0n, rr, 1n+e, R.snew.of(_, ms))) == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, 1n+e, r, R.CMemsNew{ms, sv}))) : R.Db}
+  %gn : {R.db_of(R.upd.put(t, k, KV.hash(k), n, x, 0n, rr, 1n+e, R.snew.of(False{}, ms))) == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, 1n+e, r, R.CMemsNew{ms, _}))) : R.Db}
+  {==}
+
+def snew_sadd_g(+t: KV.Trie<KV.Val>, +k: String, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>, +r: R.Reply, +ms: List<&2, String>, +sv: KV.Mems, eq: {KV.entry.at(KV.Val, t, k, KV.hash(k)) == None{} : Maybe<&2, KV.Item<KV.Val>>}, g: GoodNewM(ms, sv)) -> {Laws.final(R.exec_all([R.Upd{k, R.UMems{R.SWAdd{ms}}}], R.Db{t, n, x, 0n, rr})) == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, 0n, r, R.CMemsNew{ms, sv}))) : R.Db}:
+  (gn, ne) = g
+  snew_sadd(t, k, n, x, now, rr, r, ms, sv, eq, gn, ne_empty(ms)(ne))
+
+def snew_eval_g(+t: KV.Trie<KV.Val>, +k: String, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>, +r: R.Reply, +ms: List<&2, String>, +sv: KV.Mems, +w: KV.Val, +e: Nat, eq: {KV.entry.at(KV.Val, t, k, KV.hash(k)) == Some{KV.Item{w, e}} : Maybe<&2, KV.Item<KV.Val>>}, g: GoodNewM(ms, sv)) -> {Laws.final(R.exec_all([R.Upd{k, R.UMems{R.SWNew{ms}}}], R.Db{t, n, x, 0n, rr})) == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, 1n+e, r, R.CMemsNew{ms, sv}))) : R.Db}:
+  (gn, ne) = g
+  snew_eval(t, k, n, x, now, rr, r, ms, sv, w, e, eq, gn, ne_empty(ms)(ne))
+
+def snew_replay(m: Maybe<&2, KV.Item<KV.Val>>, +t: KV.Trie<KV.Val>, +k: String, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>, +r: R.Reply, +ms: List<&2, String>, +sv: KV.Mems) -> {KV.entry.at(KV.Val, t, k, KV.hash(k)) == m : Maybe<&2, KV.Item<KV.Val>>} -> GoodNewM(ms, sv) -> {Laws.final(R.exec_all(A.ch.effect(k, R.ent.code(m), R.CMemsNew{ms, sv}), R.Db{t, n, x, 0n, rr})) == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, R.ent.code(m), r, R.CMemsNew{ms, sv}))) : R.Db}:
+  match m:
+    case Some{KV.Item{+w, +e}}:
+      eq => g => snew_eval_g(t, k, n, x, now, rr, r, ms, sv, w, e, eq, g)
+    case None{}:
+      eq => g => snew_sadd_g(t, k, n, x, now, rr, r, ms, sv, eq, g)
 
 def ch_replay(ch: R.Change, m: Maybe<&2, KV.Item<KV.Val>>, +t: KV.Trie<KV.Val>, +k: String, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>, +r: R.Reply) -> {KV.entry.at(KV.Val, t, k, KV.hash(k)) == m : Maybe<&2, KV.Item<KV.Val>>} -> Good(m, ch) -> {Laws.final(R.exec_all(A.ch.effect(k, R.ent.code(m), ch), R.Db{t, n, x, 0n, rr})) == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, R.ent.code(m), r, ch))) : R.Db}:
   match ch m:
@@ -6878,6 +7367,12 @@ def ch_replay(ch: R.Change, m: Maybe<&2, KV.Item<KV.Val>>, +t: KV.Trie<KV.Val>, 
       eq => g => Empty.absurd({Laws.final(R.exec_all(A.ch.effect(k, R.ent.code(None{}), R.CList{op, l}), R.Db{t, n, x, 0n, rr})) == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, R.ent.code(None{}), r, R.CList{op, l}))) : R.Db}, g)
     case R.CListNew{+left, +xs, +l} _:
       eq => g => lnew_replay(m, t, k, n, x, now, rr, r, left, xs, l)(eq)(g)
+    case R.CMems{+op, +sv} Some{KV.Item{w, +e}}:
+      eq => g => mems_replay_v(w, t, k, n, x, now, rr, r, op, sv, e)(eq)(g)
+    case R.CMems{op, sv} None{}:
+      eq => g => Empty.absurd({Laws.final(R.exec_all(A.ch.effect(k, R.ent.code(None{}), R.CMems{op, sv}), R.Db{t, n, x, 0n, rr})) == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, R.ent.code(None{}), r, R.CMems{op, sv}))) : R.Db}, g)
+    case R.CMemsNew{+ms, +sv} _:
+      eq => g => snew_replay(m, t, k, n, x, now, rr, r, ms, sv)(eq)(g)
 
 # an update's effects make its change again
 def out_replay(o: R.Out, +m: Maybe<&2, KV.Item<KV.Val>>, +t: KV.Trie<KV.Val>, +k: String, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>) -> {KV.entry.at(KV.Val, t, k, KV.hash(k)) == m : Maybe<&2, KV.Item<KV.Val>>} -> Good(m, ch_of(o)) -> {Laws.final(R.exec_all(A.upd.effect(k, R.ent.code(m), o), R.Db{t, n, x, 0n, rr})) == R.db.at(0n, R.db_of(R.upd.put(t, k, KV.hash(k), n, x, now, rr, R.ent.code(m), o))) : R.Db}:
@@ -7151,6 +7646,8 @@ def good_coll_hash(op: R.HWrite, c: KV.Coll, -e: Nat) -> Good(Some{KV.Item{KV.VC
       hw_old_good(op, h0, e)
     case KV.CList{+l}:
       hw_wrong_good(op, Some{KV.Item{KV.VColl{KV.CList{l}}, e}})
+    case KV.CMems{+sv}:
+      hw_wrong_good(op, Some{KV.Item{KV.VColl{KV.CMems{sv}}, e}})
 
 # A write of a list: of a key not there (an empty list made fresh) none
 # or a new list; of a key that holds another kind, none, or the new list
@@ -7249,6 +7746,10 @@ def LShape(op: R.LWrite, ch: R.Change) -> Type:
       Empty
     case R.CHashNew{ps, hv}:
       Empty
+    case R.CMems{sop, sv}:
+      Empty
+    case R.CMemsNew{ms, sv}:
+      Empty
 
 def op_eq(-op: R.LWrite, -op2: R.LWrite, -l: KV.Deq, -l0: KV.Deq, gl: {op2 == op : R.LWrite}, eq: {ch_of(R.lwrite(op, False{}, l0)) == R.CList{op2, l} : R.Change}) -> {ch_of(R.lwrite(op2, False{}, l0)) == R.CList{op2, l} : R.Change}:
   %Equal.sym(R.LWrite, op2, op, gl) : {ch_of(R.lwrite(_, False{}, l0)) == R.CList{op2, l} : R.Change}
@@ -7282,6 +7783,10 @@ def shape_good(ch: R.Change, -op: R.LWrite, -l0: KV.Deq, -e: Nat) -> {ch_of(R.lw
       eq => sh => Empty.absurd(Good(Some{KV.Item{KV.VColl{KV.CList{l0}}, e}}, R.CHash{hop, hv}), sh)
     case R.CHashNew{ps, hv}:
       eq => sh => Empty.absurd(Good(Some{KV.Item{KV.VColl{KV.CList{l0}}, e}}, R.CHashNew{ps, hv}), sh)
+    case R.CMems{sop, sv}:
+      eq => sh => Empty.absurd(Good(Some{KV.Item{KV.VColl{KV.CList{l0}}, e}}, R.CMems{sop, sv}), sh)
+    case R.CMemsNew{ms, sv}:
+      eq => sh => Empty.absurd(Good(Some{KV.Item{KV.VColl{KV.CList{l0}}, e}}, R.CMemsNew{ms, sv}), sh)
 
 def some_ok_n(-m: Maybe<&2, Nat>, -a: Nat, e: {m == Some{a} : Maybe<&2, Nat>}) -> {Maybe.is_some(&2, Nat, m) == True{} : Bool}:
   %Equal.sym(Maybe<&2, Nat>, m, Some{a}, e) : {Maybe.is_some(&2, Nat, _) == True{} : Bool}
@@ -7450,6 +7955,155 @@ def good_coll_list(op: R.LWrite, c: KV.Coll, -e: Nat) -> Good(Some{KV.Item{KV.VC
       lw_old_good(op, l0, e)
     case KV.CHash{h}:
       lw_wrong_good(op, Some{KV.Item{KV.VColl{KV.CHash{h}}, e}})
+    case KV.CMems{+sv}:
+      lw_wrong_good(op, Some{KV.Item{KV.VColl{KV.CMems{sv}}, e}})
+
+# A write of a set: of a key not there (an empty set made fresh) none or
+# a new set; of a key that holds another kind, none, or the new set of
+# SWNew; of a set the key held (s0): none, the key deleted (its last
+# member taken), or the set changed by SADD or SREM of the members, which
+# make it again (SPOP's change is SREM's)
+def sub_self(n: Nat) -> {0n == Nat.sub(n, n) : Nat}:
+  match n:
+    case 0n:
+      {==}
+    case 1n++p:
+      sub_self(p)
+
+def has_none(b: Bool, +m: String) -> {False{} == KV.mems.ints.has(b, m, Nil{}) : Bool}:
+  match b:
+    case True{}:
+      {==}
+    case False{}:
+      {==}
+
+def srem_empty(ms: List<&2, String>) -> {R.SDel{KV.mems.empty(), 0n} == R.srem.go(ms, R.SDel{KV.mems.empty(), 0n}) : R.SDel}:
+  match ms:
+    case Nil{}:
+      {==}
+    case Con{+m, +rest}:
+      %has_none(KV.ints.ok(m), m) : {R.SDel{KV.mems.empty(), 0n} == R.srem.go(rest, R.srem.one(_, KV.mems.empty(), m, 0n)) : R.SDel}
+      srem_empty(rest)
+
+def spop_ch(o: R.Out) -> {ch_of(o) == R.spop.ch(o) : R.Change}:
+  match o:
+    case R.Out{r, ch}:
+      {==}
+
+def sadd_fresh(ms: List<&2, String>, -m: Maybe<&2, KV.Item<KV.Val>>) -> Good(m, ch_of(R.swrite(R.SWAdd{ms}, True{}, KV.mems.empty()))):
+  match ms:
+    case Nil{}:
+      {==}
+    case Con{+y, +rest}:
+      ({==}, {==})
+
+def snew_good(ms: List<&2, String>, -m: Maybe<&2, KV.Item<KV.Val>>) -> Good(m, ch_of(R.snew.of(List.is_empty(&2, String, ms), ms))):
+  match ms:
+    case Nil{}:
+      {==}
+    case Con{+y, +rest}:
+      ({==}, {==})
+
+def spop_fresh(+xs: List<&2, String>, -m: Maybe<&2, KV.Item<KV.Val>>) -> Good(m, R.spop.ch(R.srem.out(R.srem.go(xs, R.SDel{KV.mems.empty(), 0n}), xs))):
+  %srem_empty(xs) : Good(m, R.spop.ch(R.srem.out(_, xs)))
+  {==}
+
+def sw_fresh_good(op: R.SWrite, -m: Maybe<&2, KV.Item<KV.Val>>) -> Good(m, ch_of(R.swrite(op, True{}, KV.mems.empty()))):
+  match op:
+    case R.SWAdd{+ms}:
+      sadd_fresh(ms, m)
+    case R.SWRem{+ms}:
+      %srem_empty(ms) : Good(m, ch_of(R.srem.out(_, ms)))
+      {==}
+    case R.SWNew{+ms}:
+      snew_good(ms, m)
+    case R.SWPop{+r}:
+      spop_fresh(R.spop.one(R.srand.pick(KV.mems.empty(), R.srand.next(r))), m)
+    case R.SWPopN{+c, +r}:
+      spop_fresh(R.srand.many(c, KV.mems.empty(), r), m)
+
+def sw_wrong_good(op: R.SWrite, -m: Maybe<&2, KV.Item<KV.Val>>) -> Good(m, ch_of(R.swrite.wrong(op))):
+  match op:
+    case R.SWNew{+ms}:
+      sw_fresh_good(R.SWNew{ms}, m)
+    case R.SWAdd{ms}:
+      {==}
+    case R.SWRem{ms}:
+      {==}
+    case R.SWPop{r}:
+      {==}
+    case R.SWPopN{c, r}:
+      {==}
+
+def sadd_of_old(none: Bool, +ms: List<&2, String>, +s0: KV.Mems, -e: Nat) -> {none == Nat.is_eq(Nat.sub(KV.mems.len(KV.mems.adds(ms, s0)), KV.mems.len(s0)), 0n) : Bool} -> NeS(ms) -> Good(Some{KV.Item{KV.VColl{KV.CMems{s0}}, e}}, ch_of(R.sadd.of(none, False{}, ms, KV.mems.adds(ms, s0), Nat.sub(KV.mems.len(KV.mems.adds(ms, s0)), KV.mems.len(s0))))):
+  match none:
+    case True{}:
+      en => ne => {==}
+    case False{}:
+      en => ne =>
+        %en : {ch_of(R.sadd.of(_, False{}, ms, KV.mems.adds(ms, s0), Nat.sub(KV.mems.len(KV.mems.adds(ms, s0)), KV.mems.len(s0)))) == R.CMems{R.SWAdd{ms}, KV.mems.adds(ms, s0)} : R.Change} & NeS(ms)
+        ({==}, ne)
+
+def sadd_old(ms: List<&2, String>, +s0: KV.Mems, -e: Nat) -> Good(Some{KV.Item{KV.VColl{KV.CMems{s0}}, e}}, ch_of(R.swrite(R.SWAdd{ms}, False{}, s0))):
+  match ms:
+    case Nil{}:
+      %sub_self(KV.mems.len(s0)) : Good(Some{KV.Item{KV.VColl{KV.CMems{s0}}, e}}, ch_of(R.sadd.of(Nat.is_eq(_, 0n), False{}, Nil{}, s0, _)))
+      {==}
+    case Con{+y, +rest}:
+      sadd_of_old(Nat.is_eq(Nat.sub(KV.mems.len(KV.mems.adds(Con{y, rest}, s0)), KV.mems.len(s0)), 0n), Con{y, rest}, s0, e)({==})({==})
+
+# SREM of a set the key held: nothing, the key deleted (its last member
+# taken), or the set without the members, which SREM of them makes again
+def srem_of_old(none: Bool, empty: Bool, +m: String, +rest: List<&2, String>, +sv: KV.Mems, +gone: Nat, +s0: KV.Mems, -e: Nat, eq: {R.srem.go(Con{m, rest}, R.SDel{s0, 0n}) == R.SDel{sv, gone} : R.SDel}) -> {none == Nat.is_eq(gone, 0n) : Bool} -> {empty == Nat.is_eq(KV.mems.len(sv), 0n) : Bool} -> Good(Some{KV.Item{KV.VColl{KV.CMems{s0}}, e}}, ch_of(R.srem.of(none, empty, Con{m, rest}, sv, gone))):
+  match none empty:
+    case True{} _:
+      en => ee => {==}
+    case False{} True{}:
+      en => ee => {==}
+    case False{} False{}:
+      en => ee =>
+        %Equal.sym(R.SDel, R.srem.go(Con{m, rest}, R.SDel{s0, 0n}), R.SDel{sv, gone}, eq) : {ch_of(R.srem.out(_, Con{m, rest})) == R.CMems{R.SWRem{Con{m, rest}}, sv} : R.Change} & {True{} == True{} : Bool}
+        %en : {ch_of(R.srem.of(_, Nat.is_eq(KV.mems.len(sv), 0n), Con{m, rest}, sv, gone)) == R.CMems{R.SWRem{Con{m, rest}}, sv} : R.Change} & {True{} == True{} : Bool}
+        %ee : {ch_of(R.srem.of(False{}, _, Con{m, rest}, sv, gone)) == R.CMems{R.SWRem{Con{m, rest}}, sv} : R.Change} & {True{} == True{} : Bool}
+        ({==}, {==})
+
+def srem_old_d(d: R.SDel, +m: String, +rest: List<&2, String>, +s0: KV.Mems, -e: Nat) -> {R.srem.go(Con{m, rest}, R.SDel{s0, 0n}) == d : R.SDel} -> Good(Some{KV.Item{KV.VColl{KV.CMems{s0}}, e}}, ch_of(R.srem.out(d, Con{m, rest}))):
+  match d:
+    case R.SDel{+sv, +gone}:
+      eq => srem_of_old(Nat.is_eq(gone, 0n), Nat.is_eq(KV.mems.len(sv), 0n), m, rest, sv, gone, s0, e, eq)({==})({==})
+
+def srem_old(ms: List<&2, String>, +s0: KV.Mems, -e: Nat) -> Good(Some{KV.Item{KV.VColl{KV.CMems{s0}}, e}}, ch_of(R.srem.out(R.srem.go(ms, R.SDel{s0, 0n}), ms))):
+  match ms:
+    case Nil{}:
+      {==}
+    case Con{+m, +rest}:
+      srem_old_d(R.srem.go(Con{m, rest}, R.SDel{s0, 0n}), m, rest, s0, e)({==})
+
+def spop_old(+xs: List<&2, String>, +s0: KV.Mems, -e: Nat) -> Good(Some{KV.Item{KV.VColl{KV.CMems{s0}}, e}}, R.spop.ch(R.srem.out(R.srem.go(xs, R.SDel{s0, 0n}), xs))):
+  %spop_ch(R.srem.out(R.srem.go(xs, R.SDel{s0, 0n}), xs)) : Good(Some{KV.Item{KV.VColl{KV.CMems{s0}}, e}}, _)
+  srem_old(xs, s0, e)
+
+def sw_old_good(op: R.SWrite, +s0: KV.Mems, -e: Nat) -> Good(Some{KV.Item{KV.VColl{KV.CMems{s0}}, e}}, ch_of(R.swrite(op, False{}, s0))):
+  match op:
+    case R.SWAdd{+ms}:
+      sadd_old(ms, s0, e)
+    case R.SWRem{+ms}:
+      srem_old(ms, s0, e)
+    case R.SWNew{+ms}:
+      snew_good(ms, Some{KV.Item{KV.VColl{KV.CMems{s0}}, e}})
+    case R.SWPop{+r}:
+      spop_old(R.spop.one(R.srand.pick(s0, R.srand.next(r))), s0, e)
+    case R.SWPopN{+c, +r}:
+      spop_old(R.srand.many(c, s0, r), s0, e)
+
+def good_coll_set(op: R.SWrite, c: KV.Coll, -e: Nat) -> Good(Some{KV.Item{KV.VColl{c}, e}}, ch_of(R.swrite.coll(op, c))):
+  match c:
+    case KV.CMems{+s0}:
+      sw_old_good(op, s0, e)
+    case KV.CHash{+h}:
+      sw_wrong_good(op, Some{KV.Item{KV.VColl{KV.CHash{h}}, e}})
+    case KV.CList{+l}:
+      sw_wrong_good(op, Some{KV.Item{KV.VColl{KV.CList{l}}, e}})
 
 # of a key that is not there: none or a put
 def good_none(op: R.UpdOp, +now: Nat, -m: Maybe<&2, KV.Item<KV.Val>>) -> Good(m, ch_of(R.upd(op, now, None{}))):
@@ -7483,6 +8137,8 @@ def good_none(op: R.UpdOp, +now: Nat, -m: Maybe<&2, KV.Item<KV.Val>>) -> Good(m,
       hw_new_good(hop, m)
     case R.UList{+lop}:
       lw_fresh_good(lop, m)
+    case R.UMems{+sop}:
+      sw_fresh_good(sop, m)
 
 # a time set alone, to f, of a key there with e: none given none is
 # nothing
@@ -7605,6 +8261,58 @@ def good_some(op: R.UpdOp, +now: Nat, +w: String, +e: Nat) -> Good(Some{KV.Item{
       hw_wrong_good(hop, Some{KV.Item{KV.VStr{w}, e}})
     case R.UList{+lop}:
       lw_wrong_good(lop, Some{KV.Item{KV.VStr{w}, e}})
+    case R.UMems{+sop}:
+      sw_wrong_good(sop, Some{KV.Item{KV.VStr{w}, e}})
+
+# SET with GET of a key that holds a collection changes nothing
+def get_wrong_at(a: Maybe<&2, R.At>, -name: String) -> {ch_of(R.get.wrong.at(a, name)) == R.CKeep{} : R.Change}:
+  match a:
+    case Some{t}:
+      {==}
+    case None{}:
+      {==}
+
+def get_wrong_ttl(ttl: R.SetTtl, -v: String, -cond: Nat, +name: String, +now: Nat) -> {ch_of(R.get.wrong(R.USet{v, cond, ttl, name}, now)) == R.CKeep{} : R.Change}:
+  match ttl:
+    case R.TNone{}:
+      {==}
+    case R.TKeep{}:
+      {==}
+    case R.TAt{+t}:
+      get_wrong_at(R.at.of(t, now), name)
+
+def get_wrong_keep(o: R.UpdOp, +now: Nat) -> {ch_of(R.get.wrong(o, now)) == R.CKeep{} : R.Change}:
+  match o:
+    case R.USet{v, cond, +ttl, +name}:
+      get_wrong_ttl(ttl, v, cond, name, now)
+    case R.USetNx{x}:
+      {==}
+    case R.UGet{x}:
+      {==}
+    case R.UAppend{x}:
+      {==}
+    case R.UGetEx{x}:
+      {==}
+    case R.UGetDel{}:
+      {==}
+    case R.UExpire{x, y, z}:
+      {==}
+    case R.UPersist{}:
+      {==}
+    case R.UIncr{x}:
+      {==}
+    case R.URange{x, y}:
+      {==}
+    case R.USetBit{x, y}:
+      {==}
+    case R.UBitfield{x}:
+      {==}
+    case R.UHash{x}:
+      {==}
+    case R.UList{x}:
+      {==}
+    case R.UMems{x}:
+      {==}
 
 # of a key there that holds a collection: SET, SETNX, EXPIRE and its kin
 # and PERSIST act on it as on a string, any other changes nothing
@@ -7612,7 +8320,8 @@ def good_coll(op: R.UpdOp, +now: Nat, +c: KV.Coll, +e: Nat) -> Good(Some{KV.Item
   match op:
     case R.USetNx{v}:
       {==}
-    case R.UGet{o}:
+    case R.UGet{+o}:
+      %Equal.sym(R.Change, ch_of(R.get.wrong(o, now)), R.CKeep{}, get_wrong_keep(o, now)) : Good(Some{KV.Item{KV.VColl{c}, e}}, _)
       {==}
     case R.UAppend{a}:
       {==}
@@ -7638,6 +8347,8 @@ def good_coll(op: R.UpdOp, +now: Nat, +c: KV.Coll, +e: Nat) -> Good(Some{KV.Item
       good_coll_hash(hop, c, e)
     case R.UList{+lop}:
       good_coll_list(lop, c, e)
+    case R.UMems{+sop}:
+      good_coll_set(sop, c, e)
 
 def ug_v(w: KV.Val, op: R.UpdOp, +now: Nat, +e: Nat) -> Good(Some{KV.Item{w, e}}, ch_of(R.upd.v(op, now, Some{KV.Item{w, e}}))):
   match w:
@@ -8010,6 +8721,248 @@ def lmpop_at0(m: Maybe<&2, String>, +left: Bool, +cnt: String, +t: KV.Trie<KV.Va
     case None{}:
       {==}
 
+# a STORE's effects replay at time 0 as its write ran: the DEL of its
+# destination, or the update SWNew of it
+def sstore_of_at0(xs: List<&2, String>, +d: String, +t: KV.Trie<KV.Val>, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>) -> {Laws.final(R.exec_all(sstore_eff_of(xs, d, R.Db{t, n, x, now, rr}), R.Db{t, n, x, 0n, rr})) == R.db.at(0n, R.db_of(R.sstore.of(xs, d, R.Db{t, n, x, now, rr}))) : R.Db}:
+  match xs:
+    case Nil{}:
+      %fin_cons(R.Del{[d]}, Nil{}, R.Db{t, n, x, 0n, rr}) : {_ == R.db.at(0n, R.db_of(R.sstore.of(Nil{}, d, R.Db{t, n, x, now, rr}))) : R.Db}
+      del_at0([d], t, n, x, now, rr)
+    case Con{+y, +rest}:
+      out_replay(R.upd.v(R.UMems{R.SWNew{y <> rest}}, now, R.ent.live(now, KV.entry.at(KV.Val, t, d, KV.hash(d)))), KV.entry.at(KV.Val, t, d, KV.hash(d)), t, d, n, x, now, rr)({==})(upd_good(R.UMems{R.SWNew{y <> rest}}, now, KV.entry.at(KV.Val, t, d, KV.hash(d))))
+
+def sstore_at0(g: R.SGot, +op: R.SetK, +ks: List<&2, String>, +d: String, +t: KV.Trie<KV.Val>, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>) -> {Laws.final(R.exec_all(sstore_eff(g, op, ks, d, R.Db{t, n, x, now, rr}), R.Db{t, n, x, 0n, rr})) == R.db.at(0n, R.db_of(R.sstore.do(g, op, ks, d, R.Db{t, n, x, now, rr}))) : R.Db}:
+  match g:
+    case R.SGot{+ss}:
+      sstore_of_at0(R.sop.members(op, ks, ss), d, t, n, x, now, rr)
+    case R.SGotWrong{}:
+      {==}
+
+# An update at time 0 leaves the database the update at now leaves, at
+# time 0, when it makes the same change there
+def ch_at0(ch: R.Change, +t: KV.Trie<KV.Val>, +k: String, +h: U32, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>, +c: Nat, +r: R.Reply) -> {R.db_of(R.upd.ch(t, k, h, n, x, 0n, rr, c, r, ch)) == R.db.at(0n, R.db_of(R.upd.ch(t, k, h, n, x, now, rr, c, r, ch))) : R.Db}:
+  match ch:
+    case R.CKeep{}:
+      {==}
+    case R.CDel{}:
+      {==}
+    case R.CExp{e}:
+      {==}
+    case R.CPut{v, e}:
+      {==}
+    case R.CKeepT{v}:
+      {==}
+    case R.CApp{a, v}:
+      {==}
+    case R.CRange{o, a, v}:
+      {==}
+    case R.CHash{op, hv}:
+      {==}
+    case R.CHashNew{ps, hv}:
+      {==}
+    case R.CList{op, lv}:
+      {==}
+    case R.CListNew{lf, xs, lv}:
+      {==}
+    case R.CMems{op, sv}:
+      {==}
+    case R.CMemsNew{ms, sv}:
+      {==}
+
+def upd0_ch(+t: KV.Trie<KV.Val>, +k: String, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>, +op: R.UpdOp, +op2: R.UpdOp) -> {ch_of(R.upd.v(op2, 0n, KV.entry.at(KV.Val, t, k, KV.hash(k)))) == ch_of(R.upd.v(op, now, R.ent.live(now, KV.entry.at(KV.Val, t, k, KV.hash(k))))) : R.Change} -> {R.db_of(R.db.upd(R.Db{t, n, x, 0n, rr}, k, op2)) == R.db.at(0n, R.db_of(R.db.upd(R.Db{t, n, x, now, rr}, k, op))) : R.Db}:
+  ec =>
+    %Equal.sym(Maybe<&2, KV.Item<KV.Val>>, R.ent.live(0n, KV.entry.at(KV.Val, t, k, KV.hash(k))), KV.entry.at(KV.Val, t, k, KV.hash(k)), live0_ent(KV.entry.at(KV.Val, t, k, KV.hash(k)))) : {R.db_of(R.upd.put(t, k, KV.hash(k), n, x, 0n, rr, R.ent.code(KV.entry.at(KV.Val, t, k, KV.hash(k))), R.upd.v(op2, 0n, _))) == R.db.at(0n, R.db_of(R.db.upd(R.Db{t, n, x, now, rr}, k, op))) : R.Db}
+    %put_db(t, k, KV.hash(k), n, x, 0n, rr, R.ent.code(KV.entry.at(KV.Val, t, k, KV.hash(k))), R.upd.v(op2, 0n, KV.entry.at(KV.Val, t, k, KV.hash(k)))) : {_ == R.db.at(0n, R.db_of(R.db.upd(R.Db{t, n, x, now, rr}, k, op))) : R.Db}
+    %put_db(t, k, KV.hash(k), n, x, now, rr, R.ent.code(KV.entry.at(KV.Val, t, k, KV.hash(k))), R.upd.v(op, now, R.ent.live(now, KV.entry.at(KV.Val, t, k, KV.hash(k))))) : {R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, 0n, rr, R.ent.code(KV.entry.at(KV.Val, t, k, KV.hash(k))), R.RNull{}, ch_of(R.upd.v(op2, 0n, KV.entry.at(KV.Val, t, k, KV.hash(k)))))) == R.db.at(0n, _) : R.Db}
+    %Equal.sym(R.Change, ch_of(R.upd.v(op2, 0n, KV.entry.at(KV.Val, t, k, KV.hash(k)))), ch_of(R.upd.v(op, now, R.ent.live(now, KV.entry.at(KV.Val, t, k, KV.hash(k))))), ec) : {R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, 0n, rr, R.ent.code(KV.entry.at(KV.Val, t, k, KV.hash(k))), R.RNull{}, _)) == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, R.ent.code(KV.entry.at(KV.Val, t, k, KV.hash(k))), R.RNull{}, ch_of(R.upd.v(op, now, R.ent.live(now, KV.entry.at(KV.Val, t, k, KV.hash(k)))))))) : R.Db}
+    ch_at0(ch_of(R.upd.v(op, now, R.ent.live(now, KV.entry.at(KV.Val, t, k, KV.hash(k))))), t, k, KV.hash(k), n, x, now, rr, R.ent.code(KV.entry.at(KV.Val, t, k, KV.hash(k))), R.RNull{})
+
+def upd0_d(d: R.Db, +k: String, +op: R.UpdOp, +op2: R.UpdOp) -> {ch_of(R.upd.v(op2, 0n, KV.entry.at(KV.Val, R.db.t(d), k, KV.hash(k)))) == ch_of(R.upd.v(op, R.db.now(d), R.ent.live(R.db.now(d), KV.entry.at(KV.Val, R.db.t(d), k, KV.hash(k))))) : R.Change} -> {R.db_of(R.db.upd(R.db.at(0n, d), k, op2)) == R.db.at(0n, R.db_of(R.db.upd(d, k, op))) : R.Db}:
+  match d:
+    case R.Db{+t, +n, +x, +now, +rr}:
+      upd0_ch(t, k, n, x, now, rr, op, op2)
+
+# SMOVE's effect replays at time 0 as SMOVE ran: what it finds at time 0
+# (its New form when the destination's time had passed at now) is what
+# it found at now, and its two updates make the changes they made
+def sunmoved(f: R.Smv, +s: String, +d: String, +w: R.SMem, +db: R.Db) -> {A.smove.moved(f) == False{} : Bool} -> {db == R.db_of(R.smove.do(f, s, d, w, db)) : R.Db}:
+  match f:
+    case R.SmvZero{}:
+      em => {==}
+    case R.SmvWrong{}:
+      em => {==}
+    case R.SmvSame{had}:
+      em => {==}
+    case R.SmvGo{}:
+      em => Empty.absurd({db == R.db_of(R.smove.do(R.SmvGo{}, s, d, w, db)) : R.Db}, true_false(em))
+
+def smv_go(f: R.Smv) -> {A.smove.moved(f) == True{} : Bool} -> {f == R.SmvGo{} : R.Smv}:
+  match f:
+    case R.SmvZero{}:
+      em => Empty.absurd({R.SmvZero{} == R.SmvGo{} : R.Smv}, false_true(em))
+    case R.SmvWrong{}:
+      em => Empty.absurd({R.SmvWrong{} == R.SmvGo{} : R.Smv}, false_true(em))
+    case R.SmvSame{had}:
+      em => Empty.absurd({R.SmvSame{had} == R.SmvGo{} : R.Smv}, false_true(em))
+    case R.SmvGo{}:
+      em => {==}
+
+# a move: the source is there at now, and is not the destination
+def go_src_b(b: Bool, +v: KV.Val, +e: Nat, +md: Maybe<&2, KV.Item<KV.Val>>, +same: Bool, +m: String) -> {A.smove.moved(R.smv.find(Bool.pick(Maybe<&2, KV.Item<KV.Val>>, b, Some{KV.Item{v, e}}, None{}), md, same, m)) == True{} : Bool} -> {Bool.pick(Maybe<&2, KV.Item<KV.Val>>, b, Some{KV.Item{v, e}}, None{}) == Some{KV.Item{v, e}} : Maybe<&2, KV.Item<KV.Val>>}:
+  match b:
+    case True{}:
+      em => {==}
+    case False{}:
+      em => Empty.absurd({None{} == Some{KV.Item{v, e}} : Maybe<&2, KV.Item<KV.Val>>}, false_true(em))
+
+def go_src(ms: Maybe<&2, KV.Item<KV.Val>>, +now: Nat, +md: Maybe<&2, KV.Item<KV.Val>>, +same: Bool, +m: String) -> {A.smove.moved(R.smv.find(R.ent.live(now, ms), md, same, m)) == True{} : Bool} -> {R.ent.live(now, ms) == ms : Maybe<&2, KV.Item<KV.Val>>}:
+  match ms:
+    case None{}:
+      em => {==}
+    case Some{KV.Item{+v, +e}}:
+      go_src_b(KV.live(now, e), v, e, md, same, m)
+
+def go_dst(same: Bool, +had: Bool, -md: Maybe<&2, KV.Item<KV.Val>>) -> {A.smove.moved(R.smv.dst(same, had, md)) == True{} : Bool} -> {same == False{} : Bool}:
+  match same:
+    case True{}:
+      em => Empty.absurd({True{} == False{} : Bool}, false_true(em))
+    case False{}:
+      em => {==}
+
+def go_same_v(v: KV.Val, -e: Nat, +md: Maybe<&2, KV.Item<KV.Val>>, +same: Bool, +m: String) -> {A.smove.moved(R.smv.find(Some{KV.Item{v, e}}, md, same, m)) == True{} : Bool} -> {same == False{} : Bool}:
+  match v:
+    case KV.VColl{KV.CMems{+sv}}:
+      go_dst(same, KV.mems.has(m, sv), md)
+    case KV.VColl{KV.CHash{h}}:
+      em => Empty.absurd({same == False{} : Bool}, false_true(em))
+    case KV.VColl{KV.CList{l}}:
+      em => Empty.absurd({same == False{} : Bool}, false_true(em))
+    case KV.VStr{u}:
+      em => Empty.absurd({same == False{} : Bool}, false_true(em))
+
+def go_same(ms: Maybe<&2, KV.Item<KV.Val>>, +md: Maybe<&2, KV.Item<KV.Val>>, +same: Bool, +m: String) -> {A.smove.moved(R.smv.find(ms, md, same, m)) == True{} : Bool} -> {same == False{} : Bool}:
+  match ms:
+    case None{}:
+      em => Empty.absurd({same == False{} : Bool}, false_true(em))
+    case Some{KV.Item{+v, +e}}:
+      go_same_v(v, e, md, same, m)
+
+# a set's write sees no time: at 0 as at now
+def umems_v(v: KV.Val, +op: R.SWrite, +now: Nat, +e: Nat) -> {R.upd.v(R.UMems{op}, 0n, Some{KV.Item{v, e}}) == R.upd.v(R.UMems{op}, now, Some{KV.Item{v, e}}) : R.Out}:
+  match v:
+    case KV.VStr{u}:
+      {==}
+    case KV.VColl{c}:
+      {==}
+
+def umems_now(m: Maybe<&2, KV.Item<KV.Val>>, +op: R.SWrite, +now: Nat) -> {R.upd.v(R.UMems{op}, 0n, m) == R.upd.v(R.UMems{op}, now, m) : R.Out}:
+  match m:
+    case Some{KV.Item{+v, +e}}:
+      umems_v(v, op, now, e)
+    case None{}:
+      {==}
+
+# the destination's write: the same change at time 0, by the New form
+# when its time had passed at now
+def add_fresh_ch(w: R.SMem) -> {ch_of(R.swrite(R.smv.add(w), True{}, KV.mems.empty())) == R.CMemsNew{[R.smv.member(w)], KV.mems.of([R.smv.member(w)])} : R.Change}:
+  match w:
+    case R.SMem{+m}:
+      {==}
+    case R.SMemNew{+m}:
+      {==}
+
+def dst_ch_b(b: Bool, +v: KV.Val, +e: Nat, +w: R.SMem, +now: Nat) -> {ch_of(R.upd.v(R.UMems{R.smv.add(Bool.pick(R.SMem, Bool.not(b), R.SMemNew{R.smv.member(w)}, w))}, 0n, Some{KV.Item{v, e}})) == ch_of(R.upd.v(R.UMems{R.smv.add(w)}, now, Bool.pick(Maybe<&2, KV.Item<KV.Val>>, b, Some{KV.Item{v, e}}, None{}))) : R.Change}:
+  match b:
+    case True{}:
+      Equal.cong(R.Out, R.Change, z => ch_of(z), R.upd.v(R.UMems{R.smv.add(w)}, 0n, Some{KV.Item{v, e}}), R.upd.v(R.UMems{R.smv.add(w)}, now, Some{KV.Item{v, e}}), umems_v(v, R.smv.add(w), now, e))
+    case False{}:
+      %snew_v(v, [R.smv.member(w)], e) : {ch_of(_) == ch_of(R.upd.v(R.UMems{R.smv.add(w)}, now, None{})) : R.Change}
+      Equal.sym(R.Change, ch_of(R.swrite(R.smv.add(w), True{}, KV.mems.empty())), R.CMemsNew{[R.smv.member(w)], KV.mems.of([R.smv.member(w)])}, add_fresh_ch(w))
+
+def dst_ch(md: Maybe<&2, KV.Item<KV.Val>>, +w: R.SMem, +now: Nat) -> {ch_of(R.upd.v(R.UMems{R.smv.add(Bool.pick(R.SMem, R.ent.dead(now, md), R.SMemNew{R.smv.member(w)}, w))}, 0n, md)) == ch_of(R.upd.v(R.UMems{R.smv.add(w)}, now, R.ent.live(now, md))) : R.Change}:
+  match md:
+    case None{}:
+      {==}
+    case Some{KV.Item{+v, +e}}:
+      dst_ch_b(KV.live(now, e), v, e, w, now)
+
+def member_pick(b: Bool, +w: R.SMem) -> {R.smv.member(Bool.pick(R.SMem, b, R.SMemNew{R.smv.member(w)}, w)) == R.smv.member(w) : String}:
+  match b:
+    case True{}:
+      {==}
+    case False{}:
+      {==}
+
+def smv_dst_eq_b(b: Bool, +v: KV.Val, +e: Nat, +w: R.SMem) -> {R.mv.dst.ent(R.smv.fresh(w), Bool.pick(Maybe<&2, KV.Item<KV.Val>>, b, Some{KV.Item{v, e}}, None{})) == R.mv.dst.ent(R.smv.fresh(Bool.pick(R.SMem, Bool.not(b), R.SMemNew{R.smv.member(w)}, w)), Some{KV.Item{v, e}}) : Maybe<&2, KV.Item<KV.Val>>}:
+  match b:
+    case True{}:
+      {==}
+    case False{}:
+      dst_none(R.smv.fresh(w))
+
+def smv_dst_eq(md: Maybe<&2, KV.Item<KV.Val>>, +w: R.SMem, +now: Nat) -> {R.mv.dst.ent(R.smv.fresh(w), R.ent.live(now, md)) == R.mv.dst.ent(R.smv.fresh(Bool.pick(R.SMem, R.ent.dead(now, md), R.SMemNew{R.smv.member(w)}, w)), md) : Maybe<&2, KV.Item<KV.Val>>}:
+  match md:
+    case None{}:
+      {==}
+    case Some{KV.Item{+v, +e}}:
+      smv_dst_eq_b(KV.live(now, e), v, e, w)
+
+def smv_find0(+s: String, +d: String, +w: R.SMem, +t: KV.Trie<KV.Val>, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>, -dd: Bool) -> {R.ent.dead(now, KV.entry.at(KV.Val, t, d, KV.hash(d))) == dd : Bool} -> {A.smove.moved(R.smv.of(R.Db{t, n, x, now, rr}, s, d, w)) == True{} : Bool} -> {R.smv.of(R.Db{t, n, x, now, rr}, s, d, w) == R.smv.of(R.Db{t, n, x, 0n, rr}, s, d, Bool.pick(R.SMem, dd, R.SMemNew{R.smv.member(w)}, w)) : R.Smv}:
+  ed => mv =>
+    %ed : {R.smv.of(R.Db{t, n, x, now, rr}, s, d, w) == R.smv.of(R.Db{t, n, x, 0n, rr}, s, d, Bool.pick(R.SMem, _, R.SMemNew{R.smv.member(w)}, w)) : R.Smv}
+    %Equal.sym(Maybe<&2, KV.Item<KV.Val>>, R.ent.live(0n, KV.entry.at(KV.Val, t, d, KV.hash(d))), KV.entry.at(KV.Val, t, d, KV.hash(d)), live0_ent(KV.entry.at(KV.Val, t, d, KV.hash(d)))) : {R.smv.of(R.Db{t, n, x, now, rr}, s, d, w) == R.smv.find(R.ent.live(0n, KV.entry.at(KV.Val, t, s, KV.hash(s))), R.mv.dst.ent(R.smv.fresh(Bool.pick(R.SMem, R.ent.dead(now, KV.entry.at(KV.Val, t, d, KV.hash(d))), R.SMemNew{R.smv.member(w)}, w)), _), KV.str_eq(s, d), R.smv.member(Bool.pick(R.SMem, R.ent.dead(now, KV.entry.at(KV.Val, t, d, KV.hash(d))), R.SMemNew{R.smv.member(w)}, w))) : R.Smv}
+    %Equal.sym(Maybe<&2, KV.Item<KV.Val>>, R.ent.live(0n, KV.entry.at(KV.Val, t, s, KV.hash(s))), KV.entry.at(KV.Val, t, s, KV.hash(s)), live0_ent(KV.entry.at(KV.Val, t, s, KV.hash(s)))) : {R.smv.of(R.Db{t, n, x, now, rr}, s, d, w) == R.smv.find(_, R.mv.dst.ent(R.smv.fresh(Bool.pick(R.SMem, R.ent.dead(now, KV.entry.at(KV.Val, t, d, KV.hash(d))), R.SMemNew{R.smv.member(w)}, w)), KV.entry.at(KV.Val, t, d, KV.hash(d))), KV.str_eq(s, d), R.smv.member(Bool.pick(R.SMem, R.ent.dead(now, KV.entry.at(KV.Val, t, d, KV.hash(d))), R.SMemNew{R.smv.member(w)}, w))) : R.Smv}
+    %Equal.sym(String, R.smv.member(Bool.pick(R.SMem, R.ent.dead(now, KV.entry.at(KV.Val, t, d, KV.hash(d))), R.SMemNew{R.smv.member(w)}, w)), R.smv.member(w), member_pick(R.ent.dead(now, KV.entry.at(KV.Val, t, d, KV.hash(d))), w)) : {R.smv.of(R.Db{t, n, x, now, rr}, s, d, w) == R.smv.find(KV.entry.at(KV.Val, t, s, KV.hash(s)), R.mv.dst.ent(R.smv.fresh(Bool.pick(R.SMem, R.ent.dead(now, KV.entry.at(KV.Val, t, d, KV.hash(d))), R.SMemNew{R.smv.member(w)}, w)), KV.entry.at(KV.Val, t, d, KV.hash(d))), KV.str_eq(s, d), _) : R.Smv}
+    %smv_dst_eq(KV.entry.at(KV.Val, t, d, KV.hash(d)), w, now) : {R.smv.of(R.Db{t, n, x, now, rr}, s, d, w) == R.smv.find(KV.entry.at(KV.Val, t, s, KV.hash(s)), _, KV.str_eq(s, d), R.smv.member(w)) : R.Smv}
+    Equal.cong(Maybe<&2, KV.Item<KV.Val>>, R.Smv, z => R.smv.find(z, R.mv.dst.ent(R.smv.fresh(w), R.ent.live(now, KV.entry.at(KV.Val, t, d, KV.hash(d)))), KV.str_eq(s, d), R.smv.member(w)), R.ent.live(now, KV.entry.at(KV.Val, t, s, KV.hash(s))), KV.entry.at(KV.Val, t, s, KV.hash(s)), go_src(KV.entry.at(KV.Val, t, s, KV.hash(s)), now, R.mv.dst.ent(R.smv.fresh(w), R.ent.live(now, KV.entry.at(KV.Val, t, d, KV.hash(d)))), KV.str_eq(s, d), R.smv.member(w))(mv))
+
+# the frame of the source's update at the destination
+def upd_entry_at(+t: KV.Trie<KV.Val>, +s: String, +d: String, +op: R.UpdOp, +now: Nat, ne: {d != s : String}) -> {KV.entry.at(KV.Val, T.db_of(T.upd.run(t, s, op, now)), d, KV.hash(d)) == KV.entry.at(KV.Val, t, d, KV.hash(d)) : Maybe<&2, KV.Item<KV.Val>>}:
+  Equal.trans(Maybe<&2, KV.Item<KV.Val>>, KV.entry.at(KV.Val, T.db_of(T.upd.run(t, s, op, now)), d, KV.hash(d)), KV.entry(KV.Val, T.db_of(T.upd.run(t, s, op, now)), d), KV.entry.at(KV.Val, t, d, KV.hash(d)),
+    Equal.sym(Maybe<&2, KV.Item<KV.Val>>, KV.entry(KV.Val, T.db_of(T.upd.run(t, s, op, now)), d), KV.entry.at(KV.Val, T.db_of(T.upd.run(t, s, op, now)), d, KV.hash(d)), entry_at_eq(KV.Val, T.db_of(T.upd.run(t, s, op, now)), d)),
+    Equal.trans(Maybe<&2, KV.Item<KV.Val>>, KV.entry(KV.Val, T.db_of(T.upd.run(t, s, op, now)), d), KV.entry(KV.Val, t, d), KV.entry.at(KV.Val, t, d, KV.hash(d)),
+      upd_frame(t, s, d, R.upd.v(op, now, R.ent.live(now, KV.entry.at(KV.Val, t, s, KV.hash(s)))), ne),
+      entry_at_eq(KV.Val, t, d)))
+
+def src_ch(+t: KV.Trie<KV.Val>, +s: String, +op: R.SWrite, +now: Nat, es: {R.ent.live(now, KV.entry.at(KV.Val, t, s, KV.hash(s))) == KV.entry.at(KV.Val, t, s, KV.hash(s)) : Maybe<&2, KV.Item<KV.Val>>}) -> {ch_of(R.upd.v(R.UMems{op}, 0n, KV.entry.at(KV.Val, t, s, KV.hash(s)))) == ch_of(R.upd.v(R.UMems{op}, now, R.ent.live(now, KV.entry.at(KV.Val, t, s, KV.hash(s))))) : R.Change}:
+  %Equal.sym(Maybe<&2, KV.Item<KV.Val>>, R.ent.live(now, KV.entry.at(KV.Val, t, s, KV.hash(s))), KV.entry.at(KV.Val, t, s, KV.hash(s)), es) : {ch_of(R.upd.v(R.UMems{op}, 0n, KV.entry.at(KV.Val, t, s, KV.hash(s)))) == ch_of(R.upd.v(R.UMems{op}, now, _)) : R.Change}
+  Equal.cong(R.Out, R.Change, z => ch_of(z), R.upd.v(R.UMems{op}, 0n, KV.entry.at(KV.Val, t, s, KV.hash(s))), R.upd.v(R.UMems{op}, now, KV.entry.at(KV.Val, t, s, KV.hash(s))), umems_now(KV.entry.at(KV.Val, t, s, KV.hash(s)), op, now))
+
+def dst_cond(+t: KV.Trie<KV.Val>, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>, +s: String, +d: String, +w: R.SMem, +w2: R.SMem, ne: {d != s : String}, ed: {ch_of(R.upd.v(R.UMems{R.smv.add(w2)}, 0n, KV.entry.at(KV.Val, t, d, KV.hash(d)))) == ch_of(R.upd.v(R.UMems{R.smv.add(w)}, now, R.ent.live(now, KV.entry.at(KV.Val, t, d, KV.hash(d))))) : R.Change}) -> {ch_of(R.upd.v(R.UMems{R.smv.add(w2)}, 0n, KV.entry.at(KV.Val, R.db.t(R.db_of(R.db.upd(R.Db{t, n, x, now, rr}, s, R.UMems{R.SWRem{[R.smv.member(w)]}}))), d, KV.hash(d)))) == ch_of(R.upd.v(R.UMems{R.smv.add(w)}, R.db.now(R.db_of(R.db.upd(R.Db{t, n, x, now, rr}, s, R.UMems{R.SWRem{[R.smv.member(w)]}}))), R.ent.live(R.db.now(R.db_of(R.db.upd(R.Db{t, n, x, now, rr}, s, R.UMems{R.SWRem{[R.smv.member(w)]}}))), KV.entry.at(KV.Val, R.db.t(R.db_of(R.db.upd(R.Db{t, n, x, now, rr}, s, R.UMems{R.SWRem{[R.smv.member(w)]}}))), d, KV.hash(d))))) : R.Change}:
+  %Equal.sym(Nat, R.db.now(R.db_of(R.db.upd(R.Db{t, n, x, now, rr}, s, R.UMems{R.SWRem{[R.smv.member(w)]}}))), now, upd_now_d(R.Db{t, n, x, now, rr}, s, R.UMems{R.SWRem{[R.smv.member(w)]}})) : {ch_of(R.upd.v(R.UMems{R.smv.add(w2)}, 0n, KV.entry.at(KV.Val, R.db.t(R.db_of(R.db.upd(R.Db{t, n, x, now, rr}, s, R.UMems{R.SWRem{[R.smv.member(w)]}}))), d, KV.hash(d)))) == ch_of(R.upd.v(R.UMems{R.smv.add(w)}, _, R.ent.live(_, KV.entry.at(KV.Val, R.db.t(R.db_of(R.db.upd(R.Db{t, n, x, now, rr}, s, R.UMems{R.SWRem{[R.smv.member(w)]}}))), d, KV.hash(d))))) : R.Change}
+  %Equal.sym(KV.Trie<KV.Val>, R.db.t(R.db_of(R.db.upd(R.Db{t, n, x, now, rr}, s, R.UMems{R.SWRem{[R.smv.member(w)]}}))), T.db_of(T.upd.run(t, s, R.UMems{R.SWRem{[R.smv.member(w)]}}, now)), upd_t(R.Db{t, n, x, now, rr}, s, R.UMems{R.SWRem{[R.smv.member(w)]}})) : {ch_of(R.upd.v(R.UMems{R.smv.add(w2)}, 0n, KV.entry.at(KV.Val, _, d, KV.hash(d)))) == ch_of(R.upd.v(R.UMems{R.smv.add(w)}, now, R.ent.live(now, KV.entry.at(KV.Val, _, d, KV.hash(d))))) : R.Change}
+  %Equal.sym(Maybe<&2, KV.Item<KV.Val>>, KV.entry.at(KV.Val, T.db_of(T.upd.run(t, s, R.UMems{R.SWRem{[R.smv.member(w)]}}, now)), d, KV.hash(d)), KV.entry.at(KV.Val, t, d, KV.hash(d)), upd_entry_at(t, s, d, R.UMems{R.SWRem{[R.smv.member(w)]}}, now, ne)) : {ch_of(R.upd.v(R.UMems{R.smv.add(w2)}, 0n, _)) == ch_of(R.upd.v(R.UMems{R.smv.add(w)}, now, R.ent.live(now, _))) : R.Change}
+  ed
+
+def smove_go_at0(+s: String, +d: String, +w: R.SMem, +w2: R.SMem, +t: KV.Trie<KV.Val>, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>, em: {R.smv.member(w2) == R.smv.member(w) : String}, es: {R.ent.live(now, KV.entry.at(KV.Val, t, s, KV.hash(s))) == KV.entry.at(KV.Val, t, s, KV.hash(s)) : Maybe<&2, KV.Item<KV.Val>>}, ne: {d != s : String}, ed: {ch_of(R.upd.v(R.UMems{R.smv.add(w2)}, 0n, KV.entry.at(KV.Val, t, d, KV.hash(d)))) == ch_of(R.upd.v(R.UMems{R.smv.add(w)}, now, R.ent.live(now, KV.entry.at(KV.Val, t, d, KV.hash(d))))) : R.Change}) -> {R.db_of(R.smove.do(R.SmvGo{}, s, d, w2, R.Db{t, n, x, 0n, rr})) == R.db.at(0n, R.db_of(R.smove.do(R.SmvGo{}, s, d, w, R.Db{t, n, x, now, rr}))) : R.Db}:
+  %Equal.sym(String, R.smv.member(w2), R.smv.member(w), em) : {R.db_of(R.db.upd(R.db_of(R.db.upd(R.Db{t, n, x, 0n, rr}, s, R.UMems{R.SWRem{[_]}})), d, R.UMems{R.smv.add(w2)})) == R.db.at(0n, R.db_of(R.db.upd(R.db_of(R.db.upd(R.Db{t, n, x, now, rr}, s, R.UMems{R.SWRem{[R.smv.member(w)]}})), d, R.UMems{R.smv.add(w)}))) : R.Db}
+  %Equal.sym(R.Db, R.db_of(R.db.upd(R.Db{t, n, x, 0n, rr}, s, R.UMems{R.SWRem{[R.smv.member(w)]}})), R.db.at(0n, R.db_of(R.db.upd(R.Db{t, n, x, now, rr}, s, R.UMems{R.SWRem{[R.smv.member(w)]}}))), upd0_ch(t, s, n, x, now, rr, R.UMems{R.SWRem{[R.smv.member(w)]}}, R.UMems{R.SWRem{[R.smv.member(w)]}})(src_ch(t, s, R.SWRem{[R.smv.member(w)]}, now, es))) : {R.db_of(R.db.upd(_, d, R.UMems{R.smv.add(w2)})) == R.db.at(0n, R.db_of(R.db.upd(R.db_of(R.db.upd(R.Db{t, n, x, now, rr}, s, R.UMems{R.SWRem{[R.smv.member(w)]}})), d, R.UMems{R.smv.add(w)}))) : R.Db}
+  upd0_d(R.db_of(R.db.upd(R.Db{t, n, x, now, rr}, s, R.UMems{R.SWRem{[R.smv.member(w)]}})), d, R.UMems{R.smv.add(w)}, R.UMems{R.smv.add(w2)})(dst_cond(t, n, x, now, rr, s, d, w, w2, ne, ed))
+
+def smove_mv_at0(+s: String, +d: String, +w: R.SMem, +t: KV.Trie<KV.Val>, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>, -dd: Bool, +ed: {R.ent.dead(now, KV.entry.at(KV.Val, t, d, KV.hash(d))) == dd : Bool}, +mv: {A.smove.moved(R.smv.of(R.Db{t, n, x, now, rr}, s, d, w)) == True{} : Bool}) -> {R.db_of(R.smove.do(R.smv.of(R.Db{t, n, x, 0n, rr}, s, d, Bool.pick(R.SMem, dd, R.SMemNew{R.smv.member(w)}, w)), s, d, Bool.pick(R.SMem, dd, R.SMemNew{R.smv.member(w)}, w), R.Db{t, n, x, 0n, rr})) == R.db.at(0n, R.db_of(R.smove.do(R.smv.of(R.Db{t, n, x, now, rr}, s, d, w), s, d, w, R.Db{t, n, x, now, rr}))) : R.Db}:
+  %smv_find0(s, d, w, t, n, x, now, rr, dd)(ed)(mv) : {R.db_of(R.smove.do(_, s, d, Bool.pick(R.SMem, dd, R.SMemNew{R.smv.member(w)}, w), R.Db{t, n, x, 0n, rr})) == R.db.at(0n, R.db_of(R.smove.do(R.smv.of(R.Db{t, n, x, now, rr}, s, d, w), s, d, w, R.Db{t, n, x, now, rr}))) : R.Db}
+  %Equal.sym(R.Smv, R.smv.of(R.Db{t, n, x, now, rr}, s, d, w), R.SmvGo{}, smv_go(R.smv.of(R.Db{t, n, x, now, rr}, s, d, w))(mv)) : {R.db_of(R.smove.do(_, s, d, Bool.pick(R.SMem, dd, R.SMemNew{R.smv.member(w)}, w), R.Db{t, n, x, 0n, rr})) == R.db.at(0n, R.db_of(R.smove.do(_, s, d, w, R.Db{t, n, x, now, rr}))) : R.Db}
+  %ed : {R.db_of(R.smove.do(R.SmvGo{}, s, d, Bool.pick(R.SMem, _, R.SMemNew{R.smv.member(w)}, w), R.Db{t, n, x, 0n, rr})) == R.db.at(0n, R.db_of(R.smove.do(R.SmvGo{}, s, d, w, R.Db{t, n, x, now, rr}))) : R.Db}
+  smove_go_at0(s, d, w, Bool.pick(R.SMem, R.ent.dead(now, KV.entry.at(KV.Val, t, d, KV.hash(d))), R.SMemNew{R.smv.member(w)}, w), t, n, x, now, rr,
+    member_pick(R.ent.dead(now, KV.entry.at(KV.Val, t, d, KV.hash(d))), w),
+    go_src(KV.entry.at(KV.Val, t, s, KV.hash(s)), now, R.mv.dst.ent(R.smv.fresh(w), R.ent.live(now, KV.entry.at(KV.Val, t, d, KV.hash(d)))), KV.str_eq(s, d), R.smv.member(w))(mv),
+    ne_sym(s, d, go_same(R.ent.live(now, KV.entry.at(KV.Val, t, s, KV.hash(s))), R.mv.dst.ent(R.smv.fresh(w), R.ent.live(now, KV.entry.at(KV.Val, t, d, KV.hash(d)))), KV.str_eq(s, d), R.smv.member(w))(mv)),
+    dst_ch(KV.entry.at(KV.Val, t, d, KV.hash(d)), w, now))
+
+def smove_at0(mvd: Bool, dd: Bool, +s: String, +d: String, +w: R.SMem, +t: KV.Trie<KV.Val>, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>) -> {A.smove.moved(R.smv.of(R.Db{t, n, x, now, rr}, s, d, w)) == mvd : Bool} -> {R.ent.dead(now, KV.entry.at(KV.Val, t, d, KV.hash(d))) == dd : Bool} -> {Laws.final(R.exec_all(A.smove.effect(mvd, dd, s, d, w), R.Db{t, n, x, 0n, rr})) == R.db.at(0n, R.db_of(R.smove.do(R.smv.of(R.Db{t, n, x, now, rr}, s, d, w), s, d, w, R.Db{t, n, x, now, rr}))) : R.Db}:
+  match mvd dd:
+    case False{} _:
+      em => ed => %sunmoved(R.smv.of(R.Db{t, n, x, now, rr}, s, d, w), s, d, w, R.Db{t, n, x, now, rr})(em) : {R.Db{t, n, x, 0n, rr} == R.db.at(0n, _) : R.Db}
+                  {==}
+    case True{} True{}:
+      em => ed =>
+        %fin_cons(R.SMv{s, d, R.SMemNew{R.smv.member(w)}}, Nil{}, R.Db{t, n, x, 0n, rr}) : {_ == R.db.at(0n, R.db_of(R.smove.do(R.smv.of(R.Db{t, n, x, now, rr}, s, d, w), s, d, w, R.Db{t, n, x, now, rr}))) : R.Db}
+        smove_mv_at0(s, d, w, t, n, x, now, rr, True{}, ed, em)
+    case True{} False{}:
+      em => ed =>
+        %fin_cons(R.SMv{s, d, w}, Nil{}, R.Db{t, n, x, 0n, rr}) : {_ == R.db.at(0n, R.db_of(R.smove.do(R.smv.of(R.Db{t, n, x, now, rr}, s, d, w), s, d, w, R.Db{t, n, x, now, rr}))) : R.Db}
+        smove_mv_at0(s, d, w, t, n, x, now, rr, False{}, ed, em)
+
 # a command's effects, run at time 0 on the database it ran on, leave the
 # database it left, at time 0: an update's (and INCRBY's) by its change
 # (out_replay), as the change is a good one (upd_good)
@@ -8067,6 +9020,12 @@ def effect_go(c: R.Cmd, +t: KV.Trie<KV.Val>, +n: Nat, +x: Nat, +now: Nat, +rr: M
       lmove_at0(A.lmove.moved(R.mv.find(R.Db{t, n, x, now, rr}, s, d, w)), R.ent.dead(now, KV.entry.at(KV.Val, t, d, KV.hash(d))), s, d, w, t, n, x, now, rr)({==})({==})
     case R.LMPop{+ks, +left, +cnt}:
       lmpop_at0(R.lmpop.first(ks, R.lmpop.head(ks, R.Db{t, n, x, now, rr}), R.Db{t, n, x, now, rr}), left, cnt, t, n, x, now, rr)
+    case R.SOp{op, ks}:
+      {==}
+    case R.SStore{+op, +d, +srcs}:
+      sstore_at0(R.sets.at(srcs, now, t), op, srcs, d, t, n, x, now, rr)
+    case R.SMv{+s, +d, +w}:
+      smove_at0(A.smove.moved(R.smv.of(R.Db{t, n, x, now, rr}, s, d, w)), R.ent.dead(now, KV.entry.at(KV.Val, t, d, KV.hash(d))), s, d, w, t, n, x, now, rr)({==})({==})
     case R.Own{o}:
       {==}
     case R.Bad{r}:
@@ -8310,6 +9269,8 @@ def hash_args_v(w: KV.Val, +op: R.HWrite, -hv: KV.Hash, +k: String) -> GoodHashV
       g => Empty.absurd({[R.Upd{k, R.UHash{op}}] == A.parse_all(A.args_all([R.Upd{k, R.UHash{op}}])) : List<&2, R.Cmd>}, g)
     case KV.VStr{u}:
       g => Empty.absurd({[R.Upd{k, R.UHash{op}}] == A.parse_all(A.args_all([R.Upd{k, R.UHash{op}}])) : List<&2, R.Cmd>}, g)
+    case KV.VColl{KV.CMems{s0}}:
+      g => Empty.absurd({[R.Upd{k, R.UHash{op}}] == A.parse_all(A.args_all([R.Upd{k, R.UHash{op}}])) : List<&2, R.Cmd>}, g)
 
 def hnew_args(b: Bool, +k: String, +ps: List<&2, KV.HPair>, ne: NeP(ps)) -> {A.hnew.effect(b, k, ps) == A.parse_all(A.args_all(A.hnew.effect(b, k, ps))) : List<&2, R.Cmd>}:
   match b:
@@ -8402,6 +9363,8 @@ def list_args_v(w: KV.Val, +op: R.LWrite, -l: KV.Deq, +k: String) -> GoodListV(w
       g => Empty.absurd({[R.Upd{k, R.UList{op}}] == A.parse_all(A.args_all([R.Upd{k, R.UList{op}}])) : List<&2, R.Cmd>}, g)
     case KV.VStr{u}:
       g => Empty.absurd({[R.Upd{k, R.UList{op}}] == A.parse_all(A.args_all([R.Upd{k, R.UList{op}}])) : List<&2, R.Cmd>}, g)
+    case KV.VColl{KV.CMems{s0}}:
+      g => Empty.absurd({[R.Upd{k, R.UList{op}}] == A.parse_all(A.args_all([R.Upd{k, R.UList{op}}])) : List<&2, R.Cmd>}, g)
 
 def lnew_eval_args(left: Bool, +k: String, xs: List<&2, String>) -> NeS(xs) -> {[R.Upd{k, R.UList{R.LWNew{left, xs}}}] == A.parse_all(A.args_all([R.Upd{k, R.UList{R.LWNew{left, xs}}}])) : List<&2, R.Cmd>}:
   match left xs:
@@ -8422,6 +9385,68 @@ def lnew_args(b: Bool, +k: String, +left: Bool, +xs: List<&2, String>, ne: NeS(x
       lnew_eval_args(left, k, xs)(ne)
 
 def gl_ne(-left: Bool, -xs: List<&2, String>, -l: KV.Deq, g: GoodNewL(left, xs, l)) -> NeS(xs):
+  (gn, ne) = g
+  ne
+
+# a set's write, as the file logs it, parses back to itself: SADD or
+# SREM of members, the script of a new set
+def sadd_args(+k: String, ms: List<&2, String>) -> NeS(ms) -> {[R.Upd{k, R.UMems{R.SWAdd{ms}}}] == A.parse_all(A.args_all([R.Upd{k, R.UMems{R.SWAdd{ms}}}])) : List<&2, R.Cmd>}:
+  match ms:
+    case Nil{}:
+      ne => Empty.absurd({[R.Upd{k, R.UMems{R.SWAdd{Nil{}}}}] == A.parse_all(A.args_all([R.Upd{k, R.UMems{R.SWAdd{Nil{}}}}])) : List<&2, R.Cmd>}, ne)
+    case Con{y, rest}:
+      ne => {==}
+
+def srem_args(+k: String, ms: List<&2, String>) -> NeS(ms) -> {[R.Upd{k, R.UMems{R.SWRem{ms}}}] == A.parse_all(A.args_all([R.Upd{k, R.UMems{R.SWRem{ms}}}])) : List<&2, R.Cmd>}:
+  match ms:
+    case Nil{}:
+      ne => Empty.absurd({[R.Upd{k, R.UMems{R.SWRem{Nil{}}}}] == A.parse_all(A.args_all([R.Upd{k, R.UMems{R.SWRem{Nil{}}}}])) : List<&2, R.Cmd>}, ne)
+    case Con{y, rest}:
+      ne => {==}
+
+def snew_eval_args(+k: String, ms: List<&2, String>) -> NeS(ms) -> {[R.Upd{k, R.UMems{R.SWNew{ms}}}] == A.parse_all(A.args_all([R.Upd{k, R.UMems{R.SWNew{ms}}}])) : List<&2, R.Cmd>}:
+  match ms:
+    case Nil{}:
+      ne => Empty.absurd({[R.Upd{k, R.UMems{R.SWNew{Nil{}}}}] == A.parse_all(A.args_all([R.Upd{k, R.UMems{R.SWNew{Nil{}}}}])) : List<&2, R.Cmd>}, ne)
+    case Con{y, rest}:
+      ne => {==}
+
+def mems_args(op: R.SWrite, +k: String) -> GoodSOp(op) -> {[R.Upd{k, R.UMems{op}}] == A.parse_all(A.args_all([R.Upd{k, R.UMems{op}}])) : List<&2, R.Cmd>}:
+  match op:
+    case R.SWAdd{ms}:
+      g => sadd_args(k, ms)(g)
+    case R.SWRem{ms}:
+      g => srem_args(k, ms)(g)
+    case R.SWNew{ms}:
+      g => Empty.absurd({[R.Upd{k, R.UMems{R.SWNew{ms}}}] == A.parse_all(A.args_all([R.Upd{k, R.UMems{R.SWNew{ms}}}])) : List<&2, R.Cmd>}, g)
+    case R.SWPop{r}:
+      g => Empty.absurd({[R.Upd{k, R.UMems{R.SWPop{r}}}] == A.parse_all(A.args_all([R.Upd{k, R.UMems{R.SWPop{r}}}])) : List<&2, R.Cmd>}, g)
+    case R.SWPopN{c, r}:
+      g => Empty.absurd({[R.Upd{k, R.UMems{R.SWPopN{c, r}}}] == A.parse_all(A.args_all([R.Upd{k, R.UMems{R.SWPopN{c, r}}}])) : List<&2, R.Cmd>}, g)
+
+def gmems_op(-op: R.SWrite, -sv: KV.Mems, -s0: KV.Mems, g: {ch_of(R.swrite(op, False{}, s0)) == R.CMems{op, sv} : R.Change} & GoodSOp(op)) -> GoodSOp(op):
+  (gs, go) = g
+  go
+
+def mems_args_v(w: KV.Val, +op: R.SWrite, -sv: KV.Mems, +k: String) -> GoodMemsV(w, op, sv) -> {[R.Upd{k, R.UMems{op}}] == A.parse_all(A.args_all([R.Upd{k, R.UMems{op}}])) : List<&2, R.Cmd>}:
+  match w:
+    case KV.VColl{KV.CMems{s0}}:
+      g => mems_args(op, k)(gmems_op(op, sv, s0, g))
+    case KV.VColl{KV.CHash{h0}}:
+      g => Empty.absurd({[R.Upd{k, R.UMems{op}}] == A.parse_all(A.args_all([R.Upd{k, R.UMems{op}}])) : List<&2, R.Cmd>}, g)
+    case KV.VColl{KV.CList{l0}}:
+      g => Empty.absurd({[R.Upd{k, R.UMems{op}}] == A.parse_all(A.args_all([R.Upd{k, R.UMems{op}}])) : List<&2, R.Cmd>}, g)
+    case KV.VStr{u}:
+      g => Empty.absurd({[R.Upd{k, R.UMems{op}}] == A.parse_all(A.args_all([R.Upd{k, R.UMems{op}}])) : List<&2, R.Cmd>}, g)
+
+def snew_args(b: Bool, +k: String, +ms: List<&2, String>, ne: NeS(ms)) -> {A.snew.effect(b, k, ms) == A.parse_all(A.args_all(A.snew.effect(b, k, ms))) : List<&2, R.Cmd>}:
+  match b:
+    case True{}:
+      sadd_args(k, ms)(ne)
+    case False{}:
+      snew_eval_args(k, ms)(ne)
+
+def gm_ne(-ms: List<&2, String>, -sv: KV.Mems, g: GoodNewM(ms, sv)) -> NeS(ms):
   (gn, ne) = g
   ne
 
@@ -8459,6 +9484,12 @@ def ch_args(ch: R.Change, m: Maybe<&2, KV.Item<KV.Val>>, +k: String) -> Good(m, 
       g => Empty.absurd({A.ch.effect(k, R.ent.code(None{}), R.CList{op, l}) == A.parse_all(A.args_all(A.ch.effect(k, R.ent.code(None{}), R.CList{op, l}))) : List<&2, R.Cmd>}, g)
     case R.CListNew{+left, +xs, l} _:
       g => lnew_args(Nat.is_eq(R.ent.code(m), 0n), k, left, xs, gl_ne(left, xs, l, g))
+    case R.CMems{+op, sv} Some{KV.Item{w, e}}:
+      g => mems_args_v(w, op, sv, k)(g)
+    case R.CMems{op, sv} None{}:
+      g => Empty.absurd({A.ch.effect(k, R.ent.code(None{}), R.CMems{op, sv}) == A.parse_all(A.args_all(A.ch.effect(k, R.ent.code(None{}), R.CMems{op, sv}))) : List<&2, R.Cmd>}, g)
+    case R.CMemsNew{+ms, sv} _:
+      g => snew_args(Nat.is_eq(R.ent.code(m), 0n), k, ms, gm_ne(ms, sv, g))
 
 def out_args(o: R.Out, m: Maybe<&2, KV.Item<KV.Val>>, +k: String) -> Good(m, ch_of(o)) -> {A.upd.effect(k, R.ent.code(m), o) == A.parse_all(A.args_all(A.upd.effect(k, R.ent.code(m), o))) : List<&2, R.Cmd>}:
   match o:
@@ -8542,6 +9573,39 @@ def lmpop_args(m: Maybe<&2, String>, +left: Bool, +cnt: String, +t: KV.Trie<KV.V
     case None{}:
       {==}
 
+# SMOVE, or its New form, parses back
+def smove_args1(+s: String, +d: String, w: R.SMem) -> {[R.SMv{s, d, w}] == A.parse_all(A.args_all([R.SMv{s, d, w}])) : List<&2, R.Cmd>}:
+  match w:
+    case R.SMem{m}:
+      {==}
+    case R.SMemNew{m}:
+      {==}
+
+def smove_args(mvd: Bool, dd: Bool, +s: String, +d: String, +w: R.SMem) -> {A.smove.effect(mvd, dd, s, d, w) == A.parse_all(A.args_all(A.smove.effect(mvd, dd, s, d, w))) : List<&2, R.Cmd>}:
+  match mvd dd:
+    case True{} True{}:
+      smove_args1(s, d, R.SMemNew{R.smv.member(w)})
+    case True{} False{}:
+      smove_args1(s, d, w)
+    case False{} _:
+      {==}
+
+# a STORE's effects, the DEL of its destination or the update SWNew of
+# it, parse back
+def sstore_of_args(xs: List<&2, String>, +d: String, +t: KV.Trie<KV.Val>, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>) -> {sstore_eff_of(xs, d, R.Db{t, n, x, now, rr}) == A.parse_all(A.args_all(sstore_eff_of(xs, d, R.Db{t, n, x, now, rr}))) : List<&2, R.Cmd>}:
+  match xs:
+    case Nil{}:
+      {==}
+    case Con{+y, +rest}:
+      out_args(R.upd.v(R.UMems{R.SWNew{y <> rest}}, now, R.ent.live(now, KV.entry.at(KV.Val, t, d, KV.hash(d)))), KV.entry.at(KV.Val, t, d, KV.hash(d)), d)(upd_good(R.UMems{R.SWNew{y <> rest}}, now, KV.entry.at(KV.Val, t, d, KV.hash(d))))
+
+def sstore_args(g: R.SGot, +op: R.SetK, +ks: List<&2, String>, +d: String, +t: KV.Trie<KV.Val>, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>) -> {sstore_eff(g, op, ks, d, R.Db{t, n, x, now, rr}) == A.parse_all(A.args_all(sstore_eff(g, op, ks, d, R.Db{t, n, x, now, rr}))) : List<&2, R.Cmd>}:
+  match g:
+    case R.SGot{+ss}:
+      sstore_of_args(R.sop.members(op, ks, ss), d, t, n, x, now, rr)
+    case R.SGotWrong{}:
+      {==}
+
 def args_go(c: R.Cmd, +t: KV.Trie<KV.Val>, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>) -> {eff(c, R.Db{t, n, x, now, rr}) == A.parse_all(A.args_all(eff(c, R.Db{t, n, x, now, rr}))) : List<&2, R.Cmd>}:
   match c:
     case R.Ping{}:
@@ -8593,6 +9657,12 @@ def args_go(c: R.Cmd, +t: KV.Trie<KV.Val>, +n: Nat, +x: Nat, +now: Nat, +rr: May
       lmove_args(A.lmove.moved(R.mv.find(R.Db{t, n, x, now, rr}, s, d, w)), R.ent.dead(now, KV.entry.at(KV.Val, t, d, KV.hash(d))), s, d, w)
     case R.LMPop{+ks, +left, +cnt}:
       lmpop_args(R.lmpop.first(ks, R.lmpop.head(ks, R.Db{t, n, x, now, rr}), R.Db{t, n, x, now, rr}), left, cnt, t, n, x, now, rr)
+    case R.SOp{op, ks}:
+      {==}
+    case R.SStore{+op, +d, +srcs}:
+      sstore_args(R.sets.at(srcs, now, t), op, srcs, d, t, n, x, now, rr)
+    case R.SMv{+s, +d, +w}:
+      smove_args(A.smove.moved(R.smv.of(R.Db{t, n, x, now, rr}, s, d, w)), R.ent.dead(now, KV.entry.at(KV.Val, t, d, KV.hash(d))), s, d, w)
     case R.Own{o}:
       {==}
     case R.Bad{r}:
@@ -8827,6 +9897,13 @@ def lnew_one(b: Bool, +k: String, +left: Bool, +xs: List<&2, String>) -> OneEff(
     case False{}:
       Inr{(R.Upd{k, R.UList{R.LWNew{left, xs}}}, {==})}
 
+def snew_one(b: Bool, +k: String, +ms: List<&2, String>) -> OneEff(A.snew.effect(b, k, ms)):
+  match b:
+    case True{}:
+      Inr{(R.Upd{k, R.UMems{R.SWAdd{ms}}}, {==})}
+    case False{}:
+      Inr{(R.Upd{k, R.UMems{R.SWNew{ms}}}, {==})}
+
 def ch_one(+k: String, +c: Nat, ch: R.Change) -> OneEff(A.ch.effect(k, c, ch)):
   match ch:
     case R.CKeep{}:
@@ -8859,6 +9936,10 @@ def ch_one(+k: String, +c: Nat, ch: R.Change) -> OneEff(A.ch.effect(k, c, ch)):
       Inr{(R.Upd{k, R.UList{op}}, {==})}
     case R.CListNew{+left, +xs, l}:
       lnew_one(Nat.is_eq(c, 0n), k, left, xs)
+    case R.CMems{op, sv}:
+      Inr{(R.Upd{k, R.UMems{op}}, {==})}
+    case R.CMemsNew{+ms, sv}:
+      snew_one(Nat.is_eq(c, 0n), k, ms)
 
 def out_one(+k: String, +c: Nat, o: R.Out) -> OneEff(A.upd.effect(k, c, o)):
   match o:
@@ -8917,6 +9998,29 @@ def lmpop_one(m: Maybe<&2, String>, +left: Bool, +cnt: String, +t: KV.Trie<KV.Va
     case None{}:
       Inl{{==}}
 
+def smove_one(mvd: Bool, dd: Bool, +s: String, +d: String, +w: R.SMem) -> OneEff(A.smove.effect(mvd, dd, s, d, w)):
+  match mvd dd:
+    case True{} True{}:
+      Inr{(R.SMv{s, d, R.SMemNew{R.smv.member(w)}}, {==})}
+    case True{} False{}:
+      Inr{(R.SMv{s, d, w}, {==})}
+    case False{} _:
+      Inl{{==}}
+
+def sstore_of_one(xs: List<&2, String>, +d: String, +t: KV.Trie<KV.Val>, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>) -> OneEff(sstore_eff_of(xs, d, R.Db{t, n, x, now, rr})):
+  match xs:
+    case Nil{}:
+      Inr{(R.Del{[d]}, {==})}
+    case Con{+y, +rest}:
+      out_one(d, R.ent.code(KV.entry.at(KV.Val, t, d, KV.hash(d))), R.upd.v(R.UMems{R.SWNew{y <> rest}}, now, R.ent.live(now, KV.entry.at(KV.Val, t, d, KV.hash(d)))))
+
+def sstore_one(g: R.SGot, +op: R.SetK, +ks: List<&2, String>, +d: String, +t: KV.Trie<KV.Val>, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>) -> OneEff(sstore_eff(g, op, ks, d, R.Db{t, n, x, now, rr})):
+  match g:
+    case R.SGot{+ss}:
+      sstore_of_one(R.sop.members(op, ks, ss), d, t, n, x, now, rr)
+    case R.SGotWrong{}:
+      Inl{{==}}
+
 def eff_one_go(c: R.Cmd, +t: KV.Trie<KV.Val>, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>) -> OneEff(eff(c, R.Db{t, n, x, now, rr})):
   match c:
     case R.Ping{}:
@@ -8967,6 +10071,12 @@ def eff_one_go(c: R.Cmd, +t: KV.Trie<KV.Val>, +n: Nat, +x: Nat, +now: Nat, +rr: 
       lmove_one(A.lmove.moved(R.mv.find(R.Db{t, n, x, now, rr}, s, d, w)), R.ent.dead(now, KV.entry.at(KV.Val, t, d, KV.hash(d))), s, d, w)
     case R.LMPop{+ks, +left, +cnt}:
       lmpop_one(R.lmpop.first(ks, R.lmpop.head(ks, R.Db{t, n, x, now, rr}), R.Db{t, n, x, now, rr}), left, cnt, t, n, x, now, rr)
+    case R.SOp{op, ks}:
+      Inl{{==}}
+    case R.SStore{+op, +d, +srcs}:
+      sstore_one(R.sets.at(srcs, now, t), op, srcs, d, t, n, x, now, rr)
+    case R.SMv{+s, +d, +w}:
+      smove_one(A.smove.moved(R.smv.of(R.Db{t, n, x, now, rr}, s, d, w)), R.ent.dead(now, KV.entry.at(KV.Val, t, d, KV.hash(d))), s, d, w)
     case R.Own{o}:
       Inl{{==}}
     case R.Bad{r}:
@@ -9864,6 +10974,12 @@ def fa_of(e: R.Cmd) -> {R.parse(A.args(e)) == e : R.Cmd} -> {A.file.act(e) == R.
     case R.LMove{op, d, srcs}:
       h => {==}
     case R.LMPop{op, d, srcs}:
+      h => {==}
+    case R.SOp{op, ks}:
+      h => {==}
+    case R.SStore{op, d, srcs}:
+      h => {==}
+    case R.SMv{sk, d, w}:
       h => {==}
     case R.Own{o}:
       h => Empty.absurd({A.file.act(R.Own{o}) == R.ARun{R.Own{o}} : R.Act}, own_noent(o, h))
@@ -11603,6 +12719,12 @@ def unzip_gen(+conn: S.Conn, +srv: S.Srv, rs: List<&2, B.Req>, +cs: List<&2, R.C
       e => unzip_gen(conn, srv, rest, R.LMove{x0, x1, x2} <> cs, h <> hs, ds)(e)
     case Con{B.Req{R.LMPop{x0, x1, x2}, h}, rest}:
       e => unzip_gen(conn, srv, rest, R.LMPop{x0, x1, x2} <> cs, h <> hs, ds)(e)
+    case Con{B.Req{R.SOp{x0, x1}, h}, rest}:
+      e => unzip_gen(conn, srv, rest, R.SOp{x0, x1} <> cs, h <> hs, ds)(e)
+    case Con{B.Req{R.SStore{x0, x1, x2}, h}, rest}:
+      e => unzip_gen(conn, srv, rest, R.SStore{x0, x1, x2} <> cs, h <> hs, ds)(e)
+    case Con{B.Req{R.SMv{x0, x1, x2}, h}, rest}:
+      e => unzip_gen(conn, srv, rest, R.SMv{x0, x1, x2} <> cs, h <> hs, ds)(e)
     case Con{B.Req{R.Own{x0}, h}, rest}:
       e => mixed_gen(conn, srv, rest, R.Own{x0} <> cs, h <> hs, ds)
     case Con{B.Req{R.Bad{x0}, h}, rest}:
@@ -11709,6 +12831,12 @@ def unzip_gen_log(+conn: S.Conn, +srv: S.Srv, rs: List<&2, B.Req>, +cs: List<&2,
       e => unzip_gen_log(conn, srv, rest, R.LMove{x0, x1, x2} <> cs, h <> hs, ds)(e)
     case Con{B.Req{R.LMPop{x0, x1, x2}, h}, rest}:
       e => unzip_gen_log(conn, srv, rest, R.LMPop{x0, x1, x2} <> cs, h <> hs, ds)(e)
+    case Con{B.Req{R.SOp{x0, x1}, h}, rest}:
+      e => unzip_gen_log(conn, srv, rest, R.SOp{x0, x1} <> cs, h <> hs, ds)(e)
+    case Con{B.Req{R.SStore{x0, x1, x2}, h}, rest}:
+      e => unzip_gen_log(conn, srv, rest, R.SStore{x0, x1, x2} <> cs, h <> hs, ds)(e)
+    case Con{B.Req{R.SMv{x0, x1, x2}, h}, rest}:
+      e => unzip_gen_log(conn, srv, rest, R.SMv{x0, x1, x2} <> cs, h <> hs, ds)(e)
     case Con{B.Req{R.Own{x0}, h}, rest}:
       e => mixed_gen_log(conn, srv, rest, R.Own{x0} <> cs, h <> hs, ds)
     case Con{B.Req{R.Bad{x0}, h}, rest}:
@@ -11787,6 +12915,10 @@ def srv_same.o(o: R.SessOp, +conn: S.Conn, +srv: S.Srv, +ef: {S.authed(conn, srv
       e => Empty.absurd({S.own_srv(R.SLcs{y0}, conn, srv) == srv : S.Srv}, true_false(Equal.trans(Bool, True{}, S.authed(conn, srv), False{}, e, ef)))
     case R.SHRandField{y0, y1}:
       e => Empty.absurd({S.own_srv(R.SHRandField{y0, y1}, conn, srv) == srv : S.Srv}, true_false(Equal.trans(Bool, True{}, S.authed(conn, srv), False{}, e, ef)))
+    case R.SSPop{y0, y1}:
+      e => Empty.absurd({S.own_srv(R.SSPop{y0, y1}, conn, srv) == srv : S.Srv}, true_false(Equal.trans(Bool, True{}, S.authed(conn, srv), False{}, e, ef)))
+    case R.SSRandMember{y0, y1}:
+      e => Empty.absurd({S.own_srv(R.SSRandMember{y0, y1}, conn, srv) == srv : S.Srv}, true_false(Equal.trans(Bool, True{}, S.authed(conn, srv), False{}, e, ef)))
     case R.SMemUsage{y0, y1}:
       e => Empty.absurd({S.own_srv(R.SMemUsage{y0, y1}, conn, srv) == srv : S.Srv}, true_false(Equal.trans(Bool, True{}, S.authed(conn, srv), False{}, e, ef)))
     case R.SReply{y0}:
@@ -11904,6 +13036,14 @@ def own_bad(o: R.SessOp, +ps: List<&2, R.Act>, +id: Nat, +a: Bool, +n: String, +
       ih =>
         %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel}, srv), False{}, ef) : {Laws.all_bad(List.append(&2, R.Act, S.acts.k(S.KSess{R.SHRandField{y0, y1}}, _, R.Own{R.SHRandField{y0, y1}}, S.Conn{id, a, n, m, False{}, sel}, srv), ps)) == True{} : Bool}
         ih
+    case R.SSPop{y0, y1}:
+      ih =>
+        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel}, srv), False{}, ef) : {Laws.all_bad(List.append(&2, R.Act, S.acts.k(S.KSess{R.SSPop{y0, y1}}, _, R.Own{R.SSPop{y0, y1}}, S.Conn{id, a, n, m, False{}, sel}, srv), ps)) == True{} : Bool}
+        ih
+    case R.SSRandMember{y0, y1}:
+      ih =>
+        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel}, srv), False{}, ef) : {Laws.all_bad(List.append(&2, R.Act, S.acts.k(S.KSess{R.SSRandMember{y0, y1}}, _, R.Own{R.SSRandMember{y0, y1}}, S.Conn{id, a, n, m, False{}, sel}, srv), ps)) == True{} : Bool}
+        ih
     case R.SMemUsage{y0, y1}:
       ih =>
         %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel}, srv), False{}, ef) : {Laws.all_bad(List.append(&2, R.Act, S.acts.k(S.KSess{R.SMemUsage{y0, y1}}, _, R.Own{R.SMemUsage{y0, y1}}, S.Conn{id, a, n, m, False{}, sel}, srv), ps)) == True{} : Bool}
@@ -11976,6 +13116,18 @@ def ran_bad(c: R.Cmd, +ps: List<&2, R.Act>, +id: Nat, +a: Bool, +n: String, +m: 
     case R.LMPop{x0, x1, x2}:
       ih =>
         %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel}, srv), False{}, ef) : {Laws.all_bad(List.append(&2, R.Act, S.acts.k(S.KData{}, _, R.LMPop{x0, x1, x2}, S.Conn{id, a, n, m, False{}, sel}, srv), ps)) == True{} : Bool}
+        ih
+    case R.SOp{x0, x1}:
+      ih =>
+        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel}, srv), False{}, ef) : {Laws.all_bad(List.append(&2, R.Act, S.acts.k(S.KData{}, _, R.SOp{x0, x1}, S.Conn{id, a, n, m, False{}, sel}, srv), ps)) == True{} : Bool}
+        ih
+    case R.SStore{x0, x1, x2}:
+      ih =>
+        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel}, srv), False{}, ef) : {Laws.all_bad(List.append(&2, R.Act, S.acts.k(S.KData{}, _, R.SStore{x0, x1, x2}, S.Conn{id, a, n, m, False{}, sel}, srv), ps)) == True{} : Bool}
+        ih
+    case R.SMv{x0, x1, x2}:
+      ih =>
+        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel}, srv), False{}, ef) : {Laws.all_bad(List.append(&2, R.Act, S.acts.k(S.KData{}, _, R.SMv{x0, x1, x2}, S.Conn{id, a, n, m, False{}, sel}, srv), ps)) == True{} : Bool}
         ih
     case R.DbSize{}:
       ih =>
@@ -12094,6 +13246,14 @@ def auth_own(o: R.SessOp, +id: Nat, +a: Bool, +n: String, +m: S.Mute, +sel: Nat,
       el =>
         %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel}, srv), False{}, ef) : {S.conn.auth(S.next_conn.k(S.KSess{R.SHRandField{y0, y1}}, _, S.Conn{id, a, n, m, False{}, sel}, srv)) == False{} : Bool}
         ef
+    case R.SSPop{y0, y1}:
+      el =>
+        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel}, srv), False{}, ef) : {S.conn.auth(S.next_conn.k(S.KSess{R.SSPop{y0, y1}}, _, S.Conn{id, a, n, m, False{}, sel}, srv)) == False{} : Bool}
+        ef
+    case R.SSRandMember{y0, y1}:
+      el =>
+        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel}, srv), False{}, ef) : {S.conn.auth(S.next_conn.k(S.KSess{R.SSRandMember{y0, y1}}, _, S.Conn{id, a, n, m, False{}, sel}, srv)) == False{} : Bool}
+        ef
     case R.SMemUsage{y0, y1}:
       el =>
         %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel}, srv), False{}, ef) : {S.conn.auth(S.next_conn.k(S.KSess{R.SMemUsage{y0, y1}}, _, S.Conn{id, a, n, m, False{}, sel}, srv)) == False{} : Bool}
@@ -12137,6 +13297,12 @@ def auth_nc(c: R.Cmd, +id: Nat, +a: Bool, +n: String, +m: S.Mute, +sel: Nat, +sr
     case R.LMove{x0, x1, x2}:
       el => ef
     case R.LMPop{x0, x1, x2}:
+      el => ef
+    case R.SOp{x0, x1}:
+      el => ef
+    case R.SStore{x0, x1, x2}:
+      el => ef
+    case R.SMv{x0, x1, x2}:
       el => ef
     case R.DbSize{}:
       el => ef

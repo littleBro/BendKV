@@ -1,5 +1,5 @@
-# aof_check.bend: runs smoke.bend's batch, and writes of hashes and of
-# lists, with its effects (aof.bend:
+# aof_check.bend: runs smoke.bend's batch, and writes of hashes, of
+# lists and of sets, with its effects (aof.bend:
 # exec_log), writes the effects as the server appends them, reads the
 # file back, runs it from an empty database and prints whether that gives
 # the batch's database; then cuts the file at every length and prints
@@ -64,7 +64,15 @@ def buf() -> String:
   "*7\r\n$4\r\nEVAL\r\n$131\r\n" ++ R.hnew.script() ++ "\r\n$1\r\n1\r\n$2\r\nl5\r\n$5\r\nLPUSH\r\n$1\r\na\r\n$1\r\nb\r\n" ++
   "*6\r\n$4\r\nEVAL\r\n$131\r\n" ++ R.hnew.script() ++ "\r\n$1\r\n1\r\n$1\r\nh\r\n$5\r\nRPUSH\r\n$1\r\nc\r\n" ++
   "*7\r\n$4\r\nEVAL\r\n$84\r\n" ++ R.lmove.script() ++ "\r\n$1\r\n2\r\n$1\r\nl\r\n$2\r\nl5\r\n$4\r\nLEFT\r\n$5\r\nRIGHT\r\n" ++
-  "*7\r\n$4\r\nEVAL\r\n$84\r\n" ++ R.lmove.script() ++ "\r\n$1\r\n2\r\n$1\r\nl\r\n$1\r\nu\r\n$5\r\nRIGHT\r\n$4\r\nLEFT\r\n"
+  "*7\r\n$4\r\nEVAL\r\n$84\r\n" ++ R.lmove.script() ++ "\r\n$1\r\n2\r\n$1\r\nl\r\n$1\r\nu\r\n$5\r\nRIGHT\r\n$4\r\nLEFT\r\n" ++
+  "SADD st 1 2 3\r\nSADD st a\r\nSREM st 2 nope\r\nSADD sn 5 6\r\nSMOVE st sn 1\r\nSMOVE st st 3\r\n" ++
+  "SMOVE st nope2 zz\r\nSINTERSTORE si st sn\r\nSUNIONSTORE su st sn\r\nSDIFFSTORE sd st sn\r\n" ++
+  "SINTERSTORE sd st nope\r\nSINTERCARD 2 st sn\r\nSMEMBERS st\r\nSADD g x\r\nSET sx v\r\nEXPIRE st 100\r\n" ++
+  "SREM st a\r\nSADD sb 1 b\r\nSREM sb b\r\nSREM sn 5 6\r\nSADD\r\nSINTERCARD 0 st\r\n" ++
+  "*7\r\n$4\r\nEVAL\r\n$131\r\n" ++ R.hnew.script() ++ "\r\n$1\r\n1\r\n$2\r\nsx\r\n$4\r\nSADD\r\n$1\r\na\r\n$1\r\nb\r\n" ++
+  "*6\r\n$4\r\nEVAL\r\n$131\r\n" ++ R.hnew.script() ++ "\r\n$1\r\n1\r\n$1\r\nh\r\n$4\r\nSADD\r\n$1\r\nc\r\n" ++
+  "*6\r\n$4\r\nEVAL\r\n$76\r\n" ++ R.smove.script() ++ "\r\n$1\r\n2\r\n$2\r\nsu\r\n$2\r\nsx\r\n$1\r\n5\r\n" ++
+  "*6\r\n$4\r\nEVAL\r\n$76\r\n" ++ R.smove.script() ++ "\r\n$1\r\n2\r\n$2\r\nsu\r\n$1\r\nl\r\n$1\r\n6\r\n"
 
 # an entry as its value, and the time it expires at when it has one
 def dump.pairs(ps: List<&2, KV.HPair>) -> String:
@@ -89,6 +97,8 @@ def dump.val(v: KV.Val) -> String:
       "<hash" ++ dump.pairs(KV.hash.pairs(h)) ++ ">"
     case KV.VColl{KV.CList{+l}}:
       "<list" ++ dump.elems(KV.deq.all(l)) ++ ">"
+    case KV.VColl{KV.CMems{+m}}:
+      "<set" ++ dump.elems(KV.mems.all(m)) ++ ">"
 
 def dump.ent(m: Maybe<&2, KV.Item<KV.Val>>) -> String:
   match m:

@@ -221,6 +221,10 @@ def writes(c: R.Cmd, +j: String) -> Bool:
       any_key(j, [s, t])
     case R.LMPop{ks, left, c}:
       any_key(j, ks)
+    case R.SStore{op, d, srcs}:
+      KV.str_eq(j, d)
+    case R.SMv{s, d, w}:
+      any_key(j, [s, d])
     case _:
       False{}
 
@@ -229,8 +233,9 @@ def writes(c: R.Cmd, +j: String) -> Bool:
 # RENAME moves its source key's entry to its destination when the
 # destination is not there for RENAMENX, BITOP sets its destination to
 # what its sources make, LMOVE pushes onto its destination what it pops
-# from its source, and LMPOP pops from the first of its keys that is
-# there
+# from its source, LMPOP pops from the first of its keys that is there,
+# a STORE of a set operation sets its destination to what its sources
+# make, and SMOVE moves a member from its source to its destination
 def pair_keys(ps: List<&2, R.KVPair>) -> List<&2, String>:
   match ps:
     case Nil{}:
@@ -250,6 +255,10 @@ def deps(c: R.Cmd) -> List<&2, String>:
       [s, t]
     case R.LMPop{ks, left, c}:
       ks
+    case R.SStore{op, d, srcs}:
+      srcs
+    case R.SMv{s, d, w}:
+      [s, d]
     case _:
       Nil{}
 
@@ -275,6 +284,8 @@ def is_read(c: R.Cmd) -> Bool:
     case R.Scan{a}:
       True{}
     case R.Peek{k, o}:
+      True{}
+    case R.SOp{op, ks}:
       True{}
     case R.Own{o}:
       True{}
@@ -622,6 +633,12 @@ def disturbs(+c2: R.Cmd, c1: R.Cmd) -> Bool:
       writes_any(c2, [s, t])
     case R.LMPop{ks, left, c}:
       writes_any(c2, ks)
+    case R.SOp{op, ks}:
+      writes_any(c2, ks)
+    case R.SStore{op, d, srcs}:
+      writes_any(c2, srcs)
+    case R.SMv{s, d, w}:
+      writes_any(c2, [s, d])
     case R.DbSize{}:
       Bool.not(is_read(c2))
     case R.Keys{p}:
@@ -701,6 +718,10 @@ def clash_w(+c2: R.Cmd, c1: R.Cmd) -> Bool:
       writes_any(c2, [s, t])
     case R.LMPop{ks, left, c}:
       writes_any(c2, ks)
+    case R.SStore{op, +d, srcs}:
+      writes(c2, d)
+    case R.SMv{s, t, w}:
+      writes_any(c2, [s, t])
     case _:
       False{}
 

@@ -21,7 +21,13 @@ key whose time had passed still lay as the like script of its pushes,
 and a move onto such a key as a script that deletes the destination and
 runs the LMOVE; the commands run both ways, with a few keys whose time
 passes before a move onto them or a push, and a file of the scripts is
-read by both alike. Redis 7 keeps its
+read by both alike. A set is logged as the SADD and SREM that changed it
+(SPOP as the SREM of what it took, or the DEL of the key when it took the
+last members, as Redis logs it), a set made where a key whose time had
+passed still lay as the like script of its SADD (SINTERSTORE and its kin
+too, as the script of the members they make), and SMOVE onto such a key
+as a script that deletes the destination and runs the SMOVE; SPOP runs
+both ways only where its picks are the whole set. Redis 7 keeps its
 file in parts, a base and increments (appendonlydir): BendKV reads them
 joined, the base written without an RDB preamble.
 
@@ -86,16 +92,30 @@ CMDS = [
     [b"HSET", b"ex3", b"f", b"v"], [b"PEXPIRE", b"ex3", b"3"], [b"SET", b"ex4", b"v", b"PX", b"3"], [b"SLEEP"],
     [b"RPUSH", b"src", b"1", b"2", b"3"], [b"LMOVE", b"src", b"ex1", b"LEFT", b"RIGHT"], [b"RPOPLPUSH", b"src", b"ex2"],
     [b"LPUSH", b"ex3", b"n"], [b"RPUSH", b"ex4", b"m", b"n"],
+    [b"SADD", b"st", b"1", b"2", b"3"], [b"sadd", b"st", b"a"], [b"SREM", b"st", b"2", b"nope"],
+    [b"SADD", b"st2"] + [b"%d" % j for j in range(600)], [b"SREM", b"st2", b"5", b"6"], [b"SMOVE", b"st", b"st3", b"1"],
+    [b"SMOVE", b"st", b"st", b"3"], [b"SMOVE", b"st2", b"st3", b"7"], [b"SMOVE", b"st2", b"nope", b"9999"],
+    [b"SINTERSTORE", b"st4", b"st", b"st3"], [b"SUNIONSTORE", b"st5", b"st", b"st2"], [b"SDIFFSTORE", b"st6", b"st2", b"st3"],
+    [b"SINTERSTORE", b"st6", b"st", b"nope"], [b"SINTERCARD", b"2", b"st2", b"st5", b"LIMIT", b"10"],
+    [b"SADD", b"sp", b"9"], [b"SPOP", b"sp"], [b"SADD", b"sp2", b"1", b"2", b"3"], [b"SPOP", b"sp2", b"10"],
+    [b"SADD", b"sp3", b"4", b"5"], [b"SPOP", b"sp3", b"0"], [b"PEXPIREAT", b"st", b"%d" % (T + 13)],
+    [b"COPY", b"st", b"st7", b"DB", b"2"], [b"RENAME", b"st5", b"st8"], [b"MOVE", b"st8", b"5"], [b"SADD", b"a", b"x"],
+    [b"SET", b"st3", b"str"], [b"SADD", b"st3", b"y"], [b"SUNIONSTORE", b"st3", b"st4"],
+    [b"SADD", b"ex5", b"a"], [b"PEXPIRE", b"ex5", b"3"], [b"SET", b"ex6", b"v", b"PX", b"3"], [b"SADD", b"ex7", b"q"],
+    [b"PEXPIRE", b"ex7", b"3"], [b"HSET", b"ex8", b"f", b"v"], [b"PEXPIRE", b"ex8", b"3"], [b"SLEEP"],
+    [b"SADD", b"ex5", b"n"], [b"SADD", b"srcs", b"1", b"2", b"3"], [b"SMOVE", b"srcs", b"ex6", b"1"],
+    [b"SUNIONSTORE", b"ex7", b"srcs"], [b"SMOVE", b"srcs", b"ex8", b"2"],
 ]
 
-# a file with the entries BendKV logs for a hash or a list made where a
-# key whose time had passed still lay: the script that deletes the key
-# and runs the HSET (the pushes; a thousand arguments a call), and for a
-# move onto such a key, the script that deletes it and runs the LMOVE;
-# Redis runs them and BendKV reads them back
+# a file with the entries BendKV logs for a hash, a list or a set made
+# where a key whose time had passed still lay: the script that deletes the
+# key and runs the HSET (the pushes, the SADD; a thousand arguments a
+# call), and for a move onto such a key, the script that deletes it and
+# runs the LMOVE or the SMOVE; Redis runs them and BendKV reads them back
 SCRIPT = (b"redis.call('del',KEYS[1]) local n=#ARGV for i=2,n,1000 do redis.call(ARGV[1],KEYS[1],"
           b"unpack(ARGV,i,math.min(i+999,n))) end return 0")
 MOVE = b"redis.call('del',KEYS[2]) return redis.call('lmove',KEYS[1],KEYS[2],ARGV[1],ARGV[2])"
+SMOVE = b"redis.call('del',KEYS[2]) return redis.call('smove',KEYS[1],KEYS[2],ARGV[1])"
 
 
 def entry(*a):
@@ -113,7 +133,12 @@ def eval_file(path):
                 entry(b"EVAL", SCRIPT, b"1", b"lbig", b"RPUSH", *[b"e%d" % j for j in range(2500)]) +
                 entry(b"EVAL", SCRIPT, b"1", b"h", b"RPUSH", b"c") + entry(b"RPUSH", b"src", b"1", b"2", b"3") +
                 entry(b"EVAL", MOVE, b"2", b"src", b"lk", b"LEFT", b"RIGHT") +
-                entry(b"EVAL", MOVE, b"2", b"src", b"k", b"RIGHT", b"LEFT"))
+                entry(b"EVAL", MOVE, b"2", b"src", b"k", b"RIGHT", b"LEFT") +
+                entry(b"SET", b"sk", b"str") + entry(b"EVAL", SCRIPT, b"1", b"sk", b"SADD", b"a", b"b", b"1") +
+                entry(b"EVAL", SCRIPT, b"1", b"sbig", b"SADD", *[b"m%d" % j for j in range(2500)]) +
+                entry(b"EVAL", SCRIPT, b"1", b"sint", b"SADD", *[b"%d" % j for j in range(300)]) +
+                entry(b"EVAL", SCRIPT, b"1", b"h", b"SADD", b"c") + entry(b"SADD", b"ssrc", b"1", b"2", b"3") +
+                entry(b"EVAL", SMOVE, b"2", b"ssrc", b"sk", b"1") + entry(b"EVAL", SMOVE, b"2", b"ssrc", b"k", b"2"))
 
 
 # a server started, once it answers PONG (Redis answers LOADING while it
@@ -227,7 +252,7 @@ def main():
         kb = keyspace(c)
     finally:
         stop(p)
-    same("BendKV reads the scripts of a new hash, a new list and a move as Redis runs them", kb, kr)
+    same("BendKV reads the scripts of a new hash, list and set and of the moves as Redis runs them", kb, kr)
     print("ALL OK")
 
 
