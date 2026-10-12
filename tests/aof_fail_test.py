@@ -4,13 +4,17 @@ LD_PRELOAD shim). A file that is there but cannot be read stops the start
 (an empty database would be served, and the next writes appended to the
 file that holds the old one). A failed fsync stops the server with
 everysec as it does with always. A file that is not there is still an
-empty database. Then the files the start cannot replay as they were
-written: an unknown command, a wrong number of arguments, an argument
-that does not read, a database not there, a command of the server, a
-transaction left open; each stops the start with the entry's number and
-the byte it starts at, the file left byte for byte as it was (an entry
-cut short after one is not cut), while a file as Redis writes it
-(SELECT, MULTI and EXEC, lowercase names) restores.
+empty database; the start makes it and syncs the directory that holds
+it before it serves (the shim's trace shows the order: the file made,
+its directory synced, and only then a write synced and answered), and a
+failed sync of the directory stops the start before any reply. Then the
+files the start cannot replay as they were written: an unknown command,
+a wrong number of arguments, an argument that does not read, a database
+not there, a command of the server, a transaction left open; each stops
+the start with the entry's number and the byte it starts at, the file
+left byte for byte as it was (an entry cut short after one is not cut),
+while a file as Redis writes it (SELECT, MULTI and EXEC, lowercase
+names) restores.
 
     cc -shared -fPIC -o build/fail_io.so tests/fail_io.c -ldl
     python3 tests/aof_fail_test.py --port 6380 --shim build/fail_io.so
@@ -137,6 +141,14 @@ def unreplayable(a, path, name, data, want):
     return check(name + ": the file is left as it was", same) and ok
 
 
+def traced(path):
+    """The shim's trace: its lines, as (what, path)."""
+    if not os.path.exists(path):
+        return []
+    with open(path) as f:
+        return [tuple(l.rstrip("\n").split(" ", 1)) for l in f if " " in l]
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--port", type=int, default=6380)
@@ -199,6 +211,59 @@ def main():
                 "SET: %r, exit %s, log: %s" % (got, code, log[-300:]))
     if c is not None:
         c.close()
+
+    # a new file: made, its directory synced, then served (the trace of
+    # the shim, in the order the calls came), and a write in always
+    # synced after that; then the same start where the sync of the
+    # directory fails: it stops before it answers anything
+    fresh = os.path.abspath(os.path.join(a.dir, "fail_new.aof"))
+    trace = os.path.abspath(os.path.join(a.dir, "fail_trace.txt"))
+    for p in [fresh, trace]:
+        if os.path.exists(p):
+            os.remove(p)
+    s = Server(a, ["send", fresh, "always"], {"BENDKV_TRACE": trace})
+    c = s.connect()
+    pong = ask(c, b"PING") if c is not None else b""
+    at_pong = traced(trace)
+    got = ask(c, b"SET", b"k", b"v") if c is not None else b""
+    after = traced(trace)
+    if c is not None:
+        c.close()
+    log = s.stop()
+    made = ("create", fresh)
+    dsync = ("fsync", os.path.dirname(fresh))
+    fsync = ("fdatasync", fresh)
+    ok &= check("a new file is made and its directory synced before the server answers",
+                pong == b"+PONG\r\n" and made in at_pong and dsync in at_pong
+                and at_pong.index(made) < at_pong.index(dsync),
+                "PING: %r, trace: %s, log: %s" % (pong, at_pong, log[-300:]))
+    ok &= check("the first write's sync comes after the directory's",
+                got == b"+OK\r\n" and fsync in after and after.index(dsync) < after.index(fsync)
+                and fsync not in at_pong, "SET: %r, trace: %s" % (got, after))
+    os.remove(fresh)
+    s = Server(a, ["send", fresh, "always"], {"BENDKV_FAIL_DIRSYNC": "1"})
+    c = s.connect()
+    got = ask(c, b"SET", b"k", b"v") if c is not None else b""
+    code = s.exited(5)
+    log = s.stop()
+    ok &= check("a failed sync of the directory stops the start before any reply",
+                code == 1 and got == b"" and
+                "Can't sync the directory of the append-only file %s: Input/output error" % fresh in log,
+                "SET: %r, exit %s, log: %s" % (got, code, log[-300:]))
+    if c is not None:
+        c.close()
+    os.remove(trace)
+    s = Server(a, ["send", fresh, "always"], {"BENDKV_TRACE": trace})
+    c = s.connect()
+    pong = ask(c, b"PING") if c is not None else b""
+    at_pong = traced(trace)
+    if c is not None:
+        c.close()
+    s.stop()
+    ok &= check("the next start finds the file and syncs its directory again",
+                pong == b"+PONG\r\n" and dsync in at_pong, "PING: %r, trace: %s" % (pong, at_pong))
+    for p in [fresh, trace]:
+        os.remove(p)
 
     # files the start cannot replay as they were written: each stops it,
     # naming the entry (from 1) and its first byte, and leaves the file

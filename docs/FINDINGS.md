@@ -597,6 +597,18 @@ cannot hold fails with `EOVERFLOW` before the file is touched. The patch's test 
 sparse file to 2^32 − 1, 2^32 and 2^32 + 1 bytes and reads each size back exactly,
 with the file's first bytes kept.
 
+**A new file's name** (issue #7). With `always` the server answers only once
+`fdatasync` returns, but a sync of a file does not make its entry in the directory
+durable: after a crash the name of a file just made could be gone, and the next start
+would find no file and serve empty databases. The start now syncs the directory that
+holds the file (`File.sync_dir`, the twenty-second patch's `fsync` of the directory,
+as Redis's `fsyncFileDir`) right after it opens the file to append and before it
+serves, at every start (one that stopped on a failed sync of the directory may have
+left the file there, not yet on the disk); a failure stops the start.
+`tests/aof_fail_test.py` traces the calls through its shim: the file made, its
+directory synced, then the first reply, and a failed sync of the directory stops the
+start before any reply.
+
 **Group commit.** The first version wrote each batch's effects with its own `write`
 on the runtime's helper threads, as Bend runs every file effect, and with `always`
 synced each batch. Without pipelining, SET fell from 83 to 31 thousand a second even

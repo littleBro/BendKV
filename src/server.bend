@@ -1094,7 +1094,9 @@ def log.die(-A: Type, +lg: Log, +msg: String) -> IO(A):
 # entry, cut by a crash in the middle of a write, is cut back to its last
 # whole entry, as Redis does with aof-load-truncated, whatever its size;
 # a file with anything else after its entries is refused, as Redis
-# refuses it.
+# refuses it. The file opened to append, its directory is synced before
+# the server serves, so that a new file's name is on the disk before the
+# first write to it is acknowledged.
 
 # how the file reaches the disk
 type Sync is Data:
@@ -1579,10 +1581,29 @@ def st.new(srv: S.Srv, ds: R.Ds) -> St:
   +x = ds
   St{srv, x, R.ds.index(x)}
 
+# the directory that holds the file synced, so that the file's name is on
+# the disk before the first write to it is acknowledged: File.open may
+# have just made the file, and a sync of the file does not make its
+# entry in the directory durable (a crash could lose the name, and the
+# next start find no file). It runs at each start, whether the start
+# made the file or found it (one made by a start that stopped on this
+# very failure may be there and not yet on the disk); a failure stops
+# the start.
 @unsafe
-def open_aof(+path: String, +sync: Sync, srv: S.Srv, ds: R.Ds) -> IO(Chan(Req)):
+def dir_synced(r: Result<&1, &1, U32 & String, Unit>, +path: String, +lg: Log) -> IO(Unit):
+  match r:
+    case Done{u}:
+      IO.pure(Unit, Unit{})
+    case Fail{e}:
+      (code, msg) = e
+      log.die(Unit, lg, "Can't sync the directory of the append-only file " ++ path ++ ": " ++ msg)
+
+@unsafe
+def open_aof(+path: String, +sync: Sync, srv: S.Srv, ds: R.Ds, +lg: Log) -> IO(Chan(Req)):
   do IO<Chan(Req)>:
     f : File <- IO.try(File, File.open(path, "a"))
+    r : Result<&1, &1, U32 & String, Unit> <- File.sync_dir(path)
+    Unit <- dir_synced(r, path, lg)
     Unit <- syncer(sync, path)
     +reqs : Chan(Req) <- Chan.new(Req, 1024)
     Unit <- IO.spawn(Unit, aof_loop(st.new(srv, ds), f, sync, reqs))
@@ -1622,7 +1643,7 @@ def accept_all(ls: List<&1, Listener>, +reqs: Chan(Req), +post: Bool, +lg: Log, 
 def serve.aof(p: R.Ds & Nat, +path: String, +sync: Sync, +items: List<&2, C.CItem>, info: I.Info, ls: List<&1, Listener>, +post: Bool, +lg: Log, +tl: Chan(Tally)) -> IO(Unit):
   (ds, +size) = p
   do IO<Unit>:
-    +reqs : Chan(Req) <- open_aof(path, sync, S.srv_of(items, I.info.restored(info, size)), ds)
+    +reqs : Chan(Req) <- open_aof(path, sync, S.srv_of(items, I.info.restored(info, size)), ds, lg)
     accept_all(ls, reqs, post, lg, tl)
 
 # the databases after the first (databases less one)

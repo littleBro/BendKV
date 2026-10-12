@@ -236,12 +236,13 @@ translation stays in the trusted base.
   entries of another database, SWAPDB, MOVE and FLUSHALL as Redis writes them, and COPY
   with its DB and REPLACE spelled out (`redis-check-aof` accepts it, and Redis loads it;
   BendKV loads Redis's, COPY as the client sent it, MULTI and EXEC as marks), fsync
-  `always`, `everysec` or `no`. The start cuts a file that ends in an entry cut short
-  back to its last whole entry at any size. A file with an entry the start cannot
-  replay as it was written (an unknown command, a wrong number of arguments, an
-  argument that does not read, a database not there, a transaction left open) stops
-  the start, naming the entry and the byte it starts at, the file left as it was,
-  where Redis stops at an unknown command.
+  `always`, `everysec` or `no`. The start syncs the file's directory before it serves,
+  so that a new file's name is on the disk before the first write is acknowledged, and
+  cuts a file that ends in an entry cut short back to its last whole entry at any size.
+  A file with an entry the start cannot replay as it was written (an unknown command, a
+  wrong number of arguments, an argument that does not read, a database not there, a
+  transaction left open) stops the start, naming the entry and the byte it starts at,
+  the file left as it was, where Redis stops at an unknown command.
 
 Not yet: streams and the other types (HyperLogLog, geo), the blocking commands, Lua
 scripts, MULTI/EXEC, pub/sub, RESP3, timing of commands
@@ -336,8 +337,9 @@ from),
 robustness and concurrency checks,
 restarts from the append-only file (every database read back, including after a
 truncated tail), disk failures
-under the file, injected with an `LD_PRELOAD` shim, files the start must refuse, each
-left as it was, and the files both ways: BendKV
+under the file, injected with an `LD_PRELOAD` shim (the order of the file's creation,
+its directory's sync and the first reply traced through it), files the start must
+refuse, each left as it was, and the files both ways: BendKV
 started from a file Redis wrote and Redis from one BendKV wrote, each holding the
 databases the other held. `make suite` runs Redis's own test
 suite in its mode for a server already started, on Redis and on BendKV, and counts the
