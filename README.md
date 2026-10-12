@@ -12,10 +12,11 @@ with it. Under pipelined load it serves GET at 1.6×, SET at 1.8× and INCR at 1
 throughput of Redis 7.0.15 on the same machine, with half its memory for small values.
 
 > **Status: research prototype.** BendKV implements a subset of Redis (strings and their
-> times to live, the keyspace, connection commands, an append-only file). The goal now is a drop-in
-> replacement for a single Redis node, measured by Redis's own test suite: of the 1,656
-> tests Redis 7.0.15 passes against a server it did not start, BendKV passes 213, and 189
-> of the 315 in what it implements ([docs/COMPATIBILITY.md](docs/COMPATIBILITY.md)). Do
+> times to live, the keyspace, several databases, connection commands, an append-only
+> file). The goal now is a drop-in
+> replacement for a single Redis node, measured by Redis's own test suite: of the 1,673
+> tests Redis 7.0.15 passes against a server it did not start, BendKV passes 219, and 195
+> of the 325 in what it implements ([docs/COMPATIBILITY.md](docs/COMPATIBILITY.md)). Do
 > not use it for data you cannot lose.
 
 BendKV is an independent project. It is not affiliated with Higher Order Company or the

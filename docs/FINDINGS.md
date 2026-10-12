@@ -1,7 +1,7 @@
 # BendKV: what we found
 
 BendKV is a Redis-compatible key-value store written in Bend2, with its core proved
-against 53 laws. This file sums up in English what building it and making it fast
+against 58 laws. This file sums up in English what building it and making it fast
 showed us. The detailed record, with every table and measurement, is in Russian:
 [PERFORMANCE.md](PERFORMANCE.md) (performance, section by section) and
 [README.ru.md](../README.ru.md) (the project, the proofs, how to run). Where the work goes
@@ -9,19 +9,19 @@ next, and why, is in [DIRECTIONS.md](DIRECTIONS.md).
 
 ## 1. The result
 
-**Correctness.** About 1,900 lines of core code (with the parsing of commands, of their
-times and options, and Redis's pattern matching), about 500 lines of sessions (a
-connection's state and the server's), about 70 lines of batch hints, about 280 lines of
-append-only file, about 4,850 lines of handwritten proofs with a specification of about
-130 that they bridge to (section 3u), and about 1,700 lines of 16-way case splits written
-by a script ([`tools/gen_trie.py`](../tools/gen_trie.py)), not counting comments and
-blank lines. Bend checks the 53 laws in about 3 s; the BendTT kernel, whose soundness is
-proved in Lean, rechecks them in about 30 s. Among them: after any history,
-the server restores from its append-only file exactly the database it held, and from a
-file cut by a crash at any byte, the database it held after some prefix of its commands
-(section 3e). On about 266 thousand random commands the replies matched real Redis 7
-byte for byte; the versions with the 16-way trie passed about 300 thousand more, the
-current one about 70 thousand. Shards across cores and a key hashed once were built and
+**Correctness.** About 2,130 lines of core code (with the parsing of commands, of their
+times and options, Redis's pattern matching and several databases), about 650 lines of
+sessions (a connection's state and the server's), about 70 lines of batch hints, about
+410 lines of append-only file, about 6,140 lines of handwritten proofs with a
+specification of about 130 that they bridge to (section 3u), and about 1,700 lines of
+16-way case splits written by a script ([`tools/gen_trie.py`](../tools/gen_trie.py)), not
+counting comments and blank lines. Bend checks the 58 laws in about 4 s; the BendTT
+kernel, whose soundness is proved in Lean, rechecks them in about 40 s. Among them: after
+any history, the server restores from its append-only file exactly the databases it
+held, and from a file cut by a crash at any byte, the databases it held after some prefix
+of its acts (sections 3e and 3x). On about 266 thousand random commands the replies
+matched real Redis 7 byte for byte; the versions with the 16-way trie passed about 410
+thousand more, the current one, with several databases, about 107 thousand. Shards across cores and a key hashed once were built and
 proved too (sections 3a–3c, 3g, 3h), and taken out again because they paid too little
 for what they cost (section 3l): 38% less code and 38% fewer lines of proof.
 
@@ -1799,6 +1799,82 @@ keys with a time or not, and `make perfcheck` counted 14–19% more instructions
 request: under callgrind the server runs some fifty times slower while its cron still
 ticks ten times a second, so each sweep's 400 entries fell on that many fewer requests.
 In a database with no key that has a time, a tick now reads nothing.
+
+## 3x. Several databases
+
+**What it does.** BendKV holds Redis's databases: 16, or as many as `databases` says
+(fixed at the start, as in Redis). SELECT, MOVE, SWAPDB, FLUSHDB and FLUSHALL (with ASYNC
+and SYNC, which empty at once) answer as Redis 7.0.15 does, errors included: a number is
+read as Redis's `getIntFromObjectOrReply` reads one, so `01`, `+1` and `1.5` are no
+integers, a long long past an int is out of range with Redis's bounds in the error, and
+SWAPDB names its own errors. A connection starts on database 0, and RESET selects it
+again. INFO's keyspace has a line for each database that holds keys, and the sweep of
+expired keys goes over every database with a key that has a time, a cursor for each.
+
+**The model.** The databases are a zipper (`R.Ds`): the database in focus, those before
+it (the nearest first) and those after it. A command of one database runs on the focus
+exactly as it ran on the lone database before, and the actor moves the focus to a
+connection's database before it runs the connection's batch (one comparison when the
+focus is there already). A batch runs at the focus's time: a database that leaves the
+focus keeps the time it last ran at, and one that comes into focus takes the focus's.
+
+**MOVE in two steps.** Redis's MOVE deletes the key's entry in the target database when
+the key's time has passed there, then moves the key when the target holds no entry for
+it. BendKV runs these as two acts: a purge, which deletes such an entry, and the move
+proper, which moves an entry, its value and its time, only to a database that holds no
+entry for the key at all. Each step is one effect in the append-only file and means the
+same whenever it runs, and a crash between the two restores the databases the first
+left.
+
+**The file.** An effect is located (`A.Eff`): a command's on the database it ran on, and
+SWAPDB, MOVE (from the database the key leaves) and FLUSHALL. The writer remembers the
+database the file selected last and writes a SELECT before the entries of another, as
+Redis does, and SWAPDB, MOVE and FLUSHALL as Redis writes them. On load a SELECT moves
+the replay's focus, and every other entry acts as the server acted. `redis-check-aof`
+accepts the file, Redis 7.0.15 loads it into the same databases, and BendKV loads
+Redis's.
+
+**What is proved.** The laws of persistence are stated over several databases and proved
+again: after any history, each batch at its own time and on any database, the server
+restores exactly the databases it held (at time 0), and a file cut anywhere restores the
+databases after some prefix of its acts. The replay keeps an invariant with the
+server's databases (`Inv`): every database reads the same at time 0, the replay's focus
+is the database the file selected last, and its time is 0. An act with no effect leaves
+every database reading the same at time 0 (a moved focus, a SWAPDB, MOVE or purge that
+did nothing, a command that wrote nothing); an act with an effect does to the replay
+what it did to the server's databases, the replay moving its focus first when the file
+selects another database (`act_inv`, a case for each kind of act). The lemmas see a
+zipper's databases at time 0 as a list: a focus replaced is a database put at its number
+(`zput`), and a database picked into focus at the time now reads at time 0 as it did
+(`zpick0`). The numbers the file names read back as written, since the databases are
+1 + n with n of 14 digits at most, the law's hypothesis (Redis's `databases` is an int).
+For a cut file, the whole entries in front of the cut replay as the first effects (a
+SELECT cut off from the entry after it moves the focus alone, which changes no
+database), and those as the first acts, an act having one effect at most. Five new laws
+say what the acts do, at time 0: SELECT changes no database and focuses the one it
+names, SWAPDB puts each of two databases in the other's place, FLUSHALL empties them all,
+and MOVE takes a key's entry out of the focus and sets it, its value and its time, in the
+other database. 58 laws; about 1,260 lines of proof more (6,141 against 4,885), `make
+check` in about 4 s, `make verdict` in about 40 s.
+
+**What the tests found.** The differential test now moves between databases 0 to 3,
+moves keys between them and swaps them, with bad numbers among them, and found one
+difference: a number past an int (`SELECT 2147483648`) was "not an integer" to BendKV,
+where Redis answers "value is out of range, value must between -2147483648 and
+2147483647". The numbers are now read as Redis reads them, through the long long reader
+of section 3v.
+
+**Cost.** In instructions per request (`make perfcheck`): GET 3,141 (+55, +1.8%), SET
+4,070 (+48, +1.2%), INCR 4,226 (+54, +1.3%) against section 3w's, for the zipper around
+the focus and the focus moved to a connection's database before each batch;
+`tools/perf_baseline.txt` holds the new numbers. Redis's test suite now runs with all
+its databases (without `--singledb`): BendKV passes 219 of the 1,673 tests Redis passes
+(213 of 1,656 before) and 195 of the 325 in what it has. Of the 17 tests Redis passes that
+need several databases, it passes 6. Of the others, 10 need COPY, MULTI, WATCH, Lua or
+lists, and one,
+MOVE's basic test, passes alone but in its unit counts a key that earlier tests left,
+since the test that would have emptied the database stops at XADD
+([COMPATIBILITY.md](COMPATIBILITY.md)).
 
 ## 4. Where a request's time goes, and hiding the memory waits
 
