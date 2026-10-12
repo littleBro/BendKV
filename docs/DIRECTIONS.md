@@ -281,8 +281,8 @@ Where performance and proof meet: **batched execution under proved laws.**
    laws: logging changes no reply, nor do the hints before it, a batch's effects
    replay to its database, they
    parse back to themselves, a file loads as the entries written to it, after any
-   history the restored database is the one the server held, and a file cut by a
-   crash at any byte restores the database after some prefix of the commands, the
+   history the restored databases are the ones the server held, and a file cut by a
+   crash at any byte restores the databases after some prefix of the acts, the
    server cutting off exactly the part of an entry the crash left. (With the shards,
    each shard logged to a file of its own, with three more laws; section 3g.) Not yet:
    the rewrite of the log from a snapshot (BGREWRITEAOF), whose law would be about what
@@ -293,13 +293,14 @@ Where performance and proof meet: **batched execution under proved laws.**
    decision to cut a file (`cut_short`).
 6. **Next: a drop-in Redis for one node.** Strings, hashes, lists, sets and sorted sets
    with WRONGTYPE, times to live with time in the state and a sweep of expired keys
-   (done; FINDINGS.md, sections 3v and 3w), MULTI/EXEC/WATCH, pub/sub, the connection
+   (done; FINDINGS.md, sections 3v and 3w), several databases with SELECT, MOVE and
+   SWAPDB (done; section 3x), MULTI/EXEC/WATCH, pub/sub, the connection
    commands clients send on connect (HELLO, SELECT, CLIENT, AUTH, INFO, COMMAND, CONFIG;
    done), SCAN and RANDOMKEY (done), and the log's rewrite, measured by Redis's own test
    suite run against BendKV and by client libraries' tests. Lua, streams, cluster,
-   replication and modules are out of scope. The suite's count: of the 1,656 tests
-   Redis 7.0.15 passes against a server it did not start, BendKV passes 213, 189 of the
-   315 in what it has ([COMPATIBILITY.md](COMPATIBILITY.md)).
+   replication and modules are out of scope. The suite's count: of the 1,673 tests
+   Redis 7.0.15 passes against a server it did not start, BendKV passes 219, 195 of the
+   325 in what it has ([COMPATIBILITY.md](COMPATIBILITY.md)).
 
 After that comes proving the native strings (section 5, step 1): a small piece of
 work that makes the word "verified" much stronger.
