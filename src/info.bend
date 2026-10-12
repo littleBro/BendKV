@@ -368,13 +368,30 @@ type Count is Data:
 type Inst is Data:
   IInst{ms: Nat, last: Count, sc: List<&2, Nat>, si: List<&2, Nat>, so: List<&2, Nat>}
 
+# the sweep of expired keys (redis.bend: reap): the bucket the next one
+# starts at, and the keys the sweeps deleted (Redis's expired_keys)
+type Exp is Data:
+  IExp{cur: Nat, n: Nat}
+
 # everything INFO shows that the parameters and the keys do not: the
 # start, the last facts, the counts, the rates, the peak of memory, the
 # connections taken before the last CONFIG RESETSTAT, the size of the
-# append-only file at the start and now, and the statistics per command
-# and per error
+# append-only file at the start and now, the statistics per command and
+# per error, and the sweep of expired keys
 type Info is Data:
-  IInfo{boot: Boot, live: Live, cnt: Count, inst: Inst, peak: Nat, conns0: Nat, aof0: Nat, aof: Nat, st: Stats}
+  IInfo{boot: Boot, live: Live, cnt: Count, inst: Inst, peak: Nat, conns0: Nat, aof0: Nat, aof: Nat, st: Stats, ex: Exp}
+
+# CONFIG RESETSTAT counts the keys the sweeps delete again (Redis's
+# stat_expiredkeys), and the sweeps go on where they were
+def exp.reset(e: Exp) -> Exp:
+  match e:
+    case IExp{cur, n}:
+      IExp{cur, 0n}
+
+def exp.n(+e: Exp) -> Nat:
+  match e:
+    case IExp{cur, +n}:
+      n
 
 def count.zero() -> Count:
   ICount{big.zero(), big.zero(), big.zero()}
@@ -399,13 +416,13 @@ def live.conns(+l: Live) -> Nat:
 
 # the server's facts at its start
 def info.new(b: Boot, +l: Live) -> Info:
-  IInfo{b, l, count.zero(), IInst{live.ms(l), count.zero(), samples.zero(), samples.zero(), samples.zero()}, live.rss(l), 0n, 0n, 0n, stats.zero()}
+  IInfo{b, l, count.zero(), IInst{live.ms(l), count.zero(), samples.zero(), samples.zero(), samples.zero()}, live.rss(l), 0n, 0n, 0n, stats.zero(), IExp{0n, 0n}}
 
 # the append-only file the server restored at its start, of size bytes
 def info.restored(i: Info, +size: Nat) -> Info:
   match i:
-    case IInfo{b, l, c, inst, pk, c0, a0, a, st}:
-      IInfo{b, l, c, inst, pk, c0, size, size, st}
+    case IInfo{b, l, c, inst, pk, c0, a0, a, st, ex}:
+      IInfo{b, l, c, inst, pk, c0, size, size, st, ex}
 
 # a batch's commands, the bytes it came in and the bytes of its replies
 def count.add(c: Count, +n: Nat, +inb: Nat, +outb: Nat) -> Count:
@@ -418,32 +435,32 @@ def count.add(c: Count, +n: Nat, +inb: Nat, +outb: Nat) -> Count:
 # bytes of its replies
 def info.ran(i: Info, +calls: Nat, +r: Nat, rs: List<&2, Nat>, +inb: Nat, +outb: Nat) -> Info:
   match i:
-    case IInfo{b, l, c, inst, pk, c0, a0, a, st}:
-      IInfo{b, l, count.add(c, calls, inb, outb), inst, pk, c0, a0, a, stats.add(st, r, rs)}
+    case IInfo{b, l, c, inst, pk, c0, a0, a, st, ex}:
+      IInfo{b, l, count.add(c, calls, inb, outb), inst, pk, c0, a0, a, stats.add(st, r, rs), ex}
 
 # a batch's error replies
 def info.errs(i: Info, xs: List<&2, R.Erred>) -> Info:
   match i:
-    case IInfo{b, l, c, inst, pk, c0, a0, a, st}:
-      IInfo{b, l, c, inst, pk, c0, a0, a, stats.errs(xs, st)}
+    case IInfo{b, l, c, inst, pk, c0, a0, a, st, ex}:
+      IInfo{b, l, c, inst, pk, c0, a0, a, stats.errs(xs, st), ex}
 
 # an error reply the shell sent itself (a protocol error)
 def info.erred(i: Info, +m: String) -> Info:
   match i:
-    case IInfo{b, l, c, inst, pk, c0, a0, a, st}:
-      IInfo{b, l, c, inst, pk, c0, a0, a, stats.err(st, 1n, m)}
+    case IInfo{b, l, c, inst, pk, c0, a0, a, st, ex}:
+      IInfo{b, l, c, inst, pk, c0, a0, a, stats.err(st, 1n, m), ex}
 
 # bytes appended to the append-only file
 def info.aof(i: Info, +n: Nat) -> Info:
   match i:
-    case IInfo{b, l, c, inst, pk, c0, a0, a, st}:
-      IInfo{b, l, c, inst, pk, c0, a0, Nat.add(a, n), st}
+    case IInfo{b, l, c, inst, pk, c0, a0, a, st, ex}:
+      IInfo{b, l, c, inst, pk, c0, a0, Nat.add(a, n), st, ex}
 
 # new facts from the shell; the peak of memory follows them
 def info.live(i: Info, +l: Live) -> Info:
   match i:
-    case IInfo{b, old, c, inst, pk, c0, a0, a, st}:
-      IInfo{b, l, c, inst, Nat.max(pk, live.rss(l)), c0, a0, a, st}
+    case IInfo{b, old, c, inst, pk, c0, a0, a, st, ex}:
+      IInfo{b, l, c, inst, Nat.max(pk, live.rss(l)), c0, a0, a, st, ex}
 
 def take15(n: Nat, xs: List<&2, Nat>) -> List<&2, Nat>:
   match n xs:
@@ -473,16 +490,32 @@ def inst.tick(inst: Inst, +c: Count, +ms: Nat) -> Inst:
 # are counted
 def info.tick(i: Info, +ms: Nat) -> Info:
   match i:
-    case IInfo{b, l, +c, inst, pk, c0, a0, a, st}:
-      IInfo{b, l, c, inst.tick(inst, c, ms), pk, c0, a0, a, stats.fold(st)}
+    case IInfo{b, l, +c, inst, pk, c0, a0, a, st, ex}:
+      IInfo{b, l, c, inst.tick(inst, c, ms), pk, c0, a0, a, stats.fold(st), ex}
 
 # CONFIG RESETSTAT: the counts, the rates and the statistics start again,
 # as Redis's resetServerStats, resetCommandTableStats and
 # resetErrorTableStats start them
 def info.reset(i: Info) -> Info:
   match i:
-    case IInfo{b, +l, c, inst, pk, c0, a0, a, st}:
-      IInfo{b, l, count.zero(), IInst{live.ms(l), count.zero(), samples.zero(), samples.zero(), samples.zero()}, pk, live.conns(l), a0, a, stats.zero()}
+    case IInfo{b, +l, c, inst, pk, c0, a0, a, st, ex}:
+      IInfo{b, l, count.zero(), IInst{live.ms(l), count.zero(), samples.zero(), samples.zero(), samples.zero()}, pk, live.conns(l), a0, a, stats.zero(), exp.reset(ex)}
+
+# the sweep of expired keys: where the next one starts, and a sweep that
+# stopped at next having deleted k keys
+def info.reap_at(+i: Info) -> Nat:
+  match i:
+    case IInfo{b, l, c, inst, pk, c0, a0, a, st, +ex}:
+      match ex:
+        case IExp{+cur, n}:
+          cur
+
+def info.reaped(i: Info, +next: Nat, +k: Nat) -> Info:
+  match i:
+    case IInfo{b, l, c, inst, pk, c0, a0, a, st, ex}:
+      match ex:
+        case IExp{cur, +n}:
+          IInfo{b, l, c, inst, pk, c0, a0, a, st, IExp{next, Nat.add(n, k)}}
 
 # Numbers as printf writes them
 # ----------------------------
@@ -675,7 +708,7 @@ def sec.persistence(+items: List<&2, C.CItem>, +start: U32, +a0: Nat, +a: Nat) -
   kv("aof_last_cow_size", "0") ++ kv("module_fork_in_progress", "0") ++ kv("module_fork_last_cow_size", "0") ++
   sec.aof(on, a0, a)
 
-def sec.stats.go(c: Count, inst: Inst, +conns: Nat, +errs: String) -> String:
+def sec.stats.go(c: Count, inst: Inst, +conns: Nat, +errs: String, +expired: Nat) -> String:
   match c inst:
     case ICount{+cmds, +inb, +outb} IInst{ms, last, +sc, +si, +so}:
       "# Stats\r\n" ++ kv("total_connections_received", Nat.show(conns)) ++ kv("total_commands_processed", big.show(cmds)) ++
@@ -684,7 +717,7 @@ def sec.stats.go(c: Count, inst: Inst, +conns: Nat, +errs: String) -> String:
       kv("total_net_repl_output_bytes", "0") ++ kv("instantaneous_input_kbps", fix2(Nat.show(mean(si)), 1024n)) ++
       kv("instantaneous_output_kbps", fix2(Nat.show(mean(so)), 1024n)) ++ kv("instantaneous_input_repl_kbps", "0.00") ++
       kv("instantaneous_output_repl_kbps", "0.00") ++ kv("rejected_connections", "0") ++ kv("sync_full", "0") ++
-      kv("sync_partial_ok", "0") ++ kv("sync_partial_err", "0") ++ kv("expired_keys", "0") ++ kv("expired_stale_perc", "0.00") ++
+      kv("sync_partial_ok", "0") ++ kv("sync_partial_err", "0") ++ kv("expired_keys", Nat.show(expired)) ++ kv("expired_stale_perc", "0.00") ++
       kv("expired_time_cap_reached_count", "0") ++ kv("expire_cycle_cpu_milliseconds", "0") ++ kv("evicted_keys", "0") ++
       kv("evicted_clients", "0") ++ kv("total_eviction_exceeded_time", "0") ++ kv("current_eviction_exceeded_time", "0") ++
       kv("keyspace_hits", "0") ++ kv("keyspace_misses", "0") ++ kv("pubsub_channels", "0") ++ kv("pubsub_patterns", "0") ++
@@ -774,21 +807,21 @@ def join(xs: List<&2, String>, +acc: String) -> String:
 
 def on.server(on: Bool, +items: List<&2, C.CItem>, +i: Info) -> String:
   match on i:
-    case True{} IInfo{+b, +l, c, inst, pk, c0, a0, a, st}:
+    case True{} IInfo{+b, +l, c, inst, pk, c0, a0, a, st, ex}:
       sec.server(items, b, l)
     case False{} _:
       ""
 
 def on.clients(on: Bool, +items: List<&2, C.CItem>, +i: Info) -> String:
   match on i:
-    case True{} IInfo{b, +l, c, inst, pk, c0, a0, a, st}:
+    case True{} IInfo{b, +l, c, inst, pk, c0, a0, a, st, ex}:
       sec.clients(items, l)
     case False{} _:
       ""
 
 def on.memory(on: Bool, +items: List<&2, C.CItem>, +i: Info) -> String:
   match on i:
-    case True{} IInfo{+b, +l, c, inst, +pk, c0, a0, a, st}:
+    case True{} IInfo{+b, +l, c, inst, +pk, c0, a0, a, st, ex}:
       sec.memory(items, b, l, pk)
     case False{} _:
       ""
@@ -806,35 +839,35 @@ def boot.replid(+b: Boot) -> String:
 # a seed for the server's random numbers: its run id hashed
 def info.seed(+i: Info) -> U32:
   match i:
-    case IInfo{b, l, c, inst, pk, c0, a0, a, st}:
+    case IInfo{b, l, c, inst, pk, c0, a0, a, st, ex}:
       match b:
         case IBoot{os, pid, +run, replid, exe, conf, sysmem, start, rss0}:
           String.hash(run)
 
 def on.persistence(on: Bool, +items: List<&2, C.CItem>, +i: Info) -> String:
   match on i:
-    case True{} IInfo{+b, l, c, inst, pk, c0, +a0, +a, st}:
+    case True{} IInfo{+b, l, c, inst, pk, c0, +a0, +a, st, ex}:
       sec.persistence(items, boot.start(b), a0, a)
     case False{} _:
       ""
 
 def on.stats(on: Bool, +i: Info) -> String:
   match on i:
-    case True{} IInfo{b, +l, +c, +inst, pk, +c0, a0, a, +st}:
-      sec.stats.go(c, inst, Nat.sub(live.conns(l), c0), stats.total(st))
+    case True{} IInfo{b, +l, +c, +inst, pk, +c0, a0, a, +st, +ex}:
+      sec.stats.go(c, inst, Nat.sub(live.conns(l), c0), stats.total(st), exp.n(ex))
     case False{} _:
       ""
 
 def on.replication(on: Bool, +items: List<&2, C.CItem>, +i: Info) -> String:
   match on i:
-    case True{} IInfo{+b, l, c, inst, pk, c0, a0, a, st}:
+    case True{} IInfo{+b, l, c, inst, pk, c0, a0, a, st, ex}:
       sec.replication(items, boot.replid(b))
     case False{} _:
       ""
 
 def on.cpu(on: Bool, +i: Info) -> String:
   match on i:
-    case True{} IInfo{b, +l, c, inst, pk, c0, a0, a, st}:
+    case True{} IInfo{b, +l, c, inst, pk, c0, a0, a, st, ex}:
       sec.cpu(l)
     case False{} _:
       ""
@@ -848,14 +881,14 @@ def on.keyspace(on: Bool, +db: R.Db) -> String:
 
 def on.cmdstats(on: Bool, +i: Info) -> String:
   match on i:
-    case True{} IInfo{b, l, c, inst, pk, c0, a0, a, +st}:
+    case True{} IInfo{b, l, c, inst, pk, c0, a0, a, +st, ex}:
       "# Commandstats\r\n" ++ stats.cmds(st)
     case False{} _:
       ""
 
 def on.errstats(on: Bool, +i: Info) -> String:
   match on i:
-    case True{} IInfo{b, l, c, inst, pk, c0, a0, a, +st}:
+    case True{} IInfo{b, l, c, inst, pk, c0, a0, a, +st, ex}:
       "# Errorstats\r\n" ++ stats.errors(st)
     case False{} _:
       ""

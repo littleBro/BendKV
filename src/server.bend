@@ -333,6 +333,69 @@ def run_job(job: B.Job, outs: List<&2, Sigma<&2, &2, Chan(Ans), _ => Ans>>, +cn:
     case B.Mixed{cmds, +hs}:
       run_gen(outs, back, inb, gen.go(cmds, R.codes.of(hs), GRun{Nil{}, cn, srv, db}))
 
+# The sweep of expired keys
+# -------------------------
+# At each tick, when some key has a time, the actor sweeps the trie for
+# keys whose time has passed (R.reap: reap.want entries a round, from
+# where the last round stopped) and deletes the keys it found with DEL, a
+# batch like any other, at the group's time. While a round finds expired more than one in ten of the
+# entries it read, another one goes on from where it stopped, up to
+# reap.rounds of them, as Redis's sweep goes on while more than a tenth of
+# the keys it looked at had expired.
+def reap.want() -> Nat:
+  400n
+
+def reap.rounds() -> Nat:
+  10n
+
+# whether a round that stopped at next (0: it read the last bucket) and
+# deleted k keys is followed by another
+def reap.more(+next: Nat, +k: Nat) -> Bool:
+  Bool.and(Nat.is_lt(0n, next), Nat.is_lt(reap.want(), Nat.mul(10n, k)))
+
+# the keys the sweep deleted: those the database counted before it less
+# those it counts after
+def reap.gone(+before: Nat, +d: R.Db) -> Nat:
+  Nat.sub(before, R.db.n(d))
+
+# a round's outcome: whether another one follows, and the state after it
+type Rd is Data:
+  Rd{more: Bool, srv: S.Srv, db: R.Db}
+
+# a sweep starts only when some key has a time (Redis's sweep samples the
+# keys with a time alone): with none, a tick reads no entry
+def reap.start(srv: S.Srv, db: R.Db) -> Rd:
+  +d = db
+  Rd{Nat.is_lt(0n, R.db.x(d)), srv, d}
+
+def reap.del(srv: S.Srv, +next: Nat, ks: List<&2, String>, db: R.Db) -> Rd:
+  match ks:
+    case Nil{}:
+      Rd{False{}, S.srv.reaped(srv, next, 0n), db}
+    case Con{k, rest}:
+      +d0 = db
+      +n0 = R.db.n(d0)
+      +d = R.db_of(R.exec(R.Del{k <> rest}, d0))
+      +gone = reap.gone(n0, d)
+      Rd{reap.more(next, gone), S.srv.reaped(srv, next, gone), d}
+
+def reap.done(srv: S.Srv, r: R.Reap, db: R.Db) -> Rd:
+  match r:
+    case R.Reap{+next, ks}:
+      reap.del(srv, next, ks, db)
+
+def reap.round(srv: S.Srv, db: R.Db) -> Rd:
+  +d = db
+  +sv = srv
+  reap.done(sv, R.reap(d, S.srv.reap_at(sv), reap.want()), d)
+
+def reap.run(f: Nat, outs: List<&2, Sigma<&2, &2, Chan(Ans), _ => Ans>>, r: Rd) -> Run:
+  match f r:
+    case 1n+g Rd{True{}, srv, db}:
+      reap.run(g, outs, reap.round(srv, db))
+    case _ Rd{more, srv, db}:
+      Run{outs, srv, db}
+
 def run_req(q: Req, outs: List<&2, Sigma<&2, &2, Chan(Ans), _ => Ans>>, srv: S.Srv, db: R.Db) -> Run:
   match q:
     case Req{cn, job, back, +tl, +inb}:
@@ -340,7 +403,7 @@ def run_req(q: Req, outs: List<&2, Sigma<&2, &2, Chan(Ans), _ => Ans>>, srv: S.S
     case Facts{live}:
       Run{outs, S.srv.live(srv, live), db}
     case Tick{+ms}:
-      Run{outs, S.srv.tick(srv, ms), db}
+      reap.run(reap.rounds(), outs, reap.start(S.srv.tick(srv, ms), db))
     case Oops{}:
       Run{outs, S.srv.erred(srv, "ERR Protocol error"), db}
 
@@ -1136,6 +1199,43 @@ def group_job(job: B.Job, outs: List<&2, Sigma<&2, &2, Chan(Ans), _ => Ans>>, es
     case B.Mixed{cmds, +hs}:
       group_gen(outs, back, inb, lgen.go(cmds, R.codes.of(hs), LRun{Nil{}, es, cn, srv, db}))
 
+# a sweep of expired keys with the append-only file: its DEL is logged
+# as the batches' effects are (DEL of keys is its own effect)
+type LRd is Data:
+  LRd{more: Bool, es: List<&2, R.Cmd>, srv: S.Srv, db: R.Db}
+
+def lreap.start(es: List<&2, R.Cmd>, srv: S.Srv, db: R.Db) -> LRd:
+  +d = db
+  LRd{Nat.is_lt(0n, R.db.x(d)), es, srv, d}
+
+def lreap.del(es: List<&2, R.Cmd>, srv: S.Srv, +next: Nat, ks: List<&2, String>, db: R.Db) -> LRd:
+  match ks:
+    case Nil{}:
+      LRd{False{}, es, S.srv.reaped(srv, next, 0n), db}
+    case Con{+k, +rest}:
+      +d0 = db
+      +n0 = R.db.n(d0)
+      +d = R.db_of(R.exec(R.Del{k <> rest}, d0))
+      +gone = reap.gone(n0, d)
+      LRd{reap.more(next, gone), R.Del{k <> rest} <> es, S.srv.reaped(srv, next, gone), d}
+
+def lreap.done(es: List<&2, R.Cmd>, srv: S.Srv, r: R.Reap, db: R.Db) -> LRd:
+  match r:
+    case R.Reap{+next, ks}:
+      lreap.del(es, srv, next, ks, db)
+
+def lreap.round(es: List<&2, R.Cmd>, srv: S.Srv, db: R.Db) -> LRd:
+  +d = db
+  +sv = srv
+  lreap.done(es, sv, R.reap(d, S.srv.reap_at(sv), reap.want()), d)
+
+def lreap.run(f: Nat, outs: List<&2, Sigma<&2, &2, Chan(Ans), _ => Ans>>, r: LRd) -> Grp:
+  match f r:
+    case 1n+g LRd{True{}, es, srv, db}:
+      lreap.run(g, outs, lreap.round(es, srv, db))
+    case _ LRd{more, es, srv, db}:
+      Grp{outs, es, St{srv, db}}
+
 def group_req(q: Req, outs: List<&2, Sigma<&2, &2, Chan(Ans), _ => Ans>>, es: List<&2, R.Cmd>, st: St) -> Grp:
   match q st:
     case Req{cn, job, back, +tl, +inb} St{srv, db}:
@@ -1143,7 +1243,7 @@ def group_req(q: Req, outs: List<&2, Sigma<&2, &2, Chan(Ans), _ => Ans>>, es: Li
     case Facts{live} St{srv, db}:
       Grp{outs, es, St{S.srv.live(srv, live), db}}
     case Tick{+ms} St{srv, db}:
-      Grp{outs, es, St{S.srv.tick(srv, ms), db}}
+      lreap.run(reap.rounds(), outs, lreap.start(es, S.srv.tick(srv, ms), db))
     case Oops{} St{srv, db}:
       Grp{outs, es, St{S.srv.erred(srv, "ERR Protocol error"), db}}
 

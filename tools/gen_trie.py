@@ -183,22 +183,22 @@ def block_folds():
             "      1n+tsize(V, rest)"]
 
 # the scan of a node: its 16 subtries in order, each skipped whole when
-# it lies before the cursor
+# it lies before the cursor (or at or past the bound to)
 def block_scan():
     s = "s"
     for i, c in enumerate(cs):
         base = "base" if i == 0 else f"Nat.add(base, Nat.mul({i}n, q))"
         skip = f"Nat.is_le(Nat.add(base, Nat.mul({i + 1}n, q)), from)"
         skip = f"Bool.or({skip}, Nat.is_le(to, {base}))"
-        s = f"tscan(V, p, {c}, {skip}, {base}, q, from, to, now, all, {s})"
-    return ["def tscan(-V: Data, +d: Nat, +t: Trie<V>, skip: Bool, +base: Nat, +span: Nat, +from: Nat, +to: Nat, +now: Nat, +all: Bool, s: Scan) -> Scan:",
+        s = f"tscan(V, p, {c}, {skip}, {base}, q, from, to, now, all, dead, {s})"
+    return ["def tscan(-V: Data, +d: Nat, +t: Trie<V>, skip: Bool, +base: Nat, +span: Nat, +from: Nat, +to: Nat, +now: Nat, +all: Bool, +dead: Bool, s: Scan) -> Scan:",
             "  match d t skip s:",
             "    case _ _ True{} s:",
             "      s",
             "    case _ _ False{} Stop{at, acc}:",
             "      Stop{at, acc}",
             "    case 0n b False{} Scan{want, acc}:",
-            "      bscan(V, b, base, want, acc, now, all)",
+            "      bscan(V, b, base, want, acc, now, all, dead)",
             "    case 1n+p Tip{} False{} s:",
             "      s",
             f"    case 1n+p {node(cs)} False{{}} s:",

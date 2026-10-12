@@ -1,7 +1,7 @@
 # BendKV: what we found
 
 BendKV is a Redis-compatible key-value store written in Bend2, with its core proved
-against 52 laws. This file sums up in English what building it and making it fast
+against 53 laws. This file sums up in English what building it and making it fast
 showed us. The detailed record, with every table and measurement, is in Russian:
 [PERFORMANCE.md](PERFORMANCE.md) (performance, section by section) and
 [README.ru.md](../README.ru.md) (the project, the proofs, how to run). Where the work goes
@@ -15,7 +15,7 @@ connection's state and the server's), about 70 lines of batch hints, about 280 l
 append-only file, about 4,850 lines of handwritten proofs with a specification of about
 130 that they bridge to (section 3u), and about 1,700 lines of 16-way case splits written
 by a script ([`tools/gen_trie.py`](../tools/gen_trie.py)), not counting comments and
-blank lines. Bend checks the 52 laws in about 3 s; the BendTT kernel, whose soundness is
+blank lines. Bend checks the 53 laws in about 3 s; the BendTT kernel, whose soundness is
 proved in Lean, rechecks them in about 30 s. Among them: after any history,
 the server restores from its append-only file exactly the database it held, and from a
 file cut by a crash at any byte, the database it held after some prefix of its commands
@@ -1400,7 +1400,8 @@ the 1,729 that run in this mode (most of the others need `DEBUG`, off by default
 protocol, connections, the keyspace, strings, counters, introspection); with the
 statistics per command (section 3s), 127 and 106; with SCAN and RANDOMKEY (section 3t),
 135 and 109; with times to live (section 3v), 212, and 188 of the 315 in the units of
-what it has, `unit/expire` among them. Of the rest, 813 stop on a command BendKV does
+what it has, `unit/expire` among them; with the sweep of expired keys (section 3w), 213
+and 189. Of the rest, 813 stop on a command BendKV does
 not have (FUNCTION LOAD, ZADD, XADD, GEOADD, SADD, MULTI, LPUSH lead), 589 never run
 because their unit stopped earlier, and 42 fail on COMMAND GETKEYS of commands BendKV
 does not have or on RESP3. The unit-by-unit table and the
@@ -1691,7 +1692,7 @@ are read as `parseExtendedStringArgumentsOrReply` and
 `parseExtendedExpireArgumentsOrReply` read them, with the same errors in the same order.
 In Redis's test suite the step made 77 more tests pass (212 in all): `unit/expire` passes
 54 of the 59 that Redis passes (the other five need replication, LPUSH, TIME and the
-sweep below), `unit/type/string` 41 of 77 (the rest need GETRANGE, SETRANGE, the bit
+sweep of section 3w), `unit/type/string` 41 of 77 (the rest need GETRANGE, SETRANGE, the bit
 commands, LCS, MSETNX or other types).
 
 **The model.** An entry of the trie holds its key, its value and the time it expires at,
@@ -1701,9 +1702,9 @@ from the clock before each group of batches. A key whose time has passed is ther
 command: GET answers nil, EXISTS does not count it, SETNX sets it anew, KEYS, SCAN and
 RANDOMKEY skip it. No read deletes it: its entry stays until a write sets the key again
 or deletes it, and DBSIZE counts it until then. Redis deletes such a key when any
-command comes to it, and in a sweep from its cron; BendKV has no sweep yet. Reads that
-change nothing keep the laws of reads (`reads_keep_db`) and of commuting commands as
-they were.
+command comes to it, and in a sweep from its cron; BendKV's sweep came with the next
+step (section 3w). Reads that change nothing keep the laws of reads (`reads_keep_db`)
+and of commuting commands as they were.
 
 **Fourteen digits.** BendKV's integers have at most 14 digits, since a Nat holds
 2^48 − 1, and so do its times: a time from 1970 at or past 10^14 ms (the year 5138)
@@ -1767,6 +1768,37 @@ and INCR count the keys with a time.
 - **A proof the checker could not hold.** A pair of proofs written in place, `({==}, e)`,
   for a pair of equalities ran the checker out of memory; the same pair with its first
   half a named lemma checks at once.
+
+## 3w. The sweep of expired keys
+
+Redis deletes a key whose time has passed when a command comes to it, and in a sweep
+from its cron, ten times a second: it samples keys with a time, deletes the expired ones,
+and goes on while more than a tenth of what it sampled had expired. BendKV's database
+actor sweeps at each tick of its cron, also ten times a second, when some key has a time
+(the record counts them, section 3u). A round scans the trie
+from where the last one stopped, 400 entries at most, for keys whose time has passed (the
+scan of SCAN and RANDOMKEY, section 3t, with one more mode), and deletes them with DEL at
+the group's time, a batch like any other: the append-only file logs it, as Redis logs a
+DEL for each key it expires, so the laws of persistence cover the sweep as they cover
+any batch. While a round finds expired more than one in ten of the entries it read,
+another goes on, ten rounds at most. INFO's `expired_keys` counts the keys the sweeps
+deleted (CONFIG RESETSTAT counts them again), and `unit/expire`'s "Redis should actively
+expire keys incrementally" passes: 213 tests in all.
+
+**What is proved.** The keys a scan finds are checked again before DEL runs: a filter
+(`R.reap.keys`) keeps only those that are not there at now. One law follows
+(`reap_keeps`): whatever keys the scan found, the sweep deletes no key that is there.
+A key that is there is none of the filter's keys (key comparison is equality, and an
+equal key is there too), so DEL leaves it as it was (`frame`). The proof is four lemmas;
+the scan itself needs none, as nothing is proved of what it finds.
+
+**Cost.** None on a request's path: `make perfcheck` gives GET 3,086, SET 4,022 and INCR
+4,172 instructions (+0.1%, 0.0%, 0.0% against section 3v's). A sweep that finds nothing
+reads at most 400 entries ten times a second. The first version swept at every tick,
+keys with a time or not, and `make perfcheck` counted 14–19% more instructions per
+request: under callgrind the server runs some fifty times slower while its cron still
+ticks ten times a second, so each sweep's 400 entries fell on that many fewer requests.
+In a database with no key that has a time, a tick now reads nothing.
 
 ## 4. Where a request's time goes, and hiding the memory waits
 

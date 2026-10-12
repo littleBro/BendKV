@@ -153,6 +153,18 @@ def srv.tick(s: Srv, +ms: Nat) -> Srv:
     case Srv{pass, cfg, info, rng}:
       Srv{pass, cfg, I.info.tick(info, ms), rng}
 
+# the sweep of expired keys (redis.bend: reap): where the next one starts,
+# and a sweep that stopped at next having deleted k keys
+def srv.reap_at(+s: Srv) -> Nat:
+  match s:
+    case Srv{pass, cfg, +info, rng}:
+      I.info.reap_at(info)
+
+def srv.reaped(s: Srv, +next: Nat, +k: Nat) -> Srv:
+  match s:
+    case Srv{pass, cfg, info, rng}:
+      Srv{pass, cfg, I.info.reaped(info, next, k), rng}
+
 # Authentication
 # --------------
 # A client must authenticate when the server has a password; a client

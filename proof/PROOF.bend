@@ -7695,3 +7695,53 @@ def sg.top(+n: String, +v: String, +items: List<&2, C.CItem>, it: C.CItem, +nv: 
 
 def Laws.config_set_get(n, v, items, it, nv, items2, e1, e2, e3):
   sg.top(n, v, items, it, nv, items2)(e1)(e2)(e3)
+
+# The sweep of expired keys
+# =========================
+# A sweep deletes with DEL the keys R.reap.keys keeps, which are not there
+# at now: so a key that is there is none of them, and DEL leaves it as it
+# was (frame).
+
+# a key that is there, and a key equal to it, is there
+def reap_there(+t: KV.Trie<String>, +k: String, +j: String, +now: Nat, -y: KV.Item<String>, jk: {j == k : String}, e: {R.ent.live(now, KV.entry(String, t, j)) == Some{y} : Maybe<&2, KV.Item<String>>}) -> {Maybe.is_some(&2, KV.Item<String>, R.ent.live(now, KV.entry.at(String, t, k, KV.hash(k)))) == True{} : Bool}:
+  %entry_at_eq(String, t, k) : {Maybe.is_some(&2, KV.Item<String>, R.ent.live(now, _)) == True{} : Bool}
+  %jk : {Maybe.is_some(&2, KV.Item<String>, R.ent.live(now, KV.entry(String, t, _))) == True{} : Bool}
+  %Equal.sym(Maybe<&2, KV.Item<String>>, R.ent.live(now, KV.entry(String, t, j)), Some{y}, e) : {Maybe.is_some(&2, KV.Item<String>, _) == True{} : Bool}
+  {==}
+
+# a key the sweep keeps is not j, which is there
+def reap_ne(c: Bool, +t: KV.Trie<String>, +k: String, +j: String, +now: Nat, -y: KV.Item<String>, -r: Bool)
+  -> {c == KV.str_eq(j, k) : Bool}
+  -> {False{} == Maybe.is_some(&2, KV.Item<String>, R.ent.live(now, KV.entry.at(String, t, k, KV.hash(k)))) : Bool}
+  -> {R.ent.live(now, KV.entry(String, t, j)) == Some{y} : Maybe<&2, KV.Item<String>>}
+  -> {r == False{} : Bool}
+  -> {Bool.or(c, r) == False{} : Bool}:
+  match c:
+    case False{}:
+      ec => eb => e => ih => ih
+    case True{}:
+      ec => eb => e => ih => Empty.absurd({Bool.or(True{}, r) == False{} : Bool}, false_true(Equal.trans(Bool, False{}, Maybe.is_some(&2, KV.Item<String>, R.ent.live(now, KV.entry.at(String, t, k, KV.hash(k)))), True{}, eb, reap_there(t, k, j, now, y, Laws.key_eq_true(j, k, Equal.sym(Bool, True{}, KV.str_eq(j, k), ec)), e))))
+
+def reap_k(b: Bool, +k: String, +j: String, +t: KV.Trie<String>, +now: Nat, -y: KV.Item<String>, -ks: List<&2, String>)
+  -> {b == Maybe.is_some(&2, KV.Item<String>, R.ent.live(now, KV.entry.at(String, t, k, KV.hash(k)))) : Bool}
+  -> {Laws.any_key(j, ks) == False{} : Bool}
+  -> {R.ent.live(now, KV.entry(String, t, j)) == Some{y} : Maybe<&2, KV.Item<String>>}
+  -> {Laws.any_key(j, R.reap.put(b, k, ks)) == False{} : Bool}:
+  match b:
+    case True{}:
+      eb => ih => e => ih
+    case False{}:
+      eb => ih => e => reap_ne(KV.str_eq(j, k), t, k, j, now, y, Laws.any_key(j, ks))({==})(eb)(e)(ih)
+
+# none of the keys the sweep keeps is j, which is there
+def reap_none(ks: List<&2, String>, +t: KV.Trie<String>, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>, +j: String, -y: KV.Item<String>) -> {R.ent.live(now, KV.entry(String, t, j)) == Some{y} : Maybe<&2, KV.Item<String>>} -> {Laws.any_key(j, R.reap.keys(ks, R.Db{t, n, x, now, rr})) == False{} : Bool}:
+  match ks:
+    case Nil{}:
+      e => {==}
+    case Con{+k, +rest}:
+      +e => reap_k(Maybe.is_some(&2, KV.Item<String>, R.ent.live(now, KV.entry.at(String, t, k, KV.hash(k)))), k, j, t, now, y, R.reap.keys(rest, R.Db{t, n, x, now, rr}))({==})(reap_none(rest, t, n, x, now, rr, j, y)(e))(e)
+
+def Laws.reap_keeps(ks, db, j, y, e):
+  match db:
+    case R.Db{+t, +n, +x, +now, +rr}:
+      Laws.frame(R.Del{R.reap.keys(ks, R.Db{t, n, x, now, rr})}, R.Db{t, n, x, now, rr}, j, reap_none(ks, t, n, x, now, rr, j, y)(e))

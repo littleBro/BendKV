@@ -33,15 +33,15 @@ make suite REDIS_SRC=../redis      # both runs and the table, in build/suite/
 ## The result
 
 Redis 7.0.15, October 2026. Of the 1,656 tests Redis passes in this mode, BendKV passes
-**212 (12.8%)**; of the 315 in the units of what BendKV has, 188 (60%). Times to live
-(EXPIRE and its kin, TTL and PTTL, SET's options, GETEX, GETDEL) brought 77 of them:
-unit/expire passes 54 of its 59 tests (the other 5 need replication, LPUSH, TIME, and
-the active expiry of keys), unit/type/string 41 of 77 (the rest need GETRANGE, SETRANGE,
+**213 (12.9%)**; of the 315 in the units of what BendKV has, 189 (60%). Times to live
+(EXPIRE and its kin, TTL and PTTL, SET's options, GETEX, GETDEL) and the sweep of
+expired keys brought 78 of them: unit/expire passes 55 of its 59 tests (the other 4 need
+replication, LPUSH and TIME), unit/type/string 41 of 77 (the rest need GETRANGE, SETRANGE,
 GETBIT, SETBIT, LCS, MSETNX, or other types).
 
 | area | units | Redis passes | BendKV passes |
 |---|---|---:|---:|
-| what BendKV has: the protocol, connections, the keyspace, strings, counters, times to live, introspection | protocol, quit, keyspace, type/string, type/incr, expire, introspection, introspection-2, other, info-command | 315 | **188** |
+| what BendKV has: the protocol, connections, the keyspace, strings, counters, times to live, introspection | protocol, quit, keyspace, type/string, type/incr, expire, introspection, introspection-2, other, info-command | 315 | **189** |
 | data types, not yet | type/hash, type/list, list-2, list-3, type/set, type/zset, geo, hyperloglog, bitops, bitfield, sort, scan, dump, lazyfree, violations | 910 | 20 |
 | transactions, pub/sub, client-side caching, CLIENT PAUSE, the latency monitor, the slow log, the query buffer, not yet | multi, pubsub, tracking, pause, latency-monitor, slowlog, querybuf | 127 | 0 |
 | out of scope: Lua scripts, functions, streams | scripting, functions, type/stream, type/stream-cgroups | 304 | 4 |
@@ -62,7 +62,7 @@ pubsubshard, shutdown, tls, type/list-common, wait):
 | unit/bitfield | 16 | 16 | 0 |
 | unit/bitops | 45 | 45 | 0 |
 | unit/dump | 12 | 11 | 1 |
-| unit/expire | 65 | 59 | 54 |
+| unit/expire | 65 | 59 | 55 |
 | unit/functions | 94 | 90 | 2 |
 | unit/geo | 59 | 59 | 0 |
 | unit/hyperloglog | 20 | 20 | 0 |
@@ -96,9 +96,9 @@ pubsubshard, shutdown, tls, type/list-common, wait):
 | unit/type/string | 77 | 77 | 41 |
 | unit/type/zset | 291 | 289 | 10 |
 | unit/violations | 1 | 1 | 0 |
-| **all** | **1729** | **1656** | **212 (12.8%)** |
+| **all** | **1729** | **1656** | **213 (12.9%)** |
 
-## Why the other 1,444 fail
+## Why the other 1,443 fail
 
 - **813 stop on a command BendKV does not have.** By the number of tests each one stops:
   FUNCTION LOAD 121, ZADD 117, XADD 60, GEOADD 37, SADD 31, MULTI 23, LPUSH 21, PFADD 19,
@@ -113,11 +113,9 @@ pubsubshard, shutdown, tls, type/list-common, wait):
   comes because the command before it is missing (pubsub: PSUBSCRIBE after CLIENT REPLY
   OFF; scripting: the second line of FUNCTION LOAD's reply, read raw). One test runs
   only on a server that names jemalloc as its allocator.
-- **42 fail with another error**, all of them in what BendKV does not have yet: COMMAND
-  GETKEYS and COMMAND INFO of commands BendKV does not have (19), RESP3 (16), 6 that
-  fail because a command before them is missing, and the active expiry of keys (1):
-  BendKV takes an expired key out only when a write comes to it, and has no sweep of
-  expired keys yet. (Before times to live, SET's options failed 30 more tests here,
+- **41 fail with another error**, all of them in what BendKV does not have yet: COMMAND
+  GETKEYS and COMMAND INFO of commands BendKV does not have (19), RESP3 (16), and 6 that
+  fail because a command before them is missing. (Before times to live, SET's options failed 30 more tests here,
   answered `ERR syntax error`. INFO's statistics per command, which `info-command` looked
   for, made 3 more tests pass; SCAN and RANDOMKEY pass all their tests on keys: SCAN's
   basic iteration, COUNT, MATCH, TYPE, and its guarantee under a load of writes, and
@@ -125,7 +123,7 @@ pubsubshard, shutdown, tls, type/list-common, wait):
 
 So the tests are where the plan goes next: the rest of the commands on strings and keys
 (GETRANGE, SETRANGE, MSETNX, the bit commands, LCS, COPY, RENAME, TOUCH, TIME, OBJECT)
-and the active expiry of keys, then the data types one by one (910 tests), RESP3, which
+and several databases, then the data types one by one (910 tests), RESP3, which
 two units need before their second half runs, and MULTI/EXEC and pub/sub. Scripts,
 functions and streams (304 tests) stay out of scope.
 

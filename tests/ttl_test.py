@@ -7,8 +7,10 @@ within a second; KEYS and SCAN answer in their own order.
 
     python3 tests/ttl_test.py --bendkv 6380 --redis 6390
 
-DBSIZE is not compared once a key has expired: Redis deletes an expired
-key when a command comes to it, BendKV only when a write comes to it.
+DBSIZE is compared only once both servers' sweeps of expired keys have
+run, a second after the keys expired: before that, Redis deletes an
+expired key when a command comes to it, BendKV only when a write or its
+sweep comes to it.
 """
 import argparse
 import sys
@@ -110,6 +112,15 @@ CASES = [
     ], 400, [
         [b"MGET", b"a", b"b", b"c", b"d", b"e", b"f", b"g", b"h", b"i", b"j", b"k", b"l", b"m", b"n"],
         [b"KEYS", b"*"],
+    ]),
+    ("the sweep of expired keys", [
+        [b"SET", b"a", b"1", b"PX", b"100"],
+        [b"SET", b"b", b"1", b"PX", b"100"],
+        [b"PSETEX", b"c", b"100", b"x"],
+        [b"SET", b"d", b"1"],
+        [b"SET", b"e", b"1", b"EX", b"100"],
+    ], 1000, [
+        [b"DBSIZE"], [b"KEYS", b"*"], [b"EXISTS", b"a", b"b", b"c", b"d", b"e"],
     ]),
     ("times in the past", [
         [b"SET", b"a", b"1"], [b"EXPIREAT", b"a", b"1"],
