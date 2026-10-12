@@ -1786,7 +1786,7 @@ def zt.size(+t: ZTree) -> Nat:
   match t:
     case ZTip{}:
       0n
-    case ZBin{+n, m, d, l, r}:
+    case ZBin{n, m, d, l, r}:
       n
 
 # the size of t's left side (0 for a tip)
@@ -2022,7 +2022,9 @@ def zt.nth(+t: ZTree, +i: Nat) -> ZEl:
 # (ZGeS: Redis's zslValueGteMin) or at most an upper one (ZLeS:
 # zslValueLteMax), its member at least a lower bound (ZGeL:
 # zslLexValueGteMin) or at most an upper one (ZLeL: zslLexValueLteMax),
-# or the opposite of a test (ZNot). A bound of scores is a score, left
+# or past an upper one (ZGtS, ZGtL: the opposite tests). A test holds no
+# test of its own, so it is a few words passed as they are, never a node
+# that a read of a tree would have to own. A bound of scores is a score, left
 # out of the range when ex ('(' before it); a bound of members is '-'
 # (before every member), '+' (after every one), or a member, taken in
 # ('[' before it) or left out ('('), as Redis reads one (sdscmplex).
@@ -2041,7 +2043,8 @@ type ZP is Data:
   ZLeS{b: ZSB}
   ZGeL{b: ZLB}
   ZLeL{b: ZLB}
-  ZNot{p: ZP}
+  ZGtS{b: ZSB}
+  ZGtL{b: ZLB}
 
 def zsb.ge(+d: F.F64, +b: ZSB) -> Bool:
   match b:
@@ -2094,8 +2097,10 @@ def zp.ok(+p: ZP, +m: String, +d: F.F64) -> Bool:
       zlb.ge(m, b)
     case ZLeL{+b}:
       zlb.le(m, b)
-    case ZNot{+q}:
-      Bool.not(zp.ok(q, m, d))
+    case ZGtS{+b}:
+      Bool.not(zsb.le(d, b))
+    case ZGtL{+b}:
+      Bool.not(zlb.le(m, b))
 
 # whether p holds of t's root (True for a tip)
 def zt.p_at(+t: ZTree, +p: ZP) -> Bool:
@@ -2126,12 +2131,17 @@ def zt.before(+t: ZTree, +p: ZP) -> Nat:
 def zt.meets(+lo: Nat, +n: Nat, +a: Nat, +b: Nat) -> Bool:
   Bool.and(Nat.is_lt(0n, n), Bool.and(Nat.is_lt(lo, b), Nat.is_lt(a, Nat.add(lo, n))))
 
-def zt.slice.mid(take: Bool, +m: String, +d: F.F64, acc: List<&2, ZEl>) -> List<&2, ZEl>:
+def zt.slice.mid(take: Bool, x: ZEl, acc: List<&2, ZEl>) -> List<&2, ZEl>:
   match take:
     case True{}:
-      ZEl{m, d} <> acc
+      x <> acc
     case False{}:
       acc
+
+# a node's element, made before the walk goes on: a field of a node read
+# past a call would have the walk own every node it reads
+def zt.el(+m: String, +d: F.F64) -> ZEl:
+  ZEl{m, d}
 
 # the elements of t at the ranks from a to b - 1, in order, before acc;
 # t's first element is at rank base, and hit is whether t's ranks meet
@@ -2145,8 +2155,9 @@ def zt.slice.go(+t: ZTree, hit: Bool, +a: Nat, +b: Nat, +base: Nat, acc: List<&2
     case ZBin{n, +k, +e, +l, +r} True{}:
       +me = Nat.add(base, zt.size(l))
       +rb = Nat.add(me, 1n)
+      x = zt.el(k, e)
       acc2 = zt.slice.go(r, zt.meets(rb, zt.size(r), a, b), a, b, rb, acc)
-      acc3 = zt.slice.mid(Bool.and(Nat.is_le(a, me), Nat.is_lt(me, b)), k, e, acc2)
+      acc3 = zt.slice.mid(Bool.and(Nat.is_le(a, me), Nat.is_lt(me, b)), x, acc2)
       zt.slice.go(l, zt.meets(base, zt.size(l), a, b), a, b, base, acc3)
 
 def zt.slice(+t: ZTree, +a: Nat, +b: Nat) -> List<&2, ZEl>:
@@ -2162,8 +2173,9 @@ def zt.rslice.go(+t: ZTree, hit: Bool, +a: Nat, +b: Nat, +base: Nat, acc: List<&
     case ZBin{n, +k, +e, +l, +r} True{}:
       +me = Nat.add(base, zt.size(l))
       +rb = Nat.add(me, 1n)
+      x = zt.el(k, e)
       acc2 = zt.rslice.go(l, zt.meets(base, zt.size(l), a, b), a, b, base, acc)
-      acc3 = zt.slice.mid(Bool.and(Nat.is_le(a, me), Nat.is_lt(me, b)), k, e, acc2)
+      acc3 = zt.slice.mid(Bool.and(Nat.is_le(a, me), Nat.is_lt(me, b)), x, acc2)
       zt.rslice.go(r, zt.meets(rb, zt.size(r), a, b), a, b, rb, acc3)
 
 def zt.rslice(+t: ZTree, +a: Nat, +b: Nat) -> List<&2, ZEl>:
@@ -2172,6 +2184,17 @@ def zt.rslice(+t: ZTree, +a: Nat, +b: Nat) -> List<&2, ZEl>:
 # all the elements of t, in order
 def zt.all(+t: ZTree) -> List<&2, ZEl>:
   zt.slice(t, 0n, zt.size(t))
+
+# all the elements of a tree its caller owns, in order, before acc,
+# taking it apart (a tree made for the purpose, as a STORE's): the reads
+# above borrow the trees they read, and a tree computed for them alone
+# would have them own every node they read
+def zt.drain(t: ZTree, acc: List<&2, ZEl>) -> List<&2, ZEl>:
+  match t:
+    case ZTip{}:
+      acc
+    case ZBin{n, m, d, l, r}:
+      zt.drain(l, ZEl{m, d} <> zt.drain(r, acc))
 
 # m's score, when t holds m (got: the score found so far): a walk along
 # all its elements in order, as along a listpack
@@ -2218,8 +2241,15 @@ def zset.tree(+z: Zset) -> ZTree:
     case ZBig{+tr, t}:
       tr
 
+# (a field of z, which a read borrows, not a tree computed from it: a
+# computed tree passed to zt.size would have every reader of a size own
+# the node it reads, and copy it when the tree shares it)
 def zset.len(+z: Zset) -> Nat:
-  zt.size(zset.tree(z))
+  match z:
+    case ZSmall{tr}:
+      zt.size(tr)
+    case ZBig{tr, t}:
+      zt.size(tr)
 
 def zset.is_small(+z: Zset) -> Bool:
   match z:
@@ -2270,12 +2300,35 @@ def zset.set(z: Zset, +m: String, +old: F.F64, +d: F.F64) -> Zset:
 
 # the elements of z at the ranks from a to b - 1, in order (last first
 # when rev)
-def zset.slice(rev: Bool, +z: Zset, +a: Nat, +b: Nat) -> List<&2, ZEl>:
+def zset.slice.of(rev: Bool, +t: ZTree, +a: Nat, +b: Nat) -> List<&2, ZEl>:
   match rev:
     case True{}:
-      zt.rslice(zset.tree(z), a, b)
+      zt.rslice(t, a, b)
     case False{}:
-      zt.slice(zset.tree(z), a, b)
+      zt.slice(t, a, b)
+
+def zset.slice(rev: Bool, +z: Zset, +a: Nat, +b: Nat) -> List<&2, ZEl>:
+  match z:
+    case ZSmall{tr}:
+      zset.slice.of(rev, tr, a, b)
+    case ZBig{tr, t}:
+      zset.slice.of(rev, tr, a, b)
+
+# all the elements of z, in order
+def zset.all(+z: Zset) -> List<&2, ZEl>:
+  match z:
+    case ZSmall{tr}:
+      zt.all(tr)
+    case ZBig{tr, t}:
+      zt.all(tr)
+
+# how many elements of z come before (d, m), which it holds
+def zset.rank(+z: Zset, +m: String, +d: F.F64) -> Nat:
+  match z:
+    case ZSmall{tr}:
+      zt.rank(tr, m, d)
+    case ZBig{tr, t}:
+      zt.rank(tr, m, d)
 
 # z without the elements xs, which it holds
 def zset.dels(xs: List<&2, ZEl>, z: Zset) -> Zset:
