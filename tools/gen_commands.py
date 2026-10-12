@@ -26,7 +26,9 @@
 # numbers, its name, its arity from the same JSON (the statistics count a
 # call with the wrong number of arguments as refused only when it fails
 # Redis's own check of the arity), whether its calls may fail as they run,
-# and the word each code rides in (twelve bits, six of them set).
+# and the word each code rides in (twelve bits, six of them set). The
+# fourth writes there how a request's name finds its command (Step 4
+# below), from the same numbers.
 #
 # The descriptions are data from Redis 7.0.15 (src/commands/*.json, BSD
 # 3-clause, Copyright (c) 2009-2012 Salvatore Sanfilippo and Redis
@@ -257,8 +259,9 @@ def generate():
 # ----------------------------
 # INFO's statistics count each command and subcommand by a key: the
 # commands in the order of their numbers in the parser (redis.bend:
-# cmd_id), then the subcommands of each container in the order of their
-# own (client_id, function_id, config_id, command_id); 0 is none. What a
+# parse_id, parse_sess), then the subcommands of each container in the
+# order of their own (client_id, function_id, config_id, command_id); 0 is
+# none. What a
 # call counts as is a code, 4 times its key plus its class (0 runs, 1 is
 # refused, 2 fails as it parses), and a request carries its code as a
 # word of twelve bits with six of them set (the code-th such word, in
@@ -309,6 +312,22 @@ def numbering(src, fn):
         out[name.lower()] = int(n)
     return out
 
+# the parser's numbers of its commands: each case of parse_id, and of
+# parse_sess from 100 on, is the number of the command its comment names
+def parser_numbers(src):
+    out = {}
+    for fn in ("parse_id", "parse_sess"):
+        a = src.index("\ndef %s(" % fn)
+        b = src.index("\ndef ", a + 1)
+        for n, name in re.findall(r"\n    case (\d+)n:  # ([A-Z][A-Z_]*)", src[a:b]):
+            if name.lower() in out or int(n) in out.values():
+                raise SystemExit("gen_commands.py: %s numbers %s twice" % (fn, name))
+            out[name.lower()] = int(n)
+    if set(out) != set(COMMANDS):
+        raise SystemExit("gen_commands.py: the parser and COMMANDS differ on "
+                         + ", ".join(sorted(set(out) ^ set(COMMANDS))))
+    return out
+
 def arities(facts):
     out = {}
     for name, c in facts["commands"].items():
@@ -321,7 +340,7 @@ def arities(facts):
 WORDS = [w for w in range(1 << 12) if bin(w).count("1") == 6]
 
 def stats_keys(src):
-    tops = numbering(src, "cmd_id")
+    tops = parser_numbers(src)
     keys = [(n, "top", i) for n, i in sorted(tops.items(), key=lambda x: x[1])]
     for cont, fn in CONTAINERS.items():
         if cont not in tops:
@@ -396,8 +415,46 @@ def stats_block(src, facts):
         out += ["def stat.mark.%s() -> U32:" % name, "  %d" % (WORDS[4 * k] << 20), ""]
     return "\n".join(out[:-1]) + "\n"
 
-def generate_stats():
+# Step 4: the parser's numbers -> dispatch
+# ----------------------------------------
+# A request's name, in upper case, finds its command's number in the
+# parser with cmd_id: by the name's length, then by its first letter, then
+# with String.eq against the few names left (eight at most of Redis's 241
+# commands). The letter goes by its place in the alphabet, A as 1, so that
+# no match names a number past 26 (a match on a number tests each one from
+# 0 up to its largest case). The block between "# BEGIN gen_commands:
+# dispatch" and "# END gen_commands: dispatch" in src/redis.bend holds
+# cmd_id and a function for each length (cmd_id.lN).
+
+DBEGIN, DEND = "# BEGIN gen_commands: dispatch\n", "# END gen_commands: dispatch\n"
+
+def dispatch_block(nums):
+    lens = {}
+    for name, n in nums.items():
+        up = name.upper()
+        if not "A" <= up[0] <= "Z":
+            raise SystemExit("gen_commands.py: a name that starts with no letter: " + up)
+        lens.setdefault(len(up), {}).setdefault(ord(up[0]) - 64, []).append((n, up))
+    out = []
+    for l in sorted(lens):
+        out += ["def cmd_id.l%d(+n: String, c: Nat) -> Nat:" % l, "  match c:"]
+        for c in sorted(lens[l]):
+            ns = sorted(lens[l][c])
+            out.append("    case %dn:  # %s" % (c, chr(64 + c)))
+            out += ["      Bool.pick(Nat, String.eq(n, %s), %dn," % (bstr(up), n) for n, up in ns]
+            out[-1] += " 0n" + ")" * len(ns)
+        out += ["    case _:", "      0n", ""]
+    out += ["def cmd_id(+n: String, len: Nat) -> Nat:", "  match len:"]
+    for l in sorted(lens):
+        out += ["    case %dn:" % l,
+                "      cmd_id.l%d(n, Nat.sub(U32.to_nat(String.code_at(n, 0n)), 64n))" % l]
+    out += ["    case _:", "      0n"]
+    return "\n".join(out) + "\n"
+
+def generate_redis():
     src = REDIS.read_text()
+    a, b = src.index(DBEGIN) + len(DBEGIN), src.index(DEND)
+    src = src[:a] + dispatch_block(parser_numbers(src)) + src[b:]
     a, b = src.index(SBEGIN) + len(SBEGIN), src.index(SEND)
     return src[:a] + stats_block(src, json.loads(JSON.read_text())) + src[b:]
 
@@ -407,10 +464,10 @@ if __name__ == "__main__":
     elif sys.argv[1:] == ["--check"]:
         if generate() != BEND.read_text():
             raise SystemExit("gen_commands.py: src/command.bend is out of date; run tools/gen_commands.py")
-        if generate_stats() != REDIS.read_text():
+        if generate_redis() != REDIS.read_text():
             raise SystemExit("gen_commands.py: src/redis.bend is out of date; run tools/gen_commands.py")
     elif sys.argv[1:] == []:
         BEND.write_text(generate())
-        REDIS.write_text(generate_stats())
+        REDIS.write_text(generate_redis())
     else:
         raise SystemExit("usage: gen_commands.py [--extract | --check]")

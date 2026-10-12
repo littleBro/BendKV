@@ -2450,6 +2450,26 @@ compared with Redis's), lists in the differential test, in the numbers test, in 
 append-only files (both scripts among them) and in the restarts, in `tests/aof_check.bend`,
 and COMMAND GETKEYS of LMPOP, LMOVE and the others in the test of COMMAND.
 
+## 3zi. A dispatch by length, then by first letter
+
+A request's name finds its command by a number (`cmd_id`), and each type of value adds
+names: with lists, INCR's length (four letters) held 27 of them, and each was compared
+with the name (a chain of `Bool.pick` computes all of them; for a name of up to six bytes
+a comparison is one of words). `tools/gen_commands.py` now writes `cmd_id` from the
+parser's own cases, each `case N:` of `parse_id` and `parse_sess` naming its command in a
+comment: a match on the name's length, then on its first letter (by its place in the
+alphabet, so that no match names a number past 26), then `String.eq` against the few
+names left, eight at most of Redis's 241 commands. The numbers and the dispatch can no
+longer disagree, and a new command needs its case in the parser and its name in the
+generator's list.
+
+**Cost** (callgrind, 20,000 requests of redis-benchmark at pipeline 16, as `make
+perfcheck` counts them): INCR 4,615 instructions to 4,475 (−3.0%, 0.5% under the
+guard's baseline again), LPOP −1.6%, LPUSH −1.0%, HSET −0.7%, MSET −0.5%. GET and SET,
+whose length held five names, stay where they were (3,295 and 4,289): a lookup by letter
+costs about what four comparisons of words did. The proofs check as before (`make
+verdict`, 26.5 s): `R.parse` of a literal name reduces through the new matches.
+
 ## 4. Where a request's time goes, and hiding the memory waits
 
 With the eight patches, BendKV ran fewer instructions on GET and SET than Redis, missed

@@ -2769,126 +2769,245 @@ def parse_lmpop(args: List<&2, String>) -> Cmd:
     case _:
       e_arity("lmpop")
 
-# A command's name, in upper case, picks how its arguments parse. The
-# name's length narrows it down to a few names, which cmd_id compares with
-# it whole: String.eq with a literal is one memcmp, cheap enough that
-# Bool.pick computes all of them. parse_id goes by the name's number, 0
-# for a name no command has, and has the name as the client sent it, for
-# the error about an unknown one.
-def cmd_id(+n: String, len: Nat) -> Nat:
-  match len:
-    case 3n:
-      Bool.pick(Nat, String.eq(n, "GET"), 3n,
-      Bool.pick(Nat, String.eq(n, "SET"), 4n,
-      Bool.pick(Nat, String.eq(n, "DEL"), 7n,
-      Bool.pick(Nat, String.eq(n, "TTL"), 32n,
-      Bool.pick(Nat, String.eq(n, "LCS"), 116n, 0n)))))
-    case 4n:
-      Bool.pick(Nat, String.eq(n, "PING"), 1n,
+# A command's name, in upper case, picks how its arguments parse: cmd_id
+# gives the name's number in the parser (parse_id, from 100 on
+# parse_sess), 0 for a name no command has, and parse_id has the name as
+# the client sent it, for the error about an unknown one.
+# tools/gen_commands.py writes cmd_id from the parser's cases, each of
+# which names its command in a comment: the name's length, then its first
+# letter (cmd_id.lN, the letter by its place in the alphabet) narrow it
+# down to a few names, which String.eq compares with it whole: with a
+# literal that is one memcmp (one comparison of words up to six bytes),
+# cheap enough that Bool.pick computes all of them.
+
+# BEGIN gen_commands: dispatch
+def cmd_id.l3(+n: String, c: Nat) -> Nat:
+  match c:
+    case 4n:  # D
+      Bool.pick(Nat, String.eq(n, "DEL"), 7n, 0n)
+    case 7n:  # G
+      Bool.pick(Nat, String.eq(n, "GET"), 3n, 0n)
+    case 12n:  # L
+      Bool.pick(Nat, String.eq(n, "LCS"), 116n, 0n)
+    case 19n:  # S
+      Bool.pick(Nat, String.eq(n, "SET"), 4n, 0n)
+    case 20n:  # T
+      Bool.pick(Nat, String.eq(n, "TTL"), 32n, 0n)
+    case _:
+      0n
+
+def cmd_id.l4(+n: String, c: Nat) -> Nat:
+  match c:
+    case 1n:  # A
+      Bool.pick(Nat, String.eq(n, "AUTH"), 102n, 0n)
+    case 3n:  # C
+      Bool.pick(Nat, String.eq(n, "COPY"), 115n, 0n)
+    case 4n:  # D
+      Bool.pick(Nat, String.eq(n, "DECR"), 11n, 0n)
+    case 5n:  # E
       Bool.pick(Nat, String.eq(n, "ECHO"), 2n,
-      Bool.pick(Nat, String.eq(n, "INCR"), 10n,
-      Bool.pick(Nat, String.eq(n, "DECR"), 11n,
-      Bool.pick(Nat, String.eq(n, "MGET"), 16n,
-      Bool.pick(Nat, String.eq(n, "MSET"), 17n,
-      Bool.pick(Nat, String.eq(n, "KEYS"), 21n,
-      Bool.pick(Nat, String.eq(n, "SCAN"), 22n,
-      Bool.pick(Nat, String.eq(n, "TYPE"), 25n,
-      Bool.pick(Nat, String.eq(n, "AUTH"), 102n,
-      Bool.pick(Nat, String.eq(n, "QUIT"), 103n,
-      Bool.pick(Nat, String.eq(n, "INFO"), 108n,
-      Bool.pick(Nat, String.eq(n, "MOVE"), 112n,
-      Bool.pick(Nat, String.eq(n, "PTTL"), 33n,
-      Bool.pick(Nat, String.eq(n, "TIME"), 113n,
-      Bool.pick(Nat, String.eq(n, "COPY"), 115n,
+      Bool.pick(Nat, String.eq(n, "EVAL"), 65n, 0n))
+    case 8n:  # H
       Bool.pick(Nat, String.eq(n, "HSET"), 51n,
       Bool.pick(Nat, String.eq(n, "HGET"), 53n,
       Bool.pick(Nat, String.eq(n, "HDEL"), 56n,
-      Bool.pick(Nat, String.eq(n, "HLEN"), 57n,
-      Bool.pick(Nat, String.eq(n, "EVAL"), 65n,
+      Bool.pick(Nat, String.eq(n, "HLEN"), 57n, 0n))))
+    case 9n:  # I
+      Bool.pick(Nat, String.eq(n, "INCR"), 10n,
+      Bool.pick(Nat, String.eq(n, "INFO"), 108n, 0n))
+    case 11n:  # K
+      Bool.pick(Nat, String.eq(n, "KEYS"), 21n, 0n)
+    case 12n:  # L
       Bool.pick(Nat, String.eq(n, "LPOP"), 70n,
-      Bool.pick(Nat, String.eq(n, "RPOP"), 71n,
       Bool.pick(Nat, String.eq(n, "LLEN"), 72n,
       Bool.pick(Nat, String.eq(n, "LSET"), 75n,
       Bool.pick(Nat, String.eq(n, "LREM"), 77n,
-      Bool.pick(Nat, String.eq(n, "LPOS"), 79n, 0n)))))))))))))))))))))))))))
-    case 5n:
-      Bool.pick(Nat, String.eq(n, "SETNX"), 5n,
-      Bool.pick(Nat, String.eq(n, "HELLO"), 101n,
-      Bool.pick(Nat, String.eq(n, "RESET"), 104n,
-      Bool.pick(Nat, String.eq(n, "SETEX"), 23n,
-      Bool.pick(Nat, String.eq(n, "GETEX"), 26n,
-      Bool.pick(Nat, String.eq(n, "TOUCH"), 44n,
-      Bool.pick(Nat, String.eq(n, "BITOP"), 48n,
+      Bool.pick(Nat, String.eq(n, "LPOS"), 79n, 0n)))))
+    case 13n:  # M
+      Bool.pick(Nat, String.eq(n, "MGET"), 16n,
+      Bool.pick(Nat, String.eq(n, "MSET"), 17n,
+      Bool.pick(Nat, String.eq(n, "MOVE"), 112n, 0n)))
+    case 16n:  # P
+      Bool.pick(Nat, String.eq(n, "PING"), 1n,
+      Bool.pick(Nat, String.eq(n, "PTTL"), 33n, 0n))
+    case 17n:  # Q
+      Bool.pick(Nat, String.eq(n, "QUIT"), 103n, 0n)
+    case 18n:  # R
+      Bool.pick(Nat, String.eq(n, "RPOP"), 71n, 0n)
+    case 19n:  # S
+      Bool.pick(Nat, String.eq(n, "SCAN"), 22n, 0n)
+    case 20n:  # T
+      Bool.pick(Nat, String.eq(n, "TYPE"), 25n,
+      Bool.pick(Nat, String.eq(n, "TIME"), 113n, 0n))
+    case _:
+      0n
+
+def cmd_id.l5(+n: String, c: Nat) -> Nat:
+  match c:
+    case 2n:  # B
+      Bool.pick(Nat, String.eq(n, "BITOP"), 48n, 0n)
+    case 7n:  # G
+      Bool.pick(Nat, String.eq(n, "GETEX"), 26n, 0n)
+    case 8n:  # H
       Bool.pick(Nat, String.eq(n, "HMGET"), 54n,
       Bool.pick(Nat, String.eq(n, "HMSET"), 55n,
       Bool.pick(Nat, String.eq(n, "HKEYS"), 60n,
       Bool.pick(Nat, String.eq(n, "HVALS"), 61n,
       Bool.pick(Nat, String.eq(n, "HSCAN"), 64n,
+      Bool.pick(Nat, String.eq(n, "HELLO"), 101n, 0n))))))
+    case 12n:  # L
       Bool.pick(Nat, String.eq(n, "LPUSH"), 66n,
-      Bool.pick(Nat, String.eq(n, "RPUSH"), 67n,
       Bool.pick(Nat, String.eq(n, "LTRIM"), 78n,
       Bool.pick(Nat, String.eq(n, "LMOVE"), 80n,
-      Bool.pick(Nat, String.eq(n, "LMPOP"), 82n, 0n)))))))))))))))))
-    case 6n:
-      Bool.pick(Nat, String.eq(n, "GETSET"), 6n,
-      Bool.pick(Nat, String.eq(n, "UNLINK"), 8n,
-      Bool.pick(Nat, String.eq(n, "EXISTS"), 9n,
-      Bool.pick(Nat, String.eq(n, "INCRBY"), 12n,
-      Bool.pick(Nat, String.eq(n, "DECRBY"), 13n,
-      Bool.pick(Nat, String.eq(n, "APPEND"), 14n,
-      Bool.pick(Nat, String.eq(n, "STRLEN"), 15n,
-      Bool.pick(Nat, String.eq(n, "DBSIZE"), 18n,
-      Bool.pick(Nat, String.eq(n, "CONFIG"), 107n,
-      Bool.pick(Nat, String.eq(n, "SELECT"), 100n,
+      Bool.pick(Nat, String.eq(n, "LMPOP"), 82n, 0n))))
+    case 18n:  # R
+      Bool.pick(Nat, String.eq(n, "RPUSH"), 67n,
+      Bool.pick(Nat, String.eq(n, "RESET"), 104n, 0n))
+    case 19n:  # S
+      Bool.pick(Nat, String.eq(n, "SETNX"), 5n,
+      Bool.pick(Nat, String.eq(n, "SETEX"), 23n, 0n))
+    case 20n:  # T
+      Bool.pick(Nat, String.eq(n, "TOUCH"), 44n, 0n)
+    case _:
+      0n
+
+def cmd_id.l6(+n: String, c: Nat) -> Nat:
+  match c:
+    case 1n:  # A
+      Bool.pick(Nat, String.eq(n, "APPEND"), 14n, 0n)
+    case 2n:  # B
+      Bool.pick(Nat, String.eq(n, "BITPOS"), 43n, 0n)
+    case 3n:  # C
       Bool.pick(Nat, String.eq(n, "CLIENT"), 105n,
-      Bool.pick(Nat, String.eq(n, "PSETEX"), 24n,
+      Bool.pick(Nat, String.eq(n, "CONFIG"), 107n, 0n))
+    case 4n:  # D
+      Bool.pick(Nat, String.eq(n, "DECRBY"), 13n,
+      Bool.pick(Nat, String.eq(n, "DBSIZE"), 18n, 0n))
+    case 5n:  # E
+      Bool.pick(Nat, String.eq(n, "EXISTS"), 9n,
+      Bool.pick(Nat, String.eq(n, "EXPIRE"), 28n, 0n))
+    case 7n:  # G
+      Bool.pick(Nat, String.eq(n, "GETSET"), 6n,
       Bool.pick(Nat, String.eq(n, "GETDEL"), 27n,
-      Bool.pick(Nat, String.eq(n, "SWAPDB"), 111n,
-      Bool.pick(Nat, String.eq(n, "EXPIRE"), 28n,
-      Bool.pick(Nat, String.eq(n, "SUBSTR"), 38n,
-      Bool.pick(Nat, String.eq(n, "GETBIT"), 40n,
-      Bool.pick(Nat, String.eq(n, "SETBIT"), 41n,
-      Bool.pick(Nat, String.eq(n, "BITPOS"), 43n,
-      Bool.pick(Nat, String.eq(n, "OBJECT"), 114n,
-      Bool.pick(Nat, String.eq(n, "MSETNX"), 45n,
-      Bool.pick(Nat, String.eq(n, "RENAME"), 46n,
-      Bool.pick(Nat, String.eq(n, "HSETNX"), 52n,
-      Bool.pick(Nat, String.eq(n, "MEMORY"), 118n,
+      Bool.pick(Nat, String.eq(n, "GETBIT"), 40n, 0n)))
+    case 8n:  # H
+      Bool.pick(Nat, String.eq(n, "HSETNX"), 52n, 0n)
+    case 9n:  # I
+      Bool.pick(Nat, String.eq(n, "INCRBY"), 12n, 0n)
+    case 12n:  # L
       Bool.pick(Nat, String.eq(n, "LPUSHX"), 68n,
-      Bool.pick(Nat, String.eq(n, "RPUSHX"), 69n,
       Bool.pick(Nat, String.eq(n, "LINDEX"), 73n,
-      Bool.pick(Nat, String.eq(n, "LRANGE"), 74n, 0n))))))))))))))))))))))))))))
-    case 7n:
-      Bool.pick(Nat, String.eq(n, "FLUSHDB"), 20n,
-      Bool.pick(Nat, String.eq(n, "COMMAND"), 109n,
-      Bool.pick(Nat, String.eq(n, "PEXPIRE"), 29n,
-      Bool.pick(Nat, String.eq(n, "PERSIST"), 36n,
+      Bool.pick(Nat, String.eq(n, "LRANGE"), 74n, 0n)))
+    case 13n:  # M
+      Bool.pick(Nat, String.eq(n, "MSETNX"), 45n,
+      Bool.pick(Nat, String.eq(n, "MEMORY"), 118n, 0n))
+    case 15n:  # O
+      Bool.pick(Nat, String.eq(n, "OBJECT"), 114n, 0n)
+    case 16n:  # P
+      Bool.pick(Nat, String.eq(n, "PSETEX"), 24n, 0n)
+    case 18n:  # R
+      Bool.pick(Nat, String.eq(n, "RENAME"), 46n,
+      Bool.pick(Nat, String.eq(n, "RPUSHX"), 69n, 0n))
+    case 19n:  # S
+      Bool.pick(Nat, String.eq(n, "STRLEN"), 15n,
+      Bool.pick(Nat, String.eq(n, "SUBSTR"), 38n,
+      Bool.pick(Nat, String.eq(n, "SETBIT"), 41n,
+      Bool.pick(Nat, String.eq(n, "SELECT"), 100n,
+      Bool.pick(Nat, String.eq(n, "SWAPDB"), 111n, 0n)))))
+    case 21n:  # U
+      Bool.pick(Nat, String.eq(n, "UNLINK"), 8n, 0n)
+    case _:
+      0n
+
+def cmd_id.l7(+n: String, c: Nat) -> Nat:
+  match c:
+    case 3n:  # C
+      Bool.pick(Nat, String.eq(n, "COMMAND"), 109n, 0n)
+    case 6n:  # F
+      Bool.pick(Nat, String.eq(n, "FLUSHDB"), 20n, 0n)
+    case 8n:  # H
       Bool.pick(Nat, String.eq(n, "HSTRLEN"), 58n,
       Bool.pick(Nat, String.eq(n, "HEXISTS"), 59n,
       Bool.pick(Nat, String.eq(n, "HGETALL"), 62n,
-      Bool.pick(Nat, String.eq(n, "HINCRBY"), 63n,
-      Bool.pick(Nat, String.eq(n, "LINSERT"), 76n, 0n)))))))))
-    case 8n:
-      Bool.pick(Nat, String.eq(n, "FLUSHALL"), 19n,
-      Bool.pick(Nat, String.eq(n, "FUNCTION"), 106n,
-      Bool.pick(Nat, String.eq(n, "EXPIREAT"), 30n,
-      Bool.pick(Nat, String.eq(n, "GETRANGE"), 37n,
-      Bool.pick(Nat, String.eq(n, "SETRANGE"), 39n,
-      Bool.pick(Nat, String.eq(n, "BITCOUNT"), 42n,
-      Bool.pick(Nat, String.eq(n, "RENAMENX"), 47n,
-      Bool.pick(Nat, String.eq(n, "BITFIELD"), 49n, 0n))))))))
-    case 9n:
-      Bool.pick(Nat, String.eq(n, "RANDOMKEY"), 110n,
-      Bool.pick(Nat, String.eq(n, "PEXPIREAT"), 31n,
-      Bool.pick(Nat, String.eq(n, "RPOPLPUSH"), 81n, 0n)))
-    case 10n:
-      Bool.pick(Nat, String.eq(n, "EXPIRETIME"), 34n,
-      Bool.pick(Nat, String.eq(n, "HRANDFIELD"), 117n, 0n))
-    case 11n:
-      Bool.pick(Nat, String.eq(n, "PEXPIRETIME"), 35n,
-      Bool.pick(Nat, String.eq(n, "BITFIELD_RO"), 50n, 0n))
+      Bool.pick(Nat, String.eq(n, "HINCRBY"), 63n, 0n))))
+    case 12n:  # L
+      Bool.pick(Nat, String.eq(n, "LINSERT"), 76n, 0n)
+    case 16n:  # P
+      Bool.pick(Nat, String.eq(n, "PEXPIRE"), 29n,
+      Bool.pick(Nat, String.eq(n, "PERSIST"), 36n, 0n))
     case _:
       0n
+
+def cmd_id.l8(+n: String, c: Nat) -> Nat:
+  match c:
+    case 2n:  # B
+      Bool.pick(Nat, String.eq(n, "BITCOUNT"), 42n,
+      Bool.pick(Nat, String.eq(n, "BITFIELD"), 49n, 0n))
+    case 5n:  # E
+      Bool.pick(Nat, String.eq(n, "EXPIREAT"), 30n, 0n)
+    case 6n:  # F
+      Bool.pick(Nat, String.eq(n, "FLUSHALL"), 19n,
+      Bool.pick(Nat, String.eq(n, "FUNCTION"), 106n, 0n))
+    case 7n:  # G
+      Bool.pick(Nat, String.eq(n, "GETRANGE"), 37n, 0n)
+    case 18n:  # R
+      Bool.pick(Nat, String.eq(n, "RENAMENX"), 47n, 0n)
+    case 19n:  # S
+      Bool.pick(Nat, String.eq(n, "SETRANGE"), 39n, 0n)
+    case _:
+      0n
+
+def cmd_id.l9(+n: String, c: Nat) -> Nat:
+  match c:
+    case 16n:  # P
+      Bool.pick(Nat, String.eq(n, "PEXPIREAT"), 31n, 0n)
+    case 18n:  # R
+      Bool.pick(Nat, String.eq(n, "RPOPLPUSH"), 81n,
+      Bool.pick(Nat, String.eq(n, "RANDOMKEY"), 110n, 0n))
+    case _:
+      0n
+
+def cmd_id.l10(+n: String, c: Nat) -> Nat:
+  match c:
+    case 5n:  # E
+      Bool.pick(Nat, String.eq(n, "EXPIRETIME"), 34n, 0n)
+    case 8n:  # H
+      Bool.pick(Nat, String.eq(n, "HRANDFIELD"), 117n, 0n)
+    case _:
+      0n
+
+def cmd_id.l11(+n: String, c: Nat) -> Nat:
+  match c:
+    case 2n:  # B
+      Bool.pick(Nat, String.eq(n, "BITFIELD_RO"), 50n, 0n)
+    case 16n:  # P
+      Bool.pick(Nat, String.eq(n, "PEXPIRETIME"), 35n, 0n)
+    case _:
+      0n
+
+def cmd_id(+n: String, len: Nat) -> Nat:
+  match len:
+    case 3n:
+      cmd_id.l3(n, Nat.sub(U32.to_nat(String.code_at(n, 0n)), 64n))
+    case 4n:
+      cmd_id.l4(n, Nat.sub(U32.to_nat(String.code_at(n, 0n)), 64n))
+    case 5n:
+      cmd_id.l5(n, Nat.sub(U32.to_nat(String.code_at(n, 0n)), 64n))
+    case 6n:
+      cmd_id.l6(n, Nat.sub(U32.to_nat(String.code_at(n, 0n)), 64n))
+    case 7n:
+      cmd_id.l7(n, Nat.sub(U32.to_nat(String.code_at(n, 0n)), 64n))
+    case 8n:
+      cmd_id.l8(n, Nat.sub(U32.to_nat(String.code_at(n, 0n)), 64n))
+    case 9n:
+      cmd_id.l9(n, Nat.sub(U32.to_nat(String.code_at(n, 0n)), 64n))
+    case 10n:
+      cmd_id.l10(n, Nat.sub(U32.to_nat(String.code_at(n, 0n)), 64n))
+    case 11n:
+      cmd_id.l11(n, Nat.sub(U32.to_nat(String.code_at(n, 0n)), 64n))
+    case _:
+      0n
+# END gen_commands: dispatch
 
 def parse_id(id: Nat, name: String, args: List<&2, String>) -> Cmd:
   match id:
