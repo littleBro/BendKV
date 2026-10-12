@@ -120,12 +120,17 @@ def report(+cs: List<&2, R.Cmd>, r: List<&2, R.Reply> & (List<&2, R.Cmd> & R.Db)
   (rs, q) = r
   report.of(cs, q)
 
-# a batch on several databases: SELECT moves the focus, SWAPDB, MOVE and
-# FLUSHALL act on the databases
+# a batch on several databases: SELECT moves the focus, SWAPDB, MOVE, COPY
+# and FLUSHALL act on the databases (the batch is read as a file: COPY as
+# BendKV writes it, COPY s d DB n REPLACE, and as Redis writes it, as the
+# client sent it, the last two refused)
 def mbuf() -> String:
   "SET a 0\r\nSELECT 4\r\nSET z 0\r\nFLUSHALL\r\nSET a 1\r\nSELECT 2\r\nSET b 2\r\nSET c 3 PX 100000\r\nSELECT 5\r\nSET d 4\r\n" ++
   "SELECT 2\r\nMOVE b 7\r\nMOVE b 7\r\nMOVE c 7\r\nSWAPDB 5 9\r\nSELECT 9\r\nINCR d\r\nSELECT 7\r\nSET h 8\r\n" ++
-  "SELECT 6\r\nSET k 1\r\nFLUSHDB\r\nSET e 5\r\nSELECT 3\r\nSET g 7\r\nSELECT 14\r\nSWAPDB 3 15\r\nSET i 9\r\n"
+  "SELECT 6\r\nSET k 1\r\nFLUSHDB\r\nSET e 5\r\nSELECT 3\r\nSET g 7\r\nSELECT 14\r\nSWAPDB 3 15\r\nSET i 9\r\n" ++
+  "COPY i i2 DB 14 REPLACE\r\nCOPY i j DB 4 REPLACE\r\nSET i 10\r\nCOPY i j DB 4 REPLACE\r\nCOPY nope x DB 1 REPLACE\r\n" ++
+  "SELECT 7\r\nCOPY c c2 DB 0 REPLACE\r\nCOPY h i DB 14 REPLACE\r\n" ++
+  "SELECT 14\r\ncopy i k\r\ncopy i2 k replace\r\nCOPY i2 m REPLACE db 5\r\nCOPY i2 k\r\nCOPY i k DB\r\nCOPY i k FOO\r\n"
 
 # the databases as one string, each with its number
 def dump.dbs(dbs: List<&2, R.Db>, +i: Nat) -> String:

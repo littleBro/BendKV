@@ -1830,6 +1830,165 @@
     ]
    ]
   },
+  "copy": {
+   "docs": [
+    "summary",
+    "Copy a key",
+    "since",
+    "6.2.0",
+    "group",
+    "generic",
+    "complexity",
+    "O(N) worst case for collections, where N is the number of nested items. O(1) for string values.",
+    "arguments",
+    [
+     [
+      "name",
+      "source",
+      "type",
+      "key",
+      "key_spec_index",
+      0
+     ],
+     [
+      "name",
+      "destination",
+      "type",
+      "key",
+      "key_spec_index",
+      1
+     ],
+     [
+      "name",
+      "destination-db",
+      "type",
+      "integer",
+      "token",
+      "DB",
+      "flags",
+      [
+       {
+        "+": "optional"
+       }
+      ]
+     ],
+     [
+      "name",
+      "replace",
+      "type",
+      "pure-token",
+      "token",
+      "REPLACE",
+      "flags",
+      [
+       {
+        "+": "optional"
+       }
+      ]
+     ]
+    ]
+   ],
+   "info": [
+    "copy",
+    -3,
+    [
+     {
+      "+": "write"
+     },
+     {
+      "+": "denyoom"
+     }
+    ],
+    1,
+    2,
+    1,
+    [
+     {
+      "+": "@keyspace"
+     },
+     {
+      "+": "@write"
+     },
+     {
+      "+": "@slow"
+     }
+    ],
+    [],
+    [
+     [
+      "flags",
+      [
+       {
+        "+": "RO"
+       },
+       {
+        "+": "access"
+       }
+      ],
+      "begin_search",
+      [
+       "type",
+       "index",
+       "spec",
+       [
+        "index",
+        1
+       ]
+      ],
+      "find_keys",
+      [
+       "type",
+       "range",
+       "spec",
+       [
+        "lastkey",
+        0,
+        "keystep",
+        1,
+        "limit",
+        0
+       ]
+      ]
+     ],
+     [
+      "flags",
+      [
+       {
+        "+": "OW"
+       },
+       {
+        "+": "update"
+       }
+      ],
+      "begin_search",
+      [
+       "type",
+       "index",
+       "spec",
+       [
+        "index",
+        2
+       ]
+      ],
+      "find_keys",
+      [
+       "type",
+       "range",
+       "spec",
+       [
+        "lastkey",
+        0,
+        "keystep",
+        1,
+        "limit",
+        0
+       ]
+      ]
+     ]
+    ],
+    []
+   ]
+  },
   "dbsize": {
    "docs": [
     "summary",

@@ -14,10 +14,13 @@
 # them. Then the append-only file: a
 # random stream, a restart from the file, the keyspace compared; then
 # the file's last entry cut short, as a crash in a write leaves it, a
-# restart that cuts it back, and the keyspace compared again. Last, the
+# restart that cuts it back, and the keyspace compared again. Then the
 # disk failing under the file (tests/fail_io.c injects it): a file that
 # is there but cannot be read must stop the start, and a failed fsync
-# must stop the server, with everysec as with always.
+# must stop the server, with everysec as with always. Last, the files
+# both ways: the same commands against BendKV and a redis-server that
+# keeps its own file, then BendKV started from Redis's file and Redis
+# from BendKV's, each holding the databases the other held.
 set -e
 cd "$(dirname "$0")/.."
 PORT=${PORT:-6380}
@@ -93,3 +96,5 @@ restart build/test.aof
 echo "== append-only file failures"
 ${CC:-cc} -shared -fPIC -o build/fail_io.so tests/fail_io.c -ldl
 python3 tests/aof_fail_test.py --port "$PORT" --shim build/fail_io.so
+echo "== append-only files of Redis and of BendKV"
+python3 tests/aof_redis_test.py --bin build/bendkv --bendkv "$PORT" --redis "$((REDIS_PORT + 1))" --dir build/aofio

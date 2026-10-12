@@ -920,7 +920,7 @@ law load_cut:
 # other's place; FLUSHALL empties every database; MOVE of a key that is
 # there, to another database that holds no entry for it, takes the key's
 # entry out of the focus and puts it, its value and its time, in that
-# database.
+# database; COPY puts a copy of it in the database it names.
 
 # LAW: SELECT changes no database
 law focus_keeps:
@@ -966,6 +966,24 @@ law move_key:
   for  en: {R.db.entry(y, k) == None{} : Maybe<&2, KV.Item<String>>}
   for  ek: {R.ds.ent(ds, k) == Some{KV.Item{v, e}} : Maybe<&2, KV.Item<String>>}
   {zero(R.ds_of(R.act(R.AMove{k, j}, ds))) == R.ds.put(j, R.db.at(0n, R.db.setx(y, k, v, e)), zero(R.ds.unset(k, ds))) : List<&2, R.Db>}
+
+# LAW: COPY of a key there, to a database that is there, when REPLACE is
+# given or the destination key is not there in that database, sets the
+# destination key there to the source's entry, its value and its time,
+# and changes nothing else
+law copy_key:
+  for +s: String
+  for +d: String
+  for +j: Nat
+  for +rep: Bool
+  for +ds: R.Ds
+  for +y: R.Db
+  for +v: String
+  for +e: Nat
+  for  ey: {R.ds.nth(j, R.ds.list(ds)) == Some{y} : Maybe<&2, R.Db>}
+  for  ek: {R.ds.ent(ds, s) == Some{KV.Item{v, e}} : Maybe<&2, KV.Item<String>>}
+  for  ok: {Bool.or(rep, Bool.not(Maybe.is_some(&2, KV.Item<String>, R.ent.live(R.ds.now(ds), R.db.entry(y, d))))) == True{} : Bool}
+  {zero(R.ds_of(R.act(R.ACopy{s, d, j, rep}, ds))) == R.ds.put(j, R.db.at(0n, R.db.setx(y, d, v, e)), zero(ds)) : List<&2, R.Db>}
 
 # Sessions
 # ========

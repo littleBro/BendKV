@@ -16,7 +16,9 @@ with errors and FREQ, refused under the default policy (an encoding or a
 count of references BendKV derives from the value, where Redis keeps how
 the value was made, and the idle time reads a clock), and TIME with
 arguments. MSETNX, RENAME and RENAMENX move and set keys of the same
-few names, so they often find one there.
+few names, so they often find one there; COPY copies within the
+database and to the others, with REPLACE or not, and bad numbers and
+options among them.
 
 Known, documented divergences that the generator avoids: BendKV's
 integers have at most 14 digits (Redis allows int64), and so have its
@@ -324,6 +326,11 @@ def rnd_cmd(r):
         (0.02, lambda: [b"MSETNX"] + sum(([k(), rnd_value(r)] for _ in range(r.randint(1, 3))), [])),
         (0.03, lambda: [r.choice([b"RENAME", b"RENAMENX", b"rename"]), k(), k()]),
         (0.005, lambda: [r.choice([b"MSETNX", b"RENAME", b"RENAMENX"])] + [k() for _ in range(r.choice([0, 1, 3]))]),
+        (0.03, lambda: [r.choice([b"COPY", b"copy"]), k(), k()] +
+                       r.choice([[], [], [b"REPLACE"], [b"DB", rnd_db(r)], [b"db", rnd_db(r), b"replace"],
+                                 [b"REPLACE", b"DB", rnd_db(r)], [b"DB"], [b"FOO"], [b"DB", rnd_db(r), b"DB", rnd_db(r)],
+                                 [b"REPLACE", b"REPLACE"]])),
+        (0.003, lambda: [b"COPY"] + [k() for _ in range(r.choice([0, 1]))]),
     ]
     c *= sum(p for p, f in table)
     acc = 0.0
