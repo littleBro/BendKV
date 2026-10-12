@@ -4,7 +4,13 @@ LD_PRELOAD shim). A file that is there but cannot be read stops the start
 (an empty database would be served, and the next writes appended to the
 file that holds the old one). A failed fsync stops the server with
 everysec as it does with always. A file that is not there is still an
-empty database.
+empty database. Then the files the start cannot replay as they were
+written: an unknown command, a wrong number of arguments, an argument
+that does not read, a database not there, a command of the server, a
+transaction left open; each stops the start with the entry's number and
+the byte it starts at, the file left byte for byte as it was (an entry
+cut short after one is not cut), while a file as Redis writes it
+(SELECT, MULTI and EXEC, lowercase names) restores.
 
     cc -shared -fPIC -o build/fail_io.so tests/fail_io.c -ldl
     python3 tests/aof_fail_test.py --port 6380 --shim build/fail_io.so
@@ -116,6 +122,21 @@ def refused(a, name, args, env, want):
                  "exit %s, log: %s" % (code, log[-300:]))
 
 
+def entry(*args):
+    return resp(*args)
+
+
+def unreplayable(a, path, name, data, want):
+    """A file of data stops the start with want, and is left as it was."""
+    with open(path, "wb") as f:
+        f.write(data)
+    ok = refused(a, name, ["send", path, "always"], None,
+                 "Bad command reading the append only file %s: %s" % (path, want))
+    with open(path, "rb") as f:
+        same = f.read() == data
+    return check(name + ": the file is left as it was", same) and ok
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--port", type=int, default=6380)
@@ -178,6 +199,59 @@ def main():
                 "SET: %r, exit %s, log: %s" % (got, code, log[-300:]))
     if c is not None:
         c.close()
+
+    # files the start cannot replay as they were written: each stops it,
+    # naming the entry (from 1) and its first byte, and leaves the file
+    # as it was; the first entry, SET a 1, is 27 bytes
+    bad = os.path.join(a.dir, "fail_bad.aof")
+    one = entry(b"SET", b"a", b"1")
+    for name, data, want in [
+            ("an unknown command stops the start",
+             one + entry(b"SXT", b"lost", b"v") + entry(b"SET", b"after", b"ok"),
+             "entry 2, at byte 27: ERR unknown command 'SXT', with args beginning with: 'lost' 'v'"),
+            ("a wrong number of arguments stops the start",
+             one + entry(b"SET", b"k"), "entry 2, at byte 27: ERR wrong number of arguments for 'set' command"),
+            ("an argument that does not read stops the start",
+             one + entry(b"SET", b"k", b"v", b"EX", b"abc"),
+             "entry 2, at byte 27: ERR value is not an integer or out of range"),
+            ("a database not there stops the start",
+             one + entry(b"SELECT", b"16") + entry(b"SET", b"k", b"v"),
+             "entry 2, at byte 27: ERR DB index is out of range"),
+            ("a database number that does not read stops the start",
+             one + entry(b"SELECT", b"x") + entry(b"SET", b"k", b"v"),
+             "entry 2, at byte 27: ERR SELECT of a database number that does not read"),
+            ("a command of the server stops the start",
+             one + entry(b"CONFIG", b"SET", b"maxmemory", b"1"),
+             "entry 2, at byte 27: ERR a command of a connection or of the server, which no file holds"),
+            ("a transaction left open stops the start",
+             one + entry(b"MULTI") + entry(b"SET", b"b", b"2"),
+             "entry 2, at byte 27: ERR MULTI without EXEC: the file ends inside a transaction"),
+            ("a bad entry before an entry cut short stops the start, and nothing is cut",
+             one + entry(b"SXT", b"x") + b"*3\r\n$3\r\nSET\r\n$1\r\nk",
+             "entry 2, at byte 27: ERR unknown command 'SXT', with args beginning with: 'x'")]:
+        ok &= unreplayable(a, bad, name, data, want)
+    os.remove(bad)
+
+    # a file as Redis writes it: SELECT, a MULTI and EXEC around a DEL and
+    # a SET (a key whose time passed, deleted as a write meets it), names
+    # in lowercase, a time from 1970
+    redis_file = os.path.join(a.dir, "fail_redis.aof")
+    with open(redis_file, "wb") as f:
+        f.write(entry(b"SELECT", b"0") + entry(b"set", b"k", b"v") + entry(b"MULTI") +
+                entry(b"del", b"k") + entry(b"set", b"k", b"w") + entry(b"EXEC") +
+                entry(b"SELECT", b"3") + entry(b"SET", b"x", b"y") +
+                entry(b"PEXPIREAT", b"x", b"99999999999999"))
+    s = Server(a, ["send", redis_file, "always"])
+    c = s.connect()
+    got = [ask(c, b"GET", b"k"), ask(c, b"SELECT", b"3"), ask(c, b"GET", b"x"),
+           ask(c, b"PEXPIRETIME", b"x")] if c is not None else []
+    if c is not None:
+        c.close()
+    log = s.stop()
+    ok &= check("a file as Redis writes it, with MULTI and EXEC, restores",
+                got == [b"$1\r\nw\r\n", b"+OK\r\n", b"$1\r\ny\r\n", b":99999999999999\r\n"],
+                "replies: %r, log: %s" % (got, log[-300:]))
+    os.remove(redis_file)
 
     print("ALL OK" if ok else "SOME CHECKS FAILED")
     return ok

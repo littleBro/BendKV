@@ -2,15 +2,18 @@
 # lists, of sets and of sorted sets, with its effects (aof.bend:
 # exec_log), writes the effects as the server appends them, reads the
 # file back, runs it from an empty database and checks that this gives
-# the batch's database; then cuts the file at every length and checks
+# the batch's database, and that the start's checked replay (aof.bend:
+# checked) gives it too; then cuts the file at every length and checks
 # that each cut loads as whole entries and a leftover that together are
 # the cut, the leftover holding no whole entry. Then the same for a batch
 # on several databases (SELECT, SWAPDB, MOVE, FLUSHDB, FLUSHALL), run as
 # acts (aof.bend: A.acts), its effects written with the SELECTs the
-# server writes, the file replayed over 16 databases. Each check prints
+# server writes, the file replayed over 16 databases. Last, files the
+# start must refuse, each with the entry it names and the byte it starts
+# at, and a file as Redis writes it, which it replays. Each check prints
 # its line; any that fails makes the run exit with 1. With
-# BENDKV_CHECK_BREAK set to log, db or cut, one kind of check is given a
-# wrong expectation, to show that its failure fails the run
+# BENDKV_CHECK_BREAK set to log, db, cut or check, one kind of check is
+# given a wrong expectation, to show that its failure fails the run
 # (tests/smoke_check.sh).
 # Run: bend tests/aof_check.bend
 import Base
@@ -158,6 +161,17 @@ def replay(f: List<&2, List<&2, String>> & String) -> R.Db:
   (reqs, rest) = f
   db_of(R.exec_all(A.parse_all(reqs), R.db.empty()))
 
+# the databases as one string, each with its number
+def dump.dbs(dbs: List<&2, R.Db>, +i: Nat) -> String:
+  match dbs:
+    case Nil{}:
+      SNil{}
+    case Con{+d, rest}:
+      Nat.show(i) ++ ": " ++ dump(d) ++ "\n" ++ dump.dbs(rest, 1n+i)
+
+def dump.ds(+ds: R.Ds) -> String:
+  dump.dbs(R.ds.list(ds), 0n)
+
 # a check's line: the two the same, or where they differ; and whether
 # they are
 def same(name: String, +got: String, +want: String) -> IO(Bool):
@@ -214,6 +228,18 @@ def cuts.run(go: Bool, +f: String, +b: String) -> IO(Bool):
 def cuts.go(+mode: String) -> Bool:
   Bool.or(String.is_empty(mode), String.eq(mode, "cut"))
 
+# the start's replay of a file, with 1 + n databases: the databases, or
+# the entry it refuses by its number (from 1) and the byte it starts at
+def dump.checked(+f: String, r: A.Replay) -> String:
+  match r:
+    case A.Replayed{+ds}:
+      dump.ds(ds)
+    case A.Refused{+i, why}:
+      "entry " ++ Nat.show(1n+i) ++ ", at byte " ++ Nat.show(A.offset(f, i)) ++ ": " ++ why
+
+def checked(+f: String, +n: Nat) -> String:
+  dump.checked(f, A.checked(Pair.fst(List<&2, List<&2, String>>, String, A.load(f)), n))
+
 def report.of(+mode: String, +cs: List<&2, R.Cmd>, q: List<&2, R.Cmd> & R.Db) -> IO(Bool):
   (es, +db) = q
   +f = A.encode(A.args_all(es))
@@ -223,9 +249,10 @@ def report.of(+mode: String, +cs: List<&2, R.Cmd>, q: List<&2, R.Cmd> & R.Db) ->
     Unit <- IO.print("file: " ++ Nat.show(String.length(f)) ++ " bytes, " ++ Nat.show(List.length(&2, List<&2, String>, Pair.fst(List<&2, List<&2, String>>, String, A.load(f)))) ++ " entries")
     a : Bool <- same("exec_log's database is exec_all's", want, one ++ brk(mode, "log"))
     b : Bool <- same("replayed database", dump(replay(A.load(f))), want ++ brk(mode, "db"))
+    c : Bool <- same("the start's checked replay", checked(f, 0n), "0: " ++ want ++ "\n")
     Unit <- IO.print("database: " ++ want)
     d : Bool <- cuts.run(cuts.go(mode), f, brk(mode, "cut"))
-    return Bool.and(a, Bool.and(b, d))
+    return Bool.and(Bool.and(a, b), Bool.and(c, d))
 
 def report(+mode: String, +cs: List<&2, R.Cmd>, r: List<&2, R.Reply> & (List<&2, R.Cmd> & R.Db)) -> IO(Bool):
   (rs, q) = r
@@ -243,17 +270,6 @@ def mbuf() -> String:
   "SELECT 7\r\nCOPY c c2 DB 0 REPLACE\r\nCOPY h i DB 14 REPLACE\r\n" ++
   "SELECT 14\r\ncopy i k\r\ncopy i2 k replace\r\nCOPY i2 m REPLACE db 5\r\nCOPY i2 k\r\nCOPY i k DB\r\nCOPY i k FOO\r\n"
 
-# the databases as one string, each with its number
-def dump.dbs(dbs: List<&2, R.Db>, +i: Nat) -> String:
-  match dbs:
-    case Nil{}:
-      SNil{}
-    case Con{+d, rest}:
-      Nat.show(i) ++ ": " ++ dump(d) ++ "\n" ++ dump.dbs(rest, 1n+i)
-
-def dump.ds(+ds: R.Ds) -> String:
-  dump.dbs(R.ds.list(ds), 0n)
-
 def mreport.of(+mode: String, q: List<&2, A.Eff> & R.Ds) -> IO(Bool):
   (es, +ds) = q
   +f = A.encode(A.effs.args(List.reverse(&2, A.Eff, es), 0n))
@@ -261,9 +277,83 @@ def mreport.of(+mode: String, q: List<&2, A.Eff> & R.Ds) -> IO(Bool):
   do IO<Bool>:
     Unit <- IO.print("file on several databases: " ++ Nat.show(String.length(f)) ++ " bytes, " ++ Nat.show(List.length(&2, List<&2, String>, Pair.fst(List<&2, List<&2, String>>, String, A.load(f)))) ++ " entries")
     a : Bool <- same("replayed databases", dump.ds(A.replay(Pair.fst(List<&2, List<&2, String>>, String, A.load(f)), 15n)), want ++ brk(mode, "db"))
+    b : Bool <- same("the start's checked replay of the databases", checked(f, 15n), want)
     Unit <- IO.print("databases:\n" ++ want)
     c : Bool <- cuts.run(cuts.go(mode), f, brk(mode, "cut"))
-    return Bool.and(a, c)
+    return Bool.and(a, Bool.and(b, c))
+
+# Files the start refuses
+# -----------------------
+# each with 16 databases, as the server has by default; the first entry,
+# SET a 1, is 27 bytes
+
+def one() -> List<&2, String>:
+  ["SET", "a", "1"]
+
+def refuse(name: String, reqs: List<&2, List<&2, String>>, +want: String) -> IO(Bool):
+  same("the start refuses " ++ name, checked(A.encode(reqs), 15n), want)
+
+# the databases with keys, each with its number
+def dump.kept(dbs: List<&2, R.Db>, +i: Nat) -> String:
+  match dbs:
+    case Nil{}:
+      SNil{}
+    case Con{+d, rest}:
+      Bool.pick(String, Nat.is_eq(R.db.n(d), 0n), "", Nat.show(i) ++ ": " ++ dump(d) ++ "; ") ++ dump.kept(rest, 1n+i)
+
+def dump.kept.of(r: A.Replay) -> String:
+  match r:
+    case A.Replayed{+ds}:
+      dump.kept(R.ds.list(ds), 0n)
+    case A.Refused{+i, why}:
+      "refused: " ++ why
+
+# a file as Redis writes it: SELECT, a MULTI and EXEC around a DEL and a
+# SET (a key whose time passed, deleted as a write meets it), names in
+# lowercase, a time from 1970; replayed as replay replays it
+def redis_file() -> List<&2, List<&2, String>>:
+  [["SELECT", "0"], ["set", "k", "v"], ["MULTI"], ["del", "k"], ["set", "k", "w"], ["EXEC"],
+   ["SELECT", "3"], ["SET", "x", "y"], ["PEXPIREAT", "x", "99999999999999"], ["multi"], ["exec"]]
+
+def refusals(+mode: String) -> IO(Bool):
+  do IO<Bool>:
+    a : Bool <- refuse("an unknown command", [one(), ["SXT", "lost", "v"], ["SET", "after", "ok"]],
+      "entry 2, at byte 27: ERR unknown command 'SXT', with args beginning with: 'lost' 'v' " ++ brk(mode, "check"))
+    b : Bool <- refuse("a wrong number of arguments", [one(), ["SET", "k"]],
+      "entry 2, at byte 27: ERR wrong number of arguments for 'set' command")
+    c : Bool <- refuse("an argument that does not read", [one(), ["SET", "k", "v", "EX", "abc"]],
+      "entry 2, at byte 27: ERR value is not an integer or out of range")
+    d : Bool <- refuse("an empty entry", [one(), Nil{}],
+      "entry 2, at byte 27: ERR empty command")
+    e : Bool <- refuse("a SELECT of a database not there", [one(), ["SELECT", "16"]],
+      "entry 2, at byte 27: ERR DB index is out of range")
+    f : Bool <- refuse("a SWAPDB of a database not there", [["SWAPDB", "0", "16"]],
+      "entry 1, at byte 0: ERR DB index is out of range")
+    g : Bool <- refuse("a MOVE to a database not there", [one(), ["MOVE", "a", "16"]],
+      "entry 2, at byte 27: ERR DB index is out of range")
+    h : Bool <- refuse("a COPY to a database not there", [one(), ["COPY", "a", "b", "DB", "16", "REPLACE"]],
+      "entry 2, at byte 27: ERR DB index is out of range")
+    i : Bool <- refuse("a SELECT of a number that does not read", [one(), ["SELECT", "x"]],
+      "entry 2, at byte 27: ERR SELECT of a database number that does not read")
+    j : Bool <- refuse("a command of the server", [one(), ["CONFIG", "SET", "maxmemory", "1"]],
+      "entry 2, at byte 27: ERR a command of a connection or of the server, which no file holds")
+    k : Bool <- refuse("a command of a connection's database", [one(), ["SPOP", "a"]],
+      "entry 2, at byte 27: ERR a command of a connection or of the server, which no file holds")
+    l : Bool <- refuse("a transaction left open", [one(), ["MULTI"], ["SET", "b", "2"]],
+      "entry 2, at byte 27: ERR MULTI without EXEC: the file ends inside a transaction")
+    m : Bool <- refuse("a MULTI inside another", [["MULTI"], ["MULTI"], ["EXEC"], ["EXEC"]],
+      "entry 2, at byte 15: ERR MULTI calls can not be nested")
+    n : Bool <- refuse("an EXEC without MULTI", [one(), ["EXEC"]],
+      "entry 2, at byte 27: ERR EXEC without MULTI")
+    o : Bool <- same("the start refuses an entry after one written another way, at its byte",
+      checked("*3\r\n$03\r\nSET\r\n$1\r\na\r\n$1\r\n1\r\n" ++ A.encode([["SXT"]]), 15n),
+      "entry 2, at byte 28: ERR unknown command 'SXT', with args beginning with: ")
+    p : Bool <- same("the start replays a file as Redis writes it", dump.kept.of(A.checked(redis_file(), 15n)),
+      "0: k=w (1 keys counted, 0 with a time); 3: x=y@99999999999999 (1 keys counted, 1 with a time); ")
+    q : Bool <- same("the start replays it as replay does", checked(A.encode(redis_file()), 15n),
+      dump.ds(A.replay(redis_file(), 15n)))
+    return Bool.and(Bool.and(Bool.and(Bool.and(a, b), Bool.and(c, d)), Bool.and(Bool.and(e, f), Bool.and(g, h))),
+      Bool.and(Bool.and(Bool.and(i, j), Bool.and(k, l)), Bool.and(Bool.and(m, n), Bool.and(o, Bool.and(p, q)))))
 
 def env.or(r: Result<&1, &1, U32 & String, String>) -> String:
   match r:
@@ -284,7 +374,8 @@ def run(+mode: String) -> IO(Unit):
   do IO<Unit>:
     a : Bool <- report(mode, cs, A.exec_log(cs, R.db.empty()))
     b : Bool <- mreport.of(mode, A.acts(A.file.acts(batch_of(P.parse(mbuf()))), (Nil{}, R.ds.empty(15n))))
-    verdict(Bool.and(a, b))
+    c : Bool <- refusals(mode)
+    verdict(Bool.and(a, Bool.and(b, c)))
 
 def main() -> IO(Unit):
   do IO<Unit>:

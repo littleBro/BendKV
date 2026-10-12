@@ -1,7 +1,7 @@
 # BendKV: what we found
 
 BendKV is a Redis-compatible key-value store written in Bend2, with its core proved
-against 64 laws. This file sums up what building it and making it fast
+against 65 laws. This file sums up what building it and making it fast
 showed us. Where the work goes next, and why, is in [DIRECTIONS.md](DIRECTIONS.md).
 
 ## 1. The result
@@ -13,7 +13,7 @@ sessions (a connection's state and the server's), about 70 lines of batch hints,
 520 lines of append-only file, about 6,960 lines of handwritten proofs with a
 specification of about 130 that they bridge to (section 3u), and about 1,700 lines of
 16-way case splits written by a script ([`tools/gen_trie.py`](../tools/gen_trie.py)), not
-counting comments and blank lines. Bend checks the 64 laws in about 5 s; the BendTT
+counting comments and blank lines. Bend checks the 65 laws in about 5 s; the BendTT
 kernel, whose soundness is proved in Lean, rechecks them in about 50 s. Among them: after
 any history, the server restores from its append-only file exactly the databases it
 held, and from a file cut by a crash at any byte, the databases it held after some prefix
@@ -483,9 +483,10 @@ Reads and errors have no effects; SET, SETNX, GETSET, APPEND, DEL, MSET and FLUS
 log themselves; INCRBY logs the SET of the value it stored, as Redis logs
 INCRBYFLOAT, so that no number is ever read back from text. The reply decides the
 effect, so the actor never looks at the database twice and keeps owning it. At start
-the server loads the file and runs its entries from an empty database.
+the server loads the file and runs its entries from an empty database, once a check
+finds that each of them replays as the file means it (below).
 
-Eight laws ([`LAWS.bend`](../proof/LAWS.bend), section Persistence):
+Nine laws ([`LAWS.bend`](../proof/LAWS.bend), section Persistence):
 - `log_exec`: `exec_log` answers and leaves the database as `exec_all` does;
 - `log_hints`: the actor runs each batch after the hints of `batch.bend` (its keys'
   trie paths start loading first), and they change nothing;
@@ -500,7 +501,9 @@ Eight laws ([`LAWS.bend`](../proof/LAWS.bend), section Persistence):
   after some prefix of its commands: no command is applied in part, none out of order,
   and none after one that was lost;
 - `load_cut`: the entries the loader reads, written again, followed by what it leaves,
-  are the cut file, so the server cuts off exactly the leftover.
+  are the cut file, so the server cuts off exactly the leftover;
+- `checked_replay`: the start's replay with its check (`A.checked`) gives the databases
+  the replay of the laws above gives, whenever the check refuses no entry.
 
 The interesting part is the decimal round trip inside `aof_load`. `Nat.show` writes the
 last digit, then the digits of the quotient by 10, with the number itself as fuel; its
@@ -546,8 +549,37 @@ the server from starting, never change the database.
 
 **Compatible with Redis both ways.** `redis-check-aof` accepts BendKV's files, Redis
 7.0.15 loads a BendKV file and serves the same data, and BendKV loads a file Redis
-wrote (`SELECT 0` parses to a stub, lowercase names parse, and Redis has already
-rewritten GETSET as SET).
+wrote (SELECT moves the focus, lowercase names parse, Redis has already rewritten
+GETSET as SET, and the MULTI and EXEC Redis writes around a transaction and around
+a key's deletion where a write meets a key whose time had passed are marks: the
+commands between them replay in order).
+
+**What the start refuses** (issue #2 of the review of the first commit). The replay
+ran every entry and dropped every reply, so a file that parsed as RESP but held an
+unknown command (`SXT lost v`), a wrong number of arguments, an argument that did not
+read (`SET k v EX abc`), a SELECT of a database not there or one whose number did not
+read, was reported restored with those entries skipped, and the entries after a bad
+SELECT landed in the wrong database. Now the start replays a file through
+`A.checked`: before it runs anything it reads each entry as an act and refuses the
+file at the first that would not replay as the file means it: one the parser refuses
+(`R.Bad` and a session command's `R.SBad`: unknown commands and subcommands, wrong
+numbers of arguments, arguments that do not read), a command of a connection or of the
+server (`R.Own` that `file.act` leaves as a command, as it leaves a SELECT, SWAPDB,
+MOVE or COPY whose numbers or options do not read), a SELECT, SWAPDB, MOVE or COPY of
+a database not there (a start with fewer `databases` than the file names), and a MULTI
+inside another, an EXEC without one, or a file that ends inside a transaction (Redis
+reverts that one). The log names the entry, from 1, the byte it starts at (the file
+read again: the first text is let go before the replay) and the parser's error, and
+the start stops before it cuts the file or opens it to append, so the file is left
+byte for byte as it was. Redis 7.0.15 stops its load at an unknown command and does
+not look at the replies of the commands it runs; BendKV does not look at them either,
+and refuses more, since neither server writes such entries: both log only commands
+that ran. The law `checked_replay` says that the check only decides: when it refuses
+nothing, the start holds the databases `A.replay` gives, those `recover` and
+`recover_cut` are about. What is not proved: that the check accepts every file BendKV
+writes (the tests show it on their files, `tests/aof_check.bend` and every restart of
+`make test`); a refusal of BendKV's own file would stop a start, never change a
+database.
 
 **Group commit.** The first version wrote each batch's effects with its own `write`
 on the runtime's helper threads, as Bend runs every file effect, and with `always`
