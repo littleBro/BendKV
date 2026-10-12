@@ -5921,6 +5921,48 @@ def setbit_some_good(b: Bool, +o: Nat, +on: Bool, +w: String, +e: Nat) -> Good(S
       %Equal.sym(R.Change, ch_of(R.setbit.out(R.setbit.r(o, w), R.range.of(Nat.div(o, 8n), R.setbit.byte(o, on, R.setbit.x(o, w)), Some{KV.Item{w, e}}))), ch_of(R.range.of(Nat.div(o, 8n), R.setbit.byte(o, on, R.setbit.x(o, w)), Some{KV.Item{w, e}})), setbit_ch(R.setbit.r(o, w), R.range.of(Nat.div(o, 8n), R.setbit.byte(o, on, R.setbit.x(o, w)), Some{KV.Item{w, e}}))) : Good(Some{KV.Item{w, e}}, _)
       range_some_good(R.range.go(Nat.div(o, 8n), R.setbit.byte(o, on, R.setbit.x(o, w))), Nat.div(o, 8n), R.setbit.byte(o, on, R.setbit.x(o, w)), w, e, String.is_empty(R.setbit.byte(o, on, R.setbit.x(o, w))))({==})
 
+# BITFIELD: nothing, an error that changes nothing, or the SETRANGE of
+# its span (of a key not there a put)
+def bf_put_none(ok: Bool, +r: R.Reply, +lo: Nat, +sp: String, -m: Maybe<&2, KV.Item<String>>) -> Good(m, ch_of(R.bf.put(ok, r, lo, sp, None{}))):
+  match ok:
+    case True{}:
+      %Equal.sym(R.Change, ch_of(R.setbit.out(r, R.range.of(lo, sp, None{}))), ch_of(R.range.of(lo, sp, None{})), setbit_ch(r, R.range.of(lo, sp, None{}))) : Good(m, _)
+      range_none_good(R.range.go(lo, sp), lo, sp, String.is_empty(sp), m)
+    case False{}:
+      {==}
+
+def bf_res_none(ch: Bool, +r: R.Reply, +lo: Nat, +sp: String, -m: Maybe<&2, KV.Item<String>>) -> Good(m, ch_of(R.bf.res(ch, r, lo, sp, None{}))):
+  match ch:
+    case True{}:
+      bf_put_none(R.range.go(lo, sp), r, lo, sp, m)
+    case False{}:
+      {==}
+
+def bf_none(st: R.BfRun, +lo: Nat, -m: Maybe<&2, KV.Item<String>>) -> Good(m, ch_of(R.bf.fin(st, lo, None{}))):
+  match st:
+    case R.BfRun{+sp, ch, rs}:
+      bf_res_none(ch, R.RArray{List.reverse(&2, R.Reply, rs)}, lo, sp, m)
+
+def bf_put_some(ok: Bool, +r: R.Reply, +lo: Nat, +sp: String, +w: String, +e: Nat) -> Good(Some{KV.Item{w, e}}, ch_of(R.bf.put(ok, r, lo, sp, Some{KV.Item{w, e}}))):
+  match ok:
+    case True{}:
+      %Equal.sym(R.Change, ch_of(R.setbit.out(r, R.range.of(lo, sp, Some{KV.Item{w, e}}))), ch_of(R.range.of(lo, sp, Some{KV.Item{w, e}})), setbit_ch(r, R.range.of(lo, sp, Some{KV.Item{w, e}}))) : Good(Some{KV.Item{w, e}}, _)
+      range_some_good(R.range.go(lo, sp), lo, sp, w, e, String.is_empty(sp))({==})
+    case False{}:
+      {==}
+
+def bf_res_some(ch: Bool, +r: R.Reply, +lo: Nat, +sp: String, +w: String, +e: Nat) -> Good(Some{KV.Item{w, e}}, ch_of(R.bf.res(ch, r, lo, sp, Some{KV.Item{w, e}}))):
+  match ch:
+    case True{}:
+      bf_put_some(R.range.go(lo, sp), r, lo, sp, w, e)
+    case False{}:
+      {==}
+
+def bf_some(st: R.BfRun, +lo: Nat, +w: String, +e: Nat) -> Good(Some{KV.Item{w, e}}, ch_of(R.bf.fin(st, lo, Some{KV.Item{w, e}}))):
+  match st:
+    case R.BfRun{+sp, ch, rs}:
+      bf_res_some(ch, R.RArray{List.reverse(&2, R.Reply, rs)}, lo, sp, w, e)
+
 # of a key that is not there: none or a put
 def good_none(op: R.UpdOp, +now: Nat, -m: Maybe<&2, KV.Item<String>>) -> Good(m, ch_of(R.upd(op, now, None{}))):
   match op:
@@ -5947,6 +5989,8 @@ def good_none(op: R.UpdOp, +now: Nat, -m: Maybe<&2, KV.Item<String>>) -> Good(m,
       range_none_good(R.range.go(o, a), o, a, String.is_empty(a), m)
     case R.USetBit{+o, +on}:
       setbit_none(o, on, m)
+    case R.UBitfield{+ops}:
+      bf_none(R.bf.run0(ops, ""), R.bf.lo0(ops), m)
 
 # a time set alone, to f, of a key there with e: none given none is
 # nothing
@@ -6063,6 +6107,8 @@ def good_some(op: R.UpdOp, +now: Nat, +w: String, +e: Nat) -> Good(Some{KV.Item{
       range_some_good(R.range.go(o, a), o, a, w, e, String.is_empty(a))({==})
     case R.USetBit{+o, +on}:
       setbit_some_good(R.setbit.same(o, on, w), o, on, w, e)
+    case R.UBitfield{+ops}:
+      bf_some(R.bf.run0(ops, w), R.bf.lo0(ops), w, e)
 
 def ug_b(b: Bool, op: R.UpdOp, +now: Nat, +w: String, +e: Nat) -> Good(Some{KV.Item{w, e}}, ch_of(R.upd(op, now, Bool.pick(Maybe<&2, KV.Item<String>>, b, Some{KV.Item{w, e}}, None{})))):
   match b:

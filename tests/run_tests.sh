@@ -10,8 +10,9 @@
 # consistency checks under concurrent clients, and against the first the
 # protocol's edge cases, the commands of a connection and CONFIG, byte
 # for byte against Redis, INFO's sections and fields, its statistics per
-# command, COMMAND, SCAN and RANDOMKEY, keys that expire, and numbers at
-# their edges in every argument that is one; then stops
+# command, COMMAND, SCAN and RANDOMKEY, keys that expire, numbers at
+# their edges in every argument that is one, and BITFIELD's fields at
+# random; then stops
 # them. Then the append-only file: a
 # random stream, a restart from the file, the keyspace compared; then
 # the file's last entry cut short, as a crash in a write leaves it, a
@@ -50,6 +51,7 @@ for n in "" post send "post build/test.aof everysec"; do
     python3 tests/keyspace_test.py --bendkv "$PORT" --redis "$REDIS_PORT"
     python3 tests/ttl_test.py --bendkv "$PORT" --redis "$REDIS_PORT"
     python3 tests/numbers_test.py --bendkv "$PORT" --redis "$REDIS_PORT"
+    python3 tests/bitfield_test.py --bendkv "$PORT" --redis "$REDIS_PORT"
   fi
   for seed in 1 2 3; do
     redis-cli -p "$REDIS_PORT" flushall > /dev/null

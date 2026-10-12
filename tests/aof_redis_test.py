@@ -5,8 +5,11 @@ BendKV started from Redis's file and Redis from BendKV's, and every database
 must read back as the server that wrote the file held it, each key with its
 value and the time it expires at. Redis writes a command as the client sent
 it (COPY with its options in any order and case, into the selected database
-without DB; BITOP, which BendKV's load runs again), BendKV as it acted (COPY
-with DB and REPLACE, BITOP as the SET of its value). Redis 7 keeps its
+without DB; BITOP and BITFIELD, which BendKV's load runs again), BendKV as
+it acted (COPY with DB and REPLACE, BITOP as the SET of its value,
+BITFIELD as the SETRANGE of the bytes its writes reach). A BITFIELD
+whose writes all fail (OVERFLOW FAIL) on a key it makes or grows is left
+out: Redis makes the key and does not log it. Redis 7 keeps its
 file in parts, a base and increments (appendonlydir): BendKV reads them
 joined, the base written without an RDB preamble.
 
@@ -48,6 +51,10 @@ CMDS = [
     [b"FLUSHDB"], [b"SET", b"k2", b"2"], [b"DEL", b"nothing"], [b"SELECT", b"0"], [b"UNLINK", b"x1"],
     [b"BITOP", b"AND", b"bo1", b"a", b"b"], [b"bitop", b"not", b"bo2", b"a"], [b"BITOP", b"OR", b"e", b"a", b"nope"],
     [b"BITOP", b"XOR", b"bo3", b"nope"], [b"BITOP", b"NOT", b"bo2", b"nope"], [b"LCS", b"a", b"b"],
+    [b"BITFIELD", b"bf", b"SET", b"u8", b"0", b"255", b"INCRBY", b"i5", b"100", b"1", b"GET", b"u4", b"0"],
+    [b"bitfield", b"bf", b"overflow", b"fail", b"incrby", b"u2", b"0", b"9", b"incrby", b"u2", b"0", b"1"],
+    [b"BITFIELD", b"b", b"SET", b"i64", b"#1", b"-1"], [b"BITFIELD", b"b", b"SET", b"i64", b"#1", b"-1"],
+    [b"BITFIELD_RO", b"bf", b"GET", b"u8", b"0"], [b"BITFIELD", b"bf", b"SET", b"u8", b"0", b"x"],
 ]
 
 

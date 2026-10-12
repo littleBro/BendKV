@@ -352,6 +352,383 @@
     []
    ]
   },
+  "bitfield": {
+   "docs": [
+    "summary",
+    "Perform arbitrary bitfield integer operations on strings",
+    "since",
+    "3.2.0",
+    "group",
+    "bitmap",
+    "complexity",
+    "O(1) for each subcommand specified",
+    "arguments",
+    [
+     [
+      "name",
+      "key",
+      "type",
+      "key",
+      "key_spec_index",
+      0
+     ],
+     [
+      "name",
+      "operation",
+      "type",
+      "oneof",
+      "flags",
+      [
+       {
+        "+": "optional"
+       },
+       {
+        "+": "multiple"
+       }
+      ],
+      "arguments",
+      [
+       [
+        "name",
+        "encoding_offset",
+        "type",
+        "block",
+        "token",
+        "GET",
+        "arguments",
+        [
+         [
+          "name",
+          "encoding",
+          "type",
+          "string"
+         ],
+         [
+          "name",
+          "offset",
+          "type",
+          "integer"
+         ]
+        ]
+       ],
+       [
+        "name",
+        "write",
+        "type",
+        "block",
+        "arguments",
+        [
+         [
+          "name",
+          "wrap_sat_fail",
+          "type",
+          "oneof",
+          "token",
+          "OVERFLOW",
+          "flags",
+          [
+           {
+            "+": "optional"
+           }
+          ],
+          "arguments",
+          [
+           [
+            "name",
+            "wrap",
+            "type",
+            "pure-token",
+            "token",
+            "WRAP"
+           ],
+           [
+            "name",
+            "sat",
+            "type",
+            "pure-token",
+            "token",
+            "SAT"
+           ],
+           [
+            "name",
+            "fail",
+            "type",
+            "pure-token",
+            "token",
+            "FAIL"
+           ]
+          ]
+         ],
+         [
+          "name",
+          "write_operation",
+          "type",
+          "oneof",
+          "arguments",
+          [
+           [
+            "name",
+            "encoding_offset_value",
+            "type",
+            "block",
+            "token",
+            "SET",
+            "arguments",
+            [
+             [
+              "name",
+              "encoding",
+              "type",
+              "string"
+             ],
+             [
+              "name",
+              "offset",
+              "type",
+              "integer"
+             ],
+             [
+              "name",
+              "value",
+              "type",
+              "integer"
+             ]
+            ]
+           ],
+           [
+            "name",
+            "encoding_offset_increment",
+            "type",
+            "block",
+            "token",
+            "INCRBY",
+            "arguments",
+            [
+             [
+              "name",
+              "encoding",
+              "type",
+              "string"
+             ],
+             [
+              "name",
+              "offset",
+              "type",
+              "integer"
+             ],
+             [
+              "name",
+              "increment",
+              "type",
+              "integer"
+             ]
+            ]
+           ]
+          ]
+         ]
+        ]
+       ]
+      ]
+     ]
+    ]
+   ],
+   "info": [
+    "bitfield",
+    -2,
+    [
+     {
+      "+": "write"
+     },
+     {
+      "+": "denyoom"
+     }
+    ],
+    1,
+    1,
+    1,
+    [
+     {
+      "+": "@write"
+     },
+     {
+      "+": "@bitmap"
+     },
+     {
+      "+": "@slow"
+     }
+    ],
+    [],
+    [
+     [
+      "notes",
+      "This command allows both access and modification of the key",
+      "flags",
+      [
+       {
+        "+": "RW"
+       },
+       {
+        "+": "access"
+       },
+       {
+        "+": "update"
+       },
+       {
+        "+": "variable_flags"
+       }
+      ],
+      "begin_search",
+      [
+       "type",
+       "index",
+       "spec",
+       [
+        "index",
+        1
+       ]
+      ],
+      "find_keys",
+      [
+       "type",
+       "range",
+       "spec",
+       [
+        "lastkey",
+        0,
+        "keystep",
+        1,
+        "limit",
+        0
+       ]
+      ]
+     ]
+    ],
+    []
+   ]
+  },
+  "bitfield_ro": {
+   "docs": [
+    "summary",
+    "Perform arbitrary bitfield integer operations on strings. Read-only variant of BITFIELD",
+    "since",
+    "6.0.0",
+    "group",
+    "bitmap",
+    "complexity",
+    "O(1) for each subcommand specified",
+    "arguments",
+    [
+     [
+      "name",
+      "key",
+      "type",
+      "key",
+      "key_spec_index",
+      0
+     ],
+     [
+      "name",
+      "encoding_offset",
+      "type",
+      "block",
+      "token",
+      "GET",
+      "flags",
+      [
+       {
+        "+": "optional"
+       },
+       {
+        "+": "multiple"
+       },
+       {
+        "+": "multiple_token"
+       }
+      ],
+      "arguments",
+      [
+       [
+        "name",
+        "encoding",
+        "type",
+        "string"
+       ],
+       [
+        "name",
+        "offset",
+        "type",
+        "integer"
+       ]
+      ]
+     ]
+    ]
+   ],
+   "info": [
+    "bitfield_ro",
+    -2,
+    [
+     {
+      "+": "readonly"
+     },
+     {
+      "+": "fast"
+     }
+    ],
+    1,
+    1,
+    1,
+    [
+     {
+      "+": "@read"
+     },
+     {
+      "+": "@bitmap"
+     },
+     {
+      "+": "@fast"
+     }
+    ],
+    [],
+    [
+     [
+      "flags",
+      [
+       {
+        "+": "RO"
+       },
+       {
+        "+": "access"
+       }
+      ],
+      "begin_search",
+      [
+       "type",
+       "index",
+       "spec",
+       [
+        "index",
+        1
+       ]
+      ],
+      "find_keys",
+      [
+       "type",
+       "range",
+       "spec",
+       [
+        "lastkey",
+        0,
+        "keystep",
+        1,
+        "limit",
+        0
+       ]
+      ]
+     ]
+    ],
+    []
+   ]
+  },
   "bitop": {
    "docs": [
     "summary",

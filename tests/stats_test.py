@@ -17,7 +17,7 @@ a key and no value, which pass the arity and fail in the command;
 SETRANGE past 512MB, BITCOUNT and BITPOS reading their ranges, RENAME of
 a key that is not there, LCS's options) or as
 they parse (a syntax error, SCAN's invalid cursor, GETRANGE's range, BITOP's
-operation); errors with codes
+operation, BITFIELD's subcommands); errors with codes
 other than ERR (WRONGPASS, NOAUTH); calls while CLIENT REPLY holds
 replies back (counted all the same); commands after a QUIT (dropped); a
 protocol error (counted, then the connection closes); and random
@@ -151,7 +151,8 @@ def one_at_a_time(c, port):
                  ["RENAMENX", "m3", "m2"], ["RENAMENX", "m3", "m4"], ["RENAME", "m4", "m4"],
                  ["COPY", "m4", "m5"], ["COPY", "m4", "m5"], ["COPY", "m4", "m5", "DB", "1", "REPLACE"],
                  ["BITOP", "AND", "m6", "m4", "m5"], ["BITOP", "not", "m6", "nope"], ["LCS", "m4", "m5"],
-                 ["LCS", "m4", "m5", "IDX", "WITHMATCHLEN"],
+                 ["LCS", "m4", "m5", "IDX", "WITHMATCHLEN"], ["BITFIELD", "m6", "SET", "u8", "0", "1", "GET", "i4", "2"],
+                 ["BITFIELD", "m6", "OVERFLOW", "FAIL", "INCRBY", "u2", "0", "9"], ["BITFIELD_RO", "m6", "GET", "u8", "0"],
                  ["FLUSHDB"], ["RANDOMKEY"], ["FLUSHALL"]):
         r = c.ask(*args)
         out.append(r if args[0] not in ("CLIENT", "COMMAND", "CONFIG", "DBSIZE", "KEYS", "SCAN", "RANDOMKEY", "TIME")
@@ -181,7 +182,9 @@ def errors_at_a_time(c, port):
                  ["COPY", "a", "b", "DB", "x"], ["COPY", "a", "b", "DB", "99"], ["COPY", "a", "b", "FOO"],
                  ["BITOP", "FOO", "a", "b"], ["BITOP", "NOT", "a", "b", "c"], ["BITOP", "AND", "a"],
                  ["LCS", "a"], ["LCS", "a", "b", "FOO"], ["LCS", "a", "b", "LEN", "IDX"],
-                 ["LCS", "a", "b", "MINMATCHLEN", "x"]):
+                 ["LCS", "a", "b", "MINMATCHLEN", "x"], ["BITFIELD"], ["BITFIELD", "a", "GET", "x8", "0"],
+                 ["BITFIELD", "a", "FOO"], ["BITFIELD", "a", "SET", "u8", "0", "x"], ["BITFIELD_RO"],
+                 ["BITFIELD_RO", "a", "SET", "u8", "0", "1"]):
         out.append(c.ask(*args))
     return out
 
@@ -268,7 +271,9 @@ def random_pipelines(rounds, seed):
             ["SETBIT", "n", "0", "1"], ["GETRANGE", "k", "x", "0"], ["MSETNX", "k", "v", "z", "w"],
             ["RENAME", "k", "z"], ["RENAMENX", "z", "k"], ["RENAME", "nokey", "k"], ["COPY", "k", "c"],
             ["COPY", "k", "c", "DB", "2", "REPLACE"], ["COPY", "k", "k"], ["COPY", "k", "c", "DB", "x"],
-            ["BITOP", "OR", "z", "k", "c"], ["BITOP", "XOR", "k"], ["LCS", "k", "c", "LEN"], ["LCS", "k", "c", "IDX", "LEN"]]
+            ["BITOP", "OR", "z", "k", "c"], ["BITOP", "XOR", "k"], ["LCS", "k", "c", "LEN"], ["LCS", "k", "c", "IDX", "LEN"],
+            ["BITFIELD", "k", "INCRBY", "u8", "0", "1"], ["BITFIELD", "k", "GET", "i9", "x"], ["BITFIELD_RO", "k", "GET", "u8", "0"],
+            ["BITFIELD_RO", "k", "INCRBY", "u8", "0", "1"]]
 
     def case(c, port):
         rnd = random.Random(seed)

@@ -1,8 +1,11 @@
 #!/usr/bin/env python3
 """Numbers at their edges in every argument that is one: past what a long
 long holds, at LLONG_MAX and LLONG_MIN, at 2^48 (past which a Bend Nat does
-not go), at 2^32 and 2^31, and in forms Redis refuses (+5, 1e5, 0x10, " 5",
--0, 00, 3.5). BendKV must answer each command, and answer as Redis does,
+not go), at 2^32 and 2^31, at 2^58 + 1 (64 times it, an i64's offset #k
+in BITFIELD, wraps to 64), and in forms Redis refuses (+5, 1e5, 0x10,
+" 5", -0, 00, 3.5). BITFIELD reads at the number as an offset, or writes
+it at a small one (a write far out would make a value of up to 512MB).
+BendKV must answer each command, and answer as Redis does,
 but where BendKV is known to differ: INCRBY and DECRBY past 14 digits (its
 integers), and SCAN with a cursor it did not give (the cursor is the place
 in each server's own table). A full SCAN's keys are compared as a set:
@@ -17,7 +20,8 @@ from diff_test import Conn
 
 NUMS = [b"9223372036854775807", b"9223372036854775808", b"-9223372036854775808", b"-9223372036854775809",
         b"18446744073709551615", b"99999999999999999999", b"281474976710656", b"281474976710655",
-        b"4294967296", b"2147483648", b"-2147483649", b"1e5", b"+5", b"0x10", b" 5", b"5 ", b"-0", b"00", b"3.5"]
+        b"4294967296", b"2147483648", b"-2147483649", b"1e5", b"+5", b"0x10", b" 5", b"5 ", b"-0", b"00", b"3.5",
+        b"288230376151711745", b"-288230376151711745"]
 
 # n: the number tried; the commands the known differences are in are
 # checked for an answer only
@@ -29,7 +33,10 @@ TEMPL = [
     "GETRANGE k n n", "GETRANGE k 0 n", "SUBSTR k n 1", "SETRANGE k n x", "GETBIT k n",
     "SETBIT k n 1", "BITCOUNT k n n", "BITCOUNT k 0 n BIT", "BITPOS k 1 n", "BITPOS k 1 0 n BIT",
     "SCAN n", "SCAN 0 COUNT n", "CONFIG SET hz n", "CONFIG SET proto-max-bulk-len n",
-    "CONFIG SET maxmemory n", "CONFIG SET databases n",
+    "CONFIG SET maxmemory n", "CONFIG SET databases n", "BITFIELD k GET u8 n", "BITFIELD k GET i64 #n",
+    "BITFIELD k GET u5 #n", "BITFIELD_RO k GET i3 n", "BITFIELD k GET Tn 0", "BITFIELD k GET Un 0",
+    "BITFIELD k SET i64 0 n", "BITFIELD k SET u8 3 n", "BITFIELD k INCRBY i64 0 n", "BITFIELD k INCRBY u63 1 n",
+    "BITFIELD k OVERFLOW SAT INCRBY i32 0 n", "BITFIELD k OVERFLOW SAT SET i8 0 n", "BITFIELD k OVERFLOW FAIL SET u7 0 n",
 ]
 ANSWER_ONLY = ("INCRBY", "DECRBY", "SCAN n")
 
@@ -59,7 +66,8 @@ def main():
             c.reply()
     for t in TEMPL:
         for num in NUMS:
-            args = [num if w == "n" else w.encode() for w in t.split(" ")]
+            args = [num if w == "n" else b"#" + num if w == "#n" else b"i" + num if w == "Tn" else
+                    b"u" + num if w == "Un" else w.encode() for w in t.split(" ")]
             for c in (b, r):
                 c.send(RESET)
                 for _ in RESET:

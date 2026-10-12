@@ -22,7 +22,10 @@ options among them. BITOP combines keys of those names (one of them its
 own destination now and then), with names of operations in any case and
 wrong ones; LCS compares two of them with its options in any order, and
 wrong ones (its table stays far below proto-max-bulk-len: values are
-short).
+short). BITFIELD and BITFIELD_RO read and write fields of random types
+at small bit offsets (or #k), with values at the edges of the fields and
+of a long long, under each kind of overflow, and wrong types, offsets,
+values and words among them; a read may go far, a write never does.
 
 Known, documented divergences that the generator avoids: BendKV's
 integers have at most 14 digits (Redis allows int64), and so have its
@@ -266,6 +269,59 @@ def rnd_bitoff(r, read=False):
                     ([b"4294967295", b"100000"] if read else []))
 
 
+# BITFIELD's operations: a type, an offset, a value, as rnd_bitoff takes
+# them, and now and then a wrong one
+BF_TYPES_BAD = [b"u64", b"i65", b"i0", b"x8", b"i", b"", b"I8", b"i08", b"u+3", b"i-1", b"i8\x00x"]
+BF_VALS_BAD = [b"x", b"", b"1.5", b"9223372036854775808", b"-0", b"+1", b"-9223372036854775809", b"-", b"01"]
+
+
+def rnd_bf_type(r):
+    if r.random() < 0.97:
+        sign = r.random() < 0.5
+        return (b"i%d" if sign else b"u%d") % r.randint(1, 64 if sign else 63)
+    return r.choice(BF_TYPES_BAD)
+
+
+def rnd_bf_off(r, read):
+    c = r.random()
+    if c < 0.75:
+        return b"%d" % r.randint(0, 255)
+    if c < 0.95:
+        return b"#%d" % r.randint(0, 30)
+    return r.choice([b"-1", b"x", b"", b"4294967296", b"#", b"#-1", b"01", b"#99999999999999999999"] +
+                    ([b"4294967295", b"4294967232", b"#67108863", b"#288230376151711745"] if read else []))
+
+
+def rnd_bf_val(r):
+    c = r.random()
+    if c < 0.3:
+        return b"%d" % r.randint(-(1 << 63), (1 << 63) - 1)
+    if c < 0.6:
+        return b"%d" % r.randint(-300, 300)
+    if c < 0.97:
+        n = r.randint(1, 64)
+        return b"%d" % r.choice([0, 1, -1, (1 << 63) - 1, -(1 << 63), (1 << (n - 1)) - 1, -(1 << (n - 1)),
+                                 (1 << n) - 1, 1 << n])
+    return r.choice(BF_VALS_BAD)
+
+
+def rnd_bitfield(r, ro):
+    ops = []
+    for _ in range(r.randint(0, 5)):
+        c = r.random()
+        if c < (0.9 if ro else 0.35):
+            ops += [r.choice([b"GET", b"get", b"Get"]), rnd_bf_type(r), rnd_bf_off(r, True)]
+        elif c < (0.93 if ro else 0.6):
+            ops += [r.choice([b"SET", b"set"]), rnd_bf_type(r), rnd_bf_off(r, False), rnd_bf_val(r)]
+        elif c < (0.95 if ro else 0.85):
+            ops += [r.choice([b"INCRBY", b"incrby"]), rnd_bf_type(r), rnd_bf_off(r, False), rnd_bf_val(r)]
+        elif c < 0.98:
+            ops += [r.choice([b"OVERFLOW", b"overflow"]), r.choice([b"WRAP", b"SAT", b"FAIL", b"sat", b"fail"])]
+        else:
+            ops += r.choice([[b"FOO"], [b"OVERFLOW", b"x"], [b"GET", b"i8"], [b"SET", b"u8", b"0"], [b"OVERFLOW"]])
+    return ops
+
+
 def rnd_cmd(r):
     k = lambda: r.choice(KEYS)
     ks = lambda: [k() for _ in range(r.randint(1, 4))]
@@ -342,6 +398,9 @@ def rnd_cmd(r):
         (0.03, lambda: [b"LCS", k(), k()] + r.sample([b"LEN", b"IDX", b"WITHMATCHLEN", b"withmatchlen", b"idx"], r.randint(0, 2)) +
                        r.choice([[], [], [b"MINMATCHLEN", r.choice([b"0", b"1", b"2", b"3", b"-1", b"x", b"99999999999999999999"])]])),
         (0.005, lambda: [b"LCS"] + r.choice([[], [k()], [k(), k(), b"FOO"], [k(), k(), b"MINMATCHLEN"], [k(), k(), b"LEN", b"IDX"]])),
+        (0.04, lambda: [r.choice([b"BITFIELD", b"bitfield"]), k()] + rnd_bitfield(r, False)),
+        (0.01, lambda: [r.choice([b"BITFIELD_RO", b"bitfield_ro"]), k()] + rnd_bitfield(r, True)),
+        (0.003, lambda: [r.choice([b"BITFIELD", b"BITFIELD_RO"])]),
     ]
     c *= sum(p for p, f in table)
     acc = 0.0

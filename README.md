@@ -15,8 +15,8 @@ throughput of Redis 7.0.15 on the same machine, with half its memory for small v
 > times to live, the keyspace, several databases, connection commands, an append-only
 > file). The goal now is a drop-in
 > replacement for a single Redis node, measured by Redis's own test suite: of the 1,673
-> tests Redis 7.0.15 passes against a server it did not start, BendKV passes 311, and 287
-> of the 370 in what it implements ([docs/COMPATIBILITY.md](docs/COMPATIBILITY.md)). Do
+> tests Redis 7.0.15 passes against a server it did not start, BendKV passes 327, and 303
+> of the 386 in what it implements ([docs/COMPATIBILITY.md](docs/COMPATIBILITY.md)). Do
 > not use it for data you cannot lose.
 
 BendKV is an independent project. It is not affiliated with Higher Order Company or the
@@ -97,7 +97,11 @@ translation stays in the trusted base.
   its default). SETRANGE and SETBIT are logged as a SETRANGE of the bytes they wrote, not
   the whole value. BITOP (AND, OR, XOR, NOT; logged as the SET of its value) and LCS (LEN,
   IDX, MINMATCHLEN, WITHMATCHLEN, its table bounded by proto-max-bulk-len as in Redis, and
-  slow: about twenty times Redis's time).
+  slow: about twenty times Redis's time). BITFIELD and BITFIELD_RO: fields of up to 64
+  bits, signed or not, at a bit offset or `#k`, with GET, SET, INCRBY and OVERFLOW WRAP,
+  SAT or FAIL, in C's wrapping arithmetic as Redis's; logged as the SETRANGE of the bytes
+  its writes reach. A field across the 2^32-th bit, for which Redis grows a value past
+  512MB, is refused with SETRANGE's error.
 - **Times to live:** EXPIRE, PEXPIRE, EXPIREAT and PEXPIREAT (with NX, XX, GT, LT), TTL,
   PTTL, EXPIRETIME, PEXPIRETIME, PERSIST; SET with NX, XX, GET, EX, PX, EXAT, PXAT and
   KEEPTTL; SETEX, PSETEX, GETEX (EX, PX, EXAT, PXAT, PERSIST) and GETDEL. Times are read
@@ -232,7 +236,8 @@ documentation, the lists and their filters, the keys of command lines, random on
 too), SCAN and RANDOMKEY (their arguments, full iterations with COUNT, MATCH and TYPE
 finding Redis's keys, each once, an iteration while other clients write, RANDOMKEY's
 picks), numbers at their edges in every argument that takes one (past a long long, at
-2^48, in forms Redis refuses), robustness and concurrency checks,
+2^48, in forms Redis refuses), BITFIELD's fields at random (each reply and each value
+after it compared), robustness and concurrency checks,
 restarts from the append-only file (every database read back, including after a
 truncated tail), disk failures
 under the file, injected with an `LD_PRELOAD` shim, and the files both ways: BendKV
@@ -257,7 +262,7 @@ src/        the server
   startup.bend  the command line and the configuration file        tested
   server.bend   TCP, connections, the database actor, the log      tested
 proof/      LAWS.bend (the laws), PROOF.bend (their proofs), SPEC.bend (the commands on the trie alone)
-tests/      start, differential, expiry, protocol, session, CONFIG, INFO, COMMAND, SCAN, robustness, concurrency, AOF tests
+tests/      start, differential, expiry, protocol, session, CONFIG, INFO, COMMAND, SCAN, BITFIELD, robustness, concurrency, AOF tests
 bench/      in-process benchmarks of the map, the core and channels
 tools/      measurement scripts, the runner of Redis's test suite, and the generators of
             the trie, of the parameter table and of the command table, with the facts
