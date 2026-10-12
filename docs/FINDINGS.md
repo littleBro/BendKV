@@ -1,7 +1,7 @@
 # BendKV: what we found
 
 BendKV is a Redis-compatible key-value store written in Bend2, with its core proved
-against 63 laws. This file sums up in English what building it and making it fast
+against 64 laws. This file sums up in English what building it and making it fast
 showed us. The detailed record, with every table and measurement, is in Russian:
 [PERFORMANCE.md](PERFORMANCE.md) (performance, section by section) and
 [README.ru.md](../README.ru.md) (the project, the proofs, how to run). Where the work goes
@@ -9,20 +9,20 @@ next, and why, is in [DIRECTIONS.md](DIRECTIONS.md).
 
 ## 1. The result
 
-**Correctness.** About 2,670 lines of core code (with the parsing of commands, of their
+**Correctness.** About 2,780 lines of core code (with the parsing of commands, of their
 times and options, Redis's pattern matching, several databases and the ranges and bits
-of strings), about 720 lines of
+of strings), about 950 lines of
 sessions (a connection's state and the server's), about 70 lines of batch hints, about
-510 lines of append-only file, about 6,780 lines of handwritten proofs with a
+520 lines of append-only file, about 6,920 lines of handwritten proofs with a
 specification of about 130 that they bridge to (section 3u), and about 1,700 lines of
 16-way case splits written by a script ([`tools/gen_trie.py`](../tools/gen_trie.py)), not
-counting comments and blank lines. Bend checks the 63 laws in about 5 s; the BendTT
+counting comments and blank lines. Bend checks the 64 laws in about 5 s; the BendTT
 kernel, whose soundness is proved in Lean, rechecks them in about 50 s. Among them: after
 any history, the server restores from its append-only file exactly the databases it
 held, and from a file cut by a crash at any byte, the databases it held after some prefix
 of its acts (sections 3e and 3x). On about 266 thousand random commands the replies
-matched real Redis 7 byte for byte; the versions with the 16-way trie passed about 835
-thousand more, the current one, with COPY, about 165 thousand. Shards across cores and a key hashed once were built and
+matched real Redis 7 byte for byte; the versions with the 16-way trie passed about 935
+thousand more, the current one, with BITOP and LCS, about 100 thousand. Shards across cores and a key hashed once were built and
 proved too (sections 3a–3c, 3g, 3h), and taken out again because they paid too little
 for what they cost (section 3l): 38% less code and 38% fewer lines of proof.
 
@@ -2076,6 +2076,48 @@ number the numbers at their edges (past a long long, LLONG_MAX and LLONG_MIN, 2^
 2^31, and forms Redis refuses: `+5`, `1e5`, `0x10`, `" 5"`, `-0`, `00`, `3.5`): 741
 commands, each answered as Redis answers it, but INCRBY and DECRBY past 14 digits and
 SCAN with a cursor BendKV did not give, the differences documented already.
+
+## 3zd. BITOP and LCS
+
+**BITOP.** AND, OR and XOR combine their sources byte by byte, a key not there reading
+as no bytes and a shorter value padded with zero bytes; NOT complements its one source.
+The value is set at the destination as SET sets it, its time gone, or the destination is
+deleted when the value is empty, and the reply is the value's length. The operation is
+named in any case and read only up to a NUL byte, as `strcasecmp` reads it, with Redis's
+errors (a syntax error for another name; NOT with more than one source).
+
+BITOP is the third command whose write depends on keys besides the one it writes: its
+`deps` are its sources, so the commuting laws hold of it as they hold of MSETNX and
+RENAME, through three lemmas: its value is the same in two tries that agree on its
+sources (an induction over them), its write leaves a key that had one entry in two tries
+with one entry, and it changes no key but its destination. Its write is the SET or the
+DEL of its destination, and so is its log, so that the laws of the log needed nothing
+SET and DEL did not have already. One more law, `bitop_store`: after BITOP the
+destination holds the value with no time, or nothing when the value is empty, and the
+reply is the value's length (64 laws).
+
+**LCS.** The longest common subsequence of two values, as Redis 7.0.15's `lcsCommand`
+finds it: the table of the LCS lengths of every two prefixes, then a walk back from its
+last cell that takes a byte when both prefixes end with it, and otherwise drops the last
+byte of the first value when the cell above holds more than the cell to the left, else
+the second's (the tie decides which subsequence, and which runs, come out). LEN answers
+the length with no walk; IDX the runs the walk took, the last first, each as its ranges
+in both values, with its length after WITHMATCHLEN, those shorter than MINMATCHLEN left
+out; otherwise the subsequence itself. LCS is a command of the session, as OBJECT is: it
+reads the selected database and proto-max-bulk-len, which bounds the table at 4 bytes a
+cell, as in Redis. It changes no database, so its proofs are a case of the sessions'
+proofs each. The table is lists of numbers, about 16 bytes a cell where Redis has 4, and
+it is slow: two values of 4,000 bytes (16 million cells) take 1.1 to 2.5 s, where Redis
+takes 0.06 s; the largest table proto-max-bulk-len allows by default, 134 million cells,
+would take BendKV tens of seconds and gigabytes.
+
+**Cost.** GET 3,146, SET 4,076 and INCR 4,240 instructions per request (3,143, 4,072 and
+4,236 before, +0.1%). Redis's test suite: BendKV passes 311 of the 1,673 tests Redis
+passes (18.6%) and 287 of the 370 in what it has; unit/bitops 43 of 45 (was 30: BITOP's
+twelve, and a fuzz test of BITPOS and BITCOUNT that BITOP NOT sets up), unit/type/string
+70 of 77 (LCS's five), and COMMAND GETKEYS of LCS. The differential tests ran about 100
+thousand commands with BITOP and LCS among them (operations and options in any case,
+wrong ones, a destination among the sources), every reply identical to Redis's.
 
 ## 4. Where a request's time goes, and hiding the memory waits
 

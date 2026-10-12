@@ -18,7 +18,11 @@ the value was made, and the idle time reads a clock), and TIME with
 arguments. MSETNX, RENAME and RENAMENX move and set keys of the same
 few names, so they often find one there; COPY copies within the
 database and to the others, with REPLACE or not, and bad numbers and
-options among them.
+options among them. BITOP combines keys of those names (one of them its
+own destination now and then), with names of operations in any case and
+wrong ones; LCS compares two of them with its options in any order, and
+wrong ones (its table stays far below proto-max-bulk-len: values are
+short).
 
 Known, documented divergences that the generator avoids: BendKV's
 integers have at most 14 digits (Redis allows int64), and so have its
@@ -331,6 +335,13 @@ def rnd_cmd(r):
                                  [b"REPLACE", b"DB", rnd_db(r)], [b"DB"], [b"FOO"], [b"DB", rnd_db(r), b"DB", rnd_db(r)],
                                  [b"REPLACE", b"REPLACE"]])),
         (0.003, lambda: [b"COPY"] + [k() for _ in range(r.choice([0, 1]))]),
+        (0.03, lambda: [b"BITOP", r.choice([b"AND", b"or", b"Xor", b"OR", b"xor", b"and"]), k()] + ks()),
+        (0.01, lambda: [b"BITOP", r.choice([b"NOT", b"not"]), k(), k()]),
+        (0.005, lambda: [b"BITOP"] + r.choice([[b"NOT", k(), k(), k()], [b"FOO", k(), k()], [b"AND", k()], [b"NOT", k()],
+                                               [b"AND"], [], [b"and\x00x", k(), k()]])),
+        (0.03, lambda: [b"LCS", k(), k()] + r.sample([b"LEN", b"IDX", b"WITHMATCHLEN", b"withmatchlen", b"idx"], r.randint(0, 2)) +
+                       r.choice([[], [], [b"MINMATCHLEN", r.choice([b"0", b"1", b"2", b"3", b"-1", b"x", b"99999999999999999999"])]])),
+        (0.005, lambda: [b"LCS"] + r.choice([[], [k()], [k(), k(), b"FOO"], [k(), k(), b"MINMATCHLEN"], [k(), k(), b"LEN", b"IDX"]])),
     ]
     c *= sum(p for p, f in table)
     acc = 0.0

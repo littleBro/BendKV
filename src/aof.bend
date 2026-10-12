@@ -24,7 +24,8 @@ import ./batch.bend as B
 # on, at time 0 (a file loads at time 0, when no key has expired): none
 # for one that only reads or fails, the command itself for SET, DEL, MSET
 # and FLUSHDB, the MSET of its pairs for an MSETNX that set them, RENAME
-# for a RENAME or RENAMENX that moved its entry, and for an update (R.Upd,
+# for a RENAME or RENAMENX that moved its entry, the SET of BITOP's value
+# (the DEL of its destination when the value is empty), and for an update (R.Upd,
 # and INCRBY, run here as one) what its change left of its key: SET of
 # the value it holds (with PXAT and the time it expires at, when it
 # does), PEXPIREAT for a time alone, PERSIST for none, DEL for a key
@@ -139,6 +140,20 @@ def run.rename(+src: String, +dst: String, +nx: Bool, db: R.Db) -> R.Reply & (Li
   es = ren.effect(R.ren.find(d, src, dst, nx), src, dst)
   run.out(R.exec(R.Rename{src, dst, nx}, d), es)
 
+# BITOP's effect: the SET of its value, or the DEL of its destination
+# when the value is empty
+def bitop.effect(e: Bool, +v: String, +d: String) -> List<&2, R.Cmd>:
+  match e:
+    case True{}:
+      [R.Del{[d]}]
+    case False{}:
+      [R.Set{d, v}]
+
+def run.bitop(+op: R.BitK, +d: String, +srcs: List<&2, String>, db: R.Db) -> R.Reply & (List<&2, R.Cmd> & R.Db):
+  +x = db
+  +v = R.bitop.val(op, srcs, R.db.now(x), R.db.trie(x))
+  run.out(R.exec(R.BitOp{op, d, srcs}, x), bitop.effect(String.is_empty(v), v, d))
+
 def run(+c: R.Cmd, db: R.Db) -> R.Reply & (List<&2, R.Cmd> & R.Db):
   match c:
     case R.Upd{+k, +op}:
@@ -149,6 +164,8 @@ def run(+c: R.Cmd, db: R.Db) -> R.Reply & (List<&2, R.Cmd> & R.Db):
       run.msetnx(ps, db)
     case R.Rename{+src, +dst, +nx}:
       run.rename(src, dst, nx, db)
+    case R.BitOp{+op, +d, +srcs}:
+      run.bitop(op, d, srcs, db)
     case _:
       run.put(c, R.exec(c, db))
 

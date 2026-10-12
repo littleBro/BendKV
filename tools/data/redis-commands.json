@@ -352,6 +352,149 @@
     []
    ]
   },
+  "bitop": {
+   "docs": [
+    "summary",
+    "Perform bitwise operations between strings",
+    "since",
+    "2.6.0",
+    "group",
+    "bitmap",
+    "complexity",
+    "O(N)",
+    "arguments",
+    [
+     [
+      "name",
+      "operation",
+      "type",
+      "string"
+     ],
+     [
+      "name",
+      "destkey",
+      "type",
+      "key",
+      "key_spec_index",
+      0
+     ],
+     [
+      "name",
+      "key",
+      "type",
+      "key",
+      "key_spec_index",
+      1,
+      "flags",
+      [
+       {
+        "+": "multiple"
+       }
+      ]
+     ]
+    ]
+   ],
+   "info": [
+    "bitop",
+    -4,
+    [
+     {
+      "+": "write"
+     },
+     {
+      "+": "denyoom"
+     }
+    ],
+    2,
+    -1,
+    1,
+    [
+     {
+      "+": "@write"
+     },
+     {
+      "+": "@bitmap"
+     },
+     {
+      "+": "@slow"
+     }
+    ],
+    [],
+    [
+     [
+      "flags",
+      [
+       {
+        "+": "OW"
+       },
+       {
+        "+": "update"
+       }
+      ],
+      "begin_search",
+      [
+       "type",
+       "index",
+       "spec",
+       [
+        "index",
+        2
+       ]
+      ],
+      "find_keys",
+      [
+       "type",
+       "range",
+       "spec",
+       [
+        "lastkey",
+        0,
+        "keystep",
+        1,
+        "limit",
+        0
+       ]
+      ]
+     ],
+     [
+      "flags",
+      [
+       {
+        "+": "RO"
+       },
+       {
+        "+": "access"
+       }
+      ],
+      "begin_search",
+      [
+       "type",
+       "index",
+       "spec",
+       [
+        "index",
+        3
+       ]
+      ],
+      "find_keys",
+      [
+       "type",
+       "range",
+       "spec",
+       [
+        "lastkey",
+        -1,
+        "keystep",
+        1,
+        "limit",
+        0
+       ]
+      ]
+     ]
+    ],
+    []
+   ]
+  },
   "bitpos": {
    "docs": [
     "summary",
@@ -4255,6 +4398,155 @@
      "nondeterministic_output_order"
     ],
     [],
+    []
+   ]
+  },
+  "lcs": {
+   "docs": [
+    "summary",
+    "Find longest common substring",
+    "since",
+    "7.0.0",
+    "group",
+    "string",
+    "complexity",
+    "O(N*M) where N and M are the lengths of s1 and s2, respectively",
+    "arguments",
+    [
+     [
+      "name",
+      "key1",
+      "type",
+      "key",
+      "key_spec_index",
+      0
+     ],
+     [
+      "name",
+      "key2",
+      "type",
+      "key",
+      "key_spec_index",
+      0
+     ],
+     [
+      "name",
+      "len",
+      "type",
+      "pure-token",
+      "token",
+      "LEN",
+      "flags",
+      [
+       {
+        "+": "optional"
+       }
+      ]
+     ],
+     [
+      "name",
+      "idx",
+      "type",
+      "pure-token",
+      "token",
+      "IDX",
+      "flags",
+      [
+       {
+        "+": "optional"
+       }
+      ]
+     ],
+     [
+      "name",
+      "len",
+      "type",
+      "integer",
+      "token",
+      "MINMATCHLEN",
+      "flags",
+      [
+       {
+        "+": "optional"
+       }
+      ]
+     ],
+     [
+      "name",
+      "withmatchlen",
+      "type",
+      "pure-token",
+      "token",
+      "WITHMATCHLEN",
+      "flags",
+      [
+       {
+        "+": "optional"
+       }
+      ]
+     ]
+    ]
+   ],
+   "info": [
+    "lcs",
+    -3,
+    [
+     {
+      "+": "readonly"
+     }
+    ],
+    1,
+    2,
+    1,
+    [
+     {
+      "+": "@read"
+     },
+     {
+      "+": "@string"
+     },
+     {
+      "+": "@slow"
+     }
+    ],
+    [],
+    [
+     [
+      "flags",
+      [
+       {
+        "+": "RO"
+       },
+       {
+        "+": "access"
+       }
+      ],
+      "begin_search",
+      [
+       "type",
+       "index",
+       "spec",
+       [
+        "index",
+        1
+       ]
+      ],
+      "find_keys",
+      [
+       "type",
+       "range",
+       "spec",
+       [
+        "lastkey",
+        1,
+        "keystep",
+        1,
+        "limit",
+        0
+       ]
+      ]
+     ]
+    ],
     []
    ]
   },

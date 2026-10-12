@@ -98,6 +98,18 @@ def ren(r: R.Ren, nx: Bool, +src: String, +dst: String, db: KV.Trie<String>) -> 
     case R.RnMove{v, +e}:
       (R.ren.ok(nx, 1n), KV.del(String, KV.setx(String, db, dst, v, e), src))
 
+# BITOP: the value its sources make set at dst as SET sets it, or dst
+# deleted when the value is empty; the reply is the value's length
+def bitop.t(e: Bool, +v: String, +d: String, db: KV.Trie<String>) -> KV.Trie<String>:
+  match e:
+    case True{}:
+      KV.del(String, db, d)
+    case False{}:
+      KV.set(String, db, d, v)
+
+def bitop(+v: String, +d: String, db: KV.Trie<String>) -> R.Reply & KV.Trie<String>:
+  (R.r_int(String.length(v)), bitop.t(String.is_empty(v), v, d, db))
+
 def reply_of(r: R.Reply & KV.Trie<String>) -> R.Reply:
   (x, db) = r
   x
@@ -156,6 +168,9 @@ def exec(cmd: R.Cmd, db: KV.Trie<String>, +now: Nat) -> R.Reply & KV.Trie<String
     case R.Rename{+src, +dst, +nx}:
       +d = db
       ren(ren.find(d, src, dst, nx, now), nx, src, dst, d)
+    case R.BitOp{+op, +dst, srcs}:
+      +d = db
+      bitop(R.bitop.val(op, srcs, now, d), dst, d)
     case R.Own{o}:
       (R.RError{"ERR a command of the connection, not of the database"}, db)
     case R.Bad{r}:

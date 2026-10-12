@@ -123,7 +123,9 @@ type UpdOp is Data:
 # reads. TIME reads the clock (the time the batch runs at), OBJECT a key of
 # the selected database and the parameters of eviction; COPY copies a key
 # to the selected database or another one (an act of several databases,
-# below), its arguments kept as they came and read as it runs. A command whose
+# below), its arguments kept as they came and read as it runs; LCS reads
+# two keys of the selected database and proto-max-bulk-len, which bounds
+# its table, its arguments read as it runs. A command whose
 # reply is fixed (a HELP) is SReply; one the parser found wrong (an
 # unknown subcommand, a wrong number of arguments) is SBad, answered as
 # Redis answers those, before it asks a client to authenticate.
@@ -150,8 +152,16 @@ type SessOp is Data:
   STime{}
   SObject{sub: Nat, key: String}
   SCopy{args: List<&2, String>}
+  SLcs{args: List<&2, String>}
   SReply{r: Reply}
   SBad{r: Reply}
+
+# BITOP's operation
+type BitK is Data:
+  BAnd{}
+  BOr{}
+  BXor{}
+  BNot{}
 
 # a parsed command
 type Cmd is Data:
@@ -172,6 +182,7 @@ type Cmd is Data:
   Upd{key: String, op: UpdOp}
   MSetNx{pairs: List<&2, KVPair>}
   Rename{src: String, dst: String, nx: Bool}
+  BitOp{op: BitK, dst: String, srcs: List<&2, String>}
   Own{op: SessOp}
   Bad{reply: Reply}
 
@@ -505,6 +516,31 @@ def sess_reply(r: Reply) -> SessOp:
 # finds it: up to s's first NUL
 def is_word(+s: String, w: String) -> Bool:
   String.eq(String.to_upper(cstr(s)), w)
+
+# BITOP op dst src...: the operation named in any case, as strcasecmp
+# reads it; NOT takes exactly one source
+def bitop.kind(+w: String) -> Maybe<&2, BitK>:
+  Bool.pick(Maybe<&2, BitK>, is_word(w, "AND"), Some{BAnd{}},
+  Bool.pick(Maybe<&2, BitK>, is_word(w, "OR"), Some{BOr{}},
+  Bool.pick(Maybe<&2, BitK>, is_word(w, "XOR"), Some{BXor{}},
+  Bool.pick(Maybe<&2, BitK>, is_word(w, "NOT"), Some{BNot{}}, None{}))))
+
+def parse_bitop(m: Maybe<&2, BitK>, d: String, srcs: List<&2, String>) -> Cmd:
+  match m:
+    case None{}:
+      Bad{RError{"ERR syntax error"}}
+    case Some{BNot{}}:
+      match srcs:
+        case Con{k, Nil{}}:
+          BitOp{BNot{}, d, [k]}
+        case _:
+          Bad{RError{"ERR BITOP NOT must be called with a single source key."}}
+    case Some{BAnd{}}:
+      BitOp{BAnd{}, d, srcs}
+    case Some{BOr{}}:
+      BitOp{BOr{}, d, srcs}
+    case Some{BXor{}}:
+      BitOp{BXor{}, d, srcs}
 
 # CLIENT: BendKV has no client tracking and no blocking commands, so the
 # subcommands about them answer as Redis does when none is in use
@@ -1587,7 +1623,8 @@ def cmd_id(+n: String, len: Nat) -> Nat:
       Bool.pick(Nat, String.eq(n, "GET"), 3n,
       Bool.pick(Nat, String.eq(n, "SET"), 4n,
       Bool.pick(Nat, String.eq(n, "DEL"), 7n,
-      Bool.pick(Nat, String.eq(n, "TTL"), 32n, 0n))))
+      Bool.pick(Nat, String.eq(n, "TTL"), 32n,
+      Bool.pick(Nat, String.eq(n, "LCS"), 116n, 0n)))))
     case 4n:
       Bool.pick(Nat, String.eq(n, "PING"), 1n,
       Bool.pick(Nat, String.eq(n, "ECHO"), 2n,
@@ -1611,7 +1648,8 @@ def cmd_id(+n: String, len: Nat) -> Nat:
       Bool.pick(Nat, String.eq(n, "RESET"), 104n,
       Bool.pick(Nat, String.eq(n, "SETEX"), 23n,
       Bool.pick(Nat, String.eq(n, "GETEX"), 26n,
-      Bool.pick(Nat, String.eq(n, "TOUCH"), 44n, 0n))))))
+      Bool.pick(Nat, String.eq(n, "TOUCH"), 44n,
+      Bool.pick(Nat, String.eq(n, "BITOP"), 48n, 0n)))))))
     case 6n:
       Bool.pick(Nat, String.eq(n, "GETSET"), 6n,
       Bool.pick(Nat, String.eq(n, "UNLINK"), 8n,
@@ -1931,6 +1969,12 @@ def parse_id(id: Nat, name: String, args: List<&2, String>) -> Cmd:
           Rename{a, b, True{}}
         case _:
           e_arity("renamenx")
+    case 48n:  # BITOP
+      match args:
+        case Con{o, Con{d, Con{k, ks}}}:
+          parse_bitop(bitop.kind(o), d, k <> ks)
+        case _:
+          e_arity("bitop")
     case _:
       e_unknown(name, args)
 
@@ -2026,6 +2070,12 @@ def parse_sess(id: Nat, name: String, args: List<&2, String>) -> SessOp:
           SCopy{a <> b <> rest}
         case _:
           s_arity("copy")
+    case 116n:  # LCS
+      match args:
+        case Con{a, Con{b, rest}}:
+          SLcs{a <> b <> rest}
+        case _:
+          s_arity("lcs")
     case _:
       SBad{RError{no_newlines("ERR unknown command '" ++ String.take(name, 128n) ++ "', with args beginning with: " ++ unknown.args(args, ""))}}
 
@@ -2166,38 +2216,42 @@ def stat.top(+id: Nat) -> Nat:
       46n
     case 47n:
       47n
-    case 100n:
+    case 48n:
       48n
-    case 101n:
+    case 100n:
       49n
-    case 102n:
+    case 101n:
       50n
-    case 103n:
+    case 102n:
       51n
-    case 104n:
+    case 103n:
       52n
-    case 105n:
+    case 104n:
       53n
-    case 106n:
+    case 105n:
       54n
-    case 107n:
+    case 106n:
       55n
-    case 108n:
+    case 107n:
       56n
-    case 109n:
+    case 108n:
       57n
-    case 110n:
+    case 109n:
       58n
-    case 111n:
+    case 110n:
       59n
-    case 112n:
+    case 111n:
       60n
-    case 113n:
+    case 112n:
       61n
-    case 114n:
+    case 113n:
       62n
-    case 115n:
+    case 114n:
       63n
+    case 115n:
+      64n
+    case 116n:
+      65n
     case _:
       0n
 
@@ -2205,25 +2259,25 @@ def stat.top(+id: Nat) -> Nat:
 def stat.sub.client(+sub: Nat) -> Nat:
   match sub:
     case 1n:
-      64n
-    case 2n:
-      65n
-    case 3n:
       66n
-    case 4n:
+    case 2n:
       67n
-    case 5n:
+    case 3n:
       68n
-    case 6n:
+    case 4n:
       69n
-    case 7n:
+    case 5n:
       70n
-    case 8n:
+    case 6n:
       71n
-    case 9n:
+    case 7n:
       72n
-    case 10n:
+    case 8n:
       73n
+    case 9n:
+      74n
+    case 10n:
+      75n
     case _:
       0n
 
@@ -2231,9 +2285,9 @@ def stat.sub.client(+sub: Nat) -> Nat:
 def stat.sub.function(+sub: Nat) -> Nat:
   match sub:
     case 1n:
-      74n
+      76n
     case 2n:
-      75n
+      77n
     case _:
       0n
 
@@ -2241,15 +2295,15 @@ def stat.sub.function(+sub: Nat) -> Nat:
 def stat.sub.config(+sub: Nat) -> Nat:
   match sub:
     case 1n:
-      76n
-    case 2n:
-      77n
-    case 3n:
       78n
-    case 4n:
+    case 2n:
       79n
-    case 5n:
+    case 3n:
       80n
+    case 4n:
+      81n
+    case 5n:
+      82n
     case _:
       0n
 
@@ -2257,19 +2311,19 @@ def stat.sub.config(+sub: Nat) -> Nat:
 def stat.sub.command(+sub: Nat) -> Nat:
   match sub:
     case 1n:
-      81n
-    case 2n:
-      82n
-    case 3n:
       83n
-    case 4n:
+    case 2n:
       84n
-    case 5n:
+    case 3n:
       85n
-    case 6n:
+    case 4n:
       86n
-    case 7n:
+    case 5n:
       87n
+    case 6n:
+      88n
+    case 7n:
+      89n
     case _:
       0n
 
@@ -2277,15 +2331,15 @@ def stat.sub.command(+sub: Nat) -> Nat:
 def stat.sub.object(+sub: Nat) -> Nat:
   match sub:
     case 1n:
-      88n
-    case 2n:
-      89n
-    case 3n:
       90n
-    case 4n:
+    case 2n:
       91n
-    case 5n:
+    case 3n:
       92n
+    case 4n:
+      93n
+    case 5n:
+      94n
     case _:
       0n
 
@@ -2387,94 +2441,98 @@ def stat.name(+key: Nat) -> String:
     case 47n:
       "renamenx"
     case 48n:
-      "select"
+      "bitop"
     case 49n:
-      "hello"
+      "select"
     case 50n:
-      "auth"
+      "hello"
     case 51n:
-      "quit"
+      "auth"
     case 52n:
-      "reset"
+      "quit"
     case 53n:
-      "client"
+      "reset"
     case 54n:
-      "function"
+      "client"
     case 55n:
-      "config"
+      "function"
     case 56n:
-      "info"
+      "config"
     case 57n:
-      "command"
+      "info"
     case 58n:
-      "randomkey"
+      "command"
     case 59n:
-      "swapdb"
+      "randomkey"
     case 60n:
-      "move"
+      "swapdb"
     case 61n:
-      "time"
+      "move"
     case 62n:
-      "object"
+      "time"
     case 63n:
-      "copy"
+      "object"
     case 64n:
-      "client|id"
+      "copy"
     case 65n:
-      "client|help"
+      "lcs"
     case 66n:
-      "client|reply"
+      "client|id"
     case 67n:
-      "client|getname"
+      "client|help"
     case 68n:
-      "client|setname"
+      "client|reply"
     case 69n:
-      "client|caching"
+      "client|getname"
     case 70n:
-      "client|unblock"
+      "client|setname"
     case 71n:
-      "client|getredir"
+      "client|caching"
     case 72n:
-      "client|no-evict"
+      "client|unblock"
     case 73n:
-      "client|trackinginfo"
+      "client|getredir"
     case 74n:
-      "function|flush"
+      "client|no-evict"
     case 75n:
-      "function|help"
+      "client|trackinginfo"
     case 76n:
-      "config|get"
+      "function|flush"
     case 77n:
-      "config|set"
+      "function|help"
     case 78n:
-      "config|resetstat"
+      "config|get"
     case 79n:
-      "config|rewrite"
+      "config|set"
     case 80n:
-      "config|help"
+      "config|resetstat"
     case 81n:
-      "command|info"
+      "config|rewrite"
     case 82n:
-      "command|docs"
+      "config|help"
     case 83n:
-      "command|list"
+      "command|info"
     case 84n:
-      "command|help"
+      "command|docs"
     case 85n:
-      "command|count"
+      "command|list"
     case 86n:
-      "command|getkeys"
+      "command|help"
     case 87n:
-      "command|getkeysandflags"
+      "command|count"
     case 88n:
-      "object|help"
+      "command|getkeys"
     case 89n:
-      "object|freq"
+      "command|getkeysandflags"
     case 90n:
-      "object|encoding"
+      "object|help"
     case 91n:
-      "object|refcount"
+      "object|freq"
     case 92n:
+      "object|encoding"
+    case 93n:
+      "object|refcount"
+    case 94n:
       "object|idletime"
     case _:
       ""
@@ -2578,94 +2636,98 @@ def stat.arity(+key: Nat) -> Nat:
     case 47n:
       6n
     case 48n:
-      4n
+      9n
     case 49n:
-      3n
+      4n
     case 50n:
-      5n
-    case 51n:
       3n
-    case 52n:
-      2n
-    case 53n:
+    case 51n:
       5n
+    case 52n:
+      3n
+    case 53n:
+      2n
     case 54n:
       5n
     case 55n:
       5n
     case 56n:
-      3n
+      5n
     case 57n:
       3n
     case 58n:
-      2n
+      3n
     case 59n:
-      6n
+      2n
     case 60n:
       6n
     case 61n:
-      2n
-    case 62n:
-      5n
-    case 63n:
-      7n
-    case 64n:
-      4n
-    case 65n:
-      4n
-    case 66n:
       6n
+    case 62n:
+      2n
+    case 63n:
+      5n
+    case 64n:
+      7n
+    case 65n:
+      7n
+    case 66n:
+      4n
     case 67n:
       4n
     case 68n:
       6n
     case 69n:
-      6n
-    case 70n:
-      7n
-    case 71n:
       4n
-    case 72n:
+    case 70n:
       6n
+    case 71n:
+      6n
+    case 72n:
+      7n
     case 73n:
       4n
     case 74n:
-      5n
+      6n
     case 75n:
       4n
     case 76n:
-      7n
+      5n
     case 77n:
-      9n
+      4n
     case 78n:
-      4n
+      7n
     case 79n:
-      4n
+      9n
     case 80n:
       4n
     case 81n:
-      5n
+      4n
     case 82n:
-      5n
+      4n
     case 83n:
       5n
     case 84n:
-      4n
+      5n
     case 85n:
-      4n
+      5n
     case 86n:
-      9n
-    case 87n:
-      9n
-    case 88n:
       4n
+    case 87n:
+      4n
+    case 88n:
+      9n
     case 89n:
-      6n
+      9n
     case 90n:
-      6n
+      4n
     case 91n:
       6n
     case 92n:
+      6n
+    case 93n:
+      6n
+    case 94n:
       6n
     case _:
       1n
@@ -2701,9 +2763,11 @@ def stat.risky(+key: Nat) -> Bool:
       True{}
     case 47n:
       True{}
-    case 89n:
+    case 65n:
       True{}
-    case 92n:
+    case 91n:
+      True{}
+    case 94n:
       True{}
     case _:
       False{}
@@ -3455,6 +3519,22 @@ def stat.cw(+code: Nat) -> U32:
       1656
     case 371n:
       1671
+    case 372n:
+      1675
+    case 373n:
+      1677
+    case 374n:
+      1678
+    case 375n:
+      1683
+    case 376n:
+      1685
+    case 377n:
+      1686
+    case 378n:
+      1689
+    case 379n:
+      1690
     case _:
       63
 
@@ -4205,6 +4285,22 @@ def stat.code.cw(+w: Nat) -> Nat:
       370n
     case 1671n:
       371n
+    case 1675n:
+      372n
+    case 1677n:
+      373n
+    case 1678n:
+      374n
+    case 1683n:
+      375n
+    case 1685n:
+      376n
+    case 1686n:
+      377n
+    case 1689n:
+      378n
+    case 1690n:
+      379n
     case _:
       0n
 
@@ -5838,6 +5934,92 @@ def db_of(r: Reply & Db) -> Db:
   (x, db) = r
   db
 
+# BITOP op dst src...: the bytes of the sources (a key not there reads as
+# no bytes) combined byte by byte, AND, OR or XOR, a source shorter than
+# another padded with zero bytes, or the one source's bytes complemented
+# (NOT). The value is set at dst as SET sets it, its time gone, or dst is
+# deleted when the value is empty; the reply is the value's length.
+def bitop.byte(+op: BitK, +x: U32, +y: U32) -> U32:
+  match op:
+    case BAnd{}:
+      U32.and(x, y)
+    case BOr{}:
+      U32.or(x, y)
+    case BXor{}:
+      U32.xor(x, y)
+    case BNot{}:
+      U32.and(U32.not(x), 255)
+
+# the bytes of s, each against a zero byte (past the end of the shorter
+# value; NOT's complement), onto acc, which holds the bytes before them
+# reversed
+def bitop.rest(+op: BitK, s: String, acc: String) -> String:
+  match s:
+    case SNil{}:
+      String.reverse(acc)
+    case SCon{Chr{+x}, t}:
+      bitop.rest(op, t, SCon{Chr{bitop.byte(op, x, 0)}, acc})
+
+def bitop.zip(+op: BitK, a: String, b: String, acc: String) -> String:
+  match a:
+    case SNil{}:
+      bitop.rest(op, b, acc)
+    case SCon{Chr{+x}, s}:
+      match b:
+        case SNil{}:
+          bitop.rest(op, SCon{Chr{x}, s}, acc)
+        case SCon{Chr{+y}, t}:
+          bitop.zip(op, s, t, SCon{Chr{bitop.byte(op, x, y)}, acc})
+
+def bitop.or_empty(m: Maybe<&2, String>) -> String:
+  match m:
+    case Some{v}:
+      v
+    case None{}:
+      ""
+
+def bitop.src(+t: KV.Trie<String>, +now: Nat, +k: String) -> String:
+  bitop.or_empty(KV.read(String, t, k, now))
+
+# the value so far, acc, combined with each source after the first
+def bitop.fold(+op: BitK, srcs: List<&2, String>, +now: Nat, +t: KV.Trie<String>, acc: String) -> String:
+  match srcs:
+    case Nil{}:
+      acc
+    case Con{+k, rest}:
+      bitop.fold(op, rest, now, t, bitop.zip(op, acc, bitop.src(t, now, k), ""))
+
+# the first source as the value starts: complemented for NOT
+def bitop.first(+op: BitK, v: String) -> String:
+  match op:
+    case BNot{}:
+      bitop.rest(BNot{}, v, "")
+    case BAnd{}:
+      v
+    case BOr{}:
+      v
+    case BXor{}:
+      v
+
+def bitop.val(+op: BitK, srcs: List<&2, String>, +now: Nat, +t: KV.Trie<String>) -> String:
+  match srcs:
+    case Nil{}:
+      ""
+    case Con{+k, rest}:
+      bitop.fold(op, rest, now, t, bitop.first(op, bitop.src(t, now, k)))
+
+def bitop.db(e: Bool, +v: String, +d: String, db: Db) -> Db:
+  match e:
+    case True{}:
+      db_of(db.del(db, [d]))
+    case False{}:
+      db.set(db, d, v)
+
+def db.bitop(db: Db, +op: BitK, +d: String, srcs: List<&2, String>) -> Reply & Db:
+  +x = db
+  +v = bitop.val(op, srcs, db.now(x), db.trie(x))
+  (r_int(String.length(v)), bitop.db(String.is_empty(v), v, d, x))
+
 # one command: its reply and the database after it. The database is
 # passed on, not shared, so a write rebuilds only the path it changes.
 # A key read only reads the trie: the compiler lends t to the read and
@@ -5893,6 +6075,8 @@ def exec(cmd: Cmd, db: Db) -> Reply & Db:
       db.msetnx(db, ps)
     case Rename{+src, +dst, +nx}:
       db.rename(db, src, dst, nx)
+    case BitOp{+op, +d, srcs}:
+      db.bitop(db, op, d, srcs)
     case Own{o}:
       (RError{"ERR a command of the connection, not of the database"}, db)
     case Bad{r}:
