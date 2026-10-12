@@ -24,9 +24,9 @@ HERE = pathlib.Path(__file__).resolve().parent.parent
 JSON = HERE / "tools" / "data" / "redis-configs.json"
 BEND = HERE / "src" / "config.bend"
 
-# Where BendKV's default is not Redis's: one database, no RDB snapshots,
-# and the loopback address it listens on.
-DEFAULTS = {"databases": "1", "save": "", "bind": "127.0.0.1"}
+# Where BendKV's default is not Redis's: no RDB snapshots, and the
+# loopback address it listens on.
+DEFAULTS = {"save": "", "bind": "127.0.0.1"}
 
 # What a change does in BendKV, by Redis's apply function: hz is capped as
 # Redis caps it, repl-backlog-size is raised to Redis's least backlog,

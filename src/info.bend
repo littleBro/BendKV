@@ -369,9 +369,10 @@ type Inst is Data:
   IInst{ms: Nat, last: Count, sc: List<&2, Nat>, si: List<&2, Nat>, so: List<&2, Nat>}
 
 # the sweep of expired keys (redis.bend: reap): the bucket the next one
-# starts at, and the keys the sweeps deleted (Redis's expired_keys)
+# starts at in each database (by number; none for 0), and the keys the
+# sweeps deleted (Redis's expired_keys)
 type Exp is Data:
-  IExp{cur: Nat, n: Nat}
+  IExp{cur: List<&2, Nat>, n: Nat}
 
 # everything INFO shows that the parameters and the keys do not: the
 # start, the last facts, the counts, the rates, the peak of memory, the
@@ -416,7 +417,7 @@ def live.conns(+l: Live) -> Nat:
 
 # the server's facts at its start
 def info.new(b: Boot, +l: Live) -> Info:
-  IInfo{b, l, count.zero(), IInst{live.ms(l), count.zero(), samples.zero(), samples.zero(), samples.zero()}, live.rss(l), 0n, 0n, 0n, stats.zero(), IExp{0n, 0n}}
+  IInfo{b, l, count.zero(), IInst{live.ms(l), count.zero(), samples.zero(), samples.zero(), samples.zero()}, live.rss(l), 0n, 0n, 0n, stats.zero(), IExp{Nil{}, 0n}}
 
 # the append-only file the server restored at its start, of size bytes
 def info.restored(i: Info, +size: Nat) -> Info:
@@ -501,21 +502,43 @@ def info.reset(i: Info) -> Info:
     case IInfo{b, +l, c, inst, pk, c0, a0, a, st, ex}:
       IInfo{b, l, count.zero(), IInst{live.ms(l), count.zero(), samples.zero(), samples.zero(), samples.zero()}, pk, live.conns(l), a0, a, stats.zero(), exp.reset(ex)}
 
-# the sweep of expired keys: where the next one starts, and a sweep that
-# stopped at next having deleted k keys
-def info.reap_at(+i: Info) -> Nat:
+# the j-th of a list of numbers (0 past its end), and the list with v in
+# its place
+def cur.nth(j: Nat, +xs: List<&2, Nat>) -> Nat:
+  match j xs:
+    case 0n Con{+x, rest}:
+      x
+    case 1n+i Con{x, +rest}:
+      cur.nth(i, rest)
+    case _ Nil{}:
+      0n
+
+def cur.put(j: Nat, +v: Nat, xs: List<&2, Nat>) -> List<&2, Nat>:
+  match j xs:
+    case 0n Con{x, rest}:
+      v <> rest
+    case 0n Nil{}:
+      [v]
+    case 1n+i Con{x, rest}:
+      x <> cur.put(i, v, rest)
+    case 1n+i Nil{}:
+      0n <> cur.put(i, v, Nil{})
+
+# the sweep of expired keys: where the next one starts in database j, and
+# a sweep of j that stopped at next having deleted k keys
+def info.reap_at(+i: Info, +j: Nat) -> Nat:
   match i:
     case IInfo{b, l, c, inst, pk, c0, a0, a, st, +ex}:
       match ex:
         case IExp{+cur, n}:
-          cur
+          cur.nth(j, cur)
 
-def info.reaped(i: Info, +next: Nat, +k: Nat) -> Info:
+def info.reaped(i: Info, +j: Nat, +next: Nat, +k: Nat) -> Info:
   match i:
     case IInfo{b, l, c, inst, pk, c0, a0, a, st, ex}:
       match ex:
         case IExp{cur, +n}:
-          IInfo{b, l, c, inst, pk, c0, a0, a, st, IExp{next, Nat.add(n, k)}}
+          IInfo{b, l, c, inst, pk, c0, a0, a, st, IExp{cur.put(j, next, cur), Nat.add(n, k)}}
 
 # Numbers as printf writes them
 # ----------------------------
@@ -751,8 +774,24 @@ def sec.cpu(+l: Live) -> String:
       "# CPU\r\n" ++ kv("used_cpu_sys", cpu(st)) ++ kv("used_cpu_user", cpu(ut)) ++ kv("used_cpu_sys_children", "0.000000") ++
       kv("used_cpu_user_children", "0.000000") ++ kv("used_cpu_sys_main_thread", cpu(mst)) ++ kv("used_cpu_user_main_thread", cpu(mut))
 
-def sec.keyspace(+n: Nat, +x: Nat) -> String:
-  "# Keyspace\r\n" ++ Bool.pick(String, Nat.is_lt(0n, n), "db0:keys=" ++ Nat.show(n) ++ ",expires=" ++ Nat.show(x) ++ ",avg_ttl=0\r\n", "")
+# a line for each database that holds keys
+def ks.line(has: Bool, +i: Nat, +n: Nat, +x: Nat) -> String:
+  match has:
+    case True{}:
+      "db" ++ Nat.show(i) ++ ":keys=" ++ Nat.show(n) ++ ",expires=" ++ Nat.show(x) ++ ",avg_ttl=0\r\n"
+    case False{}:
+      ""
+
+def ks.lines(dbs: List<&2, R.Db>, +i: Nat) -> String:
+  match dbs:
+    case Nil{}:
+      ""
+    case Con{+d, rest}:
+      +n = R.db.n(d)
+      ks.line(Nat.is_lt(0n, n), i, n, R.db.x(d)) ++ ks.lines(rest, 1n+i)
+
+def sec.keyspace(dbs: List<&2, R.Db>) -> String:
+  "# Keyspace\r\n" ++ ks.lines(dbs, 0n)
 
 # Which sections
 # --------------
@@ -872,10 +911,10 @@ def on.cpu(on: Bool, +i: Info) -> String:
     case False{} _:
       ""
 
-def on.keyspace(on: Bool, +db: R.Db) -> String:
+def on.keyspace(on: Bool, +ds: R.Ds) -> String:
   match on:
     case True{}:
-      sec.keyspace(R.db.n(db), R.db.x(db))
+      sec.keyspace(R.ds.list(ds))
     case False{}:
       ""
 
@@ -901,7 +940,7 @@ def on.head(on: Bool, +head: String) -> String:
       ""
 
 # INFO [section ...]: the text of the sections asked for
-def text(args: List<&2, String>, +items: List<&2, C.CItem>, +i: Info, +db: R.Db) -> String:
+def text(args: List<&2, String>, +items: List<&2, C.CItem>, +i: Info, +ds: R.Ds) -> String:
   +s = sel.of(args)
   join([
     on.server(sel.has(s, "server"), items, i),
@@ -916,4 +955,4 @@ def text(args: List<&2, String>, +items: List<&2, C.CItem>, +i: Info, +db: R.Db)
     on.errstats(sel.has(s, "errorstats"), i),
     on.head(sel.has(s, "latencystats"), "# Latencystats\r\n"),
     on.head(sel.has(s, "cluster"), "# Cluster\r\n" ++ kv("cluster_enabled", "0")),
-    on.keyspace(sel.has(s, "keyspace"), db)], "")
+    on.keyspace(sel.has(s, "keyspace"), ds)], "")

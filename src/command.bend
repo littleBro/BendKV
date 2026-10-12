@@ -253,6 +253,12 @@ def cmd.mget() -> Top:
     [R.RBulk{"summary"}, R.RBulk{"Get the values of all the given keys"}, R.RBulk{"since"}, R.RBulk{"1.0.0"}, R.RBulk{"group"}, R.RBulk{"string"}, R.RBulk{"complexity"}, R.RBulk{"O(N) where N is the number of keys to retrieve."}, R.RBulk{"arguments"}, R.RArray{[R.RArray{[R.RBulk{"name"}, R.RBulk{"key"}, R.RBulk{"type"}, R.RBulk{"key"}, R.RBulk{"key_spec_index"}, R.RInt{R.IPos{0n}}, R.RBulk{"flags"}, R.RArray{[R.RStatus{"multiple"}]}]}]}]},
   []}
 
+def cmd.move() -> Top:
+  Top{Desc{"move", R.IPos{3n}, ["keyspace", "write", "fast"], [KSpec{["RW", "access", "update"], 1n, R.IPos{0n}, 1n, 0n}], KBySpecs{}, False{},
+    [R.RBulk{"move"}, R.RInt{R.IPos{3n}}, R.RArray{[R.RStatus{"write"}, R.RStatus{"fast"}]}, R.RInt{R.IPos{1n}}, R.RInt{R.IPos{1n}}, R.RInt{R.IPos{1n}}, R.RArray{[R.RStatus{"@keyspace"}, R.RStatus{"@write"}, R.RStatus{"@fast"}]}, R.RArray{[]}, R.RArray{[R.RArray{[R.RBulk{"flags"}, R.RArray{[R.RStatus{"RW"}, R.RStatus{"access"}, R.RStatus{"update"}]}, R.RBulk{"begin_search"}, R.RArray{[R.RBulk{"type"}, R.RBulk{"index"}, R.RBulk{"spec"}, R.RArray{[R.RBulk{"index"}, R.RInt{R.IPos{1n}}]}]}, R.RBulk{"find_keys"}, R.RArray{[R.RBulk{"type"}, R.RBulk{"range"}, R.RBulk{"spec"}, R.RArray{[R.RBulk{"lastkey"}, R.RInt{R.IPos{0n}}, R.RBulk{"keystep"}, R.RInt{R.IPos{1n}}, R.RBulk{"limit"}, R.RInt{R.IPos{0n}}]}]}]}]}],
+    [R.RBulk{"summary"}, R.RBulk{"Move a key to another database"}, R.RBulk{"since"}, R.RBulk{"1.0.0"}, R.RBulk{"group"}, R.RBulk{"generic"}, R.RBulk{"complexity"}, R.RBulk{"O(1)"}, R.RBulk{"arguments"}, R.RArray{[R.RArray{[R.RBulk{"name"}, R.RBulk{"key"}, R.RBulk{"type"}, R.RBulk{"key"}, R.RBulk{"key_spec_index"}, R.RInt{R.IPos{0n}}]}, R.RArray{[R.RBulk{"name"}, R.RBulk{"db"}, R.RBulk{"type"}, R.RBulk{"integer"}]}]}]},
+  []}
+
 def cmd.mset() -> Top:
   Top{Desc{"mset", R.INeg{2n}, ["write", "string", "slow"], [KSpec{["OW", "update"], 1n, R.INeg{0n}, 2n, 0n}], KBySpecs{}, False{},
     [R.RBulk{"mset"}, R.RInt{R.INeg{2n}}, R.RArray{[R.RStatus{"write"}, R.RStatus{"denyoom"}]}, R.RInt{R.IPos{1n}}, R.RInt{R.INeg{0n}}, R.RInt{R.IPos{2n}}, R.RArray{[R.RStatus{"@write"}, R.RStatus{"@string"}, R.RStatus{"@slow"}]}, R.RArray{[R.RBulk{"request_policy:multi_shard"}, R.RBulk{"response_policy:all_succeeded"}]}, R.RArray{[R.RArray{[R.RBulk{"flags"}, R.RArray{[R.RStatus{"OW"}, R.RStatus{"update"}]}, R.RBulk{"begin_search"}, R.RArray{[R.RBulk{"type"}, R.RBulk{"index"}, R.RBulk{"spec"}, R.RArray{[R.RBulk{"index"}, R.RInt{R.IPos{1n}}]}]}, R.RBulk{"find_keys"}, R.RArray{[R.RBulk{"type"}, R.RBulk{"range"}, R.RBulk{"spec"}, R.RArray{[R.RBulk{"lastkey"}, R.RInt{R.INeg{0n}}, R.RBulk{"keystep"}, R.RInt{R.IPos{2n}}, R.RBulk{"limit"}, R.RInt{R.IPos{0n}}]}]}]}]}],
@@ -355,6 +361,12 @@ def cmd.strlen() -> Top:
     [R.RBulk{"summary"}, R.RBulk{"Get the length of the value stored in a key"}, R.RBulk{"since"}, R.RBulk{"2.2.0"}, R.RBulk{"group"}, R.RBulk{"string"}, R.RBulk{"complexity"}, R.RBulk{"O(1)"}, R.RBulk{"arguments"}, R.RArray{[R.RArray{[R.RBulk{"name"}, R.RBulk{"key"}, R.RBulk{"type"}, R.RBulk{"key"}, R.RBulk{"key_spec_index"}, R.RInt{R.IPos{0n}}]}]}]},
   []}
 
+def cmd.swapdb() -> Top:
+  Top{Desc{"swapdb", R.IPos{3n}, ["keyspace", "write", "fast", "dangerous"], [], KBySpecs{}, False{},
+    [R.RBulk{"swapdb"}, R.RInt{R.IPos{3n}}, R.RArray{[R.RStatus{"write"}, R.RStatus{"fast"}]}, R.RInt{R.IPos{0n}}, R.RInt{R.IPos{0n}}, R.RInt{R.IPos{0n}}, R.RArray{[R.RStatus{"@keyspace"}, R.RStatus{"@write"}, R.RStatus{"@fast"}, R.RStatus{"@dangerous"}]}, R.RArray{[]}, R.RArray{[]}],
+    [R.RBulk{"summary"}, R.RBulk{"Swaps two Redis databases"}, R.RBulk{"since"}, R.RBulk{"4.0.0"}, R.RBulk{"group"}, R.RBulk{"server"}, R.RBulk{"complexity"}, R.RBulk{"O(N) where N is the count of clients watching or blocking on keys from both databases."}, R.RBulk{"arguments"}, R.RArray{[R.RArray{[R.RBulk{"name"}, R.RBulk{"index1"}, R.RBulk{"type"}, R.RBulk{"integer"}]}, R.RArray{[R.RBulk{"name"}, R.RBulk{"index2"}, R.RBulk{"type"}, R.RBulk{"integer"}]}]}]},
+  []}
+
 def cmd.ttl() -> Top:
   Top{Desc{"ttl", R.IPos{2n}, ["keyspace", "read", "fast"], [KSpec{["RO", "access"], 1n, R.IPos{0n}, 1n, 0n}], KBySpecs{}, False{},
     [R.RBulk{"ttl"}, R.RInt{R.IPos{2n}}, R.RArray{[R.RStatus{"readonly"}, R.RStatus{"fast"}]}, R.RInt{R.IPos{1n}}, R.RInt{R.IPos{1n}}, R.RInt{R.IPos{1n}}, R.RArray{[R.RStatus{"@keyspace"}, R.RStatus{"@read"}, R.RStatus{"@fast"}]}, R.RArray{[R.RBulk{"nondeterministic_output"}]}, R.RArray{[R.RArray{[R.RBulk{"flags"}, R.RArray{[R.RStatus{"RO"}, R.RStatus{"access"}]}, R.RBulk{"begin_search"}, R.RArray{[R.RBulk{"type"}, R.RBulk{"index"}, R.RBulk{"spec"}, R.RArray{[R.RBulk{"index"}, R.RInt{R.IPos{1n}}]}]}, R.RBulk{"find_keys"}, R.RArray{[R.RBulk{"type"}, R.RBulk{"range"}, R.RBulk{"spec"}, R.RArray{[R.RBulk{"lastkey"}, R.RInt{R.IPos{0n}}, R.RBulk{"keystep"}, R.RInt{R.IPos{1n}}, R.RBulk{"limit"}, R.RInt{R.IPos{0n}}]}]}]}]}],
@@ -375,7 +387,7 @@ def cmd.unlink() -> Top:
 
 # the commands, by name
 def table() -> List<&2, Top>:
-  [cmd.append(), cmd.auth(), cmd.client(), cmd.command(), cmd.config(), cmd.dbsize(), cmd.decr(), cmd.decrby(), cmd.del(), cmd.echo(), cmd.exists(), cmd.expire(), cmd.expireat(), cmd.expiretime(), cmd.flushall(), cmd.flushdb(), cmd.function(), cmd.get(), cmd.getdel(), cmd.getex(), cmd.getset(), cmd.hello(), cmd.incr(), cmd.incrby(), cmd.info(), cmd.keys(), cmd.mget(), cmd.mset(), cmd.persist(), cmd.pexpire(), cmd.pexpireat(), cmd.pexpiretime(), cmd.ping(), cmd.psetex(), cmd.pttl(), cmd.quit(), cmd.randomkey(), cmd.reset(), cmd.scan(), cmd.select(), cmd.set(), cmd.setex(), cmd.setnx(), cmd.strlen(), cmd.ttl(), cmd.type(), cmd.unlink()]
+  [cmd.append(), cmd.auth(), cmd.client(), cmd.command(), cmd.config(), cmd.dbsize(), cmd.decr(), cmd.decrby(), cmd.del(), cmd.echo(), cmd.exists(), cmd.expire(), cmd.expireat(), cmd.expiretime(), cmd.flushall(), cmd.flushdb(), cmd.function(), cmd.get(), cmd.getdel(), cmd.getex(), cmd.getset(), cmd.hello(), cmd.incr(), cmd.incrby(), cmd.info(), cmd.keys(), cmd.mget(), cmd.move(), cmd.mset(), cmd.persist(), cmd.pexpire(), cmd.pexpireat(), cmd.pexpiretime(), cmd.ping(), cmd.psetex(), cmd.pttl(), cmd.quit(), cmd.randomkey(), cmd.reset(), cmd.scan(), cmd.select(), cmd.set(), cmd.setex(), cmd.setnx(), cmd.strlen(), cmd.swapdb(), cmd.ttl(), cmd.type(), cmd.unlink()]
 
 # Redis's ACL categories (ACL CAT)
 def categories() -> List<&2, String>:

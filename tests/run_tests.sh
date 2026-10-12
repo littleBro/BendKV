@@ -1,9 +1,9 @@
 #!/bin/sh
 # First the start: the command line and the configuration file, each
 # case on BendKV and on redis-server (tests/start_test.py). Then starts
-# a reference Redis (with one database, as BendKV has, and on the
-# loopback, as BendKV listens) and BendKV on spare ports: BendKV with
-# its defaults, then posting its replies to its writer thread (post),
+# a reference Redis (on the loopback, as BendKV listens) and BendKV on
+# spare ports: BendKV with its defaults, then posting its replies to its
+# writer thread (post),
 # then sending them from its loop (send), then with an append-only file,
 # and runs against each the robustness checks, the differential test
 # against Redis (a fresh Redis database for each run) and the
@@ -25,7 +25,7 @@ REDIS_PORT=${REDIS_PORT:-6390}
 ROUNDS=${ROUNDS:-1000}
 echo "== the start"
 python3 tests/start_test.py --bin build/bendkv
-redis-server --port "$REDIS_PORT" --save '' --appendonly no --databases 1 --bind 127.0.0.1 > build/redis.log 2>&1 &
+redis-server --port "$REDIS_PORT" --save '' --appendonly no --bind 127.0.0.1 > build/redis.log 2>&1 &
 RDS=$!
 BKV=
 trap 'kill $BKV $RDS 2>/dev/null || true' EXIT

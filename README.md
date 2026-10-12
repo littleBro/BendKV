@@ -2,7 +2,8 @@
 
 A Redis-compatible key-value server written in [Bend2](https://github.com/bendlang/bend),
 whose core is formally verified: the command semantics, the hash trie behind them, the
-append-only file, the connection state and the configuration are proved against 53 laws,
+append-only file, the databases, the connection state and the configuration are proved
+against 58 laws,
 checked by Bend
 and rechecked by the BendTT kernel, whose soundness is proved in Lean.
 
@@ -34,10 +35,11 @@ that gives it the process's directory, id and clock).
 ## What is proved
 
 The laws are stated by hand in [`proof/LAWS.bend`](proof/LAWS.bend) and proved in
-[`proof/PROOF.bend`](proof/PROOF.bend). The database is a record: the trie, whose
+[`proof/PROOF.bend`](proof/PROOF.bend). A database is a record: the trie, whose
 entries hold each key's value and the time it expires at; how many keys it holds (which
-DBSIZE answers) and how many of them have a time; and the time its batch runs at. A key
-whose time has passed is there for no command. The laws about what keys read and what
+DBSIZE answers) and how many of them have a time; and the time its batch runs at. The
+server holds several (16, as Redis), with the one a connection selected in focus while
+its batch runs. A key whose time has passed is there for no command. The laws about what keys read and what
 commands answer are proved of a specification, the commands on the trie alone at a time
 ([`proof/SPEC.bend`](proof/SPEC.bend)), and a bridge proves that the server's commands
 answer as it does (DBSIZE answers the count) and leave the trie it leaves. That the count
@@ -49,12 +51,13 @@ is the trie's size is not proved yet.
 | Keys | 2 | key comparison is exactly string equality, down to the bits of `U32` |
 | Commands | 19 | no command changes a key it does not write, neither its value nor its time (`frame`); reads keep the database; a key whose time has passed is there for no command, and the sweep of expired keys deletes no key that is there; GET, DEL, APPEND, SETNX, INCR, GETDEL, PERSIST, PTTL and SET with KEEPTTL behave as specified, a key they add counted; a pipelined batch runs exactly as its commands in order; the cache hints before a batch change nothing |
 | Commuting | 5 | commands on different keys commute: replies and key contents are the same in either order, and adjacent independent commands in a batch can be swapped |
-| Persistence | 8 | logging changes no reply; the file reads back as written, times included; after any history, each batch at its own time, the server restores exactly the database it held; a file cut by a crash at any byte restores the database after some prefix of its commands, never a partial command |
-| Sessions | 5 | however the server dispatches a batch, it runs as its commands in order; a batch changes the database and the log as its executed commands do; a client that has not authenticated against a password cannot read or change any key |
+| Persistence | 8 | logging changes no reply; the file reads back as written, times included; after any history, each batch at its own time, on any of the databases, the server restores exactly the databases it held; a file cut by a crash at any byte restores the databases after some prefix of its acts, never a partial one |
+| Databases | 5 | SELECT changes no database and focuses the one it names; SWAPDB puts each of two databases in the other's place; FLUSHALL empties them all; MOVE takes a key's entry, its value and its time, out of the selected database and sets it in the other |
+| Sessions | 5 | however the server dispatches a batch, it runs as its commands in order; a batch changes the databases and the log as its executed commands do; a client that has not authenticated against a password cannot read or change any key |
 | Configuration | 3 | a CONFIG SET that fails changes nothing; one that succeeds makes the new requirepass the password; after a CONFIG SET of a parameter, CONFIG GET finds the value its check gave |
 
-`make check` takes about 3 s; `make verdict` rechecks every proof in the BendTT kernel
-in about 30 s.
+`make check` takes about 4 s; `make verdict` rechecks every proof in the BendTT kernel
+in about 40 s.
 
 **Trust boundary.** The proofs cover `src/map.bend`, `src/redis.bend`, `src/batch.bend`,
 `src/aof.bend`, `src/session.bend` and `src/config.bend`. Trusted without proof: the Bend
@@ -77,7 +80,7 @@ translation stays in the trusted base.
 ## Commands
 
 - **Strings and keys:** GET, SET, SETNX, GETSET, DEL, UNLINK, EXISTS, INCR, DECR, INCRBY,
-  DECRBY, APPEND, STRLEN, MGET, MSET, DBSIZE, FLUSHALL, FLUSHDB (with ASYNC/SYNC), KEYS
+  DECRBY, APPEND, STRLEN, MGET, MSET, DBSIZE, KEYS
   (Redis's patterns: `*`, `?`, `[...]` classes, `\` escapes), TYPE, SCAN (MATCH, COUNT,
   TYPE, with Redis's guarantee: a key there for a whole iteration is found, however the
   database changes meanwhile) and RANDOMKEY (picked as Redis picks one).
@@ -89,8 +92,12 @@ translation stays in the trusted base.
   expired keys ten times a second (logged as DEL, as Redis logs it); until then DBSIZE
   and INFO's keyspace count it, where Redis also deletes it when a read comes to it. A
   time at or past 10^14 ms (the year 5138) gives a key no time at all.
-- **Connection:** PING, ECHO, HELLO (RESP2, with AUTH and SETNAME), AUTH, SELECT (one
-  database, as Redis with `databases 1`), QUIT, RESET, CLIENT (ID, GETNAME, SETNAME,
+- **Databases:** 16 of them, or as many as `databases` says, as in Redis: SELECT, MOVE
+  (the key with its time), SWAPDB, FLUSHDB and FLUSHALL (with ASYNC/SYNC, which empty at
+  once), with Redis's errors for a bad number; INFO's keyspace has a line for each
+  database that holds keys, and the sweep of expired keys goes over every database.
+- **Connection:** PING, ECHO, HELLO (RESP2, with AUTH and SETNAME), AUTH, SELECT, QUIT,
+  RESET (which selects database 0 again), CLIENT (ID, GETNAME, SETNAME,
   REPLY ON/OFF/SKIP, NO-EVICT, GETREDIR, TRACKINGINFO, CACHING, UNBLOCK, HELP),
   FUNCTION FLUSH.
 - **Configuration:** CONFIG GET (names, aliases and glob patterns), SET (several
@@ -129,10 +136,11 @@ translation stays in the trusted base.
   multi-part append-only file to load) stops the start with a line saying so.
 - **Protocol:** pipelining, partial packets, inline commands with quoting,
   binary-safe values, Redis's protocol errors.
-- **Persistence:** an append-only file in Redis's own format (`redis-check-aof` accepts
-  it, and Redis loads it), fsync `always`, `everysec` or `no`.
+- **Persistence:** an append-only file in Redis's own format, a SELECT before the
+  entries of another database and SWAPDB, MOVE and FLUSHALL as Redis writes them
+  (`redis-check-aof` accepts it, and Redis loads it), fsync `always`, `everysec` or `no`.
 
-Not yet: other data types, multiple databases, MULTI/EXEC, pub/sub, timing of commands
+Not yet: other data types, MULTI/EXEC, pub/sub, timing of commands
 (usec in INFO commandstats, latencystats), CONFIG REWRITE (it answers as Redis does without a configuration file),
 RDB files. Integers, and times in ms, are limited to 14 digits.
 
@@ -193,7 +201,8 @@ make suite     BEND="$B" REDIS_SRC=../redis   # Redis's own test suite, on Redis
 `make test` runs, against a reference `redis-server`: the start (about a hundred command
 lines and configuration files, each on both servers, with the same errors and the same
 parameters after them), a differential test of random
-command streams compared byte for byte (times to live and SET's options among them),
+command streams compared byte for byte (times to live, SET's options and several
+databases among them),
 keys that expire (set with short times on both servers, then read once the times have
 passed), the protocol edge cases of Redis's
 `tests/unit/protocol.tcl`, the connection commands, CONFIG (every parameter, a list of
@@ -207,7 +216,8 @@ documentation, the lists and their filters, the keys of command lines, random on
 too), SCAN and RANDOMKEY (their arguments, full iterations with COUNT, MATCH and TYPE
 finding Redis's keys, each once, an iteration while other clients write, RANDOMKEY's
 picks), robustness and concurrency checks,
-restarts from the append-only file (including a truncated tail), and disk failures
+restarts from the append-only file (every database read back, including after a
+truncated tail), and disk failures
 under the file, injected with an `LD_PRELOAD` shim. `make suite` runs Redis's own test
 suite in its mode for a server already started, on Redis and on BendKV, and counts the
 tests Redis passes that BendKV passes ([docs/COMPATIBILITY.md](docs/COMPATIBILITY.md)).

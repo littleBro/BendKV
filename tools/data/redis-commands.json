@@ -3679,6 +3679,103 @@
     []
    ]
   },
+  "move": {
+   "docs": [
+    "summary",
+    "Move a key to another database",
+    "since",
+    "1.0.0",
+    "group",
+    "generic",
+    "complexity",
+    "O(1)",
+    "arguments",
+    [
+     [
+      "name",
+      "key",
+      "type",
+      "key",
+      "key_spec_index",
+      0
+     ],
+     [
+      "name",
+      "db",
+      "type",
+      "integer"
+     ]
+    ]
+   ],
+   "info": [
+    "move",
+    3,
+    [
+     {
+      "+": "write"
+     },
+     {
+      "+": "fast"
+     }
+    ],
+    1,
+    1,
+    1,
+    [
+     {
+      "+": "@keyspace"
+     },
+     {
+      "+": "@write"
+     },
+     {
+      "+": "@fast"
+     }
+    ],
+    [],
+    [
+     [
+      "flags",
+      [
+       {
+        "+": "RW"
+       },
+       {
+        "+": "access"
+       },
+       {
+        "+": "update"
+       }
+      ],
+      "begin_search",
+      [
+       "type",
+       "index",
+       "spec",
+       [
+        "index",
+        1
+       ]
+      ],
+      "find_keys",
+      [
+       "type",
+       "range",
+       "spec",
+       [
+        "lastkey",
+        0,
+        "keystep",
+        1,
+        "limit",
+        0
+       ]
+      ]
+     ]
+    ],
+    []
+   ]
+  },
   "mset": {
    "docs": [
     "summary",
@@ -5323,6 +5420,65 @@
       ]
      ]
     ],
+    []
+   ]
+  },
+  "swapdb": {
+   "docs": [
+    "summary",
+    "Swaps two Redis databases",
+    "since",
+    "4.0.0",
+    "group",
+    "server",
+    "complexity",
+    "O(N) where N is the count of clients watching or blocking on keys from both databases.",
+    "arguments",
+    [
+     [
+      "name",
+      "index1",
+      "type",
+      "integer"
+     ],
+     [
+      "name",
+      "index2",
+      "type",
+      "integer"
+     ]
+    ]
+   ],
+   "info": [
+    "swapdb",
+    3,
+    [
+     {
+      "+": "write"
+     },
+     {
+      "+": "fast"
+     }
+    ],
+    0,
+    0,
+    0,
+    [
+     {
+      "+": "@keyspace"
+     },
+     {
+      "+": "@write"
+     },
+     {
+      "+": "@fast"
+     },
+     {
+      "+": "@dangerous"
+     }
+    ],
+    [],
+    [],
     []
    ]
   },

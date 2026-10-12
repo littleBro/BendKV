@@ -6,6 +6,10 @@ and command semantics are all exercised.
 
     python3 tests/diff_test.py --bendkv 6380 --redis 6390 --rounds 2000
 
+The stream moves between databases 0 to 3 (SELECT), moves keys between
+them (MOVE), swaps them (SWAPDB) and empties one (FLUSHDB) or all
+(FLUSHALL), with bad numbers among them.
+
 Known, documented divergences that the generator avoids: BendKV's
 integers have at most 14 digits (Redis allows int64), and so have its
 times: a time at or past 10^14 ms (the year 5138) gives a key no time at
@@ -198,6 +202,13 @@ def rnd_pattern(r):
     return bytes(r.choice(b"k01u:*?[]^-\\\xd0") for _ in range(r.randint(0, 6)))
 
 
+def rnd_db(r):
+    if r.random() < 0.85:
+        return str(r.randint(0, 3)).encode()
+    return r.choice([b"15", b"16", b"-1", b"x", b"", b" 1", b"01", b"1.0", b"+1", b"2147483647",
+                     b"2147483648", b"-2147483649", b"99999999999999999999"])
+
+
 def rnd_cmd(r):
     k = lambda: r.choice(KEYS)
     ks = lambda: [k() for _ in range(r.randint(1, 4))]
@@ -231,6 +242,12 @@ def rnd_cmd(r):
         (0.02, lambda: [r.choice([b"get", b"Get", b"sEt", b"incr"]), k()] + ([rnd_value(r)] if r.random() < 0.5 else [])),
         (0.02, lambda: [r.choice([b"GET", b"SET", b"INCR", b"STRLEN", b"GETSET"])] + [k() for _ in range(r.choice([0, 3]))]),
         (0.01, lambda: [b"FLUSHALL"]),
+        (0.03, lambda: [b"SELECT", rnd_db(r)]),
+        (0.03, lambda: [b"MOVE", k(), rnd_db(r)]),
+        (0.02, lambda: [b"SWAPDB", rnd_db(r), rnd_db(r)]),
+        (0.01, lambda: [b"FLUSHDB"] + r.choice([[], [], [b"ASYNC"], [b"sync"], [b"x"]])),
+        (0.005, lambda: [b"FLUSHALL"] + r.choice([[b"ASYNC"], [b"SYNC"], [b"y"]])),
+        (0.005, lambda: [r.choice([b"SELECT", b"MOVE", b"SWAPDB", b"FLUSHDB"])] + [k() for _ in range(r.choice([0, 3]))]),
         (0.05, lambda: [b"SET", k(), rnd_value(r)] + rnd_set_opts(r)),
         (0.02, lambda: [b"SETEX", k(), rnd_time(r, False, False, True, False), rnd_value(r)]),
         (0.02, lambda: [b"PSETEX", k(), rnd_time(r, True, False, True, False), rnd_value(r)]),

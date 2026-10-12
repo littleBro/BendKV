@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """Restart test for the append-only file: a random command stream (the
-differential test's) against BendKV, with one FLUSHALL halfway, then the
-whole keyspace saved, each key with its value and the time it expires at;
-after the server restarts from its file, the keyspace must read back the
-same.
+differential test's, which moves between databases, moves keys between
+them and swaps them) against BendKV, with one FLUSHALL halfway, then the
+whole keyspace of each of the 16 databases saved, each key with its
+value and the time it expires at; after the server restarts from its
+file, every database must read back the same.
 
     python3 tests/aof_test.py --port 6380 --write build/aof_dump.txt --rounds 1000
     (restart BendKV with the same file)
@@ -16,22 +17,26 @@ import sys
 from diff_test import NOW_S, Conn, rnd_cmd
 
 
-def keyspace(c):
-    c.send([[b"KEYS", b"*"]])
-    kind, items = c.reply()
-    keys = sorted(data for kind, data in items)
-    vals = []
-    times = []
-    if keys:
-        c.send([[b"MGET"] + keys])
-        kind, vals = c.reply()
-        c.send([[b"PEXPIRETIME", k] for k in keys])
-        times = [c.reply()[1] for k in keys]
-    return [(k.hex(), v[1].hex(), t.decode()) for k, v, t in zip(keys, vals, times)]
+def keyspace(c, dbs=16):
+    out = []
+    for db in range(dbs):
+        c.send([[b"SELECT", b"%d" % db], [b"KEYS", b"*"]])
+        c.reply()
+        kind, items = c.reply()
+        keys = sorted(data for kind, data in items)
+        vals = []
+        times = []
+        if keys:
+            c.send([[b"MGET"] + keys])
+            kind, vals = c.reply()
+            c.send([[b"PEXPIRETIME", k] for k in keys])
+            times = [c.reply()[1] for k in keys]
+        out += [(db, k.hex(), v[1].hex(), t.decode()) for k, v, t in zip(keys, vals, times)]
+    return out
 
 
 def show(ks):
-    return "\n".join("%s %s %s" % kv for kv in ks) + "\n"
+    return "\n".join("%d %s %s %s" % kv for kv in ks) + "\n"
 
 
 def main():

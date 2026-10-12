@@ -104,7 +104,7 @@ def exec(cmd: R.Cmd, db: KV.Trie<String>, +now: Nat) -> R.Reply & KV.Trie<String
     case R.DbSize{}:
       +d = db
       (R.r_int(KV.size(String, d)), d)
-    case R.FlushAll{}:
+    case R.FlushDb{}:
       (R.r_ok(), KV.empty(String))
     case R.Keys{p}:
       +d = db

@@ -182,7 +182,7 @@ law key_eq_false:
 # time has passed is not there for any command, but its entry stays until
 # a write puts the key anew or deletes it.
 
-# the keys a command may write: its named keys, or every key for FLUSHALL
+# the keys a command may write: its named keys, or every key for FLUSHDB
 def any_key(+j: String, ks: List<&2, String>) -> Bool:
   match ks:
     case Nil{}:
@@ -207,7 +207,7 @@ def writes(c: R.Cmd, +j: String) -> Bool:
       KV.str_eq(j, k)
     case R.MSet{ps}:
       any_pair(j, ps)
-    case R.FlushAll{}:
+    case R.FlushDb{}:
       True{}
     case R.Upd{k, op}:
       KV.str_eq(j, k)
@@ -215,7 +215,8 @@ def writes(c: R.Cmd, +j: String) -> Bool:
       False{}
 
 # the commands that only read (a command of the connection or of the
-# server, R.Own, never touches the database)
+# server, R.Own, never touches the database exec runs on: those that act
+# on several databases are the acts of Several databases, below)
 def is_read(c: R.Cmd) -> Bool:
   match c:
     case R.Ping{}:
@@ -539,7 +540,7 @@ def clash(+c2: R.Cmd, c1: R.Cmd) -> Bool:
       writes_any(c2, ks)
     case R.MSet{ps}:
       writes_pairs(c2, ps)
-    case R.FlushAll{}:
+    case R.FlushDb{}:
       Bool.not(is_read(c2))
     case _:
       False{}
@@ -606,15 +607,19 @@ law swap_reads:
 # with exec_log (aof.bend), which also gives what the batch did, as
 # commands (its effects), and appends their entries to the file before it
 # answers. At start the server loads the file and runs its entries from
-# an empty database (restore). The laws: exec_log answers as exec_all; a
-# batch's effects, run on the database the batch ran on, leave the
-# database the batch left; a client's effects, written as entries, parse
-# back to themselves; a file loads as the entries written to it; and so,
-# after any history, the server restores from its file the database it
-# held. A file cut anywhere by a crash restores the database the server
-# held after some prefix of its commands, and the loader leaves exactly
-# the part of an entry the cut left. The actor runs each batch after the
-# hints of batch.bend (log_batch), which change nothing.
+# an empty database (restore). The laws of one database: exec_log answers
+# as exec_all; a batch's effects, run on the database the batch ran on,
+# leave the database the batch left; a client's effects, written as
+# entries, parse back to themselves; a file loads as the entries written
+# to it. The actor runs each batch after the hints of batch.bend
+# (log_batch), which change nothing. On several databases an effect is
+# located (A.Eff: the command's on the database it ran on, and SWAPDB,
+# MOVE, FLUSHALL), and the file holds a SELECT before an effect on
+# another database than the one it last selected. So, after any history,
+# the server restores from its file the databases it held; a file cut
+# anywhere by a crash restores the databases the server held after some
+# prefix of its acts, and the loader leaves exactly the part of an entry
+# the cut left.
 
 # a batch run with its effects, without them; and the effects
 def log_out(r: List<&2, R.Reply> & (List<&2, R.Cmd> & R.Db)) -> List<&2, R.Reply> & R.Db:
@@ -660,65 +665,103 @@ law aof_load:
   {A.load(A.encode(reqs)) == (reqs, "") : List<&2, List<&2, String>> & String}
 
 # a history: the batches the server has run since it started, newest
-# first, each with the time it ran at (the server sets the database's
-# time before each group of batches), run from an empty database
+# first, each with the time it ran at (the server sets the focus's time
+# before each group of batches) and what it did to the databases (its
+# acts: those of its commands, S.plan, after the focus moved to its
+# connection's database, R.AFocus), run from 1 + n empty databases
 type Run is Data:
-  Run{now: Nat, cs: List<&2, R.Cmd>}
+  Run{now: Nat, acts: List<&2, R.Act>}
 
-def batch_at(b: Run, db: R.Db) -> R.Db:
+def batch_at(b: Run, ds: R.Ds) -> R.Ds:
   match b:
-    case Run{now, cs}:
-      final(R.exec_all(cs, R.db.at(now, db)))
+    case Run{now, as}:
+      R.acts(as, R.ds.at(now, ds))
 
-def single(hist: List<&2, Run>) -> R.Db:
+def single(hist: List<&2, Run>, +n: Nat) -> R.Ds:
   match hist:
     case Nil{}:
-      R.db.empty()
+      R.ds.empty(n)
     case Con{b, older}:
-      batch_at(b, single(older))
+      batch_at(b, single(older, n))
 
-# the entries of a batch's effects, the batch run at its time on db
-def logged(b: Run, db: R.Db) -> String:
+# acts run with their effects: the effects, in order
+def act_effects(as: List<&2, R.Act>, ds: R.Ds) -> List<&2, A.Eff>:
+  List.reverse(&2, A.Eff, Pair.fst(List<&2, A.Eff>, R.Ds, A.acts(as, (Nil{}, ds))))
+
+# the effects of a batch, run at its time on ds
+def batch_effs(b: Run, ds: R.Ds) -> List<&2, A.Eff>:
   match b:
-    case Run{now, cs}:
-      A.encode(A.args_all(effects(A.exec_log(cs, R.db.at(now, db)))))
+    case Run{now, as}:
+      act_effects(as, R.ds.at(now, ds))
+
+# a file and the database its last SELECT selected, with the entries of
+# more effects appended
+def file.put(f: String & Nat, es: List<&2, A.Eff>) -> String & Nat:
+  (s, +sel) = f
+  +e = es
+  (s ++ A.encode(A.effs.args(e, sel)), A.effs.sel(e, sel))
 
 # the file after a history: the entries of each batch's effects, appended
-# after those of the batches before it
-def aof(hist: List<&2, Run>) -> String:
+# after those of the batches before it, a SELECT before an effect on
+# another database than the file's (0 at first, as a file loads from
+# database 0); and the database the file has selected
+def file(hist: List<&2, Run>, +n: Nat) -> String & Nat:
   match hist:
     case Nil{}:
-      ""
+      ("", 0n)
     case Con{b, +older}:
-      aof(older) ++ logged(b, single(older))
+      file.put(file(older, n), batch_effs(b, single(older, n)))
 
-# LAW: after any history, the server restores from its file the database
+def aof(hist: List<&2, Run>, +n: Nat) -> String:
+  Pair.fst(String, Nat, file(hist, n))
+
+# the databases, each at time 0 (a database keeps the time it last ran at;
+# at time 0 every key is there)
+def zero.go(xs: List<&2, R.Db>) -> List<&2, R.Db>:
+  match xs:
+    case Nil{}:
+      Nil{}
+    case Con{x, rest}:
+      R.db.at(0n, x) <> zero.go(rest)
+
+def zero(ds: R.Ds) -> List<&2, R.Db>:
+  zero.go(R.ds.list(ds))
+
+def zero.rest(p: R.Ds & String) -> List<&2, R.Db> & String:
+  (ds, s) = p
+  (zero(ds), s)
+
+# LAW: after any history, the server restores from its file the databases
 # it held (at time 0: the server sets the time before it runs a batch
-# again), and nothing is left over
+# again), and nothing is left over. The number of databases has 14
+# digits at most, so that each number the file names reads back as
+# written (Redis's databases is an int).
 law recover:
   for +hist: List<&2, Run>
-  {A.restore(aof(hist)) == (R.db.at(0n, single(hist)), "") : R.Db & String}
+  for +n: Nat
+  for  sm: {KV.small(n) == True{} : Bool}
+  {zero.rest(A.restore(aof(hist, n), n)) == (zero(single(hist, n)), "") : List<&2, R.Db> & String}
 
 # A crash in the middle of a write leaves the file cut anywhere: c is
 # what reached the disk, d what did not. The server loads what it can
 # (whole entries) and cuts the rest off (server.bend: restore).
 
-# a command and the time it ran at
+# an act and the time it ran at
 type Step is Data:
-  Step{now: Nat, c: R.Cmd}
+  Step{now: Nat, a: R.Act}
 
-# the commands of a history, oldest first, each with its batch's time
-def stamp(+now: Nat, cs: List<&2, R.Cmd>) -> List<&2, Step>:
-  match cs:
+# the acts of a history, oldest first, each with its batch's time
+def stamp(+now: Nat, as: List<&2, R.Act>) -> List<&2, Step>:
+  match as:
     case Nil{}:
       Nil{}
-    case Con{c, rest}:
-      Step{now, c} <> stamp(now, rest)
+    case Con{a, rest}:
+      Step{now, a} <> stamp(now, rest)
 
 def stamped(b: Run) -> List<&2, Step>:
   match b:
-    case Run{+now, cs}:
-      stamp(now, cs)
+    case Run{+now, as}:
+      stamp(now, as)
 
 def commands(hist: List<&2, Run>) -> List<&2, Step>:
   match hist:
@@ -727,41 +770,99 @@ def commands(hist: List<&2, Run>) -> List<&2, Step>:
     case Con{b, older}:
       List.append(&2, Step, commands(older), stamped(b))
 
-# commands run one after another, each at its time
-def run_at(s: Step, db: R.Db) -> R.Db:
+# acts run one after another, each at its time
+def run_at(s: Step, ds: R.Ds) -> R.Ds:
   match s:
-    case Step{now, c}:
-      R.db_of(R.exec(c, R.db.at(now, db)))
+    case Step{now, a}:
+      R.ds_of(R.act(a, R.ds.at(now, ds)))
 
-def run_timed(ss: List<&2, Step>, db: R.Db) -> R.Db:
+def run_timed(ss: List<&2, Step>, ds: R.Ds) -> R.Ds:
   match ss:
     case Nil{}:
-      db
+      ds
     case Con{s, rest}:
-      run_timed(rest, run_at(s, db))
+      run_timed(rest, run_at(s, ds))
 
-# the database after the first j commands of a history
-def held(hist: List<&2, Run>, j: Nat) -> R.Db:
-  run_timed(List.take(&2, Step, commands(hist), j), R.db.empty())
+# the databases after the first j acts of a history
+def held(hist: List<&2, Run>, +n: Nat, j: Nat) -> R.Ds:
+  run_timed(List.take(&2, Step, commands(hist), j), R.ds.empty(n))
 
-# LAW: a file cut anywhere restores the database the server held after
-# some prefix of its commands (at time 0): no command is applied in part,
-# none is applied out of order, and none after one that is lost
+# LAW: a file cut anywhere restores the databases the server held after
+# some prefix of its acts (at time 0): no act is applied in part, none is
+# applied out of order, and none after one that is lost
 law recover_cut:
   for +hist: List<&2, Run>
+  for +n: Nat
+  for  sm: {KV.small(n) == True{} : Bool}
   for +c: String
   for -d: String
-  for  e: {c ++ d == aof(hist) : String}
-  Exists(Nat, j => {Pair.fst(R.Db, String, A.restore(c)) == R.db.at(0n, held(hist, j)) : R.Db})
+  for  e: {c ++ d == aof(hist, n) : String}
+  Exists(Nat, j => {zero(Pair.fst(R.Ds, String, A.restore(c, n))) == zero(held(hist, n, j)) : List<&2, R.Db>})
 
 # LAW: and what the loader reads, written again, followed by what it
 # leaves, is the cut file: cutting the leftover off leaves whole entries
 law load_cut:
   for +hist: List<&2, Run>
+  for +n: Nat
   for +c: String
   for -d: String
-  for  e: {c ++ d == aof(hist) : String}
+  for  e: {c ++ d == aof(hist, n) : String}
   {A.encode(Pair.fst(List<&2, List<&2, String>>, String, A.load(c))) ++ Pair.snd(List<&2, List<&2, String>>, String, A.load(c)) == c : String}
+
+# Several databases
+# =================
+# The acts that change the databases as a whole (R.Act; session.bend:
+# plan), seen at time 0 (zero): SELECT moves the focus and changes no
+# database; SWAPDB of two databases that are there puts each in the
+# other's place; FLUSHALL empties every database; MOVE of a key that is
+# there, to another database that holds no entry for it, takes the key's
+# entry out of the focus and puts it, its value and its time, in that
+# database.
+
+# LAW: SELECT changes no database
+law focus_keeps:
+  for +j: Nat
+  for +ds: R.Ds
+  {zero(R.ds_of(R.act(R.AFocus{j}, ds))) == zero(ds) : List<&2, R.Db>}
+
+# LAW: and focuses the database it names when that one is there
+law focus_on:
+  for +j: Nat
+  for +ds: R.Ds
+  for -y: R.Db
+  for  e: {R.ds.nth(j, R.ds.list(ds)) == Some{y} : Maybe<&2, R.Db>}
+  {R.ds.index(R.ds_of(R.act(R.AFocus{j}, ds))) == j : Nat}
+
+# LAW: SWAPDB puts each of two databases in the other's place
+law swap_dbs:
+  for +a: Nat
+  for +b: Nat
+  for +ds: R.Ds
+  for +x: R.Db
+  for +y: R.Db
+  for  ea: {R.ds.nth(a, R.ds.list(ds)) == Some{x} : Maybe<&2, R.Db>}
+  for  eb: {R.ds.nth(b, R.ds.list(ds)) == Some{y} : Maybe<&2, R.Db>}
+  {zero(R.ds_of(R.act(R.ASwap{a, b}, ds))) == R.ds.put(a, R.db.at(0n, y), R.ds.put(b, R.db.at(0n, x), zero(ds))) : List<&2, R.Db>}
+
+# LAW: FLUSHALL empties every database
+law wipe_dbs:
+  for +ds: R.Ds
+  {zero(R.ds_of(R.act(R.AWipe{}, ds))) == R.ds.flush(zero(ds)) : List<&2, R.Db>}
+
+# LAW: MOVE takes a key's entry out of the focus and sets it in the
+# database it names
+law move_key:
+  for +k: String
+  for +j: Nat
+  for +ds: R.Ds
+  for +y: R.Db
+  for +v: String
+  for +e: Nat
+  for  ey: {R.ds.nth(j, R.ds.list(ds)) == Some{y} : Maybe<&2, R.Db>}
+  for  ne: {Nat.is_ne(j, R.ds.index(ds)) == True{} : Bool}
+  for  en: {R.db.entry(y, k) == None{} : Maybe<&2, KV.Item<String>>}
+  for  ek: {R.ds.ent(ds, k) == Some{KV.Item{v, e}} : Maybe<&2, KV.Item<String>>}
+  {zero(R.ds_of(R.act(R.AMove{k, j}, ds))) == R.ds.put(j, R.db.at(0n, R.db.setx(y, k, v, e)), zero(R.ds.unset(k, ds))) : List<&2, R.Db>}
 
 # Sessions
 # ========
@@ -769,13 +870,14 @@ law load_cut:
 # (session.bend): the server runs it as S.run, or S.run_log with an
 # append-only file, which take a batch of database commands only, from a
 # client that may run them and gets every reply, the fast way (exec_batch,
-# log_batch), and any other batch a command at a time (S.gen). The laws:
-# the fast way is the general one; the general one changes the database
-# exactly as exec_all runs the commands that ran (S.plan), and logs the
-# effects exec_log gives them, so the laws of the commands and of
-# persistence hold for the commands that ran; and a client that has not
-# authenticated, to a server with a password, runs nothing but the
-# errors the parser found, until it sends AUTH or HELLO.
+# log_batch, on the focus), and any other batch a command at a time
+# (S.gen). The laws: the fast way is the general one; the general one
+# changes the databases exactly as the acts of the commands that ran
+# (S.plan) do, R.acts running them, and logs the effects A.acts gives
+# them, so the laws of the commands, of the databases and of persistence
+# hold for what ran; and a client that has not authenticated, to a server
+# with a password, runs nothing but the errors the parser found, until it
+# sends AUTH or HELLO.
 
 # LAW: however the server takes a batch apart (B.unzip, B.job), it runs
 # it as the general path runs its commands, in order
@@ -783,45 +885,44 @@ law run_gen:
   for  conn: S.Conn
   for  srv: S.Srv
   for +rs: List<&2, B.Req>
-  for  db: R.Db
-  {S.run(conn, srv, B.job(B.unzip(rs, Nil{}, Nil{})), db) == S.done.gen(S.gen(conn, srv, B.cmds_of(rs, Nil{}), db)) : S.Fin}
+  for  ds: R.Ds
+  {S.run(conn, srv, B.job(B.unzip(rs, Nil{}, Nil{})), ds) == S.done.gen(S.gen(conn, srv, B.cmds_of(rs, Nil{}), ds)) : S.Fin}
 
 # LAW: and so with an append-only file
 law run_log_gen:
   for  conn: S.Conn
   for  srv: S.Srv
   for +rs: List<&2, B.Req>
-  for  db: R.Db
-  {S.run_log(conn, srv, B.job(B.unzip(rs, Nil{}, Nil{})), db) == S.logged.gen(S.gen(conn, srv, B.cmds_of(rs, Nil{}), db)) : S.Logged}
+  for  ds: R.Ds
+  {S.run_log(conn, srv, B.job(B.unzip(rs, Nil{}, Nil{})), ds) == S.logged.gen(S.gen(conn, srv, B.cmds_of(rs, Nil{}), ds)) : S.Logged}
 
-def logged_es(l: S.Logged) -> List<&2, R.Cmd>:
+def logged_es(l: S.Logged) -> List<&2, A.Eff>:
   match l:
-    case S.Logged{rs, es, conn, srv, db}:
+    case S.Logged{rs, es, conn, srv, ds}:
       es
 
-def logged_db(l: S.Logged) -> R.Db:
+def logged_ds(l: S.Logged) -> R.Ds:
   match l:
-    case S.Logged{rs, es, conn, srv, db}:
-      db
+    case S.Logged{rs, es, conn, srv, ds}:
+      ds
 
-# LAW: a batch leaves the database exec_all leaves by the commands that
-# ran in it
+# LAW: a batch leaves the databases the acts of the commands that ran in
+# it leave
 law gen_db:
   for +conn: S.Conn
   for +srv: S.Srv
   for +cmds: List<&2, R.Cmd>
-  for +db: R.Db
-  {logged_db(S.logged.gen(S.gen(conn, srv, cmds, db))) == final(R.exec_all(S.plan(cmds, conn, srv), db)) : R.Db}
+  for +ds: R.Ds
+  {logged_ds(S.logged.gen(S.gen(conn, srv, cmds, ds))) == R.acts(S.plan(cmds, conn, srv), ds) : R.Ds}
 
-# LAW: and logs the effects exec_log gives them: the append-only file
-# holds the history of the commands that ran, as the Persistence laws
-# have it
+# LAW: and logs the effects A.acts gives them: the append-only file holds
+# the history of what ran, as the Persistence laws have it
 law gen_log:
   for +conn: S.Conn
   for +srv: S.Srv
   for +cmds: List<&2, R.Cmd>
-  for +db: R.Db
-  {logged_es(S.logged.gen(S.gen(conn, srv, cmds, db))) == effects(A.exec_log(S.plan(cmds, conn, srv), db)) : List<&2, R.Cmd>}
+  for +ds: R.Ds
+  {logged_es(S.logged.gen(S.gen(conn, srv, cmds, ds))) == act_effects(S.plan(cmds, conn, srv), ds) : List<&2, A.Eff>}
 
 # whether a command logs a client in: AUTH, or HELLO, which may carry an
 # AUTH
@@ -841,19 +942,22 @@ def no_login(cs: List<&2, R.Cmd>) -> Bool:
     case Con{c, rest}:
       Bool.and(Bool.not(logs_in(c)), no_login(rest))
 
-# whether every command is an error the parser found (R.Bad): exec
-# answers it with the error, and it changes nothing
-def all_bad(cs: List<&2, R.Cmd>) -> Bool:
-  match cs:
+# whether every act reads and changes no key: an error the parser found
+# (R.Bad), which exec answers with the error and which changes nothing,
+# or the focus moved (RESET moves it to database 0)
+def all_bad(as: List<&2, R.Act>) -> Bool:
+  match as:
     case Nil{}:
       True{}
-    case Con{R.Bad{r}, rest}:
+    case Con{R.ARun{R.Bad{r}}, rest}:
       all_bad(rest)
-    case Con{c, rest}:
+    case Con{R.AFocus{j}, rest}:
+      all_bad(rest)
+    case Con{a, rest}:
       False{}
 
 # LAW: a client that has not authenticated, to a server with a password,
-# runs nothing on the database but the errors the parser found, until it
+# runs nothing on the databases but the errors the parser found, until it
 # sends AUTH or HELLO: it can neither read nor change a key
 law noauth:
   for  conn: S.Conn

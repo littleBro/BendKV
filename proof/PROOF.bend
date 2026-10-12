@@ -2582,8 +2582,8 @@ def t_reads_go(c: R.Cmd, +db: KV.Trie<String>, +now: Nat) -> {Laws.is_read(c) ==
       e => Empty.absurd({T.db_of(T.exec(R.MSet{ps}, db, now)) == db : KV.Trie<String>}, false_true(e))
     case R.DbSize{}:
       e => {==}
-    case R.FlushAll{}:
-      e => Empty.absurd({T.db_of(T.exec(R.FlushAll{}, db, now)) == db : KV.Trie<String>}, false_true(e))
+    case R.FlushDb{}:
+      e => Empty.absurd({T.db_of(T.exec(R.FlushDb{}, db, now)) == db : KV.Trie<String>}, false_true(e))
     case R.Keys{p}:
       e => {==}
     case R.Scan{a}:
@@ -2835,7 +2835,7 @@ def frame_go(c: R.Cmd, +db: KV.Trie<String>, +j: String, +now: Nat) -> {Laws.wri
       e => mset_frame(ps, db, j)(e)
     case R.DbSize{}:
       e => {==}
-    case R.FlushAll{}:
+    case R.FlushDb{}:
       e => Empty.absurd({KV.entry(String, KV.empty(String), j) == KV.entry(String, db, j) : Maybe<&2, KV.Item<String>>}, true_false(e))
     case R.Keys{p}:
       e => {==}
@@ -3120,8 +3120,8 @@ def loc_reply(c: R.Cmd, +t: KV.Trie<String>, +u: KV.Trie<String>, +now: Nat) -> 
       kd => e => Empty.absurd({T.reply_of(T.exec(R.MSet{ps}, t, now)) == T.reply_of(T.exec(R.MSet{ps}, u, now)) : R.Reply}, false_true(kd))
     case R.DbSize{}:
       kd => e => Empty.absurd({T.reply_of(T.exec(R.DbSize{}, t, now)) == T.reply_of(T.exec(R.DbSize{}, u, now)) : R.Reply}, false_true(kd))
-    case R.FlushAll{}:
-      kd => e => Empty.absurd({T.reply_of(T.exec(R.FlushAll{}, t, now)) == T.reply_of(T.exec(R.FlushAll{}, u, now)) : R.Reply}, false_true(kd))
+    case R.FlushDb{}:
+      kd => e => Empty.absurd({T.reply_of(T.exec(R.FlushDb{}, t, now)) == T.reply_of(T.exec(R.FlushDb{}, u, now)) : R.Reply}, false_true(kd))
     case R.Keys{p}:
       kd => e => Empty.absurd({T.reply_of(T.exec(R.Keys{p}, t, now)) == T.reply_of(T.exec(R.Keys{p}, u, now)) : R.Reply}, false_true(kd))
     case R.Scan{a}:
@@ -3239,8 +3239,8 @@ def loc_key(c: R.Cmd, +t: KV.Trie<String>, +u: KV.Trie<String>, +now: Nat) -> {k
       kd => e => Empty.absurd({KV.entry(String, T.db_of(T.exec(R.MSet{ps}, t, now)), "") == KV.entry(String, T.db_of(T.exec(R.MSet{ps}, u, now)), "") : Maybe<&2, KV.Item<String>>}, false_true(kd))
     case R.DbSize{}:
       kd => e => Empty.absurd({KV.entry(String, T.db_of(T.exec(R.DbSize{}, t, now)), "") == KV.entry(String, T.db_of(T.exec(R.DbSize{}, u, now)), "") : Maybe<&2, KV.Item<String>>}, false_true(kd))
-    case R.FlushAll{}:
-      kd => e => Empty.absurd({KV.entry(String, T.db_of(T.exec(R.FlushAll{}, t, now)), "") == KV.entry(String, T.db_of(T.exec(R.FlushAll{}, u, now)), "") : Maybe<&2, KV.Item<String>>}, false_true(kd))
+    case R.FlushDb{}:
+      kd => e => Empty.absurd({KV.entry(String, T.db_of(T.exec(R.FlushDb{}, t, now)), "") == KV.entry(String, T.db_of(T.exec(R.FlushDb{}, u, now)), "") : Maybe<&2, KV.Item<String>>}, false_true(kd))
     case R.Keys{p}:
       kd => e => Empty.absurd({KV.entry(String, T.db_of(T.exec(R.Keys{p}, t, now)), "") == KV.entry(String, T.db_of(T.exec(R.Keys{p}, u, now)), "") : Maybe<&2, KV.Item<String>>}, false_true(kd))
     case R.Scan{a}:
@@ -3289,8 +3289,8 @@ def writes_one(c: R.Cmd, +j: String) -> {keyed(c) == True{} : Bool} -> {False{} 
       kd => nb => Empty.absurd({Laws.writes(R.MSet{ps}, j) == False{} : Bool}, false_true(kd))
     case R.DbSize{}:
       kd => nb => Empty.absurd({Laws.writes(R.DbSize{}, j) == False{} : Bool}, false_true(kd))
-    case R.FlushAll{}:
-      kd => nb => Empty.absurd({Laws.writes(R.FlushAll{}, j) == False{} : Bool}, false_true(kd))
+    case R.FlushDb{}:
+      kd => nb => Empty.absurd({Laws.writes(R.FlushDb{}, j) == False{} : Bool}, false_true(kd))
     case R.Keys{p}:
       kd => nb => Empty.absurd({Laws.writes(R.Keys{p}, j) == False{} : Bool}, false_true(kd))
     case R.Scan{a}:
@@ -3393,7 +3393,7 @@ def point_cmd(c: R.Cmd, +t: KV.Trie<String>, +u: KV.Trie<String>, +j: String, +n
       mset_point(ps, t, u, j)
     case R.DbSize{}:
       e => e
-    case R.FlushAll{}:
+    case R.FlushDb{}:
       e => {==}
     case R.Keys{p}:
       e => e
@@ -3535,7 +3535,7 @@ def reply_after(c1: R.Cmd, +c2: R.Cmd, +db: KV.Trie<String>, +now: Nat) -> {Laws
     case R.DbSize{}:
       e => %Equal.sym(KV.Trie<String>, T.db_of(T.exec(c2, db, now)), db, t_reads_keep_db(c2, db, now, not_false(Laws.is_read(c2))(e))) : {T.reply_of(T.exec(R.DbSize{}, _, now)) == T.reply_of(T.exec(R.DbSize{}, db, now)) : R.Reply}
            {==}
-    case R.FlushAll{}:
+    case R.FlushDb{}:
       e => {==}
     case R.Keys{p}:
       e => %Equal.sym(KV.Trie<String>, T.db_of(T.exec(c2, db, now)), db, t_reads_keep_db(c2, db, now, not_false(Laws.is_read(c2))(e))) : {T.reply_of(T.exec(R.Keys{p}, _, now)) == T.reply_of(T.exec(R.Keys{p}, db, now)) : R.Reply}
@@ -3607,8 +3607,8 @@ def read_writes(c: R.Cmd, +j: String) -> {Laws.is_read(c) == True{} : Bool} -> {
       e => Empty.absurd({Laws.writes(R.MSet{ps}, j) == False{} : Bool}, false_true(e))
     case R.DbSize{}:
       e => {==}
-    case R.FlushAll{}:
-      e => Empty.absurd({Laws.writes(R.FlushAll{}, j) == False{} : Bool}, false_true(e))
+    case R.FlushDb{}:
+      e => Empty.absurd({Laws.writes(R.FlushDb{}, j) == False{} : Bool}, false_true(e))
     case R.Keys{p}:
       e => {==}
     case R.Scan{a}:
@@ -3661,7 +3661,7 @@ def clash_at(c1: R.Cmd, +c2: R.Cmd, +j: String) -> {Laws.clash(c2, c1) == False{
       pairs_clash(c2, j, ps)
     case R.DbSize{}:
       e => {==}
-    case R.FlushAll{}:
+    case R.FlushDb{}:
       e => read_writes(c2, j)(not_false(Laws.is_read(c2))(e))
     case R.Keys{p}:
       e => {==}
@@ -3747,7 +3747,7 @@ def rep_tw(+c1: R.Cmd, +c2: R.Cmd, +db: KV.Trie<String>, +H: List<&2, R.Cmd>, +n
       kw => {==}
     case R.DbSize{}:
       kw => Empty.absurd({T.reply_of(T.exec(R.DbSize{}, tw(H, T.db_of(T.exec(c2, T.db_of(T.exec(c1, db, now)), now)), now), now)) == T.reply_of(T.exec(R.DbSize{}, tw(H, T.db_of(T.exec(c1, T.db_of(T.exec(c2, db, now)), now)), now), now)) : R.Reply}, false_true(kw))
-    case R.FlushAll{}:
+    case R.FlushDb{}:
       kw => {==}
     case R.Keys{p}:
       kw => Empty.absurd({T.reply_of(T.exec(R.Keys{p}, tw(H, T.db_of(T.exec(c2, T.db_of(T.exec(c1, db, now)), now)), now), now)) == T.reply_of(T.exec(R.Keys{p}, tw(H, T.db_of(T.exec(c1, T.db_of(T.exec(c2, db, now)), now)), now), now)) : R.Reply}, false_true(kw))
@@ -3899,7 +3899,7 @@ def bridge_go(c: R.Cmd, +t: KV.Trie<String>, +n: Nat, +x: Nat, +now: Nat, +rr: M
       kw => Equal.cong(KV.Trie<String>, R.Reply & KV.Trie<String>, z => (R.r_ok(), z), R.db.t(R.mset_pairs(ps, R.Db{t, n, x, now, rr})), T.mset_pairs(ps, t), mset_br(ps, t, n, x, now, rr))
     case R.DbSize{}:
       kw => Empty.absurd({proj(R.exec(R.DbSize{}, R.Db{t, n, x, now, rr})) == T.exec(R.DbSize{}, t, now) : R.Reply & KV.Trie<String>}, false_true(kw))
-    case R.FlushAll{}:
+    case R.FlushDb{}:
       kw => {==}
     case R.Keys{p}:
       kw => {==}
@@ -3990,7 +3990,7 @@ def now_go(c: R.Cmd, +t: KV.Trie<String>, +n: Nat, +x: Nat, +now: Nat, +rr: Mayb
       mset_now(ps, t, n, x, now, rr)
     case R.DbSize{}:
       {==}
-    case R.FlushAll{}:
+    case R.FlushDb{}:
       {==}
     case R.Keys{p}:
       {==}
@@ -4036,7 +4036,7 @@ def bt_go(c: R.Cmd, +t: KV.Trie<String>, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe
       bt_kw(R.MSet{ps}, t, n, x, now, rr, {==})
     case R.DbSize{}:
       {==}
-    case R.FlushAll{}:
+    case R.FlushDb{}:
       {==}
     case R.Keys{p}:
       {==}
@@ -4139,8 +4139,8 @@ def reads_go(c: R.Cmd, +db: R.Db) -> {Laws.is_read(c) == True{} : Bool} -> {R.db
       e => Empty.absurd({R.db_of(R.exec(R.MSet{ps}, db)) == db : R.Db}, false_true(e))
     case R.DbSize{}:
       e => {==}
-    case R.FlushAll{}:
-      e => Empty.absurd({R.db_of(R.exec(R.FlushAll{}, db)) == db : R.Db}, false_true(e))
+    case R.FlushDb{}:
+      e => Empty.absurd({R.db_of(R.exec(R.FlushDb{}, db)) == db : R.Db}, false_true(e))
     case R.Keys{p}:
       e => {==}
     case R.Scan{a}:
@@ -4384,8 +4384,8 @@ def reply_after_db(c1: R.Cmd, +c2: R.Cmd, +db: R.Db) -> {Laws.disturbs(c2, c1) =
     case R.DbSize{}:
       e => %Equal.sym(R.Db, R.db_of(R.exec(c2, db)), db, Laws.reads_keep_db(c2, db, not_false(Laws.is_read(c2))(e))) : {R.reply_of(R.exec(R.DbSize{}, _)) == R.reply_of(R.exec(R.DbSize{}, db)) : R.Reply}
            {==}
-    case R.FlushAll{}:
-      e => reply_via(R.FlushAll{}, c2, db, {==}, e)
+    case R.FlushDb{}:
+      e => reply_via(R.FlushDb{}, c2, db, {==}, e)
     case R.Keys{p}:
       e => %Equal.sym(R.Db, R.db_of(R.exec(c2, db)), db, Laws.reads_keep_db(c2, db, not_false(Laws.is_read(c2))(e))) : {R.reply_of(R.exec(R.Keys{p}, _)) == R.reply_of(R.exec(R.Keys{p}, db)) : R.Reply}
            {==}
@@ -4932,8 +4932,8 @@ def eff(c: R.Cmd, +db: R.Db) -> List<&2, R.Cmd>:
       A.effect(R.MSet{ps})
     case R.DbSize{}:
       A.effect(R.DbSize{})
-    case R.FlushAll{}:
-      A.effect(R.FlushAll{})
+    case R.FlushDb{}:
+      A.effect(R.FlushDb{})
     case R.Keys{p}:
       A.effect(R.Keys{p})
     case R.Scan{a}:
@@ -5046,8 +5046,8 @@ def run_split(c: R.Cmd, +db: R.Db) -> {(R.reply_of(R.exec(c, db)), (eff(c, db), 
       put_split(R.MSet{ps}, R.exec(R.MSet{ps}, db))
     case R.DbSize{}:
       put_split(R.DbSize{}, R.exec(R.DbSize{}, db))
-    case R.FlushAll{}:
-      put_split(R.FlushAll{}, R.exec(R.FlushAll{}, db))
+    case R.FlushDb{}:
+      put_split(R.FlushDb{}, R.exec(R.FlushDb{}, db))
     case R.Keys{+p}:
       put_split(R.Keys{p}, R.exec(R.Keys{p}, db))
     case R.Scan{+a}:
@@ -5635,7 +5635,7 @@ def effect_go(c: R.Cmd, +t: KV.Trie<String>, +n: Nat, +x: Nat, +now: Nat, +rr: M
           mset_at0(Con{p, rest}, t, n, x, now, rr)
     case R.DbSize{}:
       {==}
-    case R.FlushAll{}:
+    case R.FlushDb{}:
       {==}
     case R.Keys{p}:
       {==}
@@ -5862,7 +5862,7 @@ def args_go(c: R.Cmd, +t: KV.Trie<String>, +n: Nat, +x: Nat, +now: Nat, +rr: May
           {==}
     case R.DbSize{}:
       {==}
-    case R.FlushAll{}:
+    case R.FlushDb{}:
       {==}
     case R.Keys{p}:
       {==}
@@ -5952,14 +5952,127 @@ def enc_cat(+a: List<&2, List<&2, String>>, +b: List<&2, List<&2, String>>) -> {
     encode_glue(a, "", A.encode(b)),
     onto_app(a, b, ""))
 
-# the effects of a history, oldest first
+# Several databases
+# -----------------
+# An act runs with its effects (A.act) as R.act runs it (act_split), and
+# acts run one after another with their effects (A.acts) give each act's
+# effects in turn (acts_split); acts compose (acts_app, aeffs_app).
 
-# Recovering
-# ----------
-# The file after a history holds the entries of all the effects of its
-# batches, each batch's run at its time (aof_all); they parse back to
-# themselves (parse_all_effs) and, run at time 0 from an empty database,
-# leave the database the history left, at time 0 (replay_all).
+def tfst(t: R.Reply & (List<&2, A.Eff> & R.Ds)) -> R.Reply:
+  (x, q) = t
+  x
+
+def tmid(t: R.Reply & (List<&2, A.Eff> & R.Ds)) -> List<&2, A.Eff>:
+  (x, q) = t
+  Pair.fst(List<&2, A.Eff>, R.Ds, q)
+
+def tlst(t: R.Reply & (List<&2, A.Eff> & R.Ds)) -> R.Ds:
+  (x, q) = t
+  Pair.snd(List<&2, A.Eff>, R.Ds, q)
+
+# an act's effects
+def aeff(a: R.Act, ds: R.Ds) -> List<&2, A.Eff>:
+  tmid(A.act(a, ds))
+
+# acts' effects, in order
+def aeffs(as: List<&2, R.Act>, +ds: R.Ds) -> List<&2, A.Eff>:
+  match as:
+    case Nil{}:
+      Nil{}
+    case Con{+a, rest}:
+      List.append(&2, A.Eff, aeff(a, ds), aeffs(rest, R.ds_of(R.act(a, ds))))
+
+def swap_split(+a: Nat, +b: Nat, p: Bool & R.Ds) -> {(R.reply_ds(R.act.ok(p)), (tmid(A.act.swap(a, b, p)), R.ds_of(R.act.ok(p)))) == A.act.swap(a, b, p) : R.Reply & (List<&2, A.Eff> & R.Ds)}:
+  (ok, ds) = p
+  {==}
+
+def purge_split(+k: String, +j: Nat, p: Bool & R.Ds) -> {(R.reply_ds(R.act.ok(p)), (tmid(A.act.purge(k, j, p)), R.ds_of(R.act.ok(p)))) == A.act.purge(k, j, p) : R.Reply & (List<&2, A.Eff> & R.Ds)}:
+  (ok, ds) = p
+  {==}
+
+def move_split(+k: String, +i: Nat, +j: Nat, p: Bool & R.Ds) -> {(R.reply_ds(R.act.moved(p)), (tmid(A.act.move(k, i, j, p)), R.ds_of(R.act.moved(p)))) == A.act.move(k, i, j, p) : R.Reply & (List<&2, A.Eff> & R.Ds)}:
+  (ok, ds) = p
+  {==}
+
+# an act runs with its effects as R.act runs it
+def act_split(+a: R.Act, +ds: R.Ds) -> {(R.reply_ds(R.act(a, ds)), (aeff(a, ds), R.ds_of(R.act(a, ds)))) == A.act(a, ds) : R.Reply & (List<&2, A.Eff> & R.Ds)}:
+  match a ds:
+    case R.ARun{+c} R.Ds{+d, +pre, +post}:
+      %run_split(c, d) : {(R.reply_ds(R.act.run(R.exec(c, d), pre, post)), (tmid(A.act.run(List.length(&2, R.Db, pre), _, pre, post)), R.ds_of(R.act.run(R.exec(c, d), pre, post)))) == A.act.run(List.length(&2, R.Db, pre), _, pre, post) : R.Reply & (List<&2, A.Eff> & R.Ds)}
+      %eta_r(R.exec(c, d)) : {(R.reply_ds(R.act.run(_, pre, post)), (tmid(A.act.run(List.length(&2, R.Db, pre), (R.reply_of(R.exec(c, d)), (eff(c, d), R.db_of(R.exec(c, d)))), pre, post)), R.ds_of(R.act.run(_, pre, post)))) == A.act.run(List.length(&2, R.Db, pre), (R.reply_of(R.exec(c, d)), (eff(c, d), R.db_of(R.exec(c, d)))), pre, post) : R.Reply & (List<&2, A.Eff> & R.Ds)}
+      {==}
+    case R.AFocus{+j} x:
+      {==}
+    case R.ASwap{+a, +b} x:
+      swap_split(a, b, R.ds.swap(a, b, x))
+    case R.APurge{+k, +j} x:
+      purge_split(k, j, R.ds.purge(k, j, x))
+    case R.AMove{+k, +j} x:
+      move_split(k, R.ds.index(x), j, R.ds.move(k, j, x))
+    case R.AWipe{} x:
+      {==}
+
+def app_nil_e(xs: List<&2, A.Eff>) -> {List.append(&2, A.Eff, xs, Nil{}) == xs : List<&2, A.Eff>}:
+  match xs:
+    case Nil{}:
+      {==}
+    case Con{h, +t}:
+      Equal.cong(List<&2, A.Eff>, List<&2, A.Eff>, z => h <> z, List.append(&2, A.Eff, t, Nil{}), t, app_nil_e(t))
+
+def rev_app_go_e(e: List<&2, A.Eff>, -ys: List<&2, A.Eff>, -acc: List<&2, A.Eff>) -> {List.reverse.go(&2, A.Eff, ys, List.reverse.go(&2, A.Eff, e, acc)) == List.reverse.go(&2, A.Eff, List.append(&2, A.Eff, e, ys), acc) : List<&2, A.Eff>}:
+  match e:
+    case Nil{}:
+      {==}
+    case Con{h, t}:
+      rev_app_go_e(t, ys, h <> acc)
+
+def rev_go_app_e(e: List<&2, A.Eff>, -es: List<&2, A.Eff>, -ys: List<&2, A.Eff>) -> {List.reverse.go(&2, A.Eff, List.reverse.go(&2, A.Eff, e, es), ys) == List.reverse.go(&2, A.Eff, es, List.append(&2, A.Eff, e, ys)) : List<&2, A.Eff>}:
+  match e:
+    case Nil{}:
+      {==}
+    case Con{h, t}:
+      rev_go_app_e(t, h <> es, ys)
+
+# a list reversed twice
+def rev_rev_e(+xs: List<&2, A.Eff>) -> {List.reverse(&2, A.Eff, List.reverse.go(&2, A.Eff, xs, Nil{})) == xs : List<&2, A.Eff>}:
+  Equal.trans(List<&2, A.Eff>, List.reverse.go(&2, A.Eff, List.reverse.go(&2, A.Eff, xs, Nil{}), Nil{}), List.append(&2, A.Eff, xs, Nil{}), xs, rev_go_app_e(xs, Nil{}, Nil{}), app_nil_e(xs))
+
+# acts run with their effects: the effects of each in turn, in front of
+# es, newest first, and the databases R.acts leaves
+def acts_split(as: List<&2, R.Act>, -es: List<&2, A.Eff>, +ds: R.Ds) -> {(List.reverse.go(&2, A.Eff, aeffs(as, ds), es), R.acts(as, ds)) == A.acts(as, (es, ds)) : List<&2, A.Eff> & R.Ds}:
+  match as:
+    case Nil{}:
+      {==}
+    case Con{+a, +rest}:
+      %act_split(a, ds) : {(List.reverse.go(&2, A.Eff, List.append(&2, A.Eff, aeff(a, ds), aeffs(rest, R.ds_of(R.act(a, ds)))), es), R.acts(rest, R.ds_of(R.act(a, ds)))) == A.acts(rest, A.acts.put(es, _)) : List<&2, A.Eff> & R.Ds}
+      %rev_app_go_e(aeff(a, ds), aeffs(rest, R.ds_of(R.act(a, ds))), es) : {(_, R.acts(rest, R.ds_of(R.act(a, ds)))) == A.acts(rest, (List.reverse.go(&2, A.Eff, aeff(a, ds), es), R.ds_of(R.act(a, ds)))) : List<&2, A.Eff> & R.Ds}
+      acts_split(rest, List.reverse.go(&2, A.Eff, aeff(a, ds), es), R.ds_of(R.act(a, ds)))
+
+# acts, then more
+def acts_app(xs: List<&2, R.Act>, -ys: List<&2, R.Act>, +ds: R.Ds) -> {R.acts(ys, R.acts(xs, ds)) == R.acts(List.append(&2, R.Act, xs, ys), ds) : R.Ds}:
+  match xs:
+    case Nil{}:
+      {==}
+    case Con{+a, rest}:
+      acts_app(rest, ys, R.ds_of(R.act(a, ds)))
+
+def lapp_assoc_e(a: List<&2, A.Eff>, -b: List<&2, A.Eff>, -c: List<&2, A.Eff>) -> {List.append(&2, A.Eff, List.append(&2, A.Eff, a, b), c) == List.append(&2, A.Eff, a, List.append(&2, A.Eff, b, c)) : List<&2, A.Eff>}:
+  match a:
+    case Nil{}:
+      {==}
+    case Con{h, +t}:
+      Equal.cong(List<&2, A.Eff>, List<&2, A.Eff>, z => h <> z, List.append(&2, A.Eff, List.append(&2, A.Eff, t, b), c), List.append(&2, A.Eff, t, List.append(&2, A.Eff, b, c)), lapp_assoc_e(t, b, c))
+
+def aeffs_app(xs: List<&2, R.Act>, +ys: List<&2, R.Act>, +ds: R.Ds) -> {List.append(&2, A.Eff, aeffs(xs, ds), aeffs(ys, R.acts(xs, ds))) == aeffs(List.append(&2, R.Act, xs, ys), ds) : List<&2, A.Eff>}:
+  match xs:
+    case Nil{}:
+      {==}
+    case Con{+a, +rest}:
+      Equal.trans(List<&2, A.Eff>, List.append(&2, A.Eff, List.append(&2, A.Eff, aeff(a, ds), aeffs(rest, R.ds_of(R.act(a, ds)))), aeffs(ys, R.acts(rest, R.ds_of(R.act(a, ds))))),
+        List.append(&2, A.Eff, aeff(a, ds), List.append(&2, A.Eff, aeffs(rest, R.ds_of(R.act(a, ds))), aeffs(ys, R.acts(rest, R.ds_of(R.act(a, ds)))))),
+        List.append(&2, A.Eff, aeff(a, ds), aeffs(List.append(&2, R.Act, rest, ys), R.ds_of(R.act(a, ds)))),
+        lapp_assoc_e(aeff(a, ds), aeffs(rest, R.ds_of(R.act(a, ds))), aeffs(ys, R.acts(rest, R.ds_of(R.act(a, ds))))),
+        Equal.cong(List<&2, A.Eff>, List<&2, A.Eff>, z => List.append(&2, A.Eff, aeff(a, ds), z), List.append(&2, A.Eff, aeffs(rest, R.ds_of(R.act(a, ds))), aeffs(ys, R.acts(rest, R.ds_of(R.act(a, ds))))), aeffs(List.append(&2, R.Act, rest, ys), R.ds_of(R.act(a, ds))), aeffs_app(rest, ys, R.ds_of(R.act(a, ds)))))
 
 # a time set, then another
 def at_at(+t: Nat, +now: Nat, db: R.Db) -> {R.db.at(t, R.db.at(now, db)) == R.db.at(t, db) : R.Db}:
@@ -5967,66 +6080,1307 @@ def at_at(+t: Nat, +now: Nat, db: R.Db) -> {R.db.at(t, R.db.at(now, db)) == R.db
     case R.Db{a, n, x, w, rr}:
       {==}
 
-# the effects of a history, oldest first
-def all_effs(hist: List<&2, Laws.Run>) -> List<&2, R.Cmd>:
+# a command's effects are none or one command
+def OneEff(es: List<&2, R.Cmd>) -> Type:
+  Or({es == Nil{} : List<&2, R.Cmd>}, Exists(R.Cmd, e => {es == [e] : List<&2, R.Cmd>}))
+
+def ch_one(+k: String, ch: R.Change) -> OneEff(A.ch.effect(k, ch)):
+  match ch:
+    case R.CKeep{}:
+      Inl{{==}}
+    case R.CDel{}:
+      Inr{(R.Del{[k]}, {==})}
+    case R.CExp{f}:
+      match f:
+        case 0n:
+          Inr{(R.Upd{k, R.UPersist{}}, {==})}
+        case 1n+p:
+          Inr{(R.Upd{k, R.UExpire{R.TmN{True{}, 1n+p}, R.ExpIf{False{}, False{}, False{}, False{}}, "pexpireat"}}, {==})}
+    case R.CPut{v, f}:
+      match f:
+        case 0n:
+          Inr{(R.Set{k, v}, {==})}
+        case 1n+p:
+          Inr{(R.Upd{k, R.USet{v, 0n, R.TAt{R.TmN{True{}, 1n+p}}, "set"}}, {==})}
+    case R.CKeepT{v}:
+      Inr{(R.Upd{k, R.USet{v, 0n, R.TKeep{}, "set"}}, {==})}
+    case R.CApp{a, v}:
+      Inr{(R.Upd{k, R.UAppend{a}}, {==})}
+
+def out_one(+k: String, o: R.Out) -> OneEff(A.upd.effect(k, o)):
+  match o:
+    case R.Out{r, ch}:
+      ch_one(k, ch)
+
+def eff_one_go(c: R.Cmd, +t: KV.Trie<String>, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>) -> OneEff(eff(c, R.Db{t, n, x, now, rr})):
+  match c:
+    case R.Ping{}:
+      Inl{{==}}
+    case R.Echo{m}:
+      Inl{{==}}
+    case R.Get{k}:
+      Inl{{==}}
+    case R.Set{k, v}:
+      Inr{(R.Set{k, v}, {==})}
+    case R.Del{ks}:
+      match ks:
+        case Nil{}:
+          Inl{{==}}
+        case Con{k, rest}:
+          Inr{(R.Del{Con{k, rest}}, {==})}
+    case R.Exists{ks}:
+      Inl{{==}}
+    case R.IncrBy{+k, +by}:
+      out_one(k, R.upd(R.UIncr{by}, now, R.ent.live(now, KV.entry.at(String, t, k, KV.hash(k)))))
+    case R.MGet{ks}:
+      Inl{{==}}
+    case R.MSet{ps}:
+      match ps:
+        case Nil{}:
+          Inl{{==}}
+        case Con{p, rest}:
+          Inr{(R.MSet{Con{p, rest}}, {==})}
+    case R.DbSize{}:
+      Inl{{==}}
+    case R.FlushDb{}:
+      Inr{(R.FlushDb{}, {==})}
+    case R.Keys{p}:
+      Inl{{==}}
+    case R.Scan{a}:
+      Inl{{==}}
+    case R.Peek{k, o}:
+      Inl{{==}}
+    case R.Upd{+k, +op}:
+      out_one(k, R.upd(op, now, R.ent.live(now, KV.entry.at(String, t, k, KV.hash(k)))))
+    case R.Own{o}:
+      Inl{{==}}
+    case R.Bad{r}:
+      Inl{{==}}
+
+def eff_one(c: R.Cmd, +db: R.Db) -> OneEff(eff(c, db)):
+  match db:
+    case R.Db{+t, +n, +x, +now, +rr}:
+      eff_one_go(c, t, n, x, now, rr)
+
+# Recovering
+# ----------
+# The file after a history holds the entries of the effects of all its
+# acts, in order, each a located effect (file_all), and a file loads
+# back as its entries (Laws.aof_load). Replayed (A.replay), the entries
+# act on 1 + n empty databases effect by effect (rp_file), and the
+# replay keeps an invariant with the databases the server held (Inv):
+# every database reads the same at time 0, the replay's focus is the
+# database the file selected, and its time is 0 (act_inv). An act with no
+# effect leaves every database reading the same at time 0 (a moved focus,
+# a SWAPDB, MOVE or purge that did nothing, a command that wrote nothing);
+# an act with an effect does to the replay what it did to the server's
+# databases, the replay moving its focus first when the file selects
+# another database. The numbers the file names have 14 digits at most,
+# as the databases are 1 + n with n small (small_le), so they read back
+# as written (num_rt).
+
+# Lists of databases
+# ~~~~~~~~~~~~~~~~~~
+
+def len_rg(xs: List<&2, R.Db>, -ys: List<&2, R.Db>) -> {List.length(&2, R.Db, List.reverse.go(&2, R.Db, xs, ys)) == Nat.add(List.length(&2, R.Db, xs), List.length(&2, R.Db, ys)) : Nat}:
+  match xs:
+    case Nil{}:
+      {==}
+    case Con{h, +t}:
+      Equal.trans(Nat, List.length(&2, R.Db, List.reverse.go(&2, R.Db, t, h <> ys)), Nat.add(List.length(&2, R.Db, t), 1n+List.length(&2, R.Db, ys)), 1n+Nat.add(List.length(&2, R.Db, t), List.length(&2, R.Db, ys)), len_rg(t, h <> ys), add_succ_r(List.length(&2, R.Db, t), List.length(&2, R.Db, ys)))
+
+def len_zg(xs: List<&2, R.Db>) -> {List.length(&2, R.Db, Laws.zero.go(xs)) == List.length(&2, R.Db, xs) : Nat}:
+  match xs:
+    case Nil{}:
+      {==}
+    case Con{h, t}:
+      Equal.cong(Nat, Nat, z => 1n+z, List.length(&2, R.Db, Laws.zero.go(t)), List.length(&2, R.Db, t), len_zg(t))
+
+# at time 0, then reversed onto more, or reversed, then at time 0
+def zg_rg(xs: List<&2, R.Db>, -ys: List<&2, R.Db>) -> {List.reverse.go(&2, R.Db, Laws.zero.go(xs), Laws.zero.go(ys)) == Laws.zero.go(List.reverse.go(&2, R.Db, xs, ys)) : List<&2, R.Db>}:
+  match xs:
+    case Nil{}:
+      {==}
+    case Con{h, t}:
+      zg_rg(t, h <> ys)
+
+def len_put(j: Nat, -y: R.Db, xs: List<&2, R.Db>) -> {List.length(&2, R.Db, R.ds.put(j, y, xs)) == List.length(&2, R.Db, xs) : Nat}:
+  match j xs:
+    case 0n Con{x, rest}:
+      {==}
+    case 1n+i Con{x, rest}:
+      Equal.cong(Nat, Nat, z => 1n+z, List.length(&2, R.Db, R.ds.put(i, y, rest)), List.length(&2, R.Db, rest), len_put(i, y, rest))
+    case _ Nil{}:
+      {==}
+
+def zg_put(j: Nat, -y: R.Db, xs: List<&2, R.Db>) -> {Laws.zero.go(R.ds.put(j, y, xs)) == R.ds.put(j, R.db.at(0n, y), Laws.zero.go(xs)) : List<&2, R.Db>}:
+  match j xs:
+    case 0n Con{x, rest}:
+      {==}
+    case 1n+i Con{x, rest}:
+      Equal.cong(List<&2, R.Db>, List<&2, R.Db>, z => R.db.at(0n, x) <> z, Laws.zero.go(R.ds.put(i, y, rest)), R.ds.put(i, R.db.at(0n, y), Laws.zero.go(rest)), zg_put(i, y, rest))
+    case _ Nil{}:
+      {==}
+
+# a database, maybe, at time 0
+def mat0(m: Maybe<&2, R.Db>) -> Maybe<&2, R.Db>:
+  match m:
+    case Some{x}:
+      Some{R.db.at(0n, x)}
+    case None{}:
+      None{}
+
+def zg_nth(j: Nat, xs: List<&2, R.Db>) -> {R.ds.nth(j, Laws.zero.go(xs)) == mat0(R.ds.nth(j, xs)) : Maybe<&2, R.Db>}:
+  match j xs:
+    case 0n Con{x, rest}:
+      {==}
+    case 1n+i Con{x, rest}:
+      zg_nth(i, rest)
+    case _ Nil{}:
+      {==}
+
+def mnone(m: Maybe<&2, R.Db>) -> Type:
+  match m:
+    case Some{x}:
+      Empty
+    case None{}:
+      Unit
+
+def none_some_d(-y: R.Db, e: {None{} == Some{y} : Maybe<&2, R.Db>}) -> Empty:
+  %e : mnone(_)
+  Unit{}
+
+def mget(z: R.Db, m: Maybe<&2, R.Db>) -> R.Db:
+  match m:
+    case Some{x}:
+      x
+    case None{}:
+      z
+
+def some_inj_d(-a: R.Db, -b: R.Db, e: {Some{a} == Some{b} : Maybe<&2, R.Db>}) -> {a == b : R.Db}:
+  Equal.cong(Maybe<&2, R.Db>, R.Db, m => mget(a, m), Some{a}, Some{b}, e)
+
+# the j-th of a list is there only below its length
+def nth_lt(j: Nat, xs: List<&2, R.Db>, -y: R.Db) -> {R.ds.nth(j, xs) == Some{y} : Maybe<&2, R.Db>} -> {le(1n+j, List.length(&2, R.Db, xs)) == True{} : Bool}:
+  match j xs:
+    case 0n Con{x, rest}:
+      e => {==}
+    case 1n+i Con{x, rest}:
+      e => nth_lt(i, rest, y)(e)
+    case _ Nil{}:
+      e => Empty.absurd({le(1n+j, 0n) == True{} : Bool}, none_some_d(y, e))
+
+# a database there, maybe at time 0, is one there at time 0
+def mat0_some(m: Maybe<&2, R.Db>, -z: R.Db) -> {mat0(m) == Some{z} : Maybe<&2, R.Db>} -> Exists(R.Db, x => {m == Some{x} : Maybe<&2, R.Db>} & {R.db.at(0n, x) == z : R.Db}):
+  match m:
+    case Some{x}:
+      e => (x, ({==}, some_inj_d(R.db.at(0n, x), z, e)))
+    case None{}:
+      e => Empty.absurd(Exists(R.Db, x => {None{} == Some{x} : Maybe<&2, R.Db>} & {R.db.at(0n, x) == z : R.Db}), none_some_d(z, e))
+
+def le_add(a: Nat, -b: Nat) -> {le(1n+a, Nat.add(a, 1n+b)) == True{} : Bool}:
+  match a:
+    case 0n:
+      {==}
+    case 1n+p:
+      le_add(p, b)
+
+# Small numbers
+# ~~~~~~~~~~~~~
+
+def quot_mono(j: Nat, n: Nat) -> {le(j, n) == True{} : Bool} -> {le(quot10(j), quot10(n)) == True{} : Bool}:
+  match j n:
+    case 0n _:
+      e => {==}
+    case 1n _:
+      e => {==}
+    case 2n _:
+      e => {==}
+    case 3n _:
+      e => {==}
+    case 4n _:
+      e => {==}
+    case 5n _:
+      e => {==}
+    case 6n _:
+      e => {==}
+    case 7n _:
+      e => {==}
+    case 8n _:
+      e => {==}
+    case 9n _:
+      e => {==}
+    case 10n+a 0n:
+      e => Empty.absurd({le(quot10(10n+a), 0n) == True{} : Bool}, false_true(e))
+    case 10n+a 1n:
+      e => Empty.absurd({le(quot10(10n+a), 0n) == True{} : Bool}, false_true(e))
+    case 10n+a 2n:
+      e => Empty.absurd({le(quot10(10n+a), 0n) == True{} : Bool}, false_true(e))
+    case 10n+a 3n:
+      e => Empty.absurd({le(quot10(10n+a), 0n) == True{} : Bool}, false_true(e))
+    case 10n+a 4n:
+      e => Empty.absurd({le(quot10(10n+a), 0n) == True{} : Bool}, false_true(e))
+    case 10n+a 5n:
+      e => Empty.absurd({le(quot10(10n+a), 0n) == True{} : Bool}, false_true(e))
+    case 10n+a 6n:
+      e => Empty.absurd({le(quot10(10n+a), 0n) == True{} : Bool}, false_true(e))
+    case 10n+a 7n:
+      e => Empty.absurd({le(quot10(10n+a), 0n) == True{} : Bool}, false_true(e))
+    case 10n+a 8n:
+      e => Empty.absurd({le(quot10(10n+a), 0n) == True{} : Bool}, false_true(e))
+    case 10n+a 9n:
+      e => Empty.absurd({le(quot10(10n+a), 0n) == True{} : Bool}, false_true(e))
+    case 10n+a 10n+b:
+      e => quot_mono(a, b)(e)
+
+def le0(j: Nat, n: Nat) -> {le(j, n) == True{} : Bool} -> {Nat.is_eq(n, 0n) == True{} : Bool} -> {Nat.is_eq(j, 0n) == True{} : Bool}:
+  match j n:
+    case 0n _:
+      l => d => {==}
+    case 1n+p 0n:
+      l => d => Empty.absurd({Nat.is_eq(1n+p, 0n) == True{} : Bool}, false_true(l))
+    case 1n+p 1n+q:
+      l => d => Empty.absurd({Nat.is_eq(1n+p, 0n) == True{} : Bool}, false_true(d))
+
+def digits_mono(k: Nat, +j: Nat, +n: Nat) -> {le(j, n) == True{} : Bool} -> {KV.digits.le(k, n) == True{} : Bool} -> {KV.digits.le(k, j) == True{} : Bool}:
+  match k:
+    case 0n:
+      le0(j, n)
+    case 1n++i:
+      l => d => Equal.trans(Bool, KV.digits.le(1n+i, j), KV.digits.le(i, quot10(j)), True{},
+        Equal.sym(Bool, KV.digits.le(i, quot10(j)), KV.digits.le(1n+i, j), digits_quot(i, j)),
+        digits_mono(i, quot10(j), quot10(n))(quot_mono(j, n)(l))(Equal.trans(Bool, KV.digits.le(i, quot10(n)), KV.digits.le(1n+i, n), True{}, digits_quot(i, n), d)))
+
+# a number below a small one is small
+def small_le(+j: Nat, +n: Nat, l: {le(j, n) == True{} : Bool}, s: {KV.small(n) == True{} : Bool}) -> {KV.small(j) == True{} : Bool}:
+  digits_mono(14n, j, n)(l)(s)
+
+# a small number, written, reads back as itself
+def num_rt(j: Nat) -> {KV.small(j) == True{} : Bool} -> {A.file.num(Nat.show(j)) == Some{j} : Maybe<&2, Nat>}:
+  match j:
+    case 0n:
+      s => {==}
+    case 1n+p:
+      s => Equal.sym(Maybe<&2, Nat>, Some{1n+p}, A.file.num(Nat.show(1n+p)), num14_show(p, s))
+
+# Zippers
+# ~~~~~~~
+# The databases a zipper holds, at time 0 (Laws.zero): a focus replaced
+# is a database put at its number (zput), and it is there (znth).
+
+def nat_eq(a: Nat, b: Nat) -> {Nat.is_eq(a, b) == True{} : Bool} -> {a == b : Nat}:
+  match a b:
+    case 0n 0n:
+      e => {==}
+    case 0n 1n+q:
+      e => Empty.absurd({0n == 1n+q : Nat}, false_true(e))
+    case 1n+p 0n:
+      e => Empty.absurd({1n+p == 0n : Nat}, false_true(e))
+    case 1n+p 1n+q:
+      e => Equal.cong(Nat, Nat, z => 1n+z, p, q, nat_eq(p, q)(e))
+
+def nat_refl(a: Nat) -> {Nat.is_eq(a, a) == True{} : Bool}:
+  match a:
+    case 0n:
+      {==}
+    case 1n+p:
+      nat_refl(p)
+
+def now_at(+t: Nat, x: R.Db) -> {R.db.now(R.db.at(t, x)) == t : Nat}:
+  match x:
+    case R.Db{a, n, c, w, rr}:
+      {==}
+
+def at_self(d: R.Db) -> {R.db.at(R.db.now(d), d) == d : R.Db}:
+  match d:
+    case R.Db{t, n, x, w, rr}:
+      {==}
+
+def at0_of(d: R.Db) -> {R.db.now(d) == 0n : Nat} -> {R.db.at(0n, d) == d : R.Db}:
+  match d:
+    case R.Db{t, n, x, w, rr}:
+      e =>
+        %Equal.sym(Nat, w, 0n, e) : {R.Db{t, n, x, 0n, rr} == R.Db{t, n, x, _, rr} : R.Db}
+        {==}
+
+def app_putd(w: List<&2, R.Db>, -x: R.Db, -y: R.Db, -q: List<&2, R.Db>) -> {List.append(&2, R.Db, w, x <> q) == R.ds.put(List.length(&2, R.Db, w), x, List.append(&2, R.Db, w, y <> q)) : List<&2, R.Db>}:
+  match w:
+    case Nil{}:
+      {==}
+    case Con{h, t}:
+      Equal.cong(List<&2, R.Db>, List<&2, R.Db>, z => h <> z, List.append(&2, R.Db, t, x <> q), R.ds.put(List.length(&2, R.Db, t), x, List.append(&2, R.Db, t, y <> q)), app_putd(t, x, y, q))
+
+def rg_put(a: List<&2, R.Db>, +w: List<&2, R.Db>, -x: R.Db, -y: R.Db, -q: List<&2, R.Db>) -> {List.reverse.go(&2, R.Db, a, List.append(&2, R.Db, w, x <> q)) == R.ds.put(Nat.add(List.length(&2, R.Db, a), List.length(&2, R.Db, w)), x, List.reverse.go(&2, R.Db, a, List.append(&2, R.Db, w, y <> q))) : List<&2, R.Db>}:
+  match a:
+    case Nil{}:
+      app_putd(w, x, y, q)
+    case Con{h, +t}:
+      %add_succ_r(List.length(&2, R.Db, t), List.length(&2, R.Db, w)) : {List.reverse.go(&2, R.Db, t, List.append(&2, R.Db, h <> w, x <> q)) == R.ds.put(_, x, List.reverse.go(&2, R.Db, t, List.append(&2, R.Db, h <> w, y <> q))) : List<&2, R.Db>}
+      rg_put(t, h <> w, x, y, q)
+
+def app_nthd(w: List<&2, R.Db>, -x: R.Db, -q: List<&2, R.Db>) -> {R.ds.nth(List.length(&2, R.Db, w), List.append(&2, R.Db, w, x <> q)) == Some{x} : Maybe<&2, R.Db>}:
+  match w:
+    case Nil{}:
+      {==}
+    case Con{h, t}:
+      app_nthd(t, x, q)
+
+def rg_nth(a: List<&2, R.Db>, +w: List<&2, R.Db>, -x: R.Db, -q: List<&2, R.Db>) -> {R.ds.nth(Nat.add(List.length(&2, R.Db, a), List.length(&2, R.Db, w)), List.reverse.go(&2, R.Db, a, List.append(&2, R.Db, w, x <> q))) == Some{x} : Maybe<&2, R.Db>}:
+  match a:
+    case Nil{}:
+      app_nthd(w, x, q)
+    case Con{h, +t}:
+      %add_succ_r(List.length(&2, R.Db, t), List.length(&2, R.Db, w)) : {R.ds.nth(_, List.reverse.go(&2, R.Db, t, List.append(&2, R.Db, h <> w, x <> q))) == Some{x} : Maybe<&2, R.Db>}
+      rg_nth(t, h <> w, x, q)
+
+# a zipper's databases at time 0: those before the focus, reversed, the
+# focus, those after
+def zds(-d: R.Db, pre: List<&2, R.Db>, -post: List<&2, R.Db>) -> {List.reverse.go(&2, R.Db, Laws.zero.go(pre), R.db.at(0n, d) <> Laws.zero.go(post)) == Laws.zero(R.Ds{d, pre, post}) : List<&2, R.Db>}:
+  zg_rg(pre, d <> post)
+
+def zput(-x: R.Db, -d: R.Db, +p: List<&2, R.Db>, -q: List<&2, R.Db>) -> {Laws.zero(R.Ds{x, p, q}) == R.ds.put(List.length(&2, R.Db, p), R.db.at(0n, x), Laws.zero(R.Ds{d, p, q})) : List<&2, R.Db>}:
+  %zds(x, p, q) : {_ == R.ds.put(List.length(&2, R.Db, p), R.db.at(0n, x), Laws.zero(R.Ds{d, p, q})) : List<&2, R.Db>}
+  %zds(d, p, q) : {List.reverse.go(&2, R.Db, Laws.zero.go(p), R.db.at(0n, x) <> Laws.zero.go(q)) == R.ds.put(List.length(&2, R.Db, p), R.db.at(0n, x), _) : List<&2, R.Db>}
+  %len_zg(p) : {List.reverse.go(&2, R.Db, Laws.zero.go(p), R.db.at(0n, x) <> Laws.zero.go(q)) == R.ds.put(_, R.db.at(0n, x), List.reverse.go(&2, R.Db, Laws.zero.go(p), R.db.at(0n, d) <> Laws.zero.go(q))) : List<&2, R.Db>}
+  %Equal.sym(Nat, List.length(&2, R.Db, Laws.zero.go(p)), Nat.add(List.length(&2, R.Db, Laws.zero.go(p)), 0n), add_zero(List.length(&2, R.Db, Laws.zero.go(p)))) : {List.reverse.go(&2, R.Db, Laws.zero.go(p), R.db.at(0n, x) <> Laws.zero.go(q)) == R.ds.put(_, R.db.at(0n, x), List.reverse.go(&2, R.Db, Laws.zero.go(p), R.db.at(0n, d) <> Laws.zero.go(q))) : List<&2, R.Db>}
+  rg_put(Laws.zero.go(p), Nil{}, R.db.at(0n, x), R.db.at(0n, d), Laws.zero.go(q))
+
+def znth(-d: R.Db, +p: List<&2, R.Db>, -q: List<&2, R.Db>) -> {R.ds.nth(List.length(&2, R.Db, p), Laws.zero(R.Ds{d, p, q})) == Some{R.db.at(0n, d)} : Maybe<&2, R.Db>}:
+  %zds(d, p, q) : {R.ds.nth(List.length(&2, R.Db, p), _) == Some{R.db.at(0n, d)} : Maybe<&2, R.Db>}
+  %len_zg(p) : {R.ds.nth(_, List.reverse.go(&2, R.Db, Laws.zero.go(p), R.db.at(0n, d) <> Laws.zero.go(q))) == Some{R.db.at(0n, d)} : Maybe<&2, R.Db>}
+  %Equal.sym(Nat, List.length(&2, R.Db, Laws.zero.go(p)), Nat.add(List.length(&2, R.Db, Laws.zero.go(p)), 0n), add_zero(List.length(&2, R.Db, Laws.zero.go(p)))) : {R.ds.nth(_, List.reverse.go(&2, R.Db, Laws.zero.go(p), R.db.at(0n, d) <> Laws.zero.go(q))) == Some{R.db.at(0n, d)} : Maybe<&2, R.Db>}
+  rg_nth(Laws.zero.go(p), Nil{}, R.db.at(0n, d), Laws.zero.go(q))
+
+# focuses that read the same at time 0
+def zfoc(-d1: R.Db, -d2: R.Db, +p: List<&2, R.Db>, -q: List<&2, R.Db>, e: {R.db.at(0n, d1) == R.db.at(0n, d2) : R.Db}) -> {Laws.zero(R.Ds{d1, p, q}) == Laws.zero(R.Ds{d2, p, q}) : List<&2, R.Db>}:
+  %zds(d1, p, q) : {_ == Laws.zero(R.Ds{d2, p, q}) : List<&2, R.Db>}
+  %zds(d2, p, q) : {List.reverse.go(&2, R.Db, Laws.zero.go(p), R.db.at(0n, d1) <> Laws.zero.go(q)) == _ : List<&2, R.Db>}
+  %Equal.sym(R.Db, R.db.at(0n, d1), R.db.at(0n, d2), e) : {List.reverse.go(&2, R.Db, Laws.zero.go(p), _ <> Laws.zero.go(q)) == List.reverse.go(&2, R.Db, Laws.zero.go(p), R.db.at(0n, d2) <> Laws.zero.go(q)) : List<&2, R.Db>}
+  {==}
+
+# a database picked at the time now reads at time 0 as it did
+def zpick0(+now: Nat, x: R.Db, +acc: List<&2, R.Db>, -rest: List<&2, R.Db>) -> {Laws.zero(R.Ds{R.db.at(now, x), acc, rest}) == Laws.zero.go(List.reverse.go(&2, R.Db, acc, x <> rest)) : List<&2, R.Db>}:
+  %zds(R.db.at(now, x), acc, rest) : {_ == Laws.zero.go(List.reverse.go(&2, R.Db, acc, x <> rest)) : List<&2, R.Db>}
+  %zg_rg(acc, x <> rest) : {List.reverse.go(&2, R.Db, Laws.zero.go(acc), R.db.at(0n, R.db.at(now, x)) <> Laws.zero.go(rest)) == _ : List<&2, R.Db>}
+  %Equal.sym(R.Db, R.db.at(0n, R.db.at(now, x)), R.db.at(0n, x), at_at(0n, now, x)) : {List.reverse.go(&2, R.Db, Laws.zero.go(acc), _ <> Laws.zero.go(rest)) == List.reverse.go(&2, R.Db, Laws.zero.go(acc), R.db.at(0n, x) <> Laws.zero.go(rest)) : List<&2, R.Db>}
+  {==}
+
+def pick_z(j: Nat, +now: Nat, +acc: List<&2, R.Db>, xs: List<&2, R.Db>, -X: R.Ds) -> {le(1n+j, List.length(&2, R.Db, xs)) == True{} : Bool} -> {Laws.zero(R.ds.or(R.ds.pick(j, now, acc, xs), X)) == Laws.zero.go(List.reverse.go(&2, R.Db, acc, xs)) : List<&2, R.Db>}:
+  match j xs:
+    case 0n Con{x, rest}:
+      l => zpick0(now, x, acc, rest)
+    case 1n+i Con{x, rest}:
+      l => pick_z(i, now, x <> acc, rest, X)(l)
+    case _ Nil{}:
+      l => Empty.absurd({Laws.zero(X) == Laws.zero.go(List.reverse.go(&2, R.Db, acc, Nil{})) : List<&2, R.Db>}, false_true(l))
+
+def pick_zx(j: Nat, +now: Nat, +acc: List<&2, R.Db>, xs: List<&2, R.Db>, -X: R.Ds) -> {Laws.zero.go(List.reverse.go(&2, R.Db, acc, xs)) == Laws.zero(X) : List<&2, R.Db>} -> {Laws.zero(R.ds.or(R.ds.pick(j, now, acc, xs), X)) == Laws.zero(X) : List<&2, R.Db>}:
+  match j xs:
+    case 0n Con{x, rest}:
+      h => Equal.trans(List<&2, R.Db>, Laws.zero(R.Ds{R.db.at(now, x), acc, rest}), Laws.zero.go(List.reverse.go(&2, R.Db, acc, x <> rest)), Laws.zero(X), zpick0(now, x, acc, rest), h)
+    case 1n+i Con{x, rest}:
+      h => pick_zx(i, now, x <> acc, rest, X)(h)
+    case _ Nil{}:
+      h => {==}
+
+def pick_i(j: Nat, +now: Nat, +acc: List<&2, R.Db>, xs: List<&2, R.Db>, -X: R.Ds) -> {le(1n+j, List.length(&2, R.Db, xs)) == True{} : Bool} -> {R.ds.index(R.ds.or(R.ds.pick(j, now, acc, xs), X)) == Nat.add(List.length(&2, R.Db, acc), j) : Nat}:
+  match j xs:
+    case 0n Con{x, rest}:
+      l => add_zero(List.length(&2, R.Db, acc))
+    case 1n++i Con{x, rest}:
+      l => Equal.trans(Nat, R.ds.index(R.ds.or(R.ds.pick(i, now, x <> acc, rest), X)), 1n+Nat.add(List.length(&2, R.Db, acc), i), Nat.add(List.length(&2, R.Db, acc), 1n+i), pick_i(i, now, x <> acc, rest, X)(l), Equal.sym(Nat, Nat.add(List.length(&2, R.Db, acc), 1n+i), 1n+Nat.add(List.length(&2, R.Db, acc), i), add_succ_r(List.length(&2, R.Db, acc), i)))
+    case _ Nil{}:
+      l => Empty.absurd({R.ds.index(X) == Nat.add(List.length(&2, R.Db, acc), j) : Nat}, false_true(l))
+
+def pick_n(j: Nat, +now: Nat, acc: List<&2, R.Db>, xs: List<&2, R.Db>, -X: R.Ds) -> {R.ds.now(X) == now : Nat} -> {R.ds.now(R.ds.or(R.ds.pick(j, now, acc, xs), X)) == now : Nat}:
+  match j xs:
+    case 0n Con{x, rest}:
+      h => now_at(now, x)
+    case 1n+i Con{x, rest}:
+      h => pick_n(i, now, x <> acc, rest, X)(h)
+    case _ Nil{}:
+      h => h
+
+def with_z(L: List<&2, R.Db>, +X: R.Ds, l: {le(1n+R.ds.index(X), List.length(&2, R.Db, L)) == True{} : Bool}) -> {Laws.zero(R.ds.with(L, X)) == Laws.zero.go(L) : List<&2, R.Db>}:
+  pick_z(R.ds.index(X), R.ds.now(X), Nil{}, L, X)(l)
+
+def with_i(L: List<&2, R.Db>, +X: R.Ds, l: {le(1n+R.ds.index(X), List.length(&2, R.Db, L)) == True{} : Bool}) -> {R.ds.index(R.ds.with(L, X)) == R.ds.index(X) : Nat}:
+  pick_i(R.ds.index(X), R.ds.now(X), Nil{}, L, X)(l)
+
+def with_n(L: List<&2, R.Db>, +X: R.Ds) -> {R.ds.now(R.ds.with(L, X)) == R.ds.now(X) : Nat}:
+  pick_n(R.ds.index(X), R.ds.now(X), Nil{}, L, X)({==})
+
+def focus_if_z(b: Bool, +j: Nat, +X: R.Ds) -> {Laws.zero(R.ds.focus.if(b, j, X)) == Laws.zero(X) : List<&2, R.Db>}:
+  match b:
+    case True{}:
+      {==}
+    case False{}:
+      pick_zx(j, R.ds.now(X), Nil{}, R.ds.list(X), X)({==})
+
+def focus_z(+j: Nat, +X: R.Ds) -> {Laws.zero(R.ds.focus(j, X)) == Laws.zero(X) : List<&2, R.Db>}:
+  focus_if_z(Nat.is_eq(R.ds.index(X), j), j, X)
+
+def focus_if_n(b: Bool, +j: Nat, +X: R.Ds) -> {R.ds.now(R.ds.focus.if(b, j, X)) == R.ds.now(X) : Nat}:
+  match b:
+    case True{}:
+      {==}
+    case False{}:
+      pick_n(j, R.ds.now(X), Nil{}, R.ds.list(X), X)({==})
+
+def focus_n(+j: Nat, +X: R.Ds) -> {R.ds.now(R.ds.focus(j, X)) == R.ds.now(X) : Nat}:
+  focus_if_n(Nat.is_eq(R.ds.index(X), j), j, X)
+
+def focus_if_i(b: Bool, +j: Nat, +X: R.Ds) -> {b == Nat.is_eq(R.ds.index(X), j) : Bool} -> {le(1n+j, List.length(&2, R.Db, R.ds.list(X))) == True{} : Bool} -> {R.ds.index(R.ds.focus.if(b, j, X)) == j : Nat}:
+  match b:
+    case True{}:
+      e => l => nat_eq(R.ds.index(X), j)(Equal.sym(Bool, True{}, Nat.is_eq(R.ds.index(X), j), e))
+    case False{}:
+      e => l => pick_i(j, R.ds.now(X), Nil{}, R.ds.list(X), X)(l)
+
+def focus_i(+j: Nat, +X: R.Ds, l: {le(1n+j, List.length(&2, R.Db, R.ds.list(X))) == True{} : Bool}) -> {R.ds.index(R.ds.focus(j, X)) == j : Nat}:
+  focus_if_i(Nat.is_eq(R.ds.index(X), j), j, X)({==})(l)
+
+def focus_same(+j: Nat, +X: R.Ds, e: {R.ds.index(X) == j : Nat}) -> {X == R.ds.focus(j, X) : R.Ds}:
+  %Equal.sym(Nat, R.ds.index(X), j, e) : {X == R.ds.focus.if(Nat.is_eq(_, j), j, X) : R.Ds}
+  %Equal.sym(Bool, Nat.is_eq(j, j), True{}, nat_refl(j)) : {X == R.ds.focus.if(_, j, X) : R.Ds}
+  {==}
+
+# the databases at a time: they read the same at time 0
+def z_at(+t: Nat, X: R.Ds) -> {Laws.zero(R.ds.at(t, X)) == Laws.zero(X) : List<&2, R.Db>}:
+  match X:
+    case R.Ds{d, +pre, post}:
+      zfoc(R.db.at(t, d), d, pre, post, at_at(0n, t, d))
+
+def ds_now_at(+t: Nat, X: R.Ds) -> {R.ds.now(R.ds.at(t, X)) == t : Nat}:
+  match X:
+    case R.Ds{d, pre, post}:
+      now_at(t, d)
+
+def ds_at_self(X: R.Ds) -> {R.ds.at(R.ds.now(X), X) == X : R.Ds}:
+  match X:
+    case R.Ds{d, pre, post}:
+      Equal.cong(R.Db, R.Ds, z => R.Ds{z, pre, post}, R.db.at(R.db.now(d), d), d, at_self(d))
+
+def ds_at_at(+t: Nat, +now: Nat, X: R.Ds) -> {R.ds.at(t, R.ds.at(now, X)) == R.ds.at(t, X) : R.Ds}:
+  match X:
+    case R.Ds{d, pre, post}:
+      Equal.cong(R.Db, R.Ds, z => R.Ds{z, pre, post}, R.db.at(t, R.db.at(now, d)), R.db.at(t, d), at_at(t, now, d))
+
+# the focus's number is below the number of databases
+def idx_lt(X: R.Ds) -> {le(1n+R.ds.index(X), List.length(&2, R.Db, R.ds.list(X))) == True{} : Bool}:
+  match X:
+    case R.Ds{d, +pre, post}:
+      %Equal.sym(Nat, List.length(&2, R.Db, List.reverse.go(&2, R.Db, pre, d <> post)), Nat.add(List.length(&2, R.Db, pre), List.length(&2, R.Db, d <> post)), len_rg(pre, d <> post)) : {le(1n+List.length(&2, R.Db, pre), _) == True{} : Bool}
+      le_add(List.length(&2, R.Db, pre), List.length(&2, R.Db, post))
+
+# The databases an act changes
+# ~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+def del0(d: R.Db, +ks: List<&2, String>) -> {R.db.at(0n, R.db_of(R.db.del(d, ks))) == R.db_of(R.db.del(R.db.at(0n, d), ks)) : R.Db}:
+  match d:
+    case R.Db{+t, +n, +x, +now, +rr}:
+      Equal.sym(R.Db, R.db_of(R.del.db(R.del_keys(ks, 0n, t), n, x, 0n, rr)), R.db.at(0n, R.db_of(R.del.db(R.del_keys(ks, now, t), n, x, now, rr))), del_at0(ks, t, n, x, now, rr))
+
+def setx0(d: R.Db, +k: String, -v: String, +e: Nat) -> {R.db.at(0n, R.db.setx(d, k, v, e)) == R.db.setx(R.db.at(0n, d), k, v, e) : R.Db}:
+  match d:
+    case R.Db{t, n, x, now, rr}:
+      {==}
+
+def entry_at0(d: R.Db, +k: String) -> {R.db.entry(R.db.at(0n, d), k) == R.db.entry(d, k) : Maybe<&2, KV.Item<String>>}:
+  match d:
+    case R.Db{t, n, x, now, rr}:
+      {==}
+
+def flush0(d: R.Db) -> {R.db.at(0n, R.db.flush(d)) == R.db.flush(R.db.at(0n, d)) : R.Db}:
+  match d:
+    case R.Db{t, n, x, now, rr}:
+      {==}
+
+def flush_now(d: R.Db) -> {R.db.now(R.db.flush(d)) == R.db.now(d) : Nat}:
+  match d:
+    case R.Db{t, n, x, now, rr}:
+      {==}
+
+def cons_eq_d(-a: R.Db, -b: R.Db, -s: List<&2, R.Db>, -t: List<&2, R.Db>, ea: {a == b : R.Db}, es: {s == t : List<&2, R.Db>}) -> {a <> s == b <> t : List<&2, R.Db>}:
+  %ea : {a <> s == _ <> t : List<&2, R.Db>}
+  %es : {a <> s == a <> _ : List<&2, R.Db>}
+  {==}
+
+def fl_rg(xs: List<&2, R.Db>, -ys: List<&2, R.Db>) -> {R.ds.flush(List.reverse.go(&2, R.Db, xs, ys)) == List.reverse.go(&2, R.Db, R.ds.flush(xs), R.ds.flush(ys)) : List<&2, R.Db>}:
+  match xs:
+    case Nil{}:
+      {==}
+    case Con{h, t}:
+      fl_rg(t, h <> ys)
+
+def zg_fl(xs: List<&2, R.Db>) -> {Laws.zero.go(R.ds.flush(xs)) == R.ds.flush(Laws.zero.go(xs)) : List<&2, R.Db>}:
+  match xs:
+    case Nil{}:
+      {==}
+    case Con{+h, +t}:
+      cons_eq_d(R.db.at(0n, R.db.flush(h)), R.db.flush(R.db.at(0n, h)), Laws.zero.go(R.ds.flush(t)), R.ds.flush(Laws.zero.go(t)), flush0(h), zg_fl(t))
+
+def len_fl(xs: List<&2, R.Db>) -> {List.length(&2, R.Db, R.ds.flush(xs)) == List.length(&2, R.Db, xs) : Nat}:
+  match xs:
+    case Nil{}:
+      {==}
+    case Con{h, t}:
+      Equal.cong(Nat, Nat, z => 1n+z, List.length(&2, R.Db, R.ds.flush(t)), List.length(&2, R.Db, t), len_fl(t))
+
+def z_wipe(X: R.Ds) -> {Laws.zero(R.ds.wipe(X)) == R.ds.flush(Laws.zero(X)) : List<&2, R.Db>}:
+  match X:
+    case R.Ds{d, +pre, post}:
+      %fl_rg(pre, d <> post) : {Laws.zero.go(_) == R.ds.flush(Laws.zero.go(List.reverse.go(&2, R.Db, pre, d <> post))) : List<&2, R.Db>}
+      zg_fl(List.reverse.go(&2, R.Db, pre, d <> post))
+
+def idx_wipe(X: R.Ds) -> {R.ds.index(R.ds.wipe(X)) == R.ds.index(X) : Nat}:
+  match X:
+    case R.Ds{d, pre, post}:
+      len_fl(pre)
+
+def now_wipe(X: R.Ds) -> {R.ds.now(R.ds.wipe(X)) == R.ds.now(X) : Nat}:
+  match X:
+    case R.Ds{d, pre, post}:
+      flush_now(d)
+
+def idx_unset(+k: String, X: R.Ds) -> {R.ds.index(R.ds.unset(k, X)) == R.ds.index(X) : Nat}:
+  match X:
+    case R.Ds{d, pre, post}:
+      {==}
+
+def now_unset(+k: String, X: R.Ds) -> {R.ds.now(R.ds.unset(k, X)) == R.ds.now(X) : Nat}:
+  match X:
+    case R.Ds{d, pre, post}:
+      now_eq(R.Del{[k]}, d)
+
+# the focus with a key deleted: the database there at time 0 with the key
+# deleted, put at its number
+def z_unset(+k: String, X: R.Ds, -z: R.Db) -> {R.ds.nth(R.ds.index(X), Laws.zero(X)) == Some{z} : Maybe<&2, R.Db>} -> {Laws.zero(R.ds.unset(k, X)) == R.ds.put(R.ds.index(X), R.db_of(R.db.del(z, [k])), Laws.zero(X)) : List<&2, R.Db>}:
+  match X:
+    case R.Ds{+d, +pre, +post}:
+      en =>
+        %Equal.sym(List<&2, R.Db>, Laws.zero(R.Ds{R.db_of(R.db.del(d, [k])), pre, post}), R.ds.put(List.length(&2, R.Db, pre), R.db.at(0n, R.db_of(R.db.del(d, [k]))), Laws.zero(R.Ds{d, pre, post})), zput(R.db_of(R.db.del(d, [k])), d, pre, post)) : {_ == R.ds.put(List.length(&2, R.Db, pre), R.db_of(R.db.del(z, [k])), Laws.zero(R.Ds{d, pre, post})) : List<&2, R.Db>}
+        %Equal.sym(R.Db, R.db.at(0n, R.db_of(R.db.del(d, [k]))), R.db_of(R.db.del(R.db.at(0n, d), [k])), del0(d, [k])) : {R.ds.put(List.length(&2, R.Db, pre), _, Laws.zero(R.Ds{d, pre, post})) == R.ds.put(List.length(&2, R.Db, pre), R.db_of(R.db.del(z, [k])), Laws.zero(R.Ds{d, pre, post})) : List<&2, R.Db>}
+        %some_inj_d(z, R.db.at(0n, d), Equal.trans(Maybe<&2, R.Db>, Some{z}, R.ds.nth(List.length(&2, R.Db, pre), Laws.zero(R.Ds{d, pre, post})), Some{R.db.at(0n, d)}, Equal.sym(Maybe<&2, R.Db>, R.ds.nth(List.length(&2, R.Db, pre), Laws.zero(R.Ds{d, pre, post})), Some{z}, en), znth(d, pre, post))) : {R.ds.put(List.length(&2, R.Db, pre), R.db_of(R.db.del(_, [k])), Laws.zero(R.Ds{d, pre, post})) == R.ds.put(List.length(&2, R.Db, pre), R.db_of(R.db.del(z, [k])), Laws.zero(R.Ds{d, pre, post})) : List<&2, R.Db>}
+        {==}
+
+def put_bound(+j: Nat, -y: R.Db, +X: R.Ds) -> {le(1n+R.ds.index(X), List.length(&2, R.Db, R.ds.put(j, y, R.ds.list(X)))) == True{} : Bool}:
+  %Equal.sym(Nat, List.length(&2, R.Db, R.ds.put(j, y, R.ds.list(X))), List.length(&2, R.Db, R.ds.list(X)), len_put(j, y, R.ds.list(X))) : {le(1n+R.ds.index(X), _) == True{} : Bool}
+  idx_lt(X)
+
+# a database put at its number in place of those of X
+def z_with1(+j: Nat, y: R.Db, +X: R.Ds) -> {Laws.zero(R.ds.with(R.ds.put(j, y, R.ds.list(X)), X)) == R.ds.put(j, R.db.at(0n, y), Laws.zero(X)) : List<&2, R.Db>}:
+  Equal.trans(List<&2, R.Db>, Laws.zero(R.ds.with(R.ds.put(j, y, R.ds.list(X)), X)), Laws.zero.go(R.ds.put(j, y, R.ds.list(X))), R.ds.put(j, R.db.at(0n, y), Laws.zero(X)),
+    with_z(R.ds.put(j, y, R.ds.list(X)), X, put_bound(j, y, X)),
+    zg_put(j, y, R.ds.list(X)))
+
+def put_bound2(+a: Nat, -y: R.Db, +b: Nat, +x: R.Db, +X: R.Ds) -> {le(1n+R.ds.index(X), List.length(&2, R.Db, R.ds.put(a, y, R.ds.put(b, x, R.ds.list(X))))) == True{} : Bool}:
+  %Equal.sym(Nat, List.length(&2, R.Db, R.ds.put(a, y, R.ds.put(b, x, R.ds.list(X)))), List.length(&2, R.Db, R.ds.put(b, x, R.ds.list(X))), len_put(a, y, R.ds.put(b, x, R.ds.list(X)))) : {le(1n+R.ds.index(X), _) == True{} : Bool}
+  put_bound(b, x, X)
+
+# two databases put at their numbers in place of those of X
+def z_with2(+a: Nat, y: R.Db, +b: Nat, +x: R.Db, +X: R.Ds) -> {Laws.zero(R.ds.with(R.ds.put(a, y, R.ds.put(b, x, R.ds.list(X))), X)) == R.ds.put(a, R.db.at(0n, y), R.ds.put(b, R.db.at(0n, x), Laws.zero(X))) : List<&2, R.Db>}:
+  Equal.trans(List<&2, R.Db>, Laws.zero(R.ds.with(R.ds.put(a, y, R.ds.put(b, x, R.ds.list(X))), X)), Laws.zero.go(R.ds.put(a, y, R.ds.put(b, x, R.ds.list(X)))), R.ds.put(a, R.db.at(0n, y), R.ds.put(b, R.db.at(0n, x), Laws.zero(X))),
+    with_z(R.ds.put(a, y, R.ds.put(b, x, R.ds.list(X))), X, put_bound2(a, y, b, x, X)),
+    Equal.trans(List<&2, R.Db>, Laws.zero.go(R.ds.put(a, y, R.ds.put(b, x, R.ds.list(X)))), R.ds.put(a, R.db.at(0n, y), Laws.zero.go(R.ds.put(b, x, R.ds.list(X)))), R.ds.put(a, R.db.at(0n, y), R.ds.put(b, R.db.at(0n, x), Laws.zero(X))),
+      zg_put(a, y, R.ds.put(b, x, R.ds.list(X))),
+      Equal.cong(List<&2, R.Db>, List<&2, R.Db>, z => R.ds.put(a, R.db.at(0n, y), z), Laws.zero.go(R.ds.put(b, x, R.ds.list(X))), R.ds.put(b, R.db.at(0n, x), Laws.zero(X)), zg_put(b, x, R.ds.list(X)))))
+
+# what SWAPDB, MOVE's purge and MOVE's move do: nothing, or what they do
+# when they do it
+def SwapOk(a: Nat, b: Nat, o: R.Ds, p: Bool & R.Ds) -> Type:
+  Or({p == (False{}, o) : Bool & R.Ds}, Exists(R.Db, x => Exists(R.Db, y => {R.ds.nth(a, R.ds.list(o)) == Some{x} : Maybe<&2, R.Db>} & ({R.ds.nth(b, R.ds.list(o)) == Some{y} : Maybe<&2, R.Db>} & {p == (True{}, R.ds.with(R.ds.put(a, y, R.ds.put(b, x, R.ds.list(o))), o)) : Bool & R.Ds}))))
+
+def swap_of(+a: Nat, +b: Nat, ma: Maybe<&2, R.Db>, mb: Maybe<&2, R.Db>, +o: R.Ds) -> {ma == R.ds.nth(a, R.ds.list(o)) : Maybe<&2, R.Db>} -> {mb == R.ds.nth(b, R.ds.list(o)) : Maybe<&2, R.Db>} -> SwapOk(a, b, o, R.ds.swap.of(a, b, ma, mb, R.ds.list(o), o)):
+  match ma mb:
+    case Some{x} Some{y}:
+      ea => eb => Inr{(x, (y, (Equal.sym(Maybe<&2, R.Db>, Some{x}, R.ds.nth(a, R.ds.list(o)), ea), (Equal.sym(Maybe<&2, R.Db>, Some{y}, R.ds.nth(b, R.ds.list(o)), eb), {==}))))}
+    case Some{x} None{}:
+      ea => eb => Inl{{==}}
+    case None{} _:
+      ea => eb => Inl{{==}}
+
+def swap_spec(+a: Nat, +b: Nat, +o: R.Ds) -> SwapOk(a, b, o, R.ds.swap(a, b, o)):
+  swap_of(a, b, R.ds.nth(a, R.ds.list(o)), R.ds.nth(b, R.ds.list(o)), o)({==})({==})
+
+def swap_some(+a: Nat, +b: Nat, +r: R.Ds, -x: R.Db, -y: R.Db, ea: {R.ds.nth(a, R.ds.list(r)) == Some{x} : Maybe<&2, R.Db>}, eb: {R.ds.nth(b, R.ds.list(r)) == Some{y} : Maybe<&2, R.Db>}) -> {R.ds.swap(a, b, r) == (True{}, R.ds.with(R.ds.put(a, y, R.ds.put(b, x, R.ds.list(r))), r)) : Bool & R.Ds}:
+  %Equal.sym(Maybe<&2, R.Db>, R.ds.nth(a, R.ds.list(r)), Some{x}, ea) : {R.ds.swap.of(a, b, _, R.ds.nth(b, R.ds.list(r)), R.ds.list(r), r) == (True{}, R.ds.with(R.ds.put(a, y, R.ds.put(b, x, R.ds.list(r))), r)) : Bool & R.Ds}
+  %Equal.sym(Maybe<&2, R.Db>, R.ds.nth(b, R.ds.list(r)), Some{y}, eb) : {R.ds.swap.of(a, b, Some{x}, _, R.ds.list(r), r) == (True{}, R.ds.with(R.ds.put(a, y, R.ds.put(b, x, R.ds.list(r))), r)) : Bool & R.Ds}
+  {==}
+
+def PurgeOk(k: String, j: Nat, o: R.Ds, p: Bool & R.Ds) -> Type:
+  Or({p == (False{}, o) : Bool & R.Ds}, Exists(R.Db, y => {R.ds.nth(j, R.ds.list(o)) == Some{y} : Maybe<&2, R.Db>} & {p == (True{}, R.ds.with(R.ds.put(j, R.db_of(R.db.del(y, [k])), R.ds.list(o)), o)) : Bool & R.Ds}))
+
+def purge_if(b: Bool, +k: String, +j: Nat, y: R.Db, +o: R.Ds, ey: {R.ds.nth(j, R.ds.list(o)) == Some{y} : Maybe<&2, R.Db>}) -> PurgeOk(k, j, o, R.ds.purge.if(b, k, j, y, R.ds.list(o), o)):
+  match b:
+    case True{}:
+      Inr{(y, (ey, {==}))}
+    case False{}:
+      Inl{{==}}
+
+def purge_of(+k: String, +j: Nat, my: Maybe<&2, R.Db>, +o: R.Ds) -> {my == R.ds.nth(j, R.ds.list(o)) : Maybe<&2, R.Db>} -> PurgeOk(k, j, o, R.ds.purge.of(k, j, my, R.ds.list(o), o)):
+  match my:
+    case Some{+y}:
+      e => purge_if(Bool.and(Nat.is_ne(j, R.ds.index(o)), Bool.and(R.ds.has(o, k), R.ent.dead(R.ds.now(o), R.db.entry(y, k)))), k, j, y, o, Equal.sym(Maybe<&2, R.Db>, Some{y}, R.ds.nth(j, R.ds.list(o)), e))
+    case None{}:
+      e => Inl{{==}}
+
+def purge_spec(+k: String, +j: Nat, +o: R.Ds) -> PurgeOk(k, j, o, R.ds.purge(k, j, o)):
+  purge_of(k, j, R.ds.nth(j, R.ds.list(o)), o)({==})
+
+def MoveOk(k: String, j: Nat, o: R.Ds, p: Bool & R.Ds) -> Type:
+  Or({p == (False{}, o) : Bool & R.Ds}, Exists(R.Db, y => Exists(String, v => Exists(Nat, e => {R.ds.nth(j, R.ds.list(o)) == Some{y} : Maybe<&2, R.Db>} & ({Nat.is_ne(j, R.ds.index(o)) == True{} : Bool} & ({R.db.entry(y, k) == None{} : Maybe<&2, KV.Item<String>>} & ({R.ds.ent(o, k) == Some{KV.Item{v, e}} : Maybe<&2, KV.Item<String>>} & {p == (True{}, R.ds.moved(k, j, R.db.setx(y, k, v, e), o)) : Bool & R.Ds})))))))
+
+def none_of(m: Maybe<&2, KV.Item<String>>) -> {Maybe.is_none(&2, KV.Item<String>, m) == True{} : Bool} -> {m == None{} : Maybe<&2, KV.Item<String>>}:
+  match m:
+    case Some{x}:
+      e => Empty.absurd({Some{x} == None{} : Maybe<&2, KV.Item<String>>}, false_true(e))
+    case None{}:
+      e => {==}
+
+def move_if(ok: Bool, m: Maybe<&2, KV.Item<String>>, +k: String, +j: Nat, +y: R.Db, +o: R.Ds, ey: {R.ds.nth(j, R.ds.list(o)) == Some{y} : Maybe<&2, R.Db>}) -> {ok == Bool.and(Nat.is_ne(j, R.ds.index(o)), Maybe.is_none(&2, KV.Item<String>, R.db.entry(y, k))) : Bool} -> {m == R.ds.ent(o, k) : Maybe<&2, KV.Item<String>>} -> MoveOk(k, j, o, R.ds.move.if(ok, k, j, y, m, o)):
+  match ok m:
+    case True{} Some{KV.Item{v, e}}:
+      +eo => em => Inr{(y, (v, (e, (ey, (and_l(Nat.is_ne(j, R.ds.index(o)), Maybe.is_none(&2, KV.Item<String>, R.db.entry(y, k)))(Equal.sym(Bool, True{}, Bool.and(Nat.is_ne(j, R.ds.index(o)), Maybe.is_none(&2, KV.Item<String>, R.db.entry(y, k))), eo)), (none_of(R.db.entry(y, k))(and_r(Nat.is_ne(j, R.ds.index(o)), Maybe.is_none(&2, KV.Item<String>, R.db.entry(y, k)))(Equal.sym(Bool, True{}, Bool.and(Nat.is_ne(j, R.ds.index(o)), Maybe.is_none(&2, KV.Item<String>, R.db.entry(y, k))), eo))), (Equal.sym(Maybe<&2, KV.Item<String>>, Some{KV.Item{v, e}}, R.ds.ent(o, k), em), {==})))))))}
+    case True{} None{}:
+      eo => em => Inl{{==}}
+    case False{} _:
+      eo => em => Inl{{==}}
+
+def move_of(+k: String, +j: Nat, my: Maybe<&2, R.Db>, +o: R.Ds) -> {my == R.ds.nth(j, R.ds.list(o)) : Maybe<&2, R.Db>} -> MoveOk(k, j, o, R.ds.move.of(k, j, my, o)):
+  match my:
+    case Some{+y}:
+      e => move_if(Bool.and(Nat.is_ne(j, R.ds.index(o)), Maybe.is_none(&2, KV.Item<String>, R.db.entry(y, k))), R.ds.ent(o, k), k, j, y, o, Equal.sym(Maybe<&2, R.Db>, Some{y}, R.ds.nth(j, R.ds.list(o)), e))({==})({==})
+    case None{}:
+      e => Inl{{==}}
+
+def move_spec(+k: String, +j: Nat, +o: R.Ds) -> MoveOk(k, j, o, R.ds.move(k, j, o)):
+  move_of(k, j, R.ds.nth(j, R.ds.list(o)), o)({==})
+
+def move_some(+k: String, +j: Nat, +f: R.Ds, -y: R.Db, -v: String, -e: Nat, ey: {R.ds.nth(j, R.ds.list(f)) == Some{y} : Maybe<&2, R.Db>}, ene: {Nat.is_ne(j, R.ds.index(f)) == True{} : Bool}, eno: {R.db.entry(y, k) == None{} : Maybe<&2, KV.Item<String>>}, eent: {R.ds.ent(f, k) == Some{KV.Item{v, e}} : Maybe<&2, KV.Item<String>>}) -> {R.ds.move(k, j, f) == (True{}, R.ds.moved(k, j, R.db.setx(y, k, v, e), f)) : Bool & R.Ds}:
+  %Equal.sym(Maybe<&2, R.Db>, R.ds.nth(j, R.ds.list(f)), Some{y}, ey) : {R.ds.move.of(k, j, _, f) == (True{}, R.ds.moved(k, j, R.db.setx(y, k, v, e), f)) : Bool & R.Ds}
+  %Equal.sym(Bool, Nat.is_ne(j, R.ds.index(f)), True{}, ene) : {R.ds.move.if(Bool.and(_, Maybe.is_none(&2, KV.Item<String>, R.db.entry(y, k))), k, j, y, R.ds.ent(f, k), f) == (True{}, R.ds.moved(k, j, R.db.setx(y, k, v, e), f)) : Bool & R.Ds}
+  %Equal.sym(Maybe<&2, KV.Item<String>>, R.db.entry(y, k), None{}, eno) : {R.ds.move.if(Bool.and(True{}, Maybe.is_none(&2, KV.Item<String>, _)), k, j, y, R.ds.ent(f, k), f) == (True{}, R.ds.moved(k, j, R.db.setx(y, k, v, e), f)) : Bool & R.Ds}
+  %Equal.sym(Maybe<&2, KV.Item<String>>, R.ds.ent(f, k), Some{KV.Item{v, e}}, eent) : {R.ds.move.if(True{}, k, j, y, _, f) == (True{}, R.ds.moved(k, j, R.db.setx(y, k, v, e), f)) : Bool & R.Ds}
+  {==}
+
+# The replay
+# ~~~~~~~~~~
+
+# the replay's databases read at time 0 as the server's, its focus is
+# the database the file selected, and its time is 0
+def Inv(r: R.Ds, o: R.Ds, sel: Nat) -> Type:
+  {Laws.zero(r) == Laws.zero(o) : List<&2, R.Db>} & ({R.ds.index(r) == sel : Nat} & {R.ds.now(r) == 0n : Nat})
+
+# the server holds 1 + n databases
+def Len(o: R.Ds, n: Nat) -> Type:
+  {List.length(&2, R.Db, Laws.zero(o)) == 1n+n : Nat}
+
+# an effect's entries, written after the file selected sel, replayed
+def rp1(e: A.Eff, +sel: Nat, r: R.Ds) -> R.Ds:
+  R.acts(A.file.acts(A.parse_all(A.eff.args(e, sel))), r)
+
+# effects' entries replayed, one effect after another
+def rp(es: List<&2, A.Eff>, +sel: Nat, r: R.Ds) -> R.Ds:
+  match es:
+    case Nil{}:
+      r
+    case Con{+e, rest}:
+      rp(rest, A.eff.sel(e, sel), rp1(e, sel, r))
+
+def fa_app(xs: List<&2, R.Cmd>, -ys: List<&2, R.Cmd>) -> {List.append(&2, R.Act, A.file.acts(xs), A.file.acts(ys)) == A.file.acts(List.append(&2, R.Cmd, xs, ys)) : List<&2, R.Act>}:
+  match xs:
+    case Nil{}:
+      {==}
+    case Con{+c, rest}:
+      Equal.cong(List<&2, R.Act>, List<&2, R.Act>, z => A.file.act(c) <> z, List.append(&2, R.Act, A.file.acts(rest), A.file.acts(ys)), A.file.acts(List.append(&2, R.Cmd, rest, ys)), fa_app(rest, ys))
+
+# the entries of effects replayed are the effects replayed one by one
+def rp_file(es: List<&2, A.Eff>, +sel: Nat, +r: R.Ds) -> {R.acts(A.file.acts(A.parse_all(A.effs.args(es, sel))), r) == rp(es, sel, r) : R.Ds}:
+  match es:
+    case Nil{}:
+      {==}
+    case Con{+e, +rest}:
+      %parse_app(A.eff.args(e, sel), A.effs.args(rest, A.eff.sel(e, sel))) : {R.acts(A.file.acts(_), r) == rp(rest, A.eff.sel(e, sel), rp1(e, sel, r)) : R.Ds}
+      %fa_app(A.parse_all(A.eff.args(e, sel)), A.parse_all(A.effs.args(rest, A.eff.sel(e, sel)))) : {R.acts(_, r) == rp(rest, A.eff.sel(e, sel), rp1(e, sel, r)) : R.Ds}
+      %acts_app(A.file.acts(A.parse_all(A.eff.args(e, sel))), A.file.acts(A.parse_all(A.effs.args(rest, A.eff.sel(e, sel)))), r) : {_ == rp(rest, A.eff.sel(e, sel), rp1(e, sel, r)) : R.Ds}
+      rp_file(rest, A.eff.sel(e, sel), rp1(e, sel, r))
+
+def lapp_assoc_s(a: List<&2, List<&2, String>>, -b: List<&2, List<&2, String>>, -c: List<&2, List<&2, String>>) -> {List.append(&2, List<&2, String>, List.append(&2, List<&2, String>, a, b), c) == List.append(&2, List<&2, String>, a, List.append(&2, List<&2, String>, b, c)) : List<&2, List<&2, String>>}:
+  match a:
+    case Nil{}:
+      {==}
+    case Con{h, +t}:
+      Equal.cong(List<&2, List<&2, String>>, List<&2, List<&2, String>>, z => h <> z, List.append(&2, List<&2, String>, List.append(&2, List<&2, String>, t, b), c), List.append(&2, List<&2, String>, t, List.append(&2, List<&2, String>, b, c)), lapp_assoc_s(t, b, c))
+
+# the entries of effects, then of more, after the selection the first
+# leave
+def args_cat(xs: List<&2, A.Eff>, -ys: List<&2, A.Eff>, +sel: Nat) -> {List.append(&2, List<&2, String>, A.effs.args(xs, sel), A.effs.args(ys, A.effs.sel(xs, sel))) == A.effs.args(List.append(&2, A.Eff, xs, ys), sel) : List<&2, List<&2, String>>}:
+  match xs:
+    case Nil{}:
+      {==}
+    case Con{+e, +rest}:
+      Equal.trans(List<&2, List<&2, String>>, List.append(&2, List<&2, String>, List.append(&2, List<&2, String>, A.eff.args(e, sel), A.effs.args(rest, A.eff.sel(e, sel))), A.effs.args(ys, A.effs.sel(rest, A.eff.sel(e, sel)))),
+        List.append(&2, List<&2, String>, A.eff.args(e, sel), List.append(&2, List<&2, String>, A.effs.args(rest, A.eff.sel(e, sel)), A.effs.args(ys, A.effs.sel(rest, A.eff.sel(e, sel))))),
+        List.append(&2, List<&2, String>, A.eff.args(e, sel), A.effs.args(List.append(&2, A.Eff, rest, ys), A.eff.sel(e, sel))),
+        lapp_assoc_s(A.eff.args(e, sel), A.effs.args(rest, A.eff.sel(e, sel)), A.effs.args(ys, A.effs.sel(rest, A.eff.sel(e, sel)))),
+        Equal.cong(List<&2, List<&2, String>>, List<&2, List<&2, String>>, z => List.append(&2, List<&2, String>, A.eff.args(e, sel), z), List.append(&2, List<&2, String>, A.effs.args(rest, A.eff.sel(e, sel)), A.effs.args(ys, A.effs.sel(rest, A.eff.sel(e, sel)))), A.effs.args(List.append(&2, A.Eff, rest, ys), A.eff.sel(e, sel)), args_cat(rest, ys, A.eff.sel(e, sel))))
+
+def sel_cat(xs: List<&2, A.Eff>, -ys: List<&2, A.Eff>, +sel: Nat) -> {A.effs.sel(ys, A.effs.sel(xs, sel)) == A.effs.sel(List.append(&2, A.Eff, xs, ys), sel) : Nat}:
+  match xs:
+    case Nil{}:
+      {==}
+    case Con{+e, rest}:
+      sel_cat(rest, ys, A.eff.sel(e, sel))
+
+def rp_cat(xs: List<&2, A.Eff>, -ys: List<&2, A.Eff>, +sel: Nat, r: R.Ds) -> {rp(ys, A.effs.sel(xs, sel), rp(xs, sel, r)) == rp(List.append(&2, A.Eff, xs, ys), sel, r) : R.Ds}:
+  match xs:
+    case Nil{}:
+      {==}
+    case Con{+e, rest}:
+      rp_cat(rest, ys, A.eff.sel(e, sel), rp1(e, sel, r))
+
+# a command's effect on database j, replayed: the focus moves to j (a
+# SELECT, when the file selected another one), and the command runs there
+def rp_edb.if(b: Bool, +j: Nat, +c: R.Cmd, +sel: Nat, +r: R.Ds) -> {b == Nat.is_eq(j, sel) : Bool} -> {KV.small(j) == True{} : Bool} -> {R.ds.index(r) == sel : Nat} -> {R.parse(A.args(c)) == c : R.Cmd} -> {A.file.act(c) == R.ARun{c} : R.Act} -> {R.acts(A.file.acts(A.parse_all(A.sel.put(b, j, [A.args(c)]))), r) == R.ds_of(R.act(R.ARun{c}, R.ds.focus(j, r))) : R.Ds}:
+  match b:
+    case True{}:
+      eb => sm => ei => ep => ef =>
+        %Equal.sym(R.Cmd, R.parse(A.args(c)), c, ep) : {R.acts(A.file.acts([_]), r) == R.ds_of(R.act(R.ARun{c}, R.ds.focus(j, r))) : R.Ds}
+        %Equal.sym(R.Act, A.file.act(c), R.ARun{c}, ef) : {R.acts([_], r) == R.ds_of(R.act(R.ARun{c}, R.ds.focus(j, r))) : R.Ds}
+        %focus_same(j, r, Equal.trans(Nat, R.ds.index(r), sel, j, ei, Equal.sym(Nat, j, sel, nat_eq(j, sel)(Equal.sym(Bool, True{}, Nat.is_eq(j, sel), eb))))) : {R.acts([R.ARun{c}], r) == R.ds_of(R.act(R.ARun{c}, _)) : R.Ds}
+        {==}
+    case False{}:
+      eb => sm => ei => ep => ef =>
+        %Equal.sym(R.Cmd, R.parse(A.args(c)), c, ep) : {R.acts(A.file.acts([R.parse(["SELECT", Nat.show(j)]), _]), r) == R.ds_of(R.act(R.ARun{c}, R.ds.focus(j, r))) : R.Ds}
+        %Equal.sym(R.Act, A.file.act(c), R.ARun{c}, ef) : {R.acts([A.file.act(R.Own{R.SSelect{Nat.show(j)}}), _], r) == R.ds_of(R.act(R.ARun{c}, R.ds.focus(j, r))) : R.Ds}
+        %Equal.sym(Maybe<&2, Nat>, A.file.num(Nat.show(j)), Some{j}, num_rt(j)(sm)) : {R.acts([A.file.focus(_, R.Own{R.SSelect{Nat.show(j)}}), R.ARun{c}], r) == R.ds_of(R.act(R.ARun{c}, R.ds.focus(j, r))) : R.Ds}
+        {==}
+
+def rp_edb(+j: Nat, +c: R.Cmd, +sel: Nat, +r: R.Ds, sm: {KV.small(j) == True{} : Bool}, ei: {R.ds.index(r) == sel : Nat}, ep: {R.parse(A.args(c)) == c : R.Cmd}, ef: {A.file.act(c) == R.ARun{c} : R.Act}) -> {rp([A.EDb{j, c}], sel, r) == R.ds_of(R.act(R.ARun{c}, R.ds.focus(j, r))) : R.Ds}:
+  rp_edb.if(Nat.is_eq(j, sel), j, c, sel, r)({==})(sm)(ei)(ep)(ef)
+
+# MOVE's effect, replayed: the focus moves to the database the key moved
+# from, and MOVE runs there
+def rp_emove.if(b: Bool, +k: String, +src: Nat, +dst: Nat, +sel: Nat, +r: R.Ds) -> {b == Nat.is_eq(src, sel) : Bool} -> {KV.small(src) == True{} : Bool} -> {KV.small(dst) == True{} : Bool} -> {R.ds.index(r) == sel : Nat} -> {R.acts(A.file.acts(A.parse_all(A.sel.put(b, src, [["MOVE", k, Nat.show(dst)]]))), r) == R.ds_of(R.act(R.AMove{k, dst}, R.ds.focus(src, r))) : R.Ds}:
+  match b:
+    case True{}:
+      eb => ss => sd => ei =>
+        %Equal.sym(Maybe<&2, Nat>, A.file.num(Nat.show(dst)), Some{dst}, num_rt(dst)(sd)) : {R.acts([A.file.move(k, _, R.Own{R.SMove{k, Nat.show(dst)}})], r) == R.ds_of(R.act(R.AMove{k, dst}, R.ds.focus(src, r))) : R.Ds}
+        %focus_same(src, r, Equal.trans(Nat, R.ds.index(r), sel, src, ei, Equal.sym(Nat, src, sel, nat_eq(src, sel)(Equal.sym(Bool, True{}, Nat.is_eq(src, sel), eb))))) : {R.acts([R.AMove{k, dst}], r) == R.ds_of(R.act(R.AMove{k, dst}, _)) : R.Ds}
+        {==}
+    case False{}:
+      eb => ss => sd => ei =>
+        %Equal.sym(Maybe<&2, Nat>, A.file.num(Nat.show(src)), Some{src}, num_rt(src)(ss)) : {R.acts([A.file.focus(_, R.Own{R.SSelect{Nat.show(src)}}), A.file.move(k, A.file.num(Nat.show(dst)), R.Own{R.SMove{k, Nat.show(dst)}})], r) == R.ds_of(R.act(R.AMove{k, dst}, R.ds.focus(src, r))) : R.Ds}
+        %Equal.sym(Maybe<&2, Nat>, A.file.num(Nat.show(dst)), Some{dst}, num_rt(dst)(sd)) : {R.acts([R.AFocus{src}, A.file.move(k, _, R.Own{R.SMove{k, Nat.show(dst)}})], r) == R.ds_of(R.act(R.AMove{k, dst}, R.ds.focus(src, r))) : R.Ds}
+        {==}
+
+def rp_emove(+k: String, +src: Nat, +dst: Nat, +sel: Nat, +r: R.Ds, ss: {KV.small(src) == True{} : Bool}, sd: {KV.small(dst) == True{} : Bool}, ei: {R.ds.index(r) == sel : Nat}) -> {rp([A.EMove{k, src, dst}], sel, r) == R.ds_of(R.act(R.AMove{k, dst}, R.ds.focus(src, r))) : R.Ds}:
+  rp_emove.if(Nat.is_eq(src, sel), k, src, dst, sel, r)({==})(ss)(sd)(ei)
+
+# SWAPDB's effect, replayed: SWAPDB
+def rp_swap(+a: Nat, +b: Nat, +sel: Nat, +r: R.Ds, sa: {KV.small(a) == True{} : Bool}, sb: {KV.small(b) == True{} : Bool}) -> {rp([A.ESwap{a, b}], sel, r) == R.ds_of(R.act(R.ASwap{a, b}, r)) : R.Ds}:
+  %Equal.sym(Maybe<&2, Nat>, A.file.num(Nat.show(a)), Some{a}, num_rt(a)(sa)) : {R.acts([A.file.swap(_, A.file.num(Nat.show(b)), R.Own{R.SSwapDb{Nat.show(a), Nat.show(b)}})], r) == R.ds_of(R.act(R.ASwap{a, b}, r)) : R.Ds}
+  %Equal.sym(Maybe<&2, Nat>, A.file.num(Nat.show(b)), Some{b}, num_rt(b)(sb)) : {R.acts([A.file.swap(Some{a}, _, R.Own{R.SSwapDb{Nat.show(a), Nat.show(b)}})], r) == R.ds_of(R.act(R.ASwap{a, b}, r)) : R.Ds}
+  {==}
+
+# FLUSHALL's effect, replayed: FLUSHALL
+def rp_wipe(+sel: Nat, r: R.Ds) -> {rp([A.EWipe{}], sel, r) == R.ds.wipe(r) : R.Ds}:
+  {==}
+
+# a command of one database runs on the focus as exec runs it
+def act_run(+c: R.Cmd, +d: R.Db, +pre: List<&2, R.Db>, +post: List<&2, R.Db>) -> {(R.reply_of(R.exec(c, d)), R.Ds{R.db_of(R.exec(c, d)), pre, post}) == R.act(R.ARun{c}, R.Ds{d, pre, post}) : R.Reply & R.Ds}:
+  %eta_r(R.exec(c, d)) : {(R.reply_of(R.exec(c, d)), R.Ds{R.db_of(R.exec(c, d)), pre, post}) == R.act.run(_, pre, post) : R.Reply & R.Ds}
+  {==}
+
+# Each act
+# ~~~~~~~~
+# An act keeps the invariant, the replay running the act's effect, and
+# the server keeps 1 + n databases (Post).
+
+def Post(a: R.Act, o: R.Ds, r: R.Ds, sel: Nat, n: Nat) -> Type:
+  Inv(rp(aeff(a, o), sel, r), R.ds_of(R.act(a, o)), A.effs.sel(aeff(a, o), sel)) & Len(R.ds_of(R.act(a, o)), n)
+
+# the replay's databases read at time 0 as zl, focused on s, at time 0
+def Inv3(r: R.Ds, zl: List<&2, R.Db>, s: Nat) -> Type:
+  {Laws.zero(r) == zl : List<&2, R.Db>} & ({R.ds.index(r) == s : Nat} & {R.ds.now(r) == 0n : Nat})
+
+def inv3_post(-r: R.Ds, -o: R.Ds, -zl: List<&2, R.Db>, -s: Nat, -n: Nat, i3: Inv3(r, zl, s), +ez: {Laws.zero(o) == zl : List<&2, R.Db>}, ln: {List.length(&2, R.Db, zl) == 1n+n : Nat}) -> Inv(r, o, s) & Len(o, n):
+  (z1, q) = i3
+  ((Equal.trans(List<&2, R.Db>, Laws.zero(r), zl, Laws.zero(o), z1, Equal.sym(List<&2, R.Db>, Laws.zero(o), zl, ez)), q), Equal.trans(Nat, List.length(&2, R.Db, Laws.zero(o)), List.length(&2, R.Db, zl), 1n+n, Equal.cong(List<&2, R.Db>, Nat, z => List.length(&2, R.Db, z), Laws.zero(o), zl, ez), ln))
+
+# databases that read the same at time 0 keep the invariant
+def inv_z(-r: R.Ds, -o: R.Ds, -o2: R.Ds, -sel: Nat, -n: Nat, +e: {Laws.zero(o2) == Laws.zero(o) : List<&2, R.Db>}, inv: Inv(r, o, sel), ln: {List.length(&2, R.Db, Laws.zero(o)) == 1n+n : Nat}) -> Inv(r, o2, sel) & Len(o2, n):
+  (ez, q) = inv
+  ((Equal.trans(List<&2, R.Db>, Laws.zero(r), Laws.zero(o), Laws.zero(o2), ez, Equal.sym(List<&2, R.Db>, Laws.zero(o2), Laws.zero(o), e)), q), Equal.trans(Nat, List.length(&2, R.Db, Laws.zero(o2)), List.length(&2, R.Db, Laws.zero(o)), 1n+n, Equal.cong(List<&2, R.Db>, Nat, z => List.length(&2, R.Db, z), Laws.zero(o2), Laws.zero(o), e), ln))
+
+def len_put_n(+j: Nat, -w: R.Db, +zl: List<&2, R.Db>, -n: Nat, ln: {List.length(&2, R.Db, zl) == 1n+n : Nat}) -> {List.length(&2, R.Db, R.ds.put(j, w, zl)) == 1n+n : Nat}:
+  Equal.trans(Nat, List.length(&2, R.Db, R.ds.put(j, w, zl)), List.length(&2, R.Db, zl), 1n+n, len_put(j, w, zl), ln)
+
+# the replay has as many databases as the server
+def len_list_r(+r: R.Ds, -o: R.Ds, -n: Nat, ez: {Laws.zero(r) == Laws.zero(o) : List<&2, R.Db>}, ln: {List.length(&2, R.Db, Laws.zero(o)) == 1n+n : Nat}) -> {List.length(&2, R.Db, R.ds.list(r)) == 1n+n : Nat}:
+  Equal.trans(Nat, List.length(&2, R.Db, R.ds.list(r)), List.length(&2, R.Db, Laws.zero(r)), 1n+n,
+    Equal.sym(Nat, List.length(&2, R.Db, Laws.zero(r)), List.length(&2, R.Db, R.ds.list(r)), len_zg(R.ds.list(r))),
+    Equal.trans(Nat, List.length(&2, R.Db, Laws.zero(r)), List.length(&2, R.Db, Laws.zero(o)), 1n+n, Equal.cong(List<&2, R.Db>, Nat, z => List.length(&2, R.Db, z), Laws.zero(r), Laws.zero(o), ez), ln))
+
+# the focus's number, and a number a database is at, are at most n
+def lidx(+o: R.Ds, +n: Nat, ln: {List.length(&2, R.Db, Laws.zero(o)) == 1n+n : Nat}) -> {le(R.ds.index(o), n) == True{} : Bool}:
+  %len_list_r(o, o, n, {==}, ln) : {le(1n+R.ds.index(o), _) == True{} : Bool}
+  idx_lt(o)
+
+def lnth(j: Nat, +o: R.Ds, +n: Nat, ln: {List.length(&2, R.Db, Laws.zero(o)) == 1n+n : Nat}, -y: R.Db, ey: {R.ds.nth(j, R.ds.list(o)) == Some{y} : Maybe<&2, R.Db>}) -> {le(j, n) == True{} : Bool}:
+  %len_list_r(o, o, n, {==}, ln) : {le(1n+j, _) == True{} : Bool}
+  nth_lt(j, R.ds.list(o), y)(ey)
+
+# a number at most n is a number of the replay's databases
+def bound_r(+j: Nat, +r: R.Ds, -o: R.Ds, -n: Nat, ez: {Laws.zero(r) == Laws.zero(o) : List<&2, R.Db>}, ln: {List.length(&2, R.Db, Laws.zero(o)) == 1n+n : Nat}, l: {le(j, n) == True{} : Bool}) -> {le(1n+j, List.length(&2, R.Db, R.ds.list(r))) == True{} : Bool}:
+  %Equal.sym(Nat, List.length(&2, R.Db, R.ds.list(r)), 1n+n, len_list_r(r, o, n, ez, ln)) : {le(1n+j, _) == True{} : Bool}
+  l
+
+# the j-th database of the replay reads at time 0 as the server's
+def nth_r(+j: Nat, +r: R.Ds, +o: R.Ds, ez: {Laws.zero(r) == Laws.zero(o) : List<&2, R.Db>}, -x: R.Db, ex: {R.ds.nth(j, R.ds.list(o)) == Some{x} : Maybe<&2, R.Db>}) -> {mat0(R.ds.nth(j, R.ds.list(r))) == Some{R.db.at(0n, x)} : Maybe<&2, R.Db>}:
+  %zg_nth(j, R.ds.list(r)) : {_ == Some{R.db.at(0n, x)} : Maybe<&2, R.Db>}
+  %Equal.sym(List<&2, R.Db>, Laws.zero(r), Laws.zero(o), ez) : {R.ds.nth(j, _) == Some{R.db.at(0n, x)} : Maybe<&2, R.Db>}
+  %Equal.sym(Maybe<&2, R.Db>, R.ds.nth(j, Laws.zero(o)), mat0(R.ds.nth(j, R.ds.list(o))), zg_nth(j, R.ds.list(o))) : {_ == Some{R.db.at(0n, x)} : Maybe<&2, R.Db>}
+  %Equal.sym(Maybe<&2, R.Db>, R.ds.nth(j, R.ds.list(o)), Some{x}, ex) : {mat0(_) == Some{R.db.at(0n, x)} : Maybe<&2, R.Db>}
+  {==}
+
+# a command run on the focus, j, of a replay at time 0 whose databases
+# read as zo: the database z there, at time 0, with the command run
+def run_focus(f: R.Ds, +c: R.Cmd, +j: Nat, -zo: List<&2, R.Db>, -z: R.Db) -> {R.ds.index(f) == j : Nat} -> {R.ds.now(f) == 0n : Nat} -> {Laws.zero(f) == zo : List<&2, R.Db>} -> {R.ds.nth(j, zo) == Some{z} : Maybe<&2, R.Db>} -> Inv3(R.ds_of(R.act(R.ARun{c}, f)), R.ds.put(j, R.db_of(R.exec(c, z)), zo), j):
+  match f:
+    case R.Ds{+df, +pf, +qf}:
+      +ei => +en => +ez => et =>
+        +nx = Equal.trans(Nat, R.db.now(R.db_of(R.exec(c, df))), R.db.now(df), 0n, now_eq(c, df), en)
+        +eaz = some_inj_d(R.db.at(0n, df), z, Equal.trans(Maybe<&2, R.Db>, Some{R.db.at(0n, df)}, R.ds.nth(List.length(&2, R.Db, pf), Laws.zero(R.Ds{df, pf, qf})), Some{z}, Equal.sym(Maybe<&2, R.Db>, R.ds.nth(List.length(&2, R.Db, pf), Laws.zero(R.Ds{df, pf, qf})), Some{R.db.at(0n, df)}, znth(df, pf, qf)), Equal.trans(Maybe<&2, R.Db>, R.ds.nth(List.length(&2, R.Db, pf), Laws.zero(R.Ds{df, pf, qf})), R.ds.nth(j, zo), Some{z}, Equal.trans(Maybe<&2, R.Db>, R.ds.nth(List.length(&2, R.Db, pf), Laws.zero(R.Ds{df, pf, qf})), R.ds.nth(j, Laws.zero(R.Ds{df, pf, qf})), R.ds.nth(j, zo), Equal.cong(Nat, Maybe<&2, R.Db>, i => R.ds.nth(i, Laws.zero(R.Ds{df, pf, qf})), List.length(&2, R.Db, pf), j, ei), Equal.cong(List<&2, R.Db>, Maybe<&2, R.Db>, l => R.ds.nth(j, l), Laws.zero(R.Ds{df, pf, qf}), zo, ez)), et)))
+        +edz = Equal.trans(R.Db, df, R.db.at(0n, df), z, Equal.sym(R.Db, R.db.at(0n, df), df, at0_of(df)(en)), eaz)
+        %act_run(c, df, pf, qf) : Inv3(R.ds_of(_), R.ds.put(j, R.db_of(R.exec(c, z)), zo), j)
+        %edz : {Laws.zero(R.Ds{R.db_of(R.exec(c, df)), pf, qf}) == R.ds.put(j, R.db_of(R.exec(c, _)), zo) : List<&2, R.Db>} & ({List.length(&2, R.Db, pf) == j : Nat} & {R.db.now(R.db_of(R.exec(c, df))) == 0n : Nat})
+        %ei : {Laws.zero(R.Ds{R.db_of(R.exec(c, df)), pf, qf}) == R.ds.put(_, R.db_of(R.exec(c, df)), zo) : List<&2, R.Db>} & ({List.length(&2, R.Db, pf) == j : Nat} & {R.db.now(R.db_of(R.exec(c, df))) == 0n : Nat})
+        %ez : {Laws.zero(R.Ds{R.db_of(R.exec(c, df)), pf, qf}) == R.ds.put(List.length(&2, R.Db, pf), R.db_of(R.exec(c, df)), _) : List<&2, R.Db>} & ({List.length(&2, R.Db, pf) == j : Nat} & {R.db.now(R.db_of(R.exec(c, df))) == 0n : Nat})
+        %at0_of(R.db_of(R.exec(c, df)))(nx) : {Laws.zero(R.Ds{R.db_of(R.exec(c, df)), pf, qf}) == R.ds.put(List.length(&2, R.Db, pf), _, Laws.zero(R.Ds{df, pf, qf})) : List<&2, R.Db>} & ({List.length(&2, R.Db, pf) == j : Nat} & {R.db.now(R.db_of(R.exec(c, df))) == 0n : Nat})
+        (zput(R.db_of(R.exec(c, df)), df, pf, qf), (ei, nx))
+
+# a command's effect parses back to itself (eff_args), so it is no act on
+# several databases: a command that would be (R.Own) has no strings, and
+# parses back to an error
+def chead(z: R.Cmd, xs: List<&2, R.Cmd>) -> R.Cmd:
+  match xs:
+    case Nil{}:
+      z
+    case Con{h, t}:
+      h
+
+def ep_of(c: R.Cmd, +d: R.Db, -e: R.Cmd, +e1: {eff(c, d) == [e] : List<&2, R.Cmd>}) -> {R.parse(A.args(e)) == e : R.Cmd}:
+  h = Equal.trans(List<&2, R.Cmd>, [e], eff(c, d), A.parse_all(A.args_all([e])),
+    Equal.sym(List<&2, R.Cmd>, eff(c, d), [e], e1),
+    Equal.trans(List<&2, R.Cmd>, eff(c, d), A.parse_all(A.args_all(eff(c, d))), A.parse_all(A.args_all([e])),
+      eff_args(c, d),
+      Equal.cong(List<&2, R.Cmd>, List<&2, R.Cmd>, z => A.parse_all(A.args_all(z)), eff(c, d), [e], e1)))
+  Equal.sym(R.Cmd, e, R.parse(A.args(e)), Equal.cong(List<&2, R.Cmd>, R.Cmd, z => chead(e, z), [e], A.parse_all(A.args_all([e])), h))
+
+def not_own(c: R.Cmd) -> Type:
+  match c:
+    case R.Own{o}:
+      Empty
+    case _:
+      Unit
+
+def own_noent(-o: R.SessOp, h: {R.parse(A.args(R.Own{o})) == R.Own{o} : R.Cmd}) -> Empty:
+  %h : not_own(_)
+  Unit{}
+
+def fa_of(e: R.Cmd) -> {R.parse(A.args(e)) == e : R.Cmd} -> {A.file.act(e) == R.ARun{e} : R.Act}:
+  match e:
+    case R.Ping{}:
+      h => {==}
+    case R.Echo{m}:
+      h => {==}
+    case R.Get{k}:
+      h => {==}
+    case R.Set{k, v}:
+      h => {==}
+    case R.Del{ks}:
+      h => {==}
+    case R.Exists{ks}:
+      h => {==}
+    case R.IncrBy{k, by}:
+      h => {==}
+    case R.MGet{ks}:
+      h => {==}
+    case R.MSet{ps}:
+      h => {==}
+    case R.DbSize{}:
+      h => {==}
+    case R.FlushDb{}:
+      h => {==}
+    case R.Keys{p}:
+      h => {==}
+    case R.Scan{a}:
+      h => {==}
+    case R.Peek{k, o}:
+      h => {==}
+    case R.Upd{k, op}:
+      h => {==}
+    case R.Own{o}:
+      h => Empty.absurd({A.file.act(R.Own{o}) == R.ARun{R.Own{o}} : R.Act}, own_noent(o, h))
+    case R.Bad{r}:
+      h => {==}
+
+# a command that wrote nothing leaves its database reading the same at
+# time 0; one with an effect leaves it as the effect leaves it
+def none_at0(+c: R.Cmd, +d: R.Db, e0: {eff(c, d) == Nil{} : List<&2, R.Cmd>}) -> {R.db.at(0n, R.db_of(R.exec(c, d))) == R.db.at(0n, d) : R.Db}:
+  Equal.trans(R.Db, R.db.at(0n, R.db_of(R.exec(c, d))), Laws.final(R.exec_all(eff(c, d), R.db.at(0n, d))), R.db.at(0n, d),
+    Equal.sym(R.Db, Laws.final(R.exec_all(eff(c, d), R.db.at(0n, d))), R.db.at(0n, R.db_of(R.exec(c, d))), effect_db(c, d)),
+    Equal.cong(List<&2, R.Cmd>, R.Db, z => Laws.final(R.exec_all(z, R.db.at(0n, d))), eff(c, d), Nil{}, e0))
+
+def one_at0(+c: R.Cmd, +d: R.Db, +e: R.Cmd, e1: {eff(c, d) == [e] : List<&2, R.Cmd>}) -> {R.db.at(0n, R.db_of(R.exec(c, d))) == R.db_of(R.exec(e, R.db.at(0n, d))) : R.Db}:
+  Equal.sym(R.Db, R.db_of(R.exec(e, R.db.at(0n, d))), R.db.at(0n, R.db_of(R.exec(c, d))),
+    Equal.trans(R.Db, R.db_of(R.exec(e, R.db.at(0n, d))), Laws.final(R.exec_all([e], R.db.at(0n, d))), R.db.at(0n, R.db_of(R.exec(c, d))),
+      fin_cons(e, Nil{}, R.db.at(0n, d)),
+      Equal.trans(R.Db, Laws.final(R.exec_all([e], R.db.at(0n, d))), Laws.final(R.exec_all(eff(c, d), R.db.at(0n, d))), R.db.at(0n, R.db_of(R.exec(c, d))),
+        Equal.cong(List<&2, R.Cmd>, R.Db, z => Laws.final(R.exec_all(z, R.db.at(0n, d))), [e], eff(c, d), Equal.sym(List<&2, R.Cmd>, eff(c, d), [e], e1)),
+        effect_db(c, d))))
+
+# a command of one database, with an effect
+def run_eff(+c: R.Cmd, +d: R.Db, +pre: List<&2, R.Db>, +post: List<&2, R.Db>, +r: R.Ds, +sel: Nat, +n: Nat, +e: R.Cmd, +e1: {eff(c, d) == [e] : List<&2, R.Cmd>}, +ln: {List.length(&2, R.Db, Laws.zero(R.Ds{d, pre, post})) == 1n+n : Nat}, sm: {KV.small(n) == True{} : Bool}, +ez: {Laws.zero(r) == Laws.zero(R.Ds{d, pre, post}) : List<&2, R.Db>}, +ei: {R.ds.index(r) == sel : Nat}, +en: {R.ds.now(r) == 0n : Nat}) -> Inv(rp(A.at_db(List.length(&2, R.Db, pre), eff(c, d)), sel, r), R.Ds{R.db_of(R.exec(c, d)), pre, post}, A.effs.sel(A.at_db(List.length(&2, R.Db, pre), eff(c, d)), sel)) & Len(R.Ds{R.db_of(R.exec(c, d)), pre, post}, n):
+  +ep = ep_of(c, d, e, e1)
+  i3 = run_focus(R.ds.focus(List.length(&2, R.Db, pre), r), e, List.length(&2, R.Db, pre), Laws.zero(R.Ds{d, pre, post}), R.db.at(0n, d))(focus_i(List.length(&2, R.Db, pre), r, bound_r(List.length(&2, R.Db, pre), r, R.Ds{d, pre, post}, n, ez, ln, lidx(R.Ds{d, pre, post}, n, ln))))(Equal.trans(Nat, R.ds.now(R.ds.focus(List.length(&2, R.Db, pre), r)), R.ds.now(r), 0n, focus_n(List.length(&2, R.Db, pre), r), en))(Equal.trans(List<&2, R.Db>, Laws.zero(R.ds.focus(List.length(&2, R.Db, pre), r)), Laws.zero(r), Laws.zero(R.Ds{d, pre, post}), focus_z(List.length(&2, R.Db, pre), r), ez))(znth(d, pre, post))
+  %Equal.sym(List<&2, R.Cmd>, eff(c, d), [e], e1) : Inv(rp(A.at_db(List.length(&2, R.Db, pre), _), sel, r), R.Ds{R.db_of(R.exec(c, d)), pre, post}, A.effs.sel(A.at_db(List.length(&2, R.Db, pre), _), sel)) & Len(R.Ds{R.db_of(R.exec(c, d)), pre, post}, n)
+  %Equal.sym(R.Ds, rp([A.EDb{List.length(&2, R.Db, pre), e}], sel, r), R.ds_of(R.act(R.ARun{e}, R.ds.focus(List.length(&2, R.Db, pre), r))), rp_edb(List.length(&2, R.Db, pre), e, sel, r, small_le(List.length(&2, R.Db, pre), n, lidx(R.Ds{d, pre, post}, n, ln), sm), ei, ep, fa_of(e)(ep))) : Inv(_, R.Ds{R.db_of(R.exec(c, d)), pre, post}, List.length(&2, R.Db, pre)) & Len(R.Ds{R.db_of(R.exec(c, d)), pre, post}, n)
+  inv3_post(R.ds_of(R.act(R.ARun{e}, R.ds.focus(List.length(&2, R.Db, pre), r))), R.Ds{R.db_of(R.exec(c, d)), pre, post}, R.ds.put(List.length(&2, R.Db, pre), R.db_of(R.exec(e, R.db.at(0n, d))), Laws.zero(R.Ds{d, pre, post})), List.length(&2, R.Db, pre), n, i3,
+    Equal.trans(List<&2, R.Db>, Laws.zero(R.Ds{R.db_of(R.exec(c, d)), pre, post}), R.ds.put(List.length(&2, R.Db, pre), R.db.at(0n, R.db_of(R.exec(c, d))), Laws.zero(R.Ds{d, pre, post})), R.ds.put(List.length(&2, R.Db, pre), R.db_of(R.exec(e, R.db.at(0n, d))), Laws.zero(R.Ds{d, pre, post})),
+      zput(R.db_of(R.exec(c, d)), d, pre, post),
+      Equal.cong(R.Db, List<&2, R.Db>, z => R.ds.put(List.length(&2, R.Db, pre), z, Laws.zero(R.Ds{d, pre, post})), R.db.at(0n, R.db_of(R.exec(c, d))), R.db_of(R.exec(e, R.db.at(0n, d))), one_at0(c, d, e, e1))),
+    len_put_n(List.length(&2, R.Db, pre), R.db_of(R.exec(e, R.db.at(0n, d))), Laws.zero(R.Ds{d, pre, post}), n, ln))
+
+# a command of one database
+def run_one(+c: R.Cmd, +d: R.Db, +pre: List<&2, R.Db>, +post: List<&2, R.Db>, +r: R.Ds, +sel: Nat, +n: Nat, oe: OneEff(eff(c, d)), +ln: {List.length(&2, R.Db, Laws.zero(R.Ds{d, pre, post})) == 1n+n : Nat}, sm: {KV.small(n) == True{} : Bool}, +ez: {Laws.zero(r) == Laws.zero(R.Ds{d, pre, post}) : List<&2, R.Db>}, +ei: {R.ds.index(r) == sel : Nat}, +en: {R.ds.now(r) == 0n : Nat}) -> Inv(rp(A.at_db(List.length(&2, R.Db, pre), eff(c, d)), sel, r), R.Ds{R.db_of(R.exec(c, d)), pre, post}, A.effs.sel(A.at_db(List.length(&2, R.Db, pre), eff(c, d)), sel)) & Len(R.Ds{R.db_of(R.exec(c, d)), pre, post}, n):
+  match oe:
+    case Inl{+e0}:
+      %Equal.sym(List<&2, R.Cmd>, eff(c, d), Nil{}, e0) : Inv(rp(A.at_db(List.length(&2, R.Db, pre), _), sel, r), R.Ds{R.db_of(R.exec(c, d)), pre, post}, A.effs.sel(A.at_db(List.length(&2, R.Db, pre), _), sel)) & Len(R.Ds{R.db_of(R.exec(c, d)), pre, post}, n)
+      inv_z(r, R.Ds{d, pre, post}, R.Ds{R.db_of(R.exec(c, d)), pre, post}, sel, n, zfoc(R.db_of(R.exec(c, d)), d, pre, post, none_at0(c, d, e0)), (ez, (ei, en)), ln)
+    case Inr{p}:
+      (e, e1) = p
+      run_eff(c, d, pre, post, r, sel, n, e, e1, ln, sm, ez, ei, en)
+
+def post_run(+c: R.Cmd, o: R.Ds, +r: R.Ds, +sel: Nat, +n: Nat) -> {List.length(&2, R.Db, Laws.zero(o)) == 1n+n : Nat} -> {KV.small(n) == True{} : Bool} -> {Laws.zero(r) == Laws.zero(o) : List<&2, R.Db>} -> {R.ds.index(r) == sel : Nat} -> {R.ds.now(r) == 0n : Nat} -> Post(R.ARun{c}, o, r, sel, n):
+  match o:
+    case R.Ds{+d, +pre, +post}:
+      ln => sm => ez => ei => en =>
+        %run_split(c, d) : Inv(rp(tmid(A.act.run(List.length(&2, R.Db, pre), _, pre, post)), sel, r), R.ds_of(R.act(R.ARun{c}, R.Ds{d, pre, post})), A.effs.sel(tmid(A.act.run(List.length(&2, R.Db, pre), _, pre, post)), sel)) & Len(R.ds_of(R.act(R.ARun{c}, R.Ds{d, pre, post})), n)
+        %act_run(c, d, pre, post) : Inv(rp(A.at_db(List.length(&2, R.Db, pre), eff(c, d)), sel, r), R.ds_of(_), A.effs.sel(A.at_db(List.length(&2, R.Db, pre), eff(c, d)), sel)) & Len(R.ds_of(_), n)
+        run_one(c, d, pre, post, r, sel, n, eff_one(c, d), ln, sm, ez, ei, en)
+
+# a focus moved: every database reads the same at time 0
+def put2_eq(+a: Nat, +b: Nat, -y1: R.Db, -y2: R.Db, -x1: R.Db, -x2: R.Db, -l1: List<&2, R.Db>, -l2: List<&2, R.Db>, ey: {y1 == y2 : R.Db}, ex: {x1 == x2 : R.Db}, el: {l1 == l2 : List<&2, R.Db>}) -> {R.ds.put(a, y1, R.ds.put(b, x1, l1)) == R.ds.put(a, y2, R.ds.put(b, x2, l2)) : List<&2, R.Db>}:
+  %ey : {R.ds.put(a, y1, R.ds.put(b, x1, l1)) == R.ds.put(a, _, R.ds.put(b, x2, l2)) : List<&2, R.Db>}
+  %ex : {R.ds.put(a, y1, R.ds.put(b, x1, l1)) == R.ds.put(a, y1, R.ds.put(b, _, l2)) : List<&2, R.Db>}
+  %el : {R.ds.put(a, y1, R.ds.put(b, x1, l1)) == R.ds.put(a, y1, R.ds.put(b, x1, _)) : List<&2, R.Db>}
+  {==}
+
+# SWAPDB that swapped
+def swap_yes2(+a: Nat, +b: Nat, +o: R.Ds, +r: R.Ds, +sel: Nat, +n: Nat, +x: R.Db, +y: R.Db, +x2: R.Db, +y2: R.Db, +ea: {R.ds.nth(a, R.ds.list(o)) == Some{x} : Maybe<&2, R.Db>}, +eb: {R.ds.nth(b, R.ds.list(o)) == Some{y} : Maybe<&2, R.Db>}, +ea2: {R.ds.nth(a, R.ds.list(r)) == Some{x2} : Maybe<&2, R.Db>}, +eb2: {R.ds.nth(b, R.ds.list(r)) == Some{y2} : Maybe<&2, R.Db>}, +ex2: {R.db.at(0n, x2) == R.db.at(0n, x) : R.Db}, +ey2: {R.db.at(0n, y2) == R.db.at(0n, y) : R.Db}, +ln: {List.length(&2, R.Db, Laws.zero(o)) == 1n+n : Nat}, +sm: {KV.small(n) == True{} : Bool}, +ez: {Laws.zero(r) == Laws.zero(o) : List<&2, R.Db>}, +ei: {R.ds.index(r) == sel : Nat}, +en: {R.ds.now(r) == 0n : Nat}) -> Inv(rp([A.ESwap{a, b}], sel, r), R.ds.with(R.ds.put(a, y, R.ds.put(b, x, R.ds.list(o))), o), sel) & Len(R.ds.with(R.ds.put(a, y, R.ds.put(b, x, R.ds.list(o))), o), n):
+  %Equal.sym(R.Ds, rp([A.ESwap{a, b}], sel, r), R.ds_of(R.act(R.ASwap{a, b}, r)), rp_swap(a, b, sel, r, small_le(a, n, lnth(a, o, n, ln, x, ea), sm), small_le(b, n, lnth(b, o, n, ln, y, eb), sm))) : Inv(_, R.ds.with(R.ds.put(a, y, R.ds.put(b, x, R.ds.list(o))), o), sel) & Len(R.ds.with(R.ds.put(a, y, R.ds.put(b, x, R.ds.list(o))), o), n)
+  %Equal.sym(Bool & R.Ds, R.ds.swap(a, b, r), (True{}, R.ds.with(R.ds.put(a, y2, R.ds.put(b, x2, R.ds.list(r))), r)), swap_some(a, b, r, x2, y2, ea2, eb2)) : Inv(R.ds_of(R.act.ok(_)), R.ds.with(R.ds.put(a, y, R.ds.put(b, x, R.ds.list(o))), o), sel) & Len(R.ds.with(R.ds.put(a, y, R.ds.put(b, x, R.ds.list(o))), o), n)
+  ((Equal.trans(List<&2, R.Db>, Laws.zero(R.ds.with(R.ds.put(a, y2, R.ds.put(b, x2, R.ds.list(r))), r)), R.ds.put(a, R.db.at(0n, y2), R.ds.put(b, R.db.at(0n, x2), Laws.zero(r))), Laws.zero(R.ds.with(R.ds.put(a, y, R.ds.put(b, x, R.ds.list(o))), o)),
+      z_with2(a, y2, b, x2, r),
+      Equal.trans(List<&2, R.Db>, R.ds.put(a, R.db.at(0n, y2), R.ds.put(b, R.db.at(0n, x2), Laws.zero(r))), R.ds.put(a, R.db.at(0n, y), R.ds.put(b, R.db.at(0n, x), Laws.zero(o))), Laws.zero(R.ds.with(R.ds.put(a, y, R.ds.put(b, x, R.ds.list(o))), o)),
+        put2_eq(a, b, R.db.at(0n, y2), R.db.at(0n, y), R.db.at(0n, x2), R.db.at(0n, x), Laws.zero(r), Laws.zero(o), ey2, ex2, ez),
+        Equal.sym(List<&2, R.Db>, Laws.zero(R.ds.with(R.ds.put(a, y, R.ds.put(b, x, R.ds.list(o))), o)), R.ds.put(a, R.db.at(0n, y), R.ds.put(b, R.db.at(0n, x), Laws.zero(o))), z_with2(a, y, b, x, o)))),
+    (Equal.trans(Nat, R.ds.index(R.ds.with(R.ds.put(a, y2, R.ds.put(b, x2, R.ds.list(r))), r)), R.ds.index(r), sel, with_i(R.ds.put(a, y2, R.ds.put(b, x2, R.ds.list(r))), r, put_bound2(a, y2, b, x2, r)), ei),
+     Equal.trans(Nat, R.ds.now(R.ds.with(R.ds.put(a, y2, R.ds.put(b, x2, R.ds.list(r))), r)), R.ds.now(r), 0n, with_n(R.ds.put(a, y2, R.ds.put(b, x2, R.ds.list(r))), r), en))),
+   Equal.trans(Nat, List.length(&2, R.Db, Laws.zero(R.ds.with(R.ds.put(a, y, R.ds.put(b, x, R.ds.list(o))), o))), List.length(&2, R.Db, R.ds.put(a, R.db.at(0n, y), R.ds.put(b, R.db.at(0n, x), Laws.zero(o)))), 1n+n,
+     Equal.cong(List<&2, R.Db>, Nat, z => List.length(&2, R.Db, z), Laws.zero(R.ds.with(R.ds.put(a, y, R.ds.put(b, x, R.ds.list(o))), o)), R.ds.put(a, R.db.at(0n, y), R.ds.put(b, R.db.at(0n, x), Laws.zero(o))), z_with2(a, y, b, x, o)),
+     Equal.trans(Nat, List.length(&2, R.Db, R.ds.put(a, R.db.at(0n, y), R.ds.put(b, R.db.at(0n, x), Laws.zero(o)))), List.length(&2, R.Db, R.ds.put(b, R.db.at(0n, x), Laws.zero(o))), 1n+n, len_put(a, R.db.at(0n, y), R.ds.put(b, R.db.at(0n, x), Laws.zero(o))), len_put_n(b, R.db.at(0n, x), Laws.zero(o), n, ln))))
+
+def swap_yes1(+a: Nat, +b: Nat, +o: R.Ds, +r: R.Ds, +sel: Nat, +n: Nat, +x: R.Db, +y: R.Db, +ea: {R.ds.nth(a, R.ds.list(o)) == Some{x} : Maybe<&2, R.Db>}, +eb: {R.ds.nth(b, R.ds.list(o)) == Some{y} : Maybe<&2, R.Db>}, mx: Exists(R.Db, z => {R.ds.nth(a, R.ds.list(r)) == Some{z} : Maybe<&2, R.Db>} & {R.db.at(0n, z) == R.db.at(0n, x) : R.Db}), my: Exists(R.Db, z => {R.ds.nth(b, R.ds.list(r)) == Some{z} : Maybe<&2, R.Db>} & {R.db.at(0n, z) == R.db.at(0n, y) : R.Db}), +ln: {List.length(&2, R.Db, Laws.zero(o)) == 1n+n : Nat}, +sm: {KV.small(n) == True{} : Bool}, +ez: {Laws.zero(r) == Laws.zero(o) : List<&2, R.Db>}, +ei: {R.ds.index(r) == sel : Nat}, +en: {R.ds.now(r) == 0n : Nat}) -> Inv(rp([A.ESwap{a, b}], sel, r), R.ds.with(R.ds.put(a, y, R.ds.put(b, x, R.ds.list(o))), o), sel) & Len(R.ds.with(R.ds.put(a, y, R.ds.put(b, x, R.ds.list(o))), o), n):
+  (x2, qa) = mx
+  (ea2, ex2) = qa
+  (y2, qb) = my
+  (eb2, ey2) = qb
+  swap_yes2(a, b, o, r, sel, n, x, y, x2, y2, ea, eb, ea2, eb2, ex2, ey2, ln, sm, ez, ei, en)
+
+def swap_yes(+a: Nat, +b: Nat, +o: R.Ds, +r: R.Ds, +sel: Nat, +n: Nat, +x: R.Db, +y: R.Db, +ea: {R.ds.nth(a, R.ds.list(o)) == Some{x} : Maybe<&2, R.Db>}, +eb: {R.ds.nth(b, R.ds.list(o)) == Some{y} : Maybe<&2, R.Db>}, +ln: {List.length(&2, R.Db, Laws.zero(o)) == 1n+n : Nat}, +sm: {KV.small(n) == True{} : Bool}, +ez: {Laws.zero(r) == Laws.zero(o) : List<&2, R.Db>}, +ei: {R.ds.index(r) == sel : Nat}, +en: {R.ds.now(r) == 0n : Nat}) -> Inv(rp([A.ESwap{a, b}], sel, r), R.ds.with(R.ds.put(a, y, R.ds.put(b, x, R.ds.list(o))), o), sel) & Len(R.ds.with(R.ds.put(a, y, R.ds.put(b, x, R.ds.list(o))), o), n):
+  swap_yes1(a, b, o, r, sel, n, x, y, ea, eb, mat0_some(R.ds.nth(a, R.ds.list(r)), R.db.at(0n, x))(nth_r(a, r, o, ez, x, ea)), mat0_some(R.ds.nth(b, R.ds.list(r)), R.db.at(0n, y))(nth_r(b, r, o, ez, y, eb)), ln, sm, ez, ei, en)
+
+def post_swap(+a: Nat, +b: Nat, +o: R.Ds, +r: R.Ds, +sel: Nat, +n: Nat, -p: Bool & R.Ds, sp: SwapOk(a, b, o, p), +ln: {List.length(&2, R.Db, Laws.zero(o)) == 1n+n : Nat}, +sm: {KV.small(n) == True{} : Bool}, +ez: {Laws.zero(r) == Laws.zero(o) : List<&2, R.Db>}, +ei: {R.ds.index(r) == sel : Nat}, +en: {R.ds.now(r) == 0n : Nat}) -> Inv(rp(tmid(A.act.swap(a, b, p)), sel, r), R.ds_of(R.act.ok(p)), A.effs.sel(tmid(A.act.swap(a, b, p)), sel)) & Len(R.ds_of(R.act.ok(p)), n):
+  match sp:
+    case Inl{eq}:
+      %Equal.sym(Bool & R.Ds, p, (False{}, o), eq) : Inv(rp(tmid(A.act.swap(a, b, _)), sel, r), R.ds_of(R.act.ok(_)), A.effs.sel(tmid(A.act.swap(a, b, _)), sel)) & Len(R.ds_of(R.act.ok(_)), n)
+      ((ez, (ei, en)), ln)
+    case Inr{w}:
+      (x, w2) = w
+      (y, w3) = w2
+      (ea, w4) = w3
+      (eb, eq) = w4
+      %Equal.sym(Bool & R.Ds, p, (True{}, R.ds.with(R.ds.put(a, y, R.ds.put(b, x, R.ds.list(o))), o)), eq) : Inv(rp(tmid(A.act.swap(a, b, _)), sel, r), R.ds_of(R.act.ok(_)), A.effs.sel(tmid(A.act.swap(a, b, _)), sel)) & Len(R.ds_of(R.act.ok(_)), n)
+      swap_yes(a, b, o, r, sel, n, x, y, ea, eb, ln, sm, ez, ei, en)
+
+# MOVE's purge that deleted the key's entry
+def purge_yes(+k: String, +j: Nat, +o: R.Ds, +r: R.Ds, +sel: Nat, +n: Nat, +y: R.Db, +ey: {R.ds.nth(j, R.ds.list(o)) == Some{y} : Maybe<&2, R.Db>}, +ln: {List.length(&2, R.Db, Laws.zero(o)) == 1n+n : Nat}, +sm: {KV.small(n) == True{} : Bool}, +ez: {Laws.zero(r) == Laws.zero(o) : List<&2, R.Db>}, +ei: {R.ds.index(r) == sel : Nat}, +en: {R.ds.now(r) == 0n : Nat}) -> Inv(rp([A.EDb{j, R.Del{[k]}}], sel, r), R.ds.with(R.ds.put(j, R.db_of(R.db.del(y, [k])), R.ds.list(o)), o), j) & Len(R.ds.with(R.ds.put(j, R.db_of(R.db.del(y, [k])), R.ds.list(o)), o), n):
+  i3 = run_focus(R.ds.focus(j, r), R.Del{[k]}, j, Laws.zero(o), R.db.at(0n, y))(focus_i(j, r, bound_r(j, r, o, n, ez, ln, lnth(j, o, n, ln, y, ey))))(Equal.trans(Nat, R.ds.now(R.ds.focus(j, r)), R.ds.now(r), 0n, focus_n(j, r), en))(Equal.trans(List<&2, R.Db>, Laws.zero(R.ds.focus(j, r)), Laws.zero(r), Laws.zero(o), focus_z(j, r), ez))(Equal.trans(Maybe<&2, R.Db>, R.ds.nth(j, Laws.zero(o)), mat0(R.ds.nth(j, R.ds.list(o))), Some{R.db.at(0n, y)}, zg_nth(j, R.ds.list(o)), Equal.cong(Maybe<&2, R.Db>, Maybe<&2, R.Db>, m => mat0(m), R.ds.nth(j, R.ds.list(o)), Some{y}, ey)))
+  %Equal.sym(R.Ds, rp([A.EDb{j, R.Del{[k]}}], sel, r), R.ds_of(R.act(R.ARun{R.Del{[k]}}, R.ds.focus(j, r))), rp_edb(j, R.Del{[k]}, sel, r, small_le(j, n, lnth(j, o, n, ln, y, ey), sm), ei, {==}, {==})) : Inv(_, R.ds.with(R.ds.put(j, R.db_of(R.db.del(y, [k])), R.ds.list(o)), o), j) & Len(R.ds.with(R.ds.put(j, R.db_of(R.db.del(y, [k])), R.ds.list(o)), o), n)
+  inv3_post(R.ds_of(R.act(R.ARun{R.Del{[k]}}, R.ds.focus(j, r))), R.ds.with(R.ds.put(j, R.db_of(R.db.del(y, [k])), R.ds.list(o)), o), R.ds.put(j, R.db_of(R.exec(R.Del{[k]}, R.db.at(0n, y))), Laws.zero(o)), j, n, i3,
+    Equal.trans(List<&2, R.Db>, Laws.zero(R.ds.with(R.ds.put(j, R.db_of(R.db.del(y, [k])), R.ds.list(o)), o)), R.ds.put(j, R.db.at(0n, R.db_of(R.db.del(y, [k]))), Laws.zero(o)), R.ds.put(j, R.db_of(R.exec(R.Del{[k]}, R.db.at(0n, y))), Laws.zero(o)),
+      z_with1(j, R.db_of(R.db.del(y, [k])), o),
+      Equal.cong(R.Db, List<&2, R.Db>, z => R.ds.put(j, z, Laws.zero(o)), R.db.at(0n, R.db_of(R.db.del(y, [k]))), R.db_of(R.db.del(R.db.at(0n, y), [k])), del0(y, [k]))),
+    len_put_n(j, R.db_of(R.exec(R.Del{[k]}, R.db.at(0n, y))), Laws.zero(o), n, ln))
+
+def post_purge(+k: String, +j: Nat, +o: R.Ds, +r: R.Ds, +sel: Nat, +n: Nat, -p: Bool & R.Ds, sp: PurgeOk(k, j, o, p), +ln: {List.length(&2, R.Db, Laws.zero(o)) == 1n+n : Nat}, +sm: {KV.small(n) == True{} : Bool}, +ez: {Laws.zero(r) == Laws.zero(o) : List<&2, R.Db>}, +ei: {R.ds.index(r) == sel : Nat}, +en: {R.ds.now(r) == 0n : Nat}) -> Inv(rp(tmid(A.act.purge(k, j, p)), sel, r), R.ds_of(R.act.ok(p)), A.effs.sel(tmid(A.act.purge(k, j, p)), sel)) & Len(R.ds_of(R.act.ok(p)), n):
+  match sp:
+    case Inl{eq}:
+      %Equal.sym(Bool & R.Ds, p, (False{}, o), eq) : Inv(rp(tmid(A.act.purge(k, j, _)), sel, r), R.ds_of(R.act.ok(_)), A.effs.sel(tmid(A.act.purge(k, j, _)), sel)) & Len(R.ds_of(R.act.ok(_)), n)
+      ((ez, (ei, en)), ln)
+    case Inr{w}:
+      (y, w2) = w
+      (ey, eq) = w2
+      %Equal.sym(Bool & R.Ds, p, (True{}, R.ds.with(R.ds.put(j, R.db_of(R.db.del(y, [k])), R.ds.list(o)), o)), eq) : Inv(rp(tmid(A.act.purge(k, j, _)), sel, r), R.ds_of(R.act.ok(_)), A.effs.sel(tmid(A.act.purge(k, j, _)), sel)) & Len(R.ds_of(R.act.ok(_)), n)
+      purge_yes(k, j, o, r, sel, n, y, ey, ln, sm, ez, ei, en)
+
+# k's entry in a focus at time 0 is its entry in the database there
+def dbent0(d: R.Db, +k: String) -> {R.db.now(d) == 0n : Nat} -> {R.db.ent(d, k) == R.db.entry(d, k) : Maybe<&2, KV.Item<String>>}:
+  match d:
+    case R.Db{+t, n, x, w, rr}:
+      e =>
+        %Equal.sym(Nat, w, 0n, e) : {R.ent.live(_, KV.entry.at(String, t, k, KV.hash(k))) == KV.entry.at(String, t, k, KV.hash(k)) : Maybe<&2, KV.Item<String>>}
+        live0_ent(KV.entry.at(String, t, k, KV.hash(k)))
+
+def dbent_some(d: R.Db, +k: String, -w: KV.Item<String>) -> {R.db.ent(d, k) == Some{w} : Maybe<&2, KV.Item<String>>} -> {R.db.entry(d, k) == Some{w} : Maybe<&2, KV.Item<String>>}:
+  match d:
+    case R.Db{+t, n, x, +now, rr}:
+      e => live_some(KV.entry.at(String, t, k, KV.hash(k)), now, w)(e)
+
+# zippers focused on the same number, reading the same at time 0, have
+# focuses that read the same at time 0
+def foc_eq(+dF: R.Db, +pF: List<&2, R.Db>, +qF: List<&2, R.Db>, +dO: R.Db, +pO: List<&2, R.Db>, +qO: List<&2, R.Db>, ei: {List.length(&2, R.Db, pF) == List.length(&2, R.Db, pO) : Nat}, ez: {Laws.zero(R.Ds{dF, pF, qF}) == Laws.zero(R.Ds{dO, pO, qO}) : List<&2, R.Db>}) -> {R.db.at(0n, dF) == R.db.at(0n, dO) : R.Db}:
+  some_inj_d(R.db.at(0n, dF), R.db.at(0n, dO), Equal.trans(Maybe<&2, R.Db>, Some{R.db.at(0n, dF)}, R.ds.nth(List.length(&2, R.Db, pF), Laws.zero(R.Ds{dF, pF, qF})), Some{R.db.at(0n, dO)},
+    Equal.sym(Maybe<&2, R.Db>, R.ds.nth(List.length(&2, R.Db, pF), Laws.zero(R.Ds{dF, pF, qF})), Some{R.db.at(0n, dF)}, znth(dF, pF, qF)),
+    Equal.trans(Maybe<&2, R.Db>, R.ds.nth(List.length(&2, R.Db, pF), Laws.zero(R.Ds{dF, pF, qF})), R.ds.nth(List.length(&2, R.Db, pO), Laws.zero(R.Ds{dO, pO, qO})), Some{R.db.at(0n, dO)},
+      Equal.trans(Maybe<&2, R.Db>, R.ds.nth(List.length(&2, R.Db, pF), Laws.zero(R.Ds{dF, pF, qF})), R.ds.nth(List.length(&2, R.Db, pO), Laws.zero(R.Ds{dF, pF, qF})), R.ds.nth(List.length(&2, R.Db, pO), Laws.zero(R.Ds{dO, pO, qO})),
+        Equal.cong(Nat, Maybe<&2, R.Db>, i => R.ds.nth(i, Laws.zero(R.Ds{dF, pF, qF})), List.length(&2, R.Db, pF), List.length(&2, R.Db, pO), ei),
+        Equal.cong(List<&2, R.Db>, Maybe<&2, R.Db>, l => R.ds.nth(List.length(&2, R.Db, pO), l), Laws.zero(R.Ds{dF, pF, qF}), Laws.zero(R.Ds{dO, pO, qO}), ez)),
+      znth(dO, pO, qO))))
+
+# such zippers hold the same entry for a key in their focus
+def ent_eq(F: R.Ds, o: R.Ds, +k: String, -w: KV.Item<String>) -> {R.ds.now(F) == 0n : Nat} -> {R.ds.index(F) == R.ds.index(o) : Nat} -> {Laws.zero(F) == Laws.zero(o) : List<&2, R.Db>} -> {R.ds.ent(o, k) == Some{w} : Maybe<&2, KV.Item<String>>} -> {R.ds.ent(F, k) == Some{w} : Maybe<&2, KV.Item<String>>}:
+  match F:
+    case R.Ds{+dF, +pF, +qF}:
+      match o:
+        case R.Ds{+dO, +pO, +qO}:
+          en => ei => ez => eo =>
+            Equal.trans(Maybe<&2, KV.Item<String>>, R.db.ent(dF, k), R.db.entry(dF, k), Some{w}, dbent0(dF, k)(en),
+              Equal.trans(Maybe<&2, KV.Item<String>>, R.db.entry(dF, k), R.db.entry(R.db.at(0n, dF), k), Some{w}, Equal.sym(Maybe<&2, KV.Item<String>>, R.db.entry(R.db.at(0n, dF), k), R.db.entry(dF, k), entry_at0(dF, k)),
+                Equal.trans(Maybe<&2, KV.Item<String>>, R.db.entry(R.db.at(0n, dF), k), R.db.entry(R.db.at(0n, dO), k), Some{w}, Equal.cong(R.Db, Maybe<&2, KV.Item<String>>, z => R.db.entry(z, k), R.db.at(0n, dF), R.db.at(0n, dO), foc_eq(dF, pF, qF, dO, pO, qO, ei, ez)),
+                  Equal.trans(Maybe<&2, KV.Item<String>>, R.db.entry(R.db.at(0n, dO), k), R.db.entry(dO, k), Some{w}, entry_at0(dO, k), dbent_some(dO, k, w)(eo)))))
+
+# and the same databases at time 0 once the key is deleted from the focus
+def unset_eq(+k: String, F: R.Ds, o: R.Ds) -> {R.ds.index(F) == R.ds.index(o) : Nat} -> {Laws.zero(F) == Laws.zero(o) : List<&2, R.Db>} -> {Laws.zero(R.ds.unset(k, F)) == Laws.zero(R.ds.unset(k, o)) : List<&2, R.Db>}:
+  match F:
+    case R.Ds{+dF, +pF, +qF}:
+      match o:
+        case R.Ds{+dO, +pO, +qO}:
+          +ei => +ez =>
+            +eat = foc_eq(dF, pF, qF, dO, pO, qO, ei, ez)
+            %Equal.sym(List<&2, R.Db>, Laws.zero(R.Ds{R.db_of(R.db.del(dF, [k])), pF, qF}), R.ds.put(List.length(&2, R.Db, pF), R.db.at(0n, R.db_of(R.db.del(dF, [k]))), Laws.zero(R.Ds{dF, pF, qF})), zput(R.db_of(R.db.del(dF, [k])), dF, pF, qF)) : {_ == Laws.zero(R.Ds{R.db_of(R.db.del(dO, [k])), pO, qO}) : List<&2, R.Db>}
+            %Equal.sym(List<&2, R.Db>, Laws.zero(R.Ds{R.db_of(R.db.del(dO, [k])), pO, qO}), R.ds.put(List.length(&2, R.Db, pO), R.db.at(0n, R.db_of(R.db.del(dO, [k]))), Laws.zero(R.Ds{dO, pO, qO})), zput(R.db_of(R.db.del(dO, [k])), dO, pO, qO)) : {R.ds.put(List.length(&2, R.Db, pF), R.db.at(0n, R.db_of(R.db.del(dF, [k]))), Laws.zero(R.Ds{dF, pF, qF})) == _ : List<&2, R.Db>}
+            %Equal.sym(R.Db, R.db.at(0n, R.db_of(R.db.del(dF, [k]))), R.db_of(R.db.del(R.db.at(0n, dF), [k])), del0(dF, [k])) : {R.ds.put(List.length(&2, R.Db, pF), _, Laws.zero(R.Ds{dF, pF, qF})) == R.ds.put(List.length(&2, R.Db, pO), R.db.at(0n, R.db_of(R.db.del(dO, [k]))), Laws.zero(R.Ds{dO, pO, qO})) : List<&2, R.Db>}
+            %Equal.sym(R.Db, R.db.at(0n, R.db_of(R.db.del(dO, [k]))), R.db_of(R.db.del(R.db.at(0n, dO), [k])), del0(dO, [k])) : {R.ds.put(List.length(&2, R.Db, pF), R.db_of(R.db.del(R.db.at(0n, dF), [k])), Laws.zero(R.Ds{dF, pF, qF})) == R.ds.put(List.length(&2, R.Db, pO), _, Laws.zero(R.Ds{dO, pO, qO})) : List<&2, R.Db>}
+            %eat : {R.ds.put(List.length(&2, R.Db, pF), R.db_of(R.db.del(R.db.at(0n, dF), [k])), Laws.zero(R.Ds{dF, pF, qF})) == R.ds.put(List.length(&2, R.Db, pO), R.db_of(R.db.del(_, [k])), Laws.zero(R.Ds{dO, pO, qO})) : List<&2, R.Db>}
+            %ei : {R.ds.put(List.length(&2, R.Db, pF), R.db_of(R.db.del(R.db.at(0n, dF), [k])), Laws.zero(R.Ds{dF, pF, qF})) == R.ds.put(_, R.db_of(R.db.del(R.db.at(0n, dF), [k])), Laws.zero(R.Ds{dO, pO, qO})) : List<&2, R.Db>}
+            %ez : {R.ds.put(List.length(&2, R.Db, pF), R.db_of(R.db.del(R.db.at(0n, dF), [k])), Laws.zero(R.Ds{dF, pF, qF})) == R.ds.put(List.length(&2, R.Db, pF), R.db_of(R.db.del(R.db.at(0n, dF), [k])), _) : List<&2, R.Db>}
+            {==}
+
+def len_unset(+k: String, X: R.Ds) -> {List.length(&2, R.Db, Laws.zero(R.ds.unset(k, X))) == List.length(&2, R.Db, Laws.zero(X)) : Nat}:
+  match X:
+    case R.Ds{+d, +pre, +post}:
+      Equal.trans(Nat, List.length(&2, R.Db, Laws.zero(R.Ds{R.db_of(R.db.del(d, [k])), pre, post})), List.length(&2, R.Db, R.ds.put(List.length(&2, R.Db, pre), R.db.at(0n, R.db_of(R.db.del(d, [k]))), Laws.zero(R.Ds{d, pre, post}))), List.length(&2, R.Db, Laws.zero(R.Ds{d, pre, post})),
+        Equal.cong(List<&2, R.Db>, Nat, z => List.length(&2, R.Db, z), Laws.zero(R.Ds{R.db_of(R.db.del(d, [k])), pre, post}), R.ds.put(List.length(&2, R.Db, pre), R.db.at(0n, R.db_of(R.db.del(d, [k]))), Laws.zero(R.Ds{d, pre, post})), zput(R.db_of(R.db.del(d, [k])), d, pre, post)),
+        len_put(List.length(&2, R.Db, pre), R.db.at(0n, R.db_of(R.db.del(d, [k]))), Laws.zero(R.Ds{d, pre, post})))
+
+def put1_eq(+j: Nat, -a1: R.Db, -a2: R.Db, -l1: List<&2, R.Db>, -l2: List<&2, R.Db>, ea: {a1 == a2 : R.Db}, el: {l1 == l2 : List<&2, R.Db>}) -> {R.ds.put(j, a1, l1) == R.ds.put(j, a2, l2) : List<&2, R.Db>}:
+  %ea : {R.ds.put(j, a1, l1) == R.ds.put(j, _, l2) : List<&2, R.Db>}
+  %el : {R.ds.put(j, a1, l1) == R.ds.put(j, a1, _) : List<&2, R.Db>}
+  {==}
+
+# MOVE that moved the key
+def move_yes2(+k: String, +j: Nat, +o: R.Ds, +r: R.Ds, +sel: Nat, +n: Nat, +y: R.Db, +v: String, +e: Nat, +y2: R.Db, +ey: {R.ds.nth(j, R.ds.list(o)) == Some{y} : Maybe<&2, R.Db>}, +ene: {Nat.is_ne(j, R.ds.index(o)) == True{} : Bool}, +eno: {R.db.entry(y, k) == None{} : Maybe<&2, KV.Item<String>>}, +eent: {R.ds.ent(o, k) == Some{KV.Item{v, e}} : Maybe<&2, KV.Item<String>>}, +ey2: {R.ds.nth(j, R.ds.list(R.ds.focus(R.ds.index(o), r))) == Some{y2} : Maybe<&2, R.Db>}, +eyy: {R.db.at(0n, y2) == R.db.at(0n, y) : R.Db}, +ln: {List.length(&2, R.Db, Laws.zero(o)) == 1n+n : Nat}, +sm: {KV.small(n) == True{} : Bool}, +ez: {Laws.zero(r) == Laws.zero(o) : List<&2, R.Db>}, +ei: {R.ds.index(r) == sel : Nat}, +en: {R.ds.now(r) == 0n : Nat}) -> Inv(rp([A.EMove{k, R.ds.index(o), j}], sel, r), R.ds.moved(k, j, R.db.setx(y, k, v, e), o), R.ds.index(o)) & Len(R.ds.moved(k, j, R.db.setx(y, k, v, e), o), n):
+  +eiF = focus_i(R.ds.index(o), r, bound_r(R.ds.index(o), r, o, n, ez, ln, lidx(o, n, ln)))
+  +enF = Equal.trans(Nat, R.ds.now(R.ds.focus(R.ds.index(o), r)), R.ds.now(r), 0n, focus_n(R.ds.index(o), r), en)
+  +ezF = Equal.trans(List<&2, R.Db>, Laws.zero(R.ds.focus(R.ds.index(o), r)), Laws.zero(r), Laws.zero(o), focus_z(R.ds.index(o), r), ez)
+  +es = Equal.trans(R.Db, R.db.at(0n, R.db.setx(y2, k, v, e)), R.db.setx(R.db.at(0n, y2), k, v, e), R.db.at(0n, R.db.setx(y, k, v, e)), setx0(y2, k, v, e), Equal.trans(R.Db, R.db.setx(R.db.at(0n, y2), k, v, e), R.db.setx(R.db.at(0n, y), k, v, e), R.db.at(0n, R.db.setx(y, k, v, e)), Equal.cong(R.Db, R.Db, z => R.db.setx(z, k, v, e), R.db.at(0n, y2), R.db.at(0n, y), eyy), Equal.sym(R.Db, R.db.at(0n, R.db.setx(y, k, v, e)), R.db.setx(R.db.at(0n, y), k, v, e), setx0(y, k, v, e))))
+  +ene2 = Equal.trans(Bool, Nat.is_ne(j, R.ds.index(R.ds.focus(R.ds.index(o), r))), Nat.is_ne(j, R.ds.index(o)), True{}, Equal.cong(Nat, Bool, z => Nat.is_ne(j, z), R.ds.index(R.ds.focus(R.ds.index(o), r)), R.ds.index(o), eiF), ene)
+  +eno2 = Equal.trans(Maybe<&2, KV.Item<String>>, R.db.entry(y2, k), R.db.entry(R.db.at(0n, y2), k), None{}, Equal.sym(Maybe<&2, KV.Item<String>>, R.db.entry(R.db.at(0n, y2), k), R.db.entry(y2, k), entry_at0(y2, k)), Equal.trans(Maybe<&2, KV.Item<String>>, R.db.entry(R.db.at(0n, y2), k), R.db.entry(R.db.at(0n, y), k), None{}, Equal.cong(R.Db, Maybe<&2, KV.Item<String>>, z => R.db.entry(z, k), R.db.at(0n, y2), R.db.at(0n, y), eyy), Equal.trans(Maybe<&2, KV.Item<String>>, R.db.entry(R.db.at(0n, y), k), R.db.entry(y, k), None{}, entry_at0(y, k), eno)))
+  +eent2 = ent_eq(R.ds.focus(R.ds.index(o), r), o, k, KV.Item{v, e})(enF)(eiF)(ezF)(eent)
+  %Equal.sym(R.Ds, rp([A.EMove{k, R.ds.index(o), j}], sel, r), R.ds_of(R.act(R.AMove{k, j}, R.ds.focus(R.ds.index(o), r))), rp_emove(k, R.ds.index(o), j, sel, r, small_le(R.ds.index(o), n, lidx(o, n, ln), sm), small_le(j, n, lnth(j, o, n, ln, y, ey), sm), ei)) : Inv(_, R.ds.moved(k, j, R.db.setx(y, k, v, e), o), R.ds.index(o)) & Len(R.ds.moved(k, j, R.db.setx(y, k, v, e), o), n)
+  %Equal.sym(Bool & R.Ds, R.ds.move(k, j, R.ds.focus(R.ds.index(o), r)), (True{}, R.ds.moved(k, j, R.db.setx(y2, k, v, e), R.ds.focus(R.ds.index(o), r))), move_some(k, j, R.ds.focus(R.ds.index(o), r), y2, v, e, ey2, ene2, eno2, eent2)) : Inv(R.ds_of(R.act.moved(_)), R.ds.moved(k, j, R.db.setx(y, k, v, e), o), R.ds.index(o)) & Len(R.ds.moved(k, j, R.db.setx(y, k, v, e), o), n)
+  ((Equal.trans(List<&2, R.Db>, Laws.zero(R.ds.moved(k, j, R.db.setx(y2, k, v, e), R.ds.focus(R.ds.index(o), r))), R.ds.put(j, R.db.at(0n, R.db.setx(y2, k, v, e)), Laws.zero(R.ds.unset(k, R.ds.focus(R.ds.index(o), r)))), Laws.zero(R.ds.moved(k, j, R.db.setx(y, k, v, e), o)),
+      z_with1(j, R.db.setx(y2, k, v, e), R.ds.unset(k, R.ds.focus(R.ds.index(o), r))),
+      Equal.trans(List<&2, R.Db>, R.ds.put(j, R.db.at(0n, R.db.setx(y2, k, v, e)), Laws.zero(R.ds.unset(k, R.ds.focus(R.ds.index(o), r)))), R.ds.put(j, R.db.at(0n, R.db.setx(y, k, v, e)), Laws.zero(R.ds.unset(k, o))), Laws.zero(R.ds.moved(k, j, R.db.setx(y, k, v, e), o)),
+        put1_eq(j, R.db.at(0n, R.db.setx(y2, k, v, e)), R.db.at(0n, R.db.setx(y, k, v, e)), Laws.zero(R.ds.unset(k, R.ds.focus(R.ds.index(o), r))), Laws.zero(R.ds.unset(k, o)), es, unset_eq(k, R.ds.focus(R.ds.index(o), r), o)(eiF)(ezF)),
+        Equal.sym(List<&2, R.Db>, Laws.zero(R.ds.moved(k, j, R.db.setx(y, k, v, e), o)), R.ds.put(j, R.db.at(0n, R.db.setx(y, k, v, e)), Laws.zero(R.ds.unset(k, o))), z_with1(j, R.db.setx(y, k, v, e), R.ds.unset(k, o))))),
+    (Equal.trans(Nat, R.ds.index(R.ds.moved(k, j, R.db.setx(y2, k, v, e), R.ds.focus(R.ds.index(o), r))), R.ds.index(R.ds.unset(k, R.ds.focus(R.ds.index(o), r))), R.ds.index(o), with_i(R.ds.put(j, R.db.setx(y2, k, v, e), R.ds.list(R.ds.unset(k, R.ds.focus(R.ds.index(o), r)))), R.ds.unset(k, R.ds.focus(R.ds.index(o), r)), put_bound(j, R.db.setx(y2, k, v, e), R.ds.unset(k, R.ds.focus(R.ds.index(o), r)))), Equal.trans(Nat, R.ds.index(R.ds.unset(k, R.ds.focus(R.ds.index(o), r))), R.ds.index(R.ds.focus(R.ds.index(o), r)), R.ds.index(o), idx_unset(k, R.ds.focus(R.ds.index(o), r)), eiF)),
+     Equal.trans(Nat, R.ds.now(R.ds.moved(k, j, R.db.setx(y2, k, v, e), R.ds.focus(R.ds.index(o), r))), R.ds.now(R.ds.unset(k, R.ds.focus(R.ds.index(o), r))), 0n, with_n(R.ds.put(j, R.db.setx(y2, k, v, e), R.ds.list(R.ds.unset(k, R.ds.focus(R.ds.index(o), r)))), R.ds.unset(k, R.ds.focus(R.ds.index(o), r))), Equal.trans(Nat, R.ds.now(R.ds.unset(k, R.ds.focus(R.ds.index(o), r))), R.ds.now(R.ds.focus(R.ds.index(o), r)), 0n, now_unset(k, R.ds.focus(R.ds.index(o), r)), enF)))),
+   Equal.trans(Nat, List.length(&2, R.Db, Laws.zero(R.ds.moved(k, j, R.db.setx(y, k, v, e), o))), List.length(&2, R.Db, R.ds.put(j, R.db.at(0n, R.db.setx(y, k, v, e)), Laws.zero(R.ds.unset(k, o)))), 1n+n,
+     Equal.cong(List<&2, R.Db>, Nat, z => List.length(&2, R.Db, z), Laws.zero(R.ds.moved(k, j, R.db.setx(y, k, v, e), o)), R.ds.put(j, R.db.at(0n, R.db.setx(y, k, v, e)), Laws.zero(R.ds.unset(k, o))), z_with1(j, R.db.setx(y, k, v, e), R.ds.unset(k, o))),
+     Equal.trans(Nat, List.length(&2, R.Db, R.ds.put(j, R.db.at(0n, R.db.setx(y, k, v, e)), Laws.zero(R.ds.unset(k, o)))), List.length(&2, R.Db, Laws.zero(R.ds.unset(k, o))), 1n+n, len_put(j, R.db.at(0n, R.db.setx(y, k, v, e)), Laws.zero(R.ds.unset(k, o))), Equal.trans(Nat, List.length(&2, R.Db, Laws.zero(R.ds.unset(k, o))), List.length(&2, R.Db, Laws.zero(o)), 1n+n, len_unset(k, o), ln))))
+
+def move_yes1(+k: String, +j: Nat, +o: R.Ds, +r: R.Ds, +sel: Nat, +n: Nat, +y: R.Db, +v: String, +e: Nat, +ey: {R.ds.nth(j, R.ds.list(o)) == Some{y} : Maybe<&2, R.Db>}, +ene: {Nat.is_ne(j, R.ds.index(o)) == True{} : Bool}, +eno: {R.db.entry(y, k) == None{} : Maybe<&2, KV.Item<String>>}, +eent: {R.ds.ent(o, k) == Some{KV.Item{v, e}} : Maybe<&2, KV.Item<String>>}, my: Exists(R.Db, z => {R.ds.nth(j, R.ds.list(R.ds.focus(R.ds.index(o), r))) == Some{z} : Maybe<&2, R.Db>} & {R.db.at(0n, z) == R.db.at(0n, y) : R.Db}), +ln: {List.length(&2, R.Db, Laws.zero(o)) == 1n+n : Nat}, +sm: {KV.small(n) == True{} : Bool}, +ez: {Laws.zero(r) == Laws.zero(o) : List<&2, R.Db>}, +ei: {R.ds.index(r) == sel : Nat}, +en: {R.ds.now(r) == 0n : Nat}) -> Inv(rp([A.EMove{k, R.ds.index(o), j}], sel, r), R.ds.moved(k, j, R.db.setx(y, k, v, e), o), R.ds.index(o)) & Len(R.ds.moved(k, j, R.db.setx(y, k, v, e), o), n):
+  (y2, q) = my
+  (ey2, eyy) = q
+  move_yes2(k, j, o, r, sel, n, y, v, e, y2, ey, ene, eno, eent, ey2, eyy, ln, sm, ez, ei, en)
+
+def move_yes(+k: String, +j: Nat, +o: R.Ds, +r: R.Ds, +sel: Nat, +n: Nat, +y: R.Db, +v: String, +e: Nat, +ey: {R.ds.nth(j, R.ds.list(o)) == Some{y} : Maybe<&2, R.Db>}, +ene: {Nat.is_ne(j, R.ds.index(o)) == True{} : Bool}, +eno: {R.db.entry(y, k) == None{} : Maybe<&2, KV.Item<String>>}, +eent: {R.ds.ent(o, k) == Some{KV.Item{v, e}} : Maybe<&2, KV.Item<String>>}, +ln: {List.length(&2, R.Db, Laws.zero(o)) == 1n+n : Nat}, +sm: {KV.small(n) == True{} : Bool}, +ez: {Laws.zero(r) == Laws.zero(o) : List<&2, R.Db>}, +ei: {R.ds.index(r) == sel : Nat}, +en: {R.ds.now(r) == 0n : Nat}) -> Inv(rp([A.EMove{k, R.ds.index(o), j}], sel, r), R.ds.moved(k, j, R.db.setx(y, k, v, e), o), R.ds.index(o)) & Len(R.ds.moved(k, j, R.db.setx(y, k, v, e), o), n):
+  move_yes1(k, j, o, r, sel, n, y, v, e, ey, ene, eno, eent, mat0_some(R.ds.nth(j, R.ds.list(R.ds.focus(R.ds.index(o), r))), R.db.at(0n, y))(nth_r(j, R.ds.focus(R.ds.index(o), r), o, Equal.trans(List<&2, R.Db>, Laws.zero(R.ds.focus(R.ds.index(o), r)), Laws.zero(r), Laws.zero(o), focus_z(R.ds.index(o), r), ez), y, ey)), ln, sm, ez, ei, en)
+
+def post_move(+k: String, +j: Nat, +o: R.Ds, +r: R.Ds, +sel: Nat, +n: Nat, -p: Bool & R.Ds, sp: MoveOk(k, j, o, p), +ln: {List.length(&2, R.Db, Laws.zero(o)) == 1n+n : Nat}, +sm: {KV.small(n) == True{} : Bool}, +ez: {Laws.zero(r) == Laws.zero(o) : List<&2, R.Db>}, +ei: {R.ds.index(r) == sel : Nat}, +en: {R.ds.now(r) == 0n : Nat}) -> Inv(rp(tmid(A.act.move(k, R.ds.index(o), j, p)), sel, r), R.ds_of(R.act.moved(p)), A.effs.sel(tmid(A.act.move(k, R.ds.index(o), j, p)), sel)) & Len(R.ds_of(R.act.moved(p)), n):
+  match sp:
+    case Inl{eq}:
+      %Equal.sym(Bool & R.Ds, p, (False{}, o), eq) : Inv(rp(tmid(A.act.move(k, R.ds.index(o), j, _)), sel, r), R.ds_of(R.act.moved(_)), A.effs.sel(tmid(A.act.move(k, R.ds.index(o), j, _)), sel)) & Len(R.ds_of(R.act.moved(_)), n)
+      ((ez, (ei, en)), ln)
+    case Inr{w}:
+      (y, w2) = w
+      (v, w3) = w2
+      (e, w4) = w3
+      (ey, w5) = w4
+      (ene, w6) = w5
+      (eno, w7) = w6
+      (eent, eq) = w7
+      %Equal.sym(Bool & R.Ds, p, (True{}, R.ds.moved(k, j, R.db.setx(y, k, v, e), o)), eq) : Inv(rp(tmid(A.act.move(k, R.ds.index(o), j, _)), sel, r), R.ds_of(R.act.moved(_)), A.effs.sel(tmid(A.act.move(k, R.ds.index(o), j, _)), sel)) & Len(R.ds_of(R.act.moved(_)), n)
+      move_yes(k, j, o, r, sel, n, y, v, e, ey, ene, eno, eent, ln, sm, ez, ei, en)
+
+# FLUSHALL
+def post_wipe(+o: R.Ds, +r: R.Ds, +sel: Nat, +n: Nat, +ln: {List.length(&2, R.Db, Laws.zero(o)) == 1n+n : Nat}, +ez: {Laws.zero(r) == Laws.zero(o) : List<&2, R.Db>}, +ei: {R.ds.index(r) == sel : Nat}, +en: {R.ds.now(r) == 0n : Nat}) -> Inv(R.ds.wipe(r), R.ds.wipe(o), sel) & Len(R.ds.wipe(o), n):
+  ((Equal.trans(List<&2, R.Db>, Laws.zero(R.ds.wipe(r)), R.ds.flush(Laws.zero(r)), Laws.zero(R.ds.wipe(o)), z_wipe(r), Equal.trans(List<&2, R.Db>, R.ds.flush(Laws.zero(r)), R.ds.flush(Laws.zero(o)), Laws.zero(R.ds.wipe(o)), Equal.cong(List<&2, R.Db>, List<&2, R.Db>, z => R.ds.flush(z), Laws.zero(r), Laws.zero(o), ez), Equal.sym(List<&2, R.Db>, Laws.zero(R.ds.wipe(o)), R.ds.flush(Laws.zero(o)), z_wipe(o)))),
+    (Equal.trans(Nat, R.ds.index(R.ds.wipe(r)), R.ds.index(r), sel, idx_wipe(r), ei), Equal.trans(Nat, R.ds.now(R.ds.wipe(r)), R.ds.now(r), 0n, now_wipe(r), en))),
+   Equal.trans(Nat, List.length(&2, R.Db, Laws.zero(R.ds.wipe(o))), List.length(&2, R.Db, R.ds.flush(Laws.zero(o))), 1n+n, Equal.cong(List<&2, R.Db>, Nat, z => List.length(&2, R.Db, z), Laws.zero(R.ds.wipe(o)), R.ds.flush(Laws.zero(o)), z_wipe(o)), Equal.trans(Nat, List.length(&2, R.Db, R.ds.flush(Laws.zero(o))), List.length(&2, R.Db, Laws.zero(o)), 1n+n, len_fl(Laws.zero(o)), ln)))
+
+# every act keeps the invariant
+def act_inv(t: R.Act, +o: R.Ds, +r: R.Ds, +sel: Nat, +n: Nat, +sm: {KV.small(n) == True{} : Bool}, st: Inv(r, o, sel) & Len(o, n)) -> Post(t, o, r, sel, n):
+  match t:
+    case R.ARun{+c}:
+      (inv, ln) = st
+      (ez, q) = inv
+      (ei, en) = q
+      post_run(c, o, r, sel, n)(ln)(sm)(ez)(ei)(en)
+    case R.AFocus{+j}:
+      (inv, ln) = st
+      inv_z(r, o, R.ds.focus(j, o), sel, n, focus_z(j, o), inv, ln)
+    case R.ASwap{+a, +b}:
+      (inv, ln) = st
+      (ez, q) = inv
+      (ei, en) = q
+      post_swap(a, b, o, r, sel, n, R.ds.swap(a, b, o), swap_spec(a, b, o), ln, sm, ez, ei, en)
+    case R.APurge{+k, +j}:
+      (inv, ln) = st
+      (ez, q) = inv
+      (ei, en) = q
+      post_purge(k, j, o, r, sel, n, R.ds.purge(k, j, o), purge_spec(k, j, o), ln, sm, ez, ei, en)
+    case R.AMove{+k, +j}:
+      (inv, ln) = st
+      (ez, q) = inv
+      (ei, en) = q
+      post_move(k, j, o, r, sel, n, R.ds.move(k, j, o), move_spec(k, j, o), ln, sm, ez, ei, en)
+    case R.AWipe{}:
+      (inv, ln) = st
+      (ez, q) = inv
+      (ei, en) = q
+      post_wipe(o, r, sel, n, ln, ez, ei, en)
+
+# acts one after another keep it, effect after effect
+def acts_inv(as: List<&2, R.Act>, +o: R.Ds, +r: R.Ds, +sel: Nat, +n: Nat, +sm: {KV.small(n) == True{} : Bool}, st: Inv(r, o, sel) & Len(o, n)) -> Inv(rp(aeffs(as, o), sel, r), R.acts(as, o), A.effs.sel(aeffs(as, o), sel)) & Len(R.acts(as, o), n):
+  match as:
+    case Nil{}:
+      st
+    case Con{+t, +rest}:
+      %rp_cat(aeff(t, o), aeffs(rest, R.ds_of(R.act(t, o))), sel, r) : Inv(_, R.acts(rest, R.ds_of(R.act(t, o))), A.effs.sel(List.append(&2, A.Eff, aeff(t, o), aeffs(rest, R.ds_of(R.act(t, o)))), sel)) & Len(R.acts(rest, R.ds_of(R.act(t, o))), n)
+      %sel_cat(aeff(t, o), aeffs(rest, R.ds_of(R.act(t, o))), sel) : Inv(rp(aeffs(rest, R.ds_of(R.act(t, o))), A.effs.sel(aeff(t, o), sel), rp(aeff(t, o), sel, r)), R.acts(rest, R.ds_of(R.act(t, o))), _) & Len(R.acts(rest, R.ds_of(R.act(t, o))), n)
+      acts_inv(rest, R.ds_of(R.act(t, o)), rp(aeff(t, o), sel, r), A.effs.sel(aeff(t, o), sel), n, sm, act_inv(t, o, r, sel, n, sm, st))
+
+# The history
+# ~~~~~~~~~~~
+
+# the effects of a history's batches, oldest first
+def all_effs(hist: List<&2, Laws.Run>, +n: Nat) -> List<&2, A.Eff>:
   match hist:
     case Nil{}:
       Nil{}
-    case Con{Laws.Run{+now, cs}, +older}:
-      List.append(&2, R.Cmd, all_effs(older), effs(cs, R.db.at(now, Laws.single(older))))
+    case Con{b, +older}:
+      List.append(&2, A.Eff, all_effs(older, n), Laws.batch_effs(b, Laws.single(older, n)))
 
-# the file after a history holds the entries of all its effects
-def aof_all(hist: List<&2, Laws.Run>) -> {A.encode(A.args_all(all_effs(hist))) == Laws.aof(hist) : String}:
+# a batch's effects are its acts' effects, in order
+def beffs(+now: Nat, +as: List<&2, R.Act>, +ds: R.Ds) -> {Laws.batch_effs(Laws.Run{now, as}, ds) == aeffs(as, R.ds.at(now, ds)) : List<&2, A.Eff>}:
+  %acts_split(as, Nil{}, R.ds.at(now, ds)) : {List.reverse(&2, A.Eff, Pair.fst(List<&2, A.Eff>, R.Ds, _)) == aeffs(as, R.ds.at(now, ds)) : List<&2, A.Eff>}
+  rev_rev_e(aeffs(as, R.ds.at(now, ds)))
+
+def len_ego(n: Nat) -> {List.length(&2, R.Db, R.ds.empty.go(n)) == n : Nat}:
+  match n:
+    case 0n:
+      {==}
+    case 1n+m:
+      Equal.cong(Nat, Nat, z => 1n+z, List.length(&2, R.Db, R.ds.empty.go(m)), m, len_ego(m))
+
+def len_empty(+n: Nat) -> {List.length(&2, R.Db, Laws.zero(R.ds.empty(n))) == 1n+n : Nat}:
+  Equal.cong(Nat, Nat, z => 1n+z, List.length(&2, R.Db, Laws.zero.go(R.ds.empty.go(n))), n, Equal.trans(Nat, List.length(&2, R.Db, Laws.zero.go(R.ds.empty.go(n))), List.length(&2, R.Db, R.ds.empty.go(n)), n, len_zg(R.ds.empty.go(n)), len_ego(n)))
+
+def replay_step(+now: Nat, +as: List<&2, R.Act>, +older: List<&2, Laws.Run>, +n: Nat, +sm: {KV.small(n) == True{} : Bool}, p: Inv(rp(all_effs(older, n), 0n, R.ds.empty(n)), Laws.single(older, n), A.effs.sel(all_effs(older, n), 0n)) & Len(Laws.single(older, n), n)) -> Inv(rp(all_effs(Con{Laws.Run{now, as}, older}, n), 0n, R.ds.empty(n)), Laws.single(Con{Laws.Run{now, as}, older}, n), A.effs.sel(all_effs(Con{Laws.Run{now, as}, older}, n), 0n)) & Len(Laws.single(Con{Laws.Run{now, as}, older}, n), n):
+  (inv0, ln0) = p
+  (ez0, q0) = inv0
+  %Equal.sym(List<&2, A.Eff>, Laws.batch_effs(Laws.Run{now, as}, Laws.single(older, n)), aeffs(as, R.ds.at(now, Laws.single(older, n))), beffs(now, as, Laws.single(older, n))) : Inv(rp(List.append(&2, A.Eff, all_effs(older, n), _), 0n, R.ds.empty(n)), R.acts(as, R.ds.at(now, Laws.single(older, n))), A.effs.sel(List.append(&2, A.Eff, all_effs(older, n), _), 0n)) & Len(R.acts(as, R.ds.at(now, Laws.single(older, n))), n)
+  %rp_cat(all_effs(older, n), aeffs(as, R.ds.at(now, Laws.single(older, n))), 0n, R.ds.empty(n)) : Inv(_, R.acts(as, R.ds.at(now, Laws.single(older, n))), A.effs.sel(List.append(&2, A.Eff, all_effs(older, n), aeffs(as, R.ds.at(now, Laws.single(older, n)))), 0n)) & Len(R.acts(as, R.ds.at(now, Laws.single(older, n))), n)
+  %sel_cat(all_effs(older, n), aeffs(as, R.ds.at(now, Laws.single(older, n))), 0n) : Inv(rp(aeffs(as, R.ds.at(now, Laws.single(older, n))), A.effs.sel(all_effs(older, n), 0n), rp(all_effs(older, n), 0n, R.ds.empty(n))), R.acts(as, R.ds.at(now, Laws.single(older, n))), _) & Len(R.acts(as, R.ds.at(now, Laws.single(older, n))), n)
+  acts_inv(as, R.ds.at(now, Laws.single(older, n)), rp(all_effs(older, n), 0n, R.ds.empty(n)), A.effs.sel(all_effs(older, n), 0n), n, sm,
+   ((Equal.trans(List<&2, R.Db>, Laws.zero(rp(all_effs(older, n), 0n, R.ds.empty(n))), Laws.zero(Laws.single(older, n)), Laws.zero(R.ds.at(now, Laws.single(older, n))), ez0, Equal.sym(List<&2, R.Db>, Laws.zero(R.ds.at(now, Laws.single(older, n))), Laws.zero(Laws.single(older, n)), z_at(now, Laws.single(older, n)))), q0),
+    Equal.trans(Nat, List.length(&2, R.Db, Laws.zero(R.ds.at(now, Laws.single(older, n)))), List.length(&2, R.Db, Laws.zero(Laws.single(older, n))), 1n+n, Equal.cong(List<&2, R.Db>, Nat, z => List.length(&2, R.Db, z), Laws.zero(R.ds.at(now, Laws.single(older, n))), Laws.zero(Laws.single(older, n)), z_at(now, Laws.single(older, n))), ln0)))
+
+# the replay of a history's effects keeps the invariant with the
+# databases the history left
+def replay_inv(hist: List<&2, Laws.Run>, +n: Nat, +sm: {KV.small(n) == True{} : Bool}) -> Inv(rp(all_effs(hist, n), 0n, R.ds.empty(n)), Laws.single(hist, n), A.effs.sel(all_effs(hist, n), 0n)) & Len(Laws.single(hist, n), n):
+  match hist:
+    case Nil{}:
+      (({==}, ({==}, {==})), len_empty(n))
+    case Con{Laws.Run{+now, +as}, +older}:
+      replay_step(now, as, older, n, sm, replay_inv(older, n, sm))
+
+# the file after a history: the entries of its effects, and the database
+# the last selected
+def file_all(hist: List<&2, Laws.Run>, +n: Nat) -> {Laws.file(hist, n) == (A.encode(A.effs.args(all_effs(hist, n), 0n)), A.effs.sel(all_effs(hist, n), 0n)) : String & Nat}:
   match hist:
     case Nil{}:
       {==}
-    case Con{Laws.Run{+now, +cs}, +older}:
-      %args_app(all_effs(older), effs(cs, R.db.at(now, Laws.single(older)))) : {A.encode(_) == Laws.aof(Con{Laws.Run{now, cs}, older}) : String}
-      %enc_cat(A.args_all(all_effs(older)), A.args_all(effs(cs, R.db.at(now, Laws.single(older))))) : {_ == Laws.aof(Con{Laws.Run{now, cs}, older}) : String}
-      %effects_eq(cs, R.db.at(now, Laws.single(older))) : {A.encode(A.args_all(all_effs(older))) ++ A.encode(A.args_all(effs(cs, R.db.at(now, Laws.single(older))))) == Laws.aof(older) ++ A.encode(A.args_all(_)) : String}
-      %aof_all(older) : {A.encode(A.args_all(all_effs(older))) ++ A.encode(A.args_all(effs(cs, R.db.at(now, Laws.single(older))))) == _ ++ A.encode(A.args_all(effs(cs, R.db.at(now, Laws.single(older))))) : String}
+    case Con{+b, +older}:
+      %Equal.sym(String & Nat, Laws.file(older, n), (A.encode(A.effs.args(all_effs(older, n), 0n)), A.effs.sel(all_effs(older, n), 0n)), file_all(older, n)) : {Laws.file.put(_, Laws.batch_effs(b, Laws.single(older, n))) == (A.encode(A.effs.args(List.append(&2, A.Eff, all_effs(older, n), Laws.batch_effs(b, Laws.single(older, n))), 0n)), A.effs.sel(List.append(&2, A.Eff, all_effs(older, n), Laws.batch_effs(b, Laws.single(older, n))), 0n)) : String & Nat}
+      %args_cat(all_effs(older, n), Laws.batch_effs(b, Laws.single(older, n)), 0n) : {(A.encode(A.effs.args(all_effs(older, n), 0n)) ++ A.encode(A.effs.args(Laws.batch_effs(b, Laws.single(older, n)), A.effs.sel(all_effs(older, n), 0n))), A.effs.sel(Laws.batch_effs(b, Laws.single(older, n)), A.effs.sel(all_effs(older, n), 0n))) == (A.encode(_), A.effs.sel(List.append(&2, A.Eff, all_effs(older, n), Laws.batch_effs(b, Laws.single(older, n))), 0n)) : String & Nat}
+      %sel_cat(all_effs(older, n), Laws.batch_effs(b, Laws.single(older, n)), 0n) : {(A.encode(A.effs.args(all_effs(older, n), 0n)) ++ A.encode(A.effs.args(Laws.batch_effs(b, Laws.single(older, n)), A.effs.sel(all_effs(older, n), 0n))), A.effs.sel(Laws.batch_effs(b, Laws.single(older, n)), A.effs.sel(all_effs(older, n), 0n))) == (A.encode(List.append(&2, List<&2, String>, A.effs.args(all_effs(older, n), 0n), A.effs.args(Laws.batch_effs(b, Laws.single(older, n)), A.effs.sel(all_effs(older, n), 0n)))), _) : String & Nat}
+      %enc_cat(A.effs.args(all_effs(older, n), 0n), A.effs.args(Laws.batch_effs(b, Laws.single(older, n)), A.effs.sel(all_effs(older, n), 0n))) : {(A.encode(A.effs.args(all_effs(older, n), 0n)) ++ A.encode(A.effs.args(Laws.batch_effs(b, Laws.single(older, n)), A.effs.sel(all_effs(older, n), 0n))), A.effs.sel(Laws.batch_effs(b, Laws.single(older, n)), A.effs.sel(all_effs(older, n), 0n))) == (_, A.effs.sel(Laws.batch_effs(b, Laws.single(older, n)), A.effs.sel(all_effs(older, n), 0n))) : String & Nat}
       {==}
 
-# all the effects, run at time 0 from an empty database, leave the
-# history's database, at time 0
-def replay_all(hist: List<&2, Laws.Run>) -> {Laws.final(R.exec_all(all_effs(hist), R.db.empty())) == R.db.at(0n, Laws.single(hist)) : R.Db}:
-  match hist:
-    case Nil{}:
-      {==}
-    case Con{Laws.Run{+now, +cs}, +older}:
-      %comp(all_effs(older), effs(cs, R.db.at(now, Laws.single(older))), R.db.empty()) : {_ == R.db.at(0n, Laws.single(Con{Laws.Run{now, cs}, older})) : R.Db}
-      %Equal.sym(R.Db, Laws.final(R.exec_all(all_effs(older), R.db.empty())), R.db.at(0n, Laws.single(older)), replay_all(older)) : {Laws.final(R.exec_all(effs(cs, R.db.at(now, Laws.single(older))), _)) == R.db.at(0n, Laws.single(Con{Laws.Run{now, cs}, older})) : R.Db}
-      %at_at(0n, now, Laws.single(older)) : {Laws.final(R.exec_all(effs(cs, R.db.at(now, Laws.single(older))), _)) == R.db.at(0n, Laws.single(Con{Laws.Run{now, cs}, older})) : R.Db}
-      replay_effs(cs, R.db.at(now, Laws.single(older)))
+def aof_all(+hist: List<&2, Laws.Run>, +n: Nat) -> {Laws.aof(hist, n) == A.encode(A.effs.args(all_effs(hist, n), 0n)) : String}:
+  Equal.cong(String & Nat, String, p => Pair.fst(String, Nat, p), Laws.file(hist, n), (A.encode(A.effs.args(all_effs(hist, n), 0n)), A.effs.sel(all_effs(hist, n), 0n)), file_all(hist, n))
 
-# and they parse back to themselves
-def parse_all_effs(hist: List<&2, Laws.Run>) -> {all_effs(hist) == A.parse_all(A.args_all(all_effs(hist))) : List<&2, R.Cmd>}:
-  match hist:
-    case Nil{}:
-      {==}
-    case Con{Laws.Run{+now, +cs}, +older}:
-      args_round(all_effs(older), effs(cs, R.db.at(now, Laws.single(older))), parse_all_effs(older), effs_args(cs, R.db.at(now, Laws.single(older))))
+def recover_go(+hist: List<&2, Laws.Run>, +n: Nat, p: Inv(rp(all_effs(hist, n), 0n, R.ds.empty(n)), Laws.single(hist, n), A.effs.sel(all_effs(hist, n), 0n)) & Len(Laws.single(hist, n), n)) -> {Laws.zero.rest(A.restore(Laws.aof(hist, n), n)) == (Laws.zero(Laws.single(hist, n)), "") : List<&2, R.Db> & String}:
+  (inv, ln) = p
+  (ez, q) = inv
+  %Equal.sym(String, Laws.aof(hist, n), A.encode(A.effs.args(all_effs(hist, n), 0n)), aof_all(hist, n)) : {Laws.zero.rest(A.restore(_, n)) == (Laws.zero(Laws.single(hist, n)), "") : List<&2, R.Db> & String}
+  %Equal.sym(List<&2, List<&2, String>> & String, A.load(A.encode(A.effs.args(all_effs(hist, n), 0n))), (A.effs.args(all_effs(hist, n), 0n), ""), Laws.aof_load(A.effs.args(all_effs(hist, n), 0n))) : {Laws.zero.rest(A.restore.of(_, n)) == (Laws.zero(Laws.single(hist, n)), "") : List<&2, R.Db> & String}
+  %Equal.sym(R.Ds, R.acts(A.file.acts(A.parse_all(A.effs.args(all_effs(hist, n), 0n))), R.ds.empty(n)), rp(all_effs(hist, n), 0n, R.ds.empty(n)), rp_file(all_effs(hist, n), 0n, R.ds.empty(n))) : {(Laws.zero(_), "") == (Laws.zero(Laws.single(hist, n)), "") : List<&2, R.Db> & String}
+  Equal.cong(List<&2, R.Db>, List<&2, R.Db> & String, z => (z, ""), Laws.zero(rp(all_effs(hist, n), 0n, R.ds.empty(n))), Laws.zero(Laws.single(hist, n)), ez)
 
-def Laws.recover(hist):
-  %aof_all(hist) : {A.restore(_) == (R.db.at(0n, Laws.single(hist)), "") : R.Db & String}
-  %Equal.sym(List<&2, List<&2, String>> & String, A.load(A.encode(A.args_all(all_effs(hist)))), (A.args_all(all_effs(hist)), ""), Laws.aof_load(A.args_all(all_effs(hist)))) : {A.restore.of(_) == (R.db.at(0n, Laws.single(hist)), "") : R.Db & String}
-  %parse_all_effs(hist) : {(A.db_after(R.exec_all(_, R.db.empty())), "") == (R.db.at(0n, Laws.single(hist)), "") : R.Db & String}
-  %replay_all(hist) : {(A.db_after(R.exec_all(all_effs(hist), R.db.empty())), "") == (_, "") : R.Db & String}
-  %eta_l(R.exec_all(all_effs(hist), R.db.empty())) : {(A.db_after(_), "") == (Laws.final(_), "") : R.Db & String}
-  {==}
+def Laws.recover(hist, n, sm):
+  recover_go(hist, n, replay_inv(hist, n, sm))
+
 # Cuts
 # ----
 # A crash leaves c of the file, c ++ d being the file (Laws.recover_cut,
 # Laws.load_cut). An entry cut short never parses (entry_cut): a cut
 # number line ends without its "\r\n" (num_cut), a cut bulk lacks bytes
 # or its "\r\n" (bulk_cut). So the loader reads the whole entries in
-# front of the cut and leaves the rest (load_cut_go). Each entry is one
-# effect, and the first k effects of commands run each at its time, run
-# at time 0, leave the database the first j commands leave, at time 0,
-# for some j (seffs_prefix): a command with no effect leaves the database
-# as it was. A history's effects are those of its commands in order
-# (all_effs_cmds), so the k entries in front of a cut restore the database
-# after some j of its commands (Laws.recover_cut).
+# front of the cut and leaves the rest (load_cut_go). The whole entries
+# replay as the first effects of the history (ep: a SELECT cut off from
+# the entry after it moves the focus alone, which changes no database),
+# and those as its first acts (sep: an act has no effect or one), so the
+# entries in front of a cut restore the databases after some j of the
+# history's acts (Laws.recover_cut).
 
 def scon_snil(-h: Char, -t: String, e: {SCon{h, t} == SNil{} : String}) -> Empty:
   %e : is_scon(_)
@@ -6435,372 +7789,490 @@ def load_cut_fin(+c: String, -es: List<&2, List<&2, String>>, res: Cut(String.le
   p2
 
 # the file is the entries of the history's effects
-def aof_entries(+hist: List<&2, Laws.Run>, +c: String, -d: String, e: {c ++ d == Laws.aof(hist) : String}) -> {c ++ d == A.encode.onto(A.args_all(all_effs(hist)), "") : String}:
-  Equal.trans(String, c ++ d, Laws.aof(hist), A.encode(A.args_all(all_effs(hist))), e, Equal.sym(String, A.encode(A.args_all(all_effs(hist))), Laws.aof(hist), aof_all(hist)))
+def aof_entries(+hist: List<&2, Laws.Run>, +n: Nat, -c: String, -d: String, e: {c ++ d == Laws.aof(hist, n) : String}) -> {c ++ d == A.encode.onto(A.effs.args(all_effs(hist, n), 0n), "") : String}:
+  Equal.trans(String, c ++ d, Laws.aof(hist, n), A.encode(A.effs.args(all_effs(hist, n), 0n)), e, aof_all(hist, n))
 
-def Laws.load_cut(hist, c, d, e):
-  load_cut_fin(c, A.args_all(all_effs(hist)), load_cut_go(A.args_all(all_effs(hist)), c, d, String.length(c), Nil{})(aof_entries(hist, c, d, e))(le_refl(String.length(c))))
+def Laws.load_cut(hist, n, c, d, e):
+  load_cut_fin(c, A.effs.args(all_effs(hist, n), 0n), load_cut_go(A.effs.args(all_effs(hist, n), 0n), c, d, String.length(c), Nil{})(aof_entries(hist, n, c, d, e))(le_refl(String.length(c))))
 
 # Steps and their effects
 # -----------------------
-# A history's commands, each at its time (Laws.commands), run one after
-# another, leave its database, but for the time (single_cmds); and their
-# effects are the history's (all_effs_cmds). A command leaves the time it
-# ran at (exec_at).
+# A history's acts, each at its time (Laws.commands), run one after
+# another, leave its databases, but for the focus's time (single_cmds),
+# and their effects are the history's (all_effs_cmds): an act leaves the
+# time it ran at (act_now).
 
-# the effects of commands run each at its time, in order
-def seffs(ss: List<&2, Laws.Step>, +db: R.Db) -> List<&2, R.Cmd>:
+# an act leaves the focus's time
+def now_swap(+a: Nat, +b: Nat, +o: R.Ds, -p: Bool & R.Ds, sp: SwapOk(a, b, o, p)) -> {R.ds.now(R.ds_of(R.act.ok(p))) == R.ds.now(o) : Nat}:
+  match sp:
+    case Inl{eq}:
+      %Equal.sym(Bool & R.Ds, p, (False{}, o), eq) : {R.ds.now(R.ds_of(R.act.ok(_))) == R.ds.now(o) : Nat}
+      {==}
+    case Inr{w}:
+      (x, w2) = w
+      (y, w3) = w2
+      (ea, w4) = w3
+      (eb, eq) = w4
+      %Equal.sym(Bool & R.Ds, p, (True{}, R.ds.with(R.ds.put(a, y, R.ds.put(b, x, R.ds.list(o))), o)), eq) : {R.ds.now(R.ds_of(R.act.ok(_))) == R.ds.now(o) : Nat}
+      with_n(R.ds.put(a, y, R.ds.put(b, x, R.ds.list(o))), o)
+
+def now_purge(+k: String, +j: Nat, +o: R.Ds, -p: Bool & R.Ds, sp: PurgeOk(k, j, o, p)) -> {R.ds.now(R.ds_of(R.act.ok(p))) == R.ds.now(o) : Nat}:
+  match sp:
+    case Inl{eq}:
+      %Equal.sym(Bool & R.Ds, p, (False{}, o), eq) : {R.ds.now(R.ds_of(R.act.ok(_))) == R.ds.now(o) : Nat}
+      {==}
+    case Inr{w}:
+      (y, w2) = w
+      (ey, eq) = w2
+      %Equal.sym(Bool & R.Ds, p, (True{}, R.ds.with(R.ds.put(j, R.db_of(R.db.del(y, [k])), R.ds.list(o)), o)), eq) : {R.ds.now(R.ds_of(R.act.ok(_))) == R.ds.now(o) : Nat}
+      with_n(R.ds.put(j, R.db_of(R.db.del(y, [k])), R.ds.list(o)), o)
+
+def now_move(+k: String, +j: Nat, +o: R.Ds, -p: Bool & R.Ds, sp: MoveOk(k, j, o, p)) -> {R.ds.now(R.ds_of(R.act.moved(p))) == R.ds.now(o) : Nat}:
+  match sp:
+    case Inl{eq}:
+      %Equal.sym(Bool & R.Ds, p, (False{}, o), eq) : {R.ds.now(R.ds_of(R.act.moved(_))) == R.ds.now(o) : Nat}
+      {==}
+    case Inr{w}:
+      (y, w2) = w
+      (v, w3) = w2
+      (e, w4) = w3
+      (ey, w5) = w4
+      (ene, w6) = w5
+      (eno, w7) = w6
+      (eent, eq) = w7
+      %Equal.sym(Bool & R.Ds, p, (True{}, R.ds.moved(k, j, R.db.setx(y, k, v, e), o)), eq) : {R.ds.now(R.ds_of(R.act.moved(_))) == R.ds.now(o) : Nat}
+      Equal.trans(Nat, R.ds.now(R.ds.moved(k, j, R.db.setx(y, k, v, e), o)), R.ds.now(R.ds.unset(k, o)), R.ds.now(o), with_n(R.ds.put(j, R.db.setx(y, k, v, e), R.ds.list(R.ds.unset(k, o))), R.ds.unset(k, o)), now_unset(k, o))
+
+def now_run(+c: R.Cmd, o: R.Ds) -> {R.ds.now(R.ds_of(R.act(R.ARun{c}, o))) == R.ds.now(o) : Nat}:
+  match o:
+    case R.Ds{+d, +pre, +post}:
+      %act_run(c, d, pre, post) : {R.ds.now(R.ds_of(_)) == R.db.now(d) : Nat}
+      now_eq(c, d)
+
+def act_now(t: R.Act, +o: R.Ds) -> {R.ds.now(R.ds_of(R.act(t, o))) == R.ds.now(o) : Nat}:
+  match t:
+    case R.ARun{+c}:
+      now_run(c, o)
+    case R.AFocus{+j}:
+      focus_n(j, o)
+    case R.ASwap{+a, +b}:
+      now_swap(a, b, o, R.ds.swap(a, b, o), swap_spec(a, b, o))
+    case R.APurge{+k, +j}:
+      now_purge(k, j, o, R.ds.purge(k, j, o), purge_spec(k, j, o))
+    case R.AMove{+k, +j}:
+      now_move(k, j, o, R.ds.move(k, j, o), move_spec(k, j, o))
+    case R.AWipe{}:
+      now_wipe(o)
+
+# an act run at a time leaves the databases at that time
+def act_at(+t: R.Act, +now: Nat, +x: R.Ds) -> {R.ds.at(now, R.ds_of(R.act(t, R.ds.at(now, x)))) == R.ds_of(R.act(t, R.ds.at(now, x))) : R.Ds}:
+  %Equal.trans(Nat, R.ds.now(R.ds_of(R.act(t, R.ds.at(now, x)))), R.ds.now(R.ds.at(now, x)), now, act_now(t, R.ds.at(now, x)), ds_now_at(now, x)) : {R.ds.at(_, R.ds_of(R.act(t, R.ds.at(now, x)))) == R.ds_of(R.act(t, R.ds.at(now, x))) : R.Ds}
+  ds_at_self(R.ds_of(R.act(t, R.ds.at(now, x))))
+
+# the effects of acts run each at its time, in order
+def seff(s: Laws.Step, x: R.Ds) -> List<&2, A.Eff>:
+  match s:
+    case Laws.Step{+now, a}:
+      aeff(a, R.ds.at(now, x))
+
+def seffs(ss: List<&2, Laws.Step>, +x: R.Ds) -> List<&2, A.Eff>:
   match ss:
     case Nil{}:
       Nil{}
-    case Con{Laws.Step{+now, +c}, rest}:
-      List.append(&2, R.Cmd, eff(c, R.db.at(now, db)), seffs(rest, R.db_of(R.exec(c, R.db.at(now, db)))))
+    case Con{+s, rest}:
+      List.append(&2, A.Eff, seff(s, x), seffs(rest, Laws.run_at(s, x)))
 
-def at_self(d: R.Db) -> {R.db.at(R.db.now(d), d) == d : R.Db}:
-  match d:
-    case R.Db{t, n, x, w, rr}:
-      {==}
-
-# a command leaves the time it ran at
-def exec_at(+c: R.Cmd, +now: Nat, db: R.Db) -> {R.db.at(now, R.db_of(R.exec(c, R.db.at(now, db)))) == R.db_of(R.exec(c, R.db.at(now, db))) : R.Db}:
-  match db:
-    case R.Db{+t, +n, +x, +w, +rr}:
-      %now_eq(c, R.Db{t, n, x, now, rr}) : {R.db.at(_, R.db_of(R.exec(c, R.Db{t, n, x, now, rr}))) == R.db_of(R.exec(c, R.Db{t, n, x, now, rr})) : R.Db}
-      at_self(R.db_of(R.exec(c, R.Db{t, n, x, now, rr})))
-
-# a batch's effects at its time are its steps' effects
-def at_effs(+now: Nat, cs: List<&2, R.Cmd>, +db: R.Db) -> {effs(cs, R.db.at(now, db)) == seffs(Laws.stamp(now, cs), db) : List<&2, R.Cmd>}:
-  match cs:
+# a batch's acts at its time have its effects
+def stamp_effs(+now: Nat, as: List<&2, R.Act>, +x: R.Ds) -> {seffs(Laws.stamp(now, as), x) == aeffs(as, R.ds.at(now, x)) : List<&2, A.Eff>}:
+  match as:
     case Nil{}:
       {==}
-    case Con{+c, +rest}:
-      %at_effs(now, rest, R.db_of(R.exec(c, R.db.at(now, db)))) : {List.append(&2, R.Cmd, eff(c, R.db.at(now, db)), effs(rest, R.db_of(R.exec(c, R.db.at(now, db))))) == List.append(&2, R.Cmd, eff(c, R.db.at(now, db)), _) : List<&2, R.Cmd>}
-      %exec_at(c, now, db) : {List.append(&2, R.Cmd, eff(c, R.db.at(now, db)), effs(rest, _)) == List.append(&2, R.Cmd, eff(c, R.db.at(now, db)), effs(rest, R.db.at(now, R.db_of(R.exec(c, R.db.at(now, db)))))) : List<&2, R.Cmd>}
-      {==}
+    case Con{+a, +rest}:
+      Equal.cong(List<&2, A.Eff>, List<&2, A.Eff>, z => List.append(&2, A.Eff, aeff(a, R.ds.at(now, x)), z), seffs(Laws.stamp(now, rest), R.ds_of(R.act(a, R.ds.at(now, x)))), aeffs(rest, R.ds_of(R.act(a, R.ds.at(now, x)))),
+        Equal.trans(List<&2, A.Eff>, seffs(Laws.stamp(now, rest), R.ds_of(R.act(a, R.ds.at(now, x)))), aeffs(rest, R.ds.at(now, R.ds_of(R.act(a, R.ds.at(now, x))))), aeffs(rest, R.ds_of(R.act(a, R.ds.at(now, x)))),
+          stamp_effs(now, rest, R.ds_of(R.act(a, R.ds.at(now, x)))),
+          Equal.cong(R.Ds, List<&2, A.Eff>, z => aeffs(rest, z), R.ds.at(now, R.ds_of(R.act(a, R.ds.at(now, x)))), R.ds_of(R.act(a, R.ds.at(now, x))), act_at(a, now, x))))
 
-# a batch's steps leave the database the batch leaves, but for the time
-def stamp_run(+t: Nat, +now: Nat, cs: List<&2, R.Cmd>, +db: R.Db) -> {R.db.at(t, Laws.run_timed(Laws.stamp(now, cs), db)) == R.db.at(t, Laws.final(R.exec_all(cs, R.db.at(now, db)))) : R.Db}:
-  match cs:
+# a batch's acts leave the databases the batch leaves, but for the time
+def stamp_run(+t: Nat, +now: Nat, as: List<&2, R.Act>, +x: R.Ds) -> {R.ds.at(t, Laws.run_timed(Laws.stamp(now, as), x)) == R.ds.at(t, R.acts(as, R.ds.at(now, x))) : R.Ds}:
+  match as:
     case Nil{}:
-      Equal.sym(R.Db, R.db.at(t, R.db.at(now, db)), R.db.at(t, db), at_at(t, now, db))
-    case Con{+c, +rest}:
-      %fin_cons(c, rest, R.db.at(now, db)) : {R.db.at(t, Laws.run_timed(Laws.stamp(now, rest), R.db_of(R.exec(c, R.db.at(now, db))))) == R.db.at(t, _) : R.Db}
-      %exec_at(c, now, db) : {R.db.at(t, Laws.run_timed(Laws.stamp(now, rest), R.db_of(R.exec(c, R.db.at(now, db))))) == R.db.at(t, Laws.final(R.exec_all(rest, _))) : R.Db}
-      stamp_run(t, now, rest, R.db_of(R.exec(c, R.db.at(now, db))))
+      Equal.sym(R.Ds, R.ds.at(t, R.ds.at(now, x)), R.ds.at(t, x), ds_at_at(t, now, x))
+    case Con{+a, +rest}:
+      Equal.trans(R.Ds, R.ds.at(t, Laws.run_timed(Laws.stamp(now, rest), R.ds_of(R.act(a, R.ds.at(now, x))))), R.ds.at(t, R.acts(rest, R.ds.at(now, R.ds_of(R.act(a, R.ds.at(now, x)))))), R.ds.at(t, R.acts(rest, R.ds_of(R.act(a, R.ds.at(now, x))))),
+        stamp_run(t, now, rest, R.ds_of(R.act(a, R.ds.at(now, x)))),
+        Equal.cong(R.Ds, R.Ds, z => R.ds.at(t, R.acts(rest, z)), R.ds.at(now, R.ds_of(R.act(a, R.ds.at(now, x)))), R.ds_of(R.act(a, R.ds.at(now, x))), act_at(a, now, x)))
 
-def run_timed_app(xs: List<&2, Laws.Step>, -ys: List<&2, Laws.Step>, +db: R.Db) -> {Laws.run_timed(ys, Laws.run_timed(xs, db)) == Laws.run_timed(List.append(&2, Laws.Step, xs, ys), db) : R.Db}:
+def run_timed_app(xs: List<&2, Laws.Step>, -ys: List<&2, Laws.Step>, +x: R.Ds) -> {Laws.run_timed(ys, Laws.run_timed(xs, x)) == Laws.run_timed(List.append(&2, Laws.Step, xs, ys), x) : R.Ds}:
+  match xs:
+    case Nil{}:
+      {==}
+    case Con{+s, rest}:
+      run_timed_app(rest, ys, Laws.run_at(s, x))
+
+# a history's acts, run from empty databases, leave its databases, but
+# for the time
+def single_cmds(hist: List<&2, Laws.Run>, +n: Nat, +t: Nat) -> {R.ds.at(t, Laws.run_timed(Laws.commands(hist), R.ds.empty(n))) == R.ds.at(t, Laws.single(hist, n)) : R.Ds}:
+  match hist:
+    case Nil{}:
+      {==}
+    case Con{Laws.Run{+now, +as}, +older}:
+      %run_timed_app(Laws.commands(older), Laws.stamp(now, as), R.ds.empty(n)) : {R.ds.at(t, _) == R.ds.at(t, R.acts(as, R.ds.at(now, Laws.single(older, n)))) : R.Ds}
+      Equal.trans(R.Ds, R.ds.at(t, Laws.run_timed(Laws.stamp(now, as), Laws.run_timed(Laws.commands(older), R.ds.empty(n)))), R.ds.at(t, R.acts(as, R.ds.at(now, Laws.run_timed(Laws.commands(older), R.ds.empty(n))))), R.ds.at(t, R.acts(as, R.ds.at(now, Laws.single(older, n)))),
+        stamp_run(t, now, as, Laws.run_timed(Laws.commands(older), R.ds.empty(n))),
+        Equal.cong(R.Ds, R.Ds, z => R.ds.at(t, R.acts(as, z)), R.ds.at(now, Laws.run_timed(Laws.commands(older), R.ds.empty(n))), R.ds.at(now, Laws.single(older, n)), single_cmds(older, n, now)))
+
+# the effects of steps xs then ys
+def seffs_app(xs: List<&2, Laws.Step>, +ys: List<&2, Laws.Step>, +x: R.Ds) -> {List.append(&2, A.Eff, seffs(xs, x), seffs(ys, Laws.run_timed(xs, x))) == seffs(List.append(&2, Laws.Step, xs, ys), x) : List<&2, A.Eff>}:
   match xs:
     case Nil{}:
       {==}
     case Con{+s, +rest}:
-      run_timed_app(rest, ys, Laws.run_at(s, db))
+      Equal.trans(List<&2, A.Eff>, List.append(&2, A.Eff, List.append(&2, A.Eff, seff(s, x), seffs(rest, Laws.run_at(s, x))), seffs(ys, Laws.run_timed(rest, Laws.run_at(s, x)))), List.append(&2, A.Eff, seff(s, x), List.append(&2, A.Eff, seffs(rest, Laws.run_at(s, x)), seffs(ys, Laws.run_timed(rest, Laws.run_at(s, x))))), List.append(&2, A.Eff, seff(s, x), seffs(List.append(&2, Laws.Step, rest, ys), Laws.run_at(s, x))),
+        lapp_assoc_e(seff(s, x), seffs(rest, Laws.run_at(s, x)), seffs(ys, Laws.run_timed(rest, Laws.run_at(s, x)))),
+        Equal.cong(List<&2, A.Eff>, List<&2, A.Eff>, z => List.append(&2, A.Eff, seff(s, x), z), List.append(&2, A.Eff, seffs(rest, Laws.run_at(s, x)), seffs(ys, Laws.run_timed(rest, Laws.run_at(s, x)))), seffs(List.append(&2, Laws.Step, rest, ys), Laws.run_at(s, x)), seffs_app(rest, ys, Laws.run_at(s, x))))
 
-# a history's commands, run from an empty database, leave its database,
-# but for the time
-def single_cmds(hist: List<&2, Laws.Run>, +t: Nat) -> {R.db.at(t, Laws.run_timed(Laws.commands(hist), R.db.empty())) == R.db.at(t, Laws.single(hist)) : R.Db}:
+# a history's acts have its effects
+def all_effs_cmds(hist: List<&2, Laws.Run>, +n: Nat) -> {seffs(Laws.commands(hist), R.ds.empty(n)) == all_effs(hist, n) : List<&2, A.Eff>}:
   match hist:
     case Nil{}:
       {==}
-    case Con{Laws.Run{+now, +cs}, +older}:
-      %run_timed_app(Laws.commands(older), Laws.stamp(now, cs), R.db.empty()) : {R.db.at(t, _) == R.db.at(t, Laws.final(R.exec_all(cs, R.db.at(now, Laws.single(older))))) : R.Db}
-      %Equal.sym(R.Db, R.db.at(t, Laws.run_timed(Laws.stamp(now, cs), Laws.run_timed(Laws.commands(older), R.db.empty()))), R.db.at(t, Laws.final(R.exec_all(cs, R.db.at(now, Laws.run_timed(Laws.commands(older), R.db.empty()))))), stamp_run(t, now, cs, Laws.run_timed(Laws.commands(older), R.db.empty()))) : {_ == R.db.at(t, Laws.final(R.exec_all(cs, R.db.at(now, Laws.single(older))))) : R.Db}
-      %single_cmds(older, now) : {R.db.at(t, Laws.final(R.exec_all(cs, R.db.at(now, Laws.run_timed(Laws.commands(older), R.db.empty()))))) == R.db.at(t, Laws.final(R.exec_all(cs, _))) : R.Db}
-      {==}
-
-def lapp_assoc(a: List<&2, R.Cmd>, -b: List<&2, R.Cmd>, -c: List<&2, R.Cmd>) -> {List.append(&2, R.Cmd, List.append(&2, R.Cmd, a, b), c) == List.append(&2, R.Cmd, a, List.append(&2, R.Cmd, b, c)) : List<&2, R.Cmd>}:
-  match a:
-    case Nil{}:
-      {==}
-    case Con{h, t}:
-      Equal.cong(List<&2, R.Cmd>, List<&2, R.Cmd>, z => h <> z, List.append(&2, R.Cmd, List.append(&2, R.Cmd, t, b), c), List.append(&2, R.Cmd, t, List.append(&2, R.Cmd, b, c)), lapp_assoc(t, b, c))
-
-# the effects of steps xs then ys
-def seffs_app(xs: List<&2, Laws.Step>, +ys: List<&2, Laws.Step>, +db: R.Db) -> {List.append(&2, R.Cmd, seffs(xs, db), seffs(ys, Laws.run_timed(xs, db))) == seffs(List.append(&2, Laws.Step, xs, ys), db) : List<&2, R.Cmd>}:
-  match xs:
-    case Nil{}:
-      {==}
-    case Con{Laws.Step{+now, +c}, +rest}:
-      Equal.trans(List<&2, R.Cmd>, List.append(&2, R.Cmd, List.append(&2, R.Cmd, eff(c, R.db.at(now, db)), seffs(rest, R.db_of(R.exec(c, R.db.at(now, db))))), seffs(ys, Laws.run_timed(rest, R.db_of(R.exec(c, R.db.at(now, db)))))), List.append(&2, R.Cmd, eff(c, R.db.at(now, db)), List.append(&2, R.Cmd, seffs(rest, R.db_of(R.exec(c, R.db.at(now, db)))), seffs(ys, Laws.run_timed(rest, R.db_of(R.exec(c, R.db.at(now, db))))))), List.append(&2, R.Cmd, eff(c, R.db.at(now, db)), seffs(List.append(&2, Laws.Step, rest, ys), R.db_of(R.exec(c, R.db.at(now, db))))),
-        lapp_assoc(eff(c, R.db.at(now, db)), seffs(rest, R.db_of(R.exec(c, R.db.at(now, db)))), seffs(ys, Laws.run_timed(rest, R.db_of(R.exec(c, R.db.at(now, db)))))),
-        Equal.cong(List<&2, R.Cmd>, List<&2, R.Cmd>, z => List.append(&2, R.Cmd, eff(c, R.db.at(now, db)), z), List.append(&2, R.Cmd, seffs(rest, R.db_of(R.exec(c, R.db.at(now, db)))), seffs(ys, Laws.run_timed(rest, R.db_of(R.exec(c, R.db.at(now, db)))))), seffs(List.append(&2, Laws.Step, rest, ys), R.db_of(R.exec(c, R.db.at(now, db)))), seffs_app(rest, ys, R.db_of(R.exec(c, R.db.at(now, db))))))
-
-# a history's steps have its effects
-def all_effs_cmds(hist: List<&2, Laws.Run>) -> {seffs(Laws.commands(hist), R.db.empty()) == all_effs(hist) : List<&2, R.Cmd>}:
-  match hist:
-    case Nil{}:
-      {==}
-    case Con{Laws.Run{+now, +cs}, +older}:
-      %seffs_app(Laws.commands(older), Laws.stamp(now, cs), R.db.empty()) : {_ == List.append(&2, R.Cmd, all_effs(older), effs(cs, R.db.at(now, Laws.single(older)))) : List<&2, R.Cmd>}
-      %all_effs_cmds(older) : {List.append(&2, R.Cmd, seffs(Laws.commands(older), R.db.empty()), seffs(Laws.stamp(now, cs), Laws.run_timed(Laws.commands(older), R.db.empty()))) == List.append(&2, R.Cmd, _, effs(cs, R.db.at(now, Laws.single(older)))) : List<&2, R.Cmd>}
-      %at_effs(now, cs, Laws.run_timed(Laws.commands(older), R.db.empty())) : {List.append(&2, R.Cmd, seffs(Laws.commands(older), R.db.empty()), _) == List.append(&2, R.Cmd, seffs(Laws.commands(older), R.db.empty()), effs(cs, R.db.at(now, Laws.single(older)))) : List<&2, R.Cmd>}
-      %single_cmds(older, now) : {List.append(&2, R.Cmd, seffs(Laws.commands(older), R.db.empty()), effs(cs, R.db.at(now, Laws.run_timed(Laws.commands(older), R.db.empty())))) == List.append(&2, R.Cmd, seffs(Laws.commands(older), R.db.empty()), effs(cs, _)) : List<&2, R.Cmd>}
+    case Con{Laws.Run{+now, +as}, +older}:
+      %seffs_app(Laws.commands(older), Laws.stamp(now, as), R.ds.empty(n)) : {_ == List.append(&2, A.Eff, all_effs(older, n), Laws.batch_effs(Laws.Run{now, as}, Laws.single(older, n))) : List<&2, A.Eff>}
+      %all_effs_cmds(older, n) : {List.append(&2, A.Eff, seffs(Laws.commands(older), R.ds.empty(n)), seffs(Laws.stamp(now, as), Laws.run_timed(Laws.commands(older), R.ds.empty(n)))) == List.append(&2, A.Eff, _, Laws.batch_effs(Laws.Run{now, as}, Laws.single(older, n))) : List<&2, A.Eff>}
+      %Equal.sym(List<&2, A.Eff>, seffs(Laws.stamp(now, as), Laws.run_timed(Laws.commands(older), R.ds.empty(n))), aeffs(as, R.ds.at(now, Laws.run_timed(Laws.commands(older), R.ds.empty(n)))), stamp_effs(now, as, Laws.run_timed(Laws.commands(older), R.ds.empty(n)))) : {List.append(&2, A.Eff, seffs(Laws.commands(older), R.ds.empty(n)), _) == List.append(&2, A.Eff, seffs(Laws.commands(older), R.ds.empty(n)), Laws.batch_effs(Laws.Run{now, as}, Laws.single(older, n))) : List<&2, A.Eff>}
+      %Equal.sym(List<&2, A.Eff>, Laws.batch_effs(Laws.Run{now, as}, Laws.single(older, n)), aeffs(as, R.ds.at(now, Laws.single(older, n))), beffs(now, as, Laws.single(older, n))) : {List.append(&2, A.Eff, seffs(Laws.commands(older), R.ds.empty(n)), aeffs(as, R.ds.at(now, Laws.run_timed(Laws.commands(older), R.ds.empty(n))))) == List.append(&2, A.Eff, seffs(Laws.commands(older), R.ds.empty(n)), _) : List<&2, A.Eff>}
+      %single_cmds(older, n, now) : {List.append(&2, A.Eff, seffs(Laws.commands(older), R.ds.empty(n)), aeffs(as, R.ds.at(now, Laws.run_timed(Laws.commands(older), R.ds.empty(n))))) == List.append(&2, A.Eff, seffs(Laws.commands(older), R.ds.empty(n)), aeffs(as, _)) : List<&2, A.Eff>}
       {==}
 
 # Prefixes
 # --------
-# A command's effects are none or one command; so the first k effects of
-# steps, run at time 0, leave the database the first j steps leave, at
-# time 0, for some j.
+# The first k entries of a file, replayed, read at time 0 as the first m
+# effects replayed, for some m (ep): an effect is one entry, or a SELECT
+# and one entry, and a SELECT alone changes no database. The first m
+# effects of acts run each at its time, replayed, read at time 0 as the
+# databases after the first j acts, for some j (sep): an act has no
+# effect or one (one_eff), and keeps the invariant (act_inv).
 
-def OneEff(es: List<&2, R.Cmd>) -> Type:
-  Or({es == Nil{} : List<&2, R.Cmd>}, Exists(R.Cmd, e => {es == [e] : List<&2, R.Cmd>}))
+def Shp(xs: List<&2, List<&2, String>>, r: R.Ds) -> Type:
+  Or(Exists(List<&2, String>, x => {xs == [x] : List<&2, List<&2, String>>}), Exists(List<&2, String>, s => Exists(List<&2, String>, x => {xs == [s, x] : List<&2, List<&2, String>>} & {Laws.zero(R.acts(A.file.acts(A.parse_all([s])), r)) == Laws.zero(r) : List<&2, R.Db>})))
 
-def ch_one(+k: String, ch: R.Change) -> OneEff(A.ch.effect(k, ch)):
-  match ch:
-    case R.CKeep{}:
-      Inl{{==}}
-    case R.CDel{}:
-      Inr{(R.Del{[k]}, {==})}
-    case R.CExp{f}:
-      match f:
-        case 0n:
-          Inr{(R.Upd{k, R.UPersist{}}, {==})}
-        case 1n+p:
-          Inr{(R.Upd{k, R.UExpire{R.TmN{True{}, 1n+p}, R.ExpIf{False{}, False{}, False{}, False{}}, "pexpireat"}}, {==})}
-    case R.CPut{v, f}:
-      match f:
-        case 0n:
-          Inr{(R.Set{k, v}, {==})}
-        case 1n+p:
-          Inr{(R.Upd{k, R.USet{v, 0n, R.TAt{R.TmN{True{}, 1n+p}}, "set"}}, {==})}
-    case R.CKeepT{v}:
-      Inr{(R.Upd{k, R.USet{v, 0n, R.TKeep{}, "set"}}, {==})}
-    case R.CApp{a, v}:
-      Inr{(R.Upd{k, R.UAppend{a}}, {==})}
+# a command of the connection, replayed, runs as an error
+def zown(r: R.Ds, -o: R.SessOp) -> {Laws.zero(R.acts([R.ARun{R.Own{o}}], r)) == Laws.zero(r) : List<&2, R.Db>}:
+  match r:
+    case R.Ds{d, pre, post}:
+      {==}
 
-def out_one(+k: String, o: R.Out) -> OneEff(A.upd.effect(k, o)):
-  match o:
-    case R.Out{r, ch}:
-      ch_one(k, ch)
+# a SELECT alone moves the focus (or runs as an error): no database
+# changes
+def zsel_m(m: Maybe<&2, Nat>, -s: String, +r: R.Ds) -> {Laws.zero(R.acts([A.file.focus(m, R.Own{R.SSelect{s}})], r)) == Laws.zero(r) : List<&2, R.Db>}:
+  match m:
+    case Some{i}:
+      focus_z(i, r)
+    case None{}:
+      zown(r, R.SSelect{s})
 
-def eff_one_go(c: R.Cmd, +t: KV.Trie<String>, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>) -> OneEff(eff(c, R.Db{t, n, x, now, rr})):
-  match c:
-    case R.Ping{}:
-      Inl{{==}}
-    case R.Echo{m}:
-      Inl{{==}}
-    case R.Get{k}:
-      Inl{{==}}
-    case R.Set{k, v}:
-      Inr{(R.Set{k, v}, {==})}
-    case R.Del{ks}:
-      match ks:
-        case Nil{}:
-          Inl{{==}}
-        case Con{k, rest}:
-          Inr{(R.Del{Con{k, rest}}, {==})}
-    case R.Exists{ks}:
-      Inl{{==}}
-    case R.IncrBy{+k, +by}:
-      out_one(k, R.upd(R.UIncr{by}, now, R.ent.live(now, KV.entry.at(String, t, k, KV.hash(k)))))
-    case R.MGet{ks}:
-      Inl{{==}}
-    case R.MSet{ps}:
-      match ps:
-        case Nil{}:
-          Inl{{==}}
-        case Con{p, rest}:
-          Inr{(R.MSet{Con{p, rest}}, {==})}
-    case R.DbSize{}:
-      Inl{{==}}
-    case R.FlushAll{}:
-      Inr{(R.FlushAll{}, {==})}
-    case R.Keys{p}:
-      Inl{{==}}
-    case R.Scan{a}:
-      Inl{{==}}
-    case R.Peek{k, o}:
-      Inl{{==}}
-    case R.Upd{+k, +op}:
-      out_one(k, R.upd(op, now, R.ent.live(now, KV.entry.at(String, t, k, KV.hash(k)))))
-    case R.Own{o}:
-      Inl{{==}}
-    case R.Bad{r}:
-      Inl{{==}}
+def shp_put(b: Bool, +j: Nat, +x: List<&2, String>, +r: R.Ds) -> Shp(A.sel.put(b, j, [x]), r):
+  match b:
+    case True{}:
+      Inl{(x, {==})}
+    case False{}:
+      Inr{(["SELECT", Nat.show(j)], (x, ({==}, zsel_m(A.file.num(Nat.show(j)), Nat.show(j), r))))}
 
-def eff_one(c: R.Cmd, +db: R.Db) -> OneEff(eff(c, db)):
-  match db:
-    case R.Db{+t, +n, +x, +now, +rr}:
-      eff_one_go(c, t, n, x, now, rr)
+def shape(e: A.Eff, +sel: Nat, +r: R.Ds) -> Shp(A.eff.args(e, sel), r):
+  match e:
+    case A.EDb{+j, c}:
+      shp_put(Nat.is_eq(j, sel), j, A.args(c), r)
+    case A.ESwap{a, b}:
+      Inl{(["SWAPDB", Nat.show(a), Nat.show(b)], {==})}
+    case A.EMove{k, +src, dst}:
+      shp_put(Nat.is_eq(src, sel), src, ["MOVE", k, Nat.show(dst)], r)
+    case A.EWipe{}:
+      Inl{(["FLUSHALL"], {==})}
 
-def SEP(ss: List<&2, Laws.Step>, db: R.Db, k: Nat) -> Type:
-  Exists(Nat, j => {Laws.final(R.exec_all(ltake(R.Cmd, k, seffs(ss, db)), R.db.at(0n, db))) == R.db.at(0n, Laws.run_timed(List.take(&2, Laws.Step, ss, j), db)) : R.Db})
+def EP(es: List<&2, A.Eff>, sel: Nat, r: R.Ds, k: Nat) -> Type:
+  Exists(Nat, m => {Laws.zero(R.acts(A.file.acts(A.parse_all(ltake(List<&2, String>, k, A.effs.args(es, sel)))), r)) == Laws.zero(rp(ltake(A.Eff, m, es), sel, r)) : List<&2, R.Db>})
 
-# a command with no effect leaves the database as it was, at time 0
-def none_db(+c: R.Cmd, +now: Nat, +db: R.Db, +e0: {eff(c, R.db.at(now, db)) == Nil{} : List<&2, R.Cmd>}) -> {R.db.at(0n, R.db_of(R.exec(c, R.db.at(now, db)))) == R.db.at(0n, db) : R.Db}:
-  Equal.trans(R.Db, R.db.at(0n, R.db_of(R.exec(c, R.db.at(now, db)))), R.db.at(0n, R.db.at(now, db)), R.db.at(0n, db),
-    Equal.trans(R.Db, R.db.at(0n, R.db_of(R.exec(c, R.db.at(now, db)))), Laws.final(R.exec_all(eff(c, R.db.at(now, db)), R.db.at(0n, R.db.at(now, db)))), R.db.at(0n, R.db.at(now, db)),
-      Equal.sym(R.Db, Laws.final(R.exec_all(eff(c, R.db.at(now, db)), R.db.at(0n, R.db.at(now, db)))), R.db.at(0n, R.db_of(R.exec(c, R.db.at(now, db)))), effect_db(c, R.db.at(now, db))),
-      Equal.cong(List<&2, R.Cmd>, R.Db, z => Laws.final(R.exec_all(z, R.db.at(0n, R.db.at(now, db)))), eff(c, R.db.at(now, db)), Nil{}, e0)),
-    at_at(0n, now, db))
+# an effect of one entry, taken whole
+def ep_eq1(+e: A.Eff, -rest: List<&2, A.Eff>, +sel: Nat, +r: R.Ds, -k2: Nat, -m2: Nat, -x: List<&2, String>, +ex: {A.eff.args(e, sel) == [x] : List<&2, List<&2, String>>}, h: {Laws.zero(R.acts(A.file.acts(A.parse_all(ltake(List<&2, String>, k2, A.effs.args(rest, A.eff.sel(e, sel))))), rp1(e, sel, r))) == Laws.zero(rp(ltake(A.Eff, m2, rest), A.eff.sel(e, sel), rp1(e, sel, r))) : List<&2, R.Db>}) -> {Laws.zero(R.acts(A.file.acts(A.parse_all(ltake(List<&2, String>, 1n+k2, A.effs.args(Con{e, rest}, sel)))), r)) == Laws.zero(rp(ltake(A.Eff, 1n+m2, Con{e, rest}), sel, r)) : List<&2, R.Db>}:
+  %Equal.sym(List<&2, List<&2, String>>, A.eff.args(e, sel), [x], ex) : {Laws.zero(R.acts(A.file.acts(A.parse_all(ltake(List<&2, String>, 1n+k2, List.append(&2, List<&2, String>, _, A.effs.args(rest, A.eff.sel(e, sel)))))), r)) == Laws.zero(rp(ltake(A.Eff, m2, rest), A.eff.sel(e, sel), rp1(e, sel, r))) : List<&2, R.Db>}
+  %Equal.cong(List<&2, List<&2, String>>, R.Ds, z => R.acts(A.file.acts(A.parse_all(z)), r), A.eff.args(e, sel), [x], ex) : {Laws.zero(R.acts(A.file.acts(A.parse_all(ltake(List<&2, String>, k2, A.effs.args(rest, A.eff.sel(e, sel))))), _)) == Laws.zero(rp(ltake(A.Eff, m2, rest), A.eff.sel(e, sel), rp1(e, sel, r))) : List<&2, R.Db>}
+  h
 
-def sep_none.p(+now: Nat, +c: R.Cmd, +rest: List<&2, Laws.Step>, +db: R.Db, -k: Nat, +j: Nat, +e0: {eff(c, R.db.at(now, db)) == Nil{} : List<&2, R.Cmd>}, p: {Laws.final(R.exec_all(ltake(R.Cmd, k, seffs(rest, R.db_of(R.exec(c, R.db.at(now, db))))), R.db.at(0n, R.db_of(R.exec(c, R.db.at(now, db)))))) == R.db.at(0n, Laws.run_timed(List.take(&2, Laws.Step, rest, j), R.db_of(R.exec(c, R.db.at(now, db))))) : R.Db})
-  -> {Laws.final(R.exec_all(ltake(R.Cmd, k, seffs(Con{Laws.Step{now, c}, rest}, db)), R.db.at(0n, db))) == R.db.at(0n, Laws.run_timed(List.take(&2, Laws.Step, Con{Laws.Step{now, c}, rest}, 1n+j), db)) : R.Db}:
-  %Equal.sym(List<&2, R.Cmd>, eff(c, R.db.at(now, db)), Nil{}, e0) : {Laws.final(R.exec_all(ltake(R.Cmd, k, List.append(&2, R.Cmd, _, seffs(rest, R.db_of(R.exec(c, R.db.at(now, db)))))), R.db.at(0n, db))) == R.db.at(0n, Laws.run_timed(List.take(&2, Laws.Step, Con{Laws.Step{now, c}, rest}, 1n+j), db)) : R.Db}
-  %none_db(c, now, db, e0) : {Laws.final(R.exec_all(ltake(R.Cmd, k, seffs(rest, R.db_of(R.exec(c, R.db.at(now, db))))), _)) == R.db.at(0n, Laws.run_timed(List.take(&2, Laws.Step, Con{Laws.Step{now, c}, rest}, 1n+j), db)) : R.Db}
-  p
+def ep_lift1(+e: A.Eff, -rest: List<&2, A.Eff>, +sel: Nat, +r: R.Ds, -k2: Nat, -x: List<&2, String>, +ex: {A.eff.args(e, sel) == [x] : List<&2, List<&2, String>>}, w: EP(rest, A.eff.sel(e, sel), rp1(e, sel, r), k2)) -> EP(Con{e, rest}, sel, r, 1n+k2):
+  (m2, h) = w
+  (1n+m2, ep_eq1(e, rest, sel, r, k2, m2, x, ex, h))
 
-def sep_none(+now: Nat, +c: R.Cmd, +rest: List<&2, Laws.Step>, +db: R.Db, -k: Nat, +e0: {eff(c, R.db.at(now, db)) == Nil{} : List<&2, R.Cmd>}, r: SEP(rest, R.db_of(R.exec(c, R.db.at(now, db))), k)) -> SEP(Con{Laws.Step{now, c}, rest}, db, k):
-  (+j, p) = r
-  (1n+j, sep_none.p(now, c, rest, db, k, j, e0, p))
-
-# a command whose effect is e leaves, at time 0, the database e leaves
-def one_db(+c: R.Cmd, +now: Nat, +db: R.Db, +e: R.Cmd, +e1: {eff(c, R.db.at(now, db)) == [e] : List<&2, R.Cmd>}) -> {R.db.at(0n, R.db_of(R.exec(c, R.db.at(now, db)))) == R.db_of(R.exec(e, R.db.at(0n, db))) : R.Db}:
-  Equal.trans(R.Db, R.db.at(0n, R.db_of(R.exec(c, R.db.at(now, db)))), Laws.final(R.exec_all(eff(c, R.db.at(now, db)), R.db.at(0n, R.db.at(now, db)))), R.db_of(R.exec(e, R.db.at(0n, db))),
-    Equal.sym(R.Db, Laws.final(R.exec_all(eff(c, R.db.at(now, db)), R.db.at(0n, R.db.at(now, db)))), R.db.at(0n, R.db_of(R.exec(c, R.db.at(now, db)))), effect_db(c, R.db.at(now, db))),
-    Equal.trans(R.Db, Laws.final(R.exec_all(eff(c, R.db.at(now, db)), R.db.at(0n, R.db.at(now, db)))), Laws.final(R.exec_all([e], R.db.at(0n, R.db.at(now, db)))), R.db_of(R.exec(e, R.db.at(0n, db))),
-      Equal.cong(List<&2, R.Cmd>, R.Db, z => Laws.final(R.exec_all(z, R.db.at(0n, R.db.at(now, db)))), eff(c, R.db.at(now, db)), [e], e1),
-      Equal.trans(R.Db, Laws.final(R.exec_all([e], R.db.at(0n, R.db.at(now, db)))), Laws.final(R.exec_all([e], R.db.at(0n, db))), R.db_of(R.exec(e, R.db.at(0n, db))),
-        Equal.cong(R.Db, R.Db, z => Laws.final(R.exec_all([e], z)), R.db.at(0n, R.db.at(now, db)), R.db.at(0n, db), at_at(0n, now, db)),
-        Equal.sym(R.Db, R.db_of(R.exec(e, R.db.at(0n, db))), Laws.final(R.exec_all([e], R.db.at(0n, db))), fin_cons(e, Nil{}, R.db.at(0n, db))))))
-
-def sep_one.p(+now: Nat, +c: R.Cmd, +rest: List<&2, Laws.Step>, +db: R.Db, +k2: Nat, +j: Nat, +e: R.Cmd, +e1: {eff(c, R.db.at(now, db)) == [e] : List<&2, R.Cmd>}, p: {Laws.final(R.exec_all(ltake(R.Cmd, k2, seffs(rest, R.db_of(R.exec(c, R.db.at(now, db))))), R.db.at(0n, R.db_of(R.exec(c, R.db.at(now, db)))))) == R.db.at(0n, Laws.run_timed(List.take(&2, Laws.Step, rest, j), R.db_of(R.exec(c, R.db.at(now, db))))) : R.Db})
-  -> {Laws.final(R.exec_all(ltake(R.Cmd, 1n+k2, seffs(Con{Laws.Step{now, c}, rest}, db)), R.db.at(0n, db))) == R.db.at(0n, Laws.run_timed(List.take(&2, Laws.Step, Con{Laws.Step{now, c}, rest}, 1n+j), db)) : R.Db}:
-  %Equal.sym(List<&2, R.Cmd>, eff(c, R.db.at(now, db)), [e], e1) : {Laws.final(R.exec_all(ltake(R.Cmd, 1n+k2, List.append(&2, R.Cmd, _, seffs(rest, R.db_of(R.exec(c, R.db.at(now, db)))))), R.db.at(0n, db))) == R.db.at(0n, Laws.run_timed(List.take(&2, Laws.Step, Con{Laws.Step{now, c}, rest}, 1n+j), db)) : R.Db}
-  %fin_cons(e, ltake(R.Cmd, k2, seffs(rest, R.db_of(R.exec(c, R.db.at(now, db))))), R.db.at(0n, db)) : {_ == R.db.at(0n, Laws.run_timed(List.take(&2, Laws.Step, Con{Laws.Step{now, c}, rest}, 1n+j), db)) : R.Db}
-  %one_db(c, now, db, e, e1) : {Laws.final(R.exec_all(ltake(R.Cmd, k2, seffs(rest, R.db_of(R.exec(c, R.db.at(now, db))))), _)) == R.db.at(0n, Laws.run_timed(List.take(&2, Laws.Step, Con{Laws.Step{now, c}, rest}, 1n+j), db)) : R.Db}
-  p
-
-def sep_one_more(+now: Nat, +c: R.Cmd, +rest: List<&2, Laws.Step>, +db: R.Db, +k2: Nat, +e: R.Cmd, +e1: {eff(c, R.db.at(now, db)) == [e] : List<&2, R.Cmd>}, r: SEP(rest, R.db_of(R.exec(c, R.db.at(now, db))), k2)) -> SEP(Con{Laws.Step{now, c}, rest}, db, 1n+k2):
-  (+j, p) = r
-  (1n+j, sep_one.p(now, c, rest, db, k2, j, e, e1, p))
-
-def sep_one(k: Nat, +now: Nat, +c: R.Cmd, +rest: List<&2, Laws.Step>, +db: R.Db, +e: R.Cmd, +e1: {eff(c, R.db.at(now, db)) == [e] : List<&2, R.Cmd>}, ih: @k2: Nat -> SEP(rest, R.db_of(R.exec(c, R.db.at(now, db))), k2)) -> SEP(Con{Laws.Step{now, c}, rest}, db, k):
+def ep_one(+e: A.Eff, -rest: List<&2, A.Eff>, +sel: Nat, +r: R.Ds, k: Nat, -x: List<&2, String>, +ex: {A.eff.args(e, sel) == [x] : List<&2, List<&2, String>>}, ih: @k2: Nat -> EP(rest, A.eff.sel(e, sel), rp1(e, sel, r), k2)) -> EP(Con{e, rest}, sel, r, k):
   match k:
     case 0n:
       (0n, {==})
-    case 1n++k2:
-      sep_one_more(now, c, rest, db, k2, e, e1, ih(k2))
+    case 1n+k2:
+      ep_lift1(e, rest, sel, r, k2, x, ex, ih(k2))
 
-def sep_step(+now: Nat, +c: R.Cmd, +rest: List<&2, Laws.Step>, +db: R.Db, k: Nat, o: OneEff(eff(c, R.db.at(now, db))), ih: @k2: Nat -> SEP(rest, R.db_of(R.exec(c, R.db.at(now, db))), k2)) -> SEP(Con{Laws.Step{now, c}, rest}, db, k):
-  match o:
-    case Inl{e0}:
-      sep_none(now, c, rest, db, k, e0, ih(k))
+# an effect of a SELECT and one entry: cut after the SELECT, or taken
+# whole
+def ep_eq2(+e: A.Eff, -rest: List<&2, A.Eff>, +sel: Nat, +r: R.Ds, -k3: Nat, -m2: Nat, -s: List<&2, String>, -x: List<&2, String>, +ex: {A.eff.args(e, sel) == [s, x] : List<&2, List<&2, String>>}, h: {Laws.zero(R.acts(A.file.acts(A.parse_all(ltake(List<&2, String>, k3, A.effs.args(rest, A.eff.sel(e, sel))))), rp1(e, sel, r))) == Laws.zero(rp(ltake(A.Eff, m2, rest), A.eff.sel(e, sel), rp1(e, sel, r))) : List<&2, R.Db>}) -> {Laws.zero(R.acts(A.file.acts(A.parse_all(ltake(List<&2, String>, 2n+k3, A.effs.args(Con{e, rest}, sel)))), r)) == Laws.zero(rp(ltake(A.Eff, 1n+m2, Con{e, rest}), sel, r)) : List<&2, R.Db>}:
+  %Equal.sym(List<&2, List<&2, String>>, A.eff.args(e, sel), [s, x], ex) : {Laws.zero(R.acts(A.file.acts(A.parse_all(ltake(List<&2, String>, 2n+k3, List.append(&2, List<&2, String>, _, A.effs.args(rest, A.eff.sel(e, sel)))))), r)) == Laws.zero(rp(ltake(A.Eff, m2, rest), A.eff.sel(e, sel), rp1(e, sel, r))) : List<&2, R.Db>}
+  %Equal.cong(List<&2, List<&2, String>>, R.Ds, z => R.acts(A.file.acts(A.parse_all(z)), r), A.eff.args(e, sel), [s, x], ex) : {Laws.zero(R.acts(A.file.acts(A.parse_all(ltake(List<&2, String>, k3, A.effs.args(rest, A.eff.sel(e, sel))))), _)) == Laws.zero(rp(ltake(A.Eff, m2, rest), A.eff.sel(e, sel), rp1(e, sel, r))) : List<&2, R.Db>}
+  h
+
+def ep_eq2a(+e: A.Eff, -rest: List<&2, A.Eff>, +sel: Nat, -r: R.Ds, -s: List<&2, String>, -x: List<&2, String>, +ex: {A.eff.args(e, sel) == [s, x] : List<&2, List<&2, String>>}, zs: {Laws.zero(R.acts(A.file.acts(A.parse_all([s])), r)) == Laws.zero(r) : List<&2, R.Db>}) -> {Laws.zero(R.acts(A.file.acts(A.parse_all(ltake(List<&2, String>, 1n, A.effs.args(Con{e, rest}, sel)))), r)) == Laws.zero(rp(ltake(A.Eff, 0n, Con{e, rest}), sel, r)) : List<&2, R.Db>}:
+  %Equal.sym(List<&2, List<&2, String>>, A.eff.args(e, sel), [s, x], ex) : {Laws.zero(R.acts(A.file.acts(A.parse_all(ltake(List<&2, String>, 1n, List.append(&2, List<&2, String>, _, A.effs.args(rest, A.eff.sel(e, sel)))))), r)) == Laws.zero(r) : List<&2, R.Db>}
+  zs
+
+def ep_lift2(+e: A.Eff, -rest: List<&2, A.Eff>, +sel: Nat, +r: R.Ds, -k3: Nat, -s: List<&2, String>, -x: List<&2, String>, +ex: {A.eff.args(e, sel) == [s, x] : List<&2, List<&2, String>>}, w: EP(rest, A.eff.sel(e, sel), rp1(e, sel, r), k3)) -> EP(Con{e, rest}, sel, r, 2n+k3):
+  (m2, h) = w
+  (1n+m2, ep_eq2(e, rest, sel, r, k3, m2, s, x, ex, h))
+
+def ep_two(+e: A.Eff, -rest: List<&2, A.Eff>, +sel: Nat, +r: R.Ds, k: Nat, -s: List<&2, String>, -x: List<&2, String>, +ex: {A.eff.args(e, sel) == [s, x] : List<&2, List<&2, String>>}, zs: {Laws.zero(R.acts(A.file.acts(A.parse_all([s])), r)) == Laws.zero(r) : List<&2, R.Db>}, ih: @k2: Nat -> EP(rest, A.eff.sel(e, sel), rp1(e, sel, r), k2)) -> EP(Con{e, rest}, sel, r, k):
+  match k:
+    case 0n:
+      (0n, {==})
+    case 1n:
+      (0n, ep_eq2a(e, rest, sel, r, s, x, ex, zs))
+    case 2n+k3:
+      ep_lift2(e, rest, sel, r, k3, s, x, ex, ih(k3))
+
+def ep_con(+e: A.Eff, -rest: List<&2, A.Eff>, +sel: Nat, +r: R.Ds, k: Nat, sh: Shp(A.eff.args(e, sel), r), ih: @k2: Nat -> EP(rest, A.eff.sel(e, sel), rp1(e, sel, r), k2)) -> EP(Con{e, rest}, sel, r, k):
+  match sh:
+    case Inl{p}:
+      (x, ex) = p
+      ep_one(e, rest, sel, r, k, x, ex, ih)
     case Inr{p}:
-      (e, e1) = p
-      sep_one(k, now, c, rest, db, e, e1, ih)
+      (s, p2) = p
+      (x, p3) = p2
+      (ex, zs) = p3
+      ep_two(e, rest, sel, r, k, s, x, ex, zs, ih)
 
-def seffs_prefix(ss: List<&2, Laws.Step>, +db: R.Db, k: Nat) -> SEP(ss, db, k):
-  match ss:
+def ep(es: List<&2, A.Eff>, +sel: Nat, +r: R.Ds, k: Nat) -> EP(es, sel, r, k):
+  match es:
     case Nil{}:
       match k:
         case 0n:
           (0n, {==})
-        case 1n+j:
+        case 1n+k2:
           (0n, {==})
-    case Con{Laws.Step{+now, +c}, +rest}:
-      sep_step(now, c, rest, db, k, eff_one(c, R.db.at(now, db)), k2 => seffs_prefix(rest, R.db_of(R.exec(c, R.db.at(now, db))), k2))
+    case Con{+e, rest}:
+      ep_con(e, rest, sel, r, k, shape(e, sel, r), k2 => ep(rest, A.eff.sel(e, sel), rp1(e, sel, r), k2))
 
-# the first k parsed entries are the first k entries parsed
-def ltake_parse(k: Nat, L: List<&2, List<&2, String>>) -> {ltake(R.Cmd, k, A.parse_all(L)) == A.parse_all(ltake(List<&2, String>, k, L)) : List<&2, R.Cmd>}:
-  match k L:
-    case 0n _:
-      {==}
-    case 1n+j Nil{}:
-      {==}
-    case 1n+j Con{r, rest}:
-      Equal.cong(List<&2, R.Cmd>, List<&2, R.Cmd>, z => R.parse(r) <> z, ltake(R.Cmd, j, A.parse_all(rest)), A.parse_all(ltake(List<&2, String>, j, rest)), ltake_parse(j, rest))
+# an act has no effect or one
+def OneE(es: List<&2, A.Eff>) -> Type:
+  Or({es == Nil{} : List<&2, A.Eff>}, Exists(A.Eff, e => {es == [e] : List<&2, A.Eff>}))
+
+def one_if(b: Bool, +e: A.Eff) -> OneE(A.act.if(b, e)):
+  match b:
+    case True{}:
+      Inr{(e, {==})}
+    case False{}:
+      Inl{{==}}
+
+def one_swap(+a: Nat, +b: Nat, p: Bool & R.Ds) -> OneE(tmid(A.act.swap(a, b, p))):
+  (ok, ds) = p
+  one_if(ok, A.ESwap{a, b})
+
+def one_purge(+k: String, +j: Nat, p: Bool & R.Ds) -> OneE(tmid(A.act.purge(k, j, p))):
+  (ok, ds) = p
+  one_if(ok, A.EDb{j, R.Del{[k]}})
+
+def one_move(+k: String, +i: Nat, +j: Nat, p: Bool & R.Ds) -> OneE(tmid(A.act.move(k, i, j, p))):
+  (ok, ds) = p
+  one_if(ok, A.EMove{k, i, j})
+
+def one_at(+i: Nat, -es: List<&2, R.Cmd>, oe: OneEff(es)) -> OneE(A.at_db(i, es)):
+  match oe:
+    case Inl{e0}:
+      %Equal.sym(List<&2, R.Cmd>, es, Nil{}, e0) : OneE(A.at_db(i, _))
+      Inl{{==}}
+    case Inr{p}:
+      (e, e1) = p
+      %Equal.sym(List<&2, R.Cmd>, es, [e], e1) : OneE(A.at_db(i, _))
+      Inr{(A.EDb{i, e}, {==})}
+
+def one_run(+c: R.Cmd, o: R.Ds) -> OneE(aeff(R.ARun{c}, o)):
+  match o:
+    case R.Ds{+d, +pre, +post}:
+      %run_split(c, d) : OneE(tmid(A.act.run(List.length(&2, R.Db, pre), _, pre, post)))
+      one_at(List.length(&2, R.Db, pre), eff(c, d), eff_one(c, d))
+
+def one_eff(t: R.Act, +o: R.Ds) -> OneE(aeff(t, o)):
+  match t:
+    case R.ARun{+c}:
+      one_run(c, o)
+    case R.AFocus{j}:
+      Inl{{==}}
+    case R.ASwap{+a, +b}:
+      one_swap(a, b, R.ds.swap(a, b, o))
+    case R.APurge{+k, +j}:
+      one_purge(k, j, R.ds.purge(k, j, o))
+    case R.AMove{+k, +j}:
+      one_move(k, R.ds.index(o), j, R.ds.move(k, j, o))
+    case R.AWipe{}:
+      Inr{(A.EWipe{}, {==})}
+
+def SEP(ss: List<&2, Laws.Step>, x: R.Ds, r: R.Ds, sel: Nat, m: Nat) -> Type:
+  Exists(Nat, j => {Laws.zero(rp(ltake(A.Eff, m, seffs(ss, x)), sel, r)) == Laws.zero(Laws.run_timed(List.take(&2, Laws.Step, ss, j), x)) : List<&2, R.Db>})
+
+def inv_ez(-r: R.Ds, -x: R.Ds, -sel: Nat, -n: Nat, st: Inv(r, x, sel) & Len(x, n)) -> {Laws.zero(r) == Laws.zero(x) : List<&2, R.Db>}:
+  (inv, ln) = st
+  (ez, q) = inv
+  ez
+
+def st_at(+now: Nat, +x: R.Ds, -r: R.Ds, -sel: Nat, -n: Nat, st: Inv(r, x, sel) & Len(x, n)) -> Inv(r, R.ds.at(now, x), sel) & Len(R.ds.at(now, x), n):
+  (inv, ln) = st
+  inv_z(r, x, R.ds.at(now, x), sel, n, z_at(now, x), inv, ln)
+
+def post_nil(-t: R.Act, -o: R.Ds, -r: R.Ds, -sel: Nat, -n: Nat, e0: {aeff(t, o) == Nil{} : List<&2, A.Eff>}, post: Post(t, o, r, sel, n)) -> Inv(r, R.ds_of(R.act(t, o)), sel) & Len(R.ds_of(R.act(t, o)), n):
+  %e0 : Inv(rp(_, sel, r), R.ds_of(R.act(t, o)), A.effs.sel(_, sel)) & Len(R.ds_of(R.act(t, o)), n)
+  post
+
+def post_one(-t: R.Act, -o: R.Ds, -r: R.Ds, -sel: Nat, -n: Nat, -ev: A.Eff, e1: {aeff(t, o) == [ev] : List<&2, A.Eff>}, post: Post(t, o, r, sel, n)) -> Inv(rp1(ev, sel, r), R.ds_of(R.act(t, o)), A.eff.sel(ev, sel)) & Len(R.ds_of(R.act(t, o)), n):
+  %e1 : Inv(rp(_, sel, r), R.ds_of(R.act(t, o)), A.effs.sel(_, sel)) & Len(R.ds_of(R.act(t, o)), n)
+  post
+
+def sep_lift(-now: Nat, -a: R.Act, -rest: List<&2, Laws.Step>, -x: R.Ds, -r: R.Ds, -sel: Nat, -m: Nat, w: SEP(rest, Laws.run_at(Laws.Step{now, a}, x), r, sel, m)) -> Exists(Nat, j => {Laws.zero(rp(ltake(A.Eff, m, seffs(rest, Laws.run_at(Laws.Step{now, a}, x))), sel, r)) == Laws.zero(Laws.run_timed(List.take(&2, Laws.Step, Con{Laws.Step{now, a}, rest}, j), x)) : List<&2, R.Db>}):
+  (j2, h) = w
+  (1n+j2, h)
+
+def sep_none(-now: Nat, -a: R.Act, -rest: List<&2, Laws.Step>, -x: R.Ds, +r: R.Ds, +sel: Nat, +n: Nat, m: Nat, +e0: {aeff(a, R.ds.at(now, x)) == Nil{} : List<&2, A.Eff>}, post: Post(a, R.ds.at(now, x), r, sel, n), ih: @r2: R.Ds -> @s2: Nat -> @m2: Nat -> Inv(r2, Laws.run_at(Laws.Step{now, a}, x), s2) & Len(Laws.run_at(Laws.Step{now, a}, x), n) -> SEP(rest, Laws.run_at(Laws.Step{now, a}, x), r2, s2, m2)) -> SEP(Con{Laws.Step{now, a}, rest}, x, r, sel, m):
+  %Equal.sym(List<&2, A.Eff>, aeff(a, R.ds.at(now, x)), Nil{}, e0) : Exists(Nat, j => {Laws.zero(rp(ltake(A.Eff, m, List.append(&2, A.Eff, _, seffs(rest, Laws.run_at(Laws.Step{now, a}, x)))), sel, r)) == Laws.zero(Laws.run_timed(List.take(&2, Laws.Step, Con{Laws.Step{now, a}, rest}, j), x)) : List<&2, R.Db>})
+  sep_lift(now, a, rest, x, r, sel, m, ih(r, sel, m, post_nil(a, R.ds.at(now, x), r, sel, n, e0, post)))
+
+def sep_some(+now: Nat, +a: R.Act, -rest: List<&2, Laws.Step>, +x: R.Ds, +r: R.Ds, +sel: Nat, +n: Nat, +sm: {KV.small(n) == True{} : Bool}, m: Nat, +ev: A.Eff, +e1: {aeff(a, R.ds.at(now, x)) == [ev] : List<&2, A.Eff>}, st: Inv(r, x, sel) & Len(x, n), ih: @r2: R.Ds -> @s2: Nat -> @m2: Nat -> Inv(r2, Laws.run_at(Laws.Step{now, a}, x), s2) & Len(Laws.run_at(Laws.Step{now, a}, x), n) -> SEP(rest, Laws.run_at(Laws.Step{now, a}, x), r2, s2, m2)) -> SEP(Con{Laws.Step{now, a}, rest}, x, r, sel, m):
+  match m:
+    case 0n:
+      (0n, inv_ez(r, x, sel, n, st))
+    case 1n+m2:
+      %Equal.sym(List<&2, A.Eff>, aeff(a, R.ds.at(now, x)), [ev], e1) : Exists(Nat, j => {Laws.zero(rp(ltake(A.Eff, 1n+m2, List.append(&2, A.Eff, _, seffs(rest, Laws.run_at(Laws.Step{now, a}, x)))), sel, r)) == Laws.zero(Laws.run_timed(List.take(&2, Laws.Step, Con{Laws.Step{now, a}, rest}, j), x)) : List<&2, R.Db>})
+      sep_lift(now, a, rest, x, rp1(ev, sel, r), A.eff.sel(ev, sel), m2, ih(rp1(ev, sel, r), A.eff.sel(ev, sel), m2, post_one(a, R.ds.at(now, x), r, sel, n, ev, e1, act_inv(a, R.ds.at(now, x), r, sel, n, sm, st_at(now, x, r, sel, n, st)))))
+
+def sep_con(+now: Nat, +a: R.Act, -rest: List<&2, Laws.Step>, +x: R.Ds, +r: R.Ds, +sel: Nat, +n: Nat, +sm: {KV.small(n) == True{} : Bool}, m: Nat, st: Inv(r, x, sel) & Len(x, n), oe: OneE(aeff(a, R.ds.at(now, x))), ih: @r2: R.Ds -> @s2: Nat -> @m2: Nat -> Inv(r2, Laws.run_at(Laws.Step{now, a}, x), s2) & Len(Laws.run_at(Laws.Step{now, a}, x), n) -> SEP(rest, Laws.run_at(Laws.Step{now, a}, x), r2, s2, m2)) -> SEP(Con{Laws.Step{now, a}, rest}, x, r, sel, m):
+  match oe:
+    case Inl{e0}:
+      sep_none(now, a, rest, x, r, sel, n, m, e0, act_inv(a, R.ds.at(now, x), r, sel, n, sm, st_at(now, x, r, sel, n, st)), ih)
+    case Inr{p}:
+      (ev, e1) = p
+      sep_some(now, a, rest, x, r, sel, n, sm, m, ev, e1, st, ih)
+
+def sep(ss: List<&2, Laws.Step>, +x: R.Ds, +r: R.Ds, +sel: Nat, +n: Nat, +sm: {KV.small(n) == True{} : Bool}, m: Nat, st: Inv(r, x, sel) & Len(x, n)) -> SEP(ss, x, r, sel, m):
+  match ss:
+    case Nil{}:
+      match m:
+        case 0n:
+          (0n, inv_ez(r, x, sel, n, st))
+        case 1n+m2:
+          (0n, inv_ez(r, x, sel, n, st))
+    case Con{Laws.Step{+now, +a}, +rest}:
+      sep_con(now, a, rest, x, r, sel, n, sm, m, st, one_eff(a, R.ds.at(now, x)), r2 => s2 => m2 => st2 => sep(rest, Laws.run_at(Laws.Step{now, a}, x), r2, s2, n, sm, m2, st2))
 
 # Recovering a cut file
 # ---------------------
+# The loader reads the k whole entries in front of the cut (load_cut_go):
+# they replay as the first m effects (ep), and those as the first j acts
+# (sep).
 
-# the k whole entries in front of a cut replay the first k effects
-def cut_db(+hist: List<&2, Laws.Run>, -c: String, +k: Nat, -r: String, p1: {A.load.go(String.length(c), c, A.entry(c), Nil{}) == (List.reverse.go(&2, List<&2, String>, Nil{}, ltake(List<&2, String>, k, A.args_all(all_effs(hist)))), r) : List<&2, List<&2, String>> & String}) -> {Pair.fst(R.Db, String, A.restore(c)) == Laws.final(R.exec_all(ltake(R.Cmd, k, seffs(Laws.commands(hist), R.db.empty())), R.db.at(0n, R.db.empty()))) : R.Db}:
-  %Equal.sym(List<&2, List<&2, String>> & String, A.load.go(String.length(c), c, A.entry(c), Nil{}), (List.reverse.go(&2, List<&2, String>, Nil{}, ltake(List<&2, String>, k, A.args_all(all_effs(hist)))), r), p1) : {Pair.fst(R.Db, String, A.restore.of(_)) == Laws.final(R.exec_all(ltake(R.Cmd, k, seffs(Laws.commands(hist), R.db.empty())), R.db.at(0n, R.db.empty()))) : R.Db}
-  %ltake_parse(k, A.args_all(all_effs(hist))) : {A.db_after(R.exec_all(_, R.db.empty())) == Laws.final(R.exec_all(ltake(R.Cmd, k, seffs(Laws.commands(hist), R.db.empty())), R.db.at(0n, R.db.empty()))) : R.Db}
-  %parse_all_effs(hist) : {A.db_after(R.exec_all(ltake(R.Cmd, k, _), R.db.empty())) == Laws.final(R.exec_all(ltake(R.Cmd, k, seffs(Laws.commands(hist), R.db.empty())), R.db.at(0n, R.db.empty()))) : R.Db}
-  %all_effs_cmds(hist) : {A.db_after(R.exec_all(ltake(R.Cmd, k, _), R.db.empty())) == Laws.final(R.exec_all(ltake(R.Cmd, k, seffs(Laws.commands(hist), R.db.empty())), R.db.at(0n, R.db.empty()))) : R.Db}
-  %eta_l(R.exec_all(ltake(R.Cmd, k, seffs(Laws.commands(hist), R.db.empty())), R.db.empty())) : {A.db_after(_) == Laws.final(_) : R.Db}
-  {==}
+def cut_sep(+hist: List<&2, Laws.Run>, +n: Nat, -c: String, -k: Nat, -m: Nat, e_r: {Laws.zero(Pair.fst(R.Ds, String, A.restore(c, n))) == Laws.zero(R.acts(A.file.acts(A.parse_all(ltake(List<&2, String>, k, A.effs.args(all_effs(hist, n), 0n)))), R.ds.empty(n))) : List<&2, R.Db>}, h1: {Laws.zero(R.acts(A.file.acts(A.parse_all(ltake(List<&2, String>, k, A.effs.args(all_effs(hist, n), 0n)))), R.ds.empty(n))) == Laws.zero(rp(ltake(A.Eff, m, all_effs(hist, n)), 0n, R.ds.empty(n))) : List<&2, R.Db>}, w: SEP(Laws.commands(hist), R.ds.empty(n), R.ds.empty(n), 0n, m)) -> Exists(Nat, j => {Laws.zero(Pair.fst(R.Ds, String, A.restore(c, n))) == Laws.zero(Laws.held(hist, n, j)) : List<&2, R.Db>}):
+  (j, h2) = w
+  (j, Equal.trans(List<&2, R.Db>, Laws.zero(Pair.fst(R.Ds, String, A.restore(c, n))), Laws.zero(R.acts(A.file.acts(A.parse_all(ltake(List<&2, String>, k, A.effs.args(all_effs(hist, n), 0n)))), R.ds.empty(n))), Laws.zero(Laws.held(hist, n, j)), e_r,
+    Equal.trans(List<&2, R.Db>, Laws.zero(R.acts(A.file.acts(A.parse_all(ltake(List<&2, String>, k, A.effs.args(all_effs(hist, n), 0n)))), R.ds.empty(n))), Laws.zero(rp(ltake(A.Eff, m, all_effs(hist, n)), 0n, R.ds.empty(n))), Laws.zero(Laws.held(hist, n, j)), h1,
+      Equal.trans(List<&2, R.Db>, Laws.zero(rp(ltake(A.Eff, m, all_effs(hist, n)), 0n, R.ds.empty(n))), Laws.zero(rp(ltake(A.Eff, m, seffs(Laws.commands(hist), R.ds.empty(n))), 0n, R.ds.empty(n))), Laws.zero(Laws.held(hist, n, j)),
+        Equal.cong(List<&2, A.Eff>, List<&2, R.Db>, z => Laws.zero(rp(ltake(A.Eff, m, z), 0n, R.ds.empty(n))), all_effs(hist, n), seffs(Laws.commands(hist), R.ds.empty(n)), Equal.sym(List<&2, A.Eff>, seffs(Laws.commands(hist), R.ds.empty(n)), all_effs(hist, n), all_effs_cmds(hist, n))),
+        h2))))
 
-# and so do the first j commands, for some j
-def cut_held(+hist: List<&2, Laws.Run>, -c: String, -k: Nat, d0: {Pair.fst(R.Db, String, A.restore(c)) == Laws.final(R.exec_all(ltake(R.Cmd, k, seffs(Laws.commands(hist), R.db.empty())), R.db.at(0n, R.db.empty()))) : R.Db}, ep: SEP(Laws.commands(hist), R.db.empty(), k)) -> Exists(Nat, j => {Pair.fst(R.Db, String, A.restore(c)) == R.db.at(0n, Laws.held(hist, j)) : R.Db}):
-  (+j, q) = ep
-  (j, Equal.trans(R.Db, Pair.fst(R.Db, String, A.restore(c)), Laws.final(R.exec_all(ltake(R.Cmd, k, seffs(Laws.commands(hist), R.db.empty())), R.db.at(0n, R.db.empty()))), R.db.at(0n, Laws.held(hist, j)), d0, q))
+def cut_ep(+hist: List<&2, Laws.Run>, +n: Nat, +sm: {KV.small(n) == True{} : Bool}, -c: String, -k: Nat, e_r: {Laws.zero(Pair.fst(R.Ds, String, A.restore(c, n))) == Laws.zero(R.acts(A.file.acts(A.parse_all(ltake(List<&2, String>, k, A.effs.args(all_effs(hist, n), 0n)))), R.ds.empty(n))) : List<&2, R.Db>}, w: EP(all_effs(hist, n), 0n, R.ds.empty(n), k)) -> Exists(Nat, j => {Laws.zero(Pair.fst(R.Ds, String, A.restore(c, n))) == Laws.zero(Laws.held(hist, n, j)) : List<&2, R.Db>}):
+  (m, h1) = w
+  cut_sep(hist, n, c, k, m, e_r, h1, sep(Laws.commands(hist), R.ds.empty(n), R.ds.empty(n), 0n, n, sm, m, (({==}, ({==}, {==})), len_empty(n))))
 
-def cut_fin(+hist: List<&2, Laws.Run>, -c: String, res: Cut(String.length(c), c, Nil{}, A.args_all(all_effs(hist)))) -> Exists(Nat, j => {Pair.fst(R.Db, String, A.restore(c)) == R.db.at(0n, Laws.held(hist, j)) : R.Db}):
-  (+k, q) = res
+def cut_fin2(+hist: List<&2, Laws.Run>, +n: Nat, +sm: {KV.small(n) == True{} : Bool}, +c: String, res: Cut(String.length(c), c, Nil{}, A.effs.args(all_effs(hist, n), 0n))) -> Exists(Nat, j => {Laws.zero(Pair.fst(R.Ds, String, A.restore(c, n))) == Laws.zero(Laws.held(hist, n, j)) : List<&2, R.Db>}):
+  (k, q) = res
   (r, pq) = q
   (p1, p2) = pq
-  cut_held(hist, c, k, cut_db(hist, c, k, r, p1), seffs_prefix(Laws.commands(hist), R.db.empty(), k))
+  cut_ep(hist, n, sm, c, k, Equal.cong(List<&2, List<&2, String>> & String, List<&2, R.Db>, z => Laws.zero(Pair.fst(R.Ds, String, A.restore.of(z, n))), A.load.go(String.length(c), c, A.entry(c), Nil{}), (List.reverse.go(&2, List<&2, String>, Nil{}, ltake(List<&2, String>, k, A.effs.args(all_effs(hist, n), 0n))), r), p1), ep(all_effs(hist, n), 0n, R.ds.empty(n), k))
 
-def Laws.recover_cut(hist, c, d, e):
-  cut_fin(hist, c, load_cut_go(A.args_all(all_effs(hist)), c, d, String.length(c), Nil{})(aof_entries(hist, c, d, e))(le_refl(String.length(c))))
+def Laws.recover_cut(hist, n, sm, c, d, e):
+  cut_fin2(hist, n, sm, c, load_cut_go(A.effs.args(all_effs(hist, n), 0n), c, d, String.length(c), Nil{})(aof_entries(hist, n, c, d, e))(le_refl(String.length(c))))
+
+# Several databases
+# -----------------
+
+def Laws.focus_keeps(j, ds):
+  focus_z(j, ds)
+
+def Laws.focus_on(j, ds, y, e):
+  focus_i(j, ds, nth_lt(j, R.ds.list(ds), y)(e))
+
+def Laws.swap_dbs(a, b, ds, x, y, ea, eb):
+  %Equal.sym(Bool & R.Ds, R.ds.swap(a, b, ds), (True{}, R.ds.with(R.ds.put(a, y, R.ds.put(b, x, R.ds.list(ds))), ds)), swap_some(a, b, ds, x, y, ea, eb)) : {Laws.zero(R.ds_of(R.act.ok(_))) == R.ds.put(a, R.db.at(0n, y), R.ds.put(b, R.db.at(0n, x), Laws.zero(ds))) : List<&2, R.Db>}
+  z_with2(a, y, b, x, ds)
+
+def Laws.wipe_dbs(ds):
+  z_wipe(ds)
+
+def Laws.move_key(k, j, ds, y, v, e, ey, ne, en, ek):
+  %Equal.sym(Bool & R.Ds, R.ds.move(k, j, ds), (True{}, R.ds.moved(k, j, R.db.setx(y, k, v, e), ds)), move_some(k, j, ds, y, v, e, ey, ne, en, ek)) : {Laws.zero(R.ds_of(R.act.moved(_))) == R.ds.put(j, R.db.at(0n, R.db.setx(y, k, v, e)), Laws.zero(R.ds.unset(k, ds))) : List<&2, R.Db>}
+  z_with1(j, R.db.setx(y, k, v, e), R.ds.unset(k, ds))
+
 # Sessions
 # ========
 # The general path (S.gen) folds a batch with its replies and its effects
-# in reverse, as exec_all and exec_log do. rep1, eff_if and db_if spell
-# one command of it: the reply it sends, if any, and, when it runs on the
-# database (S.ran), its effects and the database after it; greps, gconn
-# and gsrv spell a batch's replies, connection and server by plain
-# recursion. gen_spec makes the fold these, with the effects and the
-# database of the commands that ran (S.plan) as effs and run give them.
-# A batch of database commands from a client that is ready runs every
-# command and sends every reply, so gen is then exec_all (fast_eq); the
-# server's unzip hands gen the batch's commands in order (unzip_gen). A
-# client that has not authenticated stays so, and runs only the errors
-# the parser found (noauth_go).
+# in reverse. rep1 is the reply one command sends, if any, and S.acts.q
+# what it does to the databases (its acts), whose effects (aeffs) and
+# databases (R.acts) gen gives; greps, gconn and gsrv spell a batch's
+# replies, connection and server by plain recursion. gen_spec makes the
+# fold these, with the effects and the databases of the acts of the
+# commands that ran (S.plan). A batch of database commands from a client
+# that is ready runs every command on the focus and sends every reply, so
+# gen is then exec_all on the focus (fast_eq); the server's unzip hands
+# gen the batch's commands in order (unzip_gen). A client that has not
+# authenticated stays so, and runs only the errors the parser found and
+# moves of the focus (noauth_go).
 
 # the reply of a command of kind k that runs (ok) or is refused
-def rep.k(+k: S.Role, ok: Bool, +c: R.Cmd, +conn: S.Conn, +srv: S.Srv, +d: R.Db) -> Maybe<&2, R.Reply>:
+def rep.k(+k: S.Role, ok: Bool, +c: R.Cmd, +conn: S.Conn, +srv: S.Srv, +ds: R.Ds) -> Maybe<&2, R.Reply>:
   match k ok:
     case S.KSess{o} True{}:
-      S.own_reply(o, conn, srv, d)
+      S.own_reply(o, conn, srv, ds)
     case S.KSess{o} False{}:
       S.say(S.conn.mode(conn), S.e_noauth())
     case _ True{}:
-      S.say(S.conn.mode(conn), R.reply_of(R.exec(c, d)))
+      S.say(S.conn.mode(conn), R.reply_ds(R.act(R.ARun{c}, ds)))
     case _ False{}:
       S.say(S.conn.mode(conn), S.e_noauth())
 
 # the reply a command sends, if any (none after QUIT)
-def rep1(q: Bool, +c: R.Cmd, +conn: S.Conn, +srv: S.Srv, +d: R.Db) -> Maybe<&2, R.Reply>:
+def rep1(q: Bool, +c: R.Cmd, +conn: S.Conn, +srv: S.Srv, +ds: R.Ds) -> Maybe<&2, R.Reply>:
   match q:
     case True{}:
       None{}
     case False{}:
-      rep.k(S.kind(c), S.may(S.kind(c), conn, srv), c, conn, srv, d)
+      rep.k(S.kind(c), S.may(S.kind(c), conn, srv), c, conn, srv, ds)
 
-# a command's effects and the database after it, when it runs
-def eff_if(b: Bool, +c: R.Cmd, +d: R.Db) -> List<&2, R.Cmd>:
-  match b:
-    case True{}:
-      eff(c, d)
-    case False{}:
-      Nil{}
-
-def db_if(b: Bool, +c: R.Cmd, +d: R.Db) -> R.Db:
-  match b:
-    case True{}:
-      R.db_of(R.exec(c, d))
-    case False{}:
-      d
-
-def out_k(+k: S.Role, ok: Bool, +c: R.Cmd, +rs: List<&2, R.Reply>, +es: List<&2, R.Cmd>, +conn: S.Conn, +srv: S.Srv, +d: R.Db)
-  -> {S.Out{S.put(rep.k(k, ok, c, conn, srv, d), rs), List.reverse.go(&2, R.Cmd, eff_if(S.ran.k(k, ok), c, d), es), db_if(S.ran.k(k, ok), c, d)} == S.out.k(k, ok, c, rs, es, conn, srv, d) : S.Out}:
+def out_k(+k: S.Role, ok: Bool, +c: R.Cmd, +rs: List<&2, R.Reply>, +es: List<&2, A.Eff>, +conn: S.Conn, +srv: S.Srv, +ds: R.Ds)
+  -> {S.Out{S.put(rep.k(k, ok, c, conn, srv, ds), rs), List.reverse.go(&2, A.Eff, aeffs(S.acts.k(k, ok, c, conn, srv), ds), es), R.acts(S.acts.k(k, ok, c, conn, srv), ds)} == S.out.k(k, ok, c, rs, es, conn, srv, ds) : S.Out}:
   match k ok:
     case S.KSess{o} True{}:
+      %acts_split(S.own_acts(o, conn, srv), es, ds) : {S.Out{S.put(S.own_reply(o, conn, srv, ds), rs), List.reverse.go(&2, A.Eff, aeffs(S.own_acts(o, conn, srv), ds), es), R.acts(S.own_acts(o, conn, srv), ds)} == S.out.own(S.put(S.own_reply(o, conn, srv, ds), rs), _) : S.Out}
       {==}
     case S.KSess{o} False{}:
       {==}
     case S.KData{} True{}:
-      %run_split(c, d) : {S.Out{S.put(S.say(S.conn.mode(conn), R.reply_of(R.exec(c, d))), rs), List.reverse.go(&2, R.Cmd, eff(c, d), es), R.db_of(R.exec(c, d))} == S.out.data(rs, es, S.conn.mode(conn), _) : S.Out}
-      {==}
+      %act_split(R.ARun{c}, ds) : {S.Out{S.put(S.say(S.conn.mode(conn), R.reply_ds(R.act(R.ARun{c}, ds))), rs), List.reverse.go(&2, A.Eff, List.append(&2, A.Eff, aeff(R.ARun{c}, ds), Nil{}), es), R.ds_of(R.act(R.ARun{c}, ds))} == S.out.data(rs, es, S.conn.mode(conn), _) : S.Out}
+      Equal.cong(List<&2, A.Eff>, S.Out, z => S.Out{S.put(S.say(S.conn.mode(conn), R.reply_ds(R.act(R.ARun{c}, ds))), rs), List.reverse.go(&2, A.Eff, z, es), R.ds_of(R.act(R.ARun{c}, ds))}, List.append(&2, A.Eff, aeff(R.ARun{c}, ds), Nil{}), aeff(R.ARun{c}, ds), app_nil_e(aeff(R.ARun{c}, ds)))
     case S.KData{} False{}:
       {==}
     case S.KBad{} True{}:
-      %run_split(c, d) : {S.Out{S.put(S.say(S.conn.mode(conn), R.reply_of(R.exec(c, d))), rs), List.reverse.go(&2, R.Cmd, eff(c, d), es), R.db_of(R.exec(c, d))} == S.out.data(rs, es, S.conn.mode(conn), _) : S.Out}
-      {==}
+      %act_split(R.ARun{c}, ds) : {S.Out{S.put(S.say(S.conn.mode(conn), R.reply_ds(R.act(R.ARun{c}, ds))), rs), List.reverse.go(&2, A.Eff, List.append(&2, A.Eff, aeff(R.ARun{c}, ds), Nil{}), es), R.ds_of(R.act(R.ARun{c}, ds))} == S.out.data(rs, es, S.conn.mode(conn), _) : S.Out}
+      Equal.cong(List<&2, A.Eff>, S.Out, z => S.Out{S.put(S.say(S.conn.mode(conn), R.reply_ds(R.act(R.ARun{c}, ds))), rs), List.reverse.go(&2, A.Eff, z, es), R.ds_of(R.act(R.ARun{c}, ds))}, List.append(&2, A.Eff, aeff(R.ARun{c}, ds), Nil{}), aeff(R.ARun{c}, ds), app_nil_e(aeff(R.ARun{c}, ds)))
     case S.KBad{} False{}:
       {==}
 
-def out_q(q: Bool, +c: R.Cmd, +rs: List<&2, R.Reply>, +es: List<&2, R.Cmd>, +conn: S.Conn, +srv: S.Srv, +d: R.Db)
-  -> {S.Out{S.put(rep1(q, c, conn, srv, d), rs), List.reverse.go(&2, R.Cmd, eff_if(S.ran(q, c, conn, srv), c, d), es), db_if(S.ran(q, c, conn, srv), c, d)} == S.out.q(q, c, rs, es, conn, srv, d) : S.Out}:
+def out_q(q: Bool, +c: R.Cmd, +rs: List<&2, R.Reply>, +es: List<&2, A.Eff>, +conn: S.Conn, +srv: S.Srv, +ds: R.Ds)
+  -> {S.Out{S.put(rep1(q, c, conn, srv, ds), rs), List.reverse.go(&2, A.Eff, aeffs(S.acts.q(q, c, conn, srv), ds), es), R.acts(S.acts.q(q, c, conn, srv), ds)} == S.out.q(q, c, rs, es, conn, srv, ds) : S.Out}:
   match q:
     case True{}:
       {==}
     case False{}:
-      out_k(S.kind(c), S.may(S.kind(c), conn, srv), c, rs, es, conn, srv, d)
+      out_k(S.kind(c), S.may(S.kind(c), conn, srv), c, rs, es, conn, srv, ds)
 
 def opt_cons(m: Maybe<&2, R.Reply>, xs: List<&2, R.Reply>) -> List<&2, R.Reply>:
   match m:
@@ -6810,12 +8282,12 @@ def opt_cons(m: Maybe<&2, R.Reply>, xs: List<&2, R.Reply>) -> List<&2, R.Reply>:
       xs
 
 # the replies a batch sends, the connection and the server after it
-def greps(cs: List<&2, R.Cmd>, +conn: S.Conn, +srv: S.Srv, +d: R.Db) -> List<&2, R.Reply>:
+def greps(cs: List<&2, R.Cmd>, +conn: S.Conn, +srv: S.Srv, +ds: R.Ds) -> List<&2, R.Reply>:
   match cs:
     case Nil{}:
       Nil{}
     case Con{+c, rest}:
-      opt_cons(rep1(S.conn.quit(conn), c, conn, srv, d), greps(rest, S.next_conn(S.conn.quit(conn), c, conn, srv), S.next_srv(S.conn.quit(conn), c, conn, srv), db_if(S.ran(S.conn.quit(conn), c, conn, srv), c, d)))
+      opt_cons(rep1(S.conn.quit(conn), c, conn, srv, ds), greps(rest, S.next_conn(S.conn.quit(conn), c, conn, srv), S.next_srv(S.conn.quit(conn), c, conn, srv), R.acts(S.acts.q(S.conn.quit(conn), c, conn, srv), ds)))
 
 def gconn(cs: List<&2, R.Cmd>, +conn: S.Conn, +srv: S.Srv) -> S.Conn:
   match cs:
@@ -6838,73 +8310,38 @@ def rev_opt(m: Maybe<&2, R.Reply>, -xs: List<&2, R.Reply>, -rs: List<&2, R.Reply
     case None{}:
       {==}
 
-def rev_app_go(e: List<&2, R.Cmd>, -ys: List<&2, R.Cmd>, -acc: List<&2, R.Cmd>) -> {List.reverse.go(&2, R.Cmd, List.append(&2, R.Cmd, e, ys), acc) == List.reverse.go(&2, R.Cmd, ys, List.reverse.go(&2, R.Cmd, e, acc)) : List<&2, R.Cmd>}:
-  match e:
-    case Nil{}:
-      {==}
-    case Con{h, t}:
-      rev_app_go(t, ys, h <> acc)
-
-# the effects and the database of a command that runs or not, then more
-def effs_keep(b: Bool, +c: R.Cmd, +p: List<&2, R.Cmd>, +d: R.Db, +es: List<&2, R.Cmd>) -> {List.reverse.go(&2, R.Cmd, effs(List.append(&2, R.Cmd, S.keep(b, c), p), d), es) == List.reverse.go(&2, R.Cmd, effs(p, db_if(b, c, d)), List.reverse.go(&2, R.Cmd, eff_if(b, c, d), es)) : List<&2, R.Cmd>}:
-  match b:
-    case True{}:
-      rev_app_go(eff(c, d), effs(p, R.db_of(R.exec(c, d))), es)
-    case False{}:
-      {==}
-
-def run_keep(b: Bool, +c: R.Cmd, +p: List<&2, R.Cmd>, +d: R.Db) -> {rsnd(run(List.append(&2, R.Cmd, S.keep(b, c), p), d)) == rsnd(run(p, db_if(b, c, d))) : R.Db}:
-  match b:
-    case True{}:
-      %eta_l(run(p, R.db_of(R.exec(c, d)))) : {rsnd(R.exec_all.cons(R.reply_of(R.exec(c, d)), _)) == rsnd(run(p, R.db_of(R.exec(c, d)))) : R.Db}
-      {==}
-    case False{}:
-      {==}
-
-def gen5(-a1: List<&2, R.Reply>, -a2: List<&2, R.Reply>, -b1: List<&2, R.Cmd>, -b2: List<&2, R.Cmd>, -c: S.Conn, -s: S.Srv, -e1: R.Db, -e2: R.Db, ea: {a1 == a2 : List<&2, R.Reply>}, eb: {b1 == b2 : List<&2, R.Cmd>}, ee: {e1 == e2 : R.Db}) -> {S.Gen{a1, b1, c, s, e1} == S.Gen{a2, b2, c, s, e2} : S.Gen}:
+def gen5(-a1: List<&2, R.Reply>, -a2: List<&2, R.Reply>, -b1: List<&2, A.Eff>, -b2: List<&2, A.Eff>, -c: S.Conn, -s: S.Srv, -e1: R.Ds, -e2: R.Ds, ea: {a1 == a2 : List<&2, R.Reply>}, eb: {b1 == b2 : List<&2, A.Eff>}, ee: {e1 == e2 : R.Ds}) -> {S.Gen{a1, b1, c, s, e1} == S.Gen{a2, b2, c, s, e2} : S.Gen}:
   %ea : {S.Gen{a1, b1, c, s, e1} == S.Gen{_, b2, c, s, e2} : S.Gen}
   %eb : {S.Gen{a1, b1, c, s, e1} == S.Gen{a1, _, c, s, e2} : S.Gen}
   %ee : {S.Gen{a1, b1, c, s, e1} == S.Gen{a1, b1, c, s, _} : S.Gen}
   {==}
 
+# the effects of a command's acts, then of more acts, newest first
+def effs_step(+x: List<&2, R.Act>, +p: List<&2, R.Act>, +ds: R.Ds, -es: List<&2, A.Eff>) -> {List.reverse.go(&2, A.Eff, aeffs(List.append(&2, R.Act, x, p), ds), es) == List.reverse.go(&2, A.Eff, aeffs(p, R.acts(x, ds)), List.reverse.go(&2, A.Eff, aeffs(x, ds), es)) : List<&2, A.Eff>}:
+  %aeffs_app(x, p, ds) : {List.reverse.go(&2, A.Eff, _, es) == List.reverse.go(&2, A.Eff, aeffs(p, R.acts(x, ds)), List.reverse.go(&2, A.Eff, aeffs(x, ds), es)) : List<&2, A.Eff>}
+  Equal.sym(List<&2, A.Eff>, List.reverse.go(&2, A.Eff, aeffs(p, R.acts(x, ds)), List.reverse.go(&2, A.Eff, aeffs(x, ds), es)), List.reverse.go(&2, A.Eff, List.append(&2, A.Eff, aeffs(x, ds), aeffs(p, R.acts(x, ds))), es), rev_app_go_e(aeffs(x, ds), aeffs(p, R.acts(x, ds)), es))
+
 # gen is its spec
-def gen_spec(cs: List<&2, R.Cmd>, +rs: List<&2, R.Reply>, +es: List<&2, R.Cmd>, +conn: S.Conn, +srv: S.Srv, +d: R.Db) -> {S.Gen{List.reverse.go(&2, R.Reply, greps(cs, conn, srv, d), rs), List.reverse.go(&2, R.Cmd, effs(S.plan(cs, conn, srv), d), es), gconn(cs, conn, srv), gsrv(cs, conn, srv), rsnd(run(S.plan(cs, conn, srv), d))} == S.gen.go(cs, S.Gen{rs, es, conn, srv, d}) : S.Gen}:
+def gen_spec(cs: List<&2, R.Cmd>, +rs: List<&2, R.Reply>, +es: List<&2, A.Eff>, +conn: S.Conn, +srv: S.Srv, +ds: R.Ds) -> {S.Gen{List.reverse.go(&2, R.Reply, greps(cs, conn, srv, ds), rs), List.reverse.go(&2, A.Eff, aeffs(S.plan(cs, conn, srv), ds), es), gconn(cs, conn, srv), gsrv(cs, conn, srv), R.acts(S.plan(cs, conn, srv), ds)} == S.gen.go(cs, S.Gen{rs, es, conn, srv, ds}) : S.Gen}:
   match cs:
     case Nil{}:
       {==}
     case Con{+c, +rest}:
-      %out_q(S.conn.quit(conn), c, rs, es, conn, srv, d) : {S.Gen{List.reverse.go(&2, R.Reply, greps(Con{c, rest}, conn, srv, d), rs), List.reverse.go(&2, R.Cmd, effs(S.plan(Con{c, rest}, conn, srv), d), es), gconn(Con{c, rest}, conn, srv), gsrv(Con{c, rest}, conn, srv), rsnd(run(S.plan(Con{c, rest}, conn, srv), d))} == S.gen.go(rest, S.gen.mk(_, S.next_conn(S.conn.quit(conn), c, conn, srv), S.next_srv(S.conn.quit(conn), c, conn, srv))) : S.Gen}
-      %gen_spec(rest, S.put(rep1(S.conn.quit(conn), c, conn, srv, d), rs), List.reverse.go(&2, R.Cmd, eff_if(S.ran(S.conn.quit(conn), c, conn, srv), c, d), es), S.next_conn(S.conn.quit(conn), c, conn, srv), S.next_srv(S.conn.quit(conn), c, conn, srv), db_if(S.ran(S.conn.quit(conn), c, conn, srv), c, d)) : {S.Gen{List.reverse.go(&2, R.Reply, greps(Con{c, rest}, conn, srv, d), rs), List.reverse.go(&2, R.Cmd, effs(S.plan(Con{c, rest}, conn, srv), d), es), gconn(Con{c, rest}, conn, srv), gsrv(Con{c, rest}, conn, srv), rsnd(run(S.plan(Con{c, rest}, conn, srv), d))} == _ : S.Gen}
-      Equal.sym(S.Gen, S.Gen{List.reverse.go(&2, R.Reply, greps(rest, S.next_conn(S.conn.quit(conn), c, conn, srv), S.next_srv(S.conn.quit(conn), c, conn, srv), db_if(S.ran(S.conn.quit(conn), c, conn, srv), c, d)), S.put(rep1(S.conn.quit(conn), c, conn, srv, d), rs)), List.reverse.go(&2, R.Cmd, effs(S.plan(rest, S.next_conn(S.conn.quit(conn), c, conn, srv), S.next_srv(S.conn.quit(conn), c, conn, srv)), db_if(S.ran(S.conn.quit(conn), c, conn, srv), c, d)), List.reverse.go(&2, R.Cmd, eff_if(S.ran(S.conn.quit(conn), c, conn, srv), c, d), es)), gconn(rest, S.next_conn(S.conn.quit(conn), c, conn, srv), S.next_srv(S.conn.quit(conn), c, conn, srv)), gsrv(rest, S.next_conn(S.conn.quit(conn), c, conn, srv), S.next_srv(S.conn.quit(conn), c, conn, srv)), rsnd(run(S.plan(rest, S.next_conn(S.conn.quit(conn), c, conn, srv), S.next_srv(S.conn.quit(conn), c, conn, srv)), db_if(S.ran(S.conn.quit(conn), c, conn, srv), c, d)))}, S.Gen{List.reverse.go(&2, R.Reply, greps(Con{c, rest}, conn, srv, d), rs), List.reverse.go(&2, R.Cmd, effs(S.plan(Con{c, rest}, conn, srv), d), es), gconn(Con{c, rest}, conn, srv), gsrv(Con{c, rest}, conn, srv), rsnd(run(S.plan(Con{c, rest}, conn, srv), d))},
-        gen5(List.reverse.go(&2, R.Reply, greps(rest, S.next_conn(S.conn.quit(conn), c, conn, srv), S.next_srv(S.conn.quit(conn), c, conn, srv), db_if(S.ran(S.conn.quit(conn), c, conn, srv), c, d)), S.put(rep1(S.conn.quit(conn), c, conn, srv, d), rs)), List.reverse.go(&2, R.Reply, opt_cons(rep1(S.conn.quit(conn), c, conn, srv, d), greps(rest, S.next_conn(S.conn.quit(conn), c, conn, srv), S.next_srv(S.conn.quit(conn), c, conn, srv), db_if(S.ran(S.conn.quit(conn), c, conn, srv), c, d))), rs),
-             List.reverse.go(&2, R.Cmd, effs(S.plan(rest, S.next_conn(S.conn.quit(conn), c, conn, srv), S.next_srv(S.conn.quit(conn), c, conn, srv)), db_if(S.ran(S.conn.quit(conn), c, conn, srv), c, d)), List.reverse.go(&2, R.Cmd, eff_if(S.ran(S.conn.quit(conn), c, conn, srv), c, d), es)), List.reverse.go(&2, R.Cmd, effs(List.append(&2, R.Cmd, S.keep(S.ran(S.conn.quit(conn), c, conn, srv), c), S.plan(rest, S.next_conn(S.conn.quit(conn), c, conn, srv), S.next_srv(S.conn.quit(conn), c, conn, srv))), d), es),
-             gconn(rest, S.next_conn(S.conn.quit(conn), c, conn, srv), S.next_srv(S.conn.quit(conn), c, conn, srv)), gsrv(rest, S.next_conn(S.conn.quit(conn), c, conn, srv), S.next_srv(S.conn.quit(conn), c, conn, srv)),
-             rsnd(run(S.plan(rest, S.next_conn(S.conn.quit(conn), c, conn, srv), S.next_srv(S.conn.quit(conn), c, conn, srv)), db_if(S.ran(S.conn.quit(conn), c, conn, srv), c, d))), rsnd(run(List.append(&2, R.Cmd, S.keep(S.ran(S.conn.quit(conn), c, conn, srv), c), S.plan(rest, S.next_conn(S.conn.quit(conn), c, conn, srv), S.next_srv(S.conn.quit(conn), c, conn, srv))), d)),
-             Equal.sym(List<&2, R.Reply>, List.reverse.go(&2, R.Reply, opt_cons(rep1(S.conn.quit(conn), c, conn, srv, d), greps(rest, S.next_conn(S.conn.quit(conn), c, conn, srv), S.next_srv(S.conn.quit(conn), c, conn, srv), db_if(S.ran(S.conn.quit(conn), c, conn, srv), c, d))), rs), List.reverse.go(&2, R.Reply, greps(rest, S.next_conn(S.conn.quit(conn), c, conn, srv), S.next_srv(S.conn.quit(conn), c, conn, srv), db_if(S.ran(S.conn.quit(conn), c, conn, srv), c, d)), S.put(rep1(S.conn.quit(conn), c, conn, srv, d), rs)), rev_opt(rep1(S.conn.quit(conn), c, conn, srv, d), greps(rest, S.next_conn(S.conn.quit(conn), c, conn, srv), S.next_srv(S.conn.quit(conn), c, conn, srv), db_if(S.ran(S.conn.quit(conn), c, conn, srv), c, d)), rs)),
-             Equal.sym(List<&2, R.Cmd>, List.reverse.go(&2, R.Cmd, effs(List.append(&2, R.Cmd, S.keep(S.ran(S.conn.quit(conn), c, conn, srv), c), S.plan(rest, S.next_conn(S.conn.quit(conn), c, conn, srv), S.next_srv(S.conn.quit(conn), c, conn, srv))), d), es), List.reverse.go(&2, R.Cmd, effs(S.plan(rest, S.next_conn(S.conn.quit(conn), c, conn, srv), S.next_srv(S.conn.quit(conn), c, conn, srv)), db_if(S.ran(S.conn.quit(conn), c, conn, srv), c, d)), List.reverse.go(&2, R.Cmd, eff_if(S.ran(S.conn.quit(conn), c, conn, srv), c, d), es)), effs_keep(S.ran(S.conn.quit(conn), c, conn, srv), c, S.plan(rest, S.next_conn(S.conn.quit(conn), c, conn, srv), S.next_srv(S.conn.quit(conn), c, conn, srv)), d, es)),
-             Equal.sym(R.Db, rsnd(run(List.append(&2, R.Cmd, S.keep(S.ran(S.conn.quit(conn), c, conn, srv), c), S.plan(rest, S.next_conn(S.conn.quit(conn), c, conn, srv), S.next_srv(S.conn.quit(conn), c, conn, srv))), d)), rsnd(run(S.plan(rest, S.next_conn(S.conn.quit(conn), c, conn, srv), S.next_srv(S.conn.quit(conn), c, conn, srv)), db_if(S.ran(S.conn.quit(conn), c, conn, srv), c, d))), run_keep(S.ran(S.conn.quit(conn), c, conn, srv), c, S.plan(rest, S.next_conn(S.conn.quit(conn), c, conn, srv), S.next_srv(S.conn.quit(conn), c, conn, srv)), d))))
+      %out_q(S.conn.quit(conn), c, rs, es, conn, srv, ds) : {S.Gen{List.reverse.go(&2, R.Reply, greps(Con{c, rest}, conn, srv, ds), rs), List.reverse.go(&2, A.Eff, aeffs(S.plan(Con{c, rest}, conn, srv), ds), es), gconn(Con{c, rest}, conn, srv), gsrv(Con{c, rest}, conn, srv), R.acts(S.plan(Con{c, rest}, conn, srv), ds)} == S.gen.go(rest, S.gen.mk(_, S.next_conn(S.conn.quit(conn), c, conn, srv), S.next_srv(S.conn.quit(conn), c, conn, srv))) : S.Gen}
+      %gen_spec(rest, S.put(rep1(S.conn.quit(conn), c, conn, srv, ds), rs), List.reverse.go(&2, A.Eff, aeffs(S.acts.q(S.conn.quit(conn), c, conn, srv), ds), es), S.next_conn(S.conn.quit(conn), c, conn, srv), S.next_srv(S.conn.quit(conn), c, conn, srv), R.acts(S.acts.q(S.conn.quit(conn), c, conn, srv), ds)) : {S.Gen{List.reverse.go(&2, R.Reply, greps(Con{c, rest}, conn, srv, ds), rs), List.reverse.go(&2, A.Eff, aeffs(S.plan(Con{c, rest}, conn, srv), ds), es), gconn(Con{c, rest}, conn, srv), gsrv(Con{c, rest}, conn, srv), R.acts(S.plan(Con{c, rest}, conn, srv), ds)} == _ : S.Gen}
+      gen5(List.reverse.go(&2, R.Reply, opt_cons(rep1(S.conn.quit(conn), c, conn, srv, ds), greps(rest, S.next_conn(S.conn.quit(conn), c, conn, srv), S.next_srv(S.conn.quit(conn), c, conn, srv), R.acts(S.acts.q(S.conn.quit(conn), c, conn, srv), ds))), rs), List.reverse.go(&2, R.Reply, greps(rest, S.next_conn(S.conn.quit(conn), c, conn, srv), S.next_srv(S.conn.quit(conn), c, conn, srv), R.acts(S.acts.q(S.conn.quit(conn), c, conn, srv), ds)), S.put(rep1(S.conn.quit(conn), c, conn, srv, ds), rs)), List.reverse.go(&2, A.Eff, aeffs(List.append(&2, R.Act, S.acts.q(S.conn.quit(conn), c, conn, srv), S.plan(rest, S.next_conn(S.conn.quit(conn), c, conn, srv), S.next_srv(S.conn.quit(conn), c, conn, srv))), ds), es), List.reverse.go(&2, A.Eff, aeffs(S.plan(rest, S.next_conn(S.conn.quit(conn), c, conn, srv), S.next_srv(S.conn.quit(conn), c, conn, srv)), R.acts(S.acts.q(S.conn.quit(conn), c, conn, srv), ds)), List.reverse.go(&2, A.Eff, aeffs(S.acts.q(S.conn.quit(conn), c, conn, srv), ds), es)), gconn(rest, S.next_conn(S.conn.quit(conn), c, conn, srv), S.next_srv(S.conn.quit(conn), c, conn, srv)), gsrv(rest, S.next_conn(S.conn.quit(conn), c, conn, srv), S.next_srv(S.conn.quit(conn), c, conn, srv)), R.acts(List.append(&2, R.Act, S.acts.q(S.conn.quit(conn), c, conn, srv), S.plan(rest, S.next_conn(S.conn.quit(conn), c, conn, srv), S.next_srv(S.conn.quit(conn), c, conn, srv))), ds), R.acts(S.plan(rest, S.next_conn(S.conn.quit(conn), c, conn, srv), S.next_srv(S.conn.quit(conn), c, conn, srv)), R.acts(S.acts.q(S.conn.quit(conn), c, conn, srv), ds)),
+        rev_opt(rep1(S.conn.quit(conn), c, conn, srv, ds), greps(rest, S.next_conn(S.conn.quit(conn), c, conn, srv), S.next_srv(S.conn.quit(conn), c, conn, srv), R.acts(S.acts.q(S.conn.quit(conn), c, conn, srv), ds)), rs),
+        effs_step(S.acts.q(S.conn.quit(conn), c, conn, srv), S.plan(rest, S.next_conn(S.conn.quit(conn), c, conn, srv), S.next_srv(S.conn.quit(conn), c, conn, srv)), ds, es),
+        Equal.sym(R.Ds, R.acts(S.plan(rest, S.next_conn(S.conn.quit(conn), c, conn, srv), S.next_srv(S.conn.quit(conn), c, conn, srv)), R.acts(S.acts.q(S.conn.quit(conn), c, conn, srv), ds)), R.acts(List.append(&2, R.Act, S.acts.q(S.conn.quit(conn), c, conn, srv), S.plan(rest, S.next_conn(S.conn.quit(conn), c, conn, srv), S.next_srv(S.conn.quit(conn), c, conn, srv))), ds), acts_app(S.acts.q(S.conn.quit(conn), c, conn, srv), S.plan(rest, S.next_conn(S.conn.quit(conn), c, conn, srv), S.next_srv(S.conn.quit(conn), c, conn, srv)), ds)))
 
-def Laws.gen_db(conn, srv, cmds, db):
-  %gen_spec(cmds, Nil{}, Nil{}, conn, srv, db) : {Laws.logged_db(S.logged.gen(_)) == Laws.final(R.exec_all(S.plan(cmds, conn, srv), db)) : R.Db}
-  %exec_all_run(S.plan(cmds, conn, srv), db) : {Laws.logged_db(S.logged.gen(S.Gen{List.reverse.go(&2, R.Reply, greps(cmds, conn, srv, db), Nil{}), List.reverse.go(&2, R.Cmd, effs(S.plan(cmds, conn, srv), db), Nil{}), gconn(cmds, conn, srv), gsrv(cmds, conn, srv), rsnd(run(S.plan(cmds, conn, srv), db))})) == Laws.final(_) : R.Db}
-  %eta_l(run(S.plan(cmds, conn, srv), db)) : {Laws.logged_db(S.logged.gen(S.Gen{List.reverse.go(&2, R.Reply, greps(cmds, conn, srv, db), Nil{}), List.reverse.go(&2, R.Cmd, effs(S.plan(cmds, conn, srv), db), Nil{}), gconn(cmds, conn, srv), gsrv(cmds, conn, srv), rsnd(run(S.plan(cmds, conn, srv), db))})) == Laws.final(_) : R.Db}
+def Laws.gen_db(conn, srv, cmds, ds):
+  %gen_spec(cmds, Nil{}, Nil{}, conn, srv, ds) : {Laws.logged_ds(S.logged.gen(_)) == R.acts(S.plan(cmds, conn, srv), ds) : R.Ds}
   {==}
 
-def app_nil(xs: List<&2, R.Cmd>) -> {List.append(&2, R.Cmd, xs, Nil{}) == xs : List<&2, R.Cmd>}:
-  match xs:
-    case Nil{}:
-      {==}
-    case Con{h, +t}:
-      Equal.cong(List<&2, R.Cmd>, List<&2, R.Cmd>, z => h <> z, List.append(&2, R.Cmd, t, Nil{}), t, app_nil(t))
-
-# a list reversed twice
-def rev_rev(+xs: List<&2, R.Cmd>) -> {List.reverse(&2, R.Cmd, List.reverse.go(&2, R.Cmd, xs, Nil{})) == xs : List<&2, R.Cmd>}:
-  Equal.trans(List<&2, R.Cmd>, List.reverse.go(&2, R.Cmd, List.reverse.go(&2, R.Cmd, xs, Nil{}), Nil{}), List.append(&2, R.Cmd, xs, Nil{}), xs, rev_go_app(xs, Nil{}, Nil{}), app_nil(xs))
-
-def Laws.gen_log(conn, srv, cmds, db):
-  %gen_spec(cmds, Nil{}, Nil{}, conn, srv, db) : {Laws.logged_es(S.logged.gen(_)) == Laws.effects(A.exec_log(S.plan(cmds, conn, srv), db)) : List<&2, R.Cmd>}
-  %log_go(S.plan(cmds, conn, srv), Nil{}, Nil{}, db) : {Laws.logged_es(S.logged.gen(S.Gen{List.reverse.go(&2, R.Reply, greps(cmds, conn, srv, db), Nil{}), List.reverse.go(&2, R.Cmd, effs(S.plan(cmds, conn, srv), db), Nil{}), gconn(cmds, conn, srv), gsrv(cmds, conn, srv), rsnd(run(S.plan(cmds, conn, srv), db))})) == Laws.effects(_) : List<&2, R.Cmd>}
-  rev_rev(effs(S.plan(cmds, conn, srv), db))
+def Laws.gen_log(conn, srv, cmds, ds):
+  %gen_spec(cmds, Nil{}, Nil{}, conn, srv, ds) : {Laws.logged_es(S.logged.gen(_)) == Laws.act_effects(S.plan(cmds, conn, srv), ds) : List<&2, A.Eff>}
+  %acts_split(S.plan(cmds, conn, srv), Nil{}, ds) : {List.reverse(&2, A.Eff, List.reverse.go(&2, A.Eff, aeffs(S.plan(cmds, conn, srv), ds), Nil{})) == List.reverse(&2, A.Eff, Pair.fst(List<&2, A.Eff>, R.Ds, _)) : List<&2, A.Eff>}
+  {==}
 
 # A batch of database commands only
 # ---------------------------------
@@ -6926,88 +8363,98 @@ def plain(cs: List<&2, R.Cmd>) -> Bool:
     case Con{c, rest}:
       Bool.and(not_sess(S.kind(c)), plain(rest))
 
+# the acts of commands of one database
+def runs(cs: List<&2, R.Cmd>) -> List<&2, R.Act>:
+  match cs:
+    case Nil{}:
+      Nil{}
+    case Con{c, rest}:
+      R.ARun{c} <> runs(rest)
+
 # a ready client (S.ready) runs each command of such a batch, sends each
 # reply, and stays ready, authenticated
-def fast_greps.k(k: S.Role, +c: R.Cmd, +rest: List<&2, R.Cmd>, +id: Nat, +a: Bool, +n: String, +srv: S.Srv, +d: R.Db,
-    ih: {greps(rest, S.Conn{id, True{}, n, S.MOn{}, False{}}, srv, R.db_of(R.exec(c, d))) == rfst(run(rest, R.db_of(R.exec(c, d)))) : List<&2, R.Reply>})
+def fast_greps.k(k: S.Role, +c: R.Cmd, +rest: List<&2, R.Cmd>, +id: Nat, +a: Bool, +n: String, +sel: Nat, +srv: S.Srv, +d: R.Db, +pre: List<&2, R.Db>, +post: List<&2, R.Db>,
+    ih: {greps(rest, S.Conn{id, True{}, n, S.MOn{}, False{}, sel}, srv, R.Ds{R.db_of(R.exec(c, d)), pre, post}) == rfst(run(rest, R.db_of(R.exec(c, d)))) : List<&2, R.Reply>})
   -> {not_sess(k) == True{} : Bool}
-  -> {S.authed(S.Conn{id, a, n, S.MOn{}, False{}}, srv) == True{} : Bool}
-  -> {opt_cons(rep.k(k, S.may(k, S.Conn{id, a, n, S.MOn{}, False{}}, srv), c, S.Conn{id, a, n, S.MOn{}, False{}}, srv, d), greps(rest, S.next_conn.k(k, S.may(k, S.Conn{id, a, n, S.MOn{}, False{}}, srv), S.Conn{id, a, n, S.MOn{}, False{}}, srv), S.next_srv.k(k, S.may(k, S.Conn{id, a, n, S.MOn{}, False{}}, srv), S.Conn{id, a, n, S.MOn{}, False{}}, srv), db_if(S.ran.k(k, S.may(k, S.Conn{id, a, n, S.MOn{}, False{}}, srv)), c, d))) == rfst(run(Con{c, rest}, d)) : List<&2, R.Reply>}:
+  -> {S.authed(S.Conn{id, a, n, S.MOn{}, False{}, sel}, srv) == True{} : Bool}
+  -> {opt_cons(rep.k(k, S.may(k, S.Conn{id, a, n, S.MOn{}, False{}, sel}, srv), c, S.Conn{id, a, n, S.MOn{}, False{}, sel}, srv, R.Ds{d, pre, post}), greps(rest, S.next_conn.k(k, S.may(k, S.Conn{id, a, n, S.MOn{}, False{}, sel}, srv), S.Conn{id, a, n, S.MOn{}, False{}, sel}, srv), S.next_srv.k(k, S.may(k, S.Conn{id, a, n, S.MOn{}, False{}, sel}, srv), S.Conn{id, a, n, S.MOn{}, False{}, sel}, srv), R.acts(S.acts.k(k, S.may(k, S.Conn{id, a, n, S.MOn{}, False{}, sel}, srv), c, S.Conn{id, a, n, S.MOn{}, False{}, sel}, srv), R.Ds{d, pre, post}))) == rfst(run(Con{c, rest}, d)) : List<&2, R.Reply>}:
   match k:
     case S.KSess{o}:
-      e => ea => Empty.absurd({opt_cons(rep.k(S.KSess{o}, S.may(S.KSess{o}, S.Conn{id, a, n, S.MOn{}, False{}}, srv), c, S.Conn{id, a, n, S.MOn{}, False{}}, srv, d), greps(rest, S.next_conn.k(S.KSess{o}, S.may(S.KSess{o}, S.Conn{id, a, n, S.MOn{}, False{}}, srv), S.Conn{id, a, n, S.MOn{}, False{}}, srv), S.next_srv.k(S.KSess{o}, S.may(S.KSess{o}, S.Conn{id, a, n, S.MOn{}, False{}}, srv), S.Conn{id, a, n, S.MOn{}, False{}}, srv), db_if(S.ran.k(S.KSess{o}, S.may(S.KSess{o}, S.Conn{id, a, n, S.MOn{}, False{}}, srv)), c, d))) == rfst(run(Con{c, rest}, d)) : List<&2, R.Reply>}, false_true(e))
+      e => ea => Empty.absurd({opt_cons(rep.k(S.KSess{o}, S.may(S.KSess{o}, S.Conn{id, a, n, S.MOn{}, False{}, sel}, srv), c, S.Conn{id, a, n, S.MOn{}, False{}, sel}, srv, R.Ds{d, pre, post}), greps(rest, S.next_conn.k(S.KSess{o}, S.may(S.KSess{o}, S.Conn{id, a, n, S.MOn{}, False{}, sel}, srv), S.Conn{id, a, n, S.MOn{}, False{}, sel}, srv), S.next_srv.k(S.KSess{o}, S.may(S.KSess{o}, S.Conn{id, a, n, S.MOn{}, False{}, sel}, srv), S.Conn{id, a, n, S.MOn{}, False{}, sel}, srv), R.acts(S.acts.k(S.KSess{o}, S.may(S.KSess{o}, S.Conn{id, a, n, S.MOn{}, False{}, sel}, srv), c, S.Conn{id, a, n, S.MOn{}, False{}, sel}, srv), R.Ds{d, pre, post}))) == rfst(run(Con{c, rest}, d)) : List<&2, R.Reply>}, false_true(e))
     case S.KData{}:
       e => ea =>
-        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, S.MOn{}, False{}}, srv), True{}, ea) : {opt_cons(rep.k(S.KData{}, _, c, S.Conn{id, a, n, S.MOn{}, False{}}, srv, d), greps(rest, S.Conn{id, _, n, S.after(S.MOn{}), False{}}, srv, db_if(S.ran.k(S.KData{}, _), c, d))) == rfst(run(Con{c, rest}, d)) : List<&2, R.Reply>}
-        %eta_l(run(rest, R.db_of(R.exec(c, d)))) : {R.reply_of(R.exec(c, d)) <> greps(rest, S.Conn{id, True{}, n, S.MOn{}, False{}}, srv, R.db_of(R.exec(c, d))) == rfst(R.exec_all.cons(R.reply_of(R.exec(c, d)), _)) : List<&2, R.Reply>}
-        Equal.cong(List<&2, R.Reply>, List<&2, R.Reply>, z => R.reply_of(R.exec(c, d)) <> z, greps(rest, S.Conn{id, True{}, n, S.MOn{}, False{}}, srv, R.db_of(R.exec(c, d))), rfst(run(rest, R.db_of(R.exec(c, d)))), ih)
+        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, S.MOn{}, False{}, sel}, srv), True{}, ea) : {opt_cons(rep.k(S.KData{}, _, c, S.Conn{id, a, n, S.MOn{}, False{}, sel}, srv, R.Ds{d, pre, post}), greps(rest, S.Conn{id, _, n, S.after(S.MOn{}), False{}, sel}, srv, R.acts(S.acts.k(S.KData{}, _, c, S.Conn{id, a, n, S.MOn{}, False{}, sel}, srv), R.Ds{d, pre, post}))) == rfst(run(Con{c, rest}, d)) : List<&2, R.Reply>}
+        %act_run(c, d, pre, post) : {opt_cons(Some{R.reply_ds(_)}, greps(rest, S.Conn{id, True{}, n, S.MOn{}, False{}, sel}, srv, R.ds_of(_))) == rfst(run(Con{c, rest}, d)) : List<&2, R.Reply>}
+        %eta_l(run(rest, R.db_of(R.exec(c, d)))) : {R.reply_of(R.exec(c, d)) <> greps(rest, S.Conn{id, True{}, n, S.MOn{}, False{}, sel}, srv, R.Ds{R.db_of(R.exec(c, d)), pre, post}) == rfst(R.exec_all.cons(R.reply_of(R.exec(c, d)), _)) : List<&2, R.Reply>}
+        Equal.cong(List<&2, R.Reply>, List<&2, R.Reply>, z => R.reply_of(R.exec(c, d)) <> z, greps(rest, S.Conn{id, True{}, n, S.MOn{}, False{}, sel}, srv, R.Ds{R.db_of(R.exec(c, d)), pre, post}), rfst(run(rest, R.db_of(R.exec(c, d)))), ih)
     case S.KBad{}:
       e => ea =>
-        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, S.MOn{}, False{}}, srv), True{}, ea) : {opt_cons(rep.k(S.KBad{}, True{}, c, S.Conn{id, a, n, S.MOn{}, False{}}, srv, d), greps(rest, S.Conn{id, _, n, S.after(S.MOn{}), False{}}, srv, db_if(S.ran.k(S.KBad{}, True{}), c, d))) == rfst(run(Con{c, rest}, d)) : List<&2, R.Reply>}
-        %eta_l(run(rest, R.db_of(R.exec(c, d)))) : {R.reply_of(R.exec(c, d)) <> greps(rest, S.Conn{id, True{}, n, S.MOn{}, False{}}, srv, R.db_of(R.exec(c, d))) == rfst(R.exec_all.cons(R.reply_of(R.exec(c, d)), _)) : List<&2, R.Reply>}
-        Equal.cong(List<&2, R.Reply>, List<&2, R.Reply>, z => R.reply_of(R.exec(c, d)) <> z, greps(rest, S.Conn{id, True{}, n, S.MOn{}, False{}}, srv, R.db_of(R.exec(c, d))), rfst(run(rest, R.db_of(R.exec(c, d)))), ih)
+        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, S.MOn{}, False{}, sel}, srv), True{}, ea) : {opt_cons(rep.k(S.KBad{}, True{}, c, S.Conn{id, a, n, S.MOn{}, False{}, sel}, srv, R.Ds{d, pre, post}), greps(rest, S.Conn{id, _, n, S.after(S.MOn{}), False{}, sel}, srv, R.acts(S.acts.k(S.KBad{}, True{}, c, S.Conn{id, a, n, S.MOn{}, False{}, sel}, srv), R.Ds{d, pre, post}))) == rfst(run(Con{c, rest}, d)) : List<&2, R.Reply>}
+        %act_run(c, d, pre, post) : {opt_cons(Some{R.reply_ds(_)}, greps(rest, S.Conn{id, True{}, n, S.MOn{}, False{}, sel}, srv, R.ds_of(_))) == rfst(run(Con{c, rest}, d)) : List<&2, R.Reply>}
+        %eta_l(run(rest, R.db_of(R.exec(c, d)))) : {R.reply_of(R.exec(c, d)) <> greps(rest, S.Conn{id, True{}, n, S.MOn{}, False{}, sel}, srv, R.Ds{R.db_of(R.exec(c, d)), pre, post}) == rfst(R.exec_all.cons(R.reply_of(R.exec(c, d)), _)) : List<&2, R.Reply>}
+        Equal.cong(List<&2, R.Reply>, List<&2, R.Reply>, z => R.reply_of(R.exec(c, d)) <> z, greps(rest, S.Conn{id, True{}, n, S.MOn{}, False{}, sel}, srv, R.Ds{R.db_of(R.exec(c, d)), pre, post}), rfst(run(rest, R.db_of(R.exec(c, d)))), ih)
 
-def fast_greps(cs: List<&2, R.Cmd>, +id: Nat, +a: Bool, +n: String, +srv: S.Srv, +d: R.Db)
-  -> {S.authed(S.Conn{id, a, n, S.MOn{}, False{}}, srv) == True{} : Bool}
+def fast_greps(cs: List<&2, R.Cmd>, +id: Nat, +a: Bool, +n: String, +sel: Nat, +srv: S.Srv, +d: R.Db, +pre: List<&2, R.Db>, +post: List<&2, R.Db>)
+  -> {S.authed(S.Conn{id, a, n, S.MOn{}, False{}, sel}, srv) == True{} : Bool}
   -> {plain(cs) == True{} : Bool}
-  -> {greps(cs, S.Conn{id, a, n, S.MOn{}, False{}}, srv, d) == rfst(run(cs, d)) : List<&2, R.Reply>}:
+  -> {greps(cs, S.Conn{id, a, n, S.MOn{}, False{}, sel}, srv, R.Ds{d, pre, post}) == rfst(run(cs, d)) : List<&2, R.Reply>}:
   match cs:
     case Nil{}:
       ea => ep => {==}
     case Con{+c, +rest}:
-      +ea => +ep => fast_greps.k(S.kind(c), c, rest, id, a, n, srv, d, fast_greps(rest, id, True{}, n, srv, R.db_of(R.exec(c, d)))({==})(and_r(not_sess(S.kind(c)), plain(rest))(ep)))(and_l(not_sess(S.kind(c)), plain(rest))(ep))(ea)
+      +ea => +ep => fast_greps.k(S.kind(c), c, rest, id, a, n, sel, srv, d, pre, post, fast_greps(rest, id, True{}, n, sel, srv, R.db_of(R.exec(c, d)), pre, post)({==})(and_r(not_sess(S.kind(c)), plain(rest))(ep)))(and_l(not_sess(S.kind(c)), plain(rest))(ep))(ea)
 
-def fast_plan.k(k: S.Role, +c: R.Cmd, +rest: List<&2, R.Cmd>, +id: Nat, +a: Bool, +n: String, +srv: S.Srv,
-    ih: {S.plan(rest, S.Conn{id, True{}, n, S.MOn{}, False{}}, srv) == rest : List<&2, R.Cmd>})
+def fast_plan.k(k: S.Role, +c: R.Cmd, +rest: List<&2, R.Cmd>, +id: Nat, +a: Bool, +n: String, +sel: Nat, +srv: S.Srv,
+    ih: {S.plan(rest, S.Conn{id, True{}, n, S.MOn{}, False{}, sel}, srv) == runs(rest) : List<&2, R.Act>})
   -> {not_sess(k) == True{} : Bool}
-  -> {S.authed(S.Conn{id, a, n, S.MOn{}, False{}}, srv) == True{} : Bool}
-  -> {List.append(&2, R.Cmd, S.keep(S.ran.k(k, S.may(k, S.Conn{id, a, n, S.MOn{}, False{}}, srv)), c), S.plan(rest, S.next_conn.k(k, S.may(k, S.Conn{id, a, n, S.MOn{}, False{}}, srv), S.Conn{id, a, n, S.MOn{}, False{}}, srv), S.next_srv.k(k, S.may(k, S.Conn{id, a, n, S.MOn{}, False{}}, srv), S.Conn{id, a, n, S.MOn{}, False{}}, srv))) == Con{c, rest} : List<&2, R.Cmd>}:
+  -> {S.authed(S.Conn{id, a, n, S.MOn{}, False{}, sel}, srv) == True{} : Bool}
+  -> {List.append(&2, R.Act, S.acts.k(k, S.may(k, S.Conn{id, a, n, S.MOn{}, False{}, sel}, srv), c, S.Conn{id, a, n, S.MOn{}, False{}, sel}, srv), S.plan(rest, S.next_conn.k(k, S.may(k, S.Conn{id, a, n, S.MOn{}, False{}, sel}, srv), S.Conn{id, a, n, S.MOn{}, False{}, sel}, srv), S.next_srv.k(k, S.may(k, S.Conn{id, a, n, S.MOn{}, False{}, sel}, srv), S.Conn{id, a, n, S.MOn{}, False{}, sel}, srv))) == runs(Con{c, rest}) : List<&2, R.Act>}:
   match k:
     case S.KSess{o}:
-      e => ea => Empty.absurd({List.append(&2, R.Cmd, S.keep(S.ran.k(S.KSess{o}, S.may(S.KSess{o}, S.Conn{id, a, n, S.MOn{}, False{}}, srv)), c), S.plan(rest, S.next_conn.k(S.KSess{o}, S.may(S.KSess{o}, S.Conn{id, a, n, S.MOn{}, False{}}, srv), S.Conn{id, a, n, S.MOn{}, False{}}, srv), S.next_srv.k(S.KSess{o}, S.may(S.KSess{o}, S.Conn{id, a, n, S.MOn{}, False{}}, srv), S.Conn{id, a, n, S.MOn{}, False{}}, srv))) == Con{c, rest} : List<&2, R.Cmd>}, false_true(e))
+      e => ea => Empty.absurd({List.append(&2, R.Act, S.acts.k(S.KSess{o}, S.may(S.KSess{o}, S.Conn{id, a, n, S.MOn{}, False{}, sel}, srv), c, S.Conn{id, a, n, S.MOn{}, False{}, sel}, srv), S.plan(rest, S.next_conn.k(S.KSess{o}, S.may(S.KSess{o}, S.Conn{id, a, n, S.MOn{}, False{}, sel}, srv), S.Conn{id, a, n, S.MOn{}, False{}, sel}, srv), S.next_srv.k(S.KSess{o}, S.may(S.KSess{o}, S.Conn{id, a, n, S.MOn{}, False{}, sel}, srv), S.Conn{id, a, n, S.MOn{}, False{}, sel}, srv))) == runs(Con{c, rest}) : List<&2, R.Act>}, false_true(e))
     case S.KData{}:
       e => ea =>
-        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, S.MOn{}, False{}}, srv), True{}, ea) : {List.append(&2, R.Cmd, S.keep(S.ran.k(S.KData{}, _), c), S.plan(rest, S.Conn{id, _, n, S.after(S.MOn{}), False{}}, srv)) == Con{c, rest} : List<&2, R.Cmd>}
-        Equal.cong(List<&2, R.Cmd>, List<&2, R.Cmd>, z => c <> z, S.plan(rest, S.Conn{id, True{}, n, S.MOn{}, False{}}, srv), rest, ih)
+        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, S.MOn{}, False{}, sel}, srv), True{}, ea) : {List.append(&2, R.Act, S.acts.k(S.KData{}, _, c, S.Conn{id, a, n, S.MOn{}, False{}, sel}, srv), S.plan(rest, S.Conn{id, _, n, S.after(S.MOn{}), False{}, sel}, srv)) == runs(Con{c, rest}) : List<&2, R.Act>}
+        Equal.cong(List<&2, R.Act>, List<&2, R.Act>, z => R.ARun{c} <> z, S.plan(rest, S.Conn{id, True{}, n, S.MOn{}, False{}, sel}, srv), runs(rest), ih)
     case S.KBad{}:
       e => ea =>
-        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, S.MOn{}, False{}}, srv), True{}, ea) : {List.append(&2, R.Cmd, S.keep(S.ran.k(S.KBad{}, True{}), c), S.plan(rest, S.Conn{id, _, n, S.after(S.MOn{}), False{}}, srv)) == Con{c, rest} : List<&2, R.Cmd>}
-        Equal.cong(List<&2, R.Cmd>, List<&2, R.Cmd>, z => c <> z, S.plan(rest, S.Conn{id, True{}, n, S.MOn{}, False{}}, srv), rest, ih)
+        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, S.MOn{}, False{}, sel}, srv), True{}, ea) : {List.append(&2, R.Act, S.acts.k(S.KBad{}, True{}, c, S.Conn{id, a, n, S.MOn{}, False{}, sel}, srv), S.plan(rest, S.Conn{id, _, n, S.after(S.MOn{}), False{}, sel}, srv)) == runs(Con{c, rest}) : List<&2, R.Act>}
+        Equal.cong(List<&2, R.Act>, List<&2, R.Act>, z => R.ARun{c} <> z, S.plan(rest, S.Conn{id, True{}, n, S.MOn{}, False{}, sel}, srv), runs(rest), ih)
 
-def fast_plan(cs: List<&2, R.Cmd>, +id: Nat, +a: Bool, +n: String, +srv: S.Srv)
-  -> {S.authed(S.Conn{id, a, n, S.MOn{}, False{}}, srv) == True{} : Bool}
+def fast_plan(cs: List<&2, R.Cmd>, +id: Nat, +a: Bool, +n: String, +sel: Nat, +srv: S.Srv)
+  -> {S.authed(S.Conn{id, a, n, S.MOn{}, False{}, sel}, srv) == True{} : Bool}
   -> {plain(cs) == True{} : Bool}
-  -> {S.plan(cs, S.Conn{id, a, n, S.MOn{}, False{}}, srv) == cs : List<&2, R.Cmd>}:
+  -> {S.plan(cs, S.Conn{id, a, n, S.MOn{}, False{}, sel}, srv) == runs(cs) : List<&2, R.Act>}:
   match cs:
     case Nil{}:
       ea => ep => {==}
     case Con{+c, +rest}:
-      +ea => +ep => fast_plan.k(S.kind(c), c, rest, id, a, n, srv, fast_plan(rest, id, True{}, n, srv)({==})(and_r(not_sess(S.kind(c)), plain(rest))(ep)))(and_l(not_sess(S.kind(c)), plain(rest))(ep))(ea)
+      +ea => +ep => fast_plan.k(S.kind(c), c, rest, id, a, n, sel, srv, fast_plan(rest, id, True{}, n, sel, srv)({==})(and_r(not_sess(S.kind(c)), plain(rest))(ep)))(and_l(not_sess(S.kind(c)), plain(rest))(ep))(ea)
 
-def fast_conn.k(k: S.Role, +rest: List<&2, R.Cmd>, +id: Nat, +a: Bool, +n: String, +srv: S.Srv,
-    ih: {gconn(rest, S.Conn{id, True{}, n, S.MOn{}, False{}}, srv) == S.Conn{id, True{}, n, S.MOn{}, False{}} : S.Conn})
+def fast_conn.k(k: S.Role, +rest: List<&2, R.Cmd>, +id: Nat, +a: Bool, +n: String, +sel: Nat, +srv: S.Srv,
+    ih: {gconn(rest, S.Conn{id, True{}, n, S.MOn{}, False{}, sel}, srv) == S.Conn{id, True{}, n, S.MOn{}, False{}, sel} : S.Conn})
   -> {not_sess(k) == True{} : Bool}
-  -> {S.authed(S.Conn{id, a, n, S.MOn{}, False{}}, srv) == True{} : Bool}
-  -> {gconn(rest, S.next_conn.k(k, S.may(k, S.Conn{id, a, n, S.MOn{}, False{}}, srv), S.Conn{id, a, n, S.MOn{}, False{}}, srv), S.next_srv.k(k, S.may(k, S.Conn{id, a, n, S.MOn{}, False{}}, srv), S.Conn{id, a, n, S.MOn{}, False{}}, srv)) == S.Conn{id, True{}, n, S.MOn{}, False{}} : S.Conn}:
+  -> {S.authed(S.Conn{id, a, n, S.MOn{}, False{}, sel}, srv) == True{} : Bool}
+  -> {gconn(rest, S.next_conn.k(k, S.may(k, S.Conn{id, a, n, S.MOn{}, False{}, sel}, srv), S.Conn{id, a, n, S.MOn{}, False{}, sel}, srv), S.next_srv.k(k, S.may(k, S.Conn{id, a, n, S.MOn{}, False{}, sel}, srv), S.Conn{id, a, n, S.MOn{}, False{}, sel}, srv)) == S.Conn{id, True{}, n, S.MOn{}, False{}, sel} : S.Conn}:
   match k:
     case S.KSess{o}:
-      e => ea => Empty.absurd({gconn(rest, S.next_conn.k(S.KSess{o}, S.may(S.KSess{o}, S.Conn{id, a, n, S.MOn{}, False{}}, srv), S.Conn{id, a, n, S.MOn{}, False{}}, srv), S.next_srv.k(S.KSess{o}, S.may(S.KSess{o}, S.Conn{id, a, n, S.MOn{}, False{}}, srv), S.Conn{id, a, n, S.MOn{}, False{}}, srv)) == S.Conn{id, True{}, n, S.MOn{}, False{}} : S.Conn}, false_true(e))
+      e => ea => Empty.absurd({gconn(rest, S.next_conn.k(S.KSess{o}, S.may(S.KSess{o}, S.Conn{id, a, n, S.MOn{}, False{}, sel}, srv), S.Conn{id, a, n, S.MOn{}, False{}, sel}, srv), S.next_srv.k(S.KSess{o}, S.may(S.KSess{o}, S.Conn{id, a, n, S.MOn{}, False{}, sel}, srv), S.Conn{id, a, n, S.MOn{}, False{}, sel}, srv)) == S.Conn{id, True{}, n, S.MOn{}, False{}, sel} : S.Conn}, false_true(e))
     case S.KData{}:
       e => ea =>
-        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, S.MOn{}, False{}}, srv), True{}, ea) : {gconn(rest, S.Conn{id, _, n, S.after(S.MOn{}), False{}}, srv) == S.Conn{id, True{}, n, S.MOn{}, False{}} : S.Conn}
+        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, S.MOn{}, False{}, sel}, srv), True{}, ea) : {gconn(rest, S.Conn{id, _, n, S.after(S.MOn{}), False{}, sel}, srv) == S.Conn{id, True{}, n, S.MOn{}, False{}, sel} : S.Conn}
         ih
     case S.KBad{}:
       e => ea =>
-        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, S.MOn{}, False{}}, srv), True{}, ea) : {gconn(rest, S.Conn{id, _, n, S.after(S.MOn{}), False{}}, srv) == S.Conn{id, True{}, n, S.MOn{}, False{}} : S.Conn}
+        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, S.MOn{}, False{}, sel}, srv), True{}, ea) : {gconn(rest, S.Conn{id, _, n, S.after(S.MOn{}), False{}, sel}, srv) == S.Conn{id, True{}, n, S.MOn{}, False{}, sel} : S.Conn}
         ih
 
 # a ready client stays ready, authenticated
-def fast_conn1(cs: List<&2, R.Cmd>, +id: Nat, +n: String, +srv: S.Srv) -> {plain(cs) == True{} : Bool} -> {gconn(cs, S.Conn{id, True{}, n, S.MOn{}, False{}}, srv) == S.Conn{id, True{}, n, S.MOn{}, False{}} : S.Conn}:
+def fast_conn1(cs: List<&2, R.Cmd>, +id: Nat, +n: String, +sel: Nat, +srv: S.Srv) -> {plain(cs) == True{} : Bool} -> {gconn(cs, S.Conn{id, True{}, n, S.MOn{}, False{}, sel}, srv) == S.Conn{id, True{}, n, S.MOn{}, False{}, sel} : S.Conn}:
   match cs:
     case Nil{}:
       ep => {==}
     case Con{+c, +rest}:
-      +ep => fast_conn.k(S.kind(c), rest, id, True{}, n, srv, fast_conn1(rest, id, n, srv)(and_r(not_sess(S.kind(c)), plain(rest))(ep)))(and_l(not_sess(S.kind(c)), plain(rest))(ep))({==})
+      +ep => fast_conn.k(S.kind(c), rest, id, True{}, n, sel, srv, fast_conn1(rest, id, n, sel, srv)(and_r(not_sess(S.kind(c)), plain(rest))(ep)))(and_l(not_sess(S.kind(c)), plain(rest))(ep))({==})
 
 # the server is as it was after a batch of database commands only
 def gsrv.k(k: S.Role, +ok: Bool, +rest: List<&2, R.Cmd>, +x: S.Conn, +conn: S.Conn, +srv: S.Srv, ih: {gsrv(rest, x, srv) == srv : S.Srv})
@@ -7054,116 +8501,147 @@ def rev_go_app_r(e: List<&2, R.Reply>, -es: List<&2, R.Reply>, -ys: List<&2, R.R
 def rev_rev_r(+xs: List<&2, R.Reply>) -> {List.reverse(&2, R.Reply, List.reverse.go(&2, R.Reply, xs, Nil{})) == xs : List<&2, R.Reply>}:
   Equal.trans(List<&2, R.Reply>, List.reverse.go(&2, R.Reply, List.reverse.go(&2, R.Reply, xs, Nil{}), Nil{}), List.append(&2, R.Reply, xs, Nil{}), xs, rev_go_app_r(xs, Nil{}, Nil{}), app_nil_r(xs))
 
-def fin4(-a1: List<&2, R.Reply>, -a2: List<&2, R.Reply>, -c1: S.Conn, -c2: S.Conn, -s1: S.Srv, -s2: S.Srv, -d1: R.Db, -d2: R.Db, ea: {a1 == a2 : List<&2, R.Reply>}, ec: {c1 == c2 : S.Conn}, es: {s1 == s2 : S.Srv}, ed: {d1 == d2 : R.Db}) -> {S.Fin{a1, c1, s1, d1} == S.Fin{a2, c2, s2, d2} : S.Fin}:
+def fin4(-a1: List<&2, R.Reply>, -a2: List<&2, R.Reply>, -c1: S.Conn, -c2: S.Conn, -s1: S.Srv, -s2: S.Srv, -d1: R.Ds, -d2: R.Ds, ea: {a1 == a2 : List<&2, R.Reply>}, ec: {c1 == c2 : S.Conn}, es: {s1 == s2 : S.Srv}, ed: {d1 == d2 : R.Ds}) -> {S.Fin{a1, c1, s1, d1} == S.Fin{a2, c2, s2, d2} : S.Fin}:
   %ea : {S.Fin{a1, c1, s1, d1} == S.Fin{_, c2, s2, d2} : S.Fin}
   %ec : {S.Fin{a1, c1, s1, d1} == S.Fin{a1, _, s2, d2} : S.Fin}
   %es : {S.Fin{a1, c1, s1, d1} == S.Fin{a1, c1, _, d2} : S.Fin}
   %ed : {S.Fin{a1, c1, s1, d1} == S.Fin{a1, c1, s1, _} : S.Fin}
   {==}
 
+# the acts of commands of one database run them on the focus, one after
+# another
+def acts_runs(cs: List<&2, R.Cmd>, +d: R.Db, +pre: List<&2, R.Db>, +post: List<&2, R.Db>) -> {R.Ds{rsnd(run(cs, d)), pre, post} == R.acts(runs(cs), R.Ds{d, pre, post}) : R.Ds}:
+  match cs:
+    case Nil{}:
+      {==}
+    case Con{+c, +rest}:
+      %act_run(c, d, pre, post) : {R.Ds{rsnd(run(Con{c, rest}, d)), pre, post} == R.acts(runs(rest), R.ds_of(_)) : R.Ds}
+      %eta_l(run(rest, R.db_of(R.exec(c, d)))) : {R.Ds{rsnd(R.exec_all.cons(R.reply_of(R.exec(c, d)), _)), pre, post} == R.acts(runs(rest), R.Ds{R.db_of(R.exec(c, d)), pre, post}) : R.Ds}
+      acts_runs(rest, R.db_of(R.exec(c, d)), pre, post)
+
+# a database's effects, located, then another's
+def at_db_app(+i: Nat, x: List<&2, R.Cmd>, -y: List<&2, R.Cmd>) -> {List.append(&2, A.Eff, A.at_db(i, x), A.at_db(i, y)) == A.at_db(i, List.append(&2, R.Cmd, x, y)) : List<&2, A.Eff>}:
+  match x:
+    case Nil{}:
+      {==}
+    case Con{e, rest}:
+      Equal.cong(List<&2, A.Eff>, List<&2, A.Eff>, z => A.EDb{i, e} <> z, List.append(&2, A.Eff, A.at_db(i, rest), A.at_db(i, y)), A.at_db(i, List.append(&2, R.Cmd, rest, y)), at_db_app(i, rest, y))
+
+# and their effects are the commands' own, on the focus
+def aeffs_runs(cs: List<&2, R.Cmd>, +d: R.Db, +pre: List<&2, R.Db>, +post: List<&2, R.Db>) -> {A.at_db(List.length(&2, R.Db, pre), effs(cs, d)) == aeffs(runs(cs), R.Ds{d, pre, post}) : List<&2, A.Eff>}:
+  match cs:
+    case Nil{}:
+      {==}
+    case Con{+c, +rest}:
+      %at_db_app(List.length(&2, R.Db, pre), eff(c, d), effs(rest, R.db_of(R.exec(c, d)))) : {_ == aeffs(runs(Con{c, rest}), R.Ds{d, pre, post}) : List<&2, A.Eff>}
+      %run_split(c, d) : {List.append(&2, A.Eff, A.at_db(List.length(&2, R.Db, pre), eff(c, d)), A.at_db(List.length(&2, R.Db, pre), effs(rest, R.db_of(R.exec(c, d))))) == List.append(&2, A.Eff, tmid(A.act.run(List.length(&2, R.Db, pre), _, pre, post)), aeffs(runs(rest), R.ds_of(R.act(R.ARun{c}, R.Ds{d, pre, post})))) : List<&2, A.Eff>}
+      %act_run(c, d, pre, post) : {List.append(&2, A.Eff, A.at_db(List.length(&2, R.Db, pre), eff(c, d)), A.at_db(List.length(&2, R.Db, pre), effs(rest, R.db_of(R.exec(c, d))))) == List.append(&2, A.Eff, A.at_db(List.length(&2, R.Db, pre), eff(c, d)), aeffs(runs(rest), R.ds_of(_))) : List<&2, A.Eff>}
+      Equal.cong(List<&2, A.Eff>, List<&2, A.Eff>, z => List.append(&2, A.Eff, A.at_db(List.length(&2, R.Db, pre), eff(c, d)), z), A.at_db(List.length(&2, R.Db, pre), effs(rest, R.db_of(R.exec(c, d)))), aeffs(runs(rest), R.Ds{R.db_of(R.exec(c, d)), pre, post}), aeffs_runs(rest, R.db_of(R.exec(c, d)), pre, post))
+
 # the fast way is the general one
-def fast_eq(+c: R.Cmd, +cs: List<&2, R.Cmd>, +id: Nat, +a: Bool, +n: String, +srv: S.Srv, +hs: List<&2, U32>, +db: R.Db)
-  -> {S.authed(S.Conn{id, a, n, S.MOn{}, False{}}, srv) == True{} : Bool}
+def fast_eq(+c: R.Cmd, +cs: List<&2, R.Cmd>, +id: Nat, +a: Bool, +n: String, +sel: Nat, +srv: S.Srv, +hs: List<&2, U32>, +d: R.Db, +pre: List<&2, R.Db>, +post: List<&2, R.Db>)
+  -> {S.authed(S.Conn{id, a, n, S.MOn{}, False{}, sel}, srv) == True{} : Bool}
   -> {plain(Con{c, cs}) == True{} : Bool}
-  -> {S.done.fast(S.Conn{id, a, n, S.MOn{}, False{}}, srv, B.exec_batch(Con{c, cs}, hs, db)) == S.done.gen(S.gen(S.Conn{id, a, n, S.MOn{}, False{}}, srv, Con{c, cs}, db)) : S.Fin}:
+  -> {S.run.fast(S.Conn{id, a, n, S.MOn{}, False{}, sel}, srv, Con{c, cs}, hs, R.Ds{d, pre, post}) == S.done.gen(S.gen(S.Conn{id, a, n, S.MOn{}, False{}, sel}, srv, Con{c, cs}, R.Ds{d, pre, post})) : S.Fin}:
   +ea => +ep =>
-    %Equal.sym(List<&2, R.Reply> & R.Db, B.exec_batch(Con{c, cs}, hs, db), R.exec_all(Con{c, cs}, db), Laws.batch_hints(Con{c, cs}, hs, db)) : {S.done.fast(S.Conn{id, a, n, S.MOn{}, False{}}, srv, _) == S.done.gen(S.gen(S.Conn{id, a, n, S.MOn{}, False{}}, srv, Con{c, cs}, db)) : S.Fin}
-    %exec_all_run(Con{c, cs}, db) : {S.done.fast(S.Conn{id, a, n, S.MOn{}, False{}}, srv, _) == S.done.gen(S.gen(S.Conn{id, a, n, S.MOn{}, False{}}, srv, Con{c, cs}, db)) : S.Fin}
-    %eta_l(run(Con{c, cs}, db)) : {S.done.fast(S.Conn{id, a, n, S.MOn{}, False{}}, srv, _) == S.done.gen(S.gen(S.Conn{id, a, n, S.MOn{}, False{}}, srv, Con{c, cs}, db)) : S.Fin}
-    %gen_spec(Con{c, cs}, Nil{}, Nil{}, S.Conn{id, a, n, S.MOn{}, False{}}, srv, db) : {S.done.fast(S.Conn{id, a, n, S.MOn{}, False{}}, srv, (rfst(run(Con{c, cs}, db)), rsnd(run(Con{c, cs}, db)))) == S.done.gen(_) : S.Fin}
-    fin4(rfst(run(Con{c, cs}, db)), List.reverse(&2, R.Reply, List.reverse.go(&2, R.Reply, greps(Con{c, cs}, S.Conn{id, a, n, S.MOn{}, False{}}, srv, db), Nil{})),
-         S.Conn{id, True{}, n, S.MOn{}, False{}}, gconn(Con{c, cs}, S.Conn{id, a, n, S.MOn{}, False{}}, srv), srv, gsrv(Con{c, cs}, S.Conn{id, a, n, S.MOn{}, False{}}, srv),
-         rsnd(run(Con{c, cs}, db)), rsnd(run(S.plan(Con{c, cs}, S.Conn{id, a, n, S.MOn{}, False{}}, srv), db)),
-         Equal.trans(List<&2, R.Reply>, rfst(run(Con{c, cs}, db)), greps(Con{c, cs}, S.Conn{id, a, n, S.MOn{}, False{}}, srv, db), List.reverse(&2, R.Reply, List.reverse.go(&2, R.Reply, greps(Con{c, cs}, S.Conn{id, a, n, S.MOn{}, False{}}, srv, db), Nil{})),
-           Equal.sym(List<&2, R.Reply>, greps(Con{c, cs}, S.Conn{id, a, n, S.MOn{}, False{}}, srv, db), rfst(run(Con{c, cs}, db)), fast_greps(Con{c, cs}, id, a, n, srv, db)(ea)(ep)),
-           Equal.sym(List<&2, R.Reply>, List.reverse(&2, R.Reply, List.reverse.go(&2, R.Reply, greps(Con{c, cs}, S.Conn{id, a, n, S.MOn{}, False{}}, srv, db), Nil{})), greps(Con{c, cs}, S.Conn{id, a, n, S.MOn{}, False{}}, srv, db), rev_rev_r(greps(Con{c, cs}, S.Conn{id, a, n, S.MOn{}, False{}}, srv, db)))),
-         Equal.sym(S.Conn, gconn(Con{c, cs}, S.Conn{id, a, n, S.MOn{}, False{}}, srv), S.Conn{id, True{}, n, S.MOn{}, False{}}, fast_conn.k(S.kind(c), cs, id, a, n, srv, fast_conn1(cs, id, n, srv)(and_r(not_sess(S.kind(c)), plain(cs))(ep)))(and_l(not_sess(S.kind(c)), plain(cs))(ep))(ea)),
-         Equal.sym(S.Srv, gsrv(Con{c, cs}, S.Conn{id, a, n, S.MOn{}, False{}}, srv), srv, gsrv_plain(Con{c, cs}, S.Conn{id, a, n, S.MOn{}, False{}}, srv)(ep)),
-         Equal.cong(List<&2, R.Cmd>, R.Db, z => rsnd(run(z, db)), Con{c, cs}, S.plan(Con{c, cs}, S.Conn{id, a, n, S.MOn{}, False{}}, srv), Equal.sym(List<&2, R.Cmd>, S.plan(Con{c, cs}, S.Conn{id, a, n, S.MOn{}, False{}}, srv), Con{c, cs}, fast_plan(Con{c, cs}, id, a, n, srv)(ea)(ep))))
+    %Equal.sym(List<&2, R.Reply> & R.Db, B.exec_batch(Con{c, cs}, hs, d), R.exec_all(Con{c, cs}, d), Laws.batch_hints(Con{c, cs}, hs, d)) : {S.done.fast(S.Conn{id, a, n, S.MOn{}, False{}, sel}, srv, pre, post, _) == S.done.gen(S.gen(S.Conn{id, a, n, S.MOn{}, False{}, sel}, srv, Con{c, cs}, R.Ds{d, pre, post})) : S.Fin}
+    %exec_all_run(Con{c, cs}, d) : {S.done.fast(S.Conn{id, a, n, S.MOn{}, False{}, sel}, srv, pre, post, _) == S.done.gen(S.gen(S.Conn{id, a, n, S.MOn{}, False{}, sel}, srv, Con{c, cs}, R.Ds{d, pre, post})) : S.Fin}
+    %eta_l(run(Con{c, cs}, d)) : {S.done.fast(S.Conn{id, a, n, S.MOn{}, False{}, sel}, srv, pre, post, _) == S.done.gen(S.gen(S.Conn{id, a, n, S.MOn{}, False{}, sel}, srv, Con{c, cs}, R.Ds{d, pre, post})) : S.Fin}
+    %gen_spec(Con{c, cs}, Nil{}, Nil{}, S.Conn{id, a, n, S.MOn{}, False{}, sel}, srv, R.Ds{d, pre, post}) : {S.done.fast(S.Conn{id, a, n, S.MOn{}, False{}, sel}, srv, pre, post, (rfst(run(Con{c, cs}, d)), rsnd(run(Con{c, cs}, d)))) == S.done.gen(_) : S.Fin}
+    fin4(rfst(run(Con{c, cs}, d)), List.reverse(&2, R.Reply, List.reverse.go(&2, R.Reply, greps(Con{c, cs}, S.Conn{id, a, n, S.MOn{}, False{}, sel}, srv, R.Ds{d, pre, post}), Nil{})),
+         S.Conn{id, True{}, n, S.MOn{}, False{}, sel}, gconn(Con{c, cs}, S.Conn{id, a, n, S.MOn{}, False{}, sel}, srv), srv, gsrv(Con{c, cs}, S.Conn{id, a, n, S.MOn{}, False{}, sel}, srv),
+         R.Ds{rsnd(run(Con{c, cs}, d)), pre, post}, R.acts(S.plan(Con{c, cs}, S.Conn{id, a, n, S.MOn{}, False{}, sel}, srv), R.Ds{d, pre, post}),
+         Equal.trans(List<&2, R.Reply>, rfst(run(Con{c, cs}, d)), greps(Con{c, cs}, S.Conn{id, a, n, S.MOn{}, False{}, sel}, srv, R.Ds{d, pre, post}), List.reverse(&2, R.Reply, List.reverse.go(&2, R.Reply, greps(Con{c, cs}, S.Conn{id, a, n, S.MOn{}, False{}, sel}, srv, R.Ds{d, pre, post}), Nil{})),
+           Equal.sym(List<&2, R.Reply>, greps(Con{c, cs}, S.Conn{id, a, n, S.MOn{}, False{}, sel}, srv, R.Ds{d, pre, post}), rfst(run(Con{c, cs}, d)), fast_greps(Con{c, cs}, id, a, n, sel, srv, d, pre, post)(ea)(ep)),
+           Equal.sym(List<&2, R.Reply>, List.reverse(&2, R.Reply, List.reverse.go(&2, R.Reply, greps(Con{c, cs}, S.Conn{id, a, n, S.MOn{}, False{}, sel}, srv, R.Ds{d, pre, post}), Nil{})), greps(Con{c, cs}, S.Conn{id, a, n, S.MOn{}, False{}, sel}, srv, R.Ds{d, pre, post}), rev_rev_r(greps(Con{c, cs}, S.Conn{id, a, n, S.MOn{}, False{}, sel}, srv, R.Ds{d, pre, post})))),
+         Equal.sym(S.Conn, gconn(Con{c, cs}, S.Conn{id, a, n, S.MOn{}, False{}, sel}, srv), S.Conn{id, True{}, n, S.MOn{}, False{}, sel}, fast_conn.k(S.kind(c), cs, id, a, n, sel, srv, fast_conn1(cs, id, n, sel, srv)(and_r(not_sess(S.kind(c)), plain(cs))(ep)))(and_l(not_sess(S.kind(c)), plain(cs))(ep))(ea)),
+         Equal.sym(S.Srv, gsrv(Con{c, cs}, S.Conn{id, a, n, S.MOn{}, False{}, sel}, srv), srv, gsrv_plain(Con{c, cs}, S.Conn{id, a, n, S.MOn{}, False{}, sel}, srv)(ep)),
+         Equal.trans(R.Ds, R.Ds{rsnd(run(Con{c, cs}, d)), pre, post}, R.acts(runs(Con{c, cs}), R.Ds{d, pre, post}), R.acts(S.plan(Con{c, cs}, S.Conn{id, a, n, S.MOn{}, False{}, sel}, srv), R.Ds{d, pre, post}),
+           acts_runs(Con{c, cs}, d, pre, post),
+           Equal.cong(List<&2, R.Act>, R.Ds, z => R.acts(z, R.Ds{d, pre, post}), runs(Con{c, cs}), S.plan(Con{c, cs}, S.Conn{id, a, n, S.MOn{}, False{}, sel}, srv), Equal.sym(List<&2, R.Act>, S.plan(Con{c, cs}, S.Conn{id, a, n, S.MOn{}, False{}, sel}, srv), runs(Con{c, cs}), fast_plan(Con{c, cs}, id, a, n, sel, srv)(ea)(ep)))))
 
 # a batch of database commands taken the fast way or not
-
-def plain_run(b: Bool, conn: S.Conn, +srv: S.Srv, cs: List<&2, R.Cmd>, +hs: List<&2, U32>, +db: R.Db) -> {b == S.ready(conn, srv) : Bool} -> {plain(cs) == True{} : Bool} -> {S.run.plain(b, conn, srv, cs, hs, db) == S.done.gen(S.gen(conn, srv, cs, db)) : S.Fin}:
-  match b conn cs:
-    case _ _ Nil{}:
+def plain_run(b: Bool, conn: S.Conn, +srv: S.Srv, cs: List<&2, R.Cmd>, +hs: List<&2, U32>, ds: R.Ds) -> {b == S.ready(conn, srv) : Bool} -> {plain(cs) == True{} : Bool} -> {S.run.plain(b, conn, srv, cs, hs, ds) == S.done.gen(S.gen(conn, srv, cs, ds)) : S.Fin}:
+  match b conn cs ds:
+    case _ _ Nil{} _:
       eb => ep => {==}
-    case False{} _ Con{c, rest}:
+    case False{} _ Con{c, rest} _:
       eb => ep => {==}
-    case True{} S.Conn{id, a, n, S.MOn{}, True{}} Con{c, rest}:
-      eb => ep => Empty.absurd({S.run.plain(True{}, S.Conn{id, a, n, S.MOn{}, True{}}, srv, Con{c, rest}, hs, db) == S.done.gen(S.gen(S.Conn{id, a, n, S.MOn{}, True{}}, srv, Con{c, rest}, db)) : S.Fin}, true_false(eb))
-    case True{} S.Conn{id, a, n, S.MOn{}, False{}} Con{+c, +rest}:
-      eb => +ep => fast_eq(c, rest, id, a, n, srv, hs, db)(Equal.sym(Bool, True{}, S.authed(S.Conn{id, a, n, S.MOn{}, False{}}, srv), eb))(ep)
-    case True{} S.Conn{id, a, n, S.MOff{}, True{}} Con{c, rest}:
-      eb => ep => Empty.absurd({S.run.plain(True{}, S.Conn{id, a, n, S.MOff{}, True{}}, srv, Con{c, rest}, hs, db) == S.done.gen(S.gen(S.Conn{id, a, n, S.MOff{}, True{}}, srv, Con{c, rest}, db)) : S.Fin}, true_false(eb))
-    case True{} S.Conn{id, a, n, S.MOff{}, False{}} Con{c, rest}:
-      eb => ep => Empty.absurd({S.run.plain(True{}, S.Conn{id, a, n, S.MOff{}, False{}}, srv, Con{c, rest}, hs, db) == S.done.gen(S.gen(S.Conn{id, a, n, S.MOff{}, False{}}, srv, Con{c, rest}, db)) : S.Fin}, true_false(eb))
-    case True{} S.Conn{id, a, n, S.MSkip{}, True{}} Con{c, rest}:
-      eb => ep => Empty.absurd({S.run.plain(True{}, S.Conn{id, a, n, S.MSkip{}, True{}}, srv, Con{c, rest}, hs, db) == S.done.gen(S.gen(S.Conn{id, a, n, S.MSkip{}, True{}}, srv, Con{c, rest}, db)) : S.Fin}, true_false(eb))
-    case True{} S.Conn{id, a, n, S.MSkip{}, False{}} Con{c, rest}:
-      eb => ep => Empty.absurd({S.run.plain(True{}, S.Conn{id, a, n, S.MSkip{}, False{}}, srv, Con{c, rest}, hs, db) == S.done.gen(S.gen(S.Conn{id, a, n, S.MSkip{}, False{}}, srv, Con{c, rest}, db)) : S.Fin}, true_false(eb))
+    case True{} S.Conn{+id, +a, +n, S.MOn{}, False{}, +sel} Con{+c, +rest} R.Ds{+d, +pre, +post}:
+      eb => +ep => fast_eq(c, rest, id, a, n, sel, srv, hs, d, pre, post)(Equal.sym(Bool, True{}, S.authed(S.Conn{id, a, n, S.MOn{}, False{}, sel}, srv), eb))(ep)
+    case True{} S.Conn{id, a, n, S.MOn{}, True{}, sel} Con{c, rest} x:
+      eb => ep => Empty.absurd({S.run.plain(True{}, S.Conn{id, a, n, S.MOn{}, True{}, sel}, srv, Con{c, rest}, hs, x) == S.done.gen(S.gen(S.Conn{id, a, n, S.MOn{}, True{}, sel}, srv, Con{c, rest}, x)) : S.Fin}, true_false(eb))
+    case True{} S.Conn{id, a, n, S.MOff{}, True{}, sel} Con{c, rest} x:
+      eb => ep => Empty.absurd({S.run.plain(True{}, S.Conn{id, a, n, S.MOff{}, True{}, sel}, srv, Con{c, rest}, hs, x) == S.done.gen(S.gen(S.Conn{id, a, n, S.MOff{}, True{}, sel}, srv, Con{c, rest}, x)) : S.Fin}, true_false(eb))
+    case True{} S.Conn{id, a, n, S.MOff{}, False{}, sel} Con{c, rest} x:
+      eb => ep => Empty.absurd({S.run.plain(True{}, S.Conn{id, a, n, S.MOff{}, False{}, sel}, srv, Con{c, rest}, hs, x) == S.done.gen(S.gen(S.Conn{id, a, n, S.MOff{}, False{}, sel}, srv, Con{c, rest}, x)) : S.Fin}, true_false(eb))
+    case True{} S.Conn{id, a, n, S.MSkip{}, True{}, sel} Con{c, rest} x:
+      eb => ep => Empty.absurd({S.run.plain(True{}, S.Conn{id, a, n, S.MSkip{}, True{}, sel}, srv, Con{c, rest}, hs, x) == S.done.gen(S.gen(S.Conn{id, a, n, S.MSkip{}, True{}, sel}, srv, Con{c, rest}, x)) : S.Fin}, true_false(eb))
+    case True{} S.Conn{id, a, n, S.MSkip{}, False{}, sel} Con{c, rest} x:
+      eb => ep => Empty.absurd({S.run.plain(True{}, S.Conn{id, a, n, S.MSkip{}, False{}, sel}, srv, Con{c, rest}, hs, x) == S.done.gen(S.gen(S.Conn{id, a, n, S.MSkip{}, False{}, sel}, srv, Con{c, rest}, x)) : S.Fin}, true_false(eb))
 
 # a batch with a command of the connection or of the server runs the
 # general way, its commands in order, whatever its hashes
-def mixed_gen(+conn: S.Conn, +srv: S.Srv, rs: List<&2, B.Req>, +cs: List<&2, R.Cmd>, +hs: List<&2, U32>, +db: R.Db) -> {S.run(conn, srv, B.mixed_of(rs, cs, hs), db) == S.done.gen(S.gen(conn, srv, B.cmds_of(rs, cs), db)) : S.Fin}:
+def mixed_gen(+conn: S.Conn, +srv: S.Srv, rs: List<&2, B.Req>, +cs: List<&2, R.Cmd>, +hs: List<&2, U32>, +ds: R.Ds) -> {S.run(conn, srv, B.mixed_of(rs, cs, hs), ds) == S.done.gen(S.gen(conn, srv, B.cmds_of(rs, cs), ds)) : S.Fin}:
   match rs:
     case Nil{}:
       {==}
     case Con{B.Req{c, h}, rest}:
-      mixed_gen(conn, srv, rest, c <> cs, h <> hs, db)
+      mixed_gen(conn, srv, rest, c <> cs, h <> hs, ds)
 
-def mixed_gen_log(+conn: S.Conn, +srv: S.Srv, rs: List<&2, B.Req>, +cs: List<&2, R.Cmd>, +hs: List<&2, U32>, +db: R.Db) -> {S.run_log(conn, srv, B.mixed_of(rs, cs, hs), db) == S.logged.gen(S.gen(conn, srv, B.cmds_of(rs, cs), db)) : S.Logged}:
+def mixed_gen_log(+conn: S.Conn, +srv: S.Srv, rs: List<&2, B.Req>, +cs: List<&2, R.Cmd>, +hs: List<&2, U32>, +ds: R.Ds) -> {S.run_log(conn, srv, B.mixed_of(rs, cs, hs), ds) == S.logged.gen(S.gen(conn, srv, B.cmds_of(rs, cs), ds)) : S.Logged}:
   match rs:
     case Nil{}:
       {==}
     case Con{B.Req{c, h}, rest}:
-      mixed_gen_log(conn, srv, rest, c <> cs, h <> hs, db)
+      mixed_gen_log(conn, srv, rest, c <> cs, h <> hs, ds)
 
 # the server's unzip hands gen a batch's commands in order, and takes the
 # fast way only for database commands
 
-def unzip_gen(+conn: S.Conn, +srv: S.Srv, rs: List<&2, B.Req>, +cs: List<&2, R.Cmd>, +hs: List<&2, U32>, +db: R.Db) -> {plain(cs) == True{} : Bool} -> {S.run(conn, srv, B.job(B.unzip(rs, cs, hs)), db) == S.done.gen(S.gen(conn, srv, B.cmds_of(rs, cs), db)) : S.Fin}:
+def unzip_gen(+conn: S.Conn, +srv: S.Srv, rs: List<&2, B.Req>, +cs: List<&2, R.Cmd>, +hs: List<&2, U32>, +ds: R.Ds) -> {plain(cs) == True{} : Bool} -> {S.run(conn, srv, B.job(B.unzip(rs, cs, hs)), ds) == S.done.gen(S.gen(conn, srv, B.cmds_of(rs, cs), ds)) : S.Fin}:
   match rs:
     case Nil{}:
-      e => plain_run(S.ready(conn, srv), conn, srv, cs, hs, db)({==})(e)
+      e => plain_run(S.ready(conn, srv), conn, srv, cs, hs, ds)({==})(e)
     case Con{B.Req{R.Ping{}, h}, rest}:
-      e => unzip_gen(conn, srv, rest, R.Ping{} <> cs, h <> hs, db)(e)
+      e => unzip_gen(conn, srv, rest, R.Ping{} <> cs, h <> hs, ds)(e)
     case Con{B.Req{R.Echo{x0}, h}, rest}:
-      e => unzip_gen(conn, srv, rest, R.Echo{x0} <> cs, h <> hs, db)(e)
+      e => unzip_gen(conn, srv, rest, R.Echo{x0} <> cs, h <> hs, ds)(e)
     case Con{B.Req{R.Get{x0}, h}, rest}:
-      e => unzip_gen(conn, srv, rest, R.Get{x0} <> cs, h <> hs, db)(e)
+      e => unzip_gen(conn, srv, rest, R.Get{x0} <> cs, h <> hs, ds)(e)
     case Con{B.Req{R.Set{x0, x1}, h}, rest}:
-      e => unzip_gen(conn, srv, rest, R.Set{x0, x1} <> cs, h <> hs, db)(e)
+      e => unzip_gen(conn, srv, rest, R.Set{x0, x1} <> cs, h <> hs, ds)(e)
     case Con{B.Req{R.Del{x0}, h}, rest}:
-      e => unzip_gen(conn, srv, rest, R.Del{x0} <> cs, h <> hs, db)(e)
+      e => unzip_gen(conn, srv, rest, R.Del{x0} <> cs, h <> hs, ds)(e)
     case Con{B.Req{R.Exists{x0}, h}, rest}:
-      e => unzip_gen(conn, srv, rest, R.Exists{x0} <> cs, h <> hs, db)(e)
+      e => unzip_gen(conn, srv, rest, R.Exists{x0} <> cs, h <> hs, ds)(e)
     case Con{B.Req{R.IncrBy{x0, x1}, h}, rest}:
-      e => unzip_gen(conn, srv, rest, R.IncrBy{x0, x1} <> cs, h <> hs, db)(e)
+      e => unzip_gen(conn, srv, rest, R.IncrBy{x0, x1} <> cs, h <> hs, ds)(e)
     case Con{B.Req{R.MGet{x0}, h}, rest}:
-      e => unzip_gen(conn, srv, rest, R.MGet{x0} <> cs, h <> hs, db)(e)
+      e => unzip_gen(conn, srv, rest, R.MGet{x0} <> cs, h <> hs, ds)(e)
     case Con{B.Req{R.MSet{x0}, h}, rest}:
-      e => unzip_gen(conn, srv, rest, R.MSet{x0} <> cs, h <> hs, db)(e)
+      e => unzip_gen(conn, srv, rest, R.MSet{x0} <> cs, h <> hs, ds)(e)
     case Con{B.Req{R.DbSize{}, h}, rest}:
-      e => unzip_gen(conn, srv, rest, R.DbSize{} <> cs, h <> hs, db)(e)
-    case Con{B.Req{R.FlushAll{}, h}, rest}:
-      e => unzip_gen(conn, srv, rest, R.FlushAll{} <> cs, h <> hs, db)(e)
+      e => unzip_gen(conn, srv, rest, R.DbSize{} <> cs, h <> hs, ds)(e)
+    case Con{B.Req{R.FlushDb{}, h}, rest}:
+      e => unzip_gen(conn, srv, rest, R.FlushDb{} <> cs, h <> hs, ds)(e)
     case Con{B.Req{R.Keys{x0}, h}, rest}:
-      e => unzip_gen(conn, srv, rest, R.Keys{x0} <> cs, h <> hs, db)(e)
+      e => unzip_gen(conn, srv, rest, R.Keys{x0} <> cs, h <> hs, ds)(e)
     case Con{B.Req{R.Scan{x0}, h}, rest}:
-      e => unzip_gen(conn, srv, rest, R.Scan{x0} <> cs, h <> hs, db)(e)
+      e => unzip_gen(conn, srv, rest, R.Scan{x0} <> cs, h <> hs, ds)(e)
     case Con{B.Req{R.Peek{x0, x1}, h}, rest}:
-      e => unzip_gen(conn, srv, rest, R.Peek{x0, x1} <> cs, h <> hs, db)(e)
+      e => unzip_gen(conn, srv, rest, R.Peek{x0, x1} <> cs, h <> hs, ds)(e)
     case Con{B.Req{R.Upd{x0, x1}, h}, rest}:
-      e => unzip_gen(conn, srv, rest, R.Upd{x0, x1} <> cs, h <> hs, db)(e)
+      e => unzip_gen(conn, srv, rest, R.Upd{x0, x1} <> cs, h <> hs, ds)(e)
     case Con{B.Req{R.Own{x0}, h}, rest}:
-      e => mixed_gen(conn, srv, rest, R.Own{x0} <> cs, h <> hs, db)
+      e => mixed_gen(conn, srv, rest, R.Own{x0} <> cs, h <> hs, ds)
     case Con{B.Req{R.Bad{x0}, h}, rest}:
-      e => unzip_gen(conn, srv, rest, R.Bad{x0} <> cs, h <> hs, db)(e)
+      e => unzip_gen(conn, srv, rest, R.Bad{x0} <> cs, h <> hs, ds)(e)
 
-def Laws.run_gen(conn, srv, rs, db):
-  unzip_gen(conn, srv, rs, Nil{}, Nil{}, db)({==})
+def Laws.run_gen(conn, srv, rs, ds):
+  unzip_gen(conn, srv, rs, Nil{}, Nil{}, ds)({==})
 
-def log5(-a1: List<&2, R.Reply>, -a2: List<&2, R.Reply>, -b1: List<&2, R.Cmd>, -b2: List<&2, R.Cmd>, -c1: S.Conn, -c2: S.Conn, -s1: S.Srv, -s2: S.Srv, -d1: R.Db, -d2: R.Db, ea: {a1 == a2 : List<&2, R.Reply>}, eb: {b1 == b2 : List<&2, R.Cmd>}, ec: {c1 == c2 : S.Conn}, es: {s1 == s2 : S.Srv}, ed: {d1 == d2 : R.Db}) -> {S.Logged{a1, b1, c1, s1, d1} == S.Logged{a2, b2, c2, s2, d2} : S.Logged}:
+def log5(-a1: List<&2, R.Reply>, -a2: List<&2, R.Reply>, -b1: List<&2, A.Eff>, -b2: List<&2, A.Eff>, -c1: S.Conn, -c2: S.Conn, -s1: S.Srv, -s2: S.Srv, -d1: R.Ds, -d2: R.Ds, ea: {a1 == a2 : List<&2, R.Reply>}, eb: {b1 == b2 : List<&2, A.Eff>}, ec: {c1 == c2 : S.Conn}, es: {s1 == s2 : S.Srv}, ed: {d1 == d2 : R.Ds}) -> {S.Logged{a1, b1, c1, s1, d1} == S.Logged{a2, b2, c2, s2, d2} : S.Logged}:
   %ea : {S.Logged{a1, b1, c1, s1, d1} == S.Logged{_, b2, c2, s2, d2} : S.Logged}
   %eb : {S.Logged{a1, b1, c1, s1, d1} == S.Logged{a1, _, c2, s2, d2} : S.Logged}
   %ec : {S.Logged{a1, b1, c1, s1, d1} == S.Logged{a1, b1, _, s2, d2} : S.Logged}
@@ -7172,88 +8650,92 @@ def log5(-a1: List<&2, R.Reply>, -a2: List<&2, R.Reply>, -b1: List<&2, R.Cmd>, -
   {==}
 
 # and with an append-only file
-def fast_eq_log(+c: R.Cmd, +cs: List<&2, R.Cmd>, +id: Nat, +a: Bool, +n: String, +srv: S.Srv, +hs: List<&2, U32>, +db: R.Db)
-  -> {S.authed(S.Conn{id, a, n, S.MOn{}, False{}}, srv) == True{} : Bool}
+def fast_eq_log(+c: R.Cmd, +cs: List<&2, R.Cmd>, +id: Nat, +a: Bool, +n: String, +sel: Nat, +srv: S.Srv, +hs: List<&2, U32>, +d: R.Db, +pre: List<&2, R.Db>, +post: List<&2, R.Db>)
+  -> {S.authed(S.Conn{id, a, n, S.MOn{}, False{}, sel}, srv) == True{} : Bool}
   -> {plain(Con{c, cs}) == True{} : Bool}
-  -> {S.logged.fast(S.Conn{id, a, n, S.MOn{}, False{}}, srv, A.log_batch(Con{c, cs}, hs, db)) == S.logged.gen(S.gen(S.Conn{id, a, n, S.MOn{}, False{}}, srv, Con{c, cs}, db)) : S.Logged}:
+  -> {S.run_log.fast(S.Conn{id, a, n, S.MOn{}, False{}, sel}, srv, Con{c, cs}, hs, R.Ds{d, pre, post}) == S.logged.gen(S.gen(S.Conn{id, a, n, S.MOn{}, False{}, sel}, srv, Con{c, cs}, R.Ds{d, pre, post})) : S.Logged}:
   +ea => +ep =>
-    %Equal.sym(List<&2, R.Reply> & (List<&2, R.Cmd> & R.Db), A.log_batch(Con{c, cs}, hs, db), A.exec_log(Con{c, cs}, db), Laws.log_hints(Con{c, cs}, hs, db)) : {S.logged.fast(S.Conn{id, a, n, S.MOn{}, False{}}, srv, _) == S.logged.gen(S.gen(S.Conn{id, a, n, S.MOn{}, False{}}, srv, Con{c, cs}, db)) : S.Logged}
-    %log_go(Con{c, cs}, Nil{}, Nil{}, db) : {S.logged.fast(S.Conn{id, a, n, S.MOn{}, False{}}, srv, _) == S.logged.gen(S.gen(S.Conn{id, a, n, S.MOn{}, False{}}, srv, Con{c, cs}, db)) : S.Logged}
-    %gen_spec(Con{c, cs}, Nil{}, Nil{}, S.Conn{id, a, n, S.MOn{}, False{}}, srv, db) : {S.logged.fast(S.Conn{id, a, n, S.MOn{}, False{}}, srv, (List.reverse.go(&2, R.Reply, Nil{}, rfst(run(Con{c, cs}, db))), (List.reverse.go(&2, R.Cmd, Nil{}, effs(Con{c, cs}, db)), rsnd(run(Con{c, cs}, db))))) == S.logged.gen(_) : S.Logged}
-    log5(rfst(run(Con{c, cs}, db)), List.reverse(&2, R.Reply, List.reverse.go(&2, R.Reply, greps(Con{c, cs}, S.Conn{id, a, n, S.MOn{}, False{}}, srv, db), Nil{})),
-         effs(Con{c, cs}, db), List.reverse(&2, R.Cmd, List.reverse.go(&2, R.Cmd, effs(S.plan(Con{c, cs}, S.Conn{id, a, n, S.MOn{}, False{}}, srv), db), Nil{})),
-         S.Conn{id, True{}, n, S.MOn{}, False{}}, gconn(Con{c, cs}, S.Conn{id, a, n, S.MOn{}, False{}}, srv), srv, gsrv(Con{c, cs}, S.Conn{id, a, n, S.MOn{}, False{}}, srv),
-         rsnd(run(Con{c, cs}, db)), rsnd(run(S.plan(Con{c, cs}, S.Conn{id, a, n, S.MOn{}, False{}}, srv), db)),
-         Equal.trans(List<&2, R.Reply>, rfst(run(Con{c, cs}, db)), greps(Con{c, cs}, S.Conn{id, a, n, S.MOn{}, False{}}, srv, db), List.reverse(&2, R.Reply, List.reverse.go(&2, R.Reply, greps(Con{c, cs}, S.Conn{id, a, n, S.MOn{}, False{}}, srv, db), Nil{})),
-           Equal.sym(List<&2, R.Reply>, greps(Con{c, cs}, S.Conn{id, a, n, S.MOn{}, False{}}, srv, db), rfst(run(Con{c, cs}, db)), fast_greps(Con{c, cs}, id, a, n, srv, db)(ea)(ep)),
-           Equal.sym(List<&2, R.Reply>, List.reverse(&2, R.Reply, List.reverse.go(&2, R.Reply, greps(Con{c, cs}, S.Conn{id, a, n, S.MOn{}, False{}}, srv, db), Nil{})), greps(Con{c, cs}, S.Conn{id, a, n, S.MOn{}, False{}}, srv, db), rev_rev_r(greps(Con{c, cs}, S.Conn{id, a, n, S.MOn{}, False{}}, srv, db)))),
-         Equal.trans(List<&2, R.Cmd>, effs(Con{c, cs}, db), effs(S.plan(Con{c, cs}, S.Conn{id, a, n, S.MOn{}, False{}}, srv), db), List.reverse(&2, R.Cmd, List.reverse.go(&2, R.Cmd, effs(S.plan(Con{c, cs}, S.Conn{id, a, n, S.MOn{}, False{}}, srv), db), Nil{})),
-           Equal.cong(List<&2, R.Cmd>, List<&2, R.Cmd>, z => effs(z, db), Con{c, cs}, S.plan(Con{c, cs}, S.Conn{id, a, n, S.MOn{}, False{}}, srv), Equal.sym(List<&2, R.Cmd>, S.plan(Con{c, cs}, S.Conn{id, a, n, S.MOn{}, False{}}, srv), Con{c, cs}, fast_plan(Con{c, cs}, id, a, n, srv)(ea)(ep))),
-           Equal.sym(List<&2, R.Cmd>, List.reverse(&2, R.Cmd, List.reverse.go(&2, R.Cmd, effs(S.plan(Con{c, cs}, S.Conn{id, a, n, S.MOn{}, False{}}, srv), db), Nil{})), effs(S.plan(Con{c, cs}, S.Conn{id, a, n, S.MOn{}, False{}}, srv), db), rev_rev(effs(S.plan(Con{c, cs}, S.Conn{id, a, n, S.MOn{}, False{}}, srv), db)))),
-         Equal.sym(S.Conn, gconn(Con{c, cs}, S.Conn{id, a, n, S.MOn{}, False{}}, srv), S.Conn{id, True{}, n, S.MOn{}, False{}}, fast_conn.k(S.kind(c), cs, id, a, n, srv, fast_conn1(cs, id, n, srv)(and_r(not_sess(S.kind(c)), plain(cs))(ep)))(and_l(not_sess(S.kind(c)), plain(cs))(ep))(ea)),
-         Equal.sym(S.Srv, gsrv(Con{c, cs}, S.Conn{id, a, n, S.MOn{}, False{}}, srv), srv, gsrv_plain(Con{c, cs}, S.Conn{id, a, n, S.MOn{}, False{}}, srv)(ep)),
-         Equal.cong(List<&2, R.Cmd>, R.Db, z => rsnd(run(z, db)), Con{c, cs}, S.plan(Con{c, cs}, S.Conn{id, a, n, S.MOn{}, False{}}, srv), Equal.sym(List<&2, R.Cmd>, S.plan(Con{c, cs}, S.Conn{id, a, n, S.MOn{}, False{}}, srv), Con{c, cs}, fast_plan(Con{c, cs}, id, a, n, srv)(ea)(ep))))
+    %Equal.sym(List<&2, R.Reply> & (List<&2, R.Cmd> & R.Db), A.log_batch(Con{c, cs}, hs, d), A.exec_log(Con{c, cs}, d), Laws.log_hints(Con{c, cs}, hs, d)) : {S.logged.fast(S.Conn{id, a, n, S.MOn{}, False{}, sel}, srv, List.length(&2, R.Db, pre), pre, post, _) == S.logged.gen(S.gen(S.Conn{id, a, n, S.MOn{}, False{}, sel}, srv, Con{c, cs}, R.Ds{d, pre, post})) : S.Logged}
+    %log_parts(Con{c, cs}, d) : {S.logged.fast(S.Conn{id, a, n, S.MOn{}, False{}, sel}, srv, List.length(&2, R.Db, pre), pre, post, _) == S.logged.gen(S.gen(S.Conn{id, a, n, S.MOn{}, False{}, sel}, srv, Con{c, cs}, R.Ds{d, pre, post})) : S.Logged}
+    %gen_spec(Con{c, cs}, Nil{}, Nil{}, S.Conn{id, a, n, S.MOn{}, False{}, sel}, srv, R.Ds{d, pre, post}) : {S.logged.fast(S.Conn{id, a, n, S.MOn{}, False{}, sel}, srv, List.length(&2, R.Db, pre), pre, post, (rfst(run(Con{c, cs}, d)), (effs(Con{c, cs}, d), rsnd(run(Con{c, cs}, d))))) == S.logged.gen(_) : S.Logged}
+    log5(rfst(run(Con{c, cs}, d)), List.reverse(&2, R.Reply, List.reverse.go(&2, R.Reply, greps(Con{c, cs}, S.Conn{id, a, n, S.MOn{}, False{}, sel}, srv, R.Ds{d, pre, post}), Nil{})),
+         A.at_db(List.length(&2, R.Db, pre), effs(Con{c, cs}, d)), List.reverse(&2, A.Eff, List.reverse.go(&2, A.Eff, aeffs(S.plan(Con{c, cs}, S.Conn{id, a, n, S.MOn{}, False{}, sel}, srv), R.Ds{d, pre, post}), Nil{})),
+         S.Conn{id, True{}, n, S.MOn{}, False{}, sel}, gconn(Con{c, cs}, S.Conn{id, a, n, S.MOn{}, False{}, sel}, srv), srv, gsrv(Con{c, cs}, S.Conn{id, a, n, S.MOn{}, False{}, sel}, srv),
+         R.Ds{rsnd(run(Con{c, cs}, d)), pre, post}, R.acts(S.plan(Con{c, cs}, S.Conn{id, a, n, S.MOn{}, False{}, sel}, srv), R.Ds{d, pre, post}),
+         Equal.trans(List<&2, R.Reply>, rfst(run(Con{c, cs}, d)), greps(Con{c, cs}, S.Conn{id, a, n, S.MOn{}, False{}, sel}, srv, R.Ds{d, pre, post}), List.reverse(&2, R.Reply, List.reverse.go(&2, R.Reply, greps(Con{c, cs}, S.Conn{id, a, n, S.MOn{}, False{}, sel}, srv, R.Ds{d, pre, post}), Nil{})),
+           Equal.sym(List<&2, R.Reply>, greps(Con{c, cs}, S.Conn{id, a, n, S.MOn{}, False{}, sel}, srv, R.Ds{d, pre, post}), rfst(run(Con{c, cs}, d)), fast_greps(Con{c, cs}, id, a, n, sel, srv, d, pre, post)(ea)(ep)),
+           Equal.sym(List<&2, R.Reply>, List.reverse(&2, R.Reply, List.reverse.go(&2, R.Reply, greps(Con{c, cs}, S.Conn{id, a, n, S.MOn{}, False{}, sel}, srv, R.Ds{d, pre, post}), Nil{})), greps(Con{c, cs}, S.Conn{id, a, n, S.MOn{}, False{}, sel}, srv, R.Ds{d, pre, post}), rev_rev_r(greps(Con{c, cs}, S.Conn{id, a, n, S.MOn{}, False{}, sel}, srv, R.Ds{d, pre, post})))),
+         Equal.trans(List<&2, A.Eff>, A.at_db(List.length(&2, R.Db, pre), effs(Con{c, cs}, d)), aeffs(S.plan(Con{c, cs}, S.Conn{id, a, n, S.MOn{}, False{}, sel}, srv), R.Ds{d, pre, post}), List.reverse(&2, A.Eff, List.reverse.go(&2, A.Eff, aeffs(S.plan(Con{c, cs}, S.Conn{id, a, n, S.MOn{}, False{}, sel}, srv), R.Ds{d, pre, post}), Nil{})),
+           Equal.trans(List<&2, A.Eff>, A.at_db(List.length(&2, R.Db, pre), effs(Con{c, cs}, d)), aeffs(runs(Con{c, cs}), R.Ds{d, pre, post}), aeffs(S.plan(Con{c, cs}, S.Conn{id, a, n, S.MOn{}, False{}, sel}, srv), R.Ds{d, pre, post}),
+             aeffs_runs(Con{c, cs}, d, pre, post),
+             Equal.cong(List<&2, R.Act>, List<&2, A.Eff>, z => aeffs(z, R.Ds{d, pre, post}), runs(Con{c, cs}), S.plan(Con{c, cs}, S.Conn{id, a, n, S.MOn{}, False{}, sel}, srv), Equal.sym(List<&2, R.Act>, S.plan(Con{c, cs}, S.Conn{id, a, n, S.MOn{}, False{}, sel}, srv), runs(Con{c, cs}), fast_plan(Con{c, cs}, id, a, n, sel, srv)(ea)(ep)))),
+           Equal.sym(List<&2, A.Eff>, List.reverse(&2, A.Eff, List.reverse.go(&2, A.Eff, aeffs(S.plan(Con{c, cs}, S.Conn{id, a, n, S.MOn{}, False{}, sel}, srv), R.Ds{d, pre, post}), Nil{})), aeffs(S.plan(Con{c, cs}, S.Conn{id, a, n, S.MOn{}, False{}, sel}, srv), R.Ds{d, pre, post}), rev_rev_e(aeffs(S.plan(Con{c, cs}, S.Conn{id, a, n, S.MOn{}, False{}, sel}, srv), R.Ds{d, pre, post})))),
+         Equal.sym(S.Conn, gconn(Con{c, cs}, S.Conn{id, a, n, S.MOn{}, False{}, sel}, srv), S.Conn{id, True{}, n, S.MOn{}, False{}, sel}, fast_conn.k(S.kind(c), cs, id, a, n, sel, srv, fast_conn1(cs, id, n, sel, srv)(and_r(not_sess(S.kind(c)), plain(cs))(ep)))(and_l(not_sess(S.kind(c)), plain(cs))(ep))(ea)),
+         Equal.sym(S.Srv, gsrv(Con{c, cs}, S.Conn{id, a, n, S.MOn{}, False{}, sel}, srv), srv, gsrv_plain(Con{c, cs}, S.Conn{id, a, n, S.MOn{}, False{}, sel}, srv)(ep)),
+         Equal.trans(R.Ds, R.Ds{rsnd(run(Con{c, cs}, d)), pre, post}, R.acts(runs(Con{c, cs}), R.Ds{d, pre, post}), R.acts(S.plan(Con{c, cs}, S.Conn{id, a, n, S.MOn{}, False{}, sel}, srv), R.Ds{d, pre, post}),
+           acts_runs(Con{c, cs}, d, pre, post),
+           Equal.cong(List<&2, R.Act>, R.Ds, z => R.acts(z, R.Ds{d, pre, post}), runs(Con{c, cs}), S.plan(Con{c, cs}, S.Conn{id, a, n, S.MOn{}, False{}, sel}, srv), Equal.sym(List<&2, R.Act>, S.plan(Con{c, cs}, S.Conn{id, a, n, S.MOn{}, False{}, sel}, srv), runs(Con{c, cs}), fast_plan(Con{c, cs}, id, a, n, sel, srv)(ea)(ep)))))
 
-def plain_run_log(b: Bool, conn: S.Conn, +srv: S.Srv, cs: List<&2, R.Cmd>, +hs: List<&2, U32>, +db: R.Db) -> {b == S.ready(conn, srv) : Bool} -> {plain(cs) == True{} : Bool} -> {S.run_log.plain(b, conn, srv, cs, hs, db) == S.logged.gen(S.gen(conn, srv, cs, db)) : S.Logged}:
-  match b conn cs:
-    case _ _ Nil{}:
+def plain_run_log(b: Bool, conn: S.Conn, +srv: S.Srv, cs: List<&2, R.Cmd>, +hs: List<&2, U32>, ds: R.Ds) -> {b == S.ready(conn, srv) : Bool} -> {plain(cs) == True{} : Bool} -> {S.run_log.plain(b, conn, srv, cs, hs, ds) == S.logged.gen(S.gen(conn, srv, cs, ds)) : S.Logged}:
+  match b conn cs ds:
+    case _ _ Nil{} _:
       eb => ep => {==}
-    case False{} _ Con{c, rest}:
+    case False{} _ Con{c, rest} _:
       eb => ep => {==}
-    case True{} S.Conn{id, a, n, S.MOn{}, True{}} Con{c, rest}:
-      eb => ep => Empty.absurd({S.run_log.plain(True{}, S.Conn{id, a, n, S.MOn{}, True{}}, srv, Con{c, rest}, hs, db) == S.logged.gen(S.gen(S.Conn{id, a, n, S.MOn{}, True{}}, srv, Con{c, rest}, db)) : S.Logged}, true_false(eb))
-    case True{} S.Conn{id, a, n, S.MOn{}, False{}} Con{+c, +rest}:
-      eb => +ep => fast_eq_log(c, rest, id, a, n, srv, hs, db)(Equal.sym(Bool, True{}, S.authed(S.Conn{id, a, n, S.MOn{}, False{}}, srv), eb))(ep)
-    case True{} S.Conn{id, a, n, S.MOff{}, True{}} Con{c, rest}:
-      eb => ep => Empty.absurd({S.run_log.plain(True{}, S.Conn{id, a, n, S.MOff{}, True{}}, srv, Con{c, rest}, hs, db) == S.logged.gen(S.gen(S.Conn{id, a, n, S.MOff{}, True{}}, srv, Con{c, rest}, db)) : S.Logged}, true_false(eb))
-    case True{} S.Conn{id, a, n, S.MOff{}, False{}} Con{c, rest}:
-      eb => ep => Empty.absurd({S.run_log.plain(True{}, S.Conn{id, a, n, S.MOff{}, False{}}, srv, Con{c, rest}, hs, db) == S.logged.gen(S.gen(S.Conn{id, a, n, S.MOff{}, False{}}, srv, Con{c, rest}, db)) : S.Logged}, true_false(eb))
-    case True{} S.Conn{id, a, n, S.MSkip{}, True{}} Con{c, rest}:
-      eb => ep => Empty.absurd({S.run_log.plain(True{}, S.Conn{id, a, n, S.MSkip{}, True{}}, srv, Con{c, rest}, hs, db) == S.logged.gen(S.gen(S.Conn{id, a, n, S.MSkip{}, True{}}, srv, Con{c, rest}, db)) : S.Logged}, true_false(eb))
-    case True{} S.Conn{id, a, n, S.MSkip{}, False{}} Con{c, rest}:
-      eb => ep => Empty.absurd({S.run_log.plain(True{}, S.Conn{id, a, n, S.MSkip{}, False{}}, srv, Con{c, rest}, hs, db) == S.logged.gen(S.gen(S.Conn{id, a, n, S.MSkip{}, False{}}, srv, Con{c, rest}, db)) : S.Logged}, true_false(eb))
+    case True{} S.Conn{+id, +a, +n, S.MOn{}, False{}, +sel} Con{+c, +rest} R.Ds{+d, +pre, +post}:
+      eb => +ep => fast_eq_log(c, rest, id, a, n, sel, srv, hs, d, pre, post)(Equal.sym(Bool, True{}, S.authed(S.Conn{id, a, n, S.MOn{}, False{}, sel}, srv), eb))(ep)
+    case True{} S.Conn{id, a, n, S.MOn{}, True{}, sel} Con{c, rest} x:
+      eb => ep => Empty.absurd({S.run_log.plain(True{}, S.Conn{id, a, n, S.MOn{}, True{}, sel}, srv, Con{c, rest}, hs, x) == S.logged.gen(S.gen(S.Conn{id, a, n, S.MOn{}, True{}, sel}, srv, Con{c, rest}, x)) : S.Logged}, true_false(eb))
+    case True{} S.Conn{id, a, n, S.MOff{}, True{}, sel} Con{c, rest} x:
+      eb => ep => Empty.absurd({S.run_log.plain(True{}, S.Conn{id, a, n, S.MOff{}, True{}, sel}, srv, Con{c, rest}, hs, x) == S.logged.gen(S.gen(S.Conn{id, a, n, S.MOff{}, True{}, sel}, srv, Con{c, rest}, x)) : S.Logged}, true_false(eb))
+    case True{} S.Conn{id, a, n, S.MOff{}, False{}, sel} Con{c, rest} x:
+      eb => ep => Empty.absurd({S.run_log.plain(True{}, S.Conn{id, a, n, S.MOff{}, False{}, sel}, srv, Con{c, rest}, hs, x) == S.logged.gen(S.gen(S.Conn{id, a, n, S.MOff{}, False{}, sel}, srv, Con{c, rest}, x)) : S.Logged}, true_false(eb))
+    case True{} S.Conn{id, a, n, S.MSkip{}, True{}, sel} Con{c, rest} x:
+      eb => ep => Empty.absurd({S.run_log.plain(True{}, S.Conn{id, a, n, S.MSkip{}, True{}, sel}, srv, Con{c, rest}, hs, x) == S.logged.gen(S.gen(S.Conn{id, a, n, S.MSkip{}, True{}, sel}, srv, Con{c, rest}, x)) : S.Logged}, true_false(eb))
+    case True{} S.Conn{id, a, n, S.MSkip{}, False{}, sel} Con{c, rest} x:
+      eb => ep => Empty.absurd({S.run_log.plain(True{}, S.Conn{id, a, n, S.MSkip{}, False{}, sel}, srv, Con{c, rest}, hs, x) == S.logged.gen(S.gen(S.Conn{id, a, n, S.MSkip{}, False{}, sel}, srv, Con{c, rest}, x)) : S.Logged}, true_false(eb))
 
-def unzip_gen_log(+conn: S.Conn, +srv: S.Srv, rs: List<&2, B.Req>, +cs: List<&2, R.Cmd>, +hs: List<&2, U32>, +db: R.Db) -> {plain(cs) == True{} : Bool} -> {S.run_log(conn, srv, B.job(B.unzip(rs, cs, hs)), db) == S.logged.gen(S.gen(conn, srv, B.cmds_of(rs, cs), db)) : S.Logged}:
+def unzip_gen_log(+conn: S.Conn, +srv: S.Srv, rs: List<&2, B.Req>, +cs: List<&2, R.Cmd>, +hs: List<&2, U32>, +ds: R.Ds) -> {plain(cs) == True{} : Bool} -> {S.run_log(conn, srv, B.job(B.unzip(rs, cs, hs)), ds) == S.logged.gen(S.gen(conn, srv, B.cmds_of(rs, cs), ds)) : S.Logged}:
   match rs:
     case Nil{}:
-      e => plain_run_log(S.ready(conn, srv), conn, srv, cs, hs, db)({==})(e)
+      e => plain_run_log(S.ready(conn, srv), conn, srv, cs, hs, ds)({==})(e)
     case Con{B.Req{R.Ping{}, h}, rest}:
-      e => unzip_gen_log(conn, srv, rest, R.Ping{} <> cs, h <> hs, db)(e)
+      e => unzip_gen_log(conn, srv, rest, R.Ping{} <> cs, h <> hs, ds)(e)
     case Con{B.Req{R.Echo{x0}, h}, rest}:
-      e => unzip_gen_log(conn, srv, rest, R.Echo{x0} <> cs, h <> hs, db)(e)
+      e => unzip_gen_log(conn, srv, rest, R.Echo{x0} <> cs, h <> hs, ds)(e)
     case Con{B.Req{R.Get{x0}, h}, rest}:
-      e => unzip_gen_log(conn, srv, rest, R.Get{x0} <> cs, h <> hs, db)(e)
+      e => unzip_gen_log(conn, srv, rest, R.Get{x0} <> cs, h <> hs, ds)(e)
     case Con{B.Req{R.Set{x0, x1}, h}, rest}:
-      e => unzip_gen_log(conn, srv, rest, R.Set{x0, x1} <> cs, h <> hs, db)(e)
+      e => unzip_gen_log(conn, srv, rest, R.Set{x0, x1} <> cs, h <> hs, ds)(e)
     case Con{B.Req{R.Del{x0}, h}, rest}:
-      e => unzip_gen_log(conn, srv, rest, R.Del{x0} <> cs, h <> hs, db)(e)
+      e => unzip_gen_log(conn, srv, rest, R.Del{x0} <> cs, h <> hs, ds)(e)
     case Con{B.Req{R.Exists{x0}, h}, rest}:
-      e => unzip_gen_log(conn, srv, rest, R.Exists{x0} <> cs, h <> hs, db)(e)
+      e => unzip_gen_log(conn, srv, rest, R.Exists{x0} <> cs, h <> hs, ds)(e)
     case Con{B.Req{R.IncrBy{x0, x1}, h}, rest}:
-      e => unzip_gen_log(conn, srv, rest, R.IncrBy{x0, x1} <> cs, h <> hs, db)(e)
+      e => unzip_gen_log(conn, srv, rest, R.IncrBy{x0, x1} <> cs, h <> hs, ds)(e)
     case Con{B.Req{R.MGet{x0}, h}, rest}:
-      e => unzip_gen_log(conn, srv, rest, R.MGet{x0} <> cs, h <> hs, db)(e)
+      e => unzip_gen_log(conn, srv, rest, R.MGet{x0} <> cs, h <> hs, ds)(e)
     case Con{B.Req{R.MSet{x0}, h}, rest}:
-      e => unzip_gen_log(conn, srv, rest, R.MSet{x0} <> cs, h <> hs, db)(e)
+      e => unzip_gen_log(conn, srv, rest, R.MSet{x0} <> cs, h <> hs, ds)(e)
     case Con{B.Req{R.DbSize{}, h}, rest}:
-      e => unzip_gen_log(conn, srv, rest, R.DbSize{} <> cs, h <> hs, db)(e)
-    case Con{B.Req{R.FlushAll{}, h}, rest}:
-      e => unzip_gen_log(conn, srv, rest, R.FlushAll{} <> cs, h <> hs, db)(e)
+      e => unzip_gen_log(conn, srv, rest, R.DbSize{} <> cs, h <> hs, ds)(e)
+    case Con{B.Req{R.FlushDb{}, h}, rest}:
+      e => unzip_gen_log(conn, srv, rest, R.FlushDb{} <> cs, h <> hs, ds)(e)
     case Con{B.Req{R.Keys{x0}, h}, rest}:
-      e => unzip_gen_log(conn, srv, rest, R.Keys{x0} <> cs, h <> hs, db)(e)
+      e => unzip_gen_log(conn, srv, rest, R.Keys{x0} <> cs, h <> hs, ds)(e)
     case Con{B.Req{R.Scan{x0}, h}, rest}:
-      e => unzip_gen_log(conn, srv, rest, R.Scan{x0} <> cs, h <> hs, db)(e)
+      e => unzip_gen_log(conn, srv, rest, R.Scan{x0} <> cs, h <> hs, ds)(e)
     case Con{B.Req{R.Peek{x0, x1}, h}, rest}:
-      e => unzip_gen_log(conn, srv, rest, R.Peek{x0, x1} <> cs, h <> hs, db)(e)
+      e => unzip_gen_log(conn, srv, rest, R.Peek{x0, x1} <> cs, h <> hs, ds)(e)
     case Con{B.Req{R.Upd{x0, x1}, h}, rest}:
-      e => unzip_gen_log(conn, srv, rest, R.Upd{x0, x1} <> cs, h <> hs, db)(e)
+      e => unzip_gen_log(conn, srv, rest, R.Upd{x0, x1} <> cs, h <> hs, ds)(e)
     case Con{B.Req{R.Own{x0}, h}, rest}:
-      e => mixed_gen_log(conn, srv, rest, R.Own{x0} <> cs, h <> hs, db)
+      e => mixed_gen_log(conn, srv, rest, R.Own{x0} <> cs, h <> hs, ds)
     case Con{B.Req{R.Bad{x0}, h}, rest}:
-      e => unzip_gen_log(conn, srv, rest, R.Bad{x0} <> cs, h <> hs, db)(e)
+      e => unzip_gen_log(conn, srv, rest, R.Bad{x0} <> cs, h <> hs, ds)(e)
 
-def Laws.run_log_gen(conn, srv, rs, db):
-  unzip_gen_log(conn, srv, rs, Nil{}, Nil{}, db)({==})
+def Laws.run_log_gen(conn, srv, rs, ds):
+  unzip_gen_log(conn, srv, rs, Nil{}, Nil{}, ds)({==})
 
 # A client that has not authenticated
 # ------------------------------------
@@ -7309,6 +8791,12 @@ def srv_same.o(o: R.SessOp, +conn: S.Conn, +srv: S.Srv, +ef: {S.authed(conn, srv
       e => Empty.absurd({S.own_srv(R.SCommand{y0}, conn, srv) == srv : S.Srv}, true_false(Equal.trans(Bool, True{}, S.authed(conn, srv), False{}, e, ef)))
     case R.SRandomKey{}:
       e => Empty.absurd({S.own_srv(R.SRandomKey{}, conn, srv) == srv : S.Srv}, true_false(Equal.trans(Bool, True{}, S.authed(conn, srv), False{}, e, ef)))
+    case R.SSwapDb{y0, y1}:
+      e => Empty.absurd({S.own_srv(R.SSwapDb{y0, y1}, conn, srv) == srv : S.Srv}, true_false(Equal.trans(Bool, True{}, S.authed(conn, srv), False{}, e, ef)))
+    case R.SMove{y0, y1}:
+      e => Empty.absurd({S.own_srv(R.SMove{y0, y1}, conn, srv) == srv : S.Srv}, true_false(Equal.trans(Bool, True{}, S.authed(conn, srv), False{}, e, ef)))
+    case R.SFlushAll{}:
+      e => Empty.absurd({S.own_srv(R.SFlushAll{}, conn, srv) == srv : S.Srv}, true_false(Equal.trans(Bool, True{}, S.authed(conn, srv), False{}, e, ef)))
     case R.SReply{y0}:
       e => Empty.absurd({S.own_srv(R.SReply{y0}, conn, srv) == srv : S.Srv}, true_false(Equal.trans(Bool, True{}, S.authed(conn, srv), False{}, e, ef)))
     case R.SBad{y0}:
@@ -7334,88 +8822,165 @@ def srv_same(q: Bool, +c: R.Cmd, +conn: S.Conn, +srv: S.Srv, +ef: {S.authed(conn
     case False{}:
       srv_same.k(S.kind(c), S.may(S.kind(c), conn, srv), conn, srv, ef)({==})
 
-# a command a client that may not run commands sends runs on the database
-# only when it is an error the parser found
-def ran_bad(c: R.Cmd, +ps: List<&2, R.Cmd>, +id: Nat, +a: Bool, +n: String, +m: S.Mute, +srv: S.Srv, ef: {S.authed(S.Conn{id, a, n, m, False{}}, srv) == False{} : Bool})
+# a session command a client that may not run commands sends acts on the
+# databases only as RESET does, moving the focus
+def own_bad(o: R.SessOp, +ps: List<&2, R.Act>, +id: Nat, +a: Bool, +n: String, +m: S.Mute, +sel: Nat, +srv: S.Srv, ef: {S.authed(S.Conn{id, a, n, m, False{}, sel}, srv) == False{} : Bool})
   -> {Laws.all_bad(ps) == True{} : Bool}
-  -> {Laws.all_bad(List.append(&2, R.Cmd, S.keep(S.ran(False{}, c, S.Conn{id, a, n, m, False{}}, srv), c), ps)) == True{} : Bool}:
+  -> {Laws.all_bad(List.append(&2, R.Act, S.acts.k(S.KSess{o}, S.may(S.KSess{o}, S.Conn{id, a, n, m, False{}, sel}, srv), R.Own{o}, S.Conn{id, a, n, m, False{}, sel}, srv), ps)) == True{} : Bool}:
+  match o:
+    case R.SHello{y0}:
+      ih => ih
+    case R.SAuth{y0}:
+      ih => ih
+    case R.SSelect{y0}:
+      ih =>
+        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel}, srv), False{}, ef) : {Laws.all_bad(List.append(&2, R.Act, S.acts.k(S.KSess{R.SSelect{y0}}, _, R.Own{R.SSelect{y0}}, S.Conn{id, a, n, m, False{}, sel}, srv), ps)) == True{} : Bool}
+        ih
+    case R.SQuit{}:
+      ih => ih
+    case R.SReset{}:
+      ih => ih
+    case R.SClientId{}:
+      ih =>
+        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel}, srv), False{}, ef) : {Laws.all_bad(List.append(&2, R.Act, S.acts.k(S.KSess{R.SClientId{}}, _, R.Own{R.SClientId{}}, S.Conn{id, a, n, m, False{}, sel}, srv), ps)) == True{} : Bool}
+        ih
+    case R.SClientGetName{}:
+      ih =>
+        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel}, srv), False{}, ef) : {Laws.all_bad(List.append(&2, R.Act, S.acts.k(S.KSess{R.SClientGetName{}}, _, R.Own{R.SClientGetName{}}, S.Conn{id, a, n, m, False{}, sel}, srv), ps)) == True{} : Bool}
+        ih
+    case R.SClientSetName{y0}:
+      ih =>
+        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel}, srv), False{}, ef) : {Laws.all_bad(List.append(&2, R.Act, S.acts.k(S.KSess{R.SClientSetName{y0}}, _, R.Own{R.SClientSetName{y0}}, S.Conn{id, a, n, m, False{}, sel}, srv), ps)) == True{} : Bool}
+        ih
+    case R.SClientReply{y0}:
+      ih =>
+        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel}, srv), False{}, ef) : {Laws.all_bad(List.append(&2, R.Act, S.acts.k(S.KSess{R.SClientReply{y0}}, _, R.Own{R.SClientReply{y0}}, S.Conn{id, a, n, m, False{}, sel}, srv), ps)) == True{} : Bool}
+        ih
+    case R.SConfigGet{y0}:
+      ih =>
+        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel}, srv), False{}, ef) : {Laws.all_bad(List.append(&2, R.Act, S.acts.k(S.KSess{R.SConfigGet{y0}}, _, R.Own{R.SConfigGet{y0}}, S.Conn{id, a, n, m, False{}, sel}, srv), ps)) == True{} : Bool}
+        ih
+    case R.SConfigSet{y0}:
+      ih =>
+        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel}, srv), False{}, ef) : {Laws.all_bad(List.append(&2, R.Act, S.acts.k(S.KSess{R.SConfigSet{y0}}, _, R.Own{R.SConfigSet{y0}}, S.Conn{id, a, n, m, False{}, sel}, srv), ps)) == True{} : Bool}
+        ih
+    case R.SConfigResetStat{}:
+      ih =>
+        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel}, srv), False{}, ef) : {Laws.all_bad(List.append(&2, R.Act, S.acts.k(S.KSess{R.SConfigResetStat{}}, _, R.Own{R.SConfigResetStat{}}, S.Conn{id, a, n, m, False{}, sel}, srv), ps)) == True{} : Bool}
+        ih
+    case R.SInfo{y0}:
+      ih =>
+        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel}, srv), False{}, ef) : {Laws.all_bad(List.append(&2, R.Act, S.acts.k(S.KSess{R.SInfo{y0}}, _, R.Own{R.SInfo{y0}}, S.Conn{id, a, n, m, False{}, sel}, srv), ps)) == True{} : Bool}
+        ih
+    case R.SCommand{y0}:
+      ih =>
+        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel}, srv), False{}, ef) : {Laws.all_bad(List.append(&2, R.Act, S.acts.k(S.KSess{R.SCommand{y0}}, _, R.Own{R.SCommand{y0}}, S.Conn{id, a, n, m, False{}, sel}, srv), ps)) == True{} : Bool}
+        ih
+    case R.SRandomKey{}:
+      ih =>
+        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel}, srv), False{}, ef) : {Laws.all_bad(List.append(&2, R.Act, S.acts.k(S.KSess{R.SRandomKey{}}, _, R.Own{R.SRandomKey{}}, S.Conn{id, a, n, m, False{}, sel}, srv), ps)) == True{} : Bool}
+        ih
+    case R.SSwapDb{y0, y1}:
+      ih =>
+        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel}, srv), False{}, ef) : {Laws.all_bad(List.append(&2, R.Act, S.acts.k(S.KSess{R.SSwapDb{y0, y1}}, _, R.Own{R.SSwapDb{y0, y1}}, S.Conn{id, a, n, m, False{}, sel}, srv), ps)) == True{} : Bool}
+        ih
+    case R.SMove{y0, y1}:
+      ih =>
+        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel}, srv), False{}, ef) : {Laws.all_bad(List.append(&2, R.Act, S.acts.k(S.KSess{R.SMove{y0, y1}}, _, R.Own{R.SMove{y0, y1}}, S.Conn{id, a, n, m, False{}, sel}, srv), ps)) == True{} : Bool}
+        ih
+    case R.SFlushAll{}:
+      ih =>
+        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel}, srv), False{}, ef) : {Laws.all_bad(List.append(&2, R.Act, S.acts.k(S.KSess{R.SFlushAll{}}, _, R.Own{R.SFlushAll{}}, S.Conn{id, a, n, m, False{}, sel}, srv), ps)) == True{} : Bool}
+        ih
+    case R.SReply{y0}:
+      ih =>
+        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel}, srv), False{}, ef) : {Laws.all_bad(List.append(&2, R.Act, S.acts.k(S.KSess{R.SReply{y0}}, _, R.Own{R.SReply{y0}}, S.Conn{id, a, n, m, False{}, sel}, srv), ps)) == True{} : Bool}
+        ih
+    case R.SBad{y0}:
+      ih => ih
+
+# a command a client that may not run commands sends runs on the
+# databases only when it is an error the parser found, or moves the focus
+def ran_bad(c: R.Cmd, +ps: List<&2, R.Act>, +id: Nat, +a: Bool, +n: String, +m: S.Mute, +sel: Nat, +srv: S.Srv, ef: {S.authed(S.Conn{id, a, n, m, False{}, sel}, srv) == False{} : Bool})
+  -> {Laws.all_bad(ps) == True{} : Bool}
+  -> {Laws.all_bad(List.append(&2, R.Act, S.acts.q(False{}, c, S.Conn{id, a, n, m, False{}, sel}, srv), ps)) == True{} : Bool}:
   match c:
     case R.Ping{}:
       ih =>
-        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}}, srv), False{}, ef) : {Laws.all_bad(List.append(&2, R.Cmd, S.keep(_, R.Ping{}), ps)) == True{} : Bool}
+        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel}, srv), False{}, ef) : {Laws.all_bad(List.append(&2, R.Act, S.acts.k(S.KData{}, _, R.Ping{}, S.Conn{id, a, n, m, False{}, sel}, srv), ps)) == True{} : Bool}
         ih
     case R.Echo{x0}:
       ih =>
-        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}}, srv), False{}, ef) : {Laws.all_bad(List.append(&2, R.Cmd, S.keep(_, R.Echo{x0}), ps)) == True{} : Bool}
+        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel}, srv), False{}, ef) : {Laws.all_bad(List.append(&2, R.Act, S.acts.k(S.KData{}, _, R.Echo{x0}, S.Conn{id, a, n, m, False{}, sel}, srv), ps)) == True{} : Bool}
         ih
     case R.Get{x0}:
       ih =>
-        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}}, srv), False{}, ef) : {Laws.all_bad(List.append(&2, R.Cmd, S.keep(_, R.Get{x0}), ps)) == True{} : Bool}
+        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel}, srv), False{}, ef) : {Laws.all_bad(List.append(&2, R.Act, S.acts.k(S.KData{}, _, R.Get{x0}, S.Conn{id, a, n, m, False{}, sel}, srv), ps)) == True{} : Bool}
         ih
     case R.Set{x0, x1}:
       ih =>
-        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}}, srv), False{}, ef) : {Laws.all_bad(List.append(&2, R.Cmd, S.keep(_, R.Set{x0, x1}), ps)) == True{} : Bool}
+        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel}, srv), False{}, ef) : {Laws.all_bad(List.append(&2, R.Act, S.acts.k(S.KData{}, _, R.Set{x0, x1}, S.Conn{id, a, n, m, False{}, sel}, srv), ps)) == True{} : Bool}
         ih
     case R.Del{x0}:
       ih =>
-        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}}, srv), False{}, ef) : {Laws.all_bad(List.append(&2, R.Cmd, S.keep(_, R.Del{x0}), ps)) == True{} : Bool}
+        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel}, srv), False{}, ef) : {Laws.all_bad(List.append(&2, R.Act, S.acts.k(S.KData{}, _, R.Del{x0}, S.Conn{id, a, n, m, False{}, sel}, srv), ps)) == True{} : Bool}
         ih
     case R.Exists{x0}:
       ih =>
-        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}}, srv), False{}, ef) : {Laws.all_bad(List.append(&2, R.Cmd, S.keep(_, R.Exists{x0}), ps)) == True{} : Bool}
+        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel}, srv), False{}, ef) : {Laws.all_bad(List.append(&2, R.Act, S.acts.k(S.KData{}, _, R.Exists{x0}, S.Conn{id, a, n, m, False{}, sel}, srv), ps)) == True{} : Bool}
         ih
     case R.IncrBy{x0, x1}:
       ih =>
-        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}}, srv), False{}, ef) : {Laws.all_bad(List.append(&2, R.Cmd, S.keep(_, R.IncrBy{x0, x1}), ps)) == True{} : Bool}
+        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel}, srv), False{}, ef) : {Laws.all_bad(List.append(&2, R.Act, S.acts.k(S.KData{}, _, R.IncrBy{x0, x1}, S.Conn{id, a, n, m, False{}, sel}, srv), ps)) == True{} : Bool}
         ih
     case R.MGet{x0}:
       ih =>
-        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}}, srv), False{}, ef) : {Laws.all_bad(List.append(&2, R.Cmd, S.keep(_, R.MGet{x0}), ps)) == True{} : Bool}
+        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel}, srv), False{}, ef) : {Laws.all_bad(List.append(&2, R.Act, S.acts.k(S.KData{}, _, R.MGet{x0}, S.Conn{id, a, n, m, False{}, sel}, srv), ps)) == True{} : Bool}
         ih
     case R.MSet{x0}:
       ih =>
-        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}}, srv), False{}, ef) : {Laws.all_bad(List.append(&2, R.Cmd, S.keep(_, R.MSet{x0}), ps)) == True{} : Bool}
+        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel}, srv), False{}, ef) : {Laws.all_bad(List.append(&2, R.Act, S.acts.k(S.KData{}, _, R.MSet{x0}, S.Conn{id, a, n, m, False{}, sel}, srv), ps)) == True{} : Bool}
         ih
     case R.DbSize{}:
       ih =>
-        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}}, srv), False{}, ef) : {Laws.all_bad(List.append(&2, R.Cmd, S.keep(_, R.DbSize{}), ps)) == True{} : Bool}
+        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel}, srv), False{}, ef) : {Laws.all_bad(List.append(&2, R.Act, S.acts.k(S.KData{}, _, R.DbSize{}, S.Conn{id, a, n, m, False{}, sel}, srv), ps)) == True{} : Bool}
         ih
-    case R.FlushAll{}:
+    case R.FlushDb{}:
       ih =>
-        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}}, srv), False{}, ef) : {Laws.all_bad(List.append(&2, R.Cmd, S.keep(_, R.FlushAll{}), ps)) == True{} : Bool}
+        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel}, srv), False{}, ef) : {Laws.all_bad(List.append(&2, R.Act, S.acts.k(S.KData{}, _, R.FlushDb{}, S.Conn{id, a, n, m, False{}, sel}, srv), ps)) == True{} : Bool}
         ih
     case R.Keys{x0}:
       ih =>
-        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}}, srv), False{}, ef) : {Laws.all_bad(List.append(&2, R.Cmd, S.keep(_, R.Keys{x0}), ps)) == True{} : Bool}
+        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel}, srv), False{}, ef) : {Laws.all_bad(List.append(&2, R.Act, S.acts.k(S.KData{}, _, R.Keys{x0}, S.Conn{id, a, n, m, False{}, sel}, srv), ps)) == True{} : Bool}
         ih
     case R.Scan{x0}:
       ih =>
-        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}}, srv), False{}, ef) : {Laws.all_bad(List.append(&2, R.Cmd, S.keep(_, R.Scan{x0}), ps)) == True{} : Bool}
+        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel}, srv), False{}, ef) : {Laws.all_bad(List.append(&2, R.Act, S.acts.k(S.KData{}, _, R.Scan{x0}, S.Conn{id, a, n, m, False{}, sel}, srv), ps)) == True{} : Bool}
         ih
     case R.Peek{x0, x1}:
       ih =>
-        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}}, srv), False{}, ef) : {Laws.all_bad(List.append(&2, R.Cmd, S.keep(_, R.Peek{x0, x1}), ps)) == True{} : Bool}
+        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel}, srv), False{}, ef) : {Laws.all_bad(List.append(&2, R.Act, S.acts.k(S.KData{}, _, R.Peek{x0, x1}, S.Conn{id, a, n, m, False{}, sel}, srv), ps)) == True{} : Bool}
         ih
     case R.Upd{x0, x1}:
       ih =>
-        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}}, srv), False{}, ef) : {Laws.all_bad(List.append(&2, R.Cmd, S.keep(_, R.Upd{x0, x1}), ps)) == True{} : Bool}
+        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel}, srv), False{}, ef) : {Laws.all_bad(List.append(&2, R.Act, S.acts.k(S.KData{}, _, R.Upd{x0, x1}, S.Conn{id, a, n, m, False{}, sel}, srv), ps)) == True{} : Bool}
         ih
     case R.Own{x0}:
-      ih => ih
+      ih => own_bad(x0, ps, id, a, n, m, sel, srv, ef)(ih)
     case R.Bad{x0}:
       ih => ih
 
-def auth_own(o: R.SessOp, +id: Nat, +a: Bool, +n: String, +m: S.Mute, +srv: S.Srv, +ef: {S.authed(S.Conn{id, a, n, m, False{}}, srv) == False{} : Bool}, +ep: {S.nopass(srv) == False{} : Bool})
+def auth_own(o: R.SessOp, +id: Nat, +a: Bool, +n: String, +m: S.Mute, +sel: Nat, +srv: S.Srv, +ef: {S.authed(S.Conn{id, a, n, m, False{}, sel}, srv) == False{} : Bool}, +ep: {S.nopass(srv) == False{} : Bool})
   -> {Laws.logs_in(R.Own{o}) == False{} : Bool}
-  -> {S.conn.auth(S.next_conn(False{}, R.Own{o}, S.Conn{id, a, n, m, False{}}, srv)) == False{} : Bool}:
+  -> {S.conn.auth(S.next_conn(False{}, R.Own{o}, S.Conn{id, a, n, m, False{}, sel}, srv)) == False{} : Bool}:
   match o:
     case R.SHello{y0}:
-      el => Empty.absurd({S.conn.auth(S.next_conn(False{}, R.Own{R.SHello{y0}}, S.Conn{id, a, n, m, False{}}, srv)) == False{} : Bool}, true_false(el))
+      el => Empty.absurd({S.conn.auth(S.next_conn(False{}, R.Own{R.SHello{y0}}, S.Conn{id, a, n, m, False{}, sel}, srv)) == False{} : Bool}, true_false(el))
     case R.SAuth{y0}:
-      el => Empty.absurd({S.conn.auth(S.next_conn(False{}, R.Own{R.SAuth{y0}}, S.Conn{id, a, n, m, False{}}, srv)) == False{} : Bool}, true_false(el))
+      el => Empty.absurd({S.conn.auth(S.next_conn(False{}, R.Own{R.SAuth{y0}}, S.Conn{id, a, n, m, False{}, sel}, srv)) == False{} : Bool}, true_false(el))
     case R.SSelect{y0}:
       el =>
-        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}}, srv), False{}, ef) : {S.conn.auth(S.next_conn.k(S.KSess{R.SSelect{y0}}, _, S.Conn{id, a, n, m, False{}}, srv)) == False{} : Bool}
+        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel}, srv), False{}, ef) : {S.conn.auth(S.next_conn.k(S.KSess{R.SSelect{y0}}, _, S.Conn{id, a, n, m, False{}, sel}, srv)) == False{} : Bool}
         ef
     case R.SQuit{}:
       el => ef
@@ -7423,55 +8988,67 @@ def auth_own(o: R.SessOp, +id: Nat, +a: Bool, +n: String, +m: S.Mute, +srv: S.Sr
       el => ep
     case R.SClientId{}:
       el =>
-        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}}, srv), False{}, ef) : {S.conn.auth(S.next_conn.k(S.KSess{R.SClientId{}}, _, S.Conn{id, a, n, m, False{}}, srv)) == False{} : Bool}
+        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel}, srv), False{}, ef) : {S.conn.auth(S.next_conn.k(S.KSess{R.SClientId{}}, _, S.Conn{id, a, n, m, False{}, sel}, srv)) == False{} : Bool}
         ef
     case R.SClientGetName{}:
       el =>
-        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}}, srv), False{}, ef) : {S.conn.auth(S.next_conn.k(S.KSess{R.SClientGetName{}}, _, S.Conn{id, a, n, m, False{}}, srv)) == False{} : Bool}
+        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel}, srv), False{}, ef) : {S.conn.auth(S.next_conn.k(S.KSess{R.SClientGetName{}}, _, S.Conn{id, a, n, m, False{}, sel}, srv)) == False{} : Bool}
         ef
     case R.SClientSetName{y0}:
       el =>
-        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}}, srv), False{}, ef) : {S.conn.auth(S.next_conn.k(S.KSess{R.SClientSetName{y0}}, _, S.Conn{id, a, n, m, False{}}, srv)) == False{} : Bool}
+        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel}, srv), False{}, ef) : {S.conn.auth(S.next_conn.k(S.KSess{R.SClientSetName{y0}}, _, S.Conn{id, a, n, m, False{}, sel}, srv)) == False{} : Bool}
         ef
     case R.SClientReply{y0}:
       el =>
-        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}}, srv), False{}, ef) : {S.conn.auth(S.next_conn.k(S.KSess{R.SClientReply{y0}}, _, S.Conn{id, a, n, m, False{}}, srv)) == False{} : Bool}
+        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel}, srv), False{}, ef) : {S.conn.auth(S.next_conn.k(S.KSess{R.SClientReply{y0}}, _, S.Conn{id, a, n, m, False{}, sel}, srv)) == False{} : Bool}
         ef
     case R.SConfigGet{y0}:
       el =>
-        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}}, srv), False{}, ef) : {S.conn.auth(S.next_conn.k(S.KSess{R.SConfigGet{y0}}, _, S.Conn{id, a, n, m, False{}}, srv)) == False{} : Bool}
+        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel}, srv), False{}, ef) : {S.conn.auth(S.next_conn.k(S.KSess{R.SConfigGet{y0}}, _, S.Conn{id, a, n, m, False{}, sel}, srv)) == False{} : Bool}
         ef
     case R.SConfigSet{y0}:
       el =>
-        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}}, srv), False{}, ef) : {S.conn.auth(S.next_conn.k(S.KSess{R.SConfigSet{y0}}, _, S.Conn{id, a, n, m, False{}}, srv)) == False{} : Bool}
+        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel}, srv), False{}, ef) : {S.conn.auth(S.next_conn.k(S.KSess{R.SConfigSet{y0}}, _, S.Conn{id, a, n, m, False{}, sel}, srv)) == False{} : Bool}
         ef
     case R.SConfigResetStat{}:
       el =>
-        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}}, srv), False{}, ef) : {S.conn.auth(S.next_conn.k(S.KSess{R.SConfigResetStat{}}, _, S.Conn{id, a, n, m, False{}}, srv)) == False{} : Bool}
+        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel}, srv), False{}, ef) : {S.conn.auth(S.next_conn.k(S.KSess{R.SConfigResetStat{}}, _, S.Conn{id, a, n, m, False{}, sel}, srv)) == False{} : Bool}
         ef
     case R.SInfo{y0}:
       el =>
-        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}}, srv), False{}, ef) : {S.conn.auth(S.next_conn.k(S.KSess{R.SInfo{y0}}, _, S.Conn{id, a, n, m, False{}}, srv)) == False{} : Bool}
+        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel}, srv), False{}, ef) : {S.conn.auth(S.next_conn.k(S.KSess{R.SInfo{y0}}, _, S.Conn{id, a, n, m, False{}, sel}, srv)) == False{} : Bool}
         ef
     case R.SCommand{y0}:
       el =>
-        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}}, srv), False{}, ef) : {S.conn.auth(S.next_conn.k(S.KSess{R.SCommand{y0}}, _, S.Conn{id, a, n, m, False{}}, srv)) == False{} : Bool}
+        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel}, srv), False{}, ef) : {S.conn.auth(S.next_conn.k(S.KSess{R.SCommand{y0}}, _, S.Conn{id, a, n, m, False{}, sel}, srv)) == False{} : Bool}
         ef
     case R.SRandomKey{}:
       el =>
-        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}}, srv), False{}, ef) : {S.conn.auth(S.next_conn.k(S.KSess{R.SRandomKey{}}, _, S.Conn{id, a, n, m, False{}}, srv)) == False{} : Bool}
+        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel}, srv), False{}, ef) : {S.conn.auth(S.next_conn.k(S.KSess{R.SRandomKey{}}, _, S.Conn{id, a, n, m, False{}, sel}, srv)) == False{} : Bool}
+        ef
+    case R.SSwapDb{y0, y1}:
+      el =>
+        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel}, srv), False{}, ef) : {S.conn.auth(S.next_conn.k(S.KSess{R.SSwapDb{y0, y1}}, _, S.Conn{id, a, n, m, False{}, sel}, srv)) == False{} : Bool}
+        ef
+    case R.SMove{y0, y1}:
+      el =>
+        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel}, srv), False{}, ef) : {S.conn.auth(S.next_conn.k(S.KSess{R.SMove{y0, y1}}, _, S.Conn{id, a, n, m, False{}, sel}, srv)) == False{} : Bool}
+        ef
+    case R.SFlushAll{}:
+      el =>
+        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel}, srv), False{}, ef) : {S.conn.auth(S.next_conn.k(S.KSess{R.SFlushAll{}}, _, S.Conn{id, a, n, m, False{}, sel}, srv)) == False{} : Bool}
         ef
     case R.SReply{y0}:
       el =>
-        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}}, srv), False{}, ef) : {S.conn.auth(S.next_conn.k(S.KSess{R.SReply{y0}}, _, S.Conn{id, a, n, m, False{}}, srv)) == False{} : Bool}
+        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel}, srv), False{}, ef) : {S.conn.auth(S.next_conn.k(S.KSess{R.SReply{y0}}, _, S.Conn{id, a, n, m, False{}, sel}, srv)) == False{} : Bool}
         ef
     case R.SBad{y0}:
       el => ef
 
 # and leaves the client not authenticated, unless it is AUTH or HELLO
-def auth_nc(c: R.Cmd, +id: Nat, +a: Bool, +n: String, +m: S.Mute, +srv: S.Srv, +ef: {S.authed(S.Conn{id, a, n, m, False{}}, srv) == False{} : Bool}, +ep: {S.nopass(srv) == False{} : Bool})
+def auth_nc(c: R.Cmd, +id: Nat, +a: Bool, +n: String, +m: S.Mute, +sel: Nat, +srv: S.Srv, +ef: {S.authed(S.Conn{id, a, n, m, False{}, sel}, srv) == False{} : Bool}, +ep: {S.nopass(srv) == False{} : Bool})
   -> {Laws.logs_in(c) == False{} : Bool}
-  -> {S.conn.auth(S.next_conn(False{}, c, S.Conn{id, a, n, m, False{}}, srv)) == False{} : Bool}:
+  -> {S.conn.auth(S.next_conn(False{}, c, S.Conn{id, a, n, m, False{}, sel}, srv)) == False{} : Bool}:
   match c:
     case R.Ping{}:
       el => ef
@@ -7493,7 +9070,7 @@ def auth_nc(c: R.Cmd, +id: Nat, +a: Bool, +n: String, +m: S.Mute, +srv: S.Srv, +
       el => ef
     case R.DbSize{}:
       el => ef
-    case R.FlushAll{}:
+    case R.FlushDb{}:
       el => ef
     case R.Keys{x0}:
       el => ef
@@ -7504,7 +9081,7 @@ def auth_nc(c: R.Cmd, +id: Nat, +a: Bool, +n: String, +m: S.Mute, +srv: S.Srv, +
     case R.Upd{x0, x1}:
       el => ef
     case R.Own{x0}:
-      el => auth_own(x0, id, a, n, m, srv, ef, ep)(el)
+      el => auth_own(x0, id, a, n, m, sel, srv, ef, ep)(el)
     case R.Bad{x0}:
       el => ef
 
@@ -7512,12 +9089,12 @@ def noauth_go(cmds: List<&2, R.Cmd>, conn: S.Conn, +srv: S.Srv) -> {S.conn.auth(
   match cmds conn:
     case Nil{} _:
       ea => ep => el => {==}
-    case Con{+c, +rest} S.Conn{+id, +a, +n, +m, True{}}:
-      +ea => +ep => +el => noauth_go(rest, S.Conn{id, a, n, m, True{}}, srv)(ea)(ep)(and_r(Bool.not(Laws.logs_in(c)), Laws.no_login(rest))(el))
-    case Con{+c, +rest} S.Conn{+id, +a, +n, +m, False{}}:
+    case Con{+c, +rest} S.Conn{+id, +a, +n, +m, True{}, +sel}:
+      +ea => +ep => +el => noauth_go(rest, S.Conn{id, a, n, m, True{}, sel}, srv)(ea)(ep)(and_r(Bool.not(Laws.logs_in(c)), Laws.no_login(rest))(el))
+    case Con{+c, +rest} S.Conn{+id, +a, +n, +m, False{}, +sel}:
       +ea => +ep => +el =>
-        ran_bad(c, S.plan(rest, S.next_conn(False{}, c, S.Conn{id, a, n, m, False{}}, srv), S.next_srv(False{}, c, S.Conn{id, a, n, m, False{}}, srv)), id, a, n, m, srv, or_ff(a, S.nopass(srv))(ea)(ep))(
-          noauth_go(rest, S.next_conn(False{}, c, S.Conn{id, a, n, m, False{}}, srv), S.next_srv(False{}, c, S.Conn{id, a, n, m, False{}}, srv))(auth_nc(c, id, a, n, m, srv, or_ff(a, S.nopass(srv))(ea)(ep), ep)(not_true(Laws.logs_in(c))(and_l(Bool.not(Laws.logs_in(c)), Laws.no_login(rest))(el))))(Equal.trans(Bool, S.nopass(S.next_srv(False{}, c, S.Conn{id, a, n, m, False{}}, srv)), S.nopass(srv), False{}, Equal.cong(S.Srv, Bool, z => S.nopass(z), S.next_srv(False{}, c, S.Conn{id, a, n, m, False{}}, srv), srv, srv_same(False{}, c, S.Conn{id, a, n, m, False{}}, srv, or_ff(a, S.nopass(srv))(ea)(ep))), ep))(and_r(Bool.not(Laws.logs_in(c)), Laws.no_login(rest))(el)))
+        ran_bad(c, S.plan(rest, S.next_conn(False{}, c, S.Conn{id, a, n, m, False{}, sel}, srv), S.next_srv(False{}, c, S.Conn{id, a, n, m, False{}, sel}, srv)), id, a, n, m, sel, srv, or_ff(a, S.nopass(srv))(ea)(ep))(
+          noauth_go(rest, S.next_conn(False{}, c, S.Conn{id, a, n, m, False{}, sel}, srv), S.next_srv(False{}, c, S.Conn{id, a, n, m, False{}, sel}, srv))(auth_nc(c, id, a, n, m, sel, srv, or_ff(a, S.nopass(srv))(ea)(ep), ep)(not_true(Laws.logs_in(c))(and_l(Bool.not(Laws.logs_in(c)), Laws.no_login(rest))(el))))(Equal.trans(Bool, S.nopass(S.next_srv(False{}, c, S.Conn{id, a, n, m, False{}, sel}, srv)), S.nopass(srv), False{}, Equal.cong(S.Srv, Bool, z => S.nopass(z), S.next_srv(False{}, c, S.Conn{id, a, n, m, False{}, sel}, srv), srv, srv_same(False{}, c, S.Conn{id, a, n, m, False{}, sel}, srv, or_ff(a, S.nopass(srv))(ea)(ep))), ep))(and_r(Bool.not(Laws.logs_in(c)), Laws.no_login(rest))(el)))
 
 def Laws.noauth(conn, srv, cmds, e1, e2, e3):
   noauth_go(cmds, conn, srv)(e1)(e2)(e3)

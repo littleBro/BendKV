@@ -2,11 +2,13 @@
 """redis_suite.py: Redis's own test suite against BendKV, and against Redis
 itself, the same way: each unit of tests/unit (and tests/unit/type) of a
 Redis 7.0.15 source tree runs in Redis's external mode, against a server
-already started, with the options Redis has for compatible servers: one
-database (--singledb), no checks of object encodings or of DEBUG DIGEST
-(--ignore-encoding, --ignore-digest), and every test run even after one
-fails with an error (--durable). Tests that need to start their own
-servers are marked external:skip and do not run in this mode.
+already started, with the options Redis has for compatible servers: no
+checks of object encodings or of DEBUG DIGEST (--ignore-encoding,
+--ignore-digest), and every test run even after one fails with an error
+(--durable); with --singledb, the suite uses database 0 alone (for a
+server with one database), else database 9 for its keys and the others
+for the tests of SELECT, MOVE and SWAPDB. Tests that need to start their
+own servers are marked external:skip and do not run in this mode.
 
 Each server under test runs as several instances, one unit at a time on
 each, restarted when a unit kills it. The results go to a JSON file:
@@ -106,9 +108,9 @@ def parse(text):
     done()
     return tests
 
-def run_unit(src, unit, port, baseport, timeout):
-    cmd = ["./runtest", "--host", "127.0.0.1", "--port", str(port), "--singledb", "--ignore-encoding",
-           "--ignore-digest", "--durable", "--timeout", str(timeout), "--baseport", str(baseport),
+def run_unit(src, unit, port, baseport, timeout, singledb):
+    cmd = ["./runtest", "--host", "127.0.0.1", "--port", str(port)] + (["--singledb"] if singledb else []) + [
+           "--ignore-encoding", "--ignore-digest", "--durable", "--timeout", str(timeout), "--baseport", str(baseport),
            "--single", unit]
     try:
         r = subprocess.run(cmd, cwd=src, capture_output=True, text=True, errors="replace",
@@ -136,7 +138,7 @@ def main_run(a):
                     break
                 unit = queue.popleft()
             t0 = time.time()
-            text = run_unit(a.redis_src, unit, port, 21000 + 100 * i, a.timeout)
+            text = run_unit(a.redis_src, unit, port, 21000 + 100 * i, a.timeout, a.singledb)
             died = not srv.alive()
             tests = parse(text)
             with open(os.path.join(a.logs, unit.replace("/", "_") + ".txt"), "w") as f:
@@ -234,6 +236,7 @@ if __name__ == "__main__":
     ap.add_argument("--port", type=int, default=6600)
     ap.add_argument("--timeout", type=int, default=60)
     ap.add_argument("--units", nargs="*")
+    ap.add_argument("--singledb", action="store_true")
     ap.add_argument("--report", nargs=2)
     ap.add_argument("--top", type=int, default=25)
     ap.add_argument("--name", default="BendKV")
