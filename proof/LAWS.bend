@@ -280,7 +280,7 @@ law frame:
   for +db: R.Db
   for +j: String
   for  e: {writes(c, j) == False{} : Bool}
-  {KV.entry(String, R.db.t(R.db_of(R.exec(c, db))), j) == KV.entry(String, R.db.t(db), j) : Maybe<&2, KV.Item<String>>}
+  {KV.entry(KV.Val, R.db.t(R.db_of(R.exec(c, db))), j) == KV.entry(KV.Val, R.db.t(db), j) : Maybe<&2, KV.Item<KV.Val>>}
 
 # LAW: reads leave the whole database as it was
 law reads_keep_db:
@@ -297,26 +297,26 @@ law get_after_set:
   {R.reply_of(R.exec(R.Get{k}, R.db_of(R.exec(R.Set{k, v}, db)))) == R.RBulk{v} : R.Reply}
 
 # k's entry in a database, when the key is there at the database's now
-def there(+db: R.Db, +k: String) -> Maybe<&2, KV.Item<String>>:
-  R.ent.live(R.db.now(db), KV.entry(String, R.db.t(db), k))
+def there(+db: R.Db, +k: String) -> Maybe<&2, KV.Item<KV.Val>>:
+  R.ent.live(R.db.now(db), KV.entry(KV.Val, R.db.t(db), k))
 
 # LAW: a key whose time has passed is not there (so GET answers nil, DEL
 # does not count it, SETNX sets it anew)
 law expired:
   for +db: R.Db
   for +k: String
-  for +v: String
+  for +v: KV.Val
   for +e: Nat
-  for  h: {KV.entry(String, R.db.t(db), k) == Some{KV.Item{v, 1n+e}} : Maybe<&2, KV.Item<String>>}
+  for  h: {KV.entry(KV.Val, R.db.t(db), k) == Some{KV.Item{v, 1n+e}} : Maybe<&2, KV.Item<KV.Val>>}
   for  p: {Nat.is_lt(1n+e, R.db.now(db)) == True{} : Bool}
-  {there(db, k) == None{} : Maybe<&2, KV.Item<String>>}
+  {there(db, k) == None{} : Maybe<&2, KV.Item<KV.Val>>}
 
 # LAW: GET of a key that is not there (never set, deleted, or expired)
 # answers nil and changes nothing
 law get_missing:
   for +db: R.Db
   for +k: String
-  for  e: {there(db, k) == None{} : Maybe<&2, KV.Item<String>>}
+  for  e: {there(db, k) == None{} : Maybe<&2, KV.Item<KV.Val>>}
   {R.exec(R.Get{k}, db) == (R.RNull{}, db) : R.Reply & R.Db}
 
 # LAW: DEL removes every key it names, expired or not
@@ -325,58 +325,68 @@ law del_effect:
   for +db: R.Db
   for +j: String
   for  e: {any_key(j, ks) == True{} : Bool}
-  {KV.entry(String, R.db.t(R.db_of(R.exec(R.Del{ks}, db))), j) == None{} : Maybe<&2, KV.Item<String>>}
+  {KV.entry(KV.Val, R.db.t(R.db_of(R.exec(R.Del{ks}, db))), j) == None{} : Maybe<&2, KV.Item<KV.Val>>}
 
 # LAW: DEL of one key answers 1 when it was there, 0 when it was not
 law del_one_count:
   for +db: R.Db
   for +k: String
-  {R.reply_of(R.exec(R.Del{[k]}, db)) == R.r_int(Bool.pick(Nat, Maybe.is_some(&2, KV.Item<String>, there(db, k)), 1n, 0n)) : R.Reply}
+  {R.reply_of(R.exec(R.Del{[k]}, db)) == R.r_int(Bool.pick(Nat, Maybe.is_some(&2, KV.Item<KV.Val>, there(db, k)), 1n, 0n)) : R.Reply}
 
 # what a command answers, and what its key k holds after it
-def at_key(r: R.Reply & R.Db, +k: String) -> R.Reply & Maybe<&2, KV.Item<String>>:
+def at_key(r: R.Reply & R.Db, +k: String) -> R.Reply & Maybe<&2, KV.Item<KV.Val>>:
   (x, db) = r
-  (x, KV.entry(String, R.db.t(db), k))
+  (x, KV.entry(KV.Val, R.db.t(db), k))
 
-# the value a key there holds, and its time: nothing and none for a key
+# the string a key there holds, and its time: nothing and none for a key
 # that is not there
-def old_val(m: Maybe<&2, KV.Item<String>>) -> String:
+def old_val(m: Maybe<&2, KV.Item<KV.Val>>) -> String:
   match m:
-    case Some{KV.Item{v, e}}:
+    case Some{KV.Item{KV.VStr{v}, e}}:
       v
-    case None{}:
+    case _:
       ""
 
-def old_exp(m: Maybe<&2, KV.Item<String>>) -> Nat:
+# whether a key holds a collection (a command on strings answers it
+# WRONGTYPE)
+def holds_coll(m: Maybe<&2, KV.Item<KV.Val>>) -> Bool:
+  match m:
+    case Some{KV.Item{KV.VColl{c}, e}}:
+      True{}
+    case _:
+      False{}
+
+def old_exp(m: Maybe<&2, KV.Item<KV.Val>>) -> Nat:
   match m:
     case Some{KV.Item{v, e}}:
       e
     case None{}:
       0n
 
-# LAW: APPEND stores the value the key held followed by the new bytes,
+# LAW: APPEND stores the string the key held followed by the new bytes,
 # keeping the key's time, and answers the new length
 law append_effect:
   for +db: R.Db
   for +k: String
   for +s: String
-  {at_key(R.exec(R.Upd{k, R.UAppend{s}}, db), k) == (R.r_int(String.length(old_val(there(db, k)) ++ s)), Some{KV.Item{old_val(there(db, k)) ++ s, old_exp(there(db, k))}}) : R.Reply & Maybe<&2, KV.Item<String>>}
+  for  nc: {holds_coll(there(db, k)) == False{} : Bool}
+  {at_key(R.exec(R.Upd{k, R.UAppend{s}}, db), k) == (R.r_int(String.length(old_val(there(db, k)) ++ s)), Some{KV.Item{KV.VStr{old_val(there(db, k)) ++ s}, old_exp(there(db, k))}}) : R.Reply & Maybe<&2, KV.Item<KV.Val>>}
 
 # LAW: SETNX sets a key that is not there, with no time, and answers 1
 law setnx_missing:
   for +db: R.Db
   for +k: String
   for +v: String
-  for  e: {there(db, k) == None{} : Maybe<&2, KV.Item<String>>}
-  {at_key(R.exec(R.Upd{k, R.USetNx{v}}, db), k) == (R.r_int(1n), Some{KV.Item{v, 0n}}) : R.Reply & Maybe<&2, KV.Item<String>>}
+  for  e: {there(db, k) == None{} : Maybe<&2, KV.Item<KV.Val>>}
+  {at_key(R.exec(R.Upd{k, R.USetNx{v}}, db), k) == (R.r_int(1n), Some{KV.Item{KV.VStr{v}, 0n}}) : R.Reply & Maybe<&2, KV.Item<KV.Val>>}
 
 # LAW: SETNX leaves a key that is there alone and answers 0
 law setnx_present:
   for +db: R.Db
   for +k: String
   for +v: String
-  for +x: KV.Item<String>
-  for  e: {there(db, k) == Some{x} : Maybe<&2, KV.Item<String>>}
+  for +x: KV.Item<KV.Val>
+  for  e: {there(db, k) == Some{x} : Maybe<&2, KV.Item<KV.Val>>}
   {R.exec(R.Upd{k, R.USetNx{v}}, db) == (R.r_int(0n), db) : R.Reply & R.Db}
 
 # LAW: INCR of a key that is not there stores "1", with no time, and
@@ -384,45 +394,45 @@ law setnx_present:
 law incr_missing:
   for +db: R.Db
   for +k: String
-  for  e: {there(db, k) == None{} : Maybe<&2, KV.Item<String>>}
-  {at_key(R.exec(R.IncrBy{k, R.IPos{1n}}, db), k) == (R.RInt{R.IPos{1n}}, Some{KV.Item{"1", 0n}}) : R.Reply & Maybe<&2, KV.Item<String>>}
+  for  e: {there(db, k) == None{} : Maybe<&2, KV.Item<KV.Val>>}
+  {at_key(R.exec(R.IncrBy{k, R.IPos{1n}}, db), k) == (R.RInt{R.IPos{1n}}, Some{KV.Item{KV.VStr{"1"}, 0n}}) : R.Reply & Maybe<&2, KV.Item<KV.Val>>}
 
 # LAW: PTTL of a key there with a time answers the time left, in ms
 law pttl_left:
   for +db: R.Db
   for +k: String
-  for +v: String
+  for +v: KV.Val
   for +e: Nat
-  for  h: {there(db, k) == Some{KV.Item{v, 1n+e}} : Maybe<&2, KV.Item<String>>}
+  for  h: {there(db, k) == Some{KV.Item{v, 1n+e}} : Maybe<&2, KV.Item<KV.Val>>}
   {R.exec(R.Peek{k, R.PPttl{}}, db) == (R.RInt{R.IPos{Nat.sub(1n+e, R.db.now(db))}}, db) : R.Reply & R.Db}
 
-# LAW: SET with KEEPTTL of a key there keeps its time
+# LAW: SET with KEEPTTL of a key there, of any kind, keeps its time
 law set_keepttl:
   for +db: R.Db
   for +k: String
   for +v: String
-  for +w: String
+  for +w: KV.Val
   for +e: Nat
-  for  h: {there(db, k) == Some{KV.Item{w, e}} : Maybe<&2, KV.Item<String>>}
-  {at_key(R.exec(R.Upd{k, R.USet{v, 0n, R.TKeep{}, "set"}}, db), k) == (R.r_ok(), Some{KV.Item{v, e}}) : R.Reply & Maybe<&2, KV.Item<String>>}
+  for  h: {there(db, k) == Some{KV.Item{w, e}} : Maybe<&2, KV.Item<KV.Val>>}
+  {at_key(R.exec(R.Upd{k, R.USet{v, 0n, R.TKeep{}, "set"}}, db), k) == (R.r_ok(), Some{KV.Item{KV.VStr{v}, e}}) : R.Reply & Maybe<&2, KV.Item<KV.Val>>}
 
 # LAW: PERSIST of a key there with a time takes the time away and answers 1
 law persist_effect:
   for +db: R.Db
   for +k: String
-  for +v: String
+  for +v: KV.Val
   for +e: Nat
-  for  h: {there(db, k) == Some{KV.Item{v, 1n+e}} : Maybe<&2, KV.Item<String>>}
-  {at_key(R.exec(R.Upd{k, R.UPersist{}}, db), k) == (R.r_int(1n), Some{KV.Item{v, 0n}}) : R.Reply & Maybe<&2, KV.Item<String>>}
+  for  h: {there(db, k) == Some{KV.Item{v, 1n+e}} : Maybe<&2, KV.Item<KV.Val>>}
+  {at_key(R.exec(R.Upd{k, R.UPersist{}}, db), k) == (R.r_int(1n), Some{KV.Item{v, 0n}}) : R.Reply & Maybe<&2, KV.Item<KV.Val>>}
 
-# LAW: GETDEL of a key there answers its value and deletes it
+# LAW: GETDEL of a key there that holds a string answers it and deletes it
 law getdel_effect:
   for +db: R.Db
   for +k: String
   for +v: String
   for +e: Nat
-  for  h: {there(db, k) == Some{KV.Item{v, e}} : Maybe<&2, KV.Item<String>>}
-  {at_key(R.exec(R.Upd{k, R.UGetDel{}}, db), k) == (R.RBulk{v}, None{}) : R.Reply & Maybe<&2, KV.Item<String>>}
+  for  h: {there(db, k) == Some{KV.Item{KV.VStr{v}, e}} : Maybe<&2, KV.Item<KV.Val>>}
+  {at_key(R.exec(R.Upd{k, R.UGetDel{}}, db), k) == (R.RBulk{v}, None{}) : R.Reply & Maybe<&2, KV.Item<KV.Val>>}
 
 # LAW: SETRANGE of a key there writes s at offset o, the value padded
 # with zero bytes when it is shorter, keeps the key's time and answers the
@@ -436,14 +446,14 @@ law setrange_effect:
   for +s: String
   for +w: String
   for +e: Nat
-  for  h: {there(db, k) == Some{KV.Item{w, e}} : Maybe<&2, KV.Item<String>>}
+  for  h: {there(db, k) == Some{KV.Item{KV.VStr{w}, e}} : Maybe<&2, KV.Item<KV.Val>>}
   for  ok: {R.range.go(o, s) == True{} : Bool}
-  {at_key(R.exec(R.Upd{k, R.URange{o, s}}, db), k) == (R.r_int(String.length(R.range.put(w, o, s))), Some{KV.Item{R.range.put(w, o, s), e}}) : R.Reply & Maybe<&2, KV.Item<String>>}
+  {at_key(R.exec(R.Upd{k, R.URange{o, s}}, db), k) == (R.r_int(String.length(R.range.put(w, o, s))), Some{KV.Item{KV.VStr{R.range.put(w, o, s)}, e}}) : R.Reply & Maybe<&2, KV.Item<KV.Val>>}
 
 # what a command answers, and what two keys hold after it
-def at_keys(r: R.Reply & R.Db, +s: String, +d: String) -> R.Reply & (Maybe<&2, KV.Item<String>> & Maybe<&2, KV.Item<String>>):
+def at_keys(r: R.Reply & R.Db, +s: String, +d: String) -> R.Reply & (Maybe<&2, KV.Item<KV.Val>> & Maybe<&2, KV.Item<KV.Val>>):
   (x, +db) = r
-  (x, (KV.entry(String, R.db.t(db), s), KV.entry(String, R.db.t(db), d)))
+  (x, (KV.entry(KV.Val, R.db.t(db), s), KV.entry(KV.Val, R.db.t(db), d)))
 
 # LAW: RENAME of a key there to another key moves the key's entry, its
 # value and its time, and answers OK: the source is gone, and the
@@ -452,11 +462,11 @@ law rename_effect:
   for +db: R.Db
   for +s: String
   for +d: String
-  for +v: String
+  for +v: KV.Val
   for +e: Nat
-  for  h: {there(db, s) == Some{KV.Item{v, e}} : Maybe<&2, KV.Item<String>>}
+  for  h: {there(db, s) == Some{KV.Item{v, e}} : Maybe<&2, KV.Item<KV.Val>>}
   for  ne: {KV.str_eq(s, d) == False{} : Bool}
-  {at_keys(R.exec(R.Rename{s, d, False{}}, db), s, d) == (R.r_ok(), (None{}, Some{KV.Item{v, e}})) : R.Reply & (Maybe<&2, KV.Item<String>> & Maybe<&2, KV.Item<String>>)}
+  {at_keys(R.exec(R.Rename{s, d, False{}}, db), s, d) == (R.r_ok(), (None{}, Some{KV.Item{v, e}})) : R.Reply & (Maybe<&2, KV.Item<KV.Val>> & Maybe<&2, KV.Item<KV.Val>>)}
 
 # whether a key of ks is there
 def any_there(+db: R.Db, ks: List<&2, String>) -> Bool:
@@ -464,7 +474,7 @@ def any_there(+db: R.Db, ks: List<&2, String>) -> Bool:
     case Nil{}:
       False{}
     case Con{+k, rest}:
-      Bool.or(Maybe.is_some(&2, KV.Item<String>, there(db, k)), any_there(db, rest))
+      Bool.or(Maybe.is_some(&2, KV.Item<KV.Val>, there(db, k)), any_there(db, rest))
 
 # LAW: MSETNX sets nothing when a key of its pairs is there, and answers 0
 law msetnx_present:
@@ -487,21 +497,23 @@ law msetnx_missing:
 def bitop_val(+op: R.BitK, srcs: List<&2, String>, +db: R.Db) -> String:
   R.bitop.val(op, srcs, R.db.now(db), R.db.trie(db))
 
-def stored(e: Bool, v: String) -> Maybe<&2, KV.Item<String>>:
+def stored(e: Bool, v: String) -> Maybe<&2, KV.Item<KV.Val>>:
   match e:
     case True{}:
       None{}
     case False{}:
-      Some{KV.Item{v, 0n}}
+      Some{KV.Item{KV.VStr{v}, 0n}}
 
 # LAW: BITOP sets its destination to the value its sources make, with no
-# time, and answers the value's length; an empty value deletes it
+# time, and answers the value's length; an empty value deletes it (when
+# no source holds a collection: that is WRONGTYPE)
 law bitop_store:
   for +op: R.BitK
   for +d: String
   for +srcs: List<&2, String>
   for +db: R.Db
-  {at_key(R.exec(R.BitOp{op, d, srcs}, db), d) == (R.r_int(String.length(bitop_val(op, srcs, db))), stored(String.is_empty(bitop_val(op, srcs, db)), bitop_val(op, srcs, db))) : R.Reply & Maybe<&2, KV.Item<String>>}
+  for  nw: {R.bitop.wrong(srcs, R.db.now(db), R.db.trie(db)) == False{} : Bool}
+  {at_key(R.exec(R.BitOp{op, d, srcs}, db), d) == (R.r_int(String.length(bitop_val(op, srcs, db))), stored(String.is_empty(bitop_val(op, srcs, db)), bitop_val(op, srcs, db))) : R.Reply & Maybe<&2, KV.Item<KV.Val>>}
 
 # LAW: the sweep of expired keys deletes no key that is there: the
 # server sweeps with DEL of the keys R.reap.keys keeps of those its scan
@@ -510,9 +522,9 @@ law reap_keeps:
   for +ks: List<&2, String>
   for +db: R.Db
   for +j: String
-  for +y: KV.Item<String>
-  for  e: {there(db, j) == Some{y} : Maybe<&2, KV.Item<String>>}
-  {KV.entry(String, R.db.t(R.db_of(R.exec(R.Del{R.reap.keys(ks, db)}, db))), j) == KV.entry(String, R.db.t(db), j) : Maybe<&2, KV.Item<String>>}
+  for +y: KV.Item<KV.Val>
+  for  e: {there(db, j) == Some{y} : Maybe<&2, KV.Item<KV.Val>>}
+  {KV.entry(KV.Val, R.db.t(R.db_of(R.exec(R.Del{R.reap.keys(ks, db)}, db))), j) == KV.entry(KV.Val, R.db.t(db), j) : Maybe<&2, KV.Item<KV.Val>>}
 
 # LAW: a batch runs as its commands one after another: the server runs
 # pipelined requests through exec_all, and this law makes that the same
@@ -624,7 +636,7 @@ law commute_reads:
   for +j: String
   for  e: {Bool.and(writes(c1, j), writes(c2, j)) == False{} : Bool}
   for  d: {Bool.or(spoils(c1, c2), spoils(c2, c1)) == False{} : Bool}
-  {KV.entry(String, R.db.t(R.db_of(R.exec(c2, R.db_of(R.exec(c1, db))))), j) == KV.entry(String, R.db.t(R.db_of(R.exec(c1, R.db_of(R.exec(c2, db))))), j) : Maybe<&2, KV.Item<String>>}
+  {KV.entry(KV.Val, R.db.t(R.db_of(R.exec(c2, R.db_of(R.exec(c1, db))))), j) == KV.entry(KV.Val, R.db.t(R.db_of(R.exec(c1, R.db_of(R.exec(c2, db))))), j) : Maybe<&2, KV.Item<KV.Val>>}
 
 # LAW: two commands that do not disturb each other answer the same in
 # either order
@@ -733,7 +745,7 @@ law swap_reads:
   for +db: R.Db
   for +j: String
   for  e: {clash(c2, c1) == False{} : Bool}
-  {KV.entry(String, R.db.t(final(R.exec_all(Con{c2, Con{c1, cs}}, db))), j) == KV.entry(String, R.db.t(final(R.exec_all(Con{c1, Con{c2, cs}}, db))), j) : Maybe<&2, KV.Item<String>>}
+  {KV.entry(KV.Val, R.db.t(final(R.exec_all(Con{c2, Con{c1, cs}}, db))), j) == KV.entry(KV.Val, R.db.t(final(R.exec_all(Con{c1, Con{c2, cs}}, db))), j) : Maybe<&2, KV.Item<KV.Val>>}
 
 # Persistence
 # ===========
@@ -990,12 +1002,12 @@ law move_key:
   for +j: Nat
   for +ds: R.Ds
   for +y: R.Db
-  for +v: String
+  for +v: KV.Val
   for +e: Nat
   for  ey: {R.ds.nth(j, R.ds.list(ds)) == Some{y} : Maybe<&2, R.Db>}
   for  ne: {Nat.is_ne(j, R.ds.index(ds)) == True{} : Bool}
-  for  en: {R.db.entry(y, k) == None{} : Maybe<&2, KV.Item<String>>}
-  for  ek: {R.ds.ent(ds, k) == Some{KV.Item{v, e}} : Maybe<&2, KV.Item<String>>}
+  for  en: {R.db.entry(y, k) == None{} : Maybe<&2, KV.Item<KV.Val>>}
+  for  ek: {R.ds.ent(ds, k) == Some{KV.Item{v, e}} : Maybe<&2, KV.Item<KV.Val>>}
   {zero(R.ds_of(R.act(R.AMove{k, j}, ds))) == R.ds.put(j, R.db.at(0n, R.db.setx(y, k, v, e)), zero(R.ds.unset(k, ds))) : List<&2, R.Db>}
 
 # LAW: COPY of a key there, to a database that is there, when REPLACE is
@@ -1009,11 +1021,11 @@ law copy_key:
   for +rep: Bool
   for +ds: R.Ds
   for +y: R.Db
-  for +v: String
+  for +v: KV.Val
   for +e: Nat
   for  ey: {R.ds.nth(j, R.ds.list(ds)) == Some{y} : Maybe<&2, R.Db>}
-  for  ek: {R.ds.ent(ds, s) == Some{KV.Item{v, e}} : Maybe<&2, KV.Item<String>>}
-  for  ok: {Bool.or(rep, Bool.not(Maybe.is_some(&2, KV.Item<String>, R.ent.live(R.ds.now(ds), R.db.entry(y, d))))) == True{} : Bool}
+  for  ek: {R.ds.ent(ds, s) == Some{KV.Item{v, e}} : Maybe<&2, KV.Item<KV.Val>>}
+  for  ok: {Bool.or(rep, Bool.not(Maybe.is_some(&2, KV.Item<KV.Val>, R.ent.live(R.ds.now(ds), R.db.entry(y, d))))) == True{} : Bool}
   {zero(R.ds_of(R.act(R.ACopy{s, d, j, rep}, ds))) == R.ds.put(j, R.db.at(0n, R.db.setx(y, d, v, e)), zero(ds)) : List<&2, R.Db>}
 
 # Sessions

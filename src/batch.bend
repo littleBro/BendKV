@@ -99,28 +99,28 @@ def many(hs: List<&2, U32>) -> Bool:
     case _:
       False{}
 
-def touch_nodes(+hs: List<&2, U32>, +db: KV.Trie<String>, +d: Nat, acc: U32) -> U32:
+def touch_nodes(+hs: List<&2, U32>, +db: KV.Trie<KV.Val>, +d: Nat, acc: U32) -> U32:
   match hs:
     case Nil{}:
       acc
     case Con{+h, +rest}:
-      touch_nodes(rest, db, d, KV.touch.node(String, db, h, d, acc))
+      touch_nodes(rest, db, d, KV.touch.node(KV.Val, db, h, d, acc))
 
-def touch_entries(+hs: List<&2, U32>, +db: KV.Trie<String>, acc: U32) -> U32:
+def touch_entries(+hs: List<&2, U32>, +db: KV.Trie<KV.Val>, acc: U32) -> U32:
   match hs:
     case Nil{}:
       acc
     case Con{+h, +rest}:
-      touch_entries(rest, db, KV.touch.entry(String, db, h, acc))
+      touch_entries(rest, db, KV.touch.entry(KV.Val, db, h, acc))
 
 # the hints for a batch: the nodes at depth 4 (the top four levels stay in
 # the cache), then the buckets, then their first keys and values
-def touch_batch(hs: List<&2, U32>, +db: KV.Trie<String>) -> U32:
+def touch_batch(hs: List<&2, U32>, +db: KV.Trie<KV.Val>) -> U32:
   +h = hs
   touch_entries(h, db, touch_nodes(h, db, 5n, touch_nodes(h, db, 4n, 0)))
 
 # the hints of a batch of two commands or more
-def touch_if(many: Bool, hs: List<&2, U32>, +db: KV.Trie<String>) -> U32:
+def touch_if(many: Bool, hs: List<&2, U32>, +db: KV.Trie<KV.Val>) -> U32:
   match many:
     case True{}:
       touch_batch(hs, db)

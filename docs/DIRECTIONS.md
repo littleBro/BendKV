@@ -292,7 +292,8 @@ Where performance and proof meet: **batched execution under proved laws.**
    law would cover the network parser of `resp.bend`, and with it the server's
    decision to cut a file (`cut_short`).
 6. **Next: a drop-in Redis for one node.** Strings, hashes, lists, sets and sorted sets
-   with WRONGTYPE, times to live with time in the state and a sweep of expired keys
+   with WRONGTYPE (a value of a type, with WRONGTYPE: done, section 3zf; hashes next),
+   times to live with time in the state and a sweep of expired keys
    (done; FINDINGS.md, sections 3v and 3w), several databases with SELECT, MOVE and
    SWAPDB (done; section 3x), the ranges and bits of strings (GETRANGE, SETRANGE,
    GETBIT, SETBIT, BITCOUNT, BITPOS; done, section 3y), MSETNX and RENAME (done,

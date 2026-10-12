@@ -51,24 +51,31 @@ def buf() -> String:
   "BITFIELD g SET u8 0 x\r\nBITFIELD bo5 INCRBY u8 0 1\r\nBITFIELD bf1 SET u8 0 255\r\nBITFIELD_RO bf1 SET u8 0 1\r\n"
 
 # an entry as its value, and the time it expires at when it has one
-def dump.ent(m: Maybe<&2, KV.Item<String>>) -> String:
+def dump.val(v: KV.Val) -> String:
+  match v:
+    case KV.VStr{s}:
+      s
+    case KV.VColl{c}:
+      "<" ++ R.coll.type(c) ++ ">"
+
+def dump.ent(m: Maybe<&2, KV.Item<KV.Val>>) -> String:
   match m:
     case Some{KV.Item{v, +e}}:
-      v ++ Bool.pick(String, Nat.is_eq(e, 0n), "", "@" ++ Nat.show(e))
+      dump.val(v) ++ Bool.pick(String, Nat.is_eq(e, 0n), "", "@" ++ Nat.show(e))
     case None{}:
       "?"
 
 # a database as its keys and entries, in its own order (all keys are
 # there at time 0)
-def dump.go(+db: KV.Trie<String>, ks: List<&2, String>) -> String:
+def dump.go(+db: KV.Trie<KV.Val>, ks: List<&2, String>) -> String:
   match ks:
     case Nil{}:
       SNil{}
     case Con{+k, rest}:
-      k ++ "=" ++ dump.ent(KV.entry(String, db, k)) ++ " " ++ dump.go(db, rest)
+      k ++ "=" ++ dump.ent(KV.entry(KV.Val, db, k)) ++ " " ++ dump.go(db, rest)
 
-def dump.of(+t: KV.Trie<String>, +n: Nat, +x: Nat) -> String:
-  dump.go(t, KV.keys(String, t, 0n)) ++ "(" ++ Nat.show(n) ++ " keys counted, " ++ Nat.show(x) ++ " with a time)"
+def dump.of(+t: KV.Trie<KV.Val>, +n: Nat, +x: Nat) -> String:
+  dump.go(t, KV.keys(KV.Val, t, 0n)) ++ "(" ++ Nat.show(n) ++ " keys counted, " ++ Nat.show(x) ++ " with a time)"
 
 # and the counts of keys the database keeps
 def dump(+db: R.Db) -> String:

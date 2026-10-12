@@ -66,6 +66,31 @@ type Op<-V: Data> is Data:
   OExp{key: String, exp: Nat}
   ODel{key: String}
 
+# What a key of the server holds (redis.bend: Db): a string, or a
+# collection. The commands on strings see any collection as a value of
+# another kind (WRONGTYPE), so a new kind of collection changes no
+# command on strings and none of their proofs.
+type Val is Data:
+  VStr{s: String}
+  VColl{c: Coll}
+
+# a collection: a hash, its fields and their values (Hash)
+type Coll is Data:
+  CHash{h: Hash}
+
+# a hash: a field and its value
+type HPair is Data:
+  HP{f: String, v: String}
+
+# A hash, as Redis 7.0 keeps one: a small one (n fields, each of at most
+# hash-max-listpack-value bytes, n at most hash-max-listpack-entries) as
+# a list of its pairs in the order they came (a listpack: HGETALL answers
+# them so), a larger one as a trie of its fields (a hashtable, in no
+# order), which it stays.
+type Hash is Data:
+  HSmall{n: Nat, ps: List<&2, HPair>}
+  HBig{n: Nat, t: Trie<String>}
+
 # Keys
 # ----
 
@@ -290,29 +315,53 @@ def blive(-V: Data, +k: String, +b: Trie<V>, +now: Nat) -> Maybe<&2, V>:
   s = bhead(V, k, b)
   blive.go(V, k, b, s, now)
 
-# blive for String values, answering a copy of the value made where it
+# blive for the keys' values, answering a copy of a string made where it
 # lies: the value is only read, so the trie never shares it (blive answers
 # the value itself, which the trie and the answer then share, under a
 # seal). A copy of the whole string is the string (PROOF.bend: take_len).
-def bget_c.ent(ok: Bool, +v: String) -> Maybe<&2, String>:
+# Of a collection it answers only that there is one (GET and INCR tell it
+# from a string, nothing more): got_of is what it answers, of what blive
+# answers.
+type Got is Data:
+  GStr{s: String}
+  GColl{}
+  GNone{}
+
+def got_of(m: Maybe<&2, Val>) -> Got:
+  match m:
+    case Some{VStr{s}}:
+      GStr{s}
+    case Some{VColl{c}}:
+      GColl{}
+    case None{}:
+      GNone{}
+
+def bget_c.val(+v: Val) -> Got:
+  match v:
+    case VStr{+s}:
+      GStr{String.take(s, String.length(s))}
+    case VColl{c}:
+      GColl{}
+
+def bget_c.ent(ok: Bool, +v: Val) -> Got:
   match ok:
     case True{}:
-      Some{String.take(v, String.length(v))}
+      bget_c.val(v)
     case False{}:
-      None{}
+      GNone{}
 
-def bget_c.go(+k: String, b: Trie<String>, same: Bool, +now: Nat) -> Maybe<&2, String>:
+def bget_c.go(+k: String, b: Trie<Val>, same: Bool, +now: Nat) -> Got:
   match b same:
     case Ent{key, +v, +e, rest} True{}:
       bget_c.ent(live(now, e), v)
     case Ent{key, v, e, +rest} False{}:
-      s = bhead(String, k, rest)
+      s = bhead(Val, k, rest)
       bget_c.go(k, rest, s, now)
     case other _:
-      None{}
+      GNone{}
 
-def bget_c(+k: String, +b: Trie<String>, +now: Nat) -> Maybe<&2, String>:
-  s = bhead(String, k, b)
+def bget_c(+k: String, +b: Trie<Val>, +now: Nat) -> Got:
+  s = bhead(Val, k, b)
   bget_c.go(k, b, s, now)
 
 # the bucket with the first entry for k set to v, expiring at e, or k
@@ -610,8 +659,8 @@ def tget_kl(-V: Data, d: Nat, +t: Trie<V>, x: Hex, +h: U32, +k: String, +now: Na
     case 1n+p other _:
       None{}
 
-# tget_kl for String values, answering a copy of the value (bget_c)
-def tget_kc(d: Nat, +t: Trie<String>, x: Hex, +h: U32, +k: String, +now: Nat) -> Maybe<&2, String>:
+# tget_kl for the keys' values, answering a copy of a string (bget_c)
+def tget_kc(d: Nat, +t: Trie<Val>, x: Hex, +h: U32, +k: String, +now: Nat) -> Got:
   match d t x:
     case 0n t0 _:
       bget_c(k, t0, now)
@@ -648,7 +697,7 @@ def tget_kc(d: Nat, +t: Trie<String>, x: Hex, +h: U32, +k: String, +now: Nat) ->
     case 1n+p Node{c0, c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13, c14, c15} H15{}:
       tget_kc(p, c15, hex(shr4(h)), shr4(h), k, now)
     case 1n+p other _:
-      None{}
+      GNone{}
 
 # hints for a walk to come (Mem.prefetch): ttouch is acc, after starting
 # to load the subtrie where a walk of depth d ends (a bucket at depth
@@ -982,11 +1031,13 @@ def live.at(-V: Data, +t: Trie<V>, +k: String, +h: U32, +now: Nat) -> Maybe<&2, 
 def read(-V: Data, +t: Trie<V>, +k: String, +now: Nat) -> Maybe<&2, V>:
   live.at(V, t, k, hash(k), now)
 
-# read for String values, answering a copy of the value (bget_c): GET
+# read for the keys' values, answering a copy of a string (bget_c): GET
 # reads with it, so the value a read finds stays unshared in the trie
-def get_copy(+t: Trie<String>, +k: String, +now: Nat) -> Maybe<&2, String>:
-  +h = hash(k)
+def get_copy.at(+t: Trie<Val>, +k: String, +h: U32, +now: Nat) -> Got:
   tget_kc(5n, t, hex(h), h, k, now)
+
+def get_copy(+t: Trie<Val>, +k: String, +now: Nat) -> Got:
+  get_copy.at(t, k, hash(k), now)
 
 def set.at(-V: Data, t: Trie<V>, +k: String, v: V, +h: U32) -> Trie<V>:
   tmod_h(V, 5n, t, hex(h), h, OSet{k, v, 0n})

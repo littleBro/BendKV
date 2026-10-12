@@ -719,7 +719,7 @@ def mode.conn(m: Mute, +c: Conn, +s: Srv) -> Conn:
 def randomkey.of(+db: R.Db, +r: U32) -> R.Reply:
   match db:
     case R.Db{+t, n, x, +now, rr}:
-      R.r_get(KV.pick(String, t, r, now))
+      R.r_get(KV.pick(KV.Val, t, r, now))
 
 # TIME: the time the batch runs at (the focus's, set from the clock for
 # each group of batches), in s and us since 1970; BendKV keeps it in ms
@@ -768,10 +768,31 @@ def obj.of(+sub: Nat, +v: String, +cfg: List<&2, C.CItem>) -> R.Reply:
     case _:
       Bool.pick(R.Reply, obj.lfu(cfg), R.RError{"ERR An LFU maxmemory policy is selected, idle time not tracked. Please note that when switching between policies at runtime LRU and LFU data will take some time to adjust."}, R.r_int(0n))
 
-def obj.reply(+sub: Nat, m: Maybe<&2, KV.Item<String>>, +cfg: List<&2, C.CItem>) -> R.Reply:
+# OBJECT of a collection: its encoding as Redis 7.0 names it (a small
+# hash is a listpack, a large one a hashtable), a count of references of
+# 1, and the rest as for a string
+def obj.coll.enc(+c: KV.Coll) -> String:
+  match c:
+    case KV.CHash{KV.HSmall{n, ps}}:
+      "listpack"
+    case KV.CHash{KV.HBig{n, t}}:
+      "hashtable"
+
+def obj.coll(+sub: Nat, +c: KV.Coll, +cfg: List<&2, C.CItem>) -> R.Reply:
+  match sub:
+    case 3n:
+      R.RBulk{obj.coll.enc(c)}
+    case 4n:
+      R.r_int(1n)
+    case _:
+      obj.of(sub, "", cfg)
+
+def obj.reply(+sub: Nat, m: Maybe<&2, KV.Item<KV.Val>>, +cfg: List<&2, C.CItem>) -> R.Reply:
   match m:
-    case Some{KV.Item{+v, e}}:
+    case Some{KV.Item{KV.VStr{+v}, e}}:
       obj.of(sub, v, cfg)
+    case Some{KV.Item{KV.VColl{+c}, e}}:
+      obj.coll(sub, c, cfg)
     case None{}:
       R.RNull{}
 
@@ -1069,17 +1090,35 @@ def lcs.check(st: LcsSt, +a: String, +b: String, +max: Nat) -> R.Reply:
     case LsErr{r}:
       r
 
-def lcs.val(m: Maybe<&2, KV.Item<String>>) -> String:
+def lcs.val(m: Maybe<&2, KV.Item<KV.Val>>) -> String:
   match m:
-    case Some{KV.Item{v, e}}:
+    case Some{KV.Item{KV.VStr{v}, e}}:
       v
-    case None{}:
+    case _:
       ""
+
+# whether a key holds a collection (Redis checks both keys before the
+# options)
+def lcs.coll(+m: Maybe<&2, KV.Item<KV.Val>>) -> Bool:
+  match m:
+    case Some{KV.Item{KV.VColl{c}, e}}:
+      True{}
+    case _:
+      False{}
+
+def lcs.typed(coll: Bool, rest: List<&2, String>, +ma: Maybe<&2, KV.Item<KV.Val>>, +mb: Maybe<&2, KV.Item<KV.Val>>, +cfg: List<&2, C.CItem>) -> R.Reply:
+  match coll:
+    case True{}:
+      R.RError{"ERR The specified keys must contain string values"}
+    case False{}:
+      lcs.check(lcs.opts(rest, LsOpt{False{}, False{}, False{}, 0n}), lcs.val(ma), lcs.val(mb), lcs.max.of(R.ll.read(C.config.get_value(cfg, "proto-max-bulk-len"))))
 
 def lcs.reply(args: List<&2, String>, +db: R.Db, +cfg: List<&2, C.CItem>) -> R.Reply:
   match args:
     case Con{+ka, Con{+kb, rest}}:
-      lcs.check(lcs.opts(rest, LsOpt{False{}, False{}, False{}, 0n}), lcs.val(R.db.ent(db, ka)), lcs.val(R.db.ent(db, kb)), lcs.max.of(R.ll.read(C.config.get_value(cfg, "proto-max-bulk-len"))))
+      +ma = R.db.ent(db, ka)
+      +mb = R.db.ent(db, kb)
+      lcs.typed(Bool.or(lcs.coll(ma), lcs.coll(mb)), rest, ma, mb, cfg)
     case _:
       R.RError{"ERR wrong number of arguments for 'lcs' command"}
 

@@ -2185,6 +2185,68 @@ words), its offsets and values in `tests/numbers_test.py` (`#288230376151711745`
 i64, which wraps to 64, among them), and BITFIELD in both files, Redis's loaded by
 BendKV and BendKV's by Redis.
 
+## 3zf. A value of a type: strings and collections
+
+**What changed.** A key held a string; now it holds a `KV.Val`: `VStr{s}`, a string, or
+`VColl{c}`, a collection (`KV.Coll`). Hashes come first: `HSmall`, a list of field-value
+pairs in the order they came, as Redis's listpack keeps them, or `HBig`, a trie of fields,
+as its hashtable. The trie is generic in its values, so its eleven map laws hold of
+`Trie<Val>` as they held of `Trie<String>`; the database, the specification, the bridge,
+the append-only file and the sessions changed only the type they use. No command makes a
+collection yet (hashes are next), so nothing a client sees has changed: this is the ground
+the types stand on.
+
+**What a command sees.** Redis answers `WRONGTYPE Operation against a key holding the
+wrong kind of value` to a command for one type on a key of another. A string command now
+reads its key's entry through a view (`peek.v` for the reads, `upd.v` for the updates): a
+string's entry goes to the string code as before, unchanged; a collection's is WRONGTYPE,
+the key left as it was, but for the commands that act on a key of any type. SET (with
+SETEX and PSETEX) replaces it, SETNX finds it there, EXPIRE and its kin and PERSIST set
+its time: they see it as a key there with its time and an empty string, which none of them
+reads. TYPE names the collection's type, and TTL, PTTL, EXPIRETIME and PEXPIRETIME answer
+its time. SET with GET and GETSET read the old value, so they are WRONGTYPE, as in Redis.
+The key commands (DEL, EXISTS, RENAME, COPY, MOVE, KEYS, SCAN, TOUCH, the sweep) carry
+any value. MGET answers a null for a collection, as Redis does; BITOP is WRONGTYPE when
+any source holds one (it checks them all before it computes); LCS answers Redis 7.0's
+`ERR The specified keys must contain string values` before it reads its options. SCAN's
+TYPE compares the type's name (`string`, `hash`, in any case), and OBJECT ENCODING of a
+hash answers `listpack` or `hashtable`. GET reads a copy made while the trie is lent
+(section 3k); it now reads a `Got`, the string's copy, a mark that the key holds a
+collection, or none, so a read builds no `VStr` and copies no collection. INCRBY reads the
+same way.
+
+**The proofs.** The laws of the commands now say which values they hold for: APPEND's for
+a key that holds no collection, GETDEL's and SETRANGE's for one that holds a string,
+BITOP's when no source holds a collection; SETNX, PTTL, PERSIST, SET with KEEPTTL,
+RENAME, MOVE, COPY and the frame laws hold of a key of any type. BITOP's verdict on its
+sources' types is the same in two tries that agree on its sources, which its commuting
+laws need: a write to another key could otherwise change it. The persistence proof
+(section 3e) replays each update's change at time 0 from the effect the file holds, and
+needs the change to be good of the key's entry (`Good`); APPEND's and SETRANGE's changes
+are good only of a string, whose value the replay reads again. An update that acts on a
+key of any type sees a collection as a string with nothing in it (`any_v`: `upd.v(op,
+now, Some{Item{w, e}})` is `upd(op, now, Some{Item{sview(w), e}})` for SET, SETNX, EXPIRE
+and PERSIST), so replaying PERSIST, PEXPIREAT or SET KEEPTTL on a collection makes the
+change the update made. BITOP logs nothing when it answers WRONGTYPE. Of the 928
+definitions of the proof, 275 changed, most of them only in the type of their values, and
+27 came in; none of the map's laws changed.
+
+**Cost: a node per value.** A string is now behind a node of its own, the `VStr`, where
+the entry held it (a value of up to 6 bytes inside the entry's word: patch 4, section 3).
+Instructions per request (`make perfcheck`, 100 thousand keys): GET 3,272 (3,141 before,
++4.2%), SET 4,261 (4,070, +4.7%), INCR 4,499 (4,226, +6.5%); the baseline is rewritten.
+With a million keys, where the node is a miss of its own: GET 3,376 instructions and 5.69
+last-level misses per request (3,223 and 4.18 before), INCR 4,830 and 7.53 (4,513 and
+5.25); the batch hints fetch the node only once the entry is in, too late for the read
+behind it. In time (`tools/bench_pairs.sh`, a million keys, pipeline 16, 20 clients, five
+pairs): GET and SET run as before (1.00 of the old build, medians of pairs), with 11% and
+6% more user CPU per request, and INCR at 0.89, as it reads the node, builds another and
+drops the old one. Memory: a million keys with 3-byte values take 64 bytes each against
+56 (`VmRSS`), 8 more, one word. The way back is in the compiler, not in BendKV: a type
+whose one variant holds a String and whose other variants are constructors could keep
+that variant as the String's own word (a string's tag is not a constructor's), with no
+node and no proof touched. It is on the list for after the types.
+
 ## 4. Where a request's time goes, and hiding the memory waits
 
 With the eight patches, BendKV ran fewer instructions on GET and SET than Redis, missed
