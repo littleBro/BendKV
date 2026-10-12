@@ -6,11 +6,11 @@ showed us. Where the work goes next, and why, is in [DIRECTIONS.md](DIRECTIONS.m
 
 ## 1. The result
 
-**Correctness.** About 2,780 lines of core code (with the parsing of commands, of their
-times and options, Redis's pattern matching, several databases and the ranges and bits
-of strings), about 950 lines of
+**Correctness.** About 3,320 lines of core code (with the parsing of commands, of their
+times and options, Redis's pattern matching, several databases, the ranges and bits of
+strings and BITFIELD's words of 64 bits), about 950 lines of
 sessions (a connection's state and the server's), about 70 lines of batch hints, about
-520 lines of append-only file, about 6,920 lines of handwritten proofs with a
+520 lines of append-only file, about 6,960 lines of handwritten proofs with a
 specification of about 130 that they bridge to (section 3u), and about 1,700 lines of
 16-way case splits written by a script ([`tools/gen_trie.py`](../tools/gen_trie.py)), not
 counting comments and blank lines. Bend checks the 64 laws in about 5 s; the BendTT
@@ -18,8 +18,8 @@ kernel, whose soundness is proved in Lean, rechecks them in about 50 s. Among th
 any history, the server restores from its append-only file exactly the databases it
 held, and from a file cut by a crash at any byte, the databases it held after some prefix
 of its acts (sections 3e and 3x). On about 266 thousand random commands the replies
-matched real Redis 7 byte for byte; the versions with the 16-way trie passed about 935
-thousand more, the current one, with BITOP and LCS, about 100 thousand. Shards across cores and a key hashed once were built and
+matched real Redis 7 byte for byte; the versions with the 16-way trie passed about 1,050
+thousand more, the current one, with BITFIELD, about 115 thousand. Shards across cores and a key hashed once were built and
 proved too (sections 3a–3c, 3g, 3h), and taken out again because they paid too little
 for what they cost (section 3l): 38% less code and 38% fewer lines of proof.
 
@@ -2114,6 +2114,72 @@ twelve, and a fuzz test of BITPOS and BITCOUNT that BITOP NOT sets up), unit/typ
 70 of 77 (LCS's five), and COMMAND GETKEYS of LCS. The differential tests ran about 100
 thousand commands with BITOP and LCS among them (operations and options in any case,
 wrong ones, a destination among the sources), every reply identical to Redis's.
+
+## 3ze. BITFIELD: words of 64 bits where a Nat stops at 2^48
+
+**What it does.** BITFIELD and BITFIELD_RO as Redis 7.0.15's `bitfieldGeneric`: fields
+of 1 to 64 bits, signed (two's complement) or unsigned (up to 63 bits), at any bit
+offset, or at `#k`, k times the field's width; GET, SET (its reply the old value),
+INCRBY (the new one), and OVERFLOW WRAP, SAT or FAIL for the operations after it, a
+FAIL's overflow writing nothing and answering a null. The errors are Redis's, in the
+order Redis checks the words: a subcommand with the words it needs after it, the type,
+the offset (below 2^32, the bits of 512MB), the value (a long long). BITFIELD whose
+operations are GETs alone is a read, a Peek, as BITFIELD_RO is; with a write it is an
+update, an Upd, as SETBIT is. COMMAND GETKEYS gives its key the flags Redis's
+`bitfieldGetKeys` gives it: read-only while its words are GETs and OVERFLOWs.
+
+**A word of 64 bits.** A field's value reaches 2^63 in magnitude and Redis's arithmetic
+on it wraps as C's does, where a Nat stops at 2^48. A word is two U32 halves (a U32
+wraps as C's `uint32_t`): addition with its carry, negation, signed and unsigned
+comparison, masks, sign extension, and its decimal digits by long division by 10^9 over
+16-bit limbs, so no Nat past 2^47 is made. Redis's checks of overflow
+(`checkSignedBitfieldOverflow`, `checkUnsignedBitfieldOverflow`) run on these words as
+written, where their sums wrap too: `OVERFLOW SAT SET i8 0 -9223372036854775808` stores
+127 in Redis, its `maxincr` wrapping, and in BendKV. Two traps of Bend shape the code. A
+U32 shift compiles to C's, and a shift by 32 or more is undefined in C; and `Bool.pick`
+evaluates both of its branches, so every shift that might reach 32 is in a def that
+matches on which half it is for. The reply is the word's text, a reply of its own
+(`RIntS`): an Int holds 48 bits.
+
+**The write.** Redis grows the value to the last byte a write reaches (makes it, for a
+key not there), then runs the operations in order on it. BendKV runs them on the span of
+bytes the writes reach, from the first write's first byte to the last write's last, as it
+starts of the value's bytes and zeros past its end; a write reads its field there and
+puts it back there, a GET reads the span where it lies and the value elsewhere. The
+change is the SETRANGE of the span, as SETBIT's is the SETRANGE of its byte, made when
+the value grows or a write changes its bits, as Redis counts a change; so the file holds
+a SETRANGE, and the proofs needed nothing SETRANGE did not have: two lemmas a case, on
+whether the change is made and whether its range fits. Where every write fails
+(OVERFLOW FAIL) on a key it makes or grows, Redis keeps the key and logs nothing, since
+it counts only the writes it made: its file and its replicas lack a key its memory holds.
+BendKV keeps the key too, and logs it. A field across the 2^32-th bit makes Redis grow
+the value up to 8 bytes past 512MB; BendKV, whose values stop at 512MB, answers the
+error SETRANGE answers there.
+
+**Cost.** At pipeline 16 (`redis-benchmark`, medians of three rounds, each against Redis
+in turn), a BITFIELD INCRBY of a u8 runs at 530 thousand requests per second against
+Redis's 1,050 thousand, a GET of an i32 by BITFIELD_RO at 660 thousand against 1,110
+thousand, and a BITFIELD of eight operations (four INCRBYs, four GETs of a u63) at 110
+thousand against 340 thousand: its 34 words are parsed, a word at a time, into the
+states of a machine, every field's bits pass through words of two halves, and the
+runtime spends a fifth of its time dropping what they leave. The first version, which
+read a field a bit at a time and every number as a long long's word, was about 30%
+slower still; a field read a byte's part at a time, short numbers read as Nats (`num14`,
+the long long's path left to the long ones) and branches computed only on the side taken
+made up the difference. Placed after RInt among the replies, `RIntS` made GET 1.5%
+dearer (3,194 instructions per request against 3,146): the tags of the replies after it
+moved, and the reply's encoder compiled otherwise. Placed last, it costs nothing: GET
+3,147, SET 4,077 and INCR 4,238 (3,146, 4,076 and 4,240 before). Redis's test suite:
+BendKV passes 327 of the 1,673 tests Redis passes (19.5%; 311 before) and 303 of the 386
+in what it has: unit/bitfield 16 of 16. One test of unit/bitops that BITFIELD now
+reaches counts the changes since the last save (`rdb_changes_since_last_save`), which
+BendKV does not keep. The tests: `tests/bitfield_test.py` in `make test` (3,000 random
+commands on three keys, fields of every type at offsets below 256 or `#k`, values at the
+edges of the fields and of a long long, each reply and each value after it compared with
+Redis's), BITFIELD in the differential test (with wrong types, offsets, values and
+words), its offsets and values in `tests/numbers_test.py` (`#288230376151711745` of an
+i64, which wraps to 64, among them), and BITFIELD in both files, Redis's loaded by
+BendKV and BendKV's by Redis.
 
 ## 4. Where a request's time goes, and hiding the memory waits
 

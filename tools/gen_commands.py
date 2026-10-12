@@ -53,7 +53,8 @@ COMMANDS = {
     "pexpiretime": [], "persist": [], "swapdb": [], "move": [], "getrange": [], "substr": [],
     "setrange": [], "getbit": [], "setbit": [], "bitcount": [], "bitpos": [], "touch": [],
     "time": [], "object": ["encoding", "freq", "help", "idletime", "refcount"], "msetnx": [],
-    "rename": [], "renamenx": [], "copy": [], "bitop": [], "lcs": []}
+    "rename": [], "renamenx": [], "copy": [], "bitop": [], "lcs": [], "bitfield": [],
+    "bitfield_ro": []}
 
 # Step 1: redis-server -> facts
 # -----------------------------
@@ -156,7 +157,7 @@ def extract():
 # Commands whose keys Redis finds with a function of its own rather than
 # their key specs (it does when a spec's flags vary): COMMAND GETKEYS
 # runs BendKV's copy of that function
-GETKEYS = {"set": "KBySet{}"}
+GETKEYS = {"set": "KBySet{}", "bitfield": "KByBitfield{}"}
 
 def bstr(s):
     if any(ord(ch) > 126 or ord(ch) < 32 for ch in s):
@@ -261,13 +262,14 @@ SBEGIN, SEND = "# BEGIN gen_commands: stats\n", "# END gen_commands: stats\n"
 # GETEX reads its time only once it finds its key, as BITCOUNT and BITPOS
 # read their ranges, SETRANGE can make a value past 512MB, OBJECT FREQ
 # and IDLETIME depend on the policy of eviction, RENAME and RENAMENX
-# fail when their source key is not there, and LCS when its table would
-# pass proto-max-bulk-len. (SET's time
+# fail when their source key is not there, LCS when its table would
+# pass proto-max-bulk-len, and BITFIELD when its writes reach past 512MB
+# (bitfield.of). (SET's time
 # can overflow too, past 9 * 10^18 ms only: SET is left out, so that a
 # batch of SETs needs no look at its replies.)
 RISKY = {"incr", "decr", "incrby", "decrby", "expire", "pexpire", "setex", "psetex", "getex",
          "setrange", "bitcount", "bitpos", "object|freq", "object|idletime", "rename", "renamenx",
-         "lcs"}
+         "lcs", "bitfield"}
 
 # the parser's commands with subcommands, by the function that numbers
 # their subcommands

@@ -22,10 +22,12 @@ type KSpec is Data:
   KSpec{flags: List<&2, String>, pos: Nat, last: R.Int, step: Nat, limit: Nat}
 
 # how COMMAND GETKEYS finds a command's keys: from its key specs, or as
-# the function Redis has for SET (whose key's flags depend on its GET)
+# the function Redis has for SET (whose key's flags depend on its GET) or
+# BITFIELD (on its subcommands)
 type KWay is Data:
   KBySpecs{}
   KBySet{}
+  KByBitfield{}
 
 # a command or a subcommand: its full name ("client|id" for a
 # subcommand), its arity, its ACL categories, its key specs, how its keys
@@ -59,6 +61,18 @@ def cmd.bitcount() -> Top:
   Top{Desc{"bitcount", R.INeg{1n}, ["read", "bitmap", "slow"], [KSpec{["RO", "access"], 1n, R.IPos{0n}, 1n, 0n}], KBySpecs{}, False{},
     [R.RBulk{"bitcount"}, R.RInt{R.INeg{1n}}, R.RArray{[R.RStatus{"readonly"}]}, R.RInt{R.IPos{1n}}, R.RInt{R.IPos{1n}}, R.RInt{R.IPos{1n}}, R.RArray{[R.RStatus{"@read"}, R.RStatus{"@bitmap"}, R.RStatus{"@slow"}]}, R.RArray{[]}, R.RArray{[R.RArray{[R.RBulk{"flags"}, R.RArray{[R.RStatus{"RO"}, R.RStatus{"access"}]}, R.RBulk{"begin_search"}, R.RArray{[R.RBulk{"type"}, R.RBulk{"index"}, R.RBulk{"spec"}, R.RArray{[R.RBulk{"index"}, R.RInt{R.IPos{1n}}]}]}, R.RBulk{"find_keys"}, R.RArray{[R.RBulk{"type"}, R.RBulk{"range"}, R.RBulk{"spec"}, R.RArray{[R.RBulk{"lastkey"}, R.RInt{R.IPos{0n}}, R.RBulk{"keystep"}, R.RInt{R.IPos{1n}}, R.RBulk{"limit"}, R.RInt{R.IPos{0n}}]}]}]}]}],
     [R.RBulk{"summary"}, R.RBulk{"Count set bits in a string"}, R.RBulk{"since"}, R.RBulk{"2.6.0"}, R.RBulk{"group"}, R.RBulk{"bitmap"}, R.RBulk{"complexity"}, R.RBulk{"O(N)"}, R.RBulk{"history"}, R.RArray{[R.RArray{[R.RBulk{"7.0.0"}, R.RBulk{"Added the `BYTE|BIT` option."}]}]}, R.RBulk{"arguments"}, R.RArray{[R.RArray{[R.RBulk{"name"}, R.RBulk{"key"}, R.RBulk{"type"}, R.RBulk{"key"}, R.RBulk{"key_spec_index"}, R.RInt{R.IPos{0n}}]}, R.RArray{[R.RBulk{"name"}, R.RBulk{"index"}, R.RBulk{"type"}, R.RBulk{"block"}, R.RBulk{"flags"}, R.RArray{[R.RStatus{"optional"}]}, R.RBulk{"arguments"}, R.RArray{[R.RArray{[R.RBulk{"name"}, R.RBulk{"start"}, R.RBulk{"type"}, R.RBulk{"integer"}]}, R.RArray{[R.RBulk{"name"}, R.RBulk{"end"}, R.RBulk{"type"}, R.RBulk{"integer"}]}, R.RArray{[R.RBulk{"name"}, R.RBulk{"index_unit"}, R.RBulk{"type"}, R.RBulk{"oneof"}, R.RBulk{"since"}, R.RBulk{"7.0.0"}, R.RBulk{"flags"}, R.RArray{[R.RStatus{"optional"}]}, R.RBulk{"arguments"}, R.RArray{[R.RArray{[R.RBulk{"name"}, R.RBulk{"byte"}, R.RBulk{"type"}, R.RBulk{"pure-token"}, R.RBulk{"token"}, R.RBulk{"BYTE"}]}, R.RArray{[R.RBulk{"name"}, R.RBulk{"bit"}, R.RBulk{"type"}, R.RBulk{"pure-token"}, R.RBulk{"token"}, R.RBulk{"BIT"}]}]}]}]}]}]}]},
+  []}
+
+def cmd.bitfield() -> Top:
+  Top{Desc{"bitfield", R.INeg{1n}, ["write", "bitmap", "slow"], [KSpec{["RW", "access", "update", "variable_flags"], 1n, R.IPos{0n}, 1n, 0n}], KByBitfield{}, False{},
+    [R.RBulk{"bitfield"}, R.RInt{R.INeg{1n}}, R.RArray{[R.RStatus{"write"}, R.RStatus{"denyoom"}]}, R.RInt{R.IPos{1n}}, R.RInt{R.IPos{1n}}, R.RInt{R.IPos{1n}}, R.RArray{[R.RStatus{"@write"}, R.RStatus{"@bitmap"}, R.RStatus{"@slow"}]}, R.RArray{[]}, R.RArray{[R.RArray{[R.RBulk{"notes"}, R.RBulk{"This command allows both access and modification of the key"}, R.RBulk{"flags"}, R.RArray{[R.RStatus{"RW"}, R.RStatus{"access"}, R.RStatus{"update"}, R.RStatus{"variable_flags"}]}, R.RBulk{"begin_search"}, R.RArray{[R.RBulk{"type"}, R.RBulk{"index"}, R.RBulk{"spec"}, R.RArray{[R.RBulk{"index"}, R.RInt{R.IPos{1n}}]}]}, R.RBulk{"find_keys"}, R.RArray{[R.RBulk{"type"}, R.RBulk{"range"}, R.RBulk{"spec"}, R.RArray{[R.RBulk{"lastkey"}, R.RInt{R.IPos{0n}}, R.RBulk{"keystep"}, R.RInt{R.IPos{1n}}, R.RBulk{"limit"}, R.RInt{R.IPos{0n}}]}]}]}]}],
+    [R.RBulk{"summary"}, R.RBulk{"Perform arbitrary bitfield integer operations on strings"}, R.RBulk{"since"}, R.RBulk{"3.2.0"}, R.RBulk{"group"}, R.RBulk{"bitmap"}, R.RBulk{"complexity"}, R.RBulk{"O(1) for each subcommand specified"}, R.RBulk{"arguments"}, R.RArray{[R.RArray{[R.RBulk{"name"}, R.RBulk{"key"}, R.RBulk{"type"}, R.RBulk{"key"}, R.RBulk{"key_spec_index"}, R.RInt{R.IPos{0n}}]}, R.RArray{[R.RBulk{"name"}, R.RBulk{"operation"}, R.RBulk{"type"}, R.RBulk{"oneof"}, R.RBulk{"flags"}, R.RArray{[R.RStatus{"optional"}, R.RStatus{"multiple"}]}, R.RBulk{"arguments"}, R.RArray{[R.RArray{[R.RBulk{"name"}, R.RBulk{"encoding_offset"}, R.RBulk{"type"}, R.RBulk{"block"}, R.RBulk{"token"}, R.RBulk{"GET"}, R.RBulk{"arguments"}, R.RArray{[R.RArray{[R.RBulk{"name"}, R.RBulk{"encoding"}, R.RBulk{"type"}, R.RBulk{"string"}]}, R.RArray{[R.RBulk{"name"}, R.RBulk{"offset"}, R.RBulk{"type"}, R.RBulk{"integer"}]}]}]}, R.RArray{[R.RBulk{"name"}, R.RBulk{"write"}, R.RBulk{"type"}, R.RBulk{"block"}, R.RBulk{"arguments"}, R.RArray{[R.RArray{[R.RBulk{"name"}, R.RBulk{"wrap_sat_fail"}, R.RBulk{"type"}, R.RBulk{"oneof"}, R.RBulk{"token"}, R.RBulk{"OVERFLOW"}, R.RBulk{"flags"}, R.RArray{[R.RStatus{"optional"}]}, R.RBulk{"arguments"}, R.RArray{[R.RArray{[R.RBulk{"name"}, R.RBulk{"wrap"}, R.RBulk{"type"}, R.RBulk{"pure-token"}, R.RBulk{"token"}, R.RBulk{"WRAP"}]}, R.RArray{[R.RBulk{"name"}, R.RBulk{"sat"}, R.RBulk{"type"}, R.RBulk{"pure-token"}, R.RBulk{"token"}, R.RBulk{"SAT"}]}, R.RArray{[R.RBulk{"name"}, R.RBulk{"fail"}, R.RBulk{"type"}, R.RBulk{"pure-token"}, R.RBulk{"token"}, R.RBulk{"FAIL"}]}]}]}, R.RArray{[R.RBulk{"name"}, R.RBulk{"write_operation"}, R.RBulk{"type"}, R.RBulk{"oneof"}, R.RBulk{"arguments"}, R.RArray{[R.RArray{[R.RBulk{"name"}, R.RBulk{"encoding_offset_value"}, R.RBulk{"type"}, R.RBulk{"block"}, R.RBulk{"token"}, R.RBulk{"SET"}, R.RBulk{"arguments"}, R.RArray{[R.RArray{[R.RBulk{"name"}, R.RBulk{"encoding"}, R.RBulk{"type"}, R.RBulk{"string"}]}, R.RArray{[R.RBulk{"name"}, R.RBulk{"offset"}, R.RBulk{"type"}, R.RBulk{"integer"}]}, R.RArray{[R.RBulk{"name"}, R.RBulk{"value"}, R.RBulk{"type"}, R.RBulk{"integer"}]}]}]}, R.RArray{[R.RBulk{"name"}, R.RBulk{"encoding_offset_increment"}, R.RBulk{"type"}, R.RBulk{"block"}, R.RBulk{"token"}, R.RBulk{"INCRBY"}, R.RBulk{"arguments"}, R.RArray{[R.RArray{[R.RBulk{"name"}, R.RBulk{"encoding"}, R.RBulk{"type"}, R.RBulk{"string"}]}, R.RArray{[R.RBulk{"name"}, R.RBulk{"offset"}, R.RBulk{"type"}, R.RBulk{"integer"}]}, R.RArray{[R.RBulk{"name"}, R.RBulk{"increment"}, R.RBulk{"type"}, R.RBulk{"integer"}]}]}]}]}]}]}]}]}]}]}]},
+  []}
+
+def cmd.bitfield_ro() -> Top:
+  Top{Desc{"bitfield_ro", R.INeg{1n}, ["read", "bitmap", "fast"], [KSpec{["RO", "access"], 1n, R.IPos{0n}, 1n, 0n}], KBySpecs{}, False{},
+    [R.RBulk{"bitfield_ro"}, R.RInt{R.INeg{1n}}, R.RArray{[R.RStatus{"readonly"}, R.RStatus{"fast"}]}, R.RInt{R.IPos{1n}}, R.RInt{R.IPos{1n}}, R.RInt{R.IPos{1n}}, R.RArray{[R.RStatus{"@read"}, R.RStatus{"@bitmap"}, R.RStatus{"@fast"}]}, R.RArray{[]}, R.RArray{[R.RArray{[R.RBulk{"flags"}, R.RArray{[R.RStatus{"RO"}, R.RStatus{"access"}]}, R.RBulk{"begin_search"}, R.RArray{[R.RBulk{"type"}, R.RBulk{"index"}, R.RBulk{"spec"}, R.RArray{[R.RBulk{"index"}, R.RInt{R.IPos{1n}}]}]}, R.RBulk{"find_keys"}, R.RArray{[R.RBulk{"type"}, R.RBulk{"range"}, R.RBulk{"spec"}, R.RArray{[R.RBulk{"lastkey"}, R.RInt{R.IPos{0n}}, R.RBulk{"keystep"}, R.RInt{R.IPos{1n}}, R.RBulk{"limit"}, R.RInt{R.IPos{0n}}]}]}]}]}],
+    [R.RBulk{"summary"}, R.RBulk{"Perform arbitrary bitfield integer operations on strings. Read-only variant of BITFIELD"}, R.RBulk{"since"}, R.RBulk{"6.0.0"}, R.RBulk{"group"}, R.RBulk{"bitmap"}, R.RBulk{"complexity"}, R.RBulk{"O(1) for each subcommand specified"}, R.RBulk{"arguments"}, R.RArray{[R.RArray{[R.RBulk{"name"}, R.RBulk{"key"}, R.RBulk{"type"}, R.RBulk{"key"}, R.RBulk{"key_spec_index"}, R.RInt{R.IPos{0n}}]}, R.RArray{[R.RBulk{"name"}, R.RBulk{"encoding_offset"}, R.RBulk{"type"}, R.RBulk{"block"}, R.RBulk{"token"}, R.RBulk{"GET"}, R.RBulk{"flags"}, R.RArray{[R.RStatus{"optional"}, R.RStatus{"multiple"}, R.RStatus{"multiple_token"}]}, R.RBulk{"arguments"}, R.RArray{[R.RArray{[R.RBulk{"name"}, R.RBulk{"encoding"}, R.RBulk{"type"}, R.RBulk{"string"}]}, R.RArray{[R.RBulk{"name"}, R.RBulk{"offset"}, R.RBulk{"type"}, R.RBulk{"integer"}]}]}]}]}]},
   []}
 
 def cmd.bitop() -> Top:
@@ -493,7 +507,7 @@ def cmd.unlink() -> Top:
 
 # the commands, by name
 def table() -> List<&2, Top>:
-  [cmd.append(), cmd.auth(), cmd.bitcount(), cmd.bitop(), cmd.bitpos(), cmd.client(), cmd.command(), cmd.config(), cmd.copy(), cmd.dbsize(), cmd.decr(), cmd.decrby(), cmd.del(), cmd.echo(), cmd.exists(), cmd.expire(), cmd.expireat(), cmd.expiretime(), cmd.flushall(), cmd.flushdb(), cmd.function(), cmd.get(), cmd.getbit(), cmd.getdel(), cmd.getex(), cmd.getrange(), cmd.getset(), cmd.hello(), cmd.incr(), cmd.incrby(), cmd.info(), cmd.keys(), cmd.lcs(), cmd.mget(), cmd.move(), cmd.mset(), cmd.msetnx(), cmd.object(), cmd.persist(), cmd.pexpire(), cmd.pexpireat(), cmd.pexpiretime(), cmd.ping(), cmd.psetex(), cmd.pttl(), cmd.quit(), cmd.randomkey(), cmd.rename(), cmd.renamenx(), cmd.reset(), cmd.scan(), cmd.select(), cmd.set(), cmd.setbit(), cmd.setex(), cmd.setnx(), cmd.setrange(), cmd.strlen(), cmd.substr(), cmd.swapdb(), cmd.time(), cmd.touch(), cmd.ttl(), cmd.type(), cmd.unlink()]
+  [cmd.append(), cmd.auth(), cmd.bitcount(), cmd.bitfield(), cmd.bitfield_ro(), cmd.bitop(), cmd.bitpos(), cmd.client(), cmd.command(), cmd.config(), cmd.copy(), cmd.dbsize(), cmd.decr(), cmd.decrby(), cmd.del(), cmd.echo(), cmd.exists(), cmd.expire(), cmd.expireat(), cmd.expiretime(), cmd.flushall(), cmd.flushdb(), cmd.function(), cmd.get(), cmd.getbit(), cmd.getdel(), cmd.getex(), cmd.getrange(), cmd.getset(), cmd.hello(), cmd.incr(), cmd.incrby(), cmd.info(), cmd.keys(), cmd.lcs(), cmd.mget(), cmd.move(), cmd.mset(), cmd.msetnx(), cmd.object(), cmd.persist(), cmd.pexpire(), cmd.pexpireat(), cmd.pexpiretime(), cmd.ping(), cmd.psetex(), cmd.pttl(), cmd.quit(), cmd.randomkey(), cmd.rename(), cmd.renamenx(), cmd.reset(), cmd.scan(), cmd.select(), cmd.set(), cmd.setbit(), cmd.setex(), cmd.setnx(), cmd.setrange(), cmd.strlen(), cmd.substr(), cmd.swapdb(), cmd.time(), cmd.touch(), cmd.ttl(), cmd.type(), cmd.unlink()]
 
 # Redis's ACL categories (ACL CAT)
 def categories() -> List<&2, String>:
@@ -884,12 +898,45 @@ def set.keys(argv: List<&2, String>) -> List<&2, KeyAt>:
     case _:
       [KeyAt{1n, ["OW", "update"]}]
 
+# BITFIELD's key: read alone when its words are GETs and OVERFLOWs with
+# the words they take (Redis's bitfieldGetKeys, which stops at the first
+# other word, as a write: a SET, an INCRBY, or a syntax error); skip is
+# the words left to pass over, none once a write is met
+def bitfield.ro.skip(+u: String, +rest: List<&2, String>) -> Maybe<&2, Nat>:
+  Bool.pick(Maybe<&2, Nat>, Bool.and(String.eq(u, "GET"), R.bf.has(2n, rest)), Some{2n},
+    Bool.pick(Maybe<&2, Nat>, Bool.and(String.eq(u, "OVERFLOW"), R.bf.has(1n, rest)), Some{1n}, None{}))
+
+def bitfield.ro.step(+k: Nat, +x: String, +rest: List<&2, String>) -> Maybe<&2, Nat>:
+  match k:
+    case 0n:
+      bitfield.ro.skip(String.to_upper(R.cstr(x)), rest)
+    case 1n+j:
+      Some{j}
+
+def bitfield.ro(xs: List<&2, String>, skip: Maybe<&2, Nat>) -> Bool:
+  match xs skip:
+    case _ None{}:
+      False{}
+    case Nil{} Some{k}:
+      True{}
+    case Con{+x, +rest} Some{+k}:
+      bitfield.ro(rest, bitfield.ro.step(k, x, rest))
+
+def bitfield.keys(argv: List<&2, String>) -> List<&2, KeyAt>:
+  match argv:
+    case Con{c, Con{k, rest}}:
+      [KeyAt{1n, Bool.pick(List<&2, String>, bitfield.ro(rest, Some{0n}), ["RO", "access"], ["RW", "access", "update"])}]
+    case _:
+      [KeyAt{1n, ["RW", "access", "update"]}]
+
 def keys.find(way: KWay, sps: List<&2, KSpec>, +argv: List<&2, String>) -> Maybe<&2, List<&2, KeyAt>>:
   match way:
     case KBySpecs{}:
       keys.specs(sps, List.length(&2, String, argv))
     case KBySet{}:
       Some{set.keys(argv)}
+    case KByBitfield{}:
+      Some{bitfield.keys(argv)}
 
 def keys.has.specs(sps: List<&2, KSpec>) -> Bool:
   match sps:
@@ -902,6 +949,8 @@ def keys.has.specs(sps: List<&2, KSpec>) -> Bool:
 def keys.has(+way: KWay, sps: List<&2, KSpec>) -> Bool:
   match way:
     case KBySet{}:
+      True{}
+    case KByBitfield{}:
       True{}
     case KBySpecs{}:
       keys.has.specs(sps)

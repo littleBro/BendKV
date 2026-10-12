@@ -27,7 +27,10 @@ type Int is Data:
   INeg{n: Nat}
 
 # a RESP2 reply; an array holds replies, so arrays nest (HELLO, the
-# tracking info of CLIENT)
+# tracking info of CLIENT). RIntS is an integer as its decimal text:
+# BITFIELD's, of up to 64 bits, past what an Int holds. It comes last, so
+# that the others keep their tags: after RInt, it made GET 1.5% dearer
+# in instructions (the reply's encoder compiled otherwise)
 type Reply is Data:
   RStatus{s: String}
   RError{s: String}
@@ -35,21 +38,42 @@ type Reply is Data:
   RBulk{s: String}
   RNull{}
   RArray{xs: List<&2, Reply>}
+  RIntS{s: String}
 
 # a key and a value, for MSET
 type KVPair is Data:
   KP{key: String, val: String}
+
+# BITFIELD's fields are integers of up to 64 bits, signed (two's
+# complement) or not, and its arithmetic wraps as C's does. A Nat stays
+# below 2^48, so a word is two U32 halves, which wrap as C's do. No shift
+# is ever by 32 or more: the defs that pick a half make the shift only on
+# the half it is for.
+type W64 is Data:
+  W64{hi: U32, lo: U32}
+
+# BITFIELD key [GET type offset] [SET type offset value] [INCRBY type
+# offset increment] [OVERFLOW WRAP|SAT|FAIL] ...: a field is a signed (iN,
+# N from 1 to 64) or unsigned (uN, N from 1 to 63) integer of N bits at a
+# bit offset (#k: k times N), its bits numbered as SETBIT numbers them.
+# OVERFLOW (0 WRAP, 1 SAT, 2 FAIL) holds for the operations after it.
+type BfOp is Data:
+  BfGet{sign: Bool, bits: Nat, off: Nat}
+  BfSet{sign: Bool, bits: Nat, off: Nat, v: W64, ow: Nat}
+  BfIncr{sign: Bool, bits: Nat, off: Nat, v: W64, ow: Nat}
 
 # A read of one key whose reply depends on what the key holds at now
 # alone (its value and the time it expires at, when it is there): its
 # type (TYPE), its length (STRLEN), its time to live in s or ms (TTL,
 # PTTL) or the time it expires at (EXPIRETIME, PEXPIRETIME), a range of
 # its bytes (GETRANGE, SUBSTR), a bit (GETBIT), the bits set in a range
-# (BITCOUNT) or the first bit of a value in one (BITPOS). The laws see
-# them as one command, Peek (LAWS.bend: disturbs), so one more needs no
-# more proof. A command travels in registers as wide as its widest form,
-# so each has one field of a word at most: GETRANGE, BITCOUNT and BITPOS
-# keep their arguments as they came (Ranges and bits, below).
+# (BITCOUNT), the first bit of a value in one (BITPOS), or fields of its
+# bits (BITFIELD_RO, and BITFIELD whose operations are GETs alone). The
+# laws see them as one command, Peek (LAWS.bend: disturbs), so one more
+# needs no more proof. A command travels in registers as wide as its
+# widest form, so each has one field of a word at most: GETRANGE,
+# BITCOUNT and BITPOS keep their arguments as they came (Ranges and bits,
+# below), BITFIELD its operations as a list.
 type PeekOp is Data:
   PType{}
   PStrlen{}
@@ -61,6 +85,7 @@ type PeekOp is Data:
   PGetBit{off: Nat}
   PCount{args: List<&2, String>}
   PPos{args: List<&2, String>}
+  PBitfield{ops: List<&2, BfOp>}
 
 # A time a command names, in ms (a time in s, times 1000; Times, below):
 # a short one (TmN, below 10^14) or any other long long (TmB: its sign and
@@ -96,9 +121,9 @@ type ExpIf is Data:
 # is SET with GET), GETEX, GETDEL, EXPIRE and its kin (t from now or from
 # 1970), PERSIST, INCRBY (UIncr: as the append-only file sees it,
 # aof.bend; the server runs INCRBY as its own command, IncrBy, the same
-# way, faster), SETRANGE (s at offset off) and SETBIT (the bit at offset
-# off, to on). The laws see them as one command, Upd, so one more needs
-# no more proof. UGet holds an update, so the compiler makes an update a
+# way, faster), SETRANGE (s at offset off), SETBIT (the bit at offset
+# off, to on) and BITFIELD with a write among its operations. The laws
+# see them as one command, Upd, so one more needs no more proof. UGet holds an update, so the compiler makes an update a
 # node of its own: a command travels in registers as wide as its widest
 # form, and an update's options are many.
 type UpdOp is Data:
@@ -113,6 +138,7 @@ type UpdOp is Data:
   UIncr{by: Int}
   URange{off: Nat, s: String}
   USetBit{off: Nat, on: Bool}
+  UBitfield{ops: List<&2, BfOp>}
 
 # The commands of a connection and of the server: session.bend runs
 # them, with the state of the connection and of the server. None of them
@@ -1164,6 +1190,427 @@ def ll.le(+hi: Nat, +lo: Nat, +hb: Nat, +lb: Nat) -> Bool:
 def ll.ms(+hi: Nat, +lo: Nat) -> Nat & Nat:
   (Nat.add(Nat.mul(hi, 1000n), Nat.div(lo, 1000000n)), Nat.mul(Nat.mod(lo, 1000000n), 1000n))
 
+
+# 64-bit words
+# ------------
+# BITFIELD's arithmetic, on W64 (Types): C's on int64_t and uint64_t.
+
+def w64.zero() -> W64:
+  W64{0, 0}
+
+def w64.ones() -> W64:
+  W64{4294967295, 4294967295}
+
+def w64.not(a: W64) -> W64:
+  match a:
+    case W64{+h, +l}:
+      W64{U32.not(h), U32.not(l)}
+
+def w64.and(a: W64, b: W64) -> W64:
+  match a b:
+    case W64{+h, +l} W64{+g, +m}:
+      W64{U32.and(h, g), U32.and(l, m)}
+
+def w64.or(a: W64, b: W64) -> W64:
+  match a b:
+    case W64{+h, +l} W64{+g, +m}:
+      W64{U32.or(h, g), U32.or(l, m)}
+
+# a + b, wrapping: the carry out of the low halves goes into the high one
+def w64.add(a: W64, b: W64) -> W64:
+  match a b:
+    case W64{+h, +l} W64{+g, +m}:
+      +s = U32.add(l, m)
+      W64{U32.add(U32.add(h, g), Bool.pick(U32, U32.is_lt(s, l), 1, 0)), s}
+
+def w64.neg(a: W64) -> W64:
+  w64.add(w64.not(a), W64{0, 1})
+
+def w64.sub(a: W64, b: W64) -> W64:
+  w64.add(a, w64.neg(b))
+
+def w64.is_neg(+a: W64) -> Bool:
+  match a:
+    case W64{+h, l}:
+      U32.is_eq(U32.shrn(h, 31n), 1)
+
+def w64.is_zero(+a: W64) -> Bool:
+  match a:
+    case W64{+h, +l}:
+      Bool.and(U32.is_eq(h, 0), U32.is_eq(l, 0))
+
+def w64.eq(+a: W64, +b: W64) -> Bool:
+  match a b:
+    case W64{+h, +l} W64{+g, +m}:
+      Bool.and(U32.is_eq(h, g), U32.is_eq(l, m))
+
+def w64.is_pos(+a: W64) -> Bool:
+  Bool.and(Bool.not(w64.is_neg(a)), Bool.not(w64.is_zero(a)))
+
+# a < b, unsigned and signed
+def w64.ult(+a: W64, +b: W64) -> Bool:
+  match a b:
+    case W64{+h, +l} W64{+g, +m}:
+      Bool.or(U32.is_lt(h, g), Bool.and(U32.is_eq(h, g), U32.is_lt(l, m)))
+
+def w64.slt(+a: W64, +b: W64) -> Bool:
+  +na = w64.is_neg(a)
+  +nb = w64.is_neg(b)
+  Bool.or(Bool.and(na, Bool.not(nb)), Bool.and(Bool.not(Bool.xor(na, nb)), w64.ult(a, b)))
+
+# a shifted left by one, the bit b coming in at the low end
+def w64.shl1(a: W64, +b: U32) -> W64:
+  match a:
+    case W64{+h, +l}:
+      W64{U32.or(U32.shln(h, 1n), U32.shrn(l, 31n)), U32.or(U32.shln(l, 1n), b)}
+
+# a times n (n small), wrapping
+def w64.mul(+a: W64, n: Nat, acc: W64) -> W64:
+  match n:
+    case 0n:
+      acc
+    case 1n+m:
+      w64.mul(a, m, w64.add(acc, a))
+
+# the n low bits of a half (n below 32)
+def w64.mask32(+n: Nat) -> U32:
+  U32.sub(U32.shln(1, n), 1)
+
+def w64.low.hi(all: Bool, +n: Nat) -> W64:
+  match all:
+    case True{}:
+      w64.ones()
+    case False{}:
+      W64{w64.mask32(Nat.sub(n, 32n)), 4294967295}
+
+def w64.low.of(big: Bool, +n: Nat) -> W64:
+  match big:
+    case True{}:
+      w64.low.hi(Nat.is_le(64n, n), n)
+    case False{}:
+      W64{0, w64.mask32(n)}
+
+# the n low bits set (n from 0 to 64)
+def w64.low(+n: Nat) -> W64:
+  w64.low.of(Nat.is_le(32n, n), n)
+
+# a's bit i (0 the lowest, i below 64)
+def w64.bit.of(low: Bool, +h: U32, +l: U32, +i: Nat) -> U32:
+  match low:
+    case True{}:
+      U32.and(U32.shrn(l, i), 1)
+    case False{}:
+      U32.and(U32.shrn(h, Nat.sub(i, 32n)), 1)
+
+def w64.bit(+a: W64, +i: Nat) -> U32:
+  match a:
+    case W64{+h, +l}:
+      w64.bit.of(Nat.is_lt(i, 32n), h, l, i)
+
+# a shifted left by n (1 to 8) bits, the n bits y coming in at its low end
+def w64.shln8(a: W64, +n: Nat, +y: U32) -> W64:
+  match a:
+    case W64{+h, +l}:
+      W64{U32.or(U32.shln(h, n), U32.shrn(l, Nat.sub(32n, n))), U32.or(U32.shln(l, n), y)}
+
+# the n bits (n from 1 to 8) of a from its bit sh up (sh below 64): of the
+# high half, of the low one, or across them (sh above 24, below 32)
+def w64.bits.lo(fits: Bool, +h: U32, +l: U32, +sh: Nat, +n: Nat) -> U32:
+  match fits:
+    case True{}:
+      U32.and(U32.shrn(l, sh), w64.mask32(n))
+    case False{}:
+      U32.and(U32.or(U32.shrn(l, sh), U32.shln(h, Nat.sub(32n, sh))), w64.mask32(n))
+
+def w64.bits.of(high: Bool, +h: U32, +l: U32, +sh: Nat, +n: Nat) -> U32:
+  match high:
+    case True{}:
+      U32.and(U32.shrn(h, Nat.sub(sh, 32n)), w64.mask32(n))
+    case False{}:
+      w64.bits.lo(Nat.is_le(Nat.add(sh, n), 32n), h, l, sh, n)
+
+def w64.bits(+a: W64, +sh: Nat, +n: Nat) -> U32:
+  match a:
+    case W64{+h, +l}:
+      w64.bits.of(Nat.is_le(32n, sh), h, l, sh, n)
+
+# the bits low bits of a, sign-extended (bits from 1 to 64)
+def w64.sext.of(neg: Bool, a: W64, +bits: Nat) -> W64:
+  match neg:
+    case True{}:
+      w64.or(a, w64.not(w64.low(bits)))
+    case False{}:
+      a
+
+def w64.sext(a: W64, +bits: Nat) -> W64:
+  +x = w64.and(a, w64.low(bits))
+  w64.sext.of(Bool.and(Nat.is_lt(bits, 64n), U32.is_eq(w64.bit(x, Nat.sub(bits, 1n)), 1)), x, bits)
+
+# a word's decimal digits, unsigned: its value divided by 10^9 by long
+# division over its four 16-bit limbs (no Nat past 10^9 * 2^16 is made),
+# the quotient (below 2^35) and the remainder put together
+def w64.digits(+q: Nat, +r: Nat) -> String:
+  match q:
+    case 0n:
+      Nat.show(r)
+    case 1n+p:
+      +d = Nat.show(r)
+      Nat.show(q) ++ String.repeat("0", Nat.sub(9n, String.length(d))) ++ d
+
+def w64.ushow(+a: W64) -> String:
+  match a:
+    case W64{+h, +l}:
+      +hn = U32.to_nat(h)
+      +ln = U32.to_nat(l)
+      +c1 = Nat.add(Nat.mul(Nat.mod(hn, 1000000000n), 65536n), Nat.div(ln, 65536n))
+      +c0 = Nat.add(Nat.mul(Nat.mod(c1, 1000000000n), 65536n), Nat.mod(ln, 65536n))
+      w64.digits(Nat.add(Nat.mul(Nat.add(Nat.mul(Nat.div(hn, 1000000000n), 65536n), Nat.div(c1, 1000000000n)), 65536n), Nat.div(c0, 1000000000n)), Nat.mod(c0, 1000000000n))
+
+# a word as a long long's decimal text
+def w64.show.of(neg: Bool, +a: W64) -> String:
+  match neg:
+    case True{}:
+      "-" ++ w64.ushow(w64.neg(a))
+    case False{}:
+      w64.ushow(a)
+
+def w64.show(+a: W64) -> String:
+  w64.show.of(w64.is_neg(a), a)
+
+# the digits of a decimal string into a word, wrapping
+def w64.read.go(s: String, acc: W64) -> W64:
+  match s:
+    case SNil{}:
+      acc
+    case SCon{Chr{+c}, t}:
+      +x = acc
+      +x2 = w64.shl1(x, 0)
+      w64.read.go(t, w64.add(w64.add(w64.shl1(w64.shl1(x2, 0), 0), x2), W64{0, U32.sub(c, 48)}))
+
+# a long long's word, from its text, which ll.read has read as one, its
+# magnitude hi * 10^9 + lo: below 10^9 (hi 0) the word of lo, else of
+# the digits
+def w64.mag(small: Bool, +lo: Nat, +s: String) -> W64:
+  match small:
+    case True{}:
+      W64{0, U32.from_nat(lo)}
+    case False{}:
+      w64.read.go(s, w64.zero())
+
+def w64.read(+s: String, neg: Bool, +hi: Nat, +lo: Nat) -> W64:
+  match neg:
+    case True{}:
+      w64.neg(w64.mag(Nat.is_eq(hi, 0n), lo, String.drop(s, 1n)))
+    case False{}:
+      w64.mag(Nat.is_eq(hi, 0n), lo, s)
+
+# BITFIELD's operations (BfOp, Types) as they read, a word at a time: a
+# subcommand next (with the words left after it, which it must have),
+# OVERFLOW's word, a type, an offset, a value, or an error, as Redis
+# checks each in turn
+type BfSt is Data:
+  BfWord{ow: Nat, wr: Bool, acc: List<&2, BfOp>}
+  BfOw{wr: Bool, acc: List<&2, BfOp>}
+  BfTy{op: Nat, ow: Nat, wr: Bool, acc: List<&2, BfOp>}
+  BfOff{op: Nat, sign: Bool, bits: Nat, ow: Nat, wr: Bool, acc: List<&2, BfOp>}
+  BfVal{op: Nat, sign: Bool, bits: Nat, off: Nat, ow: Nat, wr: Bool, acc: List<&2, BfOp>}
+  BfErr{r: Reply}
+
+def bf.e_type() -> Reply:
+  RError{"ERR Invalid bitfield type. Use something like i16 u8. Note that u64 is not supported but i64 is."}
+
+def bf.e_off() -> Reply:
+  RError{"ERR bit offset is not an integer or out of range"}
+
+# whether l has n items at least
+def bf.has(n: Nat, +l: List<&2, String>) -> Bool:
+  match n l:
+    case 0n _:
+      True{}
+    case 1n+m Con{x, t}:
+      bf.has(m, t)
+    case 1n+m Nil{}:
+      False{}
+
+# a subcommand (is it GET, SET, INCRBY, OVERFLOW?) with the words rest
+# after it, which must be as many as it takes
+def bf.word(isget: Bool, isset: Bool, isincr: Bool, isow: Bool, +rest: List<&2, String>, ow: Nat, wr: Bool, acc: List<&2, BfOp>) -> BfSt:
+  match isget isset isincr isow:
+    case True{} _ _ _:
+      Bool.pick(BfSt, bf.has(2n, rest), BfTy{0n, ow, wr, acc}, BfErr{RError{"ERR syntax error"}})
+    case False{} True{} _ _:
+      Bool.pick(BfSt, bf.has(3n, rest), BfTy{1n, ow, wr, acc}, BfErr{RError{"ERR syntax error"}})
+    case False{} False{} True{} _:
+      Bool.pick(BfSt, bf.has(3n, rest), BfTy{2n, ow, wr, acc}, BfErr{RError{"ERR syntax error"}})
+    case False{} False{} False{} True{}:
+      Bool.pick(BfSt, bf.has(1n, rest), BfOw{wr, acc}, BfErr{RError{"ERR syntax error"}})
+    case False{} False{} False{} False{}:
+      BfErr{RError{"ERR syntax error"}}
+
+def bf.word.of(+u: String, +rest: List<&2, String>, ow: Nat, wr: Bool, acc: List<&2, BfOp>) -> BfSt:
+  bf.word(String.eq(u, "GET"), String.eq(u, "SET"), String.eq(u, "INCRBY"), String.eq(u, "OVERFLOW"), rest, ow, wr, acc)
+
+def bf.ow(+u: String, +wr: Bool, +acc: List<&2, BfOp>) -> BfSt:
+  Bool.pick(BfSt, String.eq(u, "WRAP"), BfWord{0n, wr, acc},
+  Bool.pick(BfSt, String.eq(u, "SAT"), BfWord{1n, wr, acc},
+  Bool.pick(BfSt, String.eq(u, "FAIL"), BfWord{2n, wr, acc}, BfErr{RError{"ERR Invalid OVERFLOW type specified"}})))
+
+# a type: 'i' or 'u', then its bits as string2ll reads them, up to a NUL,
+# from 1 to 64 (63 unsigned): a short number (num14), as one that
+# string2ll reads and num14 does not is below 1 or past 64
+def bf.ty.of(+sign: Bool, m: Maybe<&2, Nat>, +op: Nat, +ow: Nat, wr: Bool, acc: List<&2, BfOp>) -> BfSt:
+  match m:
+    case Some{+n}:
+      Bool.pick(BfSt, Bool.and(Nat.is_le(1n, n), Nat.is_le(n, Bool.pick(Nat, sign, 64n, 63n))), BfOff{op, sign, n, ow, wr, acc}, BfErr{bf.e_type()})
+    case None{}:
+      BfErr{bf.e_type()}
+
+def bf.ty(+t: String, +op: Nat, +ow: Nat, wr: Bool, acc: List<&2, BfOp>) -> BfSt:
+  +c = String.code_at(t, 0n)
+  +d = cstr(String.drop(t, 1n))
+  Bool.pick(BfSt, Bool.or(U32.is_eq(c, 105), U32.is_eq(c, 117)),
+    bf.ty.of(U32.is_eq(c, 105), num14(d, 0n, 0n, False{}, nch(d)), op, ow, wr, acc), BfErr{bf.e_type()})
+
+# an offset: a long long (#k: k times the bits, wrapping as C's does),
+# at least 0 and below 2^32 (a byte below proto-max-bulk-len, 512MB). A
+# short one (num14) needs no word: its product with the bits (64 at most)
+# is made only below 2^32, a Nat below 2^38 then
+def bf.off.ok(+x: W64) -> Maybe<&2, Nat>:
+  match x:
+    case W64{+h, +l}:
+      Bool.pick(Maybe<&2, Nat>, U32.is_eq(h, 0), Some{U32.to_nat(l)}, None{})
+
+def bf.off.mul(hash: Bool, +x: W64, +bits: Nat) -> W64:
+  match hash:
+    case True{}:
+      w64.mul(x, bits, w64.zero())
+    case False{}:
+      x
+
+def bf.off.word(l: LL, +s: String, +hash: Bool, +bits: Nat) -> Maybe<&2, Nat>:
+  match l:
+    case LL{+neg, +hi, +lo}:
+      bf.off.ok(bf.off.mul(hash, w64.read(s, neg, hi, lo), bits))
+    case LLBad{}:
+      None{}
+
+def bf.off.hash(small: Bool, +n: Nat, +bits: Nat) -> Maybe<&2, Nat>:
+  match small:
+    case True{}:
+      +x = Nat.mul(n, bits)
+      Bool.pick(Maybe<&2, Nat>, Nat.is_le(x, 4294967295n), Some{x}, None{})
+    case False{}:
+      None{}
+
+def bf.off.n(+hash: Bool, +n: Nat, +bits: Nat) -> Maybe<&2, Nat>:
+  +small = Nat.is_le(n, 4294967295n)
+  Bool.pick(Maybe<&2, Nat>, hash, bf.off.hash(small, n, bits), Bool.pick(Maybe<&2, Nat>, small, Some{n}, None{}))
+
+def bf.off.of(m: Maybe<&2, Nat>, +t: String, +hash: Bool, +bits: Nat) -> Maybe<&2, Nat>:
+  match m:
+    case Some{+n}:
+      bf.off.n(hash, n, bits)
+    case None{}:
+      bf.off.word(ll.read(t), t, hash, bits)
+
+def bf.off(+s: String, +bits: Nat) -> Maybe<&2, Nat>:
+  +hash = U32.is_eq(String.code_at(s, 0n), 35)
+  +t = Bool.pick(String, hash, String.drop(s, 1n), s)
+  bf.off.of(num14(t, 0n, 0n, False{}, nch(t)), t, hash, bits)
+
+def bf.off.st(m: Maybe<&2, Nat>, +op: Nat, +sign: Bool, +bits: Nat, +ow: Nat, wr: Bool, +acc: List<&2, BfOp>) -> BfSt:
+  match m:
+    case Some{+off}:
+      Bool.pick(BfSt, Nat.is_eq(op, 0n), BfWord{ow, wr, BfGet{sign, bits, off} <> acc}, BfVal{op, sign, bits, off, ow, True{}, acc})
+    case None{}:
+      BfErr{bf.e_off()}
+
+# a value of SET or INCRBY: a long long. A short one (num14; after a '-',
+# above 0, as string2ll refuses -0) is a Nat below 2^47, its word its
+# halves; any other is read as ll.read reads it
+def bf.v.put(+v: W64, +op: Nat, +sign: Bool, +bits: Nat, +off: Nat, +ow: Nat, acc: List<&2, BfOp>) -> BfSt:
+  BfWord{ow, True{}, Bool.pick(BfOp, Nat.is_eq(op, 1n), BfSet{sign, bits, off, v, ow}, BfIncr{sign, bits, off, v, ow}) <> acc}
+
+def bf.val.st(l: LL, +s: String, +op: Nat, +sign: Bool, +bits: Nat, +off: Nat, +ow: Nat, acc: List<&2, BfOp>) -> BfSt:
+  match l:
+    case LL{+neg, +hi, +lo}:
+      bf.v.put(w64.read(s, neg, hi, lo), op, sign, bits, off, ow, acc)
+    case LLBad{}:
+      BfErr{e_int()}
+
+def bf.v.nat(+n: Nat) -> W64:
+  +b = Nat.mul(65536n, 65536n)
+  W64{U32.from_nat(Nat.div(n, b)), U32.from_nat(Nat.mod(n, b))}
+
+def bf.v.neg(neg: Bool, +n: Nat) -> W64:
+  match neg:
+    case True{}:
+      w64.neg(bf.v.nat(n))
+    case False{}:
+      bf.v.nat(n)
+
+def bf.v.of(m: Maybe<&2, Nat>, +neg: Bool, +s: String, +op: Nat, +sign: Bool, +bits: Nat, +off: Nat, +ow: Nat, acc: List<&2, BfOp>) -> BfSt:
+  match m:
+    case Some{+n}:
+      bf.v.put(bf.v.neg(neg, n), op, sign, bits, off, ow, acc)
+    case None{}:
+      bf.val.st(ll.read(s), s, op, sign, bits, off, ow, acc)
+
+def bf.v.pos(m: Maybe<&2, Nat>) -> Maybe<&2, Nat>:
+  match m:
+    case Some{+n}:
+      Bool.pick(Maybe<&2, Nat>, Nat.is_eq(n, 0n), None{}, Some{n})
+    case None{}:
+      None{}
+
+def bf.v.short(+neg: Bool, +t: String) -> Maybe<&2, Nat>:
+  +m = num14(t, 0n, 0n, False{}, nch(t))
+  Bool.pick(Maybe<&2, Nat>, neg, bf.v.pos(m), m)
+
+def bf.value(+a: String, +op: Nat, +sign: Bool, +bits: Nat, +off: Nat, +ow: Nat, acc: List<&2, BfOp>) -> BfSt:
+  +neg = U32.is_eq(String.code_at(a, 0n), 45)
+  bf.v.of(bf.v.short(neg, Bool.pick(String, neg, String.drop(a, 1n), a)), neg, a, op, sign, bits, off, ow, acc)
+
+def bf.step(st: BfSt, +a: String, +rest: List<&2, String>) -> BfSt:
+  match st:
+    case BfWord{+ow, wr, acc}:
+      bf.word.of(String.to_upper(cstr(a)), rest, ow, wr, acc)
+    case BfOw{wr, acc}:
+      bf.ow(String.to_upper(cstr(a)), wr, acc)
+    case BfTy{+op, +ow, wr, acc}:
+      bf.ty(a, op, ow, wr, acc)
+    case BfOff{+op, +sign, +bits, +ow, wr, acc}:
+      bf.off.st(bf.off(a, bits), op, sign, bits, ow, wr, acc)
+    case BfVal{+op, +sign, +bits, +off, +ow, wr, acc}:
+      bf.value(a, op, sign, bits, off, ow, acc)
+    case BfErr{r}:
+      BfErr{r}
+
+def bf.go(args: List<&2, String>, st: BfSt) -> BfSt:
+  match args:
+    case Nil{}:
+      st
+    case Con{+a, +rest}:
+      bf.go(rest, bf.step(st, a, rest))
+
+# the command: a read of the key when no operation writes (BITFIELD_RO,
+# ro, refuses one that does), else an update of it
+def bf.cmd(st: BfSt, +k: String, ro: Bool) -> Cmd:
+  match st ro:
+    case BfWord{ow, False{}, acc} _:
+      Peek{k, PBitfield{List.reverse(&2, BfOp, acc)}}
+    case BfWord{ow, True{}, acc} False{}:
+      Upd{k, UBitfield{List.reverse(&2, BfOp, acc)}}
+    case BfWord{ow, True{}, acc} True{}:
+      Bad{RError{"ERR BITFIELD_RO only supports the GET subcommand"}}
+    case BfErr{r} _:
+      Bad{r}
+    case _ _:
+      Bad{RError{"ERR syntax error"}}
+
+def parse_bitfield(+k: String, args: List<&2, String>, ro: Bool) -> Cmd:
+  bf.cmd(bf.go(args, BfWord{0n, False{}, Nil{}}), k, ro)
+
 # a time as a command reads it, or the error it answers
 type TmR is Data:
   TOk{t: Tm}
@@ -1685,14 +2132,16 @@ def cmd_id(+n: String, len: Nat) -> Nat:
       Bool.pick(Nat, String.eq(n, "GETRANGE"), 37n,
       Bool.pick(Nat, String.eq(n, "SETRANGE"), 39n,
       Bool.pick(Nat, String.eq(n, "BITCOUNT"), 42n,
-      Bool.pick(Nat, String.eq(n, "RENAMENX"), 47n, 0n)))))))
+      Bool.pick(Nat, String.eq(n, "RENAMENX"), 47n,
+      Bool.pick(Nat, String.eq(n, "BITFIELD"), 49n, 0n))))))))
     case 9n:
       Bool.pick(Nat, String.eq(n, "RANDOMKEY"), 110n,
       Bool.pick(Nat, String.eq(n, "PEXPIREAT"), 31n, 0n))
     case 10n:
       Bool.pick(Nat, String.eq(n, "EXPIRETIME"), 34n, 0n)
     case 11n:
-      Bool.pick(Nat, String.eq(n, "PEXPIRETIME"), 35n, 0n)
+      Bool.pick(Nat, String.eq(n, "PEXPIRETIME"), 35n,
+      Bool.pick(Nat, String.eq(n, "BITFIELD_RO"), 50n, 0n))
     case _:
       0n
 
@@ -1975,6 +2424,18 @@ def parse_id(id: Nat, name: String, args: List<&2, String>) -> Cmd:
           parse_bitop(bitop.kind(o), d, k <> ks)
         case _:
           e_arity("bitop")
+    case 49n:  # BITFIELD
+      match args:
+        case Con{k, rest}:
+          parse_bitfield(k, rest, False{})
+        case _:
+          e_arity("bitfield")
+    case 50n:  # BITFIELD_RO
+      match args:
+        case Con{k, rest}:
+          parse_bitfield(k, rest, True{})
+        case _:
+          e_arity("bitfield_ro")
     case _:
       e_unknown(name, args)
 
@@ -2218,40 +2679,44 @@ def stat.top(+id: Nat) -> Nat:
       47n
     case 48n:
       48n
-    case 100n:
+    case 49n:
       49n
-    case 101n:
+    case 50n:
       50n
-    case 102n:
+    case 100n:
       51n
-    case 103n:
+    case 101n:
       52n
-    case 104n:
+    case 102n:
       53n
-    case 105n:
+    case 103n:
       54n
-    case 106n:
+    case 104n:
       55n
-    case 107n:
+    case 105n:
       56n
-    case 108n:
+    case 106n:
       57n
-    case 109n:
+    case 107n:
       58n
-    case 110n:
+    case 108n:
       59n
-    case 111n:
+    case 109n:
       60n
-    case 112n:
+    case 110n:
       61n
-    case 113n:
+    case 111n:
       62n
-    case 114n:
+    case 112n:
       63n
-    case 115n:
+    case 113n:
       64n
-    case 116n:
+    case 114n:
       65n
+    case 115n:
+      66n
+    case 116n:
+      67n
     case _:
       0n
 
@@ -2259,25 +2724,25 @@ def stat.top(+id: Nat) -> Nat:
 def stat.sub.client(+sub: Nat) -> Nat:
   match sub:
     case 1n:
-      66n
-    case 2n:
-      67n
-    case 3n:
       68n
-    case 4n:
+    case 2n:
       69n
-    case 5n:
+    case 3n:
       70n
-    case 6n:
+    case 4n:
       71n
-    case 7n:
+    case 5n:
       72n
-    case 8n:
+    case 6n:
       73n
-    case 9n:
+    case 7n:
       74n
-    case 10n:
+    case 8n:
       75n
+    case 9n:
+      76n
+    case 10n:
+      77n
     case _:
       0n
 
@@ -2285,9 +2750,9 @@ def stat.sub.client(+sub: Nat) -> Nat:
 def stat.sub.function(+sub: Nat) -> Nat:
   match sub:
     case 1n:
-      76n
+      78n
     case 2n:
-      77n
+      79n
     case _:
       0n
 
@@ -2295,15 +2760,15 @@ def stat.sub.function(+sub: Nat) -> Nat:
 def stat.sub.config(+sub: Nat) -> Nat:
   match sub:
     case 1n:
-      78n
-    case 2n:
-      79n
-    case 3n:
       80n
-    case 4n:
+    case 2n:
       81n
-    case 5n:
+    case 3n:
       82n
+    case 4n:
+      83n
+    case 5n:
+      84n
     case _:
       0n
 
@@ -2311,19 +2776,19 @@ def stat.sub.config(+sub: Nat) -> Nat:
 def stat.sub.command(+sub: Nat) -> Nat:
   match sub:
     case 1n:
-      83n
-    case 2n:
-      84n
-    case 3n:
       85n
-    case 4n:
+    case 2n:
       86n
-    case 5n:
+    case 3n:
       87n
-    case 6n:
+    case 4n:
       88n
-    case 7n:
+    case 5n:
       89n
+    case 6n:
+      90n
+    case 7n:
+      91n
     case _:
       0n
 
@@ -2331,15 +2796,15 @@ def stat.sub.command(+sub: Nat) -> Nat:
 def stat.sub.object(+sub: Nat) -> Nat:
   match sub:
     case 1n:
-      90n
-    case 2n:
-      91n
-    case 3n:
       92n
-    case 4n:
+    case 2n:
       93n
-    case 5n:
+    case 3n:
       94n
+    case 4n:
+      95n
+    case 5n:
+      96n
     case _:
       0n
 
@@ -2443,96 +2908,100 @@ def stat.name(+key: Nat) -> String:
     case 48n:
       "bitop"
     case 49n:
-      "select"
+      "bitfield"
     case 50n:
-      "hello"
+      "bitfield_ro"
     case 51n:
-      "auth"
+      "select"
     case 52n:
-      "quit"
+      "hello"
     case 53n:
-      "reset"
+      "auth"
     case 54n:
-      "client"
+      "quit"
     case 55n:
-      "function"
+      "reset"
     case 56n:
-      "config"
+      "client"
     case 57n:
-      "info"
+      "function"
     case 58n:
-      "command"
+      "config"
     case 59n:
-      "randomkey"
+      "info"
     case 60n:
-      "swapdb"
+      "command"
     case 61n:
-      "move"
+      "randomkey"
     case 62n:
-      "time"
+      "swapdb"
     case 63n:
-      "object"
+      "move"
     case 64n:
-      "copy"
+      "time"
     case 65n:
-      "lcs"
+      "object"
     case 66n:
-      "client|id"
+      "copy"
     case 67n:
-      "client|help"
+      "lcs"
     case 68n:
-      "client|reply"
+      "client|id"
     case 69n:
-      "client|getname"
+      "client|help"
     case 70n:
-      "client|setname"
+      "client|reply"
     case 71n:
-      "client|caching"
+      "client|getname"
     case 72n:
-      "client|unblock"
+      "client|setname"
     case 73n:
-      "client|getredir"
+      "client|caching"
     case 74n:
-      "client|no-evict"
+      "client|unblock"
     case 75n:
-      "client|trackinginfo"
+      "client|getredir"
     case 76n:
-      "function|flush"
+      "client|no-evict"
     case 77n:
-      "function|help"
+      "client|trackinginfo"
     case 78n:
-      "config|get"
+      "function|flush"
     case 79n:
-      "config|set"
+      "function|help"
     case 80n:
-      "config|resetstat"
+      "config|get"
     case 81n:
-      "config|rewrite"
+      "config|set"
     case 82n:
-      "config|help"
+      "config|resetstat"
     case 83n:
-      "command|info"
+      "config|rewrite"
     case 84n:
-      "command|docs"
+      "config|help"
     case 85n:
-      "command|list"
+      "command|info"
     case 86n:
-      "command|help"
+      "command|docs"
     case 87n:
-      "command|count"
+      "command|list"
     case 88n:
-      "command|getkeys"
+      "command|help"
     case 89n:
-      "command|getkeysandflags"
+      "command|count"
     case 90n:
-      "object|help"
+      "command|getkeys"
     case 91n:
-      "object|freq"
+      "command|getkeysandflags"
     case 92n:
-      "object|encoding"
+      "object|help"
     case 93n:
-      "object|refcount"
+      "object|freq"
     case 94n:
+      "object|encoding"
+    case 95n:
+      "object|refcount"
+    case 96n:
       "object|idletime"
     case _:
       ""
@@ -2638,96 +3107,100 @@ def stat.arity(+key: Nat) -> Nat:
     case 48n:
       9n
     case 49n:
-      4n
-    case 50n:
-      3n
-    case 51n:
       5n
+    case 50n:
+      5n
+    case 51n:
+      4n
     case 52n:
       3n
     case 53n:
-      2n
+      5n
     case 54n:
-      5n
+      3n
     case 55n:
-      5n
+      2n
     case 56n:
       5n
     case 57n:
-      3n
-    case 58n:
-      3n
-    case 59n:
-      2n
-    case 60n:
-      6n
-    case 61n:
-      6n
-    case 62n:
-      2n
-    case 63n:
       5n
-    case 64n:
-      7n
-    case 65n:
-      7n
-    case 66n:
-      4n
-    case 67n:
-      4n
-    case 68n:
+    case 58n:
+      5n
+    case 59n:
+      3n
+    case 60n:
+      3n
+    case 61n:
+      2n
+    case 62n:
       6n
+    case 63n:
+      6n
+    case 64n:
+      2n
+    case 65n:
+      5n
+    case 66n:
+      7n
+    case 67n:
+      7n
+    case 68n:
+      4n
     case 69n:
       4n
     case 70n:
       6n
     case 71n:
-      6n
-    case 72n:
-      7n
-    case 73n:
       4n
-    case 74n:
+    case 72n:
       6n
+    case 73n:
+      6n
+    case 74n:
+      7n
     case 75n:
       4n
     case 76n:
-      5n
+      6n
     case 77n:
       4n
     case 78n:
-      7n
+      5n
     case 79n:
-      9n
+      4n
     case 80n:
-      4n
+      7n
     case 81n:
-      4n
+      9n
     case 82n:
       4n
     case 83n:
-      5n
+      4n
     case 84n:
-      5n
+      4n
     case 85n:
       5n
     case 86n:
-      4n
+      5n
     case 87n:
-      4n
+      5n
     case 88n:
-      9n
-    case 89n:
-      9n
-    case 90n:
       4n
+    case 89n:
+      4n
+    case 90n:
+      9n
     case 91n:
-      6n
+      9n
     case 92n:
-      6n
+      4n
     case 93n:
       6n
     case 94n:
+      6n
+    case 95n:
+      6n
+    case 96n:
       6n
     case _:
       1n
@@ -2763,11 +3236,13 @@ def stat.risky(+key: Nat) -> Bool:
       True{}
     case 47n:
       True{}
-    case 65n:
+    case 49n:
       True{}
-    case 91n:
+    case 67n:
       True{}
-    case 94n:
+    case 93n:
+      True{}
+    case 96n:
       True{}
     case _:
       False{}
@@ -3535,6 +4010,22 @@ def stat.cw(+code: Nat) -> U32:
       1689
     case 379n:
       1690
+    case 380n:
+      1692
+    case 381n:
+      1699
+    case 382n:
+      1701
+    case 383n:
+      1702
+    case 384n:
+      1705
+    case 385n:
+      1706
+    case 386n:
+      1708
+    case 387n:
+      1713
     case _:
       63
 
@@ -4301,6 +4792,22 @@ def stat.code.cw(+w: Nat) -> Nat:
       378n
     case 1690n:
       379n
+    case 1692n:
+      380n
+    case 1699n:
+      381n
+    case 1701n:
+      382n
+    case 1702n:
+      383n
+    case 1705n:
+      384n
+    case 1706n:
+      385n
+    case 1708n:
+      386n
+    case 1713n:
+      387n
     case _:
       0n
 
@@ -5395,6 +5902,78 @@ def bitpos.peek(args: List<&2, String>, m: Maybe<&2, KV.Item<String>>) -> Reply:
     case None{}:
       bitpos.none(args)
 
+# BITFIELD's fields. The byte at index i of the value as the writes so
+# far leave it: the span sp's (its bytes lo on, below) where it lies, else
+# w's (byte.at reads 0 past the end of either); a read alone has no span
+def bf.vbyte(in: Bool, +w: String, +sp: String, +lo: Nat, +i: Nat) -> U32:
+  match in:
+    case True{}:
+      byte.at(sp, Nat.sub(i, lo))
+    case False{}:
+      byte.at(w, i)
+
+def bf.vb(+w: String, +sp: String, +lo: Nat, +i: Nat) -> U32:
+  bf.vbyte(Bool.and(Nat.is_le(lo, i), Nat.is_lt(i, Nat.add(lo, String.length(sp)))), w, sp, lo, i)
+
+# the bits a to b - 1 of a byte x (its bit 0 the high one, as SETBIT
+# numbers them)
+def bf.part(+x: U32, +a: Nat, +b: Nat) -> U32:
+  U32.and(U32.shrn(x, Nat.sub(8n, b)), w64.mask32(Nat.sub(b, a)))
+
+# a field's bits, bits s to e - 1 of k bytes from byte i: each byte's part
+# after acc (q the byte's first bit, from the first byte's)
+def bf.rd(k: Nat, +w: String, +sp: String, +lo: Nat, +i: Nat, +q: Nat, +s: Nat, +e: Nat, acc: W64) -> W64:
+  match k:
+    case 0n:
+      acc
+    case 1n+m:
+      +a = Nat.sub(Nat.max(s, q), q)
+      +b = Nat.sub(Nat.min(e, Nat.add(q, 8n)), q)
+      bf.rd(m, w, sp, lo, Nat.add(i, 1n), Nat.add(q, 8n), s, e, w64.shln8(acc, Nat.sub(b, a), bf.part(bf.vb(w, sp, lo, i), a, b)))
+
+# the bits of a field of bits bits at bit offset off
+def bf.field(+w: String, +sp: String, +lo: Nat, +bits: Nat, +off: Nat) -> W64:
+  +s = Nat.mod(off, 8n)
+  +e = Nat.add(s, bits)
+  bf.rd(Nat.div(Nat.add(e, 7n), 8n), w, sp, lo, Nat.div(off, 8n), 0n, s, e, w64.zero())
+
+# a field's value, from its bits: signed, its sign extended
+def bf.val(sign: Bool, +raw: W64, +bits: Nat) -> W64:
+  match sign:
+    case True{}:
+      w64.sext(raw, bits)
+    case False{}:
+      raw
+
+def bf.rint(+sign: Bool, +bits: Nat, +raw: W64) -> Reply:
+  RIntS{w64.show(bf.val(sign, raw, bits))}
+
+def bf.get(+w: String, +sign: Bool, +bits: Nat, +off: Nat) -> Reply:
+  bf.rint(sign, bits, bf.field(w, "", 0n, bits, off))
+
+def bf.read1(op: BfOp, +w: String) -> Reply:
+  match op:
+    case BfGet{+sign, +bits, +off}:
+      bf.get(w, sign, bits, off)
+    case _:
+      RNull{}
+
+# BITFIELD_RO, and BITFIELD with GETs alone: each a read of the value w
+# ("" for a key not there), the replies before acc reversed
+def bf.reads(ops: List<&2, BfOp>, +w: String, acc: List<&2, Reply>) -> List<&2, Reply>:
+  match ops:
+    case Nil{}:
+      List.reverse(&2, Reply, acc)
+    case Con{op, rest}:
+      bf.reads(rest, w, bf.read1(op, w) <> acc)
+
+def bf.peek(ops: List<&2, BfOp>, m: Maybe<&2, KV.Item<String>>) -> Reply:
+  match m:
+    case Some{KV.Item{+w, e}}:
+      RArray{bf.reads(ops, w, Nil{})}
+    case None{}:
+      RArray{bf.reads(ops, "", Nil{})}
+
 # the reply of a Peek, from the entry of its key there at now
 def peek(c: PeekOp, +now: Nat, m: Maybe<&2, KV.Item<String>>) -> Reply:
   match c:
@@ -5418,6 +5997,8 @@ def peek(c: PeekOp, +now: Nat, m: Maybe<&2, KV.Item<String>>) -> Reply:
       bitcount.peek(args, m)
     case PPos{args}:
       bitpos.peek(args, m)
+    case PBitfield{ops}:
+      bf.peek(ops, m)
 
 # What a write of one key does to it: nothing, delete it, set its time
 # alone, set its value and its time (0: none), or set its value and keep
@@ -5738,6 +6319,210 @@ def setbit.of(+off: Nat, +on: Bool, m: Maybe<&2, KV.Item<String>>) -> Out:
     case None{}:
       setbit.out(r_int(0n), range.of(Nat.div(off, 8n), setbit.byte(off, on, 0), None{}))
 
+# BITFIELD's writes. Redis grows the value (makes it, of a key not there)
+# to the last byte a write reaches, then runs the operations in turn on
+# it. Here they run on the span of the bytes the writes reach, from lo to
+# end - 1, as it starts of w's bytes there and zeros past w's end: a write
+# reads its field there and puts it back there, a GET reads the span where
+# it lies and w elsewhere. The change is the SETRANGE of the span at lo,
+# made when the value grows or a write changes its bits (as Redis counts
+# a change); a FAIL's overflow writes nothing (its reply a null). A span
+# past 512MB (a field across the 2^32-th bit, which Redis lets grow the
+# value past what a value may hold, by up to 8 bytes) is the error
+# SETRANGE answers there.
+def bf.wlo(op: BfOp, +acc: Nat) -> Nat:
+  match op:
+    case BfGet{sign, bits, off}:
+      acc
+    case BfSet{sign, bits, +off, v, ow}:
+      Nat.min(acc, Nat.div(off, 8n))
+    case BfIncr{sign, bits, +off, v, ow}:
+      Nat.min(acc, Nat.div(off, 8n))
+
+def bf.wend(op: BfOp, +acc: Nat) -> Nat:
+  match op:
+    case BfGet{sign, bits, off}:
+      acc
+    case BfSet{sign, +bits, +off, v, ow}:
+      Nat.max(acc, Nat.add(Nat.div(Nat.sub(Nat.add(off, bits), 1n), 8n), 1n))
+    case BfIncr{sign, +bits, +off, v, ow}:
+      Nat.max(acc, Nat.add(Nat.div(Nat.sub(Nat.add(off, bits), 1n), 8n), 1n))
+
+def bf.lo(ops: List<&2, BfOp>, +acc: Nat) -> Nat:
+  match ops:
+    case Nil{}:
+      acc
+    case Con{op, rest}:
+      bf.lo(rest, bf.wlo(op, acc))
+
+def bf.end(ops: List<&2, BfOp>, +acc: Nat) -> Nat:
+  match ops:
+    case Nil{}:
+      acc
+    case Con{op, rest}:
+      bf.end(rest, bf.wend(op, acc))
+
+# bytes lo to end - 1 of w, zeros past its end
+def bf.span(+w: String, +lo: Nat, +end: Nat) -> String:
+  +s = String.take(String.drop(w, lo), Nat.sub(end, lo))
+  s ++ zeros(Nat.sub(Nat.sub(end, lo), String.length(s)))
+
+# the span, whether a write changed the value (or it grows), and the
+# replies so far, reversed
+type BfRun is Data:
+  BfRun{sp: String, ch: Bool, rs: List<&2, Reply>}
+
+# an overflow (Redis's checkSignedBitfieldOverflow and
+# checkUnsignedBitfieldOverflow, whose sums wrap as here): 0 none, 1 past
+# the field's largest value, 2 past its least
+def bf.over(+o: Bool, +u: Bool) -> Nat:
+  Bool.pick(Nat, o, 1n, Bool.pick(Nat, u, 2n, 0n))
+
+def bf.sover(+value: W64, +incr: W64, +bits: Nat) -> Nat:
+  +max = w64.low(Nat.sub(bits, 1n))
+  +min = w64.not(max)
+  +maxincr = w64.sub(max, value)
+  +minincr = w64.sub(min, value)
+  +n64 = Bool.not(Nat.is_eq(bits, 64n))
+  bf.over(Bool.or(w64.slt(max, value), Bool.or(Bool.and(n64, w64.slt(maxincr, incr)), Bool.and(Bool.and(Bool.not(w64.is_neg(value)), w64.is_pos(incr)), w64.slt(maxincr, incr)))),
+    Bool.or(w64.slt(value, min), Bool.or(Bool.and(n64, w64.slt(incr, minincr)), Bool.and(Bool.and(w64.is_neg(value), w64.is_neg(incr)), w64.slt(incr, minincr)))))
+
+def bf.uover(+value: W64, +incr: W64, +bits: Nat) -> Nat:
+  +max = w64.low(bits)
+  bf.over(Bool.or(w64.ult(max, value), Bool.and(w64.is_pos(incr), w64.slt(w64.sub(max, value), incr))),
+    Bool.and(w64.is_neg(incr), w64.slt(incr, w64.neg(value))))
+
+def bf.over.of(sign: Bool, +value: W64, +incr: W64, +bits: Nat) -> Nat:
+  match sign:
+    case True{}:
+      bf.sover(value, incr, bits)
+    case False{}:
+      bf.uover(value, incr, bits)
+
+# the value an overflow o leaves: WRAP's (ow 0) the sum's low bits, SAT's
+# the field's largest value or its least
+def bf.sat(+sign: Bool, +o: Nat, +bits: Nat) -> W64:
+  +top = w64.low(Nat.sub(bits, 1n))
+  Bool.pick(W64, sign, Bool.pick(W64, Nat.is_eq(o, 1n), top, w64.not(top)), Bool.pick(W64, Nat.is_eq(o, 1n), w64.low(bits), w64.zero()))
+
+def bf.wrap(sign: Bool, +sum: W64, +bits: Nat) -> W64:
+  match sign:
+    case True{}:
+      w64.sext(sum, bits)
+    case False{}:
+      w64.and(sum, w64.low(bits))
+
+def bf.lim(wrap: Bool, +sign: Bool, +o: Nat, +sum: W64, +bits: Nat) -> W64:
+  match wrap:
+    case True{}:
+      bf.wrap(sign, sum, bits)
+    case False{}:
+      bf.sat(sign, o, bits)
+
+# the new value: the sum, or what its overflow o leaves
+def bf.nv(none: Bool, +o: Nat, +sign: Bool, +ow: Nat, +sum: W64, +bits: Nat) -> W64:
+  match none:
+    case True{}:
+      sum
+    case False{}:
+      bf.lim(Nat.is_eq(ow, 0n), sign, o, sum, bits)
+
+# a field's k bytes from byte i, the field (bits s to e - 1 of them) the
+# new value nb's bits: each byte's part (bits a to b - 1) nb's bits there
+def bf.wb(k: Nat, +w: String, +sp: String, +lo: Nat, +i: Nat, +q: Nat, +s: Nat, +e: Nat, +nb: W64) -> String:
+  match k:
+    case 0n:
+      ""
+    case 1n+m:
+      +a = Nat.sub(Nat.max(s, q), q)
+      +b = Nat.sub(Nat.min(e, Nat.add(q, 8n)), q)
+      +n = Nat.sub(b, a)
+      +sh = Nat.sub(8n, b)
+      +y = w64.bits(nb, Nat.sub(e, Nat.add(q, b)), n)
+      +x = bf.vb(w, sp, lo, i)
+      SCon{Chr{U32.or(U32.and(x, U32.not(U32.shln(w64.mask32(n), sh))), U32.shln(y, sh))}, bf.wb(m, w, sp, lo, Nat.add(i, 1n), Nat.add(q, 8n), s, e, nb)}
+
+# a write of a field's new value nv, its bits raw before; the reply is the
+# old value (SET) or the new one (INCRBY), or a null for a FAIL's
+# overflow, which writes nothing
+def bf.wr.do(fail: Bool, +set: Bool, +bits: Nat, +off: Nat, +w: String, +lo: Nat, +raw: W64, +old: W64, +nv: W64, +sp: String, +ch: Bool, rs: List<&2, Reply>) -> BfRun:
+  match fail:
+    case True{}:
+      BfRun{sp, ch, RNull{} <> rs}
+    case False{}:
+      +nb = w64.and(nv, w64.low(bits))
+      +s = Nat.mod(off, 8n)
+      +e = Nat.add(s, bits)
+      +i = Nat.div(off, 8n)
+      BfRun{range.put(sp, Nat.sub(i, lo), bf.wb(Nat.div(Nat.add(e, 7n), 8n), w, sp, lo, i, 0n, s, e, nb)), Bool.or(ch, Bool.not(w64.eq(nb, raw))), RIntS{w64.show(Bool.pick(W64, set, old, nv))} <> rs}
+
+# a SET (set) of v, or an INCRBY by v, of a field of bits bits at bit
+# offset off, under the overflow ow (0 WRAP, 1 SAT, 2 FAIL)
+def bf.wr(+set: Bool, +sign: Bool, +bits: Nat, +off: Nat, +v: W64, +ow: Nat, +w: String, +lo: Nat, st: BfRun) -> BfRun:
+  match st:
+    case BfRun{+sp, +ch, rs}:
+      +raw = bf.field(w, sp, lo, bits, off)
+      +old = bf.val(sign, raw, bits)
+      +value = Bool.pick(W64, set, v, old)
+      +incr = Bool.pick(W64, set, w64.zero(), v)
+      +o = bf.over.of(sign, value, incr, bits)
+      bf.wr.do(Bool.and(Nat.is_lt(0n, o), Nat.is_eq(ow, 2n)), set, bits, off, w, lo, raw, old, bf.nv(Nat.is_eq(o, 0n), o, sign, ow, w64.add(value, incr), bits), sp, ch, rs)
+
+def bf.get.at(+sign: Bool, +bits: Nat, +off: Nat, +w: String, +lo: Nat, st: BfRun) -> BfRun:
+  match st:
+    case BfRun{+sp, ch, rs}:
+      BfRun{sp, ch, bf.rint(sign, bits, bf.field(w, sp, lo, bits, off)) <> rs}
+
+def bf.op(op: BfOp, +w: String, +lo: Nat, st: BfRun) -> BfRun:
+  match op:
+    case BfGet{+sign, +bits, +off}:
+      bf.get.at(sign, bits, off, w, lo, st)
+    case BfSet{+sign, +bits, +off, +v, +ow}:
+      bf.wr(True{}, sign, bits, off, v, ow, w, lo, st)
+    case BfIncr{+sign, +bits, +off, +v, +ow}:
+      bf.wr(False{}, sign, bits, off, v, ow, w, lo, st)
+
+def bf.run(ops: List<&2, BfOp>, +w: String, +lo: Nat, st: BfRun) -> BfRun:
+  match ops:
+    case Nil{}:
+      st
+    case Con{op, rest}:
+      bf.run(rest, w, lo, bf.op(op, w, lo, st))
+
+def bf.lo0(+ops: List<&2, BfOp>) -> Nat:
+  bf.lo(ops, 1073741824n)
+
+def bf.run0(+ops: List<&2, BfOp>, +w: String) -> BfRun:
+  +lo = bf.lo0(ops)
+  +end = bf.end(ops, 0n)
+  bf.run(ops, w, lo, BfRun{bf.span(w, lo, end), Nat.is_lt(String.length(w), end), Nil{}})
+
+def bf.put(ok: Bool, +r: Reply, +lo: Nat, +sp: String, m: Maybe<&2, KV.Item<String>>) -> Out:
+  match ok:
+    case True{}:
+      setbit.out(r, range.of(lo, sp, m))
+    case False{}:
+      Out{range.err(), CKeep{}}
+
+def bf.res(ch: Bool, +r: Reply, +lo: Nat, +sp: String, m: Maybe<&2, KV.Item<String>>) -> Out:
+  match ch:
+    case True{}:
+      bf.put(range.go(lo, sp), r, lo, sp, m)
+    case False{}:
+      Out{r, CKeep{}}
+
+def bf.fin(st: BfRun, +lo: Nat, m: Maybe<&2, KV.Item<String>>) -> Out:
+  match st:
+    case BfRun{+sp, ch, rs}:
+      bf.res(ch, RArray{List.reverse(&2, Reply, rs)}, lo, sp, m)
+
+def bitfield.of(+ops: List<&2, BfOp>, m: Maybe<&2, KV.Item<String>>) -> Out:
+  match m:
+    case Some{KV.Item{+w, +e}}:
+      bf.fin(bf.run0(ops, w), bf.lo0(ops), Some{KV.Item{w, e}})
+    case None{}:
+      bf.fin(bf.run0(ops, ""), bf.lo0(ops), None{})
+
 def upd(op: UpdOp, +now: Nat, m: Maybe<&2, KV.Item<String>>) -> Out:
   match op:
     case USetNx{v}:
@@ -5764,6 +6549,8 @@ def upd(op: UpdOp, +now: Nat, m: Maybe<&2, KV.Item<String>>) -> Out:
       range.of(off, s, m)
     case USetBit{+off, +on}:
       setbit.of(off, on, m)
+    case UBitfield{ops}:
+      bitfield.of(ops, m)
 
 # the change done to key k, whose code was c (a deleted key, or one whose
 # time alone changes, was there)
