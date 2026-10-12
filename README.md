@@ -2,7 +2,7 @@
 
 A Redis-compatible key-value server written in [Bend2](https://github.com/bendlang/bend),
 whose core is formally verified: the command semantics, the hash trie behind them, the
-append-only file, the connection state and the configuration are proved against 52 laws,
+append-only file, the connection state and the configuration are proved against 53 laws,
 checked by Bend
 and rechecked by the BendTT kernel, whose soundness is proved in Lean.
 
@@ -13,7 +13,7 @@ throughput of Redis 7.0.15 on the same machine, with half its memory for small v
 > **Status: research prototype.** BendKV implements a subset of Redis (strings and their
 > times to live, the keyspace, connection commands, an append-only file). The goal now is a drop-in
 > replacement for a single Redis node, measured by Redis's own test suite: of the 1,656
-> tests Redis 7.0.15 passes against a server it did not start, BendKV passes 212, and 188
+> tests Redis 7.0.15 passes against a server it did not start, BendKV passes 213, and 189
 > of the 315 in what it implements ([docs/COMPATIBILITY.md](docs/COMPATIBILITY.md)). Do
 > not use it for data you cannot lose.
 
@@ -47,7 +47,7 @@ is the trie's size is not proved yet.
 |---|---:|---|
 | Map | 11 | the trie is a finite map from keys to a value and a time: after any sequence of writes (a value with a time, a value with its time kept, a time alone, a deletion), every key holds what was last written to it, with no stale, lost or foreign entries; a read sees a key only until its time |
 | Keys | 2 | key comparison is exactly string equality, down to the bits of `U32` |
-| Commands | 18 | no command changes a key it does not write, neither its value nor its time (`frame`); reads keep the database; a key whose time has passed is there for no command; GET, DEL, APPEND, SETNX, INCR, GETDEL, PERSIST, PTTL and SET with KEEPTTL behave as specified, a key they add counted; a pipelined batch runs exactly as its commands in order; the cache hints before a batch change nothing |
+| Commands | 19 | no command changes a key it does not write, neither its value nor its time (`frame`); reads keep the database; a key whose time has passed is there for no command, and the sweep of expired keys deletes no key that is there; GET, DEL, APPEND, SETNX, INCR, GETDEL, PERSIST, PTTL and SET with KEEPTTL behave as specified, a key they add counted; a pipelined batch runs exactly as its commands in order; the cache hints before a batch change nothing |
 | Commuting | 5 | commands on different keys commute: replies and key contents are the same in either order, and adjacent independent commands in a batch can be swapped |
 | Persistence | 8 | logging changes no reply; the file reads back as written, times included; after any history, each batch at its own time, the server restores exactly the database it held; a file cut by a crash at any byte restores the database after some prefix of its commands, never a partial command |
 | Sessions | 5 | however the server dispatches a batch, it runs as its commands in order; a batch changes the database and the log as its executed commands do; a client that has not authenticated against a password cannot read or change any key |
@@ -85,9 +85,10 @@ translation stays in the trusted base.
   PTTL, EXPIRETIME, PEXPIRETIME, PERSIST; SET with NX, XX, GET, EX, PX, EXAT, PXAT and
   KEEPTTL; SETEX, PSETEX, GETEX (EX, PX, EXAT, PXAT, PERSIST) and GETDEL. Times are read
   as Redis reads them, with its errors, and a key expires at its time for every command.
-  Unlike Redis, a key whose time has passed stays in the database until a write sets it
-  again or deletes it (DBSIZE and INFO's keyspace count it until then), and a time at or
-  past 10^14 ms (the year 5138) gives a key no time at all.
+  A key whose time has passed is deleted by a write that comes to it, or by the sweep of
+  expired keys ten times a second (logged as DEL, as Redis logs it); until then DBSIZE
+  and INFO's keyspace count it, where Redis also deletes it when a read comes to it. A
+  time at or past 10^14 ms (the year 5138) gives a key no time at all.
 - **Connection:** PING, ECHO, HELLO (RESP2, with AUTH and SETNAME), AUTH, SELECT (one
   database, as Redis with `databases 1`), QUIT, RESET, CLIENT (ID, GETNAME, SETNAME,
   REPLY ON/OFF/SKIP, NO-EVICT, GETREDIR, TRACKINGINFO, CACHING, UNBLOCK, HELP),
@@ -107,7 +108,7 @@ translation stays in the trusted base.
   process, its parameters, its connections, commands and bytes (with the instantaneous
   rates sampled every 100 ms, as Redis's cron samples them), its resident memory, its
   keys, its append-only file; for what BendKV does not have (replication, forks,
-  scripts, eviction, active expiry) they are what Redis shows when it has none. The statistics
+  scripts, eviction) they are what Redis shows when it has none. The statistics
   per command count as Redis counts them: each command's and subcommand's calls, the
   calls refused before they run (a wrong number of arguments by Redis's arity, a client
   that must authenticate first) and the calls that fail as they run, and the error
@@ -131,9 +132,8 @@ translation stays in the trusted base.
 - **Persistence:** an append-only file in Redis's own format (`redis-check-aof` accepts
   it, and Redis loads it), fsync `always`, `everysec` or `no`.
 
-Not yet: other data types, active expiry (Redis's sweep of expired keys), multiple
-databases, MULTI/EXEC, pub/sub, timing of commands (usec in INFO commandstats,
-latencystats), CONFIG REWRITE (it answers as Redis does without a configuration file),
+Not yet: other data types, multiple databases, MULTI/EXEC, pub/sub, timing of commands
+(usec in INFO commandstats, latencystats), CONFIG REWRITE (it answers as Redis does without a configuration file),
 RDB files. Integers, and times in ms, are limited to 14 digits.
 
 ## Performance

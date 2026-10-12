@@ -394,6 +394,17 @@ law getdel_effect:
   for  h: {there(db, k) == Some{KV.Item{v, e}} : Maybe<&2, KV.Item<String>>}
   {at_key(R.exec(R.Upd{k, R.UGetDel{}}, db), k) == (R.RBulk{v}, None{}) : R.Reply & Maybe<&2, KV.Item<String>>}
 
+# LAW: the sweep of expired keys deletes no key that is there: the
+# server sweeps with DEL of the keys R.reap.keys keeps of those its scan
+# found, whatever the scan found
+law reap_keeps:
+  for +ks: List<&2, String>
+  for +db: R.Db
+  for +j: String
+  for +y: KV.Item<String>
+  for  e: {there(db, j) == Some{y} : Maybe<&2, KV.Item<String>>}
+  {KV.entry(String, R.db.t(R.db_of(R.exec(R.Del{R.reap.keys(ks, db)}, db))), j) == KV.entry(String, R.db.t(db), j) : Maybe<&2, KV.Item<String>>}
+
 # LAW: a batch runs as its commands one after another: the server runs
 # pipelined requests through exec_all, and this law makes that the same
 # as running them one by one

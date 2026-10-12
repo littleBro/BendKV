@@ -3966,10 +3966,10 @@ def scan.reply(a: ScanArgs, +d: KV.Trie<String>, +now: Nat) -> Reply:
 # ---------
 # A key whose time has passed is not there for any command (Redis's keys
 # expire at their time), but its entry stays in the trie until a write
-# puts the key anew or deletes it, as a Redis replica keeps such a key
-# until its master deletes it (Redis itself also deletes it when a read
-# comes to it, and in a sweep of expired keys, which BendKV has not yet).
-# A read changes nothing, so the laws of reads and of commuting commands
+# puts the key anew or deletes it, or the server's sweep of expired keys
+# does (below), as a Redis replica keeps such a key until its master
+# deletes it (Redis itself also deletes it when a read comes to it). A
+# read changes nothing, so the laws of reads and of commuting commands
 # hold with time as without. DBSIZE and INFO's keyspace count the
 # entries, as Redis counts the keys it has not deleted yet.
 
@@ -4486,6 +4486,48 @@ def db.flush(db: Db) -> Db:
   match db:
     case Db{t, n, x, now, rr}:
       Db{KV.empty(String), 0n, 0n, now, rr}
+
+# The sweep of expired keys
+# -------------------------
+# Redis deletes the keys whose time has passed when a command comes to
+# one, and in a sweep from its cron; BendKV, in a sweep at each tick of
+# its cron (server.bend). A sweep scans the trie from where the last one
+# stopped, a bounded number of entries (KV.reap), and the server deletes
+# what it found with DEL, a batch like any other, which the append-only
+# file logs (Redis logs a DEL too). The keys found are checked again
+# here, so that a sweep deletes no key that is there, whatever the scan
+# finds (LAWS.bend: reap_keeps).
+
+# the keys of ks that are not there at now
+def reap.put(there: Bool, k: String, ks: List<&2, String>) -> List<&2, String>:
+  match there:
+    case True{}:
+      ks
+    case False{}:
+      k <> ks
+
+def reap.keys(ks: List<&2, String>, +d: Db) -> List<&2, String>:
+  match ks:
+    case Nil{}:
+      Nil{}
+    case Con{+k, rest}:
+      reap.put(Maybe.is_some(&2, KV.Item<String>, db.ent(d, k)), k, reap.keys(rest, d))
+
+# a sweep: the bucket the next one starts at (0 once it read the last
+# bucket), and the keys it deletes
+type Reap is Data:
+  Reap{next: Nat, ks: List<&2, String>}
+
+def reap.of(s: KV.Scan, +d: Db) -> Reap:
+  match s:
+    case KV.Stop{at, acc}:
+      Reap{at, reap.keys(acc, d)}
+    case KV.Scan{want, acc}:
+      Reap{0n, reap.keys(acc, d)}
+
+# the sweep of d from the bucket from on, until want entries are read
+def reap(+d: Db, +from: Nat, +want: Nat) -> Reap:
+  reap.of(KV.reap(String, db.trie(d), from, want, db.now(d)), d)
 
 def reply_of(r: Reply & Db) -> Reply:
   (x, db) = r

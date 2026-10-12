@@ -292,13 +292,13 @@ Where performance and proof meet: **batched execution under proved laws.**
    law would cover the network parser of `resp.bend`, and with it the server's
    decision to cut a file (`cut_short`).
 6. **Next: a drop-in Redis for one node.** Strings, hashes, lists, sets and sorted sets
-   with WRONGTYPE, times to live with time in the state (done, but for the sweep of
-   expired keys; FINDINGS.md, section 3v), MULTI/EXEC/WATCH, pub/sub, the connection
+   with WRONGTYPE, times to live with time in the state and a sweep of expired keys
+   (done; FINDINGS.md, sections 3v and 3w), MULTI/EXEC/WATCH, pub/sub, the connection
    commands clients send on connect (HELLO, SELECT, CLIENT, AUTH, INFO, COMMAND, CONFIG;
    done), SCAN and RANDOMKEY (done), and the log's rewrite, measured by Redis's own test
    suite run against BendKV and by client libraries' tests. Lua, streams, cluster,
    replication and modules are out of scope. The suite's count: of the 1,656 tests
-   Redis 7.0.15 passes against a server it did not start, BendKV passes 212, 188 of the
+   Redis 7.0.15 passes against a server it did not start, BendKV passes 213, 189 of the
    315 in what it has ([COMPATIBILITY.md](COMPATIBILITY.md)).
 
 After that comes proving the native strings (section 5, step 1): a small piece of

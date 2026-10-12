@@ -841,7 +841,8 @@ def tsize(-V: Data, t: Trie<V>) -> Nat:
 # never rehashes, so a key that stays in the map from the first scan of
 # an iteration to its last is found by one of them. A subtrie that lies
 # before the cursor, or at or past the bound to (RANDOMKEY's), is
-# skipped whole.
+# skipped whole. The sweep of expired keys (reap) scans the same way for
+# the keys whose time has passed (dead).
 type Scan is Data:
   Scan{want: Nat, acc: List<&2, String>}
   Stop{at: Nat, acc: List<&2, String>}
@@ -853,32 +854,33 @@ def bscan.end(done: Bool, +base: Nat, want: Nat, acc: List<&2, String>) -> Scan:
     case False{}:
       Scan{want, acc}
 
-# the keys of the bucket b of index base that are there at now, before
-# acc, counted off want: every entry when all (SCAN's COUNT bounds the
-# entries it reads, as Redis's bounds the work), else the keys there only
-# (RANDOMKEY's window)
-def bscan(-V: Data, +b: Trie<V>, +base: Nat, +want: Nat, acc: List<&2, String>, +now: Nat, +all: Bool) -> Scan:
+# the keys of the bucket b of index base that are there at now (or, when
+# dead, whose time has passed), before acc, counted off want: every entry
+# when all (SCAN's COUNT bounds the entries it reads, as Redis's bounds
+# the work; and so the sweep's), else the keys taken only (RANDOMKEY's
+# window)
+def bscan(-V: Data, +b: Trie<V>, +base: Nat, +want: Nat, acc: List<&2, String>, +now: Nat, +all: Bool, +dead: Bool) -> Scan:
   match b:
     case Ent{+k, v, +e, +rest}:
-      +ok = live(now, e)
-      bscan(V, rest, base, Nat.sub(want, Bool.pick(Nat, Bool.or(all, ok), 1n, 0n)), kput(ok, k, acc), now, all)
+      +ok = Bool.xor(live(now, e), dead)
+      bscan(V, rest, base, Nat.sub(want, Bool.pick(Nat, Bool.or(all, ok), 1n, 0n)), kput(ok, k, acc), now, all, dead)
     case _:
       bscan.end(Nat.is_eq(want, 0n), base, want, acc)
 
 # BEGIN gen_trie: scan
-def tscan(-V: Data, +d: Nat, +t: Trie<V>, skip: Bool, +base: Nat, +span: Nat, +from: Nat, +to: Nat, +now: Nat, +all: Bool, s: Scan) -> Scan:
+def tscan(-V: Data, +d: Nat, +t: Trie<V>, skip: Bool, +base: Nat, +span: Nat, +from: Nat, +to: Nat, +now: Nat, +all: Bool, +dead: Bool, s: Scan) -> Scan:
   match d t skip s:
     case _ _ True{} s:
       s
     case _ _ False{} Stop{at, acc}:
       Stop{at, acc}
     case 0n b False{} Scan{want, acc}:
-      bscan(V, b, base, want, acc, now, all)
+      bscan(V, b, base, want, acc, now, all, dead)
     case 1n+p Tip{} False{} s:
       s
     case 1n+p Node{c0, c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13, c14, c15} False{} s:
       +q = Nat.div(span, 16n)
-      tscan(V, p, c15, Bool.or(Nat.is_le(Nat.add(base, Nat.mul(16n, q)), from), Nat.is_le(to, Nat.add(base, Nat.mul(15n, q)))), Nat.add(base, Nat.mul(15n, q)), q, from, to, now, all, tscan(V, p, c14, Bool.or(Nat.is_le(Nat.add(base, Nat.mul(15n, q)), from), Nat.is_le(to, Nat.add(base, Nat.mul(14n, q)))), Nat.add(base, Nat.mul(14n, q)), q, from, to, now, all, tscan(V, p, c13, Bool.or(Nat.is_le(Nat.add(base, Nat.mul(14n, q)), from), Nat.is_le(to, Nat.add(base, Nat.mul(13n, q)))), Nat.add(base, Nat.mul(13n, q)), q, from, to, now, all, tscan(V, p, c12, Bool.or(Nat.is_le(Nat.add(base, Nat.mul(13n, q)), from), Nat.is_le(to, Nat.add(base, Nat.mul(12n, q)))), Nat.add(base, Nat.mul(12n, q)), q, from, to, now, all, tscan(V, p, c11, Bool.or(Nat.is_le(Nat.add(base, Nat.mul(12n, q)), from), Nat.is_le(to, Nat.add(base, Nat.mul(11n, q)))), Nat.add(base, Nat.mul(11n, q)), q, from, to, now, all, tscan(V, p, c10, Bool.or(Nat.is_le(Nat.add(base, Nat.mul(11n, q)), from), Nat.is_le(to, Nat.add(base, Nat.mul(10n, q)))), Nat.add(base, Nat.mul(10n, q)), q, from, to, now, all, tscan(V, p, c9, Bool.or(Nat.is_le(Nat.add(base, Nat.mul(10n, q)), from), Nat.is_le(to, Nat.add(base, Nat.mul(9n, q)))), Nat.add(base, Nat.mul(9n, q)), q, from, to, now, all, tscan(V, p, c8, Bool.or(Nat.is_le(Nat.add(base, Nat.mul(9n, q)), from), Nat.is_le(to, Nat.add(base, Nat.mul(8n, q)))), Nat.add(base, Nat.mul(8n, q)), q, from, to, now, all, tscan(V, p, c7, Bool.or(Nat.is_le(Nat.add(base, Nat.mul(8n, q)), from), Nat.is_le(to, Nat.add(base, Nat.mul(7n, q)))), Nat.add(base, Nat.mul(7n, q)), q, from, to, now, all, tscan(V, p, c6, Bool.or(Nat.is_le(Nat.add(base, Nat.mul(7n, q)), from), Nat.is_le(to, Nat.add(base, Nat.mul(6n, q)))), Nat.add(base, Nat.mul(6n, q)), q, from, to, now, all, tscan(V, p, c5, Bool.or(Nat.is_le(Nat.add(base, Nat.mul(6n, q)), from), Nat.is_le(to, Nat.add(base, Nat.mul(5n, q)))), Nat.add(base, Nat.mul(5n, q)), q, from, to, now, all, tscan(V, p, c4, Bool.or(Nat.is_le(Nat.add(base, Nat.mul(5n, q)), from), Nat.is_le(to, Nat.add(base, Nat.mul(4n, q)))), Nat.add(base, Nat.mul(4n, q)), q, from, to, now, all, tscan(V, p, c3, Bool.or(Nat.is_le(Nat.add(base, Nat.mul(4n, q)), from), Nat.is_le(to, Nat.add(base, Nat.mul(3n, q)))), Nat.add(base, Nat.mul(3n, q)), q, from, to, now, all, tscan(V, p, c2, Bool.or(Nat.is_le(Nat.add(base, Nat.mul(3n, q)), from), Nat.is_le(to, Nat.add(base, Nat.mul(2n, q)))), Nat.add(base, Nat.mul(2n, q)), q, from, to, now, all, tscan(V, p, c1, Bool.or(Nat.is_le(Nat.add(base, Nat.mul(2n, q)), from), Nat.is_le(to, Nat.add(base, Nat.mul(1n, q)))), Nat.add(base, Nat.mul(1n, q)), q, from, to, now, all, tscan(V, p, c0, Bool.or(Nat.is_le(Nat.add(base, Nat.mul(1n, q)), from), Nat.is_le(to, base)), base, q, from, to, now, all, s))))))))))))))))
+      tscan(V, p, c15, Bool.or(Nat.is_le(Nat.add(base, Nat.mul(16n, q)), from), Nat.is_le(to, Nat.add(base, Nat.mul(15n, q)))), Nat.add(base, Nat.mul(15n, q)), q, from, to, now, all, dead, tscan(V, p, c14, Bool.or(Nat.is_le(Nat.add(base, Nat.mul(15n, q)), from), Nat.is_le(to, Nat.add(base, Nat.mul(14n, q)))), Nat.add(base, Nat.mul(14n, q)), q, from, to, now, all, dead, tscan(V, p, c13, Bool.or(Nat.is_le(Nat.add(base, Nat.mul(14n, q)), from), Nat.is_le(to, Nat.add(base, Nat.mul(13n, q)))), Nat.add(base, Nat.mul(13n, q)), q, from, to, now, all, dead, tscan(V, p, c12, Bool.or(Nat.is_le(Nat.add(base, Nat.mul(13n, q)), from), Nat.is_le(to, Nat.add(base, Nat.mul(12n, q)))), Nat.add(base, Nat.mul(12n, q)), q, from, to, now, all, dead, tscan(V, p, c11, Bool.or(Nat.is_le(Nat.add(base, Nat.mul(12n, q)), from), Nat.is_le(to, Nat.add(base, Nat.mul(11n, q)))), Nat.add(base, Nat.mul(11n, q)), q, from, to, now, all, dead, tscan(V, p, c10, Bool.or(Nat.is_le(Nat.add(base, Nat.mul(11n, q)), from), Nat.is_le(to, Nat.add(base, Nat.mul(10n, q)))), Nat.add(base, Nat.mul(10n, q)), q, from, to, now, all, dead, tscan(V, p, c9, Bool.or(Nat.is_le(Nat.add(base, Nat.mul(10n, q)), from), Nat.is_le(to, Nat.add(base, Nat.mul(9n, q)))), Nat.add(base, Nat.mul(9n, q)), q, from, to, now, all, dead, tscan(V, p, c8, Bool.or(Nat.is_le(Nat.add(base, Nat.mul(9n, q)), from), Nat.is_le(to, Nat.add(base, Nat.mul(8n, q)))), Nat.add(base, Nat.mul(8n, q)), q, from, to, now, all, dead, tscan(V, p, c7, Bool.or(Nat.is_le(Nat.add(base, Nat.mul(8n, q)), from), Nat.is_le(to, Nat.add(base, Nat.mul(7n, q)))), Nat.add(base, Nat.mul(7n, q)), q, from, to, now, all, dead, tscan(V, p, c6, Bool.or(Nat.is_le(Nat.add(base, Nat.mul(7n, q)), from), Nat.is_le(to, Nat.add(base, Nat.mul(6n, q)))), Nat.add(base, Nat.mul(6n, q)), q, from, to, now, all, dead, tscan(V, p, c5, Bool.or(Nat.is_le(Nat.add(base, Nat.mul(6n, q)), from), Nat.is_le(to, Nat.add(base, Nat.mul(5n, q)))), Nat.add(base, Nat.mul(5n, q)), q, from, to, now, all, dead, tscan(V, p, c4, Bool.or(Nat.is_le(Nat.add(base, Nat.mul(5n, q)), from), Nat.is_le(to, Nat.add(base, Nat.mul(4n, q)))), Nat.add(base, Nat.mul(4n, q)), q, from, to, now, all, dead, tscan(V, p, c3, Bool.or(Nat.is_le(Nat.add(base, Nat.mul(4n, q)), from), Nat.is_le(to, Nat.add(base, Nat.mul(3n, q)))), Nat.add(base, Nat.mul(3n, q)), q, from, to, now, all, dead, tscan(V, p, c2, Bool.or(Nat.is_le(Nat.add(base, Nat.mul(3n, q)), from), Nat.is_le(to, Nat.add(base, Nat.mul(2n, q)))), Nat.add(base, Nat.mul(2n, q)), q, from, to, now, all, dead, tscan(V, p, c1, Bool.or(Nat.is_le(Nat.add(base, Nat.mul(2n, q)), from), Nat.is_le(to, Nat.add(base, Nat.mul(1n, q)))), Nat.add(base, Nat.mul(1n, q)), q, from, to, now, all, dead, tscan(V, p, c0, Bool.or(Nat.is_le(Nat.add(base, Nat.mul(1n, q)), from), Nat.is_le(to, base)), base, q, from, to, now, all, dead, s))))))))))))))))
     case 1n+p Ent{k, v, e, rest} False{} s:
       s
 # END gen_trie: scan
@@ -924,7 +926,7 @@ def pick.wrap(-V: Data, +t: Trie<V>, +b: Nat, +r: U32, +now: Nat, s: Scan) -> Ma
     case Stop{at, acc}:
       pick.of(acc, r)
     case Scan{want, acc}:
-      pick.of(scan.acc(tscan(V, 5n, t, False{}, 0n, 1048576n, 0n, b, now, False{}, Scan{want, acc})), r)
+      pick.of(scan.acc(tscan(V, 5n, t, False{}, 0n, 1048576n, 0n, b, now, False{}, False{}, Scan{want, acc})), r)
 
 # API
 # ---
@@ -1027,9 +1029,14 @@ def size(-V: Data, t: Trie<V>) -> Nat:
 # the keys there at now of the buckets from index from on, until want
 # entries are read (Scans); the keys newest first
 def scan(-V: Data, +t: Trie<V>, +from: Nat, want: Nat, +now: Nat) -> Scan:
-  tscan(V, 5n, t, False{}, 0n, 1048576n, from, 1048576n, now, True{}, Scan{want, Nil{}})
+  tscan(V, 5n, t, False{}, 0n, 1048576n, from, 1048576n, now, True{}, False{}, Scan{want, Nil{}})
+
+# the keys whose time has passed at now of the buckets from index from
+# on, until want entries are read (the sweep of expired keys)
+def reap(-V: Data, +t: Trie<V>, +from: Nat, want: Nat, +now: Nat) -> Scan:
+  tscan(V, 5n, t, False{}, 0n, 1048576n, from, 1048576n, now, True{}, True{}, Scan{want, Nil{}})
 
 # a key of t there at now, by r (Random picks), None when there is none
 def pick(-V: Data, +t: Trie<V>, +r: U32, +now: Nat) -> Maybe<&2, String>:
   +b = U32.to_nat(U32.and(r, 1048575))
-  pick.wrap(V, t, b, mix(r), now, tscan(V, 5n, t, False{}, 0n, 1048576n, b, 1048576n, now, False{}, Scan{16n, Nil{}}))
+  pick.wrap(V, t, b, mix(r), now, tscan(V, 5n, t, False{}, 0n, 1048576n, b, 1048576n, now, False{}, False{}, Scan{16n, Nil{}}))
