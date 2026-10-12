@@ -728,9 +728,10 @@ def conn_quit.if(quit: Bool, s: Socket, +ln: Link, cn: S.Conn, err: Maybe<&2, St
     case False{}:
       conn_err(s, ln, cn, err, rest, need)
 
-# a protocol error is answered, and counted among the error replies for
-# INFO, then the connection closes, as in Redis; without one, the
-# connection reads on
+# a protocol error is answered, as any error reply is encoded (on one
+# line: a byte the parser did not expect may be a CR or LF), and counted
+# among the error replies for INFO, then the connection closes, as in
+# Redis; without one, the connection reads on
 @unsafe
 def conn_err(s: Socket, +ln: Link, cn: S.Conn, err: Maybe<&2, String>, rest: String, need: Nat) -> IO(Unit):
   match ln err:
@@ -739,7 +740,7 @@ def conn_err(s: Socket, +ln: Link, cn: S.Conn, err: Maybe<&2, String>, rest: Str
     case Link{db, back, post, tl} Some{msg}:
       do IO<Unit>:
         sent : Bool <- Chan.send(Req, db, Oops{})
-        put_out(s, post, "-ERR " ++ msg ++ "\r\n", s2 => Socket.close(s2))
+        put_out(s, post, P.encode(R.RError{"ERR " ++ msg}), s2 => Socket.close(s2))
 
 # Accepting
 # ---------

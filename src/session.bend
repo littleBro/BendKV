@@ -288,7 +288,7 @@ def hello.opt(a: String, auth: Bool, name: String, au: Bool, sn: Bool) -> Hel:
     case False{} True{}:
       Hel{WName{}, auth, name}
     case False{} False{}:
-      Hel{WFail{R.RError{"ERR Syntax error in HELLO option '" ++ a ++ "'"}}, auth, name}
+      Hel{WFail{R.RError{R.e_fmt("ERR Syntax error in HELLO option '" ++ R.cstr(a) ++ "'")}}, auth, name}
 
 def hello.pass(ok: Bool, auth: Bool, name: String) -> Hel:
   match ok:

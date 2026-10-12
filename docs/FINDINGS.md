@@ -3303,3 +3303,21 @@ checks that both servers let the connection go once the client closes it. Left o
 tighter limits Redis sets before a client authenticates (an error past 10 arguments or a
 bulk of 16 KB), which need the connection's state in the parser, and a new
 proto-max-bulk-len, which BendKV keeps but does not apply.
+
+**Errors on one line ([#6](https://github.com/littleBro/bendkv/issues/6)).** HELLO's
+error quoted its option as it came, so `HELLO 2 "a\r\nb"` answered two lines where Redis
+answers `-ERR Syntax error in HELLO option 'a  b'`; the parser's diagnostics held a CR and
+LF of their own (`expected '\r\n' after bulk data`) or the raw byte it did not expect
+(`expected '$', got '\r'`), and went out as they were. Unknown commands, subcommands and
+CONFIG SET's options had been mended in between, each where its error is made. Now the
+encoder sends every error reply on one line: a CR or LF in its text goes out as a space,
+as Redis's `addReplyErrorFormat` and `rejectCommandFormat` send theirs, after a look for
+either (two `String.find`s, on error replies only); the parser's diagnostics go out through
+the encoder too. HELLO's error is formatted as Redis formats it (`R.e_fmt`), and the
+arguments an error quotes stop at their first NUL, as `%s` stops (HELLO's option, the name
+and first arguments of an unknown command, an unknown subcommand, an unknown CONFIG SET
+option): Redis answers `unknown command 'no'` to `no\0pe`. The trailer the issue noted,
+`*1\r\n$4\r\nPINGxx`, which BendKV refused and Redis answers `+PONG` to: Redis never looks
+at the two bytes after a bulk's data, as it never looks at the byte after a line's `'\r'`,
+and BendKV no longer does either, so its diagnostic is gone, and so are two reads of the
+buffer and their comparisons from every bulk the parser reads. 17 cases in `tests/protocol_test.py`.
