@@ -10,8 +10,10 @@ lengths read by string2ll (no 0 before a number's first digit, no -0, a
 count from -2^63 up), a count of 0 or less skipped, a line ended by its
 '\\r' and whatever byte follows it, no line until its '\\r' comes (a NUL
 before it hides it), 64 KB at most without one, a bulk's two bytes after
-its data skipped unread; and errors on one line, a CR or LF in them sent
-as a space, an argument quoted in them up to its first NUL.
+its data skipped unread; errors on one line, a CR or LF in them sent as
+a space, an argument quoted in them up to its first NUL; and a protocol
+error under CLIENT REPLY OFF or SKIP, which Redis does not answer, nor
+close the connection after, nor read on.
 
 Whether the server closed a connection is not taken from a quiet
 socket: a server that keeps one open shows it in INFO's
@@ -32,6 +34,10 @@ def resp(*args):
     for a in args:
         out += b"$%d\r\n%s\r\n" % (len(a), a)
     return out
+
+
+def reply_off(mode):
+    return resp(b"CLIENT", b"REPLY", mode)
 
 
 CASES = [
@@ -117,6 +123,14 @@ CASES = [
     ("CR in an unknown subcommand", resp(b"OBJECT", b"a\rb", b"z")),
     ("NUL in a subcommand's syntax error", resp(b"CONFIG", b"x\x00y")),
     ("NUL in CONFIG SET's option", resp(b"CONFIG", b"SET", b"a\x00b", b"1")),
+    # a protocol error while replies are held back
+    ("protocol error after CLIENT REPLY OFF", reply_off(b"OFF") + b"*x\r\n"),
+    ("protocol error after CLIENT REPLY SKIP", reply_off(b"SKIP") + b"*x\r\n"),
+    ("protocol error after a skipped reply", reply_off(b"SKIP") + resp(b"PING") + b"*x\r\n"),
+    ("protocol error after CLIENT REPLY OFF, in a later read", [reply_off(b"OFF"), b"*1\r\n$-1\r\n"]),
+    ("requests after an unanswered protocol error", [reply_off(b"OFF") + b"*1\r\nX\r\n", resp(b"SET", b"after", b"1"),
+                                                    reply_off(b"ON") + resp(b"PING")]),
+    ("CLIENT REPLY ON, then a protocol error", [reply_off(b"OFF") + reply_off(b"ON"), b"*x\r\n"]),
 ]
 
 

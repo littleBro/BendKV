@@ -3320,7 +3320,8 @@ option): Redis answers `unknown command 'no'` to `no\0pe`. The trailer the issue
 `*1\r\n$4\r\nPINGxx`, which BendKV refused and Redis answers `+PONG` to: Redis never looks
 at the two bytes after a bulk's data, as it never looks at the byte after a line's `'\r'`,
 and BendKV no longer does either, so its diagnostic is gone, and so are two reads of the
-buffer and their comparisons from every bulk the parser reads. 17 cases in `tests/protocol_test.py`.
+buffer and their comparisons from every bulk the parser reads. 17 cases in
+`tests/protocol_test.py`.
 
 **A channel for each connection ([#5](https://github.com/littleBro/bendkv/issues/5)).**
 Each connection opens a channel for its answers (`Chan.new` in `conn_start`), and none
@@ -3340,3 +3341,21 @@ or before any, QUIT, a protocol error, the client resetting before the server re
 request and while it sends a reply of a megabyte) on a BendKV of its own, posting and
 sending: INFO counts no connection left, the database answers a new connection, and the
 table holds 4 rows after, 3 before (304 before the fix).
+
+**Protocol errors under CLIENT REPLY OFF ([#10](https://github.com/littleBro/bendkv/issues/10)).**
+The protocol error's reply went out from the connection's loop, which never looked at the
+connection's reply mode, so after `CLIENT REPLY OFF` a malformed request was answered,
+where Redis answers nothing: its check of the mode is in the path every reply takes
+(`prepareClientToWrite`). Nor does Redis close the connection then: a protocol error marks
+it to close once its last reply is written, and there is none to write, while
+`processInputBuffer` reads nothing more from a connection so marked; the connection stays
+open, counted in INFO, until the client closes it (a second connection asking INFO, and a
+SET sent after the error that never runs, show it on Redis 7.0.15). The loop now holds
+the error back under OFF, and under SKIP for the request the error is in, as `say` holds
+a reply back (the error is still counted, as Redis counts it), and then reads and drops
+what comes until the client closes, when the connection ends as any other (`conn_drop`,
+then `conn_end`). Six cases in `tests/protocol_test.py` (the error after OFF, after SKIP,
+after a reply SKIP held back, in a later read, the requests after it, and after OFF and
+ON again), and a seventh way to end in `tests/conn_test.py`. QUIT under CLIENT REPLY OFF,
+after which Redis also leaves the connection open and unread, still closes it here, as
+`tests/session_test.py` notes.

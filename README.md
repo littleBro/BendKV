@@ -237,8 +237,11 @@ translation stays in the trusted base.
   -2^63, a line ended by its `\r` and whatever byte follows it, 64 KB at most without
   one, the two bytes after a bulk's data skipped unread), and Redis's protocol errors.
   An error goes out on one line, as Redis's error formatting sends it: a CR or LF in its
-  text as a space, an argument it quotes up to its first NUL. Not the tighter limits Redis puts on a client that
-  must still authenticate (10 arguments, a bulk of 16 KB), nor a new proto-max-bulk-len.
+  text as a space, an argument it quotes up to its first NUL. Under CLIENT REPLY OFF, or
+  SKIP for the request it is in, a protocol error goes unanswered, as in Redis, and the
+  connection stays open, reading nothing more, until the client closes it. Not the
+  tighter limits Redis puts on a client that must still authenticate (10 arguments, a
+  bulk of 16 KB), nor a new proto-max-bulk-len.
 - **Persistence:** an append-only file in Redis's own format, a SELECT before the
   entries of another database, SWAPDB, MOVE and FLUSHALL as Redis writes them, and COPY
   with its DB and REPLACE spelled out (`redis-check-aof` accepts it, and Redis loads it;
@@ -310,8 +313,9 @@ databases among them),
 keys that expire (set with short times on both servers, then read once the times have
 passed), the protocol edge cases of Redis's
 `tests/unit/protocol.tcl` and of the lengths and lines of its `processMultibulkBuffer`
-(each server's closing of a connection seen in its count of connections, not in a quiet
-socket), the float library against glibc (random texts of numbers,
+and of the replies CLIENT REPLY holds back (each server's closing of a connection seen in
+its count of connections, not in a quiet socket), the float library against glibc
+(random texts of numbers,
 read, written and added, the answers compared byte for byte with C's), the connection
 commands, CONFIG (every parameter, a list of
 cases and thousands of random values, set and read back on both servers), INFO (the
