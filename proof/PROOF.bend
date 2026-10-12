@@ -2797,6 +2797,8 @@ def upd_ch_frame(+t: KV.Trie<String>, +k: String, +j: String, r: R.Reply, ch: R.
       Laws.entry_keep_other(String, t, k, j, v, ne)
     case R.CApp{a, +v}:
       Laws.entry_keep_other(String, t, k, j, v, ne)
+    case R.CRange{o, a, +v}:
+      Laws.entry_keep_other(String, t, k, j, v, ne)
 
 def upd_frame(+t: KV.Trie<String>, +k: String, +j: String, o: R.Out, ne: {j != k : String}) -> {KV.entry(String, T.db_of(T.upd.put(t, k, KV.hash(k), o)), j) == KV.entry(String, t, j) : Maybe<&2, KV.Item<String>>}:
   match o:
@@ -3063,6 +3065,8 @@ def upd_ch_rep(ch: R.Change, -r: R.Reply, -t: KV.Trie<String>, -u: KV.Trie<Strin
       {==}
     case R.CApp{a, v}:
       {==}
+    case R.CRange{o, a, v}:
+      {==}
 
 def upd_rep(o: R.Out, -t: KV.Trie<String>, -u: KV.Trie<String>, -k: String, -h: U32) -> {T.reply_of(T.upd.put(t, k, h, o)) == T.reply_of(T.upd.put(u, k, h, o)) : R.Reply}:
   match o:
@@ -3193,6 +3197,8 @@ def upd_ch_key(ch: R.Change, -r: R.Reply, +t: KV.Trie<String>, +u: KV.Trie<Strin
     case R.CKeepT{+v}:
       e => keep_key(t, u, k, v)(e)
     case R.CApp{a, +v}:
+      e => keep_key(t, u, k, v)(e)
+    case R.CRange{o, a, +v}:
       e => keep_key(t, u, k, v)(e)
 
 def upd_key(o: R.Out, +t: KV.Trie<String>, +u: KV.Trie<String>, +k: String) -> {KV.entry(String, t, k) == KV.entry(String, u, k) : Maybe<&2, KV.Item<String>>} -> {KV.entry(String, T.db_of(T.upd.put(t, k, KV.hash(k), o)), k) == KV.entry(String, T.db_of(T.upd.put(u, k, KV.hash(k), o)), k) : Maybe<&2, KV.Item<String>>}:
@@ -3869,6 +3875,8 @@ def upd_ch_br(+t: KV.Trie<String>, +k: String, +h: U32, +n: Nat, +x: Nat, +now: 
       {==}
     case R.CApp{a, v}:
       {==}
+    case R.CRange{o, a, v}:
+      {==}
 
 def upd_br(+t: KV.Trie<String>, +k: String, +h: U32, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>, +c: Nat, o: R.Out) -> {proj(R.upd.put(t, k, h, n, x, now, rr, c, o)) == T.upd.put(t, k, h, o) : R.Reply & KV.Trie<String>}:
   match o:
@@ -3961,6 +3969,8 @@ def upd_ch_now(+t: KV.Trie<String>, +k: String, +h: U32, +n: Nat, +x: Nat, +now:
     case R.CKeepT{v}:
       {==}
     case R.CApp{a, v}:
+      {==}
+    case R.CRange{o, a, v}:
       {==}
 
 def upd_now(+t: KV.Trie<String>, +k: String, +h: U32, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>, +c: Nat, o: R.Out) -> {R.db.now(R.db_of(R.upd.put(t, k, h, n, x, now, rr, c, o))) == now : Nat}:
@@ -4321,6 +4331,20 @@ def keepttl_db(+db: R.Db, +k: String, +v: String, +w: String, +e: Nat) -> {Laws.
 
 def Laws.set_keepttl(db, k, v, w, e, h):
   keepttl_db(db, k, v, w, e)(h)
+
+def setrange_db(+db: R.Db, +k: String, +o: Nat, +s: String, +w: String, +e: Nat) -> {Laws.there(db, k) == Some{KV.Item{w, e}} : Maybe<&2, KV.Item<String>>} -> {R.range.go(o, s) == True{} : Bool} -> {Laws.at_key(R.exec(R.Upd{k, R.URange{o, s}}, db), k) == (R.r_int(String.length(R.range.put(w, o, s))), Some{KV.Item{R.range.put(w, o, s), e}}) : R.Reply & Maybe<&2, KV.Item<String>>}:
+  match db:
+    case R.Db{+t, +n, +x, +now, +rr}:
+      +h => ok =>
+        %entry_at_eq(String, t, k) : {Laws.at_key(R.upd.put(t, k, KV.hash(k), n, x, now, rr, R.ent.code(_), R.upd(R.URange{o, s}, now, R.ent.live(now, _))), k) == (R.r_int(String.length(R.range.put(w, o, s))), Some{KV.Item{R.range.put(w, o, s), e}}) : R.Reply & Maybe<&2, KV.Item<String>>}
+        %Equal.sym(Maybe<&2, KV.Item<String>>, R.ent.live(now, KV.entry(String, t, k)), Some{KV.Item{w, e}}, h) : {Laws.at_key(R.upd.put(t, k, KV.hash(k), n, x, now, rr, R.ent.code(KV.entry(String, t, k)), R.upd(R.URange{o, s}, now, _)), k) == (R.r_int(String.length(R.range.put(w, o, s))), Some{KV.Item{R.range.put(w, o, s), e}}) : R.Reply & Maybe<&2, KV.Item<String>>}
+        %Equal.sym(Bool, R.range.go(o, s), True{}, ok) : {Laws.at_key(R.upd.put(t, k, KV.hash(k), n, x, now, rr, R.ent.code(KV.entry(String, t, k)), R.range.some(_, o, s, w, String.is_empty(s))), k) == (R.r_int(String.length(R.range.put(w, o, s))), Some{KV.Item{R.range.put(w, o, s), e}}) : R.Reply & Maybe<&2, KV.Item<String>>}
+        %Equal.sym(Maybe<&2, KV.Item<String>>, KV.entry(String, KV.keep(String, t, k, R.range.put(w, o, s)), k), Some{KV.Item{R.range.put(w, o, s), Laws.keep_exp(String, KV.entry(String, t, k))}}, Laws.entry_keep_same(String, t, k, R.range.put(w, o, s))) : {(R.r_int(String.length(R.range.put(w, o, s))), _) == (R.r_int(String.length(R.range.put(w, o, s))), Some{KV.Item{R.range.put(w, o, s), e}}) : R.Reply & Maybe<&2, KV.Item<String>>}
+        %Equal.sym(Maybe<&2, KV.Item<String>>, KV.entry(String, t, k), Some{KV.Item{w, e}}, live_some(KV.entry(String, t, k), now, KV.Item{w, e})(h)) : {(R.r_int(String.length(R.range.put(w, o, s))), Some{KV.Item{R.range.put(w, o, s), Laws.keep_exp(String, _)}}) == (R.r_int(String.length(R.range.put(w, o, s))), Some{KV.Item{R.range.put(w, o, s), e}}) : R.Reply & Maybe<&2, KV.Item<String>>}
+        {==}
+
+def Laws.setrange_effect(db, k, o, s, w, e, h, ok):
+  setrange_db(db, k, o, s, w, e)(h)(ok)
 
 def persist_db(+db: R.Db, +k: String, +v: String, +e: Nat) -> {Laws.there(db, k) == Some{KV.Item{v, 1n+e}} : Maybe<&2, KV.Item<String>>} -> {Laws.at_key(R.exec(R.Upd{k, R.UPersist{}}, db), k) == (R.r_int(1n), Some{KV.Item{v, 0n}}) : R.Reply & Maybe<&2, KV.Item<String>>}:
   match db:
@@ -5201,6 +5225,15 @@ def GoodApp(m: Maybe<&2, KV.Item<String>>, s: String, v: String) -> Type:
     case None{}:
       Empty
 
+# a SETRANGE of s at o (or a SETBIT, as one) of a key there: one that
+# changes it (R.range.go), whose value v is the old one w with s at o
+def GoodRange(m: Maybe<&2, KV.Item<String>>, o: Nat, s: String, v: String) -> Type:
+  match m:
+    case Some{KV.Item{w, e}}:
+      {R.range.go(o, s) == True{} : Bool} & {v == R.range.put(w, o, s) : String}
+    case None{}:
+      Empty
+
 def Good(m: Maybe<&2, KV.Item<String>>, ch: R.Change) -> Type:
   match ch:
     case R.CKeep{}:
@@ -5215,6 +5248,8 @@ def Good(m: Maybe<&2, KV.Item<String>>, ch: R.Change) -> Type:
       {Maybe.is_some(&2, KV.Item<String>, m) == True{} : Bool}
     case R.CApp{s, v}:
       GoodApp(m, s, v)
+    case R.CRange{o, s, v}:
+      GoodRange(m, o, s, v)
 
 # a change, made again by its effects at time 0
 def del_replay(+t: KV.Trie<String>, +k: String, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>, +r: R.Reply, +w: String, +e: Nat, eq: {KV.entry.at(String, t, k, KV.hash(k)) == Some{KV.Item{w, e}} : Maybe<&2, KV.Item<String>>}) -> {Laws.final(R.exec_all([R.Del{[k]}], R.Db{t, n, x, 0n, rr})) == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, 1n+e, r, R.CDel{}))) : R.Db}:
@@ -5285,6 +5320,18 @@ def app_replay(+t: KV.Trie<String>, +k: String, +n: Nat, +x: Nat, +now: Nat, +rr
   %Equal.sym(String, v, w ++ s, gv) : {R.db_of(R.upd.put(t, k, KV.hash(k), n, x, 0n, rr, R.ent.code(Some{KV.Item{w, e}}), R.append.of(s, Some{KV.Item{w, e}}))) == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, R.ent.code(Some{KV.Item{w, e}}), r, R.CApp{s, _}))) : R.Db}
   {==}
 
+def range_replay(+t: KV.Trie<String>, +k: String, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>, +r: R.Reply, +o: Nat, +s: String, +v: String, +w: String, +e: Nat, eq: {KV.entry.at(String, t, k, KV.hash(k)) == Some{KV.Item{w, e}} : Maybe<&2, KV.Item<String>>}, ok: {R.range.go(o, s) == True{} : Bool}, gv: {v == R.range.put(w, o, s) : String}) -> {Laws.final(R.exec_all(A.ch.effect(k, R.CRange{o, s, v}), R.Db{t, n, x, 0n, rr})) == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, R.ent.code(Some{KV.Item{w, e}}), r, R.CRange{o, s, v}))) : R.Db}:
+  %fin_cons(R.Upd{k, R.URange{o, s}}, Nil{}, R.Db{t, n, x, 0n, rr}) : {_ == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, R.ent.code(Some{KV.Item{w, e}}), r, R.CRange{o, s, v}))) : R.Db}
+  %Equal.sym(Maybe<&2, KV.Item<String>>, KV.entry.at(String, t, k, KV.hash(k)), Some{KV.Item{w, e}}, eq) : {R.db_of(R.upd.put(t, k, KV.hash(k), n, x, 0n, rr, R.ent.code(_), R.upd(R.URange{o, s}, 0n, R.ent.live(0n, _)))) == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, R.ent.code(Some{KV.Item{w, e}}), r, R.CRange{o, s, v}))) : R.Db}
+  %Equal.sym(Maybe<&2, KV.Item<String>>, R.ent.live(0n, Some{KV.Item{w, e}}), Some{KV.Item{w, e}}, live0_ent(Some{KV.Item{w, e}})) : {R.db_of(R.upd.put(t, k, KV.hash(k), n, x, 0n, rr, R.ent.code(Some{KV.Item{w, e}}), R.upd(R.URange{o, s}, 0n, _))) == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, R.ent.code(Some{KV.Item{w, e}}), r, R.CRange{o, s, v}))) : R.Db}
+  %Equal.sym(Bool, R.range.go(o, s), True{}, ok) : {R.db_of(R.upd.put(t, k, KV.hash(k), n, x, 0n, rr, R.ent.code(Some{KV.Item{w, e}}), R.range.some(_, o, s, w, String.is_empty(s)))) == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, R.ent.code(Some{KV.Item{w, e}}), r, R.CRange{o, s, v}))) : R.Db}
+  %Equal.sym(String, v, R.range.put(w, o, s), gv) : {R.db_of(R.upd.put(t, k, KV.hash(k), n, x, 0n, rr, R.ent.code(Some{KV.Item{w, e}}), R.range.some(True{}, o, s, w, String.is_empty(s)))) == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, R.ent.code(Some{KV.Item{w, e}}), r, R.CRange{o, s, _}))) : R.Db}
+  {==}
+
+def range_go(+t: KV.Trie<String>, +k: String, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>, +r: R.Reply, +o: Nat, +s: String, +v: String, +w: String, +e: Nat, eq: {KV.entry.at(String, t, k, KV.hash(k)) == Some{KV.Item{w, e}} : Maybe<&2, KV.Item<String>>}, g: GoodRange(Some{KV.Item{w, e}}, o, s, v)) -> {Laws.final(R.exec_all(A.ch.effect(k, R.CRange{o, s, v}), R.Db{t, n, x, 0n, rr})) == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, R.ent.code(Some{KV.Item{w, e}}), r, R.CRange{o, s, v}))) : R.Db}:
+  (ok, gv) = g
+  range_replay(t, k, n, x, now, rr, r, o, s, v, w, e, eq, ok, gv)
+
 def ch_replay(ch: R.Change, m: Maybe<&2, KV.Item<String>>, +t: KV.Trie<String>, +k: String, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>, +r: R.Reply) -> {KV.entry.at(String, t, k, KV.hash(k)) == m : Maybe<&2, KV.Item<String>>} -> Good(m, ch) -> {Laws.final(R.exec_all(A.ch.effect(k, ch), R.Db{t, n, x, 0n, rr})) == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, R.ent.code(m), r, ch))) : R.Db}:
   match ch m:
     case R.CKeep{} _:
@@ -5307,6 +5354,10 @@ def ch_replay(ch: R.Change, m: Maybe<&2, KV.Item<String>>, +t: KV.Trie<String>, 
       eq => g => app_replay(t, k, n, x, now, rr, r, s, v, w, e, eq, g)
     case R.CApp{s, v} None{}:
       eq => g => Empty.absurd({Laws.final(R.exec_all(A.ch.effect(k, R.CApp{s, v}), R.Db{t, n, x, 0n, rr})) == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, R.ent.code(None{}), r, R.CApp{s, v}))) : R.Db}, g)
+    case R.CRange{o, s, v} Some{KV.Item{w, e}}:
+      eq => g => range_go(t, k, n, x, now, rr, r, o, s, v, w, e, eq, g)
+    case R.CRange{o, s, v} None{}:
+      eq => g => Empty.absurd({Laws.final(R.exec_all(A.ch.effect(k, R.CRange{o, s, v}), R.Db{t, n, x, 0n, rr})) == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, R.ent.code(None{}), r, R.CRange{o, s, v}))) : R.Db}, g)
 
 def ch_of(o: R.Out) -> R.Change:
   match o:
@@ -5374,6 +5425,39 @@ def incr_fit_none(ok: Bool, +by: R.Int, -m: Maybe<&2, KV.Item<String>>) -> Good(
     case False{}:
       {==}
 
+# SETRANGE, and SETBIT as the SETRANGE of its byte: of a key not there a
+# put of a value with no time, of a key there a SETRANGE that changes it
+def range_none_good(b: Bool, +o: Nat, +a: String, +em: Bool, -m: Maybe<&2, KV.Item<String>>) -> Good(m, ch_of(R.range.none(b, o, a, em))):
+  match b:
+    case True{}:
+      {==}
+    case False{}:
+      {==}
+
+def range_some_good(b: Bool, +o: Nat, +a: String, +w: String, -e: Nat, +em: Bool) -> {b == R.range.go(o, a) : Bool} -> Good(Some{KV.Item{w, e}}, ch_of(R.range.some(b, o, a, w, em))):
+  match b:
+    case True{}:
+      eb => (Equal.sym(Bool, True{}, R.range.go(o, a), eb), {==})
+    case False{}:
+      eb => {==}
+
+def setbit_ch(+r: R.Reply, o: R.Out) -> {ch_of(R.setbit.out(r, o)) == ch_of(o) : R.Change}:
+  match o:
+    case R.Out{x, ch}:
+      {==}
+
+def setbit_none(+o: Nat, +on: Bool, -m: Maybe<&2, KV.Item<String>>) -> Good(m, ch_of(R.setbit.of(o, on, None{}))):
+  %Equal.sym(R.Change, ch_of(R.setbit.out(R.r_int(0n), R.range.of(Nat.div(o, 8n), R.setbit.byte(o, on, 0), None{}))), ch_of(R.range.of(Nat.div(o, 8n), R.setbit.byte(o, on, 0), None{})), setbit_ch(R.r_int(0n), R.range.of(Nat.div(o, 8n), R.setbit.byte(o, on, 0), None{}))) : Good(m, _)
+  range_none_good(R.range.go(Nat.div(o, 8n), R.setbit.byte(o, on, 0)), Nat.div(o, 8n), R.setbit.byte(o, on, 0), String.is_empty(R.setbit.byte(o, on, 0)), m)
+
+def setbit_some_good(b: Bool, +o: Nat, +on: Bool, +w: String, +e: Nat) -> Good(Some{KV.Item{w, e}}, ch_of(R.setbit.some(b, o, on, w, e))):
+  match b:
+    case True{}:
+      {==}
+    case False{}:
+      %Equal.sym(R.Change, ch_of(R.setbit.out(R.setbit.r(o, w), R.range.of(Nat.div(o, 8n), R.setbit.byte(o, on, R.setbit.x(o, w)), Some{KV.Item{w, e}}))), ch_of(R.range.of(Nat.div(o, 8n), R.setbit.byte(o, on, R.setbit.x(o, w)), Some{KV.Item{w, e}})), setbit_ch(R.setbit.r(o, w), R.range.of(Nat.div(o, 8n), R.setbit.byte(o, on, R.setbit.x(o, w)), Some{KV.Item{w, e}}))) : Good(Some{KV.Item{w, e}}, _)
+      range_some_good(R.range.go(Nat.div(o, 8n), R.setbit.byte(o, on, R.setbit.x(o, w))), Nat.div(o, 8n), R.setbit.byte(o, on, R.setbit.x(o, w)), w, e, String.is_empty(R.setbit.byte(o, on, R.setbit.x(o, w))))({==})
+
 # of a key that is not there: none or a put
 def good_none(op: R.UpdOp, +now: Nat, -m: Maybe<&2, KV.Item<String>>) -> Good(m, ch_of(R.upd(op, now, None{}))):
   match op:
@@ -5396,6 +5480,10 @@ def good_none(op: R.UpdOp, +now: Nat, -m: Maybe<&2, KV.Item<String>>) -> Good(m,
       {==}
     case R.UIncr{+by}:
       incr_fit_none(R.int_fits(by), by, m)
+    case R.URange{+o, +a}:
+      range_none_good(R.range.go(o, a), o, a, String.is_empty(a), m)
+    case R.USetBit{+o, +on}:
+      setbit_none(o, on, m)
 
 # a time set alone, to f, of a key there with e: none given none is
 # nothing
@@ -5508,6 +5596,10 @@ def good_some(op: R.UpdOp, +now: Nat, +w: String, +e: Nat) -> Good(Some{KV.Item{
       persist_go(Nat.is_eq(e, 0n), w, e)({==})
     case R.UIncr{+by}:
       incr_num_some(R.int_read(w), by, w, e)
+    case R.URange{+o, +a}:
+      range_some_good(R.range.go(o, a), o, a, w, e, String.is_empty(a))({==})
+    case R.USetBit{+o, +on}:
+      setbit_some_good(R.setbit.same(o, on, w), o, on, w, e)
 
 def ug_b(b: Bool, op: R.UpdOp, +now: Nat, +w: String, +e: Nat) -> Good(Some{KV.Item{w, e}}, ch_of(R.upd(op, now, Bool.pick(Maybe<&2, KV.Item<String>>, b, Some{KV.Item{w, e}}, None{})))):
   match b:
@@ -5808,6 +5900,23 @@ def put_args(f: Nat, +k: String, +v: String) -> {KV.clamp(f) == f : Nat} -> {A.c
         %num14_show(p, fixed_small(p, fx)) : {[R.Upd{k, R.USet{v, 0n, R.TAt{R.TmN{True{}, 1n+p}}, "set"}}] == [R.set.ttl.cmd(k, v, 0n, False{}, R.tm.of.go(_, Nat.show(1n+p), True{}, False{}, True{}, "set"), "set")] : List<&2, R.Cmd>}
         {==}
 
+# a SETRANGE that changes its key has a small offset
+def range_small(+o: Nat, +s: String, ok: {R.range.go(o, s) == True{} : Bool}) -> {KV.small(o) == True{} : Bool}:
+  and_l(KV.small(o), Nat.is_le(Nat.add(o, String.length(s)), 536870912n))(and_r(Bool.not(String.is_empty(s)), Bool.and(KV.small(o), Nat.is_le(Nat.add(o, String.length(s)), 536870912n)))(ok))
+
+def range_args(o: Nat, +k: String, +a: String, -v: String) -> {KV.small(o) == True{} : Bool} -> {A.ch.effect(k, R.CRange{o, a, v}) == A.parse_all(A.args_all(A.ch.effect(k, R.CRange{o, a, v}))) : List<&2, R.Cmd>}:
+  match o:
+    case 0n:
+      sm => {==}
+    case 1n++p:
+      sm =>
+        %num14_show(p, sm) : {[R.Upd{k, R.URange{1n+p, a}}] == [R.setrange.of(k, _, Nat.show(1n+p), a)] : List<&2, R.Cmd>}
+        {==}
+
+def range_args_go(+o: Nat, +k: String, +a: String, -v: String, -w: String, -e: Nat, g: GoodRange(Some{KV.Item{w, e}}, o, a, v)) -> {A.ch.effect(k, R.CRange{o, a, v}) == A.parse_all(A.args_all(A.ch.effect(k, R.CRange{o, a, v}))) : List<&2, R.Cmd>}:
+  (ok, gv) = g
+  range_args(o, k, a, v)(range_small(o, a, ok))
+
 def ch_args(ch: R.Change, m: Maybe<&2, KV.Item<String>>, +k: String) -> Good(m, ch) -> {A.ch.effect(k, ch) == A.parse_all(A.args_all(A.ch.effect(k, ch))) : List<&2, R.Cmd>}:
   match ch m:
     case R.CKeep{} _:
@@ -5824,6 +5933,10 @@ def ch_args(ch: R.Change, m: Maybe<&2, KV.Item<String>>, +k: String) -> Good(m, 
       g => {==}
     case R.CApp{s, v} _:
       g => {==}
+    case R.CRange{o, a, v} Some{KV.Item{w, e}}:
+      g => range_args_go(o, k, a, v, w, e, g)
+    case R.CRange{o, a, v} None{}:
+      g => Empty.absurd({A.ch.effect(k, R.CRange{o, a, v}) == A.parse_all(A.args_all(A.ch.effect(k, R.CRange{o, a, v}))) : List<&2, R.Cmd>}, g)
 
 def out_args(o: R.Out, m: Maybe<&2, KV.Item<String>>, +k: String) -> Good(m, ch_of(o)) -> {A.upd.effect(k, o) == A.parse_all(A.args_all(A.upd.effect(k, o))) : List<&2, R.Cmd>}:
   match o:
@@ -6106,6 +6219,8 @@ def ch_one(+k: String, ch: R.Change) -> OneEff(A.ch.effect(k, ch)):
       Inr{(R.Upd{k, R.USet{v, 0n, R.TKeep{}, "set"}}, {==})}
     case R.CApp{a, v}:
       Inr{(R.Upd{k, R.UAppend{a}}, {==})}
+    case R.CRange{o, a, v}:
+      Inr{(R.Upd{k, R.URange{o, a}}, {==})}
 
 def out_one(+k: String, o: R.Out) -> OneEff(A.upd.effect(k, o)):
   match o:

@@ -1,7 +1,7 @@
 # BendKV: what we found
 
 BendKV is a Redis-compatible key-value store written in Bend2, with its core proved
-against 58 laws. This file sums up in English what building it and making it fast
+against 59 laws. This file sums up in English what building it and making it fast
 showed us. The detailed record, with every table and measurement, is in Russian:
 [PERFORMANCE.md](PERFORMANCE.md) (performance, section by section) and
 [README.ru.md](../README.ru.md) (the project, the proofs, how to run). Where the work goes
@@ -9,19 +9,20 @@ next, and why, is in [DIRECTIONS.md](DIRECTIONS.md).
 
 ## 1. The result
 
-**Correctness.** About 2,130 lines of core code (with the parsing of commands, of their
-times and options, Redis's pattern matching and several databases), about 650 lines of
+**Correctness.** About 2,550 lines of core code (with the parsing of commands, of their
+times and options, Redis's pattern matching, several databases and the ranges and bits
+of strings), about 650 lines of
 sessions (a connection's state and the server's), about 70 lines of batch hints, about
-410 lines of append-only file, about 6,140 lines of handwritten proofs with a
+410 lines of append-only file, about 6,240 lines of handwritten proofs with a
 specification of about 130 that they bridge to (section 3u), and about 1,700 lines of
 16-way case splits written by a script ([`tools/gen_trie.py`](../tools/gen_trie.py)), not
-counting comments and blank lines. Bend checks the 58 laws in about 4 s; the BendTT
+counting comments and blank lines. Bend checks the 59 laws in about 4 s; the BendTT
 kernel, whose soundness is proved in Lean, rechecks them in about 40 s. Among them: after
 any history, the server restores from its append-only file exactly the databases it
 held, and from a file cut by a crash at any byte, the databases it held after some prefix
 of its acts (sections 3e and 3x). On about 266 thousand random commands the replies
-matched real Redis 7 byte for byte; the versions with the 16-way trie passed about 410
-thousand more, the current one, with several databases, about 107 thousand. Shards across cores and a key hashed once were built and
+matched real Redis 7 byte for byte; the versions with the 16-way trie passed about 550
+thousand more, the current one, with the ranges and bits of strings, about 138 thousand. Shards across cores and a key hashed once were built and
 proved too (sections 3a–3c, 3g, 3h), and taken out again because they paid too little
 for what they cost (section 3l): 38% less code and 38% fewer lines of proof.
 
@@ -1875,6 +1876,70 @@ lists, and one,
 MOVE's basic test, passes alone but in its unit counts a key that earlier tests left,
 since the test that would have emptied the database stops at XADD
 ([COMPATIBILITY.md](COMPATIBILITY.md)).
+
+## 3y. Ranges and bits
+
+**What it does.** GETRANGE (and SUBSTR, its old name), SETRANGE, GETBIT, SETBIT, BITCOUNT
+and BITPOS answer as Redis 7.0.15 does, errors included, each where Redis gives it:
+GETRANGE reads its range before it looks for its key, BITCOUNT and BITPOS read theirs
+only once they find the key (so BITCOUNT of a missing key answers 0 whatever stands where
+the numbers should), and BITPOS reads its bit first. A number is a long long, as
+`string2ll` reads one; a range counts from the end below 0 and is cut to the value, in
+bytes or, with BIT, in bits; BITCOUNT answers 0 at once for a range of two numbers below
+0 whose start is after its end, and BITPOS treats a 0 sought with no end given as found
+just past the value. SETRANGE and SETBIT pad a value with zero bytes and refuse one past
+512MB (`proto-max-bulk-len` at its default: BendKV keeps a new value of that parameter
+but does not apply it, as before).
+
+**A command stays a word wide.** The compiler lays a datatype out flat unless it is
+recursive, and a parsed command travels in registers as wide as its widest form (section
+3q). A range is two long longs: kept as numbers, GETRANGE's would have made every command
+three words wider. So GETRANGE, BITCOUNT and BITPOS keep their arguments as they came, one
+word, and exec reads them again; the parser checks GETRANGE's first, as Redis does before
+it looks for the key. GETBIT's offset is one Nat, SETRANGE's and SETBIT's ride in the
+update, already a node of its own. Exec keeps a number of a range as a place: 2^41 plus
+the number, whose magnitude is cut at 2^40, more than any value's length in bits. That
+changes no answer once the case Redis answers early (both below 0, the start after the
+end) is decided on the numbers themselves. A Nat literal is a 32-bit word at most, so
+2^40 and 2^41 are products, and so is SETBIT's bound, 2^32.
+
+**The file.** SETRANGE logs the SETRANGE of the bytes it wrote, not the value, as APPEND
+logs APPEND; SETBIT logs the SETRANGE of the byte that holds its bit, so a SETBIT on a
+bitmap of a megabyte costs the file a few bytes, as in Redis, where it logs the SETBIT.
+A new change (`R.CRange{off, s, v}`) makes it. It is good (`GoodRange`) when a SETRANGE of
+s at off would change the key (`R.range.go`: s is not empty and the value stays within
+512MB) and v is the old value with s at off; its effect, run at time 0, then makes v again
+(`range_replay`), and its entry parses back to itself, since the offset has 14 digits at
+most (`num14_show`, as for times). SETBIT computes its change as SETRANGE's of the new
+byte, so it is good by the same lemma; a SETBIT whose bit was already so, in a value long
+enough, changes nothing and logs nothing. A key that is not there is made with SET of
+its new value, so a key whose time passed meanwhile starts anew on replay as it did.
+
+**What is proved.** The laws of persistence hold for the new updates with no change to
+their statements: the change of every update is good (`good_none`, `good_some`, a case
+each more), and the lemmas of a change (its frame, its bridge to the specification, its
+time) take a case each, as APPEND's. One new law, `setrange_effect`: SETRANGE of a key
+there writes s at the offset, keeps the key's time and answers the new length. 59 laws;
+about 100 lines of proof more (6,238 against 6,141).
+
+**What the tests found.** Nothing to fix: about 200 cases by hand at Redis's edges
+(numbers past a long long, ranges in both directions, units in any case, offsets at
+2^32 and 512MB) and the differential test, which now draws ranges, offsets and bits,
+138 thousand commands, answer as Redis byte for byte, and so do INFO's statistics of the
+new commands (their calls, the calls that fail, the errors). The commands that read their
+range as they run (BITCOUNT, BITPOS) and SETRANGE, which fails past 512MB, have their
+replies looked at for errors (`RISKY` in `tools/gen_commands.py`).
+
+**Cost.** None: GET 3,137, SET 4,069, INCR 4,223 instructions per request (`make
+perfcheck`), against 3,141, 4,070 and 4,226. The new names lengthen the parser's chains
+for names of 6 and 8 letters only, and the session commands moved from number 40 to 100,
+to leave the database's commands room. INFO's statistics now have 80 keys, 324 codes of
+the 924 words of twelve bits with six set: room for 230 keys, fewer than Redis's commands
+and subcommands, so the codes will need more bits before the data types are all in.
+Redis's test suite: BendKV passes 268 of the 1,673 tests Redis passes (219 before) and
+244 of the 370 in what it has: unit/type/string 60 of 77 (41 before), unit/bitops 30 of
+45 (0 before). The others there need LCS, MSETNX, BITOP, BITFIELD, other types or
+replication ([COMPATIBILITY.md](COMPATIBILITY.md)).
 
 ## 4. Where a request's time goes, and hiding the memory waits
 

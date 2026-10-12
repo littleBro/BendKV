@@ -50,7 +50,8 @@ COMMANDS = {
     "randomkey": [], "scan": [], "setnx": [], "strlen": [], "type": [], "unlink": [],
     "setex": [], "psetex": [], "getex": [], "getdel": [], "expire": [], "pexpire": [],
     "expireat": [], "pexpireat": [], "ttl": [], "pttl": [], "expiretime": [],
-    "pexpiretime": [], "persist": [], "swapdb": [], "move": []}
+    "pexpiretime": [], "persist": [], "swapdb": [], "move": [], "getrange": [], "substr": [],
+    "setrange": [], "getbit": [], "setbit": [], "bitcount": [], "bitpos": []}
 
 # Step 1: redis-server -> facts
 # -----------------------------
@@ -255,10 +256,12 @@ SBEGIN, SEND = "# BEGIN gen_commands: stats\n", "# END gen_commands: stats\n"
 # the commands whose calls can fail as they run, on what the database
 # holds: INCR and its kin meet values that are not integers, and overflows;
 # a time from now can overflow LLONG_MAX (EXPIRE, PEXPIRE, SETEX, PSETEX),
-# and GETEX reads its time only once it finds its key. (SET's time can
-# overflow too, past 9 * 10^18 ms only: SET is left out, so that a batch
-# of SETs needs no look at its replies.)
-RISKY = {"incr", "decr", "incrby", "decrby", "expire", "pexpire", "setex", "psetex", "getex"}
+# GETEX reads its time only once it finds its key, as BITCOUNT and BITPOS
+# read their ranges, and SETRANGE can make a value past 512MB. (SET's time
+# can overflow too, past 9 * 10^18 ms only: SET is left out, so that a
+# batch of SETs needs no look at its replies.)
+RISKY = {"incr", "decr", "incrby", "decrby", "expire", "pexpire", "setex", "psetex", "getex",
+         "setrange", "bitcount", "bitpos"}
 
 # the parser's commands with subcommands, by the function that numbers
 # their subcommands

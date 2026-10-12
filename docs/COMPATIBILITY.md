@@ -35,11 +35,13 @@ make suite REDIS_SRC=../redis      # both runs and the table, in build/suite/
 ## The result
 
 Redis 7.0.15, October 2026. Of the 1,673 tests Redis passes in this mode, BendKV passes
-**219 (13.1%)**; of the 325 in the units of what BendKV has, 195 (60%). Times to live
+**268 (16.0%)**; of the 370 in the units of what BendKV has, 244 (66%). Times to live
 (EXPIRE and its kin, TTL and PTTL, SET's options, GETEX, GETDEL) and the sweep of
 expired keys brought 78 of them: unit/expire passes 55 of its 59 tests (the other 4 need
-replication, LPUSH and TIME), unit/type/string 41 of 77 (the rest need GETRANGE, SETRANGE,
-GETBIT, SETBIT, LCS, MSETNX, or other types). Several databases brought 6 of the 17 tests
+replication, LPUSH and TIME). Ranges and bits (GETRANGE, SETRANGE, GETBIT, SETBIT,
+BITCOUNT, BITPOS) brought 49: unit/type/string passes 60 of its 77 tests (the rest need
+LCS, MSETNX, other types, or replication), unit/bitops 30 of 45 (the rest need BITOP,
+BITFIELD or lists). Several databases brought 6 of the 17 tests
 Redis passes that run only without `--singledb`: SET and GET in different databases, DEL in database
 1, and four of MOVE's five (against a key the target holds, against a database that is no
 integer, with a time and without one). The fifth, MOVE's basic usage, passes alone but
@@ -48,8 +50,8 @@ them with FLUSHDB, stops at XADD. The other 10 need COPY, MULTI and WATCH, Lua o
 
 | area | units | Redis passes | BendKV passes |
 |---|---|---:|---:|
-| what BendKV has: the protocol, connections, the keyspace and its databases, strings, counters, times to live, introspection | protocol, quit, keyspace, type/string, type/incr, expire, introspection, introspection-2, other, info-command | 325 | **195** |
-| data types, not yet | type/hash, type/list, list-2, list-3, type/set, type/zset, geo, hyperloglog, bitops, bitfield, sort, scan, dump, lazyfree, violations | 911 | 20 |
+| what BendKV has: the protocol, connections, the keyspace and its databases, strings and their ranges and bits, counters, times to live, introspection | protocol, quit, keyspace, type/string, type/incr, bitops, expire, introspection, introspection-2, other, info-command | 370 | **244** |
+| data types, not yet | type/hash, type/list, list-2, list-3, type/set, type/zset, geo, hyperloglog, bitfield, sort, scan, dump, lazyfree, violations | 866 | 20 |
 | transactions, pub/sub, client-side caching, CLIENT PAUSE, the latency monitor, the slow log, the query buffer, not yet | multi, pubsub, tracking, pause, latency-monitor, slowlog, querybuf | 131 | 0 |
 | out of scope: Lua scripts, functions, streams | scripting, functions, type/stream, type/stream-cgroups | 306 | 4 |
 
@@ -67,7 +69,7 @@ pubsubshard, shutdown, tls, type/list-common, wait):
 | unit | tests | Redis passes | BendKV passes |
 |---|---:|---:|---:|
 | unit/bitfield | 16 | 16 | 0 |
-| unit/bitops | 45 | 45 | 0 |
+| unit/bitops | 45 | 45 | 30 |
 | unit/dump | 12 | 11 | 1 |
 | unit/expire | 65 | 59 | 55 |
 | unit/functions | 94 | 90 | 2 |
@@ -100,18 +102,18 @@ pubsubshard, shutdown, tls, type/list-common, wait):
 | unit/type/set | 98 | 94 | 0 |
 | unit/type/stream | 72 | 63 | 1 |
 | unit/type/stream-cgroups | 44 | 43 | 1 |
-| unit/type/string | 77 | 77 | 41 |
+| unit/type/string | 77 | 77 | 60 |
 | unit/type/zset | 291 | 289 | 10 |
 | unit/violations | 1 | 1 | 0 |
-| **all** | **1751** | **1673** | **219 (13.1%)** |
+| **all** | **1751** | **1673** | **268 (16.0%)** |
 
-## Why the other 1,454 fail
+## Why the other 1,405 fail
 
-- **822 stop on a command BendKV does not have.** By the number of tests each one stops:
-  FUNCTION LOAD 123, ZADD 117, XADD 60, GEOADD 37, SADD 31, MULTI 23, LPUSH 20, PFADD 19,
-  WATCH 18, SYNC 17 (tests that read the replication stream), BITFIELD 16, BITCOUNT 15,
-  RPUSH 15, BITPOS 14, BITOP 12, XGROUP 12, GEORADIUS 10, INCRBYFLOAT 10, SETBIT 9,
-  ZINCRBY 9, and about a hundred more below nine.
+- **773 stop on a command BendKV does not have.** By the number of tests each one stops:
+  FUNCTION LOAD 123, ZADD 118, XADD 60, GEOADD 37, SADD 31, MULTI 23, LPUSH 19, PFADD 19,
+  WATCH 18, BITFIELD 17, SYNC 17 (tests that read the replication stream), RPUSH 16,
+  BITOP 13, XGROUP 12, INCRBYFLOAT 11, GEORADIUS 10, ZINCRBY 9, and 69 more below nine
+  (220 tests), COPY among them with 7.
 - **590 never ran**: their unit ended before them, on a command outside any test:
   LATENCY RESET (latency-monitor), LPUSH (sort), HSET (type/hash), SADD (type/set),
   SUBSCRIBE (tracking), HELLO 3 (type/list and type/zset run their tests over RESP2 and
@@ -129,8 +131,8 @@ pubsubshard, shutdown, tls, type/list-common, wait):
   RANDOMKEY's three.)
 
 So the tests are where the plan goes next: the rest of the commands on strings and keys
-(GETRANGE, SETRANGE, MSETNX, the bit commands, LCS, COPY, RENAME, TOUCH, TIME, OBJECT),
-then the data types one by one (911 tests), RESP3, which
+(MSETNX, BITOP, BITFIELD, LCS, COPY, RENAME, TOUCH, TIME, OBJECT), then the data types
+one by one (866 tests), RESP3, which
 two units need before their second half runs, and MULTI/EXEC and pub/sub. Scripts,
 functions and streams (306 tests) stay out of scope.
 

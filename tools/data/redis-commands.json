@@ -200,6 +200,331 @@
     []
    ]
   },
+  "bitcount": {
+   "docs": [
+    "summary",
+    "Count set bits in a string",
+    "since",
+    "2.6.0",
+    "group",
+    "bitmap",
+    "complexity",
+    "O(N)",
+    "history",
+    [
+     [
+      "7.0.0",
+      "Added the `BYTE|BIT` option."
+     ]
+    ],
+    "arguments",
+    [
+     [
+      "name",
+      "key",
+      "type",
+      "key",
+      "key_spec_index",
+      0
+     ],
+     [
+      "name",
+      "index",
+      "type",
+      "block",
+      "flags",
+      [
+       {
+        "+": "optional"
+       }
+      ],
+      "arguments",
+      [
+       [
+        "name",
+        "start",
+        "type",
+        "integer"
+       ],
+       [
+        "name",
+        "end",
+        "type",
+        "integer"
+       ],
+       [
+        "name",
+        "index_unit",
+        "type",
+        "oneof",
+        "since",
+        "7.0.0",
+        "flags",
+        [
+         {
+          "+": "optional"
+         }
+        ],
+        "arguments",
+        [
+         [
+          "name",
+          "byte",
+          "type",
+          "pure-token",
+          "token",
+          "BYTE"
+         ],
+         [
+          "name",
+          "bit",
+          "type",
+          "pure-token",
+          "token",
+          "BIT"
+         ]
+        ]
+       ]
+      ]
+     ]
+    ]
+   ],
+   "info": [
+    "bitcount",
+    -2,
+    [
+     {
+      "+": "readonly"
+     }
+    ],
+    1,
+    1,
+    1,
+    [
+     {
+      "+": "@read"
+     },
+     {
+      "+": "@bitmap"
+     },
+     {
+      "+": "@slow"
+     }
+    ],
+    [],
+    [
+     [
+      "flags",
+      [
+       {
+        "+": "RO"
+       },
+       {
+        "+": "access"
+       }
+      ],
+      "begin_search",
+      [
+       "type",
+       "index",
+       "spec",
+       [
+        "index",
+        1
+       ]
+      ],
+      "find_keys",
+      [
+       "type",
+       "range",
+       "spec",
+       [
+        "lastkey",
+        0,
+        "keystep",
+        1,
+        "limit",
+        0
+       ]
+      ]
+     ]
+    ],
+    []
+   ]
+  },
+  "bitpos": {
+   "docs": [
+    "summary",
+    "Find first bit set or clear in a string",
+    "since",
+    "2.8.7",
+    "group",
+    "bitmap",
+    "complexity",
+    "O(N)",
+    "history",
+    [
+     [
+      "7.0.0",
+      "Added the `BYTE|BIT` option."
+     ]
+    ],
+    "arguments",
+    [
+     [
+      "name",
+      "key",
+      "type",
+      "key",
+      "key_spec_index",
+      0
+     ],
+     [
+      "name",
+      "bit",
+      "type",
+      "integer"
+     ],
+     [
+      "name",
+      "index",
+      "type",
+      "block",
+      "flags",
+      [
+       {
+        "+": "optional"
+       }
+      ],
+      "arguments",
+      [
+       [
+        "name",
+        "start",
+        "type",
+        "integer"
+       ],
+       [
+        "name",
+        "end_index",
+        "type",
+        "block",
+        "flags",
+        [
+         {
+          "+": "optional"
+         }
+        ],
+        "arguments",
+        [
+         [
+          "name",
+          "end",
+          "type",
+          "integer"
+         ],
+         [
+          "name",
+          "index_unit",
+          "type",
+          "oneof",
+          "since",
+          "7.0.0",
+          "flags",
+          [
+           {
+            "+": "optional"
+           }
+          ],
+          "arguments",
+          [
+           [
+            "name",
+            "byte",
+            "type",
+            "pure-token",
+            "token",
+            "BYTE"
+           ],
+           [
+            "name",
+            "bit",
+            "type",
+            "pure-token",
+            "token",
+            "BIT"
+           ]
+          ]
+         ]
+        ]
+       ]
+      ]
+     ]
+    ]
+   ],
+   "info": [
+    "bitpos",
+    -3,
+    [
+     {
+      "+": "readonly"
+     }
+    ],
+    1,
+    1,
+    1,
+    [
+     {
+      "+": "@read"
+     },
+     {
+      "+": "@bitmap"
+     },
+     {
+      "+": "@slow"
+     }
+    ],
+    [],
+    [
+     [
+      "flags",
+      [
+       {
+        "+": "RO"
+       },
+       {
+        "+": "access"
+       }
+      ],
+      "begin_search",
+      [
+       "type",
+       "index",
+       "spec",
+       [
+        "index",
+        1
+       ]
+      ],
+      "find_keys",
+      [
+       "type",
+       "range",
+       "spec",
+       [
+        "lastkey",
+        0,
+        "keystep",
+        1,
+        "limit",
+        0
+       ]
+      ]
+     ]
+    ],
+    []
+   ]
+  },
   "client": {
    "docs": [
     "summary",
@@ -2796,6 +3121,100 @@
     []
    ]
   },
+  "getbit": {
+   "docs": [
+    "summary",
+    "Returns the bit value at offset in the string value stored at key",
+    "since",
+    "2.2.0",
+    "group",
+    "bitmap",
+    "complexity",
+    "O(1)",
+    "arguments",
+    [
+     [
+      "name",
+      "key",
+      "type",
+      "key",
+      "key_spec_index",
+      0
+     ],
+     [
+      "name",
+      "offset",
+      "type",
+      "integer"
+     ]
+    ]
+   ],
+   "info": [
+    "getbit",
+    3,
+    [
+     {
+      "+": "readonly"
+     },
+     {
+      "+": "fast"
+     }
+    ],
+    1,
+    1,
+    1,
+    [
+     {
+      "+": "@read"
+     },
+     {
+      "+": "@bitmap"
+     },
+     {
+      "+": "@fast"
+     }
+    ],
+    [],
+    [
+     [
+      "flags",
+      [
+       {
+        "+": "RO"
+       },
+       {
+        "+": "access"
+       }
+      ],
+      "begin_search",
+      [
+       "type",
+       "index",
+       "spec",
+       [
+        "index",
+        1
+       ]
+      ],
+      "find_keys",
+      [
+       "type",
+       "range",
+       "spec",
+       [
+        "lastkey",
+        0,
+        "keystep",
+        1,
+        "limit",
+        0
+       ]
+      ]
+     ]
+    ],
+    []
+   ]
+  },
   "getdel": {
    "docs": [
     "summary",
@@ -3004,6 +3423,103 @@
        },
        {
         "+": "update"
+       }
+      ],
+      "begin_search",
+      [
+       "type",
+       "index",
+       "spec",
+       [
+        "index",
+        1
+       ]
+      ],
+      "find_keys",
+      [
+       "type",
+       "range",
+       "spec",
+       [
+        "lastkey",
+        0,
+        "keystep",
+        1,
+        "limit",
+        0
+       ]
+      ]
+     ]
+    ],
+    []
+   ]
+  },
+  "getrange": {
+   "docs": [
+    "summary",
+    "Get a substring of the string stored at a key",
+    "since",
+    "2.4.0",
+    "group",
+    "string",
+    "complexity",
+    "O(N) where N is the length of the returned string. The complexity is ultimately determined by the returned length, but because creating a substring from an existing string is very cheap, it can be considered O(1) for small strings.",
+    "arguments",
+    [
+     [
+      "name",
+      "key",
+      "type",
+      "key",
+      "key_spec_index",
+      0
+     ],
+     [
+      "name",
+      "start",
+      "type",
+      "integer"
+     ],
+     [
+      "name",
+      "end",
+      "type",
+      "integer"
+     ]
+    ]
+   ],
+   "info": [
+    "getrange",
+    4,
+    [
+     {
+      "+": "readonly"
+     }
+    ],
+    1,
+    1,
+    1,
+    [
+     {
+      "+": "@read"
+     },
+     {
+      "+": "@string"
+     },
+     {
+      "+": "@slow"
+     }
+    ],
+    [],
+    [
+     [
+      "flags",
+      [
+       {
+        "+": "RO"
+       },
+       {
+        "+": "access"
        }
       ],
       "begin_search",
@@ -5141,6 +5657,109 @@
     []
    ]
   },
+  "setbit": {
+   "docs": [
+    "summary",
+    "Sets or clears the bit at offset in the string value stored at key",
+    "since",
+    "2.2.0",
+    "group",
+    "bitmap",
+    "complexity",
+    "O(1)",
+    "arguments",
+    [
+     [
+      "name",
+      "key",
+      "type",
+      "key",
+      "key_spec_index",
+      0
+     ],
+     [
+      "name",
+      "offset",
+      "type",
+      "integer"
+     ],
+     [
+      "name",
+      "value",
+      "type",
+      "integer"
+     ]
+    ]
+   ],
+   "info": [
+    "setbit",
+    4,
+    [
+     {
+      "+": "write"
+     },
+     {
+      "+": "denyoom"
+     }
+    ],
+    1,
+    1,
+    1,
+    [
+     {
+      "+": "@write"
+     },
+     {
+      "+": "@bitmap"
+     },
+     {
+      "+": "@slow"
+     }
+    ],
+    [],
+    [
+     [
+      "flags",
+      [
+       {
+        "+": "RW"
+       },
+       {
+        "+": "access"
+       },
+       {
+        "+": "update"
+       }
+      ],
+      "begin_search",
+      [
+       "type",
+       "index",
+       "spec",
+       [
+        "index",
+        1
+       ]
+      ],
+      "find_keys",
+      [
+       "type",
+       "range",
+       "spec",
+       [
+        "lastkey",
+        0,
+        "keystep",
+        1,
+        "limit",
+        0
+       ]
+      ]
+     ]
+    ],
+    []
+   ]
+  },
   "setex": {
    "docs": [
     "summary",
@@ -5338,6 +5957,106 @@
     []
    ]
   },
+  "setrange": {
+   "docs": [
+    "summary",
+    "Overwrite part of a string at key starting at the specified offset",
+    "since",
+    "2.2.0",
+    "group",
+    "string",
+    "complexity",
+    "O(1), not counting the time taken to copy the new string in place. Usually, this string is very small so the amortized complexity is O(1). Otherwise, complexity is O(M) with M being the length of the value argument.",
+    "arguments",
+    [
+     [
+      "name",
+      "key",
+      "type",
+      "key",
+      "key_spec_index",
+      0
+     ],
+     [
+      "name",
+      "offset",
+      "type",
+      "integer"
+     ],
+     [
+      "name",
+      "value",
+      "type",
+      "string"
+     ]
+    ]
+   ],
+   "info": [
+    "setrange",
+    4,
+    [
+     {
+      "+": "write"
+     },
+     {
+      "+": "denyoom"
+     }
+    ],
+    1,
+    1,
+    1,
+    [
+     {
+      "+": "@write"
+     },
+     {
+      "+": "@string"
+     },
+     {
+      "+": "@slow"
+     }
+    ],
+    [],
+    [
+     [
+      "flags",
+      [
+       {
+        "+": "RW"
+       },
+       {
+        "+": "update"
+       }
+      ],
+      "begin_search",
+      [
+       "type",
+       "index",
+       "spec",
+       [
+        "index",
+        1
+       ]
+      ],
+      "find_keys",
+      [
+       "type",
+       "range",
+       "spec",
+       [
+        "lastkey",
+        0,
+        "keystep",
+        1,
+        "limit",
+        0
+       ]
+      ]
+     ]
+    ],
+    []
+   ]
+  },
   "strlen": {
    "docs": [
     "summary",
@@ -5392,6 +6111,113 @@
       [
        {
         "+": "RO"
+       }
+      ],
+      "begin_search",
+      [
+       "type",
+       "index",
+       "spec",
+       [
+        "index",
+        1
+       ]
+      ],
+      "find_keys",
+      [
+       "type",
+       "range",
+       "spec",
+       [
+        "lastkey",
+        0,
+        "keystep",
+        1,
+        "limit",
+        0
+       ]
+      ]
+     ]
+    ],
+    []
+   ]
+  },
+  "substr": {
+   "docs": [
+    "summary",
+    "Get a substring of the string stored at a key",
+    "since",
+    "1.0.0",
+    "group",
+    "string",
+    "complexity",
+    "O(N) where N is the length of the returned string. The complexity is ultimately determined by the returned length, but because creating a substring from an existing string is very cheap, it can be considered O(1) for small strings.",
+    "doc_flags",
+    [
+     {
+      "+": "deprecated"
+     }
+    ],
+    "deprecated_since",
+    "2.0.0",
+    "replaced_by",
+    "`GETRANGE`",
+    "arguments",
+    [
+     [
+      "name",
+      "key",
+      "type",
+      "key",
+      "key_spec_index",
+      0
+     ],
+     [
+      "name",
+      "start",
+      "type",
+      "integer"
+     ],
+     [
+      "name",
+      "end",
+      "type",
+      "integer"
+     ]
+    ]
+   ],
+   "info": [
+    "substr",
+    4,
+    [
+     {
+      "+": "readonly"
+     }
+    ],
+    1,
+    1,
+    1,
+    [
+     {
+      "+": "@read"
+     },
+     {
+      "+": "@string"
+     },
+     {
+      "+": "@slow"
+     }
+    ],
+    [],
+    [
+     [
+      "flags",
+      [
+       {
+        "+": "RO"
+       },
+       {
+        "+": "access"
        }
       ],
       "begin_search",

@@ -43,10 +43,13 @@ type KVPair is Data:
 # A read of one key whose reply depends on what the key holds at now
 # alone (its value and the time it expires at, when it is there): its
 # type (TYPE), its length (STRLEN), its time to live in s or ms (TTL,
-# PTTL) or the time it expires at (EXPIRETIME, PEXPIRETIME). The laws see
+# PTTL) or the time it expires at (EXPIRETIME, PEXPIRETIME), a range of
+# its bytes (GETRANGE, SUBSTR), a bit (GETBIT), the bits set in a range
+# (BITCOUNT) or the first bit of a value in one (BITPOS). The laws see
 # them as one command, Peek (LAWS.bend: disturbs), so one more needs no
-# more proof. Each is a constructor of its own, with no fields: a command
-# travels in registers as wide as its widest form.
+# more proof. A command travels in registers as wide as its widest form,
+# so each has one field of a word at most: GETRANGE, BITCOUNT and BITPOS
+# keep their arguments as they came (Ranges and bits, below).
 type PeekOp is Data:
   PType{}
   PStrlen{}
@@ -54,6 +57,10 @@ type PeekOp is Data:
   PPttl{}
   PExpTime{}
   PPExpTime{}
+  PRange{args: List<&2, String>}
+  PGetBit{off: Nat}
+  PCount{args: List<&2, String>}
+  PPos{args: List<&2, String>}
 
 # A time a command names, in ms (a time in s, times 1000; Times, below):
 # a short one (TmN, below 10^14) or any other long long (TmB: its sign and
@@ -87,9 +94,10 @@ type ExpIf is Data:
 # none, 1 NX, 2 XX; name is the command's, for its errors), an update
 # whose reply is the old value (UGet: SET's GET option, and GETSET, which
 # is SET with GET), GETEX, GETDEL, EXPIRE and its kin (t from now or from
-# 1970), PERSIST, and INCRBY (UIncr: as the append-only file sees it,
+# 1970), PERSIST, INCRBY (UIncr: as the append-only file sees it,
 # aof.bend; the server runs INCRBY as its own command, IncrBy, the same
-# way, faster). The laws see them as one command, Upd, so one more needs
+# way, faster), SETRANGE (s at offset off) and SETBIT (the bit at offset
+# off, to on). The laws see them as one command, Upd, so one more needs
 # no more proof. UGet holds an update, so the compiler makes an update a
 # node of its own: a command travels in registers as wide as its widest
 # form, and an update's options are many.
@@ -103,6 +111,8 @@ type UpdOp is Data:
   UExpire{t: Tm, c: ExpIf, name: String}
   UPersist{}
   UIncr{by: Int}
+  URange{off: Nat, s: String}
+  USetBit{off: Nat, on: Bool}
 
 # The commands of a connection and of the server: session.bend runs
 # them, with the state of the connection and of the server. None of them
@@ -1402,6 +1412,97 @@ def exp.cmd(+k: String, +s: String, +at: Bool, +secs: Bool, +name: String, st: E
 def parse_expire(+k: String, +s: String, +os: List<&2, String>, +at: Bool, +secs: Bool, +name: String) -> Cmd:
   exp.cmd(k, s, at, secs, name, exp.opts(os, ExpSt{False{}, False{}, False{}, False{}}))
 
+# Ranges and bits
+# ---------------
+# GETRANGE (and SUBSTR, its old name), SETRANGE, GETBIT, SETBIT, BITCOUNT
+# and BITPOS read their numbers as Redis 7.0.15 does, each a long long
+# (string2ll, ll.read), and answer an error for one where Redis does:
+# GETRANGE reads its range before it looks for its key, BITCOUNT and
+# BITPOS theirs only once they find the key (BITPOS its bit before). So
+# GETRANGE's arguments are checked here and kept as they came, as are
+# BITCOUNT's and BITPOS's, and exec reads them again (Execution: Ranges),
+# so that a command stays a word wide for them (Types). SETRANGE's offset
+# is a Nat below 10^14 (num14; one of 10^14 or more acts as 2^29 + 1
+# does, past 512MB, the most a value may hold: proto-max-bulk-len, which
+# BendKV keeps at Redis's default); a bit's offset is below 2^32, the
+# bits of 512MB.
+
+def e_offset() -> Reply:
+  RError{"ERR offset is out of range"}
+
+def e_bitoff() -> Reply:
+  RError{"ERR bit offset is not an integer or out of range"}
+
+def ll.bad(l: LL) -> Bool:
+  match l:
+    case LL{neg, hi, lo}:
+      False{}
+    case LLBad{}:
+      True{}
+
+# whether s is a long long
+def ll.is(+s: String) -> Bool:
+  Bool.not(ll.bad(ll.read(s)))
+
+# GETRANGE key start end
+def parse_getrange(+k: String, +a: String, +b: String) -> Cmd:
+  Bool.pick(Cmd, Bool.and(ll.is(a), ll.is(b)), Peek{k, PRange{[a, b]}}, Bad{e_int()})
+
+# SETRANGE key offset value: an offset of 14 digits or more, or below 0
+def setrange.big(+k: String, l: LL, s: String) -> Cmd:
+  match l:
+    case LL{neg, hi, lo}:
+      Bool.pick(Cmd, neg, Bad{e_offset()}, Upd{k, URange{536870913n, s}})
+    case LLBad{}:
+      Bad{e_int()}
+
+def setrange.of(+k: String, m: Maybe<&2, Nat>, +o: String, s: String) -> Cmd:
+  match m:
+    case Some{off}:
+      Upd{k, URange{off, s}}
+    case None{}:
+      setrange.big(k, ll.read(o), s)
+
+def parse_setrange(+k: String, +o: String, s: String) -> Cmd:
+  setrange.of(k, num14(o, 0n, 0n, False{}, nch(o)), o, s)
+
+# a bit's offset, below 2^32; None for none
+def bitoff.of(m: Maybe<&2, Nat>) -> Maybe<&2, Nat>:
+  match m:
+    case Some{+n}:
+      Bool.pick(Maybe<&2, Nat>, Nat.is_lt(n, Nat.mul(65536n, 65536n)), Some{n}, None{})
+    case None{}:
+      None{}
+
+def bitoff(+o: String) -> Maybe<&2, Nat>:
+  bitoff.of(num14(o, 0n, 0n, False{}, nch(o)))
+
+# GETBIT key offset
+def parse_getbit(+k: String, m: Maybe<&2, Nat>) -> Cmd:
+  match m:
+    case Some{off}:
+      Peek{k, PGetBit{off}}
+    case None{}:
+      Bad{e_bitoff()}
+
+# SETBIT key offset bit: the offset is read first, then the bit, 0 or 1
+def setbit.cmd(+k: String, +off: Nat, +b: String) -> Cmd:
+  Bool.pick(Cmd, String.eq(b, "1"), Upd{k, USetBit{off, True{}}},
+    Bool.pick(Cmd, String.eq(b, "0"), Upd{k, USetBit{off, False{}}}, Bad{RError{"ERR bit is not an integer or out of range"}}))
+
+def parse_setbit(+k: String, m: Maybe<&2, Nat>, +b: String) -> Cmd:
+  match m:
+    case Some{+off}:
+      setbit.cmd(k, off, b)
+    case None{}:
+      Bad{e_bitoff()}
+
+# BITPOS key bit [start [end [BYTE|BIT]]]: the bit is read before the key
+# is looked for, an integer, then 0 or 1
+def parse_bitpos(+k: String, +b: String, rest: List<&2, String>) -> Cmd:
+  Bool.pick(Cmd, Bool.or(String.eq(b, "0"), String.eq(b, "1")), Peek{k, PPos{b <> rest}},
+    Bool.pick(Cmd, ll.is(b), Bad{RError{"ERR The bit argument must be 1 or 0."}}, Bad{e_int()}))
+
 # A command's name, in upper case, picks how its arguments parse. The
 # name's length narrows it down to a few names, which cmd_id compares with
 # it whole: String.eq with a literal is one memcmp, cheap enough that
@@ -1425,15 +1526,15 @@ def cmd_id(+n: String, len: Nat) -> Nat:
       Bool.pick(Nat, String.eq(n, "KEYS"), 21n,
       Bool.pick(Nat, String.eq(n, "SCAN"), 22n,
       Bool.pick(Nat, String.eq(n, "TYPE"), 25n,
-      Bool.pick(Nat, String.eq(n, "AUTH"), 42n,
-      Bool.pick(Nat, String.eq(n, "QUIT"), 43n,
-      Bool.pick(Nat, String.eq(n, "INFO"), 48n,
-      Bool.pick(Nat, String.eq(n, "MOVE"), 52n,
+      Bool.pick(Nat, String.eq(n, "AUTH"), 102n,
+      Bool.pick(Nat, String.eq(n, "QUIT"), 103n,
+      Bool.pick(Nat, String.eq(n, "INFO"), 108n,
+      Bool.pick(Nat, String.eq(n, "MOVE"), 112n,
       Bool.pick(Nat, String.eq(n, "PTTL"), 33n, 0n))))))))))))))
     case 5n:
       Bool.pick(Nat, String.eq(n, "SETNX"), 5n,
-      Bool.pick(Nat, String.eq(n, "HELLO"), 41n,
-      Bool.pick(Nat, String.eq(n, "RESET"), 44n,
+      Bool.pick(Nat, String.eq(n, "HELLO"), 101n,
+      Bool.pick(Nat, String.eq(n, "RESET"), 104n,
       Bool.pick(Nat, String.eq(n, "SETEX"), 23n,
       Bool.pick(Nat, String.eq(n, "GETEX"), 26n, 0n)))))
     case 6n:
@@ -1445,24 +1546,31 @@ def cmd_id(+n: String, len: Nat) -> Nat:
       Bool.pick(Nat, String.eq(n, "APPEND"), 14n,
       Bool.pick(Nat, String.eq(n, "STRLEN"), 15n,
       Bool.pick(Nat, String.eq(n, "DBSIZE"), 18n,
-      Bool.pick(Nat, String.eq(n, "CONFIG"), 47n,
-      Bool.pick(Nat, String.eq(n, "SELECT"), 40n,
-      Bool.pick(Nat, String.eq(n, "CLIENT"), 45n,
+      Bool.pick(Nat, String.eq(n, "CONFIG"), 107n,
+      Bool.pick(Nat, String.eq(n, "SELECT"), 100n,
+      Bool.pick(Nat, String.eq(n, "CLIENT"), 105n,
       Bool.pick(Nat, String.eq(n, "PSETEX"), 24n,
       Bool.pick(Nat, String.eq(n, "GETDEL"), 27n,
-      Bool.pick(Nat, String.eq(n, "SWAPDB"), 51n,
-      Bool.pick(Nat, String.eq(n, "EXPIRE"), 28n, 0n)))))))))))))))
+      Bool.pick(Nat, String.eq(n, "SWAPDB"), 111n,
+      Bool.pick(Nat, String.eq(n, "EXPIRE"), 28n,
+      Bool.pick(Nat, String.eq(n, "SUBSTR"), 38n,
+      Bool.pick(Nat, String.eq(n, "GETBIT"), 40n,
+      Bool.pick(Nat, String.eq(n, "SETBIT"), 41n,
+      Bool.pick(Nat, String.eq(n, "BITPOS"), 43n, 0n)))))))))))))))))))
     case 7n:
       Bool.pick(Nat, String.eq(n, "FLUSHDB"), 20n,
-      Bool.pick(Nat, String.eq(n, "COMMAND"), 49n,
+      Bool.pick(Nat, String.eq(n, "COMMAND"), 109n,
       Bool.pick(Nat, String.eq(n, "PEXPIRE"), 29n,
       Bool.pick(Nat, String.eq(n, "PERSIST"), 36n, 0n))))
     case 8n:
       Bool.pick(Nat, String.eq(n, "FLUSHALL"), 19n,
-      Bool.pick(Nat, String.eq(n, "FUNCTION"), 46n,
-      Bool.pick(Nat, String.eq(n, "EXPIREAT"), 30n, 0n)))
+      Bool.pick(Nat, String.eq(n, "FUNCTION"), 106n,
+      Bool.pick(Nat, String.eq(n, "EXPIREAT"), 30n,
+      Bool.pick(Nat, String.eq(n, "GETRANGE"), 37n,
+      Bool.pick(Nat, String.eq(n, "SETRANGE"), 39n,
+      Bool.pick(Nat, String.eq(n, "BITCOUNT"), 42n, 0n))))))
     case 9n:
-      Bool.pick(Nat, String.eq(n, "RANDOMKEY"), 50n,
+      Bool.pick(Nat, String.eq(n, "RANDOMKEY"), 110n,
       Bool.pick(Nat, String.eq(n, "PEXPIREAT"), 31n, 0n))
     case 10n:
       Bool.pick(Nat, String.eq(n, "EXPIRETIME"), 34n, 0n)
@@ -1681,77 +1789,119 @@ def parse_id(id: Nat, name: String, args: List<&2, String>) -> Cmd:
           Upd{k, UPersist{}}
         case _:
           e_arity("persist")
+    case 37n:  # GETRANGE
+      match args:
+        case Con{k, Con{a, Con{b, Nil{}}}}:
+          parse_getrange(k, a, b)
+        case _:
+          e_arity("getrange")
+    case 38n:  # SUBSTR
+      match args:
+        case Con{k, Con{a, Con{b, Nil{}}}}:
+          parse_getrange(k, a, b)
+        case _:
+          e_arity("substr")
+    case 39n:  # SETRANGE
+      match args:
+        case Con{k, Con{o, Con{v, Nil{}}}}:
+          parse_setrange(k, o, v)
+        case _:
+          e_arity("setrange")
+    case 40n:  # GETBIT
+      match args:
+        case Con{k, Con{+o, Nil{}}}:
+          parse_getbit(k, bitoff(o))
+        case _:
+          e_arity("getbit")
+    case 41n:  # SETBIT
+      match args:
+        case Con{k, Con{+o, Con{b, Nil{}}}}:
+          parse_setbit(k, bitoff(o), b)
+        case _:
+          e_arity("setbit")
+    case 42n:  # BITCOUNT
+      match args:
+        case Con{k, rest}:
+          Peek{k, PCount{rest}}
+        case _:
+          e_arity("bitcount")
+    case 43n:  # BITPOS
+      match args:
+        case Con{k, Con{b, rest}}:
+          parse_bitpos(k, b, rest)
+        case _:
+          e_arity("bitpos")
     case _:
       e_unknown(name, args)
 
-# the session commands (ids from 40), parsed into their ops
+# the session commands (ids from 100), parsed into their ops
 def parse_sess(id: Nat, name: String, args: List<&2, String>) -> SessOp:
   match id:
-    case 40n:  # SELECT
+    case 100n:  # SELECT
       match args:
         case Con{d, Nil{}}:
           SSelect{d}
         case _:
           s_arity("select")
-    case 41n:  # HELLO
+    case 101n:  # HELLO
       SHello{args}
-    case 42n:  # AUTH
+    case 102n:  # AUTH
       match args:
         case Nil{}:
           s_arity("auth")
         case Con{a, rest}:
           SAuth{a <> rest}
-    case 43n:  # QUIT
+    case 103n:  # QUIT
       SQuit{}
-    case 44n:  # RESET
+    case 104n:  # RESET
       match args:
         case Nil{}:
           SReset{}
         case _:
           s_arity("reset")
-    case 45n:  # CLIENT
+    case 105n:  # CLIENT
       match args:
         case Nil{}:
           s_arity("client")
         case Con{+sub, rest}:
           +up = String.to_upper(sub)
           parse_client(client_id(up, String.length(up)), sub, rest)
-    case 46n:  # FUNCTION
+    case 106n:  # FUNCTION
       match args:
         case Nil{}:
           s_arity("function")
         case Con{+sub, rest}:
           +up = String.to_upper(sub)
           parse_function(function_id(up, String.length(up)), sub, rest)
-    case 47n:  # CONFIG
+    case 107n:  # CONFIG
       match args:
         case Nil{}:
           s_arity("config")
         case Con{+sub, rest}:
           +up = String.to_upper(sub)
           parse_config(config_id(up, String.length(up)), sub, rest)
-    case 48n:  # INFO
+    case 108n:  # INFO
       SInfo{args}
-    case 49n:  # COMMAND
+    case 109n:  # COMMAND
       match args:
         case Nil{}:
           SCommand{Nil{}}
         case Con{+sub, rest}:
           +up = String.to_upper(sub)
           parse_command(command_id(up, String.length(up)), sub, rest)
-    case 50n:  # RANDOMKEY
+    case 110n:  # RANDOMKEY
       match args:
         case Nil{}:
           SRandomKey{}
         case _:
           s_arity("randomkey")
-    case 51n:  # SWAPDB
+    case 111n:  # SWAPDB
       match args:
         case Con{a, Con{b, Nil{}}}:
           SSwapDb{a, b}
         case _:
           s_arity("swapdb")
-    case 52n:  # MOVE
+    case 112n:  # MOVE
       match args:
         case Con{k, Con{d, Nil{}}}:
           SMove{k, d}
@@ -1760,8 +1910,8 @@ def parse_sess(id: Nat, name: String, args: List<&2, String>) -> SessOp:
     case _:
       SBad{RError{no_newlines("ERR unknown command '" ++ String.take(name, 128n) ++ "', with args beginning with: " ++ unknown.args(args, ""))}}
 
-# a command of number id: from 40 on, a command of the connection, of the
-# server or of several databases (parse_sess)
+# a command of number id: from 100 on, a command of the connection, of
+# the server or of several databases (parse_sess)
 def parse_of(own: Bool, +id: Nat, name: String, args: List<&2, String>) -> Cmd:
   match own:
     case True{}:
@@ -1772,7 +1922,7 @@ def parse_of(own: Bool, +id: Nat, name: String, args: List<&2, String>) -> Cmd:
 def parse_named(+name: String, args: List<&2, String>) -> Cmd:
   +up = String.to_upper(name)
   +id = cmd_id(up, String.length(up))
-  parse_of(Nat.is_le(40n, id), id, name, args)
+  parse_of(Nat.is_le(100n, id), id, name, args)
 
 def parse(args: List<&2, String>) -> Cmd:
   match args:
@@ -1875,32 +2025,46 @@ def stat.top(+id: Nat) -> Nat:
       35n
     case 36n:
       36n
-    case 40n:
+    case 37n:
       37n
-    case 41n:
+    case 38n:
       38n
-    case 42n:
+    case 39n:
       39n
-    case 43n:
+    case 40n:
       40n
-    case 44n:
+    case 41n:
       41n
-    case 45n:
+    case 42n:
       42n
-    case 46n:
+    case 43n:
       43n
-    case 47n:
+    case 100n:
       44n
-    case 48n:
+    case 101n:
       45n
-    case 49n:
+    case 102n:
       46n
-    case 50n:
+    case 103n:
       47n
-    case 51n:
+    case 104n:
       48n
-    case 52n:
+    case 105n:
       49n
+    case 106n:
+      50n
+    case 107n:
+      51n
+    case 108n:
+      52n
+    case 109n:
+      53n
+    case 110n:
+      54n
+    case 111n:
+      55n
+    case 112n:
+      56n
     case _:
       0n
 
@@ -1908,25 +2072,25 @@ def stat.top(+id: Nat) -> Nat:
 def stat.sub.client(+sub: Nat) -> Nat:
   match sub:
     case 1n:
-      50n
-    case 2n:
-      51n
-    case 3n:
-      52n
-    case 4n:
-      53n
-    case 5n:
-      54n
-    case 6n:
-      55n
-    case 7n:
-      56n
-    case 8n:
       57n
-    case 9n:
+    case 2n:
       58n
-    case 10n:
+    case 3n:
       59n
+    case 4n:
+      60n
+    case 5n:
+      61n
+    case 6n:
+      62n
+    case 7n:
+      63n
+    case 8n:
+      64n
+    case 9n:
+      65n
+    case 10n:
+      66n
     case _:
       0n
 
@@ -1934,9 +2098,9 @@ def stat.sub.client(+sub: Nat) -> Nat:
 def stat.sub.function(+sub: Nat) -> Nat:
   match sub:
     case 1n:
-      60n
+      67n
     case 2n:
-      61n
+      68n
     case _:
       0n
 
@@ -1944,15 +2108,15 @@ def stat.sub.function(+sub: Nat) -> Nat:
 def stat.sub.config(+sub: Nat) -> Nat:
   match sub:
     case 1n:
-      62n
+      69n
     case 2n:
-      63n
+      70n
     case 3n:
-      64n
+      71n
     case 4n:
-      65n
+      72n
     case 5n:
-      66n
+      73n
     case _:
       0n
 
@@ -1960,19 +2124,19 @@ def stat.sub.config(+sub: Nat) -> Nat:
 def stat.sub.command(+sub: Nat) -> Nat:
   match sub:
     case 1n:
-      67n
+      74n
     case 2n:
-      68n
+      75n
     case 3n:
-      69n
+      76n
     case 4n:
-      70n
+      77n
     case 5n:
-      71n
+      78n
     case 6n:
-      72n
+      79n
     case 7n:
-      73n
+      80n
     case _:
       0n
 
@@ -2052,78 +2216,92 @@ def stat.name(+key: Nat) -> String:
     case 36n:
       "persist"
     case 37n:
-      "select"
+      "getrange"
     case 38n:
-      "hello"
+      "substr"
     case 39n:
-      "auth"
+      "setrange"
     case 40n:
-      "quit"
+      "getbit"
     case 41n:
-      "reset"
+      "setbit"
     case 42n:
-      "client"
+      "bitcount"
     case 43n:
-      "function"
+      "bitpos"
     case 44n:
-      "config"
+      "select"
     case 45n:
-      "info"
+      "hello"
     case 46n:
-      "command"
+      "auth"
     case 47n:
-      "randomkey"
+      "quit"
     case 48n:
-      "swapdb"
+      "reset"
     case 49n:
-      "move"
+      "client"
     case 50n:
-      "client|id"
+      "function"
     case 51n:
-      "client|help"
+      "config"
     case 52n:
-      "client|reply"
+      "info"
     case 53n:
-      "client|getname"
+      "command"
     case 54n:
-      "client|setname"
+      "randomkey"
     case 55n:
-      "client|caching"
+      "swapdb"
     case 56n:
-      "client|unblock"
+      "move"
     case 57n:
-      "client|getredir"
+      "client|id"
     case 58n:
-      "client|no-evict"
+      "client|help"
     case 59n:
-      "client|trackinginfo"
+      "client|reply"
     case 60n:
-      "function|flush"
+      "client|getname"
     case 61n:
-      "function|help"
+      "client|setname"
     case 62n:
-      "config|get"
+      "client|caching"
     case 63n:
-      "config|set"
+      "client|unblock"
     case 64n:
-      "config|resetstat"
+      "client|getredir"
     case 65n:
-      "config|rewrite"
+      "client|no-evict"
     case 66n:
-      "config|help"
+      "client|trackinginfo"
     case 67n:
-      "command|info"
+      "function|flush"
     case 68n:
-      "command|docs"
+      "function|help"
     case 69n:
-      "command|list"
+      "config|get"
     case 70n:
-      "command|help"
+      "config|set"
     case 71n:
-      "command|count"
+      "config|resetstat"
     case 72n:
-      "command|getkeys"
+      "config|rewrite"
     case 73n:
+      "config|help"
+    case 74n:
+      "command|info"
+    case 75n:
+      "command|docs"
+    case 76n:
+      "command|list"
+    case 77n:
+      "command|help"
+    case 78n:
+      "command|count"
+    case 79n:
+      "command|getkeys"
+    case 80n:
       "command|getkeysandflags"
     case _:
       ""
@@ -2205,78 +2383,92 @@ def stat.arity(+key: Nat) -> Nat:
     case 36n:
       4n
     case 37n:
-      4n
+      8n
     case 38n:
-      3n
+      8n
     case 39n:
-      5n
+      8n
     case 40n:
-      3n
+      6n
     case 41n:
-      2n
+      8n
     case 42n:
       5n
     case 43n:
-      5n
+      7n
     case 44n:
-      5n
+      4n
     case 45n:
       3n
     case 46n:
-      3n
+      5n
     case 47n:
-      2n
+      3n
     case 48n:
-      6n
+      2n
     case 49n:
-      6n
+      5n
     case 50n:
-      4n
+      5n
     case 51n:
-      4n
+      5n
     case 52n:
-      6n
+      3n
     case 53n:
-      4n
+      3n
     case 54n:
-      6n
+      2n
     case 55n:
       6n
     case 56n:
-      7n
+      6n
     case 57n:
       4n
     case 58n:
-      6n
+      4n
     case 59n:
-      4n
+      6n
     case 60n:
-      5n
-    case 61n:
       4n
+    case 61n:
+      6n
     case 62n:
-      7n
+      6n
     case 63n:
-      9n
+      7n
     case 64n:
       4n
     case 65n:
-      4n
+      6n
     case 66n:
       4n
     case 67n:
       5n
     case 68n:
-      5n
-    case 69n:
-      5n
-    case 70n:
       4n
+    case 69n:
+      7n
+    case 70n:
+      9n
     case 71n:
       4n
     case 72n:
-      9n
+      4n
     case 73n:
+      4n
+    case 74n:
+      5n
+    case 75n:
+      5n
+    case 76n:
+      5n
+    case 77n:
+      4n
+    case 78n:
+      4n
+    case 79n:
+      9n
+    case 80n:
       9n
     case _:
       1n
@@ -2301,6 +2493,12 @@ def stat.risky(+key: Nat) -> Bool:
     case 28n:
       True{}
     case 29n:
+      True{}
+    case 39n:
+      True{}
+    case 42n:
+      True{}
+    case 43n:
       True{}
     case _:
       False{}
@@ -2900,6 +3098,62 @@ def stat.cw(+code: Nat) -> U32:
       1385
     case 295n:
       1386
+    case 296n:
+      1388
+    case 297n:
+      1393
+    case 298n:
+      1394
+    case 299n:
+      1396
+    case 300n:
+      1400
+    case 301n:
+      1415
+    case 302n:
+      1419
+    case 303n:
+      1421
+    case 304n:
+      1422
+    case 305n:
+      1427
+    case 306n:
+      1429
+    case 307n:
+      1430
+    case 308n:
+      1433
+    case 309n:
+      1434
+    case 310n:
+      1436
+    case 311n:
+      1443
+    case 312n:
+      1445
+    case 313n:
+      1446
+    case 314n:
+      1449
+    case 315n:
+      1450
+    case 316n:
+      1452
+    case 317n:
+      1457
+    case 318n:
+      1458
+    case 319n:
+      1460
+    case 320n:
+      1464
+    case 321n:
+      1475
+    case 322n:
+      1477
+    case 323n:
+      1478
     case _:
       63
 
@@ -3498,6 +3752,62 @@ def stat.code.cw(+w: Nat) -> Nat:
       294n
     case 1386n:
       295n
+    case 1388n:
+      296n
+    case 1393n:
+      297n
+    case 1394n:
+      298n
+    case 1396n:
+      299n
+    case 1400n:
+      300n
+    case 1415n:
+      301n
+    case 1419n:
+      302n
+    case 1421n:
+      303n
+    case 1422n:
+      304n
+    case 1427n:
+      305n
+    case 1429n:
+      306n
+    case 1430n:
+      307n
+    case 1433n:
+      308n
+    case 1434n:
+      309n
+    case 1436n:
+      310n
+    case 1443n:
+      311n
+    case 1445n:
+      312n
+    case 1446n:
+      313n
+    case 1449n:
+      314n
+    case 1450n:
+      315n
+    case 1452n:
+      316n
+    case 1457n:
+      317n
+    case 1458n:
+      318n
+    case 1460n:
+      319n
+    case 1464n:
+      320n
+    case 1475n:
+      321n
+    case 1477n:
+      322n
+    case 1478n:
+      323n
     case _:
       0n
 
@@ -3517,11 +3827,11 @@ def stat.mark.incr() -> U32:
 # alone, the container itself (top)
 def stat.sub.of(id: Nat, +up: String) -> Nat:
   match id:
-    case 45n:
+    case 105n:
       stat.sub.client(client_id(up, String.length(up)))
-    case 46n:
+    case 106n:
       stat.sub.function(function_id(up, String.length(up)))
-    case 47n:
+    case 107n:
       stat.sub.config(config_id(up, String.length(up)))
     case _:
       stat.sub.command(command_id(up, String.length(up)))
@@ -3536,14 +3846,14 @@ def stat.key.args(top: Nat, id: Nat, +args: List<&2, String>) -> Nat:
 # the key of a command of number id with these arguments
 def stat.key(+id: Nat, +args: List<&2, String>) -> Nat:
   match id:
-    case 45n:
-      stat.key.args(stat.top(45n), 45n, args)
-    case 46n:
-      stat.key.args(stat.top(46n), 46n, args)
-    case 47n:
-      stat.key.args(stat.top(47n), 47n, args)
-    case 49n:
-      stat.key.args(stat.top(49n), 49n, args)
+    case 105n:
+      stat.key.args(stat.top(105n), 105n, args)
+    case 106n:
+      stat.key.args(stat.top(106n), 106n, args)
+    case 107n:
+      stat.key.args(stat.top(107n), 107n, args)
+    case 109n:
+      stat.key.args(stat.top(109n), 109n, args)
     case _:
       stat.top(id)
 
@@ -4273,6 +4583,321 @@ def ttl.of(ms: Bool, abs: Bool, +now: Nat, m: Maybe<&2, KV.Item<String>>) -> Rep
     case None{}:
       RInt{INeg{1n}}
 
+# Ranges
+# ------
+# GETRANGE, BITCOUNT and BITPOS take a range: from start to end, both
+# counted from the end when below 0 (-1 the last), then cut to the value
+# (its bytes, or its bits for BIT). A number of the range is a long long;
+# one past 2^40, more than any value's length in bits, acts as 2^40
+# would, so each is kept as a place: 2^41 plus the number, a Nat.
+
+def rg.off() -> Nat:
+  Nat.mul(2097152n, 1048576n)
+
+def rg.big() -> Nat:
+  Nat.mul(1048576n, 1048576n)
+
+# a magnitude hi * 10^9 + lo, at most 2^40: a def, so that the product is
+# made only when it may fit (small: hi below 1100)
+def rg.mag(small: Bool, +hi: Nat, +lo: Nat) -> Nat:
+  match small:
+    case True{}:
+      Nat.min(Nat.add(Nat.mul(hi, 1000000000n), lo), rg.big())
+    case False{}:
+      rg.big()
+
+# a long long's place
+def rg.place(l: LL) -> Nat:
+  match l:
+    case LL{+neg, +hi, +lo}:
+      +m = rg.mag(Nat.is_lt(hi, 1100n), hi, lo)
+      Bool.pick(Nat, neg, Nat.sub(rg.off(), m), Nat.add(rg.off(), m))
+    case LLBad{}:
+      rg.off()
+
+# whether a start and an end are both below 0, the start after the end:
+# GETRANGE and BITCOUNT then answer an empty range at once
+def rg.flip(+a: LL, +b: LL) -> Bool:
+  match a b:
+    case LL{+na, +ha, +la} LL{+nb, +hb, +lb}:
+      Bool.and(Bool.and(na, nb), Bool.not(ll.le(hb, lb, ha, la)))
+    case _ _:
+      False{}
+
+# a place below 0 counted from the end of n units, then 0 at least
+def rg.from(+p: Nat, +n: Nat) -> Nat:
+  Nat.max(Bool.pick(Nat, Nat.is_lt(p, rg.off()), Nat.add(p, n), p), rg.off())
+
+# a range cut to a value: its first and last index
+type Span is Data:
+  Span{i: Nat, j: Nat}
+
+# the range from place s to place e, of n units, or none when it is empty
+def rg.cut(+s: Nat, +e: Nat, +n: Nat) -> Maybe<&2, Span>:
+  +a = rg.from(s, n)
+  +b = Nat.min(rg.from(e, n), Nat.sub(Nat.add(rg.off(), n), 1n))
+  Bool.pick(Maybe<&2, Span>, Nat.is_le(a, b), Some{Span{Nat.sub(a, rg.off()), Nat.sub(b, rg.off())}}, None{})
+
+# BYTE or BIT, as a range's unit (none: BYTE); None for another word
+def rg.unit(u: Maybe<&2, String>) -> Maybe<&2, Bool>:
+  match u:
+    case Some{+w}:
+      Bool.pick(Maybe<&2, Bool>, is_word(w, "BIT"), Some{True{}}, Bool.pick(Maybe<&2, Bool>, is_word(w, "BYTE"), Some{False{}}, None{}))
+    case None{}:
+      Some{False{}}
+
+def r_syntax() -> Reply:
+  RError{"ERR syntax error"}
+
+def r_neg1() -> Reply:
+  RInt{INeg{0n}}
+
+# the byte at index i of w, 0 past its end
+def byte.at(+w: String, +i: Nat) -> U32:
+  +x = String.code_at(w, i)
+  Bool.pick(U32, U32.is_eq(x, 4294967295), 0, x)
+
+# the bits set in a byte
+def pop8(+x: U32) -> Nat:
+  +a = U32.sub(x, U32.and(U32.shr(x), 85))
+  +b = U32.add(U32.and(a, 51), U32.and(U32.shrn(a, 2n), 51))
+  U32.to_nat(U32.and(U32.add(b, U32.shrn(b, 4n)), 15))
+
+# the bits set in the bytes of s, after acc
+def pop.go(+s: String, +acc: Nat) -> Nat:
+  match s:
+    case SNil{}:
+      acc
+    case SCon{Chr{+x}, t}:
+      pop.go(t, Nat.add(acc, pop8(x)))
+
+# the bits of a byte before its bit k, and after it (bit 0 is the high
+# one, as Redis numbers the bits of a value)
+def mask.before(+k: Nat) -> U32:
+  U32.and(U32.not(U32.sub(U32.shln(1, Nat.sub(8n, k)), 1)), 255)
+
+def mask.after(+k: Nat) -> U32:
+  U32.sub(U32.shln(1, Nat.sub(7n, k)), 1)
+
+# GETRANGE of a value w
+def getrange.cut(+w: String, r: Maybe<&2, Span>) -> Reply:
+  match r:
+    case Some{Span{+i, +j}}:
+      RBulk{String.slice(w, i, Nat.add(Nat.sub(j, i), 1n))}
+    case None{}:
+      RBulk{""}
+
+def getrange.of(+w: String, +a: LL, +b: LL) -> Reply:
+  Bool.pick(Reply, rg.flip(a, b), RBulk{""}, getrange.cut(w, rg.cut(rg.place(a), rg.place(b), String.length(w))))
+
+def getrange.args(+w: String, args: List<&2, String>) -> Reply:
+  match args:
+    case Con{+a, Con{+b, Nil{}}}:
+      getrange.of(w, ll.read(a), ll.read(b))
+    case _:
+      RBulk{""}
+
+# GETBIT of a value w
+def getbit.of(+w: String, +off: Nat) -> Reply:
+  r_int(U32.to_nat(U32.and(U32.shrn(byte.at(w, Nat.div(off, 8n)), Nat.sub(7n, Nat.mod(off, 8n))), 1)))
+
+# BITCOUNT of a value w: the bits set from index i to j, of its bytes, or
+# of its bits (the bytes they are in, less the bits of the first before
+# i and of the last after j)
+def bitcount.in(+w: String, +bit: Bool, +i: Nat, +j: Nat) -> Reply:
+  +bi = Bool.pick(Nat, bit, Nat.div(i, 8n), i)
+  +bj = Bool.pick(Nat, bit, Nat.div(j, 8n), j)
+  +all = pop.go(String.slice(w, bi, Nat.add(Nat.sub(bj, bi), 1n)), 0n)
+  +lead = Bool.pick(U32, bit, mask.before(Nat.mod(i, 8n)), 0)
+  +tail = Bool.pick(U32, bit, mask.after(Nat.mod(j, 8n)), 0)
+  r_int(Nat.sub(Nat.sub(all, pop8(U32.and(byte.at(w, bi), lead))), pop8(U32.and(byte.at(w, bj), tail))))
+
+def bitcount.cut(+w: String, +bit: Bool, r: Maybe<&2, Span>) -> Reply:
+  match r:
+    case Some{Span{+i, +j}}:
+      bitcount.in(w, bit, i, j)
+    case None{}:
+      r_int(0n)
+
+def bitcount.unit(+w: String, +s: Nat, +e: Nat, u: Maybe<&2, Bool>) -> Reply:
+  match u:
+    case Some{+bit}:
+      +n = String.length(w)
+      bitcount.cut(w, bit, rg.cut(s, e, Bool.pick(Nat, bit, Nat.mul(n, 8n), n)))
+    case None{}:
+      r_syntax()
+
+# BITCOUNT key start end [unit]: the start and the end are read, then an
+# empty range of two numbers below 0 counts 0, then the unit is read
+def bitcount.rng(+w: String, a: LL, b: LL, u: Maybe<&2, String>) -> Reply:
+  match a b:
+    case LLBad{} _:
+      e_int()
+    case LL{na, ha, la} LLBad{}:
+      e_int()
+    case LL{+na, +ha, +la} LL{+nb, +hb, +lb}:
+      Bool.pick(Reply, rg.flip(LL{na, ha, la}, LL{nb, hb, lb}), r_int(0n),
+        bitcount.unit(w, rg.place(LL{na, ha, la}), rg.place(LL{nb, hb, lb}), rg.unit(u)))
+
+def bitcount.args(+w: String, args: List<&2, String>) -> Reply:
+  match args:
+    case Nil{}:
+      r_int(pop.go(w, 0n))
+    case Con{+a, Con{+b, Nil{}}}:
+      bitcount.rng(w, ll.read(a), ll.read(b), None{})
+    case Con{+a, Con{+b, Con{u, Nil{}}}}:
+      bitcount.rng(w, ll.read(a), ll.read(b), Some{u})
+    case _:
+      r_syntax()
+
+# BITPOS: the first bit of value bit in the bytes of s, the slice of a
+# value from byte q on: in byte bi the bits of fm, in byte bj those of lm,
+# are out of the range; r is what the bytes before found
+def bit.hi(+z: U32) -> Nat:
+  Bool.pick(Nat, U32.is_le(128, z), 0n, Bool.pick(Nat, U32.is_le(64, z), 1n, Bool.pick(Nat, U32.is_le(32, z), 2n,
+    Bool.pick(Nat, U32.is_le(16, z), 3n, Bool.pick(Nat, U32.is_le(8, z), 4n, Bool.pick(Nat, U32.is_le(4, z), 5n,
+    Bool.pick(Nat, U32.is_le(2, z), 6n, 7n)))))))
+
+# byte y at index q, when a bit of value bit is in it: where
+def bit.in(+y: U32, +bit: Bool, +q: Nat) -> Maybe<&2, Nat>:
+  +z = Bool.pick(U32, bit, y, U32.xor(y, 255))
+  Bool.pick(Maybe<&2, Nat>, U32.is_ne(z, 0), Some{Nat.add(Nat.mul(q, 8n), bit.hi(z))}, None{})
+
+def bit.scan(s: String, +bit: Bool, +q: Nat, +bi: Nat, +bj: Nat, +fm: U32, +lm: U32, r: Maybe<&2, Nat>) -> Maybe<&2, Nat>:
+  match s r:
+    case _ Some{p}:
+      Some{p}
+    case SNil{} None{}:
+      None{}
+    case SCon{Chr{+x}, t} None{}:
+      +m = U32.or(Bool.pick(U32, Nat.is_eq(q, bi), fm, 0), Bool.pick(U32, Nat.is_eq(q, bj), lm, 0))
+      bit.scan(t, bit, Nat.add(q, 1n), bi, bj, fm, lm, bit.in(Bool.pick(U32, bit, U32.and(x, U32.not(m)), U32.or(x, m)), bit, q))
+
+# the first bit of value bit in w from bit i to bit j
+def bit.first(+w: String, +bit: Bool, +i: Nat, +j: Nat) -> Maybe<&2, Nat>:
+  +bi = Nat.div(i, 8n)
+  +bj = Nat.div(j, 8n)
+  bit.scan(String.slice(w, bi, Nat.add(Nat.sub(bj, bi), 1n)), bit, bi, bi, bj, mask.before(Nat.mod(i, 8n)), mask.after(Nat.mod(j, 8n)), None{})
+
+# what BITPOS found: none is -1, but for a 0 sought in bytes with no end
+# given (pad), where the value counts as followed by 0s: the bit after
+# the range
+def bitpos.found(m: Maybe<&2, Nat>, +pad: Bool, +j: Nat) -> Reply:
+  match m:
+    case Some{p}:
+      r_int(p)
+    case None{}:
+      Bool.pick(Reply, pad, r_int(Nat.mul(Nat.add(j, 1n), 8n)), r_neg1())
+
+def bitpos.cut(+w: String, +bit: Bool, +isbit: Bool, +given: Bool, r: Maybe<&2, Span>) -> Reply:
+  match r:
+    case Some{Span{+i, +j}}:
+      bitpos.found(bit.first(w, bit, Bool.pick(Nat, isbit, i, Nat.mul(i, 8n)), Bool.pick(Nat, isbit, j, Nat.add(Nat.mul(j, 8n), 7n))),
+        Bool.and(Bool.not(bit), Bool.and(Bool.not(isbit), Bool.not(given))), j)
+    case None{}:
+      r_neg1()
+
+def bitpos.unit(+w: String, +bit: Bool, +s: Nat, +e: Nat, +given: Bool, u: Maybe<&2, Bool>) -> Reply:
+  match u:
+    case Some{+isbit}:
+      +n = String.length(w)
+      bitpos.cut(w, bit, isbit, given, rg.cut(s, e, Bool.pick(Nat, isbit, Nat.mul(n, 8n), n)))
+    case None{}:
+      r_syntax()
+
+def bitpos.ll(e: Maybe<&2, String>) -> Maybe<&2, LL>:
+  match e:
+    case Some{+x}:
+      Some{ll.read(x)}
+    case None{}:
+      None{}
+
+# BITPOS's end, read last: none is the value's last byte
+def bitpos.end(+w: String, +bit: Bool, +s: Nat, e: Maybe<&2, LL>, u: Maybe<&2, Bool>) -> Reply:
+  match e:
+    case Some{LL{+n, +h, +l}}:
+      bitpos.unit(w, bit, s, rg.place(LL{n, h, l}), True{}, u)
+    case Some{LLBad{}}:
+      e_int()
+    case None{}:
+      bitpos.unit(w, bit, s, Nat.sub(Nat.add(rg.off(), String.length(w)), 1n), False{}, u)
+
+# a unit given that is no unit is an error before the end is read
+def bitpos.unit.word(given: Bool, u: Maybe<&2, Bool>, +w: String, +bit: Bool, +s: Nat, e: Maybe<&2, String>) -> Reply:
+  match given u:
+    case True{} None{}:
+      r_syntax()
+    case _ _:
+      bitpos.end(w, bit, s, bitpos.ll(e), u)
+
+# BITPOS's start, read first, then the unit (when it is given), then the
+# end
+def bitpos.start(+w: String, +bit: Bool, a: LL, e: Maybe<&2, String>, +u: Maybe<&2, String>) -> Reply:
+  match a:
+    case LL{+n, +h, +l}:
+      +g = Maybe.is_some(&2, String, u)
+      bitpos.unit.word(g, rg.unit(u), w, bit, rg.place(LL{n, h, l}), e)
+    case LLBad{}:
+      e_int()
+
+def bitpos.args(+w: String, +bit: Bool, args: List<&2, String>) -> Reply:
+  match args:
+    case Nil{}:
+      bitpos.unit(w, bit, rg.off(), Nat.sub(Nat.add(rg.off(), String.length(w)), 1n), False{}, Some{False{}})
+    case Con{+a, Nil{}}:
+      bitpos.start(w, bit, ll.read(a), None{}, None{})
+    case Con{+a, Con{e, Nil{}}}:
+      bitpos.start(w, bit, ll.read(a), Some{e}, None{})
+    case Con{+a, Con{e, Con{u, Nil{}}}}:
+      bitpos.start(w, bit, ll.read(a), Some{e}, Some{u})
+    case _:
+      r_syntax()
+
+def bitpos.of(+w: String, args: List<&2, String>) -> Reply:
+  match args:
+    case Con{+b, rest}:
+      bitpos.args(w, String.eq(b, "1"), rest)
+    case Nil{}:
+      r_neg1()
+
+# BITPOS of a key that is not there: a value of 0s with no end
+def bitpos.none(args: List<&2, String>) -> Reply:
+  match args:
+    case Con{+b, rest}:
+      Bool.pick(Reply, String.eq(b, "1"), r_neg1(), r_int(0n))
+    case Nil{}:
+      r_neg1()
+
+# the reads of a range and of bits, of a key there or not (GETRANGE's
+# empty string, GETBIT's and BITCOUNT's 0, and BITPOS's in a value of 0s)
+def range.peek(args: List<&2, String>, m: Maybe<&2, KV.Item<String>>) -> Reply:
+  match m:
+    case Some{KV.Item{+w, e}}:
+      getrange.args(w, args)
+    case None{}:
+      RBulk{""}
+
+def getbit.peek(+off: Nat, m: Maybe<&2, KV.Item<String>>) -> Reply:
+  match m:
+    case Some{KV.Item{+w, e}}:
+      getbit.of(w, off)
+    case None{}:
+      r_int(0n)
+
+def bitcount.peek(args: List<&2, String>, m: Maybe<&2, KV.Item<String>>) -> Reply:
+  match m:
+    case Some{KV.Item{+w, e}}:
+      bitcount.args(w, args)
+    case None{}:
+      r_int(0n)
+
+def bitpos.peek(args: List<&2, String>, m: Maybe<&2, KV.Item<String>>) -> Reply:
+  match m:
+    case Some{KV.Item{+w, e}}:
+      bitpos.of(w, args)
+    case None{}:
+      bitpos.none(args)
+
 # the reply of a Peek, from the entry of its key there at now
 def peek(c: PeekOp, +now: Nat, m: Maybe<&2, KV.Item<String>>) -> Reply:
   match c:
@@ -4288,16 +4913,24 @@ def peek(c: PeekOp, +now: Nat, m: Maybe<&2, KV.Item<String>>) -> Reply:
       ttl.of(False{}, True{}, now, m)
     case PPExpTime{}:
       ttl.of(True{}, True{}, now, m)
+    case PRange{args}:
+      range.peek(args, m)
+    case PGetBit{+off}:
+      getbit.peek(off, m)
+    case PCount{args}:
+      bitcount.peek(args, m)
+    case PPos{args}:
+      bitpos.peek(args, m)
 
 # What a write of one key does to it: nothing, delete it, set its time
 # alone, set its value and its time (0: none), or set its value and keep
 # its time, for a key that is there (CKeepT; CApp for an APPEND of s,
-# which leaves v). An Upd's reply and change come from the key's entry
-# there at now alone. A time a change gives a key is one the key may keep
-# (KV.clamp: a time at or past the year 5138 is none), and a key without
-# a time is never given none again (exp.to): so the change the
-# append-only file logs for it (aof.bend) makes it again, on any
-# database.
+# CRange for a SETRANGE of s at offset off, each of which leaves v). An
+# Upd's reply and change come from the key's entry there at now alone. A
+# time a change gives a key is one the key may keep (KV.clamp: a time at
+# or past the year 5138 is none), and a key without a time is never given
+# none again (exp.to): so the change the append-only file logs for it
+# (aof.bend) makes it again, on any database.
 type Change is Data:
   CKeep{}
   CDel{}
@@ -4305,6 +4938,7 @@ type Change is Data:
   CPut{v: String, e: Nat}
   CKeepT{v: String}
   CApp{s: String, v: String}
+  CRange{off: Nat, s: String, v: String}
 
 type Out is Data:
   Out{r: Reply, ch: Change}
@@ -4502,6 +5136,111 @@ def persist.of(m: Maybe<&2, KV.Item<String>>) -> Out:
     case None{}:
       Out{r_int(0n), CKeep{}}
 
+# SETRANGE: s written at offset off of the value, which zero bytes pad
+# when it is shorter; the key keeps its time, and a key not there is made
+# with none. An empty s changes nothing (the reply is the value's length,
+# 0 for no key, and no key is made); a value that would pass 512MB
+# (proto-max-bulk-len) is an error (range.go; an offset of 14 digits or
+# more does). The offset is small (KV.small), so the append-only file
+# reads it back (aof.bend).
+def range.go(+off: Nat, +s: String) -> Bool:
+  Bool.and(Bool.not(String.is_empty(s)), Bool.and(KV.small(off), Nat.is_le(Nat.add(off, String.length(s)), 536870912n)))
+
+# n zero bytes: the halves made once and put together (f bounds the
+# depth; 64 is more than any n needs)
+def zeros.go(f: Nat, n: Nat) -> String:
+  match f n:
+    case _ 0n:
+      ""
+    case 0n _:
+      ""
+    case 1n+g 1n++p:
+      +h = zeros.go(g, Nat.div(1n+p, 2n))
+      Bool.pick(String, Nat.is_eq(Nat.mod(1n+p, 2n), 1n), SCon{Chr{0}, SNil{}}, "") ++ h ++ h
+
+def zeros(n: Nat) -> String:
+  zeros.go(64n, n)
+
+def range.put(+w: String, +off: Nat, +s: String) -> String:
+  String.take(w, off) ++ zeros(Nat.sub(off, String.length(w))) ++ s ++ String.drop(w, Nat.add(off, String.length(s)))
+
+def range.err() -> Reply:
+  RError{"ERR string exceeds maximum allowed size (proto-max-bulk-len)"}
+
+# of a key there, with value w: a def, so that the value is made only
+# when it may (ok)
+def range.some(ok: Bool, +off: Nat, +s: String, +w: String, +empty: Bool) -> Out:
+  match ok:
+    case True{}:
+      +v = range.put(w, off, s)
+      Out{r_int(String.length(v)), CRange{off, s, v}}
+    case False{}:
+      Out{Bool.pick(Reply, empty, r_int(String.length(w)), range.err()), CKeep{}}
+
+def range.none(ok: Bool, +off: Nat, +s: String, +empty: Bool) -> Out:
+  match ok:
+    case True{}:
+      +v = range.put("", off, s)
+      Out{r_int(String.length(v)), CPut{v, 0n}}
+    case False{}:
+      Out{Bool.pick(Reply, empty, r_int(0n), range.err()), CKeep{}}
+
+def range.of(+off: Nat, +s: String, m: Maybe<&2, KV.Item<String>>) -> Out:
+  match m:
+    case Some{KV.Item{+w, e}}:
+      range.some(range.go(off, s), off, s, w, String.is_empty(s))
+    case None{}:
+      range.none(range.go(off, s), off, s, String.is_empty(s))
+
+# SETBIT: the bit at offset off set to on; the reply is the bit it was. A
+# key not there is made, of zero bytes up to the bit's, as a value too
+# short grows to it: the change is the SETRANGE of the bit's new byte (an
+# offset below 2^32 is a byte's below 2^29, so it never fails). A bit
+# already so changes nothing.
+def bit.put(+x: U32, +sh: Nat, +on: Bool) -> U32:
+  Bool.pick(U32, on, U32.or(x, U32.shln(1, sh)), U32.and(x, U32.not(U32.shln(1, sh))))
+
+# the byte the bit at off is in, of a value w, and the bit's place in it
+# (7 for its high bit)
+def setbit.x(+off: Nat, +w: String) -> U32:
+  byte.at(w, Nat.div(off, 8n))
+
+def setbit.sh(+off: Nat) -> Nat:
+  Nat.sub(7n, Nat.mod(off, 8n))
+
+# the bit at off of w, the reply, and its byte x with the bit set to on
+def setbit.was(+off: Nat, +w: String) -> Bool:
+  U32.is_ne(U32.and(U32.shrn(setbit.x(off, w), setbit.sh(off)), 1), 0)
+
+def setbit.r(+off: Nat, +w: String) -> Reply:
+  r_int(Bool.pick(Nat, setbit.was(off, w), 1n, 0n))
+
+def setbit.byte(+off: Nat, +on: Bool, +x: U32) -> String:
+  SCon{Chr{bit.put(x, setbit.sh(off), on)}, SNil{}}
+
+# whether the bit is so already, in a value long enough
+def setbit.same(+off: Nat, +on: Bool, +w: String) -> Bool:
+  Bool.and(Nat.is_lt(Nat.div(off, 8n), String.length(w)), Bool.not(Bool.xor(setbit.was(off, w), on)))
+
+def setbit.out(+r: Reply, o: Out) -> Out:
+  match o:
+    case Out{x, ch}:
+      Out{r, ch}
+
+def setbit.some(same: Bool, +off: Nat, +on: Bool, +w: String, +e: Nat) -> Out:
+  match same:
+    case True{}:
+      Out{setbit.r(off, w), CKeep{}}
+    case False{}:
+      setbit.out(setbit.r(off, w), range.of(Nat.div(off, 8n), setbit.byte(off, on, setbit.x(off, w)), Some{KV.Item{w, e}}))
+
+def setbit.of(+off: Nat, +on: Bool, m: Maybe<&2, KV.Item<String>>) -> Out:
+  match m:
+    case Some{KV.Item{+w, +e}}:
+      setbit.some(setbit.same(off, on, w), off, on, w, e)
+    case None{}:
+      setbit.out(r_int(0n), range.of(Nat.div(off, 8n), setbit.byte(off, on, 0), None{}))
+
 def upd(op: UpdOp, +now: Nat, m: Maybe<&2, KV.Item<String>>) -> Out:
   match op:
     case USetNx{v}:
@@ -4524,6 +5263,10 @@ def upd(op: UpdOp, +now: Nat, m: Maybe<&2, KV.Item<String>>) -> Out:
       persist.of(m)
     case UIncr{+by}:
       uincr.of(by, m)
+    case URange{+off, +s}:
+      range.of(off, s, m)
+    case USetBit{+off, +on}:
+      setbit.of(off, on, m)
 
 # the change done to key k, whose code was c (a deleted key, or one whose
 # time alone changes, was there)
@@ -4540,6 +5283,8 @@ def upd.ch(t: KV.Trie<String>, +k: String, +h: U32, +n: Nat, +x: Nat, now: Nat, 
     case CKeepT{v}:
       (r, Db{KV.keep.at(String, t, k, v, h), cnt.n(c, n), x, now, rr})
     case CApp{s, v}:
+      (r, Db{KV.keep.at(String, t, k, v, h), cnt.n(c, n), x, now, rr})
+    case CRange{o, s, v}:
       (r, Db{KV.keep.at(String, t, k, v, h), cnt.n(c, n), x, now, rr})
 
 def upd.put(t: KV.Trie<String>, +k: String, +h: U32, +n: Nat, +x: Nat, now: Nat, rr: Maybe<&2, Db>, +c: Nat, o: Out) -> Reply & Db:

@@ -28,11 +28,12 @@ import ./batch.bend as B
 # and the time it expires at, when it does), PEXPIREAT for a time alone,
 # PERSIST for none, DEL for a key gone, SET with KEEPTTL for a value set
 # with the time kept (an INCRBY logs the SET of the sum, as Redis logs
-# INCRBYFLOAT), and APPEND again for an APPEND to a key that was there, so
-# that the file does not hold the whole value again. Every time is from
-# 1970, so the effects mean the same whenever they run, and a time is one
-# a key may keep, of 14 digits at most (KV.small): no number but such a
-# time, or a database's number, is ever read back from text.
+# INCRBYFLOAT), and APPEND or SETRANGE again for an APPEND or a SETRANGE
+# (or a SETBIT: the SETRANGE of its byte) to a key that was there, so that
+# the file does not hold the whole value again. Every time is from 1970,
+# so the effects mean the same whenever they run, and a time, or an
+# offset, is of 14 digits at most (KV.small): no number but such a time
+# or offset, or a database's number, is ever read back from text.
 
 # a key left with v and time e (0: none)
 def put.effect(+k: String, v: String, +e: Nat) -> List<&2, R.Cmd>:
@@ -79,6 +80,8 @@ def ch.effect(+k: String, +ch: R.Change) -> List<&2, R.Cmd>:
       [R.Upd{k, R.USet{v, 0n, R.TKeep{}, "set"}}]
     case R.CApp{+a, v}:
       [R.Upd{k, R.UAppend{a}}]
+    case R.CRange{+o, +a, v}:
+      [R.Upd{k, R.URange{o, a}}]
 
 def upd.effect(+k: String, +o: R.Out) -> List<&2, R.Cmd>:
   match o:
@@ -259,8 +262,8 @@ def pair_args(ps: List<&2, R.KVPair>) -> List<&2, String>:
       k <> v <> pair_args(rest)
 
 # the strings of an Upd an effect is: SET with PXAT or KEEPTTL,
-# PEXPIREAT, PERSIST, APPEND (a time is a TmN from 1970, written as
-# Nat.show writes it)
+# PEXPIREAT, PERSIST, APPEND, SETRANGE (a time is a TmN from 1970, written
+# as Nat.show writes it, as an offset is)
 def tm.arg(t: R.Tm) -> String:
   match t:
     case R.TmN{at, ms}:
@@ -287,6 +290,8 @@ def upd.args(+k: String, op: R.UpdOp) -> List<&2, String>:
       ["PERSIST", k]
     case R.UAppend{v}:
       ["APPEND", k, v]
+    case R.URange{o, s}:
+      ["SETRANGE", k, Nat.show(o), s]
     case _:
       Nil{}
 

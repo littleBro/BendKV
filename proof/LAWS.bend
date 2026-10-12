@@ -395,6 +395,22 @@ law getdel_effect:
   for  h: {there(db, k) == Some{KV.Item{v, e}} : Maybe<&2, KV.Item<String>>}
   {at_key(R.exec(R.Upd{k, R.UGetDel{}}, db), k) == (R.RBulk{v}, None{}) : R.Reply & Maybe<&2, KV.Item<String>>}
 
+# LAW: SETRANGE of a key there writes s at offset o, the value padded
+# with zero bytes when it is shorter, keeps the key's time and answers the
+# new length, when it changes the key (R.range.go: s is not empty, and the
+# value stays within 512MB; SETBIT's change is such a SETRANGE, of its
+# byte)
+law setrange_effect:
+  for +db: R.Db
+  for +k: String
+  for +o: Nat
+  for +s: String
+  for +w: String
+  for +e: Nat
+  for  h: {there(db, k) == Some{KV.Item{w, e}} : Maybe<&2, KV.Item<String>>}
+  for  ok: {R.range.go(o, s) == True{} : Bool}
+  {at_key(R.exec(R.Upd{k, R.URange{o, s}}, db), k) == (R.r_int(String.length(R.range.put(w, o, s))), Some{KV.Item{R.range.put(w, o, s), e}}) : R.Reply & Maybe<&2, KV.Item<String>>}
+
 # LAW: the sweep of expired keys deletes no key that is there: the
 # server sweeps with DEL of the keys R.reap.keys keeps of those its scan
 # found, whatever the scan found

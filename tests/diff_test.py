@@ -8,7 +8,10 @@ and command semantics are all exercised.
 
 The stream moves between databases 0 to 3 (SELECT), moves keys between
 them (MOVE), swaps them (SWAPDB) and empties one (FLUSHDB) or all
-(FLUSHALL), with bad numbers among them.
+(FLUSHALL), with bad numbers among them. Ranges and bits (GETRANGE,
+SETRANGE, GETBIT, SETBIT, BITCOUNT, BITPOS) take small offsets, and now
+and then wrong or huge ones, but never one that would make a value near
+512MB.
 
 Known, documented divergences that the generator avoids: BendKV's
 integers have at most 14 digits (Redis allows int64), and so have its
@@ -209,6 +212,49 @@ def rnd_db(r):
                      b"2147483648", b"-2147483649", b"99999999999999999999"])
 
 
+# a number of a range (GETRANGE, BITCOUNT, BITPOS): mostly small, about
+# the values' lengths, below 0 too; now and then a big one or no number
+def rnd_index(r):
+    if r.random() < 0.85:
+        return str(r.randint(-25, 25)).encode()
+    return r.choice([b"x", b"", b"1.5", b"+1", b"01", b"-0", b"9223372036854775807", b"-9223372036854775808",
+                     b"9223372036854775808", b"99999999999999999999", b"1099511627777", b"-1099511627777",
+                     b"4294967296", b"-4294967296"])
+
+
+# BITCOUNT's and BITPOS's range, with a unit now and then, or too many
+# arguments
+def rnd_range(r):
+    c = r.random()
+    if c < 0.25:
+        return []
+    if c < 0.35:
+        return [rnd_index(r)]
+    if c < 0.65:
+        return [rnd_index(r), rnd_index(r)]
+    if c < 0.95:
+        return [rnd_index(r), rnd_index(r), r.choice([b"BIT", b"BYTE", b"bit", b"Byte", b"bits", b""])]
+    return [rnd_index(r), rnd_index(r), b"BIT", b"x"]
+
+
+# SETRANGE's offset: small, so that no value grows big (an offset near
+# 512MB with a value would make one that size in both servers); now and
+# then one past 512MB, below 0, or no number
+def rnd_offset(r):
+    if r.random() < 0.9:
+        return str(r.randint(0, 40)).encode()
+    return r.choice([b"-1", b"x", b"", b"536870912", b"100000000000000", b"9223372036854775807",
+                     b"99999999999999999999", b"01", b"+3", b"-0"])
+
+
+# a bit's offset, small for the same reason (a read may go far)
+def rnd_bitoff(r, read=False):
+    if r.random() < 0.9:
+        return str(r.randint(0, 200)).encode()
+    return r.choice([b"-1", b"x", b"4294967296", b"", b"01", b"99999999999999999999"] +
+                    ([b"4294967295", b"100000"] if read else []))
+
+
 def rnd_cmd(r):
     k = lambda: r.choice(KEYS)
     ks = lambda: [k() for _ in range(r.randint(1, 4))]
@@ -258,6 +304,14 @@ def rnd_cmd(r):
         (0.02, lambda: [b"PERSIST", k()]),
         (0.01, lambda: [r.choice([b"SETEX", b"PSETEX", b"GETEX", b"GETDEL", b"EXPIRE", b"TTL", b"PERSIST"])] +
                        [k() for _ in range(r.choice([0, 3, 4]))]),
+        (0.03, lambda: [r.choice([b"GETRANGE", b"SUBSTR", b"getrange"]), k(), rnd_index(r), rnd_index(r)]),
+        (0.03, lambda: [b"SETRANGE", k(), rnd_offset(r), rnd_value(r)]),
+        (0.02, lambda: [b"GETBIT", k(), rnd_bitoff(r, True)]),
+        (0.03, lambda: [b"SETBIT", k(), rnd_bitoff(r), r.choice([b"0", b"1", b"1", b"0", b"2", b"x", b"-1", b"01"])]),
+        (0.03, lambda: [b"BITCOUNT", k()] + rnd_range(r)),
+        (0.03, lambda: [b"BITPOS", k(), r.choice([b"0", b"1", b"1", b"0", b"2", b"x", b"-1"])] + rnd_range(r)),
+        (0.005, lambda: [r.choice([b"GETRANGE", b"SUBSTR", b"SETRANGE", b"GETBIT", b"SETBIT", b"BITCOUNT", b"BITPOS"])] +
+                        [k() for _ in range(r.choice([0, 1, 2]))]),
     ]
     c *= sum(p for p, f in table)
     acc = 0.0

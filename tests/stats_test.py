@@ -13,8 +13,9 @@ them; a pipeline over 64 KB (counted a request at a time); calls refused
 before they run (a wrong number of arguments by the command's arity,
 NOAUTH), unknown commands and subcommands (errorstats only), calls that
 fail as they run (INCR of a string; PING with two arguments and MSET with
-a key and no value, which pass the arity and fail in the command) or as
-they parse (a syntax error, SCAN's invalid cursor); errors with codes
+a key and no value, which pass the arity and fail in the command;
+SETRANGE past 512MB, BITCOUNT and BITPOS reading their ranges) or as
+they parse (a syntax error, SCAN's invalid cursor, GETRANGE's range); errors with codes
 other than ERR (WRONGPASS, NOAUTH); calls while CLIENT REPLY holds
 replies back (counted all the same); commands after a QUIT (dropped); a
 protocol error (counted, then the connection closes); and random
@@ -140,6 +141,9 @@ def one_at_a_time(c, port):
                  ["PING"], ["PING", "x"], ["ECHO", "e"], ["CLIENT", "ID"], ["CLIENT", "SETNAME", "nm"],
                  ["CLIENT", "GETNAME"], ["CONFIG", "GET", "maxmemory"], ["COMMAND", "COUNT"], ["SELECT", "0"],
                  ["SCAN", "0"], ["SCAN", "0", "MATCH", "a*", "COUNT", "5", "TYPE", "string"], ["RANDOMKEY"],
+                 ["GETRANGE", "k", "0", "-1"], ["SUBSTR", "k", "1", "2"], ["SETRANGE", "k", "2", "xy"],
+                 ["GETBIT", "k", "3"], ["SETBIT", "k", "3", "1"], ["BITCOUNT", "k"], ["BITCOUNT", "k", "0", "-1", "BIT"],
+                 ["BITPOS", "k", "1"], ["BITPOS", "k", "0", "1", "-1"],
                  ["FLUSHDB"], ["RANDOMKEY"], ["FLUSHALL"]):
         r = c.ask(*args)
         out.append(r if args[0] not in ("CLIENT", "COMMAND", "CONFIG", "DBSIZE", "KEYS", "SCAN", "RANDOMKEY")
@@ -157,7 +161,12 @@ def errors_at_a_time(c, port):
                  ["AUTH", "u", "pw"], ["ECHO"], ["PING", "a", "b"], ["MSET", "a"], ["MGET"], ["DEL"],
                  ["CLIENT", "REPLY", "MAYBE"], ["FUNCTION", "FLUSH", "NOW"], ["HELLO", "4"], ["SCAN"],
                  ["SCAN", "x"], ["SCAN", "0", "COUNT", "0"], ["SCAN", "0", "COUNT", "x"], ["SCAN", "0", "FOO"],
-                 ["SCAN", "0", "MATCH"], ["RANDOMKEY", "x"]):
+                 ["SCAN", "0", "MATCH"], ["RANDOMKEY", "x"], ["GETRANGE", "s", "x", "1"], ["GETRANGE", "s"],
+                 ["SETRANGE", "s", "-1", "a"], ["SETRANGE", "s", "536870912", "a"], ["SETRANGE", "s", "x", "a"],
+                 ["GETBIT", "s", "-1"], ["SETBIT", "s", "1", "2"], ["SETBIT", "s", "x", "1"], ["BITCOUNT", "s", "0"],
+                 ["BITCOUNT", "s", "x", "1"], ["BITCOUNT", "s", "0", "1", "foo"], ["BITCOUNT", "nokey", "x", "y"],
+                 ["BITPOS", "s", "2"], ["BITPOS", "s", "x"], ["BITPOS", "s", "1", "x"], ["BITPOS", "s", "1", "0", "1", "foo"],
+                 ["BITPOS", "nokey", "1", "x"], ["BITPOS", "s"]):
         out.append(c.ask(*args))
     return out
 
@@ -239,7 +248,9 @@ def random_pipelines(rounds, seed):
             ["CLIENT", "NOSUCH"], ["CONFIG", "GET"], ["SET", "k", "v", "foo"], ["APPEND", "k", "x"],
             ["SELECT", "1"], ["EXISTS", "k"], ["STRLEN", "k"], ["SET", "n", "1"], ["TYPE", "k"],
             ["SCAN", "0", "COUNT", "1000", "MATCH", "nomatch"], ["SCAN", "x"], ["SCAN", "0", "COUNT", "0"],
-            ["RANDOMKEY"], ["RANDOMKEY", "x"]]
+            ["RANDOMKEY"], ["RANDOMKEY", "x"], ["SETRANGE", "k", "1", "z"], ["SETRANGE", "k", "536870912", "z"],
+            ["BITCOUNT", "k", "x", "1"], ["BITCOUNT", "k"], ["BITPOS", "k", "1", "0", "-1", "x"], ["GETBIT", "k", "1"],
+            ["SETBIT", "n", "0", "1"], ["GETRANGE", "k", "x", "0"]]
 
     def case(c, port):
         rnd = random.Random(seed)
