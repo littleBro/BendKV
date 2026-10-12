@@ -4404,6 +4404,407 @@
     []
    ]
   },
+  "object": {
+   "docs": [
+    "summary",
+    "A container for object introspection commands",
+    "since",
+    "2.2.3",
+    "group",
+    "generic",
+    "complexity",
+    "Depends on subcommand.",
+    "subcommands",
+    [
+     "object|encoding",
+     [
+      "summary",
+      "Inspect the internal encoding of a Redis object",
+      "since",
+      "2.2.3",
+      "group",
+      "generic",
+      "complexity",
+      "O(1)",
+      "arguments",
+      [
+       [
+        "name",
+        "key",
+        "type",
+        "key",
+        "key_spec_index",
+        0
+       ]
+      ]
+     ],
+     "object|freq",
+     [
+      "summary",
+      "Get the logarithmic access frequency counter of a Redis object",
+      "since",
+      "4.0.0",
+      "group",
+      "generic",
+      "complexity",
+      "O(1)",
+      "arguments",
+      [
+       [
+        "name",
+        "key",
+        "type",
+        "key",
+        "key_spec_index",
+        0
+       ]
+      ]
+     ],
+     "object|help",
+     [
+      "summary",
+      "Show helpful text about the different subcommands",
+      "since",
+      "6.2.0",
+      "group",
+      "generic",
+      "complexity",
+      "O(1)"
+     ],
+     "object|idletime",
+     [
+      "summary",
+      "Get the time since a Redis object was last accessed",
+      "since",
+      "2.2.3",
+      "group",
+      "generic",
+      "complexity",
+      "O(1)",
+      "arguments",
+      [
+       [
+        "name",
+        "key",
+        "type",
+        "key",
+        "key_spec_index",
+        0
+       ]
+      ]
+     ],
+     "object|refcount",
+     [
+      "summary",
+      "Get the number of references to the value of the key",
+      "since",
+      "2.2.3",
+      "group",
+      "generic",
+      "complexity",
+      "O(1)",
+      "arguments",
+      [
+       [
+        "name",
+        "key",
+        "type",
+        "key",
+        "key_spec_index",
+        0
+       ]
+      ]
+     ]
+    ]
+   ],
+   "info": [
+    "object",
+    -2,
+    [],
+    0,
+    0,
+    0,
+    [
+     {
+      "+": "@slow"
+     }
+    ],
+    [],
+    [],
+    [
+     [
+      "object|encoding",
+      3,
+      [
+       {
+        "+": "readonly"
+       }
+      ],
+      2,
+      2,
+      1,
+      [
+       {
+        "+": "@keyspace"
+       },
+       {
+        "+": "@read"
+       },
+       {
+        "+": "@slow"
+       }
+      ],
+      [
+       "nondeterministic_output"
+      ],
+      [
+       [
+        "flags",
+        [
+         {
+          "+": "RO"
+         }
+        ],
+        "begin_search",
+        [
+         "type",
+         "index",
+         "spec",
+         [
+          "index",
+          2
+         ]
+        ],
+        "find_keys",
+        [
+         "type",
+         "range",
+         "spec",
+         [
+          "lastkey",
+          0,
+          "keystep",
+          1,
+          "limit",
+          0
+         ]
+        ]
+       ]
+      ],
+      []
+     ],
+     [
+      "object|freq",
+      3,
+      [
+       {
+        "+": "readonly"
+       }
+      ],
+      2,
+      2,
+      1,
+      [
+       {
+        "+": "@keyspace"
+       },
+       {
+        "+": "@read"
+       },
+       {
+        "+": "@slow"
+       }
+      ],
+      [
+       "nondeterministic_output"
+      ],
+      [
+       [
+        "flags",
+        [
+         {
+          "+": "RO"
+         }
+        ],
+        "begin_search",
+        [
+         "type",
+         "index",
+         "spec",
+         [
+          "index",
+          2
+         ]
+        ],
+        "find_keys",
+        [
+         "type",
+         "range",
+         "spec",
+         [
+          "lastkey",
+          0,
+          "keystep",
+          1,
+          "limit",
+          0
+         ]
+        ]
+       ]
+      ],
+      []
+     ],
+     [
+      "object|help",
+      2,
+      [
+       {
+        "+": "loading"
+       },
+       {
+        "+": "stale"
+       }
+      ],
+      0,
+      0,
+      0,
+      [
+       {
+        "+": "@keyspace"
+       },
+       {
+        "+": "@slow"
+       }
+      ],
+      [],
+      [],
+      []
+     ],
+     [
+      "object|idletime",
+      3,
+      [
+       {
+        "+": "readonly"
+       }
+      ],
+      2,
+      2,
+      1,
+      [
+       {
+        "+": "@keyspace"
+       },
+       {
+        "+": "@read"
+       },
+       {
+        "+": "@slow"
+       }
+      ],
+      [
+       "nondeterministic_output"
+      ],
+      [
+       [
+        "flags",
+        [
+         {
+          "+": "RO"
+         }
+        ],
+        "begin_search",
+        [
+         "type",
+         "index",
+         "spec",
+         [
+          "index",
+          2
+         ]
+        ],
+        "find_keys",
+        [
+         "type",
+         "range",
+         "spec",
+         [
+          "lastkey",
+          0,
+          "keystep",
+          1,
+          "limit",
+          0
+         ]
+        ]
+       ]
+      ],
+      []
+     ],
+     [
+      "object|refcount",
+      3,
+      [
+       {
+        "+": "readonly"
+       }
+      ],
+      2,
+      2,
+      1,
+      [
+       {
+        "+": "@keyspace"
+       },
+       {
+        "+": "@read"
+       },
+       {
+        "+": "@slow"
+       }
+      ],
+      [
+       "nondeterministic_output"
+      ],
+      [
+       [
+        "flags",
+        [
+         {
+          "+": "RO"
+         }
+        ],
+        "begin_search",
+        [
+         "type",
+         "index",
+         "spec",
+         [
+          "index",
+          2
+         ]
+        ],
+        "find_keys",
+        [
+         "type",
+         "range",
+         "spec",
+         [
+          "lastkey",
+          0,
+          "keystep",
+          1,
+          "limit",
+          0
+         ]
+        ]
+       ]
+      ],
+      []
+     ]
+    ]
+   ]
+  },
   "persist": {
    "docs": [
     "summary",
@@ -6305,6 +6706,140 @@
     ],
     [],
     [],
+    []
+   ]
+  },
+  "time": {
+   "docs": [
+    "summary",
+    "Return the current server time",
+    "since",
+    "2.6.0",
+    "group",
+    "server",
+    "complexity",
+    "O(1)"
+   ],
+   "info": [
+    "time",
+    1,
+    [
+     {
+      "+": "loading"
+     },
+     {
+      "+": "stale"
+     },
+     {
+      "+": "fast"
+     }
+    ],
+    0,
+    0,
+    0,
+    [
+     {
+      "+": "@fast"
+     }
+    ],
+    [
+     "nondeterministic_output"
+    ],
+    [],
+    []
+   ]
+  },
+  "touch": {
+   "docs": [
+    "summary",
+    "Alters the last access time of a key(s). Returns the number of existing keys specified.",
+    "since",
+    "3.2.1",
+    "group",
+    "generic",
+    "complexity",
+    "O(N) where N is the number of keys that will be touched.",
+    "arguments",
+    [
+     [
+      "name",
+      "key",
+      "type",
+      "key",
+      "key_spec_index",
+      0,
+      "flags",
+      [
+       {
+        "+": "multiple"
+       }
+      ]
+     ]
+    ]
+   ],
+   "info": [
+    "touch",
+    -2,
+    [
+     {
+      "+": "readonly"
+     },
+     {
+      "+": "fast"
+     }
+    ],
+    1,
+    -1,
+    1,
+    [
+     {
+      "+": "@keyspace"
+     },
+     {
+      "+": "@read"
+     },
+     {
+      "+": "@fast"
+     }
+    ],
+    [
+     "request_policy:multi_shard",
+     "response_policy:agg_sum"
+    ],
+    [
+     [
+      "flags",
+      [
+       {
+        "+": "RO"
+       }
+      ],
+      "begin_search",
+      [
+       "type",
+       "index",
+       "spec",
+       [
+        "index",
+        1
+       ]
+      ],
+      "find_keys",
+      [
+       "type",
+       "range",
+       "spec",
+       [
+        "lastkey",
+        -1,
+        "keystep",
+        1,
+        "limit",
+        0
+       ]
+      ]
+     ]
+    ],
     []
    ]
   },

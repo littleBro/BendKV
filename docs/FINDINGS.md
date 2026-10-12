@@ -1941,6 +1941,31 @@ Redis's test suite: BendKV passes 268 of the 1,673 tests Redis passes (219 befor
 45 (0 before). The others there need LCS, MSETNX, BITOP, BITFIELD, other types or
 replication ([COMPATIBILITY.md](COMPATIBILITY.md)).
 
+## 3z. TOUCH, TIME and OBJECT
+
+TOUCH counts the keys that are there, as EXISTS does: Redis's TOUCH also updates a key's
+time of last access, which BendKV does not keep. TIME answers the time the batch runs at,
+the clock read once for each group of batches, in s and µs (to the ms). OBJECT answers
+what Redis keeps beside a value from the value itself, since BendKV keeps no encoding and
+no access times: ENCODING as Redis 7.0.15 encodes a value set whole (`int` for a long,
+`embstr` up to 44 bytes, `raw` past them), where Redis answers `raw` for a value made by
+APPEND, SETRANGE or SETBIT whatever it holds; REFCOUNT 2147483647 for the integers 0 to
+9999 that Redis shares, unless `maxmemory` is set with an LRU or LFU policy, judged by the
+current parameters where Redis judges when it makes the value; IDLETIME and FREQ 0, each
+refused under the policy Redis refuses it under, with Redis's errors. TIME and OBJECT are
+commands of the session (they read the clock, the parameters and the selected database),
+so they change no database and the proofs of sessions take a case each for them, as for
+the other session commands. OBJECT counts in INFO's statistics by its subcommands, as
+CLIENT and CONFIG do, and FREQ and IDLETIME, which fail as they run under one policy or
+another, have their replies looked at for errors.
+
+**Cost.** INCR 4,235 instructions per request (+9, +0.2%): TIME lengthened the chain of
+names of four letters, INCR's. GET 3,138 and SET 4,068, the same. Redis's test suite:
+BendKV passes 272 of the 1,673 tests Redis passes and 248 of the 370 in what it has (TOUCH's
+two tests, a PEXPIREAT at a time TIME gave, and INCR's shared integers seen by OBJECT
+REFCOUNT); one test now fails on the time of last access rather than on a missing
+command.
+
 ## 4. Where a request's time goes, and hiding the memory waits
 
 With the eight patches, BendKV ran fewer instructions on GET and SET than Redis, missed

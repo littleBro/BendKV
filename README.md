@@ -15,7 +15,7 @@ throughput of Redis 7.0.15 on the same machine, with half its memory for small v
 > times to live, the keyspace, several databases, connection commands, an append-only
 > file). The goal now is a drop-in
 > replacement for a single Redis node, measured by Redis's own test suite: of the 1,673
-> tests Redis 7.0.15 passes against a server it did not start, BendKV passes 268, and 244
+> tests Redis 7.0.15 passes against a server it did not start, BendKV passes 272, and 248
 > of the 370 in what it implements ([docs/COMPATIBILITY.md](docs/COMPATIBILITY.md)). Do
 > not use it for data you cannot lose.
 
@@ -82,9 +82,14 @@ translation stays in the trusted base.
 
 - **Strings and keys:** GET, SET, SETNX, GETSET, DEL, UNLINK, EXISTS, INCR, DECR, INCRBY,
   DECRBY, APPEND, STRLEN, MGET, MSET, DBSIZE, KEYS
-  (Redis's patterns: `*`, `?`, `[...]` classes, `\` escapes), TYPE, SCAN (MATCH, COUNT,
-  TYPE, with Redis's guarantee: a key there for a whole iteration is found, however the
-  database changes meanwhile) and RANDOMKEY (picked as Redis picks one).
+  (Redis's patterns: `*`, `?`, `[...]` classes, `\` escapes), TYPE, TOUCH, SCAN (MATCH,
+  COUNT, TYPE, with Redis's guarantee: a key there for a whole iteration is found, however
+  the database changes meanwhile) and RANDOMKEY (picked as Redis picks one). OBJECT
+  (ENCODING, REFCOUNT, IDLETIME, FREQ, HELP) answers from the value, since BendKV keeps no
+  encoding and no access times: ENCODING as Redis encodes a value set whole (where Redis
+  answers `raw` for one made by APPEND, SETRANGE or SETBIT), REFCOUNT by Redis's shared
+  integers under the current eviction policy, IDLETIME and FREQ 0 (each refused under the
+  policy Redis refuses it under).
 - **Ranges and bits:** GETRANGE (and SUBSTR), SETRANGE, GETBIT, SETBIT, BITCOUNT and
   BITPOS (with BYTE and BIT ranges), their numbers read as Redis reads them and their
   errors where Redis gives them; a value grows to 512MB at most (proto-max-bulk-len at
@@ -102,7 +107,8 @@ translation stays in the trusted base.
   (the key with its time), SWAPDB, FLUSHDB and FLUSHALL (with ASYNC/SYNC, which empty at
   once), with Redis's errors for a bad number; INFO's keyspace has a line for each
   database that holds keys, and the sweep of expired keys goes over every database.
-- **Connection:** PING, ECHO, HELLO (RESP2, with AUTH and SETNAME), AUTH, SELECT, QUIT,
+- **Connection:** PING, ECHO, TIME (the time the batch runs at, to the ms), HELLO (RESP2,
+  with AUTH and SETNAME), AUTH, SELECT, QUIT,
   RESET (which selects database 0 again), CLIENT (ID, GETNAME, SETNAME,
   REPLY ON/OFF/SKIP, NO-EVICT, GETREDIR, TRACKINGINFO, CACHING, UNBLOCK, HELP),
   FUNCTION FLUSH.

@@ -143,10 +143,11 @@ def one_at_a_time(c, port):
                  ["SCAN", "0"], ["SCAN", "0", "MATCH", "a*", "COUNT", "5", "TYPE", "string"], ["RANDOMKEY"],
                  ["GETRANGE", "k", "0", "-1"], ["SUBSTR", "k", "1", "2"], ["SETRANGE", "k", "2", "xy"],
                  ["GETBIT", "k", "3"], ["SETBIT", "k", "3", "1"], ["BITCOUNT", "k"], ["BITCOUNT", "k", "0", "-1", "BIT"],
-                 ["BITPOS", "k", "1"], ["BITPOS", "k", "0", "1", "-1"],
+                 ["BITPOS", "k", "1"], ["BITPOS", "k", "0", "1", "-1"], ["TOUCH", "k", "x", "k"], ["TIME"],
+                 ["SET", "oe", "12"], ["OBJECT", "ENCODING", "oe"], ["OBJECT", "REFCOUNT", "oe"], ["OBJECT", "HELP"],
                  ["FLUSHDB"], ["RANDOMKEY"], ["FLUSHALL"]):
         r = c.ask(*args)
-        out.append(r if args[0] not in ("CLIENT", "COMMAND", "CONFIG", "DBSIZE", "KEYS", "SCAN", "RANDOMKEY")
+        out.append(r if args[0] not in ("CLIENT", "COMMAND", "CONFIG", "DBSIZE", "KEYS", "SCAN", "RANDOMKEY", "TIME")
                    else type(r))
     return out
 
@@ -166,7 +167,8 @@ def errors_at_a_time(c, port):
                  ["GETBIT", "s", "-1"], ["SETBIT", "s", "1", "2"], ["SETBIT", "s", "x", "1"], ["BITCOUNT", "s", "0"],
                  ["BITCOUNT", "s", "x", "1"], ["BITCOUNT", "s", "0", "1", "foo"], ["BITCOUNT", "nokey", "x", "y"],
                  ["BITPOS", "s", "2"], ["BITPOS", "s", "x"], ["BITPOS", "s", "1", "x"], ["BITPOS", "s", "1", "0", "1", "foo"],
-                 ["BITPOS", "nokey", "1", "x"], ["BITPOS", "s"]):
+                 ["BITPOS", "nokey", "1", "x"], ["BITPOS", "s"], ["TOUCH"], ["TIME", "x"], ["OBJECT"],
+                 ["OBJECT", "FOO"], ["OBJECT", "FREQ", "s"], ["OBJECT", "ENCODING"], ["OBJECT", "HELP", "x"]):
         out.append(c.ask(*args))
     return out
 

@@ -4,7 +4,8 @@ case sends its requests on a fresh connection to both servers and compares
 what comes back before the server goes quiet, and whether it closed the
 connection. Both servers have Redis's 16 databases. Client ids differ between the servers (Redis gives
 some to clients of its own), so a case that shows one has its integers
-masked. Two differences are left out: HELLO 3, which BendKV refuses (it
+masked; TIME's value is compared within a second. Two differences are
+left out: HELLO 3, which BendKV refuses (it
 speaks RESP2 alone), and a QUIT while CLIENT REPLY is off, after which
 Redis keeps the connection open but reads nothing more from it (the close
 waits for a reply that never goes out), where BendKV closes it.
@@ -81,9 +82,37 @@ CASES = [
                      b"SWAPDB 0 0", b"SWAPDB 0 16", b"SWAPDB x 0", b"SWAPDB 0 x", b"SWAPDB -1 0", b"SWAPDB 0",
                      b"SWAPDB 1 2 3", b"FLUSHALL"), False),
     ("reset selects 0", lines(b"SELECT 5", b"SET r5 x", b"RESET", b"GET r5", b"SELECT 5", b"GET r5", b"FLUSHALL"), False),
+    # TOUCH, OBJECT and TIME's arity (TIME's value: time_close, below;
+    # OBJECT IDLETIME of a key reads Redis's clock of seconds, which may
+    # tick between two commands, and BendKV answers 0)
+    ("touch", lines(b"SET t1 1", b"TOUCH t1 t2 t1", b"TOUCH nope", b"TOUCH", b"FLUSHALL"), False),
+    ("object", lines(b"SET o1 1", b"SET o2 hello", b"SET o3 10000", b"SET o4 -5", b"SET o5 " + b"x" * 45,
+                     b"OBJECT ENCODING o1", b"OBJECT ENCODING o2", b"OBJECT ENCODING o4", b"OBJECT ENCODING o5",
+                     b"OBJECT REFCOUNT o1", b"OBJECT REFCOUNT o3", b"OBJECT REFCOUNT o2", b"OBJECT IDLETIME nope",
+                     b"OBJECT FREQ o1", b"OBJECT encoding nope", b"OBJECT REFCOUNT nope", b"OBJECT FREQ nope",
+                     b"FLUSHALL"), False),
+    ("object: help, arity and unknown", lines(b"OBJECT HELP", b"OBJECT", b"OBJECT FOO x", b"OBJECT ENCODING",
+                                              b"OBJECT ENCODING a b", b"OBJECT HELP x"), False),
+    ("object under an LFU policy", lines(b"SET o1 1", b"CONFIG SET maxmemory-policy allkeys-lfu", b"OBJECT FREQ o1",
+                                         b"OBJECT IDLETIME o1", b"OBJECT IDLETIME nope",
+                                         b"CONFIG SET maxmemory-policy noeviction", b"FLUSHALL"), False),
+    ("time: arity", lines(b"TIME x", b"TIME a b"), False),
     # a pipeline of both kinds
     ("mixed pipeline", lines(b"SET m 1", b"CLIENT SETNAME pipe", b"INCR m", b"CLIENT GETNAME", b"GET m", b"TYPE m"), False),
 ]
+
+
+# TIME: two bulk strings, s and us since 1970, within a second of Redis's
+def time_close(bendkv, redis):
+    def seconds(port):
+        data, closed = exchange(port, resp(b"TIME"))
+        parts = data.split(b"\r\n")
+        if len(parts) < 5 or parts[0] != b"*2" or not parts[1].startswith(b"$") or not parts[3].startswith(b"$"):
+            return None
+        sec, usec = int(parts[2]), int(parts[4])
+        return sec + usec / 1e6 if usec < 10**6 else None
+    a, b = seconds(bendkv), seconds(redis)
+    return a is not None and b is not None and abs(a - b) <= 1.0
 
 
 def mask(got):
@@ -110,6 +139,9 @@ def main():
         if not same:
             print("     bendkv: %r" % (mine,))
             print("     redis:  %r" % (theirs,))
+    same = time_close(a.bendkv, a.redis)
+    ok &= same
+    print("%s %s" % ("ok  " if same else "FAIL", "time: within a second of Redis's"))
     print("ALL OK" if ok else "SOME CHECKS FAILED")
     return ok
 

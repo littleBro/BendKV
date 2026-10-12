@@ -35,13 +35,17 @@ make suite REDIS_SRC=../redis      # both runs and the table, in build/suite/
 ## The result
 
 Redis 7.0.15, October 2026. Of the 1,673 tests Redis passes in this mode, BendKV passes
-**268 (16.0%)**; of the 370 in the units of what BendKV has, 244 (66%). Times to live
+**272 (16.3%)**; of the 370 in the units of what BendKV has, 248 (67%). Times to live
 (EXPIRE and its kin, TTL and PTTL, SET's options, GETEX, GETDEL) and the sweep of
-expired keys brought 78 of them: unit/expire passes 55 of its 59 tests (the other 4 need
-replication, LPUSH and TIME). Ranges and bits (GETRANGE, SETRANGE, GETBIT, SETBIT,
+expired keys brought 78 of them: unit/expire passes 56 of its 59 tests (the other 3 need
+replication and LPUSH). Ranges and bits (GETRANGE, SETRANGE, GETBIT, SETBIT,
 BITCOUNT, BITPOS) brought 49: unit/type/string passes 60 of its 77 tests (the rest need
 LCS, MSETNX, other types, or replication), unit/bitops 30 of 45 (the rest need BITOP,
-BITFIELD or lists). Several databases brought 6 of the 17 tests
+BITFIELD or lists). TOUCH, TIME and OBJECT brought 4 (TOUCH's two in
+unit/introspection-2, a PEXPIREAT at a time TIME gave, and INCR's shared integers seen
+by OBJECT REFCOUNT); one test more now fails on what BendKV does not keep, rather than
+on a missing command: OBJECT IDLETIME is 0, where the test waits three seconds for it.
+Several databases brought 6 of the 17 tests
 Redis passes that run only without `--singledb`: SET and GET in different databases, DEL in database
 1, and four of MOVE's five (against a key the target holds, against a database that is no
 integer, with a time and without one). The fifth, MOVE's basic usage, passes alone but
@@ -50,7 +54,7 @@ them with FLUSHDB, stops at XADD. The other 10 need COPY, MULTI and WATCH, Lua o
 
 | area | units | Redis passes | BendKV passes |
 |---|---|---:|---:|
-| what BendKV has: the protocol, connections, the keyspace and its databases, strings and their ranges and bits, counters, times to live, introspection | protocol, quit, keyspace, type/string, type/incr, bitops, expire, introspection, introspection-2, other, info-command | 370 | **244** |
+| what BendKV has: the protocol, connections, the keyspace and its databases, strings and their ranges and bits, counters, times to live, introspection | protocol, quit, keyspace, type/string, type/incr, bitops, expire, introspection, introspection-2, other, info-command | 370 | **248** |
 | data types, not yet | type/hash, type/list, list-2, list-3, type/set, type/zset, geo, hyperloglog, bitfield, sort, scan, dump, lazyfree, violations | 866 | 20 |
 | transactions, pub/sub, client-side caching, CLIENT PAUSE, the latency monitor, the slow log, the query buffer, not yet | multi, pubsub, tracking, pause, latency-monitor, slowlog, querybuf | 131 | 0 |
 | out of scope: Lua scripts, functions, streams | scripting, functions, type/stream, type/stream-cgroups | 306 | 4 |
@@ -71,13 +75,13 @@ pubsubshard, shutdown, tls, type/list-common, wait):
 | unit/bitfield | 16 | 16 | 0 |
 | unit/bitops | 45 | 45 | 30 |
 | unit/dump | 12 | 11 | 1 |
-| unit/expire | 65 | 59 | 55 |
+| unit/expire | 65 | 59 | 56 |
 | unit/functions | 94 | 90 | 2 |
 | unit/geo | 59 | 59 | 0 |
 | unit/hyperloglog | 20 | 20 | 0 |
 | unit/info-command | 3 | 3 | 3 |
 | unit/introspection | 28 | 28 | 14 |
-| unit/introspection-2 | 43 | 43 | 18 |
+| unit/introspection-2 | 43 | 43 | 20 |
 | unit/keyspace | 53 | 52 | 27 |
 | unit/latency-monitor | 14 | 13 | 0 |
 | unit/lazyfree | 4 | 4 | 0 |
@@ -95,7 +99,7 @@ pubsubshard, shutdown, tls, type/list-common, wait):
 | unit/sort | 52 | 52 | 0 |
 | unit/tracking | 13 | 10 | 0 |
 | unit/type/hash | 73 | 72 | 1 |
-| unit/type/incr | 25 | 24 | 10 |
+| unit/type/incr | 25 | 24 | 11 |
 | unit/type/list | 235 | 218 | 0 |
 | unit/type/list-2 | 2 | 2 | 0 |
 | unit/type/list-3 | 11 | 11 | 3 |
@@ -105,15 +109,15 @@ pubsubshard, shutdown, tls, type/list-common, wait):
 | unit/type/string | 77 | 77 | 60 |
 | unit/type/zset | 291 | 289 | 10 |
 | unit/violations | 1 | 1 | 0 |
-| **all** | **1751** | **1673** | **268 (16.0%)** |
+| **all** | **1751** | **1673** | **272 (16.3%)** |
 
-## Why the other 1,405 fail
+## Why the other 1,401 fail
 
-- **773 stop on a command BendKV does not have.** By the number of tests each one stops:
-  FUNCTION LOAD 123, ZADD 118, XADD 60, GEOADD 37, SADD 31, MULTI 23, LPUSH 19, PFADD 19,
+- **768 stop on a command BendKV does not have.** By the number of tests each one stops:
+  FUNCTION LOAD 123, ZADD 117, XADD 60, GEOADD 37, SADD 31, MULTI 23, LPUSH 20, PFADD 19,
   WATCH 18, BITFIELD 17, SYNC 17 (tests that read the replication stream), RPUSH 16,
-  BITOP 13, XGROUP 12, INCRBYFLOAT 11, GEORADIUS 10, ZINCRBY 9, and 69 more below nine
-  (220 tests), COPY among them with 7.
+  BITOP 13, XGROUP 12, INCRBYFLOAT 11, GEORADIUS 10, ZINCRBY 9, and 66 more below nine
+  (215 tests), COPY among them with 7.
 - **590 never ran**: their unit ended before them, on a command outside any test:
   LATENCY RESET (latency-monitor), LPUSH (sort), HSET (type/hash), SADD (type/set),
   SUBSCRIBE (tracking), HELLO 3 (type/list and type/zset run their tests over RESP2 and
@@ -122,16 +126,18 @@ pubsubshard, shutdown, tls, type/list-common, wait):
   comes because the command before it is missing (pubsub: PSUBSCRIBE after CLIENT REPLY
   OFF; scripting: the second line of FUNCTION LOAD's reply, read raw). One test runs
   only on a server that names jemalloc as its allocator.
-- **42 fail with another error**, all of them for what BendKV does not have yet: COMMAND
-  GETKEYS, INFO and LIST of commands BendKV does not have (19), RESP3 (16), and 7 that
-  fail because a command before them is missing (MOVE's basic usage among them, above). (Before times to live, SET's options failed 30 more tests here,
+- **43 fail with another error**, all of them for what BendKV does not have yet: COMMAND
+  GETKEYS, INFO and LIST of commands BendKV does not have (19), RESP3 (16), 7 that
+  fail because a command before them is missing (MOVE's basic usage among them, above),
+  and one for the time of a key's last access, which BendKV does not keep (OBJECT
+  IDLETIME answers 0). (Before times to live, SET's options failed 30 more tests here,
   answered `ERR syntax error`. INFO's statistics per command, which `info-command` looked
   for, made 3 more tests pass; SCAN and RANDOMKEY pass all their tests on keys: SCAN's
   basic iteration, COUNT, MATCH, TYPE, and its guarantee under a load of writes, and
   RANDOMKEY's three.)
 
 So the tests are where the plan goes next: the rest of the commands on strings and keys
-(MSETNX, BITOP, BITFIELD, LCS, COPY, RENAME, TOUCH, TIME, OBJECT), then the data types
+(MSETNX, BITOP, BITFIELD, LCS, COPY, RENAME), then the data types
 one by one (866 tests), RESP3, which
 two units need before their second half runs, and MULTI/EXEC and pub/sub. Scripts,
 functions and streams (306 tests) stay out of scope.
