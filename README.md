@@ -232,7 +232,11 @@ translation stays in the trusted base.
   background, a cluster, a replica, TLS, a supervisor to signal, an RDB file or Redis 7's
   multi-part append-only file to load) stops the start with a line saying so.
 - **Protocol:** pipelining, partial packets, inline commands with quoting,
-  binary-safe values, Redis's protocol errors.
+  binary-safe values; requests framed as Redis 7.0.15 frames them (a length as `string2ll`
+  reads it, with no `0` before its first digit, a count of 0 or less skipped down to
+  -2^63, a line ended by its `\r` and whatever byte follows it, 64 KB at most without
+  one), and Redis's protocol errors. Not the tighter limits Redis puts on a client that
+  must still authenticate (10 arguments, a bulk of 16 KB), nor a new proto-max-bulk-len.
 - **Persistence:** an append-only file in Redis's own format, a SELECT before the
   entries of another database, SWAPDB, MOVE and FLUSHALL as Redis writes them, and COPY
   with its DB and REPLACE spelled out (`redis-check-aof` accepts it, and Redis loads it;
@@ -304,7 +308,9 @@ command streams compared byte for byte (times to live, SET's options and several
 databases among them),
 keys that expire (set with short times on both servers, then read once the times have
 passed), the protocol edge cases of Redis's
-`tests/unit/protocol.tcl`, the float library against glibc (random texts of numbers,
+`tests/unit/protocol.tcl` and of the lengths and lines of its `processMultibulkBuffer`
+(each server's closing of a connection seen in its count of connections, not in a quiet
+socket), the float library against glibc (random texts of numbers,
 read, written and added, the answers compared byte for byte with C's), the connection
 commands, CONFIG (every parameter, a list of
 cases and thousands of random values, set and read back on both servers), INFO (the

@@ -3285,3 +3285,25 @@ compares KEYS and SCAN's MATCH with Redis on 32 such patterns, adjacent stars,
 alternatives that match at once or nowhere, literal mismatches, classes and escapes among
 stars, and stars nested past 1000; each answers at once, where a matcher without one of the
 cut-offs would not answer within the client's timeout.
+
+**Lengths ([#9](https://github.com/littleBro/bendkv/issues/9)).** The parser read a
+length's line with `String.dec_line_at`, 1 to 10 digits and `"\r\n"`, and a count's '-'
+by skipping it, so `*01`, `$04` and `*-0` passed where Redis 7.0.15 refuses them, and
+`*-10000000000`, which Redis skips, was refused. Redis's `processMultibulkBuffer` finds a
+line's end with `strchr` (the first `'\r'`, hidden by a NUL before it, and whatever byte
+comes after it, skipped unread), waits for it up to 64 KB, then reads the number with
+`string2ll`: a sign, no `0` before the first digit, from -2^63 to 2^63 - 1; a count past
+INT_MAX or no number is an error, a count of 0 or less skips the request, and a bulk's
+length must be from 0 to 512 MB. The quick way stays for the lines clients send: a line of
+two digits or more whose number has fewer digits starts with a 0 and leaves it, at the
+cost of a comparison with a power of ten for those lines only. Every other line now goes
+Redis's way (`line_at`, then `R.ll.of`, the reading of `string2ll` that HELLO and the
+commands use), and so does a bulk that does not start with `'$'`, whose error waited, in
+Redis, for its line. `tests/protocol_test.py` gained 37 cases (the issue's four among
+them, and the lines Redis waits for, hides behind a NUL or refuses past 64 KB); its
+closures are no longer read from a quiet socket: a server holds a connection open when
+INFO counts it, and closed it when the client saw the end of the file, and every case
+checks that both servers let the connection go once the client closes it. Left out: the
+tighter limits Redis sets before a client authenticates (an error past 10 arguments or a
+bulk of 16 KB), which need the connection's state in the parser, and a new
+proto-max-bulk-len, which BendKV keeps but does not apply.
