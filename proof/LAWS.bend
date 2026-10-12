@@ -215,13 +215,16 @@ def writes(c: R.Cmd, +j: String) -> Bool:
       any_pair(j, ps)
     case R.Rename{src, dst, nx}:
       any_key(j, [src, dst])
+    case R.BitOp{op, d, srcs}:
+      KV.str_eq(j, d)
     case _:
       False{}
 
 # the keys whose entries a command's writes depend on, besides the key
 # each write is to: MSETNX sets its keys only when none of them is there,
-# and RENAME moves its source key's entry to its destination when the
-# destination is not there for RENAMENX
+# RENAME moves its source key's entry to its destination when the
+# destination is not there for RENAMENX, and BITOP sets its destination
+# to what its sources make
 def pair_keys(ps: List<&2, R.KVPair>) -> List<&2, String>:
   match ps:
     case Nil{}:
@@ -235,6 +238,8 @@ def deps(c: R.Cmd) -> List<&2, String>:
       pair_keys(ps)
     case R.Rename{src, dst, nx}:
       [src, dst]
+    case R.BitOp{op, d, srcs}:
+      srcs
     case _:
       Nil{}
 
@@ -476,6 +481,28 @@ law msetnx_missing:
   for  e: {any_there(db, pair_keys(ps)) == False{} : Bool}
   {R.exec(R.MSetNx{ps}, db) == (R.r_int(1n), R.db_of(R.exec(R.MSet{ps}, db))) : R.Reply & R.Db}
 
+# the value BITOP makes in a database, from its sources there at its now,
+# and what its destination holds after it: nothing when the value is
+# empty (e), else the value with no time
+def bitop_val(+op: R.BitK, srcs: List<&2, String>, +db: R.Db) -> String:
+  R.bitop.val(op, srcs, R.db.now(db), R.db.trie(db))
+
+def stored(e: Bool, v: String) -> Maybe<&2, KV.Item<String>>:
+  match e:
+    case True{}:
+      None{}
+    case False{}:
+      Some{KV.Item{v, 0n}}
+
+# LAW: BITOP sets its destination to the value its sources make, with no
+# time, and answers the value's length; an empty value deletes it
+law bitop_store:
+  for +op: R.BitK
+  for +d: String
+  for +srcs: List<&2, String>
+  for +db: R.Db
+  {at_key(R.exec(R.BitOp{op, d, srcs}, db), d) == (R.r_int(String.length(bitop_val(op, srcs, db))), stored(String.is_empty(bitop_val(op, srcs, db)), bitop_val(op, srcs, db))) : R.Reply & Maybe<&2, KV.Item<String>>}
+
 # LAW: the sweep of expired keys deletes no key that is there: the
 # server sweeps with DEL of the keys R.reap.keys keeps of those its scan
 # found, whatever the scan found
@@ -567,6 +594,8 @@ def disturbs(+c2: R.Cmd, c1: R.Cmd) -> Bool:
       writes_any(c2, pair_keys(ps))
     case R.Rename{src, dst, nx}:
       writes_any(c2, [src, dst])
+    case R.BitOp{op, d, srcs}:
+      writes_any(c2, srcs)
     case R.DbSize{}:
       Bool.not(is_read(c2))
     case R.Keys{p}:
@@ -640,6 +669,8 @@ def clash_w(+c2: R.Cmd, c1: R.Cmd) -> Bool:
       writes_pairs(c2, ps)
     case R.Rename{src, dst, nx}:
       writes_any(c2, [src, dst])
+    case R.BitOp{op, +d, srcs}:
+      writes(c2, d)
     case _:
       False{}
 

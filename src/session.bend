@@ -775,6 +775,314 @@ def obj.reply(+sub: Nat, m: Maybe<&2, KV.Item<String>>, +cfg: List<&2, C.CItem>)
     case None{}:
       R.RNull{}
 
+# LCS a b [IDX] [LEN] [WITHMATCHLEN] [MINMATCHLEN n]: the longest common
+# subsequence of two values (a key not there reads as an empty one), found
+# as Redis 7.0.15 finds it: the table of the lengths of the LCS of every
+# two prefixes, then a walk back from its last cell that takes a byte when
+# both prefixes end with it, and otherwise drops the last byte of a when
+# the cell above holds more than the cell to the left, else b's. LEN
+# answers the length (with no walk); IDX the runs of bytes the walk took
+# one after another, the last first, each as its range in a and in b,
+# with its length after WITHMATCHLEN, and none shorter than MINMATCHLEN;
+# otherwise the LCS itself. The options read in order, their errors as
+# Redis's; the table, 4 bytes a cell in Redis, must fit in
+# proto-max-bulk-len.
+type LcsSt is Data:
+  LsOpt{len: Bool, idx: Bool, wml: Bool, min: Nat}
+  LsMin{len: Bool, idx: Bool, wml: Bool}
+  LsErr{r: R.Reply}
+
+def lcs.word(isidx: Bool, islen: Bool, iswml: Bool, ismin: Bool, len: Bool, idx: Bool, wml: Bool, min: Nat) -> LcsSt:
+  match isidx islen iswml ismin:
+    case True{} _ _ _:
+      LsOpt{len, True{}, wml, min}
+    case False{} True{} _ _:
+      LsOpt{True{}, idx, wml, min}
+    case False{} False{} True{} _:
+      LsOpt{len, idx, True{}, min}
+    case False{} False{} False{} True{}:
+      LsMin{len, idx, wml}
+    case False{} False{} False{} False{}:
+      LsErr{R.r_syntax()}
+
+# a magnitude hi * 10^9 + lo when small says it is below cap, else cap
+# (the product is made only when it is small: a Nat stays below 2^48)
+def lcs.cap(small: Bool, +hi: Nat, +lo: Nat, +cap: Nat) -> Nat:
+  match small:
+    case True{}:
+      Nat.add(Nat.mul(hi, 1000000000n), lo)
+    case False{}:
+      cap
+
+# MINMATCHLEN's number, a long long as Redis reads one: below 0 it is 0,
+# and from 10^10, which no run reaches (a value holds less than 2^32
+# bytes), 10^10
+def lcs.min(l: R.LL, len: Bool, idx: Bool, wml: Bool) -> LcsSt:
+  match l:
+    case R.LL{+neg, +hi, +lo}:
+      LsOpt{len, idx, wml, Bool.pick(Nat, neg, 0n, lcs.cap(Nat.is_lt(hi, 10n), hi, lo, Nat.mul(100000n, 100000n)))}
+    case R.LLBad{}:
+      LsErr{R.e_int()}
+
+def lcs.opts(args: List<&2, String>, st: LcsSt) -> LcsSt:
+  match args st:
+    case _ LsErr{r}:
+      LsErr{r}
+    case Nil{} LsOpt{len, idx, wml, min}:
+      LsOpt{len, idx, wml, min}
+    case Nil{} LsMin{len, idx, wml}:
+      LsErr{R.r_syntax()}
+    case Con{+a, rest} LsOpt{len, idx, wml, min}:
+      lcs.opts(rest, lcs.word(R.is_word(a, "IDX"), R.is_word(a, "LEN"), R.is_word(a, "WITHMATCHLEN"), R.is_word(a, "MINMATCHLEN"), len, idx, wml, min))
+    case Con{+a, rest} LsMin{len, idx, wml}:
+      lcs.opts(rest, lcs.min(R.ll.read(a), len, idx, wml))
+
+# a row of the table, for a's byte x: from the row above (prev, from its
+# cell j - 1, so that its first two cells are above-left and above) and
+# the cell to the left; the row comes out reversed onto acc
+def lcs.cell(+x: U32, +y: U32, +dg: Nat, +up: Nat, +left: Nat) -> Nat:
+  Bool.pick(Nat, U32.is_eq(x, y), Nat.add(dg, 1n), Nat.max(up, left))
+
+def lcs.row(+x: U32, bs: String, prev: List<&2, Nat>, +left: Nat, acc: List<&2, Nat>) -> List<&2, Nat>:
+  match bs prev:
+    case SCon{Chr{+y}, t} Con{+dg, Con{+up, ps}}:
+      +c = lcs.cell(x, y, dg, up, left)
+      lcs.row(x, t, Con{up, ps}, c, Con{c, acc})
+    case _ _:
+      acc
+
+def lcs.zeros(n: Nat, acc: List<&2, Nat>) -> List<&2, Nat>:
+  match n:
+    case 0n:
+      Con{0n, acc}
+    case 1n+m:
+      lcs.zeros(m, Con{0n, acc})
+
+# the rows for the bytes of as, each reversed, the last first, onto acc;
+# prev is the row above them, in order
+def lcs.rows(as: String, +bs: String, prev: List<&2, Nat>, acc: List<&2, List<&2, Nat>>) -> List<&2, List<&2, Nat>>:
+  match as:
+    case SNil{}:
+      acc
+    case SCon{Chr{+x}, t}:
+      +r = lcs.row(x, bs, prev, 0n, [0n])
+      lcs.rows(t, bs, List.reverse(&2, Nat, r), Con{r, acc})
+
+def lcs.hd(+xs: List<&2, Nat>) -> Nat:
+  match xs:
+    case Con{+x, r}:
+      x
+    case Nil{}:
+      0n
+
+def lcs.tl(xs: List<&2, Nat>) -> List<&2, Nat>:
+  match xs:
+    case Con{x, r}:
+      r
+    case Nil{}:
+      Nil{}
+
+# the row before the rows rest hold, from its cell j (n = |b| - j cells
+# dropped), and the rows before it
+def lcs.next(rest: List<&2, List<&2, Nat>>, +n: Nat) -> List<&2, Nat> & List<&2, List<&2, Nat>>:
+  match rest:
+    case Nil{}:
+      (Nil{}, Nil{})
+    case Con{r, rs}:
+      (List.drop(&2, Nat, r, n), rs)
+
+# a run of matches the walk took: its first and last byte in a and in b
+type LRange is Data:
+  LNone{}
+  LRun{a0: Nat, a1: Nat, b0: Nat, b1: Nat}
+
+# the walk at cell (i, j): a's bytes before i reversed, b's before j, the
+# row i from cell j (reversed), the row i - 1 from cell j, the rows before
+# it, the LCS after (i, j), the run being taken, the runs emitted
+type LcsW is Data:
+  LcsW{ar: String, br: String, cur: List<&2, Nat>, up: List<&2, Nat>, rest: List<&2, List<&2, Nat>>, i: Nat, j: Nat, res: String, m: LRange, out: List<&2, R.Reply>}
+
+# a run as IDX answers it, unless shorter than MINMATCHLEN (0: none is),
+# or without IDX
+def lcs.emit.if(ok: Bool, r: R.Reply, out: List<&2, R.Reply>) -> List<&2, R.Reply>:
+  match ok:
+    case True{}:
+      Con{r, out}
+    case False{}:
+      out
+
+def lcs.pair(+x: Nat, +y: Nat) -> R.Reply:
+  R.RArray{[R.r_int(x), R.r_int(y)]}
+
+def lcs.emit(m: LRange, +idx: Bool, +wml: Bool, +min: Nat, out: List<&2, R.Reply>) -> List<&2, R.Reply>:
+  match m:
+    case LNone{}:
+      out
+    case LRun{+a0, +a1, +b0, +b1}:
+      +n = Nat.add(Nat.sub(a1, a0), 1n)
+      +ra = lcs.pair(a0, a1)
+      +rb = lcs.pair(b0, b1)
+      lcs.emit.if(Bool.and(idx, Bool.or(Nat.is_eq(min, 0n), Nat.is_le(min, n))), R.RArray{Bool.pick(List<&2, R.Reply>, wml, [ra, rb, R.r_int(n)], [ra, rb])}, out)
+
+# the run after a match at bytes i - 1 and j - 1, and whether it is
+# emitted now: a new run, or the run grown back by one byte when it starts
+# at i and j (else it ends, and is emitted as it was); emitted too when it
+# reaches the first byte of a or of b
+type LHit is Data:
+  LHit{r: LRange, emit: Bool}
+
+def lcs.hit(m: LRange, +i: Nat, +j: Nat) -> LHit:
+  match m:
+    case LNone{}:
+      LHit{LRun{Nat.sub(i, 1n), Nat.sub(i, 1n), Nat.sub(j, 1n), Nat.sub(j, 1n)}, Bool.or(Nat.is_eq(i, 1n), Nat.is_eq(j, 1n))}
+    case LRun{+a0, +a1, +b0, +b1}:
+      +ext = Bool.and(Nat.is_eq(a0, i), Nat.is_eq(b0, j))
+      +c0 = Bool.pick(Nat, ext, Nat.sub(a0, 1n), a0)
+      +d0 = Bool.pick(Nat, ext, Nat.sub(b0, 1n), b0)
+      LHit{LRun{c0, a1, d0, b1}, Bool.or(Bool.not(ext), Bool.or(Nat.is_eq(c0, 0n), Nat.is_eq(d0, 0n)))}
+
+def lcs.after(e: Bool, r: LRange) -> LRange:
+  match e:
+    case True{}:
+      LNone{}
+    case False{}:
+      r
+
+def lcs.out(e: Bool, r: LRange, +idx: Bool, +wml: Bool, +min: Nat, out: List<&2, R.Reply>) -> List<&2, R.Reply>:
+  match e:
+    case True{}:
+      lcs.emit(r, idx, wml, min, out)
+    case False{}:
+      out
+
+# the walk with the row above and the rows before it from lcs.next
+def lcs.w(ar: String, br: String, cur: List<&2, Nat>, p: List<&2, Nat> & List<&2, List<&2, Nat>>, +i: Nat, +j: Nat, res: String, m: LRange, out: List<&2, R.Reply>) -> LcsW:
+  (up, rest) = p
+  LcsW{ar, br, cur, up, rest, i, j, res, m, out}
+
+# a step on a match: the byte taken, to cell (i - 1, j - 1)
+def lcs.matched(h: LHit, +x: U32, at: String, bt: String, up: List<&2, Nat>, rest: List<&2, List<&2, Nat>>, +i: Nat, +j: Nat, res: String, out: List<&2, R.Reply>, +bl: Nat, +idx: Bool, +wml: Bool, +min: Nat) -> LcsW:
+  match h:
+    case LHit{+r, +e}:
+      lcs.w(at, bt, lcs.tl(up), lcs.next(rest, Nat.sub(bl, Nat.sub(j, 1n))), Nat.sub(i, 1n), Nat.sub(j, 1n), SCon{Chr{x}, res}, lcs.after(e, r), lcs.out(e, r, idx, wml, min, out))
+
+# a step on no match: to cell (i - 1, j) when the cell above holds more
+# than the cell to the left, else to (i, j - 1); a run being taken ends
+def lcs.moved(upi: Bool, at: String, bt: String, ar: String, br: String, cur: List<&2, Nat>, up: List<&2, Nat>, rest: List<&2, List<&2, Nat>>, +i: Nat, +j: Nat, res: String, out: List<&2, R.Reply>, +bl: Nat) -> LcsW:
+  match upi:
+    case True{}:
+      lcs.w(at, br, up, lcs.next(rest, Nat.sub(bl, j)), Nat.sub(i, 1n), j, res, LNone{}, out)
+    case False{}:
+      LcsW{ar, bt, lcs.tl(cur), lcs.tl(up), rest, i, Nat.sub(j, 1n), res, LNone{}, out}
+
+def lcs.step.of(eq: Bool, +x: U32, at: String, bt: String, ar: String, br: String, +cur: List<&2, Nat>, +up: List<&2, Nat>, rest: List<&2, List<&2, Nat>>, +i: Nat, +j: Nat, res: String, m: LRange, out: List<&2, R.Reply>, +bl: Nat, +idx: Bool, +wml: Bool, +min: Nat) -> LcsW:
+  match eq:
+    case True{}:
+      lcs.matched(lcs.hit(m, i, j), x, at, bt, up, rest, i, j, res, out, bl, idx, wml, min)
+    case False{}:
+      lcs.moved(Nat.is_lt(lcs.hd(lcs.tl(cur)), lcs.hd(up)), at, bt, ar, br, cur, up, rest, i, j, res, lcs.emit(m, idx, wml, min, out), bl)
+
+# one step of the walk, none past the first row or column
+def lcs.step(+bl: Nat, +idx: Bool, +wml: Bool, +min: Nat, w: LcsW) -> LcsW:
+  match w:
+    case LcsW{+ar, +br, cur, up, rest, +i, +j, res, m, out}:
+      match ar br:
+        case SCon{Chr{+x}, at} SCon{Chr{+y}, bt}:
+          lcs.step.of(U32.is_eq(x, y), x, at, bt, ar, br, cur, up, rest, i, j, res, m, out, bl, idx, wml, min)
+        case _ _:
+          LcsW{ar, br, cur, up, rest, i, j, res, m, out}
+
+# the walk, f steps at most (|a| + |b| reach the first row or column)
+def lcs.walk(f: Nat, +bl: Nat, +idx: Bool, +wml: Bool, +min: Nat, w: LcsW) -> LcsW:
+  match f:
+    case 0n:
+      w
+    case 1n+g:
+      lcs.walk(g, bl, idx, wml, min, lcs.step(bl, idx, wml, min, w))
+
+def lcs.start(rows: List<&2, List<&2, Nat>>, +a: String, +b: String, +al: Nat, +bl: Nat) -> LcsW:
+  match rows:
+    case Con{r, Con{u, rest}}:
+      LcsW{String.reverse(a), String.reverse(b), r, u, rest, al, bl, "", LNone{}, Nil{}}
+    case Con{r, Nil{}}:
+      LcsW{String.reverse(a), String.reverse(b), r, Nil{}, Nil{}, al, bl, "", LNone{}, Nil{}}
+    case Nil{}:
+      LcsW{"", "", Nil{}, Nil{}, Nil{}, 0n, 0n, "", LNone{}, Nil{}}
+
+def lcs.top(rows: List<&2, List<&2, Nat>>) -> Nat:
+  match rows:
+    case Con{r, rs}:
+      lcs.hd(r)
+    case Nil{}:
+      0n
+
+def lcs.fin(w: LcsW, +idx: Bool, +n: Nat) -> R.Reply:
+  match w:
+    case LcsW{ar, br, cur, up, rest, i, j, res, m, out}:
+      match idx:
+        case True{}:
+          R.RArray{[R.RBulk{"matches"}, R.RArray{List.reverse(&2, R.Reply, out)}, R.RBulk{"len"}, R.r_int(n)]}
+        case False{}:
+          R.RBulk{res}
+
+def lcs.walked(lenonly: Bool, +rows: List<&2, List<&2, Nat>>, +a: String, +b: String, +idx: Bool, +wml: Bool, +min: Nat) -> R.Reply:
+  match lenonly:
+    case True{}:
+      R.r_int(lcs.top(rows))
+    case False{}:
+      +al = String.length(a)
+      +bl = String.length(b)
+      lcs.fin(lcs.walk(Nat.add(al, bl), bl, idx, wml, min, lcs.start(rows, a, b, al, bl)), idx, lcs.top(rows))
+
+def lcs.run(+a: String, +b: String, +len: Bool, +idx: Bool, +wml: Bool, +min: Nat) -> R.Reply:
+  +z = lcs.zeros(String.length(b), Nil{})
+  lcs.walked(Bool.and(len, Bool.not(idx)), lcs.rows(a, b, z, [z]), a, b, idx, wml, min)
+
+# whether the table, (|a| + 1) * (|b| + 1) cells of 4 bytes, passes max,
+# found without the product: |a| + 1 > (max / 4) / (|b| + 1)
+def lcs.big(+la: Nat, +lb: Nat, +max: Nat) -> Bool:
+  Nat.is_lt(Nat.div(Nat.div(max, 4n), Nat.add(lb, 1n)), Nat.add(la, 1n))
+
+# proto-max-bulk-len, kept below 2^46: no table BendKV can build passes it
+def lcs.max.of(l: R.LL) -> Nat:
+  match l:
+    case R.LL{neg, +hi, +lo}:
+      lcs.cap(Nat.is_lt(hi, 70000n), hi, lo, Nat.mul(70000n, 1000000000n))
+    case R.LLBad{}:
+      536870912n
+
+def lcs.check.of(both: Bool, big: Bool, +a: String, +b: String, +len: Bool, +idx: Bool, +wml: Bool, +min: Nat) -> R.Reply:
+  match both big:
+    case True{} _:
+      R.RError{"ERR If you want both the length and indexes, please just use IDX."}
+    case False{} True{}:
+      R.RError{"ERR Insufficient memory, transient memory for LCS exceeds proto-max-bulk-len"}
+    case False{} False{}:
+      lcs.run(a, b, len, idx, wml, min)
+
+def lcs.check(st: LcsSt, +a: String, +b: String, +max: Nat) -> R.Reply:
+  match st:
+    case LsOpt{+len, +idx, +wml, +min}:
+      lcs.check.of(Bool.and(len, idx), lcs.big(String.length(a), String.length(b), max), a, b, len, idx, wml, min)
+    case LsMin{len, idx, wml}:
+      R.r_syntax()
+    case LsErr{r}:
+      r
+
+def lcs.val(m: Maybe<&2, KV.Item<String>>) -> String:
+  match m:
+    case Some{KV.Item{v, e}}:
+      v
+    case None{}:
+      ""
+
+def lcs.reply(args: List<&2, String>, +db: R.Db, +cfg: List<&2, C.CItem>) -> R.Reply:
+  match args:
+    case Con{+ka, Con{+kb, rest}}:
+      lcs.check(lcs.opts(rest, LsOpt{False{}, False{}, False{}, 0n}), lcs.val(R.db.ent(db, ka)), lcs.val(R.db.ent(db, kb)), lcs.max.of(R.ll.read(C.config.get_value(cfg, "proto-max-bulk-len"))))
+    case _:
+      R.RError{"ERR wrong number of arguments for 'lcs' command"}
+
 # a session command's reply, sent or not; the databases are there for
 # the commands that read them
 def own_reply(+o: R.SessOp, +c: Conn, +s: Srv, +ds: R.Ds) -> Maybe<&2, R.Reply>:
@@ -821,6 +1129,8 @@ def own_reply(+o: R.SessOp, +c: Conn, +s: Srv, +ds: R.Ds) -> Maybe<&2, R.Reply>:
       say(conn.mode(c), obj.reply(sub, R.db.ent(R.ds.focused(ds), k), srv.cfg(s)))
     case R.SCopy{+args}:
       say(conn.mode(c), copy.reply(copy.of(args, c, s), ds))
+    case R.SLcs{args}:
+      say(conn.mode(c), lcs.reply(args, R.ds.focused(ds), srv.cfg(s)))
     case R.SReply{r}:
       say(conn.mode(c), r)
     case R.SBad{r}:
@@ -870,6 +1180,8 @@ def own_conn(+o: R.SessOp, +c: Conn, +s: Srv) -> Conn:
     case R.SObject{sub, k}:
       step_conn(c, s)
     case R.SCopy{a}:
+      step_conn(c, s)
+    case R.SLcs{a}:
       step_conn(c, s)
     case R.SReply{r}:
       step_conn(c, s)

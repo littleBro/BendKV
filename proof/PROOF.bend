@@ -2596,6 +2596,8 @@ def t_reads_go(c: R.Cmd, +db: KV.Trie<String>, +now: Nat) -> {Laws.is_read(c) ==
       e => Empty.absurd({T.db_of(T.exec(R.MSetNx{ps}, db, now)) == db : KV.Trie<String>}, false_true(e))
     case R.Rename{s, d, nx}:
       e => Empty.absurd({T.db_of(T.exec(R.Rename{s, d, nx}, db, now)) == db : KV.Trie<String>}, false_true(e))
+    case R.BitOp{op, d, srcs}:
+      e => Empty.absurd({T.db_of(T.exec(R.BitOp{op, d, srcs}, db, now)) == db : KV.Trie<String>}, false_true(e))
     case R.Own{o}:
       e => {==}
     case R.Bad{r}:
@@ -2840,6 +2842,15 @@ def ren_frame(r: R.Ren, +nx: Bool, +s: String, +d: String, +db: KV.Trie<String>,
               Laws.entry_del_other(String, KV.setx(String, db, d, v, x), s, j, Laws.key_eq_false(j, s, or_false_l(KV.str_eq(j, s), Laws.any_key(j, [d]))(e))),
               Laws.entry_setx_other(String, db, d, j, v, x, Laws.key_eq_false(j, d, or_false_l(KV.str_eq(j, d), Laws.any_key(j, Nil{}))(or_false_r(KV.str_eq(j, s), Laws.any_key(j, [d]))(e)))))
 
+# BITOP's write, for a given value: the destination set or deleted, every
+# other key as it was
+def bitop_frame(e: Bool, +v: String, +d: String, +db: KV.Trie<String>, +j: String) -> {KV.str_eq(j, d) == False{} : Bool} -> {KV.entry(String, T.bitop.t(e, v, d, db), j) == KV.entry(String, db, j) : Maybe<&2, KV.Item<String>>}:
+  match e:
+    case True{}:
+      ne => Laws.entry_del_other(String, db, d, j, Laws.key_eq_false(j, d, ne))
+    case False{}:
+      ne => Laws.entry_setx_other(String, db, d, j, v, 0n, Laws.key_eq_false(j, d, ne))
+
 def frame_go(c: R.Cmd, +db: KV.Trie<String>, +j: String, +now: Nat) -> {Laws.writes(c, j) == False{} : Bool} -> {KV.entry(String, T.db_of(T.exec(c, db, now)), j) == KV.entry(String, db, j) : Maybe<&2, KV.Item<String>>}:
   match c:
     case R.Ping{}:
@@ -2877,6 +2888,8 @@ def frame_go(c: R.Cmd, +db: KV.Trie<String>, +j: String, +now: Nat) -> {Laws.wri
       e => msetnx_frame(R.pairs.live(ps, now, db), ps, db, j)(e)
     case R.Rename{+s, +d, +nx}:
       e => ren_frame(T.ren.find(db, s, d, nx, now), nx, s, d, db, j)(e)
+    case R.BitOp{+op, +d, +srcs}:
+      e => bitop_frame(String.is_empty(R.bitop.val(op, srcs, now, db)), R.bitop.val(op, srcs, now, db), d, db, j)(e)
     case R.Own{o}:
       e => {==}
     case R.Bad{r}:
@@ -3173,6 +3186,8 @@ def loc_reply(c: R.Cmd, +t: KV.Trie<String>, +u: KV.Trie<String>, +now: Nat) -> 
       kd => e => Empty.absurd({T.reply_of(T.exec(R.MSetNx{ps}, t, now)) == T.reply_of(T.exec(R.MSetNx{ps}, u, now)) : R.Reply}, false_true(kd))
     case R.Rename{s, d, nx}:
       kd => e => Empty.absurd({T.reply_of(T.exec(R.Rename{s, d, nx}, t, now)) == T.reply_of(T.exec(R.Rename{s, d, nx}, u, now)) : R.Reply}, false_true(kd))
+    case R.BitOp{op, d, srcs}:
+      kd => e => Empty.absurd({T.reply_of(T.exec(R.BitOp{op, d, srcs}, t, now)) == T.reply_of(T.exec(R.BitOp{op, d, srcs}, u, now)) : R.Reply}, false_true(kd))
     case R.Own{o}:
       kd => e => Empty.absurd({T.reply_of(T.exec(R.Own{o}, t, now)) == T.reply_of(T.exec(R.Own{o}, u, now)) : R.Reply}, false_true(kd))
     case R.Bad{r}:
@@ -3296,6 +3311,8 @@ def loc_key(c: R.Cmd, +t: KV.Trie<String>, +u: KV.Trie<String>, +now: Nat) -> {k
       kd => e => Empty.absurd({KV.entry(String, T.db_of(T.exec(R.MSetNx{ps}, t, now)), "") == KV.entry(String, T.db_of(T.exec(R.MSetNx{ps}, u, now)), "") : Maybe<&2, KV.Item<String>>}, false_true(kd))
     case R.Rename{s, d, nx}:
       kd => e => Empty.absurd({KV.entry(String, T.db_of(T.exec(R.Rename{s, d, nx}, t, now)), "") == KV.entry(String, T.db_of(T.exec(R.Rename{s, d, nx}, u, now)), "") : Maybe<&2, KV.Item<String>>}, false_true(kd))
+    case R.BitOp{op, d, srcs}:
+      kd => e => Empty.absurd({KV.entry(String, T.db_of(T.exec(R.BitOp{op, d, srcs}, t, now)), "") == KV.entry(String, T.db_of(T.exec(R.BitOp{op, d, srcs}, u, now)), "") : Maybe<&2, KV.Item<String>>}, false_true(kd))
     case R.Own{o}:
       kd => e => Empty.absurd({KV.entry(String, T.db_of(T.exec(R.Own{o}, t, now)), "") == KV.entry(String, T.db_of(T.exec(R.Own{o}, u, now)), "") : Maybe<&2, KV.Item<String>>}, false_true(kd))
     case R.Bad{r}:
@@ -3347,6 +3364,8 @@ def writes_one(c: R.Cmd, +j: String) -> {keyed(c) == True{} : Bool} -> {False{} 
       kd => nb => Empty.absurd({Laws.writes(R.MSetNx{ps}, j) == False{} : Bool}, false_true(kd))
     case R.Rename{s, d, nx}:
       kd => nb => Empty.absurd({Laws.writes(R.Rename{s, d, nx}, j) == False{} : Bool}, false_true(kd))
+    case R.BitOp{op, d, srcs}:
+      kd => nb => Empty.absurd({Laws.writes(R.BitOp{op, d, srcs}, j) == False{} : Bool}, false_true(kd))
     case R.Own{o}:
       kd => nb => Empty.absurd({Laws.writes(R.Own{o}, j) == False{} : Bool}, false_true(kd))
     case R.Bad{r}:
@@ -3522,6 +3541,38 @@ def ren_point(r: R.Ren, +nx: Bool, +s: String, +d: String, +t: KV.Trie<String>, 
     case R.RnMove{+v, +x}:
       e => del_one_point(KV.setx(String, t, d, v, x), KV.setx(String, u, d, v, x), s, j, KV.str_eq(j, s))({==})(str_refl(j, s))(setx_one_point(t, u, d, v, x, j, KV.str_eq(j, d))({==})(str_refl(j, d))(e))
 
+# BITOP's value, in two tries that agree on its sources
+def bitop_src_eq(+t: KV.Trie<String>, +u: KV.Trie<String>, +k: String, +now: Nat, h: {KV.entry(String, t, k) == KV.entry(String, u, k) : Maybe<&2, KV.Item<String>>}) -> {R.bitop.src(t, now, k) == R.bitop.src(u, now, k) : String}:
+  %read_eq(t, k, now) : {R.bitop.or_empty(_) == R.bitop.or_empty(KV.read(String, u, k, now)) : String}
+  %read_eq(u, k, now) : {R.bitop.or_empty(Laws.live_val(String, KV.entry(String, t, k), now)) == R.bitop.or_empty(_) : String}
+  %h : {R.bitop.or_empty(Laws.live_val(String, KV.entry(String, t, k), now)) == R.bitop.or_empty(Laws.live_val(String, _, now)) : String}
+  {==}
+
+def bitop_fold_eq(+op: R.BitK, srcs: List<&2, String>, +t: KV.Trie<String>, +u: KV.Trie<String>, +now: Nat, +acc: String) -> Agree(t, u, srcs) -> {R.bitop.fold(op, srcs, now, t, acc) == R.bitop.fold(op, srcs, now, u, acc) : String}:
+  match srcs:
+    case Nil{}:
+      ag => {==}
+    case Con{+k, +rest}:
+      +ag => %bitop_src_eq(t, u, k, now, ag_head(t, u, k, rest, ag)) : {R.bitop.fold(op, rest, now, t, R.bitop.zip(op, acc, R.bitop.src(t, now, k), "")) == R.bitop.fold(op, rest, now, u, R.bitop.zip(op, acc, _, "")) : String}
+             bitop_fold_eq(op, rest, t, u, now, R.bitop.zip(op, acc, R.bitop.src(t, now, k), ""))(ag_tail(t, u, k, rest, ag))
+
+def bitop_val_eq(+op: R.BitK, srcs: List<&2, String>, +t: KV.Trie<String>, +u: KV.Trie<String>, +now: Nat) -> Agree(t, u, srcs) -> {R.bitop.val(op, srcs, now, t) == R.bitop.val(op, srcs, now, u) : String}:
+  match srcs:
+    case Nil{}:
+      ag => {==}
+    case Con{+k, +rest}:
+      +ag => %bitop_src_eq(t, u, k, now, ag_head(t, u, k, rest, ag)) : {R.bitop.fold(op, rest, now, t, R.bitop.first(op, R.bitop.src(t, now, k))) == R.bitop.fold(op, rest, now, u, R.bitop.first(op, _)) : String}
+             bitop_fold_eq(op, rest, t, u, now, R.bitop.first(op, R.bitop.src(t, now, k)))(ag_tail(t, u, k, rest, ag))
+
+# BITOP's write, for a given value: a key with one entry in two tries has
+# one entry after it
+def bitop_point(e: Bool, +v: String, +d: String, +t: KV.Trie<String>, +u: KV.Trie<String>, +j: String) -> {KV.entry(String, t, j) == KV.entry(String, u, j) : Maybe<&2, KV.Item<String>>} -> {KV.entry(String, T.bitop.t(e, v, d, t), j) == KV.entry(String, T.bitop.t(e, v, d, u), j) : Maybe<&2, KV.Item<String>>}:
+  match e:
+    case True{}:
+      h => del_one_point(t, u, d, j, KV.str_eq(j, d))({==})(str_refl(j, d))(h)
+    case False{}:
+      h => setx_one_point(t, u, d, v, 0n, j, KV.str_eq(j, d))({==})(str_refl(j, d))(h)
+
 # any command, run on two tries that agree on the keys its writes depend
 # on: a key j's entry after it depends only on j's entry before it
 def point_cmd(c: R.Cmd, +t: KV.Trie<String>, +u: KV.Trie<String>, +j: String, +now: Nat) -> Agree(t, u, Laws.deps(c)) -> {KV.entry(String, t, j) == KV.entry(String, u, j) : Maybe<&2, KV.Item<String>>} -> {KV.entry(String, T.db_of(T.exec(c, t, now)), j) == KV.entry(String, T.db_of(T.exec(c, u, now)), j) : Maybe<&2, KV.Item<String>>}:
@@ -3564,6 +3615,9 @@ def point_cmd(c: R.Cmd, +t: KV.Trie<String>, +u: KV.Trie<String>, +j: String, +n
     case R.Rename{+s, +d, +nx}:
       ag => e => %ren_find_eq(t, u, s, d, nx, now)(ag) : {KV.entry(String, T.db_of(T.ren(T.ren.find(t, s, d, nx, now), nx, s, d, t)), j) == KV.entry(String, T.db_of(T.ren(_, nx, s, d, u)), j) : Maybe<&2, KV.Item<String>>}
                  ren_point(T.ren.find(t, s, d, nx, now), nx, s, d, t, u, j)(e)
+    case R.BitOp{+op, +d, +srcs}:
+      ag => e => %bitop_val_eq(op, srcs, t, u, now)(ag) : {KV.entry(String, T.bitop.t(String.is_empty(R.bitop.val(op, srcs, now, t)), R.bitop.val(op, srcs, now, t), d, t), j) == KV.entry(String, T.bitop.t(String.is_empty(_), _, d, u), j) : Maybe<&2, KV.Item<String>>}
+                 bitop_point(String.is_empty(R.bitop.val(op, srcs, now, t)), R.bitop.val(op, srcs, now, t), d, t, u, j)(e)
     case R.Own{o}:
       ag => e => e
     case R.Bad{r}:
@@ -3724,6 +3778,9 @@ def reply_after(c1: R.Cmd, +c2: R.Cmd, +db: KV.Trie<String>, +now: Nat) -> {Laws
     case R.Rename{+s, +d, +nx}:
       e => %ren_find_eq(T.db_of(T.exec(c2, db, now)), db, s, d, nx, now)(frame_agree(c2, db, [s, d], now)(e)) : {T.reply_of(T.ren(T.ren.find(T.db_of(T.exec(c2, db, now)), s, d, nx, now), nx, s, d, T.db_of(T.exec(c2, db, now)))) == T.reply_of(T.ren(_, nx, s, d, db)) : R.Reply}
            ren_rep(T.ren.find(T.db_of(T.exec(c2, db, now)), s, d, nx, now), nx, s, d, T.db_of(T.exec(c2, db, now)), db)
+    case R.BitOp{+op, +d, +srcs}:
+      e => %bitop_val_eq(op, srcs, T.db_of(T.exec(c2, db, now)), db, now)(frame_agree(c2, db, srcs, now)(e)) : {T.reply_of(T.bitop(R.bitop.val(op, srcs, now, T.db_of(T.exec(c2, db, now))), d, T.db_of(T.exec(c2, db, now)))) == T.reply_of(T.bitop(_, d, db)) : R.Reply}
+           {==}
     case R.Own{o}:
       e => {==}
     case R.Bad{r}:
@@ -3798,6 +3855,8 @@ def read_writes(c: R.Cmd, +j: String) -> {Laws.is_read(c) == True{} : Bool} -> {
       e => Empty.absurd({Laws.writes(R.MSetNx{ps}, j) == False{} : Bool}, false_true(e))
     case R.Rename{s, d, nx}:
       e => Empty.absurd({Laws.writes(R.Rename{s, d, nx}, j) == False{} : Bool}, false_true(e))
+    case R.BitOp{op, d, srcs}:
+      e => Empty.absurd({Laws.writes(R.BitOp{op, d, srcs}, j) == False{} : Bool}, false_true(e))
     case R.Own{o}:
       e => {==}
     case R.Bad{r}:
@@ -3856,6 +3915,8 @@ def clash_w_at(c1: R.Cmd, +c2: R.Cmd, +j: String) -> {Laws.clash_w(c2, c1) == Fa
       pairs_clash(c2, j, ps)
     case R.Rename{+s, +d, +nx}:
       any_clash(c2, j, [s, d])
+    case R.BitOp{op, +d, srcs}:
+      e => key_clash(c2, j, d, e, KV.str_eq(j, d))({==})(str_refl(j, d))
     case R.Own{o}:
       e => {==}
     case R.Bad{r}:
@@ -3976,6 +4037,9 @@ def rep_tw(+c1: R.Cmd, +c2: R.Cmd, +db: KV.Trie<String>, +H: List<&2, R.Cmd>, +n
     case R.Rename{+s, +d, +nx}:
       kw => %ren_find_eq(tw(H, T.db_of(T.exec(c2, T.db_of(T.exec(c1, db, now)), now)), now), tw(H, T.db_of(T.exec(c1, T.db_of(T.exec(c2, db, now)), now)), now), s, d, nx, now)(eq_gen(c1, c2, db, H, [s, d], now, e)) : {T.reply_of(T.ren(T.ren.find(tw(H, T.db_of(T.exec(c2, T.db_of(T.exec(c1, db, now)), now)), now), s, d, nx, now), nx, s, d, tw(H, T.db_of(T.exec(c2, T.db_of(T.exec(c1, db, now)), now)), now))) == T.reply_of(T.ren(_, nx, s, d, tw(H, T.db_of(T.exec(c1, T.db_of(T.exec(c2, db, now)), now)), now))) : R.Reply}
             ren_rep(T.ren.find(tw(H, T.db_of(T.exec(c2, T.db_of(T.exec(c1, db, now)), now)), now), s, d, nx, now), nx, s, d, tw(H, T.db_of(T.exec(c2, T.db_of(T.exec(c1, db, now)), now)), now), tw(H, T.db_of(T.exec(c1, T.db_of(T.exec(c2, db, now)), now)), now))
+    case R.BitOp{+op, +d, +srcs}:
+      kw => %bitop_val_eq(op, srcs, tw(H, T.db_of(T.exec(c2, T.db_of(T.exec(c1, db, now)), now)), now), tw(H, T.db_of(T.exec(c1, T.db_of(T.exec(c2, db, now)), now)), now), now)(eq_gen(c1, c2, db, H, srcs, now, e)) : {T.reply_of(T.bitop(R.bitop.val(op, srcs, now, tw(H, T.db_of(T.exec(c2, T.db_of(T.exec(c1, db, now)), now)), now)), d, tw(H, T.db_of(T.exec(c2, T.db_of(T.exec(c1, db, now)), now)), now))) == T.reply_of(T.bitop(_, d, tw(H, T.db_of(T.exec(c1, T.db_of(T.exec(c2, db, now)), now)), now))) : R.Reply}
+            {==}
     case R.Own{o}:
       kw => {==}
     case R.Bad{r}:
@@ -4115,6 +4179,17 @@ def ren_br(r: R.Ren, +nx: Bool, +s: String, +d: String, +t: KV.Trie<String>, +n:
     case R.RnMove{v, e}:
       {==}
 
+# BITOP's write on the record leaves the spec's trie
+def bitop_br.t(e: Bool, +v: String, +d: String, +t: KV.Trie<String>, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>) -> {R.db.t(R.bitop.db(e, v, d, R.Db{t, n, x, now, rr})) == T.bitop.t(e, v, d, t) : KV.Trie<String>}:
+  match e:
+    case True{}:
+      {==}
+    case False{}:
+      {==}
+
+def bitop_br(+v: String, +d: String, +t: KV.Trie<String>, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>) -> {proj((R.r_int(String.length(v)), R.bitop.db(String.is_empty(v), v, d, R.Db{t, n, x, now, rr}))) == T.bitop(v, d, t) : R.Reply & KV.Trie<String>}:
+  Equal.cong(KV.Trie<String>, R.Reply & KV.Trie<String>, z => (R.r_int(String.length(v)), z), R.db.t(R.bitop.db(String.is_empty(v), v, d, R.Db{t, n, x, now, rr})), T.bitop.t(String.is_empty(v), v, d, t), bitop_br.t(String.is_empty(v), v, d, t, n, x, now, rr))
+
 # a command answers as the spec's at the database's now, DBSIZE but, and
 # leaves the trie the spec's leaves
 def bridge_go(c: R.Cmd, +t: KV.Trie<String>, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>) -> {Laws.keywise(c) == True{} : Bool} -> {proj(R.exec(c, R.Db{t, n, x, now, rr})) == T.exec(c, t, now) : R.Reply & KV.Trie<String>}:
@@ -4153,6 +4228,8 @@ def bridge_go(c: R.Cmd, +t: KV.Trie<String>, +n: Nat, +x: Nat, +now: Nat, +rr: M
       kw => msetnx_br(R.pairs.live(ps, now, t), ps, t, n, x, now, rr)
     case R.Rename{+s, +d, +nx}:
       kw => ren_br(T.ren.find(t, s, d, nx, now), nx, s, d, t, n, x, now, rr)
+    case R.BitOp{+op, +d, +srcs}:
+      kw => bitop_br(R.bitop.val(op, srcs, now, t), d, t, n, x, now, rr)
     case R.Own{o}:
       kw => {==}
     case R.Bad{r}:
@@ -4232,6 +4309,13 @@ def ren_now(r: R.Ren, +nx: Bool, +s: String, +d: String, +t: KV.Trie<String>, +n
     case R.RnMove{v, e}:
       {==}
 
+def bitop_now(e: Bool, +v: String, +d: String, +t: KV.Trie<String>, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>) -> {R.db.now(R.bitop.db(e, v, d, R.Db{t, n, x, now, rr})) == now : Nat}:
+  match e:
+    case True{}:
+      {==}
+    case False{}:
+      {==}
+
 def now_go(c: R.Cmd, +t: KV.Trie<String>, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>) -> {R.db.now(R.db_of(R.exec(c, R.Db{t, n, x, now, rr}))) == now : Nat}:
   match c:
     case R.Ping{}:
@@ -4268,6 +4352,8 @@ def now_go(c: R.Cmd, +t: KV.Trie<String>, +n: Nat, +x: Nat, +now: Nat, +rr: Mayb
       msetnx_now(R.pairs.live(ps, now, t), ps, t, n, x, now, rr)
     case R.Rename{+s, +d, +nx}:
       ren_now(T.ren.find(t, s, d, nx, now), nx, s, d, t, n, x, now, rr)
+    case R.BitOp{+op, +d, +srcs}:
+      bitop_now(String.is_empty(R.bitop.val(op, srcs, now, t)), R.bitop.val(op, srcs, now, t), d, t, n, x, now, rr)
     case R.Own{o}:
       {==}
     case R.Bad{r}:
@@ -4318,6 +4404,8 @@ def bt_go(c: R.Cmd, +t: KV.Trie<String>, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe
       bt_kw(R.MSetNx{ps}, t, n, x, now, rr, {==})
     case R.Rename{+s, +d, +nx}:
       bt_kw(R.Rename{s, d, nx}, t, n, x, now, rr, {==})
+    case R.BitOp{+op, +d, +srcs}:
+      bt_kw(R.BitOp{op, d, srcs}, t, n, x, now, rr, {==})
     case R.Own{o}:
       {==}
     case R.Bad{r}:
@@ -4425,6 +4513,8 @@ def reads_go(c: R.Cmd, +db: R.Db) -> {Laws.is_read(c) == True{} : Bool} -> {R.db
       e => Empty.absurd({R.db_of(R.exec(R.MSetNx{ps}, db)) == db : R.Db}, false_true(e))
     case R.Rename{s, d, nx}:
       e => Empty.absurd({R.db_of(R.exec(R.Rename{s, d, nx}, db)) == db : R.Db}, false_true(e))
+    case R.BitOp{op, d, srcs}:
+      e => Empty.absurd({R.db_of(R.exec(R.BitOp{op, d, srcs}, db)) == db : R.Db}, false_true(e))
     case R.Own{o}:
       e => {==}
     case R.Bad{r}:
@@ -4707,6 +4797,25 @@ def Laws.msetnx_present(db, ps, e):
 def Laws.msetnx_missing(db, ps, e):
   msetnx_missing_db(db, ps)(e)
 
+
+# BITOP's destination after it: deleted for an empty value, else the value
+# with no time
+def bitop_store_go(e: Bool, +v: String, +d: String, +t: KV.Trie<String>, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>) -> {Laws.at_key((R.r_int(String.length(v)), R.bitop.db(e, v, d, R.Db{t, n, x, now, rr})), d) == (R.r_int(String.length(v)), Laws.stored(e, v)) : R.Reply & Maybe<&2, KV.Item<String>>}:
+  match e:
+    case True{}:
+      %Laws.entry_del_same(String, t, d) : {Laws.at_key((R.r_int(String.length(v)), R.bitop.db(True{}, v, d, R.Db{t, n, x, now, rr})), d) == (R.r_int(String.length(v)), _) : R.Reply & Maybe<&2, KV.Item<String>>}
+      {==}
+    case False{}:
+      %Laws.entry_setx_same(String, t, d, v, 0n) : {Laws.at_key((R.r_int(String.length(v)), R.bitop.db(False{}, v, d, R.Db{t, n, x, now, rr})), d) == (R.r_int(String.length(v)), _) : R.Reply & Maybe<&2, KV.Item<String>>}
+      {==}
+
+def bitop_store_db(+op: R.BitK, +d: String, +srcs: List<&2, String>, +db: R.Db) -> {Laws.at_key(R.exec(R.BitOp{op, d, srcs}, db), d) == (R.r_int(String.length(Laws.bitop_val(op, srcs, db))), Laws.stored(String.is_empty(Laws.bitop_val(op, srcs, db)), Laws.bitop_val(op, srcs, db))) : R.Reply & Maybe<&2, KV.Item<String>>}:
+  match db:
+    case R.Db{+t, +n, +x, +now, +rr}:
+      bitop_store_go(String.is_empty(R.bitop.val(op, srcs, now, t)), R.bitop.val(op, srcs, now, t), d, t, n, x, now, rr)
+
+def Laws.bitop_store(op, d, srcs, db):
+  bitop_store_db(op, d, srcs, db)
 def Laws.batch_nil(db):
   {==}
 
@@ -4760,6 +4869,8 @@ def reply_after_db(c1: R.Cmd, +c2: R.Cmd, +db: R.Db) -> {Laws.disturbs(c2, c1) =
       e => reply_via(R.MSetNx{ps}, c2, db, {==}, e)
     case R.Rename{s, d, nx}:
       e => reply_via(R.Rename{s, d, nx}, c2, db, {==}, e)
+    case R.BitOp{op, d, srcs}:
+      e => reply_via(R.BitOp{op, d, srcs}, c2, db, {==}, e)
     case R.Own{o}:
       e => reply_via(R.Own{o}, c2, db, {==}, e)
     case R.Bad{r}:
@@ -5310,6 +5421,8 @@ def eff(c: R.Cmd, +db: R.Db) -> List<&2, R.Cmd>:
       A.msetnx.effect(R.pairs.live(ps, R.db.now(db), R.db.trie(db)), ps)
     case R.Rename{+s, +d, +nx}:
       A.ren.effect(R.ren.find(db, s, d, nx), s, d)
+    case R.BitOp{+op, +d, +srcs}:
+      A.bitop.effect(String.is_empty(R.bitop.val(op, srcs, R.db.now(db), R.db.trie(db))), R.bitop.val(op, srcs, R.db.now(db), R.db.trie(db)), d)
     case R.Own{o}:
       A.effect(R.Own{o})
     case R.Bad{r}:
@@ -5428,6 +5541,8 @@ def run_split(c: R.Cmd, +db: R.Db) -> {(R.reply_of(R.exec(c, db)), (eff(c, db), 
       out_split(R.exec(R.MSetNx{ps}, db), A.msetnx.effect(R.pairs.live(ps, R.db.now(db), R.db.trie(db)), ps))
     case R.Rename{+s, +d, +nx}:
       out_split(R.exec(R.Rename{s, d, nx}, db), A.ren.effect(R.ren.find(db, s, d, nx), s, d))
+    case R.BitOp{+op, +d, +srcs}:
+      out_split(R.exec(R.BitOp{op, d, srcs}, db), A.bitop.effect(String.is_empty(R.bitop.val(op, srcs, R.db.now(db), R.db.trie(db))), R.bitop.val(op, srcs, R.db.now(db), R.db.trie(db)), d))
     case R.Own{+o}:
       put_split(R.Own{o}, R.exec(R.Own{o}, db))
     case R.Bad{+r}:
@@ -6081,6 +6196,16 @@ def ren_at0(m: Maybe<&2, KV.Item<String>>, same: Bool, held: Bool, +nx: Bool, +s
     case Some{KV.Item{+v, +e}}:
       em => ren_at0_b(KV.live(now, e), same, held, nx, s, d, v, e, t, n, x, now, rr, em)
 
+# BITOP's effect, the SET of its value or the DEL of its destination,
+# replays at time 0 as BITOP ran
+def bitop_at0(e: Bool, +v: String, +d: String, +t: KV.Trie<String>, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>) -> {Laws.final(R.exec_all(A.bitop.effect(e, v, d), R.Db{t, n, x, 0n, rr})) == R.db.at(0n, R.bitop.db(e, v, d, R.Db{t, n, x, now, rr})) : R.Db}:
+  match e:
+    case True{}:
+      %fin_cons(R.Del{[d]}, Nil{}, R.Db{t, n, x, 0n, rr}) : {_ == R.db.at(0n, R.bitop.db(True{}, v, d, R.Db{t, n, x, now, rr})) : R.Db}
+      del_at0([d], t, n, x, now, rr)
+    case False{}:
+      {==}
+
 # a command's effects, run at time 0 on the database it ran on, leave the
 # database it left, at time 0: an update's (and INCRBY's) by its change
 # (out_replay), as the change is a good one (upd_good)
@@ -6132,6 +6257,8 @@ def effect_go(c: R.Cmd, +t: KV.Trie<String>, +n: Nat, +x: Nat, +now: Nat, +rr: M
       msetnx_at0(R.pairs.live(ps, now, t), ps, t, n, x, now, rr)
     case R.Rename{+s, +d, +nx}:
       ren_at0(KV.entry.at(String, t, s, KV.hash(s)), KV.str_eq(s, d), Bool.and(nx, Maybe.is_some(&2, KV.Item<String>, R.ent.live(now, KV.entry.at(String, t, d, KV.hash(d))))), nx, s, d, t, n, x, now, rr)({==})({==})
+    case R.BitOp{+op, +d, +srcs}:
+      bitop_at0(String.is_empty(R.bitop.val(op, srcs, now, t)), R.bitop.val(op, srcs, now, t), d, t, n, x, now, rr)
     case R.Own{o}:
       {==}
     case R.Bad{r}:
@@ -6362,6 +6489,13 @@ def ren_args(r: R.Ren, +s: String, +d: String) -> {A.ren.effect(r, s, d) == A.pa
     case R.RnMove{v, e}:
       {==}
 
+def bitop_args(e: Bool, +v: String, +d: String) -> {A.bitop.effect(e, v, d) == A.parse_all(A.args_all(A.bitop.effect(e, v, d))) : List<&2, R.Cmd>}:
+  match e:
+    case True{}:
+      {==}
+    case False{}:
+      {==}
+
 # a command's effects parse back to themselves
 def args_go(c: R.Cmd, +t: KV.Trie<String>, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>) -> {eff(c, R.Db{t, n, x, now, rr}) == A.parse_all(A.args_all(eff(c, R.Db{t, n, x, now, rr}))) : List<&2, R.Cmd>}:
   match c:
@@ -6408,6 +6542,8 @@ def args_go(c: R.Cmd, +t: KV.Trie<String>, +n: Nat, +x: Nat, +now: Nat, +rr: May
       msetnx_args(R.pairs.live(ps, now, t), ps)
     case R.Rename{+s, +d, +nx}:
       ren_args(T.ren.find(t, s, d, nx, now), s, d)
+    case R.BitOp{+op, +d, +srcs}:
+      bitop_args(String.is_empty(R.bitop.val(op, srcs, now, t)), R.bitop.val(op, srcs, now, t), d)
     case R.Own{o}:
       {==}
     case R.Bad{r}:
@@ -6680,6 +6816,13 @@ def ren_one(r: R.Ren, +s: String, +d: String) -> OneEff(A.ren.effect(r, s, d)):
     case R.RnMove{v, e}:
       Inr{(R.Rename{s, d, False{}}, {==})}
 
+def bitop_one(e: Bool, +v: String, +d: String) -> OneEff(A.bitop.effect(e, v, d)):
+  match e:
+    case True{}:
+      Inr{(R.Del{[d]}, {==})}
+    case False{}:
+      Inr{(R.Set{d, v}, {==})}
+
 def eff_one_go(c: R.Cmd, +t: KV.Trie<String>, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>) -> OneEff(eff(c, R.Db{t, n, x, now, rr})):
   match c:
     case R.Ping{}:
@@ -6724,6 +6867,8 @@ def eff_one_go(c: R.Cmd, +t: KV.Trie<String>, +n: Nat, +x: Nat, +now: Nat, +rr: 
       msetnx_one(R.pairs.live(ps, now, t), ps)
     case R.Rename{+s, +d, +nx}:
       ren_one(T.ren.find(t, s, d, nx, now), s, d)
+    case R.BitOp{+op, +d, +srcs}:
+      bitop_one(String.is_empty(R.bitop.val(op, srcs, now, t)), R.bitop.val(op, srcs, now, t), d)
     case R.Own{o}:
       Inl{{==}}
     case R.Bad{r}:
@@ -7615,6 +7760,8 @@ def fa_of(e: R.Cmd) -> {R.parse(A.args(e)) == e : R.Cmd} -> {A.file.act(e) == R.
     case R.MSetNx{ps}:
       h => {==}
     case R.Rename{s, d, nx}:
+      h => {==}
+    case R.BitOp{op, d, srcs}:
       h => {==}
     case R.Own{o}:
       h => Empty.absurd({A.file.act(R.Own{o}) == R.ARun{R.Own{o}} : R.Act}, own_noent(o, h))
@@ -9348,6 +9495,8 @@ def unzip_gen(+conn: S.Conn, +srv: S.Srv, rs: List<&2, B.Req>, +cs: List<&2, R.C
       e => unzip_gen(conn, srv, rest, R.MSetNx{x0} <> cs, h <> hs, ds)(e)
     case Con{B.Req{R.Rename{x0, x1, x2}, h}, rest}:
       e => unzip_gen(conn, srv, rest, R.Rename{x0, x1, x2} <> cs, h <> hs, ds)(e)
+    case Con{B.Req{R.BitOp{x0, x1, x2}, h}, rest}:
+      e => unzip_gen(conn, srv, rest, R.BitOp{x0, x1, x2} <> cs, h <> hs, ds)(e)
     case Con{B.Req{R.Own{x0}, h}, rest}:
       e => mixed_gen(conn, srv, rest, R.Own{x0} <> cs, h <> hs, ds)
     case Con{B.Req{R.Bad{x0}, h}, rest}:
@@ -9448,6 +9597,8 @@ def unzip_gen_log(+conn: S.Conn, +srv: S.Srv, rs: List<&2, B.Req>, +cs: List<&2,
       e => unzip_gen_log(conn, srv, rest, R.MSetNx{x0} <> cs, h <> hs, ds)(e)
     case Con{B.Req{R.Rename{x0, x1, x2}, h}, rest}:
       e => unzip_gen_log(conn, srv, rest, R.Rename{x0, x1, x2} <> cs, h <> hs, ds)(e)
+    case Con{B.Req{R.BitOp{x0, x1, x2}, h}, rest}:
+      e => unzip_gen_log(conn, srv, rest, R.BitOp{x0, x1, x2} <> cs, h <> hs, ds)(e)
     case Con{B.Req{R.Own{x0}, h}, rest}:
       e => mixed_gen_log(conn, srv, rest, R.Own{x0} <> cs, h <> hs, ds)
     case Con{B.Req{R.Bad{x0}, h}, rest}:
@@ -9522,6 +9673,8 @@ def srv_same.o(o: R.SessOp, +conn: S.Conn, +srv: S.Srv, +ef: {S.authed(conn, srv
       e => Empty.absurd({S.own_srv(R.SObject{y0, y1}, conn, srv) == srv : S.Srv}, true_false(Equal.trans(Bool, True{}, S.authed(conn, srv), False{}, e, ef)))
     case R.SCopy{y0}:
       e => Empty.absurd({S.own_srv(R.SCopy{y0}, conn, srv) == srv : S.Srv}, true_false(Equal.trans(Bool, True{}, S.authed(conn, srv), False{}, e, ef)))
+    case R.SLcs{y0}:
+      e => Empty.absurd({S.own_srv(R.SLcs{y0}, conn, srv) == srv : S.Srv}, true_false(Equal.trans(Bool, True{}, S.authed(conn, srv), False{}, e, ef)))
     case R.SReply{y0}:
       e => Empty.absurd({S.own_srv(R.SReply{y0}, conn, srv) == srv : S.Srv}, true_false(Equal.trans(Bool, True{}, S.authed(conn, srv), False{}, e, ef)))
     case R.SBad{y0}:
@@ -9629,6 +9782,10 @@ def own_bad(o: R.SessOp, +ps: List<&2, R.Act>, +id: Nat, +a: Bool, +n: String, +
       ih =>
         %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel}, srv), False{}, ef) : {Laws.all_bad(List.append(&2, R.Act, S.acts.k(S.KSess{R.SCopy{y0}}, _, R.Own{R.SCopy{y0}}, S.Conn{id, a, n, m, False{}, sel}, srv), ps)) == True{} : Bool}
         ih
+    case R.SLcs{y0}:
+      ih =>
+        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel}, srv), False{}, ef) : {Laws.all_bad(List.append(&2, R.Act, S.acts.k(S.KSess{R.SLcs{y0}}, _, R.Own{R.SLcs{y0}}, S.Conn{id, a, n, m, False{}, sel}, srv), ps)) == True{} : Bool}
+        ih
     case R.SReply{y0}:
       ih =>
         %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel}, srv), False{}, ef) : {Laws.all_bad(List.append(&2, R.Act, S.acts.k(S.KSess{R.SReply{y0}}, _, R.Own{R.SReply{y0}}, S.Conn{id, a, n, m, False{}, sel}, srv), ps)) == True{} : Bool}
@@ -9685,6 +9842,10 @@ def ran_bad(c: R.Cmd, +ps: List<&2, R.Act>, +id: Nat, +a: Bool, +n: String, +m: 
     case R.Rename{x0, x1, x2}:
       ih =>
         %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel}, srv), False{}, ef) : {Laws.all_bad(List.append(&2, R.Act, S.acts.k(S.KData{}, _, R.Rename{x0, x1, x2}, S.Conn{id, a, n, m, False{}, sel}, srv), ps)) == True{} : Bool}
+        ih
+    case R.BitOp{x0, x1, x2}:
+      ih =>
+        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel}, srv), False{}, ef) : {Laws.all_bad(List.append(&2, R.Act, S.acts.k(S.KData{}, _, R.BitOp{x0, x1, x2}, S.Conn{id, a, n, m, False{}, sel}, srv), ps)) == True{} : Bool}
         ih
     case R.DbSize{}:
       ih =>
@@ -9795,6 +9956,10 @@ def auth_own(o: R.SessOp, +id: Nat, +a: Bool, +n: String, +m: S.Mute, +sel: Nat,
       el =>
         %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel}, srv), False{}, ef) : {S.conn.auth(S.next_conn.k(S.KSess{R.SCopy{y0}}, _, S.Conn{id, a, n, m, False{}, sel}, srv)) == False{} : Bool}
         ef
+    case R.SLcs{y0}:
+      el =>
+        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel}, srv), False{}, ef) : {S.conn.auth(S.next_conn.k(S.KSess{R.SLcs{y0}}, _, S.Conn{id, a, n, m, False{}, sel}, srv)) == False{} : Bool}
+        ef
     case R.SReply{y0}:
       el =>
         %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel}, srv), False{}, ef) : {S.conn.auth(S.next_conn.k(S.KSess{R.SReply{y0}}, _, S.Conn{id, a, n, m, False{}, sel}, srv)) == False{} : Bool}
@@ -9828,6 +9993,8 @@ def auth_nc(c: R.Cmd, +id: Nat, +a: Bool, +n: String, +m: S.Mute, +sel: Nat, +sr
     case R.MSetNx{x0}:
       el => ef
     case R.Rename{x0, x1, x2}:
+      el => ef
+    case R.BitOp{x0, x1, x2}:
       el => ef
     case R.DbSize{}:
       el => ef
