@@ -41,7 +41,9 @@ def buf() -> String:
   "SETRANGE g 3 xyz\r\nSETRANGE r1 2 ab\r\nSETRANGE r2 0 \"\"\r\nSETRANGE g 0 \"\"\r\nSETRANGE u 1 Z\r\n" ++
   "SETRANGE g 536870912 a\r\nSETRANGE g -1 a\r\nSETBIT b1 9 1\r\nSETBIT b1 9 1\r\nSETBIT b1 0 1\r\n" ++
   "SETBIT b1 100 0\r\nSETBIT a 3 1\r\nSETBIT b1 4294967296 1\r\nGETRANGE g 0 -1\r\nGETBIT b1 9\r\n" ++
-  "BITCOUNT b1\r\nBITCOUNT b1 0 -1 BIT\r\nBITPOS b1 1\r\nBITPOS b1 0 2 -1 BYTE\r\nSUBSTR u 0 3\r\n"
+  "BITCOUNT b1\r\nBITCOUNT b1 0 -1 BIT\r\nBITPOS b1 1\r\nBITPOS b1 0 2 -1 BYTE\r\nSUBSTR u 0 3\r\n" ++
+  "MSETNX mx1 1 mx2 2\r\nMSETNX mx2 3 mx3 4\r\nMSETNX mx3 5 mx3 6\r\nMSETNX odd 1 x\r\nRENAME mx1 rn1\r\n" ++
+  "RENAME rn1 u\r\nRENAMENX u mx2\r\nRENAMENX u rn2\r\nRENAME nope x\r\nRENAME rn2 rn2\r\nRENAMENX rn2 rn2\r\n"
 
 # an entry as its value, and the time it expires at when it has one
 def dump.ent(m: Maybe<&2, KV.Item<String>>) -> String:

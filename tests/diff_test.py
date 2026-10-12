@@ -15,7 +15,8 @@ and then wrong or huge ones, but never one that would make a value near
 with errors and FREQ, refused under the default policy (an encoding or a
 count of references BendKV derives from the value, where Redis keeps how
 the value was made, and the idle time reads a clock), and TIME with
-arguments.
+arguments. MSETNX, RENAME and RENAMENX move and set keys of the same
+few names, so they often find one there.
 
 Known, documented divergences that the generator avoids: BendKV's
 integers have at most 14 digits (Redis allows int64), and so have its
@@ -320,6 +321,9 @@ def rnd_cmd(r):
         (0.01, lambda: [b"OBJECT"] + r.choice([[b"FREQ", k()], [b"help"], [b"FOO"], [], [b"ENCODING"],
                                                [b"REFCOUNT", k(), k()], [b"IDLETIME"]])),
         (0.005, lambda: [b"TIME"] + [k() for _ in range(r.choice([1, 2]))]),
+        (0.02, lambda: [b"MSETNX"] + sum(([k(), rnd_value(r)] for _ in range(r.randint(1, 3))), [])),
+        (0.03, lambda: [r.choice([b"RENAME", b"RENAMENX", b"rename"]), k(), k()]),
+        (0.005, lambda: [r.choice([b"MSETNX", b"RENAME", b"RENAMENX"])] + [k() for _ in range(r.choice([0, 1, 3]))]),
     ]
     c *= sum(p for p, f in table)
     acc = 0.0

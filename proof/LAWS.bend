@@ -211,8 +211,32 @@ def writes(c: R.Cmd, +j: String) -> Bool:
       True{}
     case R.Upd{k, op}:
       KV.str_eq(j, k)
+    case R.MSetNx{ps}:
+      any_pair(j, ps)
+    case R.Rename{src, dst, nx}:
+      any_key(j, [src, dst])
     case _:
       False{}
+
+# the keys whose entries a command's writes depend on, besides the key
+# each write is to: MSETNX sets its keys only when none of them is there,
+# and RENAME moves its source key's entry to its destination when the
+# destination is not there for RENAMENX
+def pair_keys(ps: List<&2, R.KVPair>) -> List<&2, String>:
+  match ps:
+    case Nil{}:
+      Nil{}
+    case Con{R.KP{k, v}, rest}:
+      k <> pair_keys(rest)
+
+def deps(c: R.Cmd) -> List<&2, String>:
+  match c:
+    case R.MSetNx{ps}:
+      pair_keys(ps)
+    case R.Rename{src, dst, nx}:
+      [src, dst]
+    case _:
+      Nil{}
 
 # the commands that only read (a command of the connection or of the
 # server, R.Own, never touches the database exec runs on: those that act
@@ -411,6 +435,47 @@ law setrange_effect:
   for  ok: {R.range.go(o, s) == True{} : Bool}
   {at_key(R.exec(R.Upd{k, R.URange{o, s}}, db), k) == (R.r_int(String.length(R.range.put(w, o, s))), Some{KV.Item{R.range.put(w, o, s), e}}) : R.Reply & Maybe<&2, KV.Item<String>>}
 
+# what a command answers, and what two keys hold after it
+def at_keys(r: R.Reply & R.Db, +s: String, +d: String) -> R.Reply & (Maybe<&2, KV.Item<String>> & Maybe<&2, KV.Item<String>>):
+  (x, +db) = r
+  (x, (KV.entry(String, R.db.t(db), s), KV.entry(String, R.db.t(db), d)))
+
+# LAW: RENAME of a key there to another key moves the key's entry, its
+# value and its time, and answers OK: the source is gone, and the
+# destination holds what the source held, whatever it held before
+law rename_effect:
+  for +db: R.Db
+  for +s: String
+  for +d: String
+  for +v: String
+  for +e: Nat
+  for  h: {there(db, s) == Some{KV.Item{v, e}} : Maybe<&2, KV.Item<String>>}
+  for  ne: {KV.str_eq(s, d) == False{} : Bool}
+  {at_keys(R.exec(R.Rename{s, d, False{}}, db), s, d) == (R.r_ok(), (None{}, Some{KV.Item{v, e}})) : R.Reply & (Maybe<&2, KV.Item<String>> & Maybe<&2, KV.Item<String>>)}
+
+# whether a key of ks is there
+def any_there(+db: R.Db, ks: List<&2, String>) -> Bool:
+  match ks:
+    case Nil{}:
+      False{}
+    case Con{+k, rest}:
+      Bool.or(Maybe.is_some(&2, KV.Item<String>, there(db, k)), any_there(db, rest))
+
+# LAW: MSETNX sets nothing when a key of its pairs is there, and answers 0
+law msetnx_present:
+  for +db: R.Db
+  for +ps: List<&2, R.KVPair>
+  for  e: {any_there(db, pair_keys(ps)) == True{} : Bool}
+  {R.exec(R.MSetNx{ps}, db) == (R.r_int(0n), db) : R.Reply & R.Db}
+
+# LAW: and when none is there it sets them all, as MSET does, and answers
+# 1
+law msetnx_missing:
+  for +db: R.Db
+  for +ps: List<&2, R.KVPair>
+  for  e: {any_there(db, pair_keys(ps)) == False{} : Bool}
+  {R.exec(R.MSetNx{ps}, db) == (R.r_int(1n), R.db_of(R.exec(R.MSet{ps}, db))) : R.Reply & R.Db}
+
 # LAW: the sweep of expired keys deletes no key that is there: the
 # server sweeps with DEL of the keys R.reap.keys keeps of those its scan
 # found, whatever the scan found
@@ -458,12 +523,14 @@ def final(r: List<&2, R.Reply> & R.Db) -> R.Db:
 # ==================
 # Commands on different keys may run in either order: each answers the
 # same, and every key reads the same after both. A command changes a key
-# only as that key read before it (no command moves a value from one key
-# to another), so for the database it is enough that no key is written by
-# both; for a reply, that the other command writes no key it reads. These
-# laws speak of what keys read, not of the trie: two new keys of one
-# bucket sit in the order they were set, so KEYS may list them in either
-# order, as Redis's KEYS promises no order.
+# only as that key read before it, and the keys its writes depend on
+# (deps: RENAME moves a value from one key to another, MSETNX sets its
+# keys when none of them is there), so for the database it is enough
+# that no key is written by both, and that neither writes a key the
+# other's writes depend on; for a reply, that the other command writes no
+# key it reads. These laws speak of what keys read, not of the trie: two
+# new keys of one bucket sit in the order they were set, so KEYS may list
+# them in either order, as Redis's KEYS promises no order.
 
 # whether c writes a key of ks
 def writes_any(+c: R.Cmd, ks: List<&2, String>) -> Bool:
@@ -472,6 +539,10 @@ def writes_any(+c: R.Cmd, ks: List<&2, String>) -> Bool:
       False{}
     case Con{+k, rest}:
       Bool.or(writes(c, k), writes_any(c, rest))
+
+# whether c2 writes a key whose entry c1's writes depend on
+def spoils(+c2: R.Cmd, c1: R.Cmd) -> Bool:
+  writes_any(c2, deps(c1))
 
 # whether c2, run first, may change what c1 answers: c2 writes a key c1
 # reads, or c1 reads the whole database (DBSIZE, KEYS, SCAN) and c2 writes
@@ -492,6 +563,10 @@ def disturbs(+c2: R.Cmd, c1: R.Cmd) -> Bool:
       writes_any(c2, ks)
     case R.Peek{+k, o}:
       writes(c2, k)
+    case R.MSetNx{ps}:
+      writes_any(c2, pair_keys(ps))
+    case R.Rename{src, dst, nx}:
+      writes_any(c2, [src, dst])
     case R.DbSize{}:
       Bool.not(is_read(c2))
     case R.Keys{p}:
@@ -511,13 +586,15 @@ law commute_reply:
   {R.reply_of(R.exec(c1, R.db_of(R.exec(c2, db)))) == R.reply_of(R.exec(c1, db)) : R.Reply}
 
 # LAW: run in either order, two commands leave a key that at most one of
-# them writes reading the same
+# them writes reading the same, when neither writes a key the other's
+# writes depend on
 law commute_reads:
   for +c1: R.Cmd
   for +c2: R.Cmd
   for +db: R.Db
   for +j: String
   for  e: {Bool.and(writes(c1, j), writes(c2, j)) == False{} : Bool}
+  for  d: {Bool.or(spoils(c1, c2), spoils(c2, c1)) == False{} : Bool}
   {KV.entry(String, R.db.t(R.db_of(R.exec(c2, R.db_of(R.exec(c1, db))))), j) == KV.entry(String, R.db.t(R.db_of(R.exec(c1, R.db_of(R.exec(c2, db))))), j) : Maybe<&2, KV.Item<String>>}
 
 # LAW: two commands that do not disturb each other answer the same in
@@ -532,9 +609,10 @@ law commute:
 # A swap inside a batch
 # ---------------------
 # Two adjacent commands of a batch may trade places when neither disturbs
-# the other and they write no key in common: the rest of the batch then
-# runs on a database that reads the same at every key, so it answers the
-# same, unless it holds DBSIZE or KEYS, which see the trie itself.
+# the other, they write no key in common and neither writes a key the
+# other's writes depend on: the rest of the batch then runs on a database
+# that reads the same at every key, so it answers the same, unless it
+# holds DBSIZE or KEYS, which see the trie itself.
 
 def writes_pairs(+c: R.Cmd, ps: List<&2, R.KVPair>) -> Bool:
   match ps:
@@ -544,7 +622,7 @@ def writes_pairs(+c: R.Cmd, ps: List<&2, R.KVPair>) -> Bool:
       Bool.or(writes(c, k), writes_pairs(c, rest))
 
 # whether c2 may write a key c1 writes
-def clash(+c2: R.Cmd, c1: R.Cmd) -> Bool:
+def clash_w(+c2: R.Cmd, c1: R.Cmd) -> Bool:
   match c1:
     case R.Set{+k, v}:
       writes(c2, k)
@@ -558,11 +636,20 @@ def clash(+c2: R.Cmd, c1: R.Cmd) -> Bool:
       writes_pairs(c2, ps)
     case R.FlushDb{}:
       Bool.not(is_read(c2))
+    case R.MSetNx{ps}:
+      writes_pairs(c2, ps)
+    case R.Rename{src, dst, nx}:
+      writes_any(c2, [src, dst])
     case _:
       False{}
 
+# whether c2 may write a key c1 writes, or either writes a key the
+# other's writes depend on
+def clash(+c2: R.Cmd, +c1: R.Cmd) -> Bool:
+  Bool.or(clash_w(c2, c1), Bool.or(spoils(c1, c2), spoils(c2, c1)))
+
 # whether two adjacent commands may not trade places: one disturbs the
-# other, or they may write a key in common
+# other, or they clash
 def interferes(+c1: R.Cmd, +c2: R.Cmd) -> Bool:
   Bool.or(Bool.or(disturbs(c1, c2), disturbs(c2, c1)), clash(c2, c1))
 
