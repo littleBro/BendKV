@@ -725,11 +725,12 @@ def e_fmt(s: String) -> String:
 
 # Redis's reply to an unknown command: the name as it was sent (up to 128
 # bytes) and its first arguments, each quoted and followed by a space,
-# while they make less than 128 bytes, each cut to what is left
+# while they make less than 128 bytes, each cut to what is left; each up
+# to its first NUL, as Redis formats them with %s
 def unknown.arg(room: Bool, x: String, +acc: String) -> String:
   match room:
     case True{}:
-      acc ++ "'" ++ String.take(x, Nat.sub(128n, String.length(acc))) ++ "' "
+      acc ++ "'" ++ String.take(cstr(x), Nat.sub(128n, String.length(acc))) ++ "' "
     case False{}:
       acc
 
@@ -741,7 +742,7 @@ def unknown.args(xs: List<&2, String>, +acc: String) -> String:
       unknown.args(rest, unknown.arg(Nat.is_lt(String.length(acc), 128n), x, acc))
 
 def e_unknown(name: String, args: List<&2, String>) -> Cmd:
-  Bad{RError{no_newlines("ERR unknown command '" ++ String.take(name, 128n) ++ "', with args beginning with: " ++ unknown.args(args, ""))}}
+  Bad{RError{no_newlines("ERR unknown command '" ++ String.take(cstr(name), 128n) ++ "', with args beginning with: " ++ unknown.args(args, ""))}}
 
 def s_arity(name: String) -> SessOp:
   SBad{RError{"ERR wrong number of arguments for '" ++ name ++ "' command"}}
@@ -804,14 +805,15 @@ def parse_decrby(k: String, by: Maybe<&2, Int>) -> Cmd:
 # argument. An unknown one, and a wrong number of arguments, are errors
 # found before the command runs, as Redis finds them when it looks the
 # command up; the others come from the command itself (a Sess, which
-# needs the connection to be authenticated).
+# needs the connection to be authenticated). The subcommand is quoted up
+# to 128 bytes and its first NUL, as Redis's %.128s quotes it.
 
 def e_unknown_sub(sub: String, cmd: String) -> SessOp:
-  SBad{RError{no_newlines("ERR unknown subcommand '" ++ String.take(sub, 128n) ++ "'. Try " ++ cmd ++ " HELP.")}}
+  SBad{RError{no_newlines("ERR unknown subcommand '" ++ String.take(cstr(sub), 128n) ++ "'. Try " ++ cmd ++ " HELP.")}}
 
 # a subcommand's own complaint about its arguments
 def e_sub_syntax(sub: String, cmd: String) -> Reply:
-  RError{no_newlines("ERR unknown subcommand or wrong number of arguments for '" ++ String.take(sub, 128n) ++ "'. Try " ++ cmd ++ " HELP.")}
+  RError{no_newlines("ERR unknown subcommand or wrong number of arguments for '" ++ String.take(cstr(sub), 128n) ++ "'. Try " ++ cmd ++ " HELP.")}
 
 def statuses(xs: List<&2, String>) -> List<&2, Reply>:
   match xs:
@@ -4871,7 +4873,7 @@ def parse_sess(id: Nat, name: String, args: List<&2, String>) -> SessOp:
         case Nil{}:
           s_arity("zrandmember")
     case _:
-      SBad{RError{no_newlines("ERR unknown command '" ++ String.take(name, 128n) ++ "', with args beginning with: " ++ unknown.args(args, ""))}}
+      SBad{RError{no_newlines("ERR unknown command '" ++ String.take(cstr(name), 128n) ++ "', with args beginning with: " ++ unknown.args(args, ""))}}
 
 # a command of number id: a command of the connection, of the server or
 # of several databases (parse_sess) for a number cmd_own names

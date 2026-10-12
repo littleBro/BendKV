@@ -235,7 +235,9 @@ translation stays in the trusted base.
   binary-safe values; requests framed as Redis 7.0.15 frames them (a length as `string2ll`
   reads it, with no `0` before its first digit, a count of 0 or less skipped down to
   -2^63, a line ended by its `\r` and whatever byte follows it, 64 KB at most without
-  one), and Redis's protocol errors. Not the tighter limits Redis puts on a client that
+  one, the two bytes after a bulk's data skipped unread), and Redis's protocol errors.
+  An error goes out on one line, as Redis's error formatting sends it: a CR or LF in its
+  text as a space, an argument it quotes up to its first NUL. Not the tighter limits Redis puts on a client that
   must still authenticate (10 arguments, a bulk of 16 KB), nor a new proto-max-bulk-len.
 - **Persistence:** an append-only file in Redis's own format, a SELECT before the
   entries of another database, SWAPDB, MOVE and FLUSHALL as Redis writes them, and COPY

@@ -208,26 +208,24 @@ def head.of(+s: String, +i: Nat, ln: Line) -> Head:
 def head_at(+s: String, +i: Nat, +l: Nat) -> Head:
   head.of(s, i, line_at(s, i, l))
 
-# the n bytes of a bulk at index j: copied out (String.slice) when the
-# buffer holds them and their "\r\n"; short is how many bytes it lacks
-def bulk.fin(+s: String, +n: Nat, +j: Nat, ok: Bool, short: Nat, crlf: Bool) -> Bulk:
-  match ok short crlf:
-    case False{} _ _:
+# the n bytes of a bulk at index j, copied out (String.slice) once the
+# buffer holds them and the two bytes after them, which Redis skips
+# unread, as it skips the byte after a line's '\r'; short is how many
+# bytes it lacks
+def bulk.fin(+s: String, +n: Nat, +j: Nat, ok: Bool, short: Nat) -> Bulk:
+  match ok short:
+    case False{} _:
       BulkBad{"Protocol error: invalid bulk length"}
-    case True{} 0n True{}:
+    case True{} 0n:
       BulkOk{String.slice(s, j, n), 2n+Nat.add(j, n)}
-    case True{} 0n False{}:
-      BulkBad{"Protocol error: expected '\r\n' after bulk data"}
-    case True{} 1n+k _:
+    case True{} 1n+k:
       BulkMore{1n+k}
 
 # a bulk whose header went Redis's way
 def bulk.slow(+s: String, +l: Nat, h: Head) -> Bulk:
   match h:
     case HeadOk{+n, +j}:
-      +e = Nat.add(j, n)
-      +crlf = Bool.and(U32.is_eq(String.code_at(s, e), 13), U32.is_eq(String.code_at(s, 1n+e), 10))
-      bulk.fin(s, n, j, True{}, Nat.sub(2n+e, l), crlf)
+      bulk.fin(s, n, j, True{}, Nat.sub(2n+Nat.add(j, n), l))
     case HeadMore{}:
       BulkMore{1n}
     case HeadBad{msg}:
@@ -238,9 +236,7 @@ def bulk.slow(+s: String, +l: Nat, h: Head) -> Bulk:
 def bulk.body(+s: String, +i: Nat, +l: Nat, nl: NumLine) -> Bulk:
   match nl:
     case NumOk{+n, +j}:
-      +e = Nat.add(j, n)
-      +crlf = Bool.and(U32.is_eq(String.code_at(s, e), 13), U32.is_eq(String.code_at(s, 1n+e), 10))
-      bulk.fin(s, n, j, Nat.is_le(n, 536870912n), Nat.sub(2n+e, l), crlf)
+      bulk.fin(s, n, j, Nat.is_le(n, 536870912n), Nat.sub(2n+Nat.add(j, n), l))
     case NumMore{}:
       BulkMore{1n}
     case NumBad{}:
@@ -268,23 +264,19 @@ type Key is Data:
   KeyMore{need: Nat}
   KeyBad{msg: String}
 
-def key.fin(+s: String, +n: Nat, +j: Nat, ok: Bool, short: Nat, crlf: Bool) -> Key:
-  match ok short crlf:
-    case False{} _ _:
+def key.fin(+s: String, +n: Nat, +j: Nat, ok: Bool, short: Nat) -> Key:
+  match ok short:
+    case False{} _:
       KeyBad{"Protocol error: invalid bulk length"}
-    case True{} 0n True{}:
+    case True{} 0n:
       KeyOk{String.slice(s, j, n), String.hash_at(s, j, n), 2n+Nat.add(j, n)}
-    case True{} 0n False{}:
-      KeyBad{"Protocol error: expected '\r\n' after bulk data"}
-    case True{} 1n+k _:
+    case True{} 1n+k:
       KeyMore{1n+k}
 
 def key.slow(+s: String, +l: Nat, h: Head) -> Key:
   match h:
     case HeadOk{+n, +j}:
-      +e = Nat.add(j, n)
-      +crlf = Bool.and(U32.is_eq(String.code_at(s, e), 13), U32.is_eq(String.code_at(s, 1n+e), 10))
-      key.fin(s, n, j, True{}, Nat.sub(2n+e, l), crlf)
+      key.fin(s, n, j, True{}, Nat.sub(2n+Nat.add(j, n), l))
     case HeadMore{}:
       KeyMore{1n}
     case HeadBad{msg}:
@@ -293,9 +285,7 @@ def key.slow(+s: String, +l: Nat, h: Head) -> Key:
 def key.body(+s: String, +i: Nat, +l: Nat, nl: NumLine) -> Key:
   match nl:
     case NumOk{+n, +j}:
-      +e = Nat.add(j, n)
-      +crlf = Bool.and(U32.is_eq(String.code_at(s, e), 13), U32.is_eq(String.code_at(s, 1n+e), 10))
-      key.fin(s, n, j, Nat.is_le(n, 536870912n), Nat.sub(2n+e, l), crlf)
+      key.fin(s, n, j, Nat.is_le(n, 536870912n), Nat.sub(2n+Nat.add(j, n), l))
     case NumMore{}:
       KeyMore{1n}
     case NumBad{}:
@@ -828,6 +818,21 @@ def parse_read(+s: String) -> Batch:
 def crlf() -> String:
   "\r\n"
 
+# An error goes out on one line, as Redis's error formatting sends it: a
+# CR or LF in its text (an argument it quotes, a byte the parser did not
+# expect) goes out as a space (R.no_newlines). Nearly every text has
+# neither, and goes out as it is.
+def err_line.if(nl: Bool, s: String) -> String:
+  match nl:
+    case True{}:
+      R.no_newlines(s)
+    case False{}:
+      s
+
+def err_line(+s: String) -> String:
+  +l = String.length(s)
+  err_line.if(Bool.or(Nat.is_lt(String.find(s, '\r', 0n), l), Nat.is_lt(String.find(s, '\n', 0n), l)), s)
+
 def bulk_into(+s: String, out: String) -> String:
   "$" ++ Nat.show(String.length(s)) ++ crlf() ++ s ++ crlf() ++ out
 
@@ -846,7 +851,7 @@ def encode_onto(rs: List<&2, R.Reply>, out: String) -> String:
     case Con{R.RStatus{s}, rest}:
       "+" ++ s ++ crlf() ++ encode_onto(rest, out)
     case Con{R.RError{s}, rest}:
-      "-" ++ s ++ crlf() ++ encode_onto(rest, out)
+      "-" ++ err_line(s) ++ crlf() ++ encode_onto(rest, out)
     case Con{R.RInt{i}, rest}:
       int_into(i, encode_onto(rest, out))
     case Con{R.RBulk{s}, rest}:

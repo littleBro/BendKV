@@ -9,7 +9,9 @@ commands; and processMultibulkBuffer, as Redis 7.0.15 reads a request:
 lengths read by string2ll (no 0 before a number's first digit, no -0, a
 count from -2^63 up), a count of 0 or less skipped, a line ended by its
 '\\r' and whatever byte follows it, no line until its '\\r' comes (a NUL
-before it hides it), 64 KB at most without one.
+before it hides it), 64 KB at most without one, a bulk's two bytes after
+its data skipped unread; and errors on one line, a CR or LF in them sent
+as a space, an argument quoted in them up to its first NUL.
 
 Whether the server closed a connection is not taken from a quiet
 socket: a server that keeps one open shows it in INFO's
@@ -96,6 +98,25 @@ CASES = [
     ("bulk header over 64 KB", b"*1\r\n" + b"a" * 65537),
     ("bulk header of 64 KB waits", b"*1\r\n" + b"a" * 65536),
     ("NUL in the count line, past 64 KB", b"*1\x00" + b"1" * 70000 + b"\r\n"),
+    # the two bytes after a bulk's data
+    ("bulk trailer not CRLF", b"*1\r\n$4\r\nPINGxx"),
+    ("bulk trailer not CRLF, then a request", b"*1\r\n$4\r\nPINGabPING\r\n"),
+    ("bulk trailer CR CR", b"*1\r\n$4\r\nPING\r\r*1\r\n$4\r\nPING\r\n"),
+    ("GET's key trailer", b"*2\r\n$3\r\nGET\r\nkxy" + b"*2\r\n$3\r\nGET\r\n$1\r\nk\r\n"),
+    ("SET's trailers", b"*3\r\n$3\r\nSET\r\n$1\r\nkxy$1\r\nvzz" + resp(b"GET", b"k")),
+    ("INCR's key trailer", b"*2\r\n$4\r\nINCR\r\n$1\r\nnab" + resp(b"GET", b"n")),
+    ("a bulk length one short", resp(b"CONFIG", b"SET", b"maxmemory", b"0").replace(b"$9", b"$7")),
+    # errors on one line
+    ("CR and LF in HELLO's option", resp(b"HELLO", b"2", b"a\r\nb") + resp(b"PING")),
+    ("CR and LF around HELLO's option", resp(b"HELLO", b"2", b"\r\nb\r\n") + resp(b"PING")),
+    ("NUL in HELLO's option", resp(b"HELLO", b"2", b"a\x00b") + resp(b"PING")),
+    ("CR where a bulk starts", b"*1\r\n\r\n"),
+    ("LF where a bulk starts", b"*1\r\n\n$4\r\nPING\r\n"),
+    ("NUL in an unknown command", resp(b"no\x00pe", b"x\x00y", b"zz")),
+    ("NUL in an unknown subcommand", resp(b"CLIENT", b"x\x00y", b"z")),
+    ("CR in an unknown subcommand", resp(b"OBJECT", b"a\rb", b"z")),
+    ("NUL in a subcommand's syntax error", resp(b"CONFIG", b"x\x00y")),
+    ("NUL in CONFIG SET's option", resp(b"CONFIG", b"SET", b"a\x00b", b"1")),
 ]
 
 
