@@ -267,7 +267,7 @@ also needs Lean 4.34.0 (through elan).
 
 ```bash
 git clone https://github.com/bendlang/bend ../bend-patched
-sh bend-patches/apply.sh ../bend-patched      # Bend 2.0.35 + 22 patches
+sh bend-patches/apply.sh ../bend-patched      # Bend 2.0.35 + 23 patches
 B="bun ../bend-patched/bend2/main.ts"
 
 make check   BEND="$B"   # check the proofs
@@ -279,8 +279,9 @@ redis-cli -p 6380 set foo bar
 
 `./build/bendkv [/path/to/redis.conf] [--name value ...] [-]` starts as `redis-server`
 does (`./build/bendkv --port 7777 --appendonly yes`, `./build/bendkv /etc/redis/redis.conf`);
-replies go out from a writer thread when the process has two cores or more, and from the
-event loop with `io-threads 1`. `./build/bendkv --help` lists the forms. The short form
+replies go out from a writer thread when the process has two cores or more (a client that
+stops reading holds up only its own replies), and from the event loop with
+`io-threads 1`. `./build/bendkv --help` lists the forms. The short form
 `./build/bendkv PORT [post|send [FILE [always|everysec|no]]]` is BendKV's own: `post` or
 `send` picks how replies go out, `FILE` (any path) turns on the append-only file.
 
@@ -327,7 +328,8 @@ compared as sets and each random pick checked against the set it came from), sor
 listpack's limits, STOREs and pops of keys whose time has passed, and at random, ZSCAN's
 walk compared by its pairs and each random pick checked against the sorted set it came
 from),
-robustness and concurrency checks,
+robustness and concurrency checks, a client that stops reading while the others are
+served (`tests/writer_test.py`),
 restarts from the append-only file (every database read back, including after a
 truncated tail), disk failures
 under the file, injected with an `LD_PRELOAD` shim, and the files both ways: BendKV
@@ -353,12 +355,12 @@ src/        the server
   startup.bend  the command line and the configuration file        tested
   server.bend   TCP, connections, the database actor, the log      tested
 proof/      LAWS.bend (the laws), PROOF.bend (their proofs), SPEC.bend (the commands on the trie alone)
-tests/      float, start, differential, expiry, protocol, session, CONFIG, INFO, COMMAND, SCAN, BITFIELD, hash, list, set, sorted set, robustness, concurrency, AOF tests
+tests/      float, start, differential, expiry, protocol, session, CONFIG, INFO, COMMAND, SCAN, BITFIELD, hash, list, set, sorted set, robustness, stalled reader, concurrency, AOF tests
 bench/      in-process benchmarks of the map, the core and channels
 tools/      measurement scripts, the runner of Redis's test suite, and the generators of
             the trie, of the parameter table and of the command table, with the facts
             they take from Redis (tools/data/)
-bend-patches/  the 22 patches to the Bend compiler and runtime
+bend-patches/  the 23 patches to the Bend compiler and runtime
 docs/       FINDINGS.md, DIRECTIONS.md, COMPATIBILITY.md (English), PERFORMANCE.md (Russian)
 ```
 

@@ -7,9 +7,10 @@
 # spare ports: BendKV with its defaults, then posting its replies to its
 # writer thread (post),
 # then sending them from its loop (send), then with an append-only file,
-# and runs against each the robustness checks, the differential test
-# against Redis (a fresh Redis database for each run) and the
-# consistency checks under concurrent clients, and against the first the
+# and runs against each the robustness checks, a client that stops
+# reading (its replies must hold up no one else's, nor the loop), the
+# differential test against Redis (a fresh Redis database for each run)
+# and the consistency checks under concurrent clients, and against the first the
 # protocol's edge cases, the commands of a connection and CONFIG, byte
 # for byte against Redis, INFO's sections and fields, its statistics per
 # command, COMMAND, SCAN and RANDOMKEY, keys that expire, numbers at
@@ -45,6 +46,7 @@ for n in "" post send "post build/test.aof everysec"; do
   sleep 0.5
   echo "== ${n:-defaults}"
   python3 tests/robust_test.py --port "$PORT"
+  python3 tests/writer_test.py --port "$PORT"
   if [ -z "$n" ]; then
     python3 tests/protocol_test.py --bendkv "$PORT" --redis "$REDIS_PORT"
     python3 tests/session_test.py --bendkv "$PORT" --redis "$REDIS_PORT"
