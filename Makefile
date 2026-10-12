@@ -17,7 +17,9 @@
 # lines and key hashes by index with the seventeenth's String.dec_line_at
 # and String.hash_at; the start changes the directory and logs the pid
 # and the date with the twentieth's IO.chdir, IO.cwd, IO.pid and
-# IO.clock; the others only speed up the runtime and the code):
+# IO.clock, and cuts a file of any size with the twenty-second's
+# File.truncate of a Nat; the others only speed up the runtime and the
+# code):
 #   make build BEND="bun <patched bend>/bend2/main.ts"
 # Bend compiles with $(BEND_CC) when it has one: clang 19 honors the
 # preserve_none calling convention of the runtime's segments, clang 18

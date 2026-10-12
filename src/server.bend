@@ -1092,8 +1092,9 @@ def log.die(-A: Type, +lg: Log, +msg: String) -> IO(A):
 # replay as the file means it (aof.bend: checked; a file with one that
 # does not is refused, and left as it was). A file that ends inside an
 # entry, cut by a crash in the middle of a write, is cut back to its last
-# whole entry, as Redis does with aof-load-truncated; a file with anything
-# else after its entries is refused, as Redis refuses it.
+# whole entry, as Redis does with aof-load-truncated, whatever its size;
+# a file with anything else after its entries is refused, as Redis
+# refuses it.
 
 # how the file reaches the disk
 type Sync is Data:
@@ -1452,11 +1453,14 @@ def cut_done(+lg: Log, p: File & Result<&1, &1, U32 & String, Unit>, +path: Stri
         Unit <- File.close(f)
         log(lg, 3, "BendKV cut " ++ Nat.show(cut) ++ " bytes of an entry cut short from the end of " ++ path)
 
+# the file cut to its first keep bytes: File.truncate takes the Nat
+# itself (a 64-bit word in the runtime), so a file of 4 GiB or more keeps
+# all its whole entries, not keep modulo 2^32 of them
 @unsafe
 def cut_file(+lg: Log, +path: String, keep: Nat, +cut: Nat) -> IO(Unit):
   do IO<Unit>:
     f : File <- IO.try(File, File.open(path, "a"))
-    p : File & Result<&1, &1, U32 & String, Unit> <- File.truncate(f, U32.from_nat(keep))
+    p : File & Result<&1, &1, U32 & String, Unit> <- File.truncate(f, keep)
     cut_done(lg, p, path, cut)
 
 # a file that ends in an entry cut short is cut back to its last whole
