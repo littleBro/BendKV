@@ -31,6 +31,15 @@ indexes and ranges, cut (LTRIM), searched (LPOS with its options) and
 moved between keys of the same few names (LMOVE, RPOPLPUSH, LMPOP),
 with elements of a few names, so that LPOS, LREM and LINSERT meet the
 ones pushed, and wrong numbers and words among them.
+Sets are added to and taken from with members of a few names (integers
+among them, so that a set is an intset, then a hashtable), moved between
+keys of the same few names (SMOVE), combined (SINTER, SUNION, SDIFF,
+their STOREs, SINTERCARD with LIMIT) and scanned whole (SSCAN with a
+COUNT past every member): a whole set is compared as a set, as each
+server answers a hashtable in the order of its own table. SPOP pops
+where the server's choice is the order alone (a count of 0, or one past
+every member, which takes them all and deletes the key) and with wrong
+counts; SRANDMEMBER's picks are compared by how many.
 
 Known, documented divergences that the generator avoids: BendKV's
 integers have at most 14 digits (Redis allows int64), and so have its
@@ -368,6 +377,21 @@ def rnd_lpos(r):
     return opts
 
 
+# a set's members: a few, so that SREM, SISMEMBER and the operations of
+# several sets meet the ones added, integers among them (an intset) and
+# random bytes now and then (a hashtable)
+SMEMS = [b"1", b"2", b"-3", b"10", b"a", b"b", b"", b"\x00\r\n"]
+
+
+def rnd_member(r):
+    return r.choice(SMEMS) if r.random() < 0.9 else rnd_value(r)
+
+
+def rnd_sintercard(r, ks):
+    n = r.choice([str(len(ks)).encode()] * 8 + [b"0", b"x", b"-1", str(len(ks) + 1).encode()])
+    return [b"SINTERCARD", n] + ks + r.choice([[], [], [b"LIMIT", rnd_lnum(r)], [b"LIMIT"], [b"LIMIT", b"1", b"FOO"]])
+
+
 def rnd_lmpop(r, ks):
     n = r.choice([str(len(ks)).encode()] * 8 + [b"0", b"x", b"-1", str(len(ks) + 1).encode()])
     return [b"LMPOP", n] + ks + [rnd_end(r)] + r.choice([[], [], [b"COUNT", rnd_lnum(r)], [b"COUNT"]])
@@ -481,6 +505,20 @@ def rnd_cmd(r):
         (0.01, lambda: rnd_lmpop(r, ks())),
         (0.005, lambda: [r.choice([b"LPUSH", b"LPOP", b"LRANGE", b"LSET", b"LINSERT", b"LREM", b"LTRIM", b"LPOS",
                                    b"LMOVE", b"LMPOP", b"RPOPLPUSH", b"LINDEX", b"LLEN"])] + [k() for _ in range(r.choice([0, 1]))]),
+        (0.04, lambda: [r.choice([b"SADD", b"sadd"]), k()] + [rnd_member(r) for _ in range(r.randint(1, 4))]),
+        (0.02, lambda: [b"SREM", k()] + [rnd_member(r) for _ in range(r.randint(1, 3))]),
+        (0.02, lambda: [r.choice([b"SCARD", b"SMEMBERS"]), k()]),
+        (0.01, lambda: [b"SISMEMBER", k(), rnd_member(r)]),
+        (0.01, lambda: [b"SMISMEMBER", k()] + [rnd_member(r) for _ in range(r.randint(1, 3))]),
+        (0.02, lambda: [b"SMOVE", k(), k(), rnd_member(r)]),
+        (0.02, lambda: [r.choice([b"SINTER", b"SUNION", b"SDIFF"])] + ks()),
+        (0.02, lambda: [r.choice([b"SINTERSTORE", b"SUNIONSTORE", b"SDIFFSTORE"]), k()] + ks()),
+        (0.01, lambda: rnd_sintercard(r, ks())),
+        (0.01, lambda: [b"SPOP", k(), r.choice([b"0", b"1000000", b"-1", b"x", b""])]),
+        (0.01, lambda: [b"SRANDMEMBER", k()] + r.choice([[], [b"2"], [b"-3"], [b"0"], [b"1000000"], [b"x"]])),
+        (0.01, lambda: [b"SSCAN", k(), b"0", b"COUNT", b"1000"] + ([b"MATCH", rnd_pattern(r)] if r.random() < 0.5 else [])),
+        (0.005, lambda: [r.choice([b"SADD", b"SREM", b"SMOVE", b"SINTER", b"SINTERCARD", b"SPOP", b"SRANDMEMBER", b"SSCAN",
+                                   b"SMISMEMBER", b"SUNIONSTORE"])] + [k() for _ in range(r.choice([0, 1]))]),
     ]
     c *= sum(p for p, f in table)
     acc = 0.0
@@ -512,9 +550,16 @@ def normalize(cmd, rep):
         return (rep[0], pairs_of(rep[1]))
     if name == b"HSCAN" and rep[0] == b"*":
         return (rep[0], [rep[1][0], (rep[1][1][0], pairs_of(rep[1][1][1]))])
-    # HRANDFIELD picks at random: how many, or nil or not, is compared
-    if name == b"HRANDFIELD" and rep[0] in (b"*", b"$"):
+    # HRANDFIELD and SRANDMEMBER pick at random: how many, or nil or not,
+    # is compared
+    if name in (b"HRANDFIELD", b"SRANDMEMBER") and rep[0] in (b"*", b"$"):
         return (rep[0], len(rep[1]) if rep[0] == b"*" else rep[1] is not None)
+    # a set of words is a hashtable, in the order of each server's table;
+    # SSCAN's COUNT of 1000 is past every member
+    if name in (b"SMEMBERS", b"SINTER", b"SUNION", b"SDIFF", b"SPOP") and rep[0] == b"*" and rep[1] is not None:
+        return (rep[0], sorted(rep[1]))
+    if name == b"SSCAN" and rep[0] == b"*":
+        return (rep[0], [rep[1][0], (rep[1][1][0], sorted(rep[1][1][1]))])
     # RANDOMKEY picks a key of its own choice: nil or not is compared
     if cmd[0].upper() == b"RANDOMKEY" and rep[0] == b"$":
         return (rep[0], rep[1] is not None)

@@ -62,7 +62,10 @@ COMMANDS = {
     "memory": ["help", "usage"], "lpush": [], "rpush": [], "lpushx": [], "rpushx": [],
     "lpop": [], "rpop": [], "llen": [], "lindex": [], "lrange": [], "lset": [],
     "linsert": [], "lrem": [], "ltrim": [], "lpos": [], "lmove": [], "rpoplpush": [],
-    "lmpop": []}
+    "lmpop": [], "sadd": [], "srem": [], "scard": [], "sismember": [], "smismember": [],
+    "smembers": [], "sscan": [], "smove": [], "sinter": [], "sintercard": [],
+    "sinterstore": [], "sunion": [], "sunionstore": [], "sdiff": [], "sdiffstore": [],
+    "spop": [], "srandmember": []}
 
 # Step 1: redis-server -> facts
 # -----------------------------
@@ -170,7 +173,7 @@ GETKEYS = {"set": "KBySet{}", "bitfield": "KByBitfield{}"}
 # Commands whose key spec counts its keys with an argument (keynum):
 # COMMAND GETKEYS runs BendKV's copy of what Redis does for them (the
 # spec, then the command's own function when the spec does not read)
-KEYNUM = {"eval": "KByEval{}", "lmpop": "KByLmpop{}"}
+KEYNUM = {"eval": "KByEval{}", "lmpop": "KByLmpop{}", "sintercard": "KBySintercard{}"}
 
 def bstr(s):
     if any(ord(ch) > 126 or ord(ch) < 32 for ch in s):
@@ -285,7 +288,9 @@ SBEGIN, SEND = "# BEGIN gen_commands: stats\n", "# END gen_commands: stats\n"
 # (WRONGTYPE), HINCRBY on a value that is not an integer, HSCAN,
 # HRANDFIELD and MEMORY USAGE on options read once the key is found, a
 # command of a list on a key of another kind (WRONGTYPE), LINDEX and
-# LSET on an index read once the list is found.
+# LSET on an index read once the list is found, a command of a set on a
+# key of another kind (WRONGTYPE), SSCAN on options read once the set is
+# found.
 # (SET's time
 # can overflow too, past 9 * 10^18 ms only: SET is left out, so that a
 # batch of SETs needs no look at its replies.)
@@ -294,7 +299,9 @@ RISKY = {"incr", "decr", "incrby", "decrby", "expire", "pexpire", "setex", "pset
          "lcs", "bitfield", "hset", "hsetnx", "hget", "hmget", "hmset", "hdel", "hlen", "hstrlen",
          "hexists", "hkeys", "hvals", "hgetall", "hincrby", "hscan", "hrandfield", "memory|usage",
          "lpush", "rpush", "lpushx", "rpushx", "lpop", "rpop", "llen", "lindex", "lrange", "lset",
-         "linsert", "lrem", "ltrim", "lpos", "lmove", "rpoplpush", "lmpop"}
+         "linsert", "lrem", "ltrim", "lpos", "lmove", "rpoplpush", "lmpop", "sadd", "srem", "scard",
+         "sismember", "smismember", "smembers", "sscan", "smove", "sinter", "sintercard",
+         "sinterstore", "sunion", "sunionstore", "sdiff", "sdiffstore", "spop", "srandmember"}
 
 # the parser's commands with subcommands, by the function that numbers
 # their subcommands

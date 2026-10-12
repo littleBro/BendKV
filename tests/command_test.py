@@ -231,7 +231,12 @@ def main():
              ["lpush", "k", "a"], ["lpush", "k"], ["rpoplpush", "a", "b"], ["lmove", "a", "b", "left", "right"],
              ["lmove", "a"], ["lmpop", "2", "a", "b", "left"], ["lmpop", "1", "a", "left", "count", "2"],
              ["lmpop", "0", "a", "left"], ["lmpop", "3", "a", "b"], ["lmpop", "x", "a"], ["lmpop", "-1", "a", "left"],
-             ["lmpop"], ["lrange", "k", "0", "-1"], ["lpos", "k", "a", "rank", "1"], ["linsert", "k", "before", "a", "b"]]
+             ["lmpop"], ["lrange", "k", "0", "-1"], ["lpos", "k", "a", "rank", "1"], ["linsert", "k", "before", "a", "b"],
+             ["sadd", "k", "a"], ["sadd", "k"], ["sinter", "a", "b"], ["sinter"], ["sinterstore", "d", "a", "b"],
+             ["sunionstore", "d"], ["sdiff", "a"], ["sintercard", "2", "a", "b"], ["sintercard", "2", "a", "b", "limit", "1"],
+             ["sintercard", "1", "a", "b"], ["sintercard", "0", "a"], ["sintercard", "3", "a", "b"], ["sintercard", "x", "a"],
+             ["sintercard", "-1", "a"], ["sintercard"], ["smove", "a", "b", "m"], ["smove", "a", "b"], ["smove", "a"],
+             ["sscan", "k", "0"], ["spop", "k", "2"], ["srandmember", "k"], ["smismember", "k", "a", "b"]]
     for argv in lines:
         for sub in ("GETKEYS", "GETKEYSANDFLAGS"):
             same("COMMAND %s %s" % (sub, " ".join(argv)), "COMMAND", sub, *argv, fix=None)

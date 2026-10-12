@@ -96,6 +96,16 @@ def lnew.effect(gone: Bool, +k: String, +left: Bool, xs: List<&2, String>) -> Li
     case False{}:
       [R.Upd{k, R.UList{R.LWNew{left, xs}}}]
 
+# a new set, its members ms added in turn: the SADD of them where the
+# trie held no entry for the key (gone), else the script that deletes the
+# key and runs the SADD (R.SWNew), one entry, as for a new hash
+def snew.effect(gone: Bool, +k: String, ms: List<&2, String>) -> List<&2, R.Cmd>:
+  match gone:
+    case True{}:
+      [R.Upd{k, R.UMems{R.SWAdd{ms}}}]
+    case False{}:
+      [R.Upd{k, R.UMems{R.SWNew{ms}}}]
+
 # the effects of an update, from the change it made to its key, whose
 # code was c (R.ent.code)
 def ch.effect(+k: String, +c: Nat, +ch: R.Change) -> List<&2, R.Cmd>:
@@ -122,6 +132,10 @@ def ch.effect(+k: String, +c: Nat, +ch: R.Change) -> List<&2, R.Cmd>:
       [R.Upd{k, R.UList{op}}]
     case R.CListNew{+left, xs, l}:
       lnew.effect(Nat.is_eq(c, 0n), k, left, xs)
+    case R.CMems{op, s}:
+      [R.Upd{k, R.UMems{op}}]
+    case R.CMemsNew{ms, s}:
+      snew.effect(Nat.is_eq(c, 0n), k, ms)
 
 def upd.effect(+k: String, +c: Nat, +o: R.Out) -> List<&2, R.Cmd>:
   match o:
@@ -243,6 +257,60 @@ def run.lmpop(ks: List<&2, String>, +left: Bool, c: String, db: R.Db) -> R.Reply
   +k = ks
   lmpop.at(R.lmpop.first(k, R.lmpop.head(k, x), x), left, c, x)
 
+# SINTERSTORE's, SUNIONSTORE's and SDIFFSTORE's effects: those of the
+# write the STORE makes of its destination (the DEL of it when the
+# operation makes no member, else the update SWNew of the members, as
+# run.upd gives its effects), with the STORE's reply
+def sstore.ans(+n: Nat, r: R.Reply & (List<&2, R.Cmd> & R.Db)) -> R.Reply & (List<&2, R.Cmd> & R.Db):
+  (x, q) = r
+  (R.r_int(n), q)
+
+def sstore.put(+ms: List<&2, String>, +d: String, db: R.Db) -> R.Reply & (List<&2, R.Cmd> & R.Db):
+  sstore.ans(List.length(&2, String, ms), run.upd(db, d, R.UMems{R.SWNew{ms}}))
+
+def sstore.eff(xs: List<&2, String>, +d: String, db: R.Db) -> R.Reply & (List<&2, R.Cmd> & R.Db):
+  match xs:
+    case Nil{}:
+      sstore.ans(0n, run.put(R.Del{[d]}, R.exec(R.Del{[d]}, db)))
+    case Con{x, rest}:
+      sstore.put(x <> rest, d, db)
+
+def sstore.run(g: R.SGot, op: R.SetK, ks: List<&2, String>, +d: String, db: R.Db) -> R.Reply & (List<&2, R.Cmd> & R.Db):
+  match g:
+    case R.SGot{ss}:
+      sstore.eff(R.sop.members(op, ks, ss), d, db)
+    case R.SGotWrong{}:
+      (R.e_wrongtype(), (Nil{}, db))
+
+def run.sstore(op: R.SetK, +d: String, ks: List<&2, String>, db: R.Db) -> R.Reply & (List<&2, R.Cmd> & R.Db):
+  +x = db
+  +k = ks
+  sstore.run(R.sets.at(k, R.db.now(x), R.db.trie(x)), op, k, d, x)
+
+# SMOVE's effect: the SMOVE when it moved its member, in its New form (the
+# script that deletes the destination first) when the destination held
+# an entry whose time had passed (a New form logs itself again)
+def smove.moved(f: R.Smv) -> Bool:
+  match f:
+    case R.SmvGo{}:
+      True{}
+    case _:
+      False{}
+
+def smove.effect(moved: Bool, dead: Bool, +s: String, +d: String, +w: R.SMem) -> List<&2, R.Cmd>:
+  match moved dead:
+    case True{} True{}:
+      [R.SMv{s, d, R.SMemNew{R.smv.member(w)}}]
+    case True{} False{}:
+      [R.SMv{s, d, w}]
+    case False{} _:
+      Nil{}
+
+def run.smove(+s: String, +d: String, +w: R.SMem, db: R.Db) -> R.Reply & (List<&2, R.Cmd> & R.Db):
+  +x = db
+  es = smove.effect(smove.moved(R.smv.of(x, s, d, w)), R.ent.dead(R.db.now(x), R.db.entry(x, d)), s, d, w)
+  run.out(R.exec(R.SMv{s, d, w}, x), es)
+
 def run(+c: R.Cmd, db: R.Db) -> R.Reply & (List<&2, R.Cmd> & R.Db):
   match c:
     case R.Upd{+k, +op}:
@@ -259,6 +327,10 @@ def run(+c: R.Cmd, db: R.Db) -> R.Reply & (List<&2, R.Cmd> & R.Db):
       run.lmove(s, t, e, db)
     case R.LMPop{+ks, +left, +n}:
       run.lmpop(ks, left, n, db)
+    case R.SStore{+op, +d, +ks}:
+      run.sstore(op, d, ks, db)
+    case R.SMv{+s, +d, +w}:
+      run.smove(s, d, w, db)
     case _:
       run.put(c, R.exec(c, db))
 
@@ -499,6 +571,20 @@ def list.args(+k: String, op: R.LWrite) -> List<&2, String>:
     case R.LWNew{left, xs}:
       "EVAL" <> R.hnew.script() <> "1" <> k <> push.name(left, False{}) <> xs
 
+# a set's write as the file logs it: SADD or SREM of members, or the
+# script of a new set (R.hnew.script); SPOP is logged as the SREM of what
+# it took
+def mems.args(+k: String, op: R.SWrite) -> List<&2, String>:
+  match op:
+    case R.SWAdd{ms}:
+      "SADD" <> k <> ms
+    case R.SWRem{ms}:
+      "SREM" <> k <> ms
+    case R.SWNew{ms}:
+      "EVAL" <> R.hnew.script() <> "1" <> k <> "SADD" <> ms
+    case _:
+      Nil{}
+
 def upd.args(+k: String, op: R.UpdOp) -> List<&2, String>:
   match op:
     case R.USet{v, cond, ttl, name}:
@@ -515,6 +601,8 @@ def upd.args(+k: String, op: R.UpdOp) -> List<&2, String>:
       hash.args(k, op)
     case R.UList{op}:
       list.args(k, op)
+    case R.UMems{op}:
+      mems.args(k, op)
     case _:
       Nil{}
 
@@ -532,6 +620,14 @@ def lmove.args.of(fresh: Bool, s: String, t: String, +e: R.LEnds) -> List<&2, St
       ["EVAL", R.lmove.script(), "2", s, t, end.word(R.ends.from(e)), end.word(R.ends.to(e))]
     case False{}:
       ["LMOVE", s, t, end.word(R.ends.from(e)), end.word(R.ends.to(e))]
+
+# SMOVE as the file logs it, or the script of its New form
+def smove.args.of(fresh: Bool, s: String, d: String, m: String) -> List<&2, String>:
+  match fresh:
+    case True{}:
+      ["EVAL", R.smove.script(), "2", s, d, m]
+    case False{}:
+      ["SMOVE", s, d, m]
 
 # a logged command as the strings of a request that parses back to it
 # (none for a command no effect is: they are never logged)
@@ -551,6 +647,8 @@ def args(c: R.Cmd) -> List<&2, String>:
       ["RENAME", src, dst]
     case R.LMove{s, t, +e}:
       lmove.args.of(R.ends.fresh(e), s, t, e)
+    case R.SMv{s, d, +w}:
+      smove.args.of(R.smv.fresh(w), s, d, R.smv.member(w))
     case _:
       Nil{}
 

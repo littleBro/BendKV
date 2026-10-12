@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
 """Restart test for the append-only file: a random command stream (the
 differential test's, which moves between databases, moves keys between
-them and swaps them, and writes strings, hashes and lists) against
-BendKV, with one FLUSHALL halfway, then the whole keyspace of each of
-the 16 databases saved, each key with its value (a hash's pairs, a
-list's elements) and the time it expires at; after the server restarts
-from its file, every database must read back the same.
+them and swaps them, and writes strings, hashes, lists and sets)
+against BendKV, with one FLUSHALL halfway, then the whole keyspace of
+each of the 16 databases saved, each key with its value (a hash's
+pairs, a list's elements, a set's members) and the time it expires at;
+after the server restarts from its file, every database must read back
+the same.
 
     python3 tests/aof_test.py --port 6380 --write build/aof_dump.txt --rounds 1000
     (restart BendKV with the same file)
@@ -19,16 +20,23 @@ from diff_test import NOW_S, Conn, rnd_cmd
 
 
 # a key's value as the dump shows it: a string's bytes (MGET's), a hash's
-# pairs in order of their fields, or a list's elements in order (MGET
-# answers nil for a key of another type)
+# pairs in order of their fields, a list's elements in order, or a set's
+# members in order with its encoding (MGET answers nil for a key of
+# another type)
 def value(c, k, v):
     if v[1] is not None:
         return v[1].hex()
     c.send([[b"TYPE", k]])
-    if c.reply()[1] == b"list":
+    t = c.reply()[1]
+    if t == b"list":
         c.send([[b"LRANGE", k, b"0", b"-1"]])
         kind, xs = c.reply()
         return "list:" + ",".join(x.hex() for _, x in xs)
+    if t == b"set":
+        c.send([[b"SMEMBERS", k], [b"OBJECT", b"ENCODING", k]])
+        kind, xs = c.reply()
+        enc = c.reply()[1].decode()
+        return "set:" + enc + ":" + ",".join(sorted(x.hex() for _, x in xs))
     c.send([[b"HGETALL", k]])
     kind, xs = c.reply()
     xs = [x for _, x in xs]
@@ -115,6 +123,18 @@ def main():
             if i % 700 == 0:
                 batch.append([b"LTRIM", b"l:%d" % i, b"1", b"-2"])
                 batch.append([b"PEXPIREAT", b"l:%d" % i, b"%d" % (NOW_S * 1000 + r.randint(10**6, 10**9))])
+            # sets: integers (an intset, now and then one past 512 members)
+            # and words, taken from (SREM, SPOP), moved onto the next one,
+            # and combined into a third
+            ns = 600 if i % 5000 == 0 else r.randint(1, 6)
+            batch.append([b"SADD", b"s:%d" % i] + [b"%d" % r.randint(-50, 50) for _ in range(ns)])
+            batch.append([b"SADD", b"t:%d" % i] + [b"w%d" % r.randint(0, 9) for _ in range(r.randint(1, 4))])
+            batch.append([b"SREM", b"s:%d" % i, b"%d" % r.randint(-50, 50), b"nope"])
+            batch.append([b"SPOP", b"t:%d" % i] + ([b"2"] if i % 300 == 0 else []))
+            batch.append([b"SMOVE", b"s:%d" % i, b"s:%d" % (i + 100), b"%d" % r.randint(-50, 50)])
+            batch.append([r.choice([b"SINTERSTORE", b"SUNIONSTORE", b"SDIFFSTORE"]), b"u:%d" % i, b"s:%d" % i, b"t:%d" % i])
+            if i % 900 == 0:
+                batch.append([b"PEXPIREAT", b"s:%d" % i, b"%d" % (NOW_S * 1000 + r.randint(10**6, 10**9))])
             c.send(batch)
             for _ in batch:
                 c.reply()

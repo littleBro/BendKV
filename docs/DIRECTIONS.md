@@ -293,7 +293,8 @@ Where performance and proof meet: **batched execution under proved laws.**
    decision to cut a file (`cut_short`).
 6. **Next: a drop-in Redis for one node.** Strings, hashes, lists, sets and sorted sets
    with WRONGTYPE (a value of a type, with WRONGTYPE: done, section 3zf; hashes: done,
-   section 3zg; lists: done but the blocking commands, section 3zh; sets next),
+   section 3zg; lists: done but the blocking commands, section 3zh; sets: done,
+   section 3zj; sorted sets next),
    times to live with time in the state and a sweep of expired keys
    (done; FINDINGS.md, sections 3v and 3w), several databases with SELECT, MOVE and
    SWAPDB (done; section 3x), the ranges and bits of strings (GETRANGE, SETRANGE,
@@ -304,8 +305,8 @@ Where performance and proof meet: **batched execution under proved laws.**
    done), SCAN and RANDOMKEY (done), and the log's rewrite, measured by Redis's own test
    suite run against BendKV and by client libraries' tests. Lua, streams, cluster,
    replication and modules are out of scope. The suite's count: of the 1,673 tests
-   Redis 7.0.15 passes against a server it did not start, BendKV passes 424, 401 of the
-   689 in what it has ([COMPATIBILITY.md](COMPATIBILITY.md)); RESP3 now holds back the
+   Redis 7.0.15 passes against a server it did not start, BendKV passes 528, 512 of the
+   800 in what it has ([COMPATIBILITY.md](COMPATIBILITY.md)); RESP3 now holds back the
    most tests of what it has (203 of unit/type/list's run after its HELLO 3).
 
 After that comes proving the native strings (section 5, step 1): a small piece of

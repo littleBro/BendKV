@@ -143,6 +143,31 @@ type LWrite is Data:
   LWTrim{a: String, b: String}
   LWNew{left: Bool, xs: List<&2, String>}
 
+# A read of a set (PMems, below): whether a member is there (SISMEMBER),
+# each of several (SMISMEMBER), how many members it has (SCARD), its
+# members (SMEMBERS), or a scan of it (SSCAN, its arguments after the key
+# as they came, as HSCAN keeps them)
+type SRead is Data:
+  SRIs{m: String}
+  SRMIs{ms: List<&2, String>}
+  SRCard{}
+  SRAll{}
+  SRScan{args: List<&2, String>}
+
+# A write of a set (UMems, below): SADD of members, SREM of members, a
+# new set of members where the key was, whatever it held (SWNew: the
+# script the append-only file logs for a set made where a key whose time
+# had passed still lay, and the set a STORE of a set operation leaves,
+# aof.bend), or SPOP of a member (SWPop) or of c different members
+# (SWPopN), picked by the server's random number r (the session makes
+# these two, session.bend: SPOP is logged as the SREM of what it took)
+type SWrite is Data:
+  SWAdd{ms: List<&2, String>}
+  SWRem{ms: List<&2, String>}
+  SWNew{ms: List<&2, String>}
+  SWPop{r: U32}
+  SWPopN{c: Nat, r: U32}
+
 # A read of one key whose reply depends on what the key holds at now
 # alone (its value and the time it expires at, when it is there): its
 # type (TYPE), its length (STRLEN), its time to live in s or ms (TTL,
@@ -150,7 +175,7 @@ type LWrite is Data:
 # its bytes (GETRANGE, SUBSTR), a bit (GETBIT), the bits set in a range
 # (BITCOUNT), the first bit of a value in one (BITPOS), fields of its
 # bits (BITFIELD_RO, and BITFIELD whose operations are GETs alone), a
-# read of a hash (PHash) or of a list (PList). The
+# read of a hash (PHash), of a list (PList) or of a set (PMems). The
 # laws see them as one command, Peek (LAWS.bend: disturbs), so one more
 # needs no more proof. A command travels in registers as wide as its
 # widest form, so each has one field of a word at most: GETRANGE,
@@ -170,6 +195,7 @@ type PeekOp is Data:
   PBitfield{ops: List<&2, BfOp>}
   PHash{op: HRead}
   PList{op: LRead}
+  PMems{op: SRead}
 
 # A time a command names, in ms (a time in s, times 1000; Times, below):
 # a short one (TmN, below 10^14) or any other long long (TmB: its sign and
@@ -207,7 +233,7 @@ type ExpIf is Data:
 # aof.bend; the server runs INCRBY as its own command, IncrBy, the same
 # way, faster), SETRANGE (s at offset off), SETBIT (the bit at offset
 # off, to on), BITFIELD with a write among its operations, and a write
-# of a hash (UHash) or of a list (UList). The laws
+# of a hash (UHash), of a list (UList) or of a set (UMems). The laws
 # see them as one command, Upd, so one more needs no more proof. UGet holds an update, so the compiler makes an update a
 # node of its own: a command travels in registers as wide as its widest
 # form, and an update's options are many.
@@ -226,6 +252,7 @@ type UpdOp is Data:
   UBitfield{ops: List<&2, BfOp>}
   UHash{op: HWrite}
   UList{op: LWrite}
+  UMems{op: SWrite}
 
 # The commands of a connection and of the server: session.bend runs
 # them, with the state of the connection and of the server. None of them
@@ -240,7 +267,9 @@ type UpdOp is Data:
 # two keys of the selected database and proto-max-bulk-len, which bounds
 # its table, its arguments read as it runs; HRANDFIELD reads a hash and
 # the server's random numbers, MEMORY USAGE the size of a key's entry,
-# their arguments read as they run. A command whose
+# their arguments read as they run; SPOP and SRANDMEMBER read a set and
+# the random numbers, and SPOP takes the members it answers out of the set
+# (an act of the session's database, session.bend). A command whose
 # reply is fixed (a HELP) is SReply; one the parser found wrong (an
 # unknown subcommand, a wrong number of arguments) is SBad, answered as
 # Redis answers those, before it asks a client to authenticate.
@@ -272,6 +301,8 @@ type SessOp is Data:
   SMemUsage{key: String, args: List<&2, String>}
   SReply{r: Reply}
   SBad{r: Reply}
+  SSPop{key: String, args: List<&2, String>}
+  SSRandMember{key: String, args: List<&2, String>}
 
 # BITOP's operation
 type BitK is Data:
@@ -294,11 +325,31 @@ type LEnds is Data:
   RtoLNew{}
   RtoRNew{}
 
+# A set operation: the intersection of sets (SINTER, SINTERSTORE), their
+# union (SUNION), the first less the others (SDIFF), or the size of the
+# intersection, counted up to limit (SINTERCARD; 0 counts all)
+type SetK is Data:
+  KInter{}
+  KUnion{}
+  KDiff{}
+  KCard{limit: Nat}
+
+# SMOVE's member, and whether the move takes the destination as not
+# there, whatever it holds (SMemNew: the script the append-only file logs
+# for a move to a key whose entry's time had passed, aof.bend)
+type SMem is Data:
+  SMem{m: String}
+  SMemNew{m: String}
+
 # a parsed command. LMove (LMOVE, RPOPLPUSH: an element popped from the
 # list at src and pushed onto the one at dst, the ends e) and LMPop
 # (LMPOP: up to c elements popped from the first of the keys that is
-# there, at its first end when left) come last, so that the others keep
-# their tags
+# there, at its first end when left) come after the others, so that they
+# keep their tags, and the commands of several sets after them: SOp (a
+# set operation on the sets at keys: SINTER, SUNION, SDIFF, SINTERCARD),
+# SStore (SINTERSTORE, SUNIONSTORE, SDIFFSTORE: the set an operation
+# makes of the sets at srcs, set at dst) and SMv (SMOVE: a member moved
+# from the set at src to the set at dst)
 type Cmd is Data:
   Ping{}
   Echo{msg: String}
@@ -322,6 +373,9 @@ type Cmd is Data:
   Bad{reply: Reply}
   LMove{src: String, dst: String, e: LEnds}
   LMPop{keys: List<&2, String>, left: Bool, c: String}
+  SOp{k: SetK, keys: List<&2, String>}
+  SStore{k: SetK, dst: String, srcs: List<&2, String>}
+  SMv{src: String, dst: String, m: SMem}
 
 # Integers
 # --------
@@ -494,6 +548,8 @@ def coll.type(+c: KV.Coll) -> String:
       "hash"
     case KV.CList{l}:
       "list"
+    case KV.CMems{s}:
+      "set"
 
 def val.type(+v: KV.Val) -> String:
   match v:
@@ -2443,12 +2499,12 @@ def lends.of(a: Nat, b: Nat) -> Maybe<&2, LEnds>:
     case _ _:
       None{}
 
-# EVAL: BendKV runs no Lua scripts but the one its append-only file
-# writes (a new hash or list where a key whose time had passed still
-# lay, aof.bend): EVAL <the script> 1 key HSET field value [field value
-# ...], or LPUSH (RPUSH) element [element ...], which deletes the key and
-# runs the HSET (the pushes), a thousand arguments a call, and returns 0,
-# as Redis runs it
+# EVAL: BendKV runs no Lua scripts but the ones its append-only file
+# writes (a new hash, list or set where a key whose time had passed
+# still lay, aof.bend): EVAL <the script> 1 key HSET field value [field
+# value ...], LPUSH (RPUSH) element [element ...], or SADD member
+# [member ...], which deletes the key and runs the HSET (the pushes, the
+# SADD), a thousand arguments a call, and returns 0, as Redis runs it
 def hnew.script() -> String:
   "redis.call('del',KEYS[1]) local n=#ARGV for i=2,n,1000 do redis.call(ARGV[1],KEYS[1],unpack(ARGV,i,math.min(i+999,n))) end return 0"
 
@@ -2469,7 +2525,15 @@ def parse_eval.list(ok: Bool, +k: String, +left: Bool, xs: List<&2, String>) -> 
     case _ _:
       e_lua()
 
-# the command the script runs: 1 HSET, 2 LPUSH, 3 RPUSH, 0 another
+def parse_eval.set(ok: Bool, +k: String, xs: List<&2, String>) -> Cmd:
+  match ok xs:
+    case True{} Con{x, rest}:
+      Upd{k, UMems{SWNew{x <> rest}}}
+    case _ _:
+      e_lua()
+
+# the command the script runs: 1 HSET, 2 LPUSH, 3 RPUSH, 4 SADD, 0
+# another
 def parse_eval.w(w: Nat, ok: Bool, +k: String, rest: List<&2, String>) -> Cmd:
   match w:
     case 1n:
@@ -2478,13 +2542,15 @@ def parse_eval.w(w: Nat, ok: Bool, +k: String, rest: List<&2, String>) -> Cmd:
       parse_eval.list(ok, k, True{}, rest)
     case 3n:
       parse_eval.list(ok, k, False{}, rest)
+    case 4n:
+      parse_eval.set(ok, k, rest)
     case _:
       e_lua()
 
 def parse_eval.one(ok: Bool, rest: List<&2, String>) -> Cmd:
   match rest:
     case Con{+k, Con{+w, more}}:
-      parse_eval.w(Bool.pick(Nat, String.eq(w, "HSET"), 1n, Bool.pick(Nat, String.eq(w, "LPUSH"), 2n, Bool.pick(Nat, String.eq(w, "RPUSH"), 3n, 0n))), ok, k, more)
+      parse_eval.w(Bool.pick(Nat, String.eq(w, "HSET"), 1n, Bool.pick(Nat, String.eq(w, "LPUSH"), 2n, Bool.pick(Nat, String.eq(w, "RPUSH"), 3n, Bool.pick(Nat, String.eq(w, "SADD"), 4n, 0n)))), ok, k, more)
     case _:
       e_lua()
 
@@ -2508,20 +2574,36 @@ def parse_eval.move(ok: Bool, rest: List<&2, String>) -> Cmd:
     case _:
       e_lua()
 
-# which script: 1 a new hash's or list's, 2 a move's, 0 another
+# The script of a set's move to a key whose entry's time had passed:
+# EVAL <it> 2 src dst member, which deletes dst and runs the SMOVE (SMv
+# with SMemNew)
+def smove.script() -> String:
+  "redis.call('del',KEYS[2]) return redis.call('smove',KEYS[1],KEYS[2],ARGV[1])"
+
+def parse_eval.smove(ok: Bool, rest: List<&2, String>) -> Cmd:
+  match ok rest:
+    case True{} Con{s, Con{d, Con{m, Nil{}}}}:
+      SMv{s, d, SMemNew{m}}
+    case _ _:
+      e_lua()
+
+# which script: 1 a new hash's, list's or set's, 2 a list's move, 3 a
+# set's move, 0 another
 def parse_eval.which(w: Nat, +nk: String, rest: List<&2, String>) -> Cmd:
   match w:
     case 1n:
       parse_eval.one(String.eq(nk, "1"), rest)
     case 2n:
       parse_eval.move(String.eq(nk, "2"), rest)
+    case 3n:
+      parse_eval.smove(String.eq(nk, "2"), rest)
     case _:
       e_lua()
 
 def parse_eval(args: List<&2, String>) -> Cmd:
   match args:
     case Con{+s, Con{+nk, rest}}:
-      parse_eval.which(Bool.pick(Nat, String.eq(s, hnew.script()), 1n, Bool.pick(Nat, String.eq(s, lmove.script()), 2n, 0n)), nk, rest)
+      parse_eval.which(Bool.pick(Nat, String.eq(s, hnew.script()), 1n, Bool.pick(Nat, String.eq(s, lmove.script()), 2n, Bool.pick(Nat, String.eq(s, smove.script()), 3n, 0n))), nk, rest)
     case _:
       e_arity("eval")
 
@@ -2769,6 +2851,89 @@ def parse_lmpop(args: List<&2, String>) -> Cmd:
     case _:
       e_arity("lmpop")
 
+# Sets: SADD, SREM and SMISMEMBER take a key and at least one member;
+# SSCAN's cursor is read as the command parses, before the key is looked
+# for, as HSCAN's
+def parse_sscan(+k: String, +c: String, rest: List<&2, String>) -> Cmd:
+  Bool.pick(Cmd, Maybe.is_some(&2, Nat, scan.cursor(c)), Peek{k, PMems{SRScan{c <> rest}}}, Bad{RError{"ERR invalid cursor"}})
+
+# SINTER, SUNION and SDIFF take at least one key; their STOREs a
+# destination and at least one source
+def parse_sop(+k: SetK, args: List<&2, String>, name: String) -> Cmd:
+  match args:
+    case Con{x, xs}:
+      SOp{k, x <> xs}
+    case Nil{}:
+      e_arity(name)
+
+def parse_sstore(+k: SetK, args: List<&2, String>, name: String) -> Cmd:
+  match args:
+    case Con{d, Con{x, xs}}:
+      SStore{k, d, x <> xs}
+    case _:
+      e_arity(name)
+
+# SINTERCARD numkeys key [key ...] [LIMIT limit], as Redis reads it:
+# numkeys a long from 1 (else "numkeys should be greater than 0"), at
+# most the arguments after it, then LIMIT and a long at least 0 (else
+# "LIMIT can't be negative"), as often as it comes, the last one
+# counting; any other word, or LIMIT last, is a syntax error
+type SicSt is Data:
+  SicOk{limit: Nat}
+  SicErr{r: Reply}
+
+def sic.opt(limit: Bool, m: Maybe<&2, Nat>) -> SicSt:
+  match limit m:
+    case True{} Some{n}:
+      SicOk{n}
+    case True{} None{}:
+      SicErr{RError{"ERR LIMIT can't be negative"}}
+    case False{} _:
+      SicErr{RError{"ERR syntax error"}}
+
+def sic.opts(xs: List<&2, String>, st: SicSt) -> SicSt:
+  match xs st:
+    case _ SicErr{r}:
+      SicErr{r}
+    case Nil{} st:
+      st
+    case Con{+w, Con{+v, rest}} SicOk{l}:
+      sic.opts(rest, sic.opt(is_word(w, "LIMIT"), lcount(v)))
+    case Con{w, Nil{}} SicOk{l}:
+      SicErr{RError{"ERR syntax error"}}
+
+def sic.of(st: SicSt, ks: List<&2, String>) -> Cmd:
+  match st:
+    case SicOk{l}:
+      SOp{KCard{l}, ks}
+    case SicErr{r}:
+      Bad{r}
+
+def sic.fin(p: List<&2, String> & List<&2, String>) -> Cmd:
+  (ks, more) = p
+  sic.of(sic.opts(more, SicOk{0n}), List.reverse(&2, String, ks))
+
+def sic.fit(ok: Bool, +n: Nat, rest: List<&2, String>) -> Cmd:
+  match ok:
+    case True{}:
+      sic.fin(KV.deq.cut(n, rest, Nil{}))
+    case False{}:
+      Bad{RError{"ERR Number of keys can't be greater than number of args"}}
+
+def sic.keys(m: Maybe<&2, Int>, +rest: List<&2, String>) -> Cmd:
+  match m:
+    case Some{IPos{1n++n}}:
+      sic.fit(Nat.is_le(1n+n, List.length(&2, String, rest)), 1n+n, rest)
+    case _:
+      Bad{RError{"ERR numkeys should be greater than 0"}}
+
+def parse_sintercard(args: List<&2, String>) -> Cmd:
+  match args:
+    case Con{+nk, Con{k, rest}}:
+      sic.keys(lnum(nk), k <> rest)
+    case _:
+      e_arity("sintercard")
+
 # A command's name, in upper case, picks how its arguments parse: cmd_id
 # gives the name's number in the parser (parse_id, from 100 on
 # parse_sess), 0 for a name no command has, and parse_id has the name as
@@ -2835,7 +3000,10 @@ def cmd_id.l4(+n: String, c: Nat) -> Nat:
     case 18n:  # R
       Bool.pick(Nat, String.eq(n, "RPOP"), 71n, 0n)
     case 19n:  # S
-      Bool.pick(Nat, String.eq(n, "SCAN"), 22n, 0n)
+      Bool.pick(Nat, String.eq(n, "SCAN"), 22n,
+      Bool.pick(Nat, String.eq(n, "SADD"), 83n,
+      Bool.pick(Nat, String.eq(n, "SREM"), 84n,
+      Bool.pick(Nat, String.eq(n, "SPOP"), 119n, 0n))))
     case 20n:  # T
       Bool.pick(Nat, String.eq(n, "TYPE"), 25n,
       Bool.pick(Nat, String.eq(n, "TIME"), 113n, 0n))
@@ -2865,7 +3033,11 @@ def cmd_id.l5(+n: String, c: Nat) -> Nat:
       Bool.pick(Nat, String.eq(n, "RESET"), 104n, 0n))
     case 19n:  # S
       Bool.pick(Nat, String.eq(n, "SETNX"), 5n,
-      Bool.pick(Nat, String.eq(n, "SETEX"), 23n, 0n))
+      Bool.pick(Nat, String.eq(n, "SETEX"), 23n,
+      Bool.pick(Nat, String.eq(n, "SCARD"), 85n,
+      Bool.pick(Nat, String.eq(n, "SSCAN"), 89n,
+      Bool.pick(Nat, String.eq(n, "SMOVE"), 90n,
+      Bool.pick(Nat, String.eq(n, "SDIFF"), 96n, 0n))))))
     case 20n:  # T
       Bool.pick(Nat, String.eq(n, "TOUCH"), 44n, 0n)
     case _:
@@ -2912,8 +3084,10 @@ def cmd_id.l6(+n: String, c: Nat) -> Nat:
       Bool.pick(Nat, String.eq(n, "STRLEN"), 15n,
       Bool.pick(Nat, String.eq(n, "SUBSTR"), 38n,
       Bool.pick(Nat, String.eq(n, "SETBIT"), 41n,
+      Bool.pick(Nat, String.eq(n, "SINTER"), 91n,
+      Bool.pick(Nat, String.eq(n, "SUNION"), 94n,
       Bool.pick(Nat, String.eq(n, "SELECT"), 100n,
-      Bool.pick(Nat, String.eq(n, "SWAPDB"), 111n, 0n)))))
+      Bool.pick(Nat, String.eq(n, "SWAPDB"), 111n, 0n)))))))
     case 21n:  # U
       Bool.pick(Nat, String.eq(n, "UNLINK"), 8n, 0n)
     case _:
@@ -2953,7 +3127,8 @@ def cmd_id.l8(+n: String, c: Nat) -> Nat:
     case 18n:  # R
       Bool.pick(Nat, String.eq(n, "RENAMENX"), 47n, 0n)
     case 19n:  # S
-      Bool.pick(Nat, String.eq(n, "SETRANGE"), 39n, 0n)
+      Bool.pick(Nat, String.eq(n, "SETRANGE"), 39n,
+      Bool.pick(Nat, String.eq(n, "SMEMBERS"), 88n, 0n))
     case _:
       0n
 
@@ -2964,6 +3139,8 @@ def cmd_id.l9(+n: String, c: Nat) -> Nat:
     case 18n:  # R
       Bool.pick(Nat, String.eq(n, "RPOPLPUSH"), 81n,
       Bool.pick(Nat, String.eq(n, "RANDOMKEY"), 110n, 0n))
+    case 19n:  # S
+      Bool.pick(Nat, String.eq(n, "SISMEMBER"), 86n, 0n)
     case _:
       0n
 
@@ -2973,6 +3150,10 @@ def cmd_id.l10(+n: String, c: Nat) -> Nat:
       Bool.pick(Nat, String.eq(n, "EXPIRETIME"), 34n, 0n)
     case 8n:  # H
       Bool.pick(Nat, String.eq(n, "HRANDFIELD"), 117n, 0n)
+    case 19n:  # S
+      Bool.pick(Nat, String.eq(n, "SMISMEMBER"), 87n,
+      Bool.pick(Nat, String.eq(n, "SINTERCARD"), 92n,
+      Bool.pick(Nat, String.eq(n, "SDIFFSTORE"), 97n, 0n)))
     case _:
       0n
 
@@ -2982,6 +3163,10 @@ def cmd_id.l11(+n: String, c: Nat) -> Nat:
       Bool.pick(Nat, String.eq(n, "BITFIELD_RO"), 50n, 0n)
     case 16n:  # P
       Bool.pick(Nat, String.eq(n, "PEXPIRETIME"), 35n, 0n)
+    case 19n:  # S
+      Bool.pick(Nat, String.eq(n, "SINTERSTORE"), 93n,
+      Bool.pick(Nat, String.eq(n, "SUNIONSTORE"), 95n,
+      Bool.pick(Nat, String.eq(n, "SRANDMEMBER"), 120n, 0n)))
     case _:
       0n
 
@@ -3452,6 +3637,68 @@ def parse_id(id: Nat, name: String, args: List<&2, String>) -> Cmd:
           e_arity("rpoplpush")
     case 82n:  # LMPOP
       parse_lmpop(args)
+    case 83n:  # SADD
+      match args:
+        case Con{k, Con{m, ms}}:
+          Upd{k, UMems{SWAdd{m <> ms}}}
+        case _:
+          e_arity("sadd")
+    case 84n:  # SREM
+      match args:
+        case Con{k, Con{m, ms}}:
+          Upd{k, UMems{SWRem{m <> ms}}}
+        case _:
+          e_arity("srem")
+    case 85n:  # SCARD
+      match args:
+        case Con{k, Nil{}}:
+          Peek{k, PMems{SRCard{}}}
+        case _:
+          e_arity("scard")
+    case 86n:  # SISMEMBER
+      match args:
+        case Con{k, Con{m, Nil{}}}:
+          Peek{k, PMems{SRIs{m}}}
+        case _:
+          e_arity("sismember")
+    case 87n:  # SMISMEMBER
+      match args:
+        case Con{k, Con{m, ms}}:
+          Peek{k, PMems{SRMIs{m <> ms}}}
+        case _:
+          e_arity("smismember")
+    case 88n:  # SMEMBERS
+      match args:
+        case Con{k, Nil{}}:
+          Peek{k, PMems{SRAll{}}}
+        case _:
+          e_arity("smembers")
+    case 89n:  # SSCAN
+      match args:
+        case Con{+k, Con{+c, rest}}:
+          parse_sscan(k, c, rest)
+        case _:
+          e_arity("sscan")
+    case 90n:  # SMOVE
+      match args:
+        case Con{a, Con{b, Con{m, Nil{}}}}:
+          SMv{a, b, SMem{m}}
+        case _:
+          e_arity("smove")
+    case 91n:  # SINTER
+      parse_sop(KInter{}, args, "sinter")
+    case 92n:  # SINTERCARD
+      parse_sintercard(args)
+    case 93n:  # SINTERSTORE
+      parse_sstore(KInter{}, args, "sinterstore")
+    case 94n:  # SUNION
+      parse_sop(KUnion{}, args, "sunion")
+    case 95n:  # SUNIONSTORE
+      parse_sstore(KUnion{}, args, "sunionstore")
+    case 96n:  # SDIFF
+      parse_sop(KDiff{}, args, "sdiff")
+    case 97n:  # SDIFFSTORE
+      parse_sstore(KDiff{}, args, "sdiffstore")
     case _:
       e_unknown(name, args)
 
@@ -3566,6 +3813,18 @@ def parse_sess(id: Nat, name: String, args: List<&2, String>) -> SessOp:
         case Con{+sub, rest}:
           +up = String.to_upper(sub)
           parse_memory(memory_id(up, String.length(up)), sub, rest)
+    case 119n:  # SPOP
+      match args:
+        case Con{k, rest}:
+          SSPop{k, rest}
+        case Nil{}:
+          s_arity("spop")
+    case 120n:  # SRANDMEMBER
+      match args:
+        case Con{k, rest}:
+          SSRandMember{k, rest}
+        case Nil{}:
+          s_arity("srandmember")
     case _:
       SBad{RError{no_newlines("ERR unknown command '" ++ String.take(name, 128n) ++ "', with args beginning with: " ++ unknown.args(args, ""))}}
 
@@ -3776,101 +4035,83 @@ def stat.top(+id: Nat) -> Nat:
       81n
     case 82n:
       82n
-    case 100n:
+    case 83n:
       83n
-    case 101n:
+    case 84n:
       84n
-    case 102n:
+    case 85n:
       85n
-    case 103n:
+    case 86n:
       86n
-    case 104n:
+    case 87n:
       87n
-    case 105n:
+    case 88n:
       88n
-    case 106n:
+    case 89n:
       89n
-    case 107n:
+    case 90n:
       90n
-    case 108n:
+    case 91n:
       91n
-    case 109n:
+    case 92n:
       92n
-    case 110n:
+    case 93n:
       93n
-    case 111n:
+    case 94n:
       94n
-    case 112n:
+    case 95n:
       95n
-    case 113n:
+    case 96n:
       96n
-    case 114n:
+    case 97n:
       97n
-    case 115n:
+    case 100n:
       98n
-    case 116n:
+    case 101n:
       99n
-    case 117n:
+    case 102n:
       100n
-    case 118n:
+    case 103n:
       101n
+    case 104n:
+      102n
+    case 105n:
+      103n
+    case 106n:
+      104n
+    case 107n:
+      105n
+    case 108n:
+      106n
+    case 109n:
+      107n
+    case 110n:
+      108n
+    case 111n:
+      109n
+    case 112n:
+      110n
+    case 113n:
+      111n
+    case 114n:
+      112n
+    case 115n:
+      113n
+    case 116n:
+      114n
+    case 117n:
+      115n
+    case 118n:
+      116n
+    case 119n:
+      117n
+    case 120n:
+      118n
     case _:
       0n
 
 # a subcommand of CLIENT's key, by its number; 0 for none
 def stat.sub.client(+sub: Nat) -> Nat:
-  match sub:
-    case 1n:
-      102n
-    case 2n:
-      103n
-    case 3n:
-      104n
-    case 4n:
-      105n
-    case 5n:
-      106n
-    case 6n:
-      107n
-    case 7n:
-      108n
-    case 8n:
-      109n
-    case 9n:
-      110n
-    case 10n:
-      111n
-    case _:
-      0n
-
-# a subcommand of FUNCTION's key, by its number; 0 for none
-def stat.sub.function(+sub: Nat) -> Nat:
-  match sub:
-    case 1n:
-      112n
-    case 2n:
-      113n
-    case _:
-      0n
-
-# a subcommand of CONFIG's key, by its number; 0 for none
-def stat.sub.config(+sub: Nat) -> Nat:
-  match sub:
-    case 1n:
-      114n
-    case 2n:
-      115n
-    case 3n:
-      116n
-    case 4n:
-      117n
-    case 5n:
-      118n
-    case _:
-      0n
-
-# a subcommand of COMMAND's key, by its number; 0 for none
-def stat.sub.command(+sub: Nat) -> Nat:
   match sub:
     case 1n:
       119n
@@ -3886,6 +4127,58 @@ def stat.sub.command(+sub: Nat) -> Nat:
       124n
     case 7n:
       125n
+    case 8n:
+      126n
+    case 9n:
+      127n
+    case 10n:
+      128n
+    case _:
+      0n
+
+# a subcommand of FUNCTION's key, by its number; 0 for none
+def stat.sub.function(+sub: Nat) -> Nat:
+  match sub:
+    case 1n:
+      129n
+    case 2n:
+      130n
+    case _:
+      0n
+
+# a subcommand of CONFIG's key, by its number; 0 for none
+def stat.sub.config(+sub: Nat) -> Nat:
+  match sub:
+    case 1n:
+      131n
+    case 2n:
+      132n
+    case 3n:
+      133n
+    case 4n:
+      134n
+    case 5n:
+      135n
+    case _:
+      0n
+
+# a subcommand of COMMAND's key, by its number; 0 for none
+def stat.sub.command(+sub: Nat) -> Nat:
+  match sub:
+    case 1n:
+      136n
+    case 2n:
+      137n
+    case 3n:
+      138n
+    case 4n:
+      139n
+    case 5n:
+      140n
+    case 6n:
+      141n
+    case 7n:
+      142n
     case _:
       0n
 
@@ -3893,15 +4186,15 @@ def stat.sub.command(+sub: Nat) -> Nat:
 def stat.sub.object(+sub: Nat) -> Nat:
   match sub:
     case 1n:
-      126n
+      143n
     case 2n:
-      127n
+      144n
     case 3n:
-      128n
+      145n
     case 4n:
-      129n
+      146n
     case 5n:
-      130n
+      147n
     case _:
       0n
 
@@ -3909,9 +4202,9 @@ def stat.sub.object(+sub: Nat) -> Nat:
 def stat.sub.memory(+sub: Nat) -> Nat:
   match sub:
     case 1n:
-      131n
+      148n
     case 2n:
-      132n
+      149n
     case _:
       0n
 
@@ -4083,104 +4376,138 @@ def stat.name(+key: Nat) -> String:
     case 82n:
       "lmpop"
     case 83n:
-      "select"
+      "sadd"
     case 84n:
-      "hello"
+      "srem"
     case 85n:
-      "auth"
+      "scard"
     case 86n:
-      "quit"
+      "sismember"
     case 87n:
-      "reset"
+      "smismember"
     case 88n:
-      "client"
+      "smembers"
     case 89n:
-      "function"
+      "sscan"
     case 90n:
-      "config"
+      "smove"
     case 91n:
-      "info"
+      "sinter"
     case 92n:
-      "command"
+      "sintercard"
     case 93n:
-      "randomkey"
+      "sinterstore"
     case 94n:
-      "swapdb"
+      "sunion"
     case 95n:
-      "move"
+      "sunionstore"
     case 96n:
-      "time"
+      "sdiff"
     case 97n:
-      "object"
+      "sdiffstore"
     case 98n:
-      "copy"
+      "select"
     case 99n:
-      "lcs"
+      "hello"
     case 100n:
-      "hrandfield"
+      "auth"
     case 101n:
-      "memory"
+      "quit"
     case 102n:
-      "client|id"
+      "reset"
     case 103n:
-      "client|help"
+      "client"
     case 104n:
-      "client|reply"
+      "function"
     case 105n:
-      "client|getname"
+      "config"
     case 106n:
-      "client|setname"
+      "info"
     case 107n:
-      "client|caching"
+      "command"
     case 108n:
-      "client|unblock"
+      "randomkey"
     case 109n:
-      "client|getredir"
+      "swapdb"
     case 110n:
-      "client|no-evict"
+      "move"
     case 111n:
-      "client|trackinginfo"
+      "time"
     case 112n:
-      "function|flush"
+      "object"
     case 113n:
-      "function|help"
+      "copy"
     case 114n:
-      "config|get"
+      "lcs"
     case 115n:
-      "config|set"
+      "hrandfield"
     case 116n:
-      "config|resetstat"
+      "memory"
     case 117n:
-      "config|rewrite"
+      "spop"
     case 118n:
-      "config|help"
+      "srandmember"
     case 119n:
-      "command|info"
+      "client|id"
     case 120n:
-      "command|docs"
+      "client|help"
     case 121n:
-      "command|list"
+      "client|reply"
     case 122n:
-      "command|help"
+      "client|getname"
     case 123n:
-      "command|count"
+      "client|setname"
     case 124n:
-      "command|getkeys"
+      "client|caching"
     case 125n:
-      "command|getkeysandflags"
+      "client|unblock"
     case 126n:
-      "object|help"
+      "client|getredir"
     case 127n:
-      "object|freq"
+      "client|no-evict"
     case 128n:
-      "object|encoding"
+      "client|trackinginfo"
     case 129n:
-      "object|refcount"
+      "function|flush"
     case 130n:
-      "object|idletime"
+      "function|help"
     case 131n:
-      "memory|help"
+      "config|get"
     case 132n:
+      "config|set"
+    case 133n:
+      "config|resetstat"
+    case 134n:
+      "config|rewrite"
+    case 135n:
+      "config|help"
+    case 136n:
+      "command|info"
+    case 137n:
+      "command|docs"
+    case 138n:
+      "command|list"
+    case 139n:
+      "command|help"
+    case 140n:
+      "command|count"
+    case 141n:
+      "command|getkeys"
+    case 142n:
+      "command|getkeysandflags"
+    case 143n:
+      "object|help"
+    case 144n:
+      "object|freq"
+    case 145n:
+      "object|encoding"
+    case 146n:
+      "object|refcount"
+    case 147n:
+      "object|idletime"
+    case 148n:
+      "memory|help"
+    case 149n:
       "memory|usage"
     case _:
       ""
@@ -4354,104 +4681,138 @@ def stat.arity(+key: Nat) -> Nat:
     case 82n:
       9n
     case 83n:
-      4n
+      7n
     case 84n:
-      3n
+      7n
     case 85n:
-      5n
+      4n
     case 86n:
-      3n
+      6n
     case 87n:
-      2n
+      7n
     case 88n:
-      5n
+      4n
     case 89n:
-      5n
+      7n
     case 90n:
-      5n
+      8n
     case 91n:
-      3n
-    case 92n:
-      3n
-    case 93n:
-      2n
-    case 94n:
-      6n
-    case 95n:
-      6n
-    case 96n:
-      2n
-    case 97n:
       5n
+    case 92n:
+      7n
+    case 93n:
+      7n
+    case 94n:
+      5n
+    case 95n:
+      7n
+    case 96n:
+      5n
+    case 97n:
+      7n
     case 98n:
-      7n
+      4n
     case 99n:
-      7n
+      3n
     case 100n:
       5n
     case 101n:
-      5n
+      3n
     case 102n:
-      4n
+      2n
     case 103n:
-      4n
+      5n
     case 104n:
-      6n
+      5n
     case 105n:
-      4n
+      5n
     case 106n:
-      6n
+      3n
     case 107n:
-      6n
+      3n
     case 108n:
-      7n
+      2n
     case 109n:
-      4n
+      6n
     case 110n:
       6n
     case 111n:
-      4n
+      2n
     case 112n:
       5n
     case 113n:
-      4n
+      7n
     case 114n:
       7n
     case 115n:
-      9n
+      5n
     case 116n:
-      4n
+      5n
     case 117n:
-      4n
+      5n
     case 118n:
-      4n
+      5n
     case 119n:
-      5n
+      4n
     case 120n:
-      5n
+      4n
     case 121n:
-      5n
+      6n
     case 122n:
       4n
     case 123n:
-      4n
+      6n
     case 124n:
-      9n
+      6n
     case 125n:
-      9n
+      7n
     case 126n:
       4n
     case 127n:
       6n
     case 128n:
-      6n
-    case 129n:
-      6n
-    case 130n:
-      6n
-    case 131n:
       4n
+    case 129n:
+      5n
+    case 130n:
+      4n
+    case 131n:
+      7n
     case 132n:
+      9n
+    case 133n:
+      4n
+    case 134n:
+      4n
+    case 135n:
+      4n
+    case 136n:
+      5n
+    case 137n:
+      5n
+    case 138n:
+      5n
+    case 139n:
+      4n
+    case 140n:
+      4n
+    case 141n:
+      9n
+    case 142n:
+      9n
+    case 143n:
+      4n
+    case 144n:
+      6n
+    case 145n:
+      6n
+    case 146n:
+      6n
+    case 147n:
+      6n
+    case 148n:
+      4n
+    case 149n:
       7n
     case _:
       1n
@@ -4551,15 +4912,49 @@ def stat.risky(+key: Nat) -> Bool:
       True{}
     case 82n:
       True{}
-    case 99n:
+    case 83n:
       True{}
-    case 100n:
+    case 84n:
       True{}
-    case 127n:
+    case 85n:
       True{}
-    case 130n:
+    case 86n:
       True{}
-    case 132n:
+    case 87n:
+      True{}
+    case 88n:
+      True{}
+    case 89n:
+      True{}
+    case 90n:
+      True{}
+    case 91n:
+      True{}
+    case 92n:
+      True{}
+    case 93n:
+      True{}
+    case 94n:
+      True{}
+    case 95n:
+      True{}
+    case 96n:
+      True{}
+    case 97n:
+      True{}
+    case 114n:
+      True{}
+    case 115n:
+      True{}
+    case 117n:
+      True{}
+    case 118n:
+      True{}
+    case 144n:
+      True{}
+    case 147n:
+      True{}
+    case 149n:
       True{}
     case _:
       False{}
@@ -5631,6 +6026,142 @@ def stat.cw(+code: Nat) -> U32:
       2361
     case 531n:
       2362
+    case 532n:
+      2364
+    case 533n:
+      2375
+    case 534n:
+      2379
+    case 535n:
+      2381
+    case 536n:
+      2382
+    case 537n:
+      2387
+    case 538n:
+      2389
+    case 539n:
+      2390
+    case 540n:
+      2393
+    case 541n:
+      2394
+    case 542n:
+      2396
+    case 543n:
+      2403
+    case 544n:
+      2405
+    case 545n:
+      2406
+    case 546n:
+      2409
+    case 547n:
+      2410
+    case 548n:
+      2412
+    case 549n:
+      2417
+    case 550n:
+      2418
+    case 551n:
+      2420
+    case 552n:
+      2424
+    case 553n:
+      2439
+    case 554n:
+      2443
+    case 555n:
+      2445
+    case 556n:
+      2446
+    case 557n:
+      2451
+    case 558n:
+      2453
+    case 559n:
+      2454
+    case 560n:
+      2457
+    case 561n:
+      2458
+    case 562n:
+      2460
+    case 563n:
+      2467
+    case 564n:
+      2469
+    case 565n:
+      2470
+    case 566n:
+      2473
+    case 567n:
+      2474
+    case 568n:
+      2476
+    case 569n:
+      2481
+    case 570n:
+      2482
+    case 571n:
+      2484
+    case 572n:
+      2488
+    case 573n:
+      2499
+    case 574n:
+      2501
+    case 575n:
+      2502
+    case 576n:
+      2505
+    case 577n:
+      2506
+    case 578n:
+      2508
+    case 579n:
+      2513
+    case 580n:
+      2514
+    case 581n:
+      2516
+    case 582n:
+      2520
+    case 583n:
+      2529
+    case 584n:
+      2530
+    case 585n:
+      2532
+    case 586n:
+      2536
+    case 587n:
+      2544
+    case 588n:
+      2575
+    case 589n:
+      2583
+    case 590n:
+      2587
+    case 591n:
+      2589
+    case 592n:
+      2590
+    case 593n:
+      2599
+    case 594n:
+      2603
+    case 595n:
+      2605
+    case 596n:
+      2606
+    case 597n:
+      2611
+    case 598n:
+      2613
+    case 599n:
+      2614
     case _:
       63
 
@@ -6880,6 +7411,162 @@ def stat.code.lo36(+lo: Nat) -> Nat:
       530n
     case 58n:
       531n
+    case 60n:
+      532n
+    case _:
+      0n
+
+def stat.code.lo37(+lo: Nat) -> Nat:
+  match lo:
+    case 7n:
+      533n
+    case 11n:
+      534n
+    case 13n:
+      535n
+    case 14n:
+      536n
+    case 19n:
+      537n
+    case 21n:
+      538n
+    case 22n:
+      539n
+    case 25n:
+      540n
+    case 26n:
+      541n
+    case 28n:
+      542n
+    case 35n:
+      543n
+    case 37n:
+      544n
+    case 38n:
+      545n
+    case 41n:
+      546n
+    case 42n:
+      547n
+    case 44n:
+      548n
+    case 49n:
+      549n
+    case 50n:
+      550n
+    case 52n:
+      551n
+    case 56n:
+      552n
+    case _:
+      0n
+
+def stat.code.lo38(+lo: Nat) -> Nat:
+  match lo:
+    case 7n:
+      553n
+    case 11n:
+      554n
+    case 13n:
+      555n
+    case 14n:
+      556n
+    case 19n:
+      557n
+    case 21n:
+      558n
+    case 22n:
+      559n
+    case 25n:
+      560n
+    case 26n:
+      561n
+    case 28n:
+      562n
+    case 35n:
+      563n
+    case 37n:
+      564n
+    case 38n:
+      565n
+    case 41n:
+      566n
+    case 42n:
+      567n
+    case 44n:
+      568n
+    case 49n:
+      569n
+    case 50n:
+      570n
+    case 52n:
+      571n
+    case 56n:
+      572n
+    case _:
+      0n
+
+def stat.code.lo39(+lo: Nat) -> Nat:
+  match lo:
+    case 3n:
+      573n
+    case 5n:
+      574n
+    case 6n:
+      575n
+    case 9n:
+      576n
+    case 10n:
+      577n
+    case 12n:
+      578n
+    case 17n:
+      579n
+    case 18n:
+      580n
+    case 20n:
+      581n
+    case 24n:
+      582n
+    case 33n:
+      583n
+    case 34n:
+      584n
+    case 36n:
+      585n
+    case 40n:
+      586n
+    case 48n:
+      587n
+    case _:
+      0n
+
+def stat.code.lo40(+lo: Nat) -> Nat:
+  match lo:
+    case 15n:
+      588n
+    case 23n:
+      589n
+    case 27n:
+      590n
+    case 29n:
+      591n
+    case 30n:
+      592n
+    case 39n:
+      593n
+    case 43n:
+      594n
+    case 45n:
+      595n
+    case 46n:
+      596n
+    case 51n:
+      597n
+    case 53n:
+      598n
+    case 54n:
+      599n
     case _:
       0n
 
@@ -6959,6 +7646,14 @@ def stat.code.hl(+hi: Nat, +lo: Nat) -> Nat:
       stat.code.lo35(lo)
     case 36n:
       stat.code.lo36(lo)
+    case 37n:
+      stat.code.lo37(lo)
+    case 38n:
+      stat.code.lo38(lo)
+    case 39n:
+      stat.code.lo39(lo)
+    case 40n:
+      stat.code.lo40(lo)
     case _:
       0n
 
@@ -8337,6 +9032,8 @@ def hread.coll(op: HRead, +cl: KV.Coll) -> Reply:
       hread(op, h)
     case KV.CList{+l}:
       e_wrongtype()
+    case KV.CMems{+m}:
+      e_wrongtype()
 
 # A list's reads.
 
@@ -8499,6 +9196,121 @@ def lread.coll(op: LRead, +cl: KV.Coll) -> Reply:
       lread(op, l)
     case KV.CHash{+h}:
       e_wrongtype()
+    case KV.CMems{+m}:
+      e_wrongtype()
+
+# A set's reads. A key not there reads as an empty set, as in Redis
+# (SISMEMBER 0, SMISMEMBER's zeros, SCARD 0, SMEMBERS empty, an empty
+# scan with cursor 0); a key that holds another kind answers WRONGTYPE.
+
+def smis(ms: List<&2, String>, +s: KV.Mems) -> List<&2, Reply>:
+  match ms:
+    case Nil{}:
+      Nil{}
+    case Con{+m, rest}:
+      r_int(Bool.pick(Nat, KV.mems.has(m, s), 1n, 0n)) <> smis(rest, s)
+
+def smis.none(ms: List<&2, String>) -> List<&2, Reply>:
+  match ms:
+    case Nil{}:
+      Nil{}
+    case Con{m, rest}:
+      r_int(0n) <> smis.none(rest)
+
+# the members that match the pattern p (all of them when it is "*")
+def ms.keep(ok: Bool, m: String, rest: List<&2, Reply>) -> List<&2, Reply>:
+  match ok:
+    case True{}:
+      RBulk{m} <> rest
+    case False{}:
+      rest
+
+def ms.glob(+all: Bool, +p: String, xs: List<&2, String>) -> List<&2, Reply>:
+  match xs:
+    case Nil{}:
+      Nil{}
+    case Con{+x, rest}:
+      ms.keep(glob_hit(all, p, x), x, ms.glob(all, p, rest))
+
+def ms.match(xs: List<&2, String>, pat: Maybe<&2, String>) -> List<&2, Reply>:
+  match pat:
+    case Some{+p}:
+      ms.glob(String.eq(p, "*"), p, xs)
+    case None{}:
+      lbulks(xs)
+
+def sscan.rep(+next: Nat, xs: List<&2, String>, pat: Maybe<&2, String>) -> Reply:
+  RArray{[RBulk{Nat.show(next)}, RArray{ms.match(xs, pat)}]}
+
+# SSCAN: an intset answers all its members at once, with cursor 0, as
+# Redis answers one; a hashtable scans its trie as HSCAN scans a hash's
+# (the options as HSCAN reads them)
+def sscan.big(sc: KV.Scan, pat: Maybe<&2, String>) -> Reply:
+  match sc:
+    case KV.Stop{+at, acc}:
+      sscan.rep(Bool.pick(Nat, Nat.is_lt(at, 1048576n), at, 0n), List.reverse(&2, String, acc), pat)
+    case KV.Scan{w, acc}:
+      sscan.rep(0n, List.reverse(&2, String, acc), pat)
+
+def sscan.go(+s: KV.Mems, +cur: Nat, +n: Nat, pat: Maybe<&2, String>) -> Reply:
+  match s:
+    case KV.MInts{m, +xs}:
+      sscan.rep(0n, xs, pat)
+    case KV.MBig{m, +t}:
+      sscan.big(KV.scan(Unit, t, cur, n, 0n), pat)
+
+def sscan.of(a: ScanArgs, +s: KV.Mems) -> Reply:
+  match a:
+    case ScanArgs{+cur, +n, pat, typ}:
+      sscan.go(s, cur, n, pat)
+    case ScanBad{r}:
+      r
+
+# a set read of a key that holds a set
+def sread(op: SRead, +s: KV.Mems) -> Reply:
+  match op:
+    case SRIs{+m}:
+      r_int(Bool.pick(Nat, KV.mems.has(m, s), 1n, 0n))
+    case SRMIs{ms}:
+      RArray{smis(ms, s)}
+    case SRCard{}:
+      r_int(KV.mems.len(s))
+    case SRAll{}:
+      RArray{lbulks(KV.mems.all(s))}
+    case SRScan{args}:
+      sscan.of(hscan.args(args), s)
+
+# of a key not there
+def sread.none(op: SRead) -> Reply:
+  match op:
+    case SRIs{m}:
+      r_int(0n)
+    case SRMIs{ms}:
+      RArray{smis.none(ms)}
+    case SRCard{}:
+      r_int(0n)
+    case SRAll{}:
+      RArray{Nil{}}
+    case SRScan{args}:
+      RArray{[RBulk{"0"}, RArray{Nil{}}]}
+
+# of a key that holds a string (m: the string's entry, or none)
+def sread.str(op: SRead, m: Maybe<&2, KV.Item<String>>) -> Reply:
+  match m:
+    case Some{x}:
+      e_wrongtype()
+    case None{}:
+      sread.none(op)
+
+# of a key that holds a collection
+def sread.coll(op: SRead, +cl: KV.Coll) -> Reply:
+  match cl:
+    case KV.CMems{+m}:
+      sread(op, m)
+    case KV.CHash{+h}:
+      e_wrongtype()
+    case KV.CList{+l}:
+      e_wrongtype()
 
 # the reply of a Peek, from the entry of its key there at now
 def peek(c: PeekOp, +now: Nat, m: Maybe<&2, KV.Item<String>>) -> Reply:
@@ -8529,6 +9341,8 @@ def peek(c: PeekOp, +now: Nat, m: Maybe<&2, KV.Item<String>>) -> Reply:
       hread.str(op, m)
     case PList{op}:
       lread.str(op, m)
+    case PMems{op}:
+      sread.str(op, m)
 
 # a Peek of a key that holds a collection: its type, its time, a read of
 # a hash of a hash, or WRONGTYPE for a read of a string
@@ -8548,6 +9362,8 @@ def peek.coll(c: PeekOp, +now: Nat, +cl: KV.Coll, +e: Nat) -> Reply:
       hread.coll(op, cl)
     case PList{op}:
       lread.coll(op, cl)
+    case PMems{op}:
+      sread.coll(op, cl)
     case _:
       e_wrongtype()
 
@@ -8572,8 +9388,11 @@ def peek.v(c: PeekOp, +now: Nat, m: Maybe<&2, KV.Item<KV.Val>>) -> Reply:
 # (CHashNew); or set it to a list: one the key held, changed by a write
 # of a list, its time kept (CList), or a new one, with no time, made of
 # pushes where the key was not there at now (CListNew: the elements xs
-# pushed in turn at its first end, left, or its last); each keeps the
-# write the append-only file logs. An
+# pushed in turn at its first end, left, or its last); or set it to a
+# set: one the key held, changed by a write of a set, its time kept
+# (CMems), or a new one, with no time, made of members where the key was
+# not there at now (CMemsNew: the members ms added in turn); each keeps
+# the write the append-only file logs. An
 # Upd's reply and change come from the key's entry there at now alone. A
 # time a change gives a key is one the key may keep (KV.clamp: a time at
 # or past the year 5138 is none), and a key without a time is never given
@@ -8591,6 +9410,8 @@ type Change is Data:
   CHashNew{ps: List<&2, KV.HPair>, h: KV.Hash}
   CList{op: LWrite, l: KV.Deq}
   CListNew{left: Bool, xs: List<&2, String>, l: KV.Deq}
+  CMems{op: SWrite, s: KV.Mems}
+  CMemsNew{ms: List<&2, String>, s: KV.Mems}
 
 type Out is Data:
   Out{r: Reply, ch: Change}
@@ -9248,6 +10069,8 @@ def hwrite.coll(op: HWrite, +cl: KV.Coll) -> Out:
       hwrite(op, False{}, h)
     case KV.CList{l}:
       hwrite.wrong(op)
+    case KV.CMems{m}:
+      hwrite.wrong(op)
 
 # A list's writes. A key not there is an empty list: LPUSH and RPUSH make
 # it, LPUSHX and RPUSHX answer 0, the others find nothing (LSET: no such
@@ -9576,6 +10399,289 @@ def lwrite.coll(op: LWrite, +cl: KV.Coll) -> Out:
       lwrite(op, False{}, l)
     case KV.CHash{h}:
       lwrite.wrong(op)
+    case KV.CMems{m}:
+      lwrite.wrong(op)
+
+# Members at random, by r (the server's random number, and the numbers of
+# its Weyl sequence after it, each scrambled by KV.mix): a member of an
+# intset by its index, of a hashtable as RANDOMKEY picks a key (KV.pick).
+# k different members of a set of n, k below n: an intset's picked and
+# dropped in turn; a hashtable's, when k is more than a third of n, by
+# n - k members dropped from it at random (Redis's third way), else
+# picked until k different ones come, at most 16k + 64 picks (Redis's
+# fourth way), as SRANDMEMBER and SPOP pick them.
+def srand.next(+r: U32) -> U32:
+  U32.add(r, 2654435769)
+
+def srand.at(+r: U32, +n: Nat) -> Nat:
+  Nat.mod(U32.to_nat(KV.mix(r)), Nat.max(n, 1n))
+
+def srand.pick(+s: KV.Mems, +r: U32) -> Maybe<&2, String>:
+  match s:
+    case KV.MInts{+n, +xs}:
+      KV.nth(xs, srand.at(r, n))
+    case KV.MBig{n, +t}:
+      KV.pick(Unit, t, KV.mix(r), 0n)
+
+def srand.cons(m: Maybe<&2, String>, rest: List<&2, String>) -> List<&2, String>:
+  match m:
+    case Some{x}:
+      x <> rest
+    case None{}:
+      rest
+
+# k members of s, each picked anew
+def srand.rep(k: Nat, +s: KV.Mems, +r: U32) -> List<&2, String>:
+  match k:
+    case 0n:
+      Nil{}
+    case 1n+j:
+      +q = srand.next(r)
+      srand.cons(srand.pick(s, q), srand.rep(j, s, q))
+
+# xs without its i-th
+def srand.drop(xs: List<&2, String>, i: Nat) -> List<&2, String>:
+  match xs i:
+    case Con{x, rest} 0n:
+      rest
+    case Con{x, rest} 1n+j:
+      Con{x, srand.drop(rest, j)}
+    case Nil{} _:
+      Nil{}
+
+def srand.ints(k: Nat, xs: List<&2, String>, +n: Nat, +r: U32) -> List<&2, String>:
+  match k:
+    case 0n:
+      Nil{}
+    case 1n+j:
+      +q = srand.next(r)
+      +i = srand.at(q, n)
+      +ys = xs
+      srand.cons(KV.nth(ys, i), srand.ints(j, srand.drop(ys, i), Nat.sub(n, 1n), q))
+
+def srand.drop1(m: Maybe<&2, String>, t: KV.Trie<Unit>) -> KV.Trie<Unit>:
+  match m:
+    case Some{+x}:
+      KV.del(Unit, t, x)
+    case None{}:
+      t
+
+# t with c of its members dropped at random
+def srand.thin(c: Nat, t: KV.Trie<Unit>, +r: U32) -> KV.Trie<Unit>:
+  match c:
+    case 0n:
+      t
+    case 1n+j:
+      +q = srand.next(r)
+      +u = t
+      srand.thin(j, srand.drop1(KV.pick(Unit, u, KV.mix(q), 0n), u), q)
+
+# the members picked so far (acc, c of them), or all that are wanted
+type Gath is Data:
+  Gath{acc: KV.Trie<Unit>, c: Nat}
+  GathDone{acc: KV.Trie<Unit>}
+
+def srand.fin(done: Bool, acc: KV.Trie<Unit>, c: Nat) -> Gath:
+  match done:
+    case True{}:
+      GathDone{acc}
+    case False{}:
+      Gath{acc, c}
+
+def srand.put(had: Bool, +x: String, acc: KV.Trie<Unit>, +c: Nat, +k: Nat) -> Gath:
+  match had:
+    case True{}:
+      Gath{acc, c}
+    case False{}:
+      srand.fin(Nat.is_le(k, 1n+c), KV.set(Unit, acc, x, Unit{}), 1n+c)
+
+def srand.step(m: Maybe<&2, String>, +acc: KV.Trie<Unit>, +c: Nat, +k: Nat) -> Gath:
+  match m:
+    case Some{+x}:
+      srand.put(KV.has(Unit, acc, x), x, acc, c, k)
+    case None{}:
+      GathDone{acc}
+
+# members of t picked until k different ones come, or fuel runs out
+def srand.gather(fuel: Nat, g: Gath, +k: Nat, +t: KV.Trie<Unit>, +r: U32) -> KV.Trie<Unit>:
+  match fuel g:
+    case _ GathDone{acc}:
+      acc
+    case 0n Gath{acc, c}:
+      acc
+    case 1n+f Gath{acc, +c}:
+      +q = srand.next(r)
+      srand.gather(f, srand.step(KV.pick(Unit, t, KV.mix(q), 0n), acc, c, k), k, t, q)
+
+def srand.big(thin: Bool, +k: Nat, +n: Nat, +t: KV.Trie<Unit>, +r: U32) -> List<&2, String>:
+  match thin:
+    case True{}:
+      KV.keys(Unit, srand.thin(Nat.sub(n, k), t, r), 0n)
+    case False{}:
+      KV.keys(Unit, srand.gather(Nat.add(Nat.mul(k, 16n), 64n), srand.fin(Nat.is_eq(k, 0n), KV.empty(Unit), 0n), k, t, r), 0n)
+
+# k different members of s, k below its size
+def srand.uniq(+k: Nat, +s: KV.Mems, +r: U32) -> List<&2, String>:
+  match s:
+    case KV.MInts{+n, +xs}:
+      srand.ints(k, xs, n, r)
+    case KV.MBig{+n, +t}:
+      srand.big(Nat.is_lt(n, Nat.mul(k, 3n)), k, n, t, r)
+
+# c different members of s, all of them when c is at least its size
+def srand.many.of(all: Bool, +c: Nat, +s: KV.Mems, +r: U32) -> List<&2, String>:
+  match all:
+    case True{}:
+      KV.mems.all(s)
+    case False{}:
+      srand.uniq(c, s, r)
+
+def srand.many(+c: Nat, +s: KV.Mems, +r: U32) -> List<&2, String>:
+  srand.many.of(Nat.is_le(KV.mems.len(s), c), c, s, r)
+
+# A set's writes. A key not there is an empty set: SADD makes it, SREM
+# finds nothing; a key that holds a set keeps its time, and is deleted
+# when SREM takes its last member (as Redis deletes an empty set); a key
+# that holds another kind answers WRONGTYPE. The change keeps the write
+# as the append-only file logs it: SADD's members, SREM's; fresh says
+# whether the set is a new one. SADD adds no member that is there, and a
+# write that adds or takes none leaves the key as it was. SWNew makes a
+# new set of its members where the key was, whatever it held, and
+# answers 0, as the script the file logs for it does.
+
+# SADD's members added to s: the reply counts them by the size they add
+def sadd.ch(fresh: Bool, ms: List<&2, String>, s: KV.Mems) -> Change:
+  match fresh:
+    case True{}:
+      CMemsNew{ms, s}
+    case False{}:
+      CMems{SWAdd{ms}, s}
+
+def sadd.of(none: Bool, +fresh: Bool, ms: List<&2, String>, s: KV.Mems, +added: Nat) -> Out:
+  match none:
+    case True{}:
+      Out{r_int(0n), CKeep{}}
+    case False{}:
+      Out{r_int(added), sadd.ch(fresh, ms, s)}
+
+# whether SADD adds none: of a new set, when it has no members (one or
+# more members make a set of one or more), else when the size is the same
+def sadd.none(fresh: Bool, +ms: List<&2, String>, +added: Nat) -> Bool:
+  match fresh:
+    case True{}:
+      List.is_empty(&2, String, ms)
+    case False{}:
+      Nat.is_eq(added, 0n)
+
+def sadd.out(+fresh: Bool, +ms: List<&2, String>, +s: KV.Mems) -> Out:
+  +n = KV.mems.len(s)
+  +t = KV.mems.adds(ms, s)
+  +added = Nat.sub(KV.mems.len(t), n)
+  sadd.of(sadd.none(fresh, ms, added), fresh, ms, t, added)
+
+# SREM's members taken out of s, and how many of them it held
+type SDel is Data:
+  SDel{s: KV.Mems, gone: Nat}
+
+def srem.one(had: Bool, s: KV.Mems, +m: String, +gone: Nat) -> SDel:
+  match had:
+    case True{}:
+      SDel{KV.mems.del(s, m), 1n+gone}
+    case False{}:
+      SDel{s, gone}
+
+def srem.go(ms: List<&2, String>, acc: SDel) -> SDel:
+  match ms acc:
+    case Nil{} acc:
+      acc
+    case Con{+m, rest} SDel{+s, +gone}:
+      srem.go(rest, srem.one(KV.mems.has(m, s), s, m, gone))
+
+def srem.of(none: Bool, empty: Bool, +ms: List<&2, String>, s: KV.Mems, +gone: Nat) -> Out:
+  match none empty:
+    case True{} _:
+      Out{r_int(0n), CKeep{}}
+    case False{} True{}:
+      Out{r_int(gone), CDel{}}
+    case False{} False{}:
+      Out{r_int(gone), CMems{SWRem{ms}, s}}
+
+def srem.out(r: SDel, +ms: List<&2, String>) -> Out:
+  match r:
+    case SDel{+s, +gone}:
+      srem.of(Nat.is_eq(gone, 0n), Nat.is_eq(KV.mems.len(s), 0n), ms, s, gone)
+
+# SPOP's reply: the member it took (a nil for none), or the members, and
+# its change: the SREM of them
+def spop.reply(one: Bool, xs: List<&2, String>) -> Reply:
+  match one xs:
+    case True{} Con{x, rest}:
+      RBulk{x}
+    case True{} Nil{}:
+      RNull{}
+    case False{} ys:
+      RArray{lbulks(ys)}
+
+def spop.ch(o: Out) -> Change:
+  match o:
+    case Out{r, ch}:
+      ch
+
+def spop.out(+one: Bool, +xs: List<&2, String>, s: KV.Mems) -> Out:
+  Out{spop.reply(one, xs), spop.ch(srem.out(srem.go(xs, SDel{s, 0n}), xs))}
+
+def spop.one(m: Maybe<&2, String>) -> List<&2, String>:
+  srand.cons(m, Nil{})
+
+# SWNew: a new set of the members where the key was, whatever it held
+# (the script the append-only file logs, aof.bend), answered 0 as the
+# script returns it
+def snew.of(none: Bool, +ms: List<&2, String>) -> Out:
+  match none:
+    case True{}:
+      Out{r_int(0n), CKeep{}}
+    case False{}:
+      Out{r_int(0n), CMemsNew{ms, KV.mems.of(ms)}}
+
+# a write of a set to a set s (an empty one for a key not there: fresh)
+def swrite(op: SWrite, +fresh: Bool, +s: KV.Mems) -> Out:
+  match op:
+    case SWAdd{+ms}:
+      sadd.out(fresh, ms, s)
+    case SWRem{+ms}:
+      srem.out(srem.go(ms, SDel{s, 0n}), ms)
+    case SWNew{+ms}:
+      snew.of(List.is_empty(&2, String, ms), ms)
+    case SWPop{+r}:
+      spop.out(True{}, spop.one(srand.pick(s, srand.next(r))), s)
+    case SWPopN{+c, +r}:
+      spop.out(False{}, srand.many(c, s, r), s)
+
+# of a key that holds another kind: WRONGTYPE, but for SWNew
+def swrite.wrong(op: SWrite) -> Out:
+  match op:
+    case SWNew{+ms}:
+      swrite(SWNew{ms}, True{}, KV.mems.empty())
+    case _:
+      Out{e_wrongtype(), CKeep{}}
+
+# of a key that holds a string (m: the string's entry, or none)
+def swrite.str(op: SWrite, m: Maybe<&2, KV.Item<String>>) -> Out:
+  match m:
+    case Some{x}:
+      swrite.wrong(op)
+    case None{}:
+      swrite(op, True{}, KV.mems.empty())
+
+# of a key that holds a collection
+def swrite.coll(op: SWrite, +cl: KV.Coll) -> Out:
+  match cl:
+    case KV.CMems{m}:
+      swrite(op, False{}, m)
+    case KV.CHash{h}:
+      swrite.wrong(op)
+    case KV.CList{l}:
+      swrite.wrong(op)
 
 def upd(op: UpdOp, +now: Nat, m: Maybe<&2, KV.Item<String>>) -> Out:
   match op:
@@ -9609,13 +10715,16 @@ def upd(op: UpdOp, +now: Nat, m: Maybe<&2, KV.Item<String>>) -> Out:
       hwrite.str(op, m)
     case UList{op}:
       lwrite.str(op, m)
+    case UMems{op}:
+      swrite.str(op, m)
 
 # An update of a key that holds a collection: SET (and SETEX, PSETEX)
 # replaces it, SETNX finds it there, EXPIRE and its kin and PERSIST set
 # its time; they see it as a key there with its time (and an empty
-# string, which none of them reads). A write of a hash writes a hash
+# string, which none of them reads). A write of a collection writes it
 # (upd.only). Any other is WRONGTYPE, as Redis answers it, the key left
-# as it was.
+# as it was; SET with GET answers first the error of a time from now it
+# cannot keep, as Redis checks the time before the type.
 def upd.any(op: UpdOp) -> Bool:
   match op:
     case USetNx{v}:
@@ -9629,12 +10738,30 @@ def upd.any(op: UpdOp) -> Bool:
     case _:
       False{}
 
-def upd.only(op: UpdOp, +cl: KV.Coll) -> Out:
+def get.wrong.at(a: Maybe<&2, At>, +name: String) -> Out:
+  match a:
+    case Some{t}:
+      Out{e_wrongtype(), CKeep{}}
+    case None{}:
+      Out{e_time(name), CKeep{}}
+
+def get.wrong(o: UpdOp, +now: Nat) -> Out:
+  match o:
+    case USet{v, cond, TAt{t}, +name}:
+      get.wrong.at(at.of(t, now), name)
+    case _:
+      Out{e_wrongtype(), CKeep{}}
+
+def upd.only(op: UpdOp, +now: Nat, +cl: KV.Coll) -> Out:
   match op:
     case UHash{hop}:
       hwrite.coll(hop, cl)
     case UList{lop}:
       lwrite.coll(lop, cl)
+    case UMems{sop}:
+      swrite.coll(sop, cl)
+    case UGet{o}:
+      get.wrong(o, now)
     case _:
       Out{e_wrongtype(), CKeep{}}
 
@@ -9643,7 +10770,7 @@ def upd.coll(any: Bool, op: UpdOp, +now: Nat, +cl: KV.Coll, +e: Nat) -> Out:
     case True{}:
       upd(op, now, Some{KV.Item{"", e}})
     case False{}:
-      upd.only(op, cl)
+      upd.only(op, now, cl)
 
 # an update of a key, from its entry there at now: a string is updated as
 # above
@@ -9683,6 +10810,10 @@ def upd.ch(t: KV.Trie<KV.Val>, +k: String, +h: U32, +n: Nat, +x: Nat, now: Nat, 
       (r, Db{KV.keep.at(KV.Val, t, k, KV.VColl{KV.CList{lv}}, h), n, x, now, rr})
     case CListNew{left, xs, lv}:
       (r, Db{KV.setx.at(KV.Val, t, k, KV.VColl{KV.CList{lv}}, 0n, h), cnt.n(c, n), cnt.x(c, 0n, x), now, rr})
+    case CMems{op, sv}:
+      (r, Db{KV.keep.at(KV.Val, t, k, KV.VColl{KV.CMems{sv}}, h), n, x, now, rr})
+    case CMemsNew{ms, sv}:
+      (r, Db{KV.setx.at(KV.Val, t, k, KV.VColl{KV.CMems{sv}}, 0n, h), cnt.n(c, n), cnt.x(c, 0n, x), now, rr})
 
 def upd.put(t: KV.Trie<KV.Val>, +k: String, +h: U32, +n: Nat, +x: Nat, now: Nat, rr: Maybe<&2, Db>, +c: Nat, o: Out) -> Reply & Db:
   match o:
@@ -10102,6 +11233,392 @@ def db.lmpop(db: Db, ks: List<&2, String>, +left: Bool, c: String) -> Reply & Db
   +k = ks
   lmpop.at(lmpop.first(k, lmpop.head(k, x), x), left, c, x)
 
+# Sets of several keys
+# --------------------
+# SINTER, SUNION, SDIFF, SINTERCARD and their STOREs read the sets at
+# their keys there at now, in order: a key not there is an empty set, and
+# one that holds another kind makes the command answer WRONGTYPE, as
+# Redis answers once it has looked at every key (after a key not there,
+# too). SINTER reads the members of its smallest set, in that set's order
+# (an intset's increasing), and keeps those every other set holds;
+# SUNION adds every set's members in turn to an empty set, and SDIFF the
+# first set's members that no other holds, by the way Redis 7.0.15 picks
+# for the sizes: both answer the members of the set they made, in its
+# order. A STORE sets its destination to the set of the members the
+# operation answers, added in turn to an empty set (the write SWNew, with
+# no time, whatever the destination held), or deletes it when there are
+# none, and answers how many there are.
+
+# the sets at the keys (none for a key not there), or WRONGTYPE
+type SGot is Data:
+  SGot{ss: List<&2, Maybe<&2, KV.Mems>>}
+  SGotWrong{}
+
+def sget.one(m: Maybe<&2, KV.Val>, rest: SGot) -> SGot:
+  match m rest:
+    case _ SGotWrong{}:
+      SGotWrong{}
+    case None{} SGot{ss}:
+      SGot{None{} <> ss}
+    case Some{KV.VColl{KV.CMems{s}}} SGot{ss}:
+      SGot{Some{s} <> ss}
+    case Some{v} SGot{ss}:
+      SGotWrong{}
+
+def sets.at(ks: List<&2, String>, +now: Nat, +t: KV.Trie<KV.Val>) -> SGot:
+  match ks:
+    case Nil{}:
+      SGot{Nil{}}
+    case Con{+k, rest}:
+      sget.one(KV.read(KV.Val, t, k, now), sets.at(rest, now, t))
+
+# the sets, when every key holds one
+def sets.all.cons(m: Maybe<&2, KV.Mems>, rest: Maybe<&2, List<&2, KV.Mems>>) -> Maybe<&2, List<&2, KV.Mems>>:
+  match m rest:
+    case Some{s} Some{xs}:
+      Some{s <> xs}
+    case _ _:
+      None{}
+
+def sets.all(ss: List<&2, Maybe<&2, KV.Mems>>) -> Maybe<&2, List<&2, KV.Mems>>:
+  match ss:
+    case Nil{}:
+      Some{Nil{}}
+    case Con{m, rest}:
+      sets.all.cons(m, sets.all(rest))
+
+# the sets of the keys that hold one, in order
+def sets.some(ss: List<&2, Maybe<&2, KV.Mems>>) -> List<&2, KV.Mems>:
+  match ss:
+    case Nil{}:
+      Nil{}
+    case Con{Some{s}, rest}:
+      s <> sets.some(rest)
+    case Con{None{}, rest}:
+      sets.some(rest)
+
+# the sets from the smallest to the largest: s goes before the first set
+# of ss that is larger (before: whether that is ss's first, computed
+# before ss is passed on)
+def sets.lt(+s: KV.Mems, +ss: List<&2, KV.Mems>) -> Bool:
+  match ss:
+    case Con{+x, rest}:
+      Nat.is_lt(KV.mems.len(s), KV.mems.len(x))
+    case Nil{}:
+      True{}
+
+def sets.ins(+s: KV.Mems, ss: List<&2, KV.Mems>, before: Bool) -> List<&2, KV.Mems>:
+  match ss before:
+    case Nil{} _:
+      [s]
+    case Con{x, rest} True{}:
+      s <> Con{x, rest}
+    case Con{x, +rest} False{}:
+      b = sets.lt(s, rest)
+      Con{x, sets.ins(s, rest, b)}
+
+def sets.sort(ss: List<&2, KV.Mems>, acc: List<&2, KV.Mems>) -> List<&2, KV.Mems>:
+  match ss:
+    case Nil{}:
+      acc
+    case Con{+s, rest}:
+      +a = acc
+      sets.sort(rest, sets.ins(s, a, sets.lt(s, a)))
+
+# whether each set of ss holds x (ok: so far)
+def sets.has_all.go(ss: List<&2, KV.Mems>, ok: Bool, +x: String) -> Bool:
+  match ss ok:
+    case _ False{}:
+      False{}
+    case Nil{} True{}:
+      True{}
+    case Con{+s, rest} True{}:
+      sets.has_all.go(rest, KV.mems.has(x, s), x)
+
+def sets.has_all(+x: String, ss: List<&2, KV.Mems>) -> Bool:
+  sets.has_all.go(ss, True{}, x)
+
+# whether a set of ss holds x (none: so far)
+def sets.has_any.go(ss: List<&2, KV.Mems>, none: Bool, +x: String) -> Bool:
+  match ss none:
+    case _ False{}:
+      True{}
+    case Nil{} True{}:
+      False{}
+    case Con{+s, rest} True{}:
+      sets.has_any.go(rest, Bool.not(KV.mems.has(x, s)), x)
+
+def sets.has_any(+x: String, ss: List<&2, KV.Mems>) -> Bool:
+  sets.has_any.go(ss, True{}, x)
+
+def sets.if(ok: Bool, x: String, rest: List<&2, String>) -> List<&2, String>:
+  match ok:
+    case True{}:
+      x <> rest
+    case False{}:
+      rest
+
+# the members of xs that each set of ss holds, in order
+def sinter.keep(xs: List<&2, String>, +ss: List<&2, KV.Mems>) -> List<&2, String>:
+  match xs:
+    case Nil{}:
+      Nil{}
+    case Con{+x, rest}:
+      sets.if(sets.has_all(x, ss), x, sinter.keep(rest, ss))
+
+# the members of xs that no set of ss holds, in order
+def sinter.none(xs: List<&2, String>, +ss: List<&2, KV.Mems>) -> List<&2, String>:
+  match xs:
+    case Nil{}:
+      Nil{}
+    case Con{+x, rest}:
+      sets.if(Bool.not(sets.has_any(x, ss)), x, sinter.none(rest, ss))
+
+def sinter.sorted(ss: List<&2, KV.Mems>) -> List<&2, String>:
+  match ss:
+    case Con{+s, rest}:
+      sinter.keep(KV.mems.all(s), rest)
+    case Nil{}:
+      Nil{}
+
+# SINTER's members: none when a key is not there
+def sinter.of(m: Maybe<&2, List<&2, KV.Mems>>) -> List<&2, String>:
+  match m:
+    case Some{ss}:
+      sinter.sorted(sets.sort(ss, Nil{}))
+    case None{}:
+      Nil{}
+
+# how many members of xs each set of ss holds, counted from c up to
+# limit (0: all of them); done once c reaches it
+def sicard.go(xs: List<&2, String>, done: Bool, +ss: List<&2, KV.Mems>, +limit: Nat, +c: Nat) -> Nat:
+  match xs done:
+    case _ True{}:
+      c
+    case Nil{} False{}:
+      c
+    case Con{+x, rest} False{}:
+      +d = Bool.pick(Nat, sets.has_all(x, ss), 1n+c, c)
+      sicard.go(rest, Bool.and(Nat.is_lt(0n, limit), Nat.is_le(limit, d)), ss, limit, d)
+
+def sicard.sorted(+limit: Nat, ss: List<&2, KV.Mems>) -> Nat:
+  match ss:
+    case Con{+s, rest}:
+      sicard.go(KV.mems.all(s), False{}, rest, limit, 0n)
+    case Nil{}:
+      0n
+
+def sicard.of(+limit: Nat, m: Maybe<&2, List<&2, KV.Mems>>) -> Nat:
+  match m:
+    case Some{ss}:
+      sicard.sorted(limit, sets.sort(ss, Nil{}))
+    case None{}:
+      0n
+
+# SUNION's set: every set's members added in turn to an empty set
+def sunion.of(ss: List<&2, KV.Mems>, acc: KV.Mems) -> KV.Mems:
+  match ss:
+    case Nil{}:
+      acc
+    case Con{+s, rest}:
+      sunion.of(rest, KV.mems.adds(KV.mems.all(s), acc))
+
+# whether k is one of ks
+def keys.has(+k: String, ks: List<&2, String>) -> Bool:
+  match ks:
+    case Nil{}:
+      False{}
+    case Con{+j, rest}:
+      Bool.or(String.eq(k, j), keys.has(k, rest))
+
+# the members xs of a set taken out of s, those it holds
+def sdiff.one(had: Bool, s: KV.Mems, +x: String) -> KV.Mems:
+  match had:
+    case True{}:
+      KV.mems.del(s, x)
+    case False{}:
+      s
+
+def sdiff.drop(xs: List<&2, String>, s: KV.Mems) -> KV.Mems:
+  match xs:
+    case Nil{}:
+      s
+    case Con{+x, rest}:
+      +t = s
+      sdiff.drop(rest, sdiff.one(KV.mems.has(x, t), t, x))
+
+def sdiff.drops(ss: List<&2, KV.Mems>, s: KV.Mems) -> KV.Mems:
+  match ss:
+    case Nil{}:
+      s
+    case Con{+x, rest}:
+      sdiff.drops(rest, sdiff.drop(KV.mems.all(x), s))
+
+def sets.sizes(ss: List<&2, KV.Mems>) -> Nat:
+  match ss:
+    case Nil{}:
+      0n
+    case Con{+x, rest}:
+      Nat.add(KV.mems.len(x), sets.sizes(rest))
+
+# SDIFF's set, the first set s0 and the other sets there, os: by Redis's
+# first way (s0's members that no other set holds, added to an empty
+# set) when its work, half of s0's size for each set, is at most the
+# second's (s0's members added to an empty set, then the others' taken
+# out), the sum of their sizes
+def sdiff.way(one: Bool, +s0: KV.Mems, +os: List<&2, KV.Mems>) -> KV.Mems:
+  match one:
+    case True{}:
+      KV.mems.of(sinter.none(KV.mems.all(s0), os))
+    case False{}:
+      sdiff.drops(os, KV.mems.of(KV.mems.all(s0)))
+
+def sdiff.go(same: Bool, +s0: KV.Mems, +os: List<&2, KV.Mems>) -> KV.Mems:
+  match same:
+    case True{}:
+      KV.mems.empty()
+    case False{}:
+      +n0 = KV.mems.len(s0)
+      sdiff.way(Nat.is_le(Nat.div(Nat.mul(n0, 1n+List.length(&2, KV.Mems, os)), 2n), Nat.add(n0, sets.sizes(os))), s0, os)
+
+# SDIFF's set: none when the first key is not there, and none when it
+# comes again among the others (the same set taken from itself)
+def sdiff.of(ks: List<&2, String>, ss: List<&2, Maybe<&2, KV.Mems>>) -> KV.Mems:
+  match ks ss:
+    case Con{+k, rest} Con{Some{s0}, os}:
+      sdiff.go(keys.has(k, rest), s0, sets.some(os))
+    case _ _:
+      KV.mems.empty()
+
+# the members a set operation answers
+def sop.members(op: SetK, ks: List<&2, String>, ss: List<&2, Maybe<&2, KV.Mems>>) -> List<&2, String>:
+  match op:
+    case KInter{}:
+      sinter.of(sets.all(ss))
+    case KCard{l}:
+      sinter.of(sets.all(ss))
+    case KUnion{}:
+      KV.mems.all(sunion.of(sets.some(ss), KV.mems.empty()))
+    case KDiff{}:
+      KV.mems.all(sdiff.of(ks, ss))
+
+def sop.of(op: SetK, ks: List<&2, String>, ss: List<&2, Maybe<&2, KV.Mems>>) -> Reply:
+  match op:
+    case KCard{+limit}:
+      r_int(sicard.of(limit, sets.all(ss)))
+    case KInter{}:
+      RArray{lbulks(sop.members(KInter{}, ks, ss))}
+    case KUnion{}:
+      RArray{lbulks(sop.members(KUnion{}, ks, ss))}
+    case KDiff{}:
+      RArray{lbulks(sop.members(KDiff{}, ks, ss))}
+
+def sop.reply(op: SetK, ks: List<&2, String>, g: SGot) -> Reply:
+  match g:
+    case SGot{ss}:
+      sop.of(op, ks, ss)
+    case SGotWrong{}:
+      e_wrongtype()
+
+def sstore.put(+ms: List<&2, String>, +d: String, db: Db) -> Reply & Db:
+  (r_int(List.length(&2, String, ms)), db_of(db.upd(db, d, UMems{SWNew{ms}})))
+
+def sstore.of(xs: List<&2, String>, +d: String, db: Db) -> Reply & Db:
+  match xs:
+    case Nil{}:
+      (r_int(0n), db_of(db.del(db, [d])))
+    case Con{x, rest}:
+      sstore.put(x <> rest, d, db)
+
+def sstore.do(g: SGot, op: SetK, ks: List<&2, String>, +d: String, db: Db) -> Reply & Db:
+  match g:
+    case SGot{ss}:
+      sstore.of(sop.members(op, ks, ss), d, db)
+    case SGotWrong{}:
+      (e_wrongtype(), db)
+
+def db.sstore(db: Db, op: SetK, +d: String, ks: List<&2, String>) -> Reply & Db:
+  +x = db
+  +k = ks
+  sstore.do(sets.at(k, db.now(x), db.trie(x)), op, k, d, x)
+
+# SMOVE src dst m, as Redis 7.0.15 does it: src not there answers 0,
+# whatever dst holds; src or dst of another kind WRONGTYPE; src the same
+# key as dst answers whether it holds m; m not in src 0; else 1: m taken
+# out of src (deleted when it gives its last member) and added to dst (a
+# new set there when dst is not there at now), by the writes SREM and
+# SADD make (db.upd). The New form adds m to a new set at dst, whatever
+# dst holds (the script the file logs for it deletes dst first).
+# What SMOVE finds: 0, WRONGTYPE, src the same key as dst (had: it holds
+# m), or a move
+type Smv is Data:
+  SmvZero{}
+  SmvWrong{}
+  SmvSame{had: Bool}
+  SmvGo{}
+
+def smv.dst(same: Bool, +had: Bool, md: Maybe<&2, KV.Item<KV.Val>>) -> Smv:
+  match same md:
+    case True{} _:
+      SmvSame{had}
+    case False{} None{}:
+      Bool.pick(Smv, had, SmvGo{}, SmvZero{})
+    case False{} Some{KV.Item{KV.VColl{KV.CMems{d}}, e}}:
+      Bool.pick(Smv, had, SmvGo{}, SmvZero{})
+    case False{} Some{it}:
+      SmvWrong{}
+
+# from the entries of src and dst there at now (dst none for a New form)
+def smv.find(ms: Maybe<&2, KV.Item<KV.Val>>, md: Maybe<&2, KV.Item<KV.Val>>, same: Bool, +m: String) -> Smv:
+  match ms:
+    case None{}:
+      SmvZero{}
+    case Some{KV.Item{KV.VColl{KV.CMems{+s}}, e}}:
+      smv.dst(same, KV.mems.has(m, s), md)
+    case Some{it}:
+      SmvWrong{}
+
+def smv.member(+w: SMem) -> String:
+  match w:
+    case SMem{+m}:
+      m
+    case SMemNew{+m}:
+      m
+
+def smv.fresh(+w: SMem) -> Bool:
+  match w:
+    case SMem{m}:
+      False{}
+    case SMemNew{m}:
+      True{}
+
+# the write of dst: SADD of m, or a new set of m
+def smv.add(+w: SMem) -> SWrite:
+  match w:
+    case SMem{+m}:
+      SWAdd{[m]}
+    case SMemNew{+m}:
+      SWNew{[m]}
+
+def smove.do(f: Smv, +s: String, +d: String, +w: SMem, db: Db) -> Reply & Db:
+  match f:
+    case SmvZero{}:
+      (r_int(0n), db)
+    case SmvWrong{}:
+      (e_wrongtype(), db)
+    case SmvSame{had}:
+      (r_int(Bool.pick(Nat, had, 1n, 0n)), db)
+    case SmvGo{}:
+      (r_int(1n), db_of(db.upd(db_of(db.upd(db, s, UMems{SWRem{[smv.member(w)]}})), d, UMems{smv.add(w)})))
+
+# what SMOVE finds in the database x
+def smv.of(+x: Db, +s: String, +d: String, +w: SMem) -> Smv:
+  smv.find(db.ent(x, s), mv.dst.ent(smv.fresh(w), db.ent(x, d)), KV.str_eq(s, d), smv.member(w))
+
+def db.smove(db: Db, +s: String, +d: String, +w: SMem) -> Reply & Db:
+  +x = db
+  smove.do(smv.of(x, s, d, w), s, d, w, x)
+
 # one command: its reply and the database after it. The database is
 # passed on, not shared, so a write rebuilds only the path it changes.
 # A key read only reads the trie: the compiler lends t to the read and
@@ -10167,6 +11684,13 @@ def exec(cmd: Cmd, db: Db) -> Reply & Db:
       db.lmove(db, s, t, e)
     case LMPop{ks, +left, c}:
       db.lmpop(db, ks, left, c)
+    case SOp{op, +ks}:
+      +d = db
+      (sop.reply(op, ks, sets.at(ks, db.now(d), db.trie(d))), d)
+    case SStore{op, +d, ks}:
+      db.sstore(db, op, d, ks)
+    case SMv{+s, +d, +w}:
+      db.smove(db, s, d, w)
 
 # a batch of commands, in order: the replies in order, and the database
 # after the last

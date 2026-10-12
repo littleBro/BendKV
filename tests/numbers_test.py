@@ -9,7 +9,11 @@ BendKV must answer each command, and answer as Redis does,
 but where BendKV is known to differ: INCRBY and DECRBY past 14 digits (its
 integers), and SCAN with a cursor it did not give (the cursor is the place
 in each server's own table). A full SCAN's keys are compared as a set:
-each server lists them in the order of its own table.
+each server lists them in the order of its own table; the set the set
+commands take is an intset, which SSCAN answers whole whatever the
+cursor, and SPOP's random picks are compared by how many (SRANDMEMBER
+of a negative count n answers n members on both servers, as many as
+memory holds: only of a key not there here).
 
     python3 tests/numbers_test.py --bendkv 6380 --redis 6390
 """
@@ -40,19 +44,24 @@ TEMPL = [
     "LINDEX l n", "LRANGE l n n", "LRANGE l 0 n", "LRANGE l n -1", "LSET l n v", "LREM l n a", "LTRIM l n n",
     "LTRIM l 0 n", "LPOP l n", "RPOP l n", "LPOS l a RANK n", "LPOS l a COUNT n", "LPOS l a MAXLEN n",
     "LPOS l a RANK n COUNT 0", "LMPOP n l LEFT", "LMPOP 1 l LEFT COUNT n", "LINSERT l BEFORE n v",
+    "SPOP s n", "SINTERCARD n s", "SINTERCARD 1 s LIMIT n", "SSCAN s n", "SSCAN s 0 COUNT n",
+    "SADD s n", "SISMEMBER s n", "SMOVE s s2 n", "SPOP nope n", "SRANDMEMBER nope n",
 ]
 ANSWER_ONLY = ("INCRBY", "DECRBY", "SCAN n")
 
 
 def norm(t, x):
-    if t.startswith("SCAN") and x[0] == b"*":
+    if t.startswith(("SCAN", "SSCAN")) and x[0] == b"*":
         return (x[0], [x[1][0], (x[1][1][0], sorted(x[1][1][1]))])
+    # SPOP and SRANDMEMBER pick at random: how many, or nil or not
+    if t.startswith(("SPOP", "SRANDMEMBER")) and x[0] in (b"*", b"$"):
+        return (x[0], len(x[1]) if x[0] == b"*" else x[1] is not None)
     return x
 
 
 # the state each command starts from on both servers
 RESET = [[b"SELECT", b"0"], [b"SET", b"k", b"hello"], [b"SET", b"i", b"5"], [b"DEL", b"l"],
-         [b"RPUSH", b"l", b"a", b"b", b"a", b"c", b"a"],
+         [b"RPUSH", b"l", b"a", b"b", b"a", b"c", b"a"], [b"DEL", b"s", b"s2"], [b"SADD", b"s", b"1", b"2", b"3", b"4", b"5"],
          [b"CONFIG", b"SET", b"proto-max-bulk-len", b"536870912"], [b"CONFIG", b"SET", b"hz", b"10"],
          [b"CONFIG", b"SET", b"maxmemory", b"0"]]
 
