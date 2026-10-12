@@ -13,9 +13,12 @@ each server lists them in the order of its own table; the set the set
 commands take is an intset, which SSCAN answers whole whatever the
 cursor, and SPOP's random picks are compared by how many (SRANDMEMBER
 of a negative count n answers n members on both servers, as many as
-memory holds: only of a key not there here). INCRBYFLOAT and
-HINCRBYFLOAT read each as a long double, and add it to a value and to a
-field that are numbers and to ones that are not there.
+memory holds: only of a key not there here, as ZRANDMEMBER's). INCRBYFLOAT
+and HINCRBYFLOAT read each as a long double, and add it to a value and
+to a field that are numbers and to ones that are not there; the sorted
+set the sorted-set commands take is a listpack, which ZSCAN answers
+whole whatever the cursor, and its scores and the commands' bounds and
+weights read each as a double.
 
     python3 tests/numbers_test.py --bendkv 6380 --redis 6390
 """
@@ -49,6 +52,12 @@ TEMPL = [
     "SPOP s n", "SINTERCARD n s", "SINTERCARD 1 s LIMIT n", "SSCAN s n", "SSCAN s 0 COUNT n",
     "SADD s n", "SISMEMBER s n", "SMOVE s s2 n", "SPOP nope n", "SRANDMEMBER nope n",
     "INCRBYFLOAT i n", "INCRBYFLOAT nope n", "HINCRBYFLOAT h f n", "HINCRBYFLOAT h g n",
+    "ZADD zz n m", "ZADD zz INCR n a", "ZINCRBY zz n a", "ZSCORE zz n", "ZRANK zz n", "ZRANGE zz n n",
+    "ZRANGE zz 0 n", "ZRANGE zz n -1 REV", "ZRANGE zz n n BYSCORE", "ZRANGE zz -inf +inf BYSCORE LIMIT n 2",
+    "ZRANGE zz -inf +inf BYSCORE LIMIT 0 n", "ZRANGEBYSCORE zz n +inf", "ZREVRANGE zz 0 n", "ZCOUNT zz n n",
+    "ZREMRANGEBYRANK zz n n", "ZREMRANGEBYSCORE zz n n", "ZPOPMIN zz n", "ZPOPMAX zz n", "ZMPOP n zz MIN",
+    "ZMPOP 1 zz MIN COUNT n", "ZINTERCARD n zz", "ZINTERCARD 1 zz LIMIT n", "ZUNION n zz", "ZUNION 1 zz WEIGHTS n",
+    "ZUNIONSTORE d n zz", "ZRANGESTORE d zz n n", "ZSCAN zz n", "ZSCAN zz 0 COUNT n", "ZRANDMEMBER nope n",
 ]
 ANSWER_ONLY = ("INCRBY", "DECRBY", "SCAN n")
 
@@ -56,8 +65,9 @@ ANSWER_ONLY = ("INCRBY", "DECRBY", "SCAN n")
 def norm(t, x):
     if t.startswith(("SCAN", "SSCAN")) and x[0] == b"*":
         return (x[0], [x[1][0], (x[1][1][0], sorted(x[1][1][1]))])
-    # SPOP and SRANDMEMBER pick at random: how many, or nil or not
-    if t.startswith(("SPOP", "SRANDMEMBER")) and x[0] in (b"*", b"$"):
+    # SPOP, SRANDMEMBER and ZRANDMEMBER pick at random: how many, or nil
+    # or not
+    if t.startswith(("SPOP", "SRANDMEMBER", "ZRANDMEMBER")) and x[0] in (b"*", b"$"):
         return (x[0], len(x[1]) if x[0] == b"*" else x[1] is not None)
     return x
 
@@ -65,7 +75,8 @@ def norm(t, x):
 # the state each command starts from on both servers
 RESET = [[b"SELECT", b"0"], [b"SET", b"k", b"hello"], [b"SET", b"i", b"5"], [b"DEL", b"l"],
          [b"RPUSH", b"l", b"a", b"b", b"a", b"c", b"a"], [b"DEL", b"s", b"s2"], [b"SADD", b"s", b"1", b"2", b"3", b"4", b"5"],
-         [b"DEL", b"nope", b"h"], [b"HSET", b"h", b"f", b"1.5"],
+         [b"DEL", b"nope", b"h"], [b"HSET", b"h", b"f", b"1.5"], [b"DEL", b"zz", b"d"],
+         [b"ZADD", b"zz", b"1", b"a", b"2", b"b", b"3", b"c", b"4", b"d", b"5", b"e"],
          [b"CONFIG", b"SET", b"proto-max-bulk-len", b"536870912"], [b"CONFIG", b"SET", b"hz", b"10"],
          [b"CONFIG", b"SET", b"maxmemory", b"0"]]
 

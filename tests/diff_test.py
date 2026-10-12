@@ -414,8 +414,106 @@ def rnd_lmpop(r, ks):
     return [b"LMPOP", n] + ks + [rnd_end(r)] + r.choice([[], [], [b"COUNT", rnd_lnum(r)], [b"COUNT"]])
 
 
+# Sorted sets: members of a few names (one past 64 bytes, which makes a
+# skiplist), scores of a few values (ties, infinities, -0), forms of
+# doubles and wrong ones; ranges of ranks, scores and members with
+# their options in any order, and wrong ones. A range of members is
+# read only of the keys LEXKEYS, whose scores are all 0: Redis answers
+# one of a skiplist of other scores by the levels of its nodes, which
+# are random.
+ZMEMS = [b"a", b"b", b"c", b"d", b"e", b"1", b"2", b"", b"\x00\r\n", b"z" * 70]
+LEXKEYS = [b"lex:1", b"lex:2"]
+
+
+def rnd_zmember(r):
+    return r.choice(ZMEMS) if r.random() < 0.95 else rnd_value(r)
+
+
+def rnd_zscore(r):
+    c = r.random()
+    if c < 0.5:
+        return str(r.randint(-3, 3)).encode()
+    if c < 0.7:
+        return ("%.2f" % r.uniform(-5, 5)).encode()
+    if c < 0.85:
+        return r.choice([b"inf", b"-inf", b"+inf", b"-0", b"0.0", b"1e300", b"-1e-300", b"0x10", b"1.5",
+                         b"100000000000000000", b"4611686018427387904", b"9007199254740993"])
+    return rnd_float(r)
+
+
+def rnd_zopts(r):
+    if r.random() < 0.6:
+        return []
+    return r.sample([b"NX", b"XX", b"GT", b"LT", b"CH", b"INCR", b"nx", b"ch", b"incr", b"gt", b"xx"], r.randint(1, 3))
+
+
+def rnd_zpairs(r, lex):
+    n = r.choice([1, 1, 2, 3]) if r.random() < 0.97 else 130
+    out = []
+    for i in range(n):
+        out += [r.choice([b"0", b"0", b"-0"]) if lex else rnd_zscore(r),
+                rnd_zmember(r) if n < 100 else b"m%d" % r.randint(0, 200)]
+    return out
+
+
+def rnd_zbound(r):
+    if r.random() < 0.3:
+        return str(r.randint(-3, 3)).encode()
+    return r.choice([b"-inf", b"+inf", b"inf", b"(1", b"(-1", b"(0", b"2.5", b"(2.5", b"-0", b"(", b"abc", b"((1",
+                     b" 1", b"1 ", b"(inf", b"(-inf", b"nan", b"1e400", b""])
+
+
+def rnd_zlex(r):
+    return r.choice([b"-", b"+", b"[a", b"(a", b"[c", b"(c", b"[d", b"(e", b"[", b"(", b"[z", b"a", b"",
+                     b"+x", b"-x", b"[" + b"z" * 70, b"[1", b"(2"])
+
+
+def rnd_zrange_opts(r, kind):
+    opts = []
+    for _ in range(r.choice([0, 0, 1, 2, 3])):
+        opts += r.choice([[b"WITHSCORES"], [b"withscores"], [b"LIMIT", rnd_lnum(r), rnd_lnum(r)],
+                          [b"LIMIT", b"0", b"-1"], [b"limit", b"1", b"2"], [b"REV"], [kind]] +
+                         ([[b"FOO"], [b"LIMIT"], [b"LIMIT", b"1"], [b"BYSCORE"], [b"BYLEX"]] if r.random() < 0.1 else []))
+    return opts
+
+
+def rnd_zrange(r, k, lk):
+    c = r.random()
+    if c < 0.3:
+        return [b"ZRANGE", k(), rnd_lnum(r), rnd_lnum(r)] + rnd_zrange_opts(r, b"REV")
+    if c < 0.55:
+        return [b"ZRANGE", k(), rnd_zbound(r), rnd_zbound(r), b"BYSCORE"] + rnd_zrange_opts(r, b"BYSCORE")
+    if c < 0.7:
+        return [b"ZRANGE", lk(), rnd_zlex(r), rnd_zlex(r), b"BYLEX"] + rnd_zrange_opts(r, b"BYLEX")
+    if c < 0.8:
+        return [r.choice([b"ZRANGEBYSCORE", b"ZREVRANGEBYSCORE"]), k(), rnd_zbound(r), rnd_zbound(r)] + \
+            rnd_zrange_opts(r, b"WITHSCORES")
+    if c < 0.9:
+        return [r.choice([b"ZRANGEBYLEX", b"ZREVRANGEBYLEX"]), lk(), rnd_zlex(r), rnd_zlex(r)] + \
+            rnd_zrange_opts(r, b"LIMIT")
+    return [b"ZREVRANGE", k(), rnd_lnum(r), rnd_lnum(r)] + rnd_zrange_opts(r, b"WITHSCORES")
+
+
+def rnd_zop(r, ks, store):
+    n = r.choice([str(len(ks)).encode()] * 8 + [b"0", b"x", b"-1", str(len(ks) + 1).encode()])
+    name = r.choice([b"ZUNION", b"ZINTER", b"ZDIFF", b"ZINTERCARD"] if not store else
+                    [b"ZUNIONSTORE", b"ZINTERSTORE", b"ZDIFFSTORE"])
+    opts = []
+    for _ in range(r.choice([0, 0, 1, 2])):
+        opts += r.choice([[b"WEIGHTS"] + [r.choice([b"1", b"2", b"-1", b"0", b"0.5", b"inf", b"-inf", b"x"]) for _ in ks],
+                          [b"AGGREGATE", r.choice([b"SUM", b"min", b"MAX", b"foo"])], [b"WITHSCORES"],
+                          [b"LIMIT", rnd_lnum(r)], [b"WEIGHTS", b"1"], [b"FOO"]])
+    return [name] + ([KEYS[0]] if store else []) + [n] + ks + opts
+
+
+def rnd_zmpop(r, ks):
+    n = r.choice([str(len(ks)).encode()] * 8 + [b"0", b"x", b"-1", str(len(ks) + 1).encode()])
+    return [b"ZMPOP", n] + ks + [r.choice([b"MIN", b"max", b"FOO"])] + r.choice([[], [], [b"COUNT", rnd_lnum(r)], [b"COUNT"]])
+
+
 def rnd_cmd(r):
     k = lambda: r.choice(KEYS)
+    lk = lambda: r.choice(LEXKEYS)
     ks = lambda: [k() for _ in range(r.randint(1, 4))]
     c = r.random()
     table = [
@@ -540,6 +638,31 @@ def rnd_cmd(r):
         (0.01, lambda: [b"SSCAN", k(), b"0", b"COUNT", b"1000"] + ([b"MATCH", rnd_pattern(r)] if r.random() < 0.5 else [])),
         (0.005, lambda: [r.choice([b"SADD", b"SREM", b"SMOVE", b"SINTER", b"SINTERCARD", b"SPOP", b"SRANDMEMBER", b"SSCAN",
                                    b"SMISMEMBER", b"SUNIONSTORE"])] + [k() for _ in range(r.choice([0, 1]))]),
+        (0.05, lambda: [r.choice([b"ZADD", b"zadd"]), k()] + rnd_zopts(r) + rnd_zpairs(r, False)),
+        (0.02, lambda: [b"ZADD", lk()] + r.choice([[], [], [b"NX"], [b"XX", b"CH"], [b"GT"]]) + rnd_zpairs(r, True)),
+        (0.02, lambda: [b"ZINCRBY", k(), rnd_zscore(r), rnd_zmember(r)]),
+        (0.02, lambda: [b"ZREM", r.choice([k, lk])()] + [rnd_zmember(r) for _ in range(r.randint(1, 3))]),
+        (0.02, lambda: [r.choice([b"ZCARD", b"TYPE"]), r.choice([k, lk])()]),
+        (0.02, lambda: [r.choice([b"ZSCORE", b"ZRANK", b"ZREVRANK"]), r.choice([k, lk])(), rnd_zmember(r)]),
+        (0.01, lambda: [b"ZMSCORE", k()] + [rnd_zmember(r) for _ in range(r.randint(1, 3))]),
+        (0.02, lambda: [b"ZCOUNT", k(), rnd_zbound(r), rnd_zbound(r)]),
+        (0.01, lambda: [b"ZLEXCOUNT", lk(), rnd_zlex(r), rnd_zlex(r)]),
+        (0.06, lambda: rnd_zrange(r, k, lk)),
+        (0.01, lambda: [b"ZREMRANGEBYRANK", r.choice([k, lk])(), rnd_lnum(r), rnd_lnum(r)]),
+        (0.01, lambda: [b"ZREMRANGEBYSCORE", k(), rnd_zbound(r), rnd_zbound(r)]),
+        (0.01, lambda: [b"ZREMRANGEBYLEX", lk(), rnd_zlex(r), rnd_zlex(r)]),
+        (0.02, lambda: [r.choice([b"ZPOPMIN", b"ZPOPMAX"]), r.choice([k, lk])()] + r.choice([[], [], [rnd_lnum(r)], [b"1", b"2"]])),
+        (0.01, lambda: [b"ZSCAN", r.choice([k, lk])(), b"0", b"COUNT", b"1000"] + ([b"MATCH", rnd_pattern(r)] if r.random() < 0.5 else [])),
+        (0.02, lambda: rnd_zop(r, ks(), False)),
+        (0.02, lambda: rnd_zop(r, ks(), True)),
+        (0.01, lambda: [b"ZRANGESTORE", k(), k(), rnd_lnum(r), rnd_lnum(r)] + r.choice([[], [b"REV"], [b"WITHSCORES"]])),
+        (0.01, lambda: [b"ZRANGESTORE", k(), k(), rnd_zbound(r), rnd_zbound(r), b"BYSCORE"] + rnd_zrange_opts(r, b"REV")),
+        (0.005, lambda: [b"ZRANGESTORE", lk(), lk(), rnd_zlex(r), rnd_zlex(r), b"BYLEX"] + rnd_zrange_opts(r, b"REV")),
+        (0.01, lambda: rnd_zmpop(r, ks())),
+        (0.01, lambda: [b"ZRANDMEMBER", k()] + r.choice([[], [b"2"], [b"-3"], [b"5", b"WITHSCORES"], [b"x"], [b"0"], [b"1000"]])),
+        (0.005, lambda: [r.choice([b"ZADD", b"ZINCRBY", b"ZREM", b"ZRANGE", b"ZRANGEBYSCORE", b"ZCOUNT", b"ZPOPMIN", b"ZSCAN",
+                                   b"ZREMRANGEBYRANK", b"ZMSCORE", b"ZSCORE", b"ZUNION", b"ZINTERSTORE", b"ZMPOP",
+                                   b"ZRANGESTORE", b"ZRANDMEMBER", b"ZINTERCARD"])] + [k() for _ in range(r.choice([0, 1, 2]))]),
     ]
     c *= sum(p for p, f in table)
     acc = 0.0
@@ -573,7 +696,7 @@ def normalize(cmd, rep):
         return (rep[0], [rep[1][0], (rep[1][1][0], pairs_of(rep[1][1][1]))])
     # HRANDFIELD and SRANDMEMBER pick at random: how many, or nil or not,
     # is compared
-    if name in (b"HRANDFIELD", b"SRANDMEMBER") and rep[0] in (b"*", b"$"):
+    if name in (b"HRANDFIELD", b"SRANDMEMBER", b"ZRANDMEMBER") and rep[0] in (b"*", b"$"):
         return (rep[0], len(rep[1]) if rep[0] == b"*" else rep[1] is not None)
     # a set of words is a hashtable, in the order of each server's table;
     # SSCAN's COUNT of 1000 is past every member
@@ -581,6 +704,10 @@ def normalize(cmd, rep):
         return (rep[0], sorted(rep[1]))
     if name == b"SSCAN" and rep[0] == b"*":
         return (rep[0], [rep[1][0], (rep[1][1][0], sorted(rep[1][1][1]))])
+    # a skiplist's members are scanned in the order of each server's table;
+    # ZSCAN's COUNT of 1000 is past every member
+    if name == b"ZSCAN" and rep[0] == b"*":
+        return (rep[0], [rep[1][0], (rep[1][1][0], pairs_of(rep[1][1][1]))])
     # RANDOMKEY picks a key of its own choice: nil or not is compared
     if cmd[0].upper() == b"RANDOMKEY" and rep[0] == b"$":
         return (rep[0], rep[1] is not None)

@@ -78,6 +78,10 @@ def upd.ch(t: KV.Trie<KV.Val>, +k: String, +h: U32, r: R.Reply, ch: R.Change) ->
       (r, KV.keep.at(KV.Val, t, k, KV.VColl{KV.CMems{sv}}, h))
     case R.CMemsNew{ms, sv}:
       (r, KV.setx.at(KV.Val, t, k, KV.VColl{KV.CMems{sv}}, 0n, h))
+    case R.CZset{op, zv}:
+      (r, KV.keep.at(KV.Val, t, k, KV.VColl{KV.CZset{zv}}, h))
+    case R.CZsetNew{o, ps, zv}:
+      (r, KV.setx.at(KV.Val, t, k, KV.VColl{KV.CZset{zv}}, 0n, h))
 
 def upd.put(t: KV.Trie<KV.Val>, +k: String, +h: U32, o: R.Out) -> R.Reply & KV.Trie<KV.Val>:
   match o:
@@ -280,6 +284,71 @@ def smove(db: KV.Trie<KV.Val>, +s: String, +d: String, +w: R.SMem, +now: Nat) ->
   +x = db
   smove.do(smv.find(x, s, d, w, now), s, d, w, x, now)
 
+# ZUNIONSTORE, ZINTERSTORE, ZDIFFSTORE: the elements the operation makes
+# of the sorted sets (and sets) at the keys there at now set at dst as
+# the update ZWNew sets them, or dst deleted as DEL deletes it when there
+# are none; the reply counts them. A key of another kind makes it
+# WRONGTYPE, options that do not read their error. ZRANGESTORE: the same,
+# of the range of the sorted set at src.
+def zstore.put(+n: Nat, ps: List<&2, R.ZPair>, +d: String, db: KV.Trie<KV.Val>, +now: Nat) -> R.Reply & KV.Trie<KV.Val>:
+  (R.r_int(n), db_of(upd.run(db, d, R.UZset{R.ZWNew{R.zopts.none(), ps}}, now)))
+
+def zstore.of(+xs: List<&2, KV.ZEl>, +d: String, db: KV.Trie<KV.Val>, +now: Nat) -> R.Reply & KV.Trie<KV.Val>:
+  match xs:
+    case Nil{}:
+      (R.r_int(0n), db_of(del_reply(R.del_keys([d], now, db))))
+    case Con{x, rest}:
+      zstore.put(List.length(&2, KV.ZEl, xs), R.zstore.pairs(xs), d, db, now)
+
+def zstore.ok(bad: Maybe<&2, R.Reply>, +op: R.ZSetK, ss: List<&2, R.ZSrc>, +d: String, db: KV.Trie<KV.Val>, +now: Nat) -> R.Reply & KV.Trie<KV.Val>:
+  match bad:
+    case Some{r}:
+      (r, db)
+    case None{}:
+      zstore.of(R.zop.els(op, ss), d, db, now)
+
+def zstore.do(g: R.ZGot, +op: R.ZSetK, +d: String, db: KV.Trie<KV.Val>, +now: Nat) -> R.Reply & KV.Trie<KV.Val>:
+  match g:
+    case R.ZGot{ss}:
+      zstore.ok(R.zop.bad(op), op, ss, d, db, now)
+    case R.ZGotWrong{}:
+      (R.e_wrongtype(), db)
+
+def zstore(db: KV.Trie<KV.Val>, +op: R.ZSetK, +d: String, ks: List<&2, String>, +now: Nat) -> R.Reply & KV.Trie<KV.Val>:
+  +x = db
+  zstore.do(R.zsrcs.at(ks, now, x), op, d, x, now)
+
+def zrs.of(m: Maybe<&2, KV.Val>, q: R.ZQ, +d: String, db: KV.Trie<KV.Val>, +now: Nat) -> R.Reply & KV.Trie<KV.Val>:
+  match m:
+    case None{}:
+      zstore.of(Nil{}, d, db, now)
+    case Some{KV.VColl{KV.CZset{+z}}}:
+      zstore.of(R.zq.run(q, z), d, db, now)
+    case Some{v}:
+      (R.e_wrongtype(), db)
+
+def zrangestore(db: KV.Trie<KV.Val>, +d: String, +s: String, q: R.ZQ, +now: Nat) -> R.Reply & KV.Trie<KV.Val>:
+  +x = db
+  zrs.of(KV.read(KV.Val, x, s, now), q, d, x, now)
+
+# ZMPOP: as LMPOP, from the first of its keys there at now, by the update
+# ZWPopN
+def zmpop.out(+k: String, r: R.Reply & KV.Trie<KV.Val>) -> R.Reply & KV.Trie<KV.Val>:
+  (x, d) = r
+  (R.zmpop.reply(k, x), d)
+
+def zmpop.at(m: Maybe<&2, String>, +max: Bool, c: String, db: KV.Trie<KV.Val>, +now: Nat) -> R.Reply & KV.Trie<KV.Val>:
+  match m:
+    case Some{+k}:
+      zmpop.out(k, upd.run(db, k, R.UZset{R.ZWPopN{max, c}}, now))
+    case None{}:
+      (R.RNullA{}, db)
+
+def zmpop(db: KV.Trie<KV.Val>, ks: List<&2, String>, +max: Bool, c: String, +now: Nat) -> R.Reply & KV.Trie<KV.Val>:
+  +x = db
+  +k = ks
+  zmpop.at(lmpop.first(k, lmpop.head(k, x, now), x, now), max, c, x, now)
+
 def exec(cmd: R.Cmd, db: KV.Trie<KV.Val>, +now: Nat) -> R.Reply & KV.Trie<KV.Val>:
   match cmd:
     case R.Ping{}:
@@ -349,6 +418,15 @@ def exec(cmd: R.Cmd, db: KV.Trie<KV.Val>, +now: Nat) -> R.Reply & KV.Trie<KV.Val
       sstore(db, op, d, ks, now)
     case R.SMv{+s, +d, +w}:
       smove(db, s, d, w, now)
+    case R.ZOp{+op, +ks}:
+      +d = db
+      (R.zop.reply(op, R.zsrcs.at(ks, now, d)), d)
+    case R.ZStore{+op, +d, ks}:
+      zstore(db, op, d, ks, now)
+    case R.ZRangeStore{+d, +s, q}:
+      zrangestore(db, d, s, q, now)
+    case R.ZMPop{ks, +max, c}:
+      zmpop(db, ks, max, c, now)
 
 # a batch's replies, and the trie after it
 def replies(r: List<&2, R.Reply> & KV.Trie<KV.Val>) -> List<&2, R.Reply>:

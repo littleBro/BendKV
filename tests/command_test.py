@@ -238,7 +238,15 @@ def main():
              ["sintercard", "-1", "a"], ["sintercard"], ["smove", "a", "b", "m"], ["smove", "a", "b"], ["smove", "a"],
              ["sscan", "k", "0"], ["spop", "k", "2"], ["srandmember", "k"], ["smismember", "k", "a", "b"],
              ["incrbyfloat", "k", "1.5"], ["incrbyfloat", "k"], ["hincrbyfloat", "k", "f", "1.5"],
-             ["hincrbyfloat", "k", "f"]]
+             ["hincrbyfloat", "k", "f"], ["zadd", "k", "1", "a"], ["zadd", "k"], ["zincrby", "k", "1", "a"],
+             ["zrange", "k", "0", "-1"], ["zunion", "2", "a", "b"], ["zunion", "0", "a"], ["zunion", "x", "a"],
+             ["zunion", "3", "a", "b"], ["zinter", "-1", "a"], ["zunionstore", "d", "2", "a", "b"],
+             ["zinterstore", "d", "1", "a", "weights", "2"], ["zdiffstore", "d", "3", "a", "b"], ["zunionstore", "d"],
+             ["zunionstore", "d", "2a", "a", "b"], ["zintercard", "2", "a", "b", "limit", "1"], ["zintercard", "0", "a"],
+             ["zrangestore", "d", "s", "0", "-1"], ["zrangestore", "d"], ["zmpop", "2", "a", "b", "min"],
+             ["zmpop", "1", "a", "max", "count", "2"], ["zmpop", "0", "a", "min"], ["zmpop", "3", "a", "b"],
+             ["zmpop", "x", "a"], ["zmpop"], ["zrandmember", "k", "2"], ["zscan", "k", "0"], ["zpopmin", "k", "2"],
+             ["zremrangebyrank", "k", "0", "1"]]
     for argv in lines:
         for sub in ("GETKEYS", "GETKEYSANDFLAGS"):
             same("COMMAND %s %s" % (sub, " ".join(argv)), "COMMAND", sub, *argv, fix=None)

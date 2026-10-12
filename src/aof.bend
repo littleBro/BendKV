@@ -106,6 +106,17 @@ def snew.effect(gone: Bool, +k: String, ms: List<&2, String>) -> List<&2, R.Cmd>
     case False{}:
       [R.Upd{k, R.UMems{R.SWNew{ms}}}]
 
+# a new sorted set, made by a ZADD of options o and pairs ps: the ZADD
+# where the trie held no entry for the key (gone), else the script that
+# deletes the key and runs the ZADD (R.ZWNew), one entry, as for a new
+# hash
+def znew.effect(gone: Bool, +k: String, o: R.ZOpts, ps: List<&2, R.ZPair>) -> List<&2, R.Cmd>:
+  match gone:
+    case True{}:
+      [R.Upd{k, R.UZset{R.ZWAdd{o, ps}}}]
+    case False{}:
+      [R.Upd{k, R.UZset{R.ZWNew{o, ps}}}]
+
 # the effects of an update, from the change it made to its key, whose
 # code was c (R.ent.code)
 def ch.effect(+k: String, +c: Nat, +ch: R.Change) -> List<&2, R.Cmd>:
@@ -136,6 +147,10 @@ def ch.effect(+k: String, +c: Nat, +ch: R.Change) -> List<&2, R.Cmd>:
       [R.Upd{k, R.UMems{op}}]
     case R.CMemsNew{ms, s}:
       snew.effect(Nat.is_eq(c, 0n), k, ms)
+    case R.CZset{op, z}:
+      [R.Upd{k, R.UZset{op}}]
+    case R.CZsetNew{o, ps, z}:
+      znew.effect(Nat.is_eq(c, 0n), k, o, ps)
 
 def upd.effect(+k: String, +c: Nat, +o: R.Out) -> List<&2, R.Cmd>:
   match o:
@@ -287,6 +302,67 @@ def run.sstore(op: R.SetK, +d: String, ks: List<&2, String>, db: R.Db) -> R.Repl
   +k = ks
   sstore.run(R.sets.at(k, R.db.now(x), R.db.trie(x)), op, k, d, x)
 
+# ZUNIONSTORE's, ZINTERSTORE's, ZDIFFSTORE's and ZRANGESTORE's effects:
+# those of the write the STORE makes of its destination (the DEL of it
+# when the operation makes no member, else the update ZWNew of the
+# pairs, as run.upd gives its effects), with the STORE's reply
+def zstore.eff(+xs: List<&2, KV.ZEl>, +d: String, db: R.Db) -> R.Reply & (List<&2, R.Cmd> & R.Db):
+  match xs:
+    case Nil{}:
+      sstore.ans(0n, run.put(R.Del{[d]}, R.exec(R.Del{[d]}, db)))
+    case Con{x, rest}:
+      sstore.ans(List.length(&2, KV.ZEl, xs), run.upd(db, d, R.UZset{R.ZWNew{R.zopts.none(), R.zstore.pairs(xs)}}))
+
+def zstore.ok(bad: Maybe<&2, R.Reply>, +op: R.ZSetK, ss: List<&2, R.ZSrc>, +d: String, db: R.Db) -> R.Reply & (List<&2, R.Cmd> & R.Db):
+  match bad:
+    case Some{r}:
+      (r, (Nil{}, db))
+    case None{}:
+      zstore.eff(R.zop.els(op, ss), d, db)
+
+def zstore.run(g: R.ZGot, +op: R.ZSetK, +d: String, db: R.Db) -> R.Reply & (List<&2, R.Cmd> & R.Db):
+  match g:
+    case R.ZGot{ss}:
+      zstore.ok(R.zop.bad(op), op, ss, d, db)
+    case R.ZGotWrong{}:
+      (R.e_wrongtype(), (Nil{}, db))
+
+def run.zstore(+op: R.ZSetK, +d: String, ks: List<&2, String>, db: R.Db) -> R.Reply & (List<&2, R.Cmd> & R.Db):
+  +x = db
+  zstore.run(R.zsrcs.at(ks, R.db.now(x), R.db.trie(x)), op, d, x)
+
+def zrs.run(m: Maybe<&2, KV.Val>, q: R.ZQ, +d: String, db: R.Db) -> R.Reply & (List<&2, R.Cmd> & R.Db):
+  match m:
+    case None{}:
+      zstore.eff(Nil{}, d, db)
+    case Some{KV.VColl{KV.CZset{+z}}}:
+      zstore.eff(R.zq.run(q, z), d, db)
+    case Some{v}:
+      (R.e_wrongtype(), (Nil{}, db))
+
+def run.zrangestore(+d: String, +s: String, q: R.ZQ, db: R.Db) -> R.Reply & (List<&2, R.Cmd> & R.Db):
+  +x = db
+  zrs.run(KV.read(KV.Val, R.db.trie(x), s, R.db.now(x)), q, d, x)
+
+# ZMPOP's effect: the update of the key it pops from (a ZPOPMIN or
+# ZPOPMAX of the count, or the DEL of its last elements), as run.upd
+# gives it
+def zmpop.out(+k: String, r: R.Reply & (List<&2, R.Cmd> & R.Db)) -> R.Reply & (List<&2, R.Cmd> & R.Db):
+  (x, q) = r
+  (R.zmpop.reply(k, x), q)
+
+def zmpop.at(m: Maybe<&2, String>, +max: Bool, c: String, db: R.Db) -> R.Reply & (List<&2, R.Cmd> & R.Db):
+  match m:
+    case Some{+k}:
+      zmpop.out(k, run.upd(db, k, R.UZset{R.ZWPopN{max, c}}))
+    case None{}:
+      (R.RNullA{}, (Nil{}, db))
+
+def run.zmpop(ks: List<&2, String>, +max: Bool, c: String, db: R.Db) -> R.Reply & (List<&2, R.Cmd> & R.Db):
+  +x = db
+  +k = ks
+  zmpop.at(R.lmpop.first(k, R.lmpop.head(k, x), x), max, c, x)
+
 # SMOVE's effect: the SMOVE when it moved its member, in its New form (the
 # script that deletes the destination first) when the destination held
 # an entry whose time had passed (a New form logs itself again)
@@ -331,6 +407,12 @@ def run(+c: R.Cmd, db: R.Db) -> R.Reply & (List<&2, R.Cmd> & R.Db):
       run.sstore(op, d, ks, db)
     case R.SMv{+s, +d, +w}:
       run.smove(s, d, w, db)
+    case R.ZStore{+op, +d, ks}:
+      run.zstore(op, d, ks, db)
+    case R.ZRangeStore{+d, +s, q}:
+      run.zrangestore(d, s, q, db)
+    case R.ZMPop{ks, +max, c}:
+      run.zmpop(ks, max, c, db)
     case _:
       run.put(c, R.exec(c, db))
 
@@ -585,6 +667,54 @@ def mems.args(+k: String, op: R.SWrite) -> List<&2, String>:
     case _:
       Nil{}
 
+# a sorted set's write as the file logs it: the command as the client
+# sent it (ZINCRBY as ZADD with INCR; ZADD's options in one order), or
+# the script of a new sorted set (R.znew.script)
+def zopt.w(b: Bool, w: String, rest: List<&2, String>) -> List<&2, String>:
+  match b:
+    case True{}:
+      w <> rest
+    case False{}:
+      rest
+
+def zopts.on(o: R.ZOpts, rest: List<&2, String>) -> List<&2, String>:
+  match o:
+    case R.ZOpts{nx, xx, gt, lt, ch, incr}:
+      zopt.w(nx, "NX", zopt.w(xx, "XX", zopt.w(gt, "GT", zopt.w(lt, "LT", zopt.w(ch, "CH", zopt.w(incr, "INCR", rest))))))
+
+def zpairs.args(ps: List<&2, R.ZPair>) -> List<&2, String>:
+  match ps:
+    case Nil{}:
+      Nil{}
+    case Con{R.ZPair{s, m}, rest}:
+      s <> m <> zpairs.args(rest)
+
+def zpop.name(max: Bool) -> String:
+  match max:
+    case True{}:
+      "ZPOPMAX"
+    case False{}:
+      "ZPOPMIN"
+
+def zset.args(+k: String, op: R.ZWrite) -> List<&2, String>:
+  match op:
+    case R.ZWAdd{o, ps}:
+      "ZADD" <> k <> zopts.on(o, zpairs.args(ps))
+    case R.ZWRem{ms}:
+      "ZREM" <> k <> ms
+    case R.ZWNew{+o, ps}:
+      "EVAL" <> R.znew.script() <> "1" <> k <> Nat.show(R.zopts.count(o)) <> zopts.on(o, zpairs.args(ps))
+    case R.ZWRemRank{a, b}:
+      ["ZREMRANGEBYRANK", k, a, b]
+    case R.ZWRemScore{a, b}:
+      ["ZREMRANGEBYSCORE", k, a, b]
+    case R.ZWRemLex{a, b}:
+      ["ZREMRANGEBYLEX", k, a, b]
+    case R.ZWPop{max}:
+      [zpop.name(max), k]
+    case R.ZWPopN{max, c}:
+      [zpop.name(max), k, c]
+
 def upd.args(+k: String, op: R.UpdOp) -> List<&2, String>:
   match op:
     case R.USet{v, cond, ttl, name}:
@@ -603,6 +733,8 @@ def upd.args(+k: String, op: R.UpdOp) -> List<&2, String>:
       list.args(k, op)
     case R.UMems{op}:
       mems.args(k, op)
+    case R.UZset{op}:
+      zset.args(k, op)
     case _:
       Nil{}
 

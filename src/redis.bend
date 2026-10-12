@@ -171,6 +171,75 @@ type SWrite is Data:
   SWPop{r: U32}
   SWPopN{c: Nat, r: U32}
 
+# A sorted set's score and member, as ZADD takes them (the score's text
+# as it came: the write reads it as it runs, and the append-only file
+# logs it again)
+type ZPair is Data:
+  ZPair{s: String, m: String}
+
+# ZADD's options (ZINCRBY is ZADD with INCR)
+type ZOpts is Data:
+  ZOpts{nx: Bool, xx: Bool, gt: Bool, lt: Bool, ch: Bool, incr: Bool}
+
+# A range of a sorted set's elements, as ZRANGE and its kin read it: by
+# rank (start and stop, as LRANGE reads them), by score or by member
+# (each bound read: the lower one first, as Redis keeps them once it has
+# swapped those of a reversed range)
+type ZRng is Data:
+  ZRankR{a: Int, b: Int}
+  ZScoreR{lo: KV.ZSB, hi: KV.ZSB}
+  ZLexR{lo: KV.ZLB, hi: KV.ZLB}
+
+# A read of a range: the range, LIMIT's offset and count (longs; none is
+# 0 and -1) and whether it answers the scores (WITHSCORES); or such a read
+# from the last element (REV). A command travels in registers as wide as
+# its widest form, and a range and its options are many words: as a read
+# from the last element holds the read it reverses, the compiler makes a
+# read a node of its own, as UGet makes an update one.
+type ZQ is Data:
+  ZQ{r: ZRng, off: Int, cnt: Int, ws: Bool}
+  ZQRev{q: ZQ}
+
+# A read of a sorted set (PZset, below): how many elements it has
+# (ZCARD), a member's score (ZSCORE), several (ZMSCORE), a member's rank
+# (ZRANK), from the last element (ZREVRANK), how many elements a range of
+# scores holds (ZCOUNT) or of members (ZLEXCOUNT: the bounds of both as
+# they came, as LRANGE keeps its own, read as the command parses and
+# again as it runs), a range (ZRANGE and its kin, read as the command
+# parses), each read to answer its errors before the key is looked for,
+# as Redis does; or a scan of it (ZSCAN, its arguments after the key as
+# they came, as HSCAN keeps them)
+type ZRead is Data:
+  ZRCard{}
+  ZRScore{m: String}
+  ZRMScore{ms: List<&2, String>}
+  ZRRank{m: String}
+  ZRRevRank{m: String}
+  ZRCount{args: List<&2, String>}
+  ZRLexCount{args: List<&2, String>}
+  ZRRange{q: ZQ}
+  ZRScan{args: List<&2, String>}
+
+# A write of a sorted set (UZset, below): ZADD of pairs with options
+# (ZINCRBY: with INCR), ZREM of members, a new sorted set of a ZADD where
+# the key was, whatever it held (ZWNew: the script the append-only file
+# logs for a sorted set made where a key whose time had passed still
+# lay, and the sorted set a STORE leaves, aof.bend), ZREMRANGEBYRANK,
+# ZREMRANGEBYSCORE and ZREMRANGEBYLEX of a range (its bounds as they
+# came: the parser reads them to answer their errors first, as Redis
+# does, and the write reads them again as it runs, so that the write the
+# append-only file logs is the one the client sent), or ZPOPMIN (ZPOPMAX
+# when max) of one element or of a count (as it came)
+type ZWrite is Data:
+  ZWAdd{o: ZOpts, ps: List<&2, ZPair>}
+  ZWRem{ms: List<&2, String>}
+  ZWNew{o: ZOpts, ps: List<&2, ZPair>}
+  ZWRemRank{a: String, b: String}
+  ZWRemScore{a: String, b: String}
+  ZWRemLex{a: String, b: String}
+  ZWPop{max: Bool}
+  ZWPopN{max: Bool, c: String}
+
 # A read of one key whose reply depends on what the key holds at now
 # alone (its value and the time it expires at, when it is there): its
 # type (TYPE), its length (STRLEN), its time to live in s or ms (TTL,
@@ -199,6 +268,7 @@ type PeekOp is Data:
   PHash{op: HRead}
   PList{op: LRead}
   PMems{op: SRead}
+  PZset{op: ZRead}
 
 # A time a command names, in ms (a time in s, times 1000; Times, below):
 # a short one (TmN, below 10^14) or any other long long (TmB: its sign and
@@ -258,6 +328,7 @@ type UpdOp is Data:
   UList{op: LWrite}
   UMems{op: SWrite}
   UIncrF{by: String}
+  UZset{op: ZWrite}
 
 # The commands of a connection and of the server: session.bend runs
 # them, with the state of the connection and of the server. None of them
@@ -308,6 +379,7 @@ type SessOp is Data:
   SBad{r: Reply}
   SSPop{key: String, args: List<&2, String>}
   SSRandMember{key: String, args: List<&2, String>}
+  SZRandMember{key: String, args: List<&2, String>}
 
 # BITOP's operation
 type BitK is Data:
@@ -339,6 +411,29 @@ type SetK is Data:
   KDiff{}
   KCard{limit: Nat}
 
+# The options of ZUNION, ZINTER, ZDIFF and ZINTERCARD (and of their
+# STOREs), read as the command parses: WEIGHTS (a double for each key;
+# none given: 1 for each), AGGREGATE (0 SUM, 1 MIN, 2 MAX) and LIMIT
+# (lim; 0 counts all); such options with WITHSCORES; or the error they
+# make, answered once the keys are found to hold sets or sorted sets
+# (Redis reads the options after the keys). As the options with
+# WITHSCORES hold the options, the compiler makes them a node of their
+# own, and an operation is a word wide (Cmd, below).
+type ZAgg is Data:
+  ZAgg{ws: List<&2, F.F64>, agg: Nat, lim: Nat}
+  ZAggScores{o: ZAgg}
+  ZAggBad{r: Reply}
+
+# A sorted-set operation and its options: the union of sorted sets
+# (ZUNION; a set is a sorted set of scores 1), their intersection
+# (ZINTER), the first less the others (ZDIFF), or the size of the
+# intersection, counted up to its LIMIT (ZINTERCARD)
+type ZSetK is Data:
+  ZKUnion{o: ZAgg}
+  ZKInter{o: ZAgg}
+  ZKDiff{o: ZAgg}
+  ZKCard{o: ZAgg}
+
 # SMOVE's member, and whether the move takes the destination as not
 # there, whatever it holds (SMemNew: the script the append-only file logs
 # for a move to a key whose entry's time had passed, aof.bend)
@@ -354,7 +449,13 @@ type SMem is Data:
 # set operation on the sets at keys: SINTER, SUNION, SDIFF, SINTERCARD),
 # SStore (SINTERSTORE, SUNIONSTORE, SDIFFSTORE: the set an operation
 # makes of the sets at srcs, set at dst) and SMv (SMOVE: a member moved
-# from the set at src to the set at dst)
+# from the set at src to the set at dst), then those of several sorted
+# sets: ZOp (a sorted-set operation on the keys: ZUNION, ZINTER, ZDIFF,
+# ZINTERCARD), ZStore (ZUNIONSTORE, ZINTERSTORE, ZDIFFSTORE: the sorted
+# set an operation makes of the keys at srcs, set at dst), ZRangeStore
+# (ZRANGESTORE: a range of the sorted set at src, set at dst) and ZMPop
+# (ZMPOP: up to c elements popped from the first of the keys that is
+# there, from its last end when max)
 type Cmd is Data:
   Ping{}
   Echo{msg: String}
@@ -381,6 +482,10 @@ type Cmd is Data:
   SOp{k: SetK, keys: List<&2, String>}
   SStore{k: SetK, dst: String, srcs: List<&2, String>}
   SMv{src: String, dst: String, m: SMem}
+  ZOp{k: ZSetK, keys: List<&2, String>}
+  ZStore{k: ZSetK, dst: String, srcs: List<&2, String>}
+  ZRangeStore{dst: String, src: String, q: ZQ}
+  ZMPop{keys: List<&2, String>, max: Bool, c: String}
 
 # Integers
 # --------
@@ -555,6 +660,8 @@ def coll.type(+c: KV.Coll) -> String:
       "list"
     case KV.CMems{s}:
       "set"
+    case KV.CZset{z}:
+      "zset"
 
 def val.type(+v: KV.Val) -> String:
   match v:
@@ -2520,6 +2627,460 @@ def lends.of(a: Nat, b: Nat) -> Maybe<&2, LEnds>:
     case _ _:
       None{}
 
+# Sorted sets: ZADD's options come before its pairs, in any case and
+# order, each as often as it comes, as Redis reads them up to the first
+# word that is none of them; then come pairs of a score and a member, one
+# at least (else a syntax error). Then, in Redis's order: NX goes with
+# neither XX nor GT nor LT, nor GT with LT; INCR takes one pair alone;
+# every score reads as a double (string2d: F.f64.parse). The write checks
+# them all again as it runs (zadd.check), so that a write that runs is
+# one the parser takes; it also checks that the first score is none of
+# the options' words, which no score that reads as a double is.
+
+# an option's word: 1 NX, 2 XX, 3 GT, 4 LT, 5 CH, 6 INCR, 0 another
+def zopt.word(+w: String) -> Nat:
+  +up = String.to_upper(cstr(w))
+  Bool.pick(Nat, String.eq(up, "NX"), 1n, Bool.pick(Nat, String.eq(up, "XX"), 2n, Bool.pick(Nat, String.eq(up, "GT"), 3n, Bool.pick(Nat, String.eq(up, "LT"), 4n, Bool.pick(Nat, String.eq(up, "CH"), 5n, Bool.pick(Nat, String.eq(up, "INCR"), 6n, 0n))))))
+
+def zopt.head(+xs: List<&2, String>) -> Nat:
+  match xs:
+    case Nil{}:
+      0n
+    case Con{+w, r}:
+      zopt.word(w)
+
+def zopts.none() -> ZOpts:
+  ZOpts{False{}, False{}, False{}, False{}, False{}, False{}}
+
+def zopts.incr() -> ZOpts:
+  ZOpts{False{}, False{}, False{}, False{}, False{}, True{}}
+
+def zopts.xx(+o: ZOpts) -> Bool:
+  match o:
+    case ZOpts{nx, +xx, gt, lt, ch, incr}:
+      xx
+
+def zopts.one(b: Bool) -> Nat:
+  match b:
+    case True{}:
+      1n
+    case False{}:
+      0n
+
+# how many options o has
+def zopts.count(+o: ZOpts) -> Nat:
+  match o:
+    case ZOpts{+nx, +xx, +gt, +lt, +ch, +incr}:
+      Nat.add(Nat.add(Nat.add(zopts.one(nx), zopts.one(xx)), Nat.add(zopts.one(gt), zopts.one(lt))), Nat.add(zopts.one(ch), zopts.one(incr)))
+
+# o with the option of word c set
+def zopts.set(c: Nat, o: ZOpts) -> ZOpts:
+  match c o:
+    case 1n ZOpts{nx, xx, gt, lt, ch, incr}:
+      ZOpts{True{}, xx, gt, lt, ch, incr}
+    case 2n ZOpts{nx, xx, gt, lt, ch, incr}:
+      ZOpts{nx, True{}, gt, lt, ch, incr}
+    case 3n ZOpts{nx, xx, gt, lt, ch, incr}:
+      ZOpts{nx, xx, True{}, lt, ch, incr}
+    case 4n ZOpts{nx, xx, gt, lt, ch, incr}:
+      ZOpts{nx, xx, gt, True{}, ch, incr}
+    case 5n ZOpts{nx, xx, gt, lt, ch, incr}:
+      ZOpts{nx, xx, gt, lt, True{}, incr}
+    case 6n ZOpts{nx, xx, gt, lt, ch, incr}:
+      ZOpts{nx, xx, gt, lt, ch, True{}}
+    case _ p:
+      p
+
+# the options before ZADD's pairs, set in o, and the words after them; c
+# is the first word's option (0 for none)
+def zadd.opts.go(xs: List<&2, String>, c: Nat, o: ZOpts) -> ZOpts & List<&2, String>:
+  match xs c:
+    case Con{w, +rest} 1n+p:
+      zadd.opts.go(rest, zopt.head(rest), zopts.set(1n+p, o))
+    case ys _:
+      (o, ys)
+
+def zadd.opts(+xs: List<&2, String>) -> ZOpts & List<&2, String>:
+  zadd.opts.go(xs, zopt.head(xs), zopts.none())
+
+def zpairs.cons(p: ZPair, m: Maybe<&2, List<&2, ZPair>>) -> Maybe<&2, List<&2, ZPair>>:
+  match m:
+    case Some{ps}:
+      Some{Con{p, ps}}
+    case None{}:
+      None{}
+
+# the words as pairs of a score and a member (None for an odd number)
+def zpairs(xs: List<&2, String>) -> Maybe<&2, List<&2, ZPair>>:
+  match xs:
+    case Nil{}:
+      Some{Nil{}}
+    case Con{s, Con{m, rest}}:
+      zpairs.cons(ZPair{s, m}, zpairs(rest))
+    case Con{s, Nil{}}:
+      None{}
+
+# whether every score reads as a double
+def zpairs.ok(+ps: List<&2, ZPair>) -> Bool:
+  match ps:
+    case Nil{}:
+      True{}
+    case Con{ZPair{+s, m}, +rest}:
+      Bool.and(Maybe.is_some(&2, F.F64, F.f64.parse(s)), zpairs.ok(rest))
+
+# whether there is a pair, and its score is none of the options' words
+def zpairs.first(+ps: List<&2, ZPair>) -> Bool:
+  match ps:
+    case Nil{}:
+      False{}
+    case Con{ZPair{+s, m}, rest}:
+      Nat.is_eq(zopt.word(s), 0n)
+
+def zadd.check.of(first: Bool, nxx: Bool, gtl: Bool, many: Bool, ok: Bool) -> Maybe<&2, Reply>:
+  match first nxx gtl many ok:
+    case False{} _ _ _ _:
+      Some{RError{"ERR syntax error"}}
+    case True{} True{} _ _ _:
+      Some{RError{"ERR XX and NX options at the same time are not compatible"}}
+    case True{} False{} True{} _ _:
+      Some{RError{"ERR GT, LT, and/or NX options at the same time are not compatible"}}
+    case True{} False{} False{} True{} _:
+      Some{RError{"ERR INCR option supports a single increment-element pair"}}
+    case True{} False{} False{} False{} False{}:
+      Some{RError{"ERR value is not a valid float"}}
+    case True{} False{} False{} False{} True{}:
+      None{}
+
+# ZADD's options and pairs, checked as Redis checks them, in its order:
+# None when they are fine, else the error
+def zadd.check(+o: ZOpts, +ps: List<&2, ZPair>) -> Maybe<&2, Reply>:
+  match o:
+    case ZOpts{+nx, +xx, +gt, +lt, ch, +incr}:
+      zadd.check.of(zpairs.first(ps), Bool.and(nx, xx), Bool.or(Bool.and(Bool.or(gt, lt), nx), Bool.and(gt, lt)), Bool.and(incr, Nat.is_lt(1n, List.length(&2, ZPair, ps))), zpairs.ok(ps))
+
+def parse_zadd.ok(c: Maybe<&2, Reply>, k: String, o: ZOpts, ps: List<&2, ZPair>) -> Cmd:
+  match c:
+    case None{}:
+      Upd{k, UZset{ZWAdd{o, ps}}}
+    case Some{r}:
+      Bad{r}
+
+def parse_zadd.of(+k: String, m: Maybe<&2, List<&2, ZPair>>, +o: ZOpts) -> Cmd:
+  match m:
+    case Some{+ps}:
+      parse_zadd.ok(zadd.check(o, ps), k, o, ps)
+    case None{}:
+      e_syntax()
+
+def parse_zadd.at(+k: String, p: ZOpts & List<&2, String>) -> Cmd:
+  (o, ws) = p
+  parse_zadd.of(k, zpairs(ws), o)
+
+def parse_zadd(args: List<&2, String>) -> Cmd:
+  match args:
+    case Con{+k, Con{x, Con{y, rest}}}:
+      parse_zadd.at(k, zadd.opts(x <> (y <> rest)))
+    case _:
+      e_arity("zadd")
+
+def zpairs.one(s: String, m: String) -> List<&2, ZPair>:
+  [ZPair{s, m}]
+
+# ZINCRBY key increment member: ZADD with INCR, as Redis runs it, so an
+# increment that is an option's word is read as that option, and leaves
+# a member without its score (a syntax error)
+def parse_zincrby.of(ok: Bool, +k: String, n: String, m: String) -> Cmd:
+  match ok:
+    case True{}:
+      +o = zopts.incr()
+      +ps = zpairs.one(n, m)
+      parse_zadd.ok(zadd.check(o, ps), k, o, ps)
+    case False{}:
+      e_syntax()
+
+def parse_zincrby(args: List<&2, String>) -> Cmd:
+  match args:
+    case Con{+k, Con{+n, Con{m, Nil{}}}}:
+      parse_zincrby.of(Nat.is_eq(zopt.word(n), 0n), k, n, m)
+    case _:
+      e_arity("zincrby")
+
+# A bound of a range of scores, as zslParseRange reads one: '(' first for
+# one left out, then a double as strtod reads it (F.f64.parse_range); of
+# members, as zslParseLexRangeItem reads one: '+' or '-' alone (as C
+# reads it, up to a NUL), or '[' (taken in) or '(' (left out) and a
+# member.
+def zsb.parse.of(m: Maybe<&2, F.F64>, ex: Bool) -> Maybe<&2, KV.ZSB>:
+  match m:
+    case Some{d}:
+      Some{KV.ZSB{d, ex}}
+    case None{}:
+      None{}
+
+def zsb.parse(+s: String) -> Maybe<&2, KV.ZSB>:
+  +ex = U32.is_eq(String.code_at(s, 0n), 40)
+  zsb.parse.of(F.f64.parse_range(Bool.pick(String, ex, String.drop(s, 1n), s)), ex)
+
+def zlb.parse.of(+c: U32, +alone: Bool, +s: String) -> Maybe<&2, KV.ZLB>:
+  Bool.pick(Maybe<&2, KV.ZLB>, U32.is_eq(c, 40), Some{KV.ZLEx{String.drop(s, 1n)}},
+    Bool.pick(Maybe<&2, KV.ZLB>, U32.is_eq(c, 91), Some{KV.ZLIn{String.drop(s, 1n)}},
+      Bool.pick(Maybe<&2, KV.ZLB>, Bool.and(U32.is_eq(c, 43), alone), Some{KV.ZLPos{}},
+        Bool.pick(Maybe<&2, KV.ZLB>, Bool.and(U32.is_eq(c, 45), alone), Some{KV.ZLNeg{}}, None{}))))
+
+def zlb.parse(+s: String) -> Maybe<&2, KV.ZLB>:
+  zlb.parse.of(String.code_at(s, 0n), Bool.or(Nat.is_eq(String.length(s), 1n), U32.is_eq(String.code_at(s, 1n), 0)), s)
+
+def zrng.rank(ma: Maybe<&2, Int>, mb: Maybe<&2, Int>) -> Maybe<&2, ZRng>:
+  match ma mb:
+    case Some{a} Some{b}:
+      Some{ZRankR{a, b}}
+    case _ _:
+      None{}
+
+def zrng.score(ma: Maybe<&2, KV.ZSB>, mb: Maybe<&2, KV.ZSB>) -> Maybe<&2, ZRng>:
+  match ma mb:
+    case Some{a} Some{b}:
+      Some{ZScoreR{a, b}}
+    case _ _:
+      None{}
+
+def zrng.lex(ma: Maybe<&2, KV.ZLB>, mb: Maybe<&2, KV.ZLB>) -> Maybe<&2, ZRng>:
+  match ma mb:
+    case Some{a} Some{b}:
+      Some{ZLexR{a, b}}
+    case _ _:
+      None{}
+
+# a range of kind k (1 by rank, 2 by score, 3 by member) of bounds a and
+# b, as Redis reads it, and the error of one that does not read
+def zrng.of(+k: Nat, +a: String, +b: String) -> Maybe<&2, ZRng>:
+  match k:
+    case 2n:
+      zrng.score(zsb.parse(a), zsb.parse(b))
+    case 3n:
+      zrng.lex(zlb.parse(a), zlb.parse(b))
+    case _:
+      zrng.rank(lnum(a), lnum(b))
+
+def zrng.err(+k: Nat) -> Reply:
+  match k:
+    case 2n:
+      RError{"ERR min or max is not a float"}
+    case 3n:
+      RError{"ERR min or max not valid string range item"}
+    case _:
+      e_int()
+
+def parse_zcount.of(m: Maybe<&2, ZRng>, +k: Nat, key: String, a: String, b: String) -> Cmd:
+  match m:
+    case Some{ZScoreR{lo, hi}}:
+      Peek{key, PZset{ZRCount{[a, b]}}}
+    case Some{ZLexR{lo, hi}}:
+      Peek{key, PZset{ZRLexCount{[a, b]}}}
+    case _:
+      Bad{zrng.err(k)}
+
+# ZCOUNT (k 2) and ZLEXCOUNT (k 3): a key and a range
+def parse_zcount(args: List<&2, String>, +k: Nat, name: String) -> Cmd:
+  match args:
+    case Con{key, Con{+a, Con{+b, Nil{}}}}:
+      parse_zcount.of(zrng.of(k, a, b), k, key, a, b)
+    case _:
+      e_arity(name)
+
+# ZRANGE's options as Redis reads them, in turn (zrangeGenericCommand):
+# WITHSCORES (not for ZRANGESTORE: store), LIMIT and two longs (offset
+# and count), REV (where the command leaves the direction to them),
+# BYSCORE or BYLEX (where it leaves the kind to them, and only once); any
+# other word, or LIMIT with fewer than two words after it, is a syntax
+# error, and a LIMIT that does not read as two longs answers that at
+# once. dir is 0 (not given), 1 forward, 2 reverse; kind is 0 (not
+# given), 1 by rank, 2 by score, 3 by member.
+type ZqSt is Data:
+  ZqSt{ws: Bool, off: Int, cnt: Int, dir: Nat, kind: Nat}
+  ZqErr{r: Reply}
+
+# a word of ZRANGE's options: 1 WITHSCORES, 2 LIMIT, 3 REV, 4 BYSCORE,
+# 5 BYLEX, 0 another
+def zq.word(+w: String) -> Nat:
+  +up = String.to_upper(cstr(w))
+  Bool.pick(Nat, String.eq(up, "WITHSCORES"), 1n, Bool.pick(Nat, String.eq(up, "LIMIT"), 2n, Bool.pick(Nat, String.eq(up, "REV"), 3n, Bool.pick(Nat, String.eq(up, "BYSCORE"), 4n, Bool.pick(Nat, String.eq(up, "BYLEX"), 5n, 0n)))))
+
+def zq.head(+xs: List<&2, String>) -> Nat:
+  match xs:
+    case Nil{}:
+      0n
+    case Con{+w, r}:
+      zq.word(w)
+
+def zq.ws(store: Bool, off: Int, cnt: Int, dir: Nat, kind: Nat) -> ZqSt:
+  match store:
+    case True{}:
+      ZqErr{RError{"ERR syntax error"}}
+    case False{}:
+      ZqSt{True{}, off, cnt, dir, kind}
+
+def zq.limit(ma: Maybe<&2, Int>, mb: Maybe<&2, Int>, ws: Bool, dir: Nat, kind: Nat) -> ZqSt:
+  match ma mb:
+    case Some{a} Some{b}:
+      ZqSt{ws, a, b, dir, kind}
+    case _ _:
+      ZqErr{e_int()}
+
+def zq.rev(dir: Nat, ws: Bool, off: Int, cnt: Int, kind: Nat) -> ZqSt:
+  match dir:
+    case 0n:
+      ZqSt{ws, off, cnt, 2n, kind}
+    case _:
+      ZqErr{RError{"ERR syntax error"}}
+
+def zq.kind(kind: Nat, +k: Nat, ws: Bool, off: Int, cnt: Int, dir: Nat) -> ZqSt:
+  match kind:
+    case 0n:
+      ZqSt{ws, off, cnt, dir, k}
+    case _:
+      ZqErr{RError{"ERR syntax error"}}
+
+# the options xs read into st; c is the first word's (zq.word)
+def zq.go(xs: List<&2, String>, c: Nat, st: ZqSt, +store: Bool) -> ZqSt:
+  match xs c st:
+    case _ _ ZqErr{r}:
+      ZqErr{r}
+    case Nil{} _ s:
+      s
+    case Con{w, +rest} 1n ZqSt{ws, off, cnt, dir, kind}:
+      zq.go(rest, zq.head(rest), zq.ws(store, off, cnt, dir, kind), store)
+    case Con{w, Con{+a, Con{+b, +rest}}} 2n ZqSt{ws, off, cnt, dir, kind}:
+      zq.go(rest, zq.head(rest), zq.limit(lnum(a), lnum(b), ws, dir, kind), store)
+    case Con{w, +rest} 3n ZqSt{ws, off, cnt, dir, kind}:
+      zq.go(rest, zq.head(rest), zq.rev(dir, ws, off, cnt, kind), store)
+    case Con{w, +rest} 4n ZqSt{ws, off, cnt, dir, kind}:
+      zq.go(rest, zq.head(rest), zq.kind(kind, 2n, ws, off, cnt, dir), store)
+    case Con{w, +rest} 5n ZqSt{ws, off, cnt, dir, kind}:
+      zq.go(rest, zq.head(rest), zq.kind(kind, 3n, ws, off, cnt, dir), store)
+    case _ _ _:
+      ZqErr{RError{"ERR syntax error"}}
+
+# a range read, or the error it answers
+type ZqOut is Data:
+  ZqOk{q: ZQ}
+  ZqBad{r: Reply}
+
+# a read, from the last element when rev
+def zq.dir(rev: Bool, q: ZQ) -> ZQ:
+  match rev:
+    case True{}:
+      ZQRev{q}
+    case False{}:
+      q
+
+def zq.mk(m: Maybe<&2, ZRng>, +k: Nat, rev: Bool, off: Int, cnt: Int, ws: Bool) -> ZqOut:
+  match m:
+    case Some{r}:
+      ZqOk{zq.dir(rev, ZQ{r, off, cnt, ws})}
+    case None{}:
+      ZqBad{zrng.err(k)}
+
+# whether a count is -1, which Redis takes for no LIMIT
+def zq.nolimit(+c: Int) -> Bool:
+  match c:
+    case INeg{+n}:
+      Nat.is_eq(n, 0n)
+    case IPos{n}:
+      False{}
+
+def zq.check(lim: Bool, wsl: Bool, +k: Nat, +rev: Bool, off: Int, cnt: Int, ws: Bool, +a: String, +b: String) -> ZqOut:
+  match lim wsl:
+    case True{} _:
+      ZqBad{RError{"ERR syntax error, LIMIT is only supported in combination with either BYSCORE or BYLEX"}}
+    case False{} True{}:
+      ZqBad{RError{"ERR syntax error, WITHSCORES not supported in combination with BYLEX"}}
+    case False{} False{}:
+      +sw = Bool.and(rev, Nat.is_lt(1n, k))
+      zq.mk(zrng.of(k, Bool.pick(String, sw, b, a), Bool.pick(String, sw, a, b)), k, rev, off, cnt, ws)
+
+# the options read, the range with them: the direction defaults to
+# forward, the kind to by rank; LIMIT goes with a range by score or by
+# member alone (a count of -1 counts as none, as Redis tells), WITHSCORES
+# not with one by member; a reversed range by score or by member names its
+# upper bound first; then the bounds are read
+def zq.fin(st: ZqSt, +a: String, +b: String) -> ZqOut:
+  match st:
+    case ZqErr{r}:
+      ZqBad{r}
+    case ZqSt{+ws, off, +cnt, +dir, +kind}:
+      +k = Bool.pick(Nat, Nat.is_eq(kind, 0n), 1n, kind)
+      zq.check(Bool.and(Bool.not(zq.nolimit(cnt)), Nat.is_eq(k, 1n)), Bool.and(ws, Nat.is_eq(k, 3n)), k, Nat.is_eq(dir, 2n), off, cnt, ws, a, b)
+
+# ZRANGE key a b [options], and its kin, which fix the direction (dir) or
+# the kind (kind) where ZRANGE leaves them to its options (0)
+def zq.read(+dir: Nat, +kind: Nat, +store: Bool, +a: String, +b: String, +rest: List<&2, String>) -> ZqOut:
+  zq.fin(zq.go(rest, zq.head(rest), ZqSt{False{}, IPos{0n}, INeg{0n}, dir, kind}, store), a, b)
+
+def parse_zrange.of(k: String, o: ZqOut) -> Cmd:
+  match o:
+    case ZqOk{q}:
+      Peek{k, PZset{ZRRange{q}}}
+    case ZqBad{r}:
+      Bad{r}
+
+def parse_zrange(args: List<&2, String>, +dir: Nat, +kind: Nat, name: String) -> Cmd:
+  match args:
+    case Con{k, Con{+a, Con{+b, +rest}}}:
+      parse_zrange.of(k, zq.read(dir, kind, False{}, a, b, rest))
+    case _:
+      e_arity(name)
+
+# ZREMRANGEBYRANK (k 1), ZREMRANGEBYSCORE (2) and ZREMRANGEBYLEX (3): a
+# key and a range, read as the command parses and kept as it came
+def zremr.op(+k: Nat, a: String, b: String) -> ZWrite:
+  match k:
+    case 2n:
+      ZWRemScore{a, b}
+    case 3n:
+      ZWRemLex{a, b}
+    case _:
+      ZWRemRank{a, b}
+
+def parse_zremrange.of(ok: Bool, +k: Nat, key: String, a: String, b: String) -> Cmd:
+  match ok:
+    case True{}:
+      Upd{key, UZset{zremr.op(k, a, b)}}
+    case False{}:
+      Bad{zrng.err(k)}
+
+def parse_zremrange(args: List<&2, String>, +k: Nat, name: String) -> Cmd:
+  match args:
+    case Con{key, Con{+a, Con{+b, Nil{}}}}:
+      parse_zremrange.of(Maybe.is_some(&2, ZRng, zrng.of(k, a, b)), k, key, a, b)
+    case _:
+      e_arity(name)
+
+# ZPOPMIN and ZPOPMAX (max): a key and a count at most, a long at least 0
+# read as the command parses (Redis's error for one that is not is "out
+# of range"); more is a syntax error
+def parse_zpop.n(ok: Bool, k: String, +max: Bool, c: String) -> Cmd:
+  match ok:
+    case True{}:
+      Upd{k, UZset{ZWPopN{max, c}}}
+    case False{}:
+      Bad{RError{"ERR value is out of range, must be positive"}}
+
+def parse_zpop(args: List<&2, String>, +max: Bool, name: String) -> Cmd:
+  match args:
+    case Con{k, Nil{}}:
+      Upd{k, UZset{ZWPop{max}}}
+    case Con{k, Con{+c, Nil{}}}:
+      parse_zpop.n(Maybe.is_some(&2, Nat, lcount(c)), k, max, c)
+    case Con{k, Con{c, Con{x, rest}}}:
+      e_syntax()
+    case Nil{}:
+      e_arity(name)
+
+# ZSCAN's cursor is read as the command parses, as HSCAN's
+def parse_zscan(+k: String, +c: String, rest: List<&2, String>) -> Cmd:
+  Bool.pick(Cmd, Maybe.is_some(&2, Nat, scan.cursor(c)), Peek{k, PZset{ZRScan{c <> rest}}}, Bad{RError{"ERR invalid cursor"}})
+
 # EVAL: BendKV runs no Lua scripts but the ones its append-only file
 # writes (a new hash, list or set where a key whose time had passed
 # still lay, aof.bend): EVAL <the script> 1 key HSET field value [field
@@ -2608,8 +3169,45 @@ def parse_eval.smove(ok: Bool, rest: List<&2, String>) -> Cmd:
     case _ _:
       e_lua()
 
+# The script of a new sorted set (ZWNew): EVAL <it> 1 key n o1 .. on s1
+# m1 ..., which deletes the key and runs ZADD with the n options o1 to
+# on (n written as Nat.show writes it; never XX, which would add
+# nothing) and the pairs, a thousand words of pairs a call, each with the
+# options before them (a ZADD of some of the pairs does to each what the
+# ZADD of all does: INCR takes one alone), and returns 0
+def znew.script() -> String:
+  "redis.call('del',KEYS[1]) local o=tonumber(ARGV[1]) local n=#ARGV for i=o+2,n,1000 do local a={} for j=2,o+1 do a[#a+1]=ARGV[j] end for j=i,math.min(i+999,n) do a[#a+1]=ARGV[j] end redis.call('zadd',KEYS[1],unpack(a)) end return 0"
+
+def parse_eval.znew.fin(c: Maybe<&2, Reply>, k: String, o: ZOpts, ps: List<&2, ZPair>) -> Cmd:
+  match c:
+    case None{}:
+      Upd{k, UZset{ZWNew{o, ps}}}
+    case Some{r}:
+      e_lua()
+
+def parse_eval.znew.ps(ok: Bool, +k: String, +o: ZOpts, m: Maybe<&2, List<&2, ZPair>>) -> Cmd:
+  match ok m:
+    case True{} Some{+ps}:
+      parse_eval.znew.fin(zadd.check(o, ps), k, o, ps)
+    case _ _:
+      e_lua()
+
+def parse_eval.znew.at(ok: Bool, +k: String, +n: String, +o: ZOpts, ws: List<&2, String>) -> Cmd:
+  parse_eval.znew.ps(Bool.and(ok, Bool.and(String.eq(n, Nat.show(zopts.count(o))), Bool.not(zopts.xx(o)))), k, o, zpairs(ws))
+
+def parse_eval.znew.of(ok: Bool, +k: String, +n: String, p: ZOpts & List<&2, String>) -> Cmd:
+  (o, ws) = p
+  parse_eval.znew.at(ok, k, n, o, ws)
+
+def parse_eval.znew(ok: Bool, rest: List<&2, String>) -> Cmd:
+  match rest:
+    case Con{+k, Con{+n, +ws}}:
+      parse_eval.znew.of(ok, k, n, zadd.opts(ws))
+    case _:
+      e_lua()
+
 # which script: 1 a new hash's, list's or set's, 2 a list's move, 3 a
-# set's move, 0 another
+# set's move, 4 a new sorted set's, 0 another
 def parse_eval.which(w: Nat, +nk: String, rest: List<&2, String>) -> Cmd:
   match w:
     case 1n:
@@ -2618,13 +3216,15 @@ def parse_eval.which(w: Nat, +nk: String, rest: List<&2, String>) -> Cmd:
       parse_eval.move(String.eq(nk, "2"), rest)
     case 3n:
       parse_eval.smove(String.eq(nk, "2"), rest)
+    case 4n:
+      parse_eval.znew(String.eq(nk, "1"), rest)
     case _:
       e_lua()
 
 def parse_eval(args: List<&2, String>) -> Cmd:
   match args:
     case Con{+s, Con{+nk, rest}}:
-      parse_eval.which(Bool.pick(Nat, String.eq(s, hnew.script()), 1n, Bool.pick(Nat, String.eq(s, lmove.script()), 2n, Bool.pick(Nat, String.eq(s, smove.script()), 3n, 0n))), nk, rest)
+      parse_eval.which(Bool.pick(Nat, String.eq(s, hnew.script()), 1n, Bool.pick(Nat, String.eq(s, lmove.script()), 2n, Bool.pick(Nat, String.eq(s, smove.script()), 3n, Bool.pick(Nat, String.eq(s, znew.script()), 4n, 0n)))), nk, rest)
     case _:
       e_arity("eval")
 
@@ -2872,6 +3472,234 @@ def parse_lmpop(args: List<&2, String>) -> Cmd:
     case _:
       e_arity("lmpop")
 
+# ZUNION, ZINTER, ZDIFF and ZINTERCARD numkeys key [key ...] [options],
+# and their STOREs destination numkeys key ...: numkeys a long (else not
+# an integer), at least 1 (else "at least 1 input key is needed", with
+# the command's name), at most the words after it (else a syntax error);
+# then the options, as Redis reads them, a word at a time: WEIGHTS and a
+# double for each key (not for ZDIFF nor ZINTERCARD; "weight value is not
+# a float"), AGGREGATE and SUM, MIN or MAX (the same), WITHSCORES (not
+# for a STORE nor ZINTERCARD), LIMIT and a long at least 0 (ZINTERCARD
+# alone; "LIMIT can't be negative"), as often as each comes, the last
+# counting; any other word, or one without the words it takes, is a
+# syntax error. kind is 1 for ZUNION, 2 ZINTER, 3 ZDIFF, 4 ZINTERCARD.
+# The options' state: m is what the next word is (0 an option, 1 a
+# weight, k of them still to come, 2 AGGREGATE's word, 3 LIMIT's count),
+# left how many words are left with it.
+type ZOptSt is Data:
+  ZOptSt{ws: List<&2, F.F64>, agg: Nat, sc: Bool, lim: Nat, m: Nat, k: Nat}
+  ZOptBad{r: Reply}
+
+# an option's word: 1 WEIGHTS, 2 AGGREGATE, 3 WITHSCORES, 4 LIMIT, 0 another
+def zagg.word(+w: String) -> Nat:
+  +up = String.to_upper(cstr(w))
+  Bool.pick(Nat, String.eq(up, "WEIGHTS"), 1n, Bool.pick(Nat, String.eq(up, "AGGREGATE"), 2n, Bool.pick(Nat, String.eq(up, "WITHSCORES"), 3n, Bool.pick(Nat, String.eq(up, "LIMIT"), 4n, 0n))))
+
+# AGGREGATE's word: 0 SUM, 1 MIN, 2 MAX, 3 another
+def zagg.fn(+w: String) -> Nat:
+  +up = String.to_upper(cstr(w))
+  Bool.pick(Nat, String.eq(up, "SUM"), 0n, Bool.pick(Nat, String.eq(up, "MIN"), 1n, Bool.pick(Nat, String.eq(up, "MAX"), 2n, 3n)))
+
+def zopt.err() -> ZOptSt:
+  ZOptBad{RError{"ERR syntax error"}}
+
+# an option's word, with kind, whether the command is a STORE, n the
+# number of keys and left the words left
+def zopt.at(c: Nat, +sets: Bool, +kind: Nat, +store: Bool, +n: Nat, +left: Nat, ws: List<&2, F.F64>, agg: Nat, sc: Bool, lim: Nat) -> ZOptSt:
+  match c:
+    case 1n:
+      Bool.pick(ZOptSt, Bool.and(sets, Nat.is_le(Nat.add(n, 1n), left)), ZOptSt{Nil{}, agg, sc, lim, 1n, n}, zopt.err())
+    case 2n:
+      Bool.pick(ZOptSt, Bool.and(sets, Nat.is_le(2n, left)), ZOptSt{ws, agg, sc, lim, 2n, 0n}, zopt.err())
+    case 3n:
+      Bool.pick(ZOptSt, Bool.and(Bool.not(store), Nat.is_lt(kind, 4n)), ZOptSt{ws, agg, True{}, lim, 0n, 0n}, zopt.err())
+    case 4n:
+      Bool.pick(ZOptSt, Bool.and(Nat.is_eq(kind, 4n), Nat.is_le(2n, left)), ZOptSt{ws, agg, sc, lim, 3n, 0n}, zopt.err())
+    case _:
+      zopt.err()
+
+def zopt.weight(m: Maybe<&2, F.F64>, ws: List<&2, F.F64>, agg: Nat, sc: Bool, lim: Nat, +k: Nat) -> ZOptSt:
+  match m:
+    case Some{d}:
+      ZOptSt{d <> ws, agg, sc, lim, Bool.pick(Nat, Nat.is_eq(k, 1n), 0n, 1n), Nat.sub(k, 1n)}
+    case None{}:
+      ZOptBad{RError{"ERR weight value is not a float"}}
+
+def zopt.fn(f: Nat, ws: List<&2, F.F64>, sc: Bool, lim: Nat) -> ZOptSt:
+  match f:
+    case 3n:
+      zopt.err()
+    case _:
+      ZOptSt{ws, f, sc, lim, 0n, 0n}
+
+def zopt.lim(m: Maybe<&2, Nat>, ws: List<&2, F.F64>, agg: Nat, sc: Bool) -> ZOptSt:
+  match m:
+    case Some{l}:
+      ZOptSt{ws, agg, sc, l, 0n, 0n}
+    case None{}:
+      ZOptBad{RError{"ERR LIMIT can't be negative"}}
+
+# the state after the word w
+def zopt.step(+w: String, st: ZOptSt, +kind: Nat, +store: Bool, +n: Nat, +left: Nat) -> ZOptSt:
+  match st:
+    case ZOptBad{r}:
+      ZOptBad{r}
+    case ZOptSt{ws, agg, sc, lim, m, +k}:
+      match m:
+        case 0n:
+          zopt.at(zagg.word(w), Nat.is_le(kind, 2n), kind, store, n, left, ws, agg, sc, lim)
+        case 1n:
+          zopt.weight(F.f64.parse(w), ws, agg, sc, lim, k)
+        case 2n:
+          zopt.fn(zagg.fn(w), ws, sc, lim)
+        case _:
+          zopt.lim(lcount(w), ws, agg, sc)
+
+def zopt.go(xs: List<&2, String>, st: ZOptSt, +kind: Nat, +store: Bool, +n: Nat, +left: Nat) -> ZOptSt:
+  match xs:
+    case Nil{}:
+      st
+    case Con{+w, rest}:
+      zopt.go(rest, zopt.step(w, st, kind, store, n, left), kind, store, n, Nat.sub(left, 1n))
+
+# the options, with WITHSCORES when sc
+def zagg.with(sc: Bool, o: ZAgg) -> ZAgg:
+  match sc:
+    case True{}:
+      ZAggScores{o}
+    case False{}:
+      o
+
+def zopt.fin(st: ZOptSt) -> ZAgg:
+  match st:
+    case ZOptSt{ws, agg, sc, lim, m, k}:
+      zagg.with(sc, ZAgg{List.reverse(&2, F.F64, ws), agg, lim})
+    case ZOptBad{r}:
+      ZAggBad{r}
+
+def zagg.of(+kind: Nat, +store: Bool, +n: Nat, +xs: List<&2, String>) -> ZAgg:
+  zopt.fin(zopt.go(xs, ZOptSt{Nil{}, 0n, False{}, 0n, 0n, 0n}, kind, store, n, List.length(&2, String, xs)))
+
+def zsetk.of(+kind: Nat, o: ZAgg) -> ZSetK:
+  match kind:
+    case 1n:
+      ZKUnion{o}
+    case 2n:
+      ZKInter{o}
+    case 3n:
+      ZKDiff{o}
+    case _:
+      ZKCard{o}
+
+def zop.cmd(store: Maybe<&2, String>, k: ZSetK, ks: List<&2, String>) -> Cmd:
+  match store:
+    case Some{d}:
+      ZStore{k, d, ks}
+    case None{}:
+      ZOp{k, ks}
+
+# the keys and the options' words, split, with the command they make
+def zop.mk.of(+kind: Nat, +store: Maybe<&2, String>, +ks: List<&2, String>, +rest: List<&2, String>) -> Cmd:
+  zop.cmd(store, zsetk.of(kind, zagg.of(kind, Maybe.is_some(&2, String, store), List.length(&2, String, ks), rest)), List.reverse(&2, String, ks))
+
+def zop.mk(+kind: Nat, store: Maybe<&2, String>, p: List<&2, String> & List<&2, String>) -> Cmd:
+  (ks, rest) = p
+  zop.mk.of(kind, store, ks, rest)
+
+def zop.fit(ok: Bool, +kind: Nat, store: Maybe<&2, String>, +n: Nat, rest: List<&2, String>) -> Cmd:
+  match ok:
+    case True{}:
+      zop.mk(kind, store, KV.deq.cut(n, rest, Nil{}))
+    case False{}:
+      e_syntax()
+
+def zop.keys(m: Maybe<&2, Int>, +kind: Nat, store: Maybe<&2, String>, +rest: List<&2, String>, name: String) -> Cmd:
+  match m:
+    case Some{IPos{1n+(+n)}}:
+      zop.fit(Nat.is_le(1n+n, List.length(&2, String, rest)), kind, store, 1n+n, rest)
+    case Some{x}:
+      Bad{RError{"ERR at least 1 input key is needed for '" ++ name ++ "' command"}}
+    case None{}:
+      Bad{e_int()}
+
+def parse_zop(args: List<&2, String>, +kind: Nat, name: String) -> Cmd:
+  match args:
+    case Con{+nk, Con{k, rest}}:
+      zop.keys(lnum(nk), kind, None{}, k <> rest, name)
+    case _:
+      e_arity(name)
+
+def parse_zstore(args: List<&2, String>, +kind: Nat, name: String) -> Cmd:
+  match args:
+    case Con{d, Con{+nk, Con{k, rest}}}:
+      zop.keys(lnum(nk), kind, Some{d}, k <> rest, name)
+    case _:
+      e_arity(name)
+
+# ZRANGESTORE dst src min max [options]: ZRANGE's, but WITHSCORES
+def parse_zrangestore.of(d: String, s: String, o: ZqOut) -> Cmd:
+  match o:
+    case ZqOk{q}:
+      ZRangeStore{d, s, q}
+    case ZqBad{r}:
+      Bad{r}
+
+def parse_zrangestore(args: List<&2, String>) -> Cmd:
+  match args:
+    case Con{d, Con{s, Con{+a, Con{+b, +rest}}}}:
+      parse_zrangestore.of(d, s, zq.read(0n, 0n, True{}, a, b, rest))
+    case _:
+      e_arity("zrangestore")
+
+# ZMPOP numkeys key [key ...] MIN|MAX [COUNT count], as LMPOP's
+# arguments are read (MIN and MAX for LEFT and RIGHT)
+def zend.word(+w: String) -> Nat:
+  Bool.pick(Nat, is_word(w, "MIN"), 1n, Bool.pick(Nat, is_word(w, "MAX"), 2n, 0n))
+
+def zmpop.fin.of(mc: Maybe<&2, String>, me: Maybe<&2, Reply>, ks: List<&2, String>, +max: Bool) -> Cmd:
+  match mc me:
+    case Some{c} _:
+      ZMPop{ks, max, c}
+    case None{} Some{r}:
+      Bad{r}
+    case None{} None{}:
+      Bad{RError{"ERR syntax error"}}
+
+def zmpop.fin(ks: List<&2, String>, +max: Bool, p: Maybe<&2, String> & Maybe<&2, Reply>) -> Cmd:
+  (mc, me) = p
+  zmpop.fin.of(mc, me, ks, max)
+
+def zmpop.end(w: Nat, ks: List<&2, String>, rest: List<&2, String>) -> Cmd:
+  match w:
+    case 1n:
+      zmpop.fin(ks, False{}, lmpop.count(rest))
+    case 2n:
+      zmpop.fin(ks, True{}, lmpop.count(rest))
+    case _:
+      Bad{RError{"ERR syntax error"}}
+
+def zmpop.where(p: List<&2, String> & List<&2, String>) -> Cmd:
+  (ks, rest) = p
+  match rest:
+    case Con{+w, more}:
+      zmpop.end(zend.word(w), List.reverse(&2, String, ks), more)
+    case Nil{}:
+      Bad{RError{"ERR syntax error"}}
+
+def zmpop.keys(m: Maybe<&2, Int>, rest: List<&2, String>) -> Cmd:
+  match m:
+    case Some{IPos{1n+n}}:
+      zmpop.where(KV.deq.cut(1n+n, rest, Nil{}))
+    case _:
+      Bad{RError{"ERR numkeys should be greater than 0"}}
+
+def parse_zmpop(args: List<&2, String>) -> Cmd:
+  match args:
+    case Con{+nk, Con{k, Con{w, rest}}}:
+      zmpop.keys(lnum(nk), k <> (w <> rest))
+    case _:
+      e_arity("zmpop")
+
 # Sets: SADD, SREM and SMISMEMBER take a key and at least one member;
 # SSCAN's cursor is read as the command parses, before the key is looked
 # for, as HSCAN's
@@ -3028,6 +3856,9 @@ def cmd_id.l4(+n: String, c: Nat) -> Nat:
     case 20n:  # T
       Bool.pick(Nat, String.eq(n, "TYPE"), 25n,
       Bool.pick(Nat, String.eq(n, "TIME"), 113n, 0n))
+    case 26n:  # Z
+      Bool.pick(Nat, String.eq(n, "ZADD"), 121n,
+      Bool.pick(Nat, String.eq(n, "ZREM"), 123n, 0n))
     case _:
       0n
 
@@ -3061,6 +3892,12 @@ def cmd_id.l5(+n: String, c: Nat) -> Nat:
       Bool.pick(Nat, String.eq(n, "SDIFF"), 96n, 0n))))))
     case 20n:  # T
       Bool.pick(Nat, String.eq(n, "TOUCH"), 44n, 0n)
+    case 26n:  # Z
+      Bool.pick(Nat, String.eq(n, "ZCARD"), 124n,
+      Bool.pick(Nat, String.eq(n, "ZRANK"), 127n,
+      Bool.pick(Nat, String.eq(n, "ZSCAN"), 142n,
+      Bool.pick(Nat, String.eq(n, "ZDIFF"), 145n,
+      Bool.pick(Nat, String.eq(n, "ZMPOP"), 151n, 0n)))))
     case _:
       0n
 
@@ -3111,6 +3948,12 @@ def cmd_id.l6(+n: String, c: Nat) -> Nat:
       Bool.pick(Nat, String.eq(n, "SWAPDB"), 111n, 0n)))))))
     case 21n:  # U
       Bool.pick(Nat, String.eq(n, "UNLINK"), 8n, 0n)
+    case 26n:  # Z
+      Bool.pick(Nat, String.eq(n, "ZSCORE"), 125n,
+      Bool.pick(Nat, String.eq(n, "ZCOUNT"), 129n,
+      Bool.pick(Nat, String.eq(n, "ZRANGE"), 131n,
+      Bool.pick(Nat, String.eq(n, "ZUNION"), 143n,
+      Bool.pick(Nat, String.eq(n, "ZINTER"), 144n, 0n)))))
     case _:
       0n
 
@@ -3130,6 +3973,11 @@ def cmd_id.l7(+n: String, c: Nat) -> Nat:
     case 16n:  # P
       Bool.pick(Nat, String.eq(n, "PEXPIRE"), 29n,
       Bool.pick(Nat, String.eq(n, "PERSIST"), 36n, 0n))
+    case 26n:  # Z
+      Bool.pick(Nat, String.eq(n, "ZINCRBY"), 122n,
+      Bool.pick(Nat, String.eq(n, "ZMSCORE"), 126n,
+      Bool.pick(Nat, String.eq(n, "ZPOPMIN"), 140n,
+      Bool.pick(Nat, String.eq(n, "ZPOPMAX"), 141n, 0n))))
     case _:
       0n
 
@@ -3150,6 +3998,8 @@ def cmd_id.l8(+n: String, c: Nat) -> Nat:
     case 19n:  # S
       Bool.pick(Nat, String.eq(n, "SETRANGE"), 39n,
       Bool.pick(Nat, String.eq(n, "SMEMBERS"), 88n, 0n))
+    case 26n:  # Z
+      Bool.pick(Nat, String.eq(n, "ZREVRANK"), 128n, 0n)
     case _:
       0n
 
@@ -3162,6 +4012,9 @@ def cmd_id.l9(+n: String, c: Nat) -> Nat:
       Bool.pick(Nat, String.eq(n, "RANDOMKEY"), 110n, 0n))
     case 19n:  # S
       Bool.pick(Nat, String.eq(n, "SISMEMBER"), 86n, 0n)
+    case 26n:  # Z
+      Bool.pick(Nat, String.eq(n, "ZLEXCOUNT"), 130n,
+      Bool.pick(Nat, String.eq(n, "ZREVRANGE"), 136n, 0n))
     case _:
       0n
 
@@ -3175,6 +4028,9 @@ def cmd_id.l10(+n: String, c: Nat) -> Nat:
       Bool.pick(Nat, String.eq(n, "SMISMEMBER"), 87n,
       Bool.pick(Nat, String.eq(n, "SINTERCARD"), 92n,
       Bool.pick(Nat, String.eq(n, "SDIFFSTORE"), 97n, 0n)))
+    case 26n:  # Z
+      Bool.pick(Nat, String.eq(n, "ZINTERCARD"), 146n,
+      Bool.pick(Nat, String.eq(n, "ZDIFFSTORE"), 149n, 0n))
     case _:
       0n
 
@@ -3190,6 +4046,12 @@ def cmd_id.l11(+n: String, c: Nat) -> Nat:
       Bool.pick(Nat, String.eq(n, "SINTERSTORE"), 93n,
       Bool.pick(Nat, String.eq(n, "SUNIONSTORE"), 95n,
       Bool.pick(Nat, String.eq(n, "SRANDMEMBER"), 120n, 0n)))
+    case 26n:  # Z
+      Bool.pick(Nat, String.eq(n, "ZRANGEBYLEX"), 134n,
+      Bool.pick(Nat, String.eq(n, "ZUNIONSTORE"), 147n,
+      Bool.pick(Nat, String.eq(n, "ZINTERSTORE"), 148n,
+      Bool.pick(Nat, String.eq(n, "ZRANGESTORE"), 150n,
+      Bool.pick(Nat, String.eq(n, "ZRANDMEMBER"), 152n, 0n)))))
     case _:
       0n
 
@@ -3197,6 +4059,36 @@ def cmd_id.l12(+n: String, c: Nat) -> Nat:
   match c:
     case 8n:  # H
       Bool.pick(Nat, String.eq(n, "HINCRBYFLOAT"), 99n, 0n)
+    case _:
+      0n
+
+def cmd_id.l13(+n: String, c: Nat) -> Nat:
+  match c:
+    case 26n:  # Z
+      Bool.pick(Nat, String.eq(n, "ZRANGEBYSCORE"), 132n, 0n)
+    case _:
+      0n
+
+def cmd_id.l14(+n: String, c: Nat) -> Nat:
+  match c:
+    case 26n:  # Z
+      Bool.pick(Nat, String.eq(n, "ZREVRANGEBYLEX"), 135n,
+      Bool.pick(Nat, String.eq(n, "ZREMRANGEBYLEX"), 139n, 0n))
+    case _:
+      0n
+
+def cmd_id.l15(+n: String, c: Nat) -> Nat:
+  match c:
+    case 26n:  # Z
+      Bool.pick(Nat, String.eq(n, "ZREMRANGEBYRANK"), 137n, 0n)
+    case _:
+      0n
+
+def cmd_id.l16(+n: String, c: Nat) -> Nat:
+  match c:
+    case 26n:  # Z
+      Bool.pick(Nat, String.eq(n, "ZREVRANGEBYSCORE"), 133n,
+      Bool.pick(Nat, String.eq(n, "ZREMRANGEBYSCORE"), 138n, 0n))
     case _:
       0n
 
@@ -3222,13 +4114,21 @@ def cmd_id(+n: String, len: Nat) -> Nat:
       cmd_id.l11(n, Nat.sub(U32.to_nat(String.code_at(n, 0n)), 64n))
     case 12n:
       cmd_id.l12(n, Nat.sub(U32.to_nat(String.code_at(n, 0n)), 64n))
+    case 13n:
+      cmd_id.l13(n, Nat.sub(U32.to_nat(String.code_at(n, 0n)), 64n))
+    case 14n:
+      cmd_id.l14(n, Nat.sub(U32.to_nat(String.code_at(n, 0n)), 64n))
+    case 15n:
+      cmd_id.l15(n, Nat.sub(U32.to_nat(String.code_at(n, 0n)), 64n))
+    case 16n:
+      cmd_id.l16(n, Nat.sub(U32.to_nat(String.code_at(n, 0n)), 64n))
     case _:
       0n
 
 # whether a command's number is parse_sess's (a command of the
 # connection, of the server or of several databases)
 def cmd_own(+id: Nat) -> Bool:
-  Bool.and(Nat.is_le(100n, id), Nat.is_le(id, 120n))
+  Bool.or(Bool.and(Nat.is_le(100n, id), Nat.is_le(id, 120n)), Bool.and(Nat.is_le(152n, id), Nat.is_le(id, 152n)))
 # END gen_commands: dispatch
 
 def parse_id(id: Nat, name: String, args: List<&2, String>) -> Cmd:
@@ -3748,6 +4648,96 @@ def parse_id(id: Nat, name: String, args: List<&2, String>) -> Cmd:
           parse_hincrbyfloat(k, f, F.ld.parse(n))
         case _:
           e_arity("hincrbyfloat")
+    case 121n:  # ZADD
+      parse_zadd(args)
+    case 122n:  # ZINCRBY
+      parse_zincrby(args)
+    case 123n:  # ZREM
+      match args:
+        case Con{k, Con{m, ms}}:
+          Upd{k, UZset{ZWRem{m <> ms}}}
+        case _:
+          e_arity("zrem")
+    case 124n:  # ZCARD
+      match args:
+        case Con{k, Nil{}}:
+          Peek{k, PZset{ZRCard{}}}
+        case _:
+          e_arity("zcard")
+    case 125n:  # ZSCORE
+      match args:
+        case Con{k, Con{m, Nil{}}}:
+          Peek{k, PZset{ZRScore{m}}}
+        case _:
+          e_arity("zscore")
+    case 126n:  # ZMSCORE
+      match args:
+        case Con{k, Con{m, ms}}:
+          Peek{k, PZset{ZRMScore{m <> ms}}}
+        case _:
+          e_arity("zmscore")
+    case 127n:  # ZRANK
+      match args:
+        case Con{k, Con{m, Nil{}}}:
+          Peek{k, PZset{ZRRank{m}}}
+        case _:
+          e_arity("zrank")
+    case 128n:  # ZREVRANK
+      match args:
+        case Con{k, Con{m, Nil{}}}:
+          Peek{k, PZset{ZRRevRank{m}}}
+        case _:
+          e_arity("zrevrank")
+    case 129n:  # ZCOUNT
+      parse_zcount(args, 2n, "zcount")
+    case 130n:  # ZLEXCOUNT
+      parse_zcount(args, 3n, "zlexcount")
+    case 131n:  # ZRANGE
+      parse_zrange(args, 0n, 0n, "zrange")
+    case 132n:  # ZRANGEBYSCORE
+      parse_zrange(args, 1n, 2n, "zrangebyscore")
+    case 133n:  # ZREVRANGEBYSCORE
+      parse_zrange(args, 2n, 2n, "zrevrangebyscore")
+    case 134n:  # ZRANGEBYLEX
+      parse_zrange(args, 1n, 3n, "zrangebylex")
+    case 135n:  # ZREVRANGEBYLEX
+      parse_zrange(args, 2n, 3n, "zrevrangebylex")
+    case 136n:  # ZREVRANGE
+      parse_zrange(args, 2n, 1n, "zrevrange")
+    case 137n:  # ZREMRANGEBYRANK
+      parse_zremrange(args, 1n, "zremrangebyrank")
+    case 138n:  # ZREMRANGEBYSCORE
+      parse_zremrange(args, 2n, "zremrangebyscore")
+    case 139n:  # ZREMRANGEBYLEX
+      parse_zremrange(args, 3n, "zremrangebylex")
+    case 140n:  # ZPOPMIN
+      parse_zpop(args, False{}, "zpopmin")
+    case 141n:  # ZPOPMAX
+      parse_zpop(args, True{}, "zpopmax")
+    case 142n:  # ZSCAN
+      match args:
+        case Con{+k, Con{+c, rest}}:
+          parse_zscan(k, c, rest)
+        case _:
+          e_arity("zscan")
+    case 143n:  # ZUNION
+      parse_zop(args, 1n, "zunion")
+    case 144n:  # ZINTER
+      parse_zop(args, 2n, "zinter")
+    case 145n:  # ZDIFF
+      parse_zop(args, 3n, "zdiff")
+    case 146n:  # ZINTERCARD
+      parse_zop(args, 4n, "zintercard")
+    case 147n:  # ZUNIONSTORE
+      parse_zstore(args, 1n, "zunionstore")
+    case 148n:  # ZINTERSTORE
+      parse_zstore(args, 2n, "zinterstore")
+    case 149n:  # ZDIFFSTORE
+      parse_zstore(args, 3n, "zdiffstore")
+    case 150n:  # ZRANGESTORE
+      parse_zrangestore(args)
+    case 151n:  # ZMPOP
+      parse_zmpop(args)
     case _:
       e_unknown(name, args)
 
@@ -3874,6 +4864,12 @@ def parse_sess(id: Nat, name: String, args: List<&2, String>) -> SessOp:
           SSRandMember{k, rest}
         case Nil{}:
           s_arity("srandmember")
+    case 152n:  # ZRANDMEMBER
+      match args:
+        case Con{k, rest}:
+          SZRandMember{k, rest}
+        case Nil{}:
+          s_arity("zrandmember")
     case _:
       SBad{RError{no_newlines("ERR unknown command '" ++ String.take(name, 128n) ++ "', with args beginning with: " ++ unknown.args(args, ""))}}
 
@@ -4160,6 +5156,70 @@ def stat.top(+id: Nat) -> Nat:
       119n
     case 120n:
       120n
+    case 121n:
+      121n
+    case 122n:
+      122n
+    case 123n:
+      123n
+    case 124n:
+      124n
+    case 125n:
+      125n
+    case 126n:
+      126n
+    case 127n:
+      127n
+    case 128n:
+      128n
+    case 129n:
+      129n
+    case 130n:
+      130n
+    case 131n:
+      131n
+    case 132n:
+      132n
+    case 133n:
+      133n
+    case 134n:
+      134n
+    case 135n:
+      135n
+    case 136n:
+      136n
+    case 137n:
+      137n
+    case 138n:
+      138n
+    case 139n:
+      139n
+    case 140n:
+      140n
+    case 141n:
+      141n
+    case 142n:
+      142n
+    case 143n:
+      143n
+    case 144n:
+      144n
+    case 145n:
+      145n
+    case 146n:
+      146n
+    case 147n:
+      147n
+    case 148n:
+      148n
+    case 149n:
+      149n
+    case 150n:
+      150n
+    case 151n:
+      151n
+    case 152n:
+      152n
     case _:
       0n
 
@@ -4167,25 +5227,25 @@ def stat.top(+id: Nat) -> Nat:
 def stat.sub.client(+sub: Nat) -> Nat:
   match sub:
     case 1n:
-      121n
+      153n
     case 2n:
-      122n
+      154n
     case 3n:
-      123n
+      155n
     case 4n:
-      124n
+      156n
     case 5n:
-      125n
+      157n
     case 6n:
-      126n
+      158n
     case 7n:
-      127n
+      159n
     case 8n:
-      128n
+      160n
     case 9n:
-      129n
+      161n
     case 10n:
-      130n
+      162n
     case _:
       0n
 
@@ -4193,9 +5253,9 @@ def stat.sub.client(+sub: Nat) -> Nat:
 def stat.sub.function(+sub: Nat) -> Nat:
   match sub:
     case 1n:
-      131n
+      163n
     case 2n:
-      132n
+      164n
     case _:
       0n
 
@@ -4203,15 +5263,15 @@ def stat.sub.function(+sub: Nat) -> Nat:
 def stat.sub.config(+sub: Nat) -> Nat:
   match sub:
     case 1n:
-      133n
+      165n
     case 2n:
-      134n
+      166n
     case 3n:
-      135n
+      167n
     case 4n:
-      136n
+      168n
     case 5n:
-      137n
+      169n
     case _:
       0n
 
@@ -4219,19 +5279,19 @@ def stat.sub.config(+sub: Nat) -> Nat:
 def stat.sub.command(+sub: Nat) -> Nat:
   match sub:
     case 1n:
-      138n
+      170n
     case 2n:
-      139n
+      171n
     case 3n:
-      140n
+      172n
     case 4n:
-      141n
+      173n
     case 5n:
-      142n
+      174n
     case 6n:
-      143n
+      175n
     case 7n:
-      144n
+      176n
     case _:
       0n
 
@@ -4239,15 +5299,15 @@ def stat.sub.command(+sub: Nat) -> Nat:
 def stat.sub.object(+sub: Nat) -> Nat:
   match sub:
     case 1n:
-      145n
+      177n
     case 2n:
-      146n
+      178n
     case 3n:
-      147n
+      179n
     case 4n:
-      148n
+      180n
     case 5n:
-      149n
+      181n
     case _:
       0n
 
@@ -4255,9 +5315,9 @@ def stat.sub.object(+sub: Nat) -> Nat:
 def stat.sub.memory(+sub: Nat) -> Nat:
   match sub:
     case 1n:
-      150n
+      182n
     case 2n:
-      151n
+      183n
     case _:
       0n
 
@@ -4505,66 +5565,130 @@ def stat.name(+key: Nat) -> String:
     case 120n:
       "srandmember"
     case 121n:
-      "client|id"
+      "zadd"
     case 122n:
-      "client|help"
+      "zincrby"
     case 123n:
-      "client|reply"
+      "zrem"
     case 124n:
-      "client|getname"
+      "zcard"
     case 125n:
-      "client|setname"
+      "zscore"
     case 126n:
-      "client|caching"
+      "zmscore"
     case 127n:
-      "client|unblock"
+      "zrank"
     case 128n:
-      "client|getredir"
+      "zrevrank"
     case 129n:
-      "client|no-evict"
+      "zcount"
     case 130n:
-      "client|trackinginfo"
+      "zlexcount"
     case 131n:
-      "function|flush"
+      "zrange"
     case 132n:
-      "function|help"
+      "zrangebyscore"
     case 133n:
-      "config|get"
+      "zrevrangebyscore"
     case 134n:
-      "config|set"
+      "zrangebylex"
     case 135n:
-      "config|resetstat"
+      "zrevrangebylex"
     case 136n:
-      "config|rewrite"
+      "zrevrange"
     case 137n:
-      "config|help"
+      "zremrangebyrank"
     case 138n:
-      "command|info"
+      "zremrangebyscore"
     case 139n:
-      "command|docs"
+      "zremrangebylex"
     case 140n:
-      "command|list"
+      "zpopmin"
     case 141n:
-      "command|help"
+      "zpopmax"
     case 142n:
-      "command|count"
+      "zscan"
     case 143n:
-      "command|getkeys"
+      "zunion"
     case 144n:
-      "command|getkeysandflags"
+      "zinter"
     case 145n:
-      "object|help"
+      "zdiff"
     case 146n:
-      "object|freq"
+      "zintercard"
     case 147n:
-      "object|encoding"
+      "zunionstore"
     case 148n:
-      "object|refcount"
+      "zinterstore"
     case 149n:
-      "object|idletime"
+      "zdiffstore"
     case 150n:
-      "memory|help"
+      "zrangestore"
     case 151n:
+      "zmpop"
+    case 152n:
+      "zrandmember"
+    case 153n:
+      "client|id"
+    case 154n:
+      "client|help"
+    case 155n:
+      "client|reply"
+    case 156n:
+      "client|getname"
+    case 157n:
+      "client|setname"
+    case 158n:
+      "client|caching"
+    case 159n:
+      "client|unblock"
+    case 160n:
+      "client|getredir"
+    case 161n:
+      "client|no-evict"
+    case 162n:
+      "client|trackinginfo"
+    case 163n:
+      "function|flush"
+    case 164n:
+      "function|help"
+    case 165n:
+      "config|get"
+    case 166n:
+      "config|set"
+    case 167n:
+      "config|resetstat"
+    case 168n:
+      "config|rewrite"
+    case 169n:
+      "config|help"
+    case 170n:
+      "command|info"
+    case 171n:
+      "command|docs"
+    case 172n:
+      "command|list"
+    case 173n:
+      "command|help"
+    case 174n:
+      "command|count"
+    case 175n:
+      "command|getkeys"
+    case 176n:
+      "command|getkeysandflags"
+    case 177n:
+      "object|help"
+    case 178n:
+      "object|freq"
+    case 179n:
+      "object|encoding"
+    case 180n:
+      "object|refcount"
+    case 181n:
+      "object|idletime"
+    case 182n:
+      "memory|help"
+    case 183n:
       "memory|usage"
     case _:
       ""
@@ -4814,66 +5938,130 @@ def stat.arity(+key: Nat) -> Nat:
     case 120n:
       5n
     case 121n:
-      4n
+      9n
     case 122n:
-      4n
+      8n
     case 123n:
-      6n
+      7n
     case 124n:
       4n
     case 125n:
       6n
     case 126n:
-      6n
+      7n
     case 127n:
-      7n
-    case 128n:
-      4n
-    case 129n:
       6n
+    case 128n:
+      6n
+    case 129n:
+      8n
     case 130n:
-      4n
+      8n
     case 131n:
-      5n
+      9n
     case 132n:
-      4n
+      9n
     case 133n:
-      7n
+      9n
     case 134n:
       9n
     case 135n:
-      4n
+      9n
     case 136n:
-      4n
+      9n
     case 137n:
-      4n
+      8n
     case 138n:
-      5n
+      8n
     case 139n:
-      5n
+      8n
     case 140n:
       5n
     case 141n:
-      4n
+      5n
     case 142n:
-      4n
+      7n
     case 143n:
-      9n
+      7n
     case 144n:
-      9n
+      7n
     case 145n:
-      4n
+      7n
     case 146n:
-      6n
+      7n
     case 147n:
-      6n
+      9n
     case 148n:
-      6n
+      9n
     case 149n:
-      6n
+      9n
     case 150n:
-      4n
+      11n
     case 151n:
+      9n
+    case 152n:
+      5n
+    case 153n:
+      4n
+    case 154n:
+      4n
+    case 155n:
+      6n
+    case 156n:
+      4n
+    case 157n:
+      6n
+    case 158n:
+      6n
+    case 159n:
+      7n
+    case 160n:
+      4n
+    case 161n:
+      6n
+    case 162n:
+      4n
+    case 163n:
+      5n
+    case 164n:
+      4n
+    case 165n:
+      7n
+    case 166n:
+      9n
+    case 167n:
+      4n
+    case 168n:
+      4n
+    case 169n:
+      4n
+    case 170n:
+      5n
+    case 171n:
+      5n
+    case 172n:
+      5n
+    case 173n:
+      4n
+    case 174n:
+      4n
+    case 175n:
+      9n
+    case 176n:
+      9n
+    case 177n:
+      4n
+    case 178n:
+      6n
+    case 179n:
+      6n
+    case 180n:
+      6n
+    case 181n:
+      6n
+    case 182n:
+      4n
+    case 183n:
       7n
     case _:
       1n
@@ -5015,11 +6203,75 @@ def stat.risky(+key: Nat) -> Bool:
       True{}
     case 120n:
       True{}
+    case 121n:
+      True{}
+    case 122n:
+      True{}
+    case 123n:
+      True{}
+    case 124n:
+      True{}
+    case 125n:
+      True{}
+    case 126n:
+      True{}
+    case 127n:
+      True{}
+    case 128n:
+      True{}
+    case 129n:
+      True{}
+    case 130n:
+      True{}
+    case 131n:
+      True{}
+    case 132n:
+      True{}
+    case 133n:
+      True{}
+    case 134n:
+      True{}
+    case 135n:
+      True{}
+    case 136n:
+      True{}
+    case 137n:
+      True{}
+    case 138n:
+      True{}
+    case 139n:
+      True{}
+    case 140n:
+      True{}
+    case 141n:
+      True{}
+    case 142n:
+      True{}
+    case 143n:
+      True{}
+    case 144n:
+      True{}
+    case 145n:
+      True{}
     case 146n:
+      True{}
+    case 147n:
+      True{}
+    case 148n:
       True{}
     case 149n:
       True{}
+    case 150n:
+      True{}
     case 151n:
+      True{}
+    case 152n:
+      True{}
+    case 178n:
+      True{}
+    case 181n:
+      True{}
+    case 183n:
       True{}
     case _:
       False{}
@@ -6243,6 +7495,262 @@ def stat.cw(+code: Nat) -> U32:
       2638
     case 607n:
       2643
+    case 608n:
+      2645
+    case 609n:
+      2646
+    case 610n:
+      2649
+    case 611n:
+      2650
+    case 612n:
+      2652
+    case 613n:
+      2659
+    case 614n:
+      2661
+    case 615n:
+      2662
+    case 616n:
+      2665
+    case 617n:
+      2666
+    case 618n:
+      2668
+    case 619n:
+      2673
+    case 620n:
+      2674
+    case 621n:
+      2676
+    case 622n:
+      2680
+    case 623n:
+      2695
+    case 624n:
+      2699
+    case 625n:
+      2701
+    case 626n:
+      2702
+    case 627n:
+      2707
+    case 628n:
+      2709
+    case 629n:
+      2710
+    case 630n:
+      2713
+    case 631n:
+      2714
+    case 632n:
+      2716
+    case 633n:
+      2723
+    case 634n:
+      2725
+    case 635n:
+      2726
+    case 636n:
+      2729
+    case 637n:
+      2730
+    case 638n:
+      2732
+    case 639n:
+      2737
+    case 640n:
+      2738
+    case 641n:
+      2740
+    case 642n:
+      2744
+    case 643n:
+      2755
+    case 644n:
+      2757
+    case 645n:
+      2758
+    case 646n:
+      2761
+    case 647n:
+      2762
+    case 648n:
+      2764
+    case 649n:
+      2769
+    case 650n:
+      2770
+    case 651n:
+      2772
+    case 652n:
+      2776
+    case 653n:
+      2785
+    case 654n:
+      2786
+    case 655n:
+      2788
+    case 656n:
+      2792
+    case 657n:
+      2800
+    case 658n:
+      2823
+    case 659n:
+      2827
+    case 660n:
+      2829
+    case 661n:
+      2830
+    case 662n:
+      2835
+    case 663n:
+      2837
+    case 664n:
+      2838
+    case 665n:
+      2841
+    case 666n:
+      2842
+    case 667n:
+      2844
+    case 668n:
+      2851
+    case 669n:
+      2853
+    case 670n:
+      2854
+    case 671n:
+      2857
+    case 672n:
+      2858
+    case 673n:
+      2860
+    case 674n:
+      2865
+    case 675n:
+      2866
+    case 676n:
+      2868
+    case 677n:
+      2872
+    case 678n:
+      2883
+    case 679n:
+      2885
+    case 680n:
+      2886
+    case 681n:
+      2889
+    case 682n:
+      2890
+    case 683n:
+      2892
+    case 684n:
+      2897
+    case 685n:
+      2898
+    case 686n:
+      2900
+    case 687n:
+      2904
+    case 688n:
+      2913
+    case 689n:
+      2914
+    case 690n:
+      2916
+    case 691n:
+      2920
+    case 692n:
+      2928
+    case 693n:
+      2947
+    case 694n:
+      2949
+    case 695n:
+      2950
+    case 696n:
+      2953
+    case 697n:
+      2954
+    case 698n:
+      2956
+    case 699n:
+      2961
+    case 700n:
+      2962
+    case 701n:
+      2964
+    case 702n:
+      2968
+    case 703n:
+      2977
+    case 704n:
+      2978
+    case 705n:
+      2980
+    case 706n:
+      2984
+    case 707n:
+      2992
+    case 708n:
+      3009
+    case 709n:
+      3010
+    case 710n:
+      3012
+    case 711n:
+      3016
+    case 712n:
+      3024
+    case 713n:
+      3040
+    case 714n:
+      3087
+    case 715n:
+      3095
+    case 716n:
+      3099
+    case 717n:
+      3101
+    case 718n:
+      3102
+    case 719n:
+      3111
+    case 720n:
+      3115
+    case 721n:
+      3117
+    case 722n:
+      3118
+    case 723n:
+      3123
+    case 724n:
+      3125
+    case 725n:
+      3126
+    case 726n:
+      3129
+    case 727n:
+      3130
+    case 728n:
+      3132
+    case 729n:
+      3143
+    case 730n:
+      3147
+    case 731n:
+      3149
+    case 732n:
+      3150
+    case 733n:
+      3155
+    case 734n:
+      3157
+    case 735n:
+      3158
     case _:
       63
 
@@ -7669,6 +9177,302 @@ def stat.code.lo41(+lo: Nat) -> Nat:
       606n
     case 19n:
       607n
+    case 21n:
+      608n
+    case 22n:
+      609n
+    case 25n:
+      610n
+    case 26n:
+      611n
+    case 28n:
+      612n
+    case 35n:
+      613n
+    case 37n:
+      614n
+    case 38n:
+      615n
+    case 41n:
+      616n
+    case 42n:
+      617n
+    case 44n:
+      618n
+    case 49n:
+      619n
+    case 50n:
+      620n
+    case 52n:
+      621n
+    case 56n:
+      622n
+    case _:
+      0n
+
+def stat.code.lo42(+lo: Nat) -> Nat:
+  match lo:
+    case 7n:
+      623n
+    case 11n:
+      624n
+    case 13n:
+      625n
+    case 14n:
+      626n
+    case 19n:
+      627n
+    case 21n:
+      628n
+    case 22n:
+      629n
+    case 25n:
+      630n
+    case 26n:
+      631n
+    case 28n:
+      632n
+    case 35n:
+      633n
+    case 37n:
+      634n
+    case 38n:
+      635n
+    case 41n:
+      636n
+    case 42n:
+      637n
+    case 44n:
+      638n
+    case 49n:
+      639n
+    case 50n:
+      640n
+    case 52n:
+      641n
+    case 56n:
+      642n
+    case _:
+      0n
+
+def stat.code.lo43(+lo: Nat) -> Nat:
+  match lo:
+    case 3n:
+      643n
+    case 5n:
+      644n
+    case 6n:
+      645n
+    case 9n:
+      646n
+    case 10n:
+      647n
+    case 12n:
+      648n
+    case 17n:
+      649n
+    case 18n:
+      650n
+    case 20n:
+      651n
+    case 24n:
+      652n
+    case 33n:
+      653n
+    case 34n:
+      654n
+    case 36n:
+      655n
+    case 40n:
+      656n
+    case 48n:
+      657n
+    case _:
+      0n
+
+def stat.code.lo44(+lo: Nat) -> Nat:
+  match lo:
+    case 7n:
+      658n
+    case 11n:
+      659n
+    case 13n:
+      660n
+    case 14n:
+      661n
+    case 19n:
+      662n
+    case 21n:
+      663n
+    case 22n:
+      664n
+    case 25n:
+      665n
+    case 26n:
+      666n
+    case 28n:
+      667n
+    case 35n:
+      668n
+    case 37n:
+      669n
+    case 38n:
+      670n
+    case 41n:
+      671n
+    case 42n:
+      672n
+    case 44n:
+      673n
+    case 49n:
+      674n
+    case 50n:
+      675n
+    case 52n:
+      676n
+    case 56n:
+      677n
+    case _:
+      0n
+
+def stat.code.lo45(+lo: Nat) -> Nat:
+  match lo:
+    case 3n:
+      678n
+    case 5n:
+      679n
+    case 6n:
+      680n
+    case 9n:
+      681n
+    case 10n:
+      682n
+    case 12n:
+      683n
+    case 17n:
+      684n
+    case 18n:
+      685n
+    case 20n:
+      686n
+    case 24n:
+      687n
+    case 33n:
+      688n
+    case 34n:
+      689n
+    case 36n:
+      690n
+    case 40n:
+      691n
+    case 48n:
+      692n
+    case _:
+      0n
+
+def stat.code.lo46(+lo: Nat) -> Nat:
+  match lo:
+    case 3n:
+      693n
+    case 5n:
+      694n
+    case 6n:
+      695n
+    case 9n:
+      696n
+    case 10n:
+      697n
+    case 12n:
+      698n
+    case 17n:
+      699n
+    case 18n:
+      700n
+    case 20n:
+      701n
+    case 24n:
+      702n
+    case 33n:
+      703n
+    case 34n:
+      704n
+    case 36n:
+      705n
+    case 40n:
+      706n
+    case 48n:
+      707n
+    case _:
+      0n
+
+def stat.code.lo47(+lo: Nat) -> Nat:
+  match lo:
+    case 1n:
+      708n
+    case 2n:
+      709n
+    case 4n:
+      710n
+    case 8n:
+      711n
+    case 16n:
+      712n
+    case 32n:
+      713n
+    case _:
+      0n
+
+def stat.code.lo48(+lo: Nat) -> Nat:
+  match lo:
+    case 15n:
+      714n
+    case 23n:
+      715n
+    case 27n:
+      716n
+    case 29n:
+      717n
+    case 30n:
+      718n
+    case 39n:
+      719n
+    case 43n:
+      720n
+    case 45n:
+      721n
+    case 46n:
+      722n
+    case 51n:
+      723n
+    case 53n:
+      724n
+    case 54n:
+      725n
+    case 57n:
+      726n
+    case 58n:
+      727n
+    case 60n:
+      728n
+    case _:
+      0n
+
+def stat.code.lo49(+lo: Nat) -> Nat:
+  match lo:
+    case 7n:
+      729n
+    case 11n:
+      730n
+    case 13n:
+      731n
+    case 14n:
+      732n
+    case 19n:
+      733n
+    case 21n:
+      734n
+    case 22n:
+      735n
     case _:
       0n
 
@@ -7758,6 +9562,22 @@ def stat.code.hl(+hi: Nat, +lo: Nat) -> Nat:
       stat.code.lo40(lo)
     case 41n:
       stat.code.lo41(lo)
+    case 42n:
+      stat.code.lo42(lo)
+    case 43n:
+      stat.code.lo43(lo)
+    case 44n:
+      stat.code.lo44(lo)
+    case 45n:
+      stat.code.lo45(lo)
+    case 46n:
+      stat.code.lo46(lo)
+    case 47n:
+      stat.code.lo47(lo)
+    case 48n:
+      stat.code.lo48(lo)
+    case 49n:
+      stat.code.lo49(lo)
     case _:
       0n
 
@@ -9138,6 +10958,8 @@ def hread.coll(op: HRead, +cl: KV.Coll) -> Reply:
       e_wrongtype()
     case KV.CMems{+m}:
       e_wrongtype()
+    case KV.CZset{+z}:
+      e_wrongtype()
 
 # A list's reads.
 
@@ -9302,6 +11124,8 @@ def lread.coll(op: LRead, +cl: KV.Coll) -> Reply:
       e_wrongtype()
     case KV.CMems{+m}:
       e_wrongtype()
+    case KV.CZset{+z}:
+      e_wrongtype()
 
 # A set's reads. A key not there reads as an empty set, as in Redis
 # (SISMEMBER 0, SMISMEMBER's zeros, SCARD 0, SMEMBERS empty, an empty
@@ -9415,6 +11239,410 @@ def sread.coll(op: SRead, +cl: KV.Coll) -> Reply:
       e_wrongtype()
     case KV.CList{+l}:
       e_wrongtype()
+    case KV.CZset{+z}:
+      e_wrongtype()
+
+# A sorted set's reads. A key not there reads as an empty sorted set, as
+# in Redis (ZCARD 0, nils for scores and ranks, no elements in a range,
+# an empty scan with cursor 0); a key that holds another kind answers
+# WRONGTYPE. A score is answered as Redis writes a double (%.17g; inf,
+# -inf: F.f64.show).
+
+def zscore.reply(m: Maybe<&2, F.F64>) -> Reply:
+  match m:
+    case Some{+d}:
+      RBulk{F.f64.show(d)}
+    case None{}:
+      RNull{}
+
+def zmscore(ms: List<&2, String>, +z: KV.Zset) -> List<&2, Reply>:
+  match ms:
+    case Nil{}:
+      Nil{}
+    case Con{+m, rest}:
+      zscore.reply(KV.zset.score(m, z)) <> zmscore(rest, z)
+
+def zmscore.none(ms: List<&2, String>) -> List<&2, Reply>:
+  match ms:
+    case Nil{}:
+      Nil{}
+    case Con{m, rest}:
+      RNull{} <> zmscore.none(rest)
+
+# a member's rank, from the first element (from the last when rev)
+def zrank.of(m: Maybe<&2, F.F64>, +rev: Bool, +k: String, +z: KV.Zset) -> Reply:
+  match m:
+    case Some{+d}:
+      +r = KV.zt.rank(KV.zset.tree(z), k, d)
+      r_int(Bool.pick(Nat, rev, Nat.sub(Nat.sub(KV.zset.len(z), r), 1n), r))
+    case None{}:
+      RNull{}
+
+def zel.m(e: KV.ZEl) -> String:
+  match e:
+    case KV.ZEl{m, d}:
+      m
+
+# a range's elements as Redis answers them: each member, and its score
+# after it under WITHSCORES
+def zels.one(ws: Bool, m: String, +d: F.F64, rest: List<&2, Reply>) -> List<&2, Reply>:
+  match ws:
+    case True{}:
+      RBulk{m} <> (RBulk{F.f64.show(d)} <> rest)
+    case False{}:
+      RBulk{m} <> rest
+
+def zels(xs: List<&2, KV.ZEl>, +ws: Bool) -> List<&2, Reply>:
+  match xs:
+    case Nil{}:
+      Nil{}
+    case Con{KV.ZEl{m, +d}, rest}:
+      zels.one(ws, m, d, zels(rest, ws))
+
+# How a range's elements are found. By rank, as LRANGE reads its range
+# (lspan); from the last element when reversed. By score (in order, so a
+# walk down the tree finds where a bound falls, KV.zt.before): the ranks
+# lo, of the first element in the range, and hi, past its last; then
+# LIMIT as Redis reads it (genericZrangebyscoreCommand): an offset above
+# 0 and at least the size of the sorted set, or below 0, keeps none, a
+# count below 0 keeps all, and a reversed range is read from hi down. By
+# member: a large sorted set's as by score (Redis's skiplist is walked
+# down the same way, which finds the range when the scores are all the
+# same, as Redis asks of such a range); a small one's as a listpack's is
+# read, element by element (zzlFirstInLexRange, zzlLastInLexRange):
+# none when the bounds alone make the range empty (sdscmplex), or the
+# last element is below min, or the first above max; else from the first
+# element at least min (the last at most max when reversed), when it is
+# in the range, the offset skipped, then the elements while they stay at
+# most max (at least min).
+
+# the ranks a LIMIT keeps of the ranks lo to hi - 1, of n (from hi down
+# when rev): its offset o (when it is a long at least 0, past keeps
+# none) and its count c (n for a count below 0)
+type ZWin is Data:
+  ZWin{a: Nat, b: Nat}
+
+def zwin.of(past: Bool, rev: Bool, +lo: Nat, +hi: Nat, +o: Nat, +c: Nat) -> ZWin:
+  match past rev:
+    case True{} _:
+      ZWin{0n, 0n}
+    case False{} False{}:
+      +s = Nat.add(lo, o)
+      ZWin{s, Nat.max(s, Nat.min(hi, Nat.add(s, c)))}
+    case False{} True{}:
+      +top = Nat.max(lo, Nat.sub(hi, o))
+      ZWin{Nat.max(lo, Nat.sub(top, c)), top}
+
+def zwin(off: Int, +rev: Bool, +lo: Nat, +hi: Nat, +c: Nat, +n: Nat) -> ZWin:
+  match off:
+    case INeg{x}:
+      ZWin{0n, 0n}
+    case IPos{+o}:
+      zwin.of(Bool.and(Nat.is_lt(0n, o), Nat.is_le(n, o)), rev, lo, hi, o, c)
+
+def zcnt(c: Int, +n: Nat) -> Nat:
+  match c:
+    case IPos{x}:
+      x
+    case INeg{x}:
+      n
+
+def zwin.slice(w: ZWin, rev: Bool, +z: KV.Zset) -> List<&2, KV.ZEl>:
+  match w:
+    case ZWin{+a, +b}:
+      KV.zset.slice(rev, z, a, b)
+
+def zrank.range(sp: LSpan, +rev: Bool, +z: KV.Zset) -> List<&2, KV.ZEl>:
+  match sp:
+    case LSpan{+s, +e}:
+      +n = KV.zset.len(z)
+      KV.zset.slice(rev, z, Bool.pick(Nat, rev, Nat.sub(Nat.sub(n, 1n), e), s), Bool.pick(Nat, rev, Nat.sub(n, s), Nat.add(e, 1n)))
+    case LNone{}:
+      Nil{}
+
+# the elements a test holds of, of a list (the first that p holds of on)
+def zl.ok(+xs: List<&2, KV.ZEl>, +p: KV.ZP) -> Bool:
+  match xs:
+    case Nil{}:
+      True{}
+    case Con{KV.ZEl{+m, +d}, r}:
+      KV.zp.ok(p, m, d)
+
+def zl.from.go(xs: List<&2, KV.ZEl>, ok: Bool, +p: KV.ZP) -> List<&2, KV.ZEl>:
+  match xs ok:
+    case Con{x, +rest} False{}:
+      zl.from.go(rest, zl.ok(rest, p), p)
+    case ys _:
+      ys
+
+def zl.from(+xs: List<&2, KV.ZEl>, +p: KV.ZP) -> List<&2, KV.ZEl>:
+  zl.from.go(xs, zl.ok(xs, p), p)
+
+# the first elements of xs while p holds of them, c at most
+def zl.take.go(xs: List<&2, KV.ZEl>, ok: Bool, +p: KV.ZP, c: Nat) -> List<&2, KV.ZEl>:
+  match xs ok c:
+    case Con{x, +rest} True{} 1n+j:
+      x <> zl.take.go(rest, zl.ok(rest, p), p, j)
+    case _ _ _:
+      Nil{}
+
+def zl.take(+xs: List<&2, KV.ZEl>, +p: KV.ZP, c: Nat) -> List<&2, KV.ZEl>:
+  zl.take.go(xs, zl.ok(xs, p), p, c)
+
+def zl.drop(xs: List<&2, KV.ZEl>, k: Nat) -> List<&2, KV.ZEl>:
+  match xs k:
+    case Con{x, rest} 1n+j:
+      zl.drop(rest, j)
+    case ys _:
+      ys
+
+# how two bounds of members compare, as sdscmplex compares them ('-' and
+# '+' as the same bound only with themselves)
+def zlb.cmp2(+a: KV.ZLB, +b: KV.ZLB) -> Cmp:
+  match a b:
+    case KV.ZLNeg{} KV.ZLNeg{}:
+      EQ{}
+    case KV.ZLPos{} KV.ZLPos{}:
+      EQ{}
+    case KV.ZLNeg{} _:
+      LT{}
+    case _ KV.ZLPos{}:
+      LT{}
+    case KV.ZLPos{} _:
+      GT{}
+    case _ KV.ZLNeg{}:
+      GT{}
+    case KV.ZLIn{+s} KV.ZLIn{+t}:
+      String.order(s, t)
+    case KV.ZLIn{+s} KV.ZLEx{+t}:
+      String.order(s, t)
+    case KV.ZLEx{+s} KV.ZLIn{+t}:
+      String.order(s, t)
+    case KV.ZLEx{+s} KV.ZLEx{+t}:
+      String.order(s, t)
+
+# whether a range of members holds no member by its bounds alone
+def zlb.empty(+lo: KV.ZLB, +hi: KV.ZLB) -> Bool:
+  +c = zlb.cmp2(lo, hi)
+  Bool.or(Cmp.is_gt(c), Bool.and(Cmp.is_eq(c), Bool.or(KV.zlb.ex(lo), KV.zlb.ex(hi))))
+
+def zel.ok(e: KV.ZEl, +p: KV.ZP) -> Bool:
+  match e:
+    case KV.ZEl{+m, +d}:
+      KV.zp.ok(p, m, d)
+
+# whether a small sorted set's range of members can hold an element
+# (zzlIsInLexRange)
+def zlex.in(+t: KV.ZTree, +lo: KV.ZLB, +hi: KV.ZLB) -> Bool:
+  +n = KV.zt.size(t)
+  Bool.and(Bool.not(zlb.empty(lo, hi)), Bool.and(Nat.is_lt(0n, n), Bool.and(zel.ok(KV.zt.nth(t, Nat.sub(n, 1n)), KV.ZGeL{lo}), zel.ok(KV.zt.nth(t, 0n), KV.ZLeL{hi}))))
+
+def zlex.take(ok: Bool, +s: List<&2, KV.ZEl>, +o: Nat, +p: KV.ZP, +c: Nat) -> List<&2, KV.ZEl>:
+  match ok:
+    case True{}:
+      zl.take(zl.drop(s, o), p, c)
+    case False{}:
+      Nil{}
+
+def zlex.small.in(ok: Bool, rev: Bool, +t: KV.ZTree, +lo: KV.ZLB, +hi: KV.ZLB, +o: Nat, +c: Nat) -> List<&2, KV.ZEl>:
+  match ok rev:
+    case False{} _:
+      Nil{}
+    case True{} False{}:
+      +s = zl.from(KV.zt.all(t), KV.ZGeL{lo})
+      zlex.take(zl.ok(s, KV.ZLeL{hi}), s, o, KV.ZLeL{hi}, c)
+    case True{} True{}:
+      +s = zl.from(KV.zt.rslice(t, 0n, KV.zt.size(t)), KV.ZLeL{hi})
+      zlex.take(zl.ok(s, KV.ZGeL{lo}), s, o, KV.ZGeL{lo}, c)
+
+def zlex.small(off: Int, +rev: Bool, +t: KV.ZTree, +lo: KV.ZLB, +hi: KV.ZLB, +c: Nat) -> List<&2, KV.ZEl>:
+  match off:
+    case INeg{x}:
+      Nil{}
+    case IPos{+o}:
+      zlex.small.in(zlex.in(t, lo, hi), rev, t, lo, hi, o, c)
+
+def zlex.of(small: Bool, +lo: KV.ZLB, +hi: KV.ZLB, +rev: Bool, +off: Int, +cnt: Int, +z: KV.Zset) -> List<&2, KV.ZEl>:
+  match small:
+    case True{}:
+      zlex.small(off, rev, KV.zset.tree(z), lo, hi, zcnt(cnt, KV.zset.len(z)))
+    case False{}:
+      +t = KV.zset.tree(z)
+      +n = KV.zset.len(z)
+      zwin.slice(zwin(off, rev, KV.zt.before(t, KV.ZGeL{lo}), KV.zt.before(t, KV.ZNot{KV.ZLeL{hi}}), zcnt(cnt, n), n), rev, z)
+
+# a range's elements, in the order Redis answers them
+def zrange.of(r: ZRng, +rev: Bool, +off: Int, +cnt: Int, +z: KV.Zset) -> List<&2, KV.ZEl>:
+  match r:
+    case ZRankR{+a, +b}:
+      zrank.range(lspan(a, b, KV.zset.len(z)), rev, z)
+    case ZScoreR{+lo, +hi}:
+      +t = KV.zset.tree(z)
+      +n = KV.zset.len(z)
+      zwin.slice(zwin(off, rev, KV.zt.before(t, KV.ZGeS{lo}), KV.zt.before(t, KV.ZNot{KV.ZLeS{hi}}), zcnt(cnt, n), n), rev, z)
+    case ZLexR{+lo, +hi}:
+      zlex.of(KV.zset.is_small(z), lo, hi, rev, off, cnt, z)
+
+# a read's elements, from the last when rev
+def zq.els(q: ZQ, +rev: Bool, +z: KV.Zset) -> List<&2, KV.ZEl>:
+  match q:
+    case ZQ{r, +off, +cnt, ws}:
+      zrange.of(r, rev, off, cnt, z)
+    case ZQRev{q}:
+      zq.els(q, True{}, z)
+
+def zq.run(q: ZQ, +z: KV.Zset) -> List<&2, KV.ZEl>:
+  zq.els(q, False{}, z)
+
+# whether a read answers the scores (WITHSCORES)
+def zq.scores(q: ZQ) -> Bool:
+  match q:
+    case ZQ{r, off, cnt, +ws}:
+      ws
+    case ZQRev{q}:
+      zq.scores(q)
+
+def zq.reply(+q: ZQ, +z: KV.Zset) -> Reply:
+  RArray{zels(zq.run(q, z), zq.scores(q))}
+
+# ZCOUNT: the elements between the ranks of its bounds; ZLEXCOUNT: of a
+# small sorted set, those its range by member holds (as above), of a
+# large one, those between the ranks of its bounds
+def zcount(+lo: KV.ZSB, +hi: KV.ZSB, +z: KV.Zset) -> Nat:
+  +t = KV.zset.tree(z)
+  Nat.sub(KV.zt.before(t, KV.ZNot{KV.ZLeS{hi}}), KV.zt.before(t, KV.ZGeS{lo}))
+
+def zlexcount.of(small: Bool, +lo: KV.ZLB, +hi: KV.ZLB, +z: KV.Zset) -> Nat:
+  match small:
+    case True{}:
+      List.length(&2, KV.ZEl, zlex.small(IPos{0n}, False{}, KV.zset.tree(z), lo, hi, KV.zset.len(z)))
+    case False{}:
+      +t = KV.zset.tree(z)
+      Nat.sub(KV.zt.before(t, KV.ZNot{KV.ZLeL{hi}}), KV.zt.before(t, KV.ZGeL{lo}))
+
+# ZCOUNT's range (k 2) or ZLEXCOUNT's (k 3), read again as it runs: the
+# count, or the error of a range that does not read
+def zcount.rng(m: Maybe<&2, ZRng>, +k: Nat, +z: KV.Zset) -> Reply:
+  match m:
+    case Some{ZScoreR{+lo, +hi}}:
+      r_int(zcount(lo, hi, z))
+    case Some{ZLexR{+lo, +hi}}:
+      r_int(zlexcount.of(KV.zset.is_small(z), lo, hi, z))
+    case _:
+      zrng.err(k)
+
+def zcount.args(+k: Nat, args: List<&2, String>, +z: KV.Zset) -> Reply:
+  match args:
+    case Con{+a, Con{+b, rest}}:
+      zcount.rng(zrng.of(k, a, b), k, z)
+    case _:
+      zrng.err(k)
+
+# ZSCAN: a small sorted set answers all its elements at once, with cursor
+# 0, each score as a listpack keeps it (F.f64.show_lp); a large one scans
+# its trie of members as HSCAN scans a hash's, each score as Redis writes
+# a double (the options as HSCAN reads them)
+def zscan.lp(xs: List<&2, KV.ZEl>) -> List<&2, KV.HPair>:
+  match xs:
+    case Nil{}:
+      Nil{}
+    case Con{KV.ZEl{m, +d}, rest}:
+      KV.HP{m, F.f64.show_lp(d)} <> zscan.lp(rest)
+
+def zscan.score(m: Maybe<&2, F.F64>) -> String:
+  match m:
+    case Some{+d}:
+      F.f64.show(d)
+    case None{}:
+      "0"
+
+def zscan.kv(+t: KV.Trie<F.F64>, ks: List<&2, String>) -> List<&2, KV.HPair>:
+  match ks:
+    case Nil{}:
+      Nil{}
+    case Con{+k, rest}:
+      KV.HP{k, zscan.score(KV.get(F.F64, t, k))} <> zscan.kv(t, rest)
+
+def zscan.big(+t: KV.Trie<F.F64>, sc: KV.Scan, pat: Maybe<&2, String>) -> Reply:
+  match sc:
+    case KV.Stop{+at, acc}:
+      hscan.rep(Bool.pick(Nat, Nat.is_lt(at, 1048576n), at, 0n), zscan.kv(t, List.reverse(&2, String, acc)), pat)
+    case KV.Scan{w, acc}:
+      hscan.rep(0n, zscan.kv(t, List.reverse(&2, String, acc)), pat)
+
+def zscan.go(+z: KV.Zset, +cur: Nat, +n: Nat, pat: Maybe<&2, String>) -> Reply:
+  match z:
+    case KV.ZSmall{+tr}:
+      hscan.rep(0n, zscan.lp(KV.zt.all(tr)), pat)
+    case KV.ZBig{tr, +t}:
+      zscan.big(t, KV.scan(F.F64, t, cur, n, 0n), pat)
+
+def zscan.of(a: ScanArgs, +z: KV.Zset) -> Reply:
+  match a:
+    case ScanArgs{+cur, +n, pat, typ}:
+      zscan.go(z, cur, n, pat)
+    case ScanBad{r}:
+      r
+
+# a read of a key that holds a sorted set
+def zread(op: ZRead, +z: KV.Zset) -> Reply:
+  match op:
+    case ZRCard{}:
+      r_int(KV.zset.len(z))
+    case ZRScore{+m}:
+      zscore.reply(KV.zset.score(m, z))
+    case ZRMScore{ms}:
+      RArray{zmscore(ms, z)}
+    case ZRRank{+m}:
+      zrank.of(KV.zset.score(m, z), False{}, m, z)
+    case ZRRevRank{+m}:
+      zrank.of(KV.zset.score(m, z), True{}, m, z)
+    case ZRCount{args}:
+      zcount.args(2n, args, z)
+    case ZRLexCount{args}:
+      zcount.args(3n, args, z)
+    case ZRRange{q}:
+      zq.reply(q, z)
+    case ZRScan{args}:
+      zscan.of(hscan.args(args), z)
+
+# of a key not there
+def zread.none(op: ZRead) -> Reply:
+  match op:
+    case ZRCard{}:
+      r_int(0n)
+    case ZRScore{m}:
+      RNull{}
+    case ZRMScore{ms}:
+      RArray{zmscore.none(ms)}
+    case ZRRank{m}:
+      RNull{}
+    case ZRRevRank{m}:
+      RNull{}
+    case ZRCount{args}:
+      r_int(0n)
+    case ZRLexCount{args}:
+      r_int(0n)
+    case ZRRange{q}:
+      RArray{Nil{}}
+    case ZRScan{args}:
+      RArray{[RBulk{"0"}, RArray{Nil{}}]}
+
+# of a key that holds a string (m: the string's entry, or none)
+def zread.str(op: ZRead, m: Maybe<&2, KV.Item<String>>) -> Reply:
+  match m:
+    case Some{x}:
+      e_wrongtype()
+    case None{}:
+      zread.none(op)
+
+# of a key that holds a collection
+def zread.coll(op: ZRead, +cl: KV.Coll) -> Reply:
+  match cl:
+    case KV.CZset{+z}:
+      zread(op, z)
+    case _:
+      e_wrongtype()
 
 # the reply of a Peek, from the entry of its key there at now
 def peek(c: PeekOp, +now: Nat, m: Maybe<&2, KV.Item<String>>) -> Reply:
@@ -9447,6 +11675,8 @@ def peek(c: PeekOp, +now: Nat, m: Maybe<&2, KV.Item<String>>) -> Reply:
       lread.str(op, m)
     case PMems{op}:
       sread.str(op, m)
+    case PZset{op}:
+      zread.str(op, m)
 
 # a Peek of a key that holds a collection: its type, its time, a read of
 # a hash of a hash, or WRONGTYPE for a read of a string
@@ -9468,6 +11698,8 @@ def peek.coll(c: PeekOp, +now: Nat, +cl: KV.Coll, +e: Nat) -> Reply:
       lread.coll(op, cl)
     case PMems{op}:
       sread.coll(op, cl)
+    case PZset{op}:
+      zread.coll(op, cl)
     case _:
       e_wrongtype()
 
@@ -9516,6 +11748,8 @@ type Change is Data:
   CListNew{left: Bool, xs: List<&2, String>, l: KV.Deq}
   CMems{op: SWrite, s: KV.Mems}
   CMemsNew{ms: List<&2, String>, s: KV.Mems}
+  CZset{op: ZWrite, z: KV.Zset}
+  CZsetNew{o: ZOpts, ps: List<&2, ZPair>, z: KV.Zset}
 
 type Out is Data:
   Out{r: Reply, ch: Change}
@@ -10232,6 +12466,8 @@ def hwrite.coll(op: HWrite, +cl: KV.Coll) -> Out:
       hwrite.wrong(op)
     case KV.CMems{m}:
       hwrite.wrong(op)
+    case KV.CZset{z}:
+      hwrite.wrong(op)
 
 # A list's writes. A key not there is an empty list: LPUSH and RPUSH make
 # it, LPUSHX and RPUSHX answer 0, the others find nothing (LSET: no such
@@ -10562,6 +12798,8 @@ def lwrite.coll(op: LWrite, +cl: KV.Coll) -> Out:
       lwrite.wrong(op)
     case KV.CMems{m}:
       lwrite.wrong(op)
+    case KV.CZset{z}:
+      lwrite.wrong(op)
 
 # Members at random, by r (the server's random number, and the numbers of
 # its Weyl sequence after it, each scrambled by KV.mix): a member of an
@@ -10843,6 +13081,300 @@ def swrite.coll(op: SWrite, +cl: KV.Coll) -> Out:
       swrite.wrong(op)
     case KV.CList{l}:
       swrite.wrong(op)
+    case KV.CZset{z}:
+      swrite.wrong(op)
+
+# A sorted set's writes. A key not there is an empty sorted set: ZADD
+# makes it (but under XX, which adds nothing), the others find nothing; a
+# key that holds a sorted set keeps its time, and is deleted when a write
+# takes its last element (as Redis deletes an empty sorted set); a key
+# that holds another kind answers WRONGTYPE. The change keeps the write
+# as the client sent it (ZINCRBY as ZADD with INCR), which the
+# append-only file logs; a write that changes nothing leaves the key as
+# it was.
+
+# ZADD's pairs added in turn to z, as Redis's zsetAdd adds each: a member
+# there is left alone under NX; under INCR its score is the increment
+# plus the one it had (a NaN is an error that stops the command: INCR
+# takes one pair alone, so it changes nothing); under GT (LT) a score not
+# above (below) the one it had leaves it alone; else the member takes the
+# score, when it is another (-0 is 0). A member not there is left out
+# under XX, else added with the score (the increment, under INCR). added
+# and upd count the members it added and changed, done those it did not
+# leave alone (taking the score they had counts), and last is the score
+# the last of those took.
+type ZAdd is Data:
+  ZAdd{z: KV.Zset, added: Nat, upd: Nat, done: Nat, last: F.F64}
+  ZAddNaN{}
+
+def zadd.num(m: Maybe<&2, F.F64>) -> F.F64:
+  match m:
+    case Some{d}:
+      d
+    case None{}:
+      F.F64{0n, 0n}
+
+def zadd.score(incr: Bool, +c: F.F64, +d: F.F64) -> F.F64:
+  match incr:
+    case True{}:
+      F.f64.of(F.fl.add(F.fmt.d(), F.f64.to(c), F.f64.to(d)))
+    case False{}:
+      d
+
+def zadd.new(xx: Bool, +d: F.F64, +m: String, z: KV.Zset, +added: Nat, +upd: Nat, +done: Nat, last: F.F64) -> ZAdd:
+  match xx:
+    case True{}:
+      ZAdd{z, added, upd, done, last}
+    case False{}:
+      ZAdd{KV.zset.add(z, m, d), Nat.add(added, 1n), upd, Nat.add(done, 1n), d}
+
+def zadd.old.of(nx: Bool, nan: Bool, keep: Bool, same: Bool, +sc: F.F64, +c: F.F64, +m: String, z: KV.Zset, +added: Nat, +upd: Nat, +done: Nat, last: F.F64) -> ZAdd:
+  match nx nan keep same:
+    case True{} _ _ _:
+      ZAdd{z, added, upd, done, last}
+    case False{} True{} _ _:
+      ZAddNaN{}
+    case False{} False{} True{} _:
+      ZAdd{z, added, upd, done, last}
+    case False{} False{} False{} True{}:
+      ZAdd{z, added, upd, Nat.add(done, 1n), sc}
+    case False{} False{} False{} False{}:
+      ZAdd{KV.zset.set(z, m, c, sc), added, Nat.add(upd, 1n), Nat.add(done, 1n), sc}
+
+# a member there, of score c
+def zadd.old(+o: ZOpts, +c: F.F64, +d: F.F64, +m: String, z: KV.Zset, +added: Nat, +upd: Nat, +done: Nat, last: F.F64) -> ZAdd:
+  match o:
+    case ZOpts{+nx, xx, +gt, +lt, ch, +incr}:
+      +sc = zadd.score(incr, c, d)
+      +cmp = F.f64.cmp(sc, c)
+      zadd.old.of(nx, F.f64.is_nan(sc), Bool.or(Bool.and(lt, Bool.not(Cmp.is_lt(cmp))), Bool.and(gt, Bool.not(Cmp.is_gt(cmp)))), Cmp.is_eq(cmp), sc, c, m, z, added, upd, done, last)
+
+def zadd.at(cur: Maybe<&2, F.F64>, +o: ZOpts, +d: F.F64, +m: String, z: KV.Zset, +added: Nat, +upd: Nat, +done: Nat, last: F.F64) -> ZAdd:
+  match cur:
+    case Some{+c}:
+      zadd.old(o, c, d, m, z, added, upd, done, last)
+    case None{}:
+      zadd.new(zopts.xx(o), d, m, z, added, upd, done, last)
+
+def zadd.step(+o: ZOpts, p: ZPair, st: ZAdd) -> ZAdd:
+  match p st:
+    case _ ZAddNaN{}:
+      ZAddNaN{}
+    case ZPair{+s, +m} ZAdd{+z, added, upd, done, last}:
+      zadd.at(KV.zset.score(m, z), o, zadd.num(F.f64.parse(s)), m, z, added, upd, done, last)
+
+def zadd.go(ps: List<&2, ZPair>, +o: ZOpts, st: ZAdd) -> ZAdd:
+  match ps:
+    case Nil{}:
+      st
+    case Con{p, rest}:
+      zadd.go(rest, o, zadd.step(o, p, st))
+
+# ZADD's reply: under INCR the score the member took (nil when it was
+# left alone), else how many it added (CH: and changed)
+def zadd.reply.of(incr: Bool, +ch: Bool, +added: Nat, +upd: Nat, +done: Nat, +last: F.F64) -> Reply:
+  match incr:
+    case True{}:
+      Bool.pick(Reply, Nat.is_eq(done, 0n), RNull{}, RBulk{F.f64.show(last)})
+    case False{}:
+      r_int(Bool.pick(Nat, ch, Nat.add(added, upd), added))
+
+def zadd.reply(+o: ZOpts, +added: Nat, +upd: Nat, +done: Nat, +last: F.F64) -> Reply:
+  match o:
+    case ZOpts{nx, xx, gt, lt, +ch, +incr}:
+      zadd.reply.of(incr, ch, added, upd, done, last)
+
+# the change: none when it added and changed nothing; a new sorted set,
+# made by the ZADD (of options o and pairs ps) where the key was not
+# there (fresh); else the ZADD of the sorted set the key held
+def zadd.ch(none: Bool, fresh: Bool, o: ZOpts, ps: List<&2, ZPair>, z: KV.Zset) -> Change:
+  match none fresh:
+    case True{} _:
+      CKeep{}
+    case False{} True{}:
+      CZsetNew{o, ps, z}
+    case False{} False{}:
+      CZset{ZWAdd{o, ps}, z}
+
+def zadd.res(st: ZAdd, +fresh: Bool, +o: ZOpts, +ps: List<&2, ZPair>) -> Out:
+  match st:
+    case ZAddNaN{}:
+      Out{RError{"ERR resulting score is not a number (NaN)"}, CKeep{}}
+    case ZAdd{z, +added, +upd, +done, +last}:
+      Out{zadd.reply(o, added, upd, done, last), zadd.ch(Nat.is_eq(Nat.add(added, upd), 0n), fresh, o, ps, z)}
+
+def zadd.fin(err: Maybe<&2, Reply>, +fresh: Bool, +o: ZOpts, +ps: List<&2, ZPair>, z: KV.Zset) -> Out:
+  match err:
+    case Some{r}:
+      Out{r, CKeep{}}
+    case None{}:
+      zadd.res(zadd.go(ps, o, ZAdd{z, 0n, 0n, 0n, F.F64{0n, 0n}}), fresh, o, ps)
+
+def zadd.out(+fresh: Bool, +o: ZOpts, +ps: List<&2, ZPair>, z: KV.Zset) -> Out:
+  zadd.fin(zadd.check(o, ps), fresh, o, ps, z)
+
+# ZWNew: the change of the ZADD of o and ps on a key not there, made
+# where the key was, whatever it held (the script the append-only file
+# logs, aof.bend), answered 0 as the script returns it; nothing when it
+# adds nothing (XX, which the script's parser refuses)
+def znew.out(o: Out) -> Out:
+  match o:
+    case Out{r, ch}:
+      Out{r_int(0n), ch}
+
+# z without the elements xs, which it holds: the reply counts them, and
+# the change deletes the key when none is left
+def zdels.of(none: Bool, empty: Bool, +op: ZWrite, z: KV.Zset, r: Reply) -> Out:
+  match none empty:
+    case True{} _:
+      Out{r, CKeep{}}
+    case False{} True{}:
+      Out{r, CDel{}}
+    case False{} False{}:
+      Out{r, CZset{op, z}}
+
+def zdels.out(+xs: List<&2, KV.ZEl>, +op: ZWrite, z: KV.Zset, r: Reply) -> Out:
+  +left = KV.zset.dels(xs, z)
+  zdels.of(List.is_empty(&2, KV.ZEl, xs), Nat.is_eq(KV.zset.len(left), 0n), op, left, r)
+
+# ZREM's members taken out of z, and how many of them it held
+type ZDel is Data:
+  ZDel{z: KV.Zset, gone: Nat}
+
+def zrem.one(m: Maybe<&2, F.F64>, z: KV.Zset, +k: String, +gone: Nat) -> ZDel:
+  match m:
+    case Some{+d}:
+      ZDel{KV.zset.del(z, k, d), Nat.add(gone, 1n)}
+    case None{}:
+      ZDel{z, gone}
+
+def zrem.go(ms: List<&2, String>, st: ZDel) -> ZDel:
+  match ms st:
+    case Nil{} acc:
+      acc
+    case Con{+m, rest} ZDel{+z, +gone}:
+      zrem.go(rest, zrem.one(KV.zset.score(m, z), z, m, gone))
+
+def zrem.of(none: Bool, empty: Bool, +ms: List<&2, String>, z: KV.Zset, +gone: Nat) -> Out:
+  match none empty:
+    case True{} _:
+      Out{r_int(0n), CKeep{}}
+    case False{} True{}:
+      Out{r_int(gone), CDel{}}
+    case False{} False{}:
+      Out{r_int(gone), CZset{ZWRem{ms}, z}}
+
+def zrem.out(r: ZDel, +ms: List<&2, String>) -> Out:
+  match r:
+    case ZDel{+z, +gone}:
+      zrem.of(Nat.is_eq(gone, 0n), Nat.is_eq(KV.zset.len(z), 0n), ms, z, gone)
+
+# ZREMRANGEBY*: the elements its range holds (read again as it runs: a
+# range that does not read answers its error), as ZRANGE finds them with
+# no LIMIT, taken out; the reply counts them
+def zremr.of(m: Maybe<&2, ZRng>, +k: Nat, +op: ZWrite, +z: KV.Zset) -> Out:
+  match m:
+    case Some{r}:
+      +xs = zrange.of(r, False{}, IPos{0n}, INeg{0n}, z)
+      zdels.out(xs, op, z, r_int(List.length(&2, KV.ZEl, xs)))
+    case None{}:
+      Out{zrng.err(k), CKeep{}}
+
+# of a key not there (fresh): what the empty sorted set answers, and no
+# change
+def zremr.none(m: Maybe<&2, ZRng>, +k: Nat) -> Out:
+  match m:
+    case Some{r}:
+      Out{r_int(0n), CKeep{}}
+    case None{}:
+      Out{zrng.err(k), CKeep{}}
+
+def zremr.at(fresh: Bool, m: Maybe<&2, ZRng>, +k: Nat, +op: ZWrite, +z: KV.Zset) -> Out:
+  match fresh:
+    case True{}:
+      zremr.none(m, k)
+    case False{}:
+      zremr.of(m, k, op, z)
+
+# ZPOPMIN and ZPOPMAX (max): up to c elements from the first end (the
+# last), answered with their scores, in the order they are taken
+def zpop.pick(max: Bool, +k: Nat, +n: Nat, +z: KV.Zset) -> List<&2, KV.ZEl>:
+  match max:
+    case True{}:
+      KV.zt.rslice(KV.zset.tree(z), Nat.sub(n, k), n)
+    case False{}:
+      KV.zt.slice(KV.zset.tree(z), 0n, k)
+
+def zpop.els(+max: Bool, +c: Nat, +z: KV.Zset) -> List<&2, KV.ZEl>:
+  +n = KV.zset.len(z)
+  zpop.pick(max, Nat.min(c, n), n, z)
+
+def zpop.of(m: Maybe<&2, Nat>, +max: Bool, +op: ZWrite, +z: KV.Zset) -> Out:
+  match m:
+    case Some{+c}:
+      +xs = zpop.els(max, c, z)
+      zdels.out(xs, op, z, RArray{zels(xs, True{})})
+    case None{}:
+      Out{RError{"ERR value is out of range, must be positive"}, CKeep{}}
+
+def zpop.none(m: Maybe<&2, Nat>) -> Out:
+  match m:
+    case Some{c}:
+      Out{RArray{Nil{}}, CKeep{}}
+    case None{}:
+      Out{RError{"ERR value is out of range, must be positive"}, CKeep{}}
+
+def zpop.at(fresh: Bool, m: Maybe<&2, Nat>, +max: Bool, +op: ZWrite, +z: KV.Zset) -> Out:
+  match fresh:
+    case True{}:
+      zpop.none(m)
+    case False{}:
+      zpop.of(m, max, op, z)
+
+# a write of a sorted set to a sorted set z (an empty one for a key not
+# there: fresh)
+def zwrite(op: ZWrite, +fresh: Bool, +z: KV.Zset) -> Out:
+  match op:
+    case ZWAdd{+o, +ps}:
+      zadd.out(fresh, o, ps, z)
+    case ZWRem{+ms}:
+      zrem.out(zrem.go(ms, ZDel{z, 0n}), ms)
+    case ZWNew{+o, +ps}:
+      znew.out(zadd.out(True{}, o, ps, KV.zset.empty()))
+    case ZWRemRank{+a, +b}:
+      zremr.at(fresh, zrng.of(1n, a, b), 1n, ZWRemRank{a, b}, z)
+    case ZWRemScore{+a, +b}:
+      zremr.at(fresh, zrng.of(2n, a, b), 2n, ZWRemScore{a, b}, z)
+    case ZWRemLex{+a, +b}:
+      zremr.at(fresh, zrng.of(3n, a, b), 3n, ZWRemLex{a, b}, z)
+    case ZWPop{+max}:
+      zpop.at(fresh, Some{1n}, max, ZWPop{max}, z)
+    case ZWPopN{+max, +c}:
+      zpop.at(fresh, lcount(c), max, ZWPopN{max, c}, z)
+
+# of a key that holds another kind: WRONGTYPE, but for ZWNew
+def zwrite.wrong(op: ZWrite) -> Out:
+  match op:
+    case ZWNew{+o, +ps}:
+      zwrite(ZWNew{o, ps}, True{}, KV.zset.empty())
+    case _:
+      Out{e_wrongtype(), CKeep{}}
+
+# of a key that holds a string (m: the string's entry, or none)
+def zwrite.str(op: ZWrite, m: Maybe<&2, KV.Item<String>>) -> Out:
+  match m:
+    case Some{x}:
+      zwrite.wrong(op)
+    case None{}:
+      zwrite(op, True{}, KV.zset.empty())
+
+# of a key that holds a collection
+def zwrite.coll(op: ZWrite, +cl: KV.Coll) -> Out:
+  match cl:
+    case KV.CZset{z}:
+      zwrite(op, False{}, z)
+    case _:
+      zwrite.wrong(op)
 
 def upd(op: UpdOp, +now: Nat, m: Maybe<&2, KV.Item<String>>) -> Out:
   match op:
@@ -10880,6 +13412,8 @@ def upd(op: UpdOp, +now: Nat, m: Maybe<&2, KV.Item<String>>) -> Out:
       swrite.str(op, m)
     case UIncrF{+by}:
       uincrf.of(by, m)
+    case UZset{op}:
+      zwrite.str(op, m)
 
 # An update of a key that holds a collection: SET (and SETEX, PSETEX)
 # replaces it, SETNX finds it there, EXPIRE and its kin and PERSIST set
@@ -10923,6 +13457,8 @@ def upd.only(op: UpdOp, +now: Nat, +cl: KV.Coll) -> Out:
       lwrite.coll(lop, cl)
     case UMems{sop}:
       swrite.coll(sop, cl)
+    case UZset{zop}:
+      zwrite.coll(zop, cl)
     case UGet{o}:
       get.wrong(o, now)
     case _:
@@ -10977,6 +13513,10 @@ def upd.ch(t: KV.Trie<KV.Val>, +k: String, +h: U32, +n: Nat, +x: Nat, now: Nat, 
       (r, Db{KV.keep.at(KV.Val, t, k, KV.VColl{KV.CMems{sv}}, h), n, x, now, rr})
     case CMemsNew{ms, sv}:
       (r, Db{KV.setx.at(KV.Val, t, k, KV.VColl{KV.CMems{sv}}, 0n, h), cnt.n(c, n), cnt.x(c, 0n, x), now, rr})
+    case CZset{op, zv}:
+      (r, Db{KV.keep.at(KV.Val, t, k, KV.VColl{KV.CZset{zv}}, h), n, x, now, rr})
+    case CZsetNew{o, ps, zv}:
+      (r, Db{KV.setx.at(KV.Val, t, k, KV.VColl{KV.CZset{zv}}, 0n, h), cnt.n(c, n), cnt.x(c, 0n, x), now, rr})
 
 def upd.put(t: KV.Trie<KV.Val>, +k: String, +h: U32, +n: Nat, +x: Nat, now: Nat, rr: Maybe<&2, Db>, +c: Nat, o: Out) -> Reply & Db:
   match o:
@@ -11794,6 +14334,488 @@ def db.smove(db: Db, +s: String, +d: String, +w: SMem) -> Reply & Db:
 # writes it hashes the key once (the .at walks: the walks with the hash
 # given). A write that does not read the key (SET, MSET) asks the key's
 # code first (KV.code.at), so that the counts change by what the key was.
+# Sorted sets of several keys
+# ---------------------------
+# ZUNION, ZINTER, ZDIFF, ZINTERCARD and their STOREs, as Redis 7.0.15
+# runs them (zunionInterDiffGenericCommand): each key holds a sorted set
+# or a set (a set's members of score 1), or is not there (none: an empty
+# one), else WRONGTYPE; then the options' error, if they made one. A
+# score of an input is its score times the key's weight (a NaN, as inf
+# times 0, is 0), and a member of several inputs aggregates their
+# scores, in their order: their sum (a NaN is 0, as for inf and -inf),
+# the least or the greatest. ZUNION and ZINTER take the inputs from the
+# smallest to the largest (stably, as glibc's qsort sorts so few):
+# ZUNION every member of each, ZINTER the members of the smallest that
+# all the others hold, each other input's score times its weight (not
+# made 0 when a NaN: aggregated, a sum made a NaN is 0, and MIN and MAX
+# keep the score they had). ZDIFF takes the members of the first input
+# that no other holds, with their scores. ZINTERCARD counts ZINTER's
+# members, up to its LIMIT. The members answer in order of score, then
+# of member, as a sorted set holds them. A STORE sets its destination to
+# the sorted set of the members, with no time, whatever it held (ZWNew:
+# the ZADD of each score, as Redis writes a double, and member), or
+# deletes it when there are none, and answers how many there are.
+
+# a source: a sorted set, a set, or none
+type ZSrc is Data:
+  ZSrcZ{z: KV.Zset}
+  ZSrcS{s: KV.Mems}
+  ZSrcNone{}
+
+# the sources at the keys, or WRONGTYPE
+type ZGot is Data:
+  ZGot{ss: List<&2, ZSrc>}
+  ZGotWrong{}
+
+def zget.one(m: Maybe<&2, KV.Val>, rest: ZGot) -> ZGot:
+  match m rest:
+    case _ ZGotWrong{}:
+      ZGotWrong{}
+    case None{} ZGot{ss}:
+      ZGot{ZSrcNone{} <> ss}
+    case Some{KV.VColl{KV.CZset{z}}} ZGot{ss}:
+      ZGot{ZSrcZ{z} <> ss}
+    case Some{KV.VColl{KV.CMems{s}}} ZGot{ss}:
+      ZGot{ZSrcS{s} <> ss}
+    case Some{v} ZGot{ss}:
+      ZGotWrong{}
+
+def zsrcs.at(ks: List<&2, String>, +now: Nat, +t: KV.Trie<KV.Val>) -> ZGot:
+  match ks:
+    case Nil{}:
+      ZGot{Nil{}}
+    case Con{+k, rest}:
+      zget.one(KV.read(KV.Val, t, k, now), zsrcs.at(rest, now, t))
+
+def zsrc.len(+s: ZSrc) -> Nat:
+  match s:
+    case ZSrcZ{+z}:
+      KV.zset.len(z)
+    case ZSrcS{+m}:
+      KV.mems.len(m)
+    case ZSrcNone{}:
+      0n
+
+# the score 1
+def zone() -> F.F64:
+  F.F64{1072693248n, 0n}
+
+# a member's score in a source (1 in a set)
+def zsrc.score(+m: String, +s: ZSrc) -> Maybe<&2, F.F64>:
+  match s:
+    case ZSrcZ{+z}:
+      KV.zset.score(m, z)
+    case ZSrcS{+ms}:
+      Bool.pick(Maybe<&2, F.F64>, KV.mems.has(m, ms), Some{zone()}, None{})
+    case ZSrcNone{}:
+      None{}
+
+def zsrc.ones(xs: List<&2, String>) -> List<&2, KV.ZEl>:
+  match xs:
+    case Nil{}:
+      Nil{}
+    case Con{x, rest}:
+      KV.ZEl{x, zone()} <> zsrc.ones(rest)
+
+# a source's elements, in its order
+def zsrc.els(+s: ZSrc) -> List<&2, KV.ZEl>:
+  match s:
+    case ZSrcZ{+z}:
+      KV.zt.all(KV.zset.tree(z))
+    case ZSrcS{+ms}:
+      zsrc.ones(KV.mems.all(ms))
+    case ZSrcNone{}:
+      Nil{}
+
+# an input: a source and its weight
+type ZIn is Data:
+  ZIn{s: ZSrc, w: F.F64}
+
+def zins.of(ss: List<&2, ZSrc>, ws: List<&2, F.F64>) -> List<&2, ZIn>:
+  match ss ws:
+    case Con{s, rest} Con{w, more}:
+      ZIn{s, w} <> zins.of(rest, more)
+    case Con{s, rest} Nil{}:
+      ZIn{s, zone()} <> zins.of(rest, Nil{})
+    case Nil{} _:
+      Nil{}
+
+def zin.len(+x: ZIn) -> Nat:
+  match x:
+    case ZIn{+s, w}:
+      zsrc.len(s)
+
+# whether the first input of xs is larger than x
+def zins.gt(+xs: List<&2, ZIn>, +x: ZIn) -> Bool:
+  match xs:
+    case Nil{}:
+      False{}
+    case Con{+y, r}:
+      Nat.is_lt(zin.len(x), zin.len(y))
+
+# xs (from the smallest) with x after the inputs of its size
+def zins.ins(xs: List<&2, ZIn>, before: Bool, +x: ZIn) -> List<&2, ZIn>:
+  match xs before:
+    case Nil{} _:
+      [x]
+    case ys True{}:
+      x <> ys
+    case Con{y, +rest} False{}:
+      y <> zins.ins(rest, zins.gt(rest, x), x)
+
+def zins.sort(xs: List<&2, ZIn>, +acc: List<&2, ZIn>) -> List<&2, ZIn>:
+  match xs:
+    case Nil{}:
+      acc
+    case Con{+x, rest}:
+      zins.sort(rest, zins.ins(acc, zins.gt(acc, x), x))
+
+# a score times a weight (a weight of 1 changes no score: none is a NaN)
+def zmul.of(one: Bool, +w: F.F64, +d: F.F64) -> F.F64:
+  match one:
+    case True{}:
+      d
+    case False{}:
+      F.f64.of(F.fl.mul(F.fmt.d(), F.f64.to(w), F.f64.to(d)))
+
+def zmul(+w: F.F64, +d: F.F64) -> F.F64:
+  zmul.of(F.f64.same(w, zone()), w, d)
+
+# 0 for a NaN
+def znan0(+d: F.F64) -> F.F64:
+  Bool.pick(F.F64, F.f64.is_nan(d), F.F64{0n, 0n}, d)
+
+# a score aggregated with the one a member had (agg 0 SUM, 1 MIN, 2 MAX)
+def zagg.do(+agg: Nat, +t: F.F64, +v: F.F64) -> F.F64:
+  match agg:
+    case 1n:
+      Bool.pick(F.F64, Bool.and(Bool.not(F.f64.is_nan(v)), Cmp.is_lt(F.f64.cmp(v, t))), v, t)
+    case 2n:
+      Bool.pick(F.F64, Bool.and(Bool.not(F.f64.is_nan(v)), Cmp.is_gt(F.f64.cmp(v, t))), v, t)
+    case _:
+      znan0(F.f64.of(F.fl.add(F.fmt.d(), F.f64.to(t), F.f64.to(v))))
+
+# the members and their scores as a sorted set orders them
+def zres.put(xs: List<&2, KV.ZEl>, +t: KV.ZTree) -> KV.ZTree:
+  match xs:
+    case Nil{}:
+      t
+    case Con{KV.ZEl{+m, +d}, rest}:
+      zres.put(rest, KV.zt.add(t, m, d))
+
+def zres(xs: List<&2, KV.ZEl>) -> List<&2, KV.ZEl>:
+  KV.zt.all(zres.put(xs, KV.ZTip{}))
+
+# ZUNION: the scores of every input's members, in a trie
+def zunion.put(cur: Maybe<&2, F.F64>, +agg: Nat, +m: String, +sc: F.F64, acc: KV.Trie<F.F64>) -> KV.Trie<F.F64>:
+  match cur:
+    case Some{+c}:
+      KV.set(F.F64, acc, m, zagg.do(agg, c, sc))
+    case None{}:
+      KV.set(F.F64, acc, m, sc)
+
+def zunion.els(xs: List<&2, KV.ZEl>, +w: F.F64, +agg: Nat, acc: KV.Trie<F.F64>) -> KV.Trie<F.F64>:
+  match xs:
+    case Nil{}:
+      acc
+    case Con{KV.ZEl{+m, +d}, rest}:
+      +a = acc
+      zunion.els(rest, w, agg, zunion.put(KV.get(F.F64, a, m), agg, m, znan0(zmul(w, d)), a))
+
+def zunion.go(ins: List<&2, ZIn>, +agg: Nat, acc: KV.Trie<F.F64>) -> KV.Trie<F.F64>:
+  match ins:
+    case Nil{}:
+      acc
+    case Con{ZIn{+s, +w}, rest}:
+      zunion.go(rest, agg, zunion.els(zsrc.els(s), w, agg, acc))
+
+def zunion.kv(+t: KV.Trie<F.F64>, ks: List<&2, String>) -> List<&2, KV.ZEl>:
+  match ks:
+    case Nil{}:
+      Nil{}
+    case Con{+k, rest}:
+      KV.ZEl{k, zadd.num(KV.get(F.F64, t, k))} <> zunion.kv(t, rest)
+
+def zunion(ins: List<&2, ZIn>, +agg: Nat) -> List<&2, KV.ZEl>:
+  +t = zunion.go(ins, agg, KV.empty(F.F64))
+  zres(zunion.kv(t, KV.keys(F.F64, t, 0n)))
+
+def zinter.with(v: Maybe<&2, F.F64>, +agg: Nat, +w: F.F64, +c: F.F64) -> Maybe<&2, F.F64>:
+  match v:
+    case Some{+x}:
+      Some{zagg.do(agg, c, zmul(w, x))}
+    case None{}:
+      None{}
+
+# ZINTER: a member's score through the other inputs, none when one of
+# them does not hold it
+def zinter.through(ins: List<&2, ZIn>, +agg: Nat, +m: String, sc: Maybe<&2, F.F64>) -> Maybe<&2, F.F64>:
+  match ins sc:
+    case _ None{}:
+      None{}
+    case Nil{} s:
+      s
+    case Con{ZIn{+s, +w}, rest} Some{+c}:
+      zinter.through(rest, agg, m, zinter.with(zsrc.score(m, s), agg, w, c))
+
+def zinter.keep(m: Maybe<&2, F.F64>, k: String, rest: List<&2, KV.ZEl>) -> List<&2, KV.ZEl>:
+  match m:
+    case Some{d}:
+      KV.ZEl{k, d} <> rest
+    case None{}:
+      rest
+
+def zinter.els(xs: List<&2, KV.ZEl>, +w: F.F64, +others: List<&2, ZIn>, +agg: Nat) -> List<&2, KV.ZEl>:
+  match xs:
+    case Nil{}:
+      Nil{}
+    case Con{KV.ZEl{+m, +d}, rest}:
+      zinter.keep(zinter.through(others, agg, m, Some{znan0(zmul(w, d))}), m, zinter.els(rest, w, others, agg))
+
+def zinter.go(ins: List<&2, ZIn>, +agg: Nat) -> List<&2, KV.ZEl>:
+  match ins:
+    case Nil{}:
+      Nil{}
+    case Con{ZIn{+s, +w}, +rest}:
+      zinter.els(zsrc.els(s), w, rest, agg)
+
+def zinter(ins: List<&2, ZIn>, +agg: Nat) -> List<&2, KV.ZEl>:
+  zres(zinter.go(ins, agg))
+
+# ZINTERCARD: how many members ZINTER answers, counted up to lim (0: all)
+def zcard.els(xs: List<&2, KV.ZEl>, stop: Bool, +others: List<&2, ZIn>, +lim: Nat, +n: Nat) -> Nat:
+  match xs stop:
+    case _ True{}:
+      n
+    case Nil{} _:
+      n
+    case Con{KV.ZEl{+m, d}, rest} False{}:
+      +n2 = Bool.pick(Nat, Maybe.is_some(&2, F.F64, zinter.through(others, 0n, m, Some{zone()})), Nat.add(n, 1n), n)
+      zcard.els(rest, Bool.and(Nat.is_lt(0n, lim), Nat.is_le(lim, n2)), others, lim, n2)
+
+def zcard.go(ins: List<&2, ZIn>, +lim: Nat) -> Nat:
+  match ins:
+    case Nil{}:
+      0n
+    case Con{ZIn{+s, w}, +rest}:
+      zcard.els(zsrc.els(s), False{}, rest, lim, 0n)
+
+# ZDIFF: the members of the first input no other holds
+def zdiff.any(ins: List<&2, ZIn>, +m: String) -> Bool:
+  match ins:
+    case Nil{}:
+      False{}
+    case Con{ZIn{+s, w}, rest}:
+      Bool.or(Maybe.is_some(&2, F.F64, zsrc.score(m, s)), zdiff.any(rest, m))
+
+def zdiff.els(xs: List<&2, KV.ZEl>, +others: List<&2, ZIn>) -> List<&2, KV.ZEl>:
+  match xs:
+    case Nil{}:
+      Nil{}
+    case Con{KV.ZEl{+m, +d}, rest}:
+      zinter.keep(Bool.pick(Maybe<&2, F.F64>, zdiff.any(others, m), None{}, Some{d}), m, zdiff.els(rest, others))
+
+def zdiff(ins: List<&2, ZIn>) -> List<&2, KV.ZEl>:
+  match ins:
+    case Nil{}:
+      Nil{}
+    case Con{ZIn{+s, w}, +rest}:
+      zres(zdiff.els(zsrc.els(s), rest))
+
+# the options' WEIGHTS (none given: none), AGGREGATE, LIMIT, whether
+# they answer the scores, and their error, if they made one
+def zagg.ws(o: ZAgg) -> List<&2, F.F64>:
+  match o:
+    case ZAgg{ws, agg, lim}:
+      ws
+    case ZAggScores{o}:
+      zagg.ws(o)
+    case ZAggBad{r}:
+      Nil{}
+
+def zagg.agg(o: ZAgg) -> Nat:
+  match o:
+    case ZAgg{ws, agg, lim}:
+      agg
+    case ZAggScores{o}:
+      zagg.agg(o)
+    case ZAggBad{r}:
+      0n
+
+def zagg.lim(o: ZAgg) -> Nat:
+  match o:
+    case ZAgg{ws, agg, lim}:
+      lim
+    case ZAggScores{o}:
+      zagg.lim(o)
+    case ZAggBad{r}:
+      0n
+
+def zagg.sc(o: ZAgg) -> Bool:
+  match o:
+    case ZAggScores{o}:
+      True{}
+    case _:
+      False{}
+
+def zagg.bad(o: ZAgg) -> Maybe<&2, Reply>:
+  match o:
+    case ZAggBad{r}:
+      Some{r}
+    case _:
+      None{}
+
+# the members an operation makes of the sources, with its options
+def zop.els(op: ZSetK, ss: List<&2, ZSrc>) -> List<&2, KV.ZEl>:
+  match op:
+    case ZKUnion{+o}:
+      zunion(zins.sort(zins.of(ss, zagg.ws(o)), Nil{}), zagg.agg(o))
+    case ZKInter{+o}:
+      zinter(zins.sort(zins.of(ss, zagg.ws(o)), Nil{}), zagg.agg(o))
+    case ZKDiff{o}:
+      zdiff(zins.of(ss, Nil{}))
+    case ZKCard{o}:
+      Nil{}
+
+# the options' error, if they made one
+def zop.bad(+op: ZSetK) -> Maybe<&2, Reply>:
+  match op:
+    case ZKUnion{o}:
+      zagg.bad(o)
+    case ZKInter{o}:
+      zagg.bad(o)
+    case ZKDiff{o}:
+      zagg.bad(o)
+    case ZKCard{o}:
+      zagg.bad(o)
+
+# whether an operation answers the scores (WITHSCORES)
+def zop.sc(+op: ZSetK) -> Bool:
+  match op:
+    case ZKUnion{o}:
+      zagg.sc(o)
+    case ZKInter{o}:
+      zagg.sc(o)
+    case ZKDiff{o}:
+      zagg.sc(o)
+    case ZKCard{o}:
+      False{}
+
+# ZINTERCARD's LIMIT (none for another operation)
+def zop.lim(+op: ZSetK) -> Maybe<&2, Nat>:
+  match op:
+    case ZKCard{o}:
+      Some{zagg.lim(o)}
+    case _:
+      None{}
+
+def zop.ok(lim: Maybe<&2, Nat>, +op: ZSetK, ss: List<&2, ZSrc>) -> Reply:
+  match lim:
+    case Some{+l}:
+      r_int(zcard.go(zins.sort(zins.of(ss, Nil{}), Nil{}), l))
+    case None{}:
+      RArray{zels(zop.els(op, ss), zop.sc(op))}
+
+def zop.of(bad: Maybe<&2, Reply>, +op: ZSetK, ss: List<&2, ZSrc>) -> Reply:
+  match bad:
+    case Some{r}:
+      r
+    case None{}:
+      zop.ok(zop.lim(op), op, ss)
+
+def zop.reply(+op: ZSetK, g: ZGot) -> Reply:
+  match g:
+    case ZGot{ss}:
+      zop.of(zop.bad(op), op, ss)
+    case ZGotWrong{}:
+      e_wrongtype()
+
+# the pairs of a STORE's ZADD: each score as Redis writes a double, and
+# its member
+def zstore.pairs(xs: List<&2, KV.ZEl>) -> List<&2, ZPair>:
+  match xs:
+    case Nil{}:
+      Nil{}
+    case Con{KV.ZEl{m, +d}, rest}:
+      ZPair{F.f64.show(d), m} <> zstore.pairs(rest)
+
+def zstore.put(+n: Nat, ps: List<&2, ZPair>, +d: String, db: Db) -> Reply & Db:
+  (r_int(n), db_of(db.upd(db, d, UZset{ZWNew{zopts.none(), ps}})))
+
+def zstore.of(+xs: List<&2, KV.ZEl>, +d: String, db: Db) -> Reply & Db:
+  match xs:
+    case Nil{}:
+      (r_int(0n), db_of(db.del(db, [d])))
+    case Con{x, rest}:
+      zstore.put(List.length(&2, KV.ZEl, xs), zstore.pairs(xs), d, db)
+
+def zstore.ok(bad: Maybe<&2, Reply>, +op: ZSetK, ss: List<&2, ZSrc>, +d: String, db: Db) -> Reply & Db:
+  match bad:
+    case Some{r}:
+      (r, db)
+    case None{}:
+      zstore.of(zop.els(op, ss), d, db)
+
+def zstore.do(g: ZGot, +op: ZSetK, +d: String, db: Db) -> Reply & Db:
+  match g:
+    case ZGot{ss}:
+      zstore.ok(zop.bad(op), op, ss, d, db)
+    case ZGotWrong{}:
+      (e_wrongtype(), db)
+
+def db.zstore(db: Db, +op: ZSetK, +d: String, ks: List<&2, String>) -> Reply & Db:
+  +x = db
+  zstore.do(zsrcs.at(ks, db.now(x), db.trie(x)), op, d, x)
+
+# ZRANGESTORE: the range of the sorted set at src, in the order ZRANGE
+# answers it, set at dst as a STORE sets it (a src not there: none);
+# WRONGTYPE for a src of another kind
+def zrs.of(m: Maybe<&2, KV.Val>, q: ZQ, +d: String, db: Db) -> Reply & Db:
+  match m:
+    case None{}:
+      zstore.of(Nil{}, d, db)
+    case Some{KV.VColl{KV.CZset{+z}}}:
+      zstore.of(zq.run(q, z), d, db)
+    case Some{v}:
+      (e_wrongtype(), db)
+
+def db.zrangestore(db: Db, +d: String, +s: String, q: ZQ) -> Reply & Db:
+  +x = db
+  zrs.of(KV.read(KV.Val, db.trie(x), s, db.now(x)), q, d, x)
+
+# ZMPOP: as LMPOP, from the first of the keys there at now: its elements
+# popped (ZWPopN), answered with the key, each element as a pair of its
+# member and its score
+def zmpop.pairs(xs: List<&2, Reply>) -> List<&2, Reply>:
+  match xs:
+    case Con{m, Con{s, rest}}:
+      RArray{[m, s]} <> zmpop.pairs(rest)
+    case _:
+      Nil{}
+
+def zmpop.reply(+k: String, r: Reply) -> Reply:
+  match r:
+    case RArray{xs}:
+      RArray{[RBulk{k}, RArray{zmpop.pairs(xs)}]}
+    case _:
+      r
+
+def zmpop.out(+k: String, r: Reply & Db) -> Reply & Db:
+  (x, d) = r
+  (zmpop.reply(k, x), d)
+
+def zmpop.at(m: Maybe<&2, String>, +max: Bool, c: String, db: Db) -> Reply & Db:
+  match m:
+    case Some{+k}:
+      zmpop.out(k, db.upd(db, k, UZset{ZWPopN{max, c}}))
+    case None{}:
+      (RNullA{}, db)
+
+def db.zmpop(db: Db, ks: List<&2, String>, +max: Bool, c: String) -> Reply & Db:
+  +x = db
+  +k = ks
+  zmpop.at(lmpop.first(k, lmpop.head(k, x), x), max, c, x)
+
 def exec(cmd: Cmd, db: Db) -> Reply & Db:
   match cmd:
     case Ping{}:
@@ -11854,6 +14876,15 @@ def exec(cmd: Cmd, db: Db) -> Reply & Db:
       db.sstore(db, op, d, ks)
     case SMv{+s, +d, +w}:
       db.smove(db, s, d, w)
+    case ZOp{+op, +ks}:
+      +d = db
+      (zop.reply(op, zsrcs.at(ks, db.now(d), db.trie(d))), d)
+    case ZStore{+op, +d, ks}:
+      db.zstore(db, op, d, ks)
+    case ZRangeStore{+d, +s, q}:
+      db.zrangestore(db, d, s, q)
+    case ZMPop{ks, +max, c}:
+      db.zmpop(db, ks, max, c)
 
 # a batch of commands, in order: the replies in order, and the database
 # after the last

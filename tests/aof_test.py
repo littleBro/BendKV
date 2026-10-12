@@ -20,8 +20,9 @@ from diff_test import NOW_S, Conn, rnd_cmd
 
 
 # a key's value as the dump shows it: a string's bytes (MGET's), a hash's
-# pairs in order of their fields, a list's elements in order, or a set's
-# members in order with its encoding (MGET answers nil for a key of
+# pairs in order of their fields, a list's elements in order, a set's
+# members in order with its encoding, or a sorted set's members and
+# scores in its order, with its encoding (MGET answers nil for a key of
 # another type)
 def value(c, k, v):
     if v[1] is not None:
@@ -37,6 +38,11 @@ def value(c, k, v):
         kind, xs = c.reply()
         enc = c.reply()[1].decode()
         return "set:" + enc + ":" + ",".join(sorted(x.hex() for _, x in xs))
+    if t == b"zset":
+        c.send([[b"ZRANGE", k, b"0", b"-1", b"WITHSCORES"], [b"OBJECT", b"ENCODING", k]])
+        kind, xs = c.reply()
+        enc = c.reply()[1].decode()
+        return "zset:" + enc + ":" + ",".join(x.hex() for _, x in xs)
     c.send([[b"HGETALL", k]])
     kind, xs = c.reply()
     xs = [x for _, x in xs]
@@ -142,6 +148,31 @@ def main():
             batch.append([r.choice([b"SINTERSTORE", b"SUNIONSTORE", b"SDIFFSTORE"]), b"u:%d" % i, b"s:%d" % i, b"t:%d" % i])
             if i % 900 == 0:
                 batch.append([b"PEXPIREAT", b"s:%d" % i, b"%d" % (NOW_S * 1000 + r.randint(10**6, 10**9))])
+            # sorted sets: small ones and now and then one past a listpack
+            # (300 members, or a long one), with ZADD's options, changed
+            # by ZINCRBY, ZREM, the ZREMRANGEs and the pops, combined
+            # into another (onto a key there: the script of a new one),
+            # a range of them stored, and popped from by ZMPOP
+            nz = 300 if i % 3000 == 0 else r.randint(1, 6)
+            batch.append([b"ZADD", b"z:%d" % i] + [x for j in range(nz) for x in
+                                                  (r.choice([b"%d" % r.randint(-9, 9), b"%.3f" % r.uniform(-9, 9), b"-0", b"inf"]),
+                                                   b"m%d" % r.randint(0, 2 * nz))])
+            batch.append([b"ZADD", b"z:%d" % i] + r.choice([[b"NX"], [b"XX", b"CH"], [b"GT"], [b"LT", b"CH"], []]) +
+                         [b"%d" % r.randint(-9, 9), b"m%d" % r.randint(0, 9)])
+            batch.append([b"ZADD", b"z:%d" % i, b"INCR", b"%.2f" % r.uniform(-3, 3), b"m1"])
+            batch.append([b"ZINCRBY", b"z:%d" % i, b"%d" % r.randint(-5, 5), b"m2"])
+            batch.append([b"ZADD", b"y:%d" % i, b"1", b"m" * r.choice([3, 70]), b"2", b"m2"])
+            batch.append([b"ZREM", b"z:%d" % i, b"m3", b"nope"])
+            batch.append(r.choice([[b"ZREMRANGEBYRANK", b"z:%d" % i, b"0", b"0"],
+                                   [b"ZREMRANGEBYSCORE", b"z:%d" % i, b"(5", b"+inf"],
+                                   [b"ZREMRANGEBYLEX", b"y:%d" % i, b"[a", b"(n"],
+                                   [b"ZPOPMIN", b"z:%d" % i], [b"ZPOPMAX", b"z:%d" % i, b"2"]]))
+            batch.append([r.choice([b"ZUNIONSTORE", b"ZINTERSTORE", b"ZDIFFSTORE"]), b"w:%d" % (i - i % 300), b"2",
+                          b"z:%d" % i, b"y:%d" % i] + r.choice([[], [b"WEIGHTS", b"2", b"-1"], [b"AGGREGATE", b"MAX"]]))
+            batch.append([b"ZRANGESTORE", b"v:%d" % i, b"z:%d" % i, b"0", b"2"] + r.choice([[], [b"REV"]]))
+            batch.append([b"ZMPOP", b"2", b"nope", b"y:%d" % i, r.choice([b"MIN", b"MAX"])])
+            if i % 800 == 0:
+                batch.append([b"PEXPIREAT", b"z:%d" % i, b"%d" % (NOW_S * 1000 + r.randint(10**6, 10**9))])
             c.send(batch)
             for _ in batch:
                 c.reply()

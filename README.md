@@ -12,11 +12,11 @@ with it. Under pipelined load it serves GET at 1.6×, SET at 1.8× and INCR at 1
 throughput of Redis 7.0.15 on the same machine, with half its memory for small values.
 
 > **Status: research prototype.** BendKV implements a subset of Redis (strings, hashes,
-> lists, sets and their times to live, the keyspace, several databases, connection
-> commands, an append-only file). The goal now is a drop-in
+> lists, sets, sorted sets and their times to live, the keyspace, several databases,
+> connection commands, an append-only file). The goal now is a drop-in
 > replacement for a single Redis node, measured by Redis's own test suite: of the 1,673
-> tests Redis 7.0.15 passes against a server it did not start, BendKV passes 552, and 536
-> of the 800 in what it implements ([docs/COMPATIBILITY.md](docs/COMPATIBILITY.md)). Do
+> tests Redis 7.0.15 passes against a server it did not start, BendKV passes 733, and 726
+> of the 1,089 in what it implements ([docs/COMPATIBILITY.md](docs/COMPATIBILITY.md)). Do
 > not use it for data you cannot lose.
 
 BendKV is an independent project. It is not affiliated with Higher Order Company or the
@@ -50,15 +50,15 @@ is the trie's size is not proved yet.
 |---|---:|---|
 | Map | 11 | the trie is a finite map from keys to a value and a time: after any sequence of writes (a value with a time, a value with its time kept, a time alone, a deletion), every key holds what was last written to it, with no stale, lost or foreign entries; a read sees a key only until its time |
 | Keys | 2 | key comparison is exactly string equality, down to the bits of `U32` |
-| Commands | 24 | no command changes a key it does not write, neither its value nor its time (`frame`); reads keep the database (the commands of hashes, lists and sets are reads and updates of their key, LMOVE, LMPOP, SMOVE and the operations of several sets of their keys, so these laws and those below hold of them); a key whose time has passed is there for no command, and the sweep of expired keys deletes no key that is there; GET, DEL, APPEND, SETRANGE, SETNX, INCR, GETDEL, PERSIST, PTTL, SET with KEEPTTL, RENAME, MSETNX and BITOP behave as specified, on keys of the types they take (SET, SETNX, the times and the key commands take any), a key they add counted; a pipelined batch runs exactly as its commands in order; the cache hints before a batch change nothing |
-| Commuting | 5 | commands on different keys commute: replies and key contents are the same in either order, and adjacent independent commands in a batch can be swapped, when neither writes a key the other's writes depend on (RENAME moves a value from one key to another, MSETNX sets its keys only when none is there, BITOP sets its destination from its sources, LMOVE pushes onto its destination what it pops from its source, LMPOP pops from the first of its keys that is there, a STORE of a set operation sets its destination to what its sources make, SMOVE moves a member from its source to its destination) |
+| Commands | 24 | no command changes a key it does not write, neither its value nor its time (`frame`); reads keep the database (the commands of hashes, lists, sets and sorted sets are reads and updates of their key, LMOVE, LMPOP, SMOVE, ZMPOP and the operations of several sets and sorted sets of their keys, so these laws and those below hold of them); a key whose time has passed is there for no command, and the sweep of expired keys deletes no key that is there; GET, DEL, APPEND, SETRANGE, SETNX, INCR, GETDEL, PERSIST, PTTL, SET with KEEPTTL, RENAME, MSETNX and BITOP behave as specified, on keys of the types they take (SET, SETNX, the times and the key commands take any), a key they add counted; a pipelined batch runs exactly as its commands in order; the cache hints before a batch change nothing |
+| Commuting | 5 | commands on different keys commute: replies and key contents are the same in either order, and adjacent independent commands in a batch can be swapped, when neither writes a key the other's writes depend on (RENAME moves a value from one key to another, MSETNX sets its keys only when none is there, BITOP sets its destination from its sources, LMOVE pushes onto its destination what it pops from its source, LMPOP pops from the first of its keys that is there, a STORE of a set operation sets its destination to what its sources make, SMOVE moves a member from its source to its destination, a STORE of a sorted-set operation or of a range sets its destination to what its sources or its source make, ZMPOP pops from the first of its keys that is there) |
 | Persistence | 8 | logging changes no reply; the file reads back as written, times included; after any history, each batch at its own time, on any of the databases, the server restores exactly the databases it held; a file cut by a crash at any byte restores the databases after some prefix of its acts, never a partial one |
 | Databases | 6 | SELECT changes no database and focuses the one it names; SWAPDB puts each of two databases in the other's place; FLUSHALL empties them all; MOVE takes a key's entry, its value and its time, out of the selected database and sets it in the other; COPY sets a key's entry at another key, in the selected database or another, when that key is not there or REPLACE is given |
 | Sessions | 5 | however the server dispatches a batch, it runs as its commands in order; a batch changes the databases and the log as its executed commands do; a client that has not authenticated against a password cannot read or change any key |
 | Configuration | 3 | a CONFIG SET that fails changes nothing; one that succeeds makes the new requirepass the password; after a CONFIG SET of a parameter, CONFIG GET finds the value its check gave |
 
-`make check` takes about 4 s; `make verdict` rechecks every proof in the BendTT kernel
-in about 40 s.
+`make check` takes about 15 s; `make verdict` rechecks every proof in the BendTT kernel
+in about a minute.
 
 **Trust boundary.** The proofs cover `src/map.bend`, `src/redis.bend`, `src/batch.bend`,
 `src/aof.bend`, `src/session.bend` and `src/config.bend`. Trusted without proof: the Bend
@@ -126,7 +126,7 @@ translation stays in the trusted base.
   one EVAL of a fixed script that deletes the key and sets the pairs, which Redis runs as
   it loads the file and BendKV reads back (Redis itself logs a MULTI with a DEL and the
   HSET, two entries a crash could part). BendKV runs no other Lua but the like scripts of
-  lists and sets, below.
+  lists, sets and sorted sets, below.
 - **Lists:** LPUSH, RPUSH, LPUSHX, RPUSHX, LPOP and RPOP (with a count), LLEN, LINDEX,
   LRANGE, LSET, LINSERT, LREM, LTRIM, LPOS (RANK, COUNT, MAXLEN, read as Redis 7.0.15
   reads them, a RANK of LLONG_MIN included), LMOVE, RPOPLPUSH and LMPOP, their arguments
@@ -156,6 +156,28 @@ translation stays in the trusted base.
   held an entry (a STORE's destination, a key whose time had passed) is logged as the
   EVAL of the hash's script with the SADD, and SMOVE onto a key whose time had passed as
   one EVAL of a third fixed script that deletes the destination and runs the SMOVE.
+- **Sorted sets:** ZADD (NX, XX, GT, LT, CH, INCR), ZINCRBY, ZREM, ZCARD, ZSCORE, ZMSCORE,
+  ZRANK, ZREVRANK, ZCOUNT, ZLEXCOUNT, ZRANGE (BYSCORE, BYLEX, REV, LIMIT, WITHSCORES),
+  ZRANGEBYSCORE, ZREVRANGEBYSCORE, ZRANGEBYLEX, ZREVRANGEBYLEX, ZREVRANGE,
+  ZREMRANGEBYRANK, ZREMRANGEBYSCORE, ZREMRANGEBYLEX, ZPOPMIN and ZPOPMAX (with a count),
+  ZMPOP, ZRANDMEMBER (a count, repeating when negative, WITHSCORES; picked with the
+  server's random numbers), ZSCAN, ZUNION, ZINTER, ZDIFF, their STOREs, ZINTERCARD
+  (LIMIT) and ZRANGESTORE, their arguments and errors read where and as Redis reads them.
+  Scores are doubles, read, written, compared and added as C's are (`src/float.bend`),
+  with Redis's rules for infinities. A sorted set is one weight-balanced tree of its
+  elements in Redis's order, by score and then member, and past a listpack's limits (128
+  elements, members of 64 bytes) the same tree with a trie of its members, for good, as
+  Redis turns a listpack into a skiplist: a small one answers as Redis's listpack does
+  (no `-0` score, a range by member walked from its first element, ZSCAN whole with
+  cursor 0, its integer scores as digits). OBJECT ENCODING answers `listpack` or
+  `skiplist`, MEMORY USAGE estimates a sorted set's bytes, and a key never holds an
+  empty one. A sorted-set write is logged as the command the client sent (ZINCRBY as
+  ZADD INCR, ZADD's options in one order, ZMPOP as the ZPOPMIN or ZPOPMAX of the key it
+  took from; the removal of the last elements as a DEL); a sorted set made where a key
+  held an entry (a STORE's destination, a key whose time had passed) is logged as one
+  EVAL of a fourth fixed script that deletes the key and runs the ZADD of its elements. A
+  STORE of more than 128 elements loses the sign of a `-0` score where Redis keeps it.
+  The blocking BZPOPMIN, BZPOPMAX and BZMPOP are not there yet.
 - **Times to live:** EXPIRE, PEXPIRE, EXPIREAT and PEXPIREAT (with NX, XX, GT, LT), TTL,
   PTTL, EXPIRETIME, PEXPIRETIME, PERSIST; SET with NX, XX, GET, EX, PX, EXAT, PXAT and
   KEEPTTL; SETEX, PSETEX, GETEX (EX, PX, EXAT, PXAT, PERSIST) and GETDEL. Times are read
@@ -214,7 +236,7 @@ translation stays in the trusted base.
   with its DB and REPLACE spelled out (`redis-check-aof` accepts it, and Redis loads it;
   BendKV loads Redis's, COPY as the client sent it), fsync `always`, `everysec` or `no`.
 
-Not yet: sorted sets, streams and the other types, the blocking commands, Lua
+Not yet: streams and the other types (HyperLogLog, geo), the blocking commands, Lua
 scripts, MULTI/EXEC, pub/sub, RESP3, timing of commands
 (usec in INFO commandstats, latencystats), CONFIG REWRITE (it answers as Redis does without a configuration file),
 RDB files. Integers, and times in ms, are limited to 14 digits.
@@ -299,7 +321,11 @@ whose time has passed, and at random, the fields of a hashtable compared as sets
 has passed, and at random, with moves between a few keys), sets (each command at its
 edges, intsets on both sides of 512 members and hashtables of up to 20,000, moves and
 STOREs onto keys whose time has passed, and at random, the members of a hashtable
-compared as sets and each random pick checked against the set it came from),
+compared as sets and each random pick checked against the set it came from), sorted sets
+(each command at its edges, sorted sets of up to 20,000 elements on both sides of a
+listpack's limits, STOREs and pops of keys whose time has passed, and at random, ZSCAN's
+walk compared by its pairs and each random pick checked against the sorted set it came
+from),
 robustness and concurrency checks,
 restarts from the append-only file (every database read back, including after a
 truncated tail), disk failures
@@ -326,7 +352,7 @@ src/        the server
   startup.bend  the command line and the configuration file        tested
   server.bend   TCP, connections, the database actor, the log      tested
 proof/      LAWS.bend (the laws), PROOF.bend (their proofs), SPEC.bend (the commands on the trie alone)
-tests/      float, start, differential, expiry, protocol, session, CONFIG, INFO, COMMAND, SCAN, BITFIELD, hash, list, set, robustness, concurrency, AOF tests
+tests/      float, start, differential, expiry, protocol, session, CONFIG, INFO, COMMAND, SCAN, BITFIELD, hash, list, set, sorted set, robustness, concurrency, AOF tests
 bench/      in-process benchmarks of the map, the core and channels
 tools/      measurement scripts, the runner of Redis's test suite, and the generators of
             the trie, of the parameter table and of the command table, with the facts

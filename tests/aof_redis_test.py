@@ -30,7 +30,12 @@ too, as the script of the members they make), and SMOVE onto such a key
 as a script that deletes the destination and runs the SMOVE; SPOP runs
 both ways only where its picks are the whole set. Redis 7 keeps its
 file in parts, a base and increments (appendonlydir): BendKV reads them
-joined, the base written without an RDB preamble.
+joined, the base written without an RDB preamble. A sorted set is
+logged as the commands that changed it (ZINCRBY as ZADD with INCR, ZMPOP
+as the ZPOPMIN or ZPOPMAX of the key it took from), and a sorted set a
+STORE makes, or a ZADD where a key whose time had passed still lay, as a
+script that deletes the key and runs ZADD with the options before each
+thousand words of pairs; a file of the scripts is read by both alike.
 
     python3 tests/aof_redis_test.py --bin build/bendkv --bendkv 6380 --redis 6391 --dir build/aofio
 """
@@ -109,6 +114,21 @@ CMDS = [
     [b"PEXPIRE", b"ex7", b"3"], [b"HSET", b"ex8", b"f", b"v"], [b"PEXPIRE", b"ex8", b"3"], [b"SLEEP"],
     [b"SADD", b"ex5", b"n"], [b"SADD", b"srcs", b"1", b"2", b"3"], [b"SMOVE", b"srcs", b"ex6", b"1"],
     [b"SUNIONSTORE", b"ex7", b"srcs"], [b"SMOVE", b"srcs", b"ex8", b"2"],
+    [b"ZADD", b"zs", b"1", b"a", b"2", b"b", b"3", b"c"], [b"zadd", b"zs", b"NX", b"CH", b"5", b"a", b"4", b"d"],
+    [b"ZADD", b"zs", b"XX", b"GT", b"10", b"b"], [b"ZADD", b"zs", b"INCR", b"2.5", b"c"], [b"ZINCRBY", b"zs", b"-1", b"d"],
+    [b"ZADD", b"zs", b"LT", b"0", b"e", b"-1", b"a"], [b"ZREM", b"zs", b"b", b"nope"], [b"ZADD", b"zs", b"-0", b"z"],
+    [b"ZADD", b"zs2"] + [x for j in range(300) for x in (b"%d" % (j % 7), b"m%d" % j)],
+    [b"ZREMRANGEBYRANK", b"zs2", b"0", b"9"], [b"ZREMRANGEBYSCORE", b"zs2", b"(5", b"+inf"],
+    [b"ZADD", b"zl", b"0", b"a", b"0", b"b", b"0", b"c", b"0", b"d"], [b"ZREMRANGEBYLEX", b"zl", b"[b", b"(d"],
+    [b"ZPOPMIN", b"zs"], [b"ZPOPMAX", b"zs2", b"3"], [b"ZUNIONSTORE", b"zu", b"2", b"zs", b"zs2", b"WEIGHTS", b"2", b"1"],
+    [b"ZINTERSTORE", b"zi", b"2", b"zs2", b"zl"], [b"ZDIFFSTORE", b"zd", b"2", b"zs2", b"zs"],
+    [b"ZRANGESTORE", b"zr", b"zs2", b"0", b"4", b"REV"], [b"ZMPOP", b"2", b"nope", b"zl", b"MIN", b"COUNT", b"10"],
+    [b"ZADD", b"zlong", b"1", b"z" * 70, b"-0", b"y"], [b"PEXPIREAT", b"zs", b"%d" % (T + 14)],
+    [b"COPY", b"zs", b"zs3", b"DB", b"2"], [b"RENAME", b"zu", b"zu2"], [b"SET", b"zstr", b"x"],
+    [b"ZUNIONSTORE", b"zstr", b"1", b"zs"], [b"SADD", b"zsrc", b"a", b"q"], [b"ZINTERSTORE", b"zi2", b"2", b"zs", b"zsrc"],
+    [b"ZINTERSTORE", b"zi2", b"2", b"zs", b"nope"], [b"ZRANGESTORE", b"zr", b"nope", b"0", b"-1"],
+    [b"ZADD", b"ex9", b"1", b"a"], [b"PEXPIRE", b"ex9", b"3"], [b"ZADD", b"ex10", b"1", b"a"], [b"PEXPIRE", b"ex10", b"3"],
+    [b"SLEEP"], [b"ZADD", b"ex9", b"NX", b"2", b"b", b"3", b"b"], [b"ZUNIONSTORE", b"ex10", b"1", b"zsrc"],
 ]
 
 # a file with the entries BendKV logs for a hash, a list or a set made
@@ -120,6 +140,9 @@ SCRIPT = (b"redis.call('del',KEYS[1]) local n=#ARGV for i=2,n,1000 do redis.call
           b"unpack(ARGV,i,math.min(i+999,n))) end return 0")
 MOVE = b"redis.call('del',KEYS[2]) return redis.call('lmove',KEYS[1],KEYS[2],ARGV[1],ARGV[2])"
 SMOVE = b"redis.call('del',KEYS[2]) return redis.call('smove',KEYS[1],KEYS[2],ARGV[1])"
+ZSCRIPT = (b"redis.call('del',KEYS[1]) local o=tonumber(ARGV[1]) local n=#ARGV for i=o+2,n,1000 do local a={} "
+           b"for j=2,o+1 do a[#a+1]=ARGV[j] end for j=i,math.min(i+999,n) do a[#a+1]=ARGV[j] end "
+           b"redis.call('zadd',KEYS[1],unpack(a)) end return 0")
 
 
 def entry(*a):
@@ -142,7 +165,12 @@ def eval_file(path):
                 entry(b"EVAL", SCRIPT, b"1", b"sbig", b"SADD", *[b"m%d" % j for j in range(2500)]) +
                 entry(b"EVAL", SCRIPT, b"1", b"sint", b"SADD", *[b"%d" % j for j in range(300)]) +
                 entry(b"EVAL", SCRIPT, b"1", b"h", b"SADD", b"c") + entry(b"SADD", b"ssrc", b"1", b"2", b"3") +
-                entry(b"EVAL", SMOVE, b"2", b"ssrc", b"sk", b"1") + entry(b"EVAL", SMOVE, b"2", b"ssrc", b"k", b"2"))
+                entry(b"EVAL", SMOVE, b"2", b"ssrc", b"sk", b"1") + entry(b"EVAL", SMOVE, b"2", b"ssrc", b"k", b"2") +
+                entry(b"SET", b"zk", b"str") + entry(b"EVAL", ZSCRIPT, b"1", b"zk", b"0", b"1", b"a", b"2", b"b") +
+                entry(b"EVAL", ZSCRIPT, b"1", b"zbig", b"0", *[x for j in range(1500) for x in (b"%d" % (j % 9), b"m%d" % j)]) +
+                entry(b"EVAL", ZSCRIPT, b"1", b"zopt", b"2", b"NX", b"CH", b"1", b"a", b"2", b"a", b"-0", b"b") +
+                entry(b"EVAL", ZSCRIPT, b"1", b"h", b"1", b"INCR", b"5", b"x") +
+                entry(b"EVAL", ZSCRIPT, b"1", b"zgt", b"1", b"GT", *[x for j in range(1200) for x in (b"%d" % j, b"m%d" % (j % 700))]))
 
 
 # a server started, once it answers PONG (Redis answers LOADING while it
@@ -256,7 +284,7 @@ def main():
         kb = keyspace(c)
     finally:
         stop(p)
-    same("BendKV reads the scripts of a new hash, list and set and of the moves as Redis runs them", kb, kr)
+    same("BendKV reads the scripts of a new hash, list, set and sorted set and of the moves as Redis runs them", kb, kr)
     print("ALL OK")
 
 

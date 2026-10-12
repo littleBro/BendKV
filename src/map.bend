@@ -15,6 +15,7 @@
 # written by tools/gen_trie.py.
 
 import Base
+import ./float.bend as F
 
 # Types
 # -----
@@ -75,11 +76,13 @@ type Val is Data:
   VColl{c: Coll}
 
 # a collection: a hash, its fields and their values (Hash), a list, its
-# elements in order (Deq), or a set, its members (Mems)
+# elements in order (Deq), a set, its members (Mems), or a sorted set,
+# its members and their scores (Zset)
 type Coll is Data:
   CHash{h: Hash}
   CList{l: Deq}
   CMems{s: Mems}
+  CZset{z: Zset}
 
 # a hash: a field and its value
 type HPair is Data:
@@ -109,6 +112,22 @@ type Deq is Data:
 type Mems is Data:
   MInts{n: Nat, xs: List<&2, String>}
   MBig{n: Nat, t: Trie<Unit>}
+
+# A sorted set's elements in order (Sorted sets, below), as a
+# weight-balanced tree: a tip, or a node of n elements, its element (a
+# member m and its score d) after those of l and before those of r
+type ZTree is Data:
+  ZTip{}
+  ZBin{n: Nat, m: String, d: F.F64, l: ZTree, r: ZTree}
+
+# A sorted set, as Redis 7.0 keeps one: a small one (at most 128
+# elements, each member of at most 64 bytes) as a listpack, its tree
+# alone; any other as a skiplist with a hashtable of its members, its
+# tree and a trie of its members' scores, which it stays (Sorted sets,
+# below)
+type Zset is Data:
+  ZSmall{tr: ZTree}
+  ZBig{tr: ZTree, t: Trie<F.F64>}
 
 # Keys
 # ----
@@ -1736,3 +1755,532 @@ def mems.all(+s: Mems) -> List<&2, String>:
       xs
     case MBig{n, +t}:
       keys(Unit, t, 0n)
+
+# Sorted sets
+# -----------
+# A sorted set's elements (Zset, above), each a member and its score (a
+# double, never a NaN), in order of score (-0 the same as +0), then of
+# member (bytes, as memcmp orders them, a prefix first: String.order), in
+# a weight-balanced tree: each node keeps how many elements it holds, so
+# that the element at a rank, and the rank of an element, are found in
+# O(log n), and no side of a node holds more than 3 times the other (as
+# Adams's trees, and Haskell's Data.Map, keep them). Redis 7.0 keeps a
+# sorted set as a listpack while it holds at most
+# zset-max-listpack-entries elements (128), each member of at most
+# zset-max-listpack-value bytes (64), and as a skiplist with a hashtable
+# of its members from the first write that passes either, for good.
+# BendKV keeps a small one as its tree alone (a member is looked for along
+# it, as along a listpack) and a large one with a trie of its members'
+# scores as well, turning one into the other at those defaults, whatever
+# the parameters say, as it does a hash (Hashes, above); OBJECT ENCODING
+# reads the parameters as they are (session.bend). A listpack keeps an
+# integral score as an integer, so -0 reads back from it as 0: a small
+# sorted set keeps 0 for a score of -0, as Redis does. A key never holds
+# an empty sorted set: a write that takes its last element deletes it.
+
+# an element of a sorted set: its member and its score
+type ZEl is Data:
+  ZEl{m: String, d: F.F64}
+
+def zt.size(+t: ZTree) -> Nat:
+  match t:
+    case ZTip{}:
+      0n
+    case ZBin{+n, m, d, l, r}:
+      n
+
+# the size of t's left side (0 for a tip)
+def zt.lsize(+t: ZTree) -> Nat:
+  match t:
+    case ZTip{}:
+      0n
+    case ZBin{n, m, d, +l, r}:
+      zt.size(l)
+
+def zt.bin(+m: String, +d: F.F64, +l: ZTree, +r: ZTree) -> ZTree:
+  ZBin{Nat.add(Nat.add(zt.size(l), zt.size(r)), 1n), m, d, l, r}
+
+# how the element (d, m) compares with (e, k): by score, then by member
+def zel.cmp.of(c: Cmp, +m: String, +k: String) -> Cmp:
+  match c:
+    case EQ{}:
+      String.order(m, k)
+    case LT{}:
+      LT{}
+    case GT{}:
+      GT{}
+
+def zel.cmp(+d: F.F64, +m: String, +e: F.F64, +k: String) -> Cmp:
+  zel.cmp.of(F.f64.cmp(d, e), m, k)
+
+# how (d, m) compares with t's root (GT for a tip)
+def zt.at(+t: ZTree, +d: F.F64, +m: String) -> Cmp:
+  match t:
+    case ZTip{}:
+      GT{}
+    case ZBin{n, +k, +e, l, r}:
+      zel.cmp(d, m, e, k)
+
+# A node of m and d between l and r, rebalanced after an insertion or a
+# deletion on one side: when the two sides hold two or more elements and
+# one holds more than 3 times the other, a single rotation, or a double
+# one when the larger side's inner part holds at least 2 times its outer
+# part, moves elements to the smaller side.
+
+# r is the larger side
+def zt.dbll(+m: String, +d: F.F64, l: ZTree, +rm: String, +rd: F.F64, rr: ZTree, rl: ZTree) -> ZTree:
+  match rl:
+    case ZTip{}:
+      zt.bin(rm, rd, zt.bin(m, d, l, ZTip{}), rr)
+    case ZBin{n, +xm, +xd, +xl, +xr}:
+      zt.bin(xm, xd, zt.bin(m, d, l, xl), zt.bin(rm, rd, xr, rr))
+
+def zt.rotl.of(single: Bool, +m: String, +d: F.F64, l: ZTree, +rm: String, +rd: F.F64, rl: ZTree, rr: ZTree) -> ZTree:
+  match single:
+    case True{}:
+      zt.bin(rm, rd, zt.bin(m, d, l, rl), rr)
+    case False{}:
+      zt.dbll(m, d, l, rm, rd, rr, rl)
+
+def zt.rotl(+m: String, +d: F.F64, l: ZTree, r: ZTree) -> ZTree:
+  match r:
+    case ZTip{}:
+      zt.bin(m, d, l, ZTip{})
+    case ZBin{n, +rm, +rd, +rl, +rr}:
+      zt.rotl.of(Nat.is_lt(zt.size(rl), Nat.mul(2n, zt.size(rr))), m, d, l, rm, rd, rl, rr)
+
+# l is the larger side
+def zt.dblr(+m: String, +d: F.F64, r: ZTree, +lm: String, +ld: F.F64, ll: ZTree, lr: ZTree) -> ZTree:
+  match lr:
+    case ZTip{}:
+      zt.bin(lm, ld, ll, zt.bin(m, d, ZTip{}, r))
+    case ZBin{n, +xm, +xd, +xl, +xr}:
+      zt.bin(xm, xd, zt.bin(lm, ld, ll, xl), zt.bin(m, d, xr, r))
+
+def zt.rotr.of(single: Bool, +m: String, +d: F.F64, r: ZTree, +lm: String, +ld: F.F64, ll: ZTree, lr: ZTree) -> ZTree:
+  match single:
+    case True{}:
+      zt.bin(lm, ld, ll, zt.bin(m, d, lr, r))
+    case False{}:
+      zt.dblr(m, d, r, lm, ld, ll, lr)
+
+def zt.rotr(+m: String, +d: F.F64, l: ZTree, r: ZTree) -> ZTree:
+  match l:
+    case ZTip{}:
+      zt.bin(m, d, ZTip{}, r)
+    case ZBin{n, +lm, +ld, +ll, +lr}:
+      zt.rotr.of(Nat.is_lt(zt.size(lr), Nat.mul(2n, zt.size(ll))), m, d, r, lm, ld, ll, lr)
+
+def zt.bal.of(few: Bool, rh: Bool, lh: Bool, +m: String, +d: F.F64, l: ZTree, r: ZTree) -> ZTree:
+  match few rh lh:
+    case True{} _ _:
+      zt.bin(m, d, l, r)
+    case False{} True{} _:
+      zt.rotl(m, d, l, r)
+    case False{} False{} True{}:
+      zt.rotr(m, d, l, r)
+    case False{} False{} False{}:
+      zt.bin(m, d, l, r)
+
+def zt.balance(+m: String, +d: F.F64, +l: ZTree, +r: ZTree) -> ZTree:
+  +sl = zt.size(l)
+  +sr = zt.size(r)
+  zt.bal.of(Nat.is_le(Nat.add(sl, sr), 1n), Nat.is_lt(Nat.mul(3n, sl), sr), Nat.is_lt(Nat.mul(3n, sr), sl), m, d, l, r)
+
+# t with the element (m, d) in its place (t does not hold m); c is how
+# (d, m) compares with t's root
+def zt.ins(t: ZTree, c: Cmp, +m: String, +d: F.F64) -> ZTree:
+  match t c:
+    case ZTip{} _:
+      ZBin{1n, m, d, ZTip{}, ZTip{}}
+    case ZBin{n, +k, +e, +l, +r} LT{}:
+      zt.balance(k, e, zt.ins(l, zt.at(l, d, m), m, d), r)
+    case ZBin{n, +k, +e, +l, +r} _:
+      zt.balance(k, e, l, zt.ins(r, zt.at(r, d, m), m, d))
+
+def zt.add(+t: ZTree, +m: String, +d: F.F64) -> ZTree:
+  zt.ins(t, zt.at(t, d, m), m, d)
+
+# an element cut from the end of a tree, and the tree left
+type ZCut is Data:
+  ZCut{m: String, d: F.F64, t: ZTree}
+
+def zt.cutl.fix(c: ZCut, +m: String, +d: F.F64, r: ZTree) -> ZCut:
+  match c:
+    case ZCut{+cm, +cd, +ct}:
+      ZCut{cm, cd, zt.balance(m, d, ct, r)}
+
+# the first element of the node of m and d between l and r, cut from it
+def zt.cutl(l: ZTree, +m: String, +d: F.F64, r: ZTree) -> ZCut:
+  match l:
+    case ZTip{}:
+      ZCut{m, d, r}
+    case ZBin{n, +lm, +ld, ll, lr}:
+      zt.cutl.fix(zt.cutl(ll, lm, ld, lr), m, d, r)
+
+def zt.cutr.fix(c: ZCut, +m: String, +d: F.F64, l: ZTree) -> ZCut:
+  match c:
+    case ZCut{+cm, +cd, +ct}:
+      ZCut{cm, cd, zt.balance(m, d, l, ct)}
+
+# the last element of the node of m and d between l and r, cut from it
+def zt.cutr(r: ZTree, +m: String, +d: F.F64, l: ZTree) -> ZCut:
+  match r:
+    case ZTip{}:
+      ZCut{m, d, l}
+    case ZBin{n, +rm, +rd, rl, rr}:
+      zt.cutr.fix(zt.cutr(rr, rm, rd, rl), m, d, l)
+
+def zt.glue.lfix(c: ZCut, r: ZTree) -> ZTree:
+  match c:
+    case ZCut{+m, +d, +l}:
+      zt.balance(m, d, l, r)
+
+def zt.glue.rfix(l: ZTree, c: ZCut) -> ZTree:
+  match c:
+    case ZCut{+m, +d, +r}:
+      zt.balance(m, d, l, r)
+
+# the larger side l's last element takes the place of the one deleted
+def zt.glue.l(l: ZTree, r: ZTree) -> ZTree:
+  match l:
+    case ZTip{}:
+      r
+    case ZBin{n, +lm, +ld, ll, lr}:
+      zt.glue.lfix(zt.cutr(lr, lm, ld, ll), r)
+
+# or r's first element (r a tip: both sides are)
+def zt.glue.r(l: ZTree, r: ZTree) -> ZTree:
+  match r:
+    case ZTip{}:
+      l
+    case ZBin{n, +rm, +rd, rl, rr}:
+      zt.glue.rfix(l, zt.cutl(rl, rm, rd, rr))
+
+def zt.glue.of(lbig: Bool, l: ZTree, r: ZTree) -> ZTree:
+  match lbig:
+    case True{}:
+      zt.glue.l(l, r)
+    case False{}:
+      zt.glue.r(l, r)
+
+# the elements of l and then those of r, the sides of a node whose
+# element is deleted
+def zt.glue(+l: ZTree, +r: ZTree) -> ZTree:
+  zt.glue.of(Nat.is_lt(zt.size(r), zt.size(l)), l, r)
+
+# t without the element (m, d), which it holds; c is how (d, m) compares
+# with t's root
+def zt.rm(t: ZTree, c: Cmp, +m: String, +d: F.F64) -> ZTree:
+  match t c:
+    case ZTip{} _:
+      ZTip{}
+    case ZBin{n, +k, +e, +l, +r} LT{}:
+      zt.balance(k, e, zt.rm(l, zt.at(l, d, m), m, d), r)
+    case ZBin{n, +k, +e, +l, +r} GT{}:
+      zt.balance(k, e, l, zt.rm(r, zt.at(r, d, m), m, d))
+    case ZBin{n, k, e, +l, +r} EQ{}:
+      zt.glue(l, r)
+
+def zt.del(+t: ZTree, +m: String, +d: F.F64) -> ZTree:
+  zt.rm(t, zt.at(t, d, m), m, d)
+
+# how many elements of t come before (d, m), which it holds; c is how
+# (d, m) compares with t's root
+def zt.rank.go(+t: ZTree, c: Cmp, +m: String, +d: F.F64, +acc: Nat) -> Nat:
+  match t c:
+    case ZTip{} _:
+      acc
+    case ZBin{n, k, e, +l, r} LT{}:
+      zt.rank.go(l, zt.at(l, d, m), m, d, acc)
+    case ZBin{n, k, e, +l, +r} GT{}:
+      zt.rank.go(r, zt.at(r, d, m), m, d, Nat.add(acc, Nat.add(zt.size(l), 1n)))
+    case ZBin{n, k, e, +l, r} EQ{}:
+      Nat.add(acc, zt.size(l))
+
+def zt.rank(+t: ZTree, +m: String, +d: F.F64) -> Nat:
+  zt.rank.go(t, zt.at(t, d, m), m, d, 0n)
+
+# the element at rank i of t (i below its size); c is how i compares with
+# the size of t's left side
+def zt.nth.go(+t: ZTree, c: Cmp, +i: Nat) -> ZEl:
+  match t c:
+    case ZTip{} _:
+      ZEl{"", F.F64{0n, 0n}}
+    case ZBin{n, k, e, +l, r} LT{}:
+      zt.nth.go(l, Nat.cmp(i, zt.lsize(l)), i)
+    case ZBin{n, +k, +e, l, r} EQ{}:
+      ZEl{k, e}
+    case ZBin{n, k, e, +l, +r} GT{}:
+      +j = Nat.sub(i, Nat.add(zt.size(l), 1n))
+      zt.nth.go(r, Nat.cmp(j, zt.lsize(r)), j)
+
+def zt.nth(+t: ZTree, +i: Nat) -> ZEl:
+  zt.nth.go(t, Nat.cmp(i, zt.lsize(t)), i)
+
+# A test of an element (ZP): its score at least a lower bound of a range
+# (ZGeS: Redis's zslValueGteMin) or at most an upper one (ZLeS:
+# zslValueLteMax), its member at least a lower bound (ZGeL:
+# zslLexValueGteMin) or at most an upper one (ZLeL: zslLexValueLteMax),
+# or the opposite of a test (ZNot). A bound of scores is a score, left
+# out of the range when ex ('(' before it); a bound of members is '-'
+# (before every member), '+' (after every one), or a member, taken in
+# ('[' before it) or left out ('('), as Redis reads one (sdscmplex).
+
+type ZSB is Data:
+  ZSB{d: F.F64, ex: Bool}
+
+type ZLB is Data:
+  ZLNeg{}
+  ZLPos{}
+  ZLIn{s: String}
+  ZLEx{s: String}
+
+type ZP is Data:
+  ZGeS{b: ZSB}
+  ZLeS{b: ZSB}
+  ZGeL{b: ZLB}
+  ZLeL{b: ZLB}
+  ZNot{p: ZP}
+
+def zsb.ge(+d: F.F64, +b: ZSB) -> Bool:
+  match b:
+    case ZSB{+e, +ex}:
+      +c = F.f64.cmp(d, e)
+      Bool.pick(Bool, ex, Cmp.is_gt(c), Bool.not(Cmp.is_lt(c)))
+
+def zsb.le(+d: F.F64, +b: ZSB) -> Bool:
+  match b:
+    case ZSB{+e, +ex}:
+      +c = F.f64.cmp(d, e)
+      Bool.pick(Bool, ex, Cmp.is_lt(c), Bool.not(Cmp.is_gt(c)))
+
+# how member m compares with a bound of members
+def zlb.cmp(+m: String, +b: ZLB) -> Cmp:
+  match b:
+    case ZLNeg{}:
+      GT{}
+    case ZLPos{}:
+      LT{}
+    case ZLIn{+s}:
+      String.order(m, s)
+    case ZLEx{+s}:
+      String.order(m, s)
+
+# whether a bound of members is left out ('-' and '+' are, as Redis reads
+# them)
+def zlb.ex(+b: ZLB) -> Bool:
+  match b:
+    case ZLIn{s}:
+      False{}
+    case _:
+      True{}
+
+def zlb.ge(+m: String, +b: ZLB) -> Bool:
+  +c = zlb.cmp(m, b)
+  Bool.pick(Bool, zlb.ex(b), Cmp.is_gt(c), Bool.not(Cmp.is_lt(c)))
+
+def zlb.le(+m: String, +b: ZLB) -> Bool:
+  +c = zlb.cmp(m, b)
+  Bool.pick(Bool, zlb.ex(b), Cmp.is_lt(c), Bool.not(Cmp.is_gt(c)))
+
+def zp.ok(+p: ZP, +m: String, +d: F.F64) -> Bool:
+  match p:
+    case ZGeS{+b}:
+      zsb.ge(d, b)
+    case ZLeS{+b}:
+      zsb.le(d, b)
+    case ZGeL{+b}:
+      zlb.ge(m, b)
+    case ZLeL{+b}:
+      zlb.le(m, b)
+    case ZNot{+q}:
+      Bool.not(zp.ok(q, m, d))
+
+# whether p holds of t's root (True for a tip)
+def zt.p_at(+t: ZTree, +p: ZP) -> Bool:
+  match t:
+    case ZTip{}:
+      True{}
+    case ZBin{n, +k, +e, l, r}:
+      zp.ok(p, k, e)
+
+# How many elements of t come before the first that p holds of, when p
+# holds of none of the first elements and of all the others (a test of
+# scores always does; one of members does when the scores are all the
+# same, as Redis asks of a range of members): a walk down from the root,
+# as Redis walks down its skiplist. ok is whether p holds of t's root.
+def zt.before.go(+t: ZTree, ok: Bool, +p: ZP, +acc: Nat) -> Nat:
+  match t ok:
+    case ZTip{} _:
+      acc
+    case ZBin{n, k, e, +l, r} True{}:
+      zt.before.go(l, zt.p_at(l, p), p, acc)
+    case ZBin{n, k, e, +l, +r} False{}:
+      zt.before.go(r, zt.p_at(r, p), p, Nat.add(acc, Nat.add(zt.size(l), 1n)))
+
+def zt.before(+t: ZTree, +p: ZP) -> Nat:
+  zt.before.go(t, zt.p_at(t, p), p, 0n)
+
+# whether the ranks from lo to lo + n - 1 meet those from a to b - 1
+def zt.meets(+lo: Nat, +n: Nat, +a: Nat, +b: Nat) -> Bool:
+  Bool.and(Nat.is_lt(0n, n), Bool.and(Nat.is_lt(lo, b), Nat.is_lt(a, Nat.add(lo, n))))
+
+def zt.slice.mid(take: Bool, +m: String, +d: F.F64, acc: List<&2, ZEl>) -> List<&2, ZEl>:
+  match take:
+    case True{}:
+      ZEl{m, d} <> acc
+    case False{}:
+      acc
+
+# the elements of t at the ranks from a to b - 1, in order, before acc;
+# t's first element is at rank base, and hit is whether t's ranks meet
+# those (a walk that reads only the nodes on the way to them)
+def zt.slice.go(+t: ZTree, hit: Bool, +a: Nat, +b: Nat, +base: Nat, acc: List<&2, ZEl>) -> List<&2, ZEl>:
+  match t hit:
+    case ZTip{} _:
+      acc
+    case ZBin{n, k, e, l, r} False{}:
+      acc
+    case ZBin{n, +k, +e, +l, +r} True{}:
+      +me = Nat.add(base, zt.size(l))
+      +rb = Nat.add(me, 1n)
+      acc2 = zt.slice.go(r, zt.meets(rb, zt.size(r), a, b), a, b, rb, acc)
+      acc3 = zt.slice.mid(Bool.and(Nat.is_le(a, me), Nat.is_lt(me, b)), k, e, acc2)
+      zt.slice.go(l, zt.meets(base, zt.size(l), a, b), a, b, base, acc3)
+
+def zt.slice(+t: ZTree, +a: Nat, +b: Nat) -> List<&2, ZEl>:
+  zt.slice.go(t, zt.meets(0n, zt.size(t), a, b), a, b, 0n, Nil{})
+
+# the same elements, last first
+def zt.rslice.go(+t: ZTree, hit: Bool, +a: Nat, +b: Nat, +base: Nat, acc: List<&2, ZEl>) -> List<&2, ZEl>:
+  match t hit:
+    case ZTip{} _:
+      acc
+    case ZBin{n, k, e, l, r} False{}:
+      acc
+    case ZBin{n, +k, +e, +l, +r} True{}:
+      +me = Nat.add(base, zt.size(l))
+      +rb = Nat.add(me, 1n)
+      acc2 = zt.rslice.go(l, zt.meets(base, zt.size(l), a, b), a, b, base, acc)
+      acc3 = zt.slice.mid(Bool.and(Nat.is_le(a, me), Nat.is_lt(me, b)), k, e, acc2)
+      zt.rslice.go(r, zt.meets(rb, zt.size(r), a, b), a, b, rb, acc3)
+
+def zt.rslice(+t: ZTree, +a: Nat, +b: Nat) -> List<&2, ZEl>:
+  zt.rslice.go(t, zt.meets(0n, zt.size(t), a, b), a, b, 0n, Nil{})
+
+# all the elements of t, in order
+def zt.all(+t: ZTree) -> List<&2, ZEl>:
+  zt.slice(t, 0n, zt.size(t))
+
+# m's score, when t holds m (got: the score found so far): a walk along
+# all its elements in order, as along a listpack
+def zt.find.node(got: Maybe<&2, F.F64>, +m: String, +k: String, +e: F.F64) -> Maybe<&2, F.F64>:
+  match got:
+    case Some{x}:
+      Some{x}
+    case None{}:
+      Bool.pick(Maybe<&2, F.F64>, String.eq(m, k), Some{e}, None{})
+
+def zt.find.go(+t: ZTree, got: Maybe<&2, F.F64>, +m: String) -> Maybe<&2, F.F64>:
+  match t got:
+    case ZTip{} g:
+      g
+    case ZBin{n, k, e, l, r} Some{x}:
+      Some{x}
+    case ZBin{n, +k, +e, +l, +r} None{}:
+      zt.find.go(r, zt.find.node(zt.find.go(l, None{}, m), m, k, e), m)
+
+def zt.find(+t: ZTree, +m: String) -> Maybe<&2, F.F64>:
+  zt.find.go(t, None{}, m)
+
+# the elements of t added to the trie s, each member with its score
+def zt.trie(+t: ZTree, s: Trie<F.F64>) -> Trie<F.F64>:
+  match t:
+    case ZTip{}:
+      s
+    case ZBin{n, +k, +e, +l, +r}:
+      zt.trie(r, set(F.F64, zt.trie(l, s), k, e))
+
+# the score a listpack keeps for d: 0 for -0
+def zset.norm(+d: F.F64) -> F.F64:
+  match d:
+    case F.F64{+hi, +lo}:
+      Bool.pick(F.F64, Bool.and(Nat.is_eq(hi, 2147483648n), Nat.is_eq(lo, 0n)), F.F64{0n, 0n}, F.F64{hi, lo})
+
+def zset.empty() -> Zset:
+  ZSmall{ZTip{}}
+
+def zset.tree(+z: Zset) -> ZTree:
+  match z:
+    case ZSmall{+tr}:
+      tr
+    case ZBig{+tr, t}:
+      tr
+
+def zset.len(+z: Zset) -> Nat:
+  zt.size(zset.tree(z))
+
+def zset.is_small(+z: Zset) -> Bool:
+  match z:
+    case ZSmall{tr}:
+      True{}
+    case ZBig{tr, t}:
+      False{}
+
+# m's score, when z holds m
+def zset.score(+m: String, +z: Zset) -> Maybe<&2, F.F64>:
+  match z:
+    case ZSmall{+tr}:
+      zt.find(tr, m)
+    case ZBig{tr, +t}:
+      get(F.F64, t, m)
+
+# z with m of score d added (z does not hold m): a small one turns large
+# when it would pass 128 elements, or m passes 64 bytes
+def zset.add.small(fits: Bool, +tr: ZTree, +m: String, +d: F.F64) -> Zset:
+  match fits:
+    case True{}:
+      ZSmall{zt.add(tr, m, zset.norm(d))}
+    case False{}:
+      ZBig{zt.add(tr, m, d), set(F.F64, zt.trie(tr, empty(F.F64)), m, d)}
+
+def zset.add(z: Zset, +m: String, +d: F.F64) -> Zset:
+  match z:
+    case ZSmall{+tr}:
+      zset.add.small(Bool.and(Nat.is_lt(zt.size(tr), 128n), Nat.is_le(String.length(m), 64n)), tr, m, d)
+    case ZBig{+tr, +t}:
+      ZBig{zt.add(tr, m, d), set(F.F64, t, m, d)}
+
+# z without m, which it holds with score d
+def zset.del(z: Zset, +m: String, +d: F.F64) -> Zset:
+  match z:
+    case ZSmall{+tr}:
+      ZSmall{zt.del(tr, m, d)}
+    case ZBig{+tr, +t}:
+      ZBig{zt.del(tr, m, d), del(F.F64, t, m)}
+
+# z with m's score, old, set to d
+def zset.set(z: Zset, +m: String, +old: F.F64, +d: F.F64) -> Zset:
+  match z:
+    case ZSmall{+tr}:
+      ZSmall{zt.add(zt.del(tr, m, old), m, zset.norm(d))}
+    case ZBig{+tr, +t}:
+      ZBig{zt.add(zt.del(tr, m, old), m, d), set(F.F64, t, m, d)}
+
+# the elements of z at the ranks from a to b - 1, in order (last first
+# when rev)
+def zset.slice(rev: Bool, +z: Zset, +a: Nat, +b: Nat) -> List<&2, ZEl>:
+  match rev:
+    case True{}:
+      zt.rslice(zset.tree(z), a, b)
+    case False{}:
+      zt.slice(zset.tree(z), a, b)
+
+# z without the elements xs, which it holds
+def zset.dels(xs: List<&2, ZEl>, z: Zset) -> Zset:
+  match xs:
+    case Nil{}:
+      z
+    case Con{ZEl{+m, +d}, rest}:
+      zset.dels(rest, zset.del(z, m, d))

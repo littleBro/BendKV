@@ -65,7 +65,14 @@ COMMANDS = {
     "lmpop": [], "sadd": [], "srem": [], "scard": [], "sismember": [], "smismember": [],
     "smembers": [], "sscan": [], "smove": [], "sinter": [], "sintercard": [],
     "sinterstore": [], "sunion": [], "sunionstore": [], "sdiff": [], "sdiffstore": [],
-    "spop": [], "srandmember": [], "incrbyfloat": [], "hincrbyfloat": []}
+    "spop": [], "srandmember": [], "incrbyfloat": [], "hincrbyfloat": [], "zadd": [],
+    "zincrby": [], "zrem": [], "zcard": [], "zscore": [], "zmscore": [], "zrank": [],
+    "zrevrank": [], "zcount": [], "zlexcount": [], "zrange": [], "zrangebyscore": [],
+    "zrevrangebyscore": [], "zrangebylex": [], "zrevrangebylex": [], "zrevrange": [],
+    "zremrangebyrank": [], "zremrangebyscore": [], "zremrangebylex": [], "zpopmin": [],
+    "zpopmax": [], "zscan": [], "zunion": [], "zinter": [], "zdiff": [], "zintercard": [],
+    "zunionstore": [], "zinterstore": [], "zdiffstore": [], "zrangestore": [], "zmpop": [],
+    "zrandmember": []}
 
 # Step 1: redis-server -> facts
 # -----------------------------
@@ -172,8 +179,14 @@ GETKEYS = {"set": "KBySet{}", "bitfield": "KByBitfield{}"}
 
 # Commands whose key spec counts its keys with an argument (keynum):
 # COMMAND GETKEYS runs BendKV's copy of what Redis does for them (the
-# spec, then the command's own function when the spec does not read)
-KEYNUM = {"eval": "KByEval{}", "lmpop": "KByLmpop{}", "sintercard": "KBySintercard{}"}
+# spec, then the command's own function when the spec does not read):
+# ZUNION and its kin find their keys as SINTERCARD does, ZMPOP as LMPOP,
+# and the STOREs their destination first (OW, update) and then the keys,
+# or, by their function, the keys and then the destination
+KEYNUM = {"eval": "KByEval{}", "lmpop": "KByLmpop{}", "sintercard": "KBySintercard{}",
+          "zunion": "KBySintercard{}", "zinter": "KBySintercard{}", "zdiff": "KBySintercard{}",
+          "zintercard": "KBySintercard{}", "zmpop": "KByLmpop{}", "zunionstore": "KByZstore{}",
+          "zinterstore": "KByZstore{}", "zdiffstore": "KByZstore{}"}
 
 def bstr(s):
     if any(ord(ch) > 126 or ord(ch) < 32 for ch in s):
@@ -291,7 +304,9 @@ SBEGIN, SEND = "# BEGIN gen_commands: stats\n", "# END gen_commands: stats\n"
 # LSET on an index read once the list is found, a command of a set on a
 # key of another kind (WRONGTYPE), SSCAN on options read once the set is
 # found, INCRBYFLOAT and HINCRBYFLOAT on values that are not floats and
-# sums that are not finite.
+# sums that are not finite, a command of a sorted set on a key of another
+# kind (WRONGTYPE, and ZINCRBY's sums that are not a number), ZSCAN on
+# options read once the sorted set is found.
 # (SET's time
 # can overflow too, past 9 * 10^18 ms only: SET is left out, so that a
 # batch of SETs needs no look at its replies.)
@@ -303,7 +318,12 @@ RISKY = {"incr", "decr", "incrby", "decrby", "expire", "pexpire", "setex", "pset
          "linsert", "lrem", "ltrim", "lpos", "lmove", "rpoplpush", "lmpop", "sadd", "srem", "scard",
          "sismember", "smismember", "smembers", "sscan", "smove", "sinter", "sintercard",
          "sinterstore", "sunion", "sunionstore", "sdiff", "sdiffstore", "spop", "srandmember",
-         "incrbyfloat", "hincrbyfloat"}
+         "incrbyfloat", "hincrbyfloat", "zadd", "zincrby", "zrem", "zcard", "zscore", "zmscore",
+         "zrank", "zrevrank", "zcount", "zlexcount", "zrange", "zrangebyscore", "zrevrangebyscore",
+         "zrangebylex", "zrevrangebylex", "zrevrange", "zremrangebyrank", "zremrangebyscore",
+         "zremrangebylex", "zpopmin", "zpopmax", "zscan", "zunion", "zinter", "zdiff",
+         "zintercard", "zunionstore", "zinterstore", "zdiffstore", "zrangestore", "zmpop",
+         "zrandmember"}
 
 # the parser's commands with subcommands, by the function that numbers
 # their subcommands
