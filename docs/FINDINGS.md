@@ -531,7 +531,11 @@ lets through: a bulk cut inside its bytes read as a shorter string (a value nobo
 wrote), and an entry cut between its arguments read as what arrived (DEL a b c run as
 DEL a b). With either, all the earlier proofs still check; the proof of the cut fails.
 The runtime test `tests/aof_check.bend` catches the first on its sample file; the law
-covers every file.
+covers every file. That test, and `tests/smoke.bend`, once printed a failure and still
+exited 0, so `make smoke` stayed green (issue #8): now each check's failure makes the
+run exit with 1, `smoke.bend` checks each reply against the one expected, and `make
+smoke` also runs each with one kind of check given a wrong expectation
+(`BENDKV_CHECK_BREAK`), which must fail it (`tests/smoke_check.sh`).
 
 What is not proved: that the server appends exactly each batch's effects (it groups
 batches into one write; that the encoding of a concatenation is the concatenation of
