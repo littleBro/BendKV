@@ -120,10 +120,11 @@ type UpdOp is Data:
 # FLUSHALL), which act on all of them (Databases, below). They come as
 # one command, Own, which exec never meets (it answers one with an
 # error), so the laws of exec see them as one more command that only
-# reads. A command whose reply is fixed (a HELP) is SReply; one the
-# parser found wrong (an unknown subcommand, a wrong number of arguments)
-# is SBad, answered as Redis answers those, before it asks a client to
-# authenticate.
+# reads. TIME reads the clock (the time the batch runs at), OBJECT a key of
+# the selected database and the parameters of eviction. A command whose
+# reply is fixed (a HELP) is SReply; one the parser found wrong (an
+# unknown subcommand, a wrong number of arguments) is SBad, answered as
+# Redis answers those, before it asks a client to authenticate.
 
 type SessOp is Data:
   SHello{args: List<&2, String>}
@@ -144,6 +145,8 @@ type SessOp is Data:
   SSwapDb{a: String, b: String}
   SMove{key: String, db: String}
   SFlushAll{}
+  STime{}
+  SObject{sub: Nat, key: String}
   SReply{r: Reply}
   SBad{r: Reply}
 
@@ -704,6 +707,61 @@ def parse_command(id: Nat, +sub: String, args: List<&2, String>) -> SessOp:
       command_keys(sub, args, "command|getkeysandflags")
     case _:
       e_unknown_sub(sub, "COMMAND")
+
+# OBJECT: what Redis keeps of a value beside it (session.bend answers it,
+# with the parameters of eviction)
+def object_id(+n: String, len: Nat) -> Nat:
+  match len:
+    case 4n:
+      Bool.pick(Nat, String.eq(n, "HELP"), 1n,
+      Bool.pick(Nat, String.eq(n, "FREQ"), 2n, 0n))
+    case 8n:
+      Bool.pick(Nat, String.eq(n, "ENCODING"), 3n,
+      Bool.pick(Nat, String.eq(n, "REFCOUNT"), 4n,
+      Bool.pick(Nat, String.eq(n, "IDLETIME"), 5n, 0n)))
+    case _:
+      0n
+
+def object_help() -> List<&2, String>:
+  ["ENCODING <key>",
+   "    Return the kind of internal representation used in order to store the value",
+   "    associated with a <key>.",
+   "FREQ <key>",
+   "    Return the access frequency index of the <key>. The returned integer is",
+   "    proportional to the logarithm of the recent access frequency of the key.",
+   "IDLETIME <key>",
+   "    Return the idle time of the <key>, that is the approximated number of",
+   "    seconds elapsed since the last access to the key.",
+   "REFCOUNT <key>",
+   "    Return the number of references of the value associated with the specified",
+   "    <key>."]
+
+# a subcommand of a key: FREQ 2, ENCODING 3, REFCOUNT 4, IDLETIME 5
+def object_key(+id: Nat, args: List<&2, String>, name: String) -> SessOp:
+  match args:
+    case Con{k, Nil{}}:
+      SObject{id, k}
+    case _:
+      s_arity(name)
+
+def parse_object(id: Nat, sub: String, args: List<&2, String>) -> SessOp:
+  match id:
+    case 1n:  # HELP
+      match args:
+        case Nil{}:
+          help("OBJECT", object_help())
+        case _:
+          s_arity("object|help")
+    case 2n:
+      object_key(2n, args, "object|freq")
+    case 3n:
+      object_key(3n, args, "object|encoding")
+    case 4n:
+      object_key(4n, args, "object|refcount")
+    case 5n:
+      object_key(5n, args, "object|idletime")
+    case _:
+      e_unknown_sub(sub, "OBJECT")
 
 # CONFIG: GET and SET of the server's parameters (config.bend), RESETSTAT,
 # and REWRITE, which fails as Redis fails without a config file
@@ -1530,13 +1588,15 @@ def cmd_id(+n: String, len: Nat) -> Nat:
       Bool.pick(Nat, String.eq(n, "QUIT"), 103n,
       Bool.pick(Nat, String.eq(n, "INFO"), 108n,
       Bool.pick(Nat, String.eq(n, "MOVE"), 112n,
-      Bool.pick(Nat, String.eq(n, "PTTL"), 33n, 0n))))))))))))))
+      Bool.pick(Nat, String.eq(n, "PTTL"), 33n,
+      Bool.pick(Nat, String.eq(n, "TIME"), 113n, 0n)))))))))))))))
     case 5n:
       Bool.pick(Nat, String.eq(n, "SETNX"), 5n,
       Bool.pick(Nat, String.eq(n, "HELLO"), 101n,
       Bool.pick(Nat, String.eq(n, "RESET"), 104n,
       Bool.pick(Nat, String.eq(n, "SETEX"), 23n,
-      Bool.pick(Nat, String.eq(n, "GETEX"), 26n, 0n)))))
+      Bool.pick(Nat, String.eq(n, "GETEX"), 26n,
+      Bool.pick(Nat, String.eq(n, "TOUCH"), 44n, 0n))))))
     case 6n:
       Bool.pick(Nat, String.eq(n, "GETSET"), 6n,
       Bool.pick(Nat, String.eq(n, "UNLINK"), 8n,
@@ -1556,7 +1616,8 @@ def cmd_id(+n: String, len: Nat) -> Nat:
       Bool.pick(Nat, String.eq(n, "SUBSTR"), 38n,
       Bool.pick(Nat, String.eq(n, "GETBIT"), 40n,
       Bool.pick(Nat, String.eq(n, "SETBIT"), 41n,
-      Bool.pick(Nat, String.eq(n, "BITPOS"), 43n, 0n)))))))))))))))))))
+      Bool.pick(Nat, String.eq(n, "BITPOS"), 43n,
+      Bool.pick(Nat, String.eq(n, "OBJECT"), 114n, 0n))))))))))))))))))))
     case 7n:
       Bool.pick(Nat, String.eq(n, "FLUSHDB"), 20n,
       Bool.pick(Nat, String.eq(n, "COMMAND"), 109n,
@@ -1831,6 +1892,13 @@ def parse_id(id: Nat, name: String, args: List<&2, String>) -> Cmd:
           parse_bitpos(k, b, rest)
         case _:
           e_arity("bitpos")
+    case 44n:  # TOUCH: EXISTS, as Redis counts a key there (BendKV keeps
+               # no time of last access)
+      match args:
+        case Nil{}:
+          e_arity("touch")
+        case Con{k, ks}:
+          Exists{k <> ks}
     case _:
       e_unknown(name, args)
 
@@ -1907,6 +1975,19 @@ def parse_sess(id: Nat, name: String, args: List<&2, String>) -> SessOp:
           SMove{k, d}
         case _:
           s_arity("move")
+    case 113n:  # TIME
+      match args:
+        case Nil{}:
+          STime{}
+        case _:
+          s_arity("time")
+    case 114n:  # OBJECT
+      match args:
+        case Nil{}:
+          s_arity("object")
+        case Con{+sub, rest}:
+          +up = String.to_upper(sub)
+          parse_object(object_id(up, String.length(up)), sub, rest)
     case _:
       SBad{RError{no_newlines("ERR unknown command '" ++ String.take(name, 128n) ++ "', with args beginning with: " ++ unknown.args(args, ""))}}
 
@@ -1937,7 +2018,7 @@ def parse(args: List<&2, String>) -> Cmd:
 # client called it (INCR and INCRBY apart, though both parse to IncrBy).
 # Its key here is a number (tools/gen_commands.py writes the keys, below):
 # the commands in the order of their numbers (cmd_id), then the
-# subcommands of CLIENT, FUNCTION, CONFIG and COMMAND; 0 is an unknown
+# subcommands of CLIENT, FUNCTION, CONFIG, COMMAND and OBJECT; 0 is an unknown
 # command or subcommand, which Redis counts nowhere but in errorstats.
 # With the key comes what a call counts as (stat.code: 4 times the key
 # plus that): 0 when it runs; 1 when it is refused before it runs, as
@@ -2039,32 +2120,38 @@ def stat.top(+id: Nat) -> Nat:
       42n
     case 43n:
       43n
-    case 100n:
+    case 44n:
       44n
-    case 101n:
+    case 100n:
       45n
-    case 102n:
+    case 101n:
       46n
-    case 103n:
+    case 102n:
       47n
-    case 104n:
+    case 103n:
       48n
-    case 105n:
+    case 104n:
       49n
-    case 106n:
+    case 105n:
       50n
-    case 107n:
+    case 106n:
       51n
-    case 108n:
+    case 107n:
       52n
-    case 109n:
+    case 108n:
       53n
-    case 110n:
+    case 109n:
       54n
-    case 111n:
+    case 110n:
       55n
-    case 112n:
+    case 111n:
       56n
+    case 112n:
+      57n
+    case 113n:
+      58n
+    case 114n:
+      59n
     case _:
       0n
 
@@ -2072,25 +2159,25 @@ def stat.top(+id: Nat) -> Nat:
 def stat.sub.client(+sub: Nat) -> Nat:
   match sub:
     case 1n:
-      57n
-    case 2n:
-      58n
-    case 3n:
-      59n
-    case 4n:
       60n
-    case 5n:
+    case 2n:
       61n
-    case 6n:
+    case 3n:
       62n
-    case 7n:
+    case 4n:
       63n
-    case 8n:
+    case 5n:
       64n
-    case 9n:
+    case 6n:
       65n
-    case 10n:
+    case 7n:
       66n
+    case 8n:
+      67n
+    case 9n:
+      68n
+    case 10n:
+      69n
     case _:
       0n
 
@@ -2098,9 +2185,9 @@ def stat.sub.client(+sub: Nat) -> Nat:
 def stat.sub.function(+sub: Nat) -> Nat:
   match sub:
     case 1n:
-      67n
+      70n
     case 2n:
-      68n
+      71n
     case _:
       0n
 
@@ -2108,15 +2195,15 @@ def stat.sub.function(+sub: Nat) -> Nat:
 def stat.sub.config(+sub: Nat) -> Nat:
   match sub:
     case 1n:
-      69n
-    case 2n:
-      70n
-    case 3n:
-      71n
-    case 4n:
       72n
-    case 5n:
+    case 2n:
       73n
+    case 3n:
+      74n
+    case 4n:
+      75n
+    case 5n:
+      76n
     case _:
       0n
 
@@ -2124,19 +2211,35 @@ def stat.sub.config(+sub: Nat) -> Nat:
 def stat.sub.command(+sub: Nat) -> Nat:
   match sub:
     case 1n:
-      74n
-    case 2n:
-      75n
-    case 3n:
-      76n
-    case 4n:
       77n
-    case 5n:
+    case 2n:
       78n
-    case 6n:
+    case 3n:
       79n
-    case 7n:
+    case 4n:
       80n
+    case 5n:
+      81n
+    case 6n:
+      82n
+    case 7n:
+      83n
+    case _:
+      0n
+
+# a subcommand of OBJECT's key, by its number; 0 for none
+def stat.sub.object(+sub: Nat) -> Nat:
+  match sub:
+    case 1n:
+      84n
+    case 2n:
+      85n
+    case 3n:
+      86n
+    case 4n:
+      87n
+    case 5n:
+      88n
     case _:
       0n
 
@@ -2230,79 +2333,95 @@ def stat.name(+key: Nat) -> String:
     case 43n:
       "bitpos"
     case 44n:
-      "select"
+      "touch"
     case 45n:
-      "hello"
+      "select"
     case 46n:
-      "auth"
+      "hello"
     case 47n:
-      "quit"
+      "auth"
     case 48n:
-      "reset"
+      "quit"
     case 49n:
-      "client"
+      "reset"
     case 50n:
-      "function"
+      "client"
     case 51n:
-      "config"
+      "function"
     case 52n:
-      "info"
+      "config"
     case 53n:
-      "command"
+      "info"
     case 54n:
-      "randomkey"
+      "command"
     case 55n:
-      "swapdb"
+      "randomkey"
     case 56n:
-      "move"
+      "swapdb"
     case 57n:
-      "client|id"
+      "move"
     case 58n:
-      "client|help"
+      "time"
     case 59n:
-      "client|reply"
+      "object"
     case 60n:
-      "client|getname"
+      "client|id"
     case 61n:
-      "client|setname"
+      "client|help"
     case 62n:
-      "client|caching"
+      "client|reply"
     case 63n:
-      "client|unblock"
+      "client|getname"
     case 64n:
-      "client|getredir"
+      "client|setname"
     case 65n:
-      "client|no-evict"
+      "client|caching"
     case 66n:
-      "client|trackinginfo"
+      "client|unblock"
     case 67n:
-      "function|flush"
+      "client|getredir"
     case 68n:
-      "function|help"
+      "client|no-evict"
     case 69n:
-      "config|get"
+      "client|trackinginfo"
     case 70n:
-      "config|set"
+      "function|flush"
     case 71n:
-      "config|resetstat"
+      "function|help"
     case 72n:
-      "config|rewrite"
+      "config|get"
     case 73n:
-      "config|help"
+      "config|set"
     case 74n:
-      "command|info"
+      "config|resetstat"
     case 75n:
-      "command|docs"
+      "config|rewrite"
     case 76n:
-      "command|list"
+      "config|help"
     case 77n:
-      "command|help"
+      "command|info"
     case 78n:
-      "command|count"
+      "command|docs"
     case 79n:
-      "command|getkeys"
+      "command|list"
     case 80n:
+      "command|help"
+    case 81n:
+      "command|count"
+    case 82n:
+      "command|getkeys"
+    case 83n:
       "command|getkeysandflags"
+    case 84n:
+      "object|help"
+    case 85n:
+      "object|freq"
+    case 86n:
+      "object|encoding"
+    case 87n:
+      "object|refcount"
+    case 88n:
+      "object|idletime"
     case _:
       ""
 
@@ -2397,79 +2516,95 @@ def stat.arity(+key: Nat) -> Nat:
     case 43n:
       7n
     case 44n:
-      4n
+      5n
     case 45n:
-      3n
+      4n
     case 46n:
-      5n
-    case 47n:
       3n
-    case 48n:
-      2n
-    case 49n:
+    case 47n:
       5n
+    case 48n:
+      3n
+    case 49n:
+      2n
     case 50n:
       5n
     case 51n:
       5n
     case 52n:
-      3n
+      5n
     case 53n:
       3n
     case 54n:
-      2n
+      3n
     case 55n:
-      6n
+      2n
     case 56n:
       6n
     case 57n:
-      4n
-    case 58n:
-      4n
-    case 59n:
       6n
+    case 58n:
+      2n
+    case 59n:
+      5n
     case 60n:
       4n
     case 61n:
-      6n
+      4n
     case 62n:
       6n
     case 63n:
-      7n
-    case 64n:
       4n
+    case 64n:
+      6n
     case 65n:
       6n
     case 66n:
-      4n
-    case 67n:
-      5n
-    case 68n:
-      4n
-    case 69n:
       7n
+    case 67n:
+      4n
+    case 68n:
+      6n
+    case 69n:
+      4n
     case 70n:
-      9n
+      5n
     case 71n:
       4n
     case 72n:
-      4n
+      7n
     case 73n:
-      4n
+      9n
     case 74n:
-      5n
+      4n
     case 75n:
-      5n
+      4n
     case 76n:
-      5n
+      4n
     case 77n:
-      4n
+      5n
     case 78n:
-      4n
+      5n
     case 79n:
-      9n
+      5n
     case 80n:
+      4n
+    case 81n:
+      4n
+    case 82n:
       9n
+    case 83n:
+      9n
+    case 84n:
+      4n
+    case 85n:
+      6n
+    case 86n:
+      6n
+    case 87n:
+      6n
+    case 88n:
+      6n
     case _:
       1n
 
@@ -2499,6 +2634,10 @@ def stat.risky(+key: Nat) -> Bool:
     case 42n:
       True{}
     case 43n:
+      True{}
+    case 85n:
+      True{}
+    case 88n:
       True{}
     case _:
       False{}
@@ -3154,6 +3293,70 @@ def stat.cw(+code: Nat) -> U32:
       1477
     case 323n:
       1478
+    case 324n:
+      1481
+    case 325n:
+      1482
+    case 326n:
+      1484
+    case 327n:
+      1489
+    case 328n:
+      1490
+    case 329n:
+      1492
+    case 330n:
+      1496
+    case 331n:
+      1505
+    case 332n:
+      1506
+    case 333n:
+      1508
+    case 334n:
+      1512
+    case 335n:
+      1520
+    case 336n:
+      1551
+    case 337n:
+      1559
+    case 338n:
+      1563
+    case 339n:
+      1565
+    case 340n:
+      1566
+    case 341n:
+      1575
+    case 342n:
+      1579
+    case 343n:
+      1581
+    case 344n:
+      1582
+    case 345n:
+      1587
+    case 346n:
+      1589
+    case 347n:
+      1590
+    case 348n:
+      1593
+    case 349n:
+      1594
+    case 350n:
+      1596
+    case 351n:
+      1607
+    case 352n:
+      1611
+    case 353n:
+      1613
+    case 354n:
+      1614
+    case 355n:
+      1619
     case _:
       63
 
@@ -3808,6 +4011,70 @@ def stat.code.cw(+w: Nat) -> Nat:
       322n
     case 1478n:
       323n
+    case 1481n:
+      324n
+    case 1482n:
+      325n
+    case 1484n:
+      326n
+    case 1489n:
+      327n
+    case 1490n:
+      328n
+    case 1492n:
+      329n
+    case 1496n:
+      330n
+    case 1505n:
+      331n
+    case 1506n:
+      332n
+    case 1508n:
+      333n
+    case 1512n:
+      334n
+    case 1520n:
+      335n
+    case 1551n:
+      336n
+    case 1559n:
+      337n
+    case 1563n:
+      338n
+    case 1565n:
+      339n
+    case 1566n:
+      340n
+    case 1575n:
+      341n
+    case 1579n:
+      342n
+    case 1581n:
+      343n
+    case 1582n:
+      344n
+    case 1587n:
+      345n
+    case 1589n:
+      346n
+    case 1590n:
+      347n
+    case 1593n:
+      348n
+    case 1594n:
+      349n
+    case 1596n:
+      350n
+    case 1607n:
+      351n
+    case 1611n:
+      352n
+    case 1613n:
+      353n
+    case 1614n:
+      354n
+    case 1619n:
+      355n
     case _:
       0n
 
@@ -3823,7 +4090,7 @@ def stat.mark.incr() -> U32:
   380633088
 # END gen_commands: stats
 
-# a container (CLIENT, FUNCTION, CONFIG, COMMAND) by its first argument;
+# a container (CLIENT, FUNCTION, CONFIG, COMMAND, OBJECT) by its first argument;
 # alone, the container itself (top)
 def stat.sub.of(id: Nat, +up: String) -> Nat:
   match id:
@@ -3833,6 +4100,8 @@ def stat.sub.of(id: Nat, +up: String) -> Nat:
       stat.sub.function(function_id(up, String.length(up)))
     case 107n:
       stat.sub.config(config_id(up, String.length(up)))
+    case 114n:
+      stat.sub.object(object_id(up, String.length(up)))
     case _:
       stat.sub.command(command_id(up, String.length(up)))
 
@@ -3854,6 +4123,8 @@ def stat.key(+id: Nat, +args: List<&2, String>) -> Nat:
       stat.key.args(stat.top(107n), 107n, args)
     case 109n:
       stat.key.args(stat.top(109n), 109n, args)
+    case 114n:
+      stat.key.args(stat.top(114n), 114n, args)
     case _:
       stat.top(id)
 

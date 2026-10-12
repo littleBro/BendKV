@@ -11,7 +11,11 @@ them (MOVE), swaps them (SWAPDB) and empties one (FLUSHDB) or all
 (FLUSHALL), with bad numbers among them. Ranges and bits (GETRANGE,
 SETRANGE, GETBIT, SETBIT, BITCOUNT, BITPOS) take small offsets, and now
 and then wrong or huge ones, but never one that would make a value near
-512MB.
+512MB. TOUCH counts keys as EXISTS does; OBJECT's subcommands come
+with errors and FREQ, refused under the default policy (an encoding or a
+count of references BendKV derives from the value, where Redis keeps how
+the value was made, and the idle time reads a clock), and TIME with
+arguments.
 
 Known, documented divergences that the generator avoids: BendKV's
 integers have at most 14 digits (Redis allows int64), and so have its
@@ -312,6 +316,10 @@ def rnd_cmd(r):
         (0.03, lambda: [b"BITPOS", k(), r.choice([b"0", b"1", b"1", b"0", b"2", b"x", b"-1"])] + rnd_range(r)),
         (0.005, lambda: [r.choice([b"GETRANGE", b"SUBSTR", b"SETRANGE", b"GETBIT", b"SETBIT", b"BITCOUNT", b"BITPOS"])] +
                         [k() for _ in range(r.choice([0, 1, 2]))]),
+        (0.02, lambda: [b"TOUCH"] + ks()),
+        (0.01, lambda: [b"OBJECT"] + r.choice([[b"FREQ", k()], [b"help"], [b"FOO"], [], [b"ENCODING"],
+                                               [b"REFCOUNT", k(), k()], [b"IDLETIME"]])),
+        (0.005, lambda: [b"TIME"] + [k() for _ in range(r.choice([1, 2]))]),
     ]
     c *= sum(p for p, f in table)
     acc = 0.0

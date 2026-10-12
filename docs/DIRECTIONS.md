@@ -300,7 +300,7 @@ Where performance and proof meet: **batched execution under proved laws.**
    done), SCAN and RANDOMKEY (done), and the log's rewrite, measured by Redis's own test
    suite run against BendKV and by client libraries' tests. Lua, streams, cluster,
    replication and modules are out of scope. The suite's count: of the 1,673 tests
-   Redis 7.0.15 passes against a server it did not start, BendKV passes 268, 244 of the
+   Redis 7.0.15 passes against a server it did not start, BendKV passes 272, 248 of the
    370 in what it has ([COMPATIBILITY.md](COMPATIBILITY.md)).
 
 After that comes proving the native strings (section 5, step 1): a small piece of

@@ -635,6 +635,60 @@ def randomkey.of(+db: R.Db, +r: U32) -> R.Reply:
     case R.Db{+t, n, x, +now, rr}:
       R.r_get(KV.pick(String, t, r, now))
 
+# TIME: the time the batch runs at (the focus's, set from the clock for
+# each group of batches), in s and us since 1970; BendKV keeps it in ms
+def time.reply(+now: Nat) -> R.Reply:
+  R.RArray{[R.RBulk{Nat.show(Nat.div(now, 1000n))}, R.RBulk{Nat.show(Nat.mul(Nat.mod(now, 1000n), 1000n))}]}
+
+# OBJECT of a key there (none: nil). BendKV keeps a value as its bytes
+# alone, so it answers ENCODING as Redis 7.0.15 encodes a value set whole
+# ("int" for a long, "embstr" up to 44 bytes, else "raw"; a value Redis
+# made by APPEND, SETRANGE or SETBIT is "raw" there whatever it holds),
+# REFCOUNT by the integers 0 to 9999 Redis shares (INT_MAX for one, unless
+# maxmemory is set with an LRU or LFU policy, else 1), IDLETIME and FREQ
+# 0: it does not track accesses. IDLETIME is refused under an LFU policy,
+# FREQ under any other, as in Redis.
+def obj.lfu(+cfg: List<&2, C.CItem>) -> Bool:
+  +p = C.config.get_value(cfg, "maxmemory-policy")
+  Bool.or(String.eq(p, "allkeys-lfu"), String.eq(p, "volatile-lfu"))
+
+def obj.shared(+cfg: List<&2, C.CItem>) -> Bool:
+  +p = C.config.get_value(cfg, "maxmemory-policy")
+  Bool.or(String.eq(C.config.get_value(cfg, "maxmemory"), "0"),
+    Bool.not(Bool.or(Bool.or(String.eq(p, "allkeys-lru"), String.eq(p, "volatile-lru")), obj.lfu(cfg))))
+
+def obj.encoding(l: R.LL, +n: Nat) -> R.Reply:
+  match l:
+    case R.LL{neg, hi, lo}:
+      R.RBulk{"int"}
+    case R.LLBad{}:
+      R.RBulk{Bool.pick(String, Nat.is_le(n, 44n), "embstr", "raw")}
+
+def obj.refcount(l: R.LL, +shared: Bool) -> R.Reply:
+  match l:
+    case R.LL{+neg, +hi, +lo}:
+      R.r_int(Bool.pick(Nat, Bool.and(shared, Bool.and(Bool.not(neg), Bool.and(Nat.is_eq(hi, 0n), Nat.is_lt(lo, 10000n)))), 2147483647n, 1n))
+    case R.LLBad{}:
+      R.r_int(1n)
+
+def obj.of(+sub: Nat, +v: String, +cfg: List<&2, C.CItem>) -> R.Reply:
+  match sub:
+    case 2n:
+      Bool.pick(R.Reply, obj.lfu(cfg), R.r_int(0n), R.RError{"ERR An LFU maxmemory policy is not selected, access frequency not tracked. Please note that when switching between policies at runtime LRU and LFU data will take some time to adjust."})
+    case 3n:
+      obj.encoding(R.ll.read(v), String.length(v))
+    case 4n:
+      obj.refcount(R.ll.read(v), obj.shared(cfg))
+    case _:
+      Bool.pick(R.Reply, obj.lfu(cfg), R.RError{"ERR An LFU maxmemory policy is selected, idle time not tracked. Please note that when switching between policies at runtime LRU and LFU data will take some time to adjust."}, R.r_int(0n))
+
+def obj.reply(+sub: Nat, m: Maybe<&2, KV.Item<String>>, +cfg: List<&2, C.CItem>) -> R.Reply:
+  match m:
+    case Some{KV.Item{+v, e}}:
+      obj.of(sub, v, cfg)
+    case None{}:
+      R.RNull{}
+
 # a session command's reply, sent or not; the databases are there for
 # the commands that read them
 def own_reply(+o: R.SessOp, +c: Conn, +s: Srv, +ds: R.Ds) -> Maybe<&2, R.Reply>:
@@ -675,6 +729,10 @@ def own_reply(+o: R.SessOp, +c: Conn, +s: Srv, +ds: R.Ds) -> Maybe<&2, R.Reply>:
       say(conn.mode(c), move.reply(k, move.idx(d, c, s), ds))
     case R.SFlushAll{}:
       say(conn.mode(c), R.r_ok())
+    case R.STime{}:
+      say(conn.mode(c), time.reply(R.ds.now(ds)))
+    case R.SObject{+sub, +k}:
+      say(conn.mode(c), obj.reply(sub, R.db.ent(R.ds.focused(ds), k), srv.cfg(s)))
     case R.SReply{r}:
       say(conn.mode(c), r)
     case R.SBad{r}:
@@ -718,6 +776,10 @@ def own_conn(+o: R.SessOp, +c: Conn, +s: Srv) -> Conn:
     case R.SMove{k, d}:
       step_conn(c, s)
     case R.SFlushAll{}:
+      step_conn(c, s)
+    case R.STime{}:
+      step_conn(c, s)
+    case R.SObject{sub, k}:
       step_conn(c, s)
     case R.SReply{r}:
       step_conn(c, s)
