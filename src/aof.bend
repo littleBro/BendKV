@@ -85,6 +85,17 @@ def hnew.effect(gone: Bool, +k: String, ps: List<&2, KV.HPair>) -> List<&2, R.Cm
     case False{}:
       [R.Upd{k, R.UHash{R.HWNew{ps}}}]
 
+# a new list, its elements xs pushed at its first end (left) or its
+# last: the push where the trie held no entry for the key (gone), else
+# the script that deletes the key and runs the pushes (R.LWNew), one
+# entry, as for a new hash
+def lnew.effect(gone: Bool, +k: String, +left: Bool, xs: List<&2, String>) -> List<&2, R.Cmd>:
+  match gone:
+    case True{}:
+      [R.Upd{k, R.UList{R.LWPush{left, xs}}}]
+    case False{}:
+      [R.Upd{k, R.UList{R.LWNew{left, xs}}}]
+
 # the effects of an update, from the change it made to its key, whose
 # code was c (R.ent.code)
 def ch.effect(+k: String, +c: Nat, +ch: R.Change) -> List<&2, R.Cmd>:
@@ -107,6 +118,10 @@ def ch.effect(+k: String, +c: Nat, +ch: R.Change) -> List<&2, R.Cmd>:
       [R.Upd{k, R.UHash{op}}]
     case R.CHashNew{ps, h}:
       hnew.effect(Nat.is_eq(c, 0n), k, ps)
+    case R.CList{op, l}:
+      [R.Upd{k, R.UList{op}}]
+    case R.CListNew{+left, xs, l}:
+      lnew.effect(Nat.is_eq(c, 0n), k, left, xs)
 
 def upd.effect(+k: String, +c: Nat, +o: R.Out) -> List<&2, R.Cmd>:
   match o:
@@ -184,6 +199,50 @@ def run.bitop(+op: R.BitK, +d: String, +srcs: List<&2, String>, db: R.Db) -> R.R
   +x = db
   run.out(R.exec(R.BitOp{op, d, srcs}, x), bitop.eff(R.bitop.wrong(srcs, R.db.now(x), R.db.trie(x)), op, d, srcs, x))
 
+# LMOVE's effect: the LMOVE when it moved an element, in its New form
+# (the script that deletes the destination first) when the destination
+# held an entry whose time had passed (a New form logs itself again)
+def lmove.moved(m: R.Mv) -> Bool:
+  match m:
+    case R.MvNone{}:
+      False{}
+    case R.MvWrong{}:
+      False{}
+    case _:
+      True{}
+
+def lmove.effect(moved: Bool, dead: Bool, +s: String, +t: String, +e: R.LEnds) -> List<&2, R.Cmd>:
+  match moved dead:
+    case True{} True{}:
+      [R.LMove{s, t, R.ends.new(e)}]
+    case True{} False{}:
+      [R.LMove{s, t, e}]
+    case False{} _:
+      Nil{}
+
+def run.lmove(+s: String, +t: String, +e: R.LEnds, db: R.Db) -> R.Reply & (List<&2, R.Cmd> & R.Db):
+  +d = db
+  es = lmove.effect(lmove.moved(R.mv.find(d, s, t, e)), R.ent.dead(R.db.now(d), R.db.entry(d, t)), s, t, e)
+  run.out(R.exec(R.LMove{s, t, e}, d), es)
+
+# LMPOP's effect: the update of the key it pops from (an LPOP or RPOP of
+# the count, or the DEL of its last elements), as run.upd gives it
+def lmpop.out(+k: String, r: R.Reply & (List<&2, R.Cmd> & R.Db)) -> R.Reply & (List<&2, R.Cmd> & R.Db):
+  (x, q) = r
+  (R.lmpop.reply(k, x), q)
+
+def lmpop.at(m: Maybe<&2, String>, +left: Bool, c: String, db: R.Db) -> R.Reply & (List<&2, R.Cmd> & R.Db):
+  match m:
+    case Some{+k}:
+      lmpop.out(k, run.upd(db, k, R.UList{R.LWPopN{left, c}}))
+    case None{}:
+      (R.RNullA{}, (Nil{}, db))
+
+def run.lmpop(ks: List<&2, String>, +left: Bool, c: String, db: R.Db) -> R.Reply & (List<&2, R.Cmd> & R.Db):
+  +x = db
+  +k = ks
+  lmpop.at(R.lmpop.first(k, R.lmpop.head(k, x), x), left, c, x)
+
 def run(+c: R.Cmd, db: R.Db) -> R.Reply & (List<&2, R.Cmd> & R.Db):
   match c:
     case R.Upd{+k, +op}:
@@ -196,6 +255,10 @@ def run(+c: R.Cmd, db: R.Db) -> R.Reply & (List<&2, R.Cmd> & R.Db):
       run.rename(src, dst, nx, db)
     case R.BitOp{+op, +d, +srcs}:
       run.bitop(op, d, srcs, db)
+    case R.LMove{+s, +t, +e}:
+      run.lmove(s, t, e, db)
+    case R.LMPop{+ks, +left, +n}:
+      run.lmpop(ks, left, n, db)
     case _:
       run.put(c, R.exec(c, db))
 
@@ -393,6 +456,49 @@ def hash.args(+k: String, op: R.HWrite) -> List<&2, String>:
     case _:
       Nil{}
 
+# a list's write as the file logs it: the command as the client sent it,
+# or the script of a new list (R.hnew.script)
+def push.name(left: Bool, x: Bool) -> String:
+  match left x:
+    case True{} False{}:
+      "LPUSH"
+    case False{} False{}:
+      "RPUSH"
+    case True{} True{}:
+      "LPUSHX"
+    case False{} True{}:
+      "RPUSHX"
+
+def pop.name(left: Bool) -> String:
+  match left:
+    case True{}:
+      "LPOP"
+    case False{}:
+      "RPOP"
+
+def list.args(+k: String, op: R.LWrite) -> List<&2, String>:
+  match op:
+    case R.LWPush{left, xs}:
+      push.name(left, False{}) <> k <> xs
+    case R.LWPushX{left, xs}:
+      push.name(left, True{}) <> k <> xs
+    case R.LWPop{left}:
+      [pop.name(left), k]
+    case R.LWPopN{left, c}:
+      [pop.name(left), k, c]
+    case R.LWSet{i, v}:
+      ["LSET", k, i, v]
+    case R.LWBefore{p, v}:
+      ["LINSERT", k, "BEFORE", p, v]
+    case R.LWAfter{p, v}:
+      ["LINSERT", k, "AFTER", p, v]
+    case R.LWRem{c, v}:
+      ["LREM", k, c, v]
+    case R.LWTrim{a, b}:
+      ["LTRIM", k, a, b]
+    case R.LWNew{left, xs}:
+      "EVAL" <> R.hnew.script() <> "1" <> k <> push.name(left, False{}) <> xs
+
 def upd.args(+k: String, op: R.UpdOp) -> List<&2, String>:
   match op:
     case R.USet{v, cond, ttl, name}:
@@ -407,8 +513,25 @@ def upd.args(+k: String, op: R.UpdOp) -> List<&2, String>:
       ["SETRANGE", k, Nat.show(o), s]
     case R.UHash{op}:
       hash.args(k, op)
+    case R.UList{op}:
+      list.args(k, op)
     case _:
       Nil{}
+
+# LMOVE as the file logs it, or the script of its New form
+def end.word(left: Bool) -> String:
+  match left:
+    case True{}:
+      "LEFT"
+    case False{}:
+      "RIGHT"
+
+def lmove.args.of(fresh: Bool, s: String, t: String, +e: R.LEnds) -> List<&2, String>:
+  match fresh:
+    case True{}:
+      ["EVAL", R.lmove.script(), "2", s, t, end.word(R.ends.from(e)), end.word(R.ends.to(e))]
+    case False{}:
+      ["LMOVE", s, t, end.word(R.ends.from(e)), end.word(R.ends.to(e))]
 
 # a logged command as the strings of a request that parses back to it
 # (none for a command no effect is: they are never logged)
@@ -426,6 +549,8 @@ def args(c: R.Cmd) -> List<&2, String>:
       ["FLUSHDB"]
     case R.Rename{src, dst, nx}:
       ["RENAME", src, dst]
+    case R.LMove{s, t, +e}:
+      lmove.args.of(R.ends.fresh(e), s, t, e)
     case _:
       Nil{}
 

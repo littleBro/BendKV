@@ -687,6 +687,8 @@ def encode_onto(rs: List<&2, R.Reply>, out: String) -> String:
       "*" ++ Nat.show(List.length(&2, R.Reply, xs)) ++ crlf() ++ encode_onto(xs, encode_onto(rest, out))
     case Con{R.RIntS{s}, rest}:
       ":" ++ s ++ crlf() ++ encode_onto(rest, out)
+    case Con{R.RNullA{}, rest}:
+      "*-1\r\n" ++ encode_onto(rest, out)
 
 def encode(r: R.Reply) -> String:
   encode_onto([r], SNil{})

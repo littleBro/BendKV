@@ -217,14 +217,20 @@ def writes(c: R.Cmd, +j: String) -> Bool:
       any_key(j, [src, dst])
     case R.BitOp{op, d, srcs}:
       KV.str_eq(j, d)
+    case R.LMove{s, t, e}:
+      any_key(j, [s, t])
+    case R.LMPop{ks, left, c}:
+      any_key(j, ks)
     case _:
       False{}
 
 # the keys whose entries a command's writes depend on, besides the key
 # each write is to: MSETNX sets its keys only when none of them is there,
 # RENAME moves its source key's entry to its destination when the
-# destination is not there for RENAMENX, and BITOP sets its destination
-# to what its sources make
+# destination is not there for RENAMENX, BITOP sets its destination to
+# what its sources make, LMOVE pushes onto its destination what it pops
+# from its source, and LMPOP pops from the first of its keys that is
+# there
 def pair_keys(ps: List<&2, R.KVPair>) -> List<&2, String>:
   match ps:
     case Nil{}:
@@ -240,6 +246,10 @@ def deps(c: R.Cmd) -> List<&2, String>:
       [src, dst]
     case R.BitOp{op, d, srcs}:
       srcs
+    case R.LMove{s, t, e}:
+      [s, t]
+    case R.LMPop{ks, left, c}:
+      ks
     case _:
       Nil{}
 
@@ -608,6 +618,10 @@ def disturbs(+c2: R.Cmd, c1: R.Cmd) -> Bool:
       writes_any(c2, [src, dst])
     case R.BitOp{op, d, srcs}:
       writes_any(c2, srcs)
+    case R.LMove{s, t, e}:
+      writes_any(c2, [s, t])
+    case R.LMPop{ks, left, c}:
+      writes_any(c2, ks)
     case R.DbSize{}:
       Bool.not(is_read(c2))
     case R.Keys{p}:
@@ -683,6 +697,10 @@ def clash_w(+c2: R.Cmd, c1: R.Cmd) -> Bool:
       writes_any(c2, [src, dst])
     case R.BitOp{op, +d, srcs}:
       writes(c2, d)
+    case R.LMove{s, t, e}:
+      writes_any(c2, [s, t])
+    case R.LMPop{ks, left, c}:
+      writes_any(c2, ks)
     case _:
       False{}
 

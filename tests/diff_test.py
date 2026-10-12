@@ -26,6 +26,11 @@ short). BITFIELD and BITFIELD_RO read and write fields of random types
 at small bit offsets (or #k), with values at the edges of the fields and
 of a long long, under each kind of overflow, and wrong types, offsets,
 values and words among them; a read may go far, a write never does.
+Lists are pushed to and popped from (with counts), read and written at
+indexes and ranges, cut (LTRIM), searched (LPOS with its options) and
+moved between keys of the same few names (LMOVE, RPOPLPUSH, LMPOP),
+with elements of a few names, so that LPOS, LREM and LINSERT meet the
+ones pushed, and wrong numbers and words among them.
 
 Known, documented divergences that the generator avoids: BendKV's
 integers have at most 14 digits (Redis allows int64), and so have its
@@ -335,6 +340,39 @@ def rnd_hpairs(r):
     return sum(([rnd_field(r), rnd_value(r)] for _ in range(r.randint(1, 3))), [])
 
 
+# a list's elements: a few, so that LPOS, LREM and LINSERT meet the ones
+# pushed, and random bytes now and then; numbers for indexes, ranges and
+# counts, at their edges and wrong; the ends of a move
+LELEMS = [b"a", b"b", b"c", b"", b"\x00\r\n"]
+
+
+def rnd_elem(r):
+    return r.choice(LELEMS) if r.random() < 0.9 else rnd_value(r)
+
+
+def rnd_lnum(r):
+    return r.choice([b"0", b"1", b"2", b"-1", b"-2", b"5", b"-5", b"100", b"x", b"1.5", b"",
+                     b"-9223372036854775808", b"9223372036854775807"])
+
+
+def rnd_end(r):
+    return r.choice([b"LEFT", b"RIGHT", b"left", b"Right", b"UP"])
+
+
+def rnd_lpos(r):
+    opts = []
+    for _ in range(r.choice([0, 0, 1, 2, 3])):
+        opts += r.choice([[b"RANK", r.choice([b"1", b"2", b"-1", b"-3", b"0", b"x"])],
+                          [b"COUNT", r.choice([b"0", b"1", b"2", b"-1"])],
+                          [b"MAXLEN", r.choice([b"0", b"1", b"3", b"-1"])], [b"RANK"], [b"FOO"]])
+    return opts
+
+
+def rnd_lmpop(r, ks):
+    n = r.choice([str(len(ks)).encode()] * 8 + [b"0", b"x", b"-1", str(len(ks) + 1).encode()])
+    return [b"LMPOP", n] + ks + [rnd_end(r)] + r.choice([[], [], [b"COUNT", rnd_lnum(r)], [b"COUNT"]])
+
+
 def rnd_cmd(r):
     k = lambda: r.choice(KEYS)
     ks = lambda: [k() for _ in range(r.randint(1, 4))]
@@ -427,6 +465,22 @@ def rnd_cmd(r):
         (0.01, lambda: [b"HRANDFIELD", k()] + r.choice([[], [b"2"], [b"-3"], [b"5", b"WITHVALUES"], [b"x"], [b"0"]])),
         (0.005, lambda: [r.choice([b"HSET", b"HGET", b"HDEL", b"HINCRBY", b"HSCAN", b"HMGET", b"HSETNX"])] +
                         [k() for _ in range(r.choice([0, 1]))]),
+        (0.05, lambda: [r.choice([b"LPUSH", b"RPUSH", b"lpush", b"rpush"]), k()] + [rnd_elem(r) for _ in range(r.randint(1, 4))]),
+        (0.01, lambda: [r.choice([b"LPUSHX", b"RPUSHX"]), k()] + [rnd_elem(r) for _ in range(r.randint(1, 3))]),
+        (0.03, lambda: [r.choice([b"LPOP", b"RPOP"]), k()] + r.choice([[], [], [rnd_lnum(r)]])),
+        (0.02, lambda: [r.choice([b"LLEN", b"TYPE"]), k()]),
+        (0.02, lambda: [b"LINDEX", k(), rnd_lnum(r)]),
+        (0.03, lambda: [b"LRANGE", k(), rnd_lnum(r), rnd_lnum(r)]),
+        (0.01, lambda: [b"LSET", k(), rnd_lnum(r), rnd_elem(r)]),
+        (0.01, lambda: [b"LINSERT", k(), r.choice([b"BEFORE", b"after", b"MIDDLE"]), rnd_elem(r), rnd_elem(r)]),
+        (0.01, lambda: [b"LREM", k(), rnd_lnum(r), rnd_elem(r)]),
+        (0.01, lambda: [b"LTRIM", k(), rnd_lnum(r), rnd_lnum(r)]),
+        (0.02, lambda: [b"LPOS", k(), rnd_elem(r)] + rnd_lpos(r)),
+        (0.02, lambda: [b"LMOVE", k(), k(), rnd_end(r), rnd_end(r)]),
+        (0.01, lambda: [b"RPOPLPUSH", k(), k()]),
+        (0.01, lambda: rnd_lmpop(r, ks())),
+        (0.005, lambda: [r.choice([b"LPUSH", b"LPOP", b"LRANGE", b"LSET", b"LINSERT", b"LREM", b"LTRIM", b"LPOS",
+                                   b"LMOVE", b"LMPOP", b"RPOPLPUSH", b"LINDEX", b"LLEN"])] + [k() for _ in range(r.choice([0, 1]))]),
     ]
     c *= sum(p for p, f in table)
     acc = 0.0

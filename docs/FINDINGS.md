@@ -2350,6 +2350,110 @@ append-only files (Redis's loaded by BendKV and BendKV's by Redis, the script of
 hash among them) and in the restarts from BendKV's own, and COMMAND GETKEYS of EVAL and of
 the hash commands in the test of COMMAND.
 
+## 3zh. Lists
+
+**What there is.** LPUSH, RPUSH, LPUSHX, RPUSHX, LPOP and RPOP (with a count), LLEN,
+LINDEX, LRANGE, LSET, LINSERT, LREM, LTRIM, LPOS, LMOVE, RPOPLPUSH and LMPOP. A list is a
+deque of two stacks (`Deq`): the front elements in order, the back ones reversed, so a
+push or a pop at either end adds or takes the head of one of them. When one part holds
+more than three times the other's elements and one more, the elements are dealt again,
+half to each: a push or a pop costs O(1) amortized, and LINDEX, LSET and LRANGE walk only
+from the end nearer to what they read. A key never holds an empty list: a write that
+takes its last element deletes the key, as in Redis. OBJECT ENCODING answers `quicklist`,
+as Redis 7.0 does for every list. Arguments are read where Redis reads them: the counts
+of LPOP and LREM and the ranges of LRANGE and LTRIM as the command parses, before the key
+is looked for; the index of LINDEX and of LSET once the list is found; LPOS's options in
+turn, the last of each counting, with a RANK of LLONG_MIN as Redis 7.0.15 has it (its
+negation wraps in C: it reads from the last element and, with COUNT, takes every match).
+A count or an index may be any long long.
+
+**A command travels as wide as its widest form.** The first version of the list commands
+cost every request more instructions: GET +3.6%, SET +3.0%, INCR +4.6%, though GET runs
+none of them. Bend compiles a non-recursive nested type flat: a value of `Cmd` travels in
+as many registers as its widest constructor needs, nested types unfolded, and the reads
+of a list, kept inside a `Peek`, had forms of several fields of their own. `Cmd` grew
+from 5 words to 11, and every call that passes a command (the parser, the hints, the
+dispatch, the run) moved and dropped the extra words. The reads now keep their arguments
+as they came, one word (a list of strings, read again as the command runs; the parser
+reads LRANGE's and LPOS's first, to answer their errors as Redis does), and a write of a
+list keeps two fields at most, so that a change that holds one is no wider than a hash's.
+The cost fell to GET +0.8%, SET +0.7%, INCR +2.6%. INCR's share is the dispatch: the
+names grow with each type, and the chain of comparisons for INCR's length holds more of
+them; a dispatch by length and then by first letter comes next.
+
+**Moves between keys.** LMOVE (RPOPLPUSH is its RIGHT LEFT form) pops from one key and
+pushes onto another; LMPOP pops from the first of its keys that holds a list. Both are
+commands whose writes depend on other keys (section 3za): `deps` names LMOVE's two keys
+and LMPOP's keys, and the commuting laws, proved for any command with its dependencies,
+cover them with no change to a law. LMPOP is logged as the pop of the key it took from (an
+LPOP or RPOP with its count, or the DEL of that key when it took the last elements): one
+entry. Bend 2 has no mutual recursion, so the search for the first key that is there
+computes whether the first key holds a list before it recurses, and passes that down
+(`lmpop.first`).
+
+**A destination whose time had passed.** LMOVE onto a key whose entry still lies in the
+trie with its time passed meets the case of hashes (section 3zg): at time 0, when the
+file loads, the old entry lives again, and a plain LMOVE would push onto it. BendKV logs
+such a move as one EVAL of a second fixed script,
+`redis.call('del',KEYS[2]) return redis.call('lmove',KEYS[1],KEYS[2],ARGV[1],ARGV[2])`,
+which Redis runs as it loads the file and BendKV parses back as `LMove` with its ends' New
+form: a move that takes the destination as not there, whatever it holds, and sets the new
+list where the destination's entry lies. Where it lies matters: the persistence proof
+compares tries by their structure, and a delete then a set would put the key at the end of
+its bucket. A list made by a push where an expired entry lay is logged as the hash's script
+with the pushes. (`tests/aof_redis_test.py` makes such keys with a time of 3 ms; BendKV's
+sweep, every 100 ms, may take them first, and the file then holds a plain move onto a key
+not there.) One case parts the two servers, and no file BendKV writes holds it: the move
+script with one key as both source and destination, for which Redis deletes the key and
+moves nothing, where BendKV moves the element within the list.
+
+**A count as large as a long long.** `tests/numbers_test.py`, with the list commands in
+it, stopped the server: `LPOP key 9223372036854775807` on a list of five popped one
+element a step for the whole count, a pop of an empty deque being a step that changes
+nothing: 2^63 steps. Redis bounds the count by the list's length; BendKV now does too
+(`lpop.cap`), and the proof follows the code. (`HRANDFIELD key -2147483649` asks both
+servers for 2^31 picks, which both start to build; the test leaves it out.)
+
+**The proofs.** Of the 1,053 definitions of the proof, the spec and the laws, 49 changed
+and 156 came in; no law changed. The one-key commands of lists are reads (`Peek`) and
+updates (`Upd`) of their key, as hashes are; LMOVE and LMPOP are commands of their own in
+the spec (`mv.find`, `mv.do`, `lmpop.first`), with their lemmas of frame, of a key's entry
+after them, of their replies, of the bridge to the server's records and of time. The new
+parts of persistence: `Good` for the two changes of a list (a list changed: the write it
+keeps, replayed on the list the key held, makes the same change, and is one the file can
+write: a push of elements, a pop of a count that reads as one, LREM and LTRIM of numbers
+that read as ones; a new list: its pushes on an empty one), proved of every write by its
+shape (`lw_shape`); LMOVE's replay at time 0 (what it finds then is what it found at now:
+an entry there at now is there at 0, and a dead destination is one the New form takes as
+not there); the parse back of each write and of both scripts; one effect per command.
+Laws of lists themselves (LPUSH, then LPOP answers the element) are not stated yet.
+
+**Cost.** Instructions per request (`make perfcheck`): GET 3,298 (+0.8%), SET 4,289
+(+0.7%), INCR 4,614 (+2.6%), within the guard. Against Redis 7.0.15 (redis-benchmark,
+pipelines of 16, one key): LPUSH 1.08 M/s against 1.63 M/s, RPUSH 0.81 against 1.02, LPOP
+0.60 against 1.15, RPOP 0.80 against 1.26: 0.53 to 0.80 of Redis's throughput, where GET
+is 1.6 times it. A push of a hundred elements a command onto a list that grows to 200,000:
+33 µs a command pipelined against Redis's 10, 89 against 67 one at a time. A read or a
+write in the middle of a list of 200,000 walks cons cells: LINDEX 3.9 ms (Redis 0.06),
+LSET 9.2 (0.05), LINSERT 19.9 (1.3), LREM 10.1 (2.5), LPOS 7.2 (1.5); near an end, 0.08
+ms. Redis's quicklist hops nodes of many elements; a deque of chunks would do the same.
+
+**Where BendKV differs.** MEMORY USAGE is an estimate; the blocking commands (BLPOP,
+BRPOP, BLMOVE, BLMPOP, BRPOPLPUSH) are not there yet; the move script with one key at
+both ends (above).
+
+**Redis's test suite and the tests.** BendKV passes 424 of the 1,673 tests Redis passes
+(25.3%; 391 before) and 401 of the 689 in what it has. Lists brought 33: all 11 of
+unit/type/list-3, both of unit/type/list-2, 15 of the 218 of unit/type/list (the unit then
+runs its other tests over RESP3 first, and stops at HELLO 3), and 8 tests of other units
+that need a list. The tests: `tests/list_test.py` in `make test` (a script of commands at
+their edges, lists of 1 to 20,000 elements read and written at both ends and in the
+middle, a capped list and a queue, keys whose time has passed as sources and destinations
+of moves, then 3,000 random commands on a few keys with moves between them, each reply
+compared with Redis's), lists in the differential test, in the numbers test, in both
+append-only files (both scripts among them) and in the restarts, in `tests/aof_check.bend`,
+and COMMAND GETKEYS of LMPOP, LMOVE and the others in the test of COMMAND.
+
 ## 4. Where a request's time goes, and hiding the memory waits
 
 With the eight patches, BendKV ran fewer instructions on GET and SET than Redis, missed

@@ -70,6 +70,10 @@ def upd.ch(t: KV.Trie<KV.Val>, +k: String, +h: U32, r: R.Reply, ch: R.Change) ->
       (r, KV.keep.at(KV.Val, t, k, KV.VColl{KV.CHash{hv}}, h))
     case R.CHashNew{ps, hv}:
       (r, KV.setx.at(KV.Val, t, k, KV.VColl{KV.CHash{hv}}, 0n, h))
+    case R.CList{op, lv}:
+      (r, KV.keep.at(KV.Val, t, k, KV.VColl{KV.CList{lv}}, h))
+    case R.CListNew{left, xs, lv}:
+      (r, KV.setx.at(KV.Val, t, k, KV.VColl{KV.CList{lv}}, 0n, h))
 
 def upd.put(t: KV.Trie<KV.Val>, +k: String, +h: U32, o: R.Out) -> R.Reply & KV.Trie<KV.Val>:
   match o:
@@ -124,6 +128,98 @@ def bitop.go(wrong: Bool, +op: R.BitK, srcs: List<&2, String>, +dst: String, db:
     case False{}:
       +d = db
       bitop(R.bitop.val(op, srcs, now, d), dst, d)
+
+# LMOVE: what it finds, from its keys' entries (dst none for a New
+# form); the element popped from src's list and pushed onto dst's
+def mv.find(+db: KV.Trie<KV.Val>, +s: String, +t: String, +e: R.LEnds, +now: Nat) -> R.Mv:
+  R.mv.of(R.ent.live(now, KV.entry.at(KV.Val, db, s, KV.hash(s))), KV.str_eq(s, t), R.mv.dst.ent(R.ends.fresh(e), R.ent.live(now, KV.entry.at(KV.Val, db, t, KV.hash(t)))))
+
+# src left with the list l: deleted when l is empty
+def mv.src(empty: Bool, +k: String, l: KV.Deq, db: KV.Trie<KV.Val>) -> KV.Trie<KV.Val>:
+  match empty:
+    case True{}:
+      KV.del(KV.Val, db, k)
+    case False{}:
+      KV.keep(KV.Val, db, k, KV.VColl{KV.CList{l}})
+
+def mv.put(+s: String, l: KV.Deq, db: KV.Trie<KV.Val>) -> KV.Trie<KV.Val>:
+  +m = l
+  mv.src(Nat.is_eq(KV.deq.len(m), 0n), s, m, db)
+
+def mv.go(p: KV.Pop, +e: R.LEnds, +s: String, +t: String, dl: Maybe<&2, KV.Deq>, db: KV.Trie<KV.Val>) -> R.Reply & KV.Trie<KV.Val>:
+  match p dl:
+    case KV.Pop{+x, l} Some{d}:
+      (R.RBulk{x}, KV.keep(KV.Val, mv.put(s, l, db), t, KV.VColl{KV.CList{KV.deq.push(R.ends.to(e), x, d)}}))
+    case KV.Pop{+x, l} None{}:
+      (R.RBulk{x}, KV.setx(KV.Val, mv.put(s, l, db), t, KV.VColl{KV.CList{KV.deq.push(R.ends.to(e), x, KV.deq.empty())}}, 0n))
+    case KV.PopNone{} _:
+      (R.RNull{}, db)
+
+def mv.self(p: KV.Pop, +e: R.LEnds, +s: String, db: KV.Trie<KV.Val>) -> R.Reply & KV.Trie<KV.Val>:
+  match p:
+    case KV.Pop{+x, l}:
+      (R.RBulk{x}, KV.keep(KV.Val, db, s, KV.VColl{KV.CList{KV.deq.push(R.ends.to(e), x, l)}}))
+    case KV.PopNone{}:
+      (R.RNull{}, db)
+
+def mv.do(m: R.Mv, +e: R.LEnds, +s: String, +t: String, db: KV.Trie<KV.Val>) -> R.Reply & KV.Trie<KV.Val>:
+  match m:
+    case R.MvNone{}:
+      (R.RNull{}, db)
+    case R.MvWrong{}:
+      (R.e_wrongtype(), db)
+    case R.MvSelf{l, se}:
+      mv.self(KV.deq.pop(R.ends.from(e), l), e, s, db)
+    case R.MvOnto{l, se, dl}:
+      mv.go(KV.deq.pop(R.ends.from(e), l), e, s, t, Some{dl}, db)
+    case R.MvNew{l, se}:
+      mv.go(KV.deq.pop(R.ends.from(e), l), e, s, t, None{}, db)
+
+def lmove(db: KV.Trie<KV.Val>, +s: String, +t: String, +e: R.LEnds, +now: Nat) -> R.Reply & KV.Trie<KV.Val>:
+  +x = db
+  mv.do(mv.find(x, s, t, e, now), e, s, t, x)
+
+# an update of k, as exec runs Upd
+def upd.run(db: KV.Trie<KV.Val>, +k: String, op: R.UpdOp, +now: Nat) -> R.Reply & KV.Trie<KV.Val>:
+  +d = db
+  +h = KV.hash(k)
+  +m = KV.entry.at(KV.Val, d, k, h)
+  upd.put(d, k, h, R.upd.v(op, now, R.ent.live(now, m)))
+
+# LMPOP: the first of the keys there at now (there: whether the first of
+# ks is), and the pop of its list (LWPopN) as Upd runs it
+def lmpop.head(+ks: List<&2, String>, +db: KV.Trie<KV.Val>, +now: Nat) -> Bool:
+  match ks:
+    case Con{+k, +rest}:
+      Maybe.is_some(&2, KV.Item<KV.Val>, R.ent.live(now, KV.entry.at(KV.Val, db, k, KV.hash(k))))
+    case Nil{}:
+      False{}
+
+def lmpop.first(ks: List<&2, String>, there: Bool, +db: KV.Trie<KV.Val>, +now: Nat) -> Maybe<&2, String>:
+  match ks there:
+    case Con{k, rest} True{}:
+      Some{k}
+    case Con{k, +rest} False{}:
+      +h = lmpop.head(rest, db, now)
+      lmpop.first(rest, h, db, now)
+    case Nil{} _:
+      None{}
+
+def lmpop.out(+k: String, r: R.Reply & KV.Trie<KV.Val>) -> R.Reply & KV.Trie<KV.Val>:
+  (x, d) = r
+  (R.lmpop.reply(k, x), d)
+
+def lmpop.at(m: Maybe<&2, String>, +left: Bool, c: String, db: KV.Trie<KV.Val>, +now: Nat) -> R.Reply & KV.Trie<KV.Val>:
+  match m:
+    case Some{+k}:
+      lmpop.out(k, upd.run(db, k, R.UList{R.LWPopN{left, c}}, now))
+    case None{}:
+      (R.RNullA{}, db)
+
+def lmpop(db: KV.Trie<KV.Val>, ks: List<&2, String>, +left: Bool, c: String, +now: Nat) -> R.Reply & KV.Trie<KV.Val>:
+  +x = db
+  +k = ks
+  lmpop.at(lmpop.first(k, lmpop.head(k, x, now), x, now), left, c, x, now)
 
 def reply_of(r: R.Reply & KV.Trie<KV.Val>) -> R.Reply:
   (x, db) = r
@@ -191,6 +287,10 @@ def exec(cmd: R.Cmd, db: KV.Trie<KV.Val>, +now: Nat) -> R.Reply & KV.Trie<KV.Val
       (R.RError{"ERR a command of the connection, not of the database"}, db)
     case R.Bad{r}:
       (r, db)
+    case R.LMove{+s, +t, +e}:
+      lmove(db, s, t, e, now)
+    case R.LMPop{ks, +left, c}:
+      lmpop(db, ks, left, c, now)
 
 # a batch's replies, and the trie after it
 def replies(r: List<&2, R.Reply> & KV.Trie<KV.Val>) -> List<&2, R.Reply>:

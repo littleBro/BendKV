@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """Restart test for the append-only file: a random command stream (the
 differential test's, which moves between databases, moves keys between
-them and swaps them, and writes strings and hashes) against BendKV, with
-one FLUSHALL halfway, then the whole keyspace of each of the 16
-databases saved, each key with its value (a hash's pairs) and the time
-it expires at; after the server restarts from its file, every database
-must read back the same.
+them and swaps them, and writes strings, hashes and lists) against
+BendKV, with one FLUSHALL halfway, then the whole keyspace of each of
+the 16 databases saved, each key with its value (a hash's pairs, a
+list's elements) and the time it expires at; after the server restarts
+from its file, every database must read back the same.
 
     python3 tests/aof_test.py --port 6380 --write build/aof_dump.txt --rounds 1000
     (restart BendKV with the same file)
@@ -18,12 +18,17 @@ import sys
 from diff_test import NOW_S, Conn, rnd_cmd
 
 
-# a key's value as the dump shows it: a string's bytes (MGET's), or a
-# hash's pairs (MGET answers nil for a key of another type), in order of
-# their fields
+# a key's value as the dump shows it: a string's bytes (MGET's), a hash's
+# pairs in order of their fields, or a list's elements in order (MGET
+# answers nil for a key of another type)
 def value(c, k, v):
     if v[1] is not None:
         return v[1].hex()
+    c.send([[b"TYPE", k]])
+    if c.reply()[1] == b"list":
+        c.send([[b"LRANGE", k, b"0", b"-1"]])
+        kind, xs = c.reply()
+        return "list:" + ",".join(x.hex() for _, x in xs)
     c.send([[b"HGETALL", k]])
     kind, xs = c.reply()
     xs = [x for _, x in xs]
@@ -99,6 +104,17 @@ def main():
             batch.append([b"HINCRBY", b"h:%d" % i, b"f1", b"%d" % r.randint(-100, 100)])
             if i % 500 == 0:
                 batch.append([b"EXPIRE", b"h:%d" % i, b"%d" % r.randint(10**6, 10**7)])
+            # lists: pushes at both ends, now and then a long one (3000
+            # elements), popped, set, cut, and moved onto the next one
+            ne = 3000 if i % 4000 == 0 else r.randint(1, 6)
+            batch.append([b"RPUSH", b"l:%d" % i] + [b"e%d" % j for j in range(ne)])
+            batch.append([b"LPUSH", b"l:%d" % i, b"h", b"g"])
+            batch.append([b"LPOP", b"l:%d" % i] + ([b"2"] if i % 300 == 0 else []))
+            batch.append([b"LSET", b"l:%d" % i, b"-1", b"last"])
+            batch.append([b"LMOVE", b"l:%d" % i, b"l:%d" % (i + 100), b"LEFT", b"RIGHT"])
+            if i % 700 == 0:
+                batch.append([b"LTRIM", b"l:%d" % i, b"1", b"-2"])
+                batch.append([b"PEXPIREAT", b"l:%d" % i, b"%d" % (NOW_S * 1000 + r.randint(10**6, 10**9))])
             c.send(batch)
             for _ in batch:
                 c.reply()
