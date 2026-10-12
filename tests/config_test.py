@@ -7,8 +7,8 @@ a list of cases, each type of parameter and each error; then random
 values for every parameter that changes, each set and read back on both;
 then every parameter is put back as it was.
 
-The reference Redis runs as run_tests.sh starts it: one database, no
-snapshots, on the loopback (--databases 1 --save '' --bind 127.0.0.1).
+The reference Redis runs as run_tests.sh starts it: no snapshots, on
+the loopback (--save '' --bind 127.0.0.1).
 Parameters whose new value Redis would act on in a way that disturbs the
 test or the machine (the port, the addresses, the append-only file, the
 password, the client limits, the snapshots) are left out of the random

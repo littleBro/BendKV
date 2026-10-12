@@ -2,8 +2,7 @@
 """The commands of a connection, BendKV against Redis byte for byte: each
 case sends its requests on a fresh connection to both servers and compares
 what comes back before the server goes quiet, and whether it closed the
-connection. The reference Redis runs with one database (--databases 1),
-as BendKV has one. Client ids differ between the servers (Redis gives
+connection. Both servers have Redis's 16 databases. Client ids differ between the servers (Redis gives
 some to clients of its own), so a case that shows one has its integers
 masked. Two differences are left out: HELLO 3, which BendKV refuses (it
 speaks RESP2 alone), and a QUIT while CLIENT REPLY is off, after which
@@ -69,6 +68,19 @@ CASES = [
                              b"FUNCTION FLUSH x", b"FUNCTION FLUSH a b", b"FUNCTION", b"FUNCTION NOPE", b"FUNCTION HELP x"), False),
     # FLUSHALL and FLUSHDB
     ("flush options", lines(b"SET f 1", b"FLUSHALL ASYNC", b"GET f", b"FLUSHALL X", b"FLUSHDB sync", b"FLUSHDB a b", b"FLUSHALL"), False),
+    # several databases: numbers, keys apart, MOVE, SWAPDB, RESET
+    ("select: numbers", lines(b"SELECT 15", b"SELECT 16", b"SELECT 01", b"SELECT +1", b"SELECT 1.5", b"SELECT 2147483647",
+                              b"SELECT 2147483648", b"SELECT -2147483649", b"SELECT 99999999999999999999"), False),
+    ("databases apart", lines(b"SELECT 1", b"SET d 1", b"SELECT 2", b"GET d", b"SET d 2", b"SELECT 1", b"GET d",
+                              b"DBSIZE", b"FLUSHDB", b"DBSIZE", b"SELECT 2", b"GET d", b"FLUSHALL", b"GET d"), False),
+    ("move", lines(b"SET mv 1", b"MOVE mv 1", b"GET mv", b"SELECT 1", b"GET mv", b"MOVE mv 1", b"MOVE mv 0",
+                   b"MOVE nope 0", b"SET mv 2", b"SELECT 0", b"SET mv 3", b"SELECT 1", b"MOVE mv 0", b"GET mv",
+                   b"MOVE mv 16", b"MOVE mv x", b"MOVE mv -1", b"MOVE mv", b"MOVE a b c", b"FLUSHALL"), False),
+    ("move keeps the time", lines(b"SET mt 1 EXAT 4000000000", b"MOVE mt 3", b"SELECT 3", b"EXPIRETIME mt", b"FLUSHALL"), False),
+    ("swapdb", lines(b"SET s0 a", b"SELECT 1", b"SET s1 b", b"SWAPDB 0 1", b"GET s0", b"GET s1", b"SELECT 0", b"GET s1",
+                     b"SWAPDB 0 0", b"SWAPDB 0 16", b"SWAPDB x 0", b"SWAPDB 0 x", b"SWAPDB -1 0", b"SWAPDB 0",
+                     b"SWAPDB 1 2 3", b"FLUSHALL"), False),
+    ("reset selects 0", lines(b"SELECT 5", b"SET r5 x", b"RESET", b"GET r5", b"SELECT 5", b"GET r5", b"FLUSHALL"), False),
     # a pipeline of both kinds
     ("mixed pipeline", lines(b"SET m 1", b"CLIENT SETNAME pipe", b"INCR m", b"CLIENT GETNAME", b"GET m", b"TYPE m"), False),
 ]

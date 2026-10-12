@@ -183,28 +183,28 @@ def gen.count(srv: S.Srv, +code: Nat, ys: List<&2, R.Erred>) -> S.Srv:
   S.srv.errs(S.srv.ran(srv, R.code.calls(code, 1n), R.run.of(code, 1n), Nil{}, 0n, 0n), ys)
 
 # a batch on the general way so far: its replies (newest first), and the
-# connection, the server and the database after its commands so far
+# connection, the server and the databases after its commands so far
 type GRun is Data:
-  GRun{rs: List<&2, R.Reply>, conn: S.Conn, srv: S.Srv, db: R.Db}
+  GRun{rs: List<&2, R.Reply>, conn: S.Conn, srv: S.Srv, ds: R.Ds}
 
 def gen.done(d: S.Fin, p: Pre, rs: List<&2, R.Reply>) -> GRun:
   match d p:
-    case S.Fin{+rs1, conn, srv, db} Pre{+code, xs}:
+    case S.Fin{+rs1, conn, srv, ds} Pre{+code, xs}:
       +ys = gen.errs(xs, rs1, code)
-      GRun{List.reverse.go(&2, R.Reply, rs1, rs), conn, gen.count(srv, code, ys), db}
+      GRun{List.reverse.go(&2, R.Reply, rs1, rs), conn, gen.count(srv, code, ys), ds}
 
 # A call that runs while its client's replies are held back has its reply
 # counted as Redis has it. A command of the database runs with them on,
 # for its reply, which is counted and dropped (its client gets none), the
 # connection after it being the one its run with them held back gives
 # (S.next_conn: the replies are all that the mode changes); its run is its
-# only one, so the database goes on unshared. A command of the connection
+# only one, so the databases go on unshared. A command of the connection
 # or of the server runs as it is (CLIENT REPLY ON and RESET answer all the
 # same), its reply as Redis has it taken from S.own_reply before.
 def gen.held(d: S.Fin, conn: S.Conn, +code: Nat, rs: List<&2, R.Reply>) -> GRun:
   match d:
-    case S.Fin{+rs1, c1, srv, db}:
-      GRun{rs, conn, gen.count(srv, code, R.errs.zip(rs1, [code], Nil{})), db}
+    case S.Fin{+rs1, c1, srv, ds}:
+      GRun{rs, conn, gen.count(srv, code, R.errs.zip(rs1, [code], Nil{})), ds}
 
 def gen.err.of(m: Maybe<&2, R.Reply>, +code: Nat) -> List<&2, R.Erred>:
   match m:
@@ -213,39 +213,39 @@ def gen.err.of(m: Maybe<&2, R.Reply>, +code: Nat) -> List<&2, R.Erred>:
     case _:
       Nil{}
 
-def gen.pre.own(+o: R.SessOp, +code: Nat, +conn: S.Conn, +srv: S.Srv, +db: R.Db) -> Pre:
-  Pre{code, Some{gen.err.of(S.own_reply(o, S.conn.on(conn), srv, db), code)}}
+def gen.pre.own(+o: R.SessOp, +code: Nat, +conn: S.Conn, +srv: S.Srv, +ds: R.Ds) -> Pre:
+  Pre{code, Some{gen.err.of(S.own_reply(o, S.conn.on(conn), srv, ds), code)}}
 
-def gen.held.k(+k: S.Role, +c: R.Cmd, +code: Nat, rs: List<&2, R.Reply>, +conn: S.Conn, +srv: S.Srv, db: R.Db) -> GRun:
+def gen.held.k(+k: S.Role, +c: R.Cmd, +code: Nat, rs: List<&2, R.Reply>, +conn: S.Conn, +srv: S.Srv, ds: R.Ds) -> GRun:
   match k:
     case S.KSess{+o}:
-      +d = db
+      +d = ds
       +p = gen.pre.own(o, code, conn, srv, d)
       gen.done(S.run(conn, srv, B.Mixed{[c], Nil{}}, d), p, rs)
     case _:
-      gen.held(S.run(S.conn.on(conn), srv, B.Mixed{[c], Nil{}}, db), S.next_conn(False{}, c, conn, srv), code, rs)
+      gen.held(S.run(S.conn.on(conn), srv, B.Mixed{[c], Nil{}}, ds), S.next_conn(False{}, c, conn, srv), code, rs)
 
-def gen.run(held: Bool, +ok: Bool, +k: S.Role, +c: R.Cmd, +code: Nat, rs: List<&2, R.Reply>, +conn: S.Conn, +srv: S.Srv, db: R.Db) -> GRun:
+def gen.run(held: Bool, +ok: Bool, +k: S.Role, +c: R.Cmd, +code: Nat, rs: List<&2, R.Reply>, +conn: S.Conn, +srv: S.Srv, ds: R.Ds) -> GRun:
   match held:
     case True{}:
-      gen.held.k(k, c, code, rs, conn, srv, db)
+      gen.held.k(k, c, code, rs, conn, srv, ds)
     case False{}:
-      gen.done(S.run(conn, srv, B.Mixed{[c], Nil{}}, db), gen.pre(ok, c, code), rs)
+      gen.done(S.run(conn, srv, B.Mixed{[c], Nil{}}, ds), gen.pre(ok, c, code), rs)
 
 # one command, unless a QUIT before it dropped it
-def gen.one(q: Bool, +c: R.Cmd, +code: Nat, rs: List<&2, R.Reply>, +conn: S.Conn, +srv: S.Srv, db: R.Db) -> GRun:
+def gen.one(q: Bool, +c: R.Cmd, +code: Nat, rs: List<&2, R.Reply>, +conn: S.Conn, +srv: S.Srv, ds: R.Ds) -> GRun:
   match q:
     case True{}:
-      GRun{rs, conn, srv, db}
+      GRun{rs, conn, srv, ds}
     case False{}:
       +k = S.kind(c)
       +ok = S.may(k, conn, srv)
-      gen.run(gen.muted(ok, code, conn), ok, k, c, code, rs, conn, srv, db)
+      gen.run(gen.muted(ok, code, conn), ok, k, c, code, rs, conn, srv, ds)
 
 def gen.step(c: R.Cmd, +code: Nat, g: GRun) -> GRun:
   match g:
-    case GRun{rs, +conn, srv, db}:
-      gen.one(S.conn.quit(conn), c, code, rs, conn, srv, db)
+    case GRun{rs, +conn, srv, ds}:
+      gen.one(S.conn.quit(conn), c, code, rs, conn, srv, ds)
 
 def gen.go(cs: List<&2, R.Cmd>, ks: List<&2, Nat>, g: GRun) -> GRun:
   match cs ks:
@@ -263,11 +263,12 @@ def gen.go(cs: List<&2, R.Cmd>, ks: List<&2, Nat>, g: GRun) -> GRun:
 # batch of database commands only, from a client that may run them, runs
 # the fast way (S.run.plain, as S.run runs it); any other a command at a
 # time, as gen does (Statistics). A group is its answers so far, newest
-# first, the server's state and the database. Each batch adds its calls,
+# first, the server's state and the databases. Each batch runs on its
+# connection's database (the focus moves to it), and adds its calls,
 # errors and bytes to the server's counts for INFO, the shell's facts go
 # in the server's state, and a tick takes a sample of the rates.
 type Run is Data:
-  Run{outs: List<&2, Sigma<&2, &2, Chan(Ans), _ => Ans>>, srv: S.Srv, db: R.Db}
+  Run{outs: List<&2, Sigma<&2, &2, Chan(Ans), _ => Ans>>, srv: S.Srv, ds: R.Ds}
 
 def group_max() -> U32:
   255
@@ -282,14 +283,14 @@ def errs.put(xs: List<&2, R.Erred>, srv: S.Srv) -> S.Srv:
 
 # a batch of one code run the fast way, its replies looked at for errors
 # when they have a '-' (ans.errs)
-def run_put.one(dash: Bool, outs: List<&2, Sigma<&2, &2, Chan(Ans), _ => Ans>>, back: Chan(Ans), a: Ans, +calls: Nat, +run: Nat, +inb: Nat, +outb: Nat, srv: S.Srv, db: R.Db) -> Run:
+def run_put.one(dash: Bool, outs: List<&2, Sigma<&2, &2, Chan(Ans), _ => Ans>>, back: Chan(Ans), a: Ans, +calls: Nat, +run: Nat, +inb: Nat, +outb: Nat, srv: S.Srv, ds: R.Ds) -> Run:
   match dash:
     case False{}:
-      Run{(back, a) <> outs, S.srv.ran(srv, calls, run, Nil{}, inb, outb), db}
+      Run{(back, a) <> outs, S.srv.ran(srv, calls, run, Nil{}, inb, outb), ds}
     case True{}:
       +b = a
       +xs = ans.errs(b, R.run.code(run))
-      Run{(back, b) <> outs, errs.put(xs, S.srv.ran(srv, calls, run, Nil{}, inb, outb)), db}
+      Run{(back, b) <> outs, errs.put(xs, S.srv.ran(srv, calls, run, Nil{}, inb, outb)), ds}
 
 # a batch run the fast way: its calls counted, and its replies looked at
 # for errors only where a call may have one (R.Tally): those of a batch
@@ -297,51 +298,52 @@ def run_put.one(dash: Bool, outs: List<&2, Sigma<&2, &2, Chan(Ans), _ => Ans>>, 
 # before they are encoded (each call has one reply, in order)
 def run_put(outs: List<&2, Sigma<&2, &2, Chan(Ans), _ => Ans>>, back: Chan(Ans), t: R.Tally, +inb: Nat, d: S.Fin) -> Run:
   match t d:
-    case R.Tally{+calls, False{}, +run, runs} S.Fin{rs, cn, srv, db}:
+    case R.Tally{+calls, False{}, +run, runs} S.Fin{rs, cn, srv, ds}:
       +a = ans_of(rs, cn)
       +outb = ans.len(a)
-      Run{(back, a) <> outs, S.srv.ran(srv, calls, run, runs, inb, outb), db}
-    case R.Tally{+calls, True{}, +run, Nil{}} S.Fin{rs, cn, srv, db}:
+      Run{(back, a) <> outs, S.srv.ran(srv, calls, run, runs, inb, outb), ds}
+    case R.Tally{+calls, True{}, +run, Nil{}} S.Fin{rs, cn, srv, ds}:
       +a = ans_of(rs, cn)
       +outb = ans.len(a)
-      run_put.one(ans.dash(a, outb), outs, back, a, calls, run, inb, outb, srv, db)
-    case R.Tally{+calls, True{}, +run, +runs} S.Fin{+rs, cn, srv, db}:
+      run_put.one(ans.dash(a, outb), outs, back, a, calls, run, inb, outb, srv, ds)
+    case R.Tally{+calls, True{}, +run, +runs} S.Fin{+rs, cn, srv, ds}:
       +xs = R.errs.zip(rs, R.codes.runs(runs, Nil{}), Nil{})
       +a = ans_of(rs, cn)
       +outb = ans.len(a)
-      Run{(back, a) <> outs, errs.put(xs, S.srv.ran(srv, calls, run, runs, inb, outb)), db}
+      Run{(back, a) <> outs, errs.put(xs, S.srv.ran(srv, calls, run, runs, inb, outb)), ds}
 
 def run_gen(outs: List<&2, Sigma<&2, &2, Chan(Ans), _ => Ans>>, back: Chan(Ans), +inb: Nat, g: GRun) -> Run:
   match g:
-    case GRun{rs, conn, srv, db}:
+    case GRun{rs, conn, srv, ds}:
       +a = ans_of(List.reverse(&2, R.Reply, rs), conn)
       +outb = ans.len(a)
-      Run{(back, a) <> outs, S.srv.ran(srv, 0n, 0n, Nil{}, inb, outb), db}
+      Run{(back, a) <> outs, S.srv.ran(srv, 0n, 0n, Nil{}, inb, outb), ds}
 
-def run_plain(ready: Bool, outs: List<&2, Sigma<&2, &2, Chan(Ans), _ => Ans>>, cn: S.Conn, cmds: List<&2, R.Cmd>, +hs: List<&2, U32>, back: Chan(Ans), +tl: U32, +inb: Nat, srv: S.Srv, db: R.Db) -> Run:
+def run_plain(ready: Bool, outs: List<&2, Sigma<&2, &2, Chan(Ans), _ => Ans>>, cn: S.Conn, cmds: List<&2, R.Cmd>, +hs: List<&2, U32>, back: Chan(Ans), +tl: U32, +inb: Nat, srv: S.Srv, ds: R.Ds) -> Run:
   match ready:
     case True{}:
       +t = R.tally(tl, inb, hs)
-      run_put(outs, back, t, inb, S.run.plain(True{}, cn, srv, cmds, hs, db))
+      run_put(outs, back, t, inb, S.run.plain(True{}, cn, srv, cmds, hs, ds))
     case False{}:
-      run_gen(outs, back, inb, gen.go(cmds, R.codes.of(hs), GRun{Nil{}, cn, srv, db}))
+      run_gen(outs, back, inb, gen.go(cmds, R.codes.of(hs), GRun{Nil{}, cn, srv, ds}))
 
-def run_job(job: B.Job, outs: List<&2, Sigma<&2, &2, Chan(Ans), _ => Ans>>, +cn: S.Conn, back: Chan(Ans), +tl: U32, +inb: Nat, +srv: S.Srv, db: R.Db) -> Run:
+def run_job(job: B.Job, outs: List<&2, Sigma<&2, &2, Chan(Ans), _ => Ans>>, +cn: S.Conn, back: Chan(Ans), +tl: U32, +inb: Nat, +srv: S.Srv, ds: R.Ds) -> Run:
   match job:
     case B.Plain{cmds, hs}:
-      run_plain(S.ready(cn, srv), outs, cn, cmds, hs, back, tl, inb, srv, db)
+      run_plain(S.ready(cn, srv), outs, cn, cmds, hs, back, tl, inb, srv, ds)
     case B.Mixed{cmds, +hs}:
-      run_gen(outs, back, inb, gen.go(cmds, R.codes.of(hs), GRun{Nil{}, cn, srv, db}))
+      run_gen(outs, back, inb, gen.go(cmds, R.codes.of(hs), GRun{Nil{}, cn, srv, ds}))
 
 # The sweep of expired keys
 # -------------------------
-# At each tick, when some key has a time, the actor sweeps the trie for
-# keys whose time has passed (R.reap: reap.want entries a round, from
-# where the last round stopped) and deletes the keys it found with DEL, a
-# batch like any other, at the group's time. While a round finds expired more than one in ten of the
-# entries it read, another one goes on from where it stopped, up to
-# reap.rounds of them, as Redis's sweep goes on while more than a tenth of
-# the keys it looked at had expired.
+# At each tick, the actor sweeps each database where some key has a time
+# for keys whose time has passed (R.reap: reap.want entries a round, from
+# where the last round of that database stopped), at the group's time,
+# and deletes the keys it found with DEL, as a batch on that database
+# would, which the append-only file logs as one. While a round finds
+# expired more than one in ten of the entries it read, another one goes on
+# from where it stopped, up to reap.rounds of them, as Redis's sweep goes
+# on while more than a tenth of the keys it looked at had expired.
 def reap.want() -> Nat:
   400n
 
@@ -358,59 +360,93 @@ def reap.more(+next: Nat, +k: Nat) -> Bool:
 def reap.gone(+before: Nat, +d: R.Db) -> Nat:
   Nat.sub(before, R.db.n(d))
 
-# a round's outcome: whether another one follows, and the state after it
+# a round's outcome on a database: whether another one follows, the
+# server, the effects so far (newest first) and the database
 type Rd is Data:
-  Rd{more: Bool, srv: S.Srv, db: R.Db}
+  Rd{more: Bool, srv: S.Srv, es: List<&2, A.Eff>, db: R.Db}
 
 # a sweep starts only when some key has a time (Redis's sweep samples the
 # keys with a time alone): with none, a tick reads no entry
-def reap.start(srv: S.Srv, db: R.Db) -> Rd:
+def reap.start(srv: S.Srv, es: List<&2, A.Eff>, db: R.Db) -> Rd:
   +d = db
-  Rd{Nat.is_lt(0n, R.db.x(d)), srv, d}
+  Rd{Nat.is_lt(0n, R.db.x(d)), srv, es, d}
 
-def reap.del(srv: S.Srv, +next: Nat, ks: List<&2, String>, db: R.Db) -> Rd:
+def reap.del(+i: Nat, srv: S.Srv, +next: Nat, ks: List<&2, String>, es: List<&2, A.Eff>, db: R.Db) -> Rd:
   match ks:
     case Nil{}:
-      Rd{False{}, S.srv.reaped(srv, next, 0n), db}
-    case Con{k, rest}:
+      Rd{False{}, S.srv.reaped(srv, i, next, 0n), es, db}
+    case Con{+k, +rest}:
       +d0 = db
       +n0 = R.db.n(d0)
       +d = R.db_of(R.exec(R.Del{k <> rest}, d0))
       +gone = reap.gone(n0, d)
-      Rd{reap.more(next, gone), S.srv.reaped(srv, next, gone), d}
+      Rd{reap.more(next, gone), S.srv.reaped(srv, i, next, gone), A.EDb{i, R.Del{k <> rest}} <> es, d}
 
-def reap.done(srv: S.Srv, r: R.Reap, db: R.Db) -> Rd:
+def reap.done(+i: Nat, srv: S.Srv, r: R.Reap, es: List<&2, A.Eff>, db: R.Db) -> Rd:
   match r:
     case R.Reap{+next, ks}:
-      reap.del(srv, next, ks, db)
+      reap.del(i, srv, next, ks, es, db)
 
-def reap.round(srv: S.Srv, db: R.Db) -> Rd:
+def reap.round(+i: Nat, srv: S.Srv, es: List<&2, A.Eff>, db: R.Db) -> Rd:
   +d = db
   +sv = srv
-  reap.done(sv, R.reap(d, S.srv.reap_at(sv), reap.want()), d)
+  reap.done(i, sv, R.reap(d, S.srv.reap_at(sv, i), reap.want()), es, d)
 
-def reap.run(f: Nat, outs: List<&2, Sigma<&2, &2, Chan(Ans), _ => Ans>>, r: Rd) -> Run:
+def reap.run(f: Nat, +i: Nat, r: Rd) -> Rd:
   match f r:
-    case 1n+g Rd{True{}, srv, db}:
-      reap.run(g, outs, reap.round(srv, db))
-    case _ Rd{more, srv, db}:
-      Run{outs, srv, db}
+    case 1n+g Rd{True{}, srv, es, db}:
+      reap.run(g, i, reap.round(i, srv, es, db))
+    case _ r0:
+      r0
 
-def run_req(q: Req, outs: List<&2, Sigma<&2, &2, Chan(Ans), _ => Ans>>, srv: S.Srv, db: R.Db) -> Run:
+# the sweep of the databases from the i-th on, each at the time now: the
+# server, the effects (newest first) and the databases swept, newest first
+type Sw is Data:
+  Sw{srv: S.Srv, es: List<&2, A.Eff>, done: List<&2, R.Db>}
+
+def sw.put(r: Rd, done: List<&2, R.Db>) -> Sw:
+  match r:
+    case Rd{more, srv, es, db}:
+      Sw{srv, es, db <> done}
+
+def sweep.dbs(dbs: List<&2, R.Db>, +i: Nat, +now: Nat, w: Sw) -> Sw:
+  match dbs w:
+    case Nil{} w0:
+      w0
+    case Con{d, rest} Sw{srv, es, done}:
+      sweep.dbs(rest, 1n+i, now, sw.put(reap.run(reap.rounds(), i, reap.start(srv, es, R.db.at(now, d))), done))
+
+def sweep.fin(w: Sw, ds: R.Ds) -> S.Srv & (List<&2, A.Eff> & R.Ds):
+  match w:
+    case Sw{srv, es, done}:
+      (srv, (es, R.ds.with(List.reverse(&2, R.Db, done), ds)))
+
+# the sweep of every database: the server after it, the effects in front
+# of es (newest first), and the databases after it, the focus where it was
+def sweep(srv: S.Srv, es: List<&2, A.Eff>, ds: R.Ds) -> S.Srv & (List<&2, A.Eff> & R.Ds):
+  +x = ds
+  sweep.fin(sweep.dbs(R.ds.list(x), 0n, R.ds.now(x), Sw{srv, es, Nil{}}), x)
+
+def run.swept(outs: List<&2, Sigma<&2, &2, Chan(Ans), _ => Ans>>, r: S.Srv & (List<&2, A.Eff> & R.Ds)) -> Run:
+  (srv, q) = r
+  (es, ds) = q
+  Run{outs, srv, ds}
+
+def run_req(q: Req, outs: List<&2, Sigma<&2, &2, Chan(Ans), _ => Ans>>, srv: S.Srv, ds: R.Ds) -> Run:
   match q:
-    case Req{cn, job, back, +tl, +inb}:
-      run_job(job, outs, cn, back, tl, inb, srv, db)
+    case Req{+cn, job, back, +tl, +inb}:
+      run_job(job, outs, cn, back, tl, inb, srv, R.ds.focus(S.conn.db(cn), ds))
     case Facts{live}:
-      Run{outs, S.srv.live(srv, live), db}
+      Run{outs, S.srv.live(srv, live), ds}
     case Tick{+ms}:
-      reap.run(reap.rounds(), outs, reap.start(S.srv.tick(srv, ms), db))
+      run.swept(outs, sweep(S.srv.tick(srv, ms), Nil{}, ds))
     case Oops{}:
-      Run{outs, S.srv.erred(srv, "ERR Protocol error"), db}
+      Run{outs, S.srv.erred(srv, "ERR Protocol error"), ds}
 
 def run_step(q: Req, g: Run) -> Run:
   match g:
-    case Run{outs, srv, db}:
-      run_req(q, outs, srv, db)
+    case Run{outs, srv, ds}:
+      run_req(q, outs, srv, ds)
 
 # the clock (IO.clock: s and us since 1970) in ms
 def clock.ms(t: U32 & U32) -> Nat:
@@ -425,13 +461,13 @@ def run_group(qs: List<&1, Req>, g: Run) -> Run:
       run_group(rest, run_step(q, g))
 
 @unsafe
-def db_loop(srv: S.Srv, db: R.Db, +reqs: Chan(Req)) -> IO(Unit):
+def db_loop(srv: S.Srv, ds: R.Ds, +reqs: Chan(Req)) -> IO(Unit):
   do IO<Unit>:
     m : Maybe<&1, Req> <- Chan.recv(Req, reqs)
-    db_serve(srv, db, reqs, m)
+    db_serve(srv, ds, reqs, m)
 
 @unsafe
-def db_serve(srv: S.Srv, db: R.Db, +reqs: Chan(Req), m: Maybe<&1, Req>) -> IO(Unit):
+def db_serve(srv: S.Srv, ds: R.Ds, +reqs: Chan(Req), m: Maybe<&1, Req>) -> IO(Unit):
   match m:
     case None{}:
       IO.pure(Unit, Unit{})
@@ -439,15 +475,15 @@ def db_serve(srv: S.Srv, db: R.Db, +reqs: Chan(Req), m: Maybe<&1, Req>) -> IO(Un
       do IO<Unit>:
         more : List<&1, Req> <- Chan.drain(Req, reqs, group_max())
         t : U32 & U32 <- IO.clock()
-        db_group(run_group(q <> more, Run{Nil{}, srv, R.db.at(clock.ms(t), db)}), reqs)
+        db_group(run_group(q <> more, Run{Nil{}, srv, R.ds.at(clock.ms(t), ds)}), reqs)
 
 @unsafe
 def db_group(g: Run, +reqs: Chan(Req)) -> IO(Unit):
   match g:
-    case Run{outs, srv, db}:
+    case Run{outs, srv, ds}:
       do IO<Unit>:
         Unit <- Chan.send_all(Ans, List.reverse(&2, Sigma<&2, &2, Chan(Ans), _ => Ans>, outs))
-        db_loop(srv, db, reqs)
+        db_loop(srv, ds, reqs)
 
 # Connections
 # -----------
@@ -1084,91 +1120,92 @@ def aof_fail(e: U32 & String) -> String:
 # appends the effects of them all at once, syncs once, and answers them
 # all at once, as Redis does in each turn of its loop. A group is its
 # answers so far, newest first, the effects so far, each batch's in front
-# of the ones before reversed, and the state: the server's and the
-# database.
+# of the ones before reversed, and the state: the server's, the databases
+# and the database the file has selected (its last SELECT: an effect on
+# another database is written after a SELECT of its own, aof.bend).
 type St is Data:
-  St{srv: S.Srv, db: R.Db}
+  St{srv: S.Srv, ds: R.Ds, sel: Nat}
 
 # the state at the time now (a group's batches run at the time the actor
 # took them)
 def st.at(+now: Nat, st: St) -> St:
   match st:
-    case St{srv, db}:
-      St{srv, R.db.at(now, db)}
+    case St{srv, ds, sel}:
+      St{srv, R.ds.at(now, ds), sel}
 
 type Grp is Data:
-  Grp{outs: List<&2, Sigma<&2, &2, Chan(Ans), _ => Ans>>, es: List<&2, R.Cmd>, st: St}
+  Grp{outs: List<&2, Sigma<&2, &2, Chan(Ans), _ => Ans>>, es: List<&2, A.Eff>, srv: S.Srv, ds: R.Ds}
 
-def group_put.one(dash: Bool, outs: List<&2, Sigma<&2, &2, Chan(Ans), _ => Ans>>, es: List<&2, R.Cmd>, back: Chan(Ans), a: Ans, +calls: Nat, +run: Nat, +inb: Nat, +outb: Nat, srv: S.Srv, db: R.Db) -> Grp:
+def group_put.one(dash: Bool, outs: List<&2, Sigma<&2, &2, Chan(Ans), _ => Ans>>, es: List<&2, A.Eff>, back: Chan(Ans), a: Ans, +calls: Nat, +run: Nat, +inb: Nat, +outb: Nat, srv: S.Srv, ds: R.Ds) -> Grp:
   match dash:
     case False{}:
-      Grp{(back, a) <> outs, es, St{S.srv.ran(srv, calls, run, Nil{}, inb, outb), db}}
+      Grp{(back, a) <> outs, es, S.srv.ran(srv, calls, run, Nil{}, inb, outb), ds}
     case True{}:
       +b = a
       +xs = ans.errs(b, R.run.code(run))
-      Grp{(back, b) <> outs, es, St{errs.put(xs, S.srv.ran(srv, calls, run, Nil{}, inb, outb)), db}}
+      Grp{(back, b) <> outs, es, errs.put(xs, S.srv.ran(srv, calls, run, Nil{}, inb, outb)), ds}
 
-def group_put(outs: List<&2, Sigma<&2, &2, Chan(Ans), _ => Ans>>, es: List<&2, R.Cmd>, back: Chan(Ans), t: R.Tally, +inb: Nat, d: S.Logged) -> Grp:
+def group_put(outs: List<&2, Sigma<&2, &2, Chan(Ans), _ => Ans>>, es: List<&2, A.Eff>, back: Chan(Ans), t: R.Tally, +inb: Nat, d: S.Logged) -> Grp:
   match t d:
-    case R.Tally{+calls, False{}, +run, runs} S.Logged{rs, e, cn, srv, db}:
+    case R.Tally{+calls, False{}, +run, runs} S.Logged{rs, e, cn, srv, ds}:
       +a = ans_of(rs, cn)
       +outb = ans.len(a)
-      Grp{(back, a) <> outs, List.reverse.go(&2, R.Cmd, e, es), St{S.srv.ran(srv, calls, run, runs, inb, outb), db}}
-    case R.Tally{+calls, True{}, +run, Nil{}} S.Logged{rs, e, cn, srv, db}:
+      Grp{(back, a) <> outs, List.reverse.go(&2, A.Eff, e, es), S.srv.ran(srv, calls, run, runs, inb, outb), ds}
+    case R.Tally{+calls, True{}, +run, Nil{}} S.Logged{rs, e, cn, srv, ds}:
       +a = ans_of(rs, cn)
       +outb = ans.len(a)
-      group_put.one(ans.dash(a, outb), outs, List.reverse.go(&2, R.Cmd, e, es), back, a, calls, run, inb, outb, srv, db)
-    case R.Tally{+calls, True{}, +run, +runs} S.Logged{+rs, e, cn, srv, db}:
+      group_put.one(ans.dash(a, outb), outs, List.reverse.go(&2, A.Eff, e, es), back, a, calls, run, inb, outb, srv, ds)
+    case R.Tally{+calls, True{}, +run, +runs} S.Logged{+rs, e, cn, srv, ds}:
       +xs = R.errs.zip(rs, R.codes.runs(runs, Nil{}), Nil{})
       +a = ans_of(rs, cn)
       +outb = ans.len(a)
-      Grp{(back, a) <> outs, List.reverse.go(&2, R.Cmd, e, es), St{errs.put(xs, S.srv.ran(srv, calls, run, runs, inb, outb)), db}}
+      Grp{(back, a) <> outs, List.reverse.go(&2, A.Eff, e, es), errs.put(xs, S.srv.ran(srv, calls, run, runs, inb, outb)), ds}
 
 # a batch the general way, a command at a time (gen.go), with the effects
 # of each, put in front of the ones before reversed as a batch's are
 type LRun is Data:
-  LRun{rs: List<&2, R.Reply>, es: List<&2, R.Cmd>, conn: S.Conn, srv: S.Srv, db: R.Db}
+  LRun{rs: List<&2, R.Reply>, es: List<&2, A.Eff>, conn: S.Conn, srv: S.Srv, ds: R.Ds}
 
-def lgen.done(d: S.Logged, p: Pre, rs: List<&2, R.Reply>, es: List<&2, R.Cmd>) -> LRun:
+def lgen.done(d: S.Logged, p: Pre, rs: List<&2, R.Reply>, es: List<&2, A.Eff>) -> LRun:
   match d p:
-    case S.Logged{+rs1, e, conn, srv, db} Pre{+code, xs}:
+    case S.Logged{+rs1, e, conn, srv, ds} Pre{+code, xs}:
       +ys = gen.errs(xs, rs1, code)
-      LRun{List.reverse.go(&2, R.Reply, rs1, rs), List.reverse.go(&2, R.Cmd, e, es), conn, gen.count(srv, code, ys), db}
+      LRun{List.reverse.go(&2, R.Reply, rs1, rs), List.reverse.go(&2, A.Eff, e, es), conn, gen.count(srv, code, ys), ds}
 
-def lgen.held(d: S.Logged, conn: S.Conn, +code: Nat, rs: List<&2, R.Reply>, es: List<&2, R.Cmd>) -> LRun:
+def lgen.held(d: S.Logged, conn: S.Conn, +code: Nat, rs: List<&2, R.Reply>, es: List<&2, A.Eff>) -> LRun:
   match d:
-    case S.Logged{+rs1, e, c1, srv, db}:
-      LRun{rs, List.reverse.go(&2, R.Cmd, e, es), conn, gen.count(srv, code, R.errs.zip(rs1, [code], Nil{})), db}
+    case S.Logged{+rs1, e, c1, srv, ds}:
+      LRun{rs, List.reverse.go(&2, A.Eff, e, es), conn, gen.count(srv, code, R.errs.zip(rs1, [code], Nil{})), ds}
 
-def lgen.held.k(+k: S.Role, +c: R.Cmd, +code: Nat, rs: List<&2, R.Reply>, es: List<&2, R.Cmd>, +conn: S.Conn, +srv: S.Srv, db: R.Db) -> LRun:
+def lgen.held.k(+k: S.Role, +c: R.Cmd, +code: Nat, rs: List<&2, R.Reply>, es: List<&2, A.Eff>, +conn: S.Conn, +srv: S.Srv, ds: R.Ds) -> LRun:
   match k:
     case S.KSess{+o}:
-      +d = db
+      +d = ds
       +p = gen.pre.own(o, code, conn, srv, d)
       lgen.done(S.run_log(conn, srv, B.Mixed{[c], Nil{}}, d), p, rs, es)
     case _:
-      lgen.held(S.run_log(S.conn.on(conn), srv, B.Mixed{[c], Nil{}}, db), S.next_conn(False{}, c, conn, srv), code, rs, es)
+      lgen.held(S.run_log(S.conn.on(conn), srv, B.Mixed{[c], Nil{}}, ds), S.next_conn(False{}, c, conn, srv), code, rs, es)
 
-def lgen.run(held: Bool, +ok: Bool, +k: S.Role, +c: R.Cmd, +code: Nat, rs: List<&2, R.Reply>, es: List<&2, R.Cmd>, +conn: S.Conn, +srv: S.Srv, db: R.Db) -> LRun:
+def lgen.run(held: Bool, +ok: Bool, +k: S.Role, +c: R.Cmd, +code: Nat, rs: List<&2, R.Reply>, es: List<&2, A.Eff>, +conn: S.Conn, +srv: S.Srv, ds: R.Ds) -> LRun:
   match held:
     case True{}:
-      lgen.held.k(k, c, code, rs, es, conn, srv, db)
+      lgen.held.k(k, c, code, rs, es, conn, srv, ds)
     case False{}:
-      lgen.done(S.run_log(conn, srv, B.Mixed{[c], Nil{}}, db), gen.pre(ok, c, code), rs, es)
+      lgen.done(S.run_log(conn, srv, B.Mixed{[c], Nil{}}, ds), gen.pre(ok, c, code), rs, es)
 
-def lgen.one(q: Bool, +c: R.Cmd, +code: Nat, rs: List<&2, R.Reply>, es: List<&2, R.Cmd>, +conn: S.Conn, +srv: S.Srv, db: R.Db) -> LRun:
+def lgen.one(q: Bool, +c: R.Cmd, +code: Nat, rs: List<&2, R.Reply>, es: List<&2, A.Eff>, +conn: S.Conn, +srv: S.Srv, ds: R.Ds) -> LRun:
   match q:
     case True{}:
-      LRun{rs, es, conn, srv, db}
+      LRun{rs, es, conn, srv, ds}
     case False{}:
       +k = S.kind(c)
       +ok = S.may(k, conn, srv)
-      lgen.run(gen.muted(ok, code, conn), ok, k, c, code, rs, es, conn, srv, db)
+      lgen.run(gen.muted(ok, code, conn), ok, k, c, code, rs, es, conn, srv, ds)
 
 def lgen.step(c: R.Cmd, +code: Nat, g: LRun) -> LRun:
   match g:
-    case LRun{rs, es, +conn, srv, db}:
-      lgen.one(S.conn.quit(conn), c, code, rs, es, conn, srv, db)
+    case LRun{rs, es, +conn, srv, ds}:
+      lgen.one(S.conn.quit(conn), c, code, rs, es, conn, srv, ds)
 
 def lgen.go(cs: List<&2, R.Cmd>, ks: List<&2, Nat>, g: LRun) -> LRun:
   match cs ks:
@@ -1179,85 +1216,50 @@ def lgen.go(cs: List<&2, R.Cmd>, ks: List<&2, Nat>, g: LRun) -> LRun:
 
 def group_gen(outs: List<&2, Sigma<&2, &2, Chan(Ans), _ => Ans>>, back: Chan(Ans), +inb: Nat, g: LRun) -> Grp:
   match g:
-    case LRun{rs, es, conn, srv, db}:
+    case LRun{rs, es, conn, srv, ds}:
       +a = ans_of(List.reverse(&2, R.Reply, rs), conn)
       +outb = ans.len(a)
-      Grp{(back, a) <> outs, es, St{S.srv.ran(srv, 0n, 0n, Nil{}, inb, outb), db}}
+      Grp{(back, a) <> outs, es, S.srv.ran(srv, 0n, 0n, Nil{}, inb, outb), ds}
 
-def group_plain(ready: Bool, outs: List<&2, Sigma<&2, &2, Chan(Ans), _ => Ans>>, es: List<&2, R.Cmd>, cn: S.Conn, cmds: List<&2, R.Cmd>, +hs: List<&2, U32>, back: Chan(Ans), +tl: U32, +inb: Nat, srv: S.Srv, db: R.Db) -> Grp:
+def group_plain(ready: Bool, outs: List<&2, Sigma<&2, &2, Chan(Ans), _ => Ans>>, es: List<&2, A.Eff>, cn: S.Conn, cmds: List<&2, R.Cmd>, +hs: List<&2, U32>, back: Chan(Ans), +tl: U32, +inb: Nat, srv: S.Srv, ds: R.Ds) -> Grp:
   match ready:
     case True{}:
       +t = R.tally(tl, inb, hs)
-      group_put(outs, es, back, t, inb, S.run_log.plain(True{}, cn, srv, cmds, hs, db))
+      group_put(outs, es, back, t, inb, S.run_log.plain(True{}, cn, srv, cmds, hs, ds))
     case False{}:
-      group_gen(outs, back, inb, lgen.go(cmds, R.codes.of(hs), LRun{Nil{}, es, cn, srv, db}))
+      group_gen(outs, back, inb, lgen.go(cmds, R.codes.of(hs), LRun{Nil{}, es, cn, srv, ds}))
 
-def group_job(job: B.Job, outs: List<&2, Sigma<&2, &2, Chan(Ans), _ => Ans>>, es: List<&2, R.Cmd>, +cn: S.Conn, back: Chan(Ans), +tl: U32, +inb: Nat, +srv: S.Srv, db: R.Db) -> Grp:
+def group_job(job: B.Job, outs: List<&2, Sigma<&2, &2, Chan(Ans), _ => Ans>>, es: List<&2, A.Eff>, +cn: S.Conn, back: Chan(Ans), +tl: U32, +inb: Nat, +srv: S.Srv, ds: R.Ds) -> Grp:
   match job:
     case B.Plain{cmds, hs}:
-      group_plain(S.ready(cn, srv), outs, es, cn, cmds, hs, back, tl, inb, srv, db)
+      group_plain(S.ready(cn, srv), outs, es, cn, cmds, hs, back, tl, inb, srv, ds)
     case B.Mixed{cmds, +hs}:
-      group_gen(outs, back, inb, lgen.go(cmds, R.codes.of(hs), LRun{Nil{}, es, cn, srv, db}))
+      group_gen(outs, back, inb, lgen.go(cmds, R.codes.of(hs), LRun{Nil{}, es, cn, srv, ds}))
 
-# a sweep of expired keys with the append-only file: its DEL is logged
-# as the batches' effects are (DEL of keys is its own effect)
-type LRd is Data:
-  LRd{more: Bool, es: List<&2, R.Cmd>, srv: S.Srv, db: R.Db}
+# a sweep of expired keys with the append-only file: its DELs are logged
+# as the batches' effects are
+def group.swept(outs: List<&2, Sigma<&2, &2, Chan(Ans), _ => Ans>>, r: S.Srv & (List<&2, A.Eff> & R.Ds)) -> Grp:
+  (srv, q) = r
+  (es, ds) = q
+  Grp{outs, es, srv, ds}
 
-def lreap.start(es: List<&2, R.Cmd>, srv: S.Srv, db: R.Db) -> LRd:
-  +d = db
-  LRd{Nat.is_lt(0n, R.db.x(d)), es, srv, d}
-
-def lreap.del(es: List<&2, R.Cmd>, srv: S.Srv, +next: Nat, ks: List<&2, String>, db: R.Db) -> LRd:
-  match ks:
-    case Nil{}:
-      LRd{False{}, es, S.srv.reaped(srv, next, 0n), db}
-    case Con{+k, +rest}:
-      +d0 = db
-      +n0 = R.db.n(d0)
-      +d = R.db_of(R.exec(R.Del{k <> rest}, d0))
-      +gone = reap.gone(n0, d)
-      LRd{reap.more(next, gone), R.Del{k <> rest} <> es, S.srv.reaped(srv, next, gone), d}
-
-def lreap.done(es: List<&2, R.Cmd>, srv: S.Srv, r: R.Reap, db: R.Db) -> LRd:
-  match r:
-    case R.Reap{+next, ks}:
-      lreap.del(es, srv, next, ks, db)
-
-def lreap.round(es: List<&2, R.Cmd>, srv: S.Srv, db: R.Db) -> LRd:
-  +d = db
-  +sv = srv
-  lreap.done(es, sv, R.reap(d, S.srv.reap_at(sv), reap.want()), d)
-
-def lreap.run(f: Nat, outs: List<&2, Sigma<&2, &2, Chan(Ans), _ => Ans>>, r: LRd) -> Grp:
-  match f r:
-    case 1n+g LRd{True{}, es, srv, db}:
-      lreap.run(g, outs, lreap.round(es, srv, db))
-    case _ LRd{more, es, srv, db}:
-      Grp{outs, es, St{srv, db}}
-
-def group_req(q: Req, outs: List<&2, Sigma<&2, &2, Chan(Ans), _ => Ans>>, es: List<&2, R.Cmd>, st: St) -> Grp:
-  match q st:
-    case Req{cn, job, back, +tl, +inb} St{srv, db}:
-      group_job(job, outs, es, cn, back, tl, inb, srv, db)
-    case Facts{live} St{srv, db}:
-      Grp{outs, es, St{S.srv.live(srv, live), db}}
-    case Tick{+ms} St{srv, db}:
-      lreap.run(reap.rounds(), outs, lreap.start(es, S.srv.tick(srv, ms), db))
-    case Oops{} St{srv, db}:
-      Grp{outs, es, St{S.srv.erred(srv, "ERR Protocol error"), db}}
-
-def group_step(q: Req, g: Grp) -> Grp:
-  match g:
-    case Grp{outs, es, st}:
-      group_req(q, outs, es, st)
+def group_req(q: Req, g: Grp) -> Grp:
+  match q g:
+    case Req{+cn, job, back, +tl, +inb} Grp{outs, es, srv, ds}:
+      group_job(job, outs, es, cn, back, tl, inb, srv, R.ds.focus(S.conn.db(cn), ds))
+    case Facts{live} Grp{outs, es, srv, ds}:
+      Grp{outs, es, S.srv.live(srv, live), ds}
+    case Tick{+ms} Grp{outs, es, srv, ds}:
+      group.swept(outs, sweep(S.srv.tick(srv, ms), es, ds))
+    case Oops{} Grp{outs, es, srv, ds}:
+      Grp{outs, es, S.srv.erred(srv, "ERR Protocol error"), ds}
 
 def group_run(qs: List<&1, Req>, g: Grp) -> Grp:
   match qs:
     case Nil{}:
       g
     case Con{q, rest}:
-      group_run(rest, group_step(q, g))
+      group_run(rest, group_req(q, g))
 
 @unsafe
 def aof_loop(st: St, f: File, +sync: Sync, +reqs: Chan(Req)) -> IO(Unit):
@@ -1265,39 +1267,57 @@ def aof_loop(st: St, f: File, +sync: Sync, +reqs: Chan(Req)) -> IO(Unit):
     m : Maybe<&1, Req> <- Chan.recv(Req, reqs)
     aof_more(st, f, sync, reqs, m)
 
+def grp.of(+now: Nat, st: St) -> Grp:
+  match st:
+    case St{srv, ds, sel}:
+      Grp{Nil{}, Nil{}, srv, R.ds.at(now, ds)}
+
+def st.sel(+st: St) -> Nat:
+  match st:
+    case St{srv, ds, +sel}:
+      sel
+
 @unsafe
 def aof_more(st: St, f: File, +sync: Sync, +reqs: Chan(Req), m: Maybe<&1, Req>) -> IO(Unit):
   match m:
     case None{}:
       File.close(f)
     case Some{q}:
+      +s0 = st
       do IO<Unit>:
         more : List<&1, Req> <- Chan.drain(Req, reqs, group_max())
         t : U32 & U32 <- IO.clock()
-        aof_group(group_run(q <> more, Grp{Nil{}, Nil{}, st.at(clock.ms(t), st)}), f, sync, reqs)
+        aof_group(group_run(q <> more, grp.of(clock.ms(t), s0)), st.sel(s0), f, sync, reqs)
 
 @unsafe
-def aof_group(g: Grp, f: File, +sync: Sync, +reqs: Chan(Req)) -> IO(Unit):
+def aof_group(g: Grp, +sel: Nat, f: File, +sync: Sync, +reqs: Chan(Req)) -> IO(Unit):
   match g:
-    case Grp{outs, es, st}:
-      aof_put(List.reverse(&2, Sigma<&2, &2, Chan(Ans), _ => Ans>, outs), List.reverse(&2, R.Cmd, es), st, f, sync, reqs)
+    case Grp{outs, es, srv, ds}:
+      aof_put(List.reverse(&2, Sigma<&2, &2, Chan(Ans), _ => Ans>, outs), List.reverse(&2, A.Eff, es), St{srv, ds, sel}, f, sync, reqs)
 
-# the bytes appended to the file, for INFO
-def st.aof(st: St, +n: Nat) -> St:
+# the bytes appended to the file, for INFO, and the database the file has
+# selected after them
+def st.aof(st: St, +n: Nat, +sel: Nat) -> St:
   match st:
-    case St{srv, db}:
-      St{S.srv.aof(srv, n), db}
+    case St{srv, ds, old}:
+      St{S.srv.aof(srv, n), ds, sel}
 
 @unsafe
-def aof_put(outs: List<&2, Sigma<&2, &2, Chan(Ans), _ => Ans>>, es: List<&2, R.Cmd>, st: St, f: File, +sync: Sync, +reqs: Chan(Req)) -> IO(Unit):
+def aof_write(outs: List<&2, Sigma<&2, &2, Chan(Ans), _ => Ans>>, +es: List<&2, A.Eff>, st: St, f: File, +sync: Sync, +reqs: Chan(Req)) -> IO(Unit):
+  +x = st
+  +sel = st.sel(x)
+  +bytes = A.encode(A.effs.args(es, sel))
+  do IO<Unit>:
+    p : File & Result<&1, &1, U32 & String, Unit> <- File.write_raw(f, bytes)
+    aof_wrote(p, outs, st.aof(x, String.length(bytes), A.effs.sel(es, sel)), sync, reqs)
+
+@unsafe
+def aof_put(outs: List<&2, Sigma<&2, &2, Chan(Ans), _ => Ans>>, es: List<&2, A.Eff>, st: St, f: File, +sync: Sync, +reqs: Chan(Req)) -> IO(Unit):
   match es:
     case Nil{}:
       aof_reply(outs, st, f, sync, reqs)
     case Con{e, more}:
-      +bytes = A.encode(A.args_all(e <> more))
-      do IO<Unit>:
-        p : File & Result<&1, &1, U32 & String, Unit> <- File.write_raw(f, bytes)
-        aof_wrote(p, outs, st.aof(st, String.length(bytes)), sync, reqs)
+      aof_write(outs, e <> more, st, f, sync, reqs)
 
 @unsafe
 def aof_wrote(p: File & Result<&1, &1, U32 & String, Unit>, outs: List<&2, Sigma<&2, &2, Chan(Ans), _ => Ans>>, st: St, +sync: Sync, +reqs: Chan(Req)) -> IO(Unit):
@@ -1408,8 +1428,16 @@ def cut_short(s: String) -> Bool:
     case _:
       False{}
 
-def restored(+n: Nat, +db: R.Db, +path: String) -> String:
-  "BendKV restored " ++ Nat.show(R.db.n(db)) ++ " keys from " ++ Nat.show(n) ++ " entries of " ++ path
+# the keys of the databases
+def keys.all(dbs: List<&2, R.Db>) -> Nat:
+  match dbs:
+    case Nil{}:
+      0n
+    case Con{+d, rest}:
+      Nat.add(R.db.n(d), keys.all(rest))
+
+def restored(+n: Nat, +ds: R.Ds, +path: String) -> String:
+  "BendKV restored " ++ Nat.show(keys.all(R.ds.list(ds))) ++ " keys from " ++ Nat.show(n) ++ " entries of " ++ path
 
 @unsafe
 def cut_done(+lg: Log, p: File & Result<&1, &1, U32 & String, Unit>, +path: String, +cut: Nat) -> IO(Unit):
@@ -1431,43 +1459,43 @@ def cut_file(+lg: Log, +path: String, keep: Nat, +cut: Nat) -> IO(Unit):
 
 # a file that ends in an entry cut short is cut back to its last whole
 # entry, unless aof-load-truncated is no: then it stops the start, as in
-# Redis. What a start gives is the database and the file's size.
+# Redis. What a start gives is the databases and the file's size.
 @unsafe
-def restore_cut(trunc: Bool, +lg: Log, +path: String, +size: Nat, +n: Nat, +db: R.Db, +rest: String) -> IO(R.Db & Nat):
+def restore_cut(trunc: Bool, +lg: Log, +path: String, +size: Nat, +n: Nat, +ds: R.Ds, +rest: String) -> IO(R.Ds & Nat):
   match trunc:
     case True{}:
-      do IO<R.Db & Nat>:
+      do IO<R.Ds & Nat>:
         Unit <- cut_file(lg, path, Nat.sub(size, String.length(rest)), String.length(rest))
-        Unit <- log(lg, 2, restored(n, db, path))
-        return (db, Nat.sub(size, String.length(rest)))
+        Unit <- log(lg, 2, restored(n, ds, path))
+        return (ds, Nat.sub(size, String.length(rest)))
     case False{}:
-      log.die(R.Db & Nat, lg, "Unexpected end of file reading the append only file " ++ path ++ ". You can: 1) Make a backup of your AOF file, then use ./redis-check-aof --fix <filename>. 2) Alternatively you can set the 'aof-load-truncated' configuration option to yes and restart the server.")
+      log.die(R.Ds & Nat, lg, "Unexpected end of file reading the append only file " ++ path ++ ". You can: 1) Make a backup of your AOF file, then use ./redis-check-aof --fix <filename>. 2) Alternatively you can set the 'aof-load-truncated' configuration option to yes and restart the server.")
 
-# the database of the entries, once the file is fit to append to: whole,
+# the databases of the entries, once the file is fit to append to: whole,
 # or cut back to its last whole entry
 @unsafe
-def restore_fix(+lg: Log, +trunc: Bool, +path: String, +size: Nat, +n: Nat, +db: R.Db, +rest: String, whole: Bool, cut: Bool) -> IO(R.Db & Nat):
+def restore_fix(+lg: Log, +trunc: Bool, +path: String, +size: Nat, +n: Nat, +ds: R.Ds, +rest: String, whole: Bool, cut: Bool) -> IO(R.Ds & Nat):
   match whole cut:
     case True{} _:
-      do IO<R.Db & Nat>:
-        Unit <- log(lg, 2, restored(n, db, path))
-        return (db, size)
+      do IO<R.Ds & Nat>:
+        Unit <- log(lg, 2, restored(n, ds, path))
+        return (ds, size)
     case False{} True{}:
-      restore_cut(trunc, lg, path, size, n, db, rest)
+      restore_cut(trunc, lg, path, size, n, ds, rest)
     case False{} False{}:
-      log.die(R.Db & Nat, lg, "Bad file format reading the append only file " ++ path ++ ": no entry at byte " ++ Nat.show(Nat.sub(size, String.length(rest))))
+      log.die(R.Ds & Nat, lg, "Bad file format reading the append only file " ++ path ++ ": no entry at byte " ++ Nat.show(Nat.sub(size, String.length(rest))))
 
 @unsafe
-def restore_load(+lg: Log, +trunc: Bool, +path: String, +size: Nat, l: List<&2, List<&2, String>> & String) -> IO(R.Db & Nat):
+def restore_load(+lg: Log, +trunc: Bool, +path: String, +size: Nat, +more: Nat, l: List<&2, List<&2, String>> & String) -> IO(R.Ds & Nat):
   (+reqs, +rest) = l
-  restore_fix(lg, trunc, path, size, List.length(&2, List<&2, String>, reqs), A.replay(reqs), rest, String.is_empty(rest), cut_short(rest))
+  restore_fix(lg, trunc, path, size, List.length(&2, List<&2, String>, reqs), A.replay(reqs, more), rest, String.is_empty(rest), cut_short(rest))
 
 @unsafe
-def restore_read(+lg: Log, +trunc: Bool, +path: String, p: File & String) -> IO(R.Db & Nat):
+def restore_read(+lg: Log, +trunc: Bool, +path: String, +more: Nat, p: File & String) -> IO(R.Ds & Nat):
   (f, +s) = p
-  do IO<R.Db & Nat>:
+  do IO<R.Ds & Nat>:
     Unit <- File.close(f)
-    restore_load(lg, trunc, path, String.length(s), A.load(s))
+    restore_load(lg, trunc, path, String.length(s), more, A.load(s))
 
 # ENOENT: the one failure to open a file that means it is not there
 def enoent() -> U32:
@@ -1476,48 +1504,53 @@ def enoent() -> U32:
 def open_fail(+path: String, msg: String) -> String:
   "Can't open the append-only file " ++ path ++ ": " ++ msg
 
-# a file not there is an empty database; any other failure to open it (no
+# a file not there is empty databases; any other failure to open it (no
 # permission, an I/O error, no descriptor left) stops the start: serving
-# an empty database would append to a file that holds another
+# empty databases would append to a file that holds others
 @unsafe
-def restore_none(none: Bool, +lg: Log, +path: String, msg: String) -> IO(R.Db & Nat):
+def restore_none(none: Bool, +lg: Log, +path: String, +more: Nat, msg: String) -> IO(R.Ds & Nat):
   match none:
     case True{}:
-      IO.pure(R.Db & Nat, (R.db.empty(), 0n))
+      IO.pure(R.Ds & Nat, (R.ds.empty(more), 0n))
     case False{}:
-      log.die(R.Db & Nat, lg, open_fail(path, msg))
+      log.die(R.Ds & Nat, lg, open_fail(path, msg))
 
 @unsafe
-def restore_fail(+lg: Log, +path: String, e: U32 & String) -> IO(R.Db & Nat):
+def restore_fail(+lg: Log, +path: String, +more: Nat, e: U32 & String) -> IO(R.Ds & Nat):
   (code, msg) = e
-  restore_none(U32.is_eq(code, enoent()), lg, path, msg)
+  restore_none(U32.is_eq(code, enoent()), lg, path, more, msg)
 
 @unsafe
-def restore_open(+lg: Log, +trunc: Bool, +path: String, m: Result<&1, &1, U32 & String, File>) -> IO(R.Db & Nat):
+def restore_open(+lg: Log, +trunc: Bool, +path: String, +more: Nat, m: Result<&1, &1, U32 & String, File>) -> IO(R.Ds & Nat):
   match m:
     case Fail{e}:
-      restore_fail(lg, path, e)
+      restore_fail(lg, path, more, e)
     case Done{f}:
-      do IO<R.Db & Nat>:
+      do IO<R.Ds & Nat>:
         p : File & String <- read_all(f, Nil{})
-        restore_read(lg, trunc, path, p)
+        restore_read(lg, trunc, path, more, p)
 
-# the database a file holds, and the file's size; none for a file not
-# there yet
+# the databases a file holds (1 + more of them), and the file's size;
+# empty ones for a file not there yet
 @unsafe
-def restore(+lg: Log, +trunc: Bool, +path: String) -> IO(R.Db & Nat):
-  do IO<R.Db & Nat>:
+def restore(+lg: Log, +trunc: Bool, +path: String, +more: Nat) -> IO(R.Ds & Nat):
+  do IO<R.Ds & Nat>:
     m : Result<&1, &1, U32 & String, File> <- File.open(path, "r")
-    restore_open(lg, trunc, path, m)
+    restore_open(lg, trunc, path, more, m)
 
-# the actor appending to the file, on the database the file held
+# the actor appending to the file, on the databases the file held, with
+# the database its last SELECT selected (the focus after its entries)
+def st.new(srv: S.Srv, ds: R.Ds) -> St:
+  +x = ds
+  St{srv, x, R.ds.index(x)}
+
 @unsafe
-def open_aof(+path: String, +sync: Sync, srv: S.Srv, db: R.Db) -> IO(Chan(Req)):
+def open_aof(+path: String, +sync: Sync, srv: S.Srv, ds: R.Ds) -> IO(Chan(Req)):
   do IO<Chan(Req)>:
     f : File <- IO.try(File, File.open(path, "a"))
     Unit <- syncer(sync, path)
     +reqs : Chan(Req) <- Chan.new(Req, 1024)
-    Unit <- IO.spawn(Unit, aof_loop(St{srv, db}, f, sync, reqs))
+    Unit <- IO.spawn(Unit, aof_loop(st.new(srv, ds), f, sync, reqs))
     return reqs
 
 # Serving
@@ -1551,11 +1584,15 @@ def accept_all(ls: List<&1, Listener>, +reqs: Chan(Req), +post: Bool, +lg: Log, 
     log(lg, 2, "Ready to accept connections")
 
 @unsafe
-def serve.aof(p: R.Db & Nat, +path: String, +sync: Sync, +items: List<&2, C.CItem>, info: I.Info, ls: List<&1, Listener>, +post: Bool, +lg: Log, +tl: Chan(Tally)) -> IO(Unit):
-  (db, +size) = p
+def serve.aof(p: R.Ds & Nat, +path: String, +sync: Sync, +items: List<&2, C.CItem>, info: I.Info, ls: List<&1, Listener>, +post: Bool, +lg: Log, +tl: Chan(Tally)) -> IO(Unit):
+  (ds, +size) = p
   do IO<Unit>:
-    +reqs : Chan(Req) <- open_aof(path, sync, S.srv_of(items, I.info.restored(info, size)), db)
+    +reqs : Chan(Req) <- open_aof(path, sync, S.srv_of(items, I.info.restored(info, size)), ds)
     accept_all(ls, reqs, post, lg, tl)
+
+# the databases after the first (databases less one)
+def dbs.more(+items: List<&2, C.CItem>) -> Nat:
+  Nat.sub(S.srv.dbs.of(R.int_read(C.config.get_value(items, "databases"))), 1n)
 
 @unsafe
 def serve(aof: Maybe<&2, String>, ls: List<&1, Listener>, +post: Bool, +sync: Sync, +trunc: Bool, +items: List<&2, C.CItem>, info: I.Info, +lg: Log, +tl: Chan(Tally)) -> IO(Unit):
@@ -1563,11 +1600,11 @@ def serve(aof: Maybe<&2, String>, ls: List<&1, Listener>, +post: Bool, +sync: Sy
     case None{}:
       do IO<Unit>:
         +reqs : Chan(Req) <- Chan.new(Req, 1024)
-        Unit <- IO.spawn(Unit, db_loop(S.srv_of(items, info), R.db.empty(), reqs))
+        Unit <- IO.spawn(Unit, db_loop(S.srv_of(items, info), R.ds.empty(dbs.more(items)), reqs))
         accept_all(ls, reqs, post, lg, tl)
     case Some{+path}:
       do IO<Unit>:
-        p : R.Db & Nat <- restore(lg, trunc, path)
+        p : R.Ds & Nat <- restore(lg, trunc, path, dbs.more(items))
         serve.aof(p, path, sync, items, info, ls, post, lg, tl)
 
 # Listening
@@ -1782,7 +1819,7 @@ def run(+items: List<&2, C.CItem>, +post: Bool, +aof: Maybe<&2, String>, +sync: 
     +tl : Chan(Tally) <- Chan.new(Tally, 1)
     ok : Bool <- Chan.send(Tally, tl, Tally{0n, 0n})
     info : I.Info <- info.read(pid, exe, conf, tl)
-    serve(aof, ls, post, sync, String.eq(T.cfg(items, "aof-load-truncated"), "yes"), C.items.put(items, "databases", "1"), info, lm, tl)
+    serve(aof, ls, post, sync, String.eq(T.cfg(items, "aof-load-truncated"), "yes"), items, info, lm, tl)
 
 # The short form
 # --------------

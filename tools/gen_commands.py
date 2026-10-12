@@ -50,7 +50,7 @@ COMMANDS = {
     "randomkey": [], "scan": [], "setnx": [], "strlen": [], "type": [], "unlink": [],
     "setex": [], "psetex": [], "getex": [], "getdel": [], "expire": [], "pexpire": [],
     "expireat": [], "pexpireat": [], "ttl": [], "pttl": [], "expiretime": [],
-    "pexpiretime": [], "persist": []}
+    "pexpiretime": [], "persist": [], "swapdb": [], "move": []}
 
 # Step 1: redis-server -> facts
 # -----------------------------

@@ -171,7 +171,7 @@ def config.table() -> List<&2, CItem>:
     CItem{CParam{"propagation-error-behavior", "", False{}, False{}, False{}, False{}, CEnum{["ignore", "panic", "panic-on-replicas"], [0, 1, 2], False{}, VNone{}}, AppNone{}}, "ignore"},
     CItem{CParam{"shutdown-on-sigint", "", False{}, False{}, False{}, True{}, CEnum{["default", "save", "nosave", "now", "force"], [0, 1, 2, 4, 8], True{}, VSig{}}, AppNone{}}, "default"},
     CItem{CParam{"shutdown-on-sigterm", "", False{}, False{}, False{}, True{}, CEnum{["default", "save", "nosave", "now", "force"], [0, 1, 2, 4, 8], True{}, VSig{}}, AppNone{}}, "default"},
-    CItem{CParam{"databases", "", True{}, False{}, False{}, False{}, CNum{True{}, "1", "2147483647", NPlain{}}, AppNone{}}, "1"},
+    CItem{CParam{"databases", "", True{}, False{}, False{}, False{}, CNum{True{}, "1", "2147483647", NPlain{}}, AppNone{}}, "16"},
     CItem{CParam{"port", "", False{}, False{}, False{}, False{}, CNum{True{}, "0", "65535", NPlain{}}, AppFixed{"Unable to listen on this port. Check server logs."}}, "6379"},
     CItem{CParam{"io-threads", "", True{}, False{}, False{}, False{}, CNum{True{}, "1", "128", NPlain{}}, AppNone{}}, "1"},
     CItem{CParam{"auto-aof-rewrite-percentage", "", False{}, False{}, False{}, False{}, CNum{True{}, "0", "2147483647", NPlain{}}, AppNone{}}, "100"},

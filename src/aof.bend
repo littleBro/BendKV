@@ -1,11 +1,16 @@
 # aof.bend: the append-only file. After each batch the server appends what
 # its commands did (effects), each entry written as Redis writes its AOF:
-# a RESP array of bulk strings. At start it reads the file back (load),
-# parses each entry (R.parse) and runs the entries from an empty database
-# (restore). LAWS.bend (Persistence) proves that this gives back exactly
-# the database the server had: the file reads back as the entries written
-# to it, each entry parses back to its command, and the effects of a batch
-# leave the database the batch left.
+# a RESP array of bulk strings, a SELECT before the entries of another
+# database than the one the file last selected, and SWAPDB, MOVE and
+# FLUSHALL as Redis writes them. At start it reads the file back (load),
+# parses each entry (R.parse) and runs the entries from 1 + n empty
+# databases (restore): a SELECT moves the focus, and every other entry
+# acts as the server acted. LAWS.bend (Persistence) proves that this gives
+# back exactly the databases the server had: the file reads back as the
+# entries written to it, each entry parses back to its command, the
+# effects of a batch leave the database the batch left, and a file cut
+# anywhere by a crash restores the databases after some prefix of the
+# server's acts.
 
 import Base
 import ./map.bend as KV
@@ -18,7 +23,7 @@ import ./batch.bend as B
 # What a command did, as commands that do it again on the database it ran
 # on, at time 0 (a file loads at time 0, when no key has expired): none
 # for one that only reads or fails, the command itself for SET, DEL, MSET
-# and FLUSHALL, and for an update (R.Upd, and INCRBY, run here as one)
+# and FLUSHDB, and for an update (R.Upd, and INCRBY, run here as one)
 # what its change left of its key: SET of the value it holds (with PXAT
 # and the time it expires at, when it does), PEXPIREAT for a time alone,
 # PERSIST for none, DEL for a key gone, SET with KEEPTTL for a value set
@@ -27,7 +32,7 @@ import ./batch.bend as B
 # that the file does not hold the whole value again. Every time is from
 # 1970, so the effects mean the same whenever they run, and a time is one
 # a key may keep, of 14 digits at most (KV.small): no number but such a
-# time is ever read back from text.
+# time, or a database's number, is ever read back from text.
 
 # a key left with v and time e (0: none)
 def put.effect(+k: String, v: String, +e: Nat) -> List<&2, R.Cmd>:
@@ -54,8 +59,8 @@ def effect(c: R.Cmd) -> List<&2, R.Cmd>:
       [R.Del{k <> ks}]
     case R.MSet{Con{p, ps}}:
       [R.MSet{p <> ps}]
-    case R.FlushAll{}:
-      [R.FlushAll{}]
+    case R.FlushDb{}:
+      [R.FlushDb{}]
     case _:
       Nil{}
 
@@ -159,6 +164,90 @@ def log_batch(cs: List<&2, R.Cmd>, hs: List<&2, U32>, db: R.Db) -> List<&2, R.Re
   +h = hs
   log_hinted(U32.is_eq(B.touch_db(B.many(h), h, d), 0), cs, d)
 
+# Several databases
+# -----------------
+# An effect on several databases is located: a command's effect is on
+# the database the command ran on (EDb), and SWAPDB, MOVE and FLUSHALL
+# are effects of their own, MOVE's the key moved from database src to
+# dst. An act (R.Act) has at most one effect: a command of one database
+# has its command's (A.run), a focus moved none, MOVE's first step the DEL
+# of the key's entry in the other database, its second step the move.
+
+type Eff is Data:
+  EDb{db: Nat, c: R.Cmd}
+  ESwap{a: Nat, b: Nat}
+  EMove{key: String, src: Nat, dst: Nat}
+  EWipe{}
+
+# a database's effects, located at its number
+def at_db(+i: Nat, es: List<&2, R.Cmd>) -> List<&2, Eff>:
+  match es:
+    case Nil{}:
+      Nil{}
+    case Con{e, rest}:
+      EDb{i, e} <> at_db(i, rest)
+
+def act.run(+i: Nat, r: R.Reply & (List<&2, R.Cmd> & R.Db), pre: List<&2, R.Db>, post: List<&2, R.Db>) -> R.Reply & (List<&2, Eff> & R.Ds):
+  (x, q) = r
+  (es, d) = q
+  (x, (at_db(i, es), R.Ds{d, pre, post}))
+
+# an act's effect, when the act did what it does (b)
+def act.if(b: Bool, e: Eff) -> List<&2, Eff>:
+  match b:
+    case True{}:
+      [e]
+    case False{}:
+      Nil{}
+
+def act.swap(+a: Nat, +b: Nat, r: Bool & R.Ds) -> R.Reply & (List<&2, Eff> & R.Ds):
+  (ok, ds) = r
+  (R.r_ok(), (act.if(ok, ESwap{a, b}), ds))
+
+def act.purge(+k: String, +j: Nat, r: Bool & R.Ds) -> R.Reply & (List<&2, Eff> & R.Ds):
+  (ok, ds) = r
+  (R.r_ok(), (act.if(ok, EDb{j, R.Del{[k]}}), ds))
+
+def act.move(+k: String, +i: Nat, +j: Nat, r: Bool & R.Ds) -> R.Reply & (List<&2, Eff> & R.Ds):
+  (+ok, ds) = r
+  (R.r_int(Bool.pick(Nat, ok, 1n, 0n)), (act.if(ok, EMove{k, i, j}), ds))
+
+# an act run with its effect: its reply, its effects, and the databases
+# after it, as R.act runs it
+def act(a: R.Act, ds: R.Ds) -> R.Reply & (List<&2, Eff> & R.Ds):
+  match a ds:
+    case R.ARun{+c} R.Ds{d, +pre, post}:
+      act.run(List.length(&2, R.Db, pre), run(c, d), pre, post)
+    case R.AFocus{+j} x:
+      (R.r_ok(), (Nil{}, R.ds.focus(j, x)))
+    case R.ASwap{+a, +b} x:
+      act.swap(a, b, R.ds.swap(a, b, x))
+    case R.APurge{+k, +j} x:
+      act.purge(k, j, R.ds.purge(k, j, x))
+    case R.AMove{+k, +j} x:
+      +y = x
+      act.move(k, R.ds.index(y), j, R.ds.move(k, j, y))
+    case R.AWipe{} x:
+      (R.r_ok(), ([EWipe{}], R.ds.wipe(x)))
+
+def acts.put(es: List<&2, Eff>, r: R.Reply & (List<&2, Eff> & R.Ds)) -> List<&2, Eff> & R.Ds:
+  (x, q) = r
+  (e, ds) = q
+  (List.reverse.go(&2, Eff, e, es), ds)
+
+def acts.step(a: R.Act, q: List<&2, Eff> & R.Ds) -> List<&2, Eff> & R.Ds:
+  (es, ds) = q
+  acts.put(es, act(a, ds))
+
+# acts run with their effects: the effects, newest first, in front of
+# those of q, and the databases after the last
+def acts(as: List<&2, R.Act>, q: List<&2, Eff> & R.Ds) -> List<&2, Eff> & R.Ds:
+  match as:
+    case Nil{}:
+      q
+    case Con{a, rest}:
+      acts(rest, acts.step(a, q))
+
 # Entries
 # -------
 
@@ -213,8 +302,8 @@ def args(c: R.Cmd) -> List<&2, String>:
       "DEL" <> ks
     case R.MSet{ps}:
       "MSET" <> pair_args(ps)
-    case R.FlushAll{}:
-      ["FLUSHALL"]
+    case R.FlushDb{}:
+      ["FLUSHDB"]
     case _:
       Nil{}
 
@@ -231,6 +320,53 @@ def parse_all(reqs: List<&2, List<&2, String>>) -> List<&2, R.Cmd>:
       Nil{}
     case Con{r, rest}:
       R.parse(r) <> parse_all(rest)
+
+# A located effect's entries: a command of one database after a SELECT
+# of its database when the file has another one selected (sel: the last
+# SELECT in the file, else 0, as Redis loads a file from database 0);
+# SWAPDB, MOVE (after a SELECT of the database it moves from) and FLUSHALL
+# as Redis writes them
+def sel.put(same: Bool, +j: Nat, xs: List<&2, List<&2, String>>) -> List<&2, List<&2, String>>:
+  match same:
+    case True{}:
+      xs
+    case False{}:
+      ["SELECT", Nat.show(j)] <> xs
+
+def eff.args(+e: Eff, +sel: Nat) -> List<&2, List<&2, String>>:
+  match e:
+    case EDb{+j, c}:
+      sel.put(Nat.is_eq(j, sel), j, [args(c)])
+    case ESwap{a, b}:
+      [["SWAPDB", Nat.show(a), Nat.show(b)]]
+    case EMove{k, +src, dst}:
+      sel.put(Nat.is_eq(src, sel), src, [["MOVE", k, Nat.show(dst)]])
+    case EWipe{}:
+      [["FLUSHALL"]]
+
+# the database the file has selected after an effect's entries
+def eff.sel(+e: Eff, +sel: Nat) -> Nat:
+  match e:
+    case EDb{+j, c}:
+      j
+    case EMove{k, +src, dst}:
+      src
+    case _:
+      sel
+
+def effs.args(es: List<&2, Eff>, +sel: Nat) -> List<&2, List<&2, String>>:
+  match es:
+    case Nil{}:
+      Nil{}
+    case Con{+e, rest}:
+      List.append(&2, List<&2, String>, eff.args(e, sel), effs.args(rest, eff.sel(e, sel)))
+
+def effs.sel(es: List<&2, Eff>, +sel: Nat) -> Nat:
+  match es:
+    case Nil{}:
+      sel
+    case Con{+e, rest}:
+      effs.sel(rest, eff.sel(e, sel))
 
 # Writing
 # -------
@@ -390,18 +526,66 @@ def load(+s: String) -> List<&2, List<&2, String>> & String:
 # Restoring
 # ---------
 
-def db_after(r: List<&2, R.Reply> & R.Db) -> R.Db:
-  (rs, db) = r
-  db
+# a number of a SELECT, SWAPDB or MOVE in a file, as a short number reads
+# (R.num14): every one BendKV writes is
+def file.num(+s: String) -> Maybe<&2, Nat>:
+  R.num14(s, 0n, 0n, False{}, R.nch(s))
 
-# the database the entries leave, run from an empty one
-def replay(reqs: List<&2, List<&2, String>>) -> R.Db:
-  db_after(R.exec_all(parse_all(reqs), R.db.empty()))
+def file.focus(m: Maybe<&2, Nat>, c: R.Cmd) -> R.Act:
+  match m:
+    case Some{j}:
+      R.AFocus{j}
+    case None{}:
+      R.ARun{c}
 
-def restore.of(l: List<&2, List<&2, String>> & String) -> R.Db & String:
+def file.swap(ma: Maybe<&2, Nat>, mb: Maybe<&2, Nat>, c: R.Cmd) -> R.Act:
+  match ma mb:
+    case Some{a} Some{b}:
+      R.ASwap{a, b}
+    case _ _:
+      R.ARun{c}
+
+def file.move(k: String, m: Maybe<&2, Nat>, c: R.Cmd) -> R.Act:
+  match m:
+    case Some{j}:
+      R.AMove{k, j}
+    case None{}:
+      R.ARun{c}
+
+# a command of a file as an act: SELECT moves the focus, SWAPDB, MOVE and
+# FLUSHALL act on the databases, and any other command runs on the focus
+# (a SELECT, SWAPDB or MOVE whose numbers do not read too: exec answers it
+# with an error and changes nothing, as Redis's load ignores a command
+# that fails)
+def file.act(+c: R.Cmd) -> R.Act:
+  match c:
+    case R.Own{R.SSelect{+s}}:
+      file.focus(file.num(s), c)
+    case R.Own{R.SSwapDb{+a, +b}}:
+      file.swap(file.num(a), file.num(b), c)
+    case R.Own{R.SMove{k, +d}}:
+      file.move(k, file.num(d), c)
+    case R.Own{R.SFlushAll{}}:
+      R.AWipe{}
+    case _:
+      R.ARun{c}
+
+def file.acts(cs: List<&2, R.Cmd>) -> List<&2, R.Act>:
+  match cs:
+    case Nil{}:
+      Nil{}
+    case Con{+c, rest}:
+      file.act(c) <> file.acts(rest)
+
+# the databases the entries leave, run from 1 + n empty ones
+def replay(reqs: List<&2, List<&2, String>>, n: Nat) -> R.Ds:
+  R.acts(file.acts(parse_all(reqs)), R.ds.empty(n))
+
+def restore.of(l: List<&2, List<&2, String>> & String, n: Nat) -> R.Ds & String:
   (reqs, rest) = l
-  (replay(reqs), rest)
+  (replay(reqs, n), rest)
 
-# the database a file holds, and what is left after its last whole entry
-def restore(s: String) -> R.Db & String:
-  restore.of(load(s))
+# the databases a file holds, from 1 + n empty ones, and what is left
+# after its last whole entry
+def restore(s: String, n: Nat) -> R.Ds & String:
+  restore.of(load(s), n)

@@ -3,7 +3,10 @@
 # file back, runs it from an empty database and prints whether that gives
 # the batch's database; then cuts the file at every length and prints
 # whether each cut loads as whole entries and a leftover that together
-# are the cut, the leftover holding no whole entry.
+# are the cut, the leftover holding no whole entry. Then the same for a
+# batch on several databases (SELECT, SWAPDB, MOVE, FLUSHDB, FLUSHALL),
+# run as acts (aof.bend: A.acts), its effects written with the SELECTs
+# the server writes, the file replayed over 16 databases.
 # Run: bend tests/aof_check.bend
 import Base
 import ../src/map.bend as KV
@@ -27,7 +30,7 @@ def buf() -> String:
   "EXISTS a b c a z\r\nDEL a b c z\r\nSETNX foo x\r\nSETNX g x\r\nGETSET foo y\r\nDBSIZE\r\n" ++
   "KEYS *\r\nKEYS f?o\r\nPING\r\nECHO hi\r\nNOPE 1 2\r\nSET k\r\nINCRBY n x\r\n" ++
   "SET big 9223372036854775807\r\nINCR big\r\nINCRBY m -5\r\nSET e \"\"\r\n" ++
-  "FLUSHALL\r\nDBSIZE\r\nSET q 1\r\nMGET q q\r\nDEL q q\r\nKEYS *\r\n" ++
+  "FLUSHDB\r\nDBSIZE\r\nSET q 1\r\nMGET q q\r\nDEL q q\r\nKEYS *\r\n" ++
   "SET a 1\r\nINCRBY a 99\r\nAPPEND a 0\r\nMSET x 1 y 2\r\nDEL y\r\nSETNX z 3\r\nGETSET z 4\r\n" ++
   "SET t 1 EX 100\r\nSETEX u 10 v\r\nPSETEX w 5 w\r\nPEXPIRE a 5000\r\nEXPIRE x 7 NX\r\nEXPIRE x 9 NX\r\n" ++
   "EXPIRE x 8 GT\r\nEXPIRE x 9 LT\r\nPERSIST t\r\nPERSIST t\r\nINCR a\r\nAPPEND a 1\r\nGETEX u PX 300\r\n" ++
@@ -111,6 +114,36 @@ def report(+cs: List<&2, R.Cmd>, r: List<&2, R.Reply> & (List<&2, R.Cmd> & R.Db)
   (rs, q) = r
   report.of(cs, q)
 
+# a batch on several databases: SELECT moves the focus, SWAPDB, MOVE and
+# FLUSHALL act on the databases
+def mbuf() -> String:
+  "SET a 0\r\nSELECT 4\r\nSET z 0\r\nFLUSHALL\r\nSET a 1\r\nSELECT 2\r\nSET b 2\r\nSET c 3 PX 100000\r\nSELECT 5\r\nSET d 4\r\n" ++
+  "SELECT 2\r\nMOVE b 7\r\nMOVE b 7\r\nMOVE c 7\r\nSWAPDB 5 9\r\nSELECT 9\r\nINCR d\r\nSELECT 7\r\nSET h 8\r\n" ++
+  "SELECT 6\r\nSET k 1\r\nFLUSHDB\r\nSET e 5\r\nSELECT 3\r\nSET g 7\r\nSELECT 14\r\nSWAPDB 3 15\r\nSET i 9\r\n"
+
+# the databases as one string, each with its number
+def dump.dbs(dbs: List<&2, R.Db>, +i: Nat) -> String:
+  match dbs:
+    case Nil{}:
+      SNil{}
+    case Con{+d, rest}:
+      Nat.show(i) ++ ": " ++ dump(d) ++ "\n" ++ dump.dbs(rest, 1n+i)
+
+def dump.ds(+ds: R.Ds) -> String:
+  dump.dbs(R.ds.list(ds), 0n)
+
+def mreport.of(q: List<&2, A.Eff> & R.Ds) -> IO(Unit):
+  (es, +ds) = q
+  +f = A.encode(A.effs.args(List.reverse(&2, A.Eff, es), 0n))
+  +want = dump.ds(ds)
+  do IO<Unit>:
+    Unit <- IO.print("file on several databases: " ++ Nat.show(String.length(f)) ++ " bytes, " ++ Nat.show(List.length(&2, List<&2, String>, Pair.fst(List<&2, List<&2, String>>, String, A.load(f)))) ++ " entries")
+    Unit <- IO.print("replayed databases: " ++ same(dump.ds(A.replay(Pair.fst(List<&2, List<&2, String>>, String, A.load(f)), 15n)), want))
+    Unit <- IO.print("databases:\n" ++ want)
+    IO.print(cuts(f, 1n+String.length(f), 0n))
+
 def main() -> IO(Unit):
   +cs = batch_of(P.parse(buf()))
-  report(cs, A.exec_log(cs, R.db.empty()))
+  do IO<Unit>:
+    Unit <- report(cs, A.exec_log(cs, R.db.empty()))
+    mreport.of(A.acts(A.file.acts(batch_of(P.parse(mbuf()))), (Nil{}, R.ds.empty(15n))))

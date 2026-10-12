@@ -38,10 +38,10 @@ type Mute is Data:
   MSkip{}
 
 # a connection: its id, whether it has authenticated, its name (empty
-# for none), which replies it gets, and whether it has asked to close
-# (QUIT)
+# for none), which replies it gets, whether it has asked to close (QUIT),
+# and the database it selected (SELECT)
 type Conn is Data:
-  Conn{id: Nat, auth: Bool, name: String, mode: Mute, quit: Bool}
+  Conn{id: Nat, auth: Bool, name: String, mode: Mute, quit: Bool, db: Nat}
 
 # the server, besides its database: its password (empty for none), its
 # parameters (config.bend), of which requirepass is the password, what
@@ -51,7 +51,7 @@ type Srv is Data:
   Srv{pass: String, cfg: List<&2, C.CItem>, info: I.Info, rng: U32}
 
 def conn_new(id: Nat) -> Conn:
-  Conn{id, False{}, "", MOn{}, False{}}
+  Conn{id, False{}, "", MOn{}, False{}, 0n}
 
 # the server with these parameters: its password is requirepass; its
 # random numbers start from its run id
@@ -69,35 +69,40 @@ def srv.puts(sets: List<&2, String>, cfg: List<&2, C.CItem>) -> List<&2, C.CItem
 
 def conn.auth(+c: Conn) -> Bool:
   match c:
-    case Conn{id, auth, name, mode, quit}:
+    case Conn{id, auth, name, mode, quit, db}:
       auth
 
 def conn.id(+c: Conn) -> Nat:
   match c:
-    case Conn{id, auth, name, mode, quit}:
+    case Conn{id, auth, name, mode, quit, db}:
       id
 
 def conn.name(+c: Conn) -> String:
   match c:
-    case Conn{id, auth, name, mode, quit}:
+    case Conn{id, auth, name, mode, quit, db}:
       name
 
 def conn.mode(+c: Conn) -> Mute:
   match c:
-    case Conn{id, auth, name, mode, quit}:
+    case Conn{id, auth, name, mode, quit, db}:
       mode
 
 # the connection with every reply on (for INFO's statistics, which count
 # the replies a client does not get)
 def conn.on(c: Conn) -> Conn:
   match c:
-    case Conn{id, auth, name, mode, quit}:
-      Conn{id, auth, name, MOn{}, quit}
+    case Conn{id, auth, name, mode, quit, db}:
+      Conn{id, auth, name, MOn{}, quit, db}
 
 def conn.quit(+c: Conn) -> Bool:
   match c:
-    case Conn{id, auth, name, mode, quit}:
+    case Conn{id, auth, name, mode, quit, db}:
       quit
+
+def conn.db(+c: Conn) -> Nat:
+  match c:
+    case Conn{id, auth, name, mode, quit, +db}:
+      db
 
 def srv.pass(+s: Srv) -> String:
   match s:
@@ -118,6 +123,18 @@ def srv.rng(+s: Srv) -> U32:
   match s:
     case Srv{pass, cfg, info, rng}:
       rng
+
+# how many databases the server has (databases, which cannot change while
+# it runs)
+def srv.dbs.of(v: Maybe<&2, R.Int>) -> Nat:
+  match v:
+    case Some{R.IPos{n}}:
+      n
+    case _:
+      1n
+
+def srv.dbs(+s: Srv) -> Nat:
+  srv.dbs.of(R.int_read(C.config.get_value(srv.cfg(s), "databases")))
 
 # what the shell adds to INFO's account (info.bend): a batch's calls (the
 # ones that ran, and runs of codes, R.Tally), its error replies and its
@@ -153,17 +170,18 @@ def srv.tick(s: Srv, +ms: Nat) -> Srv:
     case Srv{pass, cfg, info, rng}:
       Srv{pass, cfg, I.info.tick(info, ms), rng}
 
-# the sweep of expired keys (redis.bend: reap): where the next one starts,
-# and a sweep that stopped at next having deleted k keys
-def srv.reap_at(+s: Srv) -> Nat:
+# the sweep of expired keys (redis.bend: reap): where the next one starts
+# in database j, and a sweep of j that stopped at next having deleted k
+# keys
+def srv.reap_at(+s: Srv, +j: Nat) -> Nat:
   match s:
     case Srv{pass, cfg, +info, rng}:
-      I.info.reap_at(info)
+      I.info.reap_at(info, j)
 
-def srv.reaped(s: Srv, +next: Nat, +k: Nat) -> Srv:
+def srv.reaped(s: Srv, +j: Nat, +next: Nat, +k: Nat) -> Srv:
   match s:
     case Srv{pass, cfg, info, rng}:
-      Srv{pass, cfg, I.info.reaped(info, next, k), rng}
+      Srv{pass, cfg, I.info.reaped(info, j, next, k), rng}
 
 # Authentication
 # --------------
@@ -227,8 +245,8 @@ def put(m: Maybe<&2, R.Reply>, rs: List<&2, R.Reply>) -> List<&2, R.Reply>:
 # if it may run commands now, its mode one command on
 def step_conn(+c: Conn, +s: Srv) -> Conn:
   match c:
-    case Conn{id, auth, name, mode, quit}:
-      Conn{id, authed(c, s), name, after(mode), quit}
+    case Conn{id, auth, name, mode, quit, db}:
+      Conn{id, authed(c, s), name, after(mode), quit, db}
 
 # Session commands
 # ----------------
@@ -354,8 +372,8 @@ def hello.run(+s: Srv, +c: Conn, args: List<&2, String>) -> Hel:
 # if it may run commands now, and named as its SETNAME said
 def hello.conn(h: Hel, +c: Conn, +s: Srv) -> Conn:
   match h c:
-    case Hel{w, auth, name} Conn{id, a, n, mode, quit}:
-      Conn{id, Bool.or(auth, authed(c, s)), name, after(mode), quit}
+    case Hel{w, auth, name} Conn{id, a, n, mode, quit, db}:
+      Conn{id, Bool.or(auth, authed(c, s)), name, after(mode), quit, db}
 
 # AUTH [user] password
 def auth.one(nopass: Bool, ok: Bool) -> R.Reply:
@@ -385,34 +403,169 @@ def auth.ok(+args: List<&2, String>, +s: Srv) -> Bool:
 
 def auth.conn(ok: Bool, +c: Conn, +s: Srv) -> Conn:
   match ok c:
-    case True{} Conn{id, a, name, mode, quit}:
-      Conn{id, True{}, name, after(mode), quit}
+    case True{} Conn{id, a, name, mode, quit, db}:
+      Conn{id, True{}, name, after(mode), quit, db}
     case False{} c0:
       step_conn(c0, s)
 
-# SELECT: BendKV has one database, as Redis has with "databases 1"
-def select.reply(v: Maybe<&2, R.Int>) -> R.Reply:
+# Databases
+# ---------
+# SELECT, SWAPDB and MOVE name a database by its number, read as Redis
+# reads one (getIntFromObjectOrReply): an integer that fits an int, else
+# the command's own error, or Redis's ("value is not an integer or out of
+# range" for no long long, "value is out of range, value must between
+# ..." for a long long past an int); then one of the server's, else "DB
+# index is out of range".
+type Idx is Data:
+  IdxOk{n: Nat}
+  IdxBad{r: R.Reply}
+
+def e_range() -> R.Reply:
+  R.RError{"ERR DB index is out of range"}
+
+def e_intr() -> R.Reply:
+  R.RError{"ERR value is out of range, value must between -2147483648 and 2147483647"}
+
+# a number as an int: one that fits (from -2^31 to 2^31 - 1), a long long
+# past one, or no long long (R.ll.read reads one as Redis's string2ll)
+type IntR is Data:
+  IntOk{i: R.Int}
+  IntBig{}
+  IntNot{}
+
+def int.mk(neg: Bool, +m: Nat) -> IntR:
+  match neg:
+    case True{}:
+      IntOk{R.INeg{Nat.sub(m, 1n)}}
+    case False{}:
+      IntOk{R.IPos{m}}
+
+def int.mag(+neg: Bool, +m: Nat) -> IntR:
+  Bool.pick(IntR, Nat.is_lt(m, Bool.pick(Nat, neg, 2147483649n, 2147483648n)), int.mk(neg, m), IntBig{})
+
+def int.of(l: R.LL) -> IntR:
+  match l:
+    case R.LL{+neg, +hi, +lo}:
+      Bool.pick(IntR, Nat.is_lt(hi, 3n), int.mag(neg, Nat.add(Nat.mul(hi, 1000000000n), lo)), IntBig{})
+    case R.LLBad{}:
+      IntNot{}
+
+def int.read(+s: String) -> IntR:
+  int.of(R.ll.read(s))
+
+def idx.of(v: IntR, +dbs: Nat, e: R.Reply, big: R.Reply) -> Idx:
   match v:
-    case Some{R.IPos{0n}}:
+    case IntOk{R.IPos{+n}}:
+      Bool.pick(Idx, Nat.is_lt(n, dbs), IdxOk{n}, IdxBad{e_range()})
+    case IntOk{R.INeg{n}}:
+      IdxBad{e_range()}
+    case IntBig{}:
+      IdxBad{big}
+    case IntNot{}:
+      IdxBad{e}
+
+def idx(+s: String, +dbs: Nat) -> Idx:
+  idx.of(int.read(s), dbs, R.e_int(), e_intr())
+
+def idx.reply(i: Idx) -> R.Reply:
+  match i:
+    case IdxOk{n}:
       R.r_ok()
-    case Some{other}:
-      R.RError{"ERR DB index is out of range"}
-    case None{}:
-      R.e_int()
+    case IdxBad{r}:
+      r
+
+# SELECT index: the connection's database from then on
+def select.idx(+d: String, +s: Srv) -> Idx:
+  idx(d, srv.dbs(s))
+
+def select.conn(i: Idx, +c: Conn, +s: Srv) -> Conn:
+  match i c:
+    case IdxOk{j} Conn{id, a, name, mode, quit, db}:
+      Conn{id, authed(c, s), name, after(mode), quit, j}
+    case IdxBad{r} c0:
+      step_conn(c0, s)
+
+def select.acts(i: Idx) -> List<&2, R.Act>:
+  match i:
+    case IdxOk{j}:
+      [R.AFocus{j}]
+    case IdxBad{r}:
+      Nil{}
+
+# SWAPDB index1 index2: each an int ("invalid first DB index", "invalid
+# second DB index"), then both of the server's
+type Idx2 is Data:
+  Idx2Ok{a: Nat, b: Nat}
+  Idx2Bad{r: R.Reply}
+
+def swap.check(ma: IntR, mb: IntR, +dbs: Nat) -> Idx2:
+  match ma mb:
+    case IntOk{R.IPos{+a}} IntOk{R.IPos{+b}}:
+      Bool.pick(Idx2, Bool.and(Nat.is_lt(a, dbs), Nat.is_lt(b, dbs)), Idx2Ok{a, b}, Idx2Bad{e_range()})
+    case IntOk{x} IntOk{y}:
+      Idx2Bad{e_range()}
+    case IntOk{x} _:
+      Idx2Bad{R.RError{"ERR invalid second DB index"}}
+    case _ _:
+      Idx2Bad{R.RError{"ERR invalid first DB index"}}
+
+def swap.idx(+a: String, +b: String, +s: Srv) -> Idx2:
+  swap.check(int.read(a), int.read(b), srv.dbs(s))
+
+def swap.reply(i: Idx2) -> R.Reply:
+  match i:
+    case Idx2Ok{a, b}:
+      R.r_ok()
+    case Idx2Bad{r}:
+      r
+
+def swap.acts(i: Idx2) -> List<&2, R.Act>:
+  match i:
+    case Idx2Ok{a, b}:
+      [R.ASwap{a, b}]
+    case Idx2Bad{r}:
+      Nil{}
+
+# MOVE key db: db an int, one of the server's, and not the connection's
+# own ("source and destination objects are the same"); MOVE's two acts
+# (R.ds.purge, R.ds.move), the second's reply being MOVE's
+def move.of(i: Idx, +c: Conn) -> Idx:
+  match i:
+    case IdxOk{+j}:
+      Bool.pick(Idx, Nat.is_eq(j, conn.db(c)), IdxBad{R.RError{"ERR source and destination objects are the same"}}, IdxOk{j})
+    case IdxBad{r}:
+      IdxBad{r}
+
+def move.idx(+d: String, +c: Conn, +s: Srv) -> Idx:
+  move.of(idx(d, srv.dbs(s)), c)
+
+def move.acts(+k: String, i: Idx) -> List<&2, R.Act>:
+  match i:
+    case IdxOk{+j}:
+      [R.APurge{k, j}, R.AMove{k, j}]
+    case IdxBad{r}:
+      Nil{}
+
+def move.reply(+k: String, i: Idx, +ds: R.Ds) -> R.Reply:
+  match i:
+    case IdxOk{+j}:
+      R.reply_ds(R.act(R.AMove{k, j}, R.ds_of(R.act(R.APurge{k, j}, ds))))
+    case IdxBad{r}:
+      r
 
 # QUIT: OK, and the connection closes once its replies are out; the
 # commands after it in the batch are dropped
 def quit.conn(+c: Conn, +s: Srv) -> Conn:
   match c:
-    case Conn{id, a, name, mode, quit}:
-      Conn{id, authed(c, s), name, after(mode), True{}}
+    case Conn{id, a, name, mode, quit, db}:
+      Conn{id, authed(c, s), name, after(mode), True{}, db}
 
 # RESET: the connection as new, authenticated if there is no password;
 # its reply goes out unless it is the one skipped
 def reset.conn(c: Conn, +s: Srv) -> Conn:
   match c:
-    case Conn{id, a, name, mode, quit}:
-      Conn{id, nopass(s), "", MOn{}, False{}}
+    case Conn{id, a, name, mode, quit, db}:
+      Conn{id, nopass(s), "", MOn{}, False{}, 0n}
 
 def reset.out(m: Mute) -> Maybe<&2, R.Reply>:
   match m:
@@ -431,8 +584,8 @@ def getname(n: String) -> R.Reply:
 
 def setname.conn(ok: Bool, n: String, +c: Conn, +s: Srv) -> Conn:
   match ok c:
-    case True{} Conn{id, a, name, mode, quit}:
-      Conn{id, authed(c, s), n, after(mode), quit}
+    case True{} Conn{id, a, name, mode, quit, db}:
+      Conn{id, authed(c, s), n, after(mode), quit, db}
     case False{} c0:
       step_conn(c0, s)
 
@@ -472,8 +625,8 @@ def reply.out(w: Nat, old: Mute) -> Maybe<&2, R.Reply>:
 
 def mode.conn(m: Mute, +c: Conn, +s: Srv) -> Conn:
   match c:
-    case Conn{id, a, name, mode, quit}:
-      Conn{id, authed(c, s), name, m, quit}
+    case Conn{id, a, name, mode, quit, db}:
+      Conn{id, authed(c, s), name, m, quit, db}
 
 # RANDOMKEY's reply: a key there at now in the database's trie, by r, or
 # nil
@@ -482,16 +635,16 @@ def randomkey.of(+db: R.Db, +r: U32) -> R.Reply:
     case R.Db{+t, n, x, +now, rr}:
       R.r_get(KV.pick(String, t, r, now))
 
-# a session command's reply, sent or not; the database is there for the
-# commands that read it
-def own_reply(+o: R.SessOp, +c: Conn, +s: Srv, +db: R.Db) -> Maybe<&2, R.Reply>:
+# a session command's reply, sent or not; the databases are there for
+# the commands that read them
+def own_reply(+o: R.SessOp, +c: Conn, +s: Srv, +ds: R.Ds) -> Maybe<&2, R.Reply>:
   match o:
     case R.SHello{args}:
       say(conn.mode(c), hello.fin(hello.run(s, c, args), conn.id(c), nopass(s)))
     case R.SAuth{args}:
       say(conn.mode(c), auth.reply(args, s))
-    case R.SSelect{d}:
-      say(conn.mode(c), select.reply(R.int_read(d)))
+    case R.SSelect{+d}:
+      say(conn.mode(c), idx.reply(select.idx(d, s)))
     case R.SQuit{}:
       say(conn.mode(c), R.r_ok())
     case R.SReset{}:
@@ -511,11 +664,17 @@ def own_reply(+o: R.SessOp, +c: Conn, +s: Srv, +db: R.Db) -> Maybe<&2, R.Reply>:
     case R.SConfigResetStat{}:
       say(conn.mode(c), R.r_ok())
     case R.SInfo{args}:
-      say(conn.mode(c), R.RBulk{I.text(args, srv.cfg(s), srv.info(s), db)})
+      say(conn.mode(c), R.RBulk{I.text(args, srv.cfg(s), srv.info(s), ds)})
     case R.SCommand{args}:
       say(conn.mode(c), K.reply(args))
     case R.SRandomKey{}:
-      say(conn.mode(c), randomkey.of(db, KV.mix(srv.rng(s))))
+      say(conn.mode(c), randomkey.of(R.ds.focused(ds), KV.mix(srv.rng(s))))
+    case R.SSwapDb{+a, +b}:
+      say(conn.mode(c), swap.reply(swap.idx(a, b, s)))
+    case R.SMove{+k, +d}:
+      say(conn.mode(c), move.reply(k, move.idx(d, c, s), ds))
+    case R.SFlushAll{}:
+      say(conn.mode(c), R.r_ok())
     case R.SReply{r}:
       say(conn.mode(c), r)
     case R.SBad{r}:
@@ -528,8 +687,8 @@ def own_conn(+o: R.SessOp, +c: Conn, +s: Srv) -> Conn:
       hello.conn(hello.run(s, c, args), c, s)
     case R.SAuth{args}:
       auth.conn(auth.ok(args, s), c, s)
-    case R.SSelect{d}:
-      step_conn(c, s)
+    case R.SSelect{+d}:
+      select.conn(select.idx(d, s), c, s)
     case R.SQuit{}:
       quit.conn(c, s)
     case R.SReset{}:
@@ -554,10 +713,34 @@ def own_conn(+o: R.SessOp, +c: Conn, +s: Srv) -> Conn:
       step_conn(c, s)
     case R.SRandomKey{}:
       step_conn(c, s)
+    case R.SSwapDb{a, b}:
+      step_conn(c, s)
+    case R.SMove{k, d}:
+      step_conn(c, s)
+    case R.SFlushAll{}:
+      step_conn(c, s)
     case R.SReply{r}:
       step_conn(c, s)
     case R.SBad{r}:
       step_conn(c, s)
+
+# what a session command does to the databases: SELECT and RESET move the
+# focus to the connection's new database, SWAPDB, MOVE and FLUSHALL act
+# on the databases, and the others do nothing to them
+def own_acts(+o: R.SessOp, +c: Conn, +s: Srv) -> List<&2, R.Act>:
+  match o:
+    case R.SSelect{+d}:
+      select.acts(select.idx(d, s))
+    case R.SReset{}:
+      [R.AFocus{0n}]
+    case R.SSwapDb{+a, +b}:
+      swap.acts(swap.idx(a, b, s))
+    case R.SMove{+k, +d}:
+      move.acts(k, move.idx(d, c, s))
+    case R.SFlushAll{}:
+      [R.AWipe{}]
+    case _:
+      Nil{}
 
 def srv.set(r: Result<&2, &2, R.Reply, List<&2, C.CItem>>, +s: Srv) -> Srv:
   match r:
@@ -641,41 +824,48 @@ def may(+k: Role, +c: Conn, +s: Srv) -> Bool:
       True{}
 
 # a batch so far on the general path: its replies and its effects
-# (newest first), the connection, the server and the database
+# (newest first), the connection, the server and the databases
 type Gen is Data:
-  Gen{rs: List<&2, R.Reply>, es: List<&2, R.Cmd>, conn: Conn, srv: Srv, db: R.Db}
+  Gen{rs: List<&2, R.Reply>, es: List<&2, A.Eff>, conn: Conn, srv: Srv, ds: R.Ds}
 
-# the replies, the effects and the database after a command; the
+# the replies, the effects and the databases after a command; the
 # connection and the server after it come apart (next_conn, next_srv),
-# for they do not depend on the database
+# for they do not depend on the databases
 type Out is Data:
-  Out{rs: List<&2, R.Reply>, es: List<&2, R.Cmd>, db: R.Db}
+  Out{rs: List<&2, R.Reply>, es: List<&2, A.Eff>, ds: R.Ds}
 
-# a database command run with its effects (A.run): its reply, sent or
-# not, and its effects, put before those of the commands before it
-def out.data(rs: List<&2, R.Reply>, es: List<&2, R.Cmd>, m: Mute, r: R.Reply & (List<&2, R.Cmd> & R.Db)) -> Out:
+# a command of one database run on the focus with its effects (A.act):
+# its reply, sent or not, and its effects, put before those of the
+# commands before it
+def out.data(rs: List<&2, R.Reply>, es: List<&2, A.Eff>, m: Mute, r: R.Reply & (List<&2, A.Eff> & R.Ds)) -> Out:
   (+x, q) = r
   (e, d) = q
-  Out{put(say(m, x), rs), List.reverse.go(&2, R.Cmd, e, es), d}
+  Out{put(say(m, x), rs), List.reverse.go(&2, A.Eff, e, es), d}
 
-def out.k(+k: Role, ok: Bool, +c: R.Cmd, rs: List<&2, R.Reply>, es: List<&2, R.Cmd>, +conn: Conn, +srv: Srv, +db: R.Db) -> Out:
+# a session command: its reply, sent or not, and what its acts did
+def out.own(rs: List<&2, R.Reply>, q: List<&2, A.Eff> & R.Ds) -> Out:
+  (es, d) = q
+  Out{rs, es, d}
+
+def out.k(+k: Role, ok: Bool, +c: R.Cmd, rs: List<&2, R.Reply>, es: List<&2, A.Eff>, +conn: Conn, +srv: Srv, ds: R.Ds) -> Out:
   match k ok:
     case KSess{o} True{}:
-      Out{put(own_reply(o, conn, srv, db), rs), es, db}
+      +x = ds
+      out.own(put(own_reply(o, conn, srv, x), rs), A.acts(own_acts(o, conn, srv), (es, x)))
     case KSess{o} False{}:
-      Out{put(say(conn.mode(conn), e_noauth()), rs), es, db}
+      Out{put(say(conn.mode(conn), e_noauth()), rs), es, ds}
     case _ True{}:
-      out.data(rs, es, conn.mode(conn), A.run(c, db))
+      out.data(rs, es, conn.mode(conn), A.act(R.ARun{c}, ds))
     case _ False{}:
-      Out{put(say(conn.mode(conn), e_noauth()), rs), es, db}
+      Out{put(say(conn.mode(conn), e_noauth()), rs), es, ds}
 
-def out.q(quit: Bool, +c: R.Cmd, rs: List<&2, R.Reply>, es: List<&2, R.Cmd>, +conn: Conn, +srv: Srv, db: R.Db) -> Out:
+def out.q(quit: Bool, +c: R.Cmd, rs: List<&2, R.Reply>, es: List<&2, A.Eff>, +conn: Conn, +srv: Srv, ds: R.Ds) -> Out:
   match quit:
     case True{}:
-      Out{rs, es, db}
+      Out{rs, es, ds}
     case False{}:
       +k = kind(c)
-      out.k(k, may(k, conn, srv), c, rs, es, conn, srv, db)
+      out.k(k, may(k, conn, srv), c, rs, es, conn, srv, ds)
 
 def next_conn.k(+k: Role, ok: Bool, +conn: Conn, +srv: Srv) -> Conn:
   match k ok:
@@ -709,14 +899,14 @@ def next_srv(quit: Bool, +c: R.Cmd, +conn: Conn, +srv: Srv) -> Srv:
 
 def gen.mk(o: Out, conn: Conn, srv: Srv) -> Gen:
   match o:
-    case Out{rs, es, db}:
-      Gen{rs, es, conn, srv, db}
+    case Out{rs, es, ds}:
+      Gen{rs, es, conn, srv, ds}
 
 def gen.step(+c: R.Cmd, st: Gen) -> Gen:
   match st:
-    case Gen{rs, es, +conn, +srv, db}:
+    case Gen{rs, es, +conn, +srv, ds}:
       +q = conn.quit(conn)
-      gen.mk(out.q(q, c, rs, es, conn, srv, db), next_conn(q, c, conn, srv), next_srv(q, c, conn, srv))
+      gen.mk(out.q(q, c, rs, es, conn, srv, ds), next_conn(q, c, conn, srv), next_srv(q, c, conn, srv))
 
 def gen.go(cmds: List<&2, R.Cmd>, st: Gen) -> Gen:
   match cmds:
@@ -725,36 +915,35 @@ def gen.go(cmds: List<&2, R.Cmd>, st: Gen) -> Gen:
     case Con{c, rest}:
       gen.go(rest, gen.step(c, st))
 
-def gen(conn: Conn, srv: Srv, cmds: List<&2, R.Cmd>, db: R.Db) -> Gen:
-  gen.go(cmds, Gen{Nil{}, Nil{}, conn, srv, db})
+def gen(conn: Conn, srv: Srv, cmds: List<&2, R.Cmd>, ds: R.Ds) -> Gen:
+  gen.go(cmds, Gen{Nil{}, Nil{}, conn, srv, ds})
 
-# whether a command runs on the database (as exec runs it)
-def ran.k(+k: Role, ok: Bool) -> Bool:
-  match k:
-    case KSess{o}:
-      False{}
-    case _:
-      ok
-
-def ran(quit: Bool, +c: R.Cmd, +conn: Conn, +srv: Srv) -> Bool:
-  match quit:
-    case True{}:
-      False{}
-    case False{}:
-      +k = kind(c)
-      ran.k(k, may(k, conn, srv))
-
-def keep(ok: Bool, c: R.Cmd) -> List<&2, R.Cmd>:
-  match ok:
-    case True{}:
-      [c]
-    case False{}:
+# what a command that runs does to the databases: a command of one
+# database runs on the focus (as exec runs it; an error the parser found
+# among them answers and changes nothing), a session command acts as
+# own_acts says
+def acts.k(+k: Role, ok: Bool, +c: R.Cmd, +conn: Conn, +srv: Srv) -> List<&2, R.Act>:
+  match k ok:
+    case KSess{o} True{}:
+      own_acts(o, conn, srv)
+    case KSess{o} False{}:
+      Nil{}
+    case _ True{}:
+      [R.ARun{c}]
+    case _ False{}:
       Nil{}
 
-# the commands a batch runs on the database, in order, as exec runs them
-# (an error the parser found among them answers and changes nothing):
-# the spec of gen
-def plan(cmds: List<&2, R.Cmd>, conn: Conn, srv: Srv) -> List<&2, R.Cmd>:
+def acts.q(quit: Bool, +c: R.Cmd, +conn: Conn, +srv: Srv) -> List<&2, R.Act>:
+  match quit:
+    case True{}:
+      Nil{}
+    case False{}:
+      +k = kind(c)
+      acts.k(k, may(k, conn, srv), c, conn, srv)
+
+# what a batch does to the databases, in order, as R.acts runs it: the
+# spec of gen
+def plan(cmds: List<&2, R.Cmd>, conn: Conn, srv: Srv) -> List<&2, R.Act>:
   match cmds:
     case Nil{}:
       Nil{}
@@ -762,90 +951,100 @@ def plan(cmds: List<&2, R.Cmd>, conn: Conn, srv: Srv) -> List<&2, R.Cmd>:
       +cn = conn
       +sv = srv
       +q = conn.quit(cn)
-      List.append(&2, R.Cmd, keep(ran(q, c, cn, sv), c), plan(rest, next_conn(q, c, cn, sv), next_srv(q, c, cn, sv)))
+      List.append(&2, R.Act, acts.q(q, c, cn, sv), plan(rest, next_conn(q, c, cn, sv), next_srv(q, c, cn, sv)))
 
 # The fast path: a batch of database commands only, from a client that
-# may run them and gets every reply. It leaves the connection
-# authenticated, as the general path does after a command (an empty
-# batch, which the server never sends, leaves it as it was).
+# may run them and gets every reply, run on the focus. It leaves the
+# connection authenticated, as the general path does after a command (an
+# empty batch, which the server never sends, leaves it as it was).
 
 def ready(+c: Conn, +s: Srv) -> Bool:
   match c:
-    case Conn{id, auth, name, MOn{}, False{}}:
+    case Conn{id, auth, name, MOn{}, False{}, db}:
       authed(c, s)
     case _:
       False{}
 
 def conn_ok(c: Conn) -> Conn:
   match c:
-    case Conn{id, auth, name, mode, quit}:
-      Conn{id, True{}, name, mode, quit}
+    case Conn{id, auth, name, mode, quit, db}:
+      Conn{id, True{}, name, mode, quit, db}
 
 # a batch's outcome: its replies in order, the connection and the server
-# after it, and the database
+# after it, and the databases
 type Fin is Data:
-  Fin{rs: List<&2, R.Reply>, conn: Conn, srv: Srv, db: R.Db}
+  Fin{rs: List<&2, R.Reply>, conn: Conn, srv: Srv, ds: R.Ds}
 
-def done.fast(conn: Conn, srv: Srv, r: List<&2, R.Reply> & R.Db) -> Fin:
-  (rs, db) = r
-  Fin{rs, conn_ok(conn), srv, db}
+def done.fast(conn: Conn, srv: Srv, pre: List<&2, R.Db>, post: List<&2, R.Db>, r: List<&2, R.Reply> & R.Db) -> Fin:
+  (rs, d) = r
+  Fin{rs, conn_ok(conn), srv, R.Ds{d, pre, post}}
+
+def run.fast(conn: Conn, srv: Srv, cmds: List<&2, R.Cmd>, hs: List<&2, U32>, ds: R.Ds) -> Fin:
+  match ds:
+    case R.Ds{d, pre, post}:
+      done.fast(conn, srv, pre, post, B.exec_batch(cmds, hs, d))
 
 def done.gen(st: Gen) -> Fin:
   match st:
-    case Gen{rs, es, conn, srv, db}:
-      Fin{List.reverse(&2, R.Reply, rs), conn, srv, db}
+    case Gen{rs, es, conn, srv, ds}:
+      Fin{List.reverse(&2, R.Reply, rs), conn, srv, ds}
 
-def run.plain(fast: Bool, conn: Conn, srv: Srv, cmds: List<&2, R.Cmd>, hs: List<&2, U32>, db: R.Db) -> Fin:
+def run.plain(fast: Bool, conn: Conn, srv: Srv, cmds: List<&2, R.Cmd>, hs: List<&2, U32>, ds: R.Ds) -> Fin:
   match fast cmds:
     case _ Nil{}:
-      Fin{Nil{}, conn, srv, db}
+      Fin{Nil{}, conn, srv, ds}
     case True{} Con{c, cs}:
-      done.fast(conn, srv, B.exec_batch(c <> cs, hs, db))
+      run.fast(conn, srv, c <> cs, hs, ds)
     case False{} Con{c, cs}:
-      done.gen(gen(conn, srv, c <> cs, db))
+      done.gen(gen(conn, srv, c <> cs, ds))
 
 # a batch, as the server without an append-only file runs it
-def run(conn: Conn, srv: Srv, job: B.Job, db: R.Db) -> Fin:
+def run(conn: Conn, srv: Srv, job: B.Job, ds: R.Ds) -> Fin:
   match job:
     case B.Plain{cmds, hs}:
       +c = conn
       +s = srv
-      run.plain(ready(c, s), c, s, cmds, hs, db)
+      run.plain(ready(c, s), c, s, cmds, hs, ds)
     case B.Mixed{cmds, hs}:
-      done.gen(gen(conn, srv, cmds, db))
+      done.gen(gen(conn, srv, cmds, ds))
 
 # a batch's outcome with its effects, in order, for the append-only file
 type Logged is Data:
-  Logged{rs: List<&2, R.Reply>, es: List<&2, R.Cmd>, conn: Conn, srv: Srv, db: R.Db}
+  Logged{rs: List<&2, R.Reply>, es: List<&2, A.Eff>, conn: Conn, srv: Srv, ds: R.Ds}
 
-def logged.fast2(conn: Conn, srv: Srv, rs: List<&2, R.Reply>, q: List<&2, R.Cmd> & R.Db) -> Logged:
-  (es, db) = q
-  Logged{rs, es, conn_ok(conn), srv, db}
+def logged.fast2(conn: Conn, srv: Srv, rs: List<&2, R.Reply>, +i: Nat, pre: List<&2, R.Db>, post: List<&2, R.Db>, q: List<&2, R.Cmd> & R.Db) -> Logged:
+  (es, d) = q
+  Logged{rs, A.at_db(i, es), conn_ok(conn), srv, R.Ds{d, pre, post}}
 
-def logged.fast(conn: Conn, srv: Srv, r: List<&2, R.Reply> & (List<&2, R.Cmd> & R.Db)) -> Logged:
+def logged.fast(conn: Conn, srv: Srv, +i: Nat, pre: List<&2, R.Db>, post: List<&2, R.Db>, r: List<&2, R.Reply> & (List<&2, R.Cmd> & R.Db)) -> Logged:
   (rs, q) = r
-  logged.fast2(conn, srv, rs, q)
+  logged.fast2(conn, srv, rs, i, pre, post, q)
+
+def run_log.fast(conn: Conn, srv: Srv, cmds: List<&2, R.Cmd>, hs: List<&2, U32>, ds: R.Ds) -> Logged:
+  match ds:
+    case R.Ds{d, +pre, post}:
+      logged.fast(conn, srv, List.length(&2, R.Db, pre), pre, post, A.log_batch(cmds, hs, d))
 
 def logged.gen(st: Gen) -> Logged:
   match st:
-    case Gen{rs, es, conn, srv, db}:
-      Logged{List.reverse(&2, R.Reply, rs), List.reverse(&2, R.Cmd, es), conn, srv, db}
+    case Gen{rs, es, conn, srv, ds}:
+      Logged{List.reverse(&2, R.Reply, rs), List.reverse(&2, A.Eff, es), conn, srv, ds}
 
-def run_log.plain(fast: Bool, conn: Conn, srv: Srv, cmds: List<&2, R.Cmd>, hs: List<&2, U32>, db: R.Db) -> Logged:
+def run_log.plain(fast: Bool, conn: Conn, srv: Srv, cmds: List<&2, R.Cmd>, hs: List<&2, U32>, ds: R.Ds) -> Logged:
   match fast cmds:
     case _ Nil{}:
-      Logged{Nil{}, Nil{}, conn, srv, db}
+      Logged{Nil{}, Nil{}, conn, srv, ds}
     case True{} Con{c, cs}:
-      logged.fast(conn, srv, A.log_batch(c <> cs, hs, db))
+      run_log.fast(conn, srv, c <> cs, hs, ds)
     case False{} Con{c, cs}:
-      logged.gen(gen(conn, srv, c <> cs, db))
+      logged.gen(gen(conn, srv, c <> cs, ds))
 
 # a batch, as the server with an append-only file runs it
-def run_log(conn: Conn, srv: Srv, job: B.Job, db: R.Db) -> Logged:
+def run_log(conn: Conn, srv: Srv, job: B.Job, ds: R.Ds) -> Logged:
   match job:
     case B.Plain{cmds, hs}:
       +c = conn
       +s = srv
-      run_log.plain(ready(c, s), c, s, cmds, hs, db)
+      run_log.plain(ready(c, s), c, s, cmds, hs, ds)
     case B.Mixed{cmds, hs}:
-      logged.gen(gen(conn, srv, cmds, db))
+      logged.gen(gen(conn, srv, cmds, ds))

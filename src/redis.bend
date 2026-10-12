@@ -105,13 +105,15 @@ type UpdOp is Data:
   UIncr{by: Int}
 
 # The commands of a connection and of the server: session.bend runs
-# them, with the state of the connection and of the server, and none of
-# them changes the database. They come as one command, Own, which exec
-# never meets (it answers one with an error), so the laws see them as
-# one more command that only reads. A command whose reply is fixed (a
-# HELP) is SReply; one the parser found wrong (an unknown subcommand, a
-# wrong number of arguments) is SBad, answered as Redis answers those,
-# before it asks a client to authenticate.
+# them, with the state of the connection and of the server. None of them
+# changes a database but the commands of several databases (SWAPDB, MOVE,
+# FLUSHALL), which act on all of them (Databases, below). They come as
+# one command, Own, which exec never meets (it answers one with an
+# error), so the laws of exec see them as one more command that only
+# reads. A command whose reply is fixed (a HELP) is SReply; one the
+# parser found wrong (an unknown subcommand, a wrong number of arguments)
+# is SBad, answered as Redis answers those, before it asks a client to
+# authenticate.
 
 type SessOp is Data:
   SHello{args: List<&2, String>}
@@ -129,6 +131,9 @@ type SessOp is Data:
   SInfo{args: List<&2, String>}
   SCommand{args: List<&2, String>}
   SRandomKey{}
+  SSwapDb{a: String, b: String}
+  SMove{key: String, db: String}
+  SFlushAll{}
   SReply{r: Reply}
   SBad{r: Reply}
 
@@ -144,7 +149,7 @@ type Cmd is Data:
   MGet{keys: List<&2, String>}
   MSet{pairs: List<&2, KVPair>}
   DbSize{}
-  FlushAll{}
+  FlushDb{}
   Keys{pattern: String}
   Scan{args: List<&2, String>}
   Peek{key: String, c: PeekOp}
@@ -753,13 +758,15 @@ def parse_config(id: Nat, sub: String, args: List<&2, String>) -> SessOp:
     case _:
       e_unknown_sub(sub, "CONFIG")
 
-# FLUSHALL and FLUSHDB take ASYNC or SYNC, which change nothing here
-def parse_flush(args: List<&2, String>) -> Cmd:
+# FLUSHDB and FLUSHALL take ASYNC or SYNC, which change nothing here:
+# FLUSHDB empties the selected database, FLUSHALL every database (a
+# command of several databases, Own)
+def parse_flush(args: List<&2, String>, c: Cmd) -> Cmd:
   match args:
     case Nil{}:
-      FlushAll{}
+      c
     case Con{+m, Nil{}}:
-      Bool.pick(Cmd, Bool.or(is_word(m, "SYNC"), is_word(m, "ASYNC")), FlushAll{}, e_syntax())
+      Bool.pick(Cmd, Bool.or(is_word(m, "SYNC"), is_word(m, "ASYNC")), c, e_syntax())
     case _:
       e_syntax()
 
@@ -1421,7 +1428,8 @@ def cmd_id(+n: String, len: Nat) -> Nat:
       Bool.pick(Nat, String.eq(n, "AUTH"), 42n,
       Bool.pick(Nat, String.eq(n, "QUIT"), 43n,
       Bool.pick(Nat, String.eq(n, "INFO"), 48n,
-      Bool.pick(Nat, String.eq(n, "PTTL"), 33n, 0n)))))))))))))
+      Bool.pick(Nat, String.eq(n, "MOVE"), 52n,
+      Bool.pick(Nat, String.eq(n, "PTTL"), 33n, 0n))))))))))))))
     case 5n:
       Bool.pick(Nat, String.eq(n, "SETNX"), 5n,
       Bool.pick(Nat, String.eq(n, "HELLO"), 41n,
@@ -1442,7 +1450,8 @@ def cmd_id(+n: String, len: Nat) -> Nat:
       Bool.pick(Nat, String.eq(n, "CLIENT"), 45n,
       Bool.pick(Nat, String.eq(n, "PSETEX"), 24n,
       Bool.pick(Nat, String.eq(n, "GETDEL"), 27n,
-      Bool.pick(Nat, String.eq(n, "EXPIRE"), 28n, 0n))))))))))))))
+      Bool.pick(Nat, String.eq(n, "SWAPDB"), 51n,
+      Bool.pick(Nat, String.eq(n, "EXPIRE"), 28n, 0n)))))))))))))))
     case 7n:
       Bool.pick(Nat, String.eq(n, "FLUSHDB"), 20n,
       Bool.pick(Nat, String.eq(n, "COMMAND"), 49n,
@@ -1573,9 +1582,9 @@ def parse_id(id: Nat, name: String, args: List<&2, String>) -> Cmd:
         case _:
           e_arity("dbsize")
     case 19n:  # FLUSHALL
-      parse_flush(args)
+      parse_flush(args, Own{SFlushAll{}})
     case 20n:  # FLUSHDB
-      parse_flush(args)
+      parse_flush(args, FlushDb{})
     case 21n:  # KEYS
       match args:
         case Con{p, Nil{}}:
@@ -1736,12 +1745,34 @@ def parse_sess(id: Nat, name: String, args: List<&2, String>) -> SessOp:
           SRandomKey{}
         case _:
           s_arity("randomkey")
+    case 51n:  # SWAPDB
+      match args:
+        case Con{a, Con{b, Nil{}}}:
+          SSwapDb{a, b}
+        case _:
+          s_arity("swapdb")
+    case 52n:  # MOVE
+      match args:
+        case Con{k, Con{d, Nil{}}}:
+          SMove{k, d}
+        case _:
+          s_arity("move")
     case _:
       SBad{RError{no_newlines("ERR unknown command '" ++ String.take(name, 128n) ++ "', with args beginning with: " ++ unknown.args(args, ""))}}
 
+# a command of number id: from 40 on, a command of the connection, of the
+# server or of several databases (parse_sess)
+def parse_of(own: Bool, +id: Nat, name: String, args: List<&2, String>) -> Cmd:
+  match own:
+    case True{}:
+      Own{parse_sess(id, name, args)}
+    case False{}:
+      parse_id(id, name, args)
+
 def parse_named(+name: String, args: List<&2, String>) -> Cmd:
   +up = String.to_upper(name)
-  parse_id(cmd_id(up, String.length(up)), name, args)
+  +id = cmd_id(up, String.length(up))
+  parse_of(Nat.is_le(40n, id), id, name, args)
 
 def parse(args: List<&2, String>) -> Cmd:
   match args:
@@ -1866,6 +1897,10 @@ def stat.top(+id: Nat) -> Nat:
       46n
     case 50n:
       47n
+    case 51n:
+      48n
+    case 52n:
+      49n
     case _:
       0n
 
@@ -1873,25 +1908,25 @@ def stat.top(+id: Nat) -> Nat:
 def stat.sub.client(+sub: Nat) -> Nat:
   match sub:
     case 1n:
-      48n
-    case 2n:
-      49n
-    case 3n:
       50n
-    case 4n:
+    case 2n:
       51n
-    case 5n:
+    case 3n:
       52n
-    case 6n:
+    case 4n:
       53n
-    case 7n:
+    case 5n:
       54n
-    case 8n:
+    case 6n:
       55n
-    case 9n:
+    case 7n:
       56n
-    case 10n:
+    case 8n:
       57n
+    case 9n:
+      58n
+    case 10n:
+      59n
     case _:
       0n
 
@@ -1899,9 +1934,9 @@ def stat.sub.client(+sub: Nat) -> Nat:
 def stat.sub.function(+sub: Nat) -> Nat:
   match sub:
     case 1n:
-      58n
+      60n
     case 2n:
-      59n
+      61n
     case _:
       0n
 
@@ -1909,15 +1944,15 @@ def stat.sub.function(+sub: Nat) -> Nat:
 def stat.sub.config(+sub: Nat) -> Nat:
   match sub:
     case 1n:
-      60n
-    case 2n:
-      61n
-    case 3n:
       62n
-    case 4n:
+    case 2n:
       63n
-    case 5n:
+    case 3n:
       64n
+    case 4n:
+      65n
+    case 5n:
+      66n
     case _:
       0n
 
@@ -1925,19 +1960,19 @@ def stat.sub.config(+sub: Nat) -> Nat:
 def stat.sub.command(+sub: Nat) -> Nat:
   match sub:
     case 1n:
-      65n
-    case 2n:
-      66n
-    case 3n:
       67n
-    case 4n:
+    case 2n:
       68n
-    case 5n:
+    case 3n:
       69n
-    case 6n:
+    case 4n:
       70n
-    case 7n:
+    case 5n:
       71n
+    case 6n:
+      72n
+    case 7n:
+      73n
     case _:
       0n
 
@@ -2039,52 +2074,56 @@ def stat.name(+key: Nat) -> String:
     case 47n:
       "randomkey"
     case 48n:
-      "client|id"
+      "swapdb"
     case 49n:
-      "client|help"
+      "move"
     case 50n:
-      "client|reply"
+      "client|id"
     case 51n:
-      "client|getname"
+      "client|help"
     case 52n:
-      "client|setname"
+      "client|reply"
     case 53n:
-      "client|caching"
+      "client|getname"
     case 54n:
-      "client|unblock"
+      "client|setname"
     case 55n:
-      "client|getredir"
+      "client|caching"
     case 56n:
-      "client|no-evict"
+      "client|unblock"
     case 57n:
-      "client|trackinginfo"
+      "client|getredir"
     case 58n:
-      "function|flush"
+      "client|no-evict"
     case 59n:
-      "function|help"
+      "client|trackinginfo"
     case 60n:
-      "config|get"
+      "function|flush"
     case 61n:
-      "config|set"
+      "function|help"
     case 62n:
-      "config|resetstat"
+      "config|get"
     case 63n:
-      "config|rewrite"
+      "config|set"
     case 64n:
-      "config|help"
+      "config|resetstat"
     case 65n:
-      "command|info"
+      "config|rewrite"
     case 66n:
-      "command|docs"
+      "config|help"
     case 67n:
-      "command|list"
+      "command|info"
     case 68n:
-      "command|help"
+      "command|docs"
     case 69n:
-      "command|count"
+      "command|list"
     case 70n:
-      "command|getkeys"
+      "command|help"
     case 71n:
+      "command|count"
+    case 72n:
+      "command|getkeys"
+    case 73n:
       "command|getkeysandflags"
     case _:
       ""
@@ -2188,52 +2227,56 @@ def stat.arity(+key: Nat) -> Nat:
     case 47n:
       2n
     case 48n:
-      4n
-    case 49n:
-      4n
-    case 50n:
       6n
+    case 49n:
+      6n
+    case 50n:
+      4n
     case 51n:
       4n
     case 52n:
       6n
     case 53n:
-      6n
-    case 54n:
-      7n
-    case 55n:
       4n
-    case 56n:
+    case 54n:
       6n
+    case 55n:
+      6n
+    case 56n:
+      7n
     case 57n:
       4n
     case 58n:
-      5n
+      6n
     case 59n:
       4n
     case 60n:
-      7n
+      5n
     case 61n:
-      9n
+      4n
     case 62n:
-      4n
+      7n
     case 63n:
-      4n
+      9n
     case 64n:
       4n
     case 65n:
-      5n
+      4n
     case 66n:
-      5n
+      4n
     case 67n:
       5n
     case 68n:
-      4n
+      5n
     case 69n:
-      4n
+      5n
     case 70n:
-      9n
+      4n
     case 71n:
+      4n
+    case 72n:
+      9n
+    case 73n:
       9n
     case _:
       1n
@@ -2841,6 +2884,22 @@ def stat.cw(+code: Nat) -> U32:
       1365
     case 287n:
       1366
+    case 288n:
+      1369
+    case 289n:
+      1370
+    case 290n:
+      1372
+    case 291n:
+      1379
+    case 292n:
+      1381
+    case 293n:
+      1382
+    case 294n:
+      1385
+    case 295n:
+      1386
     case _:
       63
 
@@ -3423,6 +3482,22 @@ def stat.code.cw(+w: Nat) -> Nat:
       286n
     case 1366n:
       287n
+    case 1369n:
+      288n
+    case 1370n:
+      289n
+    case 1372n:
+      290n
+    case 1379n:
+      291n
+    case 1381n:
+      292n
+    case 1382n:
+      293n
+    case 1385n:
+      294n
+    case 1386n:
+      295n
     case _:
       0n
 
@@ -4575,7 +4650,7 @@ def exec(cmd: Cmd, db: Db) -> Reply & Db:
     case DbSize{}:
       +d = db
       (r_int(db.n(d)), d)
-    case FlushAll{}:
+    case FlushDb{}:
       (r_ok(), db.flush(db))
     case Keys{p}:
       +d = db
@@ -4621,3 +4696,299 @@ def exec_all.cons(r: Reply, rest: List<&2, Reply> & Db) -> List<&2, Reply> & Db:
 
 def exec_all(cmds: List<&2, Cmd>, db: Db) -> List<&2, Reply> & Db:
   exec_all.fin(exec_all.go(cmds, (Nil{}, db)))
+
+# Databases
+# ---------
+# The server holds several databases (databases: 16, as in Redis), by
+# number from 0, and a connection works on the one it selected (SELECT;
+# 0 at first). Ds holds them with one in focus: the focused database (d),
+# those before it, nearest first (pre), and those after it (post). A
+# command of one database runs on the focus as on a lone database, and
+# the server moves the focus to a connection's database before it runs
+# the connection's batch. A batch runs at the focus's time (its now): the
+# others keep the time they last ran at, and the focus takes its time
+# along when it moves.
+type Ds is Data:
+  Ds{d: Db, pre: List<&2, Db>, post: List<&2, Db>}
+
+# the databases in order
+def ds.list(+ds: Ds) -> List<&2, Db>:
+  match ds:
+    case Ds{d, pre, post}:
+      List.reverse.go(&2, Db, pre, d <> post)
+
+# the number of the focused database, and how many there are
+def ds.index(+ds: Ds) -> Nat:
+  match ds:
+    case Ds{d, +pre, post}:
+      List.length(&2, Db, pre)
+
+def ds.count(+ds: Ds) -> Nat:
+  match ds:
+    case Ds{d, +pre, +post}:
+      1n+Nat.add(List.length(&2, Db, pre), List.length(&2, Db, post))
+
+def ds.empty.go(n: Nat) -> List<&2, Db>:
+  match n:
+    case 0n:
+      Nil{}
+    case 1n+m:
+      db.empty() <> ds.empty.go(m)
+
+# 1 + n empty databases, the first in focus
+def ds.empty(n: Nat) -> Ds:
+  Ds{db.empty(), Nil{}, ds.empty.go(n)}
+
+# the databases at the time now: the focus's time
+def ds.at(+now: Nat, ds: Ds) -> Ds:
+  match ds:
+    case Ds{d, pre, post}:
+      Ds{db.at(now, d), pre, post}
+
+def ds.now(+ds: Ds) -> Nat:
+  match ds:
+    case Ds{+d, pre, post}:
+      db.now(d)
+
+# the focused database, lent
+def ds.focused(+ds: Ds) -> Db:
+  match ds:
+    case Ds{+d, pre, post}:
+      d
+
+# the databases xs with the j-th in focus at the time now, those before
+# it being acc's (nearest first); none when there are not j + 1
+def ds.pick(j: Nat, +now: Nat, acc: List<&2, Db>, xs: List<&2, Db>) -> Maybe<&2, Ds>:
+  match j xs:
+    case 0n Con{x, rest}:
+      Some{Ds{db.at(now, x), acc, rest}}
+    case 1n+i Con{x, rest}:
+      ds.pick(i, now, x <> acc, rest)
+    case _ Nil{}:
+      None{}
+
+# the databases xs, in focus as ds has its focus, or ds when xs has too
+# few
+def ds.or(m: Maybe<&2, Ds>, ds: Ds) -> Ds:
+  match m:
+    case Some{y}:
+      y
+    case None{}:
+      ds
+
+# the databases xs in place of those of ds, the focus at its number
+def ds.with(xs: List<&2, Db>, ds: Ds) -> Ds:
+  +x = ds
+  ds.or(ds.pick(ds.index(x), ds.now(x), Nil{}, xs), x)
+
+def ds.focus.if(same: Bool, +j: Nat, ds: Ds) -> Ds:
+  match same:
+    case True{}:
+      ds
+    case False{}:
+      +x = ds
+      ds.or(ds.pick(j, ds.now(x), Nil{}, ds.list(x)), x)
+
+# the databases with the j-th in focus (as they are when there is none)
+def ds.focus(+j: Nat, ds: Ds) -> Ds:
+  +x = ds
+  ds.focus.if(Nat.is_eq(ds.index(x), j), j, x)
+
+# the j-th of xs, lent
+def ds.nth(j: Nat, +xs: List<&2, Db>) -> Maybe<&2, Db>:
+  match j xs:
+    case 0n Con{x, rest}:
+      Some{x}
+    case 1n+i Con{x, +rest}:
+      ds.nth(i, rest)
+    case _ Nil{}:
+      None{}
+
+# xs with y in place of the j-th
+def ds.put(j: Nat, y: Db, xs: List<&2, Db>) -> List<&2, Db>:
+  match j xs:
+    case 0n Con{x, rest}:
+      y <> rest
+    case 1n+i Con{x, rest}:
+      x <> ds.put(i, y, rest)
+    case _ Nil{}:
+      Nil{}
+
+# SWAPDB a b: the a-th and the b-th databases trade places, when there
+# are both (whether there are, and the databases after); the focus stays
+# at its number, on the database now there
+def ds.swap.of(+a: Nat, +b: Nat, ma: Maybe<&2, Db>, mb: Maybe<&2, Db>, xs: List<&2, Db>, ds: Ds) -> Bool & Ds:
+  match ma mb:
+    case Some{x} Some{y}:
+      (True{}, ds.with(ds.put(a, y, ds.put(b, x, xs)), ds))
+    case _ _:
+      (False{}, ds)
+
+def ds.swap(+a: Nat, +b: Nat, ds: Ds) -> Bool & Ds:
+  +x = ds
+  +xs = ds.list(x)
+  ds.swap.of(a, b, ds.nth(a, xs), ds.nth(b, xs), xs, x)
+
+def ds.flush(xs: List<&2, Db>) -> List<&2, Db>:
+  match xs:
+    case Nil{}:
+      Nil{}
+    case Con{x, rest}:
+      db.flush(x) <> ds.flush(rest)
+
+# FLUSHALL: every database emptied
+def ds.wipe(ds: Ds) -> Ds:
+  match ds:
+    case Ds{d, pre, post}:
+      Ds{db.flush(d), ds.flush(pre), ds.flush(post)}
+
+# MOVE key db moves a key that is there in the selected database to the
+# database db, when db is another one and the key is not there in it; on
+# the way it deletes the key's entry in db when the key's time has passed
+# there, as Redis deletes such a key when MOVE looks it up. BendKV runs
+# that deletion as a step of its own (purge), and the move proper moves
+# the key only to a database that holds no entry for it at all: each
+# step is then one effect in the append-only file, which reads the same
+# whenever it runs, and a file cut between them restores the databases
+# as the first left them (LAWS.bend: recover_cut).
+
+# whether a key's entry is one whose time has passed at now
+def ent.dead(+now: Nat, +m: Maybe<&2, KV.Item<String>>) -> Bool:
+  match m:
+    case Some{KV.Item{v, +e}}:
+      Bool.not(KV.live(now, e))
+    case None{}:
+      False{}
+
+# whether k is there in the focus
+def ds.has(+ds: Ds, +k: String) -> Bool:
+  match ds:
+    case Ds{+d, pre, post}:
+      Maybe.is_some(&2, KV.Item<String>, db.ent(d, k))
+
+# k's entry in the focus, when it is there
+def ds.ent(+ds: Ds, +k: String) -> Maybe<&2, KV.Item<String>>:
+  match ds:
+    case Ds{+d, pre, post}:
+      db.ent(d, k)
+
+def ds.purge.if(ok: Bool, +k: String, +j: Nat, y: Db, xs: List<&2, Db>, ds: Ds) -> Bool & Ds:
+  match ok:
+    case True{}:
+      (True{}, ds.with(ds.put(j, db_of(db.del(y, [k])), xs), ds))
+    case False{}:
+      (False{}, ds)
+
+def ds.purge.of(+k: String, +j: Nat, my: Maybe<&2, Db>, xs: List<&2, Db>, ds: Ds) -> Bool & Ds:
+  match my:
+    case Some{+y}:
+      +x = ds
+      ds.purge.if(Bool.and(Nat.is_ne(j, ds.index(x)), Bool.and(ds.has(x, k), ent.dead(ds.now(x), db.entry(y, k)))), k, j, y, xs, x)
+    case None{}:
+      (False{}, ds)
+
+# MOVE's first step: when k is there in the focus and database j is
+# another one, k's entry in j goes if its time has passed there (whether
+# it went, and the databases after)
+def ds.purge(+k: String, +j: Nat, ds: Ds) -> Bool & Ds:
+  +x = ds
+  +xs = ds.list(x)
+  ds.purge.of(k, j, ds.nth(j, xs), xs, x)
+
+# k to v with the time e, counted, as SET with PXAT leaves it
+def db.setx(db: Db, +k: String, v: String, +e: Nat) -> Db:
+  match db:
+    case Db{t, +n, +x, now, rr}:
+      +u = t
+      +h = KV.hash(k)
+      +c = KV.code.at(String, u, k, h)
+      Db{KV.setx.at(String, u, k, v, e, h), cnt.n(c, n), cnt.x(c, e, x), now, rr}
+
+# the databases with k deleted from the focus
+def ds.unset(+k: String, ds: Ds) -> Ds:
+  match ds:
+    case Ds{d, pre, post}:
+      Ds{db_of(db.del(d, [k])), pre, post}
+
+def ds.moved(+k: String, +j: Nat, y: Db, ds: Ds) -> Ds:
+  +x = ds.unset(k, ds)
+  ds.with(ds.put(j, y, ds.list(x)), x)
+
+def ds.move.if(ok: Bool, +k: String, +j: Nat, y: Db, m: Maybe<&2, KV.Item<String>>, ds: Ds) -> Bool & Ds:
+  match ok m:
+    case True{} Some{KV.Item{v, +e}}:
+      (True{}, ds.moved(k, j, db.setx(y, k, v, e), ds))
+    case _ _:
+      (False{}, ds)
+
+def ds.move.of(+k: String, +j: Nat, my: Maybe<&2, Db>, ds: Ds) -> Bool & Ds:
+  match my:
+    case Some{+y}:
+      +x = ds
+      ds.move.if(Bool.and(Nat.is_ne(j, ds.index(x)), Maybe.is_none(&2, KV.Item<String>, db.entry(y, k))), k, j, y, ds.ent(x, k), x)
+    case None{}:
+      (False{}, ds)
+
+# MOVE's second step: when k is there in the focus and database j is
+# another one that holds no entry for k, k's entry moves to j, its value
+# and its time (whether it moved, and the databases after)
+def ds.move(+k: String, +j: Nat, ds: Ds) -> Bool & Ds:
+  +x = ds
+  +xs = ds.list(x)
+  ds.move.of(k, j, ds.nth(j, xs), x)
+
+# What a batch does to the databases, command by command (session.bend:
+# plan): a command of one database, run on the focus; the focus moved
+# (SELECT, and RESET to 0); two databases swapped (SWAPDB); MOVE's two
+# steps; every database emptied (FLUSHALL)
+type Act is Data:
+  ARun{c: Cmd}
+  AFocus{db: Nat}
+  ASwap{a: Nat, b: Nat}
+  APurge{key: String, db: Nat}
+  AMove{key: String, db: Nat}
+  AWipe{}
+
+def act.run(r: Reply & Db, pre: List<&2, Db>, post: List<&2, Db>) -> Reply & Ds:
+  (x, d) = r
+  (x, Ds{d, pre, post})
+
+def act.ok(r: Bool & Ds) -> Reply & Ds:
+  (b, ds) = r
+  (r_ok(), ds)
+
+def act.moved(r: Bool & Ds) -> Reply & Ds:
+  (b, ds) = r
+  (r_int(Bool.pick(Nat, b, 1n, 0n)), ds)
+
+# an act's reply, and the databases after it
+def act(a: Act, ds: Ds) -> Reply & Ds:
+  match a ds:
+    case ARun{c} Ds{d, pre, post}:
+      act.run(exec(c, d), pre, post)
+    case AFocus{+j} x:
+      (r_ok(), ds.focus(j, x))
+    case ASwap{+a, +b} x:
+      act.ok(ds.swap(a, b, x))
+    case APurge{+k, +j} x:
+      act.ok(ds.purge(k, j, x))
+    case AMove{+k, +j} x:
+      act.moved(ds.move(k, j, x))
+    case AWipe{} x:
+      (r_ok(), ds.wipe(x))
+
+def ds_of(r: Reply & Ds) -> Ds:
+  (x, ds) = r
+  ds
+
+def reply_ds(r: Reply & Ds) -> Reply:
+  (x, ds) = r
+  x
+
+# acts one after another: the databases after the last
+def acts(as: List<&2, Act>, ds: Ds) -> Ds:
+  match as:
+    case Nil{}:
+      ds
+    case Con{a, rest}:
+      acts(rest, ds_of(act(a, ds)))
