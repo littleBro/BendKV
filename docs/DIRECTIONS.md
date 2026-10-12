@@ -294,8 +294,9 @@ Where performance and proof meet: **batched execution under proved laws.**
 6. **Next: a drop-in Redis for one node.** Strings, hashes, lists, sets and sorted sets
    with WRONGTYPE (a value of a type, with WRONGTYPE: done, section 3zf; hashes: done,
    section 3zg; lists: done but the blocking commands, section 3zh; sets: done,
-   section 3zj; floats in software and INCRBYFLOAT: done, section 3zk; sorted sets
-   next),
+   section 3zj; floats in software and INCRBYFLOAT: done, section 3zk; sorted sets:
+   done but the blocking commands, section 3zl; the blocking commands of lists and
+   sorted sets next),
    times to live with time in the state and a sweep of expired keys
    (done; FINDINGS.md, sections 3v and 3w), several databases with SELECT, MOVE and
    SWAPDB (done; section 3x), the ranges and bits of strings (GETRANGE, SETRANGE,
@@ -306,9 +307,10 @@ Where performance and proof meet: **batched execution under proved laws.**
    done), SCAN and RANDOMKEY (done), and the log's rewrite, measured by Redis's own test
    suite run against BendKV and by client libraries' tests. Lua, streams, cluster,
    replication and modules are out of scope. The suite's count: of the 1,673 tests
-   Redis 7.0.15 passes against a server it did not start, BendKV passes 552, 536 of the
-   800 in what it has ([COMPATIBILITY.md](COMPATIBILITY.md)); RESP3 now holds back the
-   most tests of what it has (203 of unit/type/list's run after its HELLO 3).
+   Redis 7.0.15 passes against a server it did not start, BendKV passes 733, 726 of the
+   1,089 in what it has ([COMPATIBILITY.md](COMPATIBILITY.md)); RESP3 now holds back the
+   most tests of what it has (203 of unit/type/list's and 82 of unit/type/zset's run
+   after their HELLO 3).
 
 After that comes proving the native strings (section 5, step 1): a small piece of
 work that makes the word "verified" much stronger.

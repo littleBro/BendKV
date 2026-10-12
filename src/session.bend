@@ -801,6 +801,25 @@ def obj.mems.enc(+m: KV.Mems, +cfg: List<&2, C.CItem>) -> String:
     case KV.MBig{n, t}:
       "hashtable"
 
+# the longest member of the elements xs, at least m
+def obj.zwidest(xs: List<&2, KV.ZEl>, +m: Nat) -> Nat:
+  match xs:
+    case Nil{}:
+      m
+    case Con{KV.ZEl{+k, d}, rest}:
+      obj.zwidest(rest, Nat.max(m, String.length(k)))
+
+# a sorted set is a listpack while it is small (KV.Zset: as Redis turns
+# one into a skiplist at the parameters' defaults) and within
+# zset-max-listpack-entries and zset-max-listpack-value as they are now,
+# as a hash
+def obj.zset.enc(+z: KV.Zset, +cfg: List<&2, C.CItem>) -> String:
+  match z:
+    case KV.ZSmall{+tr}:
+      Bool.pick(String, Bool.and(Nat.is_le(KV.zt.size(tr), cfg.nat(cfg, "zset-max-listpack-entries")), Nat.is_le(obj.zwidest(KV.zt.all(tr), 0n), cfg.nat(cfg, "zset-max-listpack-value"))), "listpack", "skiplist")
+    case KV.ZBig{tr, t}:
+      "skiplist"
+
 def obj.coll.enc(+c: KV.Coll, +cfg: List<&2, C.CItem>) -> String:
   match c:
     case KV.CHash{+h}:
@@ -809,6 +828,8 @@ def obj.coll.enc(+c: KV.Coll, +cfg: List<&2, C.CItem>) -> String:
       "quicklist"
     case KV.CMems{+m}:
       obj.mems.enc(m, cfg)
+    case KV.CZset{+z}:
+      obj.zset.enc(z, cfg)
 
 def obj.coll(+sub: Nat, +c: KV.Coll, +cfg: List<&2, C.CItem>) -> R.Reply:
   match sub:
@@ -972,6 +993,8 @@ def hr.one(m: Maybe<&2, KV.Item<KV.Val>>, +r: U32) -> R.Reply:
       R.e_wrongtype()
     case Some{KV.Item{KV.VColl{KV.CMems{l}}, e}}:
       R.e_wrongtype()
+    case Some{KV.Item{KV.VColl{KV.CZset{z}}, e}}:
+      R.e_wrongtype()
     case Some{KV.Item{KV.VStr{s}, e}}:
       R.e_wrongtype()
     case None{}:
@@ -984,6 +1007,8 @@ def hr.many(m: Maybe<&2, KV.Item<KV.Val>>, +neg: Bool, +k: Nat, +wv: Bool, +r: U
     case Some{KV.Item{KV.VColl{KV.CList{l}}, e}}:
       R.e_wrongtype()
     case Some{KV.Item{KV.VColl{KV.CMems{l}}, e}}:
+      R.e_wrongtype()
+    case Some{KV.Item{KV.VColl{KV.CZset{z}}, e}}:
       R.e_wrongtype()
     case Some{KV.Item{KV.VStr{s}, e}}:
       R.e_wrongtype()
@@ -1100,6 +1125,158 @@ def sp.acts(a: SrArgs, +k: String, +r: U32) -> List<&2, R.Act>:
     case SrBad{e}:
       Nil{}
 
+# ZRANDMEMBER key [count [WITHSCORES]]: elements of a sorted set at
+# random, by r (as HRANDFIELD's), the count read as HRANDFIELD reads its
+# own (WITHSCORES for WITHVALUES). An element is picked by its rank (the
+# tree finds it in O(log n)). A negative count picks that many elements,
+# each anew; a positive one that many different elements, all of them
+# from the last when it is at least the sorted set's size (Redis reads a
+# sorted set from its last element there); else, when it is more
+# than a third of the size, the size less the count of them taken out at
+# random and the rest answered in order (Redis's third way), or picked
+# until that many different ones come, 16 times the count and 64 picks at
+# most (its fourth way).
+def zr.opts(+neg: Bool, +hi: Nat, +lo: Nat, rest: List<&2, String>) -> HrArgs:
+  match rest:
+    case Nil{}:
+      HrCount{neg, hr.cap(hi, lo), False{}}
+    case Con{+w, Nil{}}:
+      Bool.pick(HrArgs, R.is_word(w, "WITHSCORES"), hr.half(neg, hi, lo), HrBad{R.RError{"ERR syntax error"}})
+    case _:
+      HrBad{R.RError{"ERR syntax error"}}
+
+def zr.count(l: R.LL, rest: List<&2, String>) -> HrArgs:
+  match l:
+    case R.LL{+neg, +hi, +lo}:
+      Bool.pick(HrArgs, Bool.and(neg, Bool.and(Nat.is_eq(hi, R.dec.llmax()), Nat.is_eq(lo, 854775808n))), HrBad{R.RError{"ERR value is out of range, value must between -9223372036854775807 and 9223372036854775807"}}, zr.opts(neg, hi, lo, rest))
+    case R.LLBad{}:
+      HrBad{R.RError{"ERR value is not an integer or out of range"}}
+
+def zr.args(args: List<&2, String>) -> HrArgs:
+  match args:
+    case Nil{}:
+      HrOne{}
+    case Con{+c, rest}:
+      zr.count(R.ll.read(c), rest)
+
+# the element at a rank r picks
+def zr.el(+t: KV.ZTree, +r: U32, +n: Nat) -> KV.ZEl:
+  KV.zt.nth(t, hr.at(r, n))
+
+def zr.out(e: KV.ZEl, +ws: Bool, rest: List<&2, R.Reply>) -> List<&2, R.Reply>:
+  match e:
+    case KV.ZEl{m, +d}:
+      R.zels.one(ws, m, d, rest)
+
+# k elements, each anew
+def zr.rep(k: Nat, +t: KV.ZTree, +n: Nat, +r: U32, +ws: Bool) -> List<&2, R.Reply>:
+  match k:
+    case 0n:
+      Nil{}
+    case 1n+j:
+      +q = hr.next(r)
+      zr.out(zr.el(t, q, n), ws, zr.rep(j, t, n, q, ws))
+
+# t without c elements taken at random
+def zr.cut(e: KV.ZEl, +t: KV.ZTree) -> KV.ZTree:
+  match e:
+    case KV.ZEl{+m, +d}:
+      KV.zt.del(t, m, d)
+
+def zr.drop(c: Nat, +t: KV.ZTree, +r: U32) -> KV.ZTree:
+  match c:
+    case 0n:
+      t
+    case 1n+j:
+      +q = hr.next(r)
+      zr.drop(j, zr.cut(zr.el(t, q, KV.zt.size(t)), t), q)
+
+# picks until k different elements come: the members taken, the reply so
+# far, how many
+type ZrG is Data:
+  ZrG{acc: KV.Trie<Unit>, out: List<&2, R.Reply>, c: Nat}
+
+def zr.take(had: Bool, e: KV.ZEl, acc: KV.Trie<Unit>, out: List<&2, R.Reply>, +c: Nat, +ws: Bool) -> ZrG:
+  match had e:
+    case True{} x:
+      ZrG{acc, out, c}
+    case False{} KV.ZEl{+m, +d}:
+      ZrG{KV.set(Unit, acc, m, Unit{}), zr.out(KV.ZEl{m, d}, ws, out), Nat.add(c, 1n)}
+
+def zr.step(+e: KV.ZEl, g: ZrG, +ws: Bool) -> ZrG:
+  match g:
+    case ZrG{+acc, out, +c}:
+      zr.take(KV.has(Unit, acc, R.zel.m(e)), e, acc, out, c, ws)
+
+def zr.done(+g: ZrG, +k: Nat) -> Bool:
+  match g:
+    case ZrG{acc, out, +c}:
+      Nat.is_le(k, c)
+
+def zr.outs(g: ZrG) -> List<&2, R.Reply>:
+  match g:
+    case ZrG{acc, out, c}:
+      out
+
+def zr.gather(fuel: Nat, done: Bool, g: ZrG, +k: Nat, +t: KV.ZTree, +n: Nat, +r: U32, +ws: Bool) -> List<&2, R.Reply>:
+  match fuel done:
+    case _ True{}:
+      zr.outs(g)
+    case 0n False{}:
+      zr.outs(g)
+    case 1n+f False{}:
+      +q = hr.next(r)
+      +g2 = zr.step(zr.el(t, q, n), g, ws)
+      zr.gather(f, zr.done(g2, k), g2, k, t, n, q, ws)
+
+def zr.uniq(third: Bool, +k: Nat, +t: KV.ZTree, +n: Nat, +r: U32, +ws: Bool) -> List<&2, R.Reply>:
+  match third:
+    case True{}:
+      R.zels(KV.zt.all(zr.drop(Nat.sub(n, k), t, r)), ws)
+    case False{}:
+      zr.gather(Nat.add(Nat.mul(k, 16n), 64n), Nat.is_eq(k, 0n), ZrG{KV.empty(Unit), Nil{}, 0n}, k, t, n, r, ws)
+
+def zr.pos(all: Bool, +k: Nat, +t: KV.ZTree, +n: Nat, +r: U32, +ws: Bool) -> List<&2, R.Reply>:
+  match all:
+    case True{}:
+      R.zels(KV.zt.rslice(t, 0n, n), ws)
+    case False{}:
+      zr.uniq(Nat.is_lt(n, Nat.mul(k, 3n)), k, t, n, r, ws)
+
+def zr.of(neg: Bool, +k: Nat, +ws: Bool, +t: KV.ZTree, +n: Nat, +r: U32) -> List<&2, R.Reply>:
+  match neg:
+    case True{}:
+      zr.rep(k, t, n, r, ws)
+    case False{}:
+      zr.pos(Nat.is_le(n, k), k, t, n, r, ws)
+
+def zr.one(m: Maybe<&2, KV.Item<KV.Val>>, +r: U32) -> R.Reply:
+  match m:
+    case Some{KV.Item{KV.VColl{KV.CZset{+z}}, e}}:
+      R.RBulk{R.zel.m(zr.el(KV.zset.tree(z), hr.next(r), KV.zset.len(z)))}
+    case None{}:
+      R.RNull{}
+    case _:
+      R.e_wrongtype()
+
+def zr.many(m: Maybe<&2, KV.Item<KV.Val>>, +neg: Bool, +k: Nat, +ws: Bool, +r: U32) -> R.Reply:
+  match m:
+    case Some{KV.Item{KV.VColl{KV.CZset{+z}}, e}}:
+      R.RArray{zr.of(neg, k, ws, KV.zset.tree(z), KV.zset.len(z), r)}
+    case None{}:
+      R.RArray{Nil{}}
+    case _:
+      R.e_wrongtype()
+
+def zr.reply(a: HrArgs, m: Maybe<&2, KV.Item<KV.Val>>, +r: U32) -> R.Reply:
+  match a:
+    case HrOne{}:
+      zr.one(m, r)
+    case HrCount{+neg, +k, +wv}:
+      zr.many(m, neg, k, wv, r)
+    case HrBad{e}:
+      e
+
 # MEMORY USAGE key [SAMPLES count]: about how many bytes the key's entry
 # takes: the key, the value (a string's bytes, a hash's fields and
 # values, a list's elements) and a few words for the cells that hold
@@ -1146,6 +1323,13 @@ def mem.elems(xs: List<&2, String>, +acc: Nat) -> Nat:
     case Con{x, rest}:
       mem.elems(rest, Nat.add(acc, Nat.add(16n, String.length(x))))
 
+def mem.zels(xs: List<&2, KV.ZEl>, +acc: Nat) -> Nat:
+  match xs:
+    case Nil{}:
+      acc
+    case Con{KV.ZEl{+m, d}, rest}:
+      mem.zels(rest, Nat.add(acc, Nat.add(24n, String.length(m))))
+
 def mem.val(+v: KV.Val) -> Nat:
   match v:
     case KV.VStr{+s}:
@@ -1156,6 +1340,8 @@ def mem.val(+v: KV.Val) -> Nat:
       mem.elems(KV.deq.all(l), 48n)
     case KV.VColl{KV.CMems{+m}}:
       mem.elems(KV.mems.all(m), 48n)
+    case KV.VColl{KV.CZset{+z}}:
+      mem.zels(KV.zt.all(KV.zset.tree(z)), 48n)
 
 def mem.size(+k: String, m: Maybe<&2, KV.Item<KV.Val>>) -> R.Reply:
   match m:
@@ -1557,6 +1743,8 @@ def own_reply(+o: R.SessOp, +c: Conn, +s: Srv, +ds: R.Ds) -> Maybe<&2, R.Reply>:
       say(conn.mode(c), sp.reply(sp.args(args), k, KV.mix(srv.rng(s)), R.ds.focused(ds)))
     case R.SSRandMember{+k, args}:
       say(conn.mode(c), sr.reply(sr.args(args), R.db.ent(R.ds.focused(ds), k), KV.mix(srv.rng(s))))
+    case R.SZRandMember{+k, args}:
+      say(conn.mode(c), zr.reply(zr.args(args), R.db.ent(R.ds.focused(ds), k), KV.mix(srv.rng(s))))
 
 # the connection after a session command
 def own_conn(+o: R.SessOp, +c: Conn, +s: Srv) -> Conn:
@@ -1617,6 +1805,8 @@ def own_conn(+o: R.SessOp, +c: Conn, +s: Srv) -> Conn:
       step_conn(c, s)
     case R.SSRandMember{k, a}:
       step_conn(c, s)
+    case R.SZRandMember{k, a}:
+      step_conn(c, s)
 
 # what a session command does to the databases: SELECT and RESET move the
 # focus to the connection's new database, SWAPDB, MOVE, COPY and FLUSHALL
@@ -1676,6 +1866,8 @@ def own_srv(+o: R.SessOp, +c: Conn, +s: Srv) -> Srv:
     case R.SSPop{k, a}:
       srv.rand(s)
     case R.SSRandMember{k, a}:
+      srv.rand(s)
+    case R.SZRandMember{k, a}:
       srv.rand(s)
     case _:
       s

@@ -2660,6 +2660,153 @@ integers yet, and each sum is read from its text and written back to one.
 of its tests (INCRBYFLOAT's twelve came in), unit/type/hash 68 of its 72 (HINCRBYFLOAT's
 twelve; the other four need DUMP, RESP3, and integers past 14 digits).
 
+## 3zl. Sorted sets
+
+**What there is.** ZADD (NX, XX, GT, LT, CH, INCR), ZINCRBY, ZREM, ZCARD, ZSCORE,
+ZMSCORE, ZRANK, ZREVRANK, ZCOUNT, ZLEXCOUNT, ZRANGE (BYSCORE, BYLEX, REV, LIMIT,
+WITHSCORES) and its five older forms, ZREMRANGEBYRANK, ZREMRANGEBYSCORE and
+ZREMRANGEBYLEX, ZPOPMIN and ZPOPMAX (with a count), ZMPOP, ZRANDMEMBER (a count, WITHSCORES),
+ZSCAN, ZUNION, ZINTER, ZDIFF, their STOREs, ZINTERCARD (LIMIT) and ZRANGESTORE: the 32
+commands of Redis 7.0.15's sorted sets but the three that block. An element is a member
+and a score, a double of `src/float.bend` (section 3zk): read as strtod reads it, written
+as Redis writes a double, compared and added in double arithmetic. A sorted set is one
+weight-balanced tree of its elements in Redis's order, by score and then by member (each
+node keeps its subtree's size, so a rank, an element at a rank and a window of ranks cost
+O(log n)), and, past a listpack's limits, the same tree with a trie of its members and
+their scores beside it, for good: Redis's listpack and skiplist. The limits are Redis's
+defaults (128 elements, members of 64 bytes), and OBJECT ENCODING reads
+zset-max-listpack-entries and -value as it answers, as for hashes. A key never holds an
+empty sorted set.
+
+**Where the two encodings answer differently.** BendKV keeps Redis's encodings because
+Redis's answers depend on them, in three places. A listpack keeps a score that is an
+integer of at most 2^62 in size as an integer, so a small sorted set never holds `-0` (ZSCORE
+answers `0`), and ZSCAN, which answers a listpack's elements as they lie in it, writes
+such a score as its digits (`100000000000000000`, where ZRANGE writes `1e+17`); BendKV
+writes `0` for `-0` in a small sorted set and answers ZSCAN of one with Redis's texts.
+A range by member (ZRANGEBYLEX, ZLEXCOUNT, ZREMRANGEBYLEX) is defined for elements of one
+score; for others, Redis walks a listpack from its first element and answers the elements
+between the first that passes the lower bound and the first that passes the upper one,
+while it goes down a skiplist by its random levels. BendKV answers a small sorted set as
+the listpack's walk does, and a large one by the tree's descent, which answers as a
+skiplist does for elements of one score: the tests read ranges by member of those alone.
+ZRANDMEMBER of a count past the size answers the whole set from its last element, as
+Redis's iterator of sorted sets goes.
+
+**Arguments where Redis reads them.** ZADD's options in any order and case, then its
+errors in Redis's order (XX with NX, then GT, LT and NX together, then INCR with more
+than one pair, then a score that is not a double); the pairs from the first word that is
+no option's, so a score spelled `incr` is read as the option, and leaves an odd count of
+words (a syntax error). ZRANGE's loop of options with each of Redis's errors (LIMIT with
+fewer than two numbers, REV, BYSCORE and BYLEX more than once, WITHSCORES with BYLEX,
+LIMIT without BYSCORE or BYLEX, but not when the count is -1); a range's bounds before the
+key is looked for, as zslParseRange and zslParseLexRange read them. ZUNION, ZINTER and
+ZDIFF look for every key and check its type before they read WEIGHTS and AGGREGATE (so a
+key of another kind answers WRONGTYPE before an option's error), take a set as a sorted
+set of scores 1, and go through their sources in Redis's order, sorted by size (a stable
+sort, which decides the sum of three scores like 1e16, 1 and -1e16): a weight times a score
+that makes a NaN (0 times an infinity) counts 0, as does a SUM of +inf and -inf.
+ZMPOP reads as LMPOP does and answers each element as a pair.
+
+**Persistence.** A sorted-set write is logged as the command the client sent: ZADD with
+its options in one order (ZINCRBY as ZADD INCR), ZREM, a ZREMRANGEBY of the range as it
+came (the write reads it again as it runs, so the file holds what the client sent), ZPOPMIN
+or ZPOPMAX with the count (ZMPOP as that of the key it took from); the removal of a key's
+last elements as its DEL. A STORE, and ZRANGESTORE, is logged as the elements it made,
+each score written as Redis writes a double (`%.17g`, which reads back to the same
+double): the ZADD of them where the trie held no entry for the destination, else one EVAL
+of a fourth fixed script that deletes the destination and runs ZADD with the pairs, a
+thousand words of them a call, each call with the options before it (a ZADD of some of
+the pairs does to each what the ZADD of all does), or the DEL of the destination when
+there are none; the same script logs a ZADD that makes a sorted set where a key whose
+time had passed still lay. BendKV parses the script back as the update
+ZWNew, with the count of options it writes after the key, and refuses it with XX, which
+adds nothing to an empty sorted set.
+
+**A command travels as wide as its widest form, again.** The first version of the sorted
+sets cost every request more instructions: GET +6.9%, SET +6.0%, INCR +5.3% over the
+floats (3,529, 4,547 and 4,708 against 3,300, 4,290 and 4,472), the trap the lists had
+fallen into (section 3zh). ZRANGE's parsed read, the range with its bounds (two doubles
+and their flags), LIMIT's longs and two flags, was 13 words, and kept inside a `Peek` it
+made `Cmd` 17 words wide; ZUNION's options in ZStore were 5. Now a read from the last
+element holds the read it reverses (`ZQRev`), and options with WITHSCORES hold the
+options (`ZAggScores`): a type that holds itself is a node of its own, one word, as an
+update is (UGet). ZCOUNT and ZLEXCOUNT keep their bounds as they came, as LRANGE does,
+and ZRANK and ZREVRANK are two forms of one field. `Cmd` is 5 words again, and the cost
+went back to what it was (below); the proofs, which see a range read only as a value,
+did not change.
+
+**One change the proofs asked for.** A removal of a range and a pop of a key that is not
+there answered after running over the empty sorted set; the proof that they change
+nothing would then need to know what a range of an empty tree holds, for every range.
+They now answer the empty set's reply at once (the count 0, the empty array, or the
+range's error), the same bytes.
+
+**The proofs.** Of the 1,331 definitions of the proof, the spec and the laws, 68 changed
+and 136 came in; no law changed. The commands of one sorted set are reads (`ZOp`, a
+`Peek`) and updates (`Upd`) of their key, the STOREs, ZRANGESTORE and ZMPOP commands of
+their own in the spec (`zstore`, `zrangestore`, `zmpop`) whose writes depend on other keys
+(section 3za), with their lemmas of frame, of a key's entry after them, of their replies,
+of the bridge to the server's records and of time. `Good` for the two changes of a sorted
+set: a sorted set changed, whose write, replayed on the sorted set the key held, makes the
+same change and parses back from the file (a ZADD whose options and pairs pass ZADD's
+checks, a ZREM of members, a range that reads, a count that reads); a new sorted set, the
+ZADD of options that pass the checks and have no XX: a lemma shows that ZADD with XX adds
+nothing to an empty sorted set, so a new one never has it. ZADD's options parse back by a
+case for each of their 64 sets (written out by a script, and checked as written): each
+set, written in the file's order, is read back by ZADD's loop of options, which
+stops at the first score because the checks have it be no option's word.
+
+**Cost.** Instructions per request (`make perfcheck`): GET 3,297, SET 4,290, INCR 4,476,
+as before sorted sets (3,300, 4,290 and 4,472). Against Redis 7.0.15 (redis-benchmark,
+pipelines of 16, 20 clients), a read of one member is as fast: ZSCORE of a sorted set of
+100,000 members 633,000 requests a second against 630,000 (of 10 members, 904,000
+against 950,000), ZCARD 1.40 M against 1.34 M. What goes down the tree is slower: ZRANK
+180,000 against 513,000, ZRANGE of 10 elements with their scores 104,000 against 318,000,
+ZRANGEBYSCORE with LIMIT 10 64,000 against 597,000, ZCOUNT 142,000 against 989,000,
+ZRANDMEMBER 229,000 against 753,000; and a write of a large sorted set slower still:
+ZINCRBY 41,000 against 329,000, ZADD of random members up to 100,000 38,000 against
+272,000, ZPOPMIN 70,000 against 694,000. A small one is closer (ZADD XX of a member
+588,000 against 903,000, ZRANGE of its 10 elements with their scores 218,000 against
+302,000, ZRANDMEMBER 825,000 against 1.27 M, ZINTER of two of 10 91,000 against
+257,000), but for the STOREs: ZUNIONSTORE of two of 10 19,000 against 169,000,
+ZRANGESTORE of 10 44,000 against 286,000. Where the time goes (callgrind): ZINCRBY of a
+member of 100,000 is 147,000 instructions, three fifths of them copies of tree nodes and
+their drops. The read of a node's size (`zt.size`) binds the size with `+`, and a match
+that binds a number so owns the node it reads: of the 361 sizes a write reads (each
+rebalancing asks for them), 126 copy a node the tree shares. ZUNIONSTORE of two of 10 is
+583,000 instructions, most of them the same copies, the rest scores written as text and
+read back (a STORE makes its sorted set as the ZADD the file logs would). A field bound
+once is read from a node borrowed: that is the next change, then a native `String.order`
+(BendKV compares members char by char in Bend, where Redis's memcmp compares words).
+
+**Where BendKV differs.** A STORE (or ZRANGESTORE) of more than 128 elements: Redis
+makes a skiplist of them, and a score of `-0` stays one, where BendKV makes them as the
+ZADD the file logs would, and the elements of the first 128 lose the sign (ZSCORE answers
+`0`), as Redis's own ZADD of them would; a range by member of elements of several scores
+in a large sorted set (above); the picks of ZRANDMEMBER; MEMORY USAGE, an estimate;
+zset-max-listpack-entries and -value, read by OBJECT ENCODING alone.
+
+**Redis's test suite and the tests.** BendKV passes 733 of the 1,673 tests Redis passes
+(43.8%; 552 before) and 726 of the 1,089 in what it has. Sorted sets brought 181: 170 more
+of unit/type/zset, 180 of its 289 (the unit then runs the tests of its blocking commands
+over RESP3 first, and stops at HELLO 3 before 82 more; with the tests of RESP3 left out it
+runs to its end, and BendKV passes 238 of the 285 Redis passes, each of the other 47
+needing the blocking commands, RESP3 within a test, MULTI or replication), ZSCAN's four
+in unit/scan, COPY of a sorted set in both its encodings in unit/keyspace, COMMAND
+GETKEYS of ZUNIONSTORE with more than 256 keys and ZUNIONSTORE marked movablekeys in
+unit/introspection-2, and three tests of other units that make a sorted set on their way.
+The tests: `tests/zset_test.py` in `make
+test` (a script of commands at their edges, sorted sets of up to 20,000 elements with
+integer and fractional scores on both sides of 128 elements, a listpack grown past 128
+one element at a time, members of 64 and 65 bytes, keys whose time has passed as sources,
+destinations and operands, then 3,000 random commands on a few keys; each reply compared
+with Redis's, ZSCAN's whole walk by the pairs it answers, each ZRANDMEMBER pick checked
+against the sorted set it came from), sorted sets in the differential test, in the
+numbers test, in both append-only files (the fourth script among them) and in the
+restarts, in `tests/aof_check.bend`, and COMMAND GETKEYS of the STOREs, ZRANGESTORE and
+ZMPOP in the test of COMMAND.
+
 ## 4. Where a request's time goes, and hiding the memory waits
 
 With the eight patches, BendKV ran fewer instructions on GET and SET than Redis, missed

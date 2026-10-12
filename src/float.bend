@@ -943,6 +943,12 @@ def f64.cmp.of(zz: Bool, na: Bool, nb: Bool, +ha: Nat, +la: Nat, +hb: Nat, +lb: 
         case True{} True{}:
           f64.cmp.mag(hb, lb, ha, la)
 
+# whether two doubles have the same bits
+def f64.same(+a: F64, +b: F64) -> Bool:
+  match a b:
+    case F64{+ha, +la} F64{+hb, +lb}:
+      Bool.and(Nat.is_eq(ha, hb), Nat.is_eq(la, lb))
+
 # how two doubles compare, neither a NaN: -0 equals +0
 def f64.cmp(a: F64, b: F64) -> Cmp:
   match a b:
@@ -1247,6 +1253,41 @@ def f64.show(+d: F64) -> String:
     case F64{+hi, +lo}:
       +ex = Nat.mod(Nat.div(hi, 1048576n), 2048n)
       f64.show.of(Bool.and(Nat.is_le(1023n, ex), Nat.is_le(ex, 1069n)), Bool.and(Bool.and(Nat.is_eq(ex, 0n), Nat.is_eq(Nat.mod(hi, 1048576n), 0n)), Nat.is_eq(lo, 0n)), F64{hi, lo})
+
+# A double as a listpack keeps a sorted set's score (zzlInsertAt): an
+# integral one of magnitude at most 2^62 as its integer's digits (Redis's
+# double2ll, then ll2string), any other as Redis writes a double
+# (d2string: %.17g, inf, -inf). Below 2^47 the two are the same
+# (f64.show), so only the exponent fields from 1070 to 1085 are read here:
+# the 53 bits of the significand (m) are shifted by the exponent, the
+# bits shifted out below the point all 0 for an integer.
+def f64.lp.of(int: Bool, +neg: Bool, +v: List<&2, Nat>, +d: F64) -> String:
+  match int:
+    case True{}:
+      Bool.pick(String, neg, "-", "") ++ big.to_dec(v)
+    case False{}:
+      f64.show(d)
+
+def f64.lp.big(+hi: Nat, +lo: Nat, +ex: Nat) -> String:
+  +fh = Nat.mod(hi, 1048576n)
+  +m = big.add(big.shl(big.of(Nat.add(fh, 1048576n)), 32n), big.of(lo))
+  +up = Nat.is_le(1075n, ex)
+  +sh = Bool.pick(Nat, up, Nat.sub(ex, 1075n), Nat.sub(1075n, ex))
+  +fits = Bool.or(Nat.is_lt(ex, 1085n), Bool.and(Nat.is_eq(fh, 0n), Nat.is_eq(lo, 0n)))
+  f64.lp.of(Bool.and(fits, Bool.or(up, Bool.not(big.low_nz(m, sh)))), Nat.is_le(2147483648n, hi), Bool.pick(List<&2, Nat>, up, big.shl(m, sh), big.shr(m, sh)), F64{hi, lo})
+
+def f64.lp.if(big: Bool, +hi: Nat, +lo: Nat, +ex: Nat) -> String:
+  match big:
+    case True{}:
+      f64.lp.big(hi, lo, ex)
+    case False{}:
+      f64.show(F64{hi, lo})
+
+def f64.show_lp(+d: F64) -> String:
+  match d:
+    case F64{+hi, +lo}:
+      +ex = Nat.mod(Nat.div(hi, 1048576n), 2048n)
+      f64.lp.if(Bool.and(Nat.is_le(1070n, ex), Nat.is_le(ex, 1085n)), hi, lo, ex)
 
 # the digits of n, a number times 10^17, with the point 17 digits from
 # the right, the '0's that end it and a point left last taken out

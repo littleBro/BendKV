@@ -2618,6 +2618,14 @@ def t_reads_go(c: R.Cmd, +db: KV.Trie<KV.Val>, +now: Nat) -> {Laws.is_read(c) ==
       e => Empty.absurd({T.db_of(T.exec(R.SStore{op, d, srcs}, db, now)) == db : KV.Trie<KV.Val>}, false_true(e))
     case R.SMv{s, d, w}:
       e => Empty.absurd({T.db_of(T.exec(R.SMv{s, d, w}, db, now)) == db : KV.Trie<KV.Val>}, false_true(e))
+    case R.ZOp{op, ks}:
+      e => {==}
+    case R.ZStore{op, d, srcs}:
+      e => Empty.absurd({T.db_of(T.exec(R.ZStore{op, d, srcs}, db, now)) == db : KV.Trie<KV.Val>}, false_true(e))
+    case R.ZRangeStore{d, s, q}:
+      e => Empty.absurd({T.db_of(T.exec(R.ZRangeStore{d, s, q}, db, now)) == db : KV.Trie<KV.Val>}, false_true(e))
+    case R.ZMPop{ks, max, c}:
+      e => Empty.absurd({T.db_of(T.exec(R.ZMPop{ks, max, c}, db, now)) == db : KV.Trie<KV.Val>}, false_true(e))
     case R.Own{o}:
       e => {==}
     case R.Bad{r}:
@@ -2839,6 +2847,10 @@ def upd_ch_frame(+t: KV.Trie<KV.Val>, +k: String, +j: String, r: R.Reply, ch: R.
       Laws.entry_keep_other(KV.Val, t, k, j, KV.VColl{KV.CMems{sv}}, ne)
     case R.CMemsNew{ms, +sv}:
       Laws.entry_setx_other(KV.Val, t, k, j, KV.VColl{KV.CMems{sv}}, 0n, ne)
+    case R.CZset{op, +z}:
+      Laws.entry_keep_other(KV.Val, t, k, j, KV.VColl{KV.CZset{z}}, ne)
+    case R.CZsetNew{o, ps, +z}:
+      Laws.entry_setx_other(KV.Val, t, k, j, KV.VColl{KV.CZset{z}}, 0n, ne)
 
 def upd_frame(+t: KV.Trie<KV.Val>, +k: String, +j: String, o: R.Out, ne: {j != k : String}) -> {KV.entry(KV.Val, T.db_of(T.upd.put(t, k, KV.hash(k), o)), j) == KV.entry(KV.Val, t, j) : Maybe<&2, KV.Item<KV.Val>>}:
   match o:
@@ -3023,6 +3035,68 @@ def smove_frame(+s: String, +d: String, +w: R.SMem, +db: KV.Trie<KV.Val>, +j: St
     Laws.key_eq_false(j, s, or_false_l(KV.str_eq(j, s), Laws.any_key(j, [d]))(ee)),
     Laws.key_eq_false(j, d, or_false_l(KV.str_eq(j, d), Laws.any_key(j, Nil{}))(or_false_r(KV.str_eq(j, s), Laws.any_key(j, [d]))(ee))))
 
+# a STORE of a sorted-set operation, or of a range (ZRANGESTORE), writes
+# its destination alone: the DEL of it, or the update ZWNew; ZMPOP writes
+# the key it pops from alone, by an update
+def zstore_of_frame(xs: List<&2, KV.ZEl>, +d: String, +db: KV.Trie<KV.Val>, +j: String, +now: Nat, e: {KV.str_eq(j, d) == False{} : Bool}) -> {KV.entry(KV.Val, T.db_of(T.zstore.of(xs, d, db, now)), j) == KV.entry(KV.Val, db, j) : Maybe<&2, KV.Item<KV.Val>>}:
+  match xs:
+    case Nil{}:
+      %exec_del([d], db, now) : {KV.entry(KV.Val, _, j) == KV.entry(KV.Val, db, j) : Maybe<&2, KV.Item<KV.Val>>}
+      del_all_frame([d], db, j)(any_one(j, d, e))
+    case Con{+x, +rest}:
+      upd_frame(db, d, j, R.upd.v(R.UZset{R.ZWNew{R.zopts.none(), R.zstore.pairs(x <> rest)}}, now, R.ent.live(now, KV.entry.at(KV.Val, db, d, KV.hash(d)))), Laws.key_eq_false(j, d, e))
+
+def zstore_ok_frame(bad: Maybe<&2, R.Reply>, +op: R.ZSetK, ss: List<&2, R.ZSrc>, +d: String, +db: KV.Trie<KV.Val>, +j: String, +now: Nat, e: {KV.str_eq(j, d) == False{} : Bool}) -> {KV.entry(KV.Val, T.db_of(T.zstore.ok(bad, op, ss, d, db, now)), j) == KV.entry(KV.Val, db, j) : Maybe<&2, KV.Item<KV.Val>>}:
+  match bad:
+    case Some{r}:
+      {==}
+    case None{}:
+      zstore_of_frame(R.zop.els(op, ss), d, db, j, now, e)
+
+def zstore_do_frame(g: R.ZGot, +op: R.ZSetK, +d: String, +db: KV.Trie<KV.Val>, +j: String, +now: Nat, e: {KV.str_eq(j, d) == False{} : Bool}) -> {KV.entry(KV.Val, T.db_of(T.zstore.do(g, op, d, db, now)), j) == KV.entry(KV.Val, db, j) : Maybe<&2, KV.Item<KV.Val>>}:
+  match g:
+    case R.ZGot{ss}:
+      zstore_ok_frame(R.zop.bad(op), op, ss, d, db, j, now, e)
+    case R.ZGotWrong{}:
+      {==}
+
+def zstore_frame(+op: R.ZSetK, +d: String, ks: List<&2, String>, +db: KV.Trie<KV.Val>, +j: String, +now: Nat) -> {KV.str_eq(j, d) == False{} : Bool} -> {KV.entry(KV.Val, T.db_of(T.zstore(db, op, d, ks, now)), j) == KV.entry(KV.Val, db, j) : Maybe<&2, KV.Item<KV.Val>>}:
+  e => zstore_do_frame(R.zsrcs.at(ks, now, db), op, d, db, j, now, e)
+
+def zrs_of_frame(m: Maybe<&2, KV.Val>, q: R.ZQ, +d: String, +db: KV.Trie<KV.Val>, +j: String, +now: Nat, e: {KV.str_eq(j, d) == False{} : Bool}) -> {KV.entry(KV.Val, T.db_of(T.zrs.of(m, q, d, db, now)), j) == KV.entry(KV.Val, db, j) : Maybe<&2, KV.Item<KV.Val>>}:
+  match m:
+    case None{}:
+      zstore_of_frame(Nil{}, d, db, j, now, e)
+    case Some{KV.VColl{KV.CZset{+z}}}:
+      zstore_of_frame(R.zq.run(q, z), d, db, j, now, e)
+    case Some{KV.VColl{KV.CHash{h}}}:
+      {==}
+    case Some{KV.VColl{KV.CList{l}}}:
+      {==}
+    case Some{KV.VColl{KV.CMems{s}}}:
+      {==}
+    case Some{KV.VStr{w}}:
+      {==}
+
+def zrangestore_frame(+d: String, +s: String, q: R.ZQ, +db: KV.Trie<KV.Val>, +j: String, +now: Nat) -> {KV.str_eq(j, d) == False{} : Bool} -> {KV.entry(KV.Val, T.db_of(T.zrangestore(db, d, s, q, now)), j) == KV.entry(KV.Val, db, j) : Maybe<&2, KV.Item<KV.Val>>}:
+  e => zrs_of_frame(KV.read(KV.Val, db, s, now), q, d, db, j, now, e)
+
+def zmpop_out_db(+k: String, r: R.Reply & KV.Trie<KV.Val>) -> {T.db_of(T.zmpop.out(k, r)) == T.db_of(r) : KV.Trie<KV.Val>}:
+  (y, d) = r
+  {==}
+
+def zmpop_at_frame(m: Maybe<&2, String>, +max: Bool, +c: String, +db: KV.Trie<KV.Val>, +j: String, +now: Nat) -> NotAt(j, m) -> {KV.entry(KV.Val, T.db_of(T.zmpop.at(m, max, c, db, now)), j) == KV.entry(KV.Val, db, j) : Maybe<&2, KV.Item<KV.Val>>}:
+  match m:
+    case Some{+k}:
+      ne => Equal.trans(Maybe<&2, KV.Item<KV.Val>>, KV.entry(KV.Val, T.db_of(T.zmpop.out(k, T.upd.run(db, k, R.UZset{R.ZWPopN{max, c}}, now))), j), KV.entry(KV.Val, T.db_of(T.upd.run(db, k, R.UZset{R.ZWPopN{max, c}}, now)), j), KV.entry(KV.Val, db, j),
+              Equal.cong(KV.Trie<KV.Val>, Maybe<&2, KV.Item<KV.Val>>, z => KV.entry(KV.Val, z, j), T.db_of(T.zmpop.out(k, T.upd.run(db, k, R.UZset{R.ZWPopN{max, c}}, now))), T.db_of(T.upd.run(db, k, R.UZset{R.ZWPopN{max, c}}, now)), zmpop_out_db(k, T.upd.run(db, k, R.UZset{R.ZWPopN{max, c}}, now))),
+              upd_frame(db, k, j, R.upd.v(R.UZset{R.ZWPopN{max, c}}, now, R.ent.live(now, KV.entry.at(KV.Val, db, k, KV.hash(k)))), Laws.key_eq_false(j, k, ne)))
+    case None{}:
+      u => {==}
+
+def zmpop_frame(+ks: List<&2, String>, +max: Bool, +c: String, +db: KV.Trie<KV.Val>, +j: String, +now: Nat) -> {Laws.any_key(j, ks) == False{} : Bool} -> {KV.entry(KV.Val, T.db_of(T.zmpop(db, ks, max, c, now)), j) == KV.entry(KV.Val, db, j) : Maybe<&2, KV.Item<KV.Val>>}:
+  e => zmpop_at_frame(T.lmpop.first(ks, T.lmpop.head(ks, db, now), db, now), max, c, db, j, now)(first_not(ks, T.lmpop.head(ks, db, now), db, now, j)(e))
+
 def frame_go(c: R.Cmd, +db: KV.Trie<KV.Val>, +j: String, +now: Nat) -> {Laws.writes(c, j) == False{} : Bool} -> {KV.entry(KV.Val, T.db_of(T.exec(c, db, now)), j) == KV.entry(KV.Val, db, j) : Maybe<&2, KV.Item<KV.Val>>}:
   match c:
     case R.Ping{}:
@@ -3072,6 +3146,14 @@ def frame_go(c: R.Cmd, +db: KV.Trie<KV.Val>, +j: String, +now: Nat) -> {Laws.wri
       e => sstore_frame(op, d, ks, db, j, now)(e)
     case R.SMv{+s, +d, +w}:
       e => smove_frame(s, d, w, db, j, now)(e)
+    case R.ZOp{op, ks}:
+      e => {==}
+    case R.ZStore{+op, +d, ks}:
+      e => zstore_frame(op, d, ks, db, j, now)(e)
+    case R.ZRangeStore{+d, +s, q}:
+      e => zrangestore_frame(d, s, q, db, j, now)(e)
+    case R.ZMPop{+ks, +max, +c}:
+      ee => zmpop_frame(ks, max, c, db, j, now)(ee)
     case R.Own{o}:
       e => {==}
     case R.Bad{r}:
@@ -3306,6 +3388,10 @@ def upd_ch_rep(ch: R.Change, -r: R.Reply, -t: KV.Trie<KV.Val>, -u: KV.Trie<KV.Va
       {==}
     case R.CMemsNew{ms, sv}:
       {==}
+    case R.CZset{op, z}:
+      {==}
+    case R.CZsetNew{o, ps, z}:
+      {==}
 
 def upd_rep(o: R.Out, -t: KV.Trie<KV.Val>, -u: KV.Trie<KV.Val>, -k: String, -h: U32) -> {T.reply_of(T.upd.put(t, k, h, o)) == T.reply_of(T.upd.put(u, k, h, o)) : R.Reply}:
   match o:
@@ -3396,6 +3482,14 @@ def loc_reply(c: R.Cmd, +t: KV.Trie<KV.Val>, +u: KV.Trie<KV.Val>, +now: Nat) -> 
 
     case R.SMv{op, d, srcs}:
       kd => e => Empty.absurd({T.reply_of(T.exec(R.SMv{op, d, srcs}, t, now)) == T.reply_of(T.exec(R.SMv{op, d, srcs}, u, now)) : R.Reply}, false_true(kd))
+    case R.ZOp{op, ks}:
+      kd => e => Empty.absurd({T.reply_of(T.exec(R.ZOp{op, ks}, t, now)) == T.reply_of(T.exec(R.ZOp{op, ks}, u, now)) : R.Reply}, false_true(kd))
+    case R.ZStore{op, d, srcs}:
+      kd => e => Empty.absurd({T.reply_of(T.exec(R.ZStore{op, d, srcs}, t, now)) == T.reply_of(T.exec(R.ZStore{op, d, srcs}, u, now)) : R.Reply}, false_true(kd))
+    case R.ZRangeStore{d, s, q}:
+      kd => e => Empty.absurd({T.reply_of(T.exec(R.ZRangeStore{d, s, q}, t, now)) == T.reply_of(T.exec(R.ZRangeStore{d, s, q}, u, now)) : R.Reply}, false_true(kd))
+    case R.ZMPop{ks, max, c}:
+      kd => e => Empty.absurd({T.reply_of(T.exec(R.ZMPop{ks, max, c}, t, now)) == T.reply_of(T.exec(R.ZMPop{ks, max, c}, u, now)) : R.Reply}, false_true(kd))
     case R.Own{o}:
       kd => e => Empty.absurd({T.reply_of(T.exec(R.Own{o}, t, now)) == T.reply_of(T.exec(R.Own{o}, u, now)) : R.Reply}, false_true(kd))
     case R.Bad{r}:
@@ -3471,6 +3565,10 @@ def upd_ch_key(ch: R.Change, -r: R.Reply, +t: KV.Trie<KV.Val>, +u: KV.Trie<KV.Va
       e => keep_key(t, u, k, KV.VColl{KV.CMems{sv}})(e)
     case R.CMemsNew{ms, +sv}:
       e => Equal.trans(Maybe<&2, KV.Item<KV.Val>>, KV.entry(KV.Val, KV.setx(KV.Val, t, k, KV.VColl{KV.CMems{sv}}, 0n), k), Some{KV.Item{KV.VColl{KV.CMems{sv}}, 0n}}, KV.entry(KV.Val, KV.setx(KV.Val, u, k, KV.VColl{KV.CMems{sv}}, 0n), k), Laws.entry_setx_same(KV.Val, t, k, KV.VColl{KV.CMems{sv}}, 0n), Equal.sym(Maybe<&2, KV.Item<KV.Val>>, KV.entry(KV.Val, KV.setx(KV.Val, u, k, KV.VColl{KV.CMems{sv}}, 0n), k), Some{KV.Item{KV.VColl{KV.CMems{sv}}, 0n}}, Laws.entry_setx_same(KV.Val, u, k, KV.VColl{KV.CMems{sv}}, 0n)))
+    case R.CZset{op, +z}:
+      e => keep_key(t, u, k, KV.VColl{KV.CZset{z}})(e)
+    case R.CZsetNew{o, ps, +z}:
+      e => Equal.trans(Maybe<&2, KV.Item<KV.Val>>, KV.entry(KV.Val, KV.setx(KV.Val, t, k, KV.VColl{KV.CZset{z}}, 0n), k), Some{KV.Item{KV.VColl{KV.CZset{z}}, 0n}}, KV.entry(KV.Val, KV.setx(KV.Val, u, k, KV.VColl{KV.CZset{z}}, 0n), k), Laws.entry_setx_same(KV.Val, t, k, KV.VColl{KV.CZset{z}}, 0n), Equal.sym(Maybe<&2, KV.Item<KV.Val>>, KV.entry(KV.Val, KV.setx(KV.Val, u, k, KV.VColl{KV.CZset{z}}, 0n), k), Some{KV.Item{KV.VColl{KV.CZset{z}}, 0n}}, Laws.entry_setx_same(KV.Val, u, k, KV.VColl{KV.CZset{z}}, 0n)))
 
 def upd_key(o: R.Out, +t: KV.Trie<KV.Val>, +u: KV.Trie<KV.Val>, +k: String) -> {KV.entry(KV.Val, t, k) == KV.entry(KV.Val, u, k) : Maybe<&2, KV.Item<KV.Val>>} -> {KV.entry(KV.Val, T.db_of(T.upd.put(t, k, KV.hash(k), o)), k) == KV.entry(KV.Val, T.db_of(T.upd.put(u, k, KV.hash(k), o)), k) : Maybe<&2, KV.Item<KV.Val>>}:
   match o:
@@ -3547,6 +3645,14 @@ def loc_key(c: R.Cmd, +t: KV.Trie<KV.Val>, +u: KV.Trie<KV.Val>, +now: Nat) -> {k
 
     case R.SMv{op, d, srcs}:
       kd => e => Empty.absurd({KV.entry(KV.Val, T.db_of(T.exec(R.SMv{op, d, srcs}, t, now)), "") == KV.entry(KV.Val, T.db_of(T.exec(R.SMv{op, d, srcs}, u, now)), "") : Maybe<&2, KV.Item<KV.Val>>}, false_true(kd))
+    case R.ZOp{op, ks}:
+      kd => e => Empty.absurd({KV.entry(KV.Val, T.db_of(T.exec(R.ZOp{op, ks}, t, now)), "") == KV.entry(KV.Val, T.db_of(T.exec(R.ZOp{op, ks}, u, now)), "") : Maybe<&2, KV.Item<KV.Val>>}, false_true(kd))
+    case R.ZStore{op, d, srcs}:
+      kd => e => Empty.absurd({KV.entry(KV.Val, T.db_of(T.exec(R.ZStore{op, d, srcs}, t, now)), "") == KV.entry(KV.Val, T.db_of(T.exec(R.ZStore{op, d, srcs}, u, now)), "") : Maybe<&2, KV.Item<KV.Val>>}, false_true(kd))
+    case R.ZRangeStore{d, s, q}:
+      kd => e => Empty.absurd({KV.entry(KV.Val, T.db_of(T.exec(R.ZRangeStore{d, s, q}, t, now)), "") == KV.entry(KV.Val, T.db_of(T.exec(R.ZRangeStore{d, s, q}, u, now)), "") : Maybe<&2, KV.Item<KV.Val>>}, false_true(kd))
+    case R.ZMPop{ks, max, c}:
+      kd => e => Empty.absurd({KV.entry(KV.Val, T.db_of(T.exec(R.ZMPop{ks, max, c}, t, now)), "") == KV.entry(KV.Val, T.db_of(T.exec(R.ZMPop{ks, max, c}, u, now)), "") : Maybe<&2, KV.Item<KV.Val>>}, false_true(kd))
     case R.Own{o}:
       kd => e => Empty.absurd({KV.entry(KV.Val, T.db_of(T.exec(R.Own{o}, t, now)), "") == KV.entry(KV.Val, T.db_of(T.exec(R.Own{o}, u, now)), "") : Maybe<&2, KV.Item<KV.Val>>}, false_true(kd))
     case R.Bad{r}:
@@ -3612,6 +3718,14 @@ def writes_one(c: R.Cmd, +j: String) -> {keyed(c) == True{} : Bool} -> {False{} 
 
     case R.SMv{op, d, srcs}:
       kd => nb => Empty.absurd({Laws.writes(R.SMv{op, d, srcs}, j) == False{} : Bool}, false_true(kd))
+    case R.ZOp{op, ks}:
+      kd => nb => Empty.absurd({Laws.writes(R.ZOp{op, ks}, j) == False{} : Bool}, false_true(kd))
+    case R.ZStore{op, d, srcs}:
+      kd => nb => Empty.absurd({Laws.writes(R.ZStore{op, d, srcs}, j) == False{} : Bool}, false_true(kd))
+    case R.ZRangeStore{d, s, q}:
+      kd => nb => Empty.absurd({Laws.writes(R.ZRangeStore{d, s, q}, j) == False{} : Bool}, false_true(kd))
+    case R.ZMPop{ks, max, c}:
+      kd => nb => Empty.absurd({Laws.writes(R.ZMPop{ks, max, c}, j) == False{} : Bool}, false_true(kd))
     case R.Own{o}:
       kd => nb => Empty.absurd({Laws.writes(R.Own{o}, j) == False{} : Bool}, false_true(kd))
     case R.Bad{r}:
@@ -4007,6 +4121,72 @@ def smove_do_point(f: R.Smv, +s: String, +d: String, +w: R.SMem, +t: KV.Trie<KV.
       e => point_key(R.Upd{d, R.UMems{R.smv.add(w)}}, T.db_of(T.upd.run(t, s, R.UMems{R.SWRem{[R.smv.member(w)]}}, now)), T.db_of(T.upd.run(u, s, R.UMems{R.SWRem{[R.smv.member(w)]}}, now)), j, now, {==}, KV.str_eq(j, d))({==})(str_refl(j, d))(
              point_key(R.Upd{s, R.UMems{R.SWRem{[R.smv.member(w)]}}}, t, u, j, now, {==}, KV.str_eq(j, s))({==})(str_refl(j, s))(e))
 
+# the sorted sets (and sets) at the keys of a sorted-set operation, in
+# two tries that agree on them
+def zsrcs_at_eq(ks: List<&2, String>, +t: KV.Trie<KV.Val>, +u: KV.Trie<KV.Val>, +now: Nat) -> Agree(t, u, ks) -> {R.zsrcs.at(ks, now, t) == R.zsrcs.at(ks, now, u) : R.ZGot}:
+  match ks:
+    case Nil{}:
+      ag => {==}
+    case Con{+k, +rest}:
+      +ag => %Equal.sym(Maybe<&2, KV.Val>, KV.read(KV.Val, t, k, now), KV.read(KV.Val, u, k, now), read_agree(t, u, k, now, ag_head(t, u, k, rest, ag))) : {R.zget.one(_, R.zsrcs.at(rest, now, t)) == R.zget.one(KV.read(KV.Val, u, k, now), R.zsrcs.at(rest, now, u)) : R.ZGot}
+             %Equal.sym(R.ZGot, R.zsrcs.at(rest, now, t), R.zsrcs.at(rest, now, u), zsrcs_at_eq(rest, t, u, now)(ag_tail(t, u, k, rest, ag))) : {R.zget.one(KV.read(KV.Val, u, k, now), _) == R.zget.one(KV.read(KV.Val, u, k, now), R.zsrcs.at(rest, now, u)) : R.ZGot}
+             {==}
+
+# a STORE's write, for given elements: the DEL of its destination, or
+# the update ZWNew of it
+def zstore_of_point(xs: List<&2, KV.ZEl>, +d: String, +t: KV.Trie<KV.Val>, +u: KV.Trie<KV.Val>, +j: String, +now: Nat) -> {KV.entry(KV.Val, t, j) == KV.entry(KV.Val, u, j) : Maybe<&2, KV.Item<KV.Val>>} -> {KV.entry(KV.Val, T.db_of(T.zstore.of(xs, d, t, now)), j) == KV.entry(KV.Val, T.db_of(T.zstore.of(xs, d, u, now)), j) : Maybe<&2, KV.Item<KV.Val>>}:
+  match xs:
+    case Nil{}:
+      e => %exec_del([d], t, now) : {KV.entry(KV.Val, _, j) == KV.entry(KV.Val, T.db_of(T.exec(R.Del{[d]}, u, now)), j) : Maybe<&2, KV.Item<KV.Val>>}
+           %exec_del([d], u, now) : {KV.entry(KV.Val, del_all([d], t), j) == KV.entry(KV.Val, _, j) : Maybe<&2, KV.Item<KV.Val>>}
+           del_point([d], t, u, j)(e)
+    case Con{+x, +rest}:
+      e => point_key(R.Upd{d, R.UZset{R.ZWNew{R.zopts.none(), R.zstore.pairs(x <> rest)}}}, t, u, j, now, {==}, KV.str_eq(j, d))({==})(str_refl(j, d))(e)
+
+def zstore_ok_point(bad: Maybe<&2, R.Reply>, +op: R.ZSetK, ss: List<&2, R.ZSrc>, +d: String, +t: KV.Trie<KV.Val>, +u: KV.Trie<KV.Val>, +j: String, +now: Nat) -> {KV.entry(KV.Val, t, j) == KV.entry(KV.Val, u, j) : Maybe<&2, KV.Item<KV.Val>>} -> {KV.entry(KV.Val, T.db_of(T.zstore.ok(bad, op, ss, d, t, now)), j) == KV.entry(KV.Val, T.db_of(T.zstore.ok(bad, op, ss, d, u, now)), j) : Maybe<&2, KV.Item<KV.Val>>}:
+  match bad:
+    case Some{r}:
+      e => e
+    case None{}:
+      zstore_of_point(R.zop.els(op, ss), d, t, u, j, now)
+
+def zstore_do_point(g: R.ZGot, +op: R.ZSetK, +d: String, +t: KV.Trie<KV.Val>, +u: KV.Trie<KV.Val>, +j: String, +now: Nat) -> {KV.entry(KV.Val, t, j) == KV.entry(KV.Val, u, j) : Maybe<&2, KV.Item<KV.Val>>} -> {KV.entry(KV.Val, T.db_of(T.zstore.do(g, op, d, t, now)), j) == KV.entry(KV.Val, T.db_of(T.zstore.do(g, op, d, u, now)), j) : Maybe<&2, KV.Item<KV.Val>>}:
+  match g:
+    case R.ZGot{ss}:
+      zstore_ok_point(R.zop.bad(op), op, ss, d, t, u, j, now)
+    case R.ZGotWrong{}:
+      e => e
+
+def zrs_of_point(m: Maybe<&2, KV.Val>, q: R.ZQ, +d: String, +t: KV.Trie<KV.Val>, +u: KV.Trie<KV.Val>, +j: String, +now: Nat) -> {KV.entry(KV.Val, t, j) == KV.entry(KV.Val, u, j) : Maybe<&2, KV.Item<KV.Val>>} -> {KV.entry(KV.Val, T.db_of(T.zrs.of(m, q, d, t, now)), j) == KV.entry(KV.Val, T.db_of(T.zrs.of(m, q, d, u, now)), j) : Maybe<&2, KV.Item<KV.Val>>}:
+  match m:
+    case None{}:
+      zstore_of_point(Nil{}, d, t, u, j, now)
+    case Some{KV.VColl{KV.CZset{+z}}}:
+      zstore_of_point(R.zq.run(q, z), d, t, u, j, now)
+    case Some{KV.VColl{KV.CHash{h}}}:
+      e => e
+    case Some{KV.VColl{KV.CList{l}}}:
+      e => e
+    case Some{KV.VColl{KV.CMems{s}}}:
+      e => e
+    case Some{KV.VStr{w}}:
+      e => e
+
+# ZMPOP's write, for a given pick: the pop of the key picked, as Upd runs
+# it
+def zout_db_r(+k: String, r: R.Reply & KV.Trie<KV.Val>) -> {T.db_of(r) == T.db_of(T.zmpop.out(k, r)) : KV.Trie<KV.Val>}:
+  (y, d) = r
+  {==}
+
+def zmpop_at_point(m: Maybe<&2, String>, +max: Bool, +c: String, +t: KV.Trie<KV.Val>, +u: KV.Trie<KV.Val>, +j: String, +now: Nat) -> {KV.entry(KV.Val, t, j) == KV.entry(KV.Val, u, j) : Maybe<&2, KV.Item<KV.Val>>} -> {KV.entry(KV.Val, T.db_of(T.zmpop.at(m, max, c, t, now)), j) == KV.entry(KV.Val, T.db_of(T.zmpop.at(m, max, c, u, now)), j) : Maybe<&2, KV.Item<KV.Val>>}:
+  match m:
+    case Some{+k}:
+      e => %zout_db_r(k, T.upd.run(t, k, R.UZset{R.ZWPopN{max, c}}, now)) : {KV.entry(KV.Val, _, j) == KV.entry(KV.Val, T.db_of(T.zmpop.out(k, T.upd.run(u, k, R.UZset{R.ZWPopN{max, c}}, now))), j) : Maybe<&2, KV.Item<KV.Val>>}
+           %zout_db_r(k, T.upd.run(u, k, R.UZset{R.ZWPopN{max, c}}, now)) : {KV.entry(KV.Val, T.db_of(T.upd.run(t, k, R.UZset{R.ZWPopN{max, c}}, now)), j) == KV.entry(KV.Val, _, j) : Maybe<&2, KV.Item<KV.Val>>}
+           point_key(R.Upd{k, R.UZset{R.ZWPopN{max, c}}}, t, u, j, now, {==}, KV.str_eq(j, k))({==})(str_refl(j, k))(e)
+    case None{}:
+      e => e
+
 # any command, run on two tries that agree on the keys its writes depend
 # on: a key j's entry after it depends only on j's entry before it
 def point_cmd(c: R.Cmd, +t: KV.Trie<KV.Val>, +u: KV.Trie<KV.Val>, +j: String, +now: Nat) -> Agree(t, u, Laws.deps(c)) -> {KV.entry(KV.Val, t, j) == KV.entry(KV.Val, u, j) : Maybe<&2, KV.Item<KV.Val>>} -> {KV.entry(KV.Val, T.db_of(T.exec(c, t, now)), j) == KV.entry(KV.Val, T.db_of(T.exec(c, u, now)), j) : Maybe<&2, KV.Item<KV.Val>>}:
@@ -4066,6 +4246,17 @@ def point_cmd(c: R.Cmd, +t: KV.Trie<KV.Val>, +u: KV.Trie<KV.Val>, +j: String, +n
     case R.SMv{+s, +d, +w}:
       ag => e => %smv_find_eq(t, u, s, d, w, now)(ag) : {KV.entry(KV.Val, T.db_of(T.smove.do(T.smv.find(t, s, d, w, now), s, d, w, t, now)), j) == KV.entry(KV.Val, T.db_of(T.smove.do(_, s, d, w, u, now)), j) : Maybe<&2, KV.Item<KV.Val>>}
                  smove_do_point(T.smv.find(t, s, d, w, now), s, d, w, t, u, j, now)(e)
+    case R.ZOp{op, ks}:
+      ag => e => e
+    case R.ZStore{+op, +d, +srcs}:
+      ag => e => %zsrcs_at_eq(srcs, t, u, now)(ag) : {KV.entry(KV.Val, T.db_of(T.zstore.do(R.zsrcs.at(srcs, now, t), op, d, t, now)), j) == KV.entry(KV.Val, T.db_of(T.zstore.do(_, op, d, u, now)), j) : Maybe<&2, KV.Item<KV.Val>>}
+                 zstore_do_point(R.zsrcs.at(srcs, now, t), op, d, t, u, j, now)(e)
+    case R.ZRangeStore{+d, +s, +q}:
+      ag => e => %read_agree(t, u, s, now, ag_head(t, u, s, Nil{}, ag)) : {KV.entry(KV.Val, T.db_of(T.zrs.of(KV.read(KV.Val, t, s, now), q, d, t, now)), j) == KV.entry(KV.Val, T.db_of(T.zrs.of(_, q, d, u, now)), j) : Maybe<&2, KV.Item<KV.Val>>}
+                 zrs_of_point(KV.read(KV.Val, t, s, now), q, d, t, u, j, now)(e)
+    case R.ZMPop{+ks, +max, +c}:
+      ag => e => %lmpop_first_eq(ks, t, u, now)(ag) : {KV.entry(KV.Val, T.db_of(T.zmpop.at(T.lmpop.first(ks, T.lmpop.head(ks, t, now), t, now), max, c, t, now)), j) == KV.entry(KV.Val, T.db_of(T.zmpop.at(_, max, c, u, now)), j) : Maybe<&2, KV.Item<KV.Val>>}
+                 zmpop_at_point(T.lmpop.first(ks, T.lmpop.head(ks, t, now), t, now), max, c, t, u, j, now)(e)
     case R.Own{o}:
       ag => e => e
     case R.Bad{r}:
@@ -4274,6 +4465,58 @@ def smove_do_rep(f: R.Smv, -s: String, -d: String, -w: R.SMem, -t: KV.Trie<KV.Va
     case R.SmvGo{}:
       {==}
 
+# a STORE of a sorted-set operation, or of a range, answers with the
+# count of what it makes, whatever the trie it writes
+def zstore_of_rep(xs: List<&2, KV.ZEl>, -d: String, -t: KV.Trie<KV.Val>, -u: KV.Trie<KV.Val>, -now: Nat) -> {T.reply_of(T.zstore.of(xs, d, t, now)) == T.reply_of(T.zstore.of(xs, d, u, now)) : R.Reply}:
+  match xs:
+    case Nil{}:
+      {==}
+    case Con{x, rest}:
+      {==}
+
+def zstore_ok_rep(bad: Maybe<&2, R.Reply>, +op: R.ZSetK, ss: List<&2, R.ZSrc>, -d: String, -t: KV.Trie<KV.Val>, -u: KV.Trie<KV.Val>, -now: Nat) -> {T.reply_of(T.zstore.ok(bad, op, ss, d, t, now)) == T.reply_of(T.zstore.ok(bad, op, ss, d, u, now)) : R.Reply}:
+  match bad:
+    case Some{r}:
+      {==}
+    case None{}:
+      zstore_of_rep(R.zop.els(op, ss), d, t, u, now)
+
+def zstore_do_rep(g: R.ZGot, +op: R.ZSetK, -d: String, -t: KV.Trie<KV.Val>, -u: KV.Trie<KV.Val>, -now: Nat) -> {T.reply_of(T.zstore.do(g, op, d, t, now)) == T.reply_of(T.zstore.do(g, op, d, u, now)) : R.Reply}:
+  match g:
+    case R.ZGot{ss}:
+      zstore_ok_rep(R.zop.bad(op), op, ss, d, t, u, now)
+    case R.ZGotWrong{}:
+      {==}
+
+def zrs_of_rep(m: Maybe<&2, KV.Val>, q: R.ZQ, -d: String, -t: KV.Trie<KV.Val>, -u: KV.Trie<KV.Val>, -now: Nat) -> {T.reply_of(T.zrs.of(m, q, d, t, now)) == T.reply_of(T.zrs.of(m, q, d, u, now)) : R.Reply}:
+  match m:
+    case None{}:
+      zstore_of_rep(Nil{}, d, t, u, now)
+    case Some{KV.VColl{KV.CZset{+z}}}:
+      zstore_of_rep(R.zq.run(q, z), d, t, u, now)
+    case Some{KV.VColl{KV.CHash{h}}}:
+      {==}
+    case Some{KV.VColl{KV.CList{l}}}:
+      {==}
+    case Some{KV.VColl{KV.CMems{s}}}:
+      {==}
+    case Some{KV.VStr{w}}:
+      {==}
+
+def zout_rep_r(+k: String, r: R.Reply & KV.Trie<KV.Val>) -> {R.zmpop.reply(k, T.reply_of(r)) == T.reply_of(T.zmpop.out(k, r)) : R.Reply}:
+  (y, d) = r
+  {==}
+
+# ZMPOP's reply, for a given pick, in two tries that agree on that key
+def zmpop_at_rep(m: Maybe<&2, String>, +max: Bool, +c: String, +t: KV.Trie<KV.Val>, +u: KV.Trie<KV.Val>, +now: Nat) -> AgreeAt(t, u, m) -> {T.reply_of(T.zmpop.at(m, max, c, t, now)) == T.reply_of(T.zmpop.at(m, max, c, u, now)) : R.Reply}:
+  match m:
+    case Some{+k}:
+      h => %zout_rep_r(k, T.upd.run(t, k, R.UZset{R.ZWPopN{max, c}}, now)) : {_ == T.reply_of(T.zmpop.out(k, T.upd.run(u, k, R.UZset{R.ZWPopN{max, c}}, now))) : R.Reply}
+           %zout_rep_r(k, T.upd.run(u, k, R.UZset{R.ZWPopN{max, c}}, now)) : {R.zmpop.reply(k, T.reply_of(T.upd.run(t, k, R.UZset{R.ZWPopN{max, c}}, now))) == _ : R.Reply}
+           Equal.cong(R.Reply, R.Reply, z => R.zmpop.reply(k, z), T.reply_of(T.upd.run(t, k, R.UZset{R.ZWPopN{max, c}}, now)), T.reply_of(T.upd.run(u, k, R.UZset{R.ZWPopN{max, c}}, now)), loc_reply(R.Upd{k, R.UZset{R.ZWPopN{max, c}}}, t, u, now)({==})(h))
+    case None{}:
+      h => {==}
+
 # a command answers the same after c2 when c2 writes nothing it reads
 def reply_after(c1: R.Cmd, +c2: R.Cmd, +db: KV.Trie<KV.Val>, +now: Nat) -> {Laws.disturbs(c2, c1) == False{} : Bool} -> {T.reply_of(T.exec(c1, T.db_of(T.exec(c2, db, now)), now)) == T.reply_of(T.exec(c1, db, now)) : R.Reply}:
   match c1:
@@ -4333,6 +4576,17 @@ def reply_after(c1: R.Cmd, +c2: R.Cmd, +db: KV.Trie<KV.Val>, +now: Nat) -> {Laws
     case R.SMv{+s, +d, +w}:
       e => %smv_find_eq(T.db_of(T.exec(c2, db, now)), db, s, d, w, now)(frame_agree(c2, db, [s, d], now)(e)) : {T.reply_of(T.smove.do(T.smv.find(T.db_of(T.exec(c2, db, now)), s, d, w, now), s, d, w, T.db_of(T.exec(c2, db, now)), now)) == T.reply_of(T.smove.do(_, s, d, w, db, now)) : R.Reply}
            smove_do_rep(T.smv.find(T.db_of(T.exec(c2, db, now)), s, d, w, now), s, d, w, T.db_of(T.exec(c2, db, now)), db, now)
+    case R.ZOp{+op, +ks}:
+      +e => Equal.cong(R.ZGot, R.Reply, z => R.zop.reply(op, z), R.zsrcs.at(ks, now, T.db_of(T.exec(c2, db, now))), R.zsrcs.at(ks, now, db), zsrcs_at_eq(ks, T.db_of(T.exec(c2, db, now)), db, now)(frame_agree(c2, db, ks, now)(e)))
+    case R.ZStore{+op, +d, +srcs}:
+      +e => %zsrcs_at_eq(srcs, T.db_of(T.exec(c2, db, now)), db, now)(frame_agree(c2, db, srcs, now)(e)) : {T.reply_of(T.zstore.do(R.zsrcs.at(srcs, now, T.db_of(T.exec(c2, db, now))), op, d, T.db_of(T.exec(c2, db, now)), now)) == T.reply_of(T.zstore.do(_, op, d, db, now)) : R.Reply}
+            zstore_do_rep(R.zsrcs.at(srcs, now, T.db_of(T.exec(c2, db, now))), op, d, T.db_of(T.exec(c2, db, now)), db, now)
+    case R.ZRangeStore{+d, +s, +q}:
+      +e => %read_agree(T.db_of(T.exec(c2, db, now)), db, s, now, ag_head(T.db_of(T.exec(c2, db, now)), db, s, Nil{}, frame_agree(c2, db, [s], now)(e))) : {T.reply_of(T.zrs.of(KV.read(KV.Val, T.db_of(T.exec(c2, db, now)), s, now), q, d, T.db_of(T.exec(c2, db, now)), now)) == T.reply_of(T.zrs.of(_, q, d, db, now)) : R.Reply}
+            zrs_of_rep(KV.read(KV.Val, T.db_of(T.exec(c2, db, now)), s, now), q, d, T.db_of(T.exec(c2, db, now)), db, now)
+    case R.ZMPop{+ks, +max, +c}:
+      +e => %lmpop_first_eq(ks, T.db_of(T.exec(c2, db, now)), db, now)(frame_agree(c2, db, ks, now)(e)) : {T.reply_of(T.zmpop.at(T.lmpop.first(ks, T.lmpop.head(ks, T.db_of(T.exec(c2, db, now)), now), T.db_of(T.exec(c2, db, now)), now), max, c, T.db_of(T.exec(c2, db, now)), now)) == T.reply_of(T.zmpop.at(_, max, c, db, now)) : R.Reply}
+            zmpop_at_rep(T.lmpop.first(ks, T.lmpop.head(ks, T.db_of(T.exec(c2, db, now)), now), T.db_of(T.exec(c2, db, now)), now), max, c, T.db_of(T.exec(c2, db, now)), db, now)(first_agree(ks, T.lmpop.head(ks, T.db_of(T.exec(c2, db, now)), now), T.db_of(T.exec(c2, db, now)), T.db_of(T.exec(c2, db, now)), db, now)(frame_agree(c2, db, ks, now)(e)))
     case R.Own{o}:
       e => {==}
     case R.Bad{r}:
@@ -4419,6 +4673,14 @@ def read_writes(c: R.Cmd, +j: String) -> {Laws.is_read(c) == True{} : Bool} -> {
       e => Empty.absurd({Laws.writes(R.SStore{op, d, srcs}, j) == False{} : Bool}, false_true(e))
     case R.SMv{s, d, w}:
       e => Empty.absurd({Laws.writes(R.SMv{s, d, w}, j) == False{} : Bool}, false_true(e))
+    case R.ZOp{op, ks}:
+      e => {==}
+    case R.ZStore{op, d, srcs}:
+      e => Empty.absurd({Laws.writes(R.ZStore{op, d, srcs}, j) == False{} : Bool}, false_true(e))
+    case R.ZRangeStore{d, s, q}:
+      e => Empty.absurd({Laws.writes(R.ZRangeStore{d, s, q}, j) == False{} : Bool}, false_true(e))
+    case R.ZMPop{ks, max, c}:
+      e => Empty.absurd({Laws.writes(R.ZMPop{ks, max, c}, j) == False{} : Bool}, false_true(e))
     case R.Own{o}:
       e => {==}
     case R.Bad{r}:
@@ -4489,6 +4751,14 @@ def clash_w_at(c1: R.Cmd, +c2: R.Cmd, +j: String) -> {Laws.clash_w(c2, c1) == Fa
       e => key_clash(c2, j, d, e, KV.str_eq(j, d))({==})(str_refl(j, d))
     case R.SMv{+s, +d, w}:
       any_clash(c2, j, [s, d])
+    case R.ZOp{op, ks}:
+      e => {==}
+    case R.ZStore{op, +d, srcs}:
+      e => key_clash(c2, j, d, e, KV.str_eq(j, d))({==})(str_refl(j, d))
+    case R.ZRangeStore{+d, s, q}:
+      e => key_clash(c2, j, d, e, KV.str_eq(j, d))({==})(str_refl(j, d))
+    case R.ZMPop{+ks, max, c}:
+      any_clash(c2, j, ks)
     case R.Own{o}:
       e => {==}
     case R.Bad{r}:
@@ -4626,6 +4896,17 @@ def rep_tw(+c1: R.Cmd, +c2: R.Cmd, +db: KV.Trie<KV.Val>, +H: List<&2, R.Cmd>, +n
     case R.SMv{+s, +d, +w}:
       kw => %smv_find_eq(tw(H, T.db_of(T.exec(c2, T.db_of(T.exec(c1, db, now)), now)), now), tw(H, T.db_of(T.exec(c1, T.db_of(T.exec(c2, db, now)), now)), now), s, d, w, now)(eq_gen(c1, c2, db, H, [s, d], now, e)) : {T.reply_of(T.smove.do(T.smv.find(tw(H, T.db_of(T.exec(c2, T.db_of(T.exec(c1, db, now)), now)), now), s, d, w, now), s, d, w, tw(H, T.db_of(T.exec(c2, T.db_of(T.exec(c1, db, now)), now)), now), now)) == T.reply_of(T.smove.do(_, s, d, w, tw(H, T.db_of(T.exec(c1, T.db_of(T.exec(c2, db, now)), now)), now), now)) : R.Reply}
             smove_do_rep(T.smv.find(tw(H, T.db_of(T.exec(c2, T.db_of(T.exec(c1, db, now)), now)), now), s, d, w, now), s, d, w, tw(H, T.db_of(T.exec(c2, T.db_of(T.exec(c1, db, now)), now)), now), tw(H, T.db_of(T.exec(c1, T.db_of(T.exec(c2, db, now)), now)), now), now)
+    case R.ZOp{+op, +ks}:
+      kw => Equal.cong(R.ZGot, R.Reply, z => R.zop.reply(op, z), R.zsrcs.at(ks, now, tw(H, T.db_of(T.exec(c2, T.db_of(T.exec(c1, db, now)), now)), now)), R.zsrcs.at(ks, now, tw(H, T.db_of(T.exec(c1, T.db_of(T.exec(c2, db, now)), now)), now)), zsrcs_at_eq(ks, tw(H, T.db_of(T.exec(c2, T.db_of(T.exec(c1, db, now)), now)), now), tw(H, T.db_of(T.exec(c1, T.db_of(T.exec(c2, db, now)), now)), now), now)(eq_gen(c1, c2, db, H, ks, now, e)))
+    case R.ZStore{+op, +d, +srcs}:
+      kw => %zsrcs_at_eq(srcs, tw(H, T.db_of(T.exec(c2, T.db_of(T.exec(c1, db, now)), now)), now), tw(H, T.db_of(T.exec(c1, T.db_of(T.exec(c2, db, now)), now)), now), now)(eq_gen(c1, c2, db, H, srcs, now, e)) : {T.reply_of(T.zstore.do(R.zsrcs.at(srcs, now, tw(H, T.db_of(T.exec(c2, T.db_of(T.exec(c1, db, now)), now)), now)), op, d, tw(H, T.db_of(T.exec(c2, T.db_of(T.exec(c1, db, now)), now)), now), now)) == T.reply_of(T.zstore.do(_, op, d, tw(H, T.db_of(T.exec(c1, T.db_of(T.exec(c2, db, now)), now)), now), now)) : R.Reply}
+            zstore_do_rep(R.zsrcs.at(srcs, now, tw(H, T.db_of(T.exec(c2, T.db_of(T.exec(c1, db, now)), now)), now)), op, d, tw(H, T.db_of(T.exec(c2, T.db_of(T.exec(c1, db, now)), now)), now), tw(H, T.db_of(T.exec(c1, T.db_of(T.exec(c2, db, now)), now)), now), now)
+    case R.ZRangeStore{+d, +s, +q}:
+      kw => %read_agree(tw(H, T.db_of(T.exec(c2, T.db_of(T.exec(c1, db, now)), now)), now), tw(H, T.db_of(T.exec(c1, T.db_of(T.exec(c2, db, now)), now)), now), s, now, eq_at(c1, c2, db, H, s, now, e)) : {T.reply_of(T.zrs.of(KV.read(KV.Val, tw(H, T.db_of(T.exec(c2, T.db_of(T.exec(c1, db, now)), now)), now), s, now), q, d, tw(H, T.db_of(T.exec(c2, T.db_of(T.exec(c1, db, now)), now)), now), now)) == T.reply_of(T.zrs.of(_, q, d, tw(H, T.db_of(T.exec(c1, T.db_of(T.exec(c2, db, now)), now)), now), now)) : R.Reply}
+            zrs_of_rep(KV.read(KV.Val, tw(H, T.db_of(T.exec(c2, T.db_of(T.exec(c1, db, now)), now)), now), s, now), q, d, tw(H, T.db_of(T.exec(c2, T.db_of(T.exec(c1, db, now)), now)), now), tw(H, T.db_of(T.exec(c1, T.db_of(T.exec(c2, db, now)), now)), now), now)
+    case R.ZMPop{+ks, +max, +c}:
+      kw => %lmpop_first_eq(ks, tw(H, T.db_of(T.exec(c2, T.db_of(T.exec(c1, db, now)), now)), now), tw(H, T.db_of(T.exec(c1, T.db_of(T.exec(c2, db, now)), now)), now), now)(eq_gen(c1, c2, db, H, ks, now, e)) : {T.reply_of(T.zmpop.at(T.lmpop.first(ks, T.lmpop.head(ks, tw(H, T.db_of(T.exec(c2, T.db_of(T.exec(c1, db, now)), now)), now), now), tw(H, T.db_of(T.exec(c2, T.db_of(T.exec(c1, db, now)), now)), now), now), max, c, tw(H, T.db_of(T.exec(c2, T.db_of(T.exec(c1, db, now)), now)), now), now)) == T.reply_of(T.zmpop.at(_, max, c, tw(H, T.db_of(T.exec(c1, T.db_of(T.exec(c2, db, now)), now)), now), now)) : R.Reply}
+            zmpop_at_rep(T.lmpop.first(ks, T.lmpop.head(ks, tw(H, T.db_of(T.exec(c2, T.db_of(T.exec(c1, db, now)), now)), now), now), tw(H, T.db_of(T.exec(c2, T.db_of(T.exec(c1, db, now)), now)), now), now), max, c, tw(H, T.db_of(T.exec(c2, T.db_of(T.exec(c1, db, now)), now)), now), tw(H, T.db_of(T.exec(c1, T.db_of(T.exec(c2, db, now)), now)), now), now)(first_agree(ks, T.lmpop.head(ks, tw(H, T.db_of(T.exec(c2, T.db_of(T.exec(c1, db, now)), now)), now), now), tw(H, T.db_of(T.exec(c2, T.db_of(T.exec(c1, db, now)), now)), now), tw(H, T.db_of(T.exec(c2, T.db_of(T.exec(c1, db, now)), now)), now), tw(H, T.db_of(T.exec(c1, T.db_of(T.exec(c2, db, now)), now)), now), now)(eq_gen(c1, c2, db, H, ks, now, e)))
     case R.Own{o}:
       kw => {==}
     case R.Bad{r}:
@@ -4753,6 +5034,10 @@ def upd_ch_br(+t: KV.Trie<KV.Val>, +k: String, +h: U32, +n: Nat, +x: Nat, +now: 
     case R.CMems{op, sv}:
       {==}
     case R.CMemsNew{ms, sv}:
+      {==}
+    case R.CZset{op, z}:
+      {==}
+    case R.CZsetNew{o, ps, z}:
       {==}
 
 def upd_br(+t: KV.Trie<KV.Val>, +k: String, +h: U32, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>, +c: Nat, o: R.Out) -> {proj(R.upd.put(t, k, h, n, x, now, rr, c, o)) == T.upd.put(t, k, h, o) : R.Reply & KV.Trie<KV.Val>}:
@@ -4927,6 +5212,10 @@ def upd_ch_now(+t: KV.Trie<KV.Val>, +k: String, +h: U32, +n: Nat, +x: Nat, +now:
       {==}
     case R.CMemsNew{ms, sv}:
       {==}
+    case R.CZset{op, z}:
+      {==}
+    case R.CZsetNew{o, ps, z}:
+      {==}
 
 def upd_now(+t: KV.Trie<KV.Val>, +k: String, +h: U32, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>, +c: Nat, o: R.Out) -> {R.db.now(R.db_of(R.upd.put(t, k, h, n, x, now, rr, c, o))) == now : Nat}:
   match o:
@@ -4979,6 +5268,58 @@ def smove_do_br(f: R.Smv, +s: String, +dk: String, +w: R.SMem, +d: R.Db) -> {pro
       %upd_t(d, s, R.UMems{R.SWRem{[R.smv.member(w)]}}) : {proj((R.r_int(1n), R.db_of(R.db.upd(u, dk, R.UMems{R.smv.add(w)})))) == (R.r_int(1n), T.db_of(T.upd.run(_, dk, R.UMems{R.smv.add(w)}, R.db.now(u)))) : R.Reply & KV.Trie<KV.Val>}
       Equal.cong(KV.Trie<KV.Val>, R.Reply & KV.Trie<KV.Val>, z => (R.r_int(1n), z), R.db.t(R.db_of(R.db.upd(u, dk, R.UMems{R.smv.add(w)}))), T.db_of(T.upd.run(R.db.t(u), dk, R.UMems{R.smv.add(w)}, R.db.now(u))), upd_t(u, dk, R.UMems{R.smv.add(w)}))
 
+# ZUNIONSTORE and the rest, ZRANGESTORE and ZMPOP on the record as the
+# spec's: each write is DEL's or an update's
+def zstore_of_br(xs: List<&2, KV.ZEl>, +d: String, +t: KV.Trie<KV.Val>, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>) -> {proj(R.zstore.of(xs, d, R.Db{t, n, x, now, rr})) == T.zstore.of(xs, d, t, now) : R.Reply & KV.Trie<KV.Val>}:
+  match xs:
+    case Nil{}:
+      sstore_del_br(R.del_keys([d], now, t), n, x, now, rr)
+    case Con{+y, +rest}:
+      Equal.cong(KV.Trie<KV.Val>, R.Reply & KV.Trie<KV.Val>, z => (R.r_int(List.length(&2, KV.ZEl, y <> rest)), z), R.db.t(R.db_of(R.db.upd(R.Db{t, n, x, now, rr}, d, R.UZset{R.ZWNew{R.zopts.none(), R.zstore.pairs(y <> rest)}}))), T.db_of(T.upd.run(t, d, R.UZset{R.ZWNew{R.zopts.none(), R.zstore.pairs(y <> rest)}}, now)), upd_t(R.Db{t, n, x, now, rr}, d, R.UZset{R.ZWNew{R.zopts.none(), R.zstore.pairs(y <> rest)}}))
+
+def zstore_ok_br(bad: Maybe<&2, R.Reply>, +op: R.ZSetK, ss: List<&2, R.ZSrc>, +d: String, +t: KV.Trie<KV.Val>, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>) -> {proj(R.zstore.ok(bad, op, ss, d, R.Db{t, n, x, now, rr})) == T.zstore.ok(bad, op, ss, d, t, now) : R.Reply & KV.Trie<KV.Val>}:
+  match bad:
+    case Some{r}:
+      {==}
+    case None{}:
+      zstore_of_br(R.zop.els(op, ss), d, t, n, x, now, rr)
+
+def zstore_do_br(g: R.ZGot, +op: R.ZSetK, +d: String, +t: KV.Trie<KV.Val>, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>) -> {proj(R.zstore.do(g, op, d, R.Db{t, n, x, now, rr})) == T.zstore.do(g, op, d, t, now) : R.Reply & KV.Trie<KV.Val>}:
+  match g:
+    case R.ZGot{ss}:
+      zstore_ok_br(R.zop.bad(op), op, ss, d, t, n, x, now, rr)
+    case R.ZGotWrong{}:
+      {==}
+
+def zrs_of_br(m: Maybe<&2, KV.Val>, q: R.ZQ, +d: String, +t: KV.Trie<KV.Val>, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>) -> {proj(R.zrs.of(m, q, d, R.Db{t, n, x, now, rr})) == T.zrs.of(m, q, d, t, now) : R.Reply & KV.Trie<KV.Val>}:
+  match m:
+    case None{}:
+      zstore_of_br(Nil{}, d, t, n, x, now, rr)
+    case Some{KV.VColl{KV.CZset{+z}}}:
+      zstore_of_br(R.zq.run(q, z), d, t, n, x, now, rr)
+    case Some{KV.VColl{KV.CHash{h}}}:
+      {==}
+    case Some{KV.VColl{KV.CList{l}}}:
+      {==}
+    case Some{KV.VColl{KV.CMems{s}}}:
+      {==}
+    case Some{KV.VStr{w}}:
+      {==}
+
+def zout_br(+k: String, r: R.Reply & R.Db) -> {proj(R.zmpop.out(k, r)) == T.zmpop.out(k, proj(r)) : R.Reply & KV.Trie<KV.Val>}:
+  (y, d) = r
+  {==}
+
+def zmpop_at_br(m: Maybe<&2, String>, +max: Bool, +c: String, +t: KV.Trie<KV.Val>, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>) -> {proj(R.zmpop.at(m, max, c, R.Db{t, n, x, now, rr})) == T.zmpop.at(m, max, c, t, now) : R.Reply & KV.Trie<KV.Val>}:
+  match m:
+    case Some{+k}:
+      Equal.trans(R.Reply & KV.Trie<KV.Val>, proj(R.zmpop.out(k, R.db.upd(R.Db{t, n, x, now, rr}, k, R.UZset{R.ZWPopN{max, c}}))), T.zmpop.out(k, proj(R.db.upd(R.Db{t, n, x, now, rr}, k, R.UZset{R.ZWPopN{max, c}}))), T.zmpop.out(k, T.upd.run(t, k, R.UZset{R.ZWPopN{max, c}}, now)),
+        zout_br(k, R.db.upd(R.Db{t, n, x, now, rr}, k, R.UZset{R.ZWPopN{max, c}})),
+        Equal.cong(R.Reply & KV.Trie<KV.Val>, R.Reply & KV.Trie<KV.Val>, z => T.zmpop.out(k, z), proj(R.db.upd(R.Db{t, n, x, now, rr}, k, R.UZset{R.ZWPopN{max, c}})), T.upd.run(t, k, R.UZset{R.ZWPopN{max, c}}, now),
+          upd_br(t, k, KV.hash(k), n, x, now, rr, R.ent.code(KV.entry.at(KV.Val, t, k, KV.hash(k))), R.upd.v(R.UZset{R.ZWPopN{max, c}}, now, R.ent.live(now, KV.entry.at(KV.Val, t, k, KV.hash(k)))))))
+    case None{}:
+      {==}
+
 # a command answers as the spec's at the database's now, DBSIZE but, and
 # leaves the trie the spec's leaves
 def bridge_go(c: R.Cmd, +t: KV.Trie<KV.Val>, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>) -> {Laws.keywise(c) == True{} : Bool} -> {proj(R.exec(c, R.Db{t, n, x, now, rr})) == T.exec(c, t, now) : R.Reply & KV.Trie<KV.Val>}:
@@ -5030,6 +5371,15 @@ def bridge_go(c: R.Cmd, +t: KV.Trie<KV.Val>, +n: Nat, +x: Nat, +now: Nat, +rr: M
       kw => sstore_do_br(R.sets.at(srcs, now, t), op, srcs, d, t, n, x, now, rr)
     case R.SMv{+s, +d, +w}:
       kw => smove_do_br(T.smv.find(t, s, d, w, now), s, d, w, R.Db{t, n, x, now, rr})
+    case R.ZOp{op, ks}:
+      kw => {==}
+    case R.ZStore{+op, +d, +srcs}:
+      kw => zstore_do_br(R.zsrcs.at(srcs, now, t), op, d, t, n, x, now, rr)
+    case R.ZRangeStore{+d, +s, +q}:
+      kw => zrs_of_br(KV.read(KV.Val, t, s, now), q, d, t, n, x, now, rr)
+    case R.ZMPop{+ks, +max, +c}:
+      kw => %first_br(ks, t, n, x, now, rr) : {proj(R.zmpop.at(R.lmpop.first(ks, R.lmpop.head(ks, R.Db{t, n, x, now, rr}), R.Db{t, n, x, now, rr}), max, c, R.Db{t, n, x, now, rr})) == T.zmpop.at(_, max, c, t, now) : R.Reply & KV.Trie<KV.Val>}
+            zmpop_at_br(R.lmpop.first(ks, R.lmpop.head(ks, R.Db{t, n, x, now, rr}), R.Db{t, n, x, now, rr}), max, c, t, n, x, now, rr)
     case R.Own{o}:
       kw => {==}
     case R.Bad{r}:
@@ -5196,6 +5546,55 @@ def smove_do_now(f: R.Smv, +s: String, +dk: String, +w: R.SMem, +d: R.Db) -> {R.
       +u = R.db_of(R.db.upd(d, s, R.UMems{R.SWRem{[R.smv.member(w)]}}))
       Equal.trans(Nat, R.db.now(R.db_of(R.db.upd(u, dk, R.UMems{R.smv.add(w)}))), R.db.now(u), R.db.now(d), upd_now_d(u, dk, R.UMems{R.smv.add(w)}), upd_now_d(d, s, R.UMems{R.SWRem{[R.smv.member(w)]}}))
 
+def zstore_of_now(xs: List<&2, KV.ZEl>, +d: String, +t: KV.Trie<KV.Val>, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>) -> {R.db.now(R.db_of(R.zstore.of(xs, d, R.Db{t, n, x, now, rr}))) == now : Nat}:
+  match xs:
+    case Nil{}:
+      del_now(R.del_keys([d], now, t), n, x, now, rr)
+    case Con{+y, +rest}:
+      upd_now_d(R.Db{t, n, x, now, rr}, d, R.UZset{R.ZWNew{R.zopts.none(), R.zstore.pairs(y <> rest)}})
+
+def zstore_ok_now(bad: Maybe<&2, R.Reply>, +op: R.ZSetK, ss: List<&2, R.ZSrc>, +d: String, +t: KV.Trie<KV.Val>, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>) -> {R.db.now(R.db_of(R.zstore.ok(bad, op, ss, d, R.Db{t, n, x, now, rr}))) == now : Nat}:
+  match bad:
+    case Some{r}:
+      {==}
+    case None{}:
+      zstore_of_now(R.zop.els(op, ss), d, t, n, x, now, rr)
+
+def zstore_do_now(g: R.ZGot, +op: R.ZSetK, +d: String, +t: KV.Trie<KV.Val>, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>) -> {R.db.now(R.db_of(R.zstore.do(g, op, d, R.Db{t, n, x, now, rr}))) == now : Nat}:
+  match g:
+    case R.ZGot{ss}:
+      zstore_ok_now(R.zop.bad(op), op, ss, d, t, n, x, now, rr)
+    case R.ZGotWrong{}:
+      {==}
+
+def zrs_of_now(m: Maybe<&2, KV.Val>, q: R.ZQ, +d: String, +t: KV.Trie<KV.Val>, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>) -> {R.db.now(R.db_of(R.zrs.of(m, q, d, R.Db{t, n, x, now, rr}))) == now : Nat}:
+  match m:
+    case None{}:
+      zstore_of_now(Nil{}, d, t, n, x, now, rr)
+    case Some{KV.VColl{KV.CZset{+z}}}:
+      zstore_of_now(R.zq.run(q, z), d, t, n, x, now, rr)
+    case Some{KV.VColl{KV.CHash{h}}}:
+      {==}
+    case Some{KV.VColl{KV.CList{l}}}:
+      {==}
+    case Some{KV.VColl{KV.CMems{s}}}:
+      {==}
+    case Some{KV.VStr{w}}:
+      {==}
+
+def zout_db_R(+k: String, r: R.Reply & R.Db) -> {R.db_of(R.zmpop.out(k, r)) == R.db_of(r) : R.Db}:
+  (y, d) = r
+  {==}
+
+def zmpop_at_now(m: Maybe<&2, String>, +max: Bool, +c: String, +t: KV.Trie<KV.Val>, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>) -> {R.db.now(R.db_of(R.zmpop.at(m, max, c, R.Db{t, n, x, now, rr}))) == now : Nat}:
+  match m:
+    case Some{+k}:
+      Equal.trans(Nat, R.db.now(R.db_of(R.zmpop.out(k, R.db.upd(R.Db{t, n, x, now, rr}, k, R.UZset{R.ZWPopN{max, c}})))), R.db.now(R.db_of(R.db.upd(R.Db{t, n, x, now, rr}, k, R.UZset{R.ZWPopN{max, c}}))), now,
+        Equal.cong(R.Db, Nat, z => R.db.now(z), R.db_of(R.zmpop.out(k, R.db.upd(R.Db{t, n, x, now, rr}, k, R.UZset{R.ZWPopN{max, c}}))), R.db_of(R.db.upd(R.Db{t, n, x, now, rr}, k, R.UZset{R.ZWPopN{max, c}})), zout_db_R(k, R.db.upd(R.Db{t, n, x, now, rr}, k, R.UZset{R.ZWPopN{max, c}}))),
+        upd_now(t, k, KV.hash(k), n, x, now, rr, R.ent.code(KV.entry.at(KV.Val, t, k, KV.hash(k))), R.upd.v(R.UZset{R.ZWPopN{max, c}}, now, R.ent.live(now, KV.entry.at(KV.Val, t, k, KV.hash(k))))))
+    case None{}:
+      {==}
+
 def now_go(c: R.Cmd, +t: KV.Trie<KV.Val>, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>) -> {R.db.now(R.db_of(R.exec(c, R.Db{t, n, x, now, rr}))) == now : Nat}:
   match c:
     case R.Ping{}:
@@ -5244,6 +5643,14 @@ def now_go(c: R.Cmd, +t: KV.Trie<KV.Val>, +n: Nat, +x: Nat, +now: Nat, +rr: Mayb
       sstore_do_now(R.sets.at(srcs, now, t), op, srcs, d, t, n, x, now, rr)
     case R.SMv{+s, +d, +w}:
       smove_do_now(T.smv.find(t, s, d, w, now), s, d, w, R.Db{t, n, x, now, rr})
+    case R.ZOp{op, ks}:
+      {==}
+    case R.ZStore{+op, +d, +srcs}:
+      zstore_do_now(R.zsrcs.at(srcs, now, t), op, d, t, n, x, now, rr)
+    case R.ZRangeStore{+d, +s, +q}:
+      zrs_of_now(KV.read(KV.Val, t, s, now), q, d, t, n, x, now, rr)
+    case R.ZMPop{+ks, +max, +c}:
+      zmpop_at_now(R.lmpop.first(ks, R.lmpop.head(ks, R.Db{t, n, x, now, rr}), R.Db{t, n, x, now, rr}), max, c, t, n, x, now, rr)
     case R.Own{o}:
       {==}
     case R.Bad{r}:
@@ -5306,6 +5713,14 @@ def bt_go(c: R.Cmd, +t: KV.Trie<KV.Val>, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe
       bt_kw(R.SStore{op, d, srcs}, t, n, x, now, rr, {==})
     case R.SMv{+s, +d, +w}:
       bt_kw(R.SMv{s, d, w}, t, n, x, now, rr, {==})
+    case R.ZOp{+op, +ks}:
+      bt_kw(R.ZOp{op, ks}, t, n, x, now, rr, {==})
+    case R.ZStore{+op, +d, +srcs}:
+      bt_kw(R.ZStore{op, d, srcs}, t, n, x, now, rr, {==})
+    case R.ZRangeStore{+d, +s, +q}:
+      bt_kw(R.ZRangeStore{d, s, q}, t, n, x, now, rr, {==})
+    case R.ZMPop{+ks, +max, +c}:
+      bt_kw(R.ZMPop{ks, max, c}, t, n, x, now, rr, {==})
     case R.Own{o}:
       {==}
     case R.Bad{r}:
@@ -5425,6 +5840,14 @@ def reads_go(c: R.Cmd, +db: R.Db) -> {Laws.is_read(c) == True{} : Bool} -> {R.db
       e => Empty.absurd({R.db_of(R.exec(R.SStore{op, d, srcs}, db)) == db : R.Db}, false_true(e))
     case R.SMv{s, d, w}:
       e => Empty.absurd({R.db_of(R.exec(R.SMv{s, d, w}, db)) == db : R.Db}, false_true(e))
+    case R.ZOp{op, ks}:
+      e => {==}
+    case R.ZStore{op, d, srcs}:
+      e => Empty.absurd({R.db_of(R.exec(R.ZStore{op, d, srcs}, db)) == db : R.Db}, false_true(e))
+    case R.ZRangeStore{d, s, q}:
+      e => Empty.absurd({R.db_of(R.exec(R.ZRangeStore{d, s, q}, db)) == db : R.Db}, false_true(e))
+    case R.ZMPop{ks, max, c}:
+      e => Empty.absurd({R.db_of(R.exec(R.ZMPop{ks, max, c}, db)) == db : R.Db}, false_true(e))
     case R.Own{o}:
       e => {==}
     case R.Bad{r}:
@@ -5852,6 +6275,14 @@ def reply_after_db(c1: R.Cmd, +c2: R.Cmd, +db: R.Db) -> {Laws.disturbs(c2, c1) =
       e => reply_via(R.SStore{op, d, srcs}, c2, db, {==}, e)
     case R.SMv{s, d, w}:
       e => reply_via(R.SMv{s, d, w}, c2, db, {==}, e)
+    case R.ZOp{op, ks}:
+      e => reply_via(R.ZOp{op, ks}, c2, db, {==}, e)
+    case R.ZStore{op, d, srcs}:
+      e => reply_via(R.ZStore{op, d, srcs}, c2, db, {==}, e)
+    case R.ZRangeStore{d, s, q}:
+      e => reply_via(R.ZRangeStore{d, s, q}, c2, db, {==}, e)
+    case R.ZMPop{ks, max, c}:
+      e => reply_via(R.ZMPop{ks, max, c}, c2, db, {==}, e)
     case R.Own{o}:
       e => reply_via(R.Own{o}, c2, db, {==}, e)
     case R.Bad{r}:
@@ -6388,6 +6819,46 @@ def sstore_eff(g: R.SGot, op: R.SetK, ks: List<&2, String>, +d: String, +db: R.D
     case R.SGotWrong{}:
       Nil{}
 
+# a STORE's effects, of a sorted-set operation or of a range: the DEL of
+# its destination, or its update ZWNew; ZMPOP's: the update of the key it
+# picks
+def zstore_eff_of(xs: List<&2, KV.ZEl>, +d: String, +db: R.Db) -> List<&2, R.Cmd>:
+  match xs:
+    case Nil{}:
+      A.effect(R.Del{[d]})
+    case Con{+x, +rest}:
+      upd_eff(db, d, R.UZset{R.ZWNew{R.zopts.none(), R.zstore.pairs(x <> rest)}})
+
+def zstore_eff_ok(bad: Maybe<&2, R.Reply>, op: R.ZSetK, ss: List<&2, R.ZSrc>, +d: String, +db: R.Db) -> List<&2, R.Cmd>:
+  match bad:
+    case Some{r}:
+      Nil{}
+    case None{}:
+      zstore_eff_of(R.zop.els(op, ss), d, db)
+
+def zstore_eff(g: R.ZGot, +op: R.ZSetK, +d: String, +db: R.Db) -> List<&2, R.Cmd>:
+  match g:
+    case R.ZGot{ss}:
+      zstore_eff_ok(R.zop.bad(op), op, ss, d, db)
+    case R.ZGotWrong{}:
+      Nil{}
+
+def zrs_eff(m: Maybe<&2, KV.Val>, q: R.ZQ, +d: String, +db: R.Db) -> List<&2, R.Cmd>:
+  match m:
+    case None{}:
+      zstore_eff_of(Nil{}, d, db)
+    case Some{KV.VColl{KV.CZset{+z}}}:
+      zstore_eff_of(R.zq.run(q, z), d, db)
+    case Some{v}:
+      Nil{}
+
+def zmpop_eff(m: Maybe<&2, String>, +max: Bool, c: String, +db: R.Db) -> List<&2, R.Cmd>:
+  match m:
+    case Some{+k}:
+      upd_eff(db, k, R.UZset{R.ZWPopN{max, c}})
+    case None{}:
+      Nil{}
+
 # a command's effects, run on db
 def eff(c: R.Cmd, +db: R.Db) -> List<&2, R.Cmd>:
   match c:
@@ -6437,6 +6908,14 @@ def eff(c: R.Cmd, +db: R.Db) -> List<&2, R.Cmd>:
       sstore_eff(R.sets.at(srcs, R.db.now(db), R.db.trie(db)), op, srcs, d, db)
     case R.SMv{+s, +d, +w}:
       A.smove.effect(A.smove.moved(R.smv.of(db, s, d, w)), R.ent.dead(R.db.now(db), R.db.entry(db, d)), s, d, w)
+    case R.ZOp{op, ks}:
+      A.effect(R.ZOp{op, ks})
+    case R.ZStore{+op, +d, +srcs}:
+      zstore_eff(R.zsrcs.at(srcs, R.db.now(db), R.db.trie(db)), op, d, db)
+    case R.ZRangeStore{+d, +s, q}:
+      zrs_eff(KV.read(KV.Val, R.db.trie(db), s, R.db.now(db)), q, d, db)
+    case R.ZMPop{+ks, +max, c}:
+      zmpop_eff(R.lmpop.first(ks, R.lmpop.head(ks, db), db), max, c, db)
     case R.Own{o}:
       A.effect(R.Own{o})
     case R.Bad{r}:
@@ -6557,6 +7036,58 @@ def sstore_split(g: R.SGot, +op: R.SetK, +ks: List<&2, String>, +d: String, +db:
     case R.SGotWrong{}:
       {==}
 
+def zstore_of_split(xs: List<&2, KV.ZEl>, +d: String, +db: R.Db) -> {(R.reply_of(R.zstore.of(xs, d, db)), (zstore_eff_of(xs, d, db), R.db_of(R.zstore.of(xs, d, db)))) == A.zstore.eff(xs, d, db) : R.Reply & (List<&2, R.Cmd> & R.Db)}:
+  match xs:
+    case Nil{}:
+      Equal.cong(R.Reply & (List<&2, R.Cmd> & R.Db), R.Reply & (List<&2, R.Cmd> & R.Db), z => A.sstore.ans(0n, z), (R.reply_of(R.exec(R.Del{[d]}, db)), (A.effect(R.Del{[d]}), R.db_of(R.exec(R.Del{[d]}, db)))), A.run.put(R.Del{[d]}, R.exec(R.Del{[d]}, db)), put_split(R.Del{[d]}, R.exec(R.Del{[d]}, db)))
+    case Con{+x, +rest}:
+      Equal.cong(R.Reply & (List<&2, R.Cmd> & R.Db), R.Reply & (List<&2, R.Cmd> & R.Db), z => A.sstore.ans(List.length(&2, KV.ZEl, x <> rest), z), (R.reply_of(R.exec(R.Upd{d, R.UZset{R.ZWNew{R.zopts.none(), R.zstore.pairs(x <> rest)}}}, db)), (upd_eff(db, d, R.UZset{R.ZWNew{R.zopts.none(), R.zstore.pairs(x <> rest)}}), R.db_of(R.exec(R.Upd{d, R.UZset{R.ZWNew{R.zopts.none(), R.zstore.pairs(x <> rest)}}}, db)))), A.run(R.Upd{d, R.UZset{R.ZWNew{R.zopts.none(), R.zstore.pairs(x <> rest)}}}, db), upd_split(db, d, R.UZset{R.ZWNew{R.zopts.none(), R.zstore.pairs(x <> rest)}}))
+
+def zstore_ok_split(bad: Maybe<&2, R.Reply>, +op: R.ZSetK, ss: List<&2, R.ZSrc>, +d: String, +db: R.Db) -> {(R.reply_of(R.zstore.ok(bad, op, ss, d, db)), (zstore_eff_ok(bad, op, ss, d, db), R.db_of(R.zstore.ok(bad, op, ss, d, db)))) == A.zstore.ok(bad, op, ss, d, db) : R.Reply & (List<&2, R.Cmd> & R.Db)}:
+  match bad:
+    case Some{r}:
+      {==}
+    case None{}:
+      zstore_of_split(R.zop.els(op, ss), d, db)
+
+def zstore_split(g: R.ZGot, +op: R.ZSetK, +d: String, +db: R.Db) -> {(R.reply_of(R.zstore.do(g, op, d, db)), (zstore_eff(g, op, d, db), R.db_of(R.zstore.do(g, op, d, db)))) == A.zstore.run(g, op, d, db) : R.Reply & (List<&2, R.Cmd> & R.Db)}:
+  match g:
+    case R.ZGot{ss}:
+      zstore_ok_split(R.zop.bad(op), op, ss, d, db)
+    case R.ZGotWrong{}:
+      {==}
+
+def zrs_split(m: Maybe<&2, KV.Val>, q: R.ZQ, +d: String, +db: R.Db) -> {(R.reply_of(R.zrs.of(m, q, d, db)), (zrs_eff(m, q, d, db), R.db_of(R.zrs.of(m, q, d, db)))) == A.zrs.run(m, q, d, db) : R.Reply & (List<&2, R.Cmd> & R.Db)}:
+  match m:
+    case None{}:
+      zstore_of_split(Nil{}, d, db)
+    case Some{KV.VColl{KV.CZset{+z}}}:
+      zstore_of_split(R.zq.run(q, z), d, db)
+    case Some{KV.VColl{KV.CHash{h}}}:
+      {==}
+    case Some{KV.VColl{KV.CList{l}}}:
+      {==}
+    case Some{KV.VColl{KV.CMems{s}}}:
+      {==}
+    case Some{KV.VStr{w}}:
+      {==}
+
+def zout_split(+k: String, r: R.Reply & R.Db, -es: List<&2, R.Cmd>) -> {(R.reply_of(R.zmpop.out(k, r)), (es, R.db_of(R.zmpop.out(k, r)))) == A.zmpop.out(k, (R.reply_of(r), (es, R.db_of(r)))) : R.Reply & (List<&2, R.Cmd> & R.Db)}:
+  (y, d) = r
+  {==}
+
+def zmpop_split(m: Maybe<&2, String>, +max: Bool, +c: String, +db: R.Db) -> {(R.reply_of(R.zmpop.at(m, max, c, db)), (zmpop_eff(m, max, c, db), R.db_of(R.zmpop.at(m, max, c, db)))) == A.zmpop.at(m, max, c, db) : R.Reply & (List<&2, R.Cmd> & R.Db)}:
+  match m:
+    case Some{+k}:
+      Equal.trans(R.Reply & (List<&2, R.Cmd> & R.Db),
+        (R.reply_of(R.zmpop.out(k, R.db.upd(db, k, R.UZset{R.ZWPopN{max, c}}))), (upd_eff(db, k, R.UZset{R.ZWPopN{max, c}}), R.db_of(R.zmpop.out(k, R.db.upd(db, k, R.UZset{R.ZWPopN{max, c}}))))),
+        A.zmpop.out(k, (R.reply_of(R.db.upd(db, k, R.UZset{R.ZWPopN{max, c}})), (upd_eff(db, k, R.UZset{R.ZWPopN{max, c}}), R.db_of(R.db.upd(db, k, R.UZset{R.ZWPopN{max, c}}))))),
+        A.zmpop.out(k, A.run.upd(db, k, R.UZset{R.ZWPopN{max, c}})),
+        zout_split(k, R.db.upd(db, k, R.UZset{R.ZWPopN{max, c}}), upd_eff(db, k, R.UZset{R.ZWPopN{max, c}})),
+        Equal.cong(R.Reply & (List<&2, R.Cmd> & R.Db), R.Reply & (List<&2, R.Cmd> & R.Db), z => A.zmpop.out(k, z), (R.reply_of(R.db.upd(db, k, R.UZset{R.ZWPopN{max, c}})), (upd_eff(db, k, R.UZset{R.ZWPopN{max, c}}), R.db_of(R.db.upd(db, k, R.UZset{R.ZWPopN{max, c}})))), A.run.upd(db, k, R.UZset{R.ZWPopN{max, c}}), upd_split(db, k, R.UZset{R.ZWPopN{max, c}})))
+    case None{}:
+      {==}
+
 def run_split(c: R.Cmd, +db: R.Db) -> {(R.reply_of(R.exec(c, db)), (eff(c, db), R.db_of(R.exec(c, db)))) == A.run(c, db) : R.Reply & (List<&2, R.Cmd> & R.Db)}:
   match c:
     case R.Ping{}:
@@ -6605,6 +7136,14 @@ def run_split(c: R.Cmd, +db: R.Db) -> {(R.reply_of(R.exec(c, db)), (eff(c, db), 
       sstore_split(R.sets.at(srcs, R.db.now(db), R.db.trie(db)), op, srcs, d, db)
     case R.SMv{+s, +d, +w}:
       out_split(R.exec(R.SMv{s, d, w}, db), A.smove.effect(A.smove.moved(R.smv.of(db, s, d, w)), R.ent.dead(R.db.now(db), R.db.entry(db, d)), s, d, w))
+    case R.ZOp{+op, +ks}:
+      put_split(R.ZOp{op, ks}, R.exec(R.ZOp{op, ks}, db))
+    case R.ZStore{+op, +d, +srcs}:
+      zstore_split(R.zsrcs.at(srcs, R.db.now(db), R.db.trie(db)), op, d, db)
+    case R.ZRangeStore{+d, +s, +q}:
+      zrs_split(KV.read(KV.Val, R.db.trie(db), s, R.db.now(db)), q, d, db)
+    case R.ZMPop{+ks, +max, +c}:
+      zmpop_split(R.lmpop.first(ks, R.lmpop.head(ks, db), db), max, c, db)
     case R.Own{+o}:
       put_split(R.Own{o}, R.exec(R.Own{o}, db))
     case R.Bad{+r}:
@@ -6851,6 +7390,8 @@ def GoodHashV(w: KV.Val, op: R.HWrite, hv: KV.Hash) -> Type:
       Empty
     case KV.VColl{KV.CMems{s0}}:
       Empty
+    case KV.VColl{KV.CZset{z0}}:
+      Empty
     case KV.VStr{u}:
       Empty
 
@@ -6902,6 +7443,8 @@ def GoodListV(w: KV.Val, op: R.LWrite, l: KV.Deq) -> Type:
       Empty
     case KV.VColl{KV.CMems{s0}}:
       Empty
+    case KV.VColl{KV.CZset{z0}}:
+      Empty
     case KV.VStr{u}:
       Empty
 
@@ -6933,6 +7476,8 @@ def GoodMemsV(w: KV.Val, op: R.SWrite, sv: KV.Mems) -> Type:
   match w:
     case KV.VColl{KV.CMems{s0}}:
       {ch_of(R.swrite(op, False{}, s0)) == R.CMems{op, sv} : R.Change} & GoodSOp(op)
+    case KV.VColl{KV.CZset{z0}}:
+      Empty
     case KV.VColl{KV.CHash{h0}}:
       Empty
     case KV.VColl{KV.CList{l0}}:
@@ -6949,6 +7494,55 @@ def GoodMems(m: Maybe<&2, KV.Item<KV.Val>>, op: R.SWrite, sv: KV.Mems) -> Type:
 
 def GoodNewM(ms: List<&2, String>, sv: KV.Mems) -> Type:
   {KV.mems.of(ms) == sv : KV.Mems} & NeS(ms)
+
+# A write of a sorted set: its change replayed. A sorted set changed is
+# one the key held (z0), and the write the change keeps, replayed on z0,
+# makes the same change; the file logs it as a command that parses back
+# to it (GoodZOp): a ZADD whose options and pairs pass ZADD's checks, a
+# ZREM of members, a removal of a range that reads, a pop (of a count
+# that reads). A new sorted set is the ZADD of options without XX that
+# pass the checks, made on an empty sorted set.
+def GoodZOp(op: R.ZWrite) -> Type:
+  match op:
+    case R.ZWAdd{o, ps}:
+      {R.zadd.check(o, ps) == None{} : Maybe<&2, R.Reply>}
+    case R.ZWRem{ms}:
+      NeS(ms)
+    case R.ZWNew{o, ps}:
+      Empty
+    case R.ZWRemRank{a, b}:
+      {Maybe.is_some(&2, R.ZRng, R.zrng.of(1n, a, b)) == True{} : Bool}
+    case R.ZWRemScore{a, b}:
+      {Maybe.is_some(&2, R.ZRng, R.zrng.of(2n, a, b)) == True{} : Bool}
+    case R.ZWRemLex{a, b}:
+      {Maybe.is_some(&2, R.ZRng, R.zrng.of(3n, a, b)) == True{} : Bool}
+    case R.ZWPop{max}:
+      {True{} == True{} : Bool}
+    case R.ZWPopN{max, c}:
+      {Maybe.is_some(&2, Nat, R.lcount(c)) == True{} : Bool}
+
+def GoodZsetV(w: KV.Val, op: R.ZWrite, z: KV.Zset) -> Type:
+  match w:
+    case KV.VColl{KV.CZset{z0}}:
+      {ch_of(R.zwrite(op, False{}, z0)) == R.CZset{op, z} : R.Change} & GoodZOp(op)
+    case KV.VColl{KV.CHash{h0}}:
+      Empty
+    case KV.VColl{KV.CList{l0}}:
+      Empty
+    case KV.VColl{KV.CMems{s0}}:
+      Empty
+    case KV.VStr{u}:
+      Empty
+
+def GoodZset(m: Maybe<&2, KV.Item<KV.Val>>, op: R.ZWrite, z: KV.Zset) -> Type:
+  match m:
+    case Some{KV.Item{w, e}}:
+      GoodZsetV(w, op, z)
+    case None{}:
+      Empty
+
+def GoodNewZ(o: R.ZOpts, ps: List<&2, R.ZPair>, z: KV.Zset) -> Type:
+  {ch_of(R.zadd.out(True{}, o, ps, KV.zset.empty())) == R.CZsetNew{o, ps, z} : R.Change} & ({R.zopts.xx(o) == False{} : Bool} & {R.zadd.check(o, ps) == None{} : Maybe<&2, R.Reply>})
 
 def Good(m: Maybe<&2, KV.Item<KV.Val>>, ch: R.Change) -> Type:
   match ch:
@@ -6978,6 +7572,10 @@ def Good(m: Maybe<&2, KV.Item<KV.Val>>, ch: R.Change) -> Type:
       GoodMems(m, op, sv)
     case R.CMemsNew{ms, sv}:
       GoodNewM(ms, sv)
+    case R.CZset{op, z}:
+      GoodZset(m, op, z)
+    case R.CZsetNew{o, ps, z}:
+      GoodNewZ(o, ps, z)
 
 # a change, made again by its effects at time 0
 def del_replay(+t: KV.Trie<KV.Val>, +k: String, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>, +r: R.Reply, +w: KV.Val, +e: Nat, eq: {KV.entry.at(KV.Val, t, k, KV.hash(k)) == Some{KV.Item{w, e}} : Maybe<&2, KV.Item<KV.Val>>}) -> {Laws.final(R.exec_all([R.Del{[k]}], R.Db{t, n, x, 0n, rr})) == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, 1n+e, r, R.CDel{}))) : R.Db}:
@@ -7093,6 +7691,10 @@ def ch_db(ch: R.Change, +t: KV.Trie<KV.Val>, +k: String, +h: U32, +n: Nat, +x: N
       {==}
     case R.CMemsNew{ms, sv}:
       {==}
+    case R.CZset{op, z}:
+      {==}
+    case R.CZsetNew{o, ps, z}:
+      {==}
 
 def put_db(+t: KV.Trie<KV.Val>, +k: String, +h: U32, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>, +c: Nat, o: R.Out) -> {R.db_of(R.upd.ch(t, k, h, n, x, now, rr, c, R.RNull{}, ch_of(o))) == R.db_of(R.upd.put(t, k, h, n, x, now, rr, c, o)) : R.Db}:
   match o:
@@ -7131,6 +7733,8 @@ def hash_replay_v(w: KV.Val, +t: KV.Trie<KV.Val>, +k: String, +n: Nat, +x: Nat, 
       eq => g => Empty.absurd({Laws.final(R.exec_all(A.ch.effect(k, 1n+e, R.CHash{op, hv}), R.Db{t, n, x, 0n, rr})) == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, 1n+e, r, R.CHash{op, hv}))) : R.Db}, g)
     case KV.VColl{KV.CMems{s0}}:
       eq => g => Empty.absurd({Laws.final(R.exec_all(A.ch.effect(k, 1n+e, R.CHash{op, hv}), R.Db{t, n, x, 0n, rr})) == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, 1n+e, r, R.CHash{op, hv}))) : R.Db}, g)
+    case KV.VColl{KV.CZset{z0}}:
+      eq => g => Empty.absurd({Laws.final(R.exec_all(A.ch.effect(k, 1n+e, R.CHash{op, hv}), R.Db{t, n, x, 0n, rr})) == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, 1n+e, r, R.CHash{op, hv}))) : R.Db}, g)
     case KV.VStr{u}:
       eq => g => Empty.absurd({Laws.final(R.exec_all(A.ch.effect(k, 1n+e, R.CHash{op, hv}), R.Db{t, n, x, 0n, rr})) == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, 1n+e, r, R.CHash{op, hv}))) : R.Db}, g)
 
@@ -7154,6 +7758,8 @@ def hnew_v(w: KV.Val, +ps: List<&2, KV.HPair>, +e: Nat) -> {R.hnew.out(R.hset.go
     case KV.VColl{KV.CList{l0}}:
       {==}
     case KV.VColl{KV.CMems{s0}}:
+      {==}
+    case KV.VColl{KV.CZset{z0}}:
       {==}
 
 def hnew_eval(+t: KV.Trie<KV.Val>, +k: String, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>, +r: R.Reply, +ps: List<&2, KV.HPair>, +hv: KV.Hash, +w: KV.Val, +e: Nat, eq: {KV.entry.at(KV.Val, t, k, KV.hash(k)) == Some{KV.Item{w, e}} : Maybe<&2, KV.Item<KV.Val>>}, gn: {R.hset.ch(True{}, ps, hput.h(R.hset.go(ps, R.HPut{KV.hash.empty(), 0n}))) == R.CHashNew{ps, hv} : R.Change}) -> {Laws.final(R.exec_all([R.Upd{k, R.UHash{R.HWNew{ps}}}], R.Db{t, n, x, 0n, rr})) == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, 1n+e, r, R.CHashNew{ps, hv}))) : R.Db}:
@@ -7202,6 +7808,8 @@ def list_replay_v(w: KV.Val, +t: KV.Trie<KV.Val>, +k: String, +n: Nat, +x: Nat, 
       eq => g => Empty.absurd({Laws.final(R.exec_all(A.ch.effect(k, 1n+e, R.CList{op, l}), R.Db{t, n, x, 0n, rr})) == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, 1n+e, r, R.CList{op, l}))) : R.Db}, g)
     case KV.VColl{KV.CMems{s0}}:
       eq => g => Empty.absurd({Laws.final(R.exec_all(A.ch.effect(k, 1n+e, R.CList{op, l}), R.Db{t, n, x, 0n, rr})) == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, 1n+e, r, R.CList{op, l}))) : R.Db}, g)
+    case KV.VColl{KV.CZset{z0}}:
+      eq => g => Empty.absurd({Laws.final(R.exec_all(A.ch.effect(k, 1n+e, R.CList{op, l}), R.Db{t, n, x, 0n, rr})) == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, 1n+e, r, R.CList{op, l}))) : R.Db}, g)
     case KV.VStr{u}:
       eq => g => Empty.absurd({Laws.final(R.exec_all(A.ch.effect(k, 1n+e, R.CList{op, l}), R.Db{t, n, x, 0n, rr})) == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, 1n+e, r, R.CList{op, l}))) : R.Db}, g)
 
@@ -7231,6 +7839,8 @@ def lnew_v(w: KV.Val, +left: Bool, +xs: List<&2, String>, +e: Nat) -> {R.lnew.of
     case KV.VColl{KV.CList{l0}}:
       {==}
     case KV.VColl{KV.CMems{s0}}:
+      {==}
+    case KV.VColl{KV.CZset{z0}}:
       {==}
 
 def lnew_eval(+t: KV.Trie<KV.Val>, +k: String, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>, +r: R.Reply, +left: Bool, +xs: List<&2, String>, +l: KV.Deq, +w: KV.Val, +e: Nat, eq: {KV.entry.at(KV.Val, t, k, KV.hash(k)) == Some{KV.Item{w, e}} : Maybe<&2, KV.Item<KV.Val>>}, gn: {KV.deq.pushes(left, xs, KV.deq.empty()) == l : KV.Deq}, ne: {List.is_empty(&2, String, xs) == False{} : Bool}) -> {Laws.final(R.exec_all([R.Upd{k, R.UList{R.LWNew{left, xs}}}], R.Db{t, n, x, 0n, rr})) == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, 1n+e, r, R.CListNew{left, xs, l}))) : R.Db}:
@@ -7274,6 +7884,8 @@ def mems_replay_v(w: KV.Val, +t: KV.Trie<KV.Val>, +k: String, +n: Nat, +x: Nat, 
   match w:
     case KV.VColl{KV.CMems{+s0}}:
       eq => g => mems_replay_g(t, k, n, x, now, rr, r, op, sv, s0, e, eq, g)
+    case KV.VColl{KV.CZset{z0}}:
+      eq => g => Empty.absurd({Laws.final(R.exec_all(A.ch.effect(k, 1n+e, R.CMems{op, sv}), R.Db{t, n, x, 0n, rr})) == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, 1n+e, r, R.CMems{op, sv}))) : R.Db}, g)
     case KV.VColl{KV.CHash{h0}}:
       eq => g => Empty.absurd({Laws.final(R.exec_all(A.ch.effect(k, 1n+e, R.CMems{op, sv}), R.Db{t, n, x, 0n, rr})) == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, 1n+e, r, R.CMems{op, sv}))) : R.Db}, g)
     case KV.VColl{KV.CList{l0}}:
@@ -7301,6 +7913,8 @@ def snew_v(w: KV.Val, +ms: List<&2, String>, +e: Nat) -> {R.snew.of(List.is_empt
       {==}
     case KV.VColl{KV.CMems{s0}}:
       {==}
+    case KV.VColl{KV.CZset{z0}}:
+      {==}
 
 def snew_eval(+t: KV.Trie<KV.Val>, +k: String, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>, +r: R.Reply, +ms: List<&2, String>, +sv: KV.Mems, +w: KV.Val, +e: Nat, eq: {KV.entry.at(KV.Val, t, k, KV.hash(k)) == Some{KV.Item{w, e}} : Maybe<&2, KV.Item<KV.Val>>}, gn: {KV.mems.of(ms) == sv : KV.Mems}, ne: {List.is_empty(&2, String, ms) == False{} : Bool}) -> {Laws.final(R.exec_all([R.Upd{k, R.UMems{R.SWNew{ms}}}], R.Db{t, n, x, 0n, rr})) == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, 1n+e, r, R.CMemsNew{ms, sv}))) : R.Db}:
   %fin_cons(R.Upd{k, R.UMems{R.SWNew{ms}}}, Nil{}, R.Db{t, n, x, 0n, rr}) : {_ == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, 1n+e, r, R.CMemsNew{ms, sv}))) : R.Db}
@@ -7325,6 +7939,85 @@ def snew_replay(m: Maybe<&2, KV.Item<KV.Val>>, +t: KV.Trie<KV.Val>, +k: String, 
       eq => g => snew_eval_g(t, k, n, x, now, rr, r, ms, sv, w, e, eq, g)
     case None{}:
       eq => g => snew_sadd_g(t, k, n, x, now, rr, r, ms, sv, eq, g)
+
+# a sorted set changed, made again by its write at time 0
+def zset_replay(+t: KV.Trie<KV.Val>, +k: String, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>, +r: R.Reply, +op: R.ZWrite, +z: KV.Zset, +z0: KV.Zset, +e: Nat, eq: {KV.entry.at(KV.Val, t, k, KV.hash(k)) == Some{KV.Item{KV.VColl{KV.CZset{z0}}, e}} : Maybe<&2, KV.Item<KV.Val>>}, gz: {ch_of(R.zwrite(op, False{}, z0)) == R.CZset{op, z} : R.Change}) -> {Laws.final(R.exec_all(A.ch.effect(k, 1n+e, R.CZset{op, z}), R.Db{t, n, x, 0n, rr})) == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, 1n+e, r, R.CZset{op, z}))) : R.Db}:
+  %fin_cons(R.Upd{k, R.UZset{op}}, Nil{}, R.Db{t, n, x, 0n, rr}) : {_ == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, 1n+e, r, R.CZset{op, z}))) : R.Db}
+  %Equal.sym(Maybe<&2, KV.Item<KV.Val>>, KV.entry.at(KV.Val, t, k, KV.hash(k)), Some{KV.Item{KV.VColl{KV.CZset{z0}}, e}}, eq) : {R.db_of(R.upd.put(t, k, KV.hash(k), n, x, 0n, rr, R.ent.code(_), R.upd.v(R.UZset{op}, 0n, R.ent.live(0n, _)))) == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, 1n+e, r, R.CZset{op, z}))) : R.Db}
+  %Equal.sym(Maybe<&2, KV.Item<KV.Val>>, R.ent.live(0n, Some{KV.Item{KV.VColl{KV.CZset{z0}}, e}}), Some{KV.Item{KV.VColl{KV.CZset{z0}}, e}}, live0_ent(Some{KV.Item{KV.VColl{KV.CZset{z0}}, e}})) : {R.db_of(R.upd.put(t, k, KV.hash(k), n, x, 0n, rr, 1n+e, R.upd.v(R.UZset{op}, 0n, _))) == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, 1n+e, r, R.CZset{op, z}))) : R.Db}
+  %put_db(t, k, KV.hash(k), n, x, 0n, rr, 1n+e, R.zwrite(op, False{}, z0)) : {_ == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, 1n+e, r, R.CZset{op, z}))) : R.Db}
+  %Equal.sym(R.Change, ch_of(R.zwrite(op, False{}, z0)), R.CZset{op, z}, gz) : {R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, 0n, rr, 1n+e, R.RNull{}, _)) == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, 1n+e, r, R.CZset{op, z}))) : R.Db}
+  {==}
+
+def zset_replay_g(+t: KV.Trie<KV.Val>, +k: String, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>, +r: R.Reply, +op: R.ZWrite, +z: KV.Zset, +z0: KV.Zset, +e: Nat, eq: {KV.entry.at(KV.Val, t, k, KV.hash(k)) == Some{KV.Item{KV.VColl{KV.CZset{z0}}, e}} : Maybe<&2, KV.Item<KV.Val>>}, g: {ch_of(R.zwrite(op, False{}, z0)) == R.CZset{op, z} : R.Change} & GoodZOp(op)) -> {Laws.final(R.exec_all(A.ch.effect(k, 1n+e, R.CZset{op, z}), R.Db{t, n, x, 0n, rr})) == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, 1n+e, r, R.CZset{op, z}))) : R.Db}:
+  (gz, go) = g
+  zset_replay(t, k, n, x, now, rr, r, op, z, z0, e, eq, gz)
+
+def zset_replay_v(w: KV.Val, +t: KV.Trie<KV.Val>, +k: String, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>, +r: R.Reply, +op: R.ZWrite, +z: KV.Zset, +e: Nat) -> {KV.entry.at(KV.Val, t, k, KV.hash(k)) == Some{KV.Item{w, e}} : Maybe<&2, KV.Item<KV.Val>>} -> GoodZsetV(w, op, z) -> {Laws.final(R.exec_all(A.ch.effect(k, 1n+e, R.CZset{op, z}), R.Db{t, n, x, 0n, rr})) == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, 1n+e, r, R.CZset{op, z}))) : R.Db}:
+  match w:
+    case KV.VColl{KV.CZset{+z0}}:
+      eq => g => zset_replay_g(t, k, n, x, now, rr, r, op, z, z0, e, eq, g)
+    case KV.VColl{KV.CHash{h0}}:
+      eq => g => Empty.absurd({Laws.final(R.exec_all(A.ch.effect(k, 1n+e, R.CZset{op, z}), R.Db{t, n, x, 0n, rr})) == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, 1n+e, r, R.CZset{op, z}))) : R.Db}, g)
+    case KV.VColl{KV.CList{l0}}:
+      eq => g => Empty.absurd({Laws.final(R.exec_all(A.ch.effect(k, 1n+e, R.CZset{op, z}), R.Db{t, n, x, 0n, rr})) == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, 1n+e, r, R.CZset{op, z}))) : R.Db}, g)
+    case KV.VColl{KV.CMems{s0}}:
+      eq => g => Empty.absurd({Laws.final(R.exec_all(A.ch.effect(k, 1n+e, R.CZset{op, z}), R.Db{t, n, x, 0n, rr})) == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, 1n+e, r, R.CZset{op, z}))) : R.Db}, g)
+    case KV.VStr{u}:
+      eq => g => Empty.absurd({Laws.final(R.exec_all(A.ch.effect(k, 1n+e, R.CZset{op, z}), R.Db{t, n, x, 0n, rr})) == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, 1n+e, r, R.CZset{op, z}))) : R.Db}, g)
+
+# a new sorted set, made again at time 0: by its ZADD where the trie held
+# no entry for the key, by the script of a new sorted set where it held
+# one, whatever the entry held
+def znew_ch(o: R.Out) -> {ch_of(o) == ch_of(R.znew.out(o)) : R.Change}:
+  match o:
+    case R.Out{r, ch}:
+      {==}
+
+def znew_v(w: KV.Val, +o: R.ZOpts, +ps: List<&2, R.ZPair>, +e: Nat) -> {R.znew.out(R.zadd.out(True{}, o, ps, KV.zset.empty())) == R.upd.v(R.UZset{R.ZWNew{o, ps}}, 0n, Some{KV.Item{w, e}}) : R.Out}:
+  match w:
+    case KV.VStr{u}:
+      {==}
+    case KV.VColl{KV.CHash{h0}}:
+      {==}
+    case KV.VColl{KV.CList{l0}}:
+      {==}
+    case KV.VColl{KV.CMems{s0}}:
+      {==}
+    case KV.VColl{KV.CZset{z0}}:
+      {==}
+
+def znew_zadd(+t: KV.Trie<KV.Val>, +k: String, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>, +r: R.Reply, +o: R.ZOpts, +ps: List<&2, R.ZPair>, +z: KV.Zset, eq: {KV.entry.at(KV.Val, t, k, KV.hash(k)) == None{} : Maybe<&2, KV.Item<KV.Val>>}, gn: {ch_of(R.zadd.out(True{}, o, ps, KV.zset.empty())) == R.CZsetNew{o, ps, z} : R.Change}) -> {Laws.final(R.exec_all([R.Upd{k, R.UZset{R.ZWAdd{o, ps}}}], R.Db{t, n, x, 0n, rr})) == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, 0n, r, R.CZsetNew{o, ps, z}))) : R.Db}:
+  %fin_cons(R.Upd{k, R.UZset{R.ZWAdd{o, ps}}}, Nil{}, R.Db{t, n, x, 0n, rr}) : {_ == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, 0n, r, R.CZsetNew{o, ps, z}))) : R.Db}
+  %Equal.sym(Maybe<&2, KV.Item<KV.Val>>, KV.entry.at(KV.Val, t, k, KV.hash(k)), None{}, eq) : {R.db_of(R.upd.put(t, k, KV.hash(k), n, x, 0n, rr, R.ent.code(_), R.upd.v(R.UZset{R.ZWAdd{o, ps}}, 0n, R.ent.live(0n, _)))) == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, 0n, r, R.CZsetNew{o, ps, z}))) : R.Db}
+  %put_db(t, k, KV.hash(k), n, x, 0n, rr, 0n, R.zadd.out(True{}, o, ps, KV.zset.empty())) : {_ == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, 0n, r, R.CZsetNew{o, ps, z}))) : R.Db}
+  %Equal.sym(R.Change, ch_of(R.zadd.out(True{}, o, ps, KV.zset.empty())), R.CZsetNew{o, ps, z}, gn) : {R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, 0n, rr, 0n, R.RNull{}, _)) == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, 0n, r, R.CZsetNew{o, ps, z}))) : R.Db}
+  {==}
+
+def znew_eval(+t: KV.Trie<KV.Val>, +k: String, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>, +r: R.Reply, +o: R.ZOpts, +ps: List<&2, R.ZPair>, +z: KV.Zset, +w: KV.Val, +e: Nat, eq: {KV.entry.at(KV.Val, t, k, KV.hash(k)) == Some{KV.Item{w, e}} : Maybe<&2, KV.Item<KV.Val>>}, gn: {ch_of(R.zadd.out(True{}, o, ps, KV.zset.empty())) == R.CZsetNew{o, ps, z} : R.Change}) -> {Laws.final(R.exec_all([R.Upd{k, R.UZset{R.ZWNew{o, ps}}}], R.Db{t, n, x, 0n, rr})) == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, 1n+e, r, R.CZsetNew{o, ps, z}))) : R.Db}:
+  %fin_cons(R.Upd{k, R.UZset{R.ZWNew{o, ps}}}, Nil{}, R.Db{t, n, x, 0n, rr}) : {_ == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, 1n+e, r, R.CZsetNew{o, ps, z}))) : R.Db}
+  %Equal.sym(Maybe<&2, KV.Item<KV.Val>>, KV.entry.at(KV.Val, t, k, KV.hash(k)), Some{KV.Item{w, e}}, eq) : {R.db_of(R.upd.put(t, k, KV.hash(k), n, x, 0n, rr, R.ent.code(_), R.upd.v(R.UZset{R.ZWNew{o, ps}}, 0n, R.ent.live(0n, _)))) == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, 1n+e, r, R.CZsetNew{o, ps, z}))) : R.Db}
+  %Equal.sym(Maybe<&2, KV.Item<KV.Val>>, R.ent.live(0n, Some{KV.Item{w, e}}), Some{KV.Item{w, e}}, live0_ent(Some{KV.Item{w, e}})) : {R.db_of(R.upd.put(t, k, KV.hash(k), n, x, 0n, rr, 1n+e, R.upd.v(R.UZset{R.ZWNew{o, ps}}, 0n, _))) == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, 1n+e, r, R.CZsetNew{o, ps, z}))) : R.Db}
+  %znew_v(w, o, ps, e) : {R.db_of(R.upd.put(t, k, KV.hash(k), n, x, 0n, rr, 1n+e, _)) == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, 1n+e, r, R.CZsetNew{o, ps, z}))) : R.Db}
+  %put_db(t, k, KV.hash(k), n, x, 0n, rr, 1n+e, R.znew.out(R.zadd.out(True{}, o, ps, KV.zset.empty()))) : {_ == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, 1n+e, r, R.CZsetNew{o, ps, z}))) : R.Db}
+  %znew_ch(R.zadd.out(True{}, o, ps, KV.zset.empty())) : {R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, 0n, rr, 1n+e, R.RNull{}, _)) == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, 1n+e, r, R.CZsetNew{o, ps, z}))) : R.Db}
+  %Equal.sym(R.Change, ch_of(R.zadd.out(True{}, o, ps, KV.zset.empty())), R.CZsetNew{o, ps, z}, gn) : {R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, 0n, rr, 1n+e, R.RNull{}, _)) == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, 1n+e, r, R.CZsetNew{o, ps, z}))) : R.Db}
+  {==}
+
+def znew_zadd_g(+t: KV.Trie<KV.Val>, +k: String, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>, +r: R.Reply, +o: R.ZOpts, +ps: List<&2, R.ZPair>, +z: KV.Zset, eq: {KV.entry.at(KV.Val, t, k, KV.hash(k)) == None{} : Maybe<&2, KV.Item<KV.Val>>}, g: GoodNewZ(o, ps, z)) -> {Laws.final(R.exec_all([R.Upd{k, R.UZset{R.ZWAdd{o, ps}}}], R.Db{t, n, x, 0n, rr})) == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, 0n, r, R.CZsetNew{o, ps, z}))) : R.Db}:
+  (gn, gr) = g
+  znew_zadd(t, k, n, x, now, rr, r, o, ps, z, eq, gn)
+
+def znew_eval_g(+t: KV.Trie<KV.Val>, +k: String, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>, +r: R.Reply, +o: R.ZOpts, +ps: List<&2, R.ZPair>, +z: KV.Zset, +w: KV.Val, +e: Nat, eq: {KV.entry.at(KV.Val, t, k, KV.hash(k)) == Some{KV.Item{w, e}} : Maybe<&2, KV.Item<KV.Val>>}, g: GoodNewZ(o, ps, z)) -> {Laws.final(R.exec_all([R.Upd{k, R.UZset{R.ZWNew{o, ps}}}], R.Db{t, n, x, 0n, rr})) == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, 1n+e, r, R.CZsetNew{o, ps, z}))) : R.Db}:
+  (gn, gr) = g
+  znew_eval(t, k, n, x, now, rr, r, o, ps, z, w, e, eq, gn)
+
+def znew_replay(m: Maybe<&2, KV.Item<KV.Val>>, +t: KV.Trie<KV.Val>, +k: String, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>, +r: R.Reply, +o: R.ZOpts, +ps: List<&2, R.ZPair>, +z: KV.Zset) -> {KV.entry.at(KV.Val, t, k, KV.hash(k)) == m : Maybe<&2, KV.Item<KV.Val>>} -> GoodNewZ(o, ps, z) -> {Laws.final(R.exec_all(A.ch.effect(k, R.ent.code(m), R.CZsetNew{o, ps, z}), R.Db{t, n, x, 0n, rr})) == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, R.ent.code(m), r, R.CZsetNew{o, ps, z}))) : R.Db}:
+  match m:
+    case Some{KV.Item{+w, +e}}:
+      eq => g => znew_eval_g(t, k, n, x, now, rr, r, o, ps, z, w, e, eq, g)
+    case None{}:
+      eq => g => znew_zadd_g(t, k, n, x, now, rr, r, o, ps, z, eq, g)
 
 def ch_replay(ch: R.Change, m: Maybe<&2, KV.Item<KV.Val>>, +t: KV.Trie<KV.Val>, +k: String, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>, +r: R.Reply) -> {KV.entry.at(KV.Val, t, k, KV.hash(k)) == m : Maybe<&2, KV.Item<KV.Val>>} -> Good(m, ch) -> {Laws.final(R.exec_all(A.ch.effect(k, R.ent.code(m), ch), R.Db{t, n, x, 0n, rr})) == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, R.ent.code(m), r, ch))) : R.Db}:
   match ch m:
@@ -7374,6 +8067,12 @@ def ch_replay(ch: R.Change, m: Maybe<&2, KV.Item<KV.Val>>, +t: KV.Trie<KV.Val>, 
       eq => g => Empty.absurd({Laws.final(R.exec_all(A.ch.effect(k, R.ent.code(None{}), R.CMems{op, sv}), R.Db{t, n, x, 0n, rr})) == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, R.ent.code(None{}), r, R.CMems{op, sv}))) : R.Db}, g)
     case R.CMemsNew{+ms, +sv} _:
       eq => g => snew_replay(m, t, k, n, x, now, rr, r, ms, sv)(eq)(g)
+    case R.CZset{+op, +z} Some{KV.Item{w, +e}}:
+      eq => g => zset_replay_v(w, t, k, n, x, now, rr, r, op, z, e)(eq)(g)
+    case R.CZset{op, z} None{}:
+      eq => g => Empty.absurd({Laws.final(R.exec_all(A.ch.effect(k, R.ent.code(None{}), R.CZset{op, z}), R.Db{t, n, x, 0n, rr})) == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, R.ent.code(None{}), r, R.CZset{op, z}))) : R.Db}, g)
+    case R.CZsetNew{+o, +ps, +z} _:
+      eq => g => znew_replay(m, t, k, n, x, now, rr, r, o, ps, z)(eq)(g)
 
 # an update's effects make its change again
 def out_replay(o: R.Out, +m: Maybe<&2, KV.Item<KV.Val>>, +t: KV.Trie<KV.Val>, +k: String, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>) -> {KV.entry.at(KV.Val, t, k, KV.hash(k)) == m : Maybe<&2, KV.Item<KV.Val>>} -> Good(m, ch_of(o)) -> {Laws.final(R.exec_all(A.upd.effect(k, R.ent.code(m), o), R.Db{t, n, x, 0n, rr})) == R.db.at(0n, R.db_of(R.upd.put(t, k, KV.hash(k), n, x, now, rr, R.ent.code(m), o))) : R.Db}:
@@ -7707,6 +8406,8 @@ def good_coll_hash(op: R.HWrite, c: KV.Coll, -e: Nat) -> Good(Some{KV.Item{KV.VC
       hw_wrong_good(op, Some{KV.Item{KV.VColl{KV.CList{l}}, e}})
     case KV.CMems{+sv}:
       hw_wrong_good(op, Some{KV.Item{KV.VColl{KV.CMems{sv}}, e}})
+    case KV.CZset{+z}:
+      hw_wrong_good(op, Some{KV.Item{KV.VColl{KV.CZset{z}}, e}})
 
 # A write of a list: of a key not there (an empty list made fresh) none
 # or a new list; of a key that holds another kind, none, or the new list
@@ -7809,6 +8510,10 @@ def LShape(op: R.LWrite, ch: R.Change) -> Type:
       Empty
     case R.CMemsNew{ms, sv}:
       Empty
+    case R.CZset{zop, z}:
+      Empty
+    case R.CZsetNew{o, ps, z}:
+      Empty
 
 def op_eq(-op: R.LWrite, -op2: R.LWrite, -l: KV.Deq, -l0: KV.Deq, gl: {op2 == op : R.LWrite}, eq: {ch_of(R.lwrite(op, False{}, l0)) == R.CList{op2, l} : R.Change}) -> {ch_of(R.lwrite(op2, False{}, l0)) == R.CList{op2, l} : R.Change}:
   %Equal.sym(R.LWrite, op2, op, gl) : {ch_of(R.lwrite(_, False{}, l0)) == R.CList{op2, l} : R.Change}
@@ -7846,6 +8551,10 @@ def shape_good(ch: R.Change, -op: R.LWrite, -l0: KV.Deq, -e: Nat) -> {ch_of(R.lw
       eq => sh => Empty.absurd(Good(Some{KV.Item{KV.VColl{KV.CList{l0}}, e}}, R.CMems{sop, sv}), sh)
     case R.CMemsNew{ms, sv}:
       eq => sh => Empty.absurd(Good(Some{KV.Item{KV.VColl{KV.CList{l0}}, e}}, R.CMemsNew{ms, sv}), sh)
+    case R.CZset{zop, z}:
+      eq => sh => Empty.absurd(Good(Some{KV.Item{KV.VColl{KV.CList{l0}}, e}}, R.CZset{zop, z}), sh)
+    case R.CZsetNew{o, ps, z}:
+      eq => sh => Empty.absurd(Good(Some{KV.Item{KV.VColl{KV.CList{l0}}, e}}, R.CZsetNew{o, ps, z}), sh)
 
 def some_ok_n(-m: Maybe<&2, Nat>, -a: Nat, e: {m == Some{a} : Maybe<&2, Nat>}) -> {Maybe.is_some(&2, Nat, m) == True{} : Bool}:
   %Equal.sym(Maybe<&2, Nat>, m, Some{a}, e) : {Maybe.is_some(&2, Nat, _) == True{} : Bool}
@@ -8016,6 +8725,8 @@ def good_coll_list(op: R.LWrite, c: KV.Coll, -e: Nat) -> Good(Some{KV.Item{KV.VC
       lw_wrong_good(op, Some{KV.Item{KV.VColl{KV.CHash{h}}, e}})
     case KV.CMems{+sv}:
       lw_wrong_good(op, Some{KV.Item{KV.VColl{KV.CMems{sv}}, e}})
+    case KV.CZset{+z}:
+      lw_wrong_good(op, Some{KV.Item{KV.VColl{KV.CZset{z}}, e}})
 
 # A write of a set: of a key not there (an empty set made fresh) none or
 # a new set; of a key that holds another kind, none, or the new set of
@@ -8163,6 +8874,245 @@ def good_coll_set(op: R.SWrite, c: KV.Coll, -e: Nat) -> Good(Some{KV.Item{KV.VCo
       sw_wrong_good(op, Some{KV.Item{KV.VColl{KV.CHash{h}}, e}})
     case KV.CList{+l}:
       sw_wrong_good(op, Some{KV.Item{KV.VColl{KV.CList{l}}, e}})
+    case KV.CZset{+z}:
+      sw_wrong_good(op, Some{KV.Item{KV.VColl{KV.CZset{z}}, e}})
+
+# A write of a sorted set: of a key not there (an empty sorted set made
+# fresh) none or a new sorted set (ZADD, or the script of one: never with
+# XX, which adds nothing to an empty sorted set); of a key that holds
+# another kind, none, or the new sorted set of ZWNew; of a sorted set the
+# key held (z0): none, the key deleted (its last elements taken), or z0
+# changed by the write, which makes the change again
+def zrem_empty(ms: List<&2, String>) -> {R.ZDel{KV.zset.empty(), 0n} == R.zrem.go(ms, R.ZDel{KV.zset.empty(), 0n}) : R.ZDel}:
+  match ms:
+    case Nil{}:
+      {==}
+    case Con{+m, +rest}:
+      zrem_empty(rest)
+
+def zadd_xx_go(ps: List<&2, R.ZPair>, +nx: Bool, +gt: Bool, +lt: Bool, +ch: Bool, +incr: Bool, +last: F.F64) -> {R.ZAdd{KV.zset.empty(), 0n, 0n, 0n, last} == R.zadd.go(ps, R.ZOpts{nx, True{}, gt, lt, ch, incr}, R.ZAdd{KV.zset.empty(), 0n, 0n, 0n, last}) : R.ZAdd}:
+  match ps:
+    case Nil{}:
+      {==}
+    case Con{R.ZPair{s, m}, rest}:
+      zadd_xx_go(rest, nx, gt, lt, ch, incr, last)
+
+def zadd_zero(st: R.ZAdd) -> Nat:
+  match st:
+    case R.ZAdd{z, added, upd, done, last}:
+      Nat.add(added, upd)
+    case R.ZAddNaN{}:
+      1n
+
+def zadd_new_xx_b(xx: Bool, +nx: Bool, +gt: Bool, +lt: Bool, +ch: Bool, +incr: Bool, +ps: List<&2, R.ZPair>, +z: KV.Zset, +added: Nat, +upd: Nat, +done: Nat, +last: F.F64) -> {R.zadd.go(ps, R.ZOpts{nx, xx, gt, lt, ch, incr}, R.ZAdd{KV.zset.empty(), 0n, 0n, 0n, F.F64{0n, 0n}}) == R.ZAdd{z, added, upd, done, last} : R.ZAdd} -> {False{} == Nat.is_eq(Nat.add(added, upd), 0n) : Bool} -> {xx == False{} : Bool}:
+  match xx:
+    case False{}:
+      eg => en => {==}
+    case True{}:
+      eg => en => Empty.absurd({True{} == False{} : Bool}, false_true(Equal.trans(Bool, False{}, Nat.is_eq(Nat.add(added, upd), 0n), True{}, en, Equal.cong(Nat, Bool, q => Nat.is_eq(q, 0n), Nat.add(added, upd), 0n, Equal.sym(Nat, 0n, Nat.add(added, upd), Equal.cong(R.ZAdd, Nat, q => zadd_zero(q), R.ZAdd{KV.zset.empty(), 0n, 0n, 0n, F.F64{0n, 0n}}, R.ZAdd{z, added, upd, done, last}, Equal.trans(R.ZAdd, R.ZAdd{KV.zset.empty(), 0n, 0n, 0n, F.F64{0n, 0n}}, R.zadd.go(ps, R.ZOpts{nx, True{}, gt, lt, ch, incr}, R.ZAdd{KV.zset.empty(), 0n, 0n, 0n, F.F64{0n, 0n}}), R.ZAdd{z, added, upd, done, last}, zadd_xx_go(ps, nx, gt, lt, ch, incr, F.F64{0n, 0n}), eg)))))))
+
+def zadd_new_xx(o: R.ZOpts, +ps: List<&2, R.ZPair>, +z: KV.Zset, +added: Nat, +upd: Nat, +done: Nat, +last: F.F64) -> {R.zadd.go(ps, o, R.ZAdd{KV.zset.empty(), 0n, 0n, 0n, F.F64{0n, 0n}}) == R.ZAdd{z, added, upd, done, last} : R.ZAdd} -> {False{} == Nat.is_eq(Nat.add(added, upd), 0n) : Bool} -> {R.zopts.xx(o) == False{} : Bool}:
+  match o:
+    case R.ZOpts{+nx, xx, +gt, +lt, +ch, +incr}:
+      zadd_new_xx_b(xx, nx, gt, lt, ch, incr, ps, z, added, upd, done, last)
+
+# ZADD's change, when it passes its checks and adds or changes elements
+def zadd_eq(+fresh: Bool, +o: R.ZOpts, +ps: List<&2, R.ZPair>, +z0: KV.Zset, +z: KV.Zset, +added: Nat, +upd: Nat, +done: Nat, +last: F.F64, ec: {R.zadd.check(o, ps) == None{} : Maybe<&2, R.Reply>}, eg: {R.zadd.go(ps, o, R.ZAdd{z0, 0n, 0n, 0n, F.F64{0n, 0n}}) == R.ZAdd{z, added, upd, done, last} : R.ZAdd}, en: {False{} == Nat.is_eq(Nat.add(added, upd), 0n) : Bool}) -> {ch_of(R.zadd.out(fresh, o, ps, z0)) == R.zadd.ch(False{}, fresh, o, ps, z) : R.Change}:
+  %Equal.sym(Maybe<&2, R.Reply>, R.zadd.check(o, ps), None{}, ec) : {ch_of(R.zadd.fin(_, fresh, o, ps, z0)) == R.zadd.ch(False{}, fresh, o, ps, z) : R.Change}
+  %Equal.sym(R.ZAdd, R.zadd.go(ps, o, R.ZAdd{z0, 0n, 0n, 0n, F.F64{0n, 0n}}), R.ZAdd{z, added, upd, done, last}, eg) : {ch_of(R.zadd.res(_, fresh, o, ps)) == R.zadd.ch(False{}, fresh, o, ps, z) : R.Change}
+  %en : {R.zadd.ch(_, fresh, o, ps, z) == R.zadd.ch(False{}, fresh, o, ps, z) : R.Change}
+  {==}
+
+def zadd_fresh_ch(none: Bool, +o: R.ZOpts, +ps: List<&2, R.ZPair>, +z: KV.Zset, +added: Nat, +upd: Nat, +done: Nat, +last: F.F64, -m: Maybe<&2, KV.Item<KV.Val>>) -> {R.zadd.check(o, ps) == None{} : Maybe<&2, R.Reply>} -> {R.zadd.go(ps, o, R.ZAdd{KV.zset.empty(), 0n, 0n, 0n, F.F64{0n, 0n}}) == R.ZAdd{z, added, upd, done, last} : R.ZAdd} -> {none == Nat.is_eq(Nat.add(added, upd), 0n) : Bool} -> Good(m, R.zadd.ch(none, True{}, o, ps, z)):
+  match none:
+    case True{}:
+      ec => eg => en => {==}
+    case False{}:
+      +ec => +eg => +en => (zadd_eq(True{}, o, ps, KV.zset.empty(), z, added, upd, done, last, ec, eg, en), (zadd_new_xx(o, ps, z, added, upd, done, last)(eg)(en), ec))
+
+def zadd_fresh_res(st: R.ZAdd, +o: R.ZOpts, +ps: List<&2, R.ZPair>, -m: Maybe<&2, KV.Item<KV.Val>>) -> {R.zadd.check(o, ps) == None{} : Maybe<&2, R.Reply>} -> {R.zadd.go(ps, o, R.ZAdd{KV.zset.empty(), 0n, 0n, 0n, F.F64{0n, 0n}}) == st : R.ZAdd} -> Good(m, ch_of(R.zadd.res(st, True{}, o, ps))):
+  match st:
+    case R.ZAdd{+z, +added, +upd, +done, +last}:
+      ec => eg => zadd_fresh_ch(Nat.is_eq(Nat.add(added, upd), 0n), o, ps, z, added, upd, done, last, m)(ec)(eg)({==})
+    case R.ZAddNaN{}:
+      ec => eg => {==}
+
+def zadd_fresh_fin(c: Maybe<&2, R.Reply>, +o: R.ZOpts, +ps: List<&2, R.ZPair>, -m: Maybe<&2, KV.Item<KV.Val>>) -> {R.zadd.check(o, ps) == c : Maybe<&2, R.Reply>} -> Good(m, ch_of(R.zadd.fin(c, True{}, o, ps, KV.zset.empty()))):
+  match c:
+    case Some{r}:
+      ec => {==}
+    case None{}:
+      ec => zadd_fresh_res(R.zadd.go(ps, o, R.ZAdd{KV.zset.empty(), 0n, 0n, 0n, F.F64{0n, 0n}}), o, ps, m)(ec)({==})
+
+def zadd_fresh(+o: R.ZOpts, +ps: List<&2, R.ZPair>, -m: Maybe<&2, KV.Item<KV.Val>>) -> Good(m, ch_of(R.zadd.out(True{}, o, ps, KV.zset.empty()))):
+  zadd_fresh_fin(R.zadd.check(o, ps), o, ps, m)({==})
+
+def znew_good(+o: R.ZOpts, +ps: List<&2, R.ZPair>, -m: Maybe<&2, KV.Item<KV.Val>>) -> Good(m, ch_of(R.znew.out(R.zadd.out(True{}, o, ps, KV.zset.empty())))):
+  %znew_ch(R.zadd.out(True{}, o, ps, KV.zset.empty())) : Good(m, _)
+  zadd_fresh(o, ps, m)
+
+def zremr_none_good(mr: Maybe<&2, R.ZRng>, +k: Nat, -m: Maybe<&2, KV.Item<KV.Val>>) -> Good(m, ch_of(R.zremr.none(mr, k))):
+  match mr:
+    case Some{r}:
+      {==}
+    case None{}:
+      {==}
+
+def zpop_none_good(mc: Maybe<&2, Nat>, -m: Maybe<&2, KV.Item<KV.Val>>) -> Good(m, ch_of(R.zpop.none(mc))):
+  match mc:
+    case Some{c}:
+      {==}
+    case None{}:
+      {==}
+
+def zw_fresh_good(op: R.ZWrite, -m: Maybe<&2, KV.Item<KV.Val>>) -> Good(m, ch_of(R.zwrite(op, True{}, KV.zset.empty()))):
+  match op:
+    case R.ZWAdd{+o, +ps}:
+      zadd_fresh(o, ps, m)
+    case R.ZWRem{+ms}:
+      %zrem_empty(ms) : Good(m, ch_of(R.zrem.out(_, ms)))
+      {==}
+    case R.ZWNew{+o, +ps}:
+      znew_good(o, ps, m)
+    case R.ZWRemRank{+a, +b}:
+      zremr_none_good(R.zrng.of(1n, a, b), 1n, m)
+    case R.ZWRemScore{+a, +b}:
+      zremr_none_good(R.zrng.of(2n, a, b), 2n, m)
+    case R.ZWRemLex{+a, +b}:
+      zremr_none_good(R.zrng.of(3n, a, b), 3n, m)
+    case R.ZWPop{max}:
+      {==}
+    case R.ZWPopN{max, +c}:
+      zpop_none_good(R.lcount(c), m)
+
+def zw_wrong_good(op: R.ZWrite, -m: Maybe<&2, KV.Item<KV.Val>>) -> Good(m, ch_of(R.zwrite.wrong(op))):
+  match op:
+    case R.ZWAdd{o, ps}:
+      {==}
+    case R.ZWRem{ms}:
+      {==}
+    case R.ZWNew{+o, +ps}:
+      znew_good(o, ps, m)
+    case R.ZWRemRank{a, b}:
+      {==}
+    case R.ZWRemScore{a, b}:
+      {==}
+    case R.ZWRemLex{a, b}:
+      {==}
+    case R.ZWPop{max}:
+      {==}
+    case R.ZWPopN{max, c}:
+      {==}
+
+def zadd_old_ch(none: Bool, +o: R.ZOpts, +ps: List<&2, R.ZPair>, +z: KV.Zset, +added: Nat, +upd: Nat, +done: Nat, +last: F.F64, +z0: KV.Zset, -e: Nat) -> {R.zadd.check(o, ps) == None{} : Maybe<&2, R.Reply>} -> {R.zadd.go(ps, o, R.ZAdd{z0, 0n, 0n, 0n, F.F64{0n, 0n}}) == R.ZAdd{z, added, upd, done, last} : R.ZAdd} -> {none == Nat.is_eq(Nat.add(added, upd), 0n) : Bool} -> Good(Some{KV.Item{KV.VColl{KV.CZset{z0}}, e}}, R.zadd.ch(none, False{}, o, ps, z)):
+  match none:
+    case True{}:
+      ec => eg => en => {==}
+    case False{}:
+      +ec => eg => en => (zadd_eq(False{}, o, ps, z0, z, added, upd, done, last, ec, eg, en), ec)
+
+def zadd_old_res(st: R.ZAdd, +o: R.ZOpts, +ps: List<&2, R.ZPair>, +z0: KV.Zset, -e: Nat) -> {R.zadd.check(o, ps) == None{} : Maybe<&2, R.Reply>} -> {R.zadd.go(ps, o, R.ZAdd{z0, 0n, 0n, 0n, F.F64{0n, 0n}}) == st : R.ZAdd} -> Good(Some{KV.Item{KV.VColl{KV.CZset{z0}}, e}}, ch_of(R.zadd.res(st, False{}, o, ps))):
+  match st:
+    case R.ZAdd{+z, +added, +upd, +done, +last}:
+      ec => eg => zadd_old_ch(Nat.is_eq(Nat.add(added, upd), 0n), o, ps, z, added, upd, done, last, z0, e)(ec)(eg)({==})
+    case R.ZAddNaN{}:
+      ec => eg => {==}
+
+def zadd_old_fin(c: Maybe<&2, R.Reply>, +o: R.ZOpts, +ps: List<&2, R.ZPair>, +z0: KV.Zset, -e: Nat) -> {R.zadd.check(o, ps) == c : Maybe<&2, R.Reply>} -> Good(Some{KV.Item{KV.VColl{KV.CZset{z0}}, e}}, ch_of(R.zadd.fin(c, False{}, o, ps, z0))):
+  match c:
+    case Some{r}:
+      ec => {==}
+    case None{}:
+      ec => zadd_old_res(R.zadd.go(ps, o, R.ZAdd{z0, 0n, 0n, 0n, F.F64{0n, 0n}}), o, ps, z0, e)(ec)({==})
+
+def zadd_old(+o: R.ZOpts, +ps: List<&2, R.ZPair>, +z0: KV.Zset, -e: Nat) -> Good(Some{KV.Item{KV.VColl{KV.CZset{z0}}, e}}, ch_of(R.zadd.out(False{}, o, ps, z0))):
+  zadd_old_fin(R.zadd.check(o, ps), o, ps, z0, e)({==})
+
+# ZREM of a sorted set the key held: nothing, the key deleted (its last
+# member taken), or the sorted set without the members, which ZREM of
+# them makes again
+def zrem_of_old(none: Bool, empty: Bool, +m: String, +rest: List<&2, String>, +z: KV.Zset, +gone: Nat, +z0: KV.Zset, -e: Nat, eq: {R.zrem.go(Con{m, rest}, R.ZDel{z0, 0n}) == R.ZDel{z, gone} : R.ZDel}) -> {none == Nat.is_eq(gone, 0n) : Bool} -> {empty == Nat.is_eq(KV.zset.len(z), 0n) : Bool} -> Good(Some{KV.Item{KV.VColl{KV.CZset{z0}}, e}}, ch_of(R.zrem.of(none, empty, Con{m, rest}, z, gone))):
+  match none empty:
+    case True{} _:
+      en => ee => {==}
+    case False{} True{}:
+      en => ee => {==}
+    case False{} False{}:
+      en => ee =>
+        %Equal.sym(R.ZDel, R.zrem.go(Con{m, rest}, R.ZDel{z0, 0n}), R.ZDel{z, gone}, eq) : {ch_of(R.zrem.out(_, Con{m, rest})) == R.CZset{R.ZWRem{Con{m, rest}}, z} : R.Change} & {True{} == True{} : Bool}
+        %en : {ch_of(R.zrem.of(_, Nat.is_eq(KV.zset.len(z), 0n), Con{m, rest}, z, gone)) == R.CZset{R.ZWRem{Con{m, rest}}, z} : R.Change} & {True{} == True{} : Bool}
+        %ee : {ch_of(R.zrem.of(False{}, _, Con{m, rest}, z, gone)) == R.CZset{R.ZWRem{Con{m, rest}}, z} : R.Change} & {True{} == True{} : Bool}
+        ({==}, {==})
+
+def zrem_old_d(d: R.ZDel, +m: String, +rest: List<&2, String>, +z0: KV.Zset, -e: Nat) -> {R.zrem.go(Con{m, rest}, R.ZDel{z0, 0n}) == d : R.ZDel} -> Good(Some{KV.Item{KV.VColl{KV.CZset{z0}}, e}}, ch_of(R.zrem.out(d, Con{m, rest}))):
+  match d:
+    case R.ZDel{+z, +gone}:
+      eq => zrem_of_old(Nat.is_eq(gone, 0n), Nat.is_eq(KV.zset.len(z), 0n), m, rest, z, gone, z0, e, eq)({==})({==})
+
+def zrem_old(ms: List<&2, String>, +z0: KV.Zset, -e: Nat) -> Good(Some{KV.Item{KV.VColl{KV.CZset{z0}}, e}}, ch_of(R.zrem.out(R.zrem.go(ms, R.ZDel{z0, 0n}), ms))):
+  match ms:
+    case Nil{}:
+      {==}
+    case Con{+m, +rest}:
+      zrem_old_d(R.zrem.go(Con{m, rest}, R.ZDel{z0, 0n}), m, rest, z0, e)({==})
+
+# a removal of elements z0 holds (a range, a pop): none, the key deleted,
+# or z0 without them, which the write makes again
+def zdels_good(none: Bool, empty: Bool, +op: R.ZWrite, +left: KV.Zset, +r: R.Reply, +z0: KV.Zset, -e: Nat) -> {ch_of(R.zwrite(op, False{}, z0)) == ch_of(R.zdels.of(none, empty, op, left, r)) : R.Change} -> GoodZOp(op) -> Good(Some{KV.Item{KV.VColl{KV.CZset{z0}}, e}}, ch_of(R.zdels.of(none, empty, op, left, r))):
+  match none empty:
+    case True{} _:
+      ew => go => {==}
+    case False{} True{}:
+      ew => go => {==}
+    case False{} False{}:
+      ew => go => (ew, go)
+
+def zdels_good_xs(+xs: List<&2, KV.ZEl>, +op: R.ZWrite, +r: R.Reply, +z0: KV.Zset, -e: Nat) -> {ch_of(R.zwrite(op, False{}, z0)) == ch_of(R.zdels.out(xs, op, z0, r)) : R.Change} -> GoodZOp(op) -> Good(Some{KV.Item{KV.VColl{KV.CZset{z0}}, e}}, ch_of(R.zdels.out(xs, op, z0, r))):
+  zdels_good(List.is_empty(&2, KV.ZEl, xs), Nat.is_eq(KV.zset.len(KV.zset.dels(xs, z0)), 0n), op, KV.zset.dels(xs, z0), r, z0, e)
+
+def zremr_old(mr: Maybe<&2, R.ZRng>, +k: Nat, +op: R.ZWrite, +z0: KV.Zset, -e: Nat) -> {R.zwrite(op, False{}, z0) == R.zremr.of(mr, k, op, z0) : R.Out} -> ({Maybe.is_some(&2, R.ZRng, mr) == True{} : Bool} -> GoodZOp(op)) -> Good(Some{KV.Item{KV.VColl{KV.CZset{z0}}, e}}, ch_of(R.zremr.of(mr, k, op, z0))):
+  match mr:
+    case Some{+r}:
+      ew => go => zdels_good_xs(R.zrange.of(r, False{}, R.IPos{0n}, R.INeg{0n}, z0), op, R.r_int(List.length(&2, KV.ZEl, R.zrange.of(r, False{}, R.IPos{0n}, R.INeg{0n}, z0))), z0, e)(Equal.cong(R.Out, R.Change, q => ch_of(q), R.zwrite(op, False{}, z0), R.zremr.of(Some{r}, k, op, z0), ew))(go({==}))
+    case None{}:
+      ew => go => {==}
+
+def zpop_old(mc: Maybe<&2, Nat>, +max: Bool, +op: R.ZWrite, +z0: KV.Zset, -e: Nat) -> {R.zwrite(op, False{}, z0) == R.zpop.of(mc, max, op, z0) : R.Out} -> ({Maybe.is_some(&2, Nat, mc) == True{} : Bool} -> GoodZOp(op)) -> Good(Some{KV.Item{KV.VColl{KV.CZset{z0}}, e}}, ch_of(R.zpop.of(mc, max, op, z0))):
+  match mc:
+    case Some{+c}:
+      ew => go => zdels_good_xs(R.zpop.els(max, c, z0), op, R.RArray{R.zels(R.zpop.els(max, c, z0), True{})}, z0, e)(Equal.cong(R.Out, R.Change, q => ch_of(q), R.zwrite(op, False{}, z0), R.zpop.of(Some{c}, max, op, z0), ew))(go({==}))
+    case None{}:
+      ew => go => {==}
+
+def zw_old_good(op: R.ZWrite, +z0: KV.Zset, -e: Nat) -> Good(Some{KV.Item{KV.VColl{KV.CZset{z0}}, e}}, ch_of(R.zwrite(op, False{}, z0))):
+  match op:
+    case R.ZWAdd{+o, +ps}:
+      zadd_old(o, ps, z0, e)
+    case R.ZWRem{+ms}:
+      zrem_old(ms, z0, e)
+    case R.ZWNew{+o, +ps}:
+      znew_good(o, ps, Some{KV.Item{KV.VColl{KV.CZset{z0}}, e}})
+    case R.ZWRemRank{+a, +b}:
+      zremr_old(R.zrng.of(1n, a, b), 1n, R.ZWRemRank{a, b}, z0, e)({==})(h => h)
+    case R.ZWRemScore{+a, +b}:
+      zremr_old(R.zrng.of(2n, a, b), 2n, R.ZWRemScore{a, b}, z0, e)({==})(h => h)
+    case R.ZWRemLex{+a, +b}:
+      zremr_old(R.zrng.of(3n, a, b), 3n, R.ZWRemLex{a, b}, z0, e)({==})(h => h)
+    case R.ZWPop{+max}:
+      zpop_old(Some{1n}, max, R.ZWPop{max}, z0, e)({==})(h => {==})
+    case R.ZWPopN{+max, +c}:
+      zpop_old(R.lcount(c), max, R.ZWPopN{max, c}, z0, e)({==})(h => h)
+
+def good_coll_zset(op: R.ZWrite, c: KV.Coll, -e: Nat) -> Good(Some{KV.Item{KV.VColl{c}, e}}, ch_of(R.zwrite.coll(op, c))):
+  match c:
+    case KV.CZset{+z0}:
+      zw_old_good(op, z0, e)
+    case KV.CHash{+h}:
+      zw_wrong_good(op, Some{KV.Item{KV.VColl{KV.CHash{h}}, e}})
+    case KV.CList{+l}:
+      zw_wrong_good(op, Some{KV.Item{KV.VColl{KV.CList{l}}, e}})
+    case KV.CMems{+s}:
+      zw_wrong_good(op, Some{KV.Item{KV.VColl{KV.CMems{s}}, e}})
 
 # of a key that is not there: none or a put
 def good_none(op: R.UpdOp, +now: Nat, -m: Maybe<&2, KV.Item<KV.Val>>) -> Good(m, ch_of(R.upd(op, now, None{}))):
@@ -8200,6 +9150,8 @@ def good_none(op: R.UpdOp, +now: Nat, -m: Maybe<&2, KV.Item<KV.Val>>) -> Good(m,
       sw_fresh_good(sop, m)
     case R.UIncrF{+by}:
       incrf_add_none(Some{F.fl.zero(False{})}, F.ld.parse(by), m)
+    case R.UZset{+zop}:
+      zw_fresh_good(zop, m)
 
 # a time set alone, to f, of a key there with e: none given none is
 # nothing
@@ -8346,6 +9298,8 @@ def good_some(op: R.UpdOp, +now: Nat, +w: String, +e: Nat) -> Good(Some{KV.Item{
       sw_wrong_good(sop, Some{KV.Item{KV.VStr{w}, e}})
     case R.UIncrF{+by}:
       incrf_add_some(F.ld.parse(w), F.ld.parse(by), KV.VStr{w}, e)
+    case R.UZset{+zop}:
+      zw_wrong_good(zop, Some{KV.Item{KV.VStr{w}, e}})
 
 # SET with GET of a key that holds a collection changes nothing
 def get_wrong_at(a: Maybe<&2, R.At>, -name: String) -> {ch_of(R.get.wrong.at(a, name)) == R.CKeep{} : R.Change}:
@@ -8398,6 +9352,8 @@ def get_wrong_keep(o: R.UpdOp, +now: Nat) -> {ch_of(R.get.wrong(o, now)) == R.CK
       {==}
     case R.UIncrF{x}:
       {==}
+    case R.UZset{x}:
+      {==}
 
 # of a key there that holds a collection: SET, SETNX, EXPIRE and its kin
 # and PERSIST act on it as on a string, any other changes nothing
@@ -8436,6 +9392,8 @@ def good_coll(op: R.UpdOp, +now: Nat, +c: KV.Coll, +e: Nat) -> Good(Some{KV.Item
       good_coll_set(sop, c, e)
     case R.UIncrF{by}:
       {==}
+    case R.UZset{+zop}:
+      good_coll_zset(zop, c, e)
 
 def ug_v(w: KV.Val, op: R.UpdOp, +now: Nat, +e: Nat) -> Good(Some{KV.Item{w, e}}, ch_of(R.upd.v(op, now, Some{KV.Item{w, e}}))):
   match w:
@@ -8825,6 +9783,58 @@ def sstore_at0(g: R.SGot, +op: R.SetK, +ks: List<&2, String>, +d: String, +t: KV
     case R.SGotWrong{}:
       {==}
 
+# a STORE's effects, of a sorted-set operation or of a range, replay at
+# time 0 as its write ran: the DEL of its destination, or the update
+# ZWNew of it; ZMPOP's, the update of the key it picked
+def zstore_of_at0(xs: List<&2, KV.ZEl>, +d: String, +t: KV.Trie<KV.Val>, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>) -> {Laws.final(R.exec_all(zstore_eff_of(xs, d, R.Db{t, n, x, now, rr}), R.Db{t, n, x, 0n, rr})) == R.db.at(0n, R.db_of(R.zstore.of(xs, d, R.Db{t, n, x, now, rr}))) : R.Db}:
+  match xs:
+    case Nil{}:
+      %fin_cons(R.Del{[d]}, Nil{}, R.Db{t, n, x, 0n, rr}) : {_ == R.db.at(0n, R.db_of(R.zstore.of(Nil{}, d, R.Db{t, n, x, now, rr}))) : R.Db}
+      del_at0([d], t, n, x, now, rr)
+    case Con{+y, +rest}:
+      out_replay(R.upd.v(R.UZset{R.ZWNew{R.zopts.none(), R.zstore.pairs(y <> rest)}}, now, R.ent.live(now, KV.entry.at(KV.Val, t, d, KV.hash(d)))), KV.entry.at(KV.Val, t, d, KV.hash(d)), t, d, n, x, now, rr)({==})(upd_good(R.UZset{R.ZWNew{R.zopts.none(), R.zstore.pairs(y <> rest)}}, now, KV.entry.at(KV.Val, t, d, KV.hash(d))))
+
+def zstore_ok_at0(bad: Maybe<&2, R.Reply>, +op: R.ZSetK, ss: List<&2, R.ZSrc>, +d: String, +t: KV.Trie<KV.Val>, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>) -> {Laws.final(R.exec_all(zstore_eff_ok(bad, op, ss, d, R.Db{t, n, x, now, rr}), R.Db{t, n, x, 0n, rr})) == R.db.at(0n, R.db_of(R.zstore.ok(bad, op, ss, d, R.Db{t, n, x, now, rr}))) : R.Db}:
+  match bad:
+    case Some{r}:
+      {==}
+    case None{}:
+      zstore_of_at0(R.zop.els(op, ss), d, t, n, x, now, rr)
+
+def zstore_at0(g: R.ZGot, +op: R.ZSetK, +d: String, +t: KV.Trie<KV.Val>, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>) -> {Laws.final(R.exec_all(zstore_eff(g, op, d, R.Db{t, n, x, now, rr}), R.Db{t, n, x, 0n, rr})) == R.db.at(0n, R.db_of(R.zstore.do(g, op, d, R.Db{t, n, x, now, rr}))) : R.Db}:
+  match g:
+    case R.ZGot{ss}:
+      zstore_ok_at0(R.zop.bad(op), op, ss, d, t, n, x, now, rr)
+    case R.ZGotWrong{}:
+      {==}
+
+def zrs_at0(m: Maybe<&2, KV.Val>, q: R.ZQ, +d: String, +t: KV.Trie<KV.Val>, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>) -> {Laws.final(R.exec_all(zrs_eff(m, q, d, R.Db{t, n, x, now, rr}), R.Db{t, n, x, 0n, rr})) == R.db.at(0n, R.db_of(R.zrs.of(m, q, d, R.Db{t, n, x, now, rr}))) : R.Db}:
+  match m:
+    case None{}:
+      zstore_of_at0(Nil{}, d, t, n, x, now, rr)
+    case Some{KV.VColl{KV.CZset{+z}}}:
+      zstore_of_at0(R.zq.run(q, z), d, t, n, x, now, rr)
+    case Some{KV.VColl{KV.CHash{h}}}:
+      {==}
+    case Some{KV.VColl{KV.CList{l}}}:
+      {==}
+    case Some{KV.VColl{KV.CMems{s}}}:
+      {==}
+    case Some{KV.VStr{w}}:
+      {==}
+
+def zout_db_Rr(+k: String, r: R.Reply & R.Db) -> {R.db_of(r) == R.db_of(R.zmpop.out(k, r)) : R.Db}:
+  (y, d) = r
+  {==}
+
+def zmpop_at0(m: Maybe<&2, String>, +max: Bool, +c: String, +t: KV.Trie<KV.Val>, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>) -> {Laws.final(R.exec_all(zmpop_eff(m, max, c, R.Db{t, n, x, now, rr}), R.Db{t, n, x, 0n, rr})) == R.db.at(0n, R.db_of(R.zmpop.at(m, max, c, R.Db{t, n, x, now, rr}))) : R.Db}:
+  match m:
+    case Some{+k}:
+      %zout_db_Rr(k, R.db.upd(R.Db{t, n, x, now, rr}, k, R.UZset{R.ZWPopN{max, c}})) : {Laws.final(R.exec_all(upd_eff(R.Db{t, n, x, now, rr}, k, R.UZset{R.ZWPopN{max, c}}), R.Db{t, n, x, 0n, rr})) == R.db.at(0n, _) : R.Db}
+      out_replay(R.upd.v(R.UZset{R.ZWPopN{max, c}}, now, R.ent.live(now, KV.entry.at(KV.Val, t, k, KV.hash(k)))), KV.entry.at(KV.Val, t, k, KV.hash(k)), t, k, n, x, now, rr)({==})(upd_good(R.UZset{R.ZWPopN{max, c}}, now, KV.entry.at(KV.Val, t, k, KV.hash(k))))
+    case None{}:
+      {==}
+
 # An update at time 0 leaves the database the update at now leaves, at
 # time 0, when it makes the same change there
 def ch_at0(ch: R.Change, +t: KV.Trie<KV.Val>, +k: String, +h: U32, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>, +c: Nat, +r: R.Reply) -> {R.db_of(R.upd.ch(t, k, h, n, x, 0n, rr, c, r, ch)) == R.db.at(0n, R.db_of(R.upd.ch(t, k, h, n, x, now, rr, c, r, ch))) : R.Db}:
@@ -8854,6 +9864,10 @@ def ch_at0(ch: R.Change, +t: KV.Trie<KV.Val>, +k: String, +h: U32, +n: Nat, +x: 
     case R.CMems{op, sv}:
       {==}
     case R.CMemsNew{ms, sv}:
+      {==}
+    case R.CZset{op, z}:
+      {==}
+    case R.CZsetNew{o, ps, z}:
       {==}
 
 def upd0_ch(+t: KV.Trie<KV.Val>, +k: String, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>, +op: R.UpdOp, +op2: R.UpdOp) -> {ch_of(R.upd.v(op2, 0n, KV.entry.at(KV.Val, t, k, KV.hash(k)))) == ch_of(R.upd.v(op, now, R.ent.live(now, KV.entry.at(KV.Val, t, k, KV.hash(k))))) : R.Change} -> {R.db_of(R.db.upd(R.Db{t, n, x, 0n, rr}, k, op2)) == R.db.at(0n, R.db_of(R.db.upd(R.Db{t, n, x, now, rr}, k, op))) : R.Db}:
@@ -8920,6 +9934,8 @@ def go_same_v(v: KV.Val, -e: Nat, +md: Maybe<&2, KV.Item<KV.Val>>, +same: Bool, 
   match v:
     case KV.VColl{KV.CMems{+sv}}:
       go_dst(same, KV.mems.has(m, sv), md)
+    case KV.VColl{KV.CZset{z}}:
+      em => Empty.absurd({same == False{} : Bool}, false_true(em))
     case KV.VColl{KV.CHash{h}}:
       em => Empty.absurd({same == False{} : Bool}, false_true(em))
     case KV.VColl{KV.CList{l}}:
@@ -9113,6 +10129,14 @@ def effect_go(c: R.Cmd, +t: KV.Trie<KV.Val>, +n: Nat, +x: Nat, +now: Nat, +rr: M
       sstore_at0(R.sets.at(srcs, now, t), op, srcs, d, t, n, x, now, rr)
     case R.SMv{+s, +d, +w}:
       smove_at0(A.smove.moved(R.smv.of(R.Db{t, n, x, now, rr}, s, d, w)), R.ent.dead(now, KV.entry.at(KV.Val, t, d, KV.hash(d))), s, d, w, t, n, x, now, rr)({==})({==})
+    case R.ZOp{op, ks}:
+      {==}
+    case R.ZStore{+op, +d, +srcs}:
+      zstore_at0(R.zsrcs.at(srcs, now, t), op, d, t, n, x, now, rr)
+    case R.ZRangeStore{+d, +s, +q}:
+      zrs_at0(KV.read(KV.Val, t, s, now), q, d, t, n, x, now, rr)
+    case R.ZMPop{+ks, +max, +c}:
+      zmpop_at0(R.lmpop.first(ks, R.lmpop.head(ks, R.Db{t, n, x, now, rr}), R.Db{t, n, x, now, rr}), max, c, t, n, x, now, rr)
     case R.Own{o}:
       {==}
     case R.Bad{r}:
@@ -9360,6 +10384,8 @@ def hash_args_v(w: KV.Val, +op: R.HWrite, -hv: KV.Hash, +k: String) -> GoodHashV
       g => Empty.absurd({[R.Upd{k, R.UHash{op}}] == A.parse_all(A.args_all([R.Upd{k, R.UHash{op}}])) : List<&2, R.Cmd>}, g)
     case KV.VColl{KV.CMems{s0}}:
       g => Empty.absurd({[R.Upd{k, R.UHash{op}}] == A.parse_all(A.args_all([R.Upd{k, R.UHash{op}}])) : List<&2, R.Cmd>}, g)
+    case KV.VColl{KV.CZset{z0}}:
+      g => Empty.absurd({[R.Upd{k, R.UHash{op}}] == A.parse_all(A.args_all([R.Upd{k, R.UHash{op}}])) : List<&2, R.Cmd>}, g)
 
 def hnew_args(b: Bool, +k: String, +ps: List<&2, KV.HPair>, ne: NeP(ps)) -> {A.hnew.effect(b, k, ps) == A.parse_all(A.args_all(A.hnew.effect(b, k, ps))) : List<&2, R.Cmd>}:
   match b:
@@ -9454,6 +10480,8 @@ def list_args_v(w: KV.Val, +op: R.LWrite, -l: KV.Deq, +k: String) -> GoodListV(w
       g => Empty.absurd({[R.Upd{k, R.UList{op}}] == A.parse_all(A.args_all([R.Upd{k, R.UList{op}}])) : List<&2, R.Cmd>}, g)
     case KV.VColl{KV.CMems{s0}}:
       g => Empty.absurd({[R.Upd{k, R.UList{op}}] == A.parse_all(A.args_all([R.Upd{k, R.UList{op}}])) : List<&2, R.Cmd>}, g)
+    case KV.VColl{KV.CZset{z0}}:
+      g => Empty.absurd({[R.Upd{k, R.UList{op}}] == A.parse_all(A.args_all([R.Upd{k, R.UList{op}}])) : List<&2, R.Cmd>}, g)
 
 def lnew_eval_args(left: Bool, +k: String, xs: List<&2, String>) -> NeS(xs) -> {[R.Upd{k, R.UList{R.LWNew{left, xs}}}] == A.parse_all(A.args_all([R.Upd{k, R.UList{R.LWNew{left, xs}}}])) : List<&2, R.Cmd>}:
   match left xs:
@@ -9521,6 +10549,8 @@ def mems_args_v(w: KV.Val, +op: R.SWrite, -sv: KV.Mems, +k: String) -> GoodMemsV
   match w:
     case KV.VColl{KV.CMems{s0}}:
       g => mems_args(op, k)(gmems_op(op, sv, s0, g))
+    case KV.VColl{KV.CZset{z0}}:
+      g => Empty.absurd({[R.Upd{k, R.UMems{op}}] == A.parse_all(A.args_all([R.Upd{k, R.UMems{op}}])) : List<&2, R.Cmd>}, g)
     case KV.VColl{KV.CHash{h0}}:
       g => Empty.absurd({[R.Upd{k, R.UMems{op}}] == A.parse_all(A.args_all([R.Upd{k, R.UMems{op}}])) : List<&2, R.Cmd>}, g)
     case KV.VColl{KV.CList{l0}}:
@@ -9538,6 +10568,418 @@ def snew_args(b: Bool, +k: String, +ms: List<&2, String>, ne: NeS(ms)) -> {A.sne
 def gm_ne(-ms: List<&2, String>, -sv: KV.Mems, g: GoodNewM(ms, sv)) -> NeS(ms):
   (gn, ne) = g
   ne
+
+# a sorted set's write, as the file logs it, parses back to itself: ZADD
+# of options and pairs that pass ZADD's checks (its first score no
+# option's word, so that ZADD's loop of options ends where the options,
+# written in one order, end), ZREM of members, a removal of a range that
+# reads, a pop of a count that reads, the script of a new sorted set
+def zpairs_rt(ps: List<&2, R.ZPair>) -> {Some{ps} == R.zpairs(A.zpairs.args(ps)) : Maybe<&2, List<&2, R.ZPair>>}:
+  match ps:
+    case Nil{}:
+      {==}
+    case Con{R.ZPair{+s, +m}, +rest}:
+      %zpairs_rt(rest) : {Some{Con{R.ZPair{s, m}, rest}} == R.zpairs.cons(R.ZPair{s, m}, _) : Maybe<&2, List<&2, R.ZPair>>}
+      {==}
+
+def some_none_r(-y: R.Reply, e: {Some{y} == None{} : Maybe<&2, R.Reply>}) -> Empty:
+  true_false(Equal.cong(Maybe<&2, R.Reply>, Bool, z => Maybe.is_some(&2, R.Reply, z), Some{y}, None{}, e))
+
+def word_zero(n: Nat) -> {Nat.is_eq(n, 0n) == True{} : Bool} -> {n == 0n : Nat}:
+  match n:
+    case 0n:
+      e => {==}
+    case 1n+p:
+      e => Empty.absurd({1n+p == 0n : Nat}, false_true(e))
+
+def check_first(first: Bool, -nxx: Bool, -gtl: Bool, -many: Bool, -ok: Bool) -> {R.zadd.check.of(first, nxx, gtl, many, ok) == None{} : Maybe<&2, R.Reply>} -> {first == True{} : Bool}:
+  match first:
+    case True{}:
+      e => {==}
+    case False{}:
+      e => Empty.absurd({False{} == True{} : Bool}, some_none_r(R.RError{"ERR syntax error"}, e))
+
+# ZADD's loop of options stops at a word that is no option's
+def opts_tail(+s: String, +more: List<&2, String>, +o: R.ZOpts, w0: {R.zopt.word(s) == 0n : Nat}) -> {(o, Con{s, more}) == R.zadd.opts.go(Con{s, more}, R.zopt.word(s), o) : R.ZOpts & List<&2, String>}:
+  %Equal.sym(Nat, R.zopt.word(s), 0n, w0) : {(o, Con{s, more}) == R.zadd.opts.go(Con{s, more}, _, o) : R.ZOpts & List<&2, String>}
+  {==}
+
+# ZADD and the script, past their options: the pairs read back, and pass
+# the checks
+def zadd_tail(+k: String, +o: R.ZOpts, +s: String, +m: String, +rest: List<&2, R.ZPair>, w0: {R.zopt.word(s) == 0n : Nat}, ck: {R.zadd.check(o, Con{R.ZPair{s, m}, rest}) == None{} : Maybe<&2, R.Reply>}) -> {[R.Upd{k, R.UZset{R.ZWAdd{o, Con{R.ZPair{s, m}, rest}}}}] == [R.parse_zadd.at(k, R.zadd.opts.go(Con{s, Con{m, A.zpairs.args(rest)}}, R.zopt.word(s), o))] : List<&2, R.Cmd>}:
+  %opts_tail(s, Con{m, A.zpairs.args(rest)}, o, w0) : {[R.Upd{k, R.UZset{R.ZWAdd{o, Con{R.ZPair{s, m}, rest}}}}] == [R.parse_zadd.at(k, _)] : List<&2, R.Cmd>}
+  %zpairs_rt(rest) : {[R.Upd{k, R.UZset{R.ZWAdd{o, Con{R.ZPair{s, m}, rest}}}}] == [R.parse_zadd.of(k, R.zpairs.cons(R.ZPair{s, m}, _), o)] : List<&2, R.Cmd>}
+  %Equal.sym(Maybe<&2, R.Reply>, R.zadd.check(o, Con{R.ZPair{s, m}, rest}), None{}, ck) : {[R.Upd{k, R.UZset{R.ZWAdd{o, Con{R.ZPair{s, m}, rest}}}}] == [R.parse_zadd.ok(_, k, o, Con{R.ZPair{s, m}, rest})] : List<&2, R.Cmd>}
+  {==}
+
+def znew_tail(+k: String, +o: R.ZOpts, +s: String, +m: String, +rest: List<&2, R.ZPair>, w0: {R.zopt.word(s) == 0n : Nat}, xe: {R.zopts.xx(o) == False{} : Bool}, ck: {R.zadd.check(o, Con{R.ZPair{s, m}, rest}) == None{} : Maybe<&2, R.Reply>}) -> {[R.Upd{k, R.UZset{R.ZWNew{o, Con{R.ZPair{s, m}, rest}}}}] == [R.parse_eval.znew.of(True{}, k, Nat.show(R.zopts.count(o)), R.zadd.opts.go(Con{s, Con{m, A.zpairs.args(rest)}}, R.zopt.word(s), o))] : List<&2, R.Cmd>}:
+  %opts_tail(s, Con{m, A.zpairs.args(rest)}, o, w0) : {[R.Upd{k, R.UZset{R.ZWNew{o, Con{R.ZPair{s, m}, rest}}}}] == [R.parse_eval.znew.of(True{}, k, Nat.show(R.zopts.count(o)), _)] : List<&2, R.Cmd>}
+  %str_eq_self(Nat.show(R.zopts.count(o))) : {[R.Upd{k, R.UZset{R.ZWNew{o, Con{R.ZPair{s, m}, rest}}}}] == [R.parse_eval.znew.ps(Bool.and(True{}, Bool.and(_, Bool.not(R.zopts.xx(o)))), k, o, R.zpairs(Con{s, Con{m, A.zpairs.args(rest)}}))] : List<&2, R.Cmd>}
+  %Equal.sym(Bool, R.zopts.xx(o), False{}, xe) : {[R.Upd{k, R.UZset{R.ZWNew{o, Con{R.ZPair{s, m}, rest}}}}] == [R.parse_eval.znew.ps(Bool.and(True{}, Bool.and(True{}, Bool.not(_))), k, o, R.zpairs(Con{s, Con{m, A.zpairs.args(rest)}}))] : List<&2, R.Cmd>}
+  %zpairs_rt(rest) : {[R.Upd{k, R.UZset{R.ZWNew{o, Con{R.ZPair{s, m}, rest}}}}] == [R.parse_eval.znew.ps(True{}, k, o, R.zpairs.cons(R.ZPair{s, m}, _))] : List<&2, R.Cmd>}
+  %Equal.sym(Maybe<&2, R.Reply>, R.zadd.check(o, Con{R.ZPair{s, m}, rest}), None{}, ck) : {[R.Upd{k, R.UZset{R.ZWNew{o, Con{R.ZPair{s, m}, rest}}}}] == [R.parse_eval.znew.fin(_, k, o, Con{R.ZPair{s, m}, rest})] : List<&2, R.Cmd>}
+  {==}
+
+# the options, as the file writes them, read back: one case for each of
+# their 64 sets (generated)
+def zadd_args6(nx: Bool, xx: Bool, gt: Bool, lt: Bool, ch: Bool, incr: Bool, +k: String, +s: String, +m: String, +rest: List<&2, R.ZPair>) -> {R.zopt.word(s) == 0n : Nat} -> {R.zadd.check(R.ZOpts{nx, xx, gt, lt, ch, incr}, Con{R.ZPair{s, m}, rest}) == None{} : Maybe<&2, R.Reply>} -> {[R.Upd{k, R.UZset{R.ZWAdd{R.ZOpts{nx, xx, gt, lt, ch, incr}, Con{R.ZPair{s, m}, rest}}}}] == A.parse_all(A.args_all([R.Upd{k, R.UZset{R.ZWAdd{R.ZOpts{nx, xx, gt, lt, ch, incr}, Con{R.ZPair{s, m}, rest}}}}])) : List<&2, R.Cmd>}:
+  match nx xx gt lt ch incr:
+    case False{} False{} False{} False{} False{} False{}:
+      w0 => ck => zadd_tail(k, R.ZOpts{False{}, False{}, False{}, False{}, False{}, False{}}, s, m, rest, w0, ck)
+    case False{} False{} False{} False{} False{} True{}:
+      w0 => ck => zadd_tail(k, R.ZOpts{False{}, False{}, False{}, False{}, False{}, True{}}, s, m, rest, w0, ck)
+    case False{} False{} False{} False{} True{} False{}:
+      w0 => ck => zadd_tail(k, R.ZOpts{False{}, False{}, False{}, False{}, True{}, False{}}, s, m, rest, w0, ck)
+    case False{} False{} False{} False{} True{} True{}:
+      w0 => ck => zadd_tail(k, R.ZOpts{False{}, False{}, False{}, False{}, True{}, True{}}, s, m, rest, w0, ck)
+    case False{} False{} False{} True{} False{} False{}:
+      w0 => ck => zadd_tail(k, R.ZOpts{False{}, False{}, False{}, True{}, False{}, False{}}, s, m, rest, w0, ck)
+    case False{} False{} False{} True{} False{} True{}:
+      w0 => ck => zadd_tail(k, R.ZOpts{False{}, False{}, False{}, True{}, False{}, True{}}, s, m, rest, w0, ck)
+    case False{} False{} False{} True{} True{} False{}:
+      w0 => ck => zadd_tail(k, R.ZOpts{False{}, False{}, False{}, True{}, True{}, False{}}, s, m, rest, w0, ck)
+    case False{} False{} False{} True{} True{} True{}:
+      w0 => ck => zadd_tail(k, R.ZOpts{False{}, False{}, False{}, True{}, True{}, True{}}, s, m, rest, w0, ck)
+    case False{} False{} True{} False{} False{} False{}:
+      w0 => ck => zadd_tail(k, R.ZOpts{False{}, False{}, True{}, False{}, False{}, False{}}, s, m, rest, w0, ck)
+    case False{} False{} True{} False{} False{} True{}:
+      w0 => ck => zadd_tail(k, R.ZOpts{False{}, False{}, True{}, False{}, False{}, True{}}, s, m, rest, w0, ck)
+    case False{} False{} True{} False{} True{} False{}:
+      w0 => ck => zadd_tail(k, R.ZOpts{False{}, False{}, True{}, False{}, True{}, False{}}, s, m, rest, w0, ck)
+    case False{} False{} True{} False{} True{} True{}:
+      w0 => ck => zadd_tail(k, R.ZOpts{False{}, False{}, True{}, False{}, True{}, True{}}, s, m, rest, w0, ck)
+    case False{} False{} True{} True{} False{} False{}:
+      w0 => ck => zadd_tail(k, R.ZOpts{False{}, False{}, True{}, True{}, False{}, False{}}, s, m, rest, w0, ck)
+    case False{} False{} True{} True{} False{} True{}:
+      w0 => ck => zadd_tail(k, R.ZOpts{False{}, False{}, True{}, True{}, False{}, True{}}, s, m, rest, w0, ck)
+    case False{} False{} True{} True{} True{} False{}:
+      w0 => ck => zadd_tail(k, R.ZOpts{False{}, False{}, True{}, True{}, True{}, False{}}, s, m, rest, w0, ck)
+    case False{} False{} True{} True{} True{} True{}:
+      w0 => ck => zadd_tail(k, R.ZOpts{False{}, False{}, True{}, True{}, True{}, True{}}, s, m, rest, w0, ck)
+    case False{} True{} False{} False{} False{} False{}:
+      w0 => ck => zadd_tail(k, R.ZOpts{False{}, True{}, False{}, False{}, False{}, False{}}, s, m, rest, w0, ck)
+    case False{} True{} False{} False{} False{} True{}:
+      w0 => ck => zadd_tail(k, R.ZOpts{False{}, True{}, False{}, False{}, False{}, True{}}, s, m, rest, w0, ck)
+    case False{} True{} False{} False{} True{} False{}:
+      w0 => ck => zadd_tail(k, R.ZOpts{False{}, True{}, False{}, False{}, True{}, False{}}, s, m, rest, w0, ck)
+    case False{} True{} False{} False{} True{} True{}:
+      w0 => ck => zadd_tail(k, R.ZOpts{False{}, True{}, False{}, False{}, True{}, True{}}, s, m, rest, w0, ck)
+    case False{} True{} False{} True{} False{} False{}:
+      w0 => ck => zadd_tail(k, R.ZOpts{False{}, True{}, False{}, True{}, False{}, False{}}, s, m, rest, w0, ck)
+    case False{} True{} False{} True{} False{} True{}:
+      w0 => ck => zadd_tail(k, R.ZOpts{False{}, True{}, False{}, True{}, False{}, True{}}, s, m, rest, w0, ck)
+    case False{} True{} False{} True{} True{} False{}:
+      w0 => ck => zadd_tail(k, R.ZOpts{False{}, True{}, False{}, True{}, True{}, False{}}, s, m, rest, w0, ck)
+    case False{} True{} False{} True{} True{} True{}:
+      w0 => ck => zadd_tail(k, R.ZOpts{False{}, True{}, False{}, True{}, True{}, True{}}, s, m, rest, w0, ck)
+    case False{} True{} True{} False{} False{} False{}:
+      w0 => ck => zadd_tail(k, R.ZOpts{False{}, True{}, True{}, False{}, False{}, False{}}, s, m, rest, w0, ck)
+    case False{} True{} True{} False{} False{} True{}:
+      w0 => ck => zadd_tail(k, R.ZOpts{False{}, True{}, True{}, False{}, False{}, True{}}, s, m, rest, w0, ck)
+    case False{} True{} True{} False{} True{} False{}:
+      w0 => ck => zadd_tail(k, R.ZOpts{False{}, True{}, True{}, False{}, True{}, False{}}, s, m, rest, w0, ck)
+    case False{} True{} True{} False{} True{} True{}:
+      w0 => ck => zadd_tail(k, R.ZOpts{False{}, True{}, True{}, False{}, True{}, True{}}, s, m, rest, w0, ck)
+    case False{} True{} True{} True{} False{} False{}:
+      w0 => ck => zadd_tail(k, R.ZOpts{False{}, True{}, True{}, True{}, False{}, False{}}, s, m, rest, w0, ck)
+    case False{} True{} True{} True{} False{} True{}:
+      w0 => ck => zadd_tail(k, R.ZOpts{False{}, True{}, True{}, True{}, False{}, True{}}, s, m, rest, w0, ck)
+    case False{} True{} True{} True{} True{} False{}:
+      w0 => ck => zadd_tail(k, R.ZOpts{False{}, True{}, True{}, True{}, True{}, False{}}, s, m, rest, w0, ck)
+    case False{} True{} True{} True{} True{} True{}:
+      w0 => ck => zadd_tail(k, R.ZOpts{False{}, True{}, True{}, True{}, True{}, True{}}, s, m, rest, w0, ck)
+    case True{} False{} False{} False{} False{} False{}:
+      w0 => ck => zadd_tail(k, R.ZOpts{True{}, False{}, False{}, False{}, False{}, False{}}, s, m, rest, w0, ck)
+    case True{} False{} False{} False{} False{} True{}:
+      w0 => ck => zadd_tail(k, R.ZOpts{True{}, False{}, False{}, False{}, False{}, True{}}, s, m, rest, w0, ck)
+    case True{} False{} False{} False{} True{} False{}:
+      w0 => ck => zadd_tail(k, R.ZOpts{True{}, False{}, False{}, False{}, True{}, False{}}, s, m, rest, w0, ck)
+    case True{} False{} False{} False{} True{} True{}:
+      w0 => ck => zadd_tail(k, R.ZOpts{True{}, False{}, False{}, False{}, True{}, True{}}, s, m, rest, w0, ck)
+    case True{} False{} False{} True{} False{} False{}:
+      w0 => ck => zadd_tail(k, R.ZOpts{True{}, False{}, False{}, True{}, False{}, False{}}, s, m, rest, w0, ck)
+    case True{} False{} False{} True{} False{} True{}:
+      w0 => ck => zadd_tail(k, R.ZOpts{True{}, False{}, False{}, True{}, False{}, True{}}, s, m, rest, w0, ck)
+    case True{} False{} False{} True{} True{} False{}:
+      w0 => ck => zadd_tail(k, R.ZOpts{True{}, False{}, False{}, True{}, True{}, False{}}, s, m, rest, w0, ck)
+    case True{} False{} False{} True{} True{} True{}:
+      w0 => ck => zadd_tail(k, R.ZOpts{True{}, False{}, False{}, True{}, True{}, True{}}, s, m, rest, w0, ck)
+    case True{} False{} True{} False{} False{} False{}:
+      w0 => ck => zadd_tail(k, R.ZOpts{True{}, False{}, True{}, False{}, False{}, False{}}, s, m, rest, w0, ck)
+    case True{} False{} True{} False{} False{} True{}:
+      w0 => ck => zadd_tail(k, R.ZOpts{True{}, False{}, True{}, False{}, False{}, True{}}, s, m, rest, w0, ck)
+    case True{} False{} True{} False{} True{} False{}:
+      w0 => ck => zadd_tail(k, R.ZOpts{True{}, False{}, True{}, False{}, True{}, False{}}, s, m, rest, w0, ck)
+    case True{} False{} True{} False{} True{} True{}:
+      w0 => ck => zadd_tail(k, R.ZOpts{True{}, False{}, True{}, False{}, True{}, True{}}, s, m, rest, w0, ck)
+    case True{} False{} True{} True{} False{} False{}:
+      w0 => ck => zadd_tail(k, R.ZOpts{True{}, False{}, True{}, True{}, False{}, False{}}, s, m, rest, w0, ck)
+    case True{} False{} True{} True{} False{} True{}:
+      w0 => ck => zadd_tail(k, R.ZOpts{True{}, False{}, True{}, True{}, False{}, True{}}, s, m, rest, w0, ck)
+    case True{} False{} True{} True{} True{} False{}:
+      w0 => ck => zadd_tail(k, R.ZOpts{True{}, False{}, True{}, True{}, True{}, False{}}, s, m, rest, w0, ck)
+    case True{} False{} True{} True{} True{} True{}:
+      w0 => ck => zadd_tail(k, R.ZOpts{True{}, False{}, True{}, True{}, True{}, True{}}, s, m, rest, w0, ck)
+    case True{} True{} False{} False{} False{} False{}:
+      w0 => ck => zadd_tail(k, R.ZOpts{True{}, True{}, False{}, False{}, False{}, False{}}, s, m, rest, w0, ck)
+    case True{} True{} False{} False{} False{} True{}:
+      w0 => ck => zadd_tail(k, R.ZOpts{True{}, True{}, False{}, False{}, False{}, True{}}, s, m, rest, w0, ck)
+    case True{} True{} False{} False{} True{} False{}:
+      w0 => ck => zadd_tail(k, R.ZOpts{True{}, True{}, False{}, False{}, True{}, False{}}, s, m, rest, w0, ck)
+    case True{} True{} False{} False{} True{} True{}:
+      w0 => ck => zadd_tail(k, R.ZOpts{True{}, True{}, False{}, False{}, True{}, True{}}, s, m, rest, w0, ck)
+    case True{} True{} False{} True{} False{} False{}:
+      w0 => ck => zadd_tail(k, R.ZOpts{True{}, True{}, False{}, True{}, False{}, False{}}, s, m, rest, w0, ck)
+    case True{} True{} False{} True{} False{} True{}:
+      w0 => ck => zadd_tail(k, R.ZOpts{True{}, True{}, False{}, True{}, False{}, True{}}, s, m, rest, w0, ck)
+    case True{} True{} False{} True{} True{} False{}:
+      w0 => ck => zadd_tail(k, R.ZOpts{True{}, True{}, False{}, True{}, True{}, False{}}, s, m, rest, w0, ck)
+    case True{} True{} False{} True{} True{} True{}:
+      w0 => ck => zadd_tail(k, R.ZOpts{True{}, True{}, False{}, True{}, True{}, True{}}, s, m, rest, w0, ck)
+    case True{} True{} True{} False{} False{} False{}:
+      w0 => ck => zadd_tail(k, R.ZOpts{True{}, True{}, True{}, False{}, False{}, False{}}, s, m, rest, w0, ck)
+    case True{} True{} True{} False{} False{} True{}:
+      w0 => ck => zadd_tail(k, R.ZOpts{True{}, True{}, True{}, False{}, False{}, True{}}, s, m, rest, w0, ck)
+    case True{} True{} True{} False{} True{} False{}:
+      w0 => ck => zadd_tail(k, R.ZOpts{True{}, True{}, True{}, False{}, True{}, False{}}, s, m, rest, w0, ck)
+    case True{} True{} True{} False{} True{} True{}:
+      w0 => ck => zadd_tail(k, R.ZOpts{True{}, True{}, True{}, False{}, True{}, True{}}, s, m, rest, w0, ck)
+    case True{} True{} True{} True{} False{} False{}:
+      w0 => ck => zadd_tail(k, R.ZOpts{True{}, True{}, True{}, True{}, False{}, False{}}, s, m, rest, w0, ck)
+    case True{} True{} True{} True{} False{} True{}:
+      w0 => ck => zadd_tail(k, R.ZOpts{True{}, True{}, True{}, True{}, False{}, True{}}, s, m, rest, w0, ck)
+    case True{} True{} True{} True{} True{} False{}:
+      w0 => ck => zadd_tail(k, R.ZOpts{True{}, True{}, True{}, True{}, True{}, False{}}, s, m, rest, w0, ck)
+    case True{} True{} True{} True{} True{} True{}:
+      w0 => ck => zadd_tail(k, R.ZOpts{True{}, True{}, True{}, True{}, True{}, True{}}, s, m, rest, w0, ck)
+
+def znew_args6(nx: Bool, xx: Bool, gt: Bool, lt: Bool, ch: Bool, incr: Bool, +k: String, +s: String, +m: String, +rest: List<&2, R.ZPair>) -> {R.zopt.word(s) == 0n : Nat} -> {R.zopts.xx(R.ZOpts{nx, xx, gt, lt, ch, incr}) == False{} : Bool} -> {R.zadd.check(R.ZOpts{nx, xx, gt, lt, ch, incr}, Con{R.ZPair{s, m}, rest}) == None{} : Maybe<&2, R.Reply>} -> {[R.Upd{k, R.UZset{R.ZWNew{R.ZOpts{nx, xx, gt, lt, ch, incr}, Con{R.ZPair{s, m}, rest}}}}] == A.parse_all(A.args_all([R.Upd{k, R.UZset{R.ZWNew{R.ZOpts{nx, xx, gt, lt, ch, incr}, Con{R.ZPair{s, m}, rest}}}}])) : List<&2, R.Cmd>}:
+  match nx xx gt lt ch incr:
+    case False{} False{} False{} False{} False{} False{}:
+      w0 => xe => ck => znew_tail(k, R.ZOpts{False{}, False{}, False{}, False{}, False{}, False{}}, s, m, rest, w0, xe, ck)
+    case False{} False{} False{} False{} False{} True{}:
+      w0 => xe => ck => znew_tail(k, R.ZOpts{False{}, False{}, False{}, False{}, False{}, True{}}, s, m, rest, w0, xe, ck)
+    case False{} False{} False{} False{} True{} False{}:
+      w0 => xe => ck => znew_tail(k, R.ZOpts{False{}, False{}, False{}, False{}, True{}, False{}}, s, m, rest, w0, xe, ck)
+    case False{} False{} False{} False{} True{} True{}:
+      w0 => xe => ck => znew_tail(k, R.ZOpts{False{}, False{}, False{}, False{}, True{}, True{}}, s, m, rest, w0, xe, ck)
+    case False{} False{} False{} True{} False{} False{}:
+      w0 => xe => ck => znew_tail(k, R.ZOpts{False{}, False{}, False{}, True{}, False{}, False{}}, s, m, rest, w0, xe, ck)
+    case False{} False{} False{} True{} False{} True{}:
+      w0 => xe => ck => znew_tail(k, R.ZOpts{False{}, False{}, False{}, True{}, False{}, True{}}, s, m, rest, w0, xe, ck)
+    case False{} False{} False{} True{} True{} False{}:
+      w0 => xe => ck => znew_tail(k, R.ZOpts{False{}, False{}, False{}, True{}, True{}, False{}}, s, m, rest, w0, xe, ck)
+    case False{} False{} False{} True{} True{} True{}:
+      w0 => xe => ck => znew_tail(k, R.ZOpts{False{}, False{}, False{}, True{}, True{}, True{}}, s, m, rest, w0, xe, ck)
+    case False{} False{} True{} False{} False{} False{}:
+      w0 => xe => ck => znew_tail(k, R.ZOpts{False{}, False{}, True{}, False{}, False{}, False{}}, s, m, rest, w0, xe, ck)
+    case False{} False{} True{} False{} False{} True{}:
+      w0 => xe => ck => znew_tail(k, R.ZOpts{False{}, False{}, True{}, False{}, False{}, True{}}, s, m, rest, w0, xe, ck)
+    case False{} False{} True{} False{} True{} False{}:
+      w0 => xe => ck => znew_tail(k, R.ZOpts{False{}, False{}, True{}, False{}, True{}, False{}}, s, m, rest, w0, xe, ck)
+    case False{} False{} True{} False{} True{} True{}:
+      w0 => xe => ck => znew_tail(k, R.ZOpts{False{}, False{}, True{}, False{}, True{}, True{}}, s, m, rest, w0, xe, ck)
+    case False{} False{} True{} True{} False{} False{}:
+      w0 => xe => ck => znew_tail(k, R.ZOpts{False{}, False{}, True{}, True{}, False{}, False{}}, s, m, rest, w0, xe, ck)
+    case False{} False{} True{} True{} False{} True{}:
+      w0 => xe => ck => znew_tail(k, R.ZOpts{False{}, False{}, True{}, True{}, False{}, True{}}, s, m, rest, w0, xe, ck)
+    case False{} False{} True{} True{} True{} False{}:
+      w0 => xe => ck => znew_tail(k, R.ZOpts{False{}, False{}, True{}, True{}, True{}, False{}}, s, m, rest, w0, xe, ck)
+    case False{} False{} True{} True{} True{} True{}:
+      w0 => xe => ck => znew_tail(k, R.ZOpts{False{}, False{}, True{}, True{}, True{}, True{}}, s, m, rest, w0, xe, ck)
+    case False{} True{} False{} False{} False{} False{}:
+      w0 => xe => ck => znew_tail(k, R.ZOpts{False{}, True{}, False{}, False{}, False{}, False{}}, s, m, rest, w0, xe, ck)
+    case False{} True{} False{} False{} False{} True{}:
+      w0 => xe => ck => znew_tail(k, R.ZOpts{False{}, True{}, False{}, False{}, False{}, True{}}, s, m, rest, w0, xe, ck)
+    case False{} True{} False{} False{} True{} False{}:
+      w0 => xe => ck => znew_tail(k, R.ZOpts{False{}, True{}, False{}, False{}, True{}, False{}}, s, m, rest, w0, xe, ck)
+    case False{} True{} False{} False{} True{} True{}:
+      w0 => xe => ck => znew_tail(k, R.ZOpts{False{}, True{}, False{}, False{}, True{}, True{}}, s, m, rest, w0, xe, ck)
+    case False{} True{} False{} True{} False{} False{}:
+      w0 => xe => ck => znew_tail(k, R.ZOpts{False{}, True{}, False{}, True{}, False{}, False{}}, s, m, rest, w0, xe, ck)
+    case False{} True{} False{} True{} False{} True{}:
+      w0 => xe => ck => znew_tail(k, R.ZOpts{False{}, True{}, False{}, True{}, False{}, True{}}, s, m, rest, w0, xe, ck)
+    case False{} True{} False{} True{} True{} False{}:
+      w0 => xe => ck => znew_tail(k, R.ZOpts{False{}, True{}, False{}, True{}, True{}, False{}}, s, m, rest, w0, xe, ck)
+    case False{} True{} False{} True{} True{} True{}:
+      w0 => xe => ck => znew_tail(k, R.ZOpts{False{}, True{}, False{}, True{}, True{}, True{}}, s, m, rest, w0, xe, ck)
+    case False{} True{} True{} False{} False{} False{}:
+      w0 => xe => ck => znew_tail(k, R.ZOpts{False{}, True{}, True{}, False{}, False{}, False{}}, s, m, rest, w0, xe, ck)
+    case False{} True{} True{} False{} False{} True{}:
+      w0 => xe => ck => znew_tail(k, R.ZOpts{False{}, True{}, True{}, False{}, False{}, True{}}, s, m, rest, w0, xe, ck)
+    case False{} True{} True{} False{} True{} False{}:
+      w0 => xe => ck => znew_tail(k, R.ZOpts{False{}, True{}, True{}, False{}, True{}, False{}}, s, m, rest, w0, xe, ck)
+    case False{} True{} True{} False{} True{} True{}:
+      w0 => xe => ck => znew_tail(k, R.ZOpts{False{}, True{}, True{}, False{}, True{}, True{}}, s, m, rest, w0, xe, ck)
+    case False{} True{} True{} True{} False{} False{}:
+      w0 => xe => ck => znew_tail(k, R.ZOpts{False{}, True{}, True{}, True{}, False{}, False{}}, s, m, rest, w0, xe, ck)
+    case False{} True{} True{} True{} False{} True{}:
+      w0 => xe => ck => znew_tail(k, R.ZOpts{False{}, True{}, True{}, True{}, False{}, True{}}, s, m, rest, w0, xe, ck)
+    case False{} True{} True{} True{} True{} False{}:
+      w0 => xe => ck => znew_tail(k, R.ZOpts{False{}, True{}, True{}, True{}, True{}, False{}}, s, m, rest, w0, xe, ck)
+    case False{} True{} True{} True{} True{} True{}:
+      w0 => xe => ck => znew_tail(k, R.ZOpts{False{}, True{}, True{}, True{}, True{}, True{}}, s, m, rest, w0, xe, ck)
+    case True{} False{} False{} False{} False{} False{}:
+      w0 => xe => ck => znew_tail(k, R.ZOpts{True{}, False{}, False{}, False{}, False{}, False{}}, s, m, rest, w0, xe, ck)
+    case True{} False{} False{} False{} False{} True{}:
+      w0 => xe => ck => znew_tail(k, R.ZOpts{True{}, False{}, False{}, False{}, False{}, True{}}, s, m, rest, w0, xe, ck)
+    case True{} False{} False{} False{} True{} False{}:
+      w0 => xe => ck => znew_tail(k, R.ZOpts{True{}, False{}, False{}, False{}, True{}, False{}}, s, m, rest, w0, xe, ck)
+    case True{} False{} False{} False{} True{} True{}:
+      w0 => xe => ck => znew_tail(k, R.ZOpts{True{}, False{}, False{}, False{}, True{}, True{}}, s, m, rest, w0, xe, ck)
+    case True{} False{} False{} True{} False{} False{}:
+      w0 => xe => ck => znew_tail(k, R.ZOpts{True{}, False{}, False{}, True{}, False{}, False{}}, s, m, rest, w0, xe, ck)
+    case True{} False{} False{} True{} False{} True{}:
+      w0 => xe => ck => znew_tail(k, R.ZOpts{True{}, False{}, False{}, True{}, False{}, True{}}, s, m, rest, w0, xe, ck)
+    case True{} False{} False{} True{} True{} False{}:
+      w0 => xe => ck => znew_tail(k, R.ZOpts{True{}, False{}, False{}, True{}, True{}, False{}}, s, m, rest, w0, xe, ck)
+    case True{} False{} False{} True{} True{} True{}:
+      w0 => xe => ck => znew_tail(k, R.ZOpts{True{}, False{}, False{}, True{}, True{}, True{}}, s, m, rest, w0, xe, ck)
+    case True{} False{} True{} False{} False{} False{}:
+      w0 => xe => ck => znew_tail(k, R.ZOpts{True{}, False{}, True{}, False{}, False{}, False{}}, s, m, rest, w0, xe, ck)
+    case True{} False{} True{} False{} False{} True{}:
+      w0 => xe => ck => znew_tail(k, R.ZOpts{True{}, False{}, True{}, False{}, False{}, True{}}, s, m, rest, w0, xe, ck)
+    case True{} False{} True{} False{} True{} False{}:
+      w0 => xe => ck => znew_tail(k, R.ZOpts{True{}, False{}, True{}, False{}, True{}, False{}}, s, m, rest, w0, xe, ck)
+    case True{} False{} True{} False{} True{} True{}:
+      w0 => xe => ck => znew_tail(k, R.ZOpts{True{}, False{}, True{}, False{}, True{}, True{}}, s, m, rest, w0, xe, ck)
+    case True{} False{} True{} True{} False{} False{}:
+      w0 => xe => ck => znew_tail(k, R.ZOpts{True{}, False{}, True{}, True{}, False{}, False{}}, s, m, rest, w0, xe, ck)
+    case True{} False{} True{} True{} False{} True{}:
+      w0 => xe => ck => znew_tail(k, R.ZOpts{True{}, False{}, True{}, True{}, False{}, True{}}, s, m, rest, w0, xe, ck)
+    case True{} False{} True{} True{} True{} False{}:
+      w0 => xe => ck => znew_tail(k, R.ZOpts{True{}, False{}, True{}, True{}, True{}, False{}}, s, m, rest, w0, xe, ck)
+    case True{} False{} True{} True{} True{} True{}:
+      w0 => xe => ck => znew_tail(k, R.ZOpts{True{}, False{}, True{}, True{}, True{}, True{}}, s, m, rest, w0, xe, ck)
+    case True{} True{} False{} False{} False{} False{}:
+      w0 => xe => ck => znew_tail(k, R.ZOpts{True{}, True{}, False{}, False{}, False{}, False{}}, s, m, rest, w0, xe, ck)
+    case True{} True{} False{} False{} False{} True{}:
+      w0 => xe => ck => znew_tail(k, R.ZOpts{True{}, True{}, False{}, False{}, False{}, True{}}, s, m, rest, w0, xe, ck)
+    case True{} True{} False{} False{} True{} False{}:
+      w0 => xe => ck => znew_tail(k, R.ZOpts{True{}, True{}, False{}, False{}, True{}, False{}}, s, m, rest, w0, xe, ck)
+    case True{} True{} False{} False{} True{} True{}:
+      w0 => xe => ck => znew_tail(k, R.ZOpts{True{}, True{}, False{}, False{}, True{}, True{}}, s, m, rest, w0, xe, ck)
+    case True{} True{} False{} True{} False{} False{}:
+      w0 => xe => ck => znew_tail(k, R.ZOpts{True{}, True{}, False{}, True{}, False{}, False{}}, s, m, rest, w0, xe, ck)
+    case True{} True{} False{} True{} False{} True{}:
+      w0 => xe => ck => znew_tail(k, R.ZOpts{True{}, True{}, False{}, True{}, False{}, True{}}, s, m, rest, w0, xe, ck)
+    case True{} True{} False{} True{} True{} False{}:
+      w0 => xe => ck => znew_tail(k, R.ZOpts{True{}, True{}, False{}, True{}, True{}, False{}}, s, m, rest, w0, xe, ck)
+    case True{} True{} False{} True{} True{} True{}:
+      w0 => xe => ck => znew_tail(k, R.ZOpts{True{}, True{}, False{}, True{}, True{}, True{}}, s, m, rest, w0, xe, ck)
+    case True{} True{} True{} False{} False{} False{}:
+      w0 => xe => ck => znew_tail(k, R.ZOpts{True{}, True{}, True{}, False{}, False{}, False{}}, s, m, rest, w0, xe, ck)
+    case True{} True{} True{} False{} False{} True{}:
+      w0 => xe => ck => znew_tail(k, R.ZOpts{True{}, True{}, True{}, False{}, False{}, True{}}, s, m, rest, w0, xe, ck)
+    case True{} True{} True{} False{} True{} False{}:
+      w0 => xe => ck => znew_tail(k, R.ZOpts{True{}, True{}, True{}, False{}, True{}, False{}}, s, m, rest, w0, xe, ck)
+    case True{} True{} True{} False{} True{} True{}:
+      w0 => xe => ck => znew_tail(k, R.ZOpts{True{}, True{}, True{}, False{}, True{}, True{}}, s, m, rest, w0, xe, ck)
+    case True{} True{} True{} True{} False{} False{}:
+      w0 => xe => ck => znew_tail(k, R.ZOpts{True{}, True{}, True{}, True{}, False{}, False{}}, s, m, rest, w0, xe, ck)
+    case True{} True{} True{} True{} False{} True{}:
+      w0 => xe => ck => znew_tail(k, R.ZOpts{True{}, True{}, True{}, True{}, False{}, True{}}, s, m, rest, w0, xe, ck)
+    case True{} True{} True{} True{} True{} False{}:
+      w0 => xe => ck => znew_tail(k, R.ZOpts{True{}, True{}, True{}, True{}, True{}, False{}}, s, m, rest, w0, xe, ck)
+    case True{} True{} True{} True{} True{} True{}:
+      w0 => xe => ck => znew_tail(k, R.ZOpts{True{}, True{}, True{}, True{}, True{}, True{}}, s, m, rest, w0, xe, ck)
+
+def zadd_args(+k: String, o: R.ZOpts, ps: List<&2, R.ZPair>) -> {R.zadd.check(o, ps) == None{} : Maybe<&2, R.Reply>} -> {[R.Upd{k, R.UZset{R.ZWAdd{o, ps}}}] == A.parse_all(A.args_all([R.Upd{k, R.UZset{R.ZWAdd{o, ps}}}])) : List<&2, R.Cmd>}:
+  match o ps:
+    case R.ZOpts{+nx, +xx, +gt, +lt, +ch, +incr} Con{R.ZPair{+s, +m}, +rest}:
+      +ck => zadd_args6(nx, xx, gt, lt, ch, incr, k, s, m, rest)(word_zero(R.zopt.word(s))(check_first(R.zpairs.first(Con{R.ZPair{s, m}, rest}), Bool.and(nx, xx), Bool.or(Bool.and(Bool.or(gt, lt), nx), Bool.and(gt, lt)), Bool.and(incr, Nat.is_lt(1n, List.length(&2, R.ZPair, Con{R.ZPair{s, m}, rest}))), R.zpairs.ok(Con{R.ZPair{s, m}, rest}))(ck)))(ck)
+    case R.ZOpts{nx, xx, gt, lt, ch, incr} Nil{}:
+      ck => Empty.absurd({[R.Upd{k, R.UZset{R.ZWAdd{R.ZOpts{nx, xx, gt, lt, ch, incr}, Nil{}}}}] == A.parse_all(A.args_all([R.Upd{k, R.UZset{R.ZWAdd{R.ZOpts{nx, xx, gt, lt, ch, incr}, Nil{}}}}])) : List<&2, R.Cmd>}, some_none_r(R.RError{"ERR syntax error"}, ck))
+
+def znew_eval_args(+k: String, o: R.ZOpts, ps: List<&2, R.ZPair>) -> {R.zopts.xx(o) == False{} : Bool} -> {R.zadd.check(o, ps) == None{} : Maybe<&2, R.Reply>} -> {[R.Upd{k, R.UZset{R.ZWNew{o, ps}}}] == A.parse_all(A.args_all([R.Upd{k, R.UZset{R.ZWNew{o, ps}}}])) : List<&2, R.Cmd>}:
+  match o ps:
+    case R.ZOpts{+nx, +xx, +gt, +lt, +ch, +incr} Con{R.ZPair{+s, +m}, +rest}:
+      xe => +ck => znew_args6(nx, xx, gt, lt, ch, incr, k, s, m, rest)(word_zero(R.zopt.word(s))(check_first(R.zpairs.first(Con{R.ZPair{s, m}, rest}), Bool.and(nx, xx), Bool.or(Bool.and(Bool.or(gt, lt), nx), Bool.and(gt, lt)), Bool.and(incr, Nat.is_lt(1n, List.length(&2, R.ZPair, Con{R.ZPair{s, m}, rest}))), R.zpairs.ok(Con{R.ZPair{s, m}, rest}))(ck)))(xe)(ck)
+    case R.ZOpts{nx, xx, gt, lt, ch, incr} Nil{}:
+      xe => ck => Empty.absurd({[R.Upd{k, R.UZset{R.ZWNew{R.ZOpts{nx, xx, gt, lt, ch, incr}, Nil{}}}}] == A.parse_all(A.args_all([R.Upd{k, R.UZset{R.ZWNew{R.ZOpts{nx, xx, gt, lt, ch, incr}, Nil{}}}}])) : List<&2, R.Cmd>}, some_none_r(R.RError{"ERR syntax error"}, ck))
+
+def zrem_args(+k: String, ms: List<&2, String>) -> NeS(ms) -> {[R.Upd{k, R.UZset{R.ZWRem{ms}}}] == A.parse_all(A.args_all([R.Upd{k, R.UZset{R.ZWRem{ms}}}])) : List<&2, R.Cmd>}:
+  match ms:
+    case Nil{}:
+      ne => Empty.absurd({[R.Upd{k, R.UZset{R.ZWRem{Nil{}}}}] == A.parse_all(A.args_all([R.Upd{k, R.UZset{R.ZWRem{Nil{}}}}])) : List<&2, R.Cmd>}, ne)
+    case Con{y, rest}:
+      ne => {==}
+
+def zremrank_args(+k: String, +a: String, +b: String) -> {Maybe.is_some(&2, R.ZRng, R.zrng.of(1n, a, b)) == True{} : Bool} -> {[R.Upd{k, R.UZset{R.ZWRemRank{a, b}}}] == A.parse_all(A.args_all([R.Upd{k, R.UZset{R.ZWRemRank{a, b}}}])) : List<&2, R.Cmd>}:
+  ok => %Equal.sym(Bool, Maybe.is_some(&2, R.ZRng, R.zrng.of(1n, a, b)), True{}, ok) : {[R.Upd{k, R.UZset{R.ZWRemRank{a, b}}}] == [R.parse_zremrange.of(_, 1n, k, a, b)] : List<&2, R.Cmd>}
+        {==}
+
+def zremscore_args(+k: String, +a: String, +b: String) -> {Maybe.is_some(&2, R.ZRng, R.zrng.of(2n, a, b)) == True{} : Bool} -> {[R.Upd{k, R.UZset{R.ZWRemScore{a, b}}}] == A.parse_all(A.args_all([R.Upd{k, R.UZset{R.ZWRemScore{a, b}}}])) : List<&2, R.Cmd>}:
+  ok => %Equal.sym(Bool, Maybe.is_some(&2, R.ZRng, R.zrng.of(2n, a, b)), True{}, ok) : {[R.Upd{k, R.UZset{R.ZWRemScore{a, b}}}] == [R.parse_zremrange.of(_, 2n, k, a, b)] : List<&2, R.Cmd>}
+        {==}
+
+def zremlex_args(+k: String, +a: String, +b: String) -> {Maybe.is_some(&2, R.ZRng, R.zrng.of(3n, a, b)) == True{} : Bool} -> {[R.Upd{k, R.UZset{R.ZWRemLex{a, b}}}] == A.parse_all(A.args_all([R.Upd{k, R.UZset{R.ZWRemLex{a, b}}}])) : List<&2, R.Cmd>}:
+  ok => %Equal.sym(Bool, Maybe.is_some(&2, R.ZRng, R.zrng.of(3n, a, b)), True{}, ok) : {[R.Upd{k, R.UZset{R.ZWRemLex{a, b}}}] == [R.parse_zremrange.of(_, 3n, k, a, b)] : List<&2, R.Cmd>}
+        {==}
+
+def zpop_args(max: Bool, +k: String) -> {[R.Upd{k, R.UZset{R.ZWPop{max}}}] == A.parse_all(A.args_all([R.Upd{k, R.UZset{R.ZWPop{max}}}])) : List<&2, R.Cmd>}:
+  match max:
+    case True{}:
+      {==}
+    case False{}:
+      {==}
+
+def zpopn_args(max: Bool, +k: String, +c: String) -> {Maybe.is_some(&2, Nat, R.lcount(c)) == True{} : Bool} -> {[R.Upd{k, R.UZset{R.ZWPopN{max, c}}}] == A.parse_all(A.args_all([R.Upd{k, R.UZset{R.ZWPopN{max, c}}}])) : List<&2, R.Cmd>}:
+  match max:
+    case True{}:
+      ok => %Equal.sym(Bool, Maybe.is_some(&2, Nat, R.lcount(c)), True{}, ok) : {[R.Upd{k, R.UZset{R.ZWPopN{True{}, c}}}] == [R.parse_zpop.n(_, k, True{}, c)] : List<&2, R.Cmd>}
+            {==}
+    case False{}:
+      ok => %Equal.sym(Bool, Maybe.is_some(&2, Nat, R.lcount(c)), True{}, ok) : {[R.Upd{k, R.UZset{R.ZWPopN{False{}, c}}}] == [R.parse_zpop.n(_, k, False{}, c)] : List<&2, R.Cmd>}
+            {==}
+
+def zset_args(op: R.ZWrite, +k: String) -> GoodZOp(op) -> {[R.Upd{k, R.UZset{op}}] == A.parse_all(A.args_all([R.Upd{k, R.UZset{op}}])) : List<&2, R.Cmd>}:
+  match op:
+    case R.ZWAdd{o, ps}:
+      ck => zadd_args(k, o, ps)(ck)
+    case R.ZWRem{ms}:
+      ne => zrem_args(k, ms)(ne)
+    case R.ZWNew{o, ps}:
+      g => Empty.absurd({[R.Upd{k, R.UZset{R.ZWNew{o, ps}}}] == A.parse_all(A.args_all([R.Upd{k, R.UZset{R.ZWNew{o, ps}}}])) : List<&2, R.Cmd>}, g)
+    case R.ZWRemRank{+a, +b}:
+      ok => zremrank_args(k, a, b)(ok)
+    case R.ZWRemScore{+a, +b}:
+      ok => zremscore_args(k, a, b)(ok)
+    case R.ZWRemLex{+a, +b}:
+      ok => zremlex_args(k, a, b)(ok)
+    case R.ZWPop{max}:
+      u => zpop_args(max, k)
+    case R.ZWPopN{max, +c}:
+      ok => zpopn_args(max, k, c)(ok)
+
+def gzset_op(-op: R.ZWrite, -z: KV.Zset, -z0: KV.Zset, g: {ch_of(R.zwrite(op, False{}, z0)) == R.CZset{op, z} : R.Change} & GoodZOp(op)) -> GoodZOp(op):
+  (gz, go) = g
+  go
+
+def zset_args_v(w: KV.Val, +op: R.ZWrite, -z: KV.Zset, +k: String) -> GoodZsetV(w, op, z) -> {[R.Upd{k, R.UZset{op}}] == A.parse_all(A.args_all([R.Upd{k, R.UZset{op}}])) : List<&2, R.Cmd>}:
+  match w:
+    case KV.VColl{KV.CZset{z0}}:
+      g => zset_args(op, k)(gzset_op(op, z, z0, g))
+    case KV.VColl{KV.CHash{h0}}:
+      g => Empty.absurd({[R.Upd{k, R.UZset{op}}] == A.parse_all(A.args_all([R.Upd{k, R.UZset{op}}])) : List<&2, R.Cmd>}, g)
+    case KV.VColl{KV.CList{l0}}:
+      g => Empty.absurd({[R.Upd{k, R.UZset{op}}] == A.parse_all(A.args_all([R.Upd{k, R.UZset{op}}])) : List<&2, R.Cmd>}, g)
+    case KV.VColl{KV.CMems{s0}}:
+      g => Empty.absurd({[R.Upd{k, R.UZset{op}}] == A.parse_all(A.args_all([R.Upd{k, R.UZset{op}}])) : List<&2, R.Cmd>}, g)
+    case KV.VStr{u}:
+      g => Empty.absurd({[R.Upd{k, R.UZset{op}}] == A.parse_all(A.args_all([R.Upd{k, R.UZset{op}}])) : List<&2, R.Cmd>}, g)
+
+def znew_args(b: Bool, +k: String, +o: R.ZOpts, +ps: List<&2, R.ZPair>, xe: {R.zopts.xx(o) == False{} : Bool}, ck: {R.zadd.check(o, ps) == None{} : Maybe<&2, R.Reply>}) -> {A.znew.effect(b, k, o, ps) == A.parse_all(A.args_all(A.znew.effect(b, k, o, ps))) : List<&2, R.Cmd>}:
+  match b:
+    case True{}:
+      zadd_args(k, o, ps)(ck)
+    case False{}:
+      znew_eval_args(k, o, ps)(xe)(ck)
+
+def znew_args_g(b: Bool, +k: String, +o: R.ZOpts, +ps: List<&2, R.ZPair>, -z: KV.Zset, g: GoodNewZ(o, ps, z)) -> {A.znew.effect(b, k, o, ps) == A.parse_all(A.args_all(A.znew.effect(b, k, o, ps))) : List<&2, R.Cmd>}:
+  (gn, gr) = g
+  (xe, ck) = gr
+  znew_args(b, k, o, ps, xe, ck)
 
 def ch_args(ch: R.Change, m: Maybe<&2, KV.Item<KV.Val>>, +k: String) -> Good(m, ch) -> {A.ch.effect(k, R.ent.code(m), ch) == A.parse_all(A.args_all(A.ch.effect(k, R.ent.code(m), ch))) : List<&2, R.Cmd>}:
   match ch m:
@@ -9579,6 +11021,12 @@ def ch_args(ch: R.Change, m: Maybe<&2, KV.Item<KV.Val>>, +k: String) -> Good(m, 
       g => Empty.absurd({A.ch.effect(k, R.ent.code(None{}), R.CMems{op, sv}) == A.parse_all(A.args_all(A.ch.effect(k, R.ent.code(None{}), R.CMems{op, sv}))) : List<&2, R.Cmd>}, g)
     case R.CMemsNew{+ms, sv} _:
       g => snew_args(Nat.is_eq(R.ent.code(m), 0n), k, ms, gm_ne(ms, sv, g))
+    case R.CZset{+op, z} Some{KV.Item{w, e}}:
+      g => zset_args_v(w, op, z, k)(g)
+    case R.CZset{op, z} None{}:
+      g => Empty.absurd({A.ch.effect(k, R.ent.code(None{}), R.CZset{op, z}) == A.parse_all(A.args_all(A.ch.effect(k, R.ent.code(None{}), R.CZset{op, z}))) : List<&2, R.Cmd>}, g)
+    case R.CZsetNew{+o, +ps, +z} _:
+      g => znew_args_g(Nat.is_eq(R.ent.code(m), 0n), k, o, ps, z, g)
 
 def out_args(o: R.Out, m: Maybe<&2, KV.Item<KV.Val>>, +k: String) -> Good(m, ch_of(o)) -> {A.upd.effect(k, R.ent.code(m), o) == A.parse_all(A.args_all(A.upd.effect(k, R.ent.code(m), o))) : List<&2, R.Cmd>}:
   match o:
@@ -9695,6 +11143,51 @@ def sstore_args(g: R.SGot, +op: R.SetK, +ks: List<&2, String>, +d: String, +t: K
     case R.SGotWrong{}:
       {==}
 
+# a STORE's effects, of a sorted-set operation or of a range, and ZMPOP's,
+# parse back
+def zstore_of_args(xs: List<&2, KV.ZEl>, +d: String, +t: KV.Trie<KV.Val>, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>) -> {zstore_eff_of(xs, d, R.Db{t, n, x, now, rr}) == A.parse_all(A.args_all(zstore_eff_of(xs, d, R.Db{t, n, x, now, rr}))) : List<&2, R.Cmd>}:
+  match xs:
+    case Nil{}:
+      {==}
+    case Con{+y, +rest}:
+      out_args(R.upd.v(R.UZset{R.ZWNew{R.zopts.none(), R.zstore.pairs(y <> rest)}}, now, R.ent.live(now, KV.entry.at(KV.Val, t, d, KV.hash(d)))), KV.entry.at(KV.Val, t, d, KV.hash(d)), d)(upd_good(R.UZset{R.ZWNew{R.zopts.none(), R.zstore.pairs(y <> rest)}}, now, KV.entry.at(KV.Val, t, d, KV.hash(d))))
+
+def zstore_ok_args(bad: Maybe<&2, R.Reply>, +op: R.ZSetK, ss: List<&2, R.ZSrc>, +d: String, +t: KV.Trie<KV.Val>, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>) -> {zstore_eff_ok(bad, op, ss, d, R.Db{t, n, x, now, rr}) == A.parse_all(A.args_all(zstore_eff_ok(bad, op, ss, d, R.Db{t, n, x, now, rr}))) : List<&2, R.Cmd>}:
+  match bad:
+    case Some{r}:
+      {==}
+    case None{}:
+      zstore_of_args(R.zop.els(op, ss), d, t, n, x, now, rr)
+
+def zstore_args(g: R.ZGot, +op: R.ZSetK, +d: String, +t: KV.Trie<KV.Val>, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>) -> {zstore_eff(g, op, d, R.Db{t, n, x, now, rr}) == A.parse_all(A.args_all(zstore_eff(g, op, d, R.Db{t, n, x, now, rr}))) : List<&2, R.Cmd>}:
+  match g:
+    case R.ZGot{ss}:
+      zstore_ok_args(R.zop.bad(op), op, ss, d, t, n, x, now, rr)
+    case R.ZGotWrong{}:
+      {==}
+
+def zrs_args(m: Maybe<&2, KV.Val>, q: R.ZQ, +d: String, +t: KV.Trie<KV.Val>, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>) -> {zrs_eff(m, q, d, R.Db{t, n, x, now, rr}) == A.parse_all(A.args_all(zrs_eff(m, q, d, R.Db{t, n, x, now, rr}))) : List<&2, R.Cmd>}:
+  match m:
+    case None{}:
+      zstore_of_args(Nil{}, d, t, n, x, now, rr)
+    case Some{KV.VColl{KV.CZset{+z}}}:
+      zstore_of_args(R.zq.run(q, z), d, t, n, x, now, rr)
+    case Some{KV.VColl{KV.CHash{h}}}:
+      {==}
+    case Some{KV.VColl{KV.CList{l}}}:
+      {==}
+    case Some{KV.VColl{KV.CMems{s}}}:
+      {==}
+    case Some{KV.VStr{w}}:
+      {==}
+
+def zmpop_args(m: Maybe<&2, String>, +max: Bool, +c: String, +t: KV.Trie<KV.Val>, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>) -> {zmpop_eff(m, max, c, R.Db{t, n, x, now, rr}) == A.parse_all(A.args_all(zmpop_eff(m, max, c, R.Db{t, n, x, now, rr}))) : List<&2, R.Cmd>}:
+  match m:
+    case Some{+k}:
+      out_args(R.upd.v(R.UZset{R.ZWPopN{max, c}}, now, R.ent.live(now, KV.entry.at(KV.Val, t, k, KV.hash(k)))), KV.entry.at(KV.Val, t, k, KV.hash(k)), k)(upd_good(R.UZset{R.ZWPopN{max, c}}, now, KV.entry.at(KV.Val, t, k, KV.hash(k))))
+    case None{}:
+      {==}
+
 def args_go(c: R.Cmd, +t: KV.Trie<KV.Val>, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>) -> {eff(c, R.Db{t, n, x, now, rr}) == A.parse_all(A.args_all(eff(c, R.Db{t, n, x, now, rr}))) : List<&2, R.Cmd>}:
   match c:
     case R.Ping{}:
@@ -9752,6 +11245,14 @@ def args_go(c: R.Cmd, +t: KV.Trie<KV.Val>, +n: Nat, +x: Nat, +now: Nat, +rr: May
       sstore_args(R.sets.at(srcs, now, t), op, srcs, d, t, n, x, now, rr)
     case R.SMv{+s, +d, +w}:
       smove_args(A.smove.moved(R.smv.of(R.Db{t, n, x, now, rr}, s, d, w)), R.ent.dead(now, KV.entry.at(KV.Val, t, d, KV.hash(d))), s, d, w)
+    case R.ZOp{op, ks}:
+      {==}
+    case R.ZStore{+op, +d, +srcs}:
+      zstore_args(R.zsrcs.at(srcs, now, t), op, d, t, n, x, now, rr)
+    case R.ZRangeStore{+d, +s, +q}:
+      zrs_args(KV.read(KV.Val, t, s, now), q, d, t, n, x, now, rr)
+    case R.ZMPop{+ks, +max, +c}:
+      zmpop_args(R.lmpop.first(ks, R.lmpop.head(ks, R.Db{t, n, x, now, rr}), R.Db{t, n, x, now, rr}), max, c, t, n, x, now, rr)
     case R.Own{o}:
       {==}
     case R.Bad{r}:
@@ -9993,6 +11494,13 @@ def snew_one(b: Bool, +k: String, +ms: List<&2, String>) -> OneEff(A.snew.effect
     case False{}:
       Inr{(R.Upd{k, R.UMems{R.SWNew{ms}}}, {==})}
 
+def znew_one(b: Bool, +k: String, +o: R.ZOpts, +ps: List<&2, R.ZPair>) -> OneEff(A.znew.effect(b, k, o, ps)):
+  match b:
+    case True{}:
+      Inr{(R.Upd{k, R.UZset{R.ZWAdd{o, ps}}}, {==})}
+    case False{}:
+      Inr{(R.Upd{k, R.UZset{R.ZWNew{o, ps}}}, {==})}
+
 def ch_one(+k: String, +c: Nat, ch: R.Change) -> OneEff(A.ch.effect(k, c, ch)):
   match ch:
     case R.CKeep{}:
@@ -10029,6 +11537,10 @@ def ch_one(+k: String, +c: Nat, ch: R.Change) -> OneEff(A.ch.effect(k, c, ch)):
       Inr{(R.Upd{k, R.UMems{op}}, {==})}
     case R.CMemsNew{+ms, sv}:
       snew_one(Nat.is_eq(c, 0n), k, ms)
+    case R.CZset{op, z}:
+      Inr{(R.Upd{k, R.UZset{op}}, {==})}
+    case R.CZsetNew{+o, +ps, z}:
+      znew_one(Nat.is_eq(c, 0n), k, o, ps)
 
 def out_one(+k: String, +c: Nat, o: R.Out) -> OneEff(A.upd.effect(k, c, o)):
   match o:
@@ -10110,6 +11622,49 @@ def sstore_one(g: R.SGot, +op: R.SetK, +ks: List<&2, String>, +d: String, +t: KV
     case R.SGotWrong{}:
       Inl{{==}}
 
+def zstore_of_one(xs: List<&2, KV.ZEl>, +d: String, +t: KV.Trie<KV.Val>, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>) -> OneEff(zstore_eff_of(xs, d, R.Db{t, n, x, now, rr})):
+  match xs:
+    case Nil{}:
+      Inr{(R.Del{[d]}, {==})}
+    case Con{+y, +rest}:
+      out_one(d, R.ent.code(KV.entry.at(KV.Val, t, d, KV.hash(d))), R.upd.v(R.UZset{R.ZWNew{R.zopts.none(), R.zstore.pairs(y <> rest)}}, now, R.ent.live(now, KV.entry.at(KV.Val, t, d, KV.hash(d)))))
+
+def zstore_ok_one(bad: Maybe<&2, R.Reply>, +op: R.ZSetK, ss: List<&2, R.ZSrc>, +d: String, +t: KV.Trie<KV.Val>, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>) -> OneEff(zstore_eff_ok(bad, op, ss, d, R.Db{t, n, x, now, rr})):
+  match bad:
+    case Some{r}:
+      Inl{{==}}
+    case None{}:
+      zstore_of_one(R.zop.els(op, ss), d, t, n, x, now, rr)
+
+def zstore_one(g: R.ZGot, +op: R.ZSetK, +d: String, +t: KV.Trie<KV.Val>, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>) -> OneEff(zstore_eff(g, op, d, R.Db{t, n, x, now, rr})):
+  match g:
+    case R.ZGot{ss}:
+      zstore_ok_one(R.zop.bad(op), op, ss, d, t, n, x, now, rr)
+    case R.ZGotWrong{}:
+      Inl{{==}}
+
+def zrs_one(m: Maybe<&2, KV.Val>, q: R.ZQ, +d: String, +t: KV.Trie<KV.Val>, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>) -> OneEff(zrs_eff(m, q, d, R.Db{t, n, x, now, rr})):
+  match m:
+    case None{}:
+      zstore_of_one(Nil{}, d, t, n, x, now, rr)
+    case Some{KV.VColl{KV.CZset{+z}}}:
+      zstore_of_one(R.zq.run(q, z), d, t, n, x, now, rr)
+    case Some{KV.VColl{KV.CHash{h}}}:
+      Inl{{==}}
+    case Some{KV.VColl{KV.CList{l}}}:
+      Inl{{==}}
+    case Some{KV.VColl{KV.CMems{s}}}:
+      Inl{{==}}
+    case Some{KV.VStr{w}}:
+      Inl{{==}}
+
+def zmpop_one(m: Maybe<&2, String>, +max: Bool, +c: String, +t: KV.Trie<KV.Val>, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>) -> OneEff(zmpop_eff(m, max, c, R.Db{t, n, x, now, rr})):
+  match m:
+    case Some{+k}:
+      out_one(k, R.ent.code(KV.entry.at(KV.Val, t, k, KV.hash(k))), R.upd.v(R.UZset{R.ZWPopN{max, c}}, now, R.ent.live(now, KV.entry.at(KV.Val, t, k, KV.hash(k)))))
+    case None{}:
+      Inl{{==}}
+
 def eff_one_go(c: R.Cmd, +t: KV.Trie<KV.Val>, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>) -> OneEff(eff(c, R.Db{t, n, x, now, rr})):
   match c:
     case R.Ping{}:
@@ -10166,6 +11721,14 @@ def eff_one_go(c: R.Cmd, +t: KV.Trie<KV.Val>, +n: Nat, +x: Nat, +now: Nat, +rr: 
       sstore_one(R.sets.at(srcs, now, t), op, srcs, d, t, n, x, now, rr)
     case R.SMv{+s, +d, +w}:
       smove_one(A.smove.moved(R.smv.of(R.Db{t, n, x, now, rr}, s, d, w)), R.ent.dead(now, KV.entry.at(KV.Val, t, d, KV.hash(d))), s, d, w)
+    case R.ZOp{op, ks}:
+      Inl{{==}}
+    case R.ZStore{+op, +d, +srcs}:
+      zstore_one(R.zsrcs.at(srcs, now, t), op, d, t, n, x, now, rr)
+    case R.ZRangeStore{+d, +s, +q}:
+      zrs_one(KV.read(KV.Val, t, s, now), q, d, t, n, x, now, rr)
+    case R.ZMPop{+ks, +max, +c}:
+      zmpop_one(R.lmpop.first(ks, R.lmpop.head(ks, R.Db{t, n, x, now, rr}), R.Db{t, n, x, now, rr}), max, c, t, n, x, now, rr)
     case R.Own{o}:
       Inl{{==}}
     case R.Bad{r}:
@@ -11069,6 +12632,14 @@ def fa_of(e: R.Cmd) -> {R.parse(A.args(e)) == e : R.Cmd} -> {A.file.act(e) == R.
     case R.SStore{op, d, srcs}:
       h => {==}
     case R.SMv{sk, d, w}:
+      h => {==}
+    case R.ZOp{op, ks}:
+      h => {==}
+    case R.ZStore{op, d, srcs}:
+      h => {==}
+    case R.ZRangeStore{d, s, q}:
+      h => {==}
+    case R.ZMPop{ks, max, c}:
       h => {==}
     case R.Own{o}:
       h => Empty.absurd({A.file.act(R.Own{o}) == R.ARun{R.Own{o}} : R.Act}, own_noent(o, h))
@@ -12814,6 +14385,14 @@ def unzip_gen(+conn: S.Conn, +srv: S.Srv, rs: List<&2, B.Req>, +cs: List<&2, R.C
       e => unzip_gen(conn, srv, rest, R.SStore{x0, x1, x2} <> cs, h <> hs, ds)(e)
     case Con{B.Req{R.SMv{x0, x1, x2}, h}, rest}:
       e => unzip_gen(conn, srv, rest, R.SMv{x0, x1, x2} <> cs, h <> hs, ds)(e)
+    case Con{B.Req{R.ZOp{x0, x1}, h}, rest}:
+      e => unzip_gen(conn, srv, rest, R.ZOp{x0, x1} <> cs, h <> hs, ds)(e)
+    case Con{B.Req{R.ZStore{x0, x1, x2}, h}, rest}:
+      e => unzip_gen(conn, srv, rest, R.ZStore{x0, x1, x2} <> cs, h <> hs, ds)(e)
+    case Con{B.Req{R.ZRangeStore{x0, x1, x2}, h}, rest}:
+      e => unzip_gen(conn, srv, rest, R.ZRangeStore{x0, x1, x2} <> cs, h <> hs, ds)(e)
+    case Con{B.Req{R.ZMPop{x0, x1, x2}, h}, rest}:
+      e => unzip_gen(conn, srv, rest, R.ZMPop{x0, x1, x2} <> cs, h <> hs, ds)(e)
     case Con{B.Req{R.Own{x0}, h}, rest}:
       e => mixed_gen(conn, srv, rest, R.Own{x0} <> cs, h <> hs, ds)
     case Con{B.Req{R.Bad{x0}, h}, rest}:
@@ -12926,6 +14505,14 @@ def unzip_gen_log(+conn: S.Conn, +srv: S.Srv, rs: List<&2, B.Req>, +cs: List<&2,
       e => unzip_gen_log(conn, srv, rest, R.SStore{x0, x1, x2} <> cs, h <> hs, ds)(e)
     case Con{B.Req{R.SMv{x0, x1, x2}, h}, rest}:
       e => unzip_gen_log(conn, srv, rest, R.SMv{x0, x1, x2} <> cs, h <> hs, ds)(e)
+    case Con{B.Req{R.ZOp{x0, x1}, h}, rest}:
+      e => unzip_gen_log(conn, srv, rest, R.ZOp{x0, x1} <> cs, h <> hs, ds)(e)
+    case Con{B.Req{R.ZStore{x0, x1, x2}, h}, rest}:
+      e => unzip_gen_log(conn, srv, rest, R.ZStore{x0, x1, x2} <> cs, h <> hs, ds)(e)
+    case Con{B.Req{R.ZRangeStore{x0, x1, x2}, h}, rest}:
+      e => unzip_gen_log(conn, srv, rest, R.ZRangeStore{x0, x1, x2} <> cs, h <> hs, ds)(e)
+    case Con{B.Req{R.ZMPop{x0, x1, x2}, h}, rest}:
+      e => unzip_gen_log(conn, srv, rest, R.ZMPop{x0, x1, x2} <> cs, h <> hs, ds)(e)
     case Con{B.Req{R.Own{x0}, h}, rest}:
       e => mixed_gen_log(conn, srv, rest, R.Own{x0} <> cs, h <> hs, ds)
     case Con{B.Req{R.Bad{x0}, h}, rest}:
@@ -13008,6 +14595,8 @@ def srv_same.o(o: R.SessOp, +conn: S.Conn, +srv: S.Srv, +ef: {S.authed(conn, srv
       e => Empty.absurd({S.own_srv(R.SSPop{y0, y1}, conn, srv) == srv : S.Srv}, true_false(Equal.trans(Bool, True{}, S.authed(conn, srv), False{}, e, ef)))
     case R.SSRandMember{y0, y1}:
       e => Empty.absurd({S.own_srv(R.SSRandMember{y0, y1}, conn, srv) == srv : S.Srv}, true_false(Equal.trans(Bool, True{}, S.authed(conn, srv), False{}, e, ef)))
+    case R.SZRandMember{y0, y1}:
+      e => Empty.absurd({S.own_srv(R.SZRandMember{y0, y1}, conn, srv) == srv : S.Srv}, true_false(Equal.trans(Bool, True{}, S.authed(conn, srv), False{}, e, ef)))
     case R.SMemUsage{y0, y1}:
       e => Empty.absurd({S.own_srv(R.SMemUsage{y0, y1}, conn, srv) == srv : S.Srv}, true_false(Equal.trans(Bool, True{}, S.authed(conn, srv), False{}, e, ef)))
     case R.SReply{y0}:
@@ -13133,6 +14722,10 @@ def own_bad(o: R.SessOp, +ps: List<&2, R.Act>, +id: Nat, +a: Bool, +n: String, +
       ih =>
         %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel}, srv), False{}, ef) : {Laws.all_bad(List.append(&2, R.Act, S.acts.k(S.KSess{R.SSRandMember{y0, y1}}, _, R.Own{R.SSRandMember{y0, y1}}, S.Conn{id, a, n, m, False{}, sel}, srv), ps)) == True{} : Bool}
         ih
+    case R.SZRandMember{y0, y1}:
+      ih =>
+        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel}, srv), False{}, ef) : {Laws.all_bad(List.append(&2, R.Act, S.acts.k(S.KSess{R.SZRandMember{y0, y1}}, _, R.Own{R.SZRandMember{y0, y1}}, S.Conn{id, a, n, m, False{}, sel}, srv), ps)) == True{} : Bool}
+        ih
     case R.SMemUsage{y0, y1}:
       ih =>
         %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel}, srv), False{}, ef) : {Laws.all_bad(List.append(&2, R.Act, S.acts.k(S.KSess{R.SMemUsage{y0, y1}}, _, R.Own{R.SMemUsage{y0, y1}}, S.Conn{id, a, n, m, False{}, sel}, srv), ps)) == True{} : Bool}
@@ -13217,6 +14810,22 @@ def ran_bad(c: R.Cmd, +ps: List<&2, R.Act>, +id: Nat, +a: Bool, +n: String, +m: 
     case R.SMv{x0, x1, x2}:
       ih =>
         %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel}, srv), False{}, ef) : {Laws.all_bad(List.append(&2, R.Act, S.acts.k(S.KData{}, _, R.SMv{x0, x1, x2}, S.Conn{id, a, n, m, False{}, sel}, srv), ps)) == True{} : Bool}
+        ih
+    case R.ZOp{x0, x1}:
+      ih =>
+        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel}, srv), False{}, ef) : {Laws.all_bad(List.append(&2, R.Act, S.acts.k(S.KData{}, _, R.ZOp{x0, x1}, S.Conn{id, a, n, m, False{}, sel}, srv), ps)) == True{} : Bool}
+        ih
+    case R.ZStore{x0, x1, x2}:
+      ih =>
+        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel}, srv), False{}, ef) : {Laws.all_bad(List.append(&2, R.Act, S.acts.k(S.KData{}, _, R.ZStore{x0, x1, x2}, S.Conn{id, a, n, m, False{}, sel}, srv), ps)) == True{} : Bool}
+        ih
+    case R.ZRangeStore{x0, x1, x2}:
+      ih =>
+        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel}, srv), False{}, ef) : {Laws.all_bad(List.append(&2, R.Act, S.acts.k(S.KData{}, _, R.ZRangeStore{x0, x1, x2}, S.Conn{id, a, n, m, False{}, sel}, srv), ps)) == True{} : Bool}
+        ih
+    case R.ZMPop{x0, x1, x2}:
+      ih =>
+        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel}, srv), False{}, ef) : {Laws.all_bad(List.append(&2, R.Act, S.acts.k(S.KData{}, _, R.ZMPop{x0, x1, x2}, S.Conn{id, a, n, m, False{}, sel}, srv), ps)) == True{} : Bool}
         ih
     case R.DbSize{}:
       ih =>
@@ -13343,6 +14952,10 @@ def auth_own(o: R.SessOp, +id: Nat, +a: Bool, +n: String, +m: S.Mute, +sel: Nat,
       el =>
         %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel}, srv), False{}, ef) : {S.conn.auth(S.next_conn.k(S.KSess{R.SSRandMember{y0, y1}}, _, S.Conn{id, a, n, m, False{}, sel}, srv)) == False{} : Bool}
         ef
+    case R.SZRandMember{y0, y1}:
+      el =>
+        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel}, srv), False{}, ef) : {S.conn.auth(S.next_conn.k(S.KSess{R.SZRandMember{y0, y1}}, _, S.Conn{id, a, n, m, False{}, sel}, srv)) == False{} : Bool}
+        ef
     case R.SMemUsage{y0, y1}:
       el =>
         %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel}, srv), False{}, ef) : {S.conn.auth(S.next_conn.k(S.KSess{R.SMemUsage{y0, y1}}, _, S.Conn{id, a, n, m, False{}, sel}, srv)) == False{} : Bool}
@@ -13392,6 +15005,14 @@ def auth_nc(c: R.Cmd, +id: Nat, +a: Bool, +n: String, +m: S.Mute, +sel: Nat, +sr
     case R.SStore{x0, x1, x2}:
       el => ef
     case R.SMv{x0, x1, x2}:
+      el => ef
+    case R.ZOp{x0, x1}:
+      el => ef
+    case R.ZStore{x0, x1, x2}:
+      el => ef
+    case R.ZRangeStore{x0, x1, x2}:
+      el => ef
+    case R.ZMPop{x0, x1, x2}:
       el => ef
     case R.DbSize{}:
       el => ef

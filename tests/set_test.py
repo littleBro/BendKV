@@ -239,7 +239,7 @@ SCRIPT = [
     [b"SSCAN", b"i", b"0", b"MATCH", b"*1*", b"COUNT", b"2"], [b"SSCAN", b"q", b"x"], [b"SSCAN", b"q", b"0", b"COUNT", b"0"],
     [b"SSCAN", b"q", b"0", b"COUNT", b"-1"], [b"SSCAN", b"q", b"0", b"COUNT"], [b"SSCAN", b"q", b"0", b"FOO", b"1"],
     [b"SSCAN", b"q", b"0", b"TYPE", b"set"], [b"SSCAN", b"nope", b"0"], [b"SSCAN", b"str", b"0"], [b"SSCAN", b"q"],
-    [b"SSCAN"], [b"SSCAN", b"q", b"-1"], [b"SSCAN", b"q", b"18446744073709551616"],
+    [b"SSCAN"], [b"SSCAN", b"n1", b"-1"], [b"SSCAN", b"q", b"18446744073709551616"],
     # another kind
     [b"SADD", b"str", b"a"], [b"SREM", b"str", b"a"], [b"SCARD", b"str"], [b"SISMEMBER", b"str", b"a"],
     [b"SMISMEMBER", b"str", b"a"], [b"SMEMBERS", b"str"], [b"HSET", b"h", b"f", b"v"], [b"SADD", b"h", b"a"],

@@ -1,5 +1,5 @@
 # aof_check.bend: runs smoke.bend's batch, and writes of hashes, of
-# lists and of sets, with its effects (aof.bend:
+# lists, of sets and of sorted sets, with its effects (aof.bend:
 # exec_log), writes the effects as the server appends them, reads the
 # file back, runs it from an empty database and prints whether that gives
 # the batch's database; then cuts the file at every length and prints
@@ -12,6 +12,7 @@
 import Base
 import ../src/map.bend as KV
 import ../src/redis.bend as R
+import ../src/float.bend as F
 import ../src/resp.bend as P
 import ../src/batch.bend as B
 import ../src/aof.bend as A
@@ -72,7 +73,17 @@ def buf() -> String:
   "*7\r\n$4\r\nEVAL\r\n$131\r\n" ++ R.hnew.script() ++ "\r\n$1\r\n1\r\n$2\r\nsx\r\n$4\r\nSADD\r\n$1\r\na\r\n$1\r\nb\r\n" ++
   "*6\r\n$4\r\nEVAL\r\n$131\r\n" ++ R.hnew.script() ++ "\r\n$1\r\n1\r\n$1\r\nh\r\n$4\r\nSADD\r\n$1\r\nc\r\n" ++
   "*6\r\n$4\r\nEVAL\r\n$76\r\n" ++ R.smove.script() ++ "\r\n$1\r\n2\r\n$2\r\nsu\r\n$2\r\nsx\r\n$1\r\n5\r\n" ++
-  "*6\r\n$4\r\nEVAL\r\n$76\r\n" ++ R.smove.script() ++ "\r\n$1\r\n2\r\n$2\r\nsu\r\n$1\r\nl\r\n$1\r\n6\r\n"
+  "*6\r\n$4\r\nEVAL\r\n$76\r\n" ++ R.smove.script() ++ "\r\n$1\r\n2\r\n$2\r\nsu\r\n$1\r\nl\r\n$1\r\n6\r\n" ++
+  "ZADD zs 1 a 2 b 3 c\r\nZADD zs XX CH 5 a 9 nope\r\nZADD zs NX 7 a 4 d\r\nZINCRBY zs 2.5 b\r\nZADD zs INCR 1 c\r\n" ++
+  "ZREM zs d nope\r\nZADD zs GT CH 0 a 6 c\r\nZADD z2 1 x 2 y 3 z 4 w\r\nZREMRANGEBYRANK z2 0 0\r\n" ++
+  "ZREMRANGEBYSCORE z2 (2 3\r\nZADD zl 0 a 0 b 0 c 0 d\r\nZREMRANGEBYLEX zl [b (d\r\nZPOPMIN zl\r\nZPOPMAX z2 5\r\n" ++
+  "ZADD z3 1 a 2 b 3 c 4 d\r\nZMPOP 2 nope z3 MAX COUNT 2\r\nZUNIONSTORE zu 2 zs z3 WEIGHTS 2 1\r\n" ++
+  "ZINTERSTORE zi 2 zs z3 AGGREGATE MAX\r\nZDIFFSTORE zd 2 zs z3\r\nZDIFFSTORE zd 2 zs zs\r\nZRANGESTORE zr zs 0 1 REV\r\n" ++
+  "ZRANGESTORE zr2 zs (1 +inf BYSCORE LIMIT 0 1\r\nZUNIONSTORE g 1 zs\r\nZADD zx 1 a\r\nEXPIRE zx 100\r\nZADD zx 2 b\r\n" ++
+  "ZPOPMIN zx 2\r\nZADD\r\nZADD zs NX XX 1 a\r\nZADD zs -0 neg 1e300 big\r\nZINCRBY zs inf big\r\n" ++
+  "*7\r\n$4\r\nEVAL\r\n$230\r\n" ++ R.znew.script() ++ "\r\n$1\r\n1\r\n$2\r\nzw\r\n$1\r\n0\r\n$1\r\n1\r\n$1\r\na\r\n" ++
+  "*8\r\n$4\r\nEVAL\r\n$230\r\n" ++ R.znew.script() ++ "\r\n$1\r\n1\r\n$1\r\nh\r\n$1\r\n1\r\n$2\r\nCH\r\n$1\r\n5\r\n$1\r\nb\r\n" ++
+  "*8\r\n$4\r\nEVAL\r\n$230\r\n" ++ R.znew.script() ++ "\r\n$1\r\n1\r\n$2\r\nzs\r\n$1\r\n1\r\n$4\r\nINCR\r\n$1\r\n5\r\n$1\r\nb\r\n"
 
 # an entry as its value, and the time it expires at when it has one
 def dump.pairs(ps: List<&2, KV.HPair>) -> String:
@@ -89,6 +100,13 @@ def dump.elems(xs: List<&2, String>) -> String:
     case Con{x, rest}:
       " " ++ x ++ dump.elems(rest)
 
+def dump.zels(xs: List<&2, KV.ZEl>) -> String:
+  match xs:
+    case Nil{}:
+      ""
+    case Con{KV.ZEl{m, +d}, rest}:
+      " " ++ m ++ ":" ++ F.f64.show(d) ++ dump.zels(rest)
+
 def dump.val(v: KV.Val) -> String:
   match v:
     case KV.VStr{s}:
@@ -99,6 +117,8 @@ def dump.val(v: KV.Val) -> String:
       "<list" ++ dump.elems(KV.deq.all(l)) ++ ">"
     case KV.VColl{KV.CMems{+m}}:
       "<set" ++ dump.elems(KV.mems.all(m)) ++ ">"
+    case KV.VColl{KV.CZset{+z}}:
+      "<zset" ++ dump.zels(KV.zt.all(KV.zset.tree(z))) ++ ">"
 
 def dump.ent(m: Maybe<&2, KV.Item<KV.Val>>) -> String:
   match m:
@@ -150,13 +170,18 @@ def cut_ok(+cut: String, l: List<&2, List<&2, String>> & String) -> Bool:
   (reqs, +rest) = l
   Bool.and(String.eq(A.encode(reqs) ++ rest, cut), is_none(A.entry(rest)))
 
-def cuts(+f: String, k: Nat, +n: Nat) -> String:
-  match k:
-    case 0n:
+# k cuts left from length n on, the cut before n loading (ok): a loop
+# (a call in the place of a Bool.pick's branch would not be the last
+# thing done, and a file of thousands of bytes would run out of stack)
+def cuts(k: Nat, +f: String, +n: Nat, ok: Bool) -> String:
+  match k ok:
+    case _ False{}:
+      "cut at " ++ Nat.show(Nat.sub(n, 1n)) ++ " fails"
+    case 0n True{}:
       "all " ++ Nat.show(n) ++ " cuts load"
-    case 1n+m:
+    case 1n+m True{}:
       +c = String.take(f, n)
-      Bool.pick(String, cut_ok(c, A.load(c)), cuts(f, m, 1n+n), "cut at " ++ Nat.show(n) ++ " fails")
+      cuts(m, f, 1n+n, cut_ok(c, A.load(c)))
 
 def report.of(+cs: List<&2, R.Cmd>, q: List<&2, R.Cmd> & R.Db) -> IO(Unit):
   (es, +db) = q
@@ -168,7 +193,7 @@ def report.of(+cs: List<&2, R.Cmd>, q: List<&2, R.Cmd> & R.Db) -> IO(Unit):
     Unit <- IO.print("exec_log's database is exec_all's: " ++ same(want, one))
     Unit <- IO.print("replayed database: " ++ same(dump(replay(A.load(f))), want))
     Unit <- IO.print("database: " ++ want)
-    IO.print(cuts(f, 1n+String.length(f), 0n))
+    IO.print(cuts(1n+String.length(f), f, 0n, True{}))
 
 def report(+cs: List<&2, R.Cmd>, r: List<&2, R.Reply> & (List<&2, R.Cmd> & R.Db)) -> IO(Unit):
   (rs, q) = r
@@ -205,7 +230,7 @@ def mreport.of(q: List<&2, A.Eff> & R.Ds) -> IO(Unit):
     Unit <- IO.print("file on several databases: " ++ Nat.show(String.length(f)) ++ " bytes, " ++ Nat.show(List.length(&2, List<&2, String>, Pair.fst(List<&2, List<&2, String>>, String, A.load(f)))) ++ " entries")
     Unit <- IO.print("replayed databases: " ++ same(dump.ds(A.replay(Pair.fst(List<&2, List<&2, String>>, String, A.load(f)), 15n)), want))
     Unit <- IO.print("databases:\n" ++ want)
-    IO.print(cuts(f, 1n+String.length(f), 0n))
+    IO.print(cuts(1n+String.length(f), f, 0n, True{}))
 
 def main() -> IO(Unit):
   +cs = batch_of(P.parse(buf()))

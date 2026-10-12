@@ -225,6 +225,12 @@ def writes(c: R.Cmd, +j: String) -> Bool:
       KV.str_eq(j, d)
     case R.SMv{s, d, w}:
       any_key(j, [s, d])
+    case R.ZStore{op, d, srcs}:
+      KV.str_eq(j, d)
+    case R.ZRangeStore{d, s, q}:
+      KV.str_eq(j, d)
+    case R.ZMPop{ks, max, c}:
+      any_key(j, ks)
     case _:
       False{}
 
@@ -235,7 +241,10 @@ def writes(c: R.Cmd, +j: String) -> Bool:
 # what its sources make, LMOVE pushes onto its destination what it pops
 # from its source, LMPOP pops from the first of its keys that is there,
 # a STORE of a set operation sets its destination to what its sources
-# make, and SMOVE moves a member from its source to its destination
+# make, SMOVE moves a member from its source to its destination, a STORE
+# of a sorted-set operation (or of a range) sets its destination to what
+# its sources (its source) make, and ZMPOP pops from the first of its
+# keys that is there
 def pair_keys(ps: List<&2, R.KVPair>) -> List<&2, String>:
   match ps:
     case Nil{}:
@@ -259,6 +268,12 @@ def deps(c: R.Cmd) -> List<&2, String>:
       srcs
     case R.SMv{s, d, w}:
       [s, d]
+    case R.ZStore{op, d, srcs}:
+      srcs
+    case R.ZRangeStore{d, s, q}:
+      [s]
+    case R.ZMPop{ks, max, c}:
+      ks
     case _:
       Nil{}
 
@@ -286,6 +301,8 @@ def is_read(c: R.Cmd) -> Bool:
     case R.Peek{k, o}:
       True{}
     case R.SOp{op, ks}:
+      True{}
+    case R.ZOp{op, ks}:
       True{}
     case R.Own{o}:
       True{}
@@ -639,6 +656,14 @@ def disturbs(+c2: R.Cmd, c1: R.Cmd) -> Bool:
       writes_any(c2, srcs)
     case R.SMv{s, d, w}:
       writes_any(c2, [s, d])
+    case R.ZOp{op, ks}:
+      writes_any(c2, ks)
+    case R.ZStore{op, d, srcs}:
+      writes_any(c2, srcs)
+    case R.ZRangeStore{d, s, q}:
+      writes_any(c2, [s])
+    case R.ZMPop{ks, max, c}:
+      writes_any(c2, ks)
     case R.DbSize{}:
       Bool.not(is_read(c2))
     case R.Keys{p}:
@@ -722,6 +747,12 @@ def clash_w(+c2: R.Cmd, c1: R.Cmd) -> Bool:
       writes(c2, d)
     case R.SMv{s, t, w}:
       writes_any(c2, [s, t])
+    case R.ZStore{op, +d, srcs}:
+      writes(c2, d)
+    case R.ZRangeStore{+d, s, q}:
+      writes(c2, d)
+    case R.ZMPop{ks, max, c}:
+      writes_any(c2, ks)
     case _:
       False{}
 
