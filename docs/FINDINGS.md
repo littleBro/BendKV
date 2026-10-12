@@ -3484,3 +3484,112 @@ Section 3k took them in turn: the copying GET, with every line of a buffer hinte
 in; the pass through the seal and the hash bits were measured and left out; the shared
 buffer is still open.
 
+## 12. A review of the protocol and the connections
+
+A review of the first commit (9bd45b6) filed, among others, five issues about the
+protocol and the connections. Each was checked again against the code of 26 commits
+later (914713d): one had been fixed in between, four still held.
+
+**KEYS ([#4](https://github.com/littleBro/bendkv/issues/4)).** The first commit's glob
+took both ways at each `*` with `Bool.or`, which evaluates both arguments: ten stars
+against a key of ten bytes cost 537,471 calls. Section 3r's port of Redis's
+`stringmatchlen` had replaced it: one function with an explicit mode, so a star's loop
+ends at its first match (`SmTry`), a run of stars is one star (`sm.unstar`), a star that
+ends the pattern matches at once, and a rest that matches nowhere after a star ends the
+search (`SmStop`, Redis's `skipLongerMatches`), so each star's loop runs once at most. A
+model of the matcher's calls gives what each cut-off saves: `"*a" * 100` against 200 a's
+takes 201 calls, and 3.3 * 10^60 trying both ways; `"a*" * 20 + "b"` against 40 a's (Redis's
+own regression) takes 40, and 3.4 * 10^11 without the search's end. Comparing long patterns
+with Redis showed one difference left: the Redis the tests run against, Ubuntu's 7.0.15,
+carries the fix for CVE-2024-31228 (upstream since 6.2.16, 7.2.6 and 7.4.1), under which a
+call of `stringmatchlen_impl` nested in more than 1000 others matches nothing, so
+`"*a" * 1001` matched a key of 3000 a's on BendKV only. The matcher now counts how deep
+the rest after a star is nested (`SmIn`), with a bound on its depth that still holds (four
+levels for each byte of the pattern, three for each of the key's). `tests/keyspace_test.py`
+compares KEYS and SCAN's MATCH with Redis on 32 such patterns, adjacent stars,
+alternatives that match at once or nowhere, literal mismatches, classes and escapes among
+stars, and stars nested past 1000; each answers at once, where a matcher without one of the
+cut-offs would not answer within the client's timeout.
+
+**Lengths ([#9](https://github.com/littleBro/bendkv/issues/9)).** The parser read a
+length's line with `String.dec_line_at`, 1 to 10 digits and `"\r\n"`, and a count's '-'
+by skipping it, so `*01`, `$04` and `*-0` passed where Redis 7.0.15 refuses them, and
+`*-10000000000`, which Redis skips, was refused. Redis's `processMultibulkBuffer` finds a
+line's end with `strchr` (the first `'\r'`, hidden by a NUL before it, and whatever byte
+comes after it, skipped unread), waits for it up to 64 KB, then reads the number with
+`string2ll`: a sign, no `0` before the first digit, from -2^63 to 2^63 - 1; a count past
+INT_MAX or no number is an error, a count of 0 or less skips the request, and a bulk's
+length must be from 0 to 512 MB. The quick way stays for the lines clients send: a line of
+two digits or more whose number has fewer digits starts with a 0 and leaves it, at the
+cost of a comparison with a power of ten for those lines only. Every other line now goes
+Redis's way (`line_at`, then `R.ll.of`, the reading of `string2ll` that HELLO and the
+commands use), and so does a bulk that does not start with `'$'`, whose error waited, in
+Redis, for its line. `tests/protocol_test.py` gained 37 cases (the issue's four among
+them, and the lines Redis waits for, hides behind a NUL or refuses past 64 KB); its
+closures are no longer read from a quiet socket: a server holds a connection open when
+INFO counts it, and closed it when the client saw the end of the file, and every case
+checks that both servers let the connection go once the client closes it. Left out: the
+tighter limits Redis sets before a client authenticates (an error past 10 arguments or a
+bulk of 16 KB), which need the connection's state in the parser, and a new
+proto-max-bulk-len, which BendKV keeps but does not apply.
+
+**Errors on one line ([#6](https://github.com/littleBro/bendkv/issues/6)).** HELLO's
+error quoted its option as it came, so `HELLO 2 "a\r\nb"` answered two lines where Redis
+answers `-ERR Syntax error in HELLO option 'a  b'`; the parser's diagnostics held a CR and
+LF of their own (`expected '\r\n' after bulk data`) or the raw byte it did not expect
+(`expected '$', got '\r'`), and went out as they were. Unknown commands, subcommands and
+CONFIG SET's options had been mended in between, each where its error is made. Now the
+encoder sends every error reply on one line: a CR or LF in its text goes out as a space,
+as Redis's `addReplyErrorFormat` and `rejectCommandFormat` send theirs, after a look for
+either (two `String.find`s, on error replies only); the parser's diagnostics go out through
+the encoder too. HELLO's error is formatted as Redis formats it (`R.e_fmt`), and the
+arguments an error quotes stop at their first NUL, as `%s` stops (HELLO's option, the name
+and first arguments of an unknown command, an unknown subcommand, an unknown CONFIG SET
+option): Redis answers `unknown command 'no'` to `no\0pe`. The trailer the issue noted,
+`*1\r\n$4\r\nPINGxx`, which BendKV refused and Redis answers `+PONG` to: Redis never looks
+at the two bytes after a bulk's data, as it never looks at the byte after a line's `'\r'`,
+and BendKV no longer does either, so its diagnostic is gone, and so are two reads of the
+buffer and their comparisons from every bulk the parser reads. 17 cases in
+`tests/protocol_test.py`.
+
+**A channel for each connection ([#5](https://github.com/littleBro/bendkv/issues/5)).**
+Each connection opens a channel for its answers (`Chan.new` in `conn_start`), and none
+was ever closed: a client that closed, reset, sent QUIT or a protocol error, or a send that
+failed, closed the socket alone, so each connection left a row of the runtime's channel
+table and its ring behind, and the table stops the process at 16,777,216 rows. A test
+that reads the table's size in the server's memory (`chan_len`, through
+`/proc/<pid>/mem`) saw 3 rows grow to 124 after 120 connections. Now every way a
+connection ends goes through one teardown, `conn_end`, which closes the socket (after the
+bytes posted to it) and then the channel; nothing can be on its way to the channel then,
+since a connection waits for each batch's answer before it goes on, so `Chan.close` frees
+the row at once and the next connection takes it again. The actor's channel, shared by
+every connection, stays open. The protocol error's reply is the last thing a connection
+sends (`conn_bye`), and the connection ends whether it went out or not.
+`tests/conn_test.py` ends 300 connections in six ways (the client closing after a request
+or before any, QUIT, a protocol error, the client resetting before the server reads its
+request and while it sends a reply of a megabyte) on a BendKV of its own, posting and
+sending: INFO counts no connection left, the database answers a new connection, and the
+table holds 4 rows after, 3 before (304 before the fix).
+
+**Protocol errors under CLIENT REPLY OFF ([#10](https://github.com/littleBro/bendkv/issues/10)).**
+The protocol error's reply went out from the connection's loop, which never looked at the
+connection's reply mode, so after `CLIENT REPLY OFF` a malformed request was answered,
+where Redis answers nothing: its check of the mode is in the path every reply takes
+(`prepareClientToWrite`). Nor does Redis close the connection then: a protocol error marks
+it to close once its last reply is written, and there is none to write, while
+`processInputBuffer` reads nothing more from a connection so marked; the connection stays
+open, counted in INFO, until the client closes it (a second connection asking INFO, and a
+SET sent after the error that never runs, show it on Redis 7.0.15). The loop now holds
+the error back under OFF, and under SKIP for the request the error is in, as `say` holds
+a reply back (the error is still counted, as Redis counts it), and then reads and drops
+what comes until the client closes, when the connection ends as any other (`conn_drop`,
+then `conn_end`). Six cases in `tests/protocol_test.py` (the error after OFF, after SKIP,
+after a reply SKIP held back, in a later read, the requests after it, and after OFF and
+ON again), and a seventh way to end in `tests/conn_test.py`. QUIT under CLIENT REPLY OFF,
+after which Redis also leaves the connection open and unread, still closes it here, as
+`tests/session_test.py` notes.
+
+**Cost.** Instructions per request (callgrind, `tools/perf_guard.sh`): GET, SET and INCR
+3,257, 4,176 and 4,431, against 3,296, 4,287 and 4,477 before these five changes: a bulk
+no longer reads the two bytes after its data, which pays for the comparison a length line
+of two digits or more now makes.

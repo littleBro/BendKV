@@ -2,16 +2,21 @@
 # First the float library (src/float.bend) against glibc, on random texts
 # of numbers (tests/float_test.py). Then the start: the command line and
 # the configuration file, each
-# case on BendKV and on redis-server (tests/start_test.py). Then starts
-# a reference Redis (on the loopback, as BendKV listens) and BendKV on
-# spare ports: BendKV with its defaults, then posting its replies to its
+# case on BendKV and on redis-server (tests/start_test.py). Then
+# connections that end every way one can, many times, on a BendKV of
+# their own, posting and sending, each closing the channel it opened
+# (tests/conn_test.py). Then starts a reference Redis (on the loopback,
+# as BendKV listens) and BendKV on spare ports: BendKV with its
+# defaults, then posting its replies to its
 # writer thread (post),
 # then sending them from its loop (send), then with an append-only file,
 # and runs against each the robustness checks, a client that stops
 # reading (its replies must hold up no one else's, nor the loop), the
 # differential test against Redis (a fresh Redis database for each run)
-# and the consistency checks under concurrent clients, and against the first the
-# protocol's edge cases, the commands of a connection and CONFIG, byte
+# and the consistency checks under concurrent clients, against the first
+# and against send (which sends a protocol error's reply from its loop,
+# where post hands it to the writer) the protocol's edge cases, and
+# against the first the commands of a connection and CONFIG, byte
 # for byte against Redis, INFO's sections and fields, its statistics per
 # command, COMMAND, SCAN and RANDOMKEY, keys that expire, numbers at
 # their edges in every argument that is one, BITFIELD's fields at
@@ -35,6 +40,8 @@ echo "== the float library against glibc"
 python3 tests/float_test.py --bend "${BEND:-bend}" --cc "${CC:-cc}" --seed 1 --n 1500
 echo "== the start"
 python3 tests/start_test.py --bin build/bendkv
+echo "== connections that end"
+python3 tests/conn_test.py --bin build/bendkv --port "$PORT"
 redis-server --port "$REDIS_PORT" --save '' --appendonly no --bind 127.0.0.1 > build/redis.log 2>&1 &
 RDS=$!
 BKV=
@@ -62,6 +69,9 @@ for n in "" post send "post build/test.aof everysec"; do
     python3 tests/list_test.py --bendkv "$PORT" --redis "$REDIS_PORT"
     python3 tests/set_test.py --bendkv "$PORT" --redis "$REDIS_PORT"
     python3 tests/zset_test.py --bendkv "$PORT" --redis "$REDIS_PORT"
+  fi
+  if [ "$n" = send ]; then
+    python3 tests/protocol_test.py --bendkv "$PORT" --redis "$REDIS_PORT"
   fi
   for seed in 1 2 3; do
     redis-cli -p "$REDIS_PORT" flushall > /dev/null

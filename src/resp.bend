@@ -62,62 +62,200 @@ type Batch is Data:
 
 # Lexing
 # ------
+# A length is read as Redis 7.0.15 reads it (processMultibulkBuffer): its
+# line runs from the '*' or '$' to the first '\r', and its number is
+# string2ll's, with no 0 before its first digit. The quick way reads the
+# lines clients send, 1 to 10 digits and "\r\n", where they lie
+# (String.dec_line_at); any other line goes Redis's own way (line_at,
+# len.read), which waits for its '\r' and reads any number string2ll
+# takes, so that both ways give Redis's answer.
+
+# the least number of n + 2 digits, 10^(n + 1) (a line has 10 at most)
+def num.least(n: Nat) -> Nat:
+  match n:
+    case 0n:
+      10n
+    case 1n:
+      100n
+    case 2n:
+      1000n
+    case 3n:
+      10000n
+    case 4n:
+      100000n
+    case 5n:
+      1000000n
+    case 6n:
+      10000000n
+    case 7n:
+      100000000n
+    case _:
+      1000000000n
+
+def num.wide(canon: Bool, v: Nat, next: Nat) -> NumLine:
+  match canon:
+    case True{}:
+      NumOk{v, next}
+    case False{}:
+      NumBad{}
 
 # the number line at index i, its number and its length with the "\r\n"
 # (String.dec_line_at: a length of 0 when it is bad, of 1 when the buffer
-# ends first and the line waits for the rest)
+# ends first and the line waits for the rest); a line of two digits or
+# more whose number is below 10^(digits - 1) starts with a 0, which
+# string2ll does not take, and goes Redis's way
 def num.of(+i: Nat, vr: Nat & Nat) -> NumLine:
   match vr:
     case (v, 0n):
       NumBad{}
     case (v, 1n):
       NumMore{}
-    case (v, 2n+n):
-      NumOk{v, 2n+Nat.add(i, n)}
+    case (v, 2n):
+      NumBad{}
+    case (v, 3n):
+      NumOk{v, 3n+i}
+    case (+v, 4n++n):
+      num.wide(Nat.is_le(num.least(n), v), v, 4n+Nat.add(i, n))
 
 # the number line of s at index i: 1 to 10 digits (the lengths Redis takes
-# have at most 9), then "\r\n", read in place
+# have at most 10), then "\r\n", read in place
 def num_at(+s: String, +i: Nat) -> NumLine:
   num.of(i, String.dec_line_at(s, i))
 
-# the n bytes of a bulk at index j: copied out (String.slice) when the
-# buffer holds them and their "\r\n"; short is how many bytes it lacks
-def bulk.fin(+s: String, +n: Nat, +j: Nat, ok: Bool, short: Nat, crlf: Bool) -> Bulk:
-  match ok short crlf:
-    case False{} _ _:
+# A line as Redis finds one: from index i to the first '\r' (strchr), which
+# a NUL before it hides, as Redis reads its buffer as a C string; the line
+# is there once a byte follows its '\r', whatever that byte is, as Redis
+# skips it unread. Without its '\r', more than 64 KB from i is an error.
+type Line is Data:
+  LineAt{cr: Nat}
+  LineWait{}
+  LineBig{}
+
+def line.wait(big: Bool) -> Line:
+  match big:
+    case True{}:
+      LineBig{}
+    case False{}:
+      LineWait{}
+
+def line.of(+r: Nat, found: Bool, room: Bool, big: Bool) -> Line:
+  match found room:
+    case True{} True{}:
+      LineAt{r}
+    case True{} False{}:
+      LineWait{}
+    case False{} _:
+      line.wait(big)
+
+def line_at(+s: String, +i: Nat, +l: Nat) -> Line:
+  +r = String.find(s, '\r', i)
+  line.of(r, Nat.is_lt(r, String.find(s, Chr{0}, i)), Nat.is_lt(1n+r, l), Nat.is_lt(65536n, Nat.sub(l, i)))
+
+# the number of the line from index a to its '\r' at r, as string2ll reads
+# it (R.ll.of): a '-' or not, then digits with no 0 before the first, from
+# -2^63 to 2^63 - 1; a line of 21 bytes or more is none, as string2ll
+# finds before it reads one
+def len.read.if(short: Bool, +s: String, +a: Nat, +r: Nat) -> R.LL:
+  match short:
+    case True{}:
+      +neg = U32.is_eq(String.code_at(s, a), 45)
+      R.ll.of(R.dec.of(s, Bool.pick(Nat, neg, 1n+a, a), r), neg)
+    case False{}:
+      R.LLBad{}
+
+def len.read(+s: String, +a: Nat, +r: Nat) -> R.LL:
+  len.read.if(Nat.is_lt(Nat.sub(r, a), 21n), s, a, r)
+
+# A bulk's header read Redis's way: its line from where the bulk starts,
+# then the '$' it must start with, then its length: none, one below 0 or
+# one past 512MB is an error. Where its data starts and how long it is.
+type Head is Data:
+  HeadOk{n: Nat, j: Nat}
+  HeadMore{}
+  HeadBad{msg: String}
+
+def head.size(ok: Bool, n: Nat, j: Nat) -> Head:
+  match ok:
+    case True{}:
+      HeadOk{n, j}
+    case False{}:
+      HeadBad{"Protocol error: invalid bulk length"}
+
+def head.len(ll: R.LL, j: Nat) -> Head:
+  match ll:
+    case R.LL{neg, +hi, +lo}:
+      head.size(Bool.and(Bool.not(neg), R.ll.le(hi, lo, 0n, 536870912n)), lo, j)
+    case R.LLBad{}:
+      HeadBad{"Protocol error: invalid bulk length"}
+
+def head.dollar(dollar: Bool, c: U32, +s: String, +i: Nat, +r: Nat) -> Head:
+  match dollar:
+    case True{}:
+      head.len(len.read(s, 1n+i, r), 2n+r)
+    case False{}:
+      HeadBad{"Protocol error: expected '$', got '" ++ SCon{Chr{c}, SNil{}} ++ "'"}
+
+def head.of(+s: String, +i: Nat, ln: Line) -> Head:
+  match ln:
+    case LineAt{+r}:
+      +c = String.code_at(s, i)
+      head.dollar(U32.is_eq(c, 36), c, s, i, r)
+    case LineWait{}:
+      HeadMore{}
+    case LineBig{}:
+      HeadBad{"Protocol error: too big bulk count string"}
+
+def head_at(+s: String, +i: Nat, +l: Nat) -> Head:
+  head.of(s, i, line_at(s, i, l))
+
+# the n bytes of a bulk at index j, copied out (String.slice) once the
+# buffer holds them and the two bytes after them, which Redis skips
+# unread, as it skips the byte after a line's '\r'; short is how many
+# bytes it lacks
+def bulk.fin(+s: String, +n: Nat, +j: Nat, ok: Bool, short: Nat) -> Bulk:
+  match ok short:
+    case False{} _:
       BulkBad{"Protocol error: invalid bulk length"}
-    case True{} 0n True{}:
+    case True{} 0n:
       BulkOk{String.slice(s, j, n), 2n+Nat.add(j, n)}
-    case True{} 0n False{}:
-      BulkBad{"Protocol error: expected '\r\n' after bulk data"}
-    case True{} 1n+k _:
+    case True{} 1n+k:
       BulkMore{1n+k}
 
-# a bulk of at most 512MB, as Redis allows
-def bulk.body(+s: String, +l: Nat, nl: NumLine) -> Bulk:
+# a bulk whose header went Redis's way
+def bulk.slow(+s: String, +l: Nat, h: Head) -> Bulk:
+  match h:
+    case HeadOk{+n, +j}:
+      bulk.fin(s, n, j, True{}, Nat.sub(2n+Nat.add(j, n), l))
+    case HeadMore{}:
+      BulkMore{1n}
+    case HeadBad{msg}:
+      BulkBad{msg}
+
+# a bulk of at most 512MB, as Redis allows; a header the quick way does
+# not read goes Redis's way, from i
+def bulk.body(+s: String, +i: Nat, +l: Nat, nl: NumLine) -> Bulk:
   match nl:
     case NumOk{+n, +j}:
-      +e = Nat.add(j, n)
-      +crlf = Bool.and(U32.is_eq(String.code_at(s, e), 13), U32.is_eq(String.code_at(s, 1n+e), 10))
-      bulk.fin(s, n, j, Nat.is_le(n, 536870912n), Nat.sub(2n+e, l), crlf)
+      bulk.fin(s, n, j, Nat.is_le(n, 536870912n), Nat.sub(2n+Nat.add(j, n), l))
     case NumMore{}:
       BulkMore{1n}
     case NumBad{}:
-      BulkBad{"Protocol error: invalid bulk length"}
+      bulk.slow(s, l, head_at(s, i, l))
 
-def bulk.head(+s: String, +i: Nat, +l: Nat, +c: U32, dollar: Bool, end: Bool) -> Bulk:
+# a bulk that does not start with '$' is an error once its line has come
+def bulk.head(+s: String, +i: Nat, +l: Nat, dollar: Bool, end: Bool) -> Bulk:
   match dollar end:
     case True{} _:
-      bulk.body(s, l, num_at(s, 1n+i))
+      bulk.body(s, i, l, num_at(s, 1n+i))
     case False{} True{}:
       BulkMore{1n}
     case False{} False{}:
-      BulkBad{"Protocol error: expected '$', got '" ++ SCon{Chr{c}, SNil{}} ++ "'"}
+      bulk.slow(s, l, head_at(s, i, l))
 
 # the bulk of s at index i, l the length of s
 def bulk_at(+s: String, +i: Nat, +l: Nat) -> Bulk:
   +c = String.code_at(s, i)
-  bulk.head(s, i, l, c, U32.is_eq(c, 36), U32.is_eq(c, 4294967295))
+  bulk.head(s, i, l, U32.is_eq(c, 36), U32.is_eq(c, 4294967295))
 
 # one key: the bulk of a command's key, with its hash read off the buffer
 # (String.hash_at, which is KV.hash of the key)
@@ -126,41 +264,46 @@ type Key is Data:
   KeyMore{need: Nat}
   KeyBad{msg: String}
 
-def key.fin(+s: String, +n: Nat, +j: Nat, ok: Bool, short: Nat, crlf: Bool) -> Key:
-  match ok short crlf:
-    case False{} _ _:
+def key.fin(+s: String, +n: Nat, +j: Nat, ok: Bool, short: Nat) -> Key:
+  match ok short:
+    case False{} _:
       KeyBad{"Protocol error: invalid bulk length"}
-    case True{} 0n True{}:
+    case True{} 0n:
       KeyOk{String.slice(s, j, n), String.hash_at(s, j, n), 2n+Nat.add(j, n)}
-    case True{} 0n False{}:
-      KeyBad{"Protocol error: expected '\r\n' after bulk data"}
-    case True{} 1n+k _:
+    case True{} 1n+k:
       KeyMore{1n+k}
 
-def key.body(+s: String, +l: Nat, nl: NumLine) -> Key:
+def key.slow(+s: String, +l: Nat, h: Head) -> Key:
+  match h:
+    case HeadOk{+n, +j}:
+      key.fin(s, n, j, True{}, Nat.sub(2n+Nat.add(j, n), l))
+    case HeadMore{}:
+      KeyMore{1n}
+    case HeadBad{msg}:
+      KeyBad{msg}
+
+def key.body(+s: String, +i: Nat, +l: Nat, nl: NumLine) -> Key:
   match nl:
     case NumOk{+n, +j}:
-      +e = Nat.add(j, n)
-      +crlf = Bool.and(U32.is_eq(String.code_at(s, e), 13), U32.is_eq(String.code_at(s, 1n+e), 10))
-      key.fin(s, n, j, Nat.is_le(n, 536870912n), Nat.sub(2n+e, l), crlf)
+      key.fin(s, n, j, Nat.is_le(n, 536870912n), Nat.sub(2n+Nat.add(j, n), l))
     case NumMore{}:
       KeyMore{1n}
     case NumBad{}:
-      KeyBad{"Protocol error: invalid bulk length"}
+      key.slow(s, l, head_at(s, i, l))
 
-def key.head(+s: String, +i: Nat, +l: Nat, +c: U32, dollar: Bool, end: Bool) -> Key:
+def key.head(+s: String, +i: Nat, +l: Nat, dollar: Bool, end: Bool) -> Key:
   match dollar end:
     case True{} _:
-      key.body(s, l, num_at(s, 1n+i))
+      key.body(s, i, l, num_at(s, 1n+i))
     case False{} True{}:
       KeyMore{1n}
     case False{} False{}:
-      KeyBad{"Protocol error: expected '$', got '" ++ SCon{Chr{c}, SNil{}} ++ "'"}
+      key.slow(s, l, head_at(s, i, l))
 
 # the key bulk of s at index i, l the length of s
 def key_at(+s: String, +i: Nat, +l: Nat) -> Key:
   +c = String.code_at(s, i)
-  key.head(s, i, l, c, U32.is_eq(c, 36), U32.is_eq(c, 4294967295))
+  key.head(s, i, l, U32.is_eq(c, 36), U32.is_eq(c, 4294967295))
 
 # Requests
 # --------
@@ -297,23 +440,40 @@ def array.if(n: Nat, +s: String, +l: Nat, +j: Nat, ok: Bool) -> One:
     case _ False{}:
       OneBad{"Protocol error: invalid multibulk length"}
 
-# a multibulk count below zero: Redis skips the request, as it skips *0
-def array.neg(nl: NumLine) -> One:
-  match nl:
-    case NumOk{n, j}:
-      OneNone{j}
-    case NumMore{}:
-      OneMore{1n}
-    case NumBad{}:
-      OneBad{"Protocol error: invalid multibulk length"}
-
-def array.bad(+s: String, +i: Nat, neg: Bool) -> One:
-  match neg:
+# A count read Redis's way (line_at, len.read): none, or one past
+# INT_MAX, is an error; one of 0 or less is skipped, the request with
+# it, as Redis skips *0 (an empty request), down to -2^63.
+def array.small(ok: Bool, +hi: Nat, +lo: Nat, +s: String, +l: Nat, +j: Nat) -> One:
+  match ok:
     case True{}:
-      array.neg(num_at(s, 2n+i))
+      array.if(Nat.add(Nat.mul(hi, 1000000000n), lo), s, l, j, True{})
     case False{}:
       OneBad{"Protocol error: invalid multibulk length"}
 
+def array.signed(neg: Bool, +hi: Nat, +lo: Nat, +s: String, +l: Nat, +j: Nat) -> One:
+  match neg:
+    case True{}:
+      OneNone{j}
+    case False{}:
+      array.small(R.ll.le(hi, lo, 2n, 147483647n), hi, lo, s, l, j)
+
+def array.count(ll: R.LL, +s: String, +l: Nat, +j: Nat) -> One:
+  match ll:
+    case R.LL{neg, +hi, +lo}:
+      array.signed(neg, hi, lo, s, l, j)
+    case R.LLBad{}:
+      OneBad{"Protocol error: invalid multibulk length"}
+
+def array.line(+s: String, +i: Nat, +l: Nat, ln: Line) -> One:
+  match ln:
+    case LineAt{+r}:
+      array.count(len.read(s, 1n+i, r), s, l, 2n+r)
+    case LineWait{}:
+      OneMore{1n}
+    case LineBig{}:
+      OneBad{"Protocol error: too big mbulk count string"}
+
+# a count the quick way does not read goes Redis's way, from the '*'
 def array(+s: String, +i: Nat, +l: Nat, nl: NumLine) -> One:
   match nl:
     case NumOk{+n, +j}:
@@ -321,7 +481,7 @@ def array(+s: String, +i: Nat, +l: Nat, nl: NumLine) -> One:
     case NumMore{}:
       OneMore{1n}
     case NumBad{}:
-      array.bad(s, i, U32.is_eq(String.code_at(s, 1n+i), 45))
+      array.line(s, i, l, line_at(s, i, l))
 
 # An inline request
 # -----------------
@@ -658,6 +818,21 @@ def parse_read(+s: String) -> Batch:
 def crlf() -> String:
   "\r\n"
 
+# An error goes out on one line, as Redis's error formatting sends it: a
+# CR or LF in its text (an argument it quotes, a byte the parser did not
+# expect) goes out as a space (R.no_newlines). Nearly every text has
+# neither, and goes out as it is.
+def err_line.if(nl: Bool, s: String) -> String:
+  match nl:
+    case True{}:
+      R.no_newlines(s)
+    case False{}:
+      s
+
+def err_line(+s: String) -> String:
+  +l = String.length(s)
+  err_line.if(Bool.or(Nat.is_lt(String.find(s, '\r', 0n), l), Nat.is_lt(String.find(s, '\n', 0n), l)), s)
+
 def bulk_into(+s: String, out: String) -> String:
   "$" ++ Nat.show(String.length(s)) ++ crlf() ++ s ++ crlf() ++ out
 
@@ -676,7 +851,7 @@ def encode_onto(rs: List<&2, R.Reply>, out: String) -> String:
     case Con{R.RStatus{s}, rest}:
       "+" ++ s ++ crlf() ++ encode_onto(rest, out)
     case Con{R.RError{s}, rest}:
-      "-" ++ s ++ crlf() ++ encode_onto(rest, out)
+      "-" ++ err_line(s) ++ crlf() ++ encode_onto(rest, out)
     case Con{R.RInt{i}, rest}:
       int_into(i, encode_onto(rest, out))
     case Con{R.RBulk{s}, rest}:

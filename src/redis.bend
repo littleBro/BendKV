@@ -725,11 +725,12 @@ def e_fmt(s: String) -> String:
 
 # Redis's reply to an unknown command: the name as it was sent (up to 128
 # bytes) and its first arguments, each quoted and followed by a space,
-# while they make less than 128 bytes, each cut to what is left
+# while they make less than 128 bytes, each cut to what is left; each up
+# to its first NUL, as Redis formats them with %s
 def unknown.arg(room: Bool, x: String, +acc: String) -> String:
   match room:
     case True{}:
-      acc ++ "'" ++ String.take(x, Nat.sub(128n, String.length(acc))) ++ "' "
+      acc ++ "'" ++ String.take(cstr(x), Nat.sub(128n, String.length(acc))) ++ "' "
     case False{}:
       acc
 
@@ -741,7 +742,7 @@ def unknown.args(xs: List<&2, String>, +acc: String) -> String:
       unknown.args(rest, unknown.arg(Nat.is_lt(String.length(acc), 128n), x, acc))
 
 def e_unknown(name: String, args: List<&2, String>) -> Cmd:
-  Bad{RError{no_newlines("ERR unknown command '" ++ String.take(name, 128n) ++ "', with args beginning with: " ++ unknown.args(args, ""))}}
+  Bad{RError{no_newlines("ERR unknown command '" ++ String.take(cstr(name), 128n) ++ "', with args beginning with: " ++ unknown.args(args, ""))}}
 
 def s_arity(name: String) -> SessOp:
   SBad{RError{"ERR wrong number of arguments for '" ++ name ++ "' command"}}
@@ -804,14 +805,15 @@ def parse_decrby(k: String, by: Maybe<&2, Int>) -> Cmd:
 # argument. An unknown one, and a wrong number of arguments, are errors
 # found before the command runs, as Redis finds them when it looks the
 # command up; the others come from the command itself (a Sess, which
-# needs the connection to be authenticated).
+# needs the connection to be authenticated). The subcommand is quoted up
+# to 128 bytes and its first NUL, as Redis's %.128s quotes it.
 
 def e_unknown_sub(sub: String, cmd: String) -> SessOp:
-  SBad{RError{no_newlines("ERR unknown subcommand '" ++ String.take(sub, 128n) ++ "'. Try " ++ cmd ++ " HELP.")}}
+  SBad{RError{no_newlines("ERR unknown subcommand '" ++ String.take(cstr(sub), 128n) ++ "'. Try " ++ cmd ++ " HELP.")}}
 
 # a subcommand's own complaint about its arguments
 def e_sub_syntax(sub: String, cmd: String) -> Reply:
-  RError{no_newlines("ERR unknown subcommand or wrong number of arguments for '" ++ String.take(sub, 128n) ++ "'. Try " ++ cmd ++ " HELP.")}
+  RError{no_newlines("ERR unknown subcommand or wrong number of arguments for '" ++ String.take(cstr(sub), 128n) ++ "'. Try " ++ cmd ++ " HELP.")}
 
 def statuses(xs: List<&2, String>) -> List<&2, Reply>:
   match xs:
@@ -4871,7 +4873,7 @@ def parse_sess(id: Nat, name: String, args: List<&2, String>) -> SessOp:
         case Nil{}:
           s_arity("zrandmember")
     case _:
-      SBad{RError{no_newlines("ERR unknown command '" ++ String.take(name, 128n) ++ "', with args beginning with: " ++ unknown.args(args, ""))}}
+      SBad{RError{no_newlines("ERR unknown command '" ++ String.take(cstr(name), 128n) ++ "', with args beginning with: " ++ unknown.args(args, ""))}}
 
 # a command of number id: a command of the connection, of the server or
 # of several databases (parse_sess) for a number cmd_own names
@@ -9843,12 +9845,19 @@ def byte.lower(+x: U32) -> U32:
 # --------
 # KEYS, CONFIG GET and COMMAND LIST match as Redis's stringmatchlen does
 # (the last two with case aside): '*' any run of bytes, '?' any byte,
-# '[...]' a class (with '^', ranges and '\'), '\' the byte after it. A '*'
+# '[...]' a class (with '^', ranges and '\'), '\' the byte after it. A run
+# of stars is one star, a star that ends the pattern matches at once, and
+# a '*' tries the rest at each later byte only until a try matches. A '*'
 # whose rest matches nowhere in the rest of the string ends the search
 # (Redis's skipLongerMatches): a longer run for an earlier '*' could only
-# start the rest later, so a pattern costs polynomial time, not
-# exponential. A '*' does not match an empty string, as in Redis, where
-# the empty string never enters the loop.
+# start the rest later, so each star's loop runs once at most, and a
+# pattern costs at most a pass over the string for each of its bytes,
+# not time exponential in its stars. The rest after a '*' is a call of
+# its own in Redis, and a call nested in more than 1000 others matches
+# nothing (Redis's fix for CVE-2024-31228, in 6.2.16, 7.2.6 and 7.4.1, and
+# in the 7.0.15 of Ubuntu the tests run against). A '*' does not match an
+# empty string, as in Redis, where the empty string never enters the
+# loop.
 
 type Sm is Data:
   SmYes{}
@@ -9943,7 +9952,9 @@ def sm.cls.of(+q: String, +nc: Bool, +c: U32) -> Bool & String:
 # not empty; the bottom of Redis's loop (the string may be used up); the
 # step after a byte or a class, which matched or not; a run of stars
 # done (the pattern is what follows it); the rest after a '*' tried at s
-# and then at each later byte; and what that try gave
+# and then at each later byte; what that try gave; and the start of the
+# try, Redis's nested call, which goes on only when it is nested in 1000
+# calls at most
 type SmMode is Data:
   SmStep{}
   SmNext{}
@@ -9952,6 +9963,7 @@ type SmMode is Data:
   SmStars{}
   SmStar{}
   SmTry{r: Sm}
+  SmIn{ok: Bool}
 
 def sm.cls.mode(neg: Bool, r: Bool & String) -> SmMode:
   (m, rest) = r
@@ -9989,8 +10001,10 @@ def sm.yes(r: Sm) -> Bool:
       False{}
 
 # one function, so that a decision can recurse: f bounds the depth (each
-# call goes one level down)
-def sm.go(f: Nat, mode: SmMode, +p: String, +s: String, +nc: Bool) -> Sm:
+# call goes one level down: four for each byte of the pattern and three
+# for each of the string's are enough), and d is how many of Redis's calls
+# the step is nested in
+def sm.go(f: Nat, mode: SmMode, +p: String, +s: String, +nc: Bool, +d: Nat) -> Sm:
   match f:
     case 0n:
       SmNo{}
@@ -10001,17 +10015,17 @@ def sm.go(f: Nat, mode: SmMode, +p: String, +s: String, +nc: Bool) -> Sm:
             case SNil{}:
               sm.ends(p)
             case SCon{c, t}:
-              sm.go(g, SmStep{}, p, SCon{c, t}, nc)
+              sm.go(g, SmStep{}, p, SCon{c, t}, nc, d)
         case SmLit{ok}:
           match ok s:
             case True{} SCon{c, t}:
-              sm.go(g, SmNext{}, p, t, nc)
+              sm.go(g, SmNext{}, p, t, nc, d)
             case _ _:
               SmNo{}
         case SmCls{ok, rest}:
           match ok s:
             case True{} SCon{c, t}:
-              sm.go(g, SmNext{}, rest, t, nc)
+              sm.go(g, SmNext{}, rest, t, nc, d)
             case _ _:
               SmNo{}
         case SmStars{}:
@@ -10019,13 +10033,13 @@ def sm.go(f: Nat, mode: SmMode, +p: String, +s: String, +nc: Bool) -> Sm:
             case SNil{}:
               SmYes{}
             case SCon{a, q}:
-              sm.go(g, SmStar{}, SCon{a, q}, s, nc)
+              sm.go(g, SmStar{}, SCon{a, q}, s, nc, d)
         case SmStar{}:
           match s:
             case SNil{}:
               SmStop{}
             case SCon{+c, +t}:
-              sm.go(g, SmTry{sm.go(g, SmStep{}, p, SCon{c, t}, nc)}, p, SCon{c, t}, nc)
+              sm.go(g, SmTry{sm.go(g, SmIn{Nat.is_lt(d, 1000n)}, p, SCon{c, t}, nc, 1n+d)}, p, SCon{c, t}, nc, d)
         case SmTry{r}:
           match r s:
             case SmYes{} _:
@@ -10035,7 +10049,13 @@ def sm.go(f: Nat, mode: SmMode, +p: String, +s: String, +nc: Bool) -> Sm:
             case SmNo{} SNil{}:
               SmStop{}
             case SmNo{} SCon{c, t}:
-              sm.go(g, SmStar{}, p, t, nc)
+              sm.go(g, SmStar{}, p, t, nc, d)
+        case SmIn{ok}:
+          match ok:
+            case True{}:
+              sm.go(g, SmStep{}, p, s, nc, d)
+            case False{}:
+              SmNo{}
         case SmStep{}:
           match p s:
             case SNil{} _:
@@ -10043,15 +10063,15 @@ def sm.go(f: Nat, mode: SmMode, +p: String, +s: String, +nc: Bool) -> Sm:
             case _ SNil{}:
               SmNo{}
             case SCon{'*', pt} SCon{c, t}:
-              sm.go(g, SmStars{}, sm.unstar(pt), SCon{c, t}, nc)
+              sm.go(g, SmStars{}, sm.unstar(pt), SCon{c, t}, nc, d)
             case SCon{'?', pt} SCon{c, t}:
-              sm.go(g, SmNext{}, pt, t, nc)
+              sm.go(g, SmNext{}, pt, t, nc, d)
             case SCon{'[', pt} SCon{Chr{+x}, t}:
-              sm.go(g, sm.class(pt, nc, x), pt, SCon{Chr{x}, t}, nc)
+              sm.go(g, sm.class(pt, nc, x), pt, SCon{Chr{x}, t}, nc, d)
             case SCon{'\\', SCon{Chr{+y}, pt}} SCon{Chr{+x}, t}:
-              sm.go(g, SmLit{sm.eq(nc, y, x)}, pt, SCon{Chr{x}, t}, nc)
+              sm.go(g, SmLit{sm.eq(nc, y, x)}, pt, SCon{Chr{x}, t}, nc, d)
             case SCon{Chr{+y}, pt} SCon{Chr{+x}, t}:
-              sm.go(g, SmLit{sm.eq(nc, y, x)}, pt, SCon{Chr{x}, t}, nc)
+              sm.go(g, SmLit{sm.eq(nc, y, x)}, pt, SCon{Chr{x}, t}, nc, d)
 
 # whether pattern p matches string s, case aside when nc
 def stringmatch(+p: String, +s: String, nc: Bool) -> Bool:
@@ -10059,7 +10079,7 @@ def stringmatch(+p: String, +s: String, nc: Bool) -> Bool:
     case SNil{}:
       String.is_empty(p)
     case SCon{c, t}:
-      sm.yes(sm.go(Nat.mul(4n, Nat.add(4n, Nat.add(String.length(p), String.length(s)))), SmStep{}, p, SCon{c, t}, nc))
+      sm.yes(sm.go(Nat.mul(4n, Nat.add(4n, Nat.add(String.length(p), String.length(s)))), SmStep{}, p, SCon{c, t}, nc, 0n))
 
 def glob_keep(+k: String, ks: List<&2, Reply>, hit: Bool) -> List<&2, Reply>:
   match hit:

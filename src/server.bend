@@ -488,28 +488,6 @@ def db_group(g: Run, +reqs: Chan(Req)) -> IO(Unit):
 # Connections
 # -----------
 
-def sent_ok(m: Socket & Result<&1, &1, U32 & String, Unit>, next: Socket -> IO(Unit)) -> IO(Unit):
-  (s, r) = m
-  match r:
-    case Done{u}:
-      next(s)
-    case Fail{e}:
-      Socket.close(s)
-
-# str out on s, then next: posted (TCP.post: the loop hands it to its
-# writer thread and goes on, and a dead peer shows on the next read), or
-# sent from the loop
-def put_out(s: Socket, post: Bool, str: String, next: Socket -> IO(Unit)) -> IO(Unit):
-  match post:
-    case True{}:
-      do IO<Unit>:
-        s2 : Socket <- TCP.post(s, str)
-        next(s2)
-    case False{}:
-      do IO<Unit>:
-        m : Socket & Result<&1, &1, U32 & String, Unit> <- TCP.send_raw(s, str)
-        sent_ok(m, next)
-
 # the connections: how many were taken since the start (the last client
 # id given, from 1, as Redis's CLIENT ID) and how many are open. The count
 # waits in a channel the listeners and the connections share.
@@ -526,6 +504,22 @@ def link.post(+ln: Link) -> Bool:
   match ln:
     case Link{db, back, post, tl}:
       post
+
+# A connection ends here, whichever way it ends (the client closed it or
+# reset it, a read or a send failed, QUIT, a protocol error): its socket
+# closes, after the bytes posted to it (TCP.post), and so does the
+# channel its answers come back on, which nothing is on its way to: the
+# connection waits for each batch's answer before it goes on, so at its
+# end the actor holds no answer for it, and the channel's row is free
+# for the next connection. The actor's channel, which every connection
+# shares, stays open.
+@unsafe
+def conn_end(s: Socket, ln: Link) -> IO(Unit):
+  match ln:
+    case Link{db, back, post, tl}:
+      do IO<Unit>:
+        Unit <- Socket.close(s)
+        Chan.close(Ans, back)
 
 # x before s; an empty s costs nothing, so the newest piece is not copied
 def cat(x: String, s: String) -> String:
@@ -589,7 +583,7 @@ def conn_got(m: Socket & Result<&1, &1, U32 & String, String>, rest: String, got
   (s, r) = m
   match r:
     case Fail{e}:
-      Socket.close(s)
+      conn_end(s, ln)
     case Done{+x}:
       conn_data(s, Nat.is_eq(String.length(x), 0n), x, rest, got, have, need, ln, cn)
 
@@ -597,7 +591,7 @@ def conn_got(m: Socket & Result<&1, &1, U32 & String, String>, rest: String, got
 def conn_data(s: Socket, eof: Bool, +x: String, rest: String, got: List<&2, String>, have: Nat, +need: Nat, +ln: Link, cn: S.Conn) -> IO(Unit):
   match eof:
     case True{}:
-      Socket.close(s)
+      conn_end(s, ln)
     case False{}:
       +h = Nat.add(have, count_upto(need, x))
       conn_more(s, rest, x <> got, h, need, ln, cn, Nat.is_lt(h, need))
@@ -687,7 +681,7 @@ def conn_ask(s: Socket, +ln: Link, cn: S.Conn, rs: List<&2, B.Req>, tl: U32, err
 def conn_ans(s: Socket, +ln: Link, got: Maybe<&1, Ans>, err: Maybe<&2, String>, rest: String, need: Nat) -> IO(Unit):
   match got:
     case None{}:
-      Socket.close(s)
+      conn_end(s, ln)
     case Some{Ans{None{}, cn}}:
       conn_quit(s, ln, cn, err, rest, need)
     case Some{Ans{Some{out}, cn}}:
@@ -710,7 +704,7 @@ def conn_sent(m: Socket & Result<&1, &1, U32 & String, Unit>, +ln: Link, cn: S.C
   (s, r) = m
   match r:
     case Fail{e}:
-      Socket.close(s)
+      conn_end(s, ln)
     case Done{u}:
       conn_quit(s, ln, cn, err, rest, need)
 
@@ -724,22 +718,85 @@ def conn_quit(s: Socket, +ln: Link, +cn: S.Conn, err: Maybe<&2, String>, rest: S
 def conn_quit.if(quit: Bool, s: Socket, +ln: Link, cn: S.Conn, err: Maybe<&2, String>, rest: String, need: Nat) -> IO(Unit):
   match quit:
     case True{}:
-      Socket.close(s)
+      conn_end(s, ln)
     case False{}:
       conn_err(s, ln, cn, err, rest, need)
 
-# a protocol error is answered, and counted among the error replies for
-# INFO, then the connection closes, as in Redis; without one, the
-# connection reads on
 @unsafe
-def conn_err(s: Socket, +ln: Link, cn: S.Conn, err: Maybe<&2, String>, rest: String, need: Nat) -> IO(Unit):
-  match ln err:
-    case _ None{}:
-      conn_loop(s, rest, Nil{}, 0n, need, ln, cn)
-    case Link{db, back, post, tl} Some{msg}:
+def conn_sent.end(m: Socket & Result<&1, &1, U32 & String, Unit>, +ln: Link) -> IO(Unit):
+  (s, r) = m
+  conn_end(s, ln)
+
+# a connection's last bytes, then its end, whether they went out or not:
+# posted (TCP.post: the loop hands them to its writer thread, and the
+# socket closes once they are sent), or sent from the loop
+@unsafe
+def conn_bye(s: Socket, +ln: Link, post: Bool, out: String) -> IO(Unit):
+  match post:
+    case True{}:
+      do IO<Unit>:
+        s2 : Socket <- TCP.post(s, out)
+        conn_end(s2, ln)
+    case False{}:
+      do IO<Unit>:
+        m : Socket & Result<&1, &1, U32 & String, Unit> <- TCP.send_raw(s, out)
+        conn_sent.end(m, ln)
+
+# a connection whose protocol error is held back: nothing goes out, and
+# what comes in is read and dropped until the client closes it
+@unsafe
+def conn_drop(s: Socket, +ln: Link) -> IO(Unit):
+  do IO<Unit>:
+    m : Socket & Result<&1, &1, U32 & String, String> <- TCP.recv_raw(s, 65536)
+    conn_dropped(m, ln)
+
+@unsafe
+def conn_dropped(m: Socket & Result<&1, &1, U32 & String, String>, +ln: Link) -> IO(Unit):
+  (s, r) = m
+  match r:
+    case Fail{e}:
+      conn_end(s, ln)
+    case Done{+x}:
+      conn_drop.on(Nat.is_eq(String.length(x), 0n), s, ln)
+
+@unsafe
+def conn_drop.on(eof: Bool, s: Socket, +ln: Link) -> IO(Unit):
+  match eof:
+    case True{}:
+      conn_end(s, ln)
+    case False{}:
+      conn_drop(s, ln)
+
+# A protocol error is counted among the error replies for INFO, and
+# answered, as any error reply is encoded (on one line: a byte the
+# parser did not expect may be a CR or LF), unless the client's replies
+# are held back (CLIENT REPLY OFF, or SKIP for the request the error is
+# in), as say holds them back (session.bend); then the connection ends,
+# as in Redis. A held-back error does not end it, as it does not in
+# Redis, which closes a connection once its last reply is written, and
+# has none to write, and reads nothing more from it (processInputBuffer
+# stops at CLOSE_AFTER_REPLY): it stays open, counted in INFO, and what
+# comes on it is read and dropped until the client closes it. Without an
+# error, the connection reads on.
+@unsafe
+def conn_oops(on: Bool, s: Socket, +ln: Link, msg: String) -> IO(Unit):
+  match on ln:
+    case True{} Link{db, back, post, tl}:
       do IO<Unit>:
         sent : Bool <- Chan.send(Req, db, Oops{})
-        put_out(s, post, "-ERR " ++ msg ++ "\r\n", s2 => Socket.close(s2))
+        conn_bye(s, ln, post, P.encode(R.RError{"ERR " ++ msg}))
+    case False{} Link{db, back, post, tl}:
+      do IO<Unit>:
+        sent : Bool <- Chan.send(Req, db, Oops{})
+        conn_drop(s, ln)
+
+@unsafe
+def conn_err(s: Socket, +ln: Link, cn: S.Conn, err: Maybe<&2, String>, rest: String, need: Nat) -> IO(Unit):
+  match err:
+    case None{}:
+      conn_loop(s, rest, Nil{}, 0n, need, ln, cn)
+    case Some{msg}:
+      conn_oops(mute.on(S.conn.mode(cn)), s, ln, msg)
 
 # Accepting
 # ---------
