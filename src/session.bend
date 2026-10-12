@@ -768,20 +768,41 @@ def obj.of(+sub: Nat, +v: String, +cfg: List<&2, C.CItem>) -> R.Reply:
     case _:
       Bool.pick(R.Reply, obj.lfu(cfg), R.RError{"ERR An LFU maxmemory policy is selected, idle time not tracked. Please note that when switching between policies at runtime LRU and LFU data will take some time to adjust."}, R.r_int(0n))
 
-# OBJECT of a collection: its encoding as Redis 7.0 names it (a small
-# hash is a listpack, a large one a hashtable), a count of references of
-# 1, and the rest as for a string
-def obj.coll.enc(+c: KV.Coll) -> String:
-  match c:
-    case KV.CHash{KV.HSmall{n, ps}}:
-      "listpack"
-    case KV.CHash{KV.HBig{n, t}}:
+# OBJECT of a collection: its encoding as Redis 7.0 names it, a count of
+# references of 1, and the rest as for a string. A hash is a listpack
+# while it is small (KV.Hash: as Redis turns one into a hashtable at the
+# parameters' defaults) and within hash-max-listpack-entries and
+# hash-max-listpack-value as they are now; else a hashtable. (Redis reads
+# the parameters as a hash is written, and never turns a hashtable back:
+# a small hash that once passed a lower limit, or a large one under limits
+# raised since, is named otherwise there.)
+# a parameter's number, at most 10^14 (a Nat stays below 2^48)
+def cfg.nat.of(l: R.LL) -> Nat:
+  match l:
+    case R.LL{neg, +hi, +lo}:
+      Nat.add(Nat.mul(Nat.min(hi, 100000n), 1000000000n), lo)
+    case R.LLBad{}:
+      0n
+
+def cfg.nat(+cfg: List<&2, C.CItem>, +name: String) -> Nat:
+  cfg.nat.of(R.ll.read(C.config.get_value(cfg, name)))
+
+def obj.hash.enc(+h: KV.Hash, +cfg: List<&2, C.CItem>) -> String:
+  match h:
+    case KV.HSmall{+n, +ps}:
+      Bool.pick(String, Bool.and(Nat.is_le(n, cfg.nat(cfg, "hash-max-listpack-entries")), Nat.is_le(KV.hps.widest(ps, 0n), cfg.nat(cfg, "hash-max-listpack-value"))), "listpack", "hashtable")
+    case KV.HBig{n, t}:
       "hashtable"
+
+def obj.coll.enc(+c: KV.Coll, +cfg: List<&2, C.CItem>) -> String:
+  match c:
+    case KV.CHash{+h}:
+      obj.hash.enc(h, cfg)
 
 def obj.coll(+sub: Nat, +c: KV.Coll, +cfg: List<&2, C.CItem>) -> R.Reply:
   match sub:
     case 3n:
-      R.RBulk{obj.coll.enc(c)}
+      R.RBulk{obj.coll.enc(c, cfg)}
     case 4n:
       R.r_int(1n)
     case _:
@@ -795,6 +816,228 @@ def obj.reply(+sub: Nat, m: Maybe<&2, KV.Item<KV.Val>>, +cfg: List<&2, C.CItem>)
       obj.coll(sub, c, cfg)
     case None{}:
       R.RNull{}
+
+# HRANDFIELD key [count [WITHVALUES]]: fields of a hash at random, by r
+# (the server's random number, and the numbers of its Weyl sequence after
+# it, which KV.mix scrambles), read as Redis 7.0.15 reads them: the count
+# is a long long other than LLONG_MIN, at most LONG_MAX/2 in size with
+# WITHVALUES, and any other word after it a syntax error, all before the
+# key is looked for. A key not there answers a nil (no count) or an empty
+# array, one that holds a string WRONGTYPE. A negative count picks that
+# many fields, each anew, so that a field may come again; a positive one
+# that many different fields, all of them in the hash's order when it is
+# at least the hash's size.
+type HrArgs is Data:
+  HrOne{}
+  HrCount{neg: Bool, n: Nat, wv: Bool}
+  HrBad{r: R.Reply}
+
+def hr.cap(+hi: Nat, +lo: Nat) -> Nat:
+  Nat.add(Nat.mul(Nat.min(hi, 100000n), 1000000000n), lo)
+
+# LONG_MAX / 2 (4611686018427387903): its digits before the last nine
+def hr.half.hi() -> Nat:
+  Nat.add(Nat.mul(461168n, 10000n), 6018n)
+
+def hr.half(+neg: Bool, +hi: Nat, +lo: Nat) -> HrArgs:
+  Bool.pick(HrArgs, R.ll.le(hi, lo, hr.half.hi(), 427387903n), HrCount{neg, hr.cap(hi, lo), True{}}, HrBad{R.RError{"ERR value is out of range"}})
+
+def hr.opts(+neg: Bool, +hi: Nat, +lo: Nat, rest: List<&2, String>) -> HrArgs:
+  match rest:
+    case Nil{}:
+      HrCount{neg, hr.cap(hi, lo), False{}}
+    case Con{+w, Nil{}}:
+      Bool.pick(HrArgs, R.is_word(w, "WITHVALUES"), hr.half(neg, hi, lo), HrBad{R.RError{"ERR syntax error"}})
+    case _:
+      HrBad{R.RError{"ERR syntax error"}}
+
+def hr.count(l: R.LL, rest: List<&2, String>) -> HrArgs:
+  match l:
+    case R.LL{+neg, +hi, +lo}:
+      Bool.pick(HrArgs, Bool.and(neg, Bool.and(Nat.is_eq(hi, R.dec.llmax()), Nat.is_eq(lo, 854775808n))), HrBad{R.RError{"ERR value is out of range, value must between -9223372036854775807 and 9223372036854775807"}}, hr.opts(neg, hi, lo, rest))
+    case R.LLBad{}:
+      HrBad{R.RError{"ERR value is not an integer or out of range"}}
+
+def hr.args(args: List<&2, String>) -> HrArgs:
+  match args:
+    case Nil{}:
+      HrOne{}
+    case Con{+c, rest}:
+      hr.count(R.ll.read(c), rest)
+
+def hr.next(+r: U32) -> U32:
+  U32.add(r, 2654435769)
+
+def hr.at(+r: U32, +n: Nat) -> Nat:
+  Nat.mod(U32.to_nat(KV.mix(r)), Nat.max(n, 1n))
+
+def hp.nth(ps: List<&2, KV.HPair>, i: Nat) -> Maybe<&2, KV.HPair>:
+  match ps i:
+    case Con{p, rest} 0n:
+      Some{p}
+    case Con{p, rest} 1n+j:
+      hp.nth(rest, j)
+    case Nil{} _:
+      None{}
+
+# ps without its i-th pair
+def hp.drop(ps: List<&2, KV.HPair>, i: Nat) -> List<&2, KV.HPair>:
+  match ps i:
+    case Con{p, rest} 0n:
+      rest
+    case Con{p, rest} 1n+j:
+      Con{p, hp.drop(rest, j)}
+    case Nil{} _:
+      Nil{}
+
+def hr.pair(wv: Bool, f: String, v: String, rest: List<&2, R.Reply>) -> List<&2, R.Reply>:
+  match wv:
+    case True{}:
+      R.RBulk{f} <> R.RBulk{v} <> rest
+    case False{}:
+      R.RBulk{f} <> rest
+
+def hr.out(m: Maybe<&2, KV.HPair>, +wv: Bool, rest: List<&2, R.Reply>) -> List<&2, R.Reply>:
+  match m:
+    case Some{KV.HP{f, v}}:
+      hr.pair(wv, f, v, rest)
+    case None{}:
+      rest
+
+# all the pairs, in order
+def hr.all(ps: List<&2, KV.HPair>, +wv: Bool) -> List<&2, R.Reply>:
+  match ps:
+    case Nil{}:
+      Nil{}
+    case Con{KV.HP{f, v}, rest}:
+      hr.pair(wv, f, v, hr.all(rest, wv))
+
+# k pairs of the n of ps, each picked anew
+def hr.rep(k: Nat, +ps: List<&2, KV.HPair>, +n: Nat, +r: U32, +wv: Bool) -> List<&2, R.Reply>:
+  match k:
+    case 0n:
+      Nil{}
+    case 1n+j:
+      +q = hr.next(r)
+      hr.out(hp.nth(ps, hr.at(q, n)), wv, hr.rep(j, ps, n, q, wv))
+
+# k different pairs of the n of ps
+def hr.uniq(k: Nat, ps: List<&2, KV.HPair>, +n: Nat, +r: U32, +wv: Bool) -> List<&2, R.Reply>:
+  match k:
+    case 0n:
+      Nil{}
+    case 1n+j:
+      +q = hr.next(r)
+      +i = hr.at(q, n)
+      +qs = ps
+      hr.out(hp.nth(qs, i), wv, hr.uniq(j, hp.drop(qs, i), Nat.sub(n, 1n), q, wv))
+
+def hr.pos(all: Bool, +k: Nat, +wv: Bool, ps: List<&2, KV.HPair>, +n: Nat, +r: U32) -> List<&2, R.Reply>:
+  match all:
+    case True{}:
+      hr.all(ps, wv)
+    case False{}:
+      hr.uniq(k, ps, n, r, wv)
+
+def hr.of(neg: Bool, +k: Nat, +wv: Bool, +ps: List<&2, KV.HPair>, +n: Nat, +r: U32) -> List<&2, R.Reply>:
+  match neg:
+    case True{}:
+      hr.rep(k, ps, n, r, wv)
+    case False{}:
+      hr.pos(Nat.is_le(n, k), k, wv, ps, n, r)
+
+def hr.first(m: Maybe<&2, KV.HPair>) -> R.Reply:
+  match m:
+    case Some{KV.HP{f, v}}:
+      R.RBulk{f}
+    case None{}:
+      R.RNull{}
+
+def hr.one(m: Maybe<&2, KV.Item<KV.Val>>, +r: U32) -> R.Reply:
+  match m:
+    case Some{KV.Item{KV.VColl{KV.CHash{+h}}, e}}:
+      hr.first(hp.nth(KV.hash.pairs(h), hr.at(hr.next(r), KV.hash.len(h))))
+    case Some{KV.Item{KV.VStr{s}, e}}:
+      R.e_wrongtype()
+    case None{}:
+      R.RNull{}
+
+def hr.many(m: Maybe<&2, KV.Item<KV.Val>>, +neg: Bool, +k: Nat, +wv: Bool, +r: U32) -> R.Reply:
+  match m:
+    case Some{KV.Item{KV.VColl{KV.CHash{+h}}, e}}:
+      R.RArray{hr.of(neg, k, wv, KV.hash.pairs(h), KV.hash.len(h), r)}
+    case Some{KV.Item{KV.VStr{s}, e}}:
+      R.e_wrongtype()
+    case None{}:
+      R.RArray{Nil{}}
+
+def hr.reply(a: HrArgs, m: Maybe<&2, KV.Item<KV.Val>>, +r: U32) -> R.Reply:
+  match a:
+    case HrOne{}:
+      hr.one(m, r)
+    case HrCount{+neg, +k, +wv}:
+      hr.many(m, neg, k, wv, r)
+    case HrBad{e}:
+      e
+
+# MEMORY USAGE key [SAMPLES count]: about how many bytes the key's entry
+# takes: the key, the value (a string's bytes, a hash's fields and values)
+# and a few words for the cells that hold them. SAMPLES takes a long long
+# not below 0 (BendKV counts every field: it samples none); any other word
+# is a syntax error; both are read before the key is looked for, as
+# Redis reads them.
+def mem.sample(l: R.LL) -> Maybe<&2, R.Reply>:
+  match l:
+    case R.LL{neg, hi, lo}:
+      Bool.pick(Maybe<&2, R.Reply>, neg, Some{R.RError{"ERR syntax error"}}, None{})
+    case R.LLBad{}:
+      Some{R.RError{"ERR value is not an integer or out of range"}}
+
+def mem.word(ok: Bool, +v: String) -> Maybe<&2, R.Reply>:
+  match ok:
+    case True{}:
+      mem.sample(R.ll.read(v))
+    case False{}:
+      Some{R.RError{"ERR syntax error"}}
+
+def mem.opts(xs: List<&2, String>, bad: Maybe<&2, R.Reply>) -> Maybe<&2, R.Reply>:
+  match xs bad:
+    case _ Some{e}:
+      Some{e}
+    case Nil{} None{}:
+      None{}
+    case Con{+w, Con{+v, rest}} None{}:
+      mem.opts(rest, mem.word(R.is_word(w, "SAMPLES"), v))
+    case Con{w, Nil{}} None{}:
+      Some{R.RError{"ERR syntax error"}}
+
+def mem.pairs(ps: List<&2, KV.HPair>, +acc: Nat) -> Nat:
+  match ps:
+    case Nil{}:
+      acc
+    case Con{KV.HP{f, v}, rest}:
+      mem.pairs(rest, Nat.add(acc, Nat.add(32n, Nat.add(String.length(f), String.length(v)))))
+
+def mem.val(+v: KV.Val) -> Nat:
+  match v:
+    case KV.VStr{+s}:
+      Nat.add(16n, String.length(s))
+    case KV.VColl{KV.CHash{+h}}:
+      mem.pairs(KV.hash.pairs(h), 48n)
+
+def mem.size(+k: String, m: Maybe<&2, KV.Item<KV.Val>>) -> R.Reply:
+  match m:
+    case Some{KV.Item{+v, e}}:
+      R.r_int(Nat.add(Nat.add(40n, String.length(k)), mem.val(v)))
+    case None{}:
+      R.RNull{}
+
+def mem.usage(bad: Maybe<&2, R.Reply>, +k: String, m: Maybe<&2, KV.Item<KV.Val>>) -> R.Reply:
+  match bad:
+    case Some{e}:
+      e
+    case None{}:
+      mem.size(k, m)
 
 # LCS a b [IDX] [LEN] [WITHMATCHLEN] [MINMATCHLEN n]: the longest common
 # subsequence of two values (a key not there reads as an empty one), found
@@ -1170,6 +1413,10 @@ def own_reply(+o: R.SessOp, +c: Conn, +s: Srv, +ds: R.Ds) -> Maybe<&2, R.Reply>:
       say(conn.mode(c), copy.reply(copy.of(args, c, s), ds))
     case R.SLcs{args}:
       say(conn.mode(c), lcs.reply(args, R.ds.focused(ds), srv.cfg(s)))
+    case R.SHRandField{+k, args}:
+      say(conn.mode(c), hr.reply(hr.args(args), R.db.ent(R.ds.focused(ds), k), KV.mix(srv.rng(s))))
+    case R.SMemUsage{+k, args}:
+      say(conn.mode(c), mem.usage(mem.opts(args, None{}), k, R.db.ent(R.ds.focused(ds), k)))
     case R.SReply{r}:
       say(conn.mode(c), r)
     case R.SBad{r}:
@@ -1222,6 +1469,10 @@ def own_conn(+o: R.SessOp, +c: Conn, +s: Srv) -> Conn:
       step_conn(c, s)
     case R.SLcs{a}:
       step_conn(c, s)
+    case R.SHRandField{k, a}:
+      step_conn(c, s)
+    case R.SMemUsage{k, a}:
+      step_conn(c, s)
     case R.SReply{r}:
       step_conn(c, s)
     case R.SBad{r}:
@@ -1268,7 +1519,8 @@ def srv.rand(s: Srv) -> Srv:
       Srv{pass, cfg, info, U32.add(rng, 2654435769)}
 
 # the server after a session command: CONFIG SET changes it when it
-# succeeds, CONFIG RESETSTAT its counts, and RANDOMKEY its random numbers
+# succeeds, CONFIG RESETSTAT its counts, and RANDOMKEY and HRANDFIELD its
+# random numbers
 def own_srv(+o: R.SessOp, +c: Conn, +s: Srv) -> Srv:
   match o:
     case R.SConfigSet{args}:
@@ -1276,6 +1528,8 @@ def own_srv(+o: R.SessOp, +c: Conn, +s: Srv) -> Srv:
     case R.SConfigResetStat{}:
       srv.reset(s)
     case R.SRandomKey{}:
+      srv.rand(s)
+    case R.SHRandField{k, a}:
       srv.rand(s)
     case _:
       s

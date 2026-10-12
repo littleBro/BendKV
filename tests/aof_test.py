@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 """Restart test for the append-only file: a random command stream (the
 differential test's, which moves between databases, moves keys between
-them and swaps them) against BendKV, with one FLUSHALL halfway, then the
-whole keyspace of each of the 16 databases saved, each key with its
-value and the time it expires at; after the server restarts from its
-file, every database must read back the same.
+them and swaps them, and writes strings and hashes) against BendKV, with
+one FLUSHALL halfway, then the whole keyspace of each of the 16
+databases saved, each key with its value (a hash's pairs) and the time
+it expires at; after the server restarts from its file, every database
+must read back the same.
 
     python3 tests/aof_test.py --port 6380 --write build/aof_dump.txt --rounds 1000
     (restart BendKV with the same file)
@@ -15,6 +16,18 @@ import random
 import sys
 
 from diff_test import NOW_S, Conn, rnd_cmd
+
+
+# a key's value as the dump shows it: a string's bytes (MGET's), or a
+# hash's pairs (MGET answers nil for a key of another type), in order of
+# their fields
+def value(c, k, v):
+    if v[1] is not None:
+        return v[1].hex()
+    c.send([[b"HGETALL", k]])
+    kind, xs = c.reply()
+    xs = [x for _, x in xs]
+    return "hash:" + ",".join(f.hex() + "=" + w.hex() for f, w in sorted(zip(xs[0::2], xs[1::2])))
 
 
 def keyspace(c, dbs=16):
@@ -31,7 +44,7 @@ def keyspace(c, dbs=16):
             kind, vals = c.reply()
             c.send([[b"PEXPIRETIME", k] for k in keys])
             times = [c.reply()[1] for k in keys]
-        out += [(db, k.hex(), v[1].hex(), t.decode()) for k, v, t in zip(keys, vals, times)]
+        out += [(db, k.hex(), value(c, k, v), t.decode()) for k, v, t in zip(keys, vals, times)]
     return out
 
 
@@ -77,6 +90,15 @@ def main():
             batch.append([b"PERSIST", b"key:%d" % (i + 20)])
             batch.append([b"EXPIREAT", b"key:%d" % (i + 7), b"%d" % r.randint(1, 10**6)])
             batch.append([b"GETEX", b"m:%d" % i, b"PX", b"%d" % r.randint(10**6, 10**9)])
+            # hashes: small ones, and now and then one past a listpack
+            # (600 fields, or a long value), changed by HDEL and HINCRBY
+            nf = 600 if i % 2000 == 0 else r.randint(1, 5)
+            batch.append([b"HSET", b"h:%d" % i] + [x for j in range(nf) for x in (b"f%d" % j, b"%d" % j)])
+            batch.append([b"HSET", b"h:%d" % i, b"long", b"v" * r.choice([3, 70])])
+            batch.append([b"HDEL", b"h:%d" % i, b"f0", b"nope"])
+            batch.append([b"HINCRBY", b"h:%d" % i, b"f1", b"%d" % r.randint(-100, 100)])
+            if i % 500 == 0:
+                batch.append([b"EXPIRE", b"h:%d" % i, b"%d" % r.randint(10**6, 10**7)])
             c.send(batch)
             for _ in batch:
                 c.reply()

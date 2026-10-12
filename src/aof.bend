@@ -33,7 +33,11 @@ import ./batch.bend as B
 # logs the SET of the sum, as Redis logs INCRBYFLOAT), and APPEND or
 # SETRANGE again for an APPEND or a SETRANGE (or a SETBIT: the SETRANGE
 # of its byte) to a key that was there, so that the file does not hold
-# the whole value again. Every time is from 1970, so the effects mean the
+# the whole value again; a write of a hash as the HSET of the pairs it
+# set (HSETNX's pair, HINCRBY's field with its sum) or the HDEL of the
+# fields it took, and a new hash where a key whose time had passed still
+# lay as one entry that deletes the key and sets the pairs (hnew.effect,
+# below). Every time is from 1970, so the effects mean the
 # same whenever they run, and a time, or an offset, is of 14 digits at
 # most (KV.small): no number but such a time or offset, or a database's
 # number, is ever read back from text.
@@ -68,8 +72,22 @@ def effect(c: R.Cmd) -> List<&2, R.Cmd>:
     case _:
       Nil{}
 
-# the effects of an update, from the change it made to its key
-def ch.effect(+k: String, +ch: R.Change) -> List<&2, R.Cmd>:
+# a new hash, its pairs set where the key was not there at now: an HSET
+# of them where the trie held no entry for the key (gone), else the
+# script that deletes the key and runs the HSET (R.HWNew), one entry: the
+# entry whose time had passed is in the file, there again when the file
+# loads, and Redis's MULTI with a DEL and the HSET is two, which a crash
+# could part
+def hnew.effect(gone: Bool, +k: String, ps: List<&2, KV.HPair>) -> List<&2, R.Cmd>:
+  match gone:
+    case True{}:
+      [R.Upd{k, R.UHash{R.HWSet{ps, False{}}}}]
+    case False{}:
+      [R.Upd{k, R.UHash{R.HWNew{ps}}}]
+
+# the effects of an update, from the change it made to its key, whose
+# code was c (R.ent.code)
+def ch.effect(+k: String, +c: Nat, +ch: R.Change) -> List<&2, R.Cmd>:
   match ch:
     case R.CKeep{}:
       Nil{}
@@ -85,11 +103,15 @@ def ch.effect(+k: String, +ch: R.Change) -> List<&2, R.Cmd>:
       [R.Upd{k, R.UAppend{a}}]
     case R.CRange{+o, +a, v}:
       [R.Upd{k, R.URange{o, a}}]
+    case R.CHash{op, h}:
+      [R.Upd{k, R.UHash{op}}]
+    case R.CHashNew{ps, h}:
+      hnew.effect(Nat.is_eq(c, 0n), k, ps)
 
-def upd.effect(+k: String, +o: R.Out) -> List<&2, R.Cmd>:
+def upd.effect(+k: String, +c: Nat, +o: R.Out) -> List<&2, R.Cmd>:
   match o:
     case R.Out{r, +ch}:
-      ch.effect(k, ch)
+      ch.effect(k, c, ch)
 
 # A command run with its effects: its reply, what it did (effects) and
 # the database after it. An update reads its key's entry, makes its
@@ -107,7 +129,7 @@ def run.upd(db: R.Db, +k: String, +op: R.UpdOp) -> R.Reply & (List<&2, R.Cmd> & 
       +h = KV.hash(k)
       +m = KV.entry.at(KV.Val, u, k, h)
       +o = R.upd.v(op, now, R.ent.live(now, m))
-      run.out(R.upd.put(u, k, h, n, x, now, rr, R.ent.code(m), o), upd.effect(k, o))
+      run.out(R.upd.put(u, k, h, n, x, now, rr, R.ent.code(m), o), upd.effect(k, R.ent.code(m), o))
 
 def run.put(c: R.Cmd, r: R.Reply & R.Db) -> R.Reply & (List<&2, R.Cmd> & R.Db):
   (x, db) = r
@@ -351,6 +373,26 @@ def ttl.args(+k: String, v: String, ttl: R.SetTtl) -> List<&2, String>:
     case R.TNone{}:
       ["SET", k, v]
 
+# a hash's write as the file logs it: HSET of pairs, HDEL of fields, or
+# the script of a new hash (R.hnew.script)
+def hpairs.args(ps: List<&2, KV.HPair>) -> List<&2, String>:
+  match ps:
+    case Nil{}:
+      Nil{}
+    case Con{KV.HP{f, v}, rest}:
+      f <> v <> hpairs.args(rest)
+
+def hash.args(+k: String, op: R.HWrite) -> List<&2, String>:
+  match op:
+    case R.HWSet{ps, mset}:
+      "HSET" <> k <> hpairs.args(ps)
+    case R.HWDel{fs}:
+      "HDEL" <> k <> fs
+    case R.HWNew{ps}:
+      "EVAL" <> R.hnew.script() <> "1" <> k <> "HSET" <> hpairs.args(ps)
+    case _:
+      Nil{}
+
 def upd.args(+k: String, op: R.UpdOp) -> List<&2, String>:
   match op:
     case R.USet{v, cond, ttl, name}:
@@ -363,6 +405,8 @@ def upd.args(+k: String, op: R.UpdOp) -> List<&2, String>:
       ["APPEND", k, v]
     case R.URange{o, s}:
       ["SETRANGE", k, Nat.show(o), s]
+    case R.UHash{op}:
+      hash.args(k, op)
     case _:
       Nil{}
 

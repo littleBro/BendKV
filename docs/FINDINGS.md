@@ -2247,6 +2247,109 @@ whose one variant holds a String and whose other variants are constructors could
 that variant as the String's own word (a string's tag is not a constructor's), with no
 node and no proof touched. It is on the list for after the types.
 
+## 3zg. Hashes
+
+**What there is.** HSET, HMSET, HSETNX, HGET, HMGET, HDEL, HLEN, HSTRLEN, HEXISTS, HKEYS,
+HVALS, HGETALL, HINCRBY, HSCAN and HRANDFIELD, with MEMORY USAGE. A hash is `HSmall`, its
+pairs in the order they came, while it holds at most 512 fields and values of at most 64
+bytes (Redis 7.0's listpack defaults), then `HBig`, a trie of its fields, for good, as
+Redis turns a listpack into a hashtable. BendKV converts at those defaults whatever the
+parameters say, so that the hash a history of writes leaves depends on the writes alone
+(the append-only file makes it again on any server); OBJECT ENCODING reads the parameters
+as they are. A small hash answers HGETALL, HKEYS, HVALS and HSCAN in the order its fields
+came, byte for byte as Redis; a large one in the order of its trie (Redis in the order of
+its table: both are arbitrary), and HSCAN walks its buckets with a cursor as SCAN walks
+the keys (section 3t). HRANDFIELD picks with the server's random numbers, as RANDOMKEY
+does. Arguments are read where Redis reads them: HINCRBY's increment and HSCAN's cursor as
+the command parses, before the key is looked for; HSCAN's options only once the key is
+found to hold a hash; HSET with a field and no value fails in the command (a failed call,
+not a refused one).
+
+**The file, and a key whose time had passed.** A write is logged as what it did: the HSET
+of the pairs it set (HSETNX's pair, HINCRBY's field with its sum, HMSET as HSET), the HDEL
+of the fields it took, a DEL when it took the last one. The change keeps that write, and
+the persistence proof replays it on the hash at time 0. One case did not fit: a write that
+makes a new hash where the trie still holds an entry whose time has passed (no sweep and
+no other write came to it). At time 0, where the file loads, that entry is there again: an
+HSET of the new pairs would add them to the old hash, or meet a string and answer
+WRONGTYPE. Redis 7.0 deletes the key when the write comes to it and logs `MULTI`, `DEL`,
+the write, `EXEC`, two entries a crash can part, which its loader handles by dropping a
+MULTI left open. BendKV's crash law (section 3f) rests on every act logging one entry at
+most. The ways considered:
+
+- the lazy deletion as an act of its own before each write of a collection, as MOVE's
+  first step deletes an expired entry in the other database (section 3x): one entry per
+  act again, but the write itself would then have to act on the raw entry (or do nothing
+  on an expired one) for every sequence of acts the laws quantify over, and the fast path,
+  which runs commands without acts, would have to be routed around it;
+- MULTI and EXEC in the file, with a loader that drops a group left open: the shape
+  transactions will need, but the laws of the file (each effect one entry that parses back
+  to it) would have to be restated for groups;
+- RESTORE with a DUMP payload: one standard command, but an RDB encoding and a CRC64 to
+  write and prove;
+- one EVAL of a fixed script, `redis.call('del',KEYS[1])` and then the HSET, a thousand
+  arguments a call (Lua's `unpack` stops near 8000).
+
+BendKV takes the last: one entry, which Redis runs as it loads the file (Redis wrote EVALs
+into its own files before 5.0), and which BendKV parses back as `HWNew`, a write that makes
+a new hash wherever the key was. The laws keep their shape: the effect is one entry, parses
+back to itself, and its replay replaces the entry. The EVAL is logged only in that case; a
+new hash where the trie holds no entry is an HSET. EVAL with any other script answers an
+error (BendKV has no Lua), and a client that sends this one gets what Redis gives (0, and
+the hash made). `redis-check-aof` accepts such a file; Redis loads it to the same hashes
+(3,001 pairs, in chunks, in the test) and BendKV loads them as Redis runs them.
+
+**The proofs.** Of the 972 definitions of the proof, 42 changed and 44 came in; no law
+changed. The commands of hashes are reads (`Peek`) and updates (`Upd`) of their key, so
+the frame, commuting, persistence and session laws cover them. The new parts: `Good` for
+the two changes of a hash (a hash changed: the write it keeps, replayed on the hash the key
+held, makes the same change; a new hash: its pairs set in an empty one), the replays of
+HSET, HDEL and the script, the parse back of each (the pairs written as HSET's arguments
+read back as themselves, `hpairs_rt`; the script compared whole), one effect per change
+(the effect of a new hash depends on whether the trie held an entry, so an effect now takes
+the entry's code), and HRANDFIELD and MEMORY USAGE among the commands of the connection.
+Laws of hashes themselves (HSET then HGET answers the value, HDEL takes the field) are not
+stated yet.
+
+**The kernel's stack.** `make verdict` then failed with a JavaScript stack overflow in
+Bend's translation toward the kernel. The statistics' table that maps a 12-bit word back to
+its code (`stat.code.cw`, written by `tools/gen_commands.py`) matched on numbers up to
+2,095, and a match on a number unfolds it, one level of recursion each: with the 76 codes
+of the new commands, the largest number grew from 1,713 to 2,095 and passed the stack. The
+table now matches on the word's high six bits, then on its low six, numbers up to 63.
+
+**COMMAND.** EVAL's key spec counts its keys with an argument (numkeys), which BendKV's
+specs (an index and a range) did not have: COMMAND GETKEYS of EVAL runs Redis's way, the
+spec first (numkeys a long long of at least 1 with that many words after it; RW, access,
+update), then, when it does not read, `evalGetKeys` (numkeys as `atoi` reads it; no
+flags). MEMORY is a container, as OBJECT, with HELP and USAGE.
+
+**Cost.** Instructions per request (`make perfcheck`): GET 3,291 (3,272 before, +0.6%),
+SET 4,287 (+0.6%), INCR 4,561 (+1.4%), within the guard's 3%; the baseline stays. A hash
+costs what its form does: HGET on a small hash walks its list, as Redis walks its
+listpack, and HRANDFIELD on a large hash builds the list of its pairs on each call (O(n),
+where Redis picks in O(1)). Hashes have no benchmark yet.
+
+**Where BendKV differs.** MEMORY USAGE is an estimate (40 bytes, the key's and the value's
+lengths, 32 more a pair), where Redis asks its allocator; HINCRBY stops at 14 digits, as
+INCRBY; a hash written while the listpack limits were raised stays a hashtable past the
+defaults (Redis keeps a listpack up to the raised limits); HRANDFIELD's picks differ, both
+servers' being random.
+
+**Redis's test suite and the tests.** BendKV passes 391 of the 1,673 tests Redis passes
+(23.4%; 327 before) and 365 of the 458 in what it has. Hashes brought 64: unit/type/hash
+56 of its 72 (the others: HINCRBYFLOAT's twelve, two that read a hash back with DUMP,
+HRANDFIELD over RESP3, and HINCRBY's test of overflows, which starts past 14 digits), the
+three of HSCAN in unit/scan, COPY of a hash in both its encodings, and COMMAND GETKEYS of
+EVAL and of MEMORY USAGE. The tests: `tests/hash_test.py` in `make test` (a script of
+commands at their edges, hashes of 511, 512, 513 and 1,200 fields on both sides of the
+listpack's limit, keys whose time has passed, then 3,000 random commands on a few keys,
+each reply compared with Redis's: HRANDFIELD by what its picks must be, MEMORY USAGE by
+its kind, a hashtable's fields as a set), hashes in the differential test, in both
+append-only files (Redis's loaded by BendKV and BendKV's by Redis, the script of a new
+hash among them) and in the restarts from BendKV's own, and COMMAND GETKEYS of EVAL and of
+the hash commands in the test of COMMAND.
+
 ## 4. Where a request's time goes, and hiding the memory waits
 
 With the eight patches, BendKV ran fewer instructions on GET and SET than Redis, missed

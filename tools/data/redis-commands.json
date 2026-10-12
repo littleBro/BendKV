@@ -2891,6 +2891,141 @@
     []
    ]
   },
+  "eval": {
+   "docs": [
+    "summary",
+    "Execute a Lua script server side",
+    "since",
+    "2.6.0",
+    "group",
+    "scripting",
+    "complexity",
+    "Depends on the script that is executed.",
+    "arguments",
+    [
+     [
+      "name",
+      "script",
+      "type",
+      "string"
+     ],
+     [
+      "name",
+      "numkeys",
+      "type",
+      "integer"
+     ],
+     [
+      "name",
+      "key",
+      "type",
+      "key",
+      "key_spec_index",
+      0,
+      "flags",
+      [
+       {
+        "+": "optional"
+       },
+       {
+        "+": "multiple"
+       }
+      ]
+     ],
+     [
+      "name",
+      "arg",
+      "type",
+      "string",
+      "flags",
+      [
+       {
+        "+": "optional"
+       },
+       {
+        "+": "multiple"
+       }
+      ]
+     ]
+    ]
+   ],
+   "info": [
+    "eval",
+    -3,
+    [
+     {
+      "+": "noscript"
+     },
+     {
+      "+": "stale"
+     },
+     {
+      "+": "skip_monitor"
+     },
+     {
+      "+": "no_mandatory_keys"
+     },
+     {
+      "+": "movablekeys"
+     }
+    ],
+    0,
+    0,
+    0,
+    [
+     {
+      "+": "@slow"
+     },
+     {
+      "+": "@scripting"
+     }
+    ],
+    [],
+    [
+     [
+      "notes",
+      "We cannot tell how the keys will be used so we assume the worst, RW and UPDATE",
+      "flags",
+      [
+       {
+        "+": "RW"
+       },
+       {
+        "+": "access"
+       },
+       {
+        "+": "update"
+       }
+      ],
+      "begin_search",
+      [
+       "type",
+       "index",
+       "spec",
+       [
+        "index",
+        2
+       ]
+      ],
+      "find_keys",
+      [
+       "type",
+       "keynum",
+       "spec",
+       [
+        "keynumidx",
+        0,
+        "firstkey",
+        1,
+        "keystep",
+        1
+       ]
+      ]
+     ]
+    ],
+    []
+   ]
+  },
   "exists": {
    "docs": [
     "summary",
@@ -4340,6 +4475,113 @@
     []
    ]
   },
+  "hdel": {
+   "docs": [
+    "summary",
+    "Delete one or more hash fields",
+    "since",
+    "2.0.0",
+    "group",
+    "hash",
+    "complexity",
+    "O(N) where N is the number of fields to be removed.",
+    "history",
+    [
+     [
+      "2.4.0",
+      "Accepts multiple `field` arguments."
+     ]
+    ],
+    "arguments",
+    [
+     [
+      "name",
+      "key",
+      "type",
+      "key",
+      "key_spec_index",
+      0
+     ],
+     [
+      "name",
+      "field",
+      "type",
+      "string",
+      "flags",
+      [
+       {
+        "+": "multiple"
+       }
+      ]
+     ]
+    ]
+   ],
+   "info": [
+    "hdel",
+    -3,
+    [
+     {
+      "+": "write"
+     },
+     {
+      "+": "fast"
+     }
+    ],
+    1,
+    1,
+    1,
+    [
+     {
+      "+": "@write"
+     },
+     {
+      "+": "@hash"
+     },
+     {
+      "+": "@fast"
+     }
+    ],
+    [],
+    [
+     [
+      "flags",
+      [
+       {
+        "+": "RW"
+       },
+       {
+        "+": "delete"
+       }
+      ],
+      "begin_search",
+      [
+       "type",
+       "index",
+       "spec",
+       [
+        "index",
+        1
+       ]
+      ],
+      "find_keys",
+      [
+       "type",
+       "range",
+       "spec",
+       [
+        "lastkey",
+        0,
+        "keystep",
+        1,
+        "limit",
+        0
+       ]
+      ]
+     ]
+    ],
+    []
+   ]
+  },
   "hello": {
    "docs": [
     "summary",
@@ -4461,6 +4703,1433 @@
     ],
     [],
     [],
+    []
+   ]
+  },
+  "hexists": {
+   "docs": [
+    "summary",
+    "Determine if a hash field exists",
+    "since",
+    "2.0.0",
+    "group",
+    "hash",
+    "complexity",
+    "O(1)",
+    "arguments",
+    [
+     [
+      "name",
+      "key",
+      "type",
+      "key",
+      "key_spec_index",
+      0
+     ],
+     [
+      "name",
+      "field",
+      "type",
+      "string"
+     ]
+    ]
+   ],
+   "info": [
+    "hexists",
+    3,
+    [
+     {
+      "+": "readonly"
+     },
+     {
+      "+": "fast"
+     }
+    ],
+    1,
+    1,
+    1,
+    [
+     {
+      "+": "@read"
+     },
+     {
+      "+": "@hash"
+     },
+     {
+      "+": "@fast"
+     }
+    ],
+    [],
+    [
+     [
+      "flags",
+      [
+       {
+        "+": "RO"
+       }
+      ],
+      "begin_search",
+      [
+       "type",
+       "index",
+       "spec",
+       [
+        "index",
+        1
+       ]
+      ],
+      "find_keys",
+      [
+       "type",
+       "range",
+       "spec",
+       [
+        "lastkey",
+        0,
+        "keystep",
+        1,
+        "limit",
+        0
+       ]
+      ]
+     ]
+    ],
+    []
+   ]
+  },
+  "hget": {
+   "docs": [
+    "summary",
+    "Get the value of a hash field",
+    "since",
+    "2.0.0",
+    "group",
+    "hash",
+    "complexity",
+    "O(1)",
+    "arguments",
+    [
+     [
+      "name",
+      "key",
+      "type",
+      "key",
+      "key_spec_index",
+      0
+     ],
+     [
+      "name",
+      "field",
+      "type",
+      "string"
+     ]
+    ]
+   ],
+   "info": [
+    "hget",
+    3,
+    [
+     {
+      "+": "readonly"
+     },
+     {
+      "+": "fast"
+     }
+    ],
+    1,
+    1,
+    1,
+    [
+     {
+      "+": "@read"
+     },
+     {
+      "+": "@hash"
+     },
+     {
+      "+": "@fast"
+     }
+    ],
+    [],
+    [
+     [
+      "flags",
+      [
+       {
+        "+": "RO"
+       },
+       {
+        "+": "access"
+       }
+      ],
+      "begin_search",
+      [
+       "type",
+       "index",
+       "spec",
+       [
+        "index",
+        1
+       ]
+      ],
+      "find_keys",
+      [
+       "type",
+       "range",
+       "spec",
+       [
+        "lastkey",
+        0,
+        "keystep",
+        1,
+        "limit",
+        0
+       ]
+      ]
+     ]
+    ],
+    []
+   ]
+  },
+  "hgetall": {
+   "docs": [
+    "summary",
+    "Get all the fields and values in a hash",
+    "since",
+    "2.0.0",
+    "group",
+    "hash",
+    "complexity",
+    "O(N) where N is the size of the hash.",
+    "arguments",
+    [
+     [
+      "name",
+      "key",
+      "type",
+      "key",
+      "key_spec_index",
+      0
+     ]
+    ]
+   ],
+   "info": [
+    "hgetall",
+    2,
+    [
+     {
+      "+": "readonly"
+     }
+    ],
+    1,
+    1,
+    1,
+    [
+     {
+      "+": "@read"
+     },
+     {
+      "+": "@hash"
+     },
+     {
+      "+": "@slow"
+     }
+    ],
+    [
+     "nondeterministic_output_order"
+    ],
+    [
+     [
+      "flags",
+      [
+       {
+        "+": "RO"
+       },
+       {
+        "+": "access"
+       }
+      ],
+      "begin_search",
+      [
+       "type",
+       "index",
+       "spec",
+       [
+        "index",
+        1
+       ]
+      ],
+      "find_keys",
+      [
+       "type",
+       "range",
+       "spec",
+       [
+        "lastkey",
+        0,
+        "keystep",
+        1,
+        "limit",
+        0
+       ]
+      ]
+     ]
+    ],
+    []
+   ]
+  },
+  "hincrby": {
+   "docs": [
+    "summary",
+    "Increment the integer value of a hash field by the given number",
+    "since",
+    "2.0.0",
+    "group",
+    "hash",
+    "complexity",
+    "O(1)",
+    "arguments",
+    [
+     [
+      "name",
+      "key",
+      "type",
+      "key",
+      "key_spec_index",
+      0
+     ],
+     [
+      "name",
+      "field",
+      "type",
+      "string"
+     ],
+     [
+      "name",
+      "increment",
+      "type",
+      "integer"
+     ]
+    ]
+   ],
+   "info": [
+    "hincrby",
+    4,
+    [
+     {
+      "+": "write"
+     },
+     {
+      "+": "denyoom"
+     },
+     {
+      "+": "fast"
+     }
+    ],
+    1,
+    1,
+    1,
+    [
+     {
+      "+": "@write"
+     },
+     {
+      "+": "@hash"
+     },
+     {
+      "+": "@fast"
+     }
+    ],
+    [],
+    [
+     [
+      "flags",
+      [
+       {
+        "+": "RW"
+       },
+       {
+        "+": "access"
+       },
+       {
+        "+": "update"
+       }
+      ],
+      "begin_search",
+      [
+       "type",
+       "index",
+       "spec",
+       [
+        "index",
+        1
+       ]
+      ],
+      "find_keys",
+      [
+       "type",
+       "range",
+       "spec",
+       [
+        "lastkey",
+        0,
+        "keystep",
+        1,
+        "limit",
+        0
+       ]
+      ]
+     ]
+    ],
+    []
+   ]
+  },
+  "hkeys": {
+   "docs": [
+    "summary",
+    "Get all the fields in a hash",
+    "since",
+    "2.0.0",
+    "group",
+    "hash",
+    "complexity",
+    "O(N) where N is the size of the hash.",
+    "arguments",
+    [
+     [
+      "name",
+      "key",
+      "type",
+      "key",
+      "key_spec_index",
+      0
+     ]
+    ]
+   ],
+   "info": [
+    "hkeys",
+    2,
+    [
+     {
+      "+": "readonly"
+     }
+    ],
+    1,
+    1,
+    1,
+    [
+     {
+      "+": "@read"
+     },
+     {
+      "+": "@hash"
+     },
+     {
+      "+": "@slow"
+     }
+    ],
+    [
+     "nondeterministic_output_order"
+    ],
+    [
+     [
+      "flags",
+      [
+       {
+        "+": "RO"
+       },
+       {
+        "+": "access"
+       }
+      ],
+      "begin_search",
+      [
+       "type",
+       "index",
+       "spec",
+       [
+        "index",
+        1
+       ]
+      ],
+      "find_keys",
+      [
+       "type",
+       "range",
+       "spec",
+       [
+        "lastkey",
+        0,
+        "keystep",
+        1,
+        "limit",
+        0
+       ]
+      ]
+     ]
+    ],
+    []
+   ]
+  },
+  "hlen": {
+   "docs": [
+    "summary",
+    "Get the number of fields in a hash",
+    "since",
+    "2.0.0",
+    "group",
+    "hash",
+    "complexity",
+    "O(1)",
+    "arguments",
+    [
+     [
+      "name",
+      "key",
+      "type",
+      "key",
+      "key_spec_index",
+      0
+     ]
+    ]
+   ],
+   "info": [
+    "hlen",
+    2,
+    [
+     {
+      "+": "readonly"
+     },
+     {
+      "+": "fast"
+     }
+    ],
+    1,
+    1,
+    1,
+    [
+     {
+      "+": "@read"
+     },
+     {
+      "+": "@hash"
+     },
+     {
+      "+": "@fast"
+     }
+    ],
+    [],
+    [
+     [
+      "flags",
+      [
+       {
+        "+": "RO"
+       }
+      ],
+      "begin_search",
+      [
+       "type",
+       "index",
+       "spec",
+       [
+        "index",
+        1
+       ]
+      ],
+      "find_keys",
+      [
+       "type",
+       "range",
+       "spec",
+       [
+        "lastkey",
+        0,
+        "keystep",
+        1,
+        "limit",
+        0
+       ]
+      ]
+     ]
+    ],
+    []
+   ]
+  },
+  "hmget": {
+   "docs": [
+    "summary",
+    "Get the values of all the given hash fields",
+    "since",
+    "2.0.0",
+    "group",
+    "hash",
+    "complexity",
+    "O(N) where N is the number of fields being requested.",
+    "arguments",
+    [
+     [
+      "name",
+      "key",
+      "type",
+      "key",
+      "key_spec_index",
+      0
+     ],
+     [
+      "name",
+      "field",
+      "type",
+      "string",
+      "flags",
+      [
+       {
+        "+": "multiple"
+       }
+      ]
+     ]
+    ]
+   ],
+   "info": [
+    "hmget",
+    -3,
+    [
+     {
+      "+": "readonly"
+     },
+     {
+      "+": "fast"
+     }
+    ],
+    1,
+    1,
+    1,
+    [
+     {
+      "+": "@read"
+     },
+     {
+      "+": "@hash"
+     },
+     {
+      "+": "@fast"
+     }
+    ],
+    [],
+    [
+     [
+      "flags",
+      [
+       {
+        "+": "RO"
+       },
+       {
+        "+": "access"
+       }
+      ],
+      "begin_search",
+      [
+       "type",
+       "index",
+       "spec",
+       [
+        "index",
+        1
+       ]
+      ],
+      "find_keys",
+      [
+       "type",
+       "range",
+       "spec",
+       [
+        "lastkey",
+        0,
+        "keystep",
+        1,
+        "limit",
+        0
+       ]
+      ]
+     ]
+    ],
+    []
+   ]
+  },
+  "hmset": {
+   "docs": [
+    "summary",
+    "Set multiple hash fields to multiple values",
+    "since",
+    "2.0.0",
+    "group",
+    "hash",
+    "complexity",
+    "O(N) where N is the number of fields being set.",
+    "doc_flags",
+    [
+     {
+      "+": "deprecated"
+     }
+    ],
+    "deprecated_since",
+    "4.0.0",
+    "replaced_by",
+    "`HSET` with multiple field-value pairs",
+    "arguments",
+    [
+     [
+      "name",
+      "key",
+      "type",
+      "key",
+      "key_spec_index",
+      0
+     ],
+     [
+      "name",
+      "field_value",
+      "type",
+      "block",
+      "flags",
+      [
+       {
+        "+": "multiple"
+       }
+      ],
+      "arguments",
+      [
+       [
+        "name",
+        "field",
+        "type",
+        "string"
+       ],
+       [
+        "name",
+        "value",
+        "type",
+        "string"
+       ]
+      ]
+     ]
+    ]
+   ],
+   "info": [
+    "hmset",
+    -4,
+    [
+     {
+      "+": "write"
+     },
+     {
+      "+": "denyoom"
+     },
+     {
+      "+": "fast"
+     }
+    ],
+    1,
+    1,
+    1,
+    [
+     {
+      "+": "@write"
+     },
+     {
+      "+": "@hash"
+     },
+     {
+      "+": "@fast"
+     }
+    ],
+    [],
+    [
+     [
+      "flags",
+      [
+       {
+        "+": "RW"
+       },
+       {
+        "+": "update"
+       }
+      ],
+      "begin_search",
+      [
+       "type",
+       "index",
+       "spec",
+       [
+        "index",
+        1
+       ]
+      ],
+      "find_keys",
+      [
+       "type",
+       "range",
+       "spec",
+       [
+        "lastkey",
+        0,
+        "keystep",
+        1,
+        "limit",
+        0
+       ]
+      ]
+     ]
+    ],
+    []
+   ]
+  },
+  "hrandfield": {
+   "docs": [
+    "summary",
+    "Get one or multiple random fields from a hash",
+    "since",
+    "6.2.0",
+    "group",
+    "hash",
+    "complexity",
+    "O(N) where N is the number of fields returned",
+    "arguments",
+    [
+     [
+      "name",
+      "key",
+      "type",
+      "key",
+      "key_spec_index",
+      0
+     ],
+     [
+      "name",
+      "options",
+      "type",
+      "block",
+      "flags",
+      [
+       {
+        "+": "optional"
+       }
+      ],
+      "arguments",
+      [
+       [
+        "name",
+        "count",
+        "type",
+        "integer"
+       ],
+       [
+        "name",
+        "withvalues",
+        "type",
+        "pure-token",
+        "token",
+        "WITHVALUES",
+        "flags",
+        [
+         {
+          "+": "optional"
+         }
+        ]
+       ]
+      ]
+     ]
+    ]
+   ],
+   "info": [
+    "hrandfield",
+    -2,
+    [
+     {
+      "+": "readonly"
+     }
+    ],
+    1,
+    1,
+    1,
+    [
+     {
+      "+": "@read"
+     },
+     {
+      "+": "@hash"
+     },
+     {
+      "+": "@slow"
+     }
+    ],
+    [
+     "nondeterministic_output"
+    ],
+    [
+     [
+      "flags",
+      [
+       {
+        "+": "RO"
+       },
+       {
+        "+": "access"
+       }
+      ],
+      "begin_search",
+      [
+       "type",
+       "index",
+       "spec",
+       [
+        "index",
+        1
+       ]
+      ],
+      "find_keys",
+      [
+       "type",
+       "range",
+       "spec",
+       [
+        "lastkey",
+        0,
+        "keystep",
+        1,
+        "limit",
+        0
+       ]
+      ]
+     ]
+    ],
+    []
+   ]
+  },
+  "hscan": {
+   "docs": [
+    "summary",
+    "Incrementally iterate hash fields and associated values",
+    "since",
+    "2.8.0",
+    "group",
+    "hash",
+    "complexity",
+    "O(1) for every call. O(N) for a complete iteration, including enough command calls for the cursor to return back to 0. N is the number of elements inside the collection..",
+    "arguments",
+    [
+     [
+      "name",
+      "key",
+      "type",
+      "key",
+      "key_spec_index",
+      0
+     ],
+     [
+      "name",
+      "cursor",
+      "type",
+      "integer"
+     ],
+     [
+      "name",
+      "pattern",
+      "type",
+      "pattern",
+      "token",
+      "MATCH",
+      "flags",
+      [
+       {
+        "+": "optional"
+       }
+      ]
+     ],
+     [
+      "name",
+      "count",
+      "type",
+      "integer",
+      "token",
+      "COUNT",
+      "flags",
+      [
+       {
+        "+": "optional"
+       }
+      ]
+     ]
+    ]
+   ],
+   "info": [
+    "hscan",
+    -3,
+    [
+     {
+      "+": "readonly"
+     }
+    ],
+    1,
+    1,
+    1,
+    [
+     {
+      "+": "@read"
+     },
+     {
+      "+": "@hash"
+     },
+     {
+      "+": "@slow"
+     }
+    ],
+    [
+     "nondeterministic_output"
+    ],
+    [
+     [
+      "flags",
+      [
+       {
+        "+": "RO"
+       },
+       {
+        "+": "access"
+       }
+      ],
+      "begin_search",
+      [
+       "type",
+       "index",
+       "spec",
+       [
+        "index",
+        1
+       ]
+      ],
+      "find_keys",
+      [
+       "type",
+       "range",
+       "spec",
+       [
+        "lastkey",
+        0,
+        "keystep",
+        1,
+        "limit",
+        0
+       ]
+      ]
+     ]
+    ],
+    []
+   ]
+  },
+  "hset": {
+   "docs": [
+    "summary",
+    "Set the string value of a hash field",
+    "since",
+    "2.0.0",
+    "group",
+    "hash",
+    "complexity",
+    "O(1) for each field/value pair added, so O(N) to add N field/value pairs when the command is called with multiple field/value pairs.",
+    "history",
+    [
+     [
+      "4.0.0",
+      "Accepts multiple `field` and `value` arguments."
+     ]
+    ],
+    "arguments",
+    [
+     [
+      "name",
+      "key",
+      "type",
+      "key",
+      "key_spec_index",
+      0
+     ],
+     [
+      "name",
+      "field_value",
+      "type",
+      "block",
+      "flags",
+      [
+       {
+        "+": "multiple"
+       }
+      ],
+      "arguments",
+      [
+       [
+        "name",
+        "field",
+        "type",
+        "string"
+       ],
+       [
+        "name",
+        "value",
+        "type",
+        "string"
+       ]
+      ]
+     ]
+    ]
+   ],
+   "info": [
+    "hset",
+    -4,
+    [
+     {
+      "+": "write"
+     },
+     {
+      "+": "denyoom"
+     },
+     {
+      "+": "fast"
+     }
+    ],
+    1,
+    1,
+    1,
+    [
+     {
+      "+": "@write"
+     },
+     {
+      "+": "@hash"
+     },
+     {
+      "+": "@fast"
+     }
+    ],
+    [],
+    [
+     [
+      "flags",
+      [
+       {
+        "+": "RW"
+       },
+       {
+        "+": "update"
+       }
+      ],
+      "begin_search",
+      [
+       "type",
+       "index",
+       "spec",
+       [
+        "index",
+        1
+       ]
+      ],
+      "find_keys",
+      [
+       "type",
+       "range",
+       "spec",
+       [
+        "lastkey",
+        0,
+        "keystep",
+        1,
+        "limit",
+        0
+       ]
+      ]
+     ]
+    ],
+    []
+   ]
+  },
+  "hsetnx": {
+   "docs": [
+    "summary",
+    "Set the value of a hash field, only if the field does not exist",
+    "since",
+    "2.0.0",
+    "group",
+    "hash",
+    "complexity",
+    "O(1)",
+    "arguments",
+    [
+     [
+      "name",
+      "key",
+      "type",
+      "key",
+      "key_spec_index",
+      0
+     ],
+     [
+      "name",
+      "field",
+      "type",
+      "string"
+     ],
+     [
+      "name",
+      "value",
+      "type",
+      "string"
+     ]
+    ]
+   ],
+   "info": [
+    "hsetnx",
+    4,
+    [
+     {
+      "+": "write"
+     },
+     {
+      "+": "denyoom"
+     },
+     {
+      "+": "fast"
+     }
+    ],
+    1,
+    1,
+    1,
+    [
+     {
+      "+": "@write"
+     },
+     {
+      "+": "@hash"
+     },
+     {
+      "+": "@fast"
+     }
+    ],
+    [],
+    [
+     [
+      "flags",
+      [
+       {
+        "+": "RW"
+       },
+       {
+        "+": "insert"
+       }
+      ],
+      "begin_search",
+      [
+       "type",
+       "index",
+       "spec",
+       [
+        "index",
+        1
+       ]
+      ],
+      "find_keys",
+      [
+       "type",
+       "range",
+       "spec",
+       [
+        "lastkey",
+        0,
+        "keystep",
+        1,
+        "limit",
+        0
+       ]
+      ]
+     ]
+    ],
+    []
+   ]
+  },
+  "hstrlen": {
+   "docs": [
+    "summary",
+    "Get the length of the value of a hash field",
+    "since",
+    "3.2.0",
+    "group",
+    "hash",
+    "complexity",
+    "O(1)",
+    "arguments",
+    [
+     [
+      "name",
+      "key",
+      "type",
+      "key",
+      "key_spec_index",
+      0
+     ],
+     [
+      "name",
+      "field",
+      "type",
+      "string"
+     ]
+    ]
+   ],
+   "info": [
+    "hstrlen",
+    3,
+    [
+     {
+      "+": "readonly"
+     },
+     {
+      "+": "fast"
+     }
+    ],
+    1,
+    1,
+    1,
+    [
+     {
+      "+": "@read"
+     },
+     {
+      "+": "@hash"
+     },
+     {
+      "+": "@fast"
+     }
+    ],
+    [],
+    [
+     [
+      "flags",
+      [
+       {
+        "+": "RO"
+       }
+      ],
+      "begin_search",
+      [
+       "type",
+       "index",
+       "spec",
+       [
+        "index",
+        1
+       ]
+      ],
+      "find_keys",
+      [
+       "type",
+       "range",
+       "spec",
+       [
+        "lastkey",
+        0,
+        "keystep",
+        1,
+        "limit",
+        0
+       ]
+      ]
+     ]
+    ],
+    []
+   ]
+  },
+  "hvals": {
+   "docs": [
+    "summary",
+    "Get all the values in a hash",
+    "since",
+    "2.0.0",
+    "group",
+    "hash",
+    "complexity",
+    "O(N) where N is the size of the hash.",
+    "arguments",
+    [
+     [
+      "name",
+      "key",
+      "type",
+      "key",
+      "key_spec_index",
+      0
+     ]
+    ]
+   ],
+   "info": [
+    "hvals",
+    2,
+    [
+     {
+      "+": "readonly"
+     }
+    ],
+    1,
+    1,
+    1,
+    [
+     {
+      "+": "@read"
+     },
+     {
+      "+": "@hash"
+     },
+     {
+      "+": "@slow"
+     }
+    ],
+    [
+     "nondeterministic_output_order"
+    ],
+    [
+     [
+      "flags",
+      [
+       {
+        "+": "RO"
+       },
+       {
+        "+": "access"
+       }
+      ],
+      "begin_search",
+      [
+       "type",
+       "index",
+       "spec",
+       [
+        "index",
+        1
+       ]
+      ],
+      "find_keys",
+      [
+       "type",
+       "range",
+       "spec",
+       [
+        "lastkey",
+        0,
+        "keystep",
+        1,
+        "limit",
+        0
+       ]
+      ]
+     ]
+    ],
     []
    ]
   },
@@ -4925,6 +6594,164 @@
      ]
     ],
     []
+   ]
+  },
+  "memory": {
+   "docs": [
+    "summary",
+    "A container for memory diagnostics commands",
+    "since",
+    "4.0.0",
+    "group",
+    "server",
+    "complexity",
+    "Depends on subcommand.",
+    "subcommands",
+    [
+     "memory|help",
+     [
+      "summary",
+      "Show helpful text about the different subcommands",
+      "since",
+      "4.0.0",
+      "group",
+      "server",
+      "complexity",
+      "O(1)"
+     ],
+     "memory|usage",
+     [
+      "summary",
+      "Estimate the memory usage of a key",
+      "since",
+      "4.0.0",
+      "group",
+      "server",
+      "complexity",
+      "O(N) where N is the number of samples.",
+      "arguments",
+      [
+       [
+        "name",
+        "key",
+        "type",
+        "key",
+        "key_spec_index",
+        0
+       ],
+       [
+        "name",
+        "count",
+        "type",
+        "integer",
+        "token",
+        "SAMPLES",
+        "flags",
+        [
+         {
+          "+": "optional"
+         }
+        ]
+       ]
+      ]
+     ]
+    ]
+   ],
+   "info": [
+    "memory",
+    -2,
+    [],
+    0,
+    0,
+    0,
+    [
+     {
+      "+": "@slow"
+     }
+    ],
+    [],
+    [],
+    [
+     [
+      "memory|help",
+      2,
+      [
+       {
+        "+": "loading"
+       },
+       {
+        "+": "stale"
+       }
+      ],
+      0,
+      0,
+      0,
+      [
+       {
+        "+": "@slow"
+       }
+      ],
+      [],
+      [],
+      []
+     ],
+     [
+      "memory|usage",
+      -3,
+      [
+       {
+        "+": "readonly"
+       }
+      ],
+      2,
+      2,
+      1,
+      [
+       {
+        "+": "@read"
+       },
+       {
+        "+": "@slow"
+       }
+      ],
+      [],
+      [
+       [
+        "flags",
+        [
+         {
+          "+": "RO"
+         }
+        ],
+        "begin_search",
+        [
+         "type",
+         "index",
+         "spec",
+         [
+          "index",
+          2
+         ]
+        ],
+        "find_keys",
+        [
+         "type",
+         "range",
+         "spec",
+         [
+          "lastkey",
+          0,
+          "keystep",
+          1,
+          "limit",
+          0
+         ]
+        ]
+       ]
+      ],
+      []
+     ]
+    ]
    ]
   },
   "mget": {

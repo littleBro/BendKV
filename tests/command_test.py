@@ -221,7 +221,13 @@ def main():
              ["config", "nosuch"], ["client", "id"], ["client"], ["command"], ["command", "getkeys"],
              ["nosuch"], ["nosuch", "k"], ["incrby", "k", "1"], ["incrby", "k"], ["append", "k", "v"],
              ["getset", "k", "v"], ["strlen", "k"], ["type", "k"], ["setnx", "k", "v"], ["decr", "k"],
-             ["select", "0"], ["flushall"], ["echo", "x"], ["Config", "GET", "x"]]
+             ["select", "0"], ["flushall"], ["echo", "x"], ["Config", "GET", "x"],
+             ["eval", "s", "1", "k"], ["eval", "s", "2", "a", "b", "c"], ["eval", "s", "0"], ["eval", "s", "0", "k"],
+             ["eval", "s", "3", "a", "b"], ["eval", "s", "01", "k"], ["eval", "s", " 1", "k"], ["eval", "s", "+1", "k"],
+             ["eval", "s", "1x", "k"], ["eval", "s", "-1", "k"], ["eval", "s", "x", "k"], ["eval", "s"], ["eval"],
+             ["eval", "s", "99999999999", "k"], ["eval", "s", "\t2", "a", "b"], ["hset", "k", "f", "v"], ["hset", "k"],
+             ["hmget", "k", "f"], ["hdel", "k", "f"], ["hscan", "k", "0"], ["hrandfield", "k"],
+             ["memory", "usage", "k"], ["memory", "help"], ["memory"], ["memory", "nosuch", "k"]]
     for argv in lines:
         for sub in ("GETKEYS", "GETKEYSANDFLAGS"):
             same("COMMAND %s %s" % (sub, " ".join(argv)), "COMMAND", sub, *argv, fix=None)

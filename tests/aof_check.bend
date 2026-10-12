@@ -1,4 +1,5 @@
-# aof_check.bend: runs smoke.bend's batch with its effects (aof.bend:
+# aof_check.bend: runs smoke.bend's batch, and writes of hashes, with
+# its effects (aof.bend:
 # exec_log), writes the effects as the server appends them, reads the
 # file back, runs it from an empty database and prints whether that gives
 # the batch's database; then cuts the file at every length and prints
@@ -48,15 +49,29 @@ def buf() -> String:
   "SET bo5 1 EX 100\r\nBITOP OR bo5 g\r\nBITOP NOT bo4 nope\r\nBITOP FOO x y\r\nBITOP NOT x y z\r\nLCS g u\r\n" ++
   "BITFIELD bf1 SET u8 0 255 INCRBY i5 100 1 GET u4 0\r\nBITFIELD bf1 OVERFLOW FAIL INCRBY u2 0 9\r\n" ++
   "BITFIELD bf2 OVERFLOW FAIL INCRBY u2 30 9\r\nBITFIELD g SET i64 #1 -1 GET u63 64\r\nBITFIELD_RO g GET u8 0\r\n" ++
-  "BITFIELD g SET u8 0 x\r\nBITFIELD bo5 INCRBY u8 0 1\r\nBITFIELD bf1 SET u8 0 255\r\nBITFIELD_RO bf1 SET u8 0 1\r\n"
+  "BITFIELD g SET u8 0 x\r\nBITFIELD bo5 INCRBY u8 0 1\r\nBITFIELD bf1 SET u8 0 255\r\nBITFIELD_RO bf1 SET u8 0 1\r\n" ++
+  "HSET h a 1 b 2 a 3\r\nHMSET h c 4\r\nHSETNX h d 5\r\nHSETNX h a 9\r\nHINCRBY h a 10\r\nHINCRBY h2 n -7\r\n" ++
+  "HDEL h b nope\r\nHDEL h2 n\r\nHSET g x y\r\nHSET h3 long vvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvv\r\nHSET h3 f 1\r\nHDEL h3 long\r\n" ++
+  "HGET h a\r\nHGETALL h\r\nHINCRBY h a x\r\nHSET\r\nHSET h odd\r\nEXPIRE h 100\r\n" ++
+  "*7\r\n$4\r\nEVAL\r\n$131\r\n" ++ R.hnew.script() ++ "\r\n$1\r\n1\r\n$2\r\nh4\r\n$4\r\nHSET\r\n$1\r\nf\r\n$1\r\nv\r\n" ++
+  "*7\r\n$4\r\nEVAL\r\n$131\r\n" ++ R.hnew.script() ++ "\r\n$1\r\n1\r\n$1\r\nh\r\n$4\r\nHSET\r\n$1\r\nz\r\n$1\r\n1\r\n" ++
+  "*8\r\n$4\r\nEVAL\r\n$131\r\n" ++ R.hnew.script() ++ "\r\n$1\r\n1\r\n$1\r\nu\r\n$4\r\nHSET\r\n$1\r\nz\r\n$1\r\n1\r\n$1\r\ny\r\n" ++
+  "EVAL x 0\r\nEVAL\r\n"
 
 # an entry as its value, and the time it expires at when it has one
+def dump.pairs(ps: List<&2, KV.HPair>) -> String:
+  match ps:
+    case Nil{}:
+      ""
+    case Con{KV.HP{f, v}, rest}:
+      " " ++ f ++ ":" ++ v ++ dump.pairs(rest)
+
 def dump.val(v: KV.Val) -> String:
   match v:
     case KV.VStr{s}:
       s
-    case KV.VColl{c}:
-      "<" ++ R.coll.type(c) ++ ">"
+    case KV.VColl{KV.CHash{+h}}:
+      "<hash" ++ dump.pairs(KV.hash.pairs(h)) ++ ">"
 
 def dump.ent(m: Maybe<&2, KV.Item<KV.Val>>) -> String:
   match m:
