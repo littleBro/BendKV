@@ -339,7 +339,9 @@ compared as sets and each random pick checked against the set it came from), sor
 listpack's limits, STOREs and pops of keys whose time has passed, and at random, ZSCAN's
 walk compared by its pairs and each random pick checked against the sorted set it came
 from),
-robustness and concurrency checks,
+robustness and concurrency checks, connections that end every way one can, many times
+(the client closing or resetting, QUIT, a protocol error), on a BendKV of their own whose
+table of channels is read to show that each closed the channel it opened,
 restarts from the append-only file (every database read back, including after a
 truncated tail), disk failures
 under the file, injected with an `LD_PRELOAD` shim, and the files both ways: BendKV

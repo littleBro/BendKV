@@ -3325,3 +3325,22 @@ option): Redis answers `unknown command 'no'` to `no\0pe`. The trailer the issue
 at the two bytes after a bulk's data, as it never looks at the byte after a line's `'\r'`,
 and BendKV no longer does either, so its diagnostic is gone, and so are two reads of the
 buffer and their comparisons from every bulk the parser reads. 17 cases in `tests/protocol_test.py`.
+
+**A channel for each connection ([#5](https://github.com/littleBro/bendkv/issues/5)).**
+Each connection opens a channel for its answers (`Chan.new` in `conn_start`), and none
+was ever closed: a client that closed, reset, sent QUIT or a protocol error, or a send that
+failed, closed the socket alone, so each connection left a row of the runtime's channel
+table and its ring behind, and the table stops the process at 16,777,216 rows. A test
+that reads the table's size in the server's memory (`chan_len`, through
+`/proc/<pid>/mem`) saw 3 rows grow to 124 after 120 connections. Now every way a
+connection ends goes through one teardown, `conn_end`, which closes the socket (after the
+bytes posted to it) and then the channel; nothing can be on its way to the channel then,
+since a connection waits for each batch's answer before it goes on, so `Chan.close` frees
+the row at once and the next connection takes it again. The actor's channel, shared by
+every connection, stays open. The protocol error's reply is the last thing a connection
+sends (`conn_bye`), and the connection ends whether it went out or not.
+`tests/conn_test.py` ends 300 connections in six ways (the client closing after a request
+or before any, QUIT, a protocol error, the client resetting before the server reads its
+request and while it sends a reply of a megabyte) on a BendKV of its own, posting and
+sending: INFO counts no connection left, the database answers a new connection, and the
+table holds 4 rows after, 3 before (304 before the fix).
