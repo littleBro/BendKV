@@ -13,7 +13,9 @@ each server lists them in the order of its own table; the set the set
 commands take is an intset, which SSCAN answers whole whatever the
 cursor, and SPOP's random picks are compared by how many (SRANDMEMBER
 of a negative count n answers n members on both servers, as many as
-memory holds: only of a key not there here).
+memory holds: only of a key not there here). INCRBYFLOAT and
+HINCRBYFLOAT read each as a long double, and add it to a value and to a
+field that are numbers and to ones that are not there.
 
     python3 tests/numbers_test.py --bendkv 6380 --redis 6390
 """
@@ -46,6 +48,7 @@ TEMPL = [
     "LPOS l a RANK n COUNT 0", "LMPOP n l LEFT", "LMPOP 1 l LEFT COUNT n", "LINSERT l BEFORE n v",
     "SPOP s n", "SINTERCARD n s", "SINTERCARD 1 s LIMIT n", "SSCAN s n", "SSCAN s 0 COUNT n",
     "SADD s n", "SISMEMBER s n", "SMOVE s s2 n", "SPOP nope n", "SRANDMEMBER nope n",
+    "INCRBYFLOAT i n", "INCRBYFLOAT nope n", "HINCRBYFLOAT h f n", "HINCRBYFLOAT h g n",
 ]
 ANSWER_ONLY = ("INCRBY", "DECRBY", "SCAN n")
 
@@ -62,6 +65,7 @@ def norm(t, x):
 # the state each command starts from on both servers
 RESET = [[b"SELECT", b"0"], [b"SET", b"k", b"hello"], [b"SET", b"i", b"5"], [b"DEL", b"l"],
          [b"RPUSH", b"l", b"a", b"b", b"a", b"c", b"a"], [b"DEL", b"s", b"s2"], [b"SADD", b"s", b"1", b"2", b"3", b"4", b"5"],
+         [b"DEL", b"nope", b"h"], [b"HSET", b"h", b"f", b"1.5"],
          [b"CONFIG", b"SET", b"proto-max-bulk-len", b"536870912"], [b"CONFIG", b"SET", b"hz", b"10"],
          [b"CONFIG", b"SET", b"maxmemory", b"0"]]
 

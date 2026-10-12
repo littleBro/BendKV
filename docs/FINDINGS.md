@@ -2589,6 +2589,73 @@ in both append-only files (the third script and the SADD script among them) and 
 restarts, in `tests/aof_check.bend`, and COMMAND GETKEYS of SINTERCARD, SMOVE and the
 STOREs in the test of COMMAND.
 
+## 3zk. Floats in software: INCRBYFLOAT and HINCRBYFLOAT
+
+**Why in software.** Redis 7.0.15 on x86-64 keeps the score of a sorted set as a C double
+(53 bits of precision) and adds INCRBYFLOAT's and HINCRBYFLOAT's numbers as an x87 long
+double (64 bits). Bend has a 32-bit float alone, and a Nat stops at 2^48, so
+`src/float.bend` does both in software: a number is a sign, a big integer m (limbs of 24
+bits, so that a product of two limbs and a carry stays below 2^48) and an exponent e,
+m * 2^e, and every operation rounds its exact result to the nearest number of the format,
+to the even one on a tie, subnormal numbers and overflow to an infinity included, as the
+FPU does in its default mode. Text is read as glibc's strtod and strtold read it: decimal
+digits of any length (the exact value divided by a power of ten in limbs of 10^7, with a
+sticky bit for what the division drops), hex digits with a binary exponent, `inf` and
+`infinity` in any case, `nan`; an exponent with no digit is not read, and one past 10^9
+reads as 10^9, past every range. Redis's string2d and string2ld then refuse a blank
+first, a text not read to its end (a NUL inside it among them), a NaN, and a range error
+(an overflow to an infinity, or a number that is not 0 rounding to 0); string2ld also a
+text of 5,120 chars or more. A double is written as printf's `"%.17g"` writes it and a
+long double as `"%.17Lf"`, from the number's exact decimal value (m times a power of five
+for a negative exponent), rounded half to even; ld2string then takes out the zeros that
+end the fraction and writes `-0` as `0`. An integer of up to 14 digits is read at once,
+and a double that is an integer below 2^47 written at once.
+
+**Checked against glibc.** `tests/float_test.py` (in `make test`) writes random texts of
+numbers: decimal and hex, with up to 800 digits, exact ties between two neighbouring
+doubles and between two long doubles (and texts just above and below them), numbers near
+each end of both ranges, the forms strtod reads only in part; and sums and products of
+doubles and sums of long doubles. A Bend program answers each one, a C program with
+glibc's strtod, strtold and printf (`tests/float_ref.c`, Redis's own string2d,
+string2ld and ld2string) answers it as Redis does, and the answers must be the same
+bytes: 2,308 lines in `make test`, about 9,500 more while the library was written, none
+different.
+
+**INCRBYFLOAT and HINCRBYFLOAT.** As Redis 7.0.15 runs them: INCRBYFLOAT finds its key
+(WRONGTYPE for a collection), reads the value and then the increment (`value is not a
+valid float` for either), adds them, refuses a sum that is not finite (`increment would
+produce NaN or Infinity`), and keeps the key's time; HINCRBYFLOAT reads its increment
+before it looks for the key (`value is NaN or Infinity` for an infinity), then the
+field's value (`hash value is not a float`). Both answer the sum as ld2string writes it
+for people, and the file logs the SET of it with KEEPTTL and the HSET of the field, as
+Redis propagates them, so a file reads back the same strings on any machine. After a
+million INCRBYFLOATs of 0.1, BendKV and Redis both hold 100000.00000000087324992.
+
+**Proofs.** The changes are the ones INCRBY and HINCRBY make (the SET of a value keeping
+its time, the HSET of a field), so the laws needed nothing new: INCRBYFLOAT is an update
+of its key (`UIncrF`), HINCRBYFLOAT a write of a hash (`HWIncrF`), and their lemmas follow
+INCRBY's and HINCRBY's (of the 1,323 definitions, 8 changed and 8 came in). One trap:
+the proof checker runs a Nat as Base defines it, one step per unit, and a lemma about a
+write of a float stops where the write meets a value it does not know, with the format
+already reduced. A format holding the biased exponent 2^40 (the bias the library keeps
+exponents with) overflowed the checker's stack there; a format now holds its bounds as
+small numbers and a zero's exponent is 0.
+
+**Numbers of commands.** The parser gives each command a number, and its connection
+commands (parse_sess) began at 100; the commands of hashes, lists, sets and now floats
+reached 99. `tools/gen_commands.py` now writes `cmd_own`, which tells parse_sess's
+numbers by their ranges, so a new command of either parser takes the next number free.
+
+**Cost.** Instructions per request (`make perfcheck`): GET 3,298, SET 4,290, INCR 4,478,
+as before. INCRBYFLOAT is slower than Redis's hardware arithmetic: 207,000 requests a
+second against 512,000 (redis-benchmark, pipelines of 16, 20 clients, adding 1.5), and
+HINCRBYFLOAT 131,000 against 495,000 (adding 0.1); a long double has no fast path for
+integers yet, and each sum is read from its text and written back to one.
+
+**Redis's test suite.** 552 of 1,673 (33.0%; 528 before): unit/type/incr passes all 24
+of its tests (INCRBYFLOAT's twelve came in), unit/type/hash 68 of its 72 (HINCRBYFLOAT's
+twelve; the other four need DUMP, RESP3, and integers past 14 digits).
+
 ## 4. Where a request's time goes, and hiding the memory waits
 
 With the eight patches, BendKV ran fewer instructions on GET and SET than Redis, missed

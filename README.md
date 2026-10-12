@@ -15,7 +15,7 @@ throughput of Redis 7.0.15 on the same machine, with half its memory for small v
 > lists, sets and their times to live, the keyspace, several databases, connection
 > commands, an append-only file). The goal now is a drop-in
 > replacement for a single Redis node, measured by Redis's own test suite: of the 1,673
-> tests Redis 7.0.15 passes against a server it did not start, BendKV passes 528, and 512
+> tests Redis 7.0.15 passes against a server it did not start, BendKV passes 552, and 536
 > of the 800 in what it implements ([docs/COMPATIBILITY.md](docs/COMPATIBILITY.md)). Do
 > not use it for data you cannot lose.
 
@@ -91,6 +91,15 @@ translation stays in the trusted base.
   answers `raw` for one made by APPEND, SETRANGE or SETBIT), REFCOUNT by Redis's shared
   integers under the current eviction policy, IDLETIME and FREQ 0 (each refused under the
   policy Redis refuses it under).
+- **Floats:** INCRBYFLOAT and HINCRBYFLOAT, as Redis 7.0.15 computes them on x86-64: the
+  value and the increment read as glibc's strtold reads them, added as an x87 long double
+  adds them, and the sum written as `"%.17Lf"` writes it, the zeros that end its fraction
+  taken out; a sum that is not finite refused. `src/float.bend` does C's double and
+  x87's long double in software (Bend has a 32-bit float alone): reading as strtod and
+  strtold, writing as `"%.17g"` and `"%.17Lf"`, adding and multiplying, each rounded to
+  the nearest number as the FPU rounds, and checked against glibc on random numbers in
+  `make test`. INCRBYFLOAT is logged as the SET of its sum with KEEPTTL and HINCRBYFLOAT
+  as the HSET of its field, as Redis propagates them.
 - **Ranges and bits:** GETRANGE (and SUBSTR), SETRANGE, GETBIT, SETBIT, BITCOUNT and
   BITPOS (with BYTE and BIT ranges), their numbers read as Redis reads them and their
   errors where Redis gives them; a value grows to 512MB at most (proto-max-bulk-len at
@@ -103,7 +112,7 @@ translation stays in the trusted base.
   its writes reach. A field across the 2^32-th bit, for which Redis grows a value past
   512MB, is refused with SETRANGE's error.
 - **Hashes:** HSET, HMSET, HSETNX, HGET, HMGET, HDEL, HLEN, HSTRLEN, HEXISTS, HKEYS,
-  HVALS, HGETALL, HINCRBY, HSCAN (MATCH, COUNT) and HRANDFIELD (a count, repeating when
+  HVALS, HGETALL, HINCRBY, HINCRBYFLOAT, HSCAN (MATCH, COUNT) and HRANDFIELD (a count, repeating when
   negative, WITHVALUES; picked with the server's random numbers), their arguments and
   errors read as Redis reads them. A hash keeps its fields in the order they came while it
   is small (at most 512 fields and values of at most 64 bytes, Redis's listpack defaults)
@@ -112,8 +121,8 @@ translation stays in the trusted base.
   ENCODING answers `listpack` or `hashtable` as Redis would under the current
   parameters; every command of strings answers WRONGTYPE for a hash, and every command of
   hashes for a string. MEMORY USAGE (SAMPLES) estimates a key's bytes. A hash write is
-  logged as the HSET of the pairs it set or the HDEL of the fields it took (HINCRBY as the
-  HSET of its sum); a hash made where a key whose time had passed still lay is logged as
+  logged as the HSET of the pairs it set or the HDEL of the fields it took (HINCRBY and
+  HINCRBYFLOAT as the HSET of the sum); a hash made where a key whose time had passed still lay is logged as
   one EVAL of a fixed script that deletes the key and sets the pairs, which Redis runs as
   it loads the file and BendKV reads back (Redis itself logs a MULTI with a DEL and the
   HSET, two entries a crash could part). BendKV runs no other Lua but the like scripts of
@@ -270,7 +279,9 @@ command streams compared byte for byte (times to live, SET's options and several
 databases among them),
 keys that expire (set with short times on both servers, then read once the times have
 passed), the protocol edge cases of Redis's
-`tests/unit/protocol.tcl`, the connection commands, CONFIG (every parameter, a list of
+`tests/unit/protocol.tcl`, the float library against glibc (random texts of numbers,
+read, written and added, the answers compared byte for byte with C's), the connection
+commands, CONFIG (every parameter, a list of
 cases and thousands of random values, set and read back on both servers), INFO (the
 sections and fields for 31 ways of picking them, the values that do not depend on the
 machine, the counts after CONFIG RESETSTAT), the statistics per command (commandstats,
@@ -303,6 +314,7 @@ tests Redis passes that BendKV passes ([docs/COMPATIBILITY.md](docs/COMPATIBILIT
 ```
 src/        the server
   map.bend      hash trie with string keys                         verified
+  float.bend    doubles and long doubles in software               tested
   redis.bend    command semantics: exec(cmd, db) -> (reply, db')   verified
   batch.bend    a pipelined batch with cache hints                 verified
   aof.bend      append-only file: effects, encoding, loading       verified
@@ -314,7 +326,7 @@ src/        the server
   startup.bend  the command line and the configuration file        tested
   server.bend   TCP, connections, the database actor, the log      tested
 proof/      LAWS.bend (the laws), PROOF.bend (their proofs), SPEC.bend (the commands on the trie alone)
-tests/      start, differential, expiry, protocol, session, CONFIG, INFO, COMMAND, SCAN, BITFIELD, hash, list, set, robustness, concurrency, AOF tests
+tests/      float, start, differential, expiry, protocol, session, CONFIG, INFO, COMMAND, SCAN, BITFIELD, hash, list, set, robustness, concurrency, AOF tests
 bench/      in-process benchmarks of the map, the core and channels
 tools/      measurement scripts, the runner of Redis's test suite, and the generators of
             the trie, of the parameter table and of the command table, with the facts

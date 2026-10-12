@@ -383,6 +383,23 @@ def rnd_lpos(r):
 SMEMS = [b"1", b"2", b"-3", b"10", b"a", b"b", b"", b"\x00\r\n"]
 
 
+# a float as a client sends one: decimal or hex, with exponents near the
+# ends of a long double's range, an infinity, or forms strtold refuses
+def rnd_float(r):
+    c = r.random()
+    if c < 0.3:
+        return str(r.choice([1, -1]) * r.randint(0, 10**r.randint(1, 18))).encode()
+    if c < 0.55:
+        return ("%.*f" % (r.randint(0, 20), r.uniform(-1e6, 1e6))).encode()
+    if c < 0.75:
+        return ("%.*e" % (r.randint(0, 25), r.uniform(-10, 10) * 10.0 ** r.randint(-300, 300))).encode()
+    if c < 0.85:
+        return r.choice([b"1e4932", b"-1e4932", b"1.18973149535723176502e4932", b"3.6e-4951", b"1e-5000",
+                         b"0x1.8p1", b"0X.8p-3", b"0x1p16383", b"1e309", b"4e-320"])
+    return r.choice([b"inf", b"-inf", b"Infinity", b"nan", b" 1", b"1 ", b"", b"1e", b"0x", b"1.5.2",
+                     b"+.5", b"-.5e-3", b"5.", b"abc", b"1\x002", b"0", b"-0", b"1" + b"0" * 30])
+
+
 def rnd_member(r):
     return r.choice(SMEMS) if r.random() < 0.9 else rnd_value(r)
 
@@ -485,6 +502,10 @@ def rnd_cmd(r):
         (0.02, lambda: [r.choice([b"HLEN", b"HKEYS", b"HVALS", b"HGETALL", b"TYPE"]), k()]),
         (0.01, lambda: [r.choice([b"HSTRLEN", b"HEXISTS"]), k(), rnd_field(r)]),
         (0.02, lambda: [b"HINCRBY", k(), rnd_field(r), rnd_value(r)]),
+        (0.03, lambda: [b"INCRBYFLOAT", k(), rnd_float(r)]),
+        (0.02, lambda: [b"HINCRBYFLOAT", k(), rnd_field(r), rnd_float(r)]),
+        (0.01, lambda: [b"SET", k(), rnd_float(r)]),
+        (0.005, lambda: [b"HSET", k(), rnd_field(r), rnd_float(r)]),
         (0.01, lambda: [b"HSCAN", k(), b"0", b"COUNT", b"1000"] + ([b"MATCH", rnd_pattern(r)] if r.random() < 0.5 else [])),
         (0.01, lambda: [b"HRANDFIELD", k()] + r.choice([[], [b"2"], [b"-3"], [b"5", b"WITHVALUES"], [b"x"], [b"0"]])),
         (0.005, lambda: [r.choice([b"HSET", b"HGET", b"HDEL", b"HINCRBY", b"HSCAN", b"HMGET", b"HSETNX"])] +

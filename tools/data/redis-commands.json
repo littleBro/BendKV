@@ -5084,6 +5084,112 @@
     []
    ]
   },
+  "hincrbyfloat": {
+   "docs": [
+    "summary",
+    "Increment the float value of a hash field by the given amount",
+    "since",
+    "2.6.0",
+    "group",
+    "hash",
+    "complexity",
+    "O(1)",
+    "arguments",
+    [
+     [
+      "name",
+      "key",
+      "type",
+      "key",
+      "key_spec_index",
+      0
+     ],
+     [
+      "name",
+      "field",
+      "type",
+      "string"
+     ],
+     [
+      "name",
+      "increment",
+      "type",
+      "double"
+     ]
+    ]
+   ],
+   "info": [
+    "hincrbyfloat",
+    4,
+    [
+     {
+      "+": "write"
+     },
+     {
+      "+": "denyoom"
+     },
+     {
+      "+": "fast"
+     }
+    ],
+    1,
+    1,
+    1,
+    [
+     {
+      "+": "@write"
+     },
+     {
+      "+": "@hash"
+     },
+     {
+      "+": "@fast"
+     }
+    ],
+    [],
+    [
+     [
+      "flags",
+      [
+       {
+        "+": "RW"
+       },
+       {
+        "+": "access"
+       },
+       {
+        "+": "update"
+       }
+      ],
+      "begin_search",
+      [
+       "type",
+       "index",
+       "spec",
+       [
+        "index",
+        1
+       ]
+      ],
+      "find_keys",
+      [
+       "type",
+       "range",
+       "spec",
+       [
+        "lastkey",
+        0,
+        "keystep",
+        1,
+        "limit",
+        0
+       ]
+      ]
+     ]
+    ],
+    []
+   ]
+  },
   "hkeys": {
    "docs": [
     "summary",
@@ -6257,6 +6363,106 @@
    ],
    "info": [
     "incrby",
+    3,
+    [
+     {
+      "+": "write"
+     },
+     {
+      "+": "denyoom"
+     },
+     {
+      "+": "fast"
+     }
+    ],
+    1,
+    1,
+    1,
+    [
+     {
+      "+": "@write"
+     },
+     {
+      "+": "@string"
+     },
+     {
+      "+": "@fast"
+     }
+    ],
+    [],
+    [
+     [
+      "flags",
+      [
+       {
+        "+": "RW"
+       },
+       {
+        "+": "access"
+       },
+       {
+        "+": "update"
+       }
+      ],
+      "begin_search",
+      [
+       "type",
+       "index",
+       "spec",
+       [
+        "index",
+        1
+       ]
+      ],
+      "find_keys",
+      [
+       "type",
+       "range",
+       "spec",
+       [
+        "lastkey",
+        0,
+        "keystep",
+        1,
+        "limit",
+        0
+       ]
+      ]
+     ]
+    ],
+    []
+   ]
+  },
+  "incrbyfloat": {
+   "docs": [
+    "summary",
+    "Increment the float value of a key by the given amount",
+    "since",
+    "2.6.0",
+    "group",
+    "string",
+    "complexity",
+    "O(1)",
+    "arguments",
+    [
+     [
+      "name",
+      "key",
+      "type",
+      "key",
+      "key_spec_index",
+      0
+     ],
+     [
+      "name",
+      "increment",
+      "type",
+      "double"
+     ]
+    ]
+   ],
+   "info": [
+    "incrbyfloat",
     3,
     [
      {

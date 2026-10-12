@@ -65,7 +65,7 @@ COMMANDS = {
     "lmpop": [], "sadd": [], "srem": [], "scard": [], "sismember": [], "smismember": [],
     "smembers": [], "sscan": [], "smove": [], "sinter": [], "sintercard": [],
     "sinterstore": [], "sunion": [], "sunionstore": [], "sdiff": [], "sdiffstore": [],
-    "spop": [], "srandmember": []}
+    "spop": [], "srandmember": [], "incrbyfloat": [], "hincrbyfloat": []}
 
 # Step 1: redis-server -> facts
 # -----------------------------
@@ -290,7 +290,8 @@ SBEGIN, SEND = "# BEGIN gen_commands: stats\n", "# END gen_commands: stats\n"
 # command of a list on a key of another kind (WRONGTYPE), LINDEX and
 # LSET on an index read once the list is found, a command of a set on a
 # key of another kind (WRONGTYPE), SSCAN on options read once the set is
-# found.
+# found, INCRBYFLOAT and HINCRBYFLOAT on values that are not floats and
+# sums that are not finite.
 # (SET's time
 # can overflow too, past 9 * 10^18 ms only: SET is left out, so that a
 # batch of SETs needs no look at its replies.)
@@ -301,7 +302,8 @@ RISKY = {"incr", "decr", "incrby", "decrby", "expire", "pexpire", "setex", "pset
          "lpush", "rpush", "lpushx", "rpushx", "lpop", "rpop", "llen", "lindex", "lrange", "lset",
          "linsert", "lrem", "ltrim", "lpos", "lmove", "rpoplpush", "lmpop", "sadd", "srem", "scard",
          "sismember", "smismember", "smembers", "sscan", "smove", "sinter", "sintercard",
-         "sinterstore", "sunion", "sunionstore", "sdiff", "sdiffstore", "spop", "srandmember"}
+         "sinterstore", "sunion", "sunionstore", "sdiff", "sdiffstore", "spop", "srandmember",
+         "incrbyfloat", "hincrbyfloat"}
 
 # the parser's commands with subcommands, by the function that numbers
 # their subcommands
@@ -320,7 +322,7 @@ def numbering(src, fn):
     return out
 
 # the parser's numbers of its commands: each case of parse_id, and of
-# parse_sess from 100 on, is the number of the command its comment names
+# parse_sess, is the number of the command its comment names
 def parser_numbers(src):
     out = {}
     for fn in ("parse_id", "parse_sess"):
@@ -334,6 +336,12 @@ def parser_numbers(src):
         raise SystemExit("gen_commands.py: the parser and COMMANDS differ on "
                          + ", ".join(sorted(set(out) ^ set(COMMANDS))))
     return out
+
+# the numbers of parse_sess's commands
+def own_numbers(src):
+    a = src.index("\ndef parse_sess(")
+    b = src.index("\ndef ", a + 1)
+    return sorted(int(n) for n in re.findall(r"\n    case (\d+)n:  # [A-Z][A-Z_]*", src[a:b]))
 
 def arities(facts):
     out = {}
@@ -431,11 +439,28 @@ def stats_block(src, facts):
 # no match names a number past 26 (a match on a number tests each one from
 # 0 up to its largest case). The block between "# BEGIN gen_commands:
 # dispatch" and "# END gen_commands: dispatch" in src/redis.bend holds
-# cmd_id and a function for each length (cmd_id.lN).
+# cmd_id and a function for each length (cmd_id.lN), and cmd_own, which
+# tells parse_sess's numbers from parse_id's: each runs of them a range,
+# so that a new command of either takes the next number free.
 
 DBEGIN, DEND = "# BEGIN gen_commands: dispatch\n", "# END gen_commands: dispatch\n"
 
-def dispatch_block(nums):
+def own_block(own):
+    runs = []
+    for n in own:
+        if runs and runs[-1][1] + 1 == n:
+            runs[-1][1] = n
+        else:
+            runs.append([n, n])
+    terms = ["Bool.and(Nat.is_le(%dn, id), Nat.is_le(id, %dn))" % (a, b) for a, b in runs]
+    e = terms[-1]
+    for t in reversed(terms[:-1]):
+        e = "Bool.or(%s, %s)" % (t, e)
+    return ["", "# whether a command's number is parse_sess's (a command of the",
+            "# connection, of the server or of several databases)",
+            "def cmd_own(+id: Nat) -> Bool:", "  " + e]
+
+def dispatch_block(nums, own):
     lens = {}
     for name, n in nums.items():
         up = name.upper()
@@ -456,12 +481,13 @@ def dispatch_block(nums):
         out += ["    case %dn:" % l,
                 "      cmd_id.l%d(n, Nat.sub(U32.to_nat(String.code_at(n, 0n)), 64n))" % l]
     out += ["    case _:", "      0n"]
+    out += own_block(own)
     return "\n".join(out) + "\n"
 
 def generate_redis():
     src = REDIS.read_text()
     a, b = src.index(DBEGIN) + len(DBEGIN), src.index(DEND)
-    src = src[:a] + dispatch_block(parser_numbers(src)) + src[b:]
+    src = src[:a] + dispatch_block(parser_numbers(src), own_numbers(src)) + src[b:]
     a, b = src.index(SBEGIN) + len(SBEGIN), src.index(SEND)
     return src[:a] + stats_block(src, json.loads(JSON.read_text())) + src[b:]
 

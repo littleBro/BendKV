@@ -236,7 +236,9 @@ def main():
              ["sunionstore", "d"], ["sdiff", "a"], ["sintercard", "2", "a", "b"], ["sintercard", "2", "a", "b", "limit", "1"],
              ["sintercard", "1", "a", "b"], ["sintercard", "0", "a"], ["sintercard", "3", "a", "b"], ["sintercard", "x", "a"],
              ["sintercard", "-1", "a"], ["sintercard"], ["smove", "a", "b", "m"], ["smove", "a", "b"], ["smove", "a"],
-             ["sscan", "k", "0"], ["spop", "k", "2"], ["srandmember", "k"], ["smismember", "k", "a", "b"]]
+             ["sscan", "k", "0"], ["spop", "k", "2"], ["srandmember", "k"], ["smismember", "k", "a", "b"],
+             ["incrbyfloat", "k", "1.5"], ["incrbyfloat", "k"], ["hincrbyfloat", "k", "f", "1.5"],
+             ["hincrbyfloat", "k", "f"]]
     for argv in lines:
         for sub in ("GETKEYS", "GETKEYSANDFLAGS"):
             same("COMMAND %s %s" % (sub, " ".join(argv)), "COMMAND", sub, *argv, fix=None)
