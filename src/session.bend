@@ -1232,7 +1232,7 @@ def zr.gather(fuel: Nat, done: Bool, g: ZrG, +k: Nat, +t: KV.ZTree, +n: Nat, +r:
 def zr.uniq(third: Bool, +k: Nat, +t: KV.ZTree, +n: Nat, +r: U32, +ws: Bool) -> List<&2, R.Reply>:
   match third:
     case True{}:
-      R.zels(KV.zt.all(zr.drop(Nat.sub(n, k), t, r)), ws)
+      R.zels(KV.zt.drain(zr.drop(Nat.sub(n, k), t, r), Nil{}), ws)
     case False{}:
       zr.gather(Nat.add(Nat.mul(k, 16n), 64n), Nat.is_eq(k, 0n), ZrG{KV.empty(Unit), Nil{}, 0n}, k, t, n, r, ws)
 
@@ -1341,7 +1341,7 @@ def mem.val(+v: KV.Val) -> Nat:
     case KV.VColl{KV.CMems{+m}}:
       mem.elems(KV.mems.all(m), 48n)
     case KV.VColl{KV.CZset{+z}}:
-      mem.zels(KV.zt.all(KV.zset.tree(z)), 48n)
+      mem.zels(KV.zset.all(z), 48n)
 
 def mem.size(+k: String, m: Maybe<&2, KV.Item<KV.Val>>) -> R.Reply:
   match m:

@@ -2766,15 +2766,15 @@ ZINCRBY 41,000 against 329,000, ZADD of random members up to 100,000 38,000 agai
 588,000 against 903,000, ZRANGE of its 10 elements with their scores 218,000 against
 302,000, ZRANDMEMBER 825,000 against 1.27 M, ZINTER of two of 10 91,000 against
 257,000), but for the STOREs: ZUNIONSTORE of two of 10 19,000 against 169,000,
-ZRANGESTORE of 10 44,000 against 286,000. Where the time goes (callgrind): ZINCRBY of a
-member of 100,000 is 147,000 instructions, three fifths of them copies of tree nodes and
-their drops. The read of a node's size (`zt.size`) binds the size with `+`, and a match
-that binds a number so owns the node it reads: of the 361 sizes a write reads (each
-rebalancing asks for them), 126 copy a node the tree shares. ZUNIONSTORE of two of 10 is
-583,000 instructions, most of them the same copies, the rest scores written as text and
-read back (a STORE makes its sorted set as the ZADD the file logs would). A field bound
-once is read from a node borrowed: that is the next change, then a native `String.order`
-(BendKV compares members char by char in Bend, where Redis's memcmp compares words).
+ZRANGESTORE of 10 44,000 against 286,000. Where the time went (callgrind; these rates
+are from before section 3zm's change): ZINCRBY of a member of 100,000 was 147,000
+instructions, three fifths of them copies of tree nodes that reads owned (of the 361
+sizes a write reads, as each rebalancing asks for them, 126 copied a node the tree
+shares), and ZUNIONSTORE of two of 10 583,000, most of them the same copies, the rest
+scores written as text and read back (a STORE makes its sorted set as the ZADD the file
+logs would). Section 3zm tells why the reads owned the nodes, and how they no longer do
+(77,600 and 401,400 instructions now). BendKV compares members char by char in Bend,
+where Redis's memcmp compares words: a native `String.order` comes next.
 
 **Where BendKV differs.** A STORE (or ZRANGESTORE) of more than 128 elements: Redis
 makes a skiplist of them, and a score of `-0` stays one, where BendKV makes them as the
@@ -2802,6 +2802,47 @@ against the sorted set it came from), sorted sets in the differential test, in t
 numbers test, in both append-only files (the fourth script among them) and in the
 restarts, in `tests/aof_check.bend`, and COMMAND GETKEYS of the STOREs, ZRANGESTORE and
 ZMPOP in the test of COMMAND.
+
+## 3zm. A read that owns what it reads
+
+**What callgrind showed.** ZINCRBY of a member of a sorted set of 100,000 took 147,000
+instructions, three fifths of them copies of tree nodes and their drops (`ctr_own_slow`,
+`term_drop`). The compiler decides once for each function whether a parameter is
+borrowed or owned. It is borrowed until a caller hands it a value the caller does not
+keep: a value computed for the call (`zt.size(zset.tree(z))`), or the last use of a
+value the caller owns passed in a tail call; or until the function itself reads a field
+of the node after a call it makes, as the compiler keeps a node across a call only when
+it owns it. One such caller anywhere makes the parameter owned for every caller, and an
+owned node that is shared, as every node of a sorted set the keyspace holds is, is
+copied before it is read and the copy dropped after. `zt.size`, which each rebalancing
+asks for both sides, owned its node because `zset.len` passed it a computed tree: 126
+copies for each ZINCRBY. The tests of a range (`ZP`) were nodes, as one test could hold
+another (ZNot), made at each call: `zp.ok` owned them, and so the walks down the tree
+that pass them.
+
+**The change.** The reads of a sorted set take its tree as a field of the sorted set
+(`zset.len`, `zset.slice`, `zset.all`, `zset.rank`), which they borrow; a test of a range
+is a few words (ZGtS and ZGtL take the place of ZNot); a walk makes the element it keeps
+before it recurses; and a tree built for one use, a STORE's, is taken apart by
+`zt.drain`, which owns it. Instructions per request (callgrind): ZINCRBY of a member of
+100,000 77,600 (147,100 before), ZRANGE of 10 elements of 100,000 with their scores
+56,700 (89,200), ZRANK 15,900 (27,800), ZUNIONSTORE of two of 10 401,400 (583,500); GET,
+SET and INCR 3,298, 4,290 and 4,479, as before. No proof changed: they see these reads
+only as values.
+
+**What is left.** A walk that reads a field after a recursive call still owns, and
+copies, the nodes it visits: the in-order walks of a sorted set (`zt.slice.go`,
+`zt.find.go`) and of the keyspace's trie (`tkeys` and `tscan`, behind KEYS and SCAN, and
+the reads of large hashes and sets): the sorted set reaches them through tail calls from
+a value the command owns, and a value passed in a tail call at its last use makes the
+callee own it. The remedy is in the compiler, and it is not a global rule: counting a
+value that a caller keeps past a call as lent to the callee, the first try, made GET,
+SET and INCR 37%, 30% and 27% dearer in instructions, so the rule stays as it is, and
+the zset reads stay as this change leaves them until a narrower one is found. A native
+`String.order` comes first. What a write of a sorted set costs past that
+is mostly its path, copied because the keyspace still holds the old one, and the old
+path's drop: an update in place (take the value out, change it, put it back) would save
+both.
 
 ## 4. Where a request's time goes, and hiding the memory waits
 

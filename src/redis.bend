@@ -11273,7 +11273,7 @@ def zmscore.none(ms: List<&2, String>) -> List<&2, Reply>:
 def zrank.of(m: Maybe<&2, F.F64>, +rev: Bool, +k: String, +z: KV.Zset) -> Reply:
   match m:
     case Some{+d}:
-      +r = KV.zt.rank(KV.zset.tree(z), k, d)
+      +r = KV.zset.rank(z, k, d)
       r_int(Bool.pick(Nat, rev, Nat.sub(Nat.sub(KV.zset.len(z), r), 1n), r))
     case None{}:
       RNull{}
@@ -11469,7 +11469,7 @@ def zlex.of(small: Bool, +lo: KV.ZLB, +hi: KV.ZLB, +rev: Bool, +off: Int, +cnt: 
     case False{}:
       +t = KV.zset.tree(z)
       +n = KV.zset.len(z)
-      zwin.slice(zwin(off, rev, KV.zt.before(t, KV.ZGeL{lo}), KV.zt.before(t, KV.ZNot{KV.ZLeL{hi}}), zcnt(cnt, n), n), rev, z)
+      zwin.slice(zwin(off, rev, KV.zt.before(t, KV.ZGeL{lo}), KV.zt.before(t, KV.ZGtL{hi}), zcnt(cnt, n), n), rev, z)
 
 # a range's elements, in the order Redis answers them
 def zrange.of(r: ZRng, +rev: Bool, +off: Int, +cnt: Int, +z: KV.Zset) -> List<&2, KV.ZEl>:
@@ -11479,7 +11479,7 @@ def zrange.of(r: ZRng, +rev: Bool, +off: Int, +cnt: Int, +z: KV.Zset) -> List<&2
     case ZScoreR{+lo, +hi}:
       +t = KV.zset.tree(z)
       +n = KV.zset.len(z)
-      zwin.slice(zwin(off, rev, KV.zt.before(t, KV.ZGeS{lo}), KV.zt.before(t, KV.ZNot{KV.ZLeS{hi}}), zcnt(cnt, n), n), rev, z)
+      zwin.slice(zwin(off, rev, KV.zt.before(t, KV.ZGeS{lo}), KV.zt.before(t, KV.ZGtS{hi}), zcnt(cnt, n), n), rev, z)
     case ZLexR{+lo, +hi}:
       zlex.of(KV.zset.is_small(z), lo, hi, rev, off, cnt, z)
 
@@ -11510,7 +11510,7 @@ def zq.reply(+q: ZQ, +z: KV.Zset) -> Reply:
 # large one, those between the ranks of its bounds
 def zcount(+lo: KV.ZSB, +hi: KV.ZSB, +z: KV.Zset) -> Nat:
   +t = KV.zset.tree(z)
-  Nat.sub(KV.zt.before(t, KV.ZNot{KV.ZLeS{hi}}), KV.zt.before(t, KV.ZGeS{lo}))
+  Nat.sub(KV.zt.before(t, KV.ZGtS{hi}), KV.zt.before(t, KV.ZGeS{lo}))
 
 def zlexcount.of(small: Bool, +lo: KV.ZLB, +hi: KV.ZLB, +z: KV.Zset) -> Nat:
   match small:
@@ -11518,7 +11518,7 @@ def zlexcount.of(small: Bool, +lo: KV.ZLB, +hi: KV.ZLB, +z: KV.Zset) -> Nat:
       List.length(&2, KV.ZEl, zlex.small(IPos{0n}, False{}, KV.zset.tree(z), lo, hi, KV.zset.len(z)))
     case False{}:
       +t = KV.zset.tree(z)
-      Nat.sub(KV.zt.before(t, KV.ZNot{KV.ZLeL{hi}}), KV.zt.before(t, KV.ZGeL{lo}))
+      Nat.sub(KV.zt.before(t, KV.ZGtL{hi}), KV.zt.before(t, KV.ZGeL{lo}))
 
 # ZCOUNT's range (k 2) or ZLEXCOUNT's (k 3), read again as it runs: the
 # count, or the error of a range that does not read
@@ -13301,9 +13301,9 @@ def zremr.at(fresh: Bool, m: Maybe<&2, ZRng>, +k: Nat, +op: ZWrite, +z: KV.Zset)
 def zpop.pick(max: Bool, +k: Nat, +n: Nat, +z: KV.Zset) -> List<&2, KV.ZEl>:
   match max:
     case True{}:
-      KV.zt.rslice(KV.zset.tree(z), Nat.sub(n, k), n)
+      KV.zset.slice(True{}, z, Nat.sub(n, k), n)
     case False{}:
-      KV.zt.slice(KV.zset.tree(z), 0n, k)
+      KV.zset.slice(False{}, z, 0n, k)
 
 def zpop.els(+max: Bool, +c: Nat, +z: KV.Zset) -> List<&2, KV.ZEl>:
   +n = KV.zset.len(z)
@@ -14421,7 +14421,7 @@ def zsrc.ones(xs: List<&2, String>) -> List<&2, KV.ZEl>:
 def zsrc.els(+s: ZSrc) -> List<&2, KV.ZEl>:
   match s:
     case ZSrcZ{+z}:
-      KV.zt.all(KV.zset.tree(z))
+      KV.zset.all(z)
     case ZSrcS{+ms}:
       zsrc.ones(KV.mems.all(ms))
     case ZSrcNone{}:
@@ -14504,7 +14504,7 @@ def zres.put(xs: List<&2, KV.ZEl>, +t: KV.ZTree) -> KV.ZTree:
       zres.put(rest, KV.zt.add(t, m, d))
 
 def zres(xs: List<&2, KV.ZEl>) -> List<&2, KV.ZEl>:
-  KV.zt.all(zres.put(xs, KV.ZTip{}))
+  KV.zt.drain(zres.put(xs, KV.ZTip{}), Nil{})
 
 # ZUNION: the scores of every input's members, in a trie
 def zunion.put(cur: Maybe<&2, F.F64>, +agg: Nat, +m: String, +sc: F.F64, acc: KV.Trie<F.F64>) -> KV.Trie<F.F64>:
