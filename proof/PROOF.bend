@@ -5,6 +5,7 @@
 import Base
 import ../src/map.bend as KV
 import ../src/redis.bend as R
+import ../src/float.bend as F
 import ../src/batch.bend as B
 import ../src/resp.bend as P
 import ../src/aof.bend as A
@@ -7435,6 +7436,26 @@ def incr_fit_none(ok: Bool, +by: R.Int, -m: Maybe<&2, KV.Item<KV.Val>>) -> Good(
     case False{}:
       {==}
 
+# INCRBYFLOAT of a key not there: a put of the sum, with no time, or
+# nothing (an error)
+def incrf_fin_none(bad: Bool, +s: F.Fl, -m: Maybe<&2, KV.Item<KV.Val>>) -> Good(m, ch_of(R.uincrf.fin(bad, s, False{}))):
+  match bad:
+    case True{}:
+      {==}
+    case False{}:
+      {==}
+
+def incrf_add_none(a: Maybe<&2, F.Fl>, b: Maybe<&2, F.Fl>, -m: Maybe<&2, KV.Item<KV.Val>>) -> Good(m, ch_of(R.uincrf.add(a, b, False{}))):
+  match a b:
+    case Some{+x} Some{+y}:
+      incrf_fin_none(Bool.or(F.fl.is_nan(F.fl.add(F.fmt.ld(), x, y)), F.fl.is_inf(F.fl.add(F.fmt.ld(), x, y))), F.fl.add(F.fmt.ld(), x, y), m)
+    case Some{x} None{}:
+      {==}
+    case None{} Some{y}:
+      {==}
+    case None{} None{}:
+      {==}
+
 # SETRANGE, and SETBIT as the SETRANGE of its byte: of a key not there a
 # put of a value with no time, of a key there a SETRANGE that changes it
 def range_none_good(b: Bool, +o: Nat, +a: String, +em: Bool, -m: Maybe<&2, KV.Item<KV.Val>>) -> Good(m, ch_of(R.range.none(b, o, a, em))):
@@ -7534,6 +7555,15 @@ def hincr_new(ok: Bool, +s: R.Int, +f: String, -m: Maybe<&2, KV.Item<KV.Val>>) -
     case False{}:
       {==}
 
+# HINCRBYFLOAT of a new hash: the new hash of the field with the sum, or
+# nothing
+def hincrf_new_fin(bad: Bool, +s: F.Fl, +f: String, -m: Maybe<&2, KV.Item<KV.Val>>) -> Good(m, ch_of(R.hincrf.fin(bad, s, True{}, f, KV.hash.empty()))):
+  match bad:
+    case True{}:
+      {==}
+    case False{}:
+      ({==}, {==})
+
 def hw_new_good(op: R.HWrite, -m: Maybe<&2, KV.Item<KV.Val>>) -> Good(m, ch_of(R.hwrite(op, True{}, KV.hash.empty()))):
   match op:
     case R.HWSet{+ps, +mset}:
@@ -7549,6 +7579,8 @@ def hw_new_good(op: R.HWrite, -m: Maybe<&2, KV.Item<KV.Val>>) -> Good(m, ch_of(R
     case R.HWNew{+ps}:
       %hnew_out_ch(R.hset.go(ps, R.HPut{KV.hash.empty(), 0n}), ps) : Good(m, _)
       hw_set_new(ps, m)
+    case R.HWIncrF{+f, +by}:
+      hincrf_new_fin(Bool.or(F.fl.is_nan(F.fl.add(F.fmt.ld(), F.fl.zero(False{}), by)), F.fl.is_inf(F.fl.add(F.fmt.ld(), F.fl.zero(False{}), by))), F.fl.add(F.fmt.ld(), F.fl.zero(False{}), by), f, m)
 
 def hw_wrong_good(op: R.HWrite, -m: Maybe<&2, KV.Item<KV.Val>>) -> Good(m, ch_of(R.hwrite.wrong(op))):
   match op:
@@ -7561,6 +7593,8 @@ def hw_wrong_good(op: R.HWrite, -m: Maybe<&2, KV.Item<KV.Val>>) -> Good(m, ch_of
     case R.HWDel{fs}:
       {==}
     case R.HWIncr{f, by}:
+      {==}
+    case R.HWIncrF{f, by}:
       {==}
 
 def hw_set_old(ps: List<&2, KV.HPair>, +h0: KV.Hash, -e: Nat) -> Good(Some{KV.Item{KV.VColl{KV.CHash{h0}}, e}}, R.hset.ch(False{}, ps, hput.h(R.hset.go(ps, R.HPut{h0, 0n})))):
@@ -7597,6 +7631,29 @@ def hincr_old(cur: Maybe<&2, String>, +f: String, +by: R.Int, +h0: KV.Hash, -e: 
       hincr_old_num(R.int_read(v), f, by, h0, e)
     case None{}:
       hincr_old_fit(R.int_fits(by), by, f, h0, e)
+
+# HINCRBYFLOAT of a hash the key held: the HSET of the field with the
+# sum, or nothing (an error)
+def hincrf_old_fin(bad: Bool, +s: F.Fl, +f: String, +h0: KV.Hash, -e: Nat) -> Good(Some{KV.Item{KV.VColl{KV.CHash{h0}}, e}}, ch_of(R.hincrf.fin(bad, s, False{}, f, h0))):
+  match bad:
+    case True{}:
+      {==}
+    case False{}:
+      ({==}, {==})
+
+def hincrf_old_num(m: Maybe<&2, F.Fl>, +f: String, +by: F.Fl, +h0: KV.Hash, -e: Nat) -> Good(Some{KV.Item{KV.VColl{KV.CHash{h0}}, e}}, ch_of(R.hincrf.num(m, False{}, f, by, h0))):
+  match m:
+    case Some{+x}:
+      hincrf_old_fin(Bool.or(F.fl.is_nan(F.fl.add(F.fmt.ld(), x, by)), F.fl.is_inf(F.fl.add(F.fmt.ld(), x, by))), F.fl.add(F.fmt.ld(), x, by), f, h0, e)
+    case None{}:
+      {==}
+
+def hincrf_old(cur: Maybe<&2, String>, +f: String, +by: F.Fl, +h0: KV.Hash, -e: Nat) -> Good(Some{KV.Item{KV.VColl{KV.CHash{h0}}, e}}, ch_of(R.hincrf.of(cur, False{}, f, by, h0))):
+  match cur:
+    case Some{+v}:
+      hincrf_old_num(F.ld.parse(v), f, by, h0, e)
+    case None{}:
+      hincrf_old_num(Some{F.fl.zero(False{})}, f, by, h0, e)
 
 # HDEL of a hash the key held: nothing, the key deleted (its last field
 # taken), or the hash without the fields, which HDEL of them makes again
@@ -7639,6 +7696,8 @@ def hw_old_good(op: R.HWrite, +h0: KV.Hash, -e: Nat) -> Good(Some{KV.Item{KV.VCo
     case R.HWNew{+ps}:
       %hnew_out_ch(R.hset.go(ps, R.HPut{KV.hash.empty(), 0n}), ps) : Good(Some{KV.Item{KV.VColl{KV.CHash{h0}}, e}}, _)
       hw_set_new(ps, Some{KV.Item{KV.VColl{KV.CHash{h0}}, e}})
+    case R.HWIncrF{+f, +by}:
+      hincrf_old(KV.hash.get(f, h0), f, by, h0, e)
 
 def good_coll_hash(op: R.HWrite, c: KV.Coll, -e: Nat) -> Good(Some{KV.Item{KV.VColl{c}, e}}, ch_of(R.hwrite.coll(op, c))):
   match c:
@@ -8139,6 +8198,8 @@ def good_none(op: R.UpdOp, +now: Nat, -m: Maybe<&2, KV.Item<KV.Val>>) -> Good(m,
       lw_fresh_good(lop, m)
     case R.UMems{+sop}:
       sw_fresh_good(sop, m)
+    case R.UIncrF{+by}:
+      incrf_add_none(Some{F.fl.zero(False{})}, F.ld.parse(by), m)
 
 # a time set alone, to f, of a key there with e: none given none is
 # nothing
@@ -8229,6 +8290,26 @@ def incr_num_some(cur: Maybe<&2, R.Int>, +by: R.Int, -w: KV.Val, -e: Nat) -> Goo
     case None{}:
       {==}
 
+# INCRBYFLOAT of a key there: the sum set with the key's time kept, or
+# nothing (an error)
+def incrf_fin_some(bad: Bool, +s: F.Fl, -w: KV.Val, -e: Nat) -> Good(Some{KV.Item{w, e}}, ch_of(R.uincrf.fin(bad, s, True{}))):
+  match bad:
+    case True{}:
+      {==}
+    case False{}:
+      {==}
+
+def incrf_add_some(a: Maybe<&2, F.Fl>, b: Maybe<&2, F.Fl>, -w: KV.Val, -e: Nat) -> Good(Some{KV.Item{w, e}}, ch_of(R.uincrf.add(a, b, True{}))):
+  match a b:
+    case Some{+x} Some{+y}:
+      incrf_fin_some(Bool.or(F.fl.is_nan(F.fl.add(F.fmt.ld(), x, y)), F.fl.is_inf(F.fl.add(F.fmt.ld(), x, y))), F.fl.add(F.fmt.ld(), x, y), w, e)
+    case Some{x} None{}:
+      {==}
+    case None{} Some{y}:
+      {==}
+    case None{} None{}:
+      {==}
+
 # of a key there, with value w and time e
 def good_some(op: R.UpdOp, +now: Nat, +w: String, +e: Nat) -> Good(Some{KV.Item{KV.VStr{w}, e}}, ch_of(R.upd(op, now, Some{KV.Item{w, e}}))):
   match op:
@@ -8263,6 +8344,8 @@ def good_some(op: R.UpdOp, +now: Nat, +w: String, +e: Nat) -> Good(Some{KV.Item{
       lw_wrong_good(lop, Some{KV.Item{KV.VStr{w}, e}})
     case R.UMems{+sop}:
       sw_wrong_good(sop, Some{KV.Item{KV.VStr{w}, e}})
+    case R.UIncrF{+by}:
+      incrf_add_some(F.ld.parse(w), F.ld.parse(by), KV.VStr{w}, e)
 
 # SET with GET of a key that holds a collection changes nothing
 def get_wrong_at(a: Maybe<&2, R.At>, -name: String) -> {ch_of(R.get.wrong.at(a, name)) == R.CKeep{} : R.Change}:
@@ -8313,6 +8396,8 @@ def get_wrong_keep(o: R.UpdOp, +now: Nat) -> {ch_of(R.get.wrong(o, now)) == R.CK
       {==}
     case R.UMems{x}:
       {==}
+    case R.UIncrF{x}:
+      {==}
 
 # of a key there that holds a collection: SET, SETNX, EXPIRE and its kin
 # and PERSIST act on it as on a string, any other changes nothing
@@ -8349,6 +8434,8 @@ def good_coll(op: R.UpdOp, +now: Nat, +c: KV.Coll, +e: Nat) -> Good(Some{KV.Item
       good_coll_list(lop, c, e)
     case R.UMems{+sop}:
       good_coll_set(sop, c, e)
+    case R.UIncrF{by}:
+      {==}
 
 def ug_v(w: KV.Val, op: R.UpdOp, +now: Nat, +e: Nat) -> Good(Some{KV.Item{w, e}}, ch_of(R.upd.v(op, now, Some{KV.Item{w, e}}))):
   match w:
@@ -9256,6 +9343,8 @@ def hash_args(op: R.HWrite, +k: String) -> GoodOp(op) -> {[R.Upd{k, R.UHash{op}}
       g => Empty.absurd({[R.Upd{k, R.UHash{R.HWIncr{f, by}}}] == A.parse_all(A.args_all([R.Upd{k, R.UHash{R.HWIncr{f, by}}}])) : List<&2, R.Cmd>}, g)
     case R.HWNew{ps}:
       g => Empty.absurd({[R.Upd{k, R.UHash{R.HWNew{ps}}}] == A.parse_all(A.args_all([R.Upd{k, R.UHash{R.HWNew{ps}}}])) : List<&2, R.Cmd>}, g)
+    case R.HWIncrF{f, by}:
+      g => Empty.absurd({[R.Upd{k, R.UHash{R.HWIncrF{f, by}}}] == A.parse_all(A.args_all([R.Upd{k, R.UHash{R.HWIncrF{f, by}}}])) : List<&2, R.Cmd>}, g)
 
 def ghash_op(-op: R.HWrite, -hv: KV.Hash, -h0: KV.Hash, g: {ch_of(R.hwrite(op, False{}, h0)) == R.CHash{op, hv} : R.Change} & GoodOp(op)) -> GoodOp(op):
   (gh, go) = g

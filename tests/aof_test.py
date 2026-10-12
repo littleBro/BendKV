@@ -104,12 +104,19 @@ def main():
             batch.append([b"EXPIREAT", b"key:%d" % (i + 7), b"%d" % r.randint(1, 10**6)])
             batch.append([b"GETEX", b"m:%d" % i, b"PX", b"%d" % r.randint(10**6, 10**9)])
             # hashes: small ones, and now and then one past a listpack
-            # (600 fields, or a long value), changed by HDEL and HINCRBY
+            # (600 fields, or a long value), changed by HDEL, HINCRBY and
+            # HINCRBYFLOAT
             nf = 600 if i % 2000 == 0 else r.randint(1, 5)
             batch.append([b"HSET", b"h:%d" % i] + [x for j in range(nf) for x in (b"f%d" % j, b"%d" % j)])
             batch.append([b"HSET", b"h:%d" % i, b"long", b"v" * r.choice([3, 70])])
             batch.append([b"HDEL", b"h:%d" % i, b"f0", b"nope"])
             batch.append([b"HINCRBY", b"h:%d" % i, b"f1", b"%d" % r.randint(-100, 100)])
+            batch.append([b"HINCRBYFLOAT", b"h:%d" % i, b"f2", b"%.3f" % r.uniform(-100, 100)])
+            # a float made, given a time, and added to (its time kept)
+            batch.append([b"INCRBYFLOAT", b"f:%d" % i, b"%.6e" % r.uniform(-1e6, 1e6)])
+            if i % 300 == 0:
+                batch.append([b"PEXPIREAT", b"f:%d" % i, b"%d" % (NOW_S * 1000 + r.randint(10**6, 10**9))])
+            batch.append([b"INCRBYFLOAT", b"f:%d" % i, b"%.17g" % r.uniform(-1, 1)])
             if i % 500 == 0:
                 batch.append([b"EXPIRE", b"h:%d" % i, b"%d" % r.randint(10**6, 10**7)])
             # lists: pushes at both ends, now and then a long one (3000

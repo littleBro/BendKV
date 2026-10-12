@@ -5,6 +5,7 @@
 
 import Base
 import ./map.bend as KV
+import ./float.bend as F
 
 # Types
 # -----
@@ -84,16 +85,18 @@ type HRead is Data:
   HRScan{args: List<&2, String>}
 
 # A write of a hash (UHash, below): HSET of pairs (HMSET when mset, which
-# answers OK), HSETNX of a pair, HDEL of fields, HINCRBY of a field, or a
+# answers OK), HSETNX of a pair, HDEL of fields, HINCRBY of a field, a
 # new hash of pairs where the key was, whatever it held (HWNew: the
 # script the append-only file logs for a hash made where a key whose time
-# had passed still lay, aof.bend)
+# had passed still lay, aof.bend), or HINCRBYFLOAT of a field (its
+# increment a long double, read as the command parses, float.bend)
 type HWrite is Data:
   HWSet{ps: List<&2, KV.HPair>, mset: Bool}
   HWSetNx{f: String, v: String}
   HWDel{fs: List<&2, String>}
   HWIncr{f: String, by: Int}
   HWNew{ps: List<&2, KV.HPair>}
+  HWIncrF{f: String, by: F.Fl}
 
 # LPOS's options: from the last element (back), the match to start from
 # (rank, 1 the first), how many to answer (count: none for one, as an
@@ -232,8 +235,9 @@ type ExpIf is Data:
 # 1970), PERSIST, INCRBY (UIncr: as the append-only file sees it,
 # aof.bend; the server runs INCRBY as its own command, IncrBy, the same
 # way, faster), SETRANGE (s at offset off), SETBIT (the bit at offset
-# off, to on), BITFIELD with a write among its operations, and a write
-# of a hash (UHash), of a list (UList) or of a set (UMems). The laws
+# off, to on), BITFIELD with a write among its operations, a write of a
+# hash (UHash), of a list (UList) or of a set (UMems), and INCRBYFLOAT
+# (its increment as it came, read once the key's value is). The laws
 # see them as one command, Upd, so one more needs no more proof. UGet holds an update, so the compiler makes an update a
 # node of its own: a command travels in registers as wide as its widest
 # form, and an update's options are many.
@@ -253,6 +257,7 @@ type UpdOp is Data:
   UHash{op: HWrite}
   UList{op: LWrite}
   UMems{op: SWrite}
+  UIncrF{by: String}
 
 # The commands of a connection and of the server: session.bend runs
 # them, with the state of the connection and of the server. None of them
@@ -2424,6 +2429,22 @@ def parse_hincrby(+k: String, +f: String, by: Maybe<&2, Int>) -> Cmd:
     case None{}:
       Bad{e_int()}
 
+# HINCRBYFLOAT's increment, read as a long double before the key is
+# looked for, an infinity refused, as Redis reads it
+def parse_hincrbyfloat.of(inf: Bool, +k: String, +f: String, x: F.Fl) -> Cmd:
+  match inf:
+    case True{}:
+      Bad{RError{"ERR value is NaN or Infinity"}}
+    case False{}:
+      Upd{k, UHash{HWIncrF{f, x}}}
+
+def parse_hincrbyfloat(+k: String, +f: String, by: Maybe<&2, F.Fl>) -> Cmd:
+  match by:
+    case Some{+x}:
+      parse_hincrbyfloat.of(F.fl.is_inf(x), k, f, x)
+    case None{}:
+      Bad{RError{"ERR value is not a valid float"}}
+
 def parse_hscan(+k: String, +c: String, rest: List<&2, String>) -> Cmd:
   Bool.pick(Cmd, Maybe.is_some(&2, Nat, scan.cursor(c)), Peek{k, PHash{HRScan{c <> rest}}}, Bad{RError{"ERR invalid cursor"}})
 
@@ -2935,9 +2956,9 @@ def parse_sintercard(args: List<&2, String>) -> Cmd:
       e_arity("sintercard")
 
 # A command's name, in upper case, picks how its arguments parse: cmd_id
-# gives the name's number in the parser (parse_id, from 100 on
-# parse_sess), 0 for a name no command has, and parse_id has the name as
-# the client sent it, for the error about an unknown one.
+# gives the name's number in the parser (parse_id, or parse_sess for a
+# number cmd_own names), 0 for a name no command has, and parse_id has
+# the name as the client sent it, for the error about an unknown one.
 # tools/gen_commands.py writes cmd_id from the parser's cases, each of
 # which names its command in a comment: the name's length, then its first
 # letter (cmd_id.lN, the letter by its place in the alphabet) narrow it
@@ -3161,12 +3182,21 @@ def cmd_id.l11(+n: String, c: Nat) -> Nat:
   match c:
     case 2n:  # B
       Bool.pick(Nat, String.eq(n, "BITFIELD_RO"), 50n, 0n)
+    case 9n:  # I
+      Bool.pick(Nat, String.eq(n, "INCRBYFLOAT"), 98n, 0n)
     case 16n:  # P
       Bool.pick(Nat, String.eq(n, "PEXPIRETIME"), 35n, 0n)
     case 19n:  # S
       Bool.pick(Nat, String.eq(n, "SINTERSTORE"), 93n,
       Bool.pick(Nat, String.eq(n, "SUNIONSTORE"), 95n,
       Bool.pick(Nat, String.eq(n, "SRANDMEMBER"), 120n, 0n)))
+    case _:
+      0n
+
+def cmd_id.l12(+n: String, c: Nat) -> Nat:
+  match c:
+    case 8n:  # H
+      Bool.pick(Nat, String.eq(n, "HINCRBYFLOAT"), 99n, 0n)
     case _:
       0n
 
@@ -3190,8 +3220,15 @@ def cmd_id(+n: String, len: Nat) -> Nat:
       cmd_id.l10(n, Nat.sub(U32.to_nat(String.code_at(n, 0n)), 64n))
     case 11n:
       cmd_id.l11(n, Nat.sub(U32.to_nat(String.code_at(n, 0n)), 64n))
+    case 12n:
+      cmd_id.l12(n, Nat.sub(U32.to_nat(String.code_at(n, 0n)), 64n))
     case _:
       0n
+
+# whether a command's number is parse_sess's (a command of the
+# connection, of the server or of several databases)
+def cmd_own(+id: Nat) -> Bool:
+  Bool.and(Nat.is_le(100n, id), Nat.is_le(id, 120n))
 # END gen_commands: dispatch
 
 def parse_id(id: Nat, name: String, args: List<&2, String>) -> Cmd:
@@ -3699,10 +3736,22 @@ def parse_id(id: Nat, name: String, args: List<&2, String>) -> Cmd:
       parse_sop(KDiff{}, args, "sdiff")
     case 97n:  # SDIFFSTORE
       parse_sstore(KDiff{}, args, "sdiffstore")
+    case 98n:  # INCRBYFLOAT
+      match args:
+        case Con{k, Con{n, Nil{}}}:
+          Upd{k, UIncrF{n}}
+        case _:
+          e_arity("incrbyfloat")
+    case 99n:  # HINCRBYFLOAT
+      match args:
+        case Con{+k, Con{+f, Con{n, Nil{}}}}:
+          parse_hincrbyfloat(k, f, F.ld.parse(n))
+        case _:
+          e_arity("hincrbyfloat")
     case _:
       e_unknown(name, args)
 
-# the session commands (ids from 100), parsed into their ops
+# the session commands (cmd_own), parsed into their ops
 def parse_sess(id: Nat, name: String, args: List<&2, String>) -> SessOp:
   match id:
     case 100n:  # SELECT
@@ -3828,8 +3877,8 @@ def parse_sess(id: Nat, name: String, args: List<&2, String>) -> SessOp:
     case _:
       SBad{RError{no_newlines("ERR unknown command '" ++ String.take(name, 128n) ++ "', with args beginning with: " ++ unknown.args(args, ""))}}
 
-# a command of number id: from 100 on, a command of the connection, of
-# the server or of several databases (parse_sess)
+# a command of number id: a command of the connection, of the server or
+# of several databases (parse_sess) for a number cmd_own names
 def parse_of(own: Bool, +id: Nat, name: String, args: List<&2, String>) -> Cmd:
   match own:
     case True{}:
@@ -3840,7 +3889,7 @@ def parse_of(own: Bool, +id: Nat, name: String, args: List<&2, String>) -> Cmd:
 def parse_named(+name: String, args: List<&2, String>) -> Cmd:
   +up = String.to_upper(name)
   +id = cmd_id(up, String.length(up))
-  parse_of(Nat.is_le(100n, id), id, name, args)
+  parse_of(cmd_own(id), id, name, args)
 
 def parse(args: List<&2, String>) -> Cmd:
   match args:
@@ -4065,48 +4114,52 @@ def stat.top(+id: Nat) -> Nat:
       96n
     case 97n:
       97n
-    case 100n:
+    case 98n:
       98n
-    case 101n:
+    case 99n:
       99n
-    case 102n:
+    case 100n:
       100n
-    case 103n:
+    case 101n:
       101n
-    case 104n:
+    case 102n:
       102n
-    case 105n:
+    case 103n:
       103n
-    case 106n:
+    case 104n:
       104n
-    case 107n:
+    case 105n:
       105n
-    case 108n:
+    case 106n:
       106n
-    case 109n:
+    case 107n:
       107n
-    case 110n:
+    case 108n:
       108n
-    case 111n:
+    case 109n:
       109n
-    case 112n:
+    case 110n:
       110n
-    case 113n:
+    case 111n:
       111n
-    case 114n:
+    case 112n:
       112n
-    case 115n:
+    case 113n:
       113n
-    case 116n:
+    case 114n:
       114n
-    case 117n:
+    case 115n:
       115n
-    case 118n:
+    case 116n:
       116n
-    case 119n:
+    case 117n:
       117n
-    case 120n:
+    case 118n:
       118n
+    case 119n:
+      119n
+    case 120n:
+      120n
     case _:
       0n
 
@@ -4114,25 +4167,25 @@ def stat.top(+id: Nat) -> Nat:
 def stat.sub.client(+sub: Nat) -> Nat:
   match sub:
     case 1n:
-      119n
-    case 2n:
-      120n
-    case 3n:
       121n
-    case 4n:
+    case 2n:
       122n
-    case 5n:
+    case 3n:
       123n
-    case 6n:
+    case 4n:
       124n
-    case 7n:
+    case 5n:
       125n
-    case 8n:
+    case 6n:
       126n
-    case 9n:
+    case 7n:
       127n
-    case 10n:
+    case 8n:
       128n
+    case 9n:
+      129n
+    case 10n:
+      130n
     case _:
       0n
 
@@ -4140,9 +4193,9 @@ def stat.sub.client(+sub: Nat) -> Nat:
 def stat.sub.function(+sub: Nat) -> Nat:
   match sub:
     case 1n:
-      129n
+      131n
     case 2n:
-      130n
+      132n
     case _:
       0n
 
@@ -4150,15 +4203,15 @@ def stat.sub.function(+sub: Nat) -> Nat:
 def stat.sub.config(+sub: Nat) -> Nat:
   match sub:
     case 1n:
-      131n
-    case 2n:
-      132n
-    case 3n:
       133n
-    case 4n:
+    case 2n:
       134n
-    case 5n:
+    case 3n:
       135n
+    case 4n:
+      136n
+    case 5n:
+      137n
     case _:
       0n
 
@@ -4166,19 +4219,19 @@ def stat.sub.config(+sub: Nat) -> Nat:
 def stat.sub.command(+sub: Nat) -> Nat:
   match sub:
     case 1n:
-      136n
-    case 2n:
-      137n
-    case 3n:
       138n
-    case 4n:
+    case 2n:
       139n
-    case 5n:
+    case 3n:
       140n
-    case 6n:
+    case 4n:
       141n
-    case 7n:
+    case 5n:
       142n
+    case 6n:
+      143n
+    case 7n:
+      144n
     case _:
       0n
 
@@ -4186,15 +4239,15 @@ def stat.sub.command(+sub: Nat) -> Nat:
 def stat.sub.object(+sub: Nat) -> Nat:
   match sub:
     case 1n:
-      143n
-    case 2n:
-      144n
-    case 3n:
       145n
-    case 4n:
+    case 2n:
       146n
-    case 5n:
+    case 3n:
       147n
+    case 4n:
+      148n
+    case 5n:
+      149n
     case _:
       0n
 
@@ -4202,9 +4255,9 @@ def stat.sub.object(+sub: Nat) -> Nat:
 def stat.sub.memory(+sub: Nat) -> Nat:
   match sub:
     case 1n:
-      148n
+      150n
     case 2n:
-      149n
+      151n
     case _:
       0n
 
@@ -4406,108 +4459,112 @@ def stat.name(+key: Nat) -> String:
     case 97n:
       "sdiffstore"
     case 98n:
-      "select"
+      "incrbyfloat"
     case 99n:
-      "hello"
+      "hincrbyfloat"
     case 100n:
-      "auth"
+      "select"
     case 101n:
-      "quit"
+      "hello"
     case 102n:
-      "reset"
+      "auth"
     case 103n:
-      "client"
+      "quit"
     case 104n:
-      "function"
+      "reset"
     case 105n:
-      "config"
+      "client"
     case 106n:
-      "info"
+      "function"
     case 107n:
-      "command"
+      "config"
     case 108n:
-      "randomkey"
+      "info"
     case 109n:
-      "swapdb"
+      "command"
     case 110n:
-      "move"
+      "randomkey"
     case 111n:
-      "time"
+      "swapdb"
     case 112n:
-      "object"
+      "move"
     case 113n:
-      "copy"
+      "time"
     case 114n:
-      "lcs"
+      "object"
     case 115n:
-      "hrandfield"
+      "copy"
     case 116n:
-      "memory"
+      "lcs"
     case 117n:
-      "spop"
+      "hrandfield"
     case 118n:
-      "srandmember"
+      "memory"
     case 119n:
-      "client|id"
+      "spop"
     case 120n:
-      "client|help"
+      "srandmember"
     case 121n:
-      "client|reply"
+      "client|id"
     case 122n:
-      "client|getname"
+      "client|help"
     case 123n:
-      "client|setname"
+      "client|reply"
     case 124n:
-      "client|caching"
+      "client|getname"
     case 125n:
-      "client|unblock"
+      "client|setname"
     case 126n:
-      "client|getredir"
+      "client|caching"
     case 127n:
-      "client|no-evict"
+      "client|unblock"
     case 128n:
-      "client|trackinginfo"
+      "client|getredir"
     case 129n:
-      "function|flush"
+      "client|no-evict"
     case 130n:
-      "function|help"
+      "client|trackinginfo"
     case 131n:
-      "config|get"
+      "function|flush"
     case 132n:
-      "config|set"
+      "function|help"
     case 133n:
-      "config|resetstat"
+      "config|get"
     case 134n:
-      "config|rewrite"
+      "config|set"
     case 135n:
-      "config|help"
+      "config|resetstat"
     case 136n:
-      "command|info"
+      "config|rewrite"
     case 137n:
-      "command|docs"
+      "config|help"
     case 138n:
-      "command|list"
+      "command|info"
     case 139n:
-      "command|help"
+      "command|docs"
     case 140n:
-      "command|count"
+      "command|list"
     case 141n:
-      "command|getkeys"
+      "command|help"
     case 142n:
-      "command|getkeysandflags"
+      "command|count"
     case 143n:
-      "object|help"
+      "command|getkeys"
     case 144n:
-      "object|freq"
+      "command|getkeysandflags"
     case 145n:
-      "object|encoding"
+      "object|help"
     case 146n:
-      "object|refcount"
+      "object|freq"
     case 147n:
-      "object|idletime"
+      "object|encoding"
     case 148n:
-      "memory|help"
+      "object|refcount"
     case 149n:
+      "object|idletime"
+    case 150n:
+      "memory|help"
+    case 151n:
       "memory|usage"
     case _:
       ""
@@ -4711,108 +4768,112 @@ def stat.arity(+key: Nat) -> Nat:
     case 97n:
       7n
     case 98n:
-      4n
+      6n
     case 99n:
-      3n
+      8n
     case 100n:
-      5n
+      4n
     case 101n:
       3n
     case 102n:
-      2n
+      5n
     case 103n:
-      5n
+      3n
     case 104n:
-      5n
+      2n
     case 105n:
       5n
     case 106n:
-      3n
+      5n
     case 107n:
-      3n
+      5n
     case 108n:
-      2n
+      3n
     case 109n:
-      6n
+      3n
     case 110n:
-      6n
-    case 111n:
       2n
+    case 111n:
+      6n
     case 112n:
-      5n
+      6n
     case 113n:
-      7n
+      2n
     case 114n:
-      7n
+      5n
     case 115n:
-      5n
+      7n
     case 116n:
-      5n
+      7n
     case 117n:
       5n
     case 118n:
       5n
     case 119n:
-      4n
+      5n
     case 120n:
-      4n
+      5n
     case 121n:
-      6n
+      4n
     case 122n:
       4n
     case 123n:
       6n
     case 124n:
-      6n
-    case 125n:
-      7n
-    case 126n:
       4n
-    case 127n:
+    case 125n:
       6n
+    case 126n:
+      6n
+    case 127n:
+      7n
     case 128n:
       4n
     case 129n:
-      5n
+      6n
     case 130n:
       4n
     case 131n:
-      7n
+      5n
     case 132n:
-      9n
+      4n
     case 133n:
-      4n
+      7n
     case 134n:
-      4n
+      9n
     case 135n:
       4n
     case 136n:
-      5n
+      4n
     case 137n:
-      5n
+      4n
     case 138n:
       5n
     case 139n:
-      4n
+      5n
     case 140n:
-      4n
+      5n
     case 141n:
-      9n
-    case 142n:
-      9n
-    case 143n:
       4n
+    case 142n:
+      4n
+    case 143n:
+      9n
     case 144n:
-      6n
+      9n
     case 145n:
-      6n
+      4n
     case 146n:
       6n
     case 147n:
       6n
     case 148n:
-      4n
+      6n
     case 149n:
+      6n
+    case 150n:
+      4n
+    case 151n:
       7n
     case _:
       1n
@@ -4942,19 +5003,23 @@ def stat.risky(+key: Nat) -> Bool:
       True{}
     case 97n:
       True{}
-    case 114n:
+    case 98n:
       True{}
-    case 115n:
+    case 99n:
+      True{}
+    case 116n:
       True{}
     case 117n:
       True{}
-    case 118n:
+    case 119n:
       True{}
-    case 144n:
+    case 120n:
       True{}
-    case 147n:
+    case 146n:
       True{}
     case 149n:
+      True{}
+    case 151n:
       True{}
     case _:
       False{}
@@ -6162,6 +6227,22 @@ def stat.cw(+code: Nat) -> U32:
       2613
     case 599n:
       2614
+    case 600n:
+      2617
+    case 601n:
+      2618
+    case 602n:
+      2620
+    case 603n:
+      2631
+    case 604n:
+      2635
+    case 605n:
+      2637
+    case 606n:
+      2638
+    case 607n:
+      2643
     case _:
       63
 
@@ -7567,6 +7648,27 @@ def stat.code.lo40(+lo: Nat) -> Nat:
       598n
     case 54n:
       599n
+    case 57n:
+      600n
+    case 58n:
+      601n
+    case 60n:
+      602n
+    case _:
+      0n
+
+def stat.code.lo41(+lo: Nat) -> Nat:
+  match lo:
+    case 7n:
+      603n
+    case 11n:
+      604n
+    case 13n:
+      605n
+    case 14n:
+      606n
+    case 19n:
+      607n
     case _:
       0n
 
@@ -7654,6 +7756,8 @@ def stat.code.hl(+hi: Nat, +lo: Nat) -> Nat:
       stat.code.lo39(lo)
     case 40n:
       stat.code.lo40(lo)
+    case 41n:
+      stat.code.lo41(lo)
     case _:
       0n
 
@@ -9465,6 +9569,34 @@ def uincr.of(+by: Int, m: Maybe<&2, KV.Item<String>>) -> Out:
     case None{}:
       uincr.fit(by, int_fits(by), False{})
 
+# INCRBYFLOAT, as Redis 7.0.15 runs it on x86-64 (float.bend): the value
+# and the increment read as long doubles (string2ld), added in x87's
+# precision, the sum written as ld2string writes one for people; the key
+# keeps its time (Redis propagates the SET of the sum with KEEPTTL), and
+# a key not there is 0
+def uincrf.fin(bad: Bool, +s: F.Fl, keep: Bool) -> Out:
+  match bad:
+    case True{}:
+      Out{RError{"ERR increment would produce NaN or Infinity"}, CKeep{}}
+    case False{}:
+      +v = F.fl.show_human(s)
+      Out{RBulk{v}, uincr.ch(keep, v)}
+
+def uincrf.add(a: Maybe<&2, F.Fl>, b: Maybe<&2, F.Fl>, keep: Bool) -> Out:
+  match a b:
+    case Some{x} Some{y}:
+      +s = F.fl.add(F.fmt.ld(), x, y)
+      uincrf.fin(Bool.or(F.fl.is_nan(s), F.fl.is_inf(s)), s, keep)
+    case _ _:
+      Out{RError{"ERR value is not a valid float"}, CKeep{}}
+
+def uincrf.of(+by: String, m: Maybe<&2, KV.Item<String>>) -> Out:
+  match m:
+    case Some{KV.Item{+w, e}}:
+      uincrf.add(F.ld.parse(w), F.ld.parse(by), True{})
+    case None{}:
+      uincrf.add(Some{F.fl.zero(False{})}, F.ld.parse(by), False{})
+
 # the value and the time of an entry
 def ent.val(+m: Maybe<&2, KV.Item<String>>) -> Maybe<&2, String>:
   match m:
@@ -10022,6 +10154,32 @@ def hincr.of(cur: Maybe<&2, String>, +fresh: Bool, +f: String, +by: Int, h: KV.H
     case None{}:
       hincr.fit(int_fits(by), by, fresh, f, h)
 
+# HINCRBYFLOAT: the field's value read as a long double (0 when the field
+# is not there) plus by, the sum written as INCRBYFLOAT writes it; the
+# change is the HSET of the field with it, as Redis propagates it
+def hincrf.fin(bad: Bool, +s: F.Fl, +fresh: Bool, +f: String, h: KV.Hash) -> Out:
+  match bad:
+    case True{}:
+      Out{RError{"ERR increment would produce NaN or Infinity"}, CKeep{}}
+    case False{}:
+      +v = F.fl.show_human(s)
+      Out{RBulk{v}, hchange(fresh, [KV.HP{f, v}], KV.hash.put(h, f, v))}
+
+def hincrf.num(m: Maybe<&2, F.Fl>, +fresh: Bool, +f: String, +by: F.Fl, h: KV.Hash) -> Out:
+  match m:
+    case Some{x}:
+      +s = F.fl.add(F.fmt.ld(), x, by)
+      hincrf.fin(Bool.or(F.fl.is_nan(s), F.fl.is_inf(s)), s, fresh, f, h)
+    case None{}:
+      Out{RError{"ERR hash value is not a float"}, CKeep{}}
+
+def hincrf.of(cur: Maybe<&2, String>, +fresh: Bool, +f: String, +by: F.Fl, h: KV.Hash) -> Out:
+  match cur:
+    case Some{s}:
+      hincrf.num(F.ld.parse(s), fresh, f, by, h)
+    case None{}:
+      hincrf.num(Some{F.fl.zero(False{})}, fresh, f, by, h)
+
 # HWNew: a new hash of pairs where the key was, whatever it held (the
 # script the append-only file logs, aof.bend), answered 0 as the script
 # returns it
@@ -10044,6 +10202,9 @@ def hwrite(op: HWrite, +fresh: Bool, h: KV.Hash) -> Out:
       hincr.of(KV.hash.get(f, g), fresh, f, by, g)
     case HWNew{+ps}:
       hnew.out(hset.go(ps, HPut{KV.hash.empty(), 0n}), ps)
+    case HWIncrF{+f, +by}:
+      +g = h
+      hincrf.of(KV.hash.get(f, g), fresh, f, by, g)
 
 # of a key that holds a string: WRONGTYPE, but for HWNew, which makes
 # its hash whatever the key held
@@ -10717,6 +10878,8 @@ def upd(op: UpdOp, +now: Nat, m: Maybe<&2, KV.Item<String>>) -> Out:
       lwrite.str(op, m)
     case UMems{op}:
       swrite.str(op, m)
+    case UIncrF{+by}:
+      uincrf.of(by, m)
 
 # An update of a key that holds a collection: SET (and SETEX, PSETEX)
 # replaces it, SETNX finds it there, EXPIRE and its kin and PERSIST set

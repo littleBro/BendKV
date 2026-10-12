@@ -11,7 +11,8 @@ BITFIELD as the SETRANGE of the bytes its writes reach). A BITFIELD
 whose writes all fail (OVERFLOW FAIL) on a key it makes or grows is left
 out: Redis makes the key and does not log it. A hash is logged as the
 HSET of the pairs a write set and the HDEL of the fields it took (an
-HINCRBY as the HSET of its sum), and a hash made where a key whose time
+HINCRBY and an HINCRBYFLOAT as the HSET of its sum, as INCRBYFLOAT is
+the SET of its sum with KEEPTTL), and a hash made where a key whose time
 had passed still lay as a script that deletes the key and runs the HSET
 (Redis logs a MULTI with a DEL and the HSET): a file of such scripts is
 read by both alike. A list is logged as the writes that changed it
@@ -75,6 +76,9 @@ CMDS = [
     [b"BITFIELD_RO", b"bf", b"GET", b"u8", b"0"], [b"BITFIELD", b"bf", b"SET", b"u8", b"0", b"x"],
     [b"HSET", b"h", b"a", b"1", b"b", b"2", b"a", b"3"], [b"hmset", b"h", b"c", b"4"], [b"HSETNX", b"h", b"d", b"5"],
     [b"HSETNX", b"h", b"a", b"9"], [b"HINCRBY", b"h", b"a", b"10"], [b"HINCRBY", b"h2", b"n", b"-7"],
+    [b"INCRBYFLOAT", b"fl", b"10.5"], [b"PEXPIREAT", b"fl", b"%d" % (T + 9)], [b"INCRBYFLOAT", b"fl", b"0.1"],
+    [b"incrbyfloat", b"fl2", b"-1.5e-3"], [b"HINCRBYFLOAT", b"h", b"fl", b"2.5"], [b"HINCRBYFLOAT", b"h", b"fl", b"1e2"],
+    [b"hincrbyfloat", b"h5", b"x", b"3.0e5"],
     [b"HDEL", b"h", b"b", b"nope"], [b"HDEL", b"h2", b"n"], [b"HSET", b"h3", b"long", b"v" * 70],
     [b"HSET", b"h4"] + [x for j in range(600) for x in (b"f%d" % j, b"%d" % j)], [b"HDEL", b"h4", b"f1", b"f2"],
     [b"PEXPIREAT", b"h", b"%d" % (T + 9)], [b"COPY", b"h", b"h5", b"DB", b"2"], [b"RENAME", b"h3", b"h6"],

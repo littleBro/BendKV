@@ -199,8 +199,8 @@ def req.ok(+c: R.Cmd, h: U32, +key: Nat, +args: List<&2, String>, j: Nat) -> One
   OneOk{B.Req{c, R.stat.hash(h, code)}, j}
 
 # a command of number id named nm (as the client spelled it, for an
-# unknown one), from its arguments: from id 100 on, a command of the
-# connection or of the server (R.parse_sess)
+# unknown one), from its arguments: a command of the connection or of
+# the server (R.parse_sess) for a number R.cmd_own names
 def req.mk(own: Bool, +id: Nat, +nm: String, +args: List<&2, String>, +key: Nat, j: Nat) -> One:
   match own:
     case True{}:
@@ -211,7 +211,7 @@ def req.mk(own: Bool, +id: Nat, +nm: String, +args: List<&2, String>, +key: Nat,
 def req.of(+id: Nat, +nm: String, a: Args) -> One:
   match a:
     case ArgsOk{+args, j}:
-      req.mk(Nat.is_le(100n, id), id, nm, args, R.stat.key(id, args), j)
+      req.mk(R.cmd_own(id), id, nm, args, R.stat.key(id, args), j)
     case ArgsMore{k}:
       OneMore{k}
     case ArgsBad{msg}:

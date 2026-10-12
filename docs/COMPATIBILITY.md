@@ -35,8 +35,11 @@ make suite REDIS_SRC=../redis      # both runs and the table, in build/suite/
 ## The result
 
 Redis 7.0.15, October 2026. Of the 1,673 tests Redis passes in this mode, BendKV passes
-**528 (31.6%)**; of the 800 in the units of what BendKV has, 512 (64%: 203 tests of
-unit/type/list wait for RESP3). Sets brought 104: unit/type/set passes 92 of its 94 tests
+**552 (33.0%)**; of the 800 in the units of what BendKV has, 536 (67%: 203 tests of
+unit/type/list wait for RESP3). INCRBYFLOAT and HINCRBYFLOAT (floats, in software, as
+Redis computes them: section 3zk of [FINDINGS.md](FINDINGS.md)) brought 24:
+unit/type/incr passes all 24 of its tests and unit/type/hash 68 of its 72 (the other
+four need DUMP, RESP3, and integers past 14 digits). Sets brought 104: unit/type/set passes 92 of its 94 tests
 (the other two need WATCH and ZADD), unit/scan 13 of its 17 (SSCAN's four, and SCAN's
 regression test for issue #4906, which makes sets; the other four are ZSCAN's),
 unit/keyspace COPY of a set in both its encodings (47 of its 52 now), unit/protocol the
@@ -54,8 +57,8 @@ in unit/type/string, INCR's in unit/type/incr, BITOP's in unit/bitops), COPY of 
 (unit/keyspace), EXPIRE's test of a write to a key whose time passed (unit/expire), and
 the regression of a crash with blocking ops and pipelining (unit/protocol, which sends
 BLPOP twice, refused, and then RPUSH). Hashes brought 64:
-unit/type/hash passes 56 of its 72 tests (the other 16: HINCRBYFLOAT's twelve, which wait
-for doubles; two that read hashes back with DUMP; HRANDFIELD over RESP3; and HINCRBY's test
+unit/type/hash passes 56 of its 72 tests (the other 16: HINCRBYFLOAT's twelve, which waited
+for doubles (they pass now, above); two that read hashes back with DUMP; HRANDFIELD over RESP3; and HINCRBY's test
 of overflows, which starts from -9223372036854775484, past BendKV's integers of 14
 digits), unit/scan the three of HSCAN, unit/keyspace COPY of a hash in both its encodings
 (44 of its 52 now), and unit/introspection-2 COMMAND GETKEYS of EVAL, with keys and
@@ -85,7 +88,7 @@ need MULTI and WATCH, Lua or lists (then).
 
 | area | units | Redis passes | BendKV passes |
 |---|---|---:|---:|
-| what BendKV has: the protocol, connections, the keyspace and its databases, strings and their ranges, bits and fields, counters, hashes, lists, sets, times to live, introspection | protocol, quit, keyspace, type/string, type/incr, type/hash, type/list, list-2, list-3, type/set, scan, bitops, bitfield, expire, introspection, introspection-2, other, info-command | 800 | **512** |
+| what BendKV has: the protocol, connections, the keyspace and its databases, strings and their ranges, bits and fields, counters and floats, hashes, lists, sets, times to live, introspection | protocol, quit, keyspace, type/string, type/incr, type/hash, type/list, list-2, list-3, type/set, scan, bitops, bitfield, expire, introspection, introspection-2, other, info-command | 800 | **536** |
 | data types, not yet | type/zset, geo, hyperloglog, sort, dump, lazyfree, violations | 436 | 12 |
 | transactions, pub/sub, client-side caching, CLIENT PAUSE, the latency monitor, the slow log, the query buffer, not yet | multi, pubsub, tracking, pause, latency-monitor, slowlog, querybuf | 131 | 0 |
 | out of scope: Lua scripts, functions, streams | scripting, functions, type/stream, type/stream-cgroups | 306 | 4 |
@@ -127,8 +130,8 @@ pubsubshard, shutdown, tls, type/list-common, wait):
 | unit/slowlog | 16 | 9 | 0 |
 | unit/sort | 52 | 52 | 1 |
 | unit/tracking | 13 | 10 | 0 |
-| unit/type/hash | 73 | 72 | 56 |
-| unit/type/incr | 25 | 24 | 12 |
+| unit/type/hash | 73 | 72 | 68 |
+| unit/type/incr | 25 | 24 | 24 |
 | unit/type/list | 235 | 218 | 15 |
 | unit/type/list-2 | 2 | 2 | 2 |
 | unit/type/list-3 | 11 | 11 | 11 |
@@ -138,15 +141,14 @@ pubsubshard, shutdown, tls, type/list-common, wait):
 | unit/type/string | 77 | 77 | 74 |
 | unit/type/zset | 291 | 289 | 10 |
 | unit/violations | 1 | 1 | 0 |
-| **all** | **1751** | **1673** | **528 (31.6%)** |
+| **all** | **1751** | **1673** | **552 (33.0%)** |
 
-## Why the other 1,145 fail
+## Why the other 1,121 fail
 
-- **703 stop on a command BendKV does not have.** By the number of tests each one stops:
+- **682 stop on a command BendKV does not have.** By the number of tests each one stops:
   FUNCTION LOAD 124, ZADD 124, XADD 60, SORT 42, GEOADD 37, MULTI 26, WATCH 20, PFADD 19,
-  SYNC 17 (tests that read the replication stream), XGROUP 12, INCRBYFLOAT 12, GEORADIUS
-  10, ZINTERSTORE 10, ZUNIONSTORE 10, DUMP 9, SLOWLOG 9, HINCRBYFLOAT 9, ZINCRBY 9, and 50
-  more below nine (144 tests). The blocking commands of lists stop one test (BRPOP) for
+  SYNC 17 (tests that read the replication stream), XGROUP 12, GEORADIUS 10, ZINTERSTORE
+  10, ZUNIONSTORE 10, DUMP 9, SLOWLOG 9, ZINCRBY 9, and 50 more below nine (144 tests). The blocking commands of lists stop one test (BRPOP) for
   now: those of type/list come after its HELLO 3.
 - **391 never ran**: their unit ended before them, on a command outside any test:
   LATENCY RESET (latency-monitor), SUBSCRIBE (tracking), HELLO 3 (type/list and type/zset run their later tests over RESP3
@@ -155,11 +157,10 @@ pubsubshard, shutdown, tls, type/list-common, wait):
   comes because the command before it is missing (pubsub: PSUBSCRIBE after CLIENT REPLY
   OFF; scripting: the second line of FUNCTION LOAD's reply, read raw). One test runs
   only on a server that names jemalloc as its allocator.
-- **51 fail with another error**, nearly all of them for what BendKV does not have yet:
+- **48 fail with another error**, nearly all of them for what BendKV does not have yet:
   COMMAND GETKEYS, INFO and LIST of commands BendKV does not have (17, SORT's three among
-  them now that unit/sort runs), RESP3 (17), 11 that fail because the command they test,
-  or a command before them, is missing (MOVE's basic usage among them, above, and three
-  tests of values HINCRBYFLOAT must refuse, which catch its error and match the text), two
+  them now that unit/sort runs), RESP3 (17), 8 that fail because the command they test,
+  or a command before them, is missing (MOVE's basic usage among them, above), two
   of unit/lazyfree, which stopped on SADD before (they watch used_memory rise with a set of
   100,000 members and fall after UNLINK or FLUSHDB ASYNC; BendKV's used_memory is its
   resident memory, which its heap keeps and uses again), one for Lua (`command stats for scripts`:

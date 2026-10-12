@@ -1,5 +1,7 @@
 #!/bin/sh
-# First the start: the command line and the configuration file, each
+# First the float library (src/float.bend) against glibc, on random texts
+# of numbers (tests/float_test.py). Then the start: the command line and
+# the configuration file, each
 # case on BendKV and on redis-server (tests/start_test.py). Then starts
 # a reference Redis (on the loopback, as BendKV listens) and BendKV on
 # spare ports: BendKV with its defaults, then posting its replies to its
@@ -28,6 +30,8 @@ cd "$(dirname "$0")/.."
 PORT=${PORT:-6380}
 REDIS_PORT=${REDIS_PORT:-6390}
 ROUNDS=${ROUNDS:-1000}
+echo "== the float library against glibc"
+python3 tests/float_test.py --bend "${BEND:-bend}" --cc "${CC:-cc}" --seed 1 --n 1500
 echo "== the start"
 python3 tests/start_test.py --bin build/bendkv
 redis-server --port "$REDIS_PORT" --save '' --appendonly no --bind 127.0.0.1 > build/redis.log 2>&1 &
