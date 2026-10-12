@@ -1,7 +1,7 @@
 # BendKV: make check (proofs), make verdict (proofs, rechecked by the
 # Lean-proven BendTT kernel), make build, make pgo (build/bendkv-pgo, with
 # profile-guided optimization), make smoke (the pure checks: a batch end to
-# end, the append-only file), make test (needs
+# end, the append-only file; any that fails stops it), make test (needs
 # redis-server, redis-cli, python3 and a C compiler for the disk-failure
 # shim, tests/fail_io.c; redis-check-aof if there is one),
 # make bench (needs redis-benchmark), make perfcheck (instructions per
@@ -17,7 +17,9 @@
 # lines and key hashes by index with the seventeenth's String.dec_line_at
 # and String.hash_at; the start changes the directory and logs the pid
 # and the date with the twentieth's IO.chdir, IO.cwd, IO.pid and
-# IO.clock; the others only speed up the runtime and the code):
+# IO.clock, and cuts a file of any size and syncs its directory with the
+# twenty-second's File.truncate of a Nat and File.sync_dir; the others
+# only speed up the runtime and the code):
 #   make build BEND="bun <patched bend>/bend2/main.ts"
 # Bend compiles with $(BEND_CC) when it has one: clang 19 honors the
 # preserve_none calling convention of the runtime's segments, clang 18
@@ -57,9 +59,14 @@ build/bendkv.c: $(SRC)
 build/bendkv-pgo: build/bendkv.c tools/pgo_build.sh tools/pgo_exit.c
 	CC=$(BEND_CC) sh tools/pgo_build.sh build/bendkv.c build/bendkv-pgo
 
+# the pure checks, built once for bun: each must pass, and each must fail
+# (exit 1) when one kind of its checks is given a wrong expectation
+# (tests/smoke_check.sh)
 smoke:
-	CC=$(BEND_CC) $(BEND) tests/smoke.bend
-	CC=$(BEND_CC) $(BEND) tests/aof_check.bend
+	mkdir -p build
+	$(BEND) tests/smoke.bend -o build/smoke.js
+	$(BEND) tests/aof_check.bend -o build/aof_check.js
+	sh tests/smoke_check.sh build/smoke.js build/aof_check.js
 
 run: build
 	./build/bendkv $(PORT)

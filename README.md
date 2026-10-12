@@ -3,7 +3,7 @@
 A Redis-compatible key-value server written in [Bend2](https://github.com/bendlang/bend),
 whose core is formally verified: the command semantics, the hash trie behind them, the
 append-only file, the databases, the connection state and the configuration are proved
-against 64 laws,
+against 65 laws,
 checked by Bend
 and rechecked by the BendTT kernel, whose soundness is proved in Lean.
 
@@ -30,8 +30,10 @@ well. BendKV asks how far one can get writing a real, fast server in a language 
 the code that runs is the code that is proved, without a separate model and a
 refinement proof. The answer so far: the verified core is not what makes it slow;
 the data representation of the runtime was, and most of the work went into fixing it
-(20 patches to the Bend compiler, in [`bend-patches/`](bend-patches/), and one more
-that gives it the process's directory, id and clock).
+(21 patches to the Bend compiler, in [`bend-patches/`](bend-patches/), and three more:
+one gives it the process's directory, id and clock, one keeps a client that stops
+reading from holding up the others, one cuts a file at any size and syncs a
+directory).
 
 ## What is proved
 
@@ -52,7 +54,7 @@ is the trie's size is not proved yet.
 | Keys | 2 | key comparison is exactly string equality, down to the bits of `U32` |
 | Commands | 24 | no command changes a key it does not write, neither its value nor its time (`frame`); reads keep the database (the commands of hashes, lists, sets and sorted sets are reads and updates of their key, LMOVE, LMPOP, SMOVE, ZMPOP and the operations of several sets and sorted sets of their keys, so these laws and those below hold of them); a key whose time has passed is there for no command, and the sweep of expired keys deletes no key that is there; GET, DEL, APPEND, SETRANGE, SETNX, INCR, GETDEL, PERSIST, PTTL, SET with KEEPTTL, RENAME, MSETNX and BITOP behave as specified, on keys of the types they take (SET, SETNX, the times and the key commands take any), a key they add counted; a pipelined batch runs exactly as its commands in order; the cache hints before a batch change nothing |
 | Commuting | 5 | commands on different keys commute: replies and key contents are the same in either order, and adjacent independent commands in a batch can be swapped, when neither writes a key the other's writes depend on (RENAME moves a value from one key to another, MSETNX sets its keys only when none is there, BITOP sets its destination from its sources, LMOVE pushes onto its destination what it pops from its source, LMPOP pops from the first of its keys that is there, a STORE of a set operation sets its destination to what its sources make, SMOVE moves a member from its source to its destination, a STORE of a sorted-set operation or of a range sets its destination to what its sources or its source make, ZMPOP pops from the first of its keys that is there) |
-| Persistence | 8 | logging changes no reply; the file reads back as written, times included; after any history, each batch at its own time, on any of the databases, the server restores exactly the databases it held; a file cut by a crash at any byte restores the databases after some prefix of its acts, never a partial one |
+| Persistence | 9 | logging changes no reply; the file reads back as written, times included; after any history, each batch at its own time, on any of the databases, the server restores exactly the databases it held; a file cut by a crash at any byte restores the databases after some prefix of its acts, never a partial one; the start's replay, which first checks that each entry replays as written, is that replay whenever the check refuses none |
 | Databases | 6 | SELECT changes no database and focuses the one it names; SWAPDB puts each of two databases in the other's place; FLUSHALL empties them all; MOVE takes a key's entry, its value and its time, out of the selected database and sets it in the other; COPY sets a key's entry at another key, in the selected database or another, when that key is not there or REPLACE is given |
 | Sessions | 5 | however the server dispatches a batch, it runs as its commands in order; a batch changes the databases and the log as its executed commands do; a client that has not authenticated against a password cannot read or change any key |
 | Configuration | 3 | a CONFIG SET that fails changes nothing; one that succeeds makes the new requirepass the password; after a CONFIG SET of a parameter, CONFIG GET finds the value its check gave |
@@ -234,7 +236,14 @@ translation stays in the trusted base.
 - **Persistence:** an append-only file in Redis's own format, a SELECT before the
   entries of another database, SWAPDB, MOVE and FLUSHALL as Redis writes them, and COPY
   with its DB and REPLACE spelled out (`redis-check-aof` accepts it, and Redis loads it;
-  BendKV loads Redis's, COPY as the client sent it), fsync `always`, `everysec` or `no`.
+  BendKV loads Redis's, COPY as the client sent it, MULTI and EXEC as marks), fsync
+  `always`, `everysec` or `no`. The start syncs the file's directory before it serves,
+  so that a new file's name is on the disk before the first write is acknowledged, and
+  cuts a file that ends in an entry cut short back to its last whole entry at any size.
+  A file with an entry the start cannot replay as it was written (an unknown command, a
+  wrong number of arguments, an argument that does not read, a database not there, a
+  transaction left open) stops the start, naming the entry and the byte it starts at,
+  the file left as it was, where Redis stops at an unknown command.
 
 Not yet: streams and the other types (HyperLogLog, geo), the blocking commands, Lua
 scripts, MULTI/EXEC, pub/sub, RESP3, timing of commands
@@ -266,7 +275,7 @@ also needs Lean 4.34.0 (through elan).
 
 ```bash
 git clone https://github.com/bendlang/bend ../bend-patched
-sh bend-patches/apply.sh ../bend-patched      # Bend 2.0.35 + 23 patches
+sh bend-patches/apply.sh ../bend-patched      # Bend 2.0.35 + 24 patches
 B="bun ../bend-patched/bend2/main.ts"
 
 make check   BEND="$B"   # check the proofs
@@ -287,7 +296,7 @@ stops reading holds up only its own replies), and from the event loop with
 ## Testing
 
 ```bash
-make smoke     BEND="$B"   # the pure path end to end and the append-only file, no network
+make smoke     BEND="$B"   # the pure path end to end and the append-only file, no network; fails on any mismatch
 make test      BEND="$B"   # needs redis-server, redis-cli and a C compiler
 make perfcheck BEND="$B"   # instructions per request against a baseline (needs valgrind)
 make gencheck              # the generated parts (trie, its proofs, the parameter and command tables) are up to date
@@ -331,7 +340,9 @@ robustness and concurrency checks, a client that stops reading while the others 
 served (`tests/writer_test.py`),
 restarts from the append-only file (every database read back, including after a
 truncated tail), disk failures
-under the file, injected with an `LD_PRELOAD` shim, and the files both ways: BendKV
+under the file, injected with an `LD_PRELOAD` shim (the order of the file's creation,
+its directory's sync and the first reply traced through it), files the start must
+refuse, each left as it was, and the files both ways: BendKV
 started from a file Redis wrote and Redis from one BendKV wrote, each holding the
 databases the other held. `make suite` runs Redis's own test
 suite in its mode for a server already started, on Redis and on BendKV, and counts the
@@ -359,7 +370,7 @@ bench/      in-process benchmarks of the map, the core and channels
 tools/      measurement scripts, the runner of Redis's test suite, and the generators of
             the trie, of the parameter table and of the command table, with the facts
             they take from Redis (tools/data/)
-bend-patches/  the 23 patches to the Bend compiler and runtime
+bend-patches/  the 24 patches to the Bend compiler and runtime
 docs/       FINDINGS.md, DIRECTIONS.md, COMPATIBILITY.md
 ```
 

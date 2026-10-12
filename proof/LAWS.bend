@@ -1025,6 +1025,16 @@ law load_cut:
   for  e: {c ++ d == aof(hist, n) : String}
   {A.encode(Pair.fst(List<&2, List<&2, String>>, String, A.load(c))) ++ Pair.snd(List<&2, List<&2, String>>, String, A.load(c)) == c : String}
 
+# LAW: the start replays its file with a check (A.checked), which refuses
+# a file with an entry that would not replay as the file means it; when
+# it refuses none, the start holds the databases replay gives, those the
+# laws above restore
+law checked_replay:
+  for +reqs: List<&2, List<&2, String>>
+  for +n: Nat
+  for  e: {A.check(A.marks(reqs), A.file.acts(A.parse_all(reqs)), n) == None{} : Maybe<&1, Nat & Nat>}
+  {A.checked(reqs, n) == A.Replayed{A.replay(reqs, n)} : A.Replay}
+
 # Several databases
 # =================
 # The acts that change the databases as a whole (R.Act; session.bend:
