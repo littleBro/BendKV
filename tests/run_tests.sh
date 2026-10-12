@@ -2,9 +2,12 @@
 # First the float library (src/float.bend) against glibc, on random texts
 # of numbers (tests/float_test.py). Then the start: the command line and
 # the configuration file, each
-# case on BendKV and on redis-server (tests/start_test.py). Then starts
-# a reference Redis (on the loopback, as BendKV listens) and BendKV on
-# spare ports: BendKV with its defaults, then posting its replies to its
+# case on BendKV and on redis-server (tests/start_test.py). Then
+# connections that end every way one can, many times, on a BendKV of
+# their own, posting and sending, each closing the channel it opened
+# (tests/conn_test.py). Then starts a reference Redis (on the loopback,
+# as BendKV listens) and BendKV on spare ports: BendKV with its
+# defaults, then posting its replies to its
 # writer thread (post),
 # then sending them from its loop (send), then with an append-only file,
 # and runs against each the robustness checks, the differential test
@@ -34,6 +37,8 @@ echo "== the float library against glibc"
 python3 tests/float_test.py --bend "${BEND:-bend}" --cc "${CC:-cc}" --seed 1 --n 1500
 echo "== the start"
 python3 tests/start_test.py --bin build/bendkv
+echo "== connections that end"
+python3 tests/conn_test.py --bin build/bendkv --port "$PORT"
 redis-server --port "$REDIS_PORT" --save '' --appendonly no --bind 127.0.0.1 > build/redis.log 2>&1 &
 RDS=$!
 BKV=
