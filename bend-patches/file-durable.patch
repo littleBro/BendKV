@@ -1,0 +1,314 @@
+diff --git a/bend2/base.bend b/bend2/base.bend
+index a482223..feb7604 100644
+--- a/bend2/base.bend
++++ b/bend2/base.bend
+@@ -367,12 +367,25 @@ def File.sync(file: File) ->
+   import "./effs/file_sync.c"
+   import "./effs/file_sync.js"
+ 
+-# The file cut to its first size bytes (ftruncate)
+-def File.truncate(file: File, size: U32) ->
++# The file cut to its first size bytes (ftruncate). The size is a Nat, a
++# 64-bit word on the C lane, so a cut at or past 4 GiB keeps every byte
++# below it; a size the host's off_t cannot hold fails with EOVERFLOW
++# before the file is touched.
++def File.truncate(file: File, size: Nat) ->
+   IO(File & Result<&1, &1, U32 & String, Unit>):
+   import "./effs/file_sync.c"
+   import "./effs/file_sync.js"
+ 
++# The directory that holds path has its entries on the disk when it
++# answers (fsync of the directory, as Redis's fsyncFileDir syncs it): a
++# file just made there keeps its name after a crash, which File.sync of
++# the file does not promise. A host that cannot open a directory
++# (EISDIR) or sync one (EINVAL, EBADF) answers Done.
++def File.sync_dir(path: String) ->
++  IO(Result<&1, &1, U32 & String, Unit>):
++  import "./effs/file_sync.c"
++  import "./effs/file_sync.js"
++
+ def File.close(file: File) -> IO(Unit):
+   import "./effs/file_close.c"
+   import "./effs/file_close.js"
+diff --git a/bend2/effs/file_sync.c b/bend2/effs/file_sync.c
+index 370acb2..8382045 100644
+--- a/bend2/effs/file_sync.c
++++ b/bend2/effs/file_sync.c
+@@ -35,12 +35,19 @@ static void __attribute__((constructor)) file_sync_use(void) {
+ #ifdef CID(File.truncate)
+ 
+ static void file_truncate_call(IoWork* w) {
+-  io_sys_end(w, ftruncate((int)w->hand, (off_t)w->word));
++  io_sys_end(w, ftruncate((int)w->hand, (off_t)w->size));
+ }
+ 
++// The size is a Nat, the whole 64-bit word: a cut at or past 4 GiB keeps
++// every byte below it. A size off_t cannot hold (an off_t of 32 bits)
++// fails with EOVERFLOW before the file is touched.
+ Term file_truncate_run(Env e, Term* f, IoWork* w) {
+   w->hand = (intptr_t)io_hand_v(f[0]);
+-  w->word = (u32)f[1];
++  w->size = (u64)f[1];
++  if ((off_t)w->size < 0 || (u64)(off_t)w->size != w->size) {
++    w->code = EOVERFLOW;
++    return file_sync_pack(e, w);
++  }
+   return io_work(w, file_truncate_call, file_sync_pack);
+ }
+ 
+@@ -49,3 +56,43 @@ static void __attribute__((constructor)) file_truncate_use(void) {
+ }
+ 
+ #endif
++
++#ifdef CID(File.sync_dir)
++
++#include <libgen.h>
++
++// The directory that holds the path, synced (fsync) on a helper thread, as
++// Redis's fsyncFileDir syncs it: a file just made there keeps its name
++// after a crash, which syncing the file alone does not promise. A host
++// that cannot open a directory to read (EISDIR) or sync one (EINVAL,
++// EBADF) answers done.
++static void file_sync_dir_call(IoWork* w) {
++  int fd = open(dirname(w->data), O_RDONLY);
++  if (fd < 0) {
++    w->code = errno == EISDIR ? 0 : (u32)errno;
++    return;
++  }
++  int n = fsync(fd);
++  w->code = n < 0 && errno != EINVAL && errno != EBADF ? (u32)errno : 0;
++  close(fd);
++}
++
++static Term file_sync_dir_pack(Env e, IoWork* w) {
++  free(w->data);
++  return io_res(e, w, term_pak(CID(Unit), 0));
++}
++
++Term file_sync_dir_run(Env e, Term* f, IoWork* w) {
++  w->data = io_cstr(e, f[0], &w->size);
++  if (io_nul(w->data, w->size)) {
++    w->code = EILSEQ;
++    return file_sync_dir_pack(e, w);
++  }
++  return io_work(w, file_sync_dir_call, file_sync_dir_pack);
++}
++
++static void __attribute__((constructor)) file_sync_dir_use(void) {
++  io_eff(CID(File.sync_dir), file_sync_dir_run);
++}
++
++#endif
+diff --git a/bend2/effs/file_sync.js b/bend2/effs/file_sync.js
+index 9c52eaa..0f03d0e 100644
+--- a/bend2/effs/file_sync.js
++++ b/bend2/effs/file_sync.js
+@@ -11,15 +11,47 @@ function file_sync(file) {
+   }
+ }
+ 
++// The size is a Nat, a BigInt here, below 2^48: a Number holds it exactly.
+ function file_truncate(file, size) {
+   const fs = require("fs");
+   try {
+-    fs.ftruncateSync(file, size);
++    fs.ftruncateSync(file, Number(size));
+     return io_tup(file, io_done({ $: CID(Unit) }));
+   } catch (e) {
+     return io_tup(file, io_fail(Math.abs(e.errno ?? 5)));
+   }
+ }
+ 
++// The directory that holds the path, synced, as Redis's fsyncFileDir
++// syncs it: a host that cannot open a directory (EISDIR) or sync one
++// (EINVAL, EBADF) answers done. The path's bytes go through latin1, one
++// char a byte, so that dirname cuts them where a '/' is.
++function file_sync_dir(path) {
++  const fs = require("fs");
++  const name = io_bytes(path);
++  if (name.includes(0)) {
++    return io_fail(process.platform === "darwin" ? 92 : 84);
++  }
++  const dir = require("path").dirname(Buffer.from(name).toString("latin1"));
++  let fd;
++  try {
++    fd = fs.openSync(Buffer.from(dir, "latin1"), "r");
++  } catch (e) {
++    return e.code === "EISDIR" ? io_done({ $: CID(Unit) })
++      : io_fail(Math.abs(e.errno ?? 5));
++  }
++  try {
++    fs.fsyncSync(fd);
++  } catch (e) {
++    if (e.code !== "EINVAL" && e.code !== "EBADF") {
++      fs.closeSync(fd);
++      return io_fail(Math.abs(e.errno ?? 5));
++    }
++  }
++  fs.closeSync(fd);
++  return io_done({ $: CID(Unit) });
++}
++
+ io_eff(CID(File.sync), file_sync);
+ io_eff(CID(File.truncate), file_truncate);
++io_eff(CID(File.sync_dir), file_sync_dir);
+diff --git a/tests/io/file_durable.bend b/tests/io/file_durable.bend
+new file mode 100644
+index 0000000..fdf83ab
+--- /dev/null
++++ b/tests/io/file_durable.bend
+@@ -0,0 +1,101 @@
++# io (io_file_durable): File.truncate takes its size as a Nat, so a cut at
++# or past 4 GiB is not one modulo 2^32: a file of ten bytes cut (sparse)
++# to 2^32 + 1, to 2^32 and to 2^32 - 1 bytes is that long (file.length
++# reads its size by stat), still begins with its ten bytes, and cut to 4
++# keeps four. File.sync_dir syncs the directory that holds a path: one in
++# /tmp, and one relative to the working directory; a directory not there
++# fails with ENOENT.
++import Base
++
++law file.length:
++  String -> IO(Nat)
++
++def file.length(path):
++  import "./file_durable.c"
++  import "./file_durable.js"
++
++def path() -> String:
++  "/tmp/bend_io_file_durable"
++
++def check(name: String, ok: Bool) -> IO(Unit):
++  match ok:
++    case True{}:
++      IO.print(name)
++    case False{}:
++      IO.die(Unit, 1, "FAIL " ++ name)
++
++def done(pair: File & Result<&1, &1, U32 & String, Unit>) -> IO(File):
++  (file, result) = pair
++  do IO<File>:
++    IO.pass(Unit, result)
++    return file
++
++def read(pair: File & Result<&1, &1, U32 & String, String>, +want: String, name: String) -> IO(File):
++  (file, result) = pair
++  do IO<File>:
++    got : String <- IO.pass(String, result)
++    check(name, String.eq(got, want))
++    return file
++
++def begins(+want: String, name: String) -> IO(Unit):
++  do IO<Unit>:
++    f : File <- IO.try(File, File.open(path(), "r"))
++    p : File & Result<&1, &1, U32 & String, String> <- File.read_raw(f, 10)
++    f : File <- read(p, want, name)
++    File.close(f)
++
++def cut(+size: Nat, +head: String, +name: String) -> IO(Unit):
++  do IO<Unit>:
++    f : File <- IO.try(File, File.open(path(), "a"))
++    p : File & Result<&1, &1, U32 & String, Unit> <- File.truncate(f, size)
++    f : File <- done(p)
++    Unit <- File.close(f)
++    n : Nat <- file.length(path())
++    Unit <- check(name, Nat.is_eq(n, size))
++    begins(head, name ++ ", its first bytes kept")
++
++def synced(r: Result<&1, &1, U32 & String, Unit>, name: String) -> IO(Unit):
++  match r:
++    case Done{u}:
++      IO.print(name)
++    case Fail{e}:
++      (code, msg) = e
++      IO.die(Unit, 1, "FAIL " ++ name ++ ": " ++ msg)
++
++def failed(r: Result<&1, &1, U32 & String, Unit>, want: U32, name: String) -> IO(Unit):
++  match r:
++    case Done{u}:
++      IO.die(Unit, 1, "FAIL " ++ name)
++    case Fail{e}:
++      (code, msg) = e
++      check(name, U32.is_eq(code, want))
++
++def main() -> IO(Unit):
++  +big = Nat.mul(65536n, 65536n)
++  do IO<Unit>:
++    f : File <- IO.try(File, File.open(path(), "w"))
++    p : File & Result<&1, &1, U32 & String, Unit> <- File.write_raw(f, "0123456789")
++    f : File <- done(p)
++    Unit <- File.close(f)
++    Unit <- cut(Nat.add(big, 1n), "0123456789", "cut to 2^32 + 1")
++    Unit <- cut(big, "0123456789", "cut to 2^32")
++    Unit <- cut(4294967295n, "0123456789", "cut to 2^32 - 1")
++    Unit <- cut(4n, "0123", "cut to 4")
++    r : Result<&1, &1, U32 & String, Unit> <- File.sync_dir(path())
++    Unit <- synced(r, "the directory of a file in /tmp synced")
++    r : Result<&1, &1, U32 & String, Unit> <- File.sync_dir("bend_io_file_durable_here")
++    Unit <- synced(r, "the working directory synced")
++    r : Result<&1, &1, U32 & String, Unit> <- File.sync_dir("/no/such/dir/here/x")
++    failed(r, 2, "a directory not there is ENOENT")
++
++#|cut to 2^32 + 1
++#|cut to 2^32 + 1, its first bytes kept
++#|cut to 2^32
++#|cut to 2^32, its first bytes kept
++#|cut to 2^32 - 1
++#|cut to 2^32 - 1, its first bytes kept
++#|cut to 4
++#|cut to 4, its first bytes kept
++#|the directory of a file in /tmp synced
++#|the working directory synced
++#|a directory not there is ENOENT
+diff --git a/tests/io/file_durable.c b/tests/io/file_durable.c
+new file mode 100644
+index 0000000..ee83d7e
+--- /dev/null
++++ b/tests/io/file_durable.c
+@@ -0,0 +1,16 @@
++#include <sys/stat.h>
++
++// A file's size by its path, as stat reads it: a Nat, past 4 GiB too
++// (File.size answers a U32); 0 when there is no such file.
++Term file_length_run(Env e, Term* f, IoWork* w) {
++  u64         n    = 0;
++  char*       path = io_cstr(e, f[0], &n);
++  struct stat st;
++  int         got  = stat(path, &st);
++  free(path);
++  return (Term)(got == 0 ? (u64)st.st_size : 0);
++}
++
++static void __attribute__((constructor)) file_length_use(void) {
++  io_eff(CID(file.length), file_length_run);
++}
+diff --git a/tests/io/file_durable.js b/tests/io/file_durable.js
+new file mode 100644
+index 0000000..22fea47
+--- /dev/null
++++ b/tests/io/file_durable.js
+@@ -0,0 +1,11 @@
++// A file's size by its path, as stat reads it: a Nat (a BigInt), past
++// 4 GiB too; 0 when there is no such file.
++function file_length(path) {
++  try {
++    return BigInt(require("fs").statSync(Buffer.from(io_bytes(path))).size);
++  } catch (e) {
++    return 0n;
++  }
++}
++
++io_eff(CID(file.length), file_length);
+diff --git a/tests/io/file_raw.bend b/tests/io/file_raw.bend
+index 215aef1..c960843 100644
+--- a/tests/io/file_raw.bend
++++ b/tests/io/file_raw.bend
+@@ -74,7 +74,7 @@ def append() -> IO(Unit):
+     f : File <- done(p, "synced")
+     p : File & Result<&1, &1, U32 & String, U32> <- File.size(f)
+     f : File <- sized(p, 258, "size after append")
+-    p : File & Result<&1, &1, U32 & String, Unit> <- File.truncate(f, 100)
++    p : File & Result<&1, &1, U32 & String, Unit> <- File.truncate(f, 100n)
+     f : File <- done(p, "truncated")
+     p : File & Result<&1, &1, U32 & String, U32> <- File.size(f)
+     f : File <- sized(p, 100, "size after truncate")

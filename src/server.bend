@@ -1088,10 +1088,15 @@ def log.die(-A: Type, +lg: Log, +msg: String) -> IO(A):
 # everysec (Redis's default), left to the system with no. A batch that
 # changed nothing writes nothing, and the batches that wait together
 # share one write and one sync. At start the server restores its
-# database from the file (LAWS.bend: recover). A file that ends inside an
+# database from the file (LAWS.bend: recover), once each entry is found to
+# replay as the file means it (aof.bend: checked; a file with one that
+# does not is refused, and left as it was). A file that ends inside an
 # entry, cut by a crash in the middle of a write, is cut back to its last
-# whole entry, as Redis does with aof-load-truncated; a file with anything
-# else after its entries is refused, as Redis refuses it.
+# whole entry, as Redis does with aof-load-truncated, whatever its size;
+# a file with anything else after its entries is refused, as Redis
+# refuses it. The file opened to append, its directory is synced before
+# the server serves, so that a new file's name is on the disk before the
+# first write to it is acknowledged.
 
 # how the file reaches the disk
 type Sync is Data:
@@ -1450,11 +1455,14 @@ def cut_done(+lg: Log, p: File & Result<&1, &1, U32 & String, Unit>, +path: Stri
         Unit <- File.close(f)
         log(lg, 3, "BendKV cut " ++ Nat.show(cut) ++ " bytes of an entry cut short from the end of " ++ path)
 
+# the file cut to its first keep bytes: File.truncate takes the Nat
+# itself (a 64-bit word in the runtime), so a file of 4 GiB or more keeps
+# all its whole entries, not keep modulo 2^32 of them
 @unsafe
 def cut_file(+lg: Log, +path: String, keep: Nat, +cut: Nat) -> IO(Unit):
   do IO<Unit>:
     f : File <- IO.try(File, File.open(path, "a"))
-    p : File & Result<&1, &1, U32 & String, Unit> <- File.truncate(f, U32.from_nat(keep))
+    p : File & Result<&1, &1, U32 & String, Unit> <- File.truncate(f, keep)
     cut_done(lg, p, path, cut)
 
 # a file that ends in an entry cut short is cut back to its last whole
@@ -1485,10 +1493,39 @@ def restore_fix(+lg: Log, +trunc: Bool, +path: String, +size: Nat, +n: Nat, +ds:
     case False{} False{}:
       log.die(R.Ds & Nat, lg, "Bad file format reading the append only file " ++ path ++ ": no entry at byte " ++ Nat.show(Nat.sub(size, String.length(rest))))
 
+# a file with an entry that does not replay as the file means it stops
+# the start, with the entry's number and the byte it starts at (A.offset
+# of the file read again: the text read first is let go before the
+# replay, as before the check)
+@unsafe
+def restore_refused_at(+lg: Log, +path: String, +i: Nat, +why: String, p: File & String) -> IO(R.Ds & Nat):
+  (f, +s) = p
+  do IO<R.Ds & Nat>:
+    Unit <- File.close(f)
+    log.die(R.Ds & Nat, lg, "Bad command reading the append only file " ++ path ++ ": entry " ++ Nat.show(1n+i) ++ ", at byte " ++ Nat.show(A.offset(s, i)) ++ ": " ++ why)
+
+@unsafe
+def restore_refused(+lg: Log, +path: String, +i: Nat, +why: String) -> IO(R.Ds & Nat):
+  do IO<R.Ds & Nat>:
+    f : File <- IO.try(File, File.open(path, "r"))
+    p : File & String <- read_all(f, Nil{})
+    restore_refused_at(lg, path, i, why, p)
+
+# the databases of the entries, when each replays as the file means it
+# (aof.bend: checked); else the start stops at the first that does not,
+# before the file is cut or opened to append: it is left as it was
+@unsafe
+def restore_checked(+lg: Log, +trunc: Bool, +path: String, +size: Nat, +n: Nat, r: A.Replay, +rest: String) -> IO(R.Ds & Nat):
+  match r:
+    case A.Replayed{+ds}:
+      restore_fix(lg, trunc, path, size, n, ds, rest, String.is_empty(rest), cut_short(rest))
+    case A.Refused{+i, +why}:
+      restore_refused(lg, path, i, why)
+
 @unsafe
 def restore_load(+lg: Log, +trunc: Bool, +path: String, +size: Nat, +more: Nat, l: List<&2, List<&2, String>> & String) -> IO(R.Ds & Nat):
   (+reqs, +rest) = l
-  restore_fix(lg, trunc, path, size, List.length(&2, List<&2, String>, reqs), A.replay(reqs, more), rest, String.is_empty(rest), cut_short(rest))
+  restore_checked(lg, trunc, path, size, List.length(&2, List<&2, String>, reqs), A.checked(reqs, more), rest)
 
 @unsafe
 def restore_read(+lg: Log, +trunc: Bool, +path: String, +more: Nat, p: File & String) -> IO(R.Ds & Nat):
@@ -1544,10 +1581,29 @@ def st.new(srv: S.Srv, ds: R.Ds) -> St:
   +x = ds
   St{srv, x, R.ds.index(x)}
 
+# the directory that holds the file synced, so that the file's name is on
+# the disk before the first write to it is acknowledged: File.open may
+# have just made the file, and a sync of the file does not make its
+# entry in the directory durable (a crash could lose the name, and the
+# next start find no file). It runs at each start, whether the start
+# made the file or found it (one made by a start that stopped on this
+# very failure may be there and not yet on the disk); a failure stops
+# the start.
 @unsafe
-def open_aof(+path: String, +sync: Sync, srv: S.Srv, ds: R.Ds) -> IO(Chan(Req)):
+def dir_synced(r: Result<&1, &1, U32 & String, Unit>, +path: String, +lg: Log) -> IO(Unit):
+  match r:
+    case Done{u}:
+      IO.pure(Unit, Unit{})
+    case Fail{e}:
+      (code, msg) = e
+      log.die(Unit, lg, "Can't sync the directory of the append-only file " ++ path ++ ": " ++ msg)
+
+@unsafe
+def open_aof(+path: String, +sync: Sync, srv: S.Srv, ds: R.Ds, +lg: Log) -> IO(Chan(Req)):
   do IO<Chan(Req)>:
     f : File <- IO.try(File, File.open(path, "a"))
+    r : Result<&1, &1, U32 & String, Unit> <- File.sync_dir(path)
+    Unit <- dir_synced(r, path, lg)
     Unit <- syncer(sync, path)
     +reqs : Chan(Req) <- Chan.new(Req, 1024)
     Unit <- IO.spawn(Unit, aof_loop(st.new(srv, ds), f, sync, reqs))
@@ -1587,7 +1643,7 @@ def accept_all(ls: List<&1, Listener>, +reqs: Chan(Req), +post: Bool, +lg: Log, 
 def serve.aof(p: R.Ds & Nat, +path: String, +sync: Sync, +items: List<&2, C.CItem>, info: I.Info, ls: List<&1, Listener>, +post: Bool, +lg: Log, +tl: Chan(Tally)) -> IO(Unit):
   (ds, +size) = p
   do IO<Unit>:
-    +reqs : Chan(Req) <- open_aof(path, sync, S.srv_of(items, I.info.restored(info, size)), ds)
+    +reqs : Chan(Req) <- open_aof(path, sync, S.srv_of(items, I.info.restored(info, size)), ds, lg)
     accept_all(ls, reqs, post, lg, tl)
 
 # the databases after the first (databases less one)
