@@ -3255,3 +3255,29 @@ Section 3k took them in turn: the copying GET, with every line of a buffer hinte
 in; the pass through the seal and the hash bits were measured and left out; the shared
 buffer is still open.
 
+## 12. A review of the protocol and the connections
+
+A review of the first commit (9bd45b6) filed, among others, five issues about the
+protocol and the connections. Each was checked again against the code of 26 commits
+later (914713d): one had been fixed in between, four still held.
+
+**KEYS ([#4](https://github.com/littleBro/bendkv/issues/4)).** The first commit's glob
+took both ways at each `*` with `Bool.or`, which evaluates both arguments: ten stars
+against a key of ten bytes cost 537,471 calls. Section 3r's port of Redis's
+`stringmatchlen` had replaced it: one function with an explicit mode, so a star's loop
+ends at its first match (`SmTry`), a run of stars is one star (`sm.unstar`), a star that
+ends the pattern matches at once, and a rest that matches nowhere after a star ends the
+search (`SmStop`, Redis's `skipLongerMatches`), so each star's loop runs once at most. A
+model of the matcher's calls gives what each cut-off saves: `"*a" * 100` against 200 a's
+takes 201 calls, and 3.3 * 10^60 trying both ways; `"a*" * 20 + "b"` against 40 a's (Redis's
+own regression) takes 40, and 3.4 * 10^11 without the search's end. Comparing long patterns
+with Redis showed one difference left: the Redis the tests run against, Ubuntu's 7.0.15,
+carries the fix for CVE-2024-31228 (upstream since 6.2.16, 7.2.6 and 7.4.1), under which a
+call of `stringmatchlen_impl` nested in more than 1000 others matches nothing, so
+`"*a" * 1001` matched a key of 3000 a's on BendKV only. The matcher now counts how deep
+the rest after a star is nested (`SmIn`), with a bound on its depth that still holds (four
+levels for each byte of the pattern, three for each of the key's). `tests/keyspace_test.py`
+compares KEYS and SCAN's MATCH with Redis on 32 such patterns, adjacent stars,
+alternatives that match at once or nowhere, literal mismatches, classes and escapes among
+stars, and stars nested past 1000; each answers at once, where a matcher without one of the
+cut-offs would not answer within the client's timeout.

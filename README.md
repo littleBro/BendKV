@@ -83,7 +83,9 @@ translation stays in the trusted base.
 - **Strings and keys:** GET, SET, SETNX, GETSET, DEL, UNLINK, EXISTS, INCR, DECR, INCRBY,
   DECRBY, APPEND, STRLEN, MGET, MSET, MSETNX, RENAME, RENAMENX (the key's time moves with
   it), COPY (DB and REPLACE; the key's time is copied with it), DBSIZE, KEYS
-  (Redis's patterns: `*`, `?`, `[...]` classes, `\` escapes), TYPE, TOUCH, SCAN (MATCH,
+  (Redis's patterns: `*`, `?`, `[...]` classes, `\` escapes, matched as Redis's
+  `stringmatchlen` matches them, with its cut-offs, which keep a pattern's cost polynomial,
+  and its limit of 1000 nested stars, past which nothing matches), TYPE, TOUCH, SCAN (MATCH,
   COUNT, TYPE, with Redis's guarantee: a key there for a whole iteration is found, however
   the database changes meanwhile) and RANDOMKEY (picked as Redis picks one). OBJECT
   (ENCODING, REFCOUNT, IDLETIME, FREQ, HELP) answers from the value, since BendKV keeps no
@@ -313,7 +315,9 @@ command's description and
 documentation, the lists and their filters, the keys of command lines, random ones
 too), SCAN and RANDOMKEY (their arguments, full iterations with COUNT, MATCH and TYPE
 finding Redis's keys, each once, an iteration while other clients write, RANDOMKEY's
-picks), numbers at their edges in every argument that takes one (past a long long, at
+picks), KEYS and SCAN's MATCH on patterns that only a matcher with Redis's cut-offs
+answers at once (adjacent stars, alternatives matching at once or nowhere, stars nested
+past 1000), numbers at their edges in every argument that takes one (past a long long, at
 2^48, in forms Redis refuses), BITFIELD's fields at random (each reply and each value
 after it compared), hashes (each command at its edges, past a listpack's limits, on keys
 whose time has passed, and at random, the fields of a hashtable compared as sets), lists
