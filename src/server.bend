@@ -742,19 +742,61 @@ def conn_bye(s: Socket, +ln: Link, post: Bool, out: String) -> IO(Unit):
         m : Socket & Result<&1, &1, U32 & String, Unit> <- TCP.send_raw(s, out)
         conn_sent.end(m, ln)
 
-# a protocol error is answered, as any error reply is encoded (on one
-# line: a byte the parser did not expect may be a CR or LF), and counted
-# among the error replies for INFO, then the connection ends, as in
-# Redis; without one, the connection reads on
+# a connection whose protocol error is held back: nothing goes out, and
+# what comes in is read and dropped until the client closes it
 @unsafe
-def conn_err(s: Socket, +ln: Link, cn: S.Conn, err: Maybe<&2, String>, rest: String, need: Nat) -> IO(Unit):
-  match ln err:
-    case _ None{}:
-      conn_loop(s, rest, Nil{}, 0n, need, ln, cn)
-    case Link{db, back, post, tl} Some{msg}:
+def conn_drop(s: Socket, +ln: Link) -> IO(Unit):
+  do IO<Unit>:
+    m : Socket & Result<&1, &1, U32 & String, String> <- TCP.recv_raw(s, 65536)
+    conn_dropped(m, ln)
+
+@unsafe
+def conn_dropped(m: Socket & Result<&1, &1, U32 & String, String>, +ln: Link) -> IO(Unit):
+  (s, r) = m
+  match r:
+    case Fail{e}:
+      conn_end(s, ln)
+    case Done{+x}:
+      conn_drop.on(Nat.is_eq(String.length(x), 0n), s, ln)
+
+@unsafe
+def conn_drop.on(eof: Bool, s: Socket, +ln: Link) -> IO(Unit):
+  match eof:
+    case True{}:
+      conn_end(s, ln)
+    case False{}:
+      conn_drop(s, ln)
+
+# A protocol error is counted among the error replies for INFO, and
+# answered, as any error reply is encoded (on one line: a byte the
+# parser did not expect may be a CR or LF), unless the client's replies
+# are held back (CLIENT REPLY OFF, or SKIP for the request the error is
+# in), as say holds them back (session.bend); then the connection ends,
+# as in Redis. A held-back error does not end it, as it does not in
+# Redis, which closes a connection once its last reply is written, and
+# has none to write, and reads nothing more from it (processInputBuffer
+# stops at CLOSE_AFTER_REPLY): it stays open, counted in INFO, and what
+# comes on it is read and dropped until the client closes it. Without an
+# error, the connection reads on.
+@unsafe
+def conn_oops(on: Bool, s: Socket, +ln: Link, msg: String) -> IO(Unit):
+  match on ln:
+    case True{} Link{db, back, post, tl}:
       do IO<Unit>:
         sent : Bool <- Chan.send(Req, db, Oops{})
         conn_bye(s, ln, post, P.encode(R.RError{"ERR " ++ msg}))
+    case False{} Link{db, back, post, tl}:
+      do IO<Unit>:
+        sent : Bool <- Chan.send(Req, db, Oops{})
+        conn_drop(s, ln)
+
+@unsafe
+def conn_err(s: Socket, +ln: Link, cn: S.Conn, err: Maybe<&2, String>, rest: String, need: Nat) -> IO(Unit):
+  match err:
+    case None{}:
+      conn_loop(s, rest, Nil{}, 0n, need, ln, cn)
+    case Some{msg}:
+      conn_oops(mute.on(S.conn.mode(cn)), s, ln, msg)
 
 # Accepting
 # ---------

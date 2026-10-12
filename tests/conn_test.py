@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """Connections that end, every way one can: the client closes after a
-request or before any, QUIT, a protocol error, the client resetting the
+request or before any, QUIT, a protocol error, a protocol error held
+back by CLIENT REPLY OFF (the connection stays open, and nothing more on
+it runs, until the client closes it), the client resetting the
 connection before the server reads its request, and while the server
 sends it a reply of a megabyte. Each way is taken many times, on a
 BendKV the test starts itself, with replies posted to the writer thread
@@ -156,6 +158,12 @@ def protocol_error(port):
     s.close()
 
 
+def held_back_error(port):
+    s = socket.create_connection(("127.0.0.1", port), timeout=5)
+    s.sendall(resp(b"CLIENT", b"REPLY", b"OFF") + b"*1\r\nX\r\n" + resp(b"SET", b"after", b"1"))
+    s.close()
+
+
 def reset_before_read(port):
     s = socket.create_connection(("127.0.0.1", port), timeout=5)
     s.sendall(resp(b"GET", b"big"))
@@ -173,6 +181,7 @@ WAYS = [("the client closes after a request", eof_after_request),
         ("the client closes before any", eof_at_once),
         ("QUIT", by_quit),
         ("a protocol error", protocol_error),
+        ("a protocol error held back by CLIENT REPLY OFF", held_back_error),
         ("the client resets before the server reads", reset_before_read),
         ("the client resets while the server sends", reset_while_sending)]
 
@@ -208,7 +217,8 @@ def run(binary, port, mode, rounds):
                   ("ok  " if good else "FAIL", mode, name, rounds, n))
         c = Client(port)
         good = c.ask(b"PING") == b"+PONG\r\n" and c.ask(b"SET", b"k", b"v") == b"+OK\r\n" and \
-            c.ask(b"GET", b"k") == b"$1\r\nv\r\n" and c.ask(b"GET", b"q") == b"$1\r\n1\r\n"
+            c.ask(b"GET", b"k") == b"$1\r\nv\r\n" and c.ask(b"GET", b"q") == b"$1\r\n1\r\n" and \
+            c.ask(b"EXISTS", b"after") == b":0\r\n"
         ok &= good
         print("%s %s: the database answers a new connection" % ("ok  " if good else "FAIL", mode))
         c.s.close()
