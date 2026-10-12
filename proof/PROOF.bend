@@ -2607,6 +2607,10 @@ def t_reads_go(c: R.Cmd, +db: KV.Trie<KV.Val>, +now: Nat) -> {Laws.is_read(c) ==
       e => Empty.absurd({T.db_of(T.exec(R.Rename{s, d, nx}, db, now)) == db : KV.Trie<KV.Val>}, false_true(e))
     case R.BitOp{op, d, srcs}:
       e => Empty.absurd({T.db_of(T.exec(R.BitOp{op, d, srcs}, db, now)) == db : KV.Trie<KV.Val>}, false_true(e))
+    case R.LMove{op, d, srcs}:
+      e => Empty.absurd({T.db_of(T.exec(R.LMove{op, d, srcs}, db, now)) == db : KV.Trie<KV.Val>}, false_true(e))
+    case R.LMPop{op, d, srcs}:
+      e => Empty.absurd({T.db_of(T.exec(R.LMPop{op, d, srcs}, db, now)) == db : KV.Trie<KV.Val>}, false_true(e))
     case R.Own{o}:
       e => {==}
     case R.Bad{r}:
@@ -2820,6 +2824,10 @@ def upd_ch_frame(+t: KV.Trie<KV.Val>, +k: String, +j: String, r: R.Reply, ch: R.
       Laws.entry_keep_other(KV.Val, t, k, j, KV.VColl{KV.CHash{hv}}, ne)
     case R.CHashNew{ps, +hv}:
       Laws.entry_setx_other(KV.Val, t, k, j, KV.VColl{KV.CHash{hv}}, 0n, ne)
+    case R.CList{op, +hv}:
+      Laws.entry_keep_other(KV.Val, t, k, j, KV.VColl{KV.CList{hv}}, ne)
+    case R.CListNew{lf, ps, +hv}:
+      Laws.entry_setx_other(KV.Val, t, k, j, KV.VColl{KV.CList{hv}}, 0n, ne)
 
 def upd_frame(+t: KV.Trie<KV.Val>, +k: String, +j: String, o: R.Out, ne: {j != k : String}) -> {KV.entry(KV.Val, T.db_of(T.upd.put(t, k, KV.hash(k), o)), j) == KV.entry(KV.Val, t, j) : Maybe<&2, KV.Item<KV.Val>>}:
   match o:
@@ -2856,6 +2864,93 @@ def ren_frame(r: R.Ren, +nx: Bool, +s: String, +d: String, +db: KV.Trie<KV.Val>,
       +e => Equal.trans(Maybe<&2, KV.Item<KV.Val>>, KV.entry(KV.Val, KV.del(KV.Val, KV.setx(KV.Val, db, d, v, x), s), j), KV.entry(KV.Val, KV.setx(KV.Val, db, d, v, x), j), KV.entry(KV.Val, db, j),
               Laws.entry_del_other(KV.Val, KV.setx(KV.Val, db, d, v, x), s, j, Laws.key_eq_false(j, s, or_false_l(KV.str_eq(j, s), Laws.any_key(j, [d]))(e))),
               Laws.entry_setx_other(KV.Val, db, d, j, v, x, Laws.key_eq_false(j, d, or_false_l(KV.str_eq(j, d), Laws.any_key(j, Nil{}))(or_false_r(KV.str_eq(j, s), Laws.any_key(j, [d]))(e)))))
+
+# LMOVE writes its source and its destination alone: the source's list
+# set or deleted, then the destination's set
+def mv_src_frame(b: Bool, +s: String, +l: KV.Deq, +db: KV.Trie<KV.Val>, +j: String, ns: {j != s : String}) -> {KV.entry(KV.Val, T.mv.src(b, s, l, db), j) == KV.entry(KV.Val, db, j) : Maybe<&2, KV.Item<KV.Val>>}:
+  match b:
+    case True{}:
+      Laws.entry_del_other(KV.Val, db, s, j, ns)
+    case False{}:
+      Laws.entry_keep_other(KV.Val, db, s, j, KV.VColl{KV.CList{l}}, ns)
+
+def mv_put_frame(+s: String, +l: KV.Deq, +db: KV.Trie<KV.Val>, +j: String, ns: {j != s : String}) -> {KV.entry(KV.Val, T.mv.put(s, l, db), j) == KV.entry(KV.Val, db, j) : Maybe<&2, KV.Item<KV.Val>>}:
+  mv_src_frame(Nat.is_eq(KV.deq.len(l), 0n), s, l, db, j, ns)
+
+def mv_self_frame(p: KV.Pop, +e: R.LEnds, +s: String, +db: KV.Trie<KV.Val>, +j: String, ns: {j != s : String}) -> {KV.entry(KV.Val, T.db_of(T.mv.self(p, e, s, db)), j) == KV.entry(KV.Val, db, j) : Maybe<&2, KV.Item<KV.Val>>}:
+  match p:
+    case KV.Pop{+x, +l}:
+      Laws.entry_keep_other(KV.Val, db, s, j, KV.VColl{KV.CList{KV.deq.push(R.ends.to(e), x, l)}}, ns)
+    case KV.PopNone{}:
+      {==}
+
+def mv_go_frame(p: KV.Pop, +e: R.LEnds, +s: String, +t: String, dl: Maybe<&2, KV.Deq>, +db: KV.Trie<KV.Val>, +j: String, ns: {j != s : String}, nt: {j != t : String}) -> {KV.entry(KV.Val, T.db_of(T.mv.go(p, e, s, t, dl, db)), j) == KV.entry(KV.Val, db, j) : Maybe<&2, KV.Item<KV.Val>>}:
+  match p dl:
+    case KV.Pop{+x, +l} Some{+d}:
+      Equal.trans(Maybe<&2, KV.Item<KV.Val>>, KV.entry(KV.Val, KV.keep(KV.Val, T.mv.put(s, l, db), t, KV.VColl{KV.CList{KV.deq.push(R.ends.to(e), x, d)}}), j), KV.entry(KV.Val, T.mv.put(s, l, db), j), KV.entry(KV.Val, db, j),
+        Laws.entry_keep_other(KV.Val, T.mv.put(s, l, db), t, j, KV.VColl{KV.CList{KV.deq.push(R.ends.to(e), x, d)}}, nt),
+        mv_put_frame(s, l, db, j, ns))
+    case KV.Pop{+x, +l} None{}:
+      Equal.trans(Maybe<&2, KV.Item<KV.Val>>, KV.entry(KV.Val, KV.setx(KV.Val, T.mv.put(s, l, db), t, KV.VColl{KV.CList{KV.deq.push(R.ends.to(e), x, KV.deq.empty())}}, 0n), j), KV.entry(KV.Val, T.mv.put(s, l, db), j), KV.entry(KV.Val, db, j),
+        Laws.entry_setx_other(KV.Val, T.mv.put(s, l, db), t, j, KV.VColl{KV.CList{KV.deq.push(R.ends.to(e), x, KV.deq.empty())}}, 0n, nt),
+        mv_put_frame(s, l, db, j, ns))
+    case KV.PopNone{} _:
+      {==}
+
+def mv_do_frame(m: R.Mv, +e: R.LEnds, +s: String, +t: String, +db: KV.Trie<KV.Val>, +j: String, ns: {j != s : String}, nt: {j != t : String}) -> {KV.entry(KV.Val, T.db_of(T.mv.do(m, e, s, t, db)), j) == KV.entry(KV.Val, db, j) : Maybe<&2, KV.Item<KV.Val>>}:
+  match m:
+    case R.MvNone{}:
+      {==}
+    case R.MvWrong{}:
+      {==}
+    case R.MvSelf{+l, se}:
+      mv_self_frame(KV.deq.pop(R.ends.from(e), l), e, s, db, j, ns)
+    case R.MvOnto{+l, se, +dl}:
+      mv_go_frame(KV.deq.pop(R.ends.from(e), l), e, s, t, Some{dl}, db, j, ns, nt)
+    case R.MvNew{+l, se}:
+      mv_go_frame(KV.deq.pop(R.ends.from(e), l), e, s, t, None{}, db, j, ns, nt)
+
+def lmove_frame(+s: String, +t: String, +e: R.LEnds, +db: KV.Trie<KV.Val>, +j: String, +now: Nat) -> {Laws.any_key(j, [s, t]) == False{} : Bool} -> {KV.entry(KV.Val, T.db_of(T.lmove(db, s, t, e, now)), j) == KV.entry(KV.Val, db, j) : Maybe<&2, KV.Item<KV.Val>>}:
+  +ee => mv_do_frame(T.mv.find(db, s, t, e, now), e, s, t, db, j,
+    Laws.key_eq_false(j, s, or_false_l(KV.str_eq(j, s), Laws.any_key(j, [t]))(ee)),
+    Laws.key_eq_false(j, t, or_false_l(KV.str_eq(j, t), Laws.any_key(j, Nil{}))(or_false_r(KV.str_eq(j, s), Laws.any_key(j, [t]))(ee))))
+
+# LMPOP pops from one of its keys: the key it picks is one of them
+def NotAt(j: String, m: Maybe<&2, String>) -> Data:
+  match m:
+    case Some{k}:
+      {KV.str_eq(j, k) == False{} : Bool}
+    case None{}:
+      Unit
+
+def first_not(ks: List<&2, String>, h: Bool, +db: KV.Trie<KV.Val>, +now: Nat, +j: String) -> {Laws.any_key(j, ks) == False{} : Bool} -> NotAt(j, T.lmpop.first(ks, h, db, now)):
+  match ks h:
+    case Con{+k, +rest} True{}:
+      e => or_false_l(KV.str_eq(j, k), Laws.any_key(j, rest))(e)
+    case Con{+k, +rest} False{}:
+      e => first_not(rest, T.lmpop.head(rest, db, now), db, now, j)(or_false_r(KV.str_eq(j, k), Laws.any_key(j, rest))(e))
+    case Nil{} _:
+      e => Unit{}
+
+def lmpop_out_db(+k: String, r: R.Reply & KV.Trie<KV.Val>) -> {T.db_of(T.lmpop.out(k, r)) == T.db_of(r) : KV.Trie<KV.Val>}:
+  (x, d) = r
+  {==}
+
+def lmpop_out_rep(+k: String, r: R.Reply & KV.Trie<KV.Val>) -> {T.reply_of(T.lmpop.out(k, r)) == R.lmpop.reply(k, T.reply_of(r)) : R.Reply}:
+  (x, d) = r
+  {==}
+
+def lmpop_at_frame(m: Maybe<&2, String>, +left: Bool, +c: String, +db: KV.Trie<KV.Val>, +j: String, +now: Nat) -> NotAt(j, m) -> {KV.entry(KV.Val, T.db_of(T.lmpop.at(m, left, c, db, now)), j) == KV.entry(KV.Val, db, j) : Maybe<&2, KV.Item<KV.Val>>}:
+  match m:
+    case Some{+k}:
+      ne => Equal.trans(Maybe<&2, KV.Item<KV.Val>>, KV.entry(KV.Val, T.db_of(T.lmpop.out(k, T.upd.run(db, k, R.UList{R.LWPopN{left, c}}, now))), j), KV.entry(KV.Val, T.db_of(T.upd.run(db, k, R.UList{R.LWPopN{left, c}}, now)), j), KV.entry(KV.Val, db, j),
+              Equal.cong(KV.Trie<KV.Val>, Maybe<&2, KV.Item<KV.Val>>, z => KV.entry(KV.Val, z, j), T.db_of(T.lmpop.out(k, T.upd.run(db, k, R.UList{R.LWPopN{left, c}}, now))), T.db_of(T.upd.run(db, k, R.UList{R.LWPopN{left, c}}, now)), lmpop_out_db(k, T.upd.run(db, k, R.UList{R.LWPopN{left, c}}, now))),
+              upd_frame(db, k, j, R.upd.v(R.UList{R.LWPopN{left, c}}, now, R.ent.live(now, KV.entry.at(KV.Val, db, k, KV.hash(k)))), Laws.key_eq_false(j, k, ne)))
+    case None{}:
+      u => {==}
+
+def lmpop_frame(+ks: List<&2, String>, +left: Bool, +c: String, +db: KV.Trie<KV.Val>, +j: String, +now: Nat) -> {Laws.any_key(j, ks) == False{} : Bool} -> {KV.entry(KV.Val, T.db_of(T.lmpop(db, ks, left, c, now)), j) == KV.entry(KV.Val, db, j) : Maybe<&2, KV.Item<KV.Val>>}:
+  e => lmpop_at_frame(T.lmpop.first(ks, T.lmpop.head(ks, db, now), db, now), left, c, db, j, now)(first_not(ks, T.lmpop.head(ks, db, now), db, now, j)(e))
 
 # BITOP's write, for a given value: the destination set or deleted, every
 # other key as it was
@@ -2912,6 +3007,10 @@ def frame_go(c: R.Cmd, +db: KV.Trie<KV.Val>, +j: String, +now: Nat) -> {Laws.wri
       e => ren_frame(T.ren.find(db, s, d, nx, now), nx, s, d, db, j)(e)
     case R.BitOp{+op, +d, +srcs}:
       e => bitop_go_frame(R.bitop.wrong(srcs, now, db), op, srcs, d, db, j, now)(e)
+    case R.LMove{+s, +t, +e}:
+      ee => lmove_frame(s, t, e, db, j, now)(ee)
+    case R.LMPop{+ks, +left, +c}:
+      ee => lmpop_frame(ks, left, c, db, j, now)(ee)
     case R.Own{o}:
       e => {==}
     case R.Bad{r}:
@@ -3138,6 +3237,10 @@ def upd_ch_rep(ch: R.Change, -r: R.Reply, -t: KV.Trie<KV.Val>, -u: KV.Trie<KV.Va
       {==}
     case R.CHashNew{ps, hv}:
       {==}
+    case R.CList{op, hv}:
+      {==}
+    case R.CListNew{lf, ps, hv}:
+      {==}
 
 def upd_rep(o: R.Out, -t: KV.Trie<KV.Val>, -u: KV.Trie<KV.Val>, -k: String, -h: U32) -> {T.reply_of(T.upd.put(t, k, h, o)) == T.reply_of(T.upd.put(u, k, h, o)) : R.Reply}:
   match o:
@@ -3216,6 +3319,10 @@ def loc_reply(c: R.Cmd, +t: KV.Trie<KV.Val>, +u: KV.Trie<KV.Val>, +now: Nat) -> 
       kd => e => Empty.absurd({T.reply_of(T.exec(R.Rename{s, d, nx}, t, now)) == T.reply_of(T.exec(R.Rename{s, d, nx}, u, now)) : R.Reply}, false_true(kd))
     case R.BitOp{op, d, srcs}:
       kd => e => Empty.absurd({T.reply_of(T.exec(R.BitOp{op, d, srcs}, t, now)) == T.reply_of(T.exec(R.BitOp{op, d, srcs}, u, now)) : R.Reply}, false_true(kd))
+    case R.LMove{op, d, srcs}:
+      kd => e => Empty.absurd({T.reply_of(T.exec(R.LMove{op, d, srcs}, t, now)) == T.reply_of(T.exec(R.LMove{op, d, srcs}, u, now)) : R.Reply}, false_true(kd))
+    case R.LMPop{op, d, srcs}:
+      kd => e => Empty.absurd({T.reply_of(T.exec(R.LMPop{op, d, srcs}, t, now)) == T.reply_of(T.exec(R.LMPop{op, d, srcs}, u, now)) : R.Reply}, false_true(kd))
     case R.Own{o}:
       kd => e => Empty.absurd({T.reply_of(T.exec(R.Own{o}, t, now)) == T.reply_of(T.exec(R.Own{o}, u, now)) : R.Reply}, false_true(kd))
     case R.Bad{r}:
@@ -3283,6 +3390,10 @@ def upd_ch_key(ch: R.Change, -r: R.Reply, +t: KV.Trie<KV.Val>, +u: KV.Trie<KV.Va
       e => keep_key(t, u, k, KV.VColl{KV.CHash{hv}})(e)
     case R.CHashNew{ps, +hv}:
       e => Equal.trans(Maybe<&2, KV.Item<KV.Val>>, KV.entry(KV.Val, KV.setx(KV.Val, t, k, KV.VColl{KV.CHash{hv}}, 0n), k), Some{KV.Item{KV.VColl{KV.CHash{hv}}, 0n}}, KV.entry(KV.Val, KV.setx(KV.Val, u, k, KV.VColl{KV.CHash{hv}}, 0n), k), Laws.entry_setx_same(KV.Val, t, k, KV.VColl{KV.CHash{hv}}, 0n), Equal.sym(Maybe<&2, KV.Item<KV.Val>>, KV.entry(KV.Val, KV.setx(KV.Val, u, k, KV.VColl{KV.CHash{hv}}, 0n), k), Some{KV.Item{KV.VColl{KV.CHash{hv}}, 0n}}, Laws.entry_setx_same(KV.Val, u, k, KV.VColl{KV.CHash{hv}}, 0n)))
+    case R.CList{op, +hv}:
+      e => keep_key(t, u, k, KV.VColl{KV.CList{hv}})(e)
+    case R.CListNew{lf, ps, +hv}:
+      e => Equal.trans(Maybe<&2, KV.Item<KV.Val>>, KV.entry(KV.Val, KV.setx(KV.Val, t, k, KV.VColl{KV.CList{hv}}, 0n), k), Some{KV.Item{KV.VColl{KV.CList{hv}}, 0n}}, KV.entry(KV.Val, KV.setx(KV.Val, u, k, KV.VColl{KV.CList{hv}}, 0n), k), Laws.entry_setx_same(KV.Val, t, k, KV.VColl{KV.CList{hv}}, 0n), Equal.sym(Maybe<&2, KV.Item<KV.Val>>, KV.entry(KV.Val, KV.setx(KV.Val, u, k, KV.VColl{KV.CList{hv}}, 0n), k), Some{KV.Item{KV.VColl{KV.CList{hv}}, 0n}}, Laws.entry_setx_same(KV.Val, u, k, KV.VColl{KV.CList{hv}}, 0n)))
 
 def upd_key(o: R.Out, +t: KV.Trie<KV.Val>, +u: KV.Trie<KV.Val>, +k: String) -> {KV.entry(KV.Val, t, k) == KV.entry(KV.Val, u, k) : Maybe<&2, KV.Item<KV.Val>>} -> {KV.entry(KV.Val, T.db_of(T.upd.put(t, k, KV.hash(k), o)), k) == KV.entry(KV.Val, T.db_of(T.upd.put(u, k, KV.hash(k), o)), k) : Maybe<&2, KV.Item<KV.Val>>}:
   match o:
@@ -3347,6 +3458,10 @@ def loc_key(c: R.Cmd, +t: KV.Trie<KV.Val>, +u: KV.Trie<KV.Val>, +now: Nat) -> {k
       kd => e => Empty.absurd({KV.entry(KV.Val, T.db_of(T.exec(R.Rename{s, d, nx}, t, now)), "") == KV.entry(KV.Val, T.db_of(T.exec(R.Rename{s, d, nx}, u, now)), "") : Maybe<&2, KV.Item<KV.Val>>}, false_true(kd))
     case R.BitOp{op, d, srcs}:
       kd => e => Empty.absurd({KV.entry(KV.Val, T.db_of(T.exec(R.BitOp{op, d, srcs}, t, now)), "") == KV.entry(KV.Val, T.db_of(T.exec(R.BitOp{op, d, srcs}, u, now)), "") : Maybe<&2, KV.Item<KV.Val>>}, false_true(kd))
+    case R.LMove{op, d, srcs}:
+      kd => e => Empty.absurd({KV.entry(KV.Val, T.db_of(T.exec(R.LMove{op, d, srcs}, t, now)), "") == KV.entry(KV.Val, T.db_of(T.exec(R.LMove{op, d, srcs}, u, now)), "") : Maybe<&2, KV.Item<KV.Val>>}, false_true(kd))
+    case R.LMPop{op, d, srcs}:
+      kd => e => Empty.absurd({KV.entry(KV.Val, T.db_of(T.exec(R.LMPop{op, d, srcs}, t, now)), "") == KV.entry(KV.Val, T.db_of(T.exec(R.LMPop{op, d, srcs}, u, now)), "") : Maybe<&2, KV.Item<KV.Val>>}, false_true(kd))
     case R.Own{o}:
       kd => e => Empty.absurd({KV.entry(KV.Val, T.db_of(T.exec(R.Own{o}, t, now)), "") == KV.entry(KV.Val, T.db_of(T.exec(R.Own{o}, u, now)), "") : Maybe<&2, KV.Item<KV.Val>>}, false_true(kd))
     case R.Bad{r}:
@@ -3400,6 +3515,10 @@ def writes_one(c: R.Cmd, +j: String) -> {keyed(c) == True{} : Bool} -> {False{} 
       kd => nb => Empty.absurd({Laws.writes(R.Rename{s, d, nx}, j) == False{} : Bool}, false_true(kd))
     case R.BitOp{op, d, srcs}:
       kd => nb => Empty.absurd({Laws.writes(R.BitOp{op, d, srcs}, j) == False{} : Bool}, false_true(kd))
+    case R.LMove{op, d, srcs}:
+      kd => nb => Empty.absurd({Laws.writes(R.LMove{op, d, srcs}, j) == False{} : Bool}, false_true(kd))
+    case R.LMPop{op, d, srcs}:
+      kd => nb => Empty.absurd({Laws.writes(R.LMPop{op, d, srcs}, j) == False{} : Bool}, false_true(kd))
     case R.Own{o}:
       kd => nb => Empty.absurd({Laws.writes(R.Own{o}, j) == False{} : Bool}, false_true(kd))
     case R.Bad{r}:
@@ -3639,6 +3758,107 @@ def bitop_go_rep(w: Bool, +op: R.BitK, +srcs: List<&2, String>, +d: String, +t: 
       ag => %bitop_val_eq(op, srcs, t, u, now)(ag) : {T.reply_of(T.bitop(R.bitop.val(op, srcs, now, t), d, t)) == T.reply_of(T.bitop(_, d, u)) : R.Reply}
             {==}
 
+# a keep of one key: a key with one entry in two tries has one entry
+# after it
+def keep_same(+t: KV.Trie<KV.Val>, +u: KV.Trie<KV.Val>, +k: String, +v: KV.Val, +j: String, +ejk: {j == k : String}, e: {KV.entry(KV.Val, t, j) == KV.entry(KV.Val, u, j) : Maybe<&2, KV.Item<KV.Val>>}) -> {KV.entry(KV.Val, KV.keep(KV.Val, t, k, v), j) == KV.entry(KV.Val, KV.keep(KV.Val, u, k, v), j) : Maybe<&2, KV.Item<KV.Val>>}:
+  %Equal.sym(String, j, k, ejk) : {KV.entry(KV.Val, KV.keep(KV.Val, t, k, v), _) == KV.entry(KV.Val, KV.keep(KV.Val, u, k, v), _) : Maybe<&2, KV.Item<KV.Val>>}
+  keep_key(t, u, k, v)(entry_at(t, u, j, k, ejk, e))
+
+def keep_one_point(+t: KV.Trie<KV.Val>, +u: KV.Trie<KV.Val>, +k: String, +v: KV.Val, +j: String, c: Bool) -> {c == KV.str_eq(j, k) : Bool} -> Reflect(String, j, k, c) -> {KV.entry(KV.Val, t, j) == KV.entry(KV.Val, u, j) : Maybe<&2, KV.Item<KV.Val>>} -> {KV.entry(KV.Val, KV.keep(KV.Val, t, k, v), j) == KV.entry(KV.Val, KV.keep(KV.Val, u, k, v), j) : Maybe<&2, KV.Item<KV.Val>>}:
+  match c:
+    case True{}:
+      eb => ejk => e => keep_same(t, u, k, v, j, ejk, e)
+    case False{}:
+      +eb => ne => e => Equal.trans(Maybe<&2, KV.Item<KV.Val>>, KV.entry(KV.Val, KV.keep(KV.Val, t, k, v), j), KV.entry(KV.Val, t, j), KV.entry(KV.Val, KV.keep(KV.Val, u, k, v), j), Laws.entry_keep_other(KV.Val, t, k, j, v, Laws.key_eq_false(j, k, Equal.sym(Bool, False{}, KV.str_eq(j, k), eb))),
+                          Equal.trans(Maybe<&2, KV.Item<KV.Val>>, KV.entry(KV.Val, t, j), KV.entry(KV.Val, u, j), KV.entry(KV.Val, KV.keep(KV.Val, u, k, v), j), e, Equal.sym(Maybe<&2, KV.Item<KV.Val>>, KV.entry(KV.Val, KV.keep(KV.Val, u, k, v), j), KV.entry(KV.Val, u, j), Laws.entry_keep_other(KV.Val, u, k, j, v, Laws.key_eq_false(j, k, Equal.sym(Bool, False{}, KV.str_eq(j, k), eb))))))
+
+# LMOVE's verdict, in two tries that agree on its keys
+def mv_of_eq(-ms1: Maybe<&2, KV.Item<KV.Val>>, -ms2: Maybe<&2, KV.Item<KV.Val>>, -md1: Maybe<&2, KV.Item<KV.Val>>, -md2: Maybe<&2, KV.Item<KV.Val>>, +s: String, +d: String, +e: R.LEnds, +now: Nat, es: {ms1 == ms2 : Maybe<&2, KV.Item<KV.Val>>}, ed: {md1 == md2 : Maybe<&2, KV.Item<KV.Val>>}) -> {R.mv.of(R.ent.live(now, ms1), KV.str_eq(s, d), R.mv.dst.ent(R.ends.fresh(e), R.ent.live(now, md1))) == R.mv.of(R.ent.live(now, ms2), KV.str_eq(s, d), R.mv.dst.ent(R.ends.fresh(e), R.ent.live(now, md2))) : R.Mv}:
+  %es : {R.mv.of(R.ent.live(now, ms1), KV.str_eq(s, d), R.mv.dst.ent(R.ends.fresh(e), R.ent.live(now, md1))) == R.mv.of(R.ent.live(now, _), KV.str_eq(s, d), R.mv.dst.ent(R.ends.fresh(e), R.ent.live(now, md2))) : R.Mv}
+  %ed : {R.mv.of(R.ent.live(now, ms1), KV.str_eq(s, d), R.mv.dst.ent(R.ends.fresh(e), R.ent.live(now, md1))) == R.mv.of(R.ent.live(now, ms1), KV.str_eq(s, d), R.mv.dst.ent(R.ends.fresh(e), R.ent.live(now, _))) : R.Mv}
+  {==}
+
+def mv_find_eq(+t: KV.Trie<KV.Val>, +u: KV.Trie<KV.Val>, +s: String, +d: String, +e: R.LEnds, +now: Nat) -> Agree(t, u, [s, d]) -> {T.mv.find(t, s, d, e, now) == T.mv.find(u, s, d, e, now) : R.Mv}:
+  +ag => mv_of_eq(KV.entry.at(KV.Val, t, s, KV.hash(s)), KV.entry.at(KV.Val, u, s, KV.hash(s)), KV.entry.at(KV.Val, t, d, KV.hash(d)), KV.entry.at(KV.Val, u, d, KV.hash(d)), s, d, e, now,
+           at_agree(t, u, s, ag_head(t, u, s, [d], ag)),
+           at_agree(t, u, d, ag_head(t, u, d, Nil{}, ag_tail(t, u, s, [d], ag))))
+
+# LMOVE's writes, for a given verdict: a key with one entry in two tries
+# has one entry after them
+def mv_src_point(b: Bool, +s: String, +l: KV.Deq, +t: KV.Trie<KV.Val>, +u: KV.Trie<KV.Val>, +j: String) -> {KV.entry(KV.Val, t, j) == KV.entry(KV.Val, u, j) : Maybe<&2, KV.Item<KV.Val>>} -> {KV.entry(KV.Val, T.mv.src(b, s, l, t), j) == KV.entry(KV.Val, T.mv.src(b, s, l, u), j) : Maybe<&2, KV.Item<KV.Val>>}:
+  match b:
+    case True{}:
+      del_one_point(t, u, s, j, KV.str_eq(j, s))({==})(str_refl(j, s))
+    case False{}:
+      keep_one_point(t, u, s, KV.VColl{KV.CList{l}}, j, KV.str_eq(j, s))({==})(str_refl(j, s))
+
+def mv_put_point(+s: String, +l: KV.Deq, +t: KV.Trie<KV.Val>, +u: KV.Trie<KV.Val>, +j: String) -> {KV.entry(KV.Val, t, j) == KV.entry(KV.Val, u, j) : Maybe<&2, KV.Item<KV.Val>>} -> {KV.entry(KV.Val, T.mv.put(s, l, t), j) == KV.entry(KV.Val, T.mv.put(s, l, u), j) : Maybe<&2, KV.Item<KV.Val>>}:
+  mv_src_point(Nat.is_eq(KV.deq.len(l), 0n), s, l, t, u, j)
+
+def mv_self_point(p: KV.Pop, +e: R.LEnds, +s: String, +t: KV.Trie<KV.Val>, +u: KV.Trie<KV.Val>, +j: String) -> {KV.entry(KV.Val, t, j) == KV.entry(KV.Val, u, j) : Maybe<&2, KV.Item<KV.Val>>} -> {KV.entry(KV.Val, T.db_of(T.mv.self(p, e, s, t)), j) == KV.entry(KV.Val, T.db_of(T.mv.self(p, e, s, u)), j) : Maybe<&2, KV.Item<KV.Val>>}:
+  match p:
+    case KV.Pop{+x, +l}:
+      keep_one_point(t, u, s, KV.VColl{KV.CList{KV.deq.push(R.ends.to(e), x, l)}}, j, KV.str_eq(j, s))({==})(str_refl(j, s))
+    case KV.PopNone{}:
+      h => h
+
+def mv_go_point(p: KV.Pop, +e: R.LEnds, +s: String, +d: String, dl: Maybe<&2, KV.Deq>, +t: KV.Trie<KV.Val>, +u: KV.Trie<KV.Val>, +j: String) -> {KV.entry(KV.Val, t, j) == KV.entry(KV.Val, u, j) : Maybe<&2, KV.Item<KV.Val>>} -> {KV.entry(KV.Val, T.db_of(T.mv.go(p, e, s, d, dl, t)), j) == KV.entry(KV.Val, T.db_of(T.mv.go(p, e, s, d, dl, u)), j) : Maybe<&2, KV.Item<KV.Val>>}:
+  match p dl:
+    case KV.Pop{+x, +l} Some{+q}:
+      h => keep_one_point(T.mv.put(s, l, t), T.mv.put(s, l, u), d, KV.VColl{KV.CList{KV.deq.push(R.ends.to(e), x, q)}}, j, KV.str_eq(j, d))({==})(str_refl(j, d))(mv_put_point(s, l, t, u, j)(h))
+    case KV.Pop{+x, +l} None{}:
+      h => setx_one_point(T.mv.put(s, l, t), T.mv.put(s, l, u), d, KV.VColl{KV.CList{KV.deq.push(R.ends.to(e), x, KV.deq.empty())}}, 0n, j, KV.str_eq(j, d))({==})(str_refl(j, d))(mv_put_point(s, l, t, u, j)(h))
+    case KV.PopNone{} _:
+      h => h
+
+def mv_do_point(m: R.Mv, +e: R.LEnds, +s: String, +d: String, +t: KV.Trie<KV.Val>, +u: KV.Trie<KV.Val>, +j: String) -> {KV.entry(KV.Val, t, j) == KV.entry(KV.Val, u, j) : Maybe<&2, KV.Item<KV.Val>>} -> {KV.entry(KV.Val, T.db_of(T.mv.do(m, e, s, d, t)), j) == KV.entry(KV.Val, T.db_of(T.mv.do(m, e, s, d, u)), j) : Maybe<&2, KV.Item<KV.Val>>}:
+  match m:
+    case R.MvNone{}:
+      h => h
+    case R.MvWrong{}:
+      h => h
+    case R.MvSelf{+l, se}:
+      mv_self_point(KV.deq.pop(R.ends.from(e), l), e, s, t, u, j)
+    case R.MvOnto{+l, se, +q}:
+      mv_go_point(KV.deq.pop(R.ends.from(e), l), e, s, d, Some{q}, t, u, j)
+    case R.MvNew{+l, se}:
+      mv_go_point(KV.deq.pop(R.ends.from(e), l), e, s, d, None{}, t, u, j)
+
+# LMPOP's pick, in two tries that agree on its keys
+def lmpop_head_eq(+k: String, -rest: List<&2, String>, +t: KV.Trie<KV.Val>, +u: KV.Trie<KV.Val>, +now: Nat, h: {KV.entry(KV.Val, t, k) == KV.entry(KV.Val, u, k) : Maybe<&2, KV.Item<KV.Val>>}) -> {T.lmpop.head(Con{k, rest}, t, now) == T.lmpop.head(Con{k, rest}, u, now) : Bool}:
+  %at_agree(t, u, k, h) : {Maybe.is_some(&2, KV.Item<KV.Val>, R.ent.live(now, KV.entry.at(KV.Val, t, k, KV.hash(k)))) == Maybe.is_some(&2, KV.Item<KV.Val>, R.ent.live(now, _)) : Bool}
+  {==}
+
+def lmpop_first_at(+k: String, +rest: List<&2, String>, h: Bool, +t: KV.Trie<KV.Val>, +u: KV.Trie<KV.Val>, +now: Nat) -> {T.lmpop.first(rest, T.lmpop.head(rest, t, now), t, now) == T.lmpop.first(rest, T.lmpop.head(rest, u, now), u, now) : Maybe<&2, String>} -> {T.lmpop.first(Con{k, rest}, h, t, now) == T.lmpop.first(Con{k, rest}, h, u, now) : Maybe<&2, String>}:
+  match h:
+    case True{}:
+      ih => {==}
+    case False{}:
+      ih => ih
+
+def lmpop_first_eq(ks: List<&2, String>, +t: KV.Trie<KV.Val>, +u: KV.Trie<KV.Val>, +now: Nat) -> Agree(t, u, ks) -> {T.lmpop.first(ks, T.lmpop.head(ks, t, now), t, now) == T.lmpop.first(ks, T.lmpop.head(ks, u, now), u, now) : Maybe<&2, String>}:
+  match ks:
+    case Nil{}:
+      ag => {==}
+    case Con{+k, +rest}:
+      +ag => %lmpop_head_eq(k, rest, t, u, now, ag_head(t, u, k, rest, ag)) : {T.lmpop.first(Con{k, rest}, T.lmpop.head(Con{k, rest}, t, now), t, now) == T.lmpop.first(Con{k, rest}, _, u, now) : Maybe<&2, String>}
+             lmpop_first_at(k, rest, T.lmpop.head(Con{k, rest}, t, now), t, u, now)(lmpop_first_eq(rest, t, u, now)(ag_tail(t, u, k, rest, ag)))
+
+# LMPOP's write, for a given pick: the pop of the key picked, as Upd runs
+# it
+def out_db_r(+k: String, r: R.Reply & KV.Trie<KV.Val>) -> {T.db_of(r) == T.db_of(T.lmpop.out(k, r)) : KV.Trie<KV.Val>}:
+  (x, d) = r
+  {==}
+
+def lmpop_at_point(m: Maybe<&2, String>, +left: Bool, +n: String, +t: KV.Trie<KV.Val>, +u: KV.Trie<KV.Val>, +j: String, +now: Nat) -> {KV.entry(KV.Val, t, j) == KV.entry(KV.Val, u, j) : Maybe<&2, KV.Item<KV.Val>>} -> {KV.entry(KV.Val, T.db_of(T.lmpop.at(m, left, n, t, now)), j) == KV.entry(KV.Val, T.db_of(T.lmpop.at(m, left, n, u, now)), j) : Maybe<&2, KV.Item<KV.Val>>}:
+  match m:
+    case Some{+k}:
+      e => %out_db_r(k, T.upd.run(t, k, R.UList{R.LWPopN{left, n}}, now)) : {KV.entry(KV.Val, _, j) == KV.entry(KV.Val, T.db_of(T.lmpop.out(k, T.upd.run(u, k, R.UList{R.LWPopN{left, n}}, now))), j) : Maybe<&2, KV.Item<KV.Val>>}
+           %out_db_r(k, T.upd.run(u, k, R.UList{R.LWPopN{left, n}}, now)) : {KV.entry(KV.Val, T.db_of(T.upd.run(t, k, R.UList{R.LWPopN{left, n}}, now)), j) == KV.entry(KV.Val, _, j) : Maybe<&2, KV.Item<KV.Val>>}
+           point_key(R.Upd{k, R.UList{R.LWPopN{left, n}}}, t, u, j, now, {==}, KV.str_eq(j, k))({==})(str_refl(j, k))(e)
+    case None{}:
+      e => e
+
 # any command, run on two tries that agree on the keys its writes depend
 # on: a key j's entry after it depends only on j's entry before it
 def point_cmd(c: R.Cmd, +t: KV.Trie<KV.Val>, +u: KV.Trie<KV.Val>, +j: String, +now: Nat) -> Agree(t, u, Laws.deps(c)) -> {KV.entry(KV.Val, t, j) == KV.entry(KV.Val, u, j) : Maybe<&2, KV.Item<KV.Val>>} -> {KV.entry(KV.Val, T.db_of(T.exec(c, t, now)), j) == KV.entry(KV.Val, T.db_of(T.exec(c, u, now)), j) : Maybe<&2, KV.Item<KV.Val>>}:
@@ -3684,6 +3904,12 @@ def point_cmd(c: R.Cmd, +t: KV.Trie<KV.Val>, +u: KV.Trie<KV.Val>, +j: String, +n
     case R.BitOp{+op, +d, +srcs}:
       +ag => e => %bitop_wrong_eq(srcs, t, u, now)(ag) : {KV.entry(KV.Val, T.db_of(T.bitop.go(R.bitop.wrong(srcs, now, t), op, srcs, d, t, now)), j) == KV.entry(KV.Val, T.db_of(T.bitop.go(_, op, srcs, d, u, now)), j) : Maybe<&2, KV.Item<KV.Val>>}
                   bitop_go_point(R.bitop.wrong(srcs, now, t), op, srcs, d, t, u, j, now)(ag)(e)
+    case R.LMove{+s, +d, +w}:
+      ag => e => %mv_find_eq(t, u, s, d, w, now)(ag) : {KV.entry(KV.Val, T.db_of(T.mv.do(T.mv.find(t, s, d, w, now), w, s, d, t)), j) == KV.entry(KV.Val, T.db_of(T.mv.do(_, w, s, d, u)), j) : Maybe<&2, KV.Item<KV.Val>>}
+                 mv_do_point(T.mv.find(t, s, d, w, now), w, s, d, t, u, j)(e)
+    case R.LMPop{+ks, +left, +n}:
+      ag => e => %lmpop_first_eq(ks, t, u, now)(ag) : {KV.entry(KV.Val, T.db_of(T.lmpop.at(T.lmpop.first(ks, T.lmpop.head(ks, t, now), t, now), left, n, t, now)), j) == KV.entry(KV.Val, T.db_of(T.lmpop.at(_, left, n, u, now)), j) : Maybe<&2, KV.Item<KV.Val>>}
+                 lmpop_at_point(T.lmpop.first(ks, T.lmpop.head(ks, t, now), t, now), left, n, t, u, j, now)(e)
     case R.Own{o}:
       ag => e => e
     case R.Bad{r}:
@@ -3802,6 +4028,68 @@ def del_reply_after(+ks: List<&2, String>, +c2: R.Cmd, +db: KV.Trie<KV.Val>, +no
        %exec_del_r(ks, db, now) : {R.r_int(del_count(ks, now, T.db_of(T.exec(c2, db, now)))) == _ : R.Reply}
        Equal.cong(Nat, R.Reply, n => R.r_int(n), del_count(ks, now, T.db_of(T.exec(c2, db, now))), del_count(ks, now, db), dcount(c2, db, ks, Nil{}, now)(e))
 
+# LMOVE's reply, for a given verdict, is the same in any trie
+def mv_self_rep(p: KV.Pop, +e: R.LEnds, +s: String, -t: KV.Trie<KV.Val>, -u: KV.Trie<KV.Val>) -> {T.reply_of(T.mv.self(p, e, s, t)) == T.reply_of(T.mv.self(p, e, s, u)) : R.Reply}:
+  match p:
+    case KV.Pop{x, l}:
+      {==}
+    case KV.PopNone{}:
+      {==}
+
+def mv_go_rep(p: KV.Pop, +e: R.LEnds, +s: String, +d: String, dl: Maybe<&2, KV.Deq>, -t: KV.Trie<KV.Val>, -u: KV.Trie<KV.Val>) -> {T.reply_of(T.mv.go(p, e, s, d, dl, t)) == T.reply_of(T.mv.go(p, e, s, d, dl, u)) : R.Reply}:
+  match p dl:
+    case KV.Pop{x, l} Some{q}:
+      {==}
+    case KV.Pop{x, l} None{}:
+      {==}
+    case KV.PopNone{} _:
+      {==}
+
+def mv_do_rep(m: R.Mv, +e: R.LEnds, +s: String, +d: String, -t: KV.Trie<KV.Val>, -u: KV.Trie<KV.Val>) -> {T.reply_of(T.mv.do(m, e, s, d, t)) == T.reply_of(T.mv.do(m, e, s, d, u)) : R.Reply}:
+  match m:
+    case R.MvNone{}:
+      {==}
+    case R.MvWrong{}:
+      {==}
+    case R.MvSelf{+l, se}:
+      mv_self_rep(KV.deq.pop(R.ends.from(e), l), e, s, t, u)
+    case R.MvOnto{+l, se, +q}:
+      mv_go_rep(KV.deq.pop(R.ends.from(e), l), e, s, d, Some{q}, t, u)
+    case R.MvNew{+l, se}:
+      mv_go_rep(KV.deq.pop(R.ends.from(e), l), e, s, d, None{}, t, u)
+
+# LMPOP's pick is one of its keys: two tries that agree on its keys agree
+# on the key it picks
+def AgreeAt(t: KV.Trie<KV.Val>, u: KV.Trie<KV.Val>, m: Maybe<&2, String>) -> Data:
+  match m:
+    case Some{k}:
+      {KV.entry(KV.Val, t, k) == KV.entry(KV.Val, u, k) : Maybe<&2, KV.Item<KV.Val>>}
+    case None{}:
+      Unit
+
+def first_agree(ks: List<&2, String>, h: Bool, +x: KV.Trie<KV.Val>, +t: KV.Trie<KV.Val>, +u: KV.Trie<KV.Val>, +now: Nat) -> Agree(t, u, ks) -> AgreeAt(t, u, T.lmpop.first(ks, h, x, now)):
+  match ks h:
+    case Con{+k, +rest} True{}:
+      ag => ag_head(t, u, k, rest, ag)
+    case Con{+k, +rest} False{}:
+      ag => first_agree(rest, T.lmpop.head(rest, x, now), x, t, u, now)(ag_tail(t, u, k, rest, ag))
+    case Nil{} _:
+      ag => Unit{}
+
+def out_rep_r(+k: String, r: R.Reply & KV.Trie<KV.Val>) -> {R.lmpop.reply(k, T.reply_of(r)) == T.reply_of(T.lmpop.out(k, r)) : R.Reply}:
+  (x, d) = r
+  {==}
+
+# LMPOP's reply, for a given pick, in two tries that agree on that key
+def lmpop_at_rep(m: Maybe<&2, String>, +left: Bool, +n: String, +t: KV.Trie<KV.Val>, +u: KV.Trie<KV.Val>, +now: Nat) -> AgreeAt(t, u, m) -> {T.reply_of(T.lmpop.at(m, left, n, t, now)) == T.reply_of(T.lmpop.at(m, left, n, u, now)) : R.Reply}:
+  match m:
+    case Some{+k}:
+      h => %out_rep_r(k, T.upd.run(t, k, R.UList{R.LWPopN{left, n}}, now)) : {_ == T.reply_of(T.lmpop.out(k, T.upd.run(u, k, R.UList{R.LWPopN{left, n}}, now))) : R.Reply}
+           %out_rep_r(k, T.upd.run(u, k, R.UList{R.LWPopN{left, n}}, now)) : {R.lmpop.reply(k, T.reply_of(T.upd.run(t, k, R.UList{R.LWPopN{left, n}}, now))) == _ : R.Reply}
+           Equal.cong(R.Reply, R.Reply, z => R.lmpop.reply(k, z), T.reply_of(T.upd.run(t, k, R.UList{R.LWPopN{left, n}}, now)), T.reply_of(T.upd.run(u, k, R.UList{R.LWPopN{left, n}}, now)), loc_reply(R.Upd{k, R.UList{R.LWPopN{left, n}}}, t, u, now)({==})(h))
+    case None{}:
+      h => {==}
+
 # a command answers the same after c2 when c2 writes nothing it reads
 def reply_after(c1: R.Cmd, +c2: R.Cmd, +db: KV.Trie<KV.Val>, +now: Nat) -> {Laws.disturbs(c2, c1) == False{} : Bool} -> {T.reply_of(T.exec(c1, T.db_of(T.exec(c2, db, now)), now)) == T.reply_of(T.exec(c1, db, now)) : R.Reply}:
   match c1:
@@ -3847,6 +4135,12 @@ def reply_after(c1: R.Cmd, +c2: R.Cmd, +db: KV.Trie<KV.Val>, +now: Nat) -> {Laws
     case R.BitOp{+op, +d, +srcs}:
       +e => %bitop_wrong_eq(srcs, T.db_of(T.exec(c2, db, now)), db, now)(frame_agree(c2, db, srcs, now)(e)) : {T.reply_of(T.bitop.go(R.bitop.wrong(srcs, now, T.db_of(T.exec(c2, db, now))), op, srcs, d, T.db_of(T.exec(c2, db, now)), now)) == T.reply_of(T.bitop.go(_, op, srcs, d, db, now)) : R.Reply}
             bitop_go_rep(R.bitop.wrong(srcs, now, T.db_of(T.exec(c2, db, now))), op, srcs, d, T.db_of(T.exec(c2, db, now)), db, now)(frame_agree(c2, db, srcs, now)(e))
+    case R.LMove{+s, +d, +w}:
+      e => %mv_find_eq(T.db_of(T.exec(c2, db, now)), db, s, d, w, now)(frame_agree(c2, db, [s, d], now)(e)) : {T.reply_of(T.mv.do(T.mv.find(T.db_of(T.exec(c2, db, now)), s, d, w, now), w, s, d, T.db_of(T.exec(c2, db, now)))) == T.reply_of(T.mv.do(_, w, s, d, db)) : R.Reply}
+           mv_do_rep(T.mv.find(T.db_of(T.exec(c2, db, now)), s, d, w, now), w, s, d, T.db_of(T.exec(c2, db, now)), db)
+    case R.LMPop{+ks, +left, +n}:
+      +e => %lmpop_first_eq(ks, T.db_of(T.exec(c2, db, now)), db, now)(frame_agree(c2, db, ks, now)(e)) : {T.reply_of(T.lmpop.at(T.lmpop.first(ks, T.lmpop.head(ks, T.db_of(T.exec(c2, db, now)), now), T.db_of(T.exec(c2, db, now)), now), left, n, T.db_of(T.exec(c2, db, now)), now)) == T.reply_of(T.lmpop.at(_, left, n, db, now)) : R.Reply}
+            lmpop_at_rep(T.lmpop.first(ks, T.lmpop.head(ks, T.db_of(T.exec(c2, db, now)), now), T.db_of(T.exec(c2, db, now)), now), left, n, T.db_of(T.exec(c2, db, now)), db, now)(first_agree(ks, T.lmpop.head(ks, T.db_of(T.exec(c2, db, now)), now), T.db_of(T.exec(c2, db, now)), T.db_of(T.exec(c2, db, now)), db, now)(frame_agree(c2, db, ks, now)(e)))
     case R.Own{o}:
       e => {==}
     case R.Bad{r}:
@@ -3923,6 +4217,10 @@ def read_writes(c: R.Cmd, +j: String) -> {Laws.is_read(c) == True{} : Bool} -> {
       e => Empty.absurd({Laws.writes(R.Rename{s, d, nx}, j) == False{} : Bool}, false_true(e))
     case R.BitOp{op, d, srcs}:
       e => Empty.absurd({Laws.writes(R.BitOp{op, d, srcs}, j) == False{} : Bool}, false_true(e))
+    case R.LMove{op, d, srcs}:
+      e => Empty.absurd({Laws.writes(R.LMove{op, d, srcs}, j) == False{} : Bool}, false_true(e))
+    case R.LMPop{op, d, srcs}:
+      e => Empty.absurd({Laws.writes(R.LMPop{op, d, srcs}, j) == False{} : Bool}, false_true(e))
     case R.Own{o}:
       e => {==}
     case R.Bad{r}:
@@ -3983,6 +4281,10 @@ def clash_w_at(c1: R.Cmd, +c2: R.Cmd, +j: String) -> {Laws.clash_w(c2, c1) == Fa
       any_clash(c2, j, [s, d])
     case R.BitOp{op, +d, srcs}:
       e => key_clash(c2, j, d, e, KV.str_eq(j, d))({==})(str_refl(j, d))
+    case R.LMove{+s, +d, w}:
+      any_clash(c2, j, [s, d])
+    case R.LMPop{+ks, left, n}:
+      any_clash(c2, j, ks)
     case R.Own{o}:
       e => {==}
     case R.Bad{r}:
@@ -4106,6 +4408,12 @@ def rep_tw(+c1: R.Cmd, +c2: R.Cmd, +db: KV.Trie<KV.Val>, +H: List<&2, R.Cmd>, +n
     case R.BitOp{+op, +d, +srcs}:
       kw => %bitop_wrong_eq(srcs, tw(H, T.db_of(T.exec(c2, T.db_of(T.exec(c1, db, now)), now)), now), tw(H, T.db_of(T.exec(c1, T.db_of(T.exec(c2, db, now)), now)), now), now)(eq_gen(c1, c2, db, H, srcs, now, e)) : {T.reply_of(T.bitop.go(R.bitop.wrong(srcs, now, tw(H, T.db_of(T.exec(c2, T.db_of(T.exec(c1, db, now)), now)), now)), op, srcs, d, tw(H, T.db_of(T.exec(c2, T.db_of(T.exec(c1, db, now)), now)), now), now)) == T.reply_of(T.bitop.go(_, op, srcs, d, tw(H, T.db_of(T.exec(c1, T.db_of(T.exec(c2, db, now)), now)), now), now)) : R.Reply}
             bitop_go_rep(R.bitop.wrong(srcs, now, tw(H, T.db_of(T.exec(c2, T.db_of(T.exec(c1, db, now)), now)), now)), op, srcs, d, tw(H, T.db_of(T.exec(c2, T.db_of(T.exec(c1, db, now)), now)), now), tw(H, T.db_of(T.exec(c1, T.db_of(T.exec(c2, db, now)), now)), now), now)(eq_gen(c1, c2, db, H, srcs, now, e))
+    case R.LMove{+s, +d, +w}:
+      kw => %mv_find_eq(tw(H, T.db_of(T.exec(c2, T.db_of(T.exec(c1, db, now)), now)), now), tw(H, T.db_of(T.exec(c1, T.db_of(T.exec(c2, db, now)), now)), now), s, d, w, now)(eq_gen(c1, c2, db, H, [s, d], now, e)) : {T.reply_of(T.mv.do(T.mv.find(tw(H, T.db_of(T.exec(c2, T.db_of(T.exec(c1, db, now)), now)), now), s, d, w, now), w, s, d, tw(H, T.db_of(T.exec(c2, T.db_of(T.exec(c1, db, now)), now)), now))) == T.reply_of(T.mv.do(_, w, s, d, tw(H, T.db_of(T.exec(c1, T.db_of(T.exec(c2, db, now)), now)), now))) : R.Reply}
+            mv_do_rep(T.mv.find(tw(H, T.db_of(T.exec(c2, T.db_of(T.exec(c1, db, now)), now)), now), s, d, w, now), w, s, d, tw(H, T.db_of(T.exec(c2, T.db_of(T.exec(c1, db, now)), now)), now), tw(H, T.db_of(T.exec(c1, T.db_of(T.exec(c2, db, now)), now)), now))
+    case R.LMPop{+ks, +left, +n}:
+      kw => %lmpop_first_eq(ks, tw(H, T.db_of(T.exec(c2, T.db_of(T.exec(c1, db, now)), now)), now), tw(H, T.db_of(T.exec(c1, T.db_of(T.exec(c2, db, now)), now)), now), now)(eq_gen(c1, c2, db, H, ks, now, e)) : {T.reply_of(T.lmpop.at(T.lmpop.first(ks, T.lmpop.head(ks, tw(H, T.db_of(T.exec(c2, T.db_of(T.exec(c1, db, now)), now)), now), now), tw(H, T.db_of(T.exec(c2, T.db_of(T.exec(c1, db, now)), now)), now), now), left, n, tw(H, T.db_of(T.exec(c2, T.db_of(T.exec(c1, db, now)), now)), now), now)) == T.reply_of(T.lmpop.at(_, left, n, tw(H, T.db_of(T.exec(c1, T.db_of(T.exec(c2, db, now)), now)), now), now)) : R.Reply}
+            lmpop_at_rep(T.lmpop.first(ks, T.lmpop.head(ks, tw(H, T.db_of(T.exec(c2, T.db_of(T.exec(c1, db, now)), now)), now), now), tw(H, T.db_of(T.exec(c2, T.db_of(T.exec(c1, db, now)), now)), now), now), left, n, tw(H, T.db_of(T.exec(c2, T.db_of(T.exec(c1, db, now)), now)), now), tw(H, T.db_of(T.exec(c1, T.db_of(T.exec(c2, db, now)), now)), now), now)(first_agree(ks, T.lmpop.head(ks, tw(H, T.db_of(T.exec(c2, T.db_of(T.exec(c1, db, now)), now)), now), now), tw(H, T.db_of(T.exec(c2, T.db_of(T.exec(c1, db, now)), now)), now), tw(H, T.db_of(T.exec(c2, T.db_of(T.exec(c1, db, now)), now)), now), tw(H, T.db_of(T.exec(c1, T.db_of(T.exec(c2, db, now)), now)), now), now)(eq_gen(c1, c2, db, H, ks, now, e)))
     case R.Own{o}:
       kw => {==}
     case R.Bad{r}:
@@ -4226,6 +4534,10 @@ def upd_ch_br(+t: KV.Trie<KV.Val>, +k: String, +h: U32, +n: Nat, +x: Nat, +now: 
       {==}
     case R.CHashNew{ps, hv}:
       {==}
+    case R.CList{op, hv}:
+      {==}
+    case R.CListNew{lf, ps, hv}:
+      {==}
 
 def upd_br(+t: KV.Trie<KV.Val>, +k: String, +h: U32, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>, +c: Nat, o: R.Out) -> {proj(R.upd.put(t, k, h, n, x, now, rr, c, o)) == T.upd.put(t, k, h, o) : R.Reply & KV.Trie<KV.Val>}:
   match o:
@@ -4269,6 +4581,105 @@ def bitop_do_br(w: Bool, +op: R.BitK, +d: String, +srcs: List<&2, String>, +t: K
     case False{}:
       bitop_br(R.bitop.val(op, srcs, now, t), d, t, n, x, now, rr)
 
+# LMOVE on the record, for a given verdict, as the spec's: the record's
+# trie after each of its writes is the spec's
+def keepl_t(d: R.Db, +k: String, +l: KV.Deq) -> {R.db.t(R.db.keepl(d, k, l)) == KV.keep(KV.Val, R.db.t(d), k, KV.VColl{KV.CList{l}}) : KV.Trie<KV.Val>}:
+  match d:
+    case R.Db{t, n, x, now, rr}:
+      {==}
+
+def newl_t(d: R.Db, +k: String, +l: KV.Deq) -> {R.db.t(R.db.newl(d, k, l)) == KV.setx(KV.Val, R.db.t(d), k, KV.VColl{KV.CList{l}}, 0n) : KV.Trie<KV.Val>}:
+  match d:
+    case R.Db{t, n, x, now, rr}:
+      {==}
+
+def deldb_t(r: R.Dels, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>) -> {R.db.t(R.db_of(R.del.db(r, n, x, now, rr))) == dels_t(r) : KV.Trie<KV.Val>}:
+  match r:
+    case R.Dels{l, g, y, t}:
+      {==}
+
+def del1_t(d: R.Db, +k: String) -> {R.db.t(R.db_of(R.db.del(d, [k]))) == KV.del(KV.Val, R.db.t(d), k) : KV.Trie<KV.Val>}:
+  match d:
+    case R.Db{+t, +n, +x, +now, +rr}:
+      Equal.trans(KV.Trie<KV.Val>, R.db.t(R.db_of(R.del.db(R.del_keys([k], now, t), n, x, now, rr))), dels_t(R.del_keys([k], now, t)), KV.del(KV.Val, t, k),
+        deldb_t(R.del_keys([k], now, t), n, x, now, rr),
+        del_keys_t([k], now, t))
+
+def mv_src_br(b: Bool, +k: String, +l: KV.Deq, +d: R.Db) -> {R.db.t(R.mv.src(b, k, l, d)) == T.mv.src(b, k, l, R.db.t(d)) : KV.Trie<KV.Val>}:
+  match b:
+    case True{}:
+      del1_t(d, k)
+    case False{}:
+      keepl_t(d, k, l)
+
+def mv_put_br(+s: String, +l: KV.Deq, +d: R.Db) -> {R.db.t(R.mv.put(s, l, d)) == T.mv.put(s, l, R.db.t(d)) : KV.Trie<KV.Val>}:
+  mv_src_br(Nat.is_eq(KV.deq.len(l), 0n), s, l, d)
+
+def mv_self_br(p: KV.Pop, +e: R.LEnds, +s: String, +d: R.Db) -> {proj(R.mv.self(p, e, s, d)) == T.mv.self(p, e, s, R.db.t(d)) : R.Reply & KV.Trie<KV.Val>}:
+  match p:
+    case KV.Pop{+x, +l}:
+      Equal.cong(KV.Trie<KV.Val>, R.Reply & KV.Trie<KV.Val>, z => (R.RBulk{x}, z), R.db.t(R.db.keepl(d, s, KV.deq.push(R.ends.to(e), x, l))), KV.keep(KV.Val, R.db.t(d), s, KV.VColl{KV.CList{KV.deq.push(R.ends.to(e), x, l)}}), keepl_t(d, s, KV.deq.push(R.ends.to(e), x, l)))
+    case KV.PopNone{}:
+      {==}
+
+def mv_go_br(p: KV.Pop, +e: R.LEnds, +s: String, +t: String, dl: Maybe<&2, KV.Deq>, +d: R.Db) -> {proj(R.mv.go(p, e, s, t, dl, d)) == T.mv.go(p, e, s, t, dl, R.db.t(d)) : R.Reply & KV.Trie<KV.Val>}:
+  match p dl:
+    case KV.Pop{+x, +l} Some{+q}:
+      Equal.cong(KV.Trie<KV.Val>, R.Reply & KV.Trie<KV.Val>, z => (R.RBulk{x}, z), R.db.t(R.db.keepl(R.mv.put(s, l, d), t, KV.deq.push(R.ends.to(e), x, q))), KV.keep(KV.Val, T.mv.put(s, l, R.db.t(d)), t, KV.VColl{KV.CList{KV.deq.push(R.ends.to(e), x, q)}}),
+        Equal.trans(KV.Trie<KV.Val>, R.db.t(R.db.keepl(R.mv.put(s, l, d), t, KV.deq.push(R.ends.to(e), x, q))), KV.keep(KV.Val, R.db.t(R.mv.put(s, l, d)), t, KV.VColl{KV.CList{KV.deq.push(R.ends.to(e), x, q)}}), KV.keep(KV.Val, T.mv.put(s, l, R.db.t(d)), t, KV.VColl{KV.CList{KV.deq.push(R.ends.to(e), x, q)}}),
+          keepl_t(R.mv.put(s, l, d), t, KV.deq.push(R.ends.to(e), x, q)),
+          Equal.cong(KV.Trie<KV.Val>, KV.Trie<KV.Val>, z => KV.keep(KV.Val, z, t, KV.VColl{KV.CList{KV.deq.push(R.ends.to(e), x, q)}}), R.db.t(R.mv.put(s, l, d)), T.mv.put(s, l, R.db.t(d)), mv_put_br(s, l, d))))
+    case KV.Pop{+x, +l} None{}:
+      Equal.cong(KV.Trie<KV.Val>, R.Reply & KV.Trie<KV.Val>, z => (R.RBulk{x}, z), R.db.t(R.db.newl(R.mv.put(s, l, d), t, KV.deq.push(R.ends.to(e), x, KV.deq.empty()))), KV.setx(KV.Val, T.mv.put(s, l, R.db.t(d)), t, KV.VColl{KV.CList{KV.deq.push(R.ends.to(e), x, KV.deq.empty())}}, 0n),
+        Equal.trans(KV.Trie<KV.Val>, R.db.t(R.db.newl(R.mv.put(s, l, d), t, KV.deq.push(R.ends.to(e), x, KV.deq.empty()))), KV.setx(KV.Val, R.db.t(R.mv.put(s, l, d)), t, KV.VColl{KV.CList{KV.deq.push(R.ends.to(e), x, KV.deq.empty())}}, 0n), KV.setx(KV.Val, T.mv.put(s, l, R.db.t(d)), t, KV.VColl{KV.CList{KV.deq.push(R.ends.to(e), x, KV.deq.empty())}}, 0n),
+          newl_t(R.mv.put(s, l, d), t, KV.deq.push(R.ends.to(e), x, KV.deq.empty())),
+          Equal.cong(KV.Trie<KV.Val>, KV.Trie<KV.Val>, z => KV.setx(KV.Val, z, t, KV.VColl{KV.CList{KV.deq.push(R.ends.to(e), x, KV.deq.empty())}}, 0n), R.db.t(R.mv.put(s, l, d)), T.mv.put(s, l, R.db.t(d)), mv_put_br(s, l, d))))
+    case KV.PopNone{} _:
+      {==}
+
+def mv_do_br(m: R.Mv, +e: R.LEnds, +s: String, +t: String, +d: R.Db) -> {proj(R.mv.do(m, e, s, t, d)) == T.mv.do(m, e, s, t, R.db.t(d)) : R.Reply & KV.Trie<KV.Val>}:
+  match m:
+    case R.MvNone{}:
+      {==}
+    case R.MvWrong{}:
+      {==}
+    case R.MvSelf{+l, se}:
+      mv_self_br(KV.deq.pop(R.ends.from(e), l), e, s, d)
+    case R.MvOnto{+l, se, +q}:
+      mv_go_br(KV.deq.pop(R.ends.from(e), l), e, s, t, Some{q}, d)
+    case R.MvNew{+l, se}:
+      mv_go_br(KV.deq.pop(R.ends.from(e), l), e, s, t, None{}, d)
+
+# LMPOP on the record as the spec's: it picks the same key, and pops its
+# list as Upd does
+def first_br_at(+k: String, +rest: List<&2, String>, h: Bool, +t: KV.Trie<KV.Val>, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>) -> {R.lmpop.first(rest, R.lmpop.head(rest, R.Db{t, n, x, now, rr}), R.Db{t, n, x, now, rr}) == T.lmpop.first(rest, T.lmpop.head(rest, t, now), t, now) : Maybe<&2, String>} -> {R.lmpop.first(Con{k, rest}, h, R.Db{t, n, x, now, rr}) == T.lmpop.first(Con{k, rest}, h, t, now) : Maybe<&2, String>}:
+  match h:
+    case True{}:
+      ih => {==}
+    case False{}:
+      ih => ih
+
+def first_br(ks: List<&2, String>, +t: KV.Trie<KV.Val>, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>) -> {R.lmpop.first(ks, R.lmpop.head(ks, R.Db{t, n, x, now, rr}), R.Db{t, n, x, now, rr}) == T.lmpop.first(ks, T.lmpop.head(ks, t, now), t, now) : Maybe<&2, String>}:
+  match ks:
+    case Nil{}:
+      {==}
+    case Con{+k, +rest}:
+      first_br_at(k, rest, T.lmpop.head(Con{k, rest}, t, now), t, n, x, now, rr)(first_br(rest, t, n, x, now, rr))
+
+def out_br(+k: String, r: R.Reply & R.Db) -> {proj(R.lmpop.out(k, r)) == T.lmpop.out(k, proj(r)) : R.Reply & KV.Trie<KV.Val>}:
+  (y, d) = r
+  {==}
+
+def lmpop_at_br(m: Maybe<&2, String>, +left: Bool, +c: String, +t: KV.Trie<KV.Val>, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>) -> {proj(R.lmpop.at(m, left, c, R.Db{t, n, x, now, rr})) == T.lmpop.at(m, left, c, t, now) : R.Reply & KV.Trie<KV.Val>}:
+  match m:
+    case Some{+k}:
+      Equal.trans(R.Reply & KV.Trie<KV.Val>, proj(R.lmpop.out(k, R.db.upd(R.Db{t, n, x, now, rr}, k, R.UList{R.LWPopN{left, c}}))), T.lmpop.out(k, proj(R.db.upd(R.Db{t, n, x, now, rr}, k, R.UList{R.LWPopN{left, c}}))), T.lmpop.out(k, T.upd.run(t, k, R.UList{R.LWPopN{left, c}}, now)),
+        out_br(k, R.db.upd(R.Db{t, n, x, now, rr}, k, R.UList{R.LWPopN{left, c}})),
+        Equal.cong(R.Reply & KV.Trie<KV.Val>, R.Reply & KV.Trie<KV.Val>, z => T.lmpop.out(k, z), proj(R.db.upd(R.Db{t, n, x, now, rr}, k, R.UList{R.LWPopN{left, c}})), T.upd.run(t, k, R.UList{R.LWPopN{left, c}}, now),
+          upd_br(t, k, KV.hash(k), n, x, now, rr, R.ent.code(KV.entry.at(KV.Val, t, k, KV.hash(k))), R.upd.v(R.UList{R.LWPopN{left, c}}, now, R.ent.live(now, KV.entry.at(KV.Val, t, k, KV.hash(k)))))))
+    case None{}:
+      {==}
+
 # a command answers as the spec's at the database's now, DBSIZE but, and
 # leaves the trie the spec's leaves
 def bridge_go(c: R.Cmd, +t: KV.Trie<KV.Val>, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>) -> {Laws.keywise(c) == True{} : Bool} -> {proj(R.exec(c, R.Db{t, n, x, now, rr})) == T.exec(c, t, now) : R.Reply & KV.Trie<KV.Val>}:
@@ -4309,6 +4720,11 @@ def bridge_go(c: R.Cmd, +t: KV.Trie<KV.Val>, +n: Nat, +x: Nat, +now: Nat, +rr: M
       kw => ren_br(T.ren.find(t, s, d, nx, now), nx, s, d, t, n, x, now, rr)
     case R.BitOp{+op, +d, +srcs}:
       kw => bitop_do_br(R.bitop.wrong(srcs, now, t), op, d, srcs, t, n, x, now, rr)
+    case R.LMove{+s, +d, +w}:
+      kw => mv_do_br(T.mv.find(t, s, d, w, now), w, s, d, R.Db{t, n, x, now, rr})
+    case R.LMPop{+ks, +left, +cnt}:
+      kw => %first_br(ks, t, n, x, now, rr) : {proj(R.lmpop.at(R.lmpop.first(ks, R.lmpop.head(ks, R.Db{t, n, x, now, rr}), R.Db{t, n, x, now, rr}), left, cnt, R.Db{t, n, x, now, rr})) == T.lmpop.at(_, left, cnt, t, now) : R.Reply & KV.Trie<KV.Val>}
+            lmpop_at_br(R.lmpop.first(ks, R.lmpop.head(ks, R.Db{t, n, x, now, rr}), R.Db{t, n, x, now, rr}), left, cnt, t, n, x, now, rr)
     case R.Own{o}:
       kw => {==}
     case R.Bad{r}:
@@ -4370,6 +4786,10 @@ def upd_ch_now(+t: KV.Trie<KV.Val>, +k: String, +h: U32, +n: Nat, +x: Nat, +now:
       {==}
     case R.CHashNew{ps, hv}:
       {==}
+    case R.CList{op, hv}:
+      {==}
+    case R.CListNew{lf, ps, hv}:
+      {==}
 
 def upd_now(+t: KV.Trie<KV.Val>, +k: String, +h: U32, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>, +c: Nat, o: R.Out) -> {R.db.now(R.db_of(R.upd.put(t, k, h, n, x, now, rr, c, o))) == now : Nat}:
   match o:
@@ -4407,6 +4827,73 @@ def bitop_do_now(w: Bool, +op: R.BitK, +d: String, +srcs: List<&2, String>, +t: 
       {==}
     case False{}:
       bitop_now(String.is_empty(R.bitop.val(op, srcs, now, t)), R.bitop.val(op, srcs, now, t), d, t, n, x, now, rr)
+
+def keepl_now(d: R.Db, +k: String, +l: KV.Deq) -> {R.db.now(R.db.keepl(d, k, l)) == R.db.now(d) : Nat}:
+  match d:
+    case R.Db{t, n, x, now, rr}:
+      {==}
+
+def newl_now(d: R.Db, +k: String, +l: KV.Deq) -> {R.db.now(R.db.newl(d, k, l)) == R.db.now(d) : Nat}:
+  match d:
+    case R.Db{t, n, x, now, rr}:
+      {==}
+
+def del1_now(d: R.Db, +k: String) -> {R.db.now(R.db_of(R.db.del(d, [k]))) == R.db.now(d) : Nat}:
+  match d:
+    case R.Db{+t, +n, +x, +now, +rr}:
+      del_now(R.del_keys([k], now, t), n, x, now, rr)
+
+def mv_src_now(b: Bool, +k: String, +l: KV.Deq, +d: R.Db) -> {R.db.now(R.mv.src(b, k, l, d)) == R.db.now(d) : Nat}:
+  match b:
+    case True{}:
+      del1_now(d, k)
+    case False{}:
+      keepl_now(d, k, l)
+
+def mv_put_now(+s: String, +l: KV.Deq, +d: R.Db) -> {R.db.now(R.mv.put(s, l, d)) == R.db.now(d) : Nat}:
+  mv_src_now(Nat.is_eq(KV.deq.len(l), 0n), s, l, d)
+
+def mv_self_now(p: KV.Pop, +e: R.LEnds, +s: String, +d: R.Db) -> {R.db.now(R.db_of(R.mv.self(p, e, s, d))) == R.db.now(d) : Nat}:
+  match p:
+    case KV.Pop{+x, +l}:
+      keepl_now(d, s, KV.deq.push(R.ends.to(e), x, l))
+    case KV.PopNone{}:
+      {==}
+
+def mv_go_now(p: KV.Pop, +e: R.LEnds, +s: String, +t: String, dl: Maybe<&2, KV.Deq>, +d: R.Db) -> {R.db.now(R.db_of(R.mv.go(p, e, s, t, dl, d))) == R.db.now(d) : Nat}:
+  match p dl:
+    case KV.Pop{+x, +l} Some{+q}:
+      Equal.trans(Nat, R.db.now(R.db.keepl(R.mv.put(s, l, d), t, KV.deq.push(R.ends.to(e), x, q))), R.db.now(R.mv.put(s, l, d)), R.db.now(d), keepl_now(R.mv.put(s, l, d), t, KV.deq.push(R.ends.to(e), x, q)), mv_put_now(s, l, d))
+    case KV.Pop{+x, +l} None{}:
+      Equal.trans(Nat, R.db.now(R.db.newl(R.mv.put(s, l, d), t, KV.deq.push(R.ends.to(e), x, KV.deq.empty()))), R.db.now(R.mv.put(s, l, d)), R.db.now(d), newl_now(R.mv.put(s, l, d), t, KV.deq.push(R.ends.to(e), x, KV.deq.empty())), mv_put_now(s, l, d))
+    case KV.PopNone{} _:
+      {==}
+
+def mv_do_now(m: R.Mv, +e: R.LEnds, +s: String, +t: String, +d: R.Db) -> {R.db.now(R.db_of(R.mv.do(m, e, s, t, d))) == R.db.now(d) : Nat}:
+  match m:
+    case R.MvNone{}:
+      {==}
+    case R.MvWrong{}:
+      {==}
+    case R.MvSelf{+l, se}:
+      mv_self_now(KV.deq.pop(R.ends.from(e), l), e, s, d)
+    case R.MvOnto{+l, se, +q}:
+      mv_go_now(KV.deq.pop(R.ends.from(e), l), e, s, t, Some{q}, d)
+    case R.MvNew{+l, se}:
+      mv_go_now(KV.deq.pop(R.ends.from(e), l), e, s, t, None{}, d)
+
+def out_db_R(+k: String, r: R.Reply & R.Db) -> {R.db_of(R.lmpop.out(k, r)) == R.db_of(r) : R.Db}:
+  (y, d) = r
+  {==}
+
+def lmpop_at_now(m: Maybe<&2, String>, +left: Bool, +c: String, +t: KV.Trie<KV.Val>, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>) -> {R.db.now(R.db_of(R.lmpop.at(m, left, c, R.Db{t, n, x, now, rr}))) == now : Nat}:
+  match m:
+    case Some{+k}:
+      Equal.trans(Nat, R.db.now(R.db_of(R.lmpop.out(k, R.db.upd(R.Db{t, n, x, now, rr}, k, R.UList{R.LWPopN{left, c}})))), R.db.now(R.db_of(R.db.upd(R.Db{t, n, x, now, rr}, k, R.UList{R.LWPopN{left, c}}))), now,
+        Equal.cong(R.Db, Nat, z => R.db.now(z), R.db_of(R.lmpop.out(k, R.db.upd(R.Db{t, n, x, now, rr}, k, R.UList{R.LWPopN{left, c}}))), R.db_of(R.db.upd(R.Db{t, n, x, now, rr}, k, R.UList{R.LWPopN{left, c}})), out_db_R(k, R.db.upd(R.Db{t, n, x, now, rr}, k, R.UList{R.LWPopN{left, c}}))),
+        upd_now(t, k, KV.hash(k), n, x, now, rr, R.ent.code(KV.entry.at(KV.Val, t, k, KV.hash(k))), R.upd.v(R.UList{R.LWPopN{left, c}}, now, R.ent.live(now, KV.entry.at(KV.Val, t, k, KV.hash(k))))))
+    case None{}:
+      {==}
 
 def now_go(c: R.Cmd, +t: KV.Trie<KV.Val>, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>) -> {R.db.now(R.db_of(R.exec(c, R.Db{t, n, x, now, rr}))) == now : Nat}:
   match c:
@@ -4446,6 +4933,10 @@ def now_go(c: R.Cmd, +t: KV.Trie<KV.Val>, +n: Nat, +x: Nat, +now: Nat, +rr: Mayb
       ren_now(T.ren.find(t, s, d, nx, now), nx, s, d, t, n, x, now, rr)
     case R.BitOp{+op, +d, +srcs}:
       bitop_do_now(R.bitop.wrong(srcs, now, t), op, d, srcs, t, n, x, now, rr)
+    case R.LMove{+s, +d, +w}:
+      mv_do_now(T.mv.find(t, s, d, w, now), w, s, d, R.Db{t, n, x, now, rr})
+    case R.LMPop{+ks, +left, +cnt}:
+      lmpop_at_now(R.lmpop.first(ks, R.lmpop.head(ks, R.Db{t, n, x, now, rr}), R.Db{t, n, x, now, rr}), left, cnt, t, n, x, now, rr)
     case R.Own{o}:
       {==}
     case R.Bad{r}:
@@ -4498,6 +4989,10 @@ def bt_go(c: R.Cmd, +t: KV.Trie<KV.Val>, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe
       bt_kw(R.Rename{s, d, nx}, t, n, x, now, rr, {==})
     case R.BitOp{+op, +d, +srcs}:
       bt_kw(R.BitOp{op, d, srcs}, t, n, x, now, rr, {==})
+    case R.LMove{+op, +d, +srcs}:
+      bt_kw(R.LMove{op, d, srcs}, t, n, x, now, rr, {==})
+    case R.LMPop{+op, +d, +srcs}:
+      bt_kw(R.LMPop{op, d, srcs}, t, n, x, now, rr, {==})
     case R.Own{o}:
       {==}
     case R.Bad{r}:
@@ -4607,6 +5102,10 @@ def reads_go(c: R.Cmd, +db: R.Db) -> {Laws.is_read(c) == True{} : Bool} -> {R.db
       e => Empty.absurd({R.db_of(R.exec(R.Rename{s, d, nx}, db)) == db : R.Db}, false_true(e))
     case R.BitOp{op, d, srcs}:
       e => Empty.absurd({R.db_of(R.exec(R.BitOp{op, d, srcs}, db)) == db : R.Db}, false_true(e))
+    case R.LMove{op, d, srcs}:
+      e => Empty.absurd({R.db_of(R.exec(R.LMove{op, d, srcs}, db)) == db : R.Db}, false_true(e))
+    case R.LMPop{op, d, srcs}:
+      e => Empty.absurd({R.db_of(R.exec(R.LMPop{op, d, srcs}, db)) == db : R.Db}, false_true(e))
     case R.Own{o}:
       e => {==}
     case R.Bad{r}:
@@ -5024,6 +5523,10 @@ def reply_after_db(c1: R.Cmd, +c2: R.Cmd, +db: R.Db) -> {Laws.disturbs(c2, c1) =
       e => reply_via(R.Rename{s, d, nx}, c2, db, {==}, e)
     case R.BitOp{op, d, srcs}:
       e => reply_via(R.BitOp{op, d, srcs}, c2, db, {==}, e)
+    case R.LMove{op, d, srcs}:
+      e => reply_via(R.LMove{op, d, srcs}, c2, db, {==}, e)
+    case R.LMPop{op, d, srcs}:
+      e => reply_via(R.LMPop{op, d, srcs}, c2, db, {==}, e)
     case R.Own{o}:
       e => reply_via(R.Own{o}, c2, db, {==}, e)
     case R.Bad{r}:
@@ -5537,6 +6040,14 @@ def upd_eff(+db: R.Db, +k: String, op: R.UpdOp) -> List<&2, R.Cmd>:
     case R.Db{+t, +n, +x, +now, +rr}:
       A.upd.effect(k, R.ent.code(KV.entry.at(KV.Val, t, k, KV.hash(k))), R.upd.v(op, now, R.ent.live(now, KV.entry.at(KV.Val, t, k, KV.hash(k)))))
 
+# LMPOP's effects: the update of the key it picks
+def lmpop_eff(m: Maybe<&2, String>, +left: Bool, cnt: String, +db: R.Db) -> List<&2, R.Cmd>:
+  match m:
+    case Some{+k}:
+      upd_eff(db, k, R.UList{R.LWPopN{left, cnt}})
+    case None{}:
+      Nil{}
+
 # a command's effects, run on db
 def eff(c: R.Cmd, +db: R.Db) -> List<&2, R.Cmd>:
   match c:
@@ -5576,6 +6087,10 @@ def eff(c: R.Cmd, +db: R.Db) -> List<&2, R.Cmd>:
       A.ren.effect(R.ren.find(db, s, d, nx), s, d)
     case R.BitOp{+op, +d, +srcs}:
       A.bitop.eff(R.bitop.wrong(srcs, R.db.now(db), R.db.trie(db)), op, d, srcs, db)
+    case R.LMove{+s, +d, +w}:
+      A.lmove.effect(A.lmove.moved(R.mv.find(db, s, d, w)), R.ent.dead(R.db.now(db), R.db.entry(db, d)), s, d, w)
+    case R.LMPop{+ks, +left, +cnt}:
+      lmpop_eff(R.lmpop.first(ks, R.lmpop.head(ks, db), db), left, cnt, db)
     case R.Own{o}:
       A.effect(R.Own{o})
     case R.Bad{r}:
@@ -5666,6 +6181,22 @@ def incr_split(+db: R.Db, +k: String, +by: R.Int) -> {(R.reply_of(R.exec(R.IncrB
       %Equal.sym(R.Reply & R.Db, R.exec(R.IncrBy{k, by}, R.Db{t, n, x, now, rr}), R.upd.put(t, k, KV.hash(k), n, x, now, rr, R.ent.code(KV.entry.at(KV.Val, t, k, KV.hash(k))), R.upd.v(R.UIncr{by}, now, R.ent.live(now, KV.entry.at(KV.Val, t, k, KV.hash(k))))), incr_upd_eq(t, k, by, n, x, now, rr)) : {(R.reply_of(_), (upd_eff(R.Db{t, n, x, now, rr}, k, R.UIncr{by}), R.db_of(_))) == A.run(R.IncrBy{k, by}, R.Db{t, n, x, now, rr}) : R.Reply & (List<&2, R.Cmd> & R.Db)}
       out_split(R.upd.put(t, k, KV.hash(k), n, x, now, rr, R.ent.code(KV.entry.at(KV.Val, t, k, KV.hash(k))), R.upd.v(R.UIncr{by}, now, R.ent.live(now, KV.entry.at(KV.Val, t, k, KV.hash(k))))), A.upd.effect(k, R.ent.code(KV.entry.at(KV.Val, t, k, KV.hash(k))), R.upd.v(R.UIncr{by}, now, R.ent.live(now, KV.entry.at(KV.Val, t, k, KV.hash(k))))))
 
+def lmpop_out_split(+k: String, r: R.Reply & R.Db, -es: List<&2, R.Cmd>) -> {(R.reply_of(R.lmpop.out(k, r)), (es, R.db_of(R.lmpop.out(k, r)))) == A.lmpop.out(k, (R.reply_of(r), (es, R.db_of(r)))) : R.Reply & (List<&2, R.Cmd> & R.Db)}:
+  (y, d) = r
+  {==}
+
+def lmpop_split(m: Maybe<&2, String>, +left: Bool, +cnt: String, +db: R.Db) -> {(R.reply_of(R.lmpop.at(m, left, cnt, db)), (lmpop_eff(m, left, cnt, db), R.db_of(R.lmpop.at(m, left, cnt, db)))) == A.lmpop.at(m, left, cnt, db) : R.Reply & (List<&2, R.Cmd> & R.Db)}:
+  match m:
+    case Some{+k}:
+      Equal.trans(R.Reply & (List<&2, R.Cmd> & R.Db),
+        (R.reply_of(R.lmpop.out(k, R.db.upd(db, k, R.UList{R.LWPopN{left, cnt}}))), (upd_eff(db, k, R.UList{R.LWPopN{left, cnt}}), R.db_of(R.lmpop.out(k, R.db.upd(db, k, R.UList{R.LWPopN{left, cnt}}))))),
+        A.lmpop.out(k, (R.reply_of(R.db.upd(db, k, R.UList{R.LWPopN{left, cnt}})), (upd_eff(db, k, R.UList{R.LWPopN{left, cnt}}), R.db_of(R.db.upd(db, k, R.UList{R.LWPopN{left, cnt}}))))),
+        A.lmpop.out(k, A.run.upd(db, k, R.UList{R.LWPopN{left, cnt}})),
+        lmpop_out_split(k, R.db.upd(db, k, R.UList{R.LWPopN{left, cnt}}), upd_eff(db, k, R.UList{R.LWPopN{left, cnt}})),
+        Equal.cong(R.Reply & (List<&2, R.Cmd> & R.Db), R.Reply & (List<&2, R.Cmd> & R.Db), z => A.lmpop.out(k, z), (R.reply_of(R.db.upd(db, k, R.UList{R.LWPopN{left, cnt}})), (upd_eff(db, k, R.UList{R.LWPopN{left, cnt}}), R.db_of(R.db.upd(db, k, R.UList{R.LWPopN{left, cnt}})))), A.run.upd(db, k, R.UList{R.LWPopN{left, cnt}}), upd_split(db, k, R.UList{R.LWPopN{left, cnt}})))
+    case None{}:
+      {==}
+
 def run_split(c: R.Cmd, +db: R.Db) -> {(R.reply_of(R.exec(c, db)), (eff(c, db), R.db_of(R.exec(c, db)))) == A.run(c, db) : R.Reply & (List<&2, R.Cmd> & R.Db)}:
   match c:
     case R.Ping{}:
@@ -5704,6 +6235,10 @@ def run_split(c: R.Cmd, +db: R.Db) -> {(R.reply_of(R.exec(c, db)), (eff(c, db), 
       out_split(R.exec(R.Rename{s, d, nx}, db), A.ren.effect(R.ren.find(db, s, d, nx), s, d))
     case R.BitOp{+op, +d, +srcs}:
       out_split(R.exec(R.BitOp{op, d, srcs}, db), A.bitop.eff(R.bitop.wrong(srcs, R.db.now(db), R.db.trie(db)), op, d, srcs, db))
+    case R.LMove{+s, +d, +w}:
+      out_split(R.exec(R.LMove{s, d, w}, db), A.lmove.effect(A.lmove.moved(R.mv.find(db, s, d, w)), R.ent.dead(R.db.now(db), R.db.entry(db, d)), s, d, w))
+    case R.LMPop{+ks, +left, +cnt}:
+      lmpop_split(R.lmpop.first(ks, R.lmpop.head(ks, db), db), left, cnt, db)
     case R.Own{+o}:
       put_split(R.Own{o}, R.exec(R.Own{o}, db))
     case R.Bad{+r}:
@@ -5946,6 +6481,8 @@ def GoodHashV(w: KV.Val, op: R.HWrite, hv: KV.Hash) -> Type:
   match w:
     case KV.VColl{KV.CHash{h0}}:
       {ch_of(R.hwrite(op, False{}, h0)) == R.CHash{op, hv} : R.Change} & GoodOp(op)
+    case KV.VColl{KV.CList{l0}}:
+      Empty
     case KV.VStr{u}:
       Empty
 
@@ -5958,6 +6495,55 @@ def GoodHash(m: Maybe<&2, KV.Item<KV.Val>>, op: R.HWrite, hv: KV.Hash) -> Type:
 
 def GoodNew(ps: List<&2, KV.HPair>, hv: KV.Hash) -> Type:
   {R.hset.ch(True{}, ps, hput.h(R.hset.go(ps, R.HPut{KV.hash.empty(), 0n}))) == R.CHashNew{ps, hv} : R.Change} & NeP(ps)
+
+# A write of a list: its change replayed. A list changed is one the key
+# held (l0), and the write the change keeps, replayed on l0, makes the
+# same change; the file logs it as a command that parses back to it
+# (GoodLOp): a push of elements, a pop (of a count that reads as one),
+# LSET, LINSERT, LREM of a count and LTRIM of a range that read as
+# numbers. A new list is the pushes it keeps, of elements, made on an
+# empty list.
+def GoodLOp(op: R.LWrite) -> Type:
+  match op:
+    case R.LWPush{left, xs}:
+      NeS(xs)
+    case R.LWPushX{left, xs}:
+      NeS(xs)
+    case R.LWPop{left}:
+      {True{} == True{} : Bool}
+    case R.LWPopN{left, c}:
+      {Maybe.is_some(&2, Nat, R.lcount(c)) == True{} : Bool}
+    case R.LWSet{i, v}:
+      {True{} == True{} : Bool}
+    case R.LWBefore{p, v}:
+      {True{} == True{} : Bool}
+    case R.LWAfter{p, v}:
+      {True{} == True{} : Bool}
+    case R.LWRem{c, v}:
+      {R.lnum.ok(c) == True{} : Bool}
+    case R.LWTrim{a, b}:
+      {Bool.and(R.lnum.ok(a), R.lnum.ok(b)) == True{} : Bool}
+    case R.LWNew{left, xs}:
+      Empty
+
+def GoodListV(w: KV.Val, op: R.LWrite, l: KV.Deq) -> Type:
+  match w:
+    case KV.VColl{KV.CList{l0}}:
+      {ch_of(R.lwrite(op, False{}, l0)) == R.CList{op, l} : R.Change} & GoodLOp(op)
+    case KV.VColl{KV.CHash{h0}}:
+      Empty
+    case KV.VStr{u}:
+      Empty
+
+def GoodList(m: Maybe<&2, KV.Item<KV.Val>>, op: R.LWrite, l: KV.Deq) -> Type:
+  match m:
+    case Some{KV.Item{w, e}}:
+      GoodListV(w, op, l)
+    case None{}:
+      Empty
+
+def GoodNewL(left: Bool, xs: List<&2, String>, l: KV.Deq) -> Type:
+  {KV.deq.pushes(left, xs, KV.deq.empty()) == l : KV.Deq} & NeS(xs)
 
 def Good(m: Maybe<&2, KV.Item<KV.Val>>, ch: R.Change) -> Type:
   match ch:
@@ -5979,6 +6565,10 @@ def Good(m: Maybe<&2, KV.Item<KV.Val>>, ch: R.Change) -> Type:
       GoodHash(m, op, hv)
     case R.CHashNew{ps, hv}:
       GoodNew(ps, hv)
+    case R.CList{op, l}:
+      GoodList(m, op, l)
+    case R.CListNew{left, xs, l}:
+      GoodNewL(left, xs, l)
 
 # a change, made again by its effects at time 0
 def del_replay(+t: KV.Trie<KV.Val>, +k: String, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>, +r: R.Reply, +w: KV.Val, +e: Nat, eq: {KV.entry.at(KV.Val, t, k, KV.hash(k)) == Some{KV.Item{w, e}} : Maybe<&2, KV.Item<KV.Val>>}) -> {Laws.final(R.exec_all([R.Del{[k]}], R.Db{t, n, x, 0n, rr})) == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, 1n+e, r, R.CDel{}))) : R.Db}:
@@ -6086,6 +6676,10 @@ def ch_db(ch: R.Change, +t: KV.Trie<KV.Val>, +k: String, +h: U32, +n: Nat, +x: N
       {==}
     case R.CHashNew{ps, hv}:
       {==}
+    case R.CList{op, l}:
+      {==}
+    case R.CListNew{left, xs, l}:
+      {==}
 
 def put_db(+t: KV.Trie<KV.Val>, +k: String, +h: U32, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>, +c: Nat, o: R.Out) -> {R.db_of(R.upd.ch(t, k, h, n, x, now, rr, c, R.RNull{}, ch_of(o))) == R.db_of(R.upd.put(t, k, h, n, x, now, rr, c, o)) : R.Db}:
   match o:
@@ -6120,6 +6714,8 @@ def hash_replay_v(w: KV.Val, +t: KV.Trie<KV.Val>, +k: String, +n: Nat, +x: Nat, 
   match w:
     case KV.VColl{KV.CHash{+h0}}:
       eq => g => hash_replay_g(t, k, n, x, now, rr, r, op, hv, h0, e, eq, g)
+    case KV.VColl{KV.CList{l0}}:
+      eq => g => Empty.absurd({Laws.final(R.exec_all(A.ch.effect(k, 1n+e, R.CHash{op, hv}), R.Db{t, n, x, 0n, rr})) == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, 1n+e, r, R.CHash{op, hv}))) : R.Db}, g)
     case KV.VStr{u}:
       eq => g => Empty.absurd({Laws.final(R.exec_all(A.ch.effect(k, 1n+e, R.CHash{op, hv}), R.Db{t, n, x, 0n, rr})) == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, 1n+e, r, R.CHash{op, hv}))) : R.Db}, g)
 
@@ -6139,6 +6735,8 @@ def hnew_v(w: KV.Val, +ps: List<&2, KV.HPair>, +e: Nat) -> {R.hnew.out(R.hset.go
     case KV.VStr{u}:
       {==}
     case KV.VColl{KV.CHash{h0}}:
+      {==}
+    case KV.VColl{KV.CList{l0}}:
       {==}
 
 def hnew_eval(+t: KV.Trie<KV.Val>, +k: String, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>, +r: R.Reply, +ps: List<&2, KV.HPair>, +hv: KV.Hash, +w: KV.Val, +e: Nat, eq: {KV.entry.at(KV.Val, t, k, KV.hash(k)) == Some{KV.Item{w, e}} : Maybe<&2, KV.Item<KV.Val>>}, gn: {R.hset.ch(True{}, ps, hput.h(R.hset.go(ps, R.HPut{KV.hash.empty(), 0n}))) == R.CHashNew{ps, hv} : R.Change}) -> {Laws.final(R.exec_all([R.Upd{k, R.UHash{R.HWNew{ps}}}], R.Db{t, n, x, 0n, rr})) == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, 1n+e, r, R.CHashNew{ps, hv}))) : R.Db}:
@@ -6165,6 +6763,78 @@ def hnew_replay(m: Maybe<&2, KV.Item<KV.Val>>, +t: KV.Trie<KV.Val>, +k: String, 
       eq => g => hnew_eval(t, k, n, x, now, rr, r, ps, hv, w, e, eq, gnew_eq(ps, hv, g))
     case None{}:
       eq => g => hnew_hset(t, k, n, x, now, rr, r, ps, hv, eq, gnew_eq(ps, hv, g))
+
+# a list changed, made again by its write at time 0
+def list_replay(+t: KV.Trie<KV.Val>, +k: String, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>, +r: R.Reply, +op: R.LWrite, +l: KV.Deq, +l0: KV.Deq, +e: Nat, eq: {KV.entry.at(KV.Val, t, k, KV.hash(k)) == Some{KV.Item{KV.VColl{KV.CList{l0}}, e}} : Maybe<&2, KV.Item<KV.Val>>}, gl: {ch_of(R.lwrite(op, False{}, l0)) == R.CList{op, l} : R.Change}) -> {Laws.final(R.exec_all(A.ch.effect(k, 1n+e, R.CList{op, l}), R.Db{t, n, x, 0n, rr})) == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, 1n+e, r, R.CList{op, l}))) : R.Db}:
+  %fin_cons(R.Upd{k, R.UList{op}}, Nil{}, R.Db{t, n, x, 0n, rr}) : {_ == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, 1n+e, r, R.CList{op, l}))) : R.Db}
+  %Equal.sym(Maybe<&2, KV.Item<KV.Val>>, KV.entry.at(KV.Val, t, k, KV.hash(k)), Some{KV.Item{KV.VColl{KV.CList{l0}}, e}}, eq) : {R.db_of(R.upd.put(t, k, KV.hash(k), n, x, 0n, rr, R.ent.code(_), R.upd.v(R.UList{op}, 0n, R.ent.live(0n, _)))) == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, 1n+e, r, R.CList{op, l}))) : R.Db}
+  %Equal.sym(Maybe<&2, KV.Item<KV.Val>>, R.ent.live(0n, Some{KV.Item{KV.VColl{KV.CList{l0}}, e}}), Some{KV.Item{KV.VColl{KV.CList{l0}}, e}}, live0_ent(Some{KV.Item{KV.VColl{KV.CList{l0}}, e}})) : {R.db_of(R.upd.put(t, k, KV.hash(k), n, x, 0n, rr, 1n+e, R.upd.v(R.UList{op}, 0n, _))) == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, 1n+e, r, R.CList{op, l}))) : R.Db}
+  %put_db(t, k, KV.hash(k), n, x, 0n, rr, 1n+e, R.lwrite(op, False{}, l0)) : {_ == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, 1n+e, r, R.CList{op, l}))) : R.Db}
+  %Equal.sym(R.Change, ch_of(R.lwrite(op, False{}, l0)), R.CList{op, l}, gl) : {R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, 0n, rr, 1n+e, R.RNull{}, _)) == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, 1n+e, r, R.CList{op, l}))) : R.Db}
+  {==}
+
+def list_replay_g(+t: KV.Trie<KV.Val>, +k: String, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>, +r: R.Reply, +op: R.LWrite, +l: KV.Deq, +l0: KV.Deq, +e: Nat, eq: {KV.entry.at(KV.Val, t, k, KV.hash(k)) == Some{KV.Item{KV.VColl{KV.CList{l0}}, e}} : Maybe<&2, KV.Item<KV.Val>>}, g: {ch_of(R.lwrite(op, False{}, l0)) == R.CList{op, l} : R.Change} & GoodLOp(op)) -> {Laws.final(R.exec_all(A.ch.effect(k, 1n+e, R.CList{op, l}), R.Db{t, n, x, 0n, rr})) == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, 1n+e, r, R.CList{op, l}))) : R.Db}:
+  (gl, go) = g
+  list_replay(t, k, n, x, now, rr, r, op, l, l0, e, eq, gl)
+
+def list_replay_v(w: KV.Val, +t: KV.Trie<KV.Val>, +k: String, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>, +r: R.Reply, +op: R.LWrite, +l: KV.Deq, +e: Nat) -> {KV.entry.at(KV.Val, t, k, KV.hash(k)) == Some{KV.Item{w, e}} : Maybe<&2, KV.Item<KV.Val>>} -> GoodListV(w, op, l) -> {Laws.final(R.exec_all(A.ch.effect(k, 1n+e, R.CList{op, l}), R.Db{t, n, x, 0n, rr})) == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, 1n+e, r, R.CList{op, l}))) : R.Db}:
+  match w:
+    case KV.VColl{KV.CList{+l0}}:
+      eq => g => list_replay_g(t, k, n, x, now, rr, r, op, l, l0, e, eq, g)
+    case KV.VColl{KV.CHash{h0}}:
+      eq => g => Empty.absurd({Laws.final(R.exec_all(A.ch.effect(k, 1n+e, R.CList{op, l}), R.Db{t, n, x, 0n, rr})) == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, 1n+e, r, R.CList{op, l}))) : R.Db}, g)
+    case KV.VStr{u}:
+      eq => g => Empty.absurd({Laws.final(R.exec_all(A.ch.effect(k, 1n+e, R.CList{op, l}), R.Db{t, n, x, 0n, rr})) == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, 1n+e, r, R.CList{op, l}))) : R.Db}, g)
+
+# a new list, made again at time 0: by a push where the trie held no
+# entry for the key, by the script of a new list where it held one
+def ne_empty(xs: List<&2, String>) -> NeS(xs) -> {List.is_empty(&2, String, xs) == False{} : Bool}:
+  match xs:
+    case Nil{}:
+      ne => Empty.absurd({List.is_empty(&2, String, Nil{}) == False{} : Bool}, ne)
+    case Con{y, rest}:
+      ne => {==}
+
+def lnew_push(+t: KV.Trie<KV.Val>, +k: String, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>, +r: R.Reply, +left: Bool, +xs: List<&2, String>, +l: KV.Deq, eq: {KV.entry.at(KV.Val, t, k, KV.hash(k)) == None{} : Maybe<&2, KV.Item<KV.Val>>}, gn: {KV.deq.pushes(left, xs, KV.deq.empty()) == l : KV.Deq}, ne: {List.is_empty(&2, String, xs) == False{} : Bool}) -> {Laws.final(R.exec_all([R.Upd{k, R.UList{R.LWPush{left, xs}}}], R.Db{t, n, x, 0n, rr})) == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, 0n, r, R.CListNew{left, xs, l}))) : R.Db}:
+  %fin_cons(R.Upd{k, R.UList{R.LWPush{left, xs}}}, Nil{}, R.Db{t, n, x, 0n, rr}) : {_ == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, 0n, r, R.CListNew{left, xs, l}))) : R.Db}
+  %Equal.sym(Maybe<&2, KV.Item<KV.Val>>, KV.entry.at(KV.Val, t, k, KV.hash(k)), None{}, eq) : {R.db_of(R.upd.put(t, k, KV.hash(k), n, x, 0n, rr, R.ent.code(_), R.upd.v(R.UList{R.LWPush{left, xs}}, 0n, R.ent.live(0n, _)))) == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, 0n, r, R.CListNew{left, xs, l}))) : R.Db}
+  %Equal.sym(Bool, List.is_empty(&2, String, xs), False{}, ne) : {R.db_of(R.upd.put(t, k, KV.hash(k), n, x, 0n, rr, 0n, R.lpush.of(_, True{}, left, xs, False{}, KV.deq.empty()))) == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, 0n, r, R.CListNew{left, xs, l}))) : R.Db}
+  %gn : {R.db_of(R.upd.put(t, k, KV.hash(k), n, x, 0n, rr, 0n, R.lpush.of(False{}, True{}, left, xs, False{}, KV.deq.empty()))) == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, 0n, r, R.CListNew{left, xs, _}))) : R.Db}
+  {==}
+
+# the script's write, of a key that holds w: a new list of the pushes
+def lnew_v(w: KV.Val, +left: Bool, +xs: List<&2, String>, +e: Nat) -> {R.lnew.of(List.is_empty(&2, String, xs), left, xs) == R.upd.v(R.UList{R.LWNew{left, xs}}, 0n, Some{KV.Item{w, e}}) : R.Out}:
+  match w:
+    case KV.VStr{u}:
+      {==}
+    case KV.VColl{KV.CHash{h0}}:
+      {==}
+    case KV.VColl{KV.CList{l0}}:
+      {==}
+
+def lnew_eval(+t: KV.Trie<KV.Val>, +k: String, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>, +r: R.Reply, +left: Bool, +xs: List<&2, String>, +l: KV.Deq, +w: KV.Val, +e: Nat, eq: {KV.entry.at(KV.Val, t, k, KV.hash(k)) == Some{KV.Item{w, e}} : Maybe<&2, KV.Item<KV.Val>>}, gn: {KV.deq.pushes(left, xs, KV.deq.empty()) == l : KV.Deq}, ne: {List.is_empty(&2, String, xs) == False{} : Bool}) -> {Laws.final(R.exec_all([R.Upd{k, R.UList{R.LWNew{left, xs}}}], R.Db{t, n, x, 0n, rr})) == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, 1n+e, r, R.CListNew{left, xs, l}))) : R.Db}:
+  %fin_cons(R.Upd{k, R.UList{R.LWNew{left, xs}}}, Nil{}, R.Db{t, n, x, 0n, rr}) : {_ == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, 1n+e, r, R.CListNew{left, xs, l}))) : R.Db}
+  %Equal.sym(Maybe<&2, KV.Item<KV.Val>>, KV.entry.at(KV.Val, t, k, KV.hash(k)), Some{KV.Item{w, e}}, eq) : {R.db_of(R.upd.put(t, k, KV.hash(k), n, x, 0n, rr, R.ent.code(_), R.upd.v(R.UList{R.LWNew{left, xs}}, 0n, R.ent.live(0n, _)))) == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, 1n+e, r, R.CListNew{left, xs, l}))) : R.Db}
+  %Equal.sym(Maybe<&2, KV.Item<KV.Val>>, R.ent.live(0n, Some{KV.Item{w, e}}), Some{KV.Item{w, e}}, live0_ent(Some{KV.Item{w, e}})) : {R.db_of(R.upd.put(t, k, KV.hash(k), n, x, 0n, rr, 1n+e, R.upd.v(R.UList{R.LWNew{left, xs}}, 0n, _))) == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, 1n+e, r, R.CListNew{left, xs, l}))) : R.Db}
+  %lnew_v(w, left, xs, e) : {R.db_of(R.upd.put(t, k, KV.hash(k), n, x, 0n, rr, 1n+e, _)) == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, 1n+e, r, R.CListNew{left, xs, l}))) : R.Db}
+  %Equal.sym(Bool, List.is_empty(&2, String, xs), False{}, ne) : {R.db_of(R.upd.put(t, k, KV.hash(k), n, x, 0n, rr, 1n+e, R.lnew.of(_, left, xs))) == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, 1n+e, r, R.CListNew{left, xs, l}))) : R.Db}
+  %gn : {R.db_of(R.upd.put(t, k, KV.hash(k), n, x, 0n, rr, 1n+e, R.lnew.of(False{}, left, xs))) == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, 1n+e, r, R.CListNew{left, xs, _}))) : R.Db}
+  {==}
+
+def lnew_push_g(+t: KV.Trie<KV.Val>, +k: String, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>, +r: R.Reply, +left: Bool, +xs: List<&2, String>, +l: KV.Deq, eq: {KV.entry.at(KV.Val, t, k, KV.hash(k)) == None{} : Maybe<&2, KV.Item<KV.Val>>}, g: GoodNewL(left, xs, l)) -> {Laws.final(R.exec_all([R.Upd{k, R.UList{R.LWPush{left, xs}}}], R.Db{t, n, x, 0n, rr})) == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, 0n, r, R.CListNew{left, xs, l}))) : R.Db}:
+  (gn, ne) = g
+  lnew_push(t, k, n, x, now, rr, r, left, xs, l, eq, gn, ne_empty(xs)(ne))
+
+def lnew_eval_g(+t: KV.Trie<KV.Val>, +k: String, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>, +r: R.Reply, +left: Bool, +xs: List<&2, String>, +l: KV.Deq, +w: KV.Val, +e: Nat, eq: {KV.entry.at(KV.Val, t, k, KV.hash(k)) == Some{KV.Item{w, e}} : Maybe<&2, KV.Item<KV.Val>>}, g: GoodNewL(left, xs, l)) -> {Laws.final(R.exec_all([R.Upd{k, R.UList{R.LWNew{left, xs}}}], R.Db{t, n, x, 0n, rr})) == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, 1n+e, r, R.CListNew{left, xs, l}))) : R.Db}:
+  (gn, ne) = g
+  lnew_eval(t, k, n, x, now, rr, r, left, xs, l, w, e, eq, gn, ne_empty(xs)(ne))
+
+def lnew_replay(m: Maybe<&2, KV.Item<KV.Val>>, +t: KV.Trie<KV.Val>, +k: String, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>, +r: R.Reply, +left: Bool, +xs: List<&2, String>, +l: KV.Deq) -> {KV.entry.at(KV.Val, t, k, KV.hash(k)) == m : Maybe<&2, KV.Item<KV.Val>>} -> GoodNewL(left, xs, l) -> {Laws.final(R.exec_all(A.ch.effect(k, R.ent.code(m), R.CListNew{left, xs, l}), R.Db{t, n, x, 0n, rr})) == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, R.ent.code(m), r, R.CListNew{left, xs, l}))) : R.Db}:
+  match m:
+    case Some{KV.Item{+w, +e}}:
+      eq => g => lnew_eval_g(t, k, n, x, now, rr, r, left, xs, l, w, e, eq, g)
+    case None{}:
+      eq => g => lnew_push_g(t, k, n, x, now, rr, r, left, xs, l, eq, g)
 
 def ch_replay(ch: R.Change, m: Maybe<&2, KV.Item<KV.Val>>, +t: KV.Trie<KV.Val>, +k: String, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>, +r: R.Reply) -> {KV.entry.at(KV.Val, t, k, KV.hash(k)) == m : Maybe<&2, KV.Item<KV.Val>>} -> Good(m, ch) -> {Laws.final(R.exec_all(A.ch.effect(k, R.ent.code(m), ch), R.Db{t, n, x, 0n, rr})) == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, R.ent.code(m), r, ch))) : R.Db}:
   match ch m:
@@ -6202,6 +6872,12 @@ def ch_replay(ch: R.Change, m: Maybe<&2, KV.Item<KV.Val>>, +t: KV.Trie<KV.Val>, 
       eq => g => Empty.absurd({Laws.final(R.exec_all(A.ch.effect(k, R.ent.code(None{}), R.CHash{op, hv}), R.Db{t, n, x, 0n, rr})) == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, R.ent.code(None{}), r, R.CHash{op, hv}))) : R.Db}, g)
     case R.CHashNew{+ps, +hv} _:
       eq => g => hnew_replay(m, t, k, n, x, now, rr, r, ps, hv)(eq)(g)
+    case R.CList{+op, +l} Some{KV.Item{w, +e}}:
+      eq => g => list_replay_v(w, t, k, n, x, now, rr, r, op, l, e)(eq)(g)
+    case R.CList{op, l} None{}:
+      eq => g => Empty.absurd({Laws.final(R.exec_all(A.ch.effect(k, R.ent.code(None{}), R.CList{op, l}), R.Db{t, n, x, 0n, rr})) == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, R.ent.code(None{}), r, R.CList{op, l}))) : R.Db}, g)
+    case R.CListNew{+left, +xs, +l} _:
+      eq => g => lnew_replay(m, t, k, n, x, now, rr, r, left, xs, l)(eq)(g)
 
 # an update's effects make its change again
 def out_replay(o: R.Out, +m: Maybe<&2, KV.Item<KV.Val>>, +t: KV.Trie<KV.Val>, +k: String, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>) -> {KV.entry.at(KV.Val, t, k, KV.hash(k)) == m : Maybe<&2, KV.Item<KV.Val>>} -> Good(m, ch_of(o)) -> {Laws.final(R.exec_all(A.upd.effect(k, R.ent.code(m), o), R.Db{t, n, x, 0n, rr})) == R.db.at(0n, R.db_of(R.upd.put(t, k, KV.hash(k), n, x, now, rr, R.ent.code(m), o))) : R.Db}:
@@ -6473,6 +7149,307 @@ def good_coll_hash(op: R.HWrite, c: KV.Coll, -e: Nat) -> Good(Some{KV.Item{KV.VC
   match c:
     case KV.CHash{+h0}:
       hw_old_good(op, h0, e)
+    case KV.CList{+l}:
+      hw_wrong_good(op, Some{KV.Item{KV.VColl{KV.CList{l}}, e}})
+
+# A write of a list: of a key not there (an empty list made fresh) none
+# or a new list; of a key that holds another kind, none, or the new list
+# of LWNew
+def push_fresh(xs: List<&2, String>, +left: Bool, -m: Maybe<&2, KV.Item<KV.Val>>) -> Good(m, ch_of(R.lpush.of(List.is_empty(&2, String, xs), True{}, left, xs, False{}, KV.deq.empty()))):
+  match xs:
+    case Nil{}:
+      {==}
+    case Con{+y, +rest}:
+      ({==}, {==})
+
+def new_fresh(xs: List<&2, String>, +left: Bool, -m: Maybe<&2, KV.Item<KV.Val>>) -> Good(m, ch_of(R.lnew.of(List.is_empty(&2, String, xs), left, xs))):
+  match xs:
+    case Nil{}:
+      {==}
+    case Con{+y, +rest}:
+      ({==}, {==})
+
+def popn_fresh(mc: Maybe<&2, Nat>, +left: Bool, +c: String, -m: Maybe<&2, KV.Item<KV.Val>>) -> Good(m, ch_of(R.lpop.count(mc, True{}, left, c, KV.deq.empty()))):
+  match mc:
+    case Some{k}:
+      {==}
+    case None{}:
+      {==}
+
+def lw_fresh_good(op: R.LWrite, -m: Maybe<&2, KV.Item<KV.Val>>) -> Good(m, ch_of(R.lwrite(op, True{}, KV.deq.empty()))):
+  match op:
+    case R.LWPush{+left, +xs}:
+      push_fresh(xs, left, m)
+    case R.LWPushX{left, xs}:
+      {==}
+    case R.LWPop{left}:
+      {==}
+    case R.LWPopN{+left, +c}:
+      popn_fresh(R.lcount(c), left, c, m)
+    case R.LWSet{i, v}:
+      {==}
+    case R.LWBefore{p, v}:
+      {==}
+    case R.LWAfter{p, v}:
+      {==}
+    case R.LWRem{c, v}:
+      {==}
+    case R.LWTrim{a, b}:
+      {==}
+    case R.LWNew{+left, +xs}:
+      new_fresh(xs, left, m)
+
+def lw_wrong_good(op: R.LWrite, -m: Maybe<&2, KV.Item<KV.Val>>) -> Good(m, ch_of(R.lwrite.wrong(op))):
+  match op:
+    case R.LWNew{+left, +xs}:
+      lw_fresh_good(R.LWNew{left, xs}, m)
+    case R.LWPush{left, xs}:
+      {==}
+    case R.LWPushX{left, xs}:
+      {==}
+    case R.LWPop{left}:
+      {==}
+    case R.LWPopN{left, c}:
+      {==}
+    case R.LWSet{i, v}:
+      {==}
+    case R.LWBefore{p, v}:
+      {==}
+    case R.LWAfter{p, v}:
+      {==}
+    case R.LWRem{c, v}:
+      {==}
+    case R.LWTrim{a, b}:
+      {==}
+
+# of a list the key held (l0): none, the key deleted, the list changed by
+# the write itself (the write the change keeps is the one made, and one
+# the file logs: LShape), or a new list (LWNew)
+def LShape(op: R.LWrite, ch: R.Change) -> Type:
+  match ch:
+    case R.CKeep{}:
+      {True{} == True{} : Bool}
+    case R.CDel{}:
+      {True{} == True{} : Bool}
+    case R.CList{op2, l}:
+      {op2 == op : R.LWrite} & GoodLOp(op2)
+    case R.CListNew{left, xs, l}:
+      GoodNewL(left, xs, l)
+    case R.CExp{f}:
+      Empty
+    case R.CPut{v, f}:
+      Empty
+    case R.CKeepT{v}:
+      Empty
+    case R.CApp{s, v}:
+      Empty
+    case R.CRange{o, s, v}:
+      Empty
+    case R.CHash{hop, hv}:
+      Empty
+    case R.CHashNew{ps, hv}:
+      Empty
+
+def op_eq(-op: R.LWrite, -op2: R.LWrite, -l: KV.Deq, -l0: KV.Deq, gl: {op2 == op : R.LWrite}, eq: {ch_of(R.lwrite(op, False{}, l0)) == R.CList{op2, l} : R.Change}) -> {ch_of(R.lwrite(op2, False{}, l0)) == R.CList{op2, l} : R.Change}:
+  %Equal.sym(R.LWrite, op2, op, gl) : {ch_of(R.lwrite(_, False{}, l0)) == R.CList{op2, l} : R.Change}
+  eq
+
+def sh_list(-op: R.LWrite, -op2: R.LWrite, -l: KV.Deq, -l0: KV.Deq, eq: {ch_of(R.lwrite(op, False{}, l0)) == R.CList{op2, l} : R.Change}, sh: {op2 == op : R.LWrite} & GoodLOp(op2)) -> {ch_of(R.lwrite(op2, False{}, l0)) == R.CList{op2, l} : R.Change} & GoodLOp(op2):
+  (gl, go) = sh
+  (op_eq(op, op2, l, l0, gl, eq), go)
+
+def shape_good(ch: R.Change, -op: R.LWrite, -l0: KV.Deq, -e: Nat) -> {ch_of(R.lwrite(op, False{}, l0)) == ch : R.Change} -> LShape(op, ch) -> Good(Some{KV.Item{KV.VColl{KV.CList{l0}}, e}}, ch):
+  match ch:
+    case R.CKeep{}:
+      eq => sh => {==}
+    case R.CDel{}:
+      eq => sh => {==}
+    case R.CList{op2, l}:
+      eq => sh => sh_list(op, op2, l, l0, eq, sh)
+    case R.CListNew{left, xs, l}:
+      eq => sh => sh
+    case R.CExp{f}:
+      eq => sh => Empty.absurd(Good(Some{KV.Item{KV.VColl{KV.CList{l0}}, e}}, R.CExp{f}), sh)
+    case R.CPut{v, f}:
+      eq => sh => Empty.absurd(Good(Some{KV.Item{KV.VColl{KV.CList{l0}}, e}}, R.CPut{v, f}), sh)
+    case R.CKeepT{v}:
+      eq => sh => Empty.absurd(Good(Some{KV.Item{KV.VColl{KV.CList{l0}}, e}}, R.CKeepT{v}), sh)
+    case R.CApp{s, v}:
+      eq => sh => Empty.absurd(Good(Some{KV.Item{KV.VColl{KV.CList{l0}}, e}}, R.CApp{s, v}), sh)
+    case R.CRange{o, s, v}:
+      eq => sh => Empty.absurd(Good(Some{KV.Item{KV.VColl{KV.CList{l0}}, e}}, R.CRange{o, s, v}), sh)
+    case R.CHash{hop, hv}:
+      eq => sh => Empty.absurd(Good(Some{KV.Item{KV.VColl{KV.CList{l0}}, e}}, R.CHash{hop, hv}), sh)
+    case R.CHashNew{ps, hv}:
+      eq => sh => Empty.absurd(Good(Some{KV.Item{KV.VColl{KV.CList{l0}}, e}}, R.CHashNew{ps, hv}), sh)
+
+def some_ok_n(-m: Maybe<&2, Nat>, -a: Nat, e: {m == Some{a} : Maybe<&2, Nat>}) -> {Maybe.is_some(&2, Nat, m) == True{} : Bool}:
+  %Equal.sym(Maybe<&2, Nat>, m, Some{a}, e) : {Maybe.is_some(&2, Nat, _) == True{} : Bool}
+  {==}
+
+def some_ok_i(-m: Maybe<&2, R.Int>, -a: R.Int, e: {m == Some{a} : Maybe<&2, R.Int>}) -> {Maybe.is_some(&2, R.Int, m) == True{} : Bool}:
+  %Equal.sym(Maybe<&2, R.Int>, m, Some{a}, e) : {Maybe.is_some(&2, R.Int, _) == True{} : Bool}
+  {==}
+
+def and_ok(-ma: Maybe<&2, R.Int>, -mb: Maybe<&2, R.Int>, -x: R.Int, -y: R.Int, ea: {ma == Some{x} : Maybe<&2, R.Int>}, eb: {mb == Some{y} : Maybe<&2, R.Int>}) -> {Bool.and(Maybe.is_some(&2, R.Int, ma), Maybe.is_some(&2, R.Int, mb)) == True{} : Bool}:
+  %Equal.sym(Maybe<&2, R.Int>, ma, Some{x}, ea) : {Bool.and(Maybe.is_some(&2, R.Int, _), Maybe.is_some(&2, R.Int, mb)) == True{} : Bool}
+  %Equal.sym(Maybe<&2, R.Int>, mb, Some{y}, eb) : {Bool.and(Maybe.is_some(&2, R.Int, Some{x}), Maybe.is_some(&2, R.Int, _)) == True{} : Bool}
+  {==}
+
+def push_shape(xs: List<&2, String>, +left: Bool, +l0: KV.Deq) -> LShape(R.LWPush{left, xs}, ch_of(R.lpush.of(List.is_empty(&2, String, xs), False{}, left, xs, False{}, l0))):
+  match xs:
+    case Nil{}:
+      {==}
+    case Con{+y, +rest}:
+      ({==}, {==})
+
+def pushx_shape(xs: List<&2, String>, +left: Bool, +l0: KV.Deq) -> LShape(R.LWPushX{left, xs}, ch_of(R.lpush.of(Bool.or(False{}, List.is_empty(&2, String, xs)), False{}, left, xs, True{}, l0))):
+  match xs:
+    case Nil{}:
+      {==}
+    case Con{+y, +rest}:
+      ({==}, {==})
+
+def popch_shape(b: Bool, -r: R.Reply, -left: Bool, -c: Maybe<&2, String>, -nl: KV.Deq, -op: R.LWrite) -> {R.lpop.op(left, c) == op : R.LWrite} -> GoodLOp(R.lpop.op(left, c)) -> LShape(op, ch_of(R.lpop.ch.of(b, r, left, c, nl))):
+  match b:
+    case True{}:
+      eo => g => {==}
+    case False{}:
+      eo => g => (eo, g)
+
+def pop_shape(p: KV.Pop, +left: Bool) -> LShape(R.LWPop{left}, ch_of(R.lpop.one(p, left))):
+  match p:
+    case KV.Pop{+x, +nl}:
+      popch_shape(Nat.is_eq(KV.deq.len(nl), 0n), R.RBulk{x}, left, None{}, nl, R.LWPop{left})({==})({==})
+    case KV.PopNone{}:
+      {==}
+
+def pops_shape(st: KV.Pops, +left: Bool, +c: String, ok: {Maybe.is_some(&2, Nat, R.lcount(c)) == True{} : Bool}) -> LShape(R.LWPopN{left, c}, ch_of(R.lpop.many(st, left, c))):
+  match st:
+    case KV.Pops{+xs, +nl}:
+      popch_shape(Nat.is_eq(KV.deq.len(nl), 0n), R.RArray{R.lbulks(List.reverse(&2, String, xs))}, left, Some{c}, nl, R.LWPopN{left, c})({==})(ok)
+
+def popnk_shape(k: Nat, +left: Bool, +c: String, +l0: KV.Deq, ok: {Maybe.is_some(&2, Nat, R.lcount(c)) == True{} : Bool}) -> LShape(R.LWPopN{left, c}, ch_of(R.lpop.n(False{}, k, left, c, l0))):
+  match k:
+    case 0n:
+      {==}
+    case 1n++j:
+      pops_shape(KV.deq.pops(R.lpop.cap(Nat.is_lt(1n+j, KV.deq.len(l0)), 1n+j, KV.deq.len(l0)), left, KV.Pops{Nil{}, l0}), left, c, ok)
+
+def popn_shape(mc: Maybe<&2, Nat>, +left: Bool, +c: String, +l0: KV.Deq) -> {R.lcount(c) == mc : Maybe<&2, Nat>} -> LShape(R.LWPopN{left, c}, ch_of(R.lpop.count(mc, False{}, left, c, l0))):
+  match mc:
+    case Some{+k}:
+      e => popnk_shape(k, left, c, l0, some_ok_n(R.lcount(c), k, e))
+    case None{}:
+      e => {==}
+
+def lset_at_shape(m: Maybe<&2, Nat>, +i: String, +v: String, +l0: KV.Deq) -> LShape(R.LWSet{i, v}, ch_of(R.lset.at(m, i, v, l0))):
+  match m:
+    case Some{p}:
+      ({==}, {==})
+    case None{}:
+      {==}
+
+def lset_shape(mi: Maybe<&2, R.Int>, +i: String, +v: String, +l0: KV.Deq) -> LShape(R.LWSet{i, v}, ch_of(R.lset.of(mi, i, v, l0))):
+  match mi:
+    case Some{+ix}:
+      lset_at_shape(R.lidx.at(ix, KV.deq.len(l0)), i, v, l0)
+    case None{}:
+      {==}
+
+def lins_m_shape(m: Maybe<&2, List<&2, String>>, -n: Nat, -after: Bool, -p: String, -v: String, -op: R.LWrite) -> {R.lins.op(after, p, v) == op : R.LWrite} -> GoodLOp(R.lins.op(after, p, v)) -> LShape(op, ch_of(R.lins.of(m, n, after, p, v))):
+  match m:
+    case Some{xs}:
+      eo => g => (eo, g)
+    case None{}:
+      eo => g => {==}
+
+def lrem_ch_shape(none: Bool, all: Bool, -gone: Nat, -n: Nat, -c: String, -v: String, -xs: List<&2, String>, ok: {R.lnum.ok(c) == True{} : Bool}) -> LShape(R.LWRem{c, v}, ch_of(R.lrem.ch(none, all, gone, n, c, v, xs))):
+  match none all:
+    case True{} _:
+      {==}
+    case False{} True{}:
+      {==}
+    case False{} False{}:
+      ({==}, ok)
+
+def lrem_r_shape(r: R.LRem, +n: Nat, +c: String, +v: String, ok: {R.lnum.ok(c) == True{} : Bool}) -> LShape(R.LWRem{c, v}, ch_of(R.lrem.out(r, n, c, v))):
+  match r:
+    case R.LRem{+xs, +gone}:
+      lrem_ch_shape(Nat.is_eq(gone, 0n), Nat.is_eq(gone, n), gone, n, c, v, xs, ok)
+
+def lrem_shape(mi: Maybe<&2, R.Int>, +c: String, +v: String, +l0: KV.Deq) -> {R.lnum(c) == mi : Maybe<&2, R.Int>} -> LShape(R.LWRem{c, v}, ch_of(R.lrem.of(mi, c, v, l0))):
+  match mi:
+    case Some{R.IPos{+k}}:
+      e => lrem_r_shape(R.lrem.go(KV.deq.all(l0), v, k, 0n, Nil{}), KV.deq.len(l0), c, v, some_ok_i(R.lnum(c), R.IPos{k}, e))
+    case Some{R.INeg{+k}}:
+      e => lrem_r_shape(R.lrem.back(True{}, R.lrem.go(R.lrem.elems(True{}, l0), v, 1n+k, 0n, Nil{})), KV.deq.len(l0), c, v, some_ok_i(R.lnum(c), R.INeg{k}, e))
+    case None{}:
+      e => {==}
+
+def ltrim_cut_shape(none: Bool, -s: Nat, -r: Nat, -a: String, -b: String, -l0: KV.Deq, ok: {Bool.and(R.lnum.ok(a), R.lnum.ok(b)) == True{} : Bool}) -> LShape(R.LWTrim{a, b}, ch_of(R.ltrim.cut(none, s, r, a, b, l0))):
+  match none:
+    case True{}:
+      {==}
+    case False{}:
+      ({==}, ok)
+
+def ltrim_sp_shape(sp: R.LSpan, +n: Nat, +a: String, +b: String, +l0: KV.Deq, ok: {Bool.and(R.lnum.ok(a), R.lnum.ok(b)) == True{} : Bool}) -> LShape(R.LWTrim{a, b}, ch_of(R.ltrim.span(sp, n, a, b, l0))):
+  match sp:
+    case R.LSpan{+s, +e}:
+      ltrim_cut_shape(Nat.is_eq(Nat.add(s, Nat.sub(Nat.sub(n, 1n), e)), 0n), s, Nat.sub(Nat.sub(n, 1n), e), a, b, l0, ok)
+    case R.LNone{}:
+      {==}
+
+def ltrim_shape(ma: Maybe<&2, R.Int>, mb: Maybe<&2, R.Int>, +a: String, +b: String, +l0: KV.Deq) -> {R.lnum(a) == ma : Maybe<&2, R.Int>} -> {R.lnum(b) == mb : Maybe<&2, R.Int>} -> LShape(R.LWTrim{a, b}, ch_of(R.ltrim.of(ma, mb, a, b, l0))):
+  match ma mb:
+    case Some{+x} Some{+y}:
+      ea => eb => ltrim_sp_shape(R.lspan(x, y, KV.deq.len(l0)), KV.deq.len(l0), a, b, l0, and_ok(R.lnum(a), R.lnum(b), x, y, ea, eb))
+    case Some{x} None{}:
+      ea => eb => {==}
+    case None{} _:
+      ea => eb => {==}
+
+def new_shape(xs: List<&2, String>, +left: Bool) -> LShape(R.LWNew{left, xs}, ch_of(R.lnew.of(List.is_empty(&2, String, xs), left, xs))):
+  match xs:
+    case Nil{}:
+      {==}
+    case Con{+y, +rest}:
+      ({==}, {==})
+
+def lw_shape(op: R.LWrite, +l0: KV.Deq) -> LShape(op, ch_of(R.lwrite(op, False{}, l0))):
+  match op:
+    case R.LWPush{+left, +xs}:
+      push_shape(xs, left, l0)
+    case R.LWPushX{+left, +xs}:
+      pushx_shape(xs, left, l0)
+    case R.LWPop{+left}:
+      pop_shape(KV.deq.pop(left, l0), left)
+    case R.LWPopN{+left, +c}:
+      popn_shape(R.lcount(c), left, c, l0)({==})
+    case R.LWSet{+i, +v}:
+      lset_shape(R.lnum(i), i, v, l0)
+    case R.LWBefore{+p, +v}:
+      lins_m_shape(R.lins.go(KV.deq.all(l0), R.lins.head(p, KV.deq.all(l0)), False{}, p, v, Nil{}), KV.deq.len(l0), False{}, p, v, R.LWBefore{p, v})({==})({==})
+    case R.LWAfter{+p, +v}:
+      lins_m_shape(R.lins.go(KV.deq.all(l0), R.lins.head(p, KV.deq.all(l0)), True{}, p, v, Nil{}), KV.deq.len(l0), True{}, p, v, R.LWAfter{p, v})({==})({==})
+    case R.LWRem{+c, +v}:
+      lrem_shape(R.lnum(c), c, v, l0)({==})
+    case R.LWTrim{+a, +b}:
+      ltrim_shape(R.lnum(a), R.lnum(b), a, b, l0)({==})({==})
+    case R.LWNew{+left, +xs}:
+      new_shape(xs, left)
+
+def lw_old_good(op: R.LWrite, +l0: KV.Deq, -e: Nat) -> Good(Some{KV.Item{KV.VColl{KV.CList{l0}}, e}}, ch_of(R.lwrite(op, False{}, l0))):
+  +o = op
+  shape_good(ch_of(R.lwrite(o, False{}, l0)), o, l0, e)({==})(lw_shape(o, l0))
+
+def good_coll_list(op: R.LWrite, c: KV.Coll, -e: Nat) -> Good(Some{KV.Item{KV.VColl{c}, e}}, ch_of(R.lwrite.coll(op, c))):
+  match c:
+    case KV.CList{+l0}:
+      lw_old_good(op, l0, e)
+    case KV.CHash{h}:
+      lw_wrong_good(op, Some{KV.Item{KV.VColl{KV.CHash{h}}, e}})
 
 # of a key that is not there: none or a put
 def good_none(op: R.UpdOp, +now: Nat, -m: Maybe<&2, KV.Item<KV.Val>>) -> Good(m, ch_of(R.upd(op, now, None{}))):
@@ -6504,6 +7481,8 @@ def good_none(op: R.UpdOp, +now: Nat, -m: Maybe<&2, KV.Item<KV.Val>>) -> Good(m,
       bf_none(R.bf.run0(ops, ""), R.bf.lo0(ops), m)
     case R.UHash{+hop}:
       hw_new_good(hop, m)
+    case R.UList{+lop}:
+      lw_fresh_good(lop, m)
 
 # a time set alone, to f, of a key there with e: none given none is
 # nothing
@@ -6624,6 +7603,8 @@ def good_some(op: R.UpdOp, +now: Nat, +w: String, +e: Nat) -> Good(Some{KV.Item{
       bf_some(R.bf.run0(ops, w), R.bf.lo0(ops), w, e)
     case R.UHash{+hop}:
       hw_wrong_good(hop, Some{KV.Item{KV.VStr{w}, e}})
+    case R.UList{+lop}:
+      lw_wrong_good(lop, Some{KV.Item{KV.VStr{w}, e}})
 
 # of a key there that holds a collection: SET, SETNX, EXPIRE and its kin
 # and PERSIST act on it as on a string, any other changes nothing
@@ -6655,6 +7636,8 @@ def good_coll(op: R.UpdOp, +now: Nat, +c: KV.Coll, +e: Nat) -> Good(Some{KV.Item
       {==}
     case R.UHash{+hop}:
       good_coll_hash(hop, c, e)
+    case R.UList{+lop}:
+      good_coll_list(lop, c, e)
 
 def ug_v(w: KV.Val, op: R.UpdOp, +now: Nat, +e: Nat) -> Good(Some{KV.Item{w, e}}, ch_of(R.upd.v(op, now, Some{KV.Item{w, e}}))):
   match w:
@@ -6813,6 +7796,220 @@ def bitop_do_at0(w: Bool, +op: R.BitK, +d: String, +srcs: List<&2, String>, +t: 
     case False{}:
       bitop_at0(String.is_empty(R.bitop.val(op, srcs, now, t)), R.bitop.val(op, srcs, now, t), d, t, n, x, now, rr)
 
+# LMOVE's effect, run at time 0, leaves the database LMOVE left, at time
+# 0: none when it moved nothing, else an LMOVE that finds at time 0 what
+# LMOVE found (an entry there at now is there at 0; a destination whose
+# time had passed is one the New form takes as not there), and writes as
+# LMOVE wrote (a New form pops and pushes at the ends of its plain form)
+def fresh_new(w: R.LEnds) -> {True{} == R.ends.fresh(R.ends.new(w)) : Bool}:
+  match w:
+    case R.LtoL{}:
+      {==}
+    case R.LtoR{}:
+      {==}
+    case R.RtoL{}:
+      {==}
+    case R.RtoR{}:
+      {==}
+    case R.LtoLNew{}:
+      {==}
+    case R.LtoRNew{}:
+      {==}
+    case R.RtoLNew{}:
+      {==}
+    case R.RtoRNew{}:
+      {==}
+
+def new_from(w: R.LEnds) -> {R.ends.from(R.ends.new(w)) == R.ends.from(w) : Bool}:
+  match w:
+    case R.LtoL{}:
+      {==}
+    case R.LtoR{}:
+      {==}
+    case R.RtoL{}:
+      {==}
+    case R.RtoR{}:
+      {==}
+    case R.LtoLNew{}:
+      {==}
+    case R.LtoRNew{}:
+      {==}
+    case R.RtoLNew{}:
+      {==}
+    case R.RtoRNew{}:
+      {==}
+
+def new_to(w: R.LEnds) -> {R.ends.to(R.ends.new(w)) == R.ends.to(w) : Bool}:
+  match w:
+    case R.LtoL{}:
+      {==}
+    case R.LtoR{}:
+      {==}
+    case R.RtoL{}:
+      {==}
+    case R.RtoR{}:
+      {==}
+    case R.LtoLNew{}:
+      {==}
+    case R.LtoRNew{}:
+      {==}
+    case R.RtoLNew{}:
+      {==}
+    case R.RtoRNew{}:
+      {==}
+
+def dst_none(f: Bool) -> {R.mv.dst.ent(f, None{}) == None{} : Maybe<&2, KV.Item<KV.Val>>}:
+  match f:
+    case True{}:
+      {==}
+    case False{}:
+      {==}
+
+# the destination as LMOVE saw it at now, and as its effect sees it at 0
+def dst_eq_b(b: Bool, +v: KV.Val, +e: Nat, +w: R.LEnds) -> {R.mv.dst.ent(R.ends.fresh(w), Bool.pick(Maybe<&2, KV.Item<KV.Val>>, b, Some{KV.Item{v, e}}, None{})) == R.mv.dst.ent(R.ends.fresh(Bool.pick(R.LEnds, Bool.not(b), R.ends.new(w), w)), Some{KV.Item{v, e}}) : Maybe<&2, KV.Item<KV.Val>>}:
+  match b:
+    case True{}:
+      {==}
+    case False{}:
+      %fresh_new(w) : {R.mv.dst.ent(R.ends.fresh(w), None{}) == R.mv.dst.ent(_, Some{KV.Item{v, e}}) : Maybe<&2, KV.Item<KV.Val>>}
+      dst_none(R.ends.fresh(w))
+
+def dst_eq(md: Maybe<&2, KV.Item<KV.Val>>, +w: R.LEnds, +now: Nat) -> {R.mv.dst.ent(R.ends.fresh(w), R.ent.live(now, md)) == R.mv.dst.ent(R.ends.fresh(Bool.pick(R.LEnds, R.ent.dead(now, md), R.ends.new(w), w)), md) : Maybe<&2, KV.Item<KV.Val>>}:
+  match md:
+    case None{}:
+      {==}
+    case Some{KV.Item{+v, +e}}:
+      dst_eq_b(KV.live(now, e), v, e, w)
+
+# the source, when LMOVE moved an element: there at now
+def src0_b(b: Bool, +v: KV.Val, +e: Nat, +same: Bool, +md: Maybe<&2, KV.Item<KV.Val>>) -> {A.lmove.moved(R.mv.of(Bool.pick(Maybe<&2, KV.Item<KV.Val>>, b, Some{KV.Item{v, e}}, None{}), same, md)) == True{} : Bool} -> {R.mv.of(Bool.pick(Maybe<&2, KV.Item<KV.Val>>, b, Some{KV.Item{v, e}}, None{}), same, md) == R.mv.of(Some{KV.Item{v, e}}, same, md) : R.Mv}:
+  match b:
+    case True{}:
+      mv => {==}
+    case False{}:
+      mv => Empty.absurd({R.mv.of(None{}, same, md) == R.mv.of(Some{KV.Item{v, e}}, same, md) : R.Mv}, false_true(mv))
+
+def src0(ms: Maybe<&2, KV.Item<KV.Val>>, +same: Bool, +md: Maybe<&2, KV.Item<KV.Val>>, +now: Nat) -> {A.lmove.moved(R.mv.of(R.ent.live(now, ms), same, md)) == True{} : Bool} -> {R.mv.of(R.ent.live(now, ms), same, md) == R.mv.of(ms, same, md) : R.Mv}:
+  match ms:
+    case None{}:
+      mv => {==}
+    case Some{KV.Item{+v, +e}}:
+      src0_b(KV.live(now, e), v, e, same, md)
+
+# what the effect's LMOVE finds at time 0 (its ends New when the
+# destination's time had passed at now): what LMOVE found at now
+def find0(+s: String, +d: String, +w: R.LEnds, +t: KV.Trie<KV.Val>, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>, -dd: Bool) -> {R.ent.dead(now, KV.entry.at(KV.Val, t, d, KV.hash(d))) == dd : Bool} -> {A.lmove.moved(R.mv.find(R.Db{t, n, x, now, rr}, s, d, w)) == True{} : Bool} -> {R.mv.find(R.Db{t, n, x, now, rr}, s, d, w) == R.mv.find(R.Db{t, n, x, 0n, rr}, s, d, Bool.pick(R.LEnds, dd, R.ends.new(w), w)) : R.Mv}:
+  ed => mv =>
+    %ed : {R.mv.find(R.Db{t, n, x, now, rr}, s, d, w) == R.mv.find(R.Db{t, n, x, 0n, rr}, s, d, Bool.pick(R.LEnds, _, R.ends.new(w), w)) : R.Mv}
+    %Equal.sym(Maybe<&2, KV.Item<KV.Val>>, R.ent.live(0n, KV.entry.at(KV.Val, t, d, KV.hash(d))), KV.entry.at(KV.Val, t, d, KV.hash(d)), live0_ent(KV.entry.at(KV.Val, t, d, KV.hash(d)))) : {R.mv.of(R.ent.live(now, KV.entry.at(KV.Val, t, s, KV.hash(s))), KV.str_eq(s, d), R.mv.dst.ent(R.ends.fresh(w), R.ent.live(now, KV.entry.at(KV.Val, t, d, KV.hash(d))))) == R.mv.of(R.ent.live(0n, KV.entry.at(KV.Val, t, s, KV.hash(s))), KV.str_eq(s, d), R.mv.dst.ent(R.ends.fresh(Bool.pick(R.LEnds, R.ent.dead(now, KV.entry.at(KV.Val, t, d, KV.hash(d))), R.ends.new(w), w)), _)) : R.Mv}
+    %Equal.sym(Maybe<&2, KV.Item<KV.Val>>, R.ent.live(0n, KV.entry.at(KV.Val, t, s, KV.hash(s))), KV.entry.at(KV.Val, t, s, KV.hash(s)), live0_ent(KV.entry.at(KV.Val, t, s, KV.hash(s)))) : {R.mv.of(R.ent.live(now, KV.entry.at(KV.Val, t, s, KV.hash(s))), KV.str_eq(s, d), R.mv.dst.ent(R.ends.fresh(w), R.ent.live(now, KV.entry.at(KV.Val, t, d, KV.hash(d))))) == R.mv.of(_, KV.str_eq(s, d), R.mv.dst.ent(R.ends.fresh(Bool.pick(R.LEnds, R.ent.dead(now, KV.entry.at(KV.Val, t, d, KV.hash(d))), R.ends.new(w), w)), KV.entry.at(KV.Val, t, d, KV.hash(d)))) : R.Mv}
+    %dst_eq(KV.entry.at(KV.Val, t, d, KV.hash(d)), w, now) : {R.mv.of(R.ent.live(now, KV.entry.at(KV.Val, t, s, KV.hash(s))), KV.str_eq(s, d), R.mv.dst.ent(R.ends.fresh(w), R.ent.live(now, KV.entry.at(KV.Val, t, d, KV.hash(d))))) == R.mv.of(KV.entry.at(KV.Val, t, s, KV.hash(s)), KV.str_eq(s, d), _) : R.Mv}
+    src0(KV.entry.at(KV.Val, t, s, KV.hash(s)), KV.str_eq(s, d), R.mv.dst.ent(R.ends.fresh(w), R.ent.live(now, KV.entry.at(KV.Val, t, d, KV.hash(d)))), now)(mv)
+
+# LMOVE's writes, for a given verdict, at time 0 and at now
+def keepl_at0(d: R.Db, +k: String, +l: KV.Deq) -> {R.db.keepl(R.db.at(0n, d), k, l) == R.db.at(0n, R.db.keepl(d, k, l)) : R.Db}:
+  match d:
+    case R.Db{t, n, x, now, rr}:
+      {==}
+
+def newl_at0(d: R.Db, +k: String, +l: KV.Deq) -> {R.db.newl(R.db.at(0n, d), k, l) == R.db.at(0n, R.db.newl(d, k, l)) : R.Db}:
+  match d:
+    case R.Db{t, n, x, now, rr}:
+      {==}
+
+def mv_src_at0(b: Bool, +k: String, +l: KV.Deq, +t: KV.Trie<KV.Val>, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>) -> {R.mv.src(b, k, l, R.Db{t, n, x, 0n, rr}) == R.db.at(0n, R.mv.src(b, k, l, R.Db{t, n, x, now, rr})) : R.Db}:
+  match b:
+    case True{}:
+      del_at0([k], t, n, x, now, rr)
+    case False{}:
+      {==}
+
+def mv_put_at0(+s: String, +l: KV.Deq, +t: KV.Trie<KV.Val>, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>) -> {R.mv.put(s, l, R.Db{t, n, x, 0n, rr}) == R.db.at(0n, R.mv.put(s, l, R.Db{t, n, x, now, rr})) : R.Db}:
+  mv_src_at0(Nat.is_eq(KV.deq.len(l), 0n), s, l, t, n, x, now, rr)
+
+def mv_self_at0(p: KV.Pop, +e: R.LEnds, +e2: R.LEnds, +s: String, +t: KV.Trie<KV.Val>, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>) -> {R.ends.to(e2) == R.ends.to(e) : Bool} -> {R.db_of(R.mv.self(p, e2, s, R.Db{t, n, x, 0n, rr})) == R.db.at(0n, R.db_of(R.mv.self(p, e, s, R.Db{t, n, x, now, rr}))) : R.Db}:
+  match p:
+    case KV.Pop{+y, +l}:
+      et => %et : {R.db.keepl(R.Db{t, n, x, 0n, rr}, s, KV.deq.push(R.ends.to(e2), y, l)) == R.db.at(0n, R.db.keepl(R.Db{t, n, x, now, rr}, s, KV.deq.push(_, y, l))) : R.Db}
+            {==}
+    case KV.PopNone{}:
+      et => {==}
+
+def mv_go_at0(p: KV.Pop, +e: R.LEnds, +e2: R.LEnds, +s: String, +d: String, dl: Maybe<&2, KV.Deq>, +t: KV.Trie<KV.Val>, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>) -> {R.ends.to(e2) == R.ends.to(e) : Bool} -> {R.db_of(R.mv.go(p, e2, s, d, dl, R.Db{t, n, x, 0n, rr})) == R.db.at(0n, R.db_of(R.mv.go(p, e, s, d, dl, R.Db{t, n, x, now, rr}))) : R.Db}:
+  match p dl:
+    case KV.Pop{+y, +l} Some{+q}:
+      et => %et : {R.db.keepl(R.mv.put(s, l, R.Db{t, n, x, 0n, rr}), d, KV.deq.push(R.ends.to(e2), y, q)) == R.db.at(0n, R.db.keepl(R.mv.put(s, l, R.Db{t, n, x, now, rr}), d, KV.deq.push(_, y, q))) : R.Db}
+            Equal.trans(R.Db, R.db.keepl(R.mv.put(s, l, R.Db{t, n, x, 0n, rr}), d, KV.deq.push(R.ends.to(e2), y, q)), R.db.keepl(R.db.at(0n, R.mv.put(s, l, R.Db{t, n, x, now, rr})), d, KV.deq.push(R.ends.to(e2), y, q)), R.db.at(0n, R.db.keepl(R.mv.put(s, l, R.Db{t, n, x, now, rr}), d, KV.deq.push(R.ends.to(e2), y, q))),
+              Equal.cong(R.Db, R.Db, z => R.db.keepl(z, d, KV.deq.push(R.ends.to(e2), y, q)), R.mv.put(s, l, R.Db{t, n, x, 0n, rr}), R.db.at(0n, R.mv.put(s, l, R.Db{t, n, x, now, rr})), mv_put_at0(s, l, t, n, x, now, rr)),
+              keepl_at0(R.mv.put(s, l, R.Db{t, n, x, now, rr}), d, KV.deq.push(R.ends.to(e2), y, q)))
+    case KV.Pop{+y, +l} None{}:
+      et => %et : {R.db.newl(R.mv.put(s, l, R.Db{t, n, x, 0n, rr}), d, KV.deq.push(R.ends.to(e2), y, KV.deq.empty())) == R.db.at(0n, R.db.newl(R.mv.put(s, l, R.Db{t, n, x, now, rr}), d, KV.deq.push(_, y, KV.deq.empty()))) : R.Db}
+            Equal.trans(R.Db, R.db.newl(R.mv.put(s, l, R.Db{t, n, x, 0n, rr}), d, KV.deq.push(R.ends.to(e2), y, KV.deq.empty())), R.db.newl(R.db.at(0n, R.mv.put(s, l, R.Db{t, n, x, now, rr})), d, KV.deq.push(R.ends.to(e2), y, KV.deq.empty())), R.db.at(0n, R.db.newl(R.mv.put(s, l, R.Db{t, n, x, now, rr}), d, KV.deq.push(R.ends.to(e2), y, KV.deq.empty()))),
+              Equal.cong(R.Db, R.Db, z => R.db.newl(z, d, KV.deq.push(R.ends.to(e2), y, KV.deq.empty())), R.mv.put(s, l, R.Db{t, n, x, 0n, rr}), R.db.at(0n, R.mv.put(s, l, R.Db{t, n, x, now, rr})), mv_put_at0(s, l, t, n, x, now, rr)),
+              newl_at0(R.mv.put(s, l, R.Db{t, n, x, now, rr}), d, KV.deq.push(R.ends.to(e2), y, KV.deq.empty())))
+    case KV.PopNone{} _:
+      et => {==}
+
+def mv_do_at0(m: R.Mv, +e: R.LEnds, +e2: R.LEnds, +s: String, +d: String, +t: KV.Trie<KV.Val>, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>) -> {R.ends.from(e2) == R.ends.from(e) : Bool} -> {R.ends.to(e2) == R.ends.to(e) : Bool} -> {R.db_of(R.mv.do(m, e2, s, d, R.Db{t, n, x, 0n, rr})) == R.db.at(0n, R.db_of(R.mv.do(m, e, s, d, R.Db{t, n, x, now, rr}))) : R.Db}:
+  match m:
+    case R.MvNone{}:
+      ef => et => {==}
+    case R.MvWrong{}:
+      ef => et => {==}
+    case R.MvSelf{+l, se}:
+      ef => et => %ef : {R.db_of(R.mv.self(KV.deq.pop(R.ends.from(e2), l), e2, s, R.Db{t, n, x, 0n, rr})) == R.db.at(0n, R.db_of(R.mv.self(KV.deq.pop(_, l), e, s, R.Db{t, n, x, now, rr}))) : R.Db}
+                  mv_self_at0(KV.deq.pop(R.ends.from(e2), l), e, e2, s, t, n, x, now, rr)(et)
+    case R.MvOnto{+l, se, +q}:
+      ef => et => %ef : {R.db_of(R.mv.go(KV.deq.pop(R.ends.from(e2), l), e2, s, d, Some{q}, R.Db{t, n, x, 0n, rr})) == R.db.at(0n, R.db_of(R.mv.go(KV.deq.pop(_, l), e, s, d, Some{q}, R.Db{t, n, x, now, rr}))) : R.Db}
+                  mv_go_at0(KV.deq.pop(R.ends.from(e2), l), e, e2, s, d, Some{q}, t, n, x, now, rr)(et)
+    case R.MvNew{+l, se}:
+      ef => et => %ef : {R.db_of(R.mv.go(KV.deq.pop(R.ends.from(e2), l), e2, s, d, None{}, R.Db{t, n, x, 0n, rr})) == R.db.at(0n, R.db_of(R.mv.go(KV.deq.pop(_, l), e, s, d, None{}, R.Db{t, n, x, now, rr}))) : R.Db}
+                  mv_go_at0(KV.deq.pop(R.ends.from(e2), l), e, e2, s, d, None{}, t, n, x, now, rr)(et)
+
+# LMOVE that moved nothing leaves the database as it was
+def unmoved(m: R.Mv, +e: R.LEnds, +s: String, +d: String, +db: R.Db) -> {A.lmove.moved(m) == False{} : Bool} -> {db == R.db_of(R.mv.do(m, e, s, d, db)) : R.Db}:
+  match m:
+    case R.MvNone{}:
+      em => {==}
+    case R.MvWrong{}:
+      em => {==}
+    case R.MvSelf{l, se}:
+      em => Empty.absurd({db == R.db_of(R.mv.do(R.MvSelf{l, se}, e, s, d, db)) : R.Db}, true_false(em))
+    case R.MvOnto{l, se, q}:
+      em => Empty.absurd({db == R.db_of(R.mv.do(R.MvOnto{l, se, q}, e, s, d, db)) : R.Db}, true_false(em))
+    case R.MvNew{l, se}:
+      em => Empty.absurd({db == R.db_of(R.mv.do(R.MvNew{l, se}, e, s, d, db)) : R.Db}, true_false(em))
+
+def lmove_at0(mvd: Bool, dd: Bool, +s: String, +d: String, +w: R.LEnds, +t: KV.Trie<KV.Val>, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>) -> {A.lmove.moved(R.mv.find(R.Db{t, n, x, now, rr}, s, d, w)) == mvd : Bool} -> {R.ent.dead(now, KV.entry.at(KV.Val, t, d, KV.hash(d))) == dd : Bool} -> {Laws.final(R.exec_all(A.lmove.effect(mvd, dd, s, d, w), R.Db{t, n, x, 0n, rr})) == R.db.at(0n, R.db_of(R.mv.do(R.mv.find(R.Db{t, n, x, now, rr}, s, d, w), w, s, d, R.Db{t, n, x, now, rr}))) : R.Db}:
+  match mvd dd:
+    case False{} _:
+      em => ed => %unmoved(R.mv.find(R.Db{t, n, x, now, rr}, s, d, w), w, s, d, R.Db{t, n, x, now, rr})(em) : {R.Db{t, n, x, 0n, rr} == R.db.at(0n, _) : R.Db}
+                  {==}
+    case True{} True{}:
+      em => ed =>
+        %fin_cons(R.LMove{s, d, R.ends.new(w)}, Nil{}, R.Db{t, n, x, 0n, rr}) : {_ == R.db.at(0n, R.db_of(R.mv.do(R.mv.find(R.Db{t, n, x, now, rr}, s, d, w), w, s, d, R.Db{t, n, x, now, rr}))) : R.Db}
+        %find0(s, d, w, t, n, x, now, rr, True{})(ed)(em) : {R.db_of(R.mv.do(_, R.ends.new(w), s, d, R.Db{t, n, x, 0n, rr})) == R.db.at(0n, R.db_of(R.mv.do(R.mv.find(R.Db{t, n, x, now, rr}, s, d, w), w, s, d, R.Db{t, n, x, now, rr}))) : R.Db}
+        mv_do_at0(R.mv.find(R.Db{t, n, x, now, rr}, s, d, w), w, R.ends.new(w), s, d, t, n, x, now, rr)(new_from(w))(new_to(w))
+    case True{} False{}:
+      em => ed =>
+        %fin_cons(R.LMove{s, d, w}, Nil{}, R.Db{t, n, x, 0n, rr}) : {_ == R.db.at(0n, R.db_of(R.mv.do(R.mv.find(R.Db{t, n, x, now, rr}, s, d, w), w, s, d, R.Db{t, n, x, now, rr}))) : R.Db}
+        %find0(s, d, w, t, n, x, now, rr, False{})(ed)(em) : {R.db_of(R.mv.do(_, w, s, d, R.Db{t, n, x, 0n, rr})) == R.db.at(0n, R.db_of(R.mv.do(R.mv.find(R.Db{t, n, x, now, rr}, s, d, w), w, s, d, R.Db{t, n, x, now, rr}))) : R.Db}
+        mv_do_at0(R.mv.find(R.Db{t, n, x, now, rr}, s, d, w), w, w, s, d, t, n, x, now, rr)({==})({==})
+
+# LMPOP's effects, the update of the key it picked, replay at time 0 as
+# that update ran
+def out_db_Rr(+k: String, r: R.Reply & R.Db) -> {R.db_of(r) == R.db_of(R.lmpop.out(k, r)) : R.Db}:
+  (y, d) = r
+  {==}
+
+def lmpop_at0(m: Maybe<&2, String>, +left: Bool, +cnt: String, +t: KV.Trie<KV.Val>, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>) -> {Laws.final(R.exec_all(lmpop_eff(m, left, cnt, R.Db{t, n, x, now, rr}), R.Db{t, n, x, 0n, rr})) == R.db.at(0n, R.db_of(R.lmpop.at(m, left, cnt, R.Db{t, n, x, now, rr}))) : R.Db}:
+  match m:
+    case Some{+k}:
+      %out_db_Rr(k, R.db.upd(R.Db{t, n, x, now, rr}, k, R.UList{R.LWPopN{left, cnt}})) : {Laws.final(R.exec_all(upd_eff(R.Db{t, n, x, now, rr}, k, R.UList{R.LWPopN{left, cnt}}), R.Db{t, n, x, 0n, rr})) == R.db.at(0n, _) : R.Db}
+      out_replay(R.upd.v(R.UList{R.LWPopN{left, cnt}}, now, R.ent.live(now, KV.entry.at(KV.Val, t, k, KV.hash(k)))), KV.entry.at(KV.Val, t, k, KV.hash(k)), t, k, n, x, now, rr)({==})(upd_good(R.UList{R.LWPopN{left, cnt}}, now, KV.entry.at(KV.Val, t, k, KV.hash(k))))
+    case None{}:
+      {==}
+
 # a command's effects, run at time 0 on the database it ran on, leave the
 # database it left, at time 0: an update's (and INCRBY's) by its change
 # (out_replay), as the change is a good one (upd_good)
@@ -6866,6 +8063,10 @@ def effect_go(c: R.Cmd, +t: KV.Trie<KV.Val>, +n: Nat, +x: Nat, +now: Nat, +rr: M
       ren_at0(KV.entry.at(KV.Val, t, s, KV.hash(s)), KV.str_eq(s, d), Bool.and(nx, Maybe.is_some(&2, KV.Item<KV.Val>, R.ent.live(now, KV.entry.at(KV.Val, t, d, KV.hash(d))))), nx, s, d, t, n, x, now, rr)({==})({==})
     case R.BitOp{+op, +d, +srcs}:
       bitop_do_at0(R.bitop.wrong(srcs, now, t), op, d, srcs, t, n, x, now, rr)
+    case R.LMove{+s, +d, +w}:
+      lmove_at0(A.lmove.moved(R.mv.find(R.Db{t, n, x, now, rr}, s, d, w)), R.ent.dead(now, KV.entry.at(KV.Val, t, d, KV.hash(d))), s, d, w, t, n, x, now, rr)({==})({==})
+    case R.LMPop{+ks, +left, +cnt}:
+      lmpop_at0(R.lmpop.first(ks, R.lmpop.head(ks, R.Db{t, n, x, now, rr}), R.Db{t, n, x, now, rr}), left, cnt, t, n, x, now, rr)
     case R.Own{o}:
       {==}
     case R.Bad{r}:
@@ -7105,6 +8306,8 @@ def hash_args_v(w: KV.Val, +op: R.HWrite, -hv: KV.Hash, +k: String) -> GoodHashV
   match w:
     case KV.VColl{KV.CHash{h0}}:
       g => hash_args(op, k)(ghash_op(op, hv, h0, g))
+    case KV.VColl{KV.CList{l0}}:
+      g => Empty.absurd({[R.Upd{k, R.UHash{op}}] == A.parse_all(A.args_all([R.Upd{k, R.UHash{op}}])) : List<&2, R.Cmd>}, g)
     case KV.VStr{u}:
       g => Empty.absurd({[R.Upd{k, R.UHash{op}}] == A.parse_all(A.args_all([R.Upd{k, R.UHash{op}}])) : List<&2, R.Cmd>}, g)
 
@@ -7114,6 +8317,113 @@ def hnew_args(b: Bool, +k: String, +ps: List<&2, KV.HPair>, ne: NeP(ps)) -> {A.h
       hset_args(k, ps)(ne)
     case False{}:
       hnew_eval_args(k, ps)(ne)
+
+# a list's write, as the file logs it, parses back to itself: a push of
+# elements, a pop (of a count that reads as one), LSET, LINSERT, LREM and
+# LTRIM (of numbers that read as ones), the script of a new list
+def lpush_args(left: Bool, +k: String, xs: List<&2, String>) -> NeS(xs) -> {[R.Upd{k, R.UList{R.LWPush{left, xs}}}] == A.parse_all(A.args_all([R.Upd{k, R.UList{R.LWPush{left, xs}}}])) : List<&2, R.Cmd>}:
+  match left xs:
+    case True{} Nil{}:
+      ne => Empty.absurd({[R.Upd{k, R.UList{R.LWPush{True{}, Nil{}}}}] == A.parse_all(A.args_all([R.Upd{k, R.UList{R.LWPush{True{}, Nil{}}}}])) : List<&2, R.Cmd>}, ne)
+    case True{} Con{y, rest}:
+      ne => {==}
+    case False{} Nil{}:
+      ne => Empty.absurd({[R.Upd{k, R.UList{R.LWPush{False{}, Nil{}}}}] == A.parse_all(A.args_all([R.Upd{k, R.UList{R.LWPush{False{}, Nil{}}}}])) : List<&2, R.Cmd>}, ne)
+    case False{} Con{y, rest}:
+      ne => {==}
+
+def lpushx_args(left: Bool, +k: String, xs: List<&2, String>) -> NeS(xs) -> {[R.Upd{k, R.UList{R.LWPushX{left, xs}}}] == A.parse_all(A.args_all([R.Upd{k, R.UList{R.LWPushX{left, xs}}}])) : List<&2, R.Cmd>}:
+  match left xs:
+    case True{} Nil{}:
+      ne => Empty.absurd({[R.Upd{k, R.UList{R.LWPushX{True{}, Nil{}}}}] == A.parse_all(A.args_all([R.Upd{k, R.UList{R.LWPushX{True{}, Nil{}}}}])) : List<&2, R.Cmd>}, ne)
+    case True{} Con{y, rest}:
+      ne => {==}
+    case False{} Nil{}:
+      ne => Empty.absurd({[R.Upd{k, R.UList{R.LWPushX{False{}, Nil{}}}}] == A.parse_all(A.args_all([R.Upd{k, R.UList{R.LWPushX{False{}, Nil{}}}}])) : List<&2, R.Cmd>}, ne)
+    case False{} Con{y, rest}:
+      ne => {==}
+
+def lpop_args(left: Bool, +k: String) -> {[R.Upd{k, R.UList{R.LWPop{left}}}] == A.parse_all(A.args_all([R.Upd{k, R.UList{R.LWPop{left}}}])) : List<&2, R.Cmd>}:
+  match left:
+    case True{}:
+      {==}
+    case False{}:
+      {==}
+
+def lpopn_args(left: Bool, +k: String, +c: String) -> {Maybe.is_some(&2, Nat, R.lcount(c)) == True{} : Bool} -> {[R.Upd{k, R.UList{R.LWPopN{left, c}}}] == A.parse_all(A.args_all([R.Upd{k, R.UList{R.LWPopN{left, c}}}])) : List<&2, R.Cmd>}:
+  match left:
+    case True{}:
+      ok => %Equal.sym(Bool, Maybe.is_some(&2, Nat, R.lcount(c)), True{}, ok) : {[R.Upd{k, R.UList{R.LWPopN{True{}, c}}}] == [R.parse_lpop.n(_, k, True{}, c)] : List<&2, R.Cmd>}
+            {==}
+    case False{}:
+      ok => %Equal.sym(Bool, Maybe.is_some(&2, Nat, R.lcount(c)), True{}, ok) : {[R.Upd{k, R.UList{R.LWPopN{False{}, c}}}] == [R.parse_lpop.n(_, k, False{}, c)] : List<&2, R.Cmd>}
+            {==}
+
+def lrem_args(+k: String, +c: String, +v: String, ok: {R.lnum.ok(c) == True{} : Bool}) -> {[R.Upd{k, R.UList{R.LWRem{c, v}}}] == A.parse_all(A.args_all([R.Upd{k, R.UList{R.LWRem{c, v}}}])) : List<&2, R.Cmd>}:
+  %Equal.sym(Bool, R.lnum.ok(c), True{}, ok) : {[R.Upd{k, R.UList{R.LWRem{c, v}}}] == [R.parse_lrem(_, k, c, v)] : List<&2, R.Cmd>}
+  {==}
+
+def ltrim_args(+k: String, +a: String, +b: String, ok: {Bool.and(R.lnum.ok(a), R.lnum.ok(b)) == True{} : Bool}) -> {[R.Upd{k, R.UList{R.LWTrim{a, b}}}] == A.parse_all(A.args_all([R.Upd{k, R.UList{R.LWTrim{a, b}}}])) : List<&2, R.Cmd>}:
+  %Equal.sym(Bool, Bool.and(R.lnum.ok(a), R.lnum.ok(b)), True{}, ok) : {[R.Upd{k, R.UList{R.LWTrim{a, b}}}] == [R.parse_ltrim(_, k, a, b)] : List<&2, R.Cmd>}
+  {==}
+
+def list_args(op: R.LWrite, +k: String) -> GoodLOp(op) -> {[R.Upd{k, R.UList{op}}] == A.parse_all(A.args_all([R.Upd{k, R.UList{op}}])) : List<&2, R.Cmd>}:
+  match op:
+    case R.LWPush{+left, +xs}:
+      g => lpush_args(left, k, xs)(g)
+    case R.LWPushX{+left, +xs}:
+      g => lpushx_args(left, k, xs)(g)
+    case R.LWPop{+left}:
+      g => lpop_args(left, k)
+    case R.LWPopN{+left, +c}:
+      g => lpopn_args(left, k, c)(g)
+    case R.LWSet{i, v}:
+      g => {==}
+    case R.LWBefore{p, v}:
+      g => {==}
+    case R.LWAfter{p, v}:
+      g => {==}
+    case R.LWRem{+c, +v}:
+      g => lrem_args(k, c, v, g)
+    case R.LWTrim{+a, +b}:
+      g => ltrim_args(k, a, b, g)
+    case R.LWNew{left, xs}:
+      g => Empty.absurd({[R.Upd{k, R.UList{R.LWNew{left, xs}}}] == A.parse_all(A.args_all([R.Upd{k, R.UList{R.LWNew{left, xs}}}])) : List<&2, R.Cmd>}, g)
+
+def glist_op(-op: R.LWrite, -l: KV.Deq, -l0: KV.Deq, g: {ch_of(R.lwrite(op, False{}, l0)) == R.CList{op, l} : R.Change} & GoodLOp(op)) -> GoodLOp(op):
+  (gl, go) = g
+  go
+
+def list_args_v(w: KV.Val, +op: R.LWrite, -l: KV.Deq, +k: String) -> GoodListV(w, op, l) -> {[R.Upd{k, R.UList{op}}] == A.parse_all(A.args_all([R.Upd{k, R.UList{op}}])) : List<&2, R.Cmd>}:
+  match w:
+    case KV.VColl{KV.CList{l0}}:
+      g => list_args(op, k)(glist_op(op, l, l0, g))
+    case KV.VColl{KV.CHash{h0}}:
+      g => Empty.absurd({[R.Upd{k, R.UList{op}}] == A.parse_all(A.args_all([R.Upd{k, R.UList{op}}])) : List<&2, R.Cmd>}, g)
+    case KV.VStr{u}:
+      g => Empty.absurd({[R.Upd{k, R.UList{op}}] == A.parse_all(A.args_all([R.Upd{k, R.UList{op}}])) : List<&2, R.Cmd>}, g)
+
+def lnew_eval_args(left: Bool, +k: String, xs: List<&2, String>) -> NeS(xs) -> {[R.Upd{k, R.UList{R.LWNew{left, xs}}}] == A.parse_all(A.args_all([R.Upd{k, R.UList{R.LWNew{left, xs}}}])) : List<&2, R.Cmd>}:
+  match left xs:
+    case True{} Nil{}:
+      ne => Empty.absurd({[R.Upd{k, R.UList{R.LWNew{True{}, Nil{}}}}] == A.parse_all(A.args_all([R.Upd{k, R.UList{R.LWNew{True{}, Nil{}}}}])) : List<&2, R.Cmd>}, ne)
+    case True{} Con{y, rest}:
+      ne => {==}
+    case False{} Nil{}:
+      ne => Empty.absurd({[R.Upd{k, R.UList{R.LWNew{False{}, Nil{}}}}] == A.parse_all(A.args_all([R.Upd{k, R.UList{R.LWNew{False{}, Nil{}}}}])) : List<&2, R.Cmd>}, ne)
+    case False{} Con{y, rest}:
+      ne => {==}
+
+def lnew_args(b: Bool, +k: String, +left: Bool, +xs: List<&2, String>, ne: NeS(xs)) -> {A.lnew.effect(b, k, left, xs) == A.parse_all(A.args_all(A.lnew.effect(b, k, left, xs))) : List<&2, R.Cmd>}:
+  match b:
+    case True{}:
+      lpush_args(left, k, xs)(ne)
+    case False{}:
+      lnew_eval_args(left, k, xs)(ne)
+
+def gl_ne(-left: Bool, -xs: List<&2, String>, -l: KV.Deq, g: GoodNewL(left, xs, l)) -> NeS(xs):
+  (gn, ne) = g
+  ne
 
 def ch_args(ch: R.Change, m: Maybe<&2, KV.Item<KV.Val>>, +k: String) -> Good(m, ch) -> {A.ch.effect(k, R.ent.code(m), ch) == A.parse_all(A.args_all(A.ch.effect(k, R.ent.code(m), ch))) : List<&2, R.Cmd>}:
   match ch m:
@@ -7143,6 +8453,12 @@ def ch_args(ch: R.Change, m: Maybe<&2, KV.Item<KV.Val>>, +k: String) -> Good(m, 
       g => Empty.absurd({A.ch.effect(k, R.ent.code(None{}), R.CHash{op, hv}) == A.parse_all(A.args_all(A.ch.effect(k, R.ent.code(None{}), R.CHash{op, hv}))) : List<&2, R.Cmd>}, g)
     case R.CHashNew{+ps, hv} _:
       g => hnew_args(Nat.is_eq(R.ent.code(m), 0n), k, ps, gnew_ne(ps, hv, g))
+    case R.CList{+op, l} Some{KV.Item{w, e}}:
+      g => list_args_v(w, op, l, k)(g)
+    case R.CList{op, l} None{}:
+      g => Empty.absurd({A.ch.effect(k, R.ent.code(None{}), R.CList{op, l}) == A.parse_all(A.args_all(A.ch.effect(k, R.ent.code(None{}), R.CList{op, l}))) : List<&2, R.Cmd>}, g)
+    case R.CListNew{+left, +xs, l} _:
+      g => lnew_args(Nat.is_eq(R.ent.code(m), 0n), k, left, xs, gl_ne(left, xs, l, g))
 
 def out_args(o: R.Out, m: Maybe<&2, KV.Item<KV.Val>>, +k: String) -> Good(m, ch_of(o)) -> {A.upd.effect(k, R.ent.code(m), o) == A.parse_all(A.args_all(A.upd.effect(k, R.ent.code(m), o))) : List<&2, R.Cmd>}:
   match o:
@@ -7188,6 +8504,44 @@ def bitop_do_args(w: Bool, +op: R.BitK, +d: String, +srcs: List<&2, String>, +x:
       bitop_args(String.is_empty(R.bitop.val(op, srcs, R.db.now(x), R.db.trie(x))), R.bitop.val(op, srcs, R.db.now(x), R.db.trie(x)), d)
 
 # a command's effects parse back to themselves
+# LMOVE's effect parses back to itself: LMOVE, or the script of its New
+# form
+def lmove_args1(+s: String, +d: String, e: R.LEnds) -> {[R.LMove{s, d, e}] == A.parse_all(A.args_all([R.LMove{s, d, e}])) : List<&2, R.Cmd>}:
+  match e:
+    case R.LtoL{}:
+      {==}
+    case R.LtoR{}:
+      {==}
+    case R.RtoL{}:
+      {==}
+    case R.RtoR{}:
+      {==}
+    case R.LtoLNew{}:
+      {==}
+    case R.LtoRNew{}:
+      {==}
+    case R.RtoLNew{}:
+      {==}
+    case R.RtoRNew{}:
+      {==}
+
+def lmove_args(mvd: Bool, dd: Bool, +s: String, +d: String, +w: R.LEnds) -> {A.lmove.effect(mvd, dd, s, d, w) == A.parse_all(A.args_all(A.lmove.effect(mvd, dd, s, d, w))) : List<&2, R.Cmd>}:
+  match mvd dd:
+    case True{} True{}:
+      lmove_args1(s, d, R.ends.new(w))
+    case True{} False{}:
+      lmove_args1(s, d, w)
+    case False{} _:
+      {==}
+
+# LMPOP's effects, the update of the key it picked, parse back
+def lmpop_args(m: Maybe<&2, String>, +left: Bool, +cnt: String, +t: KV.Trie<KV.Val>, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>) -> {lmpop_eff(m, left, cnt, R.Db{t, n, x, now, rr}) == A.parse_all(A.args_all(lmpop_eff(m, left, cnt, R.Db{t, n, x, now, rr}))) : List<&2, R.Cmd>}:
+  match m:
+    case Some{+k}:
+      out_args(R.upd.v(R.UList{R.LWPopN{left, cnt}}, now, R.ent.live(now, KV.entry.at(KV.Val, t, k, KV.hash(k)))), KV.entry.at(KV.Val, t, k, KV.hash(k)), k)(upd_good(R.UList{R.LWPopN{left, cnt}}, now, KV.entry.at(KV.Val, t, k, KV.hash(k))))
+    case None{}:
+      {==}
+
 def args_go(c: R.Cmd, +t: KV.Trie<KV.Val>, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>) -> {eff(c, R.Db{t, n, x, now, rr}) == A.parse_all(A.args_all(eff(c, R.Db{t, n, x, now, rr}))) : List<&2, R.Cmd>}:
   match c:
     case R.Ping{}:
@@ -7235,6 +8589,10 @@ def args_go(c: R.Cmd, +t: KV.Trie<KV.Val>, +n: Nat, +x: Nat, +now: Nat, +rr: May
       ren_args(T.ren.find(t, s, d, nx, now), s, d)
     case R.BitOp{+op, +d, +srcs}:
       bitop_do_args(R.bitop.wrong(srcs, now, t), op, d, srcs, R.Db{t, n, x, now, rr})
+    case R.LMove{+s, +d, +w}:
+      lmove_args(A.lmove.moved(R.mv.find(R.Db{t, n, x, now, rr}, s, d, w)), R.ent.dead(now, KV.entry.at(KV.Val, t, d, KV.hash(d))), s, d, w)
+    case R.LMPop{+ks, +left, +cnt}:
+      lmpop_args(R.lmpop.first(ks, R.lmpop.head(ks, R.Db{t, n, x, now, rr}), R.Db{t, n, x, now, rr}), left, cnt, t, n, x, now, rr)
     case R.Own{o}:
       {==}
     case R.Bad{r}:
@@ -7462,6 +8820,13 @@ def hnew_one(b: Bool, +k: String, +ps: List<&2, KV.HPair>) -> OneEff(A.hnew.effe
     case False{}:
       Inr{(R.Upd{k, R.UHash{R.HWNew{ps}}}, {==})}
 
+def lnew_one(b: Bool, +k: String, +left: Bool, +xs: List<&2, String>) -> OneEff(A.lnew.effect(b, k, left, xs)):
+  match b:
+    case True{}:
+      Inr{(R.Upd{k, R.UList{R.LWPush{left, xs}}}, {==})}
+    case False{}:
+      Inr{(R.Upd{k, R.UList{R.LWNew{left, xs}}}, {==})}
+
 def ch_one(+k: String, +c: Nat, ch: R.Change) -> OneEff(A.ch.effect(k, c, ch)):
   match ch:
     case R.CKeep{}:
@@ -7490,6 +8855,10 @@ def ch_one(+k: String, +c: Nat, ch: R.Change) -> OneEff(A.ch.effect(k, c, ch)):
       Inr{(R.Upd{k, R.UHash{op}}, {==})}
     case R.CHashNew{+ps, hv}:
       hnew_one(Nat.is_eq(c, 0n), k, ps)
+    case R.CList{op, l}:
+      Inr{(R.Upd{k, R.UList{op}}, {==})}
+    case R.CListNew{+left, +xs, l}:
+      lnew_one(Nat.is_eq(c, 0n), k, left, xs)
 
 def out_one(+k: String, +c: Nat, o: R.Out) -> OneEff(A.upd.effect(k, c, o)):
   match o:
@@ -7531,6 +8900,22 @@ def bitop_do_one(w: Bool, +op: R.BitK, +d: String, +srcs: List<&2, String>, +x: 
       Inl{{==}}
     case False{}:
       bitop_one(String.is_empty(R.bitop.val(op, srcs, R.db.now(x), R.db.trie(x))), R.bitop.val(op, srcs, R.db.now(x), R.db.trie(x)), d)
+
+def lmove_one(mvd: Bool, dd: Bool, +s: String, +d: String, +w: R.LEnds) -> OneEff(A.lmove.effect(mvd, dd, s, d, w)):
+  match mvd dd:
+    case True{} True{}:
+      Inr{(R.LMove{s, d, R.ends.new(w)}, {==})}
+    case True{} False{}:
+      Inr{(R.LMove{s, d, w}, {==})}
+    case False{} _:
+      Inl{{==}}
+
+def lmpop_one(m: Maybe<&2, String>, +left: Bool, +cnt: String, +t: KV.Trie<KV.Val>, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>) -> OneEff(lmpop_eff(m, left, cnt, R.Db{t, n, x, now, rr})):
+  match m:
+    case Some{+k}:
+      out_one(k, R.ent.code(KV.entry.at(KV.Val, t, k, KV.hash(k))), R.upd.v(R.UList{R.LWPopN{left, cnt}}, now, R.ent.live(now, KV.entry.at(KV.Val, t, k, KV.hash(k)))))
+    case None{}:
+      Inl{{==}}
 
 def eff_one_go(c: R.Cmd, +t: KV.Trie<KV.Val>, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>) -> OneEff(eff(c, R.Db{t, n, x, now, rr})):
   match c:
@@ -7578,6 +8963,10 @@ def eff_one_go(c: R.Cmd, +t: KV.Trie<KV.Val>, +n: Nat, +x: Nat, +now: Nat, +rr: 
       ren_one(T.ren.find(t, s, d, nx, now), s, d)
     case R.BitOp{+op, +d, +srcs}:
       bitop_do_one(R.bitop.wrong(srcs, now, t), op, d, srcs, R.Db{t, n, x, now, rr})
+    case R.LMove{+s, +d, +w}:
+      lmove_one(A.lmove.moved(R.mv.find(R.Db{t, n, x, now, rr}, s, d, w)), R.ent.dead(now, KV.entry.at(KV.Val, t, d, KV.hash(d))), s, d, w)
+    case R.LMPop{+ks, +left, +cnt}:
+      lmpop_one(R.lmpop.first(ks, R.lmpop.head(ks, R.Db{t, n, x, now, rr}), R.Db{t, n, x, now, rr}), left, cnt, t, n, x, now, rr)
     case R.Own{o}:
       Inl{{==}}
     case R.Bad{r}:
@@ -8471,6 +9860,10 @@ def fa_of(e: R.Cmd) -> {R.parse(A.args(e)) == e : R.Cmd} -> {A.file.act(e) == R.
     case R.Rename{s, d, nx}:
       h => {==}
     case R.BitOp{op, d, srcs}:
+      h => {==}
+    case R.LMove{op, d, srcs}:
+      h => {==}
+    case R.LMPop{op, d, srcs}:
       h => {==}
     case R.Own{o}:
       h => Empty.absurd({A.file.act(R.Own{o}) == R.ARun{R.Own{o}} : R.Act}, own_noent(o, h))
@@ -10206,6 +11599,10 @@ def unzip_gen(+conn: S.Conn, +srv: S.Srv, rs: List<&2, B.Req>, +cs: List<&2, R.C
       e => unzip_gen(conn, srv, rest, R.Rename{x0, x1, x2} <> cs, h <> hs, ds)(e)
     case Con{B.Req{R.BitOp{x0, x1, x2}, h}, rest}:
       e => unzip_gen(conn, srv, rest, R.BitOp{x0, x1, x2} <> cs, h <> hs, ds)(e)
+    case Con{B.Req{R.LMove{x0, x1, x2}, h}, rest}:
+      e => unzip_gen(conn, srv, rest, R.LMove{x0, x1, x2} <> cs, h <> hs, ds)(e)
+    case Con{B.Req{R.LMPop{x0, x1, x2}, h}, rest}:
+      e => unzip_gen(conn, srv, rest, R.LMPop{x0, x1, x2} <> cs, h <> hs, ds)(e)
     case Con{B.Req{R.Own{x0}, h}, rest}:
       e => mixed_gen(conn, srv, rest, R.Own{x0} <> cs, h <> hs, ds)
     case Con{B.Req{R.Bad{x0}, h}, rest}:
@@ -10308,6 +11705,10 @@ def unzip_gen_log(+conn: S.Conn, +srv: S.Srv, rs: List<&2, B.Req>, +cs: List<&2,
       e => unzip_gen_log(conn, srv, rest, R.Rename{x0, x1, x2} <> cs, h <> hs, ds)(e)
     case Con{B.Req{R.BitOp{x0, x1, x2}, h}, rest}:
       e => unzip_gen_log(conn, srv, rest, R.BitOp{x0, x1, x2} <> cs, h <> hs, ds)(e)
+    case Con{B.Req{R.LMove{x0, x1, x2}, h}, rest}:
+      e => unzip_gen_log(conn, srv, rest, R.LMove{x0, x1, x2} <> cs, h <> hs, ds)(e)
+    case Con{B.Req{R.LMPop{x0, x1, x2}, h}, rest}:
+      e => unzip_gen_log(conn, srv, rest, R.LMPop{x0, x1, x2} <> cs, h <> hs, ds)(e)
     case Con{B.Req{R.Own{x0}, h}, rest}:
       e => mixed_gen_log(conn, srv, rest, R.Own{x0} <> cs, h <> hs, ds)
     case Con{B.Req{R.Bad{x0}, h}, rest}:
@@ -10568,6 +11969,14 @@ def ran_bad(c: R.Cmd, +ps: List<&2, R.Act>, +id: Nat, +a: Bool, +n: String, +m: 
       ih =>
         %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel}, srv), False{}, ef) : {Laws.all_bad(List.append(&2, R.Act, S.acts.k(S.KData{}, _, R.BitOp{x0, x1, x2}, S.Conn{id, a, n, m, False{}, sel}, srv), ps)) == True{} : Bool}
         ih
+    case R.LMove{x0, x1, x2}:
+      ih =>
+        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel}, srv), False{}, ef) : {Laws.all_bad(List.append(&2, R.Act, S.acts.k(S.KData{}, _, R.LMove{x0, x1, x2}, S.Conn{id, a, n, m, False{}, sel}, srv), ps)) == True{} : Bool}
+        ih
+    case R.LMPop{x0, x1, x2}:
+      ih =>
+        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel}, srv), False{}, ef) : {Laws.all_bad(List.append(&2, R.Act, S.acts.k(S.KData{}, _, R.LMPop{x0, x1, x2}, S.Conn{id, a, n, m, False{}, sel}, srv), ps)) == True{} : Bool}
+        ih
     case R.DbSize{}:
       ih =>
         %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel}, srv), False{}, ef) : {Laws.all_bad(List.append(&2, R.Act, S.acts.k(S.KData{}, _, R.DbSize{}, S.Conn{id, a, n, m, False{}, sel}, srv), ps)) == True{} : Bool}
@@ -10724,6 +12133,10 @@ def auth_nc(c: R.Cmd, +id: Nat, +a: Bool, +n: String, +m: S.Mute, +sel: Nat, +sr
     case R.Rename{x0, x1, x2}:
       el => ef
     case R.BitOp{x0, x1, x2}:
+      el => ef
+    case R.LMove{x0, x1, x2}:
+      el => ef
+    case R.LMPop{x0, x1, x2}:
       el => ef
     case R.DbSize{}:
       el => ef

@@ -227,7 +227,11 @@ def main():
              ["eval", "s", "1x", "k"], ["eval", "s", "-1", "k"], ["eval", "s", "x", "k"], ["eval", "s"], ["eval"],
              ["eval", "s", "99999999999", "k"], ["eval", "s", "\t2", "a", "b"], ["hset", "k", "f", "v"], ["hset", "k"],
              ["hmget", "k", "f"], ["hdel", "k", "f"], ["hscan", "k", "0"], ["hrandfield", "k"],
-             ["memory", "usage", "k"], ["memory", "help"], ["memory"], ["memory", "nosuch", "k"]]
+             ["memory", "usage", "k"], ["memory", "help"], ["memory"], ["memory", "nosuch", "k"],
+             ["lpush", "k", "a"], ["lpush", "k"], ["rpoplpush", "a", "b"], ["lmove", "a", "b", "left", "right"],
+             ["lmove", "a"], ["lmpop", "2", "a", "b", "left"], ["lmpop", "1", "a", "left", "count", "2"],
+             ["lmpop", "0", "a", "left"], ["lmpop", "3", "a", "b"], ["lmpop", "x", "a"], ["lmpop", "-1", "a", "left"],
+             ["lmpop"], ["lrange", "k", "0", "-1"], ["lpos", "k", "a", "rank", "1"], ["linsert", "k", "before", "a", "b"]]
     for argv in lines:
         for sub in ("GETKEYS", "GETKEYSANDFLAGS"):
             same("COMMAND %s %s" % (sub, " ".join(argv)), "COMMAND", sub, *argv, fix=None)

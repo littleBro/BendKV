@@ -23,13 +23,15 @@ type KSpec is Data:
 
 # how COMMAND GETKEYS finds a command's keys: from its key specs, or as
 # the function Redis has for SET (whose key's flags depend on its GET) or
-# BITFIELD (on its subcommands), or for EVAL (whose spec counts its keys
-# with an argument, and whose function reads them when the spec does not)
+# BITFIELD (on its subcommands), or for EVAL and LMPOP (whose spec counts
+# their keys with an argument, and whose function reads them when the
+# spec does not)
 type KWay is Data:
   KBySpecs{}
   KBySet{}
   KByBitfield{}
   KByEval{}
+  KByLmpop{}
 
 # a command or a subcommand: its full name ("client|id" for a
 # subcommand), its arity, its ACL categories, its key specs, how its keys
@@ -401,6 +403,84 @@ def cmd.lcs() -> Top:
     [R.RBulk{"summary"}, R.RBulk{"Find longest common substring"}, R.RBulk{"since"}, R.RBulk{"7.0.0"}, R.RBulk{"group"}, R.RBulk{"string"}, R.RBulk{"complexity"}, R.RBulk{"O(N*M) where N and M are the lengths of s1 and s2, respectively"}, R.RBulk{"arguments"}, R.RArray{[R.RArray{[R.RBulk{"name"}, R.RBulk{"key1"}, R.RBulk{"type"}, R.RBulk{"key"}, R.RBulk{"key_spec_index"}, R.RInt{R.IPos{0n}}]}, R.RArray{[R.RBulk{"name"}, R.RBulk{"key2"}, R.RBulk{"type"}, R.RBulk{"key"}, R.RBulk{"key_spec_index"}, R.RInt{R.IPos{0n}}]}, R.RArray{[R.RBulk{"name"}, R.RBulk{"len"}, R.RBulk{"type"}, R.RBulk{"pure-token"}, R.RBulk{"token"}, R.RBulk{"LEN"}, R.RBulk{"flags"}, R.RArray{[R.RStatus{"optional"}]}]}, R.RArray{[R.RBulk{"name"}, R.RBulk{"idx"}, R.RBulk{"type"}, R.RBulk{"pure-token"}, R.RBulk{"token"}, R.RBulk{"IDX"}, R.RBulk{"flags"}, R.RArray{[R.RStatus{"optional"}]}]}, R.RArray{[R.RBulk{"name"}, R.RBulk{"len"}, R.RBulk{"type"}, R.RBulk{"integer"}, R.RBulk{"token"}, R.RBulk{"MINMATCHLEN"}, R.RBulk{"flags"}, R.RArray{[R.RStatus{"optional"}]}]}, R.RArray{[R.RBulk{"name"}, R.RBulk{"withmatchlen"}, R.RBulk{"type"}, R.RBulk{"pure-token"}, R.RBulk{"token"}, R.RBulk{"WITHMATCHLEN"}, R.RBulk{"flags"}, R.RArray{[R.RStatus{"optional"}]}]}]}]},
   []}
 
+def cmd.lindex() -> Top:
+  Top{Desc{"lindex", R.IPos{3n}, ["read", "list", "slow"], [KSpec{["RO", "access"], 1n, R.IPos{0n}, 1n, 0n}], KBySpecs{}, False{},
+    [R.RBulk{"lindex"}, R.RInt{R.IPos{3n}}, R.RArray{[R.RStatus{"readonly"}]}, R.RInt{R.IPos{1n}}, R.RInt{R.IPos{1n}}, R.RInt{R.IPos{1n}}, R.RArray{[R.RStatus{"@read"}, R.RStatus{"@list"}, R.RStatus{"@slow"}]}, R.RArray{[]}, R.RArray{[R.RArray{[R.RBulk{"flags"}, R.RArray{[R.RStatus{"RO"}, R.RStatus{"access"}]}, R.RBulk{"begin_search"}, R.RArray{[R.RBulk{"type"}, R.RBulk{"index"}, R.RBulk{"spec"}, R.RArray{[R.RBulk{"index"}, R.RInt{R.IPos{1n}}]}]}, R.RBulk{"find_keys"}, R.RArray{[R.RBulk{"type"}, R.RBulk{"range"}, R.RBulk{"spec"}, R.RArray{[R.RBulk{"lastkey"}, R.RInt{R.IPos{0n}}, R.RBulk{"keystep"}, R.RInt{R.IPos{1n}}, R.RBulk{"limit"}, R.RInt{R.IPos{0n}}]}]}]}]}],
+    [R.RBulk{"summary"}, R.RBulk{"Get an element from a list by its index"}, R.RBulk{"since"}, R.RBulk{"1.0.0"}, R.RBulk{"group"}, R.RBulk{"list"}, R.RBulk{"complexity"}, R.RBulk{"O(N) where N is the number of elements to traverse to get to the element at index. This makes asking for the first or the last element of the list O(1)."}, R.RBulk{"arguments"}, R.RArray{[R.RArray{[R.RBulk{"name"}, R.RBulk{"key"}, R.RBulk{"type"}, R.RBulk{"key"}, R.RBulk{"key_spec_index"}, R.RInt{R.IPos{0n}}]}, R.RArray{[R.RBulk{"name"}, R.RBulk{"index"}, R.RBulk{"type"}, R.RBulk{"integer"}]}]}]},
+  []}
+
+def cmd.linsert() -> Top:
+  Top{Desc{"linsert", R.IPos{5n}, ["write", "list", "slow"], [KSpec{["RW", "insert"], 1n, R.IPos{0n}, 1n, 0n}], KBySpecs{}, False{},
+    [R.RBulk{"linsert"}, R.RInt{R.IPos{5n}}, R.RArray{[R.RStatus{"write"}, R.RStatus{"denyoom"}]}, R.RInt{R.IPos{1n}}, R.RInt{R.IPos{1n}}, R.RInt{R.IPos{1n}}, R.RArray{[R.RStatus{"@write"}, R.RStatus{"@list"}, R.RStatus{"@slow"}]}, R.RArray{[]}, R.RArray{[R.RArray{[R.RBulk{"flags"}, R.RArray{[R.RStatus{"RW"}, R.RStatus{"insert"}]}, R.RBulk{"begin_search"}, R.RArray{[R.RBulk{"type"}, R.RBulk{"index"}, R.RBulk{"spec"}, R.RArray{[R.RBulk{"index"}, R.RInt{R.IPos{1n}}]}]}, R.RBulk{"find_keys"}, R.RArray{[R.RBulk{"type"}, R.RBulk{"range"}, R.RBulk{"spec"}, R.RArray{[R.RBulk{"lastkey"}, R.RInt{R.IPos{0n}}, R.RBulk{"keystep"}, R.RInt{R.IPos{1n}}, R.RBulk{"limit"}, R.RInt{R.IPos{0n}}]}]}]}]}],
+    [R.RBulk{"summary"}, R.RBulk{"Insert an element before or after another element in a list"}, R.RBulk{"since"}, R.RBulk{"2.2.0"}, R.RBulk{"group"}, R.RBulk{"list"}, R.RBulk{"complexity"}, R.RBulk{"O(N) where N is the number of elements to traverse before seeing the value pivot. This means that inserting somewhere on the left end on the list (head) can be considered O(1) and inserting somewhere on the right end (tail) is O(N)."}, R.RBulk{"arguments"}, R.RArray{[R.RArray{[R.RBulk{"name"}, R.RBulk{"key"}, R.RBulk{"type"}, R.RBulk{"key"}, R.RBulk{"key_spec_index"}, R.RInt{R.IPos{0n}}]}, R.RArray{[R.RBulk{"name"}, R.RBulk{"where"}, R.RBulk{"type"}, R.RBulk{"oneof"}, R.RBulk{"arguments"}, R.RArray{[R.RArray{[R.RBulk{"name"}, R.RBulk{"before"}, R.RBulk{"type"}, R.RBulk{"pure-token"}, R.RBulk{"token"}, R.RBulk{"BEFORE"}]}, R.RArray{[R.RBulk{"name"}, R.RBulk{"after"}, R.RBulk{"type"}, R.RBulk{"pure-token"}, R.RBulk{"token"}, R.RBulk{"AFTER"}]}]}]}, R.RArray{[R.RBulk{"name"}, R.RBulk{"pivot"}, R.RBulk{"type"}, R.RBulk{"string"}]}, R.RArray{[R.RBulk{"name"}, R.RBulk{"element"}, R.RBulk{"type"}, R.RBulk{"string"}]}]}]},
+  []}
+
+def cmd.llen() -> Top:
+  Top{Desc{"llen", R.IPos{2n}, ["read", "list", "fast"], [KSpec{["RO"], 1n, R.IPos{0n}, 1n, 0n}], KBySpecs{}, False{},
+    [R.RBulk{"llen"}, R.RInt{R.IPos{2n}}, R.RArray{[R.RStatus{"readonly"}, R.RStatus{"fast"}]}, R.RInt{R.IPos{1n}}, R.RInt{R.IPos{1n}}, R.RInt{R.IPos{1n}}, R.RArray{[R.RStatus{"@read"}, R.RStatus{"@list"}, R.RStatus{"@fast"}]}, R.RArray{[]}, R.RArray{[R.RArray{[R.RBulk{"flags"}, R.RArray{[R.RStatus{"RO"}]}, R.RBulk{"begin_search"}, R.RArray{[R.RBulk{"type"}, R.RBulk{"index"}, R.RBulk{"spec"}, R.RArray{[R.RBulk{"index"}, R.RInt{R.IPos{1n}}]}]}, R.RBulk{"find_keys"}, R.RArray{[R.RBulk{"type"}, R.RBulk{"range"}, R.RBulk{"spec"}, R.RArray{[R.RBulk{"lastkey"}, R.RInt{R.IPos{0n}}, R.RBulk{"keystep"}, R.RInt{R.IPos{1n}}, R.RBulk{"limit"}, R.RInt{R.IPos{0n}}]}]}]}]}],
+    [R.RBulk{"summary"}, R.RBulk{"Get the length of a list"}, R.RBulk{"since"}, R.RBulk{"1.0.0"}, R.RBulk{"group"}, R.RBulk{"list"}, R.RBulk{"complexity"}, R.RBulk{"O(1)"}, R.RBulk{"arguments"}, R.RArray{[R.RArray{[R.RBulk{"name"}, R.RBulk{"key"}, R.RBulk{"type"}, R.RBulk{"key"}, R.RBulk{"key_spec_index"}, R.RInt{R.IPos{0n}}]}]}]},
+  []}
+
+def cmd.lmove() -> Top:
+  Top{Desc{"lmove", R.IPos{5n}, ["write", "list", "slow"], [KSpec{["RW", "access", "delete"], 1n, R.IPos{0n}, 1n, 0n}, KSpec{["RW", "insert"], 2n, R.IPos{0n}, 1n, 0n}], KBySpecs{}, False{},
+    [R.RBulk{"lmove"}, R.RInt{R.IPos{5n}}, R.RArray{[R.RStatus{"write"}, R.RStatus{"denyoom"}]}, R.RInt{R.IPos{1n}}, R.RInt{R.IPos{2n}}, R.RInt{R.IPos{1n}}, R.RArray{[R.RStatus{"@write"}, R.RStatus{"@list"}, R.RStatus{"@slow"}]}, R.RArray{[]}, R.RArray{[R.RArray{[R.RBulk{"flags"}, R.RArray{[R.RStatus{"RW"}, R.RStatus{"access"}, R.RStatus{"delete"}]}, R.RBulk{"begin_search"}, R.RArray{[R.RBulk{"type"}, R.RBulk{"index"}, R.RBulk{"spec"}, R.RArray{[R.RBulk{"index"}, R.RInt{R.IPos{1n}}]}]}, R.RBulk{"find_keys"}, R.RArray{[R.RBulk{"type"}, R.RBulk{"range"}, R.RBulk{"spec"}, R.RArray{[R.RBulk{"lastkey"}, R.RInt{R.IPos{0n}}, R.RBulk{"keystep"}, R.RInt{R.IPos{1n}}, R.RBulk{"limit"}, R.RInt{R.IPos{0n}}]}]}]}, R.RArray{[R.RBulk{"flags"}, R.RArray{[R.RStatus{"RW"}, R.RStatus{"insert"}]}, R.RBulk{"begin_search"}, R.RArray{[R.RBulk{"type"}, R.RBulk{"index"}, R.RBulk{"spec"}, R.RArray{[R.RBulk{"index"}, R.RInt{R.IPos{2n}}]}]}, R.RBulk{"find_keys"}, R.RArray{[R.RBulk{"type"}, R.RBulk{"range"}, R.RBulk{"spec"}, R.RArray{[R.RBulk{"lastkey"}, R.RInt{R.IPos{0n}}, R.RBulk{"keystep"}, R.RInt{R.IPos{1n}}, R.RBulk{"limit"}, R.RInt{R.IPos{0n}}]}]}]}]}],
+    [R.RBulk{"summary"}, R.RBulk{"Pop an element from a list, push it to another list and return it"}, R.RBulk{"since"}, R.RBulk{"6.2.0"}, R.RBulk{"group"}, R.RBulk{"list"}, R.RBulk{"complexity"}, R.RBulk{"O(1)"}, R.RBulk{"arguments"}, R.RArray{[R.RArray{[R.RBulk{"name"}, R.RBulk{"source"}, R.RBulk{"type"}, R.RBulk{"key"}, R.RBulk{"key_spec_index"}, R.RInt{R.IPos{0n}}]}, R.RArray{[R.RBulk{"name"}, R.RBulk{"destination"}, R.RBulk{"type"}, R.RBulk{"key"}, R.RBulk{"key_spec_index"}, R.RInt{R.IPos{1n}}]}, R.RArray{[R.RBulk{"name"}, R.RBulk{"wherefrom"}, R.RBulk{"type"}, R.RBulk{"oneof"}, R.RBulk{"arguments"}, R.RArray{[R.RArray{[R.RBulk{"name"}, R.RBulk{"left"}, R.RBulk{"type"}, R.RBulk{"pure-token"}, R.RBulk{"token"}, R.RBulk{"LEFT"}]}, R.RArray{[R.RBulk{"name"}, R.RBulk{"right"}, R.RBulk{"type"}, R.RBulk{"pure-token"}, R.RBulk{"token"}, R.RBulk{"RIGHT"}]}]}]}, R.RArray{[R.RBulk{"name"}, R.RBulk{"whereto"}, R.RBulk{"type"}, R.RBulk{"oneof"}, R.RBulk{"arguments"}, R.RArray{[R.RArray{[R.RBulk{"name"}, R.RBulk{"left"}, R.RBulk{"type"}, R.RBulk{"pure-token"}, R.RBulk{"token"}, R.RBulk{"LEFT"}]}, R.RArray{[R.RBulk{"name"}, R.RBulk{"right"}, R.RBulk{"type"}, R.RBulk{"pure-token"}, R.RBulk{"token"}, R.RBulk{"RIGHT"}]}]}]}]}]},
+  []}
+
+def cmd.lmpop() -> Top:
+  Top{Desc{"lmpop", R.INeg{3n}, ["write", "list", "slow"], [], KByLmpop{}, False{},
+    [R.RBulk{"lmpop"}, R.RInt{R.INeg{3n}}, R.RArray{[R.RStatus{"write"}, R.RStatus{"movablekeys"}]}, R.RInt{R.IPos{0n}}, R.RInt{R.IPos{0n}}, R.RInt{R.IPos{0n}}, R.RArray{[R.RStatus{"@write"}, R.RStatus{"@list"}, R.RStatus{"@slow"}]}, R.RArray{[]}, R.RArray{[R.RArray{[R.RBulk{"flags"}, R.RArray{[R.RStatus{"RW"}, R.RStatus{"access"}, R.RStatus{"delete"}]}, R.RBulk{"begin_search"}, R.RArray{[R.RBulk{"type"}, R.RBulk{"index"}, R.RBulk{"spec"}, R.RArray{[R.RBulk{"index"}, R.RInt{R.IPos{1n}}]}]}, R.RBulk{"find_keys"}, R.RArray{[R.RBulk{"type"}, R.RBulk{"keynum"}, R.RBulk{"spec"}, R.RArray{[R.RBulk{"keynumidx"}, R.RInt{R.IPos{0n}}, R.RBulk{"firstkey"}, R.RInt{R.IPos{1n}}, R.RBulk{"keystep"}, R.RInt{R.IPos{1n}}]}]}]}]}],
+    [R.RBulk{"summary"}, R.RBulk{"Pop elements from a list"}, R.RBulk{"since"}, R.RBulk{"7.0.0"}, R.RBulk{"group"}, R.RBulk{"list"}, R.RBulk{"complexity"}, R.RBulk{"O(N+M) where N is the number of provided keys and M is the number of elements returned."}, R.RBulk{"arguments"}, R.RArray{[R.RArray{[R.RBulk{"name"}, R.RBulk{"numkeys"}, R.RBulk{"type"}, R.RBulk{"integer"}]}, R.RArray{[R.RBulk{"name"}, R.RBulk{"key"}, R.RBulk{"type"}, R.RBulk{"key"}, R.RBulk{"key_spec_index"}, R.RInt{R.IPos{0n}}, R.RBulk{"flags"}, R.RArray{[R.RStatus{"multiple"}]}]}, R.RArray{[R.RBulk{"name"}, R.RBulk{"where"}, R.RBulk{"type"}, R.RBulk{"oneof"}, R.RBulk{"arguments"}, R.RArray{[R.RArray{[R.RBulk{"name"}, R.RBulk{"left"}, R.RBulk{"type"}, R.RBulk{"pure-token"}, R.RBulk{"token"}, R.RBulk{"LEFT"}]}, R.RArray{[R.RBulk{"name"}, R.RBulk{"right"}, R.RBulk{"type"}, R.RBulk{"pure-token"}, R.RBulk{"token"}, R.RBulk{"RIGHT"}]}]}]}, R.RArray{[R.RBulk{"name"}, R.RBulk{"count"}, R.RBulk{"type"}, R.RBulk{"integer"}, R.RBulk{"token"}, R.RBulk{"COUNT"}, R.RBulk{"flags"}, R.RArray{[R.RStatus{"optional"}]}]}]}]},
+  []}
+
+def cmd.lpop() -> Top:
+  Top{Desc{"lpop", R.INeg{1n}, ["write", "list", "fast"], [KSpec{["RW", "access", "delete"], 1n, R.IPos{0n}, 1n, 0n}], KBySpecs{}, False{},
+    [R.RBulk{"lpop"}, R.RInt{R.INeg{1n}}, R.RArray{[R.RStatus{"write"}, R.RStatus{"fast"}]}, R.RInt{R.IPos{1n}}, R.RInt{R.IPos{1n}}, R.RInt{R.IPos{1n}}, R.RArray{[R.RStatus{"@write"}, R.RStatus{"@list"}, R.RStatus{"@fast"}]}, R.RArray{[]}, R.RArray{[R.RArray{[R.RBulk{"flags"}, R.RArray{[R.RStatus{"RW"}, R.RStatus{"access"}, R.RStatus{"delete"}]}, R.RBulk{"begin_search"}, R.RArray{[R.RBulk{"type"}, R.RBulk{"index"}, R.RBulk{"spec"}, R.RArray{[R.RBulk{"index"}, R.RInt{R.IPos{1n}}]}]}, R.RBulk{"find_keys"}, R.RArray{[R.RBulk{"type"}, R.RBulk{"range"}, R.RBulk{"spec"}, R.RArray{[R.RBulk{"lastkey"}, R.RInt{R.IPos{0n}}, R.RBulk{"keystep"}, R.RInt{R.IPos{1n}}, R.RBulk{"limit"}, R.RInt{R.IPos{0n}}]}]}]}]}],
+    [R.RBulk{"summary"}, R.RBulk{"Remove and get the first elements in a list"}, R.RBulk{"since"}, R.RBulk{"1.0.0"}, R.RBulk{"group"}, R.RBulk{"list"}, R.RBulk{"complexity"}, R.RBulk{"O(N) where N is the number of elements returned"}, R.RBulk{"history"}, R.RArray{[R.RArray{[R.RBulk{"6.2.0"}, R.RBulk{"Added the `count` argument."}]}]}, R.RBulk{"arguments"}, R.RArray{[R.RArray{[R.RBulk{"name"}, R.RBulk{"key"}, R.RBulk{"type"}, R.RBulk{"key"}, R.RBulk{"key_spec_index"}, R.RInt{R.IPos{0n}}]}, R.RArray{[R.RBulk{"name"}, R.RBulk{"count"}, R.RBulk{"type"}, R.RBulk{"integer"}, R.RBulk{"since"}, R.RBulk{"6.2.0"}, R.RBulk{"flags"}, R.RArray{[R.RStatus{"optional"}]}]}]}]},
+  []}
+
+def cmd.lpos() -> Top:
+  Top{Desc{"lpos", R.INeg{2n}, ["read", "list", "slow"], [KSpec{["RO", "access"], 1n, R.IPos{0n}, 1n, 0n}], KBySpecs{}, False{},
+    [R.RBulk{"lpos"}, R.RInt{R.INeg{2n}}, R.RArray{[R.RStatus{"readonly"}]}, R.RInt{R.IPos{1n}}, R.RInt{R.IPos{1n}}, R.RInt{R.IPos{1n}}, R.RArray{[R.RStatus{"@read"}, R.RStatus{"@list"}, R.RStatus{"@slow"}]}, R.RArray{[]}, R.RArray{[R.RArray{[R.RBulk{"flags"}, R.RArray{[R.RStatus{"RO"}, R.RStatus{"access"}]}, R.RBulk{"begin_search"}, R.RArray{[R.RBulk{"type"}, R.RBulk{"index"}, R.RBulk{"spec"}, R.RArray{[R.RBulk{"index"}, R.RInt{R.IPos{1n}}]}]}, R.RBulk{"find_keys"}, R.RArray{[R.RBulk{"type"}, R.RBulk{"range"}, R.RBulk{"spec"}, R.RArray{[R.RBulk{"lastkey"}, R.RInt{R.IPos{0n}}, R.RBulk{"keystep"}, R.RInt{R.IPos{1n}}, R.RBulk{"limit"}, R.RInt{R.IPos{0n}}]}]}]}]}],
+    [R.RBulk{"summary"}, R.RBulk{"Return the index of matching elements on a list"}, R.RBulk{"since"}, R.RBulk{"6.0.6"}, R.RBulk{"group"}, R.RBulk{"list"}, R.RBulk{"complexity"}, R.RBulk{"O(N) where N is the number of elements in the list, for the average case. When searching for elements near the head or the tail of the list, or when the MAXLEN option is provided, the command may run in constant time."}, R.RBulk{"arguments"}, R.RArray{[R.RArray{[R.RBulk{"name"}, R.RBulk{"key"}, R.RBulk{"type"}, R.RBulk{"key"}, R.RBulk{"key_spec_index"}, R.RInt{R.IPos{0n}}]}, R.RArray{[R.RBulk{"name"}, R.RBulk{"element"}, R.RBulk{"type"}, R.RBulk{"string"}]}, R.RArray{[R.RBulk{"name"}, R.RBulk{"rank"}, R.RBulk{"type"}, R.RBulk{"integer"}, R.RBulk{"token"}, R.RBulk{"RANK"}, R.RBulk{"flags"}, R.RArray{[R.RStatus{"optional"}]}]}, R.RArray{[R.RBulk{"name"}, R.RBulk{"num-matches"}, R.RBulk{"type"}, R.RBulk{"integer"}, R.RBulk{"token"}, R.RBulk{"COUNT"}, R.RBulk{"flags"}, R.RArray{[R.RStatus{"optional"}]}]}, R.RArray{[R.RBulk{"name"}, R.RBulk{"len"}, R.RBulk{"type"}, R.RBulk{"integer"}, R.RBulk{"token"}, R.RBulk{"MAXLEN"}, R.RBulk{"flags"}, R.RArray{[R.RStatus{"optional"}]}]}]}]},
+  []}
+
+def cmd.lpush() -> Top:
+  Top{Desc{"lpush", R.INeg{2n}, ["write", "list", "fast"], [KSpec{["RW", "insert"], 1n, R.IPos{0n}, 1n, 0n}], KBySpecs{}, False{},
+    [R.RBulk{"lpush"}, R.RInt{R.INeg{2n}}, R.RArray{[R.RStatus{"write"}, R.RStatus{"denyoom"}, R.RStatus{"fast"}]}, R.RInt{R.IPos{1n}}, R.RInt{R.IPos{1n}}, R.RInt{R.IPos{1n}}, R.RArray{[R.RStatus{"@write"}, R.RStatus{"@list"}, R.RStatus{"@fast"}]}, R.RArray{[]}, R.RArray{[R.RArray{[R.RBulk{"flags"}, R.RArray{[R.RStatus{"RW"}, R.RStatus{"insert"}]}, R.RBulk{"begin_search"}, R.RArray{[R.RBulk{"type"}, R.RBulk{"index"}, R.RBulk{"spec"}, R.RArray{[R.RBulk{"index"}, R.RInt{R.IPos{1n}}]}]}, R.RBulk{"find_keys"}, R.RArray{[R.RBulk{"type"}, R.RBulk{"range"}, R.RBulk{"spec"}, R.RArray{[R.RBulk{"lastkey"}, R.RInt{R.IPos{0n}}, R.RBulk{"keystep"}, R.RInt{R.IPos{1n}}, R.RBulk{"limit"}, R.RInt{R.IPos{0n}}]}]}]}]}],
+    [R.RBulk{"summary"}, R.RBulk{"Prepend one or multiple elements to a list"}, R.RBulk{"since"}, R.RBulk{"1.0.0"}, R.RBulk{"group"}, R.RBulk{"list"}, R.RBulk{"complexity"}, R.RBulk{"O(1) for each element added, so O(N) to add N elements when the command is called with multiple arguments."}, R.RBulk{"history"}, R.RArray{[R.RArray{[R.RBulk{"2.4.0"}, R.RBulk{"Accepts multiple `element` arguments."}]}]}, R.RBulk{"arguments"}, R.RArray{[R.RArray{[R.RBulk{"name"}, R.RBulk{"key"}, R.RBulk{"type"}, R.RBulk{"key"}, R.RBulk{"key_spec_index"}, R.RInt{R.IPos{0n}}]}, R.RArray{[R.RBulk{"name"}, R.RBulk{"element"}, R.RBulk{"type"}, R.RBulk{"string"}, R.RBulk{"flags"}, R.RArray{[R.RStatus{"multiple"}]}]}]}]},
+  []}
+
+def cmd.lpushx() -> Top:
+  Top{Desc{"lpushx", R.INeg{2n}, ["write", "list", "fast"], [KSpec{["RW", "insert"], 1n, R.IPos{0n}, 1n, 0n}], KBySpecs{}, False{},
+    [R.RBulk{"lpushx"}, R.RInt{R.INeg{2n}}, R.RArray{[R.RStatus{"write"}, R.RStatus{"denyoom"}, R.RStatus{"fast"}]}, R.RInt{R.IPos{1n}}, R.RInt{R.IPos{1n}}, R.RInt{R.IPos{1n}}, R.RArray{[R.RStatus{"@write"}, R.RStatus{"@list"}, R.RStatus{"@fast"}]}, R.RArray{[]}, R.RArray{[R.RArray{[R.RBulk{"flags"}, R.RArray{[R.RStatus{"RW"}, R.RStatus{"insert"}]}, R.RBulk{"begin_search"}, R.RArray{[R.RBulk{"type"}, R.RBulk{"index"}, R.RBulk{"spec"}, R.RArray{[R.RBulk{"index"}, R.RInt{R.IPos{1n}}]}]}, R.RBulk{"find_keys"}, R.RArray{[R.RBulk{"type"}, R.RBulk{"range"}, R.RBulk{"spec"}, R.RArray{[R.RBulk{"lastkey"}, R.RInt{R.IPos{0n}}, R.RBulk{"keystep"}, R.RInt{R.IPos{1n}}, R.RBulk{"limit"}, R.RInt{R.IPos{0n}}]}]}]}]}],
+    [R.RBulk{"summary"}, R.RBulk{"Prepend an element to a list, only if the list exists"}, R.RBulk{"since"}, R.RBulk{"2.2.0"}, R.RBulk{"group"}, R.RBulk{"list"}, R.RBulk{"complexity"}, R.RBulk{"O(1) for each element added, so O(N) to add N elements when the command is called with multiple arguments."}, R.RBulk{"history"}, R.RArray{[R.RArray{[R.RBulk{"4.0.0"}, R.RBulk{"Accepts multiple `element` arguments."}]}]}, R.RBulk{"arguments"}, R.RArray{[R.RArray{[R.RBulk{"name"}, R.RBulk{"key"}, R.RBulk{"type"}, R.RBulk{"key"}, R.RBulk{"key_spec_index"}, R.RInt{R.IPos{0n}}]}, R.RArray{[R.RBulk{"name"}, R.RBulk{"element"}, R.RBulk{"type"}, R.RBulk{"string"}, R.RBulk{"flags"}, R.RArray{[R.RStatus{"multiple"}]}]}]}]},
+  []}
+
+def cmd.lrange() -> Top:
+  Top{Desc{"lrange", R.IPos{4n}, ["read", "list", "slow"], [KSpec{["RO", "access"], 1n, R.IPos{0n}, 1n, 0n}], KBySpecs{}, False{},
+    [R.RBulk{"lrange"}, R.RInt{R.IPos{4n}}, R.RArray{[R.RStatus{"readonly"}]}, R.RInt{R.IPos{1n}}, R.RInt{R.IPos{1n}}, R.RInt{R.IPos{1n}}, R.RArray{[R.RStatus{"@read"}, R.RStatus{"@list"}, R.RStatus{"@slow"}]}, R.RArray{[]}, R.RArray{[R.RArray{[R.RBulk{"flags"}, R.RArray{[R.RStatus{"RO"}, R.RStatus{"access"}]}, R.RBulk{"begin_search"}, R.RArray{[R.RBulk{"type"}, R.RBulk{"index"}, R.RBulk{"spec"}, R.RArray{[R.RBulk{"index"}, R.RInt{R.IPos{1n}}]}]}, R.RBulk{"find_keys"}, R.RArray{[R.RBulk{"type"}, R.RBulk{"range"}, R.RBulk{"spec"}, R.RArray{[R.RBulk{"lastkey"}, R.RInt{R.IPos{0n}}, R.RBulk{"keystep"}, R.RInt{R.IPos{1n}}, R.RBulk{"limit"}, R.RInt{R.IPos{0n}}]}]}]}]}],
+    [R.RBulk{"summary"}, R.RBulk{"Get a range of elements from a list"}, R.RBulk{"since"}, R.RBulk{"1.0.0"}, R.RBulk{"group"}, R.RBulk{"list"}, R.RBulk{"complexity"}, R.RBulk{"O(S+N) where S is the distance of start offset from HEAD for small lists, from nearest end (HEAD or TAIL) for large lists; and N is the number of elements in the specified range."}, R.RBulk{"arguments"}, R.RArray{[R.RArray{[R.RBulk{"name"}, R.RBulk{"key"}, R.RBulk{"type"}, R.RBulk{"key"}, R.RBulk{"key_spec_index"}, R.RInt{R.IPos{0n}}]}, R.RArray{[R.RBulk{"name"}, R.RBulk{"start"}, R.RBulk{"type"}, R.RBulk{"integer"}]}, R.RArray{[R.RBulk{"name"}, R.RBulk{"stop"}, R.RBulk{"type"}, R.RBulk{"integer"}]}]}]},
+  []}
+
+def cmd.lrem() -> Top:
+  Top{Desc{"lrem", R.IPos{4n}, ["write", "list", "slow"], [KSpec{["RW", "delete"], 1n, R.IPos{0n}, 1n, 0n}], KBySpecs{}, False{},
+    [R.RBulk{"lrem"}, R.RInt{R.IPos{4n}}, R.RArray{[R.RStatus{"write"}]}, R.RInt{R.IPos{1n}}, R.RInt{R.IPos{1n}}, R.RInt{R.IPos{1n}}, R.RArray{[R.RStatus{"@write"}, R.RStatus{"@list"}, R.RStatus{"@slow"}]}, R.RArray{[]}, R.RArray{[R.RArray{[R.RBulk{"flags"}, R.RArray{[R.RStatus{"RW"}, R.RStatus{"delete"}]}, R.RBulk{"begin_search"}, R.RArray{[R.RBulk{"type"}, R.RBulk{"index"}, R.RBulk{"spec"}, R.RArray{[R.RBulk{"index"}, R.RInt{R.IPos{1n}}]}]}, R.RBulk{"find_keys"}, R.RArray{[R.RBulk{"type"}, R.RBulk{"range"}, R.RBulk{"spec"}, R.RArray{[R.RBulk{"lastkey"}, R.RInt{R.IPos{0n}}, R.RBulk{"keystep"}, R.RInt{R.IPos{1n}}, R.RBulk{"limit"}, R.RInt{R.IPos{0n}}]}]}]}]}],
+    [R.RBulk{"summary"}, R.RBulk{"Remove elements from a list"}, R.RBulk{"since"}, R.RBulk{"1.0.0"}, R.RBulk{"group"}, R.RBulk{"list"}, R.RBulk{"complexity"}, R.RBulk{"O(N+M) where N is the length of the list and M is the number of elements removed."}, R.RBulk{"arguments"}, R.RArray{[R.RArray{[R.RBulk{"name"}, R.RBulk{"key"}, R.RBulk{"type"}, R.RBulk{"key"}, R.RBulk{"key_spec_index"}, R.RInt{R.IPos{0n}}]}, R.RArray{[R.RBulk{"name"}, R.RBulk{"count"}, R.RBulk{"type"}, R.RBulk{"integer"}]}, R.RArray{[R.RBulk{"name"}, R.RBulk{"element"}, R.RBulk{"type"}, R.RBulk{"string"}]}]}]},
+  []}
+
+def cmd.lset() -> Top:
+  Top{Desc{"lset", R.IPos{4n}, ["write", "list", "slow"], [KSpec{["RW", "update"], 1n, R.IPos{0n}, 1n, 0n}], KBySpecs{}, False{},
+    [R.RBulk{"lset"}, R.RInt{R.IPos{4n}}, R.RArray{[R.RStatus{"write"}, R.RStatus{"denyoom"}]}, R.RInt{R.IPos{1n}}, R.RInt{R.IPos{1n}}, R.RInt{R.IPos{1n}}, R.RArray{[R.RStatus{"@write"}, R.RStatus{"@list"}, R.RStatus{"@slow"}]}, R.RArray{[]}, R.RArray{[R.RArray{[R.RBulk{"flags"}, R.RArray{[R.RStatus{"RW"}, R.RStatus{"update"}]}, R.RBulk{"begin_search"}, R.RArray{[R.RBulk{"type"}, R.RBulk{"index"}, R.RBulk{"spec"}, R.RArray{[R.RBulk{"index"}, R.RInt{R.IPos{1n}}]}]}, R.RBulk{"find_keys"}, R.RArray{[R.RBulk{"type"}, R.RBulk{"range"}, R.RBulk{"spec"}, R.RArray{[R.RBulk{"lastkey"}, R.RInt{R.IPos{0n}}, R.RBulk{"keystep"}, R.RInt{R.IPos{1n}}, R.RBulk{"limit"}, R.RInt{R.IPos{0n}}]}]}]}]}],
+    [R.RBulk{"summary"}, R.RBulk{"Set the value of an element in a list by its index"}, R.RBulk{"since"}, R.RBulk{"1.0.0"}, R.RBulk{"group"}, R.RBulk{"list"}, R.RBulk{"complexity"}, R.RBulk{"O(N) where N is the length of the list. Setting either the first or the last element of the list is O(1)."}, R.RBulk{"arguments"}, R.RArray{[R.RArray{[R.RBulk{"name"}, R.RBulk{"key"}, R.RBulk{"type"}, R.RBulk{"key"}, R.RBulk{"key_spec_index"}, R.RInt{R.IPos{0n}}]}, R.RArray{[R.RBulk{"name"}, R.RBulk{"index"}, R.RBulk{"type"}, R.RBulk{"integer"}]}, R.RArray{[R.RBulk{"name"}, R.RBulk{"element"}, R.RBulk{"type"}, R.RBulk{"string"}]}]}]},
+  []}
+
+def cmd.ltrim() -> Top:
+  Top{Desc{"ltrim", R.IPos{4n}, ["write", "list", "slow"], [KSpec{["RW", "delete"], 1n, R.IPos{0n}, 1n, 0n}], KBySpecs{}, False{},
+    [R.RBulk{"ltrim"}, R.RInt{R.IPos{4n}}, R.RArray{[R.RStatus{"write"}]}, R.RInt{R.IPos{1n}}, R.RInt{R.IPos{1n}}, R.RInt{R.IPos{1n}}, R.RArray{[R.RStatus{"@write"}, R.RStatus{"@list"}, R.RStatus{"@slow"}]}, R.RArray{[]}, R.RArray{[R.RArray{[R.RBulk{"flags"}, R.RArray{[R.RStatus{"RW"}, R.RStatus{"delete"}]}, R.RBulk{"begin_search"}, R.RArray{[R.RBulk{"type"}, R.RBulk{"index"}, R.RBulk{"spec"}, R.RArray{[R.RBulk{"index"}, R.RInt{R.IPos{1n}}]}]}, R.RBulk{"find_keys"}, R.RArray{[R.RBulk{"type"}, R.RBulk{"range"}, R.RBulk{"spec"}, R.RArray{[R.RBulk{"lastkey"}, R.RInt{R.IPos{0n}}, R.RBulk{"keystep"}, R.RInt{R.IPos{1n}}, R.RBulk{"limit"}, R.RInt{R.IPos{0n}}]}]}]}]}],
+    [R.RBulk{"summary"}, R.RBulk{"Trim a list to the specified range"}, R.RBulk{"since"}, R.RBulk{"1.0.0"}, R.RBulk{"group"}, R.RBulk{"list"}, R.RBulk{"complexity"}, R.RBulk{"O(N) where N is the number of elements to be removed by the operation."}, R.RBulk{"arguments"}, R.RArray{[R.RArray{[R.RBulk{"name"}, R.RBulk{"key"}, R.RBulk{"type"}, R.RBulk{"key"}, R.RBulk{"key_spec_index"}, R.RInt{R.IPos{0n}}]}, R.RArray{[R.RBulk{"name"}, R.RBulk{"start"}, R.RBulk{"type"}, R.RBulk{"integer"}]}, R.RArray{[R.RBulk{"name"}, R.RBulk{"stop"}, R.RBulk{"type"}, R.RBulk{"integer"}]}]}]},
+  []}
+
 def cmd.memory() -> Top:
   Top{Desc{"memory", R.INeg{1n}, ["slow"], [], KBySpecs{}, False{},
     [R.RBulk{"memory"}, R.RInt{R.INeg{1n}}, R.RArray{[]}, R.RInt{R.IPos{0n}}, R.RInt{R.IPos{0n}}, R.RInt{R.IPos{0n}}, R.RArray{[R.RStatus{"@slow"}]}, R.RArray{[]}, R.RArray{[]}],
@@ -523,6 +603,30 @@ def cmd.reset() -> Top:
     [R.RBulk{"summary"}, R.RBulk{"Reset the connection"}, R.RBulk{"since"}, R.RBulk{"6.2.0"}, R.RBulk{"group"}, R.RBulk{"connection"}, R.RBulk{"complexity"}, R.RBulk{"O(1)"}]},
   []}
 
+def cmd.rpop() -> Top:
+  Top{Desc{"rpop", R.INeg{1n}, ["write", "list", "fast"], [KSpec{["RW", "access", "delete"], 1n, R.IPos{0n}, 1n, 0n}], KBySpecs{}, False{},
+    [R.RBulk{"rpop"}, R.RInt{R.INeg{1n}}, R.RArray{[R.RStatus{"write"}, R.RStatus{"fast"}]}, R.RInt{R.IPos{1n}}, R.RInt{R.IPos{1n}}, R.RInt{R.IPos{1n}}, R.RArray{[R.RStatus{"@write"}, R.RStatus{"@list"}, R.RStatus{"@fast"}]}, R.RArray{[]}, R.RArray{[R.RArray{[R.RBulk{"flags"}, R.RArray{[R.RStatus{"RW"}, R.RStatus{"access"}, R.RStatus{"delete"}]}, R.RBulk{"begin_search"}, R.RArray{[R.RBulk{"type"}, R.RBulk{"index"}, R.RBulk{"spec"}, R.RArray{[R.RBulk{"index"}, R.RInt{R.IPos{1n}}]}]}, R.RBulk{"find_keys"}, R.RArray{[R.RBulk{"type"}, R.RBulk{"range"}, R.RBulk{"spec"}, R.RArray{[R.RBulk{"lastkey"}, R.RInt{R.IPos{0n}}, R.RBulk{"keystep"}, R.RInt{R.IPos{1n}}, R.RBulk{"limit"}, R.RInt{R.IPos{0n}}]}]}]}]}],
+    [R.RBulk{"summary"}, R.RBulk{"Remove and get the last elements in a list"}, R.RBulk{"since"}, R.RBulk{"1.0.0"}, R.RBulk{"group"}, R.RBulk{"list"}, R.RBulk{"complexity"}, R.RBulk{"O(N) where N is the number of elements returned"}, R.RBulk{"history"}, R.RArray{[R.RArray{[R.RBulk{"6.2.0"}, R.RBulk{"Added the `count` argument."}]}]}, R.RBulk{"arguments"}, R.RArray{[R.RArray{[R.RBulk{"name"}, R.RBulk{"key"}, R.RBulk{"type"}, R.RBulk{"key"}, R.RBulk{"key_spec_index"}, R.RInt{R.IPos{0n}}]}, R.RArray{[R.RBulk{"name"}, R.RBulk{"count"}, R.RBulk{"type"}, R.RBulk{"integer"}, R.RBulk{"since"}, R.RBulk{"6.2.0"}, R.RBulk{"flags"}, R.RArray{[R.RStatus{"optional"}]}]}]}]},
+  []}
+
+def cmd.rpoplpush() -> Top:
+  Top{Desc{"rpoplpush", R.IPos{3n}, ["write", "list", "slow"], [KSpec{["RW", "access", "delete"], 1n, R.IPos{0n}, 1n, 0n}, KSpec{["RW", "insert"], 2n, R.IPos{0n}, 1n, 0n}], KBySpecs{}, False{},
+    [R.RBulk{"rpoplpush"}, R.RInt{R.IPos{3n}}, R.RArray{[R.RStatus{"write"}, R.RStatus{"denyoom"}]}, R.RInt{R.IPos{1n}}, R.RInt{R.IPos{2n}}, R.RInt{R.IPos{1n}}, R.RArray{[R.RStatus{"@write"}, R.RStatus{"@list"}, R.RStatus{"@slow"}]}, R.RArray{[]}, R.RArray{[R.RArray{[R.RBulk{"flags"}, R.RArray{[R.RStatus{"RW"}, R.RStatus{"access"}, R.RStatus{"delete"}]}, R.RBulk{"begin_search"}, R.RArray{[R.RBulk{"type"}, R.RBulk{"index"}, R.RBulk{"spec"}, R.RArray{[R.RBulk{"index"}, R.RInt{R.IPos{1n}}]}]}, R.RBulk{"find_keys"}, R.RArray{[R.RBulk{"type"}, R.RBulk{"range"}, R.RBulk{"spec"}, R.RArray{[R.RBulk{"lastkey"}, R.RInt{R.IPos{0n}}, R.RBulk{"keystep"}, R.RInt{R.IPos{1n}}, R.RBulk{"limit"}, R.RInt{R.IPos{0n}}]}]}]}, R.RArray{[R.RBulk{"flags"}, R.RArray{[R.RStatus{"RW"}, R.RStatus{"insert"}]}, R.RBulk{"begin_search"}, R.RArray{[R.RBulk{"type"}, R.RBulk{"index"}, R.RBulk{"spec"}, R.RArray{[R.RBulk{"index"}, R.RInt{R.IPos{2n}}]}]}, R.RBulk{"find_keys"}, R.RArray{[R.RBulk{"type"}, R.RBulk{"range"}, R.RBulk{"spec"}, R.RArray{[R.RBulk{"lastkey"}, R.RInt{R.IPos{0n}}, R.RBulk{"keystep"}, R.RInt{R.IPos{1n}}, R.RBulk{"limit"}, R.RInt{R.IPos{0n}}]}]}]}]}],
+    [R.RBulk{"summary"}, R.RBulk{"Remove the last element in a list, prepend it to another list and return it"}, R.RBulk{"since"}, R.RBulk{"1.2.0"}, R.RBulk{"group"}, R.RBulk{"list"}, R.RBulk{"complexity"}, R.RBulk{"O(1)"}, R.RBulk{"doc_flags"}, R.RArray{[R.RStatus{"deprecated"}]}, R.RBulk{"deprecated_since"}, R.RBulk{"6.2.0"}, R.RBulk{"replaced_by"}, R.RBulk{"`LMOVE` with the `RIGHT` and `LEFT` arguments"}, R.RBulk{"arguments"}, R.RArray{[R.RArray{[R.RBulk{"name"}, R.RBulk{"source"}, R.RBulk{"type"}, R.RBulk{"key"}, R.RBulk{"key_spec_index"}, R.RInt{R.IPos{0n}}]}, R.RArray{[R.RBulk{"name"}, R.RBulk{"destination"}, R.RBulk{"type"}, R.RBulk{"key"}, R.RBulk{"key_spec_index"}, R.RInt{R.IPos{1n}}]}]}]},
+  []}
+
+def cmd.rpush() -> Top:
+  Top{Desc{"rpush", R.INeg{2n}, ["write", "list", "fast"], [KSpec{["RW", "insert"], 1n, R.IPos{0n}, 1n, 0n}], KBySpecs{}, False{},
+    [R.RBulk{"rpush"}, R.RInt{R.INeg{2n}}, R.RArray{[R.RStatus{"write"}, R.RStatus{"denyoom"}, R.RStatus{"fast"}]}, R.RInt{R.IPos{1n}}, R.RInt{R.IPos{1n}}, R.RInt{R.IPos{1n}}, R.RArray{[R.RStatus{"@write"}, R.RStatus{"@list"}, R.RStatus{"@fast"}]}, R.RArray{[]}, R.RArray{[R.RArray{[R.RBulk{"flags"}, R.RArray{[R.RStatus{"RW"}, R.RStatus{"insert"}]}, R.RBulk{"begin_search"}, R.RArray{[R.RBulk{"type"}, R.RBulk{"index"}, R.RBulk{"spec"}, R.RArray{[R.RBulk{"index"}, R.RInt{R.IPos{1n}}]}]}, R.RBulk{"find_keys"}, R.RArray{[R.RBulk{"type"}, R.RBulk{"range"}, R.RBulk{"spec"}, R.RArray{[R.RBulk{"lastkey"}, R.RInt{R.IPos{0n}}, R.RBulk{"keystep"}, R.RInt{R.IPos{1n}}, R.RBulk{"limit"}, R.RInt{R.IPos{0n}}]}]}]}]}],
+    [R.RBulk{"summary"}, R.RBulk{"Append one or multiple elements to a list"}, R.RBulk{"since"}, R.RBulk{"1.0.0"}, R.RBulk{"group"}, R.RBulk{"list"}, R.RBulk{"complexity"}, R.RBulk{"O(1) for each element added, so O(N) to add N elements when the command is called with multiple arguments."}, R.RBulk{"history"}, R.RArray{[R.RArray{[R.RBulk{"2.4.0"}, R.RBulk{"Accepts multiple `element` arguments."}]}]}, R.RBulk{"arguments"}, R.RArray{[R.RArray{[R.RBulk{"name"}, R.RBulk{"key"}, R.RBulk{"type"}, R.RBulk{"key"}, R.RBulk{"key_spec_index"}, R.RInt{R.IPos{0n}}]}, R.RArray{[R.RBulk{"name"}, R.RBulk{"element"}, R.RBulk{"type"}, R.RBulk{"string"}, R.RBulk{"flags"}, R.RArray{[R.RStatus{"multiple"}]}]}]}]},
+  []}
+
+def cmd.rpushx() -> Top:
+  Top{Desc{"rpushx", R.INeg{2n}, ["write", "list", "fast"], [KSpec{["RW", "insert"], 1n, R.IPos{0n}, 1n, 0n}], KBySpecs{}, False{},
+    [R.RBulk{"rpushx"}, R.RInt{R.INeg{2n}}, R.RArray{[R.RStatus{"write"}, R.RStatus{"denyoom"}, R.RStatus{"fast"}]}, R.RInt{R.IPos{1n}}, R.RInt{R.IPos{1n}}, R.RInt{R.IPos{1n}}, R.RArray{[R.RStatus{"@write"}, R.RStatus{"@list"}, R.RStatus{"@fast"}]}, R.RArray{[]}, R.RArray{[R.RArray{[R.RBulk{"flags"}, R.RArray{[R.RStatus{"RW"}, R.RStatus{"insert"}]}, R.RBulk{"begin_search"}, R.RArray{[R.RBulk{"type"}, R.RBulk{"index"}, R.RBulk{"spec"}, R.RArray{[R.RBulk{"index"}, R.RInt{R.IPos{1n}}]}]}, R.RBulk{"find_keys"}, R.RArray{[R.RBulk{"type"}, R.RBulk{"range"}, R.RBulk{"spec"}, R.RArray{[R.RBulk{"lastkey"}, R.RInt{R.IPos{0n}}, R.RBulk{"keystep"}, R.RInt{R.IPos{1n}}, R.RBulk{"limit"}, R.RInt{R.IPos{0n}}]}]}]}]}],
+    [R.RBulk{"summary"}, R.RBulk{"Append an element to a list, only if the list exists"}, R.RBulk{"since"}, R.RBulk{"2.2.0"}, R.RBulk{"group"}, R.RBulk{"list"}, R.RBulk{"complexity"}, R.RBulk{"O(1) for each element added, so O(N) to add N elements when the command is called with multiple arguments."}, R.RBulk{"history"}, R.RArray{[R.RArray{[R.RBulk{"4.0.0"}, R.RBulk{"Accepts multiple `element` arguments."}]}]}, R.RBulk{"arguments"}, R.RArray{[R.RArray{[R.RBulk{"name"}, R.RBulk{"key"}, R.RBulk{"type"}, R.RBulk{"key"}, R.RBulk{"key_spec_index"}, R.RInt{R.IPos{0n}}]}, R.RArray{[R.RBulk{"name"}, R.RBulk{"element"}, R.RBulk{"type"}, R.RBulk{"string"}, R.RBulk{"flags"}, R.RArray{[R.RStatus{"multiple"}]}]}]}]},
+  []}
+
 def cmd.scan() -> Top:
   Top{Desc{"scan", R.INeg{1n}, ["keyspace", "read", "slow"], [], KBySpecs{}, False{},
     [R.RBulk{"scan"}, R.RInt{R.INeg{1n}}, R.RArray{[R.RStatus{"readonly"}]}, R.RInt{R.IPos{0n}}, R.RInt{R.IPos{0n}}, R.RInt{R.IPos{0n}}, R.RArray{[R.RStatus{"@keyspace"}, R.RStatus{"@read"}, R.RStatus{"@slow"}]}, R.RArray{[R.RBulk{"nondeterministic_output"}, R.RBulk{"request_policy:special"}]}, R.RArray{[]}],
@@ -615,7 +719,7 @@ def cmd.unlink() -> Top:
 
 # the commands, by name
 def table() -> List<&2, Top>:
-  [cmd.append(), cmd.auth(), cmd.bitcount(), cmd.bitfield(), cmd.bitfield_ro(), cmd.bitop(), cmd.bitpos(), cmd.client(), cmd.command(), cmd.config(), cmd.copy(), cmd.dbsize(), cmd.decr(), cmd.decrby(), cmd.del(), cmd.echo(), cmd.eval(), cmd.exists(), cmd.expire(), cmd.expireat(), cmd.expiretime(), cmd.flushall(), cmd.flushdb(), cmd.function(), cmd.get(), cmd.getbit(), cmd.getdel(), cmd.getex(), cmd.getrange(), cmd.getset(), cmd.hdel(), cmd.hello(), cmd.hexists(), cmd.hget(), cmd.hgetall(), cmd.hincrby(), cmd.hkeys(), cmd.hlen(), cmd.hmget(), cmd.hmset(), cmd.hrandfield(), cmd.hscan(), cmd.hset(), cmd.hsetnx(), cmd.hstrlen(), cmd.hvals(), cmd.incr(), cmd.incrby(), cmd.info(), cmd.keys(), cmd.lcs(), cmd.memory(), cmd.mget(), cmd.move(), cmd.mset(), cmd.msetnx(), cmd.object(), cmd.persist(), cmd.pexpire(), cmd.pexpireat(), cmd.pexpiretime(), cmd.ping(), cmd.psetex(), cmd.pttl(), cmd.quit(), cmd.randomkey(), cmd.rename(), cmd.renamenx(), cmd.reset(), cmd.scan(), cmd.select(), cmd.set(), cmd.setbit(), cmd.setex(), cmd.setnx(), cmd.setrange(), cmd.strlen(), cmd.substr(), cmd.swapdb(), cmd.time(), cmd.touch(), cmd.ttl(), cmd.type(), cmd.unlink()]
+  [cmd.append(), cmd.auth(), cmd.bitcount(), cmd.bitfield(), cmd.bitfield_ro(), cmd.bitop(), cmd.bitpos(), cmd.client(), cmd.command(), cmd.config(), cmd.copy(), cmd.dbsize(), cmd.decr(), cmd.decrby(), cmd.del(), cmd.echo(), cmd.eval(), cmd.exists(), cmd.expire(), cmd.expireat(), cmd.expiretime(), cmd.flushall(), cmd.flushdb(), cmd.function(), cmd.get(), cmd.getbit(), cmd.getdel(), cmd.getex(), cmd.getrange(), cmd.getset(), cmd.hdel(), cmd.hello(), cmd.hexists(), cmd.hget(), cmd.hgetall(), cmd.hincrby(), cmd.hkeys(), cmd.hlen(), cmd.hmget(), cmd.hmset(), cmd.hrandfield(), cmd.hscan(), cmd.hset(), cmd.hsetnx(), cmd.hstrlen(), cmd.hvals(), cmd.incr(), cmd.incrby(), cmd.info(), cmd.keys(), cmd.lcs(), cmd.lindex(), cmd.linsert(), cmd.llen(), cmd.lmove(), cmd.lmpop(), cmd.lpop(), cmd.lpos(), cmd.lpush(), cmd.lpushx(), cmd.lrange(), cmd.lrem(), cmd.lset(), cmd.ltrim(), cmd.memory(), cmd.mget(), cmd.move(), cmd.mset(), cmd.msetnx(), cmd.object(), cmd.persist(), cmd.pexpire(), cmd.pexpireat(), cmd.pexpiretime(), cmd.ping(), cmd.psetex(), cmd.pttl(), cmd.quit(), cmd.randomkey(), cmd.rename(), cmd.renamenx(), cmd.reset(), cmd.rpop(), cmd.rpoplpush(), cmd.rpush(), cmd.rpushx(), cmd.scan(), cmd.select(), cmd.set(), cmd.setbit(), cmd.setex(), cmd.setnx(), cmd.setrange(), cmd.strlen(), cmd.substr(), cmd.swapdb(), cmd.time(), cmd.touch(), cmd.ttl(), cmd.type(), cmd.unlink()]
 
 # Redis's ACL categories (ACL CAT)
 def categories() -> List<&2, String>:
@@ -1089,15 +1193,17 @@ def atoi.pos(s: String, kind: Nat) -> Nat:
     case r _:
       atoi.from(r)
 
-def eval.keys.in(ok: Bool, +n: Nat, +flags: List<&2, String>) -> Maybe<&2, List<&2, KeyAt>>:
+# the n keys from argv's first-th on, when there are n > 0 and as many
+# words left
+def eval.keys.in(ok: Bool, +n: Nat, +first: Nat, +flags: List<&2, String>) -> Maybe<&2, List<&2, KeyAt>>:
   match ok:
     case True{}:
-      Some{keys.range(n, 3n, Nat.add(2n, n), 1n, flags)}
+      Some{keys.range(n, first, Nat.sub(Nat.add(first, n), 1n), 1n, flags)}
     case False{}:
       None{}
 
-def eval.keys.at(+n: Nat, +left: Nat, +flags: List<&2, String>) -> Maybe<&2, List<&2, KeyAt>>:
-  eval.keys.in(Bool.and(Nat.is_lt(0n, n), Nat.is_le(n, left)), n, flags)
+def eval.keys.at(+n: Nat, +first: Nat, +left: Nat, +flags: List<&2, String>) -> Maybe<&2, List<&2, KeyAt>>:
+  eval.keys.in(Bool.and(Nat.is_lt(0n, n), Nat.is_le(n, left)), n, first, flags)
 
 def eval.keys.fn(m: Maybe<&2, List<&2, KeyAt>>) -> List<&2, KeyAt>:
   match m:
@@ -1106,25 +1212,37 @@ def eval.keys.fn(m: Maybe<&2, List<&2, KeyAt>>) -> List<&2, KeyAt>:
     case None{}:
       Nil{}
 
-def eval.keys.or(m: Maybe<&2, List<&2, KeyAt>>, +nk: String, +left: Nat) -> List<&2, KeyAt>:
+def eval.keys.or(m: Maybe<&2, List<&2, KeyAt>>, +nk: String, +first: Nat, +left: Nat) -> List<&2, KeyAt>:
   match m:
     case Some{ks}:
       ks
     case None{}:
-      eval.keys.fn(eval.keys.at(atoi.pos(nk, atoi.kind(nk)), left, Nil{}))
+      eval.keys.fn(eval.keys.at(atoi.pos(nk, atoi.kind(nk)), first, left, Nil{}))
 
-def eval.keys.spec(l: R.LL, +left: Nat) -> Maybe<&2, List<&2, KeyAt>>:
+def eval.keys.spec(l: R.LL, +first: Nat, +left: Nat, +flags: List<&2, String>) -> Maybe<&2, List<&2, KeyAt>>:
   match l:
     case R.LL{neg, +hi, +lo}:
-      Bool.pick(Maybe<&2, List<&2, KeyAt>>, Bool.or(neg, Nat.is_lt(0n, hi)), None{}, eval.keys.at(lo, left, ["RW", "access", "update"]))
+      Bool.pick(Maybe<&2, List<&2, KeyAt>>, Bool.or(neg, Nat.is_lt(0n, hi)), None{}, eval.keys.at(lo, first, left, flags))
     case R.LLBad{}:
       None{}
+
+# the keys of a command whose numkeys is nk, the words after it rest, its
+# keys from argv's first-th on, with the flags of its spec
+def numkeys(+nk: String, rest: List<&2, String>, +first: Nat, +flags: List<&2, String>) -> List<&2, KeyAt>:
+  +left = List.length(&2, String, rest)
+  eval.keys.or(eval.keys.spec(R.ll.read(nk), first, left, flags), nk, first, left)
 
 def eval.keys(argv: List<&2, String>) -> List<&2, KeyAt>:
   match argv:
     case Con{e, Con{s, Con{+nk, rest}}}:
-      +left = List.length(&2, String, rest)
-      eval.keys.or(eval.keys.spec(R.ll.read(nk), left), nk, left)
+      numkeys(nk, rest, 3n, ["RW", "access", "update"])
+    case _:
+      Nil{}
+
+def lmpop.keys(argv: List<&2, String>) -> List<&2, KeyAt>:
+  match argv:
+    case Con{e, Con{+nk, rest}}:
+      numkeys(nk, rest, 2n, ["RW", "access", "delete"])
     case _:
       Nil{}
 
@@ -1138,6 +1256,8 @@ def keys.find(way: KWay, sps: List<&2, KSpec>, +argv: List<&2, String>) -> Maybe
       Some{bitfield.keys(argv)}
     case KByEval{}:
       Some{eval.keys(argv)}
+    case KByLmpop{}:
+      Some{lmpop.keys(argv)}
 
 def keys.has.specs(sps: List<&2, KSpec>) -> Bool:
   match sps:
@@ -1154,6 +1274,8 @@ def keys.has(+way: KWay, sps: List<&2, KSpec>) -> Bool:
     case KByBitfield{}:
       True{}
     case KByEval{}:
+      True{}
+    case KByLmpop{}:
       True{}
     case KBySpecs{}:
       keys.has.specs(sps)

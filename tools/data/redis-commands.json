@@ -6596,6 +6596,1489 @@
     []
    ]
   },
+  "lindex": {
+   "docs": [
+    "summary",
+    "Get an element from a list by its index",
+    "since",
+    "1.0.0",
+    "group",
+    "list",
+    "complexity",
+    "O(N) where N is the number of elements to traverse to get to the element at index. This makes asking for the first or the last element of the list O(1).",
+    "arguments",
+    [
+     [
+      "name",
+      "key",
+      "type",
+      "key",
+      "key_spec_index",
+      0
+     ],
+     [
+      "name",
+      "index",
+      "type",
+      "integer"
+     ]
+    ]
+   ],
+   "info": [
+    "lindex",
+    3,
+    [
+     {
+      "+": "readonly"
+     }
+    ],
+    1,
+    1,
+    1,
+    [
+     {
+      "+": "@read"
+     },
+     {
+      "+": "@list"
+     },
+     {
+      "+": "@slow"
+     }
+    ],
+    [],
+    [
+     [
+      "flags",
+      [
+       {
+        "+": "RO"
+       },
+       {
+        "+": "access"
+       }
+      ],
+      "begin_search",
+      [
+       "type",
+       "index",
+       "spec",
+       [
+        "index",
+        1
+       ]
+      ],
+      "find_keys",
+      [
+       "type",
+       "range",
+       "spec",
+       [
+        "lastkey",
+        0,
+        "keystep",
+        1,
+        "limit",
+        0
+       ]
+      ]
+     ]
+    ],
+    []
+   ]
+  },
+  "linsert": {
+   "docs": [
+    "summary",
+    "Insert an element before or after another element in a list",
+    "since",
+    "2.2.0",
+    "group",
+    "list",
+    "complexity",
+    "O(N) where N is the number of elements to traverse before seeing the value pivot. This means that inserting somewhere on the left end on the list (head) can be considered O(1) and inserting somewhere on the right end (tail) is O(N).",
+    "arguments",
+    [
+     [
+      "name",
+      "key",
+      "type",
+      "key",
+      "key_spec_index",
+      0
+     ],
+     [
+      "name",
+      "where",
+      "type",
+      "oneof",
+      "arguments",
+      [
+       [
+        "name",
+        "before",
+        "type",
+        "pure-token",
+        "token",
+        "BEFORE"
+       ],
+       [
+        "name",
+        "after",
+        "type",
+        "pure-token",
+        "token",
+        "AFTER"
+       ]
+      ]
+     ],
+     [
+      "name",
+      "pivot",
+      "type",
+      "string"
+     ],
+     [
+      "name",
+      "element",
+      "type",
+      "string"
+     ]
+    ]
+   ],
+   "info": [
+    "linsert",
+    5,
+    [
+     {
+      "+": "write"
+     },
+     {
+      "+": "denyoom"
+     }
+    ],
+    1,
+    1,
+    1,
+    [
+     {
+      "+": "@write"
+     },
+     {
+      "+": "@list"
+     },
+     {
+      "+": "@slow"
+     }
+    ],
+    [],
+    [
+     [
+      "flags",
+      [
+       {
+        "+": "RW"
+       },
+       {
+        "+": "insert"
+       }
+      ],
+      "begin_search",
+      [
+       "type",
+       "index",
+       "spec",
+       [
+        "index",
+        1
+       ]
+      ],
+      "find_keys",
+      [
+       "type",
+       "range",
+       "spec",
+       [
+        "lastkey",
+        0,
+        "keystep",
+        1,
+        "limit",
+        0
+       ]
+      ]
+     ]
+    ],
+    []
+   ]
+  },
+  "llen": {
+   "docs": [
+    "summary",
+    "Get the length of a list",
+    "since",
+    "1.0.0",
+    "group",
+    "list",
+    "complexity",
+    "O(1)",
+    "arguments",
+    [
+     [
+      "name",
+      "key",
+      "type",
+      "key",
+      "key_spec_index",
+      0
+     ]
+    ]
+   ],
+   "info": [
+    "llen",
+    2,
+    [
+     {
+      "+": "readonly"
+     },
+     {
+      "+": "fast"
+     }
+    ],
+    1,
+    1,
+    1,
+    [
+     {
+      "+": "@read"
+     },
+     {
+      "+": "@list"
+     },
+     {
+      "+": "@fast"
+     }
+    ],
+    [],
+    [
+     [
+      "flags",
+      [
+       {
+        "+": "RO"
+       }
+      ],
+      "begin_search",
+      [
+       "type",
+       "index",
+       "spec",
+       [
+        "index",
+        1
+       ]
+      ],
+      "find_keys",
+      [
+       "type",
+       "range",
+       "spec",
+       [
+        "lastkey",
+        0,
+        "keystep",
+        1,
+        "limit",
+        0
+       ]
+      ]
+     ]
+    ],
+    []
+   ]
+  },
+  "lmove": {
+   "docs": [
+    "summary",
+    "Pop an element from a list, push it to another list and return it",
+    "since",
+    "6.2.0",
+    "group",
+    "list",
+    "complexity",
+    "O(1)",
+    "arguments",
+    [
+     [
+      "name",
+      "source",
+      "type",
+      "key",
+      "key_spec_index",
+      0
+     ],
+     [
+      "name",
+      "destination",
+      "type",
+      "key",
+      "key_spec_index",
+      1
+     ],
+     [
+      "name",
+      "wherefrom",
+      "type",
+      "oneof",
+      "arguments",
+      [
+       [
+        "name",
+        "left",
+        "type",
+        "pure-token",
+        "token",
+        "LEFT"
+       ],
+       [
+        "name",
+        "right",
+        "type",
+        "pure-token",
+        "token",
+        "RIGHT"
+       ]
+      ]
+     ],
+     [
+      "name",
+      "whereto",
+      "type",
+      "oneof",
+      "arguments",
+      [
+       [
+        "name",
+        "left",
+        "type",
+        "pure-token",
+        "token",
+        "LEFT"
+       ],
+       [
+        "name",
+        "right",
+        "type",
+        "pure-token",
+        "token",
+        "RIGHT"
+       ]
+      ]
+     ]
+    ]
+   ],
+   "info": [
+    "lmove",
+    5,
+    [
+     {
+      "+": "write"
+     },
+     {
+      "+": "denyoom"
+     }
+    ],
+    1,
+    2,
+    1,
+    [
+     {
+      "+": "@write"
+     },
+     {
+      "+": "@list"
+     },
+     {
+      "+": "@slow"
+     }
+    ],
+    [],
+    [
+     [
+      "flags",
+      [
+       {
+        "+": "RW"
+       },
+       {
+        "+": "access"
+       },
+       {
+        "+": "delete"
+       }
+      ],
+      "begin_search",
+      [
+       "type",
+       "index",
+       "spec",
+       [
+        "index",
+        1
+       ]
+      ],
+      "find_keys",
+      [
+       "type",
+       "range",
+       "spec",
+       [
+        "lastkey",
+        0,
+        "keystep",
+        1,
+        "limit",
+        0
+       ]
+      ]
+     ],
+     [
+      "flags",
+      [
+       {
+        "+": "RW"
+       },
+       {
+        "+": "insert"
+       }
+      ],
+      "begin_search",
+      [
+       "type",
+       "index",
+       "spec",
+       [
+        "index",
+        2
+       ]
+      ],
+      "find_keys",
+      [
+       "type",
+       "range",
+       "spec",
+       [
+        "lastkey",
+        0,
+        "keystep",
+        1,
+        "limit",
+        0
+       ]
+      ]
+     ]
+    ],
+    []
+   ]
+  },
+  "lmpop": {
+   "docs": [
+    "summary",
+    "Pop elements from a list",
+    "since",
+    "7.0.0",
+    "group",
+    "list",
+    "complexity",
+    "O(N+M) where N is the number of provided keys and M is the number of elements returned.",
+    "arguments",
+    [
+     [
+      "name",
+      "numkeys",
+      "type",
+      "integer"
+     ],
+     [
+      "name",
+      "key",
+      "type",
+      "key",
+      "key_spec_index",
+      0,
+      "flags",
+      [
+       {
+        "+": "multiple"
+       }
+      ]
+     ],
+     [
+      "name",
+      "where",
+      "type",
+      "oneof",
+      "arguments",
+      [
+       [
+        "name",
+        "left",
+        "type",
+        "pure-token",
+        "token",
+        "LEFT"
+       ],
+       [
+        "name",
+        "right",
+        "type",
+        "pure-token",
+        "token",
+        "RIGHT"
+       ]
+      ]
+     ],
+     [
+      "name",
+      "count",
+      "type",
+      "integer",
+      "token",
+      "COUNT",
+      "flags",
+      [
+       {
+        "+": "optional"
+       }
+      ]
+     ]
+    ]
+   ],
+   "info": [
+    "lmpop",
+    -4,
+    [
+     {
+      "+": "write"
+     },
+     {
+      "+": "movablekeys"
+     }
+    ],
+    0,
+    0,
+    0,
+    [
+     {
+      "+": "@write"
+     },
+     {
+      "+": "@list"
+     },
+     {
+      "+": "@slow"
+     }
+    ],
+    [],
+    [
+     [
+      "flags",
+      [
+       {
+        "+": "RW"
+       },
+       {
+        "+": "access"
+       },
+       {
+        "+": "delete"
+       }
+      ],
+      "begin_search",
+      [
+       "type",
+       "index",
+       "spec",
+       [
+        "index",
+        1
+       ]
+      ],
+      "find_keys",
+      [
+       "type",
+       "keynum",
+       "spec",
+       [
+        "keynumidx",
+        0,
+        "firstkey",
+        1,
+        "keystep",
+        1
+       ]
+      ]
+     ]
+    ],
+    []
+   ]
+  },
+  "lpop": {
+   "docs": [
+    "summary",
+    "Remove and get the first elements in a list",
+    "since",
+    "1.0.0",
+    "group",
+    "list",
+    "complexity",
+    "O(N) where N is the number of elements returned",
+    "history",
+    [
+     [
+      "6.2.0",
+      "Added the `count` argument."
+     ]
+    ],
+    "arguments",
+    [
+     [
+      "name",
+      "key",
+      "type",
+      "key",
+      "key_spec_index",
+      0
+     ],
+     [
+      "name",
+      "count",
+      "type",
+      "integer",
+      "since",
+      "6.2.0",
+      "flags",
+      [
+       {
+        "+": "optional"
+       }
+      ]
+     ]
+    ]
+   ],
+   "info": [
+    "lpop",
+    -2,
+    [
+     {
+      "+": "write"
+     },
+     {
+      "+": "fast"
+     }
+    ],
+    1,
+    1,
+    1,
+    [
+     {
+      "+": "@write"
+     },
+     {
+      "+": "@list"
+     },
+     {
+      "+": "@fast"
+     }
+    ],
+    [],
+    [
+     [
+      "flags",
+      [
+       {
+        "+": "RW"
+       },
+       {
+        "+": "access"
+       },
+       {
+        "+": "delete"
+       }
+      ],
+      "begin_search",
+      [
+       "type",
+       "index",
+       "spec",
+       [
+        "index",
+        1
+       ]
+      ],
+      "find_keys",
+      [
+       "type",
+       "range",
+       "spec",
+       [
+        "lastkey",
+        0,
+        "keystep",
+        1,
+        "limit",
+        0
+       ]
+      ]
+     ]
+    ],
+    []
+   ]
+  },
+  "lpos": {
+   "docs": [
+    "summary",
+    "Return the index of matching elements on a list",
+    "since",
+    "6.0.6",
+    "group",
+    "list",
+    "complexity",
+    "O(N) where N is the number of elements in the list, for the average case. When searching for elements near the head or the tail of the list, or when the MAXLEN option is provided, the command may run in constant time.",
+    "arguments",
+    [
+     [
+      "name",
+      "key",
+      "type",
+      "key",
+      "key_spec_index",
+      0
+     ],
+     [
+      "name",
+      "element",
+      "type",
+      "string"
+     ],
+     [
+      "name",
+      "rank",
+      "type",
+      "integer",
+      "token",
+      "RANK",
+      "flags",
+      [
+       {
+        "+": "optional"
+       }
+      ]
+     ],
+     [
+      "name",
+      "num-matches",
+      "type",
+      "integer",
+      "token",
+      "COUNT",
+      "flags",
+      [
+       {
+        "+": "optional"
+       }
+      ]
+     ],
+     [
+      "name",
+      "len",
+      "type",
+      "integer",
+      "token",
+      "MAXLEN",
+      "flags",
+      [
+       {
+        "+": "optional"
+       }
+      ]
+     ]
+    ]
+   ],
+   "info": [
+    "lpos",
+    -3,
+    [
+     {
+      "+": "readonly"
+     }
+    ],
+    1,
+    1,
+    1,
+    [
+     {
+      "+": "@read"
+     },
+     {
+      "+": "@list"
+     },
+     {
+      "+": "@slow"
+     }
+    ],
+    [],
+    [
+     [
+      "flags",
+      [
+       {
+        "+": "RO"
+       },
+       {
+        "+": "access"
+       }
+      ],
+      "begin_search",
+      [
+       "type",
+       "index",
+       "spec",
+       [
+        "index",
+        1
+       ]
+      ],
+      "find_keys",
+      [
+       "type",
+       "range",
+       "spec",
+       [
+        "lastkey",
+        0,
+        "keystep",
+        1,
+        "limit",
+        0
+       ]
+      ]
+     ]
+    ],
+    []
+   ]
+  },
+  "lpush": {
+   "docs": [
+    "summary",
+    "Prepend one or multiple elements to a list",
+    "since",
+    "1.0.0",
+    "group",
+    "list",
+    "complexity",
+    "O(1) for each element added, so O(N) to add N elements when the command is called with multiple arguments.",
+    "history",
+    [
+     [
+      "2.4.0",
+      "Accepts multiple `element` arguments."
+     ]
+    ],
+    "arguments",
+    [
+     [
+      "name",
+      "key",
+      "type",
+      "key",
+      "key_spec_index",
+      0
+     ],
+     [
+      "name",
+      "element",
+      "type",
+      "string",
+      "flags",
+      [
+       {
+        "+": "multiple"
+       }
+      ]
+     ]
+    ]
+   ],
+   "info": [
+    "lpush",
+    -3,
+    [
+     {
+      "+": "write"
+     },
+     {
+      "+": "denyoom"
+     },
+     {
+      "+": "fast"
+     }
+    ],
+    1,
+    1,
+    1,
+    [
+     {
+      "+": "@write"
+     },
+     {
+      "+": "@list"
+     },
+     {
+      "+": "@fast"
+     }
+    ],
+    [],
+    [
+     [
+      "flags",
+      [
+       {
+        "+": "RW"
+       },
+       {
+        "+": "insert"
+       }
+      ],
+      "begin_search",
+      [
+       "type",
+       "index",
+       "spec",
+       [
+        "index",
+        1
+       ]
+      ],
+      "find_keys",
+      [
+       "type",
+       "range",
+       "spec",
+       [
+        "lastkey",
+        0,
+        "keystep",
+        1,
+        "limit",
+        0
+       ]
+      ]
+     ]
+    ],
+    []
+   ]
+  },
+  "lpushx": {
+   "docs": [
+    "summary",
+    "Prepend an element to a list, only if the list exists",
+    "since",
+    "2.2.0",
+    "group",
+    "list",
+    "complexity",
+    "O(1) for each element added, so O(N) to add N elements when the command is called with multiple arguments.",
+    "history",
+    [
+     [
+      "4.0.0",
+      "Accepts multiple `element` arguments."
+     ]
+    ],
+    "arguments",
+    [
+     [
+      "name",
+      "key",
+      "type",
+      "key",
+      "key_spec_index",
+      0
+     ],
+     [
+      "name",
+      "element",
+      "type",
+      "string",
+      "flags",
+      [
+       {
+        "+": "multiple"
+       }
+      ]
+     ]
+    ]
+   ],
+   "info": [
+    "lpushx",
+    -3,
+    [
+     {
+      "+": "write"
+     },
+     {
+      "+": "denyoom"
+     },
+     {
+      "+": "fast"
+     }
+    ],
+    1,
+    1,
+    1,
+    [
+     {
+      "+": "@write"
+     },
+     {
+      "+": "@list"
+     },
+     {
+      "+": "@fast"
+     }
+    ],
+    [],
+    [
+     [
+      "flags",
+      [
+       {
+        "+": "RW"
+       },
+       {
+        "+": "insert"
+       }
+      ],
+      "begin_search",
+      [
+       "type",
+       "index",
+       "spec",
+       [
+        "index",
+        1
+       ]
+      ],
+      "find_keys",
+      [
+       "type",
+       "range",
+       "spec",
+       [
+        "lastkey",
+        0,
+        "keystep",
+        1,
+        "limit",
+        0
+       ]
+      ]
+     ]
+    ],
+    []
+   ]
+  },
+  "lrange": {
+   "docs": [
+    "summary",
+    "Get a range of elements from a list",
+    "since",
+    "1.0.0",
+    "group",
+    "list",
+    "complexity",
+    "O(S+N) where S is the distance of start offset from HEAD for small lists, from nearest end (HEAD or TAIL) for large lists; and N is the number of elements in the specified range.",
+    "arguments",
+    [
+     [
+      "name",
+      "key",
+      "type",
+      "key",
+      "key_spec_index",
+      0
+     ],
+     [
+      "name",
+      "start",
+      "type",
+      "integer"
+     ],
+     [
+      "name",
+      "stop",
+      "type",
+      "integer"
+     ]
+    ]
+   ],
+   "info": [
+    "lrange",
+    4,
+    [
+     {
+      "+": "readonly"
+     }
+    ],
+    1,
+    1,
+    1,
+    [
+     {
+      "+": "@read"
+     },
+     {
+      "+": "@list"
+     },
+     {
+      "+": "@slow"
+     }
+    ],
+    [],
+    [
+     [
+      "flags",
+      [
+       {
+        "+": "RO"
+       },
+       {
+        "+": "access"
+       }
+      ],
+      "begin_search",
+      [
+       "type",
+       "index",
+       "spec",
+       [
+        "index",
+        1
+       ]
+      ],
+      "find_keys",
+      [
+       "type",
+       "range",
+       "spec",
+       [
+        "lastkey",
+        0,
+        "keystep",
+        1,
+        "limit",
+        0
+       ]
+      ]
+     ]
+    ],
+    []
+   ]
+  },
+  "lrem": {
+   "docs": [
+    "summary",
+    "Remove elements from a list",
+    "since",
+    "1.0.0",
+    "group",
+    "list",
+    "complexity",
+    "O(N+M) where N is the length of the list and M is the number of elements removed.",
+    "arguments",
+    [
+     [
+      "name",
+      "key",
+      "type",
+      "key",
+      "key_spec_index",
+      0
+     ],
+     [
+      "name",
+      "count",
+      "type",
+      "integer"
+     ],
+     [
+      "name",
+      "element",
+      "type",
+      "string"
+     ]
+    ]
+   ],
+   "info": [
+    "lrem",
+    4,
+    [
+     {
+      "+": "write"
+     }
+    ],
+    1,
+    1,
+    1,
+    [
+     {
+      "+": "@write"
+     },
+     {
+      "+": "@list"
+     },
+     {
+      "+": "@slow"
+     }
+    ],
+    [],
+    [
+     [
+      "flags",
+      [
+       {
+        "+": "RW"
+       },
+       {
+        "+": "delete"
+       }
+      ],
+      "begin_search",
+      [
+       "type",
+       "index",
+       "spec",
+       [
+        "index",
+        1
+       ]
+      ],
+      "find_keys",
+      [
+       "type",
+       "range",
+       "spec",
+       [
+        "lastkey",
+        0,
+        "keystep",
+        1,
+        "limit",
+        0
+       ]
+      ]
+     ]
+    ],
+    []
+   ]
+  },
+  "lset": {
+   "docs": [
+    "summary",
+    "Set the value of an element in a list by its index",
+    "since",
+    "1.0.0",
+    "group",
+    "list",
+    "complexity",
+    "O(N) where N is the length of the list. Setting either the first or the last element of the list is O(1).",
+    "arguments",
+    [
+     [
+      "name",
+      "key",
+      "type",
+      "key",
+      "key_spec_index",
+      0
+     ],
+     [
+      "name",
+      "index",
+      "type",
+      "integer"
+     ],
+     [
+      "name",
+      "element",
+      "type",
+      "string"
+     ]
+    ]
+   ],
+   "info": [
+    "lset",
+    4,
+    [
+     {
+      "+": "write"
+     },
+     {
+      "+": "denyoom"
+     }
+    ],
+    1,
+    1,
+    1,
+    [
+     {
+      "+": "@write"
+     },
+     {
+      "+": "@list"
+     },
+     {
+      "+": "@slow"
+     }
+    ],
+    [],
+    [
+     [
+      "flags",
+      [
+       {
+        "+": "RW"
+       },
+       {
+        "+": "update"
+       }
+      ],
+      "begin_search",
+      [
+       "type",
+       "index",
+       "spec",
+       [
+        "index",
+        1
+       ]
+      ],
+      "find_keys",
+      [
+       "type",
+       "range",
+       "spec",
+       [
+        "lastkey",
+        0,
+        "keystep",
+        1,
+        "limit",
+        0
+       ]
+      ]
+     ]
+    ],
+    []
+   ]
+  },
+  "ltrim": {
+   "docs": [
+    "summary",
+    "Trim a list to the specified range",
+    "since",
+    "1.0.0",
+    "group",
+    "list",
+    "complexity",
+    "O(N) where N is the number of elements to be removed by the operation.",
+    "arguments",
+    [
+     [
+      "name",
+      "key",
+      "type",
+      "key",
+      "key_spec_index",
+      0
+     ],
+     [
+      "name",
+      "start",
+      "type",
+      "integer"
+     ],
+     [
+      "name",
+      "stop",
+      "type",
+      "integer"
+     ]
+    ]
+   ],
+   "info": [
+    "ltrim",
+    4,
+    [
+     {
+      "+": "write"
+     }
+    ],
+    1,
+    1,
+    1,
+    [
+     {
+      "+": "@write"
+     },
+     {
+      "+": "@list"
+     },
+     {
+      "+": "@slow"
+     }
+    ],
+    [],
+    [
+     [
+      "flags",
+      [
+       {
+        "+": "RW"
+       },
+       {
+        "+": "delete"
+       }
+      ],
+      "begin_search",
+      [
+       "type",
+       "index",
+       "spec",
+       [
+        "index",
+        1
+       ]
+      ],
+      "find_keys",
+      [
+       "type",
+       "range",
+       "spec",
+       [
+        "lastkey",
+        0,
+        "keystep",
+        1,
+        "limit",
+        0
+       ]
+      ]
+     ]
+    ],
+    []
+   ]
+  },
   "memory": {
    "docs": [
     "summary",
@@ -8708,6 +10191,482 @@
     ],
     [],
     [],
+    []
+   ]
+  },
+  "rpop": {
+   "docs": [
+    "summary",
+    "Remove and get the last elements in a list",
+    "since",
+    "1.0.0",
+    "group",
+    "list",
+    "complexity",
+    "O(N) where N is the number of elements returned",
+    "history",
+    [
+     [
+      "6.2.0",
+      "Added the `count` argument."
+     ]
+    ],
+    "arguments",
+    [
+     [
+      "name",
+      "key",
+      "type",
+      "key",
+      "key_spec_index",
+      0
+     ],
+     [
+      "name",
+      "count",
+      "type",
+      "integer",
+      "since",
+      "6.2.0",
+      "flags",
+      [
+       {
+        "+": "optional"
+       }
+      ]
+     ]
+    ]
+   ],
+   "info": [
+    "rpop",
+    -2,
+    [
+     {
+      "+": "write"
+     },
+     {
+      "+": "fast"
+     }
+    ],
+    1,
+    1,
+    1,
+    [
+     {
+      "+": "@write"
+     },
+     {
+      "+": "@list"
+     },
+     {
+      "+": "@fast"
+     }
+    ],
+    [],
+    [
+     [
+      "flags",
+      [
+       {
+        "+": "RW"
+       },
+       {
+        "+": "access"
+       },
+       {
+        "+": "delete"
+       }
+      ],
+      "begin_search",
+      [
+       "type",
+       "index",
+       "spec",
+       [
+        "index",
+        1
+       ]
+      ],
+      "find_keys",
+      [
+       "type",
+       "range",
+       "spec",
+       [
+        "lastkey",
+        0,
+        "keystep",
+        1,
+        "limit",
+        0
+       ]
+      ]
+     ]
+    ],
+    []
+   ]
+  },
+  "rpoplpush": {
+   "docs": [
+    "summary",
+    "Remove the last element in a list, prepend it to another list and return it",
+    "since",
+    "1.2.0",
+    "group",
+    "list",
+    "complexity",
+    "O(1)",
+    "doc_flags",
+    [
+     {
+      "+": "deprecated"
+     }
+    ],
+    "deprecated_since",
+    "6.2.0",
+    "replaced_by",
+    "`LMOVE` with the `RIGHT` and `LEFT` arguments",
+    "arguments",
+    [
+     [
+      "name",
+      "source",
+      "type",
+      "key",
+      "key_spec_index",
+      0
+     ],
+     [
+      "name",
+      "destination",
+      "type",
+      "key",
+      "key_spec_index",
+      1
+     ]
+    ]
+   ],
+   "info": [
+    "rpoplpush",
+    3,
+    [
+     {
+      "+": "write"
+     },
+     {
+      "+": "denyoom"
+     }
+    ],
+    1,
+    2,
+    1,
+    [
+     {
+      "+": "@write"
+     },
+     {
+      "+": "@list"
+     },
+     {
+      "+": "@slow"
+     }
+    ],
+    [],
+    [
+     [
+      "flags",
+      [
+       {
+        "+": "RW"
+       },
+       {
+        "+": "access"
+       },
+       {
+        "+": "delete"
+       }
+      ],
+      "begin_search",
+      [
+       "type",
+       "index",
+       "spec",
+       [
+        "index",
+        1
+       ]
+      ],
+      "find_keys",
+      [
+       "type",
+       "range",
+       "spec",
+       [
+        "lastkey",
+        0,
+        "keystep",
+        1,
+        "limit",
+        0
+       ]
+      ]
+     ],
+     [
+      "flags",
+      [
+       {
+        "+": "RW"
+       },
+       {
+        "+": "insert"
+       }
+      ],
+      "begin_search",
+      [
+       "type",
+       "index",
+       "spec",
+       [
+        "index",
+        2
+       ]
+      ],
+      "find_keys",
+      [
+       "type",
+       "range",
+       "spec",
+       [
+        "lastkey",
+        0,
+        "keystep",
+        1,
+        "limit",
+        0
+       ]
+      ]
+     ]
+    ],
+    []
+   ]
+  },
+  "rpush": {
+   "docs": [
+    "summary",
+    "Append one or multiple elements to a list",
+    "since",
+    "1.0.0",
+    "group",
+    "list",
+    "complexity",
+    "O(1) for each element added, so O(N) to add N elements when the command is called with multiple arguments.",
+    "history",
+    [
+     [
+      "2.4.0",
+      "Accepts multiple `element` arguments."
+     ]
+    ],
+    "arguments",
+    [
+     [
+      "name",
+      "key",
+      "type",
+      "key",
+      "key_spec_index",
+      0
+     ],
+     [
+      "name",
+      "element",
+      "type",
+      "string",
+      "flags",
+      [
+       {
+        "+": "multiple"
+       }
+      ]
+     ]
+    ]
+   ],
+   "info": [
+    "rpush",
+    -3,
+    [
+     {
+      "+": "write"
+     },
+     {
+      "+": "denyoom"
+     },
+     {
+      "+": "fast"
+     }
+    ],
+    1,
+    1,
+    1,
+    [
+     {
+      "+": "@write"
+     },
+     {
+      "+": "@list"
+     },
+     {
+      "+": "@fast"
+     }
+    ],
+    [],
+    [
+     [
+      "flags",
+      [
+       {
+        "+": "RW"
+       },
+       {
+        "+": "insert"
+       }
+      ],
+      "begin_search",
+      [
+       "type",
+       "index",
+       "spec",
+       [
+        "index",
+        1
+       ]
+      ],
+      "find_keys",
+      [
+       "type",
+       "range",
+       "spec",
+       [
+        "lastkey",
+        0,
+        "keystep",
+        1,
+        "limit",
+        0
+       ]
+      ]
+     ]
+    ],
+    []
+   ]
+  },
+  "rpushx": {
+   "docs": [
+    "summary",
+    "Append an element to a list, only if the list exists",
+    "since",
+    "2.2.0",
+    "group",
+    "list",
+    "complexity",
+    "O(1) for each element added, so O(N) to add N elements when the command is called with multiple arguments.",
+    "history",
+    [
+     [
+      "4.0.0",
+      "Accepts multiple `element` arguments."
+     ]
+    ],
+    "arguments",
+    [
+     [
+      "name",
+      "key",
+      "type",
+      "key",
+      "key_spec_index",
+      0
+     ],
+     [
+      "name",
+      "element",
+      "type",
+      "string",
+      "flags",
+      [
+       {
+        "+": "multiple"
+       }
+      ]
+     ]
+    ]
+   ],
+   "info": [
+    "rpushx",
+    -3,
+    [
+     {
+      "+": "write"
+     },
+     {
+      "+": "denyoom"
+     },
+     {
+      "+": "fast"
+     }
+    ],
+    1,
+    1,
+    1,
+    [
+     {
+      "+": "@write"
+     },
+     {
+      "+": "@list"
+     },
+     {
+      "+": "@fast"
+     }
+    ],
+    [],
+    [
+     [
+      "flags",
+      [
+       {
+        "+": "RW"
+       },
+       {
+        "+": "insert"
+       }
+      ],
+      "begin_search",
+      [
+       "type",
+       "index",
+       "spec",
+       [
+        "index",
+        1
+       ]
+      ],
+      "find_keys",
+      [
+       "type",
+       "range",
+       "spec",
+       [
+        "lastkey",
+        0,
+        "keystep",
+        1,
+        "limit",
+        0
+       ]
+      ]
+     ]
+    ],
     []
    ]
   },

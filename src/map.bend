@@ -74,9 +74,11 @@ type Val is Data:
   VStr{s: String}
   VColl{c: Coll}
 
-# a collection: a hash, its fields and their values (Hash)
+# a collection: a hash, its fields and their values (Hash), or a list,
+# its elements in order (Deq)
 type Coll is Data:
   CHash{h: Hash}
+  CList{l: Deq}
 
 # a hash: a field and its value
 type HPair is Data:
@@ -90,6 +92,12 @@ type HPair is Data:
 type Hash is Data:
   HSmall{n: Nat, ps: List<&2, HPair>}
   HBig{n: Nat, t: Trie<String>}
+
+# A list, as a deque of two stacks: its first nf elements in order (f),
+# then the other nb in reverse (b), so the list is f and then b reversed
+# (Lists, below)
+type Deq is Data:
+  Deq{nf: Nat, f: List<&2, String>, nb: Nat, b: List<&2, String>}
 
 # Keys
 # ----
@@ -1249,3 +1257,251 @@ def hash.pairs(+h: Hash) -> List<&2, HPair>:
 # the length of h's longest field or value
 def hash.widest(+h: Hash) -> Nat:
   hps.widest(hash.pairs(h), 0n)
+
+# Lists
+# -----
+# A list's elements, first to last, as Redis 7.0 keeps them in a
+# quicklist (OBJECT ENCODING answers quicklist for every list). BendKV
+# keeps them in two stacks (Deq): the front part in order, the back part
+# reversed, so a push or a pop at either end adds or takes the head of
+# one of them. When one part holds more than three times the other's
+# elements and one more, the elements are dealt again, half to each
+# (deq.fix): a push or a pop then costs O(1) amortized, and LINDEX and
+# LRANGE walk only from the end nearer to what they read. A key never
+# holds an empty list: a write that takes its last element deletes it.
+
+def deq.empty() -> Deq:
+  Deq{0n, Nil{}, 0n, Nil{}}
+
+def deq.len(+d: Deq) -> Nat:
+  match d:
+    case Deq{+nf, f, +nb, b}:
+      Nat.add(nf, nb)
+
+# the elements, in order
+def deq.all(+d: Deq) -> List<&2, String>:
+  match d:
+    case Deq{nf, +f, nb, +b}:
+      List.append(&2, String, f, List.reverse(&2, String, b))
+
+# the first n elements of xs reversed before acc, and the others
+def deq.cut(n: Nat, xs: List<&2, String>, acc: List<&2, String>) -> List<&2, String> & List<&2, String>:
+  match n xs:
+    case 0n ys:
+      (acc, ys)
+    case 1n+m Con{x, rest}:
+      deq.cut(m, rest, x <> acc)
+    case 1n+m Nil{}:
+      (acc, Nil{})
+
+def deq.deal.of(+h: Nat, +n: Nat, p: List<&2, String> & List<&2, String>) -> Deq:
+  (rf, rest) = p
+  Deq{h, List.reverse(&2, String, rf), Nat.sub(n, h), List.reverse(&2, String, rest)}
+
+# the n elements xs, in order, dealt half to each part
+def deq.deal(+n: Nat, xs: List<&2, String>) -> Deq:
+  +h = Nat.div(n, 2n)
+  deq.deal.of(h, n, deq.cut(h, xs, Nil{}))
+
+# whether one part holds more than three times the other's elements and
+# one more
+def deq.tilted(+nf: Nat, +nb: Nat) -> Bool:
+  Bool.or(Nat.is_lt(Nat.add(Nat.mul(3n, nb), 1n), nf), Nat.is_lt(Nat.add(Nat.mul(3n, nf), 1n), nb))
+
+def deq.fix.if(tilted: Bool, d: Deq) -> Deq:
+  match tilted:
+    case True{}:
+      +x = d
+      deq.deal(deq.len(x), deq.all(x))
+    case False{}:
+      d
+
+def deq.fix(d: Deq) -> Deq:
+  match d:
+    case Deq{+nf, f, +nb, b}:
+      deq.fix.if(deq.tilted(nf, nb), Deq{nf, f, nb, b})
+
+# x put first (left) or last
+def deq.push(+left: Bool, x: String, d: Deq) -> Deq:
+  match left d:
+    case True{} Deq{+nf, f, nb, b}:
+      deq.fix(Deq{1n+nf, x <> f, nb, b})
+    case False{} Deq{nf, f, +nb, b}:
+      deq.fix(Deq{nf, f, 1n+nb, x <> b})
+
+# the elements xs pushed in turn, each first (left) or last
+def deq.pushes(+left: Bool, xs: List<&2, String>, d: Deq) -> Deq:
+  match xs:
+    case Nil{}:
+      d
+    case Con{x, rest}:
+      deq.pushes(left, rest, deq.push(left, x, d))
+
+# a list's first (or last) element and the others; none for an empty one
+type Pop is Data:
+  Pop{x: String, d: Deq}
+  PopNone{}
+
+# the first element of n elements xs, in order, and the rest
+def deq.pop.all(+n: Nat, xs: List<&2, String>) -> Pop:
+  match xs:
+    case Con{x, rest}:
+      Pop{x, deq.deal(Nat.sub(n, 1n), rest)}
+    case Nil{}:
+      PopNone{}
+
+# the first element and the rest: the front part's first, else the
+# back part's last (the back part then holds one element, while the
+# parts are dealt as deq.fix keeps them)
+def deq.popl(d: Deq) -> Pop:
+  match d:
+    case Deq{+nf, Con{x, f}, nb, b}:
+      Pop{x, deq.fix(Deq{Nat.sub(nf, 1n), f, nb, b})}
+    case Deq{nf, Nil{}, +nb, b}:
+      deq.pop.all(nb, List.reverse(&2, String, b))
+
+# the first element of n elements xs, in reverse, and the rest in order
+def deq.pop.rev(+n: Nat, xs: List<&2, String>) -> Pop:
+  match xs:
+    case Con{x, rest}:
+      Pop{x, deq.deal(Nat.sub(n, 1n), List.reverse(&2, String, rest))}
+    case Nil{}:
+      PopNone{}
+
+# the last element and the rest
+def deq.popr(d: Deq) -> Pop:
+  match d:
+    case Deq{nf, f, +nb, Con{x, b}}:
+      Pop{x, deq.fix(Deq{nf, f, Nat.sub(nb, 1n), b})}
+    case Deq{+nf, f, nb, Nil{}}:
+      deq.pop.rev(nf, List.reverse(&2, String, f))
+
+def deq.pop(+left: Bool, d: Deq) -> Pop:
+  match left:
+    case True{}:
+      deq.popl(d)
+    case False{}:
+      deq.popr(d)
+
+# elements popped so far, in reverse of the order they came off, and the
+# list left
+type Pops is Data:
+  Pops{xs: List<&2, String>, d: Deq}
+
+def deq.pop.into(p: Pop, acc: List<&2, String>) -> Pops:
+  match p:
+    case Pop{x, d}:
+      Pops{x <> acc, d}
+    case PopNone{}:
+      Pops{acc, deq.empty()}
+
+def deq.pop.step(+left: Bool, st: Pops) -> Pops:
+  match st:
+    case Pops{acc, d}:
+      deq.pop.into(deq.pop(left, d), acc)
+
+# up to c more elements popped from the first end (left) or the last
+def deq.pops(c: Nat, +left: Bool, st: Pops) -> Pops:
+  match c:
+    case 0n:
+      st
+    case 1n+k:
+      deq.pops(k, left, deq.pop.step(left, st))
+
+# the i-th element of xs, read in place
+def deq.nth(+xs: List<&2, String>, i: Nat) -> Maybe<&2, String>:
+  match xs i:
+    case Con{+x, +rest} 0n:
+      Some{x}
+    case Con{+x, +rest} 1n+j:
+      deq.nth(rest, j)
+    case Nil{} _:
+      None{}
+
+def deq.get.of(front: Bool, +i: Nat, +nf: Nat, +f: List<&2, String>, +nb: Nat, +b: List<&2, String>) -> Maybe<&2, String>:
+  match front:
+    case True{}:
+      deq.nth(f, i)
+    case False{}:
+      deq.nth(b, Nat.sub(Nat.sub(nb, 1n), Nat.sub(i, nf)))
+
+# the element at position i, below the list's length
+def deq.get(+i: Nat, +d: Deq) -> Maybe<&2, String>:
+  match d:
+    case Deq{+nf, +f, +nb, +b}:
+      deq.get.of(Nat.is_lt(i, nf), i, nf, f, nb, b)
+
+def deq.set.of(front: Bool, +i: Nat, v: String, +nf: Nat, f: List<&2, String>, +nb: Nat, b: List<&2, String>) -> Deq:
+  match front:
+    case True{}:
+      Deq{nf, List.set(&2, String, f, i, v), nb, b}
+    case False{}:
+      Deq{nf, f, nb, List.set(&2, String, b, Nat.sub(Nat.sub(nb, 1n), Nat.sub(i, nf)), v)}
+
+# the list with the element at position i, below its length, set to v
+def deq.set(+i: Nat, v: String, d: Deq) -> Deq:
+  match d:
+    case Deq{+nf, f, +nb, b}:
+      deq.set.of(Nat.is_lt(i, nf), i, v, nf, f, nb, b)
+
+# k elements of xs from the s-th on, read in place, reversed before acc
+def deq.slice(+xs: List<&2, String>, s: Nat, k: Nat, acc: List<&2, String>) -> List<&2, String>:
+  match xs s k:
+    case Con{+x, +rest} 1n+t k:
+      deq.slice(rest, t, k, acc)
+    case Con{+x, +rest} 0n 1n+j:
+      deq.slice(rest, 0n, j, x <> acc)
+    case _ _ _:
+      acc
+
+def deq.range.f(ok: Bool, +s: Nat, +e: Nat, +f: List<&2, String>, acc: List<&2, String>) -> List<&2, String>:
+  match ok:
+    case True{}:
+      List.reverse.go(&2, String, deq.slice(f, s, 1n+Nat.sub(e, s), Nil{}), acc)
+    case False{}:
+      acc
+
+def deq.range.b(ok: Bool, +lo: Nat, +e: Nat, +n: Nat, +b: List<&2, String>) -> List<&2, String>:
+  match ok:
+    case True{}:
+      deq.slice(b, Nat.sub(Nat.sub(n, 1n), e), 1n+Nat.sub(e, lo), Nil{})
+    case False{}:
+      Nil{}
+
+# the elements at positions s to e, in order, s <= e below the length
+def deq.range(+s: Nat, +e: Nat, +d: Deq) -> List<&2, String>:
+  match d:
+    case Deq{+nf, +f, +nb, +b}:
+      deq.range.f(Nat.is_lt(s, nf), s, Nat.min(e, Nat.sub(nf, 1n)), f, deq.range.b(Nat.is_le(nf, e), Nat.max(s, nf), e, Nat.add(nf, nb), b))
+
+# the list without its first k elements, k at most its length
+def deq.dropl.of(front: Bool, +k: Nat, +nf: Nat, f: List<&2, String>, +nb: Nat, b: List<&2, String>) -> Deq:
+  match front:
+    case True{}:
+      deq.fix(Deq{Nat.sub(nf, k), List.drop(&2, String, f, k), nb, b})
+    case False{}:
+      +m = Nat.sub(nb, Nat.sub(k, nf))
+      deq.deal(m, List.reverse(&2, String, List.take(&2, String, b, m)))
+
+def deq.dropl(+k: Nat, d: Deq) -> Deq:
+  match d:
+    case Deq{+nf, f, +nb, b}:
+      deq.dropl.of(Nat.is_le(k, nf), k, nf, f, nb, b)
+
+# the list without its last k elements, k at most its length
+def deq.dropr.of(back: Bool, +k: Nat, +nf: Nat, f: List<&2, String>, +nb: Nat, b: List<&2, String>) -> Deq:
+  match back:
+    case True{}:
+      deq.fix(Deq{nf, f, Nat.sub(nb, k), List.drop(&2, String, b, k)})
+    case False{}:
+      +m = Nat.sub(nf, Nat.sub(k, nb))
+      deq.deal(m, List.take(&2, String, f, m))
+
+def deq.dropr(+k: Nat, d: Deq) -> Deq:
+  match d:
+    case Deq{+nf, f, +nb, b}:
+      deq.dropr.of(Nat.is_le(k, nb), k, nf, f, nb, b)
+
+# the list of n elements xs, in order
+def deq.of(+n: Nat, xs: List<&2, String>) -> Deq:
+  deq.deal(n, xs)

@@ -31,7 +31,9 @@ type Int is Data:
 # tracking info of CLIENT). RIntS is an integer as its decimal text:
 # BITFIELD's, of up to 64 bits, past what an Int holds. It comes last, so
 # that the others keep their tags: after RInt, it made GET 1.5% dearer
-# in instructions (the reply's encoder compiled otherwise)
+# in instructions (the reply's encoder compiled otherwise). RNullA is the
+# null array (LPOP with a count of a key not there), after it for the
+# same reason
 type Reply is Data:
   RStatus{s: String}
   RError{s: String}
@@ -40,6 +42,7 @@ type Reply is Data:
   RNull{}
   RArray{xs: List<&2, Reply>}
   RIntS{s: String}
+  RNullA{}
 
 # a key and a value, for MSET
 type KVPair is Data:
@@ -92,14 +95,62 @@ type HWrite is Data:
   HWIncr{f: String, by: Int}
   HWNew{ps: List<&2, KV.HPair>}
 
+# LPOS's options: from the last element (back), the match to start from
+# (rank, 1 the first), how many to answer (count: none for one, as an
+# integer; 0 for all, as an array), how many elements to read (maxlen, 0
+# for all); or the error they make
+type LPosOpts is Data:
+  LPosOpts{back: Bool, rank: Nat, count: Maybe<&2, Nat>, maxlen: Nat}
+  LPosBad{r: Reply}
+
+# A read of a list (PList, below): its length (LLEN), an element (LINDEX,
+# its index as it came: Redis reads it only once it finds the list), a
+# range (LRANGE: start and end), or where an element is (LPOS: the
+# element and the options). Each keeps its arguments as they came, one
+# word (PeekOp), and reads them as it runs; the parser reads LRANGE's and
+# LPOS's first, to answer their errors before the key is looked for, as
+# Redis does.
+type LRead is Data:
+  LRLen{}
+  LRIndex{i: String}
+  LRRange{args: List<&2, String>}
+  LRPos{args: List<&2, String>}
+
+# A write of a list (UList, below): pushes of elements at its first end
+# (left) or its last (LPUSH, RPUSH), or onto a list that is there only
+# (LPUSHX, RPUSHX); a pop of one element (LPOP, RPOP) or of a count (as
+# an array); LSET of the element at an index; LINSERT of v before (or
+# after) the first p; LREM of v (c of them from the first end, -c from
+# the last, 0 all); LTRIM to a range; or a new list of pushes where the
+# key was, whatever it held (LWNew: the script the append-only file logs
+# for a list made where a key whose time had passed still lay,
+# aof.bend). The numbers keep the text they came as: the parser reads
+# the counts of LPOP and LREM and LTRIM's range to answer its errors
+# first, as Redis does, and the write reads them again as it runs (LSET
+# reads its index only once it finds the list), so that the write the
+# append-only file logs is the one the client sent. Each form has two
+# fields at most, so that a change that keeps one is no wider than a
+# hash's (Change, below).
+type LWrite is Data:
+  LWPush{left: Bool, xs: List<&2, String>}
+  LWPushX{left: Bool, xs: List<&2, String>}
+  LWPop{left: Bool}
+  LWPopN{left: Bool, c: String}
+  LWSet{i: String, v: String}
+  LWBefore{p: String, v: String}
+  LWAfter{p: String, v: String}
+  LWRem{c: String, v: String}
+  LWTrim{a: String, b: String}
+  LWNew{left: Bool, xs: List<&2, String>}
+
 # A read of one key whose reply depends on what the key holds at now
 # alone (its value and the time it expires at, when it is there): its
 # type (TYPE), its length (STRLEN), its time to live in s or ms (TTL,
 # PTTL) or the time it expires at (EXPIRETIME, PEXPIRETIME), a range of
 # its bytes (GETRANGE, SUBSTR), a bit (GETBIT), the bits set in a range
 # (BITCOUNT), the first bit of a value in one (BITPOS), fields of its
-# bits (BITFIELD_RO, and BITFIELD whose operations are GETs alone), or a
-# read of a hash (PHash). The
+# bits (BITFIELD_RO, and BITFIELD whose operations are GETs alone), a
+# read of a hash (PHash) or of a list (PList). The
 # laws see them as one command, Peek (LAWS.bend: disturbs), so one more
 # needs no more proof. A command travels in registers as wide as its
 # widest form, so each has one field of a word at most: GETRANGE,
@@ -118,6 +169,7 @@ type PeekOp is Data:
   PPos{args: List<&2, String>}
   PBitfield{ops: List<&2, BfOp>}
   PHash{op: HRead}
+  PList{op: LRead}
 
 # A time a command names, in ms (a time in s, times 1000; Times, below):
 # a short one (TmN, below 10^14) or any other long long (TmB: its sign and
@@ -155,7 +207,7 @@ type ExpIf is Data:
 # aof.bend; the server runs INCRBY as its own command, IncrBy, the same
 # way, faster), SETRANGE (s at offset off), SETBIT (the bit at offset
 # off, to on), BITFIELD with a write among its operations, and a write
-# of a hash (UHash). The laws
+# of a hash (UHash) or of a list (UList). The laws
 # see them as one command, Upd, so one more needs no more proof. UGet holds an update, so the compiler makes an update a
 # node of its own: a command travels in registers as wide as its widest
 # form, and an update's options are many.
@@ -173,6 +225,7 @@ type UpdOp is Data:
   USetBit{off: Nat, on: Bool}
   UBitfield{ops: List<&2, BfOp>}
   UHash{op: HWrite}
+  UList{op: LWrite}
 
 # The commands of a connection and of the server: session.bend runs
 # them, with the state of the connection and of the server. None of them
@@ -227,7 +280,25 @@ type BitK is Data:
   BXor{}
   BNot{}
 
-# a parsed command
+# LMOVE's ends: where it pops (L the first end, R the last) and where it
+# pushes; a New form deletes the destination first (the script the
+# append-only file logs for a move to a key whose entry's time had
+# passed, aof.bend)
+type LEnds is Data:
+  LtoL{}
+  LtoR{}
+  RtoL{}
+  RtoR{}
+  LtoLNew{}
+  LtoRNew{}
+  RtoLNew{}
+  RtoRNew{}
+
+# a parsed command. LMove (LMOVE, RPOPLPUSH: an element popped from the
+# list at src and pushed onto the one at dst, the ends e) and LMPop
+# (LMPOP: up to c elements popped from the first of the keys that is
+# there, at its first end when left) come last, so that the others keep
+# their tags
 type Cmd is Data:
   Ping{}
   Echo{msg: String}
@@ -249,6 +320,8 @@ type Cmd is Data:
   BitOp{op: BitK, dst: String, srcs: List<&2, String>}
   Own{op: SessOp}
   Bad{reply: Reply}
+  LMove{src: String, dst: String, e: LEnds}
+  LMPop{keys: List<&2, String>, left: Bool, c: String}
 
 # Integers
 # --------
@@ -419,6 +492,8 @@ def coll.type(+c: KV.Coll) -> String:
   match c:
     case KV.CHash{h}:
       "hash"
+    case KV.CList{l}:
+      "list"
 
 def val.type(+v: KV.Val) -> String:
   match v:
@@ -1303,6 +1378,85 @@ def ll.le(+hi: Nat, +lo: Nat, +hb: Nat, +lb: Nat) -> Bool:
 # (9223372036854775) before
 def ll.ms(+hi: Nat, +lo: Nat) -> Nat & Nat:
   (Nat.add(Nat.mul(hi, 1000n), Nat.div(lo, 1000000n)), Nat.mul(Nat.mod(lo, 1000000n), 1000n))
+
+# A list's index or count is a long as Redis reads one (string2ll), its
+# magnitude clamped to 2^47: no list holds that many elements, so each
+# command answers for the clamped long as for the long itself.
+def lnum.big() -> Nat:
+  Nat.mul(Nat.mul(65536n, 65536n), 32768n)
+
+def lnum.mag(small: Bool, +hi: Nat, +lo: Nat) -> Nat:
+  match small:
+    case True{}:
+      Nat.min(Nat.add(Nat.mul(hi, 1000000000n), lo), lnum.big())
+    case False{}:
+      lnum.big()
+
+def lnum.of(l: LL) -> Maybe<&2, Int>:
+  match l:
+    case LL{+neg, +hi, +lo}:
+      +m = lnum.mag(Nat.is_lt(hi, 140737n), hi, lo)
+      Some{Bool.pick(Int, neg, INeg{Nat.sub(m, 1n)}, IPos{m})}
+    case LLBad{}:
+      None{}
+
+# s as a list's index or count; none when it is no long
+def lnum(+s: String) -> Maybe<&2, Int>:
+  lnum.of(ll.read(s))
+
+def lnum.ok(+s: String) -> Bool:
+  Maybe.is_some(&2, Int, lnum(s))
+
+def lcount.of(m: Maybe<&2, Int>) -> Maybe<&2, Nat>:
+  match m:
+    case Some{IPos{n}}:
+      Some{n}
+    case _:
+      None{}
+
+# s as a count: a long at least 0
+def lcount(+s: String) -> Maybe<&2, Nat>:
+  lcount.of(lnum(s))
+
+# the position of index i among n elements (n + i for i below 0), when
+# it falls among them
+def lidx.at(+i: Int, +n: Nat) -> Maybe<&2, Nat>:
+  match i:
+    case IPos{+m}:
+      Bool.pick(Maybe<&2, Nat>, Nat.is_lt(m, n), Some{m}, None{})
+    case INeg{+m}:
+      Bool.pick(Maybe<&2, Nat>, Nat.is_lt(m, n), Some{Nat.sub(Nat.sub(n, m), 1n)}, None{})
+
+# LRANGE's and LTRIM's range among n elements, as Redis reads it: start
+# and end count from the first element (from the last for one below
+# 0), start at least 0, end at most n - 1; none when it holds no element
+type LSpan is Data:
+  LSpan{s: Nat, e: Nat}
+  LNone{}
+
+def lspan.start(+a: Int, +n: Nat) -> Nat:
+  match a:
+    case IPos{+x}:
+      x
+    case INeg{+x}:
+      Nat.sub(n, 1n+x)
+
+def lspan.end(+b: Int, +n: Nat) -> Maybe<&2, Nat>:
+  match b:
+    case IPos{+y}:
+      Some{y}
+    case INeg{+y}:
+      Bool.pick(Maybe<&2, Nat>, Nat.is_lt(y, n), Some{Nat.sub(Nat.sub(n, y), 1n)}, None{})
+
+def lspan.of(+s: Nat, me: Maybe<&2, Nat>, +n: Nat) -> LSpan:
+  match me:
+    case Some{+e}:
+      Bool.pick(LSpan, Bool.or(Nat.is_lt(e, s), Nat.is_le(n, s)), LNone{}, LSpan{s, Nat.min(e, Nat.sub(n, 1n))})
+    case None{}:
+      LNone{}
+
+def lspan(+a: Int, +b: Int, +n: Nat) -> LSpan:
+  lspan.of(lspan.start(a, n), lspan.end(b, n), n)
 
 
 # 64-bit words
@@ -2217,29 +2371,403 @@ def parse_hincrby(+k: String, +f: String, by: Maybe<&2, Int>) -> Cmd:
 def parse_hscan(+k: String, +c: String, rest: List<&2, String>) -> Cmd:
   Bool.pick(Cmd, Maybe.is_some(&2, Nat, scan.cursor(c)), Peek{k, PHash{HRScan{c <> rest}}}, Bad{RError{"ERR invalid cursor"}})
 
+# LMOVE's ends (LEnds): where it pops, where it pushes, whether it
+# deletes the destination first, and the New form of each
+def ends.from(+e: LEnds) -> Bool:
+  match e:
+    case LtoL{}:
+      True{}
+    case LtoR{}:
+      True{}
+    case LtoLNew{}:
+      True{}
+    case LtoRNew{}:
+      True{}
+    case _:
+      False{}
+
+def ends.to(+e: LEnds) -> Bool:
+  match e:
+    case LtoL{}:
+      True{}
+    case RtoL{}:
+      True{}
+    case LtoLNew{}:
+      True{}
+    case RtoLNew{}:
+      True{}
+    case _:
+      False{}
+
+def ends.fresh(+e: LEnds) -> Bool:
+  match e:
+    case LtoLNew{}:
+      True{}
+    case LtoRNew{}:
+      True{}
+    case RtoLNew{}:
+      True{}
+    case RtoRNew{}:
+      True{}
+    case _:
+      False{}
+
+# the New form of the ends e
+def ends.new(+e: LEnds) -> LEnds:
+  match e:
+    case LtoL{}:
+      LtoLNew{}
+    case LtoR{}:
+      LtoRNew{}
+    case RtoL{}:
+      RtoLNew{}
+    case RtoR{}:
+      RtoRNew{}
+    case _:
+      e
+
+# an end of a list, as Redis reads one: 1 LEFT, 2 RIGHT, 0 another word
+def lend.word(+w: String) -> Nat:
+  Bool.pick(Nat, is_word(w, "LEFT"), 1n, Bool.pick(Nat, is_word(w, "RIGHT"), 2n, 0n))
+
+def lends.of(a: Nat, b: Nat) -> Maybe<&2, LEnds>:
+  match a b:
+    case 1n 1n:
+      Some{LtoL{}}
+    case 1n 2n:
+      Some{LtoR{}}
+    case 2n 1n:
+      Some{RtoL{}}
+    case 2n 2n:
+      Some{RtoR{}}
+    case _ _:
+      None{}
+
 # EVAL: BendKV runs no Lua scripts but the one its append-only file
-# writes (a new hash where a key whose time had passed still lay,
-# aof.bend): EVAL <the script> 1 key HSET field value [field value ...],
-# which deletes the key and runs the HSET, a thousand arguments a call,
-# and returns 0, as Redis runs it
+# writes (a new hash or list where a key whose time had passed still
+# lay, aof.bend): EVAL <the script> 1 key HSET field value [field value
+# ...], or LPUSH (RPUSH) element [element ...], which deletes the key and
+# runs the HSET (the pushes), a thousand arguments a call, and returns 0,
+# as Redis runs it
 def hnew.script() -> String:
   "redis.call('del',KEYS[1]) local n=#ARGV for i=2,n,1000 do redis.call(ARGV[1],KEYS[1],unpack(ARGV,i,math.min(i+999,n))) end return 0"
+
+def e_lua() -> Cmd:
+  Bad{RError{"ERR BendKV runs no Lua scripts"}}
 
 def parse_eval.of(ok: Bool, +k: String, m: Maybe<&2, List<&2, KV.HPair>>) -> Cmd:
   match ok m:
     case True{} Some{Con{p, ps}}:
       Upd{k, UHash{HWNew{p <> ps}}}
     case _ _:
-      Bad{RError{"ERR BendKV runs no Lua scripts"}}
+      e_lua()
+
+def parse_eval.list(ok: Bool, +k: String, +left: Bool, xs: List<&2, String>) -> Cmd:
+  match ok xs:
+    case True{} Con{x, rest}:
+      Upd{k, UList{LWNew{left, x <> rest}}}
+    case _ _:
+      e_lua()
+
+# the command the script runs: 1 HSET, 2 LPUSH, 3 RPUSH, 0 another
+def parse_eval.w(w: Nat, ok: Bool, +k: String, rest: List<&2, String>) -> Cmd:
+  match w:
+    case 1n:
+      parse_eval.of(ok, k, hpairs(rest))
+    case 2n:
+      parse_eval.list(ok, k, True{}, rest)
+    case 3n:
+      parse_eval.list(ok, k, False{}, rest)
+    case _:
+      e_lua()
+
+def parse_eval.one(ok: Bool, rest: List<&2, String>) -> Cmd:
+  match rest:
+    case Con{+k, Con{+w, more}}:
+      parse_eval.w(Bool.pick(Nat, String.eq(w, "HSET"), 1n, Bool.pick(Nat, String.eq(w, "LPUSH"), 2n, Bool.pick(Nat, String.eq(w, "RPUSH"), 3n, 0n))), ok, k, more)
+    case _:
+      e_lua()
+
+# The script of a move to a key whose entry's time had passed: EVAL <it>
+# 2 src dst from to, which deletes dst and runs the LMOVE (LMove with
+# the ends' New form)
+def lmove.script() -> String:
+  "redis.call('del',KEYS[2]) return redis.call('lmove',KEYS[1],KEYS[2],ARGV[1],ARGV[2])"
+
+def parse_eval.moved(ok: Bool, m: Maybe<&2, LEnds>, s: String, d: String) -> Cmd:
+  match ok m:
+    case True{} Some{+e}:
+      LMove{s, d, ends.new(e)}
+    case _ _:
+      e_lua()
+
+def parse_eval.move(ok: Bool, rest: List<&2, String>) -> Cmd:
+  match rest:
+    case Con{s, Con{d, Con{+a, Con{+b, Nil{}}}}}:
+      parse_eval.moved(ok, lends.of(lend.word(a), lend.word(b)), s, d)
+    case _:
+      e_lua()
+
+# which script: 1 a new hash's or list's, 2 a move's, 0 another
+def parse_eval.which(w: Nat, +nk: String, rest: List<&2, String>) -> Cmd:
+  match w:
+    case 1n:
+      parse_eval.one(String.eq(nk, "1"), rest)
+    case 2n:
+      parse_eval.move(String.eq(nk, "2"), rest)
+    case _:
+      e_lua()
 
 def parse_eval(args: List<&2, String>) -> Cmd:
   match args:
-    case Con{+s, Con{+nk, Con{+k, Con{+w, rest}}}}:
-      parse_eval.of(Bool.and(String.eq(s, hnew.script()), Bool.and(String.eq(nk, "1"), String.eq(w, "HSET"))), k, hpairs(rest))
-    case Con{s, Con{nk, rest}}:
-      Bad{RError{"ERR BendKV runs no Lua scripts"}}
+    case Con{+s, Con{+nk, rest}}:
+      parse_eval.which(Bool.pick(Nat, String.eq(s, hnew.script()), 1n, Bool.pick(Nat, String.eq(s, lmove.script()), 2n, 0n)), nk, rest)
     case _:
       e_arity("eval")
+
+# Lists: a push takes a key and at least one element; LPOP and RPOP a
+# count after the key at most, a long at least 0 read as the command
+# parses (Redis's error for one that is not is "out of range"); LRANGE's
+# and LTRIM's range and LREM's count are read as the command parses, the
+# index of LINDEX and of LSET once the list is found, as Redis reads
+# them; LINSERT's BEFORE or AFTER in any case
+# a push of xs, onto a list that is there only for x
+def lpush.op(+left: Bool, xs: List<&2, String>, x: Bool) -> LWrite:
+  match x:
+    case True{}:
+      LWPushX{left, xs}
+    case False{}:
+      LWPush{left, xs}
+
+def parse_lpush(args: List<&2, String>, +left: Bool, +x: Bool, name: String) -> Cmd:
+  match args:
+    case Con{k, Con{v, rest}}:
+      Upd{k, UList{lpush.op(left, v <> rest, x)}}
+    case _:
+      e_arity(name)
+
+def parse_lpop.n(ok: Bool, k: String, +left: Bool, c: String) -> Cmd:
+  match ok:
+    case True{}:
+      Upd{k, UList{LWPopN{left, c}}}
+    case False{}:
+      Bad{RError{"ERR value is out of range, must be positive"}}
+
+def parse_lpop(args: List<&2, String>, +left: Bool, name: String) -> Cmd:
+  match args:
+    case Con{k, Nil{}}:
+      Upd{k, UList{LWPop{left}}}
+    case Con{k, Con{+c, Nil{}}}:
+      parse_lpop.n(Maybe.is_some(&2, Nat, lcount(c)), k, left, c)
+    case _:
+      e_arity(name)
+
+def parse_lrange(ok: Bool, k: String, a: String, b: String) -> Cmd:
+  match ok:
+    case True{}:
+      Peek{k, PList{LRRange{[a, b]}}}
+    case False{}:
+      Bad{e_int()}
+
+def parse_ltrim(ok: Bool, k: String, a: String, b: String) -> Cmd:
+  match ok:
+    case True{}:
+      Upd{k, UList{LWTrim{a, b}}}
+    case False{}:
+      Bad{e_int()}
+
+def parse_lrem(ok: Bool, k: String, c: String, v: String) -> Cmd:
+  match ok:
+    case True{}:
+      Upd{k, UList{LWRem{c, v}}}
+    case False{}:
+      Bad{e_int()}
+
+# LINSERT's word: 1 AFTER, 2 BEFORE, 0 another
+def parse_linsert(w: Nat, k: String, p: String, v: String) -> Cmd:
+  match w:
+    case 1n:
+      Upd{k, UList{LWAfter{p, v}}}
+    case 2n:
+      Upd{k, UList{LWBefore{p, v}}}
+    case _:
+      Bad{RError{"ERR syntax error"}}
+
+# LPOS's options as Redis reads them, in turn: RANK (a long, not 0),
+# COUNT and MAXLEN (longs at least 0); an option without its argument,
+# or any other word, is a syntax error. The last of an option counts.
+# RANK LLONG_MIN, whose negation wraps in C, reads from the last
+# element, takes the first match on, and with COUNT never stops: every
+# match.
+type LPosSt is Data:
+  LPosSt{neg: Bool, rank: Nat, min: Bool, cnt: Maybe<&2, Nat>, maxlen: Nat}
+  LPosErr{r: Reply}
+
+def lpos.rank(l: LL, cnt: Maybe<&2, Nat>, maxlen: Nat) -> LPosSt:
+  match l:
+    case LL{+neg, +hi, +lo}:
+      +zero = Bool.and(Nat.is_eq(hi, 0n), Nat.is_eq(lo, 0n))
+      +min = Bool.and(neg, Bool.and(Nat.is_eq(hi, dec.llmax()), Nat.is_eq(lo, 854775808n)))
+      Bool.pick(LPosSt, zero, LPosErr{RError{"ERR RANK can't be zero: use 1 to start from the first match, 2 from the second ... or use negative to start from the end of the list"}}, LPosSt{neg, lnum.mag(Nat.is_lt(hi, 140737n), hi, lo), min, cnt, maxlen})
+    case LLBad{}:
+      LPosErr{e_int()}
+
+def lpos.count(m: Maybe<&2, Nat>, neg: Bool, rank: Nat, min: Bool, maxlen: Nat) -> LPosSt:
+  match m:
+    case Some{c}:
+      LPosSt{neg, rank, min, Some{c}, maxlen}
+    case None{}:
+      LPosErr{RError{"ERR COUNT can't be negative"}}
+
+def lpos.maxlen(m: Maybe<&2, Nat>, neg: Bool, rank: Nat, min: Bool, cnt: Maybe<&2, Nat>) -> LPosSt:
+  match m:
+    case Some{x}:
+      LPosSt{neg, rank, min, cnt, x}
+    case None{}:
+      LPosErr{RError{"ERR MAXLEN can't be negative"}}
+
+# an option's word: 1 RANK, 2 COUNT, 3 MAXLEN, 0 another
+def lpos.word(+w: String) -> Nat:
+  Bool.pick(Nat, is_word(w, "RANK"), 1n, Bool.pick(Nat, is_word(w, "COUNT"), 2n, Bool.pick(Nat, is_word(w, "MAXLEN"), 3n, 0n)))
+
+def lpos.opt(w: Nat, +v: String, neg: Bool, rank: Nat, min: Bool, cnt: Maybe<&2, Nat>, maxlen: Nat) -> LPosSt:
+  match w:
+    case 1n:
+      lpos.rank(ll.read(v), cnt, maxlen)
+    case 2n:
+      lpos.count(lcount(v), neg, rank, min, maxlen)
+    case 3n:
+      lpos.maxlen(lcount(v), neg, rank, min, cnt)
+    case _:
+      LPosErr{RError{"ERR syntax error"}}
+
+def lpos.opts(xs: List<&2, String>, st: LPosSt) -> LPosSt:
+  match xs st:
+    case Nil{} st:
+      st
+    case Con{+w, Con{+v, rest}} LPosSt{neg, rank, min, cnt, maxlen}:
+      lpos.opts(rest, lpos.opt(lpos.word(w), v, neg, rank, min, cnt, maxlen))
+    case Con{w, Nil{}} LPosSt{neg, rank, min, cnt, maxlen}:
+      LPosErr{RError{"ERR syntax error"}}
+    case _ LPosErr{r}:
+      LPosErr{r}
+
+def lpos.all(cnt: Maybe<&2, Nat>) -> Maybe<&2, Nat>:
+  match cnt:
+    case Some{c}:
+      Some{0n}
+    case None{}:
+      None{}
+
+def lpos.mk(min: Bool, neg: Bool, rank: Nat, cnt: Maybe<&2, Nat>, maxlen: Nat) -> LPosOpts:
+  match min:
+    case True{}:
+      LPosOpts{True{}, 1n, lpos.all(cnt), maxlen}
+    case False{}:
+      LPosOpts{neg, rank, cnt, maxlen}
+
+def lpos.fin(st: LPosSt) -> LPosOpts:
+  match st:
+    case LPosSt{neg, rank, min, cnt, maxlen}:
+      lpos.mk(min, neg, rank, cnt, maxlen)
+    case LPosErr{r}:
+      LPosBad{r}
+
+def lpos.args(args: List<&2, String>) -> LPosOpts:
+  lpos.fin(lpos.opts(args, LPosSt{False{}, 1n, False{}, None{}, 0n}))
+
+def parse_lpos(o: LPosOpts, k: String, args: List<&2, String>) -> Cmd:
+  match o:
+    case LPosOpts{back, rank, cnt, maxlen}:
+      Peek{k, PList{LRPos{args}}}
+    case LPosBad{r}:
+      Bad{r}
+
+# LMOVE src dst from to: each end LEFT or RIGHT in any case, from first
+def parse_lmove(m: Maybe<&2, LEnds>, s: String, d: String) -> Cmd:
+  match m:
+    case Some{e}:
+      LMove{s, d, e}
+    case None{}:
+      Bad{RError{"ERR syntax error"}}
+
+# LMPOP numkeys key [key ...] LEFT|RIGHT [COUNT count], as Redis reads it:
+# numkeys a long from 1 (else "numkeys should be greater than 0"), then
+# that many keys and an end (a syntax error when the words run out
+# first), then COUNT and a long from 1 once at most (else "count should
+# be greater than 0"); any other word is a syntax error. The count is
+# kept as it came ("1" without one), the write of the key it pops reads
+# it again (LWPopN).
+# whether a count is a long from 1
+def lmpop.pos(m: Maybe<&2, Int>) -> Bool:
+  match m:
+    case Some{IPos{1n+n}}:
+      True{}
+    case _:
+      False{}
+
+def lmpop.count.of(word: Bool, ok: Bool, c: String) -> Maybe<&2, String> & Maybe<&2, Reply>:
+  match word ok:
+    case True{} True{}:
+      (Some{c}, None{})
+    case True{} False{}:
+      (None{}, Some{RError{"ERR count should be greater than 0"}})
+    case False{} _:
+      (None{}, Some{RError{"ERR syntax error"}})
+
+# the count, or the error its words make
+def lmpop.count(xs: List<&2, String>) -> Maybe<&2, String> & Maybe<&2, Reply>:
+  match xs:
+    case Nil{}:
+      (Some{"1"}, None{})
+    case Con{+w, Con{+c, Nil{}}}:
+      lmpop.count.of(is_word(w, "COUNT"), lmpop.pos(lnum(c)), c)
+    case _:
+      (None{}, Some{RError{"ERR syntax error"}})
+
+def lmpop.fin.of(mc: Maybe<&2, String>, me: Maybe<&2, Reply>, ks: List<&2, String>, +left: Bool) -> Cmd:
+  match mc me:
+    case Some{c} _:
+      LMPop{ks, left, c}
+    case None{} Some{r}:
+      Bad{r}
+    case None{} None{}:
+      Bad{RError{"ERR syntax error"}}
+
+def lmpop.fin(ks: List<&2, String>, +left: Bool, p: Maybe<&2, String> & Maybe<&2, Reply>) -> Cmd:
+  (mc, me) = p
+  lmpop.fin.of(mc, me, ks, left)
+
+def lmpop.end(w: Nat, ks: List<&2, String>, rest: List<&2, String>) -> Cmd:
+  match w:
+    case 1n:
+      lmpop.fin(ks, True{}, lmpop.count(rest))
+    case 2n:
+      lmpop.fin(ks, False{}, lmpop.count(rest))
+    case _:
+      Bad{RError{"ERR syntax error"}}
+
+def lmpop.where(p: List<&2, String> & List<&2, String>) -> Cmd:
+  (ks, rest) = p
+  match rest:
+    case Con{+w, more}:
+      lmpop.end(lend.word(w), List.reverse(&2, String, ks), more)
+    case Nil{}:
+      Bad{RError{"ERR syntax error"}}
+
+def lmpop.keys(m: Maybe<&2, Int>, rest: List<&2, String>) -> Cmd:
+  match m:
+    case Some{IPos{1n+n}}:
+      lmpop.where(KV.deq.cut(1n+n, rest, Nil{}))
+    case _:
+      Bad{RError{"ERR numkeys should be greater than 0"}}
+
+def parse_lmpop(args: List<&2, String>) -> Cmd:
+  match args:
+    case Con{+nk, Con{k, Con{w, rest}}}:
+      lmpop.keys(lnum(nk), k <> (w <> rest))
+    case _:
+      e_arity("lmpop")
 
 # A command's name, in upper case, picks how its arguments parse. The
 # name's length narrows it down to a few names, which cmd_id compares with
@@ -2276,7 +2804,13 @@ def cmd_id(+n: String, len: Nat) -> Nat:
       Bool.pick(Nat, String.eq(n, "HGET"), 53n,
       Bool.pick(Nat, String.eq(n, "HDEL"), 56n,
       Bool.pick(Nat, String.eq(n, "HLEN"), 57n,
-      Bool.pick(Nat, String.eq(n, "EVAL"), 65n, 0n)))))))))))))))))))))
+      Bool.pick(Nat, String.eq(n, "EVAL"), 65n,
+      Bool.pick(Nat, String.eq(n, "LPOP"), 70n,
+      Bool.pick(Nat, String.eq(n, "RPOP"), 71n,
+      Bool.pick(Nat, String.eq(n, "LLEN"), 72n,
+      Bool.pick(Nat, String.eq(n, "LSET"), 75n,
+      Bool.pick(Nat, String.eq(n, "LREM"), 77n,
+      Bool.pick(Nat, String.eq(n, "LPOS"), 79n, 0n)))))))))))))))))))))))))))
     case 5n:
       Bool.pick(Nat, String.eq(n, "SETNX"), 5n,
       Bool.pick(Nat, String.eq(n, "HELLO"), 101n,
@@ -2289,7 +2823,12 @@ def cmd_id(+n: String, len: Nat) -> Nat:
       Bool.pick(Nat, String.eq(n, "HMSET"), 55n,
       Bool.pick(Nat, String.eq(n, "HKEYS"), 60n,
       Bool.pick(Nat, String.eq(n, "HVALS"), 61n,
-      Bool.pick(Nat, String.eq(n, "HSCAN"), 64n, 0n))))))))))))
+      Bool.pick(Nat, String.eq(n, "HSCAN"), 64n,
+      Bool.pick(Nat, String.eq(n, "LPUSH"), 66n,
+      Bool.pick(Nat, String.eq(n, "RPUSH"), 67n,
+      Bool.pick(Nat, String.eq(n, "LTRIM"), 78n,
+      Bool.pick(Nat, String.eq(n, "LMOVE"), 80n,
+      Bool.pick(Nat, String.eq(n, "LMPOP"), 82n, 0n)))))))))))))))))
     case 6n:
       Bool.pick(Nat, String.eq(n, "GETSET"), 6n,
       Bool.pick(Nat, String.eq(n, "UNLINK"), 8n,
@@ -2314,7 +2853,11 @@ def cmd_id(+n: String, len: Nat) -> Nat:
       Bool.pick(Nat, String.eq(n, "MSETNX"), 45n,
       Bool.pick(Nat, String.eq(n, "RENAME"), 46n,
       Bool.pick(Nat, String.eq(n, "HSETNX"), 52n,
-      Bool.pick(Nat, String.eq(n, "MEMORY"), 118n, 0n))))))))))))))))))))))))
+      Bool.pick(Nat, String.eq(n, "MEMORY"), 118n,
+      Bool.pick(Nat, String.eq(n, "LPUSHX"), 68n,
+      Bool.pick(Nat, String.eq(n, "RPUSHX"), 69n,
+      Bool.pick(Nat, String.eq(n, "LINDEX"), 73n,
+      Bool.pick(Nat, String.eq(n, "LRANGE"), 74n, 0n))))))))))))))))))))))))))))
     case 7n:
       Bool.pick(Nat, String.eq(n, "FLUSHDB"), 20n,
       Bool.pick(Nat, String.eq(n, "COMMAND"), 109n,
@@ -2323,7 +2866,8 @@ def cmd_id(+n: String, len: Nat) -> Nat:
       Bool.pick(Nat, String.eq(n, "HSTRLEN"), 58n,
       Bool.pick(Nat, String.eq(n, "HEXISTS"), 59n,
       Bool.pick(Nat, String.eq(n, "HGETALL"), 62n,
-      Bool.pick(Nat, String.eq(n, "HINCRBY"), 63n, 0n))))))))
+      Bool.pick(Nat, String.eq(n, "HINCRBY"), 63n,
+      Bool.pick(Nat, String.eq(n, "LINSERT"), 76n, 0n)))))))))
     case 8n:
       Bool.pick(Nat, String.eq(n, "FLUSHALL"), 19n,
       Bool.pick(Nat, String.eq(n, "FUNCTION"), 106n,
@@ -2335,7 +2879,8 @@ def cmd_id(+n: String, len: Nat) -> Nat:
       Bool.pick(Nat, String.eq(n, "BITFIELD"), 49n, 0n))))))))
     case 9n:
       Bool.pick(Nat, String.eq(n, "RANDOMKEY"), 110n,
-      Bool.pick(Nat, String.eq(n, "PEXPIREAT"), 31n, 0n))
+      Bool.pick(Nat, String.eq(n, "PEXPIREAT"), 31n,
+      Bool.pick(Nat, String.eq(n, "RPOPLPUSH"), 81n, 0n)))
     case 10n:
       Bool.pick(Nat, String.eq(n, "EXPIRETIME"), 34n,
       Bool.pick(Nat, String.eq(n, "HRANDFIELD"), 117n, 0n))
@@ -2714,6 +3259,80 @@ def parse_id(id: Nat, name: String, args: List<&2, String>) -> Cmd:
           e_arity("hscan")
     case 65n:  # EVAL
       parse_eval(args)
+    case 66n:  # LPUSH
+      parse_lpush(args, True{}, False{}, "lpush")
+    case 67n:  # RPUSH
+      parse_lpush(args, False{}, False{}, "rpush")
+    case 68n:  # LPUSHX
+      parse_lpush(args, True{}, True{}, "lpushx")
+    case 69n:  # RPUSHX
+      parse_lpush(args, False{}, True{}, "rpushx")
+    case 70n:  # LPOP
+      parse_lpop(args, True{}, "lpop")
+    case 71n:  # RPOP
+      parse_lpop(args, False{}, "rpop")
+    case 72n:  # LLEN
+      match args:
+        case Con{k, Nil{}}:
+          Peek{k, PList{LRLen{}}}
+        case _:
+          e_arity("llen")
+    case 73n:  # LINDEX
+      match args:
+        case Con{k, Con{i, Nil{}}}:
+          Peek{k, PList{LRIndex{i}}}
+        case _:
+          e_arity("lindex")
+    case 74n:  # LRANGE
+      match args:
+        case Con{k, Con{+a, Con{+b, Nil{}}}}:
+          parse_lrange(Bool.and(lnum.ok(a), lnum.ok(b)), k, a, b)
+        case _:
+          e_arity("lrange")
+    case 75n:  # LSET
+      match args:
+        case Con{k, Con{i, Con{v, Nil{}}}}:
+          Upd{k, UList{LWSet{i, v}}}
+        case _:
+          e_arity("lset")
+    case 76n:  # LINSERT
+      match args:
+        case Con{k, Con{+w, Con{p, Con{v, Nil{}}}}}:
+          parse_linsert(Bool.pick(Nat, is_word(w, "AFTER"), 1n, Bool.pick(Nat, is_word(w, "BEFORE"), 2n, 0n)), k, p, v)
+        case _:
+          e_arity("linsert")
+    case 77n:  # LREM
+      match args:
+        case Con{k, Con{+c, Con{v, Nil{}}}}:
+          parse_lrem(lnum.ok(c), k, c, v)
+        case _:
+          e_arity("lrem")
+    case 78n:  # LTRIM
+      match args:
+        case Con{k, Con{+a, Con{+b, Nil{}}}}:
+          parse_ltrim(Bool.and(lnum.ok(a), lnum.ok(b)), k, a, b)
+        case _:
+          e_arity("ltrim")
+    case 79n:  # LPOS
+      match args:
+        case Con{k, Con{x, +rest}}:
+          parse_lpos(lpos.args(rest), k, x <> rest)
+        case _:
+          e_arity("lpos")
+    case 80n:  # LMOVE
+      match args:
+        case Con{s, Con{d, Con{+a, Con{+b, Nil{}}}}}:
+          parse_lmove(lends.of(lend.word(a), lend.word(b)), s, d)
+        case _:
+          e_arity("lmove")
+    case 81n:  # RPOPLPUSH
+      match args:
+        case Con{s, Con{d, Nil{}}}:
+          LMove{s, d, RtoL{}}
+        case _:
+          e_arity("rpoplpush")
+    case 82n:  # LMPOP
+      parse_lmpop(args)
     case _:
       e_unknown(name, args)
 
@@ -3004,101 +3623,83 @@ def stat.top(+id: Nat) -> Nat:
       64n
     case 65n:
       65n
-    case 100n:
+    case 66n:
       66n
-    case 101n:
+    case 67n:
       67n
-    case 102n:
+    case 68n:
       68n
-    case 103n:
+    case 69n:
       69n
-    case 104n:
+    case 70n:
       70n
-    case 105n:
+    case 71n:
       71n
-    case 106n:
+    case 72n:
       72n
-    case 107n:
+    case 73n:
       73n
-    case 108n:
+    case 74n:
       74n
-    case 109n:
+    case 75n:
       75n
-    case 110n:
+    case 76n:
       76n
-    case 111n:
+    case 77n:
       77n
-    case 112n:
+    case 78n:
       78n
-    case 113n:
+    case 79n:
       79n
-    case 114n:
+    case 80n:
       80n
-    case 115n:
+    case 81n:
       81n
-    case 116n:
+    case 82n:
       82n
-    case 117n:
+    case 100n:
       83n
-    case 118n:
+    case 101n:
       84n
+    case 102n:
+      85n
+    case 103n:
+      86n
+    case 104n:
+      87n
+    case 105n:
+      88n
+    case 106n:
+      89n
+    case 107n:
+      90n
+    case 108n:
+      91n
+    case 109n:
+      92n
+    case 110n:
+      93n
+    case 111n:
+      94n
+    case 112n:
+      95n
+    case 113n:
+      96n
+    case 114n:
+      97n
+    case 115n:
+      98n
+    case 116n:
+      99n
+    case 117n:
+      100n
+    case 118n:
+      101n
     case _:
       0n
 
 # a subcommand of CLIENT's key, by its number; 0 for none
 def stat.sub.client(+sub: Nat) -> Nat:
-  match sub:
-    case 1n:
-      85n
-    case 2n:
-      86n
-    case 3n:
-      87n
-    case 4n:
-      88n
-    case 5n:
-      89n
-    case 6n:
-      90n
-    case 7n:
-      91n
-    case 8n:
-      92n
-    case 9n:
-      93n
-    case 10n:
-      94n
-    case _:
-      0n
-
-# a subcommand of FUNCTION's key, by its number; 0 for none
-def stat.sub.function(+sub: Nat) -> Nat:
-  match sub:
-    case 1n:
-      95n
-    case 2n:
-      96n
-    case _:
-      0n
-
-# a subcommand of CONFIG's key, by its number; 0 for none
-def stat.sub.config(+sub: Nat) -> Nat:
-  match sub:
-    case 1n:
-      97n
-    case 2n:
-      98n
-    case 3n:
-      99n
-    case 4n:
-      100n
-    case 5n:
-      101n
-    case _:
-      0n
-
-# a subcommand of COMMAND's key, by its number; 0 for none
-def stat.sub.command(+sub: Nat) -> Nat:
   match sub:
     case 1n:
       102n
@@ -3114,6 +3715,58 @@ def stat.sub.command(+sub: Nat) -> Nat:
       107n
     case 7n:
       108n
+    case 8n:
+      109n
+    case 9n:
+      110n
+    case 10n:
+      111n
+    case _:
+      0n
+
+# a subcommand of FUNCTION's key, by its number; 0 for none
+def stat.sub.function(+sub: Nat) -> Nat:
+  match sub:
+    case 1n:
+      112n
+    case 2n:
+      113n
+    case _:
+      0n
+
+# a subcommand of CONFIG's key, by its number; 0 for none
+def stat.sub.config(+sub: Nat) -> Nat:
+  match sub:
+    case 1n:
+      114n
+    case 2n:
+      115n
+    case 3n:
+      116n
+    case 4n:
+      117n
+    case 5n:
+      118n
+    case _:
+      0n
+
+# a subcommand of COMMAND's key, by its number; 0 for none
+def stat.sub.command(+sub: Nat) -> Nat:
+  match sub:
+    case 1n:
+      119n
+    case 2n:
+      120n
+    case 3n:
+      121n
+    case 4n:
+      122n
+    case 5n:
+      123n
+    case 6n:
+      124n
+    case 7n:
+      125n
     case _:
       0n
 
@@ -3121,15 +3774,15 @@ def stat.sub.command(+sub: Nat) -> Nat:
 def stat.sub.object(+sub: Nat) -> Nat:
   match sub:
     case 1n:
-      109n
+      126n
     case 2n:
-      110n
+      127n
     case 3n:
-      111n
+      128n
     case 4n:
-      112n
+      129n
     case 5n:
-      113n
+      130n
     case _:
       0n
 
@@ -3137,9 +3790,9 @@ def stat.sub.object(+sub: Nat) -> Nat:
 def stat.sub.memory(+sub: Nat) -> Nat:
   match sub:
     case 1n:
-      114n
+      131n
     case 2n:
-      115n
+      132n
     case _:
       0n
 
@@ -3277,104 +3930,138 @@ def stat.name(+key: Nat) -> String:
     case 65n:
       "eval"
     case 66n:
-      "select"
+      "lpush"
     case 67n:
-      "hello"
+      "rpush"
     case 68n:
-      "auth"
+      "lpushx"
     case 69n:
-      "quit"
+      "rpushx"
     case 70n:
-      "reset"
+      "lpop"
     case 71n:
-      "client"
+      "rpop"
     case 72n:
-      "function"
+      "llen"
     case 73n:
-      "config"
+      "lindex"
     case 74n:
-      "info"
+      "lrange"
     case 75n:
-      "command"
+      "lset"
     case 76n:
-      "randomkey"
+      "linsert"
     case 77n:
-      "swapdb"
+      "lrem"
     case 78n:
-      "move"
+      "ltrim"
     case 79n:
-      "time"
+      "lpos"
     case 80n:
-      "object"
+      "lmove"
     case 81n:
-      "copy"
+      "rpoplpush"
     case 82n:
-      "lcs"
+      "lmpop"
     case 83n:
-      "hrandfield"
+      "select"
     case 84n:
-      "memory"
+      "hello"
     case 85n:
-      "client|id"
+      "auth"
     case 86n:
-      "client|help"
+      "quit"
     case 87n:
-      "client|reply"
+      "reset"
     case 88n:
-      "client|getname"
+      "client"
     case 89n:
-      "client|setname"
+      "function"
     case 90n:
-      "client|caching"
+      "config"
     case 91n:
-      "client|unblock"
+      "info"
     case 92n:
-      "client|getredir"
+      "command"
     case 93n:
-      "client|no-evict"
+      "randomkey"
     case 94n:
-      "client|trackinginfo"
+      "swapdb"
     case 95n:
-      "function|flush"
+      "move"
     case 96n:
-      "function|help"
+      "time"
     case 97n:
-      "config|get"
+      "object"
     case 98n:
-      "config|set"
+      "copy"
     case 99n:
-      "config|resetstat"
+      "lcs"
     case 100n:
-      "config|rewrite"
+      "hrandfield"
     case 101n:
-      "config|help"
+      "memory"
     case 102n:
-      "command|info"
+      "client|id"
     case 103n:
-      "command|docs"
+      "client|help"
     case 104n:
-      "command|list"
+      "client|reply"
     case 105n:
-      "command|help"
+      "client|getname"
     case 106n:
-      "command|count"
+      "client|setname"
     case 107n:
-      "command|getkeys"
+      "client|caching"
     case 108n:
-      "command|getkeysandflags"
+      "client|unblock"
     case 109n:
-      "object|help"
+      "client|getredir"
     case 110n:
-      "object|freq"
+      "client|no-evict"
     case 111n:
-      "object|encoding"
+      "client|trackinginfo"
     case 112n:
-      "object|refcount"
+      "function|flush"
     case 113n:
-      "object|idletime"
+      "function|help"
     case 114n:
-      "memory|help"
+      "config|get"
     case 115n:
+      "config|set"
+    case 116n:
+      "config|resetstat"
+    case 117n:
+      "config|rewrite"
+    case 118n:
+      "config|help"
+    case 119n:
+      "command|info"
+    case 120n:
+      "command|docs"
+    case 121n:
+      "command|list"
+    case 122n:
+      "command|help"
+    case 123n:
+      "command|count"
+    case 124n:
+      "command|getkeys"
+    case 125n:
+      "command|getkeysandflags"
+    case 126n:
+      "object|help"
+    case 127n:
+      "object|freq"
+    case 128n:
+      "object|encoding"
+    case 129n:
+      "object|refcount"
+    case 130n:
+      "object|idletime"
+    case 131n:
+      "memory|help"
+    case 132n:
       "memory|usage"
     case _:
       ""
@@ -3514,104 +4201,138 @@ def stat.arity(+key: Nat) -> Nat:
     case 65n:
       7n
     case 66n:
-      4n
+      7n
     case 67n:
-      3n
+      7n
     case 68n:
-      5n
+      7n
     case 69n:
-      3n
+      7n
     case 70n:
-      2n
+      5n
     case 71n:
       5n
     case 72n:
-      5n
+      4n
     case 73n:
-      5n
+      6n
     case 74n:
-      3n
+      8n
     case 75n:
-      3n
+      8n
     case 76n:
-      2n
+      10n
     case 77n:
-      6n
+      8n
     case 78n:
-      6n
+      8n
     case 79n:
-      2n
+      7n
     case 80n:
-      5n
+      10n
     case 81n:
-      7n
+      6n
     case 82n:
-      7n
-    case 83n:
-      5n
-    case 84n:
-      5n
-    case 85n:
-      4n
-    case 86n:
-      4n
-    case 87n:
-      6n
-    case 88n:
-      4n
-    case 89n:
-      6n
-    case 90n:
-      6n
-    case 91n:
-      7n
-    case 92n:
-      4n
-    case 93n:
-      6n
-    case 94n:
-      4n
-    case 95n:
-      5n
-    case 96n:
-      4n
-    case 97n:
-      7n
-    case 98n:
       9n
+    case 83n:
+      4n
+    case 84n:
+      3n
+    case 85n:
+      5n
+    case 86n:
+      3n
+    case 87n:
+      2n
+    case 88n:
+      5n
+    case 89n:
+      5n
+    case 90n:
+      5n
+    case 91n:
+      3n
+    case 92n:
+      3n
+    case 93n:
+      2n
+    case 94n:
+      6n
+    case 95n:
+      6n
+    case 96n:
+      2n
+    case 97n:
+      5n
+    case 98n:
+      7n
     case 99n:
-      4n
+      7n
     case 100n:
-      4n
+      5n
     case 101n:
-      4n
+      5n
     case 102n:
-      5n
+      4n
     case 103n:
-      5n
+      4n
     case 104n:
-      5n
+      6n
     case 105n:
       4n
     case 106n:
-      4n
+      6n
     case 107n:
-      9n
+      6n
     case 108n:
-      9n
+      7n
     case 109n:
       4n
     case 110n:
       6n
     case 111n:
-      6n
-    case 112n:
-      6n
-    case 113n:
-      6n
-    case 114n:
       4n
+    case 112n:
+      5n
+    case 113n:
+      4n
+    case 114n:
+      7n
     case 115n:
+      9n
+    case 116n:
+      4n
+    case 117n:
+      4n
+    case 118n:
+      4n
+    case 119n:
+      5n
+    case 120n:
+      5n
+    case 121n:
+      5n
+    case 122n:
+      4n
+    case 123n:
+      4n
+    case 124n:
+      9n
+    case 125n:
+      9n
+    case 126n:
+      4n
+    case 127n:
+      6n
+    case 128n:
+      6n
+    case 129n:
+      6n
+    case 130n:
+      6n
+    case 131n:
+      4n
+    case 132n:
       7n
     case _:
       1n
@@ -3677,15 +4398,49 @@ def stat.risky(+key: Nat) -> Bool:
       True{}
     case 64n:
       True{}
+    case 66n:
+      True{}
+    case 67n:
+      True{}
+    case 68n:
+      True{}
+    case 69n:
+      True{}
+    case 70n:
+      True{}
+    case 71n:
+      True{}
+    case 72n:
+      True{}
+    case 73n:
+      True{}
+    case 74n:
+      True{}
+    case 75n:
+      True{}
+    case 76n:
+      True{}
+    case 77n:
+      True{}
+    case 78n:
+      True{}
+    case 79n:
+      True{}
+    case 80n:
+      True{}
+    case 81n:
+      True{}
     case 82n:
       True{}
-    case 83n:
+    case 99n:
       True{}
-    case 110n:
+    case 100n:
       True{}
-    case 113n:
+    case 127n:
       True{}
-    case 115n:
+    case 130n:
+      True{}
+    case 132n:
       True{}
     case _:
       False{}
@@ -4621,6 +5376,142 @@ def stat.cw(+code: Nat) -> U32:
       2079
     case 463n:
       2095
+    case 464n:
+      2103
+    case 465n:
+      2107
+    case 466n:
+      2109
+    case 467n:
+      2110
+    case 468n:
+      2127
+    case 469n:
+      2135
+    case 470n:
+      2139
+    case 471n:
+      2141
+    case 472n:
+      2142
+    case 473n:
+      2151
+    case 474n:
+      2155
+    case 475n:
+      2157
+    case 476n:
+      2158
+    case 477n:
+      2163
+    case 478n:
+      2165
+    case 479n:
+      2166
+    case 480n:
+      2169
+    case 481n:
+      2170
+    case 482n:
+      2172
+    case 483n:
+      2191
+    case 484n:
+      2199
+    case 485n:
+      2203
+    case 486n:
+      2205
+    case 487n:
+      2206
+    case 488n:
+      2215
+    case 489n:
+      2219
+    case 490n:
+      2221
+    case 491n:
+      2222
+    case 492n:
+      2227
+    case 493n:
+      2229
+    case 494n:
+      2230
+    case 495n:
+      2233
+    case 496n:
+      2234
+    case 497n:
+      2236
+    case 498n:
+      2247
+    case 499n:
+      2251
+    case 500n:
+      2253
+    case 501n:
+      2254
+    case 502n:
+      2259
+    case 503n:
+      2261
+    case 504n:
+      2262
+    case 505n:
+      2265
+    case 506n:
+      2266
+    case 507n:
+      2268
+    case 508n:
+      2275
+    case 509n:
+      2277
+    case 510n:
+      2278
+    case 511n:
+      2281
+    case 512n:
+      2282
+    case 513n:
+      2284
+    case 514n:
+      2289
+    case 515n:
+      2290
+    case 516n:
+      2292
+    case 517n:
+      2296
+    case 518n:
+      2319
+    case 519n:
+      2327
+    case 520n:
+      2331
+    case 521n:
+      2333
+    case 522n:
+      2334
+    case 523n:
+      2343
+    case 524n:
+      2347
+    case 525n:
+      2349
+    case 526n:
+      2350
+    case 527n:
+      2355
+    case 528n:
+      2357
+    case 529n:
+      2358
+    case 530n:
+      2361
+    case 531n:
+      2362
     case _:
       63
 
@@ -5714,6 +6605,162 @@ def stat.code.lo32(+lo: Nat) -> Nat:
       462n
     case 47n:
       463n
+    case 55n:
+      464n
+    case 59n:
+      465n
+    case 61n:
+      466n
+    case 62n:
+      467n
+    case _:
+      0n
+
+def stat.code.lo33(+lo: Nat) -> Nat:
+  match lo:
+    case 15n:
+      468n
+    case 23n:
+      469n
+    case 27n:
+      470n
+    case 29n:
+      471n
+    case 30n:
+      472n
+    case 39n:
+      473n
+    case 43n:
+      474n
+    case 45n:
+      475n
+    case 46n:
+      476n
+    case 51n:
+      477n
+    case 53n:
+      478n
+    case 54n:
+      479n
+    case 57n:
+      480n
+    case 58n:
+      481n
+    case 60n:
+      482n
+    case _:
+      0n
+
+def stat.code.lo34(+lo: Nat) -> Nat:
+  match lo:
+    case 15n:
+      483n
+    case 23n:
+      484n
+    case 27n:
+      485n
+    case 29n:
+      486n
+    case 30n:
+      487n
+    case 39n:
+      488n
+    case 43n:
+      489n
+    case 45n:
+      490n
+    case 46n:
+      491n
+    case 51n:
+      492n
+    case 53n:
+      493n
+    case 54n:
+      494n
+    case 57n:
+      495n
+    case 58n:
+      496n
+    case 60n:
+      497n
+    case _:
+      0n
+
+def stat.code.lo35(+lo: Nat) -> Nat:
+  match lo:
+    case 7n:
+      498n
+    case 11n:
+      499n
+    case 13n:
+      500n
+    case 14n:
+      501n
+    case 19n:
+      502n
+    case 21n:
+      503n
+    case 22n:
+      504n
+    case 25n:
+      505n
+    case 26n:
+      506n
+    case 28n:
+      507n
+    case 35n:
+      508n
+    case 37n:
+      509n
+    case 38n:
+      510n
+    case 41n:
+      511n
+    case 42n:
+      512n
+    case 44n:
+      513n
+    case 49n:
+      514n
+    case 50n:
+      515n
+    case 52n:
+      516n
+    case 56n:
+      517n
+    case _:
+      0n
+
+def stat.code.lo36(+lo: Nat) -> Nat:
+  match lo:
+    case 15n:
+      518n
+    case 23n:
+      519n
+    case 27n:
+      520n
+    case 29n:
+      521n
+    case 30n:
+      522n
+    case 39n:
+      523n
+    case 43n:
+      524n
+    case 45n:
+      525n
+    case 46n:
+      526n
+    case 51n:
+      527n
+    case 53n:
+      528n
+    case 54n:
+      529n
+    case 57n:
+      530n
+    case 58n:
+      531n
     case _:
       0n
 
@@ -5785,6 +6832,14 @@ def stat.code.hl(+hi: Nat, +lo: Nat) -> Nat:
       stat.code.lo31(lo)
     case 32n:
       stat.code.lo32(lo)
+    case 33n:
+      stat.code.lo33(lo)
+    case 34n:
+      stat.code.lo34(lo)
+    case 35n:
+      stat.code.lo35(lo)
+    case 36n:
+      stat.code.lo36(lo)
     case _:
       0n
 
@@ -7161,6 +8216,170 @@ def hread.coll(op: HRead, +cl: KV.Coll) -> Reply:
   match cl:
     case KV.CHash{+h}:
       hread(op, h)
+    case KV.CList{+l}:
+      e_wrongtype()
+
+# A list's reads.
+
+def lbulks(xs: List<&2, String>) -> List<&2, Reply>:
+  match xs:
+    case Nil{}:
+      Nil{}
+    case Con{x, rest}:
+      RBulk{x} <> lbulks(rest)
+
+def lindex.at(m: Maybe<&2, Nat>, +l: KV.Deq) -> Reply:
+  match m:
+    case Some{+p}:
+      r_get(KV.deq.get(p, l))
+    case None{}:
+      RNull{}
+
+def lindex.of(m: Maybe<&2, Int>, +l: KV.Deq) -> Reply:
+  match m:
+    case Some{+i}:
+      lindex.at(lidx.at(i, KV.deq.len(l)), l)
+    case None{}:
+      e_int()
+
+def lrange.of(sp: LSpan, +l: KV.Deq) -> Reply:
+  match sp:
+    case LSpan{+a, +e}:
+      RArray{lbulks(KV.deq.range(a, e, l))}
+    case LNone{}:
+      RArray{Nil{}}
+
+def lrange.read(ma: Maybe<&2, Int>, mb: Maybe<&2, Int>, +l: KV.Deq) -> Reply:
+  match ma mb:
+    case Some{+a} Some{+b}:
+      lrange.of(lspan(a, b, KV.deq.len(l)), l)
+    case _ _:
+      e_int()
+
+def lrange.args(args: List<&2, String>, +l: KV.Deq) -> Reply:
+  match args:
+    case Con{+a, Con{+b, Nil{}}}:
+      lrange.read(lnum(a), lnum(b), l)
+    case _:
+      e_int()
+
+# LPOS's walk, from the end it starts from: the elements xs, the i-th read
+# next; stop says the walk is over (the matches it wants are found, or
+# MAXLEN elements are read); m matches so far, the positions found
+# reversed in acc (the answer with COUNT, else the one position)
+def lpos.put(take: Bool, +p: Nat, acc: List<&2, Reply>) -> List<&2, Reply>:
+  match take:
+    case True{}:
+      RInt{IPos{p}} <> acc
+    case False{}:
+      acc
+
+def lpos.out(cnt: Maybe<&2, Nat>, acc: List<&2, Reply>) -> Reply:
+  match cnt acc:
+    case Some{c} rs:
+      RArray{List.reverse(&2, Reply, rs)}
+    case None{} Con{r, rest}:
+      r
+    case None{} Nil{}:
+      RNull{}
+
+# whether the match just taken (the m-th) is the last the walk wants: the
+# first one without COUNT, the c-th from RANK on with COUNT c (0: every
+# one)
+def lpos.full(+cnt: Maybe<&2, Nat>, +rank: Nat, +m: Nat) -> Bool:
+  match cnt:
+    case None{}:
+      True{}
+    case Some{+c}:
+      Bool.and(Nat.is_lt(0n, c), Nat.is_le(c, 1n+Nat.sub(m, rank)))
+
+def lpos.go(xs: List<&2, String>, stop: Bool, +x: String, +n: Nat, +back: Bool, +rank: Nat, +cnt: Maybe<&2, Nat>, +maxlen: Nat, +i: Nat, +m: Nat, acc: List<&2, Reply>) -> Reply:
+  match xs stop:
+    case Con{y, rest} False{}:
+      +hit = String.eq(y, x)
+      +m2 = Bool.pick(Nat, hit, 1n+m, m)
+      +take = Bool.and(hit, Nat.is_le(rank, m2))
+      +last = Bool.and(Nat.is_lt(0n, maxlen), Nat.is_le(maxlen, 1n+i))
+      lpos.go(rest, Bool.or(Bool.and(take, lpos.full(cnt, rank, m2)), last), x, n, back, rank, cnt, maxlen, 1n+i, m2, lpos.put(take, Bool.pick(Nat, back, Nat.sub(Nat.sub(n, 1n), i), i), acc))
+    case _ _:
+      lpos.out(cnt, acc)
+
+def lpos.elems(back: Bool, +l: KV.Deq) -> List<&2, String>:
+  match back:
+    case True{}:
+      List.reverse(&2, String, KV.deq.all(l))
+    case False{}:
+      KV.deq.all(l)
+
+def lpos.run(o: LPosOpts, +x: String, +l: KV.Deq) -> Reply:
+  match o:
+    case LPosOpts{+back, +rank, +cnt, +maxlen}:
+      lpos.go(lpos.elems(back, l), False{}, x, KV.deq.len(l), back, rank, cnt, maxlen, 0n, 0n, Nil{})
+    case LPosBad{r}:
+      r
+
+def lpos.read(args: List<&2, String>, +l: KV.Deq) -> Reply:
+  match args:
+    case Con{+x, rest}:
+      lpos.run(lpos.args(rest), x, l)
+    case Nil{}:
+      RError{"ERR syntax error"}
+
+# a list read of a key that holds a list
+def lread(op: LRead, +l: KV.Deq) -> Reply:
+  match op:
+    case LRLen{}:
+      r_int(KV.deq.len(l))
+    case LRIndex{+i}:
+      lindex.of(lnum(i), l)
+    case LRRange{args}:
+      lrange.args(args, l)
+    case LRPos{args}:
+      lpos.read(args, l)
+
+# of a key not there
+def lpos.none(o: LPosOpts) -> Reply:
+  match o:
+    case LPosOpts{back, rank, Some{c}, maxlen}:
+      RArray{Nil{}}
+    case LPosOpts{back, rank, None{}, maxlen}:
+      RNull{}
+    case LPosBad{r}:
+      r
+
+def lpos.none.args(args: List<&2, String>) -> Reply:
+  match args:
+    case Con{x, rest}:
+      lpos.none(lpos.args(rest))
+    case Nil{}:
+      RError{"ERR syntax error"}
+
+def lread.none(op: LRead) -> Reply:
+  match op:
+    case LRLen{}:
+      r_int(0n)
+    case LRIndex{i}:
+      RNull{}
+    case LRRange{args}:
+      RArray{Nil{}}
+    case LRPos{args}:
+      lpos.none.args(args)
+
+# of a key that holds a string (m: the string's entry, or none)
+def lread.str(op: LRead, m: Maybe<&2, KV.Item<String>>) -> Reply:
+  match m:
+    case Some{x}:
+      e_wrongtype()
+    case None{}:
+      lread.none(op)
+
+# of a key that holds a collection
+def lread.coll(op: LRead, +cl: KV.Coll) -> Reply:
+  match cl:
+    case KV.CList{+l}:
+      lread(op, l)
+    case KV.CHash{+h}:
+      e_wrongtype()
 
 # the reply of a Peek, from the entry of its key there at now
 def peek(c: PeekOp, +now: Nat, m: Maybe<&2, KV.Item<String>>) -> Reply:
@@ -7189,6 +8408,8 @@ def peek(c: PeekOp, +now: Nat, m: Maybe<&2, KV.Item<String>>) -> Reply:
       bf.peek(ops, m)
     case PHash{op}:
       hread.str(op, m)
+    case PList{op}:
+      lread.str(op, m)
 
 # a Peek of a key that holds a collection: its type, its time, a read of
 # a hash of a hash, or WRONGTYPE for a read of a string
@@ -7206,6 +8427,8 @@ def peek.coll(c: PeekOp, +now: Nat, +cl: KV.Coll, +e: Nat) -> Reply:
       ttl.of(True{}, True{}, now, Some{KV.Item{"", e}})
     case PHash{op}:
       hread.coll(op, cl)
+    case PList{op}:
+      lread.coll(op, cl)
     case _:
       e_wrongtype()
 
@@ -7227,7 +8450,11 @@ def peek.v(c: PeekOp, +now: Nat, m: Maybe<&2, KV.Item<KV.Val>>) -> Reply:
 # set it to a hash: one the key held, changed by a write of a hash (an
 # HSET of pairs, or an HDEL of fields), its time kept (CHash), or a new
 # one, with no time, made of pairs where the key was not there at now
-# (CHashNew); each keeps the write the append-only file logs. An
+# (CHashNew); or set it to a list: one the key held, changed by a write
+# of a list, its time kept (CList), or a new one, with no time, made of
+# pushes where the key was not there at now (CListNew: the elements xs
+# pushed in turn at its first end, left, or its last); each keeps the
+# write the append-only file logs. An
 # Upd's reply and change come from the key's entry there at now alone. A
 # time a change gives a key is one the key may keep (KV.clamp: a time at
 # or past the year 5138 is none), and a key without a time is never given
@@ -7243,6 +8470,8 @@ type Change is Data:
   CRange{off: Nat, s: String, v: String}
   CHash{op: HWrite, h: KV.Hash}
   CHashNew{ps: List<&2, KV.HPair>, h: KV.Hash}
+  CList{op: LWrite, l: KV.Deq}
+  CListNew{left: Bool, xs: List<&2, String>, l: KV.Deq}
 
 type Out is Data:
   Out{r: Reply, ch: Change}
@@ -7898,6 +9127,336 @@ def hwrite.coll(op: HWrite, +cl: KV.Coll) -> Out:
   match cl:
     case KV.CHash{h}:
       hwrite(op, False{}, h)
+    case KV.CList{l}:
+      hwrite.wrong(op)
+
+# A list's writes. A key not there is an empty list: LPUSH and RPUSH make
+# it, LPUSHX and RPUSHX answer 0, the others find nothing (LSET: no such
+# key); a key that holds a list keeps its time, and is deleted when a
+# write takes its last element (as Redis deletes an empty list); a key
+# that holds another kind answers WRONGTYPE. The change keeps the write
+# as the client sent it, which the append-only file logs; fresh says
+# whether the list is a new one. A write that changes nothing (a push of
+# no elements, which the parser refuses; LINSERT without its pivot;
+# LREM, LTRIM that take nothing) leaves the key as it was.
+
+def lpush.out(fresh: Bool, +left: Bool, +xs: List<&2, String>, +x: Bool, nl: KV.Deq) -> Out:
+  match fresh:
+    case True{}:
+      +m = nl
+      Out{r_int(KV.deq.len(m)), CListNew{left, xs, m}}
+    case False{}:
+      +m = nl
+      Out{r_int(KV.deq.len(m)), CList{lpush.op(left, xs, x), m}}
+
+# skip: a push onto a key not there of LPUSHX or RPUSHX, or of no element
+def lpush.of(skip: Bool, fresh: Bool, +left: Bool, +xs: List<&2, String>, +x: Bool, l: KV.Deq) -> Out:
+  match skip:
+    case True{}:
+      +m = l
+      Out{r_int(KV.deq.len(m)), CKeep{}}
+    case False{}:
+      lpush.out(fresh, left, xs, x, KV.deq.pushes(left, xs, l))
+
+def lpop.op(+left: Bool, c: Maybe<&2, String>) -> LWrite:
+  match c:
+    case Some{n}:
+      LWPopN{left, n}
+    case None{}:
+      LWPop{left}
+
+# a pop's change: the key deleted when the list is left empty
+def lpop.ch.of(empty: Bool, r: Reply, +left: Bool, c: Maybe<&2, String>, nl: KV.Deq) -> Out:
+  match empty:
+    case True{}:
+      Out{r, CDel{}}
+    case False{}:
+      Out{r, CList{lpop.op(left, c), nl}}
+
+def lpop.ch(r: Reply, +left: Bool, c: Maybe<&2, String>, nl: KV.Deq) -> Out:
+  +m = nl
+  lpop.ch.of(Nat.is_eq(KV.deq.len(m), 0n), r, left, c, m)
+
+def lpop.one(p: KV.Pop, +left: Bool) -> Out:
+  match p:
+    case KV.Pop{x, nl}:
+      lpop.ch(RBulk{x}, left, None{}, nl)
+    case KV.PopNone{}:
+      Out{RNull{}, CKeep{}}
+
+def lpop.many(st: KV.Pops, +left: Bool, c: String) -> Out:
+  match st:
+    case KV.Pops{xs, nl}:
+      lpop.ch(RArray{lbulks(List.reverse(&2, String, xs))}, left, Some{c}, nl)
+
+# a count of pops, no more than the n elements there (a count may be
+# as large as a long long)
+def lpop.cap(lt: Bool, +k: Nat, +n: Nat) -> Nat:
+  match lt:
+    case True{}:
+      k
+    case False{}:
+      n
+
+def lpop.n(fresh: Bool, k: Nat, +left: Bool, c: String, l: KV.Deq) -> Out:
+  match fresh k:
+    case True{} _:
+      Out{RNullA{}, CKeep{}}
+    case False{} 0n:
+      Out{RArray{Nil{}}, CKeep{}}
+    case False{} 1n++j:
+      +d = l
+      +n = KV.deq.len(d)
+      lpop.many(KV.deq.pops(lpop.cap(Nat.is_lt(1n+j, n), 1n+j, n), left, KV.Pops{Nil{}, d}), left, c)
+
+# with a count: an array of up to count elements, or a null array for a
+# key not there
+def lpop.count(m: Maybe<&2, Nat>, fresh: Bool, +left: Bool, c: String, l: KV.Deq) -> Out:
+  match m:
+    case Some{k}:
+      lpop.n(fresh, k, left, c, l)
+    case None{}:
+      Out{RError{"ERR value is out of range, must be positive"}, CKeep{}}
+
+def lpop.of(fresh: Bool, +left: Bool, c: Maybe<&2, String>, l: KV.Deq) -> Out:
+  match fresh c:
+    case True{} None{}:
+      Out{RNull{}, CKeep{}}
+    case False{} None{}:
+      lpop.one(KV.deq.pop(left, l), left)
+    case f Some{+n}:
+      lpop.count(lcount(n), f, left, n, l)
+
+def lset.at(m: Maybe<&2, Nat>, +i: String, +v: String, l: KV.Deq) -> Out:
+  match m:
+    case Some{+p}:
+      Out{r_ok(), CList{LWSet{i, v}, KV.deq.set(p, v, l)}}
+    case None{}:
+      Out{RError{"ERR index out of range"}, CKeep{}}
+
+def lset.of(m: Maybe<&2, Int>, +i: String, +v: String, l: KV.Deq) -> Out:
+  match m:
+    case Some{+ix}:
+      +d = l
+      lset.at(lidx.at(ix, KV.deq.len(d)), i, v, d)
+    case None{}:
+      Out{e_int(), CKeep{}}
+
+def lset.fresh(fresh: Bool, +i: String, +v: String, l: KV.Deq) -> Out:
+  match fresh:
+    case True{}:
+      Out{RError{"ERR no such key"}, CKeep{}}
+    case False{}:
+      lset.of(lnum(i), i, v, l)
+
+# LINSERT: the elements xs with v put before the first p (after it, for
+# after), when one is there; hit says whether xs's first element is p
+def lins.head(+p: String, +xs: List<&2, String>) -> Bool:
+  match xs:
+    case Con{+y, +rest}:
+      String.eq(y, p)
+    case Nil{}:
+      False{}
+
+def lins.put(after: Bool, y: String, v: String, rest: List<&2, String>) -> List<&2, String>:
+  match after:
+    case True{}:
+      y <> (v <> rest)
+    case False{}:
+      v <> (y <> rest)
+
+def lins.go(xs: List<&2, String>, hit: Bool, +after: Bool, +p: String, +v: String, acc: List<&2, String>) -> Maybe<&2, List<&2, String>>:
+  match xs hit:
+    case Con{y, rest} True{}:
+      Some{List.reverse.go(&2, String, acc, lins.put(after, y, v, rest))}
+    case Con{y, +rest} False{}:
+      +h = lins.head(p, rest)
+      lins.go(rest, h, after, p, v, y <> acc)
+    case Nil{} _:
+      None{}
+
+def lins.op(after: Bool, p: String, v: String) -> LWrite:
+  match after:
+    case True{}:
+      LWAfter{p, v}
+    case False{}:
+      LWBefore{p, v}
+
+def lins.of(m: Maybe<&2, List<&2, String>>, +n: Nat, +after: Bool, +p: String, +v: String) -> Out:
+  match m:
+    case Some{xs}:
+      Out{r_int(1n+n), CList{lins.op(after, p, v), KV.deq.of(1n+n, xs)}}
+    case None{}:
+      Out{RInt{INeg{0n}}, CKeep{}}
+
+def lins.fresh(fresh: Bool, +after: Bool, +p: String, +v: String, l: KV.Deq) -> Out:
+  match fresh:
+    case True{}:
+      Out{r_int(0n), CKeep{}}
+    case False{}:
+      +d = l
+      +xs = KV.deq.all(d)
+      lins.of(lins.go(xs, lins.head(p, xs), after, p, v, Nil{}), KV.deq.len(d), after, p, v)
+
+# LREM: up to k matches of v taken (k 0: all) from the elements xs, the
+# others kept in order; how many were taken
+type LRem is Data:
+  LRem{xs: List<&2, String>, gone: Nat}
+
+def lrem.keep(hit: Bool, y: String, acc: List<&2, String>) -> List<&2, String>:
+  match hit:
+    case True{}:
+      acc
+    case False{}:
+      y <> acc
+
+def lrem.go(xs: List<&2, String>, +v: String, +k: Nat, +gone: Nat, acc: List<&2, String>) -> LRem:
+  match xs:
+    case Nil{}:
+      LRem{List.reverse(&2, String, acc), gone}
+    case Con{+y, rest}:
+      +hit = Bool.and(String.eq(y, v), Bool.or(Nat.is_eq(k, 0n), Nat.is_lt(gone, k)))
+      lrem.go(rest, v, k, Bool.pick(Nat, hit, 1n+gone, gone), lrem.keep(hit, y, acc))
+
+# from the last element (back): the elements reversed, and the rest put
+# back in order
+def lrem.back(back: Bool, r: LRem) -> LRem:
+  match back r:
+    case True{} LRem{xs, gone}:
+      LRem{List.reverse(&2, String, xs), gone}
+    case False{} r:
+      r
+
+def lrem.elems(back: Bool, +l: KV.Deq) -> List<&2, String>:
+  match back:
+    case True{}:
+      List.reverse(&2, String, KV.deq.all(l))
+    case False{}:
+      KV.deq.all(l)
+
+def lrem.ch(none: Bool, all: Bool, +gone: Nat, +n: Nat, +c: String, +v: String, xs: List<&2, String>) -> Out:
+  match none all:
+    case True{} _:
+      Out{r_int(0n), CKeep{}}
+    case False{} True{}:
+      Out{r_int(gone), CDel{}}
+    case False{} False{}:
+      Out{r_int(gone), CList{LWRem{c, v}, KV.deq.of(Nat.sub(n, gone), xs)}}
+
+def lrem.out(r: LRem, +n: Nat, +c: String, +v: String) -> Out:
+  match r:
+    case LRem{xs, +gone}:
+      lrem.ch(Nat.is_eq(gone, 0n), Nat.is_eq(gone, n), gone, n, c, v, xs)
+
+# count c: c of v from the first element (0: every one), -c from the last
+def lrem.of(m: Maybe<&2, Int>, +c: String, +v: String, l: KV.Deq) -> Out:
+  match m:
+    case Some{IPos{+k}}:
+      +d = l
+      lrem.out(lrem.go(KV.deq.all(d), v, k, 0n, Nil{}), KV.deq.len(d), c, v)
+    case Some{INeg{+k}}:
+      +d = l
+      lrem.out(lrem.back(True{}, lrem.go(lrem.elems(True{}, d), v, 1n+k, 0n, Nil{})), KV.deq.len(d), c, v)
+    case None{}:
+      Out{e_int(), CKeep{}}
+
+def lrem.fresh(fresh: Bool, +c: String, +v: String, l: KV.Deq) -> Out:
+  match fresh:
+    case True{}:
+      Out{r_int(0n), CKeep{}}
+    case False{}:
+      lrem.of(lnum(c), c, v, l)
+
+# LTRIM: the list cut to its range, or deleted when the range holds no
+# element; the elements before it (s) and after it (r) go
+def ltrim.cut(none: Bool, +s: Nat, +r: Nat, +a: String, +b: String, l: KV.Deq) -> Out:
+  match none:
+    case True{}:
+      Out{r_ok(), CKeep{}}
+    case False{}:
+      Out{r_ok(), CList{LWTrim{a, b}, KV.deq.dropr(r, KV.deq.dropl(s, l))}}
+
+def ltrim.span(sp: LSpan, +n: Nat, +a: String, +b: String, l: KV.Deq) -> Out:
+  match sp:
+    case LSpan{+s, +e}:
+      +r = Nat.sub(Nat.sub(n, 1n), e)
+      ltrim.cut(Nat.is_eq(Nat.add(s, r), 0n), s, r, a, b, l)
+    case LNone{}:
+      Out{r_ok(), CDel{}}
+
+def ltrim.of(ma: Maybe<&2, Int>, mb: Maybe<&2, Int>, +a: String, +b: String, l: KV.Deq) -> Out:
+  match ma mb:
+    case Some{+x} Some{+y}:
+      +d = l
+      +n = KV.deq.len(d)
+      ltrim.span(lspan(x, y, n), n, a, b, d)
+    case _ _:
+      Out{e_int(), CKeep{}}
+
+def ltrim.fresh(fresh: Bool, +a: String, +b: String, l: KV.Deq) -> Out:
+  match fresh:
+    case True{}:
+      Out{r_ok(), CKeep{}}
+    case False{}:
+      ltrim.of(lnum(a), lnum(b), a, b, l)
+
+# LWNew: a new list of the pushes where the key was, whatever it held
+# (the script the append-only file logs, aof.bend), answered 0 as the
+# script returns it
+def lnew.of(none: Bool, +left: Bool, +xs: List<&2, String>) -> Out:
+  match none:
+    case True{}:
+      Out{r_int(0n), CKeep{}}
+    case False{}:
+      Out{r_int(0n), CListNew{left, xs, KV.deq.pushes(left, xs, KV.deq.empty())}}
+
+def lwrite(op: LWrite, +fresh: Bool, l: KV.Deq) -> Out:
+  match op:
+    case LWPush{+left, +xs}:
+      lpush.of(List.is_empty(&2, String, xs), fresh, left, xs, False{}, l)
+    case LWPushX{+left, +xs}:
+      lpush.of(Bool.or(fresh, List.is_empty(&2, String, xs)), fresh, left, xs, True{}, l)
+    case LWPop{+left}:
+      lpop.of(fresh, left, None{}, l)
+    case LWPopN{+left, c}:
+      lpop.of(fresh, left, Some{c}, l)
+    case LWSet{+i, +v}:
+      lset.fresh(fresh, i, v, l)
+    case LWBefore{+p, +v}:
+      lins.fresh(fresh, False{}, p, v, l)
+    case LWAfter{+p, +v}:
+      lins.fresh(fresh, True{}, p, v, l)
+    case LWRem{+c, +v}:
+      lrem.fresh(fresh, c, v, l)
+    case LWTrim{+a, +b}:
+      ltrim.fresh(fresh, a, b, l)
+    case LWNew{+left, +xs}:
+      lnew.of(List.is_empty(&2, String, xs), left, xs)
+
+# of a key that holds a string or another collection: WRONGTYPE, but for
+# LWNew, which makes its list whatever the key held
+def lwrite.wrong(op: LWrite) -> Out:
+  match op:
+    case LWNew{+left, +xs}:
+      lwrite(LWNew{left, xs}, True{}, KV.deq.empty())
+    case _:
+      Out{e_wrongtype(), CKeep{}}
+
+# of a key that holds a string (m: the string's entry, or none)
+def lwrite.str(op: LWrite, m: Maybe<&2, KV.Item<String>>) -> Out:
+  match m:
+    case Some{x}:
+      lwrite.wrong(op)
+    case None{}:
+      lwrite(op, True{}, KV.deq.empty())
+
+# of a key that holds a collection
+def lwrite.coll(op: LWrite, +cl: KV.Coll) -> Out:
+  match cl:
+    case KV.CList{l}:
+      lwrite(op, False{}, l)
+    case KV.CHash{h}:
+      lwrite.wrong(op)
 
 def upd(op: UpdOp, +now: Nat, m: Maybe<&2, KV.Item<String>>) -> Out:
   match op:
@@ -7929,6 +9488,8 @@ def upd(op: UpdOp, +now: Nat, m: Maybe<&2, KV.Item<String>>) -> Out:
       bitfield.of(ops, m)
     case UHash{op}:
       hwrite.str(op, m)
+    case UList{op}:
+      lwrite.str(op, m)
 
 # An update of a key that holds a collection: SET (and SETEX, PSETEX)
 # replaces it, SETNX finds it there, EXPIRE and its kin and PERSIST set
@@ -7953,6 +9514,8 @@ def upd.only(op: UpdOp, +cl: KV.Coll) -> Out:
   match op:
     case UHash{hop}:
       hwrite.coll(hop, cl)
+    case UList{lop}:
+      lwrite.coll(lop, cl)
     case _:
       Out{e_wrongtype(), CKeep{}}
 
@@ -7997,6 +9560,10 @@ def upd.ch(t: KV.Trie<KV.Val>, +k: String, +h: U32, +n: Nat, +x: Nat, now: Nat, 
       (r, Db{KV.keep.at(KV.Val, t, k, KV.VColl{KV.CHash{hv}}, h), n, x, now, rr})
     case CHashNew{ps, hv}:
       (r, Db{KV.setx.at(KV.Val, t, k, KV.VColl{KV.CHash{hv}}, 0n, h), cnt.n(c, n), cnt.x(c, 0n, x), now, rr})
+    case CList{op, lv}:
+      (r, Db{KV.keep.at(KV.Val, t, k, KV.VColl{KV.CList{lv}}, h), n, x, now, rr})
+    case CListNew{left, xs, lv}:
+      (r, Db{KV.setx.at(KV.Val, t, k, KV.VColl{KV.CList{lv}}, 0n, h), cnt.n(c, n), cnt.x(c, 0n, x), now, rr})
 
 def upd.put(t: KV.Trie<KV.Val>, +k: String, +h: U32, +n: Nat, +x: Nat, now: Nat, rr: Maybe<&2, Db>, +c: Nat, o: Out) -> Reply & Db:
   match o:
@@ -8261,6 +9828,161 @@ def db.bitop(db: Db, +op: BitK, +d: String, srcs: List<&2, String>) -> Reply & D
   +ss = srcs
   bitop.do(bitop.wrong(ss, db.now(x), db.trie(x)), op, d, ss, x)
 
+# LMOVE (and RPOPLPUSH): an element popped from the list at src and
+# pushed onto the list at dst, as Redis 7.0.15 does it: src not there
+# answers a nil; src or dst of another kind WRONGTYPE, the keys left as
+# they were; else the element (src is deleted when it gives its last,
+# and keeps its time, as dst does when it holds a list; a new list at
+# dst has none). The New forms take dst as not there, whatever it holds,
+# and set the new list where its entry lies: the script the file logs
+# for them deletes dst before the LMOVE, and Redis runs it so (a script
+# that moves nothing, which BendKV never logs, leaves dst as it was
+# here).
+# What LMOVE finds: no list at src (MvNone), src or dst of another kind
+# (MvWrong), or src's list l and its time e, and dst: src itself
+# (MvSelf), a list dl (MvOnto), or nothing there at now (MvNew)
+type Mv is Data:
+  MvNone{}
+  MvWrong{}
+  MvSelf{l: KV.Deq, e: Nat}
+  MvOnto{l: KV.Deq, e: Nat, dl: KV.Deq}
+  MvNew{l: KV.Deq, e: Nat}
+
+def mv.dst(+same: Bool, l: KV.Deq, +e: Nat, md: Maybe<&2, KV.Item<KV.Val>>) -> Mv:
+  match same md:
+    case True{} _:
+      MvSelf{l, e}
+    case False{} None{}:
+      MvNew{l, e}
+    case False{} Some{KV.Item{KV.VColl{KV.CList{dl}}, de}}:
+      MvOnto{l, e, dl}
+    case False{} Some{it}:
+      MvWrong{}
+
+def mv.of(ms: Maybe<&2, KV.Item<KV.Val>>, +same: Bool, md: Maybe<&2, KV.Item<KV.Val>>) -> Mv:
+  match ms:
+    case Some{KV.Item{KV.VColl{KV.CList{l}}, +e}}:
+      mv.dst(same, l, e, md)
+    case Some{it}:
+      MvWrong{}
+    case None{}:
+      MvNone{}
+
+# dst's entry as the ends see it: none for a New form
+def mv.dst.ent(fresh: Bool, m: Maybe<&2, KV.Item<KV.Val>>) -> Maybe<&2, KV.Item<KV.Val>>:
+  match fresh:
+    case True{}:
+      None{}
+    case False{}:
+      m
+
+def mv.find(+d: Db, +s: String, +t: String, +e: LEnds) -> Mv:
+  mv.of(db.ent(d, s), KV.str_eq(s, t), mv.dst.ent(ends.fresh(e), db.ent(d, t)))
+
+# k set to the list l, keeping its time (k holds a list)
+def db.keepl(db: Db, +k: String, l: KV.Deq) -> Db:
+  match db:
+    case Db{t, n, x, now, rr}:
+      Db{KV.keep.at(KV.Val, t, k, KV.VColl{KV.CList{l}}, KV.hash(k)), n, x, now, rr}
+
+# k set to the new list l, with no time, counted
+def db.newl(db: Db, +k: String, l: KV.Deq) -> Db:
+  match db:
+    case Db{t, +n, +x, now, rr}:
+      +u = t
+      +h = KV.hash(k)
+      +c = KV.code.at(KV.Val, u, k, h)
+      Db{KV.setx.at(KV.Val, u, k, KV.VColl{KV.CList{l}}, 0n, h), cnt.n(c, n), cnt.x(c, 0n, x), now, rr}
+
+# src left with the list l: deleted when l is empty
+def mv.src(empty: Bool, +k: String, l: KV.Deq, db: Db) -> Db:
+  match empty:
+    case True{}:
+      db_of(db.del(db, [k]))
+    case False{}:
+      db.keepl(db, k, l)
+
+def mv.put(+s: String, l: KV.Deq, db: Db) -> Db:
+  +m = l
+  mv.src(Nat.is_eq(KV.deq.len(m), 0n), s, m, db)
+
+def mv.go(p: KV.Pop, +e: LEnds, +s: String, +t: String, dl: Maybe<&2, KV.Deq>, db: Db) -> Reply & Db:
+  match p dl:
+    case KV.Pop{+x, l} Some{d}:
+      (RBulk{x}, db.keepl(mv.put(s, l, db), t, KV.deq.push(ends.to(e), x, d)))
+    case KV.Pop{+x, l} None{}:
+      (RBulk{x}, db.newl(mv.put(s, l, db), t, KV.deq.push(ends.to(e), x, KV.deq.empty())))
+    case KV.PopNone{} _:
+      (RNull{}, db)
+
+def mv.self(p: KV.Pop, +e: LEnds, +s: String, db: Db) -> Reply & Db:
+  match p:
+    case KV.Pop{+x, l}:
+      (RBulk{x}, db.keepl(db, s, KV.deq.push(ends.to(e), x, l)))
+    case KV.PopNone{}:
+      (RNull{}, db)
+
+def mv.do(m: Mv, +e: LEnds, +s: String, +t: String, db: Db) -> Reply & Db:
+  match m:
+    case MvNone{}:
+      (RNull{}, db)
+    case MvWrong{}:
+      (e_wrongtype(), db)
+    case MvSelf{l, se}:
+      mv.self(KV.deq.pop(ends.from(e), l), e, s, db)
+    case MvOnto{l, se, dl}:
+      mv.go(KV.deq.pop(ends.from(e), l), e, s, t, Some{dl}, db)
+    case MvNew{l, se}:
+      mv.go(KV.deq.pop(ends.from(e), l), e, s, t, None{}, db)
+
+def db.lmove(db: Db, +s: String, +t: String, +e: LEnds) -> Reply & Db:
+  +x = db
+  mv.do(mv.find(x, s, t, e), e, s, t, x)
+
+# LMPOP: the first of the keys there at now; none answers a null array,
+# one of another kind WRONGTYPE, else up to c elements popped from its
+# list (LWPopN), answered with the key
+def lmpop.head(+ks: List<&2, String>, +d: Db) -> Bool:
+  match ks:
+    case Con{+k, +rest}:
+      Maybe.is_some(&2, KV.Item<KV.Val>, db.ent(d, k))
+    case Nil{}:
+      False{}
+
+# there: whether the first of ks is there
+def lmpop.first(ks: List<&2, String>, there: Bool, +d: Db) -> Maybe<&2, String>:
+  match ks there:
+    case Con{k, rest} True{}:
+      Some{k}
+    case Con{k, +rest} False{}:
+      +h = lmpop.head(rest, d)
+      lmpop.first(rest, h, d)
+    case Nil{} _:
+      None{}
+
+def lmpop.reply(+k: String, r: Reply) -> Reply:
+  match r:
+    case RArray{xs}:
+      RArray{[RBulk{k}, RArray{xs}]}
+    case _:
+      r
+
+def lmpop.out(+k: String, r: Reply & Db) -> Reply & Db:
+  (x, d) = r
+  (lmpop.reply(k, x), d)
+
+def lmpop.at(m: Maybe<&2, String>, +left: Bool, c: String, db: Db) -> Reply & Db:
+  match m:
+    case Some{+k}:
+      lmpop.out(k, db.upd(db, k, UList{LWPopN{left, c}}))
+    case None{}:
+      (RNullA{}, db)
+
+def db.lmpop(db: Db, ks: List<&2, String>, +left: Bool, c: String) -> Reply & Db:
+  +x = db
+  +k = ks
+  lmpop.at(lmpop.first(k, lmpop.head(k, x), x), left, c, x)
+
 # one command: its reply and the database after it. The database is
 # passed on, not shared, so a write rebuilds only the path it changes.
 # A key read only reads the trie: the compiler lends t to the read and
@@ -8322,6 +10044,10 @@ def exec(cmd: Cmd, db: Db) -> Reply & Db:
       (RError{"ERR a command of the connection, not of the database"}, db)
     case Bad{r}:
       (r, db)
+    case LMove{+s, +t, +e}:
+      db.lmove(db, s, t, e)
+    case LMPop{ks, +left, c}:
+      db.lmpop(db, ks, left, c)
 
 # a batch of commands, in order: the replies in order, and the database
 # after the last

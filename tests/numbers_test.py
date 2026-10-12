@@ -37,6 +37,9 @@ TEMPL = [
     "BITFIELD k GET u5 #n", "BITFIELD_RO k GET i3 n", "BITFIELD k GET Tn 0", "BITFIELD k GET Un 0",
     "BITFIELD k SET i64 0 n", "BITFIELD k SET u8 3 n", "BITFIELD k INCRBY i64 0 n", "BITFIELD k INCRBY u63 1 n",
     "BITFIELD k OVERFLOW SAT INCRBY i32 0 n", "BITFIELD k OVERFLOW SAT SET i8 0 n", "BITFIELD k OVERFLOW FAIL SET u7 0 n",
+    "LINDEX l n", "LRANGE l n n", "LRANGE l 0 n", "LRANGE l n -1", "LSET l n v", "LREM l n a", "LTRIM l n n",
+    "LTRIM l 0 n", "LPOP l n", "RPOP l n", "LPOS l a RANK n", "LPOS l a COUNT n", "LPOS l a MAXLEN n",
+    "LPOS l a RANK n COUNT 0", "LMPOP n l LEFT", "LMPOP 1 l LEFT COUNT n", "LINSERT l BEFORE n v",
 ]
 ANSWER_ONLY = ("INCRBY", "DECRBY", "SCAN n")
 
@@ -48,7 +51,8 @@ def norm(t, x):
 
 
 # the state each command starts from on both servers
-RESET = [[b"SELECT", b"0"], [b"SET", b"k", b"hello"], [b"SET", b"i", b"5"],
+RESET = [[b"SELECT", b"0"], [b"SET", b"k", b"hello"], [b"SET", b"i", b"5"], [b"DEL", b"l"],
+         [b"RPUSH", b"l", b"a", b"b", b"a", b"c", b"a"],
          [b"CONFIG", b"SET", b"proto-max-bulk-len", b"536870912"], [b"CONFIG", b"SET", b"hz", b"10"],
          [b"CONFIG", b"SET", b"maxmemory", b"0"]]
 

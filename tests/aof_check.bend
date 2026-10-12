@@ -1,5 +1,5 @@
-# aof_check.bend: runs smoke.bend's batch, and writes of hashes, with
-# its effects (aof.bend:
+# aof_check.bend: runs smoke.bend's batch, and writes of hashes and of
+# lists, with its effects (aof.bend:
 # exec_log), writes the effects as the server appends them, reads the
 # file back, runs it from an empty database and prints whether that gives
 # the batch's database; then cuts the file at every length and prints
@@ -56,7 +56,15 @@ def buf() -> String:
   "*7\r\n$4\r\nEVAL\r\n$131\r\n" ++ R.hnew.script() ++ "\r\n$1\r\n1\r\n$2\r\nh4\r\n$4\r\nHSET\r\n$1\r\nf\r\n$1\r\nv\r\n" ++
   "*7\r\n$4\r\nEVAL\r\n$131\r\n" ++ R.hnew.script() ++ "\r\n$1\r\n1\r\n$1\r\nh\r\n$4\r\nHSET\r\n$1\r\nz\r\n$1\r\n1\r\n" ++
   "*8\r\n$4\r\nEVAL\r\n$131\r\n" ++ R.hnew.script() ++ "\r\n$1\r\n1\r\n$1\r\nu\r\n$4\r\nHSET\r\n$1\r\nz\r\n$1\r\n1\r\n$1\r\ny\r\n" ++
-  "EVAL x 0\r\nEVAL\r\n"
+  "EVAL x 0\r\nEVAL\r\n" ++
+  "RPUSH l a b c\r\nLPUSH l x\r\nLPUSHX l y\r\nRPUSHX nope z\r\nLPOP l\r\nRPOP l 2\r\nLSET l 0 q\r\n" ++
+  "LINSERT l BEFORE q p\r\nLINSERT l AFTER nope p\r\nLREM l 0 p\r\nRPUSH l2 1 2 3 4 5 6\r\nLTRIM l2 1 -2\r\n" ++
+  "LMOVE l2 l LEFT RIGHT\r\nLMOVE l2 l2 RIGHT LEFT\r\nRPOPLPUSH l2 l3\r\nLMPOP 2 nope l2 RIGHT COUNT 5\r\n" ++
+  "LPUSH g x\r\nLPOP l3\r\nLPOP l3\r\nRPUSH l4 a\r\nEXPIRE l4 100\r\nRPOP l4 0\r\nLREM l4 0 a\r\n" ++
+  "*7\r\n$4\r\nEVAL\r\n$131\r\n" ++ R.hnew.script() ++ "\r\n$1\r\n1\r\n$2\r\nl5\r\n$5\r\nLPUSH\r\n$1\r\na\r\n$1\r\nb\r\n" ++
+  "*6\r\n$4\r\nEVAL\r\n$131\r\n" ++ R.hnew.script() ++ "\r\n$1\r\n1\r\n$1\r\nh\r\n$5\r\nRPUSH\r\n$1\r\nc\r\n" ++
+  "*7\r\n$4\r\nEVAL\r\n$84\r\n" ++ R.lmove.script() ++ "\r\n$1\r\n2\r\n$1\r\nl\r\n$2\r\nl5\r\n$4\r\nLEFT\r\n$5\r\nRIGHT\r\n" ++
+  "*7\r\n$4\r\nEVAL\r\n$84\r\n" ++ R.lmove.script() ++ "\r\n$1\r\n2\r\n$1\r\nl\r\n$1\r\nu\r\n$5\r\nRIGHT\r\n$4\r\nLEFT\r\n"
 
 # an entry as its value, and the time it expires at when it has one
 def dump.pairs(ps: List<&2, KV.HPair>) -> String:
@@ -66,12 +74,21 @@ def dump.pairs(ps: List<&2, KV.HPair>) -> String:
     case Con{KV.HP{f, v}, rest}:
       " " ++ f ++ ":" ++ v ++ dump.pairs(rest)
 
+def dump.elems(xs: List<&2, String>) -> String:
+  match xs:
+    case Nil{}:
+      ""
+    case Con{x, rest}:
+      " " ++ x ++ dump.elems(rest)
+
 def dump.val(v: KV.Val) -> String:
   match v:
     case KV.VStr{s}:
       s
     case KV.VColl{KV.CHash{+h}}:
       "<hash" ++ dump.pairs(KV.hash.pairs(h)) ++ ">"
+    case KV.VColl{KV.CList{+l}}:
+      "<list" ++ dump.elems(KV.deq.all(l)) ++ ">"
 
 def dump.ent(m: Maybe<&2, KV.Item<KV.Val>>) -> String:
   match m:

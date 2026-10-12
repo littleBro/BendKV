@@ -798,6 +798,8 @@ def obj.coll.enc(+c: KV.Coll, +cfg: List<&2, C.CItem>) -> String:
   match c:
     case KV.CHash{+h}:
       obj.hash.enc(h, cfg)
+    case KV.CList{l}:
+      "quicklist"
 
 def obj.coll(+sub: Nat, +c: KV.Coll, +cfg: List<&2, C.CItem>) -> R.Reply:
   match sub:
@@ -957,6 +959,8 @@ def hr.one(m: Maybe<&2, KV.Item<KV.Val>>, +r: U32) -> R.Reply:
   match m:
     case Some{KV.Item{KV.VColl{KV.CHash{+h}}, e}}:
       hr.first(hp.nth(KV.hash.pairs(h), hr.at(hr.next(r), KV.hash.len(h))))
+    case Some{KV.Item{KV.VColl{KV.CList{l}}, e}}:
+      R.e_wrongtype()
     case Some{KV.Item{KV.VStr{s}, e}}:
       R.e_wrongtype()
     case None{}:
@@ -966,6 +970,8 @@ def hr.many(m: Maybe<&2, KV.Item<KV.Val>>, +neg: Bool, +k: Nat, +wv: Bool, +r: U
   match m:
     case Some{KV.Item{KV.VColl{KV.CHash{+h}}, e}}:
       R.RArray{hr.of(neg, k, wv, KV.hash.pairs(h), KV.hash.len(h), r)}
+    case Some{KV.Item{KV.VColl{KV.CList{l}}, e}}:
+      R.e_wrongtype()
     case Some{KV.Item{KV.VStr{s}, e}}:
       R.e_wrongtype()
     case None{}:
@@ -981,8 +987,9 @@ def hr.reply(a: HrArgs, m: Maybe<&2, KV.Item<KV.Val>>, +r: U32) -> R.Reply:
       e
 
 # MEMORY USAGE key [SAMPLES count]: about how many bytes the key's entry
-# takes: the key, the value (a string's bytes, a hash's fields and values)
-# and a few words for the cells that hold them. SAMPLES takes a long long
+# takes: the key, the value (a string's bytes, a hash's fields and
+# values, a list's elements) and a few words for the cells that hold
+# them. SAMPLES takes a long long
 # not below 0 (BendKV counts every field: it samples none); any other word
 # is a syntax error; both are read before the key is looked for, as
 # Redis reads them.
@@ -1018,12 +1025,21 @@ def mem.pairs(ps: List<&2, KV.HPair>, +acc: Nat) -> Nat:
     case Con{KV.HP{f, v}, rest}:
       mem.pairs(rest, Nat.add(acc, Nat.add(32n, Nat.add(String.length(f), String.length(v)))))
 
+def mem.elems(xs: List<&2, String>, +acc: Nat) -> Nat:
+  match xs:
+    case Nil{}:
+      acc
+    case Con{x, rest}:
+      mem.elems(rest, Nat.add(acc, Nat.add(16n, String.length(x))))
+
 def mem.val(+v: KV.Val) -> Nat:
   match v:
     case KV.VStr{+s}:
       Nat.add(16n, String.length(s))
     case KV.VColl{KV.CHash{+h}}:
       mem.pairs(KV.hash.pairs(h), 48n)
+    case KV.VColl{KV.CList{+l}}:
+      mem.elems(KV.deq.all(l), 48n)
 
 def mem.size(+k: String, m: Maybe<&2, KV.Item<KV.Val>>) -> R.Reply:
   match m:
