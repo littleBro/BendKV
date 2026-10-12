@@ -30,8 +30,9 @@ well. BendKV asks how far one can get writing a real, fast server in a language 
 the code that runs is the code that is proved, without a separate model and a
 refinement proof. The answer so far: the verified core is not what makes it slow;
 the data representation of the runtime was, and most of the work went into fixing it
-(20 patches to the Bend compiler, in [`bend-patches/`](bend-patches/), and one more
-that gives it the process's directory, id and clock).
+(20 patches to the Bend compiler, in [`bend-patches/`](bend-patches/), and two more:
+one gives it the process's directory, id and clock, one cuts a file at any size and
+syncs a directory).
 
 ## What is proved
 
@@ -235,11 +236,12 @@ translation stays in the trusted base.
   entries of another database, SWAPDB, MOVE and FLUSHALL as Redis writes them, and COPY
   with its DB and REPLACE spelled out (`redis-check-aof` accepts it, and Redis loads it;
   BendKV loads Redis's, COPY as the client sent it, MULTI and EXEC as marks), fsync
-  `always`, `everysec` or `no`. A file with an entry the start cannot replay as it was
-  written (an unknown command, a wrong number of arguments, an argument that does not
-  read, a database not there, a transaction left open) stops the start, naming the
-  entry and the byte it starts at, the file left as it was, where Redis stops at an
-  unknown command.
+  `always`, `everysec` or `no`. The start cuts a file that ends in an entry cut short
+  back to its last whole entry at any size. A file with an entry the start cannot
+  replay as it was written (an unknown command, a wrong number of arguments, an
+  argument that does not read, a database not there, a transaction left open) stops
+  the start, naming the entry and the byte it starts at, the file left as it was,
+  where Redis stops at an unknown command.
 
 Not yet: streams and the other types (HyperLogLog, geo), the blocking commands, Lua
 scripts, MULTI/EXEC, pub/sub, RESP3, timing of commands
@@ -271,7 +273,7 @@ also needs Lean 4.34.0 (through elan).
 
 ```bash
 git clone https://github.com/bendlang/bend ../bend-patched
-sh bend-patches/apply.sh ../bend-patched      # Bend 2.0.35 + 21 patches
+sh bend-patches/apply.sh ../bend-patched      # Bend 2.0.35 + 22 patches
 B="bun ../bend-patched/bend2/main.ts"
 
 make check   BEND="$B"   # check the proofs
@@ -363,7 +365,7 @@ bench/      in-process benchmarks of the map, the core and channels
 tools/      measurement scripts, the runner of Redis's test suite, and the generators of
             the trie, of the parameter table and of the command table, with the facts
             they take from Redis (tools/data/)
-bend-patches/  the 21 patches to the Bend compiler and runtime
+bend-patches/  the 22 patches to the Bend compiler and runtime
 docs/       FINDINGS.md, DIRECTIONS.md, COMPATIBILITY.md
 ```
 

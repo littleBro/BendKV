@@ -125,7 +125,7 @@ represented data:
   reader an owner of the whole value: O(depth) reference-count operations per read.
 - **A deep trie.** The first map was a binary trie of 20 levels: 20 dependent loads.
 
-## 3. Twenty-one patches to the Bend compiler
+## 3. Twenty-two patches to the Bend compiler
 
 All live in [`bend-patches/`](../bend-patches/) (against `bendlang/bend` at `1cce499`,
 Bend 2.0.35). The first eight switch on by themselves for programs without GPU calls;
@@ -135,8 +135,10 @@ fourteenth speeds up `String.code_at` everywhere; the fifteenth and sixteenth wo
 a program calls `TCP.post`; the seventeenth adds string functions; the eighteenth
 changes how every program's `IO` compiles; the nineteenth speeds up `Mem.prefetch` of
 a buffer and `String.take` of a short string everywhere; the twentieth adds the
-process's id, working directory and wall clock (section 3o); and the twenty-first lays
-out a datatype wider than 32 words as a node of its own, in every program (section 3p).
+process's id, working directory and wall clock (section 3o); the twenty-first lays
+out a datatype wider than 32 words as a node of its own, in every program (section 3p);
+and the twenty-second makes `File.truncate` take its size as a `Nat` and adds
+`File.sync_dir` (section 3e).
 The sections before 3l
 number the patches as they were then: patch 16 was effect pairs, taken out in 3l with
 `TCP.post_list` of patch 11, and their patches 17–20 are today's 16–19. None changes the
@@ -167,6 +169,7 @@ to agree with the list definition, and `IO` is still a function of `R` and `k`.
 | 19. io cps | a def whose type ends in `IO` takes its continuation as a parameter, and its `do` blocks call effects and defs directly with a continuation that holds the rest of the block, instead of building `IO` values that `IO.bind` applies through closures | closure applications per request without a pipeline 14.5 → 7.1 (send) and 2.3 (post); 8% fewer instructions per request (section 3j) |
 | 20. value reads | `Mem.prefetch` of a buffer loads its bytes to its end (four cache lines at most), not its first 64 bytes; `String.take` of a string in the term word at its whole length gives the word back | lets a GET answer a copy of the value with its bytes hinted: +1.5–2% on GET hits, memory no longer grows with reads (section 3k) |
 | flat limit (today's 21st) | a datatype whose flat layout is wider than 32 words is a node of its own, instead of that many words in every call, result and frame that carries it | INFO's state in the server's: the actor's calls back from 50–67 words to under 25, and every segment's signature from 67 registers to 24 (section 3p) |
+| file durable (today's 22nd) | `File.truncate` takes its size as a `Nat`, a 64-bit word, not a `U32` (a size `off_t` cannot hold fails with `EOVERFLOW` before the file is touched); `File.sync_dir` syncs the directory that holds a path, as Redis's `fsyncFileDir` | a file of 4 GiB or more cut back to its last whole entry keeps the entries before it, not its size modulo 2^32 of them; a new file's name is on the disk before the first write is acknowledged (section 3e) |
 
 The ratios in the last column come from different series and drift by ±0.06–0.08
 between series; PERFORMANCE.md gives each one with its pairs.
@@ -186,7 +189,10 @@ stack, once missed the runner's 5 s under load and passes alone in 1–6 s, as b
 with the nineteen of section 3l, exactly the tests they pass with twenty, less the six
 tests of what was taken out (`chan_call`, `tcp_post_recv` and `tcp_post_list`, on both
 lanes); with today's twenty-one, exactly the tests they pass with twenty, plus the new
-one (`flat_limit`) on both lanes: 1,487 of 1,746.
+one (`flat_limit`) on both lanes: 1,487 of 1,746. The twenty-second changes only the type
+of `File.truncate`'s size and adds an effect: Bend's io tests on both lanes pass as with
+twenty-one (the one that cuts a file gives its size as a `Nat` now), plus the new one
+(`file_durable`).
 
 **BendKV's own changes.** A 16-way trie (5 levels instead of 20) whose leaves are
 buckets inside the trie; laws reproved for it. Requests parsed by index, with no
@@ -580,6 +586,16 @@ nothing, the start holds the databases `A.replay` gives, those `recover` and
 writes (the tests show it on their files, `tests/aof_check.bend` and every restart of
 `make test`); a refusal of BendKV's own file would stop a start, never change a
 database.
+
+**A cut at any size** (issue #1). The cut back to the last whole entry went through
+`U32.from_nat` and a `File.truncate` of a `U32`, so a file whose whole entries make
+2^32 bytes or more was cut to their length modulo 2^32: to nothing at exactly 4 GiB,
+while the server served the databases of the whole prefix, and the next start lost
+them. The twenty-second patch makes `File.truncate` take a `Nat`, a 64-bit word in
+the runtime, and `server.bend` passes its count of bytes as it is; a size that `off_t`
+cannot hold fails with `EOVERFLOW` before the file is touched. The patch's test cuts a
+sparse file to 2^32 − 1, 2^32 and 2^32 + 1 bytes and reads each size back exactly,
+with the file's first bytes kept.
 
 **Group commit.** The first version wrote each batch's effects with its own `write`
 on the runtime's helper threads, as Bend runs every file effect, and with `always`
