@@ -6530,6 +6530,10 @@ def move_split(+k: String, +i: Nat, +j: Nat, p: Bool & R.Ds) -> {(R.reply_ds(R.a
   (ok, ds) = p
   {==}
 
+def copy_split(+s: String, +d: String, +i: Nat, +j: Nat, p: Bool & R.Ds) -> {(R.reply_ds(R.act.moved(p)), (tmid(A.act.copy(s, d, i, j, p)), R.ds_of(R.act.moved(p)))) == A.act.copy(s, d, i, j, p) : R.Reply & (List<&2, A.Eff> & R.Ds)}:
+  (ok, ds) = p
+  {==}
+
 # an act runs with its effects as R.act runs it
 def act_split(+a: R.Act, +ds: R.Ds) -> {(R.reply_ds(R.act(a, ds)), (aeff(a, ds), R.ds_of(R.act(a, ds)))) == A.act(a, ds) : R.Reply & (List<&2, A.Eff> & R.Ds)}:
   match a ds:
@@ -6545,6 +6549,10 @@ def act_split(+a: R.Act, +ds: R.Ds) -> {(R.reply_ds(R.act(a, ds)), (aeff(a, ds),
       purge_split(k, j, R.ds.purge(k, j, x))
     case R.AMove{+k, +j} x:
       move_split(k, R.ds.index(x), j, R.ds.move(k, j, x))
+    case R.ACopy{+s, +d, +j, +rep} x:
+      copy_split(s, d, R.ds.index(x), j, R.ds.copy(s, d, j, rep, x))
+    case R.ACopyHere{+s, +d, +rep} x:
+      copy_split(s, d, R.ds.index(x), R.ds.index(x), R.ds.copy(s, d, R.ds.index(x), rep, x))
     case R.AWipe{} x:
       {==}
 
@@ -7442,6 +7450,24 @@ def rp_emove.if(b: Bool, +k: String, +src: Nat, +dst: Nat, +sel: Nat, +r: R.Ds) 
 def rp_emove(+k: String, +src: Nat, +dst: Nat, +sel: Nat, +r: R.Ds, ss: {KV.small(src) == True{} : Bool}, sd: {KV.small(dst) == True{} : Bool}, ei: {R.ds.index(r) == sel : Nat}) -> {rp([A.EMove{k, src, dst}], sel, r) == R.ds_of(R.act(R.AMove{k, dst}, R.ds.focus(src, r))) : R.Ds}:
   rp_emove.if(Nat.is_eq(src, sel), k, src, dst, sel, r)({==})(ss)(sd)(ei)
 
+# COPY's effect, replayed: the focus moves to the database the key was
+# copied from, and COPY runs there with REPLACE
+def rp_ecopy.if(b: Bool, +s: String, +d: String, +src: Nat, +dst: Nat, +sel: Nat, +r: R.Ds) -> {b == Nat.is_eq(src, sel) : Bool} -> {KV.small(src) == True{} : Bool} -> {KV.small(dst) == True{} : Bool} -> {R.ds.index(r) == sel : Nat} -> {R.acts(A.file.acts(A.parse_all(A.sel.put(b, src, [["COPY", s, d, "DB", Nat.show(dst), "REPLACE"]]))), r) == R.ds_of(R.act(R.ACopy{s, d, dst, True{}}, R.ds.focus(src, r))) : R.Ds}:
+  match b:
+    case True{}:
+      eb => ss => sd => ei =>
+        %Equal.sym(Maybe<&2, Nat>, A.file.num(Nat.show(dst)), Some{dst}, num_rt(dst)(sd)) : {R.acts([A.file.copy.of(True{}, True{}, s, d, _, R.Own{R.SCopy{[s, d, "DB", Nat.show(dst), "REPLACE"]}})], r) == R.ds_of(R.act(R.ACopy{s, d, dst, True{}}, R.ds.focus(src, r))) : R.Ds}
+        %focus_same(src, r, Equal.trans(Nat, R.ds.index(r), sel, src, ei, Equal.sym(Nat, src, sel, nat_eq(src, sel)(Equal.sym(Bool, True{}, Nat.is_eq(src, sel), eb))))) : {R.acts([R.ACopy{s, d, dst, True{}}], r) == R.ds_of(R.act(R.ACopy{s, d, dst, True{}}, _)) : R.Ds}
+        {==}
+    case False{}:
+      eb => ss => sd => ei =>
+        %Equal.sym(Maybe<&2, Nat>, A.file.num(Nat.show(src)), Some{src}, num_rt(src)(ss)) : {R.acts([A.file.focus(_, R.Own{R.SSelect{Nat.show(src)}}), A.file.copy.of(True{}, True{}, s, d, A.file.num(Nat.show(dst)), R.Own{R.SCopy{[s, d, "DB", Nat.show(dst), "REPLACE"]}})], r) == R.ds_of(R.act(R.ACopy{s, d, dst, True{}}, R.ds.focus(src, r))) : R.Ds}
+        %Equal.sym(Maybe<&2, Nat>, A.file.num(Nat.show(dst)), Some{dst}, num_rt(dst)(sd)) : {R.acts([R.AFocus{src}, A.file.copy.of(True{}, True{}, s, d, _, R.Own{R.SCopy{[s, d, "DB", Nat.show(dst), "REPLACE"]}})], r) == R.ds_of(R.act(R.ACopy{s, d, dst, True{}}, R.ds.focus(src, r))) : R.Ds}
+        {==}
+
+def rp_ecopy(+s: String, +d: String, +src: Nat, +dst: Nat, +sel: Nat, +r: R.Ds, ss: {KV.small(src) == True{} : Bool}, sd: {KV.small(dst) == True{} : Bool}, ei: {R.ds.index(r) == sel : Nat}) -> {rp([A.ECopy{s, d, src, dst}], sel, r) == R.ds_of(R.act(R.ACopy{s, d, dst, True{}}, R.ds.focus(src, r))) : R.Ds}:
+  rp_ecopy.if(Nat.is_eq(src, sel), s, d, src, dst, sel, r)({==})(ss)(sd)(ei)
+
 # SWAPDB's effect, replayed: SWAPDB
 def rp_swap(+a: Nat, +b: Nat, +sel: Nat, +r: R.Ds, sa: {KV.small(a) == True{} : Bool}, sb: {KV.small(b) == True{} : Bool}) -> {rp([A.ESwap{a, b}], sel, r) == R.ds_of(R.act(R.ASwap{a, b}, r)) : R.Ds}:
   %Equal.sym(Maybe<&2, Nat>, A.file.num(Nat.show(a)), Some{a}, num_rt(a)(sa)) : {R.acts([A.file.swap(_, A.file.num(Nat.show(b)), R.Own{R.SSwapDb{Nat.show(a), Nat.show(b)}})], r) == R.ds_of(R.act(R.ASwap{a, b}, r)) : R.Ds}
@@ -7594,6 +7620,39 @@ def fa_of(e: R.Cmd) -> {R.parse(A.args(e)) == e : R.Cmd} -> {A.file.act(e) == R.
       h => Empty.absurd({A.file.act(R.Own{o}) == R.ARun{R.Own{o}} : R.Act}, own_noent(o, h))
     case R.Bad{r}:
       h => {==}
+
+# what COPY does: nothing, or, when the key is there in the focus and the
+# database it names is there, the key's entry set to the destination key
+# in that database
+def CopyOk(s: String, d: String, j: Nat, rep: Bool, o: R.Ds, p: Bool & R.Ds) -> Type:
+  Or({p == (False{}, o) : Bool & R.Ds}, Exists(R.Db, y => Exists(String, v => Exists(Nat, e => {R.ds.nth(j, R.ds.list(o)) == Some{y} : Maybe<&2, R.Db>} & ({R.ds.ent(o, s) == Some{KV.Item{v, e}} : Maybe<&2, KV.Item<String>>} & {p == (True{}, R.ds.with(R.ds.put(j, R.db.setx(y, d, v, e), R.ds.list(o)), o)) : Bool & R.Ds})))))
+
+def copy_if(ok: Bool, m: Maybe<&2, KV.Item<String>>, +s: String, +d: String, +j: Nat, +rep: Bool, +y: R.Db, +o: R.Ds, ey: {R.ds.nth(j, R.ds.list(o)) == Some{y} : Maybe<&2, R.Db>}) -> {m == R.ds.ent(o, s) : Maybe<&2, KV.Item<String>>} -> CopyOk(s, d, j, rep, o, R.ds.copy.if(ok, m, d, j, y, o)):
+  match ok m:
+    case True{} Some{KV.Item{v, e}}:
+      em => Inr{(y, (v, (e, (ey, (Equal.sym(Maybe<&2, KV.Item<String>>, Some{KV.Item{v, e}}, R.ds.ent(o, s), em), {==})))))}
+    case True{} None{}:
+      em => Inl{{==}}
+    case False{} _:
+      em => Inl{{==}}
+
+def copy_of(+s: String, +d: String, +j: Nat, +rep: Bool, my: Maybe<&2, R.Db>, +o: R.Ds) -> {my == R.ds.nth(j, R.ds.list(o)) : Maybe<&2, R.Db>} -> CopyOk(s, d, j, rep, o, R.ds.copy.of(s, d, j, rep, my, o)):
+  match my:
+    case Some{+y}:
+      e => copy_if(Bool.or(rep, Bool.not(Maybe.is_some(&2, KV.Item<String>, R.ent.live(R.ds.now(o), R.db.entry(y, d))))), R.ds.ent(o, s), s, d, j, rep, y, o, Equal.sym(Maybe<&2, R.Db>, Some{y}, R.ds.nth(j, R.ds.list(o)), e))({==})
+    case None{}:
+      e => Inl{{==}}
+
+def copy_spec(+s: String, +d: String, +j: Nat, +rep: Bool, +o: R.Ds) -> CopyOk(s, d, j, rep, o, R.ds.copy(s, d, j, rep, o)):
+  copy_of(s, d, j, rep, R.ds.nth(j, R.ds.list(o)), o)({==})
+
+# COPY copies when the key is there, the database is there, and REPLACE
+# is given or the destination is not there
+def copy_some(+s: String, +d: String, +j: Nat, +rep: Bool, +f: R.Ds, -y: R.Db, -v: String, -e: Nat, ey: {R.ds.nth(j, R.ds.list(f)) == Some{y} : Maybe<&2, R.Db>}, eent: {R.ds.ent(f, s) == Some{KV.Item{v, e}} : Maybe<&2, KV.Item<String>>}, ok: {Bool.or(rep, Bool.not(Maybe.is_some(&2, KV.Item<String>, R.ent.live(R.ds.now(f), R.db.entry(y, d))))) == True{} : Bool}) -> {R.ds.copy(s, d, j, rep, f) == (True{}, R.ds.with(R.ds.put(j, R.db.setx(y, d, v, e), R.ds.list(f)), f)) : Bool & R.Ds}:
+  %Equal.sym(Maybe<&2, R.Db>, R.ds.nth(j, R.ds.list(f)), Some{y}, ey) : {R.ds.copy.of(s, d, j, rep, _, f) == (True{}, R.ds.with(R.ds.put(j, R.db.setx(y, d, v, e), R.ds.list(f)), f)) : Bool & R.Ds}
+  %Equal.sym(Maybe<&2, KV.Item<String>>, R.ds.ent(f, s), Some{KV.Item{v, e}}, eent) : {R.ds.copy.if(Bool.or(rep, Bool.not(Maybe.is_some(&2, KV.Item<String>, R.ent.live(R.ds.now(f), R.db.entry(y, d))))), _, d, j, y, f) == (True{}, R.ds.with(R.ds.put(j, R.db.setx(y, d, v, e), R.ds.list(f)), f)) : Bool & R.Ds}
+  %Equal.sym(Bool, Bool.or(rep, Bool.not(Maybe.is_some(&2, KV.Item<String>, R.ent.live(R.ds.now(f), R.db.entry(y, d))))), True{}, ok) : {R.ds.copy.if(_, Some{KV.Item{v, e}}, d, j, y, f) == (True{}, R.ds.with(R.ds.put(j, R.db.setx(y, d, v, e), R.ds.list(f)), f)) : Bool & R.Ds}
+  {==}
 
 # a command that wrote nothing leaves its database reading the same at
 # time 0; one with an effect leaves it as the effect leaves it
@@ -7817,6 +7876,48 @@ def post_move(+k: String, +j: Nat, +o: R.Ds, +r: R.Ds, +sel: Nat, +n: Nat, -p: B
       %Equal.sym(Bool & R.Ds, p, (True{}, R.ds.moved(k, j, R.db.setx(y, k, v, e), o)), eq) : Inv(rp(tmid(A.act.move(k, R.ds.index(o), j, _)), sel, r), R.ds_of(R.act.moved(_)), A.effs.sel(tmid(A.act.move(k, R.ds.index(o), j, _)), sel)) & Len(R.ds_of(R.act.moved(_)), n)
       move_yes(k, j, o, r, sel, n, y, v, e, ey, ene, eno, eent, ln, sm, ez, ei, en)
 
+# COPY that copied the key
+def copy_yes2(+s: String, +d: String, +j: Nat, +o: R.Ds, +r: R.Ds, +sel: Nat, +n: Nat, +y: R.Db, +v: String, +e: Nat, +y2: R.Db, +ey: {R.ds.nth(j, R.ds.list(o)) == Some{y} : Maybe<&2, R.Db>}, +eent: {R.ds.ent(o, s) == Some{KV.Item{v, e}} : Maybe<&2, KV.Item<String>>}, +ey2: {R.ds.nth(j, R.ds.list(R.ds.focus(R.ds.index(o), r))) == Some{y2} : Maybe<&2, R.Db>}, +eyy: {R.db.at(0n, y2) == R.db.at(0n, y) : R.Db}, +ln: {List.length(&2, R.Db, Laws.zero(o)) == 1n+n : Nat}, +sm: {KV.small(n) == True{} : Bool}, +ez: {Laws.zero(r) == Laws.zero(o) : List<&2, R.Db>}, +ei: {R.ds.index(r) == sel : Nat}, +en: {R.ds.now(r) == 0n : Nat}) -> Inv(rp([A.ECopy{s, d, R.ds.index(o), j}], sel, r), R.ds.with(R.ds.put(j, R.db.setx(y, d, v, e), R.ds.list(o)), o), R.ds.index(o)) & Len(R.ds.with(R.ds.put(j, R.db.setx(y, d, v, e), R.ds.list(o)), o), n):
+  +eiF = focus_i(R.ds.index(o), r, bound_r(R.ds.index(o), r, o, n, ez, ln, lidx(o, n, ln)))
+  +enF = Equal.trans(Nat, R.ds.now(R.ds.focus(R.ds.index(o), r)), R.ds.now(r), 0n, focus_n(R.ds.index(o), r), en)
+  +ezF = Equal.trans(List<&2, R.Db>, Laws.zero(R.ds.focus(R.ds.index(o), r)), Laws.zero(r), Laws.zero(o), focus_z(R.ds.index(o), r), ez)
+  +es = Equal.trans(R.Db, R.db.at(0n, R.db.setx(y2, d, v, e)), R.db.setx(R.db.at(0n, y2), d, v, e), R.db.at(0n, R.db.setx(y, d, v, e)), setx0(y2, d, v, e), Equal.trans(R.Db, R.db.setx(R.db.at(0n, y2), d, v, e), R.db.setx(R.db.at(0n, y), d, v, e), R.db.at(0n, R.db.setx(y, d, v, e)), Equal.cong(R.Db, R.Db, z => R.db.setx(z, d, v, e), R.db.at(0n, y2), R.db.at(0n, y), eyy), Equal.sym(R.Db, R.db.at(0n, R.db.setx(y, d, v, e)), R.db.setx(R.db.at(0n, y), d, v, e), setx0(y, d, v, e))))
+  +eent2 = ent_eq(R.ds.focus(R.ds.index(o), r), o, s, KV.Item{v, e})(enF)(eiF)(ezF)(eent)
+  %Equal.sym(R.Ds, rp([A.ECopy{s, d, R.ds.index(o), j}], sel, r), R.ds_of(R.act(R.ACopy{s, d, j, True{}}, R.ds.focus(R.ds.index(o), r))), rp_ecopy(s, d, R.ds.index(o), j, sel, r, small_le(R.ds.index(o), n, lidx(o, n, ln), sm), small_le(j, n, lnth(j, o, n, ln, y, ey), sm), ei)) : Inv(_, R.ds.with(R.ds.put(j, R.db.setx(y, d, v, e), R.ds.list(o)), o), R.ds.index(o)) & Len(R.ds.with(R.ds.put(j, R.db.setx(y, d, v, e), R.ds.list(o)), o), n)
+  %Equal.sym(Bool & R.Ds, R.ds.copy(s, d, j, True{}, R.ds.focus(R.ds.index(o), r)), (True{}, R.ds.with(R.ds.put(j, R.db.setx(y2, d, v, e), R.ds.list(R.ds.focus(R.ds.index(o), r))), R.ds.focus(R.ds.index(o), r))), copy_some(s, d, j, True{}, R.ds.focus(R.ds.index(o), r), y2, v, e, ey2, eent2, {==})) : Inv(R.ds_of(R.act.moved(_)), R.ds.with(R.ds.put(j, R.db.setx(y, d, v, e), R.ds.list(o)), o), R.ds.index(o)) & Len(R.ds.with(R.ds.put(j, R.db.setx(y, d, v, e), R.ds.list(o)), o), n)
+  ((Equal.trans(List<&2, R.Db>, Laws.zero(R.ds.with(R.ds.put(j, R.db.setx(y2, d, v, e), R.ds.list(R.ds.focus(R.ds.index(o), r))), R.ds.focus(R.ds.index(o), r))), R.ds.put(j, R.db.at(0n, R.db.setx(y2, d, v, e)), Laws.zero(R.ds.focus(R.ds.index(o), r))), Laws.zero(R.ds.with(R.ds.put(j, R.db.setx(y, d, v, e), R.ds.list(o)), o)),
+      z_with1(j, R.db.setx(y2, d, v, e), R.ds.focus(R.ds.index(o), r)),
+      Equal.trans(List<&2, R.Db>, R.ds.put(j, R.db.at(0n, R.db.setx(y2, d, v, e)), Laws.zero(R.ds.focus(R.ds.index(o), r))), R.ds.put(j, R.db.at(0n, R.db.setx(y, d, v, e)), Laws.zero(o)), Laws.zero(R.ds.with(R.ds.put(j, R.db.setx(y, d, v, e), R.ds.list(o)), o)),
+        put1_eq(j, R.db.at(0n, R.db.setx(y2, d, v, e)), R.db.at(0n, R.db.setx(y, d, v, e)), Laws.zero(R.ds.focus(R.ds.index(o), r)), Laws.zero(o), es, ezF),
+        Equal.sym(List<&2, R.Db>, Laws.zero(R.ds.with(R.ds.put(j, R.db.setx(y, d, v, e), R.ds.list(o)), o)), R.ds.put(j, R.db.at(0n, R.db.setx(y, d, v, e)), Laws.zero(o)), z_with1(j, R.db.setx(y, d, v, e), o)))),
+    (Equal.trans(Nat, R.ds.index(R.ds.with(R.ds.put(j, R.db.setx(y2, d, v, e), R.ds.list(R.ds.focus(R.ds.index(o), r))), R.ds.focus(R.ds.index(o), r))), R.ds.index(R.ds.focus(R.ds.index(o), r)), R.ds.index(o), with_i(R.ds.put(j, R.db.setx(y2, d, v, e), R.ds.list(R.ds.focus(R.ds.index(o), r))), R.ds.focus(R.ds.index(o), r), put_bound(j, R.db.setx(y2, d, v, e), R.ds.focus(R.ds.index(o), r))), eiF),
+     Equal.trans(Nat, R.ds.now(R.ds.with(R.ds.put(j, R.db.setx(y2, d, v, e), R.ds.list(R.ds.focus(R.ds.index(o), r))), R.ds.focus(R.ds.index(o), r))), R.ds.now(R.ds.focus(R.ds.index(o), r)), 0n, with_n(R.ds.put(j, R.db.setx(y2, d, v, e), R.ds.list(R.ds.focus(R.ds.index(o), r))), R.ds.focus(R.ds.index(o), r)), enF))),
+   Equal.trans(Nat, List.length(&2, R.Db, Laws.zero(R.ds.with(R.ds.put(j, R.db.setx(y, d, v, e), R.ds.list(o)), o))), List.length(&2, R.Db, R.ds.put(j, R.db.at(0n, R.db.setx(y, d, v, e)), Laws.zero(o))), 1n+n,
+     Equal.cong(List<&2, R.Db>, Nat, z => List.length(&2, R.Db, z), Laws.zero(R.ds.with(R.ds.put(j, R.db.setx(y, d, v, e), R.ds.list(o)), o)), R.ds.put(j, R.db.at(0n, R.db.setx(y, d, v, e)), Laws.zero(o)), z_with1(j, R.db.setx(y, d, v, e), o)),
+     Equal.trans(Nat, List.length(&2, R.Db, R.ds.put(j, R.db.at(0n, R.db.setx(y, d, v, e)), Laws.zero(o))), List.length(&2, R.Db, Laws.zero(o)), 1n+n, len_put(j, R.db.at(0n, R.db.setx(y, d, v, e)), Laws.zero(o)), ln)))
+
+def copy_yes1(+s: String, +d: String, +j: Nat, +o: R.Ds, +r: R.Ds, +sel: Nat, +n: Nat, +y: R.Db, +v: String, +e: Nat, +ey: {R.ds.nth(j, R.ds.list(o)) == Some{y} : Maybe<&2, R.Db>}, +eent: {R.ds.ent(o, s) == Some{KV.Item{v, e}} : Maybe<&2, KV.Item<String>>}, my: Exists(R.Db, z => {R.ds.nth(j, R.ds.list(R.ds.focus(R.ds.index(o), r))) == Some{z} : Maybe<&2, R.Db>} & {R.db.at(0n, z) == R.db.at(0n, y) : R.Db}), +ln: {List.length(&2, R.Db, Laws.zero(o)) == 1n+n : Nat}, +sm: {KV.small(n) == True{} : Bool}, +ez: {Laws.zero(r) == Laws.zero(o) : List<&2, R.Db>}, +ei: {R.ds.index(r) == sel : Nat}, +en: {R.ds.now(r) == 0n : Nat}) -> Inv(rp([A.ECopy{s, d, R.ds.index(o), j}], sel, r), R.ds.with(R.ds.put(j, R.db.setx(y, d, v, e), R.ds.list(o)), o), R.ds.index(o)) & Len(R.ds.with(R.ds.put(j, R.db.setx(y, d, v, e), R.ds.list(o)), o), n):
+  (y2, q) = my
+  (ey2, eyy) = q
+  copy_yes2(s, d, j, o, r, sel, n, y, v, e, y2, ey, eent, ey2, eyy, ln, sm, ez, ei, en)
+
+def copy_yes(+s: String, +d: String, +j: Nat, +o: R.Ds, +r: R.Ds, +sel: Nat, +n: Nat, +y: R.Db, +v: String, +e: Nat, +ey: {R.ds.nth(j, R.ds.list(o)) == Some{y} : Maybe<&2, R.Db>}, +eent: {R.ds.ent(o, s) == Some{KV.Item{v, e}} : Maybe<&2, KV.Item<String>>}, +ln: {List.length(&2, R.Db, Laws.zero(o)) == 1n+n : Nat}, +sm: {KV.small(n) == True{} : Bool}, +ez: {Laws.zero(r) == Laws.zero(o) : List<&2, R.Db>}, +ei: {R.ds.index(r) == sel : Nat}, +en: {R.ds.now(r) == 0n : Nat}) -> Inv(rp([A.ECopy{s, d, R.ds.index(o), j}], sel, r), R.ds.with(R.ds.put(j, R.db.setx(y, d, v, e), R.ds.list(o)), o), R.ds.index(o)) & Len(R.ds.with(R.ds.put(j, R.db.setx(y, d, v, e), R.ds.list(o)), o), n):
+  copy_yes1(s, d, j, o, r, sel, n, y, v, e, ey, eent, mat0_some(R.ds.nth(j, R.ds.list(R.ds.focus(R.ds.index(o), r))), R.db.at(0n, y))(nth_r(j, R.ds.focus(R.ds.index(o), r), o, Equal.trans(List<&2, R.Db>, Laws.zero(R.ds.focus(R.ds.index(o), r)), Laws.zero(r), Laws.zero(o), focus_z(R.ds.index(o), r), ez), y, ey)), ln, sm, ez, ei, en)
+
+def post_copy(+s: String, +d: String, +j: Nat, +rep: Bool, +o: R.Ds, +r: R.Ds, +sel: Nat, +n: Nat, -p: Bool & R.Ds, sp: CopyOk(s, d, j, rep, o, p), +ln: {List.length(&2, R.Db, Laws.zero(o)) == 1n+n : Nat}, +sm: {KV.small(n) == True{} : Bool}, +ez: {Laws.zero(r) == Laws.zero(o) : List<&2, R.Db>}, +ei: {R.ds.index(r) == sel : Nat}, +en: {R.ds.now(r) == 0n : Nat}) -> Inv(rp(tmid(A.act.copy(s, d, R.ds.index(o), j, p)), sel, r), R.ds_of(R.act.moved(p)), A.effs.sel(tmid(A.act.copy(s, d, R.ds.index(o), j, p)), sel)) & Len(R.ds_of(R.act.moved(p)), n):
+  match sp:
+    case Inl{eq}:
+      %Equal.sym(Bool & R.Ds, p, (False{}, o), eq) : Inv(rp(tmid(A.act.copy(s, d, R.ds.index(o), j, _)), sel, r), R.ds_of(R.act.moved(_)), A.effs.sel(tmid(A.act.copy(s, d, R.ds.index(o), j, _)), sel)) & Len(R.ds_of(R.act.moved(_)), n)
+      ((ez, (ei, en)), ln)
+    case Inr{w}:
+      (y, w2) = w
+      (v, w3) = w2
+      (e, w4) = w3
+      (ey, w5) = w4
+      (eent, eq) = w5
+      %Equal.sym(Bool & R.Ds, p, (True{}, R.ds.with(R.ds.put(j, R.db.setx(y, d, v, e), R.ds.list(o)), o)), eq) : Inv(rp(tmid(A.act.copy(s, d, R.ds.index(o), j, _)), sel, r), R.ds_of(R.act.moved(_)), A.effs.sel(tmid(A.act.copy(s, d, R.ds.index(o), j, _)), sel)) & Len(R.ds_of(R.act.moved(_)), n)
+      copy_yes(s, d, j, o, r, sel, n, y, v, e, ey, eent, ln, sm, ez, ei, en)
+
 # FLUSHALL
 def post_wipe(+o: R.Ds, +r: R.Ds, +sel: Nat, +n: Nat, +ln: {List.length(&2, R.Db, Laws.zero(o)) == 1n+n : Nat}, +ez: {Laws.zero(r) == Laws.zero(o) : List<&2, R.Db>}, +ei: {R.ds.index(r) == sel : Nat}, +en: {R.ds.now(r) == 0n : Nat}) -> Inv(R.ds.wipe(r), R.ds.wipe(o), sel) & Len(R.ds.wipe(o), n):
   ((Equal.trans(List<&2, R.Db>, Laws.zero(R.ds.wipe(r)), R.ds.flush(Laws.zero(r)), Laws.zero(R.ds.wipe(o)), z_wipe(r), Equal.trans(List<&2, R.Db>, R.ds.flush(Laws.zero(r)), R.ds.flush(Laws.zero(o)), Laws.zero(R.ds.wipe(o)), Equal.cong(List<&2, R.Db>, List<&2, R.Db>, z => R.ds.flush(z), Laws.zero(r), Laws.zero(o), ez), Equal.sym(List<&2, R.Db>, Laws.zero(R.ds.wipe(o)), R.ds.flush(Laws.zero(o)), z_wipe(o)))),
@@ -7849,6 +7950,16 @@ def act_inv(t: R.Act, +o: R.Ds, +r: R.Ds, +sel: Nat, +n: Nat, +sm: {KV.small(n) 
       (ez, q) = inv
       (ei, en) = q
       post_move(k, j, o, r, sel, n, R.ds.move(k, j, o), move_spec(k, j, o), ln, sm, ez, ei, en)
+    case R.ACopy{+s, +d, +j, +rep}:
+      (inv, ln) = st
+      (ez, q) = inv
+      (ei, en) = q
+      post_copy(s, d, j, rep, o, r, sel, n, R.ds.copy(s, d, j, rep, o), copy_spec(s, d, j, rep, o), ln, sm, ez, ei, en)
+    case R.ACopyHere{+s, +d, +rep}:
+      (inv, ln) = st
+      (ez, q) = inv
+      (ei, en) = q
+      post_copy(s, d, R.ds.index(o), rep, o, r, sel, n, R.ds.copy(s, d, R.ds.index(o), rep, o), copy_spec(s, d, R.ds.index(o), rep, o), ln, sm, ez, ei, en)
     case R.AWipe{}:
       (inv, ln) = st
       (ez, q) = inv
@@ -8411,6 +8522,20 @@ def now_move(+k: String, +j: Nat, +o: R.Ds, -p: Bool & R.Ds, sp: MoveOk(k, j, o,
       %Equal.sym(Bool & R.Ds, p, (True{}, R.ds.moved(k, j, R.db.setx(y, k, v, e), o)), eq) : {R.ds.now(R.ds_of(R.act.moved(_))) == R.ds.now(o) : Nat}
       Equal.trans(Nat, R.ds.now(R.ds.moved(k, j, R.db.setx(y, k, v, e), o)), R.ds.now(R.ds.unset(k, o)), R.ds.now(o), with_n(R.ds.put(j, R.db.setx(y, k, v, e), R.ds.list(R.ds.unset(k, o))), R.ds.unset(k, o)), now_unset(k, o))
 
+def now_copy(+s: String, +d: String, +j: Nat, +rep: Bool, +o: R.Ds, -p: Bool & R.Ds, sp: CopyOk(s, d, j, rep, o, p)) -> {R.ds.now(R.ds_of(R.act.moved(p))) == R.ds.now(o) : Nat}:
+  match sp:
+    case Inl{eq}:
+      %Equal.sym(Bool & R.Ds, p, (False{}, o), eq) : {R.ds.now(R.ds_of(R.act.moved(_))) == R.ds.now(o) : Nat}
+      {==}
+    case Inr{w}:
+      (y, w2) = w
+      (v, w3) = w2
+      (e, w4) = w3
+      (ey, w5) = w4
+      (eent, eq) = w5
+      %Equal.sym(Bool & R.Ds, p, (True{}, R.ds.with(R.ds.put(j, R.db.setx(y, d, v, e), R.ds.list(o)), o)), eq) : {R.ds.now(R.ds_of(R.act.moved(_))) == R.ds.now(o) : Nat}
+      with_n(R.ds.put(j, R.db.setx(y, d, v, e), R.ds.list(o)), o)
+
 def now_run(+c: R.Cmd, o: R.Ds) -> {R.ds.now(R.ds_of(R.act(R.ARun{c}, o))) == R.ds.now(o) : Nat}:
   match o:
     case R.Ds{+d, +pre, +post}:
@@ -8429,6 +8554,10 @@ def act_now(t: R.Act, +o: R.Ds) -> {R.ds.now(R.ds_of(R.act(t, o))) == R.ds.now(o
       now_purge(k, j, o, R.ds.purge(k, j, o), purge_spec(k, j, o))
     case R.AMove{+k, +j}:
       now_move(k, j, o, R.ds.move(k, j, o), move_spec(k, j, o))
+    case R.ACopy{+s, +d, +j, +rep}:
+      now_copy(s, d, j, rep, o, R.ds.copy(s, d, j, rep, o), copy_spec(s, d, j, rep, o))
+    case R.ACopyHere{+s, +d, +rep}:
+      now_copy(s, d, R.ds.index(o), rep, o, R.ds.copy(s, d, R.ds.index(o), rep, o), copy_spec(s, d, R.ds.index(o), rep, o))
     case R.AWipe{}:
       now_wipe(o)
 
@@ -8555,6 +8684,8 @@ def shape(e: A.Eff, +sel: Nat, +r: R.Ds) -> Shp(A.eff.args(e, sel), r):
       Inl{(["SWAPDB", Nat.show(a), Nat.show(b)], {==})}
     case A.EMove{k, +src, dst}:
       shp_put(Nat.is_eq(src, sel), src, ["MOVE", k, Nat.show(dst)], r)
+    case A.ECopy{s, d, +from, to}:
+      shp_put(Nat.is_eq(from, sel), from, ["COPY", s, d, "DB", Nat.show(to), "REPLACE"], r)
     case A.EWipe{}:
       Inl{(["FLUSHALL"], {==})}
 
@@ -8647,6 +8778,10 @@ def one_move(+k: String, +i: Nat, +j: Nat, p: Bool & R.Ds) -> OneE(tmid(A.act.mo
   (ok, ds) = p
   one_if(ok, A.EMove{k, i, j})
 
+def one_copy(+s: String, +d: String, +i: Nat, +j: Nat, p: Bool & R.Ds) -> OneE(tmid(A.act.copy(s, d, i, j, p))):
+  (ok, ds) = p
+  one_if(ok, A.ECopy{s, d, i, j})
+
 def one_at(+i: Nat, -es: List<&2, R.Cmd>, oe: OneEff(es)) -> OneE(A.at_db(i, es)):
   match oe:
     case Inl{e0}:
@@ -8675,6 +8810,10 @@ def one_eff(t: R.Act, +o: R.Ds) -> OneE(aeff(t, o)):
       one_purge(k, j, R.ds.purge(k, j, o))
     case R.AMove{+k, +j}:
       one_move(k, R.ds.index(o), j, R.ds.move(k, j, o))
+    case R.ACopy{+s, +d, +j, +rep}:
+      one_copy(s, d, R.ds.index(o), j, R.ds.copy(s, d, j, rep, o))
+    case R.ACopyHere{+s, +d, +rep}:
+      one_copy(s, d, R.ds.index(o), R.ds.index(o), R.ds.copy(s, d, R.ds.index(o), rep, o))
     case R.AWipe{}:
       Inr{(A.EWipe{}, {==})}
 
@@ -8779,6 +8918,10 @@ def Laws.wipe_dbs(ds):
 def Laws.move_key(k, j, ds, y, v, e, ey, ne, en, ek):
   %Equal.sym(Bool & R.Ds, R.ds.move(k, j, ds), (True{}, R.ds.moved(k, j, R.db.setx(y, k, v, e), ds)), move_some(k, j, ds, y, v, e, ey, ne, en, ek)) : {Laws.zero(R.ds_of(R.act.moved(_))) == R.ds.put(j, R.db.at(0n, R.db.setx(y, k, v, e)), Laws.zero(R.ds.unset(k, ds))) : List<&2, R.Db>}
   z_with1(j, R.db.setx(y, k, v, e), R.ds.unset(k, ds))
+
+def Laws.copy_key(s, d, j, rep, ds, y, v, e, ey, ek, ok):
+  %Equal.sym(Bool & R.Ds, R.ds.copy(s, d, j, rep, ds), (True{}, R.ds.with(R.ds.put(j, R.db.setx(y, d, v, e), R.ds.list(ds)), ds)), copy_some(s, d, j, rep, ds, y, v, e, ey, ek, ok)) : {Laws.zero(R.ds_of(R.act.moved(_))) == R.ds.put(j, R.db.at(0n, R.db.setx(y, d, v, e)), Laws.zero(ds)) : List<&2, R.Db>}
+  z_with1(j, R.db.setx(y, d, v, e), ds)
 
 # Sessions
 # ========
@@ -9377,6 +9520,8 @@ def srv_same.o(o: R.SessOp, +conn: S.Conn, +srv: S.Srv, +ef: {S.authed(conn, srv
       e => Empty.absurd({S.own_srv(R.STime{}, conn, srv) == srv : S.Srv}, true_false(Equal.trans(Bool, True{}, S.authed(conn, srv), False{}, e, ef)))
     case R.SObject{y0, y1}:
       e => Empty.absurd({S.own_srv(R.SObject{y0, y1}, conn, srv) == srv : S.Srv}, true_false(Equal.trans(Bool, True{}, S.authed(conn, srv), False{}, e, ef)))
+    case R.SCopy{y0}:
+      e => Empty.absurd({S.own_srv(R.SCopy{y0}, conn, srv) == srv : S.Srv}, true_false(Equal.trans(Bool, True{}, S.authed(conn, srv), False{}, e, ef)))
     case R.SReply{y0}:
       e => Empty.absurd({S.own_srv(R.SReply{y0}, conn, srv) == srv : S.Srv}, true_false(Equal.trans(Bool, True{}, S.authed(conn, srv), False{}, e, ef)))
     case R.SBad{y0}:
@@ -9479,6 +9624,10 @@ def own_bad(o: R.SessOp, +ps: List<&2, R.Act>, +id: Nat, +a: Bool, +n: String, +
     case R.SObject{y0, y1}:
       ih =>
         %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel}, srv), False{}, ef) : {Laws.all_bad(List.append(&2, R.Act, S.acts.k(S.KSess{R.SObject{y0, y1}}, _, R.Own{R.SObject{y0, y1}}, S.Conn{id, a, n, m, False{}, sel}, srv), ps)) == True{} : Bool}
+        ih
+    case R.SCopy{y0}:
+      ih =>
+        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel}, srv), False{}, ef) : {Laws.all_bad(List.append(&2, R.Act, S.acts.k(S.KSess{R.SCopy{y0}}, _, R.Own{R.SCopy{y0}}, S.Conn{id, a, n, m, False{}, sel}, srv), ps)) == True{} : Bool}
         ih
     case R.SReply{y0}:
       ih =>
@@ -9641,6 +9790,10 @@ def auth_own(o: R.SessOp, +id: Nat, +a: Bool, +n: String, +m: S.Mute, +sel: Nat,
     case R.SObject{y0, y1}:
       el =>
         %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel}, srv), False{}, ef) : {S.conn.auth(S.next_conn.k(S.KSess{R.SObject{y0, y1}}, _, S.Conn{id, a, n, m, False{}, sel}, srv)) == False{} : Bool}
+        ef
+    case R.SCopy{y0}:
+      el =>
+        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel}, srv), False{}, ef) : {S.conn.auth(S.next_conn.k(S.KSess{R.SCopy{y0}}, _, S.Conn{id, a, n, m, False{}, sel}, srv)) == False{} : Bool}
         ef
     case R.SReply{y0}:
       el =>

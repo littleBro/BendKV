@@ -1,25 +1,25 @@
 # BendKV: what we found
 
 BendKV is a Redis-compatible key-value store written in Bend2, with its core proved
-against 62 laws. This file sums up what building it and making it fast
+against 63 laws. This file sums up what building it and making it fast
 showed us. Where the work goes next, and why, is in [DIRECTIONS.md](DIRECTIONS.md).
 
 ## 1. The result
 
-**Correctness.** About 2,640 lines of core code (with the parsing of commands, of their
+**Correctness.** About 2,670 lines of core code (with the parsing of commands, of their
 times and options, Redis's pattern matching, several databases and the ranges and bits
-of strings), about 650 lines of
+of strings), about 720 lines of
 sessions (a connection's state and the server's), about 70 lines of batch hints, about
-435 lines of append-only file, about 6,650 lines of handwritten proofs with a
+510 lines of append-only file, about 6,780 lines of handwritten proofs with a
 specification of about 130 that they bridge to (section 3u), and about 1,700 lines of
 16-way case splits written by a script ([`tools/gen_trie.py`](../tools/gen_trie.py)), not
-counting comments and blank lines. Bend checks the 62 laws in about 4 s; the BendTT
-kernel, whose soundness is proved in Lean, rechecks them in about 40 s. Among them: after
+counting comments and blank lines. Bend checks the 63 laws in about 5 s; the BendTT
+kernel, whose soundness is proved in Lean, rechecks them in about 50 s. Among them: after
 any history, the server restores from its append-only file exactly the databases it
 held, and from a file cut by a crash at any byte, the databases it held after some prefix
 of its acts (sections 3e and 3x). On about 266 thousand random commands the replies
-matched real Redis 7 byte for byte; the versions with the 16-way trie passed about 670
-thousand more, the current one, with MSETNX and RENAME, about 120 thousand. Shards across cores and a key hashed once were built and
+matched real Redis 7 byte for byte; the versions with the 16-way trie passed about 835
+thousand more, the current one, with COPY, about 165 thousand. Shards across cores and a key hashed once were built and
 proved too (sections 3a–3c, 3g, 3h), and taken out again because they paid too little
 for what they cost (section 3l): 38% less code and 38% fewer lines of proof.
 
@@ -2008,6 +2008,53 @@ the reply is OK), `msetnx_present` and `msetnx_missing`: 62 laws.
 tests Redis passes (17.0%) and 261 of the 370 in what it has; unit/keyspace 35 (was 27),
 unit/type/string 65 (was 60). The differential tests ran about 120 thousand commands with
 MSETNX and RENAME among them, every reply identical to Redis's.
+
+## 3zb. COPY: a key copied, to another database or within one
+
+COPY sets its destination to the source key's entry, its value and its time, in the
+selected database or in the one DB names, when the destination is not there or REPLACE
+is given, and answers 1, else 0. Its options are read as Redis 7.0.15 reads them, word
+by word: REPLACE and DB in any order and case, DB's number as SELECT's (with Redis's
+errors for one out of range or no integer), a syntax error for any other word, and
+"source and destination objects are the same" for a key copied onto itself in its own
+database.
+
+**An act of several databases.** COPY reads the selected database and writes another,
+so it is not a command of one database (`exec` runs on the focus alone) but an act, as
+MOVE is: `ds.copy` reads the source's live entry in the focus and the destination's in
+the target, and puts the target back with the entry set. The session reads the options
+and checks that source and destination differ before the act, so that the act has no
+error to give.
+
+**The log.** A COPY that copied is logged after a SELECT of the database it copied from,
+as `COPY src dst DB n REPLACE`, whatever the client sent: replayed at time 0, a
+destination whose time had passed would read as there, and a COPY without REPLACE would
+not copy. The file's reader reads that shape at once, so that the laws of recovery go
+through it as through MOVE's. Any other COPY, as Redis writes it (the client's own
+words: no DB, lower case, REPLACE before DB), is read word by word, into the focus when
+it names no database: an act of its own (`ACopyHere`), since the reader of a file does
+not know which database the file selected last. Its proofs are COPY's, with the focus's
+number for the target's. A new test runs the same commands against BendKV and a
+redis-server that keeps its own file, then starts BendKV from Redis's file and Redis from
+BendKV's: each holds the databases the other held (`tests/aof_redis_test.py`, in `make
+test`).
+
+**What is proved.** The laws of persistence over several databases take COPY's case: a
+COPY that copied does to the replay what it did to the server's databases, the replay
+moving its focus to the source's database first (`post_copy`), and one that did not
+changes no database. One more law, `copy_key`: when the source is there, and the
+destination is not or REPLACE is given, the databases after COPY read at time 0 as
+before, but for the target database, whose destination holds the source's entry; 63
+laws.
+
+**Cost.** GET 3,143, SET 4,072 and INCR 4,236 instructions per request (3,144, 4,070 and
+4,229 before): INCR +7 (+0.2%), COPY lengthening the chain of names of four letters, as
+TIME did. Redis's test suite: BendKV passes 292 of the 1,673 tests Redis passes (17.5%)
+and 268 of the 370 in what it has; unit/keyspace 42 (was 35), all seven of COPY's tests on
+strings, three of them among the 17 that need several databases (9 of those pass now).
+The differential tests ran about 165 thousand commands with COPY among them (into
+databases 0 to 3, with REPLACE and without, with bad numbers and options), every reply
+identical to Redis's.
 
 ## 4. Where a request's time goes, and hiding the memory waits
 

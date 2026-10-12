@@ -296,12 +296,12 @@ Where performance and proof meet: **batched execution under proved laws.**
    (done; FINDINGS.md, sections 3v and 3w), several databases with SELECT, MOVE and
    SWAPDB (done; section 3x), the ranges and bits of strings (GETRANGE, SETRANGE,
    GETBIT, SETBIT, BITCOUNT, BITPOS; done, section 3y), MSETNX and RENAME (done,
-   section 3za), MULTI/EXEC/WATCH, pub/sub, the connection
+   section 3za), COPY (done, section 3zb), MULTI/EXEC/WATCH, pub/sub, the connection
    commands clients send on connect (HELLO, SELECT, CLIENT, AUTH, INFO, COMMAND, CONFIG;
    done), SCAN and RANDOMKEY (done), and the log's rewrite, measured by Redis's own test
    suite run against BendKV and by client libraries' tests. Lua, streams, cluster,
    replication and modules are out of scope. The suite's count: of the 1,673 tests
-   Redis 7.0.15 passes against a server it did not start, BendKV passes 285, 261 of the
+   Redis 7.0.15 passes against a server it did not start, BendKV passes 292, 268 of the
    370 in what it has ([COMPATIBILITY.md](COMPATIBILITY.md)).
 
 After that comes proving the native strings (section 5, step 1): a small piece of

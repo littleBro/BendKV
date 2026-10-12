@@ -203,16 +203,19 @@ def log_batch(cs: List<&2, R.Cmd>, hs: List<&2, U32>, db: R.Db) -> List<&2, R.Re
 # Several databases
 # -----------------
 # An effect on several databases is located: a command's effect is on
-# the database the command ran on (EDb), and SWAPDB, MOVE and FLUSHALL
-# are effects of their own, MOVE's the key moved from database src to
-# dst. An act (R.Act) has at most one effect: a command of one database
-# has its command's (A.run), a focus moved none, MOVE's first step the DEL
-# of the key's entry in the other database, its second step the move.
+# the database the command ran on (EDb), and SWAPDB, MOVE, COPY and
+# FLUSHALL are effects of their own, MOVE's the key moved from database
+# src to dst, COPY's the key src of database from copied to dst of
+# database to. An act (R.Act) has at most one effect: a command of one
+# database has its command's (A.run), a focus moved none, MOVE's first
+# step the DEL of the key's entry in the other database, its second step
+# the move, a COPY that copied the copy.
 
 type Eff is Data:
   EDb{db: Nat, c: R.Cmd}
   ESwap{a: Nat, b: Nat}
   EMove{key: String, src: Nat, dst: Nat}
+  ECopy{src: String, dst: String, from: Nat, to: Nat}
   EWipe{}
 
 # a database's effects, located at its number
@@ -248,6 +251,10 @@ def act.move(+k: String, +i: Nat, +j: Nat, r: Bool & R.Ds) -> R.Reply & (List<&2
   (+ok, ds) = r
   (R.r_int(Bool.pick(Nat, ok, 1n, 0n)), (act.if(ok, EMove{k, i, j}), ds))
 
+def act.copy(+s: String, +d: String, +i: Nat, +j: Nat, r: Bool & R.Ds) -> R.Reply & (List<&2, Eff> & R.Ds):
+  (+ok, ds) = r
+  (R.r_int(Bool.pick(Nat, ok, 1n, 0n)), (act.if(ok, ECopy{s, d, i, j}), ds))
+
 # an act run with its effect: its reply, its effects, and the databases
 # after it, as R.act runs it
 def act(a: R.Act, ds: R.Ds) -> R.Reply & (List<&2, Eff> & R.Ds):
@@ -263,6 +270,12 @@ def act(a: R.Act, ds: R.Ds) -> R.Reply & (List<&2, Eff> & R.Ds):
     case R.AMove{+k, +j} x:
       +y = x
       act.move(k, R.ds.index(y), j, R.ds.move(k, j, y))
+    case R.ACopy{+s, +d, +j, rep} x:
+      +y = x
+      act.copy(s, d, R.ds.index(y), j, R.ds.copy(s, d, j, rep, y))
+    case R.ACopyHere{+s, +d, rep} x:
+      +y = x
+      act.copy(s, d, R.ds.index(y), R.ds.index(y), R.ds.copy(s, d, R.ds.index(y), rep, y))
     case R.AWipe{} x:
       (R.r_ok(), ([EWipe{}], R.ds.wipe(x)))
 
@@ -365,7 +378,9 @@ def parse_all(reqs: List<&2, List<&2, String>>) -> List<&2, R.Cmd>:
 # of its database when the file has another one selected (sel: the last
 # SELECT in the file, else 0, as Redis loads a file from database 0);
 # SWAPDB, MOVE (after a SELECT of the database it moves from) and FLUSHALL
-# as Redis writes them
+# as Redis writes them, and COPY (after a SELECT of the database it copies
+# from) always with DB and REPLACE: replayed at time 0, the destination
+# may be there where its time had passed when COPY ran
 def sel.put(same: Bool, +j: Nat, xs: List<&2, List<&2, String>>) -> List<&2, List<&2, String>>:
   match same:
     case True{}:
@@ -381,6 +396,8 @@ def eff.args(+e: Eff, +sel: Nat) -> List<&2, List<&2, String>>:
       [["SWAPDB", Nat.show(a), Nat.show(b)]]
     case EMove{k, +src, dst}:
       sel.put(Nat.is_eq(src, sel), src, [["MOVE", k, Nat.show(dst)]])
+    case ECopy{s, d, +from, to}:
+      sel.put(Nat.is_eq(from, sel), from, [["COPY", s, d, "DB", Nat.show(to), "REPLACE"]])
     case EWipe{}:
       [["FLUSHALL"]]
 
@@ -391,6 +408,8 @@ def eff.sel(+e: Eff, +sel: Nat) -> Nat:
       j
     case EMove{k, +src, dst}:
       src
+    case ECopy{s, d, +from, to}:
+      from
     case _:
       sel
 
@@ -592,11 +611,83 @@ def file.move(k: String, m: Maybe<&2, Nat>, c: R.Cmd) -> R.Act:
     case None{}:
       R.ARun{c}
 
-# a command of a file as an act: SELECT moves the focus, SWAPDB, MOVE and
-# FLUSHALL act on the databases, and any other command runs on the focus
-# (a SELECT, SWAPDB or MOVE whose numbers do not read too: exec answers it
-# with an error and changes nothing, as Redis's load ignores a command
-# that fails)
+# COPY as Redis writes it, the arguments a client sent: DB and REPLACE in
+# any order and case, read word by word as session.bend's copy.go reads
+# them (Redis writes only a COPY that ran, so a number that does not read
+# is a file BendKV cannot read; that COPY runs as an error)
+type FileCopy is Data:
+  FcOpt{db: Maybe<&2, Nat>, rep: Bool}
+  FcDb{rep: Bool}
+  FcBad{}
+
+def file.copy.word(isrep: Bool, isdb: Bool, db: Maybe<&2, Nat>, rep: Bool) -> FileCopy:
+  match isrep isdb:
+    case True{} _:
+      FcOpt{db, True{}}
+    case False{} True{}:
+      FcDb{rep}
+    case False{} False{}:
+      FcBad{}
+
+def file.copy.db(m: Maybe<&2, Nat>, rep: Bool) -> FileCopy:
+  match m:
+    case Some{j}:
+      FcOpt{Some{j}, rep}
+    case None{}:
+      FcBad{}
+
+def file.copy.go(args: List<&2, String>, st: FileCopy) -> FileCopy:
+  match args st:
+    case _ FcBad{}:
+      FcBad{}
+    case Nil{} FcOpt{db, rep}:
+      FcOpt{db, rep}
+    case Nil{} FcDb{rep}:
+      FcBad{}
+    case Con{+a, rest} FcOpt{db, rep}:
+      +up = String.to_upper(a)
+      file.copy.go(rest, file.copy.word(String.eq(up, "REPLACE"), String.eq(up, "DB"), db, rep))
+    case Con{+a, rest} FcDb{rep}:
+      file.copy.go(rest, file.copy.db(file.num(a), rep))
+
+# the act of a COPY read: to the database it names, or within the focus
+def file.copy.to(st: FileCopy, s: String, d: String, c: R.Cmd) -> R.Act:
+  match st:
+    case FcOpt{Some{j}, rep}:
+      R.ACopy{s, d, j, rep}
+    case FcOpt{None{}, rep}:
+      R.ACopyHere{s, d, rep}
+    case _:
+      R.ARun{c}
+
+def file.copy.any(+c: R.Cmd) -> R.Act:
+  match c:
+    case R.Own{R.SCopy{Con{s, Con{d, rest}}}}:
+      file.copy.to(file.copy.go(rest, FcOpt{None{}, False{}}), s, d, c)
+    case _:
+      R.ARun{c}
+
+# COPY as BendKV writes it, with DB and REPLACE, read at once (the laws
+# read it so); any other COPY as Redis writes it
+def file.copy.of(isdb: Bool, isrep: Bool, s: String, d: String, m: Maybe<&2, Nat>, c: R.Cmd) -> R.Act:
+  match isdb isrep m:
+    case True{} True{} Some{j}:
+      R.ACopy{s, d, j, True{}}
+    case _ _ _:
+      file.copy.any(c)
+
+def file.copy(args: List<&2, String>, c: R.Cmd) -> R.Act:
+  match args:
+    case Con{s, Con{d, Con{+w, Con{+n, Con{+r, Nil{}}}}}}:
+      file.copy.of(String.eq(w, "DB"), String.eq(r, "REPLACE"), s, d, file.num(n), c)
+    case _:
+      file.copy.any(c)
+
+# a command of a file as an act: SELECT moves the focus, SWAPDB, MOVE,
+# COPY and FLUSHALL act on the databases, and any other command runs on
+# the focus (a SELECT, SWAPDB, MOVE or COPY whose numbers or options do
+# not read too: exec answers it with an error and changes nothing, as
+# Redis's load ignores a command that fails)
 def file.act(+c: R.Cmd) -> R.Act:
   match c:
     case R.Own{R.SSelect{+s}}:
@@ -605,6 +696,8 @@ def file.act(+c: R.Cmd) -> R.Act:
       file.swap(file.num(a), file.num(b), c)
     case R.Own{R.SMove{k, +d}}:
       file.move(k, file.num(d), c)
+    case R.Own{R.SCopy{+args}}:
+      file.copy(args, c)
     case R.Own{R.SFlushAll{}}:
       R.AWipe{}
     case _:

@@ -148,6 +148,7 @@ def one_at_a_time(c, port):
                  ["SET", "oe", "12"], ["OBJECT", "ENCODING", "oe"], ["OBJECT", "REFCOUNT", "oe"], ["OBJECT", "HELP"],
                  ["MSETNX", "m1", "1", "m2", "2"], ["MSETNX", "m1", "3"], ["RENAME", "m1", "m3"],
                  ["RENAMENX", "m3", "m2"], ["RENAMENX", "m3", "m4"], ["RENAME", "m4", "m4"],
+                 ["COPY", "m4", "m5"], ["COPY", "m4", "m5"], ["COPY", "m4", "m5", "DB", "1", "REPLACE"],
                  ["FLUSHDB"], ["RANDOMKEY"], ["FLUSHALL"]):
         r = c.ask(*args)
         out.append(r if args[0] not in ("CLIENT", "COMMAND", "CONFIG", "DBSIZE", "KEYS", "SCAN", "RANDOMKEY", "TIME")
@@ -173,7 +174,8 @@ def errors_at_a_time(c, port):
                  ["BITPOS", "nokey", "1", "x"], ["BITPOS", "s"], ["TOUCH"], ["TIME", "x"], ["OBJECT"],
                  ["OBJECT", "FOO"], ["OBJECT", "FREQ", "s"], ["OBJECT", "ENCODING"], ["OBJECT", "HELP", "x"],
                  ["MSETNX", "a"], ["MSETNX", "a", "1", "b"], ["RENAME", "nokey", "x"], ["RENAMENX", "nokey", "x"],
-                 ["RENAME", "a"], ["RENAMENX", "a", "b", "c"]):
+                 ["RENAME", "a"], ["RENAMENX", "a", "b", "c"], ["COPY", "a"], ["COPY", "a", "a"],
+                 ["COPY", "a", "b", "DB", "x"], ["COPY", "a", "b", "DB", "99"], ["COPY", "a", "b", "FOO"]):
         out.append(c.ask(*args))
     return out
 
@@ -258,7 +260,8 @@ def random_pipelines(rounds, seed):
             ["RANDOMKEY"], ["RANDOMKEY", "x"], ["SETRANGE", "k", "1", "z"], ["SETRANGE", "k", "536870912", "z"],
             ["BITCOUNT", "k", "x", "1"], ["BITCOUNT", "k"], ["BITPOS", "k", "1", "0", "-1", "x"], ["GETBIT", "k", "1"],
             ["SETBIT", "n", "0", "1"], ["GETRANGE", "k", "x", "0"], ["MSETNX", "k", "v", "z", "w"],
-            ["RENAME", "k", "z"], ["RENAMENX", "z", "k"], ["RENAME", "nokey", "k"]]
+            ["RENAME", "k", "z"], ["RENAMENX", "z", "k"], ["RENAME", "nokey", "k"], ["COPY", "k", "c"],
+            ["COPY", "k", "c", "DB", "2", "REPLACE"], ["COPY", "k", "k"], ["COPY", "k", "c", "DB", "x"]]
 
     def case(c, port):
         rnd = random.Random(seed)

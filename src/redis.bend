@@ -121,7 +121,9 @@ type UpdOp is Data:
 # one command, Own, which exec never meets (it answers one with an
 # error), so the laws of exec see them as one more command that only
 # reads. TIME reads the clock (the time the batch runs at), OBJECT a key of
-# the selected database and the parameters of eviction. A command whose
+# the selected database and the parameters of eviction; COPY copies a key
+# to the selected database or another one (an act of several databases,
+# below), its arguments kept as they came and read as it runs. A command whose
 # reply is fixed (a HELP) is SReply; one the parser found wrong (an
 # unknown subcommand, a wrong number of arguments) is SBad, answered as
 # Redis answers those, before it asks a client to authenticate.
@@ -147,6 +149,7 @@ type SessOp is Data:
   SFlushAll{}
   STime{}
   SObject{sub: Nat, key: String}
+  SCopy{args: List<&2, String>}
   SReply{r: Reply}
   SBad{r: Reply}
 
@@ -1600,7 +1603,8 @@ def cmd_id(+n: String, len: Nat) -> Nat:
       Bool.pick(Nat, String.eq(n, "INFO"), 108n,
       Bool.pick(Nat, String.eq(n, "MOVE"), 112n,
       Bool.pick(Nat, String.eq(n, "PTTL"), 33n,
-      Bool.pick(Nat, String.eq(n, "TIME"), 113n, 0n)))))))))))))))
+      Bool.pick(Nat, String.eq(n, "TIME"), 113n,
+      Bool.pick(Nat, String.eq(n, "COPY"), 115n, 0n))))))))))))))))
     case 5n:
       Bool.pick(Nat, String.eq(n, "SETNX"), 5n,
       Bool.pick(Nat, String.eq(n, "HELLO"), 101n,
@@ -2016,6 +2020,12 @@ def parse_sess(id: Nat, name: String, args: List<&2, String>) -> SessOp:
         case Con{+sub, rest}:
           +up = String.to_upper(sub)
           parse_object(object_id(up, String.length(up)), sub, rest)
+    case 115n:  # COPY
+      match args:
+        case Con{a, Con{b, rest}}:
+          SCopy{a <> b <> rest}
+        case _:
+          s_arity("copy")
     case _:
       SBad{RError{no_newlines("ERR unknown command '" ++ String.take(name, 128n) ++ "', with args beginning with: " ++ unknown.args(args, ""))}}
 
@@ -2186,6 +2196,8 @@ def stat.top(+id: Nat) -> Nat:
       61n
     case 114n:
       62n
+    case 115n:
+      63n
     case _:
       0n
 
@@ -2193,25 +2205,25 @@ def stat.top(+id: Nat) -> Nat:
 def stat.sub.client(+sub: Nat) -> Nat:
   match sub:
     case 1n:
-      63n
-    case 2n:
       64n
-    case 3n:
+    case 2n:
       65n
-    case 4n:
+    case 3n:
       66n
-    case 5n:
+    case 4n:
       67n
-    case 6n:
+    case 5n:
       68n
-    case 7n:
+    case 6n:
       69n
-    case 8n:
+    case 7n:
       70n
-    case 9n:
+    case 8n:
       71n
-    case 10n:
+    case 9n:
       72n
+    case 10n:
+      73n
     case _:
       0n
 
@@ -2219,9 +2231,9 @@ def stat.sub.client(+sub: Nat) -> Nat:
 def stat.sub.function(+sub: Nat) -> Nat:
   match sub:
     case 1n:
-      73n
-    case 2n:
       74n
+    case 2n:
+      75n
     case _:
       0n
 
@@ -2229,15 +2241,15 @@ def stat.sub.function(+sub: Nat) -> Nat:
 def stat.sub.config(+sub: Nat) -> Nat:
   match sub:
     case 1n:
-      75n
-    case 2n:
       76n
-    case 3n:
+    case 2n:
       77n
-    case 4n:
+    case 3n:
       78n
-    case 5n:
+    case 4n:
       79n
+    case 5n:
+      80n
     case _:
       0n
 
@@ -2245,19 +2257,19 @@ def stat.sub.config(+sub: Nat) -> Nat:
 def stat.sub.command(+sub: Nat) -> Nat:
   match sub:
     case 1n:
-      80n
-    case 2n:
       81n
-    case 3n:
+    case 2n:
       82n
-    case 4n:
+    case 3n:
       83n
-    case 5n:
+    case 4n:
       84n
-    case 6n:
+    case 5n:
       85n
-    case 7n:
+    case 6n:
       86n
+    case 7n:
+      87n
     case _:
       0n
 
@@ -2265,15 +2277,15 @@ def stat.sub.command(+sub: Nat) -> Nat:
 def stat.sub.object(+sub: Nat) -> Nat:
   match sub:
     case 1n:
-      87n
-    case 2n:
       88n
-    case 3n:
+    case 2n:
       89n
-    case 4n:
+    case 3n:
       90n
-    case 5n:
+    case 4n:
       91n
+    case 5n:
+      92n
     case _:
       0n
 
@@ -2405,62 +2417,64 @@ def stat.name(+key: Nat) -> String:
     case 62n:
       "object"
     case 63n:
-      "client|id"
+      "copy"
     case 64n:
-      "client|help"
+      "client|id"
     case 65n:
-      "client|reply"
+      "client|help"
     case 66n:
-      "client|getname"
+      "client|reply"
     case 67n:
-      "client|setname"
+      "client|getname"
     case 68n:
-      "client|caching"
+      "client|setname"
     case 69n:
-      "client|unblock"
+      "client|caching"
     case 70n:
-      "client|getredir"
+      "client|unblock"
     case 71n:
-      "client|no-evict"
+      "client|getredir"
     case 72n:
-      "client|trackinginfo"
+      "client|no-evict"
     case 73n:
-      "function|flush"
+      "client|trackinginfo"
     case 74n:
-      "function|help"
+      "function|flush"
     case 75n:
-      "config|get"
+      "function|help"
     case 76n:
-      "config|set"
+      "config|get"
     case 77n:
-      "config|resetstat"
+      "config|set"
     case 78n:
-      "config|rewrite"
+      "config|resetstat"
     case 79n:
-      "config|help"
+      "config|rewrite"
     case 80n:
-      "command|info"
+      "config|help"
     case 81n:
-      "command|docs"
+      "command|info"
     case 82n:
-      "command|list"
+      "command|docs"
     case 83n:
-      "command|help"
+      "command|list"
     case 84n:
-      "command|count"
+      "command|help"
     case 85n:
-      "command|getkeys"
+      "command|count"
     case 86n:
-      "command|getkeysandflags"
+      "command|getkeys"
     case 87n:
-      "object|help"
+      "command|getkeysandflags"
     case 88n:
-      "object|freq"
+      "object|help"
     case 89n:
-      "object|encoding"
+      "object|freq"
     case 90n:
-      "object|refcount"
+      "object|encoding"
     case 91n:
+      "object|refcount"
+    case 92n:
       "object|idletime"
     case _:
       ""
@@ -2594,62 +2608,64 @@ def stat.arity(+key: Nat) -> Nat:
     case 62n:
       5n
     case 63n:
-      4n
+      7n
     case 64n:
       4n
     case 65n:
-      6n
-    case 66n:
       4n
-    case 67n:
+    case 66n:
       6n
+    case 67n:
+      4n
     case 68n:
       6n
     case 69n:
-      7n
-    case 70n:
-      4n
-    case 71n:
       6n
-    case 72n:
-      4n
-    case 73n:
-      5n
-    case 74n:
-      4n
-    case 75n:
+    case 70n:
       7n
-    case 76n:
-      9n
-    case 77n:
+    case 71n:
       4n
+    case 72n:
+      6n
+    case 73n:
+      4n
+    case 74n:
+      5n
+    case 75n:
+      4n
+    case 76n:
+      7n
+    case 77n:
+      9n
     case 78n:
       4n
     case 79n:
       4n
     case 80n:
-      5n
+      4n
     case 81n:
       5n
     case 82n:
       5n
     case 83n:
-      4n
+      5n
     case 84n:
       4n
     case 85n:
-      9n
+      4n
     case 86n:
       9n
     case 87n:
-      4n
+      9n
     case 88n:
-      6n
+      4n
     case 89n:
       6n
     case 90n:
       6n
     case 91n:
+      6n
+    case 92n:
       6n
     case _:
       1n
@@ -2685,9 +2701,9 @@ def stat.risky(+key: Nat) -> Bool:
       True{}
     case 47n:
       True{}
-    case 88n:
+    case 89n:
       True{}
-    case 91n:
+    case 92n:
       True{}
     case _:
       False{}
@@ -3431,6 +3447,14 @@ def stat.cw(+code: Nat) -> U32:
       1644
     case 367n:
       1649
+    case 368n:
+      1650
+    case 369n:
+      1652
+    case 370n:
+      1656
+    case 371n:
+      1671
     case _:
       63
 
@@ -4173,6 +4197,14 @@ def stat.code.cw(+w: Nat) -> Nat:
       366n
     case 1649n:
       367n
+    case 1650n:
+      368n
+    case 1652n:
+      369n
+    case 1656n:
+      370n
+    case 1671n:
+      371n
     case _:
       0n
 
@@ -6135,16 +6167,47 @@ def ds.move(+k: String, +j: Nat, ds: Ds) -> Bool & Ds:
   +xs = ds.list(x)
   ds.move.of(k, j, ds.nth(j, xs), x)
 
+# COPY src dst DB j REPLACE: src's entry in the focus, its value and its
+# time, set to dst in database j (the focus or another one), when dst is
+# not there in j at the focus's time, or rep (REPLACE) says to replace
+# it; whether it was set, and the databases after. COPY to the same key
+# of the same database the session refuses before (Redis's "source and
+# destination objects are the same").
+def ds.copy.if(ok: Bool, m: Maybe<&2, KV.Item<String>>, +dst: String, +j: Nat, y: Db, ds: Ds) -> Bool & Ds:
+  match ok m:
+    case True{} Some{KV.Item{v, +e}}:
+      +x = ds
+      (True{}, ds.with(ds.put(j, db.setx(y, dst, v, e), ds.list(x)), x))
+    case _ _:
+      (False{}, ds)
+
+def ds.copy.of(+src: String, +dst: String, +j: Nat, rep: Bool, my: Maybe<&2, Db>, ds: Ds) -> Bool & Ds:
+  match my:
+    case Some{+y}:
+      +x = ds
+      ds.copy.if(Bool.or(rep, Bool.not(Maybe.is_some(&2, KV.Item<String>, ent.live(ds.now(x), db.entry(y, dst))))), ds.ent(x, src), dst, j, y, x)
+    case None{}:
+      (False{}, ds)
+
+def ds.copy(+src: String, +dst: String, +j: Nat, rep: Bool, ds: Ds) -> Bool & Ds:
+  +x = ds
+  +xs = ds.list(x)
+  ds.copy.of(src, dst, j, rep, ds.nth(j, xs), x)
+
 # What a batch does to the databases, command by command (session.bend:
 # plan): a command of one database, run on the focus; the focus moved
 # (SELECT, and RESET to 0); two databases swapped (SWAPDB); MOVE's two
-# steps; every database emptied (FLUSHALL)
+# steps; a key copied (COPY) to a database it names, or within the focus
+# (a COPY without DB in a file Redis wrote); every database emptied
+# (FLUSHALL)
 type Act is Data:
   ARun{c: Cmd}
   AFocus{db: Nat}
   ASwap{a: Nat, b: Nat}
   APurge{key: String, db: Nat}
   AMove{key: String, db: Nat}
+  ACopy{src: String, dst: String, db: Nat, rep: Bool}
+  ACopyHere{src: String, dst: String, rep: Bool}
   AWipe{}
 
 def act.run(r: Reply & Db, pre: List<&2, Db>, post: List<&2, Db>) -> Reply & Ds:
@@ -6155,6 +6218,7 @@ def act.ok(r: Bool & Ds) -> Reply & Ds:
   (b, ds) = r
   (r_ok(), ds)
 
+# MOVE's and COPY's reply: 1 when the key moved (was copied), else 0
 def act.moved(r: Bool & Ds) -> Reply & Ds:
   (b, ds) = r
   (r_int(Bool.pick(Nat, b, 1n, 0n)), ds)
@@ -6172,6 +6236,11 @@ def act(a: Act, ds: Ds) -> Reply & Ds:
       act.ok(ds.purge(k, j, x))
     case AMove{+k, +j} x:
       act.moved(ds.move(k, j, x))
+    case ACopy{+s, +d, +j, rep} x:
+      act.moved(ds.copy(s, d, j, rep, x))
+    case ACopyHere{+s, +d, rep} x:
+      +y = x
+      act.moved(ds.copy(s, d, ds.index(y), rep, y))
     case AWipe{} x:
       (r_ok(), ds.wipe(x))
 

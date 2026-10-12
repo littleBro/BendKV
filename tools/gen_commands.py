@@ -53,7 +53,7 @@ COMMANDS = {
     "pexpiretime": [], "persist": [], "swapdb": [], "move": [], "getrange": [], "substr": [],
     "setrange": [], "getbit": [], "setbit": [], "bitcount": [], "bitpos": [], "touch": [],
     "time": [], "object": ["encoding", "freq", "help", "idletime", "refcount"], "msetnx": [],
-    "rename": [], "renamenx": []}
+    "rename": [], "renamenx": [], "copy": []}
 
 # Step 1: redis-server -> facts
 # -----------------------------

@@ -553,6 +553,84 @@ def move.reply(+k: String, i: Idx, +ds: R.Ds) -> R.Reply:
     case IdxBad{r}:
       r
 
+# COPY source destination [DB index] [REPLACE]: the options after the two
+# keys in turn, as Redis reads them: REPLACE, or DB and an index (an int,
+# one of the server's databases, read as SELECT reads one); anything
+# else, DB as the last argument too, is a syntax error. Then the same key
+# to the same database is refused; else one act (R.ds.copy), whose reply
+# is COPY's
+type CopySt is Data:
+  CsOpt{db: Nat, rep: Bool}
+  CsDb{rep: Bool}
+  CsBad{r: R.Reply}
+
+def copy.word.of(isrep: Bool, isdb: Bool, db: Nat, rep: Bool) -> CopySt:
+  match isrep isdb:
+    case True{} _:
+      CsOpt{db, True{}}
+    case False{} True{}:
+      CsDb{rep}
+    case False{} False{}:
+      CsBad{R.r_syntax()}
+
+def copy.word(+a: String, db: Nat, rep: Bool) -> CopySt:
+  +up = String.to_upper(a)
+  copy.word.of(String.eq(up, "REPLACE"), String.eq(up, "DB"), db, rep)
+
+def copy.db(i: Idx, rep: Bool) -> CopySt:
+  match i:
+    case IdxOk{j}:
+      CsOpt{j, rep}
+    case IdxBad{r}:
+      CsBad{r}
+
+def copy.go(args: List<&2, String>, st: CopySt, +dbs: Nat) -> CopySt:
+  match args st:
+    case _ CsBad{r}:
+      CsBad{r}
+    case Nil{} CsOpt{db, rep}:
+      CsOpt{db, rep}
+    case Nil{} CsDb{rep}:
+      CsBad{R.r_syntax()}
+    case Con{+a, rest} CsOpt{db, rep}:
+      copy.go(rest, copy.word(a, db, rep), dbs)
+    case Con{+a, rest} CsDb{rep}:
+      copy.go(rest, copy.db(idx(a, dbs), rep), dbs)
+
+type CopyArgs is Data:
+  CopyOk{src: String, dst: String, db: Nat, rep: Bool}
+  CopyBad{r: R.Reply}
+
+def copy.fin(st: CopySt, +src: String, +dst: String, +cur: Nat) -> CopyArgs:
+  match st:
+    case CsOpt{+db, rep}:
+      Bool.pick(CopyArgs, Bool.and(Nat.is_eq(db, cur), KV.str_eq(src, dst)), CopyBad{R.RError{"ERR source and destination objects are the same"}}, CopyOk{src, dst, db, rep})
+    case CsDb{rep}:
+      CopyBad{R.r_syntax()}
+    case CsBad{r}:
+      CopyBad{r}
+
+def copy.of(+args: List<&2, String>, +c: Conn, +s: Srv) -> CopyArgs:
+  match args:
+    case Con{+a, Con{+b, rest}}:
+      copy.fin(copy.go(rest, CsOpt{conn.db(c), False{}}, srv.dbs(s)), a, b, conn.db(c))
+    case _:
+      CopyBad{R.RError{"ERR wrong number of arguments for 'copy' command"}}
+
+def copy.acts(ca: CopyArgs) -> List<&2, R.Act>:
+  match ca:
+    case CopyOk{s, d, j, rep}:
+      [R.ACopy{s, d, j, rep}]
+    case CopyBad{r}:
+      Nil{}
+
+def copy.reply(ca: CopyArgs, +ds: R.Ds) -> R.Reply:
+  match ca:
+    case CopyOk{s, d, j, rep}:
+      R.reply_ds(R.act(R.ACopy{s, d, j, rep}, ds))
+    case CopyBad{r}:
+      r
+
 # QUIT: OK, and the connection closes once its replies are out; the
 # commands after it in the batch are dropped
 def quit.conn(+c: Conn, +s: Srv) -> Conn:
@@ -733,6 +811,8 @@ def own_reply(+o: R.SessOp, +c: Conn, +s: Srv, +ds: R.Ds) -> Maybe<&2, R.Reply>:
       say(conn.mode(c), time.reply(R.ds.now(ds)))
     case R.SObject{+sub, +k}:
       say(conn.mode(c), obj.reply(sub, R.db.ent(R.ds.focused(ds), k), srv.cfg(s)))
+    case R.SCopy{+args}:
+      say(conn.mode(c), copy.reply(copy.of(args, c, s), ds))
     case R.SReply{r}:
       say(conn.mode(c), r)
     case R.SBad{r}:
@@ -781,14 +861,16 @@ def own_conn(+o: R.SessOp, +c: Conn, +s: Srv) -> Conn:
       step_conn(c, s)
     case R.SObject{sub, k}:
       step_conn(c, s)
+    case R.SCopy{a}:
+      step_conn(c, s)
     case R.SReply{r}:
       step_conn(c, s)
     case R.SBad{r}:
       step_conn(c, s)
 
 # what a session command does to the databases: SELECT and RESET move the
-# focus to the connection's new database, SWAPDB, MOVE and FLUSHALL act
-# on the databases, and the others do nothing to them
+# focus to the connection's new database, SWAPDB, MOVE, COPY and FLUSHALL
+# act on the databases, and the others do nothing to them
 def own_acts(+o: R.SessOp, +c: Conn, +s: Srv) -> List<&2, R.Act>:
   match o:
     case R.SSelect{+d}:
@@ -799,6 +881,8 @@ def own_acts(+o: R.SessOp, +c: Conn, +s: Srv) -> List<&2, R.Act>:
       swap.acts(swap.idx(a, b, s))
     case R.SMove{+k, +d}:
       move.acts(k, move.idx(d, c, s))
+    case R.SCopy{+args}:
+      copy.acts(copy.of(args, c, s))
     case R.SFlushAll{}:
       [R.AWipe{}]
     case _:
