@@ -336,14 +336,13 @@ def hello.fin(h: Hel, id: Nat, nopass: Bool) -> R.Reply:
     case Hel{w, auth, name}:
       Bool.pick(R.Reply, Bool.or(auth, nopass), hello.map(id), R.RError{"NOAUTH HELLO must be called with the client already authenticated, otherwise the HELLO AUTH <user> <pass> option can be used to authenticate the client and select the RESP protocol version at the same time"})
 
-# the protocol version: none, 2, or the reply that refuses it
-def hello.ver(v: Maybe<&2, R.Int>) -> Maybe<&2, R.Reply>:
-  match v:
-    case Some{R.IPos{2n}}:
-      None{}
-    case Some{other}:
-      Some{R.RError{"NOPROTO unsupported protocol version"}}
-    case None{}:
+# the protocol version, a long long as Redis reads one: none, 2, or the
+# reply that refuses it
+def hello.ver(l: R.LL) -> Maybe<&2, R.Reply>:
+  match l:
+    case R.LL{+neg, +hi, +lo}:
+      Bool.pick(Maybe<&2, R.Reply>, Bool.and(Bool.not(neg), Bool.and(Nat.is_eq(hi, 0n), Nat.is_eq(lo, 2n))), None{}, Some{R.RError{"NOPROTO unsupported protocol version"}})
+    case R.LLBad{}:
       Some{R.RError{"ERR Protocol version is not an integer or out of range"}}
 
 # HELLO's options after its version, or the version's refusal
@@ -352,7 +351,7 @@ def hello.args(args: List<&2, String>) -> Maybe<&2, R.Reply> & List<&2, String>:
     case Nil{}:
       (None{}, Nil{})
     case Con{+v, rest}:
-      (hello.ver(R.int_read(v)), rest)
+      (hello.ver(R.ll.read(v)), rest)
 
 def hello.run.if(+s: Srv, +c: Conn, bad: Maybe<&2, R.Reply>, opts: List<&2, String>) -> Hel:
   match bad:
@@ -443,10 +442,19 @@ def int.mk(neg: Bool, +m: Nat) -> IntR:
 def int.mag(+neg: Bool, +m: Nat) -> IntR:
   Bool.pick(IntR, Nat.is_lt(m, Bool.pick(Nat, neg, 2147483649n, 2147483648n)), int.mk(neg, m), IntBig{})
 
+# a magnitude hi * 10^9 + lo, made only when hi is below 3 (a def, so
+# that a long long past 2^48 is never made: a Nat stays below it)
+def int.big(small: Bool, +neg: Bool, +hi: Nat, +lo: Nat) -> IntR:
+  match small:
+    case True{}:
+      int.mag(neg, Nat.add(Nat.mul(hi, 1000000000n), lo))
+    case False{}:
+      IntBig{}
+
 def int.of(l: R.LL) -> IntR:
   match l:
     case R.LL{+neg, +hi, +lo}:
-      Bool.pick(IntR, Nat.is_lt(hi, 3n), int.mag(neg, Nat.add(Nat.mul(hi, 1000000000n), lo)), IntBig{})
+      int.big(Nat.is_lt(hi, 3n), neg, hi, lo)
     case R.LLBad{}:
       IntNot{}
 

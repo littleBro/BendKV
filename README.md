@@ -229,7 +229,8 @@ command's description and
 documentation, the lists and their filters, the keys of command lines, random ones
 too), SCAN and RANDOMKEY (their arguments, full iterations with COUNT, MATCH and TYPE
 finding Redis's keys, each once, an iteration while other clients write, RANDOMKEY's
-picks), robustness and concurrency checks,
+picks), numbers at their edges in every argument that takes one (past a long long, at
+2^48, in forms Redis refuses), robustness and concurrency checks,
 restarts from the append-only file (every database read back, including after a
 truncated tail), disk failures
 under the file, injected with an `LD_PRELOAD` shim, and the files both ways: BendKV

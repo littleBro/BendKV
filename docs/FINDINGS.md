@@ -2060,6 +2060,23 @@ The differential tests ran about 165 thousand commands with COPY among them (int
 databases 0 to 3, with REPLACE and without, with bad numbers and options), every reply
 identical to Redis's.
 
+## 3zc. A number past 2^48 stopped the server
+
+A database's number, read as Redis reads it (a long long, so that the error says
+"out of range" where Redis says it), was made as hi * 10^9 + lo inside `Bool.pick`,
+which evaluates both of its branches: for a number of 2^48 or more the product was made
+even when the other branch was taken, and the runtime stops on a Nat past 2^48. `SELECT
+9223372036854775807` stopped the server, and so did MOVE, SWAPDB and COPY with such a
+number. The other readers of long longs already made the product in a def of its own,
+which matches on whether the number is small; this one now does too. HELLO read its
+protocol version as BendKV's integers (14 digits), and called a long long past them "not
+an integer"; it reads a long long now, as Redis does (`NOPROTO` for 9223372036854775807).
+A new test, `tests/numbers_test.py` in `make test`, sends every command that takes a
+number the numbers at their edges (past a long long, LLONG_MAX and LLONG_MIN, 2^48, 2^32,
+2^31, and forms Redis refuses: `+5`, `1e5`, `0x10`, `" 5"`, `-0`, `00`, `3.5`): 741
+commands, each answered as Redis answers it, but INCRBY and DECRBY past 14 digits and
+SCAN with a cursor BendKV did not give, the differences documented already.
+
 ## 4. Where a request's time goes, and hiding the memory waits
 
 With the eight patches, BendKV ran fewer instructions on GET and SET than Redis, missed
