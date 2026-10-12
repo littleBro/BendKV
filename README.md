@@ -85,7 +85,9 @@ translation stays in the trusted base.
 - **Strings and keys:** GET, SET, SETNX, GETSET, DEL, UNLINK, EXISTS, INCR, DECR, INCRBY,
   DECRBY, APPEND, STRLEN, MGET, MSET, MSETNX, RENAME, RENAMENX (the key's time moves with
   it), COPY (DB and REPLACE; the key's time is copied with it), DBSIZE, KEYS
-  (Redis's patterns: `*`, `?`, `[...]` classes, `\` escapes), TYPE, TOUCH, SCAN (MATCH,
+  (Redis's patterns: `*`, `?`, `[...]` classes, `\` escapes, matched as Redis's
+  `stringmatchlen` matches them, with its cut-offs, which keep a pattern's cost polynomial,
+  and its limit of 1000 nested stars, past which nothing matches), TYPE, TOUCH, SCAN (MATCH,
   COUNT, TYPE, with Redis's guarantee: a key there for a whole iteration is found, however
   the database changes meanwhile) and RANDOMKEY (picked as Redis picks one). OBJECT
   (ENCODING, REFCOUNT, IDLETIME, FREQ, HELP) answers from the value, since BendKV keeps no
@@ -232,7 +234,16 @@ translation stays in the trusted base.
   background, a cluster, a replica, TLS, a supervisor to signal, an RDB file or Redis 7's
   multi-part append-only file to load) stops the start with a line saying so.
 - **Protocol:** pipelining, partial packets, inline commands with quoting,
-  binary-safe values, Redis's protocol errors.
+  binary-safe values; requests framed as Redis 7.0.15 frames them (a length as `string2ll`
+  reads it, with no `0` before its first digit, a count of 0 or less skipped down to
+  -2^63, a line ended by its `\r` and whatever byte follows it, 64 KB at most without
+  one, the two bytes after a bulk's data skipped unread), and Redis's protocol errors.
+  An error goes out on one line, as Redis's error formatting sends it: a CR or LF in its
+  text as a space, an argument it quotes up to its first NUL. Under CLIENT REPLY OFF, or
+  SKIP for the request it is in, a protocol error goes unanswered, as in Redis, and the
+  connection stays open, reading nothing more, until the client closes it. Not the
+  tighter limits Redis puts on a client that must still authenticate (10 arguments, a
+  bulk of 16 KB), nor a new proto-max-bulk-len.
 - **Persistence:** an append-only file in Redis's own format, a SELECT before the
   entries of another database, SWAPDB, MOVE and FLUSHALL as Redis writes them, and COPY
   with its DB and REPLACE spelled out (`redis-check-aof` accepts it, and Redis loads it;
@@ -312,7 +323,10 @@ command streams compared byte for byte (times to live, SET's options and several
 databases among them),
 keys that expire (set with short times on both servers, then read once the times have
 passed), the protocol edge cases of Redis's
-`tests/unit/protocol.tcl`, the float library against glibc (random texts of numbers,
+`tests/unit/protocol.tcl` and of the lengths and lines of its `processMultibulkBuffer`
+and of the replies CLIENT REPLY holds back (each server's closing of a connection seen in
+its count of connections, not in a quiet socket), the float library against glibc
+(random texts of numbers,
 read, written and added, the answers compared byte for byte with C's), the connection
 commands, CONFIG (every parameter, a list of
 cases and thousands of random values, set and read back on both servers), INFO (the
@@ -324,7 +338,9 @@ command's description and
 documentation, the lists and their filters, the keys of command lines, random ones
 too), SCAN and RANDOMKEY (their arguments, full iterations with COUNT, MATCH and TYPE
 finding Redis's keys, each once, an iteration while other clients write, RANDOMKEY's
-picks), numbers at their edges in every argument that takes one (past a long long, at
+picks), KEYS and SCAN's MATCH on patterns that only a matcher with Redis's cut-offs
+answers at once (adjacent stars, alternatives matching at once or nowhere, stars nested
+past 1000), numbers at their edges in every argument that takes one (past a long long, at
 2^48, in forms Redis refuses), BITFIELD's fields at random (each reply and each value
 after it compared), hashes (each command at its edges, past a listpack's limits, on keys
 whose time has passed, and at random, the fields of a hashtable compared as sets), lists
@@ -338,7 +354,9 @@ listpack's limits, STOREs and pops of keys whose time has passed, and at random,
 walk compared by its pairs and each random pick checked against the sorted set it came
 from),
 robustness and concurrency checks, a client that stops reading while the others are
-served (`tests/writer_test.py`),
+served (`tests/writer_test.py`), connections that end every way one can, many times
+(the client closing or resetting, QUIT, a protocol error), on a BendKV of their own whose
+table of channels is read to show that each closed the channel it opened,
 restarts from the append-only file (every database read back, including after a
 truncated tail), disk failures
 under the file, injected with an `LD_PRELOAD` shim (the order of the file's creation,

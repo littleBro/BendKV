@@ -1489,7 +1489,7 @@ def looks.err(ls: List<&2, Look>) -> Maybe<&2, String>:
     case Nil{}:
       None{}
     case Con{LUnknown{n}, rest}:
-      Some{R.no_newlines("ERR Unknown option or number of arguments for CONFIG SET - '" ++ n ++ "'")}
+      Some{R.no_newlines("ERR Unknown option or number of arguments for CONFIG SET - '" ++ R.cstr(n) ++ "'")}
     case Con{LDeny{n, why}, rest}:
       Some{e.set(n, why)}
     case Con{LOk{it, k, v}, rest}:
