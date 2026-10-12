@@ -66,6 +66,10 @@ def upd.ch(t: KV.Trie<KV.Val>, +k: String, +h: U32, r: R.Reply, ch: R.Change) ->
       (r, KV.keep.at(KV.Val, t, k, KV.VStr{v}, h))
     case R.CRange{o, a, v}:
       (r, KV.keep.at(KV.Val, t, k, KV.VStr{v}, h))
+    case R.CHash{op, hv}:
+      (r, KV.keep.at(KV.Val, t, k, KV.VColl{KV.CHash{hv}}, h))
+    case R.CHashNew{ps, hv}:
+      (r, KV.setx.at(KV.Val, t, k, KV.VColl{KV.CHash{hv}}, 0n, h))
 
 def upd.put(t: KV.Trie<KV.Val>, +k: String, +h: U32, o: R.Out) -> R.Reply & KV.Trie<KV.Val>:
   match o:

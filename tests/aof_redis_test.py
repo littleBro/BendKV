@@ -9,7 +9,12 @@ without DB; BITOP and BITFIELD, which BendKV's load runs again), BendKV as
 it acted (COPY with DB and REPLACE, BITOP as the SET of its value,
 BITFIELD as the SETRANGE of the bytes its writes reach). A BITFIELD
 whose writes all fail (OVERFLOW FAIL) on a key it makes or grows is left
-out: Redis makes the key and does not log it. Redis 7 keeps its
+out: Redis makes the key and does not log it. A hash is logged as the
+HSET of the pairs a write set and the HDEL of the fields it took (an
+HINCRBY as the HSET of its sum), and a hash made where a key whose time
+had passed still lay as a script that deletes the key and runs the HSET
+(Redis logs a MULTI with a DEL and the HSET): a file of such scripts is
+read by both alike. Redis 7 keeps its
 file in parts, a base and increments (appendonlydir): BendKV reads them
 joined, the base written without an RDB preamble.
 
@@ -55,7 +60,32 @@ CMDS = [
     [b"bitfield", b"bf", b"overflow", b"fail", b"incrby", b"u2", b"0", b"9", b"incrby", b"u2", b"0", b"1"],
     [b"BITFIELD", b"b", b"SET", b"i64", b"#1", b"-1"], [b"BITFIELD", b"b", b"SET", b"i64", b"#1", b"-1"],
     [b"BITFIELD_RO", b"bf", b"GET", b"u8", b"0"], [b"BITFIELD", b"bf", b"SET", b"u8", b"0", b"x"],
+    [b"HSET", b"h", b"a", b"1", b"b", b"2", b"a", b"3"], [b"hmset", b"h", b"c", b"4"], [b"HSETNX", b"h", b"d", b"5"],
+    [b"HSETNX", b"h", b"a", b"9"], [b"HINCRBY", b"h", b"a", b"10"], [b"HINCRBY", b"h2", b"n", b"-7"],
+    [b"HDEL", b"h", b"b", b"nope"], [b"HDEL", b"h2", b"n"], [b"HSET", b"h3", b"long", b"v" * 70],
+    [b"HSET", b"h4"] + [x for j in range(600) for x in (b"f%d" % j, b"%d" % j)], [b"HDEL", b"h4", b"f1", b"f2"],
+    [b"PEXPIREAT", b"h", b"%d" % (T + 9)], [b"COPY", b"h", b"h5", b"DB", b"2"], [b"RENAME", b"h3", b"h6"],
+    [b"MOVE", b"h6", b"3"], [b"HSET", b"a", b"f", b"v"], [b"SET", b"h", b"str"], [b"HSET", b"h", b"x", b"y"],
 ]
+
+# a file with the entry BendKV logs for a hash made where a key whose time
+# had passed still lay: the script that deletes the key and runs the HSET
+# (a thousand arguments a call), which Redis runs and BendKV reads back
+SCRIPT = (b"redis.call('del',KEYS[1]) local n=#ARGV for i=2,n,1000 do redis.call(ARGV[1],KEYS[1],"
+          b"unpack(ARGV,i,math.min(i+999,n))) end return 0")
+
+
+def entry(*a):
+    return b"*%d\r\n" % len(a) + b"".join(b"$%d\r\n%s\r\n" % (len(x), x) for x in a)
+
+
+def eval_file(path):
+    big = [x for j in range(3001) for x in (b"f%d" % j, b"v%d" % j)]
+    with open(path, "wb") as f:
+        f.write(entry(b"SELECT", b"0") + entry(b"SET", b"k", b"str") + entry(b"HSET", b"h", b"x", b"y") +
+                entry(b"PEXPIREAT", b"h", b"%d" % T) + entry(b"EVAL", SCRIPT, b"1", b"k", b"HSET", b"f1", b"v1", b"f2", b"v2") +
+                entry(b"EVAL", SCRIPT, b"1", b"big", b"HSET", *big) + entry(b"EVAL", SCRIPT, b"1", b"h", b"HSET", b"a", b"1") +
+                entry(b"EVAL", SCRIPT, b"1", b"new", b"HSET", b"a", b"1", b"a", b"2"))
 
 
 # a server started, once it answers PONG (Redis answers LOADING while it
@@ -147,6 +177,23 @@ def main():
     finally:
         stop(p)
     same("Redis restores the databases from BendKV's file", k, kb)
+    # the script of a new hash, read by both
+    edir = os.path.join(d, "eval")
+    os.makedirs(edir)
+    eval_file(os.path.join(edir, "appendonly.aof"))
+    p, c = start(redis(a.redis, edir, "--appendfilename", "appendonly.aof"), a.redis, os.path.join(d, "eval-redis.log"))
+    try:
+        kr = keyspace(c)
+    finally:
+        stop(p)
+    eval_file(os.path.join(edir, "bendkv.aof"))
+    p, c = start([a.bin, str(a.bendkv), "send", os.path.join(edir, "bendkv.aof"), "always"], a.bendkv,
+                 os.path.join(d, "eval-bendkv.log"))
+    try:
+        kb = keyspace(c)
+    finally:
+        stop(p)
+    same("BendKV reads the script of a new hash as Redis runs it", kb, kr)
     print("ALL OK")
 
 

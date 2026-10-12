@@ -1091,3 +1091,161 @@ def reap(-V: Data, +t: Trie<V>, +from: Nat, want: Nat, +now: Nat) -> Scan:
 def pick(-V: Data, +t: Trie<V>, +r: U32, +now: Nat) -> Maybe<&2, String>:
   +b = U32.to_nat(U32.and(r, 1048575))
   pick.wrap(V, t, b, mix(r), now, tscan(V, 5n, t, False{}, 0n, 1048576n, b, 1048576n, now, False{}, False{}, Scan{16n, Nil{}}))
+
+# Hashes
+# ------
+# A hash's fields and values (Hash, above): a small one is a list of its
+# pairs in the order they came, a large one a trie of its fields, each
+# with no time. Redis 7.0 keeps a hash as a listpack while it holds at
+# most hash-max-listpack-entries pairs (512), each of at most
+# hash-max-listpack-value bytes (64), and as a hashtable from the first
+# write that passes either, for good. BendKV turns a small hash into a
+# large one at those defaults, whatever the parameters say, so that the
+# hash a history of writes leaves depends on the writes alone (the
+# append-only file makes it again on any server); OBJECT ENCODING reads
+# the parameters as they are (session.bend).
+
+# whether the first pair of ps is f's
+def hps.head(+f: String, ps: List<&2, HPair>) -> Bool:
+  match ps:
+    case Con{HP{g, v}, rest}:
+      str_eq(f, g)
+    case Nil{}:
+      False{}
+
+# f's value; same is hps.head(f, ps), computed before ps is passed on
+def hps.get.go(+f: String, ps: List<&2, HPair>, same: Bool) -> Maybe<&2, String>:
+  match ps same:
+    case Con{HP{g, v}, rest} True{}:
+      Some{v}
+    case Con{p, +rest} False{}:
+      s = hps.head(f, rest)
+      hps.get.go(f, rest, s)
+    case Nil{} _:
+      None{}
+
+def hps.get(+f: String, +ps: List<&2, HPair>) -> Maybe<&2, String>:
+  s = hps.head(f, ps)
+  hps.get.go(f, ps, s)
+
+# the pairs with f's value set to v: in its place when f is there, else
+# last
+def hps.put.go(+f: String, +v: String, ps: List<&2, HPair>, same: Bool) -> List<&2, HPair>:
+  match ps same:
+    case Con{HP{g, w}, rest} True{}:
+      Con{HP{g, v}, rest}
+    case Con{p, +rest} False{}:
+      s = hps.head(f, rest)
+      Con{p, hps.put.go(f, v, rest, s)}
+    case Nil{} _:
+      [HP{f, v}]
+
+def hps.put(+f: String, +v: String, +ps: List<&2, HPair>) -> List<&2, HPair>:
+  s = hps.head(f, ps)
+  hps.put.go(f, v, ps, s)
+
+# the pairs without f's
+def hps.del.go(+f: String, ps: List<&2, HPair>, same: Bool) -> List<&2, HPair>:
+  match ps same:
+    case Con{p, rest} True{}:
+      rest
+    case Con{p, +rest} False{}:
+      s = hps.head(f, rest)
+      Con{p, hps.del.go(f, rest, s)}
+    case Nil{} _:
+      Nil{}
+
+def hps.del(+f: String, +ps: List<&2, HPair>) -> List<&2, HPair>:
+  s = hps.head(f, ps)
+  hps.del.go(f, ps, s)
+
+# the pairs ps added to the trie t
+def hps.trie(ps: List<&2, HPair>, t: Trie<String>) -> Trie<String>:
+  match ps:
+    case Nil{}:
+      t
+    case Con{HP{f, v}, rest}:
+      hps.trie(rest, set(String, t, f, v))
+
+# the length of the longest field or value of ps, at least m
+def hps.widest(ps: List<&2, HPair>, +m: Nat) -> Nat:
+  match ps:
+    case Nil{}:
+      m
+    case Con{HP{f, v}, rest}:
+      hps.widest(rest, Nat.max(m, Nat.max(String.length(f), String.length(v))))
+
+def hash.or(m: Maybe<&2, String>) -> String:
+  match m:
+    case Some{v}:
+      v
+    case None{}:
+      ""
+
+# the pairs of the fields ks of a large hash, in their order
+def hash.kv(+t: Trie<String>, ks: List<&2, String>) -> List<&2, HPair>:
+  match ks:
+    case Nil{}:
+      Nil{}
+    case Con{+k, rest}:
+      HP{k, hash.or(get(String, t, k))} <> hash.kv(t, rest)
+
+def hash.empty() -> Hash:
+  HSmall{0n, Nil{}}
+
+def hash.len(+h: Hash) -> Nat:
+  match h:
+    case HSmall{+n, ps}:
+      n
+    case HBig{+n, t}:
+      n
+
+def hash.get(+f: String, +h: Hash) -> Maybe<&2, String>:
+  match h:
+    case HSmall{n, +ps}:
+      hps.get(f, ps)
+    case HBig{n, +t}:
+      get(String, t, f)
+
+def hash.has(+f: String, +h: Hash) -> Bool:
+  Maybe.is_some(&2, String, hash.get(f, h))
+
+# whether a small hash of m pairs, one of them f and v, stays small
+def hash.fits(+m: Nat, +f: String, +v: String) -> Bool:
+  Bool.and(Nat.is_le(m, 512n), Bool.and(Nat.is_le(String.length(f), 64n), Nat.is_le(String.length(v), 64n)))
+
+def hash.small(fits: Bool, +m: Nat, ps: List<&2, HPair>) -> Hash:
+  match fits:
+    case True{}:
+      HSmall{m, ps}
+    case False{}:
+      HBig{m, hps.trie(ps, empty(String))}
+
+# h with f's value set to v
+def hash.put(h: Hash, +f: String, +v: String) -> Hash:
+  match h:
+    case HSmall{+n, +ps}:
+      +m = Bool.pick(Nat, Maybe.is_some(&2, String, hps.get(f, ps)), n, 1n+n)
+      hash.small(hash.fits(m, f, v), m, hps.put(f, v, ps))
+    case HBig{+n, +t}:
+      HBig{Bool.pick(Nat, has(String, t, f), n, 1n+n), set(String, t, f, v)}
+
+# h without f, which it holds
+def hash.del(h: Hash, +f: String) -> Hash:
+  match h:
+    case HSmall{+n, ps}:
+      HSmall{Nat.sub(n, 1n), hps.del(f, ps)}
+    case HBig{+n, t}:
+      HBig{Nat.sub(n, 1n), del(String, t, f)}
+
+# the pairs of h, in its order (a small hash's, the order they came)
+def hash.pairs(+h: Hash) -> List<&2, HPair>:
+  match h:
+    case HSmall{n, +ps}:
+      ps
+    case HBig{n, +t}:
+      hash.kv(t, keys(String, t, 0n))
+
+# the length of h's longest field or value
+def hash.widest(+h: Hash) -> Nat:
+  hps.widest(hash.pairs(h), 0n)

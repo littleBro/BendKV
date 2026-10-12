@@ -23,11 +23,13 @@ type KSpec is Data:
 
 # how COMMAND GETKEYS finds a command's keys: from its key specs, or as
 # the function Redis has for SET (whose key's flags depend on its GET) or
-# BITFIELD (on its subcommands)
+# BITFIELD (on its subcommands), or for EVAL (whose spec counts its keys
+# with an argument, and whose function reads them when the spec does not)
 type KWay is Data:
   KBySpecs{}
   KBySet{}
   KByBitfield{}
+  KByEval{}
 
 # a command or a subcommand: its full name ("client|id" for a
 # subcommand), its arity, its ACL categories, its key specs, how its keys
@@ -185,6 +187,12 @@ def cmd.echo() -> Top:
     [R.RBulk{"summary"}, R.RBulk{"Echo the given string"}, R.RBulk{"since"}, R.RBulk{"1.0.0"}, R.RBulk{"group"}, R.RBulk{"connection"}, R.RBulk{"complexity"}, R.RBulk{"O(1)"}, R.RBulk{"arguments"}, R.RArray{[R.RArray{[R.RBulk{"name"}, R.RBulk{"message"}, R.RBulk{"type"}, R.RBulk{"string"}]}]}]},
   []}
 
+def cmd.eval() -> Top:
+  Top{Desc{"eval", R.INeg{2n}, ["slow", "scripting"], [], KByEval{}, True{},
+    [R.RBulk{"eval"}, R.RInt{R.INeg{2n}}, R.RArray{[R.RStatus{"noscript"}, R.RStatus{"stale"}, R.RStatus{"skip_monitor"}, R.RStatus{"no_mandatory_keys"}, R.RStatus{"movablekeys"}]}, R.RInt{R.IPos{0n}}, R.RInt{R.IPos{0n}}, R.RInt{R.IPos{0n}}, R.RArray{[R.RStatus{"@slow"}, R.RStatus{"@scripting"}]}, R.RArray{[]}, R.RArray{[R.RArray{[R.RBulk{"notes"}, R.RBulk{"We cannot tell how the keys will be used so we assume the worst, RW and UPDATE"}, R.RBulk{"flags"}, R.RArray{[R.RStatus{"RW"}, R.RStatus{"access"}, R.RStatus{"update"}]}, R.RBulk{"begin_search"}, R.RArray{[R.RBulk{"type"}, R.RBulk{"index"}, R.RBulk{"spec"}, R.RArray{[R.RBulk{"index"}, R.RInt{R.IPos{2n}}]}]}, R.RBulk{"find_keys"}, R.RArray{[R.RBulk{"type"}, R.RBulk{"keynum"}, R.RBulk{"spec"}, R.RArray{[R.RBulk{"keynumidx"}, R.RInt{R.IPos{0n}}, R.RBulk{"firstkey"}, R.RInt{R.IPos{1n}}, R.RBulk{"keystep"}, R.RInt{R.IPos{1n}}]}]}]}]}],
+    [R.RBulk{"summary"}, R.RBulk{"Execute a Lua script server side"}, R.RBulk{"since"}, R.RBulk{"2.6.0"}, R.RBulk{"group"}, R.RBulk{"scripting"}, R.RBulk{"complexity"}, R.RBulk{"Depends on the script that is executed."}, R.RBulk{"arguments"}, R.RArray{[R.RArray{[R.RBulk{"name"}, R.RBulk{"script"}, R.RBulk{"type"}, R.RBulk{"string"}]}, R.RArray{[R.RBulk{"name"}, R.RBulk{"numkeys"}, R.RBulk{"type"}, R.RBulk{"integer"}]}, R.RArray{[R.RBulk{"name"}, R.RBulk{"key"}, R.RBulk{"type"}, R.RBulk{"key"}, R.RBulk{"key_spec_index"}, R.RInt{R.IPos{0n}}, R.RBulk{"flags"}, R.RArray{[R.RStatus{"optional"}, R.RStatus{"multiple"}]}]}, R.RArray{[R.RBulk{"name"}, R.RBulk{"arg"}, R.RBulk{"type"}, R.RBulk{"string"}, R.RBulk{"flags"}, R.RArray{[R.RStatus{"optional"}, R.RStatus{"multiple"}]}]}]}]},
+  []}
+
 def cmd.exists() -> Top:
   Top{Desc{"exists", R.INeg{1n}, ["keyspace", "read", "fast"], [KSpec{["RO"], 1n, R.INeg{0n}, 1n, 0n}], KBySpecs{}, False{},
     [R.RBulk{"exists"}, R.RInt{R.INeg{1n}}, R.RArray{[R.RStatus{"readonly"}, R.RStatus{"fast"}]}, R.RInt{R.IPos{1n}}, R.RInt{R.INeg{0n}}, R.RInt{R.IPos{1n}}, R.RArray{[R.RStatus{"@keyspace"}, R.RStatus{"@read"}, R.RStatus{"@fast"}]}, R.RArray{[R.RBulk{"request_policy:multi_shard"}, R.RBulk{"response_policy:agg_sum"}]}, R.RArray{[R.RArray{[R.RBulk{"flags"}, R.RArray{[R.RStatus{"RO"}]}, R.RBulk{"begin_search"}, R.RArray{[R.RBulk{"type"}, R.RBulk{"index"}, R.RBulk{"spec"}, R.RArray{[R.RBulk{"index"}, R.RInt{R.IPos{1n}}]}]}, R.RBulk{"find_keys"}, R.RArray{[R.RBulk{"type"}, R.RBulk{"range"}, R.RBulk{"spec"}, R.RArray{[R.RBulk{"lastkey"}, R.RInt{R.INeg{0n}}, R.RBulk{"keystep"}, R.RInt{R.IPos{1n}}, R.RBulk{"limit"}, R.RInt{R.IPos{0n}}]}]}]}]}],
@@ -267,10 +275,100 @@ def cmd.getset() -> Top:
     [R.RBulk{"summary"}, R.RBulk{"Set the string value of a key and return its old value"}, R.RBulk{"since"}, R.RBulk{"1.0.0"}, R.RBulk{"group"}, R.RBulk{"string"}, R.RBulk{"complexity"}, R.RBulk{"O(1)"}, R.RBulk{"doc_flags"}, R.RArray{[R.RStatus{"deprecated"}]}, R.RBulk{"deprecated_since"}, R.RBulk{"6.2.0"}, R.RBulk{"replaced_by"}, R.RBulk{"`SET` with the `!GET` argument"}, R.RBulk{"arguments"}, R.RArray{[R.RArray{[R.RBulk{"name"}, R.RBulk{"key"}, R.RBulk{"type"}, R.RBulk{"key"}, R.RBulk{"key_spec_index"}, R.RInt{R.IPos{0n}}]}, R.RArray{[R.RBulk{"name"}, R.RBulk{"value"}, R.RBulk{"type"}, R.RBulk{"string"}]}]}]},
   []}
 
+def cmd.hdel() -> Top:
+  Top{Desc{"hdel", R.INeg{2n}, ["write", "hash", "fast"], [KSpec{["RW", "delete"], 1n, R.IPos{0n}, 1n, 0n}], KBySpecs{}, False{},
+    [R.RBulk{"hdel"}, R.RInt{R.INeg{2n}}, R.RArray{[R.RStatus{"write"}, R.RStatus{"fast"}]}, R.RInt{R.IPos{1n}}, R.RInt{R.IPos{1n}}, R.RInt{R.IPos{1n}}, R.RArray{[R.RStatus{"@write"}, R.RStatus{"@hash"}, R.RStatus{"@fast"}]}, R.RArray{[]}, R.RArray{[R.RArray{[R.RBulk{"flags"}, R.RArray{[R.RStatus{"RW"}, R.RStatus{"delete"}]}, R.RBulk{"begin_search"}, R.RArray{[R.RBulk{"type"}, R.RBulk{"index"}, R.RBulk{"spec"}, R.RArray{[R.RBulk{"index"}, R.RInt{R.IPos{1n}}]}]}, R.RBulk{"find_keys"}, R.RArray{[R.RBulk{"type"}, R.RBulk{"range"}, R.RBulk{"spec"}, R.RArray{[R.RBulk{"lastkey"}, R.RInt{R.IPos{0n}}, R.RBulk{"keystep"}, R.RInt{R.IPos{1n}}, R.RBulk{"limit"}, R.RInt{R.IPos{0n}}]}]}]}]}],
+    [R.RBulk{"summary"}, R.RBulk{"Delete one or more hash fields"}, R.RBulk{"since"}, R.RBulk{"2.0.0"}, R.RBulk{"group"}, R.RBulk{"hash"}, R.RBulk{"complexity"}, R.RBulk{"O(N) where N is the number of fields to be removed."}, R.RBulk{"history"}, R.RArray{[R.RArray{[R.RBulk{"2.4.0"}, R.RBulk{"Accepts multiple `field` arguments."}]}]}, R.RBulk{"arguments"}, R.RArray{[R.RArray{[R.RBulk{"name"}, R.RBulk{"key"}, R.RBulk{"type"}, R.RBulk{"key"}, R.RBulk{"key_spec_index"}, R.RInt{R.IPos{0n}}]}, R.RArray{[R.RBulk{"name"}, R.RBulk{"field"}, R.RBulk{"type"}, R.RBulk{"string"}, R.RBulk{"flags"}, R.RArray{[R.RStatus{"multiple"}]}]}]}]},
+  []}
+
 def cmd.hello() -> Top:
   Top{Desc{"hello", R.INeg{0n}, ["fast", "connection"], [], KBySpecs{}, False{},
     [R.RBulk{"hello"}, R.RInt{R.INeg{0n}}, R.RArray{[R.RStatus{"noscript"}, R.RStatus{"loading"}, R.RStatus{"stale"}, R.RStatus{"fast"}, R.RStatus{"no_auth"}, R.RStatus{"allow_busy"}]}, R.RInt{R.IPos{0n}}, R.RInt{R.IPos{0n}}, R.RInt{R.IPos{0n}}, R.RArray{[R.RStatus{"@fast"}, R.RStatus{"@connection"}]}, R.RArray{[]}, R.RArray{[]}],
     [R.RBulk{"summary"}, R.RBulk{"Handshake with Redis"}, R.RBulk{"since"}, R.RBulk{"6.0.0"}, R.RBulk{"group"}, R.RBulk{"connection"}, R.RBulk{"complexity"}, R.RBulk{"O(1)"}, R.RBulk{"history"}, R.RArray{[R.RArray{[R.RBulk{"6.2.0"}, R.RBulk{"`protover` made optional; when called without arguments the command reports the current connection's context."}]}]}, R.RBulk{"arguments"}, R.RArray{[R.RArray{[R.RBulk{"name"}, R.RBulk{"arguments"}, R.RBulk{"type"}, R.RBulk{"block"}, R.RBulk{"flags"}, R.RArray{[R.RStatus{"optional"}]}, R.RBulk{"arguments"}, R.RArray{[R.RArray{[R.RBulk{"name"}, R.RBulk{"protover"}, R.RBulk{"type"}, R.RBulk{"integer"}]}, R.RArray{[R.RBulk{"name"}, R.RBulk{"username_password"}, R.RBulk{"type"}, R.RBulk{"block"}, R.RBulk{"token"}, R.RBulk{"AUTH"}, R.RBulk{"flags"}, R.RArray{[R.RStatus{"optional"}]}, R.RBulk{"arguments"}, R.RArray{[R.RArray{[R.RBulk{"name"}, R.RBulk{"username"}, R.RBulk{"type"}, R.RBulk{"string"}]}, R.RArray{[R.RBulk{"name"}, R.RBulk{"password"}, R.RBulk{"type"}, R.RBulk{"string"}]}]}]}, R.RArray{[R.RBulk{"name"}, R.RBulk{"clientname"}, R.RBulk{"type"}, R.RBulk{"string"}, R.RBulk{"token"}, R.RBulk{"SETNAME"}, R.RBulk{"flags"}, R.RArray{[R.RStatus{"optional"}]}]}]}]}]}]},
+  []}
+
+def cmd.hexists() -> Top:
+  Top{Desc{"hexists", R.IPos{3n}, ["read", "hash", "fast"], [KSpec{["RO"], 1n, R.IPos{0n}, 1n, 0n}], KBySpecs{}, False{},
+    [R.RBulk{"hexists"}, R.RInt{R.IPos{3n}}, R.RArray{[R.RStatus{"readonly"}, R.RStatus{"fast"}]}, R.RInt{R.IPos{1n}}, R.RInt{R.IPos{1n}}, R.RInt{R.IPos{1n}}, R.RArray{[R.RStatus{"@read"}, R.RStatus{"@hash"}, R.RStatus{"@fast"}]}, R.RArray{[]}, R.RArray{[R.RArray{[R.RBulk{"flags"}, R.RArray{[R.RStatus{"RO"}]}, R.RBulk{"begin_search"}, R.RArray{[R.RBulk{"type"}, R.RBulk{"index"}, R.RBulk{"spec"}, R.RArray{[R.RBulk{"index"}, R.RInt{R.IPos{1n}}]}]}, R.RBulk{"find_keys"}, R.RArray{[R.RBulk{"type"}, R.RBulk{"range"}, R.RBulk{"spec"}, R.RArray{[R.RBulk{"lastkey"}, R.RInt{R.IPos{0n}}, R.RBulk{"keystep"}, R.RInt{R.IPos{1n}}, R.RBulk{"limit"}, R.RInt{R.IPos{0n}}]}]}]}]}],
+    [R.RBulk{"summary"}, R.RBulk{"Determine if a hash field exists"}, R.RBulk{"since"}, R.RBulk{"2.0.0"}, R.RBulk{"group"}, R.RBulk{"hash"}, R.RBulk{"complexity"}, R.RBulk{"O(1)"}, R.RBulk{"arguments"}, R.RArray{[R.RArray{[R.RBulk{"name"}, R.RBulk{"key"}, R.RBulk{"type"}, R.RBulk{"key"}, R.RBulk{"key_spec_index"}, R.RInt{R.IPos{0n}}]}, R.RArray{[R.RBulk{"name"}, R.RBulk{"field"}, R.RBulk{"type"}, R.RBulk{"string"}]}]}]},
+  []}
+
+def cmd.hget() -> Top:
+  Top{Desc{"hget", R.IPos{3n}, ["read", "hash", "fast"], [KSpec{["RO", "access"], 1n, R.IPos{0n}, 1n, 0n}], KBySpecs{}, False{},
+    [R.RBulk{"hget"}, R.RInt{R.IPos{3n}}, R.RArray{[R.RStatus{"readonly"}, R.RStatus{"fast"}]}, R.RInt{R.IPos{1n}}, R.RInt{R.IPos{1n}}, R.RInt{R.IPos{1n}}, R.RArray{[R.RStatus{"@read"}, R.RStatus{"@hash"}, R.RStatus{"@fast"}]}, R.RArray{[]}, R.RArray{[R.RArray{[R.RBulk{"flags"}, R.RArray{[R.RStatus{"RO"}, R.RStatus{"access"}]}, R.RBulk{"begin_search"}, R.RArray{[R.RBulk{"type"}, R.RBulk{"index"}, R.RBulk{"spec"}, R.RArray{[R.RBulk{"index"}, R.RInt{R.IPos{1n}}]}]}, R.RBulk{"find_keys"}, R.RArray{[R.RBulk{"type"}, R.RBulk{"range"}, R.RBulk{"spec"}, R.RArray{[R.RBulk{"lastkey"}, R.RInt{R.IPos{0n}}, R.RBulk{"keystep"}, R.RInt{R.IPos{1n}}, R.RBulk{"limit"}, R.RInt{R.IPos{0n}}]}]}]}]}],
+    [R.RBulk{"summary"}, R.RBulk{"Get the value of a hash field"}, R.RBulk{"since"}, R.RBulk{"2.0.0"}, R.RBulk{"group"}, R.RBulk{"hash"}, R.RBulk{"complexity"}, R.RBulk{"O(1)"}, R.RBulk{"arguments"}, R.RArray{[R.RArray{[R.RBulk{"name"}, R.RBulk{"key"}, R.RBulk{"type"}, R.RBulk{"key"}, R.RBulk{"key_spec_index"}, R.RInt{R.IPos{0n}}]}, R.RArray{[R.RBulk{"name"}, R.RBulk{"field"}, R.RBulk{"type"}, R.RBulk{"string"}]}]}]},
+  []}
+
+def cmd.hgetall() -> Top:
+  Top{Desc{"hgetall", R.IPos{2n}, ["read", "hash", "slow"], [KSpec{["RO", "access"], 1n, R.IPos{0n}, 1n, 0n}], KBySpecs{}, False{},
+    [R.RBulk{"hgetall"}, R.RInt{R.IPos{2n}}, R.RArray{[R.RStatus{"readonly"}]}, R.RInt{R.IPos{1n}}, R.RInt{R.IPos{1n}}, R.RInt{R.IPos{1n}}, R.RArray{[R.RStatus{"@read"}, R.RStatus{"@hash"}, R.RStatus{"@slow"}]}, R.RArray{[R.RBulk{"nondeterministic_output_order"}]}, R.RArray{[R.RArray{[R.RBulk{"flags"}, R.RArray{[R.RStatus{"RO"}, R.RStatus{"access"}]}, R.RBulk{"begin_search"}, R.RArray{[R.RBulk{"type"}, R.RBulk{"index"}, R.RBulk{"spec"}, R.RArray{[R.RBulk{"index"}, R.RInt{R.IPos{1n}}]}]}, R.RBulk{"find_keys"}, R.RArray{[R.RBulk{"type"}, R.RBulk{"range"}, R.RBulk{"spec"}, R.RArray{[R.RBulk{"lastkey"}, R.RInt{R.IPos{0n}}, R.RBulk{"keystep"}, R.RInt{R.IPos{1n}}, R.RBulk{"limit"}, R.RInt{R.IPos{0n}}]}]}]}]}],
+    [R.RBulk{"summary"}, R.RBulk{"Get all the fields and values in a hash"}, R.RBulk{"since"}, R.RBulk{"2.0.0"}, R.RBulk{"group"}, R.RBulk{"hash"}, R.RBulk{"complexity"}, R.RBulk{"O(N) where N is the size of the hash."}, R.RBulk{"arguments"}, R.RArray{[R.RArray{[R.RBulk{"name"}, R.RBulk{"key"}, R.RBulk{"type"}, R.RBulk{"key"}, R.RBulk{"key_spec_index"}, R.RInt{R.IPos{0n}}]}]}]},
+  []}
+
+def cmd.hincrby() -> Top:
+  Top{Desc{"hincrby", R.IPos{4n}, ["write", "hash", "fast"], [KSpec{["RW", "access", "update"], 1n, R.IPos{0n}, 1n, 0n}], KBySpecs{}, False{},
+    [R.RBulk{"hincrby"}, R.RInt{R.IPos{4n}}, R.RArray{[R.RStatus{"write"}, R.RStatus{"denyoom"}, R.RStatus{"fast"}]}, R.RInt{R.IPos{1n}}, R.RInt{R.IPos{1n}}, R.RInt{R.IPos{1n}}, R.RArray{[R.RStatus{"@write"}, R.RStatus{"@hash"}, R.RStatus{"@fast"}]}, R.RArray{[]}, R.RArray{[R.RArray{[R.RBulk{"flags"}, R.RArray{[R.RStatus{"RW"}, R.RStatus{"access"}, R.RStatus{"update"}]}, R.RBulk{"begin_search"}, R.RArray{[R.RBulk{"type"}, R.RBulk{"index"}, R.RBulk{"spec"}, R.RArray{[R.RBulk{"index"}, R.RInt{R.IPos{1n}}]}]}, R.RBulk{"find_keys"}, R.RArray{[R.RBulk{"type"}, R.RBulk{"range"}, R.RBulk{"spec"}, R.RArray{[R.RBulk{"lastkey"}, R.RInt{R.IPos{0n}}, R.RBulk{"keystep"}, R.RInt{R.IPos{1n}}, R.RBulk{"limit"}, R.RInt{R.IPos{0n}}]}]}]}]}],
+    [R.RBulk{"summary"}, R.RBulk{"Increment the integer value of a hash field by the given number"}, R.RBulk{"since"}, R.RBulk{"2.0.0"}, R.RBulk{"group"}, R.RBulk{"hash"}, R.RBulk{"complexity"}, R.RBulk{"O(1)"}, R.RBulk{"arguments"}, R.RArray{[R.RArray{[R.RBulk{"name"}, R.RBulk{"key"}, R.RBulk{"type"}, R.RBulk{"key"}, R.RBulk{"key_spec_index"}, R.RInt{R.IPos{0n}}]}, R.RArray{[R.RBulk{"name"}, R.RBulk{"field"}, R.RBulk{"type"}, R.RBulk{"string"}]}, R.RArray{[R.RBulk{"name"}, R.RBulk{"increment"}, R.RBulk{"type"}, R.RBulk{"integer"}]}]}]},
+  []}
+
+def cmd.hkeys() -> Top:
+  Top{Desc{"hkeys", R.IPos{2n}, ["read", "hash", "slow"], [KSpec{["RO", "access"], 1n, R.IPos{0n}, 1n, 0n}], KBySpecs{}, False{},
+    [R.RBulk{"hkeys"}, R.RInt{R.IPos{2n}}, R.RArray{[R.RStatus{"readonly"}]}, R.RInt{R.IPos{1n}}, R.RInt{R.IPos{1n}}, R.RInt{R.IPos{1n}}, R.RArray{[R.RStatus{"@read"}, R.RStatus{"@hash"}, R.RStatus{"@slow"}]}, R.RArray{[R.RBulk{"nondeterministic_output_order"}]}, R.RArray{[R.RArray{[R.RBulk{"flags"}, R.RArray{[R.RStatus{"RO"}, R.RStatus{"access"}]}, R.RBulk{"begin_search"}, R.RArray{[R.RBulk{"type"}, R.RBulk{"index"}, R.RBulk{"spec"}, R.RArray{[R.RBulk{"index"}, R.RInt{R.IPos{1n}}]}]}, R.RBulk{"find_keys"}, R.RArray{[R.RBulk{"type"}, R.RBulk{"range"}, R.RBulk{"spec"}, R.RArray{[R.RBulk{"lastkey"}, R.RInt{R.IPos{0n}}, R.RBulk{"keystep"}, R.RInt{R.IPos{1n}}, R.RBulk{"limit"}, R.RInt{R.IPos{0n}}]}]}]}]}],
+    [R.RBulk{"summary"}, R.RBulk{"Get all the fields in a hash"}, R.RBulk{"since"}, R.RBulk{"2.0.0"}, R.RBulk{"group"}, R.RBulk{"hash"}, R.RBulk{"complexity"}, R.RBulk{"O(N) where N is the size of the hash."}, R.RBulk{"arguments"}, R.RArray{[R.RArray{[R.RBulk{"name"}, R.RBulk{"key"}, R.RBulk{"type"}, R.RBulk{"key"}, R.RBulk{"key_spec_index"}, R.RInt{R.IPos{0n}}]}]}]},
+  []}
+
+def cmd.hlen() -> Top:
+  Top{Desc{"hlen", R.IPos{2n}, ["read", "hash", "fast"], [KSpec{["RO"], 1n, R.IPos{0n}, 1n, 0n}], KBySpecs{}, False{},
+    [R.RBulk{"hlen"}, R.RInt{R.IPos{2n}}, R.RArray{[R.RStatus{"readonly"}, R.RStatus{"fast"}]}, R.RInt{R.IPos{1n}}, R.RInt{R.IPos{1n}}, R.RInt{R.IPos{1n}}, R.RArray{[R.RStatus{"@read"}, R.RStatus{"@hash"}, R.RStatus{"@fast"}]}, R.RArray{[]}, R.RArray{[R.RArray{[R.RBulk{"flags"}, R.RArray{[R.RStatus{"RO"}]}, R.RBulk{"begin_search"}, R.RArray{[R.RBulk{"type"}, R.RBulk{"index"}, R.RBulk{"spec"}, R.RArray{[R.RBulk{"index"}, R.RInt{R.IPos{1n}}]}]}, R.RBulk{"find_keys"}, R.RArray{[R.RBulk{"type"}, R.RBulk{"range"}, R.RBulk{"spec"}, R.RArray{[R.RBulk{"lastkey"}, R.RInt{R.IPos{0n}}, R.RBulk{"keystep"}, R.RInt{R.IPos{1n}}, R.RBulk{"limit"}, R.RInt{R.IPos{0n}}]}]}]}]}],
+    [R.RBulk{"summary"}, R.RBulk{"Get the number of fields in a hash"}, R.RBulk{"since"}, R.RBulk{"2.0.0"}, R.RBulk{"group"}, R.RBulk{"hash"}, R.RBulk{"complexity"}, R.RBulk{"O(1)"}, R.RBulk{"arguments"}, R.RArray{[R.RArray{[R.RBulk{"name"}, R.RBulk{"key"}, R.RBulk{"type"}, R.RBulk{"key"}, R.RBulk{"key_spec_index"}, R.RInt{R.IPos{0n}}]}]}]},
+  []}
+
+def cmd.hmget() -> Top:
+  Top{Desc{"hmget", R.INeg{2n}, ["read", "hash", "fast"], [KSpec{["RO", "access"], 1n, R.IPos{0n}, 1n, 0n}], KBySpecs{}, False{},
+    [R.RBulk{"hmget"}, R.RInt{R.INeg{2n}}, R.RArray{[R.RStatus{"readonly"}, R.RStatus{"fast"}]}, R.RInt{R.IPos{1n}}, R.RInt{R.IPos{1n}}, R.RInt{R.IPos{1n}}, R.RArray{[R.RStatus{"@read"}, R.RStatus{"@hash"}, R.RStatus{"@fast"}]}, R.RArray{[]}, R.RArray{[R.RArray{[R.RBulk{"flags"}, R.RArray{[R.RStatus{"RO"}, R.RStatus{"access"}]}, R.RBulk{"begin_search"}, R.RArray{[R.RBulk{"type"}, R.RBulk{"index"}, R.RBulk{"spec"}, R.RArray{[R.RBulk{"index"}, R.RInt{R.IPos{1n}}]}]}, R.RBulk{"find_keys"}, R.RArray{[R.RBulk{"type"}, R.RBulk{"range"}, R.RBulk{"spec"}, R.RArray{[R.RBulk{"lastkey"}, R.RInt{R.IPos{0n}}, R.RBulk{"keystep"}, R.RInt{R.IPos{1n}}, R.RBulk{"limit"}, R.RInt{R.IPos{0n}}]}]}]}]}],
+    [R.RBulk{"summary"}, R.RBulk{"Get the values of all the given hash fields"}, R.RBulk{"since"}, R.RBulk{"2.0.0"}, R.RBulk{"group"}, R.RBulk{"hash"}, R.RBulk{"complexity"}, R.RBulk{"O(N) where N is the number of fields being requested."}, R.RBulk{"arguments"}, R.RArray{[R.RArray{[R.RBulk{"name"}, R.RBulk{"key"}, R.RBulk{"type"}, R.RBulk{"key"}, R.RBulk{"key_spec_index"}, R.RInt{R.IPos{0n}}]}, R.RArray{[R.RBulk{"name"}, R.RBulk{"field"}, R.RBulk{"type"}, R.RBulk{"string"}, R.RBulk{"flags"}, R.RArray{[R.RStatus{"multiple"}]}]}]}]},
+  []}
+
+def cmd.hmset() -> Top:
+  Top{Desc{"hmset", R.INeg{3n}, ["write", "hash", "fast"], [KSpec{["RW", "update"], 1n, R.IPos{0n}, 1n, 0n}], KBySpecs{}, False{},
+    [R.RBulk{"hmset"}, R.RInt{R.INeg{3n}}, R.RArray{[R.RStatus{"write"}, R.RStatus{"denyoom"}, R.RStatus{"fast"}]}, R.RInt{R.IPos{1n}}, R.RInt{R.IPos{1n}}, R.RInt{R.IPos{1n}}, R.RArray{[R.RStatus{"@write"}, R.RStatus{"@hash"}, R.RStatus{"@fast"}]}, R.RArray{[]}, R.RArray{[R.RArray{[R.RBulk{"flags"}, R.RArray{[R.RStatus{"RW"}, R.RStatus{"update"}]}, R.RBulk{"begin_search"}, R.RArray{[R.RBulk{"type"}, R.RBulk{"index"}, R.RBulk{"spec"}, R.RArray{[R.RBulk{"index"}, R.RInt{R.IPos{1n}}]}]}, R.RBulk{"find_keys"}, R.RArray{[R.RBulk{"type"}, R.RBulk{"range"}, R.RBulk{"spec"}, R.RArray{[R.RBulk{"lastkey"}, R.RInt{R.IPos{0n}}, R.RBulk{"keystep"}, R.RInt{R.IPos{1n}}, R.RBulk{"limit"}, R.RInt{R.IPos{0n}}]}]}]}]}],
+    [R.RBulk{"summary"}, R.RBulk{"Set multiple hash fields to multiple values"}, R.RBulk{"since"}, R.RBulk{"2.0.0"}, R.RBulk{"group"}, R.RBulk{"hash"}, R.RBulk{"complexity"}, R.RBulk{"O(N) where N is the number of fields being set."}, R.RBulk{"doc_flags"}, R.RArray{[R.RStatus{"deprecated"}]}, R.RBulk{"deprecated_since"}, R.RBulk{"4.0.0"}, R.RBulk{"replaced_by"}, R.RBulk{"`HSET` with multiple field-value pairs"}, R.RBulk{"arguments"}, R.RArray{[R.RArray{[R.RBulk{"name"}, R.RBulk{"key"}, R.RBulk{"type"}, R.RBulk{"key"}, R.RBulk{"key_spec_index"}, R.RInt{R.IPos{0n}}]}, R.RArray{[R.RBulk{"name"}, R.RBulk{"field_value"}, R.RBulk{"type"}, R.RBulk{"block"}, R.RBulk{"flags"}, R.RArray{[R.RStatus{"multiple"}]}, R.RBulk{"arguments"}, R.RArray{[R.RArray{[R.RBulk{"name"}, R.RBulk{"field"}, R.RBulk{"type"}, R.RBulk{"string"}]}, R.RArray{[R.RBulk{"name"}, R.RBulk{"value"}, R.RBulk{"type"}, R.RBulk{"string"}]}]}]}]}]},
+  []}
+
+def cmd.hrandfield() -> Top:
+  Top{Desc{"hrandfield", R.INeg{1n}, ["read", "hash", "slow"], [KSpec{["RO", "access"], 1n, R.IPos{0n}, 1n, 0n}], KBySpecs{}, False{},
+    [R.RBulk{"hrandfield"}, R.RInt{R.INeg{1n}}, R.RArray{[R.RStatus{"readonly"}]}, R.RInt{R.IPos{1n}}, R.RInt{R.IPos{1n}}, R.RInt{R.IPos{1n}}, R.RArray{[R.RStatus{"@read"}, R.RStatus{"@hash"}, R.RStatus{"@slow"}]}, R.RArray{[R.RBulk{"nondeterministic_output"}]}, R.RArray{[R.RArray{[R.RBulk{"flags"}, R.RArray{[R.RStatus{"RO"}, R.RStatus{"access"}]}, R.RBulk{"begin_search"}, R.RArray{[R.RBulk{"type"}, R.RBulk{"index"}, R.RBulk{"spec"}, R.RArray{[R.RBulk{"index"}, R.RInt{R.IPos{1n}}]}]}, R.RBulk{"find_keys"}, R.RArray{[R.RBulk{"type"}, R.RBulk{"range"}, R.RBulk{"spec"}, R.RArray{[R.RBulk{"lastkey"}, R.RInt{R.IPos{0n}}, R.RBulk{"keystep"}, R.RInt{R.IPos{1n}}, R.RBulk{"limit"}, R.RInt{R.IPos{0n}}]}]}]}]}],
+    [R.RBulk{"summary"}, R.RBulk{"Get one or multiple random fields from a hash"}, R.RBulk{"since"}, R.RBulk{"6.2.0"}, R.RBulk{"group"}, R.RBulk{"hash"}, R.RBulk{"complexity"}, R.RBulk{"O(N) where N is the number of fields returned"}, R.RBulk{"arguments"}, R.RArray{[R.RArray{[R.RBulk{"name"}, R.RBulk{"key"}, R.RBulk{"type"}, R.RBulk{"key"}, R.RBulk{"key_spec_index"}, R.RInt{R.IPos{0n}}]}, R.RArray{[R.RBulk{"name"}, R.RBulk{"options"}, R.RBulk{"type"}, R.RBulk{"block"}, R.RBulk{"flags"}, R.RArray{[R.RStatus{"optional"}]}, R.RBulk{"arguments"}, R.RArray{[R.RArray{[R.RBulk{"name"}, R.RBulk{"count"}, R.RBulk{"type"}, R.RBulk{"integer"}]}, R.RArray{[R.RBulk{"name"}, R.RBulk{"withvalues"}, R.RBulk{"type"}, R.RBulk{"pure-token"}, R.RBulk{"token"}, R.RBulk{"WITHVALUES"}, R.RBulk{"flags"}, R.RArray{[R.RStatus{"optional"}]}]}]}]}]}]},
+  []}
+
+def cmd.hscan() -> Top:
+  Top{Desc{"hscan", R.INeg{2n}, ["read", "hash", "slow"], [KSpec{["RO", "access"], 1n, R.IPos{0n}, 1n, 0n}], KBySpecs{}, False{},
+    [R.RBulk{"hscan"}, R.RInt{R.INeg{2n}}, R.RArray{[R.RStatus{"readonly"}]}, R.RInt{R.IPos{1n}}, R.RInt{R.IPos{1n}}, R.RInt{R.IPos{1n}}, R.RArray{[R.RStatus{"@read"}, R.RStatus{"@hash"}, R.RStatus{"@slow"}]}, R.RArray{[R.RBulk{"nondeterministic_output"}]}, R.RArray{[R.RArray{[R.RBulk{"flags"}, R.RArray{[R.RStatus{"RO"}, R.RStatus{"access"}]}, R.RBulk{"begin_search"}, R.RArray{[R.RBulk{"type"}, R.RBulk{"index"}, R.RBulk{"spec"}, R.RArray{[R.RBulk{"index"}, R.RInt{R.IPos{1n}}]}]}, R.RBulk{"find_keys"}, R.RArray{[R.RBulk{"type"}, R.RBulk{"range"}, R.RBulk{"spec"}, R.RArray{[R.RBulk{"lastkey"}, R.RInt{R.IPos{0n}}, R.RBulk{"keystep"}, R.RInt{R.IPos{1n}}, R.RBulk{"limit"}, R.RInt{R.IPos{0n}}]}]}]}]}],
+    [R.RBulk{"summary"}, R.RBulk{"Incrementally iterate hash fields and associated values"}, R.RBulk{"since"}, R.RBulk{"2.8.0"}, R.RBulk{"group"}, R.RBulk{"hash"}, R.RBulk{"complexity"}, R.RBulk{"O(1) for every call. O(N) for a complete iteration, including enough command calls for the cursor to return back to 0. N is the number of elements inside the collection.."}, R.RBulk{"arguments"}, R.RArray{[R.RArray{[R.RBulk{"name"}, R.RBulk{"key"}, R.RBulk{"type"}, R.RBulk{"key"}, R.RBulk{"key_spec_index"}, R.RInt{R.IPos{0n}}]}, R.RArray{[R.RBulk{"name"}, R.RBulk{"cursor"}, R.RBulk{"type"}, R.RBulk{"integer"}]}, R.RArray{[R.RBulk{"name"}, R.RBulk{"pattern"}, R.RBulk{"type"}, R.RBulk{"pattern"}, R.RBulk{"token"}, R.RBulk{"MATCH"}, R.RBulk{"flags"}, R.RArray{[R.RStatus{"optional"}]}]}, R.RArray{[R.RBulk{"name"}, R.RBulk{"count"}, R.RBulk{"type"}, R.RBulk{"integer"}, R.RBulk{"token"}, R.RBulk{"COUNT"}, R.RBulk{"flags"}, R.RArray{[R.RStatus{"optional"}]}]}]}]},
+  []}
+
+def cmd.hset() -> Top:
+  Top{Desc{"hset", R.INeg{3n}, ["write", "hash", "fast"], [KSpec{["RW", "update"], 1n, R.IPos{0n}, 1n, 0n}], KBySpecs{}, False{},
+    [R.RBulk{"hset"}, R.RInt{R.INeg{3n}}, R.RArray{[R.RStatus{"write"}, R.RStatus{"denyoom"}, R.RStatus{"fast"}]}, R.RInt{R.IPos{1n}}, R.RInt{R.IPos{1n}}, R.RInt{R.IPos{1n}}, R.RArray{[R.RStatus{"@write"}, R.RStatus{"@hash"}, R.RStatus{"@fast"}]}, R.RArray{[]}, R.RArray{[R.RArray{[R.RBulk{"flags"}, R.RArray{[R.RStatus{"RW"}, R.RStatus{"update"}]}, R.RBulk{"begin_search"}, R.RArray{[R.RBulk{"type"}, R.RBulk{"index"}, R.RBulk{"spec"}, R.RArray{[R.RBulk{"index"}, R.RInt{R.IPos{1n}}]}]}, R.RBulk{"find_keys"}, R.RArray{[R.RBulk{"type"}, R.RBulk{"range"}, R.RBulk{"spec"}, R.RArray{[R.RBulk{"lastkey"}, R.RInt{R.IPos{0n}}, R.RBulk{"keystep"}, R.RInt{R.IPos{1n}}, R.RBulk{"limit"}, R.RInt{R.IPos{0n}}]}]}]}]}],
+    [R.RBulk{"summary"}, R.RBulk{"Set the string value of a hash field"}, R.RBulk{"since"}, R.RBulk{"2.0.0"}, R.RBulk{"group"}, R.RBulk{"hash"}, R.RBulk{"complexity"}, R.RBulk{"O(1) for each field/value pair added, so O(N) to add N field/value pairs when the command is called with multiple field/value pairs."}, R.RBulk{"history"}, R.RArray{[R.RArray{[R.RBulk{"4.0.0"}, R.RBulk{"Accepts multiple `field` and `value` arguments."}]}]}, R.RBulk{"arguments"}, R.RArray{[R.RArray{[R.RBulk{"name"}, R.RBulk{"key"}, R.RBulk{"type"}, R.RBulk{"key"}, R.RBulk{"key_spec_index"}, R.RInt{R.IPos{0n}}]}, R.RArray{[R.RBulk{"name"}, R.RBulk{"field_value"}, R.RBulk{"type"}, R.RBulk{"block"}, R.RBulk{"flags"}, R.RArray{[R.RStatus{"multiple"}]}, R.RBulk{"arguments"}, R.RArray{[R.RArray{[R.RBulk{"name"}, R.RBulk{"field"}, R.RBulk{"type"}, R.RBulk{"string"}]}, R.RArray{[R.RBulk{"name"}, R.RBulk{"value"}, R.RBulk{"type"}, R.RBulk{"string"}]}]}]}]}]},
+  []}
+
+def cmd.hsetnx() -> Top:
+  Top{Desc{"hsetnx", R.IPos{4n}, ["write", "hash", "fast"], [KSpec{["RW", "insert"], 1n, R.IPos{0n}, 1n, 0n}], KBySpecs{}, False{},
+    [R.RBulk{"hsetnx"}, R.RInt{R.IPos{4n}}, R.RArray{[R.RStatus{"write"}, R.RStatus{"denyoom"}, R.RStatus{"fast"}]}, R.RInt{R.IPos{1n}}, R.RInt{R.IPos{1n}}, R.RInt{R.IPos{1n}}, R.RArray{[R.RStatus{"@write"}, R.RStatus{"@hash"}, R.RStatus{"@fast"}]}, R.RArray{[]}, R.RArray{[R.RArray{[R.RBulk{"flags"}, R.RArray{[R.RStatus{"RW"}, R.RStatus{"insert"}]}, R.RBulk{"begin_search"}, R.RArray{[R.RBulk{"type"}, R.RBulk{"index"}, R.RBulk{"spec"}, R.RArray{[R.RBulk{"index"}, R.RInt{R.IPos{1n}}]}]}, R.RBulk{"find_keys"}, R.RArray{[R.RBulk{"type"}, R.RBulk{"range"}, R.RBulk{"spec"}, R.RArray{[R.RBulk{"lastkey"}, R.RInt{R.IPos{0n}}, R.RBulk{"keystep"}, R.RInt{R.IPos{1n}}, R.RBulk{"limit"}, R.RInt{R.IPos{0n}}]}]}]}]}],
+    [R.RBulk{"summary"}, R.RBulk{"Set the value of a hash field, only if the field does not exist"}, R.RBulk{"since"}, R.RBulk{"2.0.0"}, R.RBulk{"group"}, R.RBulk{"hash"}, R.RBulk{"complexity"}, R.RBulk{"O(1)"}, R.RBulk{"arguments"}, R.RArray{[R.RArray{[R.RBulk{"name"}, R.RBulk{"key"}, R.RBulk{"type"}, R.RBulk{"key"}, R.RBulk{"key_spec_index"}, R.RInt{R.IPos{0n}}]}, R.RArray{[R.RBulk{"name"}, R.RBulk{"field"}, R.RBulk{"type"}, R.RBulk{"string"}]}, R.RArray{[R.RBulk{"name"}, R.RBulk{"value"}, R.RBulk{"type"}, R.RBulk{"string"}]}]}]},
+  []}
+
+def cmd.hstrlen() -> Top:
+  Top{Desc{"hstrlen", R.IPos{3n}, ["read", "hash", "fast"], [KSpec{["RO"], 1n, R.IPos{0n}, 1n, 0n}], KBySpecs{}, False{},
+    [R.RBulk{"hstrlen"}, R.RInt{R.IPos{3n}}, R.RArray{[R.RStatus{"readonly"}, R.RStatus{"fast"}]}, R.RInt{R.IPos{1n}}, R.RInt{R.IPos{1n}}, R.RInt{R.IPos{1n}}, R.RArray{[R.RStatus{"@read"}, R.RStatus{"@hash"}, R.RStatus{"@fast"}]}, R.RArray{[]}, R.RArray{[R.RArray{[R.RBulk{"flags"}, R.RArray{[R.RStatus{"RO"}]}, R.RBulk{"begin_search"}, R.RArray{[R.RBulk{"type"}, R.RBulk{"index"}, R.RBulk{"spec"}, R.RArray{[R.RBulk{"index"}, R.RInt{R.IPos{1n}}]}]}, R.RBulk{"find_keys"}, R.RArray{[R.RBulk{"type"}, R.RBulk{"range"}, R.RBulk{"spec"}, R.RArray{[R.RBulk{"lastkey"}, R.RInt{R.IPos{0n}}, R.RBulk{"keystep"}, R.RInt{R.IPos{1n}}, R.RBulk{"limit"}, R.RInt{R.IPos{0n}}]}]}]}]}],
+    [R.RBulk{"summary"}, R.RBulk{"Get the length of the value of a hash field"}, R.RBulk{"since"}, R.RBulk{"3.2.0"}, R.RBulk{"group"}, R.RBulk{"hash"}, R.RBulk{"complexity"}, R.RBulk{"O(1)"}, R.RBulk{"arguments"}, R.RArray{[R.RArray{[R.RBulk{"name"}, R.RBulk{"key"}, R.RBulk{"type"}, R.RBulk{"key"}, R.RBulk{"key_spec_index"}, R.RInt{R.IPos{0n}}]}, R.RArray{[R.RBulk{"name"}, R.RBulk{"field"}, R.RBulk{"type"}, R.RBulk{"string"}]}]}]},
+  []}
+
+def cmd.hvals() -> Top:
+  Top{Desc{"hvals", R.IPos{2n}, ["read", "hash", "slow"], [KSpec{["RO", "access"], 1n, R.IPos{0n}, 1n, 0n}], KBySpecs{}, False{},
+    [R.RBulk{"hvals"}, R.RInt{R.IPos{2n}}, R.RArray{[R.RStatus{"readonly"}]}, R.RInt{R.IPos{1n}}, R.RInt{R.IPos{1n}}, R.RInt{R.IPos{1n}}, R.RArray{[R.RStatus{"@read"}, R.RStatus{"@hash"}, R.RStatus{"@slow"}]}, R.RArray{[R.RBulk{"nondeterministic_output_order"}]}, R.RArray{[R.RArray{[R.RBulk{"flags"}, R.RArray{[R.RStatus{"RO"}, R.RStatus{"access"}]}, R.RBulk{"begin_search"}, R.RArray{[R.RBulk{"type"}, R.RBulk{"index"}, R.RBulk{"spec"}, R.RArray{[R.RBulk{"index"}, R.RInt{R.IPos{1n}}]}]}, R.RBulk{"find_keys"}, R.RArray{[R.RBulk{"type"}, R.RBulk{"range"}, R.RBulk{"spec"}, R.RArray{[R.RBulk{"lastkey"}, R.RInt{R.IPos{0n}}, R.RBulk{"keystep"}, R.RInt{R.IPos{1n}}, R.RBulk{"limit"}, R.RInt{R.IPos{0n}}]}]}]}]}],
+    [R.RBulk{"summary"}, R.RBulk{"Get all the values in a hash"}, R.RBulk{"since"}, R.RBulk{"2.0.0"}, R.RBulk{"group"}, R.RBulk{"hash"}, R.RBulk{"complexity"}, R.RBulk{"O(N) where N is the size of the hash."}, R.RBulk{"arguments"}, R.RArray{[R.RArray{[R.RBulk{"name"}, R.RBulk{"key"}, R.RBulk{"type"}, R.RBulk{"key"}, R.RBulk{"key_spec_index"}, R.RInt{R.IPos{0n}}]}]}]},
   []}
 
 def cmd.incr() -> Top:
@@ -302,6 +400,16 @@ def cmd.lcs() -> Top:
     [R.RBulk{"lcs"}, R.RInt{R.INeg{2n}}, R.RArray{[R.RStatus{"readonly"}]}, R.RInt{R.IPos{1n}}, R.RInt{R.IPos{2n}}, R.RInt{R.IPos{1n}}, R.RArray{[R.RStatus{"@read"}, R.RStatus{"@string"}, R.RStatus{"@slow"}]}, R.RArray{[]}, R.RArray{[R.RArray{[R.RBulk{"flags"}, R.RArray{[R.RStatus{"RO"}, R.RStatus{"access"}]}, R.RBulk{"begin_search"}, R.RArray{[R.RBulk{"type"}, R.RBulk{"index"}, R.RBulk{"spec"}, R.RArray{[R.RBulk{"index"}, R.RInt{R.IPos{1n}}]}]}, R.RBulk{"find_keys"}, R.RArray{[R.RBulk{"type"}, R.RBulk{"range"}, R.RBulk{"spec"}, R.RArray{[R.RBulk{"lastkey"}, R.RInt{R.IPos{1n}}, R.RBulk{"keystep"}, R.RInt{R.IPos{1n}}, R.RBulk{"limit"}, R.RInt{R.IPos{0n}}]}]}]}]}],
     [R.RBulk{"summary"}, R.RBulk{"Find longest common substring"}, R.RBulk{"since"}, R.RBulk{"7.0.0"}, R.RBulk{"group"}, R.RBulk{"string"}, R.RBulk{"complexity"}, R.RBulk{"O(N*M) where N and M are the lengths of s1 and s2, respectively"}, R.RBulk{"arguments"}, R.RArray{[R.RArray{[R.RBulk{"name"}, R.RBulk{"key1"}, R.RBulk{"type"}, R.RBulk{"key"}, R.RBulk{"key_spec_index"}, R.RInt{R.IPos{0n}}]}, R.RArray{[R.RBulk{"name"}, R.RBulk{"key2"}, R.RBulk{"type"}, R.RBulk{"key"}, R.RBulk{"key_spec_index"}, R.RInt{R.IPos{0n}}]}, R.RArray{[R.RBulk{"name"}, R.RBulk{"len"}, R.RBulk{"type"}, R.RBulk{"pure-token"}, R.RBulk{"token"}, R.RBulk{"LEN"}, R.RBulk{"flags"}, R.RArray{[R.RStatus{"optional"}]}]}, R.RArray{[R.RBulk{"name"}, R.RBulk{"idx"}, R.RBulk{"type"}, R.RBulk{"pure-token"}, R.RBulk{"token"}, R.RBulk{"IDX"}, R.RBulk{"flags"}, R.RArray{[R.RStatus{"optional"}]}]}, R.RArray{[R.RBulk{"name"}, R.RBulk{"len"}, R.RBulk{"type"}, R.RBulk{"integer"}, R.RBulk{"token"}, R.RBulk{"MINMATCHLEN"}, R.RBulk{"flags"}, R.RArray{[R.RStatus{"optional"}]}]}, R.RArray{[R.RBulk{"name"}, R.RBulk{"withmatchlen"}, R.RBulk{"type"}, R.RBulk{"pure-token"}, R.RBulk{"token"}, R.RBulk{"WITHMATCHLEN"}, R.RBulk{"flags"}, R.RArray{[R.RStatus{"optional"}]}]}]}]},
   []}
+
+def cmd.memory() -> Top:
+  Top{Desc{"memory", R.INeg{1n}, ["slow"], [], KBySpecs{}, False{},
+    [R.RBulk{"memory"}, R.RInt{R.INeg{1n}}, R.RArray{[]}, R.RInt{R.IPos{0n}}, R.RInt{R.IPos{0n}}, R.RInt{R.IPos{0n}}, R.RArray{[R.RStatus{"@slow"}]}, R.RArray{[]}, R.RArray{[]}],
+    [R.RBulk{"summary"}, R.RBulk{"A container for memory diagnostics commands"}, R.RBulk{"since"}, R.RBulk{"4.0.0"}, R.RBulk{"group"}, R.RBulk{"server"}, R.RBulk{"complexity"}, R.RBulk{"Depends on subcommand."}]},
+  [Desc{"memory|help", R.IPos{2n}, ["slow"], [], KBySpecs{}, False{},
+    [R.RBulk{"memory|help"}, R.RInt{R.IPos{2n}}, R.RArray{[R.RStatus{"loading"}, R.RStatus{"stale"}]}, R.RInt{R.IPos{0n}}, R.RInt{R.IPos{0n}}, R.RInt{R.IPos{0n}}, R.RArray{[R.RStatus{"@slow"}]}, R.RArray{[]}, R.RArray{[]}],
+    [R.RBulk{"summary"}, R.RBulk{"Show helpful text about the different subcommands"}, R.RBulk{"since"}, R.RBulk{"4.0.0"}, R.RBulk{"group"}, R.RBulk{"server"}, R.RBulk{"complexity"}, R.RBulk{"O(1)"}]}, Desc{"memory|usage", R.INeg{2n}, ["read", "slow"], [KSpec{["RO"], 2n, R.IPos{0n}, 1n, 0n}], KBySpecs{}, False{},
+    [R.RBulk{"memory|usage"}, R.RInt{R.INeg{2n}}, R.RArray{[R.RStatus{"readonly"}]}, R.RInt{R.IPos{2n}}, R.RInt{R.IPos{2n}}, R.RInt{R.IPos{1n}}, R.RArray{[R.RStatus{"@read"}, R.RStatus{"@slow"}]}, R.RArray{[]}, R.RArray{[R.RArray{[R.RBulk{"flags"}, R.RArray{[R.RStatus{"RO"}]}, R.RBulk{"begin_search"}, R.RArray{[R.RBulk{"type"}, R.RBulk{"index"}, R.RBulk{"spec"}, R.RArray{[R.RBulk{"index"}, R.RInt{R.IPos{2n}}]}]}, R.RBulk{"find_keys"}, R.RArray{[R.RBulk{"type"}, R.RBulk{"range"}, R.RBulk{"spec"}, R.RArray{[R.RBulk{"lastkey"}, R.RInt{R.IPos{0n}}, R.RBulk{"keystep"}, R.RInt{R.IPos{1n}}, R.RBulk{"limit"}, R.RInt{R.IPos{0n}}]}]}]}]}],
+    [R.RBulk{"summary"}, R.RBulk{"Estimate the memory usage of a key"}, R.RBulk{"since"}, R.RBulk{"4.0.0"}, R.RBulk{"group"}, R.RBulk{"server"}, R.RBulk{"complexity"}, R.RBulk{"O(N) where N is the number of samples."}, R.RBulk{"arguments"}, R.RArray{[R.RArray{[R.RBulk{"name"}, R.RBulk{"key"}, R.RBulk{"type"}, R.RBulk{"key"}, R.RBulk{"key_spec_index"}, R.RInt{R.IPos{0n}}]}, R.RArray{[R.RBulk{"name"}, R.RBulk{"count"}, R.RBulk{"type"}, R.RBulk{"integer"}, R.RBulk{"token"}, R.RBulk{"SAMPLES"}, R.RBulk{"flags"}, R.RArray{[R.RStatus{"optional"}]}]}]}]}]}
 
 def cmd.mget() -> Top:
   Top{Desc{"mget", R.INeg{1n}, ["read", "string", "fast"], [KSpec{["RO", "access"], 1n, R.INeg{0n}, 1n, 0n}], KBySpecs{}, False{},
@@ -507,7 +615,7 @@ def cmd.unlink() -> Top:
 
 # the commands, by name
 def table() -> List<&2, Top>:
-  [cmd.append(), cmd.auth(), cmd.bitcount(), cmd.bitfield(), cmd.bitfield_ro(), cmd.bitop(), cmd.bitpos(), cmd.client(), cmd.command(), cmd.config(), cmd.copy(), cmd.dbsize(), cmd.decr(), cmd.decrby(), cmd.del(), cmd.echo(), cmd.exists(), cmd.expire(), cmd.expireat(), cmd.expiretime(), cmd.flushall(), cmd.flushdb(), cmd.function(), cmd.get(), cmd.getbit(), cmd.getdel(), cmd.getex(), cmd.getrange(), cmd.getset(), cmd.hello(), cmd.incr(), cmd.incrby(), cmd.info(), cmd.keys(), cmd.lcs(), cmd.mget(), cmd.move(), cmd.mset(), cmd.msetnx(), cmd.object(), cmd.persist(), cmd.pexpire(), cmd.pexpireat(), cmd.pexpiretime(), cmd.ping(), cmd.psetex(), cmd.pttl(), cmd.quit(), cmd.randomkey(), cmd.rename(), cmd.renamenx(), cmd.reset(), cmd.scan(), cmd.select(), cmd.set(), cmd.setbit(), cmd.setex(), cmd.setnx(), cmd.setrange(), cmd.strlen(), cmd.substr(), cmd.swapdb(), cmd.time(), cmd.touch(), cmd.ttl(), cmd.type(), cmd.unlink()]
+  [cmd.append(), cmd.auth(), cmd.bitcount(), cmd.bitfield(), cmd.bitfield_ro(), cmd.bitop(), cmd.bitpos(), cmd.client(), cmd.command(), cmd.config(), cmd.copy(), cmd.dbsize(), cmd.decr(), cmd.decrby(), cmd.del(), cmd.echo(), cmd.eval(), cmd.exists(), cmd.expire(), cmd.expireat(), cmd.expiretime(), cmd.flushall(), cmd.flushdb(), cmd.function(), cmd.get(), cmd.getbit(), cmd.getdel(), cmd.getex(), cmd.getrange(), cmd.getset(), cmd.hdel(), cmd.hello(), cmd.hexists(), cmd.hget(), cmd.hgetall(), cmd.hincrby(), cmd.hkeys(), cmd.hlen(), cmd.hmget(), cmd.hmset(), cmd.hrandfield(), cmd.hscan(), cmd.hset(), cmd.hsetnx(), cmd.hstrlen(), cmd.hvals(), cmd.incr(), cmd.incrby(), cmd.info(), cmd.keys(), cmd.lcs(), cmd.memory(), cmd.mget(), cmd.move(), cmd.mset(), cmd.msetnx(), cmd.object(), cmd.persist(), cmd.pexpire(), cmd.pexpireat(), cmd.pexpiretime(), cmd.ping(), cmd.psetex(), cmd.pttl(), cmd.quit(), cmd.randomkey(), cmd.rename(), cmd.renamenx(), cmd.reset(), cmd.scan(), cmd.select(), cmd.set(), cmd.setbit(), cmd.setex(), cmd.setnx(), cmd.setrange(), cmd.strlen(), cmd.substr(), cmd.swapdb(), cmd.time(), cmd.touch(), cmd.ttl(), cmd.type(), cmd.unlink()]
 
 # Redis's ACL categories (ACL CAT)
 def categories() -> List<&2, String>:
@@ -929,6 +1037,97 @@ def bitfield.keys(argv: List<&2, String>) -> List<&2, KeyAt>:
     case _:
       [KeyAt{1n, ["RW", "access", "update"]}]
 
+# EVAL's keys: numkeys (its third word) of them after it, read as its key
+# spec reads them (numkeys a long long of at least 1, with that many words
+# after it), flagged RW, access and update; else as Redis's evalGetKeys
+# reads them: numkeys as C's atoi reads it, from 1 to the words after it,
+# with no flags (an atoi of ten digits or more, which C cuts to an int,
+# reads as none here)
+# what the first char of s is to atoi's digits: a digit's value, or none
+def atoi.ch(s: String) -> Maybe<&2, Nat>:
+  match s:
+    case SCon{Chr{+x}, t}:
+      Bool.pick(Maybe<&2, Nat>, U32.is_lt(U32.sub(x, 48), 10), Some{U32.to_nat(U32.sub(x, 48))}, None{})
+    case SNil{}:
+      None{}
+
+# the digits of s read after acc, k more at most (0 for more than that);
+# c is what s's first char is
+def atoi.digits(s: String, k: Nat, +acc: Nat, c: Maybe<&2, Nat>) -> Nat:
+  match s k c:
+    case SCon{h, +t} 1n+j Some{+d}:
+      atoi.digits(t, j, Nat.add(Nat.mul(acc, 10n), d), atoi.ch(t))
+    case SCon{h, t} 0n Some{d}:
+      0n
+    case _ _ None{}:
+      acc
+    case SNil{} _ _:
+      acc
+
+def atoi.from(+s: String) -> Nat:
+  atoi.digits(s, 9n, 0n, atoi.ch(s))
+
+# what atoi makes of the first char of s: a space it skips (0), a plus
+# (1), a minus (2), anything else (3)
+def atoi.kind(s: String) -> Nat:
+  match s:
+    case SCon{Chr{+x}, t}:
+      Bool.pick(Nat, Bool.or(U32.is_eq(x, 32), Bool.and(U32.is_lt(8, x), U32.is_lt(x, 14))), 0n,
+        Bool.pick(Nat, U32.is_eq(x, 43), 1n, Bool.pick(Nat, U32.is_eq(x, 45), 2n, 3n)))
+    case SNil{}:
+      3n
+
+# a positive int as atoi reads it from s, else 0; kind is atoi.kind(s)
+def atoi.pos(s: String, kind: Nat) -> Nat:
+  match s kind:
+    case SCon{h, +t} 0n:
+      atoi.pos(t, atoi.kind(t))
+    case SCon{h, +t} 1n:
+      atoi.from(t)
+    case SCon{h, t} 2n:
+      0n
+    case r _:
+      atoi.from(r)
+
+def eval.keys.in(ok: Bool, +n: Nat, +flags: List<&2, String>) -> Maybe<&2, List<&2, KeyAt>>:
+  match ok:
+    case True{}:
+      Some{keys.range(n, 3n, Nat.add(2n, n), 1n, flags)}
+    case False{}:
+      None{}
+
+def eval.keys.at(+n: Nat, +left: Nat, +flags: List<&2, String>) -> Maybe<&2, List<&2, KeyAt>>:
+  eval.keys.in(Bool.and(Nat.is_lt(0n, n), Nat.is_le(n, left)), n, flags)
+
+def eval.keys.fn(m: Maybe<&2, List<&2, KeyAt>>) -> List<&2, KeyAt>:
+  match m:
+    case Some{ks}:
+      ks
+    case None{}:
+      Nil{}
+
+def eval.keys.or(m: Maybe<&2, List<&2, KeyAt>>, +nk: String, +left: Nat) -> List<&2, KeyAt>:
+  match m:
+    case Some{ks}:
+      ks
+    case None{}:
+      eval.keys.fn(eval.keys.at(atoi.pos(nk, atoi.kind(nk)), left, Nil{}))
+
+def eval.keys.spec(l: R.LL, +left: Nat) -> Maybe<&2, List<&2, KeyAt>>:
+  match l:
+    case R.LL{neg, +hi, +lo}:
+      Bool.pick(Maybe<&2, List<&2, KeyAt>>, Bool.or(neg, Nat.is_lt(0n, hi)), None{}, eval.keys.at(lo, left, ["RW", "access", "update"]))
+    case R.LLBad{}:
+      None{}
+
+def eval.keys(argv: List<&2, String>) -> List<&2, KeyAt>:
+  match argv:
+    case Con{e, Con{s, Con{+nk, rest}}}:
+      +left = List.length(&2, String, rest)
+      eval.keys.or(eval.keys.spec(R.ll.read(nk), left), nk, left)
+    case _:
+      Nil{}
+
 def keys.find(way: KWay, sps: List<&2, KSpec>, +argv: List<&2, String>) -> Maybe<&2, List<&2, KeyAt>>:
   match way:
     case KBySpecs{}:
@@ -937,6 +1136,8 @@ def keys.find(way: KWay, sps: List<&2, KSpec>, +argv: List<&2, String>) -> Maybe
       Some{set.keys(argv)}
     case KByBitfield{}:
       Some{bitfield.keys(argv)}
+    case KByEval{}:
+      Some{eval.keys(argv)}
 
 def keys.has.specs(sps: List<&2, KSpec>) -> Bool:
   match sps:
@@ -951,6 +1152,8 @@ def keys.has(+way: KWay, sps: List<&2, KSpec>) -> Bool:
     case KBySet{}:
       True{}
     case KByBitfield{}:
+      True{}
+    case KByEval{}:
       True{}
     case KBySpecs{}:
       keys.has.specs(sps)

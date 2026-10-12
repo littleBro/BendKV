@@ -54,7 +54,10 @@ COMMANDS = {
     "setrange": [], "getbit": [], "setbit": [], "bitcount": [], "bitpos": [], "touch": [],
     "time": [], "object": ["encoding", "freq", "help", "idletime", "refcount"], "msetnx": [],
     "rename": [], "renamenx": [], "copy": [], "bitop": [], "lcs": [], "bitfield": [],
-    "bitfield_ro": []}
+    "bitfield_ro": [], "hset": [], "hsetnx": [], "hget": [], "hmget": [], "hmset": [],
+    "hdel": [], "hlen": [], "hstrlen": [], "hexists": [], "hkeys": [], "hvals": [],
+    "hgetall": [], "hincrby": [], "hscan": [], "hrandfield": [], "eval": [],
+    "memory": ["help", "usage"]}
 
 # Step 1: redis-server -> facts
 # -----------------------------
@@ -159,6 +162,11 @@ def extract():
 # runs BendKV's copy of that function
 GETKEYS = {"set": "KBySet{}", "bitfield": "KByBitfield{}"}
 
+# Commands whose key spec counts its keys with an argument (keynum):
+# COMMAND GETKEYS runs BendKV's copy of what Redis does for them (the
+# spec, then the command's own function when the spec does not read)
+KEYNUM = {"eval": "KByEval{}"}
+
 def bstr(s):
     if any(ord(ch) > 126 or ord(ch) < 32 for ch in s):
         raise SystemExit("gen_commands.py: a string BendKV would send as other bytes: " + repr(s))
@@ -199,11 +207,14 @@ def kspec(name, ks):
 def desc(info, docs):
     name, flags = info[0], statuses(info[2])
     cats = [c[1:] for c in statuses(info[6])]
-    specs = [kspec(name, ks) for ks in info[8]]
-    varies = any("variable_flags" in statuses(dict(pairs(ks))["flags"]) for ks in info[8])
-    if varies != (name in GETKEYS):
-        raise SystemExit(f"gen_commands.py: how does Redis find the keys of {name}?")
-    way = GETKEYS.get(name, "KBySpecs{}")
+    if name in KEYNUM:
+        specs, way = [], KEYNUM[name]
+    else:
+        specs = [kspec(name, ks) for ks in info[8]]
+        varies = any("variable_flags" in statuses(dict(pairs(ks))["flags"]) for ks in info[8])
+        if varies != (name in GETKEYS):
+            raise SystemExit(f"gen_commands.py: how does Redis find the keys of {name}?")
+        way = GETKEYS.get(name, "KBySpecs{}")
     nokeys = "True{}" if "no_mandatory_keys" in flags else "False{}"
     fields = [reply(x) for x in info[:9]]
     doc = [reply(x) for k, v in pairs(docs) if k != "subcommands" for x in (k, v)]
@@ -263,18 +274,22 @@ SBEGIN, SEND = "# BEGIN gen_commands: stats\n", "# END gen_commands: stats\n"
 # read their ranges, SETRANGE can make a value past 512MB, OBJECT FREQ
 # and IDLETIME depend on the policy of eviction, RENAME and RENAMENX
 # fail when their source key is not there, LCS when its table would
-# pass proto-max-bulk-len, and BITFIELD when its writes reach past 512MB
-# (bitfield.of). (SET's time
+# pass proto-max-bulk-len, BITFIELD when its writes reach past 512MB
+# (bitfield.of), a command of a hash on a key that holds a string
+# (WRONGTYPE), HINCRBY on a value that is not an integer, HSCAN,
+# HRANDFIELD and MEMORY USAGE on options read once the key is found.
+# (SET's time
 # can overflow too, past 9 * 10^18 ms only: SET is left out, so that a
 # batch of SETs needs no look at its replies.)
 RISKY = {"incr", "decr", "incrby", "decrby", "expire", "pexpire", "setex", "psetex", "getex",
          "setrange", "bitcount", "bitpos", "object|freq", "object|idletime", "rename", "renamenx",
-         "lcs", "bitfield"}
+         "lcs", "bitfield", "hset", "hsetnx", "hget", "hmget", "hmset", "hdel", "hlen", "hstrlen",
+         "hexists", "hkeys", "hvals", "hgetall", "hincrby", "hscan", "hrandfield", "memory|usage"}
 
 # the parser's commands with subcommands, by the function that numbers
 # their subcommands
 CONTAINERS = {"client": "client_id", "function": "function_id", "config": "config_id",
-              "command": "command_id", "object": "object_id"}
+              "command": "command_id", "object": "object_id", "memory": "memory_id"}
 
 # the names a numbering def of redis.bend gives its numbers
 def numbering(src, fn):
@@ -351,10 +366,22 @@ def stats_block(src, facts):
     for c in range(ncodes):
         out += ["    case %dn:" % c, "      %d" % WORDS[c]]
     out += ["    case _:", "      %d" % WORDS[0], ""]
-    out += ["# a word's code (0 for one no code has)", "def stat.code.cw(+w: Nat) -> Nat:", "  match w:"]
-    for c in range(ncodes):
-        out += ["    case %dn:" % WORDS[c], "      %dn" % c]
+    # by the word's high six bits, then its low six, so that no match
+    # names a number past 63 (a match on a number unfolds it, and the
+    # proof kernel's elaboration goes as deep as the largest one)
+    his = sorted({WORDS[c] >> 6 for c in range(ncodes)})
+    for hi in his:
+        out += ["def stat.code.lo%d(+lo: Nat) -> Nat:" % hi, "  match lo:"]
+        for c in range(ncodes):
+            if WORDS[c] >> 6 == hi:
+                out += ["    case %dn:" % (WORDS[c] & 63), "      %dn" % c]
+        out += ["    case _:", "      0n", ""]
+    out += ["def stat.code.hl(+hi: Nat, +lo: Nat) -> Nat:", "  match hi:"]
+    for hi in his:
+        out += ["    case %dn:" % hi, "      stat.code.lo%d(lo)" % hi]
     out += ["    case _:", "      0n", ""]
+    out += ["# a word's code (0 for one no code has)", "def stat.code.cw(+w: Nat) -> Nat:",
+            "  stat.code.hl(Nat.div(w, 64n), Nat.mod(w, 64n))", ""]
     out += ["# the high twelve bits of the hash of a call of GET, SET and INCR that",
             "# runs, as the parser writes them"]
     for name in ("get", "set", "incr"):

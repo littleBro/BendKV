@@ -322,6 +322,19 @@ def rnd_bitfield(r, ro):
     return ops
 
 
+# a hash's fields: a few names, so that commands meet the ones set, and
+# random bytes now and then
+HFIELDS = [b"f1", b"f2", b"f3", b"", b"\xd0\xbf\xd0\xbe\xd0\xbb\xd0\xb5", b"\x00\r\n"]
+
+
+def rnd_field(r):
+    return r.choice(HFIELDS) if r.random() < 0.9 else rnd_value(r)
+
+
+def rnd_hpairs(r):
+    return sum(([rnd_field(r), rnd_value(r)] for _ in range(r.randint(1, 3))), [])
+
+
 def rnd_cmd(r):
     k = lambda: r.choice(KEYS)
     ks = lambda: [k() for _ in range(r.randint(1, 4))]
@@ -401,6 +414,19 @@ def rnd_cmd(r):
         (0.04, lambda: [r.choice([b"BITFIELD", b"bitfield"]), k()] + rnd_bitfield(r, False)),
         (0.01, lambda: [r.choice([b"BITFIELD_RO", b"bitfield_ro"]), k()] + rnd_bitfield(r, True)),
         (0.003, lambda: [r.choice([b"BITFIELD", b"BITFIELD_RO"])]),
+        (0.05, lambda: [r.choice([b"HSET", b"hset"]), k()] + rnd_hpairs(r)),
+        (0.01, lambda: [b"HMSET", k()] + rnd_hpairs(r)),
+        (0.02, lambda: [b"HSETNX", k(), rnd_field(r), rnd_value(r)]),
+        (0.03, lambda: [b"HGET", k(), rnd_field(r)]),
+        (0.02, lambda: [b"HMGET", k()] + [rnd_field(r) for _ in range(r.randint(1, 3))]),
+        (0.03, lambda: [b"HDEL", k()] + [rnd_field(r) for _ in range(r.randint(1, 3))]),
+        (0.02, lambda: [r.choice([b"HLEN", b"HKEYS", b"HVALS", b"HGETALL", b"TYPE"]), k()]),
+        (0.01, lambda: [r.choice([b"HSTRLEN", b"HEXISTS"]), k(), rnd_field(r)]),
+        (0.02, lambda: [b"HINCRBY", k(), rnd_field(r), rnd_value(r)]),
+        (0.01, lambda: [b"HSCAN", k(), b"0", b"COUNT", b"1000"] + ([b"MATCH", rnd_pattern(r)] if r.random() < 0.5 else [])),
+        (0.01, lambda: [b"HRANDFIELD", k()] + r.choice([[], [b"2"], [b"-3"], [b"5", b"WITHVALUES"], [b"x"], [b"0"]])),
+        (0.005, lambda: [r.choice([b"HSET", b"HGET", b"HDEL", b"HINCRBY", b"HSCAN", b"HMGET", b"HSETNX"])] +
+                        [k() for _ in range(r.choice([0, 1]))]),
     ]
     c *= sum(p for p, f in table)
     acc = 0.0
@@ -411,13 +437,30 @@ def rnd_cmd(r):
     return [b"PING"]
 
 
+def pairs_of(xs):
+    return sorted(zip(xs[0::2], xs[1::2]))
+
+
 def normalize(cmd, rep):
     # KEYS answers in an unspecified order, and so does SCAN, whose COUNT
     # of 1000 here is past every key: the whole database in one call
-    if cmd[0].upper() == b"KEYS" and rep[0] == b"*":
+    name = cmd[0].upper()
+    if name == b"KEYS" and rep[0] == b"*":
         return (rep[0], sorted(rep[1]))
-    if cmd[0].upper() == b"SCAN" and rep[0] == b"*":
+    if name == b"SCAN" and rep[0] == b"*":
         return (rep[0], [rep[1][0], (rep[1][1][0], sorted(rep[1][1][1]))])
+    # a hash of long values is a hashtable, in the order of each server's
+    # table (tests/hash_test.py checks the order of a listpack's); HSCAN's
+    # COUNT of 1000 is past every field
+    if name in (b"HKEYS", b"HVALS") and rep[0] == b"*":
+        return (rep[0], sorted(rep[1]))
+    if name == b"HGETALL" and rep[0] == b"*":
+        return (rep[0], pairs_of(rep[1]))
+    if name == b"HSCAN" and rep[0] == b"*":
+        return (rep[0], [rep[1][0], (rep[1][1][0], pairs_of(rep[1][1][1]))])
+    # HRANDFIELD picks at random: how many, or nil or not, is compared
+    if name == b"HRANDFIELD" and rep[0] in (b"*", b"$"):
+        return (rep[0], len(rep[1]) if rep[0] == b"*" else rep[1] is not None)
     # RANDOMKEY picks a key of its own choice: nil or not is compared
     if cmd[0].upper() == b"RANDOMKEY" and rep[0] == b"$":
         return (rep[0], rep[1] is not None)

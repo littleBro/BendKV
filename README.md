@@ -11,12 +11,12 @@ BendKV speaks RESP2, so `redis-cli`, `redis-benchmark` and `memtier_benchmark` w
 with it. Under pipelined load it serves GET at 1.6×, SET at 1.8× and INCR at 1.45× the
 throughput of Redis 7.0.15 on the same machine, with half its memory for small values.
 
-> **Status: research prototype.** BendKV implements a subset of Redis (strings and their
-> times to live, the keyspace, several databases, connection commands, an append-only
-> file). The goal now is a drop-in
+> **Status: research prototype.** BendKV implements a subset of Redis (strings, hashes
+> and their times to live, the keyspace, several databases, connection commands, an
+> append-only file). The goal now is a drop-in
 > replacement for a single Redis node, measured by Redis's own test suite: of the 1,673
-> tests Redis 7.0.15 passes against a server it did not start, BendKV passes 327, and 303
-> of the 386 in what it implements ([docs/COMPATIBILITY.md](docs/COMPATIBILITY.md)). Do
+> tests Redis 7.0.15 passes against a server it did not start, BendKV passes 391, and 365
+> of the 458 in what it implements ([docs/COMPATIBILITY.md](docs/COMPATIBILITY.md)). Do
 > not use it for data you cannot lose.
 
 BendKV is an independent project. It is not affiliated with Higher Order Company or the
@@ -50,7 +50,7 @@ is the trie's size is not proved yet.
 |---|---:|---|
 | Map | 11 | the trie is a finite map from keys to a value and a time: after any sequence of writes (a value with a time, a value with its time kept, a time alone, a deletion), every key holds what was last written to it, with no stale, lost or foreign entries; a read sees a key only until its time |
 | Keys | 2 | key comparison is exactly string equality, down to the bits of `U32` |
-| Commands | 24 | no command changes a key it does not write, neither its value nor its time (`frame`); reads keep the database; a key whose time has passed is there for no command, and the sweep of expired keys deletes no key that is there; GET, DEL, APPEND, SETRANGE, SETNX, INCR, GETDEL, PERSIST, PTTL, SET with KEEPTTL, RENAME, MSETNX and BITOP behave as specified, on keys of the types they take (SET, SETNX, the times and the key commands take any), a key they add counted; a pipelined batch runs exactly as its commands in order; the cache hints before a batch change nothing |
+| Commands | 24 | no command changes a key it does not write, neither its value nor its time (`frame`); reads keep the database (the commands of hashes are reads and updates of their key, so these laws and those below hold of them); a key whose time has passed is there for no command, and the sweep of expired keys deletes no key that is there; GET, DEL, APPEND, SETRANGE, SETNX, INCR, GETDEL, PERSIST, PTTL, SET with KEEPTTL, RENAME, MSETNX and BITOP behave as specified, on keys of the types they take (SET, SETNX, the times and the key commands take any), a key they add counted; a pipelined batch runs exactly as its commands in order; the cache hints before a batch change nothing |
 | Commuting | 5 | commands on different keys commute: replies and key contents are the same in either order, and adjacent independent commands in a batch can be swapped, when neither writes a key the other's writes depend on (RENAME moves a value from one key to another, MSETNX sets its keys only when none is there, BITOP sets its destination from its sources) |
 | Persistence | 8 | logging changes no reply; the file reads back as written, times included; after any history, each batch at its own time, on any of the databases, the server restores exactly the databases it held; a file cut by a crash at any byte restores the databases after some prefix of its acts, never a partial one |
 | Databases | 6 | SELECT changes no database and focuses the one it names; SWAPDB puts each of two databases in the other's place; FLUSHALL empties them all; MOVE takes a key's entry, its value and its time, out of the selected database and sets it in the other; COPY sets a key's entry at another key, in the selected database or another, when that key is not there or REPLACE is given |
@@ -102,6 +102,21 @@ translation stays in the trusted base.
   SAT or FAIL, in C's wrapping arithmetic as Redis's; logged as the SETRANGE of the bytes
   its writes reach. A field across the 2^32-th bit, for which Redis grows a value past
   512MB, is refused with SETRANGE's error.
+- **Hashes:** HSET, HMSET, HSETNX, HGET, HMGET, HDEL, HLEN, HSTRLEN, HEXISTS, HKEYS,
+  HVALS, HGETALL, HINCRBY, HSCAN (MATCH, COUNT) and HRANDFIELD (a count, repeating when
+  negative, WITHVALUES; picked with the server's random numbers), their arguments and
+  errors read as Redis reads them. A hash keeps its fields in the order they came while it
+  is small (at most 512 fields and values of at most 64 bytes, Redis's listpack defaults)
+  and in a trie of its own past that, for good, as Redis turns a listpack into a
+  hashtable: a small hash scans whole with cursor 0, a large one bucket by bucket. OBJECT
+  ENCODING answers `listpack` or `hashtable` as Redis would under the current
+  parameters; every command of strings answers WRONGTYPE for a hash, and every command of
+  hashes for a string. MEMORY USAGE (SAMPLES) estimates a key's bytes. A hash write is
+  logged as the HSET of the pairs it set or the HDEL of the fields it took (HINCRBY as the
+  HSET of its sum); a hash made where a key whose time had passed still lay is logged as
+  one EVAL of a fixed script that deletes the key and sets the pairs, which Redis runs as
+  it loads the file and BendKV reads back (Redis itself logs a MULTI with a DEL and the
+  HSET, two entries a crash could part). BendKV runs no other Lua.
 - **Times to live:** EXPIRE, PEXPIRE, EXPIREAT and PEXPIREAT (with NX, XX, GT, LT), TTL,
   PTTL, EXPIRETIME, PEXPIRETIME, PERSIST; SET with NX, XX, GET, EX, PX, EXAT, PXAT and
   KEEPTTL; SETEX, PSETEX, GETEX (EX, PX, EXAT, PXAT, PERSIST) and GETDEL. Times are read
@@ -160,7 +175,8 @@ translation stays in the trusted base.
   with its DB and REPLACE spelled out (`redis-check-aof` accepts it, and Redis loads it;
   BendKV loads Redis's, COPY as the client sent it), fsync `always`, `everysec` or `no`.
 
-Not yet: other data types, MULTI/EXEC, pub/sub, timing of commands
+Not yet: lists, sets, sorted sets, streams and the other types, Lua scripts, MULTI/EXEC,
+pub/sub, timing of commands
 (usec in INFO commandstats, latencystats), CONFIG REWRITE (it answers as Redis does without a configuration file),
 RDB files. Integers, and times in ms, are limited to 14 digits.
 
@@ -236,7 +252,9 @@ too), SCAN and RANDOMKEY (their arguments, full iterations with COUNT, MATCH and
 finding Redis's keys, each once, an iteration while other clients write, RANDOMKEY's
 picks), numbers at their edges in every argument that takes one (past a long long, at
 2^48, in forms Redis refuses), BITFIELD's fields at random (each reply and each value
-after it compared), robustness and concurrency checks,
+after it compared), hashes (each command at its edges, past a listpack's limits, on keys
+whose time has passed, and at random, the fields of a hashtable compared as sets),
+robustness and concurrency checks,
 restarts from the append-only file (every database read back, including after a
 truncated tail), disk failures
 under the file, injected with an `LD_PRELOAD` shim, and the files both ways: BendKV
@@ -261,7 +279,7 @@ src/        the server
   startup.bend  the command line and the configuration file        tested
   server.bend   TCP, connections, the database actor, the log      tested
 proof/      LAWS.bend (the laws), PROOF.bend (their proofs), SPEC.bend (the commands on the trie alone)
-tests/      start, differential, expiry, protocol, session, CONFIG, INFO, COMMAND, SCAN, BITFIELD, robustness, concurrency, AOF tests
+tests/      start, differential, expiry, protocol, session, CONFIG, INFO, COMMAND, SCAN, BITFIELD, hash, robustness, concurrency, AOF tests
 bench/      in-process benchmarks of the map, the core and channels
 tools/      measurement scripts, the runner of Redis's test suite, and the generators of
             the trie, of the parameter table and of the command table, with the facts

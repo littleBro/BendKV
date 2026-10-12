@@ -63,13 +63,43 @@ type BfOp is Data:
   BfSet{sign: Bool, bits: Nat, off: Nat, v: W64, ow: Nat}
   BfIncr{sign: Bool, bits: Nat, off: Nat, v: W64, ow: Nat}
 
+# A read of a hash (PHash, below): a field's value (HGET), several
+# (HMGET), how many fields it has (HLEN), a value's length (HSTRLEN),
+# whether a field is there (HEXISTS), its fields (HKEYS), its values
+# (HVALS), both (HGETALL), or a scan of it (HSCAN, its arguments after the
+# key as they came: the cursor is read as the command parses, the options
+# only once the key is found to hold a hash, as Redis reads them)
+type HRead is Data:
+  HRGet{f: String}
+  HRMGet{fs: List<&2, String>}
+  HRLen{}
+  HRStrlen{f: String}
+  HRExists{f: String}
+  HRKeys{}
+  HRVals{}
+  HRAll{}
+  HRScan{args: List<&2, String>}
+
+# A write of a hash (UHash, below): HSET of pairs (HMSET when mset, which
+# answers OK), HSETNX of a pair, HDEL of fields, HINCRBY of a field, or a
+# new hash of pairs where the key was, whatever it held (HWNew: the
+# script the append-only file logs for a hash made where a key whose time
+# had passed still lay, aof.bend)
+type HWrite is Data:
+  HWSet{ps: List<&2, KV.HPair>, mset: Bool}
+  HWSetNx{f: String, v: String}
+  HWDel{fs: List<&2, String>}
+  HWIncr{f: String, by: Int}
+  HWNew{ps: List<&2, KV.HPair>}
+
 # A read of one key whose reply depends on what the key holds at now
 # alone (its value and the time it expires at, when it is there): its
 # type (TYPE), its length (STRLEN), its time to live in s or ms (TTL,
 # PTTL) or the time it expires at (EXPIRETIME, PEXPIRETIME), a range of
 # its bytes (GETRANGE, SUBSTR), a bit (GETBIT), the bits set in a range
-# (BITCOUNT), the first bit of a value in one (BITPOS), or fields of its
-# bits (BITFIELD_RO, and BITFIELD whose operations are GETs alone). The
+# (BITCOUNT), the first bit of a value in one (BITPOS), fields of its
+# bits (BITFIELD_RO, and BITFIELD whose operations are GETs alone), or a
+# read of a hash (PHash). The
 # laws see them as one command, Peek (LAWS.bend: disturbs), so one more
 # needs no more proof. A command travels in registers as wide as its
 # widest form, so each has one field of a word at most: GETRANGE,
@@ -87,6 +117,7 @@ type PeekOp is Data:
   PCount{args: List<&2, String>}
   PPos{args: List<&2, String>}
   PBitfield{ops: List<&2, BfOp>}
+  PHash{op: HRead}
 
 # A time a command names, in ms (a time in s, times 1000; Times, below):
 # a short one (TmN, below 10^14) or any other long long (TmB: its sign and
@@ -123,7 +154,8 @@ type ExpIf is Data:
 # 1970), PERSIST, INCRBY (UIncr: as the append-only file sees it,
 # aof.bend; the server runs INCRBY as its own command, IncrBy, the same
 # way, faster), SETRANGE (s at offset off), SETBIT (the bit at offset
-# off, to on) and BITFIELD with a write among its operations. The laws
+# off, to on), BITFIELD with a write among its operations, and a write
+# of a hash (UHash). The laws
 # see them as one command, Upd, so one more needs no more proof. UGet holds an update, so the compiler makes an update a
 # node of its own: a command travels in registers as wide as its widest
 # form, and an update's options are many.
@@ -140,6 +172,7 @@ type UpdOp is Data:
   URange{off: Nat, s: String}
   USetBit{off: Nat, on: Bool}
   UBitfield{ops: List<&2, BfOp>}
+  UHash{op: HWrite}
 
 # The commands of a connection and of the server: session.bend runs
 # them, with the state of the connection and of the server. None of them
@@ -152,7 +185,9 @@ type UpdOp is Data:
 # to the selected database or another one (an act of several databases,
 # below), its arguments kept as they came and read as it runs; LCS reads
 # two keys of the selected database and proto-max-bulk-len, which bounds
-# its table, its arguments read as it runs. A command whose
+# its table, its arguments read as it runs; HRANDFIELD reads a hash and
+# the server's random numbers, MEMORY USAGE the size of a key's entry,
+# their arguments read as they run. A command whose
 # reply is fixed (a HELP) is SReply; one the parser found wrong (an
 # unknown subcommand, a wrong number of arguments) is SBad, answered as
 # Redis answers those, before it asks a client to authenticate.
@@ -180,6 +215,8 @@ type SessOp is Data:
   SObject{sub: Nat, key: String}
   SCopy{args: List<&2, String>}
   SLcs{args: List<&2, String>}
+  SHRandField{key: String, args: List<&2, String>}
+  SMemUsage{key: String, args: List<&2, String>}
   SReply{r: Reply}
   SBad{r: Reply}
 
@@ -875,6 +912,46 @@ def parse_object(id: Nat, sub: String, args: List<&2, String>) -> SessOp:
       object_key(5n, args, "object|idletime")
     case _:
       e_unknown_sub(sub, "OBJECT")
+
+# MEMORY: USAGE of a key (its options read as it runs) and HELP
+def memory_id(+n: String, len: Nat) -> Nat:
+  match len:
+    case 4n:
+      Bool.pick(Nat, String.eq(n, "HELP"), 1n, 0n)
+    case 5n:
+      Bool.pick(Nat, String.eq(n, "USAGE"), 2n, 0n)
+    case _:
+      0n
+
+def memory_help() -> List<&2, String>:
+  ["DOCTOR",
+   "    Return memory problems reports.",
+   "MALLOC-STATS",
+   "    Return internal statistics report from the memory allocator.",
+   "PURGE",
+   "    Attempt to purge dirty pages for reclamation by the allocator.",
+   "STATS",
+   "    Return information about the memory usage of the server.",
+   "USAGE <key> [SAMPLES <count>]",
+   "    Return memory in bytes used by <key> and its value. Nested values are",
+   "    sampled up to <count> times (default: 5, 0 means sample all)."]
+
+def parse_memory(id: Nat, sub: String, args: List<&2, String>) -> SessOp:
+  match id:
+    case 1n:  # HELP
+      match args:
+        case Nil{}:
+          help("MEMORY", memory_help())
+        case _:
+          s_arity("memory|help")
+    case 2n:  # USAGE
+      match args:
+        case Con{k, rest}:
+          SMemUsage{k, rest}
+        case Nil{}:
+          s_arity("memory|usage")
+    case _:
+      e_unknown_sub(sub, "MEMORY")
 
 # CONFIG: GET and SET of the server's parameters (config.bend), RESETSTAT,
 # and REWRITE, which fails as Redis fails without a config file
@@ -2095,6 +2172,75 @@ def parse_bitpos(+k: String, +b: String, rest: List<&2, String>) -> Cmd:
   Bool.pick(Cmd, Bool.or(String.eq(b, "0"), String.eq(b, "1")), Peek{k, PPos{b <> rest}},
     Bool.pick(Cmd, ll.is(b), Bad{RError{"ERR The bit argument must be 1 or 0."}}, Bad{e_int()}))
 
+# Hashes: HSET's (and HMSET's) arguments after the key are field-value
+# pairs, a field without its value a wrong number of arguments (Redis
+# checks it in the command, so the call counts as failed); HINCRBY's
+# increment and HSCAN's cursor are read as the command parses, before the
+# key is looked for, as Redis reads them
+def hpairs.cons(p: KV.HPair, m: Maybe<&2, List<&2, KV.HPair>>) -> Maybe<&2, List<&2, KV.HPair>>:
+  match m:
+    case Some{ps}:
+      Some{Con{p, ps}}
+    case None{}:
+      None{}
+
+def hpairs(xs: List<&2, String>) -> Maybe<&2, List<&2, KV.HPair>>:
+  match xs:
+    case Nil{}:
+      Some{Nil{}}
+    case Con{f, Con{v, rest}}:
+      hpairs.cons(KV.HP{f, v}, hpairs(rest))
+    case Con{f, Nil{}}:
+      None{}
+
+def parse_hset.of(+k: String, m: Maybe<&2, List<&2, KV.HPair>>, mset: Bool, name: String) -> Cmd:
+  match m:
+    case Some{ps}:
+      Upd{k, UHash{HWSet{ps, mset}}}
+    case None{}:
+      e_arity(name)
+
+def parse_hset(args: List<&2, String>, mset: Bool, name: String) -> Cmd:
+  match args:
+    case Con{+k, Con{f, Con{v, rest}}}:
+      parse_hset.of(k, hpairs(f <> v <> rest), mset, name)
+    case _:
+      e_arity(name)
+
+def parse_hincrby(+k: String, +f: String, by: Maybe<&2, Int>) -> Cmd:
+  match by:
+    case Some{n}:
+      Upd{k, UHash{HWIncr{f, n}}}
+    case None{}:
+      Bad{e_int()}
+
+def parse_hscan(+k: String, +c: String, rest: List<&2, String>) -> Cmd:
+  Bool.pick(Cmd, Maybe.is_some(&2, Nat, scan.cursor(c)), Peek{k, PHash{HRScan{c <> rest}}}, Bad{RError{"ERR invalid cursor"}})
+
+# EVAL: BendKV runs no Lua scripts but the one its append-only file
+# writes (a new hash where a key whose time had passed still lay,
+# aof.bend): EVAL <the script> 1 key HSET field value [field value ...],
+# which deletes the key and runs the HSET, a thousand arguments a call,
+# and returns 0, as Redis runs it
+def hnew.script() -> String:
+  "redis.call('del',KEYS[1]) local n=#ARGV for i=2,n,1000 do redis.call(ARGV[1],KEYS[1],unpack(ARGV,i,math.min(i+999,n))) end return 0"
+
+def parse_eval.of(ok: Bool, +k: String, m: Maybe<&2, List<&2, KV.HPair>>) -> Cmd:
+  match ok m:
+    case True{} Some{Con{p, ps}}:
+      Upd{k, UHash{HWNew{p <> ps}}}
+    case _ _:
+      Bad{RError{"ERR BendKV runs no Lua scripts"}}
+
+def parse_eval(args: List<&2, String>) -> Cmd:
+  match args:
+    case Con{+s, Con{+nk, Con{+k, Con{+w, rest}}}}:
+      parse_eval.of(Bool.and(String.eq(s, hnew.script()), Bool.and(String.eq(nk, "1"), String.eq(w, "HSET"))), k, hpairs(rest))
+    case Con{s, Con{nk, rest}}:
+      Bad{RError{"ERR BendKV runs no Lua scripts"}}
+    case _:
+      e_arity("eval")
+
 # A command's name, in upper case, picks how its arguments parse. The
 # name's length narrows it down to a few names, which cmd_id compares with
 # it whole: String.eq with a literal is one memcmp, cheap enough that
@@ -2125,7 +2271,12 @@ def cmd_id(+n: String, len: Nat) -> Nat:
       Bool.pick(Nat, String.eq(n, "MOVE"), 112n,
       Bool.pick(Nat, String.eq(n, "PTTL"), 33n,
       Bool.pick(Nat, String.eq(n, "TIME"), 113n,
-      Bool.pick(Nat, String.eq(n, "COPY"), 115n, 0n))))))))))))))))
+      Bool.pick(Nat, String.eq(n, "COPY"), 115n,
+      Bool.pick(Nat, String.eq(n, "HSET"), 51n,
+      Bool.pick(Nat, String.eq(n, "HGET"), 53n,
+      Bool.pick(Nat, String.eq(n, "HDEL"), 56n,
+      Bool.pick(Nat, String.eq(n, "HLEN"), 57n,
+      Bool.pick(Nat, String.eq(n, "EVAL"), 65n, 0n)))))))))))))))))))))
     case 5n:
       Bool.pick(Nat, String.eq(n, "SETNX"), 5n,
       Bool.pick(Nat, String.eq(n, "HELLO"), 101n,
@@ -2133,7 +2284,12 @@ def cmd_id(+n: String, len: Nat) -> Nat:
       Bool.pick(Nat, String.eq(n, "SETEX"), 23n,
       Bool.pick(Nat, String.eq(n, "GETEX"), 26n,
       Bool.pick(Nat, String.eq(n, "TOUCH"), 44n,
-      Bool.pick(Nat, String.eq(n, "BITOP"), 48n, 0n)))))))
+      Bool.pick(Nat, String.eq(n, "BITOP"), 48n,
+      Bool.pick(Nat, String.eq(n, "HMGET"), 54n,
+      Bool.pick(Nat, String.eq(n, "HMSET"), 55n,
+      Bool.pick(Nat, String.eq(n, "HKEYS"), 60n,
+      Bool.pick(Nat, String.eq(n, "HVALS"), 61n,
+      Bool.pick(Nat, String.eq(n, "HSCAN"), 64n, 0n))))))))))))
     case 6n:
       Bool.pick(Nat, String.eq(n, "GETSET"), 6n,
       Bool.pick(Nat, String.eq(n, "UNLINK"), 8n,
@@ -2156,12 +2312,18 @@ def cmd_id(+n: String, len: Nat) -> Nat:
       Bool.pick(Nat, String.eq(n, "BITPOS"), 43n,
       Bool.pick(Nat, String.eq(n, "OBJECT"), 114n,
       Bool.pick(Nat, String.eq(n, "MSETNX"), 45n,
-      Bool.pick(Nat, String.eq(n, "RENAME"), 46n, 0n))))))))))))))))))))))
+      Bool.pick(Nat, String.eq(n, "RENAME"), 46n,
+      Bool.pick(Nat, String.eq(n, "HSETNX"), 52n,
+      Bool.pick(Nat, String.eq(n, "MEMORY"), 118n, 0n))))))))))))))))))))))))
     case 7n:
       Bool.pick(Nat, String.eq(n, "FLUSHDB"), 20n,
       Bool.pick(Nat, String.eq(n, "COMMAND"), 109n,
       Bool.pick(Nat, String.eq(n, "PEXPIRE"), 29n,
-      Bool.pick(Nat, String.eq(n, "PERSIST"), 36n, 0n))))
+      Bool.pick(Nat, String.eq(n, "PERSIST"), 36n,
+      Bool.pick(Nat, String.eq(n, "HSTRLEN"), 58n,
+      Bool.pick(Nat, String.eq(n, "HEXISTS"), 59n,
+      Bool.pick(Nat, String.eq(n, "HGETALL"), 62n,
+      Bool.pick(Nat, String.eq(n, "HINCRBY"), 63n, 0n))))))))
     case 8n:
       Bool.pick(Nat, String.eq(n, "FLUSHALL"), 19n,
       Bool.pick(Nat, String.eq(n, "FUNCTION"), 106n,
@@ -2175,7 +2337,8 @@ def cmd_id(+n: String, len: Nat) -> Nat:
       Bool.pick(Nat, String.eq(n, "RANDOMKEY"), 110n,
       Bool.pick(Nat, String.eq(n, "PEXPIREAT"), 31n, 0n))
     case 10n:
-      Bool.pick(Nat, String.eq(n, "EXPIRETIME"), 34n, 0n)
+      Bool.pick(Nat, String.eq(n, "EXPIRETIME"), 34n,
+      Bool.pick(Nat, String.eq(n, "HRANDFIELD"), 117n, 0n))
     case 11n:
       Bool.pick(Nat, String.eq(n, "PEXPIRETIME"), 35n,
       Bool.pick(Nat, String.eq(n, "BITFIELD_RO"), 50n, 0n))
@@ -2473,6 +2636,84 @@ def parse_id(id: Nat, name: String, args: List<&2, String>) -> Cmd:
           parse_bitfield(k, rest, True{})
         case _:
           e_arity("bitfield_ro")
+    case 51n:  # HSET
+      parse_hset(args, False{}, "hset")
+    case 52n:  # HSETNX
+      match args:
+        case Con{k, Con{f, Con{v, Nil{}}}}:
+          Upd{k, UHash{HWSetNx{f, v}}}
+        case _:
+          e_arity("hsetnx")
+    case 53n:  # HGET
+      match args:
+        case Con{k, Con{f, Nil{}}}:
+          Peek{k, PHash{HRGet{f}}}
+        case _:
+          e_arity("hget")
+    case 54n:  # HMGET
+      match args:
+        case Con{k, Con{f, fs}}:
+          Peek{k, PHash{HRMGet{f <> fs}}}
+        case _:
+          e_arity("hmget")
+    case 55n:  # HMSET
+      parse_hset(args, True{}, "hmset")
+    case 56n:  # HDEL
+      match args:
+        case Con{k, Con{f, fs}}:
+          Upd{k, UHash{HWDel{f <> fs}}}
+        case _:
+          e_arity("hdel")
+    case 57n:  # HLEN
+      match args:
+        case Con{k, Nil{}}:
+          Peek{k, PHash{HRLen{}}}
+        case _:
+          e_arity("hlen")
+    case 58n:  # HSTRLEN
+      match args:
+        case Con{k, Con{f, Nil{}}}:
+          Peek{k, PHash{HRStrlen{f}}}
+        case _:
+          e_arity("hstrlen")
+    case 59n:  # HEXISTS
+      match args:
+        case Con{k, Con{f, Nil{}}}:
+          Peek{k, PHash{HRExists{f}}}
+        case _:
+          e_arity("hexists")
+    case 60n:  # HKEYS
+      match args:
+        case Con{k, Nil{}}:
+          Peek{k, PHash{HRKeys{}}}
+        case _:
+          e_arity("hkeys")
+    case 61n:  # HVALS
+      match args:
+        case Con{k, Nil{}}:
+          Peek{k, PHash{HRVals{}}}
+        case _:
+          e_arity("hvals")
+    case 62n:  # HGETALL
+      match args:
+        case Con{k, Nil{}}:
+          Peek{k, PHash{HRAll{}}}
+        case _:
+          e_arity("hgetall")
+    case 63n:  # HINCRBY
+      match args:
+        case Con{k, Con{f, Con{n, Nil{}}}}:
+          parse_hincrby(k, f, int_read(n))
+        case _:
+          e_arity("hincrby")
+    case 64n:  # HSCAN
+      match args:
+        case Con{k, Con{c, rest}}:
+          parse_hscan(k, c, rest)
+        case _:
+          e_arity("hscan")
+    case 65n:  # EVAL
+      parse_eval(args)
     case _:
       e_unknown(name, args)
 
@@ -2574,6 +2815,19 @@ def parse_sess(id: Nat, name: String, args: List<&2, String>) -> SessOp:
           SLcs{a <> b <> rest}
         case _:
           s_arity("lcs")
+    case 117n:  # HRANDFIELD
+      match args:
+        case Con{k, rest}:
+          SHRandField{k, rest}
+        case _:
+          s_arity("hrandfield")
+    case 118n:  # MEMORY
+      match args:
+        case Nil{}:
+          s_arity("memory")
+        case Con{+sub, rest}:
+          +up = String.to_upper(sub)
+          parse_memory(memory_id(up, String.length(up)), sub, rest)
     case _:
       SBad{RError{no_newlines("ERR unknown command '" ++ String.take(name, 128n) ++ "', with args beginning with: " ++ unknown.args(args, ""))}}
 
@@ -2720,97 +2974,79 @@ def stat.top(+id: Nat) -> Nat:
       49n
     case 50n:
       50n
-    case 100n:
+    case 51n:
       51n
-    case 101n:
+    case 52n:
       52n
-    case 102n:
+    case 53n:
       53n
-    case 103n:
+    case 54n:
       54n
-    case 104n:
+    case 55n:
       55n
-    case 105n:
+    case 56n:
       56n
-    case 106n:
+    case 57n:
       57n
-    case 107n:
+    case 58n:
       58n
-    case 108n:
+    case 59n:
       59n
-    case 109n:
+    case 60n:
       60n
-    case 110n:
+    case 61n:
       61n
-    case 111n:
+    case 62n:
       62n
-    case 112n:
+    case 63n:
       63n
-    case 113n:
+    case 64n:
       64n
-    case 114n:
+    case 65n:
       65n
-    case 115n:
+    case 100n:
       66n
-    case 116n:
+    case 101n:
       67n
+    case 102n:
+      68n
+    case 103n:
+      69n
+    case 104n:
+      70n
+    case 105n:
+      71n
+    case 106n:
+      72n
+    case 107n:
+      73n
+    case 108n:
+      74n
+    case 109n:
+      75n
+    case 110n:
+      76n
+    case 111n:
+      77n
+    case 112n:
+      78n
+    case 113n:
+      79n
+    case 114n:
+      80n
+    case 115n:
+      81n
+    case 116n:
+      82n
+    case 117n:
+      83n
+    case 118n:
+      84n
     case _:
       0n
 
 # a subcommand of CLIENT's key, by its number; 0 for none
 def stat.sub.client(+sub: Nat) -> Nat:
-  match sub:
-    case 1n:
-      68n
-    case 2n:
-      69n
-    case 3n:
-      70n
-    case 4n:
-      71n
-    case 5n:
-      72n
-    case 6n:
-      73n
-    case 7n:
-      74n
-    case 8n:
-      75n
-    case 9n:
-      76n
-    case 10n:
-      77n
-    case _:
-      0n
-
-# a subcommand of FUNCTION's key, by its number; 0 for none
-def stat.sub.function(+sub: Nat) -> Nat:
-  match sub:
-    case 1n:
-      78n
-    case 2n:
-      79n
-    case _:
-      0n
-
-# a subcommand of CONFIG's key, by its number; 0 for none
-def stat.sub.config(+sub: Nat) -> Nat:
-  match sub:
-    case 1n:
-      80n
-    case 2n:
-      81n
-    case 3n:
-      82n
-    case 4n:
-      83n
-    case 5n:
-      84n
-    case _:
-      0n
-
-# a subcommand of COMMAND's key, by its number; 0 for none
-def stat.sub.command(+sub: Nat) -> Nat:
   match sub:
     case 1n:
       85n
@@ -2826,6 +3062,58 @@ def stat.sub.command(+sub: Nat) -> Nat:
       90n
     case 7n:
       91n
+    case 8n:
+      92n
+    case 9n:
+      93n
+    case 10n:
+      94n
+    case _:
+      0n
+
+# a subcommand of FUNCTION's key, by its number; 0 for none
+def stat.sub.function(+sub: Nat) -> Nat:
+  match sub:
+    case 1n:
+      95n
+    case 2n:
+      96n
+    case _:
+      0n
+
+# a subcommand of CONFIG's key, by its number; 0 for none
+def stat.sub.config(+sub: Nat) -> Nat:
+  match sub:
+    case 1n:
+      97n
+    case 2n:
+      98n
+    case 3n:
+      99n
+    case 4n:
+      100n
+    case 5n:
+      101n
+    case _:
+      0n
+
+# a subcommand of COMMAND's key, by its number; 0 for none
+def stat.sub.command(+sub: Nat) -> Nat:
+  match sub:
+    case 1n:
+      102n
+    case 2n:
+      103n
+    case 3n:
+      104n
+    case 4n:
+      105n
+    case 5n:
+      106n
+    case 6n:
+      107n
+    case 7n:
+      108n
     case _:
       0n
 
@@ -2833,15 +3121,25 @@ def stat.sub.command(+sub: Nat) -> Nat:
 def stat.sub.object(+sub: Nat) -> Nat:
   match sub:
     case 1n:
-      92n
+      109n
     case 2n:
-      93n
+      110n
     case 3n:
-      94n
+      111n
     case 4n:
-      95n
+      112n
     case 5n:
-      96n
+      113n
+    case _:
+      0n
+
+# a subcommand of MEMORY's key, by its number; 0 for none
+def stat.sub.memory(+sub: Nat) -> Nat:
+  match sub:
+    case 1n:
+      114n
+    case 2n:
+      115n
     case _:
       0n
 
@@ -2949,97 +3247,135 @@ def stat.name(+key: Nat) -> String:
     case 50n:
       "bitfield_ro"
     case 51n:
-      "select"
+      "hset"
     case 52n:
-      "hello"
+      "hsetnx"
     case 53n:
-      "auth"
+      "hget"
     case 54n:
-      "quit"
+      "hmget"
     case 55n:
-      "reset"
+      "hmset"
     case 56n:
-      "client"
+      "hdel"
     case 57n:
-      "function"
+      "hlen"
     case 58n:
-      "config"
+      "hstrlen"
     case 59n:
-      "info"
+      "hexists"
     case 60n:
-      "command"
+      "hkeys"
     case 61n:
-      "randomkey"
+      "hvals"
     case 62n:
-      "swapdb"
+      "hgetall"
     case 63n:
-      "move"
+      "hincrby"
     case 64n:
-      "time"
+      "hscan"
     case 65n:
-      "object"
+      "eval"
     case 66n:
-      "copy"
+      "select"
     case 67n:
-      "lcs"
+      "hello"
     case 68n:
-      "client|id"
+      "auth"
     case 69n:
-      "client|help"
+      "quit"
     case 70n:
-      "client|reply"
+      "reset"
     case 71n:
-      "client|getname"
+      "client"
     case 72n:
-      "client|setname"
+      "function"
     case 73n:
-      "client|caching"
+      "config"
     case 74n:
-      "client|unblock"
+      "info"
     case 75n:
-      "client|getredir"
+      "command"
     case 76n:
-      "client|no-evict"
+      "randomkey"
     case 77n:
-      "client|trackinginfo"
+      "swapdb"
     case 78n:
-      "function|flush"
+      "move"
     case 79n:
-      "function|help"
+      "time"
     case 80n:
-      "config|get"
+      "object"
     case 81n:
-      "config|set"
+      "copy"
     case 82n:
-      "config|resetstat"
+      "lcs"
     case 83n:
-      "config|rewrite"
+      "hrandfield"
     case 84n:
-      "config|help"
+      "memory"
     case 85n:
-      "command|info"
+      "client|id"
     case 86n:
-      "command|docs"
+      "client|help"
     case 87n:
-      "command|list"
+      "client|reply"
     case 88n:
-      "command|help"
+      "client|getname"
     case 89n:
-      "command|count"
+      "client|setname"
     case 90n:
-      "command|getkeys"
+      "client|caching"
     case 91n:
-      "command|getkeysandflags"
+      "client|unblock"
     case 92n:
-      "object|help"
+      "client|getredir"
     case 93n:
-      "object|freq"
+      "client|no-evict"
     case 94n:
-      "object|encoding"
+      "client|trackinginfo"
     case 95n:
-      "object|refcount"
+      "function|flush"
     case 96n:
+      "function|help"
+    case 97n:
+      "config|get"
+    case 98n:
+      "config|set"
+    case 99n:
+      "config|resetstat"
+    case 100n:
+      "config|rewrite"
+    case 101n:
+      "config|help"
+    case 102n:
+      "command|info"
+    case 103n:
+      "command|docs"
+    case 104n:
+      "command|list"
+    case 105n:
+      "command|help"
+    case 106n:
+      "command|count"
+    case 107n:
+      "command|getkeys"
+    case 108n:
+      "command|getkeysandflags"
+    case 109n:
+      "object|help"
+    case 110n:
+      "object|freq"
+    case 111n:
+      "object|encoding"
+    case 112n:
+      "object|refcount"
+    case 113n:
       "object|idletime"
+    case 114n:
+      "memory|help"
+    case 115n:
+      "memory|usage"
     case _:
       ""
 
@@ -3148,97 +3484,135 @@ def stat.arity(+key: Nat) -> Nat:
     case 50n:
       5n
     case 51n:
-      4n
-    case 52n:
-      3n
-    case 53n:
-      5n
-    case 54n:
-      3n
-    case 55n:
-      2n
-    case 56n:
-      5n
-    case 57n:
-      5n
-    case 58n:
-      5n
-    case 59n:
-      3n
-    case 60n:
-      3n
-    case 61n:
-      2n
-    case 62n:
-      6n
-    case 63n:
-      6n
-    case 64n:
-      2n
-    case 65n:
-      5n
-    case 66n:
-      7n
-    case 67n:
-      7n
-    case 68n:
-      4n
-    case 69n:
-      4n
-    case 70n:
-      6n
-    case 71n:
-      4n
-    case 72n:
-      6n
-    case 73n:
-      6n
-    case 74n:
-      7n
-    case 75n:
-      4n
-    case 76n:
-      6n
-    case 77n:
-      4n
-    case 78n:
-      5n
-    case 79n:
-      4n
-    case 80n:
-      7n
-    case 81n:
       9n
+    case 52n:
+      8n
+    case 53n:
+      6n
+    case 54n:
+      7n
+    case 55n:
+      9n
+    case 56n:
+      7n
+    case 57n:
+      4n
+    case 58n:
+      6n
+    case 59n:
+      6n
+    case 60n:
+      4n
+    case 61n:
+      4n
+    case 62n:
+      4n
+    case 63n:
+      8n
+    case 64n:
+      7n
+    case 65n:
+      7n
+    case 66n:
+      4n
+    case 67n:
+      3n
+    case 68n:
+      5n
+    case 69n:
+      3n
+    case 70n:
+      2n
+    case 71n:
+      5n
+    case 72n:
+      5n
+    case 73n:
+      5n
+    case 74n:
+      3n
+    case 75n:
+      3n
+    case 76n:
+      2n
+    case 77n:
+      6n
+    case 78n:
+      6n
+    case 79n:
+      2n
+    case 80n:
+      5n
+    case 81n:
+      7n
     case 82n:
-      4n
+      7n
     case 83n:
-      4n
+      5n
     case 84n:
-      4n
+      5n
     case 85n:
-      5n
+      4n
     case 86n:
-      5n
+      4n
     case 87n:
-      5n
+      6n
     case 88n:
       4n
     case 89n:
-      4n
+      6n
     case 90n:
-      9n
+      6n
     case 91n:
-      9n
+      7n
     case 92n:
       4n
     case 93n:
       6n
     case 94n:
-      6n
+      4n
     case 95n:
-      6n
+      5n
     case 96n:
+      4n
+    case 97n:
+      7n
+    case 98n:
+      9n
+    case 99n:
+      4n
+    case 100n:
+      4n
+    case 101n:
+      4n
+    case 102n:
+      5n
+    case 103n:
+      5n
+    case 104n:
+      5n
+    case 105n:
+      4n
+    case 106n:
+      4n
+    case 107n:
+      9n
+    case 108n:
+      9n
+    case 109n:
+      4n
+    case 110n:
       6n
+    case 111n:
+      6n
+    case 112n:
+      6n
+    case 113n:
+      6n
+    case 114n:
+      4n
+    case 115n:
+      7n
     case _:
       1n
 
@@ -3275,11 +3649,43 @@ def stat.risky(+key: Nat) -> Bool:
       True{}
     case 49n:
       True{}
-    case 67n:
+    case 51n:
       True{}
-    case 93n:
+    case 52n:
       True{}
-    case 96n:
+    case 53n:
+      True{}
+    case 54n:
+      True{}
+    case 55n:
+      True{}
+    case 56n:
+      True{}
+    case 57n:
+      True{}
+    case 58n:
+      True{}
+    case 59n:
+      True{}
+    case 60n:
+      True{}
+    case 61n:
+      True{}
+    case 62n:
+      True{}
+    case 63n:
+      True{}
+    case 64n:
+      True{}
+    case 82n:
+      True{}
+    case 83n:
+      True{}
+    case 110n:
+      True{}
+    case 113n:
+      True{}
+    case 115n:
       True{}
     case _:
       False{}
@@ -4063,790 +4469,1328 @@ def stat.cw(+code: Nat) -> U32:
       1708
     case 387n:
       1713
+    case 388n:
+      1714
+    case 389n:
+      1716
+    case 390n:
+      1720
+    case 391n:
+      1731
+    case 392n:
+      1733
+    case 393n:
+      1734
+    case 394n:
+      1737
+    case 395n:
+      1738
+    case 396n:
+      1740
+    case 397n:
+      1745
+    case 398n:
+      1746
+    case 399n:
+      1748
+    case 400n:
+      1752
+    case 401n:
+      1761
+    case 402n:
+      1762
+    case 403n:
+      1764
+    case 404n:
+      1768
+    case 405n:
+      1776
+    case 406n:
+      1799
+    case 407n:
+      1803
+    case 408n:
+      1805
+    case 409n:
+      1806
+    case 410n:
+      1811
+    case 411n:
+      1813
+    case 412n:
+      1814
+    case 413n:
+      1817
+    case 414n:
+      1818
+    case 415n:
+      1820
+    case 416n:
+      1827
+    case 417n:
+      1829
+    case 418n:
+      1830
+    case 419n:
+      1833
+    case 420n:
+      1834
+    case 421n:
+      1836
+    case 422n:
+      1841
+    case 423n:
+      1842
+    case 424n:
+      1844
+    case 425n:
+      1848
+    case 426n:
+      1859
+    case 427n:
+      1861
+    case 428n:
+      1862
+    case 429n:
+      1865
+    case 430n:
+      1866
+    case 431n:
+      1868
+    case 432n:
+      1873
+    case 433n:
+      1874
+    case 434n:
+      1876
+    case 435n:
+      1880
+    case 436n:
+      1889
+    case 437n:
+      1890
+    case 438n:
+      1892
+    case 439n:
+      1896
+    case 440n:
+      1904
+    case 441n:
+      1923
+    case 442n:
+      1925
+    case 443n:
+      1926
+    case 444n:
+      1929
+    case 445n:
+      1930
+    case 446n:
+      1932
+    case 447n:
+      1937
+    case 448n:
+      1938
+    case 449n:
+      1940
+    case 450n:
+      1944
+    case 451n:
+      1953
+    case 452n:
+      1954
+    case 453n:
+      1956
+    case 454n:
+      1960
+    case 455n:
+      1968
+    case 456n:
+      1985
+    case 457n:
+      1986
+    case 458n:
+      1988
+    case 459n:
+      1992
+    case 460n:
+      2000
+    case 461n:
+      2016
+    case 462n:
+      2079
+    case 463n:
+      2095
     case _:
       63
 
-# a word's code (0 for one no code has)
-def stat.code.cw(+w: Nat) -> Nat:
-  match w:
+def stat.code.lo0(+lo: Nat) -> Nat:
+  match lo:
     case 63n:
       0n
-    case 95n:
-      1n
-    case 111n:
-      2n
-    case 119n:
-      3n
-    case 123n:
-      4n
-    case 125n:
-      5n
-    case 126n:
-      6n
-    case 159n:
-      7n
-    case 175n:
-      8n
-    case 183n:
-      9n
-    case 187n:
-      10n
-    case 189n:
-      11n
-    case 190n:
-      12n
-    case 207n:
-      13n
-    case 215n:
-      14n
-    case 219n:
-      15n
-    case 221n:
-      16n
-    case 222n:
-      17n
-    case 231n:
-      18n
-    case 235n:
-      19n
-    case 237n:
-      20n
-    case 238n:
-      21n
-    case 243n:
-      22n
-    case 245n:
-      23n
-    case 246n:
-      24n
-    case 249n:
-      25n
-    case 250n:
-      26n
-    case 252n:
-      27n
-    case 287n:
-      28n
-    case 303n:
-      29n
-    case 311n:
-      30n
-    case 315n:
-      31n
-    case 317n:
-      32n
-    case 318n:
-      33n
-    case 335n:
-      34n
-    case 343n:
-      35n
-    case 347n:
-      36n
-    case 349n:
-      37n
-    case 350n:
-      38n
-    case 359n:
-      39n
-    case 363n:
-      40n
-    case 365n:
-      41n
-    case 366n:
-      42n
-    case 371n:
-      43n
-    case 373n:
-      44n
-    case 374n:
-      45n
-    case 377n:
-      46n
-    case 378n:
-      47n
-    case 380n:
-      48n
-    case 399n:
-      49n
-    case 407n:
-      50n
-    case 411n:
-      51n
-    case 413n:
-      52n
-    case 414n:
-      53n
-    case 423n:
-      54n
-    case 427n:
-      55n
-    case 429n:
-      56n
-    case 430n:
-      57n
-    case 435n:
-      58n
-    case 437n:
-      59n
-    case 438n:
-      60n
-    case 441n:
-      61n
-    case 442n:
-      62n
-    case 444n:
-      63n
-    case 455n:
-      64n
-    case 459n:
-      65n
-    case 461n:
-      66n
-    case 462n:
-      67n
-    case 467n:
-      68n
-    case 469n:
-      69n
-    case 470n:
-      70n
-    case 473n:
-      71n
-    case 474n:
-      72n
-    case 476n:
-      73n
-    case 483n:
-      74n
-    case 485n:
-      75n
-    case 486n:
-      76n
-    case 489n:
-      77n
-    case 490n:
-      78n
-    case 492n:
-      79n
-    case 497n:
-      80n
-    case 498n:
-      81n
-    case 500n:
-      82n
-    case 504n:
-      83n
-    case 543n:
-      84n
-    case 559n:
-      85n
-    case 567n:
-      86n
-    case 571n:
-      87n
-    case 573n:
-      88n
-    case 574n:
-      89n
-    case 591n:
-      90n
-    case 599n:
-      91n
-    case 603n:
-      92n
-    case 605n:
-      93n
-    case 606n:
-      94n
-    case 615n:
-      95n
-    case 619n:
-      96n
-    case 621n:
-      97n
-    case 622n:
-      98n
-    case 627n:
-      99n
-    case 629n:
-      100n
-    case 630n:
-      101n
-    case 633n:
-      102n
-    case 634n:
-      103n
-    case 636n:
-      104n
-    case 655n:
-      105n
-    case 663n:
-      106n
-    case 667n:
-      107n
-    case 669n:
-      108n
-    case 670n:
-      109n
-    case 679n:
-      110n
-    case 683n:
-      111n
-    case 685n:
-      112n
-    case 686n:
-      113n
-    case 691n:
-      114n
-    case 693n:
-      115n
-    case 694n:
-      116n
-    case 697n:
-      117n
-    case 698n:
-      118n
-    case 700n:
-      119n
-    case 711n:
-      120n
-    case 715n:
-      121n
-    case 717n:
-      122n
-    case 718n:
-      123n
-    case 723n:
-      124n
-    case 725n:
-      125n
-    case 726n:
-      126n
-    case 729n:
-      127n
-    case 730n:
-      128n
-    case 732n:
-      129n
-    case 739n:
-      130n
-    case 741n:
-      131n
-    case 742n:
-      132n
-    case 745n:
-      133n
-    case 746n:
-      134n
-    case 748n:
-      135n
-    case 753n:
-      136n
-    case 754n:
-      137n
-    case 756n:
-      138n
-    case 760n:
-      139n
-    case 783n:
-      140n
-    case 791n:
-      141n
-    case 795n:
-      142n
-    case 797n:
-      143n
-    case 798n:
-      144n
-    case 807n:
-      145n
-    case 811n:
-      146n
-    case 813n:
-      147n
-    case 814n:
-      148n
-    case 819n:
-      149n
-    case 821n:
-      150n
-    case 822n:
-      151n
-    case 825n:
-      152n
-    case 826n:
-      153n
-    case 828n:
-      154n
-    case 839n:
-      155n
-    case 843n:
-      156n
-    case 845n:
-      157n
-    case 846n:
-      158n
-    case 851n:
-      159n
-    case 853n:
-      160n
-    case 854n:
-      161n
-    case 857n:
-      162n
-    case 858n:
-      163n
-    case 860n:
-      164n
-    case 867n:
-      165n
-    case 869n:
-      166n
-    case 870n:
-      167n
-    case 873n:
-      168n
-    case 874n:
-      169n
-    case 876n:
-      170n
-    case 881n:
-      171n
-    case 882n:
-      172n
-    case 884n:
-      173n
-    case 888n:
-      174n
-    case 903n:
-      175n
-    case 907n:
-      176n
-    case 909n:
-      177n
-    case 910n:
-      178n
-    case 915n:
-      179n
-    case 917n:
-      180n
-    case 918n:
-      181n
-    case 921n:
-      182n
-    case 922n:
-      183n
-    case 924n:
-      184n
-    case 931n:
-      185n
-    case 933n:
-      186n
-    case 934n:
-      187n
-    case 937n:
-      188n
-    case 938n:
-      189n
-    case 940n:
-      190n
-    case 945n:
-      191n
-    case 946n:
-      192n
-    case 948n:
-      193n
-    case 952n:
-      194n
-    case 963n:
-      195n
-    case 965n:
-      196n
-    case 966n:
-      197n
-    case 969n:
-      198n
-    case 970n:
-      199n
-    case 972n:
-      200n
-    case 977n:
-      201n
-    case 978n:
-      202n
-    case 980n:
-      203n
-    case 984n:
-      204n
-    case 993n:
-      205n
-    case 994n:
-      206n
-    case 996n:
-      207n
-    case 1000n:
-      208n
-    case 1008n:
-      209n
-    case 1055n:
-      210n
-    case 1071n:
-      211n
-    case 1079n:
-      212n
-    case 1083n:
-      213n
-    case 1085n:
-      214n
-    case 1086n:
-      215n
-    case 1103n:
-      216n
-    case 1111n:
-      217n
-    case 1115n:
-      218n
-    case 1117n:
-      219n
-    case 1118n:
-      220n
-    case 1127n:
-      221n
-    case 1131n:
-      222n
-    case 1133n:
-      223n
-    case 1134n:
-      224n
-    case 1139n:
-      225n
-    case 1141n:
-      226n
-    case 1142n:
-      227n
-    case 1145n:
-      228n
-    case 1146n:
-      229n
-    case 1148n:
-      230n
-    case 1167n:
-      231n
-    case 1175n:
-      232n
-    case 1179n:
-      233n
-    case 1181n:
-      234n
-    case 1182n:
-      235n
-    case 1191n:
-      236n
-    case 1195n:
-      237n
-    case 1197n:
-      238n
-    case 1198n:
-      239n
-    case 1203n:
-      240n
-    case 1205n:
-      241n
-    case 1206n:
-      242n
-    case 1209n:
-      243n
-    case 1210n:
-      244n
-    case 1212n:
-      245n
-    case 1223n:
-      246n
-    case 1227n:
-      247n
-    case 1229n:
-      248n
-    case 1230n:
-      249n
-    case 1235n:
-      250n
-    case 1237n:
-      251n
-    case 1238n:
-      252n
-    case 1241n:
-      253n
-    case 1242n:
-      254n
-    case 1244n:
-      255n
-    case 1251n:
-      256n
-    case 1253n:
-      257n
-    case 1254n:
-      258n
-    case 1257n:
-      259n
-    case 1258n:
-      260n
-    case 1260n:
-      261n
-    case 1265n:
-      262n
-    case 1266n:
-      263n
-    case 1268n:
-      264n
-    case 1272n:
-      265n
-    case 1295n:
-      266n
-    case 1303n:
-      267n
-    case 1307n:
-      268n
-    case 1309n:
-      269n
-    case 1310n:
-      270n
-    case 1319n:
-      271n
-    case 1323n:
-      272n
-    case 1325n:
-      273n
-    case 1326n:
-      274n
-    case 1331n:
-      275n
-    case 1333n:
-      276n
-    case 1334n:
-      277n
-    case 1337n:
-      278n
-    case 1338n:
-      279n
-    case 1340n:
-      280n
-    case 1351n:
-      281n
-    case 1355n:
-      282n
-    case 1357n:
-      283n
-    case 1358n:
-      284n
-    case 1363n:
-      285n
-    case 1365n:
-      286n
-    case 1366n:
-      287n
-    case 1369n:
-      288n
-    case 1370n:
-      289n
-    case 1372n:
-      290n
-    case 1379n:
-      291n
-    case 1381n:
-      292n
-    case 1382n:
-      293n
-    case 1385n:
-      294n
-    case 1386n:
-      295n
-    case 1388n:
-      296n
-    case 1393n:
-      297n
-    case 1394n:
-      298n
-    case 1396n:
-      299n
-    case 1400n:
-      300n
-    case 1415n:
-      301n
-    case 1419n:
-      302n
-    case 1421n:
-      303n
-    case 1422n:
-      304n
-    case 1427n:
-      305n
-    case 1429n:
-      306n
-    case 1430n:
-      307n
-    case 1433n:
-      308n
-    case 1434n:
-      309n
-    case 1436n:
-      310n
-    case 1443n:
-      311n
-    case 1445n:
-      312n
-    case 1446n:
-      313n
-    case 1449n:
-      314n
-    case 1450n:
-      315n
-    case 1452n:
-      316n
-    case 1457n:
-      317n
-    case 1458n:
-      318n
-    case 1460n:
-      319n
-    case 1464n:
-      320n
-    case 1475n:
-      321n
-    case 1477n:
-      322n
-    case 1478n:
-      323n
-    case 1481n:
-      324n
-    case 1482n:
-      325n
-    case 1484n:
-      326n
-    case 1489n:
-      327n
-    case 1490n:
-      328n
-    case 1492n:
-      329n
-    case 1496n:
-      330n
-    case 1505n:
-      331n
-    case 1506n:
-      332n
-    case 1508n:
-      333n
-    case 1512n:
-      334n
-    case 1520n:
-      335n
-    case 1551n:
-      336n
-    case 1559n:
-      337n
-    case 1563n:
-      338n
-    case 1565n:
-      339n
-    case 1566n:
-      340n
-    case 1575n:
-      341n
-    case 1579n:
-      342n
-    case 1581n:
-      343n
-    case 1582n:
-      344n
-    case 1587n:
-      345n
-    case 1589n:
-      346n
-    case 1590n:
-      347n
-    case 1593n:
-      348n
-    case 1594n:
-      349n
-    case 1596n:
-      350n
-    case 1607n:
-      351n
-    case 1611n:
-      352n
-    case 1613n:
-      353n
-    case 1614n:
-      354n
-    case 1619n:
-      355n
-    case 1621n:
-      356n
-    case 1622n:
-      357n
-    case 1625n:
-      358n
-    case 1626n:
-      359n
-    case 1628n:
-      360n
-    case 1635n:
-      361n
-    case 1637n:
-      362n
-    case 1638n:
-      363n
-    case 1641n:
-      364n
-    case 1642n:
-      365n
-    case 1644n:
-      366n
-    case 1649n:
-      367n
-    case 1650n:
-      368n
-    case 1652n:
-      369n
-    case 1656n:
-      370n
-    case 1671n:
-      371n
-    case 1675n:
-      372n
-    case 1677n:
-      373n
-    case 1678n:
-      374n
-    case 1683n:
-      375n
-    case 1685n:
-      376n
-    case 1686n:
-      377n
-    case 1689n:
-      378n
-    case 1690n:
-      379n
-    case 1692n:
-      380n
-    case 1699n:
-      381n
-    case 1701n:
-      382n
-    case 1702n:
-      383n
-    case 1705n:
-      384n
-    case 1706n:
-      385n
-    case 1708n:
-      386n
-    case 1713n:
-      387n
     case _:
       0n
+
+def stat.code.lo1(+lo: Nat) -> Nat:
+  match lo:
+    case 31n:
+      1n
+    case 47n:
+      2n
+    case 55n:
+      3n
+    case 59n:
+      4n
+    case 61n:
+      5n
+    case 62n:
+      6n
+    case _:
+      0n
+
+def stat.code.lo2(+lo: Nat) -> Nat:
+  match lo:
+    case 31n:
+      7n
+    case 47n:
+      8n
+    case 55n:
+      9n
+    case 59n:
+      10n
+    case 61n:
+      11n
+    case 62n:
+      12n
+    case _:
+      0n
+
+def stat.code.lo3(+lo: Nat) -> Nat:
+  match lo:
+    case 15n:
+      13n
+    case 23n:
+      14n
+    case 27n:
+      15n
+    case 29n:
+      16n
+    case 30n:
+      17n
+    case 39n:
+      18n
+    case 43n:
+      19n
+    case 45n:
+      20n
+    case 46n:
+      21n
+    case 51n:
+      22n
+    case 53n:
+      23n
+    case 54n:
+      24n
+    case 57n:
+      25n
+    case 58n:
+      26n
+    case 60n:
+      27n
+    case _:
+      0n
+
+def stat.code.lo4(+lo: Nat) -> Nat:
+  match lo:
+    case 31n:
+      28n
+    case 47n:
+      29n
+    case 55n:
+      30n
+    case 59n:
+      31n
+    case 61n:
+      32n
+    case 62n:
+      33n
+    case _:
+      0n
+
+def stat.code.lo5(+lo: Nat) -> Nat:
+  match lo:
+    case 15n:
+      34n
+    case 23n:
+      35n
+    case 27n:
+      36n
+    case 29n:
+      37n
+    case 30n:
+      38n
+    case 39n:
+      39n
+    case 43n:
+      40n
+    case 45n:
+      41n
+    case 46n:
+      42n
+    case 51n:
+      43n
+    case 53n:
+      44n
+    case 54n:
+      45n
+    case 57n:
+      46n
+    case 58n:
+      47n
+    case 60n:
+      48n
+    case _:
+      0n
+
+def stat.code.lo6(+lo: Nat) -> Nat:
+  match lo:
+    case 15n:
+      49n
+    case 23n:
+      50n
+    case 27n:
+      51n
+    case 29n:
+      52n
+    case 30n:
+      53n
+    case 39n:
+      54n
+    case 43n:
+      55n
+    case 45n:
+      56n
+    case 46n:
+      57n
+    case 51n:
+      58n
+    case 53n:
+      59n
+    case 54n:
+      60n
+    case 57n:
+      61n
+    case 58n:
+      62n
+    case 60n:
+      63n
+    case _:
+      0n
+
+def stat.code.lo7(+lo: Nat) -> Nat:
+  match lo:
+    case 7n:
+      64n
+    case 11n:
+      65n
+    case 13n:
+      66n
+    case 14n:
+      67n
+    case 19n:
+      68n
+    case 21n:
+      69n
+    case 22n:
+      70n
+    case 25n:
+      71n
+    case 26n:
+      72n
+    case 28n:
+      73n
+    case 35n:
+      74n
+    case 37n:
+      75n
+    case 38n:
+      76n
+    case 41n:
+      77n
+    case 42n:
+      78n
+    case 44n:
+      79n
+    case 49n:
+      80n
+    case 50n:
+      81n
+    case 52n:
+      82n
+    case 56n:
+      83n
+    case _:
+      0n
+
+def stat.code.lo8(+lo: Nat) -> Nat:
+  match lo:
+    case 31n:
+      84n
+    case 47n:
+      85n
+    case 55n:
+      86n
+    case 59n:
+      87n
+    case 61n:
+      88n
+    case 62n:
+      89n
+    case _:
+      0n
+
+def stat.code.lo9(+lo: Nat) -> Nat:
+  match lo:
+    case 15n:
+      90n
+    case 23n:
+      91n
+    case 27n:
+      92n
+    case 29n:
+      93n
+    case 30n:
+      94n
+    case 39n:
+      95n
+    case 43n:
+      96n
+    case 45n:
+      97n
+    case 46n:
+      98n
+    case 51n:
+      99n
+    case 53n:
+      100n
+    case 54n:
+      101n
+    case 57n:
+      102n
+    case 58n:
+      103n
+    case 60n:
+      104n
+    case _:
+      0n
+
+def stat.code.lo10(+lo: Nat) -> Nat:
+  match lo:
+    case 15n:
+      105n
+    case 23n:
+      106n
+    case 27n:
+      107n
+    case 29n:
+      108n
+    case 30n:
+      109n
+    case 39n:
+      110n
+    case 43n:
+      111n
+    case 45n:
+      112n
+    case 46n:
+      113n
+    case 51n:
+      114n
+    case 53n:
+      115n
+    case 54n:
+      116n
+    case 57n:
+      117n
+    case 58n:
+      118n
+    case 60n:
+      119n
+    case _:
+      0n
+
+def stat.code.lo11(+lo: Nat) -> Nat:
+  match lo:
+    case 7n:
+      120n
+    case 11n:
+      121n
+    case 13n:
+      122n
+    case 14n:
+      123n
+    case 19n:
+      124n
+    case 21n:
+      125n
+    case 22n:
+      126n
+    case 25n:
+      127n
+    case 26n:
+      128n
+    case 28n:
+      129n
+    case 35n:
+      130n
+    case 37n:
+      131n
+    case 38n:
+      132n
+    case 41n:
+      133n
+    case 42n:
+      134n
+    case 44n:
+      135n
+    case 49n:
+      136n
+    case 50n:
+      137n
+    case 52n:
+      138n
+    case 56n:
+      139n
+    case _:
+      0n
+
+def stat.code.lo12(+lo: Nat) -> Nat:
+  match lo:
+    case 15n:
+      140n
+    case 23n:
+      141n
+    case 27n:
+      142n
+    case 29n:
+      143n
+    case 30n:
+      144n
+    case 39n:
+      145n
+    case 43n:
+      146n
+    case 45n:
+      147n
+    case 46n:
+      148n
+    case 51n:
+      149n
+    case 53n:
+      150n
+    case 54n:
+      151n
+    case 57n:
+      152n
+    case 58n:
+      153n
+    case 60n:
+      154n
+    case _:
+      0n
+
+def stat.code.lo13(+lo: Nat) -> Nat:
+  match lo:
+    case 7n:
+      155n
+    case 11n:
+      156n
+    case 13n:
+      157n
+    case 14n:
+      158n
+    case 19n:
+      159n
+    case 21n:
+      160n
+    case 22n:
+      161n
+    case 25n:
+      162n
+    case 26n:
+      163n
+    case 28n:
+      164n
+    case 35n:
+      165n
+    case 37n:
+      166n
+    case 38n:
+      167n
+    case 41n:
+      168n
+    case 42n:
+      169n
+    case 44n:
+      170n
+    case 49n:
+      171n
+    case 50n:
+      172n
+    case 52n:
+      173n
+    case 56n:
+      174n
+    case _:
+      0n
+
+def stat.code.lo14(+lo: Nat) -> Nat:
+  match lo:
+    case 7n:
+      175n
+    case 11n:
+      176n
+    case 13n:
+      177n
+    case 14n:
+      178n
+    case 19n:
+      179n
+    case 21n:
+      180n
+    case 22n:
+      181n
+    case 25n:
+      182n
+    case 26n:
+      183n
+    case 28n:
+      184n
+    case 35n:
+      185n
+    case 37n:
+      186n
+    case 38n:
+      187n
+    case 41n:
+      188n
+    case 42n:
+      189n
+    case 44n:
+      190n
+    case 49n:
+      191n
+    case 50n:
+      192n
+    case 52n:
+      193n
+    case 56n:
+      194n
+    case _:
+      0n
+
+def stat.code.lo15(+lo: Nat) -> Nat:
+  match lo:
+    case 3n:
+      195n
+    case 5n:
+      196n
+    case 6n:
+      197n
+    case 9n:
+      198n
+    case 10n:
+      199n
+    case 12n:
+      200n
+    case 17n:
+      201n
+    case 18n:
+      202n
+    case 20n:
+      203n
+    case 24n:
+      204n
+    case 33n:
+      205n
+    case 34n:
+      206n
+    case 36n:
+      207n
+    case 40n:
+      208n
+    case 48n:
+      209n
+    case _:
+      0n
+
+def stat.code.lo16(+lo: Nat) -> Nat:
+  match lo:
+    case 31n:
+      210n
+    case 47n:
+      211n
+    case 55n:
+      212n
+    case 59n:
+      213n
+    case 61n:
+      214n
+    case 62n:
+      215n
+    case _:
+      0n
+
+def stat.code.lo17(+lo: Nat) -> Nat:
+  match lo:
+    case 15n:
+      216n
+    case 23n:
+      217n
+    case 27n:
+      218n
+    case 29n:
+      219n
+    case 30n:
+      220n
+    case 39n:
+      221n
+    case 43n:
+      222n
+    case 45n:
+      223n
+    case 46n:
+      224n
+    case 51n:
+      225n
+    case 53n:
+      226n
+    case 54n:
+      227n
+    case 57n:
+      228n
+    case 58n:
+      229n
+    case 60n:
+      230n
+    case _:
+      0n
+
+def stat.code.lo18(+lo: Nat) -> Nat:
+  match lo:
+    case 15n:
+      231n
+    case 23n:
+      232n
+    case 27n:
+      233n
+    case 29n:
+      234n
+    case 30n:
+      235n
+    case 39n:
+      236n
+    case 43n:
+      237n
+    case 45n:
+      238n
+    case 46n:
+      239n
+    case 51n:
+      240n
+    case 53n:
+      241n
+    case 54n:
+      242n
+    case 57n:
+      243n
+    case 58n:
+      244n
+    case 60n:
+      245n
+    case _:
+      0n
+
+def stat.code.lo19(+lo: Nat) -> Nat:
+  match lo:
+    case 7n:
+      246n
+    case 11n:
+      247n
+    case 13n:
+      248n
+    case 14n:
+      249n
+    case 19n:
+      250n
+    case 21n:
+      251n
+    case 22n:
+      252n
+    case 25n:
+      253n
+    case 26n:
+      254n
+    case 28n:
+      255n
+    case 35n:
+      256n
+    case 37n:
+      257n
+    case 38n:
+      258n
+    case 41n:
+      259n
+    case 42n:
+      260n
+    case 44n:
+      261n
+    case 49n:
+      262n
+    case 50n:
+      263n
+    case 52n:
+      264n
+    case 56n:
+      265n
+    case _:
+      0n
+
+def stat.code.lo20(+lo: Nat) -> Nat:
+  match lo:
+    case 15n:
+      266n
+    case 23n:
+      267n
+    case 27n:
+      268n
+    case 29n:
+      269n
+    case 30n:
+      270n
+    case 39n:
+      271n
+    case 43n:
+      272n
+    case 45n:
+      273n
+    case 46n:
+      274n
+    case 51n:
+      275n
+    case 53n:
+      276n
+    case 54n:
+      277n
+    case 57n:
+      278n
+    case 58n:
+      279n
+    case 60n:
+      280n
+    case _:
+      0n
+
+def stat.code.lo21(+lo: Nat) -> Nat:
+  match lo:
+    case 7n:
+      281n
+    case 11n:
+      282n
+    case 13n:
+      283n
+    case 14n:
+      284n
+    case 19n:
+      285n
+    case 21n:
+      286n
+    case 22n:
+      287n
+    case 25n:
+      288n
+    case 26n:
+      289n
+    case 28n:
+      290n
+    case 35n:
+      291n
+    case 37n:
+      292n
+    case 38n:
+      293n
+    case 41n:
+      294n
+    case 42n:
+      295n
+    case 44n:
+      296n
+    case 49n:
+      297n
+    case 50n:
+      298n
+    case 52n:
+      299n
+    case 56n:
+      300n
+    case _:
+      0n
+
+def stat.code.lo22(+lo: Nat) -> Nat:
+  match lo:
+    case 7n:
+      301n
+    case 11n:
+      302n
+    case 13n:
+      303n
+    case 14n:
+      304n
+    case 19n:
+      305n
+    case 21n:
+      306n
+    case 22n:
+      307n
+    case 25n:
+      308n
+    case 26n:
+      309n
+    case 28n:
+      310n
+    case 35n:
+      311n
+    case 37n:
+      312n
+    case 38n:
+      313n
+    case 41n:
+      314n
+    case 42n:
+      315n
+    case 44n:
+      316n
+    case 49n:
+      317n
+    case 50n:
+      318n
+    case 52n:
+      319n
+    case 56n:
+      320n
+    case _:
+      0n
+
+def stat.code.lo23(+lo: Nat) -> Nat:
+  match lo:
+    case 3n:
+      321n
+    case 5n:
+      322n
+    case 6n:
+      323n
+    case 9n:
+      324n
+    case 10n:
+      325n
+    case 12n:
+      326n
+    case 17n:
+      327n
+    case 18n:
+      328n
+    case 20n:
+      329n
+    case 24n:
+      330n
+    case 33n:
+      331n
+    case 34n:
+      332n
+    case 36n:
+      333n
+    case 40n:
+      334n
+    case 48n:
+      335n
+    case _:
+      0n
+
+def stat.code.lo24(+lo: Nat) -> Nat:
+  match lo:
+    case 15n:
+      336n
+    case 23n:
+      337n
+    case 27n:
+      338n
+    case 29n:
+      339n
+    case 30n:
+      340n
+    case 39n:
+      341n
+    case 43n:
+      342n
+    case 45n:
+      343n
+    case 46n:
+      344n
+    case 51n:
+      345n
+    case 53n:
+      346n
+    case 54n:
+      347n
+    case 57n:
+      348n
+    case 58n:
+      349n
+    case 60n:
+      350n
+    case _:
+      0n
+
+def stat.code.lo25(+lo: Nat) -> Nat:
+  match lo:
+    case 7n:
+      351n
+    case 11n:
+      352n
+    case 13n:
+      353n
+    case 14n:
+      354n
+    case 19n:
+      355n
+    case 21n:
+      356n
+    case 22n:
+      357n
+    case 25n:
+      358n
+    case 26n:
+      359n
+    case 28n:
+      360n
+    case 35n:
+      361n
+    case 37n:
+      362n
+    case 38n:
+      363n
+    case 41n:
+      364n
+    case 42n:
+      365n
+    case 44n:
+      366n
+    case 49n:
+      367n
+    case 50n:
+      368n
+    case 52n:
+      369n
+    case 56n:
+      370n
+    case _:
+      0n
+
+def stat.code.lo26(+lo: Nat) -> Nat:
+  match lo:
+    case 7n:
+      371n
+    case 11n:
+      372n
+    case 13n:
+      373n
+    case 14n:
+      374n
+    case 19n:
+      375n
+    case 21n:
+      376n
+    case 22n:
+      377n
+    case 25n:
+      378n
+    case 26n:
+      379n
+    case 28n:
+      380n
+    case 35n:
+      381n
+    case 37n:
+      382n
+    case 38n:
+      383n
+    case 41n:
+      384n
+    case 42n:
+      385n
+    case 44n:
+      386n
+    case 49n:
+      387n
+    case 50n:
+      388n
+    case 52n:
+      389n
+    case 56n:
+      390n
+    case _:
+      0n
+
+def stat.code.lo27(+lo: Nat) -> Nat:
+  match lo:
+    case 3n:
+      391n
+    case 5n:
+      392n
+    case 6n:
+      393n
+    case 9n:
+      394n
+    case 10n:
+      395n
+    case 12n:
+      396n
+    case 17n:
+      397n
+    case 18n:
+      398n
+    case 20n:
+      399n
+    case 24n:
+      400n
+    case 33n:
+      401n
+    case 34n:
+      402n
+    case 36n:
+      403n
+    case 40n:
+      404n
+    case 48n:
+      405n
+    case _:
+      0n
+
+def stat.code.lo28(+lo: Nat) -> Nat:
+  match lo:
+    case 7n:
+      406n
+    case 11n:
+      407n
+    case 13n:
+      408n
+    case 14n:
+      409n
+    case 19n:
+      410n
+    case 21n:
+      411n
+    case 22n:
+      412n
+    case 25n:
+      413n
+    case 26n:
+      414n
+    case 28n:
+      415n
+    case 35n:
+      416n
+    case 37n:
+      417n
+    case 38n:
+      418n
+    case 41n:
+      419n
+    case 42n:
+      420n
+    case 44n:
+      421n
+    case 49n:
+      422n
+    case 50n:
+      423n
+    case 52n:
+      424n
+    case 56n:
+      425n
+    case _:
+      0n
+
+def stat.code.lo29(+lo: Nat) -> Nat:
+  match lo:
+    case 3n:
+      426n
+    case 5n:
+      427n
+    case 6n:
+      428n
+    case 9n:
+      429n
+    case 10n:
+      430n
+    case 12n:
+      431n
+    case 17n:
+      432n
+    case 18n:
+      433n
+    case 20n:
+      434n
+    case 24n:
+      435n
+    case 33n:
+      436n
+    case 34n:
+      437n
+    case 36n:
+      438n
+    case 40n:
+      439n
+    case 48n:
+      440n
+    case _:
+      0n
+
+def stat.code.lo30(+lo: Nat) -> Nat:
+  match lo:
+    case 3n:
+      441n
+    case 5n:
+      442n
+    case 6n:
+      443n
+    case 9n:
+      444n
+    case 10n:
+      445n
+    case 12n:
+      446n
+    case 17n:
+      447n
+    case 18n:
+      448n
+    case 20n:
+      449n
+    case 24n:
+      450n
+    case 33n:
+      451n
+    case 34n:
+      452n
+    case 36n:
+      453n
+    case 40n:
+      454n
+    case 48n:
+      455n
+    case _:
+      0n
+
+def stat.code.lo31(+lo: Nat) -> Nat:
+  match lo:
+    case 1n:
+      456n
+    case 2n:
+      457n
+    case 4n:
+      458n
+    case 8n:
+      459n
+    case 16n:
+      460n
+    case 32n:
+      461n
+    case _:
+      0n
+
+def stat.code.lo32(+lo: Nat) -> Nat:
+  match lo:
+    case 31n:
+      462n
+    case 47n:
+      463n
+    case _:
+      0n
+
+def stat.code.hl(+hi: Nat, +lo: Nat) -> Nat:
+  match hi:
+    case 0n:
+      stat.code.lo0(lo)
+    case 1n:
+      stat.code.lo1(lo)
+    case 2n:
+      stat.code.lo2(lo)
+    case 3n:
+      stat.code.lo3(lo)
+    case 4n:
+      stat.code.lo4(lo)
+    case 5n:
+      stat.code.lo5(lo)
+    case 6n:
+      stat.code.lo6(lo)
+    case 7n:
+      stat.code.lo7(lo)
+    case 8n:
+      stat.code.lo8(lo)
+    case 9n:
+      stat.code.lo9(lo)
+    case 10n:
+      stat.code.lo10(lo)
+    case 11n:
+      stat.code.lo11(lo)
+    case 12n:
+      stat.code.lo12(lo)
+    case 13n:
+      stat.code.lo13(lo)
+    case 14n:
+      stat.code.lo14(lo)
+    case 15n:
+      stat.code.lo15(lo)
+    case 16n:
+      stat.code.lo16(lo)
+    case 17n:
+      stat.code.lo17(lo)
+    case 18n:
+      stat.code.lo18(lo)
+    case 19n:
+      stat.code.lo19(lo)
+    case 20n:
+      stat.code.lo20(lo)
+    case 21n:
+      stat.code.lo21(lo)
+    case 22n:
+      stat.code.lo22(lo)
+    case 23n:
+      stat.code.lo23(lo)
+    case 24n:
+      stat.code.lo24(lo)
+    case 25n:
+      stat.code.lo25(lo)
+    case 26n:
+      stat.code.lo26(lo)
+    case 27n:
+      stat.code.lo27(lo)
+    case 28n:
+      stat.code.lo28(lo)
+    case 29n:
+      stat.code.lo29(lo)
+    case 30n:
+      stat.code.lo30(lo)
+    case 31n:
+      stat.code.lo31(lo)
+    case 32n:
+      stat.code.lo32(lo)
+    case _:
+      0n
+
+# a word's code (0 for one no code has)
+def stat.code.cw(+w: Nat) -> Nat:
+  stat.code.hl(Nat.div(w, 64n), Nat.mod(w, 64n))
 
 # the high twelve bits of the hash of a call of GET, SET and INCR that
 # runs, as the parser writes them
@@ -4860,10 +5804,12 @@ def stat.mark.incr() -> U32:
   380633088
 # END gen_commands: stats
 
-# a container (CLIENT, FUNCTION, CONFIG, COMMAND, OBJECT) by its first argument;
-# alone, the container itself (top)
+# a container (CLIENT, FUNCTION, CONFIG, COMMAND, OBJECT, MEMORY) by its
+# first argument; alone, the container itself (top)
 def stat.sub.of(id: Nat, +up: String) -> Nat:
   match id:
+    case 118n:
+      stat.sub.memory(memory_id(up, String.length(up)))
     case 105n:
       stat.sub.client(client_id(up, String.length(up)))
     case 106n:
@@ -4895,6 +5841,8 @@ def stat.key(+id: Nat, +args: List<&2, String>) -> Nat:
       stat.key.args(stat.top(109n), 109n, args)
     case 114n:
       stat.key.args(stat.top(114n), 114n, args)
+    case 118n:
+      stat.key.args(stat.top(118n), 118n, args)
     case _:
       stat.top(id)
 
@@ -6029,6 +6977,191 @@ def bf.peek(ops: List<&2, BfOp>, m: Maybe<&2, KV.Item<String>>) -> Reply:
     case None{}:
       RArray{bf.reads(ops, "", Nil{})}
 
+# Hashes
+# ------
+# A hash's reads. A key not there reads as an empty hash, as in Redis
+# (HMGET's nulls, HLEN 0, an empty scan with cursor 0); a key that holds a
+# string answers WRONGTYPE.
+
+def hp.fields(ps: List<&2, KV.HPair>) -> List<&2, Reply>:
+  match ps:
+    case Nil{}:
+      Nil{}
+    case Con{KV.HP{f, v}, rest}:
+      RBulk{f} <> hp.fields(rest)
+
+def hp.values(ps: List<&2, KV.HPair>) -> List<&2, Reply>:
+  match ps:
+    case Nil{}:
+      Nil{}
+    case Con{KV.HP{f, v}, rest}:
+      RBulk{v} <> hp.values(rest)
+
+def hp.flat(ps: List<&2, KV.HPair>) -> List<&2, Reply>:
+  match ps:
+    case Nil{}:
+      Nil{}
+    case Con{KV.HP{f, v}, rest}:
+      RBulk{f} <> RBulk{v} <> hp.flat(rest)
+
+# the pairs whose field matches the pattern p (all of them when it is
+# "*"), flat
+def hp.keep(ok: Bool, f: String, v: String, rest: List<&2, Reply>) -> List<&2, Reply>:
+  match ok:
+    case True{}:
+      RBulk{f} <> RBulk{v} <> rest
+    case False{}:
+      rest
+
+def hp.glob(+all: Bool, +p: String, ps: List<&2, KV.HPair>) -> List<&2, Reply>:
+  match ps:
+    case Nil{}:
+      Nil{}
+    case Con{KV.HP{+f, v}, rest}:
+      hp.keep(glob_hit(all, p, f), f, v, hp.glob(all, p, rest))
+
+def hp.match(ps: List<&2, KV.HPair>, pat: Maybe<&2, String>) -> List<&2, Reply>:
+  match pat:
+    case Some{+p}:
+      hp.glob(String.eq(p, "*"), p, ps)
+    case None{}:
+      hp.flat(ps)
+
+def hmget.none(fs: List<&2, String>) -> List<&2, Reply>:
+  match fs:
+    case Nil{}:
+      Nil{}
+    case Con{f, rest}:
+      RNull{} <> hmget.none(rest)
+
+def hmget(fs: List<&2, String>, +h: KV.Hash) -> List<&2, Reply>:
+  match fs:
+    case Nil{}:
+      Nil{}
+    case Con{+f, rest}:
+      r_get(KV.hash.get(f, h)) <> hmget(rest, h)
+
+# HSCAN's options: MATCH and COUNT, as SCAN reads them (scan.opts), and
+# any other word a syntax error (TYPE is SCAN's alone)
+def hscan.set(o: Nat, v: String, +cur: Nat, +n: Nat, pat: Maybe<&2, String>) -> ScanArgs:
+  match o:
+    case 1n:
+      scan.count.set(scan.count(v), cur, pat, None{})
+    case 2n:
+      ScanArgs{cur, n, Some{v}, None{}}
+    case _:
+      ScanBad{RError{"ERR syntax error"}}
+
+def hscan.opts(xs: List<&2, String>, a: ScanArgs) -> ScanArgs:
+  match xs a:
+    case _ ScanBad{r}:
+      ScanBad{r}
+    case Nil{} a:
+      a
+    case Con{+w, Con{v, rest}} ScanArgs{+cur, +n, pat, typ}:
+      hscan.opts(rest, hscan.set(scan.word(w), v, cur, n, pat))
+    case Con{w, Nil{}} ScanArgs{cur, n, pat, typ}:
+      ScanBad{RError{"ERR syntax error"}}
+
+def hscan.args.of(c: Maybe<&2, Nat>, rest: List<&2, String>) -> ScanArgs:
+  match c:
+    case Some{+cur}:
+      hscan.opts(rest, ScanArgs{cur, 10n, None{}, None{}})
+    case None{}:
+      ScanBad{RError{"ERR invalid cursor"}}
+
+def hscan.args(args: List<&2, String>) -> ScanArgs:
+  match args:
+    case Con{+c, rest}:
+      hscan.args.of(scan.cursor(c), rest)
+    case Nil{}:
+      ScanBad{RError{"ERR invalid cursor"}}
+
+def hscan.rep(+next: Nat, ps: List<&2, KV.HPair>, pat: Maybe<&2, String>) -> Reply:
+  RArray{[RBulk{Nat.show(next)}, RArray{hp.match(ps, pat)}]}
+
+# a large hash scans its trie of fields as SCAN scans the keys (the
+# cursor is a bucket's index), COUNT fields a call; a small one answers
+# all its pairs at once, with cursor 0, as Redis answers a listpack
+def hscan.big(+t: KV.Trie<String>, sc: KV.Scan, pat: Maybe<&2, String>) -> Reply:
+  match sc:
+    case KV.Stop{+at, acc}:
+      hscan.rep(Bool.pick(Nat, Nat.is_lt(at, 1048576n), at, 0n), KV.hash.kv(t, List.reverse(&2, String, acc)), pat)
+    case KV.Scan{w, acc}:
+      hscan.rep(0n, KV.hash.kv(t, List.reverse(&2, String, acc)), pat)
+
+def hscan.go(+h: KV.Hash, +cur: Nat, +n: Nat, pat: Maybe<&2, String>) -> Reply:
+  match h:
+    case KV.HSmall{m, +ps}:
+      hscan.rep(0n, ps, pat)
+    case KV.HBig{m, +t}:
+      hscan.big(t, KV.scan(String, t, cur, n, 0n), pat)
+
+def hscan.of(a: ScanArgs, +h: KV.Hash) -> Reply:
+  match a:
+    case ScanArgs{+cur, +n, pat, typ}:
+      hscan.go(h, cur, n, pat)
+    case ScanBad{r}:
+      r
+
+# a hash read of a key that holds a hash
+def hread(op: HRead, +h: KV.Hash) -> Reply:
+  match op:
+    case HRGet{+f}:
+      r_get(KV.hash.get(f, h))
+    case HRMGet{fs}:
+      RArray{hmget(fs, h)}
+    case HRLen{}:
+      r_int(KV.hash.len(h))
+    case HRStrlen{+f}:
+      r_int(String.length(KV.hash.or(KV.hash.get(f, h))))
+    case HRExists{+f}:
+      r_int(Bool.pick(Nat, KV.hash.has(f, h), 1n, 0n))
+    case HRKeys{}:
+      RArray{hp.fields(KV.hash.pairs(h))}
+    case HRVals{}:
+      RArray{hp.values(KV.hash.pairs(h))}
+    case HRAll{}:
+      RArray{hp.flat(KV.hash.pairs(h))}
+    case HRScan{args}:
+      hscan.of(hscan.args(args), h)
+
+# of a key not there
+def hread.none(op: HRead) -> Reply:
+  match op:
+    case HRGet{f}:
+      RNull{}
+    case HRMGet{fs}:
+      RArray{hmget.none(fs)}
+    case HRLen{}:
+      r_int(0n)
+    case HRStrlen{f}:
+      r_int(0n)
+    case HRExists{f}:
+      r_int(0n)
+    case HRKeys{}:
+      RArray{Nil{}}
+    case HRVals{}:
+      RArray{Nil{}}
+    case HRAll{}:
+      RArray{Nil{}}
+    case HRScan{args}:
+      RArray{[RBulk{"0"}, RArray{Nil{}}]}
+
+# of a key that holds a string (m: the string's entry, or none)
+def hread.str(op: HRead, m: Maybe<&2, KV.Item<String>>) -> Reply:
+  match m:
+    case Some{x}:
+      e_wrongtype()
+    case None{}:
+      hread.none(op)
+
+# of a key that holds a collection
+def hread.coll(op: HRead, +cl: KV.Coll) -> Reply:
+  match cl:
+    case KV.CHash{+h}:
+      hread(op, h)
+
 # the reply of a Peek, from the entry of its key there at now
 def peek(c: PeekOp, +now: Nat, m: Maybe<&2, KV.Item<String>>) -> Reply:
   match c:
@@ -6054,9 +7187,11 @@ def peek(c: PeekOp, +now: Nat, m: Maybe<&2, KV.Item<String>>) -> Reply:
       bitpos.peek(args, m)
     case PBitfield{ops}:
       bf.peek(ops, m)
+    case PHash{op}:
+      hread.str(op, m)
 
-# a Peek of a key that holds a collection: its type, its time, or
-# WRONGTYPE for a read of a string
+# a Peek of a key that holds a collection: its type, its time, a read of
+# a hash of a hash, or WRONGTYPE for a read of a string
 def peek.coll(c: PeekOp, +now: Nat, +cl: KV.Coll, +e: Nat) -> Reply:
   match c:
     case PType{}:
@@ -6069,6 +7204,8 @@ def peek.coll(c: PeekOp, +now: Nat, +cl: KV.Coll, +e: Nat) -> Reply:
       ttl.of(False{}, True{}, now, Some{KV.Item{"", e}})
     case PPExpTime{}:
       ttl.of(True{}, True{}, now, Some{KV.Item{"", e}})
+    case PHash{op}:
+      hread.coll(op, cl)
     case _:
       e_wrongtype()
 
@@ -6086,7 +7223,11 @@ def peek.v(c: PeekOp, +now: Nat, m: Maybe<&2, KV.Item<KV.Val>>) -> Reply:
 # What a write of one key does to it: nothing, delete it, set its time
 # alone, set its value and its time (0: none), or set its value and keep
 # its time, for a key that is there (CKeepT; CApp for an APPEND of s,
-# CRange for a SETRANGE of s at offset off, each of which leaves v). An
+# CRange for a SETRANGE of s at offset off, each of which leaves v), or
+# set it to a hash: one the key held, changed by a write of a hash (an
+# HSET of pairs, or an HDEL of fields), its time kept (CHash), or a new
+# one, with no time, made of pairs where the key was not there at now
+# (CHashNew); each keeps the write the append-only file logs. An
 # Upd's reply and change come from the key's entry there at now alone. A
 # time a change gives a key is one the key may keep (KV.clamp: a time at
 # or past the year 5138 is none), and a key without a time is never given
@@ -6100,6 +7241,8 @@ type Change is Data:
   CKeepT{v: String}
   CApp{s: String, v: String}
   CRange{off: Nat, s: String, v: String}
+  CHash{op: HWrite, h: KV.Hash}
+  CHashNew{ps: List<&2, KV.HPair>, h: KV.Hash}
 
 type Out is Data:
   Out{r: Reply, ch: Change}
@@ -6606,6 +7749,156 @@ def bitfield.of(+ops: List<&2, BfOp>, m: Maybe<&2, KV.Item<String>>) -> Out:
     case None{}:
       bf.fin(bf.run0(ops, ""), bf.lo0(ops), None{})
 
+# A hash's writes. A key not there is an empty hash: HSET, HSETNX and
+# HINCRBY make it, HDEL finds nothing; a key that holds a hash keeps its
+# time, and is deleted when HDEL takes its last field (as Redis deletes
+# an empty hash); a key that holds a string answers WRONGTYPE. The change
+# keeps the write as the append-only file logs it: the pairs it set, as
+# an HSET of them (HSETNX's pair, HINCRBY's field with its sum), or the
+# fields HDEL took; fresh says whether the hash is a new one. A write
+# that sets no pair (HSET without pairs, which the parser refuses) leaves
+# the key as it was, so that no hash is ever empty.
+
+def hchange(fresh: Bool, ps: List<&2, KV.HPair>, h: KV.Hash) -> Change:
+  match fresh:
+    case True{}:
+      CHashNew{ps, h}
+    case False{}:
+      CHash{HWSet{ps, False{}}, h}
+
+# HSET's pairs set in h, in order, and how many of their fields were new
+type HPut is Data:
+  HPut{h: KV.Hash, made: Nat}
+
+def hset.go(ps: List<&2, KV.HPair>, acc: HPut) -> HPut:
+  match ps acc:
+    case Nil{} acc:
+      acc
+    case Con{KV.HP{+f, +v}, rest} HPut{+h, +made}:
+      hset.go(rest, HPut{KV.hash.put(h, f, v), Bool.pick(Nat, KV.hash.has(f, h), made, 1n+made)})
+
+def hset.ch(+fresh: Bool, ps: List<&2, KV.HPair>, h: KV.Hash) -> Change:
+  match ps:
+    case Nil{}:
+      CKeep{}
+    case Con{p, rest}:
+      hchange(fresh, p <> rest, h)
+
+def hset.out(r: HPut, +fresh: Bool, +ps: List<&2, KV.HPair>, +mset: Bool) -> Out:
+  match r:
+    case HPut{h, +made}:
+      Out{Bool.pick(Reply, mset, r_ok(), r_int(made)), hset.ch(fresh, ps, h)}
+
+def hsetnx.of(had: Bool, +fresh: Bool, +f: String, +v: String, h: KV.Hash) -> Out:
+  match had:
+    case True{}:
+      Out{r_int(0n), CKeep{}}
+    case False{}:
+      Out{r_int(1n), hchange(fresh, [KV.HP{f, v}], KV.hash.put(h, f, v))}
+
+# HDEL's fields taken out of h, and how many of them it held
+type HDel is Data:
+  HDel{h: KV.Hash, gone: Nat}
+
+def hdel.one(had: Bool, h: KV.Hash, +f: String, +gone: Nat) -> HDel:
+  match had:
+    case True{}:
+      HDel{KV.hash.del(h, f), 1n+gone}
+    case False{}:
+      HDel{h, gone}
+
+def hdel.go(fs: List<&2, String>, acc: HDel) -> HDel:
+  match fs acc:
+    case Nil{} acc:
+      acc
+    case Con{+f, rest} HDel{+h, +gone}:
+      hdel.go(rest, hdel.one(KV.hash.has(f, h), h, f, gone))
+
+def hdel.of(none: Bool, empty: Bool, +fs: List<&2, String>, h: KV.Hash, +gone: Nat) -> Out:
+  match none empty:
+    case True{} _:
+      Out{r_int(0n), CKeep{}}
+    case False{} True{}:
+      Out{r_int(gone), CDel{}}
+    case False{} False{}:
+      Out{r_int(gone), CHash{HWDel{fs}, h}}
+
+def hdel.out(r: HDel, +fs: List<&2, String>) -> Out:
+  match r:
+    case HDel{+h, +gone}:
+      hdel.of(Nat.is_eq(gone, 0n), Nat.is_eq(KV.hash.len(h), 0n), fs, h, gone)
+
+# HINCRBY: the field's integer (0 when it is not there) plus by, which
+# must fit (14 digits, as INCRBY's)
+def hincr.fit(ok: Bool, +s: Int, +fresh: Bool, +f: String, h: KV.Hash) -> Out:
+  match ok:
+    case True{}:
+      +v = int_show(s)
+      Out{RInt{s}, hchange(fresh, [KV.HP{f, v}], KV.hash.put(h, f, v))}
+    case False{}:
+      Out{RError{"ERR increment or decrement would overflow"}, CKeep{}}
+
+def hincr.num(m: Maybe<&2, Int>, +fresh: Bool, +f: String, +by: Int, h: KV.Hash) -> Out:
+  match m:
+    case Some{i}:
+      +s = int_add(i, by)
+      hincr.fit(int_fits(s), s, fresh, f, h)
+    case None{}:
+      Out{RError{"ERR hash value is not an integer"}, CKeep{}}
+
+def hincr.of(cur: Maybe<&2, String>, +fresh: Bool, +f: String, +by: Int, h: KV.Hash) -> Out:
+  match cur:
+    case Some{s}:
+      hincr.num(int_read(s), fresh, f, by, h)
+    case None{}:
+      hincr.fit(int_fits(by), by, fresh, f, h)
+
+# HWNew: a new hash of pairs where the key was, whatever it held (the
+# script the append-only file logs, aof.bend), answered 0 as the script
+# returns it
+def hnew.out(r: HPut, +ps: List<&2, KV.HPair>) -> Out:
+  match r:
+    case HPut{h, made}:
+      Out{r_int(0n), hset.ch(True{}, ps, h)}
+
+def hwrite(op: HWrite, +fresh: Bool, h: KV.Hash) -> Out:
+  match op:
+    case HWSet{+ps, +mset}:
+      hset.out(hset.go(ps, HPut{h, 0n}), fresh, ps, mset)
+    case HWSetNx{+f, +v}:
+      +g = h
+      hsetnx.of(KV.hash.has(f, g), fresh, f, v, g)
+    case HWDel{+fs}:
+      hdel.out(hdel.go(fs, HDel{h, 0n}), fs)
+    case HWIncr{+f, +by}:
+      +g = h
+      hincr.of(KV.hash.get(f, g), fresh, f, by, g)
+    case HWNew{+ps}:
+      hnew.out(hset.go(ps, HPut{KV.hash.empty(), 0n}), ps)
+
+# of a key that holds a string: WRONGTYPE, but for HWNew, which makes
+# its hash whatever the key held
+def hwrite.wrong(op: HWrite) -> Out:
+  match op:
+    case HWNew{+ps}:
+      hwrite(HWNew{ps}, True{}, KV.hash.empty())
+    case _:
+      Out{e_wrongtype(), CKeep{}}
+
+# of a key that holds a string (m: the string's entry, or none)
+def hwrite.str(op: HWrite, m: Maybe<&2, KV.Item<String>>) -> Out:
+  match m:
+    case Some{x}:
+      hwrite.wrong(op)
+    case None{}:
+      hwrite(op, True{}, KV.hash.empty())
+
+# of a key that holds a collection
+def hwrite.coll(op: HWrite, +cl: KV.Coll) -> Out:
+  match cl:
+    case KV.CHash{h}:
+      hwrite(op, False{}, h)
+
 def upd(op: UpdOp, +now: Nat, m: Maybe<&2, KV.Item<String>>) -> Out:
   match op:
     case USetNx{v}:
@@ -6634,12 +7927,15 @@ def upd(op: UpdOp, +now: Nat, m: Maybe<&2, KV.Item<String>>) -> Out:
       setbit.of(off, on, m)
     case UBitfield{ops}:
       bitfield.of(ops, m)
+    case UHash{op}:
+      hwrite.str(op, m)
 
 # An update of a key that holds a collection: SET (and SETEX, PSETEX)
 # replaces it, SETNX finds it there, EXPIRE and its kin and PERSIST set
 # its time; they see it as a key there with its time (and an empty
-# string, which none of them reads). Any other is WRONGTYPE, as Redis
-# answers it, the key left as it was.
+# string, which none of them reads). A write of a hash writes a hash
+# (upd.only). Any other is WRONGTYPE, as Redis answers it, the key left
+# as it was.
 def upd.any(op: UpdOp) -> Bool:
   match op:
     case USetNx{v}:
@@ -6653,12 +7949,19 @@ def upd.any(op: UpdOp) -> Bool:
     case _:
       False{}
 
-def upd.coll(any: Bool, op: UpdOp, +now: Nat, +e: Nat) -> Out:
+def upd.only(op: UpdOp, +cl: KV.Coll) -> Out:
+  match op:
+    case UHash{hop}:
+      hwrite.coll(hop, cl)
+    case _:
+      Out{e_wrongtype(), CKeep{}}
+
+def upd.coll(any: Bool, op: UpdOp, +now: Nat, +cl: KV.Coll, +e: Nat) -> Out:
   match any:
     case True{}:
       upd(op, now, Some{KV.Item{"", e}})
     case False{}:
-      Out{e_wrongtype(), CKeep{}}
+      upd.only(op, cl)
 
 # an update of a key, from its entry there at now: a string is updated as
 # above
@@ -6666,14 +7969,14 @@ def upd.v(op: UpdOp, +now: Nat, m: Maybe<&2, KV.Item<KV.Val>>) -> Out:
   match m:
     case Some{KV.Item{KV.VStr{w}, e}}:
       upd(op, now, Some{KV.Item{w, e}})
-    case Some{KV.Item{KV.VColl{cl}, +e}}:
+    case Some{KV.Item{KV.VColl{+cl}, +e}}:
       +o = op
-      upd.coll(upd.any(o), o, now, e)
+      upd.coll(upd.any(o), o, now, cl, e)
     case None{}:
       upd(op, now, None{})
 
 # the change done to key k, whose code was c (a deleted key, or one whose
-# time alone changes, was there); a value set is a string
+# time alone changes, was there)
 def upd.ch(t: KV.Trie<KV.Val>, +k: String, +h: U32, +n: Nat, +x: Nat, now: Nat, rr: Maybe<&2, Db>, +c: Nat, r: Reply, ch: Change) -> Reply & Db:
   match ch:
     case CKeep{}:
@@ -6690,6 +7993,10 @@ def upd.ch(t: KV.Trie<KV.Val>, +k: String, +h: U32, +n: Nat, +x: Nat, now: Nat, 
       (r, Db{KV.keep.at(KV.Val, t, k, KV.VStr{v}, h), cnt.n(c, n), x, now, rr})
     case CRange{o, s, v}:
       (r, Db{KV.keep.at(KV.Val, t, k, KV.VStr{v}, h), cnt.n(c, n), x, now, rr})
+    case CHash{op, hv}:
+      (r, Db{KV.keep.at(KV.Val, t, k, KV.VColl{KV.CHash{hv}}, h), n, x, now, rr})
+    case CHashNew{ps, hv}:
+      (r, Db{KV.setx.at(KV.Val, t, k, KV.VColl{KV.CHash{hv}}, 0n, h), cnt.n(c, n), cnt.x(c, 0n, x), now, rr})
 
 def upd.put(t: KV.Trie<KV.Val>, +k: String, +h: U32, +n: Nat, +x: Nat, now: Nat, rr: Maybe<&2, Db>, +c: Nat, o: Out) -> Reply & Db:
   match o:
