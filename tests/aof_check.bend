@@ -1,13 +1,17 @@
 # aof_check.bend: runs smoke.bend's batch, and writes of hashes, of
 # lists, of sets and of sorted sets, with its effects (aof.bend:
 # exec_log), writes the effects as the server appends them, reads the
-# file back, runs it from an empty database and prints whether that gives
-# the batch's database; then cuts the file at every length and prints
-# whether each cut loads as whole entries and a leftover that together
-# are the cut, the leftover holding no whole entry. Then the same for a
-# batch on several databases (SELECT, SWAPDB, MOVE, FLUSHDB, FLUSHALL),
-# run as acts (aof.bend: A.acts), its effects written with the SELECTs
-# the server writes, the file replayed over 16 databases.
+# file back, runs it from an empty database and checks that this gives
+# the batch's database; then cuts the file at every length and checks
+# that each cut loads as whole entries and a leftover that together are
+# the cut, the leftover holding no whole entry. Then the same for a batch
+# on several databases (SELECT, SWAPDB, MOVE, FLUSHDB, FLUSHALL), run as
+# acts (aof.bend: A.acts), its effects written with the SELECTs the
+# server writes, the file replayed over 16 databases. Each check prints
+# its line; any that fails makes the run exit with 1. With
+# BENDKV_CHECK_BREAK set to log, db or cut, one kind of check is given a
+# wrong expectation, to show that its failure fails the run
+# (tests/smoke_check.sh).
 # Run: bend tests/aof_check.bend
 import Base
 import ../src/map.bend as KV
@@ -154,8 +158,16 @@ def replay(f: List<&2, List<&2, String>> & String) -> R.Db:
   (reqs, rest) = f
   db_of(R.exec_all(A.parse_all(reqs), R.db.empty()))
 
-def same(+got: String, +want: String) -> String:
-  Bool.pick(String, String.eq(got, want), "same", "differ: " ++ got ++ " vs " ++ want)
+# a check's line: the two the same, or where they differ; and whether
+# they are
+def same(name: String, +got: String, +want: String) -> IO(Bool):
+  do IO<Bool>:
+    Unit <- IO.print(name ++ ": " ++ Bool.pick(String, String.eq(got, want), "same", "differ: " ++ got ++ " vs " ++ want))
+    return String.eq(got, want)
+
+# what a check of kind k expects is made wrong when the run breaks k
+def brk(+mode: String, k: String) -> String:
+  Bool.pick(String, String.eq(mode, k), "!", "")
 
 def is_none(m: Maybe<&1, List<&2, String> & String>) -> Bool:
   match m:
@@ -170,10 +182,11 @@ def cut_ok(+cut: String, l: List<&2, List<&2, String>> & String) -> Bool:
   (reqs, +rest) = l
   Bool.and(String.eq(A.encode(reqs) ++ rest, cut), is_none(A.entry(rest)))
 
-# k cuts left from length n on, the cut before n loading (ok): a loop
-# (a call in the place of a Bool.pick's branch would not be the last
-# thing done, and a file of thousands of bytes would run out of stack)
-def cuts(k: Nat, +f: String, +n: Nat, ok: Bool) -> String:
+# k cuts left from length n on, the cut before n loading (ok), each
+# compared with the cut and b after it: a loop (a call in the place of a
+# Bool.pick's branch would not be the last thing done, and a file of
+# thousands of bytes would run out of stack)
+def cuts(k: Nat, +f: String, +b: String, +n: Nat, ok: Bool) -> String:
   match k ok:
     case _ False{}:
       "cut at " ++ Nat.show(Nat.sub(n, 1n)) ++ " fails"
@@ -181,23 +194,42 @@ def cuts(k: Nat, +f: String, +n: Nat, ok: Bool) -> String:
       "all " ++ Nat.show(n) ++ " cuts load"
     case 1n+m True{}:
       +c = String.take(f, n)
-      cuts(m, f, 1n+n, cut_ok(c, A.load(c)))
+      cuts(m, f, b, 1n+n, cut_ok(c ++ b, A.load(c)))
 
-def report.of(+cs: List<&2, R.Cmd>, q: List<&2, R.Cmd> & R.Db) -> IO(Unit):
+def cuts.say(+r: String) -> IO(Bool):
+  do IO<Bool>:
+    Unit <- IO.print(r)
+    return String.starts_with(r, "all ")
+
+# the cuts of f, each compared with the cut and b after it; left out of a
+# run that breaks another kind of check (their failure is all that run
+# shows, and the cuts are the slowest checks)
+def cuts.run(go: Bool, +f: String, +b: String) -> IO(Bool):
+  match go:
+    case True{}:
+      cuts.say(cuts(1n+String.length(f), f, b, 0n, True{}))
+    case False{}:
+      IO.pure(Bool, True{})
+
+def cuts.go(+mode: String) -> Bool:
+  Bool.or(String.is_empty(mode), String.eq(mode, "cut"))
+
+def report.of(+mode: String, +cs: List<&2, R.Cmd>, q: List<&2, R.Cmd> & R.Db) -> IO(Bool):
   (es, +db) = q
   +f = A.encode(A.args_all(es))
   +want = dump(db)
   +one = dump(db_of(R.exec_all(cs, R.db.empty())))
-  do IO<Unit>:
+  do IO<Bool>:
     Unit <- IO.print("file: " ++ Nat.show(String.length(f)) ++ " bytes, " ++ Nat.show(List.length(&2, List<&2, String>, Pair.fst(List<&2, List<&2, String>>, String, A.load(f)))) ++ " entries")
-    Unit <- IO.print("exec_log's database is exec_all's: " ++ same(want, one))
-    Unit <- IO.print("replayed database: " ++ same(dump(replay(A.load(f))), want))
+    a : Bool <- same("exec_log's database is exec_all's", want, one ++ brk(mode, "log"))
+    b : Bool <- same("replayed database", dump(replay(A.load(f))), want ++ brk(mode, "db"))
     Unit <- IO.print("database: " ++ want)
-    IO.print(cuts(1n+String.length(f), f, 0n, True{}))
+    d : Bool <- cuts.run(cuts.go(mode), f, brk(mode, "cut"))
+    return Bool.and(a, Bool.and(b, d))
 
-def report(+cs: List<&2, R.Cmd>, r: List<&2, R.Reply> & (List<&2, R.Cmd> & R.Db)) -> IO(Unit):
+def report(+mode: String, +cs: List<&2, R.Cmd>, r: List<&2, R.Reply> & (List<&2, R.Cmd> & R.Db)) -> IO(Bool):
   (rs, q) = r
-  report.of(cs, q)
+  report.of(mode, cs, q)
 
 # a batch on several databases: SELECT moves the focus, SWAPDB, MOVE, COPY
 # and FLUSHALL act on the databases (the batch is read as a file: COPY as
@@ -222,18 +254,39 @@ def dump.dbs(dbs: List<&2, R.Db>, +i: Nat) -> String:
 def dump.ds(+ds: R.Ds) -> String:
   dump.dbs(R.ds.list(ds), 0n)
 
-def mreport.of(q: List<&2, A.Eff> & R.Ds) -> IO(Unit):
+def mreport.of(+mode: String, q: List<&2, A.Eff> & R.Ds) -> IO(Bool):
   (es, +ds) = q
   +f = A.encode(A.effs.args(List.reverse(&2, A.Eff, es), 0n))
   +want = dump.ds(ds)
-  do IO<Unit>:
+  do IO<Bool>:
     Unit <- IO.print("file on several databases: " ++ Nat.show(String.length(f)) ++ " bytes, " ++ Nat.show(List.length(&2, List<&2, String>, Pair.fst(List<&2, List<&2, String>>, String, A.load(f)))) ++ " entries")
-    Unit <- IO.print("replayed databases: " ++ same(dump.ds(A.replay(Pair.fst(List<&2, List<&2, String>>, String, A.load(f)), 15n)), want))
+    a : Bool <- same("replayed databases", dump.ds(A.replay(Pair.fst(List<&2, List<&2, String>>, String, A.load(f)), 15n)), want ++ brk(mode, "db"))
     Unit <- IO.print("databases:\n" ++ want)
-    IO.print(cuts(1n+String.length(f), f, 0n, True{}))
+    c : Bool <- cuts.run(cuts.go(mode), f, brk(mode, "cut"))
+    return Bool.and(a, c)
 
-def main() -> IO(Unit):
+def env.or(r: Result<&1, &1, U32 & String, String>) -> String:
+  match r:
+    case Done{v}:
+      v
+    case Fail{e}:
+      ""
+
+def verdict(ok: Bool) -> IO(Unit):
+  match ok:
+    case True{}:
+      IO.print("ALL AOF CHECKS PASS")
+    case False{}:
+      IO.die(Unit, 1, "SOME AOF CHECKS FAIL")
+
+def run(+mode: String) -> IO(Unit):
   +cs = batch_of(P.parse(buf()))
   do IO<Unit>:
-    Unit <- report(cs, A.exec_log(cs, R.db.empty()))
-    mreport.of(A.acts(A.file.acts(batch_of(P.parse(mbuf()))), (Nil{}, R.ds.empty(15n))))
+    a : Bool <- report(mode, cs, A.exec_log(cs, R.db.empty()))
+    b : Bool <- mreport.of(mode, A.acts(A.file.acts(batch_of(P.parse(mbuf()))), (Nil{}, R.ds.empty(15n))))
+    verdict(Bool.and(a, b))
+
+def main() -> IO(Unit):
+  do IO<Unit>:
+    r : Result<&1, &1, U32 & String, String> <- IO.get_env("BENDKV_CHECK_BREAK")
+    run(env.or(r))

@@ -287,7 +287,7 @@ event loop with `io-threads 1`. `./build/bendkv --help` lists the forms. The sho
 ## Testing
 
 ```bash
-make smoke     BEND="$B"   # the pure path end to end and the append-only file, no network
+make smoke     BEND="$B"   # the pure path end to end and the append-only file, no network; fails on any mismatch
 make test      BEND="$B"   # needs redis-server, redis-cli and a C compiler
 make perfcheck BEND="$B"   # instructions per request against a baseline (needs valgrind)
 make gencheck              # the generated parts (trie, its proofs, the parameter and command tables) are up to date
