@@ -17,7 +17,14 @@ keys and RANDOMKEY's pick), so what is compared is what Redis promises:
   from the start to the end is found;
 - RANDOMKEY: nil on an empty database, a key of the database otherwise,
   every key of a small database in a few hundred calls, many keys each
-  about as often as another; its errors byte for byte.
+  about as often as another; its errors byte for byte;
+- KEYS and SCAN's MATCH on patterns that cost a matcher time exponential
+  in their stars unless it cuts its search as Redis's stringmatchlen
+  does: adjacent stars, alternatives that match at once, literal
+  mismatches, alternatives that match nowhere, stars nested more than
+  1000 deep; each answer is Redis's, and comes within the client's
+  timeout, where a matcher without one of the cut-offs takes from
+  3.4 * 10^11 calls (Redis's own "a*a*...a*b") to more than 10^59.
 
     python3 tests/keyspace_test.py --bendkv 6380 --redis 6390
 """
@@ -277,6 +284,52 @@ def randomkey(b, r, rnd):
     check("RANDOMKEY and SCAN inline", data == b"$-1\r\n*2\r\n$1\r\n0\r\n*0\r\n", repr(data))
 
 
+# Patterns whose cost tells a matcher with Redis's cut-offs from one
+# without (calls of stringmatchlen counted on a model of each): a run of
+# stars is one star and a star that ends the pattern matches at once (the
+# review's ten stars against a key of ten bytes took the old matcher,
+# which tried both ways at each star, 537,471 calls; Redis takes one), a
+# star's loop ends at its first match ("*a" * 100 against 200 a's: 201
+# calls, 3.3 * 10^60 trying both ways), and a rest that matches nowhere
+# after a star ends the search (Redis's own "a*a*...a*b", 20 stars against
+# 40 a's: 40 calls, 3.4 * 10^11 without the cut-off; with 100 stars,
+# 200 calls against 4.5 * 10^59). With them a pattern costs a pass over
+# the key for each of its bytes, so every answer comes at once, and the
+# client's 10 s timeout fails a matcher that lost one. A star nested in
+# more than 1000 calls matches nothing, as in Redis since its fix for
+# CVE-2024-31228, so the last ones, which would match without that
+# limit, match nothing; a run of stars kept as stars would nest past it.
+def patterns(b, r):
+    keys = [b"a" * 10, b"a" * 40, b"a" * 200, b"ab" * 100, b"a" * 3000, b"a" * 2999 + b"b", b"x" * 1000 + b"b",
+            b"abc", b"", b"a*b"]
+    for c in (b, r):
+        c.ask("FLUSHALL")
+        c.pipe([["SET", k, b"1"] for k in keys])
+    pats = [
+        # adjacent stars
+        b"*" * 10, b"*" * 1000, b"*" * 1000 + b"b", b"a" + b"*" * 1000 + b"a", b"*" * 2000 + b"b",
+        b"?" + b"*" * 500 + b"?" + b"*" * 500, b"*a" + b"*" * 1500 + b"b",
+        # successful alternatives: the first try of each star matches
+        b"*a" * 100, b"a*" * 100, b"*ab" * 50 + b"*", b"*a*" * 300, b"*a" * 1000,
+        # literal mismatches
+        b"a" * 39 + b"b", b"*" + b"a" * 38 + b"b", b"a" * 41, b"ab" * 100 + b"a",
+        # unsuccessful alternatives: Redis's regression, and longer ones
+        b"a*" * 20 + b"b", b"a*" * 100 + b"c", b"*a*b" * 30 + b"c", b"*a" * 300 + b"b", b"a*" * 999 + b"c",
+        # classes, escapes and '?' among stars
+        b"[a]*" * 100 + b"[^a]", b"\\a*" * 50 + b"\\*", b"?*" * 200, b"*[ab]" * 150 + b"c", b"*[^b]" * 1000,
+        # nested in more than 1000 calls: nothing matches
+        b"a*" * 1001, b"a*" * 1001 + b"a", b"*a" * 1001, b"*?" * 1001, b"*[a]" * 1001, b"a*" * 1500 + b"b",
+    ]
+    for p in pats:
+        got = [sorted(c.ask("KEYS", p)[0]) for c in (b, r)]
+        check("KEYS %r (%d bytes)" % (p[:16], len(p)), got[0] == got[1],
+              "bendkv %r\n      redis  %r" % ([k[:8] for k in got[0]], [k[:8] for k in got[1]]))
+    for p in pats[::4]:
+        found = [sorted(k for ks in iterate(c, ["MATCH", p, "COUNT", "3"])[0] for k in ks) for c in (b, r)]
+        check("SCAN MATCH %r (%d bytes)" % (p[:16], len(p)), found[0] == found[1],
+              "bendkv %r\n      redis  %r" % ([k[:8] for k in found[0]], [k[:8] for k in found[1]]))
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--bendkv", type=int, default=6380)
@@ -293,6 +346,7 @@ def main():
     iterations(b, r, rnd)
     guarantee(a.bendkv, rnd, a.rounds)
     randomkey(b, r, rnd)
+    patterns(b, r)
     for c in (b, r):
         c.ask("FLUSHALL")
     print("%d checks; " % checks + ("ALL OK" if ok else "SOME CHECKS FAILED"))

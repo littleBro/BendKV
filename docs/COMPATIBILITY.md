@@ -204,7 +204,14 @@ loops"). It also lacked `[...]` classes and `\` escapes. KEYS now uses the port 
 Redis's `stringmatchlen` that CONFIG GET and COMMAND LIST used already, with Redis's
 cut-off that keeps a pattern's cost polynomial and Redis's shortcut for `*` alone; it
 answers that pattern at once. `tests/robust_test.py` times it, and the differential test
-now draws patterns with classes, ranges, escapes and random bytes.
+now draws patterns with classes, ranges, escapes and random bytes. A later review
+([#4](https://github.com/littleBro/bendkv/issues/4)) asked for the rest of Redis's bounds:
+the port already took a run of stars as one, ended a star's loop at its first match and
+stopped a search whose rest matched nowhere; it now also matches nothing past 1000 nested
+stars, as Redis has done since its fix for CVE-2024-31228 (in the 7.0.15 of Ubuntu that the
+tests run against), and `tests/keyspace_test.py` compares KEYS and SCAN's MATCH with Redis
+on patterns that a matcher without one of the cut-offs takes from 3.4 * 10^11 to more than
+10^59 calls to answer.
 
 ## What this mode does not test
 
