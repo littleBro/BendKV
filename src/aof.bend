@@ -10,7 +10,9 @@
 # entries written to it, each entry parses back to its command, the
 # effects of a batch leave the database the batch left, and a file cut
 # anywhere by a crash restores the databases after some prefix of the
-# server's acts.
+# server's acts. The start runs that replay after a check that refuses a
+# file with an entry it would not replay as the file means it (checked,
+# below), and the law checked_replay makes it the same replay.
 
 import Base
 import ./map.bend as KV
@@ -1146,3 +1148,221 @@ def restore.of(l: List<&2, List<&2, String>> & String, n: Nat) -> R.Ds & String:
 # after its last whole entry
 def restore(s: String, n: Nat) -> R.Ds & String:
   restore.of(load(s), n)
+
+# Checking
+# --------
+# At start the server replays a file only when each entry replays as the
+# file means it (checked), and else names the first that does not and
+# stops, the file as it was. One that does not is an entry the parser
+# refuses (R.Bad, and a session command's R.SBad: an unknown command or
+# subcommand, a wrong number of arguments, an argument that does not
+# read), a command of a connection or of the server (an R.Own file.act
+# leaves as a command, as it leaves a SELECT, SWAPDB, MOVE or COPY whose
+# numbers or options do not read), and a SELECT, SWAPDB, MOVE or COPY of
+# a database not there: replay answers each with an error and goes on,
+# and the databases after it are not those the file describes. Redis
+# 7.0.15 stops its load at an unknown command too, and the files it
+# writes and BendKV's hold none of these: both log only commands that
+# ran, on databases that are there (a start with fewer databases than
+# the file names is refused). The replies of the commands that replay
+# are not looked at, as Redis does not look at them. MULTI and EXEC,
+# which Redis writes around a transaction, a script's effects, and the
+# DEL of a key whose time had passed with the write that met it, are
+# marks: the commands between them replay one after another; a MULTI
+# inside another, an EXEC without one, and a file that ends inside one
+# (Redis reverts that transaction) are refused.
+
+# The check only reads: its walks borrow the requests (marks, before
+# parse_all takes them over) and the acts (before replay runs them), and
+# give small values, so that neither list is shared and copied, and the
+# text of why an entry is refused is found only once one is.
+
+# what an entry is to the check: MULTI, EXEC, an act that replays as the
+# file means it, or one that does not, with its code (act.code)
+type Chk is Data:
+  ChkMulti{}
+  ChkExec{}
+  ChkRuns{}
+  ChkBad{code: Nat}
+
+# an entry that is the one word MULTI (1) or EXEC (2), in any case, as
+# Redis looks a command up (R.is_word); 0 for any other
+def mark.of(+w: String) -> Nat:
+  Bool.pick(Nat, R.is_word(w, "MULTI"), 1n, Bool.pick(Nat, R.is_word(w, "EXEC"), 2n, 0n))
+
+def mark(+req: List<&2, String>) -> Nat:
+  match req:
+    case Con{+w, Nil{}}:
+      mark.of(w)
+    case _:
+      0n
+
+# each entry's mark
+def marks(+reqs: List<&2, List<&2, String>>) -> List<&2, Nat>:
+  match reqs:
+    case Nil{}:
+      Nil{}
+    case Con{+r, rest}:
+      mark(r) <> marks(rest)
+
+def db.code(out: Bool) -> Nat:
+  Bool.pick(Nat, out, 7n, 0n)
+
+# what an act of a file is, with 1 + n databases there: 0 one that
+# replays as the file means it; 1 one the parser refuses; 2 a command of
+# a connection or of the server; 3, 4, 5 and 6 a SELECT, SWAPDB, MOVE or
+# COPY whose numbers or options do not read; 7 a SELECT, SWAPDB, MOVE or
+# COPY of a database not there
+def act.code(+a: R.Act, +n: Nat) -> Nat:
+  match a:
+    case R.ARun{R.Bad{r}}:
+      1n
+    case R.ARun{R.Own{R.SBad{r}}}:
+      1n
+    case R.ARun{R.Own{R.SSelect{s}}}:
+      3n
+    case R.ARun{R.Own{R.SSwapDb{x, y}}}:
+      4n
+    case R.ARun{R.Own{R.SMove{k, d}}}:
+      5n
+    case R.ARun{R.Own{R.SCopy{xs}}}:
+      6n
+    case R.ARun{R.Own{o}}:
+      2n
+    case R.AFocus{+j}:
+      db.code(Nat.is_lt(n, j))
+    case R.ASwap{+x, +y}:
+      db.code(Bool.or(Nat.is_lt(n, x), Nat.is_lt(n, y)))
+    case R.AMove{k, +j}:
+      db.code(Nat.is_lt(n, j))
+    case R.ACopy{s, d, +j, rep}:
+      db.code(Nat.is_lt(n, j))
+    case _:
+      0n
+
+def entry.chk(m: Nat, c: Nat) -> Chk:
+  match m c:
+    case 1n _:
+      ChkMulti{}
+    case 2n _:
+      ChkExec{}
+    case _ 0n:
+      ChkRuns{}
+    case _ 1n+k:
+      ChkBad{1n+k}
+
+# each entry to the check, from its mark and its act
+def chks(ms: List<&2, Nat>, +as: List<&2, R.Act>, +n: Nat) -> List<&2, Chk>:
+  match ms as:
+    case Con{m, mr} Con{+a, ar}:
+      entry.chk(m, act.code(a, n)) <> chks(mr, ar, n)
+    case _ _:
+      Nil{}
+
+# the first entry that does not replay as the file means it, by its
+# number (from 0), and why: its act's code, or 8 for a file that ends
+# inside a transaction, 9 a MULTI inside another, 10 an EXEC without
+# one; i is the number of the first of ks, open 1 + the number of the
+# MULTI whose EXEC is still to come, 0 for none
+def check.go(ks: List<&2, Chk>, +i: Nat, open: Nat) -> Maybe<&1, Nat & Nat>:
+  match ks open:
+    case Nil{} 0n:
+      None{}
+    case Nil{} 1n+m:
+      Some{(m, 8n)}
+    case Con{ChkBad{c}, rest} _:
+      Some{(i, c)}
+    case Con{ChkMulti{}, rest} 0n:
+      check.go(rest, 1n+i, 1n+i)
+    case Con{ChkMulti{}, rest} 1n+m:
+      Some{(i, 9n)}
+    case Con{ChkExec{}, rest} 0n:
+      Some{(i, 10n)}
+    case Con{ChkExec{}, rest} 1n+m:
+      check.go(rest, 1n+i, 0n)
+    case Con{ChkRuns{}, rest} o:
+      check.go(rest, 1n+i, o)
+
+# the first entry of a file, of marks ms and acts as, that does not
+# replay as the file means it, with 1 + n databases there
+def check(ms: List<&2, Nat>, +as: List<&2, R.Act>, +n: Nat) -> Maybe<&1, Nat & Nat>:
+  check.go(chks(ms, as, n), 0n, 0n)
+
+# the parser's error, for an act it refused
+def why.parser(a: R.Act) -> String:
+  match a:
+    case R.ARun{R.Bad{R.RError{m}}}:
+      m
+    case R.ARun{R.Own{R.SBad{R.RError{m}}}}:
+      m
+    case _:
+      "ERR the parser refuses it"
+
+def why.at(i: Nat, as: List<&2, R.Act>) -> String:
+  match i as:
+    case 0n Con{a, rest}:
+      why.parser(a)
+    case 1n+j Con{a, rest}:
+      why.at(j, rest)
+    case _ Nil{}:
+      "ERR the parser refuses it"
+
+# why entry i, of code k, is refused (as, the file's acts)
+def why(k: Nat, i: Nat, as: List<&2, R.Act>) -> String:
+  match k:
+    case 1n:
+      why.at(i, as)
+    case 2n:
+      "ERR a command of a connection or of the server, which no file holds"
+    case 3n:
+      "ERR SELECT of a database number that does not read"
+    case 4n:
+      "ERR SWAPDB of a database number that does not read"
+    case 5n:
+      "ERR MOVE to a database number that does not read"
+    case 6n:
+      "ERR COPY with a database number or an option that does not read"
+    case 7n:
+      "ERR DB index is out of range"
+    case 8n:
+      "ERR MULTI without EXEC: the file ends inside a transaction"
+    case 9n:
+      "ERR MULTI calls can not be nested"
+    case _:
+      "ERR EXEC without MULTI"
+
+# A file replayed at the start: the databases it holds, from 1 + n empty
+# ones, when each entry replays as the file means it; else the first
+# that does not, by its number (from 0), and why
+type Replay is Data:
+  Replayed{ds: R.Ds}
+  Refused{at: Nat, why: String}
+
+def checked.of(m: Maybe<&1, Nat & Nat>, as: List<&2, R.Act>, n: Nat) -> Replay:
+  match m:
+    case None{}:
+      Replayed{R.acts(as, R.ds.empty(n))}
+    case Some{p}:
+      (+i, k) = p
+      Refused{i, why(k, i, as)}
+
+# the start's replay: replay's, when the check refuses no entry
+# (LAWS.bend: checked_replay)
+def checked(+reqs: List<&2, List<&2, String>>, +n: Nat) -> Replay:
+  ms = marks(reqs)
+  +as = file.acts(parse_all(reqs))
+  checked.of(check(ms, as, n), as, n)
+
+# s from its entry i on, as load reads its entries
+def skip(i: Nat, +s: String, m: Maybe<&1, List<&2, String> & String>) -> String:
+  match i m:
+    case 1n+j Some{p}:
+      (x, +rest) = p
+      skip(j, rest, entry(rest))
+    case _ _:
+      s
+
+# the byte of s its entry i starts at (where the server says a refused
+# entry is)
+def offset(+s: String, i: Nat) -> Nat:
+  Nat.sub(String.length(s), String.length(skip(i, s, entry(s))))

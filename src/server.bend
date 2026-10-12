@@ -1088,7 +1088,9 @@ def log.die(-A: Type, +lg: Log, +msg: String) -> IO(A):
 # everysec (Redis's default), left to the system with no. A batch that
 # changed nothing writes nothing, and the batches that wait together
 # share one write and one sync. At start the server restores its
-# database from the file (LAWS.bend: recover). A file that ends inside an
+# database from the file (LAWS.bend: recover), once each entry is found to
+# replay as the file means it (aof.bend: checked; a file with one that
+# does not is refused, and left as it was). A file that ends inside an
 # entry, cut by a crash in the middle of a write, is cut back to its last
 # whole entry, as Redis does with aof-load-truncated; a file with anything
 # else after its entries is refused, as Redis refuses it.
@@ -1485,10 +1487,39 @@ def restore_fix(+lg: Log, +trunc: Bool, +path: String, +size: Nat, +n: Nat, +ds:
     case False{} False{}:
       log.die(R.Ds & Nat, lg, "Bad file format reading the append only file " ++ path ++ ": no entry at byte " ++ Nat.show(Nat.sub(size, String.length(rest))))
 
+# a file with an entry that does not replay as the file means it stops
+# the start, with the entry's number and the byte it starts at (A.offset
+# of the file read again: the text read first is let go before the
+# replay, as before the check)
+@unsafe
+def restore_refused_at(+lg: Log, +path: String, +i: Nat, +why: String, p: File & String) -> IO(R.Ds & Nat):
+  (f, +s) = p
+  do IO<R.Ds & Nat>:
+    Unit <- File.close(f)
+    log.die(R.Ds & Nat, lg, "Bad command reading the append only file " ++ path ++ ": entry " ++ Nat.show(1n+i) ++ ", at byte " ++ Nat.show(A.offset(s, i)) ++ ": " ++ why)
+
+@unsafe
+def restore_refused(+lg: Log, +path: String, +i: Nat, +why: String) -> IO(R.Ds & Nat):
+  do IO<R.Ds & Nat>:
+    f : File <- IO.try(File, File.open(path, "r"))
+    p : File & String <- read_all(f, Nil{})
+    restore_refused_at(lg, path, i, why, p)
+
+# the databases of the entries, when each replays as the file means it
+# (aof.bend: checked); else the start stops at the first that does not,
+# before the file is cut or opened to append: it is left as it was
+@unsafe
+def restore_checked(+lg: Log, +trunc: Bool, +path: String, +size: Nat, +n: Nat, r: A.Replay, +rest: String) -> IO(R.Ds & Nat):
+  match r:
+    case A.Replayed{+ds}:
+      restore_fix(lg, trunc, path, size, n, ds, rest, String.is_empty(rest), cut_short(rest))
+    case A.Refused{+i, +why}:
+      restore_refused(lg, path, i, why)
+
 @unsafe
 def restore_load(+lg: Log, +trunc: Bool, +path: String, +size: Nat, +more: Nat, l: List<&2, List<&2, String>> & String) -> IO(R.Ds & Nat):
   (+reqs, +rest) = l
-  restore_fix(lg, trunc, path, size, List.length(&2, List<&2, String>, reqs), A.replay(reqs, more), rest, String.is_empty(rest), cut_short(rest))
+  restore_checked(lg, trunc, path, size, List.length(&2, List<&2, String>, reqs), A.checked(reqs, more), rest)
 
 @unsafe
 def restore_read(+lg: Log, +trunc: Bool, +path: String, +more: Nat, p: File & String) -> IO(R.Ds & Nat):

@@ -13499,6 +13499,12 @@ def aof_entries(+hist: List<&2, Laws.Run>, +n: Nat, -c: String, -d: String, e: {
 def Laws.load_cut(hist, n, c, d, e):
   load_cut_fin(c, A.effs.args(all_effs(hist, n), 0n), load_cut_go(A.effs.args(all_effs(hist, n), 0n), c, d, String.length(c), Nil{})(aof_entries(hist, n, c, d, e))(le_refl(String.length(c))))
 
+# The start's replay is replay's once its check is None: the check's
+# verdict is the one thing it looks at before it runs the acts replay runs
+def Laws.checked_replay(reqs, n, e):
+  %Equal.sym(Maybe<&1, Nat & Nat>, A.check(A.marks(reqs), A.file.acts(A.parse_all(reqs)), n), None{}, e) : {A.checked.of(_, A.file.acts(A.parse_all(reqs)), n) == A.Replayed{A.replay(reqs, n)} : A.Replay}
+  {==}
+
 # Steps and their effects
 # -----------------------
 # A history's acts, each at its time (Laws.commands), run one after
