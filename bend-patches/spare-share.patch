@@ -1,0 +1,102 @@
+diff --git a/bend2/comp.ts b/bend2/comp.ts
+index ce52dd8..5c5bad3 100644
+--- a/bend2/comp.ts
++++ b/bend2/comp.ts
+@@ -2200,11 +2200,26 @@ function bind_pop(sc: Scope, x: HTerm): Val {
+   sc.uses.set(p, { ...b, n: b.n - 1 });
+   val_owned(sc, b.val).forEach((w) => {
+     file_push(sc, `${w} = term_keep(e, ${w}, 1);`);
++    fld_put(sc, w);
+     facts_hot(sc, b.A, true);
+   });
+   return b.val;
+ }
+ 
++// A word read from a node kept as a spare is the node's too: a share may
++// wrap it (term_keep of a raw word), so the node gets the word back, the
++// one a re-read after a call takes and a rebuild that skips its slot
++// keeps; else they would hold the raw word the wrap now owns.
++function fld_put(sc: Scope, w: string): void {
++  const f = sc.fld.get(w);
++  if (f === undefined || !sc.spares.some((s) => !s.z && s.name === f.sp)) {
++    return;
++  }
++  const px = sc.perm;
++  const at = px !== null && f.sp === px.sp ? perm_at(sc, px.k, f.j) : f.j;
++  file_push(sc, `e.mem[${f.sp} + ${at}] = ${w};`);
++}
++
+ function bind_uses(sc: Scope, p: Of<"Var">, v: Val, rest: HTerm[], A: HTerm,
+   fresh = true): void {
+   const n = rest_use(rest, p);
+diff --git a/tests/rfc/spare_share.bend b/tests/rfc/spare_share.bend
+new file mode 100644
+index 0000000..837dab6
+--- /dev/null
++++ b/tests/rfc/spare_share.bend
+@@ -0,0 +1,65 @@
++# rfc (rfc_spare_share): a field of a node kept across a call, shared
++# before the call, is the node's again after it. step keeps its R node
++# across keep's call, which takes a share of a (term_keep wraps the raw
++# a in a count of two) and answers it as its tail; after the call step
++# re-reads a from the node for len, which consumes it, and rebuilds R in
++# the node with keep's answer. The node must hold the wrapped a, not the
++# raw one the wrap now owns: else len frees a's cells while keep's answer
++# still points at them, and the list main builds next takes them over
++# (206 for 46). Expect 46,7,4,206 on every lane.
++import Base
++
++type R is Data:
++  R{a: List<&2, U32>, b: List<&2, U32>, n: U32}
++  RIn{r: R}
++
++# xs with d zeros before it (a call, not a loop): xs itself its tail
++def keep(d: Nat, xs: List<&2, U32>) -> List<&2, U32>:
++  match d:
++    case 0n:
++      xs
++    case 1n+e:
++      Con{0, keep(e, xs)}
++
++def len(xs: List<&2, U32>) -> U32:
++  match xs:
++    case Nil{}:
++      0
++    case Con{h, t}:
++      U32.add(1, len(t))
++
++def sum(xs: List<&2, U32>) -> U32:
++  match xs:
++    case Nil{}:
++      0
++    case Con{h, t}:
++      U32.add(h, sum(t))
++
++def range(d: Nat, +i: U32) -> List<&2, U32>:
++  match d:
++    case 0n:
++      Nil{}
++    case 1n+e:
++      Con{i, range(e, U32.add(i, 1))}
++
++def step(r: R, +d: Nat) -> R:
++  match r:
++    case R{+a, b, n}:
++      c = keep(d, a)
++      R{c, b, U32.add(n, len(a))}
++    case RIn{x}:
++      RIn{step(x, d)}
++
++def show(r: R, z: List<&2, U32>) -> String:
++  match r:
++    case R{a, b, n}:
++      U32.show(sum(a)) ++ "," ++ U32.show(sum(b)) ++ "," ++ U32.show(n) ++ "," ++ U32.show(sum(z))
++    case RIn{x}:
++      show(x, z)
++
++def main() -> String:
++  r = step(R{range(4n, 10), [7], 0}, 3n)
++  z = range(4n, 50)
++  show(r, z)
++
++#|"46,7,4,206"

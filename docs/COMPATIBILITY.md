@@ -35,8 +35,15 @@ make suite REDIS_SRC=../redis      # both runs and the table, in build/suite/
 ## The result
 
 Redis 7.0.15, October 2026. Of the 1,673 tests Redis passes in this mode, BendKV passes
-**733 (43.8%)**; of the 1,089 in the units of what BendKV has, 726 (67%: 203 tests of
-unit/type/list and 82 of unit/type/zset wait for RESP3). Sorted sets (section 3zl of
+**746 (44.6%)**; of the 1,089 in the units of what BendKV has, 739 (68%: 203 tests of
+unit/type/list and 82 of unit/type/zset wait for RESP3). The blocking commands (section
+3zp of [FINDINGS.md](FINDINGS.md)) brought 13: unit/type/zset passes 192 of its 289, the
+twelve tests of BZPOPMIN, BZPOPMAX and BZMPOP that run over RESP2 before its HELLO 3 (a
+sorted set there already, several, and a second one that has members, in both
+encodings), and unit/introspection-2 the statistics of BRPOP (28 of its 43). With the
+tests of RESP3, MULTI, DEBUG, SORT and replication left out, unit/type/list passes the
+140 tests Redis passes, and unit/type/zset 260 of Redis's 276 (the other 16 use RESP3
+within a test). Sorted sets (section 3zl of
 [FINDINGS.md](FINDINGS.md)) brought 181: unit/type/zset passes 180 of its 289 tests (it
 then runs the tests of its blocking commands over RESP3 first, and stops at HELLO 3,
 before 82 more; of the others, 12 need the blocking commands, 14 RESP3 within a test, one
@@ -101,7 +108,7 @@ need MULTI and WATCH, Lua or lists (then).
 
 | area | units | Redis passes | BendKV passes |
 |---|---|---:|---:|
-| what BendKV has: the protocol, connections, the keyspace and its databases, strings and their ranges, bits and fields, counters and floats, hashes, lists, sets, sorted sets, times to live, introspection | protocol, quit, keyspace, type/string, type/incr, type/hash, type/list, list-2, list-3, type/set, type/zset, scan, bitops, bitfield, expire, introspection, introspection-2, other, info-command | 1089 | **726** |
+| what BendKV has: the protocol, connections, the keyspace and its databases, strings and their ranges, bits and fields, counters and floats, hashes, lists, sets, sorted sets and the commands that wait on them, times to live, introspection | protocol, quit, keyspace, type/string, type/incr, type/hash, type/list, list-2, list-3, type/set, type/zset, scan, bitops, bitfield, expire, introspection, introspection-2, other, info-command | 1089 | **739** |
 | data types, not yet | geo, hyperloglog, sort, dump, lazyfree, violations | 147 | 3 |
 | transactions, pub/sub, client-side caching, CLIENT PAUSE, the latency monitor, the slow log, the query buffer, not yet | multi, pubsub, tracking, pause, latency-monitor, slowlog, querybuf | 131 | 0 |
 | out of scope: Lua scripts, functions, streams | scripting, functions, type/stream, type/stream-cgroups | 306 | 4 |
@@ -126,7 +133,7 @@ pubsubshard, shutdown, tls, type/list-common, wait):
 | unit/hyperloglog | 20 | 20 | 0 |
 | unit/info-command | 3 | 3 | 3 |
 | unit/introspection | 28 | 28 | 14 |
-| unit/introspection-2 | 43 | 43 | 27 |
+| unit/introspection-2 | 43 | 43 | 28 |
 | unit/keyspace | 53 | 52 | 49 |
 | unit/latency-monitor | 14 | 13 | 0 |
 | unit/lazyfree | 4 | 4 | 0 |
@@ -152,18 +159,16 @@ pubsubshard, shutdown, tls, type/list-common, wait):
 | unit/type/stream | 72 | 63 | 1 |
 | unit/type/stream-cgroups | 44 | 43 | 1 |
 | unit/type/string | 77 | 77 | 74 |
-| unit/type/zset | 291 | 289 | 180 |
+| unit/type/zset | 291 | 289 | 192 |
 | unit/violations | 1 | 1 | 0 |
-| **all** | **1751** | **1673** | **733 (43.8%)** |
+| **all** | **1751** | **1673** | **746 (44.6%)** |
 
-## Why the other 940 fail
+## Why the other 927 fail
 
-- **501 stop on a command BendKV does not have.** By the number of tests each one stops:
+- **488 stop on a command BendKV does not have.** By the number of tests each one stops:
   FUNCTION LOAD 124, XADD 60, SORT 44, GEOADD 37, MULTI 27, WATCH 20, PFADD 19, SYNC 17
   (tests that read the replication stream), XGROUP 12, GEORADIUS 10, DUMP 9, SLOWLOG 9,
-  and 40 more below nine (113 tests). The blocking commands stop 13 for now (BZMPOP 6,
-  BZPOPMIN 4, BZPOPMAX 2, BRPOP 1): most of those of type/list and type/zset come after
-  their HELLO 3.
+  and 36 more below nine (100 tests).
 - **391 never ran**: their unit ended before them, on a command outside any test:
   LATENCY RESET (latency-monitor), SUBSCRIBE (tracking), HELLO 3 (type/list and type/zset run their later tests over RESP3
   and then over RESP2), `CONFIG SET appendonly yes` (type/stream; BendKV turns its
@@ -188,9 +193,9 @@ pubsubshard, shutdown, tls, type/list-common, wait):
   basic iteration, COUNT, MATCH, TYPE, and its guarantee under a load of writes, and
   RANDOMKEY's three.)
 
-So the tests are where the plan goes next: the blocking commands, RESP3, which
-type/list (203 tests) and type/zset (82) need before their later tests run, MULTI/EXEC
-and pub/sub, and the data types not yet there (147 tests).
+So the tests are where the plan goes next: RESP3, which type/list (203 tests) and
+type/zset (82) need before their later tests run, MULTI/EXEC and pub/sub, and the data
+types not yet there (147 tests).
 Scripts, functions and streams (306 tests) stay out of scope.
 
 ## What it found

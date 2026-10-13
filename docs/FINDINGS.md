@@ -128,7 +128,7 @@ represented data:
   reader an owner of the whole value: O(depth) reference-count operations per read.
 - **A deep trie.** The first map was a binary trie of 20 levels: 20 dependent loads.
 
-## 3. Twenty-four patches to the Bend compiler
+## 3. Twenty-six patches to the Bend compiler
 
 All live in [`bend-patches/`](../bend-patches/) (against `bendlang/bend` at `1cce499`,
 Bend 2.0.35). The first eight switch on by themselves for programs without GPU calls;
@@ -142,8 +142,11 @@ process's id, working directory and wall clock (section 3o); the twenty-first la
 out a datatype wider than 32 words as a node of its own, in every program (section 3p);
 the twenty-second makes `String.order` native, everywhere (section 3zn); the
 twenty-third keeps a socket with no room from holding up the writer, where a program
-calls `TCP.post` (section 3zo); and the twenty-fourth makes `File.truncate` take its
-size as a `Nat` and adds `File.sync_dir` (section 3e).
+calls `TCP.post` (section 3zo); the twenty-fourth makes `File.truncate` take its
+size as a `Nat` and adds `File.sync_dir` (section 3e); the twenty-fifth adds `TCP.watch`
+and `TCP.unwatch`, a wait for a socket that puts a message on a channel (section 3zp);
+and the twenty-sixth fixes the fifth where a field of the node it keeps across a call
+is shared before the call (section 3zp).
 The sections before 3l
 number the patches as they were then: patch 16 was effect pairs, taken out in 3l with
 `TCP.post_list` of patch 11, and their patches 17–20 are today's 16–19. None changes the
@@ -177,6 +180,8 @@ to agree with the list definition, and `IO` is still a function of `R` and `k`.
 | string order (today's 22nd) | `String.order` compares runs of bytes with `memcmp`, a prefix first, instead of a char at a time through `String.cmp` | ZRANK of a member of 100,000 of one score 76,861 → 9,028 instructions, of their own scores 15,877 → 7,515 (section 3zn) |
 | writer hold (today's 23rd) | the writer never waits for a socket: what a socket has no room for, and what is posted to it after, it holds in order and sends once its own epoll says the socket has room; the queue grows by blocks, so a post never waits for room | a client that stops reading holds up only its own replies, not the others', the timers or the accepts (section 3zo); instructions per request as before, within what moves between runs |
 | file durable (today's 24th) | `File.truncate` takes its size as a `Nat`, a 64-bit word, not a `U32` (a size `off_t` cannot hold fails with `EOVERFLOW` before the file is touched); `File.sync_dir` syncs the directory that holds a path, as Redis's `fsyncFileDir` | a file of 4 GiB or more cut back to its last whole entry keeps the entries before it, not its size modulo 2^32 of them; a new file's name is on the disk before the first write is acknowledged (section 3e) |
+| tcp watch (25th) | `TCP.watch(sock, chan, msg)` puts `msg` on `chan` once the socket has bytes to read or its peer closed it, waiting in the socket's slot as a recv does; `TCP.unwatch` takes it back, `True` if it had not fired; a watch that a stale edge or flag wakes peeks at the socket and waits on when there is nothing to read | a connection whose client waits waits at once for the actor's answer and for its client's bytes or close (section 3zp) |
+| spare share (26th) | a field of a node kept across a call (patch 5) that is shared before the call is written back to the node once `term_keep` has wrapped it, so the read after the call and a rebuild that skips the slot hold the shared word, not the raw one the wrap owns | no use after free in the batches that run a command at a time while clients wait; 27 stores in BendKV, all on that path, and the same instructions per request (section 3zp) |
 
 The ratios in the last column come from different series and drift by ±0.06–0.08
 between series; PERFORMANCE.md gives each one with its pairs.
@@ -186,7 +191,7 @@ slower than lists on one thread and 1.7 times on four: short strings built and t
 apart character by character are their worst case. The other 16 runtime benchmarks
 do not change (geometric mean ×0.99). Huge pages add about 0.4 ms to the start of a
 short program and 0.4–0.9 s of kernel time to programs whose heaps reach hundreds of
-megabytes. The patches grow `bend2/comp.ts` from 62,940 to 101,094 tokens, over the
+megabytes. The patches grow `bend2/comp.ts` from 62,940 to 101,287 tokens, over the
 repository's 64,000 cap, so upstreaming them means making them smaller first. With all
 sixteen, the C lane of Bend's own test suite passes exactly the tests it passes with
 thirteen, plus the three new ones; with nineteen, its C and JS lanes pass exactly the
@@ -205,7 +210,10 @@ others need ALSA's headers, build a test that fails to build, or print to two st
 an order that varies); with today's twenty-four, which changes only the type of
 `File.truncate`'s size and adds an effect, the tests of `tests/io` pass on both lanes as
 with twenty-three (the one that cuts a file gives its size as a `Nat` now), plus the new
-one (`file_durable`): 233 of 240; the rest of the suite was not run again.
+one (`file_durable`): 233 of 240; with twenty-five, the tests of `tests/io` pass on both
+lanes as with twenty-four, plus the new one (`tcp_watch`): 235 of 242; with twenty-six,
+the C lane of the whole suite passes exactly the tests it passes with twenty-five (734 of
+865), plus the new one (`rfc_spare_share`): 735 of 866.
 
 **BendKV's own changes.** A 16-way trie (5 levels instead of 20) whose leaves are
 buckets inside the trie; laws reproved for it. Requests parsed by index, with no
@@ -3028,8 +3036,129 @@ each block's end. Under callgrind, with replies posted, a request costs what it 
 within what moves between runs: at pipeline 16, GET, SET and INCR take 3,434, 4,375 and
 4,519 instructions against 3,390, 4,377 and 4,578 without the patch; without a pipeline,
 10,849–10,992, 12,355–12,812 and 12,350–13,113 against 10,976–11,592, 12,364–12,389 and
-12,640–12,756 (how many requests a wake finds moves a run by up to 6%). Throughput on a
-quiet machine is still to be measured.
+12,640–12,756 (how many requests a wake finds moves a run by up to 6%). Throughput, in
+pairs (`tools/bench_pairs.sh`: three trials, 100,000 keys, 20 clients) of the build with
+the reviews merged (this patch, the next one and the protocol's fixes) against the build
+before them, moved within what moves between trials: with replies posted on two cores,
+GET, SET and INCR at 1.036, 1.023 and 0.928 of it at pipeline 16, and 1.113, 0.967 and
+0.979 without a pipeline; sent from the loop on one core, 0.972, 1.015 and 0.945, and
+1.037, 0.973 and 1.035.
+
+## 3zp. Clients that wait
+
+**What there is.** BLPOP, BRPOP, BLMOVE, BRPOPLPUSH, BLMPOP, BZPOPMIN, BZPOPMAX and BZMPOP,
+the blocking commands of Redis 7.0.15's lists and sorted sets, and CLIENT UNBLOCK with
+TIMEOUT and ERROR (XREAD and WAIT wait on what BendKV does not have). A blocking command
+is the pop it makes once a key it waits on holds what it pops: LMPOP of its keys (BLPOP
+and BRPOP pop one element and answer the key and the element), LMOVE of its source
+(BRPOPLPUSH, BLMOVE) or ZMPOP (BZPOPMIN and BZPOPMAX answer the key, the member and its
+score). Its timeout is read as Redis 7.0.15 reads it, a long double of seconds, with its
+errors, its quirks included (`inf` and `1e400` are "timeout is negative", as Redis's cast
+of them to a long long makes them); 0 waits for ever, and so does a time too far to add
+to the clock, whose sum wraps in Redis. A command that finds what it pops answers at
+once; one that finds nothing makes its client wait. As in Redis: the call is counted when
+the client starts to wait; a client whose time is up gets a null array (`*-1`) and counts
+nothing more; CLIENT UNBLOCK reads its reason before the id, ends the wait with a null
+array (TIMEOUT) or `-UNBLOCKED client unblocked via CLIENT UNBLOCK` (ERROR), and counts
+the waiting command's call failed either way, its error with ERROR, and with ERROR its own
+call failed too (Redis counts an error reply that comes while a command runs against that
+command, `incrCommandStatsOnError`); the commands a client sent after its blocking one
+wait with it, as Redis leaves a blocked client's input unread; a client that closes its
+connection while it waits is forgotten; INFO counts `blocked_clients` and
+`clients_in_timeout_table`. A blocking command run while the client's replies are off
+(CLIENT REPLY OFF or SKIP) waits and pops the same, and its reply is dropped.
+
+**In the actor.** The clients that wait are one chain in the order they came (`Waits`),
+each with its connection before and after the blocking command, its pop, its database,
+its deadline and the rest of its batch. While one waits, every batch runs the general way,
+a command at a time (`bg.go`, which now runs every batch that cannot run the fast way: one
+with a command of the connection or of the server, or from a client not authenticated or
+whose replies are off); after each command, the actor looks down the chain for the
+first client one of whose keys, in its own database, holds what it waits for, makes its
+pop there, takes it out, and looks again until none is ready. A client served goes on
+with the rest of its batch at the end of the group, after its reply; a batch that waits
+again joins the end of the chain. At the end of each group, the clients whose time is up
+get their null arrays; a tick of the cron (`hz`, 10 a second by default) makes a group,
+so a timeout fires within a tick of its time, as in Redis, which looks at its timeouts
+before it sleeps, at least once a tick of its cron. The pop of a client served is logged
+as the command that makes it: LPOP or RPOP with its count, LMOVE, ZPOPMIN or ZPOPMAX
+(Redis logs the same).
+To the session and to the proofs, a blocking command is its pop run once: a key that
+holds what it pops answers as the blocking command does, and none answers as Redis
+answers a client that may not wait, inside MULTI (a null array, or a null for BRPOPLPUSH
+and BLMOVE); the actor runs the same pop when it serves the client, so what a served
+client does to the databases is what the proved commands do. The waiting itself, who is served when,
+is outside the proofs; CLIENT UNBLOCK is a session command that changes nothing in them
+(answering 0), as it is for a session that has no client waiting.
+
+**On the connection.** The answer to a batch whose client waits is `Hold`, with the
+replies before the blocking command. The connection sends them, puts out a watch on its
+socket (`TCP.watch`, the twenty-fifth patch) that puts `Ready` on its own channel when
+bytes come or the client closes it, and waits on the channel: for the actor's answer
+(the watch taken back, a `Ready` it put dropped, the replies sent, and the bytes that
+came meanwhile read on, as after any batch), or for `Ready` (the bytes kept for after the
+batch; a close tells the actor the client is gone, and the connection ends once the actor
+answers that it holds nothing more for it).
+
+**A type travels as wide as its widest form, a third time.** The first version passed
+the state of a batch run the general way (its replies, effects, connection, server,
+databases, the chain and the clients served) as a flat record: the widest result in the
+program went from 17 words to 30 and the bank of registers that every segment shares from
+28 to 48, and every request paid, though no client waited: GET 3,327 instructions, SET
+4,252, INCR 4,512 against 3,256, 4,180 and 4,431 before (+2.2%, +1.7%, +1.8%; sections 3p
+and 3zl met the same trap). Now that state is a node of its own (a type with a variant
+that holds itself), the chain of clients is one word (a type that holds itself), and the
+functions of the general way pass less: the bank is 26 registers, the widest result 17,
+and a request costs GET 3,272, SET 4,194 and INCR 4,454 (+0.5%, +0.3%, +0.5%).
+
+**Two bugs below BendKV.** Redis's suite stopped in unit/introspection, the server gone:
+a client whose replies were off sent a command of the database (CLIENT REPLY OFF, then
+PING), and at the next tick the server read the statistics of commands from freed memory
+(`SIGSEGV`). The compiler's node update (the fifth patch) had
+kept the node of the batch's state across the call to `S.run_log`, re-reading after the
+call the fields it had not saved. The server's state was used twice, by the run and by the
+connection's next state after it, so `term_keep` shared its words before the call,
+wrapping each raw word in a count of two; the node kept the raw words. After the call the
+re-read raw word went to the second use, which dropped it and freed the statistics, while
+the run's answer held the wrap. The twenty-sixth patch writes a shared field back into the
+node it is kept in (one store); it adds 27 stores to BendKV, all in the functions of the
+general way, and no other function had the pattern (the instructions per request did not
+move). The second: under the load of a build, a client served (by a push, or a MOVE), its
+pop made, sometimes never got its reply. Its connection had woken on `Ready` from a watch that fired
+for nothing, read the socket, found nothing, and waited there for bytes, the actor's answer
+on its channel. The runtime keeps for each socket a flag of an edge that came while no one
+waited on it, and a watch put out with the flag up fires at the next poll; but an edge the
+loop sees only after a read has taken its bytes raises the flag on an empty socket (or
+wakes a watch put out since). A build that logs such a fire logged 4 in 3,200 wake-ups on an
+idle machine; the one it traced came from the flag. The twenty-fifth patch now peeks at the
+socket (`recv` with `MSG_PEEK`) before it fires, and waits for the next edge when there is
+nothing to read. Before it, 8 of 1,200 wake-ups after a MOVE were lost under load, and the
+test below failed 13 runs of 30; after it, none of 10,500, and 60 runs passed.
+
+**Tests.** `tests/blocking_test.py` runs in `make test` against each mode of the server:
+18 scenarios on BendKV and on Redis, each with clients of its own, their transcripts
+compared line by line (61 lines: pushes that serve, timeouts, CLIENT UNBLOCK with its
+errors, a client that closes while it waits, the fairness of a pipeline that pushes and
+then waits itself, BLMOVE chains and a circle of BRPOPLPUSH, a move onto a key of the
+wrong type, commands and bytes behind a blocking one, sorted sets, a list that does not
+serve a client waiting for a sorted set, INFO's statistics, a timeout with a pipeline
+behind it, RENAME, MOVE and SWAPDB that
+make a key, CLIENT REPLY OFF, a client served that waits again, a SELECT and a QUIT in
+the batch of a blocking command); then BendKV under load: 300 clients served on 300 keys,
+100 timeouts at once, 100 clients that leave while they wait (none left waiting, the
+elements pushed after them kept), and 50 consumers that move 1,000 items with BRPOPLPUSH
+while some leave, each item moved once. Redis's suite: 746 of the 1,673 tests Redis passes
+(44.6%; 733 before), unit/type/zset 192 of its 289 (180) and unit/introspection-2 28 of its
+43; unit/type/list still stops at its HELLO 3 after 15. With the tests of RESP3, MULTI,
+DEBUG, SORT and replication left out, unit/type/list passes the 140 tests Redis passes,
+and unit/type/zset 260 of Redis's 276, the other 16 using RESP3 within a test.
+
+**Where BendKV differs.** Redis serves the clients of the keys a command added
+(`signalKeyAsReady`, from `dbAdd`, and SWAPDB's scan), key by key in the order the keys
+became ready; BendKV looks at every client after every command, in the order they came,
+so when one command readies several keys (SWAPDB), clients waiting on different keys may
+be served in another order. There is no MULTI yet, inside which a blocking command
+answers at once.
 
 ## 4. Where a request's time goes, and hiding the memory waits
 

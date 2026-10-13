@@ -1045,6 +1045,1149 @@
     []
    ]
   },
+  "blmove": {
+   "docs": [
+    "summary",
+    "Pop an element from a list, push it to another list and return it; or block until one is available",
+    "since",
+    "6.2.0",
+    "group",
+    "list",
+    "complexity",
+    "O(1)",
+    "arguments",
+    [
+     [
+      "name",
+      "source",
+      "type",
+      "key",
+      "key_spec_index",
+      0
+     ],
+     [
+      "name",
+      "destination",
+      "type",
+      "key",
+      "key_spec_index",
+      1
+     ],
+     [
+      "name",
+      "wherefrom",
+      "type",
+      "oneof",
+      "arguments",
+      [
+       [
+        "name",
+        "left",
+        "type",
+        "pure-token",
+        "token",
+        "LEFT"
+       ],
+       [
+        "name",
+        "right",
+        "type",
+        "pure-token",
+        "token",
+        "RIGHT"
+       ]
+      ]
+     ],
+     [
+      "name",
+      "whereto",
+      "type",
+      "oneof",
+      "arguments",
+      [
+       [
+        "name",
+        "left",
+        "type",
+        "pure-token",
+        "token",
+        "LEFT"
+       ],
+       [
+        "name",
+        "right",
+        "type",
+        "pure-token",
+        "token",
+        "RIGHT"
+       ]
+      ]
+     ],
+     [
+      "name",
+      "timeout",
+      "type",
+      "double"
+     ]
+    ]
+   ],
+   "info": [
+    "blmove",
+    6,
+    [
+     {
+      "+": "write"
+     },
+     {
+      "+": "denyoom"
+     },
+     {
+      "+": "noscript"
+     },
+     {
+      "+": "blocking"
+     }
+    ],
+    1,
+    2,
+    1,
+    [
+     {
+      "+": "@write"
+     },
+     {
+      "+": "@list"
+     },
+     {
+      "+": "@slow"
+     },
+     {
+      "+": "@blocking"
+     }
+    ],
+    [],
+    [
+     [
+      "flags",
+      [
+       {
+        "+": "RW"
+       },
+       {
+        "+": "access"
+       },
+       {
+        "+": "delete"
+       }
+      ],
+      "begin_search",
+      [
+       "type",
+       "index",
+       "spec",
+       [
+        "index",
+        1
+       ]
+      ],
+      "find_keys",
+      [
+       "type",
+       "range",
+       "spec",
+       [
+        "lastkey",
+        0,
+        "keystep",
+        1,
+        "limit",
+        0
+       ]
+      ]
+     ],
+     [
+      "flags",
+      [
+       {
+        "+": "RW"
+       },
+       {
+        "+": "insert"
+       }
+      ],
+      "begin_search",
+      [
+       "type",
+       "index",
+       "spec",
+       [
+        "index",
+        2
+       ]
+      ],
+      "find_keys",
+      [
+       "type",
+       "range",
+       "spec",
+       [
+        "lastkey",
+        0,
+        "keystep",
+        1,
+        "limit",
+        0
+       ]
+      ]
+     ]
+    ],
+    []
+   ]
+  },
+  "blmpop": {
+   "docs": [
+    "summary",
+    "Pop elements from a list, or block until one is available",
+    "since",
+    "7.0.0",
+    "group",
+    "list",
+    "complexity",
+    "O(N+M) where N is the number of provided keys and M is the number of elements returned.",
+    "arguments",
+    [
+     [
+      "name",
+      "timeout",
+      "type",
+      "double"
+     ],
+     [
+      "name",
+      "numkeys",
+      "type",
+      "integer"
+     ],
+     [
+      "name",
+      "key",
+      "type",
+      "key",
+      "key_spec_index",
+      0,
+      "flags",
+      [
+       {
+        "+": "multiple"
+       }
+      ]
+     ],
+     [
+      "name",
+      "where",
+      "type",
+      "oneof",
+      "arguments",
+      [
+       [
+        "name",
+        "left",
+        "type",
+        "pure-token",
+        "token",
+        "LEFT"
+       ],
+       [
+        "name",
+        "right",
+        "type",
+        "pure-token",
+        "token",
+        "RIGHT"
+       ]
+      ]
+     ],
+     [
+      "name",
+      "count",
+      "type",
+      "integer",
+      "token",
+      "COUNT",
+      "flags",
+      [
+       {
+        "+": "optional"
+       }
+      ]
+     ]
+    ]
+   ],
+   "info": [
+    "blmpop",
+    -5,
+    [
+     {
+      "+": "write"
+     },
+     {
+      "+": "blocking"
+     },
+     {
+      "+": "movablekeys"
+     }
+    ],
+    0,
+    0,
+    0,
+    [
+     {
+      "+": "@write"
+     },
+     {
+      "+": "@list"
+     },
+     {
+      "+": "@slow"
+     },
+     {
+      "+": "@blocking"
+     }
+    ],
+    [],
+    [
+     [
+      "flags",
+      [
+       {
+        "+": "RW"
+       },
+       {
+        "+": "access"
+       },
+       {
+        "+": "delete"
+       }
+      ],
+      "begin_search",
+      [
+       "type",
+       "index",
+       "spec",
+       [
+        "index",
+        2
+       ]
+      ],
+      "find_keys",
+      [
+       "type",
+       "keynum",
+       "spec",
+       [
+        "keynumidx",
+        0,
+        "firstkey",
+        1,
+        "keystep",
+        1
+       ]
+      ]
+     ]
+    ],
+    []
+   ]
+  },
+  "blpop": {
+   "docs": [
+    "summary",
+    "Remove and get the first element in a list, or block until one is available",
+    "since",
+    "2.0.0",
+    "group",
+    "list",
+    "complexity",
+    "O(N) where N is the number of provided keys.",
+    "history",
+    [
+     [
+      "6.0.0",
+      "`timeout` is interpreted as a double instead of an integer."
+     ]
+    ],
+    "arguments",
+    [
+     [
+      "name",
+      "key",
+      "type",
+      "key",
+      "key_spec_index",
+      0,
+      "flags",
+      [
+       {
+        "+": "multiple"
+       }
+      ]
+     ],
+     [
+      "name",
+      "timeout",
+      "type",
+      "double"
+     ]
+    ]
+   ],
+   "info": [
+    "blpop",
+    -3,
+    [
+     {
+      "+": "write"
+     },
+     {
+      "+": "noscript"
+     },
+     {
+      "+": "blocking"
+     }
+    ],
+    1,
+    -2,
+    1,
+    [
+     {
+      "+": "@write"
+     },
+     {
+      "+": "@list"
+     },
+     {
+      "+": "@slow"
+     },
+     {
+      "+": "@blocking"
+     }
+    ],
+    [],
+    [
+     [
+      "flags",
+      [
+       {
+        "+": "RW"
+       },
+       {
+        "+": "access"
+       },
+       {
+        "+": "delete"
+       }
+      ],
+      "begin_search",
+      [
+       "type",
+       "index",
+       "spec",
+       [
+        "index",
+        1
+       ]
+      ],
+      "find_keys",
+      [
+       "type",
+       "range",
+       "spec",
+       [
+        "lastkey",
+        -2,
+        "keystep",
+        1,
+        "limit",
+        0
+       ]
+      ]
+     ]
+    ],
+    []
+   ]
+  },
+  "brpop": {
+   "docs": [
+    "summary",
+    "Remove and get the last element in a list, or block until one is available",
+    "since",
+    "2.0.0",
+    "group",
+    "list",
+    "complexity",
+    "O(N) where N is the number of provided keys.",
+    "history",
+    [
+     [
+      "6.0.0",
+      "`timeout` is interpreted as a double instead of an integer."
+     ]
+    ],
+    "arguments",
+    [
+     [
+      "name",
+      "key",
+      "type",
+      "key",
+      "key_spec_index",
+      0,
+      "flags",
+      [
+       {
+        "+": "multiple"
+       }
+      ]
+     ],
+     [
+      "name",
+      "timeout",
+      "type",
+      "double"
+     ]
+    ]
+   ],
+   "info": [
+    "brpop",
+    -3,
+    [
+     {
+      "+": "write"
+     },
+     {
+      "+": "noscript"
+     },
+     {
+      "+": "blocking"
+     }
+    ],
+    1,
+    -2,
+    1,
+    [
+     {
+      "+": "@write"
+     },
+     {
+      "+": "@list"
+     },
+     {
+      "+": "@slow"
+     },
+     {
+      "+": "@blocking"
+     }
+    ],
+    [],
+    [
+     [
+      "flags",
+      [
+       {
+        "+": "RW"
+       },
+       {
+        "+": "access"
+       },
+       {
+        "+": "delete"
+       }
+      ],
+      "begin_search",
+      [
+       "type",
+       "index",
+       "spec",
+       [
+        "index",
+        1
+       ]
+      ],
+      "find_keys",
+      [
+       "type",
+       "range",
+       "spec",
+       [
+        "lastkey",
+        -2,
+        "keystep",
+        1,
+        "limit",
+        0
+       ]
+      ]
+     ]
+    ],
+    []
+   ]
+  },
+  "brpoplpush": {
+   "docs": [
+    "summary",
+    "Pop an element from a list, push it to another list and return it; or block until one is available",
+    "since",
+    "2.2.0",
+    "group",
+    "list",
+    "complexity",
+    "O(1)",
+    "doc_flags",
+    [
+     {
+      "+": "deprecated"
+     }
+    ],
+    "deprecated_since",
+    "6.2.0",
+    "replaced_by",
+    "`BLMOVE` with the `RIGHT` and `LEFT` arguments",
+    "history",
+    [
+     [
+      "6.0.0",
+      "`timeout` is interpreted as a double instead of an integer."
+     ]
+    ],
+    "arguments",
+    [
+     [
+      "name",
+      "source",
+      "type",
+      "key",
+      "key_spec_index",
+      0
+     ],
+     [
+      "name",
+      "destination",
+      "type",
+      "key",
+      "key_spec_index",
+      1
+     ],
+     [
+      "name",
+      "timeout",
+      "type",
+      "double"
+     ]
+    ]
+   ],
+   "info": [
+    "brpoplpush",
+    4,
+    [
+     {
+      "+": "write"
+     },
+     {
+      "+": "denyoom"
+     },
+     {
+      "+": "noscript"
+     },
+     {
+      "+": "blocking"
+     }
+    ],
+    1,
+    2,
+    1,
+    [
+     {
+      "+": "@write"
+     },
+     {
+      "+": "@list"
+     },
+     {
+      "+": "@slow"
+     },
+     {
+      "+": "@blocking"
+     }
+    ],
+    [],
+    [
+     [
+      "flags",
+      [
+       {
+        "+": "RW"
+       },
+       {
+        "+": "access"
+       },
+       {
+        "+": "delete"
+       }
+      ],
+      "begin_search",
+      [
+       "type",
+       "index",
+       "spec",
+       [
+        "index",
+        1
+       ]
+      ],
+      "find_keys",
+      [
+       "type",
+       "range",
+       "spec",
+       [
+        "lastkey",
+        0,
+        "keystep",
+        1,
+        "limit",
+        0
+       ]
+      ]
+     ],
+     [
+      "flags",
+      [
+       {
+        "+": "RW"
+       },
+       {
+        "+": "insert"
+       }
+      ],
+      "begin_search",
+      [
+       "type",
+       "index",
+       "spec",
+       [
+        "index",
+        2
+       ]
+      ],
+      "find_keys",
+      [
+       "type",
+       "range",
+       "spec",
+       [
+        "lastkey",
+        0,
+        "keystep",
+        1,
+        "limit",
+        0
+       ]
+      ]
+     ]
+    ],
+    []
+   ]
+  },
+  "bzmpop": {
+   "docs": [
+    "summary",
+    "Remove and return members with scores in a sorted set or block until one is available",
+    "since",
+    "7.0.0",
+    "group",
+    "sorted-set",
+    "complexity",
+    "O(K) + O(M*log(N)) where K is the number of provided keys, N being the number of elements in the sorted set, and M being the number of elements popped.",
+    "arguments",
+    [
+     [
+      "name",
+      "timeout",
+      "type",
+      "double"
+     ],
+     [
+      "name",
+      "numkeys",
+      "type",
+      "integer"
+     ],
+     [
+      "name",
+      "key",
+      "type",
+      "key",
+      "key_spec_index",
+      0,
+      "flags",
+      [
+       {
+        "+": "multiple"
+       }
+      ]
+     ],
+     [
+      "name",
+      "where",
+      "type",
+      "oneof",
+      "arguments",
+      [
+       [
+        "name",
+        "min",
+        "type",
+        "pure-token",
+        "token",
+        "MIN"
+       ],
+       [
+        "name",
+        "max",
+        "type",
+        "pure-token",
+        "token",
+        "MAX"
+       ]
+      ]
+     ],
+     [
+      "name",
+      "count",
+      "type",
+      "integer",
+      "token",
+      "COUNT",
+      "flags",
+      [
+       {
+        "+": "optional"
+       }
+      ]
+     ]
+    ]
+   ],
+   "info": [
+    "bzmpop",
+    -5,
+    [
+     {
+      "+": "write"
+     },
+     {
+      "+": "blocking"
+     },
+     {
+      "+": "movablekeys"
+     }
+    ],
+    0,
+    0,
+    0,
+    [
+     {
+      "+": "@write"
+     },
+     {
+      "+": "@sortedset"
+     },
+     {
+      "+": "@slow"
+     },
+     {
+      "+": "@blocking"
+     }
+    ],
+    [],
+    [
+     [
+      "flags",
+      [
+       {
+        "+": "RW"
+       },
+       {
+        "+": "access"
+       },
+       {
+        "+": "delete"
+       }
+      ],
+      "begin_search",
+      [
+       "type",
+       "index",
+       "spec",
+       [
+        "index",
+        2
+       ]
+      ],
+      "find_keys",
+      [
+       "type",
+       "keynum",
+       "spec",
+       [
+        "keynumidx",
+        0,
+        "firstkey",
+        1,
+        "keystep",
+        1
+       ]
+      ]
+     ]
+    ],
+    []
+   ]
+  },
+  "bzpopmax": {
+   "docs": [
+    "summary",
+    "Remove and return the member with the highest score from one or more sorted sets, or block until one is available",
+    "since",
+    "5.0.0",
+    "group",
+    "sorted-set",
+    "complexity",
+    "O(log(N)) with N being the number of elements in the sorted set.",
+    "history",
+    [
+     [
+      "6.0.0",
+      "`timeout` is interpreted as a double instead of an integer."
+     ]
+    ],
+    "arguments",
+    [
+     [
+      "name",
+      "key",
+      "type",
+      "key",
+      "key_spec_index",
+      0,
+      "flags",
+      [
+       {
+        "+": "multiple"
+       }
+      ]
+     ],
+     [
+      "name",
+      "timeout",
+      "type",
+      "double"
+     ]
+    ]
+   ],
+   "info": [
+    "bzpopmax",
+    -3,
+    [
+     {
+      "+": "write"
+     },
+     {
+      "+": "noscript"
+     },
+     {
+      "+": "blocking"
+     },
+     {
+      "+": "fast"
+     }
+    ],
+    1,
+    -2,
+    1,
+    [
+     {
+      "+": "@write"
+     },
+     {
+      "+": "@sortedset"
+     },
+     {
+      "+": "@fast"
+     },
+     {
+      "+": "@blocking"
+     }
+    ],
+    [],
+    [
+     [
+      "flags",
+      [
+       {
+        "+": "RW"
+       },
+       {
+        "+": "access"
+       },
+       {
+        "+": "delete"
+       }
+      ],
+      "begin_search",
+      [
+       "type",
+       "index",
+       "spec",
+       [
+        "index",
+        1
+       ]
+      ],
+      "find_keys",
+      [
+       "type",
+       "range",
+       "spec",
+       [
+        "lastkey",
+        -2,
+        "keystep",
+        1,
+        "limit",
+        0
+       ]
+      ]
+     ]
+    ],
+    []
+   ]
+  },
+  "bzpopmin": {
+   "docs": [
+    "summary",
+    "Remove and return the member with the lowest score from one or more sorted sets, or block until one is available",
+    "since",
+    "5.0.0",
+    "group",
+    "sorted-set",
+    "complexity",
+    "O(log(N)) with N being the number of elements in the sorted set.",
+    "history",
+    [
+     [
+      "6.0.0",
+      "`timeout` is interpreted as a double instead of an integer."
+     ]
+    ],
+    "arguments",
+    [
+     [
+      "name",
+      "key",
+      "type",
+      "key",
+      "key_spec_index",
+      0,
+      "flags",
+      [
+       {
+        "+": "multiple"
+       }
+      ]
+     ],
+     [
+      "name",
+      "timeout",
+      "type",
+      "double"
+     ]
+    ]
+   ],
+   "info": [
+    "bzpopmin",
+    -3,
+    [
+     {
+      "+": "write"
+     },
+     {
+      "+": "noscript"
+     },
+     {
+      "+": "blocking"
+     },
+     {
+      "+": "fast"
+     }
+    ],
+    1,
+    -2,
+    1,
+    [
+     {
+      "+": "@write"
+     },
+     {
+      "+": "@sortedset"
+     },
+     {
+      "+": "@fast"
+     },
+     {
+      "+": "@blocking"
+     }
+    ],
+    [],
+    [
+     [
+      "flags",
+      [
+       {
+        "+": "RW"
+       },
+       {
+        "+": "access"
+       },
+       {
+        "+": "delete"
+       }
+      ],
+      "begin_search",
+      [
+       "type",
+       "index",
+       "spec",
+       [
+        "index",
+        1
+       ]
+      ],
+      "find_keys",
+      [
+       "type",
+       "range",
+       "spec",
+       [
+        "lastkey",
+        -2,
+        "keystep",
+        1,
+        "limit",
+        0
+       ]
+      ]
+     ]
+    ],
+    []
+   ]
+  },
   "client": {
    "docs": [
     "summary",
