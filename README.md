@@ -14,9 +14,9 @@ throughput of Redis 7.0.15 on the same machine, with half its memory for small v
 > **Status: research prototype.** BendKV implements a subset of Redis (strings, hashes,
 > lists, sets, sorted sets and their times to live, the blocking commands, transactions,
 > pub/sub and keyspace notifications, the keyspace, several databases, connection
-> commands, an append-only file). The goal now is a drop-in replacement for a single
-> Redis node, measured by Redis's own test suite: of the 1,673 tests Redis 7.0.15 passes
-> against a server it did not start, BendKV passes 785, and 780 of the 1,172 in what it
+> commands and CLIENT LIST, INFO and KILL, an append-only file). The goal now is a drop-in replacement for a single
+> Redis node, measured by Redis's own test suite: of the 1,677 tests Redis 7.0.15 passes
+> against a server it did not start, BendKV passes 794, and 789 of the 1,172 in what it
 > implements ([docs/COMPATIBILITY.md](docs/COMPATIBILITY.md)). Do not use it for data you
 > cannot lose.
 
@@ -255,8 +255,25 @@ translation stays in the trusted base.
 - **Connection:** PING, ECHO, TIME (the time the batch runs at, to the ms), HELLO (RESP2,
   with AUTH and SETNAME), AUTH, SELECT, QUIT,
   RESET (which selects database 0 again), CLIENT (ID, GETNAME, SETNAME,
-  REPLY ON/OFF/SKIP, NO-EVICT, GETREDIR, TRACKINGINFO, CACHING, UNBLOCK (TIMEOUT or ERROR), HELP),
-  FUNCTION FLUSH.
+  REPLY ON/OFF/SKIP, NO-EVICT, GETREDIR, TRACKINGINFO, CACHING, UNBLOCK (TIMEOUT or ERROR),
+  LIST, INFO, KILL, HELP), FUNCTION FLUSH.
+- **Clients:** CLIENT LIST (all, of a TYPE, of IDs), CLIENT INFO and CLIENT KILL (the old
+  form of an address, and the filters ID, TYPE, ADDR, LADDR, USER and SKIPME), as Redis
+  7.0.15 runs them, with its errors. A client's line has Redis's fields in Redis's order:
+  its id, address and local address, its socket's fd, its name, age and idle time, its
+  flags (P subscribed, x in MULTI, b waiting, d a watched key touched, e NO-EVICT on, N
+  none), database, counts of subscriptions, its queued commands, the bytes of the batch
+  and of the arguments of the command that runs (of the blocking command, for a client
+  that waits), and the full name of its last command (the blocking one while it waits;
+  EXEC, with the client in MULTI, while EXEC runs). A client killed is cut off at once,
+  wherever it waits (its socket shut down), its transaction, wait and subscriptions
+  dropped, what it waited for left as it was; the old form, and SKIPME no, kill the client
+  itself after its reply, and in a transaction after the rest of it. Where BendKV
+  differs: it keeps no buffers per client, so their sizes are 0 (qbuf-free, multi-mem,
+  rbs, rbp, obl, oll, omem, tot-mem) and so is qbuf of another client (Redis's query buffer
+  holds the commands after a blocking one; BendKV holds them as commands); idle counts
+  from the client's last batch, where Redis also counts a reply written (to a subscriber
+  that gets messages, to a client that waited); user is `default`, redir -1, resp 2.
 - **Configuration:** CONFIG GET (names, aliases and glob patterns), SET (several
   parameters at once, all or none), RESETSTAT, REWRITE, HELP, over all 178 parameters of
   Redis 7.0.15, taken from Redis's own table by `tools/gen_config.py`: every value is
@@ -320,7 +337,7 @@ translation stays in the trusted base.
   at an unknown command.
 
 Not yet: streams and the other types (HyperLogLog, geo), Lua
-scripts, RESP3, timing of commands
+scripts, RESP3, MONITOR, CLIENT PAUSE and TRACKING, timing of commands
 (usec in INFO commandstats, latencystats), CONFIG REWRITE (it answers as Redis does without a configuration file),
 RDB files. Integers, and times in ms, are limited to 14 digits.
 
@@ -349,7 +366,7 @@ also needs Lean 4.34.0 (through elan).
 
 ```bash
 git clone https://github.com/bendlang/bend ../bend-patched
-sh bend-patches/apply.sh ../bend-patched      # Bend 2.0.35 + 26 patches
+sh bend-patches/apply.sh ../bend-patched      # Bend 2.0.35 + 27 patches
 B="bun ../bend-patched/bend2/main.ts"
 
 make check   BEND="$B"   # check the proofs
@@ -427,7 +444,10 @@ leave in MULTI or with keys watched; random transactions in the differential tes
 Pub/Sub (`tests/pubsub_test.py`: scenarios of Pub/Sub and the events of 138 commands
 on BendKV and on Redis, their transcripts compared line by line, then 20 subscribers that
 each get the 2,000 messages of 4 publishers in order, and 50 subscribers that leave while
-messages are published),
+messages are published), CLIENT LIST, INFO and KILL (`tests/client_test.py`: scenarios on
+BendKV and on Redis, their lines compared field by field with what differs by nature put
+aside, then 100 clients listed and half of them killed by id, and 200 killed by address
+while other clients connect and close, none killed but those named),
 connections that end every way one can, many times
 (the client closing or resetting, QUIT, a protocol error), on a BendKV of their own whose
 table of channels is read to show that each closed the channel it opened,
@@ -458,12 +478,12 @@ src/        the server
   startup.bend  the command line and the configuration file        tested
   server.bend   TCP, connections, the database actor, the log      tested
 proof/      LAWS.bend (the laws), PROOF.bend (their proofs), SPEC.bend (the commands on the trie alone)
-tests/      float, start, differential, expiry, protocol, session, CONFIG, INFO, COMMAND, SCAN, BITFIELD, hash, list, set, sorted set, robustness, stalled reader, concurrency, AOF tests
+tests/      float, start, differential, expiry, protocol, session, CONFIG, INFO, COMMAND, SCAN, BITFIELD, hash, list, set, sorted set, blocking, transaction, Pub/Sub, CLIENT, robustness, stalled reader, concurrency, AOF tests
 bench/      in-process benchmarks of the map, the core and channels
 tools/      measurement scripts, the runner of Redis's test suite, and the generators of
             the trie, of the parameter table and of the command table, with the facts
             they take from Redis (tools/data/)
-bend-patches/  the 26 patches to the Bend compiler and runtime
+bend-patches/  the 27 patches to the Bend compiler and runtime
 docs/       FINDINGS.md, DIRECTIONS.md, COMPATIBILITY.md
 ```
 

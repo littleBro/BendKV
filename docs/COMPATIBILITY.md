@@ -18,13 +18,17 @@ measure of BendKV as a drop-in replacement for one Redis node.
 7.0.15 source tree in that mode, with `--ignore-encoding --ignore-digest --durable`
 (`--durable`: a test that ends in an error counts as failed and the unit goes
 on; an error between tests still ends the unit). Three instances of the server under
-test take one unit at a time each, each in a directory of its own; an instance that
-stops answering is started again. Before each group of tests the suite empties the
-server (FLUSHALL, FUNCTION FLUSH) and sets the parameters the group asks for with
-CONFIG SET.
+test take one unit at a time each, each in a directory of its own, and each unit runs on
+an instance started for it, so that it starts from the server's defaults whatever the
+unit before it left (a test that fails before it sets back a parameter it changed
+leaves the change: unit/pubsub's test of `evicted` events, which BendKV never sends,
+leaves `maxmemory 1` and `allkeys-lru`, under which a unit/type/incr run after it on
+the same instance found INCR's shared integers counted once). Before each group of
+tests the suite empties the server (FLUSHALL, FUNCTION FLUSH) and sets the parameters
+the group asks for with CONFIG SET.
 
 The same run against `redis-server` 7.0.15 in its default configuration is the
-reference: a test counts only if Redis passes it. 78 of the 1,751 tests that run in this
+reference: a test counts only if Redis passes it. 80 of the 1,757 tests that run in this
 mode fail on Redis itself, nearly all of them because they use `DEBUG`, which Redis 7.0
 refuses unless `enable-debug-command` is set at its start.
 
@@ -34,9 +38,18 @@ make suite REDIS_SRC=../redis      # both runs and the table, in build/suite/
 
 ## The result
 
-Redis 7.0.15, October 2026. Of the 1,673 tests Redis passes in this mode, BendKV passes
-**785 (46.9%)**; of the 1,172 in the units of what BendKV has, 780 (67%: 203 tests of
-unit/type/list and 82 of unit/type/zset wait for RESP3). Pub/Sub and keyspace
+Redis 7.0.15, October 2026. Of the 1,677 tests Redis passes in this mode, BendKV passes
+**794 (47.3%)**; of the 1,172 in the units of what BendKV has, 789 (67%: 203 tests of
+unit/type/list and 82 of unit/type/zset wait for RESP3). CLIENT LIST, INFO and KILL
+(section 3zs of [FINDINGS.md](FINDINGS.md)) brought 9: unit/introspection passes 23 of
+its 28 tests (the other 5 are MONITOR's): CLIENT LIST, of IDs, with names and without,
+CLIENT INFO, KILL's errors, KILL SKIPME yes and no of all clients, and a client named by
+SETNAME that closes its connection and leaves the list. unit/querybuf's two tests now
+run past CLIENT LIST, to a check of the size of the client's query buffer, which BendKV
+does not keep (its qbuf is 0). Since each unit runs on an instance started for it, 4
+more tests of unit/type/stream-cgroups run on Redis, and pass there (1,677 of 1,757; the
+test of INCR's shared integers in unit/type/incr passes on BendKV again, as it did
+before an instance left with `allkeys-lru` ran it). Pub/Sub and keyspace
 notifications (section 3zr of [FINDINGS.md](FINDINGS.md)) brought 26: unit/pubsub passes
 25 of its 30 tests (of the other five, one runs over RESP3, one needs streams, and the
 test of `evicted` events waits for an eviction that never comes, as BendKV has no
@@ -124,10 +137,10 @@ need MULTI and WATCH, Lua or lists (then).
 
 | area | units | Redis passes | BendKV passes |
 |---|---|---:|---:|
-| what BendKV has: the protocol, connections, the keyspace and its databases, strings and their ranges, bits and fields, counters and floats, hashes, lists, sets, sorted sets and the commands that wait on them, times to live, transactions, pub/sub and keyspace notifications, introspection | protocol, quit, keyspace, type/string, type/incr, type/hash, type/list, list-2, list-3, type/set, type/zset, scan, bitops, bitfield, expire, multi, pubsub, introspection, introspection-2, other, info-command | 1172 | **780** |
+| what BendKV has: the protocol, connections and clients, the keyspace and its databases, strings and their ranges, bits and fields, counters and floats, hashes, lists, sets, sorted sets and the commands that wait on them, times to live, transactions, pub/sub and keyspace notifications, introspection | protocol, quit, keyspace, type/string, type/incr, type/hash, type/list, list-2, list-3, type/set, type/zset, scan, bitops, bitfield, expire, multi, pubsub, introspection, introspection-2, other, info-command | 1172 | **789** |
 | data types, not yet | geo, hyperloglog, sort, dump, lazyfree, violations | 147 | 2 |
 | client-side caching, CLIENT PAUSE, the latency monitor, the slow log, the query buffer, not yet | tracking, pause, latency-monitor, slowlog, querybuf | 48 | 0 |
-| out of scope: Lua scripts, functions, streams | scripting, functions, type/stream, type/stream-cgroups | 306 | 3 |
+| out of scope: Lua scripts, functions, streams | scripting, functions, type/stream, type/stream-cgroups | 310 | 3 |
 
 Most of the 5 passes outside the first row pass without the feature they test: they expect an error and take
 BendKV's "unknown command" for one, or catch every error and only check that the server
@@ -148,7 +161,7 @@ pubsubshard, shutdown, tls, type/list-common, wait):
 | unit/geo | 59 | 59 | 0 |
 | unit/hyperloglog | 20 | 20 | 0 |
 | unit/info-command | 3 | 3 | 3 |
-| unit/introspection | 28 | 28 | 14 |
+| unit/introspection | 28 | 28 | 23 |
 | unit/introspection-2 | 43 | 43 | 16 |
 | unit/keyspace | 53 | 52 | 49 |
 | unit/latency-monitor | 14 | 13 | 0 |
@@ -173,20 +186,20 @@ pubsubshard, shutdown, tls, type/list-common, wait):
 | unit/type/list-3 | 11 | 11 | 11 |
 | unit/type/set | 98 | 94 | 94 |
 | unit/type/stream | 72 | 63 | 0 |
-| unit/type/stream-cgroups | 44 | 43 | 1 |
+| unit/type/stream-cgroups | 50 | 47 | 1 |
 | unit/type/string | 77 | 77 | 74 |
 | unit/type/zset | 291 | 289 | 192 |
 | unit/violations | 1 | 1 | 0 |
-| **all** | **1751** | **1673** | **785 (46.9%)** |
+| **all** | **1757** | **1677** | **794 (47.3%)** |
 
-## Why the other 888 fail
+## Why the other 883 fail
 
-- **432 stop on a command BendKV does not have.** By the number of tests each one stops:
+- **421 stop on a command BendKV does not have.** By the number of tests each one stops:
   FUNCTION LOAD 124, XADD 61, SORT 46, GEOADD 38, PFADD 19, SYNC 17 (tests that read
   the replication stream, 12 of them unit/multi's of what a transaction propagates),
-  XGROUP 13, GEORADIUS 10, CLIENT PAUSE 10, DUMP 9, SLOWLOG 9, and 28 more below nine
-  (76 tests; CLIENT LIST 8, MONITOR 5, CLIENT KILL 2 and CLIENT INFO 1 among them).
-- **378 never ran**: their unit ended before them, on a command outside any test:
+  XGROUP 13, GEORADIUS 10, CLIENT PAUSE 10, DUMP 9, SLOWLOG 9, and 25 more below nine
+  (65 tests; MONITOR 5 among them).
+- **382 never ran**: their unit ended before them, on a command outside any test:
   LATENCY RESET (latency-monitor), HELLO 3 (type/list and type/zset run their later tests
   over RESP3 and then over RESP2), `CONFIG SET appendonly yes` (type/stream; BendKV turns
   its append-only file on only at its start); or on a test that waits for a reply that
@@ -194,7 +207,7 @@ pubsubshard, shutdown, tls, type/list-common, wait):
   CLIENT TRACKING; scripting: the second line of FUNCTION LOAD's reply, read raw) or
   because BendKV evicts nothing (pubsub: the `evicted` event, 3 tests). One test runs
   only on a server that names jemalloc as its allocator.
-- **78 fail with another error.** 28 fail on a client left in MULTI by a test before them
+- **80 fail with another error.** 28 fail on a client left in MULTI by a test before them
   that failed inside a transaction on what BendKV does not have: GEOADD in
   unit/introspection-2's test of command stats for MULTI (every test of COMMAND after it
   runs in that state, and the 12 of them that passed before answer QUEUED now),
@@ -204,7 +217,8 @@ pubsubshard, shutdown, tls, type/list-common, wait):
   have, Lua (a script's BUSY, the statistics of EVAL), DUMP, OBJECT IDLETIME (it answers
   0), `rdb_changes_since_last_save` (0), the memory UNLINK and FLUSHDB ASYNC give back
   (BendKV's used_memory is its resident memory, which its heap keeps and uses again),
-  streams, HINCRBY past 14 digits, and MOVE's basic usage
+  the size of a client's query buffer (CLIENT LIST's qbuf, 0), streams, HINCRBY past 14
+  digits, and MOVE's basic usage
   (above). (Before times to live, SET's options failed 30 more tests here, answered `ERR
   syntax error`. INFO's statistics per command, which `info-command` looked for, made 3
   more tests pass; SCAN and RANDOMKEY pass all their tests on keys: SCAN's basic
@@ -212,9 +226,8 @@ pubsubshard, shutdown, tls, type/list-common, wait):
   RANDOMKEY's three.)
 
 So the tests are where the plan goes next: RESP3, which type/list (203 tests) and
-type/zset (82) need before their later tests run, CLIENT LIST, INFO and KILL and MONITOR,
-maxmemory, and the data types not yet there (147 tests).
-Scripts, functions and streams (306 tests) stay out of scope.
+type/zset (82) need before their later tests run, MONITOR, maxmemory, and the data types
+not yet there (147 tests). Scripts, functions and streams (310 tests) stay out of scope.
 
 ## What it found
 

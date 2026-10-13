@@ -206,11 +206,16 @@ def run(binary, port, mode, rounds):
         for name, way in WAYS:
             for _ in range(rounds):
                 way(port)
-            # the server lets each go: INFO counts the test's own alone
+            # the server lets each go: INFO counts the test's own alone,
+            # and goes on so for ten reads in a row (a connection the
+            # server takes late, after its client reset it, is counted
+            # while it ends)
             end = time.time() + 10
-            while ctl.clients() != 1 and time.time() < end:
+            calm = 0
+            while calm < 10 and time.time() < end:
+                n = ctl.clients()
+                calm = calm + 1 if n == 1 else 0
                 time.sleep(0.02)
-            n = ctl.clients()
             good = n == 1
             ok &= good
             print("%s %s: %s, %d times, every connection let go (%d counted)" %

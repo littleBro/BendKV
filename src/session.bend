@@ -2134,6 +2134,57 @@ def pub.say(m: Mute, p: R.PubOp) -> Maybe<&2, R.Reply>:
     case other:
       say(m, pub.reply(other))
 
+# Clients
+# -------
+# CLIENT LIST, INFO, KILL and NO-EVICT (R.SClient), as Redis answers a
+# client alone on the server: LIST and INFO show the client's own line,
+# its addresses and its socket unknown here ("?:0", fd 0), KILL finds no
+# other client to kill and its old form no address, NO-EVICT answers OK.
+# The server answers them with every client it holds (server.bend,
+# Clients).
+def cl.cmd(+info: Bool) -> String:
+  Bool.pick(String, info, "client|info", "client|list")
+
+# the bytes of a command's arguments, from n (argv-mem)
+def cl.argv(args: List<&2, String>, +n: Nat) -> Nat:
+  match args:
+    case Nil{}:
+      n
+    case Con{+a, rest}:
+      cl.argv(rest, Nat.add(n, String.length(a)))
+
+def cl.alone.line(+c: Conn, +info: Bool, +argv: Nat) -> String:
+  R.client.line(R.ClLine{conn.id(c), "?:0", "?:0", 0n, conn.name(c), 0n, 0n, "N", conn.db(c), 0n, 0n, 0n, None{}, 0n, argv, cl.cmd(info)}) ++ "\n"
+
+def cl.ids(ids: List<&2, Nat>, +c: Conn, +argv: Nat, acc: String) -> String:
+  match ids:
+    case Nil{}:
+      acc
+    case Con{+i, rest}:
+      cl.ids(rest, c, argv, acc ++ Bool.pick(String, Nat.is_eq(i, conn.id(c)), cl.alone.line(c, False{}, argv), ""))
+
+def cl.list(+ty: Nat, ids: Maybe<&2, List<&2, Nat>>, +c: Conn, +argv: Nat) -> R.Reply:
+  match ids:
+    case Some{xs}:
+      R.RBulk{cl.ids(xs, c, argv, "")}
+    case None{}:
+      R.RBulk{Bool.pick(String, Nat.is_le(ty, 1n), cl.alone.line(c, False{}, argv), "")}
+
+def cl.reply(op: R.ClOp, +c: Conn, +argv: Nat) -> R.Reply:
+  match op:
+    case R.CoList{+ty, ids}:
+      cl.list(ty, ids, c, argv)
+    case R.CoInfo{}:
+      R.RBulk{cl.alone.line(c, True{}, argv)}
+    case R.CoKill{f}:
+      R.RInt{R.IPos{0n}}
+    case R.CoKillAddr{a}:
+      R.RError{"ERR No such client"}
+    case R.CoNoEvict{on}:
+      R.r_ok()
+    case R.CoBad{r}:
+      r
+
 # a session command's reply, sent or not; the databases are there for
 # the commands that read them
 def own_reply(+o: R.SessOp, +c: Conn, +s: Srv, +ds: R.Ds) -> Maybe<&2, R.Reply>:
@@ -2212,6 +2263,8 @@ def own_reply(+o: R.SessOp, +c: Conn, +s: Srv, +ds: R.Ds) -> Maybe<&2, R.Reply>:
       say(conn.mode(c), R.r_ok())
     case R.SPub{+k, a}:
       pub.say(conn.mode(c), R.pub.op(k, a))
+    case R.SClient{+k, +a}:
+      say(conn.mode(c), cl.reply(R.client.op(k, a), c, cl.argv(a, 10n)))
 
 # the connection after a session command
 def own_conn(+o: R.SessOp, +c: Conn, +s: Srv) -> Conn:
@@ -2289,6 +2342,8 @@ def own_conn(+o: R.SessOp, +c: Conn, +s: Srv) -> Conn:
     case R.SUnwatch{}:
       step_conn(c, s)
     case R.SPub{k, a}:
+      step_conn(c, s)
+    case R.SClient{k, a}:
       step_conn(c, s)
 
 # what a session command does to the databases: SELECT and RESET move the

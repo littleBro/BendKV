@@ -1,0 +1,523 @@
+diff --git a/bend2/base.bend b/bend2/base.bend
+index 4d44d80..0d3eb20 100644
+--- a/bend2/base.bend
++++ b/bend2/base.bend
+@@ -281,6 +281,23 @@ def Chan.send_all(-A: Data, sends: List<&2, Sigma<&2, &2, Chan(A), _ => A>>) ->
+   import "./effs/chan.c"
+   import "./effs/chan.js"
+ 
++# Chan.mark(A, chan, word, time) is chan, and Chan.marked(A, chan) is (0,
++# 0). On the C and JS lanes they also keep and read a mark per channel:
++# mark sets the word and the time of chan's, and marked reads them back
++# (the word's low 16 bits), (0, 0) for a channel never marked, or closed
++# and its row taken by another since. A mark belongs to the one
++# computation that sets and reads it, as an actor does of the channels its
++# clients wait on (what each asked for last, and when), so its
++# bookkeeping costs a store, not a message. No law reads a mark: these
++# values are the compiled lanes' alone.
++@unsafe
++def Chan.mark(-A: Type, +chan: Chan(A), +word: U32, +time: Nat) -> Chan(A):
++  chan
++
++@unsafe
++def Chan.marked(-A: Type, +chan: Chan(A)) -> U32 & Nat:
++  (0, 0n)
++
+ def IO.fork.go(-A: Type, act: IO(A), chan: Chan(A)) -> IO(Chan(A)):
+   +c = chan
+   sent = IO.bind(A, Bool, act, x => Chan.send(A, c, x))
+@@ -473,6 +490,21 @@ def TCP.unwatch(sock: Socket) -> IO(Socket & Bool):
+   import "./effs/chan.c"
+   import "./effs/chan.js"
+ 
++# sock's fd, and the address of its peer and its own, each "ip:port" as
++# Redis prints them ("[ip]:port" for IPv6; "?:0" when there is none).
++def TCP.name(sock: Socket) -> IO(Socket & (U32 & (String & String))):
++  import "./effs/tcp_name.c"
++  import "./effs/tcp_name.js"
++
++# Shuts the socket with fd down both ways (shutdown, SHUT_RDWR) when fd is a
++# socket of the runtime's that is open, so the computation that waits on it
++# finds its end: True if it was shut. The fd must not be closed while this
++# can run: a computation that owns the socket closes it only once the one
++# that may kill it knows it is gone.
++def TCP.kill(fd: U32) -> IO(Bool):
++  import "./effs/tcp_kill.c"
++  import "./effs/tcp_kill.js"
++
+ def UDP.bind(host: String, port: U32) -> IO(Result<&1, &1, U32 & String, Socket>):
+   import "./effs/udp_bind.c"
+   import "./effs/udp_bind.js"
+diff --git a/bend2/comp.ts b/bend2/comp.ts
+index 5c5bad3..41cdfc6 100644
+--- a/bend2/comp.ts
++++ b/bend2/comp.ts
+@@ -285,6 +285,11 @@ const OPERATIONS: Record<string, Intr> = Object.setPrototypeOf({
+   string_slice: { C: "str_slice(e, $0, $1, $2)", brw: [true, false, false] },
+   mem_prefetch: { C: "mem_prefetch(e.mem, $0, $1)", JS: "$1",
+     brw: [true, false] },
++  chan_mark: { C: "chan_mark($0, $1, $2)",
++    JS: "($0.mark = [$1 & 0xFFFF, $2], $0)", brw: [false, false, false] },
++  chan_marked: { C: ["chan_marked($0)", "($1 & 0xFFFF)", "($1 >> 16)"],
++    JS: "{$: \"Tuple\", fst: $0.mark ? $0.mark[0] : 0, snd: $0.mark ? $0.mark[1] : 0}",
++    brw: [true] },
+   nat_show: { C: "nat_show_str(e, $0)" },
+   ...Object.fromEntries(Object.entries({
+     new: "array_new($0, $1)", set: "($0[$1 % $0.length] = $2, $0)",
+@@ -4757,6 +4762,55 @@ INLINE u64 mem_prefetch(DEV u64* H, Term t, u64 k) {
+   return k;
+ }
+ 
++// The marks of channels (Chan.mark, Chan.marked): for each channel's row
++// (its handle's low 24 bits, the generation above them), the generation it
++// was marked under, a word and a time. They belong to the one computation
++// that marks and reads them (an actor, of the channels its clients'
++// answers go back on), so they take no lock; a row's mark under another
++// generation (the row freed and taken again since) reads as none.
++#if !DEVICE
++typedef struct ChanMark {
++  u64 gen;
++  u64 word;
++  u64 time;
++} ChanMark;
++
++static ChanMark* chan_marks;
++static u32       chan_marks_cap;
++
++OUTLINE void chan_marks_grow(u32 i) {
++  u32 cap = chan_marks_cap == 0 ? 64 : chan_marks_cap;
++  while (cap <= i) {
++    cap *= 2;
++  }
++  ChanMark* m = realloc(chan_marks, (size_t)cap * sizeof(ChanMark));
++  if (m == NULL) {
++    err_fail("host allocation failed");
++  }
++  memset(m + chan_marks_cap, 0, (size_t)(cap - chan_marks_cap) * sizeof(ChanMark));
++  chan_marks     = m;
++  chan_marks_cap = cap;
++}
++
++INLINE Term chan_mark(Term ch, u64 word, u64 time) {
++  u64 v = ((u64)term_aux(ch) << 40) | term_loc(ch);
++  u32 i = (u32)v & 0xFFFFFF;
++  if (i >= chan_marks_cap) {
++    chan_marks_grow(i);
++  }
++  chan_marks[i] = (ChanMark){ v >> 24, word, time };
++  return ch;
++}
++
++// the word in the low 16 bits, the time above them
++INLINE u64 chan_marked(Term ch) {
++  u64 v = ((u64)term_aux(ch) << 40) | term_loc(ch);
++  u32 i = (u32)v & 0xFFFFFF;
++  return i < chan_marks_cap && chan_marks[i].gen == v >> 24
++    ? (chan_marks[i].time << 16) | (chan_marks[i].word & 0xFFFF) : 0;
++}
++#endif
++
+ OUTLINE Term rfc_wrap(Env e, Term t, u32 cnt) {
+   if (term_tag(t) == TAG_CLO || term_tag(t) == TAG_TSK) {
+     err_post(e.mem, ERR_RFCS);
+@@ -9652,6 +9706,7 @@ function io_sys() {
+       Object.fromEntries(("socket:iii>i bind:ipu>i listen:ii>i connect:ipu>i"
+         + " accept:ipp>i send:ipUi>I recv:ipUi>I read:ipU>I pread:ipUI>I"
+         + " sendto:ipUipu>I recvfrom:ipUipp>I close:i>i setsockopt:iiipu>i"
++        + " getpeername:ipp>i getsockname:ipp>i shutdown:ii>i"
+         + " " + sel + ":ipppp>i"
+         + (vari ? " fcntl:iiiiiiiii>i" : " fcntl:iii>i") + " getsockopt:iiipp>i"
+         + " strerror:i>c " + err + ":>p").split(" ").map((s) => {
+diff --git a/bend2/effs/tcp_kill.c b/bend2/effs/tcp_kill.c
+new file mode 100644
+index 0000000..fb31148
+--- /dev/null
++++ b/bend2/effs/tcp_kill.c
+@@ -0,0 +1,19 @@
++// TCP
++// ===
++
++// A socket the runtime made (io_fd_new) and has not closed is shut down
++// both ways, so a recv, poll or watch on it finds its end; any other fd is
++// left as it is.
++Term tcp_kill_run(Env e, Term* f, IoWork* w) {
++  int  fd = (int)(u32)f[0];
++#if IO_EPOLL
++  bool ok = (io_fd_own(fd) & IO_SOCK) != 0 && shutdown(fd, SHUT_RDWR) == 0;
++#else
++  bool ok = fd >= 0 && shutdown(fd, SHUT_RDWR) == 0;
++#endif
++  return term_pak(ok ? CID(True) : CID(False), 0);
++}
++
++static void __attribute__((constructor)) tcp_kill_use(void) {
++  io_eff(CID(TCP.kill), tcp_kill_run);
++}
+diff --git a/bend2/effs/tcp_kill.js b/bend2/effs/tcp_kill.js
+new file mode 100644
+index 0000000..6567dd6
+--- /dev/null
++++ b/bend2/effs/tcp_kill.js
+@@ -0,0 +1,9 @@
++// TCP
++// ===
++
++// The socket with fd is shut down both ways, so a recv on it finds its end.
++function tcp_kill(fd) {
++  return Number(fd) >= 0 && io_sys().shutdown(Number(fd), 2) === 0;
++}
++
++io_eff(CID(TCP.kill), tcp_kill);
+diff --git a/bend2/effs/tcp_name.c b/bend2/effs/tcp_name.c
+new file mode 100644
+index 0000000..dfafa3b
+--- /dev/null
++++ b/bend2/effs/tcp_name.c
+@@ -0,0 +1,65 @@
++// TCP
++// ===
++
++#include <string.h>
++
++// v in decimal at out; its length
++static u64 tcp_name_dec(char* out, unsigned v) {
++  char d[10];
++  u64  n = 0;
++  do {
++    d[n++] = (char)('0' + v % 10);
++    v /= 10;
++  } while (v);
++  for (u64 i = 0; i < n; i++) {
++    out[i] = d[n - 1 - i];
++  }
++  return n;
++}
++
++// An address as Redis prints a client's (anetFormatAddr): "ip:port",
++// "[ip]:port" for IPv6, and "?:0" when the call failed or the family is
++// another. An IPv4 address is written by hand: inet_ntop and snprintf
++// format with printf, some thousands of instructions a connection.
++static Term tcp_name_addr(Env e, int got, struct sockaddr_storage* sa) {
++  char buf[INET6_ADDRSTRLEN + 16];
++  u64  n = 0;
++  if (got == 0 && sa->ss_family == AF_INET) {
++    struct sockaddr_in*  s = (struct sockaddr_in*)sa;
++    const unsigned char* b = (const unsigned char*)&s->sin_addr;
++    for (int i = 0; i < 4; i++) {
++      n += tcp_name_dec(buf + n, b[i]);
++      buf[n++] = i < 3 ? '.' : ':';
++    }
++    n += tcp_name_dec(buf + n, ntohs(s->sin_port));
++  } else if (got == 0 && sa->ss_family == AF_INET6) {
++    struct sockaddr_in6* s = (struct sockaddr_in6*)sa;
++    buf[n++] = '[';
++    inet_ntop(AF_INET6, &s->sin6_addr, buf + n, INET6_ADDRSTRLEN);
++    n += strlen(buf + n);
++    buf[n++] = ']';
++    buf[n++] = ':';
++    n += tcp_name_dec(buf + n, ntohs(s->sin6_port));
++  } else {
++    memcpy(buf, "?:0", 3);
++    n = 3;
++  }
++  return io_str(e, buf, n);
++}
++
++Term tcp_name_run(Env e, Term* f, IoWork* w) {
++  int                     fd = (int)io_hand_v(f[0]);
++  struct sockaddr_storage peer;
++  struct sockaddr_storage self;
++  socklen_t               pl = sizeof peer;
++  socklen_t               sl = sizeof self;
++  int                     pg = getpeername(fd, (struct sockaddr*)&peer, &pl);
++  int                     sg = getsockname(fd, (struct sockaddr*)&self, &sl);
++  Term                    p  = tcp_name_addr(e, pg, &peer);
++  Term                    s  = tcp_name_addr(e, sg, &self);
++  return io_tup(e, f[0], io_tup(e, (Term)(u32)fd, io_tup(e, p, s)));
++}
++
++static void __attribute__((constructor)) tcp_name_use(void) {
++  io_eff(CID(TCP.name), tcp_name_run);
++}
+diff --git a/bend2/effs/tcp_name.js b/bend2/effs/tcp_name.js
+new file mode 100644
+index 0000000..70b6f46
+--- /dev/null
++++ b/bend2/effs/tcp_name.js
+@@ -0,0 +1,53 @@
++// TCP
++// ===
++
++// An address as Redis prints a client's (anetFormatAddr): "ip:port",
++// "[ip]:port" for IPv6 (in the shortest form, as inet_ntop gives it), and
++// "?:0" when the call failed or the family is another.
++function tcp_name_addr(got, b) {
++  const sys = io_sys();
++  const fam = sys.mac ? b[1] : b[0] | (b[1] << 8);
++  const port = (b[2] << 8) | b[3];
++  if (got === 0 && fam === 2) {
++    return b[4] + "." + b[5] + "." + b[6] + "." + b[7] + ":" + port;
++  }
++  if (got === 0 && fam === (sys.mac ? 30 : 10)) {
++    const gs = [];
++    for (let i = 0; i < 8; i += 1) {
++      gs.push((b[8 + 2 * i] << 8) | b[9 + 2 * i]);
++    }
++    let at = -1;
++    let len = 0;
++    for (let i = 0; i < 8; i += 1) {
++      let j = i;
++      while (j < 8 && gs[j] === 0) {
++        j += 1;
++      }
++      if (j - i > len && j - i > 1) {
++        at = i;
++        len = j - i;
++      }
++      i = j > i ? j - 1 : i;
++    }
++    const hex = (xs) => xs.map((g) => g.toString(16)).join(":");
++    const ip = at < 0 ? hex(gs)
++      : hex(gs.slice(0, at)) + "::" + hex(gs.slice(at + len));
++    return "[" + ip + "]:" + port;
++  }
++  return "?:0";
++}
++
++function tcp_name(socket) {
++  const sys = io_sys();
++  const name = (call) => {
++    const b = new Uint8Array(128);
++    const len = new Uint32Array([128]);
++    const got = call(socket, sys.ptr(b), sys.ptr(len));
++    return tcp_name_addr(got, b);
++  };
++  const peer = name(sys.getpeername);
++  const self = name(sys.getsockname);
++  return io_tup(socket, io_tup(socket >>> 0, io_tup(peer, self)));
++}
++
++io_eff(CID(TCP.name), tcp_name);
+diff --git a/tests/io/tcp_name.bend b/tests/io/tcp_name.bend
+new file mode 100644
+index 0000000..eb6ae32
+--- /dev/null
++++ b/tests/io/tcp_name.bend
+@@ -0,0 +1,217 @@
++# io (io_tcp_name): TCP.name gives a socket's fd and the addresses of its
++# peer and its own, and they cross: an accepted socket's peer is the
++# connected one's own address, and its own is the listener's, at its
++# port. A channel marked reads its mark back, and one never marked reads
++# (0, 0), as does a new channel on the row of one marked and closed (one
++# generation up), while the old handle still reads the mark it set.
++# TCP.kill of the accepted socket's fd shuts it down, and the connected
++# socket reads its end; of an fd that is no socket, it does nothing.
++import Base
++
++def flag(b: Bool) -> String:
++  match b:
++    case True{}:
++      "T"
++    case False{}:
++      "F"
++
++def eof_or(s: String) -> String:
++  match s:
++    case SNil{}:
++      "eof"
++    case SCon{h, t}:
++      SCon{h, t}
++
++def mark_text(m: U32 & Nat) -> String:
++  (w, t) = m
++  U32.show(w) ++ " " ++ Nat.show(t)
++
++# what a raw recv read, printed ("eof" for the end)
++law read:
++  for m: Socket & Result<&1, &1, (U32 & String), String>
++  IO(Socket)
++
++def read(m):
++  (a, r) = m
++  do IO<Socket>:
++    got : String <- IO.pass(String, r)
++    w   : Unit <- IO.print(eof_or(got))
++    return a
++
++law same:
++  for +x: String
++  for +y: String
++  IO(Unit)
++
++def same(x, y):
++  IO.print(flag(String.eq(x, y)))
++
++law step_kill:
++  for l: Listener
++  for c: Socket
++  for a: Socket
++  for +fd: U32
++  IO(U32)
++
++def step_kill(l, c, a, fd):
++  do IO<U32>:
++    k  : Bool <- TCP.kill(fd)
++    p  : Unit <- IO.print(flag(k))
++    m  : Socket & Result<&1, &1, (U32 & String), String> <- TCP.recv_raw(c, 16)
++    c1 : Socket <- read(m)
++    n  : Bool <- TCP.kill(4000000)
++    q  : Unit <- IO.print(flag(n))
++    x  : Unit <- Socket.close(c1)
++    y  : Unit <- Socket.close(a)
++    z  : Unit <- Listener.close(l)
++    return 0
++
++# a second channel takes the first's row, one generation up, and reads no
++# mark; the first's handle reads the one it set
++law step_reuse:
++  for l: Listener
++  for c: Socket
++  for a: Socket
++  for +fd: U32
++  for +ch1: Chan(U32)
++  for +ch2: Chan(U32)
++  IO(U32)
++
++def step_reuse(l, c, a, fd, ch1, ch2):
++  do IO<U32>:
++    m2 : U32 & Nat <- IO.pure(U32 & Nat, Chan.marked(U32, ch2))
++    p2 : Unit <- IO.print(mark_text(m2))
++    m3 : U32 & Nat <- IO.pure(U32 & Nat, Chan.marked(U32, ch1))
++    p3 : Unit <- IO.print(mark_text(m3))
++    v  : Unit <- Chan.close(U32, ch2)
++    step_kill(l, c, a, fd)
++
++law step_marks:
++  for l: Listener
++  for c: Socket
++  for a: Socket
++  for +fd: U32
++  for +ch1: Chan(U32)
++  IO(U32)
++
++def step_marks(l, c, a, fd, ch1):
++  do IO<U32>:
++    m0  : U32 & Nat <- IO.pure(U32 & Nat, Chan.marked(U32, ch1))
++    p0  : Unit <- IO.print(mark_text(m0))
++    k   : Chan(U32) <- IO.pure(Chan(U32), Chan.mark(U32, ch1, 7, 1234n))
++    m1  : U32 & Nat <- IO.pure(U32 & Nat, Chan.marked(U32, k))
++    p1  : Unit <- IO.print(mark_text(m1))
++    u   : Unit <- Chan.close(U32, ch1)
++    ch2 : Chan(U32) <- Chan.new(U32, 1)
++    step_reuse(l, c, a, fd, ch1, ch2)
++
++law step_cross:
++  for l: Listener
++  for +port: U32
++  for c: Socket
++  for +fc: U32
++  for +pc: String
++  for +lc: String
++  for a: Socket
++  for +fa: U32
++  for +pa: String
++  for +la: String
++  IO(U32)
++
++def step_cross(l, port, c, fc, pc, lc, a, fa, pa, la):
++  do IO<U32>:
++    x   : Unit <- same(pc, la)
++    y   : Unit <- same(lc, pa)
++    z   : Unit <- same(la, "127.0.0.1:" ++ U32.show(port))
++    w   : Unit <- IO.print(flag(U32.is_ne(fc, fa)))
++    ch1 : Chan(U32) <- Chan.new(U32, 1)
++    step_marks(l, c, a, fa, ch1)
++
++law step_names:
++  for l: Listener
++  for +port: U32
++  for nc: Socket & (U32 & (String & String))
++  for na: Socket & (U32 & (String & String))
++  IO(U32)
++
++def step_names(l, port, nc, na):
++  (c, ic) = nc
++  (fc, sc) = ic
++  (pc, lc) = sc
++  (a, ia) = na
++  (fa, sa) = ia
++  (pa, la) = sa
++  step_cross(l, port, c, fc, pc, lc, a, fa, pa, la)
++
++law step_accept:
++  for c: Socket
++  for +port: U32
++  for p: Listener & Result<&1, &1, (U32 & String), Socket>
++  IO(U32)
++
++def step_accept(c, port, p):
++  (l, ar) = p
++  do IO<U32>:
++    a  : Socket <- IO.pass(Socket, ar)
++    nc : Socket & (U32 & (String & String)) <- TCP.name(c)
++    na : Socket & (U32 & (String & String)) <- TCP.name(a)
++    step_names(l, port, nc, na)
++
++law main_go:
++  for b: Listener & U32
++  IO(U32)
++
++def main_go(b):
++  (l, +port) = b
++  do IO<U32>:
++    c : Socket <- IO.try(Socket, TCP.connect("127.0.0.1", port))
++    p : Listener & Result<&1, &1, (U32 & String), Socket> <- TCP.accept(l)
++    step_accept(c, port, p)
++
++law tcp_retry:
++  for port : U32
++  for r    : Result<&1, &1, (U32 & String), Listener>
++  for rest : IO(Listener & U32)
++  IO(Listener & U32)
++
++def tcp_retry(port, r, rest):
++  match r:
++    case Done{l}:
++      IO.pure(Listener & U32, (l, port))
++    case Fail{e}:
++      rest
++
++law tcp_listen_any:
++  for tries : Nat
++  for +port : U32
++  IO(Listener & U32)
++
++def tcp_listen_any(tries, port):
++  match tries:
++    case 0n:
++      IO.die(Listener & U32, 1, "no free tcp port")
++    case 1n+t:
++      rest = tcp_listen_any(t, (port + 1 : U32))
++      do IO<Listener & U32>:
++        r : Result<&1, &1, (U32 & String), Listener> <- TCP.listen("127.0.0.1", port)
++        tcp_retry(port, r, rest)
++
++law main:
++  IO(U32)
++
++def main():
++  do IO<U32>:
++    b : Listener & U32 <- tcp_listen_any(32n, 19761)
++    main_go(b)
++
++#|T
++#|T
++#|T
++#|T
++#|0 0
++#|7 1234
++#|0 0
++#|7 1234
++#|T
++#|eof
++#|F

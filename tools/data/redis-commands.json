@@ -2283,6 +2283,346 @@
       "complexity",
       "O(1)"
      ],
+     "client|info",
+     [
+      "summary",
+      "Returns information about the current client connection.",
+      "since",
+      "6.2.0",
+      "group",
+      "connection",
+      "complexity",
+      "O(1)"
+     ],
+     "client|kill",
+     [
+      "summary",
+      "Kill the connection of a client",
+      "since",
+      "2.4.0",
+      "group",
+      "connection",
+      "complexity",
+      "O(N) where N is the number of client connections",
+      "history",
+      [
+       [
+        "2.8.12",
+        "Added new filter format."
+       ],
+       [
+        "2.8.12",
+        "`ID` option."
+       ],
+       [
+        "3.2.0",
+        "Added `master` type in for `TYPE` option."
+       ],
+       [
+        "5.0.0",
+        "Replaced `slave` `TYPE` with `replica`. `slave` still supported for backward compatibility."
+       ],
+       [
+        "6.2.0",
+        "`LADDR` option."
+       ]
+      ],
+      "arguments",
+      [
+       [
+        "name",
+        "filter",
+        "type",
+        "oneof",
+        "arguments",
+        [
+         [
+          "name",
+          "ip:port",
+          "type",
+          "string",
+          "deprecated_since",
+          "2.8.12"
+         ],
+         [
+          "name",
+          "new-format",
+          "type",
+          "oneof",
+          "flags",
+          [
+           {
+            "+": "multiple"
+           }
+          ],
+          "arguments",
+          [
+           [
+            "name",
+            "client-id",
+            "type",
+            "integer",
+            "token",
+            "ID",
+            "since",
+            "2.8.12",
+            "flags",
+            [
+             {
+              "+": "optional"
+             }
+            ]
+           ],
+           [
+            "name",
+            "normal_master_slave_pubsub",
+            "type",
+            "oneof",
+            "token",
+            "TYPE",
+            "since",
+            "2.8.12",
+            "flags",
+            [
+             {
+              "+": "optional"
+             }
+            ],
+            "arguments",
+            [
+             [
+              "name",
+              "normal",
+              "type",
+              "pure-token",
+              "token",
+              "NORMAL"
+             ],
+             [
+              "name",
+              "master",
+              "type",
+              "pure-token",
+              "token",
+              "MASTER",
+              "since",
+              "3.2.0"
+             ],
+             [
+              "name",
+              "slave",
+              "type",
+              "pure-token",
+              "token",
+              "SLAVE"
+             ],
+             [
+              "name",
+              "replica",
+              "type",
+              "pure-token",
+              "token",
+              "REPLICA",
+              "since",
+              "5.0.0"
+             ],
+             [
+              "name",
+              "pubsub",
+              "type",
+              "pure-token",
+              "token",
+              "PUBSUB"
+             ]
+            ]
+           ],
+           [
+            "name",
+            "username",
+            "type",
+            "string",
+            "token",
+            "USER",
+            "flags",
+            [
+             {
+              "+": "optional"
+             }
+            ]
+           ],
+           [
+            "name",
+            "ip:port",
+            "type",
+            "string",
+            "token",
+            "ADDR",
+            "flags",
+            [
+             {
+              "+": "optional"
+             }
+            ]
+           ],
+           [
+            "name",
+            "ip:port",
+            "type",
+            "string",
+            "token",
+            "LADDR",
+            "since",
+            "6.2.0",
+            "flags",
+            [
+             {
+              "+": "optional"
+             }
+            ]
+           ],
+           [
+            "name",
+            "yes/no",
+            "type",
+            "string",
+            "token",
+            "SKIPME",
+            "flags",
+            [
+             {
+              "+": "optional"
+             }
+            ]
+           ]
+          ]
+         ]
+        ]
+       ]
+      ]
+     ],
+     "client|list",
+     [
+      "summary",
+      "Get the list of client connections",
+      "since",
+      "2.4.0",
+      "group",
+      "connection",
+      "complexity",
+      "O(N) where N is the number of client connections",
+      "history",
+      [
+       [
+        "2.8.12",
+        "Added unique client `id` field."
+       ],
+       [
+        "5.0.0",
+        "Added optional `TYPE` filter."
+       ],
+       [
+        "6.0.0",
+        "Added `user` field."
+       ],
+       [
+        "6.2.0",
+        "Added `argv-mem`, `tot-mem`, `laddr` and `redir` fields and the optional `ID` filter."
+       ],
+       [
+        "7.0.0",
+        "Added `resp`, `multi-mem`, `rbs` and `rbp` fields."
+       ],
+       [
+        "7.0.3",
+        "Added `ssub` field."
+       ]
+      ],
+      "arguments",
+      [
+       [
+        "name",
+        "normal_master_replica_pubsub",
+        "type",
+        "oneof",
+        "token",
+        "TYPE",
+        "since",
+        "5.0.0",
+        "flags",
+        [
+         {
+          "+": "optional"
+         }
+        ],
+        "arguments",
+        [
+         [
+          "name",
+          "normal",
+          "type",
+          "pure-token",
+          "token",
+          "NORMAL"
+         ],
+         [
+          "name",
+          "master",
+          "type",
+          "pure-token",
+          "token",
+          "MASTER"
+         ],
+         [
+          "name",
+          "replica",
+          "type",
+          "pure-token",
+          "token",
+          "REPLICA"
+         ],
+         [
+          "name",
+          "pubsub",
+          "type",
+          "pure-token",
+          "token",
+          "PUBSUB"
+         ]
+        ]
+       ],
+       [
+        "name",
+        "id",
+        "type",
+        "block",
+        "token",
+        "ID",
+        "since",
+        "6.2.0",
+        "flags",
+        [
+         {
+          "+": "optional"
+         }
+        ],
+        "arguments",
+        [
+         [
+          "name",
+          "client-id",
+          "type",
+          "integer",
+          "flags",
+          [
+           {
+            "+": "multiple"
+           }
+          ]
+         ]
+        ]
+       ]
+      ]
+     ],
      "client|no-evict",
      [
       "summary",
@@ -2607,6 +2947,115 @@
        }
       ],
       [],
+      [],
+      []
+     ],
+     [
+      "client|info",
+      2,
+      [
+       {
+        "+": "noscript"
+       },
+       {
+        "+": "loading"
+       },
+       {
+        "+": "stale"
+       }
+      ],
+      0,
+      0,
+      0,
+      [
+       {
+        "+": "@slow"
+       },
+       {
+        "+": "@connection"
+       }
+      ],
+      [
+       "nondeterministic_output"
+      ],
+      [],
+      []
+     ],
+     [
+      "client|kill",
+      -3,
+      [
+       {
+        "+": "admin"
+       },
+       {
+        "+": "noscript"
+       },
+       {
+        "+": "loading"
+       },
+       {
+        "+": "stale"
+       }
+      ],
+      0,
+      0,
+      0,
+      [
+       {
+        "+": "@admin"
+       },
+       {
+        "+": "@slow"
+       },
+       {
+        "+": "@dangerous"
+       },
+       {
+        "+": "@connection"
+       }
+      ],
+      [],
+      [],
+      []
+     ],
+     [
+      "client|list",
+      -2,
+      [
+       {
+        "+": "admin"
+       },
+       {
+        "+": "noscript"
+       },
+       {
+        "+": "loading"
+       },
+       {
+        "+": "stale"
+       }
+      ],
+      0,
+      0,
+      0,
+      [
+       {
+        "+": "@admin"
+       },
+       {
+        "+": "@slow"
+       },
+       {
+        "+": "@dangerous"
+       },
+       {
+        "+": "@connection"
+       }
+      ],
+      [
+       "nondeterministic_output"
+      ],
       [],
       []
      ],

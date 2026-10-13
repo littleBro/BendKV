@@ -11,8 +11,11 @@ for the tests of SELECT, MOVE and SWAPDB. Tests that need to start their
 own servers are marked external:skip and do not run in this mode.
 
 Each server under test runs as several instances, one unit at a time on
-each, restarted when a unit kills it. The results go to a JSON file:
-for each unit and test, ok or err, with the error's first line.
+each, each unit on an instance started for it: a unit starts from the
+server's defaults, whatever the unit before it left (a test that fails
+before it sets back a parameter it changed leaves the change), as a unit
+does when Redis's runner starts the server. The results go to a JSON
+file: for each unit and test, ok or err, with the error's first line.
 
     tools/redis_suite.py --redis-src ../redis --server build/bendkv --out bendkv.json
     tools/redis_suite.py --redis-src ../redis --server redis-server --out redis.json
@@ -130,13 +133,13 @@ def main_run(a):
         port = a.port + i
         srv = Server(a.server, port, os.path.join(a.logs, "server-%d.log" % port),
                      os.path.join(a.logs, "server-%d" % port))
-        if not srv.start():
-            return
         while True:
             with lock:
                 if not queue:
                     break
                 unit = queue.popleft()
+            if not srv.start():
+                return
             t0 = time.time()
             text = run_unit(a.redis_src, unit, port, 21000 + 100 * i, a.timeout, a.singledb)
             died = not srv.alive()
@@ -149,11 +152,7 @@ def main_run(a):
                 n = sum(1 for t in tests.values() if t["st"] == "ok")
                 print("%-28s %3d/%-3d ok  %5.1fs%s" % (unit, n, len(tests), time.time() - t0,
                       "  (server died)" if died else ""), flush=True)
-            if died:
-                srv.stop()
-                if not srv.start():
-                    return
-        srv.stop()
+            srv.stop()
 
     os.makedirs(a.logs, exist_ok=True)
     ths = [threading.Thread(target=worker, args=(i,)) for i in range(a.jobs)]

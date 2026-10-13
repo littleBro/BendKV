@@ -306,11 +306,12 @@ Where performance and proof meet: **batched execution under proved laws.**
    section 3za), COPY (done, section 3zb), BITOP and LCS (done, section 3zd), BITFIELD
    (done, section 3ze), MULTI/EXEC/WATCH (done, section 3zq), pub/sub and keyspace
    notifications (done, section 3zr), the connection commands clients send on connect
-   (HELLO, SELECT, CLIENT, AUTH, INFO, COMMAND, CONFIG; done), SCAN and RANDOMKEY
-   (done), and the log's rewrite, measured by Redis's own test suite run against BendKV
+   (HELLO, SELECT, CLIENT, AUTH, INFO, COMMAND, CONFIG; done), CLIENT LIST, INFO and KILL
+   (done, section 3zs), SCAN and RANDOMKEY (done), MONITOR, and the log's rewrite,
+   measured by Redis's own test suite run against BendKV
    and by client libraries' tests. Lua, streams, cluster,
-   replication and modules are out of scope. The suite's count: of the 1,673 tests
-   Redis 7.0.15 passes against a server it did not start, BendKV passes 785, 780 of the
+   replication and modules are out of scope. The suite's count: of the 1,677 tests
+   Redis 7.0.15 passes against a server it did not start, BendKV passes 794, 789 of the
    1,172 in what it has ([COMPATIBILITY.md](COMPATIBILITY.md)); RESP3 now holds back the
    most tests of what it has (203 of unit/type/list's and 82 of unit/type/zset's run
    after their HELLO 3).

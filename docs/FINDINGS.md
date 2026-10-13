@@ -3373,6 +3373,107 @@ sends it at the read. A message a client publishes to a channel it subscribed to
 same transaction goes out before EXEC's array, where Redis puts it inside the array's
 bytes, after its count.
 
+## 3zs. CLIENT LIST, INFO and KILL
+
+**What there is.** CLIENT LIST (all clients, those of a TYPE: normal, master, replica or
+slave, pubsub; or those of the IDs given, in their order), CLIENT INFO, and CLIENT KILL
+in its old form (an address, answered OK or `ERR No such client`) and its new one (the
+filters ID, TYPE, ADDR, LADDR, USER and SKIPME, answered the count of clients killed), as
+Redis 7.0.15 runs them (`networking.c`), with its errors (`ERR Invalid client ID`, `ERR
+Unknown client type '...'`, `ERR client-id should be greater than 0`, `ERR No such user
+'...'`, the syntax errors). A client's line has Redis's 27 fields in Redis's order: its
+id; its address and its local address as Redis formats them (`ip:port`, `[ip]:port` for
+IPv6) and its socket's fd; its name (CLIENT SETNAME, HELLO's SETNAME, cleared by RESET);
+its age and idle time in whole seconds, as Redis subtracts its unix times; its flags in
+Redis's order (P with a subscription, x in MULTI, b waiting in a blocking command, d with
+a watched key touched, e with CLIENT NO-EVICT on, N for none); its database (SELECT,
+RESET); its counts of channels, patterns and shard channels; multi, -1 or the number of
+its commands queued; for the client that asks, the bytes of the batch its command came in
+(qbuf) and of the command's arguments (argv-mem), and for a client that waits, of its
+blocking command's arguments; and the full name of its last command (`client|list`,
+`get`, NULL before the first: the blocking one while the client waits, the last of the
+rest of its batch once it is served). While EXEC runs a transaction, the client's own
+line shows it in MULTI with its commands queued, EXEC as its command, and the bytes of
+EXEC's batch and argument, as Redis shows it. A client killed is cut off at once,
+wherever it waits (in a read, in a blocking command, subscribed): its transaction, its
+wait and its subscriptions are dropped, what it waited for is left as it was, and
+connected_clients counts it out. The old form on the client's own address, and SKIPME no,
+kill the client itself after its reply (in a transaction, after the rest of the
+transaction), as Redis closes a client after its reply.
+
+**In the actor.** The actor keeps a registry of its clients in the state of Pub/Sub (one
+word in each batch's state, with the subscriptions): for each client its id, the channel
+its answers go back on, its socket's fd and its addresses, the time it came, its name,
+its database and its NO-EVICT, in a trie by id. A connection sends the actor its fd and
+addresses (`TCP.name`, the twenty-seventh patch) with its first message (Join), and
+leaves with its last (Left); the name and the database are written after a batch that ran
+SETNAME, HELLO, SELECT or RESET, which run the general way. What changes with every
+batch, the client's last command and its time, would cost a write to the registry for
+each batch; it is a mark on the client's answer channel instead (`Chan.mark`: a table of
+the runtime by the channel's row and generation, which the actor alone writes and reads),
+a call a batch, and the fast way takes the last command's code from the batch's tally,
+which it counts anyway. CLIENT KILL takes a client out of the registry, of the clients
+that wait, of the transactions and of the subscriptions, and keeps its id and its fd; at
+the end of the group, before its answers go out (after the group's entries are written,
+with the append-only file), the actor's loop shuts each fd down both ways (`TCP.kill`),
+so that the connection's read, or its watch, finds the end at once. Until a killed
+client's connection says Left, the fast way is off (a bit of the word of the Pub/Sub
+state that turns it off while keyspace events are to be sent), and a batch of that client
+is answered Bye without running, as Redis frees a client with its query buffer. The fd
+shut down is still that client's socket: a connection closes its socket only after the
+actor's answer to its Left, and the actor takes the fd out of the registry in the group
+that kills the client.
+
+**What a word costs.** The first version made GET 51 instructions dearer (3,337): a
+batch's last command was found by a walk of its hashes, one a request, with a reference
+kept at each step; the code comes from the batch's tally now, which holds its runs newest
+first. And a connection formatted its addresses with `inet_ntop` and `snprintf`, some
+3,500 instructions of printf a connection; they are written by hand now. GET, SET and
+INCR take 3,303, 4,224 and 4,482 instructions (3,286, 4,211 and 4,475 for the code
+before, built by the same compiler and counted in turn: +0.5% at most, `make perfcheck`).
+
+**Tests.** `tests/client_test.py` runs in `make test` against each mode of the server:
+scenarios on BendKV and on Redis, their transcripts compared line by line, a client's
+line field by field with what differs between two servers by nature put aside (ids,
+addresses and fds compared as the client that holds them, age and idle as whether they
+reach two seconds, the sizes of buffers BendKV does not keep): 41 lines (a client's own
+line, inline and in a pipeline; LIST of ids and of types and their errors; another
+client's name, database, last command (an unknown one, one refused for its arguments, a
+subcommand, the last of a pipeline) and idle time; the flags P with its counts, x with
+the commands queued and the line of a client while EXEC runs its transaction, b with its
+blocking command's arguments, also with commands after it, d and e; KILL's errors; KILL
+by id, address, local address, type and user, of the client itself, of a client that
+waits, of one in MULTI, inside a transaction, and of all). And two checks under load: 100
+clients at once, all listed and answering, half of them killed by id, the others still
+answering and listed alone; 200 clients killed by address while four threads of clients
+connect and close, none killed but those named, and connected_clients back to one after.
+A connection now waits for the actor's answer to its Left before it closes its socket, so
+it is counted a little longer as it ends: `tests/conn_test.py`, which counts connections
+after 50 that end each way, read one count, then another, and a connection the server
+took late (after its client reset it) could fall between them; it waits for ten counts of
+one in a row now. Redis's suite: 794 of the 1,677 tests Redis passes (47.3%; 785 before):
+unit/introspection passes 23 of its 28 (its five others are MONITOR's): CLIENT LIST, of
+IDs, with names and without, CLIENT INFO, KILL's errors, KILL SKIPME yes and no of all
+the clients, and a client named by SETNAME that closes its connection and leaves the
+list. unit/querybuf's two tests now get past CLIENT LIST, to the size of the query buffer
+of a client, which BendKV does not keep. And the runner of the suite starts an instance
+of the server for each unit now: unit/pubsub's test of `evicted` events, which never
+come, left `maxmemory 1` and `allkeys-lru` behind, and a unit/type/incr that ran after it
+on the same instance found INCR's shared integers counted once (OBJECT REFCOUNT 1, as
+Redis counts them under an LRU policy); on fresh instances, 4 more tests of streams run
+on Redis, and pass (1,677 of 1,757).
+
+**Where BendKV differs.** BendKV keeps no buffers per client: the sizes Redis gives
+(qbuf-free, rbs, rbp, obl, oll, omem, tot-mem) and multi-mem (the queued commands are the
+actor's, not the client's) are 0, and so is qbuf of a client other than the one that asks
+(a client that waits with commands after the blocking one holds them as commands, where
+Redis's query buffer holds their bytes). Idle time counts from the client's last batch,
+where Redis also counts a reply written (to a subscriber that gets messages, to a client
+that waited and was served). user is `default`, redir -1 and resp 2 (no ACL, no tracking,
+no RESP3), and events `r`. There is no CLIENT KILL MAXAGE (Redis 7.4). A client killed is
+cut off at the end of the actor's group, before any of the group's answers goes out,
+where Redis frees it at once.
+
 ## 4. Where a request's time goes, and hiding the memory waits
 
 With the eight patches, BendKV ran fewer instructions on GET and SET than Redis, missed
