@@ -330,6 +330,70 @@ type UpdOp is Data:
   UIncrF{by: String}
   UZset{op: ZWrite}
 
+# A command of Pub/Sub: SUBSCRIBE, PSUBSCRIBE and SSUBSCRIBE of their
+# channels, patterns or shard channels (kind 0, 1, 2: PSub), UNSUBSCRIBE
+# and its kin of theirs (none: all of them; PUnsub), PUBLISH and SPUBLISH
+# (shard) of a message to a channel, and PUBSUB's CHANNELS and
+# SHARDCHANNELS (of a pattern or all), NUMSUB and SHARDNUMSUB (of
+# channels) and NUMPAT. A session command travels as its number and its
+# arguments (SPub, below), as wide as the other session commands: a
+# command travels in registers as wide as its widest form, and every
+# request would pay for a wider one.
+type PubOp is Data:
+  PSub{kind: Nat, names: List<&2, String>}
+  PUnsub{kind: Nat, names: List<&2, String>}
+  PPub{shard: Bool, chan: String, msg: String}
+  PChans{shard: Bool, pat: Maybe<&2, String>}
+  PNumSub{shard: Bool, chans: List<&2, String>}
+  PNumPat{}
+
+def pub.arg(args: List<&2, String>) -> Maybe<&2, String>:
+  match args:
+    case Con{a, rest}:
+      Some{a}
+    case Nil{}:
+      None{}
+
+def pub.pub(+shard: Bool, args: List<&2, String>) -> PubOp:
+  match args:
+    case Con{c, Con{m, rest}}:
+      PPub{shard, c, m}
+    case _:
+      PNumPat{}
+
+# SPub's number and arguments as the command they are: 0 to 2 SUBSCRIBE,
+# PSUBSCRIBE, SSUBSCRIBE; 3 to 5 their UNSUBSCRIBEs; 6 PUBLISH, 7
+# SPUBLISH (a channel and a message); 8 PUBSUB CHANNELS, 9 SHARDCHANNELS
+# (a pattern, or none); 10 NUMSUB, 11 SHARDNUMSUB; 12 NUMPAT
+def pub.op(+kind: Nat, args: List<&2, String>) -> PubOp:
+  match kind:
+    case 0n:
+      PSub{0n, args}
+    case 1n:
+      PSub{1n, args}
+    case 2n:
+      PSub{2n, args}
+    case 3n:
+      PUnsub{0n, args}
+    case 4n:
+      PUnsub{1n, args}
+    case 5n:
+      PUnsub{2n, args}
+    case 6n:
+      pub.pub(False{}, args)
+    case 7n:
+      pub.pub(True{}, args)
+    case 8n:
+      PChans{False{}, pub.arg(args)}
+    case 9n:
+      PChans{True{}, pub.arg(args)}
+    case 10n:
+      PNumSub{False{}, args}
+    case 11n:
+      PNumSub{True{}, args}
+    case _:
+      PNumPat{}
+
 # The commands of a connection and of the server: session.bend runs
 # them, with the state of the connection and of the server. None of them
 # changes a database but the commands of several databases (SWAPDB, MOVE,
@@ -360,6 +424,12 @@ type UpdOp is Data:
 # and answers as a client that has none is answered (EXEC and DISCARD
 # without MULTI are errors); the server keeps each client's transaction
 # and the keys it watches (server.bend, Transactions).
+# The commands of Pub/Sub are SPub, their number and arguments (pub.op,
+# above, makes the PubOp they are): a session keeps no
+# subscription and knows no other client, and answers as Redis answers a
+# client alone on the server that subscribes to nothing; the server keeps
+# every client's subscriptions and sends what is published to them
+# (server.bend, Pub/Sub).
 
 type SessOp is Data:
   SHello{args: List<&2, String>}
@@ -398,6 +468,7 @@ type SessOp is Data:
   SDiscard{}
   SWatch{keys: List<&2, String>}
   SUnwatch{}
+  SPub{kind: Nat, args: List<&2, String>}
 
 # BITOP's operation
 type BitK is Data:
@@ -1233,6 +1304,71 @@ def parse_memory(id: Nat, sub: String, args: List<&2, String>) -> SessOp:
           s_arity("memory|usage")
     case _:
       e_unknown_sub(sub, "MEMORY")
+
+# PUBSUB: CHANNELS and SHARDCHANNELS of a pattern, or of all (one
+# argument more is the subcommand's own complaint, as Redis's), NUMSUB
+# and SHARDNUMSUB of channels, NUMPAT, HELP
+def pubsub_id(+n: String, len: Nat) -> Nat:
+  match len:
+    case 4n:
+      Bool.pick(Nat, String.eq(n, "HELP"), 2n, 0n)
+    case 6n:
+      Bool.pick(Nat, String.eq(n, "NUMPAT"), 3n, Bool.pick(Nat, String.eq(n, "NUMSUB"), 4n, 0n))
+    case 8n:
+      Bool.pick(Nat, String.eq(n, "CHANNELS"), 1n, 0n)
+    case 11n:
+      Bool.pick(Nat, String.eq(n, "SHARDNUMSUB"), 6n, 0n)
+    case 13n:
+      Bool.pick(Nat, String.eq(n, "SHARDCHANNELS"), 5n, 0n)
+    case _:
+      0n
+
+def pubsub_help() -> List<&2, String>:
+  ["CHANNELS [<pattern>]",
+   "    Return the currently active channels matching a <pattern> (default: '*').",
+   "NUMPAT",
+   "    Return number of subscriptions to patterns.",
+   "NUMSUB [<channel> ...]",
+   "    Return the number of subscribers for the specified channels, excluding",
+   "    pattern subscriptions(default: no channels).",
+   "SHARDCHANNELS [<pattern>]",
+   "    Return the currently active shard level channels matching a <pattern> (default: '*').",
+   "SHARDNUMSUB [<shardchannel> ...]",
+   "    Return the number of subscribers for the specified shard level channel(s)"]
+
+def pubsub_chans(+kind: Nat, sub: String, args: List<&2, String>) -> SessOp:
+  match args:
+    case Nil{}:
+      SPub{kind, Nil{}}
+    case Con{p, Nil{}}:
+      SPub{kind, [p]}
+    case _:
+      SBad{e_sub_syntax(sub, "PUBSUB")}
+
+def parse_pubsub(id: Nat, sub: String, args: List<&2, String>) -> SessOp:
+  match id:
+    case 1n:  # CHANNELS
+      pubsub_chans(8n, sub, args)
+    case 2n:  # HELP
+      match args:
+        case Nil{}:
+          help("PUBSUB", pubsub_help())
+        case _:
+          s_arity("pubsub|help")
+    case 3n:  # NUMPAT
+      match args:
+        case Nil{}:
+          SPub{12n, Nil{}}
+        case _:
+          s_arity("pubsub|numpat")
+    case 4n:  # NUMSUB
+      SPub{10n, args}
+    case 5n:  # SHARDCHANNELS
+      pubsub_chans(9n, sub, args)
+    case 6n:  # SHARDNUMSUB
+      SPub{11n, args}
+    case _:
+      e_unknown_sub(sub, "PUBSUB")
 
 # CONFIG: GET and SET of the server's parameters (config.bend), RESETSTAT,
 # and REWRITE, which fails as Redis fails without a config file
@@ -3982,7 +4118,8 @@ def cmd_id.l6(+n: String, c: Nat) -> Nat:
     case 15n:  # O
       Bool.pick(Nat, String.eq(n, "OBJECT"), 114n, 0n)
     case 16n:  # P
-      Bool.pick(Nat, String.eq(n, "PSETEX"), 24n, 0n)
+      Bool.pick(Nat, String.eq(n, "PSETEX"), 24n,
+      Bool.pick(Nat, String.eq(n, "PUBSUB"), 174n, 0n))
     case 18n:  # R
       Bool.pick(Nat, String.eq(n, "RENAME"), 46n,
       Bool.pick(Nat, String.eq(n, "RPUSHX"), 69n, 0n))
@@ -4022,7 +4159,8 @@ def cmd_id.l7(+n: String, c: Nat) -> Nat:
       Bool.pick(Nat, String.eq(n, "LINSERT"), 76n, 0n)
     case 16n:  # P
       Bool.pick(Nat, String.eq(n, "PEXPIRE"), 29n,
-      Bool.pick(Nat, String.eq(n, "PERSIST"), 36n, 0n))
+      Bool.pick(Nat, String.eq(n, "PERSIST"), 36n,
+      Bool.pick(Nat, String.eq(n, "PUBLISH"), 172n, 0n)))
     case 21n:  # U
       Bool.pick(Nat, String.eq(n, "UNWATCH"), 165n, 0n)
     case 26n:  # Z
@@ -4051,7 +4189,8 @@ def cmd_id.l8(+n: String, c: Nat) -> Nat:
       Bool.pick(Nat, String.eq(n, "RENAMENX"), 47n, 0n)
     case 19n:  # S
       Bool.pick(Nat, String.eq(n, "SETRANGE"), 39n,
-      Bool.pick(Nat, String.eq(n, "SMEMBERS"), 88n, 0n))
+      Bool.pick(Nat, String.eq(n, "SMEMBERS"), 88n,
+      Bool.pick(Nat, String.eq(n, "SPUBLISH"), 173n, 0n)))
     case 26n:  # Z
       Bool.pick(Nat, String.eq(n, "ZREVRANK"), 128n, 0n)
     case _:
@@ -4065,7 +4204,8 @@ def cmd_id.l9(+n: String, c: Nat) -> Nat:
       Bool.pick(Nat, String.eq(n, "RPOPLPUSH"), 81n,
       Bool.pick(Nat, String.eq(n, "RANDOMKEY"), 110n, 0n))
     case 19n:  # S
-      Bool.pick(Nat, String.eq(n, "SISMEMBER"), 86n, 0n)
+      Bool.pick(Nat, String.eq(n, "SISMEMBER"), 86n,
+      Bool.pick(Nat, String.eq(n, "SUBSCRIBE"), 166n, 0n))
     case 26n:  # Z
       Bool.pick(Nat, String.eq(n, "ZLEXCOUNT"), 130n,
       Bool.pick(Nat, String.eq(n, "ZREVRANGE"), 136n, 0n))
@@ -4080,10 +4220,13 @@ def cmd_id.l10(+n: String, c: Nat) -> Nat:
       Bool.pick(Nat, String.eq(n, "EXPIRETIME"), 34n, 0n)
     case 8n:  # H
       Bool.pick(Nat, String.eq(n, "HRANDFIELD"), 117n, 0n)
+    case 16n:  # P
+      Bool.pick(Nat, String.eq(n, "PSUBSCRIBE"), 168n, 0n)
     case 19n:  # S
       Bool.pick(Nat, String.eq(n, "SMISMEMBER"), 87n,
       Bool.pick(Nat, String.eq(n, "SINTERCARD"), 92n,
-      Bool.pick(Nat, String.eq(n, "SDIFFSTORE"), 97n, 0n)))
+      Bool.pick(Nat, String.eq(n, "SDIFFSTORE"), 97n,
+      Bool.pick(Nat, String.eq(n, "SSUBSCRIBE"), 170n, 0n))))
     case 26n:  # Z
       Bool.pick(Nat, String.eq(n, "ZINTERCARD"), 146n,
       Bool.pick(Nat, String.eq(n, "ZDIFFSTORE"), 149n, 0n))
@@ -4102,6 +4245,8 @@ def cmd_id.l11(+n: String, c: Nat) -> Nat:
       Bool.pick(Nat, String.eq(n, "SINTERSTORE"), 93n,
       Bool.pick(Nat, String.eq(n, "SUNIONSTORE"), 95n,
       Bool.pick(Nat, String.eq(n, "SRANDMEMBER"), 120n, 0n)))
+    case 21n:  # U
+      Bool.pick(Nat, String.eq(n, "UNSUBSCRIBE"), 167n, 0n)
     case 26n:  # Z
       Bool.pick(Nat, String.eq(n, "ZRANGEBYLEX"), 134n,
       Bool.pick(Nat, String.eq(n, "ZUNIONSTORE"), 147n,
@@ -4115,6 +4260,10 @@ def cmd_id.l12(+n: String, c: Nat) -> Nat:
   match c:
     case 8n:  # H
       Bool.pick(Nat, String.eq(n, "HINCRBYFLOAT"), 99n, 0n)
+    case 16n:  # P
+      Bool.pick(Nat, String.eq(n, "PUNSUBSCRIBE"), 169n, 0n)
+    case 19n:  # S
+      Bool.pick(Nat, String.eq(n, "SUNSUBSCRIBE"), 171n, 0n)
     case _:
       0n
 
@@ -4184,7 +4333,7 @@ def cmd_id(+n: String, len: Nat) -> Nat:
 # whether a command's number is parse_sess's (a command of the
 # connection, of the server or of several databases)
 def cmd_own(+id: Nat) -> Bool:
-  Bool.or(Bool.and(Nat.is_le(100n, id), Nat.is_le(id, 120n)), Bool.and(Nat.is_le(152n, id), Nat.is_le(id, 165n)))
+  Bool.or(Bool.and(Nat.is_le(100n, id), Nat.is_le(id, 120n)), Bool.and(Nat.is_le(152n, id), Nat.is_le(id, 174n)))
 # END gen_commands: dispatch
 
 def parse_id(id: Nat, name: String, args: List<&2, String>) -> Cmd:
@@ -4987,6 +5136,49 @@ def parse_sess(id: Nat, name: String, args: List<&2, String>) -> SessOp:
           SUnwatch{}
         case _:
           s_arity("unwatch")
+    case 166n:  # SUBSCRIBE
+      match args:
+        case Con{c, rest}:
+          SPub{0n, c <> rest}
+        case Nil{}:
+          s_arity("subscribe")
+    case 167n:  # UNSUBSCRIBE
+      SPub{3n, args}
+    case 168n:  # PSUBSCRIBE
+      match args:
+        case Con{c, rest}:
+          SPub{1n, c <> rest}
+        case Nil{}:
+          s_arity("psubscribe")
+    case 169n:  # PUNSUBSCRIBE
+      SPub{4n, args}
+    case 170n:  # SSUBSCRIBE
+      match args:
+        case Con{c, rest}:
+          SPub{2n, c <> rest}
+        case Nil{}:
+          s_arity("ssubscribe")
+    case 171n:  # SUNSUBSCRIBE
+      SPub{5n, args}
+    case 172n:  # PUBLISH
+      match args:
+        case Con{c, Con{m, Nil{}}}:
+          SPub{6n, [c, m]}
+        case _:
+          s_arity("publish")
+    case 173n:  # SPUBLISH
+      match args:
+        case Con{c, Con{m, Nil{}}}:
+          SPub{7n, [c, m]}
+        case _:
+          s_arity("spublish")
+    case 174n:  # PUBSUB
+      match args:
+        case Nil{}:
+          s_arity("pubsub")
+        case Con{+sub, rest}:
+          +up = String.to_upper(sub)
+          parse_pubsub(pubsub_id(up, String.length(up)), sub, rest)
     case _:
       SBad{RError{no_newlines("ERR unknown command '" ++ String.take(cstr(name), 128n) ++ "', with args beginning with: " ++ unknown.args(args, ""))}}
 
@@ -5363,6 +5555,24 @@ def stat.top(+id: Nat) -> Nat:
       164n
     case 165n:
       165n
+    case 166n:
+      166n
+    case 167n:
+      167n
+    case 168n:
+      168n
+    case 169n:
+      169n
+    case 170n:
+      170n
+    case 171n:
+      171n
+    case 172n:
+      172n
+    case 173n:
+      173n
+    case 174n:
+      174n
     case _:
       0n
 
@@ -5370,25 +5580,25 @@ def stat.top(+id: Nat) -> Nat:
 def stat.sub.client(+sub: Nat) -> Nat:
   match sub:
     case 1n:
-      166n
-    case 2n:
-      167n
-    case 3n:
-      168n
-    case 4n:
-      169n
-    case 5n:
-      170n
-    case 6n:
-      171n
-    case 7n:
-      172n
-    case 8n:
-      173n
-    case 9n:
-      174n
-    case 10n:
       175n
+    case 2n:
+      176n
+    case 3n:
+      177n
+    case 4n:
+      178n
+    case 5n:
+      179n
+    case 6n:
+      180n
+    case 7n:
+      181n
+    case 8n:
+      182n
+    case 9n:
+      183n
+    case 10n:
+      184n
     case _:
       0n
 
@@ -5396,9 +5606,9 @@ def stat.sub.client(+sub: Nat) -> Nat:
 def stat.sub.function(+sub: Nat) -> Nat:
   match sub:
     case 1n:
-      176n
+      185n
     case 2n:
-      177n
+      186n
     case _:
       0n
 
@@ -5406,15 +5616,15 @@ def stat.sub.function(+sub: Nat) -> Nat:
 def stat.sub.config(+sub: Nat) -> Nat:
   match sub:
     case 1n:
-      178n
+      187n
     case 2n:
-      179n
+      188n
     case 3n:
-      180n
+      189n
     case 4n:
-      181n
+      190n
     case 5n:
-      182n
+      191n
     case _:
       0n
 
@@ -5422,19 +5632,19 @@ def stat.sub.config(+sub: Nat) -> Nat:
 def stat.sub.command(+sub: Nat) -> Nat:
   match sub:
     case 1n:
-      183n
+      192n
     case 2n:
-      184n
+      193n
     case 3n:
-      185n
+      194n
     case 4n:
-      186n
+      195n
     case 5n:
-      187n
+      196n
     case 6n:
-      188n
+      197n
     case 7n:
-      189n
+      198n
     case _:
       0n
 
@@ -5442,15 +5652,15 @@ def stat.sub.command(+sub: Nat) -> Nat:
 def stat.sub.object(+sub: Nat) -> Nat:
   match sub:
     case 1n:
-      190n
+      199n
     case 2n:
-      191n
+      200n
     case 3n:
-      192n
+      201n
     case 4n:
-      193n
+      202n
     case 5n:
-      194n
+      203n
     case _:
       0n
 
@@ -5458,9 +5668,27 @@ def stat.sub.object(+sub: Nat) -> Nat:
 def stat.sub.memory(+sub: Nat) -> Nat:
   match sub:
     case 1n:
-      195n
+      204n
     case 2n:
-      196n
+      205n
+    case _:
+      0n
+
+# a subcommand of PUBSUB's key, by its number; 0 for none
+def stat.sub.pubsub(+sub: Nat) -> Nat:
+  match sub:
+    case 1n:
+      206n
+    case 2n:
+      207n
+    case 3n:
+      208n
+    case 4n:
+      209n
+    case 5n:
+      210n
+    case 6n:
+      211n
     case _:
       0n
 
@@ -5798,67 +6026,97 @@ def stat.name(+key: Nat) -> String:
     case 165n:
       "unwatch"
     case 166n:
-      "client|id"
+      "subscribe"
     case 167n:
-      "client|help"
+      "unsubscribe"
     case 168n:
-      "client|reply"
+      "psubscribe"
     case 169n:
-      "client|getname"
+      "punsubscribe"
     case 170n:
-      "client|setname"
+      "ssubscribe"
     case 171n:
-      "client|caching"
+      "sunsubscribe"
     case 172n:
-      "client|unblock"
+      "publish"
     case 173n:
-      "client|getredir"
+      "spublish"
     case 174n:
-      "client|no-evict"
+      "pubsub"
     case 175n:
-      "client|trackinginfo"
+      "client|id"
     case 176n:
-      "function|flush"
+      "client|help"
     case 177n:
-      "function|help"
+      "client|reply"
     case 178n:
-      "config|get"
+      "client|getname"
     case 179n:
-      "config|set"
+      "client|setname"
     case 180n:
-      "config|resetstat"
+      "client|caching"
     case 181n:
-      "config|rewrite"
+      "client|unblock"
     case 182n:
-      "config|help"
+      "client|getredir"
     case 183n:
-      "command|info"
+      "client|no-evict"
     case 184n:
-      "command|docs"
+      "client|trackinginfo"
     case 185n:
-      "command|list"
+      "function|flush"
     case 186n:
-      "command|help"
+      "function|help"
     case 187n:
-      "command|count"
+      "config|get"
     case 188n:
-      "command|getkeys"
+      "config|set"
     case 189n:
-      "command|getkeysandflags"
+      "config|resetstat"
     case 190n:
-      "object|help"
+      "config|rewrite"
     case 191n:
-      "object|freq"
+      "config|help"
     case 192n:
-      "object|encoding"
+      "command|info"
     case 193n:
-      "object|refcount"
+      "command|docs"
     case 194n:
-      "object|idletime"
+      "command|list"
     case 195n:
-      "memory|help"
+      "command|help"
     case 196n:
+      "command|count"
+    case 197n:
+      "command|getkeys"
+    case 198n:
+      "command|getkeysandflags"
+    case 199n:
+      "object|help"
+    case 200n:
+      "object|freq"
+    case 201n:
+      "object|encoding"
+    case 202n:
+      "object|refcount"
+    case 203n:
+      "object|idletime"
+    case 204n:
+      "memory|help"
+    case 205n:
       "memory|usage"
+    case 206n:
+      "pubsub|channels"
+    case 207n:
+      "pubsub|help"
+    case 208n:
+      "pubsub|numpat"
+    case 209n:
+      "pubsub|numsub"
+    case 210n:
+      "pubsub|shardchannels"
+    case 211n:
+      "pubsub|shardnumsub"
     case _:
       ""
 
@@ -6197,67 +6455,97 @@ def stat.arity(+key: Nat) -> Nat:
     case 165n:
       2n
     case 166n:
-      4n
+      5n
     case 167n:
-      4n
+      3n
     case 168n:
-      6n
+      5n
     case 169n:
-      4n
+      3n
     case 170n:
-      6n
+      5n
     case 171n:
-      6n
+      3n
     case 172n:
-      7n
-    case 173n:
-      4n
-    case 174n:
       6n
+    case 173n:
+      6n
+    case 174n:
+      5n
     case 175n:
       4n
     case 176n:
-      5n
+      4n
     case 177n:
-      4n
+      6n
     case 178n:
-      7n
+      4n
     case 179n:
-      9n
+      6n
     case 180n:
-      4n
+      6n
     case 181n:
-      4n
+      7n
     case 182n:
       4n
     case 183n:
-      5n
+      6n
     case 184n:
-      5n
+      4n
     case 185n:
       5n
     case 186n:
       4n
     case 187n:
-      4n
+      7n
     case 188n:
       9n
     case 189n:
-      9n
+      4n
     case 190n:
       4n
     case 191n:
-      6n
+      4n
     case 192n:
-      6n
+      5n
     case 193n:
-      6n
+      5n
     case 194n:
-      6n
+      5n
     case 195n:
       4n
     case 196n:
+      4n
+    case 197n:
+      9n
+    case 198n:
+      9n
+    case 199n:
+      4n
+    case 200n:
+      6n
+    case 201n:
+      6n
+    case 202n:
+      6n
+    case 203n:
+      6n
+    case 204n:
+      4n
+    case 205n:
       7n
+    case 206n:
+      5n
+    case 207n:
+      4n
+    case 208n:
+      4n
+    case 209n:
+      5n
+    case 210n:
+      5n
+    case 211n:
+      5n
     case _:
       1n
 
@@ -6462,11 +6750,11 @@ def stat.risky(+key: Nat) -> Bool:
       True{}
     case 152n:
       True{}
-    case 191n:
+    case 200n:
       True{}
-    case 194n:
+    case 203n:
       True{}
-    case 196n:
+    case 205n:
       True{}
     case _:
       False{}
@@ -8050,6 +8338,126 @@ def stat.cw(+code: Nat) -> U32:
       3341
     case 787n:
       3342
+    case 788n:
+      3347
+    case 789n:
+      3349
+    case 790n:
+      3350
+    case 791n:
+      3353
+    case 792n:
+      3354
+    case 793n:
+      3356
+    case 794n:
+      3363
+    case 795n:
+      3365
+    case 796n:
+      3366
+    case 797n:
+      3369
+    case 798n:
+      3370
+    case 799n:
+      3372
+    case 800n:
+      3377
+    case 801n:
+      3378
+    case 802n:
+      3380
+    case 803n:
+      3384
+    case 804n:
+      3395
+    case 805n:
+      3397
+    case 806n:
+      3398
+    case 807n:
+      3401
+    case 808n:
+      3402
+    case 809n:
+      3404
+    case 810n:
+      3409
+    case 811n:
+      3410
+    case 812n:
+      3412
+    case 813n:
+      3416
+    case 814n:
+      3425
+    case 815n:
+      3426
+    case 816n:
+      3428
+    case 817n:
+      3432
+    case 818n:
+      3440
+    case 819n:
+      3459
+    case 820n:
+      3461
+    case 821n:
+      3462
+    case 822n:
+      3465
+    case 823n:
+      3466
+    case 824n:
+      3468
+    case 825n:
+      3473
+    case 826n:
+      3474
+    case 827n:
+      3476
+    case 828n:
+      3480
+    case 829n:
+      3489
+    case 830n:
+      3490
+    case 831n:
+      3492
+    case 832n:
+      3496
+    case 833n:
+      3504
+    case 834n:
+      3521
+    case 835n:
+      3522
+    case 836n:
+      3524
+    case 837n:
+      3528
+    case 838n:
+      3536
+    case 839n:
+      3552
+    case 840n:
+      3591
+    case 841n:
+      3595
+    case 842n:
+      3597
+    case 843n:
+      3598
+    case 844n:
+      3603
+    case 845n:
+      3605
+    case 846n:
+      3606
+    case 847n:
+      3609
     case _:
       63
 
@@ -9891,6 +10299,146 @@ def stat.code.lo52(+lo: Nat) -> Nat:
       786n
     case 14n:
       787n
+    case 19n:
+      788n
+    case 21n:
+      789n
+    case 22n:
+      790n
+    case 25n:
+      791n
+    case 26n:
+      792n
+    case 28n:
+      793n
+    case 35n:
+      794n
+    case 37n:
+      795n
+    case 38n:
+      796n
+    case 41n:
+      797n
+    case 42n:
+      798n
+    case 44n:
+      799n
+    case 49n:
+      800n
+    case 50n:
+      801n
+    case 52n:
+      802n
+    case 56n:
+      803n
+    case _:
+      0n
+
+def stat.code.lo53(+lo: Nat) -> Nat:
+  match lo:
+    case 3n:
+      804n
+    case 5n:
+      805n
+    case 6n:
+      806n
+    case 9n:
+      807n
+    case 10n:
+      808n
+    case 12n:
+      809n
+    case 17n:
+      810n
+    case 18n:
+      811n
+    case 20n:
+      812n
+    case 24n:
+      813n
+    case 33n:
+      814n
+    case 34n:
+      815n
+    case 36n:
+      816n
+    case 40n:
+      817n
+    case 48n:
+      818n
+    case _:
+      0n
+
+def stat.code.lo54(+lo: Nat) -> Nat:
+  match lo:
+    case 3n:
+      819n
+    case 5n:
+      820n
+    case 6n:
+      821n
+    case 9n:
+      822n
+    case 10n:
+      823n
+    case 12n:
+      824n
+    case 17n:
+      825n
+    case 18n:
+      826n
+    case 20n:
+      827n
+    case 24n:
+      828n
+    case 33n:
+      829n
+    case 34n:
+      830n
+    case 36n:
+      831n
+    case 40n:
+      832n
+    case 48n:
+      833n
+    case _:
+      0n
+
+def stat.code.lo55(+lo: Nat) -> Nat:
+  match lo:
+    case 1n:
+      834n
+    case 2n:
+      835n
+    case 4n:
+      836n
+    case 8n:
+      837n
+    case 16n:
+      838n
+    case 32n:
+      839n
+    case _:
+      0n
+
+def stat.code.lo56(+lo: Nat) -> Nat:
+  match lo:
+    case 7n:
+      840n
+    case 11n:
+      841n
+    case 13n:
+      842n
+    case 14n:
+      843n
+    case 19n:
+      844n
+    case 21n:
+      845n
+    case 22n:
+      846n
+    case 25n:
+      847n
     case _:
       0n
 
@@ -10002,6 +10550,14 @@ def stat.code.hl(+hi: Nat, +lo: Nat) -> Nat:
       stat.code.lo51(lo)
     case 52n:
       stat.code.lo52(lo)
+    case 53n:
+      stat.code.lo53(lo)
+    case 54n:
+      stat.code.lo54(lo)
+    case 55n:
+      stat.code.lo55(lo)
+    case 56n:
+      stat.code.lo56(lo)
     case _:
       0n
 
@@ -10021,8 +10577,8 @@ def stat.mark.incr() -> U32:
   380633088
 # END gen_commands: stats
 
-# a container (CLIENT, FUNCTION, CONFIG, COMMAND, OBJECT, MEMORY) by its
-# first argument; alone, the container itself (top)
+# a container (CLIENT, FUNCTION, CONFIG, COMMAND, OBJECT, MEMORY, PUBSUB)
+# by its first argument; alone, the container itself (top)
 def stat.sub.of(id: Nat, +up: String) -> Nat:
   match id:
     case 118n:
@@ -10035,6 +10591,8 @@ def stat.sub.of(id: Nat, +up: String) -> Nat:
       stat.sub.config(config_id(up, String.length(up)))
     case 114n:
       stat.sub.object(object_id(up, String.length(up)))
+    case 174n:
+      stat.sub.pubsub(pubsub_id(up, String.length(up)))
     case _:
       stat.sub.command(command_id(up, String.length(up)))
 
@@ -10060,6 +10618,8 @@ def stat.key(+id: Nat, +args: List<&2, String>) -> Nat:
       stat.key.args(stat.top(114n), 114n, args)
     case 118n:
       stat.key.args(stat.top(118n), 118n, args)
+    case 174n:
+      stat.key.args(stat.top(174n), 174n, args)
     case _:
       stat.top(id)
 

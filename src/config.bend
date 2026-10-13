@@ -983,10 +983,26 @@ def notify.show(+f: U32) -> String:
     notify.flag(f, 1024, "t") ++ notify.flag(f, 8192, "d") ++ notify.flag(f, 16384, "n"))
     ++ notify.flag(f, 1, "K") ++ notify.flag(f, 2, "E") ++ notify.flag(f, 2048, "m")
 
+# the flags as they are kept: each class by its letter, n too where A
+# covers the others (Redis keeps its flags, and shows A without n:
+# item.shown)
+def notify.keep(+f: U32) -> String:
+  notify.flag(f, 4, "g") ++ notify.flag(f, 8, "$") ++ notify.flag(f, 16, "l") ++ notify.flag(f, 32, "s") ++
+  notify.flag(f, 64, "h") ++ notify.flag(f, 128, "z") ++ notify.flag(f, 256, "x") ++ notify.flag(f, 512, "e") ++
+  notify.flag(f, 1024, "t") ++ notify.flag(f, 8192, "d") ++ notify.flag(f, 16384, "n")
+  ++ notify.flag(f, 1, "K") ++ notify.flag(f, 2, "E") ++ notify.flag(f, 2048, "m")
+
+def notify.shown(m: Maybe<&2, U32>) -> String:
+  match m:
+    case Some{+f}:
+      notify.show(f)
+    case None{}:
+      ""
+
 def notify.got(m: Maybe<&2, U32>) -> Result<&2, &2, String, String>:
   match m:
     case Some{+f}:
-      Done{notify.show(f)}
+      Done{notify.keep(f)}
     case None{}:
       Fail{"Invalid event class character. Use 'Ag$lshzxeKEtmdn'."}
 
@@ -1309,6 +1325,15 @@ def item.val(+it: CItem) -> String:
     case CItem{p, v}:
       v
 
+# a parameter's value as CONFIG GET shows it: notify-keyspace-events as
+# Redis shows its flags
+def item.shown(+it: CItem) -> String:
+  match it:
+    case CItem{CParam{n, a, i, h, pr, m, CSpec{XNotify{}}, ap}, +v}:
+      notify.shown(notify.read(v, Some{0}))
+    case CItem{p, v}:
+      v
+
 # whether a parameter is called lname (in lower case), by its name or by
 # its other one
 def item.is(+lname: String, +it: CItem) -> Bool:
@@ -1384,7 +1409,7 @@ def got.add(ok: Bool, k: String, lk: String, v: String, gs: List<&2, Got>) -> Li
 def got.found(m: Maybe<&2, CItem>, +a: String, gs: List<&2, Got>) -> List<&2, Got>:
   match m:
     case Some{+it}:
-      Got{a, String.to_lower(a), item.val(it)} <> gs
+      Got{a, String.to_lower(a), item.shown(it)} <> gs
     case None{}:
       gs
 
@@ -1398,10 +1423,13 @@ def get.keys(+pat: String, +name: String, +alias: String, +v: String, +gs: List<
   +g1 = got.add(Bool.and(Bool.not(got.has(gs, name)), R.stringmatch(pat, name, True{})), name, name, v, gs)
   got.add(Bool.and(Bool.not(String.is_empty(alias)), Bool.and(Bool.not(got.has(g1, alias)), R.stringmatch(pat, alias, True{}))), alias, alias, v, g1)
 
-def get.item(+pat: String, it: CItem, +gs: List<&2, Got>) -> List<&2, Got>:
+def get.item.v(+pat: String, it: CItem, +v: String, +gs: List<&2, Got>) -> List<&2, Got>:
   match it:
-    case CItem{CParam{name, alias, imm, hidden, prot, multi, ty, app}, v}:
+    case CItem{CParam{name, alias, imm, hidden, prot, multi, ty, app}, old}:
       Bool.pick(List<&2, Got>, hidden, gs, get.keys(pat, name, alias, v, gs))
+
+def get.item(+pat: String, +it: CItem, +gs: List<&2, Got>) -> List<&2, Got>:
+  get.item.v(pat, it, item.shown(it), gs)
 
 def get.pat(items: List<&2, CItem>, +pat: String, gs: List<&2, Got>) -> List<&2, Got>:
   match items:

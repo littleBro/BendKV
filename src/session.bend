@@ -2038,6 +2038,102 @@ def lcs.reply(args: List<&2, String>, +db: R.Db, +cfg: List<&2, C.CItem>) -> R.R
     case _:
       R.RError{"ERR wrong number of arguments for 'lcs' command"}
 
+# Pub/Sub
+# -------
+# A session keeps no subscription and knows no other client: it answers a
+# command of Pub/Sub as Redis answers a client alone on the server that
+# subscribes to nothing (the server keeps the subscriptions: server.bend,
+# Pub/Sub). SUBSCRIBE and its kin answer a reply for each name, its count
+# the names so far, each once; UNSUBSCRIBE and its kin a reply for each
+# name, or one with no name when there are none, the count 0. Redis sends
+# these replies even to a client whose replies are held back (CLIENT
+# REPLY OFF or SKIP), and each on its own: a session gathers them in one
+# array. PUBLISH reaches no one, no channel has a subscriber, no pattern
+# is subscribed.
+
+# the word of a reply of SUBSCRIBE (on) or UNSUBSCRIBE (off) of a kind
+def pub.word(on: Bool, +kind: Nat) -> String:
+  match on kind:
+    case True{} 0n:
+      "subscribe"
+    case True{} 1n:
+      "psubscribe"
+    case True{} _:
+      "ssubscribe"
+    case False{} 0n:
+      "unsubscribe"
+    case False{} 1n:
+      "punsubscribe"
+    case False{} _:
+      "sunsubscribe"
+
+def pub.has(+n: String, +xs: List<&2, String>) -> Bool:
+  match xs:
+    case Nil{}:
+      False{}
+    case Con{+x, +rest}:
+      Bool.or(String.eq(n, x), pub.has(n, rest))
+
+def pub.note(+w: String, n: R.Reply, +count: Nat) -> R.Reply:
+  R.RArray{[R.RBulk{w}, n, R.RInt{R.IPos{count}}]}
+
+def pub.seen(new: Bool, +n: String, seen: List<&2, String>) -> List<&2, String>:
+  match new:
+    case True{}:
+      n <> seen
+    case False{}:
+      seen
+
+# the replies of SUBSCRIBE of names, newest first in acc
+def pub.subs(+w: String, names: List<&2, String>, +seen: List<&2, String>, acc: List<&2, R.Reply>) -> List<&2, R.Reply>:
+  match names:
+    case Nil{}:
+      List.reverse(&2, R.Reply, acc)
+    case Con{+n, rest}:
+      +now = pub.seen(Bool.not(pub.has(n, seen)), n, seen)
+      pub.subs(w, rest, now, pub.note(w, R.RBulk{n}, List.length(&2, String, now)) <> acc)
+
+def pub.unsubs(+w: String, names: List<&2, String>) -> List<&2, R.Reply>:
+  match names:
+    case Nil{}:
+      Nil{}
+    case Con{n, rest}:
+      pub.note(w, R.RBulk{n}, 0n) <> pub.unsubs(w, rest)
+
+def pub.zeros(chans: List<&2, String>) -> List<&2, R.Reply>:
+  match chans:
+    case Nil{}:
+      Nil{}
+    case Con{c, rest}:
+      R.RBulk{c} <> R.RInt{R.IPos{0n}} <> pub.zeros(rest)
+
+def pub.reply(p: R.PubOp) -> R.Reply:
+  match p:
+    case R.PSub{+k, names}:
+      R.RArray{pub.subs(pub.word(True{}, k), names, Nil{}, Nil{})}
+    case R.PUnsub{+k, Nil{}}:
+      R.RArray{[pub.note(pub.word(False{}, k), R.RNull{}, 0n)]}
+    case R.PUnsub{+k, names}:
+      R.RArray{pub.unsubs(pub.word(False{}, k), names)}
+    case R.PPub{sh, c, m}:
+      R.RInt{R.IPos{0n}}
+    case R.PChans{sh, pat}:
+      R.RArray{Nil{}}
+    case R.PNumSub{sh, chans}:
+      R.RArray{pub.zeros(chans)}
+    case R.PNumPat{}:
+      R.RInt{R.IPos{0n}}
+
+# the reply sent: those of SUBSCRIBE and its kin whatever the mode
+def pub.say(m: Mute, p: R.PubOp) -> Maybe<&2, R.Reply>:
+  match p:
+    case R.PSub{k, names}:
+      Some{pub.reply(R.PSub{k, names})}
+    case R.PUnsub{k, names}:
+      Some{pub.reply(R.PUnsub{k, names})}
+    case other:
+      say(m, pub.reply(other))
+
 # a session command's reply, sent or not; the databases are there for
 # the commands that read them
 def own_reply(+o: R.SessOp, +c: Conn, +s: Srv, +ds: R.Ds) -> Maybe<&2, R.Reply>:
@@ -2114,6 +2210,8 @@ def own_reply(+o: R.SessOp, +c: Conn, +s: Srv, +ds: R.Ds) -> Maybe<&2, R.Reply>:
       say(conn.mode(c), R.r_ok())
     case R.SUnwatch{}:
       say(conn.mode(c), R.r_ok())
+    case R.SPub{+k, a}:
+      pub.say(conn.mode(c), R.pub.op(k, a))
 
 # the connection after a session command
 def own_conn(+o: R.SessOp, +c: Conn, +s: Srv) -> Conn:
@@ -2189,6 +2287,8 @@ def own_conn(+o: R.SessOp, +c: Conn, +s: Srv) -> Conn:
     case R.SWatch{ks}:
       step_conn(c, s)
     case R.SUnwatch{}:
+      step_conn(c, s)
+    case R.SPub{k, a}:
       step_conn(c, s)
 
 # what a session command does to the databases: SELECT and RESET move the

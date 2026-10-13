@@ -3267,6 +3267,112 @@ logs only a DEL that deleted, so a transaction with such a DEL and one other eff
 written between MULTI and EXEC where Redis writes the other effect alone (the file means
 the same).
 
+## 3zr. Pub/Sub and keyspace notifications
+
+**What there is.** SUBSCRIBE, UNSUBSCRIBE, PSUBSCRIBE, PUNSUBSCRIBE, SSUBSCRIBE,
+SUNSUBSCRIBE, PUBLISH, SPUBLISH and PUBSUB (CHANNELS, NUMSUB, NUMPAT, SHARDCHANNELS,
+SHARDNUMSUB, HELP), as Redis 7.0.15 runs them (`pubsub.c`). SUBSCRIBE and its kin answer
+a reply for each name, with the count of the client's channels and patterns (of its
+shard channels for SSUBSCRIBE and SUNSUBSCRIBE); a name subscribed to twice counts once;
+UNSUBSCRIBE without names unsubscribes from all, and answers one reply with a null name
+when there are none. A message goes to the subscribers of its channel (`message`, or
+`smessage` for a shard channel), then to those of each pattern it matches (`pmessage`,
+Redis's glob), and PUBLISH answers how many got it. A client with a subscription runs
+(P|S)SUBSCRIBE, (P|S)UNSUBSCRIBE, PING (answered `[pong, its argument]`), QUIT and
+RESET alone, as a client of RESP2 does in Redis: any other command is refused, once the
+checks of its name and of the number of its arguments pass (an unknown command, or GET
+with no key, answers its own error), with Redis's `Can't execute 'get': only
+(P|S)SUBSCRIBE / (P|S)UNSUBSCRIBE / PING / QUIT / RESET are allowed in this context`,
+counted as rejected; an EXEC so refused answers EXECABORT with that reason. The replies of
+SUBSCRIBE and its kin go out even to a client whose replies are held back (CLIENT REPLY
+OFF or SKIP), as Redis pushes them. In a transaction SUBSCRIBE and PSUBSCRIBE run, and
+the client has its subscription after EXEC, while SSUBSCRIBE is refused (`SSUBSCRIBE
+isn't allowed for a DENY BLOCKING client`), as in Redis. RESET, QUIT and a connection
+that closes drop the client's subscriptions.
+
+**Keyspace notifications.** With `notify-keyspace-events` set (K, E, g, $, l, s, h, z,
+x, n and A, read and shown as Redis reads and shows them: A for the classes it covers,
+n kept but not shown beside A), each change a command makes is published as Redis's
+`notifyKeyspaceEvent` publishes it: the event's name to `__keyspace@<db>__:<key>` (K)
+and the key to `__keyevent@<db>__:<name>` (E). Each command has Redis's events: `set`,
+`expire` (after `set` for SET with a time), `del`, `persist`, `incrby`, `incrbyfloat`,
+`append`, `setrange`, `setbit`, `rename_from` and `rename_to`, `move_from` and
+`move_to`, `copy_to`, `lpush`, `rpush`, `lpop`, `rpop`, `linsert`, `lset`, `lrem`,
+`ltrim` (sent whether it trims or not), `sadd`, `srem`, `spop`, `sinterstore` and its
+kin, `hset`, `hdel`, `hincrby`, `hincrbyfloat`, `zadd`, `zincr`, `zrem`,
+`zremrangebyscore` and its kin, `zpopmin`, `zpopmax`, `zunionstore` and its kin,
+`zrangestore`; a key a command makes is `new` (n) before them, a collection it empties
+is `del` after them, and the sweep of expired keys sends `expired` (x) for each key it
+deletes. A client that waits and is served (BLPOP and its kin) sends its pop's events
+after the write's, as Redis does.
+
+**In the actor.** The session keeps no subscription and knows no other client: it
+answers each command of Pub/Sub as Redis answers a client alone on the server (the
+replies of SUBSCRIBE and its kin gathered in one array), so the connection's state and
+its proofs stay. The actor keeps the subscriptions: the subscribers of each channel and
+shard channel (tries by name, as the keyspace's), those of each pattern, and each
+client's channels, patterns and shard channels. A message to a client is a push (`Push`)
+on the channel its answers come back on, after the answers already there, which the
+connection writes out as it comes; a client with a subscription waits for its socket and
+its channel at once (a watch, `TCP.watch`, as a client that waits does, section 3zp), in
+steps of its own, so that the loop of every other client is as it was; its batches go to
+the actor as `SubReq`, which runs them a command at a time. With keyspace events to
+send, every batch runs a command at a time, and each command's events come from the
+command, from whether it changed anything (its effects, the commands the append-only
+file logs for it), and from what each key it writes was before it and is after it
+(there, gone, or there with its time passed).
+
+**What a word costs.** The first version made GET 70 instructions dearer (3,349, +2.1%),
+for three reasons the profile of the generated code showed, segment by segment (a
+build with DWARF 4, which valgrind 3.22 reads, and callgrind's lines summed by the
+segment that holds them). A command travels in as many registers as its widest form, and
+the session commands' widest had two fields: a PubOp of three fields inside the session
+command made every request carry a word more, through the parser and the batch (11
+instructions in the parser's loop alone); SPub now carries a number and its arguments,
+as narrow as the others. Pub/Sub's state was eight words flat in the state of each batch,
+which every function of the fast way passes on; it is one word now, a type that holds
+itself (`PsOf`, never built), as the clients that wait and the transactions are. And a
+flag in the connection's link, read after each answer, gave three steps of the loop a
+second caller, which the compiler no longer folds into their callers; the subscribed
+client has steps of its own now. GET, SET and INCR take 3,288, 4,209 and 4,471
+instructions (3,279, 4,200 and 4,463 before, +0.3% at most, `make perfcheck`).
+
+**Tests.** `tests/pubsub_test.py` runs in `make test` against each mode of the server:
+scenarios on BendKV and on Redis, their transcripts compared line by line (191 lines:
+PING of a subscribed client, one client and two, UNSUBSCRIBE of some and of all, a
+channel subscribed to more than once, names not subscribed to, patterns with classes,
+escapes, `?`, `*` and the empty channel, NUMSUB, NUMPAT of shared patterns, message
+before pmessage, the commands a subscribed client may not run and those whose checks
+come first, RESET and QUIT of a subscribed client and one that closes its connection,
+CLIENT REPLY OFF and SKIP, SUBSCRIBE in a transaction and SSUBSCRIBE refused there,
+batches that subscribe and unsubscribe at once, PUBSUB's subcommands and errors, shard
+channels apart from the others, a message of 100 KB and 50 in a row, INFO's statistics;
+then the events of 138 commands, of every kind under `KEA` and under masks, `n`, `x`
+from the sweep, a key replaced after its time passed, a client that waits served, a
+transaction, and `notify-keyspace-events` off), and
+two checks under load: 20 subscribers of a channel and a pattern each get the 2,000
+messages of 4 publishers, in each publisher's order, PUBLISH counting 40 receivers each
+time; and 50 subscribers close their connections while messages are published, after
+which PUBLISH counts none and a new subscriber gets what is published. Redis's suite: 785
+of the 1,673 tests Redis passes (46.9%; 759 before). unit/pubsub passes 25 of the 27
+tests it reaches (not the one of RESP3, nor the one of streams), and unit/other its test
+of RESET clearing the state of Pub/Sub; the test of `evicted` events waits for an
+eviction that never comes (there is no maxmemory), so the two after it do not run: CONFIG
+GET and SET of the flags, which the tests of CONFIG compare with Redis on random flags,
+and `new` events, which the scenarios above check; unit/pubsubshard's tests are of a
+cluster, which the suite skips against a server it did not start.
+
+**Where BendKV differs.** UNSUBSCRIBE and PUNSUBSCRIBE of all go in the order the
+client subscribed, patterns are matched in the order they came, and PUBSUB CHANNELS
+lists in the order of the trie, where Redis goes in the order of its hash tables (the
+tests compare these sorted). There is no RESP3, so no push type. A slow subscriber's
+messages wait in its channel without the limit of `client-output-buffer-limit pubsub`.
+Keys missed (`m`), evicted (`e`) and the events of streams are not sent; a key that a
+read finds with its time passed sends `expired` when the sweep deletes it, where Redis
+sends it at the read. A message a client publishes to a channel it subscribed to in the
+same transaction goes out before EXEC's array, where Redis puts it inside the array's
+bytes, after its count.
+
 ## 4. Where a request's time goes, and hiding the memory waits
 
 With the eight patches, BendKV ran fewer instructions on GET and SET than Redis, missed
