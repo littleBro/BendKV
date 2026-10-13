@@ -6413,3 +6413,11 @@ as often as with RESP2, whose only commands on it are redis-benchmark's two CONF
 (342 commands against 2). That is about 150,000 instructions for each client's first 17
 commands, most of them taking apart and dropping the session's records; a client that
 sends `HELLO 3` as it connects, as go-redis and Lettuce do, pays it once.
+
+**The baseline.** `tools/perf_baseline.txt` held the counts written with values of a type
+(section 31: GET 3,272, SET 4,261, INCR 4,499); each change since has added a few
+instructions, measured in its section. CI's perfcheck counts on GitHub's runners, where
+one build counts up to 0.7% apart from one run to the next (GET 3,317 and 3,331 for one
+build of the log's rewrite, INCR 4,544 and 4,513 for one of maxmemory), and it counted
+RESP3's GET at 3,371, 3.0% past that baseline and so past the guard's tolerance. The
+baseline is now RESP3's counts in CI: GET 3,371, SET 4,268, INCR 4,543.
