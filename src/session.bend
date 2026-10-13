@@ -40,9 +40,11 @@ type Mute is Data:
 
 # a connection: its id, whether it has authenticated, its name (empty
 # for none), which replies it gets, whether it has asked to close (QUIT),
-# and the database it selected (SELECT)
+# the database it selected (SELECT), and whether it speaks RESP3 (HELLO
+# 3) or RESP2. The protocol changes how its replies are written (the
+# server's), not which replies its commands give.
 type Conn is Data:
-  Conn{id: Nat, auth: Bool, name: String, mode: Mute, quit: Bool, db: Nat}
+  Conn{id: Nat, auth: Bool, name: String, mode: Mute, quit: Bool, db: Nat, r3: Bool}
 
 # an entry of the eviction's pool (server.bend, Eviction): a key of
 # database db, and its score, the higher the better a key to evict
@@ -74,7 +76,7 @@ type Srv is Data:
   Srv{pass: String, cfg: List<&2, C.CItem>, info: I.Info, mm: Mm}
 
 def conn_new(id: Nat) -> Conn:
-  Conn{id, False{}, "", MOn{}, False{}, 0n}
+  Conn{id, False{}, "", MOn{}, False{}, 0n, False{}}
 
 # Memory
 # ------
@@ -375,40 +377,46 @@ def srv.puts(sets: List<&2, String>, cfg: List<&2, C.CItem>) -> List<&2, C.CItem
 
 def conn.auth(+c: Conn) -> Bool:
   match c:
-    case Conn{id, auth, name, mode, quit, db}:
+    case Conn{id, auth, name, mode, quit, db, r3}:
       auth
 
 def conn.id(+c: Conn) -> Nat:
   match c:
-    case Conn{id, auth, name, mode, quit, db}:
+    case Conn{id, auth, name, mode, quit, db, r3}:
       id
 
 def conn.name(+c: Conn) -> String:
   match c:
-    case Conn{id, auth, name, mode, quit, db}:
+    case Conn{id, auth, name, mode, quit, db, r3}:
       name
 
 def conn.mode(+c: Conn) -> Mute:
   match c:
-    case Conn{id, auth, name, mode, quit, db}:
+    case Conn{id, auth, name, mode, quit, db, r3}:
       mode
 
 # the connection with every reply on (for INFO's statistics, which count
 # the replies a client does not get)
 def conn.on(c: Conn) -> Conn:
   match c:
-    case Conn{id, auth, name, mode, quit, db}:
-      Conn{id, auth, name, MOn{}, quit, db}
+    case Conn{id, auth, name, mode, quit, db, r3}:
+      Conn{id, auth, name, MOn{}, quit, db, r3}
 
 def conn.quit(+c: Conn) -> Bool:
   match c:
-    case Conn{id, auth, name, mode, quit, db}:
+    case Conn{id, auth, name, mode, quit, db, r3}:
       quit
 
 def conn.db(+c: Conn) -> Nat:
   match c:
-    case Conn{id, auth, name, mode, quit, +db}:
+    case Conn{id, auth, name, mode, quit, +db, r3}:
       db
+
+# whether the connection speaks RESP3
+def conn.r3(+c: Conn) -> Bool:
+  match c:
+    case Conn{id, auth, name, mode, quit, db, r3}:
+      r3
 
 def srv.pass(+s: Srv) -> String:
   match s:
@@ -608,11 +616,14 @@ def nopass(+s: Srv) -> Bool:
 def authed(+c: Conn, +s: Srv) -> Bool:
   Bool.or(conn.auth(c), nopass(s))
 
+def authed.of(+auth: Bool, +s: Srv) -> Bool:
+  Bool.or(auth, nopass(s))
+
 # a client's connection as it joins the server: authenticated when there
 # is no password then, as Redis's createClient sets it (it stays so after
 # a password is set, until RESET)
 def conn_join(+id: Nat, +s: Srv) -> Conn:
-  Conn{id, nopass(s), "", MOn{}, False{}, 0n}
+  Conn{id, nopass(s), "", MOn{}, False{}, 0n, False{}}
 
 # a user and a password: the one user is "default", and without a
 # password any password is its own
@@ -661,8 +672,8 @@ def put(m: Maybe<&2, R.Reply>, rs: List<&2, R.Reply>) -> List<&2, R.Reply>:
 # conn_join, reset.conn), and by AUTH or HELLO
 def step_conn(+c: Conn, +s: Srv) -> Conn:
   match c:
-    case Conn{id, auth, name, mode, quit, db}:
-      Conn{id, auth, name, after(mode), quit, db}
+    case Conn{id, auth, name, mode, quit, db, r3}:
+      Conn{id, auth, name, after(mode), quit, db, r3}
 
 # Session commands
 # ----------------
@@ -679,10 +690,12 @@ def name_ok(s: String) -> Bool:
 def e_name() -> R.Reply:
   R.RError{"ERR Client names cannot contain spaces, newlines or special characters."}
 
-# HELLO [protover [AUTH user pass] [SETNAME name]]: BendKV speaks RESP2
-# alone, so HELLO 3 is refused as an unknown version, and a client goes
-# on with RESP2. The options run in order, and each one done stays done
-# when a later one fails, as in Redis.
+# HELLO [protover [AUTH user pass] [SETNAME name]]: the protocol (2 or
+# 3; none keeps the one there is), then the options, in order; each one
+# done stays done when a later one fails, as in Redis. The protocol
+# changes only when HELLO answers (helloCommand sets it last), and its
+# reply is in the protocol it changes to: a map of the server, as Redis
+# 7.0.15 describes itself.
 
 # what HELLO's options are doing: waiting for an option, the user of an
 # AUTH, its password, or the name of a SETNAME; or failed
@@ -693,46 +706,47 @@ type Want is Data:
   WName{}
   WFail{r: R.Reply}
 
-# the state of a HELLO: what it waits for, and the connection
+# the state of a HELLO: what it waits for, the connection's
+# authentication and name, and the protocol it asks for (RESP3 or not)
 type Hel is Data:
-  Hel{w: Want, auth: Bool, name: String}
+  Hel{w: Want, auth: Bool, name: String, r3: Bool}
 
-def hello.opt(a: String, auth: Bool, name: String, au: Bool, sn: Bool) -> Hel:
+def hello.opt(a: String, auth: Bool, name: String, r3: Bool, au: Bool, sn: Bool) -> Hel:
   match au sn:
     case True{} _:
-      Hel{WUser{}, auth, name}
+      Hel{WUser{}, auth, name, r3}
     case False{} True{}:
-      Hel{WName{}, auth, name}
+      Hel{WName{}, auth, name, r3}
     case False{} False{}:
-      Hel{WFail{R.RError{R.e_fmt("ERR Syntax error in HELLO option '" ++ R.cstr(a) ++ "'")}}, auth, name}
+      Hel{WFail{R.RError{R.e_fmt("ERR Syntax error in HELLO option '" ++ R.cstr(a) ++ "'")}}, auth, name, r3}
 
-def hello.pass(ok: Bool, auth: Bool, name: String) -> Hel:
+def hello.pass(ok: Bool, auth: Bool, name: String, r3: Bool) -> Hel:
   match ok:
     case True{}:
-      Hel{WOpt{}, True{}, name}
+      Hel{WOpt{}, True{}, name, r3}
     case False{}:
-      Hel{WFail{e_wrongpass()}, auth, name}
+      Hel{WFail{e_wrongpass()}, auth, name, r3}
 
-def hello.name(ok: Bool, auth: Bool, name: String, n: String) -> Hel:
+def hello.name(ok: Bool, auth: Bool, name: String, n: String, r3: Bool) -> Hel:
   match ok:
     case True{}:
-      Hel{WOpt{}, auth, n}
+      Hel{WOpt{}, auth, n, r3}
     case False{}:
-      Hel{WFail{e_name()}, auth, name}
+      Hel{WFail{e_name()}, auth, name, r3}
 
 # one argument of HELLO's options, n the number of those after it
 def hello.step(+s: Srv, h: Hel, +a: String, +n: Nat) -> Hel:
   match h:
-    case Hel{WOpt{}, auth, name}:
-      hello.opt(a, auth, name, Bool.and(R.is_word(a, "AUTH"), Nat.is_le(2n, n)), Bool.and(R.is_word(a, "SETNAME"), Nat.is_le(1n, n)))
-    case Hel{WUser{}, auth, name}:
-      Hel{WPass{a}, auth, name}
-    case Hel{WPass{+u}, auth, name}:
-      hello.pass(login_ok(u, a, s), auth, name)
-    case Hel{WName{}, auth, name}:
-      hello.name(name_ok(a), auth, name, a)
-    case Hel{WFail{r}, auth, name}:
-      Hel{WFail{r}, auth, name}
+    case Hel{WOpt{}, auth, name, r3}:
+      hello.opt(a, auth, name, r3, Bool.and(R.is_word(a, "AUTH"), Nat.is_le(2n, n)), Bool.and(R.is_word(a, "SETNAME"), Nat.is_le(1n, n)))
+    case Hel{WUser{}, auth, name, r3}:
+      Hel{WPass{a}, auth, name, r3}
+    case Hel{WPass{+u}, auth, name, r3}:
+      hello.pass(login_ok(u, a, s), auth, name, r3)
+    case Hel{WName{}, auth, name, r3}:
+      hello.name(name_ok(a), auth, name, a, r3)
+    case Hel{WFail{r}, auth, name, r3}:
+      Hel{WFail{r}, auth, name, r3}
 
 def hello.go(+s: Srv, args: List<&2, String>, h: Hel) -> Hel:
   match args:
@@ -741,54 +755,72 @@ def hello.go(+s: Srv, args: List<&2, String>, h: Hel) -> Hel:
     case Con{+a, +rest}:
       hello.go(s, rest, hello.step(s, h, a, List.length(&2, String, rest)))
 
-# HELLO's reply: the server, as Redis 7.0.15 describes itself
-def hello.map(id: Nat) -> R.Reply:
-  R.RArray{[R.RBulk{"server"}, R.RBulk{"redis"}, R.RBulk{"version"}, R.RBulk{"7.0.15"}, R.RBulk{"proto"}, R.r_int(2n), R.RBulk{"id"}, R.r_int(id), R.RBulk{"mode"}, R.RBulk{"standalone"}, R.RBulk{"role"}, R.RBulk{"master"}, R.RBulk{"modules"}, R.RArray{Nil{}}]}
+# HELLO's reply: the server, as Redis 7.0.15 describes itself, in the
+# protocol it switched to
+def hello.map(id: Nat, r3: Bool) -> R.Reply:
+  R.RMap{[R.RBulk{"server"}, R.RBulk{"redis"}, R.RBulk{"version"}, R.RBulk{"7.0.15"}, R.RBulk{"proto"}, R.r_int(Bool.pick(Nat, r3, 3n, 2n)), R.RBulk{"id"}, R.r_int(id), R.RBulk{"mode"}, R.RBulk{"standalone"}, R.RBulk{"role"}, R.RBulk{"master"}, R.RBulk{"modules"}, R.RArray{Nil{}}]}
 
 def hello.fin(h: Hel, id: Nat, nopass: Bool) -> R.Reply:
   match h:
-    case Hel{WFail{r}, auth, name}:
+    case Hel{WFail{r}, auth, name, r3}:
       r
-    case Hel{w, auth, name}:
-      Bool.pick(R.Reply, Bool.or(auth, nopass), hello.map(id), R.RError{"NOAUTH HELLO must be called with the client already authenticated, otherwise the HELLO AUTH <user> <pass> option can be used to authenticate the client and select the RESP protocol version at the same time"})
+    case Hel{w, auth, name, r3}:
+      Bool.pick(R.Reply, Bool.or(auth, nopass), hello.map(id, r3), R.RError{"NOAUTH HELLO must be called with the client already authenticated, otherwise the HELLO AUTH <user> <pass> option can be used to authenticate the client and select the RESP protocol version at the same time"})
 
-# the protocol version, a long long as Redis reads one: none, 2, or the
-# reply that refuses it
-def hello.ver(l: R.LL) -> Maybe<&2, R.Reply>:
+# the protocol version, a long long as Redis reads one: none, 2, 3, or
+# the reply that refuses it; a version is whether it is 3
+type Ver is Data:
+  VerNone{}
+  VerOk{r3: Bool}
+  VerBad{r: R.Reply}
+
+def hello.ver(l: R.LL) -> Ver:
   match l:
     case R.LL{+neg, +hi, +lo}:
-      Bool.pick(Maybe<&2, R.Reply>, Bool.and(Bool.not(neg), Bool.and(Nat.is_eq(hi, 0n), Nat.is_eq(lo, 2n))), None{}, Some{R.RError{"NOPROTO unsupported protocol version"}})
+      Bool.pick(Ver, Bool.and(Bool.not(neg), Bool.and(Nat.is_eq(hi, 0n), Bool.or(Nat.is_eq(lo, 2n), Nat.is_eq(lo, 3n)))), VerOk{Nat.is_eq(lo, 3n)}, VerBad{R.RError{"NOPROTO unsupported protocol version"}})
     case R.LLBad{}:
-      Some{R.RError{"ERR Protocol version is not an integer or out of range"}}
+      VerBad{R.RError{"ERR Protocol version is not an integer or out of range"}}
 
-# HELLO's options after its version, or the version's refusal
-def hello.args(args: List<&2, String>) -> Maybe<&2, R.Reply> & List<&2, String>:
+# HELLO's options after its version, and the version
+def hello.args(args: List<&2, String>) -> Ver & List<&2, String>:
   match args:
     case Nil{}:
-      (None{}, Nil{})
+      (VerNone{}, Nil{})
     case Con{+v, rest}:
       (hello.ver(R.ll.read(v)), rest)
 
-def hello.run.if(+s: Srv, +c: Conn, bad: Maybe<&2, R.Reply>, opts: List<&2, String>) -> Hel:
-  match bad:
-    case Some{r}:
-      Hel{WFail{r}, conn.auth(c), conn.name(c)}
-    case None{}:
-      hello.go(s, opts, Hel{WOpt{}, conn.auth(c), conn.name(c)})
+def hello.run.if(+s: Srv, +c: Conn, v: Ver, opts: List<&2, String>) -> Hel:
+  match v:
+    case VerBad{r}:
+      Hel{WFail{r}, conn.auth(c), conn.name(c), conn.r3(c)}
+    case VerOk{r3}:
+      hello.go(s, opts, Hel{WOpt{}, conn.auth(c), conn.name(c), r3})
+    case VerNone{}:
+      hello.go(s, opts, Hel{WOpt{}, conn.auth(c), conn.name(c), conn.r3(c)})
 
-def hello.run.of(+s: Srv, +c: Conn, p: Maybe<&2, R.Reply> & List<&2, String>) -> Hel:
-  (bad, opts) = p
-  hello.run.if(s, c, bad, opts)
+def hello.run.of(+s: Srv, +c: Conn, p: Ver & List<&2, String>) -> Hel:
+  (v, opts) = p
+  hello.run.if(s, c, v, opts)
 
 def hello.run(+s: Srv, +c: Conn, args: List<&2, String>) -> Hel:
   hello.run.of(s, c, hello.args(args))
 
 # the connection after a HELLO: authenticated if an AUTH of it was, or
-# if it was already, and named as its SETNAME said
+# if it was already, named as its SETNAME said, and in the protocol it
+# asked for if it answers (no option failed, and the client is
+# authenticated: hello.fin)
+def hello.ok(+w: Want, +auth: Bool, +s: Srv) -> Bool:
+  match w:
+    case WFail{r}:
+      False{}
+    case _:
+      authed.of(auth, s)
+
 def hello.conn(h: Hel, +c: Conn, +s: Srv) -> Conn:
   match h c:
-    case Hel{w, auth, name} Conn{id, a, n, mode, quit, db}:
-      Conn{id, Bool.or(auth, a), name, after(mode), quit, db}
+    case Hel{+w, auth, name, h3} Conn{id, a, n, mode, quit, db, r3}:
+      +au = Bool.or(auth, a)
+      Conn{id, au, name, after(mode), quit, db, Bool.pick(Bool, hello.ok(w, au, s), h3, r3)}
 
 # AUTH [user] password
 def auth.one(nopass: Bool, ok: Bool) -> R.Reply:
@@ -818,8 +850,8 @@ def auth.ok(+args: List<&2, String>, +s: Srv) -> Bool:
 
 def auth.conn(ok: Bool, +c: Conn, +s: Srv) -> Conn:
   match ok c:
-    case True{} Conn{id, a, name, mode, quit, db}:
-      Conn{id, True{}, name, after(mode), quit, db}
+    case True{} Conn{id, a, name, mode, quit, db, r3}:
+      Conn{id, True{}, name, after(mode), quit, db, r3}
     case False{} c0:
       step_conn(c0, s)
 
@@ -1037,6 +1069,22 @@ def blk.shape(+form: Nat, r: R.Reply) -> R.Reply:
       R.RIntS{x}
     case R.RNullA{}:
       R.RNullA{}
+    case R.RDbl{x}:
+      R.RDbl{x}
+    case R.RMap{xs}:
+      R.RMap{xs}
+    case R.RSet{xs}:
+      R.RSet{xs}
+    case R.RPairs{xs}:
+      R.RPairs{xs}
+    case R.RPair{xs}:
+      R.RPair{xs}
+    case R.RVerb{x}:
+      R.RVerb{x}
+    case R.RPush{xs}:
+      R.RPush{xs}
+    case R.RSw{p, xs}:
+      R.RSw{p, xs}
 
 # the pop run once on db: its reply as the blocking command's
 def blk.reply(b: Blk, db: R.Db) -> R.Reply:
@@ -1245,8 +1293,8 @@ def select.idx(+d: String, +s: Srv) -> Idx:
 
 def select.conn(i: Idx, +c: Conn, +s: Srv) -> Conn:
   match i c:
-    case IdxOk{j} Conn{id, a, name, mode, quit, db}:
-      Conn{id, a, name, after(mode), quit, j}
+    case IdxOk{j} Conn{id, a, name, mode, quit, db, r3}:
+      Conn{id, a, name, after(mode), quit, j, r3}
     case IdxBad{r} c0:
       step_conn(c0, s)
 
@@ -1400,15 +1448,15 @@ def copy.reply(ca: CopyArgs, +ds: R.Ds) -> R.Reply:
 # commands after it in the batch are dropped
 def quit.conn(+c: Conn, +s: Srv) -> Conn:
   match c:
-    case Conn{id, a, name, mode, quit, db}:
-      Conn{id, a, name, after(mode), True{}, db}
+    case Conn{id, a, name, mode, quit, db, r3}:
+      Conn{id, a, name, after(mode), True{}, db, r3}
 
-# RESET: the connection as new, authenticated if there is no password;
-# its reply goes out unless it is the one skipped
+# RESET: the connection as new, authenticated if there is no password,
+# in RESP2; its reply goes out unless it is the one skipped
 def reset.conn(c: Conn, +s: Srv) -> Conn:
   match c:
-    case Conn{id, a, name, mode, quit, db}:
-      Conn{id, nopass(s), "", MOn{}, False{}, 0n}
+    case Conn{id, a, name, mode, quit, db, r3}:
+      Conn{id, nopass(s), "", MOn{}, False{}, 0n, False{}}
 
 def reset.out(m: Mute) -> Maybe<&2, R.Reply>:
   match m:
@@ -1427,8 +1475,8 @@ def getname(n: String) -> R.Reply:
 
 def setname.conn(ok: Bool, n: String, +c: Conn, +s: Srv) -> Conn:
   match ok c:
-    case True{} Conn{id, a, name, mode, quit, db}:
-      Conn{id, a, n, after(mode), quit, db}
+    case True{} Conn{id, a, name, mode, quit, db, r3}:
+      Conn{id, a, n, after(mode), quit, db, r3}
     case False{} c0:
       step_conn(c0, s)
 
@@ -1468,8 +1516,8 @@ def reply.out(w: Nat, old: Mute) -> Maybe<&2, R.Reply>:
 
 def mode.conn(m: Mute, +c: Conn, +s: Srv) -> Conn:
   match c:
-    case Conn{id, a, name, mode, quit, db}:
-      Conn{id, a, name, m, quit, db}
+    case Conn{id, a, name, mode, quit, db, r3}:
+      Conn{id, a, name, m, quit, db, r3}
 
 # RANDOMKEY's reply: a key there at now in the database's trie, by r, or
 # nil
@@ -1694,10 +1742,12 @@ def hp.drop(ps: List<&2, KV.HPair>, i: Nat) -> List<&2, KV.HPair>:
     case Nil{} _:
       Nil{}
 
+# a field, or under WITHVALUES a field and its value as a pair (a flat
+# array in RESP2, an array of pairs in RESP3)
 def hr.pair(wv: Bool, f: String, v: String, rest: List<&2, R.Reply>) -> List<&2, R.Reply>:
   match wv:
     case True{}:
-      R.RBulk{f} <> R.RBulk{v} <> rest
+      R.RPair{[R.RBulk{f}, R.RBulk{v}]} <> rest
     case False{}:
       R.RBulk{f} <> rest
 
@@ -1775,7 +1825,7 @@ def hr.one(m: Maybe<&2, KV.Item<KV.Val>>, +r: U32) -> R.Reply:
 def hr.many(m: Maybe<&2, KV.Item<KV.Val>>, +neg: Bool, +k: Nat, +wv: Bool, +r: U32) -> R.Reply:
   match m:
     case Some{KV.Item{KV.VColl{KV.CHash{+h}}, e}}:
-      R.RArray{hr.of(neg, k, wv, KV.hash.pairs(h), KV.hash.len(h), r)}
+      R.zels.wrap(wv, hr.of(neg, k, wv, KV.hash.pairs(h), KV.hash.len(h), r))
     case Some{KV.Item{KV.VColl{KV.CList{l}}, e}}:
       R.e_wrongtype()
     case Some{KV.Item{KV.VColl{KV.CMems{l}}, e}}:
@@ -2034,7 +2084,7 @@ def zr.one(m: Maybe<&2, KV.Item<KV.Val>>, +r: U32) -> R.Reply:
 def zr.many(m: Maybe<&2, KV.Item<KV.Val>>, +neg: Bool, +k: Nat, +ws: Bool, +r: U32) -> R.Reply:
   match m:
     case Some{KV.Item{KV.VColl{KV.CZset{+z}}, e}}:
-      R.RArray{zr.of(neg, k, ws, KV.zset.tree(z), KV.zset.len(z), r)}
+      R.zels.wrap(ws, zr.of(neg, k, ws, KV.zset.tree(z), KV.zset.len(z), r))
     case None{}:
       R.RArray{Nil{}}
     case _:
@@ -2383,7 +2433,7 @@ def lcs.fin(w: LcsW, +idx: Bool, +n: Nat) -> R.Reply:
     case LcsW{ar, br, cur, up, rest, i, j, res, m, out}:
       match idx:
         case True{}:
-          R.RArray{[R.RBulk{"matches"}, R.RArray{List.reverse(&2, R.Reply, out)}, R.RBulk{"len"}, R.r_int(n)]}
+          R.RMap{[R.RBulk{"matches"}, R.RArray{List.reverse(&2, R.Reply, out)}, R.RBulk{"len"}, R.r_int(n)]}
         case False{}:
           R.RBulk{res}
 
@@ -2499,8 +2549,9 @@ def pub.has(+n: String, +xs: List<&2, String>) -> Bool:
     case Con{+x, +rest}:
       Bool.or(String.eq(n, x), pub.has(n, rest))
 
+# the reply of SUBSCRIBE and its kin for one name: a push (RESP2's array)
 def pub.note(+w: String, n: R.Reply, +count: Nat) -> R.Reply:
-  R.RArray{[R.RBulk{w}, n, R.RInt{R.IPos{count}}]}
+  R.RPush{[R.RBulk{w}, n, R.RInt{R.IPos{count}}]}
 
 def pub.seen(new: Bool, +n: String, seen: List<&2, String>) -> List<&2, String>:
   match new:
@@ -2581,7 +2632,7 @@ def cl.argv(args: List<&2, String>, +n: Nat) -> Nat:
       cl.argv(rest, Nat.add(n, String.length(a)))
 
 def cl.alone.line(+c: Conn, +info: Bool, +argv: Nat) -> String:
-  R.client.line(R.ClLine{conn.id(c), "?:0", "?:0", 0n, conn.name(c), 0n, 0n, "N", conn.db(c), 0n, 0n, 0n, None{}, 0n, argv, cl.cmd(info)}) ++ "\n"
+  R.client.line(R.ClLine{conn.id(c), "?:0", "?:0", 0n, conn.name(c), 0n, 0n, "N", conn.db(c), 0n, 0n, 0n, None{}, 0n, argv, cl.cmd(info), conn.r3(c)}) ++ "\n"
 
 def cl.ids(ids: List<&2, Nat>, +c: Conn, +argv: Nat, acc: String) -> String:
   match ids:
@@ -2593,16 +2644,16 @@ def cl.ids(ids: List<&2, Nat>, +c: Conn, +argv: Nat, acc: String) -> String:
 def cl.list(+ty: Nat, ids: Maybe<&2, List<&2, Nat>>, +c: Conn, +argv: Nat) -> R.Reply:
   match ids:
     case Some{xs}:
-      R.RBulk{cl.ids(xs, c, argv, "")}
+      R.RVerb{cl.ids(xs, c, argv, "")}
     case None{}:
-      R.RBulk{Bool.pick(String, Nat.is_le(ty, 1n), cl.alone.line(c, False{}, argv), "")}
+      R.RVerb{Bool.pick(String, Nat.is_le(ty, 1n), cl.alone.line(c, False{}, argv), "")}
 
 def cl.reply(op: R.ClOp, +c: Conn, +argv: Nat) -> R.Reply:
   match op:
     case R.CoList{+ty, ids}:
       cl.list(ty, ids, c, argv)
     case R.CoInfo{}:
-      R.RBulk{cl.alone.line(c, True{}, argv)}
+      R.RVerb{cl.alone.line(c, True{}, argv)}
     case R.CoKill{f}:
       R.RInt{R.IPos{0n}}
     case R.CoKillAddr{a}:
@@ -2641,7 +2692,7 @@ def own_reply(+o: R.SessOp, +c: Conn, +s: Srv, +ds: R.Ds) -> Maybe<&2, R.Reply>:
     case R.SConfigResetStat{}:
       say(conn.mode(c), R.r_ok())
     case R.SInfo{args}:
-      say(conn.mode(c), R.RBulk{I.text(args, srv.cfg(s), srv.info(s), ds)})
+      say(conn.mode(c), R.RVerb{I.text(args, srv.cfg(s), srv.info(s), ds)})
     case R.SCommand{args}:
       say(conn.mode(c), K.reply(args))
     case R.SRandomKey{}:
@@ -3035,7 +3086,7 @@ def plan(cmds: List<&2, R.Cmd>, conn: Conn, srv: Srv) -> List<&2, R.Act>:
 
 def ready(+c: Conn, +s: Srv) -> Bool:
   match c:
-    case Conn{id, auth, name, MOn{}, False{}, db}:
+    case Conn{id, auth, name, MOn{}, False{}, db, r3}:
       authed(c, s)
     case _:
       False{}

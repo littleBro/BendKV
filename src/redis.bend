@@ -28,13 +28,23 @@ type Int is Data:
   IPos{n: Nat}
   INeg{n: Nat}
 
-# a RESP2 reply; an array holds replies, so arrays nest (HELLO, the
-# tracking info of CLIENT). RIntS is an integer as its decimal text:
-# BITFIELD's, of up to 64 bits, past what an Int holds. It comes last, so
-# that the others keep their tags: after RInt, it made GET 1.5% dearer
-# in instructions (the reply's encoder compiled otherwise). RNullA is the
-# null array (LPOP with a count of a key not there), after it for the
-# same reason
+# a reply; an array holds replies, so arrays nest (HELLO, the tracking
+# info of CLIENT). RIntS is an integer as its decimal text: BITFIELD's, of
+# up to 64 bits, past what an Int holds. It comes last, so that the others
+# keep their tags: after RInt, it made GET 1.5% dearer in instructions
+# (the reply's encoder compiled otherwise). RNullA is the null array
+# (LPOP with a count of a key not there), after it for the same reason.
+# The rest are typed where Redis types a reply, as RESP3 writes them
+# (resp.bend, Replies): a double as its text (RDbl: Redis's %.17g, inf or
+# -inf), a map (RMap: its keys and values in turn), a set (RSet), pairs
+# (RPairs, each an RPair of two: ZRANGE's members and their scores, an
+# array of pairs in RESP3 and their items flat in RESP2), a verbatim text
+# (RVerb: INFO's), a push (RPush: Pub/Sub's), and a switch of the
+# protocol (RSw: its reply, the one in xs, and those after it in RESP3,
+# r3, or RESP2: HELLO's, RESET's). RESP2 writes RDbl and RVerb as RBulk,
+# and RMap, RSet, RPairs and RPush as RArray, so that its bytes are what
+# they were. (A pair and a switch hold lists, which the encoder walks as
+# it walks an array's items.)
 type Reply is Data:
   RStatus{s: String}
   RError{s: String}
@@ -44,6 +54,14 @@ type Reply is Data:
   RArray{xs: List<&2, Reply>}
   RIntS{s: String}
   RNullA{}
+  RDbl{s: String}
+  RMap{xs: List<&2, Reply>}
+  RSet{xs: List<&2, Reply>}
+  RPairs{xs: List<&2, Reply>}
+  RPair{xs: List<&2, Reply>}
+  RVerb{s: String}
+  RPush{xs: List<&2, Reply>}
+  RSw{r3: Bool, xs: List<&2, Reply>}
 
 # a key and a value, for MSET
 type KVPair is Data:
@@ -1073,7 +1091,7 @@ def unblock(sub: String, args: List<&2, String>) -> SessOp:
       sess_reply(e_sub_syntax(sub, "CLIENT"))
 
 def tracking_info() -> Reply:
-  RArray{[RBulk{"flags"}, RArray{[RBulk{"off"}]}, RBulk{"redirect"}, RInt{INeg{0n}}, RBulk{"prefixes"}, RArray{Nil{}}]}
+  RMap{[RBulk{"flags"}, RSet{[RBulk{"off"}]}, RBulk{"redirect"}, RInt{INeg{0n}}, RBulk{"prefixes"}, RArray{Nil{}}]}
 
 # CLIENT LIST, INFO, KILL and NO-EVICT are SClient, their number and
 # arguments (client.op makes the ClOp they are): a session knows no other
@@ -1411,11 +1429,12 @@ def client.op(+kind: Nat, args: List<&2, String>) -> ClOp:
 # socket's fd, name, age and idle time (s), flags, database, the counts of
 # its channels, patterns and shard channels, the commands queued in its
 # MULTI (none: -1), the bytes of the batch it runs (qbuf) and of the
-# command's arguments (argv-mem), and its last command (cmd). BendKV
-# keeps no buffer of a client's own, so qbuf-free, multi-mem, the reply
-# buffer's size and peak, the output lists and the memory are 0.
+# command's arguments (argv-mem), its last command (cmd), and whether it
+# speaks RESP3 (resp). BendKV keeps no buffer of a client's own, so
+# qbuf-free, multi-mem, the reply buffer's size and peak, the output
+# lists and the memory are 0.
 type ClLine is Data:
-  ClLine{id: Nat, addr: String, laddr: String, fd: Nat, name: String, age: Nat, idle: Nat, flags: String, db: Nat, sub: Nat, psub: Nat, ssub: Nat, multi: Maybe<&2, Nat>, qbuf: Nat, argv: Nat, cmd: String}
+  ClLine{id: Nat, addr: String, laddr: String, fd: Nat, name: String, age: Nat, idle: Nat, flags: String, db: Nat, sub: Nat, psub: Nat, ssub: Nat, multi: Maybe<&2, Nat>, qbuf: Nat, argv: Nat, cmd: String, r3: Bool}
 
 def line.multi(m: Maybe<&2, Nat>) -> String:
   match m:
@@ -1426,12 +1445,12 @@ def line.multi(m: Maybe<&2, Nat>) -> String:
 
 def client.line(l: ClLine) -> String:
   match l:
-    case ClLine{id, addr, laddr, fd, name, age, idle, flags, db, sub, psub, ssub, multi, qbuf, argv, cmd}:
+    case ClLine{id, addr, laddr, fd, name, age, idle, flags, db, sub, psub, ssub, multi, qbuf, argv, cmd, r3}:
       a = "id=" ++ Nat.show(id) ++ " addr=" ++ addr ++ " laddr=" ++ laddr ++ " fd=" ++ Nat.show(fd) ++ " name=" ++ name
       b = " age=" ++ Nat.show(age) ++ " idle=" ++ Nat.show(idle) ++ " flags=" ++ flags ++ " db=" ++ Nat.show(db)
       c = " sub=" ++ Nat.show(sub) ++ " psub=" ++ Nat.show(psub) ++ " ssub=" ++ Nat.show(ssub) ++ " multi=" ++ line.multi(multi)
       d = " qbuf=" ++ Nat.show(qbuf) ++ " qbuf-free=0 argv-mem=" ++ Nat.show(argv) ++ " multi-mem=0 rbs=0 rbp=0 obl=0 oll=0 omem=0 tot-mem=0"
-      a ++ b ++ c ++ d ++ " events=r cmd=" ++ cmd ++ " user=default redir=-1 resp=2"
+      a ++ b ++ c ++ d ++ " events=r cmd=" ++ cmd ++ " user=default redir=-1 resp=" ++ Bool.pick(String, r3, "3", "2")
 
 def parse_client(id: Nat, sub: String, args: List<&2, String>) -> SessOp:
   match id:
@@ -13182,7 +13201,7 @@ def hread(op: HRead, +h: KV.Hash) -> Reply:
     case HRVals{}:
       RArray{hp.values(KV.hash.pairs(h))}
     case HRAll{}:
-      RArray{hp.flat(KV.hash.pairs(h))}
+      RMap{hp.flat(KV.hash.pairs(h))}
     case HRScan{args}:
       hscan.of(hscan.args(args), h)
 
@@ -13204,7 +13223,7 @@ def hread.none(op: HRead) -> Reply:
     case HRVals{}:
       RArray{Nil{}}
     case HRAll{}:
-      RArray{Nil{}}
+      RMap{Nil{}}
     case HRScan{args}:
       RArray{[RBulk{"0"}, RArray{Nil{}}]}
 
@@ -13471,7 +13490,7 @@ def sread(op: SRead, +s: KV.Mems) -> Reply:
     case SRCard{}:
       r_int(KV.mems.len(s))
     case SRAll{}:
-      RArray{lbulks(KV.mems.all(s))}
+      RSet{lbulks(KV.mems.all(s))}
     case SRScan{args}:
       sscan.of(hscan.args(args), s)
 
@@ -13485,7 +13504,7 @@ def sread.none(op: SRead) -> Reply:
     case SRCard{}:
       r_int(0n)
     case SRAll{}:
-      RArray{Nil{}}
+      RSet{Nil{}}
     case SRScan{args}:
       RArray{[RBulk{"0"}, RArray{Nil{}}]}
 
@@ -13513,12 +13532,12 @@ def sread.coll(op: SRead, +cl: KV.Coll) -> Reply:
 # in Redis (ZCARD 0, nils for scores and ranks, no elements in a range,
 # an empty scan with cursor 0); a key that holds another kind answers
 # WRONGTYPE. A score is answered as Redis writes a double (%.17g; inf,
-# -inf: F.f64.show).
+# -inf: F.f64.show), a double of RESP3 (RDbl).
 
 def zscore.reply(m: Maybe<&2, F.F64>) -> Reply:
   match m:
     case Some{+d}:
-      RBulk{F.f64.show(d)}
+      RDbl{F.f64.show(d)}
     case None{}:
       RNull{}
 
@@ -13550,12 +13569,13 @@ def zel.m(e: KV.ZEl) -> String:
     case KV.ZEl{m, d}:
       m
 
-# a range's elements as Redis answers them: each member, and its score
-# after it under WITHSCORES
+# a range's elements as Redis answers them: each member, or under
+# WITHSCORES each member and its score as a pair (a flat array in RESP2,
+# an array of pairs in RESP3: Redis's zrangeResultEmitCStringForClient)
 def zels.one(ws: Bool, m: String, +d: F.F64, rest: List<&2, Reply>) -> List<&2, Reply>:
   match ws:
     case True{}:
-      RBulk{m} <> (RBulk{F.f64.show(d)} <> rest)
+      RPair{[RBulk{m}, RDbl{F.f64.show(d)}]} <> rest
     case False{}:
       RBulk{m} <> rest
 
@@ -13565,6 +13585,25 @@ def zels(xs: List<&2, KV.ZEl>, +ws: Bool) -> List<&2, Reply>:
       Nil{}
     case Con{KV.ZEl{m, +d}, rest}:
       zels.one(ws, m, d, zels(rest, ws))
+
+def zels.wrap(ws: Bool, xs: List<&2, Reply>) -> Reply:
+  match ws:
+    case True{}:
+      RPairs{xs}
+    case False{}:
+      RArray{xs}
+
+def zels.reply(xs: List<&2, KV.ZEl>, +ws: Bool) -> Reply:
+  zels.wrap(ws, zels(xs, ws))
+
+# each member and its score, flat in both protocols (ZPOPMIN without a
+# count)
+def zels.flat(xs: List<&2, KV.ZEl>) -> List<&2, Reply>:
+  match xs:
+    case Nil{}:
+      Nil{}
+    case Con{KV.ZEl{m, +d}, rest}:
+      RBulk{m} <> (RDbl{F.f64.show(d)} <> zels.flat(rest))
 
 # How a range's elements are found. By rank, as LRANGE reads its range
 # (lspan); from the last element when reversed. By score (in order, so a
@@ -13770,7 +13809,7 @@ def zq.scores(q: ZQ) -> Bool:
       zq.scores(q)
 
 def zq.reply(+q: ZQ, +z: KV.Zset) -> Reply:
-  RArray{zels(zq.run(q, z), zq.scores(q))}
+  zels.reply(zq.run(q, z), zq.scores(q))
 
 # ZCOUNT: the elements between the ranks of its bounds; ZLEXCOUNT: of a
 # small sorted set, those its range by member holds (as above), of a
@@ -15277,8 +15316,8 @@ def srem.out(r: SDel, +ms: List<&2, String>) -> Out:
     case SDel{+s, +gone}:
       srem.of(Nat.is_eq(gone, 0n), Nat.is_eq(KV.mems.len(s), 0n), ms, s, gone)
 
-# SPOP's reply: the member it took (a nil for none), or the members, and
-# its change: the SREM of them
+# SPOP's reply: the member it took (a nil for none), or the members (a
+# set), and its change: the SREM of them
 def spop.reply(one: Bool, xs: List<&2, String>) -> Reply:
   match one xs:
     case True{} Con{x, rest}:
@@ -15286,7 +15325,7 @@ def spop.reply(one: Bool, xs: List<&2, String>) -> Reply:
     case True{} Nil{}:
       RNull{}
     case False{} ys:
-      RArray{lbulks(ys)}
+      RSet{lbulks(ys)}
 
 def spop.ch(o: Out) -> Change:
   match o:
@@ -15442,7 +15481,7 @@ def zadd.go(ps: List<&2, ZPair>, +o: ZOpts, st: ZAdd) -> ZAdd:
 def zadd.reply.of(incr: Bool, +ch: Bool, +added: Nat, +upd: Nat, +done: Nat, +last: F.F64) -> Reply:
   match incr:
     case True{}:
-      Bool.pick(Reply, Nat.is_eq(done, 0n), RNull{}, RBulk{F.f64.show(last)})
+      Bool.pick(Reply, Nat.is_eq(done, 0n), RNull{}, RDbl{F.f64.show(last)})
     case False{}:
       r_int(Bool.pick(Nat, ch, Nat.add(added, upd), added))
 
@@ -15564,7 +15603,16 @@ def zremr.at(fresh: Bool, m: Maybe<&2, ZRng>, +k: Nat, +op: ZWrite, +z: KV.Zset)
       zremr.of(m, k, op, z)
 
 # ZPOPMIN and ZPOPMAX (max): up to c elements from the first end (the
-# last), answered with their scores, in the order they are taken
+# last), answered with their scores, in the order they are taken: flat
+# without a count, as pairs with one (genericZpopCommand's nested array
+# in RESP3)
+def zpop.reply(+op: ZWrite, xs: List<&2, KV.ZEl>) -> Reply:
+  match op:
+    case ZWPopN{max, c}:
+      RPairs{zels(xs, True{})}
+    case _:
+      RArray{zels.flat(xs)}
+
 def zpop.pick(max: Bool, +k: Nat, +n: Nat, +z: KV.Zset) -> List<&2, KV.ZEl>:
   match max:
     case True{}:
@@ -15580,7 +15628,7 @@ def zpop.of(m: Maybe<&2, Nat>, +max: Bool, +op: ZWrite, +z: KV.Zset) -> Out:
   match m:
     case Some{+c}:
       +xs = zpop.els(max, c, z)
-      zdels.out(xs, op, z, RArray{zels(xs, True{})})
+      zdels.out(xs, op, z, zpop.reply(op, xs))
     case None{}:
       Out{RError{"ERR value is out of range, must be positive"}, CKeep{}}
 
@@ -16477,11 +16525,11 @@ def sop.of(op: SetK, ks: List<&2, String>, ss: List<&2, Maybe<&2, KV.Mems>>) -> 
     case KCard{+limit}:
       r_int(sicard.of(limit, sets.all(ss)))
     case KInter{}:
-      RArray{lbulks(sop.members(KInter{}, ks, ss))}
+      RSet{lbulks(sop.members(KInter{}, ks, ss))}
     case KUnion{}:
-      RArray{lbulks(sop.members(KUnion{}, ks, ss))}
+      RSet{lbulks(sop.members(KUnion{}, ks, ss))}
     case KDiff{}:
-      RArray{lbulks(sop.members(KDiff{}, ks, ss))}
+      RSet{lbulks(sop.members(KDiff{}, ks, ss))}
 
 def sop.reply(op: SetK, ks: List<&2, String>, g: SGot) -> Reply:
   match g:
@@ -16981,7 +17029,7 @@ def zop.ok(lim: Maybe<&2, Nat>, +op: ZSetK, ss: List<&2, ZSrc>) -> Reply:
     case Some{+l}:
       r_int(zcard.go(zins.sort(zins.of(ss, Nil{}), Nil{}), l))
     case None{}:
-      RArray{zels(zop.els(op, ss), zop.sc(op))}
+      zels.reply(zop.els(op, ss), zop.sc(op))
 
 def zop.of(bad: Maybe<&2, Reply>, +op: ZSetK, ss: List<&2, ZSrc>) -> Reply:
   match bad:
@@ -17052,17 +17100,17 @@ def db.zrangestore(db: Db, +d: String, +s: String, q: ZQ) -> Reply & Db:
 
 # ZMPOP: as LMPOP, from the first of the keys there at now: its elements
 # popped (ZWPopN), answered with the key, each element as a pair of its
-# member and its score
+# member and its score, an array in both protocols
 def zmpop.pairs(xs: List<&2, Reply>) -> List<&2, Reply>:
   match xs:
-    case Con{m, Con{s, rest}}:
-      RArray{[m, s]} <> zmpop.pairs(rest)
+    case Con{RPair{ys}, rest}:
+      RArray{ys} <> zmpop.pairs(rest)
     case _:
       Nil{}
 
 def zmpop.reply(+k: String, r: Reply) -> Reply:
   match r:
-    case RArray{xs}:
+    case RPairs{xs}:
       RArray{[RBulk{k}, RArray{zmpop.pairs(xs)}]}
     case _:
       r

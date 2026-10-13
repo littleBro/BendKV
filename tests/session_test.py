@@ -4,11 +4,11 @@ case sends its requests on a fresh connection to both servers and compares
 what comes back before the server goes quiet, and whether it closed the
 connection. Both servers have Redis's 16 databases. Client ids differ between the servers (Redis gives
 some to clients of its own), so a case that shows one has its integers
-masked; TIME's value is compared within a second. Two differences are
-left out: HELLO 3, which BendKV refuses (it
-speaks RESP2 alone), and a QUIT while CLIENT REPLY is off, after which
-Redis keeps the connection open but reads nothing more from it (the close
-waits for a reply that never goes out), where BendKV closes it.
+masked; TIME's value is compared within a second. HELLO 3 and RESP3 have
+their own test (tests/resp3_test.py). One difference is left out: a QUIT
+while CLIENT REPLY is off, after which Redis keeps the connection open but
+reads nothing more from it (the close waits for a reply that never goes
+out), where BendKV closes it.
 
     python3 tests/session_test.py --bendkv 6380 --redis 6390
 """

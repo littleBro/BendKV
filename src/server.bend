@@ -91,7 +91,28 @@ def ans_of(rs: List<&2, R.Reply>, cn: S.Conn) -> Ans:
     case Nil{}:
       Ans{None{}, cn}
     case Con{r, rest}:
-      Ans{Some{P.encode_all(r <> rest)}, cn}
+      +c = cn
+      Ans{Some{P.encode_in(S.conn.r3(c), r <> rest, SNil{})}, c}
+
+# The protocol a batch run the general way began in: the connection's
+# after it, unless a command of it switched (R.RSw): a switch is a change,
+# so the protocol before the first is the other one
+def sw.first(rs: List<&2, R.Reply>, +r3: Bool) -> Bool:
+  match rs:
+    case Nil{}:
+      r3
+    case Con{R.RSw{p, xs}, rest}:
+      Bool.not(p)
+    case Con{x, rest}:
+      sw.first(rest, r3)
+
+def ans_of.gen(rs: List<&2, R.Reply>, cn: S.Conn) -> Ans:
+  match rs:
+    case Nil{}:
+      Ans{None{}, cn}
+    case Con{+r, +rest}:
+      +c = cn
+      Ans{Some{P.encode_as(sw.first(r <> rest, S.conn.r3(c)), r <> rest)}, c}
 
 # the bytes of an answer's replies
 def ans.len(+a: Ans) -> Nat:
@@ -1045,7 +1066,7 @@ def touch.ents(t: Tx, +xs: List<&2, A.Ent>, +pre: Maybe<&2, R.Ds>, +post: R.Ds) 
 # open socket. The monitors (MONITOR, below) are a list, in the order
 # they came, as Redis keeps them.
 type Cl is Data:
-  Cl{id: Nat, back: Chan(Ans), fd: U32, addr: String, laddr: String, since: Nat, name: String, db: Nat, noev: Bool}
+  Cl{id: Nat, back: Chan(Ans), fd: U32, addr: String, laddr: String, since: Nat, name: String, db: Nat, noev: Bool, r3: Bool}
 
 # a monitor: its client's id, the channel its lines go back on, and
 # whether its replies were on as its last batch ended (on: not held back
@@ -1133,16 +1154,16 @@ def cls.kills(cs: Cls) -> List<&2, U32> & Cls:
     case Cls{tab, kd, ks, ms}:
       (ks, Cls{tab, kd, Nil{}, ms})
 
-# a client's name and database set from its connection
+# a client's name, database and protocol set from its connection
 def cl.conn(+cn: S.Conn, c: Cl) -> Cl:
   match c:
-    case Cl{id, back, fd, addr, laddr, since, name, db, noev}:
-      Cl{id, back, fd, addr, laddr, since, S.conn.name(cn), S.conn.db(cn), noev}
+    case Cl{id, back, fd, addr, laddr, since, name, db, noev, r3}:
+      Cl{id, back, fd, addr, laddr, since, S.conn.name(cn), S.conn.db(cn), noev, S.conn.r3(cn)}
 
 def cl.noev(on: Bool, c: Cl) -> Cl:
   match c:
-    case Cl{id, back, fd, addr, laddr, since, name, db, noev}:
-      Cl{id, back, fd, addr, laddr, since, name, db, on}
+    case Cl{id, back, fd, addr, laddr, since, name, db, noev, r3}:
+      Cl{id, back, fd, addr, laddr, since, name, db, on, r3}
 
 def cls.with.if(+id: Nat, m: Maybe<&2, Cl>, +cn: S.Conn, cs: Cls) -> Cls:
   match m:
@@ -1151,8 +1172,8 @@ def cls.with.if(+id: Nat, m: Maybe<&2, Cl>, +cn: S.Conn, cs: Cls) -> Cls:
     case None{}:
       cs
 
-# the registry with the client's name and database as its connection
-# has them
+# the registry with the client's name, database and protocol as its
+# connection has them
 def cls.with(+cn: S.Conn, cs: Cls) -> Cls:
   +id = S.conn.id(cn)
   +c = cs
@@ -1239,9 +1260,10 @@ def cls.unmon(+id: Nat, cs: Cls) -> Cls:
 # arguments pass, as processCommand refuses it. RESET and the
 # connection's end drop the client's subscriptions.
 
-# a subscriber: its client's id and the channel its answers go back on
+# a subscriber: its client's id, the channel its answers go back on, and
+# whether it spoke RESP3 when it subscribed (its messages are pushes)
 type Sub is Data:
-  Sub{id: Nat, back: Chan(Ans)}
+  Sub{id: Nat, back: Chan(Ans), r3: Bool}
 
 # a pattern and its subscribers
 type Pat is Data:
@@ -1260,18 +1282,22 @@ type Reg is Data:
 
 # Pub/Sub's state: the subscriptions, the classes of keyspace events the
 # subscribers may hear (0 while there are none to send: Keyspace
-# notifications), and the pushes of the batch so far, newest first. PsOf,
+# notifications), the pushes of the batch so far, newest first, and those
+# to the client whose command runs (own: a RESP3 client with a
+# subscription that publishes to itself, or hears its own keyspace
+# events), which go among its replies, before its command's, as Redis
+# writes them to its buffer as the command runs. PsOf,
 # a state that holds a state, is never built: it makes Ps a type that
 # holds itself, which the compiler makes a node of its own, so that it
 # travels as one word, as the clients that wait and the transactions do
 # (Blocked clients); flat, it would be eight, which every batch's state
 # would carry.
 type Ps is Data:
-  Ps{reg: Reg, ev: U32, px: List<&2, Sigma<&2, &2, Chan(Ans), _ => Ans>>, cs: Cls}
+  Ps{reg: Reg, ev: U32, px: List<&2, Sigma<&2, &2, Chan(Ans), _ => Ans>>, cs: Cls, own: List<&2, R.Reply>}
   PsOf{p: Ps}
 
 def ps.new() -> Ps:
-  Ps{RegNone{}, 0, Nil{}, cls.new()}
+  Ps{RegNone{}, 0, Nil{}, cls.new(), Nil{}}
 
 # whether the fast way may run a batch: no keyspace event is to be sent,
 # no client killed, no monitor, the group not past maxmemory (ev but its
@@ -1279,7 +1305,7 @@ def ps.new() -> Ps:
 # on with: mem.bits)
 def ps.calm(+pb: Ps) -> Bool:
   match pb:
-    case Ps{reg, +ev, px, cs}:
+    case Ps{reg, +ev, px, cs, own}:
       U32.is_eq(U32.and(ev, 3825205247), 0)
     case PsOf{+p}:
       ps.calm(p)
@@ -1310,7 +1336,7 @@ def subs.first(+id: Nat, +xs: List<&2, Sub>) -> Bool:
   match xs:
     case Nil{}:
       False{}
-    case Con{Sub{+i, b}, rest}:
+    case Con{Sub{+i, b, p}, rest}:
       Nat.is_eq(i, id)
 
 # the subscribers but the client of id
@@ -1456,7 +1482,7 @@ def reg.mine(+id: Nat, +r: Reg) -> Maybe<&2, Mine>:
 # whether the client of id has a subscription
 def ps.has(+id: Nat, +pb: Ps) -> Bool:
   match pb:
-    case Ps{+reg, ev, px, cs}:
+    case Ps{+reg, ev, px, cs, own}:
       Maybe.is_some(&2, Mine, reg.mine(id, reg))
     case PsOf{+p}:
       ps.has(id, p)
@@ -1517,17 +1543,17 @@ def reg.put(+id: Nat, had: Bool, m: Mine, r: Reg) -> Reg:
 
 # SUBSCRIBE and its kin of name x, when the client has none: its
 # subscriptions and the registry after
-def reg.sub1.if(had: Bool, +kind: Nat, +x: String, +id: Nat, +back: Chan(Ans), m: Mine, r: Reg) -> Mine & Reg:
+def reg.sub1.if(had: Bool, +kind: Nat, +x: String, +id: Nat, +back: Chan(Ans), +r3: Bool, m: Mine, r: Reg) -> Mine & Reg:
   match had:
     case True{}:
       (m, r)
     case False{}:
       +m0 = m
-      (mine.with(kind, m0, List.append(&2, String, mine.names(kind, m0), [x])), reg.add(kind, x, Sub{id, back}, r))
+      (mine.with(kind, m0, List.append(&2, String, mine.names(kind, m0), [x])), reg.add(kind, x, Sub{id, back, r3}, r))
 
-def reg.sub1(+kind: Nat, +x: String, +id: Nat, +back: Chan(Ans), m: Mine, r: Reg) -> Mine & Reg:
+def reg.sub1(+kind: Nat, +x: String, +id: Nat, +back: Chan(Ans), +r3: Bool, m: Mine, r: Reg) -> Mine & Reg:
   +m0 = m
-  reg.sub1.if(S.pub.has(x, mine.names(kind, m0)), kind, x, id, back, m0, r)
+  reg.sub1.if(S.pub.has(x, mine.names(kind, m0)), kind, x, id, back, r3, m0, r)
 
 # UNSUBSCRIBE and its kin of name x, when the client has it
 def reg.unsub1.if(had: Bool, +kind: Nat, +x: String, +id: Nat, m: Mine, r: Reg) -> Mine & Reg:
@@ -1555,54 +1581,54 @@ def run.note(+on: Bool, +kind: Nat, +x: String, acc: List<&2, R.Reply>, p: Mine 
   Run{S.pub.note(S.pub.word(on, kind), R.RBulk{x}, mine.count(kind, m0)) <> acc, m0, r}
 
 # SUBSCRIBE (on) or UNSUBSCRIBE of a name
-def reg.one(+on: Bool, +kind: Nat, +x: String, +id: Nat, +back: Chan(Ans), m: Mine, r: Reg) -> Mine & Reg:
+def reg.one(+on: Bool, +kind: Nat, +x: String, +id: Nat, +back: Chan(Ans), +r3: Bool, m: Mine, r: Reg) -> Mine & Reg:
   match on:
     case True{}:
-      reg.sub1(kind, x, id, back, m, r)
+      reg.sub1(kind, x, id, back, r3, m, r)
     case False{}:
       reg.unsub1(kind, x, id, m, r)
 
 # SUBSCRIBE (on) or UNSUBSCRIBE of names, one at a time
-def reg.each(+on: Bool, +kind: Nat, names: List<&2, String>, +id: Nat, +back: Chan(Ans), w: Run) -> Run:
+def reg.each(+on: Bool, +kind: Nat, names: List<&2, String>, +id: Nat, +back: Chan(Ans), +r3: Bool, w: Run) -> Run:
   match names w:
     case Nil{} w0:
       w0
     case Con{+x, rest} Run{acc, m, r}:
-      reg.each(on, kind, rest, id, back, run.note(on, kind, x, acc, reg.one(on, kind, x, id, back, m, r)))
+      reg.each(on, kind, rest, id, back, r3, run.note(on, kind, x, acc, reg.one(on, kind, x, id, back, r3, m, r)))
 
 # UNSUBSCRIBE and its kin of all the client's names of the kind: a reply
 # with no name when it has none
-def reg.all(xs: List<&2, String>, +kind: Nat, +id: Nat, +back: Chan(Ans), m: Mine, r: Reg) -> Run:
+def reg.all(xs: List<&2, String>, +kind: Nat, +id: Nat, +back: Chan(Ans), +r3: Bool, m: Mine, r: Reg) -> Run:
   match xs:
     case Nil{}:
       +m0 = m
       Run{[S.pub.note(S.pub.word(False{}, kind), R.RNull{}, mine.count(kind, m0))], m0, r}
     case Con{x, rest}:
-      reg.each(False{}, kind, x <> rest, id, back, Run{Nil{}, m, r})
+      reg.each(False{}, kind, x <> rest, id, back, r3, Run{Nil{}, m, r})
 
-def reg.run(+on: Bool, +kind: Nat, names: List<&2, String>, +id: Nat, +back: Chan(Ans), m: Mine, r: Reg) -> Run:
+def reg.run(+on: Bool, +kind: Nat, names: List<&2, String>, +id: Nat, +back: Chan(Ans), +r3: Bool, m: Mine, r: Reg) -> Run:
   match on names:
     case False{} Nil{}:
       +m0 = m
-      reg.all(mine.names(kind, m0), kind, id, back, m0, r)
+      reg.all(mine.names(kind, m0), kind, id, back, r3, m0, r)
     case _ ns:
-      reg.each(on, kind, ns, id, back, Run{Nil{}, m, r})
+      reg.each(on, kind, ns, id, back, r3, Run{Nil{}, m, r})
 
-def ps.ran(+id: Nat, had: Bool, w: Run, ev: U32, px: List<&2, Sigma<&2, &2, Chan(Ans), _ => Ans>>, cs: Cls) -> List<&2, R.Reply> & Ps:
+def ps.ran(+id: Nat, had: Bool, w: Run, ev: U32, px: List<&2, Sigma<&2, &2, Chan(Ans), _ => Ans>>, cs: Cls, own: List<&2, R.Reply>) -> List<&2, R.Reply> & Ps:
   match w:
     case Run{acc, m, r}:
-      (List.reverse(&2, R.Reply, acc), Ps{reg.put(id, had, m, r), ev, px, cs})
+      (List.reverse(&2, R.Reply, acc), Ps{reg.put(id, had, m, r), ev, px, cs, own})
 
 # SUBSCRIBE (on) or UNSUBSCRIBE of a kind for the client of id: its
 # replies, in order, and Pub/Sub's state after it
-def ps.sub(+id: Nat, +back: Chan(Ans), +on: Bool, +kind: Nat, names: List<&2, String>, pb: Ps) -> List<&2, R.Reply> & Ps:
+def ps.sub(+id: Nat, +back: Chan(Ans), +r3: Bool, +on: Bool, +kind: Nat, names: List<&2, String>, pb: Ps) -> List<&2, R.Reply> & Ps:
   match pb:
-    case Ps{reg, ev, px, cs}:
+    case Ps{reg, ev, px, cs, own}:
       +r = reg.open(reg)
       +m = reg.mine(id, r)
-      ps.ran(id, Maybe.is_some(&2, Mine, m), reg.run(on, kind, names, id, back, mine.of(m), r), ev, px, cs)
+      ps.ran(id, Maybe.is_some(&2, Mine, m), reg.run(on, kind, names, id, back, r3, mine.of(m), r), ev, px, cs, own)
     case PsOf{p}:
-      ps.sub(id, back, on, kind, names, p)
+      ps.sub(id, back, r3, on, kind, names, p)
 
 # a client's names of a kind taken from their subscribers
 def names.dels(+kind: Nat, xs: List<&2, String>, +id: Nat, r: Reg) -> Reg:
@@ -1612,20 +1638,20 @@ def names.dels(+kind: Nat, xs: List<&2, String>, +id: Nat, r: Reg) -> Reg:
     case Con{+x, rest}:
       names.dels(kind, rest, id, reg.del(kind, x, id, r))
 
-def ps.dropped(+id: Nat, m: Maybe<&2, Mine>, r: Reg, ev: U32, px: List<&2, Sigma<&2, &2, Chan(Ans), _ => Ans>>, cs: Cls) -> Ps:
+def ps.dropped(+id: Nat, m: Maybe<&2, Mine>, r: Reg, ev: U32, px: List<&2, Sigma<&2, &2, Chan(Ans), _ => Ans>>, cs: Cls, own: List<&2, R.Reply>) -> Ps:
   match m:
     case None{}:
-      Ps{r, ev, px, cs}
+      Ps{r, ev, px, cs, own}
     case Some{Mine{c, p, s}}:
-      Ps{reg.put(id, True{}, Mine{Nil{}, Nil{}, Nil{}}, names.dels(2n, s, id, names.dels(1n, p, id, names.dels(0n, c, id, r)))), ev, px, cs}
+      Ps{reg.put(id, True{}, Mine{Nil{}, Nil{}, Nil{}}, names.dels(2n, s, id, names.dels(1n, p, id, names.dels(0n, c, id, r)))), ev, px, cs, own}
 
 # every subscription of the client of id dropped, and the client no
 # monitor (RESET, its end)
 def ps.drop(+id: Nat, pb: Ps) -> Ps:
   match pb:
-    case Ps{reg, ev, px, cs}:
+    case Ps{reg, ev, px, cs, own}:
       +r = reg
-      ps.dropped(id, reg.mine(id, r), r, ev, px, cls.unmon(id, cs))
+      ps.dropped(id, reg.mine(id, r), r, ev, px, cls.unmon(id, cs), own)
     case PsOf{p}:
       ps.drop(id, p)
 
@@ -1634,36 +1660,71 @@ def ps.drop(+id: Nat, pb: Ps) -> Ps:
 # it is killed; the fds to shut down are taken at the end of the group.
 def ps.join(+id: Nat, c: Cl, pb: Ps) -> Ps:
   match pb:
-    case Ps{reg, ev, px, cs}:
-      Ps{reg, ev, px, cls.put(id, c, cs)}
+    case Ps{reg, ev, px, cs, own}:
+      Ps{reg, ev, px, cls.put(id, c, cs), own}
     case PsOf{p}:
       ps.join(id, c, p)
 
 def ps.left(+id: Nat, pb: Ps) -> Ps:
   match pb:
-    case Ps{reg, ev, px, cs}:
+    case Ps{reg, ev, px, cs, own}:
       +c = cls.left(id, cs)
-      Ps{reg, U32.or(U32.and(ev, 1073741823), cls.bit(c)), px, c}
+      Ps{reg, U32.or(U32.and(ev, 1073741823), cls.bit(c)), px, c, own}
     case PsOf{p}:
       ps.left(id, p)
 
+# A client with a subscription that switched its protocol (HELLO, from
+# RESP3: a client of RESP2 with one may not run it) has its subscriptions
+# made again with the new one, the pushes of its messages as it speaks
+# now: each of its names taken from it and given again (it comes last
+# among a name's subscribers then, which no client sees)
+def reg.renames(+kind: Nat, xs: List<&2, String>, +id: Nat, +back: Chan(Ans), +r3: Bool, r: Reg) -> Reg:
+  match xs:
+    case Nil{}:
+      r
+    case Con{+x, rest}:
+      reg.renames(kind, rest, id, back, r3, reg.add(kind, x, Sub{id, back, r3}, reg.del(kind, x, id, r)))
+
+def reg.reproto.of(m: Maybe<&2, Mine>, +id: Nat, +back: Chan(Ans), +r3: Bool, r: Reg) -> Reg:
+  match m:
+    case Some{Mine{c, p, sh}}:
+      reg.renames(2n, sh, id, back, r3, reg.renames(1n, p, id, back, r3, reg.renames(0n, c, id, back, r3, r)))
+    case None{}:
+      r
+
+def reg.reproto.if(ch: Bool, +id: Nat, +back: Chan(Ans), +r3: Bool, r: Reg) -> Reg:
+  match ch:
+    case True{}:
+      +r0 = r
+      reg.reproto.of(reg.mine(id, r0), id, back, r3, r0)
+    case False{}:
+      r
+
+def ps.reproto(+cn: S.Conn, m: Maybe<&2, Cl>, r: Reg) -> Reg:
+  match m:
+    case Some{Cl{id, +back, fd, addr, laddr, since, name, db, noev, +r3}}:
+      +now = S.conn.r3(cn)
+      reg.reproto.if(Bool.xor(r3, now), S.conn.id(cn), back, now, r)
+    case None{}:
+      r
+
 def ps.conn(+cn: S.Conn, pb: Ps) -> Ps:
   match pb:
-    case Ps{reg, ev, px, cs}:
-      Ps{reg, ev, px, cls.with(cn, cs)}
+    case Ps{reg, ev, px, +cs, own}:
+      Ps{ps.reproto(cn, cls.get(S.conn.id(cn), cs), reg), ev, px, cls.with(cn, cs), own}
     case PsOf{p}:
       ps.conn(cn, p)
 
 def ps.noev(+id: Nat, on: Bool, pb: Ps) -> Ps:
   match pb:
-    case Ps{reg, ev, px, cs}:
-      Ps{reg, ev, px, cls.noev(id, on, cs)}
+    case Ps{reg, ev, px, cs, own}:
+      Ps{reg, ev, px, cls.noev(id, on, cs), own}
     case PsOf{p}:
       ps.noev(id, on, p)
 
 def ps.cls(+pb: Ps) -> Cls:
   match pb:
-    case Ps{reg, ev, px, +cs}:
+    case Ps{reg, ev, px, +cs, own}:
       cs
     case PsOf{+p}:
       ps.cls(p)
@@ -1674,50 +1735,50 @@ def ps.cls(+pb: Ps) -> Cls:
 # batch left them, and a line to the others
 def ps.mon.any(+pb: Ps) -> Bool:
   match pb:
-    case Ps{reg, ev, px, Cls{tab, kd, ks, +ms}}:
+    case Ps{reg, ev, px, Cls{tab, kd, ks, +ms}, own}:
       Bool.not(U32.is_eq(mon.bit(ms), 0))
     case PsOf{+p}:
       ps.mon.any(p)
 
 def ps.mon.is(+id: Nat, +pb: Ps) -> Bool:
   match pb:
-    case Ps{reg, ev, px, Cls{tab, kd, ks, +ms}}:
+    case Ps{reg, ev, px, Cls{tab, kd, ks, +ms}, own}:
       mons.has(id, ms)
     case PsOf{+p}:
       ps.mon.is(id, p)
 
 def ps.mon.add(+id: Nat, +back: Chan(Ans), pb: Ps) -> Ps:
   match pb:
-    case Ps{reg, ev, px, Cls{tab, kd, ks, ms}}:
-      Ps{reg, ev, px, Cls{tab, kd, ks, List.append(&2, Mon, ms, [Mon{id, back, True{}}])}}
+    case Ps{reg, ev, px, Cls{tab, kd, ks, ms}, own}:
+      Ps{reg, ev, px, Cls{tab, kd, ks, List.append(&2, Mon, ms, [Mon{id, back, True{}}])}, own}
     case PsOf{p}:
       ps.mon.add(id, back, p)
 
 def ps.mon.mute(+id: Nat, +on: Bool, pb: Ps) -> Ps:
   match pb:
-    case Ps{reg, ev, px, Cls{tab, kd, ks, ms}}:
-      Ps{reg, ev, px, Cls{tab, kd, ks, mons.mute(id, on, ms)}}
+    case Ps{reg, ev, px, Cls{tab, kd, ks, ms}, own}:
+      Ps{reg, ev, px, Cls{tab, kd, ks, mons.mute(id, on, ms)}, own}
     case PsOf{p}:
       ps.mon.mute(id, on, p)
 
 def ps.mon.push(+id: Nat, +out: String, pb: Ps) -> Ps:
   match pb:
-    case Ps{reg, ev, px, Cls{tab, kd, ks, +ms}}:
-      Ps{reg, ev, mons.push(id, out, ms, px), Cls{tab, kd, ks, ms}}
+    case Ps{reg, ev, px, Cls{tab, kd, ks, +ms}, own}:
+      Ps{reg, ev, mons.push(id, out, ms, px), Cls{tab, kd, ks, ms}, own}
     case PsOf{p}:
       ps.mon.push(id, out, p)
 
 # the address of the client of id, as a line shows it
 def cl.addr.or(m: Maybe<&2, Cl>) -> String:
   match m:
-    case Some{Cl{id, back, fd, addr, laddr, since, name, db, noev}}:
+    case Some{Cl{id, back, fd, addr, laddr, since, name, db, noev, r3}}:
       addr
     case None{}:
       "?:0"
 
 def ps.addr(+id: Nat, +pb: Ps) -> String:
   match pb:
-    case Ps{reg, ev, px, Cls{+tab, kd, ks, ms}}:
+    case Ps{reg, ev, px, Cls{+tab, kd, ks, ms}, own}:
       cl.addr.or(KV.get(Cl, tab, Nat.show(id)))
     case PsOf{+p}:
       ps.addr(id, p)
@@ -1726,79 +1787,122 @@ def ps.addr(+id: Nat, +pb: Ps) -> String:
 # and the fast way off until its connection ends
 def ps.kill(+id: Nat, +fd: U32, pb: Ps) -> Ps:
   match pb:
-    case Ps{reg, ev, px, Cls{tab, kd, ks, ms}}:
-      Ps{reg, U32.or(ev, 2147483648), px, Cls{KV.del(Cl, tab, Nat.show(id)), id <> kd, fd <> ks, ms}}
+    case Ps{reg, ev, px, Cls{tab, kd, ks, ms}, own}:
+      Ps{reg, U32.or(ev, 2147483648), px, Cls{KV.del(Cl, tab, Nat.show(id)), id <> kd, fd <> ks, ms}, own}
     case PsOf{p}:
       ps.kill(id, fd, p)
 
-def ps.kills.of(q: List<&2, U32> & Cls, reg: Reg, ev: U32, px: List<&2, Sigma<&2, &2, Chan(Ans), _ => Ans>>) -> List<&2, U32> & Ps:
+def ps.kills.of(q: List<&2, U32> & Cls, reg: Reg, ev: U32, px: List<&2, Sigma<&2, &2, Chan(Ans), _ => Ans>>, own: List<&2, R.Reply>) -> List<&2, U32> & Ps:
   (ks, cs) = q
-  (ks, Ps{reg, ev, px, cs})
+  (ks, Ps{reg, ev, px, cs, own})
 
 def ps.kills(pb: Ps) -> List<&2, U32> & Ps:
   match pb:
-    case Ps{reg, ev, px, cs}:
-      ps.kills.of(cls.kills(cs), reg, ev, px)
+    case Ps{reg, ev, px, cs, own}:
+      ps.kills.of(cls.kills(cs), reg, ev, px, own)
     case PsOf{p}:
       ps.kills(p)
 
-# A message: the bytes each subscriber of its channel gets (smessage for
-# a shard channel), and those of a pattern's
-def pub.msg(shard: Bool, +c: String, +m: String) -> String:
-  P.encode(R.RArray{[R.RBulk{Bool.pick(String, shard, "smessage", "message")}, R.RBulk{c}, R.RBulk{m}]})
+# A message: what each subscriber of its channel gets (smessage for a
+# shard channel), and what a pattern's does: a push, and its bytes in
+# RESP2 (an array)
+def pub.msg.r(shard: Bool, +c: String, +m: String) -> R.Reply:
+  R.RPush{[R.RBulk{Bool.pick(String, shard, "smessage", "message")}, R.RBulk{c}, R.RBulk{m}]}
 
-def pub.pmsg(+p: String, +c: String, +m: String) -> String:
-  P.encode(R.RArray{[R.RBulk{"pmessage"}, R.RBulk{p}, R.RBulk{c}, R.RBulk{m}]})
+def pub.pmsg.r(+p: String, +c: String, +m: String) -> R.Reply:
+  R.RPush{[R.RBulk{"pmessage"}, R.RBulk{p}, R.RBulk{c}, R.RBulk{m}]}
 
-# a push of out to each subscriber, before px
-def push.all(subs: List<&2, Sub>, +out: String, px: List<&2, Sigma<&2, &2, Chan(Ans), _ => Ans>>) -> List<&2, Sigma<&2, &2, Chan(Ans), _ => Ans>>:
+def pub.bytes(+r: R.Reply) -> String:
+  P.encode(r)
+
+# a message's bytes for a subscriber in RESP3 (r3: a push, its first byte
+# > for the * of RESP2's array) or RESP2
+def push.as(r3: Bool, +out: String) -> String:
+  match r3:
+    case True{}:
+      ">" ++ String.slice(out, 1n, String.length(out))
+    case False{}:
+      out
+
+# the receivers so far, the pushes, and those to the client of the
+# command that runs (own)
+type Sent is Data:
+  Sent{k: Nat, px: List<&2, Sigma<&2, &2, Chan(Ans), _ => Ans>>, own: List<&2, R.Reply>}
+
+# a message (r, out its bytes in RESP2) pushed to each subscriber, before
+# those so far; the one to the client of id me goes among its replies
+def push.one(mine: Bool, +b: Chan(Ans), +r3: Bool, +r: R.Reply, +out: String, d: Sent) -> Sent:
+  match mine d:
+    case True{} Sent{k, px, own}:
+      Sent{k, px, r <> own}
+    case False{} Sent{k, px, own}:
+      Sent{k, (b, Push{push.as(r3, out)}) <> px, own}
+
+def push.all(subs: List<&2, Sub>, +r: R.Reply, +out: String, +me: Nat, d: Sent) -> Sent:
   match subs:
     case Nil{}:
-      px
-    case Con{Sub{i, b}, rest}:
-      push.all(rest, out, (b, Push{out}) <> px)
+      d
+    case Con{Sub{+i, +b, +r3}, rest}:
+      push.all(rest, r, out, me, push.one(Nat.is_eq(i, me), b, r3, r, out, d))
 
-# the receivers so far, and the pushes
-type Sent is Data:
-  Sent{k: Nat, px: List<&2, Sigma<&2, &2, Chan(Ans), _ => Ans>>}
-
-def sent.add(+subs: List<&2, Sub>, +out: String, d: Sent) -> Sent:
+def sent.add(+subs: List<&2, Sub>, +r: R.Reply, +me: Nat, d: Sent) -> Sent:
   match d:
-    case Sent{+k, px}:
-      Sent{Nat.add(k, List.length(&2, Sub, subs)), push.all(subs, out, px)}
+    case Sent{+k, px, own}:
+      push.all(subs, r, pub.bytes(r), me, Sent{Nat.add(k, List.length(&2, Sub, subs)), px, own})
 
 # the message sent to the subscribers of each pattern channel c matches
-def pats.send.if(hit: Bool, +p: String, +subs: List<&2, Sub>, +c: String, +m: String, d: Sent) -> Sent:
+def pats.send.if(hit: Bool, +p: String, +subs: List<&2, Sub>, +c: String, +m: String, +me: Nat, d: Sent) -> Sent:
   match hit:
     case True{}:
-      sent.add(subs, pub.pmsg(p, c, m), d)
+      sent.add(subs, pub.pmsg.r(p, c, m), me, d)
     case False{}:
       d
 
-def pats.send(xs: List<&2, Pat>, +c: String, +m: String, d: Sent) -> Sent:
+def pats.send(xs: List<&2, Pat>, +c: String, +m: String, +me: Nat, d: Sent) -> Sent:
   match xs:
     case Nil{}:
       d
     case Con{Pat{+p, +subs}, rest}:
-      pats.send(rest, c, m, pats.send.if(R.stringmatch(p, c, False{}), p, subs, c, m, d))
+      pats.send(rest, c, m, me, pats.send.if(R.stringmatch(p, c, False{}), p, subs, c, m, me, d))
 
 def ps.sent(d: Sent, reg: Reg, ev: U32, cs: Cls) -> Nat & Ps:
   match d:
-    case Sent{k, px}:
-      (k, Ps{reg, ev, px, cs})
+    case Sent{k, px, own}:
+      (k, Ps{reg, ev, px, cs, own})
 
-# PUBLISH (or SPUBLISH: shard) of message m to channel c: how many got
-# it, and Pub/Sub's state with the pushes
-def ps.publish(shard: Bool, +c: String, +m: String, pb: Ps) -> Nat & Ps:
+# PUBLISH (or SPUBLISH: shard) of message m to channel c by the client of
+# id me (0 for none: the server's own events): how many got it, and
+# Pub/Sub's state with the pushes
+def ps.publish(shard: Bool, +c: String, +m: String, +me: Nat, pb: Ps) -> Nat & Ps:
   match shard pb:
-    case _ Ps{RegNone{}, ev, px, cs}:
-      (0n, Ps{RegNone{}, ev, px, cs})
-    case False{} Ps{RegOn{+ch, +p, sh, cl, n}, ev, px, cs}:
-      ps.sent(pats.send(p, c, m, sent.add(chan.subs(ch, c), pub.msg(False{}, c, m), Sent{0n, px})), RegOn{ch, p, sh, cl, n}, ev, cs)
-    case True{} Ps{RegOn{ch, p, +sh, cl, n}, ev, px, cs}:
-      ps.sent(sent.add(chan.subs(sh, c), pub.msg(True{}, c, m), Sent{0n, px}), RegOn{ch, p, sh, cl, n}, ev, cs)
+    case _ Ps{RegNone{}, ev, px, cs, own}:
+      (0n, Ps{RegNone{}, ev, px, cs, own})
+    case False{} Ps{RegOn{+ch, +p, sh, cl, n}, ev, px, cs, own}:
+      ps.sent(pats.send(p, c, m, me, sent.add(chan.subs(ch, c), pub.msg.r(False{}, c, m), me, Sent{0n, px, own})), RegOn{ch, p, sh, cl, n}, ev, cs)
+    case True{} Ps{RegOn{ch, p, +sh, cl, n}, ev, px, cs, own}:
+      ps.sent(sent.add(chan.subs(sh, c), pub.msg.r(True{}, c, m), me, Sent{0n, px, own}), RegOn{ch, p, sh, cl, n}, ev, cs)
     case sh PsOf{p}:
-      ps.publish(sh, c, m, p)
+      ps.publish(sh, c, m, me, p)
+
+# the pushes to the client of the command that runs, taken out (newest
+# first)
+def ps.own.take(pb: Ps) -> List<&2, R.Reply> & Ps:
+  match pb:
+    case Ps{reg, ev, px, cs, own}:
+      (own, Ps{reg, ev, px, cs, Nil{}})
+    case PsOf{p}:
+      ps.own.take(p)
+
+# a command's replies (newest first) with the pushes to its own client
+# before its reply (its one reply: the head)
+def own.under(own: List<&2, R.Reply>, rs: List<&2, R.Reply>) -> List<&2, R.Reply>:
+  match own rs:
+    case Nil{} xs:
+      xs
+    case ys Con{h, t}:
+      h <> List.append(&2, R.Reply, ys, t)
+    case ys Nil{}:
+      ys
 
 # PUBSUB's CHANNELS (of a pattern, or all) and SHARDCHANNELS, NUMSUB and
 # SHARDNUMSUB, NUMPAT
@@ -1839,7 +1943,7 @@ def reg.read(op: R.PubOp, +r: Reg) -> R.Reply:
 
 def ps.read(op: R.PubOp, +pb: Ps) -> R.Reply:
   match pb:
-    case Ps{+reg, ev, px, cs}:
+    case Ps{+reg, ev, px, cs, own}:
       reg.read(op, reg)
     case PsOf{+p}:
       ps.read(op, p)
@@ -1869,10 +1973,10 @@ def mem.bits(+srv: S.Srv, +ev: U32) -> U32:
 
 def ps.tune(pb: Ps, +srv: S.Srv) -> Ps:
   match pb:
-    case Ps{RegNone{}, +ev, px, +cs}:
-      Ps{RegNone{}, U32.or(cls.bit(cs), mem.bits(srv, ev)), px, cs}
-    case Ps{RegOn{c, p, sh, cl, n}, +ev, px, +cs}:
-      Ps{RegOn{c, p, sh, cl, n}, U32.or(U32.or(ev.of(srv), cls.bit(cs)), mem.bits(srv, ev)), px, cs}
+    case Ps{RegNone{}, +ev, px, +cs, own}:
+      Ps{RegNone{}, U32.or(cls.bit(cs), mem.bits(srv, ev)), px, cs, own}
+    case Ps{RegOn{c, p, sh, cl, n}, +ev, px, +cs, own}:
+      Ps{RegOn{c, p, sh, cl, n}, U32.or(U32.or(ev.of(srv), cls.bit(cs)), mem.bits(srv, ev)), px, cs, own}
     case PsOf{p}:
       ps.tune(p, srv)
 
@@ -1891,8 +1995,8 @@ def mem.res.bits(+res: Nat) -> U32:
 
 def ps.mem(pb: Ps, +res: Nat) -> Ps:
   match pb:
-    case Ps{reg, ev, px, cs}:
-      Ps{reg, U32.or(U32.and(ev, 3690987519), mem.res.bits(res)), px, cs}
+    case Ps{reg, ev, px, cs, own}:
+      Ps{reg, U32.or(U32.and(ev, 3690987519), mem.res.bits(res)), px, cs, own}
     case PsOf{p}:
       ps.mem(p, res)
 
@@ -1900,14 +2004,14 @@ def ps.mem(pb: Ps, +res: Nat) -> Ps:
 # eviction ran out of time, or a CONFIG SET changed maxmemory (bit 26)
 def ps.evicting(+pb: Ps) -> Bool:
   match pb:
-    case Ps{reg, +ev, px, cs}:
+    case Ps{reg, +ev, px, cs, own}:
       U32.is_ne(U32.and(ev, 67108864), 0)
     case PsOf{+p}:
       ps.evicting(p)
 
 def ps.oom.is(+pb: Ps) -> Bool:
   match pb:
-    case Ps{reg, +ev, px, cs}:
+    case Ps{reg, +ev, px, cs, own}:
       U32.is_ne(U32.and(ev, 536870912), 0)
     case PsOf{+p}:
       ps.oom.is(p)
@@ -1915,7 +2019,7 @@ def ps.oom.is(+pb: Ps) -> Bool:
 # whether the policy is an LFU one (Access)
 def ps.lfu(+pb: Ps) -> Bool:
   match pb:
-    case Ps{reg, +ev, px, cs}:
+    case Ps{reg, +ev, px, cs, own}:
       U32.is_ne(U32.and(ev, 134217728), 0)
     case PsOf{+p}:
       ps.lfu(p)
@@ -1926,7 +2030,7 @@ def ps.lfu(+pb: Ps) -> Bool:
 # account and evict (Eviction)
 def mem.need(+pb: Ps) -> Nat:
   match pb:
-    case Ps{reg, +ev, px, cs}:
+    case Ps{reg, +ev, px, cs, own}:
       Bool.pick(Nat, U32.is_ne(U32.and(ev, 268435456), 0), 2n, Bool.pick(Nat, U32.is_ne(U32.and(ev, 603979776), 0), 1n, 0n))
     case PsOf{+p}:
       mem.need(p)
@@ -1934,8 +2038,8 @@ def mem.need(+pb: Ps) -> Nat:
 # the pushes of a batch put before the group's answers
 def ps.flush(pb: Ps, outs: List<&2, Sigma<&2, &2, Chan(Ans), _ => Ans>>) -> Ps & List<&2, Sigma<&2, &2, Chan(Ans), _ => Ans>>:
   match pb:
-    case Ps{reg, ev, px, cs}:
-      (Ps{reg, ev, Nil{}, cs}, List.append(&2, Sigma<&2, &2, Chan(Ans), _ => Ans>, px, outs))
+    case Ps{reg, ev, px, cs, own}:
+      (Ps{reg, ev, Nil{}, cs, own}, List.append(&2, Sigma<&2, &2, Chan(Ans), _ => Ans>, px, outs))
     case PsOf{p}:
       ps.flush(p, outs)
 
@@ -2371,47 +2475,49 @@ def ps.pub.only(p: Nat & Ps) -> Ps:
   (n, pb) = p
   pb
 
-def ps.ev.space(on: Bool, +name: String, +key: String, +db: Nat, pb: Ps) -> Ps:
+def ps.ev.space(on: Bool, +name: String, +key: String, +db: Nat, +me: Nat, pb: Ps) -> Ps:
   match on:
     case True{}:
-      ps.pub.only(ps.publish(False{}, "__keyspace@" ++ Nat.show(db) ++ "__:" ++ key, name, pb))
+      ps.pub.only(ps.publish(False{}, "__keyspace@" ++ Nat.show(db) ++ "__:" ++ key, name, me, pb))
     case False{}:
       pb
 
-def ps.ev.event(on: Bool, +name: String, +key: String, +db: Nat, pb: Ps) -> Ps:
+def ps.ev.event(on: Bool, +name: String, +key: String, +db: Nat, +me: Nat, pb: Ps) -> Ps:
   match on:
     case True{}:
-      ps.pub.only(ps.publish(False{}, "__keyevent@" ++ Nat.show(db) ++ "__:" ++ name, key, pb))
+      ps.pub.only(ps.publish(False{}, "__keyevent@" ++ Nat.show(db) ++ "__:" ++ name, key, me, pb))
     case False{}:
       pb
 
-def ps.ev.send(on: Bool, +ev: U32, +name: String, +key: String, +db: Nat, pb: Ps) -> Ps:
+def ps.ev.send(on: Bool, +ev: U32, +name: String, +key: String, +db: Nat, +me: Nat, pb: Ps) -> Ps:
   match on:
     case True{}:
-      ps.ev.event(U32.is_ne(U32.and(ev, 2), 0), name, key, db, ps.ev.space(U32.is_ne(U32.and(ev, 1), 0), name, key, db, pb))
+      ps.ev.event(U32.is_ne(U32.and(ev, 2), 0), name, key, db, me, ps.ev.space(U32.is_ne(U32.and(ev, 1), 0), name, key, db, me, pb))
     case False{}:
       pb
 
-def ps.ev1(e: Ev, pb: Ps) -> Ps:
+def ps.ev1(e: Ev, +me: Nat, pb: Ps) -> Ps:
   match e pb:
-    case Ev{+cls, +name, +key, +db} Ps{reg, +ev, px, cs}:
-      ps.ev.send(U32.is_ne(U32.and(ev, cls), 0), ev, name, key, db, Ps{reg, ev, px, cs})
+    case Ev{+cls, +name, +key, +db} Ps{reg, +ev, px, cs, own}:
+      ps.ev.send(U32.is_ne(U32.and(ev, cls), 0), ev, name, key, db, me, Ps{reg, ev, px, cs, own})
     case x PsOf{p}:
-      ps.ev1(x, p)
+      ps.ev1(x, me, p)
 
-def ps.evs(es: List<&2, Ev>, pb: Ps) -> Ps:
+# the events published, by the command of the client of id me (0 for the
+# server's own: the sweep, the eviction)
+def ps.evs(es: List<&2, Ev>, +me: Nat, pb: Ps) -> Ps:
   match es:
     case Nil{}:
       pb
     case Con{e, rest}:
-      ps.evs(rest, ps.ev1(e, pb))
+      ps.evs(rest, me, ps.ev1(e, me, pb))
 
 # whether keyspace events are to be sent: a class of them is on (the
 # bits past theirs say other things, and no event goes out for them:
 # mem.bits)
 def ps.loud(+pb: Ps) -> Bool:
   match pb:
-    case Ps{reg, +ev, px, cs}:
+    case Ps{reg, +ev, px, cs, own}:
       U32.is_ne(U32.and(ev, 67108863), 0)
     case PsOf{+p}:
       ps.loud(p)
@@ -2443,16 +2549,16 @@ def ek.keep(changed: Bool, es: List<&2, Ek>) -> List<&2, Ek>:
 
 # the events of a command (changed: whether its effects es are some),
 # with the databases before it (pre) and after it (post)
-def ps.cmd.if(on: Bool, +c: R.Cmd, +es: List<&2, A.Ent>, +pre: Maybe<&2, R.Ds>, +post: R.Ds, pb: Ps) -> Ps:
+def ps.cmd.if(on: Bool, +c: R.Cmd, +es: List<&2, A.Ent>, +pre: Maybe<&2, R.Ds>, +post: R.Ds, +me: Nat, pb: Ps) -> Ps:
   match on pre:
     case True{} Some{+d0}:
-      ps.evs(List.reverse(&2, Ev, ek.evs.all(ek.keep(ents.some(es), ek.of(c, R.ds.index(d0), d0, es)), d0, post, Nil{})), pb)
+      ps.evs(List.reverse(&2, Ev, ek.evs.all(ek.keep(ents.some(es), ek.of(c, R.ds.index(d0), d0, es)), d0, post, Nil{})), me, pb)
     case _ _:
       pb
 
-def ps.cmd(+c: R.Cmd, +es: List<&2, A.Ent>, +pre: Maybe<&2, R.Ds>, +post: R.Ds, pb: Ps) -> Ps:
+def ps.cmd(+c: R.Cmd, +es: List<&2, A.Ent>, +pre: Maybe<&2, R.Ds>, +post: R.Ds, +me: Nat, pb: Ps) -> Ps:
   +p = pb
-  ps.cmd.if(ps.loud(p), c, es, pre, post, p)
+  ps.cmd.if(ps.loud(p), c, es, pre, post, me, p)
 
 def ev.expired(+i: Nat, ks: List<&2, String>) -> List<&2, Ev>:
   match ks:
@@ -2475,7 +2581,7 @@ def ev.swept(es: List<&2, A.Ent>, acc: List<&2, Ev>) -> List<&2, Ev>:
 def ps.swept.if(on: Bool, +es: List<&2, A.Ent>, pb: Ps) -> Ps:
   match on:
     case True{}:
-      ps.evs(ev.swept(es, Nil{}), pb)
+      ps.evs(ev.swept(es, Nil{}), 0n, pb)
     case False{}:
       pb
 
@@ -2501,11 +2607,22 @@ type LRun is Data:
 type Grp is Data:
   Grp{outs: List<&2, Sigma<&2, &2, Chan(Ans), _ => Ans>>, es: List<&2, A.Ent>, srv: S.Srv, ds: R.Ds, ws: Waits, up: List<&2, Up>, tx: Tx, pb: Ps}
 
-def bg.done(d: S.Logged, p: Pre, rs: List<&2, R.Reply>, es: List<&2, A.Ent>, ws: Waits, up: List<&2, Up>, tx: Tx, pb: Ps) -> LRun:
+# a command's replies, after it changed its client's protocol (HELLO,
+# RESET) or not: a change is a switch (R.RSw) of its replies, the
+# protocol of those after them in the batch (resp.bend, encode_as)
+def bg.sw(ch: Bool, +r3: Bool, rs1: List<&2, R.Reply>) -> List<&2, R.Reply>:
+  match ch:
+    case True{}:
+      [R.RSw{r3, rs1}]
+    case False{}:
+      rs1
+
+def bg.done(+r0: Bool, d: S.Logged, p: Pre, rs: List<&2, R.Reply>, es: List<&2, A.Ent>, ws: Waits, up: List<&2, Up>, tx: Tx, pb: Ps) -> LRun:
   match d p:
-    case S.Logged{+rs1, e, conn, srv, ds} Pre{+code, xs}:
+    case S.Logged{+rs1, e, +conn, srv, ds} Pre{+code, xs}:
       +ys = gen.errs(xs, rs1, code)
-      LRun{List.reverse.go(&2, R.Reply, rs1, rs), A.ents.onto(e, es), conn, gen.count(srv, code, ys), ds, ws, up, tx, pb}
+      +r3 = S.conn.r3(conn)
+      LRun{List.reverse.go(&2, R.Reply, bg.sw(Bool.xor(r0, r3), r3, rs1), rs), A.ents.onto(e, es), conn, gen.count(srv, code, ys), ds, ws, up, tx, pb}
 
 # A call that runs while its client's replies are held back has its reply
 # counted as Redis has it. A command of the database runs with them on,
@@ -2525,7 +2642,7 @@ def bg.held.k(+k: S.Role, +c: R.Cmd, +code: Nat, rs: List<&2, R.Reply>, es: List
     case S.KSess{+o}:
       +d = ds
       +p = gen.pre.own(o, code, conn, srv, d)
-      bg.done(S.run_log(conn, srv, B.Mixed{[c], Nil{}}, d), p, rs, es, ws, up, tx, pb)
+      bg.done(S.conn.r3(conn), S.run_log(conn, srv, B.Mixed{[c], Nil{}}, d), p, rs, es, ws, up, tx, pb)
     case _:
       bg.held(S.run_log(S.conn.on(conn), srv, B.Mixed{[c], Nil{}}, ds), S.next_conn(False{}, c, conn, srv), code, rs, es, ws, up, tx, pb)
 
@@ -2534,16 +2651,20 @@ def bg.run.go(held: Bool, +ok: Bool, +k: S.Role, +c: R.Cmd, +code: Nat, rs: List
     case True{}:
       bg.held.k(k, c, code, rs, es, conn, srv, ds, ws, up, tx, pb)
     case False{}:
-      bg.done(S.run_log(conn, srv, B.Mixed{[c], Nil{}}, ds), gen.pre(ok, c, code), rs, es, ws, up, tx, pb)
+      bg.done(S.conn.r3(conn), S.run_log(conn, srv, B.Mixed{[c], Nil{}}, ds), gen.pre(ok, c, code), rs, es, ws, up, tx, pb)
 
 # a command run while some client has a transaction or watches keys, or
 # keyspace events are to be sent: its effects touch the keys watched
 # (Touches), and its events are published (Keyspace notifications), with
 # the databases before it and after
+def bg.touched.of(rs: List<&2, R.Reply>, es: List<&2, A.Ent>, conn: S.Conn, srv: S.Srv, ds: R.Ds, ws: Waits, up: List<&2, Up>, tx: Tx, p: List<&2, R.Reply> & Ps) -> LRun:
+  (own, pb) = p
+  LRun{own.under(own, rs), es, conn, srv, ds, ws, up, tx, pb}
+
 def bg.touched(+pre: Maybe<&2, R.Ds>, +c: R.Cmd, es: List<&2, A.Ent>, g: LRun) -> LRun:
   match g:
-    case LRun{rs, +e1, conn, srv, +ds, ws, up, tx, pb}:
-      LRun{rs, List.append(&2, A.Ent, e1, es), conn, srv, ds, ws, up, touch.ents(tx, e1, pre, ds), ps.cmd(c, e1, pre, ds, pb)}
+    case LRun{rs, +e1, +conn, srv, +ds, ws, up, tx, pb}:
+      bg.touched.of(rs, List.append(&2, A.Ent, e1, es), conn, srv, ds, ws, up, touch.ents(tx, e1, pre, ds), ps.own.take(ps.cmd(c, e1, pre, ds, S.conn.id(conn), pb)))
     case LHeld{h}:
       LHeld{h}
 
@@ -2630,7 +2751,7 @@ def bg.errs(srv: S.Srv, +code: Nat, +r: R.Reply) -> S.Srv:
 # a pop's events too (Keyspace notifications), with the databases
 # before it (pre) and its command (pc)
 def bg.popped.put(+e: List<&2, A.Eff>, +ds: R.Ds, rs: List<&2, R.Reply>, es: List<&2, A.Ent>, conn: S.Conn, srv: S.Srv, ws: Waits, up: List<&2, Up>, tx: Tx, pb: Ps, +pc: R.Cmd, +pre: R.Ds) -> LRun:
-  LRun{rs, A.ents.onto(e, es), conn, srv, ds, ws, up, touch.effs(tx, e, None{}, ds), ps.cmd(pc, A.ents.of(e), Some{pre}, ds, pb)}
+  LRun{rs, A.ents.onto(e, es), conn, srv, ds, ws, up, touch.effs(tx, e, None{}, ds), ps.cmd(pc, A.ents.of(e), Some{pre}, ds, 0n, pb)}
 
 def bg.popped(w: Waits, r: R.Reply & (List<&2, A.Eff> & R.Ds), rs: List<&2, R.Reply>, es: List<&2, A.Ent>, conn: S.Conn, srv: S.Srv, ws: Waits, up: List<&2, Up>, tx: Tx, pb: Ps, +pc: R.Cmd, +pre: R.Ds) -> LRun:
   match w:
@@ -3498,8 +3619,8 @@ def mute.same(+a: S.Mute, +b: S.Mute) -> Bool:
 
 def conn.mode.set(+m: S.Mute, c: S.Conn) -> S.Conn:
   match c:
-    case S.Conn{id, auth, name, mode, quit, db}:
-      S.Conn{id, auth, name, m, quit, db}
+    case S.Conn{id, auth, name, mode, quit, db, r3}:
+      S.Conn{id, auth, name, m, quit, db, r3}
 
 # a transaction's entries (newest first, each its own) put before es as
 # one entry of them all when they are two or more (A.tx.wrap: the
@@ -3535,19 +3656,25 @@ def bg.pushed(+code: Nat, p: List<&2, R.Reply> & Ps, rs: List<&2, R.Reply>, es: 
 
 def bg.subs(+id: Nat, +back: Chan(Ans), +on: Bool, +kind: Nat, names: List<&2, String>, +code: Nat, g: LRun) -> LRun:
   match g:
-    case LRun{rs, es, conn, srv, ds, ws, up, tx, pb}:
-      bg.pushed(code, ps.sub(id, back, on, kind, names, pb), rs, es, conn, srv, ds, ws, up, tx)
+    case LRun{rs, es, +conn, srv, ds, ws, up, tx, pb}:
+      bg.pushed(code, ps.sub(id, back, S.conn.r3(conn), on, kind, names, pb), rs, es, conn, srv, ds, ws, up, tx)
     case LHeld{h}:
       LHeld{h}
 
+def bg.published.of(+code: Nat, +k: Nat, q: List<&2, R.Reply> & Ps, rs: List<&2, R.Reply>, es: List<&2, A.Ent>, conn: S.Conn, srv: S.Srv, ds: R.Ds, ws: Waits, up: List<&2, Up>, tx: Tx) -> LRun:
+  (own, pb) = q
+  bg.say(R.RInt{R.IPos{k}}, code, LRun{List.append(&2, R.Reply, own, rs), es, conn, srv, ds, ws, up, tx, pb})
+
+# PUBLISH's reply after the pushes to its own client, if it has a
+# subscription to the channel (RESP3)
 def bg.published(+code: Nat, p: Nat & Ps, rs: List<&2, R.Reply>, es: List<&2, A.Ent>, conn: S.Conn, srv: S.Srv, ds: R.Ds, ws: Waits, up: List<&2, Up>, tx: Tx) -> LRun:
   (k, pb) = p
-  bg.say(R.RInt{R.IPos{k}}, code, LRun{rs, es, conn, srv, ds, ws, up, tx, pb})
+  bg.published.of(code, k, ps.own.take(pb), rs, es, conn, srv, ds, ws, up, tx)
 
 def bg.publish(+shard: Bool, +c: String, +m: String, +code: Nat, g: LRun) -> LRun:
   match g:
-    case LRun{rs, es, conn, srv, ds, ws, up, tx, pb}:
-      bg.published(code, ps.publish(shard, c, m, pb), rs, es, conn, srv, ds, ws, up, tx)
+    case LRun{rs, es, +conn, srv, ds, ws, up, tx, pb}:
+      bg.published(code, ps.publish(shard, c, m, S.conn.id(conn), pb), rs, es, conn, srv, ds, ws, up, tx)
     case LHeld{h}:
       LHeld{h}
 
@@ -3638,7 +3765,7 @@ def cl.multi(+x: TxIs) -> Maybe<&2, Nat>:
 
 def ps.mine(+id: Nat, +pb: Ps) -> Maybe<&2, Mine>:
   match pb:
-    case Ps{+reg, ev, px, cs}:
+    case Ps{+reg, ev, px, cs, own}:
       reg.mine(id, reg)
     case PsOf{+p}:
       ps.mine(id, p)
@@ -3671,12 +3798,12 @@ def cl.line.of(m: Mine, +mo: Bool, +sub: Bool, +x: TxIs, +b: Bool, +wa: Nat, c: 
   match m:
     case Mine{+ch, +pa, +sh}:
       match c:
-        case Cl{id, back, fd, addr, laddr, +since, name, db, +noev}:
+        case Cl{id, back, fd, addr, laddr, +since, name, db, +noev, r3}:
           match w:
             case Them{}:
-              R.client.line(R.ClLine{id, addr, laddr, U32.to_nat(fd), name, cl.secs(now, since), cl.secs(now, at), cl.flags(mo, sub, x, b, noev), db, List.length(&2, String, ch), List.length(&2, String, pa), List.length(&2, String, sh), cl.multi(x), 0n, wa, cl.cmd.of(word)})
+              R.client.line(R.ClLine{id, addr, laddr, U32.to_nat(fd), name, cl.secs(now, since), cl.secs(now, at), cl.flags(mo, sub, x, b, noev), db, List.length(&2, String, ch), List.length(&2, String, pa), List.length(&2, String, sh), cl.multi(x), 0n, wa, cl.cmd.of(word), r3})
             case Me{i, +cn, cmd, qbuf, argv, ex}:
-              R.client.line(R.ClLine{id, addr, laddr, U32.to_nat(fd), S.conn.name(cn), cl.secs(now, since), 0n, cl.flags(mo, sub, x, b, noev), S.conn.db(cn), List.length(&2, String, ch), List.length(&2, String, pa), List.length(&2, String, sh), cl.multi(x), qbuf, argv, cmd})
+              R.client.line(R.ClLine{id, addr, laddr, U32.to_nat(fd), S.conn.name(cn), cl.secs(now, since), 0n, cl.flags(mo, sub, x, b, noev), S.conn.db(cn), List.length(&2, String, ch), List.length(&2, String, pa), List.length(&2, String, sh), cl.multi(x), qbuf, argv, cmd, S.conn.r3(cn)})
 
 def cl.line.mk(m: Mine, +mo: Bool, +sub: Bool, +x: TxIs, +b: Bool, +wa: Nat, c: Cl, +now: Nat, mk: U32 & Nat, w: Who) -> String:
   (word, at) = mk
@@ -3702,12 +3829,12 @@ def cl.tx(+w: Who, +id: Nat, +tx: Tx) -> TxIs:
 # client c's line, ended by a newline
 def cl.line(c: Cl, +now: Nat, +w: Who, +ws: Waits, +tx: Tx, +pb: Ps) -> String:
   match c:
-    case Cl{+id, +back, fd, addr, laddr, since, name, db, noev}:
-      cl.line.mk(mine.or(ps.mine(id, pb)), ps.mon.is(id, pb), ps.has(id, pb), cl.tx(w, id, tx), waits.has(id, ws), waits.argv(id, ws), Cl{id, back, fd, addr, laddr, since, name, db, noev}, now, Chan.marked(Ans, back), w) ++ "\n"
+    case Cl{+id, +back, fd, addr, laddr, since, name, db, noev, r3}:
+      cl.line.mk(mine.or(ps.mine(id, pb)), ps.mon.is(id, pb), ps.has(id, pb), cl.tx(w, id, tx), waits.has(id, ws), waits.argv(id, ws), Cl{id, back, fd, addr, laddr, since, name, db, noev, r3}, now, Chan.marked(Ans, back), w) ++ "\n"
 
 def cl.id(+c: Cl) -> Nat:
   match c:
-    case Cl{+id, back, fd, addr, laddr, since, name, db, noev}:
+    case Cl{+id, back, fd, addr, laddr, since, name, db, noev, r3}:
       id
 
 # the registry's clients, in the order of their ids (as Redis lists them
@@ -3812,21 +3939,22 @@ def cl.ids(ids: List<&2, Nat>, +now: Nat, +me: Who, +ws: Waits, +tx: Tx, +pb: Ps
     case Con{+id, rest}:
       cl.ids(rest, now, me, ws, tx, pb, acc ++ cl.line.or(cls.get(id, ps.cls(pb)), now, cl.who(me, id), ws, tx, pb))
 
-# CLIENT LIST: all clients, of a type, or of ids
+# CLIENT LIST: all clients, of a type, or of ids (a verbatim text, as
+# Redis answers it)
 def cl.list(+ty: Nat, ids: Maybe<&2, List<&2, Nat>>, +now: Nat, +me: Who, +ws: Waits, +tx: Tx, +pb: Ps) -> R.Reply:
   match ids:
     case Some{xs}:
-      R.RBulk{cl.ids(xs, now, me, ws, tx, pb, "")}
+      R.RVerb{cl.ids(xs, now, me, ws, tx, pb, "")}
     case None{}:
-      R.RBulk{cl.lines(cls.all(ps.cls(pb)), ty, now, me, ws, tx, pb, "")}
+      R.RVerb{cl.lines(cls.all(ps.cls(pb)), ty, now, me, ws, tx, pb, "")}
 
 # CLIENT INFO: the client's own line
 def cl.info(+now: Nat, +me: Who, +ws: Waits, +tx: Tx, +pb: Ps) -> R.Reply:
   match me:
     case Me{+id, cn, cmd, qbuf, argv, ex}:
-      R.RBulk{cl.ids([id], now, me, ws, tx, pb, "")}
+      R.RVerb{cl.ids([id], now, me, ws, tx, pb, "")}
     case Them{}:
-      R.RBulk{""}
+      R.RVerb{""}
 
 def opt.is(m: Maybe<&2, String>, +s: String) -> Bool:
   match m:
@@ -3846,12 +3974,12 @@ def id.is(m: Maybe<&2, Nat>, +n: Nat) -> Bool:
 # that kills)
 def cl.picked(f: R.Kill, c: Cl, +me: Nat, +pb: Ps) -> Bool:
   match f c:
-    case R.Kill{a, l, i, +ty, +skip} Cl{+id, back, fd, +addr, +laddr, since, name, db, noev}:
+    case R.Kill{a, l, i, +ty, +skip} Cl{+id, back, fd, +addr, +laddr, since, name, db, noev, r3}:
       Bool.and(Bool.and(Bool.and(opt.is(a, addr), opt.is(l, laddr)), Bool.and(id.is(i, id), cl.typed(ty, id, pb))), Bool.not(Bool.and(skip, Nat.is_eq(id, me))))
 
 def cl.fd(+c: Cl) -> U32:
   match c:
-    case Cl{id, back, +fd, addr, laddr, since, name, db, noev}:
+    case Cl{id, back, +fd, addr, laddr, since, name, db, noev, r3}:
       fd
 
 # the clients a filter picks
@@ -3878,8 +4006,8 @@ def bg.kill1(+v: Nat, +fd: U32, g: LRun) -> LRun:
 # out (CLIENT_CLOSE_AFTER_REPLY), the rest of its batch not run
 def bg.self.kill(g: LRun) -> LRun:
   match g:
-    case LRun{rs, es, S.Conn{id, auth, name, mode, quit, db}, srv, ds, ws, up, tx, pb}:
-      LRun{rs, es, S.Conn{id, auth, name, mode, True{}, db}, srv, ds, ws, up, tx, pb}
+    case LRun{rs, es, S.Conn{id, auth, name, mode, quit, db, r3}, srv, ds, ws, up, tx, pb}:
+      LRun{rs, es, S.Conn{id, auth, name, mode, True{}, db, r3}, srv, ds, ws, up, tx, pb}
     case LHeld{h}:
       LHeld{h}
 
@@ -3932,8 +4060,8 @@ def bg.noev(+id: Nat, on: Bool, +code: Nat, g: LRun) -> LRun:
     case LHeld{h}:
       LHeld{h}
 
-# the client's name and database written to the registry, after a
-# command that may set them (CLIENT SETNAME, HELLO, SELECT, RESET)
+# the client's name, database and protocol written to the registry,
+# after a command that may set them (CLIENT SETNAME, HELLO, SELECT, RESET)
 def bg.conned(g: LRun) -> LRun:
   match g:
     case LRun{rs, es, +conn, srv, ds, ws, up, tx, pb}:
@@ -3999,8 +4127,8 @@ def bg.x.ping(on: Bool, +m: String, +c: R.Cmd, +code: Nat, g: LRun) -> LRun:
 
 def bg.x.pong(+id: Nat, +m: String, +c: R.Cmd, +code: Nat, g: LRun) -> LRun:
   match g:
-    case LRun{rs, es, conn, srv, ds, ws, up, tx, +pb}:
-      bg.x.ping(ps.has(id, pb), m, c, code, LRun{rs, es, conn, srv, ds, ws, up, tx, pb})
+    case LRun{rs, es, +conn, srv, ds, ws, up, tx, +pb}:
+      bg.x.ping(Bool.and(ps.has(id, pb), Bool.not(S.conn.r3(conn))), m, c, code, LRun{rs, es, conn, srv, ds, ws, up, tx, pb})
     case LHeld{h}:
       LHeld{h}
 
@@ -4166,7 +4294,7 @@ def bg.go(+id: Nat, +back: Chan(Ans), +inb: Nat, cmds: List<&2, R.Cmd>, codes: L
     case Con{+c, +rest} Con{+k, +more} Fed{LRun{rs, es, +conn, +srv, +ds, ws, up, +tx, +pb}, +av}:
       +q = S.conn.quit(conn)
       +may = S.may(S.kind(c), conn, srv)
-      +sh = sh.of(q, may, tx.multi(id, tx), ps.has(id, pb), ps.mon.is(id, pb), ps.oom.is(pb), c, k, ds)
+      +sh = sh.of(q, may, tx.multi(id, tx), Bool.and(ps.has(id, pb), Bool.not(S.conn.r3(conn))), ps.mon.is(id, pb), ps.oom.is(pb), c, k, ds)
       +ar = av.rest(av)
       bg.go(id, back, inb, rest, more, bg.feed(mon.seen(q, may, sh, k), id, k, S.conn.mode(conn), av, ar, bg.cmd(id, back, inb, sh, c, k, rest, more, av, ar, LRun{rs, es, conn, srv, ds, ws, up, tx, pb})))
     case _ _ Fed{g0, av}:
@@ -4174,12 +4302,12 @@ def bg.go(+id: Nat, +back: Chan(Ans), +inb: Nat, cmds: List<&2, R.Cmd>, codes: L
 
 # the answer to a batch whose client waits: the replies before its
 # blocking command, encoded (none when there are none)
-def hold_of(rs: List<&2, R.Reply>) -> Ans:
+def hold_of(rs: List<&2, R.Reply>, +cn: S.Conn) -> Ans:
   match rs:
     case Nil{}:
       Hold{None{}}
-    case Con{r, rest}:
-      Hold{Some{P.encode_all(r <> rest)}}
+    case Con{+r, +rest}:
+      Hold{Some{P.encode_as(sw.first(r <> rest, S.conn.r3(cn)), r <> rest)}}
 
 # a batch run the general way, put in the group: the pushes it made,
 # then its answer (AnsSub when its client has a subscription after it),
@@ -4201,11 +4329,11 @@ def bg.put(+back: Chan(Ans), +inb: Nat, g: LRun, outs: List<&2, Sigma<&2, &2, Ch
   match g:
     case LRun{rs, es, +conn, srv, ds, ws, up, tx, pb}:
       +p = ps.quit(S.conn.quit(conn), S.conn.id(conn), ps.mon.end(conn, pb))
-      +a = ans.sub(Bool.or(ps.has(S.conn.id(conn), p), ps.mon.is(S.conn.id(conn), p)), ans_of(List.reverse(&2, R.Reply, rs), conn))
+      +a = ans.sub(Bool.or(ps.has(S.conn.id(conn), p), ps.mon.is(S.conn.id(conn), p)), ans_of.gen(List.reverse(&2, R.Reply, rs), conn))
       +outb = ans.len(a)
       bg.out(back, a, ps.flush(p, outs), es, S.srv.ran(srv, 0n, 0n, Nil{}, inb, outb), ds, ws, up, tx)
-    case LHeld{LRun{rs, es, conn, srv, ds, ws, up, tx, pb}}:
-      +a = hold_of(List.reverse(&2, R.Reply, rs))
+    case LHeld{LRun{rs, es, +conn, srv, ds, ws, up, tx, pb}}:
+      +a = hold_of(List.reverse(&2, R.Reply, rs), conn)
       +outb = ans.len(a)
       bg.out(back, a, ps.flush(pb, outs), es, S.srv.ran(srv, 0n, 0n, Nil{}, inb, outb), ds, ws, up, tx)
     case LHeld{LHeld{h}}:
@@ -4860,7 +4988,7 @@ def ev.evicted(es: List<&2, A.Ent>, acc: List<&2, Ev>) -> List<&2, Ev>:
 def ps.evicted.if(on: Bool, +es: List<&2, A.Ent>, pb: Ps) -> Ps:
   match on:
     case True{}:
-      ps.evs(ev.evicted(es, Nil{}), pb)
+      ps.evs(ev.evicted(es, Nil{}), 0n, pb)
     case False{}:
       pb
 
@@ -4903,7 +5031,7 @@ def mem.ok(was: Bool, srv: S.Srv, ds: R.Ds, ws: Waits, tx: Tx, pb: Ps) -> Grp:
 
 def ps.mem.was(+pb: Ps) -> Bool:
   match pb:
-    case Ps{reg, +ev, px, cs}:
+    case Ps{reg, +ev, px, cs, own}:
       U32.is_ne(U32.and(ev, 603979776), 0)
     case PsOf{+p}:
       ps.mem.was(p)
@@ -5323,7 +5451,7 @@ def group_req(+log: Bool, q: Req, g: Grp) -> Grp:
       Grp{(back, Bye{}) <> outs, es, srv, ds, ws, up, tx.drop(id, tx), ps.left(id, ps.drop(id, pb))}
     case Join{+id, +back, fd, addr, laddr} Grp{outs, es, +srv, +ds, ws, up, tx, pb}:
       +now = R.ds.now(ds)
-      Grp{(back, Ans{None{}, S.conn_join(id, srv)}) <> outs, es, srv, ds, ws, up, tx, ps.join(id, Cl{id, Chan.mark(Ans, back, 0, now), fd, addr, laddr, now, "", 0n, False{}}, pb)}
+      Grp{(back, Ans{None{}, S.conn_join(id, srv)}) <> outs, es, srv, ds, ws, up, tx, ps.join(id, Cl{id, Chan.mark(Ans, back, 0, now), fd, addr, laddr, now, "", 0n, False{}, False{}}, pb)}
 
 # the clock (IO.clock: s and us since 1970) in ms
 def clock.ms(t: U32 & U32) -> Nat:

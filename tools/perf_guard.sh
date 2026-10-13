@@ -7,9 +7,11 @@
 # new call site, for one, can change how the compiler passes an argument
 # to a hot function and add reference counting to every request. The
 # server sends from its loop (no writer thread, whose spinning would add
-# noise). The baseline holds for one toolchain (clang
-# 19, the patches of bend-patches/); after a deliberate change, rewrite
-# it with UPDATE=1.
+# noise). The baseline is CI's count (the perfcheck job: Ubuntu 24.04's
+# clang 19, the patches of bend-patches/), where one build counts up to
+# 0.7% apart from one run to the next, and a local count about as far;
+# after a deliberate change, rewrite it from the job's output (or with
+# UPDATE=1).
 set -e
 here=$(cd "$(dirname "$0")" && pwd)
 SERVER=${1:-build/bendkv}

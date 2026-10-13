@@ -1198,14 +1198,16 @@ TYPE.
   over three code layouts each: GET and SET at 1.09 and 1.04 of the code before at
   pipeline 16, 1.01 and 1.01 without a pipeline, all within the noise.
 - **Tests.** `tests/session_test.py`: 34 cases byte for byte against Redis 7.0.15 with one
-  database, client ids masked. Two differences stay out: HELLO 3 (BendKV speaks RESP2
-  alone and refuses it, so clients fall back), and a QUIT while CLIENT REPLY is off, after
+  database, client ids masked. Two differences stay out: HELLO 3 (BendKV spoke RESP2
+  alone and refused it, so clients fell back; it speaks RESP3 since 3zx, which has a test
+  of its own), and a QUIT while CLIENT REPLY is off, after
   which Redis keeps the connection open and reads nothing more from it (its close waits
   for a reply that never goes out), where BendKV closes it.
 - **Redis's suite** now runs on its unmodified harness (which calls FUNCTION FLUSH):
   `unit/protocol` 14, `unit/type/string` 8 (stops at EXPIRE), `unit/type/incr` 9 (at
   RPUSH), `unit/keyspace` 11 (was 7; at RENAME).
-- **Not like Redis yet.** HELLO 3; SELECT of any database but 0; for a client that must
+- **Not like Redis yet.** HELLO 3 (as Redis now: section 3zx); SELECT of any database
+  but 0; for a client that must
   log in, the errors BendKV's parser finds (a syntax error, a number that is not one)
   come before NOAUTH, where Redis checks only the arity and the name first (as Redis now:
   section 3zu); CLIENT HELP and FUNCTION HELP list only what BendKV has; CLIENT LIST,
@@ -3288,7 +3290,8 @@ when there are none. A message goes to the subscribers of its channel (`message`
 `smessage` for a shard channel), then to those of each pattern it matches (`pmessage`,
 Redis's glob), and PUBLISH answers how many got it. A client with a subscription runs
 (P|S)SUBSCRIBE, (P|S)UNSUBSCRIBE, PING (answered `[pong, its argument]`), QUIT and
-RESET alone, as a client of RESP2 does in Redis: any other command is refused, once the
+RESET alone, as a client of RESP2 does in Redis (one of RESP3 runs any command, since
+3zx): any other command is refused, once the
 checks of its name and of the number of its arguments pass (an unknown command, or GET
 with no key, answers its own error), with Redis's `Can't execute 'get': only
 (P|S)SUBSCRIBE / (P|S)UNSUBSCRIBE / PING / QUIT / RESET are allowed in this context`,
@@ -3374,7 +3377,8 @@ cluster, which the suite skips against a server it did not start.
 **Where BendKV differs.** UNSUBSCRIBE and PUNSUBSCRIBE of all go in the order the
 client subscribed, patterns are matched in the order they came, and PUBSUB CHANNELS
 lists in the order of the trie, where Redis goes in the order of its hash tables (the
-tests compare these sorted). There is no RESP3, so no push type. A slow subscriber's
+tests compare these sorted). There was no RESP3, so no push type (pushes since 3zx). A
+slow subscriber's
 messages wait in its channel without the limit of `client-output-buffer-limit pubsub`.
 Keys missed (`m`), evicted (`e`, sent since 3zw) and the events of streams are not sent; a key that a
 read finds with its time passed sends `expired` when the sweep deletes it, where Redis
@@ -3478,8 +3482,8 @@ actor's, not the client's) are 0, and so is qbuf of a client other than the one 
 (a client that waits with commands after the blocking one holds them as commands, where
 Redis's query buffer holds their bytes). Idle time counts from the client's last batch,
 where Redis also counts a reply written (to a subscriber that gets messages, to a client
-that waited and was served). user is `default`, redir -1 and resp 2 (no ACL, no tracking,
-no RESP3), and events `r`. There is no CLIENT KILL MAXAGE (Redis 7.4). A client killed is
+that waited and was served). user is `default`, redir -1 and resp 2 (no ACL, no tracking;
+resp 3 for a client of RESP3 since 3zx), and events `r`. There is no CLIENT KILL MAXAGE (Redis 7.4). A client killed is
 cut off at the end of the actor's group, before any of the group's answers goes out,
 where Redis frees it at once.
 
@@ -3572,8 +3576,8 @@ clearing a monitor's state.
 time), in ms: its microseconds end in 000, where Redis reads its clock for each call.
 The calls EXEC runs for a monitor put their lines after EXEC's array, where Redis writes
 them between the array's replies (and a client reading the array then misreads it).
-HELLO 3 is refused (BendKV speaks RESP2 alone), its user and password redacted all the
-same, as Redis redacts them for a version it takes.
+HELLO 3 was refused (BendKV spoke RESP2 alone; it takes it since 3zx), its user and
+password redacted all the same, as Redis redacts them for a version it takes.
 
 ## 3zu. Authentication as Redis decides it
 
@@ -3932,6 +3936,103 @@ Redis samples its table of keys with a time; `volatile-random` takes the first k
 time from a random bucket on, which is not quite uniform. An eviction writes DEL to the
 append-only file even with `lazyfree-lazy-eviction` (Redis writes UNLINK; both replay to
 the same). Evictions are about ten times slower than Redis's.
+
+## 3zx. RESP3
+
+**What there is.** RESP3 as Redis 7.0.15 speaks it. `HELLO 3` switches a connection to
+RESP3, `HELLO 2` back, `HELLO` alone answers in the protocol there is, and `RESET` goes
+back to RESP2; a HELLO that fails (`NOPROTO`, a wrong password, a bad name or option,
+`NOAUTH`) leaves the protocol as it was, as Redis's `helloCommand` sets it last. go-redis
+v9 and Lettuce 6 send `HELLO 3` as they connect and speak RESP3 when the server takes it;
+redis-py and node-redis do on request. A RESP3 client gets what Redis gives it: `_` for
+every null (a null bulk and a null array alike), doubles after a comma (ZSCORE, ZMSCORE,
+ZINCRBY, ZADD INCR, and the scores of ZRANGE and its family, of ZUNION, ZINTER and ZDIFF,
+of ZPOPMIN, ZPOPMAX, BZPOPMIN, BZPOPMAX, ZMPOP, BZMPOP and ZRANDMEMBER; not ZSCAN's, nor
+INCRBYFLOAT's and HINCRBYFLOAT's, which Redis answers as bulks), maps (HGETALL, CONFIG
+GET, HELLO, LCS IDX, CLIENT TRACKINGINFO, COMMAND DOCS), sets (SMEMBERS, SINTER, SUNION,
+SDIFF, SPOP with a count; COMMAND INFO's flags, categories, tips and key specs, COMMAND
+GETKEYSANDFLAGS's flags), pairs as arrays of two where RESP2 has them flat (members and
+scores WITHSCORES, fields and values WITHVALUES, ZPOPMIN and ZPOPMAX with a count),
+verbatim texts (INFO, CLIENT LIST, CLIENT INFO, whose lines say `resp=3`) and pushes:
+the replies of SUBSCRIBE and its kin, and messages. A RESP3 client with a subscription
+runs any command, and its PING answers as any PING; one of RESP2 runs what it ran.
+
+**Typed replies.** Redis types a reply where it makes it (`addReplyMapLen`,
+`addReplyDouble`, ...) and writes it in the client's protocol. So does BendKV: `R.Reply`
+has eight constructors more, after the eight it had (so that the others keep their tags,
+and GET's encoder its code): `RDbl` (a double as its text), `RMap`, `RSet`, `RPairs` (of
+`RPair`s), `RVerb`, `RPush`, and `RSw` (below). `exec`, the session and the actor build
+them where Redis calls its typed functions; the RESP2 encoder writes `RDbl` and `RVerb`
+as bulks and the rest as arrays, the items of pairs flat, so that every RESP2 reply's
+bytes are what they were (every RESP2 test passes as before), and a second encoder writes
+RESP3. A pair and a switch hold lists, not replies: Bend checks that a recursion
+decreases, and the encoder walks a list it finds in a reply as it walks an array's items,
+where a reply put in a list of its own would not decrease. Nor may two definitions call
+each other (a definition is checked before the ones after it), so neither encoder calls
+the other: a batch's replies are cut at its switches, each part written by the encoder of
+its protocol. COMMAND's table is written by `tools/gen_commands.py` from what Redis
+answers in RESP3, its maps and sets kept; the generator checks that, read as RESP2 reads
+them, they are what Redis answers in RESP2.
+
+**The connection's protocol.** `S.Conn` has a seventh field, `r3`. The laws about
+sessions hold for both protocols (it changes how replies are written, not which replies a
+batch gives): their proofs take the field as they take the selected database, 398
+patterns and twelve lemmas of `PROOF.bend` written again by a script, and they check as
+they did. The fast way runs as it runs, its replies written by the encoder of the
+client's protocol. A command that changes the protocol (HELLO, RESET) has its replies
+wrapped in a switch (`RSw`) by the actor, so that they and the replies after them in the
+batch are written in the new protocol, as Redis writes HELLO's reply in the protocol it
+switched to; the switch is put only where the protocol changes, so a batch's first
+protocol is the other one of its first switch's, or the connection's when it has none.
+A switch inside EXEC's array holds for its reply alone (below).
+
+**Pushes.** A message is encoded once, as RESP2's array; a subscriber in RESP3 gets it
+with `>` for its first byte, and each subscriber's protocol is kept with its subscription
+(a client with a subscription that switches with HELLO, which only a RESP3 client may
+run, has its subscriptions made again in the new one). A RESP3 client that publishes to
+its own channel, or hears its own keyspace events, gets them among its replies before
+its command's reply, as Redis writes them to its buffer while the command runs: the
+actor keeps those pushes apart from the others (`own`) and puts them there; the pushes
+to other clients go out before the batch's answer, as they did.
+
+**Its cost.** A RESP2 client's replies are the bytes they were, written by the encoder
+they had: GET, SET and INCR take 3,337, 4,259 and 4,546 instructions (3,328, 4,252 and
+4,514 before, counted in turn). A RESP3 client's take the same: with one client that
+pipelines 20,000 requests, GET 3,550 against RESP2's 3,548, SET 4,483 against 4,471, INCR
+4,777 against 4,755. A batch with HELLO runs the general way, as any batch with a command
+of the connection does, about 150,000 instructions for redis-benchmark's HELLO 3 and the
+16 requests it sends with it; a client pays that once, when it switches (section 49 of
+PERFORMANCE.md).
+
+**Tests.** `tests/resp3_test.py`: HELLO and its errors, the protocol switched in the
+middle of a pipeline (with CLIENT REPLY OFF too), nulls and doubles, maps, sets and pairs,
+the server's replies (CONFIG GET, CLIENT TRACKINGINFO and INFO, COMMAND INFO and DOCS),
+EXEC's replies and an EXEC that WATCH aborts, blocking commands that time out and that
+are served, Pub/Sub's pushes with a RESP3 and a RESP2 subscriber, a subscriber that
+switches its protocol, keyspace events of a client's own commands, and pipelines of the
+fast way, each scenario byte for byte against Redis (but for a client's id, and CLIENT
+INFO's line, compared by its kind and `resp=`). `RESP=3` makes every connection of the
+differential tests speak RESP3, and `make test` runs them again so: TTL, numbers,
+BITFIELD, hashes, lists, sets, sorted sets and the random stream, their normalizers
+taking maps and sets as they take arrays, the kind compared.
+
+**Redis's suite.** 1,097 of the 1,677 tests Redis passes (65.4%; 805 before), 1,090 of
+the 1,172 in what BendKV has (93%). unit/type/list runs past its HELLO 3 now and passes
+210 of its 218 tests (15 before), unit/type/zset 287 of its 289 (192 before),
+unit/type/hash its test of HRANDFIELD over RESP3 (69 of its 72) and unit/pubsub its test
+of messages with CLIENT REPLY OFF, which runs over RESP3 (29 of its 30). Of
+unit/type/list's other eight, two read the replication stream (SYNC), two make their
+list with SORT's STORE, two read lists back with DUMP, and two fail on the client that
+the test of SORT's STORE leaves waiting on its key for five seconds, stopped at SORT
+before it closes it: BLMPOP's test of a list moved into place by RENAME gets the list's
+second element (that client got the first), and BLPOP's test of a timeout of 0.001 s
+waits a second for no client to be blocked. unit/type/zset's other two read the
+replication stream.
+
+**Where BendKV differs.** HELLO queued in MULTI switches the protocol for the batches
+after EXEC; Redis switches at once, so that the replies after it in EXEC's array, and
+those after EXEC in the batch, are written in the new protocol. CLIENT TRACKING, and its
+invalidation pushes, BendKV does not have.
 
 ## 4. Where a request's time goes, and hiding the memory waits
 

@@ -149,14 +149,15 @@ where the work goes next), [tools/README.md](tools/README.md) (how it was measur
 
 ## What was done: BendKV
 
-A Redis-compatible in-memory server (RESP2). `redis-cli` and `redis-benchmark` work.
+A Redis-compatible in-memory server (RESP2 and RESP3). `redis-cli` and `redis-benchmark`
+work, and so do clients that speak RESP3 when the server takes it (go-redis v9, Lettuce).
 
 ```
 src/server.bend  TCP, connections, database actor, AOF file, log ─┐ not verified (@unsafe loops),
 src/startup.bend command line and configuration file              │ checked by tests
 src/info.bend    INFO: Redis's sections and fields                │
 src/command.bend COMMAND: BendKV's command table from Redis       │
-src/resp.bend    RESP2 parsing and reply serialization           ─┘
+src/resp.bend    RESP parsing, RESP2 and RESP3 replies           ─┘
 src/session.bend connection and server: state, a whole batch     ─┐ verified:
 src/config.bend  parameters, CONFIG GET and SET                   │
 src/aof.bend     AOF: batch effects, write, read, replay          │ proof/LAWS.bend
@@ -313,9 +314,11 @@ as Redis 7.0.15 runs them. Each name gets a reply with the client's count of cha
 and patterns (of shard channels for SSUBSCRIBE and SUNSUBSCRIBE); a message goes to the
 subscribers of its channel (`message`, `smessage` for a shard channel), then to the
 subscribers of each matching pattern (`pmessage`), and PUBLISH answers how many clients
-got it. A subscribed client runs only (P|S)SUBSCRIBE, (P|S)UNSUBSCRIBE, PING, QUIT and
-RESET, as a RESP2 client in Redis does, and any other command is refused with Redis's
-error; the replies of SUBSCRIBE and its kin go out even with replies turned off; in a
+got it. A subscribed client of RESP2 runs only (P|S)SUBSCRIBE, (P|S)UNSUBSCRIBE, PING,
+QUIT and RESET, as in Redis, and any other command is refused with Redis's error; one of
+RESP3 runs any command, and its messages are pushes among its replies (its own messages
+and keyspace events before the reply of the command that made them, as Redis writes
+them); the replies of SUBSCRIBE and its kin go out even with replies turned off; in a
 transaction SUBSCRIBE and PSUBSCRIBE run, and SSUBSCRIBE is refused; RESET, QUIT and a
 closed connection remove the client's subscriptions. Keyspace notifications: when
 `notify-keyspace-events` is set, each change a command makes is published to
@@ -324,11 +327,10 @@ closed connection remove the client's subscriptions. Keyspace notifications: whe
 `evicted` from an eviction, and the pop of a waiting client that was served comes after
 the write that served it). Where
 BendKV differs: UNSUBSCRIBE of all goes in order of subscription, and PUBSUB CHANNELS in
-the trie's order, whereas Redis goes in the order of its hash tables; there is no RESP3,
-and so no push type; a slow subscriber has no `client-output-buffer-limit pubsub`
-limit; there are no events for misses (`m`) or streams; a key that a
-read found with its time passed sends `expired` when the sweep deletes it, and Redis at
-the read.
+the trie's order, whereas Redis goes in the order of its hash tables; a slow subscriber
+has no `client-output-buffer-limit pubsub` limit; there are no events for misses (`m`)
+or streams; a key that a read found with its time passed sends `expired` when the sweep
+deletes it, and Redis at the read.
 Clients: CLIENT LIST (all, those of one TYPE, by ID numbers), CLIENT INFO and CLIENT
 KILL (the old form with an address, and the filters ID, TYPE, ADDR, LADDR, USER and
 SKIPME), as Redis 7.0.15 runs them, with its errors. A client's line has Redis's fields
@@ -373,16 +375,16 @@ Databases: 16 of them, or as many as `databases` says, as in Redis: SELECT, MOVE
 key with its time), SWAPDB, FLUSHDB and FLUSHALL (with ASYNC/SYNC, which empty at once),
 with Redis's errors for a wrong number; INFO's keyspace has a line for each database
 with keys, and the sweep of expired keys goes over all databases.
-The connection: HELLO (RESP2; with AUTH and SETNAME), AUTH (a password, or `default`
-and a password), SELECT, QUIT, RESET (selects database 0 again), CLIENT ID, GETNAME,
-SETNAME, REPLY ON/OFF/SKIP, NO-EVICT, GETREDIR, TRACKINGINFO, CACHING, UNBLOCK (TIMEOUT
-or ERROR), LIST, INFO, KILL, HELP (there is no key tracking, and its subcommands answer
-as Redis does when it is not on), FUNCTION FLUSH (there are no functions, nothing to
-flush). A client must be authenticated where Redis requires it: after the check of the
-command's name and number of arguments and before it runs (a syntax error for an
-unauthenticated client is NOAUTH); a client is authenticated on connecting and on RESET
-if there is no password then, and after AUTH or AUTH in HELLO, and nothing else changes
-that.
+The connection: HELLO (2 or 3; with AUTH and SETNAME), AUTH (a password, or `default`
+and a password), SELECT, QUIT, RESET (selects database 0 again, and RESP2), CLIENT ID,
+GETNAME, SETNAME, REPLY ON/OFF/SKIP, NO-EVICT, GETREDIR, TRACKINGINFO, CACHING, UNBLOCK
+(TIMEOUT or ERROR), LIST, INFO, KILL, HELP (there is no key tracking, and its
+subcommands answer as Redis does when it is not on), FUNCTION FLUSH (there are no
+functions, nothing to flush). A client must be authenticated where Redis requires it:
+after the check of the command's name and number of arguments and before it runs (a
+syntax error for an unauthenticated client is NOAUTH); a client is authenticated on
+connecting and on RESET if there is no password then, and after AUTH or AUTH in HELLO,
+and nothing else changes that.
 Configuration: CONFIG GET (names, alias names, glob patterns), SET (several parameters
 at once, all or none), RESETSTAT, REWRITE, HELP over all 178 parameters of Redis 7.0.15:
 `tools/gen_config.py` writes the table from Redis's own `config.c`, each value is
@@ -790,48 +792,42 @@ The translation the kernel reads can be dumped with
   skipped. The reference is the same run on redis-server 7.0.15 with default settings,
   each unit on a freshly started server instance: in this mode 1,757 tests run, and
   Redis passes 1,677 (almost all the others need DEBUG, off by default in 7.0). BendKV
-  passes 797 of them (47.5%), and in the units of what it has (the protocol, the
+  passes 1,097 of them (65.4%), and in the units of what it has (the protocol, the
   connection and clients, the keyspace and databases, strings with ranges, bits and
   fields, counters, hashes, lists, sets, sorted sets, times to live, transactions,
-  Pub/Sub and keyspace notifications, introspection), 792 of 1,172 (68%):
+  Pub/Sub and keyspace notifications, introspection), 1,090 of 1,172 (93%):
   `unit/introspection` 25 of 28 (the two others need Lua, and the third MIGRATE),
-  `unit/other` 15 of 19, `unit/multi` 25 of 53 (the others read the replication stream,
-  need Lua, SORT, XGROUP or an OOM from maxmemory, or run after the OOM test that left
-  the client in MULTI), `unit/pubsub` 25 of 30 (one test runs over RESP3, one needs
-  streams, and the test of `evicted` events waits for an eviction that never comes, and
-  two tests after it do not run), `unit/expire` 57 of 59 (the others need replication),
-  `unit/type/string` 74 of 77 (two others need replication, the third runs only with
-  jemalloc), `unit/keyspace` 49 of 52 (the others need streams, and MOVE counts keys
-  left by earlier tests), `unit/type/hash` 68 of 72 (the others need DUMP, RESP3 and
+  `unit/other` 15 of 19, `unit/multi` 27 of 53 (the others read the replication stream,
+  need Lua, SORT or XGROUP, or run after a test that left the client in MULTI),
+  `unit/pubsub` 29 of 30 (the other needs streams), `unit/expire` 57 of 59 (the others
+  need replication), `unit/type/string` 74 of 77 (two others need replication, the third
+  runs only with jemalloc), `unit/keyspace` 49 of 52 (the others need streams, and MOVE
+  counts keys left by earlier tests), `unit/type/hash` 69 of 72 (the others need DUMP and
   integers longer than 14 digits), `unit/type/incr` all 24, `unit/type/list-3` all 11,
-  `unit/type/list-2` both, `unit/type/list` 15 of 218 (further on the unit switches to
-  RESP3, HELLO 3, and stops there; without the tests of RESP3, MULTI, DEBUG, SORT and
-  replication BendKV passes all 140 that Redis passes), `unit/type/set` all 94,
-  `unit/type/zset` 192 of 289 (further on the unit runs the tests of blocking commands
-  over RESP3 first and stops at HELLO 3, short of 82 tests; without the tests of RESP3,
-  MULTI, DEBUG, SORT and replication BendKV passes 260 of the 276 that Redis passes, and
-  the other 16 need RESP3 inside the test), `unit/bitops` 44 of 45 (the remaining one
-  counts changes since the last save, which BendKV does not count), `unit/bitfield` all
-  16, `unit/protocol` all 17; SCAN and RANDOMKEY pass all their tests on keys, HSCAN,
-  SSCAN and ZSCAN all theirs; of the 17 tests with several databases that Redis passes,
-  9 (SET and GET in different databases, DEL in database 1, four tests of MOVE and three
-  of COPY).
-  The others hit commands that do not exist (417 tests: FUNCTION LOAD, XADD, SORT,
-  GEOADD, PFADD…), do not run because the unit stopped earlier (382), or fail on a
-  client left in MULTI by a test that failed inside a transaction on a command that does
-  not exist, on COMMAND GETKEYS for commands that do not exist, on RESP3, on keys left
-  by tests stopped earlier, on memory that BendKV's heap does not give back (two tests
-  of `unit/lazyfree`), on Lua, on the time of a key's last access, which BendKV does not
-  keep, on the number of changes since the last save, which it does not count, on the
-  size of a client's query buffer, which it does not have (two tests of
-  `unit/querybuf`), and on HINCRBY past 14 digits (81). Times to live and the sweep of
-  expired keys added 78 passed tests: before them there were 135, and 30 tests failed on
-  SET's options; ranges and bits added 49 more, TOUCH, TIME and OBJECT 4, MSETNX, RENAME
-  and RENAMENX 13, COPY 7, BITOP and LCS 19, BITFIELD 16, hashes 64, lists 33, sets 104,
-  INCRBYFLOAT and HINCRBYFLOAT 24, sorted sets 181, blocking commands 13, transactions
-  27 (and 14 tests that passed before now fail on a client left in MULTI by a test that
-  failed on a command that does not exist), Pub/Sub and keyspace notifications 26,
-  CLIENT LIST, INFO and KILL 9, MONITOR 3.
+  `unit/type/list-2` both, `unit/type/list` 210 of 218 (the others need replication,
+  SORT or DUMP, or fail on a client that a test stopped at SORT left waiting on its key),
+  `unit/type/set` all 94, `unit/type/zset` 287 of 289 (the other two need replication),
+  `unit/bitops` 44 of 45 (the remaining one counts changes since the last save, which
+  BendKV does not count), `unit/bitfield` all 16, `unit/protocol` all 17; SCAN and
+  RANDOMKEY pass all their tests on keys, HSCAN, SSCAN and ZSCAN all theirs; of the 17
+  tests with several databases that Redis passes, 9 (SET and GET in different databases,
+  DEL in database 1, four tests of MOVE and three of COPY).
+  The others hit commands that do not exist (425 tests: FUNCTION LOAD, XADD, SORT,
+  GEOADD, SYNC…), do not run because the unit stopped earlier (94), or fail on a client
+  left in MULTI by a test that failed inside a transaction on a command that does not
+  exist, on COMMAND GETKEYS for commands that do not exist, on keys and clients left by
+  tests stopped earlier, on Lua, on the number of changes since the last save, which
+  BendKV does not count, on the size of a client's query buffer, which it does not have
+  (two tests of `unit/querybuf`), and on HINCRBY past 14 digits (61). Times to live and
+  the sweep of expired keys added 78 passed tests: before them there were 135, and 30
+  tests failed on SET's options; ranges and bits added 49 more, TOUCH, TIME and OBJECT
+  4, MSETNX, RENAME and RENAMENX 13, COPY 7, BITOP and LCS 19, BITFIELD 16, hashes 64,
+  lists 33, sets 104, INCRBYFLOAT and HINCRBYFLOAT 24, sorted sets 181, blocking
+  commands 13, transactions 27 (and 14 tests that passed before now fail on a client
+  left in MULTI by a test that failed on a command that does not exist), Pub/Sub and
+  keyspace notifications 26, CLIENT LIST, INFO and KILL 9, MONITOR 3, maxmemory and its
+  eviction 8, RESP3 292 (`unit/type/list` and `unit/type/zset` no longer stop at their
+  HELLO 3).
   The suite found one bug in what there is: KEYS matched with a naive glob, and the
   pattern `a*a*…a*b` against a key of forty `a` characters hung the server for minutes;
   there were no classes `[...]` and no escaping either. Fixed: KEYS matches as Redis's
@@ -926,6 +922,17 @@ The translation the kernel reads can be dumped with
   pipelined, before AUTH and after, a failed AUTH, HELLO, RESET with a password and
   without, a password removed and set again, a transaction, a subscribed client, INFO's
   statistics (section 46 of docs/PERFORMANCE.md).
+- **RESP3** (`tests/resp3_test.py`): 11 scenarios on BendKV and on Redis compared byte
+  for byte — HELLO and its errors; the protocol switched in the middle of a pipeline
+  (with CLIENT REPLY OFF too); nulls and doubles; maps, sets and pairs; the server's
+  replies (CONFIG GET, CLIENT TRACKINGINFO, INFO, COMMAND INFO and DOCS); EXEC's replies
+  and an EXEC that WATCH aborts; blocking commands that time out and that are served;
+  Pub/Sub's pushes to a RESP3 and a RESP2 subscriber; a subscriber that switches its
+  protocol; keyspace events of a client's own commands; pipelines of the fast way. And
+  the differential tests of times to live, numbers, BITFIELD, hashes, lists, sets,
+  sorted sets and the random stream again, with every connection in RESP3 (`RESP=3`).
+  Of the 16 constructors of a reply, RESP2 writes the 8 new ones as it wrote what they
+  replace: every RESP2 test passes as before (section 49 of docs/PERFORMANCE.md).
 - **The rewrite of the append-only file** (`tests/rewrite_test.py`): BGREWRITEAOF's
   replies and INFO's fields against Redis's line by line (started, and refused while one
   runs; in EXEC, scheduled; in EXEC while one runs; argument errors; CONFIG RESETSTAT;
@@ -982,9 +989,9 @@ The translation the kernel reads can be dumped with
   and unknown subcommands, CLIENT REPLY OFF/ON/SKIP mixed with other commands, QUIT
   dropping the tail of the batch, FUNCTION FLUSH, mixed pipelines — are compared with
   Redis (both with 16 databases) byte for byte; client ids are masked, and TIME is
-  compared to the second. Two known differences are left out of the comparison: HELLO 3
-  (BendKV speaks only RESP2) and QUIT with CLIENT REPLY OFF, after which Redis leaves
-  the connection open but reads it no more, while BendKV closes it.
+  compared to the second (HELLO 3 and RESP3 have a test of their own, above). One known
+  difference is left out of the comparison: QUIT with CLIENT REPLY OFF, after which
+  Redis leaves the connection open but reads it no more, while BendKV closes it.
 - **CONFIG** (`tests/config_test.py`): all 191 keys of CONFIG GET * at start (except
   the port) match Redis; 146 prepared cases (patterns, alias names, hidden parameters,
   immutable and protected ones, repeats, rollback on a bad value and on a failure to
@@ -1325,12 +1332,11 @@ make suite BEND="$B" REDIS_SRC=../redis   # Redis's test suite on Redis and on B
    FLUSHDB, FLUSHALL, keyspace lines per database — with laws and recovery of all the
    databases from the append-only file), the ranges and bits of strings (GETRANGE,
    SETRANGE, GETBIT, SETBIT, BITCOUNT, BITPOS — with a law of SETRANGE and recovery from
-   the append-only file). Redis's suite in external mode: BendKV passes 797 of the 1,677
-   tests Redis itself passes, and 792 of 1,172 in the units of what it has
-   ([docs/COMPATIBILITY.md](docs/COMPATIBILITY.md)); RESP3 holds up the most tests of
-   what it has (`unit/type/list` stops at HELLO 3 with 203 tests to its end, and
-   `unit/type/zset` with 82). Start-up as for redis-server (the command line and the
-   configuration file). The database as a record with a count of keys (DBSIZE in O(1)).
+   the append-only file). Redis's suite in external mode: BendKV passes 1,097 of the
+   1,677 tests Redis itself passes, and 1,090 of 1,172 in the units of what it has
+   ([docs/COMPATIBILITY.md](docs/COMPATIBILITY.md)). Start-up as for redis-server (the
+   command line and the configuration file). The database as a record with a count of
+   keys (DBSIZE in O(1)).
    TOUCH, TIME and OBJECT. MSETNX, RENAME and RENAMENX — with laws, commutativity for
    commands whose writes depend on other keys, and recovery from the append-only file.
    COPY (into the selected database or another one) — with a law and recovery from the
@@ -1398,7 +1404,11 @@ make suite BEND="$B" REDIS_SRC=../redis   # Redis's test suite on Redis and on B
    candidates of a sample, or at random by database — deleting them as the sweep deletes
    expired ones; when the keys were touched is kept in a table of words by the key's hash,
    outside the values (section 48 of PERFORMANCE.md); checked by tests against Redis, only
-   the law of CONFIG SET proved. The next step is RESP3.
+   the law of CONFIG SET proved. RESP3: replies typed where Redis types them, written by
+   the encoder of the client's protocol (RESP2's bytes as they were), pushes for a
+   subscriber in RESP3, the protocol a field of the connection that the laws of sessions
+   take as they take the selected database (section 49 of PERFORMANCE.md); checked by
+   tests against Redis byte for byte. The next step is the tests of client libraries.
 2. **The append-only file, further.** A law of the rewrite: the rewritten file replays
    to the databases it was written from (key by key, not by the shape of the trie); it
    needs a law that a scan from the first bucket reads every key once (the invariant "a

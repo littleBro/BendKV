@@ -9080,7 +9080,7 @@ def zremr_old(mr: Maybe<&2, R.ZRng>, +k: Nat, +op: R.ZWrite, +z0: KV.Zset, -e: N
 def zpop_old(mc: Maybe<&2, Nat>, +max: Bool, +op: R.ZWrite, +z0: KV.Zset, -e: Nat) -> {R.zwrite(op, False{}, z0) == R.zpop.of(mc, max, op, z0) : R.Out} -> ({Maybe.is_some(&2, Nat, mc) == True{} : Bool} -> GoodZOp(op)) -> Good(Some{KV.Item{KV.VColl{KV.CZset{z0}}, e}}, ch_of(R.zpop.of(mc, max, op, z0))):
   match mc:
     case Some{+c}:
-      ew => go => zdels_good_xs(R.zpop.els(max, c, z0), op, R.RArray{R.zels(R.zpop.els(max, c, z0), True{})}, z0, e)(Equal.cong(R.Out, R.Change, q => ch_of(q), R.zwrite(op, False{}, z0), R.zpop.of(Some{c}, max, op, z0), ew))(go({==}))
+      ew => go => zdels_good_xs(R.zpop.els(max, c, z0), op, R.zpop.reply(op, R.zpop.els(max, c, z0)), z0, e)(Equal.cong(R.Out, R.Change, q => ch_of(q), R.zwrite(op, False{}, z0), R.zpop.of(Some{c}, max, op, z0), ew))(go({==}))
     case None{}:
       ew => go => {==}
 
@@ -14859,88 +14859,88 @@ def runs(cs: List<&2, R.Cmd>) -> List<&2, R.Act>:
 
 # a ready client (S.ready) runs each command of such a batch, sends each
 # reply, and stays ready, authenticated
-def fast_greps.k(k: S.Role, +c: R.Cmd, +rest: List<&2, R.Cmd>, +id: Nat, +a: Bool, +n: String, +sel: Nat, +srv: S.Srv, +d: R.Db, +pre: List<&2, R.Db>, +post: List<&2, R.Db>,
-    ih: {greps(rest, S.Conn{id, a, n, S.MOn{}, False{}, sel}, srv, R.Ds{R.db_of(R.exec(c, d)), pre, post}) == rfst(run(rest, R.db_of(R.exec(c, d)))) : List<&2, R.Reply>})
+def fast_greps.k(k: S.Role, +c: R.Cmd, +rest: List<&2, R.Cmd>, +id: Nat, +a: Bool, +n: String, +sel: Nat, +r3: Bool, +srv: S.Srv, +d: R.Db, +pre: List<&2, R.Db>, +post: List<&2, R.Db>,
+    ih: {greps(rest, S.Conn{id, a, n, S.MOn{}, False{}, sel, r3}, srv, R.Ds{R.db_of(R.exec(c, d)), pre, post}) == rfst(run(rest, R.db_of(R.exec(c, d)))) : List<&2, R.Reply>})
   -> {not_sess(k) == True{} : Bool}
-  -> {S.authed(S.Conn{id, a, n, S.MOn{}, False{}, sel}, srv) == True{} : Bool}
-  -> {opt_cons(rep.k(k, S.may(k, S.Conn{id, a, n, S.MOn{}, False{}, sel}, srv), c, S.Conn{id, a, n, S.MOn{}, False{}, sel}, srv, R.Ds{d, pre, post}), greps(rest, S.next_conn.k(k, S.may(k, S.Conn{id, a, n, S.MOn{}, False{}, sel}, srv), S.Conn{id, a, n, S.MOn{}, False{}, sel}, srv), S.next_srv.k(k, S.may(k, S.Conn{id, a, n, S.MOn{}, False{}, sel}, srv), S.Conn{id, a, n, S.MOn{}, False{}, sel}, srv), R.acts(S.acts.k(k, S.may(k, S.Conn{id, a, n, S.MOn{}, False{}, sel}, srv), c, S.Conn{id, a, n, S.MOn{}, False{}, sel}, srv), R.Ds{d, pre, post}))) == rfst(run(Con{c, rest}, d)) : List<&2, R.Reply>}:
+  -> {S.authed(S.Conn{id, a, n, S.MOn{}, False{}, sel, r3}, srv) == True{} : Bool}
+  -> {opt_cons(rep.k(k, S.may(k, S.Conn{id, a, n, S.MOn{}, False{}, sel, r3}, srv), c, S.Conn{id, a, n, S.MOn{}, False{}, sel, r3}, srv, R.Ds{d, pre, post}), greps(rest, S.next_conn.k(k, S.may(k, S.Conn{id, a, n, S.MOn{}, False{}, sel, r3}, srv), S.Conn{id, a, n, S.MOn{}, False{}, sel, r3}, srv), S.next_srv.k(k, S.may(k, S.Conn{id, a, n, S.MOn{}, False{}, sel, r3}, srv), S.Conn{id, a, n, S.MOn{}, False{}, sel, r3}, srv), R.acts(S.acts.k(k, S.may(k, S.Conn{id, a, n, S.MOn{}, False{}, sel, r3}, srv), c, S.Conn{id, a, n, S.MOn{}, False{}, sel, r3}, srv), R.Ds{d, pre, post}))) == rfst(run(Con{c, rest}, d)) : List<&2, R.Reply>}:
   match k:
     case S.KSess{o}:
-      e => ea => Empty.absurd({opt_cons(rep.k(S.KSess{o}, S.may(S.KSess{o}, S.Conn{id, a, n, S.MOn{}, False{}, sel}, srv), c, S.Conn{id, a, n, S.MOn{}, False{}, sel}, srv, R.Ds{d, pre, post}), greps(rest, S.next_conn.k(S.KSess{o}, S.may(S.KSess{o}, S.Conn{id, a, n, S.MOn{}, False{}, sel}, srv), S.Conn{id, a, n, S.MOn{}, False{}, sel}, srv), S.next_srv.k(S.KSess{o}, S.may(S.KSess{o}, S.Conn{id, a, n, S.MOn{}, False{}, sel}, srv), S.Conn{id, a, n, S.MOn{}, False{}, sel}, srv), R.acts(S.acts.k(S.KSess{o}, S.may(S.KSess{o}, S.Conn{id, a, n, S.MOn{}, False{}, sel}, srv), c, S.Conn{id, a, n, S.MOn{}, False{}, sel}, srv), R.Ds{d, pre, post}))) == rfst(run(Con{c, rest}, d)) : List<&2, R.Reply>}, false_true(e))
+      e => ea => Empty.absurd({opt_cons(rep.k(S.KSess{o}, S.may(S.KSess{o}, S.Conn{id, a, n, S.MOn{}, False{}, sel, r3}, srv), c, S.Conn{id, a, n, S.MOn{}, False{}, sel, r3}, srv, R.Ds{d, pre, post}), greps(rest, S.next_conn.k(S.KSess{o}, S.may(S.KSess{o}, S.Conn{id, a, n, S.MOn{}, False{}, sel, r3}, srv), S.Conn{id, a, n, S.MOn{}, False{}, sel, r3}, srv), S.next_srv.k(S.KSess{o}, S.may(S.KSess{o}, S.Conn{id, a, n, S.MOn{}, False{}, sel, r3}, srv), S.Conn{id, a, n, S.MOn{}, False{}, sel, r3}, srv), R.acts(S.acts.k(S.KSess{o}, S.may(S.KSess{o}, S.Conn{id, a, n, S.MOn{}, False{}, sel, r3}, srv), c, S.Conn{id, a, n, S.MOn{}, False{}, sel, r3}, srv), R.Ds{d, pre, post}))) == rfst(run(Con{c, rest}, d)) : List<&2, R.Reply>}, false_true(e))
     case S.KData{}:
       e => ea =>
-        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, S.MOn{}, False{}, sel}, srv), True{}, ea) : {opt_cons(rep.k(S.KData{}, _, c, S.Conn{id, a, n, S.MOn{}, False{}, sel}, srv, R.Ds{d, pre, post}), greps(rest, S.Conn{id, a, n, S.after(S.MOn{}), False{}, sel}, srv, R.acts(S.acts.k(S.KData{}, _, c, S.Conn{id, a, n, S.MOn{}, False{}, sel}, srv), R.Ds{d, pre, post}))) == rfst(run(Con{c, rest}, d)) : List<&2, R.Reply>}
-        %act_run(c, d, pre, post) : {opt_cons(Some{R.reply_ds(_)}, greps(rest, S.Conn{id, a, n, S.MOn{}, False{}, sel}, srv, R.ds_of(_))) == rfst(run(Con{c, rest}, d)) : List<&2, R.Reply>}
-        %eta_l(run(rest, R.db_of(R.exec(c, d)))) : {R.reply_of(R.exec(c, d)) <> greps(rest, S.Conn{id, a, n, S.MOn{}, False{}, sel}, srv, R.Ds{R.db_of(R.exec(c, d)), pre, post}) == rfst(R.exec_all.cons(R.reply_of(R.exec(c, d)), _)) : List<&2, R.Reply>}
-        Equal.cong(List<&2, R.Reply>, List<&2, R.Reply>, z => R.reply_of(R.exec(c, d)) <> z, greps(rest, S.Conn{id, a, n, S.MOn{}, False{}, sel}, srv, R.Ds{R.db_of(R.exec(c, d)), pre, post}), rfst(run(rest, R.db_of(R.exec(c, d)))), ih)
+        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, S.MOn{}, False{}, sel, r3}, srv), True{}, ea) : {opt_cons(rep.k(S.KData{}, _, c, S.Conn{id, a, n, S.MOn{}, False{}, sel, r3}, srv, R.Ds{d, pre, post}), greps(rest, S.Conn{id, a, n, S.after(S.MOn{}), False{}, sel, r3}, srv, R.acts(S.acts.k(S.KData{}, _, c, S.Conn{id, a, n, S.MOn{}, False{}, sel, r3}, srv), R.Ds{d, pre, post}))) == rfst(run(Con{c, rest}, d)) : List<&2, R.Reply>}
+        %act_run(c, d, pre, post) : {opt_cons(Some{R.reply_ds(_)}, greps(rest, S.Conn{id, a, n, S.MOn{}, False{}, sel, r3}, srv, R.ds_of(_))) == rfst(run(Con{c, rest}, d)) : List<&2, R.Reply>}
+        %eta_l(run(rest, R.db_of(R.exec(c, d)))) : {R.reply_of(R.exec(c, d)) <> greps(rest, S.Conn{id, a, n, S.MOn{}, False{}, sel, r3}, srv, R.Ds{R.db_of(R.exec(c, d)), pre, post}) == rfst(R.exec_all.cons(R.reply_of(R.exec(c, d)), _)) : List<&2, R.Reply>}
+        Equal.cong(List<&2, R.Reply>, List<&2, R.Reply>, z => R.reply_of(R.exec(c, d)) <> z, greps(rest, S.Conn{id, a, n, S.MOn{}, False{}, sel, r3}, srv, R.Ds{R.db_of(R.exec(c, d)), pre, post}), rfst(run(rest, R.db_of(R.exec(c, d)))), ih)
     case S.KBad{}:
       e => ea =>
-        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, S.MOn{}, False{}, sel}, srv), True{}, ea) : {opt_cons(rep.k(S.KBad{}, True{}, c, S.Conn{id, a, n, S.MOn{}, False{}, sel}, srv, R.Ds{d, pre, post}), greps(rest, S.Conn{id, a, n, S.after(S.MOn{}), False{}, sel}, srv, R.acts(S.acts.k(S.KBad{}, True{}, c, S.Conn{id, a, n, S.MOn{}, False{}, sel}, srv), R.Ds{d, pre, post}))) == rfst(run(Con{c, rest}, d)) : List<&2, R.Reply>}
-        %act_run(c, d, pre, post) : {opt_cons(Some{R.reply_ds(_)}, greps(rest, S.Conn{id, a, n, S.MOn{}, False{}, sel}, srv, R.ds_of(_))) == rfst(run(Con{c, rest}, d)) : List<&2, R.Reply>}
-        %eta_l(run(rest, R.db_of(R.exec(c, d)))) : {R.reply_of(R.exec(c, d)) <> greps(rest, S.Conn{id, a, n, S.MOn{}, False{}, sel}, srv, R.Ds{R.db_of(R.exec(c, d)), pre, post}) == rfst(R.exec_all.cons(R.reply_of(R.exec(c, d)), _)) : List<&2, R.Reply>}
-        Equal.cong(List<&2, R.Reply>, List<&2, R.Reply>, z => R.reply_of(R.exec(c, d)) <> z, greps(rest, S.Conn{id, a, n, S.MOn{}, False{}, sel}, srv, R.Ds{R.db_of(R.exec(c, d)), pre, post}), rfst(run(rest, R.db_of(R.exec(c, d)))), ih)
+        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, S.MOn{}, False{}, sel, r3}, srv), True{}, ea) : {opt_cons(rep.k(S.KBad{}, True{}, c, S.Conn{id, a, n, S.MOn{}, False{}, sel, r3}, srv, R.Ds{d, pre, post}), greps(rest, S.Conn{id, a, n, S.after(S.MOn{}), False{}, sel, r3}, srv, R.acts(S.acts.k(S.KBad{}, True{}, c, S.Conn{id, a, n, S.MOn{}, False{}, sel, r3}, srv), R.Ds{d, pre, post}))) == rfst(run(Con{c, rest}, d)) : List<&2, R.Reply>}
+        %act_run(c, d, pre, post) : {opt_cons(Some{R.reply_ds(_)}, greps(rest, S.Conn{id, a, n, S.MOn{}, False{}, sel, r3}, srv, R.ds_of(_))) == rfst(run(Con{c, rest}, d)) : List<&2, R.Reply>}
+        %eta_l(run(rest, R.db_of(R.exec(c, d)))) : {R.reply_of(R.exec(c, d)) <> greps(rest, S.Conn{id, a, n, S.MOn{}, False{}, sel, r3}, srv, R.Ds{R.db_of(R.exec(c, d)), pre, post}) == rfst(R.exec_all.cons(R.reply_of(R.exec(c, d)), _)) : List<&2, R.Reply>}
+        Equal.cong(List<&2, R.Reply>, List<&2, R.Reply>, z => R.reply_of(R.exec(c, d)) <> z, greps(rest, S.Conn{id, a, n, S.MOn{}, False{}, sel, r3}, srv, R.Ds{R.db_of(R.exec(c, d)), pre, post}), rfst(run(rest, R.db_of(R.exec(c, d)))), ih)
 
-def fast_greps(cs: List<&2, R.Cmd>, +id: Nat, +a: Bool, +n: String, +sel: Nat, +srv: S.Srv, +d: R.Db, +pre: List<&2, R.Db>, +post: List<&2, R.Db>)
-  -> {S.authed(S.Conn{id, a, n, S.MOn{}, False{}, sel}, srv) == True{} : Bool}
+def fast_greps(cs: List<&2, R.Cmd>, +id: Nat, +a: Bool, +n: String, +sel: Nat, +r3: Bool, +srv: S.Srv, +d: R.Db, +pre: List<&2, R.Db>, +post: List<&2, R.Db>)
+  -> {S.authed(S.Conn{id, a, n, S.MOn{}, False{}, sel, r3}, srv) == True{} : Bool}
   -> {plain(cs) == True{} : Bool}
-  -> {greps(cs, S.Conn{id, a, n, S.MOn{}, False{}, sel}, srv, R.Ds{d, pre, post}) == rfst(run(cs, d)) : List<&2, R.Reply>}:
+  -> {greps(cs, S.Conn{id, a, n, S.MOn{}, False{}, sel, r3}, srv, R.Ds{d, pre, post}) == rfst(run(cs, d)) : List<&2, R.Reply>}:
   match cs:
     case Nil{}:
       ea => ep => {==}
     case Con{+c, +rest}:
-      +ea => +ep => fast_greps.k(S.kind(c), c, rest, id, a, n, sel, srv, d, pre, post, fast_greps(rest, id, a, n, sel, srv, R.db_of(R.exec(c, d)), pre, post)(ea)(and_r(not_sess(S.kind(c)), plain(rest))(ep)))(and_l(not_sess(S.kind(c)), plain(rest))(ep))(ea)
+      +ea => +ep => fast_greps.k(S.kind(c), c, rest, id, a, n, sel, r3, srv, d, pre, post, fast_greps(rest, id, a, n, sel, r3, srv, R.db_of(R.exec(c, d)), pre, post)(ea)(and_r(not_sess(S.kind(c)), plain(rest))(ep)))(and_l(not_sess(S.kind(c)), plain(rest))(ep))(ea)
 
-def fast_plan.k(k: S.Role, +c: R.Cmd, +rest: List<&2, R.Cmd>, +id: Nat, +a: Bool, +n: String, +sel: Nat, +srv: S.Srv,
-    ih: {S.plan(rest, S.Conn{id, a, n, S.MOn{}, False{}, sel}, srv) == runs(rest) : List<&2, R.Act>})
+def fast_plan.k(k: S.Role, +c: R.Cmd, +rest: List<&2, R.Cmd>, +id: Nat, +a: Bool, +n: String, +sel: Nat, +r3: Bool, +srv: S.Srv,
+    ih: {S.plan(rest, S.Conn{id, a, n, S.MOn{}, False{}, sel, r3}, srv) == runs(rest) : List<&2, R.Act>})
   -> {not_sess(k) == True{} : Bool}
-  -> {S.authed(S.Conn{id, a, n, S.MOn{}, False{}, sel}, srv) == True{} : Bool}
-  -> {List.append(&2, R.Act, S.acts.k(k, S.may(k, S.Conn{id, a, n, S.MOn{}, False{}, sel}, srv), c, S.Conn{id, a, n, S.MOn{}, False{}, sel}, srv), S.plan(rest, S.next_conn.k(k, S.may(k, S.Conn{id, a, n, S.MOn{}, False{}, sel}, srv), S.Conn{id, a, n, S.MOn{}, False{}, sel}, srv), S.next_srv.k(k, S.may(k, S.Conn{id, a, n, S.MOn{}, False{}, sel}, srv), S.Conn{id, a, n, S.MOn{}, False{}, sel}, srv))) == runs(Con{c, rest}) : List<&2, R.Act>}:
+  -> {S.authed(S.Conn{id, a, n, S.MOn{}, False{}, sel, r3}, srv) == True{} : Bool}
+  -> {List.append(&2, R.Act, S.acts.k(k, S.may(k, S.Conn{id, a, n, S.MOn{}, False{}, sel, r3}, srv), c, S.Conn{id, a, n, S.MOn{}, False{}, sel, r3}, srv), S.plan(rest, S.next_conn.k(k, S.may(k, S.Conn{id, a, n, S.MOn{}, False{}, sel, r3}, srv), S.Conn{id, a, n, S.MOn{}, False{}, sel, r3}, srv), S.next_srv.k(k, S.may(k, S.Conn{id, a, n, S.MOn{}, False{}, sel, r3}, srv), S.Conn{id, a, n, S.MOn{}, False{}, sel, r3}, srv))) == runs(Con{c, rest}) : List<&2, R.Act>}:
   match k:
     case S.KSess{o}:
-      e => ea => Empty.absurd({List.append(&2, R.Act, S.acts.k(S.KSess{o}, S.may(S.KSess{o}, S.Conn{id, a, n, S.MOn{}, False{}, sel}, srv), c, S.Conn{id, a, n, S.MOn{}, False{}, sel}, srv), S.plan(rest, S.next_conn.k(S.KSess{o}, S.may(S.KSess{o}, S.Conn{id, a, n, S.MOn{}, False{}, sel}, srv), S.Conn{id, a, n, S.MOn{}, False{}, sel}, srv), S.next_srv.k(S.KSess{o}, S.may(S.KSess{o}, S.Conn{id, a, n, S.MOn{}, False{}, sel}, srv), S.Conn{id, a, n, S.MOn{}, False{}, sel}, srv))) == runs(Con{c, rest}) : List<&2, R.Act>}, false_true(e))
+      e => ea => Empty.absurd({List.append(&2, R.Act, S.acts.k(S.KSess{o}, S.may(S.KSess{o}, S.Conn{id, a, n, S.MOn{}, False{}, sel, r3}, srv), c, S.Conn{id, a, n, S.MOn{}, False{}, sel, r3}, srv), S.plan(rest, S.next_conn.k(S.KSess{o}, S.may(S.KSess{o}, S.Conn{id, a, n, S.MOn{}, False{}, sel, r3}, srv), S.Conn{id, a, n, S.MOn{}, False{}, sel, r3}, srv), S.next_srv.k(S.KSess{o}, S.may(S.KSess{o}, S.Conn{id, a, n, S.MOn{}, False{}, sel, r3}, srv), S.Conn{id, a, n, S.MOn{}, False{}, sel, r3}, srv))) == runs(Con{c, rest}) : List<&2, R.Act>}, false_true(e))
     case S.KData{}:
       e => ea =>
-        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, S.MOn{}, False{}, sel}, srv), True{}, ea) : {List.append(&2, R.Act, S.acts.k(S.KData{}, _, c, S.Conn{id, a, n, S.MOn{}, False{}, sel}, srv), S.plan(rest, S.Conn{id, a, n, S.after(S.MOn{}), False{}, sel}, srv)) == runs(Con{c, rest}) : List<&2, R.Act>}
-        Equal.cong(List<&2, R.Act>, List<&2, R.Act>, z => R.ARun{c} <> z, S.plan(rest, S.Conn{id, a, n, S.MOn{}, False{}, sel}, srv), runs(rest), ih)
+        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, S.MOn{}, False{}, sel, r3}, srv), True{}, ea) : {List.append(&2, R.Act, S.acts.k(S.KData{}, _, c, S.Conn{id, a, n, S.MOn{}, False{}, sel, r3}, srv), S.plan(rest, S.Conn{id, a, n, S.after(S.MOn{}), False{}, sel, r3}, srv)) == runs(Con{c, rest}) : List<&2, R.Act>}
+        Equal.cong(List<&2, R.Act>, List<&2, R.Act>, z => R.ARun{c} <> z, S.plan(rest, S.Conn{id, a, n, S.MOn{}, False{}, sel, r3}, srv), runs(rest), ih)
     case S.KBad{}:
       e => ea =>
-        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, S.MOn{}, False{}, sel}, srv), True{}, ea) : {List.append(&2, R.Act, S.acts.k(S.KBad{}, True{}, c, S.Conn{id, a, n, S.MOn{}, False{}, sel}, srv), S.plan(rest, S.Conn{id, a, n, S.after(S.MOn{}), False{}, sel}, srv)) == runs(Con{c, rest}) : List<&2, R.Act>}
-        Equal.cong(List<&2, R.Act>, List<&2, R.Act>, z => R.ARun{c} <> z, S.plan(rest, S.Conn{id, a, n, S.MOn{}, False{}, sel}, srv), runs(rest), ih)
+        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, S.MOn{}, False{}, sel, r3}, srv), True{}, ea) : {List.append(&2, R.Act, S.acts.k(S.KBad{}, True{}, c, S.Conn{id, a, n, S.MOn{}, False{}, sel, r3}, srv), S.plan(rest, S.Conn{id, a, n, S.after(S.MOn{}), False{}, sel, r3}, srv)) == runs(Con{c, rest}) : List<&2, R.Act>}
+        Equal.cong(List<&2, R.Act>, List<&2, R.Act>, z => R.ARun{c} <> z, S.plan(rest, S.Conn{id, a, n, S.MOn{}, False{}, sel, r3}, srv), runs(rest), ih)
 
-def fast_plan(cs: List<&2, R.Cmd>, +id: Nat, +a: Bool, +n: String, +sel: Nat, +srv: S.Srv)
-  -> {S.authed(S.Conn{id, a, n, S.MOn{}, False{}, sel}, srv) == True{} : Bool}
+def fast_plan(cs: List<&2, R.Cmd>, +id: Nat, +a: Bool, +n: String, +sel: Nat, +r3: Bool, +srv: S.Srv)
+  -> {S.authed(S.Conn{id, a, n, S.MOn{}, False{}, sel, r3}, srv) == True{} : Bool}
   -> {plain(cs) == True{} : Bool}
-  -> {S.plan(cs, S.Conn{id, a, n, S.MOn{}, False{}, sel}, srv) == runs(cs) : List<&2, R.Act>}:
+  -> {S.plan(cs, S.Conn{id, a, n, S.MOn{}, False{}, sel, r3}, srv) == runs(cs) : List<&2, R.Act>}:
   match cs:
     case Nil{}:
       ea => ep => {==}
     case Con{+c, +rest}:
-      +ea => +ep => fast_plan.k(S.kind(c), c, rest, id, a, n, sel, srv, fast_plan(rest, id, a, n, sel, srv)(ea)(and_r(not_sess(S.kind(c)), plain(rest))(ep)))(and_l(not_sess(S.kind(c)), plain(rest))(ep))(ea)
+      +ea => +ep => fast_plan.k(S.kind(c), c, rest, id, a, n, sel, r3, srv, fast_plan(rest, id, a, n, sel, r3, srv)(ea)(and_r(not_sess(S.kind(c)), plain(rest))(ep)))(and_l(not_sess(S.kind(c)), plain(rest))(ep))(ea)
 
-def fast_conn.k(k: S.Role, +rest: List<&2, R.Cmd>, +id: Nat, +a: Bool, +n: String, +sel: Nat, +srv: S.Srv,
-    ih: {gconn(rest, S.Conn{id, a, n, S.MOn{}, False{}, sel}, srv) == S.Conn{id, a, n, S.MOn{}, False{}, sel} : S.Conn})
+def fast_conn.k(k: S.Role, +rest: List<&2, R.Cmd>, +id: Nat, +a: Bool, +n: String, +sel: Nat, +r3: Bool, +srv: S.Srv,
+    ih: {gconn(rest, S.Conn{id, a, n, S.MOn{}, False{}, sel, r3}, srv) == S.Conn{id, a, n, S.MOn{}, False{}, sel, r3} : S.Conn})
   -> {not_sess(k) == True{} : Bool}
-  -> {S.authed(S.Conn{id, a, n, S.MOn{}, False{}, sel}, srv) == True{} : Bool}
-  -> {gconn(rest, S.next_conn.k(k, S.may(k, S.Conn{id, a, n, S.MOn{}, False{}, sel}, srv), S.Conn{id, a, n, S.MOn{}, False{}, sel}, srv), S.next_srv.k(k, S.may(k, S.Conn{id, a, n, S.MOn{}, False{}, sel}, srv), S.Conn{id, a, n, S.MOn{}, False{}, sel}, srv)) == S.Conn{id, a, n, S.MOn{}, False{}, sel} : S.Conn}:
+  -> {S.authed(S.Conn{id, a, n, S.MOn{}, False{}, sel, r3}, srv) == True{} : Bool}
+  -> {gconn(rest, S.next_conn.k(k, S.may(k, S.Conn{id, a, n, S.MOn{}, False{}, sel, r3}, srv), S.Conn{id, a, n, S.MOn{}, False{}, sel, r3}, srv), S.next_srv.k(k, S.may(k, S.Conn{id, a, n, S.MOn{}, False{}, sel, r3}, srv), S.Conn{id, a, n, S.MOn{}, False{}, sel, r3}, srv)) == S.Conn{id, a, n, S.MOn{}, False{}, sel, r3} : S.Conn}:
   match k:
     case S.KSess{o}:
-      e => ea => Empty.absurd({gconn(rest, S.next_conn.k(S.KSess{o}, S.may(S.KSess{o}, S.Conn{id, a, n, S.MOn{}, False{}, sel}, srv), S.Conn{id, a, n, S.MOn{}, False{}, sel}, srv), S.next_srv.k(S.KSess{o}, S.may(S.KSess{o}, S.Conn{id, a, n, S.MOn{}, False{}, sel}, srv), S.Conn{id, a, n, S.MOn{}, False{}, sel}, srv)) == S.Conn{id, a, n, S.MOn{}, False{}, sel} : S.Conn}, false_true(e))
+      e => ea => Empty.absurd({gconn(rest, S.next_conn.k(S.KSess{o}, S.may(S.KSess{o}, S.Conn{id, a, n, S.MOn{}, False{}, sel, r3}, srv), S.Conn{id, a, n, S.MOn{}, False{}, sel, r3}, srv), S.next_srv.k(S.KSess{o}, S.may(S.KSess{o}, S.Conn{id, a, n, S.MOn{}, False{}, sel, r3}, srv), S.Conn{id, a, n, S.MOn{}, False{}, sel, r3}, srv)) == S.Conn{id, a, n, S.MOn{}, False{}, sel, r3} : S.Conn}, false_true(e))
     case S.KData{}:
       e => ea =>
-        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, S.MOn{}, False{}, sel}, srv), True{}, ea) : {gconn(rest, S.Conn{id, a, n, S.after(S.MOn{}), False{}, sel}, srv) == S.Conn{id, a, n, S.MOn{}, False{}, sel} : S.Conn}
+        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, S.MOn{}, False{}, sel, r3}, srv), True{}, ea) : {gconn(rest, S.Conn{id, a, n, S.after(S.MOn{}), False{}, sel, r3}, srv) == S.Conn{id, a, n, S.MOn{}, False{}, sel, r3} : S.Conn}
         ih
     case S.KBad{}:
       e => ea =>
-        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, S.MOn{}, False{}, sel}, srv), True{}, ea) : {gconn(rest, S.Conn{id, a, n, S.after(S.MOn{}), False{}, sel}, srv) == S.Conn{id, a, n, S.MOn{}, False{}, sel} : S.Conn}
+        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, S.MOn{}, False{}, sel, r3}, srv), True{}, ea) : {gconn(rest, S.Conn{id, a, n, S.after(S.MOn{}), False{}, sel, r3}, srv) == S.Conn{id, a, n, S.MOn{}, False{}, sel, r3} : S.Conn}
         ih
 
 # a ready client stays as it was
-def fast_conn1(cs: List<&2, R.Cmd>, +id: Nat, +a: Bool, +n: String, +sel: Nat, +srv: S.Srv) -> {S.authed(S.Conn{id, a, n, S.MOn{}, False{}, sel}, srv) == True{} : Bool} -> {plain(cs) == True{} : Bool} -> {gconn(cs, S.Conn{id, a, n, S.MOn{}, False{}, sel}, srv) == S.Conn{id, a, n, S.MOn{}, False{}, sel} : S.Conn}:
+def fast_conn1(cs: List<&2, R.Cmd>, +id: Nat, +a: Bool, +n: String, +sel: Nat, +r3: Bool, +srv: S.Srv) -> {S.authed(S.Conn{id, a, n, S.MOn{}, False{}, sel, r3}, srv) == True{} : Bool} -> {plain(cs) == True{} : Bool} -> {gconn(cs, S.Conn{id, a, n, S.MOn{}, False{}, sel, r3}, srv) == S.Conn{id, a, n, S.MOn{}, False{}, sel, r3} : S.Conn}:
   match cs:
     case Nil{}:
       ea => ep => {==}
     case Con{+c, +rest}:
-      +ea => +ep => fast_conn.k(S.kind(c), rest, id, a, n, sel, srv, fast_conn1(rest, id, a, n, sel, srv)(ea)(and_r(not_sess(S.kind(c)), plain(rest))(ep)))(and_l(not_sess(S.kind(c)), plain(rest))(ep))(ea)
+      +ea => +ep => fast_conn.k(S.kind(c), rest, id, a, n, sel, r3, srv, fast_conn1(rest, id, a, n, sel, r3, srv)(ea)(and_r(not_sess(S.kind(c)), plain(rest))(ep)))(and_l(not_sess(S.kind(c)), plain(rest))(ep))(ea)
 
 # the server is as it was after a batch of database commands only
 def gsrv.k(k: S.Role, +ok: Bool, +rest: List<&2, R.Cmd>, +x: S.Conn, +conn: S.Conn, +srv: S.Srv, ih: {gsrv(rest, x, srv) == srv : S.Srv})
@@ -15025,26 +15025,26 @@ def aeffs_runs(cs: List<&2, R.Cmd>, +d: R.Db, +pre: List<&2, R.Db>, +post: List<
       Equal.cong(List<&2, A.Eff>, List<&2, A.Eff>, z => List.append(&2, A.Eff, A.at_db(List.length(&2, R.Db, pre), eff(c, d)), z), A.at_db(List.length(&2, R.Db, pre), effs(rest, R.db_of(R.exec(c, d)))), aeffs(runs(rest), R.Ds{R.db_of(R.exec(c, d)), pre, post}), aeffs_runs(rest, R.db_of(R.exec(c, d)), pre, post))
 
 # the fast way is the general one
-def fast_eq(+c: R.Cmd, +cs: List<&2, R.Cmd>, +id: Nat, +a: Bool, +n: String, +sel: Nat, +srv: S.Srv, +hs: List<&2, U32>, +d: R.Db, +pre: List<&2, R.Db>, +post: List<&2, R.Db>)
-  -> {S.authed(S.Conn{id, a, n, S.MOn{}, False{}, sel}, srv) == True{} : Bool}
+def fast_eq(+c: R.Cmd, +cs: List<&2, R.Cmd>, +id: Nat, +a: Bool, +n: String, +sel: Nat, +r3: Bool, +srv: S.Srv, +hs: List<&2, U32>, +d: R.Db, +pre: List<&2, R.Db>, +post: List<&2, R.Db>)
+  -> {S.authed(S.Conn{id, a, n, S.MOn{}, False{}, sel, r3}, srv) == True{} : Bool}
   -> {plain(Con{c, cs}) == True{} : Bool}
-  -> {S.run.fast(S.Conn{id, a, n, S.MOn{}, False{}, sel}, srv, Con{c, cs}, hs, R.Ds{d, pre, post}) == S.done.gen(S.gen(S.Conn{id, a, n, S.MOn{}, False{}, sel}, srv, Con{c, cs}, R.Ds{d, pre, post})) : S.Fin}:
+  -> {S.run.fast(S.Conn{id, a, n, S.MOn{}, False{}, sel, r3}, srv, Con{c, cs}, hs, R.Ds{d, pre, post}) == S.done.gen(S.gen(S.Conn{id, a, n, S.MOn{}, False{}, sel, r3}, srv, Con{c, cs}, R.Ds{d, pre, post})) : S.Fin}:
   +ea => +ep =>
-    %Equal.sym(List<&2, R.Reply> & R.Db, B.exec_batch(Con{c, cs}, hs, d), R.exec_all(Con{c, cs}, d), Laws.batch_hints(Con{c, cs}, hs, d)) : {S.done.fast(S.Conn{id, a, n, S.MOn{}, False{}, sel}, srv, pre, post, _) == S.done.gen(S.gen(S.Conn{id, a, n, S.MOn{}, False{}, sel}, srv, Con{c, cs}, R.Ds{d, pre, post})) : S.Fin}
-    %exec_all_run(Con{c, cs}, d) : {S.done.fast(S.Conn{id, a, n, S.MOn{}, False{}, sel}, srv, pre, post, _) == S.done.gen(S.gen(S.Conn{id, a, n, S.MOn{}, False{}, sel}, srv, Con{c, cs}, R.Ds{d, pre, post})) : S.Fin}
-    %eta_l(run(Con{c, cs}, d)) : {S.done.fast(S.Conn{id, a, n, S.MOn{}, False{}, sel}, srv, pre, post, _) == S.done.gen(S.gen(S.Conn{id, a, n, S.MOn{}, False{}, sel}, srv, Con{c, cs}, R.Ds{d, pre, post})) : S.Fin}
-    %gen_spec(Con{c, cs}, Nil{}, Nil{}, S.Conn{id, a, n, S.MOn{}, False{}, sel}, srv, R.Ds{d, pre, post}) : {S.done.fast(S.Conn{id, a, n, S.MOn{}, False{}, sel}, srv, pre, post, (rfst(run(Con{c, cs}, d)), rsnd(run(Con{c, cs}, d)))) == S.done.gen(_) : S.Fin}
-    fin4(rfst(run(Con{c, cs}, d)), List.reverse(&2, R.Reply, List.reverse.go(&2, R.Reply, greps(Con{c, cs}, S.Conn{id, a, n, S.MOn{}, False{}, sel}, srv, R.Ds{d, pre, post}), Nil{})),
-         S.Conn{id, a, n, S.MOn{}, False{}, sel}, gconn(Con{c, cs}, S.Conn{id, a, n, S.MOn{}, False{}, sel}, srv), srv, gsrv(Con{c, cs}, S.Conn{id, a, n, S.MOn{}, False{}, sel}, srv),
-         R.Ds{rsnd(run(Con{c, cs}, d)), pre, post}, R.acts(S.plan(Con{c, cs}, S.Conn{id, a, n, S.MOn{}, False{}, sel}, srv), R.Ds{d, pre, post}),
-         Equal.trans(List<&2, R.Reply>, rfst(run(Con{c, cs}, d)), greps(Con{c, cs}, S.Conn{id, a, n, S.MOn{}, False{}, sel}, srv, R.Ds{d, pre, post}), List.reverse(&2, R.Reply, List.reverse.go(&2, R.Reply, greps(Con{c, cs}, S.Conn{id, a, n, S.MOn{}, False{}, sel}, srv, R.Ds{d, pre, post}), Nil{})),
-           Equal.sym(List<&2, R.Reply>, greps(Con{c, cs}, S.Conn{id, a, n, S.MOn{}, False{}, sel}, srv, R.Ds{d, pre, post}), rfst(run(Con{c, cs}, d)), fast_greps(Con{c, cs}, id, a, n, sel, srv, d, pre, post)(ea)(ep)),
-           Equal.sym(List<&2, R.Reply>, List.reverse(&2, R.Reply, List.reverse.go(&2, R.Reply, greps(Con{c, cs}, S.Conn{id, a, n, S.MOn{}, False{}, sel}, srv, R.Ds{d, pre, post}), Nil{})), greps(Con{c, cs}, S.Conn{id, a, n, S.MOn{}, False{}, sel}, srv, R.Ds{d, pre, post}), rev_rev_r(greps(Con{c, cs}, S.Conn{id, a, n, S.MOn{}, False{}, sel}, srv, R.Ds{d, pre, post})))),
-         Equal.sym(S.Conn, gconn(Con{c, cs}, S.Conn{id, a, n, S.MOn{}, False{}, sel}, srv), S.Conn{id, a, n, S.MOn{}, False{}, sel}, fast_conn1(Con{c, cs}, id, a, n, sel, srv)(ea)(ep)),
-         Equal.sym(S.Srv, gsrv(Con{c, cs}, S.Conn{id, a, n, S.MOn{}, False{}, sel}, srv), srv, gsrv_plain(Con{c, cs}, S.Conn{id, a, n, S.MOn{}, False{}, sel}, srv)(ep)),
-         Equal.trans(R.Ds, R.Ds{rsnd(run(Con{c, cs}, d)), pre, post}, R.acts(runs(Con{c, cs}), R.Ds{d, pre, post}), R.acts(S.plan(Con{c, cs}, S.Conn{id, a, n, S.MOn{}, False{}, sel}, srv), R.Ds{d, pre, post}),
+    %Equal.sym(List<&2, R.Reply> & R.Db, B.exec_batch(Con{c, cs}, hs, d), R.exec_all(Con{c, cs}, d), Laws.batch_hints(Con{c, cs}, hs, d)) : {S.done.fast(S.Conn{id, a, n, S.MOn{}, False{}, sel, r3}, srv, pre, post, _) == S.done.gen(S.gen(S.Conn{id, a, n, S.MOn{}, False{}, sel, r3}, srv, Con{c, cs}, R.Ds{d, pre, post})) : S.Fin}
+    %exec_all_run(Con{c, cs}, d) : {S.done.fast(S.Conn{id, a, n, S.MOn{}, False{}, sel, r3}, srv, pre, post, _) == S.done.gen(S.gen(S.Conn{id, a, n, S.MOn{}, False{}, sel, r3}, srv, Con{c, cs}, R.Ds{d, pre, post})) : S.Fin}
+    %eta_l(run(Con{c, cs}, d)) : {S.done.fast(S.Conn{id, a, n, S.MOn{}, False{}, sel, r3}, srv, pre, post, _) == S.done.gen(S.gen(S.Conn{id, a, n, S.MOn{}, False{}, sel, r3}, srv, Con{c, cs}, R.Ds{d, pre, post})) : S.Fin}
+    %gen_spec(Con{c, cs}, Nil{}, Nil{}, S.Conn{id, a, n, S.MOn{}, False{}, sel, r3}, srv, R.Ds{d, pre, post}) : {S.done.fast(S.Conn{id, a, n, S.MOn{}, False{}, sel, r3}, srv, pre, post, (rfst(run(Con{c, cs}, d)), rsnd(run(Con{c, cs}, d)))) == S.done.gen(_) : S.Fin}
+    fin4(rfst(run(Con{c, cs}, d)), List.reverse(&2, R.Reply, List.reverse.go(&2, R.Reply, greps(Con{c, cs}, S.Conn{id, a, n, S.MOn{}, False{}, sel, r3}, srv, R.Ds{d, pre, post}), Nil{})),
+         S.Conn{id, a, n, S.MOn{}, False{}, sel, r3}, gconn(Con{c, cs}, S.Conn{id, a, n, S.MOn{}, False{}, sel, r3}, srv), srv, gsrv(Con{c, cs}, S.Conn{id, a, n, S.MOn{}, False{}, sel, r3}, srv),
+         R.Ds{rsnd(run(Con{c, cs}, d)), pre, post}, R.acts(S.plan(Con{c, cs}, S.Conn{id, a, n, S.MOn{}, False{}, sel, r3}, srv), R.Ds{d, pre, post}),
+         Equal.trans(List<&2, R.Reply>, rfst(run(Con{c, cs}, d)), greps(Con{c, cs}, S.Conn{id, a, n, S.MOn{}, False{}, sel, r3}, srv, R.Ds{d, pre, post}), List.reverse(&2, R.Reply, List.reverse.go(&2, R.Reply, greps(Con{c, cs}, S.Conn{id, a, n, S.MOn{}, False{}, sel, r3}, srv, R.Ds{d, pre, post}), Nil{})),
+           Equal.sym(List<&2, R.Reply>, greps(Con{c, cs}, S.Conn{id, a, n, S.MOn{}, False{}, sel, r3}, srv, R.Ds{d, pre, post}), rfst(run(Con{c, cs}, d)), fast_greps(Con{c, cs}, id, a, n, sel, r3, srv, d, pre, post)(ea)(ep)),
+           Equal.sym(List<&2, R.Reply>, List.reverse(&2, R.Reply, List.reverse.go(&2, R.Reply, greps(Con{c, cs}, S.Conn{id, a, n, S.MOn{}, False{}, sel, r3}, srv, R.Ds{d, pre, post}), Nil{})), greps(Con{c, cs}, S.Conn{id, a, n, S.MOn{}, False{}, sel, r3}, srv, R.Ds{d, pre, post}), rev_rev_r(greps(Con{c, cs}, S.Conn{id, a, n, S.MOn{}, False{}, sel, r3}, srv, R.Ds{d, pre, post})))),
+         Equal.sym(S.Conn, gconn(Con{c, cs}, S.Conn{id, a, n, S.MOn{}, False{}, sel, r3}, srv), S.Conn{id, a, n, S.MOn{}, False{}, sel, r3}, fast_conn1(Con{c, cs}, id, a, n, sel, r3, srv)(ea)(ep)),
+         Equal.sym(S.Srv, gsrv(Con{c, cs}, S.Conn{id, a, n, S.MOn{}, False{}, sel, r3}, srv), srv, gsrv_plain(Con{c, cs}, S.Conn{id, a, n, S.MOn{}, False{}, sel, r3}, srv)(ep)),
+         Equal.trans(R.Ds, R.Ds{rsnd(run(Con{c, cs}, d)), pre, post}, R.acts(runs(Con{c, cs}), R.Ds{d, pre, post}), R.acts(S.plan(Con{c, cs}, S.Conn{id, a, n, S.MOn{}, False{}, sel, r3}, srv), R.Ds{d, pre, post}),
            acts_runs(Con{c, cs}, d, pre, post),
-           Equal.cong(List<&2, R.Act>, R.Ds, z => R.acts(z, R.Ds{d, pre, post}), runs(Con{c, cs}), S.plan(Con{c, cs}, S.Conn{id, a, n, S.MOn{}, False{}, sel}, srv), Equal.sym(List<&2, R.Act>, S.plan(Con{c, cs}, S.Conn{id, a, n, S.MOn{}, False{}, sel}, srv), runs(Con{c, cs}), fast_plan(Con{c, cs}, id, a, n, sel, srv)(ea)(ep)))))
+           Equal.cong(List<&2, R.Act>, R.Ds, z => R.acts(z, R.Ds{d, pre, post}), runs(Con{c, cs}), S.plan(Con{c, cs}, S.Conn{id, a, n, S.MOn{}, False{}, sel, r3}, srv), Equal.sym(List<&2, R.Act>, S.plan(Con{c, cs}, S.Conn{id, a, n, S.MOn{}, False{}, sel, r3}, srv), runs(Con{c, cs}), fast_plan(Con{c, cs}, id, a, n, sel, r3, srv)(ea)(ep)))))
 
 # a batch of database commands taken the fast way or not
 def plain_run(b: Bool, conn: S.Conn, +srv: S.Srv, cs: List<&2, R.Cmd>, +hs: List<&2, U32>, ds: R.Ds) -> {b == S.ready(conn, srv) : Bool} -> {plain(cs) == True{} : Bool} -> {S.run.plain(b, conn, srv, cs, hs, ds) == S.done.gen(S.gen(conn, srv, cs, ds)) : S.Fin}:
@@ -15053,18 +15053,18 @@ def plain_run(b: Bool, conn: S.Conn, +srv: S.Srv, cs: List<&2, R.Cmd>, +hs: List
       eb => ep => {==}
     case False{} _ Con{c, rest} _:
       eb => ep => {==}
-    case True{} S.Conn{+id, +a, +n, S.MOn{}, False{}, +sel} Con{+c, +rest} R.Ds{+d, +pre, +post}:
-      eb => +ep => fast_eq(c, rest, id, a, n, sel, srv, hs, d, pre, post)(Equal.sym(Bool, True{}, S.authed(S.Conn{id, a, n, S.MOn{}, False{}, sel}, srv), eb))(ep)
-    case True{} S.Conn{id, a, n, S.MOn{}, True{}, sel} Con{c, rest} x:
-      eb => ep => Empty.absurd({S.run.plain(True{}, S.Conn{id, a, n, S.MOn{}, True{}, sel}, srv, Con{c, rest}, hs, x) == S.done.gen(S.gen(S.Conn{id, a, n, S.MOn{}, True{}, sel}, srv, Con{c, rest}, x)) : S.Fin}, true_false(eb))
-    case True{} S.Conn{id, a, n, S.MOff{}, True{}, sel} Con{c, rest} x:
-      eb => ep => Empty.absurd({S.run.plain(True{}, S.Conn{id, a, n, S.MOff{}, True{}, sel}, srv, Con{c, rest}, hs, x) == S.done.gen(S.gen(S.Conn{id, a, n, S.MOff{}, True{}, sel}, srv, Con{c, rest}, x)) : S.Fin}, true_false(eb))
-    case True{} S.Conn{id, a, n, S.MOff{}, False{}, sel} Con{c, rest} x:
-      eb => ep => Empty.absurd({S.run.plain(True{}, S.Conn{id, a, n, S.MOff{}, False{}, sel}, srv, Con{c, rest}, hs, x) == S.done.gen(S.gen(S.Conn{id, a, n, S.MOff{}, False{}, sel}, srv, Con{c, rest}, x)) : S.Fin}, true_false(eb))
-    case True{} S.Conn{id, a, n, S.MSkip{}, True{}, sel} Con{c, rest} x:
-      eb => ep => Empty.absurd({S.run.plain(True{}, S.Conn{id, a, n, S.MSkip{}, True{}, sel}, srv, Con{c, rest}, hs, x) == S.done.gen(S.gen(S.Conn{id, a, n, S.MSkip{}, True{}, sel}, srv, Con{c, rest}, x)) : S.Fin}, true_false(eb))
-    case True{} S.Conn{id, a, n, S.MSkip{}, False{}, sel} Con{c, rest} x:
-      eb => ep => Empty.absurd({S.run.plain(True{}, S.Conn{id, a, n, S.MSkip{}, False{}, sel}, srv, Con{c, rest}, hs, x) == S.done.gen(S.gen(S.Conn{id, a, n, S.MSkip{}, False{}, sel}, srv, Con{c, rest}, x)) : S.Fin}, true_false(eb))
+    case True{} S.Conn{+id, +a, +n, S.MOn{}, False{}, +sel, +r3} Con{+c, +rest} R.Ds{+d, +pre, +post}:
+      eb => +ep => fast_eq(c, rest, id, a, n, sel, r3, srv, hs, d, pre, post)(Equal.sym(Bool, True{}, S.authed(S.Conn{id, a, n, S.MOn{}, False{}, sel, r3}, srv), eb))(ep)
+    case True{} S.Conn{id, a, n, S.MOn{}, True{}, sel, r3} Con{c, rest} x:
+      eb => ep => Empty.absurd({S.run.plain(True{}, S.Conn{id, a, n, S.MOn{}, True{}, sel, r3}, srv, Con{c, rest}, hs, x) == S.done.gen(S.gen(S.Conn{id, a, n, S.MOn{}, True{}, sel, r3}, srv, Con{c, rest}, x)) : S.Fin}, true_false(eb))
+    case True{} S.Conn{id, a, n, S.MOff{}, True{}, sel, r3} Con{c, rest} x:
+      eb => ep => Empty.absurd({S.run.plain(True{}, S.Conn{id, a, n, S.MOff{}, True{}, sel, r3}, srv, Con{c, rest}, hs, x) == S.done.gen(S.gen(S.Conn{id, a, n, S.MOff{}, True{}, sel, r3}, srv, Con{c, rest}, x)) : S.Fin}, true_false(eb))
+    case True{} S.Conn{id, a, n, S.MOff{}, False{}, sel, r3} Con{c, rest} x:
+      eb => ep => Empty.absurd({S.run.plain(True{}, S.Conn{id, a, n, S.MOff{}, False{}, sel, r3}, srv, Con{c, rest}, hs, x) == S.done.gen(S.gen(S.Conn{id, a, n, S.MOff{}, False{}, sel, r3}, srv, Con{c, rest}, x)) : S.Fin}, true_false(eb))
+    case True{} S.Conn{id, a, n, S.MSkip{}, True{}, sel, r3} Con{c, rest} x:
+      eb => ep => Empty.absurd({S.run.plain(True{}, S.Conn{id, a, n, S.MSkip{}, True{}, sel, r3}, srv, Con{c, rest}, hs, x) == S.done.gen(S.gen(S.Conn{id, a, n, S.MSkip{}, True{}, sel, r3}, srv, Con{c, rest}, x)) : S.Fin}, true_false(eb))
+    case True{} S.Conn{id, a, n, S.MSkip{}, False{}, sel, r3} Con{c, rest} x:
+      eb => ep => Empty.absurd({S.run.plain(True{}, S.Conn{id, a, n, S.MSkip{}, False{}, sel, r3}, srv, Con{c, rest}, hs, x) == S.done.gen(S.gen(S.Conn{id, a, n, S.MSkip{}, False{}, sel, r3}, srv, Con{c, rest}, x)) : S.Fin}, true_false(eb))
 
 # a batch with a command of the connection or of the server runs the
 # general way, its commands in order, whatever its hashes
@@ -15160,31 +15160,31 @@ def log5(-a1: List<&2, R.Reply>, -a2: List<&2, R.Reply>, -b1: List<&2, A.Eff>, -
   {==}
 
 # and with an append-only file
-def fast_eq_log(+c: R.Cmd, +cs: List<&2, R.Cmd>, +id: Nat, +a: Bool, +n: String, +sel: Nat, +srv: S.Srv, +hs: List<&2, U32>, +d: R.Db, +pre: List<&2, R.Db>, +post: List<&2, R.Db>)
-  -> {S.authed(S.Conn{id, a, n, S.MOn{}, False{}, sel}, srv) == True{} : Bool}
+def fast_eq_log(+c: R.Cmd, +cs: List<&2, R.Cmd>, +id: Nat, +a: Bool, +n: String, +sel: Nat, +r3: Bool, +srv: S.Srv, +hs: List<&2, U32>, +d: R.Db, +pre: List<&2, R.Db>, +post: List<&2, R.Db>)
+  -> {S.authed(S.Conn{id, a, n, S.MOn{}, False{}, sel, r3}, srv) == True{} : Bool}
   -> {plain(Con{c, cs}) == True{} : Bool}
-  -> {S.run_log.fast(S.Conn{id, a, n, S.MOn{}, False{}, sel}, srv, Con{c, cs}, hs, R.Ds{d, pre, post}) == S.logged.gen(S.gen(S.Conn{id, a, n, S.MOn{}, False{}, sel}, srv, Con{c, cs}, R.Ds{d, pre, post})) : S.Logged}:
+  -> {S.run_log.fast(S.Conn{id, a, n, S.MOn{}, False{}, sel, r3}, srv, Con{c, cs}, hs, R.Ds{d, pre, post}) == S.logged.gen(S.gen(S.Conn{id, a, n, S.MOn{}, False{}, sel, r3}, srv, Con{c, cs}, R.Ds{d, pre, post})) : S.Logged}:
   +ea => +ep =>
-    %Equal.sym(List<&2, R.Reply> & (List<&2, R.Cmd> & R.Db), A.log_batch(Con{c, cs}, hs, d), A.exec_log(Con{c, cs}, d), Laws.log_hints(Con{c, cs}, hs, d)) : {S.logged.fast(S.Conn{id, a, n, S.MOn{}, False{}, sel}, srv, List.length(&2, R.Db, pre), pre, post, _) == S.logged.gen(S.gen(S.Conn{id, a, n, S.MOn{}, False{}, sel}, srv, Con{c, cs}, R.Ds{d, pre, post})) : S.Logged}
-    %log_parts(Con{c, cs}, d) : {S.logged.fast(S.Conn{id, a, n, S.MOn{}, False{}, sel}, srv, List.length(&2, R.Db, pre), pre, post, _) == S.logged.gen(S.gen(S.Conn{id, a, n, S.MOn{}, False{}, sel}, srv, Con{c, cs}, R.Ds{d, pre, post})) : S.Logged}
-    %gen_spec(Con{c, cs}, Nil{}, Nil{}, S.Conn{id, a, n, S.MOn{}, False{}, sel}, srv, R.Ds{d, pre, post}) : {S.logged.fast(S.Conn{id, a, n, S.MOn{}, False{}, sel}, srv, List.length(&2, R.Db, pre), pre, post, (rfst(run(Con{c, cs}, d)), (effs(Con{c, cs}, d), rsnd(run(Con{c, cs}, d))))) == S.logged.gen(_) : S.Logged}
-    log5(rfst(run(Con{c, cs}, d)), List.reverse(&2, R.Reply, List.reverse.go(&2, R.Reply, greps(Con{c, cs}, S.Conn{id, a, n, S.MOn{}, False{}, sel}, srv, R.Ds{d, pre, post}), Nil{})),
-         A.at_db(List.length(&2, R.Db, pre), effs(Con{c, cs}, d)), List.reverse(&2, A.Eff, List.reverse.go(&2, A.Eff, aeffs(S.plan(Con{c, cs}, S.Conn{id, a, n, S.MOn{}, False{}, sel}, srv), R.Ds{d, pre, post}), Nil{})),
-         S.Conn{id, a, n, S.MOn{}, False{}, sel}, gconn(Con{c, cs}, S.Conn{id, a, n, S.MOn{}, False{}, sel}, srv), srv, gsrv(Con{c, cs}, S.Conn{id, a, n, S.MOn{}, False{}, sel}, srv),
-         R.Ds{rsnd(run(Con{c, cs}, d)), pre, post}, R.acts(S.plan(Con{c, cs}, S.Conn{id, a, n, S.MOn{}, False{}, sel}, srv), R.Ds{d, pre, post}),
-         Equal.trans(List<&2, R.Reply>, rfst(run(Con{c, cs}, d)), greps(Con{c, cs}, S.Conn{id, a, n, S.MOn{}, False{}, sel}, srv, R.Ds{d, pre, post}), List.reverse(&2, R.Reply, List.reverse.go(&2, R.Reply, greps(Con{c, cs}, S.Conn{id, a, n, S.MOn{}, False{}, sel}, srv, R.Ds{d, pre, post}), Nil{})),
-           Equal.sym(List<&2, R.Reply>, greps(Con{c, cs}, S.Conn{id, a, n, S.MOn{}, False{}, sel}, srv, R.Ds{d, pre, post}), rfst(run(Con{c, cs}, d)), fast_greps(Con{c, cs}, id, a, n, sel, srv, d, pre, post)(ea)(ep)),
-           Equal.sym(List<&2, R.Reply>, List.reverse(&2, R.Reply, List.reverse.go(&2, R.Reply, greps(Con{c, cs}, S.Conn{id, a, n, S.MOn{}, False{}, sel}, srv, R.Ds{d, pre, post}), Nil{})), greps(Con{c, cs}, S.Conn{id, a, n, S.MOn{}, False{}, sel}, srv, R.Ds{d, pre, post}), rev_rev_r(greps(Con{c, cs}, S.Conn{id, a, n, S.MOn{}, False{}, sel}, srv, R.Ds{d, pre, post})))),
-         Equal.trans(List<&2, A.Eff>, A.at_db(List.length(&2, R.Db, pre), effs(Con{c, cs}, d)), aeffs(S.plan(Con{c, cs}, S.Conn{id, a, n, S.MOn{}, False{}, sel}, srv), R.Ds{d, pre, post}), List.reverse(&2, A.Eff, List.reverse.go(&2, A.Eff, aeffs(S.plan(Con{c, cs}, S.Conn{id, a, n, S.MOn{}, False{}, sel}, srv), R.Ds{d, pre, post}), Nil{})),
-           Equal.trans(List<&2, A.Eff>, A.at_db(List.length(&2, R.Db, pre), effs(Con{c, cs}, d)), aeffs(runs(Con{c, cs}), R.Ds{d, pre, post}), aeffs(S.plan(Con{c, cs}, S.Conn{id, a, n, S.MOn{}, False{}, sel}, srv), R.Ds{d, pre, post}),
+    %Equal.sym(List<&2, R.Reply> & (List<&2, R.Cmd> & R.Db), A.log_batch(Con{c, cs}, hs, d), A.exec_log(Con{c, cs}, d), Laws.log_hints(Con{c, cs}, hs, d)) : {S.logged.fast(S.Conn{id, a, n, S.MOn{}, False{}, sel, r3}, srv, List.length(&2, R.Db, pre), pre, post, _) == S.logged.gen(S.gen(S.Conn{id, a, n, S.MOn{}, False{}, sel, r3}, srv, Con{c, cs}, R.Ds{d, pre, post})) : S.Logged}
+    %log_parts(Con{c, cs}, d) : {S.logged.fast(S.Conn{id, a, n, S.MOn{}, False{}, sel, r3}, srv, List.length(&2, R.Db, pre), pre, post, _) == S.logged.gen(S.gen(S.Conn{id, a, n, S.MOn{}, False{}, sel, r3}, srv, Con{c, cs}, R.Ds{d, pre, post})) : S.Logged}
+    %gen_spec(Con{c, cs}, Nil{}, Nil{}, S.Conn{id, a, n, S.MOn{}, False{}, sel, r3}, srv, R.Ds{d, pre, post}) : {S.logged.fast(S.Conn{id, a, n, S.MOn{}, False{}, sel, r3}, srv, List.length(&2, R.Db, pre), pre, post, (rfst(run(Con{c, cs}, d)), (effs(Con{c, cs}, d), rsnd(run(Con{c, cs}, d))))) == S.logged.gen(_) : S.Logged}
+    log5(rfst(run(Con{c, cs}, d)), List.reverse(&2, R.Reply, List.reverse.go(&2, R.Reply, greps(Con{c, cs}, S.Conn{id, a, n, S.MOn{}, False{}, sel, r3}, srv, R.Ds{d, pre, post}), Nil{})),
+         A.at_db(List.length(&2, R.Db, pre), effs(Con{c, cs}, d)), List.reverse(&2, A.Eff, List.reverse.go(&2, A.Eff, aeffs(S.plan(Con{c, cs}, S.Conn{id, a, n, S.MOn{}, False{}, sel, r3}, srv), R.Ds{d, pre, post}), Nil{})),
+         S.Conn{id, a, n, S.MOn{}, False{}, sel, r3}, gconn(Con{c, cs}, S.Conn{id, a, n, S.MOn{}, False{}, sel, r3}, srv), srv, gsrv(Con{c, cs}, S.Conn{id, a, n, S.MOn{}, False{}, sel, r3}, srv),
+         R.Ds{rsnd(run(Con{c, cs}, d)), pre, post}, R.acts(S.plan(Con{c, cs}, S.Conn{id, a, n, S.MOn{}, False{}, sel, r3}, srv), R.Ds{d, pre, post}),
+         Equal.trans(List<&2, R.Reply>, rfst(run(Con{c, cs}, d)), greps(Con{c, cs}, S.Conn{id, a, n, S.MOn{}, False{}, sel, r3}, srv, R.Ds{d, pre, post}), List.reverse(&2, R.Reply, List.reverse.go(&2, R.Reply, greps(Con{c, cs}, S.Conn{id, a, n, S.MOn{}, False{}, sel, r3}, srv, R.Ds{d, pre, post}), Nil{})),
+           Equal.sym(List<&2, R.Reply>, greps(Con{c, cs}, S.Conn{id, a, n, S.MOn{}, False{}, sel, r3}, srv, R.Ds{d, pre, post}), rfst(run(Con{c, cs}, d)), fast_greps(Con{c, cs}, id, a, n, sel, r3, srv, d, pre, post)(ea)(ep)),
+           Equal.sym(List<&2, R.Reply>, List.reverse(&2, R.Reply, List.reverse.go(&2, R.Reply, greps(Con{c, cs}, S.Conn{id, a, n, S.MOn{}, False{}, sel, r3}, srv, R.Ds{d, pre, post}), Nil{})), greps(Con{c, cs}, S.Conn{id, a, n, S.MOn{}, False{}, sel, r3}, srv, R.Ds{d, pre, post}), rev_rev_r(greps(Con{c, cs}, S.Conn{id, a, n, S.MOn{}, False{}, sel, r3}, srv, R.Ds{d, pre, post})))),
+         Equal.trans(List<&2, A.Eff>, A.at_db(List.length(&2, R.Db, pre), effs(Con{c, cs}, d)), aeffs(S.plan(Con{c, cs}, S.Conn{id, a, n, S.MOn{}, False{}, sel, r3}, srv), R.Ds{d, pre, post}), List.reverse(&2, A.Eff, List.reverse.go(&2, A.Eff, aeffs(S.plan(Con{c, cs}, S.Conn{id, a, n, S.MOn{}, False{}, sel, r3}, srv), R.Ds{d, pre, post}), Nil{})),
+           Equal.trans(List<&2, A.Eff>, A.at_db(List.length(&2, R.Db, pre), effs(Con{c, cs}, d)), aeffs(runs(Con{c, cs}), R.Ds{d, pre, post}), aeffs(S.plan(Con{c, cs}, S.Conn{id, a, n, S.MOn{}, False{}, sel, r3}, srv), R.Ds{d, pre, post}),
              aeffs_runs(Con{c, cs}, d, pre, post),
-             Equal.cong(List<&2, R.Act>, List<&2, A.Eff>, z => aeffs(z, R.Ds{d, pre, post}), runs(Con{c, cs}), S.plan(Con{c, cs}, S.Conn{id, a, n, S.MOn{}, False{}, sel}, srv), Equal.sym(List<&2, R.Act>, S.plan(Con{c, cs}, S.Conn{id, a, n, S.MOn{}, False{}, sel}, srv), runs(Con{c, cs}), fast_plan(Con{c, cs}, id, a, n, sel, srv)(ea)(ep)))),
-           Equal.sym(List<&2, A.Eff>, List.reverse(&2, A.Eff, List.reverse.go(&2, A.Eff, aeffs(S.plan(Con{c, cs}, S.Conn{id, a, n, S.MOn{}, False{}, sel}, srv), R.Ds{d, pre, post}), Nil{})), aeffs(S.plan(Con{c, cs}, S.Conn{id, a, n, S.MOn{}, False{}, sel}, srv), R.Ds{d, pre, post}), rev_rev_e(aeffs(S.plan(Con{c, cs}, S.Conn{id, a, n, S.MOn{}, False{}, sel}, srv), R.Ds{d, pre, post})))),
-         Equal.sym(S.Conn, gconn(Con{c, cs}, S.Conn{id, a, n, S.MOn{}, False{}, sel}, srv), S.Conn{id, a, n, S.MOn{}, False{}, sel}, fast_conn1(Con{c, cs}, id, a, n, sel, srv)(ea)(ep)),
-         Equal.sym(S.Srv, gsrv(Con{c, cs}, S.Conn{id, a, n, S.MOn{}, False{}, sel}, srv), srv, gsrv_plain(Con{c, cs}, S.Conn{id, a, n, S.MOn{}, False{}, sel}, srv)(ep)),
-         Equal.trans(R.Ds, R.Ds{rsnd(run(Con{c, cs}, d)), pre, post}, R.acts(runs(Con{c, cs}), R.Ds{d, pre, post}), R.acts(S.plan(Con{c, cs}, S.Conn{id, a, n, S.MOn{}, False{}, sel}, srv), R.Ds{d, pre, post}),
+             Equal.cong(List<&2, R.Act>, List<&2, A.Eff>, z => aeffs(z, R.Ds{d, pre, post}), runs(Con{c, cs}), S.plan(Con{c, cs}, S.Conn{id, a, n, S.MOn{}, False{}, sel, r3}, srv), Equal.sym(List<&2, R.Act>, S.plan(Con{c, cs}, S.Conn{id, a, n, S.MOn{}, False{}, sel, r3}, srv), runs(Con{c, cs}), fast_plan(Con{c, cs}, id, a, n, sel, r3, srv)(ea)(ep)))),
+           Equal.sym(List<&2, A.Eff>, List.reverse(&2, A.Eff, List.reverse.go(&2, A.Eff, aeffs(S.plan(Con{c, cs}, S.Conn{id, a, n, S.MOn{}, False{}, sel, r3}, srv), R.Ds{d, pre, post}), Nil{})), aeffs(S.plan(Con{c, cs}, S.Conn{id, a, n, S.MOn{}, False{}, sel, r3}, srv), R.Ds{d, pre, post}), rev_rev_e(aeffs(S.plan(Con{c, cs}, S.Conn{id, a, n, S.MOn{}, False{}, sel, r3}, srv), R.Ds{d, pre, post})))),
+         Equal.sym(S.Conn, gconn(Con{c, cs}, S.Conn{id, a, n, S.MOn{}, False{}, sel, r3}, srv), S.Conn{id, a, n, S.MOn{}, False{}, sel, r3}, fast_conn1(Con{c, cs}, id, a, n, sel, r3, srv)(ea)(ep)),
+         Equal.sym(S.Srv, gsrv(Con{c, cs}, S.Conn{id, a, n, S.MOn{}, False{}, sel, r3}, srv), srv, gsrv_plain(Con{c, cs}, S.Conn{id, a, n, S.MOn{}, False{}, sel, r3}, srv)(ep)),
+         Equal.trans(R.Ds, R.Ds{rsnd(run(Con{c, cs}, d)), pre, post}, R.acts(runs(Con{c, cs}), R.Ds{d, pre, post}), R.acts(S.plan(Con{c, cs}, S.Conn{id, a, n, S.MOn{}, False{}, sel, r3}, srv), R.Ds{d, pre, post}),
            acts_runs(Con{c, cs}, d, pre, post),
-           Equal.cong(List<&2, R.Act>, R.Ds, z => R.acts(z, R.Ds{d, pre, post}), runs(Con{c, cs}), S.plan(Con{c, cs}, S.Conn{id, a, n, S.MOn{}, False{}, sel}, srv), Equal.sym(List<&2, R.Act>, S.plan(Con{c, cs}, S.Conn{id, a, n, S.MOn{}, False{}, sel}, srv), runs(Con{c, cs}), fast_plan(Con{c, cs}, id, a, n, sel, srv)(ea)(ep)))))
+           Equal.cong(List<&2, R.Act>, R.Ds, z => R.acts(z, R.Ds{d, pre, post}), runs(Con{c, cs}), S.plan(Con{c, cs}, S.Conn{id, a, n, S.MOn{}, False{}, sel, r3}, srv), Equal.sym(List<&2, R.Act>, S.plan(Con{c, cs}, S.Conn{id, a, n, S.MOn{}, False{}, sel, r3}, srv), runs(Con{c, cs}), fast_plan(Con{c, cs}, id, a, n, sel, r3, srv)(ea)(ep)))))
 
 def plain_run_log(b: Bool, conn: S.Conn, +srv: S.Srv, cs: List<&2, R.Cmd>, +hs: List<&2, U32>, ds: R.Ds) -> {b == S.ready(conn, srv) : Bool} -> {plain(cs) == True{} : Bool} -> {S.run_log.plain(b, conn, srv, cs, hs, ds) == S.logged.gen(S.gen(conn, srv, cs, ds)) : S.Logged}:
   match b conn cs ds:
@@ -15192,18 +15192,18 @@ def plain_run_log(b: Bool, conn: S.Conn, +srv: S.Srv, cs: List<&2, R.Cmd>, +hs: 
       eb => ep => {==}
     case False{} _ Con{c, rest} _:
       eb => ep => {==}
-    case True{} S.Conn{+id, +a, +n, S.MOn{}, False{}, +sel} Con{+c, +rest} R.Ds{+d, +pre, +post}:
-      eb => +ep => fast_eq_log(c, rest, id, a, n, sel, srv, hs, d, pre, post)(Equal.sym(Bool, True{}, S.authed(S.Conn{id, a, n, S.MOn{}, False{}, sel}, srv), eb))(ep)
-    case True{} S.Conn{id, a, n, S.MOn{}, True{}, sel} Con{c, rest} x:
-      eb => ep => Empty.absurd({S.run_log.plain(True{}, S.Conn{id, a, n, S.MOn{}, True{}, sel}, srv, Con{c, rest}, hs, x) == S.logged.gen(S.gen(S.Conn{id, a, n, S.MOn{}, True{}, sel}, srv, Con{c, rest}, x)) : S.Logged}, true_false(eb))
-    case True{} S.Conn{id, a, n, S.MOff{}, True{}, sel} Con{c, rest} x:
-      eb => ep => Empty.absurd({S.run_log.plain(True{}, S.Conn{id, a, n, S.MOff{}, True{}, sel}, srv, Con{c, rest}, hs, x) == S.logged.gen(S.gen(S.Conn{id, a, n, S.MOff{}, True{}, sel}, srv, Con{c, rest}, x)) : S.Logged}, true_false(eb))
-    case True{} S.Conn{id, a, n, S.MOff{}, False{}, sel} Con{c, rest} x:
-      eb => ep => Empty.absurd({S.run_log.plain(True{}, S.Conn{id, a, n, S.MOff{}, False{}, sel}, srv, Con{c, rest}, hs, x) == S.logged.gen(S.gen(S.Conn{id, a, n, S.MOff{}, False{}, sel}, srv, Con{c, rest}, x)) : S.Logged}, true_false(eb))
-    case True{} S.Conn{id, a, n, S.MSkip{}, True{}, sel} Con{c, rest} x:
-      eb => ep => Empty.absurd({S.run_log.plain(True{}, S.Conn{id, a, n, S.MSkip{}, True{}, sel}, srv, Con{c, rest}, hs, x) == S.logged.gen(S.gen(S.Conn{id, a, n, S.MSkip{}, True{}, sel}, srv, Con{c, rest}, x)) : S.Logged}, true_false(eb))
-    case True{} S.Conn{id, a, n, S.MSkip{}, False{}, sel} Con{c, rest} x:
-      eb => ep => Empty.absurd({S.run_log.plain(True{}, S.Conn{id, a, n, S.MSkip{}, False{}, sel}, srv, Con{c, rest}, hs, x) == S.logged.gen(S.gen(S.Conn{id, a, n, S.MSkip{}, False{}, sel}, srv, Con{c, rest}, x)) : S.Logged}, true_false(eb))
+    case True{} S.Conn{+id, +a, +n, S.MOn{}, False{}, +sel, +r3} Con{+c, +rest} R.Ds{+d, +pre, +post}:
+      eb => +ep => fast_eq_log(c, rest, id, a, n, sel, r3, srv, hs, d, pre, post)(Equal.sym(Bool, True{}, S.authed(S.Conn{id, a, n, S.MOn{}, False{}, sel, r3}, srv), eb))(ep)
+    case True{} S.Conn{id, a, n, S.MOn{}, True{}, sel, r3} Con{c, rest} x:
+      eb => ep => Empty.absurd({S.run_log.plain(True{}, S.Conn{id, a, n, S.MOn{}, True{}, sel, r3}, srv, Con{c, rest}, hs, x) == S.logged.gen(S.gen(S.Conn{id, a, n, S.MOn{}, True{}, sel, r3}, srv, Con{c, rest}, x)) : S.Logged}, true_false(eb))
+    case True{} S.Conn{id, a, n, S.MOff{}, True{}, sel, r3} Con{c, rest} x:
+      eb => ep => Empty.absurd({S.run_log.plain(True{}, S.Conn{id, a, n, S.MOff{}, True{}, sel, r3}, srv, Con{c, rest}, hs, x) == S.logged.gen(S.gen(S.Conn{id, a, n, S.MOff{}, True{}, sel, r3}, srv, Con{c, rest}, x)) : S.Logged}, true_false(eb))
+    case True{} S.Conn{id, a, n, S.MOff{}, False{}, sel, r3} Con{c, rest} x:
+      eb => ep => Empty.absurd({S.run_log.plain(True{}, S.Conn{id, a, n, S.MOff{}, False{}, sel, r3}, srv, Con{c, rest}, hs, x) == S.logged.gen(S.gen(S.Conn{id, a, n, S.MOff{}, False{}, sel, r3}, srv, Con{c, rest}, x)) : S.Logged}, true_false(eb))
+    case True{} S.Conn{id, a, n, S.MSkip{}, True{}, sel, r3} Con{c, rest} x:
+      eb => ep => Empty.absurd({S.run_log.plain(True{}, S.Conn{id, a, n, S.MSkip{}, True{}, sel, r3}, srv, Con{c, rest}, hs, x) == S.logged.gen(S.gen(S.Conn{id, a, n, S.MSkip{}, True{}, sel, r3}, srv, Con{c, rest}, x)) : S.Logged}, true_false(eb))
+    case True{} S.Conn{id, a, n, S.MSkip{}, False{}, sel, r3} Con{c, rest} x:
+      eb => ep => Empty.absurd({S.run_log.plain(True{}, S.Conn{id, a, n, S.MSkip{}, False{}, sel, r3}, srv, Con{c, rest}, hs, x) == S.logged.gen(S.gen(S.Conn{id, a, n, S.MSkip{}, False{}, sel, r3}, srv, Con{c, rest}, x)) : S.Logged}, true_false(eb))
 
 def unzip_gen_log(+conn: S.Conn, +srv: S.Srv, rs: List<&2, B.Req>, +cs: List<&2, R.Cmd>, +hs: List<&2, U32>, +ds: R.Ds) -> {plain(cs) == True{} : Bool} -> {S.run_log(conn, srv, B.job(B.unzip(rs, cs, hs)), ds) == S.logged.gen(S.gen(conn, srv, B.cmds_of(rs, cs), ds)) : S.Logged}:
   match rs:
@@ -15400,9 +15400,9 @@ def srv_same(q: Bool, +c: R.Cmd, +conn: S.Conn, +srv: S.Srv, +ef: {S.authed(conn
 
 # a session command a client that may not run commands sends acts on the
 # databases only as RESET does, moving the focus
-def own_bad(o: R.SessOp, +ps: List<&2, R.Act>, +id: Nat, +a: Bool, +n: String, +m: S.Mute, +sel: Nat, +srv: S.Srv, ef: {S.authed(S.Conn{id, a, n, m, False{}, sel}, srv) == False{} : Bool})
+def own_bad(o: R.SessOp, +ps: List<&2, R.Act>, +id: Nat, +a: Bool, +n: String, +m: S.Mute, +sel: Nat, +r3: Bool, +srv: S.Srv, ef: {S.authed(S.Conn{id, a, n, m, False{}, sel, r3}, srv) == False{} : Bool})
   -> {Laws.all_bad(ps) == True{} : Bool}
-  -> {Laws.all_bad(List.append(&2, R.Act, S.acts.k(S.KSess{o}, S.may(S.KSess{o}, S.Conn{id, a, n, m, False{}, sel}, srv), R.Own{o}, S.Conn{id, a, n, m, False{}, sel}, srv), ps)) == True{} : Bool}:
+  -> {Laws.all_bad(List.append(&2, R.Act, S.acts.k(S.KSess{o}, S.may(S.KSess{o}, S.Conn{id, a, n, m, False{}, sel, r3}, srv), R.Own{o}, S.Conn{id, a, n, m, False{}, sel, r3}, srv), ps)) == True{} : Bool}:
   match o:
     case R.SHello{y0}:
       ih => ih
@@ -15410,7 +15410,7 @@ def own_bad(o: R.SessOp, +ps: List<&2, R.Act>, +id: Nat, +a: Bool, +n: String, +
       ih => ih
     case R.SSelect{y0}:
       ih =>
-        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel}, srv), False{}, ef) : {Laws.all_bad(List.append(&2, R.Act, S.acts.k(S.KSess{R.SSelect{y0}}, _, R.Own{R.SSelect{y0}}, S.Conn{id, a, n, m, False{}, sel}, srv), ps)) == True{} : Bool}
+        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel, r3}, srv), False{}, ef) : {Laws.all_bad(List.append(&2, R.Act, S.acts.k(S.KSess{R.SSelect{y0}}, _, R.Own{R.SSelect{y0}}, S.Conn{id, a, n, m, False{}, sel, r3}, srv), ps)) == True{} : Bool}
         ih
     case R.SQuit{}:
       ih => ih
@@ -15418,277 +15418,277 @@ def own_bad(o: R.SessOp, +ps: List<&2, R.Act>, +id: Nat, +a: Bool, +n: String, +
       ih => ih
     case R.SClientId{}:
       ih =>
-        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel}, srv), False{}, ef) : {Laws.all_bad(List.append(&2, R.Act, S.acts.k(S.KSess{R.SClientId{}}, _, R.Own{R.SClientId{}}, S.Conn{id, a, n, m, False{}, sel}, srv), ps)) == True{} : Bool}
+        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel, r3}, srv), False{}, ef) : {Laws.all_bad(List.append(&2, R.Act, S.acts.k(S.KSess{R.SClientId{}}, _, R.Own{R.SClientId{}}, S.Conn{id, a, n, m, False{}, sel, r3}, srv), ps)) == True{} : Bool}
         ih
     case R.SClientGetName{}:
       ih =>
-        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel}, srv), False{}, ef) : {Laws.all_bad(List.append(&2, R.Act, S.acts.k(S.KSess{R.SClientGetName{}}, _, R.Own{R.SClientGetName{}}, S.Conn{id, a, n, m, False{}, sel}, srv), ps)) == True{} : Bool}
+        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel, r3}, srv), False{}, ef) : {Laws.all_bad(List.append(&2, R.Act, S.acts.k(S.KSess{R.SClientGetName{}}, _, R.Own{R.SClientGetName{}}, S.Conn{id, a, n, m, False{}, sel, r3}, srv), ps)) == True{} : Bool}
         ih
     case R.SClientSetName{y0}:
       ih =>
-        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel}, srv), False{}, ef) : {Laws.all_bad(List.append(&2, R.Act, S.acts.k(S.KSess{R.SClientSetName{y0}}, _, R.Own{R.SClientSetName{y0}}, S.Conn{id, a, n, m, False{}, sel}, srv), ps)) == True{} : Bool}
+        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel, r3}, srv), False{}, ef) : {Laws.all_bad(List.append(&2, R.Act, S.acts.k(S.KSess{R.SClientSetName{y0}}, _, R.Own{R.SClientSetName{y0}}, S.Conn{id, a, n, m, False{}, sel, r3}, srv), ps)) == True{} : Bool}
         ih
     case R.SClientReply{y0}:
       ih =>
-        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel}, srv), False{}, ef) : {Laws.all_bad(List.append(&2, R.Act, S.acts.k(S.KSess{R.SClientReply{y0}}, _, R.Own{R.SClientReply{y0}}, S.Conn{id, a, n, m, False{}, sel}, srv), ps)) == True{} : Bool}
+        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel, r3}, srv), False{}, ef) : {Laws.all_bad(List.append(&2, R.Act, S.acts.k(S.KSess{R.SClientReply{y0}}, _, R.Own{R.SClientReply{y0}}, S.Conn{id, a, n, m, False{}, sel, r3}, srv), ps)) == True{} : Bool}
         ih
     case R.SConfigGet{y0}:
       ih =>
-        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel}, srv), False{}, ef) : {Laws.all_bad(List.append(&2, R.Act, S.acts.k(S.KSess{R.SConfigGet{y0}}, _, R.Own{R.SConfigGet{y0}}, S.Conn{id, a, n, m, False{}, sel}, srv), ps)) == True{} : Bool}
+        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel, r3}, srv), False{}, ef) : {Laws.all_bad(List.append(&2, R.Act, S.acts.k(S.KSess{R.SConfigGet{y0}}, _, R.Own{R.SConfigGet{y0}}, S.Conn{id, a, n, m, False{}, sel, r3}, srv), ps)) == True{} : Bool}
         ih
     case R.SConfigSet{y0}:
       ih =>
-        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel}, srv), False{}, ef) : {Laws.all_bad(List.append(&2, R.Act, S.acts.k(S.KSess{R.SConfigSet{y0}}, _, R.Own{R.SConfigSet{y0}}, S.Conn{id, a, n, m, False{}, sel}, srv), ps)) == True{} : Bool}
+        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel, r3}, srv), False{}, ef) : {Laws.all_bad(List.append(&2, R.Act, S.acts.k(S.KSess{R.SConfigSet{y0}}, _, R.Own{R.SConfigSet{y0}}, S.Conn{id, a, n, m, False{}, sel, r3}, srv), ps)) == True{} : Bool}
         ih
     case R.SConfigResetStat{}:
       ih =>
-        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel}, srv), False{}, ef) : {Laws.all_bad(List.append(&2, R.Act, S.acts.k(S.KSess{R.SConfigResetStat{}}, _, R.Own{R.SConfigResetStat{}}, S.Conn{id, a, n, m, False{}, sel}, srv), ps)) == True{} : Bool}
+        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel, r3}, srv), False{}, ef) : {Laws.all_bad(List.append(&2, R.Act, S.acts.k(S.KSess{R.SConfigResetStat{}}, _, R.Own{R.SConfigResetStat{}}, S.Conn{id, a, n, m, False{}, sel, r3}, srv), ps)) == True{} : Bool}
         ih
     case R.SInfo{y0}:
       ih =>
-        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel}, srv), False{}, ef) : {Laws.all_bad(List.append(&2, R.Act, S.acts.k(S.KSess{R.SInfo{y0}}, _, R.Own{R.SInfo{y0}}, S.Conn{id, a, n, m, False{}, sel}, srv), ps)) == True{} : Bool}
+        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel, r3}, srv), False{}, ef) : {Laws.all_bad(List.append(&2, R.Act, S.acts.k(S.KSess{R.SInfo{y0}}, _, R.Own{R.SInfo{y0}}, S.Conn{id, a, n, m, False{}, sel, r3}, srv), ps)) == True{} : Bool}
         ih
     case R.SCommand{y0}:
       ih =>
-        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel}, srv), False{}, ef) : {Laws.all_bad(List.append(&2, R.Act, S.acts.k(S.KSess{R.SCommand{y0}}, _, R.Own{R.SCommand{y0}}, S.Conn{id, a, n, m, False{}, sel}, srv), ps)) == True{} : Bool}
+        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel, r3}, srv), False{}, ef) : {Laws.all_bad(List.append(&2, R.Act, S.acts.k(S.KSess{R.SCommand{y0}}, _, R.Own{R.SCommand{y0}}, S.Conn{id, a, n, m, False{}, sel, r3}, srv), ps)) == True{} : Bool}
         ih
     case R.SRandomKey{}:
       ih =>
-        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel}, srv), False{}, ef) : {Laws.all_bad(List.append(&2, R.Act, S.acts.k(S.KSess{R.SRandomKey{}}, _, R.Own{R.SRandomKey{}}, S.Conn{id, a, n, m, False{}, sel}, srv), ps)) == True{} : Bool}
+        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel, r3}, srv), False{}, ef) : {Laws.all_bad(List.append(&2, R.Act, S.acts.k(S.KSess{R.SRandomKey{}}, _, R.Own{R.SRandomKey{}}, S.Conn{id, a, n, m, False{}, sel, r3}, srv), ps)) == True{} : Bool}
         ih
     case R.SSwapDb{y0, y1}:
       ih =>
-        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel}, srv), False{}, ef) : {Laws.all_bad(List.append(&2, R.Act, S.acts.k(S.KSess{R.SSwapDb{y0, y1}}, _, R.Own{R.SSwapDb{y0, y1}}, S.Conn{id, a, n, m, False{}, sel}, srv), ps)) == True{} : Bool}
+        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel, r3}, srv), False{}, ef) : {Laws.all_bad(List.append(&2, R.Act, S.acts.k(S.KSess{R.SSwapDb{y0, y1}}, _, R.Own{R.SSwapDb{y0, y1}}, S.Conn{id, a, n, m, False{}, sel, r3}, srv), ps)) == True{} : Bool}
         ih
     case R.SMove{y0, y1}:
       ih =>
-        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel}, srv), False{}, ef) : {Laws.all_bad(List.append(&2, R.Act, S.acts.k(S.KSess{R.SMove{y0, y1}}, _, R.Own{R.SMove{y0, y1}}, S.Conn{id, a, n, m, False{}, sel}, srv), ps)) == True{} : Bool}
+        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel, r3}, srv), False{}, ef) : {Laws.all_bad(List.append(&2, R.Act, S.acts.k(S.KSess{R.SMove{y0, y1}}, _, R.Own{R.SMove{y0, y1}}, S.Conn{id, a, n, m, False{}, sel, r3}, srv), ps)) == True{} : Bool}
         ih
     case R.SFlushAll{}:
       ih =>
-        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel}, srv), False{}, ef) : {Laws.all_bad(List.append(&2, R.Act, S.acts.k(S.KSess{R.SFlushAll{}}, _, R.Own{R.SFlushAll{}}, S.Conn{id, a, n, m, False{}, sel}, srv), ps)) == True{} : Bool}
+        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel, r3}, srv), False{}, ef) : {Laws.all_bad(List.append(&2, R.Act, S.acts.k(S.KSess{R.SFlushAll{}}, _, R.Own{R.SFlushAll{}}, S.Conn{id, a, n, m, False{}, sel, r3}, srv), ps)) == True{} : Bool}
         ih
     case R.STime{}:
       ih =>
-        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel}, srv), False{}, ef) : {Laws.all_bad(List.append(&2, R.Act, S.acts.k(S.KSess{R.STime{}}, _, R.Own{R.STime{}}, S.Conn{id, a, n, m, False{}, sel}, srv), ps)) == True{} : Bool}
+        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel, r3}, srv), False{}, ef) : {Laws.all_bad(List.append(&2, R.Act, S.acts.k(S.KSess{R.STime{}}, _, R.Own{R.STime{}}, S.Conn{id, a, n, m, False{}, sel, r3}, srv), ps)) == True{} : Bool}
         ih
     case R.SObject{y0, y1}:
       ih =>
-        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel}, srv), False{}, ef) : {Laws.all_bad(List.append(&2, R.Act, S.acts.k(S.KSess{R.SObject{y0, y1}}, _, R.Own{R.SObject{y0, y1}}, S.Conn{id, a, n, m, False{}, sel}, srv), ps)) == True{} : Bool}
+        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel, r3}, srv), False{}, ef) : {Laws.all_bad(List.append(&2, R.Act, S.acts.k(S.KSess{R.SObject{y0, y1}}, _, R.Own{R.SObject{y0, y1}}, S.Conn{id, a, n, m, False{}, sel, r3}, srv), ps)) == True{} : Bool}
         ih
     case R.SCopy{y0}:
       ih =>
-        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel}, srv), False{}, ef) : {Laws.all_bad(List.append(&2, R.Act, S.acts.k(S.KSess{R.SCopy{y0}}, _, R.Own{R.SCopy{y0}}, S.Conn{id, a, n, m, False{}, sel}, srv), ps)) == True{} : Bool}
+        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel, r3}, srv), False{}, ef) : {Laws.all_bad(List.append(&2, R.Act, S.acts.k(S.KSess{R.SCopy{y0}}, _, R.Own{R.SCopy{y0}}, S.Conn{id, a, n, m, False{}, sel, r3}, srv), ps)) == True{} : Bool}
         ih
     case R.SLcs{y0}:
       ih =>
-        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel}, srv), False{}, ef) : {Laws.all_bad(List.append(&2, R.Act, S.acts.k(S.KSess{R.SLcs{y0}}, _, R.Own{R.SLcs{y0}}, S.Conn{id, a, n, m, False{}, sel}, srv), ps)) == True{} : Bool}
+        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel, r3}, srv), False{}, ef) : {Laws.all_bad(List.append(&2, R.Act, S.acts.k(S.KSess{R.SLcs{y0}}, _, R.Own{R.SLcs{y0}}, S.Conn{id, a, n, m, False{}, sel, r3}, srv), ps)) == True{} : Bool}
         ih
     case R.SHRandField{y0, y1}:
       ih =>
-        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel}, srv), False{}, ef) : {Laws.all_bad(List.append(&2, R.Act, S.acts.k(S.KSess{R.SHRandField{y0, y1}}, _, R.Own{R.SHRandField{y0, y1}}, S.Conn{id, a, n, m, False{}, sel}, srv), ps)) == True{} : Bool}
+        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel, r3}, srv), False{}, ef) : {Laws.all_bad(List.append(&2, R.Act, S.acts.k(S.KSess{R.SHRandField{y0, y1}}, _, R.Own{R.SHRandField{y0, y1}}, S.Conn{id, a, n, m, False{}, sel, r3}, srv), ps)) == True{} : Bool}
         ih
     case R.SSPop{y0, y1}:
       ih =>
-        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel}, srv), False{}, ef) : {Laws.all_bad(List.append(&2, R.Act, S.acts.k(S.KSess{R.SSPop{y0, y1}}, _, R.Own{R.SSPop{y0, y1}}, S.Conn{id, a, n, m, False{}, sel}, srv), ps)) == True{} : Bool}
+        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel, r3}, srv), False{}, ef) : {Laws.all_bad(List.append(&2, R.Act, S.acts.k(S.KSess{R.SSPop{y0, y1}}, _, R.Own{R.SSPop{y0, y1}}, S.Conn{id, a, n, m, False{}, sel, r3}, srv), ps)) == True{} : Bool}
         ih
     case R.SSRandMember{y0, y1}:
       ih =>
-        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel}, srv), False{}, ef) : {Laws.all_bad(List.append(&2, R.Act, S.acts.k(S.KSess{R.SSRandMember{y0, y1}}, _, R.Own{R.SSRandMember{y0, y1}}, S.Conn{id, a, n, m, False{}, sel}, srv), ps)) == True{} : Bool}
+        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel, r3}, srv), False{}, ef) : {Laws.all_bad(List.append(&2, R.Act, S.acts.k(S.KSess{R.SSRandMember{y0, y1}}, _, R.Own{R.SSRandMember{y0, y1}}, S.Conn{id, a, n, m, False{}, sel, r3}, srv), ps)) == True{} : Bool}
         ih
     case R.SZRandMember{y0, y1}:
       ih =>
-        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel}, srv), False{}, ef) : {Laws.all_bad(List.append(&2, R.Act, S.acts.k(S.KSess{R.SZRandMember{y0, y1}}, _, R.Own{R.SZRandMember{y0, y1}}, S.Conn{id, a, n, m, False{}, sel}, srv), ps)) == True{} : Bool}
+        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel, r3}, srv), False{}, ef) : {Laws.all_bad(List.append(&2, R.Act, S.acts.k(S.KSess{R.SZRandMember{y0, y1}}, _, R.Own{R.SZRandMember{y0, y1}}, S.Conn{id, a, n, m, False{}, sel, r3}, srv), ps)) == True{} : Bool}
         ih
     case R.SBlock{y0, y1}:
       ih =>
-        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel}, srv), False{}, ef) : {Laws.all_bad(List.append(&2, R.Act, S.acts.k(S.KSess{R.SBlock{y0, y1}}, _, R.Own{R.SBlock{y0, y1}}, S.Conn{id, a, n, m, False{}, sel}, srv), ps)) == True{} : Bool}
+        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel, r3}, srv), False{}, ef) : {Laws.all_bad(List.append(&2, R.Act, S.acts.k(S.KSess{R.SBlock{y0, y1}}, _, R.Own{R.SBlock{y0, y1}}, S.Conn{id, a, n, m, False{}, sel, r3}, srv), ps)) == True{} : Bool}
         ih
     case R.SUnblock{y0, y1}:
       ih =>
-        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel}, srv), False{}, ef) : {Laws.all_bad(List.append(&2, R.Act, S.acts.k(S.KSess{R.SUnblock{y0, y1}}, _, R.Own{R.SUnblock{y0, y1}}, S.Conn{id, a, n, m, False{}, sel}, srv), ps)) == True{} : Bool}
+        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel, r3}, srv), False{}, ef) : {Laws.all_bad(List.append(&2, R.Act, S.acts.k(S.KSess{R.SUnblock{y0, y1}}, _, R.Own{R.SUnblock{y0, y1}}, S.Conn{id, a, n, m, False{}, sel, r3}, srv), ps)) == True{} : Bool}
         ih
     case R.SMulti{}:
       ih =>
-        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel}, srv), False{}, ef) : {Laws.all_bad(List.append(&2, R.Act, S.acts.k(S.KSess{R.SMulti{}}, _, R.Own{R.SMulti{}}, S.Conn{id, a, n, m, False{}, sel}, srv), ps)) == True{} : Bool}
+        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel, r3}, srv), False{}, ef) : {Laws.all_bad(List.append(&2, R.Act, S.acts.k(S.KSess{R.SMulti{}}, _, R.Own{R.SMulti{}}, S.Conn{id, a, n, m, False{}, sel, r3}, srv), ps)) == True{} : Bool}
         ih
     case R.SExec{}:
       ih =>
-        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel}, srv), False{}, ef) : {Laws.all_bad(List.append(&2, R.Act, S.acts.k(S.KSess{R.SExec{}}, _, R.Own{R.SExec{}}, S.Conn{id, a, n, m, False{}, sel}, srv), ps)) == True{} : Bool}
+        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel, r3}, srv), False{}, ef) : {Laws.all_bad(List.append(&2, R.Act, S.acts.k(S.KSess{R.SExec{}}, _, R.Own{R.SExec{}}, S.Conn{id, a, n, m, False{}, sel, r3}, srv), ps)) == True{} : Bool}
         ih
     case R.SDiscard{}:
       ih =>
-        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel}, srv), False{}, ef) : {Laws.all_bad(List.append(&2, R.Act, S.acts.k(S.KSess{R.SDiscard{}}, _, R.Own{R.SDiscard{}}, S.Conn{id, a, n, m, False{}, sel}, srv), ps)) == True{} : Bool}
+        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel, r3}, srv), False{}, ef) : {Laws.all_bad(List.append(&2, R.Act, S.acts.k(S.KSess{R.SDiscard{}}, _, R.Own{R.SDiscard{}}, S.Conn{id, a, n, m, False{}, sel, r3}, srv), ps)) == True{} : Bool}
         ih
     case R.SWatch{y0}:
       ih =>
-        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel}, srv), False{}, ef) : {Laws.all_bad(List.append(&2, R.Act, S.acts.k(S.KSess{R.SWatch{y0}}, _, R.Own{R.SWatch{y0}}, S.Conn{id, a, n, m, False{}, sel}, srv), ps)) == True{} : Bool}
+        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel, r3}, srv), False{}, ef) : {Laws.all_bad(List.append(&2, R.Act, S.acts.k(S.KSess{R.SWatch{y0}}, _, R.Own{R.SWatch{y0}}, S.Conn{id, a, n, m, False{}, sel, r3}, srv), ps)) == True{} : Bool}
         ih
     case R.SUnwatch{}:
       ih =>
-        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel}, srv), False{}, ef) : {Laws.all_bad(List.append(&2, R.Act, S.acts.k(S.KSess{R.SUnwatch{}}, _, R.Own{R.SUnwatch{}}, S.Conn{id, a, n, m, False{}, sel}, srv), ps)) == True{} : Bool}
+        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel, r3}, srv), False{}, ef) : {Laws.all_bad(List.append(&2, R.Act, S.acts.k(S.KSess{R.SUnwatch{}}, _, R.Own{R.SUnwatch{}}, S.Conn{id, a, n, m, False{}, sel, r3}, srv), ps)) == True{} : Bool}
         ih
     case R.SPub{y0, y1}:
       ih =>
-        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel}, srv), False{}, ef) : {Laws.all_bad(List.append(&2, R.Act, S.acts.k(S.KSess{R.SPub{y0, y1}}, _, R.Own{R.SPub{y0, y1}}, S.Conn{id, a, n, m, False{}, sel}, srv), ps)) == True{} : Bool}
+        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel, r3}, srv), False{}, ef) : {Laws.all_bad(List.append(&2, R.Act, S.acts.k(S.KSess{R.SPub{y0, y1}}, _, R.Own{R.SPub{y0, y1}}, S.Conn{id, a, n, m, False{}, sel, r3}, srv), ps)) == True{} : Bool}
         ih
     case R.SClient{y0, y1}:
       ih =>
-        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel}, srv), False{}, ef) : {Laws.all_bad(List.append(&2, R.Act, S.acts.k(S.KSess{R.SClient{y0, y1}}, _, R.Own{R.SClient{y0, y1}}, S.Conn{id, a, n, m, False{}, sel}, srv), ps)) == True{} : Bool}
+        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel, r3}, srv), False{}, ef) : {Laws.all_bad(List.append(&2, R.Act, S.acts.k(S.KSess{R.SClient{y0, y1}}, _, R.Own{R.SClient{y0, y1}}, S.Conn{id, a, n, m, False{}, sel, r3}, srv), ps)) == True{} : Bool}
         ih
     case R.SMonitor{}:
       ih =>
-        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel}, srv), False{}, ef) : {Laws.all_bad(List.append(&2, R.Act, S.acts.k(S.KSess{R.SMonitor{}}, _, R.Own{R.SMonitor{}}, S.Conn{id, a, n, m, False{}, sel}, srv), ps)) == True{} : Bool}
+        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel, r3}, srv), False{}, ef) : {Laws.all_bad(List.append(&2, R.Act, S.acts.k(S.KSess{R.SMonitor{}}, _, R.Own{R.SMonitor{}}, S.Conn{id, a, n, m, False{}, sel, r3}, srv), ps)) == True{} : Bool}
         ih
     case R.SRewrite{}:
       ih =>
-        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel}, srv), False{}, ef) : {Laws.all_bad(List.append(&2, R.Act, S.acts.k(S.KSess{R.SRewrite{}}, _, R.Own{R.SRewrite{}}, S.Conn{id, a, n, m, False{}, sel}, srv), ps)) == True{} : Bool}
+        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel, r3}, srv), False{}, ef) : {Laws.all_bad(List.append(&2, R.Act, S.acts.k(S.KSess{R.SRewrite{}}, _, R.Own{R.SRewrite{}}, S.Conn{id, a, n, m, False{}, sel, r3}, srv), ps)) == True{} : Bool}
         ih
     case R.SFail{y0}:
       ih =>
-        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel}, srv), False{}, ef) : {Laws.all_bad(List.append(&2, R.Act, S.acts.k(S.KSess{R.SFail{y0}}, _, R.Own{R.SFail{y0}}, S.Conn{id, a, n, m, False{}, sel}, srv), ps)) == True{} : Bool}
+        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel, r3}, srv), False{}, ef) : {Laws.all_bad(List.append(&2, R.Act, S.acts.k(S.KSess{R.SFail{y0}}, _, R.Own{R.SFail{y0}}, S.Conn{id, a, n, m, False{}, sel, r3}, srv), ps)) == True{} : Bool}
         ih
     case R.SMemUsage{y0, y1}:
       ih =>
-        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel}, srv), False{}, ef) : {Laws.all_bad(List.append(&2, R.Act, S.acts.k(S.KSess{R.SMemUsage{y0, y1}}, _, R.Own{R.SMemUsage{y0, y1}}, S.Conn{id, a, n, m, False{}, sel}, srv), ps)) == True{} : Bool}
+        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel, r3}, srv), False{}, ef) : {Laws.all_bad(List.append(&2, R.Act, S.acts.k(S.KSess{R.SMemUsage{y0, y1}}, _, R.Own{R.SMemUsage{y0, y1}}, S.Conn{id, a, n, m, False{}, sel, r3}, srv), ps)) == True{} : Bool}
         ih
     case R.SReply{y0}:
       ih =>
-        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel}, srv), False{}, ef) : {Laws.all_bad(List.append(&2, R.Act, S.acts.k(S.KSess{R.SReply{y0}}, _, R.Own{R.SReply{y0}}, S.Conn{id, a, n, m, False{}, sel}, srv), ps)) == True{} : Bool}
+        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel, r3}, srv), False{}, ef) : {Laws.all_bad(List.append(&2, R.Act, S.acts.k(S.KSess{R.SReply{y0}}, _, R.Own{R.SReply{y0}}, S.Conn{id, a, n, m, False{}, sel, r3}, srv), ps)) == True{} : Bool}
         ih
     case R.SBad{y0}:
       ih => ih
 
 # a command a client that may not run commands sends runs on the
 # databases only when it is an error the parser found, or moves the focus
-def ran_bad(c: R.Cmd, +ps: List<&2, R.Act>, +id: Nat, +a: Bool, +n: String, +m: S.Mute, +sel: Nat, +srv: S.Srv, ef: {S.authed(S.Conn{id, a, n, m, False{}, sel}, srv) == False{} : Bool})
+def ran_bad(c: R.Cmd, +ps: List<&2, R.Act>, +id: Nat, +a: Bool, +n: String, +m: S.Mute, +sel: Nat, +r3: Bool, +srv: S.Srv, ef: {S.authed(S.Conn{id, a, n, m, False{}, sel, r3}, srv) == False{} : Bool})
   -> {Laws.all_bad(ps) == True{} : Bool}
-  -> {Laws.all_bad(List.append(&2, R.Act, S.acts.q(False{}, c, S.Conn{id, a, n, m, False{}, sel}, srv), ps)) == True{} : Bool}:
+  -> {Laws.all_bad(List.append(&2, R.Act, S.acts.q(False{}, c, S.Conn{id, a, n, m, False{}, sel, r3}, srv), ps)) == True{} : Bool}:
   match c:
     case R.Ping{}:
       ih =>
-        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel}, srv), False{}, ef) : {Laws.all_bad(List.append(&2, R.Act, S.acts.k(S.KData{}, _, R.Ping{}, S.Conn{id, a, n, m, False{}, sel}, srv), ps)) == True{} : Bool}
+        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel, r3}, srv), False{}, ef) : {Laws.all_bad(List.append(&2, R.Act, S.acts.k(S.KData{}, _, R.Ping{}, S.Conn{id, a, n, m, False{}, sel, r3}, srv), ps)) == True{} : Bool}
         ih
     case R.Echo{x0}:
       ih =>
-        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel}, srv), False{}, ef) : {Laws.all_bad(List.append(&2, R.Act, S.acts.k(S.KData{}, _, R.Echo{x0}, S.Conn{id, a, n, m, False{}, sel}, srv), ps)) == True{} : Bool}
+        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel, r3}, srv), False{}, ef) : {Laws.all_bad(List.append(&2, R.Act, S.acts.k(S.KData{}, _, R.Echo{x0}, S.Conn{id, a, n, m, False{}, sel, r3}, srv), ps)) == True{} : Bool}
         ih
     case R.Get{x0}:
       ih =>
-        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel}, srv), False{}, ef) : {Laws.all_bad(List.append(&2, R.Act, S.acts.k(S.KData{}, _, R.Get{x0}, S.Conn{id, a, n, m, False{}, sel}, srv), ps)) == True{} : Bool}
+        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel, r3}, srv), False{}, ef) : {Laws.all_bad(List.append(&2, R.Act, S.acts.k(S.KData{}, _, R.Get{x0}, S.Conn{id, a, n, m, False{}, sel, r3}, srv), ps)) == True{} : Bool}
         ih
     case R.Set{x0, x1}:
       ih =>
-        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel}, srv), False{}, ef) : {Laws.all_bad(List.append(&2, R.Act, S.acts.k(S.KData{}, _, R.Set{x0, x1}, S.Conn{id, a, n, m, False{}, sel}, srv), ps)) == True{} : Bool}
+        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel, r3}, srv), False{}, ef) : {Laws.all_bad(List.append(&2, R.Act, S.acts.k(S.KData{}, _, R.Set{x0, x1}, S.Conn{id, a, n, m, False{}, sel, r3}, srv), ps)) == True{} : Bool}
         ih
     case R.Del{x0}:
       ih =>
-        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel}, srv), False{}, ef) : {Laws.all_bad(List.append(&2, R.Act, S.acts.k(S.KData{}, _, R.Del{x0}, S.Conn{id, a, n, m, False{}, sel}, srv), ps)) == True{} : Bool}
+        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel, r3}, srv), False{}, ef) : {Laws.all_bad(List.append(&2, R.Act, S.acts.k(S.KData{}, _, R.Del{x0}, S.Conn{id, a, n, m, False{}, sel, r3}, srv), ps)) == True{} : Bool}
         ih
     case R.Exists{x0}:
       ih =>
-        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel}, srv), False{}, ef) : {Laws.all_bad(List.append(&2, R.Act, S.acts.k(S.KData{}, _, R.Exists{x0}, S.Conn{id, a, n, m, False{}, sel}, srv), ps)) == True{} : Bool}
+        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel, r3}, srv), False{}, ef) : {Laws.all_bad(List.append(&2, R.Act, S.acts.k(S.KData{}, _, R.Exists{x0}, S.Conn{id, a, n, m, False{}, sel, r3}, srv), ps)) == True{} : Bool}
         ih
     case R.IncrBy{x0, x1}:
       ih =>
-        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel}, srv), False{}, ef) : {Laws.all_bad(List.append(&2, R.Act, S.acts.k(S.KData{}, _, R.IncrBy{x0, x1}, S.Conn{id, a, n, m, False{}, sel}, srv), ps)) == True{} : Bool}
+        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel, r3}, srv), False{}, ef) : {Laws.all_bad(List.append(&2, R.Act, S.acts.k(S.KData{}, _, R.IncrBy{x0, x1}, S.Conn{id, a, n, m, False{}, sel, r3}, srv), ps)) == True{} : Bool}
         ih
     case R.MGet{x0}:
       ih =>
-        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel}, srv), False{}, ef) : {Laws.all_bad(List.append(&2, R.Act, S.acts.k(S.KData{}, _, R.MGet{x0}, S.Conn{id, a, n, m, False{}, sel}, srv), ps)) == True{} : Bool}
+        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel, r3}, srv), False{}, ef) : {Laws.all_bad(List.append(&2, R.Act, S.acts.k(S.KData{}, _, R.MGet{x0}, S.Conn{id, a, n, m, False{}, sel, r3}, srv), ps)) == True{} : Bool}
         ih
     case R.MSet{x0}:
       ih =>
-        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel}, srv), False{}, ef) : {Laws.all_bad(List.append(&2, R.Act, S.acts.k(S.KData{}, _, R.MSet{x0}, S.Conn{id, a, n, m, False{}, sel}, srv), ps)) == True{} : Bool}
+        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel, r3}, srv), False{}, ef) : {Laws.all_bad(List.append(&2, R.Act, S.acts.k(S.KData{}, _, R.MSet{x0}, S.Conn{id, a, n, m, False{}, sel, r3}, srv), ps)) == True{} : Bool}
         ih
     case R.MSetNx{x0}:
       ih =>
-        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel}, srv), False{}, ef) : {Laws.all_bad(List.append(&2, R.Act, S.acts.k(S.KData{}, _, R.MSetNx{x0}, S.Conn{id, a, n, m, False{}, sel}, srv), ps)) == True{} : Bool}
+        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel, r3}, srv), False{}, ef) : {Laws.all_bad(List.append(&2, R.Act, S.acts.k(S.KData{}, _, R.MSetNx{x0}, S.Conn{id, a, n, m, False{}, sel, r3}, srv), ps)) == True{} : Bool}
         ih
     case R.Rename{x0, x1, x2}:
       ih =>
-        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel}, srv), False{}, ef) : {Laws.all_bad(List.append(&2, R.Act, S.acts.k(S.KData{}, _, R.Rename{x0, x1, x2}, S.Conn{id, a, n, m, False{}, sel}, srv), ps)) == True{} : Bool}
+        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel, r3}, srv), False{}, ef) : {Laws.all_bad(List.append(&2, R.Act, S.acts.k(S.KData{}, _, R.Rename{x0, x1, x2}, S.Conn{id, a, n, m, False{}, sel, r3}, srv), ps)) == True{} : Bool}
         ih
     case R.BitOp{x0, x1, x2}:
       ih =>
-        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel}, srv), False{}, ef) : {Laws.all_bad(List.append(&2, R.Act, S.acts.k(S.KData{}, _, R.BitOp{x0, x1, x2}, S.Conn{id, a, n, m, False{}, sel}, srv), ps)) == True{} : Bool}
+        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel, r3}, srv), False{}, ef) : {Laws.all_bad(List.append(&2, R.Act, S.acts.k(S.KData{}, _, R.BitOp{x0, x1, x2}, S.Conn{id, a, n, m, False{}, sel, r3}, srv), ps)) == True{} : Bool}
         ih
     case R.LMove{x0, x1, x2}:
       ih =>
-        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel}, srv), False{}, ef) : {Laws.all_bad(List.append(&2, R.Act, S.acts.k(S.KData{}, _, R.LMove{x0, x1, x2}, S.Conn{id, a, n, m, False{}, sel}, srv), ps)) == True{} : Bool}
+        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel, r3}, srv), False{}, ef) : {Laws.all_bad(List.append(&2, R.Act, S.acts.k(S.KData{}, _, R.LMove{x0, x1, x2}, S.Conn{id, a, n, m, False{}, sel, r3}, srv), ps)) == True{} : Bool}
         ih
     case R.LMPop{x0, x1, x2}:
       ih =>
-        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel}, srv), False{}, ef) : {Laws.all_bad(List.append(&2, R.Act, S.acts.k(S.KData{}, _, R.LMPop{x0, x1, x2}, S.Conn{id, a, n, m, False{}, sel}, srv), ps)) == True{} : Bool}
+        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel, r3}, srv), False{}, ef) : {Laws.all_bad(List.append(&2, R.Act, S.acts.k(S.KData{}, _, R.LMPop{x0, x1, x2}, S.Conn{id, a, n, m, False{}, sel, r3}, srv), ps)) == True{} : Bool}
         ih
     case R.SOp{x0, x1}:
       ih =>
-        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel}, srv), False{}, ef) : {Laws.all_bad(List.append(&2, R.Act, S.acts.k(S.KData{}, _, R.SOp{x0, x1}, S.Conn{id, a, n, m, False{}, sel}, srv), ps)) == True{} : Bool}
+        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel, r3}, srv), False{}, ef) : {Laws.all_bad(List.append(&2, R.Act, S.acts.k(S.KData{}, _, R.SOp{x0, x1}, S.Conn{id, a, n, m, False{}, sel, r3}, srv), ps)) == True{} : Bool}
         ih
     case R.SStore{x0, x1, x2}:
       ih =>
-        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel}, srv), False{}, ef) : {Laws.all_bad(List.append(&2, R.Act, S.acts.k(S.KData{}, _, R.SStore{x0, x1, x2}, S.Conn{id, a, n, m, False{}, sel}, srv), ps)) == True{} : Bool}
+        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel, r3}, srv), False{}, ef) : {Laws.all_bad(List.append(&2, R.Act, S.acts.k(S.KData{}, _, R.SStore{x0, x1, x2}, S.Conn{id, a, n, m, False{}, sel, r3}, srv), ps)) == True{} : Bool}
         ih
     case R.SMv{x0, x1, x2}:
       ih =>
-        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel}, srv), False{}, ef) : {Laws.all_bad(List.append(&2, R.Act, S.acts.k(S.KData{}, _, R.SMv{x0, x1, x2}, S.Conn{id, a, n, m, False{}, sel}, srv), ps)) == True{} : Bool}
+        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel, r3}, srv), False{}, ef) : {Laws.all_bad(List.append(&2, R.Act, S.acts.k(S.KData{}, _, R.SMv{x0, x1, x2}, S.Conn{id, a, n, m, False{}, sel, r3}, srv), ps)) == True{} : Bool}
         ih
     case R.ZOp{x0, x1}:
       ih =>
-        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel}, srv), False{}, ef) : {Laws.all_bad(List.append(&2, R.Act, S.acts.k(S.KData{}, _, R.ZOp{x0, x1}, S.Conn{id, a, n, m, False{}, sel}, srv), ps)) == True{} : Bool}
+        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel, r3}, srv), False{}, ef) : {Laws.all_bad(List.append(&2, R.Act, S.acts.k(S.KData{}, _, R.ZOp{x0, x1}, S.Conn{id, a, n, m, False{}, sel, r3}, srv), ps)) == True{} : Bool}
         ih
     case R.ZStore{x0, x1, x2}:
       ih =>
-        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel}, srv), False{}, ef) : {Laws.all_bad(List.append(&2, R.Act, S.acts.k(S.KData{}, _, R.ZStore{x0, x1, x2}, S.Conn{id, a, n, m, False{}, sel}, srv), ps)) == True{} : Bool}
+        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel, r3}, srv), False{}, ef) : {Laws.all_bad(List.append(&2, R.Act, S.acts.k(S.KData{}, _, R.ZStore{x0, x1, x2}, S.Conn{id, a, n, m, False{}, sel, r3}, srv), ps)) == True{} : Bool}
         ih
     case R.ZRangeStore{x0, x1, x2}:
       ih =>
-        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel}, srv), False{}, ef) : {Laws.all_bad(List.append(&2, R.Act, S.acts.k(S.KData{}, _, R.ZRangeStore{x0, x1, x2}, S.Conn{id, a, n, m, False{}, sel}, srv), ps)) == True{} : Bool}
+        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel, r3}, srv), False{}, ef) : {Laws.all_bad(List.append(&2, R.Act, S.acts.k(S.KData{}, _, R.ZRangeStore{x0, x1, x2}, S.Conn{id, a, n, m, False{}, sel, r3}, srv), ps)) == True{} : Bool}
         ih
     case R.ZMPop{x0, x1, x2}:
       ih =>
-        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel}, srv), False{}, ef) : {Laws.all_bad(List.append(&2, R.Act, S.acts.k(S.KData{}, _, R.ZMPop{x0, x1, x2}, S.Conn{id, a, n, m, False{}, sel}, srv), ps)) == True{} : Bool}
+        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel, r3}, srv), False{}, ef) : {Laws.all_bad(List.append(&2, R.Act, S.acts.k(S.KData{}, _, R.ZMPop{x0, x1, x2}, S.Conn{id, a, n, m, False{}, sel, r3}, srv), ps)) == True{} : Bool}
         ih
     case R.DbSize{}:
       ih =>
-        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel}, srv), False{}, ef) : {Laws.all_bad(List.append(&2, R.Act, S.acts.k(S.KData{}, _, R.DbSize{}, S.Conn{id, a, n, m, False{}, sel}, srv), ps)) == True{} : Bool}
+        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel, r3}, srv), False{}, ef) : {Laws.all_bad(List.append(&2, R.Act, S.acts.k(S.KData{}, _, R.DbSize{}, S.Conn{id, a, n, m, False{}, sel, r3}, srv), ps)) == True{} : Bool}
         ih
     case R.FlushDb{}:
       ih =>
-        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel}, srv), False{}, ef) : {Laws.all_bad(List.append(&2, R.Act, S.acts.k(S.KData{}, _, R.FlushDb{}, S.Conn{id, a, n, m, False{}, sel}, srv), ps)) == True{} : Bool}
+        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel, r3}, srv), False{}, ef) : {Laws.all_bad(List.append(&2, R.Act, S.acts.k(S.KData{}, _, R.FlushDb{}, S.Conn{id, a, n, m, False{}, sel, r3}, srv), ps)) == True{} : Bool}
         ih
     case R.Keys{x0}:
       ih =>
-        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel}, srv), False{}, ef) : {Laws.all_bad(List.append(&2, R.Act, S.acts.k(S.KData{}, _, R.Keys{x0}, S.Conn{id, a, n, m, False{}, sel}, srv), ps)) == True{} : Bool}
+        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel, r3}, srv), False{}, ef) : {Laws.all_bad(List.append(&2, R.Act, S.acts.k(S.KData{}, _, R.Keys{x0}, S.Conn{id, a, n, m, False{}, sel, r3}, srv), ps)) == True{} : Bool}
         ih
     case R.Scan{x0}:
       ih =>
-        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel}, srv), False{}, ef) : {Laws.all_bad(List.append(&2, R.Act, S.acts.k(S.KData{}, _, R.Scan{x0}, S.Conn{id, a, n, m, False{}, sel}, srv), ps)) == True{} : Bool}
+        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel, r3}, srv), False{}, ef) : {Laws.all_bad(List.append(&2, R.Act, S.acts.k(S.KData{}, _, R.Scan{x0}, S.Conn{id, a, n, m, False{}, sel, r3}, srv), ps)) == True{} : Bool}
         ih
     case R.Peek{x0, x1}:
       ih =>
-        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel}, srv), False{}, ef) : {Laws.all_bad(List.append(&2, R.Act, S.acts.k(S.KData{}, _, R.Peek{x0, x1}, S.Conn{id, a, n, m, False{}, sel}, srv), ps)) == True{} : Bool}
+        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel, r3}, srv), False{}, ef) : {Laws.all_bad(List.append(&2, R.Act, S.acts.k(S.KData{}, _, R.Peek{x0, x1}, S.Conn{id, a, n, m, False{}, sel, r3}, srv), ps)) == True{} : Bool}
         ih
     case R.Upd{x0, x1}:
       ih =>
-        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel}, srv), False{}, ef) : {Laws.all_bad(List.append(&2, R.Act, S.acts.k(S.KData{}, _, R.Upd{x0, x1}, S.Conn{id, a, n, m, False{}, sel}, srv), ps)) == True{} : Bool}
+        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel, r3}, srv), False{}, ef) : {Laws.all_bad(List.append(&2, R.Act, S.acts.k(S.KData{}, _, R.Upd{x0, x1}, S.Conn{id, a, n, m, False{}, sel, r3}, srv), ps)) == True{} : Bool}
         ih
     case R.Own{x0}:
-      ih => own_bad(x0, ps, id, a, n, m, sel, srv, ef)(ih)
+      ih => own_bad(x0, ps, id, a, n, m, sel, r3, srv, ef)(ih)
     case R.Bad{x0}:
       ih => ih
 
-def auth_own(o: R.SessOp, +id: Nat, +a: Bool, +n: String, +m: S.Mute, +sel: Nat, +srv: S.Srv, +ef: {S.authed(S.Conn{id, a, n, m, False{}, sel}, srv) == False{} : Bool}, +ep: {S.nopass(srv) == False{} : Bool})
+def auth_own(o: R.SessOp, +id: Nat, +a: Bool, +n: String, +m: S.Mute, +sel: Nat, +r3: Bool, +srv: S.Srv, +ef: {S.authed(S.Conn{id, a, n, m, False{}, sel, r3}, srv) == False{} : Bool}, +ep: {S.nopass(srv) == False{} : Bool})
   -> {Laws.logs_in(R.Own{o}) == False{} : Bool}
-  -> {S.conn.auth(S.next_conn(False{}, R.Own{o}, S.Conn{id, a, n, m, False{}, sel}, srv)) == False{} : Bool}:
+  -> {S.conn.auth(S.next_conn(False{}, R.Own{o}, S.Conn{id, a, n, m, False{}, sel, r3}, srv)) == False{} : Bool}:
   match o:
     case R.SHello{y0}:
-      el => Empty.absurd({S.conn.auth(S.next_conn(False{}, R.Own{R.SHello{y0}}, S.Conn{id, a, n, m, False{}, sel}, srv)) == False{} : Bool}, true_false(el))
+      el => Empty.absurd({S.conn.auth(S.next_conn(False{}, R.Own{R.SHello{y0}}, S.Conn{id, a, n, m, False{}, sel, r3}, srv)) == False{} : Bool}, true_false(el))
     case R.SAuth{y0}:
-      el => Empty.absurd({S.conn.auth(S.next_conn(False{}, R.Own{R.SAuth{y0}}, S.Conn{id, a, n, m, False{}, sel}, srv)) == False{} : Bool}, true_false(el))
+      el => Empty.absurd({S.conn.auth(S.next_conn(False{}, R.Own{R.SAuth{y0}}, S.Conn{id, a, n, m, False{}, sel, r3}, srv)) == False{} : Bool}, true_false(el))
     case R.SSelect{y0}:
       el =>
-        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel}, srv), False{}, ef) : {S.conn.auth(S.next_conn.k(S.KSess{R.SSelect{y0}}, _, S.Conn{id, a, n, m, False{}, sel}, srv)) == False{} : Bool}
+        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel, r3}, srv), False{}, ef) : {S.conn.auth(S.next_conn.k(S.KSess{R.SSelect{y0}}, _, S.Conn{id, a, n, m, False{}, sel, r3}, srv)) == False{} : Bool}
         or_false_l(a, S.nopass(srv))(ef)
     case R.SQuit{}:
       el => or_false_l(a, S.nopass(srv))(ef)
@@ -15696,151 +15696,151 @@ def auth_own(o: R.SessOp, +id: Nat, +a: Bool, +n: String, +m: S.Mute, +sel: Nat,
       el => ep
     case R.SClientId{}:
       el =>
-        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel}, srv), False{}, ef) : {S.conn.auth(S.next_conn.k(S.KSess{R.SClientId{}}, _, S.Conn{id, a, n, m, False{}, sel}, srv)) == False{} : Bool}
+        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel, r3}, srv), False{}, ef) : {S.conn.auth(S.next_conn.k(S.KSess{R.SClientId{}}, _, S.Conn{id, a, n, m, False{}, sel, r3}, srv)) == False{} : Bool}
         or_false_l(a, S.nopass(srv))(ef)
     case R.SClientGetName{}:
       el =>
-        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel}, srv), False{}, ef) : {S.conn.auth(S.next_conn.k(S.KSess{R.SClientGetName{}}, _, S.Conn{id, a, n, m, False{}, sel}, srv)) == False{} : Bool}
+        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel, r3}, srv), False{}, ef) : {S.conn.auth(S.next_conn.k(S.KSess{R.SClientGetName{}}, _, S.Conn{id, a, n, m, False{}, sel, r3}, srv)) == False{} : Bool}
         or_false_l(a, S.nopass(srv))(ef)
     case R.SClientSetName{y0}:
       el =>
-        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel}, srv), False{}, ef) : {S.conn.auth(S.next_conn.k(S.KSess{R.SClientSetName{y0}}, _, S.Conn{id, a, n, m, False{}, sel}, srv)) == False{} : Bool}
+        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel, r3}, srv), False{}, ef) : {S.conn.auth(S.next_conn.k(S.KSess{R.SClientSetName{y0}}, _, S.Conn{id, a, n, m, False{}, sel, r3}, srv)) == False{} : Bool}
         or_false_l(a, S.nopass(srv))(ef)
     case R.SClientReply{y0}:
       el =>
-        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel}, srv), False{}, ef) : {S.conn.auth(S.next_conn.k(S.KSess{R.SClientReply{y0}}, _, S.Conn{id, a, n, m, False{}, sel}, srv)) == False{} : Bool}
+        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel, r3}, srv), False{}, ef) : {S.conn.auth(S.next_conn.k(S.KSess{R.SClientReply{y0}}, _, S.Conn{id, a, n, m, False{}, sel, r3}, srv)) == False{} : Bool}
         or_false_l(a, S.nopass(srv))(ef)
     case R.SConfigGet{y0}:
       el =>
-        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel}, srv), False{}, ef) : {S.conn.auth(S.next_conn.k(S.KSess{R.SConfigGet{y0}}, _, S.Conn{id, a, n, m, False{}, sel}, srv)) == False{} : Bool}
+        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel, r3}, srv), False{}, ef) : {S.conn.auth(S.next_conn.k(S.KSess{R.SConfigGet{y0}}, _, S.Conn{id, a, n, m, False{}, sel, r3}, srv)) == False{} : Bool}
         or_false_l(a, S.nopass(srv))(ef)
     case R.SConfigSet{y0}:
       el =>
-        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel}, srv), False{}, ef) : {S.conn.auth(S.next_conn.k(S.KSess{R.SConfigSet{y0}}, _, S.Conn{id, a, n, m, False{}, sel}, srv)) == False{} : Bool}
+        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel, r3}, srv), False{}, ef) : {S.conn.auth(S.next_conn.k(S.KSess{R.SConfigSet{y0}}, _, S.Conn{id, a, n, m, False{}, sel, r3}, srv)) == False{} : Bool}
         or_false_l(a, S.nopass(srv))(ef)
     case R.SConfigResetStat{}:
       el =>
-        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel}, srv), False{}, ef) : {S.conn.auth(S.next_conn.k(S.KSess{R.SConfigResetStat{}}, _, S.Conn{id, a, n, m, False{}, sel}, srv)) == False{} : Bool}
+        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel, r3}, srv), False{}, ef) : {S.conn.auth(S.next_conn.k(S.KSess{R.SConfigResetStat{}}, _, S.Conn{id, a, n, m, False{}, sel, r3}, srv)) == False{} : Bool}
         or_false_l(a, S.nopass(srv))(ef)
     case R.SInfo{y0}:
       el =>
-        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel}, srv), False{}, ef) : {S.conn.auth(S.next_conn.k(S.KSess{R.SInfo{y0}}, _, S.Conn{id, a, n, m, False{}, sel}, srv)) == False{} : Bool}
+        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel, r3}, srv), False{}, ef) : {S.conn.auth(S.next_conn.k(S.KSess{R.SInfo{y0}}, _, S.Conn{id, a, n, m, False{}, sel, r3}, srv)) == False{} : Bool}
         or_false_l(a, S.nopass(srv))(ef)
     case R.SCommand{y0}:
       el =>
-        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel}, srv), False{}, ef) : {S.conn.auth(S.next_conn.k(S.KSess{R.SCommand{y0}}, _, S.Conn{id, a, n, m, False{}, sel}, srv)) == False{} : Bool}
+        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel, r3}, srv), False{}, ef) : {S.conn.auth(S.next_conn.k(S.KSess{R.SCommand{y0}}, _, S.Conn{id, a, n, m, False{}, sel, r3}, srv)) == False{} : Bool}
         or_false_l(a, S.nopass(srv))(ef)
     case R.SRandomKey{}:
       el =>
-        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel}, srv), False{}, ef) : {S.conn.auth(S.next_conn.k(S.KSess{R.SRandomKey{}}, _, S.Conn{id, a, n, m, False{}, sel}, srv)) == False{} : Bool}
+        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel, r3}, srv), False{}, ef) : {S.conn.auth(S.next_conn.k(S.KSess{R.SRandomKey{}}, _, S.Conn{id, a, n, m, False{}, sel, r3}, srv)) == False{} : Bool}
         or_false_l(a, S.nopass(srv))(ef)
     case R.SSwapDb{y0, y1}:
       el =>
-        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel}, srv), False{}, ef) : {S.conn.auth(S.next_conn.k(S.KSess{R.SSwapDb{y0, y1}}, _, S.Conn{id, a, n, m, False{}, sel}, srv)) == False{} : Bool}
+        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel, r3}, srv), False{}, ef) : {S.conn.auth(S.next_conn.k(S.KSess{R.SSwapDb{y0, y1}}, _, S.Conn{id, a, n, m, False{}, sel, r3}, srv)) == False{} : Bool}
         or_false_l(a, S.nopass(srv))(ef)
     case R.SMove{y0, y1}:
       el =>
-        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel}, srv), False{}, ef) : {S.conn.auth(S.next_conn.k(S.KSess{R.SMove{y0, y1}}, _, S.Conn{id, a, n, m, False{}, sel}, srv)) == False{} : Bool}
+        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel, r3}, srv), False{}, ef) : {S.conn.auth(S.next_conn.k(S.KSess{R.SMove{y0, y1}}, _, S.Conn{id, a, n, m, False{}, sel, r3}, srv)) == False{} : Bool}
         or_false_l(a, S.nopass(srv))(ef)
     case R.SFlushAll{}:
       el =>
-        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel}, srv), False{}, ef) : {S.conn.auth(S.next_conn.k(S.KSess{R.SFlushAll{}}, _, S.Conn{id, a, n, m, False{}, sel}, srv)) == False{} : Bool}
+        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel, r3}, srv), False{}, ef) : {S.conn.auth(S.next_conn.k(S.KSess{R.SFlushAll{}}, _, S.Conn{id, a, n, m, False{}, sel, r3}, srv)) == False{} : Bool}
         or_false_l(a, S.nopass(srv))(ef)
     case R.STime{}:
       el =>
-        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel}, srv), False{}, ef) : {S.conn.auth(S.next_conn.k(S.KSess{R.STime{}}, _, S.Conn{id, a, n, m, False{}, sel}, srv)) == False{} : Bool}
+        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel, r3}, srv), False{}, ef) : {S.conn.auth(S.next_conn.k(S.KSess{R.STime{}}, _, S.Conn{id, a, n, m, False{}, sel, r3}, srv)) == False{} : Bool}
         or_false_l(a, S.nopass(srv))(ef)
     case R.SObject{y0, y1}:
       el =>
-        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel}, srv), False{}, ef) : {S.conn.auth(S.next_conn.k(S.KSess{R.SObject{y0, y1}}, _, S.Conn{id, a, n, m, False{}, sel}, srv)) == False{} : Bool}
+        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel, r3}, srv), False{}, ef) : {S.conn.auth(S.next_conn.k(S.KSess{R.SObject{y0, y1}}, _, S.Conn{id, a, n, m, False{}, sel, r3}, srv)) == False{} : Bool}
         or_false_l(a, S.nopass(srv))(ef)
     case R.SCopy{y0}:
       el =>
-        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel}, srv), False{}, ef) : {S.conn.auth(S.next_conn.k(S.KSess{R.SCopy{y0}}, _, S.Conn{id, a, n, m, False{}, sel}, srv)) == False{} : Bool}
+        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel, r3}, srv), False{}, ef) : {S.conn.auth(S.next_conn.k(S.KSess{R.SCopy{y0}}, _, S.Conn{id, a, n, m, False{}, sel, r3}, srv)) == False{} : Bool}
         or_false_l(a, S.nopass(srv))(ef)
     case R.SLcs{y0}:
       el =>
-        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel}, srv), False{}, ef) : {S.conn.auth(S.next_conn.k(S.KSess{R.SLcs{y0}}, _, S.Conn{id, a, n, m, False{}, sel}, srv)) == False{} : Bool}
+        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel, r3}, srv), False{}, ef) : {S.conn.auth(S.next_conn.k(S.KSess{R.SLcs{y0}}, _, S.Conn{id, a, n, m, False{}, sel, r3}, srv)) == False{} : Bool}
         or_false_l(a, S.nopass(srv))(ef)
     case R.SHRandField{y0, y1}:
       el =>
-        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel}, srv), False{}, ef) : {S.conn.auth(S.next_conn.k(S.KSess{R.SHRandField{y0, y1}}, _, S.Conn{id, a, n, m, False{}, sel}, srv)) == False{} : Bool}
+        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel, r3}, srv), False{}, ef) : {S.conn.auth(S.next_conn.k(S.KSess{R.SHRandField{y0, y1}}, _, S.Conn{id, a, n, m, False{}, sel, r3}, srv)) == False{} : Bool}
         or_false_l(a, S.nopass(srv))(ef)
     case R.SSPop{y0, y1}:
       el =>
-        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel}, srv), False{}, ef) : {S.conn.auth(S.next_conn.k(S.KSess{R.SSPop{y0, y1}}, _, S.Conn{id, a, n, m, False{}, sel}, srv)) == False{} : Bool}
+        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel, r3}, srv), False{}, ef) : {S.conn.auth(S.next_conn.k(S.KSess{R.SSPop{y0, y1}}, _, S.Conn{id, a, n, m, False{}, sel, r3}, srv)) == False{} : Bool}
         or_false_l(a, S.nopass(srv))(ef)
     case R.SSRandMember{y0, y1}:
       el =>
-        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel}, srv), False{}, ef) : {S.conn.auth(S.next_conn.k(S.KSess{R.SSRandMember{y0, y1}}, _, S.Conn{id, a, n, m, False{}, sel}, srv)) == False{} : Bool}
+        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel, r3}, srv), False{}, ef) : {S.conn.auth(S.next_conn.k(S.KSess{R.SSRandMember{y0, y1}}, _, S.Conn{id, a, n, m, False{}, sel, r3}, srv)) == False{} : Bool}
         or_false_l(a, S.nopass(srv))(ef)
     case R.SZRandMember{y0, y1}:
       el =>
-        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel}, srv), False{}, ef) : {S.conn.auth(S.next_conn.k(S.KSess{R.SZRandMember{y0, y1}}, _, S.Conn{id, a, n, m, False{}, sel}, srv)) == False{} : Bool}
+        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel, r3}, srv), False{}, ef) : {S.conn.auth(S.next_conn.k(S.KSess{R.SZRandMember{y0, y1}}, _, S.Conn{id, a, n, m, False{}, sel, r3}, srv)) == False{} : Bool}
         or_false_l(a, S.nopass(srv))(ef)
     case R.SBlock{y0, y1}:
       el =>
-        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel}, srv), False{}, ef) : {S.conn.auth(S.next_conn.k(S.KSess{R.SBlock{y0, y1}}, _, S.Conn{id, a, n, m, False{}, sel}, srv)) == False{} : Bool}
+        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel, r3}, srv), False{}, ef) : {S.conn.auth(S.next_conn.k(S.KSess{R.SBlock{y0, y1}}, _, S.Conn{id, a, n, m, False{}, sel, r3}, srv)) == False{} : Bool}
         or_false_l(a, S.nopass(srv))(ef)
     case R.SUnblock{y0, y1}:
       el =>
-        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel}, srv), False{}, ef) : {S.conn.auth(S.next_conn.k(S.KSess{R.SUnblock{y0, y1}}, _, S.Conn{id, a, n, m, False{}, sel}, srv)) == False{} : Bool}
+        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel, r3}, srv), False{}, ef) : {S.conn.auth(S.next_conn.k(S.KSess{R.SUnblock{y0, y1}}, _, S.Conn{id, a, n, m, False{}, sel, r3}, srv)) == False{} : Bool}
         or_false_l(a, S.nopass(srv))(ef)
     case R.SMulti{}:
       el =>
-        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel}, srv), False{}, ef) : {S.conn.auth(S.next_conn.k(S.KSess{R.SMulti{}}, _, S.Conn{id, a, n, m, False{}, sel}, srv)) == False{} : Bool}
+        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel, r3}, srv), False{}, ef) : {S.conn.auth(S.next_conn.k(S.KSess{R.SMulti{}}, _, S.Conn{id, a, n, m, False{}, sel, r3}, srv)) == False{} : Bool}
         or_false_l(a, S.nopass(srv))(ef)
     case R.SExec{}:
       el =>
-        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel}, srv), False{}, ef) : {S.conn.auth(S.next_conn.k(S.KSess{R.SExec{}}, _, S.Conn{id, a, n, m, False{}, sel}, srv)) == False{} : Bool}
+        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel, r3}, srv), False{}, ef) : {S.conn.auth(S.next_conn.k(S.KSess{R.SExec{}}, _, S.Conn{id, a, n, m, False{}, sel, r3}, srv)) == False{} : Bool}
         or_false_l(a, S.nopass(srv))(ef)
     case R.SDiscard{}:
       el =>
-        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel}, srv), False{}, ef) : {S.conn.auth(S.next_conn.k(S.KSess{R.SDiscard{}}, _, S.Conn{id, a, n, m, False{}, sel}, srv)) == False{} : Bool}
+        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel, r3}, srv), False{}, ef) : {S.conn.auth(S.next_conn.k(S.KSess{R.SDiscard{}}, _, S.Conn{id, a, n, m, False{}, sel, r3}, srv)) == False{} : Bool}
         or_false_l(a, S.nopass(srv))(ef)
     case R.SWatch{y0}:
       el =>
-        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel}, srv), False{}, ef) : {S.conn.auth(S.next_conn.k(S.KSess{R.SWatch{y0}}, _, S.Conn{id, a, n, m, False{}, sel}, srv)) == False{} : Bool}
+        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel, r3}, srv), False{}, ef) : {S.conn.auth(S.next_conn.k(S.KSess{R.SWatch{y0}}, _, S.Conn{id, a, n, m, False{}, sel, r3}, srv)) == False{} : Bool}
         or_false_l(a, S.nopass(srv))(ef)
     case R.SUnwatch{}:
       el =>
-        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel}, srv), False{}, ef) : {S.conn.auth(S.next_conn.k(S.KSess{R.SUnwatch{}}, _, S.Conn{id, a, n, m, False{}, sel}, srv)) == False{} : Bool}
+        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel, r3}, srv), False{}, ef) : {S.conn.auth(S.next_conn.k(S.KSess{R.SUnwatch{}}, _, S.Conn{id, a, n, m, False{}, sel, r3}, srv)) == False{} : Bool}
         or_false_l(a, S.nopass(srv))(ef)
     case R.SPub{y0, y1}:
       el =>
-        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel}, srv), False{}, ef) : {S.conn.auth(S.next_conn.k(S.KSess{R.SPub{y0, y1}}, _, S.Conn{id, a, n, m, False{}, sel}, srv)) == False{} : Bool}
+        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel, r3}, srv), False{}, ef) : {S.conn.auth(S.next_conn.k(S.KSess{R.SPub{y0, y1}}, _, S.Conn{id, a, n, m, False{}, sel, r3}, srv)) == False{} : Bool}
         or_false_l(a, S.nopass(srv))(ef)
     case R.SClient{y0, y1}:
       el =>
-        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel}, srv), False{}, ef) : {S.conn.auth(S.next_conn.k(S.KSess{R.SClient{y0, y1}}, _, S.Conn{id, a, n, m, False{}, sel}, srv)) == False{} : Bool}
+        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel, r3}, srv), False{}, ef) : {S.conn.auth(S.next_conn.k(S.KSess{R.SClient{y0, y1}}, _, S.Conn{id, a, n, m, False{}, sel, r3}, srv)) == False{} : Bool}
         or_false_l(a, S.nopass(srv))(ef)
     case R.SMonitor{}:
       el =>
-        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel}, srv), False{}, ef) : {S.conn.auth(S.next_conn.k(S.KSess{R.SMonitor{}}, _, S.Conn{id, a, n, m, False{}, sel}, srv)) == False{} : Bool}
+        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel, r3}, srv), False{}, ef) : {S.conn.auth(S.next_conn.k(S.KSess{R.SMonitor{}}, _, S.Conn{id, a, n, m, False{}, sel, r3}, srv)) == False{} : Bool}
         or_false_l(a, S.nopass(srv))(ef)
     case R.SRewrite{}:
       el =>
-        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel}, srv), False{}, ef) : {S.conn.auth(S.next_conn.k(S.KSess{R.SRewrite{}}, _, S.Conn{id, a, n, m, False{}, sel}, srv)) == False{} : Bool}
+        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel, r3}, srv), False{}, ef) : {S.conn.auth(S.next_conn.k(S.KSess{R.SRewrite{}}, _, S.Conn{id, a, n, m, False{}, sel, r3}, srv)) == False{} : Bool}
         or_false_l(a, S.nopass(srv))(ef)
     case R.SFail{y0}:
       el =>
-        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel}, srv), False{}, ef) : {S.conn.auth(S.next_conn.k(S.KSess{R.SFail{y0}}, _, S.Conn{id, a, n, m, False{}, sel}, srv)) == False{} : Bool}
+        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel, r3}, srv), False{}, ef) : {S.conn.auth(S.next_conn.k(S.KSess{R.SFail{y0}}, _, S.Conn{id, a, n, m, False{}, sel, r3}, srv)) == False{} : Bool}
         or_false_l(a, S.nopass(srv))(ef)
     case R.SMemUsage{y0, y1}:
       el =>
-        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel}, srv), False{}, ef) : {S.conn.auth(S.next_conn.k(S.KSess{R.SMemUsage{y0, y1}}, _, S.Conn{id, a, n, m, False{}, sel}, srv)) == False{} : Bool}
+        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel, r3}, srv), False{}, ef) : {S.conn.auth(S.next_conn.k(S.KSess{R.SMemUsage{y0, y1}}, _, S.Conn{id, a, n, m, False{}, sel, r3}, srv)) == False{} : Bool}
         or_false_l(a, S.nopass(srv))(ef)
     case R.SReply{y0}:
       el =>
-        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel}, srv), False{}, ef) : {S.conn.auth(S.next_conn.k(S.KSess{R.SReply{y0}}, _, S.Conn{id, a, n, m, False{}, sel}, srv)) == False{} : Bool}
+        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel, r3}, srv), False{}, ef) : {S.conn.auth(S.next_conn.k(S.KSess{R.SReply{y0}}, _, S.Conn{id, a, n, m, False{}, sel, r3}, srv)) == False{} : Bool}
         or_false_l(a, S.nopass(srv))(ef)
     case R.SBad{y0}:
       el => or_false_l(a, S.nopass(srv))(ef)
 
 # and leaves the client not authenticated, unless it is AUTH or HELLO
-def auth_nc(c: R.Cmd, +id: Nat, +a: Bool, +n: String, +m: S.Mute, +sel: Nat, +srv: S.Srv, +ef: {S.authed(S.Conn{id, a, n, m, False{}, sel}, srv) == False{} : Bool}, +ep: {S.nopass(srv) == False{} : Bool})
+def auth_nc(c: R.Cmd, +id: Nat, +a: Bool, +n: String, +m: S.Mute, +sel: Nat, +r3: Bool, +srv: S.Srv, +ef: {S.authed(S.Conn{id, a, n, m, False{}, sel, r3}, srv) == False{} : Bool}, +ep: {S.nopass(srv) == False{} : Bool})
   -> {Laws.logs_in(c) == False{} : Bool}
-  -> {S.conn.auth(S.next_conn(False{}, c, S.Conn{id, a, n, m, False{}, sel}, srv)) == False{} : Bool}:
+  -> {S.conn.auth(S.next_conn(False{}, c, S.Conn{id, a, n, m, False{}, sel, r3}, srv)) == False{} : Bool}:
   match c:
     case R.Ping{}:
       el => or_false_l(a, S.nopass(srv))(ef)
@@ -15897,7 +15897,7 @@ def auth_nc(c: R.Cmd, +id: Nat, +a: Bool, +n: String, +m: S.Mute, +sel: Nat, +sr
     case R.Upd{x0, x1}:
       el => or_false_l(a, S.nopass(srv))(ef)
     case R.Own{x0}:
-      el => auth_own(x0, id, a, n, m, sel, srv, ef, ep)(el)
+      el => auth_own(x0, id, a, n, m, sel, r3, srv, ef, ep)(el)
     case R.Bad{x0}:
       el => or_false_l(a, S.nopass(srv))(ef)
 
@@ -15905,12 +15905,12 @@ def noauth_go(cmds: List<&2, R.Cmd>, conn: S.Conn, +srv: S.Srv) -> {S.conn.auth(
   match cmds conn:
     case Nil{} _:
       ea => ep => el => {==}
-    case Con{+c, +rest} S.Conn{+id, +a, +n, +m, True{}, +sel}:
-      +ea => +ep => +el => noauth_go(rest, S.Conn{id, a, n, m, True{}, sel}, srv)(ea)(ep)(and_r(Bool.not(Laws.logs_in(c)), Laws.no_login(rest))(el))
-    case Con{+c, +rest} S.Conn{+id, +a, +n, +m, False{}, +sel}:
+    case Con{+c, +rest} S.Conn{+id, +a, +n, +m, True{}, +sel, +r3}:
+      +ea => +ep => +el => noauth_go(rest, S.Conn{id, a, n, m, True{}, sel, r3}, srv)(ea)(ep)(and_r(Bool.not(Laws.logs_in(c)), Laws.no_login(rest))(el))
+    case Con{+c, +rest} S.Conn{+id, +a, +n, +m, False{}, +sel, +r3}:
       +ea => +ep => +el =>
-        ran_bad(c, S.plan(rest, S.next_conn(False{}, c, S.Conn{id, a, n, m, False{}, sel}, srv), S.next_srv(False{}, c, S.Conn{id, a, n, m, False{}, sel}, srv)), id, a, n, m, sel, srv, or_ff(a, S.nopass(srv))(ea)(ep))(
-          noauth_go(rest, S.next_conn(False{}, c, S.Conn{id, a, n, m, False{}, sel}, srv), S.next_srv(False{}, c, S.Conn{id, a, n, m, False{}, sel}, srv))(auth_nc(c, id, a, n, m, sel, srv, or_ff(a, S.nopass(srv))(ea)(ep), ep)(not_true(Laws.logs_in(c))(and_l(Bool.not(Laws.logs_in(c)), Laws.no_login(rest))(el))))(Equal.trans(Bool, S.nopass(S.next_srv(False{}, c, S.Conn{id, a, n, m, False{}, sel}, srv)), S.nopass(srv), False{}, Equal.cong(S.Srv, Bool, z => S.nopass(z), S.next_srv(False{}, c, S.Conn{id, a, n, m, False{}, sel}, srv), srv, srv_same(False{}, c, S.Conn{id, a, n, m, False{}, sel}, srv, or_ff(a, S.nopass(srv))(ea)(ep))), ep))(and_r(Bool.not(Laws.logs_in(c)), Laws.no_login(rest))(el)))
+        ran_bad(c, S.plan(rest, S.next_conn(False{}, c, S.Conn{id, a, n, m, False{}, sel, r3}, srv), S.next_srv(False{}, c, S.Conn{id, a, n, m, False{}, sel, r3}, srv)), id, a, n, m, sel, r3, srv, or_ff(a, S.nopass(srv))(ea)(ep))(
+          noauth_go(rest, S.next_conn(False{}, c, S.Conn{id, a, n, m, False{}, sel, r3}, srv), S.next_srv(False{}, c, S.Conn{id, a, n, m, False{}, sel, r3}, srv))(auth_nc(c, id, a, n, m, sel, r3, srv, or_ff(a, S.nopass(srv))(ea)(ep), ep)(not_true(Laws.logs_in(c))(and_l(Bool.not(Laws.logs_in(c)), Laws.no_login(rest))(el))))(Equal.trans(Bool, S.nopass(S.next_srv(False{}, c, S.Conn{id, a, n, m, False{}, sel, r3}, srv)), S.nopass(srv), False{}, Equal.cong(S.Srv, Bool, z => S.nopass(z), S.next_srv(False{}, c, S.Conn{id, a, n, m, False{}, sel, r3}, srv), srv, srv_same(False{}, c, S.Conn{id, a, n, m, False{}, sel, r3}, srv, or_ff(a, S.nopass(srv))(ea)(ep))), ep))(and_r(Bool.not(Laws.logs_in(c)), Laws.no_login(rest))(el)))
 
 def Laws.noauth(conn, srv, cmds, e1, e2, e3):
   noauth_go(cmds, conn, srv)(e1)(e2)(e3)

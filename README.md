@@ -7,7 +7,8 @@ against 65 laws,
 checked by Bend
 and rechecked by the BendTT kernel, whose soundness is proved in Lean.
 
-BendKV speaks RESP2, so `redis-cli`, `redis-benchmark` and `memtier_benchmark` work
+BendKV speaks RESP2 and RESP3 (HELLO 3), so `redis-cli`, `redis-benchmark`,
+`memtier_benchmark` and clients that speak RESP3 by default (go-redis v9, Lettuce) work
 with it. Under pipelined load it serves GET at 1.6×, SET at 1.8× and INCR at 1.45× the
 throughput of Redis 7.0.15 on the same machine, with half its memory for small values.
 
@@ -15,10 +16,10 @@ throughput of Redis 7.0.15 on the same machine, with half its memory for small v
 > lists, sets, sorted sets and their times to live, the blocking commands, transactions,
 > pub/sub and keyspace notifications, the keyspace, several databases, connection
 > commands, CLIENT LIST, INFO and KILL, MONITOR, an append-only file and its rewrite,
-> maxmemory and its eviction). The goal now is a drop-in replacement for a single Redis
-> node, measured by Redis's own test suite: of the 1,677 tests Redis 7.0.15 passes
-> against a server it did not start, BendKV passes 805, and 798 of the 1,172 in what it
-> implements
+> maxmemory and its eviction, RESP3). The goal now is a drop-in replacement for a single
+> Redis node, measured by Redis's own test suite: of the 1,677 tests Redis 7.0.15 passes
+> against a server it did not start, BendKV passes 1,097, and 1,090 of the 1,172 in what
+> it implements
 > ([docs/COMPATIBILITY.md](docs/COMPATIBILITY.md)). Do not use it for data you cannot
 > lose.
 
@@ -228,9 +229,11 @@ translation stays in the trusted base.
   channels and patterns (of shard channels for SSUBSCRIBE and SUNSUBSCRIBE); a message
   goes to its channel's subscribers (`message`, `smessage` for a shard channel), then to
   those of each pattern it matches (`pmessage`), and PUBLISH answers how many got it. A
-  subscribed client runs (P|S)SUBSCRIBE, (P|S)UNSUBSCRIBE, PING, QUIT and RESET alone, as
-  a client of RESP2 does in Redis, any other command refused with Redis's error; the
-  replies of SUBSCRIBE and its kin go out even with replies off; in a transaction
+  subscribed client of RESP2 runs (P|S)SUBSCRIBE, (P|S)UNSUBSCRIBE, PING, QUIT and RESET
+  alone, as in Redis, any other command refused with Redis's error; one of RESP3 runs any
+  command, its messages pushes among its replies (its own messages and keyspace events
+  before the reply of the command that made them, as Redis writes them); the replies of
+  SUBSCRIBE and its kin go out even with replies off; in a transaction
   SUBSCRIBE and PSUBSCRIBE run and SSUBSCRIBE is refused; RESET, QUIT and a closed
   connection drop the client's subscriptions. Keyspace notifications: with
   `notify-keyspace-events` set, each change a command makes is published to
@@ -238,8 +241,8 @@ translation stays in the trusted base.
   events (`new` for a key made, `del` for a collection emptied, `expired` from the sweep,
   `evicted` from an eviction, the pop of a client that waits after the write that served
   it). Where BendKV differs: UNSUBSCRIBE of all goes in the order the client subscribed
-  and PUBSUB CHANNELS in the trie's, where Redis goes in its hash tables'; there is no
-  RESP3, so no push type; a slow subscriber has no `client-output-buffer-limit pubsub`; no
+  and PUBSUB CHANNELS in the trie's, where Redis goes in its hash tables'; a slow
+  subscriber has no `client-output-buffer-limit pubsub`; no
   events of misses (`m`) or streams; and a key a read finds expired sends `expired` when
   the sweep deletes it, where Redis sends it at the read.
 - **Times to live:** EXPIRE, PEXPIRE, EXPIREAT and PEXPIREAT (with NX, XX, GT, LT), TTL,
@@ -254,8 +257,9 @@ translation stays in the trusted base.
   (the key with its time), SWAPDB, FLUSHDB and FLUSHALL (with ASYNC/SYNC, which empty at
   once), with Redis's errors for a bad number; INFO's keyspace has a line for each
   database that holds keys, and the sweep of expired keys goes over every database.
-- **Connection:** PING, ECHO, TIME (the time the batch runs at, to the ms), HELLO (RESP2,
-  with AUTH and SETNAME), AUTH, SELECT, QUIT, RESET (which selects database 0 again),
+- **Connection:** PING, ECHO, TIME (the time the batch runs at, to the ms), HELLO (2 or 3,
+  with AUTH and SETNAME), AUTH, SELECT, QUIT, RESET (which selects database 0 again, and
+  RESP2),
   CLIENT (ID, GETNAME, SETNAME, REPLY ON/OFF/SKIP, NO-EVICT, GETREDIR, TRACKINGINFO,
   CACHING, UNBLOCK (TIMEOUT or ERROR), LIST, INFO, KILL, HELP), FUNCTION FLUSH. A client
   must authenticate where Redis asks it to: once a command's name and number of arguments
@@ -386,7 +390,7 @@ translation stays in the trusted base.
   (FINDINGS.md, section 3zv).
 
 Not yet: streams and the other types (HyperLogLog, geo), Lua
-scripts, RESP3, CLIENT PAUSE and TRACKING, timing of commands
+scripts, CLIENT PAUSE and TRACKING, timing of commands
 (usec in INFO commandstats, latencystats), CONFIG REWRITE (it answers as Redis does without a configuration file),
 RDB files. Integers, and times in ms, are limited to 14 digits.
 
@@ -502,7 +506,11 @@ while other clients connect and close, none killed but those named), MONITOR
 with their time and address put aside, then 4 monitors that each get every line of 20
 clients that pipeline 200 SETs each, each client's lines in order), AUTH
 (`tests/auth_test.py`: scenarios on BendKV and on Redis of when a client must
-authenticate and what it is answered before it does),
+authenticate and what it is answered before it does), RESP3 (`tests/resp3_test.py`: 11
+scenarios on BendKV and on Redis compared byte for byte, of HELLO and the switch of
+protocol in a pipeline, the replies RESP3 types, EXEC, blocking commands and Pub/Sub's
+pushes; and the differential tests of keys, numbers, BITFIELD and the types again with
+every connection in RESP3, `RESP=3`),
 connections that end every way one can, many times
 (the client closing or resetting, QUIT, a protocol error), on a BendKV of their own whose
 table of channels is read to show that each closed the channel it opened,
@@ -534,13 +542,13 @@ src/        the server
   aof.bend      append-only file: effects, encoding, loading       verified
   session.bend  connection and server state, whole batches         verified
   config.bend   the parameters, CONFIG GET and SET                 verified
-  resp.bend     RESP2 parser and reply encoder                     tested
+  resp.bend     RESP parser, RESP2 and RESP3 reply encoders         tested
   info.bend     INFO's sections and fields                         tested
   command.bend  COMMAND, with Redis's table of BendKV's commands     tested
   startup.bend  the command line and the configuration file        tested
   server.bend   TCP, connections, the database actor, the log      tested
 proof/      LAWS.bend (the laws), PROOF.bend (their proofs), SPEC.bend (the commands on the trie alone)
-tests/      float, start, differential, expiry, protocol, session, CONFIG, INFO, COMMAND, SCAN, BITFIELD, hash, list, set, sorted set, blocking, transaction, Pub/Sub, CLIENT, MONITOR, AUTH, maxmemory, robustness, stalled reader, concurrency, AOF and AOF rewrite tests
+tests/      float, start, differential, expiry, protocol, session, CONFIG, INFO, COMMAND, SCAN, BITFIELD, hash, list, set, sorted set, blocking, transaction, Pub/Sub, CLIENT, MONITOR, AUTH, RESP3, maxmemory, robustness, stalled reader, concurrency, AOF and AOF rewrite tests
 bench/      in-process benchmarks of the map, the core and channels
 tools/      measurement scripts, the runner of Redis's test suite, and the generators of
             the trie, of the parameter table and of the command table, with the facts

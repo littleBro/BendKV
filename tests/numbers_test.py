@@ -67,8 +67,8 @@ def norm(t, x):
         return (x[0], [x[1][0], (x[1][1][0], sorted(x[1][1][1]))])
     # SPOP, SRANDMEMBER and ZRANDMEMBER pick at random: how many, or nil
     # or not
-    if t.startswith(("SPOP", "SRANDMEMBER", "ZRANDMEMBER")) and x[0] in (b"*", b"$"):
-        return (x[0], len(x[1]) if x[0] == b"*" else x[1] is not None)
+    if t.startswith(("SPOP", "SRANDMEMBER", "ZRANDMEMBER")) and x[0] in (b"*", b"~", b"$"):
+        return (x[0], len(x[1]) if x[0] in (b"*", b"~") else x[1] is not None)
     return x
 
 

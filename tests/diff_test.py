@@ -51,16 +51,27 @@ runs; TTL, PTTL, EXPIRETIME and PEXPIRETIME, which read the clock of each
 server, are compared within a second.
 """
 import argparse
+import os
 import random
 import socket
 import sys
 import time
 
 
+# RESP=3 in the environment: each connection speaks RESP3 (HELLO 3 first),
+# so that the tests compare the replies of both servers in RESP3
+RESP3 = os.environ.get("RESP") == "3"
+
+
 class Conn:
-    def __init__(self, port):
+    def __init__(self, port, resp3=None):
         self.sock = socket.create_connection(("127.0.0.1", port))
         self.buf = b""
+        if RESP3 if resp3 is None else resp3:
+            self.send([[b"HELLO", b"3"]])
+            r = self.reply()
+            if r[0] != b"%":
+                raise ValueError("HELLO 3 answered %r" % (r,))
 
     def send(self, cmds):
         out = b""
@@ -88,18 +99,37 @@ class Conn:
         data, self.buf = self.buf[:n], self.buf[n + 2:]
         return data
 
+    # a reply as (its kind, its value): a line's text (+ - : and RESP3's
+    # , ( #), a bulk's bytes (and = verbatim's, !'s), None for a null, an
+    # aggregate's items (* ~ >, and % a map's keys and values in turn)
     def reply(self):
         line = self._line()
         kind, rest = line[:1], line[1:]
-        if kind in (b"+", b"-", b":"):
+        if kind in (b"+", b"-", b":", b",", b"(", b"#"):
             return (kind, rest)
-        if kind == b"$":
+        if kind in (b"$", b"=", b"!"):
             n = int(rest)
             return (kind, None if n < 0 else self._exact(n))
-        if kind == b"*":
+        if kind in (b"*", b"~", b">"):
             n = int(rest)
             return (kind, None if n < 0 else [self.reply() for _ in range(n)])
+        if kind == b"%":
+            return (kind, [self.reply() for _ in range(2 * int(rest))])
+        if kind == b"_":
+            return (kind, None)
         raise ValueError("bad reply line %r" % line)
+
+
+# the values of an aggregate's items, a pair (RESP3's array of two: a
+# member and its score, a field and its value) giving both of its own
+def flat_values(rep):
+    out = []
+    for kind, v in rep[1]:
+        if kind == b"*" and v is not None:
+            out += [x for _, x in v]
+        else:
+            out.append(v)
+    return out
 
 
 KEYS = [b"k%d" % i for i in range(8)] + [b"", b"user:1", b"user:2", b"\xd0\xba\xd0\xbb\xd1\x8e\xd1\x87", b"\x00\xff\r\n"]
@@ -700,10 +730,11 @@ def normalize(cmd, rep):
         return (rep[0], [rep[1][0], (rep[1][1][0], sorted(rep[1][1][1]))])
     # a hash of long values is a hashtable, in the order of each server's
     # table (tests/hash_test.py checks the order of a listpack's); HSCAN's
-    # COUNT of 1000 is past every field
+    # COUNT of 1000 is past every field. (In RESP3 HGETALL answers a map
+    # and a set's members a set: the kind is kept, and compared.)
     if name in (b"HKEYS", b"HVALS") and rep[0] == b"*":
         return (rep[0], sorted(rep[1]))
-    if name == b"HGETALL" and rep[0] == b"*":
+    if name == b"HGETALL" and rep[0] in (b"*", b"%"):
         return (rep[0], pairs_of(rep[1]))
     if name == b"HSCAN" and rep[0] == b"*":
         return (rep[0], [rep[1][0], (rep[1][1][0], pairs_of(rep[1][1][1]))])
@@ -713,7 +744,7 @@ def normalize(cmd, rep):
         return (rep[0], len(rep[1]) if rep[0] == b"*" else rep[1] is not None)
     # a set of words is a hashtable, in the order of each server's table;
     # SSCAN's COUNT of 1000 is past every member
-    if name in (b"SMEMBERS", b"SINTER", b"SUNION", b"SDIFF", b"SPOP") and rep[0] == b"*" and rep[1] is not None:
+    if name in (b"SMEMBERS", b"SINTER", b"SUNION", b"SDIFF", b"SPOP") and rep[0] in (b"*", b"~") and rep[1] is not None:
         return (rep[0], sorted(rep[1]))
     if name == b"SSCAN" and rep[0] == b"*":
         return (rep[0], [rep[1][0], (rep[1][1][0], sorted(rep[1][1][1]))])
