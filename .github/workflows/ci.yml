@@ -37,11 +37,15 @@ jobs:
         with:
           path: ~/.bend/bendtt
           key: bendtt-${{ hashFiles('bend-patches/**') }}
+      # (elan fetches a toolchain at its first use; the compiler looks for
+      # it in elan's directory, so it is fetched here)
       - name: Lean 4.34.0
         if: steps.kernel.outputs.cache-hit != 'true'
         run: |
           curl -sSfL https://raw.githubusercontent.com/leanprover/elan/master/elan-init.sh |
-            sh -s -- -y --no-modify-path --default-toolchain leanprover/lean4:v4.34.0
+            sh -s -- -y --no-modify-path --default-toolchain none
+          ~/.elan/bin/elan toolchain install leanprover/lean4:v4.34.0
+          ~/.elan/toolchains/leanprover--lean4---v4.34.0/bin/lean --version
       - name: make gencheck
         run: make gencheck
       - name: make check
