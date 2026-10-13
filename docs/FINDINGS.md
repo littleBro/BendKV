@@ -3478,6 +3478,98 @@ no RESP3), and events `r`. There is no CLIENT KILL MAXAGE (Redis 7.4). A client 
 cut off at the end of the actor's group, before any of the group's answers goes out,
 where Redis frees it at once.
 
+## 3zt. MONITOR
+
+**What there is.** MONITOR as Redis 7.0.15 runs it (`monitorCommand`, `call()` and
+`replicationFeedMonitors`): the client becomes a monitor, answered OK (a monitor already
+is answered nothing, its call counted), and each call that runs after it, of any client,
+sends every monitor a line: the time, the database after the call and the client's
+address, `+<s>.<us> [<db> <ip:port>]`, then the call's arguments as its client sent them
+(their case kept, an inline request split as Redis splits it), each quoted as Redis's
+`sdscatrepr` quotes it (`\"`, `\\`, `\n`, `\r`, `\t`, `\a`, `\b`, a byte outside the
+printable ones as `\xhh`). A call sends its line as `call()` would: a command the parser
+refuses (unknown, the wrong number of arguments), one refused before the client
+authenticated, to a subscribed client or to a monitor, and one queued in a transaction
+send none; the queued ones send theirs as EXEC runs them, before EXEC's own, and an EXEC
+refused sends its line all the same, as `execCommandAbort` does. A blocking command's
+line goes out when it blocks, not when it is served. The administrative commands (CONFIG,
+CLIENT LIST, KILL, NO-EVICT and UNBLOCK, MONITOR) and EVAL send none (Redis's flags
+`admin` and `skip_monitor`, generated with the table of commands), and AUTH's password
+and HELLO's user and password are `"(redacted)"`, as Redis redacts them while it reads
+them: AUTH's when it has two arguments at most, HELLO's after a version Redis takes (2
+or 3), up to its first option that is not right. A monitor reads and writes nothing: a
+command that reads or writes keys, or may be replicated (PUBLISH, SPUBLISH, EVAL;
+`may_replicate`, which COMMAND INFO hides), is refused "ERR Replica can't interact with
+the keyspace" once the parser's checks, the client's authentication and a
+subscription's limits pass, as Redis refuses it to a replica (in MULTI it flags the
+transaction); MONITOR queued in a transaction answers "ERR MONITOR isn't allowed for
+DENY BLOCKING client" as EXEC runs it. A monitor's own call is answered first, then its
+line comes; with CLIENT REPLY OFF, or SKIP before its next command, a monitor gets no
+line, its own neither, as Redis drops what it writes to such a client, and after QUIT
+its own QUIT's line does not reach it. RESET makes it no monitor (the other monitors get
+its RESET), as do the end of its connection and CLIENT KILL. CLIENT LIST shows a monitor
+with the flag O, its type normal.
+
+**In the actor.** The monitors are a list in the registry of clients (Clients), each with
+its id, its answer channel and whether its replies were on as its last batch ended, in
+the order they came. While there is one the fast way is off, a bit of Pub/Sub's word as
+for a killed client; the word's classes of keyspace events, which make the actor work
+out a command's events, are its low bits alone now, so neither bit makes it work out
+any. After each call of the general way the actor writes the call's line once, pushes it
+to every other monitor whose replies are on (Push, as a message to a subscriber; a
+monitor's connection waits as a subscribed client's does), and puts it among the
+client's own replies when the client monitors, after the call's reply (after EXEC's
+array, for the calls EXEC runs). The arguments as sent come from the bytes the batch
+came in: every batch brings them to the actor (Req's raw), the fast way drops them, and
+the actor reads them into each request's arguments (`P.argvs`, the parser's framing
+again) only when a line needs them, at the first line of the batch. The rest of a batch
+after a blocking command keeps its arguments with it, and so does each command queued in
+a transaction, so that a monitor that starts while a client waits, or queues, sees their
+lines as Redis's monitor would.
+
+**What a buffer costs.** The bytes a batch came in were the parser's: it read them, and
+cut the tail of an unfinished request off them (String.drop, which drops what comes
+before it). Kept for the actor while the parser read them, they were shared, and a
+shared buffer is shared at a cost (`rfc_wrap`), read through a redirect at every
+String.code_at, find and slice of the parse, and dropped at a cost: GET took 25 more
+instructions with 16 requests a batch, and 251 more without pipelining (10,373, +2.5%).
+The parser now takes the buffer and gives it back with the batch (Batch's raw), copies
+out the tail of an unfinished request (a copy where String.drop made a view; there is
+one only when a read ends inside a request), and parses a request longer than a window
+where it lies: nothing shares the buffer, which the actor drops where the connection
+did. GET, SET and INCR take 3,298, 4,223 and 4,485 instructions (3,299, 4,223 and 4,489
+for the code before, built by the same compiler and counted in turn), and GET without
+pipelining 10,100 (10,122).
+
+**Tests.** `tests/monitor_test.py` runs in make test against each mode of the server:
+scenarios on BendKV and on Redis with clients of their own, their transcripts compared
+line by line, a monitor's line with its time and the client's address put aside: 41 lines
+(the case of a command as sent, quoted bytes, an inline request, numbers; what is not
+shown and what is; MULTI, the queued commands at EXEC, its errors, DISCARD, a nested
+MULTI, WATCH, an EXEC refused, MONITOR in a transaction; the database after SELECT,
+SWAPDB and MOVE; AUTH and HELLO redacted, and not; a blocking command that times out, one
+served, one with a pipeline after it; a monitor's own commands, refused ones, MONITOR
+again, MULTI and EXEC of a monitor; a subscribed client, a subscribed monitor; CLIENT
+REPLY OFF, ON and SKIP of a monitor; a client without a password; monitors that start
+while a transaction is queued and while a client waits with a pipeline; CLIENT LIST's
+flag O; RESET, QUIT and CLIENT KILL of a monitor; MONITOR in a pipeline; INFO's
+statistics). A monitor's lines are read up to a marker, a command of a client of their
+own whose line comes after those of the commands before it. And a check under load: four
+monitors and 20 clients that each pipeline 200 SETs, each monitor getting every line,
+each client's in its order. Redis's suite: 797 of the 1,677 tests Redis passes (47.5%;
+794 before): unit/introspection passes 25 of its 28, a monitor's lines of the commands
+that run and a transaction's in order, with its EXEC's line also when an error while it
+queued aborted it (its other three look in a monitor for the calls of a Lua script and of
+a function, and for MIGRATE's arguments redacted), and unit/other the test of RESET
+clearing a monitor's state.
+
+**Where BendKV differs.** A line's time is the group's (the actor runs a group at one
+time), in ms: its microseconds end in 000, where Redis reads its clock for each call.
+The calls EXEC runs for a monitor put their lines after EXEC's array, where Redis writes
+them between the array's replies (and a client reading the array then misreads it).
+HELLO 3 is refused (BendKV speaks RESP2 alone), its user and password redacted all the
+same, as Redis redacts them for a version it takes.
+
 ## 4. Where a request's time goes, and hiding the memory waits
 
 With the eight patches, BendKV ran fewer instructions on GET and SET than Redis, missed

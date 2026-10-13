@@ -2141,7 +2141,9 @@ def pub.say(m: Mute, p: R.PubOp) -> Maybe<&2, R.Reply>:
 # its addresses and its socket unknown here ("?:0", fd 0), KILL finds no
 # other client to kill and its old form no address, NO-EVICT answers OK.
 # The server answers them with every client it holds (server.bend,
-# Clients).
+# Clients). MONITOR (R.SMonitor) answers OK, as Redis answers a client
+# alone on the server, which sees no command but its own; the server
+# makes the client a monitor (server.bend, MONITOR).
 def cl.cmd(+info: Bool) -> String:
   Bool.pick(String, info, "client|info", "client|list")
 
@@ -2265,6 +2267,8 @@ def own_reply(+o: R.SessOp, +c: Conn, +s: Srv, +ds: R.Ds) -> Maybe<&2, R.Reply>:
       pub.say(conn.mode(c), R.pub.op(k, a))
     case R.SClient{+k, +a}:
       say(conn.mode(c), cl.reply(R.client.op(k, a), c, cl.argv(a, 10n)))
+    case R.SMonitor{}:
+      say(conn.mode(c), R.r_ok())
 
 # the connection after a session command
 def own_conn(+o: R.SessOp, +c: Conn, +s: Srv) -> Conn:
@@ -2344,6 +2348,8 @@ def own_conn(+o: R.SessOp, +c: Conn, +s: Srv) -> Conn:
     case R.SPub{k, a}:
       step_conn(c, s)
     case R.SClient{k, a}:
+      step_conn(c, s)
+    case R.SMonitor{}:
       step_conn(c, s)
 
 # what a session command does to the databases: SELECT and RESET move the
