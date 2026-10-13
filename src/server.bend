@@ -156,12 +156,15 @@ def ans.dash(+a: Ans, +l: Nat) -> Bool:
 # every error reply. A later command of the batch (INFO) sees the counts
 # of those before it.
 
-# the message of an error the parser found (Bad, a session command's SBad)
+# the message of an error the parser found (Bad, a session command's
+# SBad, a failed call's SFail)
 def gen.bad(+c: R.Cmd) -> String:
   match c:
     case R.Bad{R.RError{+m}}:
       m
     case R.Own{R.SBad{R.RError{+m}}}:
+      m
+    case R.Own{R.SFail{R.RError{+m}}}:
       m
     case _:
       ""
@@ -1022,12 +1025,14 @@ def touch.ents(t: Tx, +xs: List<&2, A.Ent>, +pre: Maybe<&2, R.Ds>, +post: R.Ds) 
 # Clients
 # -------
 # Every client the server holds, by id, from its connection's start
-# (Join) to its end (Left): the channel its answers come back on, its
-# socket's fd, its peer's address and its own (TCP.name), when it came
-# (ms), its name and database as the last command that set them left
-# them (CLIENT SETNAME, HELLO, SELECT, RESET: the actor writes them as
-# such a command runs), and whether CLIENT NO-EVICT is on. Its last
-# command and the time of its last batch are its channel's mark
+# (Join, which the actor answers with the client's state as it comes:
+# authenticated when there is no password then, as Redis's createClient
+# sets it, S.conn_join) to its end (Left): the channel its answers come
+# back on, its socket's fd, its peer's address and its own (TCP.name),
+# when it came (ms), its name and database as the last command that set
+# them left them (CLIENT SETNAME, HELLO, SELECT, RESET: the actor writes
+# them as such a command runs), and whether CLIENT NO-EVICT is on. Its
+# last command and the time of its last batch are its channel's mark
 # (Chan.mark), which the actor sets with each batch: a store, where a
 # write to the registry would cost every request a walk of a trie.
 # CLIENT KILL takes a client out of the registry at once (killed) and
@@ -4347,9 +4352,9 @@ def group_req(+log: Bool, q: Req, g: Grp) -> Grp:
       grp.gone(id, back, outs, es, srv, ds, ws, up, tx, pb)
     case Left{+id, back} Grp{outs, es, srv, ds, ws, up, tx, pb}:
       Grp{(back, Bye{}) <> outs, es, srv, ds, ws, up, tx.drop(id, tx), ps.left(id, ps.drop(id, pb))}
-    case Join{+id, back, fd, addr, laddr} Grp{outs, es, srv, +ds, ws, up, tx, pb}:
+    case Join{+id, +back, fd, addr, laddr} Grp{outs, es, +srv, +ds, ws, up, tx, pb}:
       +now = R.ds.now(ds)
-      Grp{outs, es, srv, ds, ws, up, tx, ps.join(id, Cl{id, Chan.mark(Ans, back, 0, now), fd, addr, laddr, now, "", 0n, False{}}, pb)}
+      Grp{(back, Ans{None{}, S.conn_join(id, srv)}) <> outs, es, srv, ds, ws, up, tx, ps.join(id, Cl{id, Chan.mark(Ans, back, 0, now), fd, addr, laddr, now, "", 0n, False{}}, pb)}
 
 # the clock (IO.clock: s and us since 1970) in ms
 def clock.ms(t: U32 & U32) -> Nat:
@@ -5302,8 +5307,20 @@ def conn_sub.unwatched(p: Socket & Bool, +ln: Link, out: Maybe<&2, String>, cn: 
 # count of connections taken (Tally) waits in a channel the listeners and
 # the connections share.
 
+# the connection's state as the actor answered its Join: authenticated
+# when the server had no password then (S.conn_join)
+@unsafe
+def conn_start.of(m: Maybe<&1, Ans>, s: Socket, +ln: Link, +id: Nat) -> IO(Unit):
+  match m:
+    case Some{Ans{o, cn}}:
+      conn_loop(s, SNil{}, Nil{}, 0n, 1n, ln, cn)
+    case _:
+      conn_loop(s, SNil{}, Nil{}, 0n, 1n, ln, S.conn_new(id))
+
 # the connection's client joins the actor's registry (Join: its socket's
-# fd and addresses, TCP.name) before its first batch
+# fd and addresses, TCP.name) before its first batch, which waits for the
+# actor's answer: the client's state as it joins, its authentication
+# decided where Redis decides it, as the client comes (Clients)
 @unsafe
 def conn_joined(n: Socket & (U32 & (String & String)), +db: Chan(Req), +back: Chan(Ans), post: Bool, tl: Chan(Tally), +id: Nat) -> IO(Unit):
   (s, i) = n
@@ -5311,7 +5328,8 @@ def conn_joined(n: Socket & (U32 & (String & String)), +db: Chan(Req), +back: Ch
   (addr, laddr) = a
   do IO<Unit>:
     sent : Bool <- Chan.send(Req, db, Join{id, back, fd, addr, laddr})
-    conn_loop(s, SNil{}, Nil{}, 0n, 1n, Link{db, back, post, tl, id}, S.conn_new(id))
+    m : Maybe<&1, Ans> <- Chan.recv(Ans, back)
+    conn_start.of(m, s, Link{db, back, post, tl, id}, id)
 
 @unsafe
 def conn_start(s: Socket, db: Chan(Req), post: Bool, tl: Chan(Tally), +id: Nat) -> IO(Unit):

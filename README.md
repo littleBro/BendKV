@@ -254,10 +254,13 @@ translation stays in the trusted base.
   once), with Redis's errors for a bad number; INFO's keyspace has a line for each
   database that holds keys, and the sweep of expired keys goes over every database.
 - **Connection:** PING, ECHO, TIME (the time the batch runs at, to the ms), HELLO (RESP2,
-  with AUTH and SETNAME), AUTH, SELECT, QUIT,
-  RESET (which selects database 0 again), CLIENT (ID, GETNAME, SETNAME,
-  REPLY ON/OFF/SKIP, NO-EVICT, GETREDIR, TRACKINGINFO, CACHING, UNBLOCK (TIMEOUT or ERROR),
-  LIST, INFO, KILL, HELP), FUNCTION FLUSH.
+  with AUTH and SETNAME), AUTH, SELECT, QUIT, RESET (which selects database 0 again),
+  CLIENT (ID, GETNAME, SETNAME, REPLY ON/OFF/SKIP, NO-EVICT, GETREDIR, TRACKINGINFO,
+  CACHING, UNBLOCK (TIMEOUT or ERROR), LIST, INFO, KILL, HELP), FUNCTION FLUSH. A client
+  must authenticate where Redis asks it to: once a command's name and number of arguments
+  are checked, before it runs (a syntax error is NOAUTH for a client that has not
+  authenticated); a client is authenticated as it connects, and at RESET, when there is
+  no password then, and by AUTH and HELLO's AUTH, and nothing else changes it.
 - **Clients:** CLIENT LIST (all, of a TYPE, of IDs), CLIENT INFO and CLIENT KILL (the old
   form of an address, and the filters ID, TYPE, ADDR, LADDR, USER and SKIPME), as Redis
   7.0.15 runs them, with its errors. A client's line has Redis's fields in Redis's order:
@@ -464,7 +467,9 @@ aside, then 100 clients listed and half of them killed by id, and 200 killed by 
 while other clients connect and close, none killed but those named), MONITOR
 (`tests/monitor_test.py`: scenarios on BendKV and on Redis, a monitor's lines compared
 with their time and address put aside, then 4 monitors that each get every line of 20
-clients that pipeline 200 SETs each, each client's lines in order),
+clients that pipeline 200 SETs each, each client's lines in order), AUTH
+(`tests/auth_test.py`: scenarios on BendKV and on Redis of when a client must
+authenticate and what it is answered before it does),
 connections that end every way one can, many times
 (the client closing or resetting, QUIT, a protocol error), on a BendKV of their own whose
 table of channels is read to show that each closed the channel it opened,
@@ -495,7 +500,7 @@ src/        the server
   startup.bend  the command line and the configuration file        tested
   server.bend   TCP, connections, the database actor, the log      tested
 proof/      LAWS.bend (the laws), PROOF.bend (their proofs), SPEC.bend (the commands on the trie alone)
-tests/      float, start, differential, expiry, protocol, session, CONFIG, INFO, COMMAND, SCAN, BITFIELD, hash, list, set, sorted set, blocking, transaction, Pub/Sub, CLIENT, MONITOR, robustness, stalled reader, concurrency, AOF tests
+tests/      float, start, differential, expiry, protocol, session, CONFIG, INFO, COMMAND, SCAN, BITFIELD, hash, list, set, sorted set, blocking, transaction, Pub/Sub, CLIENT, MONITOR, AUTH, robustness, stalled reader, concurrency, AOF tests
 bench/      in-process benchmarks of the map, the core and channels
 tools/      measurement scripts, the runner of Redis's test suite, and the generators of
             the trie, of the parameter table and of the command table, with the facts

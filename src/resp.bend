@@ -340,10 +340,11 @@ def args.at(m: Nat, +s: String, +l: Nat, +j: Nat) -> Args:
       bulks(k, s, l, bulk_at(s, j, l), Nil{})
 
 # a request, its hash marked with its code: its key and what its
-# command counts as
+# command counts as; a failed call's error as the server runs it
+# (R.fail.if: SFail, answered once the client may run commands)
 def req.ok(+c: R.Cmd, h: U32, +key: Nat, +args: List<&2, String>, j: Nat) -> One:
-  +code = R.stat.code(key, R.stat.class(c, key, args))
-  OneOk{B.Req{c, R.stat.hash(h, code)}, j}
+  +class = R.stat.class(c, key, args)
+  OneOk{B.Req{R.fail.if(class, c), R.stat.hash(h, R.stat.code(key, class))}, j}
 
 # a command of number id named nm (as the client spelled it, for an
 # unknown one), from its arguments: a command of the connection or of

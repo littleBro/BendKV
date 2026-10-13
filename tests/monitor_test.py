@@ -194,9 +194,9 @@ def scenarios(port, log):
     log("10 skip", drain(m, cs), a.cmd("SET", "k3", "v3"), drain(m, cs))
     m.send("PING")
     log("10 skipped", drain(m, cs), a.cmd("SET", "k4", "v4"), mk.lines(m, cs))
-    # 11. a client without a password (the others authenticate, as BendKV
-    # asks a client that came without one, unlike Redis)
-    log("11 pass", r.cmd("CONFIG", "SET", "requirepass", "pw"), r.cmd("AUTH", "pw"), z.cmd("AUTH", "pw"), mk.lines(m, cs))
+    # 11. a client without a password (the others came before it, and
+    # stay authenticated)
+    log("11 pass", r.cmd("CONFIG", "SET", "requirepass", "pw"), mk.lines(m, cs))
     n = Client(port, db=None)
     log("11 noauth", n.cmd("GET", "x"), n.cmd("EXEC"), n.cmd("MULTI"), n.cmd("AUTH", "bad"), n.cmd("AUTH", "pw"),
         n.cmd("PING"), mk.lines(m, cs))
