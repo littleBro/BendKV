@@ -14,10 +14,11 @@ throughput of Redis 7.0.15 on the same machine, with half its memory for small v
 > **Status: research prototype.** BendKV implements a subset of Redis (strings, hashes,
 > lists, sets, sorted sets and their times to live, the blocking commands, transactions,
 > pub/sub and keyspace notifications, the keyspace, several databases, connection
-> commands, CLIENT LIST, INFO and KILL, MONITOR, an append-only file and its rewrite). The goal now is a
-> drop-in replacement for a single Redis node, measured by Redis's own test suite: of the
-> 1,677 tests Redis 7.0.15 passes against a server it did not start, BendKV passes 797,
-> and 792 of the 1,172 in what it implements
+> commands, CLIENT LIST, INFO and KILL, MONITOR, an append-only file and its rewrite,
+> maxmemory and its eviction). The goal now is a drop-in replacement for a single Redis
+> node, measured by Redis's own test suite: of the 1,677 tests Redis 7.0.15 passes
+> against a server it did not start, BendKV passes 805, and 798 of the 1,172 in what it
+> implements
 > ([docs/COMPATIBILITY.md](docs/COMPATIBILITY.md)). Do not use it for data you cannot
 > lose.
 
@@ -92,11 +93,11 @@ translation stays in the trusted base.
   and its limit of 1000 nested stars, past which nothing matches), TYPE, TOUCH, SCAN (MATCH,
   COUNT, TYPE, with Redis's guarantee: a key there for a whole iteration is found, however
   the database changes meanwhile) and RANDOMKEY (picked as Redis picks one). OBJECT
-  (ENCODING, REFCOUNT, IDLETIME, FREQ, HELP) answers from the value, since BendKV keeps no
-  encoding and no access times: ENCODING as Redis encodes a value set whole (where Redis
+  (ENCODING, REFCOUNT, IDLETIME, FREQ, HELP): ENCODING and REFCOUNT answer from the value,
+  since BendKV keeps no encodings, ENCODING as Redis encodes a value set whole (where Redis
   answers `raw` for one made by APPEND, SETRANGE or SETBIT), REFCOUNT by Redis's shared
-  integers under the current eviction policy, IDLETIME and FREQ 0 (each refused under the
-  policy Redis refuses it under).
+  integers under the current eviction policy; IDLETIME and FREQ from when the key was last
+  used (Memory, below), each refused under the policy Redis refuses it under.
 - **Floats:** INCRBYFLOAT and HINCRBYFLOAT, as Redis 7.0.15 computes them on x86-64: the
   value and the increment read as glibc's strtold reads them, added as an x87 long double
   adds them, and the sum written as `"%.17Lf"` writes it, the zeros that end its fraction
@@ -235,12 +236,12 @@ translation stays in the trusted base.
   `notify-keyspace-events` set, each change a command makes is published to
   `__keyspace@<db>__:<key>` and `__keyevent@<db>__:<event>` with Redis's names of the
   events (`new` for a key made, `del` for a collection emptied, `expired` from the sweep,
-  the pop of a client that waits after the write that served it). Where BendKV differs:
-  UNSUBSCRIBE of all goes in the order the client subscribed and PUBSUB CHANNELS in the
-  trie's, where Redis goes in its hash tables'; there is no RESP3, so no push type; a slow
-  subscriber has no `client-output-buffer-limit pubsub`; no events of misses (`m`),
-  evictions (`e`) or streams; and a key a read finds expired sends `expired` when the
-  sweep deletes it, where Redis sends it at the read.
+  `evicted` from an eviction, the pop of a client that waits after the write that served
+  it). Where BendKV differs: UNSUBSCRIBE of all goes in the order the client subscribed
+  and PUBSUB CHANNELS in the trie's, where Redis goes in its hash tables'; there is no
+  RESP3, so no push type; a slow subscriber has no `client-output-buffer-limit pubsub`; no
+  events of misses (`m`) or streams; and a key a read finds expired sends `expired` when
+  the sweep deletes it, where Redis sends it at the read.
 - **Times to live:** EXPIRE, PEXPIRE, EXPIREAT and PEXPIREAT (with NX, XX, GT, LT), TTL,
   PTTL, EXPIRETIME, PEXPIRETIME, PERSIST; SET with NX, XX, GET, EX, PX, EXAT, PXAT and
   KEEPTTL; SETEX, PSETEX, GETEX (EX, PX, EXAT, PXAT, PERSIST) and GETDEL. Times are read
@@ -298,25 +299,50 @@ translation stays in the trusted base.
   password, hz is capped as in Redis and notify-keyspace-events picks the events
   published (above); the port, the addresses, TLS and the append-only
   file cannot change while BendKV runs (a new value fails as it does when Redis cannot
-  apply it); the other parameters are kept and read back but tune nothing, since BendKV
-  has no eviction, replication or encodings for them to tune.
+  apply it); maxmemory and its policy, samples, tenacity and LFU parameters limit the
+  memory and choose what is evicted (below); the other parameters are kept and read
+  back but tune nothing, since BendKV has no replication or encodings for them to tune.
 - **Introspection:** INFO with Redis 7.0.15's sections and fields, in Redis's order,
   picked as Redis picks them (none, `default`, `all`, `everything`, any names in any
   case): server, clients, memory, persistence, stats, replication, CPU, modules,
   errorstats, cluster, keyspace. The values are BendKV's own where it has them: its
   process, its parameters, its connections, commands and bytes (with the instantaneous
-  rates sampled every 100 ms, as Redis's cron samples them), its resident memory, its
-  keys, its append-only file; for what BendKV does not have (replication, forks,
-  scripts, eviction) they are what Redis shows when it has none. The statistics
-  per command count as Redis counts them: each command's and subcommand's calls, the
-  calls refused before they run (a wrong number of arguments by Redis's arity, a client
-  that must authenticate first) and the calls that fail as they run, and the error
-  replies by their code, held-back replies included (CLIENT REPLY OFF); BendKV does not
-  time its commands, so their usec is 0 and latencystats is empty. CONFIG
-  RESETSTAT starts the counts again. COMMAND (with INFO, DOCS, COUNT, LIST and its
+  rates sampled every 100 ms, as Redis's cron samples them), its memory (`used_memory` is
+  what its heap's live values hold, as Redis's is what its allocator handed out; Memory,
+  below), its keys, its evictions, its append-only file; for what BendKV does not have
+  (replication, forks, scripts) they are what Redis shows when it has none. The
+  statistics per command count as Redis counts them: each command's and subcommand's
+  calls, the calls refused before they run (a wrong number of arguments by Redis's arity,
+  a client that must authenticate first, a command refused for memory) and the calls
+  that fail as they run, and the error replies by their code, held-back replies included
+  (CLIENT REPLY OFF); BendKV does not time its commands, so their usec is 0 and
+  latencystats is empty. CONFIG RESETSTAT starts the counts again. COMMAND (with INFO, DOCS, COUNT, LIST and its
   filters, GETKEYS, GETKEYSANDFLAGS, HELP) describes each command BendKV has, and each
   subcommand it has, as Redis 7.0.15 describes it: `tools/gen_commands.py` takes the
   descriptions from Redis itself.
+- **Memory:** maxmemory and its eviction, as Redis 7.0.15 runs them. With maxmemory set,
+  BendKV reads what its heap's live values hold before each group of requests, as Redis
+  measures before each command, and while that is past maxmemory it evicts keys by
+  `maxmemory-policy`: the LRU, LFU and volatile-ttl policies from a pool of the 16 best
+  candidates of their samples (`maxmemory-samples` keys of each database), kept from one
+  eviction to the next, the random ones a key of each database in turn, the volatile ones
+  among keys with a time alone. An evicted key is deleted as an expired one is: a DEL in
+  the append-only file, its WATCHes touched, an `evicted` keyspace event, a count in
+  INFO's `evicted_keys`. Past the time `maxmemory-eviction-tenacity` allows, the eviction
+  goes on between groups, as Redis's goes on from its event loop; with nothing it may
+  evict, the commands that may take memory get Redis's OOM error, so does any command a
+  client queues in MULTI, and EXEC aborts a transaction that queued one. A CONFIG SET of
+  maxmemory evicts at once, with Redis's warning when the memory is past the new value;
+  INFO shows how long the memory was past it (`total_eviction_exceeded_time`,
+  `current_eviction_exceeded_time`). A key's use is kept as Redis keeps it, by its LRU
+  clock (seconds) or its LFU counter (logarithmic, with `lfu-log-factor`, decayed by
+  `lfu-decay-time`), and OBJECT IDLETIME and FREQ answer from it. Where BendKV differs:
+  the same maxmemory holds another number of keys, since a key takes other bytes in
+  BendKV's heap than in Redis's allocator; a deleted key leaves its trie's nodes, so
+  eviction deletes more keys than Redis would to get under the limit; the uses are kept
+  in a table of 2^20 words by the key's hash, which keys whose hashes share their low 20
+  bits share, and a request marks its first key alone, before it runs (MGET's others are
+  not marked); and evicting many keys at once is about ten times slower than in Redis.
 - **Start:** as `redis-server` starts: a configuration file, `--name value` options and
   `-` for the standard input, read line by line as Redis reads them (includes, `dir`
   changing the directory at once, save points that add up, the same errors at the same
@@ -390,7 +416,7 @@ also needs Lean 4.34.0 (through elan).
 
 ```bash
 git clone https://github.com/bendlang/bend ../bend-patched
-sh bend-patches/apply.sh ../bend-patched      # Bend 2.0.35 + 28 patches
+sh bend-patches/apply.sh ../bend-patched      # Bend 2.0.35 + 30 patches
 B="bun ../bend-patched/bend2/main.ts"
 
 make check   BEND="$B"   # check the proofs
@@ -489,7 +515,10 @@ started from a file Redis wrote and Redis from one BendKV wrote, each holding th
 databases the other held, and the rewrite of the file (`tests/rewrite_test.py`:
 BGREWRITEAOF's replies and INFO's account against Redis's, the rewritten file against
 Redis's base command for command, writes during a rewrite and a kill during one, the
-cron's rewrites, rewrites that fail, BendKV and Redis started from the new file).
+cron's rewrites, rewrites that fail, BendKV and Redis started from the new file), and
+maxmemory (`tests/maxmemory_test.py`: the refusals past it, OBJECT IDLETIME and FREQ
+and the `evicted` event against Redis's, Redis's own tests of the policies on both, an
+eviction that goes on alone, with the append-only file on and while a rewrite runs).
 `make suite` runs Redis's own test suite in its mode for a server already started, on
 Redis and on BendKV, and counts the tests Redis passes that BendKV passes
 ([docs/COMPATIBILITY.md](docs/COMPATIBILITY.md)).
@@ -511,12 +540,12 @@ src/        the server
   startup.bend  the command line and the configuration file        tested
   server.bend   TCP, connections, the database actor, the log      tested
 proof/      LAWS.bend (the laws), PROOF.bend (their proofs), SPEC.bend (the commands on the trie alone)
-tests/      float, start, differential, expiry, protocol, session, CONFIG, INFO, COMMAND, SCAN, BITFIELD, hash, list, set, sorted set, blocking, transaction, Pub/Sub, CLIENT, MONITOR, AUTH, robustness, stalled reader, concurrency, AOF and AOF rewrite tests
+tests/      float, start, differential, expiry, protocol, session, CONFIG, INFO, COMMAND, SCAN, BITFIELD, hash, list, set, sorted set, blocking, transaction, Pub/Sub, CLIENT, MONITOR, AUTH, maxmemory, robustness, stalled reader, concurrency, AOF and AOF rewrite tests
 bench/      in-process benchmarks of the map, the core and channels
 tools/      measurement scripts, the runner of Redis's test suite, and the generators of
             the trie, of the parameter table and of the command table, with the facts
             they take from Redis (tools/data/)
-bend-patches/  the 28 patches to the Bend compiler and runtime
+bend-patches/  the 30 patches to the Bend compiler and runtime
 docs/       FINDINGS.md, DIRECTIONS.md, COMPATIBILITY.md, PERFORMANCE.md
 ```
 

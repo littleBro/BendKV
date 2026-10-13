@@ -341,10 +341,23 @@ def args.at(m: Nat, +s: String, +l: Nat, +j: Nat) -> Args:
 
 # a request, its hash marked with its code: its key and what its
 # command counts as; a failed call's error as the server runs it
-# (R.fail.if: SFail, answered once the client may run commands)
+# (R.fail.if: SFail, answered once the client may run commands). The
+# hash is also the mark of its key's use (server.bend, Access): a call
+# the parser refused or failed has none (0), as it reads no key.
 def req.ok(+c: R.Cmd, h: U32, +key: Nat, +args: List<&2, String>, j: Nat) -> One:
   +class = R.stat.class(c, key, args)
-  OneOk{B.Req{R.fail.if(class, c), R.stat.hash(h, R.stat.code(key, class))}, j}
+  OneOk{B.Req{R.fail.if(class, c), R.stat.hash(Bool.pick(U32, Nat.is_eq(class, 0n), h, 0), R.stat.code(key, class))}, j}
+
+# the hash of a request's key: that of its first argument, for a command
+# whose first key it is and that touches it as it reads it (R.stat.touch:
+# not EXISTS, TYPE and the TTLs, which Redis looks up without marking
+# their use); else none (0)
+def req.hash(touch: Bool, +args: List<&2, String>) -> U32:
+  match touch:
+    case True{}:
+      B.args_hash(args)
+    case False{}:
+      0
 
 # a command of number id named nm (as the client spelled it, for an
 # unknown one), from its arguments: a command of the connection or of
@@ -354,7 +367,7 @@ def req.mk(own: Bool, +id: Nat, +nm: String, +args: List<&2, String>, +key: Nat,
     case True{}:
       req.ok(R.Own{R.parse_sess(id, nm, args)}, 0, key, args, j)
     case False{}:
-      req.ok(R.parse_id(id, nm, args), B.args_hash(args), key, args, j)
+      req.ok(R.parse_id(id, nm, args), req.hash(R.stat.touch(key), args), key, args, j)
 
 def req.of(+id: Nat, +nm: String, a: Args) -> One:
   match a:

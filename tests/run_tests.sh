@@ -43,7 +43,12 @@
 # against Redis's, the rewritten file against Redis's base, command for
 # command, writes while it runs (and a kill while it runs), BendKV and
 # Redis started from the new file, the rewrite with appendonly no, the
-# cron's rewrites as the file grows, and rewrites that fail.
+# cron's rewrites as the file grows, and rewrites that fail. Then
+# maxmemory and eviction: the refusals past maxmemory (OOM), OBJECT
+# IDLETIME and FREQ and the evicted event against Redis's, Redis's own
+# tests of the policies on both, and BendKV's warnings, an eviction that
+# goes on alone, one with the append-only file on and one while a rewrite
+# runs.
 set -e
 cd "$(dirname "$0")/.."
 PORT=${PORT:-6380}
@@ -143,3 +148,5 @@ echo "== append-only files of Redis and of BendKV"
 python3 tests/aof_redis_test.py --bin build/bendkv --bendkv "$PORT" --redis "$((REDIS_PORT + 1))" --dir build/aofio
 echo "== the rewrite of the append-only file"
 python3 tests/rewrite_test.py --bin build/bendkv --bendkv "$PORT" --redis "$((REDIS_PORT + 1))" --dir build/rewrite
+echo "== maxmemory and eviction"
+python3 tests/maxmemory_test.py --bin build/bendkv --bendkv "$PORT" --redis "$((REDIS_PORT + 1))" --dir build/maxmemory

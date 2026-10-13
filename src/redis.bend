@@ -7558,6 +7558,357 @@ def stat.keyspace(+key: Nat) -> Bool:
     case _:
       False{}
 
+# whether the command of a key may take memory (denyoom): past
+# maxmemory with nothing left to evict, Redis refuses it
+def stat.denyoom(+key: Nat) -> Bool:
+  match key:
+    case 4n:
+      True{}
+    case 5n:
+      True{}
+    case 6n:
+      True{}
+    case 10n:
+      True{}
+    case 11n:
+      True{}
+    case 12n:
+      True{}
+    case 13n:
+      True{}
+    case 14n:
+      True{}
+    case 17n:
+      True{}
+    case 23n:
+      True{}
+    case 24n:
+      True{}
+    case 39n:
+      True{}
+    case 41n:
+      True{}
+    case 45n:
+      True{}
+    case 48n:
+      True{}
+    case 49n:
+      True{}
+    case 51n:
+      True{}
+    case 52n:
+      True{}
+    case 55n:
+      True{}
+    case 63n:
+      True{}
+    case 66n:
+      True{}
+    case 67n:
+      True{}
+    case 68n:
+      True{}
+    case 69n:
+      True{}
+    case 75n:
+      True{}
+    case 76n:
+      True{}
+    case 80n:
+      True{}
+    case 81n:
+      True{}
+    case 83n:
+      True{}
+    case 93n:
+      True{}
+    case 95n:
+      True{}
+    case 97n:
+      True{}
+    case 98n:
+      True{}
+    case 99n:
+      True{}
+    case 115n:
+      True{}
+    case 121n:
+      True{}
+    case 122n:
+      True{}
+    case 147n:
+      True{}
+    case 148n:
+      True{}
+    case 149n:
+      True{}
+    case 150n:
+      True{}
+    case 155n:
+      True{}
+    case 156n:
+      True{}
+    case _:
+      False{}
+
+# whether the command of a key touches the key of its first argument
+# (its first key is there), as Redis's lookups set a key's access time:
+# all but those that look a key up without touching it (LOOKUP_NOTOUCH)
+def stat.touch(+key: Nat) -> Bool:
+  match key:
+    case 3n:
+      True{}
+    case 4n:
+      True{}
+    case 5n:
+      True{}
+    case 6n:
+      True{}
+    case 7n:
+      True{}
+    case 8n:
+      True{}
+    case 10n:
+      True{}
+    case 11n:
+      True{}
+    case 12n:
+      True{}
+    case 13n:
+      True{}
+    case 14n:
+      True{}
+    case 15n:
+      True{}
+    case 16n:
+      True{}
+    case 17n:
+      True{}
+    case 23n:
+      True{}
+    case 24n:
+      True{}
+    case 26n:
+      True{}
+    case 27n:
+      True{}
+    case 28n:
+      True{}
+    case 29n:
+      True{}
+    case 30n:
+      True{}
+    case 31n:
+      True{}
+    case 36n:
+      True{}
+    case 37n:
+      True{}
+    case 38n:
+      True{}
+    case 39n:
+      True{}
+    case 40n:
+      True{}
+    case 41n:
+      True{}
+    case 42n:
+      True{}
+    case 43n:
+      True{}
+    case 44n:
+      True{}
+    case 45n:
+      True{}
+    case 46n:
+      True{}
+    case 47n:
+      True{}
+    case 49n:
+      True{}
+    case 50n:
+      True{}
+    case 51n:
+      True{}
+    case 52n:
+      True{}
+    case 53n:
+      True{}
+    case 54n:
+      True{}
+    case 55n:
+      True{}
+    case 56n:
+      True{}
+    case 57n:
+      True{}
+    case 58n:
+      True{}
+    case 59n:
+      True{}
+    case 60n:
+      True{}
+    case 61n:
+      True{}
+    case 62n:
+      True{}
+    case 63n:
+      True{}
+    case 64n:
+      True{}
+    case 66n:
+      True{}
+    case 67n:
+      True{}
+    case 68n:
+      True{}
+    case 69n:
+      True{}
+    case 70n:
+      True{}
+    case 71n:
+      True{}
+    case 72n:
+      True{}
+    case 73n:
+      True{}
+    case 74n:
+      True{}
+    case 75n:
+      True{}
+    case 76n:
+      True{}
+    case 77n:
+      True{}
+    case 78n:
+      True{}
+    case 79n:
+      True{}
+    case 80n:
+      True{}
+    case 81n:
+      True{}
+    case 83n:
+      True{}
+    case 84n:
+      True{}
+    case 85n:
+      True{}
+    case 86n:
+      True{}
+    case 87n:
+      True{}
+    case 88n:
+      True{}
+    case 89n:
+      True{}
+    case 90n:
+      True{}
+    case 91n:
+      True{}
+    case 93n:
+      True{}
+    case 94n:
+      True{}
+    case 95n:
+      True{}
+    case 96n:
+      True{}
+    case 97n:
+      True{}
+    case 98n:
+      True{}
+    case 99n:
+      True{}
+    case 112n:
+      True{}
+    case 115n:
+      True{}
+    case 116n:
+      True{}
+    case 117n:
+      True{}
+    case 119n:
+      True{}
+    case 120n:
+      True{}
+    case 121n:
+      True{}
+    case 122n:
+      True{}
+    case 123n:
+      True{}
+    case 124n:
+      True{}
+    case 125n:
+      True{}
+    case 126n:
+      True{}
+    case 127n:
+      True{}
+    case 128n:
+      True{}
+    case 129n:
+      True{}
+    case 130n:
+      True{}
+    case 131n:
+      True{}
+    case 132n:
+      True{}
+    case 133n:
+      True{}
+    case 134n:
+      True{}
+    case 135n:
+      True{}
+    case 136n:
+      True{}
+    case 137n:
+      True{}
+    case 138n:
+      True{}
+    case 139n:
+      True{}
+    case 140n:
+      True{}
+    case 141n:
+      True{}
+    case 142n:
+      True{}
+    case 147n:
+      True{}
+    case 148n:
+      True{}
+    case 149n:
+      True{}
+    case 150n:
+      True{}
+    case 152n:
+      True{}
+    case 153n:
+      True{}
+    case 154n:
+      True{}
+    case 155n:
+      True{}
+    case 156n:
+      True{}
+    case 158n:
+      True{}
+    case 159n:
+      True{}
+    case 164n:
+      True{}
+    case 170n:
+      True{}
+    case 171n:
+      True{}
+    case 173n:
+      True{}
+    case _:
+      False{}
+
 # a code's word
 def stat.cw(+code: Nat) -> U32:
   match code:

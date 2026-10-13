@@ -1273,11 +1273,14 @@ type Ps is Data:
 def ps.new() -> Ps:
   Ps{RegNone{}, 0, Nil{}, cls.new()}
 
-# whether the fast way may run a batch: no keyspace event is to be sent
+# whether the fast way may run a batch: no keyspace event is to be sent,
+# no client killed, no monitor, the group not past maxmemory (ev but its
+# bits 28, maxmemory set, 27, an LFU policy, and 26, an eviction to go
+# on with: mem.bits)
 def ps.calm(+pb: Ps) -> Bool:
   match pb:
     case Ps{reg, +ev, px, cs}:
-      U32.is_eq(ev, 0)
+      U32.is_eq(U32.and(ev, 3825205247), 0)
     case PsOf{+p}:
       ps.calm(p)
 
@@ -1854,14 +1857,79 @@ def ev.flags(m: Maybe<&2, U32>) -> U32:
 def ev.of(+srv: S.Srv) -> U32:
   ev.flags(C.notify.read(C.config.get_value(S.srv.cfg(srv), "notify-keyspace-events"), Some{0}))
 
+# the bits of ev past the events' (ps.loud): a killed client (31), the
+# monitors (30), a group past maxmemory with nothing left to evict (29,
+# Eviction), maxmemory set (28), an LFU policy (27, Access) and an
+# eviction to go on with (26: one ran out of time, or a CONFIG SET
+# changed maxmemory), each keeping the fast way off but the last three;
+# the last four follow the server and the actor
+def mem.bits(+srv: S.Srv, +ev: U32) -> U32:
+  +m = S.srv.mm(srv)
+  U32.or(U32.or(U32.or(U32.and(ev, 603979776), Bool.pick(U32, Nat.is_lt(0n, S.mm.max(m)), 268435456, 0)), Bool.pick(U32, S.mm.lfu(m), 134217728, 0)), Bool.pick(U32, S.mm.kick(m), 67108864, 0))
+
 def ps.tune(pb: Ps, +srv: S.Srv) -> Ps:
   match pb:
-    case Ps{RegNone{}, ev, px, +cs}:
-      Ps{RegNone{}, cls.bit(cs), px, cs}
-    case Ps{RegOn{c, p, sh, cl, n}, ev, px, +cs}:
-      Ps{RegOn{c, p, sh, cl, n}, U32.or(ev.of(srv), cls.bit(cs)), px, cs}
+    case Ps{RegNone{}, +ev, px, +cs}:
+      Ps{RegNone{}, U32.or(cls.bit(cs), mem.bits(srv, ev)), px, cs}
+    case Ps{RegOn{c, p, sh, cl, n}, +ev, px, +cs}:
+      Ps{RegOn{c, p, sh, cl, n}, U32.or(U32.or(ev.of(srv), cls.bit(cs)), mem.bits(srv, ev)), px, cs}
     case PsOf{p}:
       ps.tune(p, srv)
+
+# an eviction's outcome (Eviction: Evd's res) in Ps: 0 none, the heap
+# within maxmemory; 1 one that ran out of time (bit 26: the actor goes on
+# evicting between groups); 2 one with no key left to evict (bit 29: the
+# commands that may take memory are refused)
+def mem.res.bits(+res: Nat) -> U32:
+  match res:
+    case 1n:
+      67108864
+    case 2n:
+      536870912
+    case _:
+      0
+
+def ps.mem(pb: Ps, +res: Nat) -> Ps:
+  match pb:
+    case Ps{reg, ev, px, cs}:
+      Ps{reg, U32.or(U32.and(ev, 3690987519), mem.res.bits(res)), px, cs}
+    case PsOf{p}:
+      ps.mem(p, res)
+
+# whether the actor is to evict before it waits for a request: an
+# eviction ran out of time, or a CONFIG SET changed maxmemory (bit 26)
+def ps.evicting(+pb: Ps) -> Bool:
+  match pb:
+    case Ps{reg, +ev, px, cs}:
+      U32.is_ne(U32.and(ev, 67108864), 0)
+    case PsOf{+p}:
+      ps.evicting(p)
+
+def ps.oom.is(+pb: Ps) -> Bool:
+  match pb:
+    case Ps{reg, +ev, px, cs}:
+      U32.is_ne(U32.and(ev, 536870912), 0)
+    case PsOf{+p}:
+      ps.oom.is(p)
+
+# whether the policy is an LFU one (Access)
+def ps.lfu(+pb: Ps) -> Bool:
+  match pb:
+    case Ps{reg, +ev, px, cs}:
+      U32.is_ne(U32.and(ev, 134217728), 0)
+    case PsOf{+p}:
+      ps.lfu(p)
+
+# what the actor does about memory before a group: 0 nothing (no
+# maxmemory, and no eviction's outcome kept), 1 forget the last
+# eviction's outcome (maxmemory was taken away), 2 read the heap's
+# account and evict (Eviction)
+def mem.need(+pb: Ps) -> Nat:
+  match pb:
+    case Ps{reg, +ev, px, cs}:
+      Bool.pick(Nat, U32.is_ne(U32.and(ev, 268435456), 0), 2n, Bool.pick(Nat, U32.is_ne(U32.and(ev, 603979776), 0), 1n, 0n))
+    case PsOf{+p}:
+      mem.need(p)
 
 # the pushes of a batch put before the group's answers
 def ps.flush(pb: Ps, outs: List<&2, Sigma<&2, &2, Chan(Ans), _ => Ans>>) -> Ps & List<&2, Sigma<&2, &2, Chan(Ans), _ => Ans>>:
@@ -2339,12 +2407,12 @@ def ps.evs(es: List<&2, Ev>, pb: Ps) -> Ps:
       ps.evs(rest, ps.ev1(e, pb))
 
 # whether keyspace events are to be sent: a class of them is on (the
-# bits of a killed client and of the monitors keep the fast way off, and
-# no event goes out for them)
+# bits past theirs say other things, and no event goes out for them:
+# mem.bits)
 def ps.loud(+pb: Ps) -> Bool:
   match pb:
     case Ps{reg, +ev, px, cs}:
-      U32.is_ne(U32.and(ev, 1073741823), 0)
+      U32.is_ne(U32.and(ev, 67108863), 0)
     case PsOf{+p}:
       ps.loud(p)
 
@@ -2492,6 +2560,44 @@ def bg.run(held: Bool, +ok: Bool, +k: S.Role, +c: R.Cmd, +code: Nat, rs: List<&2
   +p = pb
   bg.run.tx(Bool.or(tx.on(t), ps.loud(p)), held, ok, k, c, code, rs, es, conn, srv, ds, ws, up, t, p)
 
+# OBJECT FREQ and IDLETIME answered from the key's word (Access): the
+# session, which is proved, answers them as a key's that no command used
+# since the server's start (a word is the runtime's alone, no law reads
+# it); its reply, when an integer (the key there, the policy of the kind
+# it asks), is made again from the key's word
+def bg.obj.rs(+sub: Nat, +k: String, +rs: List<&2, R.Reply>, +srv: S.Srv, +now: Nat) -> List<&2, R.Reply>:
+  match rs:
+    case Con{R.RInt{n}, +rest}:
+      S.obj.use(sub, Mem.cell(KV.hash(k)), now, I.info.start(S.srv.info(srv)), S.mm.lfu(S.srv.mm(srv)), S.mm.lfd(S.srv.mm(srv))) <> rest
+    case _:
+      rs
+
+def bg.obj.of(+sub: Nat, +k: String, g: LRun) -> LRun:
+  match g:
+    case LRun{+rs, es, conn, +srv, +ds, ws, up, tx, pb}:
+      LRun{bg.obj.rs(sub, k, rs, srv, R.ds.now(ds)), es, conn, srv, ds, ws, up, tx, pb}
+    case LHeld{h}:
+      LHeld{h}
+
+# whether an OBJECT subcommand reads the key's word: FREQ (2) and
+# IDLETIME (5), not ENCODING nor REFCOUNT
+def bg.obj.uses(+sub: Nat) -> Bool:
+  Bool.or(Nat.is_eq(sub, 2n), Nat.is_eq(sub, 5n))
+
+def bg.obj.if(uses: Bool, +sub: Nat, +k: String, g: LRun) -> LRun:
+  match uses:
+    case True{}:
+      bg.obj.of(sub, k, g)
+    case False{}:
+      g
+
+def bg.obj(+c: R.Cmd, g: LRun) -> LRun:
+  match c:
+    case R.Own{R.SObject{+sub, +k}}:
+      bg.obj.if(bg.obj.uses(sub), sub, k, g)
+    case _:
+      g
+
 # one command, unless a QUIT before it dropped it
 def bg.one.q(q: Bool, +c: R.Cmd, +code: Nat, rs: List<&2, R.Reply>, es: List<&2, A.Ent>, +conn: S.Conn, +srv: S.Srv, ds: R.Ds, ws: Waits, up: List<&2, Up>, tx: Tx, pb: Ps) -> LRun:
   match q:
@@ -2500,7 +2606,7 @@ def bg.one.q(q: Bool, +c: R.Cmd, +code: Nat, rs: List<&2, R.Reply>, es: List<&2,
     case False{}:
       +k = S.kind(c)
       +ok = S.may(k, conn, srv)
-      bg.run(gen.muted(ok, code, conn), ok, k, c, code, rs, es, conn, srv, ds, ws, up, tx, pb)
+      bg.obj(c, bg.run(gen.muted(ok, code, conn), ok, k, c, code, rs, es, conn, srv, ds, ws, up, tx, pb))
 
 def bg.one(+c: R.Cmd, +code: Nat, g: LRun) -> LRun:
   match g:
@@ -2651,9 +2757,10 @@ def bg.unblock(+n: Nat, +err: Bool, +code: Nat, g: LRun) -> LRun:
 # refuse any other command of such a client (Pub/Sub); make the client a
 # monitor, or refuse a monitor a command that reads or writes keys (in
 # MULTI, flagging the transaction: MONITOR); or start a rewrite of the
-# append-only file (BGREWRITEAOF: The rewrite of the append-only file); a
-# command that does not run (after a QUIT, or before the client
-# authenticates) runs as the session runs it.
+# append-only file (BGREWRITEAOF: The rewrite of the append-only file); or
+# refuse a command past maxmemory (Memory: in MULTI, flagging the
+# transaction); a command that does not run (after a QUIT, or before the
+# client authenticates) runs as the session runs it.
 type Sh is Data:
   ShRun{}
   ShWait{b: S.Blk}
@@ -2677,6 +2784,7 @@ type Sh is Data:
   ShMonitor{}
   ShMonDeny{inm: Bool}
   ShRewrite{}
+  ShOom{inm: Bool}
 
 def sh.blk(b: S.Blk, +ds: R.Ds) -> Sh:
   +x = b
@@ -2686,6 +2794,10 @@ def sh.blk(b: S.Blk, +ds: R.Ds) -> Sh:
 # Redis words EXECABORT's reason)
 def abort.why(+m: String) -> String:
   Bool.pick(String, String.eq(String.take(m, 4n), "ERR "), String.drop(m, 4n), m)
+
+# the error past maxmemory (Redis's shared.oomerr)
+def oom.msg() -> String:
+  "OOM command not allowed when used memory > 'maxmemory'."
 
 def sh.refused(+c: R.Cmd, +code: Nat) -> Sh:
   match c:
@@ -2846,7 +2958,7 @@ def sh.of.noauth(inm: Bool, +c: R.Cmd, +code: Nat) -> Sh:
     case False{}:
       sh.noauth(c)
 
-def sh.of.run(may: Bool, subd: Bool, inm: Bool, mon: Bool, +c: R.Cmd, +code: Nat, +ds: R.Ds) -> Sh:
+def sh.of.may(may: Bool, subd: Bool, inm: Bool, mon: Bool, +c: R.Cmd, +code: Nat, +ds: R.Ds) -> Sh:
   match may subd:
     case True{} True{}:
       sh.sub(c, code)
@@ -2855,12 +2967,46 @@ def sh.of.run(may: Bool, subd: Bool, inm: Bool, mon: Bool, +c: R.Cmd, +code: Nat
     case False{} _:
       sh.of.noauth(inm, c, code)
 
-def sh.of(quit: Bool, may: Bool, inm: Bool, subd: Bool, mon: Bool, +c: R.Cmd, +code: Nat, +ds: R.Ds) -> Sh:
+# Past maxmemory with nothing left to evict (oom), Redis refuses, after it
+# has checked the client's authentication and before the rest (a client
+# with a subscription, a monitor), a command that may take memory
+# (denyoom), and in MULTI any command but EXEC, DISCARD, QUIT and RESET,
+# which flags the transaction; never one the parser refused (unknown, or
+# with a number of arguments the table refuses), which Redis refuses
+# before. EXEC itself is refused when its transaction queued one that may
+# take memory (bg.exec).
+def sh.oom.multi(+c: R.Cmd) -> Bool:
+  match c:
+    case R.Own{R.SExec{}}:
+      False{}
+    case R.Own{R.SDiscard{}}:
+      False{}
+    case R.Own{R.SQuit{}}:
+      False{}
+    case R.Own{R.SReset{}}:
+      False{}
+    case _:
+      True{}
+
+def sh.oomy(+inm: Bool, +c: R.Cmd, +code: Nat) -> Bool:
+  Bool.and(Bool.not(Nat.is_eq(Nat.mod(code, 4n), 1n)),
+    Bool.or(R.stat.denyoom(Nat.div(code, 4n)), Bool.and(inm, sh.oom.multi(c))))
+
+def sh.of.run(rej: Bool, may: Bool, subd: Bool, inm: Bool, mon: Bool, +c: R.Cmd, +code: Nat, +ds: R.Ds) -> Sh:
+  match rej:
+    case True{}:
+      ShOom{inm}
+    case False{}:
+      sh.of.may(may, subd, inm, mon, c, code, ds)
+
+def sh.of(quit: Bool, may: Bool, inm: Bool, subd: Bool, mon: Bool, oom: Bool, +c: R.Cmd, +code: Nat, +ds: R.Ds) -> Sh:
   match quit:
     case True{}:
       ShRun{}
     case False{}:
-      sh.of.run(may, subd, inm, mon, c, code, ds)
+      +m = may
+      +i = inm
+      sh.of.run(Bool.and(m, Bool.and(oom, sh.oomy(i, c, code))), m, subd, i, mon, c, code, ds)
 
 # the client's transaction state, changed (its client first in the chain)
 def bg.open(+id: Nat, g: LRun) -> LRun:
@@ -2883,6 +3029,14 @@ def bg.bad(g: LRun) -> LRun:
       LRun{rs, es, conn, srv, ds, ws, up, tx.bad(tx), pb}
     case LHeld{h}:
       LHeld{h}
+
+# a command refused past maxmemory in MULTI flags the transaction
+def bg.oom.tx(inm: Bool, g: LRun) -> LRun:
+  match inm:
+    case True{}:
+      bg.bad(g)
+    case False{}:
+      g
 
 def bg.unwatch(+id: Nat, g: LRun) -> LRun:
   match g:
@@ -3084,6 +3238,8 @@ def mon.seen.sh(+may: Bool, +sh: Sh, +code: Nat) -> Bool:
     case ShDeny{n}:
       False{}
     case ShMonDeny{i}:
+      False{}
+    case ShOom{i}:
       False{}
     case _:
       mon.ran(may, code)
@@ -3907,8 +4063,24 @@ def bg.exec.if(late: Bool, +id: Nat, +back: Chan(Ans), +inb: Nat, +code: Nat, qs
 # EXEC of a transaction taken out of the chain (mine): EXECABORT when a
 # command was refused while it queued, a null array when a watched key
 # was touched or is there with its time passed now, else its commands
-def bg.exec.of(p: Tx & Tx, +id: Nat, +back: Chan(Ans), +inb: Nat, +code: Nat, rs: List<&2, R.Reply>, es: List<&2, A.Ent>, conn: S.Conn, srv: S.Srv, +ds: R.Ds, ws: Waits, up: List<&2, Up>, pb: Ps) -> LRun:
-  (mine, others) = p
+# past maxmemory with nothing left to evict, an EXEC whose transaction
+# queued a command that may take memory is refused: the transaction is
+# dropped, as Redis's execCommandAbort drops it
+def codes.denyoom(+ks: List<&2, Nat>) -> Bool:
+  match ks:
+    case Nil{}:
+      False{}
+    case Con{+k, rest}:
+      Bool.or(R.stat.denyoom(Nat.div(k, 4n)), codes.denyoom(rest))
+
+def tx.denyoom(+t: Tx) -> Bool:
+  match t:
+    case TxOn{i, mu, bad, cas, cs, +qc, qa, wk, r}:
+      codes.denyoom(qc)
+    case TxNone{}:
+      False{}
+
+def bg.exec.go(mine: Tx, others: Tx, +id: Nat, +back: Chan(Ans), +inb: Nat, +code: Nat, rs: List<&2, R.Reply>, es: List<&2, A.Ent>, conn: S.Conn, srv: S.Srv, +ds: R.Ds, ws: Waits, up: List<&2, Up>, pb: Ps) -> LRun:
   match mine:
     case TxOn{i, mu, True{}, cs, qs, qc, qa, wk, r}:
       bg.say(R.RError{"EXECABORT Transaction discarded because of previous errors."}, code, LRun{rs, es, conn, srv, ds, ws, up, others, pb})
@@ -3918,6 +4090,17 @@ def bg.exec.of(p: Tx & Tx, +id: Nat, +back: Chan(Ans), +inb: Nat, +code: Nat, rs
       bg.exec.if(wk.late(wk, ds, R.ds.now(ds)), id, back, inb, code, qs, qc, qa, LRun{rs, es, conn, srv, ds, ws, up, others, pb})
     case TxNone{}:
       bg.say(R.RError{"ERR EXEC without MULTI"}, code, LRun{rs, es, conn, srv, ds, ws, up, others, pb})
+
+def bg.exec.oom(oom: Bool, mine: Tx, others: Tx, +id: Nat, +back: Chan(Ans), +inb: Nat, +code: Nat, rs: List<&2, R.Reply>, es: List<&2, A.Ent>, conn: S.Conn, srv: S.Srv, +ds: R.Ds, ws: Waits, up: List<&2, Up>, pb: Ps) -> LRun:
+  match oom:
+    case True{}:
+      bg.one(R.Own{R.SBad{R.RError{"EXECABORT Transaction discarded because of: " ++ abort.why(oom.msg())}}}, Nat.add(Nat.mul(Nat.div(code, 4n), 4n), 1n), LRun{rs, es, conn, srv, ds, ws, up, others, pb})
+    case False{}:
+      bg.exec.go(mine, others, id, back, inb, code, rs, es, conn, srv, ds, ws, up, pb)
+
+def bg.exec.of(p: Tx & Tx, +id: Nat, +back: Chan(Ans), +inb: Nat, +code: Nat, rs: List<&2, R.Reply>, es: List<&2, A.Ent>, conn: S.Conn, srv: S.Srv, +ds: R.Ds, ws: Waits, up: List<&2, Up>, +pb: Ps) -> LRun:
+  (+mine, others) = p
+  bg.exec.oom(Bool.and(ps.oom.is(pb), tx.denyoom(mine)), mine, others, id, back, inb, code, rs, es, conn, srv, ds, ws, up, pb)
 
 def bg.exec(+id: Nat, +back: Chan(Ans), +inb: Nat, +code: Nat, g: LRun) -> LRun:
   match g:
@@ -3970,6 +4153,8 @@ def bg.cmd(+id: Nat, +back: Chan(Ans), +inb: Nat, sh: Sh, +c: R.Cmd, +code: Nat,
       bg.monitor(id, back, code, g)
     case ShRewrite{}:
       bg.rewrite(False{}, code, g)
+    case ShOom{inm}:
+      bg.one(R.Own{R.SBad{R.RError{oom.msg()}}}, Nat.add(Nat.mul(Nat.div(code, 4n), 4n), 1n), bg.oom.tx(inm, g))
     case ShMonDeny{inm}:
       bg.one(R.Own{R.SBad{R.RError{"ERR Replica can't interact with the keyspace"}}}, Nat.add(Nat.mul(Nat.div(code, 4n), 4n), 1n), bg.mon.bad(inm, g))
 
@@ -3981,7 +4166,7 @@ def bg.go(+id: Nat, +back: Chan(Ans), +inb: Nat, cmds: List<&2, R.Cmd>, codes: L
     case Con{+c, +rest} Con{+k, +more} Fed{LRun{rs, es, +conn, +srv, +ds, ws, up, +tx, +pb}, +av}:
       +q = S.conn.quit(conn)
       +may = S.may(S.kind(c), conn, srv)
-      +sh = sh.of(q, may, tx.multi(id, tx), ps.has(id, pb), ps.mon.is(id, pb), c, k, ds)
+      +sh = sh.of(q, may, tx.multi(id, tx), ps.has(id, pb), ps.mon.is(id, pb), ps.oom.is(pb), c, k, ds)
       +ar = av.rest(av)
       bg.go(id, back, inb, rest, more, bg.feed(mon.seen(q, may, sh, k), id, k, S.conn.mode(conn), av, ar, bg.cmd(id, back, inb, sh, c, k, rest, more, av, ar, LRun{rs, es, conn, srv, ds, ws, up, tx, pb})))
     case _ _ Fed{g0, av}:
@@ -4099,6 +4284,692 @@ def grp.gone(+id: Nat, +back: Chan(Ans), outs: List<&2, Sigma<&2, &2, Chan(Ans),
   +left = waits.rest(waits.take(ws, waits.is(id, ws), id, WaitNone{}))
   Grp{(back, Bye{}) <> outs, es, waits.count(left, srv), ds, left, ups.drop(up, ups.is(id, up), id), tx.drop(id, tx), ps.drop(id, pb)}
 
+# Memory
+# ------
+# With maxmemory, the actor reads the heap's account (IO.heap: the bytes
+# its live values hold, as Redis's zmalloc counts) before each group it
+# runs, as Redis's processCommand calls performEvictions before each
+# command, and evicts keys while it is past maxmemory (Eviction, below);
+# past it with nothing it may evict, the group's commands that may take
+# memory are refused (sh.of: ShOom), and its batches run the general way,
+# a command at a time. Without maxmemory nothing is read.
+
+# Eviction
+# --------
+# While the heap's live bytes, less those a rewrite's snapshot still holds
+# of the keys evicted while it runs (Mm's debt), are past maxmemory, the
+# actor picks a key by the policy and deletes it as the sweep of expired
+# keys deletes one (a DEL in the append-only file; the WATCHes of the key
+# touched; "evicted" to the keyspace's subscribers), counts it
+# (evicted_keys) and reads the heap again, as Redis's performEvictions.
+# LRU, LFU and volatile-ttl pick from a pool of the 16 best keys of their
+# samples (maxmemory-samples keys of each database with keys, from a
+# random bucket on: KV.sample), scored by the seconds since the key's last
+# use (Access), 255 less its LFU counter, or how soon it expires; the pool
+# lasts from one eviction to the next, a key deleted meanwhile dropped as
+# it comes up (Redis's ghosts). allkeys-random and volatile-random pick a
+# key at random of the next database with keys after the one they picked
+# from last (next_db). The volatile policies pick among keys with a time
+# alone. Every 16 keys the actor looks at the time: past the limit of
+# maxmemory-eviction-tenacity (500 us at 10), it stops with keys left to
+# evict (RUNNING) and goes on between groups, as Redis's evictionTimeProc;
+# with no key left the policy may evict, the group runs with the commands
+# that may take memory refused (FAIL). A CONFIG SET that changes
+# maxmemory starts an eviction at once (Mm's kick), with Redis's warning
+# when the heap is past the new value. While a rewrite of the append-only
+# file runs, its snapshot holds what an eviction frees: an evicted key
+# counts as freed by MEMORY USAGE's estimate (the debt, paid when the
+# rewrite ends). INFO's evicted_keys and the times past maxmemory count as
+# Redis's do (I.info.evicted).
+
+# 2^47: volatile-ttl's score is it less the time a key expires at (ms)
+def evict.far() -> Nat:
+  Nat.mul(32768n, Nat.mul(65536n, 65536n))
+
+# how long an eviction may run, us (evictionTimeLimitUs): 50 for each
+# step of the tenacity up to 10, 15% more for each one past it, no limit
+# at 100
+def evict.limit.go(n: Nat, +l: Nat) -> Nat:
+  match n:
+    case 0n:
+      l
+    case 1n+m:
+      evict.limit.go(m, Nat.div(Nat.mul(l, 115n), 100n))
+
+def evict.limit(+ten: Nat) -> Nat:
+  Bool.pick(Nat, Nat.is_le(ten, 10n), Nat.mul(50n, ten), Bool.pick(Nat, Nat.is_lt(ten, 100n), evict.limit.go(Nat.sub(ten, 10n), 500n), Nat.mul(1000000n, 1000000n)))
+
+# the us from the clock's (s, us) t0 to t: a clock set back reads as a day
+# past, which ends the eviction's turn (and keeps the count within a Nat)
+def evict.us(+s0: U32, +u0: U32, t: U32 & U32) -> Nat:
+  (s, u) = t
+  +d = U32.sub(s, s0)
+  Nat.sub(Nat.add(Nat.mul(U32.to_nat(Bool.pick(U32, U32.is_lt(d, 86400), d, 86400)), 1000000n), U32.to_nat(u)), U32.to_nat(u0))
+
+# whether a policy evicts keys with a time alone (volatile-*)
+def evict.vol(+pol: Nat) -> Bool:
+  Bool.or(Bool.or(Nat.is_eq(pol, 2n), Nat.is_eq(pol, 4n)), Bool.or(Nat.is_eq(pol, 6n), Nat.is_eq(pol, 7n)))
+
+# the keys of a database the policy may evict: all, or those with a time
+def evict.count(+vol: Bool, +d: R.Db) -> Nat:
+  Bool.pick(Nat, vol, R.db.x(d), R.db.n(d))
+
+def evict.time(m: Maybe<&2, KV.Item<KV.Val>>) -> Nat:
+  match m:
+    case Some{KV.Item{v, e}}:
+      e
+    case None{}:
+      0n
+
+# a key's score under policy pol, at now, the server started at start
+def evict.score(+pol: Nat, +d: R.Db, +k: String, +now: Nat, +start: U32, +lfd: Nat) -> Nat:
+  match pol:
+    case 7n:
+      Nat.sub(evict.far(), evict.time(R.db.ent(d, k)))
+    case 3n:
+      Nat.sub(255n, U32.to_nat(S.acc.freq(Mem.cell(KV.hash(k)), now, start, lfd)))
+    case 4n:
+      Nat.sub(255n, U32.to_nat(S.acc.freq(Mem.cell(KV.hash(k)), now, start, lfd)))
+    case _:
+      S.acc.idle(Mem.cell(KV.hash(k)), now, start)
+
+def pe.score(+p: S.Pe) -> Nat:
+  match p:
+    case S.Pe{+s, db, key}:
+      s
+
+# whether the first entry of the pool scores s or more
+def pool.ge(+s: Nat, +ps: List<&2, S.Pe>) -> Bool:
+  match ps:
+    case Nil{}:
+      False{}
+    case Con{+p, rest}:
+      Nat.is_le(s, pe.score(p))
+
+# the pool (best first) with e, of score s, after the entries that score
+# as well or better (as Redis's evictionPoolPopulate puts a key before
+# those that score as well, the worst first); ge: pool.ge of ps
+def pool.ins(e: S.Pe, +s: Nat, ps: List<&2, S.Pe>, ge: Bool) -> List<&2, S.Pe>:
+  match ps ge:
+    case Con{p, +rest} True{}:
+      p <> pool.ins(e, s, rest, pool.ge(s, rest))
+    case Con{p, rest} False{}:
+      e <> (p <> rest)
+    case Nil{} _:
+      [e]
+
+# the pool with e, of score s: 16 entries at most, the worst dropped
+def pool.add(e: S.Pe, +s: Nat, ps: List<&2, S.Pe>) -> List<&2, S.Pe>:
+  +q = ps
+  List.take(&2, S.Pe, pool.ins(e, s, q, pool.ge(s, q)), 16n)
+
+# The databases are walked lent, as Ds keeps them (those before the focus,
+# nearest first; the focus; those after it): a database taken out of them
+# (R.ds.list, R.db.trie) would share its trie, which the delete of a key
+# would then copy along the key's path.
+
+# how many databases xs holds, lent (List.length would take them)
+def dbs.len(+xs: List<&2, R.Db>) -> Nat:
+  match xs:
+    case Nil{}:
+      0n
+    case Con{d, +rest}:
+      1n+dbs.len(rest)
+
+def dbs.count(+ds: R.Ds) -> Nat:
+  match ds:
+    case R.Ds{d, +pre, +post}:
+      1n+Nat.add(dbs.len(pre), dbs.len(post))
+
+# the pool with the keys ks of database i, sampled
+def evict.adds(+pol: Nat, +i: Nat, +d: R.Db, +now: Nat, +start: U32, +lfd: Nat, ks: List<&2, String>, ps: List<&2, S.Pe>) -> List<&2, S.Pe>:
+  match ks:
+    case Nil{}:
+      ps
+    case Con{+k, rest}:
+      +s = evict.score(pol, d, k, now, start, lfd)
+      evict.adds(pol, i, d, now, start, lfd, rest, pool.add(S.Pe{s, i, k}, s, ps))
+
+# a sample of database d: maxmemory-samples keys the policy may evict
+# (mode: KV.scan.ok; 2 those with a time) from a random bucket (r) on,
+# among win buckets, as Redis's dictGetSomeKeys looks at a bounded number
+# of buckets and may find fewer (2^20: all of them, on until it finds
+# them)
+def evict.sample(+d: R.Db, +r: U32, +smp: Nat, +now: Nat, +mode: Nat, +win: Nat) -> List<&2, String>:
+  match d:
+    case R.Db{+t, n, x, tm, rr}:
+      KV.sample(KV.Val, t, r, smp, now, mode, win)
+
+# the buckets a sample of a database with c keys the policy may evict
+# reads: as many as hold three times maxmemory-samples of them, as the
+# keys spread over the buckets
+def evict.win(+c: Nat, +smp: Nat) -> Nat:
+  Nat.min(1048576n, Nat.max(64n, Nat.div(Nat.mul(1048576n, Nat.mul(3n, smp)), Nat.max(c, 1n))))
+
+# the parameters of a sample: the policy, whether it evicts keys with a
+# time alone (vol), whether the sample reads on until it finds its keys
+# (full), maxmemory-samples, the time, the server's start, lfu-decay-time
+type Smp is Data:
+  Smp{pol: Nat, vol: Bool, full: Bool, smp: Nat, now: Nat, start: U32, lfd: Nat}
+
+# a database's sample put in the pool, when it holds keys the policy may
+# evict (c of them)
+def evict.db(+sp: Smp, +i: Nat, +d: R.Db, +c: Nat, +r: U32, ps: List<&2, S.Pe>) -> List<&2, S.Pe>:
+  match sp c:
+    case _ 0n:
+      ps
+    case Smp{+pol, +vol, +full, +smp, +now, +start, +lfd} _:
+      evict.adds(pol, i, d, now, start, lfd, List.take(&2, String, evict.sample(d, r, smp, now, Bool.pick(Nat, vol, 2n, 0n), Bool.pick(Nat, full, 1048576n, evict.win(c, smp))), smp), ps)
+
+# the pool after a sample of each database, and whether any held a key
+# the policy may evict
+type Fill is Data:
+  Fill{ps: List<&2, S.Pe>, any: Bool}
+
+def smp.vol(+sp: Smp) -> Bool:
+  match sp:
+    case Smp{pol, +vol, full, smp, now, start, lfd}:
+      vol
+
+def evict.fill1(+sp: Smp, +i: Nat, +d: R.Db, +r: U32, f: Fill) -> Fill:
+  match f:
+    case Fill{ps, +any}:
+      +c = evict.count(smp.vol(sp), d)
+      Fill{evict.db(sp, i, d, c, KV.mix(r), ps), Bool.or(any, Nat.is_lt(0n, c))}
+
+# a sample of each of the databases xs, the first numbered i, the next
+# ones numbered up (up) or down
+def evict.fill(+sp: Smp, +xs: List<&2, R.Db>, +i: Nat, +up: Bool, +r: U32, f: Fill) -> Fill:
+  match xs:
+    case Nil{}:
+      f
+    case Con{+d, +rest}:
+      evict.fill(sp, rest, Bool.pick(Nat, up, 1n+i, Nat.sub(i, 1n)), up, U32.add(r, 2654435769), evict.fill1(sp, i, d, r, f))
+
+def evict.fill.ds(+sp: Smp, +ds: R.Ds, +r: U32, f: Fill) -> Fill:
+  match ds:
+    case R.Ds{+d, +pre, +post}:
+      +i = dbs.len(pre)
+      evict.fill(sp, post, 1n+i, True{}, U32.add(r, 2654435761), evict.fill1(sp, i, d, r, evict.fill(sp, pre, Nat.sub(i, 1n), False{}, U32.add(r, 2246822519), f)))
+
+def evict.has.ent(+vol: Bool, m: Maybe<&2, KV.Item<KV.Val>>) -> Bool:
+  match m:
+    case Some{KV.Item{v, +e}}:
+      Bool.or(Bool.not(vol), Nat.is_lt(0n, e))
+    case None{}:
+      False{}
+
+# a random policy's key of database d, which holds c keys it may evict:
+# one at random of 16 from a random bucket on, as RANDOMKEY picks one, or
+# the first with a time from a random bucket on (r); none when it holds
+# none
+def evict.rand.key(+vol: Bool, +d: R.Db, +c: Nat, +r: U32, +now: Nat) -> Maybe<&2, String>:
+  match vol d c:
+    case _ _ 0n:
+      None{}
+    case False{} R.Db{+t, n, x, tm, rr} _:
+      KV.pick.of(KV.sample(KV.Val, t, r, 16n, now, 0n, 1048576n), KV.mix(r))
+    case True{} R.Db{+t, n, x, tm, rr} _:
+      List.head(&2, String, KV.sample(KV.Val, t, r, 1n, now, 2n, 1048576n))
+
+# what is asked of a database: whether it holds key k as the policy takes
+# keys (with a time, when vol); MEMORY USAGE's estimate of key k; a random
+# policy's key of it, by r
+type Ask is Data:
+  AskHas{vol: Bool, k: String}
+  AskEst{k: String}
+  AskKey{vol: Bool, r: U32, now: Nat}
+
+# its answer: a truth, a number or a key
+type Ans1 is Data:
+  A1{b: Bool, n: Nat, k: Maybe<&2, String>}
+
+def a1.b(a: Ans1) -> Bool:
+  match a:
+    case A1{b, n, k}:
+      b
+
+def a1.n(a: Ans1) -> Nat:
+  match a:
+    case A1{b, n, k}:
+      n
+
+def a1.k(a: Ans1) -> Maybe<&2, String>:
+  match a:
+    case A1{b, n, k}:
+      k
+
+def evict.ask(+a: Ask, +d: R.Db) -> Ans1:
+  match a:
+    case AskHas{+vol, +k}:
+      A1{evict.has.ent(vol, R.db.ent(d, k)), 0n, None{}}
+    case AskEst{+k}:
+      A1{False{}, S.mem.est(k, R.db.ent(d, k)), None{}}
+    case AskKey{+vol, +r, +now}:
+      A1{False{}, 0n, evict.rand.key(vol, d, evict.count(vol, d), r, now)}
+
+# what the n-th of xs answers (none past the last)
+def evict.ask.nth(+a: Ask, +n: Nat, +xs: List<&2, R.Db>) -> Ans1:
+  match n xs:
+    case 0n Con{+d, rest}:
+      evict.ask(a, d)
+    case 1n+m Con{d, +rest}:
+      evict.ask.nth(a, m, rest)
+    case _ Nil{}:
+      A1{False{}, 0n, None{}}
+
+# where database j is to the focus, the i-th: 0 before it, 1 it, 2 after
+def evict.where(+j: Nat, +i: Nat) -> Nat:
+  Bool.pick(Nat, Nat.is_lt(j, i), 0n, Bool.pick(Nat, Nat.is_eq(j, i), 1n, 2n))
+
+def evict.ask.at(w: Nat, +a: Ask, +j: Nat, +i: Nat, +d: R.Db, +pre: List<&2, R.Db>, +post: List<&2, R.Db>) -> Ans1:
+  match w:
+    case 0n:
+      evict.ask.nth(a, Nat.sub(Nat.sub(i, j), 1n), pre)
+    case 1n:
+      evict.ask(a, d)
+    case _:
+      evict.ask.nth(a, Nat.sub(Nat.sub(j, i), 1n), post)
+
+# what database j answers to a
+def evict.ask.ds(+a: Ask, +j: Nat, +ds: R.Ds) -> Ans1:
+  match ds:
+    case R.Ds{+d, +pre, +post}:
+      +i = dbs.len(pre)
+      evict.ask.at(evict.where(j, i), a, j, i, d, pre, post)
+
+# whether the first key of the pool is still there, as the policy takes
+# keys
+def evict.there(+vol: Bool, +ds: R.Ds, +ps: List<&2, S.Pe>) -> Bool:
+  match ps:
+    case Nil{}:
+      False{}
+    case Con{S.Pe{s, +j, +k}, rest}:
+      a1.b(evict.ask.ds(AskHas{vol, k}, j, ds))
+
+# the key picked: none, or key k of database j
+type Vic is Data:
+  VicNone{}
+  Vic{db: Nat, key: String}
+
+# the best key of the pool still there (there: evict.there of ps), the
+# pool after it, without the keys before it (Redis's ghosts), and whether
+# any database held a key the policy may evict
+type Pk is Data:
+  Pk{g: Vic, ps: List<&2, S.Pe>, any: Bool}
+
+def pool.pick(+vol: Bool, +ds: R.Ds, ps: List<&2, S.Pe>, there: Bool, +any: Bool) -> Pk:
+  match ps there:
+    case Con{S.Pe{s, j, k}, rest} True{}:
+      Pk{Vic{j, k}, rest, any}
+    case Con{p, +rest} False{}:
+      pool.pick(vol, ds, rest, evict.there(vol, ds, rest), any)
+    case Nil{} _:
+      Pk{VicNone{}, Nil{}, any}
+
+def evict.pool.of(+vol: Bool, +ds: R.Ds, f: Fill) -> Pk:
+  match f:
+    case Fill{+ps, True{}}:
+      pool.pick(vol, ds, ps, evict.there(vol, ds, ps), True{})
+    case Fill{ps, False{}}:
+      Pk{VicNone{}, ps, False{}}
+
+# a pick that found no key though some database held one the policy may
+# evict (its samples found none): a full sample of each, then the pick
+def evict.retry(p: Pk, +sp: Smp, +vol: Bool, +ds: R.Ds, +r: U32) -> Pk:
+  match p:
+    case Pk{Vic{j, k}, ps, any}:
+      Pk{Vic{j, k}, ps, any}
+    case Pk{VicNone{}, ps, True{}}:
+      evict.pool.of(vol, ds, evict.fill.ds(sp, ds, r, Fill{ps, False{}}))
+    case Pk{VicNone{}, ps, False{}}:
+      Pk{VicNone{}, ps, False{}}
+
+# a random policy's pick: the databases from the one after the last it
+# picked from (Redis's static next_db goes up by one for each database
+# it looks at), n of them, j the one looked at, m its key; the key, and
+# the database it is of (next, for the next pick)
+type Rk is Data:
+  Rk{g: Vic, next: Nat}
+
+def evict.rand(+vol: Bool, +ds: R.Ds, +n: Nat, left: Nat, +j: Nat, m: Maybe<&2, String>, +r: U32, +now: Nat) -> Rk:
+  match left m:
+    case 1n+l Some{k}:
+      Rk{Vic{j, k}, j}
+    case 1n+l None{}:
+      +j2 = Nat.mod(1n+j, n)
+      evict.rand(vol, ds, n, l, j2, a1.k(evict.ask.ds(AskKey{vol, r, now}, j2, ds)), r, now)
+    case 0n _:
+      Rk{VicNone{}, j}
+
+# a pick: the eviction's state after it (its pool and random numbers, or
+# the database the next random pick starts after) and the key
+type Ep is Data:
+  Ep{mm: S.Mm, g: Vic}
+
+def evict.random.of(k: Rk, +n: Nat, mm: S.Mm) -> Ep:
+  match k:
+    case Rk{g, +next}:
+      Ep{S.mm.next.set(mm, next, n), g}
+
+# allkeys-random's or volatile-random's pick, of the n databases
+def evict.random(+vol: Bool, mm: S.Mm, +ds: R.Ds, +n: Nat, +now: Nat) -> Ep:
+  +m = mm
+  +j = Nat.mod(1n+S.mm.next(m), Nat.max(n, 1n))
+  +r = KV.mix(S.mm.rng(m))
+  evict.random.of(evict.rand(vol, ds, n, n, j, a1.k(evict.ask.ds(AskKey{vol, r, now}, j, ds)), r, now), n, m)
+
+def evict.pooled.of(p: Pk, +n: Nat, mm: S.Mm) -> Ep:
+  match p:
+    case Pk{g, ps, any}:
+      Ep{S.mm.pool.set(mm, ps, n), g}
+
+# a pool policy's pick (LRU, LFU, volatile-ttl), of the n databases:
+# samples within windows, and full ones when those found no key
+def evict.pooled.mp(+pol: Nat, p: S.Mp, +ds: R.Ds, +n: Nat, +now: Nat, +start: U32) -> Ep:
+  match p:
+    case S.Mp{ps, mm}:
+      +m = mm
+      +vol = evict.vol(pol)
+      +smp = S.mm.smp(m)
+      +lfd = S.mm.lfd(m)
+      +r = S.mm.rng(m)
+      evict.pooled.of(evict.retry(evict.pool.of(vol, ds, evict.fill.ds(Smp{pol, vol, False{}, smp, now, start, lfd}, ds, r, Fill{ps, False{}})), Smp{pol, vol, True{}, smp, now, start, lfd}, vol, ds, KV.mix(r)), n, m)
+
+def evict.pooled(+pol: Nat, mm: S.Mm, +ds: R.Ds, +n: Nat, +now: Nat, +start: U32) -> Ep:
+  evict.pooled.mp(pol, S.mm.pool.take(mm), ds, n, now, start)
+
+# the pick of the policy pol (Memory: mm.pol.of), of the n databases, at
+# now, the server started at start
+def evict.pick(+pol: Nat, mm: S.Mm, +ds: R.Ds, +n: Nat, +now: Nat, +start: U32) -> Ep:
+  match pol:
+    case 0n:
+      Ep{mm, VicNone{}}
+    case 5n:
+      evict.random(False{}, mm, ds, n, now)
+    case 6n:
+      evict.random(True{}, mm, ds, n, now)
+    case _:
+      evict.pooled(pol, mm, ds, n, now, start)
+
+# eviction's state as it goes: the server, the databases, the DELs of the
+# keys it evicted (newest first), and how many
+type Evs is Data:
+  Evs{srv: S.Srv, ds: R.Ds, es: List<&2, A.Ent>, n: Nat}
+
+def evs.n(+x: Evs) -> Nat:
+  match x:
+    case Evs{srv, ds, es, +n}:
+      n
+
+# a key evicted, or none the policy may evict
+type Ev1 is Data:
+  EvOne{x: Evs}
+  EvNone{x: Evs}
+
+# a database the eviction left without a key, its trie's nodes let go: a
+# trie keeps its nodes as its keys are deleted (KV's Scans), which hold
+# memory that would keep the heap past maxmemory with no key left to
+# evict (as Redis shrinks a hash table it emptied)
+def evict.compact.if(empty: Bool, d: R.Db) -> R.Db:
+  match empty:
+    case True{}:
+      R.db.at(R.db.now(d), R.db.empty())
+    case False{}:
+      d
+
+def evict.compact(d: R.Db) -> R.Db:
+  +y = d
+  evict.compact.if(Nat.is_eq(R.db.n(y), 0n), y)
+
+# the databases with key k of the j-th deleted, the focus where it was
+def evict.del.focused(+k: String, ds: R.Ds) -> R.Ds:
+  match ds:
+    case R.Ds{d, pre, post}:
+      R.Ds{evict.compact(R.db_of(R.exec(R.Del{[k]}, d))), pre, post}
+
+def evict.del(+j: Nat, +k: String, ds: R.Ds) -> R.Ds:
+  +x = ds
+  +i = R.ds.index(x)
+  R.ds.focus(i, evict.del.focused(k, R.ds.focus(j, x)))
+
+# a pick and the debt of its key: MEMORY USAGE's estimate of it, while a
+# rewrite runs (rws)
+type Ed is Data:
+  Ed{mm: S.Mm, g: Vic, debt: Nat}
+
+# (a match, not Bool.pick, so that no estimate is made without a rewrite)
+def evict.est(rws: Bool, +j: Nat, +k: String, +ds: R.Ds) -> Nat:
+  match rws:
+    case True{}:
+      a1.n(evict.ask.ds(AskEst{k}, j, ds))
+    case False{}:
+      0n
+
+def evict.debt(p: Ep, +rws: Bool, +ds: R.Ds) -> Ed:
+  match p:
+    case Ep{mm, Vic{+j, +k}}:
+      Ed{mm, Vic{j, k}, evict.est(rws, j, k, ds)}
+    case Ep{mm, VicNone{}}:
+      Ed{mm, VicNone{}, 0n}
+
+def evict.pick.of(+rws: Bool, mm: S.Mm, +ds: R.Ds, +start: U32) -> Ed:
+  +m = mm
+  evict.debt(evict.pick(S.mm.pol(m), m, ds, dbs.count(ds), R.ds.now(ds), start), rws, ds)
+
+# the key picked deleted: its DEL with the others, the server's debt up
+def evict.done(p: Ed, pass: String, cfg: List<&2, C.CItem>, info: I.Info, ds: R.Ds, es: List<&2, A.Ent>, +n: Nat) -> Ev1:
+  match p:
+    case Ed{mm, Vic{+j, +k}, +debt}:
+      EvOne{Evs{S.Srv{pass, cfg, info, S.mm.owe(mm, debt)}, evict.del(j, k, ds), A.EOne{A.EDb{j, R.Del{[k]}}} <> es, 1n+n}}
+    case Ed{mm, VicNone{}, debt}:
+      EvNone{Evs{S.Srv{pass, cfg, info, mm}, ds, es, n}}
+
+# one key evicted (rws: while a rewrite runs)
+def evict.one(x: Evs, +rws: Bool) -> Ev1:
+  match x:
+    case Evs{S.Srv{pass, cfg, +info, mm}, +ds, es, +n}:
+      evict.done(evict.pick.of(rws, mm, ds, I.info.start(info)), pass, cfg, info, ds, es, n)
+
+# whether the heap's used bytes, less the debt, are past maxmemory (none
+# with maxmemory 0)
+def evict.over(+used: Nat, +srv: S.Srv) -> Bool:
+  +max = S.srv.max(srv)
+  Bool.and(Nat.is_lt(0n, max), Nat.is_lt(max, Nat.sub(used, S.srv.debt(srv))))
+
+def evs.over(+used: Nat, +x: Evs) -> Bool:
+  match x:
+    case Evs{+srv, ds, es, n}:
+      evict.over(used, srv)
+
+# an eviction's outcome: 0 the heap within maxmemory (EVICT_OK), 1 keys
+# left to evict when its time ran out (EVICT_RUNNING), 2 none left that
+# the policy may evict (EVICT_FAIL); and its state
+type Evd is Data:
+  Evd{res: Nat, x: Evs}
+
+# evicting while the heap is past maxmemory (over), a key at a time, the
+# heap read after each; each 16 keys the time since the start (s0, u0)
+# looked at, against lim (us)
+@unsafe
+def evict.loop(over: Bool, x: Evs, +rws: Bool, +s0: U32, +u0: U32, +lim: Nat) -> IO(Evd):
+  match over:
+    case False{}:
+      IO.pure(Evd, Evd{0n, x})
+    case True{}:
+      evict.next(evict.one(x, rws), rws, s0, u0, lim)
+
+@unsafe
+def evict.next(r: Ev1, +rws: Bool, +s0: U32, +u0: U32, +lim: Nat) -> IO(Evd):
+  match r:
+    case EvNone{x}:
+      IO.pure(Evd, Evd{2n, x})
+    case EvOne{x}:
+      +y = x
+      evict.look(Nat.is_eq(Nat.mod(evs.n(y), 16n), 0n), y, rws, s0, u0, lim)
+
+@unsafe
+def evict.look(look: Bool, x: Evs, +rws: Bool, +s0: U32, +u0: U32, +lim: Nat) -> IO(Evd):
+  match look:
+    case False{}:
+      evict.heap(x, rws, s0, u0, lim)
+    case True{}:
+      do IO<Evd>:
+        t : U32 & U32 <- IO.clock()
+        evict.timed(Nat.is_lt(lim, evict.us(s0, u0, t)), x, rws, s0, u0, lim)
+
+@unsafe
+def evict.timed(up: Bool, x: Evs, +rws: Bool, +s0: U32, +u0: U32, +lim: Nat) -> IO(Evd):
+  match up:
+    case True{}:
+      IO.pure(Evd, Evd{1n, x})
+    case False{}:
+      evict.heap(x, rws, s0, u0, lim)
+
+@unsafe
+def evict.heap(x: Evs, +rws: Bool, +s0: U32, +u0: U32, +lim: Nat) -> IO(Evd):
+  +y = x
+  do IO<Evd>:
+    h : Nat & Nat <- IO.heap()
+    evict.loop(evs.over(heap.used(h), y), y, rws, s0, u0, lim)
+
+def heap.used(h: Nat & Nat) -> Nat:
+  (used, act) = h
+  used
+
+# the evicted keys' events (expired's: ps.swept)
+def ev.e() -> U32:
+  512
+
+def ev.evicted.ks(+i: Nat, ks: List<&2, String>) -> List<&2, Ev>:
+  match ks:
+    case Nil{}:
+      Nil{}
+    case Con{k, rest}:
+      Ev{ev.e(), "evicted", k, i} <> ev.evicted.ks(i, rest)
+
+def ev.evicted(es: List<&2, A.Ent>, acc: List<&2, Ev>) -> List<&2, Ev>:
+  match es:
+    case Nil{}:
+      acc
+    case Con{A.EOne{A.EDb{+i, R.Del{ks}}}, rest}:
+      ev.evicted(rest, List.append(&2, Ev, ev.evicted.ks(i, ks), acc))
+    case Con{x, rest}:
+      ev.evicted(rest, acc)
+
+def ps.evicted.if(on: Bool, +es: List<&2, A.Ent>, pb: Ps) -> Ps:
+  match on:
+    case True{}:
+      ps.evs(ev.evicted(es, Nil{}), pb)
+    case False{}:
+      pb
+
+def ps.evicted(+es: List<&2, A.Ent>, pb: Ps) -> Ps:
+  +p = pb
+  ps.evicted.if(ps.loud(p), es, p)
+
+# the group after an eviction of the keys es: their WATCHes touched,
+# their events pushed (before the group's answers), their DELs the
+# group's first effects; Ps with the outcome (ps.mem), the server with
+# its counts (I.info.evicted)
+def mem.grp(p: Ps & List<&2, Sigma<&2, &2, Chan(Ans), _ => Ans>>, es: List<&2, A.Ent>, srv: S.Srv, ds: R.Ds, ws: Waits, tx: Tx) -> Grp:
+  (pb, outs) = p
+  Grp{outs, es, srv, ds, ws, Nil{}, tx, pb}
+
+def mem.done(d: Evd, ws: Waits, tx: Tx, pb: Ps) -> Grp:
+  match d:
+    case Evd{+res, Evs{srv, +ds, +es, +n}}:
+      mem.grp(ps.flush(ps.evicted(es, ps.mem(pb, res)), Nil{}), es, S.srv.evicted(srv, n, Nat.is_lt(0n, res), R.ds.now(ds)), ds, ws, touch.ents(tx, es, None{}, ds))
+
+# Redis's warning for a CONFIG SET that set maxmemory below the memory in
+# use (updateMaxmemory)
+@unsafe
+def mem.warn.if(past: Bool, +srv: S.Srv, +used: Nat, +pid: U32) -> IO(Unit):
+  match past:
+    case False{}:
+      IO.pure(Unit, Unit{})
+    case True{}:
+      log(log.up(log.of(S.srv.cfg(srv), pid)), 3, "WARNING: the new maxmemory value set via CONFIG SET (" ++ Nat.show(S.srv.max(srv)) ++ ") is smaller than the current memory usage (" ++ Nat.show(used) ++ "). This will result in key eviction and/or the inability to accept new write commands depending on the maxmemory-policy.")
+
+# the group as it starts when the heap is within maxmemory: as it is,
+# unless the last eviction left it past (Ps's bits 29 and 26: was), whose
+# outcome is cleared and whose time past maxmemory ends
+def mem.ok(was: Bool, srv: S.Srv, ds: R.Ds, ws: Waits, tx: Tx, pb: Ps) -> Grp:
+  match was:
+    case False{}:
+      Grp{Nil{}, Nil{}, srv, ds, ws, Nil{}, tx, pb}
+    case True{}:
+      mem.done(Evd{0n, Evs{srv, ds, Nil{}, 0n}}, ws, tx, pb)
+
+def ps.mem.was(+pb: Ps) -> Bool:
+  match pb:
+    case Ps{reg, +ev, px, cs}:
+      U32.is_ne(U32.and(ev, 603979776), 0)
+    case PsOf{+p}:
+      ps.mem.was(p)
+
+# the memory seen to before a group (w: S.srv.mem.what of the heap's
+# used bytes, read at the clock's s0, u0): nothing within maxmemory; a
+# CONFIG SET's change of maxmemory first (its warning, Mm's kick cleared);
+# the eviction (rws: whether a rewrite runs; pid, the server's, for the
+# log); the group's state after it
+@unsafe
+def mem.run.w(w: Nat, +used: Nat, +s0: U32, +u0: U32, srv: S.Srv, ds: R.Ds, ws: Waits, tx: Tx, pb: Ps, +rws: Bool, +pid: U32) -> IO(Grp):
+  match w:
+    case 0n:
+      +p = pb
+      IO.pure(Grp, mem.ok(ps.mem.was(p), srv, ds, ws, tx, p))
+    case 1n:
+      +sv = srv
+      do IO<Grp>:
+        Unit <- mem.warn.if(evict.over(used, sv), sv, Nat.sub(used, S.srv.debt(sv)), pid)
+        mem.run.k(used, s0, u0, S.srv.kicked(sv), ds, ws, tx, pb, rws, pid)
+    case _:
+      +sv = srv
+      evict.go(S.srv.pol(sv), Evs{sv, ds, Nil{}, 0n}, ws, tx, pb, rws, s0, u0, evict.limit(S.srv.ten(sv)))
+
+@unsafe
+def mem.run.k(+used: Nat, +s0: U32, +u0: U32, srv: S.Srv, ds: R.Ds, ws: Waits, tx: Tx, pb: Ps, +rws: Bool, +pid: U32) -> IO(Grp):
+  +sv = srv
+  mem.run.w(S.srv.mem.what(sv, used), used, s0, u0, sv, ds, ws, tx, pb, rws, pid)
+
+# the eviction under policy pol: none under noeviction (EVICT_FAIL)
+@unsafe
+def evict.go(+pol: Nat, x: Evs, ws: Waits, tx: Tx, pb: Ps, +rws: Bool, +s0: U32, +u0: U32, +lim: Nat) -> IO(Grp):
+  match pol:
+    case 0n:
+      IO.pure(Grp, mem.done(Evd{2n, x}, ws, tx, pb))
+    case _:
+      do IO<Grp>:
+        d : Evd <- evict.loop(True{}, x, rws, s0, u0, lim)
+        IO.pure(Grp, mem.done(d, ws, tx, pb))
+
+@unsafe
+def mem.run(h: Nat & Nat, +s0: U32, +u0: U32, srv: S.Srv, ds: R.Ds, ws: Waits, tx: Tx, pb: Ps, +rws: Bool, +pid: U32) -> IO(Grp):
+  (u, act) = h
+  +used = u
+  mem.run.k(used, s0, u0, srv, ds, ws, tx, pb, rws, pid)
+
+# a group of requests taken at t, its memory seen to (w: mem.need): with
+# maxmemory, the heap read and the eviction (mem.run); without it, the
+# outcome of an eviction before it cleared (ps.mem)
+@unsafe
+def db_mem(+w: Nat, qs: List<&1, Req>, t: U32 & U32, srv: S.Srv, ds: R.Ds, ws: Waits, tx: Tx, pb: Ps, rw: Rw, +reqs: Chan(Req)) -> IO(Unit):
+  match w:
+    case 0n:
+      db_group(grp.end(group_run(False{}, qs, Grp{Nil{}, Nil{}, srv, R.ds.at(clock.ms(t), ds), ws, Nil{}, tx, pb})), rw, reqs)
+    case 1n:
+      db_group(grp.end(group_run(False{}, qs, Grp{Nil{}, Nil{}, srv, R.ds.at(clock.ms(t), ds), ws, Nil{}, tx, ps.mem(pb, 0n)})), rw, reqs)
+    case _:
+      (a, b) = t
+      +s0 = a
+      +u0 = b
+      +w2 = rw
+      do IO<Unit>:
+        h : Nat & Nat <- IO.heap()
+        g : Grp <- mem.run(h, s0, u0, srv, R.ds.at(clock.ms.of(s0, u0), ds), ws, tx, pb, rw.runs(w2), rw.pid(w2))
+        db_group(grp.end(group_run(False{}, qs, g)), w2, reqs)
+
 # The database actor
 # ------------------
 
@@ -4199,25 +5070,66 @@ def hs.last(+hs: List<&2, U32>, +w: U32) -> U32:
     case Con{+h, rest}:
       hs.last(rest, U32.shrn(h, 20n))
 
-def mark.hs(+back: Chan(Ans), +hs: List<&2, U32>, +now: Nat) -> Chan(Ans):
-  mark(back, R.stat.code.cw(U32.to_nat(hs.last(hs, 0))), now)
+# (k: 0, after the marks of the batch's keys: Access)
+def mark.hs(+back: Chan(Ans), +hs: List<&2, U32>, +now: Nat, k: U32) -> Chan(Ans):
+  mark(back, R.stat.code.cw(U32.to_nat(hs.last(hs, k))), now)
+
+# Access
+# ------
+# Before a batch runs, the keys its requests name are marked used
+# (session.bend, Access), by their hints' hashes, at the group's time: by
+# the second, or under an LFU policy (ps.lfu) by their counters, with the
+# server's lfu-log-factor and lfu-decay-time, as Redis marks a value as a
+# command looks it up. A request whose command touches no key has no hash
+# (0: resp.bend, req.hash) and marks word 0 alone. Redis marks a key as a
+# command finds it; BendKV marks the first key of each request in a batch
+# before the batch runs, there or not (MGET's other keys, for one, stay
+# as they were, and a command queued in a transaction marks its key as
+# it is queued). The random number of an LFU counter's step scrambles the
+# key's hash and word with the time and the request's place in the batch.
+
+def use.lru(+hs: List<&2, U32>, +w: U32, k: U32) -> U32:
+  match hs:
+    case Nil{}:
+      k
+    case Con{+h, +rest}:
+      use.lru(rest, w, Mem.touch(k, h, w))
+
+def use.lfu(+hs: List<&2, U32>, +now: Nat, +min: U32, +lf: Nat, +dt: Nat, +i: U32, k: U32) -> U32:
+  match hs:
+    case Nil{}:
+      k
+    case Con{+h, +rest}:
+      +w = Mem.cell(h)
+      use.lfu(rest, now, min, lf, dt, U32.add(i, 2654435769), Mem.touch(k, h, S.lfu.use(w, min, KV.mix(U32.xor(U32.xor(h, w), U32.xor(U32.from_nat(now), i))), lf, dt)))
+
+# a batch the general way, its keys marked used first (lfu: under an LFU
+# policy) and its client's channel marked with its last command (mark.hs)
+def bg.used(lfu: Bool, +cn: S.Conn, +back: Chan(Ans), +inb: Nat, raw: String, cmds: List<&2, R.Cmd>, +hs: List<&2, U32>, g: Grp) -> Grp:
+  match lfu g:
+    case False{} Grp{outs, es, srv, +ds, ws, up, tx, pb}:
+      +now = R.ds.now(ds)
+      bg.batch(cn, mark.hs(back, hs, now, use.lru(hs, S.acc.lru(now), 0)), inb, raw, cmds, R.codes.of(hs), Grp{outs, es, srv, ds, ws, up, tx, pb})
+    case True{} Grp{outs, es, S.Srv{pass, cfg, info, +mm}, +ds, ws, up, tx, pb}:
+      +now = R.ds.now(ds)
+      bg.batch(cn, mark.hs(back, hs, now, use.lfu(hs, now, S.acc.min(now), S.mm.lfl(mm), S.mm.lfd(mm), 0, 0)), inb, raw, cmds, R.codes.of(hs), Grp{outs, es, S.Srv{pass, cfg, info, mm}, ds, ws, up, tx, pb})
 
 def ps.killed(+id: Nat, +pb: Ps) -> Bool:
   cls.killed(id, ps.cls(pb))
 
 # a batch the general way, unless its client was killed (its connection
 # answered Bye, the batch not run)
-def job.slow.if(killed: Bool, +cn: S.Conn, +back: Chan(Ans), +inb: Nat, raw: String, cmds: List<&2, R.Cmd>, +hs: List<&2, U32>, g: Grp) -> Grp:
+def job.slow.if(killed: Bool, lfu: Bool, +cn: S.Conn, +back: Chan(Ans), +inb: Nat, raw: String, cmds: List<&2, R.Cmd>, +hs: List<&2, U32>, g: Grp) -> Grp:
   match killed g:
     case True{} Grp{outs, es, srv, ds, ws, up, tx, pb}:
       Grp{(back, Bye{}) <> outs, es, srv, ds, ws, up, tx, pb}
-    case False{} Grp{outs, es, srv, +ds, ws, up, tx, pb}:
-      bg.batch(cn, mark.hs(back, hs, R.ds.now(ds)), inb, raw, cmds, R.codes.of(hs), Grp{outs, es, srv, ds, ws, up, tx, pb})
+    case False{} g0:
+      bg.used(lfu, cn, back, inb, raw, cmds, hs, g0)
 
 def job.slow(+cn: S.Conn, +back: Chan(Ans), +inb: Nat, raw: String, cmds: List<&2, R.Cmd>, +hs: List<&2, U32>, g: Grp) -> Grp:
   match g:
     case Grp{outs, es, srv, ds, ws, up, tx, +pb}:
-      job.slow.if(ps.killed(S.conn.id(cn), pb), cn, back, inb, raw, cmds, hs, Grp{outs, es, srv, ds, ws, up, tx, pb})
+      job.slow.if(ps.killed(S.conn.id(cn), pb), ps.lfu(pb), cn, back, inb, raw, cmds, hs, Grp{outs, es, srv, ds, ws, up, tx, pb})
 
 # a batch the fast way, without the append-only file or with it (log)
 
@@ -4228,13 +5140,27 @@ def fast.run(+log: Bool, outs: List<&2, Sigma<&2, &2, Chan(Ans), _ => Ans>>, es:
     case False{}:
       run_put(outs, es, back, t, inb, S.run.plain(True{}, cn, srv, cmds, hs, ds), up, pb)
 
+# a batch the fast way, its keys marked used first (Access; lfu: under an
+# LFU policy)
+def fast.at(lfu: Bool, +log: Bool, outs: List<&2, Sigma<&2, &2, Chan(Ans), _ => Ans>>, es: List<&2, A.Ent>, cn: S.Conn, cmds: List<&2, R.Cmd>, +hs: List<&2, U32>, back: Chan(Ans), +tl: U32, +inb: Nat, srv: S.Srv, +ds: R.Ds, up: List<&2, Up>, pb: Ps) -> Grp:
+  match lfu srv:
+    case False{} s:
+      +now = R.ds.now(ds)
+      +t = R.tally(use.lru(hs, S.acc.lru(now), tl), inb, hs)
+      fast.run(log, outs, es, mark(back, tally.last(t), now), t, inb, cn, s, cmds, hs, ds, up, pb)
+    case True{} S.Srv{pass, cfg, info, +mm}:
+      +now = R.ds.now(ds)
+      +t = R.tally(use.lfu(hs, now, S.acc.min(now), S.mm.lfl(mm), S.mm.lfd(mm), 0, tl), inb, hs)
+      fast.run(log, outs, es, mark(back, tally.last(t), now), t, inb, cn, S.Srv{pass, cfg, info, mm}, cmds, hs, ds, up, pb)
+
 def fast(+log: Bool, ready: Bool, outs: List<&2, Sigma<&2, &2, Chan(Ans), _ => Ans>>, es: List<&2, A.Ent>, cn: S.Conn, cmds: List<&2, R.Cmd>, +hs: List<&2, U32>, back: Chan(Ans), +tl: U32, +inb: Nat, raw: String, srv: S.Srv, +ds: R.Ds, up: List<&2, Up>, pb: Ps) -> Grp:
   match ready:
     case True{}:
-      +t = R.tally(tl, inb, hs)
-      fast.run(log, outs, es, mark(back, tally.last(t), R.ds.now(ds)), t, inb, cn, srv, cmds, hs, ds, up, pb)
+      +p = pb
+      fast.at(ps.lfu(p), log, outs, es, cn, cmds, hs, back, tl, inb, srv, ds, up, p)
     case False{}:
-      bg.batch(cn, mark.hs(back, hs, R.ds.now(ds)), inb, raw, cmds, R.codes.of(hs), Grp{outs, es, srv, ds, WaitNone{}, up, TxNone{}, pb})
+      +p = pb
+      bg.used(ps.lfu(p), cn, back, inb, raw, cmds, hs, Grp{outs, es, srv, ds, WaitNone{}, up, TxNone{}, p})
 
 # a batch from a client with no subscription: the fast way while no
 # client waits, none has a transaction or watches a key and no keyspace
@@ -4404,6 +5330,9 @@ def clock.ms(t: U32 & U32) -> Nat:
   (secs, us) = t
   Nat.add(Nat.mul(U32.to_nat(secs), 1000n), U32.to_nat(U32.div(us, 1000)))
 
+def clock.ms.of(+secs: U32, +us: U32) -> Nat:
+  Nat.add(Nat.mul(U32.to_nat(secs), 1000n), U32.to_nat(U32.div(us, 1000)))
+
 def group_run(+log: Bool, qs: List<&1, Req>, g: Grp) -> Grp:
   match qs:
     case Nil{}:
@@ -4515,7 +5444,8 @@ def rw.keep(rw: Rw, +bytes: String) -> Rw:
 @unsafe
 def db_loop(srv: S.Srv, ds: R.Ds, ws: Waits, tx: Tx, pb: Ps, rw: Rw, +reqs: Chan(Req)) -> IO(Unit):
   +w = rw
-  db_wait(rw.runs(w), srv, ds, ws, tx, pb, w, reqs)
+  +p = pb
+  db_wait(Bool.or(rw.runs(w), ps.evicting(p)), srv, ds, ws, tx, p, w, reqs)
 
 @unsafe
 def db_wait(runs: Bool, srv: S.Srv, ds: R.Ds, ws: Waits, tx: Tx, pb: Ps, rw: Rw, +reqs: Chan(Req)) -> IO(Unit):
@@ -4533,16 +5463,32 @@ def db_wait(runs: Bool, srv: S.Srv, ds: R.Ds, ws: Waits, tx: Tx, pb: Ps, rw: Rw,
 def db_busy(qs: List<&1, Req>, srv: S.Srv, ds: R.Ds, ws: Waits, tx: Tx, pb: Ps, rw: Rw, +reqs: Chan(Req)) -> IO(Unit):
   match qs:
     case Nil{}:
+      +p = pb
+      db_idle(ps.evicting(p), srv, ds, ws, tx, p, rw, reqs)
+    case Con{q, rest}:
+      +p = pb
+      do IO<Unit>:
+        t : U32 & U32 <- IO.clock()
+        db_mem(mem.need(p), q <> rest, t, srv, ds, ws, tx, p, rw, reqs)
+
+# while no request waits: an eviction to go on with runs as a group of no
+# request, after a turn of the event loop (as Redis's evictionTimeProc
+# runs in its loop's turn); else the rewrite's slice
+@unsafe
+def db_idle(ev: Bool, srv: S.Srv, ds: R.Ds, ws: Waits, tx: Tx, pb: Ps, rw: Rw, +reqs: Chan(Req)) -> IO(Unit):
+  match ev:
+    case True{}:
+      do IO<Unit>:
+        Unit <- IO.sleep(0)
+        t : U32 & U32 <- IO.clock()
+        db_mem(2n, Nil{}, t, srv, ds, ws, tx, pb, rw, reqs)
+    case False{}:
       +d = ds
       do IO<Unit>:
         t : U32 & U32 <- IO.clock()
         p : Maybe<&1, File> & Rx <- step.go(idle.step(d, clock.ms(t)), Rx{srv, d, 0n, rw}, None{})
         Unit <- IO.sleep(0)
         db_stepped(p, ws, tx, pb, reqs)
-    case Con{q, rest}:
-      do IO<Unit>:
-        t : U32 & U32 <- IO.clock()
-        db_group(grp.end(group_run(False{}, q <> rest, Grp{Nil{}, Nil{}, srv, R.ds.at(clock.ms(t), ds), ws, Nil{}, tx, pb})), rw, reqs)
 
 @unsafe
 def db_serve(srv: S.Srv, ds: R.Ds, ws: Waits, tx: Tx, pb: Ps, rw: Rw, +reqs: Chan(Req), m: Maybe<&1, Req>) -> IO(Unit):
@@ -4550,10 +5496,11 @@ def db_serve(srv: S.Srv, ds: R.Ds, ws: Waits, tx: Tx, pb: Ps, rw: Rw, +reqs: Cha
     case None{}:
       IO.pure(Unit, Unit{})
     case Some{q}:
+      +p = pb
       do IO<Unit>:
         more : List<&1, Req> <- Chan.drain(Req, reqs, group_max())
         t : U32 & U32 <- IO.clock()
-        db_group(grp.end(group_run(False{}, q <> more, Grp{Nil{}, Nil{}, srv, R.ds.at(clock.ms(t), ds), ws, Nil{}, tx, pb})), rw, reqs)
+        db_mem(mem.need(p), q <> more, t, srv, ds, ws, tx, p, rw, reqs)
 
 @unsafe
 def db_group(g: Grp, rw: Rw, +reqs: Chan(Req)) -> IO(Unit):
@@ -5669,11 +6616,12 @@ def nat.of(+s: String) -> Nat:
 def stat.field(+s: String, +k: Nat) -> Nat:
   nat.of(nth(k, words.of(last(String.split(s, ')'), ""))))
 
-def live.of(t: U32 & U32, +ps: String, +ts: String, +sm: String, c: Tally) -> I.Live:
+def live.of(t: U32 & U32, +ps: String, +ts: String, +sm: String, h: Nat & Nat, c: Tally) -> I.Live:
   (secs, us) = t
+  (heap, act) = h
   match c:
     case Tally{taken, open}:
-      I.ILive{secs, us, stat.field(ps, 11n), stat.field(ps, 12n), stat.field(ts, 11n), stat.field(ts, 12n), Nat.mul(nat.of(nth(1n, words.of(sm))), 4096n), taken, open, 0n, 0n}
+      I.ILive{secs, us, stat.field(ps, 11n), stat.field(ps, 12n), stat.field(ts, 11n), stat.field(ts, 12n), Nat.mul(nat.of(nth(1n, words.of(sm))), 4096n), heap, act, taken, open, 0n, 0n}
 
 def hex8.go(n: Nat, +x: U32, acc: String) -> String:
   match n:
@@ -5689,9 +6637,10 @@ def hex.word(r: Result<&1, &1, U32 & String, U32>) -> String:
     case Fail{e}:
       "00000000"
 
-def boot.of(+o1: String, +o2: String, +o3: String, +mem: String, +sm: String, run: String, rep: String, t: U32 & U32, +pid: U32, exe: String, conf: String) -> I.Boot:
+def boot.of(+o1: String, +o2: String, +o3: String, +mem: String, h: Nat & Nat, run: String, rep: String, t: U32 & U32, +pid: U32, exe: String, conf: String) -> I.Boot:
+  (heap, act) = h
   (secs, us) = t
-  I.IBoot{T.trim(o1) ++ " " ++ T.trim(o2) ++ " " ++ T.trim(o3), U32.show(pid), run, rep, exe, conf, Nat.mul(nat.of(nth(1n, words.of(T.first(String.split(mem, '\n'))))), 1024n), secs, Nat.mul(nat.of(nth(1n, words.of(sm))), 4096n)}
+  I.IBoot{T.trim(o1) ++ " " ++ T.trim(o2) ++ " " ++ T.trim(o3), U32.show(pid), run, rep, exe, conf, Nat.mul(nat.of(nth(1n, words.of(T.first(String.split(mem, '\n'))))), 1024n), secs, heap}
 
 @unsafe
 def proc.got(m: Result<&1, &1, U32 & String, File>) -> IO(String):
@@ -5730,8 +6679,9 @@ def live.read(+tl: Chan(Tally)) -> IO(I.Live):
     ps : String <- proc.text("/proc/self/stat")
     ts : String <- proc.text("/proc/self/task/" ++ U32.show(pid) ++ "/stat")
     sm : String <- proc.text("/proc/self/statm")
+    h : Nat & Nat <- IO.heap()
     c : Tally <- tally.peek(tl)
-    return live.of(t, ps, ts, sm, c)
+    return live.of(t, ps, ts, sm, h, c)
 
 # the facts of the start: the program's and the configuration file's
 # absolute paths come from the start's own reading
@@ -5742,11 +6692,11 @@ def boot.read(+pid: U32, +exe: String, +conf: String) -> IO(I.Boot):
     o2 : String <- proc.text("/proc/sys/kernel/osrelease")
     o3 : String <- proc.text("/proc/sys/kernel/arch")
     mem : String <- proc.text("/proc/meminfo")
-    sm : String <- proc.text("/proc/self/statm")
+    h : Nat & Nat <- IO.heap()
     run : String <- hex40()
     rep : String <- hex40()
     t : U32 & U32 <- IO.clock()
-    return boot.of(o1, o2, o3, mem, sm, run, rep, t, pid, exe, conf)
+    return boot.of(o1, o2, o3, mem, h, run, rep, t, pid, exe, conf)
 
 # INFO's account at the start, before the append-only file is read
 @unsafe
@@ -5913,10 +6863,17 @@ def aof_fail(e: U32 & String) -> String:
 type St is Data:
   St{srv: S.Srv, ds: R.Ds, sel: Nat, ws: Waits, tx: Tx, pb: Ps, rw: Rw}
 
+# whether the actor is not to block for a request: a rewrite runs, or an
+# eviction is to go on (ps.evicting)
 def st.runs(+st: St) -> Bool:
   match st:
-    case St{srv, ds, sel, ws, tx, pb, +rw}:
-      rw.runs(rw)
+    case St{srv, ds, sel, ws, tx, +pb, +rw}:
+      Bool.or(rw.runs(rw), ps.evicting(pb))
+
+def st.evicting(+st: St) -> Bool:
+  match st:
+    case St{srv, ds, sel, ws, tx, +pb, rw}:
+      ps.evicting(pb)
 
 @unsafe
 def aof_loop(st: St, f: File, +sync: Sync, +reqs: Chan(Req)) -> IO(Unit):
@@ -5942,13 +6899,26 @@ def aof_busy(qs: List<&1, Req>, st: St, f: File, +sync: Sync, +reqs: Chan(Req)) 
   match qs:
     case Nil{}:
       +x = st
+      aof_idle(st.evicting(x), x, f, sync, reqs)
+    case Con{q, rest}:
+      aof_take(q <> rest, st, f, sync, reqs)
+
+# while no request waits: an eviction to go on with, as a group of no
+# request (db_idle), else the rewrite's slice
+@unsafe
+def aof_idle(ev: Bool, st: St, f: File, +sync: Sync, +reqs: Chan(Req)) -> IO(Unit):
+  match ev:
+    case True{}:
+      do IO<Unit>:
+        Unit <- IO.sleep(0)
+        aof_take(Nil{}, st, f, sync, reqs)
+    case False{}:
+      +x = st
       do IO<Unit>:
         t : U32 & U32 <- IO.clock()
         p : File & St <- aof_rw(st.idle(x, clock.ms(t)), x, f)
         Unit <- IO.sleep(0)
         aof_resume(p, sync, reqs)
-    case Con{q, rest}:
-      aof_take(q <> rest, st, f, sync, reqs)
 
 def st.sel(+st: St) -> Nat:
   match st:
@@ -5961,11 +6931,30 @@ def st.sel(+st: St) -> Nat:
 @unsafe
 def aof_take(qs: List<&1, Req>, st: St, f: File, +sync: Sync, +reqs: Chan(Req)) -> IO(Unit):
   match st:
-    case St{srv, ds, +sel, ws, tx, pb, rw}:
+    case St{srv, ds, +sel, ws, tx, +pb, rw}:
       do IO<Unit>:
         more : List<&1, Req> <- Chan.drain(Req, reqs, group_max())
         t : U32 & U32 <- IO.clock()
-        aof_group(grp.end(group_run(True{}, List.append(&1, Req, qs, more), Grp{Nil{}, Nil{}, srv, R.ds.at(clock.ms(t), ds), ws, Nil{}, tx, pb})), sel, rw, f, sync, reqs)
+        aof_mem(mem.need(pb), List.append(&1, Req, qs, more), t, srv, ds, ws, tx, pb, sel, rw, f, sync, reqs)
+
+# a group of requests taken at t, its memory seen to (w: mem.need), as
+# db_mem sees to it
+@unsafe
+def aof_mem(+w: Nat, qs: List<&1, Req>, t: U32 & U32, srv: S.Srv, ds: R.Ds, ws: Waits, tx: Tx, pb: Ps, +sel: Nat, rw: Rw, f: File, +sync: Sync, +reqs: Chan(Req)) -> IO(Unit):
+  match w:
+    case 0n:
+      aof_group(grp.end(group_run(True{}, qs, Grp{Nil{}, Nil{}, srv, R.ds.at(clock.ms(t), ds), ws, Nil{}, tx, pb})), sel, rw, f, sync, reqs)
+    case 1n:
+      aof_group(grp.end(group_run(True{}, qs, Grp{Nil{}, Nil{}, srv, R.ds.at(clock.ms(t), ds), ws, Nil{}, tx, ps.mem(pb, 0n)})), sel, rw, f, sync, reqs)
+    case _:
+      (a, b) = t
+      +s0 = a
+      +u0 = b
+      +w2 = rw
+      do IO<Unit>:
+        h : Nat & Nat <- IO.heap()
+        g : Grp <- mem.run(h, s0, u0, srv, R.ds.at(clock.ms.of(s0, u0), ds), ws, tx, pb, rw.runs(w2), rw.pid(w2))
+        aof_group(grp.end(group_run(True{}, qs, g)), sel, w2, f, sync, reqs)
 
 @unsafe
 def aof_more(st: St, f: File, +sync: Sync, +reqs: Chan(Req), m: Maybe<&1, Req>) -> IO(Unit):
@@ -7059,9 +8048,9 @@ def restore(+lg: Log, +trunc: Bool, +path: String, +more: Nat) -> IO(R.Ds & Nat)
 
 # the actor appending to the file, on the databases the file held, with
 # the database its last SELECT selected (the focus after its entries)
-def st.new(srv: S.Srv, ds: R.Ds, rw: Rw) -> St:
+def st.new(+srv: S.Srv, ds: R.Ds, rw: Rw) -> St:
   +x = ds
-  St{srv, x, R.ds.index(x), WaitNone{}, TxNone{}, ps.new(), rw}
+  St{srv, x, R.ds.index(x), WaitNone{}, TxNone{}, ps.tune(ps.new(), srv), rw}
 
 # the directory that holds the file synced, so that the file's name is on
 # the disk before the first write to it is acknowledged: File.open may
@@ -7114,19 +8103,38 @@ def cron(+reqs: Chan(Req)) -> IO(Unit):
     ok : Bool <- Chan.send(Req, reqs, Tick{clock.ms(t)})
     cron.next(ok, reqs)
 
+# Redis's warning, once it is ready, about a maxmemory under 1MB
 @unsafe
-def accept_all(ls: List<&1, Listener>, +reqs: Chan(Req), +post: Bool, +lg: Log, +tl: Chan(Tally)) -> IO(Unit):
+def mm.warn.if(on: Bool, +lg: Log, +max: Nat) -> IO(Unit):
+  match on:
+    case True{}:
+      log(lg, 3, "WARNING: You specified a maxmemory value that is less than 1MB (current value is " ++ Nat.show(max) ++ " bytes). Are you sure this is what you really want?")
+    case False{}:
+      IO.pure(Unit, Unit{})
+
+@unsafe
+def mm.warn(+lg: Log, +max: Nat) -> IO(Unit):
+  mm.warn.if(Bool.and(Nat.is_lt(0n, max), Nat.is_lt(max, 1048576n)), lg, max)
+
+@unsafe
+def accept_all(ls: List<&1, Listener>, +reqs: Chan(Req), +post: Bool, +lg: Log, +tl: Chan(Tally), +items: List<&2, C.CItem>) -> IO(Unit):
   do IO<Unit>:
     Unit <- IO.spawn(Unit, cron(reqs))
     Unit <- accept_each(ls, reqs, post, tl)
-    log(lg, 2, "Ready to accept connections")
+    Unit <- log(lg, 2, "Ready to accept connections")
+    mm.warn(lg, S.mm.get(items, "maxmemory"))
 
 @unsafe
 def serve.aof(p: R.Ds & Nat, +path: String, +sync: Sync, +items: List<&2, C.CItem>, info: I.Info, ls: List<&1, Listener>, +post: Bool, +lg: Log, +tl: Chan(Tally), +pid: U32) -> IO(Unit):
   (ds, +size) = p
   do IO<Unit>:
     +reqs : Chan(Req) <- open_aof(path, sync, S.srv_of(items, I.info.restored(info, size)), ds, lg, pid)
-    accept_all(ls, reqs, post, lg, tl)
+    accept_all(ls, reqs, post, lg, tl, items)
+
+# the actor without a file, its Pub/Sub's state told of maxmemory
+@unsafe
+def db_start(+srv: S.Srv, ds: R.Ds, rw: Rw, +reqs: Chan(Req)) -> IO(Unit):
+  db_loop(srv, ds, WaitNone{}, TxNone{}, ps.tune(ps.new(), srv), rw, reqs)
 
 # the databases after the first (databases less one)
 def dbs.more(+items: List<&2, C.CItem>) -> Nat:
@@ -7138,8 +8146,8 @@ def serve(aof: Maybe<&2, String>, ls: List<&1, Listener>, +post: Bool, +sync: Sy
     case None{}:
       do IO<Unit>:
         +reqs : Chan(Req) <- Chan.new(Req, 1024)
-        Unit <- IO.spawn(Unit, db_loop(S.srv_of(items, info), R.ds.empty(dbs.more(items)), WaitNone{}, TxNone{}, ps.new(), rw.new(T.cfg(items, "appendfilename"), False{}, pid), reqs))
-        accept_all(ls, reqs, post, lg, tl)
+        Unit <- IO.spawn(Unit, db_start(S.srv_of(items, info), R.ds.empty(dbs.more(items)), rw.new(T.cfg(items, "appendfilename"), False{}, pid), reqs))
+        accept_all(ls, reqs, post, lg, tl, items)
     case Some{+path}:
       do IO<Unit>:
         p : R.Ds & Nat <- restore(lg, trunc, path, dbs.more(items))

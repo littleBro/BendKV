@@ -91,6 +91,17 @@ def block_walks():
         out += [f"    case 1n+p {node(cs)} {H[i]}{{}}:",
                 f"      tget_kx(V, p, {cs[i]}, {STEP}, k)"]
     out += ["    case 1n+p other _:", "      0n", ""]
+    out += ["# the keys of the bucket a walk ends at that a scan of mode takes at now",
+            "# (bkeys), before acc: eviction's samples read buckets one walk each,",
+            "# which reads the trie lent, as get's do",
+            "def tget_kb(-V: Data, d: Nat, +t: Trie<V>, x: Hex, +h: U32, +now: Nat, +mode: Nat, acc: List<&2, String>) -> List<&2, String>:",
+            "  match d t x:",
+            "    case 0n t0 _:",
+            "      bkeys(V, t0, now, mode, acc)"]
+    for i in range(N):
+        out += [f"    case 1n+p {node(cs)} {H[i]}{{}}:",
+                f"      tget_kb(V, p, {cs[i]}, {STEP}, now, mode, acc)"]
+    out += ["    case 1n+p other _:", "      acc", ""]
     out += ["# tget_k answering k's entry, its value and its time (bent)",
             "def tget_ke(-V: Data, d: Nat, +t: Trie<V>, x: Hex, +h: U32, +k: String) -> Maybe<&2, Item<V>>:",
             "  match d t x:",
@@ -183,28 +194,30 @@ def block_folds():
             "      1n+tsize(V, rest)"]
 
 # the scan of a node: its 16 subtries in order, each skipped whole when
-# it lies before the cursor (or at or past the bound to)
+# it lies before the cursor (or at or past the bound to); the subtries are
+# lent, as the trie is (taken, each would be shared and dropped at every
+# node the scan reads)
 def block_scan():
     s = "s"
     for i, c in enumerate(cs):
         base = "base" if i == 0 else f"Nat.add(base, Nat.mul({i}n, q))"
         skip = f"Nat.is_le(Nat.add(base, Nat.mul({i + 1}n, q)), from)"
         skip = f"Bool.or({skip}, Nat.is_le(to, {base}))"
-        s = f"tscan(V, p, {c}, {skip}, {base}, q, from, to, now, all, dead, {s})"
-    return ["def tscan(-V: Data, +d: Nat, +t: Trie<V>, skip: Bool, +base: Nat, +span: Nat, +from: Nat, +to: Nat, +now: Nat, +all: Bool, +dead: Bool, s: Scan) -> Scan:",
-            "  match d t skip s:",
-            "    case _ _ True{} s:",
+        s = f"tscan(V, p, {skip}, {c}, {base}, q, from, to, now, all, mode, {s})"
+    return ["def tscan(-V: Data, +d: Nat, skip: Bool, +t: Trie<V>, +base: Nat, +span: Nat, +from: Nat, +to: Nat, +now: Nat, +all: Bool, +mode: Nat, s: Scan) -> Scan:",
+            "  match d skip t s:",
+            "    case _ True{} _ s:",
             "      s",
-            "    case _ _ False{} Stop{at, acc}:",
+            "    case _ False{} _ Stop{at, acc}:",
             "      Stop{at, acc}",
-            "    case 0n b False{} Scan{want, acc}:",
-            "      bscan(V, b, base, want, acc, now, all, dead)",
-            "    case 1n+p Tip{} False{} s:",
+            "    case 0n False{} b Scan{want, acc}:",
+            "      bscan(V, b, base, want, acc, now, all, mode)",
+            "    case 1n+p False{} Tip{} s:",
             "      s",
-            f"    case 1n+p {node(cs)} False{{}} s:",
+            f"    case 1n+p False{{}} {node(['+' + c for c in cs])} s:",
             "      +q = Nat.div(span, 16n)",
             f"      {s}",
-            "    case 1n+p Ent{k, v, e, rest} False{} s:",
+            "    case 1n+p False{} Ent{+k, +v, +e, +rest} s:",
             "      s"]
 
 # Proofs (PROOF.bend)

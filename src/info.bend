@@ -3,9 +3,9 @@
 # each with Redis's fields in Redis's order. The values are BendKV's own
 # where it has them: its process, its parameters, its counts of
 # connections, commands and bytes, its memory, its keys, its append-only
-# file. For what it does not have (replication, forks, scripts, eviction,
-# expiry, defragmentation, I/O threads) they are what Redis shows when it
-# has none of it. Facts only the shell can see (the clock, the processor
+# file, its evictions. For what it does not have (replication, forks,
+# scripts, the eviction of clients, expiry, defragmentation, I/O threads)
+# they are what Redis shows when it has none of it. Facts only the shell can see (the clock, the processor
 # time, the memory, the connections) come in Live, gathered for a batch
 # that asks for them; the counts are added a batch at a time, and the
 # rates sampled every 100 ms (server.bend).
@@ -351,19 +351,21 @@ def stats.total(+st: Stats) -> String:
 # the server at its start: the operating system (as uname names it), the
 # pid, the run id and the replication id (40 hex digits each), the
 # program and the configuration file (absolute paths, "" for none), the
-# machine's memory, the time it started (seconds since 1970) and its
-# resident memory then
+# machine's memory, the time it started (seconds since 1970) and the bytes
+# its heap's live values held then (IO.heap)
 type Boot is Data:
-  IBoot{os: String, pid: String, run: String, replid: String, exe: String, conf: String, sysmem: Nat, start: U32, rss0: Nat}
+  IBoot{os: String, pid: String, run: String, replid: String, exe: String, conf: String, sysmem: Nat, start: U32, heap0: Nat}
 
 # what the shell saw last: the wall clock (seconds since 1970 and
 # microseconds), the processor time of the process and of its main
 # thread (user, system; clock ticks of 10 ms), the resident memory, the
+# bytes the heap's live values hold and those the heap has taken
+# (IO.heap: an allocator's allocated and active bytes), the
 # connections taken since the start and those open, and the clients that
 # wait (blocked) and those of them with a timeout, as the actor counts
 # them (a connection's facts leave them as they were)
 type Live is Data:
-  ILive{secs: U32, usec: U32, ut: Nat, st: Nat, mut: Nat, mst: Nat, rss: Nat, conns: Nat, clients: Nat, blk: Nat, tmo: Nat}
+  ILive{secs: U32, usec: U32, ut: Nat, st: Nat, mut: Nat, mst: Nat, rss: Nat, heap: Nat, act: Nat, conns: Nat, clients: Nat, blk: Nat, tmo: Nat}
 
 # commands run, bytes read and bytes sent
 type Count is Data:
@@ -377,9 +379,14 @@ type Inst is Data:
 
 # the sweep of expired keys (redis.bend: reap): the bucket the next one
 # starts at in each database (by number; none for 0), and the keys the
-# sweeps deleted (Redis's expired_keys)
+# sweeps deleted (Redis's expired_keys); and eviction's (server.bend,
+# Eviction): the keys it deleted (evicted_keys), how long the heap was
+# past maxmemory with the keys to evict not yet evicted (in ms) before the
+# time that runs now, and when that time began (ms since 1970; 0 while it
+# does not run), as Redis's stat_total_eviction_exceeded_time and
+# stat_last_eviction_exceeded_time
 type Exp is Data:
-  IExp{cur: List<&2, Nat>, n: Nat}
+  IExp{cur: List<&2, Nat>, n: Nat, ev: Nat, xsum: Nat, xfrom: Nat}
 
 # the rewrite of the append-only file (BGREWRITEAOF; server.bend, The
 # rewrite of the append-only file), as INFO shows it: whether one runs,
@@ -446,17 +453,46 @@ def rws.reset(r: Rws) -> Rws:
 type Info is Data:
   IInfo{boot: Boot, live: Live, cnt: Count, inst: Inst, peak: Nat, conns0: Nat, aof0: Nat, aof: Nat, st: Stats, ex: Exp, rw: Rws}
 
-# CONFIG RESETSTAT counts the keys the sweeps delete again (Redis's
-# stat_expiredkeys), and the sweeps go on where they were
+# CONFIG RESETSTAT counts the keys the sweeps and eviction delete and the
+# time past maxmemory again (Redis's stat_expiredkeys, stat_evictedkeys
+# and the times), and the sweeps go on where they were
 def exp.reset(e: Exp) -> Exp:
   match e:
-    case IExp{cur, n}:
-      IExp{cur, 0n}
+    case IExp{cur, n, ev, xsum, xfrom}:
+      IExp{cur, 0n, 0n, 0n, 0n}
 
 def exp.n(+e: Exp) -> Nat:
   match e:
-    case IExp{cur, +n}:
+    case IExp{cur, +n, ev, xsum, xfrom}:
       n
+
+def exp.ev(+e: Exp) -> Nat:
+  match e:
+    case IExp{cur, n, +ev, xsum, xfrom}:
+      ev
+
+# the time past maxmemory at now, ms: before the one that runs, and the
+# one that runs
+def exp.cur(+e: Exp, +now: Nat) -> Nat:
+  match e:
+    case IExp{cur, n, ev, xsum, +xfrom}:
+      Bool.pick(Nat, Nat.is_eq(xfrom, 0n), 0n, Nat.sub(now, xfrom))
+
+def exp.total(+e: Exp, +now: Nat) -> Nat:
+  match e:
+    case IExp{cur, n, ev, +xsum, xfrom}:
+      Nat.add(xsum, exp.cur(e, now))
+
+# an eviction's outcome at now (Redis's update_metrics): one that left
+# the heap past maxmemory (over: keys left to evict, or none it may
+# evict) starts the time past it, if none runs; one that brought it back
+# ends the time that runs; k keys evicted
+def exp.evicted(e: Exp, +k: Nat, +over: Bool, +now: Nat) -> Exp:
+  match e over:
+    case IExp{cur, n, ev, xsum, +xfrom} True{}:
+      IExp{cur, n, Nat.add(ev, k), xsum, Bool.pick(Nat, Nat.is_eq(xfrom, 0n), Nat.max(now, 1n), xfrom)}
+    case IExp{cur, n, ev, +xsum, +xfrom} False{}:
+      IExp{cur, n, Nat.add(ev, k), Nat.add(xsum, Bool.pick(Nat, Nat.is_eq(xfrom, 0n), 0n, Nat.sub(now, xfrom))), 0n}
 
 def count.zero() -> Count:
   ICount{big.zero(), big.zero(), big.zero()}
@@ -466,22 +502,32 @@ def samples.zero() -> List<&2, Nat>:
 
 def live.ms(+l: Live) -> Nat:
   match l:
-    case ILive{+secs, +usec, ut, st, mut, mst, rss, conns, clients, b, t}:
+    case ILive{+secs, +usec, ut, st, mut, mst, rss, heap, act, conns, clients, b, t}:
       Nat.add(Nat.mul(U32.to_nat(secs), 1000n), U32.to_nat(U32.div(usec, 1000)))
 
 def live.rss(+l: Live) -> Nat:
   match l:
-    case ILive{secs, usec, ut, st, mut, mst, rss, conns, clients, b, t}:
+    case ILive{secs, usec, ut, st, mut, mst, rss, heap, act, conns, clients, b, t}:
       rss
+
+def live.heap(+l: Live) -> Nat:
+  match l:
+    case ILive{secs, usec, ut, st, mut, mst, rss, heap, act, conns, clients, b, t}:
+      heap
+
+def live.act(+l: Live) -> Nat:
+  match l:
+    case ILive{secs, usec, ut, st, mut, mst, rss, heap, act, conns, clients, b, t}:
+      act
 
 def live.conns(+l: Live) -> Nat:
   match l:
-    case ILive{secs, usec, ut, st, mut, mst, rss, conns, clients, b, t}:
+    case ILive{secs, usec, ut, st, mut, mst, rss, heap, act, conns, clients, b, t}:
       conns
 
 # the server's facts at its start
 def info.new(b: Boot, +l: Live) -> Info:
-  IInfo{b, l, count.zero(), IInst{live.ms(l), count.zero(), samples.zero(), samples.zero(), samples.zero()}, live.rss(l), 0n, 0n, 0n, stats.zero(), IExp{Nil{}, 0n}, rws.zero()}
+  IInfo{b, l, count.zero(), IInst{live.ms(l), count.zero(), samples.zero(), samples.zero(), samples.zero()}, live.heap(l), 0n, 0n, 0n, stats.zero(), IExp{Nil{}, 0n, 0n, 0n, 0n}, rws.zero()}
 
 # the append-only file the server restored at its start, of size bytes
 def info.restored(i: Info, +size: Nat) -> Info:
@@ -565,18 +611,18 @@ def info.aof.base(+i: Info) -> Nat:
 # new facts, the clients that wait as the actor counted them
 def live.keep(l: Live, old: Live) -> Live:
   match l old:
-    case ILive{secs, usec, ut, st, mut, mst, rss, conns, clients, b0, t0} ILive{s1, u1, ut1, st1, mu1, ms1, r1, n1, c1, blk, tmo}:
-      ILive{secs, usec, ut, st, mut, mst, rss, conns, clients, blk, tmo}
+    case ILive{secs, usec, ut, st, mut, mst, rss, heap, act, conns, clients, b0, t0} ILive{s1, u1, ut1, st1, mu1, ms1, r1, h1, a1, n1, c1, blk, tmo}:
+      ILive{secs, usec, ut, st, mut, mst, rss, heap, act, conns, clients, blk, tmo}
 
 def live.waits(l: Live, +n: Nat, +t: Nat) -> Live:
   match l:
-    case ILive{secs, usec, ut, st, mut, mst, rss, conns, clients, b0, t0}:
-      ILive{secs, usec, ut, st, mut, mst, rss, conns, clients, n, t}
+    case ILive{secs, usec, ut, st, mut, mst, rss, heap, act, conns, clients, b0, t0}:
+      ILive{secs, usec, ut, st, mut, mst, rss, heap, act, conns, clients, n, t}
 
 def info.live(i: Info, +l: Live) -> Info:
   match i:
     case IInfo{b, old, c, inst, pk, c0, a0, a, st, ex, rw}:
-      IInfo{b, live.keep(l, old), c, inst, Nat.max(pk, live.rss(l)), c0, a0, a, st, ex, rw}
+      IInfo{b, live.keep(l, old), c, inst, Nat.max(pk, live.heap(l)), c0, a0, a, st, ex, rw}
 
 # the clients that wait, n of them, t of them with a timeout
 def info.blocked(i: Info, +n: Nat, +t: Nat) -> Info:
@@ -658,15 +704,22 @@ def info.reap_at(+i: Info, +j: Nat) -> Nat:
   match i:
     case IInfo{b, l, c, inst, pk, c0, a0, a, st, +ex, rw}:
       match ex:
-        case IExp{+cur, n}:
+        case IExp{+cur, n, ev, xsum, xfrom}:
           cur.nth(j, cur)
 
 def info.reaped(i: Info, +j: Nat, +next: Nat, +k: Nat) -> Info:
   match i:
     case IInfo{b, l, c, inst, pk, c0, a0, a, st, ex, rw}:
       match ex:
-        case IExp{cur, +n}:
-          IInfo{b, l, c, inst, pk, c0, a0, a, st, IExp{cur.put(j, next, cur), Nat.add(n, k)}, rw}
+        case IExp{cur, +n, ev, xsum, xfrom}:
+          IInfo{b, l, c, inst, pk, c0, a0, a, st, IExp{cur.put(j, next, cur), Nat.add(n, k), ev, xsum, xfrom}, rw}
+
+# an eviction at now that deleted k keys and left the heap past maxmemory
+# or not (over)
+def info.evicted(i: Info, +k: Nat, +over: Bool, +now: Nat) -> Info:
+  match i:
+    case IInfo{b, l, c, inst, pk, c0, a0, a, st, ex, rw}:
+      IInfo{b, l, c, inst, pk, c0, a0, a, st, exp.evicted(ex, k, over, now), rw}
 
 # Numbers as printf writes them
 # ----------------------------
@@ -740,14 +793,54 @@ def lt(+a: String, +b: String) -> Bool:
   Bool.not(C.dec.le(b, a))
 
 # bytes as Redis's bytesToHuman writes them: B under 1024, then K, M, G,
-# T and P with two decimals, B again from 1024^6 on
+# T and P with two decimals, B again from 1024^6 on. Each unit is a match
+# on whether the bytes are below the next: a unit's quotient is worked out
+# for the unit that applies alone (Bool.pick would work out each, and that
+# of maxmemory's largest values in K is past a Nat)
+def human.p(below: Bool, +n: String) -> String:
+  match below:
+    case True{}:
+      h.unit(n, 5n, "P")
+    case False{}:
+      n ++ "B"
+
+def human.t(below: Bool, +n: String) -> String:
+  match below:
+    case True{}:
+      h.unit(n, 4n, "T")
+    case False{}:
+      human.p(lt(n, "1152921504606846976"), n)
+
+def human.g(below: Bool, +n: String) -> String:
+  match below:
+    case True{}:
+      h.unit(n, 3n, "G")
+    case False{}:
+      human.t(lt(n, "1125899906842624"), n)
+
+def human.m(below: Bool, +n: String) -> String:
+  match below:
+    case True{}:
+      h.unit(n, 2n, "M")
+    case False{}:
+      human.g(lt(n, "1099511627776"), n)
+
+def human.k(below: Bool, +n: String) -> String:
+  match below:
+    case True{}:
+      h.unit(n, 1n, "K")
+    case False{}:
+      human.m(lt(n, "1073741824"), n)
+
+def human.b(below: Bool, +n: String) -> String:
+  match below:
+    case True{}:
+      n ++ "B"
+    case False{}:
+      human.k(lt(n, "1048576"), n)
+
 def human(+n: String) -> String:
-  Bool.pick(String, lt(n, "1024"), n ++ "B",
-  Bool.pick(String, lt(n, "1048576"), h.unit(n, 1n, "K"),
-  Bool.pick(String, lt(n, "1073741824"), h.unit(n, 2n, "M"),
-  Bool.pick(String, lt(n, "1099511627776"), h.unit(n, 3n, "G"),
-  Bool.pick(String, lt(n, "1125899906842624"), h.unit(n, 4n, "T"),
-  Bool.pick(String, lt(n, "1152921504606846976"), h.unit(n, 5n, "P"), n ++ "B"))))))
+  human.b(lt(n, "1024"), n)
 
 # a number up to 2^64 - 1 as "%lld" prints it
 def signed64(+v: String) -> String:
@@ -786,7 +879,7 @@ def flag(b: Bool) -> String:
 
 def sec.server(+items: List<&2, C.CItem>, +b: Boot, +l: Live) -> String:
   match b l:
-    case IBoot{+os, +pid, +run, +replid, +exe, +conf, sysmem, +start, rss0} ILive{+secs, +usec, ut, st, mut, mst, rss, conns, clients, bk, tm}:
+    case IBoot{+os, +pid, +run, +replid, +exe, +conf, sysmem, +start, heap0} ILive{+secs, +usec, ut, st, mut, mst, rss, heap, act, conns, clients, bk, tm}:
       +up = Bool.pick(U32, U32.is_le(start, secs), U32.sub(secs, start), 0)
       "# Server\r\n" ++ kv("redis_version", "7.0.15") ++ kv("redis_git_sha1", "00000000") ++ kv("redis_git_dirty", "0") ++
       kv("redis_build_id", "0000000000000000") ++ kv("redis_mode", "standalone") ++ kv("os", os) ++ kv("arch_bits", "64") ++
@@ -799,25 +892,33 @@ def sec.server(+items: List<&2, C.CItem>, +b: Boot, +l: Live) -> String:
 
 def sec.clients(+items: List<&2, C.CItem>, +l: Live) -> String:
   match l:
-    case ILive{secs, usec, ut, st, mut, mst, rss, conns, +clients, +blk, +tmo}:
+    case ILive{secs, usec, ut, st, mut, mst, rss, heap, act, conns, +clients, +blk, +tmo}:
       "# Clients\r\n" ++ kv("connected_clients", Nat.show(clients)) ++ kv("cluster_connections", "0") ++
       kv("maxclients", cfg(items, "maxclients")) ++ kv("client_recent_max_input_buffer", "0") ++
       kv("client_recent_max_output_buffer", "0") ++ kv("blocked_clients", Nat.show(blk)) ++ kv("tracking_clients", "0") ++
       kv("clients_in_timeout_table", Nat.show(tmo))
 
-# memory: what BendKV has is its resident memory; its heap keeps no
-# allocator's account, so used_memory is the resident memory too, and its
-# ratios are 1
-def sec.memory.go(+items: List<&2, C.CItem>, +used: Nat, +pk: Nat, +rss0: Nat, +sysmem: Nat) -> String:
-  +data = Nat.sub(used, rss0)
-  +net = Bool.pick(Nat, Nat.is_lt(rss0, used), Nat.sub(used, rss0), 1n)
+# memory: used_memory is what the heap's live values hold (IO.heap, as
+# zmalloc counts what Redis allocated), from which maxmemory evicts;
+# allocator_active what the heap has taken, which it keeps; the resident
+# memory is the process's. The start's live bytes are the overhead, the
+# rest the dataset. A difference that may be negative is printed so (%zd)
+def sdiff(+a: Nat, +b: Nat) -> String:
+  Bool.pick(String, Nat.is_le(b, a), Nat.show(Nat.sub(a, b)), "-" ++ Nat.show(Nat.sub(b, a)))
+
+def ratio(+a: Nat, +b: Nat) -> String:
+  fix2(Nat.show(a), Nat.max(b, 1n))
+
+def sec.memory.go(+items: List<&2, C.CItem>, +used: Nat, +pk: Nat, +used0: Nat, +rss: Nat, +act: Nat, +sysmem: Nat) -> String:
+  +data = Nat.sub(used, used0)
+  +net = Bool.pick(Nat, Nat.is_lt(used0, used), Nat.sub(used, used0), 1n)
   "# Memory\r\n" ++ kv("used_memory", Nat.show(used)) ++ kv("used_memory_human", human(Nat.show(used))) ++
-  kv("used_memory_rss", Nat.show(used)) ++ kv("used_memory_rss_human", human(Nat.show(used))) ++
+  kv("used_memory_rss", Nat.show(rss)) ++ kv("used_memory_rss_human", human(Nat.show(rss))) ++
   kv("used_memory_peak", Nat.show(pk)) ++ kv("used_memory_peak_human", human(Nat.show(pk))) ++
   kv("used_memory_peak_perc", fix2(C.dec.mul(Nat.show(used), 100n), Nat.max(pk, 1n)) ++ "%") ++
-  kv("used_memory_overhead", Nat.show(rss0)) ++ kv("used_memory_startup", Nat.show(rss0)) ++
+  kv("used_memory_overhead", Nat.show(used0)) ++ kv("used_memory_startup", Nat.show(used0)) ++
   kv("used_memory_dataset", Nat.show(data)) ++ kv("used_memory_dataset_perc", fix2(C.dec.mul(Nat.show(data), 100n), net) ++ "%") ++
-  kv("allocator_allocated", Nat.show(used)) ++ kv("allocator_active", Nat.show(used)) ++ kv("allocator_resident", Nat.show(used)) ++
+  kv("allocator_allocated", Nat.show(used)) ++ kv("allocator_active", Nat.show(act)) ++ kv("allocator_resident", Nat.show(rss)) ++
   kv("total_system_memory", Nat.show(sysmem)) ++ kv("total_system_memory_human", human(Nat.show(sysmem))) ++
   kv("used_memory_lua", "0") ++ kv("used_memory_vm_eval", "0") ++ kv("used_memory_lua_human", "0B") ++
   kv("used_memory_scripts_eval", "0") ++ kv("number_of_cached_scripts", "0") ++ kv("number_of_functions", "0") ++
@@ -825,17 +926,19 @@ def sec.memory.go(+items: List<&2, C.CItem>, +used: Nat, +pk: Nat, +rss0: Nat, +
   kv("used_memory_vm_total_human", "0B") ++ kv("used_memory_functions", "0") ++ kv("used_memory_scripts", "0") ++
   kv("used_memory_scripts_human", "0B") ++ kv("maxmemory", signed64(cfg(items, "maxmemory"))) ++
   kv("maxmemory_human", human(cfg(items, "maxmemory"))) ++ kv("maxmemory_policy", cfg(items, "maxmemory-policy")) ++
-  kv("allocator_frag_ratio", "1.00") ++ kv("allocator_frag_bytes", "0") ++ kv("allocator_rss_ratio", "1.00") ++
-  kv("allocator_rss_bytes", "0") ++ kv("rss_overhead_ratio", "1.00") ++ kv("rss_overhead_bytes", "0") ++
-  kv("mem_fragmentation_ratio", "1.00") ++ kv("mem_fragmentation_bytes", "0") ++ kv("mem_not_counted_for_evict", "0") ++
+  kv("allocator_frag_ratio", ratio(act, used)) ++ kv("allocator_frag_bytes", Nat.show(Nat.sub(act, used))) ++
+  kv("allocator_rss_ratio", ratio(rss, act)) ++ kv("allocator_rss_bytes", sdiff(rss, act)) ++
+  kv("rss_overhead_ratio", "1.00") ++ kv("rss_overhead_bytes", "0") ++
+  kv("mem_fragmentation_ratio", ratio(rss, used)) ++ kv("mem_fragmentation_bytes", sdiff(rss, used)) ++
+  kv("mem_not_counted_for_evict", "0") ++
   kv("mem_replication_backlog", "0") ++ kv("mem_total_replication_buffers", "0") ++ kv("mem_clients_slaves", "0") ++
   kv("mem_clients_normal", "0") ++ kv("mem_cluster_links", "0") ++ kv("mem_aof_buffer", "0") ++ kv("mem_allocator", "libc") ++
   kv("active_defrag_running", "0") ++ kv("lazyfree_pending_objects", "0") ++ kv("lazyfreed_objects", "0")
 
 def sec.memory(+items: List<&2, C.CItem>, +b: Boot, +l: Live, +pk: Nat) -> String:
   match b:
-    case IBoot{os, pid, run, replid, exe, conf, +sysmem, start, +rss0}:
-      sec.memory.go(items, live.rss(l), Nat.max(pk, live.rss(l)), rss0, sysmem)
+    case IBoot{os, pid, run, replid, exe, conf, +sysmem, start, +heap0}:
+      sec.memory.go(items, live.heap(l), Nat.max(pk, live.heap(l)), heap0, live.rss(l), live.act(l), sysmem)
 
 def sec.aof(on: Bool, +a0: Nat, +a: Nat, +sched: Bool) -> String:
   match on:
@@ -882,7 +985,7 @@ def sec.persistence(+items: List<&2, C.CItem>, +start: U32, +a0: Nat, +a: Nat, +
   kv("aof_last_cow_size", "0") ++ kv("module_fork_in_progress", "0") ++ kv("module_fork_last_cow_size", "0") ++
   sec.aof(on, a0, a, rws.sched(rw))
 
-def sec.stats.go(c: Count, inst: Inst, +conns: Nat, +errs: String, +expired: Nat) -> String:
+def sec.stats.go(c: Count, inst: Inst, +conns: Nat, +errs: String, +expired: Nat, +ex: Exp, +now: Nat) -> String:
   match c inst:
     case ICount{+cmds, +inb, +outb} IInst{ms, last, +sc, +si, +so}:
       "# Stats\r\n" ++ kv("total_connections_received", Nat.show(conns)) ++ kv("total_commands_processed", big.show(cmds)) ++
@@ -892,8 +995,8 @@ def sec.stats.go(c: Count, inst: Inst, +conns: Nat, +errs: String, +expired: Nat
       kv("instantaneous_output_kbps", fix2(Nat.show(mean(so)), 1024n)) ++ kv("instantaneous_input_repl_kbps", "0.00") ++
       kv("instantaneous_output_repl_kbps", "0.00") ++ kv("rejected_connections", "0") ++ kv("sync_full", "0") ++
       kv("sync_partial_ok", "0") ++ kv("sync_partial_err", "0") ++ kv("expired_keys", Nat.show(expired)) ++ kv("expired_stale_perc", "0.00") ++
-      kv("expired_time_cap_reached_count", "0") ++ kv("expire_cycle_cpu_milliseconds", "0") ++ kv("evicted_keys", "0") ++
-      kv("evicted_clients", "0") ++ kv("total_eviction_exceeded_time", "0") ++ kv("current_eviction_exceeded_time", "0") ++
+      kv("expired_time_cap_reached_count", "0") ++ kv("expire_cycle_cpu_milliseconds", "0") ++ kv("evicted_keys", Nat.show(exp.ev(ex))) ++
+      kv("evicted_clients", "0") ++ kv("total_eviction_exceeded_time", Nat.show(exp.total(ex, now))) ++ kv("current_eviction_exceeded_time", Nat.show(exp.cur(ex, now))) ++
       kv("keyspace_hits", "0") ++ kv("keyspace_misses", "0") ++ kv("pubsub_channels", "0") ++ kv("pubsub_patterns", "0") ++
       kv("pubsubshard_channels", "0") ++ kv("latest_fork_usec", "0") ++ kv("total_forks", "0") ++
       kv("migrate_cached_sockets", "0") ++ kv("slave_expires_tracked_keys", "0") ++ kv("active_defrag_hits", "0") ++
@@ -921,7 +1024,7 @@ def sec.replication(+items: List<&2, C.CItem>, +replid: String) -> String:
 
 def sec.cpu(+l: Live) -> String:
   match l:
-    case ILive{secs, usec, +ut, +st, +mut, +mst, rss, conns, clients, b, t}:
+    case ILive{secs, usec, +ut, +st, +mut, +mst, rss, heap, act, conns, clients, b, t}:
       "# CPU\r\n" ++ kv("used_cpu_sys", cpu(st)) ++ kv("used_cpu_user", cpu(ut)) ++ kv("used_cpu_sys_children", "0.000000") ++
       kv("used_cpu_user_children", "0.000000") ++ kv("used_cpu_sys_main_thread", cpu(mst)) ++ kv("used_cpu_user_main_thread", cpu(mut))
 
@@ -1018,20 +1121,26 @@ def on.memory(on: Bool, +items: List<&2, C.CItem>, +i: Info) -> String:
 
 def boot.start(+b: Boot) -> U32:
   match b:
-    case IBoot{os, pid, run, replid, exe, conf, sysmem, start, rss0}:
+    case IBoot{os, pid, run, replid, exe, conf, sysmem, start, heap0}:
       start
 
 def boot.replid(+b: Boot) -> String:
   match b:
-    case IBoot{os, pid, run, replid, exe, conf, sysmem, start, rss0}:
+    case IBoot{os, pid, run, replid, exe, conf, sysmem, start, heap0}:
       replid
+
+# the second the server started at (since 1970)
+def info.start(+i: Info) -> U32:
+  match i:
+    case IInfo{+b, l, c, inst, pk, c0, a0, a, st, ex, rw}:
+      boot.start(b)
 
 # a seed for the server's random numbers: its run id hashed
 def info.seed(+i: Info) -> U32:
   match i:
     case IInfo{b, l, c, inst, pk, c0, a0, a, st, ex, rw}:
       match b:
-        case IBoot{os, pid, +run, replid, exe, conf, sysmem, start, rss0}:
+        case IBoot{os, pid, +run, replid, exe, conf, sysmem, start, heap0}:
           String.hash(run)
 
 def on.persistence(on: Bool, +items: List<&2, C.CItem>, +i: Info, +now: Nat) -> String:
@@ -1041,10 +1150,10 @@ def on.persistence(on: Bool, +items: List<&2, C.CItem>, +i: Info, +now: Nat) -> 
     case False{} _:
       ""
 
-def on.stats(on: Bool, +i: Info) -> String:
+def on.stats(on: Bool, +i: Info, +now: Nat) -> String:
   match on i:
     case True{} IInfo{b, +l, +c, +inst, pk, +c0, a0, a, +st, +ex, rw}:
-      sec.stats.go(c, inst, Nat.sub(live.conns(l), c0), stats.total(st), exp.n(ex))
+      sec.stats.go(c, inst, Nat.sub(live.conns(l), c0), stats.total(st), exp.n(ex), ex, now)
     case False{} _:
       ""
 
@@ -1098,7 +1207,7 @@ def text(args: List<&2, String>, +items: List<&2, C.CItem>, +i: Info, +ds: R.Ds)
     on.clients(sel.has(s, "clients"), items, i),
     on.memory(sel.has(s, "memory"), items, i),
     on.persistence(sel.has(s, "persistence"), items, i, R.ds.now(ds)),
-    on.stats(sel.has(s, "stats"), i),
+    on.stats(sel.has(s, "stats"), i, R.ds.now(ds)),
     on.replication(sel.has(s, "replication"), items, i),
     on.cpu(sel.has(s, "cpu"), i),
     on.head(Bool.or(sel.has(s, "module_list"), sel.has(s, "modules")), "# Modules\r\n"),

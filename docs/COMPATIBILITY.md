@@ -21,8 +21,8 @@ on; an error between tests still ends the unit). Three instances of the server u
 test take one unit at a time each, each in a directory of its own, and each unit runs on
 an instance started for it, so that it starts from the server's defaults whatever the
 unit before it left (a test that fails before it sets back a parameter it changed
-leaves the change: unit/pubsub's test of `evicted` events, which BendKV never sends,
-leaves `maxmemory 1` and `allkeys-lru`, under which a unit/type/incr run after it on
+leaves the change: unit/pubsub's test of `evicted` events, when BendKV did not send them,
+left `maxmemory 1` and `allkeys-lru`, under which a unit/type/incr run after it on
 the same instance found INCR's shared integers counted once). Before each group of
 tests the suite empties the server (FLUSHALL, FUNCTION FLUSH) and sets the parameters
 the group asks for with CONFIG SET.
@@ -39,8 +39,15 @@ make suite REDIS_SRC=../redis      # both runs and the table, in build/suite/
 ## The result
 
 Redis 7.0.15, October 2026. Of the 1,677 tests Redis passes in this mode, BendKV passes
-**797 (47.5%)**; of the 1,172 in the units of what BendKV has, 792 (68%: 203 tests of
-unit/type/list and 82 of unit/type/zset wait for RESP3). MONITOR (section 3zt of
+**805 (48.0%)**; of the 1,172 in the units of what BendKV has, 798 (68%: 203 tests of
+unit/type/list and 82 of unit/type/zset wait for RESP3). maxmemory and its eviction
+(section 3zw of [FINDINGS.md](FINDINGS.md)) brought 8: unit/pubsub's test of `evicted`
+events, and the two after it that it held back (CONFIG GET and SET of the flags, and
+`new` events); unit/multi's DISCARD past maxmemory and its EXEC aborted after a command
+refused for memory while it queued; unit/introspection-2's test that TTL, TYPE and
+EXISTS leave a key's last use as it was; and unit/lazyfree's two tests of the memory
+UNLINK and FLUSHDB ASYNC give back, now that `used_memory` is what the heap's live values
+hold. MONITOR (section 3zt of
 [FINDINGS.md](FINDINGS.md)) brought 3: unit/introspection passes 25 of its 28 tests, a
 monitor's lines of the commands that run, and a transaction's in order, with its EXEC's
 line also when an error while it queued aborted it (of the other three, two look in a
@@ -57,14 +64,15 @@ pass there (1,677 of 1,757; the test of INCR's shared integers in unit/type/incr
 on BendKV again, as it did before an instance left with `allkeys-lru` ran it). Pub/Sub
 and keyspace notifications (section 3zr of [FINDINGS.md](FINDINGS.md)) brought 26:
 unit/pubsub passes 25 of its 30 tests (of the other five, one runs over RESP3, one needs
-streams, and the test of `evicted` events waits for an eviction that never comes, as
-BendKV has no maxmemory, so the two after it do not run: CONFIG GET and SET of the flags,
+streams, and the test of `evicted` events waited for an eviction that never came, as
+BendKV had no maxmemory then, so the two after it did not run: CONFIG GET and SET of the flags,
 and `new` events), and unit/other the test of RESET clearing a client's Pub/Sub state.
 Transactions (section 3zq of [FINDINGS.md](FINDINGS.md)) brought 27: unit/multi passes 25
 of the 53 tests Redis passes (of the other 28, 12 read the replication stream with SYNC,
 4 need Lua's script timeout, 4 maxmemory's OOM, one SORT and one XGROUP, and 6 fail on
 `MULTI calls can not be nested` or `WATCH inside MULTI is not allowed`, their client left
-in MULTI by the test of OOM before them), unit/other RESET's test of the MULTI state, and
+in MULTI by the test of OOM before them; since maxmemory, two of the four pass, and the
+client is left in MULTI by REPLICAOF instead), unit/other RESET's test of the MULTI state, and
 unit/type/set the test of SMOVE onto a set that holds the member, which watches it (all
 94 of its tests now); unit/protocol's regression test of argument rewriting (issue 9598,
 which runs a transaction) passes too, but Redis fails it in this mode, so it does not
@@ -123,7 +131,8 @@ and LPUSH). Ranges and bits (GETRANGE, SETRANGE, GETBIT, SETBIT, BITCOUNT, BITPO
 brought 49 (unit/bitops 30 of its 45 then). TOUCH, TIME and OBJECT brought 4 (TOUCH's two
 in unit/introspection-2, a PEXPIREAT at a time TIME gave, and INCR's shared integers seen
 by OBJECT REFCOUNT); one test more now fails on what BendKV does not keep, rather than on
-a missing command: OBJECT IDLETIME is 0, where the test waits three seconds for it.
+a missing command: OBJECT IDLETIME was 0, where the test waits three seconds for it (it
+passes since maxmemory).
 MSETNX, RENAME and RENAMENX brought 13, and COPY 7, its tests on strings: unit/keyspace
 passes 42 of its 52 tests (the rest need other types, or DEBUG). BITOP and LCS brought
 19: unit/bitops passes 43 of its 45, unit/type/string 70 of its 77 (the rest need other
@@ -141,12 +150,13 @@ need MULTI and WATCH, Lua or lists (then).
 
 | area | units | Redis passes | BendKV passes |
 |---|---|---:|---:|
-| what BendKV has: the protocol, connections and clients, the keyspace and its databases, strings and their ranges, bits and fields, counters and floats, hashes, lists, sets, sorted sets and the commands that wait on them, times to live, transactions, pub/sub and keyspace notifications, introspection | protocol, quit, keyspace, type/string, type/incr, type/hash, type/list, list-2, list-3, type/set, type/zset, scan, bitops, bitfield, expire, multi, pubsub, introspection, introspection-2, other, info-command | 1172 | **792** |
-| data types, not yet | geo, hyperloglog, sort, dump, lazyfree, violations | 147 | 2 |
+| what BendKV has: the protocol, connections and clients, the keyspace and its databases, strings and their ranges, bits and fields, counters and floats, hashes, lists, sets, sorted sets and the commands that wait on them, times to live, transactions, pub/sub and keyspace notifications, introspection | protocol, quit, keyspace, type/string, type/incr, type/hash, type/list, list-2, list-3, type/set, type/zset, scan, bitops, bitfield, expire, multi, pubsub, introspection, introspection-2, other, info-command | 1172 | **798** |
+| data types, not yet | geo, hyperloglog, sort, dump, lazyfree, violations | 147 | 4 |
 | client-side caching, CLIENT PAUSE, the latency monitor, the slow log, the query buffer, not yet | tracking, pause, latency-monitor, slowlog, querybuf | 48 | 0 |
 | out of scope: Lua scripts, functions, streams | scripting, functions, type/stream, type/stream-cgroups | 310 | 3 |
 
-Most of the 5 passes outside the first row pass without the feature they test: they expect an error and take
+Of the 7 passes outside the first row, the two of unit/lazyfree pass on BendKV's account of
+its heap; most of the other 5 pass without the feature they test: they expect an error and take
 BendKV's "unknown command" for one, or catch every error and only check that the server
 still answers.
 
@@ -166,15 +176,15 @@ pubsubshard, shutdown, tls, type/list-common, wait):
 | unit/hyperloglog | 20 | 20 | 0 |
 | unit/info-command | 3 | 3 | 3 |
 | unit/introspection | 28 | 28 | 25 |
-| unit/introspection-2 | 43 | 43 | 16 |
+| unit/introspection-2 | 43 | 43 | 17 |
 | unit/keyspace | 53 | 52 | 49 |
 | unit/latency-monitor | 14 | 13 | 0 |
-| unit/lazyfree | 4 | 4 | 0 |
-| unit/multi | 60 | 53 | 25 |
+| unit/lazyfree | 4 | 4 | 2 |
+| unit/multi | 60 | 53 | 27 |
 | unit/other | 22 | 19 | 15 |
 | unit/pause | 14 | 14 | 0 |
 | unit/protocol | 25 | 17 | 17 |
-| unit/pubsub | 30 | 30 | 25 |
+| unit/pubsub | 30 | 30 | 28 |
 | unit/querybuf | 2 | 2 | 0 |
 | unit/quit | 3 | 3 | 3 |
 | unit/replybufsize | 1 | 0 | 0 |
@@ -194,34 +204,32 @@ pubsubshard, shutdown, tls, type/list-common, wait):
 | unit/type/string | 77 | 77 | 74 |
 | unit/type/zset | 291 | 289 | 192 |
 | unit/violations | 1 | 1 | 0 |
-| **all** | **1757** | **1677** | **797 (47.5%)** |
+| **all** | **1757** | **1677** | **805 (48.0%)** |
 
-## Why the other 880 fail
+## Why the other 872 fail
 
-- **417 stop on a command BendKV does not have.** By the number of tests each one stops:
+- **418 stop on a command BendKV does not have.** By the number of tests each one stops:
   FUNCTION LOAD 124, XADD 61, SORT 46, GEOADD 38, PFADD 19, SYNC 17 (tests that read
   the replication stream, 12 of them unit/multi's of what a transaction propagates),
   XGROUP 13, GEORADIUS 10, CLIENT PAUSE 10, DUMP 9, SLOWLOG 9, and 25 more below nine
   (61 tests).
-- **382 never ran**: their unit ended before them, on a command outside any test:
+- **379 never ran**: their unit ended before them, on a command outside any test:
   LATENCY RESET (latency-monitor), HELLO 3 (type/list and type/zset run their later tests
   over RESP3 and then over RESP2), `CONFIG SET appendonly yes` (type/stream; BendKV turns
   its append-only file on only at its start); or on a test that waits for a reply that
   never comes, because the command before it is missing (tracking: the invalidations of
-  CLIENT TRACKING; scripting: the second line of FUNCTION LOAD's reply, read raw) or
-  because BendKV evicts nothing (pubsub: the `evicted` event, 3 tests). One test runs
+  CLIENT TRACKING; scripting: the second line of FUNCTION LOAD's reply, read raw). One test runs
   only on a server that names jemalloc as its allocator.
-- **81 fail with another error.** 28 fail on a client left in MULTI by a test before them
+- **75 fail with another error.** 25 fail on a client left in MULTI by a test before them
   that failed inside a transaction on what BendKV does not have: GEOADD in
   unit/introspection-2's test of command stats for MULTI (every test of COMMAND after it
   runs in that state, and the 12 of them that passed before answer QUEUED now),
-  maxmemory's OOM in unit/multi (9, the test itself among them), XADD in unit/type/stream
+  REPLICAOF in unit/multi (6), XADD in unit/type/stream
   (4), SORT in unit/sort (2) and CLIENT PAUSE in unit/pause (1); 17 need RESP3; and the
   others fail for what BendKV does not have yet: COMMAND GETKEYS of commands it does not
   have, Lua (a script's BUSY, the statistics of EVAL, a script's calls in a monitor),
-  DUMP, OBJECT IDLETIME (it answers 0), `rdb_changes_since_last_save` (0), the memory
-  UNLINK and FLUSHDB ASYNC give back (BendKV's used_memory is its resident memory, which
-  its heap keeps and uses again), the size of a client's query buffer (CLIENT LIST's
+  DUMP, replication (`min-replicas-to-write`, EXEC's NOREPLICAS),
+  `rdb_changes_since_last_save` (0), the size of a client's query buffer (CLIENT LIST's
   qbuf, 0), streams, HINCRBY past 14 digits, and MOVE's basic usage (above). (Before
   times to live, SET's options failed 30 more tests here, answered `ERR syntax error`.
   INFO's statistics per command, which `info-command` looked for, made 3 more tests pass;
@@ -229,7 +237,7 @@ pubsubshard, shutdown, tls, type/list-common, wait):
   TYPE, and its guarantee under a load of writes, and RANDOMKEY's three.)
 
 So the tests are where the plan goes next: RESP3, which type/list (203 tests) and
-type/zset (82) need before their later tests run, maxmemory, and the data types not yet
+type/zset (82) need before their later tests run, and the data types not yet
 there (147 tests). Scripts, functions and streams (310 tests) stay out of scope.
 
 ## What it found
