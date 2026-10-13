@@ -8,9 +8,12 @@
 # first, last and step of the keys, flags hidden from the reply). So the
 # facts are read where they come out: --extract starts a redis-server
 # (7.0.15, from the PATH) on a spare port, asks it COMMAND INFO and
-# COMMAND DOCS of BendKV's commands and ACL CAT, and writes the replies
-# to tools/data/redis-commands.json, kept in the repository, so the second
-# step needs no Redis. Only the subcommands BendKV has are kept (BendKV's
+# COMMAND DOCS of BendKV's commands and ACL CAT in RESP3 (HELLO 3), whose
+# replies say which arrays are maps and sets, and writes the replies to
+# tools/data/redis-commands.json, kept in the repository, so the second
+# step needs no Redis. The table holds them typed (R.RMap, R.RSet), as
+# BendKV answers them in RESP3; RESP2 writes them as the arrays Redis
+# writes in RESP2. Only the subcommands BendKV has are kept (BendKV's
 # CLIENT has thirteen of Redis's sixteen), in the order of their names: Redis
 # lists commands in the order of a hash table with a random seed, so no
 # order is Redis's own. The second step writes the block between
@@ -99,24 +102,31 @@ class Conn:
         return line
 
     # a reply, with its kind kept: a status is {"+": s}, a bulk string a
-    # string, a null bulk None, an integer an int, an array a list
+    # string, a null None, an integer an int, an array a list, a map
+    # {"%": its keys and values in turn}, a set {"~": its items}
     def read(self):
         line = self.line()
         kind, rest = line[:1], line[1:].decode()
         if kind == b"+":
             return {"+": rest}
+        if kind == b"_":
+            return None
+        if kind == b"%":
+            return {"%": [self.read() for _ in range(2 * int(rest))]}
+        if kind == b"~":
+            return {"~": [self.read() for _ in range(int(rest))]}
         if kind == b"-":
             raise SystemExit("gen_commands.py: Redis answered an error: " + rest)
         if kind == b":":
             return int(rest)
-        if kind == b"$":
+        if kind in (b"$", b"="):
             n = int(rest)
             if n < 0:
                 return None
             while len(self.buf) < n + 2:
                 self.buf += self.s.recv(1 << 16)
             v, self.buf = self.buf[:n], self.buf[n + 2:]
-            return v.decode()
+            return v.decode()[4:] if kind == b"=" else v.decode()
         if kind == b"*":
             n = int(rest)
             return None if n < 0 else [self.read() for _ in range(n)]
@@ -133,8 +143,33 @@ class Conn:
 def pairs(m):
     return list(zip(m[0::2], m[1::2]))
 
-# a command's COMMAND INFO with only BendKV's subcommands, by name
+# a reply as RESP2 has it: a map's keys and values, a set's items, as an
+# array
+def down(v):
+    if isinstance(v, dict) and "%" in v:
+        return [down(x) for x in v["%"]]
+    if isinstance(v, dict) and "~" in v:
+        return [down(x) for x in v["~"]]
+    if isinstance(v, list):
+        return [down(x) for x in v]
+    return v
+
+# the facts as RESP2 has them (each command's "info" and "docs"), with
+# the replies as RESP3 types them kept beside (its "info3" and "docs3")
+def load():
+    facts = json.loads(JSON.read_text())
+    for c in facts["commands"].values():
+        c["info3"], c["docs3"] = c["info"], c["docs"]
+        c["info"], c["docs"] = down(c["info"]), down(c["docs"])
+    return facts
+
+# a command's COMMAND INFO with only BendKV's subcommands, by name (in
+# RESP3 a command without subcommands has an empty set of them)
 def keep_info(info, subs):
+    if isinstance(info[9], dict):
+        if subs or info[9]["~"]:
+            raise SystemExit("gen_commands.py: unexpected subcommands of " + info[0])
+        return info
     kept = [x for x in info[9] if x[0].split("|")[1] in subs]
     if len(kept) != len(subs):
         raise SystemExit("gen_commands.py: Redis lacks a subcommand of " + info[0])
@@ -142,12 +177,12 @@ def keep_info(info, subs):
 
 def keep_docs(docs, subs):
     out = []
-    for k, v in pairs(docs):
+    for k, v in pairs(docs["%"]):
         if k == "subcommands":
-            kept = sorted((p for p in pairs(v) if p[0].split("|")[1] in subs), key=lambda p: p[0])
-            v = [x for p in kept for x in p]
+            kept = sorted((p for p in pairs(v["%"]) if p[0].split("|")[1] in subs), key=lambda p: p[0])
+            v = {"%": [x for p in kept for x in p]}
         out += [k, v]
-    return out
+    return {"%": out}
 
 def extract():
     port = int(os.environ.get("GEN_PORT", "6499"))
@@ -160,6 +195,8 @@ def extract():
                 break
             except OSError:
                 time.sleep(0.05)
+        if c.ask("HELLO", "3")["%"][5] != 3:
+            raise SystemExit("gen_commands.py: Redis did not switch to RESP3")
         version = [l for l in c.ask("INFO", "server").split("\r\n") if l.startswith("redis_version:")][0]
         if version != "redis_version:7.0.15":
             raise SystemExit("gen_commands.py: needs Redis 7.0.15, found " + version)
@@ -167,7 +204,7 @@ def extract():
         cmds = {}
         for name, subs in sorted(COMMANDS.items()):
             info = c.ask("COMMAND", "INFO", name)[0]
-            docs = c.ask("COMMAND", "DOCS", name)
+            docs = c.ask("COMMAND", "DOCS", name)["%"]
             cmds[name] = {"info": keep_info(info, subs), "docs": keep_docs(docs[1], subs)}
     finally:
         srv.terminate()
@@ -207,8 +244,12 @@ def bint(n):
 def blist(xs):
     return "[" + ", ".join(xs) + "]"
 
-# a reply as Redis wrote it
+# a reply as Redis wrote it in RESP3
 def reply(v):
+    if isinstance(v, dict) and "%" in v:
+        return f"R.RMap{{{blist([reply(x) for x in v['%']])}}}"
+    if isinstance(v, dict) and "~" in v:
+        return f"R.RSet{{{blist([reply(x) for x in v['~']])}}}"
     if isinstance(v, dict):
         return f"R.RStatus{{{bstr(v['+'])}}}"
     if isinstance(v, str):
@@ -233,7 +274,9 @@ def kspec(name, ks):
     return (f"KSpec{{{blist([bstr(x) for x in statuses(m['flags'])])}, {b['index']}n, "
             f"{bint(f['lastkey'])}, {f['keystep']}n, {f['limit']}n}}")
 
-def desc(info, docs):
+# a command's description and documentation, as RESP2 has them (for
+# what they say) and as RESP3 types them (info3, docs3: for its replies)
+def desc(info, docs, info3, docs3):
     name, flags = info[0], statuses(info[2])
     cats = [c[1:] for c in statuses(info[6])]
     if name in KEYNUM:
@@ -245,8 +288,8 @@ def desc(info, docs):
             raise SystemExit(f"gen_commands.py: how does Redis find the keys of {name}?")
         way = GETKEYS.get(name, "KBySpecs{}")
     nokeys = "True{}" if "no_mandatory_keys" in flags else "False{}"
-    fields = [reply(x) for x in info[:9]]
-    doc = [reply(x) for k, v in pairs(docs) if k != "subcommands" for x in (k, v)]
+    fields = [reply(x) for x in info3[:9]]
+    doc = [reply(x) for k, v in pairs(docs3["%"]) if k != "subcommands" for x in (k, v)]
     return (f"Desc{{{bstr(name)}, {bint(info[1])}, {blist([bstr(c) for c in cats])}, "
             f"{blist(specs)}, {way}, {nokeys},\n    {blist(fields)},\n    {blist(doc)}}}")
 
@@ -255,13 +298,14 @@ def block(facts):
     names = sorted(facts["commands"])
     for name in names:
         c = facts["commands"][name]
-        subs = c["info"][9]
+        subs, subs3 = c["info"][9], c["info3"][9]
         subdocs = dict(pairs(dict(pairs(c["docs"])).get("subcommands", [])))
+        subdocs3 = dict(pairs(dict(pairs(c["docs3"]["%"])).get("subcommands", {"%": []})["%"]))
         if sorted(subdocs) != [x[0] for x in subs]:
             raise SystemExit(f"gen_commands.py: the subcommands of {name} differ in INFO and DOCS")
-        sd = [desc(x, subdocs[x[0]]) for x in subs]
+        sd = [desc(x, subdocs[x[0]], x3, subdocs3[x[0]]) for x, x3 in zip(subs, subs3)]
         out.append(f"def cmd.{name}() -> Top:")
-        out.append(f"  Top{{{desc(c['info'], c['docs'])},\n  {blist(sd)}}}")
+        out.append(f"  Top{{{desc(c['info'], c['docs'], c['info3'], c['docs3'])},\n  {blist(sd)}}}")
         out.append("")
     out.append("# the commands, by name")
     out.append("def table() -> List<&2, Top>:")
@@ -277,7 +321,7 @@ BEGIN, END = "# BEGIN gen_commands: table\n", "# END gen_commands: table\n"
 def generate():
     src = BEND.read_text()
     a, b = src.index(BEGIN) + len(BEGIN), src.index(END)
-    return src[:a] + block(json.loads(JSON.read_text())) + src[b:]
+    return src[:a] + block(load()) + src[b:]
 
 # Step 3: facts -> INFO's keys
 # ----------------------------
@@ -578,7 +622,7 @@ def generate_redis():
     a, b = src.index(DBEGIN) + len(DBEGIN), src.index(DEND)
     src = src[:a] + dispatch_block(parser_numbers(src), own_numbers(src)) + src[b:]
     a, b = src.index(SBEGIN) + len(SBEGIN), src.index(SEND)
-    return src[:a] + stats_block(src, json.loads(JSON.read_text())) + src[b:]
+    return src[:a] + stats_block(src, load()) + src[b:]
 
 if __name__ == "__main__":
     if sys.argv[1:] == ["--extract"]:

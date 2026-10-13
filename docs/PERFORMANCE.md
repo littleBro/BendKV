@@ -6381,3 +6381,35 @@ Redis samples its table of keys with a time; `volatile-random` takes the first k
 time from a random bucket on, which is not quite uniform. An eviction writes DEL to the
 append-only file even with `lazyfree-lazy-eviction` (Redis writes UNLINK; both replay to
 the same). Evictions are about ten times slower than Redis's.
+
+## 49. RESP3
+
+**What there is.** RESP3 as Redis 7.0.15 speaks it (section 3zx of FINDINGS.md): `HELLO 3`
+switches a connection, and its replies are written as Redis writes them in RESP3, typed
+where Redis types them (nulls, doubles, maps, sets, pairs, verbatim texts, pushes). The
+replies are typed where they are made (`R.Reply` has eight constructors more, after the
+eight it had), and two encoders write them: RESP2's, which writes the new ones as it
+wrote what they replace, and RESP3's. The connection's protocol is a field of `S.Conn`.
+
+**What RESP2 costs.** A RESP2 client's replies are the bytes they were, written by the
+encoder they had. The new constructors come after the old, so that the old keep their
+tags and GET's encoder its code. GET, SET and INCR take 3,337, 4,259 and 4,546
+instructions (3,328, 4,252 and 4,514 before, counted in turn, `tools/perf_guard.sh`): the
+batch reads the connection's protocol to pick its encoder, and an answer that holds a
+switch of protocol is cut at it.
+
+**What RESP3 costs.** The same. With one client that pipelines 20,000 requests 16 at a
+time (`CLIENTS=1 RB_FLAGS=-3 tools/callgrind_req.sh`), GET takes 3,550 instructions in
+RESP3 and 3,548 in RESP2, SET 4,483 and 4,471, INCR 4,777 and 4,755. The two encoders
+take the same instructions for a reply, about 32 for GET's bulk, within one: a build with
+symbols (`-g`) counted by the line, under callgrind, gives RESP3's encoder 645,169
+instructions for its 20,140 replies and RESP2's 634,152 for 20,000.
+
+With redis-benchmark's 20 clients of 1,000 requests each, RESP3 takes 157 instructions
+more per request (GET 3,489 against 3,332, the build with symbols). Each client sends
+`HELLO 3` with its first 16 requests, and a batch with HELLO runs the general way, as a
+batch with any command of the connection does: the session's general path ran 171 times
+as often as with RESP2, whose only commands on it are redis-benchmark's two CONFIG GETs
+(342 commands against 2). That is about 150,000 instructions for each client's first 17
+commands, most of them taking apart and dropping the session's records; a client that
+sends `HELLO 3` as it connects, as go-redis and Lettuce do, pays it once.

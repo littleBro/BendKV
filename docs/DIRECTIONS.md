@@ -313,13 +313,13 @@ Where performance and proof meet: **batched execution under proved laws.**
    (HELLO, SELECT, CLIENT, AUTH, INFO, COMMAND, CONFIG; done), CLIENT LIST, INFO and KILL
    (done, section 3zs), SCAN and RANDOMKEY (done), MONITOR (done, section 3zt), the
    log's rewrite (done, section 3zv), maxmemory and its eviction (done, section 3zw),
-   and RESP3 (next), measured by Redis's own test suite run against BendKV
-   and by client libraries' tests. Lua, streams, cluster,
+   and RESP3 (done, section 3zx), measured by Redis's own test suite run against BendKV
+   and by client libraries' tests (next). Lua, streams, cluster,
    replication and modules are out of scope. The suite's count: of the 1,677 tests
-   Redis 7.0.15 passes against a server it did not start, BendKV passes 805, 798 of the
-   1,172 in what it has ([COMPATIBILITY.md](COMPATIBILITY.md)); RESP3 now holds back the
-   most tests of what it has (203 of unit/type/list's and 82 of unit/type/zset's run
-   after their HELLO 3).
+   Redis 7.0.15 passes against a server it did not start, BendKV passes 1,097, 1,090 of
+   the 1,172 in what it has ([COMPATIBILITY.md](COMPATIBILITY.md)); most of the other 82
+   need commands BendKV does not have (replication's SYNC, Lua, SORT, DUMP, streams) or
+   run after a test that left its client in MULTI on one of them.
    What maxmemory left to do (section 3zw): a trie keeps its nodes when its keys go, up
    to 9 MB, so the eviction evicts more keys than Redis would to get within a limit, and
    its samples walk empty buckets (an eviction takes ten times Redis's time). Pruning

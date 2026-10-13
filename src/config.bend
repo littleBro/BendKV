@@ -1464,7 +1464,7 @@ def get.reply(gs: List<&2, Got>, acc: List<&2, R.Reply>) -> List<&2, R.Reply>:
 
 # CONFIG GET parameter [parameter ...]: a flat list of keys and values
 def config.get(args: List<&2, String>, +items: List<&2, CItem>) -> R.Reply:
-  R.RArray{get.reply(get.args(args, items, Nil{}), Nil{})}
+  R.RMap{get.reply(get.args(args, items, Nil{}), Nil{})}
 
 # CONFIG SET
 # ----------

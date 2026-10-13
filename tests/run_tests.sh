@@ -28,8 +28,8 @@
 # for byte against Redis, INFO's sections and fields, its statistics per
 # command, COMMAND, SCAN and RANDOMKEY, keys that expire, numbers at
 # their edges in every argument that is one, BITFIELD's fields at
-# random, hashes, lists, sets and sorted sets; then stops
-# them. Then the append-only file: a
+# random, hashes, lists, sets and sorted sets, and RESP3 (its scenarios,
+# and the differential tests again in RESP3); then stops them. Then the append-only file: a
 # random stream, a restart from the file, the keyspace compared; then
 # the file's last entry cut short, as a crash in a write leaves it, a
 # restart that cuts it back, and the keyspace compared again. Then the
@@ -93,6 +93,12 @@ for n in "" post send "post build/test.aof everysec"; do
     python3 tests/list_test.py --bendkv "$PORT" --redis "$REDIS_PORT"
     python3 tests/set_test.py --bendkv "$PORT" --redis "$REDIS_PORT"
     python3 tests/zset_test.py --bendkv "$PORT" --redis "$REDIS_PORT"
+    # RESP3: its scenarios, then the differential tests again with each
+    # connection in RESP3 (HELLO 3)
+    python3 tests/resp3_test.py --bendkv "$PORT" --redis "$REDIS_PORT"
+    for t in ttl numbers bitfield hash list set zset; do
+      RESP=3 python3 "tests/${t}_test.py" --bendkv "$PORT" --redis "$REDIS_PORT"
+    done
   fi
   if [ "$n" = send ]; then
     python3 tests/protocol_test.py --bendkv "$PORT" --redis "$REDIS_PORT"
@@ -102,6 +108,11 @@ for n in "" post send "post build/test.aof everysec"; do
     redis-cli -p "$PORT" flushall > /dev/null
     python3 tests/diff_test.py --bendkv "$PORT" --redis "$REDIS_PORT" --rounds "$ROUNDS" --seed "$seed"
   done
+  if [ -z "$n" ]; then
+    redis-cli -p "$REDIS_PORT" flushall > /dev/null
+    redis-cli -p "$PORT" flushall > /dev/null
+    RESP=3 python3 tests/diff_test.py --bendkv "$PORT" --redis "$REDIS_PORT" --rounds "$ROUNDS" --seed 4
+  fi
   python3 tests/concurrency_test.py --port "$PORT"
   kill "$BKV"
   wait "$BKV" 2>/dev/null || true

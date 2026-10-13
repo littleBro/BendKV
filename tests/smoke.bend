@@ -7,7 +7,8 @@
 # the session's to answer, after it checks the client's authentication,
 # as Redis does: the database alone answers that the command is the
 # connection's. With BENDKV_CHECK_BREAK=smoke the first line expected is
-# a wrong one, to show that a difference fails the run.
+# a wrong one, to show that a difference fails the run. Then replies
+# typed as RESP3 types them, written in RESP2 and in RESP3.
 # Run: bend tests/smoke.bend
 import Base
 import ../src/map.bend as KV
@@ -87,6 +88,34 @@ def want(+mode: String) -> List<&2, String>:
    "-ERR a command of the connection, not of the database\\r\\n",
    "rest: *2\\r\\n$3\\r\\nGET\\r\\n$3\\r\\nfo"]
 
+# Replies typed as RESP3 types them, each written in RESP2 then in RESP3
+# (resp.bend, Replies), and switches of the protocol in a batch's replies
+def typed() -> List<&2, R.Reply>:
+  [R.RNull{}, R.RNullA{}, R.RDbl{"1.5"}, R.RMap{[R.RBulk{"a"}, R.r_int(1n)]}, R.RSet{[R.RBulk{"a"}]},
+   R.RPairs{[R.RPair{[R.RBulk{"m"}, R.RDbl{"2"}]}]}, R.RVerb{"x"}, R.RPush{[R.RBulk{"m"}]}]
+
+def typed.lines(rs: List<&2, R.Reply>) -> List<&2, String>:
+  match rs:
+    case Nil{}:
+      [escape(P.encode_as(False{}, [R.RNull{}, R.RSw{True{}, [R.RNull{}]}, R.RNull{}])),
+       escape(P.encode_as(True{}, [R.RNull{}, R.RSw{False{}, [R.RNull{}]}, R.RNull{}])),
+       escape(P.encode_as(False{}, [R.RSw{True{}, Nil{}}, R.RNull{}]))]
+    case Con{+r, more}:
+      escape(P.encode_as(False{}, [r])) <> (escape(P.encode_as(True{}, [r])) <> typed.lines(more))
+
+def typed.want() -> List<&2, String>:
+  ["$-1\\r\\n", "_\\r\\n",
+   "*-1\\r\\n", "_\\r\\n",
+   "$3\\r\\n1.5\\r\\n", ",1.5\\r\\n",
+   "*2\\r\\n$1\\r\\na\\r\\n:1\\r\\n", "%1\\r\\n$1\\r\\na\\r\\n:1\\r\\n",
+   "*1\\r\\n$1\\r\\na\\r\\n", "~1\\r\\n$1\\r\\na\\r\\n",
+   "*2\\r\\n$1\\r\\nm\\r\\n$1\\r\\n2\\r\\n", "*1\\r\\n*2\\r\\n$1\\r\\nm\\r\\n,2\\r\\n",
+   "$1\\r\\nx\\r\\n", "=5\\r\\ntxt:x\\r\\n",
+   "*1\\r\\n$1\\r\\nm\\r\\n", ">1\\r\\n$1\\r\\nm\\r\\n",
+   "$-1\\r\\n_\\r\\n_\\r\\n",
+   "_\\r\\n$-1\\r\\n$-1\\r\\n",
+   "_\\r\\n"]
+
 # where each line got differs from the one wanted ("" where they agree),
 # the lines numbered from i
 def diff.line(+i: Nat, +got: String, +want: String) -> String:
@@ -142,4 +171,4 @@ def env.or(r: Result<&1, &1, U32 & String, String>) -> String:
 def main() -> IO(Unit):
   do IO<Unit>:
     r : Result<&1, &1, U32 & String, String> <- IO.get_env("BENDKV_CHECK_BREAK")
-    check(run(P.parse(buf())), want(env.or(r)))
+    check(List.append(&2, String, run(P.parse(buf())), typed.lines(typed())), List.append(&2, String, want(env.or(r)), typed.want()))

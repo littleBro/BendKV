@@ -19,7 +19,7 @@ import random
 import sys
 import time
 
-from diff_test import Conn
+from diff_test import Conn, flat_values
 
 bad = 0
 n = 0
@@ -39,14 +39,15 @@ def pairs(x):
     return sorted(zip(xs[0::2], xs[1::2]))
 
 
+# (HGETALL answers a map in RESP3: its kind is kept and compared)
 def norm(cmd, x, table):
     name = cmd[0].upper()
-    if not table or x[0] != b"*":
+    if not table or x[0] not in (b"*", b"%"):
         return x
     if name == b"HGETALL":
-        return (b"*", pairs(x))
+        return (x[0], pairs(x))
     if name in (b"HKEYS", b"HVALS"):
-        return (b"*", sorted(x[1]))
+        return (x[0], sorted(x[1]))
     return x
 
 
@@ -105,7 +106,7 @@ def rand_ok(b, r, cmd, x, y):
         return
     wv = len(cmd) > 3
     cnt = int(cmd[2])
-    xs = [v for _, v in x[1]]
+    xs = flat_values(x)
     fields = xs[0::2] if wv else xs
     ok = len(fields) == (abs(cnt) if cnt < 0 else min(cnt, len(h))) and all(f in h for f in fields)
     if cnt >= 0:

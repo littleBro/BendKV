@@ -1,8 +1,9 @@
-# resp.bend: the RESP2 wire format. Requests are arrays of bulk strings
+# resp.bend: the RESP wire format. Requests are arrays of bulk strings
 # (what redis-cli and every client library send) or inline lines (what a
-# human types into nc); replies are encoded per their kind. A buffer may
-# hold several pipelined requests and end in the middle of one: parse
-# returns the complete ones and keeps the rest for the next read.
+# human types into nc); replies are encoded per their kind, in RESP2 or,
+# for a client that asked for it (HELLO 3), RESP3. A buffer may hold
+# several pipelined requests and end in the middle of one: parse returns
+# the complete ones and keeps the rest for the next read.
 #
 # Strings here are byte strings: each Char holds one byte (0..255), so a
 # bulk's length in bytes is its String.length.
@@ -1066,7 +1067,15 @@ def int_into(i: R.Int, out: String) -> String:
     case R.INeg{n}:
       ":-" ++ Nat.show(1n+n) ++ crlf() ++ out
 
-# replies before out; an array's items come before the replies after it
+# an aggregate's header: its mark and its count
+def agg_into(+m: String, +n: Nat, out: String) -> String:
+  m ++ Nat.show(n) ++ crlf() ++ out
+
+# RESP2: replies before out; an array's items come before the replies
+# after it. A double and a verbatim text go out as bulks, a map, a set,
+# pairs and a push as arrays (pairs with their items flat). A switch of
+# protocol goes out as its reply: the switch itself is the batch's
+# (encode_as).
 def encode_onto(rs: List<&2, R.Reply>, out: String) -> String:
   match rs:
     case Nil{}:
@@ -1087,9 +1096,111 @@ def encode_onto(rs: List<&2, R.Reply>, out: String) -> String:
       ":" ++ s ++ crlf() ++ encode_onto(rest, out)
     case Con{R.RNullA{}, rest}:
       "*-1\r\n" ++ encode_onto(rest, out)
+    case Con{R.RDbl{s}, rest}:
+      bulk_into(s, encode_onto(rest, out))
+    case Con{R.RMap{+xs}, rest}:
+      agg_into("*", List.length(&2, R.Reply, xs), encode_onto(xs, encode_onto(rest, out)))
+    case Con{R.RSet{+xs}, rest}:
+      agg_into("*", List.length(&2, R.Reply, xs), encode_onto(xs, encode_onto(rest, out)))
+    case Con{R.RPairs{+xs}, rest}:
+      agg_into("*", Nat.mul(List.length(&2, R.Reply, xs), 2n), encode_onto(xs, encode_onto(rest, out)))
+    case Con{R.RPair{xs}, rest}:
+      encode_onto(xs, encode_onto(rest, out))
+    case Con{R.RVerb{s}, rest}:
+      bulk_into(s, encode_onto(rest, out))
+    case Con{R.RPush{+xs}, rest}:
+      agg_into("*", List.length(&2, R.Reply, xs), encode_onto(xs, encode_onto(rest, out)))
+    case Con{R.RSw{r3, xs}, rest}:
+      encode_onto(xs, encode_onto(rest, out))
+
+# RESP3 (Redis's networking.c): a null, and a null array, as _; a double
+# after a comma; a map's pairs counted after %, a set's items after ~, a
+# push's after >; pairs as an array of arrays of two; a verbatim text as
+# = with its length and txt: before it. The rest as RESP2.
+def encode3_onto(rs: List<&2, R.Reply>, out: String) -> String:
+  match rs:
+    case Nil{}:
+      out
+    case Con{R.RStatus{s}, rest}:
+      "+" ++ s ++ crlf() ++ encode3_onto(rest, out)
+    case Con{R.RError{s}, rest}:
+      "-" ++ err_line(s) ++ crlf() ++ encode3_onto(rest, out)
+    case Con{R.RInt{i}, rest}:
+      int_into(i, encode3_onto(rest, out))
+    case Con{R.RBulk{s}, rest}:
+      bulk_into(s, encode3_onto(rest, out))
+    case Con{R.RNull{}, rest}:
+      "_\r\n" ++ encode3_onto(rest, out)
+    case Con{R.RArray{+xs}, rest}:
+      agg_into("*", List.length(&2, R.Reply, xs), encode3_onto(xs, encode3_onto(rest, out)))
+    case Con{R.RIntS{s}, rest}:
+      ":" ++ s ++ crlf() ++ encode3_onto(rest, out)
+    case Con{R.RNullA{}, rest}:
+      "_\r\n" ++ encode3_onto(rest, out)
+    case Con{R.RDbl{s}, rest}:
+      "," ++ s ++ crlf() ++ encode3_onto(rest, out)
+    case Con{R.RMap{+xs}, rest}:
+      agg_into("%", Nat.div(List.length(&2, R.Reply, xs), 2n), encode3_onto(xs, encode3_onto(rest, out)))
+    case Con{R.RSet{+xs}, rest}:
+      agg_into("~", List.length(&2, R.Reply, xs), encode3_onto(xs, encode3_onto(rest, out)))
+    case Con{R.RPairs{+xs}, rest}:
+      agg_into("*", List.length(&2, R.Reply, xs), encode3_onto(xs, encode3_onto(rest, out)))
+    case Con{R.RPair{+xs}, rest}:
+      agg_into("*", List.length(&2, R.Reply, xs), encode3_onto(xs, encode3_onto(rest, out)))
+    case Con{R.RVerb{+s}, rest}:
+      "=" ++ Nat.show(Nat.add(String.length(s), 4n)) ++ crlf() ++ "txt:" ++ s ++ crlf() ++ encode3_onto(rest, out)
+    case Con{R.RPush{+xs}, rest}:
+      agg_into(">", List.length(&2, R.Reply, xs), encode3_onto(xs, encode3_onto(rest, out)))
+    case Con{R.RSw{r3, xs}, rest}:
+      encode3_onto(xs, encode3_onto(rest, out))
 
 def encode(r: R.Reply) -> String:
   encode_onto([r], SNil{})
 
 def encode_all(rs: List<&2, R.Reply>) -> String:
   encode_onto(rs, SNil{})
+
+def encode3_all(rs: List<&2, R.Reply>) -> String:
+  encode3_onto(rs, SNil{})
+
+# replies before out, in RESP3 (r3) or RESP2
+def encode_in(r3: Bool, rs: List<&2, R.Reply>, out: String) -> String:
+  match r3:
+    case True{}:
+      encode3_onto(rs, out)
+    case False{}:
+      encode_onto(rs, out)
+
+# A batch's replies up to its first switch of protocol (newest first),
+# then the switch's protocol and the replies from it on (its own first).
+# HELLO's reply and RESET's switch: Redis writes each in the protocol it
+# switches to, and the replies after it too. A switch inside an array
+# (HELLO queued in MULTI) holds for its reply alone.
+type SwCut is Data:
+  SwNone{pre: List<&2, R.Reply>}
+  SwAt{pre: List<&2, R.Reply>, r3: Bool, post: List<&2, R.Reply>}
+
+def sw.cut(rs: List<&2, R.Reply>, acc: List<&2, R.Reply>) -> SwCut:
+  match rs:
+    case Nil{}:
+      SwNone{acc}
+    case Con{R.RSw{p, xs}, rest}:
+      SwAt{acc, p, List.append(&2, R.Reply, xs, rest)}
+    case Con{x, rest}:
+      sw.cut(rest, x <> acc)
+
+# replies before out, starting in RESP3 (r3) or RESP2, each switch taken
+# for the replies from it on; each switch takes one, so the number of
+# replies is enough fuel
+def encode_as.go(fuel: Nat, r3: Bool, c: SwCut, out: String) -> String:
+  match fuel c:
+    case _ SwNone{pre}:
+      encode_in(r3, List.reverse(&2, R.Reply, pre), out)
+    case 0n SwAt{pre, p, post}:
+      encode_in(r3, List.reverse(&2, R.Reply, pre), encode_in(p, post, out))
+    case 1n+f SwAt{pre, p, post}:
+      encode_in(r3, List.reverse(&2, R.Reply, pre), encode_as.go(f, p, sw.cut(post, Nil{}), out))
+
+# a batch's replies, its client in RESP3 (r3) or RESP2 as it began
+def encode_as(r3: Bool, +rs: List<&2, R.Reply>) -> String:
+  encode_as.go(List.length(&2, R.Reply, rs), r3, sw.cut(rs, Nil{}), SNil{})

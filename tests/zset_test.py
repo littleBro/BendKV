@@ -23,7 +23,7 @@ import random
 import sys
 import time
 
-from diff_test import Conn, rnd_zbound, rnd_zlex, rnd_lnum, rnd_zrange_opts, rnd_zop, rnd_zmpop
+from diff_test import Conn, flat_values, rnd_zbound, rnd_zlex, rnd_lnum, rnd_zrange_opts, rnd_zop, rnd_zmpop
 
 bad = 0
 n = 0
@@ -46,7 +46,7 @@ def elements(c, key):
     rep = run(c, [b"ZRANGE", key, b"0", b"-1", b"WITHSCORES"])
     if rep[0] != b"*":
         return {}
-    vs = [v for _, v in rep[1]]
+    vs = flat_values(rep)
     return dict(zip(vs[0::2], vs[1::2]))
 
 
@@ -69,14 +69,14 @@ def zrand(b, r, cmd):
             fail(cmd, x, y)
         return
     have = elements(b, key)
-    if x[0] == b"$":
+    if x[0] in (b"$", b"_"):
         if (x[1] is None) != (y[1] is None) or (x[1] is not None and x[1] not in have):
             fail(cmd, x, y)
         return
     if x[1] is None or y[1] is None or len(x[1]) != len(y[1]):
         fail(cmd, x, y)
         return
-    vs = [v for _, v in x[1]]
+    vs = flat_values(x)
     ws = any(a.upper() == b"WITHSCORES" for a in cmd[3:])
     got = vs[0::2] if ws else vs
     if any(m not in have for m in got) or (ws and any(have.get(m) != s for m, s in zip(vs[0::2], vs[1::2]))):

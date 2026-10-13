@@ -42,7 +42,7 @@ def fail(cmd, x, y):
 
 def members(c, key):
     rep = run(c, [b"SMEMBERS", key])
-    return sorted(v for _, v in rep[1]) if rep[0] == b"*" else []
+    return sorted(v for _, v in rep[1]) if rep[0] in (b"*", b"~") else []
 
 
 def encoding(c, key):
@@ -77,7 +77,7 @@ def spop(b, r, cmd):
         if x != y:
             fail(cmd, x, y)
         return
-    if x[0] == b"$":
+    if x[0] in (b"$", b"_"):
         if (x[1] is None) != (y[1] is None):
             fail(cmd, x, y)
         got = [] if x[1] is None else [x[1]]
@@ -105,7 +105,7 @@ def srand(b, r, cmd):
             fail(cmd, x, y)
         return
     have = set(members(b, key))
-    if x[0] == b"$":
+    if x[0] in (b"$", b"_"):
         if (x[1] is None) != (y[1] is None) or (x[1] is not None and x[1] not in have):
             fail(cmd, x, y)
         return
@@ -152,7 +152,7 @@ def same(b, r, cmd):
         if x[0] != y[0] or (x[0] != b":" and x != y):
             fail(cmd, x, y)
         return
-    if name in WHOLE and x[0] == y[0] == b"*" and x[1] is not None and y[1] is not None:
+    if name in WHOLE and x[0] == y[0] and x[0] in (b"*", b"~") and x[1] is not None and y[1] is not None:
         x, y = sorted(x[1]), sorted(y[1])
     if name == b"SCAN" and x[0] == y[0] == b"*":
         x, y = sorted(x[1][1][1]), sorted(y[1][1][1])

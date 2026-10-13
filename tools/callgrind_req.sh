@@ -8,7 +8,8 @@
 # (so INCR finds its counters and the caches are warm), and 20k requests
 # are counted and dumped to NAME.cg.N, all from 20 clients (CLIENTS) at
 # pipeline depth 16 (PIPE), with values of DATA bytes (3, redis-benchmark's
-# default). Prints, per request: instructions,
+# default), and the flags of RB_FLAGS (-3: each client in RESP3). Prints,
+# per request: instructions,
 # last-level data read misses, mispredicted indirect and conditional
 # branches. valgrind 3.22 cannot decode some code built with -march
 # (a register-to-register vmovq, for one).
@@ -19,11 +20,11 @@ valgrind --tool=callgrind --cache-sim=yes --branch-sim=yes --LL=2097152,16,64 \
   --callgrind-out-file="$NAME.cg" "$@" > "$NAME.log" 2>&1 &
 VP=$!
 for i in $(seq 1 60); do redis-cli -p "$PORT" ping > /dev/null 2>&1 && break; sleep 1; done
-redis-benchmark -p "$PORT" -t set -r "$KEYS" -n $((KEYS * 2)) -d "$DATA" -P "$PIPE" -c "$CLIENTS" -q > /dev/null 2>&1
+redis-benchmark -p "$PORT" -t set -r "$KEYS" -n $((KEYS * 2)) -d "$DATA" -P "$PIPE" -c "$CLIENTS" $RB_FLAGS -q > /dev/null 2>&1
 for t in $TESTS; do
-  redis-benchmark -p "$PORT" -t "$t" -r "$KEYS" -n $((KEYS * 3)) -d "$DATA" -P "$PIPE" -c "$CLIENTS" -q > /dev/null 2>&1
+  redis-benchmark -p "$PORT" -t "$t" -r "$KEYS" -n $((KEYS * 3)) -d "$DATA" -P "$PIPE" -c "$CLIENTS" $RB_FLAGS -q > /dev/null 2>&1
   callgrind_control -z $VP > /dev/null
-  redis-benchmark -p "$PORT" -t "$t" -r "$KEYS" -n 20000 -d "$DATA" -P "$PIPE" -c "$CLIENTS" -q > /dev/null 2>&1
+  redis-benchmark -p "$PORT" -t "$t" -r "$KEYS" -n 20000 -d "$DATA" -P "$PIPE" -c "$CLIENTS" $RB_FLAGS -q > /dev/null 2>&1
   callgrind_control -d "$t" $VP > /dev/null
 done
 kill $VP; wait $VP 2>/dev/null
