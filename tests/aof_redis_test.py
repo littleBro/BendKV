@@ -35,7 +35,10 @@ logged as the commands that changed it (ZINCRBY as ZADD with INCR, ZMPOP
 as the ZPOPMIN or ZPOPMAX of the key it took from), and a sorted set a
 STORE makes, or a ZADD where a key whose time had passed still lay, as a
 script that deletes the key and runs ZADD with the options before each
-thousand words of pairs; a file of the scripts is read by both alike.
+thousand words of pairs; a file of the scripts is read by both alike. A
+transaction is logged by both as the effects of its commands between a
+MULTI and an EXEC (one of a single effect, as that effect alone), and read
+by both.
 
     python3 tests/aof_redis_test.py --bin build/bendkv --bendkv 6380 --redis 6391 --dir build/aofio
 """
@@ -129,6 +132,9 @@ CMDS = [
     [b"ZINTERSTORE", b"zi2", b"2", b"zs", b"nope"], [b"ZRANGESTORE", b"zr", b"nope", b"0", b"-1"],
     [b"ZADD", b"ex9", b"1", b"a"], [b"PEXPIRE", b"ex9", b"3"], [b"ZADD", b"ex10", b"1", b"a"], [b"PEXPIRE", b"ex10", b"3"],
     [b"SLEEP"], [b"ZADD", b"ex9", b"NX", b"2", b"b", b"3", b"b"], [b"ZUNIONSTORE", b"ex10", b"1", b"zsrc"],
+    [b"MULTI"], [b"SET", b"tx1", b"a"], [b"INCR", b"txn"], [b"RPUSH", b"txl", b"1", b"2"], [b"SELECT", b"4"],
+    [b"SET", b"tx4", b"b"], [b"EXEC"], [b"SELECT", b"0"], [b"MULTI"], [b"SET", b"tx2", b"c"], [b"EXEC"],
+    [b"MULTI"], [b"SET", b"tx3", b"d"], [b"DISCARD"], [b"MULTI"], [b"GET", b"tx1"], [b"EXEC"],
 ]
 
 # a file with the entries BendKV logs for a hash, a list or a set made

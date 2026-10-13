@@ -35,85 +35,94 @@ make suite REDIS_SRC=../redis      # both runs and the table, in build/suite/
 ## The result
 
 Redis 7.0.15, October 2026. Of the 1,673 tests Redis passes in this mode, BendKV passes
-**746 (44.6%)**; of the 1,089 in the units of what BendKV has, 739 (68%: 203 tests of
-unit/type/list and 82 of unit/type/zset wait for RESP3). The blocking commands (section
-3zp of [FINDINGS.md](FINDINGS.md)) brought 13: unit/type/zset passes 192 of its 289, the
-twelve tests of BZPOPMIN, BZPOPMAX and BZMPOP that run over RESP2 before its HELLO 3 (a
-sorted set there already, several, and a second one that has members, in both
-encodings), and unit/introspection-2 the statistics of BRPOP (28 of its 43). With the
-tests of RESP3, MULTI, DEBUG, SORT and replication left out, unit/type/list passes the
-140 tests Redis passes, and unit/type/zset 260 of Redis's 276 (the other 16 use RESP3
-within a test). Sorted sets (section 3zl of
+**759 (45.4%)**; of the 1,142 in the units of what BendKV has, 754 (66%: 203 tests of
+unit/type/list and 82 of unit/type/zset wait for RESP3). Transactions (section 3zq of
+[FINDINGS.md](FINDINGS.md)) brought 28: unit/multi passes 25 of the 53 tests Redis passes
+(of the other 28, 12 read the replication stream with SYNC, 4 need Lua's script timeout,
+4 maxmemory's OOM, one SORT and one XGROUP, and 6 fail on `MULTI calls can not be nested`
+or `WATCH inside MULTI is not allowed`, their client left in MULTI by the test of OOM
+before them), unit/other RESET's test of the MULTI state, unit/protocol the regression
+test of argument rewriting (issue 9598, which runs a transaction), and unit/type/set the
+test of SMOVE onto a set that holds the member, which watches it (all 94 of its tests
+now). And 14 tests that passed fail now, each on a client left in MULTI by a test before
+it that failed inside a transaction on a command BendKV does not have (GEOADD in
+unit/introspection-2's command stats for MULTI: the 12 tests of COMMAND after it answer
+QUEUED; SORT in unit/sort; XADD in unit/type/stream), as they would on a Redis without
+those commands. The blocking commands (section 3zp of [FINDINGS.md](FINDINGS.md)) brought
+13: unit/type/zset passes 192 of its 289, the twelve tests of BZPOPMIN, BZPOPMAX and
+BZMPOP that run over RESP2 before its HELLO 3 (a sorted set there already, several, and a
+second one that has members, in both encodings), and unit/introspection-2 the statistics
+of BRPOP (28 of its 43). With the tests of RESP3, MULTI, DEBUG, SORT and replication left
+out, unit/type/list passes the 140 tests Redis passes, and unit/type/zset 260 of Redis's
+276 (the other 16 use RESP3 within a test). Sorted sets (section 3zl of
 [FINDINGS.md](FINDINGS.md)) brought 181: unit/type/zset passes 180 of its 289 tests (it
 then runs the tests of its blocking commands over RESP3 first, and stops at HELLO 3,
 before 82 more; of the others, 12 need the blocking commands, 14 RESP3 within a test, one
 replication), unit/scan ZSCAN's four (all 17 now), unit/keyspace COPY of a sorted set in
 both its encodings (49 of its 52), unit/introspection-2 COMMAND GETKEYS of more than 256
-keys (of ZUNIONSTORE) and ZUNIONSTORE marked movablekeys (27 of its 43), unit/type/set the
-test of SMISMEMBER that made a sorted set first (93 of its 94), unit/other the test that
-makes a dataset of every type (the check of its digest after a reload is left out in this
-mode; 12 of its 19), and unit/sort a test named for SORT that reads a sorted set with
-infinities by ZRANGE (2 of its 52). With the tests of RESP3 left out (`--tags
+keys (of ZUNIONSTORE) and ZUNIONSTORE marked movablekeys (27 of its 43), unit/type/set
+the test of SMISMEMBER that made a sorted set first (93 of its 94), unit/other the test
+that makes a dataset of every type (the check of its digest after a reload is left out in
+this mode; 12 of its 19), and unit/sort a test named for SORT that reads a sorted set
+with infinities by ZRANGE (2 of its 52). With the tests of RESP3 left out (`--tags
 -resp3`), unit/type/zset runs to its end: Redis passes 285 of its tests, BendKV 238, and
 each of the other 47 needs the blocking commands, RESP3 within a test, MULTI or
-replication. INCRBYFLOAT and HINCRBYFLOAT (floats, in software, as
-Redis computes them: section 3zk of [FINDINGS.md](FINDINGS.md)) brought 24:
-unit/type/incr passes all 24 of its tests and unit/type/hash 68 of its 72 (the other
-four need DUMP, RESP3, and integers past 14 digits). Sets brought 104: unit/type/set passed 92 of its 94 tests
-(the other two needed WATCH and ZADD), unit/scan 13 of its 17 (SSCAN's four, and SCAN's
-regression test for issue #4906, which makes sets; the other four were ZSCAN's),
-unit/keyspace COPY of a set in both its encodings (47 of its 52 now), unit/protocol the
-three tests of raw protocol replies, which read SRANDMEMBER's (all 17 now),
-unit/type/string MGET against a set (74 of its 77), and unit/sort one: the unit now runs
-past its SADD, and its last test, named for SETRANGE, runs SORT_RO and catches every
-error. Lists brought 33:
+replication. INCRBYFLOAT and HINCRBYFLOAT (floats, in software, as Redis computes them:
+section 3zk of [FINDINGS.md](FINDINGS.md)) brought 24: unit/type/incr passes all 24 of
+its tests and unit/type/hash 68 of its 72 (the other four need DUMP, RESP3, and integers
+past 14 digits). Sets brought 104: unit/type/set passed 92 of its 94 tests (the other two
+needed WATCH and ZADD), unit/scan 13 of its 17 (SSCAN's four, and SCAN's regression test
+for issue #4906, which makes sets; the other four were ZSCAN's), unit/keyspace COPY of a
+set in both its encodings (47 of its 52 now), unit/protocol the three tests of raw
+protocol replies, which read SRANDMEMBER's (all 17 now), unit/type/string MGET against a
+set (74 of its 77), and unit/sort one: the unit now runs past its SADD, and its last
+test, named for SETRANGE, runs SORT_RO and catches every error. Lists brought 33:
 unit/type/list-3 passes all 11 of its tests and unit/type/list-2 both of its own (stress
 tests of quicklist nodes and their compression, and LTRIM under load, which the deque
-passes as it is), unit/type/list 15 of its 218 (LPOS with its options, the pushes and
-the pops with and without a count, and the checks of compressed nodes by LINSERT, LSET
-and LTRIM; the unit then runs its other tests over RESP3 first, and stops at HELLO 3),
-and 8 tests of other units need a list: a string command's WRONGTYPE against one (three
-in unit/type/string, INCR's in unit/type/incr, BITOP's in unit/bitops), COPY of a list
+passes as it is), unit/type/list 15 of its 218 (LPOS with its options, the pushes and the
+pops with and without a count, and the checks of compressed nodes by LINSERT, LSET and
+LTRIM; the unit then runs its other tests over RESP3 first, and stops at HELLO 3), and 8
+tests of other units need a list: a string command's WRONGTYPE against one (three in
+unit/type/string, INCR's in unit/type/incr, BITOP's in unit/bitops), COPY of a list
 (unit/keyspace), EXPIRE's test of a write to a key whose time passed (unit/expire), and
 the regression of a crash with blocking ops and pipelining (unit/protocol, which sends
-BLPOP twice, refused, and then RPUSH). Hashes brought 64:
-unit/type/hash passes 56 of its 72 tests (the other 16: HINCRBYFLOAT's twelve, which waited
-for doubles (they pass now, above); two that read hashes back with DUMP; HRANDFIELD over RESP3; and HINCRBY's test
-of overflows, which starts from -9223372036854775484, past BendKV's integers of 14
-digits), unit/scan the three of HSCAN, unit/keyspace COPY of a hash in both its encodings
-(44 of its 52 now), and unit/introspection-2 COMMAND GETKEYS of EVAL, with keys and
-without, and of MEMORY USAGE, and EVAL marked movablekeys (25 of its 43). Times to live
-(EXPIRE and its kin, TTL and PTTL, SET's options, GETEX, GETDEL) and the sweep of
-expired keys brought 78 of them: unit/expire passes 56 of its 59 tests (the other 3 need
-replication and LPUSH). Ranges and bits (GETRANGE, SETRANGE, GETBIT, SETBIT,
-BITCOUNT, BITPOS) brought 49 (unit/bitops 30 of its 45 then). TOUCH, TIME and OBJECT brought 4 (TOUCH's two in
-unit/introspection-2, a PEXPIREAT at a time TIME gave, and INCR's shared integers seen
-by OBJECT REFCOUNT); one test more now fails on what BendKV does not keep, rather than
-on a missing command: OBJECT IDLETIME is 0, where the test waits three seconds for it.
+BLPOP twice, refused, and then RPUSH). Hashes brought 64: unit/type/hash passes 56 of its
+72 tests (the other 16: HINCRBYFLOAT's twelve, which waited for doubles (they pass now,
+above); two that read hashes back with DUMP; HRANDFIELD over RESP3; and HINCRBY's test of
+overflows, which starts from -9223372036854775484, past BendKV's integers of 14 digits),
+unit/scan the three of HSCAN, unit/keyspace COPY of a hash in both its encodings (44 of
+its 52 now), and unit/introspection-2 COMMAND GETKEYS of EVAL, with keys and without, and
+of MEMORY USAGE, and EVAL marked movablekeys (25 of its 43). Times to live (EXPIRE and
+its kin, TTL and PTTL, SET's options, GETEX, GETDEL) and the sweep of expired keys
+brought 78 of them: unit/expire passes 56 of its 59 tests (the other 3 need replication
+and LPUSH). Ranges and bits (GETRANGE, SETRANGE, GETBIT, SETBIT, BITCOUNT, BITPOS)
+brought 49 (unit/bitops 30 of its 45 then). TOUCH, TIME and OBJECT brought 4 (TOUCH's two
+in unit/introspection-2, a PEXPIREAT at a time TIME gave, and INCR's shared integers seen
+by OBJECT REFCOUNT); one test more now fails on what BendKV does not keep, rather than on
+a missing command: OBJECT IDLETIME is 0, where the test waits three seconds for it.
 MSETNX, RENAME and RENAMENX brought 13, and COPY 7, its tests on strings: unit/keyspace
 passes 42 of its 52 tests (the rest need other types, or DEBUG). BITOP and LCS brought
 19: unit/bitops passes 43 of its 45, unit/type/string 70 of its 77 (the rest need other
 types, or replication), and COMMAND GETKEYS of LCS passes in unit/introspection-2.
 BITFIELD brought 16, all of unit/bitfield; of unit/bitops's other two tests, one needs
 lists and the other counts the changes since the last save (`rdb_changes_since_last_save`
-in INFO), which BendKV does not keep.
-Several databases brought 6 of the 17 tests
-Redis passes that run only without `--singledb`: SET and GET in different databases, DEL in database
-1, and four of MOVE's five (against a key the target holds, against a database that is no
-integer, with a time and without one). The fifth, MOVE's basic usage, passes alone but
-counts a key that earlier tests left in the unit: the test before it, which would remove
-them with FLUSHDB, stops at XADD. COPY brought 3 more (into another database with
-REPLACE and without, and a copy independent of its source): 9 of the 17. The other 7
+in INFO), which BendKV does not keep. Several databases brought 6 of the 17 tests Redis
+passes that run only without `--singledb`: SET and GET in different databases, DEL in
+database 1, and four of MOVE's five (against a key the target holds, against a database
+that is no integer, with a time and without one). The fifth, MOVE's basic usage, passes
+alone but counts a key that earlier tests left in the unit: the test before it, which
+would remove them with FLUSHDB, stops at XADD. COPY brought 3 more (into another database
+with REPLACE and without, and a copy independent of its source): 9 of the 17. The other 7
 need MULTI and WATCH, Lua or lists (then).
 
 | area | units | Redis passes | BendKV passes |
 |---|---|---:|---:|
-| what BendKV has: the protocol, connections, the keyspace and its databases, strings and their ranges, bits and fields, counters and floats, hashes, lists, sets, sorted sets and the commands that wait on them, times to live, introspection | protocol, quit, keyspace, type/string, type/incr, type/hash, type/list, list-2, list-3, type/set, type/zset, scan, bitops, bitfield, expire, introspection, introspection-2, other, info-command | 1089 | **739** |
-| data types, not yet | geo, hyperloglog, sort, dump, lazyfree, violations | 147 | 3 |
-| transactions, pub/sub, client-side caching, CLIENT PAUSE, the latency monitor, the slow log, the query buffer, not yet | multi, pubsub, tracking, pause, latency-monitor, slowlog, querybuf | 131 | 0 |
-| out of scope: Lua scripts, functions, streams | scripting, functions, type/stream, type/stream-cgroups | 306 | 4 |
+| what BendKV has: the protocol, connections, the keyspace and its databases, strings and their ranges, bits and fields, counters and floats, hashes, lists, sets, sorted sets and the commands that wait on them, times to live, transactions, introspection | protocol, quit, keyspace, type/string, type/incr, type/hash, type/list, list-2, list-3, type/set, type/zset, scan, bitops, bitfield, expire, multi, introspection, introspection-2, other, info-command | 1142 | **754** |
+| data types, not yet | geo, hyperloglog, sort, dump, lazyfree, violations | 147 | 2 |
+| pub/sub, client-side caching, CLIENT PAUSE, the latency monitor, the slow log, the query buffer, not yet | pubsub, tracking, pause, latency-monitor, slowlog, querybuf | 78 | 0 |
+| out of scope: Lua scripts, functions, streams | scripting, functions, type/stream, type/stream-cgroups | 306 | 3 |
 
-Most of the 7 passes outside the first row pass without the feature they test: they expect an error and take
+Most of the 5 passes outside the first row pass without the feature they test: they expect an error and take
 BendKV's "unknown command" for one, or catch every error and only check that the server
 still answers.
 
@@ -133,12 +142,12 @@ pubsubshard, shutdown, tls, type/list-common, wait):
 | unit/hyperloglog | 20 | 20 | 0 |
 | unit/info-command | 3 | 3 | 3 |
 | unit/introspection | 28 | 28 | 14 |
-| unit/introspection-2 | 43 | 43 | 28 |
+| unit/introspection-2 | 43 | 43 | 16 |
 | unit/keyspace | 53 | 52 | 49 |
 | unit/latency-monitor | 14 | 13 | 0 |
 | unit/lazyfree | 4 | 4 | 0 |
-| unit/multi | 60 | 53 | 0 |
-| unit/other | 22 | 19 | 12 |
+| unit/multi | 60 | 53 | 25 |
+| unit/other | 22 | 19 | 13 |
 | unit/pause | 14 | 14 | 0 |
 | unit/protocol | 25 | 17 | 17 |
 | unit/pubsub | 30 | 30 | 0 |
@@ -148,27 +157,28 @@ pubsubshard, shutdown, tls, type/list-common, wait):
 | unit/scan | 17 | 17 | 17 |
 | unit/scripting | 111 | 110 | 0 |
 | unit/slowlog | 16 | 9 | 0 |
-| unit/sort | 52 | 52 | 2 |
+| unit/sort | 52 | 52 | 1 |
 | unit/tracking | 13 | 10 | 0 |
 | unit/type/hash | 73 | 72 | 68 |
 | unit/type/incr | 25 | 24 | 24 |
 | unit/type/list | 235 | 218 | 15 |
 | unit/type/list-2 | 2 | 2 | 2 |
 | unit/type/list-3 | 11 | 11 | 11 |
-| unit/type/set | 98 | 94 | 93 |
-| unit/type/stream | 72 | 63 | 1 |
+| unit/type/set | 98 | 94 | 94 |
+| unit/type/stream | 72 | 63 | 0 |
 | unit/type/stream-cgroups | 44 | 43 | 1 |
 | unit/type/string | 77 | 77 | 74 |
 | unit/type/zset | 291 | 289 | 192 |
 | unit/violations | 1 | 1 | 0 |
-| **all** | **1751** | **1673** | **746 (44.6%)** |
+| **all** | **1751** | **1673** | **759 (45.4%)** |
 
-## Why the other 927 fail
+## Why the other 914 fail
 
-- **488 stop on a command BendKV does not have.** By the number of tests each one stops:
-  FUNCTION LOAD 124, XADD 60, SORT 44, GEOADD 37, MULTI 27, WATCH 20, PFADD 19, SYNC 17
-  (tests that read the replication stream), XGROUP 12, GEORADIUS 10, DUMP 9, SLOWLOG 9,
-  and 36 more below nine (100 tests).
+- **445 stop on a command BendKV does not have.** By the number of tests each one stops:
+  FUNCTION LOAD 124, XADD 61, SORT 46, GEOADD 38, PFADD 19, SYNC 17 (tests that read
+  the replication stream, 12 of them unit/multi's of what a transaction propagates),
+  XGROUP 12, GEORADIUS 10, CLIENT PAUSE 10, DUMP 9, SLOWLOG 9, and 33 more below nine
+  (90 tests).
 - **391 never ran**: their unit ended before them, on a command outside any test:
   LATENCY RESET (latency-monitor), SUBSCRIBE (tracking), HELLO 3 (type/list and type/zset run their later tests over RESP3
   and then over RESP2), `CONFIG SET appendonly yes` (type/stream; BendKV turns its
@@ -176,25 +186,25 @@ pubsubshard, shutdown, tls, type/list-common, wait):
   comes because the command before it is missing (pubsub: PSUBSCRIBE after CLIENT REPLY
   OFF; scripting: the second line of FUNCTION LOAD's reply, read raw). One test runs
   only on a server that names jemalloc as its allocator.
-- **48 fail with another error**, nearly all of them for what BendKV does not have yet:
-  COMMAND GETKEYS, INFO and LIST of commands BendKV does not have (17, SORT's three among
-  them now that unit/sort runs), RESP3 (17), 8 that fail because the command they test,
-  or a command before them, is missing (MOVE's basic usage among them, above), two
-  of unit/lazyfree, which stopped on SADD before (they watch used_memory rise with a set of
-  100,000 members and fall after UNLINK or FLUSHDB ASYNC; BendKV's used_memory is its
-  resident memory, which its heap keeps and uses again), one for Lua (`command stats for scripts`:
-  BendKV's EVAL runs only the script its own append-only file writes, section 3zg of
-  [FINDINGS.md](FINDINGS.md)), one for the time of a key's last access, which BendKV does
-  not keep (OBJECT IDLETIME answers 0), one for the count of changes since the last save,
-  which it does not keep either (`rdb_changes_since_last_save` answers 0), and one for
-  HINCRBY past 14 digits (above). (Before times to live, SET's options failed 30 more tests here,
-  answered `ERR syntax error`. INFO's statistics per command, which `info-command` looked
-  for, made 3 more tests pass; SCAN and RANDOMKEY pass all their tests on keys: SCAN's
-  basic iteration, COUNT, MATCH, TYPE, and its guarantee under a load of writes, and
+- **78 fail with another error.** 28 fail on a client left in MULTI by a test before them
+  that failed inside a transaction on what BendKV does not have: GEOADD in
+  unit/introspection-2's test of command stats for MULTI (every test of COMMAND after it
+  runs in that state, and the 12 of them that passed before answer QUEUED now),
+  maxmemory's OOM in unit/multi (9, the test itself among them), XADD in unit/type/stream
+  (4), SORT in unit/sort (2) and CLIENT PAUSE in unit/pause (1); 17 need RESP3; and the
+  others fail for what BendKV does not have yet: COMMAND GETKEYS of commands it does not
+  have, Lua (a script's BUSY, the statistics of EVAL), DUMP, OBJECT IDLETIME (it answers
+  0), `rdb_changes_since_last_save` (0), the memory UNLINK and FLUSHDB ASYNC give back
+  (BendKV's used_memory is its resident memory, which its heap keeps and uses again),
+  streams, HINCRBY past 14 digits, and MOVE's basic usage
+  (above). (Before times to live, SET's options failed 30 more tests here, answered `ERR
+  syntax error`. INFO's statistics per command, which `info-command` looked for, made 3
+  more tests pass; SCAN and RANDOMKEY pass all their tests on keys: SCAN's basic
+  iteration, COUNT, MATCH, TYPE, and its guarantee under a load of writes, and
   RANDOMKEY's three.)
 
 So the tests are where the plan goes next: RESP3, which type/list (203 tests) and
-type/zset (82) need before their later tests run, MULTI/EXEC and pub/sub, and the data
+type/zset (82) need before their later tests run, pub/sub, maxmemory, and the data
 types not yet there (147 tests).
 Scripts, functions and streams (306 tests) stay out of scope.
 

@@ -355,6 +355,11 @@ type UpdOp is Data:
 # Blocking commands). CLIENT UNBLOCK of a client id (a long long past
 # 0; err for its ERROR form) is SUnblock: a session has no client that
 # waits, and answers 0; the server unblocks the client, if it waits.
+# MULTI, EXEC, DISCARD, WATCH (of its keys) and UNWATCH are SMulti,
+# SExec, SDiscard, SWatch and SUnwatch: a session keeps no transaction,
+# and answers as a client that has none is answered (EXEC and DISCARD
+# without MULTI are errors); the server keeps each client's transaction
+# and the keys it watches (server.bend, Transactions).
 
 type SessOp is Data:
   SHello{args: List<&2, String>}
@@ -388,6 +393,11 @@ type SessOp is Data:
   SZRandMember{key: String, args: List<&2, String>}
   SBlock{id: Nat, args: List<&2, String>}
   SUnblock{id: Nat, err: Bool}
+  SMulti{}
+  SExec{}
+  SDiscard{}
+  SWatch{keys: List<&2, String>}
+  SUnwatch{}
 
 # BITOP's operation
 type BitK is Data:
@@ -3848,7 +3858,8 @@ def cmd_id.l4(+n: String, c: Nat) -> Nat:
       Bool.pick(Nat, String.eq(n, "DECR"), 11n, 0n)
     case 5n:  # E
       Bool.pick(Nat, String.eq(n, "ECHO"), 2n,
-      Bool.pick(Nat, String.eq(n, "EVAL"), 65n, 0n))
+      Bool.pick(Nat, String.eq(n, "EVAL"), 65n,
+      Bool.pick(Nat, String.eq(n, "EXEC"), 162n, 0n)))
     case 8n:  # H
       Bool.pick(Nat, String.eq(n, "HSET"), 51n,
       Bool.pick(Nat, String.eq(n, "HGET"), 53n,
@@ -3910,6 +3921,8 @@ def cmd_id.l5(+n: String, c: Nat) -> Nat:
       Bool.pick(Nat, String.eq(n, "LTRIM"), 78n,
       Bool.pick(Nat, String.eq(n, "LMOVE"), 80n,
       Bool.pick(Nat, String.eq(n, "LMPOP"), 82n, 0n))))
+    case 13n:  # M
+      Bool.pick(Nat, String.eq(n, "MULTI"), 161n, 0n)
     case 18n:  # R
       Bool.pick(Nat, String.eq(n, "RPUSH"), 67n,
       Bool.pick(Nat, String.eq(n, "RESET"), 104n, 0n))
@@ -3922,6 +3935,8 @@ def cmd_id.l5(+n: String, c: Nat) -> Nat:
       Bool.pick(Nat, String.eq(n, "SDIFF"), 96n, 0n))))))
     case 20n:  # T
       Bool.pick(Nat, String.eq(n, "TOUCH"), 44n, 0n)
+    case 23n:  # W
+      Bool.pick(Nat, String.eq(n, "WATCH"), 164n, 0n)
     case 26n:  # Z
       Bool.pick(Nat, String.eq(n, "ZCARD"), 124n,
       Bool.pick(Nat, String.eq(n, "ZRANK"), 127n,
@@ -3994,6 +4009,8 @@ def cmd_id.l7(+n: String, c: Nat) -> Nat:
   match c:
     case 3n:  # C
       Bool.pick(Nat, String.eq(n, "COMMAND"), 109n, 0n)
+    case 4n:  # D
+      Bool.pick(Nat, String.eq(n, "DISCARD"), 163n, 0n)
     case 6n:  # F
       Bool.pick(Nat, String.eq(n, "FLUSHDB"), 20n, 0n)
     case 8n:  # H
@@ -4006,6 +4023,8 @@ def cmd_id.l7(+n: String, c: Nat) -> Nat:
     case 16n:  # P
       Bool.pick(Nat, String.eq(n, "PEXPIRE"), 29n,
       Bool.pick(Nat, String.eq(n, "PERSIST"), 36n, 0n))
+    case 21n:  # U
+      Bool.pick(Nat, String.eq(n, "UNWATCH"), 165n, 0n)
     case 26n:  # Z
       Bool.pick(Nat, String.eq(n, "ZINCRBY"), 122n,
       Bool.pick(Nat, String.eq(n, "ZMSCORE"), 126n,
@@ -4165,7 +4184,7 @@ def cmd_id(+n: String, len: Nat) -> Nat:
 # whether a command's number is parse_sess's (a command of the
 # connection, of the server or of several databases)
 def cmd_own(+id: Nat) -> Bool:
-  Bool.or(Bool.and(Nat.is_le(100n, id), Nat.is_le(id, 120n)), Bool.and(Nat.is_le(152n, id), Nat.is_le(id, 160n)))
+  Bool.or(Bool.and(Nat.is_le(100n, id), Nat.is_le(id, 120n)), Bool.and(Nat.is_le(152n, id), Nat.is_le(id, 165n)))
 # END gen_commands: dispatch
 
 def parse_id(id: Nat, name: String, args: List<&2, String>) -> Cmd:
@@ -4938,6 +4957,36 @@ def parse_sess(id: Nat, name: String, args: List<&2, String>) -> SessOp:
       block.least(159n, 2n, "bzpopmax", args)
     case 160n:  # BZMPOP
       block.least(160n, 4n, "bzmpop", args)
+    case 161n:  # MULTI
+      match args:
+        case Nil{}:
+          SMulti{}
+        case _:
+          s_arity("multi")
+    case 162n:  # EXEC
+      match args:
+        case Nil{}:
+          SExec{}
+        case _:
+          s_arity("exec")
+    case 163n:  # DISCARD
+      match args:
+        case Nil{}:
+          SDiscard{}
+        case _:
+          s_arity("discard")
+    case 164n:  # WATCH
+      match args:
+        case Con{k, rest}:
+          SWatch{k <> rest}
+        case Nil{}:
+          s_arity("watch")
+    case 165n:  # UNWATCH
+      match args:
+        case Nil{}:
+          SUnwatch{}
+        case _:
+          s_arity("unwatch")
     case _:
       SBad{RError{no_newlines("ERR unknown command '" ++ String.take(cstr(name), 128n) ++ "', with args beginning with: " ++ unknown.args(args, ""))}}
 
@@ -5304,6 +5353,16 @@ def stat.top(+id: Nat) -> Nat:
       159n
     case 160n:
       160n
+    case 161n:
+      161n
+    case 162n:
+      162n
+    case 163n:
+      163n
+    case 164n:
+      164n
+    case 165n:
+      165n
     case _:
       0n
 
@@ -5311,25 +5370,25 @@ def stat.top(+id: Nat) -> Nat:
 def stat.sub.client(+sub: Nat) -> Nat:
   match sub:
     case 1n:
-      161n
-    case 2n:
-      162n
-    case 3n:
-      163n
-    case 4n:
-      164n
-    case 5n:
-      165n
-    case 6n:
       166n
-    case 7n:
+    case 2n:
       167n
-    case 8n:
+    case 3n:
       168n
-    case 9n:
+    case 4n:
       169n
-    case 10n:
+    case 5n:
       170n
+    case 6n:
+      171n
+    case 7n:
+      172n
+    case 8n:
+      173n
+    case 9n:
+      174n
+    case 10n:
+      175n
     case _:
       0n
 
@@ -5337,30 +5396,14 @@ def stat.sub.client(+sub: Nat) -> Nat:
 def stat.sub.function(+sub: Nat) -> Nat:
   match sub:
     case 1n:
-      171n
+      176n
     case 2n:
-      172n
+      177n
     case _:
       0n
 
 # a subcommand of CONFIG's key, by its number; 0 for none
 def stat.sub.config(+sub: Nat) -> Nat:
-  match sub:
-    case 1n:
-      173n
-    case 2n:
-      174n
-    case 3n:
-      175n
-    case 4n:
-      176n
-    case 5n:
-      177n
-    case _:
-      0n
-
-# a subcommand of COMMAND's key, by its number; 0 for none
-def stat.sub.command(+sub: Nat) -> Nat:
   match sub:
     case 1n:
       178n
@@ -5372,10 +5415,26 @@ def stat.sub.command(+sub: Nat) -> Nat:
       181n
     case 5n:
       182n
-    case 6n:
+    case _:
+      0n
+
+# a subcommand of COMMAND's key, by its number; 0 for none
+def stat.sub.command(+sub: Nat) -> Nat:
+  match sub:
+    case 1n:
       183n
-    case 7n:
+    case 2n:
       184n
+    case 3n:
+      185n
+    case 4n:
+      186n
+    case 5n:
+      187n
+    case 6n:
+      188n
+    case 7n:
+      189n
     case _:
       0n
 
@@ -5383,15 +5442,15 @@ def stat.sub.command(+sub: Nat) -> Nat:
 def stat.sub.object(+sub: Nat) -> Nat:
   match sub:
     case 1n:
-      185n
+      190n
     case 2n:
-      186n
+      191n
     case 3n:
-      187n
+      192n
     case 4n:
-      188n
+      193n
     case 5n:
-      189n
+      194n
     case _:
       0n
 
@@ -5399,9 +5458,9 @@ def stat.sub.object(+sub: Nat) -> Nat:
 def stat.sub.memory(+sub: Nat) -> Nat:
   match sub:
     case 1n:
-      190n
+      195n
     case 2n:
-      191n
+      196n
     case _:
       0n
 
@@ -5729,66 +5788,76 @@ def stat.name(+key: Nat) -> String:
     case 160n:
       "bzmpop"
     case 161n:
-      "client|id"
+      "multi"
     case 162n:
-      "client|help"
+      "exec"
     case 163n:
-      "client|reply"
+      "discard"
     case 164n:
-      "client|getname"
+      "watch"
     case 165n:
-      "client|setname"
+      "unwatch"
     case 166n:
-      "client|caching"
+      "client|id"
     case 167n:
-      "client|unblock"
+      "client|help"
     case 168n:
-      "client|getredir"
+      "client|reply"
     case 169n:
-      "client|no-evict"
+      "client|getname"
     case 170n:
-      "client|trackinginfo"
+      "client|setname"
     case 171n:
-      "function|flush"
+      "client|caching"
     case 172n:
-      "function|help"
+      "client|unblock"
     case 173n:
-      "config|get"
+      "client|getredir"
     case 174n:
-      "config|set"
+      "client|no-evict"
     case 175n:
-      "config|resetstat"
+      "client|trackinginfo"
     case 176n:
-      "config|rewrite"
+      "function|flush"
     case 177n:
-      "config|help"
+      "function|help"
     case 178n:
-      "command|info"
+      "config|get"
     case 179n:
-      "command|docs"
+      "config|set"
     case 180n:
-      "command|list"
+      "config|resetstat"
     case 181n:
-      "command|help"
+      "config|rewrite"
     case 182n:
-      "command|count"
+      "config|help"
     case 183n:
-      "command|getkeys"
+      "command|info"
     case 184n:
-      "command|getkeysandflags"
+      "command|docs"
     case 185n:
-      "object|help"
+      "command|list"
     case 186n:
-      "object|freq"
+      "command|help"
     case 187n:
-      "object|encoding"
+      "command|count"
     case 188n:
-      "object|refcount"
+      "command|getkeys"
     case 189n:
-      "object|idletime"
+      "command|getkeysandflags"
     case 190n:
-      "memory|help"
+      "object|help"
     case 191n:
+      "object|freq"
+    case 192n:
+      "object|encoding"
+    case 193n:
+      "object|refcount"
+    case 194n:
+      "object|idletime"
+    case 195n:
+      "memory|help"
+    case 196n:
       "memory|usage"
     case _:
       ""
@@ -6118,66 +6187,76 @@ def stat.arity(+key: Nat) -> Nat:
     case 160n:
       11n
     case 161n:
-      4n
+      2n
     case 162n:
-      4n
+      2n
     case 163n:
-      6n
+      2n
     case 164n:
-      4n
-    case 165n:
-      6n
-    case 166n:
-      6n
-    case 167n:
-      7n
-    case 168n:
-      4n
-    case 169n:
-      6n
-    case 170n:
-      4n
-    case 171n:
       5n
-    case 172n:
+    case 165n:
+      2n
+    case 166n:
       4n
-    case 173n:
+    case 167n:
+      4n
+    case 168n:
+      6n
+    case 169n:
+      4n
+    case 170n:
+      6n
+    case 171n:
+      6n
+    case 172n:
       7n
+    case 173n:
+      4n
     case 174n:
-      9n
+      6n
     case 175n:
       4n
     case 176n:
-      4n
+      5n
     case 177n:
       4n
     case 178n:
-      5n
+      7n
     case 179n:
-      5n
+      9n
     case 180n:
-      5n
+      4n
     case 181n:
       4n
     case 182n:
       4n
     case 183n:
-      9n
+      5n
     case 184n:
-      9n
+      5n
     case 185n:
-      4n
+      5n
     case 186n:
-      6n
+      4n
     case 187n:
-      6n
+      4n
     case 188n:
-      6n
+      9n
     case 189n:
-      6n
+      9n
     case 190n:
       4n
     case 191n:
+      6n
+    case 192n:
+      6n
+    case 193n:
+      6n
+    case 194n:
+      6n
+    case 195n:
+      4n
+    case 196n:
       7n
     case _:
       1n
@@ -6383,11 +6462,11 @@ def stat.risky(+key: Nat) -> Bool:
       True{}
     case 152n:
       True{}
-    case 186n:
-      True{}
-    case 189n:
-      True{}
     case 191n:
+      True{}
+    case 194n:
+      True{}
+    case 196n:
       True{}
     case _:
       False{}
@@ -7931,6 +8010,46 @@ def stat.cw(+code: Nat) -> U32:
       3250
     case 767n:
       3252
+    case 768n:
+      3256
+    case 769n:
+      3267
+    case 770n:
+      3269
+    case 771n:
+      3270
+    case 772n:
+      3273
+    case 773n:
+      3274
+    case 774n:
+      3276
+    case 775n:
+      3281
+    case 776n:
+      3282
+    case 777n:
+      3284
+    case 778n:
+      3288
+    case 779n:
+      3297
+    case 780n:
+      3298
+    case 781n:
+      3300
+    case 782n:
+      3304
+    case 783n:
+      3312
+    case 784n:
+      3335
+    case 785n:
+      3339
+    case 786n:
+      3341
+    case 787n:
+      3342
     case _:
       63
 
@@ -9722,6 +9841,56 @@ def stat.code.lo50(+lo: Nat) -> Nat:
       766n
     case 52n:
       767n
+    case 56n:
+      768n
+    case _:
+      0n
+
+def stat.code.lo51(+lo: Nat) -> Nat:
+  match lo:
+    case 3n:
+      769n
+    case 5n:
+      770n
+    case 6n:
+      771n
+    case 9n:
+      772n
+    case 10n:
+      773n
+    case 12n:
+      774n
+    case 17n:
+      775n
+    case 18n:
+      776n
+    case 20n:
+      777n
+    case 24n:
+      778n
+    case 33n:
+      779n
+    case 34n:
+      780n
+    case 36n:
+      781n
+    case 40n:
+      782n
+    case 48n:
+      783n
+    case _:
+      0n
+
+def stat.code.lo52(+lo: Nat) -> Nat:
+  match lo:
+    case 7n:
+      784n
+    case 11n:
+      785n
+    case 13n:
+      786n
+    case 14n:
+      787n
     case _:
       0n
 
@@ -9829,6 +9998,10 @@ def stat.code.hl(+hi: Nat, +lo: Nat) -> Nat:
       stat.code.lo49(lo)
     case 50n:
       stat.code.lo50(lo)
+    case 51n:
+      stat.code.lo51(lo)
+    case 52n:
+      stat.code.lo52(lo)
     case _:
       0n
 

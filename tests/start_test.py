@@ -280,6 +280,7 @@ BENDKV_REFUSES = [
     ("an RDB file", ["--port", "{port}"], {"dump.rdb": "REDIS0009"}, {}, "BendKV cannot load RDB files yet: {dir}/dump.rdb would be left out; move it away, or keep the data in an append-only file (appendonly yes)"),
     ("a multi-part append-only file", ["--port", "{port}", "--appendonly", "yes"], {"appendonlydir/appendonly.aof.manifest": "file appendonly.aof.1.incr.aof seq 1 type i\n"}, {}, "BendKV cannot read Redis 7's multi-part append-only files yet: {dir}/appendonlydir holds one"),
     ("a cut file, with aof-load-truncated no", ["--port", "{port}", "--appendonly", "yes", "--aof-load-truncated", "no"], {"appendonly.aof": "*3\r\n$3\r\nSET\r\n$1\r\na\r\n$1"}, {}, "Unexpected end of file reading the append only file appendonly.aof. You can: 1) Make a backup of your AOF file, then use ./redis-check-aof --fix <filename>. 2) Alternatively you can set the 'aof-load-truncated' configuration option to yes and restart the server."),
+    ("a transaction left open, with aof-load-truncated no", ["--port", "{port}", "--appendonly", "yes", "--aof-load-truncated", "no"], {"appendonly.aof": "*1\r\n$5\r\nMULTI\r\n*3\r\n$3\r\nSET\r\n$1\r\na\r\n$1\r\n1\r\n"}, {}, "Unexpected end of file reading the append only file appendonly.aof. You can: 1) Make a backup of your AOF file, then use ./redis-check-aof --fix <filename>. 2) Alternatively you can set the 'aof-load-truncated' configuration option to yes and restart the server."),
 ]
 
 

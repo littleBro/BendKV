@@ -13,7 +13,8 @@
 # and runs against each the robustness checks, a client that stops
 # reading (its replies must hold up no one else's, nor the loop), clients
 # that wait in blocking commands (scenarios against Redis, and checks
-# under load), the differential test against Redis (a fresh Redis database for each run)
+# under load), transactions (scenarios against Redis, and checks under
+# load), the differential test against Redis (a fresh Redis database for each run)
 # and the consistency checks under concurrent clients, against the first
 # and against send (which sends a protocol error's reply from its loop,
 # where post hands it to the writer) the protocol's edge cases, and
@@ -56,6 +57,7 @@ for n in "" post send "post build/test.aof everysec"; do
   python3 tests/robust_test.py --port "$PORT"
   python3 tests/writer_test.py --port "$PORT"
   python3 tests/blocking_test.py --bendkv "$PORT" --redis "$REDIS_PORT"
+  python3 tests/multi_test.py --bendkv "$PORT" --redis "$REDIS_PORT"
   if [ -z "$n" ]; then
     python3 tests/protocol_test.py --bendkv "$PORT" --redis "$REDIS_PORT"
     python3 tests/session_test.py --bendkv "$PORT" --redis "$REDIS_PORT"

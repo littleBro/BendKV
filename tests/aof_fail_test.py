@@ -288,14 +288,35 @@ def main():
             ("a command of the server stops the start",
              one + entry(b"CONFIG", b"SET", b"maxmemory", b"1"),
              "entry 2, at byte 27: ERR a command of a connection or of the server, which no file holds"),
-            ("a transaction left open stops the start",
-             one + entry(b"MULTI") + entry(b"SET", b"b", b"2"),
-             "entry 2, at byte 27: ERR MULTI without EXEC: the file ends inside a transaction"),
             ("a bad entry before an entry cut short stops the start, and nothing is cut",
              one + entry(b"SXT", b"x") + b"*3\r\n$3\r\nSET\r\n$1\r\nk",
              "entry 2, at byte 27: ERR unknown command 'SXT', with args beginning with: 'x'")]:
         ok &= unreplayable(a, bad, name, data, want)
     os.remove(bad)
+
+    # a transaction left open (a crash cut the file while it was written)
+    # is reverted, as Redis reverts it: none of its commands is applied,
+    # and the file is cut back to before its MULTI
+    opened = os.path.join(a.dir, "fail_open.aof")
+    for name, data in [
+            ("a transaction left open is reverted, and the file cut back to before it",
+             one + entry(b"MULTI") + entry(b"SET", b"b", b"2")),
+            ("a transaction left open, then an entry cut short, is reverted too",
+             one + entry(b"MULTI") + entry(b"SET", b"b", b"2") + b"*3\r\n$3\r\nSET\r\n$1\r\nc")]:
+        with open(opened, "wb") as f:
+            f.write(data)
+        s = Server(a, ["send", opened, "always"])
+        c = s.connect()
+        got = [ask(c, b"GET", b"a"), ask(c, b"GET", b"b")] if c is not None else []
+        if c is not None:
+            c.close()
+        log = s.stop()
+        with open(opened, "rb") as f:
+            left = f.read()
+        ok &= check(name, got == [b"$1\r\n1\r\n", b"$-1\r\n"] and left == one and
+                    "Revert incomplete MULTI/EXEC transaction" in log,
+                    "replies: %r, file: %r, log: %s" % (got, left, log[-300:]))
+    os.remove(opened)
 
     # a file as Redis writes it: SELECT, a MULTI and EXEC around a DEL and
     # a SET (a key whose time passed, deleted as a write meets it), names

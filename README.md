@@ -12,11 +12,11 @@ with it. Under pipelined load it serves GET at 1.6×, SET at 1.8× and INCR at 1
 throughput of Redis 7.0.15 on the same machine, with half its memory for small values.
 
 > **Status: research prototype.** BendKV implements a subset of Redis (strings, hashes,
-> lists, sets, sorted sets and their times to live, the blocking commands, the keyspace,
-> several databases, connection commands, an append-only file). The goal now is a drop-in
+> lists, sets, sorted sets and their times to live, the blocking commands, transactions,
+> the keyspace, several databases, connection commands, an append-only file). The goal now is a drop-in
 > replacement for a single Redis node, measured by Redis's own test suite: of the 1,673
-> tests Redis 7.0.15 passes against a server it did not start, BendKV passes 746, and 739
-> of the 1,089 in what it implements ([docs/COMPATIBILITY.md](docs/COMPATIBILITY.md)). Do
+> tests Redis 7.0.15 passes against a server it did not start, BendKV passes 759, and 754
+> of the 1,142 in what it implements ([docs/COMPATIBILITY.md](docs/COMPATIBILITY.md)). Do
 > not use it for data you cannot lose.
 
 BendKV is an independent project. It is not affiliated with Higher Order Company or the
@@ -54,7 +54,7 @@ is the trie's size is not proved yet.
 | Keys | 2 | key comparison is exactly string equality, down to the bits of `U32` |
 | Commands | 24 | no command changes a key it does not write, neither its value nor its time (`frame`); reads keep the database (the commands of hashes, lists, sets and sorted sets are reads and updates of their key, LMOVE, LMPOP, SMOVE, ZMPOP and the operations of several sets and sorted sets of their keys, so these laws and those below hold of them); a key whose time has passed is there for no command, and the sweep of expired keys deletes no key that is there; GET, DEL, APPEND, SETRANGE, SETNX, INCR, GETDEL, PERSIST, PTTL, SET with KEEPTTL, RENAME, MSETNX and BITOP behave as specified, on keys of the types they take (SET, SETNX, the times and the key commands take any), a key they add counted; a pipelined batch runs exactly as its commands in order; the cache hints before a batch change nothing |
 | Commuting | 5 | commands on different keys commute: replies and key contents are the same in either order, and adjacent independent commands in a batch can be swapped, when neither writes a key the other's writes depend on (RENAME moves a value from one key to another, MSETNX sets its keys only when none is there, BITOP sets its destination from its sources, LMOVE pushes onto its destination what it pops from its source, LMPOP pops from the first of its keys that is there, a STORE of a set operation sets its destination to what its sources make, SMOVE moves a member from its source to its destination, a STORE of a sorted-set operation or of a range sets its destination to what its sources or its source make, ZMPOP pops from the first of its keys that is there) |
-| Persistence | 9 | logging changes no reply; the file reads back as written, times included; after any history, each batch at its own time, on any of the databases, the server restores exactly the databases it held; a file cut by a crash at any byte restores the databases after some prefix of its acts, never a partial one; the start's replay, which first checks that each entry replays as written, is that replay whenever the check refuses none |
+| Persistence | 9 | logging changes no reply; the file reads back as written, times included; after any history, each batch at its own time, on any of the databases, the server restores exactly the databases it held; a file cut by a crash at any byte restores the databases after some prefix of its acts in which every transaction is whole, never a partial act or transaction; the start's replay, which first checks that each entry replays as written, is that replay whenever the check refuses none |
 | Databases | 6 | SELECT changes no database and focuses the one it names; SWAPDB puts each of two databases in the other's place; FLUSHALL empties them all; MOVE takes a key's entry, its value and its time, out of the selected database and sets it in the other; COPY sets a key's entry at another key, in the selected database or another, when that key is not there or REPLACE is given |
 | Sessions | 5 | however the server dispatches a batch, it runs as its commands in order; a batch changes the databases and the log as its executed commands do; a client that has not authenticated against a password cannot read or change any key |
 | Configuration | 3 | a CONFIG SET that fails changes nothing; one that succeeds makes the new requirepass the password; after a CONFIG SET of a parameter, CONFIG GET finds the value its check gave |
@@ -197,8 +197,28 @@ translation stays in the trusted base.
   replies are off (CLIENT REPLY OFF or SKIP) pops as it does with them on. Where BendKV
   differs: Redis serves the clients of the keys a command added (`signalKeyAsReady`, from
   `dbAdd`), key by key in the order they became ready, where BendKV looks at every client
-  after every command, in the order they came; MULTI, which would make a blocking command
-  answer at once, is not there yet; WAIT and XREAD are not there.
+  after every command, in the order they came; WAIT and XREAD are not there. In a
+  transaction a blocking command does not wait, as in Redis (below).
+- **Transactions:** MULTI, EXEC, DISCARD, WATCH and UNWATCH, as Redis 7.0.15 runs them.
+  After MULTI a command is queued (QUEUED), but for EXEC, DISCARD, MULTI (an error:
+  transactions do not nest), WATCH (an error inside MULTI), QUIT and RESET, which run; a
+  command refused as it is queued (an unknown command, a wrong number of arguments,
+  NOAUTH) makes EXEC answer EXECABORT, and an EXEC refused itself aborts the transaction,
+  with its reason. EXEC runs the queued commands as one: their replies are its array (an
+  error as a command runs is in it), no client that waits is served between them, and a
+  blocking command among them answers at once. A watched key that any command changes,
+  or that is there with its time passed when EXEC comes, makes EXEC answer a null array.
+  A change is what Redis counts as one: a write that changes the key, a DEL of a key that
+  is there, FLUSHDB, FLUSHALL and SWAPDB of a database that holds it, MOVE, COPY, RENAME,
+  the sweep of expired keys; a key watched after its time passed changes only when it is
+  set again (its deletion is no change). EXEC, DISCARD, UNWATCH, RESET and a closed
+  connection unwatch. The calls are counted as Redis counts them (a queued command when
+  EXEC runs it, EXEC once). The append-only file has a transaction's effects between a
+  MULTI and an EXEC when they are two or more, as Redis writes them. Where BendKV
+  differs: an LTRIM that removes nothing changes no watched key (Redis signals the key
+  anyway), and a DEL of a key not there is logged (BendKV logs every DEL), so a
+  transaction with one may be wrapped in MULTI and EXEC where Redis writes its one other
+  effect alone.
 - **Times to live:** EXPIRE, PEXPIRE, EXPIREAT and PEXPIREAT (with NX, XX, GT, LT), TTL,
   PTTL, EXPIRETIME, PEXPIRETIME, PERSIST; SET with NX, XX, GET, EX, PX, EXAT, PXAT and
   KEEPTTL; SETEX, PSETEX, GETEX (EX, PX, EXAT, PXAT, PERSIST) and GETDEL. Times are read
@@ -263,18 +283,22 @@ translation stays in the trusted base.
   bulk of 16 KB), nor a new proto-max-bulk-len.
 - **Persistence:** an append-only file in Redis's own format, a SELECT before the
   entries of another database, SWAPDB, MOVE and FLUSHALL as Redis writes them, and COPY
-  with its DB and REPLACE spelled out (`redis-check-aof` accepts it, and Redis loads it;
-  BendKV loads Redis's, COPY as the client sent it, MULTI and EXEC as marks), fsync
-  `always`, `everysec` or `no`. The start syncs the file's directory before it serves,
-  so that a new file's name is on the disk before the first write is acknowledged, and
-  cuts a file that ends in an entry cut short back to its last whole entry at any size.
-  A file with an entry the start cannot replay as it was written (an unknown command, a
-  wrong number of arguments, an argument that does not read, a database not there, a
-  transaction left open) stops the start, naming the entry and the byte it starts at,
-  the file left as it was, where Redis stops at an unknown command.
+  with its DB and REPLACE spelled out, a transaction's effects between MULTI and EXEC
+  (`redis-check-aof` accepts it, and Redis loads it; BendKV loads Redis's, COPY as the
+  client sent it), fsync `always`, `everysec` or `no`. The start syncs the file's
+  directory before it serves, so that a new file's name is on the disk before the first
+  write is acknowledged, and cuts a file that ends in an entry cut short back to its last
+  whole entry at any size; a file that ends inside a transaction (a crash cut it as it
+  was written) has the transaction reverted and is cut back to before its MULTI, as Redis
+  does ("Revert incomplete MULTI/EXEC transaction"; with `aof-load-truncated no` both stop
+  the start instead). A file with an entry the start cannot replay as it was written (an
+  unknown command, a wrong number of arguments, an argument that does not read, a
+  database not there, a MULTI inside another, an EXEC without one) stops the start,
+  naming the entry and the byte it starts at, the file left as it was, where Redis stops
+  at an unknown command.
 
 Not yet: streams and the other types (HyperLogLog, geo), Lua
-scripts, MULTI/EXEC, pub/sub, RESP3, timing of commands
+scripts, pub/sub, RESP3, timing of commands
 (usec in INFO commandstats, latencystats), CONFIG REWRITE (it answers as Redis does without a configuration file),
 RDB files. Integers, and times in ms, are limited to 14 digits.
 
@@ -373,11 +397,16 @@ robustness and concurrency checks, a client that stops reading while the others 
 served (`tests/writer_test.py`), clients that wait (`tests/blocking_test.py`: 18 scenarios
 of the blocking commands on BendKV and on Redis, their transcripts compared line by line,
 then 300 clients served at once, 100 timeouts at once, clients that leave while they wait,
-and 50 consumers moving 1,000 items while some leave), connections that end every way one can, many times
+and 50 consumers moving 1,000 items while some leave), transactions (`tests/multi_test.py`:
+12 scenarios of MULTI, EXEC, DISCARD, WATCH and UNWATCH on BendKV and on Redis, their
+transcripts compared line by line, then a counter raised by 20 clients with WATCH, each
+lost race retried, a reader that never sees half of a transaction, and 100 clients that
+leave in MULTI or with keys watched; random transactions in the differential test too),
+connections that end every way one can, many times
 (the client closing or resetting, QUIT, a protocol error), on a BendKV of their own whose
 table of channels is read to show that each closed the channel it opened,
 restarts from the append-only file (every database read back, including after a
-truncated tail), disk failures
+truncated tail or a transaction left open), disk failures
 under the file, injected with an `LD_PRELOAD` shim (the order of the file's creation,
 its directory's sync and the first reply traced through it), files the start must
 refuse, each left as it was, and the files both ways: BendKV

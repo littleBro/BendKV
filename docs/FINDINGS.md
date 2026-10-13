@@ -595,8 +595,8 @@ numbers of arguments, arguments that do not read), a command of a connection or 
 server (`R.Own` that `file.act` leaves as a command, as it leaves a SELECT, SWAPDB,
 MOVE or COPY whose numbers or options do not read), a SELECT, SWAPDB, MOVE or COPY of
 a database not there (a start with fewer `databases` than the file names), and a MULTI
-inside another, an EXEC without one, or a file that ends inside a transaction (Redis
-reverts that one). The log names the entry, from 1, the byte it starts at (the file
+inside another or an EXEC without one (a file that ends inside a transaction has it
+reverted now, as Redis does: section 3zq). The log names the entry, from 1, the byte it starts at (the file
 read again: the first text is let go before the replay) and the parser's error, and
 the start stops before it cuts the file or opens it to append, so the file is left
 byte for byte as it was. Redis 7.0.15 stops its load at an unknown command and does
@@ -3153,8 +3153,119 @@ and unit/type/zset 260 of Redis's 276, the other 16 using RESP3 within a test.
 (`signalKeyAsReady`, from `dbAdd`, and SWAPDB's scan), key by key in the order the keys
 became ready; BendKV looks at every client after every command, in the order they came,
 so when one command readies several keys (SWAPDB), clients waiting on different keys may
-be served in another order. There is no MULTI yet, inside which a blocking command
-answers at once.
+be served in another order. Inside a transaction a blocking command answers at once, as
+in Redis (section 3zq).
+
+## 3zq. Transactions
+
+**What there is.** MULTI, EXEC, DISCARD, WATCH and UNWATCH, as Redis 7.0.15 runs them
+(`multi.c`). After MULTI a command is queued and answered `+QUEUED`, but for EXEC,
+DISCARD, MULTI (`ERR MULTI calls can not be nested`), WATCH (`ERR WATCH inside MULTI is
+not allowed`), QUIT and RESET, which run. A command refused as it is queued (an unknown
+command, a wrong number of arguments, NOAUTH) answers its error and flags the
+transaction, and EXEC then answers `-EXECABORT Transaction discarded because of previous
+errors.`; an EXEC refused itself (its arguments, NOAUTH) aborts the transaction, in MULTI
+and out of it, with its reason (`-EXECABORT Transaction discarded because of: wrong
+number of arguments for 'exec' command`), as Redis's `rejectCommand` does. EXEC and
+DISCARD without MULTI are errors. EXEC runs the queued commands as one: their replies are
+its array, an error as a command runs (WRONGTYPE) one of them; no client that waits is
+served between them, a blocking command among them answers as a client that may not wait
+is answered (a null array), and the clients that wait are served once EXEC is done. A key
+a client watches makes its EXEC answer a null array (`*-1`), the transaction dropped,
+when some command changed it after WATCH, or when it is there with its time passed as
+EXEC comes (`isWatchedKeyExpired`). A change is what Redis's `touchWatchedKey` counts: a
+write that changes the key, a DEL of a key that is there (not of one that is not, nor an
+SADD of a member there, nor an SMOVE's destination that held the member already), FLUSHDB
+and FLUSHALL of a database that holds it, SWAPDB of two databases where it is there in
+either (`touchAllWatchedKeysInDb`, a SWAPDB of a database with itself none), MOVE (the
+key in both databases), COPY (its destination), RENAME (both keys) and the sweep of
+expired keys; a key watched while its entry lay there with its time passed (Redis 7.0's
+`expired` flag) is not changed by the deletion of that entry, only by a write that sets
+it again. EXEC, DISCARD, UNWATCH, RESET and a connection that closes unwatch the keys.
+The calls are counted as Redis counts them: a command queued when EXEC runs it, a command
+refused as it is queued as rejected, EXEC itself once, failed only when its own reply is
+an error. CLIENT REPLY OFF and SKIP hold back the replies of a transaction as Redis does,
+QUEUED and EXEC's array included.
+
+**In the actor.** The session answers the five commands as a client with no transaction
+is answered (MULTI and WATCH `+OK`, EXEC and DISCARD their errors), so the connection's
+state and its proofs did not change; the actor keeps the clients' transactions, a chain of
+the clients that have one or watch keys (`Tx`: in MULTI or not, flagged, touched, the
+commands queued and the keys watched, each with its database and Redis's `expired` flag),
+and acts on the commands as they run (`bg.cmd`). While the chain is empty it costs
+nothing; while it is not, every batch runs the general way, a command at a time, so that
+after each command its effects (the commands the append-only file logs for it) touch the
+keys they name, the presence of each key before and after telling a change from none, and
+FLUSHDB, FLUSHALL and SWAPDB touch as Redis's rules for them say. EXEC runs the queued
+commands the general way too, with no client served between them, and its effects, when
+they are two or more, are one entry of the file, between a MULTI and an EXEC, as Redis
+writes them (Redis 7.0 does not wrap a transaction that propagates one command). A client
+that closes its connection tells the actor (`Left`), which forgets its transaction.
+
+**In the file, and in the laws.** A file cut by a crash inside a transaction ends with
+its MULTI and some of its effects. Redis reverts such a transaction ("Revert incomplete
+MULTI/EXEC transaction in AOF file") and cuts the file back to before its MULTI; so does
+BendKV (`A.untx`: read from the end, the last mark decides, a MULTI before any EXEC
+cuts there), and with `aof-load-truncated no` both stop the start ("Unexpected end of
+file reading the append only file"), as for an entry cut short. The laws of persistence
+now see a history whose batches are commands, or the commands of a transaction (`RunTx`),
+and a file whose entries (`A.Ent`) are an effect, or a transaction's effects between
+MULTI and EXEC. `recover` keeps its statement: after any history the file restores
+exactly the databases the server held. `recover_cut` now says that a file cut anywhere
+restores the databases after some prefix of the history's steps, a step being an act, or
+the acts of a transaction together: none of a transaction's acts is applied unless all
+of them are. The proofs: replayed, MULTI and EXEC are commands of the connection, errors
+that change nothing, so an entry replays as the effects it holds (`rpe_file`); no entry
+an effect writes is a mark (`mark_args`, over the strings each logged command writes:
+every one is two words or more, or one word that is neither MULTI nor EXEC), so read from
+the end a whole file meets each transaction's EXEC before its MULTI and the start reverts
+nothing of it (`untx_all`), while a file cut inside a transaction ends with its MULTI and
+entries without marks, which the start reverts exactly (`untx_open`); the first k entries
+of a file are the history's first entries whole and a part of the next, a SELECT that
+changes no database or a transaction's start, which is reverted (`tk`); and those entries
+replay as the history's first steps (`sepe`: a step makes no entry or one). The proofs
+of the file grew from 930 lines to 1,670.
+
+**Cost.** While no client has a transaction or watches a key, a request pays one test
+more, on the fast way (the chain is empty): GET takes 3,279 instructions, SET 4,200 and
+INCR 4,463, against 3,272, 4,194 and 4,454 before (+0.2% at most, `make perfcheck`).
+
+**Tests.** `tests/multi_test.py` runs in `make test` against each mode of the server: 12
+scenarios on BendKV and on Redis, each with clients of its own, their transcripts
+compared line by line (57 lines: replies of every kind with a SELECT inside, DISCARD, a
+nested MULTI, WATCH inside MULTI, commands refused as they are queued and errors as they
+run, EXEC and DISCARD without MULTI, EXEC refused in MULTI and out of it, QUIT and RESET
+inside a transaction, keys changed by another client or not, a DEL of a key not there, an
+SADD of a member there, an SMOVE of a member the destination holds, FLUSHALL, FLUSHDB and
+SWAPDB of keys there and not, MOVE, COPY, RENAME, EXPIRE, a key of another database, keys
+that expire by the sweep or are found expired at EXEC, UNWATCH, DISCARD and EXEC
+forgetting a change, a blocking command inside EXEC and clients that wait served after
+it, CLIENT REPLY OFF and SKIP around a transaction, and the statistics of INFO as
+`info.tcl` reads them); then BendKV under load: 20 clients that add 1,000 to a counter
+with WATCH, GET, MULTI, SET and EXEC (each lost race retried; the counter ends at 1,000),
+a reader that never sees half of a transaction (an MGET of two keys that 500 transactions
+increment together), and 100 clients that close their connections in MULTI or with keys
+watched, after which a write and a transaction run as before. The differential test sends
+whole transactions now and then, and MULTI, EXEC, DISCARD, WATCH and UNWATCH alone and
+with wrong arguments; the tests of the append-only file revert a transaction left open
+(with an entry cut short after it too), and refuse it with `aof-load-truncated no`;
+BendKV restores a file Redis wrote with transactions, and Redis one BendKV wrote. Redis's
+suite: 759 of the 1,673 tests Redis passes (45.4%; 746 before). unit/multi passes 25 of
+its 53 (the others read the replication stream, need Lua, SORT, XGROUP or maxmemory's
+OOM, or run after a test of OOM that left its client in MULTI), unit/other RESET's test
+of the MULTI state, unit/protocol the regression test of argument rewriting (issue 9598),
+and unit/type/set its test of an SMOVE onto a set that holds the member, which it watches
+(it found the one difference the tests above had missed: the actor touched SMOVE's
+destination there); 14 tests that passed fail now, their client left in MULTI by a test
+that failed inside a transaction on a command BendKV does not have (GEOADD in
+unit/introspection-2, whose 12 tests of COMMAND after it answer QUEUED; SORT; XADD), as
+on a Redis without those commands.
+
+**Where BendKV differs.** An LTRIM that removes nothing changes no watched key, where
+Redis signals the key anyway. BendKV logs every DEL, of keys there or not, where Redis
+logs only a DEL that deleted, so a transaction with such a DEL and one other effect is
+written between MULTI and EXEC where Redis writes the other effect alone (the file means
+the same).
 
 ## 4. Where a request's time goes, and hiding the memory waits
 

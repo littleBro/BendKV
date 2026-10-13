@@ -73,7 +73,8 @@ COMMANDS = {
     "zpopmax": [], "zscan": [], "zunion": [], "zinter": [], "zdiff": [], "zintercard": [],
     "zunionstore": [], "zinterstore": [], "zdiffstore": [], "zrangestore": [], "zmpop": [],
     "zrandmember": [], "blpop": [], "brpop": [], "brpoplpush": [], "blmove": [],
-    "blmpop": [], "bzpopmin": [], "bzpopmax": [], "bzmpop": []}
+    "blmpop": [], "bzpopmin": [], "bzpopmax": [], "bzmpop": [], "multi": [], "exec": [],
+    "discard": [], "watch": [], "unwatch": []}
 
 # Step 1: redis-server -> facts
 # -----------------------------
