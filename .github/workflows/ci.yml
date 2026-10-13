@@ -5,7 +5,11 @@
 # server built once (make build), then tested against Redis 7.0.15
 # (make test) and counted under callgrind (make perfcheck) in two jobs
 # side by side. Redis 7.0.15 is the one Ubuntu 24.04 ships, the reference
-# the tests compare with.
+# the tests compare with. The test suites of client libraries (redis-py in
+# RESP2 and in RESP3, go-redis) run against Redis 7.0.15 and the server
+# built, in three more jobs (tools/client_suite.py): a test Redis passes
+# that BendKV fails, and that is not among the known failures of
+# tools/data/clients.json, fails the job.
 name: CI
 
 on:
@@ -125,3 +129,50 @@ jobs:
       - run: chmod +x build/bendkv
       - name: make perfcheck
         run: sh tools/perf_guard.sh build/bendkv
+
+  clients:
+    name: clients (${{ matrix.suite }})
+    needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { suite: redis-py RESP2, client: redis-py, protocol: 2 }
+          - { suite: redis-py RESP3, client: redis-py, protocol: 3 }
+          - { suite: go-redis, client: go-redis, protocol: 3 }
+    steps:
+      - uses: actions/checkout@v4
+      - name: Redis 7.0.15
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -yq redis-server redis-tools
+          sudo systemctl stop redis-server || true
+          redis-server --version | grep -q 'v=7\.0\.15 '
+      - if: matrix.client == 'redis-py'
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - if: matrix.client == 'go-redis'
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.26'
+          cache: false
+      - uses: actions/download-artifact@v4
+        with:
+          name: bendkv
+          path: build
+      - run: chmod +x build/bendkv
+      - name: the suite against Redis 7.0.15 and BendKV
+        run: >-
+          python3 tools/client_suite.py ci --client ${{ matrix.client }}
+          --protocol ${{ matrix.protocol }} --server build/bendkv --out build/clients
+      - name: the results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: clients-${{ matrix.client }}-resp${{ matrix.protocol }}
+          path: build/clients
+          if-no-files-found: ignore
+          retention-days: 7

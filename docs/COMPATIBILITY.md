@@ -284,10 +284,64 @@ and INFO's fields against Redis's, the rewritten file against Redis's base, writ
 rewrite, BendKV and Redis started from the new file; Redis's unit/aofrw is tagged
 `external:skip`, and most of it needs `DEBUG LOADAOF` and `CONFIG SET appendonly yes`).
 
+## Client libraries' test suites
+
+Redis's own suite measures the server; a client library's suite measures what an
+application sees through it. `tools/client_suite.py` runs two of them against BendKV and
+against Redis 7.0.15 the same way, each at a fixed version taken from its language's
+registry, each run against a server started for it, in a directory of its own:
+
+- **redis-py 8.1.0** (PyPI): its tests of the sync and asyncio clients, in RESP2 and in
+  RESP3 (`--protocol`), but its tests of modules (JSON, search, time series,
+  probabilistic structures, vector sets), clusters, sentinels, TLS and Redis Enterprise's
+  services;
+- **go-redis v9.23.0** (the Go module proxy): its Ginkgo specs as against one Redis
+  Enterprise database (`RE_CLUSTER`, an endpoints file naming the server), so that it
+  starts no ring, sentinel or cluster of its own, but its specs of those and of modules.
+  It speaks RESP3 (HELLO 3 as it connects), and some of its specs RESP2.
+
+A client's suite is written for the newest Redis: its tests of versions after 7.0 skip
+themselves (go-redis is told the server is 7.0), and of the rest what counts is what
+Redis 7.0.15 passes. A test that fails runs again up to twice before it counts as
+failed, in both suites. CI runs the three suites on every pull request, in three jobs
+after `build`: a test Redis passes that BendKV fails, and that is not among the known
+failures of `tools/data/clients.json`, fails the job; a known failure that passes is
+reported, to be taken off the list.
+
+```bash
+make clients                       # the three suites, against Redis and build/bendkv
+```
+
+| suite | Redis 7.0.15 passes | BendKV passes |
+|---|---:|---:|
+| redis-py 8.1.0, RESP2 | 2,753 | **2,382 (86.5%)** |
+| redis-py 8.1.0, RESP3 | 2,753 | **2,382 (86.5%)** |
+| go-redis v9.23.0, RESP3 | 460 | **389 (84.6%)** |
+
+redis-py's tests give in RESP3 what they give in RESP2, test by test, against Redis and
+against BendKV: the same tests pass, and the same fail.
+
+Every test BendKV fails of those Redis passes fails on what BendKV does not have:
+
+- **A command it does not have:** in redis-py, Lua's (EVALSHA 74, SCRIPT 30, FUNCTION 7),
+  geo (59), streams (73), SORT 37, ACL 34, DUMP 12, PFADD 9, SLOWLOG 9, CLIENT PAUSE and
+  UNPAUSE 5, LASTSAVE 3, MEMORY STATS 3, LATENCY 3, MODULE 2, and BGSAVE, CLIENT TRACKING,
+  LOLWUT, MEMORY MALLOC-STATS, REPLICAOF and ROLE one each (366 tests in each protocol); in
+  go-redis, streams (26), geo (11), Lua's (12), DUMP and RESTORE (3), SORT (2), ACL,
+  SLOWLOG and WAIT (57 tests).
+- **Another error, on the same ground:** client-side caching (CLIENT TRACKING and its
+  invalidations: go-redis's 9 specs of its cache), Lua (a script's calls in MONITOR, EVAL's
+  replies), and COMMAND, which lists only BendKV's commands: COMMAND LIST counts 216 where
+  redis-py waits for more than 300, COMMAND GETKEYS of SORT, redis-py's parser of
+  commands that reads XREAD's keys, and go-redis's filter of commands by ACL category.
+
+So no test of these suites finds a command BendKV has answering otherwise than Redis.
+
 ## Other measures
 
-- The test suites of client libraries (redis-py, go-redis, Jedis, node-redis) run
-  against a server given by its address, and test what applications see.
+- The test suites of other client libraries (Jedis, Lettuce, node-redis) run against a
+  server given by its address too; their tests ship in no registry as redis-py's and
+  go-redis's do, so they need the libraries' repositories.
 - [resp-compatibility](https://github.com/tair-opensource/resp-compatibility) (Alibaba's
   Tair team) checks which commands of which Redis versions a server answers as Redis
   does, from a table of cases per command and version; it is used to compare

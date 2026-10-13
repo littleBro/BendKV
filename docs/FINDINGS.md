@@ -3861,7 +3861,7 @@ a request (the words are 4 MB, and a random key's is seldom in the cache). With 
 set and not reached, the read of the heap's account adds 15, 15 and 13. The eviction
 itself is slower than Redis's: 200,000 keys evicted in 3.6 s, against 0.3 s for Redis,
 about 190,000 instructions a key, most of them in the walks of the samples, whose buckets
-are mostly empty as the database empties (#155). An earlier version took twice as many,
+are mostly empty as the database empties. An earlier version took twice as many,
 380,000 a key. Its samples read the buckets with the trie's scan, which recurses on the
 stack (the runtime's work loop) and so takes the nodes it is passed: a node it reads is
 shared with the database, and taking it copied it. They now read the buckets with a walk
@@ -3877,7 +3877,7 @@ and a limit of a tenth leaves none, where the nodes alone are past the limit. Re
 the like on a smaller scale: its hash table keeps its buckets until the cron shrinks it,
 and the first eviction of 200,000 keys to a tenth evicted them all on Redis too. A
 database the eviction empties gets a fresh trie, so that what the heap holds comes down.
-Pruning the nodes a delete empties would end it (DIRECTIONS.md, #155).
+Pruning the nodes a delete empties would end it (DIRECTIONS.md).
 
 **Tests.** `tests/maxmemory_test.py` runs in make test. Transcripts on BendKV and
 redis-server, compared line by line: the commands refused past maxmemory with noeviction,
@@ -4033,6 +4033,32 @@ replication stream.
 after EXEC; Redis switches at once, so that the replies after it in EXEC's array, and
 those after EXEC in the batch, are written in the new protocol. CLIENT TRACKING, and its
 invalidation pushes, BendKV does not have.
+
+## 3zy. Client libraries' test suites
+
+**What runs.** Redis's suite measures the server; a client library's suite measures what
+an application sees through it. `tools/client_suite.py` runs two, each at a fixed version
+from its language's registry, against BendKV and against Redis 7.0.15 the same way, each
+run on a server started for it: redis-py 8.1.0's tests of the sync and asyncio clients, in
+RESP2 and in RESP3, and go-redis v9.23.0's Ginkgo specs, which speak RESP3. go-redis's
+suite starts a ring, sentinels and a cluster of its own unless it is told it runs against
+one Redis Enterprise database (`RE_CLUSTER`, with an endpoints file naming the server):
+so it runs, without its specs of those and of modules; and it is told the server is
+7.0, so that its specs of later versions skip themselves. Neither suite's tests of
+modules, clusters, sentinels or TLS run. CI runs the three suites on every pull request,
+in three jobs beside `make test`: a test Redis passes that BendKV fails, and that is not
+among the known failures of `tools/data/clients.json`, fails the job.
+
+**What they found.** Of the 2,753 tests of redis-py that Redis passes, BendKV passes 2,382
+(86.5%), the same tests in RESP2 and in RESP3; of go-redis's 460, 389 (84.6%). Every test
+BendKV fails of those Redis passes fails on a command or a feature it does not have: Lua,
+streams, geo, HyperLogLog, SORT, DUMP and RESTORE, ACL, the slow log and the latency
+monitor, CLIENT PAUSE and TRACKING (go-redis's client-side cache), WAIT, LASTSAVE, ROLE,
+MODULE, MEMORY STATS; and COMMAND, which lists BendKV's commands alone (COMMAND LIST
+counts 216 where redis-py waits for more than 300, and COMMAND GETKEYS knows no SORT). No
+test finds a command BendKV has answering otherwise than Redis does, in either protocol.
+The runs also showed that BendKV has no SHUTDOWN, which test harnesses send to stop a
+server: `tools/client_suite.py` stops the servers it starts with SIGTERM.
 
 ## 4. Where a request's time goes, and hiding the memory waits
 
