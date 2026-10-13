@@ -469,6 +469,7 @@ type SessOp is Data:
   SWatch{keys: List<&2, String>}
   SUnwatch{}
   SPub{kind: Nat, args: List<&2, String>}
+  SClient{kind: Nat, args: List<&2, String>}
 
 # BITOP's operation
 type BitK is Data:
@@ -924,6 +925,26 @@ def client_help() -> List<&2, String>:
    "    Return the name of the current connection.",
    "ID",
    "    Return the ID of the current connection.",
+   "INFO",
+   "    Return information about the current client connection.",
+   "KILL <ip:port>",
+   "    Kill connection made from <ip:port>.",
+   "KILL <option> <value> [<option> <value> [...]]",
+   "    Kill connections. Options are:",
+   "    * ADDR (<ip:port>|<unixsocket>:0)",
+   "      Kill connections made from the specified address",
+   "    * LADDR (<ip:port>|<unixsocket>:0)",
+   "      Kill connections made to specified local address",
+   "    * TYPE (NORMAL|MASTER|REPLICA|PUBSUB)",
+   "      Kill connections by type.",
+   "    * USER <username>",
+   "      Kill connections authenticated by <username>.",
+   "    * SKIPME (YES|NO)",
+   "      Skip killing current connection (default: yes).",
+   "LIST [options ...]",
+   "    Return information about client connections. Options:",
+   "    * TYPE (NORMAL|MASTER|REPLICA|PUBSUB)",
+   "      Return clients of specified type.",
    "REPLY (ON|OFF|SKIP)",
    "    Control the replies sent to the current connection.",
    "SETNAME <name>",
@@ -983,7 +1004,10 @@ def client_id(+n: String, len: Nat) -> Nat:
     case 2n:
       Bool.pick(Nat, String.eq(n, "ID"), 1n, 0n)
     case 4n:
-      Bool.pick(Nat, String.eq(n, "HELP"), 2n, 0n)
+      Bool.pick(Nat, String.eq(n, "HELP"), 2n,
+      Bool.pick(Nat, String.eq(n, "LIST"), 11n,
+      Bool.pick(Nat, String.eq(n, "INFO"), 12n,
+      Bool.pick(Nat, String.eq(n, "KILL"), 13n, 0n))))
     case 5n:
       Bool.pick(Nat, String.eq(n, "REPLY"), 3n, 0n)
     case 7n:
@@ -1037,6 +1061,364 @@ def unblock(sub: String, args: List<&2, String>) -> SessOp:
 def tracking_info() -> Reply:
   RArray{[RBulk{"flags"}, RArray{[RBulk{"off"}]}, RBulk{"redirect"}, RInt{INeg{0n}}, RBulk{"prefixes"}, RArray{Nil{}}]}
 
+# CLIENT LIST, INFO, KILL and NO-EVICT are SClient, their number and
+# arguments (client.op makes the ClOp they are): a session knows no other
+# client, and answers as Redis answers a client alone on the server; the
+# server keeps every client's facts, and kills (server.bend, Clients).
+# LIST of all clients, of a type (1 normal, 2 replica, 3 pubsub, 4
+# master) or of ids, in the order given; INFO of the client itself; KILL
+# of those a filter picks (the new form) or of the one at an address (the
+# old form, which may kill the client itself); NO-EVICT on or off, which
+# CLIENT LIST shows. Errors in the arguments are found here, in Redis's
+# order (clientCommand).
+type ClOp is Data:
+  CoList{ty: Nat, ids: Maybe<&2, List<&2, Nat>>}
+  CoInfo{}
+  CoKill{f: Kill}
+  CoKillAddr{addr: String}
+  CoNoEvict{on: Bool}
+  CoBad{r: Reply}
+
+# CLIENT KILL's filter: the client's address and its own (none: any), its
+# id (none: any; Some{0} names no client), its type (0: any) and whether
+# the client that kills is spared (SKIPME, yes unless told no). USER
+# default names every client: BendKV has no other user.
+type Kill is Data:
+  Kill{addr: Maybe<&2, String>, laddr: Maybe<&2, String>, id: Maybe<&2, Nat>, ty: Nat, skip: Bool}
+
+# a client id as Redis reads one, a long long (string2ll): one that can
+# be a client's (14 digits at most, as BendKV reads integers; ids start at
+# 1), a long long past 14 digits (no client has it), one that is 0 or
+# negative, or none
+type Cid is Data:
+  CidPos{n: Nat}
+  CidBig{}
+  CidNot{}
+  CidBad{}
+
+def cid.sign(neg: Bool) -> Cid:
+  match neg:
+    case True{}:
+      CidNot{}
+    case False{}:
+      CidBig{}
+
+# at 19 digits, a long long is at most 9223372036854775807 (its
+# negation's magnitude 9223372036854775808)
+def cid.top.of(c: Cmp, neg: Bool) -> Cid:
+  match c:
+    case GT{}:
+      CidBad{}
+    case _:
+      cid.sign(neg)
+
+def cid.top(+ds: String, +neg: Bool) -> Cid:
+  cid.top.of(String.order(ds, Bool.pick(String, neg, "9223372036854775808", "9223372036854775807")), neg)
+
+def cid.long.of(ok: Bool, at19: Bool, +s: String, +i: Nat, +neg: Bool) -> Cid:
+  match ok at19:
+    case True{} True{}:
+      cid.top(String.drop(s, i), neg)
+    case True{} False{}:
+      cid.sign(neg)
+    case False{} _:
+      CidBad{}
+
+# n digits from i, past 14: a long long when they are all digits, the
+# first no zero, and at most 19 of them
+def cid.long(+s: String, +i: Nat, +n: Nat, +neg: Bool) -> Cid:
+  cid.long.of(Bool.and(Bool.and(Nat.is_eq(String.digits_at(s, i), n), U32.is_ne(String.code_at(s, i), 48)), Nat.is_le(n, 19n)), Nat.is_eq(n, 19n), s, i, neg)
+
+def cid.of(m: Maybe<&2, Int>) -> Cid:
+  match m:
+    case Some{IPos{n}}:
+      match n:
+        case 0n:
+          CidNot{}
+        case 1n+p:
+          CidPos{1n+p}
+    case Some{INeg{n}}:
+      CidNot{}
+    case None{}:
+      CidBad{}
+
+def cid.read.of(short: Bool, +s: String, +k: Nat, +n: Nat, +neg: Bool) -> Cid:
+  match short:
+    case True{}:
+      cid.of(int_read(s))
+    case False{}:
+      cid.long(s, k, Nat.sub(n, k), neg)
+
+def cid.read(+s: String) -> Cid:
+  +n = String.length(s)
+  +neg = U32.is_eq(String.code_at(s, 0n), 45)
+  +k = Bool.pick(Nat, neg, 1n, 0n)
+  cid.read.of(Nat.is_le(Nat.sub(n, k), 14n), s, k, n, neg)
+
+# a client type by its name, in any case (getClientTypeByName): 1
+# normal, 2 replica (or slave), 3 pubsub, 4 master; 0 for none
+def client.type(+n: String) -> Nat:
+  Bool.pick(Nat, is_word(n, "NORMAL"), 1n,
+  Bool.pick(Nat, Bool.or(is_word(n, "SLAVE"), is_word(n, "REPLICA")), 2n,
+  Bool.pick(Nat, is_word(n, "PUBSUB"), 3n,
+  Bool.pick(Nat, is_word(n, "MASTER"), 4n, 0n))))
+
+def e_client_type(+n: String) -> ClOp:
+  CoBad{RError{no_newlines("ERR Unknown client type '" ++ cstr(n) ++ "'")}}
+
+def e_client_syntax() -> ClOp:
+  CoBad{RError{"ERR syntax error"}}
+
+# CLIENT LIST ID's ids, each read as Redis reads it: the first that is no
+# long long ends it with an error; one no client can have is dropped
+def list.ids(args: List<&2, String>, c: Cid, acc: List<&2, Nat>) -> ClOp:
+  match args c:
+    case _ CidBad{}:
+      CoBad{RError{"ERR Invalid client ID"}}
+    case Nil{} CidPos{n}:
+      CoList{0n, Some{List.reverse(&2, Nat, n <> acc)}}
+    case Nil{} _:
+      CoList{0n, Some{List.reverse(&2, Nat, acc)}}
+    case Con{+a, rest} CidPos{n}:
+      list.ids(rest, cid.read(a), n <> acc)
+    case Con{+a, rest} _:
+      list.ids(rest, cid.read(a), acc)
+
+# the ids of CLIENT LIST ID (a CidNot reads none and adds no id)
+def list.ids.of(args: List<&2, String>) -> ClOp:
+  match args:
+    case Nil{}:
+      CoList{0n, Some{Nil{}}}
+    case Con{+a, rest}:
+      list.ids(rest, cid.read(a), Nil{})
+
+def list.type(+t: Nat, +n: String) -> ClOp:
+  match t:
+    case 0n:
+      e_client_type(n)
+    case _:
+      CoList{t, None{}}
+
+def list.two(ty: Bool, id: Bool, +x: String) -> ClOp:
+  match ty id:
+    case True{} _:
+      list.type(client.type(x), x)
+    case False{} True{}:
+      list.ids.of([x])
+    case False{} False{}:
+      e_client_syntax()
+
+def list.more(id: Bool, xs: List<&2, String>) -> ClOp:
+  match id:
+    case True{}:
+      list.ids.of(xs)
+    case False{}:
+      e_client_syntax()
+
+# CLIENT LIST's arguments: none; TYPE and a type; ID and ids
+def list.args(args: List<&2, String>) -> ClOp:
+  match args:
+    case Nil{}:
+      CoList{0n, None{}}
+    case Con{+w, Con{+x, Nil{}}}:
+      list.two(is_word(w, "TYPE"), is_word(w, "ID"), x)
+    case Con{+w, Con{x, Con{y, more}}}:
+      list.more(is_word(w, "ID"), x <> y <> more)
+    case _:
+      e_client_syntax()
+
+# CLIENT KILL's options by name: 1 ID, 2 TYPE, 3 ADDR, 4 LADDR, 5 USER,
+# 6 SKIPME; 0 for none
+def kill.word(+o: String) -> Nat:
+  Bool.pick(Nat, is_word(o, "ID"), 1n,
+  Bool.pick(Nat, is_word(o, "TYPE"), 2n,
+  Bool.pick(Nat, is_word(o, "ADDR"), 3n,
+  Bool.pick(Nat, is_word(o, "LADDR"), 4n,
+  Bool.pick(Nat, is_word(o, "USER"), 5n,
+  Bool.pick(Nat, is_word(o, "SKIPME"), 6n, 0n))))))
+
+def kill.id(m: Maybe<&2, Nat>, f: Kill) -> Kill:
+  match f:
+    case Kill{a, l, i, t, s}:
+      Kill{a, l, m, t, s}
+
+def kill.ty(+n: Nat, f: Kill) -> Kill:
+  match f:
+    case Kill{a, l, i, t, s}:
+      Kill{a, l, i, n, s}
+
+def kill.addr(v: String, f: Kill) -> Kill:
+  match f:
+    case Kill{a, l, i, t, s}:
+      Kill{Some{v}, l, i, t, s}
+
+def kill.laddr(v: String, f: Kill) -> Kill:
+  match f:
+    case Kill{a, l, i, t, s}:
+      Kill{a, Some{v}, i, t, s}
+
+def kill.skip(b: Bool, f: Kill) -> Kill:
+  match f:
+    case Kill{a, l, i, t, s}:
+      Kill{a, l, i, t, b}
+
+# a step of CLIENT KILL's options: the filter so far, or the error that
+# ends them
+type KSt is Data:
+  KOk{f: Kill}
+  KErr{r: Reply}
+
+def e_kill_id() -> KSt:
+  KErr{RError{"ERR client-id should be greater than 0"}}
+
+def kill.idv(c: Cid, f: Kill) -> KSt:
+  match c:
+    case CidPos{n}:
+      KOk{kill.id(Some{n}, f)}
+    case CidBig{}:
+      KOk{kill.id(Some{0n}, f)}
+    case _:
+      e_kill_id()
+
+def kill.tyv(+ty: Nat, +v: String, f: Kill) -> KSt:
+  match ty:
+    case 0n:
+      KErr{RError{no_newlines("ERR Unknown client type '" ++ cstr(v) ++ "'")}}
+    case _:
+      KOk{kill.ty(ty, f)}
+
+def kill.user(ok: Bool, +v: String, f: Kill) -> KSt:
+  match ok:
+    case True{}:
+      KOk{f}
+    case False{}:
+      KErr{RError{no_newlines("ERR No such user '" ++ cstr(v) ++ "'")}}
+
+def kill.skipv(yes: Bool, no: Bool, f: Kill) -> KSt:
+  match yes no:
+    case True{} _:
+      KOk{kill.skip(True{}, f)}
+    case False{} True{}:
+      KOk{kill.skip(False{}, f)}
+    case False{} False{}:
+      KErr{RError{"ERR syntax error"}}
+
+# an option (by kill.word) and its value applied to the filter
+def kill.opt(+k: Nat, +v: String, f: Kill) -> KSt:
+  match k:
+    case 1n:
+      kill.idv(cid.read(v), f)
+    case 2n:
+      kill.tyv(client.type(v), v, f)
+    case 3n:
+      KOk{kill.addr(v, f)}
+    case 4n:
+      KOk{kill.laddr(v, f)}
+    case 5n:
+      kill.user(String.eq(v, "default"), v, f)
+    case 6n:
+      kill.skipv(is_word(v, "YES"), is_word(v, "NO"), f)
+    case _:
+      KErr{RError{"ERR syntax error"}}
+
+def kill.step(st: KSt, +k: Nat, +v: String) -> KSt:
+  match st:
+    case KOk{f}:
+      kill.opt(k, v, f)
+    case KErr{r}:
+      KErr{r}
+
+def kill.end(st: KSt) -> ClOp:
+  match st:
+    case KOk{f}:
+      CoKill{f}
+    case KErr{r}:
+      CoBad{r}
+
+def kill.odd(st: KSt) -> ClOp:
+  match st:
+    case KOk{f}:
+      e_client_syntax()
+    case KErr{r}:
+      CoBad{r}
+
+# The new form's options, each with its value, in order: the first error
+# ends them, as Redis's loop does; a later option of a name overrides an
+# earlier one. An option without a value, or one Redis does not know, is
+# a syntax error.
+def kill.args(args: List<&2, String>, st: KSt) -> ClOp:
+  match args:
+    case Nil{}:
+      kill.end(st)
+    case Con{+o, Con{+v, rest}}:
+      kill.args(rest, kill.step(st, kill.word(o), v))
+    case Con{o, Nil{}}:
+      kill.odd(st)
+
+# CLIENT KILL: one argument is the old form, an address; more are options
+def kill.of(args: List<&2, String>) -> ClOp:
+  match args:
+    case Con{a, Nil{}}:
+      CoKillAddr{a}
+    case _:
+      kill.args(args, KOk{Kill{None{}, None{}, None{}, 0n, True{}}})
+
+def no_evict.on(on: Bool, off: Bool) -> ClOp:
+  match on off:
+    case True{} _:
+      CoNoEvict{True{}}
+    case False{} True{}:
+      CoNoEvict{False{}}
+    case False{} False{}:
+      e_client_syntax()
+
+def no_evict.of(args: List<&2, String>) -> ClOp:
+  match args:
+    case Con{+on, Nil{}}:
+      no_evict.on(is_word(on, "ON"), is_word(on, "OFF"))
+    case _:
+      e_client_syntax()
+
+# SClient's number and arguments as the command they are: 0 LIST, 1 INFO,
+# 2 KILL, 3 NO-EVICT
+def client.op(+kind: Nat, args: List<&2, String>) -> ClOp:
+  match kind:
+    case 0n:
+      list.args(args)
+    case 1n:
+      CoInfo{}
+    case 2n:
+      kill.of(args)
+    case _:
+      no_evict.of(args)
+
+# A client's line in CLIENT LIST and CLIENT INFO, as Redis 7.0.15 writes
+# it (catClientInfoString): its id, its peer's address and its own, its
+# socket's fd, name, age and idle time (s), flags, database, the counts of
+# its channels, patterns and shard channels, the commands queued in its
+# MULTI (none: -1), the bytes of the batch it runs (qbuf) and of the
+# command's arguments (argv-mem), and its last command (cmd). BendKV
+# keeps no buffer of a client's own, so qbuf-free, multi-mem, the reply
+# buffer's size and peak, the output lists and the memory are 0.
+type ClLine is Data:
+  ClLine{id: Nat, addr: String, laddr: String, fd: Nat, name: String, age: Nat, idle: Nat, flags: String, db: Nat, sub: Nat, psub: Nat, ssub: Nat, multi: Maybe<&2, Nat>, qbuf: Nat, argv: Nat, cmd: String}
+
+def line.multi(m: Maybe<&2, Nat>) -> String:
+  match m:
+    case Some{n}:
+      Nat.show(n)
+    case None{}:
+      "-1"
+
+def client.line(l: ClLine) -> String:
+  match l:
+    case ClLine{id, addr, laddr, fd, name, age, idle, flags, db, sub, psub, ssub, multi, qbuf, argv, cmd}:
+      a = "id=" ++ Nat.show(id) ++ " addr=" ++ addr ++ " laddr=" ++ laddr ++ " fd=" ++ Nat.show(fd) ++ " name=" ++ name
+      b = " age=" ++ Nat.show(age) ++ " idle=" ++ Nat.show(idle) ++ " flags=" ++ flags ++ " db=" ++ Nat.show(db)
+      c = " sub=" ++ Nat.show(sub) ++ " psub=" ++ Nat.show(psub) ++ " ssub=" ++ Nat.show(ssub) ++ " multi=" ++ line.multi(multi)
+      d = " qbuf=" ++ Nat.show(qbuf) ++ " qbuf-free=0 argv-mem=" ++ Nat.show(argv) ++ " multi-mem=0 rbs=0 rbp=0 obl=0 oll=0 omem=0 tot-mem=0"
+      a ++ b ++ c ++ d ++ " events=r cmd=" ++ cmd ++ " user=default redir=-1 resp=2"
+
 def parse_client(id: Nat, sub: String, args: List<&2, String>) -> SessOp:
   match id:
     case 1n:  # ID
@@ -1089,8 +1471,8 @@ def parse_client(id: Nat, sub: String, args: List<&2, String>) -> SessOp:
           s_arity("client|getredir")
     case 9n:  # NO-EVICT
       match args:
-        case Con{+on, Nil{}}:
-          no_evict(on)
+        case Con{on, Nil{}}:
+          SClient{3n, [on]}
         case _:
           s_arity("client|no-evict")
     case 10n:  # TRACKINGINFO
@@ -1099,6 +1481,20 @@ def parse_client(id: Nat, sub: String, args: List<&2, String>) -> SessOp:
           sess_reply(tracking_info())
         case _:
           s_arity("client|trackinginfo")
+    case 11n:  # LIST
+      SClient{0n, args}
+    case 12n:  # INFO
+      match args:
+        case Nil{}:
+          SClient{1n, Nil{}}
+        case _:
+          s_arity("client|info")
+    case 13n:  # KILL
+      match args:
+        case Nil{}:
+          s_arity("client|kill")
+        case Con{a, rest}:
+          SClient{2n, a <> rest}
     case _:
       e_unknown_sub(sub, "CLIENT")
 
@@ -5599,6 +5995,12 @@ def stat.sub.client(+sub: Nat) -> Nat:
       183n
     case 10n:
       184n
+    case 11n:
+      185n
+    case 12n:
+      186n
+    case 13n:
+      187n
     case _:
       0n
 
@@ -5606,9 +6008,9 @@ def stat.sub.client(+sub: Nat) -> Nat:
 def stat.sub.function(+sub: Nat) -> Nat:
   match sub:
     case 1n:
-      185n
+      188n
     case 2n:
-      186n
+      189n
     case _:
       0n
 
@@ -5616,15 +6018,15 @@ def stat.sub.function(+sub: Nat) -> Nat:
 def stat.sub.config(+sub: Nat) -> Nat:
   match sub:
     case 1n:
-      187n
-    case 2n:
-      188n
-    case 3n:
-      189n
-    case 4n:
       190n
-    case 5n:
+    case 2n:
       191n
+    case 3n:
+      192n
+    case 4n:
+      193n
+    case 5n:
+      194n
     case _:
       0n
 
@@ -5632,19 +6034,19 @@ def stat.sub.config(+sub: Nat) -> Nat:
 def stat.sub.command(+sub: Nat) -> Nat:
   match sub:
     case 1n:
-      192n
-    case 2n:
-      193n
-    case 3n:
-      194n
-    case 4n:
       195n
-    case 5n:
+    case 2n:
       196n
-    case 6n:
+    case 3n:
       197n
-    case 7n:
+    case 4n:
       198n
+    case 5n:
+      199n
+    case 6n:
+      200n
+    case 7n:
+      201n
     case _:
       0n
 
@@ -5652,15 +6054,15 @@ def stat.sub.command(+sub: Nat) -> Nat:
 def stat.sub.object(+sub: Nat) -> Nat:
   match sub:
     case 1n:
-      199n
-    case 2n:
-      200n
-    case 3n:
-      201n
-    case 4n:
       202n
-    case 5n:
+    case 2n:
       203n
+    case 3n:
+      204n
+    case 4n:
+      205n
+    case 5n:
+      206n
     case _:
       0n
 
@@ -5668,9 +6070,9 @@ def stat.sub.object(+sub: Nat) -> Nat:
 def stat.sub.memory(+sub: Nat) -> Nat:
   match sub:
     case 1n:
-      204n
+      207n
     case 2n:
-      205n
+      208n
     case _:
       0n
 
@@ -5678,17 +6080,17 @@ def stat.sub.memory(+sub: Nat) -> Nat:
 def stat.sub.pubsub(+sub: Nat) -> Nat:
   match sub:
     case 1n:
-      206n
-    case 2n:
-      207n
-    case 3n:
-      208n
-    case 4n:
       209n
-    case 5n:
+    case 2n:
       210n
-    case 6n:
+    case 3n:
       211n
+    case 4n:
+      212n
+    case 5n:
+      213n
+    case 6n:
+      214n
     case _:
       0n
 
@@ -6064,58 +6466,64 @@ def stat.name(+key: Nat) -> String:
     case 184n:
       "client|trackinginfo"
     case 185n:
-      "function|flush"
+      "client|list"
     case 186n:
-      "function|help"
+      "client|info"
     case 187n:
-      "config|get"
+      "client|kill"
     case 188n:
-      "config|set"
+      "function|flush"
     case 189n:
-      "config|resetstat"
+      "function|help"
     case 190n:
-      "config|rewrite"
+      "config|get"
     case 191n:
-      "config|help"
+      "config|set"
     case 192n:
-      "command|info"
+      "config|resetstat"
     case 193n:
-      "command|docs"
+      "config|rewrite"
     case 194n:
-      "command|list"
+      "config|help"
     case 195n:
-      "command|help"
+      "command|info"
     case 196n:
-      "command|count"
+      "command|docs"
     case 197n:
-      "command|getkeys"
+      "command|list"
     case 198n:
-      "command|getkeysandflags"
+      "command|help"
     case 199n:
-      "object|help"
+      "command|count"
     case 200n:
-      "object|freq"
+      "command|getkeys"
     case 201n:
-      "object|encoding"
+      "command|getkeysandflags"
     case 202n:
-      "object|refcount"
+      "object|help"
     case 203n:
-      "object|idletime"
+      "object|freq"
     case 204n:
-      "memory|help"
+      "object|encoding"
     case 205n:
-      "memory|usage"
+      "object|refcount"
     case 206n:
-      "pubsub|channels"
+      "object|idletime"
     case 207n:
-      "pubsub|help"
+      "memory|help"
     case 208n:
-      "pubsub|numpat"
+      "memory|usage"
     case 209n:
-      "pubsub|numsub"
+      "pubsub|channels"
     case 210n:
-      "pubsub|shardchannels"
+      "pubsub|help"
     case 211n:
+      "pubsub|numpat"
+    case 212n:
+      "pubsub|numsub"
+    case 213n:
+      "pubsub|shardchannels"
+    case 214n:
       "pubsub|shardnumsub"
     case _:
       ""
@@ -6499,52 +6907,58 @@ def stat.arity(+key: Nat) -> Nat:
     case 187n:
       7n
     case 188n:
-      9n
+      5n
     case 189n:
       4n
     case 190n:
-      4n
+      7n
     case 191n:
-      4n
+      9n
     case 192n:
-      5n
+      4n
     case 193n:
-      5n
+      4n
     case 194n:
-      5n
+      4n
     case 195n:
-      4n
+      5n
     case 196n:
-      4n
+      5n
     case 197n:
-      9n
+      5n
     case 198n:
-      9n
+      4n
     case 199n:
       4n
     case 200n:
-      6n
+      9n
     case 201n:
-      6n
+      9n
     case 202n:
-      6n
+      4n
     case 203n:
       6n
     case 204n:
-      4n
+      6n
     case 205n:
-      7n
+      6n
     case 206n:
-      5n
+      6n
     case 207n:
       4n
     case 208n:
-      4n
+      7n
     case 209n:
       5n
     case 210n:
-      5n
+      4n
     case 211n:
+      4n
+    case 212n:
+      5n
+    case 213n:
+      5n
+    case 214n:
       5n
     case _:
       1n
@@ -6750,11 +7164,11 @@ def stat.risky(+key: Nat) -> Bool:
       True{}
     case 152n:
       True{}
-    case 200n:
-      True{}
     case 203n:
       True{}
-    case 205n:
+    case 206n:
+      True{}
+    case 208n:
       True{}
     case _:
       False{}
@@ -8458,6 +8872,30 @@ def stat.cw(+code: Nat) -> U32:
       3606
     case 847n:
       3609
+    case 848n:
+      3610
+    case 849n:
+      3612
+    case 850n:
+      3619
+    case 851n:
+      3621
+    case 852n:
+      3622
+    case 853n:
+      3625
+    case 854n:
+      3626
+    case 855n:
+      3628
+    case 856n:
+      3633
+    case 857n:
+      3634
+    case 858n:
+      3636
+    case 859n:
+      3640
     case _:
       63
 
@@ -10439,6 +10877,30 @@ def stat.code.lo56(+lo: Nat) -> Nat:
       846n
     case 25n:
       847n
+    case 26n:
+      848n
+    case 28n:
+      849n
+    case 35n:
+      850n
+    case 37n:
+      851n
+    case 38n:
+      852n
+    case 41n:
+      853n
+    case 42n:
+      854n
+    case 44n:
+      855n
+    case 49n:
+      856n
+    case 50n:
+      857n
+    case 52n:
+      858n
+    case 56n:
+      859n
     case _:
       0n
 

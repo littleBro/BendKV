@@ -51,10 +51,13 @@ import ./info.bend as I
 # asks INFO or CONFIG RESETSTAT; the cron's tick, at ms since 1970, for
 # INFO's rates; a protocol error a connection answered, for errorstats;
 # a connection closed while its client waited (Blocked clients), and
-# the channel its Bye goes back on; or a connection closed, whose
-# client's transaction, watched keys and subscriptions are forgotten
-# (Transactions, Pub/Sub). A batch from a client with a subscription is
-# a SubReq, which runs a command at a time.
+# the channel its Bye goes back on; a connection closed, whose client's
+# transaction, watched keys, subscriptions and line are forgotten
+# (Transactions, Pub/Sub, Clients), and the channel the Bye it waits for
+# before it closes its socket goes back on; or a connection opened, with
+# its client's id, channel, socket's fd and addresses (Clients). A batch
+# from a client with a subscription is a SubReq, which runs a command at
+# a time.
 type Req is Data:
   Req{cn: S.Conn, job: B.Job, back: Chan(Ans), tl: U32, inb: Nat}
   SubReq{cn: S.Conn, job: B.Job, back: Chan(Ans), tl: U32, inb: Nat}
@@ -62,7 +65,8 @@ type Req is Data:
   Tick{ms: Nat}
   Oops{}
   Gone{id: Nat, back: Chan(Ans)}
-  Left{id: Nat}
+  Left{id: Nat, back: Chan(Ans)}
+  Join{id: Nat, back: Chan(Ans), fd: U32, addr: String, laddr: String}
 
 # a batch's answer: its replies, encoded (none when CLIENT REPLY held
 # them all back), and the connection's state after it (AnsSub: its
@@ -249,13 +253,14 @@ def gen.pre.own(+o: R.SessOp, +code: Nat, +conn: S.Conn, +srv: S.Srv, +ds: R.Ds)
 # the clients that wait, in the order they came, a chain of them: each
 # with its id and the channel its answers go back on, its connection
 # before the blocking command (whose mode says whether the reply goes
-# out) and after it, the pop it waits to make and the code it counts as,
+# out) and after it, the pop it waits to make, the size of the blocking
+# command's arguments (CLIENT LIST's argv-mem), the code it counts as,
 # its database, when its time is up (ms since 1970, 0 never), and the
 # rest of its batch: the commands after the blocking one and their codes.
 # A client taken out of the chain is a chain of one.
 type Waits is Data:
   WaitNone{}
-  WaitOn{id: Nat, back: Chan(Ans), c0: S.Conn, c1: S.Conn, b: S.Blk, code: Nat, db: Nat, until: Nat, cmds: List<&2, R.Cmd>, codes: List<&2, Nat>, rest: Waits}
+  WaitOn{id: Nat, back: Chan(Ans), c0: S.Conn, c1: S.Conn, b: S.Blk, argv: Nat, code: Nat, db: Nat, until: Nat, cmds: List<&2, R.Cmd>, codes: List<&2, Nat>, rest: Waits}
 
 # a client unblocked, whose batch goes on at the end of the group: the
 # channel of its answers, its connection, its replies so far (newest
@@ -268,28 +273,28 @@ type Up is Data:
 # is up at now; its pop, code and database
 def waits.is(+n: Nat, +ws: Waits) -> Bool:
   match ws:
-    case WaitOn{+id, back, c0, c1, b, code, db, until, cmds, codes, rest}:
+    case WaitOn{+id, back, c0, c1, b, argv, code, db, until, cmds, codes, rest}:
       Nat.is_eq(id, n)
     case WaitNone{}:
       False{}
 
 def waits.late(+now: Nat, +ws: Waits) -> Bool:
   match ws:
-    case WaitOn{id, back, c0, c1, b, code, db, +until, cmds, codes, rest}:
+    case WaitOn{id, back, c0, c1, b, argv, code, db, +until, cmds, codes, rest}:
       Bool.and(Nat.is_lt(0n, until), Nat.is_lt(until, now))
     case WaitNone{}:
       False{}
 
 def waits.blk(+ws: Waits) -> S.Blk:
   match ws:
-    case WaitOn{id, back, c0, c1, +b, code, db, until, cmds, codes, rest}:
+    case WaitOn{id, back, c0, c1, +b, argv, code, db, until, cmds, codes, rest}:
       b
     case WaitNone{}:
       S.BlkBad{R.RNull{}}
 
 def waits.db(+ws: Waits) -> Nat:
   match ws:
-    case WaitOn{id, back, c0, c1, b, code, +db, until, cmds, codes, rest}:
+    case WaitOn{id, back, c0, c1, b, argv, code, +db, until, cmds, codes, rest}:
       db
     case WaitNone{}:
       0n
@@ -306,23 +311,23 @@ def waits.rev(acc: Waits, ws: Waits) -> Waits:
   match acc:
     case WaitNone{}:
       ws
-    case WaitOn{id, back, c0, c1, b, code, db, until, cmds, codes, rest}:
-      waits.rev(rest, WaitOn{id, back, c0, c1, b, code, db, until, cmds, codes, ws})
+    case WaitOn{id, back, c0, c1, b, argv, code, db, until, cmds, codes, rest}:
+      waits.rev(rest, WaitOn{id, back, c0, c1, b, argv, code, db, until, cmds, codes, ws})
 
 # ws with w after its clients
 def waits.add(ws: Waits, w: Waits) -> Waits:
   match ws:
     case WaitNone{}:
       w
-    case WaitOn{id, back, c0, c1, b, code, db, until, cmds, codes, rest}:
-      WaitOn{id, back, c0, c1, b, code, db, until, cmds, codes, waits.add(rest, w)}
+    case WaitOn{id, back, c0, c1, b, argv, code, db, until, cmds, codes, rest}:
+      WaitOn{id, back, c0, c1, b, argv, code, db, until, cmds, codes, waits.add(rest, w)}
 
 # how many clients wait (on n), and how many of them have a time (on t)
 def waits.len(ws: Waits, +n: Nat, +t: Nat) -> Nat & Nat:
   match ws:
     case WaitNone{}:
       (n, t)
-    case WaitOn{id, back, c0, c1, b, code, db, +until, cmds, codes, rest}:
+    case WaitOn{id, back, c0, c1, b, argv, code, db, +until, cmds, codes, rest}:
       waits.len(rest, 1n+n, Bool.pick(Nat, Nat.is_lt(0n, until), 1n+t, t))
 
 def waits.put(p: Nat & Nat, srv: S.Srv) -> S.Srv:
@@ -337,7 +342,7 @@ def waits.length(ws: Waits, +n: Nat) -> Nat:
   match ws:
     case WaitNone{}:
       n
-    case WaitOn{id, back, c0, c1, b, code, db, until, cmds, codes, rest}:
+    case WaitOn{id, back, c0, c1, b, argv, code, db, until, cmds, codes, rest}:
       waits.length(rest, 1n+n)
 
 # the client of id n taken out of ws, a chain of one (none: no client of
@@ -345,10 +350,10 @@ def waits.length(ws: Waits, +n: Nat) -> Nat:
 # those before it, newest first)
 def waits.take(ws: Waits, hit: Bool, +n: Nat, acc: Waits) -> Waits & Waits:
   match ws hit:
-    case WaitOn{id, back, c0, c1, b, code, db, until, cmds, codes, rest} True{}:
-      (WaitOn{id, back, c0, c1, b, code, db, until, cmds, codes, WaitNone{}}, waits.rev(acc, rest))
-    case WaitOn{id, back, c0, c1, b, code, db, until, cmds, codes, +rest} False{}:
-      waits.take(rest, waits.is(n, rest), n, WaitOn{id, back, c0, c1, b, code, db, until, cmds, codes, acc})
+    case WaitOn{id, back, c0, c1, b, argv, code, db, until, cmds, codes, rest} True{}:
+      (WaitOn{id, back, c0, c1, b, argv, code, db, until, cmds, codes, WaitNone{}}, waits.rev(acc, rest))
+    case WaitOn{id, back, c0, c1, b, argv, code, db, until, cmds, codes, +rest} False{}:
+      waits.take(rest, waits.is(n, rest), n, WaitOn{id, back, c0, c1, b, argv, code, db, until, cmds, codes, acc})
     case WaitNone{} _:
       (WaitNone{}, waits.rev(acc, WaitNone{}))
 
@@ -373,10 +378,10 @@ def waits.expire(ws: Waits, late: Bool, +now: Nat, keep: Waits, up: List<&2, Up>
   match ws late:
     case WaitNone{} _:
       (waits.rev(keep, WaitNone{}), up)
-    case WaitOn{id, back, +c0, c1, b, code, db, until, cmds, codes, +rest} True{}:
+    case WaitOn{id, back, +c0, c1, b, argv, code, db, until, cmds, codes, +rest} True{}:
       waits.expire(rest, waits.late(now, rest), now, keep, Up{back, c1, S.put(S.say(S.conn.mode(c0), R.RNullA{}), Nil{}), cmds, codes} <> up)
-    case WaitOn{id, back, c0, c1, b, code, db, until, cmds, codes, +rest} False{}:
-      waits.expire(rest, waits.late(now, rest), now, WaitOn{id, back, c0, c1, b, code, db, until, cmds, codes, keep}, up)
+    case WaitOn{id, back, c0, c1, b, argv, code, db, until, cmds, codes, +rest} False{}:
+      waits.expire(rest, waits.late(now, rest), now, WaitOn{id, back, c0, c1, b, argv, code, db, until, cmds, codes, keep}, up)
 
 # whether the first of ks holds what a pop waits for (z: a sorted set) in
 # the focus of d, and the first of ks that does (hit: whether the first
@@ -406,7 +411,7 @@ def waits.ready.of(+d: R.Ds, +b: S.Blk) -> Maybe<&2, String>:
 
 def waits.ready(+ds: R.Ds, +ws: Waits) -> Maybe<&2, String>:
   match ws:
-    case WaitOn{id, back, c0, c1, +b, code, +db, until, cmds, codes, rest}:
+    case WaitOn{id, back, c0, c1, +b, argv, code, +db, until, cmds, codes, rest}:
       waits.ready.of(R.ds.focus(db, ds), b)
     case WaitNone{}:
       None{}
@@ -420,10 +425,10 @@ type Found is Data:
 
 def waits.find(ws: Waits, m: Maybe<&2, String>, +ds: R.Ds, acc: Waits) -> Found:
   match ws m:
-    case WaitOn{id, back, c0, c1, b, code, db, until, cmds, codes, rest} Some{k}:
-      Found{WaitOn{id, back, c0, c1, b, code, db, until, cmds, codes, WaitNone{}}, k, waits.rev(acc, rest)}
-    case WaitOn{id, back, c0, c1, b, code, db, until, cmds, codes, +rest} None{}:
-      waits.find(rest, waits.ready(ds, rest), ds, WaitOn{id, back, c0, c1, b, code, db, until, cmds, codes, acc})
+    case WaitOn{id, back, c0, c1, b, argv, code, db, until, cmds, codes, rest} Some{k}:
+      Found{WaitOn{id, back, c0, c1, b, argv, code, db, until, cmds, codes, WaitNone{}}, k, waits.rev(acc, rest)}
+    case WaitOn{id, back, c0, c1, b, argv, code, db, until, cmds, codes, +rest} None{}:
+      waits.find(rest, waits.ready(ds, rest), ds, WaitOn{id, back, c0, c1, b, argv, code, db, until, cmds, codes, acc})
     case WaitNone{} _:
       NotFound{waits.rev(acc, WaitNone{})}
 
@@ -1001,6 +1006,130 @@ def touch.ents(t: Tx, +xs: List<&2, A.Ent>, +pre: Maybe<&2, R.Ds>, +post: R.Ds) 
   +x = t
   touch.ents.if(tx.on(x), x, xs, pre, post)
 
+# Clients
+# -------
+# Every client the server holds, by id, from its connection's start
+# (Join) to its end (Left): the channel its answers come back on, its
+# socket's fd, its peer's address and its own (TCP.name), when it came
+# (ms), its name and database as the last command that set them left
+# them (CLIENT SETNAME, HELLO, SELECT, RESET: the actor writes them as
+# such a command runs), and whether CLIENT NO-EVICT is on. Its last
+# command and the time of its last batch are its channel's mark
+# (Chan.mark), which the actor sets with each batch: a store, where a
+# write to the registry would cost every request a walk of a trie.
+# CLIENT KILL takes a client out of the registry at once (killed) and
+# shuts its socket down at the end of the group (kills: their fds), so
+# its connection finds its end wherever it waits; until the connection
+# tells the actor it ended (Left), a batch of its that comes is answered
+# Bye and not run, as Redis frees a client with what it had read. A
+# connection closes its socket only once the actor answered its Left
+# (conn_end), so an fd in the registry or in kills is still its client's
+# open socket.
+type Cl is Data:
+  Cl{id: Nat, back: Chan(Ans), fd: U32, addr: String, laddr: String, since: Nat, name: String, db: Nat, noev: Bool}
+
+type Cls is Data:
+  Cls{tab: KV.Trie<Cl>, killed: List<&2, Nat>, kills: List<&2, U32>}
+
+def cls.new() -> Cls:
+  Cls{KV.empty(Cl), Nil{}, Nil{}}
+
+# the bit of Ps's ev that keeps the fast way off while a killed client's
+# connection has not ended: no class of keyspace event has it
+def cls.bit(+cs: Cls) -> U32:
+  match cs:
+    case Cls{tab, Nil{}, ks}:
+      0
+    case Cls{tab, Con{i, rest}, ks}:
+      2147483648
+
+def cls.get(+id: Nat, +cs: Cls) -> Maybe<&2, Cl>:
+  match cs:
+    case Cls{+tab, kd, ks}:
+      KV.get(Cl, tab, Nat.show(id))
+
+def cls.put(+id: Nat, c: Cl, cs: Cls) -> Cls:
+  match cs:
+    case Cls{tab, kd, ks}:
+      Cls{KV.set(Cl, tab, Nat.show(id), c), kd, ks}
+
+def cls.del(+id: Nat, cs: Cls) -> Cls:
+  match cs:
+    case Cls{tab, kd, ks}:
+      Cls{KV.del(Cl, tab, Nat.show(id)), kd, ks}
+
+# whether xs holds n
+def nats.has(+n: Nat, +xs: List<&2, Nat>) -> Bool:
+  match xs:
+    case Nil{}:
+      False{}
+    case Con{+x, rest}:
+      Bool.or(Nat.is_eq(x, n), nats.has(n, rest))
+
+# xs without n
+def nats.drop(+n: Nat, xs: List<&2, Nat>) -> List<&2, Nat>:
+  match xs:
+    case Nil{}:
+      Nil{}
+    case Con{+x, rest}:
+      +r = nats.drop(n, rest)
+      Bool.pick(List<&2, Nat>, Nat.is_eq(x, n), r, x <> r)
+
+# whether the client of id was killed and its connection has not ended
+def cls.killed(+id: Nat, +cs: Cls) -> Bool:
+  match cs:
+    case Cls{tab, +kd, ks}:
+      nats.has(id, kd)
+
+# the client of id's connection ended: out of the registry, and of the
+# killed
+def cls.left(+id: Nat, cs: Cls) -> Cls:
+  match cs:
+    case Cls{tab, kd, ks}:
+      Cls{KV.del(Cl, tab, Nat.show(id)), nats.drop(id, kd), ks}
+
+# the fds to shut down taken (at the end of the group)
+def cls.kills(cs: Cls) -> List<&2, U32> & Cls:
+  match cs:
+    case Cls{tab, kd, ks}:
+      (ks, Cls{tab, kd, Nil{}})
+
+# a client's name and database set from its connection
+def cl.conn(+cn: S.Conn, c: Cl) -> Cl:
+  match c:
+    case Cl{id, back, fd, addr, laddr, since, name, db, noev}:
+      Cl{id, back, fd, addr, laddr, since, S.conn.name(cn), S.conn.db(cn), noev}
+
+def cl.noev(on: Bool, c: Cl) -> Cl:
+  match c:
+    case Cl{id, back, fd, addr, laddr, since, name, db, noev}:
+      Cl{id, back, fd, addr, laddr, since, name, db, on}
+
+def cls.with.if(+id: Nat, m: Maybe<&2, Cl>, +cn: S.Conn, cs: Cls) -> Cls:
+  match m:
+    case Some{c}:
+      cls.put(id, cl.conn(cn, c), cs)
+    case None{}:
+      cs
+
+# the registry with the client's name and database as its connection
+# has them
+def cls.with(+cn: S.Conn, cs: Cls) -> Cls:
+  +id = S.conn.id(cn)
+  +c = cs
+  cls.with.if(id, cls.get(id, c), cn, c)
+
+def cls.noev.if(+id: Nat, on: Bool, m: Maybe<&2, Cl>, cs: Cls) -> Cls:
+  match m:
+    case Some{c}:
+      cls.put(id, cl.noev(on, c), cs)
+    case None{}:
+      cs
+
+def cls.noev(+id: Nat, on: Bool, cs: Cls) -> Cls:
+  +c = cs
+  cls.noev.if(id, on, cls.get(id, c), c)
+
 # Pub/Sub
 # -------
 # SUBSCRIBE, PSUBSCRIBE, SSUBSCRIBE, their UNSUBSCRIBEs, PUBLISH, SPUBLISH
@@ -1052,16 +1181,16 @@ type Reg is Data:
 # (Blocked clients); flat, it would be eight, which every batch's state
 # would carry.
 type Ps is Data:
-  Ps{reg: Reg, ev: U32, px: List<&2, Sigma<&2, &2, Chan(Ans), _ => Ans>>}
+  Ps{reg: Reg, ev: U32, px: List<&2, Sigma<&2, &2, Chan(Ans), _ => Ans>>, cs: Cls}
   PsOf{p: Ps}
 
 def ps.new() -> Ps:
-  Ps{RegNone{}, 0, Nil{}}
+  Ps{RegNone{}, 0, Nil{}, cls.new()}
 
 # whether the fast way may run a batch: no keyspace event is to be sent
 def ps.calm(+pb: Ps) -> Bool:
   match pb:
-    case Ps{reg, +ev, px}:
+    case Ps{reg, +ev, px, cs}:
       U32.is_eq(ev, 0)
     case PsOf{+p}:
       ps.calm(p)
@@ -1238,7 +1367,7 @@ def reg.mine(+id: Nat, +r: Reg) -> Maybe<&2, Mine>:
 # whether the client of id has a subscription
 def ps.has(+id: Nat, +pb: Ps) -> Bool:
   match pb:
-    case Ps{+reg, ev, px}:
+    case Ps{+reg, ev, px, cs}:
       Maybe.is_some(&2, Mine, reg.mine(id, reg))
     case PsOf{+p}:
       ps.has(id, p)
@@ -1370,19 +1499,19 @@ def reg.run(+on: Bool, +kind: Nat, names: List<&2, String>, +id: Nat, +back: Cha
     case _ ns:
       reg.each(on, kind, ns, id, back, Run{Nil{}, m, r})
 
-def ps.ran(+id: Nat, had: Bool, w: Run, ev: U32, px: List<&2, Sigma<&2, &2, Chan(Ans), _ => Ans>>) -> List<&2, R.Reply> & Ps:
+def ps.ran(+id: Nat, had: Bool, w: Run, ev: U32, px: List<&2, Sigma<&2, &2, Chan(Ans), _ => Ans>>, cs: Cls) -> List<&2, R.Reply> & Ps:
   match w:
     case Run{acc, m, r}:
-      (List.reverse(&2, R.Reply, acc), Ps{reg.put(id, had, m, r), ev, px})
+      (List.reverse(&2, R.Reply, acc), Ps{reg.put(id, had, m, r), ev, px, cs})
 
 # SUBSCRIBE (on) or UNSUBSCRIBE of a kind for the client of id: its
 # replies, in order, and Pub/Sub's state after it
 def ps.sub(+id: Nat, +back: Chan(Ans), +on: Bool, +kind: Nat, names: List<&2, String>, pb: Ps) -> List<&2, R.Reply> & Ps:
   match pb:
-    case Ps{reg, ev, px}:
+    case Ps{reg, ev, px, cs}:
       +r = reg.open(reg)
       +m = reg.mine(id, r)
-      ps.ran(id, Maybe.is_some(&2, Mine, m), reg.run(on, kind, names, id, back, mine.of(m), r), ev, px)
+      ps.ran(id, Maybe.is_some(&2, Mine, m), reg.run(on, kind, names, id, back, mine.of(m), r), ev, px, cs)
     case PsOf{p}:
       ps.sub(id, back, on, kind, names, p)
 
@@ -1394,21 +1523,80 @@ def names.dels(+kind: Nat, xs: List<&2, String>, +id: Nat, r: Reg) -> Reg:
     case Con{+x, rest}:
       names.dels(kind, rest, id, reg.del(kind, x, id, r))
 
-def ps.dropped(+id: Nat, m: Maybe<&2, Mine>, r: Reg, ev: U32, px: List<&2, Sigma<&2, &2, Chan(Ans), _ => Ans>>) -> Ps:
+def ps.dropped(+id: Nat, m: Maybe<&2, Mine>, r: Reg, ev: U32, px: List<&2, Sigma<&2, &2, Chan(Ans), _ => Ans>>, cs: Cls) -> Ps:
   match m:
     case None{}:
-      Ps{r, ev, px}
+      Ps{r, ev, px, cs}
     case Some{Mine{c, p, s}}:
-      Ps{reg.put(id, True{}, Mine{Nil{}, Nil{}, Nil{}}, names.dels(2n, s, id, names.dels(1n, p, id, names.dels(0n, c, id, r)))), ev, px}
+      Ps{reg.put(id, True{}, Mine{Nil{}, Nil{}, Nil{}}, names.dels(2n, s, id, names.dels(1n, p, id, names.dels(0n, c, id, r)))), ev, px, cs}
 
 # every subscription of the client of id dropped (RESET, its end)
 def ps.drop(+id: Nat, pb: Ps) -> Ps:
   match pb:
-    case Ps{reg, ev, px}:
+    case Ps{reg, ev, px, cs}:
       +r = reg
-      ps.dropped(id, reg.mine(id, r), r, ev, px)
+      ps.dropped(id, reg.mine(id, r), r, ev, px, cs)
     case PsOf{p}:
       ps.drop(id, p)
+
+# The registry of clients in Pub/Sub's state (Clients, above): a client
+# joins, its connection ends, its name and database or NO-EVICT change,
+# it is killed; the fds to shut down are taken at the end of the group.
+def ps.join(+id: Nat, c: Cl, pb: Ps) -> Ps:
+  match pb:
+    case Ps{reg, ev, px, cs}:
+      Ps{reg, ev, px, cls.put(id, c, cs)}
+    case PsOf{p}:
+      ps.join(id, c, p)
+
+def ps.left(+id: Nat, pb: Ps) -> Ps:
+  match pb:
+    case Ps{reg, ev, px, cs}:
+      +c = cls.left(id, cs)
+      Ps{reg, U32.or(U32.and(ev, 2147483647), cls.bit(c)), px, c}
+    case PsOf{p}:
+      ps.left(id, p)
+
+def ps.conn(+cn: S.Conn, pb: Ps) -> Ps:
+  match pb:
+    case Ps{reg, ev, px, cs}:
+      Ps{reg, ev, px, cls.with(cn, cs)}
+    case PsOf{p}:
+      ps.conn(cn, p)
+
+def ps.noev(+id: Nat, on: Bool, pb: Ps) -> Ps:
+  match pb:
+    case Ps{reg, ev, px, cs}:
+      Ps{reg, ev, px, cls.noev(id, on, cs)}
+    case PsOf{p}:
+      ps.noev(id, on, p)
+
+def ps.cls(+pb: Ps) -> Cls:
+  match pb:
+    case Ps{reg, ev, px, +cs}:
+      cs
+    case PsOf{+p}:
+      ps.cls(p)
+
+# the client of id killed: out of the registry, its fd to be shut down,
+# and the fast way off until its connection ends
+def ps.kill(+id: Nat, +fd: U32, pb: Ps) -> Ps:
+  match pb:
+    case Ps{reg, ev, px, Cls{tab, kd, ks}}:
+      Ps{reg, U32.or(ev, 2147483648), px, Cls{KV.del(Cl, tab, Nat.show(id)), id <> kd, fd <> ks}}
+    case PsOf{p}:
+      ps.kill(id, fd, p)
+
+def ps.kills.of(q: List<&2, U32> & Cls, reg: Reg, ev: U32, px: List<&2, Sigma<&2, &2, Chan(Ans), _ => Ans>>) -> List<&2, U32> & Ps:
+  (ks, cs) = q
+  (ks, Ps{reg, ev, px, cs})
+
+def ps.kills(pb: Ps) -> List<&2, U32> & Ps:
+  match pb:
+    case Ps{reg, ev, px, cs}:
+      ps.kills.of(cls.kills(cs), reg, ev, px)
+    case PsOf{p}:
+      ps.kills(p)
 
 # A message: the bytes each subscriber of its channel gets (smessage for
 # a shard channel), and those of a pattern's
@@ -1450,21 +1638,21 @@ def pats.send(xs: List<&2, Pat>, +c: String, +m: String, d: Sent) -> Sent:
     case Con{Pat{+p, +subs}, rest}:
       pats.send(rest, c, m, pats.send.if(R.stringmatch(p, c, False{}), p, subs, c, m, d))
 
-def ps.sent(d: Sent, reg: Reg, ev: U32) -> Nat & Ps:
+def ps.sent(d: Sent, reg: Reg, ev: U32, cs: Cls) -> Nat & Ps:
   match d:
     case Sent{k, px}:
-      (k, Ps{reg, ev, px})
+      (k, Ps{reg, ev, px, cs})
 
 # PUBLISH (or SPUBLISH: shard) of message m to channel c: how many got
 # it, and Pub/Sub's state with the pushes
 def ps.publish(shard: Bool, +c: String, +m: String, pb: Ps) -> Nat & Ps:
   match shard pb:
-    case _ Ps{RegNone{}, ev, px}:
-      (0n, Ps{RegNone{}, ev, px})
-    case False{} Ps{RegOn{+ch, +p, sh, cl, n}, ev, px}:
-      ps.sent(pats.send(p, c, m, sent.add(chan.subs(ch, c), pub.msg(False{}, c, m), Sent{0n, px})), RegOn{ch, p, sh, cl, n}, ev)
-    case True{} Ps{RegOn{ch, p, +sh, cl, n}, ev, px}:
-      ps.sent(sent.add(chan.subs(sh, c), pub.msg(True{}, c, m), Sent{0n, px}), RegOn{ch, p, sh, cl, n}, ev)
+    case _ Ps{RegNone{}, ev, px, cs}:
+      (0n, Ps{RegNone{}, ev, px, cs})
+    case False{} Ps{RegOn{+ch, +p, sh, cl, n}, ev, px, cs}:
+      ps.sent(pats.send(p, c, m, sent.add(chan.subs(ch, c), pub.msg(False{}, c, m), Sent{0n, px})), RegOn{ch, p, sh, cl, n}, ev, cs)
+    case True{} Ps{RegOn{ch, p, +sh, cl, n}, ev, px, cs}:
+      ps.sent(sent.add(chan.subs(sh, c), pub.msg(True{}, c, m), Sent{0n, px}), RegOn{ch, p, sh, cl, n}, ev, cs)
     case sh PsOf{p}:
       ps.publish(sh, c, m, p)
 
@@ -1507,7 +1695,7 @@ def reg.read(op: R.PubOp, +r: Reg) -> R.Reply:
 
 def ps.read(op: R.PubOp, +pb: Ps) -> R.Reply:
   match pb:
-    case Ps{+reg, ev, px}:
+    case Ps{+reg, ev, px, cs}:
       reg.read(op, reg)
     case PsOf{+p}:
       ps.read(op, p)
@@ -1527,18 +1715,18 @@ def ev.of(+srv: S.Srv) -> U32:
 
 def ps.tune(pb: Ps, +srv: S.Srv) -> Ps:
   match pb:
-    case Ps{RegNone{}, ev, px}:
-      Ps{RegNone{}, 0, px}
-    case Ps{RegOn{c, p, sh, cl, n}, ev, px}:
-      Ps{RegOn{c, p, sh, cl, n}, ev.of(srv), px}
+    case Ps{RegNone{}, ev, px, +cs}:
+      Ps{RegNone{}, cls.bit(cs), px, cs}
+    case Ps{RegOn{c, p, sh, cl, n}, ev, px, +cs}:
+      Ps{RegOn{c, p, sh, cl, n}, U32.or(ev.of(srv), cls.bit(cs)), px, cs}
     case PsOf{p}:
       ps.tune(p, srv)
 
 # the pushes of a batch put before the group's answers
 def ps.flush(pb: Ps, outs: List<&2, Sigma<&2, &2, Chan(Ans), _ => Ans>>) -> Ps & List<&2, Sigma<&2, &2, Chan(Ans), _ => Ans>>:
   match pb:
-    case Ps{reg, ev, px}:
-      (Ps{reg, ev, Nil{}}, List.append(&2, Sigma<&2, &2, Chan(Ans), _ => Ans>, px, outs))
+    case Ps{reg, ev, px, cs}:
+      (Ps{reg, ev, Nil{}, cs}, List.append(&2, Sigma<&2, &2, Chan(Ans), _ => Ans>, px, outs))
     case PsOf{p}:
       ps.flush(p, outs)
 
@@ -1997,8 +2185,8 @@ def ps.ev.send(on: Bool, +ev: U32, +name: String, +key: String, +db: Nat, pb: Ps
 
 def ps.ev1(e: Ev, pb: Ps) -> Ps:
   match e pb:
-    case Ev{+cls, +name, +key, +db} Ps{reg, +ev, px}:
-      ps.ev.send(U32.is_ne(U32.and(ev, cls), 0), ev, name, key, db, Ps{reg, ev, px})
+    case Ev{+cls, +name, +key, +db} Ps{reg, +ev, px, cs}:
+      ps.ev.send(U32.is_ne(U32.and(ev, cls), 0), ev, name, key, db, Ps{reg, ev, px, cs})
     case x PsOf{p}:
       ps.ev1(x, p)
 
@@ -2193,7 +2381,7 @@ def bg.popped.put(+e: List<&2, A.Eff>, +ds: R.Ds, rs: List<&2, R.Reply>, es: Lis
 
 def bg.popped(w: Waits, r: R.Reply & (List<&2, A.Eff> & R.Ds), rs: List<&2, R.Reply>, es: List<&2, A.Ent>, conn: S.Conn, srv: S.Srv, ws: Waits, up: List<&2, Up>, tx: Tx, pb: Ps, +pc: R.Cmd, +pre: R.Ds) -> LRun:
   match w:
-    case WaitOn{id, back, +c0, c1, +b, +code, db, until, cmds, codes, rest}:
+    case WaitOn{id, back, +c0, c1, +b, argv, +code, db, until, cmds, codes, rest}:
       (x, q) = r
       (e, ds) = q
       +y = S.blk.shape(S.blk.form(b), x)
@@ -2251,13 +2439,23 @@ def bg.serve(g: LRun) -> LRun:
     case LHeld{h}:
       LHeld{h}
 
+# the size of a blocking command's arguments, its name's too: Redis's
+# argv-mem of a client while it waits
+def wait.argv(+c: R.Cmd) -> Nat:
+  match c:
+    case R.Own{R.SBlock{+i, args}}:
+      S.cl.argv(args, String.length(R.stat.name(i)))
+    case _:
+      0n
+
 # a blocking command that finds nothing: its client waits, the call
-# counted now
+# counted now, its channel marked with the blocking command (CLIENT LIST's
+# cmd while it waits, as Redis's last command)
 def bg.wait(+id: Nat, +back: Chan(Ans), b: S.Blk, +c: R.Cmd, +code: Nat, rest: List<&2, R.Cmd>, more: List<&2, Nat>, g: LRun) -> LRun:
   match g:
     case LRun{rs, es, +conn, +srv, +ds, ws, up, tx, pb}:
       +x = b
-      +ws2 = waits.add(ws, WaitOn{id, back, conn, S.next_conn(False{}, c, conn, srv), x, code, S.conn.db(conn), S.blk.until(R.ds.now(ds), S.blk.ms(x)), rest, more, WaitNone{}})
+      +ws2 = waits.add(ws, WaitOn{id, Chan.mark(Ans, back, U32.from_nat(code), R.ds.now(ds)), conn, S.next_conn(False{}, c, conn, srv), x, wait.argv(c), code, S.conn.db(conn), S.blk.until(R.ds.now(ds), S.blk.ms(x)), rest, more, WaitNone{}})
       LHeld{LRun{rs, es, conn, waits.count(ws2, gen.count(srv, code, Nil{})), ds, ws2, up, tx, pb}}
     case LHeld{h}:
       LHeld{h}
@@ -2283,7 +2481,7 @@ def unblock.stat(+err: Bool, +code: Nat, +own: Nat, srv: S.Srv) -> S.Srv:
 def bg.unblocked(p: Waits & Waits, +err: Bool, +code: Nat, rs: List<&2, R.Reply>, es: List<&2, A.Ent>, conn: S.Conn, srv: S.Srv, ds: R.Ds, up: List<&2, Up>, tx: Tx, pb: Ps) -> LRun:
   (w, +ws) = p
   match w:
-    case WaitOn{id, back, +c0, c1, b, +wc, db, until, cmds, codes, rest}:
+    case WaitOn{id, back, +c0, c1, b, argv, +wc, db, until, cmds, codes, rest}:
       bg.one(R.Own{R.SReply{R.RInt{R.IPos{1n}}}}, code, LRun{rs, es, conn, waits.count(ws, unblock.stat(err, wc, code, srv)), ds, ws, Up{back, c1, S.put(S.say(S.conn.mode(c0), unblock.reply(err)), Nil{}), cmds, codes} <> up, tx, pb})
     case WaitNone{}:
       bg.one(R.Own{R.SReply{R.RInt{R.IPos{0n}}}}, code, LRun{rs, es, conn, srv, ds, ws, up, tx, pb})
@@ -2324,6 +2522,8 @@ type Sh is Data:
   ShPub{op: R.PubOp}
   ShPing{m: String}
   ShDeny{name: String}
+  ShClient{op: R.ClOp, argv: Nat}
+  ShConn{}
 
 def sh.blk(b: S.Blk, +ds: R.Ds) -> Sh:
   +x = b
@@ -2367,6 +2567,14 @@ def sh.plain(+c: R.Cmd, +code: Nat, +ds: R.Ds) -> Sh:
       ShReset{}
     case R.Own{R.SPub{+k, a}}:
       ShPub{R.pub.op(k, a)}
+    case R.Own{R.SClient{+k, +a}}:
+      ShClient{R.client.op(k, a), S.cl.argv(a, 10n)}
+    case R.Own{R.SClientSetName{n}}:
+      ShConn{}
+    case R.Own{R.SHello{a}}:
+      ShConn{}
+    case R.Own{R.SSelect{d}}:
+      ShConn{}
     case R.Own{R.SBad{R.RError{+m}}}:
       sh.abort.if(Nat.is_eq(Nat.div(code, 4n), R.stat.top(162n)), m)
     case _:
@@ -2631,13 +2839,418 @@ def bg.unsub.all(+id: Nat, g: LRun) -> LRun:
     case LHeld{h}:
       LHeld{h}
 
+# CLIENT LIST, INFO, KILL and NO-EVICT
+# ------------------------------------
+# A client's line as Redis writes it (R.client.line), from the registry
+# (Clients) and the actor's state: P with a subscription, x in MULTI
+# (its queued commands as multi), b waiting, d with a watched key
+# touched, e with NO-EVICT on, N for none; its counts of channels,
+# patterns and shard channels; its last command and the time of its last
+# batch from its channel's mark (NULL before its first batch); a client
+# that waits, the size of its blocking command's arguments (argv-mem). The
+# client that asks shows its own connection's name and database, the
+# command that runs, idle 0, and the bytes of its batch (qbuf) and of the
+# command's arguments (argv-mem).
+
+# whether the client of id waits, anywhere in ws
+def waits.has(+n: Nat, +ws: Waits) -> Bool:
+  match ws:
+    case WaitOn{+id, back, c0, c1, b, argv, code, db, until, cmds, codes, +rest}:
+      Bool.or(Nat.is_eq(id, n), waits.has(n, rest))
+    case WaitNone{}:
+      False{}
+
+# the size of the arguments of the command the client of id waits in
+# (argv-mem: Redis keeps a blocked client's arguments), 0 if it waits not
+def waits.argv(+n: Nat, +ws: Waits) -> Nat:
+  match ws:
+    case WaitOn{+id, back, c0, c1, b, +argv, code, db, until, cmds, codes, +rest}:
+      Bool.pick(Nat, Nat.is_eq(id, n), argv, waits.argv(n, rest))
+    case WaitNone{}:
+      0n
+
+# a client's transaction as CLIENT LIST shows it: in MULTI, its queued
+# commands, and whether a watched key of its was touched
+type TxIs is Data:
+  TxIs{multi: Bool, n: Nat, cas: Bool}
+
+def tx.find(+n: Nat, +t: Tx) -> TxIs:
+  match t:
+    case TxOn{+i, +mu, bd, +cs, +qs, qc, wk, +r}:
+      Bool.pick(TxIs, Nat.is_eq(i, n), TxIs{mu, List.length(&2, R.Cmd, qs), cs}, tx.find(n, r))
+    case TxNone{}:
+      TxIs{False{}, 0n, False{}}
+
+def cl.flag(+on: Bool, +f: String) -> String:
+  Bool.pick(String, on, f, "")
+
+def cl.flags.of(+s: String) -> String:
+  Bool.pick(String, String.eq(s, ""), "N", s)
+
+def cl.flags(+sub: Bool, +x: TxIs, +b: Bool, +e: Bool) -> String:
+  match x:
+    case TxIs{+mu, n, +cas}:
+      cl.flags.of(cl.flag(sub, "P") ++ cl.flag(mu, "x") ++ cl.flag(b, "b") ++ cl.flag(cas, "d") ++ cl.flag(e, "e"))
+
+def cl.multi(+x: TxIs) -> Maybe<&2, Nat>:
+  match x:
+    case TxIs{+mu, +n, cas}:
+      Bool.pick(Maybe<&2, Nat>, mu, Some{n}, None{})
+
+def ps.mine(+id: Nat, +pb: Ps) -> Maybe<&2, Mine>:
+  match pb:
+    case Ps{+reg, ev, px, cs}:
+      reg.mine(id, reg)
+    case PsOf{+p}:
+      ps.mine(id, p)
+
+def mine.or(m: Maybe<&2, Mine>) -> Mine:
+  match m:
+    case Some{x}:
+      x
+    case None{}:
+      Mine{Nil{}, Nil{}, Nil{}}
+
+# the name of the command of code w (its channel's mark: 0 before any)
+def cl.cmd.of(+w: U32) -> String:
+  +k = Nat.div(U32.to_nat(w), 4n)
+  Bool.pick(String, Nat.is_eq(k, 0n), "NULL", R.stat.name(k))
+
+# whole seconds between two times in ms, as Redis subtracts its unixtime
+def cl.secs(+now: Nat, +t: Nat) -> Nat:
+  Nat.sub(Nat.div(now, 1000n), Nat.div(t, 1000n))
+
+# What a line shows of the client that asks (Me: its id, its connection,
+# the name of the command that runs, the bytes of its batch and of the
+# command's arguments, and while EXEC runs its transaction the number of
+# the commands queued), or of another client (Them).
+type Who is Data:
+  Me{id: Nat, cn: S.Conn, cmd: String, qbuf: Nat, argv: Nat, ex: Maybe<&2, Nat>}
+  Them{}
+
+def cl.line.of(m: Mine, +sub: Bool, +x: TxIs, +b: Bool, +wa: Nat, c: Cl, +now: Nat, +word: U32, +at: Nat, w: Who) -> String:
+  match m:
+    case Mine{+ch, +pa, +sh}:
+      match c:
+        case Cl{id, back, fd, addr, laddr, +since, name, db, +noev}:
+          match w:
+            case Them{}:
+              R.client.line(R.ClLine{id, addr, laddr, U32.to_nat(fd), name, cl.secs(now, since), cl.secs(now, at), cl.flags(sub, x, b, noev), db, List.length(&2, String, ch), List.length(&2, String, pa), List.length(&2, String, sh), cl.multi(x), 0n, wa, cl.cmd.of(word)})
+            case Me{i, +cn, cmd, qbuf, argv, ex}:
+              R.client.line(R.ClLine{id, addr, laddr, U32.to_nat(fd), S.conn.name(cn), cl.secs(now, since), 0n, cl.flags(sub, x, b, noev), S.conn.db(cn), List.length(&2, String, ch), List.length(&2, String, pa), List.length(&2, String, sh), cl.multi(x), qbuf, argv, cmd})
+
+def cl.line.mk(m: Mine, +sub: Bool, +x: TxIs, +b: Bool, +wa: Nat, c: Cl, +now: Nat, mk: U32 & Nat, w: Who) -> String:
+  (word, at) = mk
+  cl.line.of(m, sub, x, b, wa, c, now, word, at, w)
+
+# the transaction a line shows: of the client that asks while EXEC runs
+# it (in MULTI, its commands queued, as Redis shows a client in EXEC),
+# else the chain's
+def cl.tx.of(+ex: Maybe<&2, Nat>, +id: Nat, +tx: Tx) -> TxIs:
+  match ex:
+    case Some{+n}:
+      TxIs{True{}, n, False{}}
+    case None{}:
+      tx.find(id, tx)
+
+def cl.tx(+w: Who, +id: Nat, +tx: Tx) -> TxIs:
+  match w:
+    case Me{i, cn, cmd, qbuf, argv, +ex}:
+      cl.tx.of(ex, id, tx)
+    case Them{}:
+      tx.find(id, tx)
+
+# client c's line, ended by a newline
+def cl.line(c: Cl, +now: Nat, +w: Who, +ws: Waits, +tx: Tx, +pb: Ps) -> String:
+  match c:
+    case Cl{+id, +back, fd, addr, laddr, since, name, db, noev}:
+      cl.line.mk(mine.or(ps.mine(id, pb)), ps.has(id, pb), cl.tx(w, id, tx), waits.has(id, ws), waits.argv(id, ws), Cl{id, back, fd, addr, laddr, since, name, db, noev}, now, Chan.marked(Ans, back), w) ++ "\n"
+
+def cl.id(+c: Cl) -> Nat:
+  match c:
+    case Cl{+id, back, fd, addr, laddr, since, name, db, noev}:
+      id
+
+# the registry's clients, in the order of their ids (as Redis lists them
+# in the order they came, but for its rotations): a merge sort, with the
+# number of clients as its fuel
+@unsafe
+def cls.merge(xs: List<&2, Cl>, ys: List<&2, Cl>) -> List<&2, Cl>:
+  match xs:
+    case Nil{}:
+      ys
+    case Con{+x, +xr}:
+      match ys:
+        case Nil{}:
+          x <> xr
+        case Con{+y, +yr}:
+          cls.merge.pick(Nat.is_lt(cl.id(x), cl.id(y)), x, xr, y, yr)
+
+@unsafe
+def cls.merge.pick(lt: Bool, x: Cl, xr: List<&2, Cl>, y: Cl, yr: List<&2, Cl>) -> List<&2, Cl>:
+  match lt:
+    case True{}:
+      x <> cls.merge(xr, y <> yr)
+    case False{}:
+      y <> cls.merge(x <> xr, yr)
+
+def cls.split(xs: List<&2, Cl>, a: List<&2, Cl>, b: List<&2, Cl>) -> List<&2, Cl> & List<&2, Cl>:
+  match xs:
+    case Nil{}:
+      (a, b)
+    case Con{x, rest}:
+      cls.split(rest, b, x <> a)
+
+@unsafe
+def cls.sort(xs: List<&2, Cl>) -> List<&2, Cl>:
+  match xs:
+    case Nil{}:
+      Nil{}
+    case Con{x, Nil{}}:
+      [x]
+    case Con{x, Con{y, rest}}:
+      cls.sort.halves(cls.split(x <> y <> rest, Nil{}, Nil{}))
+
+@unsafe
+def cls.sort.halves(p: List<&2, Cl> & List<&2, Cl>) -> List<&2, Cl>:
+  (a, b) = p
+  cls.merge(cls.sort(a), cls.sort(b))
+
+def cls.add(m: Maybe<&2, Cl>, acc: List<&2, Cl>) -> List<&2, Cl>:
+  match m:
+    case Some{c}:
+      c <> acc
+    case None{}:
+      acc
+
+def cls.of(ks: List<&2, String>, +tab: KV.Trie<Cl>, acc: List<&2, Cl>) -> List<&2, Cl>:
+  match ks:
+    case Nil{}:
+      acc
+    case Con{+k, rest}:
+      cls.of(rest, tab, cls.add(KV.get(Cl, tab, k), acc))
+
+def cls.all(+cs: Cls) -> List<&2, Cl>:
+  match cs:
+    case Cls{+tab, kd, ks}:
+      cls.sort(cls.of(KV.keys(Cl, tab, 0n), tab, Nil{}))
+
+# a client's type as CLIENT LIST TYPE and CLIENT KILL TYPE read it: 3
+# pubsub with a subscription, else 1 normal (no client is a replica or
+# a master)
+def cl.type(+id: Nat, +pb: Ps) -> Nat:
+  Bool.pick(Nat, ps.has(id, pb), 3n, 1n)
+
+def cl.typed(+ty: Nat, +id: Nat, +pb: Ps) -> Bool:
+  Bool.or(Nat.is_eq(ty, 0n), Nat.is_eq(ty, cl.type(id, pb)))
+
+def cl.who(+me: Who, +id: Nat) -> Who:
+  match me:
+    case Me{+i, cn, cmd, qbuf, argv, ex}:
+      Bool.pick(Who, Nat.is_eq(i, id), me, Them{})
+    case Them{}:
+      Them{}
+
+def cl.lines(xs: List<&2, Cl>, +ty: Nat, +now: Nat, +me: Who, +ws: Waits, +tx: Tx, +pb: Ps, acc: String) -> String:
+  match xs:
+    case Nil{}:
+      acc
+    case Con{+c, rest}:
+      +id = cl.id(c)
+      cl.lines(rest, ty, now, me, ws, tx, pb, acc ++ Bool.pick(String, cl.typed(ty, id, pb), cl.line(c, now, cl.who(me, id), ws, tx, pb), ""))
+
+def cl.line.or(m: Maybe<&2, Cl>, +now: Nat, w: Who, +ws: Waits, +tx: Tx, +pb: Ps) -> String:
+  match m:
+    case Some{c}:
+      cl.line(c, now, w, ws, tx, pb)
+    case None{}:
+      ""
+
+def cl.ids(ids: List<&2, Nat>, +now: Nat, +me: Who, +ws: Waits, +tx: Tx, +pb: Ps, acc: String) -> String:
+  match ids:
+    case Nil{}:
+      acc
+    case Con{+id, rest}:
+      cl.ids(rest, now, me, ws, tx, pb, acc ++ cl.line.or(cls.get(id, ps.cls(pb)), now, cl.who(me, id), ws, tx, pb))
+
+# CLIENT LIST: all clients, of a type, or of ids
+def cl.list(+ty: Nat, ids: Maybe<&2, List<&2, Nat>>, +now: Nat, +me: Who, +ws: Waits, +tx: Tx, +pb: Ps) -> R.Reply:
+  match ids:
+    case Some{xs}:
+      R.RBulk{cl.ids(xs, now, me, ws, tx, pb, "")}
+    case None{}:
+      R.RBulk{cl.lines(cls.all(ps.cls(pb)), ty, now, me, ws, tx, pb, "")}
+
+# CLIENT INFO: the client's own line
+def cl.info(+now: Nat, +me: Who, +ws: Waits, +tx: Tx, +pb: Ps) -> R.Reply:
+  match me:
+    case Me{+id, cn, cmd, qbuf, argv, ex}:
+      R.RBulk{cl.ids([id], now, me, ws, tx, pb, "")}
+    case Them{}:
+      R.RBulk{""}
+
+def opt.is(m: Maybe<&2, String>, +s: String) -> Bool:
+  match m:
+    case Some{+x}:
+      String.eq(x, s)
+    case None{}:
+      True{}
+
+def id.is(m: Maybe<&2, Nat>, +n: Nat) -> Bool:
+  match m:
+    case Some{+x}:
+      Nat.is_eq(x, n)
+    case None{}:
+      True{}
+
+# whether CLIENT KILL's filter picks client c (me: the id of the client
+# that kills)
+def cl.picked(f: R.Kill, c: Cl, +me: Nat, +pb: Ps) -> Bool:
+  match f c:
+    case R.Kill{a, l, i, +ty, +skip} Cl{+id, back, fd, +addr, +laddr, since, name, db, noev}:
+      Bool.and(Bool.and(Bool.and(opt.is(a, addr), opt.is(l, laddr)), Bool.and(id.is(i, id), cl.typed(ty, id, pb))), Bool.not(Bool.and(skip, Nat.is_eq(id, me))))
+
+def cl.fd(+c: Cl) -> U32:
+  match c:
+    case Cl{id, back, +fd, addr, laddr, since, name, db, noev}:
+      fd
+
+# the clients a filter picks
+def cl.pick(xs: List<&2, Cl>, +f: R.Kill, +me: Nat, +pb: Ps) -> List<&2, Cl>:
+  match xs:
+    case Nil{}:
+      Nil{}
+    case Con{+c, rest}:
+      +r = cl.pick(rest, f, me, pb)
+      Bool.pick(List<&2, Cl>, cl.picked(f, c, me, pb), c <> r, r)
+
+# a client the actor holds dropped, as if its connection had ended: its
+# wait, its unblocked batch, its transaction, its subscriptions; out of
+# the registry, its fd to be shut down
+def bg.kill1(+v: Nat, +fd: U32, g: LRun) -> LRun:
+  match g:
+    case LRun{rs, es, conn, srv, ds, +ws, +up, tx, pb}:
+      +left = waits.rest(waits.take(ws, waits.is(v, ws), v, WaitNone{}))
+      LRun{rs, es, conn, waits.count(left, srv), ds, left, ups.drop(up, ups.is(v, up), v), tx.drop(v, tx), ps.kill(v, fd, ps.drop(v, pb))}
+    case LHeld{h}:
+      LHeld{h}
+
+# the client itself, killed: its connection closes once this reply is
+# out (CLIENT_CLOSE_AFTER_REPLY), the rest of its batch not run
+def bg.self.kill(g: LRun) -> LRun:
+  match g:
+    case LRun{rs, es, S.Conn{id, auth, name, mode, quit, db}, srv, ds, ws, up, tx, pb}:
+      LRun{rs, es, S.Conn{id, auth, name, mode, True{}, db}, srv, ds, ws, up, tx, pb}
+    case LHeld{h}:
+      LHeld{h}
+
+# the victims killed, each another client or the client itself (after
+# the reply, which comes first)
+# a victim: the client itself (killed after its reply), or another
+def bg.kill.of(it: Bool, +c: Cl, p: Bool & LRun) -> Bool & LRun:
+  match it:
+    case True{}:
+      (s, g) = p
+      (True{}, g)
+    case False{}:
+      (s, g) = p
+      (s, bg.kill1(cl.id(c), cl.fd(c), g))
+
+def bg.kill.next(vs: List<&2, Cl>, +me: Nat, p: Bool & LRun) -> Bool & LRun:
+  match vs:
+    case Nil{}:
+      p
+    case Con{+c, rest}:
+      bg.kill.next(rest, me, bg.kill.of(Nat.is_eq(cl.id(c), me), c, p))
+
+def bg.kills(vs: List<&2, Cl>, +me: Nat, g: LRun) -> Bool & LRun:
+  bg.kill.next(vs, me, (False{}, g))
+
+def bg.killed.say(p: Bool & LRun, +r: R.Reply, +code: Nat) -> LRun:
+  (self, g) = p
+  match self:
+    case True{}:
+      bg.self.kill(bg.say(r, code, g))
+    case False{}:
+      bg.say(r, code, g)
+
+# CLIENT KILL: the new form answers how many it killed; the old form, of
+# an address, OK, or an error when no client has it
+def bg.kill(+old: Bool, f: R.Kill, +me: Nat, +code: Nat, g: LRun) -> LRun:
+  match g:
+    case LRun{rs, es, conn, srv, ds, ws, up, tx, +pb}:
+      +vs = cl.pick(cls.all(ps.cls(pb)), f, me, pb)
+      +n = List.length(&2, Cl, vs)
+      +r = Bool.pick(R.Reply, old, Bool.pick(R.Reply, Nat.is_eq(n, 0n), R.RError{"ERR No such client"}, R.r_ok()), R.RInt{R.IPos{n}})
+      bg.killed.say(bg.kills(vs, me, LRun{rs, es, conn, srv, ds, ws, up, tx, pb}), r, code)
+    case LHeld{h}:
+      LHeld{h}
+
+def bg.noev(+id: Nat, on: Bool, +code: Nat, g: LRun) -> LRun:
+  match g:
+    case LRun{rs, es, conn, srv, ds, ws, up, tx, pb}:
+      bg.say(R.r_ok(), code, LRun{rs, es, conn, srv, ds, ws, up, tx, ps.noev(id, on, pb)})
+    case LHeld{h}:
+      LHeld{h}
+
+# the client's name and database written to the registry, after a
+# command that may set them (CLIENT SETNAME, HELLO, SELECT, RESET)
+def bg.conned(g: LRun) -> LRun:
+  match g:
+    case LRun{rs, es, +conn, srv, ds, ws, up, tx, pb}:
+      LRun{rs, es, conn, srv, ds, ws, up, tx, ps.conn(conn, pb)}
+    case LHeld{h}:
+      LHeld{h}
+
+# CLIENT LIST, INFO, KILL and NO-EVICT of the client of id, whose batch
+# came in inb bytes, the command's arguments argv bytes
+def bg.list.r(info: Bool, +ty: Nat, ids: Maybe<&2, List<&2, Nat>>, +now: Nat, +me: Who, +ws: Waits, +tx: Tx, +pb: Ps) -> R.Reply:
+  match info:
+    case True{}:
+      cl.info(now, me, ws, tx, pb)
+    case False{}:
+      cl.list(ty, ids, now, me, ws, tx, pb)
+
+# the command a client's own line shows: EXEC while it runs the client's
+# transaction (Redis's last command), else CLIENT INFO or LIST
+def cl.cmd.me(+info: Bool, +ex: Maybe<&2, Nat>) -> String:
+  match ex:
+    case Some{n}:
+      "exec"
+    case None{}:
+      Bool.pick(String, info, "client|info", "client|list")
+
+def bg.list(+id: Nat, +info: Bool, +ty: Nat, ids: Maybe<&2, List<&2, Nat>>, +argv: Nat, +inb: Nat, +ex: Maybe<&2, Nat>, +code: Nat, g: LRun) -> LRun:
+  match g:
+    case LRun{rs, es, +conn, srv, +ds, +ws, up, +tx, +pb}:
+      bg.say(bg.list.r(info, ty, ids, R.ds.now(ds), Me{id, conn, cl.cmd.me(info, ex), inb, argv, ex}, ws, tx, pb), code, LRun{rs, es, conn, srv, ds, ws, up, tx, pb})
+    case LHeld{h}:
+      LHeld{h}
+
+def bg.client(+id: Nat, op: R.ClOp, +argv: Nat, +inb: Nat, +ex: Maybe<&2, Nat>, +code: Nat, g: LRun) -> LRun:
+  match op:
+    case R.CoList{+ty, ids}:
+      bg.list(id, False{}, ty, ids, argv, inb, ex, code, g)
+    case R.CoInfo{}:
+      bg.list(id, True{}, 0n, None{}, argv, inb, ex, code, g)
+    case R.CoKill{f}:
+      bg.kill(False{}, f, id, code, g)
+    case R.CoKillAddr{a}:
+      bg.kill(True{}, R.Kill{Some{a}, None{}, None{}, 0n, False{}}, id, code, g)
+    case R.CoNoEvict{on}:
+      bg.noev(id, on, code, g)
+    case R.CoBad{+r}:
+      bg.say(r, code, g)
+
 # a command of EXEC: as it runs outside of a transaction, but that no
 # client waits (a blocking command answers as for a client that may not
 # wait: the session's pop, run once) and the clients that wait are
 # served only after EXEC; a command of Pub/Sub runs as outside of one,
 # but SSUBSCRIBE, which Redis refuses to a client that may not wait, as
 # PING answers as to a client with a subscription when the client has
-# one by then
+# one by then; CLIENT LIST and INFO show the client as Redis does while
+# EXEC runs: in MULTI with its commands queued (n), its last command
+# EXEC, the bytes of EXEC's batch (inb) and EXEC's argument (4)
 def bg.x.ping(on: Bool, +m: String, +c: R.Cmd, +code: Nat, g: LRun) -> LRun:
   match on:
     case True{}:
@@ -2659,7 +3272,7 @@ def bg.x.echo(ping: Bool, +id: Nat, +m: String, +c: R.Cmd, +code: Nat, g: LRun) 
     case False{}:
       bg.one(c, code, g)
 
-def bg.x.cmd(may: Bool, +id: Nat, +back: Chan(Ans), +c: R.Cmd, +code: Nat, g: LRun) -> LRun:
+def bg.x.cmd(may: Bool, +id: Nat, +back: Chan(Ans), +inb: Nat, +n: Nat, +c: R.Cmd, +code: Nat, g: LRun) -> LRun:
   match may c:
     case True{} R.Own{R.SUnblock{+n, +e}}:
       bg.unblock(n, e, code, g)
@@ -2667,6 +3280,12 @@ def bg.x.cmd(may: Bool, +id: Nat, +back: Chan(Ans), +c: R.Cmd, +code: Nat, g: LR
       bg.say(R.RError{"ERR SSUBSCRIBE isn't allowed for a DENY BLOCKING client"}, code, g)
     case True{} R.Own{R.SPub{+k, a}}:
       bg.pub(id, back, R.pub.op(k, a), code, g)
+    case True{} R.Own{R.SClient{+k, +a}}:
+      bg.client(id, R.client.op(k, a), 4n, inb, Some{n}, code, g)
+    case True{} R.Own{R.SClientSetName{n}}:
+      bg.conned(bg.one(c, code, g))
+    case True{} R.Own{R.SSelect{d}}:
+      bg.conned(bg.one(c, code, g))
     case True{} R.Ping{}:
       bg.x.pong(id, "", c, code, g)
     case True{} R.Echo{+m}:
@@ -2674,33 +3293,33 @@ def bg.x.cmd(may: Bool, +id: Nat, +back: Chan(Ans), +c: R.Cmd, +code: Nat, g: LR
     case _ _:
       bg.one(c, code, g)
 
-def bg.x.go(+id: Nat, +back: Chan(Ans), cmds: List<&2, R.Cmd>, codes: List<&2, Nat>, g: LRun) -> LRun:
+def bg.x.go(+id: Nat, +back: Chan(Ans), +inb: Nat, +n: Nat, cmds: List<&2, R.Cmd>, codes: List<&2, Nat>, g: LRun) -> LRun:
   match cmds codes g:
     case Con{+c, rest} Con{+k, more} LRun{rs, es, +conn, +srv, ds, ws, up, tx, pb}:
-      bg.x.go(id, back, rest, more, bg.x.cmd(S.may(S.kind(c), conn, srv), id, back, c, k, LRun{rs, es, conn, srv, ds, ws, up, tx, pb}))
+      bg.x.go(id, back, inb, n, rest, more, bg.x.cmd(S.may(S.kind(c), conn, srv), id, back, inb, n, c, k, LRun{rs, es, conn, srv, ds, ws, up, tx, pb}))
     case _ _ g0:
       g0
 
-def bg.exec.run(+id: Nat, +back: Chan(Ans), +code: Nat, cmds: List<&2, R.Cmd>, codes: List<&2, Nat>, g: LRun) -> LRun:
+def bg.exec.run(+id: Nat, +back: Chan(Ans), +inb: Nat, +code: Nat, +cmds: List<&2, R.Cmd>, codes: List<&2, Nat>, g: LRun) -> LRun:
   match g:
     case LRun{rs, es, +conn, srv, ds, ws, up, tx, pb}:
       +m0 = S.conn.mode(conn)
       +mi = exec.mode(m0)
-      bg.exec.done(rs, es, m0, mi, code, bg.x.go(id, back, cmds, codes, LRun{Nil{}, Nil{}, conn.mode.set(mi, conn), srv, ds, ws, up, tx, pb}))
+      bg.exec.done(rs, es, m0, mi, code, bg.x.go(id, back, inb, List.length(&2, R.Cmd, cmds), cmds, codes, LRun{Nil{}, Nil{}, conn.mode.set(mi, conn), srv, ds, ws, up, tx, pb}))
     case LHeld{h}:
       LHeld{h}
 
-def bg.exec.if(late: Bool, +id: Nat, +back: Chan(Ans), +code: Nat, qs: List<&2, R.Cmd>, qc: List<&2, Nat>, g: LRun) -> LRun:
+def bg.exec.if(late: Bool, +id: Nat, +back: Chan(Ans), +inb: Nat, +code: Nat, qs: List<&2, R.Cmd>, qc: List<&2, Nat>, g: LRun) -> LRun:
   match late:
     case True{}:
       bg.say(R.RNullA{}, code, g)
     case False{}:
-      bg.exec.run(id, back, code, List.reverse(&2, R.Cmd, qs), List.reverse(&2, Nat, qc), g)
+      bg.exec.run(id, back, inb, code, List.reverse(&2, R.Cmd, qs), List.reverse(&2, Nat, qc), g)
 
 # EXEC of a transaction taken out of the chain (mine): EXECABORT when a
 # command was refused while it queued, a null array when a watched key
 # was touched or is there with its time passed now, else its commands
-def bg.exec.of(p: Tx & Tx, +id: Nat, +back: Chan(Ans), +code: Nat, rs: List<&2, R.Reply>, es: List<&2, A.Ent>, conn: S.Conn, srv: S.Srv, +ds: R.Ds, ws: Waits, up: List<&2, Up>, pb: Ps) -> LRun:
+def bg.exec.of(p: Tx & Tx, +id: Nat, +back: Chan(Ans), +inb: Nat, +code: Nat, rs: List<&2, R.Reply>, es: List<&2, A.Ent>, conn: S.Conn, srv: S.Srv, +ds: R.Ds, ws: Waits, up: List<&2, Up>, pb: Ps) -> LRun:
   (mine, others) = p
   match mine:
     case TxOn{i, mu, True{}, cs, qs, qc, wk, r}:
@@ -2708,18 +3327,18 @@ def bg.exec.of(p: Tx & Tx, +id: Nat, +back: Chan(Ans), +code: Nat, rs: List<&2, 
     case TxOn{i, mu, False{}, True{}, qs, qc, wk, r}:
       bg.say(R.RNullA{}, code, LRun{rs, es, conn, srv, ds, ws, up, others, pb})
     case TxOn{i, mu, False{}, False{}, qs, qc, +wk, r}:
-      bg.exec.if(wk.late(wk, ds, R.ds.now(ds)), id, back, code, qs, qc, LRun{rs, es, conn, srv, ds, ws, up, others, pb})
+      bg.exec.if(wk.late(wk, ds, R.ds.now(ds)), id, back, inb, code, qs, qc, LRun{rs, es, conn, srv, ds, ws, up, others, pb})
     case TxNone{}:
       bg.say(R.RError{"ERR EXEC without MULTI"}, code, LRun{rs, es, conn, srv, ds, ws, up, others, pb})
 
-def bg.exec(+id: Nat, +back: Chan(Ans), +code: Nat, g: LRun) -> LRun:
+def bg.exec(+id: Nat, +back: Chan(Ans), +inb: Nat, +code: Nat, g: LRun) -> LRun:
   match g:
     case LRun{rs, es, conn, srv, +ds, ws, up, +tx, pb}:
-      bg.exec.of(tx.take(tx, tx.is(id, tx), id, TxNone{}), id, back, code, rs, es, conn, srv, ds, ws, up, pb)
+      bg.exec.of(tx.take(tx, tx.is(id, tx), id, TxNone{}), id, back, inb, code, rs, es, conn, srv, ds, ws, up, pb)
     case LHeld{h}:
       LHeld{h}
 
-def bg.cmd(+id: Nat, +back: Chan(Ans), sh: Sh, +c: R.Cmd, +code: Nat, rest: List<&2, R.Cmd>, more: List<&2, Nat>, g: LRun) -> LRun:
+def bg.cmd(+id: Nat, +back: Chan(Ans), +inb: Nat, sh: Sh, +c: R.Cmd, +code: Nat, rest: List<&2, R.Cmd>, more: List<&2, Nat>, g: LRun) -> LRun:
   match sh:
     case ShRun{}:
       bg.serve(bg.one(c, code, g))
@@ -2732,7 +3351,7 @@ def bg.cmd(+id: Nat, +back: Chan(Ans), sh: Sh, +c: R.Cmd, +code: Nat, rest: List
     case ShNested{}:
       bg.say(R.RError{"ERR MULTI calls can not be nested"}, code, g)
     case ShExec{}:
-      bg.serve(bg.exec(id, back, code, g))
+      bg.serve(bg.exec(id, back, inb, code, g))
     case ShAbort{m}:
       bg.one(R.Own{R.SBad{R.RError{"EXECABORT Transaction discarded because of: " ++ m}}}, Nat.add(Nat.mul(Nat.div(code, 4n), 4n), 1n), bg.close(id, g))
     case ShDiscard{}:
@@ -2744,7 +3363,7 @@ def bg.cmd(+id: Nat, +back: Chan(Ans), sh: Sh, +c: R.Cmd, +code: Nat, rest: List
     case ShUnwatch{}:
       bg.one(c, code, bg.unwatch(id, g))
     case ShReset{}:
-      bg.one(c, code, bg.unsub.all(id, bg.close(id, g)))
+      bg.conned(bg.one(c, code, bg.unsub.all(id, bg.close(id, g))))
     case ShQueue{}:
       bg.queue(c, code, g)
     case ShRefuse{}:
@@ -2755,13 +3374,17 @@ def bg.cmd(+id: Nat, +back: Chan(Ans), sh: Sh, +c: R.Cmd, +code: Nat, rest: List
       bg.say(R.RArray{[R.RBulk{"pong"}, R.RBulk{m}]}, code, g)
     case ShDeny{name}:
       bg.one(R.Own{R.SBad{R.RError{"ERR " ++ sub.deny(name)}}}, Nat.add(Nat.mul(Nat.div(code, 4n), 4n), 1n), g)
+    case ShClient{op, +argv}:
+      bg.client(id, op, argv, inb, None{}, code, g)
+    case ShConn{}:
+      bg.conned(bg.one(c, code, g))
 
 # a batch the general way: a command at a time, until its client waits
-def bg.go(+id: Nat, +back: Chan(Ans), cmds: List<&2, R.Cmd>, codes: List<&2, Nat>, g: LRun) -> LRun:
+def bg.go(+id: Nat, +back: Chan(Ans), +inb: Nat, cmds: List<&2, R.Cmd>, codes: List<&2, Nat>, g: LRun) -> LRun:
   match cmds codes g:
     case Con{+c, +rest} Con{+k, +more} LRun{rs, es, +conn, +srv, +ds, ws, up, +tx, +pb}:
       +sh = sh.of(S.conn.quit(conn), S.may(S.kind(c), conn, srv), tx.multi(id, tx), ps.has(id, pb), c, k, ds)
-      bg.go(id, back, rest, more, bg.cmd(id, back, sh, c, k, rest, more, LRun{rs, es, conn, srv, ds, ws, up, tx, pb}))
+      bg.go(id, back, inb, rest, more, bg.cmd(id, back, inb, sh, c, k, rest, more, LRun{rs, es, conn, srv, ds, ws, up, tx, pb}))
     case _ _ g0:
       g0
 
@@ -2808,14 +3431,32 @@ def bg.batch(+cn: S.Conn, +back: Chan(Ans), +inb: Nat, cmds: List<&2, R.Cmd>, co
   match g:
     case Grp{outs, es, srv, ds, ws, up, tx, pb}:
       +id = S.conn.id(cn)
-      bg.put(back, inb, bg.go(id, back, cmds, codes, LRun{Nil{}, es, cn, srv, ds, ws, up, tx.front(id, tx), pb}), outs)
+      bg.put(back, inb, bg.go(id, back, inb, cmds, codes, LRun{Nil{}, es, cn, srv, ds, ws, up, tx.front(id, tx), pb}), outs)
+
+# the last of codes, else k
+def codes.last(+ks: List<&2, Nat>, +k: Nat) -> Nat:
+  match ks:
+    case Nil{}:
+      k
+    case Con{+x, rest}:
+      codes.last(rest, x)
+
+# an unblocked client's channel marked with the code of the last command
+# of the rest of its batch, which runs now (else still the blocking
+# command's), at the time of its batch
+def mark.up.of(+back: Chan(Ans), mk: U32 & Nat, +codes: List<&2, Nat>) -> Chan(Ans):
+  (w, at) = mk
+  Chan.mark(Ans, back, U32.from_nat(codes.last(codes, U32.to_nat(w))), at)
+
+def mark.up(+back: Chan(Ans), +codes: List<&2, Nat>) -> Chan(Ans):
+  mark.up.of(back, Chan.marked(Ans, back), codes)
 
 # an unblocked client's batch, on: on its database, after its reply
 def bg.up(u: Up, g: Grp) -> Grp:
   match u g:
-    case Up{+back, +conn, rs, cmds, codes} Grp{outs, es, srv, ds, ws, up, tx, pb}:
+    case Up{+back, +conn, rs, cmds, +codes} Grp{outs, es, srv, ds, ws, up, tx, pb}:
       +id = S.conn.id(conn)
-      bg.put(back, 0n, bg.go(id, back, cmds, codes, LRun{rs, es, conn, srv, R.ds.focus(S.conn.db(conn), ds), ws, up, tx.front(id, tx), pb}), outs)
+      bg.put(mark.up(back, codes), 0n, bg.go(id, back, 0n, cmds, codes, LRun{rs, es, conn, srv, R.ds.focus(S.conn.db(conn), ds), ws, up, tx.front(id, tx), pb}), outs)
 
 def bg.ups.run(us: List<&2, Up>, g: Grp) -> Grp:
   match us:
@@ -2933,7 +3574,54 @@ def group_put(outs: List<&2, Sigma<&2, &2, Chan(Ans), _ => Ans>>, es: List<&2, A
       +outb = ans.len(a)
       Grp{(back, a) <> outs, A.ents.onto(e, es), errs.put(xs, S.srv.ran(srv, calls, run, runs, inb, outb)), ds, WaitNone{}, up, TxNone{}, pb}
 
+# A batch's client's channel is marked with the code of its last command
+# and the group's time (Clients: CLIENT LIST's cmd and idle): the fast way
+# takes the code from the batch's tally (its one run's, else its newest
+# run's), the general way from the batch's last hash.
+def mark(+back: Chan(Ans), +k: Nat, +now: Nat) -> Chan(Ans):
+  Chan.mark(Ans, back, U32.from_nat(k), now)
+
+def tally.last.of(+run: Nat, +runs: List<&2, Nat>) -> Nat:
+  match runs:
+    case Con{+r, rest}:
+      R.run.code(r)
+    case Nil{}:
+      R.run.code(run)
+
+def tally.last(+t: R.Tally) -> Nat:
+  match t:
+    case R.Tally{calls, risky, +run, +runs}:
+      tally.last.of(run, runs)
+
+def hs.last(+hs: List<&2, U32>, +w: U32) -> U32:
+  match hs:
+    case Nil{}:
+      w
+    case Con{+h, rest}:
+      hs.last(rest, U32.shrn(h, 20n))
+
+def mark.hs(+back: Chan(Ans), +hs: List<&2, U32>, +now: Nat) -> Chan(Ans):
+  mark(back, R.stat.code.cw(U32.to_nat(hs.last(hs, 0))), now)
+
+def ps.killed(+id: Nat, +pb: Ps) -> Bool:
+  cls.killed(id, ps.cls(pb))
+
+# a batch the general way, unless its client was killed (its connection
+# answered Bye, the batch not run)
+def job.slow.if(killed: Bool, +cn: S.Conn, +back: Chan(Ans), +inb: Nat, cmds: List<&2, R.Cmd>, +hs: List<&2, U32>, g: Grp) -> Grp:
+  match killed g:
+    case True{} Grp{outs, es, srv, ds, ws, up, tx, pb}:
+      Grp{(back, Bye{}) <> outs, es, srv, ds, ws, up, tx, pb}
+    case False{} Grp{outs, es, srv, +ds, ws, up, tx, pb}:
+      bg.batch(cn, mark.hs(back, hs, R.ds.now(ds)), inb, cmds, R.codes.of(hs), Grp{outs, es, srv, ds, ws, up, tx, pb})
+
+def job.slow(+cn: S.Conn, +back: Chan(Ans), +inb: Nat, cmds: List<&2, R.Cmd>, +hs: List<&2, U32>, g: Grp) -> Grp:
+  match g:
+    case Grp{outs, es, srv, ds, ws, up, tx, +pb}:
+      job.slow.if(ps.killed(S.conn.id(cn), pb), cn, back, inb, cmds, hs, Grp{outs, es, srv, ds, ws, up, tx, pb})
+
 # a batch the fast way, without the append-only file or with it (log)
+
 def fast.run(+log: Bool, outs: List<&2, Sigma<&2, &2, Chan(Ans), _ => Ans>>, es: List<&2, A.Ent>, back: Chan(Ans), t: R.Tally, +inb: Nat, cn: S.Conn, srv: S.Srv, cmds: List<&2, R.Cmd>, hs: List<&2, U32>, ds: R.Ds, up: List<&2, Up>, pb: Ps) -> Grp:
   match log:
     case True{}:
@@ -2941,13 +3629,13 @@ def fast.run(+log: Bool, outs: List<&2, Sigma<&2, &2, Chan(Ans), _ => Ans>>, es:
     case False{}:
       run_put(outs, es, back, t, inb, S.run.plain(True{}, cn, srv, cmds, hs, ds), up, pb)
 
-def fast(+log: Bool, ready: Bool, outs: List<&2, Sigma<&2, &2, Chan(Ans), _ => Ans>>, es: List<&2, A.Ent>, cn: S.Conn, cmds: List<&2, R.Cmd>, +hs: List<&2, U32>, back: Chan(Ans), +tl: U32, +inb: Nat, srv: S.Srv, ds: R.Ds, up: List<&2, Up>, pb: Ps) -> Grp:
+def fast(+log: Bool, ready: Bool, outs: List<&2, Sigma<&2, &2, Chan(Ans), _ => Ans>>, es: List<&2, A.Ent>, cn: S.Conn, cmds: List<&2, R.Cmd>, +hs: List<&2, U32>, back: Chan(Ans), +tl: U32, +inb: Nat, srv: S.Srv, +ds: R.Ds, up: List<&2, Up>, pb: Ps) -> Grp:
   match ready:
     case True{}:
       +t = R.tally(tl, inb, hs)
-      fast.run(log, outs, es, back, t, inb, cn, srv, cmds, hs, ds, up, pb)
+      fast.run(log, outs, es, mark(back, tally.last(t), R.ds.now(ds)), t, inb, cn, srv, cmds, hs, ds, up, pb)
     case False{}:
-      bg.batch(cn, back, inb, cmds, R.codes.of(hs), Grp{outs, es, srv, ds, WaitNone{}, up, TxNone{}, pb})
+      bg.batch(cn, mark.hs(back, hs, R.ds.now(ds)), inb, cmds, R.codes.of(hs), Grp{outs, es, srv, ds, WaitNone{}, up, TxNone{}, pb})
 
 # a batch from a client with no subscription: the fast way while no
 # client waits, none has a transaction or watches a key and no keyspace
@@ -2957,17 +3645,17 @@ def group_job(+log: Bool, job: B.Job, ws: Waits, tx: Tx, calm: Bool, outs: List<
     case B.Plain{cmds, hs} WaitNone{} TxNone{} True{}:
       fast(log, S.ready(cn, srv), outs, es, cn, cmds, hs, back, tl, inb, srv, ds, up, pb)
     case B.Plain{cmds, +hs} w t c:
-      bg.batch(cn, back, inb, cmds, R.codes.of(hs), Grp{outs, es, srv, ds, w, up, t, pb})
+      job.slow(cn, back, inb, cmds, hs, Grp{outs, es, srv, ds, w, up, t, pb})
     case B.Mixed{cmds, +hs} w t c:
-      bg.batch(cn, back, inb, cmds, R.codes.of(hs), Grp{outs, es, srv, ds, w, up, t, pb})
+      job.slow(cn, back, inb, cmds, hs, Grp{outs, es, srv, ds, w, up, t, pb})
 
 # a batch from a client with a subscription: a command at a time
 def sub_job(job: B.Job, +cn: S.Conn, back: Chan(Ans), +inb: Nat, g: Grp) -> Grp:
   match job:
     case B.Plain{cmds, +hs}:
-      bg.batch(cn, back, inb, cmds, R.codes.of(hs), g)
+      job.slow(cn, back, inb, cmds, hs, g)
     case B.Mixed{cmds, +hs}:
-      bg.batch(cn, back, inb, cmds, R.codes.of(hs), g)
+      job.slow(cn, back, inb, cmds, hs, g)
 
 # The sweep of expired keys
 # -------------------------
@@ -3105,8 +3793,11 @@ def group_req(+log: Bool, q: Req, g: Grp) -> Grp:
       Grp{outs, es, S.srv.erred(srv, "ERR Protocol error"), ds, ws, up, tx, pb}
     case Gone{+id, +back} Grp{outs, es, srv, ds, +ws, +up, tx, pb}:
       grp.gone(id, back, outs, es, srv, ds, ws, up, tx, pb)
-    case Left{+id} Grp{outs, es, srv, ds, ws, up, tx, pb}:
-      Grp{outs, es, srv, ds, ws, up, tx.drop(id, tx), ps.drop(id, pb)}
+    case Left{+id, back} Grp{outs, es, srv, ds, ws, up, tx, pb}:
+      Grp{(back, Bye{}) <> outs, es, srv, ds, ws, up, tx.drop(id, tx), ps.left(id, ps.drop(id, pb))}
+    case Join{+id, back, fd, addr, laddr} Grp{outs, es, srv, +ds, ws, up, tx, pb}:
+      +now = R.ds.now(ds)
+      Grp{outs, es, srv, ds, ws, up, tx, ps.join(id, Cl{id, Chan.mark(Ans, back, 0, now), fd, addr, laddr, now, "", 0n, False{}}, pb)}
 
 # the clock (IO.clock: s and us since 1970) in ms
 def clock.ms(t: U32 & U32) -> Nat:
@@ -3140,10 +3831,39 @@ def db_serve(srv: S.Srv, ds: R.Ds, ws: Waits, tx: Tx, pb: Ps, +reqs: Chan(Req), 
 @unsafe
 def db_group(g: Grp, +reqs: Chan(Req)) -> IO(Unit):
   match g:
-    case Grp{outs, es, srv, ds, ws, up, tx, pb}:
+    case Grp{outs, es, srv, ds, ws, up, tx, +pb}:
+      db_kill(ps.calm(pb), pb, outs, srv, ds, ws, tx, reqs)
+
+# the sockets of the clients CLIENT KILL took shut down (TCP.kill), before
+# the group's answers go out
+@unsafe
+def kill_all(ks: List<&2, U32>) -> IO(Unit):
+  match ks:
+    case Nil{}:
+      IO.pure(Unit, Unit{})
+    case Con{fd, rest}:
+      do IO<Unit>:
+        b : Bool <- TCP.kill(fd)
+        kill_all(rest)
+
+@unsafe
+def db_send(p: List<&2, U32> & Ps, outs: List<&2, Sigma<&2, &2, Chan(Ans), _ => Ans>>, srv: S.Srv, ds: R.Ds, ws: Waits, tx: Tx, +reqs: Chan(Req)) -> IO(Unit):
+  (ks, pb) = p
+  do IO<Unit>:
+    Unit <- kill_all(ks)
+    Unit <- Chan.send_all(Ans, List.reverse(&2, Sigma<&2, &2, Chan(Ans), _ => Ans>, outs))
+    db_loop(srv, ds, ws, tx, pb, reqs)
+
+# while no client was killed (calm), no socket is to be shut down
+@unsafe
+def db_kill(calm: Bool, pb: Ps, outs: List<&2, Sigma<&2, &2, Chan(Ans), _ => Ans>>, srv: S.Srv, ds: R.Ds, ws: Waits, tx: Tx, +reqs: Chan(Req)) -> IO(Unit):
+  match calm:
+    case True{}:
       do IO<Unit>:
         Unit <- Chan.send_all(Ans, List.reverse(&2, Sigma<&2, &2, Chan(Ans), _ => Ans>, outs))
         db_loop(srv, ds, ws, tx, pb, reqs)
+    case False{}:
+      db_send(ps.kills(pb), outs, srv, ds, ws, tx, reqs)
 
 # Connections
 # -----------
@@ -3177,11 +3897,33 @@ def link.post(+ln: Link) -> Bool:
 @unsafe
 def conn_end(s: Socket, ln: Link) -> IO(Unit):
   match ln:
-    case Link{db, back, post, tl, id}:
+    case Link{db, +back, post, tl, id}:
       do IO<Unit>:
+        sent : Bool <- Chan.send(Req, db, Left{id, back})
+        Unit <- conn_left(back)
         Unit <- Socket.close(s)
-        sent : Bool <- Chan.send(Req, db, Left{id})
         Chan.close(Ans, back)
+
+# The actor's Bye to the connection's Left: what comes on the channel
+# before it (a push to a client with a subscription) is dropped. The
+# socket closes only after it, so that the actor, which may shut a
+# client's socket down by its fd (CLIENT KILL), never meets an fd closed
+# and taken by another connection (Clients).
+@unsafe
+def conn_left.of(m: Maybe<&1, Ans>, +back: Chan(Ans)) -> IO(Unit):
+  match m:
+    case Some{Bye{}}:
+      IO.pure(Unit, Unit{})
+    case Some{a}:
+      conn_left(back)
+    case None{}:
+      IO.pure(Unit, Unit{})
+
+@unsafe
+def conn_left(+back: Chan(Ans)) -> IO(Unit):
+  do IO<Unit>:
+    m : Maybe<&1, Ans> <- Chan.recv(Ans, back)
+    conn_left.of(m, back)
 
 # x before s; an empty s costs nothing, so the newest piece is not copied
 def cat(x: String, s: String) -> String:
@@ -4004,11 +4746,23 @@ def conn_sub.unwatched(p: Socket & Bool, +ln: Link, out: Maybe<&2, String>, cn: 
 # count of connections taken (Tally) waits in a channel the listeners and
 # the connections share.
 
+# the connection's client joins the actor's registry (Join: its socket's
+# fd and addresses, TCP.name) before its first batch
+@unsafe
+def conn_joined(n: Socket & (U32 & (String & String)), +db: Chan(Req), +back: Chan(Ans), post: Bool, tl: Chan(Tally), +id: Nat) -> IO(Unit):
+  (s, i) = n
+  (fd, a) = i
+  (addr, laddr) = a
+  do IO<Unit>:
+    sent : Bool <- Chan.send(Req, db, Join{id, back, fd, addr, laddr})
+    conn_loop(s, SNil{}, Nil{}, 0n, 1n, Link{db, back, post, tl, id}, S.conn_new(id))
+
 @unsafe
 def conn_start(s: Socket, db: Chan(Req), post: Bool, tl: Chan(Tally), +id: Nat) -> IO(Unit):
   do IO<Unit>:
     back : Chan(Ans) <- Chan.new(Ans, 1)
-    conn_loop(s, SNil{}, Nil{}, 0n, 1n, Link{db, back, post, tl, id}, S.conn_new(id))
+    n : Socket & (U32 & (String & String)) <- TCP.name(s)
+    conn_joined(n, db, back, post, tl, id)
 
 @unsafe
 def tally.took(m: Maybe<&1, Tally>, +tl: Chan(Tally)) -> IO(Nat):
@@ -4480,11 +5234,29 @@ def aof_sync(+sync: Sync, f: File, outs: List<&2, Sigma<&2, &2, Chan(Ans), _ => 
     case Never{}:
       aof_reply(outs, st, f, Never{}, reqs)
 
+# the fds of the clients CLIENT KILL took, out of the state
+def st.kills.of(p: List<&2, U32> & Ps, srv: S.Srv, ds: R.Ds, +sel: Nat, ws: Waits, tx: Tx) -> List<&2, U32> & St:
+  (ks, pb) = p
+  (ks, St{srv, ds, sel, ws, tx, pb})
+
+def st.kills(st: St) -> List<&2, U32> & St:
+  match st:
+    case St{srv, ds, +sel, ws, tx, pb}:
+      st.kills.of(ps.kills(pb), srv, ds, sel, ws, tx)
+
+# the group's answers, after the sockets of the clients CLIENT KILL took
+# are shut down (TCP.kill), as db_send does without the file
 @unsafe
-def aof_reply(outs: List<&2, Sigma<&2, &2, Chan(Ans), _ => Ans>>, st: St, f: File, +sync: Sync, +reqs: Chan(Req)) -> IO(Unit):
+def aof_answer(p: List<&2, U32> & St, outs: List<&2, Sigma<&2, &2, Chan(Ans), _ => Ans>>, f: File, +sync: Sync, +reqs: Chan(Req)) -> IO(Unit):
+  (ks, st) = p
   do IO<Unit>:
+    Unit <- kill_all(ks)
     Unit <- Chan.send_all(Ans, outs)
     aof_loop(st, f, sync, reqs)
+
+@unsafe
+def aof_reply(outs: List<&2, Sigma<&2, &2, Chan(Ans), _ => Ans>>, st: St, f: File, +sync: Sync, +reqs: Chan(Req)) -> IO(Unit):
+  aof_answer(st.kills(st), outs, f, sync, reqs)
 
 # everysec: the file synced each second, through a handle of its own
 @unsafe

@@ -11,7 +11,7 @@
 # COMMAND DOCS of BendKV's commands and ACL CAT, and writes the replies
 # to tools/data/redis-commands.json, kept in the repository, so the second
 # step needs no Redis. Only the subcommands BendKV has are kept (BendKV's
-# CLIENT has ten of Redis's sixteen), in the order of their names: Redis
+# CLIENT has thirteen of Redis's sixteen), in the order of their names: Redis
 # lists commands in the order of a hash table with a random seed, so no
 # order is Redis's own. The second step writes the block between
 # "# BEGIN gen_commands: table" and "# END gen_commands: table" in
@@ -43,7 +43,7 @@ REDIS = HERE / "src" / "redis.bend"
 # BendKV's commands, and of a command with subcommands the ones BendKV has
 COMMANDS = {
     "append": [], "auth": [], "client": ["caching", "getname", "getredir", "help", "id",
-    "no-evict", "reply", "setname", "trackinginfo", "unblock"], "command": ["count", "docs",
+    "info", "kill", "list", "no-evict", "reply", "setname", "trackinginfo", "unblock"], "command": ["count", "docs",
     "getkeys", "getkeysandflags", "help", "info", "list"], "config": ["get", "help",
     "resetstat", "rewrite", "set"], "dbsize": [], "decr": [], "decrby": [], "del": [],
     "echo": [], "exists": [], "flushall": [], "flushdb": [], "function": ["flush", "help"],

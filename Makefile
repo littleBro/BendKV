@@ -18,8 +18,13 @@
 # and String.hash_at; the start changes the directory and logs the pid
 # and the date with the twentieth's IO.chdir, IO.cwd, IO.pid and
 # IO.clock, and cuts a file of any size and syncs its directory with the
-# twenty-second's File.truncate of a Nat and File.sync_dir; the others
-# only speed up the runtime and the code):
+# twenty-fourth's File.truncate of a Nat and File.sync_dir; a connection
+# whose client waits or is subscribed waits on its socket and its channel
+# at once with the twenty-fifth's TCP.watch and TCP.unwatch; CLIENT LIST,
+# INFO and KILL read a socket's fd and addresses with the twenty-seventh's
+# TCP.name, shut a socket down with its TCP.kill, and mark a client's
+# channel with its last command and time with its Chan.mark and
+# Chan.marked; the others only speed up the runtime and the code):
 #   make build BEND="bun <patched bend>/bend2/main.ts"
 # Bend compiles with $(BEND_CC) when it has one: clang 19 honors the
 # preserve_none calling convention of the runtime's segments, clang 18
