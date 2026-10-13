@@ -314,7 +314,8 @@ Where performance and proof meet: **batched execution under proved laws.**
    (done, section 3zs), SCAN and RANDOMKEY (done), MONITOR (done, section 3zt), the
    log's rewrite (done, section 3zv), maxmemory and its eviction (done, section 3zw),
    and RESP3 (done, section 3zx), measured by Redis's own test suite run against BendKV
-   and by client libraries' tests (next). Lua, streams, cluster,
+   and by client libraries' test suites (redis-py's and go-redis's, in CI: done, section
+   3zy). Lua, streams, cluster,
    replication and modules are out of scope. The suite's count: of the 1,677 tests
    Redis 7.0.15 passes against a server it did not start, BendKV passes 1,097, 1,090 of
    the 1,172 in what it has ([COMPATIBILITY.md](COMPATIBILITY.md)); most of the other 82
@@ -323,9 +324,9 @@ Where performance and proof meet: **batched execution under proved laws.**
    What maxmemory left to do (section 3zw): a trie keeps its nodes when its keys go, up
    to 9 MB, so the eviction evicts more keys than Redis would to get within a limit, and
    its samples walk empty buckets (an eviction takes ten times Redis's time). Pruning
-   the nodes a delete empties (#155) needs the trie's delete, and the laws of its
+   the nodes a delete empties needs the trie's delete, and the laws of its
    buckets, to make an emptied node a leaf again. And the compiler copies a node a
-   function takes while its caller still shares it (#163): a walk that recurses on the
+   function takes while its caller still shares it: a walk that recurses on the
    stack takes the nodes it reads, where a loop reads them lent, so the hot walks are
    written as loops for now.
 

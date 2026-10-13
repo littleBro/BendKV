@@ -833,6 +833,16 @@ The translation the kernel reads can be dumped with
   there were no classes `[...]` and no escaping either. Fixed: KEYS matches as Redis's
   `stringmatchlen` does, together with the limit of 1,000 nested stars that Redis
   introduced against CVE-2024-31228.
+- **The test suites of client libraries** (`tools/client_suite.py`, `make clients`; and in
+  CI on every pull request): redis-py 8.1.0's tests of its sync and asyncio clients, in
+  RESP2 and in RESP3, and go-redis v9.23.0's specs, in RESP3, each against Redis 7.0.15
+  and against BendKV, each on a server started for it, without their tests of modules,
+  clusters, sentinels and TLS. Of the tests Redis passes, BendKV passes 2,382 of 2,753 in
+  redis-py, the same tests in RESP2 and in RESP3, and 389 of 460 in go-redis; every other
+  one fails on what BendKV does not have (Lua, streams, geo, HyperLogLog, SORT, DUMP, ACL,
+  the slow log, CLIENT PAUSE and TRACKING, and COMMAND's entries of those), none on a
+  command BendKV has. A test Redis passes that BendKV fails, and that is not among the
+  known failures of `tools/data/clients.json`, fails CI.
 - **Differential testing against Redis 7.0.15** (`tests/diff_test.py`). Random streams
   of commands with random binary arguments, pipelines of different lengths, and arity
   and format errors go in parallel to BendKV and to real Redis. 28 runs, ≈266 thousand
@@ -1310,6 +1320,8 @@ make pgo BEND="$B"     # build/bendkv-pgo: a build with a profile (needs llvm-pr
 make bench BEND="$B"   # redis-benchmark: BendKV against Redis
 make suite BEND="$B" REDIS_SRC=../redis   # Redis's test suite on Redis and on BendKV
                        # (a Redis 7.0.15 source tree with tests/, tclsh)
+make clients BEND="$B" # redis-py's and go-redis's test suites on Redis and on BendKV
+                       # (python3, go; PyPI and the Go module proxy)
 ```
 
 ## What next
@@ -1408,7 +1420,10 @@ make suite BEND="$B" REDIS_SRC=../redis   # Redis's test suite on Redis and on B
    the encoder of the client's protocol (RESP2's bytes as they were), pushes for a
    subscriber in RESP3, the protocol a field of the connection that the laws of sessions
    take as they take the selected database (section 49 of PERFORMANCE.md); checked by
-   tests against Redis byte for byte. The next step is the tests of client libraries.
+   tests against Redis byte for byte. The test suites of client libraries (redis-py's
+   and go-redis's) run against BendKV and Redis in CI; what they find missing within
+   the scope above (SORT, DUMP and RESTORE, CLIENT PAUSE and TRACKING, the slow log,
+   SHUTDOWN) is the next step.
 2. **The append-only file, further.** A law of the rewrite: the rewritten file replays
    to the databases it was written from (key by key, not by the shape of the trie); it
    needs a law that a scan from the first bucket reads every key once (the invariant "a

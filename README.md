@@ -447,6 +447,7 @@ make perfcheck BEND="$B"   # instructions per request against a baseline (needs 
 make gencheck              # the generated parts (trie, its proofs, the parameter and command tables) are up to date
 make bench     BEND="$B"   # redis-benchmark: BendKV against Redis
 make suite     BEND="$B" REDIS_SRC=../redis   # Redis's own test suite, on Redis and on BendKV (needs tclsh)
+make clients   BEND="$B"   # redis-py's and go-redis's test suites, on Redis and on BendKV (needs go)
 ```
 
 `make test` runs, against a reference `redis-server`: the start (about a hundred command
@@ -529,7 +530,11 @@ and the `evicted` event against Redis's, Redis's own tests of the policies on bo
 eviction that goes on alone, with the append-only file on and while a rewrite runs).
 `make suite` runs Redis's own test suite in its mode for a server already started, on
 Redis and on BendKV, and counts the tests Redis passes that BendKV passes
-([docs/COMPATIBILITY.md](docs/COMPATIBILITY.md)).
+([docs/COMPATIBILITY.md](docs/COMPATIBILITY.md)). `make clients` runs the test suites of
+two client libraries the same way, redis-py's in RESP2 and in RESP3 and go-redis's
+(`tools/client_suite.py`); CI runs them on every pull request, and fails on a test Redis
+passes that BendKV fails and that is not among the known failures of
+`tools/data/clients.json`.
 
 ## Layout
 
@@ -563,7 +568,7 @@ docs/       FINDINGS.md, DIRECTIONS.md, COMPATIBILITY.md, PERFORMANCE.md
 - [docs/DIRECTIONS.md](docs/DIRECTIONS.md): verified databases, compilers, parallelism,
   and where the work goes next.
 - [docs/COMPATIBILITY.md](docs/COMPATIBILITY.md): Redis's own test suite against BendKV,
-  unit by unit, and why the tests it fails fail.
+  unit by unit, and why the tests it fails fail; the test suites of redis-py and go-redis.
 - [docs/PERFORMANCE.md](docs/PERFORMANCE.md): every optimization, section by
   section, with measurements.
 - [OVERVIEW.md](OVERVIEW.md): the full project report, including the

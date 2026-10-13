@@ -6304,7 +6304,7 @@ a request (the words are 4 MB, and a random key's is seldom in the cache). With 
 set and not reached, the read of the heap's account adds 15, 15 and 13. The eviction
 itself is slower than Redis's: 200,000 keys evicted in 3.6 s, against 0.3 s for Redis,
 about 190,000 instructions a key, most of them in the walks of the samples, whose buckets
-are mostly empty as the database empties (#155). An earlier version took twice as many,
+are mostly empty as the database empties. An earlier version took twice as many,
 380,000 a key. Its samples read the buckets with the trie's scan, which recurses on the
 stack (the runtime's work loop) and so takes the nodes it is passed: a node it reads is
 shared with the database, and taking it copied it. They now read the buckets with a walk
@@ -6320,7 +6320,7 @@ and a limit of a tenth leaves none, where the nodes alone are past the limit. Re
 the like on a smaller scale: its hash table keeps its buckets until the cron shrinks it,
 and the first eviction of 200,000 keys to a tenth evicted them all on Redis too. A
 database the eviction empties gets a fresh trie, so that what the heap holds comes down.
-Pruning the nodes a delete empties would end it (DIRECTIONS.md, #155).
+Pruning the nodes a delete empties would end it (DIRECTIONS.md).
 
 **Tests.** `tests/maxmemory_test.py` runs in make test. Transcripts on BendKV and
 redis-server, compared line by line: the commands refused past maxmemory with noeviction,

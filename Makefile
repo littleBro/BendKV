@@ -7,7 +7,9 @@
 # make bench (needs redis-benchmark), make perfcheck (instructions per
 # request against a baseline; needs valgrind), make suite (Redis's own
 # test suite; needs a Redis 7.0.15 source tree in REDIS_SRC, its
-# redis-server on the PATH, and tclsh). Everything needs Bend with
+# redis-server on the PATH, and tclsh), make clients (the test suites of
+# redis-py and go-redis; needs python3, go, and PyPI and the Go module
+# proxy). Everything needs Bend with
 # bend-patches/ applied (src/map.bend hashes with String.hash, which the fourth
 # patch adds to Base, and hints with Mem.prefetch, which the ninth adds;
 # replies are posted to the tenth's writer thread (TCP.post), and the
@@ -44,7 +46,7 @@ REDIS_SRC  ?= ../redis
 
 SRC = $(wildcard src/*.bend)
 
-.PHONY: check verdict build pgo smoke run test bench perfcheck suite gencheck clean
+.PHONY: check verdict build pgo smoke run test bench perfcheck suite clients gencheck clean
 
 check:
 	CC=$(BEND_CC) $(BEND) proof/PROOF.bend
@@ -100,6 +102,15 @@ suite: build
 	python3 tools/redis_suite.py --redis-src $(REDIS_SRC) --server redis-server --port 6600 --out build/suite/redis.json --logs build/suite/redis-logs
 	python3 tools/redis_suite.py --redis-src $(REDIS_SRC) --server build/bendkv --port 6700 --out build/suite/bendkv.json --logs build/suite/bendkv-logs
 	python3 tools/redis_suite.py --report build/suite/redis.json build/suite/bendkv.json | tee build/suite/report.md
+
+# The test suites of client libraries (tools/client_suite.py): redis-py in
+# RESP2 and RESP3, and go-redis, each against redis-server and BendKV,
+# against the known failures of tools/data/clients.json (needs python3,
+# go and network access to PyPI and the Go module proxy)
+clients: build
+	python3 tools/client_suite.py ci --client redis-py --protocol 2 --server build/bendkv --out build/clients
+	python3 tools/client_suite.py ci --client redis-py --protocol 3 --server build/bendkv --out build/clients
+	python3 tools/client_suite.py ci --client go-redis --server build/bendkv --out build/clients
 
 # the generated blocks are up to date: the 16-way parts of src/map.bend
 # and proof/PROOF.bend (tools/gen_trie.py), the table of parameters in
