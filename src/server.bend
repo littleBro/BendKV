@@ -2650,9 +2650,10 @@ def bg.unblock(+n: Nat, +err: Bool, +code: Nat, g: LRun) -> LRun:
 # a command of Pub/Sub, answer a PING of a client with a subscription, or
 # refuse any other command of such a client (Pub/Sub); make the client a
 # monitor, or refuse a monitor a command that reads or writes keys (in
-# MULTI, flagging the transaction: MONITOR); a command that does not run
-# (after a QUIT, or before the client authenticates) runs as the session
-# runs it.
+# MULTI, flagging the transaction: MONITOR); or start a rewrite of the
+# append-only file (BGREWRITEAOF: The rewrite of the append-only file); a
+# command that does not run (after a QUIT, or before the client
+# authenticates) runs as the session runs it.
 type Sh is Data:
   ShRun{}
   ShWait{b: S.Blk}
@@ -2675,6 +2676,7 @@ type Sh is Data:
   ShConn{}
   ShMonitor{}
   ShMonDeny{inm: Bool}
+  ShRewrite{}
 
 def sh.blk(b: S.Blk, +ds: R.Ds) -> Sh:
   +x = b
@@ -2728,6 +2730,8 @@ def sh.plain(+c: R.Cmd, +code: Nat, +ds: R.Ds) -> Sh:
       ShConn{}
     case R.Own{R.SMonitor{}}:
       ShMonitor{}
+    case R.Own{R.SRewrite{}}:
+      ShRewrite{}
     case R.Own{R.SBad{R.RError{+m}}}:
       sh.abort.if(Nat.is_eq(Nat.div(code, 4n), R.stat.top(162n)), m)
     case _:
@@ -3252,6 +3256,41 @@ def bg.monitor(+id: Nat, +back: Chan(Ans), +code: Nat, g: LRun) -> LRun:
   match g:
     case LRun{rs, es, conn, srv, ds, ws, up, tx, +pb}:
       bg.monitor.if(ps.mon.is(id, pb), id, back, code, LRun{rs, es, conn, srv, ds, ws, up, tx, pb})
+    case LHeld{h}:
+      LHeld{h}
+
+# BGREWRITEAOF, as Redis 7.0.15's bgrewriteaofCommand answers it: while a
+# rewrite runs, refused; in EXEC, scheduled (the cron starts it); else
+# started: the server's state says it runs from the group's time, and the
+# actor starts it once the group is answered (The rewrite of the
+# append-only file)
+def bg.rw.go(g: LRun) -> LRun:
+  match g:
+    case LRun{rs, es, conn, srv, +ds, ws, up, tx, pb}:
+      LRun{rs, es, conn, S.srv.rw.go(srv, R.ds.now(ds)), ds, ws, up, tx, pb}
+    case LHeld{h}:
+      LHeld{h}
+
+def bg.rw.later(g: LRun) -> LRun:
+  match g:
+    case LRun{rs, es, conn, srv, ds, ws, up, tx, pb}:
+      LRun{rs, es, conn, S.srv.rw.later(srv), ds, ws, up, tx, pb}
+    case LHeld{h}:
+      LHeld{h}
+
+def bg.rewrite.if(on: Bool, exec: Bool, +code: Nat, g: LRun) -> LRun:
+  match on exec:
+    case True{} _:
+      bg.say(R.RError{"ERR Background append only file rewriting already in progress"}, code, g)
+    case False{} True{}:
+      bg.say(R.RStatus{"Background append only file rewriting scheduled"}, code, bg.rw.later(g))
+    case False{} False{}:
+      bg.say(R.RStatus{"Background append only file rewriting started"}, code, bg.rw.go(g))
+
+def bg.rewrite(exec: Bool, +code: Nat, g: LRun) -> LRun:
+  match g:
+    case LRun{rs, es, conn, +srv, ds, ws, up, tx, pb}:
+      bg.rewrite.if(S.srv.rw.on(srv), exec, code, LRun{rs, es, conn, srv, ds, ws, up, tx, pb})
     case LHeld{h}:
       LHeld{h}
 
@@ -3824,6 +3863,8 @@ def bg.x.cmd(may: Bool, +id: Nat, +back: Chan(Ans), +inb: Nat, +n: Nat, +c: R.Cm
       bg.say(R.RError{"ERR SSUBSCRIBE isn't allowed for a DENY BLOCKING client"}, code, g)
     case True{} R.Own{R.SMonitor{}}:
       bg.say(R.RError{"ERR MONITOR isn't allowed for DENY BLOCKING client"}, code, g)
+    case True{} R.Own{R.SRewrite{}}:
+      bg.rewrite(True{}, code, g)
     case True{} R.Own{R.SPub{+k, a}}:
       bg.pub(id, back, R.pub.op(k, a), code, g)
     case True{} R.Own{R.SClient{+k, +a}}:
@@ -3927,6 +3968,8 @@ def bg.cmd(+id: Nat, +back: Chan(Ans), +inb: Nat, sh: Sh, +c: R.Cmd, +code: Nat,
       bg.conned(bg.one(c, code, g))
     case ShMonitor{}:
       bg.monitor(id, back, code, g)
+    case ShRewrite{}:
+      bg.rewrite(False{}, code, g)
     case ShMonDeny{inm}:
       bg.one(R.Own{R.SBad{R.RError{"ERR Replica can't interact with the keyspace"}}}, Nat.add(Nat.mul(Nat.div(code, 4n), 4n), 1n), bg.mon.bad(inm, g))
 
@@ -4368,14 +4411,141 @@ def group_run(+log: Bool, qs: List<&1, Req>, g: Grp) -> Grp:
     case Con{q, rest}:
       group_run(log, rest, group_req(log, q, g))
 
+# The rewrite's state
+# -------------------
+# What the actor keeps of a rewrite of the append-only file (BGREWRITEAOF,
+# and the cron's: The rewrite of the append-only file, below).
+
+# a rewrite that runs: the snapshot left to write (None: all of it is),
+# the temporary file's path, the bytes written to it, the snapshot's
+# bytes not yet written (newest first: they go to the file 64 KB at a
+# time) and how many, and the entries appended to the file since the
+# rewrite started (newest first)
+type RwRun is Data:
+  RwRun{snap: Maybe<&2, A.Snap>, tmp: String, size: Nat, pend: List<&2, String>, pn: Nat, buf: List<&2, String>}
+
+# the file's path (appendfilename with appendonly no, which the rewrite
+# writes all the same), whether the server appends to it (appendonly
+# yes), the server's pid (the temporary file's name, the log's lines),
+# when the cron looks next (ms, each 100 ms as Redis's serverCron), the
+# cron's limit after failures in a row (Redis's aofRewriteLimited: its
+# next delay in minutes, and the second it holds until, 0 for none), the
+# time of the group after which the last slice was written (ms), and the
+# rewrite that runs. RwOf, a state that holds a state, is never
+# built: it makes Rw a type that holds itself, which the compiler makes a
+# node of its own, so that it travels as one word, as Pub/Sub's state
+# does; flat, it would be eighteen words in every frame of the actor's
+# loop, and the widest frame sets the registers of every function.
+type Rw is Data:
+  Rw{path: String, aof: Bool, pid: U32, cron: Nat, delay: Nat, until: Nat, last: Nat, run: Maybe<&2, RwRun>}
+  RwOf{r: Rw}
+
+# what a step of a rewrite reads and changes: the server's state (INFO's
+# account of rewrites), the databases (the snapshot, the time), the
+# database the file has selected (A.ents.args) and the rewrite's state
+type Rx is Data:
+  Rx{srv: S.Srv, ds: R.Ds, sel: Nat, rw: Rw}
+
+def rw.new(+path: String, +aof: Bool, +pid: U32) -> Rw:
+  Rw{path, aof, pid, 0n, 0n, 0n, 0n, None{}}
+
+def run.is(+m: Maybe<&2, RwRun>) -> Bool:
+  match m:
+    case Some{r}:
+      True{}
+    case None{}:
+      False{}
+
+# whether a rewrite runs
+def rw.runs(+rw: Rw) -> Bool:
+  match rw:
+    case Rw{path, aof, pid, cron, delay, until, last, +run}:
+      run.is(run)
+    case RwOf{+r}:
+      rw.runs(r)
+
+# what the actor does about a rewrite once a group is answered, at now
+# (the group's time, ms): 0 nothing; 1 start the one the group started
+# (the server's state says one runs, and none does); 2 the next slice of
+# the one that runs, once 4 ms have passed since the last one (under a
+# load that never lets the actor wait, the rewrite takes a small part of
+# its time; while no request waits the actor writes slices one after
+# another); 3 the cron's look
+def rw.what.idle(on: Bool, +cron: Nat, +now: Nat) -> Nat:
+  match on:
+    case True{}:
+      1n
+    case False{}:
+      Bool.pick(Nat, Nat.is_le(cron, now), 3n, 0n)
+
+def rw.what.of(runs: Bool, +srv: S.Srv, +cron: Nat, +last: Nat, +now: Nat) -> Nat:
+  match runs:
+    case True{}:
+      Bool.pick(Nat, Nat.is_le(Nat.add(last, 4n), now), 2n, 0n)
+    case False{}:
+      rw.what.idle(S.srv.rw.on(srv), cron, now)
+
+def rw.what(+rw: Rw, +srv: S.Srv, +now: Nat) -> Nat:
+  match rw:
+    case Rw{path, aof, pid, +cron, delay, until, +last, +run}:
+      rw.what.of(run.is(run), srv, cron, last, now)
+    case RwOf{+r}:
+      rw.what(r, srv, now)
+
+# the entries appended to the file, kept while a rewrite runs
+def run.keep(m: Maybe<&2, RwRun>, +bytes: String) -> Maybe<&2, RwRun>:
+  match m:
+    case Some{RwRun{snap, tmp, size, pend, pn, buf}}:
+      Some{RwRun{snap, tmp, size, pend, pn, bytes <> buf}}
+    case None{}:
+      None{}
+
+def rw.keep(rw: Rw, +bytes: String) -> Rw:
+  match rw:
+    case Rw{path, aof, pid, cron, delay, until, last, run}:
+      Rw{path, aof, pid, cron, delay, until, last, run.keep(run, bytes)}
+    case RwOf{r}:
+      rw.keep(r, bytes)
+
+# The actor without a file runs a rewrite all the same: while one runs,
+# it takes the requests that wait without waiting for one, and writes a
+# slice of the snapshot after each group it answers, and one after
+# another while no request waits (each with a turn of the event loop for
+# the connections, IO.sleep(0)).
 @unsafe
-def db_loop(srv: S.Srv, ds: R.Ds, ws: Waits, tx: Tx, pb: Ps, +reqs: Chan(Req)) -> IO(Unit):
-  do IO<Unit>:
-    m : Maybe<&1, Req> <- Chan.recv(Req, reqs)
-    db_serve(srv, ds, ws, tx, pb, reqs, m)
+def db_loop(srv: S.Srv, ds: R.Ds, ws: Waits, tx: Tx, pb: Ps, rw: Rw, +reqs: Chan(Req)) -> IO(Unit):
+  +w = rw
+  db_wait(rw.runs(w), srv, ds, ws, tx, pb, w, reqs)
 
 @unsafe
-def db_serve(srv: S.Srv, ds: R.Ds, ws: Waits, tx: Tx, pb: Ps, +reqs: Chan(Req), m: Maybe<&1, Req>) -> IO(Unit):
+def db_wait(runs: Bool, srv: S.Srv, ds: R.Ds, ws: Waits, tx: Tx, pb: Ps, rw: Rw, +reqs: Chan(Req)) -> IO(Unit):
+  match runs:
+    case False{}:
+      do IO<Unit>:
+        m : Maybe<&1, Req> <- Chan.recv(Req, reqs)
+        db_serve(srv, ds, ws, tx, pb, rw, reqs, m)
+    case True{}:
+      do IO<Unit>:
+        qs : List<&1, Req> <- Chan.drain(Req, reqs, group_max())
+        db_busy(qs, srv, ds, ws, tx, pb, rw, reqs)
+
+@unsafe
+def db_busy(qs: List<&1, Req>, srv: S.Srv, ds: R.Ds, ws: Waits, tx: Tx, pb: Ps, rw: Rw, +reqs: Chan(Req)) -> IO(Unit):
+  match qs:
+    case Nil{}:
+      +d = ds
+      do IO<Unit>:
+        t : U32 & U32 <- IO.clock()
+        p : Maybe<&1, File> & Rx <- step.go(idle.step(d, clock.ms(t)), Rx{srv, d, 0n, rw}, None{})
+        Unit <- IO.sleep(0)
+        db_stepped(p, ws, tx, pb, reqs)
+    case Con{q, rest}:
+      do IO<Unit>:
+        t : U32 & U32 <- IO.clock()
+        db_group(grp.end(group_run(False{}, q <> rest, Grp{Nil{}, Nil{}, srv, R.ds.at(clock.ms(t), ds), ws, Nil{}, tx, pb})), rw, reqs)
+
+@unsafe
+def db_serve(srv: S.Srv, ds: R.Ds, ws: Waits, tx: Tx, pb: Ps, rw: Rw, +reqs: Chan(Req), m: Maybe<&1, Req>) -> IO(Unit):
   match m:
     case None{}:
       IO.pure(Unit, Unit{})
@@ -4383,13 +4553,37 @@ def db_serve(srv: S.Srv, ds: R.Ds, ws: Waits, tx: Tx, pb: Ps, +reqs: Chan(Req), 
       do IO<Unit>:
         more : List<&1, Req> <- Chan.drain(Req, reqs, group_max())
         t : U32 & U32 <- IO.clock()
-        db_group(grp.end(group_run(False{}, q <> more, Grp{Nil{}, Nil{}, srv, R.ds.at(clock.ms(t), ds), ws, Nil{}, tx, pb})), reqs)
+        db_group(grp.end(group_run(False{}, q <> more, Grp{Nil{}, Nil{}, srv, R.ds.at(clock.ms(t), ds), ws, Nil{}, tx, pb})), rw, reqs)
 
 @unsafe
-def db_group(g: Grp, +reqs: Chan(Req)) -> IO(Unit):
+def db_group(g: Grp, rw: Rw, +reqs: Chan(Req)) -> IO(Unit):
   match g:
     case Grp{outs, es, srv, ds, ws, up, tx, +pb}:
-      db_kill(ps.calm(pb), pb, outs, srv, ds, ws, tx, reqs)
+      db_kill(ps.calm(pb), pb, outs, srv, ds, ws, tx, rw, reqs)
+
+# after a group is answered, the rewrite's step, if any (rw.what)
+@unsafe
+def db_next(+srv: S.Srv, +ds: R.Ds, ws: Waits, tx: Tx, pb: Ps, +rw: Rw, +reqs: Chan(Req)) -> IO(Unit):
+  db_after(rw.what(rw, srv, R.ds.now(ds)), srv, ds, ws, tx, pb, rw, reqs)
+
+@unsafe
+def db_after(w: Nat, srv: S.Srv, ds: R.Ds, ws: Waits, tx: Tx, pb: Ps, rw: Rw, +reqs: Chan(Req)) -> IO(Unit):
+  match w:
+    case 0n:
+      db_loop(srv, ds, ws, tx, pb, rw, reqs)
+    case _:
+      do IO<Unit>:
+        p : Maybe<&1, File> & Rx <- step.go(w, Rx{srv, ds, 0n, rw}, None{})
+        db_stepped(p, ws, tx, pb, reqs)
+
+@unsafe
+def db_stepped(p: Maybe<&1, File> & Rx, ws: Waits, tx: Tx, pb: Ps, +reqs: Chan(Req)) -> IO(Unit):
+  (m, x) = p
+  match x:
+    case Rx{srv, ds, sel, rw}:
+      do IO<Unit>:
+        Unit <- file.end(m)
+        db_loop(srv, ds, ws, tx, pb, rw, reqs)
 
 # the sockets of the clients CLIENT KILL took shut down (TCP.kill), before
 # the group's answers go out
@@ -4404,23 +4598,23 @@ def kill_all(ks: List<&2, U32>) -> IO(Unit):
         kill_all(rest)
 
 @unsafe
-def db_send(p: List<&2, U32> & Ps, outs: List<&2, Sigma<&2, &2, Chan(Ans), _ => Ans>>, srv: S.Srv, ds: R.Ds, ws: Waits, tx: Tx, +reqs: Chan(Req)) -> IO(Unit):
+def db_send(p: List<&2, U32> & Ps, outs: List<&2, Sigma<&2, &2, Chan(Ans), _ => Ans>>, srv: S.Srv, ds: R.Ds, ws: Waits, tx: Tx, rw: Rw, +reqs: Chan(Req)) -> IO(Unit):
   (ks, pb) = p
   do IO<Unit>:
     Unit <- kill_all(ks)
     Unit <- Chan.send_all(Ans, List.reverse(&2, Sigma<&2, &2, Chan(Ans), _ => Ans>, outs))
-    db_loop(srv, ds, ws, tx, pb, reqs)
+    db_next(srv, ds, ws, tx, pb, rw, reqs)
 
 # while no client was killed (calm), no socket is to be shut down
 @unsafe
-def db_kill(calm: Bool, pb: Ps, outs: List<&2, Sigma<&2, &2, Chan(Ans), _ => Ans>>, srv: S.Srv, ds: R.Ds, ws: Waits, tx: Tx, +reqs: Chan(Req)) -> IO(Unit):
+def db_kill(calm: Bool, pb: Ps, outs: List<&2, Sigma<&2, &2, Chan(Ans), _ => Ans>>, srv: S.Srv, ds: R.Ds, ws: Waits, tx: Tx, rw: Rw, +reqs: Chan(Req)) -> IO(Unit):
   match calm:
     case True{}:
       do IO<Unit>:
         Unit <- Chan.send_all(Ans, List.reverse(&2, Sigma<&2, &2, Chan(Ans), _ => Ans>, outs))
-        db_loop(srv, ds, ws, tx, pb, reqs)
+        db_next(srv, ds, ws, tx, pb, rw, reqs)
     case False{}:
-      db_send(ps.kills(pb), outs, srv, ds, ws, tx, reqs)
+      db_send(ps.kills(pb), outs, srv, ds, ws, tx, rw, reqs)
 
 # Connections
 # -----------
@@ -5712,20 +5906,53 @@ def aof_fail(e: U32 & String) -> String:
 # its loop. A group's effects are each batch's in front of the ones
 # before reversed. The state is the server's, the databases, the database
 # the file has selected (its last SELECT: an effect on another database
-# is written after a SELECT of its own, aof.bend) and the clients that
-# wait.
+# is written after a SELECT of its own, aof.bend), the clients that wait,
+# and the rewrite's (Rw). While a rewrite runs, the actor takes the
+# requests that wait without waiting for one, as the actor without a
+# file does (db_loop).
 type St is Data:
-  St{srv: S.Srv, ds: R.Ds, sel: Nat, ws: Waits, tx: Tx, pb: Ps}
+  St{srv: S.Srv, ds: R.Ds, sel: Nat, ws: Waits, tx: Tx, pb: Ps, rw: Rw}
+
+def st.runs(+st: St) -> Bool:
+  match st:
+    case St{srv, ds, sel, ws, tx, pb, +rw}:
+      rw.runs(rw)
 
 @unsafe
 def aof_loop(st: St, f: File, +sync: Sync, +reqs: Chan(Req)) -> IO(Unit):
-  do IO<Unit>:
-    m : Maybe<&1, Req> <- Chan.recv(Req, reqs)
-    aof_more(st, f, sync, reqs, m)
+  +x = st
+  aof_wait(st.runs(x), x, f, sync, reqs)
+
+@unsafe
+def aof_wait(runs: Bool, st: St, f: File, +sync: Sync, +reqs: Chan(Req)) -> IO(Unit):
+  match runs:
+    case False{}:
+      do IO<Unit>:
+        m : Maybe<&1, Req> <- Chan.recv(Req, reqs)
+        aof_more(st, f, sync, reqs, m)
+    case True{}:
+      do IO<Unit>:
+        qs : List<&1, Req> <- Chan.drain(Req, reqs, group_max())
+        aof_busy(qs, st, f, sync, reqs)
+
+# while a rewrite runs and no request waits, a slice of it, then a turn
+# of the event loop
+@unsafe
+def aof_busy(qs: List<&1, Req>, st: St, f: File, +sync: Sync, +reqs: Chan(Req)) -> IO(Unit):
+  match qs:
+    case Nil{}:
+      +x = st
+      do IO<Unit>:
+        t : U32 & U32 <- IO.clock()
+        p : File & St <- aof_rw(st.idle(x, clock.ms(t)), x, f)
+        Unit <- IO.sleep(0)
+        aof_resume(p, sync, reqs)
+    case Con{q, rest}:
+      aof_take(q <> rest, st, f, sync, reqs)
 
 def st.sel(+st: St) -> Nat:
   match st:
-    case St{srv, ds, +sel, ws, tx, pb}:
+    case St{srv, ds, +sel, ws, tx, pb, rw}:
       sel
 
 # the group's first request held in a list while the others are taken:
@@ -5734,11 +5961,11 @@ def st.sel(+st: St) -> Nat:
 @unsafe
 def aof_take(qs: List<&1, Req>, st: St, f: File, +sync: Sync, +reqs: Chan(Req)) -> IO(Unit):
   match st:
-    case St{srv, ds, +sel, ws, tx, pb}:
+    case St{srv, ds, +sel, ws, tx, pb, rw}:
       do IO<Unit>:
         more : List<&1, Req> <- Chan.drain(Req, reqs, group_max())
         t : U32 & U32 <- IO.clock()
-        aof_group(grp.end(group_run(True{}, List.append(&1, Req, qs, more), Grp{Nil{}, Nil{}, srv, R.ds.at(clock.ms(t), ds), ws, Nil{}, tx, pb})), sel, f, sync, reqs)
+        aof_group(grp.end(group_run(True{}, List.append(&1, Req, qs, more), Grp{Nil{}, Nil{}, srv, R.ds.at(clock.ms(t), ds), ws, Nil{}, tx, pb})), sel, rw, f, sync, reqs)
 
 @unsafe
 def aof_more(st: St, f: File, +sync: Sync, +reqs: Chan(Req), m: Maybe<&1, Req>) -> IO(Unit):
@@ -5749,17 +5976,17 @@ def aof_more(st: St, f: File, +sync: Sync, +reqs: Chan(Req), m: Maybe<&1, Req>) 
       aof_take([q], st, f, sync, reqs)
 
 @unsafe
-def aof_group(g: Grp, +sel: Nat, f: File, +sync: Sync, +reqs: Chan(Req)) -> IO(Unit):
+def aof_group(g: Grp, +sel: Nat, rw: Rw, f: File, +sync: Sync, +reqs: Chan(Req)) -> IO(Unit):
   match g:
     case Grp{outs, es, srv, ds, ws, up, tx, pb}:
-      aof_put(List.reverse(&2, Sigma<&2, &2, Chan(Ans), _ => Ans>, outs), List.reverse(&2, A.Ent, es), St{srv, ds, sel, ws, tx, pb}, f, sync, reqs)
+      aof_put(List.reverse(&2, Sigma<&2, &2, Chan(Ans), _ => Ans>, outs), List.reverse(&2, A.Ent, es), St{srv, ds, sel, ws, tx, pb, rw}, f, sync, reqs)
 
-# the bytes appended to the file, for INFO, and the database the file has
-# selected after them
-def st.aof(st: St, +n: Nat, +sel: Nat) -> St:
+# the bytes appended to the file, for INFO (and kept for the rewrite that
+# runs, if one does), and the database the file has selected after them
+def st.aof(st: St, +bytes: String, +sel: Nat) -> St:
   match st:
-    case St{srv, ds, old, ws, tx, pb}:
-      St{S.srv.aof(srv, n), ds, sel, ws, tx, pb}
+    case St{srv, ds, old, ws, tx, pb, rw}:
+      St{S.srv.aof(srv, String.length(bytes)), ds, sel, ws, tx, pb, rw.keep(rw, bytes)}
 
 @unsafe
 def aof_write(outs: List<&2, Sigma<&2, &2, Chan(Ans), _ => Ans>>, +es: List<&2, A.Ent>, st: St, f: File, +sync: Sync, +reqs: Chan(Req)) -> IO(Unit):
@@ -5768,7 +5995,7 @@ def aof_write(outs: List<&2, Sigma<&2, &2, Chan(Ans), _ => Ans>>, +es: List<&2, 
   +bytes = A.encode(A.ents.args(es, sel))
   do IO<Unit>:
     p : File & Result<&1, &1, U32 & String, Unit> <- File.write_raw(f, bytes)
-    aof_wrote(p, outs, st.aof(x, String.length(bytes), A.ents.sel(es, sel)), sync, reqs)
+    aof_wrote(p, outs, st.aof(x, bytes, A.ents.sel(es, sel)), sync, reqs)
 
 @unsafe
 def aof_put(outs: List<&2, Sigma<&2, &2, Chan(Ans), _ => Ans>>, es: List<&2, A.Ent>, st: St, f: File, +sync: Sync, +reqs: Chan(Req)) -> IO(Unit):
@@ -5809,59 +6036,801 @@ def aof_sync(+sync: Sync, f: File, outs: List<&2, Sigma<&2, &2, Chan(Ans), _ => 
       aof_reply(outs, st, f, Never{}, reqs)
 
 # the fds of the clients CLIENT KILL took, out of the state
-def st.kills.of(p: List<&2, U32> & Ps, srv: S.Srv, ds: R.Ds, +sel: Nat, ws: Waits, tx: Tx) -> List<&2, U32> & St:
+def st.kills.of(p: List<&2, U32> & Ps, srv: S.Srv, ds: R.Ds, +sel: Nat, ws: Waits, tx: Tx, rw: Rw) -> List<&2, U32> & St:
   (ks, pb) = p
-  (ks, St{srv, ds, sel, ws, tx, pb})
+  (ks, St{srv, ds, sel, ws, tx, pb, rw})
 
 def st.kills(st: St) -> List<&2, U32> & St:
   match st:
-    case St{srv, ds, +sel, ws, tx, pb}:
-      st.kills.of(ps.kills(pb), srv, ds, sel, ws, tx)
+    case St{srv, ds, +sel, ws, tx, pb, rw}:
+      st.kills.of(ps.kills(pb), srv, ds, sel, ws, tx, rw)
+
+# what the actor does about a rewrite once the group is answered
+# (rw.what)
+def st.what(+st: St) -> Nat:
+  match st:
+    case St{+srv, +ds, sel, ws, tx, pb, +rw}:
+      rw.what(rw, srv, R.ds.now(ds))
 
 # the group's answers, after the sockets of the clients CLIENT KILL took
-# are shut down (TCP.kill), as db_send does without the file
+# are shut down (TCP.kill), as db_send does without the file; then the
+# rewrite's step, if any
 @unsafe
 def aof_answer(p: List<&2, U32> & St, outs: List<&2, Sigma<&2, &2, Chan(Ans), _ => Ans>>, f: File, +sync: Sync, +reqs: Chan(Req)) -> IO(Unit):
   (ks, st) = p
+  +x = st
   do IO<Unit>:
     Unit <- kill_all(ks)
     Unit <- Chan.send_all(Ans, outs)
-    aof_loop(st, f, sync, reqs)
+    aof_after(st.what(x), x, f, sync, reqs)
+
+@unsafe
+def aof_after(w: Nat, st: St, f: File, +sync: Sync, +reqs: Chan(Req)) -> IO(Unit):
+  match w:
+    case 0n:
+      aof_loop(st, f, sync, reqs)
+    case _:
+      do IO<Unit>:
+        p : File & St <- aof_rw(w, st, f)
+        aof_resume(p, sync, reqs)
+
+@unsafe
+def aof_resume(p: File & St, +sync: Sync, +reqs: Chan(Req)) -> IO(Unit):
+  (f, st) = p
+  aof_loop(st, f, sync, reqs)
+
+# a step of the rewrite (rw.step), on the file's handle: the handle of the
+# file after it (the new file's when it ends the rewrite)
+@unsafe
+def aof_rw(w: Nat, st: St, f: File) -> IO(File & St):
+  match st:
+    case St{srv, ds, sel, ws, tx, pb, rw}:
+      do IO<File & St>:
+        p : Maybe<&1, File> & Rx <- step.go(w, Rx{srv, ds, sel, rw}, Some{f})
+        aof_rw.back(p, ws, tx, pb)
+
+@unsafe
+def aof_rw.back(p: Maybe<&1, File> & Rx, ws: Waits, tx: Tx, pb: Ps) -> IO(File & St):
+  (m, x) = p
+  match m x:
+    case Some{f} Rx{srv, ds, sel, rw}:
+      IO.pure(File & St, (f, St{srv, ds, sel, ws, tx, pb, rw}))
+    case None{} _:
+      IO.die(File & St, 1, "the append-only file has no handle after a step of its rewrite")
 
 @unsafe
 def aof_reply(outs: List<&2, Sigma<&2, &2, Chan(Ans), _ => Ans>>, st: St, f: File, +sync: Sync, +reqs: Chan(Req)) -> IO(Unit):
   aof_answer(st.kills(st), outs, f, sync, reqs)
 
-# everysec: the file synced each second, through a handle of its own
+# everysec: the file synced each second, through a handle of its own,
+# opened at its path each time: a rewrite puts a new file there
 @unsafe
-def sync_loop(f: File) -> IO(Unit):
+def sync_loop(+path: String) -> IO(Unit):
   do IO<Unit>:
     Unit <- IO.sleep(1000)
-    p : File & Result<&1, &1, U32 & String, Unit> <- File.sync(f)
-    sync_next(p)
+    m : Result<&1, &1, U32 & String, File> <- File.open(path, "a")
+    sync_open(m, path)
+
+@unsafe
+def sync_open(m: Result<&1, &1, U32 & String, File>, +path: String) -> IO(Unit):
+  match m:
+    case Fail{e}:
+      IO.die(Unit, 1, aof_fail(e))
+    case Done{f}:
+      do IO<Unit>:
+        p : File & Result<&1, &1, U32 & String, Unit> <- File.sync(f)
+        sync_next(p, path)
 
 # a failed sync stops the server, as with always: the writes it
 # acknowledged may not be on the disk, and the kernel may have dropped
 # them, so a later sync that succeeds would not show it
 @unsafe
-def sync_next(p: File & Result<&1, &1, U32 & String, Unit>) -> IO(Unit):
+def sync_next(p: File & Result<&1, &1, U32 & String, Unit>, +path: String) -> IO(Unit):
   (f, r) = p
+  do IO<Unit>:
+    Unit <- File.close(f)
+    sync_after(r, path)
+
+@unsafe
+def sync_after(r: Result<&1, &1, U32 & String, Unit>, +path: String) -> IO(Unit):
   match r:
     case Fail{e}:
       IO.die(Unit, 1, aof_fail(e))
     case Done{u}:
-      sync_loop(f)
+      sync_loop(path)
 
 @unsafe
-def syncer(sync: Sync, path: String) -> IO(Unit):
+def syncer(sync: Sync, +path: String) -> IO(Unit):
   match sync:
     case EverySec{}:
-      do IO<Unit>:
-        f : File <- IO.try(File, File.open(path, "a"))
-        IO.spawn(Unit, sync_loop(f))
+      IO.spawn(Unit, sync_loop(path))
     case Always{}:
       IO.pure(Unit, Unit{})
     case Never{}:
+      IO.pure(Unit, Unit{})
+
+# The rewrite of the append-only file
+# ------------------------------------
+# BGREWRITEAOF (or the cron: a rewrite scheduled in EXEC, or a file grown
+# past auto-aof-rewrite-percentage of its size after its last rewrite)
+# writes the append-only file again, as Redis 7.0.15 writes its base: the
+# commands that make the databases as they are when it starts (aof.bend:
+# The rewrite), to a temporary file next to the file
+# (temp-rewriteaof-bg-<pid>.aof), then the entries appended to the file
+# since it started; the temporary file synced, it is renamed onto the
+# file and the directory synced, and the actor appends to the new file
+# from then on. Redis forks a child that writes its memory as it was at
+# the fork; BendKV's databases are values, so the actor keeps them as they
+# are at the start (the snapshot: nothing copies them, the writes after
+# it make new nodes where they change shared ones, as Redis's child's
+# pages are copied on write) and writes them a slice at a time (the keys
+# of a few dozen entries of a database: A.rw.slice), after the groups it
+# answers and while no request waits (The steps: when, and how many),
+# each then with a turn of the event loop for the connections; the
+# temporary file is synced each 4 MB as it is written when
+# aof-rewrite-incremental-fsync is yes, as Redis's child syncs its file,
+# so that the last sync has little left to write. The entries appended
+# meanwhile are kept (as Redis 6 kept them in its rewrite buffer; Redis 7
+# writes them to a new file of its multi-part layout) and written after
+# the snapshot. The file has one layout, Redis 6's single file, which
+# Redis 7 reads as a file of Redis 6 (it moves it into its multi-part
+# layout). With appendonly no the rewrite writes appendfilename all the
+# same, as Redis does. A rewrite that fails (a file it cannot open, write
+# or sync, a rename that fails) leaves the file as it was and removes the
+# temporary one; one that fails after its rename (the directory's sync,
+# the new file's opening) stops the server, as a failed write to the file
+# does, since the file's name may not be on the disk.
+
+# the directory of a path, with its last '/' ("" for a name alone)
+def path.cut(s: String, +i: Nat, +at: Nat) -> Nat:
+  match s:
+    case SNil{}:
+      at
+    case SCon{Chr{+x}, t}:
+      path.cut(t, 1n+i, Bool.pick(Nat, U32.is_eq(x, 47), 1n+i, at))
+
+def path.dir(+p: String) -> String:
+  String.take(p, path.cut(p, 0n, 0n))
+
+# the temporary file of a rewrite: next to the file (a rename does not
+# cross file systems), named as Redis names its child's
+def tmp.path(+path: String, +pid: U32) -> String:
+  path.dir(path) ++ "temp-rewriteaof-bg-" ++ U32.show(pid) ++ ".aof"
+
+# strings kept newest first, as one, oldest first, before acc
+def strs.cat(xs: List<&2, String>, acc: String) -> String:
+  match xs:
+    case Nil{}:
+      acc
+    case Con{x, rest}:
+      strs.cat(rest, x ++ acc)
+
+def err.msg(e: U32 & String) -> String:
+  (code, msg) = e
+  msg
+
+# The rewrite that runs
+# ---------------------
+
+def run.tmp(+m: Maybe<&2, RwRun>) -> String:
+  match m:
+    case Some{RwRun{snap, +tmp, size, pend, pn, buf}}:
+      tmp
+    case None{}:
+      ""
+
+def run.size(+m: Maybe<&2, RwRun>) -> Nat:
+  match m:
+    case Some{RwRun{snap, tmp, +size, pend, pn, buf}}:
+      size
+    case None{}:
+      0n
+
+# the snapshot's bytes kept and not yet written; the same, then the
+# entries appended to the file since the rewrite started
+def run.pending(+m: Maybe<&2, RwRun>) -> String:
+  match m:
+    case Some{RwRun{snap, tmp, size, +pend, pn, buf}}:
+      strs.cat(pend, "")
+    case None{}:
+      ""
+
+def run.rest(+m: Maybe<&2, RwRun>) -> String:
+  match m:
+    case Some{RwRun{snap, tmp, size, +pend, pn, +buf}}:
+      strs.cat(pend, strs.cat(buf, ""))
+    case None{}:
+      ""
+
+# a slice of the snapshot taken: its commands encoded and kept
+def run.sliced(sl: A.Slice, +tmp: String, +size: Nat, pend: List<&2, String>, +pn: Nat, buf: List<&2, String>) -> RwRun:
+  match sl:
+    case A.Slice{reqs, more}:
+      +b = A.encode(reqs)
+      RwRun{more, tmp, size, b <> pend, Nat.add(pn, String.length(b)), buf}
+
+def run.slice(m: Maybe<&2, RwRun>, +want: Nat) -> Maybe<&2, RwRun>:
+  match m:
+    case Some{RwRun{Some{s}, tmp, size, pend, pn, buf}}:
+      Some{run.sliced(A.rw.slice(s, want), tmp, size, pend, pn, buf)}
+    case Some{RwRun{None{}, tmp, size, pend, pn, buf}}:
+      Some{RwRun{None{}, tmp, size, pend, pn, buf}}
+    case None{}:
+      None{}
+
+# what follows a slice: 0 nothing yet, 1 the bytes kept written (64 KB
+# of them), 2 the rewrite's end (all of the snapshot is taken)
+def run.next(+m: Maybe<&2, RwRun>) -> Nat:
+  match m:
+    case Some{RwRun{None{}, tmp, size, pend, pn, buf}}:
+      2n
+    case Some{RwRun{Some{s}, tmp, size, pend, +pn, buf}}:
+      Bool.pick(Nat, Nat.is_le(65536n, pn), 1n, 0n)
+    case None{}:
+      0n
+
+# the bytes kept written: n more in the temporary file
+def run.flushed(m: Maybe<&2, RwRun>, +n: Nat) -> Maybe<&2, RwRun>:
+  match m:
+    case Some{RwRun{snap, tmp, size, pend, pn, buf}}:
+      Some{RwRun{snap, tmp, Nat.add(size, n), Nil{}, 0n, buf}}
+    case None{}:
+      None{}
+
+# A step's state
+# --------------
+
+def rw.path(+rw: Rw) -> String:
+  match rw:
+    case Rw{+path, aof, pid, cron, delay, until, last, run}:
+      path
+    case RwOf{+r}:
+      rw.path(r)
+
+def rw.pid(+rw: Rw) -> U32:
+  match rw:
+    case Rw{path, aof, +pid, cron, delay, until, last, run}:
+      pid
+    case RwOf{+r}:
+      rw.pid(r)
+
+def rw.tmp(+rw: Rw) -> String:
+  match rw:
+    case Rw{path, aof, pid, cron, delay, until, last, +run}:
+      run.tmp(run)
+    case RwOf{+r}:
+      rw.tmp(r)
+
+def rw.pending(+rw: Rw) -> String:
+  match rw:
+    case Rw{path, aof, pid, cron, delay, until, last, +run}:
+      run.pending(run)
+    case RwOf{+r}:
+      rw.pending(r)
+
+def rw.rest(+rw: Rw) -> String:
+  match rw:
+    case Rw{path, aof, pid, cron, delay, until, last, +run}:
+      run.rest(run)
+    case RwOf{+r}:
+      rw.rest(r)
+
+def rw.next(+rw: Rw) -> Nat:
+  match rw:
+    case Rw{path, aof, pid, cron, delay, until, last, +run}:
+      run.next(run)
+    case RwOf{+r}:
+      rw.next(r)
+
+def rw.size(+rw: Rw) -> Nat:
+  match rw:
+    case Rw{path, aof, pid, cron, delay, until, last, +run}:
+      run.size(run)
+    case RwOf{+r}:
+      rw.size(r)
+
+# the same state with run as the rewrite that runs; with a slice of its
+# snapshot taken; with n more bytes in its temporary file
+def rw.with(rw: Rw, run: Maybe<&2, RwRun>) -> Rw:
+  match rw:
+    case Rw{path, aof, pid, cron, delay, until, last, old}:
+      Rw{path, aof, pid, cron, delay, until, last, run}
+    case RwOf{r}:
+      rw.with(r, run)
+
+def rw.sliced(rw: Rw, +now: Nat, +want: Nat) -> Rw:
+  match rw:
+    case Rw{path, aof, pid, cron, delay, until, last, run}:
+      Rw{path, aof, pid, cron, delay, until, now, run.slice(run, want)}
+    case RwOf{r}:
+      rw.sliced(r, now, want)
+
+def rw.flushed(rw: Rw, +n: Nat) -> Rw:
+  match rw:
+    case Rw{path, aof, pid, cron, delay, until, last, run}:
+      Rw{path, aof, pid, cron, delay, until, last, run.flushed(run, n)}
+    case RwOf{r}:
+      rw.flushed(r, n)
+
+def rx.path(+x: Rx) -> String:
+  match x:
+    case Rx{srv, ds, sel, +rw}:
+      rw.path(rw)
+
+def rx.pid(+x: Rx) -> U32:
+  match x:
+    case Rx{srv, ds, sel, +rw}:
+      rw.pid(rw)
+
+def rx.tmp(+x: Rx) -> String:
+  match x:
+    case Rx{srv, ds, sel, +rw}:
+      rw.tmp(rw)
+
+def rx.pending(+x: Rx) -> String:
+  match x:
+    case Rx{srv, ds, sel, +rw}:
+      rw.pending(rw)
+
+def rx.rest(+x: Rx) -> String:
+  match x:
+    case Rx{srv, ds, sel, +rw}:
+      rw.rest(rw)
+
+def rx.next(+x: Rx) -> Nat:
+  match x:
+    case Rx{srv, ds, sel, +rw}:
+      rw.next(rw)
+
+# the temporary file a rewrite that starts writes
+def rx.tmp0(+x: Rx) -> String:
+  match x:
+    case Rx{srv, ds, sel, +rw}:
+      tmp.path(rw.path(rw), rw.pid(rw))
+
+# the log, as the configuration has it now
+def rx.lg(+x: Rx) -> Log:
+  match x:
+    case Rx{+srv, ds, sel, +rw}:
+      log.up(log.of(S.srv.cfg(srv), rw.pid(rw)))
+
+# a rewrite begun: the snapshot of the databases as they are, its
+# temporary file (made empty), and the database the file has selected one
+# that is not there, so that the file's next entry comes after a SELECT
+# of its own (Redis's aof_selected_db = -1)
+def rx.begin(x: Rx, +tmp: String) -> Rx:
+  match x:
+    case Rx{srv, +ds, sel, rw}:
+      Rx{srv, ds, R.ds.count(ds), rw.with(rw, Some{RwRun{Some{A.snap.of(ds)}, tmp, 0n, Nil{}, 0n, Nil{}}})}
+
+def rx.slice(x: Rx, +want: Nat) -> Rx:
+  match x:
+    case Rx{srv, +ds, sel, rw}:
+      Rx{srv, ds, sel, rw.sliced(rw, R.ds.now(ds), want)}
+
+# whether n more bytes in the temporary file pass a multiple of 4 MB, with
+# aof-rewrite-incremental-fsync yes
+def rx.autosync(+x: Rx, +n: Nat) -> Bool:
+  match x:
+    case Rx{+srv, ds, sel, +rw}:
+      +size = rw.size(rw)
+      Bool.and(Bool.not(Nat.is_eq(Nat.div(size, 4194304n), Nat.div(Nat.add(size, n), 4194304n))), String.eq(C.config.get_value(S.srv.cfg(srv), "aof-rewrite-incremental-fsync"), "yes"))
+
+def rx.flushed(x: Rx, +n: Nat) -> Rx:
+  match x:
+    case Rx{srv, ds, sel, rw}:
+      Rx{srv, ds, sel, rw.flushed(rw, n)}
+
+# the rewrite ended well at ms, its last n bytes written: INFO's account
+# (its time, and the file's size and base, the temporary file's size)
+def rx.done(x: Rx, +n: Nat, +ms: Nat) -> Rx:
+  match x:
+    case Rx{srv, ds, sel, +rw}:
+      Rx{S.srv.rw.done(srv, Nat.add(rw.size(rw), n), ms), ds, sel, rw.with(rw, None{})}
+
+# it failed at ms: the file as it was
+def rx.failed(x: Rx, +ms: Nat) -> Rx:
+  match x:
+    case Rx{srv, ds, sel, rw}:
+      Rx{S.srv.rw.failed(srv, ms), ds, sel, rw.with(rw, None{})}
+
+# a rewrite the cron starts, from the group's time
+def rx.go(x: Rx) -> Rx:
+  match x:
+    case Rx{srv, +ds, sel, rw}:
+      Rx{S.srv.rw.go(srv, R.ds.now(ds)), ds, sel, rw}
+
+# The cron
+# --------
+# Each 100 ms of the actor's time it looks, as Redis's serverCron does (at
+# hz 10) while no rewrite runs: a rewrite scheduled starts, and with
+# appendonly yes a file past auto-aof-rewrite-min-size grown by
+# auto-aof-rewrite-percentage (not 0) of its size after its last rewrite
+# (or at the start) is rewritten, both unless the limit after failures
+# holds.
+
+# the file's growth since its last rewrite, in percent, as Redis measures
+# it (a base of 0 as 1)
+def rw.growth(+cur: Nat, +base: Nat) -> Nat:
+  Nat.sub(Nat.div(Nat.mul(cur, 100n), Nat.max(base, 1n)), 100n)
+
+# (the parameters looked up only as far as they are needed: a look of
+# the actor without a file, or with a rewrite percentage of 0, reads
+# none past the first)
+def rw.auto.big(grown: Bool, +srv: S.Srv) -> Bool:
+  match grown:
+    case True{}:
+      Bool.not(C.dec.le(Nat.show(S.srv.aof.size(srv)), C.config.get_value(S.srv.cfg(srv), "auto-aof-rewrite-min-size")))
+    case False{}:
+      False{}
+
+def rw.auto.on(+srv: S.Srv) -> Bool:
+  +perc = nat.of(C.config.get_value(S.srv.cfg(srv), "auto-aof-rewrite-percentage"))
+  rw.auto.big(Bool.and(Nat.is_lt(0n, perc), Nat.is_le(perc, rw.growth(S.srv.aof.size(srv), S.srv.aof.base(srv)))), srv)
+
+def rw.auto(aof: Bool, +srv: S.Srv) -> Bool:
+  match aof:
+    case True{}:
+      rw.auto.on(srv)
+    case False{}:
+      False{}
+
+# Redis's aofRewriteLimited, asked when the cron would start a rewrite:
+# after three failures in a row the cron waits 1 minute from the look
+# that finds them, then 2, 4 and so on up to 60 after each further one
+# (each wait logged as it is set); fewer failures lift it. Its state: the
+# next wait (minutes) and the second the wait holds until (0: none set).
+type RwLim is Data:
+  RwLim{held: Bool, delay: Nat, until: Nat, note: Nat}
+
+def lim.set(+s: Nat, +delay: Nat) -> RwLim:
+  +d = Bool.pick(Nat, Nat.is_eq(delay, 0n), 1n, Bool.pick(Nat, Nat.is_lt(60n, Nat.mul(delay, 2n)), 60n, Nat.mul(delay, 2n)))
+  RwLim{True{}, d, Nat.add(s, Nat.mul(d, 60n)), d}
+
+def lim.wait(+s: Nat, +delay: Nat, +until: Nat) -> RwLim:
+  Bool.pick(RwLim, Nat.is_eq(until, 0n), lim.set(s, delay), Bool.pick(RwLim, Nat.is_lt(s, until), RwLim{True{}, delay, until, 0n}, RwLim{False{}, delay, 0n, 0n}))
+
+def lim.of(few: Bool, +s: Nat, +delay: Nat, +until: Nat) -> RwLim:
+  match few:
+    case True{}:
+      RwLim{False{}, 0n, 0n, 0n}
+    case False{}:
+      lim.wait(s, delay, until)
+
+def lim.ask(want: Bool, +fails: Nat, +s: Nat, +delay: Nat, +until: Nat) -> RwLim:
+  match want:
+    case True{}:
+      lim.of(Nat.is_lt(fails, 3n), s, delay, until)
+    case False{}:
+      RwLim{False{}, delay, until, 0n}
+
+# the cron's look: the state after it (its next look 100 ms on), what it
+# starts (0 nothing, 1 the rewrite scheduled, 2 one for the file's
+# growth), the growth, and the limit's wait to log (minutes; 0 none)
+type RwLook is Data:
+  RwLook{x: Rx, go: Nat, grow: Nat, note: Nat}
+
+def look.go(held: Bool, sched: Bool, auto: Bool) -> Nat:
+  match held sched auto:
+    case True{} _ _:
+      0n
+    case False{} True{} _:
+      1n
+    case False{} False{} True{}:
+      2n
+    case False{} False{} False{}:
+      0n
+
+def look.of(+sched: Bool, +auto: Bool, l: RwLim, +grow: Nat, srv: S.Srv, ds: R.Ds, +sel: Nat, path: String, +aof: Bool, +pid: U32, +now: Nat, +last: Nat, run: Maybe<&2, RwRun>) -> RwLook:
+  match l:
+    case RwLim{held, +delay, +until, +note}:
+      RwLook{Rx{srv, ds, sel, Rw{path, aof, pid, Nat.add(now, 100n), delay, until, last, run}}, look.go(held, sched, auto), grow, note}
+
+def rw.look(rw: Rw, +srv: S.Srv, +ds: R.Ds, +sel: Nat) -> RwLook:
+  match rw:
+    case Rw{path, +aof, +pid, cron, +delay, +until, +last, run}:
+      +now = R.ds.now(ds)
+      +sched = S.srv.rw.sched(srv)
+      +grow = rw.growth(S.srv.aof.size(srv), S.srv.aof.base(srv))
+      +auto = rw.auto(aof, srv)
+      look.of(sched, auto, lim.ask(Bool.or(sched, auto), S.srv.rw.fails(srv), Nat.div(now, 1000n), delay, until), grow, srv, ds, sel, path, aof, pid, now, last, run)
+    case RwOf{r}:
+      rw.look(r, srv, ds, sel)
+
+def rx.look(x: Rx) -> RwLook:
+  match x:
+    case Rx{+srv, +ds, +sel, rw}:
+      rw.look(rw, srv, ds, sel)
+
+# The steps
+# ---------
+# A step of the rewrite, on the file's handle (None with appendonly no):
+# 1 its start, 2 its next slice after a group (64 entries; and its end
+# after the last), 3 the cron's look (rw.what), 4 its next slice while no
+# request waits (32 entries: a request that comes meanwhile waits for it,
+# about a tenth of a millisecond), 5 the same once no group has run for
+# 10 ms (256 entries: the server is idle, and the rewrite goes faster).
+
+# the slice while no request waits, at ms (the clock), by how long ago the
+# last group ran (step.go: 4 or 5)
+def idle.step(+ds: R.Ds, +ms: Nat) -> Nat:
+  Bool.pick(Nat, Nat.is_le(Nat.add(R.ds.now(ds), 10n), ms), 5n, 4n)
+
+def st.idle(+st: St, +ms: Nat) -> Nat:
+  match st:
+    case St{srv, +ds, sel, ws, tx, pb, rw}:
+      idle.step(ds, ms)
+
+@unsafe
+def step.say(+x: Rx, +level: U32, +msg: String) -> IO(Unit):
+  log(rx.lg(x), level, msg)
+
+@unsafe
+def step.go(w: Nat, x: Rx, f: Maybe<&1, File>) -> IO(Maybe<&1, File> & Rx):
+  match w:
+    case 1n:
+      step.start(x, f)
+    case 2n:
+      step.slice(x, f, 64n)
+    case 3n:
+      step.cron(x, f)
+    case 4n:
+      step.slice(x, f, 32n)
+    case _:
+      step.slice(x, f, 256n)
+
+# the start: the temporary file made empty, then the snapshot taken
+@unsafe
+def step.start(+x: Rx, f: Maybe<&1, File>) -> IO(Maybe<&1, File> & Rx):
+  +tmp = rx.tmp0(x)
+  do IO<Maybe<&1, File> & Rx>:
+    m : Result<&1, &1, U32 & String, File> <- File.open(tmp, "w")
+    step.opened(m, tmp, x, f)
+
+@unsafe
+def step.opened(m: Result<&1, &1, U32 & String, File>, +tmp: String, +x: Rx, f: Maybe<&1, File>) -> IO(Maybe<&1, File> & Rx):
+  match m:
+    case Done{t}:
+      do IO<Maybe<&1, File> & Rx>:
+        Unit <- File.close(t)
+        Unit <- step.say(x, 2, "Background append only file rewriting started by pid " ++ U32.show(rx.pid(x)))
+        return (f, rx.begin(x, tmp))
+    case Fail{e}:
+      step.fail(x, f, tmp, "Can't open the temporary file " ++ tmp ++ " for the AOF rewrite: " ++ err.msg(e))
+
+# a slice of want entries, then what follows it
+@unsafe
+def step.slice(+x: Rx, f: Maybe<&1, File>, +want: Nat) -> IO(Maybe<&1, File> & Rx):
+  +y = rx.slice(x, want)
+  step.sliced(rx.next(y), y, f)
+
+@unsafe
+def step.sliced(w: Nat, +x: Rx, f: Maybe<&1, File>) -> IO(Maybe<&1, File> & Rx):
+  match w:
+    case 0n:
+      IO.pure(Maybe<&1, File> & Rx, (f, x))
+    case 1n:
+      step.flush(x, f)
+    case _:
+      step.finish(x, f)
+
+def step.wfail(+tmp: String, +msg: String) -> String:
+  "Error writing the temporary file " ++ tmp ++ " of the AOF rewrite: " ++ msg
+
+# the bytes kept appended to the temporary file
+@unsafe
+def step.flush(+x: Rx, f: Maybe<&1, File>) -> IO(Maybe<&1, File> & Rx):
+  +tmp = rx.tmp(x)
+  do IO<Maybe<&1, File> & Rx>:
+    m : Result<&1, &1, U32 & String, File> <- File.open(tmp, "a")
+    step.put(m, rx.pending(x), tmp, x, f)
+
+@unsafe
+def step.put(m: Result<&1, &1, U32 & String, File>, +bytes: String, +tmp: String, +x: Rx, f: Maybe<&1, File>) -> IO(Maybe<&1, File> & Rx):
+  match m:
+    case Fail{e}:
+      step.fail(x, f, tmp, step.wfail(tmp, err.msg(e)))
+    case Done{t}:
+      do IO<Maybe<&1, File> & Rx>:
+        p : File & Result<&1, &1, U32 & String, Unit> <- File.write_raw(t, bytes)
+        step.put.done(p, String.length(bytes), tmp, x, f)
+
+@unsafe
+def step.put.done(p: File & Result<&1, &1, U32 & String, Unit>, +n: Nat, +tmp: String, +x: Rx, f: Maybe<&1, File>) -> IO(Maybe<&1, File> & Rx):
+  (t, r) = p
+  match r:
+    case Fail{e}:
+      do IO<Maybe<&1, File> & Rx>:
+        Unit <- File.close(t)
+        step.fail(x, f, tmp, step.wfail(tmp, err.msg(e)))
+    case Done{u}:
+      step.put.auto(rx.autosync(x, n), t, n, tmp, x, f)
+
+# the temporary file synced each 4 MB written, with
+# aof-rewrite-incremental-fsync yes (Redis's default: its child syncs so,
+# REDIS_AUTOSYNC_BYTES), so that the sync before the rename, which the
+# actor waits for, finds little to write
+@unsafe
+def step.put.auto(sync: Bool, t: File, +n: Nat, +tmp: String, +x: Rx, f: Maybe<&1, File>) -> IO(Maybe<&1, File> & Rx):
+  match sync:
+    case False{}:
+      do IO<Maybe<&1, File> & Rx>:
+        Unit <- File.close(t)
+        return (f, rx.flushed(x, n))
+    case True{}:
+      do IO<Maybe<&1, File> & Rx>:
+        q : File & Result<&1, &1, U32 & String, Unit> <- File.sync(t)
+        step.put.synced(q, n, tmp, x, f)
+
+@unsafe
+def step.put.synced(q: File & Result<&1, &1, U32 & String, Unit>, +n: Nat, +tmp: String, +x: Rx, f: Maybe<&1, File>) -> IO(Maybe<&1, File> & Rx):
+  (t, r) = q
+  do IO<Maybe<&1, File> & Rx>:
+    Unit <- File.close(t)
+    step.put.end(r, n, tmp, x, f)
+
+@unsafe
+def step.put.end(r: Result<&1, &1, U32 & String, Unit>, +n: Nat, +tmp: String, +x: Rx, f: Maybe<&1, File>) -> IO(Maybe<&1, File> & Rx):
+  match r:
+    case Fail{e}:
+      step.fail(x, f, tmp, "Error syncing the temporary file " ++ tmp ++ " of the AOF rewrite: " ++ err.msg(e))
+    case Done{u}:
+      IO.pure(Maybe<&1, File> & Rx, (f, rx.flushed(x, n)))
+
+# the end (Redis's backgroundRewriteDoneHandler): the snapshot's last
+# bytes, then the entries appended since the start, written to the
+# temporary file and synced; the temporary file renamed onto the file
+# (whoever opens it finds the old file or the new one, whole) and the
+# directory synced; then the new file opened to append to and the old
+# handle closed
+@unsafe
+def step.finish(+x: Rx, f: Maybe<&1, File>) -> IO(Maybe<&1, File> & Rx):
+  +tmp = rx.tmp(x)
+  do IO<Maybe<&1, File> & Rx>:
+    m : Result<&1, &1, U32 & String, File> <- File.open(tmp, "a")
+    step.fin(m, rx.rest(x), tmp, x, f)
+
+@unsafe
+def step.fin(m: Result<&1, &1, U32 & String, File>, +bytes: String, +tmp: String, +x: Rx, f: Maybe<&1, File>) -> IO(Maybe<&1, File> & Rx):
+  match m:
+    case Fail{e}:
+      step.fail(x, f, tmp, step.wfail(tmp, err.msg(e)))
+    case Done{t}:
+      do IO<Maybe<&1, File> & Rx>:
+        p : File & Result<&1, &1, U32 & String, Unit> <- File.write_raw(t, bytes)
+        step.fin.wrote(p, String.length(bytes), tmp, x, f)
+
+@unsafe
+def step.fin.wrote(p: File & Result<&1, &1, U32 & String, Unit>, +n: Nat, +tmp: String, +x: Rx, f: Maybe<&1, File>) -> IO(Maybe<&1, File> & Rx):
+  (t, r) = p
+  match r:
+    case Fail{e}:
+      do IO<Maybe<&1, File> & Rx>:
+        Unit <- File.close(t)
+        step.fail(x, f, tmp, step.wfail(tmp, err.msg(e)))
+    case Done{u}:
+      do IO<Maybe<&1, File> & Rx>:
+        q : File & Result<&1, &1, U32 & String, Unit> <- File.sync(t)
+        step.fin.synced(q, n, tmp, x, f)
+
+@unsafe
+def step.fin.synced(q: File & Result<&1, &1, U32 & String, Unit>, +n: Nat, +tmp: String, +x: Rx, f: Maybe<&1, File>) -> IO(Maybe<&1, File> & Rx):
+  (t, r) = q
+  do IO<Maybe<&1, File> & Rx>:
+    Unit <- File.close(t)
+    step.fin.sync(r, n, tmp, x, f)
+
+@unsafe
+def step.fin.sync(r: Result<&1, &1, U32 & String, Unit>, +n: Nat, +tmp: String, +x: Rx, f: Maybe<&1, File>) -> IO(Maybe<&1, File> & Rx):
+  match r:
+    case Fail{e}:
+      step.fail(x, f, tmp, "Error syncing the temporary file " ++ tmp ++ " of the AOF rewrite: " ++ err.msg(e))
+    case Done{u}:
+      do IO<Maybe<&1, File> & Rx>:
+        q : Result<&1, &1, U32 & String, Unit> <- File.rename(tmp, rx.path(x))
+        step.fin.renamed(q, n, tmp, x, f)
+
+@unsafe
+def step.fin.renamed(q: Result<&1, &1, U32 & String, Unit>, +n: Nat, +tmp: String, +x: Rx, f: Maybe<&1, File>) -> IO(Maybe<&1, File> & Rx):
+  match q:
+    case Fail{e}:
+      step.fail(x, f, tmp, "Error trying to rename the temporary AOF file " ++ tmp ++ " into " ++ rx.path(x) ++ ": " ++ err.msg(e))
+    case Done{u}:
+      do IO<Maybe<&1, File> & Rx>:
+        d : Result<&1, &1, U32 & String, Unit> <- File.sync_dir(rx.path(x))
+        step.fin.dir(d, n, x, f)
+
+@unsafe
+def step.fin.dir(d: Result<&1, &1, U32 & String, Unit>, +n: Nat, +x: Rx, f: Maybe<&1, File>) -> IO(Maybe<&1, File> & Rx):
+  match d:
+    case Fail{e}:
+      do IO<Maybe<&1, File> & Rx>:
+        Unit <- step.say(x, 3, "The rewritten append-only file " ++ rx.path(x) ++ " is in place, but its directory failed to sync: " ++ err.msg(e))
+        IO.die(Maybe<&1, File> & Rx, 1, "")
+    case Done{u}:
+      step.fin.open(f, n, x)
+
+@unsafe
+def step.fin.open(f: Maybe<&1, File>, +n: Nat, +x: Rx) -> IO(Maybe<&1, File> & Rx):
+  match f:
+    case None{}:
+      step.done(None{}, n, x)
+    case Some{old}:
+      do IO<Maybe<&1, File> & Rx>:
+        m : Result<&1, &1, U32 & String, File> <- File.open(rx.path(x), "a")
+        step.fin.opened(m, old, n, x)
+
+@unsafe
+def step.fin.opened(m: Result<&1, &1, U32 & String, File>, old: File, +n: Nat, +x: Rx) -> IO(Maybe<&1, File> & Rx):
+  match m:
+    case Fail{e}:
+      do IO<Maybe<&1, File> & Rx>:
+        Unit <- step.say(x, 3, "Can't open the rewritten append-only file " ++ rx.path(x) ++ ": " ++ err.msg(e))
+        IO.die(Maybe<&1, File> & Rx, 1, "")
+    case Done{g}:
+      do IO<Maybe<&1, File> & Rx>:
+        Unit <- File.close(old)
+        step.done(Some{g}, n, x)
+
+@unsafe
+def step.done(f: Maybe<&1, File>, +n: Nat, +x: Rx) -> IO(Maybe<&1, File> & Rx):
+  do IO<Maybe<&1, File> & Rx>:
+    t : U32 & U32 <- IO.clock()
+    Unit <- step.say(x, 2, "Background AOF rewrite terminated with success")
+    Unit <- step.say(x, 2, "Background AOF rewrite finished successfully")
+    return (f, rx.done(x, n, clock.ms(t)))
+
+# a rewrite that failed: why, logged; its temporary file removed; the
+# file as it was
+@unsafe
+def step.fail(+x: Rx, f: Maybe<&1, File>, +tmp: String, +why: String) -> IO(Maybe<&1, File> & Rx):
+  do IO<Maybe<&1, File> & Rx>:
+    r : Result<&1, &1, U32 & String, Unit> <- File.unlink(tmp)
+    t : U32 & U32 <- IO.clock()
+    Unit <- step.say(x, 3, why)
+    Unit <- step.say(x, 3, "Background AOF rewrite terminated with error")
+    return (f, rx.failed(x, clock.ms(t)))
+
+# the cron's look
+@unsafe
+def step.cron(x: Rx, f: Maybe<&1, File>) -> IO(Maybe<&1, File> & Rx):
+  step.look(rx.look(x), f)
+
+@unsafe
+def step.note(note: Nat, +x: Rx) -> IO(Unit):
+  match note:
+    case 0n:
+      IO.pure(Unit, Unit{})
+    case 1n+k:
+      step.say(x, 3, "Background AOF rewrite has repeatedly failed and triggered the limit, will retry in " ++ Nat.show(1n+k) ++ " minutes")
+
+@unsafe
+def step.look(l: RwLook, f: Maybe<&1, File>) -> IO(Maybe<&1, File> & Rx):
+  match l:
+    case RwLook{+x, go, +grow, note}:
+      do IO<Maybe<&1, File> & Rx>:
+        Unit <- step.note(note, x)
+        step.look.go(go, grow, x, f)
+
+@unsafe
+def step.look.go(go: Nat, +grow: Nat, +x: Rx, f: Maybe<&1, File>) -> IO(Maybe<&1, File> & Rx):
+  match go:
+    case 0n:
+      IO.pure(Maybe<&1, File> & Rx, (f, x))
+    case 1n:
+      step.start(rx.go(x), f)
+    case _:
+      do IO<Maybe<&1, File> & Rx>:
+        Unit <- step.say(x, 2, "Starting automatic rewriting of AOF on " ++ Nat.show(grow) ++ "% growth")
+        step.start(rx.go(x), f)
+
+# the file's handle a step of the actor without a file gives back (None)
+@unsafe
+def file.end(m: Maybe<&1, File>) -> IO(Unit):
+  match m:
+    case Some{f}:
+      File.close(f)
+    case None{}:
       IO.pure(Unit, Unit{})
 
 # Restoring
@@ -6090,9 +7059,9 @@ def restore(+lg: Log, +trunc: Bool, +path: String, +more: Nat) -> IO(R.Ds & Nat)
 
 # the actor appending to the file, on the databases the file held, with
 # the database its last SELECT selected (the focus after its entries)
-def st.new(srv: S.Srv, ds: R.Ds) -> St:
+def st.new(srv: S.Srv, ds: R.Ds, rw: Rw) -> St:
   +x = ds
-  St{srv, x, R.ds.index(x), WaitNone{}, TxNone{}, ps.new()}
+  St{srv, x, R.ds.index(x), WaitNone{}, TxNone{}, ps.new(), rw}
 
 # the directory that holds the file synced, so that the file's name is on
 # the disk before the first write to it is acknowledged: File.open may
@@ -6112,14 +7081,14 @@ def dir_synced(r: Result<&1, &1, U32 & String, Unit>, +path: String, +lg: Log) -
       log.die(Unit, lg, "Can't sync the directory of the append-only file " ++ path ++ ": " ++ msg)
 
 @unsafe
-def open_aof(+path: String, +sync: Sync, srv: S.Srv, ds: R.Ds, +lg: Log) -> IO(Chan(Req)):
+def open_aof(+path: String, +sync: Sync, srv: S.Srv, ds: R.Ds, +lg: Log, +pid: U32) -> IO(Chan(Req)):
   do IO<Chan(Req)>:
     f : File <- IO.try(File, File.open(path, "a"))
     r : Result<&1, &1, U32 & String, Unit> <- File.sync_dir(path)
     Unit <- dir_synced(r, path, lg)
     Unit <- syncer(sync, path)
     +reqs : Chan(Req) <- Chan.new(Req, 1024)
-    Unit <- IO.spawn(Unit, aof_loop(st.new(srv, ds), f, sync, reqs))
+    Unit <- IO.spawn(Unit, aof_loop(st.new(srv, ds, rw.new(path, True{}, pid)), f, sync, reqs))
     return reqs
 
 # Serving
@@ -6153,10 +7122,10 @@ def accept_all(ls: List<&1, Listener>, +reqs: Chan(Req), +post: Bool, +lg: Log, 
     log(lg, 2, "Ready to accept connections")
 
 @unsafe
-def serve.aof(p: R.Ds & Nat, +path: String, +sync: Sync, +items: List<&2, C.CItem>, info: I.Info, ls: List<&1, Listener>, +post: Bool, +lg: Log, +tl: Chan(Tally)) -> IO(Unit):
+def serve.aof(p: R.Ds & Nat, +path: String, +sync: Sync, +items: List<&2, C.CItem>, info: I.Info, ls: List<&1, Listener>, +post: Bool, +lg: Log, +tl: Chan(Tally), +pid: U32) -> IO(Unit):
   (ds, +size) = p
   do IO<Unit>:
-    +reqs : Chan(Req) <- open_aof(path, sync, S.srv_of(items, I.info.restored(info, size)), ds, lg)
+    +reqs : Chan(Req) <- open_aof(path, sync, S.srv_of(items, I.info.restored(info, size)), ds, lg, pid)
     accept_all(ls, reqs, post, lg, tl)
 
 # the databases after the first (databases less one)
@@ -6164,17 +7133,17 @@ def dbs.more(+items: List<&2, C.CItem>) -> Nat:
   Nat.sub(S.srv.dbs.of(R.int_read(C.config.get_value(items, "databases"))), 1n)
 
 @unsafe
-def serve(aof: Maybe<&2, String>, ls: List<&1, Listener>, +post: Bool, +sync: Sync, +trunc: Bool, +items: List<&2, C.CItem>, info: I.Info, +lg: Log, +tl: Chan(Tally)) -> IO(Unit):
+def serve(aof: Maybe<&2, String>, ls: List<&1, Listener>, +post: Bool, +sync: Sync, +trunc: Bool, +items: List<&2, C.CItem>, info: I.Info, +lg: Log, +tl: Chan(Tally), +pid: U32) -> IO(Unit):
   match aof:
     case None{}:
       do IO<Unit>:
         +reqs : Chan(Req) <- Chan.new(Req, 1024)
-        Unit <- IO.spawn(Unit, db_loop(S.srv_of(items, info), R.ds.empty(dbs.more(items)), WaitNone{}, TxNone{}, ps.new(), reqs))
+        Unit <- IO.spawn(Unit, db_loop(S.srv_of(items, info), R.ds.empty(dbs.more(items)), WaitNone{}, TxNone{}, ps.new(), rw.new(T.cfg(items, "appendfilename"), False{}, pid), reqs))
         accept_all(ls, reqs, post, lg, tl)
     case Some{+path}:
       do IO<Unit>:
         p : R.Ds & Nat <- restore(lg, trunc, path, dbs.more(items))
-        serve.aof(p, path, sync, items, info, ls, post, lg, tl)
+        serve.aof(p, path, sync, items, info, ls, post, lg, tl, pid)
 
 # Listening
 # ---------
@@ -6388,7 +7357,7 @@ def run(+items: List<&2, C.CItem>, +post: Bool, +aof: Maybe<&2, String>, +sync: 
     +tl : Chan(Tally) <- Chan.new(Tally, 1)
     ok : Bool <- Chan.send(Tally, tl, Tally{0n, 0n})
     info : I.Info <- info.read(pid, exe, conf, tl)
-    serve(aof, ls, post, sync, String.eq(T.cfg(items, "aof-load-truncated"), "yes"), items, info, lm, tl)
+    serve(aof, ls, post, sync, String.eq(T.cfg(items, "aof-load-truncated"), "yes"), items, info, lm, tl, pid)
 
 # The short form
 # --------------

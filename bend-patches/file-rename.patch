@@ -1,0 +1,244 @@
+diff --git a/bend2/base.bend b/bend2/base.bend
+index 0d3eb20..3e7d47a 100644
+--- a/bend2/base.bend
++++ b/bend2/base.bend
+@@ -403,6 +403,21 @@ def File.sync_dir(path: String) ->
+   import "./effs/file_sync.c"
+   import "./effs/file_sync.js"
+ 
++# from renamed to to (rename): to, if it was there, is replaced in one
++# step, so whoever opens to finds the old file or the new one, whole,
++# never a part of either, as Redis puts a rewritten append-only file in
++# place. Both are paths; a file renamed across file systems fails (EXDEV).
++def File.rename(from: String, to: String) ->
++  IO(Result<&1, &1, U32 & String, Unit>):
++  import "./effs/file_rename.c"
++  import "./effs/file_rename.js"
++
++# path's name removed (unlink): the file goes once nothing has it open
++def File.unlink(path: String) ->
++  IO(Result<&1, &1, U32 & String, Unit>):
++  import "./effs/file_rename.c"
++  import "./effs/file_rename.js"
++
+ def File.close(file: File) -> IO(Unit):
+   import "./effs/file_close.c"
+   import "./effs/file_close.js"
+diff --git a/bend2/effs/file_rename.c b/bend2/effs/file_rename.c
+new file mode 100644
+index 0000000..829243a
+--- /dev/null
++++ b/bend2/effs/file_rename.c
+@@ -0,0 +1,61 @@
++// File
++// ====
++
++#ifdef CID(File.rename)
++
++// from renamed to to (rename), on a helper thread: to, if it was there,
++// is replaced in one step, so whoever opens to finds the old file or the
++// new one whole, as Redis puts a rewritten append-only file in place.
++static void file_rename_call(IoWork* w) {
++  io_sys_end(w, rename(w->data, w->text));
++}
++
++static Term file_rename_pack(Env e, IoWork* w) {
++  free(w->data);
++  free(w->text);
++  return io_res(e, w, term_pak(CID(Unit), 0));
++}
++
++Term file_rename_run(Env e, Term* f, IoWork* w) {
++  u64 n = 0;
++  w->data = io_cstr(e, f[0], &w->size);
++  w->text = io_cstr(e, f[1], &n);
++  if (io_nul(w->data, w->size) || io_nul(w->text, n)) {
++    w->code = EILSEQ;
++    return file_rename_pack(e, w);
++  }
++  return io_work(w, file_rename_call, file_rename_pack);
++}
++
++static void __attribute__((constructor)) file_rename_use(void) {
++  io_eff(CID(File.rename), file_rename_run);
++}
++
++#endif
++
++#ifdef CID(File.unlink)
++
++// path's name removed (unlink), on a helper thread
++static void file_unlink_call(IoWork* w) {
++  io_sys_end(w, unlink(w->data));
++}
++
++static Term file_unlink_pack(Env e, IoWork* w) {
++  free(w->data);
++  return io_res(e, w, term_pak(CID(Unit), 0));
++}
++
++Term file_unlink_run(Env e, Term* f, IoWork* w) {
++  w->data = io_cstr(e, f[0], &w->size);
++  if (io_nul(w->data, w->size)) {
++    w->code = EILSEQ;
++    return file_unlink_pack(e, w);
++  }
++  return io_work(w, file_unlink_call, file_unlink_pack);
++}
++
++static void __attribute__((constructor)) file_unlink_use(void) {
++  io_eff(CID(File.unlink), file_unlink_run);
++}
++
++#endif
+diff --git a/bend2/effs/file_rename.js b/bend2/effs/file_rename.js
+new file mode 100644
+index 0000000..17797ed
+--- /dev/null
++++ b/bend2/effs/file_rename.js
+@@ -0,0 +1,34 @@
++// from renamed to to, in one step: to, if it was there, is replaced whole.
++// The paths' bytes go to the host as they are (a Buffer each).
++function file_rename(from, to) {
++  const fs = require("fs");
++  const a = io_bytes(from);
++  const b = io_bytes(to);
++  if (a.includes(0) || b.includes(0)) {
++    return io_fail(process.platform === "darwin" ? 92 : 84);
++  }
++  try {
++    fs.renameSync(Buffer.from(a), Buffer.from(b));
++    return io_done({ $: CID(Unit) });
++  } catch (e) {
++    return io_fail(Math.abs(e.errno ?? 5));
++  }
++}
++
++// path's name removed
++function file_unlink(path) {
++  const fs = require("fs");
++  const a = io_bytes(path);
++  if (a.includes(0)) {
++    return io_fail(process.platform === "darwin" ? 92 : 84);
++  }
++  try {
++    fs.unlinkSync(Buffer.from(a));
++    return io_done({ $: CID(Unit) });
++  } catch (e) {
++    return io_fail(Math.abs(e.errno ?? 5));
++  }
++}
++
++io_eff(CID(File.rename), file_rename);
++io_eff(CID(File.unlink), file_unlink);
+diff --git a/tests/io/file_rename.bend b/tests/io/file_rename.bend
+new file mode 100644
+index 0000000..1baf3f3
+--- /dev/null
++++ b/tests/io/file_rename.bend
+@@ -0,0 +1,105 @@
++# io (io_file_rename): File.rename puts a file in another's place in one
++# step: a file renamed onto one that is there replaces it, the new name
++# reads the renamed file's bytes, the old name is gone (ENOENT), and a
++# handle opened on the renamed file before the rename writes on into it
++# under the new name; a file not there renames with ENOENT. File.unlink
++# removes a name: the file reads as gone after it, and a name not there
++# fails with ENOENT.
++import Base
++
++def a() -> String:
++  "/tmp/bend_io_file_rename_a"
++
++def b() -> String:
++  "/tmp/bend_io_file_rename_b"
++
++def check(name: String, ok: Bool) -> IO(Unit):
++  match ok:
++    case True{}:
++      IO.print(name)
++    case False{}:
++      IO.die(Unit, 1, "FAIL " ++ name)
++
++def done(pair: File & Result<&1, &1, U32 & String, Unit>) -> IO(File):
++  (file, result) = pair
++  do IO<File>:
++    IO.pass(Unit, result)
++    return file
++
++def ok(r: Result<&1, &1, U32 & String, Unit>, name: String) -> IO(Unit):
++  match r:
++    case Done{u}:
++      IO.print(name)
++    case Fail{e}:
++      (code, msg) = e
++      IO.die(Unit, 1, "FAIL " ++ name ++ ": " ++ msg)
++
++def failed(r: Result<&1, &1, U32 & String, Unit>, want: U32, name: String) -> IO(Unit):
++  match r:
++    case Done{u}:
++      IO.die(Unit, 1, "FAIL " ++ name)
++    case Fail{e}:
++      (code, msg) = e
++      check(name, U32.is_eq(code, want))
++
++def write(path: String, bytes: String) -> IO(Unit):
++  do IO<Unit>:
++    f : File <- IO.try(File, File.open(path, "w"))
++    p : File & Result<&1, &1, U32 & String, Unit> <- File.write_raw(f, bytes)
++    f : File <- done(p)
++    File.close(f)
++
++def got(pair: File & Result<&1, &1, U32 & String, String>, +want: String, name: String) -> IO(Unit):
++  (file, result) = pair
++  do IO<Unit>:
++    s : String <- IO.pass(String, result)
++    Unit <- File.close(file)
++    check(name, String.eq(s, want))
++
++def reads(path: String, +want: String, name: String) -> IO(Unit):
++  do IO<Unit>:
++    f : File <- IO.try(File, File.open(path, "r"))
++    p : File & Result<&1, &1, U32 & String, String> <- File.read_raw(f, 100)
++    got(p, want, name)
++
++def gone(m: Result<&1, &1, U32 & String, File>, name: String) -> IO(Unit):
++  match m:
++    case Done{f}:
++      do IO<Unit>:
++        Unit <- File.close(f)
++        IO.die(Unit, 1, "FAIL " ++ name)
++    case Fail{e}:
++      (code, msg) = e
++      check(name, U32.is_eq(code, 2))
++
++def main() -> IO(Unit):
++  do IO<Unit>:
++    Unit <- write(a(), "first")
++    Unit <- write(b(), "second, longer")
++    f : File <- IO.try(File, File.open(a(), "a"))
++    r : Result<&1, &1, U32 & String, Unit> <- File.rename(a(), b())
++    Unit <- ok(r, "a renamed onto b")
++    Unit <- reads(b(), "first", "b reads a's bytes")
++    m : Result<&1, &1, U32 & String, File> <- File.open(a(), "r")
++    Unit <- gone(m, "a is gone")
++    p : File & Result<&1, &1, U32 & String, Unit> <- File.write_raw(f, " and more")
++    f : File <- done(p)
++    Unit <- File.close(f)
++    Unit <- reads(b(), "first and more", "a handle opened before writes on under the new name")
++    r : Result<&1, &1, U32 & String, Unit> <- File.rename(a(), b())
++    Unit <- failed(r, 2, "a file not there renames with ENOENT")
++    r : Result<&1, &1, U32 & String, Unit> <- File.unlink(b())
++    Unit <- ok(r, "b unlinked")
++    m : Result<&1, &1, U32 & String, File> <- File.open(b(), "r")
++    Unit <- gone(m, "b is gone")
++    r : Result<&1, &1, U32 & String, Unit> <- File.unlink(b())
++    failed(r, 2, "a name not there unlinks with ENOENT")
++
++#|a renamed onto b
++#|b reads a's bytes
++#|a is gone
++#|a handle opened before writes on under the new name
++#|a file not there renames with ENOENT
++#|b unlinked
++#|b is gone
++#|a name not there unlinks with ENOENT

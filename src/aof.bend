@@ -19,6 +19,7 @@ import ./map.bend as KV
 import ./redis.bend as R
 import ./resp.bend as P
 import ./batch.bend as B
+import ./float.bend as F
 
 # Effects
 # -------
@@ -1468,3 +1469,161 @@ def skip(i: Nat, +s: String, m: Maybe<&1, List<&2, String> & String>) -> String:
 # entry is)
 def offset(+s: String, i: Nat) -> Nat:
   Nat.sub(String.length(s), String.length(skip(i, s, entry(s))))
+
+# The rewrite
+# -----------
+# BGREWRITEAOF writes the file again from a snapshot of the databases,
+# as Redis 7.0.15's rewriteAppendOnlyFileRio writes a base: for each
+# database that holds keys a SELECT of it, then each key as the commands
+# that make it again: the SET of a string, the RPUSH of a list's
+# elements, the SADD of a set's members, the ZADD of a sorted set's
+# scores (as Redis writes a double, %.17g) and members, the HMSET of a
+# hash's fields and values, 64 elements or pairs to a command
+# (AOF_REWRITE_ITEMS_PER_CMD), and the PEXPIREAT of the time it expires
+# at when it does. A key whose time has passed at the snapshot's time is
+# left out. The snapshot is a value (the databases at a time), so the
+# server writes it a slice at a time (rw.slice: the keys of the buckets a
+# scan of a few dozen entries reads, KV.scan, from a cursor), between the
+# groups of requests it serves meanwhile.
+
+# a command's words, its name and key first
+def rw.cmd(+name: String, +k: String, ws: List<&2, String>) -> List<&2, String>:
+  name <> k <> List.reverse(&2, String, ws)
+
+def rw.flush(+name: String, +k: String, cur: List<&2, String>, acc: List<&2, List<&2, String>>) -> List<&2, List<&2, String>>:
+  match cur:
+    case Nil{}:
+      acc
+    case Con{w, ws}:
+      rw.cmd(name, k, w <> ws) <> acc
+
+# xs as commands name k and w of its words each (cur: the words of the one
+# being filled, newest first; left: how many more it takes), newest
+# first before acc
+def rw.fill(+name: String, +k: String, +w: Nat, xs: List<&2, String>, +left: Nat, cur: List<&2, String>, acc: List<&2, List<&2, String>>) -> List<&2, List<&2, String>>:
+  match xs left:
+    case Nil{} _:
+      rw.flush(name, k, cur, acc)
+    case Con{x, rest} 0n:
+      rw.fill(name, k, w, rest, Nat.sub(w, 1n), [x], rw.flush(name, k, cur, acc))
+    case Con{x, rest} 1n+l:
+      rw.fill(name, k, w, rest, l, x <> cur, acc)
+
+def rw.chunks(+name: String, +k: String, +w: Nat, xs: List<&2, String>, acc: List<&2, List<&2, String>>) -> List<&2, List<&2, String>>:
+  rw.fill(name, k, w, xs, w, Nil{}, acc)
+
+# a hash's pairs as words: field, value, ...
+def rw.hwords(ps: List<&2, KV.HPair>) -> List<&2, String>:
+  match ps:
+    case Nil{}:
+      Nil{}
+    case Con{KV.HP{f, v}, rest}:
+      f <> v <> rw.hwords(rest)
+
+# a sorted set's elements as words: score, member, ...
+def rw.zwords(es: List<&2, KV.ZEl>) -> List<&2, String>:
+  match es:
+    case Nil{}:
+      Nil{}
+    case Con{KV.ZEl{m, +d}, rest}:
+      F.f64.show(d) <> m <> rw.zwords(rest)
+
+# the commands that make a key's value again, newest first before acc
+def rw.val(+k: String, v: KV.Val, acc: List<&2, List<&2, String>>) -> List<&2, List<&2, String>>:
+  match v:
+    case KV.VStr{s}:
+      ["SET", k, s] <> acc
+    case KV.VColl{KV.CHash{+h}}:
+      rw.chunks("HMSET", k, 128n, rw.hwords(KV.hash.pairs(h)), acc)
+    case KV.VColl{KV.CList{+l}}:
+      rw.chunks("RPUSH", k, 64n, KV.deq.all(l), acc)
+    case KV.VColl{KV.CMems{+m}}:
+      rw.chunks("SADD", k, 64n, KV.mems.all(m), acc)
+    case KV.VColl{KV.CZset{+z}}:
+      rw.chunks("ZADD", k, 128n, rw.zwords(KV.zset.all(z)), acc)
+
+# and the time it expires at, when it does
+def rw.exp(+k: String, +e: Nat, acc: List<&2, List<&2, String>>) -> List<&2, List<&2, String>>:
+  match e:
+    case 0n:
+      acc
+    case 1n+p:
+      ["PEXPIREAT", k, Nat.show(1n+p)] <> acc
+
+def rw.item(+k: String, m: Maybe<&2, KV.Item<KV.Val>>, acc: List<&2, List<&2, String>>) -> List<&2, List<&2, String>>:
+  match m:
+    case Some{KV.Item{v, +e}}:
+      rw.exp(k, e, rw.val(k, v, acc))
+    case None{}:
+      acc
+
+# the commands of the keys ks of trie t, newest first before acc
+def rw.keys(+t: KV.Trie<KV.Val>, ks: List<&2, String>, acc: List<&2, List<&2, String>>) -> List<&2, List<&2, String>>:
+  match ks:
+    case Nil{}:
+      acc
+    case Con{+k, rest}:
+      rw.keys(t, rest, rw.item(k, KV.entry(KV.Val, t, k), acc))
+
+# A snapshot being written: the databases yet to write (the current one
+# first), its number, the bucket its scan goes on from, whether its
+# SELECT is written, and the snapshot's time
+type Snap is Data:
+  Snap{dbs: List<&2, R.Db>, i: Nat, at: Nat, sel: Bool, now: Nat}
+
+# a slice written: its requests, and the snapshot after it (None: all of
+# it is written)
+type Slice is Data:
+  Slice{reqs: List<&2, List<&2, String>>, more: Maybe<&2, Snap>}
+
+def snap.of(+ds: R.Ds) -> Snap:
+  Snap{R.ds.list(ds), 0n, 0n, False{}, R.ds.now(ds)}
+
+def rw.trie(+db: R.Db) -> KV.Trie<KV.Val>:
+  match db:
+    case R.Db{t, n, x, now, rr}:
+      t
+
+# the keys a scan found, with the database's SELECT first when it is the
+# first of them
+def rw.sel(sel: Bool, +i: Nat, +ks: List<&2, String>, acc: List<&2, List<&2, String>>) -> List<&2, List<&2, String>>:
+  match sel ks:
+    case False{} Con{k, rest}:
+      ["SELECT", Nat.show(i)] <> acc
+    case _ _:
+      acc
+
+def rw.any(+ks: List<&2, String>) -> Bool:
+  match ks:
+    case Nil{}:
+      False{}
+    case Con{+k, +rest}:
+      True{}
+
+# the requests of the keys ks of database i, in order
+def rw.reqs(+db: R.Db, +i: Nat, +sel: Bool, +ks: List<&2, String>) -> List<&2, List<&2, String>>:
+  List.reverse(&2, List<&2, String>, rw.keys(rw.trie(db), ks, rw.sel(sel, i, ks, Nil{})))
+
+# the database's last keys: the next one's from its first bucket on
+def rw.last(rest: List<&2, R.Db>, +i: Nat, +now: Nat, reqs: List<&2, List<&2, String>>) -> Slice:
+  match rest:
+    case Nil{}:
+      Slice{reqs, None{}}
+    case Con{d, ds}:
+      Slice{reqs, Some{Snap{d <> ds, 1n+i, 0n, False{}, now}}}
+
+def rw.found(sc: KV.Scan, +db: R.Db, rest: List<&2, R.Db>, +i: Nat, +sel: Bool, +now: Nat) -> Slice:
+  match sc:
+    case KV.Stop{at, +ks}:
+      Slice{rw.reqs(db, i, sel, ks), Some{Snap{db <> rest, i, at, Bool.or(sel, rw.any(ks)), now}}}
+    case KV.Scan{w, +ks}:
+      rw.last(rest, i, now, rw.reqs(db, i, sel, ks))
+
+# the next slice of a snapshot: the keys of the buckets from its cursor
+# on, until a scan has read want entries, or the database's end
+def rw.slice(s: Snap, +want: Nat) -> Slice:
+  match s:
+    case Snap{Nil{}, i, at, sel, now}:
+      Slice{Nil{}, None{}}
+    case Snap{Con{+db, rest}, +i, +at, +sel, +now}:
+      rw.found(KV.scan(KV.Val, rw.trie(db), at, want, now), db, rest, i, sel, now)
