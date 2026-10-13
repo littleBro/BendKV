@@ -286,14 +286,18 @@ Where performance and proof meet: **batched execution under proved laws.**
    server cutting off exactly the part of an entry the crash left, and the start's
    replay, which refuses a file with an entry it cannot replay as written, is that
    replay whenever it refuses none. (With the shards,
-   each shard logged to a file of its own, with three more laws; section 3g.) Not yet:
-   the rewrite of the log from a snapshot (BGREWRITEAOF), whose law would be about what
-   keys read, not the trie's shape, and that a file cut back and written on is the log
-   of the prefix and the new batches. The persistent trie makes that snapshot free (a
-   root is one), and the file format is the requests clients send, so the same kind of
-   law would cover the network parser of `resp.bend`, and with it the server's
-   decision to cut a file (`cut_short`). Nor is it proved yet that the start's check
-   accepts every file the server writes (the tests show it on theirs).
+   each shard logged to a file of its own, with three more laws; section 3g.) The
+   rewrite of the log from a snapshot (BGREWRITEAOF) is done and tested against Redis
+   (section 3zv): the persistent trie made the snapshot free, a root is one. Not yet
+   proved: that the rewritten file replays to the databases it was written from, a law
+   about what keys read, not the trie's shape, which needs a scan from the first bucket
+   to read every key once (the invariant that a bucket holds a key once) and a double
+   written as `%.17g` to read back as itself; and that a file cut back and written on
+   is the log of the prefix and the new batches. The file format is the requests
+   clients send, so the same kind of law would cover the network parser of `resp.bend`,
+   and with it the server's decision to cut a file (`cut_short`). Nor is it proved yet
+   that the start's check accepts every file the server writes (the tests show it on
+   theirs).
 6. **Next: a drop-in Redis for one node.** Strings, hashes, lists, sets and sorted sets
    with WRONGTYPE (a value of a type, with WRONGTYPE: done, section 3zf; hashes: done,
    section 3zg; lists: done, section 3zh; sets: done, section 3zj; floats in software
@@ -307,8 +311,8 @@ Where performance and proof meet: **batched execution under proved laws.**
    (done, section 3ze), MULTI/EXEC/WATCH (done, section 3zq), pub/sub and keyspace
    notifications (done, section 3zr), the connection commands clients send on connect
    (HELLO, SELECT, CLIENT, AUTH, INFO, COMMAND, CONFIG; done), CLIENT LIST, INFO and KILL
-   (done, section 3zs), SCAN and RANDOMKEY (done), MONITOR (done, section 3zt), and the
-   log's rewrite (next),
+   (done, section 3zs), SCAN and RANDOMKEY (done), MONITOR (done, section 3zt), the
+   log's rewrite (done, section 3zv), and maxmemory and RESP3 (next),
    measured by Redis's own test suite run against BendKV
    and by client libraries' tests. Lua, streams, cluster,
    replication and modules are out of scope. The suite's count: of the 1,677 tests

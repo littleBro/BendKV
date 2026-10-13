@@ -24,7 +24,10 @@
 # INFO and KILL read a socket's fd and addresses with the twenty-seventh's
 # TCP.name, shut a socket down with its TCP.kill, and mark a client's
 # channel with its last command and time with its Chan.mark and
-# Chan.marked; the others only speed up the runtime and the code):
+# Chan.marked; the rewrite of the append-only file puts the new file in
+# place with the twenty-eighth's File.rename and takes a temporary file
+# back with its File.unlink; the others only speed up the runtime and the
+# code):
 #   make build BEND="bun <patched bend>/bend2/main.ts"
 # Bend compiles with $(BEND_CC) when it has one: clang 19 honors the
 # preserve_none calling convention of the runtime's segments, clang 18

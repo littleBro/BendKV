@@ -14,7 +14,7 @@ throughput of Redis 7.0.15 on the same machine, with half its memory for small v
 > **Status: research prototype.** BendKV implements a subset of Redis (strings, hashes,
 > lists, sets, sorted sets and their times to live, the blocking commands, transactions,
 > pub/sub and keyspace notifications, the keyspace, several databases, connection
-> commands, CLIENT LIST, INFO and KILL, MONITOR, an append-only file). The goal now is a
+> commands, CLIENT LIST, INFO and KILL, MONITOR, an append-only file and its rewrite). The goal now is a
 > drop-in replacement for a single Redis node, measured by Redis's own test suite: of the
 > 1,677 tests Redis 7.0.15 passes against a server it did not start, BendKV passes 797,
 > and 792 of the 1,172 in what it implements
@@ -351,7 +351,13 @@ translation stays in the trusted base.
   unknown command, a wrong number of arguments, an argument that does not read, a
   database not there, a MULTI inside another, an EXEC without one) stops the start,
   naming the entry and the byte it starts at, the file left as it was, where Redis stops
-  at an unknown command.
+  at an unknown command. BGREWRITEAOF, and the cron's rewrites as the file grows
+  (`auto-aof-rewrite-percentage`, `auto-aof-rewrite-min-size`), write the file again
+  as Redis writes its base: the commands that make the databases as they are when it
+  starts, then the entries appended meanwhile, into a temporary file renamed onto the
+  file; without a fork, the databases being values, a slice at a time between the
+  groups of requests the server answers meanwhile; with INFO's fields of a rewrite
+  (FINDINGS.md, section 3zv).
 
 Not yet: streams and the other types (HyperLogLog, geo), Lua
 scripts, RESP3, CLIENT PAUSE and TRACKING, timing of commands
@@ -383,7 +389,7 @@ also needs Lean 4.34.0 (through elan).
 
 ```bash
 git clone https://github.com/bendlang/bend ../bend-patched
-sh bend-patches/apply.sh ../bend-patched      # Bend 2.0.35 + 27 patches
+sh bend-patches/apply.sh ../bend-patched      # Bend 2.0.35 + 28 patches
 B="bun ../bend-patched/bend2/main.ts"
 
 make check   BEND="$B"   # check the proofs
@@ -479,9 +485,13 @@ under the file, injected with an `LD_PRELOAD` shim (the order of the file's crea
 its directory's sync and the first reply traced through it), files the start must
 refuse, each left as it was, and the files both ways: BendKV
 started from a file Redis wrote and Redis from one BendKV wrote, each holding the
-databases the other held. `make suite` runs Redis's own test
-suite in its mode for a server already started, on Redis and on BendKV, and counts the
-tests Redis passes that BendKV passes ([docs/COMPATIBILITY.md](docs/COMPATIBILITY.md)).
+databases the other held, and the rewrite of the file (`tests/rewrite_test.py`:
+BGREWRITEAOF's replies and INFO's account against Redis's, the rewritten file against
+Redis's base command for command, writes during a rewrite and a kill during one, the
+cron's rewrites, rewrites that fail, BendKV and Redis started from the new file).
+`make suite` runs Redis's own test suite in its mode for a server already started, on
+Redis and on BendKV, and counts the tests Redis passes that BendKV passes
+([docs/COMPATIBILITY.md](docs/COMPATIBILITY.md)).
 
 ## Layout
 
@@ -500,12 +510,12 @@ src/        the server
   startup.bend  the command line and the configuration file        tested
   server.bend   TCP, connections, the database actor, the log      tested
 proof/      LAWS.bend (the laws), PROOF.bend (their proofs), SPEC.bend (the commands on the trie alone)
-tests/      float, start, differential, expiry, protocol, session, CONFIG, INFO, COMMAND, SCAN, BITFIELD, hash, list, set, sorted set, blocking, transaction, Pub/Sub, CLIENT, MONITOR, AUTH, robustness, stalled reader, concurrency, AOF tests
+tests/      float, start, differential, expiry, protocol, session, CONFIG, INFO, COMMAND, SCAN, BITFIELD, hash, list, set, sorted set, blocking, transaction, Pub/Sub, CLIENT, MONITOR, AUTH, robustness, stalled reader, concurrency, AOF and AOF rewrite tests
 bench/      in-process benchmarks of the map, the core and channels
 tools/      measurement scripts, the runner of Redis's test suite, and the generators of
             the trie, of the parameter table and of the command table, with the facts
             they take from Redis (tools/data/)
-bend-patches/  the 27 patches to the Bend compiler and runtime
+bend-patches/  the 28 patches to the Bend compiler and runtime
 docs/       FINDINGS.md, DIRECTIONS.md, COMPATIBILITY.md
 ```
 

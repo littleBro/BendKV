@@ -3630,6 +3630,134 @@ once more before its first read, which does not show against the ~90 µs a clien
 Python takes to connect, send PING and close (3,000 of them in a row, three runs each
 way).
 
+## 3zv. The rewrite of the append-only file
+
+**What there is.** BGREWRITEAOF as Redis 7.0.15 answers it (`bgrewriteaofCommand`):
+"Background append only file rewriting started"; while a rewrite runs, the error
+"Background append only file rewriting already in progress"; in EXEC, "Background append
+only file rewriting scheduled", and the cron starts the rewrite at its next look, as
+Redis's `serverCron` starts one scheduled. The cron also rewrites a file that has grown,
+as Redis does with appendonly yes: past `auto-aof-rewrite-min-size`, and by
+`auto-aof-rewrite-percentage` (not 0) of its size after its last rewrite (or at the
+start; a base of 0 counts as 1), logged "Starting automatic rewriting of AOF on N%
+growth"; after three failed rewrites in a row it holds its own rewrites back a minute,
+then two, four and so on up to an hour (`aofRewriteLimited`, logged as Redis logs it),
+and a rewrite asked for in EXEC forgets the failures and starts all the same. INFO's
+persistence section shows it as Redis does: `aof_rewrite_in_progress`,
+`aof_rewrite_scheduled` (and `aof_pending_rewrite`), `aof_last_rewrite_time_sec` and
+`aof_current_rewrite_time_sec` (whole seconds, -1 for none), `aof_last_bgrewrite_status`,
+`aof_rewrites` and `aof_rewrites_consecutive_failures` (CONFIG RESETSTAT counts both
+again), and after a rewrite `aof_current_size` and `aof_base_size` are the new file's
+size. With appendonly no BGREWRITEAOF writes `appendfilename` all the same, as Redis
+does, and a server started with appendonly yes then reads it.
+
+**What it writes.** The commands that make the databases as they are when the rewrite
+starts, as Redis's `rewriteAppendOnlyFileRio` writes a base without an RDB preamble: a
+SELECT of each database that holds keys, then for each key its SET, RPUSH, SADD, HMSET
+or ZADD, 64 elements or pairs to a command (`AOF_REWRITE_ITEMS_PER_CMD`), a score as
+`%.17g` writes it (`F.f64.show`), and the PEXPIREAT of the time it expires at when it
+has one; then the entries the server appended to the file since the rewrite started,
+the first of them after a SELECT of its own (Redis's `aof_selected_db = -1`). The file
+is written to a temporary file next to it (`temp-rewriteaof-bg-<pid>.aof`; a rename does
+not cross file systems), synced each 4 MB as it is written when
+`aof-rewrite-incremental-fsync` is yes (its default; Redis's child syncs its file so,
+`REDIS_AUTOSYNC_BYTES`) and at its end, renamed onto the file (`File.rename`, the
+twenty-eighth patch: whoever opens the file finds the old one or the new one, whole),
+and its directory synced; the actor then appends to the new file, and the syncer of
+everysec opens the file each second instead of keeping a handle of its own, since a
+rewrite puts a new file at its path. A rewrite that fails (a temporary file it cannot
+make, write or sync, a rename that fails) logs why and "Background AOF rewrite
+terminated with error", removes the temporary file (`File.unlink`) and leaves the file
+as it was; one that fails after its rename (the directory's sync, the new file's
+opening) stops the server, as a failed write to the file does: the new file's name may
+not be on the disk, and the acknowledged writes after it with it.
+
+**Without a fork.** Redis forks a child, which writes the memory as it was at the fork
+while the parent goes on. BendKV's databases are values: the actor keeps them as they
+are when the rewrite starts (the snapshot: nothing is copied, a write after it makes new
+nodes where it changes nodes the snapshot shares, as the child's pages are copied when
+the parent writes them) and writes them a slice at a time, the keys of a few dozen
+entries of a database's trie (`A.rw.slice`, a scan from a cursor, as SCAN's), encoded and
+kept until 64 KB of them go to the temporary file, each slice then with a turn of the
+event loop (`IO.sleep(0)`) for the connections. When a slice comes and how large it is
+weighs the rewrite's time against the requests' wait: after a group of requests, a slice
+of 64 entries, at most one each 4 ms, so that a load that never lets the actor wait
+gives the rewrite a small part of its time; while no request waits, slices of 32 entries
+one after another (a request that comes meanwhile waits for one, about a tenth of a
+millisecond), and of 256 once no group has run for 10 ms (`idle.step`: the server is
+idle, and the rewrite goes faster). The entries the actor appends to the file meanwhile
+are kept in memory too (Redis 6 kept them in its rewrite buffer; Redis 7 writes them to
+a new file of its multi-part layout) and written after the snapshot, in the same step as
+the rename, so that no group runs between the last of them and the switch.
+
+**What a rewrite costs the requests.** 950,000 keys, a file of 42.7 MB, on a machine of
+four cores whose own spread from one measure to the next is a fifth either way: with no
+load the rewrite takes 3 to 4 s (2.9 to 3.1 s with `aof-rewrite-incremental-fsync no`:
+the syncs each 4 MB cost a quarter of it). Under redis-benchmark's GET at full speed (20
+clients, pipelines of 16), GET gives 414,000 to 460,000 requests a second while the
+rewrite runs, against 513,000 to 788,000 without one; its p99 is 1.4 to 1.6 ms against
+0.8 to 1.6 ms, and its longest wait 8.5 to 21 ms against 4 to 42 ms (without a rewrite,
+the syncs of everysec). The first version wrote a slice of 256 entries after each group
+and one after another while no request waited: the rewrite took 3.3 s, but GET fell to
+about 220,000 requests a second, and the last sync, of the whole file at once, held the
+actor 90 ms; the syncs each 4 MB brought that wait to 30 ms, and the slices as they are
+now gave the numbers above.
+
+**What it cost.** GET, SET and INCR take 3,301, 4,228 and 4,488 instructions (3,300,
+4,226 and 4,489 for the code before, counted in turn). The first version took 3,567,
+4,549 and 4,811 (+8%), for two reasons. The cron's look read two parameters of the
+configuration (a walk of its 178 items) every 100 ms of the actor's time; under
+callgrind, whose slowness stretches a measure over many of them, that was 65 instructions
+a request, and the look now reads them only with appendonly yes, and the second only when
+the first allows a rewrite. And the rewrite's state, a record of plain fields with the
+rewrite that runs inside it, traveled flat, eighteen words in every frame of the actor's
+loop: the widest frame or result sets the registers of every function in the program (46
+instead of 35, the widest result 29 words instead of 17), and every call and return of
+every request paid for them (+1.5%). The state is now a type that holds itself (`RwOf`,
+never built), which the compiler makes a node of its own, as the state of Pub/Sub and the
+database are, and the registers are 35 again.
+
+**Tests.** `tests/rewrite_test.py` runs in make test: BGREWRITEAOF's replies and INFO's
+account against Redis's, line by line (started and refused while it runs, in one
+pipeline; scheduled in EXEC; in EXEC while one runs; the arguments it refuses; CONFIG
+RESETSTAT; the statistics of the call and of its errors); the same databases on both
+(strings, lists, sets of numbers and of words, hashes, sorted sets with scores of each
+form, small and past 64 elements, times to expire at, three databases), rewritten by
+both, BendKV's file against Redis's base command for command (each key's commands and how
+many elements each holds, its elements, its time), and BendKV and Redis started from
+BendKV's file; 150,000 keys and pipelines of 200 writes of each kind on five databases
+(SWAPDB, MOVE, COPY, RENAME, transactions, FLUSHDB) sent to BendKV and to Redis while the
+rewrite ran (about 150 of them), more after it, the databases compared, then BendKV and
+Redis started from the new file; BendKV killed (SIGKILL) while a rewrite runs, the writes
+acknowledged, and started again from its file as it was; appendonly no; the cron's
+rewrites (none under the minimum, none with a percentage of 0 or one the file has not
+grown by, one past both); and rewrites that fail (a directory where the temporary file
+goes), counted and logged, three of them holding the cron back (logged), and a rewrite
+scheduled in EXEC that starts all the same.
+
+**Proofs.** BGREWRITEAOF is a session command (SRewrite) that needs a client that may run
+commands, so the law `noauth` holds with three more cases, as for MONITOR. The rewrite
+itself is tested, not proved. Its law would say that the rewritten file replays to the
+databases it was written from, key by key; it needs a law that a scan from the first
+bucket reads every key once (the invariant that a bucket holds a key once, not yet
+proved: DIRECTIONS.md), laws for RPUSH, SADD, HMSET and ZADD of a key not there, and that
+a double written as `%.17g` reads back as itself. The law `recover` covers a file the
+server wrote as its log from an empty one; after a rewrite, the file's head is a
+snapshot, and recovery rests on the tests. What still holds for any file, the rewritten
+one too: it loads as the entries written to it (`load(encode(reqs)) = reqs`), and the
+start replays it only when the check accepts each entry.
+
+**Where BendKV differs.** One file, Redis 6's layout, where Redis 7 keeps a base and
+increments with a manifest (`appendonlydir`); Redis 7 reads BendKV's file as a file of
+Redis 6 (and moves it into its layout), and BendKV refuses to start on a manifest. No RDB
+preamble: `aof-use-rdb-preamble` is kept, and the file is commands whatever it says, as
+Redis writes it with `no`. A key whose time has passed is left out, where Redis writes it
+with its time and it expires as the file is read. BGREWRITEAOF never answers "Can't
+execute an AOF background rewriting": BendKV forks nothing, and a temporary file it
+cannot make shows as a rewrite that ended with an error, as a child's failure does in
+Redis. The temporary file's pid is the server's, and the log has the lines of Redis 6
+that apply to one file (no "Successfully created the temporary AOF base file").
+
 ## 4. Where a request's time goes, and hiding the memory waits
 
 With the eight patches, BendKV ran fewer instructions on GET and SET than Redis, missed

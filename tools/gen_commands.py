@@ -78,7 +78,7 @@ COMMANDS = {
     "discard": [], "watch": [], "unwatch": [], "subscribe": [], "unsubscribe": [],
     "psubscribe": [], "punsubscribe": [], "ssubscribe": [], "sunsubscribe": [],
     "publish": [], "spublish": [], "pubsub": ["channels", "help", "numpat", "numsub",
-    "shardchannels", "shardnumsub"], "monitor": []}
+    "shardchannels", "shardnumsub"], "monitor": [], "bgrewriteaof": []}
 
 # Step 1: redis-server -> facts
 # -----------------------------

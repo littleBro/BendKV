@@ -200,6 +200,50 @@
     []
    ]
   },
+  "bgrewriteaof": {
+   "docs": [
+    "summary",
+    "Asynchronously rewrite the append-only file",
+    "since",
+    "1.0.0",
+    "group",
+    "server",
+    "complexity",
+    "O(1)"
+   ],
+   "info": [
+    "bgrewriteaof",
+    1,
+    [
+     {
+      "+": "admin"
+     },
+     {
+      "+": "noscript"
+     },
+     {
+      "+": "no_async_loading"
+     }
+    ],
+    0,
+    0,
+    0,
+    [
+     {
+      "+": "@admin"
+     },
+     {
+      "+": "@slow"
+     },
+     {
+      "+": "@dangerous"
+     }
+    ],
+    [],
+    [],
+    []
+   ]
+  },
   "bitcount": {
    "docs": [
     "summary",

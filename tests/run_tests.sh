@@ -38,7 +38,12 @@
 # must stop the server, with everysec as with always. Last, the files
 # both ways: the same commands against BendKV and a redis-server that
 # keeps its own file, then BendKV started from Redis's file and Redis
-# from BendKV's, each holding the databases the other held.
+# from BendKV's, each holding the databases the other held. And the
+# rewrite of the file (BGREWRITEAOF): its replies and INFO's account
+# against Redis's, the rewritten file against Redis's base, command for
+# command, writes while it runs (and a kill while it runs), BendKV and
+# Redis started from the new file, the rewrite with appendonly no, the
+# cron's rewrites as the file grows, and rewrites that fail.
 set -e
 cd "$(dirname "$0")/.."
 PORT=${PORT:-6380}
@@ -136,3 +141,5 @@ ${CC:-cc} -shared -fPIC -o build/fail_io.so tests/fail_io.c -ldl
 python3 tests/aof_fail_test.py --port "$PORT" --shim build/fail_io.so
 echo "== append-only files of Redis and of BendKV"
 python3 tests/aof_redis_test.py --bin build/bendkv --bendkv "$PORT" --redis "$((REDIS_PORT + 1))" --dir build/aofio
+echo "== the rewrite of the append-only file"
+python3 tests/rewrite_test.py --bin build/bendkv --bendkv "$PORT" --redis "$((REDIS_PORT + 1))" --dir build/rewrite

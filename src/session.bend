@@ -161,6 +161,57 @@ def srv.aof(s: Srv, +n: Nat) -> Srv:
     case Srv{pass, cfg, info, rng}:
       Srv{pass, cfg, I.info.aof(info, n), rng}
 
+# the rewrite of the append-only file (info.bend: Rws): whether one runs,
+# whether one is scheduled, how many failed in a row; one started at ms;
+# one scheduled (BGREWRITEAOF in EXEC); the one that ran ended well at
+# ms, the file of size bytes then; or failed at ms
+def srv.rw.on(+s: Srv) -> Bool:
+  match s:
+    case Srv{pass, cfg, +info, rng}:
+      I.rws.on(I.info.rw(info))
+
+def srv.rw.sched(+s: Srv) -> Bool:
+  match s:
+    case Srv{pass, cfg, +info, rng}:
+      I.rws.sched(I.info.rw(info))
+
+def srv.rw.fails(+s: Srv) -> Nat:
+  match s:
+    case Srv{pass, cfg, +info, rng}:
+      I.rws.fails(I.info.rw(info))
+
+def srv.rw.go(s: Srv, +ms: Nat) -> Srv:
+  match s:
+    case Srv{pass, cfg, info, rng}:
+      Srv{pass, cfg, I.info.rw.go(info, ms), rng}
+
+def srv.rw.later(s: Srv) -> Srv:
+  match s:
+    case Srv{pass, cfg, info, rng}:
+      Srv{pass, cfg, I.info.rw.later(info), rng}
+
+def srv.rw.done(s: Srv, +size: Nat, +ms: Nat) -> Srv:
+  match s:
+    case Srv{pass, cfg, info, rng}:
+      Srv{pass, cfg, I.info.rw.done(info, size, ms), rng}
+
+def srv.rw.failed(s: Srv, +ms: Nat) -> Srv:
+  match s:
+    case Srv{pass, cfg, info, rng}:
+      Srv{pass, cfg, I.info.rw.failed(info, ms), rng}
+
+# the size of the append-only file now, and after its last rewrite (or at
+# the start)
+def srv.aof.size(+s: Srv) -> Nat:
+  match s:
+    case Srv{pass, cfg, +info, rng}:
+      I.info.aof.size(info)
+
+def srv.aof.base(+s: Srv) -> Nat:
+  match s:
+    case Srv{pass, cfg, +info, rng}:
+      I.info.aof.base(info)
+
 def srv.live(s: Srv, l: I.Live) -> Srv:
   match s:
     case Srv{pass, cfg, info, rng}:
@@ -2279,6 +2330,8 @@ def own_reply(+o: R.SessOp, +c: Conn, +s: Srv, +ds: R.Ds) -> Maybe<&2, R.Reply>:
       say(conn.mode(c), cl.reply(R.client.op(k, a), c, cl.argv(a, 10n)))
     case R.SMonitor{}:
       say(conn.mode(c), R.r_ok())
+    case R.SRewrite{}:
+      say(conn.mode(c), R.RStatus{"Background append only file rewriting started"})
 
 # the connection after a session command
 def own_conn(+o: R.SessOp, +c: Conn, +s: Srv) -> Conn:
@@ -2362,6 +2415,8 @@ def own_conn(+o: R.SessOp, +c: Conn, +s: Srv) -> Conn:
     case R.SClient{k, a}:
       step_conn(c, s)
     case R.SMonitor{}:
+      step_conn(c, s)
+    case R.SRewrite{}:
       step_conn(c, s)
 
 # what a session command does to the databases: SELECT and RESET move the

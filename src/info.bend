@@ -381,13 +381,70 @@ type Inst is Data:
 type Exp is Data:
   IExp{cur: List<&2, Nat>, n: Nat}
 
+# the rewrite of the append-only file (BGREWRITEAOF; server.bend, The
+# rewrite of the append-only file), as INFO shows it: whether one runs,
+# whether one is scheduled (asked for in EXEC: the cron starts it), when
+# the one that runs started (ms since 1970), how long the last one took
+# (s; none before the first), whether the last one ended well, how many
+# started and how many failed in a row (CONFIG RESETSTAT counts both
+# again)
+type Rws is Data:
+  IRws{on: Bool, sched: Bool, start: Nat, last: Maybe<&2, Nat>, ok: Bool, n: Nat, fails: Nat}
+
+def rws.zero() -> Rws:
+  IRws{False{}, False{}, 0n, None{}, True{}, 0n, 0n}
+
+def rws.on(+r: Rws) -> Bool:
+  match r:
+    case IRws{+on, sched, start, last, ok, n, fails}:
+      on
+
+def rws.sched(+r: Rws) -> Bool:
+  match r:
+    case IRws{on, +sched, start, last, ok, n, fails}:
+      sched
+
+def rws.fails(+r: Rws) -> Nat:
+  match r:
+    case IRws{on, sched, start, last, ok, n, +fails}:
+      fails
+
+# a rewrite starts at ms (Redis's rewriteAppendOnlyFileBackground): it
+# runs, none is scheduled any more, and it is counted
+def rws.go(r: Rws, +ms: Nat) -> Rws:
+  match r:
+    case IRws{on, sched, start, last, ok, +n, fails}:
+      IRws{True{}, False{}, ms, last, ok, 1n+n, fails}
+
+# BGREWRITEAOF in EXEC: a rewrite scheduled, and the failures in a row
+# forgotten, so that the cron starts it at once (bgrewriteaofCommand)
+def rws.later(r: Rws) -> Rws:
+  match r:
+    case IRws{on, sched, start, last, ok, n, fails}:
+      IRws{on, True{}, start, last, ok, n, 0n}
+
+# the rewrite that ran ended at ms, well or not: the seconds it took are
+# the difference of the two times in whole seconds, as Redis's time()
+def rws.end(r: Rws, +well: Bool, +ms: Nat) -> Rws:
+  match r:
+    case IRws{on, sched, +start, last, ok, n, +fails}:
+      IRws{False{}, sched, start, Some{Nat.sub(Nat.div(ms, 1000n), Nat.div(start, 1000n))}, well, n, Bool.pick(Nat, well, 0n, 1n+fails)}
+
+# CONFIG RESETSTAT: the rewrites and the failures in a row counted again
+# (resetServerStats)
+def rws.reset(r: Rws) -> Rws:
+  match r:
+    case IRws{on, sched, start, last, ok, n, fails}:
+      IRws{on, sched, start, last, ok, 0n, 0n}
+
 # everything INFO shows that the parameters and the keys do not: the
 # start, the last facts, the counts, the rates, the peak of memory, the
 # connections taken before the last CONFIG RESETSTAT, the size of the
-# append-only file at the start and now, the statistics per command and
-# per error, and the sweep of expired keys
+# append-only file at the start (or after its last rewrite: Redis's
+# aof_rewrite_base_size) and now, the statistics per command and per
+# error, the sweep of expired keys, and the rewrite of the file
 type Info is Data:
-  IInfo{boot: Boot, live: Live, cnt: Count, inst: Inst, peak: Nat, conns0: Nat, aof0: Nat, aof: Nat, st: Stats, ex: Exp}
+  IInfo{boot: Boot, live: Live, cnt: Count, inst: Inst, peak: Nat, conns0: Nat, aof0: Nat, aof: Nat, st: Stats, ex: Exp, rw: Rws}
 
 # CONFIG RESETSTAT counts the keys the sweeps delete again (Redis's
 # stat_expiredkeys), and the sweeps go on where they were
@@ -424,13 +481,13 @@ def live.conns(+l: Live) -> Nat:
 
 # the server's facts at its start
 def info.new(b: Boot, +l: Live) -> Info:
-  IInfo{b, l, count.zero(), IInst{live.ms(l), count.zero(), samples.zero(), samples.zero(), samples.zero()}, live.rss(l), 0n, 0n, 0n, stats.zero(), IExp{Nil{}, 0n}}
+  IInfo{b, l, count.zero(), IInst{live.ms(l), count.zero(), samples.zero(), samples.zero(), samples.zero()}, live.rss(l), 0n, 0n, 0n, stats.zero(), IExp{Nil{}, 0n}, rws.zero()}
 
 # the append-only file the server restored at its start, of size bytes
 def info.restored(i: Info, +size: Nat) -> Info:
   match i:
-    case IInfo{b, l, c, inst, pk, c0, a0, a, st, ex}:
-      IInfo{b, l, c, inst, pk, c0, size, size, st, ex}
+    case IInfo{b, l, c, inst, pk, c0, a0, a, st, ex, rw}:
+      IInfo{b, l, c, inst, pk, c0, size, size, st, ex, rw}
 
 # a batch's commands, the bytes it came in and the bytes of its replies
 def count.add(c: Count, +n: Nat, +inb: Nat, +outb: Nat) -> Count:
@@ -443,26 +500,66 @@ def count.add(c: Count, +n: Nat, +inb: Nat, +outb: Nat) -> Count:
 # bytes of its replies
 def info.ran(i: Info, +calls: Nat, +r: Nat, rs: List<&2, Nat>, +inb: Nat, +outb: Nat) -> Info:
   match i:
-    case IInfo{b, l, c, inst, pk, c0, a0, a, st, ex}:
-      IInfo{b, l, count.add(c, calls, inb, outb), inst, pk, c0, a0, a, stats.add(st, r, rs), ex}
+    case IInfo{b, l, c, inst, pk, c0, a0, a, st, ex, rw}:
+      IInfo{b, l, count.add(c, calls, inb, outb), inst, pk, c0, a0, a, stats.add(st, r, rs), ex, rw}
 
 # a batch's error replies
 def info.errs(i: Info, xs: List<&2, R.Erred>) -> Info:
   match i:
-    case IInfo{b, l, c, inst, pk, c0, a0, a, st, ex}:
-      IInfo{b, l, c, inst, pk, c0, a0, a, stats.errs(xs, st), ex}
+    case IInfo{b, l, c, inst, pk, c0, a0, a, st, ex, rw}:
+      IInfo{b, l, c, inst, pk, c0, a0, a, stats.errs(xs, st), ex, rw}
 
 # an error reply the shell sent itself (a protocol error)
 def info.erred(i: Info, +m: String) -> Info:
   match i:
-    case IInfo{b, l, c, inst, pk, c0, a0, a, st, ex}:
-      IInfo{b, l, c, inst, pk, c0, a0, a, stats.err(st, 1n, m), ex}
+    case IInfo{b, l, c, inst, pk, c0, a0, a, st, ex, rw}:
+      IInfo{b, l, c, inst, pk, c0, a0, a, stats.err(st, 1n, m), ex, rw}
 
 # bytes appended to the append-only file
 def info.aof(i: Info, +n: Nat) -> Info:
   match i:
-    case IInfo{b, l, c, inst, pk, c0, a0, a, st, ex}:
-      IInfo{b, l, c, inst, pk, c0, a0, Nat.add(a, n), st, ex}
+    case IInfo{b, l, c, inst, pk, c0, a0, a, st, ex, rw}:
+      IInfo{b, l, c, inst, pk, c0, a0, Nat.add(a, n), st, ex, rw}
+
+# the rewrite of the file (Rws): its record; one started at ms; one
+# scheduled; the one that ran ended well at ms, the file of size bytes
+# then (the size after the rewrite is the base the cron's growth is
+# measured from, as Redis's aof_rewrite_base_size); or failed at ms
+def info.rw(+i: Info) -> Rws:
+  match i:
+    case IInfo{b, l, c, inst, pk, c0, a0, a, st, ex, +rw}:
+      rw
+
+def info.rw.go(i: Info, +ms: Nat) -> Info:
+  match i:
+    case IInfo{b, l, c, inst, pk, c0, a0, a, st, ex, rw}:
+      IInfo{b, l, c, inst, pk, c0, a0, a, st, ex, rws.go(rw, ms)}
+
+def info.rw.later(i: Info) -> Info:
+  match i:
+    case IInfo{b, l, c, inst, pk, c0, a0, a, st, ex, rw}:
+      IInfo{b, l, c, inst, pk, c0, a0, a, st, ex, rws.later(rw)}
+
+def info.rw.done(i: Info, +size: Nat, +ms: Nat) -> Info:
+  match i:
+    case IInfo{b, l, c, inst, pk, c0, a0, a, st, ex, rw}:
+      IInfo{b, l, c, inst, pk, c0, size, size, st, ex, rws.end(rw, True{}, ms)}
+
+def info.rw.failed(i: Info, +ms: Nat) -> Info:
+  match i:
+    case IInfo{b, l, c, inst, pk, c0, a0, a, st, ex, rw}:
+      IInfo{b, l, c, inst, pk, c0, a0, a, st, ex, rws.end(rw, False{}, ms)}
+
+# the size of the file now and at the start or the last rewrite
+def info.aof.size(+i: Info) -> Nat:
+  match i:
+    case IInfo{b, l, c, inst, pk, c0, a0, +a, st, ex, rw}:
+      a
+
+def info.aof.base(+i: Info) -> Nat:
+  match i:
+    case IInfo{b, l, c, inst, pk, c0, +a0, a, st, ex, rw}:
+      a0
 
 # new facts from the shell; the peak of memory follows them
 # new facts, the clients that wait as the actor counted them
@@ -478,21 +575,21 @@ def live.waits(l: Live, +n: Nat, +t: Nat) -> Live:
 
 def info.live(i: Info, +l: Live) -> Info:
   match i:
-    case IInfo{b, old, c, inst, pk, c0, a0, a, st, ex}:
-      IInfo{b, live.keep(l, old), c, inst, Nat.max(pk, live.rss(l)), c0, a0, a, st, ex}
+    case IInfo{b, old, c, inst, pk, c0, a0, a, st, ex, rw}:
+      IInfo{b, live.keep(l, old), c, inst, Nat.max(pk, live.rss(l)), c0, a0, a, st, ex, rw}
 
 # the clients that wait, n of them, t of them with a timeout
 def info.blocked(i: Info, +n: Nat, +t: Nat) -> Info:
   match i:
-    case IInfo{b, l, c, inst, pk, c0, a0, a, st, ex}:
-      IInfo{b, live.waits(l, n, t), c, inst, pk, c0, a0, a, st, ex}
+    case IInfo{b, l, c, inst, pk, c0, a0, a, st, ex, rw}:
+      IInfo{b, live.waits(l, n, t), c, inst, pk, c0, a0, a, st, ex, rw}
 
 # a call of code k that failed after it was counted: a blocked client
 # that CLIENT UNBLOCK unblocked (Redis's updateStatsOnUnblock)
 def info.failed(i: Info, +k: Nat) -> Info:
   match i:
-    case IInfo{b, l, c, inst, pk, c0, a0, a, st, ex}:
-      IInfo{b, l, c, inst, pk, c0, a0, a, stats.failed(st, k), ex}
+    case IInfo{b, l, c, inst, pk, c0, a0, a, st, ex, rw}:
+      IInfo{b, l, c, inst, pk, c0, a0, a, stats.failed(st, k), ex, rw}
 
 def take15(n: Nat, xs: List<&2, Nat>) -> List<&2, Nat>:
   match n xs:
@@ -522,16 +619,16 @@ def inst.tick(inst: Inst, +c: Count, +ms: Nat) -> Inst:
 # are counted
 def info.tick(i: Info, +ms: Nat) -> Info:
   match i:
-    case IInfo{b, l, +c, inst, pk, c0, a0, a, st, ex}:
-      IInfo{b, l, c, inst.tick(inst, c, ms), pk, c0, a0, a, stats.fold(st), ex}
+    case IInfo{b, l, +c, inst, pk, c0, a0, a, st, ex, rw}:
+      IInfo{b, l, c, inst.tick(inst, c, ms), pk, c0, a0, a, stats.fold(st), ex, rw}
 
 # CONFIG RESETSTAT: the counts, the rates and the statistics start again,
 # as Redis's resetServerStats, resetCommandTableStats and
 # resetErrorTableStats start them
 def info.reset(i: Info) -> Info:
   match i:
-    case IInfo{b, +l, c, inst, pk, c0, a0, a, st, ex}:
-      IInfo{b, l, count.zero(), IInst{live.ms(l), count.zero(), samples.zero(), samples.zero(), samples.zero()}, pk, live.conns(l), a0, a, stats.zero(), exp.reset(ex)}
+    case IInfo{b, +l, c, inst, pk, c0, a0, a, st, ex, rw}:
+      IInfo{b, l, count.zero(), IInst{live.ms(l), count.zero(), samples.zero(), samples.zero(), samples.zero()}, pk, live.conns(l), a0, a, stats.zero(), exp.reset(ex), rws.reset(rw)}
 
 # the j-th of a list of numbers (0 past its end), and the list with v in
 # its place
@@ -559,17 +656,17 @@ def cur.put(j: Nat, +v: Nat, xs: List<&2, Nat>) -> List<&2, Nat>:
 # a sweep of j that stopped at next having deleted k keys
 def info.reap_at(+i: Info, +j: Nat) -> Nat:
   match i:
-    case IInfo{b, l, c, inst, pk, c0, a0, a, st, +ex}:
+    case IInfo{b, l, c, inst, pk, c0, a0, a, st, +ex, rw}:
       match ex:
         case IExp{+cur, n}:
           cur.nth(j, cur)
 
 def info.reaped(i: Info, +j: Nat, +next: Nat, +k: Nat) -> Info:
   match i:
-    case IInfo{b, l, c, inst, pk, c0, a0, a, st, ex}:
+    case IInfo{b, l, c, inst, pk, c0, a0, a, st, ex, rw}:
       match ex:
         case IExp{cur, +n}:
-          IInfo{b, l, c, inst, pk, c0, a0, a, st, IExp{cur.put(j, next, cur), Nat.add(n, k)}}
+          IInfo{b, l, c, inst, pk, c0, a0, a, st, IExp{cur.put(j, next, cur), Nat.add(n, k)}, rw}
 
 # Numbers as printf writes them
 # ----------------------------
@@ -740,15 +837,40 @@ def sec.memory(+items: List<&2, C.CItem>, +b: Boot, +l: Live, +pk: Nat) -> Strin
     case IBoot{os, pid, run, replid, exe, conf, +sysmem, start, +rss0}:
       sec.memory.go(items, live.rss(l), Nat.max(pk, live.rss(l)), rss0, sysmem)
 
-def sec.aof(on: Bool, +a0: Nat, +a: Nat) -> String:
+def sec.aof(on: Bool, +a0: Nat, +a: Nat, +sched: Bool) -> String:
   match on:
     case True{}:
-      kv("aof_current_size", Nat.show(a)) ++ kv("aof_base_size", Nat.show(a0)) ++ kv("aof_pending_rewrite", "0") ++
+      kv("aof_current_size", Nat.show(a)) ++ kv("aof_base_size", Nat.show(a0)) ++ kv("aof_pending_rewrite", flag(sched)) ++
       kv("aof_buffer_length", "0") ++ kv("aof_pending_bio_fsync", "0") ++ kv("aof_delayed_fsync", "0")
     case False{}:
       ""
 
-def sec.persistence(+items: List<&2, C.CItem>, +start: U32, +a0: Nat, +a: Nat) -> String:
+# how long the last rewrite took (-1 before the first), and the one that
+# runs so far at now (ms; -1 when none runs), in seconds as Redis counts
+# them (the difference of the two times in whole seconds)
+def rw.last(m: Maybe<&2, Nat>) -> String:
+  match m:
+    case Some{+t}:
+      Nat.show(t)
+    case None{}:
+      "-1"
+
+def rw.cur(on: Bool, +start: Nat, +now: Nat) -> String:
+  match on:
+    case True{}:
+      Nat.show(Nat.sub(Nat.div(now, 1000n), Nat.div(start, 1000n)))
+    case False{}:
+      "-1"
+
+def sec.rewrite(r: Rws, +now: Nat) -> String:
+  match r:
+    case IRws{+on, +sched, +start, last, +ok, +n, +fails}:
+      kv("aof_rewrite_in_progress", flag(on)) ++ kv("aof_rewrite_scheduled", flag(sched)) ++
+      kv("aof_last_rewrite_time_sec", rw.last(last)) ++ kv("aof_current_rewrite_time_sec", rw.cur(on, start, now)) ++
+      kv("aof_last_bgrewrite_status", Bool.pick(String, ok, "ok", "err")) ++ kv("aof_rewrites", Nat.show(n)) ++
+      kv("aof_rewrites_consecutive_failures", Nat.show(fails))
+
+def sec.persistence(+items: List<&2, C.CItem>, +start: U32, +a0: Nat, +a: Nat, +rw: Rws, +now: Nat) -> String:
   +on = String.eq(cfg(items, "appendonly"), "yes")
   "# Persistence\r\n" ++ kv("loading", "0") ++ kv("async_loading", "0") ++ kv("current_cow_peak", "0") ++
   kv("current_cow_size", "0") ++ kv("current_cow_size_age", "0") ++ kv("current_fork_perc", "0.00") ++
@@ -756,11 +878,9 @@ def sec.persistence(+items: List<&2, C.CItem>, +start: U32, +a0: Nat, +a: Nat) -
   kv("rdb_bgsave_in_progress", "0") ++ kv("rdb_last_save_time", U32.show(start)) ++ kv("rdb_last_bgsave_status", "ok") ++
   kv("rdb_last_bgsave_time_sec", "-1") ++ kv("rdb_current_bgsave_time_sec", "-1") ++ kv("rdb_saves", "0") ++
   kv("rdb_last_cow_size", "0") ++ kv("rdb_last_load_keys_expired", "0") ++ kv("rdb_last_load_keys_loaded", "0") ++
-  kv("aof_enabled", flag(on)) ++ kv("aof_rewrite_in_progress", "0") ++ kv("aof_rewrite_scheduled", "0") ++
-  kv("aof_last_rewrite_time_sec", "-1") ++ kv("aof_current_rewrite_time_sec", "-1") ++ kv("aof_last_bgrewrite_status", "ok") ++
-  kv("aof_rewrites", "0") ++ kv("aof_rewrites_consecutive_failures", "0") ++ kv("aof_last_write_status", "ok") ++
+  kv("aof_enabled", flag(on)) ++ sec.rewrite(rw, now) ++ kv("aof_last_write_status", "ok") ++
   kv("aof_last_cow_size", "0") ++ kv("module_fork_in_progress", "0") ++ kv("module_fork_last_cow_size", "0") ++
-  sec.aof(on, a0, a)
+  sec.aof(on, a0, a, rws.sched(rw))
 
 def sec.stats.go(c: Count, inst: Inst, +conns: Nat, +errs: String, +expired: Nat) -> String:
   match c inst:
@@ -877,21 +997,21 @@ def join(xs: List<&2, String>, +acc: String) -> String:
 
 def on.server(on: Bool, +items: List<&2, C.CItem>, +i: Info) -> String:
   match on i:
-    case True{} IInfo{+b, +l, c, inst, pk, c0, a0, a, st, ex}:
+    case True{} IInfo{+b, +l, c, inst, pk, c0, a0, a, st, ex, rw}:
       sec.server(items, b, l)
     case False{} _:
       ""
 
 def on.clients(on: Bool, +items: List<&2, C.CItem>, +i: Info) -> String:
   match on i:
-    case True{} IInfo{b, +l, c, inst, pk, c0, a0, a, st, ex}:
+    case True{} IInfo{b, +l, c, inst, pk, c0, a0, a, st, ex, rw}:
       sec.clients(items, l)
     case False{} _:
       ""
 
 def on.memory(on: Bool, +items: List<&2, C.CItem>, +i: Info) -> String:
   match on i:
-    case True{} IInfo{+b, +l, c, inst, +pk, c0, a0, a, st, ex}:
+    case True{} IInfo{+b, +l, c, inst, +pk, c0, a0, a, st, ex, rw}:
       sec.memory(items, b, l, pk)
     case False{} _:
       ""
@@ -909,35 +1029,35 @@ def boot.replid(+b: Boot) -> String:
 # a seed for the server's random numbers: its run id hashed
 def info.seed(+i: Info) -> U32:
   match i:
-    case IInfo{b, l, c, inst, pk, c0, a0, a, st, ex}:
+    case IInfo{b, l, c, inst, pk, c0, a0, a, st, ex, rw}:
       match b:
         case IBoot{os, pid, +run, replid, exe, conf, sysmem, start, rss0}:
           String.hash(run)
 
-def on.persistence(on: Bool, +items: List<&2, C.CItem>, +i: Info) -> String:
+def on.persistence(on: Bool, +items: List<&2, C.CItem>, +i: Info, +now: Nat) -> String:
   match on i:
-    case True{} IInfo{+b, l, c, inst, pk, c0, +a0, +a, st, ex}:
-      sec.persistence(items, boot.start(b), a0, a)
+    case True{} IInfo{+b, l, c, inst, pk, c0, +a0, +a, st, ex, +rw}:
+      sec.persistence(items, boot.start(b), a0, a, rw, now)
     case False{} _:
       ""
 
 def on.stats(on: Bool, +i: Info) -> String:
   match on i:
-    case True{} IInfo{b, +l, +c, +inst, pk, +c0, a0, a, +st, +ex}:
+    case True{} IInfo{b, +l, +c, +inst, pk, +c0, a0, a, +st, +ex, rw}:
       sec.stats.go(c, inst, Nat.sub(live.conns(l), c0), stats.total(st), exp.n(ex))
     case False{} _:
       ""
 
 def on.replication(on: Bool, +items: List<&2, C.CItem>, +i: Info) -> String:
   match on i:
-    case True{} IInfo{+b, l, c, inst, pk, c0, a0, a, st, ex}:
+    case True{} IInfo{+b, l, c, inst, pk, c0, a0, a, st, ex, rw}:
       sec.replication(items, boot.replid(b))
     case False{} _:
       ""
 
 def on.cpu(on: Bool, +i: Info) -> String:
   match on i:
-    case True{} IInfo{b, +l, c, inst, pk, c0, a0, a, st, ex}:
+    case True{} IInfo{b, +l, c, inst, pk, c0, a0, a, st, ex, rw}:
       sec.cpu(l)
     case False{} _:
       ""
@@ -951,14 +1071,14 @@ def on.keyspace(on: Bool, +ds: R.Ds) -> String:
 
 def on.cmdstats(on: Bool, +i: Info) -> String:
   match on i:
-    case True{} IInfo{b, l, c, inst, pk, c0, a0, a, +st, ex}:
+    case True{} IInfo{b, l, c, inst, pk, c0, a0, a, +st, ex, rw}:
       "# Commandstats\r\n" ++ stats.cmds(st)
     case False{} _:
       ""
 
 def on.errstats(on: Bool, +i: Info) -> String:
   match on i:
-    case True{} IInfo{b, l, c, inst, pk, c0, a0, a, +st, ex}:
+    case True{} IInfo{b, l, c, inst, pk, c0, a0, a, +st, ex, rw}:
       "# Errorstats\r\n" ++ stats.errors(st)
     case False{} _:
       ""
@@ -977,7 +1097,7 @@ def text(args: List<&2, String>, +items: List<&2, C.CItem>, +i: Info, +ds: R.Ds)
     on.server(sel.has(s, "server"), items, i),
     on.clients(sel.has(s, "clients"), items, i),
     on.memory(sel.has(s, "memory"), items, i),
-    on.persistence(sel.has(s, "persistence"), items, i),
+    on.persistence(sel.has(s, "persistence"), items, i, R.ds.now(ds)),
     on.stats(sel.has(s, "stats"), i),
     on.replication(sel.has(s, "replication"), items, i),
     on.cpu(sel.has(s, "cpu"), i),
