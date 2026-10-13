@@ -14,11 +14,12 @@ throughput of Redis 7.0.15 on the same machine, with half its memory for small v
 > **Status: research prototype.** BendKV implements a subset of Redis (strings, hashes,
 > lists, sets, sorted sets and their times to live, the blocking commands, transactions,
 > pub/sub and keyspace notifications, the keyspace, several databases, connection
-> commands and CLIENT LIST, INFO and KILL, an append-only file). The goal now is a drop-in replacement for a single
-> Redis node, measured by Redis's own test suite: of the 1,677 tests Redis 7.0.15 passes
-> against a server it did not start, BendKV passes 794, and 789 of the 1,172 in what it
-> implements ([docs/COMPATIBILITY.md](docs/COMPATIBILITY.md)). Do not use it for data you
-> cannot lose.
+> commands, CLIENT LIST, INFO and KILL, MONITOR, an append-only file). The goal now is a
+> drop-in replacement for a single Redis node, measured by Redis's own test suite: of the
+> 1,677 tests Redis 7.0.15 passes against a server it did not start, BendKV passes 797,
+> and 792 of the 1,172 in what it implements
+> ([docs/COMPATIBILITY.md](docs/COMPATIBILITY.md)). Do not use it for data you cannot
+> lose.
 
 BendKV is an independent project. It is not affiliated with Higher Order Company or the
 Bend project, nor with Redis Ltd. Redis is a trademark of Redis Ltd.
@@ -274,6 +275,19 @@ translation stays in the trusted base.
   holds the commands after a blocking one; BendKV holds them as commands); idle counts
   from the client's last batch, where Redis also counts a reply written (to a subscriber
   that gets messages, to a client that waited); user is `default`, redir -1, resp 2.
+- **MONITOR**, as Redis 7.0.15 runs it: each call that runs after it, of any client,
+  sends every monitor a line, `+<s>.<us> [<db> <ip:port>]` and the call's arguments as
+  the client sent them, quoted as Redis quotes them. As in Redis, a command refused
+  before it runs (unknown, the wrong number of arguments, before AUTH, to a subscribed
+  client) sends no line, nor do the administrative commands (CONFIG, CLIENT LIST, KILL,
+  NO-EVICT and UNBLOCK) and EVAL; a queued command sends its line as EXEC runs it, a
+  blocking command as it blocks, and AUTH's password and HELLO's user and password are
+  `"(redacted)"`. A monitor is refused the commands that read or write keys ("ERR Replica
+  can't interact with the keyspace"), gets its own line after its reply and no line with
+  CLIENT REPLY OFF or SKIP; RESET, QUIT and CLIENT KILL end it, and CLIENT LIST shows it
+  with the flag O. Where BendKV differs: a line's time is that of the actor's group, in
+  ms (its microseconds end in 000), and a monitor's own lines for the calls EXEC runs
+  come after EXEC's array, where Redis writes them between its replies.
 - **Configuration:** CONFIG GET (names, aliases and glob patterns), SET (several
   parameters at once, all or none), RESETSTAT, REWRITE, HELP, over all 178 parameters of
   Redis 7.0.15, taken from Redis's own table by `tools/gen_config.py`: every value is
@@ -337,7 +351,7 @@ translation stays in the trusted base.
   at an unknown command.
 
 Not yet: streams and the other types (HyperLogLog, geo), Lua
-scripts, RESP3, MONITOR, CLIENT PAUSE and TRACKING, timing of commands
+scripts, RESP3, CLIENT PAUSE and TRACKING, timing of commands
 (usec in INFO commandstats, latencystats), CONFIG REWRITE (it answers as Redis does without a configuration file),
 RDB files. Integers, and times in ms, are limited to 14 digits.
 
@@ -447,7 +461,10 @@ each get the 2,000 messages of 4 publishers in order, and 50 subscribers that le
 messages are published), CLIENT LIST, INFO and KILL (`tests/client_test.py`: scenarios on
 BendKV and on Redis, their lines compared field by field with what differs by nature put
 aside, then 100 clients listed and half of them killed by id, and 200 killed by address
-while other clients connect and close, none killed but those named),
+while other clients connect and close, none killed but those named), MONITOR
+(`tests/monitor_test.py`: scenarios on BendKV and on Redis, a monitor's lines compared
+with their time and address put aside, then 4 monitors that each get every line of 20
+clients that pipeline 200 SETs each, each client's lines in order),
 connections that end every way one can, many times
 (the client closing or resetting, QUIT, a protocol error), on a BendKV of their own whose
 table of channels is read to show that each closed the channel it opened,
@@ -478,7 +495,7 @@ src/        the server
   startup.bend  the command line and the configuration file        tested
   server.bend   TCP, connections, the database actor, the log      tested
 proof/      LAWS.bend (the laws), PROOF.bend (their proofs), SPEC.bend (the commands on the trie alone)
-tests/      float, start, differential, expiry, protocol, session, CONFIG, INFO, COMMAND, SCAN, BITFIELD, hash, list, set, sorted set, blocking, transaction, Pub/Sub, CLIENT, robustness, stalled reader, concurrency, AOF tests
+tests/      float, start, differential, expiry, protocol, session, CONFIG, INFO, COMMAND, SCAN, BITFIELD, hash, list, set, sorted set, blocking, transaction, Pub/Sub, CLIENT, MONITOR, robustness, stalled reader, concurrency, AOF tests
 bench/      in-process benchmarks of the map, the core and channels
 tools/      measurement scripts, the runner of Redis's test suite, and the generators of
             the trie, of the parameter table and of the command table, with the facts

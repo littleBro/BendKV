@@ -16,9 +16,10 @@ import ./batch.bend as B
 # A batch is parsed where it lies: the parser reads the buffer by index
 # (String.code_at, String.find, and String.dec_line_at for a number line),
 # hashes a key where it lies (String.hash_at), copies out only the bulks
-# (String.slice), and drops the parsed bytes once, at the end. The buffer
-# is only lent to it, so nothing is shared and nothing is rebuilt char by
-# char.
+# (String.slice) and the tail of an unfinished request, and leaves the
+# buffer to its reader whole (the server sends it to the actor with the
+# batch, for MONITOR). The buffer is only lent to it, so nothing is shared
+# and nothing is rebuilt char by char.
 
 # a number line: "<digits>\r\n", its number and the index after it
 type NumLine is Data:
@@ -55,10 +56,13 @@ type One is Data:
 # puts them in order in the same pass that takes their commands and
 # hashes apart, B.unzip), how many they are and the words of their codes
 # together (R.tl.add: whether they all have one code, and which), the
-# unparsed tail, a protocol error that ends the connection, if any, and
-# how many bytes the tail needs at least before a parse can make progress
+# unparsed tail, a protocol error that ends the connection, if any, how
+# many bytes the tail needs at least before a parse can make progress,
+# and the buffer itself, whole (the server sends it to the actor with the
+# batch, for MONITOR: the parser takes the buffer and gives it back, so
+# that nothing shares it)
 type Batch is Data:
-  Batch{reqs: List<&2, B.Req>, tl: U32, rest: String, err: Maybe<&2, String>, need: Nat}
+  Batch{reqs: List<&2, B.Req>, tl: U32, rest: String, err: Maybe<&2, String>, need: Nat, raw: String}
 
 # Lexing
 # ------
@@ -709,21 +713,35 @@ def batch.go(fuel: Nat, +s: String, +l: Nat, +i: Nat, o: One, acc: List<&2, B.Re
     case 1n+f OneBad{m}:
       Cut{acc, tl, l, Some{m}, 0n}
 
-# the tail is what follows the parsed requests: s is dropped up to it
-def batch.fin(c: Cut, s: String) -> Batch:
-  match c:
-    case Cut{reqs, tl, at, err, need}:
-      Batch{reqs, tl, String.drop(s, at), err, need}
+# the tail is what follows the parsed requests, from index at of s (of
+# length l): none when they took all of s, as they mostly do, else a copy
+# of the rest of s; s goes back whole with the batch
+def batch.tail(none: Bool, +s: String, +at: Nat, +l: Nat) -> String:
+  match none:
+    case True{}:
+      SNil{}
+    case False{}:
+      String.slice(s, at, Nat.sub(l, at))
 
-# the requests of s put before acc, counted in tl with those read before
-# them: fuel must be at least the number of requests in s, which a reader
-# that knows how many bytes it has passes; parse counts them itself
+def batch.fin(c: Cut, +s: String, +l: Nat) -> Batch:
+  match c:
+    case Cut{reqs, tl, +at, err, need}:
+      Batch{reqs, tl, batch.tail(Nat.is_le(l, at), s, at, l), err, need, s}
+
+# the requests of s from index at on, put before acc, counted in tl with
+# those read before them: fuel must be at least the number of requests in
+# s, which a reader that knows how many bytes it has passes; parse counts
+# them itself
+def parse_from(fuel: Nat, +s: String, +at: Nat, +l: Nat, acc: List<&2, B.Req>, tl: U32) -> Batch:
+  batch.fin(batch.go(fuel, s, l, at, one(s, at, l), acc, tl), s, l)
+
 def parse_onto(fuel: Nat, +s: String, acc: List<&2, B.Req>, tl: U32) -> Batch:
   +l = String.length(s)
-  batch.fin(batch.go(fuel, s, l, 0n, one(s, 0n, l), acc, tl), s)
+  parse_from(fuel, s, 0n, l, acc, tl)
 
 def parse(+s: String) -> Batch:
-  parse_onto(1n+String.length(s), s, Nil{}, 0)
+  +l = String.length(s)
+  parse_onto(1n+l, s, Nil{}, 0)
 
 # Long buffers
 # ------------
@@ -733,8 +751,8 @@ def parse(+s: String) -> Batch:
 # parsed a window of at most 2048 bytes at a time, each window a copy of
 # its own in one run (String.slice), from the first byte the window before
 # did not parse; the requests of all the windows make one batch. A request
-# longer than a window is parsed in the rest of the buffer as it is: that
-# happens once, when all its bytes have come.
+# longer than a window is parsed in the rest of the buffer where it lies:
+# that happens once, when all its bytes have come.
 
 def win.max() -> Nat:
   2048n
@@ -759,16 +777,17 @@ def win.on(reqs: List<&2, B.Req>, tl: U32, +at: Nat, +done: Nat, stuck: Bool) ->
 def win.judge(reqs: List<&2, B.Req>, tl: U32, rest: String, err: Maybe<&2, String>, need: Nat, +at: Nat, +done: Nat, last: Bool) -> Win:
   match err last:
     case Some{m} _:
-      WinLast{Batch{reqs, tl, rest, Some{m}, need}}
+      WinLast{Batch{reqs, tl, rest, Some{m}, need, SNil{}}}
     case None{} True{}:
-      WinLast{Batch{reqs, tl, rest, None{}, need}}
+      WinLast{Batch{reqs, tl, rest, None{}, need, SNil{}}}
     case None{} False{}:
       win.on(reqs, tl, at, done, Nat.is_eq(done, 0n))
 
 # the window of w bytes at index at, of a buffer of l bytes, and its parse
+# (the window, a copy, dropped)
 def win.of(b: Batch, +at: Nat, +w: Nat, +l: Nat) -> Win:
   match b:
-    case Batch{reqs, tl, +rest, err, need}:
+    case Batch{reqs, tl, +rest, err, need, win}:
       win.judge(reqs, tl, rest, err, need, at, Nat.sub(w, String.length(rest)), Nat.is_le(l, Nat.add(at, w)))
 
 # the window at index at, its requests put before acc, counted with
@@ -777,16 +796,22 @@ def win.at(+s: String, +at: Nat, +l: Nat, acc: List<&2, B.Req>, tl: U32) -> Win:
   +w = Nat.min(win.max(), Nat.sub(l, at))
   win.of(parse_onto(1n+w, String.slice(s, at, w), acc, tl), at, w, l)
 
+# the last window's batch, with the buffer whole
+def win.last(b: Batch, s: String) -> Batch:
+  match b:
+    case Batch{reqs, tl, rest, err, need, x}:
+      Batch{reqs, tl, rest, err, need, s}
+
 # the windows of s from the one judged in w on; each window parses one
 # byte or more, so the length of s is enough fuel
 def win.go(n: Nat, +s: String, +l: Nat, w: Win) -> Batch:
   match n w:
     case _ WinLast{b}:
-      b
+      win.last(b, s)
     case _ WinBig{reqs, tl, +at}:
-      parse_onto(1n+Nat.sub(l, at), String.drop(s, at), reqs, tl)
+      parse_from(1n+Nat.sub(l, at), s, at, l, reqs, tl)
     case 0n WinOn{reqs, tl, +at}:
-      parse_onto(1n+Nat.sub(l, at), String.drop(s, at), reqs, tl)
+      parse_from(1n+Nat.sub(l, at), s, at, l, reqs, tl)
     case 1n+m WinOn{reqs, tl, +at}:
       win.go(m, s, l, win.at(s, at, l, reqs, tl))
 
@@ -808,6 +833,190 @@ def parse_read.if(short: Bool, +s: String, +l: Nat) -> Batch:
 def parse_read(+s: String) -> Batch:
   +l = String.length(s)
   parse_read.if(Nat.is_le(l, win.max()), s, l)
+
+# Arguments as sent
+# ------------------
+# MONITOR shows each command with its arguments as its client sent them
+# (server.bend, MONITOR): the bytes of a batch are read again, the actor
+# reading them only while a client monitors, into the arguments of each
+# request, its name first, as the requests were read (one, above): the
+# same requests, an empty one skipped, up to the first that is not whole
+# or not right, which the batch did not hold either.
+
+# one request's arguments; none for an empty request; or the end
+type Av1 is Data:
+  AvOk{args: List<&2, String>, next: Nat}
+  AvSkip{next: Nat}
+  AvEnd{}
+
+def av.args(a: Args) -> Av1:
+  match a:
+    case ArgsOk{args, j}:
+      AvOk{args, j}
+    case _:
+      AvEnd{}
+
+def av.array.if(n: Nat, +s: String, +l: Nat, +j: Nat, ok: Bool) -> Av1:
+  match n ok:
+    case 0n True{}:
+      AvSkip{j}
+    case 1n+m True{}:
+      av.args(args.at(1n+m, s, l, j))
+    case _ False{}:
+      AvEnd{}
+
+def av.array.small(ok: Bool, +hi: Nat, +lo: Nat, +s: String, +l: Nat, +j: Nat) -> Av1:
+  match ok:
+    case True{}:
+      av.array.if(Nat.add(Nat.mul(hi, 1000000000n), lo), s, l, j, True{})
+    case False{}:
+      AvEnd{}
+
+def av.array.signed(neg: Bool, +hi: Nat, +lo: Nat, +s: String, +l: Nat, +j: Nat) -> Av1:
+  match neg:
+    case True{}:
+      AvSkip{j}
+    case False{}:
+      av.array.small(R.ll.le(hi, lo, 2n, 147483647n), hi, lo, s, l, j)
+
+def av.array.count(ll: R.LL, +s: String, +l: Nat, +j: Nat) -> Av1:
+  match ll:
+    case R.LL{neg, +hi, +lo}:
+      av.array.signed(neg, hi, lo, s, l, j)
+    case R.LLBad{}:
+      AvEnd{}
+
+def av.array.line(+s: String, +i: Nat, +l: Nat, ln: Line) -> Av1:
+  match ln:
+    case LineAt{+r}:
+      av.array.count(len.read(s, 1n+i, r), s, l, 2n+r)
+    case _:
+      AvEnd{}
+
+def av.array(+s: String, +i: Nat, +l: Nat, nl: NumLine) -> Av1:
+  match nl:
+    case NumOk{+n, +j}:
+      av.array.if(n, s, l, j, Nat.is_le(n, 2147483647n))
+    case NumMore{}:
+      AvEnd{}
+    case NumBad{}:
+      av.array.line(s, i, l, line_at(s, i, l))
+
+def av.words(ws: List<&2, String>, +next: Nat) -> Av1:
+  match ws:
+    case Nil{}:
+      AvSkip{next}
+    case Con{w, rest}:
+      AvOk{w <> rest, next}
+
+def av.inline.of(m: Maybe<&2, List<&2, String>>, +next: Nat) -> Av1:
+  match m:
+    case Some{ws}:
+      av.words(List.reverse(&2, String, ws), next)
+    case None{}:
+      AvEnd{}
+
+def av.inline.line(+line: String, +n: Nat, nul: Bool, +next: Nat) -> Av1:
+  match nul:
+    case True{}:
+      AvEnd{}
+    case False{}:
+      av.inline.of(sp.run(Nat.mul(2n, 1n+n), Go{MBlank{}, inline.text(line, n, U32.is_eq(String.code_at(line, Nat.sub(n, 1n)), 13)), SNil{}, Nil{}}), next)
+
+def av.inline.at(+s: String, +i: Nat, +k: Nat, +l: Nat, found: Bool) -> Av1:
+  match found:
+    case True{}:
+      +n = Nat.sub(k, i)
+      +line = String.slice(s, i, n)
+      av.inline.line(line, n, Nat.is_lt(String.find(line, Chr{0}, 0n), n), 1n+k)
+    case False{}:
+      AvEnd{}
+
+def av.head(+s: String, +i: Nat, +l: Nat, star: Bool, end: Bool) -> Av1:
+  match star end:
+    case True{} _:
+      av.array(s, i, l, num_at(s, 1n+i))
+    case False{} True{}:
+      AvEnd{}
+    case False{} False{}:
+      +k = String.find(s, '\n', i)
+      av.inline.at(s, i, k, l, Nat.is_lt(k, l))
+
+# the arguments of the request of s at index i, l the length of s
+def av.one(+s: String, +i: Nat, +l: Nat) -> Av1:
+  +c = String.code_at(s, i)
+  av.head(s, i, l, U32.is_eq(c, 42), U32.is_eq(c, 4294967295))
+
+def av.go(fuel: Nat, +s: String, +l: Nat, a: Av1, acc: List<&2, List<&2, String>>) -> List<&2, List<&2, String>>:
+  match fuel a:
+    case 1n+f AvOk{args, +j}:
+      av.go(f, s, l, av.one(s, j, l), args <> acc)
+    case 1n+f AvSkip{+j}:
+      av.go(f, s, l, av.one(s, j, l), acc)
+    case _ _:
+      List.reverse(&2, List<&2, String>, acc)
+
+# the arguments of each request of s, in order; each request takes a byte
+# or more, so the length of s is enough fuel
+def argvs(+s: String) -> List<&2, List<&2, String>>:
+  +l = String.length(s)
+  av.go(1n+l, s, l, av.one(s, 0n, l), Nil{})
+
+# An argument as Redis quotes it (sdscatrepr): in double quotes, a \ or "
+# with a \ before it, a newline, return, tab, bell or backspace as \n,
+# \r, \t, \a or \b, a printable byte as it is, and any other as \x and
+# two hex digits. The quoted argument is built backwards, a byte at a
+# time, then turned around.
+def repr.hex(+d: U32) -> Char:
+  Chr{Bool.pick(U32, U32.is_lt(d, 10), U32.add(d, 48), U32.add(d, 87))}
+
+def repr.other(print: Bool, +x: U32, acc: String) -> String:
+  match print:
+    case True{}:
+      SCon{Chr{x}, acc}
+    case False{}:
+      SCon{repr.hex(U32.and(x, 15)), SCon{repr.hex(U32.shrn(x, 4n)), SCon{'x', SCon{'\\', acc}}}}
+
+def repr.esc(none: Bool, +e: U32, +x: U32, acc: String) -> String:
+  match none:
+    case True{}:
+      repr.other(Bool.and(U32.is_le(32, x), U32.is_le(x, 126)), x, acc)
+    case False{}:
+      SCon{Chr{e}, SCon{'\\', acc}}
+
+# the letter after the \ that a byte goes out as, or 0 for none
+def repr.code(+x: U32) -> U32:
+  Bool.pick(U32, Bool.or(U32.is_eq(x, 92), U32.is_eq(x, 34)), x,
+  Bool.pick(U32, U32.is_eq(x, 10), 110,
+  Bool.pick(U32, U32.is_eq(x, 13), 114,
+  Bool.pick(U32, U32.is_eq(x, 9), 116,
+  Bool.pick(U32, U32.is_eq(x, 7), 97,
+  Bool.pick(U32, U32.is_eq(x, 8), 98, 0))))))
+
+def repr.go(s: String, acc: String) -> String:
+  match s:
+    case SNil{}:
+      String.reverse(SCon{'"', acc})
+    case SCon{Chr{+x}, t}:
+      +e = repr.code(x)
+      repr.go(t, repr.esc(U32.is_eq(e, 0), e, x, acc))
+
+def repr(s: String) -> String:
+  repr.go(s, "\"")
+
+# arguments quoted, a space between two: each goes before those after it
+# (xs, last first)
+def reprs.go(xs: List<&2, String>, out: String) -> String:
+  match xs:
+    case Nil{}:
+      out
+    case Con{x, Nil{}}:
+      repr(x) ++ out
+    case Con{x, rest}:
+      reprs.go(rest, " " ++ repr(x) ++ out)
+
+def reprs(xs: List<&2, String>) -> String:
+  reprs.go(List.reverse(&2, String, xs), "")
 
 # Replies
 # -------

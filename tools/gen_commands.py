@@ -26,7 +26,8 @@
 # numbers, its name, its arity from the same JSON (the statistics count a
 # call with the wrong number of arguments as refused only when it fails
 # Redis's own check of the arity), whether its calls may fail as they run,
-# and the word each code rides in (twelve bits, six of them set). The
+# whether MONITOR sees its calls and whether a monitor may run it (from its
+# flags), and the word each code rides in (twelve bits, six of them set). The
 # fourth writes there how a request's name finds its command (Step 4
 # below), from the same numbers.
 #
@@ -77,7 +78,7 @@ COMMANDS = {
     "discard": [], "watch": [], "unwatch": [], "subscribe": [], "unsubscribe": [],
     "psubscribe": [], "punsubscribe": [], "ssubscribe": [], "sunsubscribe": [],
     "publish": [], "spublish": [], "pubsub": ["channels", "help", "numpat", "numsub",
-    "shardchannels", "shardnumsub"]}
+    "shardchannels", "shardnumsub"], "monitor": []}
 
 # Step 1: redis-server -> facts
 # -----------------------------
@@ -332,6 +333,11 @@ RISKY = {"incr", "decr", "incrby", "decrby", "expire", "pexpire", "setex", "pset
          "zintercard", "zunionstore", "zinterstore", "zdiffstore", "zrangestore", "zmpop",
          "zrandmember"}
 
+# BendKV's commands that may be replicated (MAY_REPLICATE in Redis's
+# src/commands/*.json), a flag COMMAND INFO hides: a monitor may not run
+# them, as it may not run a command that reads or writes a key
+MAY_REPLICATE = {"publish", "spublish", "eval"}
+
 # the parser's commands with subcommands, by the function that numbers
 # their subcommands
 CONTAINERS = {"client": "client_id", "function": "function_id", "config": "config_id",
@@ -370,6 +376,15 @@ def own_numbers(src):
     a = src.index("\ndef parse_sess(")
     b = src.index("\ndef ", a + 1)
     return sorted(int(n) for n in re.findall(r"\n    case (\d+)n:  # [A-Z][A-Z_]*", src[a:b]))
+
+# the flags COMMAND INFO gives each command and subcommand, by name
+def flag_sets(facts):
+    out = {}
+    for name, c in facts["commands"].items():
+        out[name] = {f["+"] for f in c["info"][2]}
+        for sub in c["info"][9]:
+            out[sub[0]] = {f["+"] for f in sub[2]}
+    return out
 
 def arities(facts):
     out = {}
@@ -428,6 +443,22 @@ def stats_block(src, facts):
             "def stat.risky(+key: Nat) -> Bool:", "  match key:"]
     for k, (name, kind, i) in enumerate(keys, 1):
         if name in RISKY:
+            out += ["    case %dn:" % k, "      True{}"]
+    out += ["    case _:", "      False{}", ""]
+    fl = flag_sets(facts)
+    out += ["# whether a call of the command of a key goes unseen by MONITOR: an",
+            "# administrative command (admin), or one that feeds the monitors",
+            "# itself (skip_monitor), as Redis's call() leaves them out",
+            "def stat.unseen(+key: Nat) -> Bool:", "  match key:"]
+    for k, (name, kind, i) in enumerate(keys, 1):
+        if fl[name] & {"admin", "skip_monitor"}:
+            out += ["    case %dn:" % k, "      True{}"]
+    out += ["    case _:", "      False{}", ""]
+    out += ["# whether the command of a key reads or writes keys, or may be",
+            "# replicated (write, readonly, may_replicate): a monitor may not run it",
+            "def stat.keyspace(+key: Nat) -> Bool:", "  match key:"]
+    for k, (name, kind, i) in enumerate(keys, 1):
+        if fl[name] & {"write", "readonly"} or name in MAY_REPLICATE:
             out += ["    case %dn:" % k, "      True{}"]
     out += ["    case _:", "      False{}", ""]
     ncodes = 4 * (len(keys) + 1)
