@@ -3984,6 +3984,53 @@
     []
    ]
   },
+  "discard": {
+   "docs": [
+    "summary",
+    "Discard all commands issued after MULTI",
+    "since",
+    "2.0.0",
+    "group",
+    "transactions",
+    "complexity",
+    "O(N), when N is the number of queued commands"
+   ],
+   "info": [
+    "discard",
+    1,
+    [
+     {
+      "+": "noscript"
+     },
+     {
+      "+": "loading"
+     },
+     {
+      "+": "stale"
+     },
+     {
+      "+": "fast"
+     },
+     {
+      "+": "allow_busy"
+     }
+    ],
+    0,
+    0,
+    0,
+    [
+     {
+      "+": "@fast"
+     },
+     {
+      "+": "@transaction"
+     }
+    ],
+    [],
+    [],
+    []
+   ]
+  },
   "echo": {
    "docs": [
     "summary",
@@ -4166,6 +4213,50 @@
       ]
      ]
     ],
+    []
+   ]
+  },
+  "exec": {
+   "docs": [
+    "summary",
+    "Execute all commands issued after MULTI",
+    "since",
+    "1.2.0",
+    "group",
+    "transactions",
+    "complexity",
+    "Depends on commands in the transaction"
+   ],
+   "info": [
+    "exec",
+    1,
+    [
+     {
+      "+": "noscript"
+     },
+     {
+      "+": "loading"
+     },
+     {
+      "+": "stale"
+     },
+     {
+      "+": "skip_slowlog"
+     }
+    ],
+    0,
+    0,
+    0,
+    [
+     {
+      "+": "@slow"
+     },
+     {
+      "+": "@transaction"
+     }
+    ],
+    [],
+    [],
     []
    ]
   },
@@ -10003,6 +10094,53 @@
     []
    ]
   },
+  "multi": {
+   "docs": [
+    "summary",
+    "Mark the start of a transaction block",
+    "since",
+    "1.2.0",
+    "group",
+    "transactions",
+    "complexity",
+    "O(1)"
+   ],
+   "info": [
+    "multi",
+    1,
+    [
+     {
+      "+": "noscript"
+     },
+     {
+      "+": "loading"
+     },
+     {
+      "+": "stale"
+     },
+     {
+      "+": "fast"
+     },
+     {
+      "+": "allow_busy"
+     }
+    ],
+    0,
+    0,
+    0,
+    [
+     {
+      "+": "@fast"
+     },
+     {
+      "+": "@transaction"
+     }
+    ],
+    [],
+    [],
+    []
+   ]
+  },
   "object": {
    "docs": [
     "summary",
@@ -15305,6 +15443,150 @@
        },
        {
         "+": "delete"
+       }
+      ],
+      "begin_search",
+      [
+       "type",
+       "index",
+       "spec",
+       [
+        "index",
+        1
+       ]
+      ],
+      "find_keys",
+      [
+       "type",
+       "range",
+       "spec",
+       [
+        "lastkey",
+        -1,
+        "keystep",
+        1,
+        "limit",
+        0
+       ]
+      ]
+     ]
+    ],
+    []
+   ]
+  },
+  "unwatch": {
+   "docs": [
+    "summary",
+    "Forget about all watched keys",
+    "since",
+    "2.2.0",
+    "group",
+    "transactions",
+    "complexity",
+    "O(1)"
+   ],
+   "info": [
+    "unwatch",
+    1,
+    [
+     {
+      "+": "noscript"
+     },
+     {
+      "+": "loading"
+     },
+     {
+      "+": "stale"
+     },
+     {
+      "+": "fast"
+     },
+     {
+      "+": "allow_busy"
+     }
+    ],
+    0,
+    0,
+    0,
+    [
+     {
+      "+": "@fast"
+     },
+     {
+      "+": "@transaction"
+     }
+    ],
+    [],
+    [],
+    []
+   ]
+  },
+  "watch": {
+   "docs": [
+    "summary",
+    "Watch the given keys to determine execution of the MULTI/EXEC block",
+    "since",
+    "2.2.0",
+    "group",
+    "transactions",
+    "complexity",
+    "O(1) for every key.",
+    "arguments",
+    [
+     [
+      "name",
+      "key",
+      "type",
+      "key",
+      "key_spec_index",
+      0,
+      "flags",
+      [
+       {
+        "+": "multiple"
+       }
+      ]
+     ]
+    ]
+   ],
+   "info": [
+    "watch",
+    -2,
+    [
+     {
+      "+": "noscript"
+     },
+     {
+      "+": "loading"
+     },
+     {
+      "+": "stale"
+     },
+     {
+      "+": "fast"
+     },
+     {
+      "+": "allow_busy"
+     }
+    ],
+    1,
+    -1,
+    1,
+    [
+     {
+      "+": "@fast"
+     },
+     {
+      "+": "@transaction"
+     }
+    ],
+    [],
+    [
+     [
+      "flags",
+      [
+       {
+        "+": "RO"
        }
       ],
       "begin_search",

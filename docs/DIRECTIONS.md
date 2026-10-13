@@ -304,13 +304,13 @@ Where performance and proof meet: **batched execution under proved laws.**
    SWAPDB (done; section 3x), the ranges and bits of strings (GETRANGE, SETRANGE,
    GETBIT, SETBIT, BITCOUNT, BITPOS; done, section 3y), MSETNX and RENAME (done,
    section 3za), COPY (done, section 3zb), BITOP and LCS (done, section 3zd), BITFIELD
-   (done, section 3ze), MULTI/EXEC/WATCH, pub/sub, the connection
+   (done, section 3ze), MULTI/EXEC/WATCH (done, section 3zq), pub/sub, the connection
    commands clients send on connect (HELLO, SELECT, CLIENT, AUTH, INFO, COMMAND, CONFIG;
    done), SCAN and RANDOMKEY (done), and the log's rewrite, measured by Redis's own test
    suite run against BendKV and by client libraries' tests. Lua, streams, cluster,
    replication and modules are out of scope. The suite's count: of the 1,673 tests
-   Redis 7.0.15 passes against a server it did not start, BendKV passes 746, 739 of the
-   1,089 in what it has ([COMPATIBILITY.md](COMPATIBILITY.md)); RESP3 now holds back the
+   Redis 7.0.15 passes against a server it did not start, BendKV passes 759, 754 of the
+   1,142 in what it has ([COMPATIBILITY.md](COMPATIBILITY.md)); RESP3 now holds back the
    most tests of what it has (203 of unit/type/list's and 82 of unit/type/zset's run
    after their HELLO 3).
 

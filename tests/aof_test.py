@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Restart test for the append-only file: a random command stream (the
 differential test's, which moves between databases, moves keys between
-them and swaps them, and writes strings, hashes, lists and sets)
+them and swaps them, writes strings, hashes, lists and sets, and runs
+transactions, which the file holds between a MULTI and an EXEC)
 against BendKV, with one FLUSHALL halfway, then the whole keyspace of
 each of the 16 databases saved, each key with its value (a hash's
 pairs, a list's elements, a set's members) and the time it expires at;
@@ -95,6 +96,10 @@ def main():
             for _ in batch:
                 c.reply()
             n += len(batch)
+        # the stream may have left a transaction open (a MULTI with no
+        # EXEC yet) and keys watched: dropped, so that what follows runs
+        c.send([[b"DISCARD"], [b"UNWATCH"]])
+        c.reply(), c.reply()
         # and many keys, so that the trie is deep: SETs and MSETs of
         # random bytes, 100 to a batch; a key in 5 with a time to expire
         # at, and then times changed, taken away, or in the past (which

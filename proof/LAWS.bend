@@ -831,11 +831,14 @@ law swap_reads:
 # (log_batch), which change nothing. On several databases an effect is
 # located (A.Eff: the command's on the database it ran on, and SWAPDB,
 # MOVE, FLUSHALL), and the file holds a SELECT before an effect on
-# another database than the one it last selected. So, after any history,
-# the server restores from its file the databases it held; a file cut
-# anywhere by a crash restores the databases the server held after some
-# prefix of its acts, and the loader leaves exactly the part of an entry
-# the cut left.
+# another database than the one it last selected; a transaction's effects
+# (EXEC's, when they are two or more) are one entry of the file (A.Ent),
+# written between a MULTI and an EXEC. So, after any history, the server
+# restores from its file the databases it held; a file cut anywhere by a
+# crash restores the databases the server held after some prefix of its
+# acts in which every transaction is whole (the loader reverts a
+# transaction the file ends inside), and the loader leaves exactly the
+# part of an entry the cut left.
 
 # a batch run with its effects, without them; and the effects
 def log_out(r: List<&2, R.Reply> & (List<&2, R.Cmd> & R.Db)) -> List<&2, R.Reply> & R.Db:
@@ -884,13 +887,18 @@ law aof_load:
 # first, each with the time it ran at (the server sets the focus's time
 # before each group of batches) and what it did to the databases (its
 # acts: those of its commands, S.plan, after the focus moved to its
-# connection's database, R.AFocus), run from 1 + n empty databases
+# connection's database, R.AFocus), run from 1 + n empty databases; or
+# the commands of a transaction (RunTx: what EXEC ran, its acts all
+# together)
 type Run is Data:
   Run{now: Nat, acts: List<&2, R.Act>}
+  RunTx{now: Nat, acts: List<&2, R.Act>}
 
 def batch_at(b: Run, ds: R.Ds) -> R.Ds:
   match b:
     case Run{now, as}:
+      R.acts(as, R.ds.at(now, ds))
+    case RunTx{now, as}:
       R.acts(as, R.ds.at(now, ds))
 
 def single(hist: List<&2, Run>, +n: Nat) -> R.Ds:
@@ -904,18 +912,22 @@ def single(hist: List<&2, Run>, +n: Nat) -> R.Ds:
 def act_effects(as: List<&2, R.Act>, ds: R.Ds) -> List<&2, A.Eff>:
   List.reverse(&2, A.Eff, Pair.fst(List<&2, A.Eff>, R.Ds, A.acts(as, (Nil{}, ds))))
 
-# the effects of a batch, run at its time on ds
-def batch_effs(b: Run, ds: R.Ds) -> List<&2, A.Eff>:
+# the effects of a batch, run at its time on ds, as entries of the
+# file: each effect an entry of its own, and a transaction's effects one
+# entry of them all when they are two or more (A.tx.wrap)
+def batch_effs(b: Run, ds: R.Ds) -> List<&2, A.Ent>:
   match b:
     case Run{now, as}:
-      act_effects(as, R.ds.at(now, ds))
+      A.ents.of(act_effects(as, R.ds.at(now, ds)))
+    case RunTx{now, as}:
+      A.tx.wrap(act_effects(as, R.ds.at(now, ds)))
 
 # a file and the database its last SELECT selected, with the entries of
 # more effects appended
-def file.put(f: String & Nat, es: List<&2, A.Eff>) -> String & Nat:
+def file.put(f: String & Nat, es: List<&2, A.Ent>) -> String & Nat:
   (s, +sel) = f
   +e = es
-  (s ++ A.encode(A.effs.args(e, sel)), A.effs.sel(e, sel))
+  (s ++ A.encode(A.ents.args(e, sel)), A.ents.sel(e, sel))
 
 # the file after a history: the entries of each batch's effects, appended
 # after those of the batches before it, a SELECT before an effect on
@@ -960,11 +972,13 @@ law recover:
 
 # A crash in the middle of a write leaves the file cut anywhere: c is
 # what reached the disk, d what did not. The server loads what it can
-# (whole entries) and cuts the rest off (server.bend: restore).
+# (whole entries, but for a transaction left open) and cuts the rest off
+# (server.bend: restore).
 
-# an act and the time it ran at
+# an act and the time it ran at; or a transaction's acts, together
 type Step is Data:
   Step{now: Nat, a: R.Act}
+  StepTx{now: Nat, acts: List<&2, R.Act>}
 
 # the acts of a history, oldest first, each with its batch's time
 def stamp(+now: Nat, as: List<&2, R.Act>) -> List<&2, Step>:
@@ -978,6 +992,8 @@ def stamped(b: Run) -> List<&2, Step>:
   match b:
     case Run{+now, as}:
       stamp(now, as)
+    case RunTx{now, as}:
+      [StepTx{now, as}]
 
 def commands(hist: List<&2, Run>) -> List<&2, Step>:
   match hist:
@@ -991,6 +1007,8 @@ def run_at(s: Step, ds: R.Ds) -> R.Ds:
   match s:
     case Step{now, a}:
       R.ds_of(R.act(a, R.ds.at(now, ds)))
+    case StepTx{now, as}:
+      R.acts(as, R.ds.at(now, ds))
 
 def run_timed(ss: List<&2, Step>, ds: R.Ds) -> R.Ds:
   match ss:
@@ -999,13 +1017,15 @@ def run_timed(ss: List<&2, Step>, ds: R.Ds) -> R.Ds:
     case Con{s, rest}:
       run_timed(rest, run_at(s, ds))
 
-# the databases after the first j acts of a history
+# the databases after the first j steps of a history (an act, or a
+# transaction whole)
 def held(hist: List<&2, Run>, +n: Nat, j: Nat) -> R.Ds:
   run_timed(List.take(&2, Step, commands(hist), j), R.ds.empty(n))
 
 # LAW: a file cut anywhere restores the databases the server held after
-# some prefix of its acts (at time 0): no act is applied in part, none is
-# applied out of order, and none after one that is lost
+# some prefix of its acts in which every transaction is whole (at time
+# 0): no act is applied in part, none is applied out of order, none after
+# one that is lost, and none of a transaction's unless all of them are
 law recover_cut:
   for +hist: List<&2, Run>
   for +n: Nat

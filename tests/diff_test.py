@@ -663,6 +663,14 @@ def rnd_cmd(r):
         (0.005, lambda: [r.choice([b"ZADD", b"ZINCRBY", b"ZREM", b"ZRANGE", b"ZRANGEBYSCORE", b"ZCOUNT", b"ZPOPMIN", b"ZSCAN",
                                    b"ZREMRANGEBYRANK", b"ZMSCORE", b"ZSCORE", b"ZUNION", b"ZINTERSTORE", b"ZMPOP",
                                    b"ZRANGESTORE", b"ZRANDMEMBER", b"ZINTERCARD"])] + [k() for _ in range(r.choice([0, 1, 2]))]),
+        # transactions: a MULTI, EXEC or DISCARD on its own (the rounds
+        # also send whole ones, rnd_tx), keys watched and unwatched
+        (0.004, lambda: [r.choice([b"MULTI", b"multi"])]),
+        (0.004, lambda: [r.choice([b"EXEC", b"exec"])]),
+        (0.002, lambda: [b"DISCARD"]),
+        (0.01, lambda: [b"WATCH"] + ks()),
+        (0.004, lambda: [b"UNWATCH"]),
+        (0.002, lambda: [r.choice([b"MULTI", b"EXEC", b"DISCARD", b"UNWATCH", b"WATCH"])] + [k() for _ in range(r.choice([0, 1]))]),
     ]
     c *= sum(p for p, f in table)
     acc = 0.0
@@ -671,6 +679,11 @@ def rnd_cmd(r):
         if c < acc:
             return f()
     return [b"PING"]
+
+
+# a whole transaction: MULTI, some commands, then EXEC (or DISCARD)
+def rnd_tx(r):
+    return [[b"MULTI"]] + [rnd_cmd(r) for _ in range(r.randint(0, 6))] + [[r.choice([b"EXEC", b"EXEC", b"EXEC", b"DISCARD"])]]
 
 
 def pairs_of(xs):
@@ -739,6 +752,44 @@ def known_divergence(got, want):
     return False
 
 
+# The commands a transaction queued, as Redis answered them (QUEUED),
+# so that EXEC's array is normalized command by command: None while no
+# transaction is open
+class Tx:
+    def __init__(self):
+        self.queued = None
+
+    def see(self, cmd, want):
+        name = cmd[0].upper()
+        if self.queued is not None and want == (b"+", b"QUEUED"):
+            self.queued.append(cmd)
+        elif name == b"MULTI" and want == (b"+", b"OK"):
+            self.queued = []
+        elif name in (b"EXEC", b"DISCARD") and len(cmd) == 1 or want[0] == b"-" and want[1].startswith(b"EXECABORT"):
+            self.queued = None
+
+    # EXEC's array, each reply normalized as its command's
+    def norm(self, cmd, rep):
+        if cmd[0].upper() == b"EXEC" and rep[0] == b"*" and rep[1] is not None and self.queued is not None \
+                and len(rep[1]) == len(self.queued):
+            return (rep[0], [normalize(c, x) for c, x in zip(self.queued, rep[1])])
+        return normalize(cmd, rep)
+
+
+# EXEC's arrays, compared reply by reply as the commands' replies are
+# (a TTL within its second); known: a known divergence is allowed among
+# them
+def same_exec(cmd, got, want, queued, known=False):
+    if got == want:
+        return True
+    if cmd[0].upper() != b"EXEC" or got[0] != b"*" or want[0] != b"*" or queued is None:
+        return False
+    if got[1] is None or want[1] is None or len(got[1]) != len(want[1]) or len(want[1]) != len(queued):
+        return False
+    return all(g == w or close(c, g, w) or known and known_divergence(g, w)
+               for c, g, w in zip(queued, got[1], want[1]))
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--bendkv", type=int, default=6380)
@@ -753,18 +804,24 @@ def main():
         c.reply()
     total = 0
     known = 0
+    tx = Tx()
     for rnd in range(a.rounds):
-        batch = [rnd_cmd(r) for _ in range(r.choice([1, 1, 2, 5, 20]))]
+        if r.random() < 0.05:
+            batch = rnd_tx(r)
+        else:
+            batch = [rnd_cmd(r) for _ in range(r.choice([1, 1, 2, 5, 20]))]
         b.send(batch)
         s.send(batch)
         diverged = False
         for cmd in batch:
-            got, want = normalize(cmd, b.reply()), normalize(cmd, s.reply())
+            got, want = tx.norm(cmd, b.reply()), tx.norm(cmd, s.reply())
+            queued = tx.queued
+            tx.see(cmd, want)
             if diverged:
                 continue
             total += 1
-            if got != want and not close(cmd, got, want):
-                if known_divergence(got, want):
+            if got != want and not close(cmd, got, want) and not same_exec(cmd, got, want, queued):
+                if known_divergence(got, want) or same_exec(cmd, got, want, queued, True):
                     # the states now differ on one key: compare no more of
                     # this batch, and start the next from empty databases
                     known += 1
@@ -777,8 +834,9 @@ def main():
                 sys.exit(1)
         if diverged:
             for c in (b, s):
-                c.send([[b"FLUSHALL"]])
-                c.reply()
+                c.send([[b"DISCARD"], [b"UNWATCH"], [b"FLUSHALL"]])
+                c.reply(), c.reply(), c.reply()
+            tx.queued = None
     print("OK: %d commands in %d pipelined batches, all replies identical"
           " (%d known 64-bit integer divergences skipped)" % (total, a.rounds, known))
 

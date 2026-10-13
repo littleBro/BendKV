@@ -13003,19 +13003,147 @@ def acts_inv(as: List<&2, R.Act>, +o: R.Ds, +r: R.Ds, +sel: Nat, +n: Nat, +sm: {
 
 # The history
 # ~~~~~~~~~~~
+# A history's batches append entries to the file (A.Ent): an effect, or
+# the effects of a transaction, between a MULTI and an EXEC, when they
+# are two or more. MULTI and EXEC, replayed, are commands of the
+# connection, errors that change nothing, so the entries replay as the
+# effects they hold, one after another (rpe_file); and these are the
+# effects of the history's acts, in order (bflat_run, bflat_tx).
 
-# the effects of a history's batches, oldest first
-def all_effs(hist: List<&2, Laws.Run>, +n: Nat) -> List<&2, A.Eff>:
+# the effects an entry holds
+def xeffs(x: A.Ent) -> List<&2, A.Eff>:
+  match x:
+    case A.EOne{e}:
+      [e]
+    case A.ETx{es}:
+      es
+
+# the effects entries hold, in order
+def xseffs(xs: List<&2, A.Ent>) -> List<&2, A.Eff>:
+  match xs:
+    case Nil{}:
+      Nil{}
+    case Con{x, rest}:
+      List.append(&2, A.Eff, xeffs(x), xseffs(rest))
+
+# a command of the connection, replayed, runs as an error and changes
+# nothing
+def own_id(r: R.Ds, -o: R.SessOp) -> {R.acts([R.ARun{R.Own{o}}], r) == r : R.Ds}:
+  match r:
+    case R.Ds{d, pre, post}:
+      {==}
+
+# a transaction's entry replayed: MULTI, its effects, EXEC
+def rpe_tx(+es: List<&2, A.Eff>, +sel: Nat, +r: R.Ds) -> {R.acts(A.file.acts(A.parse_all(A.ent.args(A.ETx{es}, sel))), r) == rp(es, sel, r) : R.Ds}:
+  %Equal.sym(R.Ds, R.acts([R.ARun{R.Own{R.SMulti{}}}], r), r, own_id(r, R.SMulti{})) : {R.acts(A.file.acts(A.parse_all(List.append(&2, List<&2, String>, A.effs.args(es, sel), [["EXEC"]]))), _) == rp(es, sel, r) : R.Ds}
+  %parse_app(A.effs.args(es, sel), [["EXEC"]]) : {R.acts(A.file.acts(_), r) == rp(es, sel, r) : R.Ds}
+  %fa_app(A.parse_all(A.effs.args(es, sel)), A.parse_all([["EXEC"]])) : {R.acts(_, r) == rp(es, sel, r) : R.Ds}
+  %acts_app(A.file.acts(A.parse_all(A.effs.args(es, sel))), A.file.acts(A.parse_all([["EXEC"]])), r) : {_ == rp(es, sel, r) : R.Ds}
+  %Equal.sym(R.Ds, R.acts(A.file.acts(A.parse_all(A.effs.args(es, sel))), r), rp(es, sel, r), rp_file(es, sel, r)) : {R.acts(A.file.acts(A.parse_all([["EXEC"]])), _) == rp(es, sel, r) : R.Ds}
+  own_id(rp(es, sel, r), R.SExec{})
+
+# an entry replayed: the effects it holds replayed
+def rpe_ent(x: A.Ent, +sel: Nat, +r: R.Ds) -> {R.acts(A.file.acts(A.parse_all(A.ent.args(x, sel))), r) == rp(xeffs(x), sel, r) : R.Ds}:
+  match x:
+    case A.EOne{e}:
+      {==}
+    case A.ETx{+es}:
+      rpe_tx(es, sel, r)
+
+def sel_ent(x: A.Ent, +sel: Nat) -> {A.ent.sel(x, sel) == A.effs.sel(xeffs(x), sel) : Nat}:
+  match x:
+    case A.EOne{e}:
+      {==}
+    case A.ETx{es}:
+      {==}
+
+# the entries replayed are the effects they hold replayed, one after
+# another
+def rpe_file(xs: List<&2, A.Ent>, +sel: Nat, +r: R.Ds) -> {R.acts(A.file.acts(A.parse_all(A.ents.args(xs, sel))), r) == rp(xseffs(xs), sel, r) : R.Ds}:
+  match xs:
+    case Nil{}:
+      {==}
+    case Con{+x, +rest}:
+      %parse_app(A.ent.args(x, sel), A.ents.args(rest, A.ent.sel(x, sel))) : {R.acts(A.file.acts(_), r) == rp(List.append(&2, A.Eff, xeffs(x), xseffs(rest)), sel, r) : R.Ds}
+      %fa_app(A.parse_all(A.ent.args(x, sel)), A.parse_all(A.ents.args(rest, A.ent.sel(x, sel)))) : {R.acts(_, r) == rp(List.append(&2, A.Eff, xeffs(x), xseffs(rest)), sel, r) : R.Ds}
+      %acts_app(A.file.acts(A.parse_all(A.ent.args(x, sel))), A.file.acts(A.parse_all(A.ents.args(rest, A.ent.sel(x, sel)))), r) : {_ == rp(List.append(&2, A.Eff, xeffs(x), xseffs(rest)), sel, r) : R.Ds}
+      %rp_cat(xeffs(x), xseffs(rest), sel, r) : {R.acts(A.file.acts(A.parse_all(A.ents.args(rest, A.ent.sel(x, sel)))), R.acts(A.file.acts(A.parse_all(A.ent.args(x, sel))), r)) == _ : R.Ds}
+      %sel_ent(x, sel) : {R.acts(A.file.acts(A.parse_all(A.ents.args(rest, A.ent.sel(x, sel)))), R.acts(A.file.acts(A.parse_all(A.ent.args(x, sel))), r)) == rp(xseffs(rest), _, rp(xeffs(x), sel, r)) : R.Ds}
+      %rpe_ent(x, sel, r) : {R.acts(A.file.acts(A.parse_all(A.ents.args(rest, A.ent.sel(x, sel)))), R.acts(A.file.acts(A.parse_all(A.ent.args(x, sel))), r)) == rp(xseffs(rest), A.ent.sel(x, sel), _) : R.Ds}
+      rpe_file(rest, A.ent.sel(x, sel), R.acts(A.file.acts(A.parse_all(A.ent.args(x, sel))), r))
+
+def sel_file(xs: List<&2, A.Ent>, +sel: Nat) -> {A.ents.sel(xs, sel) == A.effs.sel(xseffs(xs), sel) : Nat}:
+  match xs:
+    case Nil{}:
+      {==}
+    case Con{+x, +rest}:
+      %sel_cat(xeffs(x), xseffs(rest), sel) : {A.ents.sel(rest, A.ent.sel(x, sel)) == _ : Nat}
+      %sel_ent(x, sel) : {A.ents.sel(rest, A.ent.sel(x, sel)) == A.effs.sel(xseffs(rest), _) : Nat}
+      sel_file(rest, A.ent.sel(x, sel))
+
+def lapp_assoc_x(a: List<&2, A.Ent>, -b: List<&2, A.Ent>, -c: List<&2, A.Ent>) -> {List.append(&2, A.Ent, List.append(&2, A.Ent, a, b), c) == List.append(&2, A.Ent, a, List.append(&2, A.Ent, b, c)) : List<&2, A.Ent>}:
+  match a:
+    case Nil{}:
+      {==}
+    case Con{h, +t}:
+      Equal.cong(List<&2, A.Ent>, List<&2, A.Ent>, z => h <> z, List.append(&2, A.Ent, List.append(&2, A.Ent, t, b), c), List.append(&2, A.Ent, t, List.append(&2, A.Ent, b, c)), lapp_assoc_x(t, b, c))
+
+def app_nil_x(xs: List<&2, A.Ent>) -> {List.append(&2, A.Ent, xs, Nil{}) == xs : List<&2, A.Ent>}:
+  match xs:
+    case Nil{}:
+      {==}
+    case Con{h, +t}:
+      Equal.cong(List<&2, A.Ent>, List<&2, A.Ent>, z => h <> z, List.append(&2, A.Ent, t, Nil{}), t, app_nil_x(t))
+
+# the effects of entries, then of more
+def xseffs_app(xs: List<&2, A.Ent>, -ys: List<&2, A.Ent>) -> {List.append(&2, A.Eff, xseffs(xs), xseffs(ys)) == xseffs(List.append(&2, A.Ent, xs, ys)) : List<&2, A.Eff>}:
+  match xs:
+    case Nil{}:
+      {==}
+    case Con{+x, +rest}:
+      Equal.trans(List<&2, A.Eff>, List.append(&2, A.Eff, List.append(&2, A.Eff, xeffs(x), xseffs(rest)), xseffs(ys)), List.append(&2, A.Eff, xeffs(x), List.append(&2, A.Eff, xseffs(rest), xseffs(ys))), List.append(&2, A.Eff, xeffs(x), xseffs(List.append(&2, A.Ent, rest, ys))),
+        lapp_assoc_e(xeffs(x), xseffs(rest), xseffs(ys)),
+        Equal.cong(List<&2, A.Eff>, List<&2, A.Eff>, z => List.append(&2, A.Eff, xeffs(x), z), List.append(&2, A.Eff, xseffs(rest), xseffs(ys)), xseffs(List.append(&2, A.Ent, rest, ys)), xseffs_app(rest, ys)))
+
+# effects each an entry of its own hold themselves
+def of_flat(es: List<&2, A.Eff>) -> {xseffs(A.ents.of(es)) == es : List<&2, A.Eff>}:
+  match es:
+    case Nil{}:
+      {==}
+    case Con{e, +rest}:
+      Equal.cong(List<&2, A.Eff>, List<&2, A.Eff>, z => e <> z, xseffs(A.ents.of(rest)), rest, of_flat(rest))
+
+# a transaction's entries hold its effects
+def wrap_flat(es: List<&2, A.Eff>) -> {xseffs(A.tx.wrap(es)) == es : List<&2, A.Eff>}:
+  match es:
+    case Nil{}:
+      {==}
+    case Con{a, Nil{}}:
+      {==}
+    case Con{a, Con{b, rest}}:
+      app_nil_e(a <> b <> rest)
+
+# acts' effects, as the laws collect them: in order
+def act_effs(+as: List<&2, R.Act>, +ds: R.Ds) -> {Laws.act_effects(as, ds) == aeffs(as, ds) : List<&2, A.Eff>}:
+  %acts_split(as, Nil{}, ds) : {List.reverse(&2, A.Eff, Pair.fst(List<&2, A.Eff>, R.Ds, _)) == aeffs(as, ds) : List<&2, A.Eff>}
+  rev_rev_e(aeffs(as, ds))
+
+# a batch's entries hold its acts' effects, in order
+def bflat_run(+now: Nat, +as: List<&2, R.Act>, +ds: R.Ds) -> {xseffs(Laws.batch_effs(Laws.Run{now, as}, ds)) == aeffs(as, R.ds.at(now, ds)) : List<&2, A.Eff>}:
+  %Equal.sym(List<&2, A.Eff>, Laws.act_effects(as, R.ds.at(now, ds)), aeffs(as, R.ds.at(now, ds)), act_effs(as, R.ds.at(now, ds))) : {xseffs(A.ents.of(_)) == aeffs(as, R.ds.at(now, ds)) : List<&2, A.Eff>}
+  of_flat(aeffs(as, R.ds.at(now, ds)))
+
+def bflat_tx(+now: Nat, +as: List<&2, R.Act>, +ds: R.Ds) -> {xseffs(Laws.batch_effs(Laws.RunTx{now, as}, ds)) == aeffs(as, R.ds.at(now, ds)) : List<&2, A.Eff>}:
+  %Equal.sym(List<&2, A.Eff>, Laws.act_effects(as, R.ds.at(now, ds)), aeffs(as, R.ds.at(now, ds)), act_effs(as, R.ds.at(now, ds))) : {xseffs(A.tx.wrap(_)) == aeffs(as, R.ds.at(now, ds)) : List<&2, A.Eff>}
+  wrap_flat(aeffs(as, R.ds.at(now, ds)))
+
+# the entries of a history's batches, oldest first
+def all_ents(hist: List<&2, Laws.Run>, +n: Nat) -> List<&2, A.Ent>:
   match hist:
     case Nil{}:
       Nil{}
     case Con{b, +older}:
-      List.append(&2, A.Eff, all_effs(older, n), Laws.batch_effs(b, Laws.single(older, n)))
-
-# a batch's effects are its acts' effects, in order
-def beffs(+now: Nat, +as: List<&2, R.Act>, +ds: R.Ds) -> {Laws.batch_effs(Laws.Run{now, as}, ds) == aeffs(as, R.ds.at(now, ds)) : List<&2, A.Eff>}:
-  %acts_split(as, Nil{}, R.ds.at(now, ds)) : {List.reverse(&2, A.Eff, Pair.fst(List<&2, A.Eff>, R.Ds, _)) == aeffs(as, R.ds.at(now, ds)) : List<&2, A.Eff>}
-  rev_rev_e(aeffs(as, R.ds.at(now, ds)))
+      List.append(&2, A.Ent, all_ents(older, n), Laws.batch_effs(b, Laws.single(older, n)))
 
 def len_ego(n: Nat) -> {List.length(&2, R.Db, R.ds.empty.go(n)) == n : Nat}:
   match n:
@@ -13027,48 +13155,468 @@ def len_ego(n: Nat) -> {List.length(&2, R.Db, R.ds.empty.go(n)) == n : Nat}:
 def len_empty(+n: Nat) -> {List.length(&2, R.Db, Laws.zero(R.ds.empty(n))) == 1n+n : Nat}:
   Equal.cong(Nat, Nat, z => 1n+z, List.length(&2, R.Db, Laws.zero.go(R.ds.empty.go(n))), n, Equal.trans(Nat, List.length(&2, R.Db, Laws.zero.go(R.ds.empty.go(n))), List.length(&2, R.Db, R.ds.empty.go(n)), n, len_zg(R.ds.empty.go(n)), len_ego(n)))
 
-def replay_step(+now: Nat, +as: List<&2, R.Act>, +older: List<&2, Laws.Run>, +n: Nat, +sm: {KV.small(n) == True{} : Bool}, p: Inv(rp(all_effs(older, n), 0n, R.ds.empty(n)), Laws.single(older, n), A.effs.sel(all_effs(older, n), 0n)) & Len(Laws.single(older, n), n)) -> Inv(rp(all_effs(Con{Laws.Run{now, as}, older}, n), 0n, R.ds.empty(n)), Laws.single(Con{Laws.Run{now, as}, older}, n), A.effs.sel(all_effs(Con{Laws.Run{now, as}, older}, n), 0n)) & Len(Laws.single(Con{Laws.Run{now, as}, older}, n), n):
+# the invariant, carried to equal replays, databases and selections
+def inv_eq(-r1: R.Ds, -r2: R.Ds, -o1: R.Ds, -o2: R.Ds, -s1: Nat, -s2: Nat, -n: Nat, er: {r1 == r2 : R.Ds}, eo: {o1 == o2 : R.Ds}, es: {s1 == s2 : Nat}, st: Inv(r1, o1, s1) & Len(o1, n)) -> Inv(r2, o2, s2) & Len(o2, n):
+  %er : Inv(_, o2, s2) & Len(o2, n)
+  %eo : Inv(r1, _, s2) & Len(_, n)
+  %es : Inv(r1, o1, _) & Len(o1, n)
+  st
+
+# a batch's acts, at its time, after the history before it: the replay
+# of the effects before and of the acts' effects keeps the invariant
+def replay_acts(+now: Nat, +as: List<&2, R.Act>, +older: List<&2, Laws.Run>, +n: Nat, +sm: {KV.small(n) == True{} : Bool}, p: Inv(rp(xseffs(all_ents(older, n)), 0n, R.ds.empty(n)), Laws.single(older, n), A.effs.sel(xseffs(all_ents(older, n)), 0n)) & Len(Laws.single(older, n), n)) -> Inv(rp(List.append(&2, A.Eff, xseffs(all_ents(older, n)), aeffs(as, R.ds.at(now, Laws.single(older, n)))), 0n, R.ds.empty(n)), R.acts(as, R.ds.at(now, Laws.single(older, n))), A.effs.sel(List.append(&2, A.Eff, xseffs(all_ents(older, n)), aeffs(as, R.ds.at(now, Laws.single(older, n)))), 0n)) & Len(R.acts(as, R.ds.at(now, Laws.single(older, n))), n):
   (inv0, ln0) = p
   (ez0, q0) = inv0
-  %Equal.sym(List<&2, A.Eff>, Laws.batch_effs(Laws.Run{now, as}, Laws.single(older, n)), aeffs(as, R.ds.at(now, Laws.single(older, n))), beffs(now, as, Laws.single(older, n))) : Inv(rp(List.append(&2, A.Eff, all_effs(older, n), _), 0n, R.ds.empty(n)), R.acts(as, R.ds.at(now, Laws.single(older, n))), A.effs.sel(List.append(&2, A.Eff, all_effs(older, n), _), 0n)) & Len(R.acts(as, R.ds.at(now, Laws.single(older, n))), n)
-  %rp_cat(all_effs(older, n), aeffs(as, R.ds.at(now, Laws.single(older, n))), 0n, R.ds.empty(n)) : Inv(_, R.acts(as, R.ds.at(now, Laws.single(older, n))), A.effs.sel(List.append(&2, A.Eff, all_effs(older, n), aeffs(as, R.ds.at(now, Laws.single(older, n)))), 0n)) & Len(R.acts(as, R.ds.at(now, Laws.single(older, n))), n)
-  %sel_cat(all_effs(older, n), aeffs(as, R.ds.at(now, Laws.single(older, n))), 0n) : Inv(rp(aeffs(as, R.ds.at(now, Laws.single(older, n))), A.effs.sel(all_effs(older, n), 0n), rp(all_effs(older, n), 0n, R.ds.empty(n))), R.acts(as, R.ds.at(now, Laws.single(older, n))), _) & Len(R.acts(as, R.ds.at(now, Laws.single(older, n))), n)
-  acts_inv(as, R.ds.at(now, Laws.single(older, n)), rp(all_effs(older, n), 0n, R.ds.empty(n)), A.effs.sel(all_effs(older, n), 0n), n, sm,
-   ((Equal.trans(List<&2, R.Db>, Laws.zero(rp(all_effs(older, n), 0n, R.ds.empty(n))), Laws.zero(Laws.single(older, n)), Laws.zero(R.ds.at(now, Laws.single(older, n))), ez0, Equal.sym(List<&2, R.Db>, Laws.zero(R.ds.at(now, Laws.single(older, n))), Laws.zero(Laws.single(older, n)), z_at(now, Laws.single(older, n)))), q0),
+  %rp_cat(xseffs(all_ents(older, n)), aeffs(as, R.ds.at(now, Laws.single(older, n))), 0n, R.ds.empty(n)) : Inv(_, R.acts(as, R.ds.at(now, Laws.single(older, n))), A.effs.sel(List.append(&2, A.Eff, xseffs(all_ents(older, n)), aeffs(as, R.ds.at(now, Laws.single(older, n)))), 0n)) & Len(R.acts(as, R.ds.at(now, Laws.single(older, n))), n)
+  %sel_cat(xseffs(all_ents(older, n)), aeffs(as, R.ds.at(now, Laws.single(older, n))), 0n) : Inv(rp(aeffs(as, R.ds.at(now, Laws.single(older, n))), A.effs.sel(xseffs(all_ents(older, n)), 0n), rp(xseffs(all_ents(older, n)), 0n, R.ds.empty(n))), R.acts(as, R.ds.at(now, Laws.single(older, n))), _) & Len(R.acts(as, R.ds.at(now, Laws.single(older, n))), n)
+  acts_inv(as, R.ds.at(now, Laws.single(older, n)), rp(xseffs(all_ents(older, n)), 0n, R.ds.empty(n)), A.effs.sel(xseffs(all_ents(older, n)), 0n), n, sm,
+   ((Equal.trans(List<&2, R.Db>, Laws.zero(rp(xseffs(all_ents(older, n)), 0n, R.ds.empty(n))), Laws.zero(Laws.single(older, n)), Laws.zero(R.ds.at(now, Laws.single(older, n))), ez0, Equal.sym(List<&2, R.Db>, Laws.zero(R.ds.at(now, Laws.single(older, n))), Laws.zero(Laws.single(older, n)), z_at(now, Laws.single(older, n)))), q0),
     Equal.trans(Nat, List.length(&2, R.Db, Laws.zero(R.ds.at(now, Laws.single(older, n)))), List.length(&2, R.Db, Laws.zero(Laws.single(older, n))), 1n+n, Equal.cong(List<&2, R.Db>, Nat, z => List.length(&2, R.Db, z), Laws.zero(R.ds.at(now, Laws.single(older, n))), Laws.zero(Laws.single(older, n)), z_at(now, Laws.single(older, n))), ln0)))
 
-# the replay of a history's effects keeps the invariant with the
+# a batch (b), its acts at its time, whose entries hold their effects
+def replay_step(+b: Laws.Run, +now: Nat, +as: List<&2, R.Act>, +older: List<&2, Laws.Run>, +n: Nat, +sm: {KV.small(n) == True{} : Bool}, +eb: {xseffs(Laws.batch_effs(b, Laws.single(older, n))) == aeffs(as, R.ds.at(now, Laws.single(older, n))) : List<&2, A.Eff>}, eo: {R.acts(as, R.ds.at(now, Laws.single(older, n))) == Laws.batch_at(b, Laws.single(older, n)) : R.Ds}, p: Inv(rp(xseffs(all_ents(older, n)), 0n, R.ds.empty(n)), Laws.single(older, n), A.effs.sel(xseffs(all_ents(older, n)), 0n)) & Len(Laws.single(older, n), n)) -> Inv(rp(xseffs(all_ents(Con{b, older}, n)), 0n, R.ds.empty(n)), Laws.single(Con{b, older}, n), A.effs.sel(xseffs(all_ents(Con{b, older}, n)), 0n)) & Len(Laws.single(Con{b, older}, n), n):
+  +fl = Equal.trans(List<&2, A.Eff>, List.append(&2, A.Eff, xseffs(all_ents(older, n)), aeffs(as, R.ds.at(now, Laws.single(older, n)))), List.append(&2, A.Eff, xseffs(all_ents(older, n)), xseffs(Laws.batch_effs(b, Laws.single(older, n)))), xseffs(List.append(&2, A.Ent, all_ents(older, n), Laws.batch_effs(b, Laws.single(older, n)))),
+    Equal.cong(List<&2, A.Eff>, List<&2, A.Eff>, z => List.append(&2, A.Eff, xseffs(all_ents(older, n)), z), aeffs(as, R.ds.at(now, Laws.single(older, n))), xseffs(Laws.batch_effs(b, Laws.single(older, n))), Equal.sym(List<&2, A.Eff>, xseffs(Laws.batch_effs(b, Laws.single(older, n))), aeffs(as, R.ds.at(now, Laws.single(older, n))), eb)),
+    xseffs_app(all_ents(older, n), Laws.batch_effs(b, Laws.single(older, n))))
+  inv_eq(rp(List.append(&2, A.Eff, xseffs(all_ents(older, n)), aeffs(as, R.ds.at(now, Laws.single(older, n)))), 0n, R.ds.empty(n)), rp(xseffs(List.append(&2, A.Ent, all_ents(older, n), Laws.batch_effs(b, Laws.single(older, n)))), 0n, R.ds.empty(n)),
+    R.acts(as, R.ds.at(now, Laws.single(older, n))), Laws.batch_at(b, Laws.single(older, n)),
+    A.effs.sel(List.append(&2, A.Eff, xseffs(all_ents(older, n)), aeffs(as, R.ds.at(now, Laws.single(older, n)))), 0n), A.effs.sel(xseffs(List.append(&2, A.Ent, all_ents(older, n), Laws.batch_effs(b, Laws.single(older, n)))), 0n), n,
+    Equal.cong(List<&2, A.Eff>, R.Ds, z => rp(z, 0n, R.ds.empty(n)), List.append(&2, A.Eff, xseffs(all_ents(older, n)), aeffs(as, R.ds.at(now, Laws.single(older, n)))), xseffs(List.append(&2, A.Ent, all_ents(older, n), Laws.batch_effs(b, Laws.single(older, n)))), fl),
+    eo,
+    Equal.cong(List<&2, A.Eff>, Nat, z => A.effs.sel(z, 0n), List.append(&2, A.Eff, xseffs(all_ents(older, n)), aeffs(as, R.ds.at(now, Laws.single(older, n)))), xseffs(List.append(&2, A.Ent, all_ents(older, n), Laws.batch_effs(b, Laws.single(older, n)))), fl),
+    replay_acts(now, as, older, n, sm, p))
+
+# the replay of a history's entries keeps the invariant with the
 # databases the history left
-def replay_inv(hist: List<&2, Laws.Run>, +n: Nat, +sm: {KV.small(n) == True{} : Bool}) -> Inv(rp(all_effs(hist, n), 0n, R.ds.empty(n)), Laws.single(hist, n), A.effs.sel(all_effs(hist, n), 0n)) & Len(Laws.single(hist, n), n):
+def replay_inv(hist: List<&2, Laws.Run>, +n: Nat, +sm: {KV.small(n) == True{} : Bool}) -> Inv(rp(xseffs(all_ents(hist, n)), 0n, R.ds.empty(n)), Laws.single(hist, n), A.effs.sel(xseffs(all_ents(hist, n)), 0n)) & Len(Laws.single(hist, n), n):
   match hist:
     case Nil{}:
       (({==}, ({==}, {==})), len_empty(n))
     case Con{Laws.Run{+now, +as}, +older}:
-      replay_step(now, as, older, n, sm, replay_inv(older, n, sm))
+      replay_step(Laws.Run{now, as}, now, as, older, n, sm, bflat_run(now, as, Laws.single(older, n)), {==}, replay_inv(older, n, sm))
+    case Con{Laws.RunTx{+now, +as}, +older}:
+      replay_step(Laws.RunTx{now, as}, now, as, older, n, sm, bflat_tx(now, as, Laws.single(older, n)), {==}, replay_inv(older, n, sm))
 
-# the file after a history: the entries of its effects, and the database
-# the last selected
-def file_all(hist: List<&2, Laws.Run>, +n: Nat) -> {Laws.file(hist, n) == (A.encode(A.effs.args(all_effs(hist, n), 0n)), A.effs.sel(all_effs(hist, n), 0n)) : String & Nat}:
+# the entries of entries, then of more, after the selection the first
+# leave
+def eargs_cat(xs: List<&2, A.Ent>, -ys: List<&2, A.Ent>, +sel: Nat) -> {List.append(&2, List<&2, String>, A.ents.args(xs, sel), A.ents.args(ys, A.ents.sel(xs, sel))) == A.ents.args(List.append(&2, A.Ent, xs, ys), sel) : List<&2, List<&2, String>>}:
+  match xs:
+    case Nil{}:
+      {==}
+    case Con{+x, +rest}:
+      Equal.trans(List<&2, List<&2, String>>, List.append(&2, List<&2, String>, List.append(&2, List<&2, String>, A.ent.args(x, sel), A.ents.args(rest, A.ent.sel(x, sel))), A.ents.args(ys, A.ents.sel(rest, A.ent.sel(x, sel)))),
+        List.append(&2, List<&2, String>, A.ent.args(x, sel), List.append(&2, List<&2, String>, A.ents.args(rest, A.ent.sel(x, sel)), A.ents.args(ys, A.ents.sel(rest, A.ent.sel(x, sel))))),
+        List.append(&2, List<&2, String>, A.ent.args(x, sel), A.ents.args(List.append(&2, A.Ent, rest, ys), A.ent.sel(x, sel))),
+        lapp_assoc_s(A.ent.args(x, sel), A.ents.args(rest, A.ent.sel(x, sel)), A.ents.args(ys, A.ents.sel(rest, A.ent.sel(x, sel)))),
+        Equal.cong(List<&2, List<&2, String>>, List<&2, List<&2, String>>, z => List.append(&2, List<&2, String>, A.ent.args(x, sel), z), List.append(&2, List<&2, String>, A.ents.args(rest, A.ent.sel(x, sel)), A.ents.args(ys, A.ents.sel(rest, A.ent.sel(x, sel)))), A.ents.args(List.append(&2, A.Ent, rest, ys), A.ent.sel(x, sel)), eargs_cat(rest, ys, A.ent.sel(x, sel))))
+
+def esel_cat(xs: List<&2, A.Ent>, -ys: List<&2, A.Ent>, +sel: Nat) -> {A.ents.sel(ys, A.ents.sel(xs, sel)) == A.ents.sel(List.append(&2, A.Ent, xs, ys), sel) : Nat}:
+  match xs:
+    case Nil{}:
+      {==}
+    case Con{+x, rest}:
+      esel_cat(rest, ys, A.ent.sel(x, sel))
+
+# the file after a history: the history's entries, and the database the
+# last selected
+def file_all(hist: List<&2, Laws.Run>, +n: Nat) -> {Laws.file(hist, n) == (A.encode(A.ents.args(all_ents(hist, n), 0n)), A.ents.sel(all_ents(hist, n), 0n)) : String & Nat}:
   match hist:
     case Nil{}:
       {==}
     case Con{+b, +older}:
-      %Equal.sym(String & Nat, Laws.file(older, n), (A.encode(A.effs.args(all_effs(older, n), 0n)), A.effs.sel(all_effs(older, n), 0n)), file_all(older, n)) : {Laws.file.put(_, Laws.batch_effs(b, Laws.single(older, n))) == (A.encode(A.effs.args(List.append(&2, A.Eff, all_effs(older, n), Laws.batch_effs(b, Laws.single(older, n))), 0n)), A.effs.sel(List.append(&2, A.Eff, all_effs(older, n), Laws.batch_effs(b, Laws.single(older, n))), 0n)) : String & Nat}
-      %args_cat(all_effs(older, n), Laws.batch_effs(b, Laws.single(older, n)), 0n) : {(A.encode(A.effs.args(all_effs(older, n), 0n)) ++ A.encode(A.effs.args(Laws.batch_effs(b, Laws.single(older, n)), A.effs.sel(all_effs(older, n), 0n))), A.effs.sel(Laws.batch_effs(b, Laws.single(older, n)), A.effs.sel(all_effs(older, n), 0n))) == (A.encode(_), A.effs.sel(List.append(&2, A.Eff, all_effs(older, n), Laws.batch_effs(b, Laws.single(older, n))), 0n)) : String & Nat}
-      %sel_cat(all_effs(older, n), Laws.batch_effs(b, Laws.single(older, n)), 0n) : {(A.encode(A.effs.args(all_effs(older, n), 0n)) ++ A.encode(A.effs.args(Laws.batch_effs(b, Laws.single(older, n)), A.effs.sel(all_effs(older, n), 0n))), A.effs.sel(Laws.batch_effs(b, Laws.single(older, n)), A.effs.sel(all_effs(older, n), 0n))) == (A.encode(List.append(&2, List<&2, String>, A.effs.args(all_effs(older, n), 0n), A.effs.args(Laws.batch_effs(b, Laws.single(older, n)), A.effs.sel(all_effs(older, n), 0n)))), _) : String & Nat}
-      %enc_cat(A.effs.args(all_effs(older, n), 0n), A.effs.args(Laws.batch_effs(b, Laws.single(older, n)), A.effs.sel(all_effs(older, n), 0n))) : {(A.encode(A.effs.args(all_effs(older, n), 0n)) ++ A.encode(A.effs.args(Laws.batch_effs(b, Laws.single(older, n)), A.effs.sel(all_effs(older, n), 0n))), A.effs.sel(Laws.batch_effs(b, Laws.single(older, n)), A.effs.sel(all_effs(older, n), 0n))) == (_, A.effs.sel(Laws.batch_effs(b, Laws.single(older, n)), A.effs.sel(all_effs(older, n), 0n))) : String & Nat}
+      %Equal.sym(String & Nat, Laws.file(older, n), (A.encode(A.ents.args(all_ents(older, n), 0n)), A.ents.sel(all_ents(older, n), 0n)), file_all(older, n)) : {Laws.file.put(_, Laws.batch_effs(b, Laws.single(older, n))) == (A.encode(A.ents.args(List.append(&2, A.Ent, all_ents(older, n), Laws.batch_effs(b, Laws.single(older, n))), 0n)), A.ents.sel(List.append(&2, A.Ent, all_ents(older, n), Laws.batch_effs(b, Laws.single(older, n))), 0n)) : String & Nat}
+      %eargs_cat(all_ents(older, n), Laws.batch_effs(b, Laws.single(older, n)), 0n) : {(A.encode(A.ents.args(all_ents(older, n), 0n)) ++ A.encode(A.ents.args(Laws.batch_effs(b, Laws.single(older, n)), A.ents.sel(all_ents(older, n), 0n))), A.ents.sel(Laws.batch_effs(b, Laws.single(older, n)), A.ents.sel(all_ents(older, n), 0n))) == (A.encode(_), A.ents.sel(List.append(&2, A.Ent, all_ents(older, n), Laws.batch_effs(b, Laws.single(older, n))), 0n)) : String & Nat}
+      %esel_cat(all_ents(older, n), Laws.batch_effs(b, Laws.single(older, n)), 0n) : {(A.encode(A.ents.args(all_ents(older, n), 0n)) ++ A.encode(A.ents.args(Laws.batch_effs(b, Laws.single(older, n)), A.ents.sel(all_ents(older, n), 0n))), A.ents.sel(Laws.batch_effs(b, Laws.single(older, n)), A.ents.sel(all_ents(older, n), 0n))) == (A.encode(List.append(&2, List<&2, String>, A.ents.args(all_ents(older, n), 0n), A.ents.args(Laws.batch_effs(b, Laws.single(older, n)), A.ents.sel(all_ents(older, n), 0n)))), _) : String & Nat}
+      %enc_cat(A.ents.args(all_ents(older, n), 0n), A.ents.args(Laws.batch_effs(b, Laws.single(older, n)), A.ents.sel(all_ents(older, n), 0n))) : {(A.encode(A.ents.args(all_ents(older, n), 0n)) ++ A.encode(A.ents.args(Laws.batch_effs(b, Laws.single(older, n)), A.ents.sel(all_ents(older, n), 0n))), A.ents.sel(Laws.batch_effs(b, Laws.single(older, n)), A.ents.sel(all_ents(older, n), 0n))) == (_, A.ents.sel(Laws.batch_effs(b, Laws.single(older, n)), A.ents.sel(all_ents(older, n), 0n))) : String & Nat}
       {==}
 
-def aof_all(+hist: List<&2, Laws.Run>, +n: Nat) -> {Laws.aof(hist, n) == A.encode(A.effs.args(all_effs(hist, n), 0n)) : String}:
-  Equal.cong(String & Nat, String, p => Pair.fst(String, Nat, p), Laws.file(hist, n), (A.encode(A.effs.args(all_effs(hist, n), 0n)), A.effs.sel(all_effs(hist, n), 0n)), file_all(hist, n))
+def aof_all(+hist: List<&2, Laws.Run>, +n: Nat) -> {Laws.aof(hist, n) == A.encode(A.ents.args(all_ents(hist, n), 0n)) : String}:
+  Equal.cong(String & Nat, String, p => Pair.fst(String, Nat, p), Laws.file(hist, n), (A.encode(A.ents.args(all_ents(hist, n), 0n)), A.ents.sel(all_ents(hist, n), 0n)), file_all(hist, n))
 
-def recover_go(+hist: List<&2, Laws.Run>, +n: Nat, p: Inv(rp(all_effs(hist, n), 0n, R.ds.empty(n)), Laws.single(hist, n), A.effs.sel(all_effs(hist, n), 0n)) & Len(Laws.single(hist, n), n)) -> {Laws.zero.rest(A.restore(Laws.aof(hist, n), n)) == (Laws.zero(Laws.single(hist, n)), "") : List<&2, R.Db> & String}:
+# Marks
+# ~~~~~
+# No entry of an effect is a mark (the one word MULTI or EXEC): each is
+# a command of two words or more, or of one word that is neither
+# (FLUSHDB, FLUSHALL, a DEL or MSET of nothing). So, read from the end, a
+# file's whole entries meet the EXEC of each transaction before its MULTI,
+# and the start reverts none of them (untx_all, untx_keep); a file cut
+# inside a transaction ends with its MULTI and entries of its effects,
+# and the start reverts exactly these (untx_open).
+
+# entries none of which is a mark
+def NM(xs: List<&2, List<&2, String>>) -> Type:
+  match xs:
+    case Nil{}:
+      Unit
+    case Con{x, rest}:
+      {A.mark(x) == 0n : Nat} & NM(rest)
+
+def mk_del(ks: List<&2, String>) -> {A.mark("DEL" <> ks) == 0n : Nat}:
+  match ks:
+    case Nil{}:
+      {==}
+    case Con{k, rest}:
+      {==}
+
+def mk_mset(ps: List<&2, R.KVPair>) -> {A.mark("MSET" <> A.pair_args(ps)) == 0n : Nat}:
+  match ps:
+    case Nil{}:
+      {==}
+    case Con{R.KP{k, v}, rest}:
+      {==}
+
+def mk_ttl(-k: String, -v: String, ttl: R.SetTtl) -> {A.mark(A.ttl.args(k, v, ttl)) == 0n : Nat}:
+  match ttl:
+    case R.TNone{}:
+      {==}
+    case R.TKeep{}:
+      {==}
+    case R.TAt{t}:
+      {==}
+
+def mk_hash(-k: String, op: R.HWrite) -> {A.mark(A.hash.args(k, op)) == 0n : Nat}:
+  match op:
+    case R.HWSet{ps, mset}:
+      {==}
+    case R.HWSetNx{f, v}:
+      {==}
+    case R.HWDel{fs}:
+      {==}
+    case R.HWIncr{f, by}:
+      {==}
+    case R.HWNew{ps}:
+      {==}
+    case R.HWIncrF{f, by}:
+      {==}
+
+def mk_list(-k: String, op: R.LWrite) -> {A.mark(A.list.args(k, op)) == 0n : Nat}:
+  match op:
+    case R.LWPush{left, xs}:
+      {==}
+    case R.LWPushX{left, xs}:
+      {==}
+    case R.LWPop{left}:
+      {==}
+    case R.LWPopN{left, c}:
+      {==}
+    case R.LWSet{i, v}:
+      {==}
+    case R.LWBefore{p, v}:
+      {==}
+    case R.LWAfter{p, v}:
+      {==}
+    case R.LWRem{c, v}:
+      {==}
+    case R.LWTrim{a, b}:
+      {==}
+    case R.LWNew{left, xs}:
+      {==}
+
+def mk_mems(-k: String, op: R.SWrite) -> {A.mark(A.mems.args(k, op)) == 0n : Nat}:
+  match op:
+    case R.SWAdd{ms}:
+      {==}
+    case R.SWRem{ms}:
+      {==}
+    case R.SWNew{ms}:
+      {==}
+    case R.SWPop{r}:
+      {==}
+    case R.SWPopN{c, r}:
+      {==}
+
+def mk_zset(-k: String, op: R.ZWrite) -> {A.mark(A.zset.args(k, op)) == 0n : Nat}:
+  match op:
+    case R.ZWAdd{o, ps}:
+      {==}
+    case R.ZWRem{ms}:
+      {==}
+    case R.ZWNew{o, ps}:
+      {==}
+    case R.ZWRemRank{a, b}:
+      {==}
+    case R.ZWRemScore{a, b}:
+      {==}
+    case R.ZWRemLex{a, b}:
+      {==}
+    case R.ZWPop{max}:
+      {==}
+    case R.ZWPopN{max, c}:
+      {==}
+
+def mk_upd(-k: String, op: R.UpdOp) -> {A.mark(A.upd.args(k, op)) == 0n : Nat}:
+  match op:
+    case R.USetNx{v}:
+      {==}
+    case R.UGet{o}:
+      {==}
+    case R.UAppend{v}:
+      {==}
+    case R.USet{v, cond, ttl, name}:
+      mk_ttl(k, v, ttl)
+    case R.UGetEx{o}:
+      {==}
+    case R.UGetDel{}:
+      {==}
+    case R.UExpire{t, c, name}:
+      {==}
+    case R.UPersist{}:
+      {==}
+    case R.UIncr{by}:
+      {==}
+    case R.URange{o, s}:
+      {==}
+    case R.USetBit{o, on}:
+      {==}
+    case R.UBitfield{ops}:
+      {==}
+    case R.UHash{op}:
+      mk_hash(k, op)
+    case R.UList{op}:
+      mk_list(k, op)
+    case R.UMems{op}:
+      mk_mems(k, op)
+    case R.UIncrF{by}:
+      {==}
+    case R.UZset{op}:
+      mk_zset(k, op)
+
+def mk_lmove(b: Bool, -s: String, -t: String, -e: R.LEnds) -> {A.mark(A.lmove.args.of(b, s, t, e)) == 0n : Nat}:
+  match b:
+    case True{}:
+      {==}
+    case False{}:
+      {==}
+
+def mk_smove(b: Bool, -s: String, -d: String, -m: String) -> {A.mark(A.smove.args.of(b, s, d, m)) == 0n : Nat}:
+  match b:
+    case True{}:
+      {==}
+    case False{}:
+      {==}
+
+# the strings of a logged command are never a mark
+def mark_args(c: R.Cmd) -> {A.mark(A.args(c)) == 0n : Nat}:
+  match c:
+    case R.Ping{}:
+      {==}
+    case R.Echo{m}:
+      {==}
+    case R.Get{k}:
+      {==}
+    case R.Set{k, v}:
+      {==}
+    case R.Del{ks}:
+      mk_del(ks)
+    case R.Exists{ks}:
+      {==}
+    case R.IncrBy{k, by}:
+      {==}
+    case R.MGet{ks}:
+      {==}
+    case R.MSet{ps}:
+      mk_mset(ps)
+    case R.DbSize{}:
+      {==}
+    case R.FlushDb{}:
+      {==}
+    case R.Keys{p}:
+      {==}
+    case R.Scan{a}:
+      {==}
+    case R.Peek{k, o}:
+      {==}
+    case R.Upd{k, op}:
+      mk_upd(k, op)
+    case R.MSetNx{ps}:
+      {==}
+    case R.Rename{s, d, nx}:
+      {==}
+    case R.BitOp{op, d, srcs}:
+      {==}
+    case R.Own{o}:
+      {==}
+    case R.Bad{r}:
+      {==}
+    case R.LMove{s, t, +e}:
+      mk_lmove(R.ends.fresh(e), s, t, e)
+    case R.LMPop{ks, left, c}:
+      {==}
+    case R.SOp{k, ks}:
+      {==}
+    case R.SStore{k, d, srcs}:
+      {==}
+    case R.SMv{s, d, +w}:
+      mk_smove(R.smv.fresh(w), s, d, R.smv.member(w))
+    case R.ZOp{k, ks}:
+      {==}
+    case R.ZStore{k, d, srcs}:
+      {==}
+    case R.ZRangeStore{d, s, q}:
+      {==}
+    case R.ZMPop{ks, max, c}:
+      {==}
+
+# an effect's entries are no mark
+def nm_put(b: Bool, -j: Nat, -x: List<&2, String>, hx: {A.mark(x) == 0n : Nat}) -> NM(A.sel.put(b, j, [x])):
+  match b:
+    case True{}:
+      (hx, Unit{})
+    case False{}:
+      ({==}, (hx, Unit{}))
+
+def nm_eff(e: A.Eff, +sel: Nat) -> NM(A.eff.args(e, sel)):
+  match e:
+    case A.EDb{+j, +c}:
+      nm_put(Nat.is_eq(j, sel), j, A.args(c), mark_args(c))
+    case A.ESwap{a, b}:
+      ({==}, Unit{})
+    case A.EMove{k, +src, dst}:
+      nm_put(Nat.is_eq(src, sel), src, ["MOVE", k, Nat.show(dst)], {==})
+    case A.ECopy{s, d, +from, to}:
+      nm_put(Nat.is_eq(from, sel), from, ["COPY", s, d, "DB", Nat.show(to), "REPLACE"], {==})
+    case A.EWipe{}:
+      ({==}, Unit{})
+
+def nm_cat(-x: List<&2, String>, -rest: List<&2, List<&2, String>>, -ys: List<&2, List<&2, String>>, h: {A.mark(x) == 0n : Nat} & NM(rest), hy: NM(ys), ih: NM(rest) -> NM(ys) -> NM(List.append(&2, List<&2, String>, rest, ys))) -> NM(Con{x, List.append(&2, List<&2, String>, rest, ys)}):
+  (hx, hr) = h
+  (hx, ih(hr)(hy))
+
+def nm_app(xs: List<&2, List<&2, String>>, -ys: List<&2, List<&2, String>>) -> NM(xs) -> NM(ys) -> NM(List.append(&2, List<&2, String>, xs, ys)):
+  match xs:
+    case Nil{}:
+      hx => hy => hy
+    case Con{x, rest}:
+      hx => hy => nm_cat(x, rest, ys, hx, hy, nm_app(rest, ys))
+
+# effects' entries are no mark
+def nm_effs(es: List<&2, A.Eff>, +sel: Nat) -> NM(A.effs.args(es, sel)):
+  match es:
+    case Nil{}:
+      Unit{}
+    case Con{+e, rest}:
+      nm_app(A.eff.args(e, sel), A.effs.args(rest, A.eff.sel(e, sel)))(nm_eff(e, sel))(nm_effs(rest, A.eff.sel(e, sel)))
+
+def rgo_app(a: List<&2, List<&2, String>>, -b: List<&2, List<&2, String>>, -w: List<&2, List<&2, String>>) -> {List.reverse.go(&2, List<&2, String>, b, List.reverse.go(&2, List<&2, String>, a, w)) == List.reverse.go(&2, List<&2, String>, List.append(&2, List<&2, String>, a, b), w) : List<&2, List<&2, String>>}:
+  match a:
+    case Nil{}:
+      {==}
+    case Con{h, t}:
+      rgo_app(t, b, h <> w)
+
+# entries with no mark, read from the end, leave the reading of what is
+# before them as it was
+def cq.con(+x: List<&2, String>, -rest: List<&2, List<&2, String>>, -w: List<&2, List<&2, String>>, h: {A.mark(x) == 0n : Nat} & NM(rest), ih: NM(rest) -> {A.cut.go(List.reverse.go(&2, List<&2, String>, rest, x <> w), 0n) == A.cut.go(x <> w, 0n) : Maybe<&2, List<&2, List<&2, String>>>}) -> {A.cut.go(List.reverse.go(&2, List<&2, String>, rest, x <> w), 0n) == A.cut.go(w, 0n) : Maybe<&2, List<&2, List<&2, String>>>}:
+  (hx, hr) = h
+  %hx : {A.cut.go(List.reverse.go(&2, List<&2, String>, rest, x <> w), 0n) == A.cut.go(w, _) : Maybe<&2, List<&2, List<&2, String>>>}
+  ih(hr)
+
+def cq(q: List<&2, List<&2, String>>, -w: List<&2, List<&2, String>>) -> NM(q) -> {A.cut.go(List.reverse.go(&2, List<&2, String>, q, w), 0n) == A.cut.go(w, 0n) : Maybe<&2, List<&2, List<&2, String>>>}:
+  match q:
+    case Nil{}:
+      h => {==}
+    case Con{+x, rest}:
+      h => cq.con(x, rest, w, h, cq(rest, x <> w))
+
+# a MULTI read: the entries before it; an EXEC read: none reverted
+def cg1(r: List<&2, List<&2, String>>) -> {A.cut.go(r, 1n) == Some{r} : Maybe<&2, List<&2, List<&2, String>>>}:
+  match r:
+    case Nil{}:
+      {==}
+    case Con{x, rest}:
+      {==}
+
+def cg2(r: List<&2, List<&2, String>>) -> {A.cut.go(r, 2n) == None{} : Maybe<&2, List<&2, List<&2, String>>>}:
+  match r:
+    case Nil{}:
+      {==}
+    case Con{x, rest}:
+      {==}
+
+# a whole entry read from the end, after w, where reading w reverts
+# nothing: nothing is reverted (an effect's entries are no mark, and a
+# transaction's EXEC is read first)
+def cent.tx(+es: List<&2, A.Eff>, +sel: Nat, w: List<&2, List<&2, String>>) -> {A.cut.go(List.reverse.go(&2, List<&2, String>, A.ent.args(A.ETx{es}, sel), w), 0n) == None{} : Maybe<&2, List<&2, List<&2, String>>>}:
+  %rgo_app(A.effs.args(es, sel), [["EXEC"]], ["MULTI"] <> w) : {A.cut.go(_, 0n) == None{} : Maybe<&2, List<&2, List<&2, String>>>}
+  cg2(List.reverse.go(&2, List<&2, String>, A.effs.args(es, sel), ["MULTI"] <> w))
+
+def cent(x: A.Ent, +sel: Nat, +w: List<&2, List<&2, String>>) -> {A.cut.go(w, 0n) == None{} : Maybe<&2, List<&2, List<&2, String>>>} -> {A.cut.go(List.reverse.go(&2, List<&2, String>, A.ent.args(x, sel), w), 0n) == None{} : Maybe<&2, List<&2, List<&2, String>>>}:
+  match x:
+    case A.EOne{+e}:
+      h => Equal.trans(Maybe<&2, List<&2, List<&2, String>>>, A.cut.go(List.reverse.go(&2, List<&2, String>, A.eff.args(e, sel), w), 0n), A.cut.go(w, 0n), None{}, cq(A.eff.args(e, sel), w)(nm_eff(e, sel)), h)
+    case A.ETx{+es}:
+      h => cent.tx(es, sel, w)
+
+def cgn.con(+x: A.Ent, -rest: List<&2, A.Ent>, +sel: Nat, -w: List<&2, List<&2, String>>, h1: {A.cut.go(List.reverse.go(&2, List<&2, String>, A.ent.args(x, sel), w), 0n) == None{} : Maybe<&2, List<&2, List<&2, String>>>}, ih: {A.cut.go(List.reverse.go(&2, List<&2, String>, A.ent.args(x, sel), w), 0n) == None{} : Maybe<&2, List<&2, List<&2, String>>>} -> {A.cut.go(List.reverse.go(&2, List<&2, String>, A.ents.args(rest, A.ent.sel(x, sel)), List.reverse.go(&2, List<&2, String>, A.ent.args(x, sel), w)), 0n) == None{} : Maybe<&2, List<&2, List<&2, String>>>}) -> {A.cut.go(List.reverse.go(&2, List<&2, String>, A.ents.args(Con{x, rest}, sel), w), 0n) == None{} : Maybe<&2, List<&2, List<&2, String>>>}:
+  %rgo_app(A.ent.args(x, sel), A.ents.args(rest, A.ent.sel(x, sel)), w) : {A.cut.go(_, 0n) == None{} : Maybe<&2, List<&2, List<&2, String>>>}
+  ih(h1)
+
+# whole entries read from the end, after w, where reading w reverts
+# nothing: nothing is reverted
+def cgn(xs: List<&2, A.Ent>, +sel: Nat, +w: List<&2, List<&2, String>>) -> {A.cut.go(w, 0n) == None{} : Maybe<&2, List<&2, List<&2, String>>>} -> {A.cut.go(List.reverse.go(&2, List<&2, String>, A.ents.args(xs, sel), w), 0n) == None{} : Maybe<&2, List<&2, List<&2, String>>>}:
+  match xs:
+    case Nil{}:
+      h => h
+    case Con{+x, rest}:
+      h => cgn.con(x, rest, sel, w, cent(x, sel, w)(h), cgn(rest, A.ent.sel(x, sel), List.reverse.go(&2, List<&2, String>, A.ent.args(x, sel), w)))
+
+def app_nil_s(xs: List<&2, List<&2, String>>) -> {List.append(&2, List<&2, String>, xs, Nil{}) == xs : List<&2, List<&2, String>>}:
+  match xs:
+    case Nil{}:
+      {==}
+    case Con{h, +t}:
+      Equal.cong(List<&2, List<&2, String>>, List<&2, List<&2, String>>, z => h <> z, List.append(&2, List<&2, String>, t, Nil{}), t, app_nil_s(t))
+
+def rev_go_app_s(e: List<&2, List<&2, String>>, -es: List<&2, List<&2, String>>, -ys: List<&2, List<&2, String>>) -> {List.reverse.go(&2, List<&2, String>, List.reverse.go(&2, List<&2, String>, e, es), ys) == List.reverse.go(&2, List<&2, String>, es, List.append(&2, List<&2, String>, e, ys)) : List<&2, List<&2, String>>}:
+  match e:
+    case Nil{}:
+      {==}
+    case Con{h, t}:
+      rev_go_app_s(t, h <> es, ys)
+
+def rev_rev_s(+xs: List<&2, List<&2, String>>) -> {List.reverse(&2, List<&2, String>, List.reverse.go(&2, List<&2, String>, xs, Nil{})) == xs : List<&2, List<&2, String>>}:
+  Equal.trans(List<&2, List<&2, String>>, List.reverse.go(&2, List<&2, String>, List.reverse.go(&2, List<&2, String>, xs, Nil{}), Nil{}), List.append(&2, List<&2, String>, xs, Nil{}), xs, rev_go_app_s(xs, Nil{}, Nil{}), app_nil_s(xs))
+
+# a file's whole entries: the start reverts none of them
+def untx_all(+xs: List<&2, A.Ent>, +sel: Nat) -> {A.untx(A.ents.args(xs, sel)) == A.ents.args(xs, sel) : List<&2, List<&2, String>>}:
+  %Equal.sym(Maybe<&2, List<&2, List<&2, String>>>, A.cut.go(List.reverse.go(&2, List<&2, String>, A.ents.args(xs, sel), Nil{}), 0n), None{}, cgn(xs, sel, Nil{})({==})) : {A.untx.of(_, A.ents.args(xs, sel)) == A.ents.args(xs, sel) : List<&2, List<&2, String>>}
+  {==}
+
+# whole entries, then entries with no mark (a part of an effect's
+# entries): the start reverts none of them
+def untx_keep(+xs: List<&2, A.Ent>, +sel: Nat, +t: List<&2, List<&2, String>>, ht: NM(t)) -> {A.untx(List.append(&2, List<&2, String>, A.ents.args(xs, sel), t)) == List.append(&2, List<&2, String>, A.ents.args(xs, sel), t) : List<&2, List<&2, String>>}:
+  +e = Equal.trans(Maybe<&2, List<&2, List<&2, String>>>, A.cut.go(List.reverse.go(&2, List<&2, String>, List.append(&2, List<&2, String>, A.ents.args(xs, sel), t), Nil{}), 0n), A.cut.go(List.reverse.go(&2, List<&2, String>, t, List.reverse.go(&2, List<&2, String>, A.ents.args(xs, sel), Nil{})), 0n), None{},
+    Equal.cong(List<&2, List<&2, String>>, Maybe<&2, List<&2, List<&2, String>>>, z => A.cut.go(z, 0n), List.reverse.go(&2, List<&2, String>, List.append(&2, List<&2, String>, A.ents.args(xs, sel), t), Nil{}), List.reverse.go(&2, List<&2, String>, t, List.reverse.go(&2, List<&2, String>, A.ents.args(xs, sel), Nil{})), Equal.sym(List<&2, List<&2, String>>, List.reverse.go(&2, List<&2, String>, t, List.reverse.go(&2, List<&2, String>, A.ents.args(xs, sel), Nil{})), List.reverse.go(&2, List<&2, String>, List.append(&2, List<&2, String>, A.ents.args(xs, sel), t), Nil{}), rgo_app(A.ents.args(xs, sel), t, Nil{}))),
+    Equal.trans(Maybe<&2, List<&2, List<&2, String>>>, A.cut.go(List.reverse.go(&2, List<&2, String>, t, List.reverse.go(&2, List<&2, String>, A.ents.args(xs, sel), Nil{})), 0n), A.cut.go(List.reverse.go(&2, List<&2, String>, A.ents.args(xs, sel), Nil{}), 0n), None{}, cq(t, List.reverse.go(&2, List<&2, String>, A.ents.args(xs, sel), Nil{}))(ht), cgn(xs, sel, Nil{})({==})))
+  %Equal.sym(Maybe<&2, List<&2, List<&2, String>>>, A.cut.go(List.reverse.go(&2, List<&2, String>, List.append(&2, List<&2, String>, A.ents.args(xs, sel), t), Nil{}), 0n), None{}, e) : {A.untx.of(_, List.append(&2, List<&2, String>, A.ents.args(xs, sel), t)) == List.append(&2, List<&2, String>, A.ents.args(xs, sel), t) : List<&2, List<&2, String>>}
+  {==}
+
+# whole entries, then a MULTI and entries with no mark (a transaction
+# cut short): the start reverts the transaction
+def untx_open(+xs: List<&2, A.Ent>, +sel: Nat, +q: List<&2, List<&2, String>>, hq: NM(q)) -> {A.untx(List.append(&2, List<&2, String>, A.ents.args(xs, sel), ["MULTI"] <> q)) == A.ents.args(xs, sel) : List<&2, List<&2, String>>}:
+  +e = Equal.trans(Maybe<&2, List<&2, List<&2, String>>>, A.cut.go(List.reverse.go(&2, List<&2, String>, List.append(&2, List<&2, String>, A.ents.args(xs, sel), ["MULTI"] <> q), Nil{}), 0n), A.cut.go(List.reverse.go(&2, List<&2, String>, q, ["MULTI"] <> List.reverse.go(&2, List<&2, String>, A.ents.args(xs, sel), Nil{})), 0n), Some{List.reverse.go(&2, List<&2, String>, A.ents.args(xs, sel), Nil{})},
+    Equal.cong(List<&2, List<&2, String>>, Maybe<&2, List<&2, List<&2, String>>>, z => A.cut.go(z, 0n), List.reverse.go(&2, List<&2, String>, List.append(&2, List<&2, String>, A.ents.args(xs, sel), ["MULTI"] <> q), Nil{}), List.reverse.go(&2, List<&2, String>, ["MULTI"] <> q, List.reverse.go(&2, List<&2, String>, A.ents.args(xs, sel), Nil{})), Equal.sym(List<&2, List<&2, String>>, List.reverse.go(&2, List<&2, String>, ["MULTI"] <> q, List.reverse.go(&2, List<&2, String>, A.ents.args(xs, sel), Nil{})), List.reverse.go(&2, List<&2, String>, List.append(&2, List<&2, String>, A.ents.args(xs, sel), ["MULTI"] <> q), Nil{}), rgo_app(A.ents.args(xs, sel), ["MULTI"] <> q, Nil{}))),
+    Equal.trans(Maybe<&2, List<&2, List<&2, String>>>, A.cut.go(List.reverse.go(&2, List<&2, String>, q, ["MULTI"] <> List.reverse.go(&2, List<&2, String>, A.ents.args(xs, sel), Nil{})), 0n), A.cut.go(["MULTI"] <> List.reverse.go(&2, List<&2, String>, A.ents.args(xs, sel), Nil{}), 0n), Some{List.reverse.go(&2, List<&2, String>, A.ents.args(xs, sel), Nil{})}, cq(q, ["MULTI"] <> List.reverse.go(&2, List<&2, String>, A.ents.args(xs, sel), Nil{}))(hq), cg1(List.reverse.go(&2, List<&2, String>, A.ents.args(xs, sel), Nil{}))))
+  %Equal.sym(Maybe<&2, List<&2, List<&2, String>>>, A.cut.go(List.reverse.go(&2, List<&2, String>, List.append(&2, List<&2, String>, A.ents.args(xs, sel), ["MULTI"] <> q), Nil{}), 0n), Some{List.reverse.go(&2, List<&2, String>, A.ents.args(xs, sel), Nil{})}, e) : {A.untx.of(_, List.append(&2, List<&2, String>, A.ents.args(xs, sel), ["MULTI"] <> q)) == A.ents.args(xs, sel) : List<&2, List<&2, String>>}
+  rev_rev_s(A.ents.args(xs, sel))
+
+# all of a list dropped
+def drop_len(xs: List<&2, List<&2, String>>) -> {List.drop(&2, List<&2, String>, xs, List.length(&2, List<&2, String>, xs)) == Nil{} : List<&2, List<&2, String>>}:
+  match xs:
+    case Nil{}:
+      {==}
+    case Con{x, rest}:
+      drop_len(rest)
+
+def recover_go(+hist: List<&2, Laws.Run>, +n: Nat, p: Inv(rp(xseffs(all_ents(hist, n)), 0n, R.ds.empty(n)), Laws.single(hist, n), A.effs.sel(xseffs(all_ents(hist, n)), 0n)) & Len(Laws.single(hist, n), n)) -> {Laws.zero.rest(A.restore(Laws.aof(hist, n), n)) == (Laws.zero(Laws.single(hist, n)), "") : List<&2, R.Db> & String}:
   (inv, ln) = p
   (ez, q) = inv
-  %Equal.sym(String, Laws.aof(hist, n), A.encode(A.effs.args(all_effs(hist, n), 0n)), aof_all(hist, n)) : {Laws.zero.rest(A.restore(_, n)) == (Laws.zero(Laws.single(hist, n)), "") : List<&2, R.Db> & String}
-  %Equal.sym(List<&2, List<&2, String>> & String, A.load(A.encode(A.effs.args(all_effs(hist, n), 0n))), (A.effs.args(all_effs(hist, n), 0n), ""), Laws.aof_load(A.effs.args(all_effs(hist, n), 0n))) : {Laws.zero.rest(A.restore.of(_, n)) == (Laws.zero(Laws.single(hist, n)), "") : List<&2, R.Db> & String}
-  %Equal.sym(R.Ds, R.acts(A.file.acts(A.parse_all(A.effs.args(all_effs(hist, n), 0n))), R.ds.empty(n)), rp(all_effs(hist, n), 0n, R.ds.empty(n)), rp_file(all_effs(hist, n), 0n, R.ds.empty(n))) : {(Laws.zero(_), "") == (Laws.zero(Laws.single(hist, n)), "") : List<&2, R.Db> & String}
-  Equal.cong(List<&2, R.Db>, List<&2, R.Db> & String, z => (z, ""), Laws.zero(rp(all_effs(hist, n), 0n, R.ds.empty(n))), Laws.zero(Laws.single(hist, n)), ez)
+  %Equal.sym(String, Laws.aof(hist, n), A.encode(A.ents.args(all_ents(hist, n), 0n)), aof_all(hist, n)) : {Laws.zero.rest(A.restore(_, n)) == (Laws.zero(Laws.single(hist, n)), "") : List<&2, R.Db> & String}
+  %Equal.sym(List<&2, List<&2, String>> & String, A.load(A.encode(A.ents.args(all_ents(hist, n), 0n))), (A.ents.args(all_ents(hist, n), 0n), ""), Laws.aof_load(A.ents.args(all_ents(hist, n), 0n))) : {Laws.zero.rest(A.restore.of(_, n)) == (Laws.zero(Laws.single(hist, n)), "") : List<&2, R.Db> & String}
+  %Equal.sym(List<&2, List<&2, String>>, A.untx(A.ents.args(all_ents(hist, n), 0n)), A.ents.args(all_ents(hist, n), 0n), untx_all(all_ents(hist, n), 0n)) : {(Laws.zero(A.replay(_, n)), A.encode(List.drop(&2, List<&2, String>, A.ents.args(all_ents(hist, n), 0n), List.length(&2, List<&2, String>, _))) ++ "") == (Laws.zero(Laws.single(hist, n)), "") : List<&2, R.Db> & String}
+  %Equal.sym(List<&2, List<&2, String>>, List.drop(&2, List<&2, String>, A.ents.args(all_ents(hist, n), 0n), List.length(&2, List<&2, String>, A.ents.args(all_ents(hist, n), 0n))), Nil{}, drop_len(A.ents.args(all_ents(hist, n), 0n))) : {(Laws.zero(A.replay(A.ents.args(all_ents(hist, n), 0n), n)), A.encode(_) ++ "") == (Laws.zero(Laws.single(hist, n)), "") : List<&2, R.Db> & String}
+  %Equal.sym(R.Ds, R.acts(A.file.acts(A.parse_all(A.ents.args(all_ents(hist, n), 0n))), R.ds.empty(n)), rp(xseffs(all_ents(hist, n)), 0n, R.ds.empty(n)), rpe_file(all_ents(hist, n), 0n, R.ds.empty(n))) : {(Laws.zero(_), "") == (Laws.zero(Laws.single(hist, n)), "") : List<&2, R.Db> & String}
+  Equal.cong(List<&2, R.Db>, List<&2, R.Db> & String, z => (z, ""), Laws.zero(rp(xseffs(all_ents(hist, n)), 0n, R.ds.empty(n))), Laws.zero(Laws.single(hist, n)), ez)
 
 def Laws.recover(hist, n, sm):
   recover_go(hist, n, replay_inv(hist, n, sm))
@@ -13079,12 +13627,14 @@ def Laws.recover(hist, n, sm):
 # Laws.load_cut). An entry cut short never parses (entry_cut): a cut
 # number line ends without its "\r\n" (num_cut), a cut bulk lacks bytes
 # or its "\r\n" (bulk_cut). So the loader reads the whole entries in
-# front of the cut and leaves the rest (load_cut_go). The whole entries
-# replay as the first effects of the history (ep: a SELECT cut off from
-# the entry after it moves the focus alone, which changes no database),
-# and those as its first acts (sep: an act has no effect or one), so the
-# entries in front of a cut restore the databases after some j of the
-# history's acts (Laws.recover_cut).
+# front of the cut and leaves the rest (load_cut_go). These are the
+# history's first entries (A.Ent) and a part of the next (tk): a SELECT
+# cut off from the entry after it, which moves the focus alone and changes
+# no database, or the MULTI and some entries of a transaction, which the
+# start reverts (untx_open). The first entries replay as the history's
+# first steps (sepe: a step, an act or a transaction whole, makes no entry
+# or one), so the entries in front of a cut restore the databases after
+# some j of the history's steps (Laws.recover_cut).
 
 def scon_snil(-h: Char, -t: String, e: {SCon{h, t} == SNil{} : String}) -> Empty:
   %e : is_scon(_)
@@ -13492,12 +14042,12 @@ def load_cut_fin(+c: String, -es: List<&2, List<&2, String>>, res: Cut(String.le
   %Equal.sym(List<&2, List<&2, String>> & String, A.load.go(String.length(c), c, A.entry(c), Nil{}), (List.reverse.go(&2, List<&2, String>, Nil{}, ltake(List<&2, String>, k, es)), r), p1) : {A.encode(Pair.fst(List<&2, List<&2, String>>, String, _)) ++ Pair.snd(List<&2, List<&2, String>>, String, _) == c : String}
   p2
 
-# the file is the entries of the history's effects
-def aof_entries(+hist: List<&2, Laws.Run>, +n: Nat, -c: String, -d: String, e: {c ++ d == Laws.aof(hist, n) : String}) -> {c ++ d == A.encode.onto(A.effs.args(all_effs(hist, n), 0n), "") : String}:
-  Equal.trans(String, c ++ d, Laws.aof(hist, n), A.encode(A.effs.args(all_effs(hist, n), 0n)), e, aof_all(hist, n))
+# the file is the history's entries
+def aof_entries(+hist: List<&2, Laws.Run>, +n: Nat, -c: String, -d: String, e: {c ++ d == Laws.aof(hist, n) : String}) -> {c ++ d == A.encode.onto(A.ents.args(all_ents(hist, n), 0n), "") : String}:
+  Equal.trans(String, c ++ d, Laws.aof(hist, n), A.encode(A.ents.args(all_ents(hist, n), 0n)), e, aof_all(hist, n))
 
 def Laws.load_cut(hist, n, c, d, e):
-  load_cut_fin(c, A.effs.args(all_effs(hist, n), 0n), load_cut_go(A.effs.args(all_effs(hist, n), 0n), c, d, String.length(c), Nil{})(aof_entries(hist, n, c, d, e))(le_refl(String.length(c))))
+  load_cut_fin(c, A.ents.args(all_ents(hist, n), 0n), load_cut_go(A.ents.args(all_ents(hist, n), 0n), c, d, String.length(c), Nil{})(aof_entries(hist, n, c, d, e))(le_refl(String.length(c))))
 
 # The start's replay is replay's once its check is None: the check's
 # verdict is the one thing it looks at before it runs the acts replay runs
@@ -13505,12 +14055,12 @@ def Laws.checked_replay(reqs, n, e):
   %Equal.sym(Maybe<&1, Nat & Nat>, A.check(A.marks(reqs), A.file.acts(A.parse_all(reqs)), n), None{}, e) : {A.checked.of(_, A.file.acts(A.parse_all(reqs)), n) == A.Replayed{A.replay(reqs, n)} : A.Replay}
   {==}
 
-# Steps and their effects
+# Steps and their entries
 # -----------------------
-# A history's acts, each at its time (Laws.commands), run one after
-# another, leave its databases, but for the focus's time (single_cmds),
-# and their effects are the history's (all_effs_cmds): an act leaves the
-# time it ran at (act_now).
+# A history's steps, each at its time (Laws.commands: an act, or the acts
+# of a transaction together), run one after another, leave its databases,
+# but for the focus's time (single_cmds), and their entries are the
+# history's (all_ents_cmds): an act leaves the time it ran at (act_now).
 
 # an act leaves the focus's time
 def now_swap(+a: Nat, +b: Nat, +o: R.Ds, -p: Bool & R.Ds, sp: SwapOk(a, b, o, p)) -> {R.ds.now(R.ds_of(R.act.ok(p))) == R.ds.now(o) : Nat}:
@@ -13597,29 +14147,46 @@ def act_at(+t: R.Act, +now: Nat, +x: R.Ds) -> {R.ds.at(now, R.ds_of(R.act(t, R.d
   %Equal.trans(Nat, R.ds.now(R.ds_of(R.act(t, R.ds.at(now, x)))), R.ds.now(R.ds.at(now, x)), now, act_now(t, R.ds.at(now, x)), ds_now_at(now, x)) : {R.ds.at(_, R.ds_of(R.act(t, R.ds.at(now, x)))) == R.ds_of(R.act(t, R.ds.at(now, x))) : R.Ds}
   ds_at_self(R.ds_of(R.act(t, R.ds.at(now, x))))
 
-# the effects of acts run each at its time, in order
-def seff(s: Laws.Step, x: R.Ds) -> List<&2, A.Eff>:
+# a step's entries: an act's effect (none or one) an entry of its own,
+# or a transaction's effects, one entry of them all when they are two or
+# more
+def sent(s: Laws.Step, x: R.Ds) -> List<&2, A.Ent>:
   match s:
     case Laws.Step{+now, a}:
-      aeff(a, R.ds.at(now, x))
+      A.ents.of(aeff(a, R.ds.at(now, x)))
+    case Laws.StepTx{+now, as}:
+      A.tx.wrap(aeffs(as, R.ds.at(now, x)))
 
-def seffs(ss: List<&2, Laws.Step>, +x: R.Ds) -> List<&2, A.Eff>:
+# the entries of steps run each at its time, in order
+def sents(ss: List<&2, Laws.Step>, +x: R.Ds) -> List<&2, A.Ent>:
   match ss:
     case Nil{}:
       Nil{}
     case Con{+s, rest}:
-      List.append(&2, A.Eff, seff(s, x), seffs(rest, Laws.run_at(s, x)))
+      List.append(&2, A.Ent, sent(s, x), sents(rest, Laws.run_at(s, x)))
 
-# a batch's acts at its time have its effects
-def stamp_effs(+now: Nat, as: List<&2, R.Act>, +x: R.Ds) -> {seffs(Laws.stamp(now, as), x) == aeffs(as, R.ds.at(now, x)) : List<&2, A.Eff>}:
+def of_app(xs: List<&2, A.Eff>, -ys: List<&2, A.Eff>) -> {List.append(&2, A.Ent, A.ents.of(xs), A.ents.of(ys)) == A.ents.of(List.append(&2, A.Eff, xs, ys)) : List<&2, A.Ent>}:
+  match xs:
+    case Nil{}:
+      {==}
+    case Con{e, +rest}:
+      Equal.cong(List<&2, A.Ent>, List<&2, A.Ent>, z => A.EOne{e} <> z, List.append(&2, A.Ent, A.ents.of(rest), A.ents.of(ys)), A.ents.of(List.append(&2, A.Eff, rest, ys)), of_app(rest, ys))
+
+# a batch's acts at its time have its entries
+def stamp_ents(+now: Nat, as: List<&2, R.Act>, +x: R.Ds) -> {sents(Laws.stamp(now, as), x) == A.ents.of(aeffs(as, R.ds.at(now, x))) : List<&2, A.Ent>}:
   match as:
     case Nil{}:
       {==}
     case Con{+a, +rest}:
-      Equal.cong(List<&2, A.Eff>, List<&2, A.Eff>, z => List.append(&2, A.Eff, aeff(a, R.ds.at(now, x)), z), seffs(Laws.stamp(now, rest), R.ds_of(R.act(a, R.ds.at(now, x)))), aeffs(rest, R.ds_of(R.act(a, R.ds.at(now, x)))),
-        Equal.trans(List<&2, A.Eff>, seffs(Laws.stamp(now, rest), R.ds_of(R.act(a, R.ds.at(now, x)))), aeffs(rest, R.ds.at(now, R.ds_of(R.act(a, R.ds.at(now, x))))), aeffs(rest, R.ds_of(R.act(a, R.ds.at(now, x)))),
-          stamp_effs(now, rest, R.ds_of(R.act(a, R.ds.at(now, x)))),
-          Equal.cong(R.Ds, List<&2, A.Eff>, z => aeffs(rest, z), R.ds.at(now, R.ds_of(R.act(a, R.ds.at(now, x)))), R.ds_of(R.act(a, R.ds.at(now, x))), act_at(a, now, x))))
+      Equal.trans(List<&2, A.Ent>,
+        List.append(&2, A.Ent, A.ents.of(aeff(a, R.ds.at(now, x))), sents(Laws.stamp(now, rest), R.ds_of(R.act(a, R.ds.at(now, x))))),
+        List.append(&2, A.Ent, A.ents.of(aeff(a, R.ds.at(now, x))), A.ents.of(aeffs(rest, R.ds_of(R.act(a, R.ds.at(now, x)))))),
+        A.ents.of(List.append(&2, A.Eff, aeff(a, R.ds.at(now, x)), aeffs(rest, R.ds_of(R.act(a, R.ds.at(now, x)))))),
+        Equal.cong(List<&2, A.Ent>, List<&2, A.Ent>, z => List.append(&2, A.Ent, A.ents.of(aeff(a, R.ds.at(now, x))), z), sents(Laws.stamp(now, rest), R.ds_of(R.act(a, R.ds.at(now, x)))), A.ents.of(aeffs(rest, R.ds_of(R.act(a, R.ds.at(now, x))))),
+          Equal.trans(List<&2, A.Ent>, sents(Laws.stamp(now, rest), R.ds_of(R.act(a, R.ds.at(now, x)))), A.ents.of(aeffs(rest, R.ds.at(now, R.ds_of(R.act(a, R.ds.at(now, x)))))), A.ents.of(aeffs(rest, R.ds_of(R.act(a, R.ds.at(now, x))))),
+            stamp_ents(now, rest, R.ds_of(R.act(a, R.ds.at(now, x)))),
+            Equal.cong(R.Ds, List<&2, A.Ent>, z => A.ents.of(aeffs(rest, z)), R.ds.at(now, R.ds_of(R.act(a, R.ds.at(now, x)))), R.ds_of(R.act(a, R.ds.at(now, x))), act_at(a, now, x)))),
+        of_app(aeff(a, R.ds.at(now, x)), aeffs(rest, R.ds_of(R.act(a, R.ds.at(now, x))))))
 
 # a batch's acts leave the databases the batch leaves, but for the time
 def stamp_run(+t: Nat, +now: Nat, as: List<&2, R.Act>, +x: R.Ds) -> {R.ds.at(t, Laws.run_timed(Laws.stamp(now, as), x)) == R.ds.at(t, R.acts(as, R.ds.at(now, x))) : R.Ds}:
@@ -13638,7 +14205,7 @@ def run_timed_app(xs: List<&2, Laws.Step>, -ys: List<&2, Laws.Step>, +x: R.Ds) -
     case Con{+s, rest}:
       run_timed_app(rest, ys, Laws.run_at(s, x))
 
-# a history's acts, run from empty databases, leave its databases, but
+# a history's steps, run from empty databases, leave its databases, but
 # for the time
 def single_cmds(hist: List<&2, Laws.Run>, +n: Nat, +t: Nat) -> {R.ds.at(t, Laws.run_timed(Laws.commands(hist), R.ds.empty(n))) == R.ds.at(t, Laws.single(hist, n)) : R.Ds}:
   match hist:
@@ -13649,41 +14216,60 @@ def single_cmds(hist: List<&2, Laws.Run>, +n: Nat, +t: Nat) -> {R.ds.at(t, Laws.
       Equal.trans(R.Ds, R.ds.at(t, Laws.run_timed(Laws.stamp(now, as), Laws.run_timed(Laws.commands(older), R.ds.empty(n)))), R.ds.at(t, R.acts(as, R.ds.at(now, Laws.run_timed(Laws.commands(older), R.ds.empty(n))))), R.ds.at(t, R.acts(as, R.ds.at(now, Laws.single(older, n)))),
         stamp_run(t, now, as, Laws.run_timed(Laws.commands(older), R.ds.empty(n))),
         Equal.cong(R.Ds, R.Ds, z => R.ds.at(t, R.acts(as, z)), R.ds.at(now, Laws.run_timed(Laws.commands(older), R.ds.empty(n))), R.ds.at(now, Laws.single(older, n)), single_cmds(older, n, now)))
+    case Con{Laws.RunTx{+now, +as}, +older}:
+      %run_timed_app(Laws.commands(older), [Laws.StepTx{now, as}], R.ds.empty(n)) : {R.ds.at(t, _) == R.ds.at(t, R.acts(as, R.ds.at(now, Laws.single(older, n)))) : R.Ds}
+      Equal.cong(R.Ds, R.Ds, z => R.ds.at(t, R.acts(as, z)), R.ds.at(now, Laws.run_timed(Laws.commands(older), R.ds.empty(n))), R.ds.at(now, Laws.single(older, n)), single_cmds(older, n, now))
 
-# the effects of steps xs then ys
-def seffs_app(xs: List<&2, Laws.Step>, +ys: List<&2, Laws.Step>, +x: R.Ds) -> {List.append(&2, A.Eff, seffs(xs, x), seffs(ys, Laws.run_timed(xs, x))) == seffs(List.append(&2, Laws.Step, xs, ys), x) : List<&2, A.Eff>}:
+# the entries of steps xs then ys
+def sents_app(xs: List<&2, Laws.Step>, +ys: List<&2, Laws.Step>, +x: R.Ds) -> {List.append(&2, A.Ent, sents(xs, x), sents(ys, Laws.run_timed(xs, x))) == sents(List.append(&2, Laws.Step, xs, ys), x) : List<&2, A.Ent>}:
   match xs:
     case Nil{}:
       {==}
     case Con{+s, +rest}:
-      Equal.trans(List<&2, A.Eff>, List.append(&2, A.Eff, List.append(&2, A.Eff, seff(s, x), seffs(rest, Laws.run_at(s, x))), seffs(ys, Laws.run_timed(rest, Laws.run_at(s, x)))), List.append(&2, A.Eff, seff(s, x), List.append(&2, A.Eff, seffs(rest, Laws.run_at(s, x)), seffs(ys, Laws.run_timed(rest, Laws.run_at(s, x))))), List.append(&2, A.Eff, seff(s, x), seffs(List.append(&2, Laws.Step, rest, ys), Laws.run_at(s, x))),
-        lapp_assoc_e(seff(s, x), seffs(rest, Laws.run_at(s, x)), seffs(ys, Laws.run_timed(rest, Laws.run_at(s, x)))),
-        Equal.cong(List<&2, A.Eff>, List<&2, A.Eff>, z => List.append(&2, A.Eff, seff(s, x), z), List.append(&2, A.Eff, seffs(rest, Laws.run_at(s, x)), seffs(ys, Laws.run_timed(rest, Laws.run_at(s, x)))), seffs(List.append(&2, Laws.Step, rest, ys), Laws.run_at(s, x)), seffs_app(rest, ys, Laws.run_at(s, x))))
+      Equal.trans(List<&2, A.Ent>, List.append(&2, A.Ent, List.append(&2, A.Ent, sent(s, x), sents(rest, Laws.run_at(s, x))), sents(ys, Laws.run_timed(rest, Laws.run_at(s, x)))), List.append(&2, A.Ent, sent(s, x), List.append(&2, A.Ent, sents(rest, Laws.run_at(s, x)), sents(ys, Laws.run_timed(rest, Laws.run_at(s, x))))), List.append(&2, A.Ent, sent(s, x), sents(List.append(&2, Laws.Step, rest, ys), Laws.run_at(s, x))),
+        lapp_assoc_x(sent(s, x), sents(rest, Laws.run_at(s, x)), sents(ys, Laws.run_timed(rest, Laws.run_at(s, x)))),
+        Equal.cong(List<&2, A.Ent>, List<&2, A.Ent>, z => List.append(&2, A.Ent, sent(s, x), z), List.append(&2, A.Ent, sents(rest, Laws.run_at(s, x)), sents(ys, Laws.run_timed(rest, Laws.run_at(s, x)))), sents(List.append(&2, Laws.Step, rest, ys), Laws.run_at(s, x)), sents_app(rest, ys, Laws.run_at(s, x))))
 
-# a history's acts have its effects
-def all_effs_cmds(hist: List<&2, Laws.Run>, +n: Nat) -> {seffs(Laws.commands(hist), R.ds.empty(n)) == all_effs(hist, n) : List<&2, A.Eff>}:
+# a history's steps have its entries
+def all_ents_cmds(hist: List<&2, Laws.Run>, +n: Nat) -> {sents(Laws.commands(hist), R.ds.empty(n)) == all_ents(hist, n) : List<&2, A.Ent>}:
   match hist:
     case Nil{}:
       {==}
     case Con{Laws.Run{+now, +as}, +older}:
-      %seffs_app(Laws.commands(older), Laws.stamp(now, as), R.ds.empty(n)) : {_ == List.append(&2, A.Eff, all_effs(older, n), Laws.batch_effs(Laws.Run{now, as}, Laws.single(older, n))) : List<&2, A.Eff>}
-      %all_effs_cmds(older, n) : {List.append(&2, A.Eff, seffs(Laws.commands(older), R.ds.empty(n)), seffs(Laws.stamp(now, as), Laws.run_timed(Laws.commands(older), R.ds.empty(n)))) == List.append(&2, A.Eff, _, Laws.batch_effs(Laws.Run{now, as}, Laws.single(older, n))) : List<&2, A.Eff>}
-      %Equal.sym(List<&2, A.Eff>, seffs(Laws.stamp(now, as), Laws.run_timed(Laws.commands(older), R.ds.empty(n))), aeffs(as, R.ds.at(now, Laws.run_timed(Laws.commands(older), R.ds.empty(n)))), stamp_effs(now, as, Laws.run_timed(Laws.commands(older), R.ds.empty(n)))) : {List.append(&2, A.Eff, seffs(Laws.commands(older), R.ds.empty(n)), _) == List.append(&2, A.Eff, seffs(Laws.commands(older), R.ds.empty(n)), Laws.batch_effs(Laws.Run{now, as}, Laws.single(older, n))) : List<&2, A.Eff>}
-      %Equal.sym(List<&2, A.Eff>, Laws.batch_effs(Laws.Run{now, as}, Laws.single(older, n)), aeffs(as, R.ds.at(now, Laws.single(older, n))), beffs(now, as, Laws.single(older, n))) : {List.append(&2, A.Eff, seffs(Laws.commands(older), R.ds.empty(n)), aeffs(as, R.ds.at(now, Laws.run_timed(Laws.commands(older), R.ds.empty(n))))) == List.append(&2, A.Eff, seffs(Laws.commands(older), R.ds.empty(n)), _) : List<&2, A.Eff>}
-      %single_cmds(older, n, now) : {List.append(&2, A.Eff, seffs(Laws.commands(older), R.ds.empty(n)), aeffs(as, R.ds.at(now, Laws.run_timed(Laws.commands(older), R.ds.empty(n))))) == List.append(&2, A.Eff, seffs(Laws.commands(older), R.ds.empty(n)), aeffs(as, _)) : List<&2, A.Eff>}
+      %sents_app(Laws.commands(older), Laws.stamp(now, as), R.ds.empty(n)) : {_ == List.append(&2, A.Ent, all_ents(older, n), Laws.batch_effs(Laws.Run{now, as}, Laws.single(older, n))) : List<&2, A.Ent>}
+      %all_ents_cmds(older, n) : {List.append(&2, A.Ent, sents(Laws.commands(older), R.ds.empty(n)), sents(Laws.stamp(now, as), Laws.run_timed(Laws.commands(older), R.ds.empty(n)))) == List.append(&2, A.Ent, _, Laws.batch_effs(Laws.Run{now, as}, Laws.single(older, n))) : List<&2, A.Ent>}
+      %Equal.sym(List<&2, A.Ent>, sents(Laws.stamp(now, as), Laws.run_timed(Laws.commands(older), R.ds.empty(n))), A.ents.of(aeffs(as, R.ds.at(now, Laws.run_timed(Laws.commands(older), R.ds.empty(n))))), stamp_ents(now, as, Laws.run_timed(Laws.commands(older), R.ds.empty(n)))) : {List.append(&2, A.Ent, sents(Laws.commands(older), R.ds.empty(n)), _) == List.append(&2, A.Ent, sents(Laws.commands(older), R.ds.empty(n)), Laws.batch_effs(Laws.Run{now, as}, Laws.single(older, n))) : List<&2, A.Ent>}
+      %Equal.sym(List<&2, A.Eff>, Laws.act_effects(as, R.ds.at(now, Laws.single(older, n))), aeffs(as, R.ds.at(now, Laws.single(older, n))), act_effs(as, R.ds.at(now, Laws.single(older, n)))) : {List.append(&2, A.Ent, sents(Laws.commands(older), R.ds.empty(n)), A.ents.of(aeffs(as, R.ds.at(now, Laws.run_timed(Laws.commands(older), R.ds.empty(n)))))) == List.append(&2, A.Ent, sents(Laws.commands(older), R.ds.empty(n)), A.ents.of(_)) : List<&2, A.Ent>}
+      %single_cmds(older, n, now) : {List.append(&2, A.Ent, sents(Laws.commands(older), R.ds.empty(n)), A.ents.of(aeffs(as, R.ds.at(now, Laws.run_timed(Laws.commands(older), R.ds.empty(n)))))) == List.append(&2, A.Ent, sents(Laws.commands(older), R.ds.empty(n)), A.ents.of(aeffs(as, _))) : List<&2, A.Ent>}
+      {==}
+    case Con{Laws.RunTx{+now, +as}, +older}:
+      %sents_app(Laws.commands(older), [Laws.StepTx{now, as}], R.ds.empty(n)) : {_ == List.append(&2, A.Ent, all_ents(older, n), Laws.batch_effs(Laws.RunTx{now, as}, Laws.single(older, n))) : List<&2, A.Ent>}
+      %all_ents_cmds(older, n) : {List.append(&2, A.Ent, sents(Laws.commands(older), R.ds.empty(n)), sents([Laws.StepTx{now, as}], Laws.run_timed(Laws.commands(older), R.ds.empty(n)))) == List.append(&2, A.Ent, _, Laws.batch_effs(Laws.RunTx{now, as}, Laws.single(older, n))) : List<&2, A.Ent>}
+      %Equal.sym(List<&2, A.Ent>, List.append(&2, A.Ent, A.tx.wrap(aeffs(as, R.ds.at(now, Laws.run_timed(Laws.commands(older), R.ds.empty(n))))), Nil{}), A.tx.wrap(aeffs(as, R.ds.at(now, Laws.run_timed(Laws.commands(older), R.ds.empty(n))))), app_nil_x(A.tx.wrap(aeffs(as, R.ds.at(now, Laws.run_timed(Laws.commands(older), R.ds.empty(n))))))) : {List.append(&2, A.Ent, sents(Laws.commands(older), R.ds.empty(n)), _) == List.append(&2, A.Ent, sents(Laws.commands(older), R.ds.empty(n)), Laws.batch_effs(Laws.RunTx{now, as}, Laws.single(older, n))) : List<&2, A.Ent>}
+      %Equal.sym(List<&2, A.Eff>, Laws.act_effects(as, R.ds.at(now, Laws.single(older, n))), aeffs(as, R.ds.at(now, Laws.single(older, n))), act_effs(as, R.ds.at(now, Laws.single(older, n)))) : {List.append(&2, A.Ent, sents(Laws.commands(older), R.ds.empty(n)), A.tx.wrap(aeffs(as, R.ds.at(now, Laws.run_timed(Laws.commands(older), R.ds.empty(n)))))) == List.append(&2, A.Ent, sents(Laws.commands(older), R.ds.empty(n)), A.tx.wrap(_)) : List<&2, A.Ent>}
+      %single_cmds(older, n, now) : {List.append(&2, A.Ent, sents(Laws.commands(older), R.ds.empty(n)), A.tx.wrap(aeffs(as, R.ds.at(now, Laws.run_timed(Laws.commands(older), R.ds.empty(n)))))) == List.append(&2, A.Ent, sents(Laws.commands(older), R.ds.empty(n)), A.tx.wrap(aeffs(as, _))) : List<&2, A.Ent>}
       {==}
 
 # Prefixes
 # --------
-# The first k entries of a file, replayed, read at time 0 as the first m
-# effects replayed, for some m (ep): an effect is one entry, or a SELECT
-# and one entry, and a SELECT alone changes no database. The first m
-# effects of acts run each at its time, replayed, read at time 0 as the
-# databases after the first j acts, for some j (sep): an act has no
-# effect or one (one_eff), and keeps the invariant (act_inv).
+# The first k entries of a file are the history's first i entries
+# (A.Ent) whole, and a part of the next: nothing or a SELECT alone, which
+# the start keeps and which changes no database, or a MULTI and entries of
+# the effects of a transaction, which the start reverts (tk). Replayed,
+# they read at time 0 as the first i entries' effects, and these as the
+# databases after the first j steps of the history, for some j (sepe): a
+# step (an act, or a transaction whole) makes no entry or one, and keeps
+# the invariant (act_inv, acts_inv).
 
-def Shp(xs: List<&2, List<&2, String>>, r: R.Ds) -> Type:
-  Or(Exists(List<&2, String>, x => {xs == [x] : List<&2, List<&2, String>>}), Exists(List<&2, String>, s => Exists(List<&2, String>, x => {xs == [s, x] : List<&2, List<&2, String>>} & {Laws.zero(R.acts(A.file.acts(A.parse_all([s])), r)) == Laws.zero(r) : List<&2, R.Db>})))
+# a part of an entry: one the start keeps, that changes no database, or a
+# transaction cut short, which the start reverts
+def Part(p: List<&2, List<&2, String>>) -> Type:
+  Or(NM(p) & (@r: R.Ds -> {Laws.zero(R.acts(A.file.acts(A.parse_all(p)), r)) == Laws.zero(r) : List<&2, R.Db>}), Exists(List<&2, List<&2, String>>, q => {p == ["MULTI"] <> q : List<&2, List<&2, String>>} & NM(q)))
+
+# the first k entries of the file of xs (written after the file selected
+# sel): the entries of the first i of xs, and a part of the next
+def TK(xs: List<&2, A.Ent>, sel: Nat, k: Nat) -> Type:
+  Exists(Nat, i => Exists(List<&2, List<&2, String>>, p => {ltake(List<&2, String>, k, A.ents.args(xs, sel)) == List.append(&2, List<&2, String>, A.ents.args(ltake(A.Ent, i, xs), sel), p) : List<&2, List<&2, String>>} & Part(p)))
 
 # a command of the connection, replayed, runs as an error
 def zown(r: R.Ds, -o: R.SessOp) -> {Laws.zero(R.acts([R.ARun{R.Own{o}}], r)) == Laws.zero(r) : List<&2, R.Db>}:
@@ -13700,91 +14286,166 @@ def zsel_m(m: Maybe<&2, Nat>, -s: String, +r: R.Ds) -> {Laws.zero(R.acts([A.file
     case None{}:
       zown(r, R.SSelect{s})
 
-def shp_put(b: Bool, +j: Nat, +x: List<&2, String>, +r: R.Ds) -> Shp(A.sel.put(b, j, [x]), r):
+# an effect is one entry, or a SELECT and one entry
+def Shp(xs: List<&2, List<&2, String>>) -> Type:
+  Or(Exists(List<&2, String>, x => {xs == [x] : List<&2, List<&2, String>>}), Exists(List<&2, String>, s => Exists(List<&2, String>, x => {xs == [s, x] : List<&2, List<&2, String>>} & Part([s]))))
+
+def shp_put(b: Bool, +j: Nat, +x: List<&2, String>) -> Shp(A.sel.put(b, j, [x])):
   match b:
     case True{}:
       Inl{(x, {==})}
     case False{}:
-      Inr{(["SELECT", Nat.show(j)], (x, ({==}, zsel_m(A.file.num(Nat.show(j)), Nat.show(j), r))))}
+      Inr{(["SELECT", Nat.show(j)], (x, ({==}, Inl{(({==}, Unit{}), r => zsel_m(A.file.num(Nat.show(j)), Nat.show(j), r))})))}
 
-def shape(e: A.Eff, +sel: Nat, +r: R.Ds) -> Shp(A.eff.args(e, sel), r):
+def shape(e: A.Eff, +sel: Nat) -> Shp(A.eff.args(e, sel)):
   match e:
     case A.EDb{+j, c}:
-      shp_put(Nat.is_eq(j, sel), j, A.args(c), r)
+      shp_put(Nat.is_eq(j, sel), j, A.args(c))
     case A.ESwap{a, b}:
       Inl{(["SWAPDB", Nat.show(a), Nat.show(b)], {==})}
     case A.EMove{k, +src, dst}:
-      shp_put(Nat.is_eq(src, sel), src, ["MOVE", k, Nat.show(dst)], r)
+      shp_put(Nat.is_eq(src, sel), src, ["MOVE", k, Nat.show(dst)])
     case A.ECopy{s, d, +from, to}:
-      shp_put(Nat.is_eq(from, sel), from, ["COPY", s, d, "DB", Nat.show(to), "REPLACE"], r)
+      shp_put(Nat.is_eq(from, sel), from, ["COPY", s, d, "DB", Nat.show(to), "REPLACE"])
     case A.EWipe{}:
       Inl{(["FLUSHALL"], {==})}
 
-def EP(es: List<&2, A.Eff>, sel: Nat, r: R.Ds, k: Nat) -> Type:
-  Exists(Nat, m => {Laws.zero(R.acts(A.file.acts(A.parse_all(ltake(List<&2, String>, k, A.effs.args(es, sel)))), r)) == Laws.zero(rp(ltake(A.Eff, m, es), sel, r)) : List<&2, R.Db>})
-
 # an effect of one entry, taken whole
-def ep_eq1(+e: A.Eff, -rest: List<&2, A.Eff>, +sel: Nat, +r: R.Ds, -k2: Nat, -m2: Nat, -x: List<&2, String>, +ex: {A.eff.args(e, sel) == [x] : List<&2, List<&2, String>>}, h: {Laws.zero(R.acts(A.file.acts(A.parse_all(ltake(List<&2, String>, k2, A.effs.args(rest, A.eff.sel(e, sel))))), rp1(e, sel, r))) == Laws.zero(rp(ltake(A.Eff, m2, rest), A.eff.sel(e, sel), rp1(e, sel, r))) : List<&2, R.Db>}) -> {Laws.zero(R.acts(A.file.acts(A.parse_all(ltake(List<&2, String>, 1n+k2, A.effs.args(Con{e, rest}, sel)))), r)) == Laws.zero(rp(ltake(A.Eff, 1n+m2, Con{e, rest}), sel, r)) : List<&2, R.Db>}:
-  %Equal.sym(List<&2, List<&2, String>>, A.eff.args(e, sel), [x], ex) : {Laws.zero(R.acts(A.file.acts(A.parse_all(ltake(List<&2, String>, 1n+k2, List.append(&2, List<&2, String>, _, A.effs.args(rest, A.eff.sel(e, sel)))))), r)) == Laws.zero(rp(ltake(A.Eff, m2, rest), A.eff.sel(e, sel), rp1(e, sel, r))) : List<&2, R.Db>}
-  %Equal.cong(List<&2, List<&2, String>>, R.Ds, z => R.acts(A.file.acts(A.parse_all(z)), r), A.eff.args(e, sel), [x], ex) : {Laws.zero(R.acts(A.file.acts(A.parse_all(ltake(List<&2, String>, k2, A.effs.args(rest, A.eff.sel(e, sel))))), _)) == Laws.zero(rp(ltake(A.Eff, m2, rest), A.eff.sel(e, sel), rp1(e, sel, r))) : List<&2, R.Db>}
-  h
+def tk_eq1(+e: A.Eff, -rest: List<&2, A.Ent>, +sel: Nat, -k2: Nat, -i: Nat, -p: List<&2, List<&2, String>>, +x: List<&2, String>, +ex: {A.eff.args(e, sel) == [x] : List<&2, List<&2, String>>}, h: {ltake(List<&2, String>, k2, A.ents.args(rest, A.eff.sel(e, sel))) == List.append(&2, List<&2, String>, A.ents.args(ltake(A.Ent, i, rest), A.eff.sel(e, sel)), p) : List<&2, List<&2, String>>}) -> {ltake(List<&2, String>, 1n+k2, A.ents.args(Con{A.EOne{e}, rest}, sel)) == List.append(&2, List<&2, String>, A.ents.args(ltake(A.Ent, 1n+i, Con{A.EOne{e}, rest}), sel), p) : List<&2, List<&2, String>>}:
+  %Equal.sym(List<&2, List<&2, String>>, A.eff.args(e, sel), [x], ex) : {ltake(List<&2, String>, 1n+k2, List.append(&2, List<&2, String>, _, A.ents.args(rest, A.eff.sel(e, sel)))) == List.append(&2, List<&2, String>, List.append(&2, List<&2, String>, _, A.ents.args(ltake(A.Ent, i, rest), A.eff.sel(e, sel))), p) : List<&2, List<&2, String>>}
+  Equal.cong(List<&2, List<&2, String>>, List<&2, List<&2, String>>, z => x <> z, ltake(List<&2, String>, k2, A.ents.args(rest, A.eff.sel(e, sel))), List.append(&2, List<&2, String>, A.ents.args(ltake(A.Ent, i, rest), A.eff.sel(e, sel)), p), h)
 
-def ep_lift1(+e: A.Eff, -rest: List<&2, A.Eff>, +sel: Nat, +r: R.Ds, -k2: Nat, -x: List<&2, String>, +ex: {A.eff.args(e, sel) == [x] : List<&2, List<&2, String>>}, w: EP(rest, A.eff.sel(e, sel), rp1(e, sel, r), k2)) -> EP(Con{e, rest}, sel, r, 1n+k2):
-  (m2, h) = w
-  (1n+m2, ep_eq1(e, rest, sel, r, k2, m2, x, ex, h))
+def tk_lift1(+e: A.Eff, -rest: List<&2, A.Ent>, +sel: Nat, -k2: Nat, +x: List<&2, String>, +ex: {A.eff.args(e, sel) == [x] : List<&2, List<&2, String>>}, w: TK(rest, A.eff.sel(e, sel), k2)) -> TK(Con{A.EOne{e}, rest}, sel, 1n+k2):
+  (i, q) = w
+  (p, q2) = q
+  (h, pt) = q2
+  (1n+i, (p, (tk_eq1(e, rest, sel, k2, i, p, x, ex, h), pt)))
 
-def ep_one(+e: A.Eff, -rest: List<&2, A.Eff>, +sel: Nat, +r: R.Ds, k: Nat, -x: List<&2, String>, +ex: {A.eff.args(e, sel) == [x] : List<&2, List<&2, String>>}, ih: @k2: Nat -> EP(rest, A.eff.sel(e, sel), rp1(e, sel, r), k2)) -> EP(Con{e, rest}, sel, r, k):
+def tk_one1(+e: A.Eff, -rest: List<&2, A.Ent>, +sel: Nat, k: Nat, +x: List<&2, String>, +ex: {A.eff.args(e, sel) == [x] : List<&2, List<&2, String>>}, ih: @k2: Nat -> TK(rest, A.eff.sel(e, sel), k2)) -> TK(Con{A.EOne{e}, rest}, sel, k):
   match k:
     case 0n:
-      (0n, {==})
+      (0n, (Nil{}, ({==}, Inl{(Unit{}, r => {==})})))
     case 1n+k2:
-      ep_lift1(e, rest, sel, r, k2, x, ex, ih(k2))
+      tk_lift1(e, rest, sel, k2, x, ex, ih(k2))
 
 # an effect of a SELECT and one entry: cut after the SELECT, or taken
 # whole
-def ep_eq2(+e: A.Eff, -rest: List<&2, A.Eff>, +sel: Nat, +r: R.Ds, -k3: Nat, -m2: Nat, -s: List<&2, String>, -x: List<&2, String>, +ex: {A.eff.args(e, sel) == [s, x] : List<&2, List<&2, String>>}, h: {Laws.zero(R.acts(A.file.acts(A.parse_all(ltake(List<&2, String>, k3, A.effs.args(rest, A.eff.sel(e, sel))))), rp1(e, sel, r))) == Laws.zero(rp(ltake(A.Eff, m2, rest), A.eff.sel(e, sel), rp1(e, sel, r))) : List<&2, R.Db>}) -> {Laws.zero(R.acts(A.file.acts(A.parse_all(ltake(List<&2, String>, 2n+k3, A.effs.args(Con{e, rest}, sel)))), r)) == Laws.zero(rp(ltake(A.Eff, 1n+m2, Con{e, rest}), sel, r)) : List<&2, R.Db>}:
-  %Equal.sym(List<&2, List<&2, String>>, A.eff.args(e, sel), [s, x], ex) : {Laws.zero(R.acts(A.file.acts(A.parse_all(ltake(List<&2, String>, 2n+k3, List.append(&2, List<&2, String>, _, A.effs.args(rest, A.eff.sel(e, sel)))))), r)) == Laws.zero(rp(ltake(A.Eff, m2, rest), A.eff.sel(e, sel), rp1(e, sel, r))) : List<&2, R.Db>}
-  %Equal.cong(List<&2, List<&2, String>>, R.Ds, z => R.acts(A.file.acts(A.parse_all(z)), r), A.eff.args(e, sel), [s, x], ex) : {Laws.zero(R.acts(A.file.acts(A.parse_all(ltake(List<&2, String>, k3, A.effs.args(rest, A.eff.sel(e, sel))))), _)) == Laws.zero(rp(ltake(A.Eff, m2, rest), A.eff.sel(e, sel), rp1(e, sel, r))) : List<&2, R.Db>}
-  h
+def tk_eq2a(+e: A.Eff, -rest: List<&2, A.Ent>, +sel: Nat, -s: List<&2, String>, -x: List<&2, String>, +ex: {A.eff.args(e, sel) == [s, x] : List<&2, List<&2, String>>}) -> {ltake(List<&2, String>, 1n, A.ents.args(Con{A.EOne{e}, rest}, sel)) == List.append(&2, List<&2, String>, A.ents.args(ltake(A.Ent, 0n, Con{A.EOne{e}, rest}), sel), [s]) : List<&2, List<&2, String>>}:
+  %Equal.sym(List<&2, List<&2, String>>, A.eff.args(e, sel), [s, x], ex) : {ltake(List<&2, String>, 1n, List.append(&2, List<&2, String>, _, A.ents.args(rest, A.eff.sel(e, sel)))) == [s] : List<&2, List<&2, String>>}
+  {==}
 
-def ep_eq2a(+e: A.Eff, -rest: List<&2, A.Eff>, +sel: Nat, -r: R.Ds, -s: List<&2, String>, -x: List<&2, String>, +ex: {A.eff.args(e, sel) == [s, x] : List<&2, List<&2, String>>}, zs: {Laws.zero(R.acts(A.file.acts(A.parse_all([s])), r)) == Laws.zero(r) : List<&2, R.Db>}) -> {Laws.zero(R.acts(A.file.acts(A.parse_all(ltake(List<&2, String>, 1n, A.effs.args(Con{e, rest}, sel)))), r)) == Laws.zero(rp(ltake(A.Eff, 0n, Con{e, rest}), sel, r)) : List<&2, R.Db>}:
-  %Equal.sym(List<&2, List<&2, String>>, A.eff.args(e, sel), [s, x], ex) : {Laws.zero(R.acts(A.file.acts(A.parse_all(ltake(List<&2, String>, 1n, List.append(&2, List<&2, String>, _, A.effs.args(rest, A.eff.sel(e, sel)))))), r)) == Laws.zero(r) : List<&2, R.Db>}
-  zs
+def tk_eq2(+e: A.Eff, -rest: List<&2, A.Ent>, +sel: Nat, -k3: Nat, -i: Nat, -p: List<&2, List<&2, String>>, +s: List<&2, String>, +x: List<&2, String>, +ex: {A.eff.args(e, sel) == [s, x] : List<&2, List<&2, String>>}, h: {ltake(List<&2, String>, k3, A.ents.args(rest, A.eff.sel(e, sel))) == List.append(&2, List<&2, String>, A.ents.args(ltake(A.Ent, i, rest), A.eff.sel(e, sel)), p) : List<&2, List<&2, String>>}) -> {ltake(List<&2, String>, 2n+k3, A.ents.args(Con{A.EOne{e}, rest}, sel)) == List.append(&2, List<&2, String>, A.ents.args(ltake(A.Ent, 1n+i, Con{A.EOne{e}, rest}), sel), p) : List<&2, List<&2, String>>}:
+  %Equal.sym(List<&2, List<&2, String>>, A.eff.args(e, sel), [s, x], ex) : {ltake(List<&2, String>, 2n+k3, List.append(&2, List<&2, String>, _, A.ents.args(rest, A.eff.sel(e, sel)))) == List.append(&2, List<&2, String>, List.append(&2, List<&2, String>, _, A.ents.args(ltake(A.Ent, i, rest), A.eff.sel(e, sel))), p) : List<&2, List<&2, String>>}
+  Equal.cong(List<&2, List<&2, String>>, List<&2, List<&2, String>>, z => s <> x <> z, ltake(List<&2, String>, k3, A.ents.args(rest, A.eff.sel(e, sel))), List.append(&2, List<&2, String>, A.ents.args(ltake(A.Ent, i, rest), A.eff.sel(e, sel)), p), h)
 
-def ep_lift2(+e: A.Eff, -rest: List<&2, A.Eff>, +sel: Nat, +r: R.Ds, -k3: Nat, -s: List<&2, String>, -x: List<&2, String>, +ex: {A.eff.args(e, sel) == [s, x] : List<&2, List<&2, String>>}, w: EP(rest, A.eff.sel(e, sel), rp1(e, sel, r), k3)) -> EP(Con{e, rest}, sel, r, 2n+k3):
-  (m2, h) = w
-  (1n+m2, ep_eq2(e, rest, sel, r, k3, m2, s, x, ex, h))
+def tk_lift2(+e: A.Eff, -rest: List<&2, A.Ent>, +sel: Nat, -k3: Nat, +s: List<&2, String>, +x: List<&2, String>, +ex: {A.eff.args(e, sel) == [s, x] : List<&2, List<&2, String>>}, w: TK(rest, A.eff.sel(e, sel), k3)) -> TK(Con{A.EOne{e}, rest}, sel, 2n+k3):
+  (i, q) = w
+  (p, q2) = q
+  (h, pt) = q2
+  (1n+i, (p, (tk_eq2(e, rest, sel, k3, i, p, s, x, ex, h), pt)))
 
-def ep_two(+e: A.Eff, -rest: List<&2, A.Eff>, +sel: Nat, +r: R.Ds, k: Nat, -s: List<&2, String>, -x: List<&2, String>, +ex: {A.eff.args(e, sel) == [s, x] : List<&2, List<&2, String>>}, zs: {Laws.zero(R.acts(A.file.acts(A.parse_all([s])), r)) == Laws.zero(r) : List<&2, R.Db>}, ih: @k2: Nat -> EP(rest, A.eff.sel(e, sel), rp1(e, sel, r), k2)) -> EP(Con{e, rest}, sel, r, k):
+def tk_one2(+e: A.Eff, -rest: List<&2, A.Ent>, +sel: Nat, k: Nat, +s: List<&2, String>, +x: List<&2, String>, +ex: {A.eff.args(e, sel) == [s, x] : List<&2, List<&2, String>>}, ps: Part([s]), ih: @k2: Nat -> TK(rest, A.eff.sel(e, sel), k2)) -> TK(Con{A.EOne{e}, rest}, sel, k):
   match k:
     case 0n:
-      (0n, {==})
+      (0n, (Nil{}, ({==}, Inl{(Unit{}, r => {==})})))
     case 1n:
-      (0n, ep_eq2a(e, rest, sel, r, s, x, ex, zs))
+      (0n, ([s], (tk_eq2a(e, rest, sel, s, x, ex), ps)))
     case 2n+k3:
-      ep_lift2(e, rest, sel, r, k3, s, x, ex, ih(k3))
+      tk_lift2(e, rest, sel, k3, s, x, ex, ih(k3))
 
-def ep_con(+e: A.Eff, -rest: List<&2, A.Eff>, +sel: Nat, +r: R.Ds, k: Nat, sh: Shp(A.eff.args(e, sel), r), ih: @k2: Nat -> EP(rest, A.eff.sel(e, sel), rp1(e, sel, r), k2)) -> EP(Con{e, rest}, sel, r, k):
+def tk_one(+e: A.Eff, -rest: List<&2, A.Ent>, +sel: Nat, k: Nat, sh: Shp(A.eff.args(e, sel)), ih: @k2: Nat -> TK(rest, A.eff.sel(e, sel), k2)) -> TK(Con{A.EOne{e}, rest}, sel, k):
   match sh:
     case Inl{p}:
       (x, ex) = p
-      ep_one(e, rest, sel, r, k, x, ex, ih)
+      tk_one1(e, rest, sel, k, x, ex, ih)
     case Inr{p}:
       (s, p2) = p
       (x, p3) = p2
-      (ex, zs) = p3
-      ep_two(e, rest, sel, r, k, s, x, ex, zs, ih)
+      (ex, ps) = p3
+      tk_one2(e, rest, sel, k, s, x, ex, ps, ih)
 
-def ep(es: List<&2, A.Eff>, +sel: Nat, +r: R.Ds, k: Nat) -> EP(es, sel, r, k):
-  match es:
+# the first k of entries with no mark, then an EXEC and more: a part of
+# them, or all of them, the EXEC and the first j of the rest
+def TX(k: Nat, b: List<&2, List<&2, String>>, rs: List<&2, List<&2, String>>) -> Type:
+  Or(Exists(List<&2, List<&2, String>>, q => {ltake(List<&2, String>, k, List.append(&2, List<&2, String>, b, ["EXEC"] <> rs)) == q : List<&2, List<&2, String>>} & NM(q)), Exists(Nat, j => {ltake(List<&2, String>, k, List.append(&2, List<&2, String>, b, ["EXEC"] <> rs)) == List.append(&2, List<&2, String>, b, ["EXEC"] <> ltake(List<&2, String>, j, rs)) : List<&2, List<&2, String>>}))
+
+def tx_take.lift(-k2: Nat, +x: List<&2, String>, -rest: List<&2, List<&2, String>>, -rs: List<&2, List<&2, String>>, hx: {A.mark(x) == 0n : Nat}, t: TX(k2, rest, rs)) -> TX(1n+k2, Con{x, rest}, rs):
+  match t:
+    case Inl{p}:
+      (q, p2) = p
+      (e, nq) = p2
+      Inl{(x <> q, (Equal.cong(List<&2, List<&2, String>>, List<&2, List<&2, String>>, z => x <> z, ltake(List<&2, String>, k2, List.append(&2, List<&2, String>, rest, ["EXEC"] <> rs)), q, e), (hx, nq)))}
+    case Inr{p}:
+      (j, e) = p
+      Inr{(j, Equal.cong(List<&2, List<&2, String>>, List<&2, List<&2, String>>, z => x <> z, ltake(List<&2, String>, k2, List.append(&2, List<&2, String>, rest, ["EXEC"] <> rs)), List.append(&2, List<&2, String>, rest, ["EXEC"] <> ltake(List<&2, String>, j, rs)), e))}
+
+def tx_take.con(-k2: Nat, +x: List<&2, String>, -rest: List<&2, List<&2, String>>, -rs: List<&2, List<&2, String>>, h: {A.mark(x) == 0n : Nat} & NM(rest), ih: NM(rest) -> TX(k2, rest, rs)) -> TX(1n+k2, Con{x, rest}, rs):
+  (hx, hr) = h
+  tx_take.lift(k2, x, rest, rs, hx, ih(hr))
+
+def tx_take(k: Nat, b: List<&2, List<&2, String>>, -rs: List<&2, List<&2, String>>) -> NM(b) -> TX(k, b, rs):
+  match k b:
+    case 0n _:
+      h => Inl{(Nil{}, ({==}, Unit{}))}
+    case 1n+k2 Nil{}:
+      h => Inr{(k2, {==})}
+    case 1n+k2 Con{+x, rest}:
+      h => tx_take.con(k2, x, rest, rs, h, tx_take(k2, rest, rs))
+
+# a transaction cut inside: its MULTI and a part of its effects' entries
+def tk_open_eq(+es: List<&2, A.Eff>, -rest: List<&2, A.Ent>, +sel: Nat, -k2: Nat, -q: List<&2, List<&2, String>>, e: {ltake(List<&2, String>, k2, List.append(&2, List<&2, String>, A.effs.args(es, sel), ["EXEC"] <> A.ents.args(rest, A.effs.sel(es, sel)))) == q : List<&2, List<&2, String>>}) -> {ltake(List<&2, String>, 1n+k2, A.ents.args(Con{A.ETx{es}, rest}, sel)) == List.append(&2, List<&2, String>, A.ents.args(ltake(A.Ent, 0n, Con{A.ETx{es}, rest}), sel), ["MULTI"] <> q) : List<&2, List<&2, String>>}:
+  %Equal.sym(List<&2, List<&2, String>>, List.append(&2, List<&2, String>, List.append(&2, List<&2, String>, A.effs.args(es, sel), [["EXEC"]]), A.ents.args(rest, A.effs.sel(es, sel))), List.append(&2, List<&2, String>, A.effs.args(es, sel), List.append(&2, List<&2, String>, [["EXEC"]], A.ents.args(rest, A.effs.sel(es, sel)))), lapp_assoc_s(A.effs.args(es, sel), [["EXEC"]], A.ents.args(rest, A.effs.sel(es, sel)))) : {["MULTI"] <> ltake(List<&2, String>, k2, _) == ["MULTI"] <> q : List<&2, List<&2, String>>}
+  Equal.cong(List<&2, List<&2, String>>, List<&2, List<&2, String>>, z => ["MULTI"] <> z, ltake(List<&2, String>, k2, List.append(&2, List<&2, String>, A.effs.args(es, sel), ["EXEC"] <> A.ents.args(rest, A.effs.sel(es, sel)))), q, e)
+
+# a transaction taken whole
+def tk_tx_eq(+es: List<&2, A.Eff>, -rest: List<&2, A.Ent>, +sel: Nat, -k2: Nat, -j: Nat, -i: Nat, -p: List<&2, List<&2, String>>, e: {ltake(List<&2, String>, k2, List.append(&2, List<&2, String>, A.effs.args(es, sel), ["EXEC"] <> A.ents.args(rest, A.effs.sel(es, sel)))) == List.append(&2, List<&2, String>, A.effs.args(es, sel), ["EXEC"] <> ltake(List<&2, String>, j, A.ents.args(rest, A.effs.sel(es, sel)))) : List<&2, List<&2, String>>}, h: {ltake(List<&2, String>, j, A.ents.args(rest, A.effs.sel(es, sel))) == List.append(&2, List<&2, String>, A.ents.args(ltake(A.Ent, i, rest), A.effs.sel(es, sel)), p) : List<&2, List<&2, String>>}) -> {ltake(List<&2, String>, 1n+k2, A.ents.args(Con{A.ETx{es}, rest}, sel)) == List.append(&2, List<&2, String>, A.ents.args(ltake(A.Ent, 1n+i, Con{A.ETx{es}, rest}), sel), p) : List<&2, List<&2, String>>}:
+  %Equal.sym(List<&2, List<&2, String>>, List.append(&2, List<&2, String>, List.append(&2, List<&2, String>, A.effs.args(es, sel), [["EXEC"]]), A.ents.args(rest, A.effs.sel(es, sel))), List.append(&2, List<&2, String>, A.effs.args(es, sel), List.append(&2, List<&2, String>, [["EXEC"]], A.ents.args(rest, A.effs.sel(es, sel)))), lapp_assoc_s(A.effs.args(es, sel), [["EXEC"]], A.ents.args(rest, A.effs.sel(es, sel)))) : {["MULTI"] <> ltake(List<&2, String>, k2, _) == ["MULTI"] <> List.append(&2, List<&2, String>, List.append(&2, List<&2, String>, List.append(&2, List<&2, String>, A.effs.args(es, sel), [["EXEC"]]), A.ents.args(ltake(A.Ent, i, rest), A.effs.sel(es, sel))), p) : List<&2, List<&2, String>>}
+  %Equal.sym(List<&2, List<&2, String>>, ltake(List<&2, String>, k2, List.append(&2, List<&2, String>, A.effs.args(es, sel), ["EXEC"] <> A.ents.args(rest, A.effs.sel(es, sel)))), List.append(&2, List<&2, String>, A.effs.args(es, sel), ["EXEC"] <> ltake(List<&2, String>, j, A.ents.args(rest, A.effs.sel(es, sel)))), e) : {["MULTI"] <> _ == ["MULTI"] <> List.append(&2, List<&2, String>, List.append(&2, List<&2, String>, List.append(&2, List<&2, String>, A.effs.args(es, sel), [["EXEC"]]), A.ents.args(ltake(A.Ent, i, rest), A.effs.sel(es, sel))), p) : List<&2, List<&2, String>>}
+  %Equal.sym(List<&2, List<&2, String>>, ltake(List<&2, String>, j, A.ents.args(rest, A.effs.sel(es, sel))), List.append(&2, List<&2, String>, A.ents.args(ltake(A.Ent, i, rest), A.effs.sel(es, sel)), p), h) : {["MULTI"] <> List.append(&2, List<&2, String>, A.effs.args(es, sel), ["EXEC"] <> _) == ["MULTI"] <> List.append(&2, List<&2, String>, List.append(&2, List<&2, String>, List.append(&2, List<&2, String>, A.effs.args(es, sel), [["EXEC"]]), A.ents.args(ltake(A.Ent, i, rest), A.effs.sel(es, sel))), p) : List<&2, List<&2, String>>}
+  %Equal.sym(List<&2, List<&2, String>>, List.append(&2, List<&2, String>, List.append(&2, List<&2, String>, List.append(&2, List<&2, String>, A.effs.args(es, sel), [["EXEC"]]), A.ents.args(ltake(A.Ent, i, rest), A.effs.sel(es, sel))), p), List.append(&2, List<&2, String>, List.append(&2, List<&2, String>, A.effs.args(es, sel), [["EXEC"]]), List.append(&2, List<&2, String>, A.ents.args(ltake(A.Ent, i, rest), A.effs.sel(es, sel)), p)), lapp_assoc_s(List.append(&2, List<&2, String>, A.effs.args(es, sel), [["EXEC"]]), A.ents.args(ltake(A.Ent, i, rest), A.effs.sel(es, sel)), p)) : {["MULTI"] <> List.append(&2, List<&2, String>, A.effs.args(es, sel), ["EXEC"] <> List.append(&2, List<&2, String>, A.ents.args(ltake(A.Ent, i, rest), A.effs.sel(es, sel)), p)) == ["MULTI"] <> _ : List<&2, List<&2, String>>}
+  %Equal.sym(List<&2, List<&2, String>>, List.append(&2, List<&2, String>, List.append(&2, List<&2, String>, A.effs.args(es, sel), [["EXEC"]]), List.append(&2, List<&2, String>, A.ents.args(ltake(A.Ent, i, rest), A.effs.sel(es, sel)), p)), List.append(&2, List<&2, String>, A.effs.args(es, sel), List.append(&2, List<&2, String>, [["EXEC"]], List.append(&2, List<&2, String>, A.ents.args(ltake(A.Ent, i, rest), A.effs.sel(es, sel)), p))), lapp_assoc_s(A.effs.args(es, sel), [["EXEC"]], List.append(&2, List<&2, String>, A.ents.args(ltake(A.Ent, i, rest), A.effs.sel(es, sel)), p))) : {["MULTI"] <> List.append(&2, List<&2, String>, A.effs.args(es, sel), ["EXEC"] <> List.append(&2, List<&2, String>, A.ents.args(ltake(A.Ent, i, rest), A.effs.sel(es, sel)), p)) == ["MULTI"] <> _ : List<&2, List<&2, String>>}
+  {==}
+
+# a transaction cut inside, which the start reverts
+def tk_open(+es: List<&2, A.Eff>, -rest: List<&2, A.Ent>, +sel: Nat, -k2: Nat, +q: List<&2, List<&2, String>>, e: {ltake(List<&2, String>, k2, List.append(&2, List<&2, String>, A.effs.args(es, sel), ["EXEC"] <> A.ents.args(rest, A.effs.sel(es, sel)))) == q : List<&2, List<&2, String>>}, nq: NM(q)) -> TK(Con{A.ETx{es}, rest}, sel, 1n+k2):
+  (0n, (["MULTI"] <> q, (tk_open_eq(es, rest, sel, k2, q, e), Inr{(q, ({==}, nq))})))
+
+def tk_tx_lift(+es: List<&2, A.Eff>, -rest: List<&2, A.Ent>, +sel: Nat, -k2: Nat, -j: Nat, e: {ltake(List<&2, String>, k2, List.append(&2, List<&2, String>, A.effs.args(es, sel), ["EXEC"] <> A.ents.args(rest, A.effs.sel(es, sel)))) == List.append(&2, List<&2, String>, A.effs.args(es, sel), ["EXEC"] <> ltake(List<&2, String>, j, A.ents.args(rest, A.effs.sel(es, sel)))) : List<&2, List<&2, String>>}, w: TK(rest, A.effs.sel(es, sel), j)) -> TK(Con{A.ETx{es}, rest}, sel, 1n+k2):
+  (i, q) = w
+  (p, q2) = q
+  (h, pt) = q2
+  (1n+i, (p, (tk_tx_eq(es, rest, sel, k2, j, i, p, e, h), pt)))
+
+def tk_tx_in(+es: List<&2, A.Eff>, -rest: List<&2, A.Ent>, +sel: Nat, -k2: Nat, t: TX(k2, A.effs.args(es, sel), A.ents.args(rest, A.effs.sel(es, sel))), ih: @j: Nat -> TK(rest, A.effs.sel(es, sel), j)) -> TK(Con{A.ETx{es}, rest}, sel, 1n+k2):
+  match t:
+    case Inl{p}:
+      (q, p2) = p
+      (e, nq) = p2
+      tk_open(es, rest, sel, k2, q, e, nq)
+    case Inr{p}:
+      (j, e) = p
+      tk_tx_lift(es, rest, sel, k2, j, e, ih(j))
+
+def tk_tx(+es: List<&2, A.Eff>, -rest: List<&2, A.Ent>, +sel: Nat, k: Nat, ih: @j: Nat -> TK(rest, A.effs.sel(es, sel), j)) -> TK(Con{A.ETx{es}, rest}, sel, k):
+  match k:
+    case 0n:
+      (0n, (Nil{}, ({==}, Inl{(Unit{}, r => {==})})))
+    case 1n+k2:
+      tk_tx_in(es, rest, sel, k2, tx_take(k2, A.effs.args(es, sel), A.ents.args(rest, A.effs.sel(es, sel)))(nm_effs(es, sel)), ih)
+
+# the first k entries of a file: whole entries, then a part of one
+def tk(xs: List<&2, A.Ent>, +sel: Nat, k: Nat) -> TK(xs, sel, k):
+  match xs:
     case Nil{}:
       match k:
         case 0n:
-          (0n, {==})
+          (0n, (Nil{}, ({==}, Inl{(Unit{}, r => {==})})))
         case 1n+k2:
-          (0n, {==})
-    case Con{+e, rest}:
-      ep_con(e, rest, sel, r, k, shape(e, sel, r), k2 => ep(rest, A.eff.sel(e, sel), rp1(e, sel, r), k2))
+          (0n, (Nil{}, ({==}, Inl{(Unit{}, r => {==})})))
+    case Con{A.EOne{+e}, rest}:
+      tk_one(e, rest, sel, k, shape(e, sel), k2 => tk(rest, A.eff.sel(e, sel), k2))
+    case Con{A.ETx{+es}, rest}:
+      tk_tx(es, rest, sel, k, j => tk(rest, A.effs.sel(es, sel), j))
 
 # an act has no effect or one
 def OneE(es: List<&2, A.Eff>) -> Type:
@@ -13848,8 +14509,10 @@ def one_eff(t: R.Act, +o: R.Ds) -> OneE(aeff(t, o)):
     case R.AWipe{}:
       Inr{(A.EWipe{}, {==})}
 
-def SEP(ss: List<&2, Laws.Step>, x: R.Ds, r: R.Ds, sel: Nat, m: Nat) -> Type:
-  Exists(Nat, j => {Laws.zero(rp(ltake(A.Eff, m, seffs(ss, x)), sel, r)) == Laws.zero(Laws.run_timed(List.take(&2, Laws.Step, ss, j), x)) : List<&2, R.Db>})
+# the first i entries of the steps ss, run from x, replayed after r: the
+# databases after the first j steps, for some j
+def SEPE(ss: List<&2, Laws.Step>, x: R.Ds, r: R.Ds, sel: Nat, i: Nat) -> Type:
+  Exists(Nat, j => {Laws.zero(rp(xseffs(ltake(A.Ent, i, sents(ss, x))), sel, r)) == Laws.zero(Laws.run_timed(List.take(&2, Laws.Step, ss, j), x)) : List<&2, R.Db>})
 
 def inv_ez(-r: R.Ds, -x: R.Ds, -sel: Nat, -n: Nat, st: Inv(r, x, sel) & Len(x, n)) -> {Laws.zero(r) == Laws.zero(x) : List<&2, R.Db>}:
   (inv, ln) = st
@@ -13860,75 +14523,156 @@ def st_at(+now: Nat, +x: R.Ds, -r: R.Ds, -sel: Nat, -n: Nat, st: Inv(r, x, sel) 
   (inv, ln) = st
   inv_z(r, x, R.ds.at(now, x), sel, n, z_at(now, x), inv, ln)
 
-def post_nil(-t: R.Act, -o: R.Ds, -r: R.Ds, -sel: Nat, -n: Nat, e0: {aeff(t, o) == Nil{} : List<&2, A.Eff>}, post: Post(t, o, r, sel, n)) -> Inv(r, R.ds_of(R.act(t, o)), sel) & Len(R.ds_of(R.act(t, o)), n):
-  %e0 : Inv(rp(_, sel, r), R.ds_of(R.act(t, o)), A.effs.sel(_, sel)) & Len(R.ds_of(R.act(t, o)), n)
+# a step with no effect, or effects es, keeps the invariant
+def post_nils(-es: List<&2, A.Eff>, -o: R.Ds, -r: R.Ds, -sel: Nat, -n: Nat, e0: {es == Nil{} : List<&2, A.Eff>}, post: Inv(rp(es, sel, r), o, A.effs.sel(es, sel)) & Len(o, n)) -> Inv(r, o, sel) & Len(o, n):
+  %e0 : Inv(rp(_, sel, r), o, A.effs.sel(_, sel)) & Len(o, n)
   post
 
-def post_one(-t: R.Act, -o: R.Ds, -r: R.Ds, -sel: Nat, -n: Nat, -ev: A.Eff, e1: {aeff(t, o) == [ev] : List<&2, A.Eff>}, post: Post(t, o, r, sel, n)) -> Inv(rp1(ev, sel, r), R.ds_of(R.act(t, o)), A.eff.sel(ev, sel)) & Len(R.ds_of(R.act(t, o)), n):
-  %e1 : Inv(rp(_, sel, r), R.ds_of(R.act(t, o)), A.effs.sel(_, sel)) & Len(R.ds_of(R.act(t, o)), n)
+def post_ws(-w: A.Ent, -es: List<&2, A.Eff>, -o: R.Ds, -r: R.Ds, -sel: Nat, -n: Nat, exw: {xeffs(w) == es : List<&2, A.Eff>}, post: Inv(rp(es, sel, r), o, A.effs.sel(es, sel)) & Len(o, n)) -> Inv(rp(xeffs(w), sel, r), o, A.effs.sel(xeffs(w), sel)) & Len(o, n):
+  %Equal.sym(List<&2, A.Eff>, xeffs(w), es, exw) : Inv(rp(_, sel, r), o, A.effs.sel(_, sel)) & Len(o, n)
   post
 
-def sep_lift(-now: Nat, -a: R.Act, -rest: List<&2, Laws.Step>, -x: R.Ds, -r: R.Ds, -sel: Nat, -m: Nat, w: SEP(rest, Laws.run_at(Laws.Step{now, a}, x), r, sel, m)) -> Exists(Nat, j => {Laws.zero(rp(ltake(A.Eff, m, seffs(rest, Laws.run_at(Laws.Step{now, a}, x))), sel, r)) == Laws.zero(Laws.run_timed(List.take(&2, Laws.Step, Con{Laws.Step{now, a}, rest}, j), x)) : List<&2, R.Db>}):
+def sepe_lift(-s: Laws.Step, -rest: List<&2, Laws.Step>, -x: R.Ds, -r: R.Ds, -sel: Nat, -i: Nat, w: SEPE(rest, Laws.run_at(s, x), r, sel, i)) -> Exists(Nat, j => {Laws.zero(rp(xseffs(ltake(A.Ent, i, sents(rest, Laws.run_at(s, x)))), sel, r)) == Laws.zero(Laws.run_timed(List.take(&2, Laws.Step, Con{s, rest}, j), x)) : List<&2, R.Db>}):
   (j2, h) = w
   (1n+j2, h)
 
-def sep_none(-now: Nat, -a: R.Act, -rest: List<&2, Laws.Step>, -x: R.Ds, +r: R.Ds, +sel: Nat, +n: Nat, m: Nat, +e0: {aeff(a, R.ds.at(now, x)) == Nil{} : List<&2, A.Eff>}, post: Post(a, R.ds.at(now, x), r, sel, n), ih: @r2: R.Ds -> @s2: Nat -> @m2: Nat -> Inv(r2, Laws.run_at(Laws.Step{now, a}, x), s2) & Len(Laws.run_at(Laws.Step{now, a}, x), n) -> SEP(rest, Laws.run_at(Laws.Step{now, a}, x), r2, s2, m2)) -> SEP(Con{Laws.Step{now, a}, rest}, x, r, sel, m):
-  %Equal.sym(List<&2, A.Eff>, aeff(a, R.ds.at(now, x)), Nil{}, e0) : Exists(Nat, j => {Laws.zero(rp(ltake(A.Eff, m, List.append(&2, A.Eff, _, seffs(rest, Laws.run_at(Laws.Step{now, a}, x)))), sel, r)) == Laws.zero(Laws.run_timed(List.take(&2, Laws.Step, Con{Laws.Step{now, a}, rest}, j), x)) : List<&2, R.Db>})
-  sep_lift(now, a, rest, x, r, sel, m, ih(r, sel, m, post_nil(a, R.ds.at(now, x), r, sel, n, e0, post)))
+# a step that makes no entry
+def sepe_none(+s: Laws.Step, -rest: List<&2, Laws.Step>, +x: R.Ds, +r: R.Ds, +sel: Nat, -n: Nat, +i: Nat, +ew: {sent(s, x) == Nil{} : List<&2, A.Ent>}, post: Inv(r, Laws.run_at(s, x), sel) & Len(Laws.run_at(s, x), n), ih: @r2: R.Ds -> @s2: Nat -> @i2: Nat -> Inv(r2, Laws.run_at(s, x), s2) & Len(Laws.run_at(s, x), n) -> SEPE(rest, Laws.run_at(s, x), r2, s2, i2)) -> SEPE(Con{s, rest}, x, r, sel, i):
+  %Equal.sym(List<&2, A.Ent>, sent(s, x), Nil{}, ew) : Exists(Nat, j => {Laws.zero(rp(xseffs(ltake(A.Ent, i, List.append(&2, A.Ent, _, sents(rest, Laws.run_at(s, x))))), sel, r)) == Laws.zero(Laws.run_timed(List.take(&2, Laws.Step, Con{s, rest}, j), x)) : List<&2, R.Db>})
+  sepe_lift(s, rest, x, r, sel, i, ih(r, sel, i, post))
 
-def sep_some(+now: Nat, +a: R.Act, -rest: List<&2, Laws.Step>, +x: R.Ds, +r: R.Ds, +sel: Nat, +n: Nat, +sm: {KV.small(n) == True{} : Bool}, m: Nat, +ev: A.Eff, +e1: {aeff(a, R.ds.at(now, x)) == [ev] : List<&2, A.Eff>}, st: Inv(r, x, sel) & Len(x, n), ih: @r2: R.Ds -> @s2: Nat -> @m2: Nat -> Inv(r2, Laws.run_at(Laws.Step{now, a}, x), s2) & Len(Laws.run_at(Laws.Step{now, a}, x), n) -> SEP(rest, Laws.run_at(Laws.Step{now, a}, x), r2, s2, m2)) -> SEP(Con{Laws.Step{now, a}, rest}, x, r, sel, m):
-  match m:
+# a step that makes one entry
+def sepe_one(+s: Laws.Step, -rest: List<&2, Laws.Step>, +x: R.Ds, +r: R.Ds, +sel: Nat, +n: Nat, i: Nat, +w: A.Ent, +ew: {sent(s, x) == [w] : List<&2, A.Ent>}, +ez: {Laws.zero(r) == Laws.zero(x) : List<&2, R.Db>}, post: Inv(rp(xeffs(w), sel, r), Laws.run_at(s, x), A.effs.sel(xeffs(w), sel)) & Len(Laws.run_at(s, x), n), ih: @r2: R.Ds -> @s2: Nat -> @i2: Nat -> Inv(r2, Laws.run_at(s, x), s2) & Len(Laws.run_at(s, x), n) -> SEPE(rest, Laws.run_at(s, x), r2, s2, i2)) -> SEPE(Con{s, rest}, x, r, sel, i):
+  match i:
     case 0n:
-      (0n, inv_ez(r, x, sel, n, st))
-    case 1n+m2:
-      %Equal.sym(List<&2, A.Eff>, aeff(a, R.ds.at(now, x)), [ev], e1) : Exists(Nat, j => {Laws.zero(rp(ltake(A.Eff, 1n+m2, List.append(&2, A.Eff, _, seffs(rest, Laws.run_at(Laws.Step{now, a}, x)))), sel, r)) == Laws.zero(Laws.run_timed(List.take(&2, Laws.Step, Con{Laws.Step{now, a}, rest}, j), x)) : List<&2, R.Db>})
-      sep_lift(now, a, rest, x, rp1(ev, sel, r), A.eff.sel(ev, sel), m2, ih(rp1(ev, sel, r), A.eff.sel(ev, sel), m2, post_one(a, R.ds.at(now, x), r, sel, n, ev, e1, act_inv(a, R.ds.at(now, x), r, sel, n, sm, st_at(now, x, r, sel, n, st)))))
+      (0n, ez)
+    case 1n+i2:
+      %Equal.sym(List<&2, A.Ent>, sent(s, x), [w], ew) : Exists(Nat, j => {Laws.zero(rp(xseffs(ltake(A.Ent, 1n+i2, List.append(&2, A.Ent, _, sents(rest, Laws.run_at(s, x))))), sel, r)) == Laws.zero(Laws.run_timed(List.take(&2, Laws.Step, Con{s, rest}, j), x)) : List<&2, R.Db>})
+      %rp_cat(xeffs(w), xseffs(ltake(A.Ent, i2, sents(rest, Laws.run_at(s, x)))), sel, r) : Exists(Nat, j => {Laws.zero(_) == Laws.zero(Laws.run_timed(List.take(&2, Laws.Step, Con{s, rest}, j), x)) : List<&2, R.Db>})
+      sepe_lift(s, rest, x, rp(xeffs(w), sel, r), A.effs.sel(xeffs(w), sel), i2, ih(rp(xeffs(w), sel, r), A.effs.sel(xeffs(w), sel), i2, post))
 
-def sep_con(+now: Nat, +a: R.Act, -rest: List<&2, Laws.Step>, +x: R.Ds, +r: R.Ds, +sel: Nat, +n: Nat, +sm: {KV.small(n) == True{} : Bool}, m: Nat, st: Inv(r, x, sel) & Len(x, n), oe: OneE(aeff(a, R.ds.at(now, x))), ih: @r2: R.Ds -> @s2: Nat -> @m2: Nat -> Inv(r2, Laws.run_at(Laws.Step{now, a}, x), s2) & Len(Laws.run_at(Laws.Step{now, a}, x), n) -> SEP(rest, Laws.run_at(Laws.Step{now, a}, x), r2, s2, m2)) -> SEP(Con{Laws.Step{now, a}, rest}, x, r, sel, m):
+# an act
+def sepe_act.none(+now: Nat, +a: R.Act, -rest: List<&2, Laws.Step>, +x: R.Ds, +r: R.Ds, +sel: Nat, +n: Nat, +sm: {KV.small(n) == True{} : Bool}, +i: Nat, st: Inv(r, x, sel) & Len(x, n), +e0: {aeff(a, R.ds.at(now, x)) == Nil{} : List<&2, A.Eff>}, ih: @r2: R.Ds -> @s2: Nat -> @i2: Nat -> Inv(r2, Laws.run_at(Laws.Step{now, a}, x), s2) & Len(Laws.run_at(Laws.Step{now, a}, x), n) -> SEPE(rest, Laws.run_at(Laws.Step{now, a}, x), r2, s2, i2)) -> SEPE(Con{Laws.Step{now, a}, rest}, x, r, sel, i):
+  sepe_none(Laws.Step{now, a}, rest, x, r, sel, n, i, Equal.cong(List<&2, A.Eff>, List<&2, A.Ent>, z => A.ents.of(z), aeff(a, R.ds.at(now, x)), Nil{}, e0), post_nils(aeff(a, R.ds.at(now, x)), R.ds_of(R.act(a, R.ds.at(now, x))), r, sel, n, e0, act_inv(a, R.ds.at(now, x), r, sel, n, sm, st_at(now, x, r, sel, n, st))), ih)
+
+def sepe_act.one(+now: Nat, +a: R.Act, -rest: List<&2, Laws.Step>, +x: R.Ds, +r: R.Ds, +sel: Nat, +n: Nat, +sm: {KV.small(n) == True{} : Bool}, i: Nat, +ez: {Laws.zero(r) == Laws.zero(x) : List<&2, R.Db>}, q: {R.ds.index(r) == sel : Nat} & {R.ds.now(r) == 0n : Nat}, ln: {List.length(&2, R.Db, Laws.zero(x)) == 1n+n : Nat}, +ev: A.Eff, +e1: {aeff(a, R.ds.at(now, x)) == [ev] : List<&2, A.Eff>}, ih: @r2: R.Ds -> @s2: Nat -> @i2: Nat -> Inv(r2, Laws.run_at(Laws.Step{now, a}, x), s2) & Len(Laws.run_at(Laws.Step{now, a}, x), n) -> SEPE(rest, Laws.run_at(Laws.Step{now, a}, x), r2, s2, i2)) -> SEPE(Con{Laws.Step{now, a}, rest}, x, r, sel, i):
+  sepe_one(Laws.Step{now, a}, rest, x, r, sel, n, i, A.EOne{ev}, Equal.cong(List<&2, A.Eff>, List<&2, A.Ent>, z => A.ents.of(z), aeff(a, R.ds.at(now, x)), [ev], e1), ez, post_ws(A.EOne{ev}, aeff(a, R.ds.at(now, x)), R.ds_of(R.act(a, R.ds.at(now, x))), r, sel, n, Equal.sym(List<&2, A.Eff>, aeff(a, R.ds.at(now, x)), [ev], e1), act_inv(a, R.ds.at(now, x), r, sel, n, sm, st_at(now, x, r, sel, n, ((ez, q), ln)))), ih)
+
+# an act
+def sepe_act(+now: Nat, +a: R.Act, -rest: List<&2, Laws.Step>, +x: R.Ds, +r: R.Ds, +sel: Nat, +n: Nat, +sm: {KV.small(n) == True{} : Bool}, +i: Nat, st: Inv(r, x, sel) & Len(x, n), oe: OneE(aeff(a, R.ds.at(now, x))), ih: @r2: R.Ds -> @s2: Nat -> @i2: Nat -> Inv(r2, Laws.run_at(Laws.Step{now, a}, x), s2) & Len(Laws.run_at(Laws.Step{now, a}, x), n) -> SEPE(rest, Laws.run_at(Laws.Step{now, a}, x), r2, s2, i2)) -> SEPE(Con{Laws.Step{now, a}, rest}, x, r, sel, i):
+  (inv, ln) = st
+  (ez, q) = inv
   match oe:
     case Inl{e0}:
-      sep_none(now, a, rest, x, r, sel, n, m, e0, act_inv(a, R.ds.at(now, x), r, sel, n, sm, st_at(now, x, r, sel, n, st)), ih)
+      sepe_act.none(now, a, rest, x, r, sel, n, sm, i, ((ez, q), ln), e0, ih)
     case Inr{p}:
       (ev, e1) = p
-      sep_some(now, a, rest, x, r, sel, n, sm, m, ev, e1, st, ih)
+      sepe_act.one(now, a, rest, x, r, sel, n, sm, i, ez, q, ln, ev, e1, ih)
 
-def sep(ss: List<&2, Laws.Step>, +x: R.Ds, +r: R.Ds, +sel: Nat, +n: Nat, +sm: {KV.small(n) == True{} : Bool}, m: Nat, st: Inv(r, x, sel) & Len(x, n)) -> SEP(ss, x, r, sel, m):
+# a transaction's effects make no entry, or one
+def wrap_one(es: List<&2, A.Eff>) -> Or({A.tx.wrap(es) == Nil{} : List<&2, A.Ent>} & {es == Nil{} : List<&2, A.Eff>}, Exists(A.Ent, w => {A.tx.wrap(es) == [w] : List<&2, A.Ent>} & {xeffs(w) == es : List<&2, A.Eff>})):
+  match es:
+    case Nil{}:
+      Inl{({==}, {==})}
+    case Con{a, Nil{}}:
+      Inr{(A.EOne{a}, ({==}, {==}))}
+    case Con{a, Con{b, rest}}:
+      Inr{(A.ETx{a <> b <> rest}, ({==}, {==}))}
+
+# a transaction, its acts whole
+def sepe_tx.of(+now: Nat, +as: List<&2, R.Act>, -rest: List<&2, Laws.Step>, +x: R.Ds, +r: R.Ds, +sel: Nat, +n: Nat, i: Nat, +ez: {Laws.zero(r) == Laws.zero(x) : List<&2, R.Db>}, one: Or({A.tx.wrap(aeffs(as, R.ds.at(now, x))) == Nil{} : List<&2, A.Ent>} & {aeffs(as, R.ds.at(now, x)) == Nil{} : List<&2, A.Eff>}, Exists(A.Ent, w => {A.tx.wrap(aeffs(as, R.ds.at(now, x))) == [w] : List<&2, A.Ent>} & {xeffs(w) == aeffs(as, R.ds.at(now, x)) : List<&2, A.Eff>})), post: Inv(rp(aeffs(as, R.ds.at(now, x)), sel, r), R.acts(as, R.ds.at(now, x)), A.effs.sel(aeffs(as, R.ds.at(now, x)), sel)) & Len(R.acts(as, R.ds.at(now, x)), n), ih: @r2: R.Ds -> @s2: Nat -> @i2: Nat -> Inv(r2, Laws.run_at(Laws.StepTx{now, as}, x), s2) & Len(Laws.run_at(Laws.StepTx{now, as}, x), n) -> SEPE(rest, Laws.run_at(Laws.StepTx{now, as}, x), r2, s2, i2)) -> SEPE(Con{Laws.StepTx{now, as}, rest}, x, r, sel, i):
+  match one:
+    case Inl{p}:
+      (ew, e0) = p
+      sepe_none(Laws.StepTx{now, as}, rest, x, r, sel, n, i, ew, post_nils(aeffs(as, R.ds.at(now, x)), R.acts(as, R.ds.at(now, x)), r, sel, n, e0, post), ih)
+    case Inr{p}:
+      (w, q) = p
+      (ew, exw) = q
+      sepe_one(Laws.StepTx{now, as}, rest, x, r, sel, n, i, w, ew, ez, post_ws(w, aeffs(as, R.ds.at(now, x)), R.acts(as, R.ds.at(now, x)), r, sel, n, exw, post), ih)
+
+def sepe_tx.go(+now: Nat, +as: List<&2, R.Act>, -rest: List<&2, Laws.Step>, +x: R.Ds, +r: R.Ds, +sel: Nat, +n: Nat, +sm: {KV.small(n) == True{} : Bool}, i: Nat, +ez: {Laws.zero(r) == Laws.zero(x) : List<&2, R.Db>}, q: {R.ds.index(r) == sel : Nat} & {R.ds.now(r) == 0n : Nat}, ln: {List.length(&2, R.Db, Laws.zero(x)) == 1n+n : Nat}, ih: @r2: R.Ds -> @s2: Nat -> @i2: Nat -> Inv(r2, Laws.run_at(Laws.StepTx{now, as}, x), s2) & Len(Laws.run_at(Laws.StepTx{now, as}, x), n) -> SEPE(rest, Laws.run_at(Laws.StepTx{now, as}, x), r2, s2, i2)) -> SEPE(Con{Laws.StepTx{now, as}, rest}, x, r, sel, i):
+  sepe_tx.of(now, as, rest, x, r, sel, n, i, ez, wrap_one(aeffs(as, R.ds.at(now, x))), acts_inv(as, R.ds.at(now, x), r, sel, n, sm, st_at(now, x, r, sel, n, ((ez, q), ln))), ih)
+
+def sepe_tx(+now: Nat, +as: List<&2, R.Act>, -rest: List<&2, Laws.Step>, +x: R.Ds, +r: R.Ds, +sel: Nat, +n: Nat, +sm: {KV.small(n) == True{} : Bool}, i: Nat, st: Inv(r, x, sel) & Len(x, n), ih: @r2: R.Ds -> @s2: Nat -> @i2: Nat -> Inv(r2, Laws.run_at(Laws.StepTx{now, as}, x), s2) & Len(Laws.run_at(Laws.StepTx{now, as}, x), n) -> SEPE(rest, Laws.run_at(Laws.StepTx{now, as}, x), r2, s2, i2)) -> SEPE(Con{Laws.StepTx{now, as}, rest}, x, r, sel, i):
+  (inv, ln) = st
+  (ez, q) = inv
+  sepe_tx.go(now, as, rest, x, r, sel, n, sm, i, ez, q, ln, ih)
+
+def sepe(ss: List<&2, Laws.Step>, +x: R.Ds, +r: R.Ds, +sel: Nat, +n: Nat, +sm: {KV.small(n) == True{} : Bool}, i: Nat, st: Inv(r, x, sel) & Len(x, n)) -> SEPE(ss, x, r, sel, i):
   match ss:
     case Nil{}:
-      match m:
+      match i:
         case 0n:
           (0n, inv_ez(r, x, sel, n, st))
-        case 1n+m2:
+        case 1n+i2:
           (0n, inv_ez(r, x, sel, n, st))
     case Con{Laws.Step{+now, +a}, +rest}:
-      sep_con(now, a, rest, x, r, sel, n, sm, m, st, one_eff(a, R.ds.at(now, x)), r2 => s2 => m2 => st2 => sep(rest, Laws.run_at(Laws.Step{now, a}, x), r2, s2, n, sm, m2, st2))
+      sepe_act(now, a, rest, x, r, sel, n, sm, i, st, one_eff(a, R.ds.at(now, x)), r2 => s2 => i2 => st2 => sepe(rest, Laws.run_at(Laws.Step{now, a}, x), r2, s2, n, sm, i2, st2))
+    case Con{Laws.StepTx{+now, +as}, +rest}:
+      sepe_tx(now, as, rest, x, r, sel, n, sm, i, st, r2 => s2 => i2 => st2 => sepe(rest, Laws.run_at(Laws.StepTx{now, as}, x), r2, s2, n, sm, i2, st2))
 
 # Recovering a cut file
 # ---------------------
 # The loader reads the k whole entries in front of the cut (load_cut_go):
-# they replay as the first m effects (ep), and those as the first j acts
-# (sep).
+# the history's first i entries, and a part of the next (tk), which the
+# start keeps and which changes no database, or reverts (keep_part); the
+# first i entries replay as the first j steps (sepe).
 
-def cut_sep(+hist: List<&2, Laws.Run>, +n: Nat, -c: String, -k: Nat, -m: Nat, e_r: {Laws.zero(Pair.fst(R.Ds, String, A.restore(c, n))) == Laws.zero(R.acts(A.file.acts(A.parse_all(ltake(List<&2, String>, k, A.effs.args(all_effs(hist, n), 0n)))), R.ds.empty(n))) : List<&2, R.Db>}, h1: {Laws.zero(R.acts(A.file.acts(A.parse_all(ltake(List<&2, String>, k, A.effs.args(all_effs(hist, n), 0n)))), R.ds.empty(n))) == Laws.zero(rp(ltake(A.Eff, m, all_effs(hist, n)), 0n, R.ds.empty(n))) : List<&2, R.Db>}, w: SEP(Laws.commands(hist), R.ds.empty(n), R.ds.empty(n), 0n, m)) -> Exists(Nat, j => {Laws.zero(Pair.fst(R.Ds, String, A.restore(c, n))) == Laws.zero(Laws.held(hist, n, j)) : List<&2, R.Db>}):
+def keep_part.keep(+ys: List<&2, A.Ent>, +n: Nat, +p: List<&2, List<&2, String>>, nm: NM(p), zr: @r: R.Ds -> {Laws.zero(R.acts(A.file.acts(A.parse_all(p)), r)) == Laws.zero(r) : List<&2, R.Db>}) -> {Laws.zero(A.replay(A.untx(List.append(&2, List<&2, String>, A.ents.args(ys, 0n), p)), n)) == Laws.zero(rp(xseffs(ys), 0n, R.ds.empty(n))) : List<&2, R.Db>}:
+  %Equal.sym(List<&2, List<&2, String>>, A.untx(List.append(&2, List<&2, String>, A.ents.args(ys, 0n), p)), List.append(&2, List<&2, String>, A.ents.args(ys, 0n), p), untx_keep(ys, 0n, p, nm)) : {Laws.zero(A.replay(_, n)) == Laws.zero(rp(xseffs(ys), 0n, R.ds.empty(n))) : List<&2, R.Db>}
+  %parse_app(A.ents.args(ys, 0n), p) : {Laws.zero(R.acts(A.file.acts(_), R.ds.empty(n))) == Laws.zero(rp(xseffs(ys), 0n, R.ds.empty(n))) : List<&2, R.Db>}
+  %fa_app(A.parse_all(A.ents.args(ys, 0n)), A.parse_all(p)) : {Laws.zero(R.acts(_, R.ds.empty(n))) == Laws.zero(rp(xseffs(ys), 0n, R.ds.empty(n))) : List<&2, R.Db>}
+  %acts_app(A.file.acts(A.parse_all(A.ents.args(ys, 0n))), A.file.acts(A.parse_all(p)), R.ds.empty(n)) : {Laws.zero(_) == Laws.zero(rp(xseffs(ys), 0n, R.ds.empty(n))) : List<&2, R.Db>}
+  %rpe_file(ys, 0n, R.ds.empty(n)) : {Laws.zero(R.acts(A.file.acts(A.parse_all(p)), R.acts(A.file.acts(A.parse_all(A.ents.args(ys, 0n))), R.ds.empty(n)))) == Laws.zero(_) : List<&2, R.Db>}
+  zr(R.acts(A.file.acts(A.parse_all(A.ents.args(ys, 0n))), R.ds.empty(n)))
+
+def keep_part.open(+ys: List<&2, A.Ent>, +n: Nat, -p: List<&2, List<&2, String>>, +q: List<&2, List<&2, String>>, eq: {p == ["MULTI"] <> q : List<&2, List<&2, String>>}, nq: NM(q)) -> {Laws.zero(A.replay(A.untx(List.append(&2, List<&2, String>, A.ents.args(ys, 0n), p)), n)) == Laws.zero(rp(xseffs(ys), 0n, R.ds.empty(n))) : List<&2, R.Db>}:
+  %Equal.sym(List<&2, List<&2, String>>, p, ["MULTI"] <> q, eq) : {Laws.zero(A.replay(A.untx(List.append(&2, List<&2, String>, A.ents.args(ys, 0n), _)), n)) == Laws.zero(rp(xseffs(ys), 0n, R.ds.empty(n))) : List<&2, R.Db>}
+  %Equal.sym(List<&2, List<&2, String>>, A.untx(List.append(&2, List<&2, String>, A.ents.args(ys, 0n), ["MULTI"] <> q)), A.ents.args(ys, 0n), untx_open(ys, 0n, q, nq)) : {Laws.zero(A.replay(_, n)) == Laws.zero(rp(xseffs(ys), 0n, R.ds.empty(n))) : List<&2, R.Db>}
+  Equal.cong(R.Ds, List<&2, R.Db>, z => Laws.zero(z), R.acts(A.file.acts(A.parse_all(A.ents.args(ys, 0n))), R.ds.empty(n)), rp(xseffs(ys), 0n, R.ds.empty(n)), rpe_file(ys, 0n, R.ds.empty(n)))
+
+# the whole entries in front of a part of an entry, replayed after the
+# start keeps them, and the part if it keeps it: the effects of the whole
+# entries
+def keep_part(+ys: List<&2, A.Ent>, +n: Nat, +p: List<&2, List<&2, String>>, pt: Part(p)) -> {Laws.zero(A.replay(A.untx(List.append(&2, List<&2, String>, A.ents.args(ys, 0n), p)), n)) == Laws.zero(rp(xseffs(ys), 0n, R.ds.empty(n))) : List<&2, R.Db>}:
+  match pt:
+    case Inl{h}:
+      (nm, zr) = h
+      keep_part.keep(ys, n, p, nm, zr)
+    case Inr{h}:
+      (q, h2) = h
+      (eq, nq) = h2
+      keep_part.open(ys, n, p, q, eq, nq)
+
+def cut_sepe(+hist: List<&2, Laws.Run>, +n: Nat, -c: String, -i: Nat, e_r: {Laws.zero(Pair.fst(R.Ds, String, A.restore(c, n))) == Laws.zero(rp(xseffs(ltake(A.Ent, i, all_ents(hist, n))), 0n, R.ds.empty(n))) : List<&2, R.Db>}, w: SEPE(Laws.commands(hist), R.ds.empty(n), R.ds.empty(n), 0n, i)) -> Exists(Nat, j => {Laws.zero(Pair.fst(R.Ds, String, A.restore(c, n))) == Laws.zero(Laws.held(hist, n, j)) : List<&2, R.Db>}):
   (j, h2) = w
-  (j, Equal.trans(List<&2, R.Db>, Laws.zero(Pair.fst(R.Ds, String, A.restore(c, n))), Laws.zero(R.acts(A.file.acts(A.parse_all(ltake(List<&2, String>, k, A.effs.args(all_effs(hist, n), 0n)))), R.ds.empty(n))), Laws.zero(Laws.held(hist, n, j)), e_r,
-    Equal.trans(List<&2, R.Db>, Laws.zero(R.acts(A.file.acts(A.parse_all(ltake(List<&2, String>, k, A.effs.args(all_effs(hist, n), 0n)))), R.ds.empty(n))), Laws.zero(rp(ltake(A.Eff, m, all_effs(hist, n)), 0n, R.ds.empty(n))), Laws.zero(Laws.held(hist, n, j)), h1,
-      Equal.trans(List<&2, R.Db>, Laws.zero(rp(ltake(A.Eff, m, all_effs(hist, n)), 0n, R.ds.empty(n))), Laws.zero(rp(ltake(A.Eff, m, seffs(Laws.commands(hist), R.ds.empty(n))), 0n, R.ds.empty(n))), Laws.zero(Laws.held(hist, n, j)),
-        Equal.cong(List<&2, A.Eff>, List<&2, R.Db>, z => Laws.zero(rp(ltake(A.Eff, m, z), 0n, R.ds.empty(n))), all_effs(hist, n), seffs(Laws.commands(hist), R.ds.empty(n)), Equal.sym(List<&2, A.Eff>, seffs(Laws.commands(hist), R.ds.empty(n)), all_effs(hist, n), all_effs_cmds(hist, n))),
-        h2))))
+  (j, Equal.trans(List<&2, R.Db>, Laws.zero(Pair.fst(R.Ds, String, A.restore(c, n))), Laws.zero(rp(xseffs(ltake(A.Ent, i, all_ents(hist, n))), 0n, R.ds.empty(n))), Laws.zero(Laws.held(hist, n, j)), e_r,
+    Equal.trans(List<&2, R.Db>, Laws.zero(rp(xseffs(ltake(A.Ent, i, all_ents(hist, n))), 0n, R.ds.empty(n))), Laws.zero(rp(xseffs(ltake(A.Ent, i, sents(Laws.commands(hist), R.ds.empty(n)))), 0n, R.ds.empty(n))), Laws.zero(Laws.held(hist, n, j)),
+      Equal.cong(List<&2, A.Ent>, List<&2, R.Db>, z => Laws.zero(rp(xseffs(ltake(A.Ent, i, z)), 0n, R.ds.empty(n))), all_ents(hist, n), sents(Laws.commands(hist), R.ds.empty(n)), Equal.sym(List<&2, A.Ent>, sents(Laws.commands(hist), R.ds.empty(n)), all_ents(hist, n), all_ents_cmds(hist, n))),
+      h2)))
 
-def cut_ep(+hist: List<&2, Laws.Run>, +n: Nat, +sm: {KV.small(n) == True{} : Bool}, -c: String, -k: Nat, e_r: {Laws.zero(Pair.fst(R.Ds, String, A.restore(c, n))) == Laws.zero(R.acts(A.file.acts(A.parse_all(ltake(List<&2, String>, k, A.effs.args(all_effs(hist, n), 0n)))), R.ds.empty(n))) : List<&2, R.Db>}, w: EP(all_effs(hist, n), 0n, R.ds.empty(n), k)) -> Exists(Nat, j => {Laws.zero(Pair.fst(R.Ds, String, A.restore(c, n))) == Laws.zero(Laws.held(hist, n, j)) : List<&2, R.Db>}):
-  (m, h1) = w
-  cut_sep(hist, n, c, k, m, e_r, h1, sep(Laws.commands(hist), R.ds.empty(n), R.ds.empty(n), 0n, n, sm, m, (({==}, ({==}, {==})), len_empty(n))))
+def cut_tk.go(+hist: List<&2, Laws.Run>, +n: Nat, +sm: {KV.small(n) == True{} : Bool}, +c: String, -k: Nat, -r: String, p1: {A.load.go(String.length(c), c, A.entry(c), Nil{}) == (List.reverse.go(&2, List<&2, String>, Nil{}, ltake(List<&2, String>, k, A.ents.args(all_ents(hist, n), 0n))), r) : List<&2, List<&2, String>> & String}, +i: Nat, +p: List<&2, List<&2, String>>, h: {ltake(List<&2, String>, k, A.ents.args(all_ents(hist, n), 0n)) == List.append(&2, List<&2, String>, A.ents.args(ltake(A.Ent, i, all_ents(hist, n)), 0n), p) : List<&2, List<&2, String>>}, pt: Part(p)) -> Exists(Nat, j => {Laws.zero(Pair.fst(R.Ds, String, A.restore(c, n))) == Laws.zero(Laws.held(hist, n, j)) : List<&2, R.Db>}):
+  +ld = Equal.trans(List<&2, List<&2, String>> & String, A.load.go(String.length(c), c, A.entry(c), Nil{}), (ltake(List<&2, String>, k, A.ents.args(all_ents(hist, n), 0n)), r), (List.append(&2, List<&2, String>, A.ents.args(ltake(A.Ent, i, all_ents(hist, n)), 0n), p), r), p1,
+    Equal.cong(List<&2, List<&2, String>>, List<&2, List<&2, String>> & String, z => (z, r), ltake(List<&2, String>, k, A.ents.args(all_ents(hist, n), 0n)), List.append(&2, List<&2, String>, A.ents.args(ltake(A.Ent, i, all_ents(hist, n)), 0n), p), h))
+  +e_r = Equal.trans(List<&2, R.Db>, Laws.zero(Pair.fst(R.Ds, String, A.restore(c, n))), Laws.zero(A.replay(A.untx(List.append(&2, List<&2, String>, A.ents.args(ltake(A.Ent, i, all_ents(hist, n)), 0n), p)), n)), Laws.zero(rp(xseffs(ltake(A.Ent, i, all_ents(hist, n))), 0n, R.ds.empty(n))),
+    Equal.cong(List<&2, List<&2, String>> & String, List<&2, R.Db>, z => Laws.zero(Pair.fst(R.Ds, String, A.restore.of(z, n))), A.load.go(String.length(c), c, A.entry(c), Nil{}), (List.append(&2, List<&2, String>, A.ents.args(ltake(A.Ent, i, all_ents(hist, n)), 0n), p), r), ld),
+    keep_part(ltake(A.Ent, i, all_ents(hist, n)), n, p, pt))
+  cut_sepe(hist, n, c, i, e_r, sepe(Laws.commands(hist), R.ds.empty(n), R.ds.empty(n), 0n, n, sm, i, (({==}, ({==}, {==})), len_empty(n))))
 
-def cut_fin2(+hist: List<&2, Laws.Run>, +n: Nat, +sm: {KV.small(n) == True{} : Bool}, +c: String, res: Cut(String.length(c), c, Nil{}, A.effs.args(all_effs(hist, n), 0n))) -> Exists(Nat, j => {Laws.zero(Pair.fst(R.Ds, String, A.restore(c, n))) == Laws.zero(Laws.held(hist, n, j)) : List<&2, R.Db>}):
+def cut_tk(+hist: List<&2, Laws.Run>, +n: Nat, +sm: {KV.small(n) == True{} : Bool}, +c: String, -k: Nat, -r: String, p1: {A.load.go(String.length(c), c, A.entry(c), Nil{}) == (List.reverse.go(&2, List<&2, String>, Nil{}, ltake(List<&2, String>, k, A.ents.args(all_ents(hist, n), 0n))), r) : List<&2, List<&2, String>> & String}, t: TK(all_ents(hist, n), 0n, k)) -> Exists(Nat, j => {Laws.zero(Pair.fst(R.Ds, String, A.restore(c, n))) == Laws.zero(Laws.held(hist, n, j)) : List<&2, R.Db>}):
+  (i, q) = t
+  (p, q2) = q
+  (h, pt) = q2
+  cut_tk.go(hist, n, sm, c, k, r, p1, i, p, h, pt)
+
+def cut_fin2(+hist: List<&2, Laws.Run>, +n: Nat, +sm: {KV.small(n) == True{} : Bool}, +c: String, res: Cut(String.length(c), c, Nil{}, A.ents.args(all_ents(hist, n), 0n))) -> Exists(Nat, j => {Laws.zero(Pair.fst(R.Ds, String, A.restore(c, n))) == Laws.zero(Laws.held(hist, n, j)) : List<&2, R.Db>}):
   (k, q) = res
   (r, pq) = q
   (p1, p2) = pq
-  cut_ep(hist, n, sm, c, k, Equal.cong(List<&2, List<&2, String>> & String, List<&2, R.Db>, z => Laws.zero(Pair.fst(R.Ds, String, A.restore.of(z, n))), A.load.go(String.length(c), c, A.entry(c), Nil{}), (List.reverse.go(&2, List<&2, String>, Nil{}, ltake(List<&2, String>, k, A.effs.args(all_effs(hist, n), 0n))), r), p1), ep(all_effs(hist, n), 0n, R.ds.empty(n), k))
+  cut_tk(hist, n, sm, c, k, r, p1, tk(all_ents(hist, n), 0n, k))
 
 def Laws.recover_cut(hist, n, sm, c, d, e):
-  cut_fin2(hist, n, sm, c, load_cut_go(A.effs.args(all_effs(hist, n), 0n), c, d, String.length(c), Nil{})(aof_entries(hist, n, c, d, e))(le_refl(String.length(c))))
+  cut_fin2(hist, n, sm, c, load_cut_go(A.ents.args(all_ents(hist, n), 0n), c, d, String.length(c), Nil{})(aof_entries(hist, n, c, d, e))(le_refl(String.length(c))))
 
 # Several databases
 # -----------------
@@ -14607,6 +15351,16 @@ def srv_same.o(o: R.SessOp, +conn: S.Conn, +srv: S.Srv, +ef: {S.authed(conn, srv
       e => Empty.absurd({S.own_srv(R.SBlock{y0, y1}, conn, srv) == srv : S.Srv}, true_false(Equal.trans(Bool, True{}, S.authed(conn, srv), False{}, e, ef)))
     case R.SUnblock{y0, y1}:
       e => Empty.absurd({S.own_srv(R.SUnblock{y0, y1}, conn, srv) == srv : S.Srv}, true_false(Equal.trans(Bool, True{}, S.authed(conn, srv), False{}, e, ef)))
+    case R.SMulti{}:
+      e => Empty.absurd({S.own_srv(R.SMulti{}, conn, srv) == srv : S.Srv}, true_false(Equal.trans(Bool, True{}, S.authed(conn, srv), False{}, e, ef)))
+    case R.SExec{}:
+      e => Empty.absurd({S.own_srv(R.SExec{}, conn, srv) == srv : S.Srv}, true_false(Equal.trans(Bool, True{}, S.authed(conn, srv), False{}, e, ef)))
+    case R.SDiscard{}:
+      e => Empty.absurd({S.own_srv(R.SDiscard{}, conn, srv) == srv : S.Srv}, true_false(Equal.trans(Bool, True{}, S.authed(conn, srv), False{}, e, ef)))
+    case R.SWatch{y0}:
+      e => Empty.absurd({S.own_srv(R.SWatch{y0}, conn, srv) == srv : S.Srv}, true_false(Equal.trans(Bool, True{}, S.authed(conn, srv), False{}, e, ef)))
+    case R.SUnwatch{}:
+      e => Empty.absurd({S.own_srv(R.SUnwatch{}, conn, srv) == srv : S.Srv}, true_false(Equal.trans(Bool, True{}, S.authed(conn, srv), False{}, e, ef)))
     case R.SMemUsage{y0, y1}:
       e => Empty.absurd({S.own_srv(R.SMemUsage{y0, y1}, conn, srv) == srv : S.Srv}, true_false(Equal.trans(Bool, True{}, S.authed(conn, srv), False{}, e, ef)))
     case R.SReply{y0}:
@@ -14743,6 +15497,26 @@ def own_bad(o: R.SessOp, +ps: List<&2, R.Act>, +id: Nat, +a: Bool, +n: String, +
     case R.SUnblock{y0, y1}:
       ih =>
         %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel}, srv), False{}, ef) : {Laws.all_bad(List.append(&2, R.Act, S.acts.k(S.KSess{R.SUnblock{y0, y1}}, _, R.Own{R.SUnblock{y0, y1}}, S.Conn{id, a, n, m, False{}, sel}, srv), ps)) == True{} : Bool}
+        ih
+    case R.SMulti{}:
+      ih =>
+        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel}, srv), False{}, ef) : {Laws.all_bad(List.append(&2, R.Act, S.acts.k(S.KSess{R.SMulti{}}, _, R.Own{R.SMulti{}}, S.Conn{id, a, n, m, False{}, sel}, srv), ps)) == True{} : Bool}
+        ih
+    case R.SExec{}:
+      ih =>
+        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel}, srv), False{}, ef) : {Laws.all_bad(List.append(&2, R.Act, S.acts.k(S.KSess{R.SExec{}}, _, R.Own{R.SExec{}}, S.Conn{id, a, n, m, False{}, sel}, srv), ps)) == True{} : Bool}
+        ih
+    case R.SDiscard{}:
+      ih =>
+        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel}, srv), False{}, ef) : {Laws.all_bad(List.append(&2, R.Act, S.acts.k(S.KSess{R.SDiscard{}}, _, R.Own{R.SDiscard{}}, S.Conn{id, a, n, m, False{}, sel}, srv), ps)) == True{} : Bool}
+        ih
+    case R.SWatch{y0}:
+      ih =>
+        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel}, srv), False{}, ef) : {Laws.all_bad(List.append(&2, R.Act, S.acts.k(S.KSess{R.SWatch{y0}}, _, R.Own{R.SWatch{y0}}, S.Conn{id, a, n, m, False{}, sel}, srv), ps)) == True{} : Bool}
+        ih
+    case R.SUnwatch{}:
+      ih =>
+        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel}, srv), False{}, ef) : {Laws.all_bad(List.append(&2, R.Act, S.acts.k(S.KSess{R.SUnwatch{}}, _, R.Own{R.SUnwatch{}}, S.Conn{id, a, n, m, False{}, sel}, srv), ps)) == True{} : Bool}
         ih
     case R.SMemUsage{y0, y1}:
       ih =>
@@ -14981,6 +15755,26 @@ def auth_own(o: R.SessOp, +id: Nat, +a: Bool, +n: String, +m: S.Mute, +sel: Nat,
     case R.SUnblock{y0, y1}:
       el =>
         %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel}, srv), False{}, ef) : {S.conn.auth(S.next_conn.k(S.KSess{R.SUnblock{y0, y1}}, _, S.Conn{id, a, n, m, False{}, sel}, srv)) == False{} : Bool}
+        ef
+    case R.SMulti{}:
+      el =>
+        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel}, srv), False{}, ef) : {S.conn.auth(S.next_conn.k(S.KSess{R.SMulti{}}, _, S.Conn{id, a, n, m, False{}, sel}, srv)) == False{} : Bool}
+        ef
+    case R.SExec{}:
+      el =>
+        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel}, srv), False{}, ef) : {S.conn.auth(S.next_conn.k(S.KSess{R.SExec{}}, _, S.Conn{id, a, n, m, False{}, sel}, srv)) == False{} : Bool}
+        ef
+    case R.SDiscard{}:
+      el =>
+        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel}, srv), False{}, ef) : {S.conn.auth(S.next_conn.k(S.KSess{R.SDiscard{}}, _, S.Conn{id, a, n, m, False{}, sel}, srv)) == False{} : Bool}
+        ef
+    case R.SWatch{y0}:
+      el =>
+        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel}, srv), False{}, ef) : {S.conn.auth(S.next_conn.k(S.KSess{R.SWatch{y0}}, _, S.Conn{id, a, n, m, False{}, sel}, srv)) == False{} : Bool}
+        ef
+    case R.SUnwatch{}:
+      el =>
+        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel}, srv), False{}, ef) : {S.conn.auth(S.next_conn.k(S.KSess{R.SUnwatch{}}, _, S.Conn{id, a, n, m, False{}, sel}, srv)) == False{} : Bool}
         ef
     case R.SMemUsage{y0, y1}:
       el =>

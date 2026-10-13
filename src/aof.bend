@@ -853,6 +853,70 @@ def effs.sel(es: List<&2, Eff>, +sel: Nat) -> Nat:
     case Con{+e, rest}:
       effs.sel(rest, eff.sel(e, sel))
 
+# The file's entries: an effect, or the effects of a transaction (EXEC's,
+# when they are two or more), written between a MULTI and an EXEC as
+# Redis writes them, so that a crash that cuts the file inside them
+# leaves a transaction the start reverts (below: untx)
+type Ent is Data:
+  EOne{e: Eff}
+  ETx{es: List<&2, Eff>}
+
+def ent.args(+x: Ent, +sel: Nat) -> List<&2, List<&2, String>>:
+  match x:
+    case EOne{+e}:
+      eff.args(e, sel)
+    case ETx{+es}:
+      ["MULTI"] <> List.append(&2, List<&2, String>, effs.args(es, sel), [["EXEC"]])
+
+def ent.sel(+x: Ent, +sel: Nat) -> Nat:
+  match x:
+    case EOne{+e}:
+      eff.sel(e, sel)
+    case ETx{+es}:
+      effs.sel(es, sel)
+
+def ents.args(xs: List<&2, Ent>, +sel: Nat) -> List<&2, List<&2, String>>:
+  match xs:
+    case Nil{}:
+      Nil{}
+    case Con{+x, rest}:
+      List.append(&2, List<&2, String>, ent.args(x, sel), ents.args(rest, ent.sel(x, sel)))
+
+def ents.sel(xs: List<&2, Ent>, +sel: Nat) -> Nat:
+  match xs:
+    case Nil{}:
+      sel
+    case Con{+x, rest}:
+      ents.sel(rest, ent.sel(x, sel))
+
+# effects each an entry of its own
+def ents.of(es: List<&2, Eff>) -> List<&2, Ent>:
+  match es:
+    case Nil{}:
+      Nil{}
+    case Con{e, rest}:
+      EOne{e} <> ents.of(rest)
+
+# effects (newest first) put before entries (newest first), each an
+# entry of its own
+def ents.onto(es: List<&2, Eff>, xs: List<&2, Ent>) -> List<&2, Ent>:
+  match es:
+    case Nil{}:
+      xs
+    case Con{e, rest}:
+      ents.onto(rest, EOne{e} <> xs)
+
+# a transaction's effects, in order, as entries: one entry of them all
+# when they are two or more, as Redis wraps them in MULTI and EXEC
+def tx.wrap(es: List<&2, Eff>) -> List<&2, Ent>:
+  match es:
+    case Con{a, Con{b, rest}}:
+      [ETx{a <> b <> rest}]
+    case Con{a, Nil{}}:
+      [EOne{a}]
+    case Nil{}:
+      Nil{}
+
 # Writing
 # -------
 # An entry is "*<count>\r\n", then each string as "$<length>\r\n<bytes>\r\n"
@@ -1140,15 +1204,6 @@ def file.acts(cs: List<&2, R.Cmd>) -> List<&2, R.Act>:
 def replay(reqs: List<&2, List<&2, String>>, n: Nat) -> R.Ds:
   R.acts(file.acts(parse_all(reqs)), R.ds.empty(n))
 
-def restore.of(l: List<&2, List<&2, String>> & String, n: Nat) -> R.Ds & String:
-  (reqs, rest) = l
-  (replay(reqs, n), rest)
-
-# the databases a file holds, from 1 + n empty ones, and what is left
-# after its last whole entry
-def restore(s: String, n: Nat) -> R.Ds & String:
-  restore.of(load(s), n)
-
 # Checking
 # --------
 # At start the server replays a file only when each entry replays as the
@@ -1170,7 +1225,8 @@ def restore(s: String, n: Nat) -> R.Ds & String:
 # DEL of a key whose time had passed with the write that met it, are
 # marks: the commands between them replay one after another; a MULTI
 # inside another, an EXEC without one, and a file that ends inside one
-# (Redis reverts that transaction) are refused.
+# are refused (the start first reverts a transaction the file ends
+# inside, as Redis does: untx, below, so that the check meets none).
 
 # The check only reads: its walks borrow the requests (marks, before
 # parse_all takes them over) and the acts (before replay runs them), and
@@ -1204,6 +1260,52 @@ def marks(+reqs: List<&2, List<&2, String>>) -> List<&2, Nat>:
       Nil{}
     case Con{+r, rest}:
       mark(r) <> marks(rest)
+
+# A transaction cut short
+# -----------------------
+# A file that ends inside a transaction (a MULTI with no EXEC after it:
+# a crash cut the file while a transaction was written) restores the
+# entries before its MULTI, as Redis reverts such a transaction ("Revert
+# incomplete MULTI/EXEC transaction") and cuts the file back to before
+# it: none of a transaction's commands is applied unless all are. The
+# last mark decides: read from the end, an EXEC first (or no mark)
+# keeps every entry, a MULTI first keeps those before it (cut.go: the
+# entries before it, newest first; m: the mark of the entry just read).
+def cut.go(rev: List<&2, List<&2, String>>, m: Nat) -> Maybe<&2, List<&2, List<&2, String>>>:
+  match rev m:
+    case r 1n:
+      Some{r}
+    case r 2n:
+      None{}
+    case Nil{} _:
+      None{}
+    case Con{+x, rest} _:
+      cut.go(rest, mark(x))
+
+def untx.of(m: Maybe<&2, List<&2, List<&2, String>>>, reqs: List<&2, List<&2, String>>) -> List<&2, List<&2, String>>:
+  match m:
+    case Some{rest}:
+      List.reverse(&2, List<&2, String>, rest)
+    case None{}:
+      reqs
+
+# the entries a file restores: all of them, or those before a
+# transaction it ends inside
+def untx(+reqs: List<&2, List<&2, String>>) -> List<&2, List<&2, String>>:
+  untx.of(cut.go(List.reverse(&2, List<&2, String>, reqs), 0n), reqs)
+
+# the databases the entries a file restores leave, run from 1 + n empty
+# ones, and what is left after them: the entries of a transaction cut
+# short, then what follows the last whole entry
+def restore.of(l: List<&2, List<&2, String>> & String, n: Nat) -> R.Ds & String:
+  (+reqs, rest) = l
+  +kept = untx(reqs)
+  (replay(kept, n), encode(List.drop(&2, List<&2, String>, reqs, List.length(&2, List<&2, String>, kept))) ++ rest)
+
+# the databases a file holds, from 1 + n empty ones, and what is left
+# after the entries it restores
+def restore(s: String, n: Nat) -> R.Ds & String:
+  restore.of(load(s), n)
 
 def db.code(out: Bool) -> Nat:
   Bool.pick(Nat, out, 7n, 0n)

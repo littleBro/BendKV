@@ -2104,6 +2104,16 @@ def own_reply(+o: R.SessOp, +c: Conn, +s: Srv, +ds: R.Ds) -> Maybe<&2, R.Reply>:
       say(conn.mode(c), blk.reply(blk.parse(id, args), R.ds.focused(ds)))
     case R.SUnblock{i, e}:
       say(conn.mode(c), R.RInt{R.IPos{0n}})
+    case R.SMulti{}:
+      say(conn.mode(c), R.r_ok())
+    case R.SExec{}:
+      say(conn.mode(c), R.RError{"ERR EXEC without MULTI"})
+    case R.SDiscard{}:
+      say(conn.mode(c), R.RError{"ERR DISCARD without MULTI"})
+    case R.SWatch{ks}:
+      say(conn.mode(c), R.r_ok())
+    case R.SUnwatch{}:
+      say(conn.mode(c), R.r_ok())
 
 # the connection after a session command
 def own_conn(+o: R.SessOp, +c: Conn, +s: Srv) -> Conn:
@@ -2169,6 +2179,16 @@ def own_conn(+o: R.SessOp, +c: Conn, +s: Srv) -> Conn:
     case R.SBlock{i, a}:
       step_conn(c, s)
     case R.SUnblock{i, e}:
+      step_conn(c, s)
+    case R.SMulti{}:
+      step_conn(c, s)
+    case R.SExec{}:
+      step_conn(c, s)
+    case R.SDiscard{}:
+      step_conn(c, s)
+    case R.SWatch{ks}:
+      step_conn(c, s)
+    case R.SUnwatch{}:
       step_conn(c, s)
 
 # what a session command does to the databases: SELECT and RESET move the
