@@ -3,8 +3,11 @@
 # against the one expected: a line that differs, and a reply too many or
 # too few, makes the run exit with 1, naming the first. INCR of
 # 99999999999999 overflows, as BendKV's integers stop at 14 digits (Redis
-# answers 100000000000000). With BENDKV_CHECK_BREAK=smoke the first line
-# expected is a wrong one, to show that a difference fails the run.
+# answers 100000000000000). A number the parser refuses (INCRBY n x) is
+# the session's to answer, after it checks the client's authentication,
+# as Redis does: the database alone answers that the command is the
+# connection's. With BENDKV_CHECK_BREAK=smoke the first line expected is
+# a wrong one, to show that a difference fails the run.
 # Run: bend tests/smoke.bend
 import Base
 import ../src/map.bend as KV
@@ -81,7 +84,7 @@ def want(+mode: String) -> List<&2, String>:
    "$2\\r\\nhi\\r\\n",
    "-ERR unknown command 'NOPE', with args beginning with: '1' '2' \\r\\n",
    "-ERR wrong number of arguments for 'set' command\\r\\n",
-   "-ERR value is not an integer or out of range\\r\\n",
+   "-ERR a command of the connection, not of the database\\r\\n",
    "rest: *2\\r\\n$3\\r\\nGET\\r\\n$3\\r\\nfo"]
 
 # where each line got differs from the one wanted ("" where they agree),
