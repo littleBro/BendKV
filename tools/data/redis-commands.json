@@ -11171,6 +11171,74 @@
     []
    ]
   },
+  "psubscribe": {
+   "docs": [
+    "summary",
+    "Listen for messages published to channels matching the given patterns",
+    "since",
+    "2.0.0",
+    "group",
+    "pubsub",
+    "complexity",
+    "O(N) where N is the number of patterns the client is already subscribed to.",
+    "arguments",
+    [
+     [
+      "name",
+      "pattern",
+      "type",
+      "block",
+      "flags",
+      [
+       {
+        "+": "multiple"
+       }
+      ],
+      "arguments",
+      [
+       [
+        "name",
+        "pattern",
+        "type",
+        "pattern"
+       ]
+      ]
+     ]
+    ]
+   ],
+   "info": [
+    "psubscribe",
+    -2,
+    [
+     {
+      "+": "pubsub"
+     },
+     {
+      "+": "noscript"
+     },
+     {
+      "+": "loading"
+     },
+     {
+      "+": "stale"
+     }
+    ],
+    0,
+    0,
+    0,
+    [
+     {
+      "+": "@pubsub"
+     },
+     {
+      "+": "@slow"
+     }
+    ],
+    [],
+    [],
+    []
+   ]
+  },
   "pttl": {
    "docs": [
     "summary",
@@ -11265,6 +11333,459 @@
       ]
      ]
     ],
+    []
+   ]
+  },
+  "publish": {
+   "docs": [
+    "summary",
+    "Post a message to a channel",
+    "since",
+    "2.0.0",
+    "group",
+    "pubsub",
+    "complexity",
+    "O(N+M) where N is the number of clients subscribed to the receiving channel and M is the total number of subscribed patterns (by any client).",
+    "arguments",
+    [
+     [
+      "name",
+      "channel",
+      "type",
+      "string"
+     ],
+     [
+      "name",
+      "message",
+      "type",
+      "string"
+     ]
+    ]
+   ],
+   "info": [
+    "publish",
+    3,
+    [
+     {
+      "+": "pubsub"
+     },
+     {
+      "+": "loading"
+     },
+     {
+      "+": "stale"
+     },
+     {
+      "+": "fast"
+     }
+    ],
+    0,
+    0,
+    0,
+    [
+     {
+      "+": "@pubsub"
+     },
+     {
+      "+": "@fast"
+     }
+    ],
+    [],
+    [],
+    []
+   ]
+  },
+  "pubsub": {
+   "docs": [
+    "summary",
+    "A container for Pub/Sub commands",
+    "since",
+    "2.8.0",
+    "group",
+    "pubsub",
+    "complexity",
+    "Depends on subcommand.",
+    "subcommands",
+    [
+     "pubsub|channels",
+     [
+      "summary",
+      "List active channels",
+      "since",
+      "2.8.0",
+      "group",
+      "pubsub",
+      "complexity",
+      "O(N) where N is the number of active channels, and assuming constant time pattern matching (relatively short channels and patterns)",
+      "arguments",
+      [
+       [
+        "name",
+        "pattern",
+        "type",
+        "pattern",
+        "flags",
+        [
+         {
+          "+": "optional"
+         }
+        ]
+       ]
+      ]
+     ],
+     "pubsub|help",
+     [
+      "summary",
+      "Show helpful text about the different subcommands",
+      "since",
+      "6.2.0",
+      "group",
+      "pubsub",
+      "complexity",
+      "O(1)"
+     ],
+     "pubsub|numpat",
+     [
+      "summary",
+      "Get the count of unique patterns pattern subscriptions",
+      "since",
+      "2.8.0",
+      "group",
+      "pubsub",
+      "complexity",
+      "O(1)"
+     ],
+     "pubsub|numsub",
+     [
+      "summary",
+      "Get the count of subscribers for channels",
+      "since",
+      "2.8.0",
+      "group",
+      "pubsub",
+      "complexity",
+      "O(N) for the NUMSUB subcommand, where N is the number of requested channels",
+      "arguments",
+      [
+       [
+        "name",
+        "channel",
+        "type",
+        "string",
+        "flags",
+        [
+         {
+          "+": "optional"
+         },
+         {
+          "+": "multiple"
+         }
+        ]
+       ]
+      ]
+     ],
+     "pubsub|shardchannels",
+     [
+      "summary",
+      "List active shard channels",
+      "since",
+      "7.0.0",
+      "group",
+      "pubsub",
+      "complexity",
+      "O(N) where N is the number of active shard channels, and assuming constant time pattern matching (relatively short shard channels).",
+      "arguments",
+      [
+       [
+        "name",
+        "pattern",
+        "type",
+        "pattern",
+        "flags",
+        [
+         {
+          "+": "optional"
+         }
+        ]
+       ]
+      ]
+     ],
+     "pubsub|shardnumsub",
+     [
+      "summary",
+      "Get the count of subscribers for shard channels",
+      "since",
+      "7.0.0",
+      "group",
+      "pubsub",
+      "complexity",
+      "O(N) for the SHARDNUMSUB subcommand, where N is the number of requested shard channels",
+      "arguments",
+      [
+       [
+        "name",
+        "shardchannel",
+        "type",
+        "string",
+        "flags",
+        [
+         {
+          "+": "optional"
+         },
+         {
+          "+": "multiple"
+         }
+        ]
+       ]
+      ]
+     ]
+    ]
+   ],
+   "info": [
+    "pubsub",
+    -2,
+    [],
+    0,
+    0,
+    0,
+    [
+     {
+      "+": "@slow"
+     }
+    ],
+    [],
+    [],
+    [
+     [
+      "pubsub|channels",
+      -2,
+      [
+       {
+        "+": "pubsub"
+       },
+       {
+        "+": "loading"
+       },
+       {
+        "+": "stale"
+       }
+      ],
+      0,
+      0,
+      0,
+      [
+       {
+        "+": "@pubsub"
+       },
+       {
+        "+": "@slow"
+       }
+      ],
+      [],
+      [],
+      []
+     ],
+     [
+      "pubsub|help",
+      2,
+      [
+       {
+        "+": "loading"
+       },
+       {
+        "+": "stale"
+       }
+      ],
+      0,
+      0,
+      0,
+      [
+       {
+        "+": "@slow"
+       }
+      ],
+      [],
+      [],
+      []
+     ],
+     [
+      "pubsub|numpat",
+      2,
+      [
+       {
+        "+": "pubsub"
+       },
+       {
+        "+": "loading"
+       },
+       {
+        "+": "stale"
+       }
+      ],
+      0,
+      0,
+      0,
+      [
+       {
+        "+": "@pubsub"
+       },
+       {
+        "+": "@slow"
+       }
+      ],
+      [],
+      [],
+      []
+     ],
+     [
+      "pubsub|numsub",
+      -2,
+      [
+       {
+        "+": "pubsub"
+       },
+       {
+        "+": "loading"
+       },
+       {
+        "+": "stale"
+       }
+      ],
+      0,
+      0,
+      0,
+      [
+       {
+        "+": "@pubsub"
+       },
+       {
+        "+": "@slow"
+       }
+      ],
+      [],
+      [],
+      []
+     ],
+     [
+      "pubsub|shardchannels",
+      -2,
+      [
+       {
+        "+": "pubsub"
+       },
+       {
+        "+": "loading"
+       },
+       {
+        "+": "stale"
+       }
+      ],
+      0,
+      0,
+      0,
+      [
+       {
+        "+": "@pubsub"
+       },
+       {
+        "+": "@slow"
+       }
+      ],
+      [],
+      [],
+      []
+     ],
+     [
+      "pubsub|shardnumsub",
+      -2,
+      [
+       {
+        "+": "pubsub"
+       },
+       {
+        "+": "loading"
+       },
+       {
+        "+": "stale"
+       }
+      ],
+      0,
+      0,
+      0,
+      [
+       {
+        "+": "@pubsub"
+       },
+       {
+        "+": "@slow"
+       }
+      ],
+      [],
+      [],
+      []
+     ]
+    ]
+   ]
+  },
+  "punsubscribe": {
+   "docs": [
+    "summary",
+    "Stop listening for messages posted to channels matching the given patterns",
+    "since",
+    "2.0.0",
+    "group",
+    "pubsub",
+    "complexity",
+    "O(N+M) where N is the number of patterns the client is already subscribed and M is the number of total patterns subscribed in the system (by any client).",
+    "arguments",
+    [
+     [
+      "name",
+      "pattern",
+      "type",
+      "pattern",
+      "flags",
+      [
+       {
+        "+": "optional"
+       },
+       {
+        "+": "multiple"
+       }
+      ]
+     ]
+    ]
+   ],
+   "info": [
+    "punsubscribe",
+    -1,
+    [
+     {
+      "+": "pubsub"
+     },
+     {
+      "+": "noscript"
+     },
+     {
+      "+": "loading"
+     },
+     {
+      "+": "stale"
+     }
+    ],
+    0,
+    0,
+    0,
+    [
+     {
+      "+": "@pubsub"
+     },
+     {
+      "+": "@slow"
+     }
+    ],
+    [],
+    [],
     []
    ]
   },
@@ -14244,6 +14765,98 @@
     []
    ]
   },
+  "spublish": {
+   "docs": [
+    "summary",
+    "Post a message to a shard channel",
+    "since",
+    "7.0.0",
+    "group",
+    "pubsub",
+    "complexity",
+    "O(N) where N is the number of clients subscribed to the receiving shard channel.",
+    "arguments",
+    [
+     [
+      "name",
+      "shardchannel",
+      "type",
+      "string"
+     ],
+     [
+      "name",
+      "message",
+      "type",
+      "string"
+     ]
+    ]
+   ],
+   "info": [
+    "spublish",
+    3,
+    [
+     {
+      "+": "pubsub"
+     },
+     {
+      "+": "loading"
+     },
+     {
+      "+": "stale"
+     },
+     {
+      "+": "fast"
+     }
+    ],
+    1,
+    1,
+    1,
+    [
+     {
+      "+": "@pubsub"
+     },
+     {
+      "+": "@fast"
+     }
+    ],
+    [],
+    [
+     [
+      "flags",
+      [
+       {
+        "+": "not_key"
+       }
+      ],
+      "begin_search",
+      [
+       "type",
+       "index",
+       "spec",
+       [
+        "index",
+        1
+       ]
+      ],
+      "find_keys",
+      [
+       "type",
+       "range",
+       "spec",
+       [
+        "lastkey",
+        0,
+        "keystep",
+        1,
+        "limit",
+        0
+       ]
+      ]
+     ]
+    ],
+    []
+   ]
+  },
   "srandmember": {
    "docs": [
     "summary",
@@ -14580,6 +15193,98 @@
     []
    ]
   },
+  "ssubscribe": {
+   "docs": [
+    "summary",
+    "Listen for messages published to the given shard channels",
+    "since",
+    "7.0.0",
+    "group",
+    "pubsub",
+    "complexity",
+    "O(N) where N is the number of shard channels to subscribe to.",
+    "arguments",
+    [
+     [
+      "name",
+      "shardchannel",
+      "type",
+      "string",
+      "flags",
+      [
+       {
+        "+": "multiple"
+       }
+      ]
+     ]
+    ]
+   ],
+   "info": [
+    "ssubscribe",
+    -2,
+    [
+     {
+      "+": "pubsub"
+     },
+     {
+      "+": "noscript"
+     },
+     {
+      "+": "loading"
+     },
+     {
+      "+": "stale"
+     }
+    ],
+    1,
+    -1,
+    1,
+    [
+     {
+      "+": "@pubsub"
+     },
+     {
+      "+": "@slow"
+     }
+    ],
+    [],
+    [
+     [
+      "flags",
+      [
+       {
+        "+": "not_key"
+       }
+      ],
+      "begin_search",
+      [
+       "type",
+       "index",
+       "spec",
+       [
+        "index",
+        1
+       ]
+      ],
+      "find_keys",
+      [
+       "type",
+       "range",
+       "spec",
+       [
+        "lastkey",
+        -1,
+        "keystep",
+        1,
+        "limit",
+        0
+       ]
+      ]
+     ]
+    ],
+    []
+   ]
+  },
   "strlen": {
    "docs": [
     "summary",
@@ -14662,6 +15367,65 @@
       ]
      ]
     ],
+    []
+   ]
+  },
+  "subscribe": {
+   "docs": [
+    "summary",
+    "Listen for messages published to the given channels",
+    "since",
+    "2.0.0",
+    "group",
+    "pubsub",
+    "complexity",
+    "O(N) where N is the number of channels to subscribe to.",
+    "arguments",
+    [
+     [
+      "name",
+      "channel",
+      "type",
+      "string",
+      "flags",
+      [
+       {
+        "+": "multiple"
+       }
+      ]
+     ]
+    ]
+   ],
+   "info": [
+    "subscribe",
+    -2,
+    [
+     {
+      "+": "pubsub"
+     },
+     {
+      "+": "noscript"
+     },
+     {
+      "+": "loading"
+     },
+     {
+      "+": "stale"
+     }
+    ],
+    0,
+    0,
+    0,
+    [
+     {
+      "+": "@pubsub"
+     },
+     {
+      "+": "@slow"
+     }
+    ],
+    [],
+    [],
     []
    ]
   },
@@ -14981,6 +15745,101 @@
        [
         "index",
         2
+       ]
+      ],
+      "find_keys",
+      [
+       "type",
+       "range",
+       "spec",
+       [
+        "lastkey",
+        -1,
+        "keystep",
+        1,
+        "limit",
+        0
+       ]
+      ]
+     ]
+    ],
+    []
+   ]
+  },
+  "sunsubscribe": {
+   "docs": [
+    "summary",
+    "Stop listening for messages posted to the given shard channels",
+    "since",
+    "7.0.0",
+    "group",
+    "pubsub",
+    "complexity",
+    "O(N) where N is the number of clients already subscribed to a shard channel.",
+    "arguments",
+    [
+     [
+      "name",
+      "shardchannel",
+      "type",
+      "string",
+      "flags",
+      [
+       {
+        "+": "optional"
+       },
+       {
+        "+": "multiple"
+       }
+      ]
+     ]
+    ]
+   ],
+   "info": [
+    "sunsubscribe",
+    -1,
+    [
+     {
+      "+": "pubsub"
+     },
+     {
+      "+": "noscript"
+     },
+     {
+      "+": "loading"
+     },
+     {
+      "+": "stale"
+     }
+    ],
+    1,
+    -1,
+    1,
+    [
+     {
+      "+": "@pubsub"
+     },
+     {
+      "+": "@slow"
+     }
+    ],
+    [],
+    [
+     [
+      "flags",
+      [
+       {
+        "+": "not_key"
+       }
+      ],
+      "begin_search",
+      [
+       "type",
+       "index",
+       "spec",
+       [
+        "index",
+        1
        ]
       ],
       "find_keys",
@@ -15471,6 +16330,68 @@
       ]
      ]
     ],
+    []
+   ]
+  },
+  "unsubscribe": {
+   "docs": [
+    "summary",
+    "Stop listening for messages posted to the given channels",
+    "since",
+    "2.0.0",
+    "group",
+    "pubsub",
+    "complexity",
+    "O(N) where N is the number of clients already subscribed to a channel.",
+    "arguments",
+    [
+     [
+      "name",
+      "channel",
+      "type",
+      "string",
+      "flags",
+      [
+       {
+        "+": "optional"
+       },
+       {
+        "+": "multiple"
+       }
+      ]
+     ]
+    ]
+   ],
+   "info": [
+    "unsubscribe",
+    -1,
+    [
+     {
+      "+": "pubsub"
+     },
+     {
+      "+": "noscript"
+     },
+     {
+      "+": "loading"
+     },
+     {
+      "+": "stale"
+     }
+    ],
+    0,
+    0,
+    0,
+    [
+     {
+      "+": "@pubsub"
+     },
+     {
+      "+": "@slow"
+     }
+    ],
+    [],
+    [],
     []
    ]
   },

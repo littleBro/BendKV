@@ -74,7 +74,10 @@ COMMANDS = {
     "zunionstore": [], "zinterstore": [], "zdiffstore": [], "zrangestore": [], "zmpop": [],
     "zrandmember": [], "blpop": [], "brpop": [], "brpoplpush": [], "blmove": [],
     "blmpop": [], "bzpopmin": [], "bzpopmax": [], "bzmpop": [], "multi": [], "exec": [],
-    "discard": [], "watch": [], "unwatch": []}
+    "discard": [], "watch": [], "unwatch": [], "subscribe": [], "unsubscribe": [],
+    "psubscribe": [], "punsubscribe": [], "ssubscribe": [], "sunsubscribe": [],
+    "publish": [], "spublish": [], "pubsub": ["channels", "help", "numpat", "numsub",
+    "shardchannels", "shardnumsub"]}
 
 # Step 1: redis-server -> facts
 # -----------------------------
@@ -332,7 +335,8 @@ RISKY = {"incr", "decr", "incrby", "decrby", "expire", "pexpire", "setex", "pset
 # the parser's commands with subcommands, by the function that numbers
 # their subcommands
 CONTAINERS = {"client": "client_id", "function": "function_id", "config": "config_id",
-              "command": "command_id", "object": "object_id", "memory": "memory_id"}
+              "command": "command_id", "object": "object_id", "memory": "memory_id",
+              "pubsub": "pubsub_id"}
 
 # the names a numbering def of redis.bend gives its numbers
 def numbering(src, fn):

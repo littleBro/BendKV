@@ -13,11 +13,12 @@ throughput of Redis 7.0.15 on the same machine, with half its memory for small v
 
 > **Status: research prototype.** BendKV implements a subset of Redis (strings, hashes,
 > lists, sets, sorted sets and their times to live, the blocking commands, transactions,
-> the keyspace, several databases, connection commands, an append-only file). The goal now is a drop-in
-> replacement for a single Redis node, measured by Redis's own test suite: of the 1,673
-> tests Redis 7.0.15 passes against a server it did not start, BendKV passes 759, and 754
-> of the 1,142 in what it implements ([docs/COMPATIBILITY.md](docs/COMPATIBILITY.md)). Do
-> not use it for data you cannot lose.
+> pub/sub and keyspace notifications, the keyspace, several databases, connection
+> commands, an append-only file). The goal now is a drop-in replacement for a single
+> Redis node, measured by Redis's own test suite: of the 1,673 tests Redis 7.0.15 passes
+> against a server it did not start, BendKV passes 785, and 780 of the 1,172 in what it
+> implements ([docs/COMPATIBILITY.md](docs/COMPATIBILITY.md)). Do not use it for data you
+> cannot lose.
 
 BendKV is an independent project. It is not affiliated with Higher Order Company or the
 Bend project, nor with Redis Ltd. Redis is a trademark of Redis Ltd.
@@ -219,6 +220,26 @@ translation stays in the trusted base.
   anyway), and a DEL of a key not there is logged (BendKV logs every DEL), so a
   transaction with one may be wrapped in MULTI and EXEC where Redis writes its one other
   effect alone.
+- **Pub/Sub:** SUBSCRIBE, UNSUBSCRIBE, PSUBSCRIBE, PUNSUBSCRIBE, SSUBSCRIBE, SUNSUBSCRIBE,
+  PUBLISH, SPUBLISH and PUBSUB (CHANNELS, NUMSUB, NUMPAT, SHARDCHANNELS, SHARDNUMSUB,
+  HELP), as Redis 7.0.15 runs them. Each name is answered with the client's count of
+  channels and patterns (of shard channels for SSUBSCRIBE and SUNSUBSCRIBE); a message
+  goes to its channel's subscribers (`message`, `smessage` for a shard channel), then to
+  those of each pattern it matches (`pmessage`), and PUBLISH answers how many got it. A
+  subscribed client runs (P|S)SUBSCRIBE, (P|S)UNSUBSCRIBE, PING, QUIT and RESET alone, as
+  a client of RESP2 does in Redis, any other command refused with Redis's error; the
+  replies of SUBSCRIBE and its kin go out even with replies off; in a transaction
+  SUBSCRIBE and PSUBSCRIBE run and SSUBSCRIBE is refused; RESET, QUIT and a closed
+  connection drop the client's subscriptions. Keyspace notifications: with
+  `notify-keyspace-events` set, each change a command makes is published to
+  `__keyspace@<db>__:<key>` and `__keyevent@<db>__:<event>` with Redis's names of the
+  events (`new` for a key made, `del` for a collection emptied, `expired` from the sweep,
+  the pop of a client that waits after the write that served it). Where BendKV differs:
+  UNSUBSCRIBE of all goes in the order the client subscribed and PUBSUB CHANNELS in the
+  trie's, where Redis goes in its hash tables'; there is no RESP3, so no push type; a slow
+  subscriber has no `client-output-buffer-limit pubsub`; no events of misses (`m`),
+  evictions (`e`) or streams; and a key a read finds expired sends `expired` when the
+  sweep deletes it, where Redis sends it at the read.
 - **Times to live:** EXPIRE, PEXPIRE, EXPIREAT and PEXPIREAT (with NX, XX, GT, LT), TTL,
   PTTL, EXPIRETIME, PEXPIRETIME, PERSIST; SET with NX, XX, GET, EX, PX, EXAT, PXAT and
   KEEPTTL; SETEX, PSETEX, GETEX (EX, PX, EXAT, PXAT, PERSIST) and GETDEL. Times are read
@@ -240,7 +261,8 @@ translation stays in the trusted base.
   parameters at once, all or none), RESETSTAT, REWRITE, HELP, over all 178 parameters of
   Redis 7.0.15, taken from Redis's own table by `tools/gen_config.py`: every value is
   checked as Redis checks it and read back as Redis prints it. requirepass is the
-  password and hz is capped as in Redis; the port, the addresses, TLS and the append-only
+  password, hz is capped as in Redis and notify-keyspace-events picks the events
+  published (above); the port, the addresses, TLS and the append-only
   file cannot change while BendKV runs (a new value fails as it does when Redis cannot
   apply it); the other parameters are kept and read back but tune nothing, since BendKV
   has no eviction, replication or encodings for them to tune.
@@ -298,7 +320,7 @@ translation stays in the trusted base.
   at an unknown command.
 
 Not yet: streams and the other types (HyperLogLog, geo), Lua
-scripts, pub/sub, RESP3, timing of commands
+scripts, RESP3, timing of commands
 (usec in INFO commandstats, latencystats), CONFIG REWRITE (it answers as Redis does without a configuration file),
 RDB files. Integers, and times in ms, are limited to 14 digits.
 
@@ -403,6 +425,10 @@ and 50 consumers moving 1,000 items while some leave), transactions (`tests/mult
 transcripts compared line by line, then a counter raised by 20 clients with WATCH, each
 lost race retried, a reader that never sees half of a transaction, and 100 clients that
 leave in MULTI or with keys watched; random transactions in the differential test too),
+Pub/Sub (`tests/pubsub_test.py`: scenarios of Pub/Sub and the events of 138 commands
+on BendKV and on Redis, their transcripts compared line by line, then 20 subscribers that
+each get the 2,000 messages of 4 publishers in order, and 50 subscribers that leave while
+messages are published),
 connections that end every way one can, many times
 (the client closing or resetting, QUIT, a protocol error), on a BendKV of their own whose
 table of channels is read to show that each closed the channel it opened,

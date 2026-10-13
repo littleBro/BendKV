@@ -35,17 +35,24 @@ make suite REDIS_SRC=../redis      # both runs and the table, in build/suite/
 ## The result
 
 Redis 7.0.15, October 2026. Of the 1,673 tests Redis passes in this mode, BendKV passes
-**759 (45.4%)**; of the 1,142 in the units of what BendKV has, 754 (66%: 203 tests of
-unit/type/list and 82 of unit/type/zset wait for RESP3). Transactions (section 3zq of
-[FINDINGS.md](FINDINGS.md)) brought 28: unit/multi passes 25 of the 53 tests Redis passes
+**785 (46.9%)**; of the 1,172 in the units of what BendKV has, 780 (67%: 203 tests of
+unit/type/list and 82 of unit/type/zset wait for RESP3). Pub/Sub and keyspace
+notifications (section 3zr of [FINDINGS.md](FINDINGS.md)) brought 26: unit/pubsub passes
+25 of its 30 tests (of the other five, one runs over RESP3, one needs streams, and the
+test of `evicted` events waits for an eviction that never comes, as BendKV has no
+maxmemory, so the two after it do not run: CONFIG GET and SET of the flags, and `new`
+events), and unit/other the test of RESET clearing a client's Pub/Sub state (14 of its
+19). Transactions (section 3zq of
+[FINDINGS.md](FINDINGS.md)) brought 27: unit/multi passes 25 of the 53 tests Redis passes
 (of the other 28, 12 read the replication stream with SYNC, 4 need Lua's script timeout,
 4 maxmemory's OOM, one SORT and one XGROUP, and 6 fail on `MULTI calls can not be nested`
 or `WATCH inside MULTI is not allowed`, their client left in MULTI by the test of OOM
-before them), unit/other RESET's test of the MULTI state, unit/protocol the regression
-test of argument rewriting (issue 9598, which runs a transaction), and unit/type/set the
-test of SMOVE onto a set that holds the member, which watches it (all 94 of its tests
-now). And 14 tests that passed fail now, each on a client left in MULTI by a test before
-it that failed inside a transaction on a command BendKV does not have (GEOADD in
+before them), unit/other RESET's test of the MULTI state, and unit/type/set the test of
+SMOVE onto a set that holds the member, which watches it (all 94 of its tests now);
+unit/protocol's regression test of argument rewriting (issue 9598, which runs a
+transaction) passes too, but Redis fails it in this mode, so it does not count. And 14
+tests that passed fail now, each on a client left in MULTI by a test before it that
+failed inside a transaction on a command BendKV does not have (GEOADD in
 unit/introspection-2's command stats for MULTI: the 12 tests of COMMAND after it answer
 QUEUED; SORT in unit/sort; XADD in unit/type/stream), as they would on a Redis without
 those commands. The blocking commands (section 3zp of [FINDINGS.md](FINDINGS.md)) brought
@@ -117,9 +124,9 @@ need MULTI and WATCH, Lua or lists (then).
 
 | area | units | Redis passes | BendKV passes |
 |---|---|---:|---:|
-| what BendKV has: the protocol, connections, the keyspace and its databases, strings and their ranges, bits and fields, counters and floats, hashes, lists, sets, sorted sets and the commands that wait on them, times to live, transactions, introspection | protocol, quit, keyspace, type/string, type/incr, type/hash, type/list, list-2, list-3, type/set, type/zset, scan, bitops, bitfield, expire, multi, introspection, introspection-2, other, info-command | 1142 | **754** |
+| what BendKV has: the protocol, connections, the keyspace and its databases, strings and their ranges, bits and fields, counters and floats, hashes, lists, sets, sorted sets and the commands that wait on them, times to live, transactions, pub/sub and keyspace notifications, introspection | protocol, quit, keyspace, type/string, type/incr, type/hash, type/list, list-2, list-3, type/set, type/zset, scan, bitops, bitfield, expire, multi, pubsub, introspection, introspection-2, other, info-command | 1172 | **780** |
 | data types, not yet | geo, hyperloglog, sort, dump, lazyfree, violations | 147 | 2 |
-| pub/sub, client-side caching, CLIENT PAUSE, the latency monitor, the slow log, the query buffer, not yet | pubsub, tracking, pause, latency-monitor, slowlog, querybuf | 78 | 0 |
+| client-side caching, CLIENT PAUSE, the latency monitor, the slow log, the query buffer, not yet | tracking, pause, latency-monitor, slowlog, querybuf | 48 | 0 |
 | out of scope: Lua scripts, functions, streams | scripting, functions, type/stream, type/stream-cgroups | 306 | 3 |
 
 Most of the 5 passes outside the first row pass without the feature they test: they expect an error and take
@@ -147,10 +154,10 @@ pubsubshard, shutdown, tls, type/list-common, wait):
 | unit/latency-monitor | 14 | 13 | 0 |
 | unit/lazyfree | 4 | 4 | 0 |
 | unit/multi | 60 | 53 | 25 |
-| unit/other | 22 | 19 | 13 |
+| unit/other | 22 | 19 | 14 |
 | unit/pause | 14 | 14 | 0 |
 | unit/protocol | 25 | 17 | 17 |
-| unit/pubsub | 30 | 30 | 0 |
+| unit/pubsub | 30 | 30 | 25 |
 | unit/querybuf | 2 | 2 | 0 |
 | unit/quit | 3 | 3 | 3 |
 | unit/replybufsize | 1 | 0 | 0 |
@@ -170,21 +177,22 @@ pubsubshard, shutdown, tls, type/list-common, wait):
 | unit/type/string | 77 | 77 | 74 |
 | unit/type/zset | 291 | 289 | 192 |
 | unit/violations | 1 | 1 | 0 |
-| **all** | **1751** | **1673** | **759 (45.4%)** |
+| **all** | **1751** | **1673** | **785 (46.9%)** |
 
-## Why the other 914 fail
+## Why the other 888 fail
 
-- **445 stop on a command BendKV does not have.** By the number of tests each one stops:
+- **432 stop on a command BendKV does not have.** By the number of tests each one stops:
   FUNCTION LOAD 124, XADD 61, SORT 46, GEOADD 38, PFADD 19, SYNC 17 (tests that read
   the replication stream, 12 of them unit/multi's of what a transaction propagates),
-  XGROUP 12, GEORADIUS 10, CLIENT PAUSE 10, DUMP 9, SLOWLOG 9, and 33 more below nine
-  (90 tests).
-- **391 never ran**: their unit ended before them, on a command outside any test:
-  LATENCY RESET (latency-monitor), SUBSCRIBE (tracking), HELLO 3 (type/list and type/zset run their later tests over RESP3
-  and then over RESP2), `CONFIG SET appendonly yes` (type/stream; BendKV turns its
-  append-only file on only at its start); or on a test that waits for a reply that never
-  comes because the command before it is missing (pubsub: PSUBSCRIBE after CLIENT REPLY
-  OFF; scripting: the second line of FUNCTION LOAD's reply, read raw). One test runs
+  XGROUP 13, GEORADIUS 10, CLIENT PAUSE 10, DUMP 9, SLOWLOG 9, and 28 more below nine
+  (76 tests; CLIENT LIST 8, MONITOR 5, CLIENT KILL 2 and CLIENT INFO 1 among them).
+- **378 never ran**: their unit ended before them, on a command outside any test:
+  LATENCY RESET (latency-monitor), HELLO 3 (type/list and type/zset run their later tests
+  over RESP3 and then over RESP2), `CONFIG SET appendonly yes` (type/stream; BendKV turns
+  its append-only file on only at its start); or on a test that waits for a reply that
+  never comes, because the command before it is missing (tracking: the invalidations of
+  CLIENT TRACKING; scripting: the second line of FUNCTION LOAD's reply, read raw) or
+  because BendKV evicts nothing (pubsub: the `evicted` event, 3 tests). One test runs
   only on a server that names jemalloc as its allocator.
 - **78 fail with another error.** 28 fail on a client left in MULTI by a test before them
   that failed inside a transaction on what BendKV does not have: GEOADD in
@@ -204,8 +212,8 @@ pubsubshard, shutdown, tls, type/list-common, wait):
   RANDOMKEY's three.)
 
 So the tests are where the plan goes next: RESP3, which type/list (203 tests) and
-type/zset (82) need before their later tests run, pub/sub, maxmemory, and the data
-types not yet there (147 tests).
+type/zset (82) need before their later tests run, CLIENT LIST, INFO and KILL and MONITOR,
+maxmemory, and the data types not yet there (147 tests).
 Scripts, functions and streams (306 tests) stay out of scope.
 
 ## What it found
