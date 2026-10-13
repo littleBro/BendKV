@@ -1207,10 +1207,11 @@ TYPE.
   RPUSH), `unit/keyspace` 11 (was 7; at RENAME).
 - **Not like Redis yet.** HELLO 3; SELECT of any database but 0; for a client that must
   log in, the errors BendKV's parser finds (a syntax error, a number that is not one)
-  come before NOAUTH, where Redis checks only the arity and the name first; CLIENT HELP
-  and FUNCTION HELP list only what BendKV has; CLIENT LIST, KILL, INFO, PAUSE and TRACKING
-  need a registry of clients and their addresses. The password cannot be set yet: CONFIG
-  SET and the server's options come next, with INFO and COMMAND.
+  come before NOAUTH, where Redis checks only the arity and the name first (as Redis now:
+  section 3zu); CLIENT HELP and FUNCTION HELP list only what BendKV has; CLIENT LIST,
+  KILL, INFO, PAUSE and TRACKING need a registry of clients and their addresses. The
+  password cannot be set yet: CONFIG SET and the server's options come next, with INFO
+  and COMMAND.
 
 ## 3n. CONFIG from Redis's own table
 
@@ -3569,6 +3570,69 @@ The calls EXEC runs for a monitor put their lines after EXEC's array, where Redi
 them between the array's replies (and a client reading the array then misreads it).
 HELLO 3 is refused (BendKV speaks RESP2 alone), its user and password redacted all the
 same, as Redis redacts them for a version it takes.
+
+## 3zu. Authentication as Redis decides it
+
+Two rules of Redis's that BendKV did not follow, found when MONITOR's tests compared a
+client without a password.
+
+**When a client is asked.** Redis asks a client for AUTH (`processCommand`) after it has
+looked the command up and checked its number of arguments against the command's table,
+and before the command runs. An unknown command or subcommand, and a number of arguments
+the table refuses, are answered as they are, whoever the client is; an error the command
+finds as it runs (a syntax error, a value that is not an integer, a number of arguments
+the table allows and the command does not, as PING with two) is NOAUTH for a client that
+must authenticate. BendKV's parser finds those errors itself, before anything runs (Bad,
+and a session command's SBad), and the session answered every error the parser found,
+whoever the client was: `SET k v EX abc` from a client that had not authenticated was
+answered "ERR value is not an integer or out of range", where Redis answers NOAUTH. INFO
+already told the two kinds apart (a call refused, a call failed: `stat.class`), so the
+server now takes a failed call's error as a session command of its own, SFail
+(`R.fail.if`, where the request's code is worked out), which a client is answered only
+once it may run commands; Bad and SBad are what Redis refuses before it asks for AUTH. A
+batch with a failed call runs the general way, as a batch with a command of the
+connection does; GET, SET and INCR are parsed without it.
+
+**Who is authenticated.** Redis authenticates a client as it connects when there is no
+password then (`createClient`, `clientSetDefaultAuth`), and at RESET when there is none
+then; AUTH, and HELLO's AUTH, authenticate it; nothing else changes it. A password set
+later asks nothing of a client already authenticated, and a client that never
+authenticated is asked again when a password removed is set again, whatever it ran while
+there was none. BendKV marked a connection authenticated after any command it ran while
+there was no password (`step_conn`: a client that may run commands is authenticated), so
+it asked a client that came before the password and had sent nothing yet, and let through
+a client that came while there was a password, ran a command while there was none, and
+came back after it was set again. Now a connection keeps its authentication as Redis
+keeps it: the actor answers a connection's Join with its state as it comes, authenticated
+when there is no password then (`S.conn_join`), and only AUTH, HELLO and RESET change it
+(`step_conn` and the other steps of a connection keep it, and the fast way leaves the
+connection as it was). The connection waits for that answer before its first read: a pass
+through the actor per connection, not per request.
+
+**Proofs.** SFail is a session command that needs a client that may run commands, so the
+law `noauth` (a client that has not authenticated, to a server with a password, runs
+nothing on the databases but the errors the parser found) holds with three more cases, as
+for MONITOR. The lemmas of the fast way (it runs a batch as the general way does) carry
+the client's authentication through the batch where they set it, and the proof that a
+client that has not authenticated stays so reads it from the client's state
+(`or_false_l`).
+
+**Tests.** `tests/auth_test.py` runs in make test against each mode of the server:
+scenarios on BendKV and on Redis, their transcripts compared line by line: 72 lines (27
+commands, an error of each kind and commands that run, from a client that must
+authenticate, one at a time and pipelined, and once it has; a failed AUTH; HELLO with
+AUTH and without; RESET with a password and without; a password removed and set again; a
+pipeline that sets the password and goes on; a transaction with errors of each kind; a
+subscribed client's errors; INFO's commandstats and errorstats). On the code before, 17
+of them differ. `tests/monitor_test.py` no longer authenticates the clients that came
+before the password, which only BendKV needed.
+
+**Cost.** GET, SET and INCR take 3,303, 4,223 and 4,487 instructions (3,302, 4,222 and
+4,485 for the code before, built by the same compiler and counted in turn): the requests
+that go the fast way are parsed and run as before. A new connection waits for the actor
+once more before its first read, which does not show against the ~90 µs a client in
+Python takes to connect, send PING and close (3,000 of them in a row, three runs each
+way).
 
 ## 4. Where a request's time goes, and hiding the memory waits
 

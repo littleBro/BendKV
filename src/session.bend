@@ -214,6 +214,12 @@ def nopass(+s: Srv) -> Bool:
 def authed(+c: Conn, +s: Srv) -> Bool:
   Bool.or(conn.auth(c), nopass(s))
 
+# a client's connection as it joins the server: authenticated when there
+# is no password then, as Redis's createClient sets it (it stays so after
+# a password is set, until RESET)
+def conn_join(+id: Nat, +s: Srv) -> Conn:
+  Conn{id, nopass(s), "", MOn{}, False{}, 0n}
+
 # a user and a password: the one user is "default", and without a
 # password any password is its own
 def login_ok(+u: String, +p: String, +s: Srv) -> Bool:
@@ -255,12 +261,14 @@ def put(m: Maybe<&2, R.Reply>, rs: List<&2, R.Reply>) -> List<&2, R.Reply>:
     case None{}:
       rs
 
-# the connection after a command that leaves it as it is: authenticated
-# if it may run commands now, its mode one command on
+# the connection after a command that leaves it as it is: its mode one
+# command on. Whether it authenticated changes only as Redis's does: at
+# its start and at RESET (authenticated when there is no password then,
+# conn_join, reset.conn), and by AUTH or HELLO
 def step_conn(+c: Conn, +s: Srv) -> Conn:
   match c:
     case Conn{id, auth, name, mode, quit, db}:
-      Conn{id, authed(c, s), name, after(mode), quit, db}
+      Conn{id, auth, name, after(mode), quit, db}
 
 # Session commands
 # ----------------
@@ -382,11 +390,11 @@ def hello.run(+s: Srv, +c: Conn, args: List<&2, String>) -> Hel:
   hello.run.of(s, c, hello.args(args))
 
 # the connection after a HELLO: authenticated if an AUTH of it was, or
-# if it may run commands now, and named as its SETNAME said
+# if it was already, and named as its SETNAME said
 def hello.conn(h: Hel, +c: Conn, +s: Srv) -> Conn:
   match h c:
     case Hel{w, auth, name} Conn{id, a, n, mode, quit, db}:
-      Conn{id, Bool.or(auth, authed(c, s)), name, after(mode), quit, db}
+      Conn{id, Bool.or(auth, a), name, after(mode), quit, db}
 
 # AUTH [user] password
 def auth.one(nopass: Bool, ok: Bool) -> R.Reply:
@@ -844,7 +852,7 @@ def select.idx(+d: String, +s: Srv) -> Idx:
 def select.conn(i: Idx, +c: Conn, +s: Srv) -> Conn:
   match i c:
     case IdxOk{j} Conn{id, a, name, mode, quit, db}:
-      Conn{id, authed(c, s), name, after(mode), quit, j}
+      Conn{id, a, name, after(mode), quit, j}
     case IdxBad{r} c0:
       step_conn(c0, s)
 
@@ -999,7 +1007,7 @@ def copy.reply(ca: CopyArgs, +ds: R.Ds) -> R.Reply:
 def quit.conn(+c: Conn, +s: Srv) -> Conn:
   match c:
     case Conn{id, a, name, mode, quit, db}:
-      Conn{id, authed(c, s), name, after(mode), True{}, db}
+      Conn{id, a, name, after(mode), True{}, db}
 
 # RESET: the connection as new, authenticated if there is no password;
 # its reply goes out unless it is the one skipped
@@ -1026,7 +1034,7 @@ def getname(n: String) -> R.Reply:
 def setname.conn(ok: Bool, n: String, +c: Conn, +s: Srv) -> Conn:
   match ok c:
     case True{} Conn{id, a, name, mode, quit, db}:
-      Conn{id, authed(c, s), n, after(mode), quit, db}
+      Conn{id, a, n, after(mode), quit, db}
     case False{} c0:
       step_conn(c0, s)
 
@@ -1067,7 +1075,7 @@ def reply.out(w: Nat, old: Mute) -> Maybe<&2, R.Reply>:
 def mode.conn(m: Mute, +c: Conn, +s: Srv) -> Conn:
   match c:
     case Conn{id, a, name, mode, quit, db}:
-      Conn{id, authed(c, s), name, m, quit, db}
+      Conn{id, a, name, m, quit, db}
 
 # RANDOMKEY's reply: a key there at now in the database's trie, by r, or
 # nil
@@ -2243,6 +2251,8 @@ def own_reply(+o: R.SessOp, +c: Conn, +s: Srv, +ds: R.Ds) -> Maybe<&2, R.Reply>:
       say(conn.mode(c), r)
     case R.SBad{r}:
       say(conn.mode(c), r)
+    case R.SFail{r}:
+      say(conn.mode(c), r)
     case R.SSPop{+k, args}:
       say(conn.mode(c), sp.reply(sp.args(args), k, KV.mix(srv.rng(s)), R.ds.focused(ds)))
     case R.SSRandMember{+k, args}:
@@ -2324,6 +2334,8 @@ def own_conn(+o: R.SessOp, +c: Conn, +s: Srv) -> Conn:
     case R.SReply{r}:
       step_conn(c, s)
     case R.SBad{r}:
+      step_conn(c, s)
+    case R.SFail{r}:
       step_conn(c, s)
     case R.SSPop{k, a}:
       step_conn(c, s)
@@ -2440,7 +2452,8 @@ def kind(+c: R.Cmd) -> Role:
       KData{}
 
 # the session commands a client may run before it authenticates, with
-# the errors the parser found in session commands
+# the errors the parser refuses a session command for (SBad); a failed
+# call's error (SFail) waits for AUTH, as Redis's command runs only then
 def no_auth(+o: R.SessOp) -> Bool:
   match o:
     case R.SHello{a}:
@@ -2598,8 +2611,7 @@ def plan(cmds: List<&2, R.Cmd>, conn: Conn, srv: Srv) -> List<&2, R.Act>:
 
 # The fast path: a batch of database commands only, from a client that
 # may run them and gets every reply, run on the focus. It leaves the
-# connection authenticated, as the general path does after a command (an
-# empty batch, which the server never sends, leaves it as it was).
+# connection as it was, as the general path does after such commands.
 
 def ready(+c: Conn, +s: Srv) -> Bool:
   match c:
@@ -2608,11 +2620,6 @@ def ready(+c: Conn, +s: Srv) -> Bool:
     case _:
       False{}
 
-def conn_ok(c: Conn) -> Conn:
-  match c:
-    case Conn{id, auth, name, mode, quit, db}:
-      Conn{id, True{}, name, mode, quit, db}
-
 # a batch's outcome: its replies in order, the connection and the server
 # after it, and the databases
 type Fin is Data:
@@ -2620,7 +2627,7 @@ type Fin is Data:
 
 def done.fast(conn: Conn, srv: Srv, pre: List<&2, R.Db>, post: List<&2, R.Db>, r: List<&2, R.Reply> & R.Db) -> Fin:
   (rs, d) = r
-  Fin{rs, conn_ok(conn), srv, R.Ds{d, pre, post}}
+  Fin{rs, conn, srv, R.Ds{d, pre, post}}
 
 def run.fast(conn: Conn, srv: Srv, cmds: List<&2, R.Cmd>, hs: List<&2, U32>, ds: R.Ds) -> Fin:
   match ds:
@@ -2657,7 +2664,7 @@ type Logged is Data:
 
 def logged.fast2(conn: Conn, srv: Srv, rs: List<&2, R.Reply>, +i: Nat, pre: List<&2, R.Db>, post: List<&2, R.Db>, q: List<&2, R.Cmd> & R.Db) -> Logged:
   (es, d) = q
-  Logged{rs, A.at_db(i, es), conn_ok(conn), srv, R.Ds{d, pre, post}}
+  Logged{rs, A.at_db(i, es), conn, srv, R.Ds{d, pre, post}}
 
 def logged.fast(conn: Conn, srv: Srv, +i: Nat, pre: List<&2, R.Db>, post: List<&2, R.Db>, r: List<&2, R.Reply> & (List<&2, R.Cmd> & R.Db)) -> Logged:
   (rs, q) = r

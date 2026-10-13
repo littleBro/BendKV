@@ -412,7 +412,12 @@ def pub.op(+kind: Nat, args: List<&2, String>) -> PubOp:
 # (an act of the session's database, session.bend). A command whose
 # reply is fixed (a HELP) is SReply; one the parser found wrong (an
 # unknown subcommand, a wrong number of arguments) is SBad, answered as
-# Redis answers those, before it asks a client to authenticate. A
+# Redis answers those, before it asks a client to authenticate. An error
+# the parser finds where Redis's command finds it as it runs (a syntax
+# error, a value that is not an integer, of any command: a failed call,
+# stat.class) is SFail as the server takes it (fail.of): answered with
+# the error once the client may run commands, as Redis asks for AUTH
+# before it runs the command. A
 # blocking command (BLPOP and its kin, its number id) is SBlock, its
 # arguments read as it runs: the session pops what is there, and the
 # server waits for a write to its keys when nothing is (session.bend,
@@ -461,6 +466,7 @@ type SessOp is Data:
   SMemUsage{key: String, args: List<&2, String>}
   SReply{r: Reply}
   SBad{r: Reply}
+  SFail{r: Reply}
   SSPop{key: String, args: List<&2, String>}
   SSRandMember{key: String, args: List<&2, String>}
   SZRandMember{key: String, args: List<&2, String>}
@@ -11512,6 +11518,34 @@ def stat.class(+c: Cmd, +key: Nat, +args: List<&2, String>) -> Nat:
 
 def stat.code(+key: Nat, +class: Nat) -> Nat:
   Nat.add(Nat.mul(key, 4n), class)
+
+# a command whose error is a failed call (class 2), as the server runs
+# it: SFail, which only a client that may run commands is answered, as
+# Redis's command finds the error only as it runs, after processCommand
+# asked for AUTH; an error refused before it runs (class 1) stays Bad or
+# SBad, answered whoever the client is
+def fail.own(o: SessOp) -> SessOp:
+  match o:
+    case SBad{r}:
+      SFail{r}
+    case _:
+      o
+
+def fail.of(c: Cmd) -> Cmd:
+  match c:
+    case Bad{r}:
+      Own{SFail{r}}
+    case Own{o}:
+      Own{fail.own(o)}
+    case _:
+      c
+
+def fail.if(+class: Nat, c: Cmd) -> Cmd:
+  match class:
+    case 2n:
+      fail.of(c)
+    case _:
+      c
 
 # a hint's hash with code's word in its high twelve bits
 def stat.hash(+h: U32, +code: Nat) -> U32:
