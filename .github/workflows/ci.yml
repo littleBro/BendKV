@@ -1,0 +1,123 @@
+# CI: what CONTRIBUTING.md asks of a change before it is merged, on every
+# pull request and every push to the integration branches. The proofs
+# (make check, then make verdict in the BendTT kernel), the generated
+# blocks (make gencheck) and the pure checks (make smoke) in one job; the
+# server built once (make build), then tested against Redis 7.0.15
+# (make test) and counted under callgrind (make perfcheck) in two jobs
+# side by side. Redis 7.0.15 is the one Ubuntu 24.04 ships, the reference
+# the tests compare with.
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main, claude/step-b]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  proofs:
+    name: proofs (check, verdict, gencheck, smoke)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup
+      # make verdict rechecks the proofs in the BendTT kernel, which the
+      # compiler builds once with Lean 4.34.0 into ~/.bend/bendtt; kept
+      # in the cache, Lean is needed only when the patches change
+      - id: kernel
+        uses: actions/cache@v4
+        with:
+          path: ~/.bend/bendtt
+          key: bendtt-${{ hashFiles('bend-patches/**') }}
+      - name: Lean 4.34.0
+        if: steps.kernel.outputs.cache-hit != 'true'
+        run: |
+          curl -sSfL https://raw.githubusercontent.com/leanprover/elan/master/elan-init.sh |
+            sh -s -- -y --no-modify-path --default-toolchain leanprover/lean4:v4.34.0
+      - name: make gencheck
+        run: make gencheck
+      - name: make check
+        run: make check BEND="$BEND"
+      - name: make verdict
+        run: make verdict BEND="$BEND"
+      - name: make smoke
+        run: make smoke BEND="$BEND"
+
+  build:
+    name: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup
+      - name: make build
+        run: make build BEND="$BEND"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: bendkv
+          path: build/bendkv
+          retention-days: 7
+
+  test:
+    name: test (against Redis 7.0.15)
+    needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      # the float test compiles its checks with Bend, and the tests build
+      # a shim and a reference with the C compiler
+      - uses: ./.github/actions/setup
+      - name: Redis 7.0.15
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -yq redis-server redis-tools
+          sudo systemctl stop redis-server || true
+          redis-server --version
+          redis-server --version | grep -q 'v=7\.0\.15 '
+      - uses: actions/download-artifact@v4
+        with:
+          name: bendkv
+          path: build
+      # the server as built, newer than its sources, so that nothing
+      # builds it again
+      - run: chmod +x build/bendkv && touch build/bendkv
+      - name: make test
+        run: CC=clang-19 PORT=6380 REDIS_PORT=6390 sh tests/run_tests.sh
+      - name: the logs of a failed run
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-logs
+          path: |
+            build/*.log
+            build/**/*.log
+          if-no-files-found: ignore
+          retention-days: 7
+
+  perf:
+    name: perfcheck (instructions per request)
+    needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: valgrind and redis-benchmark
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -yq valgrind redis-tools
+      - uses: actions/download-artifact@v4
+        with:
+          name: bendkv
+          path: build
+      - run: chmod +x build/bendkv
+      - name: make perfcheck
+        run: sh tools/perf_guard.sh build/bendkv
