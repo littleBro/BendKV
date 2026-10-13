@@ -1,0 +1,526 @@
+diff --git a/bend2/base.bend b/bend2/base.bend
+index feb7604..4d44d80 100644
+--- a/bend2/base.bend
++++ b/bend2/base.bend
+@@ -457,6 +457,22 @@ def TCP.poll(sock: Socket, max: U32, ms: U32) ->
+   import "./effs/tcp_poll.c"
+   import "./effs/tcp_poll.js"
+ 
++# msg on chan once sock has bytes to read, or its peer has closed it, as
++# Chan.send_all puts a value (at once, past the room if need be), unless
++# chan is closed by then; the socket comes back at once. A socket has one
++# watch at most, and no recv may wait on it while the watch is out: a
++# computation that waits on its channel for answers and for its socket at
++# once (a client of an actor, say) takes the watch back before it reads.
++def TCP.watch(-A: Type, sock: Socket, chan: Chan(A), msg: A) -> IO(Socket):
++  import "./effs/chan.c"
++  import "./effs/chan.js"
++
++# sock's watch taken back: True if it had not fired, False if its msg went
++# on its channel (or sock had no watch).
++def TCP.unwatch(sock: Socket) -> IO(Socket & Bool):
++  import "./effs/chan.c"
++  import "./effs/chan.js"
++
+ def UDP.bind(host: String, port: U32) -> IO(Result<&1, &1, U32 & String, Socket>):
+   import "./effs/udp_bind.c"
+   import "./effs/udp_bind.js"
+diff --git a/bend2/effs/chan.c b/bend2/effs/chan.c
+index 95d67ca..cc3188a 100644
+--- a/bend2/effs/chan.c
++++ b/bend2/effs/chan.c
+@@ -263,7 +263,7 @@ static void __attribute__((constructor)) chan_drain_use(void) {
+ 
+ #endif
+ 
+-#ifdef CID(Chan.send_all)
++#if defined(CID(Chan.send_all)) || defined(CID(TCP.watch))
+ 
+ // Makes the ring hold one more value than it does, past the room.
+ static void chan_grow(ChanRow* row) {
+@@ -300,6 +300,10 @@ static void chan_put(Env e, ChanRow* row, Term x) {
+   row->size += 1;
+ }
+ 
++#endif
++
++#ifdef CID(Chan.send_all)
++
+ // Every pair's value onto its channel in one hold of chan_lock: two
+ // send_alls (or sends) that share channels order their values alike on
+ // each. The list comes apart before the lock, and the values a closed
+@@ -373,3 +377,122 @@ static void __attribute__((constructor)) chan_close_use(void) {
+ }
+ 
+ #endif
++
++#if defined(CID(TCP.watch)) || defined(CID(TCP.unwatch))
++
++// TCP.watch(sock, chan, msg) puts msg on chan once sock has bytes to read
++// or its peer has closed it, as Chan.send_all puts a value (at once, past
++// the room if need be), unless chan is closed by then. The watch waits in
++// the socket's slot as a recv does, so a recv must not wait on the socket
++// while it is out (two waits on one fd); a socket found ready already
++// fires at the next poll. TCP.unwatch takes it back: true if it had not
++// fired. Each loop keeps its watches by fd; a watch is a request of its
++// own (cont holds the channel's handle, item the message), which nothing
++// resumes: its call sends and frees it.
++static _Thread_local IoWork** tcp_watches;
++static _Thread_local u32      tcp_nwatches;
++
++static IoWork** tcp_watch_slot(int fd) {
++  if ((u32)fd >= tcp_nwatches) {
++    u32 n = (u32)fd + 64 > 2 * tcp_nwatches ? (u32)fd + 64 : 2 * tcp_nwatches;
++    tcp_watches = io_mem(realloc(tcp_watches, (size_t)n * sizeof(IoWork*)));
++    memset(tcp_watches + tcp_nwatches, 0,
++      (size_t)(n - tcp_nwatches) * sizeof(IoWork*));
++    tcp_nwatches = n;
++  }
++  return &tcp_watches[fd];
++}
++
++#endif
++
++#ifdef CID(TCP.watch)
++
++// Whether fd has bytes to read, or its end (or an error a recv answers),
++// now: the edge that woke the watch may be stale (a recv took its bytes
++// before the loop saw it), and so may the flag of an edge (a recv of as
++// many bytes as it asked for leaves it up, the socket dry).
++static bool tcp_watch_due(int fd) {
++  char c;
++  ssize_t n = recv(fd, &c, 1, MSG_PEEK | MSG_DONTWAIT);
++  return n >= 0 || (errno != EAGAIN && errno != EWOULDBLOCK);
++}
++
++// The socket is ready, or the watch was taken back (code 1) while it
++// waited in the loop's list of the ready. A socket with nothing to read
++// after all has the watch wait for its next edge: a watch fires for
++// bytes and ends alone, as a computation that wakes on its message
++// reads the socket, and a read of nothing would wait there.
++static Term tcp_watch_fire(Env e, IoWork* a) {
++  bool put = false;
++  if (a->code == 0) {
++    if (!tcp_watch_due((int)a->word)) {
++      return io_wait_on(a, (int)a->word, POLLIN, 0, tcp_watch_fire);
++    }
++    *tcp_watch_slot((int)a->word) = NULL;
++    io_hold(&chan_lock);
++    ChanRow* row = chan_at(a->cont);
++    if (row != NULL && !row->shut) {
++      chan_put(e, row, a->item);
++      put = true;
++    }
++    io_let(&chan_lock);
++  }
++  if (!put) {
++    term_drop(e, a->item);
++  }
++  free(a);
++  return IO_PARK;
++}
++
++Term tcp_watch_run(Env e, Term* f, IoWork* w) {
++  int      fd = (int)io_hand_v(f[0]);
++  IoWork** at = tcp_watch_slot(fd);
++  if (*at != NULL) {
++    err_fail("two watches on one socket");
++  }
++  IoWork* a = io_mem(calloc(1, sizeof(IoWork)));
++  a->cont = f[1];
++  a->item = f[2];
++  a->home = io_me;
++  *at     = a;
++  io_wait_first(a, fd, POLLIN, 0, tcp_watch_fire);
++  return f[0];
++}
++
++static void __attribute__((constructor)) tcp_watch_use(void) {
++  io_eff(CID(TCP.watch), tcp_watch_run);
++}
++
++#endif
++
++#ifdef CID(TCP.unwatch)
++
++Term tcp_unwatch_run(Env e, Term* f, IoWork* w) {
++  int      fd = (int)io_hand_v(f[0]);
++  IoWork** at = tcp_watch_slot(fd);
++  IoWork*  a  = *at;
++  if (a == NULL) {
++    return io_tup(e, f[0], chan_bool(false));
++  }
++  *at     = NULL;
++  a->code = 1;
++#if IO_EPOLL
++  if (io_fd_here(fd) && io_fdt[fd].rd == a) {
++    io_fdt[fd].rd = NULL;
++    io_fdwaits   -= 1;
++    term_drop(e, a->item);
++    free(a);
++  }
++#else
++  io_park_del(a);
++  term_drop(e, a->item);
++  free(a);
++#endif
++  return io_tup(e, f[0], chan_bool(true));
++}
++
++static void __attribute__((constructor)) tcp_unwatch_use(void) {
++  io_eff(CID(TCP.unwatch), tcp_unwatch_run);
++}
++
++#endif
+diff --git a/bend2/effs/chan.js b/bend2/effs/chan.js
+index f16800e..04de8da 100644
+--- a/bend2/effs/chan.js
++++ b/bend2/effs/chan.js
+@@ -120,3 +120,46 @@ io_eff(CID(Chan.recv), chan_recv);
+ io_eff(CID(Chan.close), chan_close);
+ io_eff(CID(Chan.send_all), chan_send_all);
+ io_eff(CID(Chan.drain), chan_drain);
++
++// TCP.watch: msg onto row once the socket is readable (or its peer closed
++// it), as chan_put puts it, unless row is shut by then; TCP.unwatch takes
++// it back, true if it had not fired. A watch waits as a recv does, in the
++// loop's waits, and nothing resumes it: its more sends and answers nothing.
++const tcp_watches = new Map();
++
++function tcp_watch(socket, row, msg) {
++  if (tcp_watches.has(socket)) {
++    throw "bend: two watches on one socket";
++  }
++  const w = { fd: socket, out: false, k: (x) => x, gone: false };
++  w.more = () => {
++    if (!w.gone) {
++      tcp_watches.delete(socket);
++      if (!row.shut) {
++        chan_put(row, msg);
++      }
++    }
++    return undefined;
++  };
++  tcp_watches.set(socket, w);
++  globalThis.BEND_IO.waits.push(w);
++  return socket;
++}
++
++function tcp_unwatch(socket) {
++  const w = tcp_watches.get(socket);
++  if (w === undefined) {
++    return io_tup(socket, false);
++  }
++  tcp_watches.delete(socket);
++  w.gone = true;
++  const ws = globalThis.BEND_IO.waits;
++  const i = ws.indexOf(w);
++  if (i >= 0) {
++    ws.splice(i, 1);
++  }
++  return io_tup(socket, true);
++}
++
++io_eff(CID(TCP.watch), tcp_watch);
++io_eff(CID(TCP.unwatch), tcp_unwatch);
+diff --git a/tests/io/tcp_watch.bend b/tests/io/tcp_watch.bend
+new file mode 100644
+index 0000000..036306a
+--- /dev/null
++++ b/tests/io/tcp_watch.bend
+@@ -0,0 +1,295 @@
++# io (io_tcp_watch): TCP.watch puts a message on a channel once the
++# socket has bytes to read or its peer closed it, and TCP.unwatch takes
++# it back. An accepted socket is watched after its peer has sent (the
++# watch fires at the next poll) and before (it fires when the bytes come),
++# each time the message is received and the bytes polled; a watch taken
++# back before the bytes come answers True and puts nothing on the channel
++# (a value sent after them is the next one received); one taken back
++# after it fired answers False, its message on the channel; a watch put
++# out after a recv took every byte that came (as many as it asked for,
++# so the socket's flag of an edge is still up) waits for bytes, firing at
++# no poll: a value sent after a sleep is received first, and the watch is
++# taken back unfired; and the peer's close fires a watch too, the poll
++# then answering the end.
++import Base
++
++def flag(b: Bool) -> String:
++  match b:
++    case True{}:
++      "T"
++    case False{}:
++      "F"
++
++def got(m: Maybe<&1, U32>) -> String:
++  match m:
++    case Some{x}:
++      U32.show(x)
++    case None{}:
++      "closed"
++
++def eof_or(s: String) -> String:
++  match s:
++    case SNil{}:
++      "eof"
++    case SCon{h, t}:
++      SCon{h, t}
++
++law sent:
++  for m: Socket & Result<&1, &1, (U32 & String), Unit>
++  IO(Socket)
++
++def sent(m):
++  (s, r) = m
++  do IO<Socket>:
++    u : Unit <- IO.pass(Unit, r)
++    return s
++
++# c sends data, and comes back
++law say:
++  for c: Socket
++  for data: String
++  IO(Socket)
++
++def say(c, data):
++  do IO<Socket>:
++    m : Socket & Result<&1, &1, (U32 & String), Unit> <- TCP.send(c, data)
++    sent(m)
++
++# what a poll found, printed ("eof" for the peer's close)
++law polled:
++  for m: Socket & Result<&1, &1, (U32 & String), Maybe<&1, String>>
++  IO(Socket)
++
++def polled(m):
++  (a, r) = m
++  do IO<Socket>:
++    got : Maybe<&1, String> <- IO.pass(Maybe<&1, String>, r)
++    w   : Unit <- IO.print(eof_or(Maybe.default(&1, String, got, "none")))
++    return a
++
++# what a raw recv read, printed
++law read:
++  for m: Socket & Result<&1, &1, (U32 & String), String>
++  IO(Socket)
++
++def read(m):
++  (a, r) = m
++  do IO<Socket>:
++    got : String <- IO.pass(String, r)
++    w   : Unit <- IO.print(got)
++    return a
++
++# the message the channel holds next, printed
++law heard:
++  for +ch: Chan(U32)
++  IO(Unit)
++
++def heard(ch):
++  do IO<Unit>:
++    v : Maybe<&1, U32> <- Chan.recv(U32, ch)
++    IO.print(got(v))
++
++# whether unwatch found the watch out, printed
++law unwatched:
++  for m: Socket & Bool
++  IO(Socket)
++
++def unwatched(m):
++  (a, b) = m
++  do IO<Socket>:
++    p : Unit <- IO.print(flag(b))
++    return a
++
++# the peer closes: the watch fires, and the poll answers the end
++law step_close:
++  for l: Listener
++  for c: Socket
++  for a: Socket
++  for +ch: Chan(U32)
++  IO(U32)
++
++def step_close(l, c, a, ch):
++  do IO<U32>:
++    a1 : Socket <- TCP.watch(U32, a, ch, 4)
++    x  : Unit <- Socket.close(c)
++    h  : Unit <- heard(ch)
++    m  : Socket & Result<&1, &1, (U32 & String), Maybe<&1, String>> <- TCP.poll(a1, 64, 1000)
++    a2 : Socket <- polled(m)
++    y  : Unit <- Socket.close(a2)
++    z  : Unit <- Listener.close(l)
++    return 0
++
++# a watch put out after a recv of as many bytes as came (the flag of the
++# socket's edge still up, the socket dry): no poll fires it, so the value
++# sent after a sleep is the next one received, and it is taken back
++# unfired
++law step_stale:
++  for l: Listener
++  for c: Socket
++  for a: Socket
++  for +ch: Chan(U32)
++  IO(U32)
++
++def step_stale(l, c, a, ch):
++  do IO<U32>:
++    c1 : Socket <- say(c, "wxyz")
++    t  : Unit <- IO.sleep(20)
++    m  : Socket & Result<&1, &1, (U32 & String), String> <- TCP.recv_raw(a, 4)
++    a1 : Socket <- read(m)
++    a2 : Socket <- TCP.watch(U32, a1, ch, 6)
++    u  : Unit <- IO.sleep(20)
++    s  : Bool <- Chan.send(U32, ch, 8)
++    h  : Unit <- heard(ch)
++    m0 : Socket & Bool <- TCP.unwatch(a2)
++    a3 : Socket <- unwatched(m0)
++    step_close(l, c1, a3, ch)
++
++# a watch taken back after it fired: False, its message on the channel
++law step_late:
++  for l: Listener
++  for c: Socket
++  for a: Socket
++  for +ch: Chan(U32)
++  IO(U32)
++
++def step_late(l, c, a, ch):
++  do IO<U32>:
++    a1 : Socket <- TCP.watch(U32, a, ch, 3)
++    c1 : Socket <- say(c, "z")
++    h  : Unit <- heard(ch)
++    m0 : Socket & Bool <- TCP.unwatch(a1)
++    a2 : Socket <- unwatched(m0)
++    m  : Socket & Result<&1, &1, (U32 & String), Maybe<&1, String>> <- TCP.poll(a2, 64, 1000)
++    a3 : Socket <- polled(m)
++    step_stale(l, c1, a3, ch)
++
++# a watch taken back before the bytes come: True, and nothing on the
++# channel but the value sent after them
++law step_back:
++  for l: Listener
++  for c: Socket
++  for a: Socket
++  for +ch: Chan(U32)
++  IO(U32)
++
++def step_back(l, c, a, ch):
++  do IO<U32>:
++    a1 : Socket <- TCP.watch(U32, a, ch, 2)
++    m0 : Socket & Bool <- TCP.unwatch(a1)
++    a2 : Socket <- unwatched(m0)
++    c1 : Socket <- say(c, "y")
++    s  : Bool <- Chan.send(U32, ch, 7)
++    h  : Unit <- heard(ch)
++    m  : Socket & Result<&1, &1, (U32 & String), Maybe<&1, String>> <- TCP.poll(a2, 64, 1000)
++    a3 : Socket <- polled(m)
++    step_late(l, c1, a3, ch)
++
++# watched before the bytes come: it fires when they do
++law step_wait:
++  for l: Listener
++  for c: Socket
++  for a: Socket
++  for +ch: Chan(U32)
++  IO(U32)
++
++def step_wait(l, c, a, ch):
++  do IO<U32>:
++    a1 : Socket <- TCP.watch(U32, a, ch, 1)
++    c1 : Socket <- say(c, "x")
++    h  : Unit <- heard(ch)
++    m  : Socket & Result<&1, &1, (U32 & String), Maybe<&1, String>> <- TCP.poll(a1, 64, 1000)
++    a2 : Socket <- polled(m)
++    step_back(l, c1, a2, ch)
++
++# watched after the bytes came: it fires at once
++law step_ready:
++  for l: Listener
++  for c: Socket
++  for a: Socket
++  for +ch: Chan(U32)
++  IO(U32)
++
++def step_ready(l, c, a, ch):
++  do IO<U32>:
++    c1 : Socket <- say(c, "w")
++    t  : Unit <- IO.sleep(20)
++    a1 : Socket <- TCP.watch(U32, a, ch, 5)
++    h  : Unit <- heard(ch)
++    m  : Socket & Result<&1, &1, (U32 & String), Maybe<&1, String>> <- TCP.poll(a1, 64, 1000)
++    a2 : Socket <- polled(m)
++    step_wait(l, c1, a2, ch)
++
++law step_accept:
++  for c: Socket
++  for p: Listener & Result<&1, &1, (U32 & String), Socket>
++  IO(U32)
++
++def step_accept(c, p):
++  (l, ar) = p
++  do IO<U32>:
++    a  : Socket <- IO.pass(Socket, ar)
++    ch : Chan(U32) <- Chan.new(U32, 4)
++    step_ready(l, c, a, ch)
++
++law main_go:
++  for b: Listener & U32
++  IO(U32)
++
++def main_go(b):
++  (l, port) = b
++  do IO<U32>:
++    c : Socket <- IO.try(Socket, TCP.connect("127.0.0.1", port))
++    p : Listener & Result<&1, &1, (U32 & String), Socket> <- TCP.accept(l)
++    step_accept(c, p)
++
++law tcp_retry:
++  for port : U32
++  for r    : Result<&1, &1, (U32 & String), Listener>
++  for rest : IO(Listener & U32)
++  IO(Listener & U32)
++
++def tcp_retry(port, r, rest):
++  match r:
++    case Done{l}:
++      IO.pure(Listener & U32, (l, port))
++    case Fail{e}:
++      rest
++
++law tcp_listen_any:
++  for tries : Nat
++  for +port : U32
++  IO(Listener & U32)
++
++def tcp_listen_any(tries, port):
++  match tries:
++    case 0n:
++      IO.die(Listener & U32, 1, "no free tcp port")
++    case 1n+t:
++      rest = tcp_listen_any(t, (port + 1 : U32))
++      do IO<Listener & U32>:
++        r : Result<&1, &1, (U32 & String), Listener> <- TCP.listen("127.0.0.1", port)
++        tcp_retry(port, r, rest)
++
++law main:
++  IO(U32)
++
++def main():
++  do IO<U32>:
++    b : Listener & U32 <- tcp_listen_any(32n, 19731)
++    main_go(b)
++
++#|5
++#|w
++#|1
++#|x
++#|T
++#|7
++#|y
++#|3
++#|F
++#|z
++#|wxyz
++#|8
++#|T
++#|4
++#|eof

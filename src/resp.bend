@@ -16,9 +16,10 @@ import ./batch.bend as B
 # A batch is parsed where it lies: the parser reads the buffer by index
 # (String.code_at, String.find, and String.dec_line_at for a number line),
 # hashes a key where it lies (String.hash_at), copies out only the bulks
-# (String.slice), and drops the parsed bytes once, at the end. The buffer
-# is only lent to it, so nothing is shared and nothing is rebuilt char by
-# char.
+# (String.slice) and the tail of an unfinished request, and leaves the
+# buffer to its reader whole (the server sends it to the actor with the
+# batch, for MONITOR). The buffer is only lent to it, so nothing is shared
+# and nothing is rebuilt char by char.
 
 # a number line: "<digits>\r\n", its number and the index after it
 type NumLine is Data:
@@ -40,9 +41,10 @@ type Args is Data:
   ArgsMore{need: Nat}
   ArgsBad{msg: String}
 
-# one request: its command, with the hash of its key for the hints (B.Req),
-# or none for an empty one (*0, or a blank inline line), which Redis skips
-# without a reply
+# one request: its command, with the hash of its key for the hints and
+# its code for INFO's statistics in the hash's high twelve bits (B.Req,
+# R.stat.hash); or none for an empty one (*0, or a blank inline line),
+# which Redis skips without a reply
 type One is Data:
   OneOk{req: B.Req, next: Nat}
   OneNone{next: Nat}
@@ -52,70 +54,212 @@ type One is Data:
 # a buffer's worth of requests: the complete ones, newest first (as the
 # parser meets them, each put before the ones it read already; the server
 # puts them in order in the same pass that takes their commands and
-# hashes apart, B.unzip), the unparsed tail, a protocol error that
-# ends the connection, if any, and how many bytes the tail needs at least
-# before a parse can make progress
+# hashes apart, B.unzip), how many they are and the words of their codes
+# together (R.tl.add: whether they all have one code, and which), the
+# unparsed tail, a protocol error that ends the connection, if any, how
+# many bytes the tail needs at least before a parse can make progress,
+# and the buffer itself, whole (the server sends it to the actor with the
+# batch, for MONITOR: the parser takes the buffer and gives it back, so
+# that nothing shares it)
 type Batch is Data:
-  Batch{reqs: List<&2, B.Req>, rest: String, err: Maybe<&2, String>, need: Nat}
+  Batch{reqs: List<&2, B.Req>, tl: U32, rest: String, err: Maybe<&2, String>, need: Nat, raw: String}
 
 # Lexing
 # ------
+# A length is read as Redis 7.0.15 reads it (processMultibulkBuffer): its
+# line runs from the '*' or '$' to the first '\r', and its number is
+# string2ll's, with no 0 before its first digit. The quick way reads the
+# lines clients send, 1 to 10 digits and "\r\n", where they lie
+# (String.dec_line_at); any other line goes Redis's own way (line_at,
+# len.read), which waits for its '\r' and reads any number string2ll
+# takes, so that both ways give Redis's answer.
+
+# the least number of n + 2 digits, 10^(n + 1) (a line has 10 at most)
+def num.least(n: Nat) -> Nat:
+  match n:
+    case 0n:
+      10n
+    case 1n:
+      100n
+    case 2n:
+      1000n
+    case 3n:
+      10000n
+    case 4n:
+      100000n
+    case 5n:
+      1000000n
+    case 6n:
+      10000000n
+    case 7n:
+      100000000n
+    case _:
+      1000000000n
+
+def num.wide(canon: Bool, v: Nat, next: Nat) -> NumLine:
+  match canon:
+    case True{}:
+      NumOk{v, next}
+    case False{}:
+      NumBad{}
 
 # the number line at index i, its number and its length with the "\r\n"
 # (String.dec_line_at: a length of 0 when it is bad, of 1 when the buffer
-# ends first and the line waits for the rest)
+# ends first and the line waits for the rest); a line of two digits or
+# more whose number is below 10^(digits - 1) starts with a 0, which
+# string2ll does not take, and goes Redis's way
 def num.of(+i: Nat, vr: Nat & Nat) -> NumLine:
   match vr:
     case (v, 0n):
       NumBad{}
     case (v, 1n):
       NumMore{}
-    case (v, 2n+n):
-      NumOk{v, 2n+Nat.add(i, n)}
+    case (v, 2n):
+      NumBad{}
+    case (v, 3n):
+      NumOk{v, 3n+i}
+    case (+v, 4n++n):
+      num.wide(Nat.is_le(num.least(n), v), v, 4n+Nat.add(i, n))
 
 # the number line of s at index i: 1 to 10 digits (the lengths Redis takes
-# have at most 9), then "\r\n", read in place
+# have at most 10), then "\r\n", read in place
 def num_at(+s: String, +i: Nat) -> NumLine:
   num.of(i, String.dec_line_at(s, i))
 
-# the n bytes of a bulk at index j: copied out (String.slice) when the
-# buffer holds them and their "\r\n"; short is how many bytes it lacks
-def bulk.fin(+s: String, +n: Nat, +j: Nat, ok: Bool, short: Nat, crlf: Bool) -> Bulk:
-  match ok short crlf:
-    case False{} _ _:
+# A line as Redis finds one: from index i to the first '\r' (strchr), which
+# a NUL before it hides, as Redis reads its buffer as a C string; the line
+# is there once a byte follows its '\r', whatever that byte is, as Redis
+# skips it unread. Without its '\r', more than 64 KB from i is an error.
+type Line is Data:
+  LineAt{cr: Nat}
+  LineWait{}
+  LineBig{}
+
+def line.wait(big: Bool) -> Line:
+  match big:
+    case True{}:
+      LineBig{}
+    case False{}:
+      LineWait{}
+
+def line.of(+r: Nat, found: Bool, room: Bool, big: Bool) -> Line:
+  match found room:
+    case True{} True{}:
+      LineAt{r}
+    case True{} False{}:
+      LineWait{}
+    case False{} _:
+      line.wait(big)
+
+def line_at(+s: String, +i: Nat, +l: Nat) -> Line:
+  +r = String.find(s, '\r', i)
+  line.of(r, Nat.is_lt(r, String.find(s, Chr{0}, i)), Nat.is_lt(1n+r, l), Nat.is_lt(65536n, Nat.sub(l, i)))
+
+# the number of the line from index a to its '\r' at r, as string2ll reads
+# it (R.ll.of): a '-' or not, then digits with no 0 before the first, from
+# -2^63 to 2^63 - 1; a line of 21 bytes or more is none, as string2ll
+# finds before it reads one
+def len.read.if(short: Bool, +s: String, +a: Nat, +r: Nat) -> R.LL:
+  match short:
+    case True{}:
+      +neg = U32.is_eq(String.code_at(s, a), 45)
+      R.ll.of(R.dec.of(s, Bool.pick(Nat, neg, 1n+a, a), r), neg)
+    case False{}:
+      R.LLBad{}
+
+def len.read(+s: String, +a: Nat, +r: Nat) -> R.LL:
+  len.read.if(Nat.is_lt(Nat.sub(r, a), 21n), s, a, r)
+
+# A bulk's header read Redis's way: its line from where the bulk starts,
+# then the '$' it must start with, then its length: none, one below 0 or
+# one past 512MB is an error. Where its data starts and how long it is.
+type Head is Data:
+  HeadOk{n: Nat, j: Nat}
+  HeadMore{}
+  HeadBad{msg: String}
+
+def head.size(ok: Bool, n: Nat, j: Nat) -> Head:
+  match ok:
+    case True{}:
+      HeadOk{n, j}
+    case False{}:
+      HeadBad{"Protocol error: invalid bulk length"}
+
+def head.len(ll: R.LL, j: Nat) -> Head:
+  match ll:
+    case R.LL{neg, +hi, +lo}:
+      head.size(Bool.and(Bool.not(neg), R.ll.le(hi, lo, 0n, 536870912n)), lo, j)
+    case R.LLBad{}:
+      HeadBad{"Protocol error: invalid bulk length"}
+
+def head.dollar(dollar: Bool, c: U32, +s: String, +i: Nat, +r: Nat) -> Head:
+  match dollar:
+    case True{}:
+      head.len(len.read(s, 1n+i, r), 2n+r)
+    case False{}:
+      HeadBad{"Protocol error: expected '$', got '" ++ SCon{Chr{c}, SNil{}} ++ "'"}
+
+def head.of(+s: String, +i: Nat, ln: Line) -> Head:
+  match ln:
+    case LineAt{+r}:
+      +c = String.code_at(s, i)
+      head.dollar(U32.is_eq(c, 36), c, s, i, r)
+    case LineWait{}:
+      HeadMore{}
+    case LineBig{}:
+      HeadBad{"Protocol error: too big bulk count string"}
+
+def head_at(+s: String, +i: Nat, +l: Nat) -> Head:
+  head.of(s, i, line_at(s, i, l))
+
+# the n bytes of a bulk at index j, copied out (String.slice) once the
+# buffer holds them and the two bytes after them, which Redis skips
+# unread, as it skips the byte after a line's '\r'; short is how many
+# bytes it lacks
+def bulk.fin(+s: String, +n: Nat, +j: Nat, ok: Bool, short: Nat) -> Bulk:
+  match ok short:
+    case False{} _:
       BulkBad{"Protocol error: invalid bulk length"}
-    case True{} 0n True{}:
+    case True{} 0n:
       BulkOk{String.slice(s, j, n), 2n+Nat.add(j, n)}
-    case True{} 0n False{}:
-      BulkBad{"Protocol error: expected '\r\n' after bulk data"}
-    case True{} 1n+k _:
+    case True{} 1n+k:
       BulkMore{1n+k}
 
-# a bulk of at most 512MB, as Redis allows
-def bulk.body(+s: String, +l: Nat, nl: NumLine) -> Bulk:
+# a bulk whose header went Redis's way
+def bulk.slow(+s: String, +l: Nat, h: Head) -> Bulk:
+  match h:
+    case HeadOk{+n, +j}:
+      bulk.fin(s, n, j, True{}, Nat.sub(2n+Nat.add(j, n), l))
+    case HeadMore{}:
+      BulkMore{1n}
+    case HeadBad{msg}:
+      BulkBad{msg}
+
+# a bulk of at most 512MB, as Redis allows; a header the quick way does
+# not read goes Redis's way, from i
+def bulk.body(+s: String, +i: Nat, +l: Nat, nl: NumLine) -> Bulk:
   match nl:
     case NumOk{+n, +j}:
-      +e = Nat.add(j, n)
-      +crlf = Bool.and(U32.is_eq(String.code_at(s, e), 13), U32.is_eq(String.code_at(s, 1n+e), 10))
-      bulk.fin(s, n, j, Nat.is_le(n, 536870912n), Nat.sub(2n+e, l), crlf)
+      bulk.fin(s, n, j, Nat.is_le(n, 536870912n), Nat.sub(2n+Nat.add(j, n), l))
     case NumMore{}:
       BulkMore{1n}
     case NumBad{}:
-      BulkBad{"Protocol error: invalid bulk length"}
+      bulk.slow(s, l, head_at(s, i, l))
 
-def bulk.head(+s: String, +i: Nat, +l: Nat, +c: U32, dollar: Bool, end: Bool) -> Bulk:
+# a bulk that does not start with '$' is an error once its line has come
+def bulk.head(+s: String, +i: Nat, +l: Nat, dollar: Bool, end: Bool) -> Bulk:
   match dollar end:
     case True{} _:
-      bulk.body(s, l, num_at(s, 1n+i))
+      bulk.body(s, i, l, num_at(s, 1n+i))
     case False{} True{}:
       BulkMore{1n}
     case False{} False{}:
-      BulkBad{"Protocol error: expected '$', got '" ++ SCon{Chr{c}, SNil{}} ++ "'"}
+      bulk.slow(s, l, head_at(s, i, l))
 
 # the bulk of s at index i, l the length of s
 def bulk_at(+s: String, +i: Nat, +l: Nat) -> Bulk:
   +c = String.code_at(s, i)
-  bulk.head(s, i, l, c, U32.is_eq(c, 36), U32.is_eq(c, 4294967295))
+  bulk.head(s, i, l, U32.is_eq(c, 36), U32.is_eq(c, 4294967295))
 
 # one key: the bulk of a command's key, with its hash read off the buffer
 # (String.hash_at, which is KV.hash of the key)
@@ -124,41 +268,46 @@ type Key is Data:
   KeyMore{need: Nat}
   KeyBad{msg: String}
 
-def key.fin(+s: String, +n: Nat, +j: Nat, ok: Bool, short: Nat, crlf: Bool) -> Key:
-  match ok short crlf:
-    case False{} _ _:
+def key.fin(+s: String, +n: Nat, +j: Nat, ok: Bool, short: Nat) -> Key:
+  match ok short:
+    case False{} _:
       KeyBad{"Protocol error: invalid bulk length"}
-    case True{} 0n True{}:
+    case True{} 0n:
       KeyOk{String.slice(s, j, n), String.hash_at(s, j, n), 2n+Nat.add(j, n)}
-    case True{} 0n False{}:
-      KeyBad{"Protocol error: expected '\r\n' after bulk data"}
-    case True{} 1n+k _:
+    case True{} 1n+k:
       KeyMore{1n+k}
 
-def key.body(+s: String, +l: Nat, nl: NumLine) -> Key:
+def key.slow(+s: String, +l: Nat, h: Head) -> Key:
+  match h:
+    case HeadOk{+n, +j}:
+      key.fin(s, n, j, True{}, Nat.sub(2n+Nat.add(j, n), l))
+    case HeadMore{}:
+      KeyMore{1n}
+    case HeadBad{msg}:
+      KeyBad{msg}
+
+def key.body(+s: String, +i: Nat, +l: Nat, nl: NumLine) -> Key:
   match nl:
     case NumOk{+n, +j}:
-      +e = Nat.add(j, n)
-      +crlf = Bool.and(U32.is_eq(String.code_at(s, e), 13), U32.is_eq(String.code_at(s, 1n+e), 10))
-      key.fin(s, n, j, Nat.is_le(n, 536870912n), Nat.sub(2n+e, l), crlf)
+      key.fin(s, n, j, Nat.is_le(n, 536870912n), Nat.sub(2n+Nat.add(j, n), l))
     case NumMore{}:
       KeyMore{1n}
     case NumBad{}:
-      KeyBad{"Protocol error: invalid bulk length"}
+      key.slow(s, l, head_at(s, i, l))
 
-def key.head(+s: String, +i: Nat, +l: Nat, +c: U32, dollar: Bool, end: Bool) -> Key:
+def key.head(+s: String, +i: Nat, +l: Nat, dollar: Bool, end: Bool) -> Key:
   match dollar end:
     case True{} _:
-      key.body(s, l, num_at(s, 1n+i))
+      key.body(s, i, l, num_at(s, 1n+i))
     case False{} True{}:
       KeyMore{1n}
     case False{} False{}:
-      KeyBad{"Protocol error: expected '$', got '" ++ SCon{Chr{c}, SNil{}} ++ "'"}
+      key.slow(s, l, head_at(s, i, l))
 
 # the key bulk of s at index i, l the length of s
 def key_at(+s: String, +i: Nat, +l: Nat) -> Key:
   +c = String.code_at(s, i)
-  key.head(s, i, l, c, U32.is_eq(c, 36), U32.is_eq(c, 4294967295))
+  key.head(s, i, l, U32.is_eq(c, 36), U32.is_eq(c, 4294967295))
 
 # Requests
 # --------
@@ -190,20 +339,27 @@ def args.at(m: Nat, +s: String, +l: Nat, +j: Nat) -> Args:
     case 1n+k:
       bulks(k, s, l, bulk_at(s, j, l), Nil{})
 
+# a request, its hash marked with its code: its key and what its
+# command counts as; a failed call's error as the server runs it
+# (R.fail.if: SFail, answered once the client may run commands)
+def req.ok(+c: R.Cmd, h: U32, +key: Nat, +args: List<&2, String>, j: Nat) -> One:
+  +class = R.stat.class(c, key, args)
+  OneOk{B.Req{R.fail.if(class, c), R.stat.hash(h, R.stat.code(key, class))}, j}
+
 # a command of number id named nm (as the client spelled it, for an
-# unknown one), from its arguments: from id 40 on, a command of the
-# connection or of the server (R.parse_sess)
-def req.mk(own: Bool, +id: Nat, +nm: String, +args: List<&2, String>) -> B.Req:
+# unknown one), from its arguments: a command of the connection or of
+# the server (R.parse_sess) for a number R.cmd_own names
+def req.mk(own: Bool, +id: Nat, +nm: String, +args: List<&2, String>, +key: Nat, j: Nat) -> One:
   match own:
     case True{}:
-      B.Req{R.Own{R.parse_sess(id, nm, args)}, 0}
+      req.ok(R.Own{R.parse_sess(id, nm, args)}, 0, key, args, j)
     case False{}:
-      B.Req{R.parse_id(id, nm, args), B.args_hash(args)}
+      req.ok(R.parse_id(id, nm, args), B.args_hash(args), key, args, j)
 
 def req.of(+id: Nat, +nm: String, a: Args) -> One:
   match a:
     case ArgsOk{+args, j}:
-      OneOk{req.mk(Nat.is_le(40n, id), id, nm, args), j}
+      req.mk(R.cmd_own(id), id, nm, args, R.stat.key(id, args), j)
     case ArgsMore{k}:
       OneMore{k}
     case ArgsBad{msg}:
@@ -213,7 +369,7 @@ def req.of(+id: Nat, +nm: String, a: Args) -> One:
 def get.of(b: Key) -> One:
   match b:
     case KeyOk{k, h, j}:
-      OneOk{B.Req{R.Get{k}, h}, j}
+      OneOk{B.Req{R.Get{k}, U32.or(U32.and(h, 1048575), R.stat.mark.get())}, j}
     case KeyMore{n}:
       OneMore{n}
     case KeyBad{msg}:
@@ -223,7 +379,7 @@ def get.of(b: Key) -> One:
 def set.val(k: String, h: U32, b: Bulk) -> One:
   match b:
     case BulkOk{v, j}:
-      OneOk{B.Req{R.Set{k, v}, h}, j}
+      OneOk{B.Req{R.Set{k, v}, U32.or(U32.and(h, 1048575), R.stat.mark.set())}, j}
     case BulkMore{n}:
       OneMore{n}
     case BulkBad{msg}:
@@ -242,7 +398,7 @@ def set.of(+s: String, +l: Nat, b: Key) -> One:
 def incr.of(b: Key) -> One:
   match b:
     case KeyOk{k, h, j}:
-      OneOk{B.Req{R.IncrBy{k, R.IPos{1n}}, h}, j}
+      OneOk{B.Req{R.IncrBy{k, R.IPos{1n}}, U32.or(U32.and(h, 1048575), R.stat.mark.incr())}, j}
     case KeyMore{n}:
       OneMore{n}
     case KeyBad{msg}:
@@ -289,23 +445,40 @@ def array.if(n: Nat, +s: String, +l: Nat, +j: Nat, ok: Bool) -> One:
     case _ False{}:
       OneBad{"Protocol error: invalid multibulk length"}
 
-# a multibulk count below zero: Redis skips the request, as it skips *0
-def array.neg(nl: NumLine) -> One:
-  match nl:
-    case NumOk{n, j}:
-      OneNone{j}
-    case NumMore{}:
-      OneMore{1n}
-    case NumBad{}:
-      OneBad{"Protocol error: invalid multibulk length"}
-
-def array.bad(+s: String, +i: Nat, neg: Bool) -> One:
-  match neg:
+# A count read Redis's way (line_at, len.read): none, or one past
+# INT_MAX, is an error; one of 0 or less is skipped, the request with
+# it, as Redis skips *0 (an empty request), down to -2^63.
+def array.small(ok: Bool, +hi: Nat, +lo: Nat, +s: String, +l: Nat, +j: Nat) -> One:
+  match ok:
     case True{}:
-      array.neg(num_at(s, 2n+i))
+      array.if(Nat.add(Nat.mul(hi, 1000000000n), lo), s, l, j, True{})
     case False{}:
       OneBad{"Protocol error: invalid multibulk length"}
 
+def array.signed(neg: Bool, +hi: Nat, +lo: Nat, +s: String, +l: Nat, +j: Nat) -> One:
+  match neg:
+    case True{}:
+      OneNone{j}
+    case False{}:
+      array.small(R.ll.le(hi, lo, 2n, 147483647n), hi, lo, s, l, j)
+
+def array.count(ll: R.LL, +s: String, +l: Nat, +j: Nat) -> One:
+  match ll:
+    case R.LL{neg, +hi, +lo}:
+      array.signed(neg, hi, lo, s, l, j)
+    case R.LLBad{}:
+      OneBad{"Protocol error: invalid multibulk length"}
+
+def array.line(+s: String, +i: Nat, +l: Nat, ln: Line) -> One:
+  match ln:
+    case LineAt{+r}:
+      array.count(len.read(s, 1n+i, r), s, l, 2n+r)
+    case LineWait{}:
+      OneMore{1n}
+    case LineBig{}:
+      OneBad{"Protocol error: too big mbulk count string"}
+
+# a count the quick way does not read goes Redis's way, from the '*'
 def array(+s: String, +i: Nat, +l: Nat, nl: NumLine) -> One:
   match nl:
     case NumOk{+n, +j}:
@@ -313,7 +486,7 @@ def array(+s: String, +i: Nat, +l: Nat, nl: NumLine) -> One:
     case NumMore{}:
       OneMore{1n}
     case NumBad{}:
-      array.bad(s, i, U32.is_eq(String.code_at(s, 1n+i), 45))
+      array.line(s, i, l, line_at(s, i, l))
 
 # An inline request
 # -----------------
@@ -517,42 +690,59 @@ def one(+s: String, +i: Nat, +l: Nat) -> One:
   +c = String.code_at(s, i)
   one.head(s, i, l, U32.is_eq(c, 42), U32.is_eq(c, 4294967295))
 
-# a batch's requests before its tail is cut off, newest first: at is the
-# index where the tail starts, the first request not parsed on
+# a batch's requests before its tail is cut off, newest first, how many
+# they are and the words of their codes (R.tl.add): at is the index where
+# the tail starts, the first request not parsed on
 type Cut is Data:
-  Cut{reqs: List<&2, B.Req>, at: Nat, err: Maybe<&2, String>, need: Nat}
+  Cut{reqs: List<&2, B.Req>, tl: U32, at: Nat, err: Maybe<&2, String>, need: Nat}
 
-# every complete request of s from index i on, put before acc: o is the
-# parse of the one at i; each request takes at least one byte, so the
-# length of the buffer is enough fuel
-def batch.go(fuel: Nat, +s: String, +l: Nat, +i: Nat, o: One, acc: List<&2, B.Req>) -> Cut:
+# every complete request of s from index i on, put before acc, and
+# counted with its code's word in tl: o is the parse of the one at i;
+# each request takes at least one byte, so the length of the buffer is
+# enough fuel. The request is taken apart for its hash, whose high twelve
+# bits are its code's word: its words are in registers already.
+def batch.go(fuel: Nat, +s: String, +l: Nat, +i: Nat, o: One, acc: List<&2, B.Req>, tl: U32) -> Cut:
   match fuel o:
     case 0n _:
-      Cut{acc, i, None{}, 1n}
+      Cut{acc, tl, i, None{}, 1n}
     case 1n+f OneNone{+j}:
-      batch.go(f, s, l, j, one(s, j, l), acc)
-    case 1n+f OneOk{req, +j}:
-      batch.go(f, s, l, j, one(s, j, l), req <> acc)
+      batch.go(f, s, l, j, one(s, j, l), acc, tl)
+    case 1n+f OneOk{B.Req{c, +h}, +j}:
+      batch.go(f, s, l, j, one(s, j, l), B.Req{c, h} <> acc, R.tl.add(tl, h))
     case 1n+f OneMore{k}:
-      Cut{acc, i, None{}, k}
+      Cut{acc, tl, i, None{}, k}
     case 1n+f OneBad{m}:
-      Cut{acc, l, Some{m}, 0n}
+      Cut{acc, tl, l, Some{m}, 0n}
 
-# the tail is what follows the parsed requests: s is dropped up to it
-def batch.fin(c: Cut, s: String) -> Batch:
+# the tail is what follows the parsed requests, from index at of s (of
+# length l): none when they took all of s, as they mostly do, else a copy
+# of the rest of s; s goes back whole with the batch
+def batch.tail(none: Bool, +s: String, +at: Nat, +l: Nat) -> String:
+  match none:
+    case True{}:
+      SNil{}
+    case False{}:
+      String.slice(s, at, Nat.sub(l, at))
+
+def batch.fin(c: Cut, +s: String, +l: Nat) -> Batch:
   match c:
-    case Cut{reqs, at, err, need}:
-      Batch{reqs, String.drop(s, at), err, need}
+    case Cut{reqs, tl, +at, err, need}:
+      Batch{reqs, tl, batch.tail(Nat.is_le(l, at), s, at, l), err, need, s}
 
-# the requests of s put before acc (requests read before them, newest
-# first): fuel must be at least the number of requests in s, which a
-# reader that knows how many bytes it has passes; parse counts them itself
-def parse_onto(fuel: Nat, +s: String, acc: List<&2, B.Req>) -> Batch:
+# the requests of s from index at on, put before acc, counted in tl with
+# those read before them: fuel must be at least the number of requests in
+# s, which a reader that knows how many bytes it has passes; parse counts
+# them itself
+def parse_from(fuel: Nat, +s: String, +at: Nat, +l: Nat, acc: List<&2, B.Req>, tl: U32) -> Batch:
+  batch.fin(batch.go(fuel, s, l, at, one(s, at, l), acc, tl), s, l)
+
+def parse_onto(fuel: Nat, +s: String, acc: List<&2, B.Req>, tl: U32) -> Batch:
   +l = String.length(s)
-  batch.fin(batch.go(fuel, s, l, 0n, one(s, 0n, l), acc), s)
+  parse_from(fuel, s, 0n, l, acc, tl)
 
 def parse(+s: String) -> Batch:
-  parse_onto(1n+String.length(s), s, Nil{})
+  +l = String.length(s)
+  parse_onto(1n+l, s, Nil{}, 0)
 
 # Long buffers
 # ------------
@@ -562,8 +752,8 @@ def parse(+s: String) -> Batch:
 # parsed a window of at most 2048 bytes at a time, each window a copy of
 # its own in one run (String.slice), from the first byte the window before
 # did not parse; the requests of all the windows make one batch. A request
-# longer than a window is parsed in the rest of the buffer as it is: that
-# happens once, when all its bytes have come.
+# longer than a window is parsed in the rest of the buffer where it lies:
+# that happens once, when all its bytes have come.
 
 def win.max() -> Nat:
   2048n
@@ -571,71 +761,263 @@ def win.max() -> Nat:
 # a window's parse, judged: the last one (the buffer's end, or a protocol
 # error), one that parsed nothing (a request longer than a window: the
 # rest of the buffer is parsed whole from at), or one to go on after; the
-# requests of the windows so far, newest first, are in each
+# requests of the windows so far, newest first, and their count and the
+# words of their codes (R.tl.add), are in each
 type Win is Data:
   WinLast{b: Batch}
-  WinBig{reqs: List<&2, B.Req>, at: Nat}
-  WinOn{reqs: List<&2, B.Req>, next: Nat}
+  WinBig{reqs: List<&2, B.Req>, tl: U32, at: Nat}
+  WinOn{reqs: List<&2, B.Req>, tl: U32, next: Nat}
 
-def win.on(reqs: List<&2, B.Req>, +at: Nat, +done: Nat, stuck: Bool) -> Win:
+def win.on(reqs: List<&2, B.Req>, tl: U32, +at: Nat, +done: Nat, stuck: Bool) -> Win:
   match stuck:
     case True{}:
-      WinBig{reqs, at}
+      WinBig{reqs, tl, at}
     case False{}:
-      WinOn{reqs, Nat.add(at, done)}
+      WinOn{reqs, tl, Nat.add(at, done)}
 
-def win.judge(reqs: List<&2, B.Req>, rest: String, err: Maybe<&2, String>, need: Nat, +at: Nat, +done: Nat, last: Bool) -> Win:
+def win.judge(reqs: List<&2, B.Req>, tl: U32, rest: String, err: Maybe<&2, String>, need: Nat, +at: Nat, +done: Nat, last: Bool) -> Win:
   match err last:
     case Some{m} _:
-      WinLast{Batch{reqs, rest, Some{m}, need}}
+      WinLast{Batch{reqs, tl, rest, Some{m}, need, SNil{}}}
     case None{} True{}:
-      WinLast{Batch{reqs, rest, None{}, need}}
+      WinLast{Batch{reqs, tl, rest, None{}, need, SNil{}}}
     case None{} False{}:
-      win.on(reqs, at, done, Nat.is_eq(done, 0n))
+      win.on(reqs, tl, at, done, Nat.is_eq(done, 0n))
 
 # the window of w bytes at index at, of a buffer of l bytes, and its parse
+# (the window, a copy, dropped)
 def win.of(b: Batch, +at: Nat, +w: Nat, +l: Nat) -> Win:
   match b:
-    case Batch{reqs, +rest, err, need}:
-      win.judge(reqs, rest, err, need, at, Nat.sub(w, String.length(rest)), Nat.is_le(l, Nat.add(at, w)))
+    case Batch{reqs, tl, +rest, err, need, win}:
+      win.judge(reqs, tl, rest, err, need, at, Nat.sub(w, String.length(rest)), Nat.is_le(l, Nat.add(at, w)))
 
-# the window at index at, its requests put before acc, those of the
-# windows before it
-def win.at(+s: String, +at: Nat, +l: Nat, acc: List<&2, B.Req>) -> Win:
+# the window at index at, its requests put before acc, counted with
+# those of the windows before it (tl)
+def win.at(+s: String, +at: Nat, +l: Nat, acc: List<&2, B.Req>, tl: U32) -> Win:
   +w = Nat.min(win.max(), Nat.sub(l, at))
-  win.of(parse_onto(1n+w, String.slice(s, at, w), acc), at, w, l)
+  win.of(parse_onto(1n+w, String.slice(s, at, w), acc, tl), at, w, l)
+
+# the last window's batch, with the buffer whole
+def win.last(b: Batch, s: String) -> Batch:
+  match b:
+    case Batch{reqs, tl, rest, err, need, x}:
+      Batch{reqs, tl, rest, err, need, s}
 
 # the windows of s from the one judged in w on; each window parses one
 # byte or more, so the length of s is enough fuel
 def win.go(n: Nat, +s: String, +l: Nat, w: Win) -> Batch:
   match n w:
     case _ WinLast{b}:
-      b
-    case _ WinBig{reqs, +at}:
-      parse_onto(1n+Nat.sub(l, at), String.drop(s, at), reqs)
-    case 0n WinOn{reqs, +at}:
-      parse_onto(1n+Nat.sub(l, at), String.drop(s, at), reqs)
-    case 1n+m WinOn{reqs, +at}:
-      win.go(m, s, l, win.at(s, at, l, reqs))
+      win.last(b, s)
+    case _ WinBig{reqs, tl, +at}:
+      parse_from(1n+Nat.sub(l, at), s, at, l, reqs, tl)
+    case 0n WinOn{reqs, tl, +at}:
+      parse_from(1n+Nat.sub(l, at), s, at, l, reqs, tl)
+    case 1n+m WinOn{reqs, tl, +at}:
+      win.go(m, s, l, win.at(s, at, l, reqs, tl))
 
 # the requests of s, which may be made of several runs (a long read, or
 # the tail of the last read and a new one), in windows of one run each
 def parse_runs(+s: String) -> Batch:
   +l = String.length(s)
-  win.go(1n+l, s, l, win.at(s, 0n, l, Nil{}))
+  win.go(1n+l, s, l, win.at(s, 0n, l, Nil{}, 0))
 
 # the requests of a fresh read: up to 2048 bytes it is one run, parsed
 # where it lies
 def parse_read.if(short: Bool, +s: String, +l: Nat) -> Batch:
   match short:
     case True{}:
-      parse_onto(1n+l, s, Nil{})
+      parse_onto(1n+l, s, Nil{}, 0)
     case False{}:
-      win.go(1n+l, s, l, win.at(s, 0n, l, Nil{}))
+      win.go(1n+l, s, l, win.at(s, 0n, l, Nil{}, 0))
 
 def parse_read(+s: String) -> Batch:
   +l = String.length(s)
   parse_read.if(Nat.is_le(l, win.max()), s, l)
+
+# Arguments as sent
+# ------------------
+# MONITOR shows each command with its arguments as its client sent them
+# (server.bend, MONITOR): the bytes of a batch are read again, the actor
+# reading them only while a client monitors, into the arguments of each
+# request, its name first, as the requests were read (one, above): the
+# same requests, an empty one skipped, up to the first that is not whole
+# or not right, which the batch did not hold either.
+
+# one request's arguments; none for an empty request; or the end
+type Av1 is Data:
+  AvOk{args: List<&2, String>, next: Nat}
+  AvSkip{next: Nat}
+  AvEnd{}
+
+def av.args(a: Args) -> Av1:
+  match a:
+    case ArgsOk{args, j}:
+      AvOk{args, j}
+    case _:
+      AvEnd{}
+
+def av.array.if(n: Nat, +s: String, +l: Nat, +j: Nat, ok: Bool) -> Av1:
+  match n ok:
+    case 0n True{}:
+      AvSkip{j}
+    case 1n+m True{}:
+      av.args(args.at(1n+m, s, l, j))
+    case _ False{}:
+      AvEnd{}
+
+def av.array.small(ok: Bool, +hi: Nat, +lo: Nat, +s: String, +l: Nat, +j: Nat) -> Av1:
+  match ok:
+    case True{}:
+      av.array.if(Nat.add(Nat.mul(hi, 1000000000n), lo), s, l, j, True{})
+    case False{}:
+      AvEnd{}
+
+def av.array.signed(neg: Bool, +hi: Nat, +lo: Nat, +s: String, +l: Nat, +j: Nat) -> Av1:
+  match neg:
+    case True{}:
+      AvSkip{j}
+    case False{}:
+      av.array.small(R.ll.le(hi, lo, 2n, 147483647n), hi, lo, s, l, j)
+
+def av.array.count(ll: R.LL, +s: String, +l: Nat, +j: Nat) -> Av1:
+  match ll:
+    case R.LL{neg, +hi, +lo}:
+      av.array.signed(neg, hi, lo, s, l, j)
+    case R.LLBad{}:
+      AvEnd{}
+
+def av.array.line(+s: String, +i: Nat, +l: Nat, ln: Line) -> Av1:
+  match ln:
+    case LineAt{+r}:
+      av.array.count(len.read(s, 1n+i, r), s, l, 2n+r)
+    case _:
+      AvEnd{}
+
+def av.array(+s: String, +i: Nat, +l: Nat, nl: NumLine) -> Av1:
+  match nl:
+    case NumOk{+n, +j}:
+      av.array.if(n, s, l, j, Nat.is_le(n, 2147483647n))
+    case NumMore{}:
+      AvEnd{}
+    case NumBad{}:
+      av.array.line(s, i, l, line_at(s, i, l))
+
+def av.words(ws: List<&2, String>, +next: Nat) -> Av1:
+  match ws:
+    case Nil{}:
+      AvSkip{next}
+    case Con{w, rest}:
+      AvOk{w <> rest, next}
+
+def av.inline.of(m: Maybe<&2, List<&2, String>>, +next: Nat) -> Av1:
+  match m:
+    case Some{ws}:
+      av.words(List.reverse(&2, String, ws), next)
+    case None{}:
+      AvEnd{}
+
+def av.inline.line(+line: String, +n: Nat, nul: Bool, +next: Nat) -> Av1:
+  match nul:
+    case True{}:
+      AvEnd{}
+    case False{}:
+      av.inline.of(sp.run(Nat.mul(2n, 1n+n), Go{MBlank{}, inline.text(line, n, U32.is_eq(String.code_at(line, Nat.sub(n, 1n)), 13)), SNil{}, Nil{}}), next)
+
+def av.inline.at(+s: String, +i: Nat, +k: Nat, +l: Nat, found: Bool) -> Av1:
+  match found:
+    case True{}:
+      +n = Nat.sub(k, i)
+      +line = String.slice(s, i, n)
+      av.inline.line(line, n, Nat.is_lt(String.find(line, Chr{0}, 0n), n), 1n+k)
+    case False{}:
+      AvEnd{}
+
+def av.head(+s: String, +i: Nat, +l: Nat, star: Bool, end: Bool) -> Av1:
+  match star end:
+    case True{} _:
+      av.array(s, i, l, num_at(s, 1n+i))
+    case False{} True{}:
+      AvEnd{}
+    case False{} False{}:
+      +k = String.find(s, '\n', i)
+      av.inline.at(s, i, k, l, Nat.is_lt(k, l))
+
+# the arguments of the request of s at index i, l the length of s
+def av.one(+s: String, +i: Nat, +l: Nat) -> Av1:
+  +c = String.code_at(s, i)
+  av.head(s, i, l, U32.is_eq(c, 42), U32.is_eq(c, 4294967295))
+
+def av.go(fuel: Nat, +s: String, +l: Nat, a: Av1, acc: List<&2, List<&2, String>>) -> List<&2, List<&2, String>>:
+  match fuel a:
+    case 1n+f AvOk{args, +j}:
+      av.go(f, s, l, av.one(s, j, l), args <> acc)
+    case 1n+f AvSkip{+j}:
+      av.go(f, s, l, av.one(s, j, l), acc)
+    case _ _:
+      List.reverse(&2, List<&2, String>, acc)
+
+# the arguments of each request of s, in order; each request takes a byte
+# or more, so the length of s is enough fuel
+def argvs(+s: String) -> List<&2, List<&2, String>>:
+  +l = String.length(s)
+  av.go(1n+l, s, l, av.one(s, 0n, l), Nil{})
+
+# An argument as Redis quotes it (sdscatrepr): in double quotes, a \ or "
+# with a \ before it, a newline, return, tab, bell or backspace as \n,
+# \r, \t, \a or \b, a printable byte as it is, and any other as \x and
+# two hex digits. The quoted argument is built backwards, a byte at a
+# time, then turned around.
+def repr.hex(+d: U32) -> Char:
+  Chr{Bool.pick(U32, U32.is_lt(d, 10), U32.add(d, 48), U32.add(d, 87))}
+
+def repr.other(print: Bool, +x: U32, acc: String) -> String:
+  match print:
+    case True{}:
+      SCon{Chr{x}, acc}
+    case False{}:
+      SCon{repr.hex(U32.and(x, 15)), SCon{repr.hex(U32.shrn(x, 4n)), SCon{'x', SCon{'\\', acc}}}}
+
+def repr.esc(none: Bool, +e: U32, +x: U32, acc: String) -> String:
+  match none:
+    case True{}:
+      repr.other(Bool.and(U32.is_le(32, x), U32.is_le(x, 126)), x, acc)
+    case False{}:
+      SCon{Chr{e}, SCon{'\\', acc}}
+
+# the letter after the \ that a byte goes out as, or 0 for none
+def repr.code(+x: U32) -> U32:
+  Bool.pick(U32, Bool.or(U32.is_eq(x, 92), U32.is_eq(x, 34)), x,
+  Bool.pick(U32, U32.is_eq(x, 10), 110,
+  Bool.pick(U32, U32.is_eq(x, 13), 114,
+  Bool.pick(U32, U32.is_eq(x, 9), 116,
+  Bool.pick(U32, U32.is_eq(x, 7), 97,
+  Bool.pick(U32, U32.is_eq(x, 8), 98, 0))))))
+
+def repr.go(s: String, acc: String) -> String:
+  match s:
+    case SNil{}:
+      String.reverse(SCon{'"', acc})
+    case SCon{Chr{+x}, t}:
+      +e = repr.code(x)
+      repr.go(t, repr.esc(U32.is_eq(e, 0), e, x, acc))
+
+def repr(s: String) -> String:
+  repr.go(s, "\"")
+
+# arguments quoted, a space between two: each goes before those after it
+# (xs, last first)
+def reprs.go(xs: List<&2, String>, out: String) -> String:
+  match xs:
+    case Nil{}:
+      out
+    case Con{x, Nil{}}:
+      repr(x) ++ out
+    case Con{x, rest}:
+      reprs.go(rest, " " ++ repr(x) ++ out)
+
+def reprs(xs: List<&2, String>) -> String:
+  reprs.go(List.reverse(&2, String, xs), "")
 
 # Replies
 # -------
@@ -645,6 +1027,21 @@ def parse_read(+s: String) -> Batch:
 
 def crlf() -> String:
   "\r\n"
+
+# An error goes out on one line, as Redis's error formatting sends it: a
+# CR or LF in its text (an argument it quotes, a byte the parser did not
+# expect) goes out as a space (R.no_newlines). Nearly every text has
+# neither, and goes out as it is.
+def err_line.if(nl: Bool, s: String) -> String:
+  match nl:
+    case True{}:
+      R.no_newlines(s)
+    case False{}:
+      s
+
+def err_line(+s: String) -> String:
+  +l = String.length(s)
+  err_line.if(Bool.or(Nat.is_lt(String.find(s, '\r', 0n), l), Nat.is_lt(String.find(s, '\n', 0n), l)), s)
 
 def bulk_into(+s: String, out: String) -> String:
   "$" ++ Nat.show(String.length(s)) ++ crlf() ++ s ++ crlf() ++ out
@@ -664,7 +1061,7 @@ def encode_onto(rs: List<&2, R.Reply>, out: String) -> String:
     case Con{R.RStatus{s}, rest}:
       "+" ++ s ++ crlf() ++ encode_onto(rest, out)
     case Con{R.RError{s}, rest}:
-      "-" ++ s ++ crlf() ++ encode_onto(rest, out)
+      "-" ++ err_line(s) ++ crlf() ++ encode_onto(rest, out)
     case Con{R.RInt{i}, rest}:
       int_into(i, encode_onto(rest, out))
     case Con{R.RBulk{s}, rest}:
@@ -673,6 +1070,10 @@ def encode_onto(rs: List<&2, R.Reply>, out: String) -> String:
       "$-1\r\n" ++ encode_onto(rest, out)
     case Con{R.RArray{+xs}, rest}:
       "*" ++ Nat.show(List.length(&2, R.Reply, xs)) ++ crlf() ++ encode_onto(xs, encode_onto(rest, out))
+    case Con{R.RIntS{s}, rest}:
+      ":" ++ s ++ crlf() ++ encode_onto(rest, out)
+    case Con{R.RNullA{}, rest}:
+      "*-1\r\n" ++ encode_onto(rest, out)
 
 def encode(r: R.Reply) -> String:
   encode_onto([r], SNil{})

@@ -1,6 +1,6 @@
 # Tools
 
-Scripts behind the numbers in
+Scripts behind the numbers in [PERFORMANCE.md](../docs/PERFORMANCE.md) and
 [docs/FINDINGS.md](../docs/FINDINGS.md). The servers they drive take their port as
 their first argument: `build/bendkv` (a second argument, `post` or `send`, picks how
 replies go out, and a third names an append-only file), or any build of the same C from
@@ -10,6 +10,9 @@ and, for profiles, `valgrind`.
 | tool | what it does |
 |---|---|
 | `gen_trie.py` | writes the 16-way parts of `src/map.bend` and `proof/PROOF.bend` (between `BEGIN gen_trie` and `END gen_trie`); `--check` fails if one is out of date |
+| `gen_config.py` | writes the table of parameters in `src/config.bend` from `data/redis-configs.json`, the facts of Redis 7.0.15's own table (`--extract ../redis` reads them from Redis's `src/config.c`); `--check` fails if it is out of date |
+| `gen_commands.py` | writes the table of commands in `src/command.bend` from `data/redis-commands.json`, Redis 7.0.15's descriptions of BendKV's commands (`--extract` starts a `redis-server` and asks it COMMAND INFO, COMMAND DOCS and ACL CAT), and their arities in `src/redis.bend`, for INFO's statistics (a call with the wrong number of arguments is refused only when Redis's arity refuses it), and there the dispatch of a request's name to its command's number (`cmd_id`: by length, then by first letter) and which numbers are the connection's commands (`cmd_own`, by their ranges), from the parser's numbered cases; `--check` fails if either file is out of date |
+| `redis_suite.py` | `make suite`: Redis's own test suite (the units of `tests/unit` of a Redis source tree) in its mode for a server already started (with all its databases; `--singledb` for a server with one), on several instances of a server at once, each unit's results in a JSON file; `--report` compares a run on BendKV with a run on Redis: the tests Redis passes, how many BendKV passes, and why each other one fails ([COMPATIBILITY.md](../docs/COMPATIBILITY.md)) |
 | `bench_pairs.sh` | paired throughput runs of several servers (and Redis) on fresh processes, with the server's CPU time per request; `PIPE`, `CLIENTS`, `SCPU`, `CCPU` and `SARGS` change the load and the pinning |
 | `pair_ratios.py` | medians and geometric means of per-trial ratios from `bench_pairs.sh` (or `memtier_hits.sh`), against Redis or any variant; `--cpu` for CPU per request. Builds named `NAME_s1`, `NAME_s2`, ... count as one variant `NAME` |
 | `layouts.sh` | builds one generated C file once per seed, each with its functions in a different shuffled order (`NAME_s1`, `NAME_s2`, ...), so that a variant is timed over several code layouts rather than one |

@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Robustness checks for a RESP server: requests split into single bytes,
-a large value, protocol garbage, many connections at once.
+a large value, a pattern that is slow to match (KEYS and SCAN's MATCH),
+protocol garbage, many connections at once.
 
     python3 tests/robust_test.py --port 6380
 """
@@ -66,6 +67,23 @@ def main():
     ok &= check("GET 1MB (%.0f ms)" % ((time.time() - t0) * 1000), got, want)
     s.sendall(resp(b"STRLEN", b"big"))
     ok &= check("STRLEN 1MB", read_until(s, end=b"\r\n"), b":%d\r\n" % len(big))
+
+    # a pattern that takes exponential time to a matcher that tries every
+    # run for every '*' (Redis's "Regression for pattern matching long
+    # nested loops")
+    s.sendall(resp(b"SET", b"a" * 40, b"1"))
+    read_until(s, end=b"\r\n")
+    t0 = time.time()
+    s.sendall(resp(b"KEYS", b"a*" * 20 + b"b"))
+    got = read_until(s, end=b"\r\n", timeout=30)
+    ok &= check("KEYS a*a*...a*b (%.0f ms)" % ((time.time() - t0) * 1000), (got, time.time() - t0 < 2), (b"*0\r\n", True))
+    t0 = time.time()
+    s.sendall(resp(b"SCAN", b"0", b"MATCH", b"a*" * 20 + b"b", b"COUNT", b"1000000"))
+    got = read_until(s, end=b"*0\r\n", timeout=30)
+    ok &= check("SCAN 0 MATCH a*a*...a*b (%.0f ms)" % ((time.time() - t0) * 1000), (got, time.time() - t0 < 2),
+                (b"*2\r\n$1\r\n0\r\n*0\r\n", True))
+    s.sendall(resp(b"DEL", b"a" * 40))
+    read_until(s, end=b"\r\n")
 
     # a malformed request gets an error and the connection closes
     g = socket.create_connection(("127.0.0.1", a.port))

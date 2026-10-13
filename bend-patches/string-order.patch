@@ -1,0 +1,137 @@
+diff --git a/bend2/comp.ts b/bend2/comp.ts
+index 1cfd381..55fd1d3 100644
+--- a/bend2/comp.ts
++++ b/bend2/comp.ts
+@@ -270,6 +270,7 @@ const OPERATIONS: Record<string, Intr> = Object.setPrototypeOf({
+   string_length: { C: "str_len(e.mem, $0)", JS: "[...$0].length",
+     brw: [true] },
+   string_eq: { C: "str_eq(e.mem, $0, $1)", brw: [true, true] },
++  string_order: { C: "str_order(e.mem, $0, $1)", brw: [true, true] },
+   string_take: { C: "str_take_n(e, $0, $1)", brw: [true, false] },
+   string_drop: { C: "str_drop_n(e, $0, $1)" },
+   string_to_upper: { C: "str_upper(e, $0)" },
+@@ -309,7 +310,7 @@ const OPERATIONS: Record<string, Intr> = Object.setPrototypeOf({
+ const STR_NATIVES = new Set(("string_append string_length string_eq"
+   + " string_take string_drop string_to_upper string_hash string_code_at"
+   + " string_find string_slice nat_show string_hash_at string_digits_at"
+-  + " string_dec_line_at string_dec_at").split(" "));
++  + " string_dec_line_at string_dec_at string_order").split(" "));
+ 
+ // Optimized
+ // ---------
+@@ -5772,6 +5773,60 @@ INLINE u64 str_eq(u64* H, Term a, Term b) {
+   return str_eq_far(H, a, b);
+ }
+ 
++// String.order of two borrowed Strings, as Cmp's index (LT 0, EQ 1, GT
++// 2): runs of bytes by memcmp (a byte is a char below 256, and memcmp
++// reads bytes unsigned), a cell's char by its code point, a prefix first
++FAR u64 str_order_far(u64* H, Term a, Term b) {
++  StrRun x;
++  StrRun y;
++  u32    i  = 0;
++  u32    j  = 0;
++  int    c  = 0;
++  bool   hx = str_run(H, a, &x);
++  bool   hy = str_run(H, b, &y);
++  while (c == 0 && hx && hy) {
++    if (x.p != NULL && y.p != NULL) {
++      u32 w = x.n - i < y.n - j ? x.n - i : y.n - j;
++      c = memcmp(x.p + i, y.p + j, w);
++      i += w;
++      j += w;
++    } else {
++      u32 u = x.p != NULL ? x.p[i] : x.c;
++      u32 v = y.p != NULL ? y.p[j] : y.c;
++      c = (u > v) - (u < v);
++      i += 1;
++      j += 1;
++    }
++    if (i == x.n) {
++      hx = str_run(H, x.t, &x);
++      i  = 0;
++    }
++    if (j == y.n) {
++      hy = str_run(H, y.t, &y);
++      j  = 0;
++    }
++  }
++  c = c != 0 ? c : (int)hx - (int)hy;
++  return (c > 0) + (c >= 0);
++}
++
++// two borrowed Strings of one run each (members of a sorted set) are one
++// memcmp of their common length, then their lengths
++INLINE u64 str_order(u64* H, Term a, Term b) {
++  u64       wa;
++  u64       wb;
++  u32       m;
++  u32       n;
++  const u8* p = str_one_run(H, a, &wa, &m);
++  const u8* q = p == NULL ? NULL : str_one_run(H, b, &wb, &n);
++  if (q != NULL) {
++    int c = memcmp(p, q, m < n ? m : n);
++    c = c != 0 ? c : (m > n) - (m < n);
++    return (c > 0) + (c >= 0);
++  }
++  return str_order_far(H, a, b);
++}
++
+ // a borrowed s (a view too) against a literal lt, whose bytes the compiler
+ // gives as l[0..n): one chunk's run is compared directly (inlined, so the
+ // compare of n bytes is a few loads)
+diff --git a/tests/base/string_order.bend b/tests/base/string_order.bend
+new file mode 100644
+index 0000000..3b57d2c
+--- /dev/null
++++ b/tests/base/string_order.bend
+@@ -0,0 +1,49 @@
++# String.order (native on the C lane) of each of sixteen Strings with
++# each: empty, immediates, a prefix and its extension, a byte past 127,
++# chunks of one run, a view, cells before a chunk (char by char), chars
++# past 255, a String of several pieces, a NUL past a prefix. Rows are
++# "L", "E" or "G" for each String the row's String is compared with;
++# String.is_lt and String.is_ge go through it. Expect the same rows on
++# every lane.
++import Base
++
++def cmp_s(c: Cmp) -> String:
++  match c:
++    case LT{}:
++      "L"
++    case EQ{}:
++      "E"
++    case GT{}:
++      "G"
++
++def flag(b: Bool) -> String:
++  match b:
++    case True{}:
++      "T"
++    case False{}:
++      "F"
++
++def row(+a: String, +ws: List<&2, String>) -> String:
++  match ws:
++    case Nil{}:
++      ""
++    case Con{+w, rest}:
++      cmp_s(String.order(a, w)) ++ row(a, rest)
++
++def rows(xs: List<&2, String>, +ws: List<&2, String>) -> String:
++  match xs:
++    case Nil{}:
++      ""
++    case Con{x, rest}:
++      row(x, ws) ++ "/" ++ rows(rest, ws)
++
++def words(+src: String) -> List<&2, String>:
++  ["", "a", "ab", "abc", "abd", String.take(SCon{Chr{200}, "zz"}, 3n), "m:000000012345", "m:000000054321", "m:0000000123456", SCon{'m', ":000000012345"}, String.slice(src, 2n, 14n), SCon{Chr{300}, "a"}, SCon{Chr{300}, "b"}, SCon{'a', SCon{'b', SCon{'c', SNil{}}}}, "abcdefghijklmnopqrstuvwxyz" ++ String.slice(src, 2n, 14n), "abc" ++ SCon{Chr{0}, SNil{}}]
++
++def main() -> String:
++  +src = "xxm:000000012345yy" ++ "tail"
++  +ws = words(src)
++  +f = flag(String.is_lt("abc", "abd")) ++ flag(String.is_lt("abd", "abc")) ++ flag(String.is_ge("ab", "abc")) ++ flag(String.is_ge(String.slice(src, 2n, 14n), "m:000000012345"))
++  rows(ws, ws) ++ f
++
++#|"ELLLLLLLLLLLLLLL/GELLLLLLLLLLLLLL/GGELLLLLLLLLLLLL/GGGELLLLLLLLLELL/GGGGELLLLLLLLGGG/GGGGGEGGGGGLLGGG/GGGGGLELLEELLGGG/GGGGGLGEGGGLLGGG/GGGGGLGLEGGLLGGG/GGGGGLELLEELLGGG/GGGGGLELLEELLGGG/GGGGGGGGGGGELGGG/GGGGGGGGGGGGEGGG/GGGELLLLLLLLLELL/GGGGLLLLLLLLLGEG/GGGGLLLLLLLLLGLE/TFFT"

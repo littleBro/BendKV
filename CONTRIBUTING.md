@@ -28,18 +28,34 @@ make test      BEND="$B"   # byte-for-byte against Redis
 make perfcheck BEND="$B"   # no more than 3% more instructions per request
 ```
 
+CI runs the same on every pull request and on every push to `main` and `claude/step-b`
+([`.github/workflows/ci.yml`](.github/workflows/ci.yml)): the proofs, `make gencheck` and
+`make smoke` in one job; the server built once, then `make test` against the Redis 7.0.15
+that Ubuntu 24.04 ships and `make perfcheck` in two jobs side by side. Its toolchain is
+the one above: bun 1.3.14, clang 19, the patched Bend (kept in the cache while
+`bend-patches/` stays the same) and, for `make verdict`, Lean 4.34.0, which builds the
+BendTT kernel once (cached too). A change goes in through a pull request whose checks
+pass.
+
 ## How changes are made
 
 - **A new command or behavior** comes with: its semantics in `src/redis.bend` (or
-  `src/session.bend` for the state of a connection), the existing laws extended to it
-  in `proof/PROOF.bend` (the `frame` law covers every command), a new law in
-  `proof/LAWS.bend` when it promises something new, and a case in the tests under
-  `tests/` that compares it with Redis byte for byte.
+  `src/session.bend` for the state of a connection), the same on the trie alone in the
+  specification `proof/SPEC.bend` with its case of the bridge (`bridge_go`, `bt_go`),
+  the existing laws extended to it in `proof/PROOF.bend` (the `frame` law covers every
+  command), a new law in `proof/LAWS.bend` when it promises something new, and a case in
+  the tests under `tests/` that compares it with Redis byte for byte.
 - **Laws are stated by people.** A change to `proof/LAWS.bend` that weakens a law needs
   a reason in the pull request.
 - **The 16-way parts** of `src/map.bend` and `proof/PROOF.bend`, between
-  `BEGIN gen_trie` and `END gen_trie`, are written by `tools/gen_trie.py`: change the
-  script and rerun it, not the blocks.
+  `BEGIN gen_trie` and `END gen_trie`, are written by `tools/gen_trie.py`, and the table
+  of parameters in `src/config.bend` by `tools/gen_config.py` (from
+  `tools/data/redis-configs.json`, which it extracts from Redis's `src/config.c`):
+  change the script and rerun it, not the blocks.
+- **Patterns of literal characters** nested inside a String (`SCon{a, SCon{'-', ...}}`)
+  make `--verdict` explode: a Char is a 32-bit word in the kernel, and its decision
+  trees multiply. Compare bytes with `U32.is_eq` instead (see `cls.kind` in
+  `src/config.bend`); a literal at the head of a match is fine.
 - **Performance.** The server's hot path is sensitive to how the Bend compiler lays out
   terms; [docs/FINDINGS.md](docs/FINDINGS.md) (section 7) lists the traps. A deliberate
   change in instructions per request updates `tools/perf_baseline.txt` with the numbers
@@ -47,11 +63,11 @@ make perfcheck BEND="$B"   # no more than 3% more instructions per request
   describes (interleaved pairs over several code layouts), not from a single run.
 - **Bend constraints** worth knowing: a function can call only functions defined above
   it (except `@unsafe` ones), there is no mutual recursion, recursion is structural,
-  and `match` takes a parameter, not a computed value.
+  and `match` takes a parameter, not a computed value. OVERVIEW.md lists more.
 
 ## Style
 
-- Code comments and documents in English.
+- Everything in English: code, comments, documents and commit messages.
 - Comments say what a definition means and why, in plain sentences, as the existing code
   does.
 - Commits are small and say what changed and why.

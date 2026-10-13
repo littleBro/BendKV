@@ -1,24 +1,61 @@
 #!/bin/sh
-# Starts a reference Redis (with one database, as BendKV has) and BendKV
-# on spare ports: BendKV with its defaults, then posting its replies to
-# its writer thread (post), then sending them from its loop (send), then
-# with an append-only file, and runs against each the robustness checks,
-# the differential test against Redis (a fresh Redis database for each
-# run) and the consistency checks under concurrent clients, and against
-# the first the protocol's edge cases and the commands of a connection,
-# byte for byte against Redis; then stops them. Then the append-only file: a
-# random stream, a restart from the file, the keyspace compared; then the
-# file's last entry cut short, as a crash in a write leaves it, a restart
-# that cuts it back, and the keyspace compared again. Last, the disk
-# failing under the file (tests/fail_io.c injects it): a file that is
-# there but cannot be read must stop the start, and a failed fsync must
-# stop the server, with everysec as with always.
+# First the float library (src/float.bend) against glibc, on random texts
+# of numbers (tests/float_test.py). Then the start: the command line and
+# the configuration file, each
+# case on BendKV and on redis-server (tests/start_test.py). Then
+# connections that end every way one can, many times, on a BendKV of
+# their own, posting and sending, each closing the channel it opened
+# (tests/conn_test.py). Then starts a reference Redis (on the loopback,
+# as BendKV listens) and BendKV on spare ports: BendKV with its
+# defaults, then posting its replies to its
+# writer thread (post),
+# then sending them from its loop (send), then with an append-only file,
+# and runs against each the robustness checks, a client that stops
+# reading (its replies must hold up no one else's, nor the loop), clients
+# that wait in blocking commands (scenarios against Redis, and checks
+# under load), transactions (scenarios against Redis, and checks under
+# load), Pub/Sub and keyspace notifications (scenarios against Redis, and
+# checks under load), CLIENT LIST, INFO and KILL (scenarios against Redis,
+# and checks under load), MONITOR (scenarios against Redis, and a check
+# under load), AUTH (scenarios against Redis: when a client must
+# authenticate, and what it is answered before), the differential test
+# against Redis (a fresh
+# Redis database for each run)
+# and the consistency checks under concurrent clients, against the first
+# and against send (which sends a protocol error's reply from its loop,
+# where post hands it to the writer) the protocol's edge cases, and
+# against the first the commands of a connection and CONFIG, byte
+# for byte against Redis, INFO's sections and fields, its statistics per
+# command, COMMAND, SCAN and RANDOMKEY, keys that expire, numbers at
+# their edges in every argument that is one, BITFIELD's fields at
+# random, hashes, lists, sets and sorted sets; then stops
+# them. Then the append-only file: a
+# random stream, a restart from the file, the keyspace compared; then
+# the file's last entry cut short, as a crash in a write leaves it, a
+# restart that cuts it back, and the keyspace compared again. Then the
+# disk failing under the file (tests/fail_io.c injects it): a file that
+# is there but cannot be read must stop the start, and a failed fsync
+# must stop the server, with everysec as with always. Last, the files
+# both ways: the same commands against BendKV and a redis-server that
+# keeps its own file, then BendKV started from Redis's file and Redis
+# from BendKV's, each holding the databases the other held. And the
+# rewrite of the file (BGREWRITEAOF): its replies and INFO's account
+# against Redis's, the rewritten file against Redis's base, command for
+# command, writes while it runs (and a kill while it runs), BendKV and
+# Redis started from the new file, the rewrite with appendonly no, the
+# cron's rewrites as the file grows, and rewrites that fail.
 set -e
 cd "$(dirname "$0")/.."
 PORT=${PORT:-6380}
 REDIS_PORT=${REDIS_PORT:-6390}
 ROUNDS=${ROUNDS:-1000}
-redis-server --port "$REDIS_PORT" --save '' --appendonly no --databases 1 > build/redis.log 2>&1 &
+echo "== the float library against glibc"
+python3 tests/float_test.py --bend "${BEND:-bend}" --cc "${CC:-cc}" --seed 1 --n 1500
+echo "== the start"
+python3 tests/start_test.py --bin build/bendkv
+echo "== connections that end"
+python3 tests/conn_test.py --bin build/bendkv --port "$PORT"
+redis-server --port "$REDIS_PORT" --save '' --appendonly no --bind 127.0.0.1 > build/redis.log 2>&1 &
 RDS=$!
 BKV=
 trap 'kill $BKV $RDS 2>/dev/null || true' EXIT
@@ -29,9 +66,31 @@ for n in "" post send "post build/test.aof everysec"; do
   sleep 0.5
   echo "== ${n:-defaults}"
   python3 tests/robust_test.py --port "$PORT"
+  python3 tests/writer_test.py --port "$PORT"
+  python3 tests/blocking_test.py --bendkv "$PORT" --redis "$REDIS_PORT"
+  python3 tests/multi_test.py --bendkv "$PORT" --redis "$REDIS_PORT"
+  python3 tests/pubsub_test.py --bendkv "$PORT" --redis "$REDIS_PORT"
+  python3 tests/client_test.py --bendkv "$PORT" --redis "$REDIS_PORT"
+  python3 tests/monitor_test.py --bendkv "$PORT" --redis "$REDIS_PORT"
+  python3 tests/auth_test.py --bendkv "$PORT" --redis "$REDIS_PORT"
   if [ -z "$n" ]; then
     python3 tests/protocol_test.py --bendkv "$PORT" --redis "$REDIS_PORT"
     python3 tests/session_test.py --bendkv "$PORT" --redis "$REDIS_PORT"
+    python3 tests/config_test.py --bendkv "$PORT" --redis "$REDIS_PORT" --rounds "$ROUNDS"
+    python3 tests/info_test.py --bendkv "$PORT" --redis "$REDIS_PORT"
+    python3 tests/stats_test.py --bendkv "$PORT" --redis "$REDIS_PORT"
+    python3 tests/command_test.py --bendkv "$PORT" --redis "$REDIS_PORT"
+    python3 tests/keyspace_test.py --bendkv "$PORT" --redis "$REDIS_PORT"
+    python3 tests/ttl_test.py --bendkv "$PORT" --redis "$REDIS_PORT"
+    python3 tests/numbers_test.py --bendkv "$PORT" --redis "$REDIS_PORT"
+    python3 tests/bitfield_test.py --bendkv "$PORT" --redis "$REDIS_PORT"
+    python3 tests/hash_test.py --bendkv "$PORT" --redis "$REDIS_PORT"
+    python3 tests/list_test.py --bendkv "$PORT" --redis "$REDIS_PORT"
+    python3 tests/set_test.py --bendkv "$PORT" --redis "$REDIS_PORT"
+    python3 tests/zset_test.py --bendkv "$PORT" --redis "$REDIS_PORT"
+  fi
+  if [ "$n" = send ]; then
+    python3 tests/protocol_test.py --bendkv "$PORT" --redis "$REDIS_PORT"
   fi
   for seed in 1 2 3; do
     redis-cli -p "$REDIS_PORT" flushall > /dev/null
@@ -80,3 +139,7 @@ restart build/test.aof
 echo "== append-only file failures"
 ${CC:-cc} -shared -fPIC -o build/fail_io.so tests/fail_io.c -ldl
 python3 tests/aof_fail_test.py --port "$PORT" --shim build/fail_io.so
+echo "== append-only files of Redis and of BendKV"
+python3 tests/aof_redis_test.py --bin build/bendkv --bendkv "$PORT" --redis "$((REDIS_PORT + 1))" --dir build/aofio
+echo "== the rewrite of the append-only file"
+python3 tests/rewrite_test.py --bin build/bendkv --bendkv "$PORT" --redis "$((REDIS_PORT + 1))" --dir build/rewrite

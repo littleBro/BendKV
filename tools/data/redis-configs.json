@@ -1,0 +1,2307 @@
+[
+ {
+  "name": "rdbchecksum",
+  "alias": "",
+  "flags": [
+   "immutable"
+  ],
+  "type": "bool",
+  "default": "yes",
+  "check": "NULL",
+  "apply": "NULL"
+ },
+ {
+  "name": "daemonize",
+  "alias": "",
+  "flags": [
+   "immutable"
+  ],
+  "type": "bool",
+  "default": "no",
+  "check": "NULL",
+  "apply": "NULL"
+ },
+ {
+  "name": "io-threads-do-reads",
+  "alias": "",
+  "flags": [
+   "debug",
+   "immutable"
+  ],
+  "type": "bool",
+  "default": "no",
+  "check": "NULL",
+  "apply": "NULL"
+ },
+ {
+  "name": "always-show-logo",
+  "alias": "",
+  "flags": [
+   "immutable"
+  ],
+  "type": "bool",
+  "default": "no",
+  "check": "NULL",
+  "apply": "NULL"
+ },
+ {
+  "name": "protected-mode",
+  "alias": "",
+  "flags": [],
+  "type": "bool",
+  "default": "yes",
+  "check": "NULL",
+  "apply": "NULL"
+ },
+ {
+  "name": "rdbcompression",
+  "alias": "",
+  "flags": [],
+  "type": "bool",
+  "default": "yes",
+  "check": "NULL",
+  "apply": "NULL"
+ },
+ {
+  "name": "rdb-del-sync-files",
+  "alias": "",
+  "flags": [],
+  "type": "bool",
+  "default": "no",
+  "check": "NULL",
+  "apply": "NULL"
+ },
+ {
+  "name": "activerehashing",
+  "alias": "",
+  "flags": [],
+  "type": "bool",
+  "default": "yes",
+  "check": "NULL",
+  "apply": "NULL"
+ },
+ {
+  "name": "stop-writes-on-bgsave-error",
+  "alias": "",
+  "flags": [],
+  "type": "bool",
+  "default": "yes",
+  "check": "NULL",
+  "apply": "NULL"
+ },
+ {
+  "name": "set-proc-title",
+  "alias": "",
+  "flags": [
+   "immutable"
+  ],
+  "type": "bool",
+  "default": "yes",
+  "check": "NULL",
+  "apply": "NULL"
+ },
+ {
+  "name": "dynamic-hz",
+  "alias": "",
+  "flags": [],
+  "type": "bool",
+  "default": "yes",
+  "check": "NULL",
+  "apply": "NULL"
+ },
+ {
+  "name": "lazyfree-lazy-eviction",
+  "alias": "",
+  "flags": [
+   "debug"
+  ],
+  "type": "bool",
+  "default": "no",
+  "check": "NULL",
+  "apply": "NULL"
+ },
+ {
+  "name": "lazyfree-lazy-expire",
+  "alias": "",
+  "flags": [
+   "debug"
+  ],
+  "type": "bool",
+  "default": "no",
+  "check": "NULL",
+  "apply": "NULL"
+ },
+ {
+  "name": "lazyfree-lazy-server-del",
+  "alias": "",
+  "flags": [
+   "debug"
+  ],
+  "type": "bool",
+  "default": "no",
+  "check": "NULL",
+  "apply": "NULL"
+ },
+ {
+  "name": "lazyfree-lazy-user-del",
+  "alias": "",
+  "flags": [
+   "debug"
+  ],
+  "type": "bool",
+  "default": "no",
+  "check": "NULL",
+  "apply": "NULL"
+ },
+ {
+  "name": "lazyfree-lazy-user-flush",
+  "alias": "",
+  "flags": [
+   "debug"
+  ],
+  "type": "bool",
+  "default": "no",
+  "check": "NULL",
+  "apply": "NULL"
+ },
+ {
+  "name": "repl-disable-tcp-nodelay",
+  "alias": "",
+  "flags": [],
+  "type": "bool",
+  "default": "no",
+  "check": "NULL",
+  "apply": "NULL"
+ },
+ {
+  "name": "repl-diskless-sync",
+  "alias": "",
+  "flags": [
+   "debug"
+  ],
+  "type": "bool",
+  "default": "yes",
+  "check": "NULL",
+  "apply": "NULL"
+ },
+ {
+  "name": "aof-rewrite-incremental-fsync",
+  "alias": "",
+  "flags": [],
+  "type": "bool",
+  "default": "yes",
+  "check": "NULL",
+  "apply": "NULL"
+ },
+ {
+  "name": "no-appendfsync-on-rewrite",
+  "alias": "",
+  "flags": [],
+  "type": "bool",
+  "default": "no",
+  "check": "NULL",
+  "apply": "NULL"
+ },
+ {
+  "name": "cluster-require-full-coverage",
+  "alias": "",
+  "flags": [],
+  "type": "bool",
+  "default": "yes",
+  "check": "NULL",
+  "apply": "NULL"
+ },
+ {
+  "name": "rdb-save-incremental-fsync",
+  "alias": "",
+  "flags": [],
+  "type": "bool",
+  "default": "yes",
+  "check": "NULL",
+  "apply": "NULL"
+ },
+ {
+  "name": "aof-load-truncated",
+  "alias": "",
+  "flags": [],
+  "type": "bool",
+  "default": "yes",
+  "check": "NULL",
+  "apply": "NULL"
+ },
+ {
+  "name": "aof-use-rdb-preamble",
+  "alias": "",
+  "flags": [],
+  "type": "bool",
+  "default": "yes",
+  "check": "NULL",
+  "apply": "NULL"
+ },
+ {
+  "name": "aof-timestamp-enabled",
+  "alias": "",
+  "flags": [],
+  "type": "bool",
+  "default": "no",
+  "check": "NULL",
+  "apply": "NULL"
+ },
+ {
+  "name": "cluster-replica-no-failover",
+  "alias": "cluster-slave-no-failover",
+  "flags": [],
+  "type": "bool",
+  "default": "no",
+  "check": "NULL",
+  "apply": "updateClusterFlags"
+ },
+ {
+  "name": "replica-lazy-flush",
+  "alias": "slave-lazy-flush",
+  "flags": [],
+  "type": "bool",
+  "default": "no",
+  "check": "NULL",
+  "apply": "NULL"
+ },
+ {
+  "name": "replica-serve-stale-data",
+  "alias": "slave-serve-stale-data",
+  "flags": [],
+  "type": "bool",
+  "default": "yes",
+  "check": "NULL",
+  "apply": "NULL"
+ },
+ {
+  "name": "replica-read-only",
+  "alias": "slave-read-only",
+  "flags": [
+   "debug"
+  ],
+  "type": "bool",
+  "default": "yes",
+  "check": "NULL",
+  "apply": "NULL"
+ },
+ {
+  "name": "replica-ignore-maxmemory",
+  "alias": "slave-ignore-maxmemory",
+  "flags": [],
+  "type": "bool",
+  "default": "yes",
+  "check": "NULL",
+  "apply": "NULL"
+ },
+ {
+  "name": "jemalloc-bg-thread",
+  "alias": "",
+  "flags": [],
+  "type": "bool",
+  "default": "yes",
+  "check": "NULL",
+  "apply": "updateJemallocBgThread"
+ },
+ {
+  "name": "activedefrag",
+  "alias": "",
+  "flags": [
+   "debug"
+  ],
+  "type": "bool",
+  "default": "no",
+  "check": "isValidActiveDefrag",
+  "apply": "NULL"
+ },
+ {
+  "name": "syslog-enabled",
+  "alias": "",
+  "flags": [
+   "immutable"
+  ],
+  "type": "bool",
+  "default": "no",
+  "check": "NULL",
+  "apply": "NULL"
+ },
+ {
+  "name": "cluster-enabled",
+  "alias": "",
+  "flags": [
+   "immutable"
+  ],
+  "type": "bool",
+  "default": "no",
+  "check": "NULL",
+  "apply": "NULL"
+ },
+ {
+  "name": "appendonly",
+  "alias": "",
+  "flags": [
+   "deny_loading"
+  ],
+  "type": "bool",
+  "default": "no",
+  "check": "NULL",
+  "apply": "updateAppendonly"
+ },
+ {
+  "name": "cluster-allow-reads-when-down",
+  "alias": "",
+  "flags": [],
+  "type": "bool",
+  "default": "no",
+  "check": "NULL",
+  "apply": "NULL"
+ },
+ {
+  "name": "cluster-allow-pubsubshard-when-down",
+  "alias": "",
+  "flags": [],
+  "type": "bool",
+  "default": "yes",
+  "check": "NULL",
+  "apply": "NULL"
+ },
+ {
+  "name": "crash-log-enabled",
+  "alias": "",
+  "flags": [],
+  "type": "bool",
+  "default": "yes",
+  "check": "NULL",
+  "apply": "updateSighandlerEnabled"
+ },
+ {
+  "name": "crash-memcheck-enabled",
+  "alias": "",
+  "flags": [],
+  "type": "bool",
+  "default": "yes",
+  "check": "NULL",
+  "apply": "NULL"
+ },
+ {
+  "name": "use-exit-on-panic",
+  "alias": "",
+  "flags": [
+   "hidden"
+  ],
+  "type": "bool",
+  "default": "no",
+  "check": "NULL",
+  "apply": "NULL"
+ },
+ {
+  "name": "disable-thp",
+  "alias": "",
+  "flags": [
+   "immutable"
+  ],
+  "type": "bool",
+  "default": "yes",
+  "check": "NULL",
+  "apply": "NULL"
+ },
+ {
+  "name": "cluster-allow-replica-migration",
+  "alias": "",
+  "flags": [],
+  "type": "bool",
+  "default": "yes",
+  "check": "NULL",
+  "apply": "NULL"
+ },
+ {
+  "name": "replica-announced",
+  "alias": "",
+  "flags": [],
+  "type": "bool",
+  "default": "yes",
+  "check": "NULL",
+  "apply": "NULL"
+ },
+ {
+  "name": "latency-tracking",
+  "alias": "",
+  "flags": [],
+  "type": "bool",
+  "default": "yes",
+  "check": "NULL",
+  "apply": "NULL"
+ },
+ {
+  "name": "aof-disable-auto-gc",
+  "alias": "",
+  "flags": [],
+  "type": "bool",
+  "default": "no",
+  "check": "NULL",
+  "apply": "updateAofAutoGCEnabled"
+ },
+ {
+  "name": "replica-ignore-disk-write-errors",
+  "alias": "",
+  "flags": [],
+  "type": "bool",
+  "default": "no",
+  "check": "NULL",
+  "apply": "NULL"
+ },
+ {
+  "name": "aclfile",
+  "alias": "",
+  "flags": [
+   "immutable"
+  ],
+  "type": "string",
+  "null": false,
+  "default": "",
+  "check": "NULL",
+  "apply": "NULL"
+ },
+ {
+  "name": "unixsocket",
+  "alias": "",
+  "flags": [
+   "immutable"
+  ],
+  "type": "string",
+  "null": true,
+  "default": "",
+  "check": "NULL",
+  "apply": "NULL"
+ },
+ {
+  "name": "pidfile",
+  "alias": "",
+  "flags": [
+   "immutable"
+  ],
+  "type": "string",
+  "null": true,
+  "default": "",
+  "check": "NULL",
+  "apply": "NULL"
+ },
+ {
+  "name": "replica-announce-ip",
+  "alias": "slave-announce-ip",
+  "flags": [],
+  "type": "string",
+  "null": true,
+  "default": "",
+  "check": "NULL",
+  "apply": "NULL"
+ },
+ {
+  "name": "masteruser",
+  "alias": "",
+  "flags": [
+   "sensitive"
+  ],
+  "type": "string",
+  "null": true,
+  "default": "",
+  "check": "NULL",
+  "apply": "NULL"
+ },
+ {
+  "name": "cluster-announce-ip",
+  "alias": "",
+  "flags": [],
+  "type": "string",
+  "null": true,
+  "default": "",
+  "check": "NULL",
+  "apply": "updateClusterIp"
+ },
+ {
+  "name": "cluster-config-file",
+  "alias": "",
+  "flags": [
+   "immutable"
+  ],
+  "type": "string",
+  "null": false,
+  "default": "nodes.conf",
+  "check": "NULL",
+  "apply": "NULL"
+ },
+ {
+  "name": "cluster-announce-hostname",
+  "alias": "",
+  "flags": [],
+  "type": "string",
+  "null": true,
+  "default": "",
+  "check": "isValidAnnouncedHostname",
+  "apply": "updateClusterHostname"
+ },
+ {
+  "name": "syslog-ident",
+  "alias": "",
+  "flags": [
+   "immutable"
+  ],
+  "type": "string",
+  "null": false,
+  "default": "redis",
+  "check": "NULL",
+  "apply": "NULL"
+ },
+ {
+  "name": "dbfilename",
+  "alias": "",
+  "flags": [
+   "protected"
+  ],
+  "type": "string",
+  "null": false,
+  "default": "dump.rdb",
+  "check": "isValidDBfilename",
+  "apply": "NULL"
+ },
+ {
+  "name": "appendfilename",
+  "alias": "",
+  "flags": [
+   "immutable"
+  ],
+  "type": "string",
+  "null": false,
+  "default": "appendonly.aof",
+  "check": "isValidAOFfilename",
+  "apply": "NULL"
+ },
+ {
+  "name": "appenddirname",
+  "alias": "",
+  "flags": [
+   "immutable"
+  ],
+  "type": "string",
+  "null": false,
+  "default": "appendonlydir",
+  "check": "isValidAOFdirname",
+  "apply": "NULL"
+ },
+ {
+  "name": "server_cpulist",
+  "alias": "",
+  "flags": [
+   "immutable"
+  ],
+  "type": "string",
+  "null": true,
+  "default": "",
+  "check": "NULL",
+  "apply": "NULL"
+ },
+ {
+  "name": "bio_cpulist",
+  "alias": "",
+  "flags": [
+   "immutable"
+  ],
+  "type": "string",
+  "null": true,
+  "default": "",
+  "check": "NULL",
+  "apply": "NULL"
+ },
+ {
+  "name": "aof_rewrite_cpulist",
+  "alias": "",
+  "flags": [
+   "immutable"
+  ],
+  "type": "string",
+  "null": true,
+  "default": "",
+  "check": "NULL",
+  "apply": "NULL"
+ },
+ {
+  "name": "bgsave_cpulist",
+  "alias": "",
+  "flags": [
+   "immutable"
+  ],
+  "type": "string",
+  "null": true,
+  "default": "",
+  "check": "NULL",
+  "apply": "NULL"
+ },
+ {
+  "name": "ignore-warnings",
+  "alias": "",
+  "flags": [],
+  "type": "string",
+  "null": false,
+  "default": "",
+  "check": "NULL",
+  "apply": "NULL"
+ },
+ {
+  "name": "proc-title-template",
+  "alias": "",
+  "flags": [],
+  "type": "string",
+  "null": false,
+  "default": "{title} {listen-addr} {server-mode}",
+  "check": "isValidProcTitleTemplate",
+  "apply": "updateProcTitleTemplate"
+ },
+ {
+  "name": "bind-source-addr",
+  "alias": "",
+  "flags": [],
+  "type": "string",
+  "null": true,
+  "default": "",
+  "check": "NULL",
+  "apply": "NULL"
+ },
+ {
+  "name": "logfile",
+  "alias": "",
+  "flags": [
+   "immutable"
+  ],
+  "type": "string",
+  "null": false,
+  "default": "",
+  "check": "NULL",
+  "apply": "NULL"
+ },
+ {
+  "name": "masterauth",
+  "alias": "",
+  "flags": [
+   "sensitive"
+  ],
+  "type": "string",
+  "null": true,
+  "default": "",
+  "check": "NULL",
+  "apply": "NULL"
+ },
+ {
+  "name": "requirepass",
+  "alias": "",
+  "flags": [
+   "sensitive"
+  ],
+  "type": "string",
+  "null": true,
+  "default": "",
+  "check": "NULL",
+  "apply": "updateRequirePass"
+ },
+ {
+  "name": "supervised",
+  "alias": "",
+  "flags": [
+   "immutable"
+  ],
+  "type": "enum",
+  "names": [
+   "upstart",
+   "systemd",
+   "auto",
+   "no"
+  ],
+  "values": [
+   3,
+   2,
+   1,
+   0
+  ],
+  "bits": false,
+  "default": "no",
+  "check": "NULL",
+  "apply": "NULL"
+ },
+ {
+  "name": "syslog-facility",
+  "alias": "",
+  "flags": [
+   "immutable"
+  ],
+  "type": "enum",
+  "names": [
+   "user",
+   "local0",
+   "local1",
+   "local2",
+   "local3",
+   "local4",
+   "local5",
+   "local6",
+   "local7"
+  ],
+  "values": [
+   8,
+   128,
+   136,
+   144,
+   152,
+   160,
+   168,
+   176,
+   184
+  ],
+  "bits": false,
+  "default": "local0",
+  "check": "NULL",
+  "apply": "NULL"
+ },
+ {
+  "name": "repl-diskless-load",
+  "alias": "",
+  "flags": [
+   "debug",
+   "deny_loading"
+  ],
+  "type": "enum",
+  "names": [
+   "disabled",
+   "on-empty-db",
+   "swapdb"
+  ],
+  "values": [
+   0,
+   1,
+   2
+  ],
+  "bits": false,
+  "default": "disabled",
+  "check": "NULL",
+  "apply": "NULL"
+ },
+ {
+  "name": "loglevel",
+  "alias": "",
+  "flags": [],
+  "type": "enum",
+  "names": [
+   "debug",
+   "verbose",
+   "notice",
+   "warning"
+  ],
+  "values": [
+   0,
+   1,
+   2,
+   3
+  ],
+  "bits": false,
+  "default": "notice",
+  "check": "NULL",
+  "apply": "NULL"
+ },
+ {
+  "name": "maxmemory-policy",
+  "alias": "",
+  "flags": [],
+  "type": "enum",
+  "names": [
+   "volatile-lru",
+   "volatile-lfu",
+   "volatile-random",
+   "volatile-ttl",
+   "allkeys-lru",
+   "allkeys-lfu",
+   "allkeys-random",
+   "noeviction"
+  ],
+  "values": [
+   1,
+   258,
+   768,
+   512,
+   1029,
+   1286,
+   1540,
+   1792
+  ],
+  "bits": false,
+  "default": "noeviction",
+  "check": "NULL",
+  "apply": "NULL"
+ },
+ {
+  "name": "appendfsync",
+  "alias": "",
+  "flags": [],
+  "type": "enum",
+  "names": [
+   "everysec",
+   "always",
+   "no"
+  ],
+  "values": [
+   2,
+   1,
+   0
+  ],
+  "bits": false,
+  "default": "everysec",
+  "check": "NULL",
+  "apply": "NULL"
+ },
+ {
+  "name": "oom-score-adj",
+  "alias": "",
+  "flags": [],
+  "type": "enum",
+  "names": [
+   "no",
+   "yes",
+   "relative",
+   "absolute"
+  ],
+  "values": [
+   0,
+   1,
+   1,
+   2
+  ],
+  "bits": false,
+  "default": "no",
+  "check": "NULL",
+  "apply": "updateOOMScoreAdj"
+ },
+ {
+  "name": "acl-pubsub-default",
+  "alias": "",
+  "flags": [],
+  "type": "enum",
+  "names": [
+   "allchannels",
+   "resetchannels"
+  ],
+  "values": [
+   8,
+   0
+  ],
+  "bits": false,
+  "default": "resetchannels",
+  "check": "NULL",
+  "apply": "NULL"
+ },
+ {
+  "name": "sanitize-dump-payload",
+  "alias": "",
+  "flags": [
+   "debug"
+  ],
+  "type": "enum",
+  "names": [
+   "no",
+   "yes",
+   "clients"
+  ],
+  "values": [
+   0,
+   1,
+   2
+  ],
+  "bits": false,
+  "default": "no",
+  "check": "NULL",
+  "apply": "NULL"
+ },
+ {
+  "name": "enable-protected-configs",
+  "alias": "",
+  "flags": [
+   "immutable"
+  ],
+  "type": "enum",
+  "names": [
+   "no",
+   "yes",
+   "local"
+  ],
+  "values": [
+   0,
+   1,
+   2
+  ],
+  "bits": false,
+  "default": "no",
+  "check": "NULL",
+  "apply": "NULL"
+ },
+ {
+  "name": "enable-debug-command",
+  "alias": "",
+  "flags": [
+   "immutable"
+  ],
+  "type": "enum",
+  "names": [
+   "no",
+   "yes",
+   "local"
+  ],
+  "values": [
+   0,
+   1,
+   2
+  ],
+  "bits": false,
+  "default": "no",
+  "check": "NULL",
+  "apply": "NULL"
+ },
+ {
+  "name": "enable-module-command",
+  "alias": "",
+  "flags": [
+   "immutable"
+  ],
+  "type": "enum",
+  "names": [
+   "no",
+   "yes",
+   "local"
+  ],
+  "values": [
+   0,
+   1,
+   2
+  ],
+  "bits": false,
+  "default": "no",
+  "check": "NULL",
+  "apply": "NULL"
+ },
+ {
+  "name": "cluster-preferred-endpoint-type",
+  "alias": "",
+  "flags": [],
+  "type": "enum",
+  "names": [
+   "ip",
+   "hostname",
+   "unknown-endpoint"
+  ],
+  "values": [
+   0,
+   1,
+   2
+  ],
+  "bits": false,
+  "default": "ip",
+  "check": "NULL",
+  "apply": "NULL"
+ },
+ {
+  "name": "propagation-error-behavior",
+  "alias": "",
+  "flags": [],
+  "type": "enum",
+  "names": [
+   "ignore",
+   "panic",
+   "panic-on-replicas"
+  ],
+  "values": [
+   0,
+   1,
+   2
+  ],
+  "bits": false,
+  "default": "ignore",
+  "check": "NULL",
+  "apply": "NULL"
+ },
+ {
+  "name": "shutdown-on-sigint",
+  "alias": "",
+  "flags": [
+   "multi_arg"
+  ],
+  "type": "enum",
+  "names": [
+   "default",
+   "save",
+   "nosave",
+   "now",
+   "force"
+  ],
+  "values": [
+   0,
+   1,
+   2,
+   4,
+   8
+  ],
+  "bits": true,
+  "default": "default",
+  "check": "isValidShutdownOnSigFlags",
+  "apply": "NULL"
+ },
+ {
+  "name": "shutdown-on-sigterm",
+  "alias": "",
+  "flags": [
+   "multi_arg"
+  ],
+  "type": "enum",
+  "names": [
+   "default",
+   "save",
+   "nosave",
+   "now",
+   "force"
+  ],
+  "values": [
+   0,
+   1,
+   2,
+   4,
+   8
+  ],
+  "bits": true,
+  "default": "default",
+  "check": "isValidShutdownOnSigFlags",
+  "apply": "NULL"
+ },
+ {
+  "name": "databases",
+  "alias": "",
+  "flags": [
+   "immutable"
+  ],
+  "type": "num",
+  "signed": true,
+  "lo": "1",
+  "hi": "2147483647",
+  "fmt": [],
+  "default": "16",
+  "check": "NULL",
+  "apply": "NULL"
+ },
+ {
+  "name": "port",
+  "alias": "",
+  "flags": [],
+  "type": "num",
+  "signed": true,
+  "lo": "0",
+  "hi": "65535",
+  "fmt": [],
+  "default": "6379",
+  "check": "NULL",
+  "apply": "updatePort"
+ },
+ {
+  "name": "io-threads",
+  "alias": "",
+  "flags": [
+   "debug",
+   "immutable"
+  ],
+  "type": "num",
+  "signed": true,
+  "lo": "1",
+  "hi": "128",
+  "fmt": [],
+  "default": "1",
+  "check": "NULL",
+  "apply": "NULL"
+ },
+ {
+  "name": "auto-aof-rewrite-percentage",
+  "alias": "",
+  "flags": [],
+  "type": "num",
+  "signed": true,
+  "lo": "0",
+  "hi": "2147483647",
+  "fmt": [],
+  "default": "100",
+  "check": "NULL",
+  "apply": "NULL"
+ },
+ {
+  "name": "cluster-replica-validity-factor",
+  "alias": "cluster-slave-validity-factor",
+  "flags": [],
+  "type": "num",
+  "signed": true,
+  "lo": "0",
+  "hi": "2147483647",
+  "fmt": [],
+  "default": "10",
+  "check": "NULL",
+  "apply": "NULL"
+ },
+ {
+  "name": "list-max-listpack-size",
+  "alias": "list-max-ziplist-size",
+  "flags": [],
+  "type": "num",
+  "signed": true,
+  "lo": "-2147483648",
+  "hi": "2147483647",
+  "fmt": [],
+  "default": "-2",
+  "check": "NULL",
+  "apply": "NULL"
+ },
+ {
+  "name": "tcp-keepalive",
+  "alias": "",
+  "flags": [],
+  "type": "num",
+  "signed": true,
+  "lo": "0",
+  "hi": "2147483647",
+  "fmt": [],
+  "default": "300",
+  "check": "NULL",
+  "apply": "NULL"
+ },
+ {
+  "name": "cluster-migration-barrier",
+  "alias": "",
+  "flags": [],
+  "type": "num",
+  "signed": true,
+  "lo": "0",
+  "hi": "2147483647",
+  "fmt": [],
+  "default": "1",
+  "check": "NULL",
+  "apply": "NULL"
+ },
+ {
+  "name": "active-defrag-cycle-min",
+  "alias": "",
+  "flags": [],
+  "type": "num",
+  "signed": true,
+  "lo": "1",
+  "hi": "99",
+  "fmt": [],
+  "default": "1",
+  "check": "NULL",
+  "apply": "NULL"
+ },
+ {
+  "name": "active-defrag-cycle-max",
+  "alias": "",
+  "flags": [],
+  "type": "num",
+  "signed": true,
+  "lo": "1",
+  "hi": "99",
+  "fmt": [],
+  "default": "25",
+  "check": "NULL",
+  "apply": "NULL"
+ },
+ {
+  "name": "active-defrag-threshold-lower",
+  "alias": "",
+  "flags": [],
+  "type": "num",
+  "signed": true,
+  "lo": "0",
+  "hi": "1000",
+  "fmt": [],
+  "default": "10",
+  "check": "NULL",
+  "apply": "NULL"
+ },
+ {
+  "name": "active-defrag-threshold-upper",
+  "alias": "",
+  "flags": [],
+  "type": "num",
+  "signed": true,
+  "lo": "0",
+  "hi": "1000",
+  "fmt": [],
+  "default": "100",
+  "check": "NULL",
+  "apply": "NULL"
+ },
+ {
+  "name": "lfu-log-factor",
+  "alias": "",
+  "flags": [],
+  "type": "num",
+  "signed": true,
+  "lo": "0",
+  "hi": "2147483647",
+  "fmt": [],
+  "default": "10",
+  "check": "NULL",
+  "apply": "NULL"
+ },
+ {
+  "name": "lfu-decay-time",
+  "alias": "",
+  "flags": [],
+  "type": "num",
+  "signed": true,
+  "lo": "0",
+  "hi": "2147483647",
+  "fmt": [],
+  "default": "1",
+  "check": "NULL",
+  "apply": "NULL"
+ },
+ {
+  "name": "replica-priority",
+  "alias": "slave-priority",
+  "flags": [],
+  "type": "num",
+  "signed": true,
+  "lo": "0",
+  "hi": "2147483647",
+  "fmt": [],
+  "default": "100",
+  "check": "NULL",
+  "apply": "NULL"
+ },
+ {
+  "name": "repl-diskless-sync-delay",
+  "alias": "",
+  "flags": [],
+  "type": "num",
+  "signed": true,
+  "lo": "0",
+  "hi": "2147483647",
+  "fmt": [],
+  "default": "5",
+  "check": "NULL",
+  "apply": "NULL"
+ },
+ {
+  "name": "maxmemory-samples",
+  "alias": "",
+  "flags": [],
+  "type": "num",
+  "signed": true,
+  "lo": "1",
+  "hi": "2147483647",
+  "fmt": [],
+  "default": "5",
+  "check": "NULL",
+  "apply": "NULL"
+ },
+ {
+  "name": "maxmemory-eviction-tenacity",
+  "alias": "",
+  "flags": [],
+  "type": "num",
+  "signed": true,
+  "lo": "0",
+  "hi": "100",
+  "fmt": [],
+  "default": "10",
+  "check": "NULL",
+  "apply": "NULL"
+ },
+ {
+  "name": "timeout",
+  "alias": "",
+  "flags": [],
+  "type": "num",
+  "signed": true,
+  "lo": "0",
+  "hi": "2147483647",
+  "fmt": [],
+  "default": "0",
+  "check": "NULL",
+  "apply": "NULL"
+ },
+ {
+  "name": "replica-announce-port",
+  "alias": "slave-announce-port",
+  "flags": [],
+  "type": "num",
+  "signed": true,
+  "lo": "0",
+  "hi": "65535",
+  "fmt": [],
+  "default": "0",
+  "check": "NULL",
+  "apply": "NULL"
+ },
+ {
+  "name": "tcp-backlog",
+  "alias": "",
+  "flags": [
+   "immutable"
+  ],
+  "type": "num",
+  "signed": true,
+  "lo": "0",
+  "hi": "2147483647",
+  "fmt": [],
+  "default": "511",
+  "check": "NULL",
+  "apply": "NULL"
+ },
+ {
+  "name": "cluster-port",
+  "alias": "",
+  "flags": [
+   "immutable"
+  ],
+  "type": "num",
+  "signed": true,
+  "lo": "0",
+  "hi": "65535",
+  "fmt": [],
+  "default": "0",
+  "check": "NULL",
+  "apply": "NULL"
+ },
+ {
+  "name": "cluster-announce-bus-port",
+  "alias": "",
+  "flags": [],
+  "type": "num",
+  "signed": true,
+  "lo": "0",
+  "hi": "65535",
+  "fmt": [],
+  "default": "0",
+  "check": "NULL",
+  "apply": "updateClusterAnnouncedPort"
+ },
+ {
+  "name": "cluster-announce-port",
+  "alias": "",
+  "flags": [],
+  "type": "num",
+  "signed": true,
+  "lo": "0",
+  "hi": "65535",
+  "fmt": [],
+  "default": "0",
+  "check": "NULL",
+  "apply": "updateClusterAnnouncedPort"
+ },
+ {
+  "name": "cluster-announce-tls-port",
+  "alias": "",
+  "flags": [],
+  "type": "num",
+  "signed": true,
+  "lo": "0",
+  "hi": "65535",
+  "fmt": [],
+  "default": "0",
+  "check": "NULL",
+  "apply": "updateClusterAnnouncedPort"
+ },
+ {
+  "name": "repl-timeout",
+  "alias": "",
+  "flags": [],
+  "type": "num",
+  "signed": true,
+  "lo": "1",
+  "hi": "2147483647",
+  "fmt": [],
+  "default": "60",
+  "check": "NULL",
+  "apply": "NULL"
+ },
+ {
+  "name": "repl-ping-replica-period",
+  "alias": "repl-ping-slave-period",
+  "flags": [],
+  "type": "num",
+  "signed": true,
+  "lo": "1",
+  "hi": "2147483647",
+  "fmt": [],
+  "default": "10",
+  "check": "NULL",
+  "apply": "NULL"
+ },
+ {
+  "name": "list-compress-depth",
+  "alias": "",
+  "flags": [
+   "debug"
+  ],
+  "type": "num",
+  "signed": true,
+  "lo": "0",
+  "hi": "2147483647",
+  "fmt": [],
+  "default": "0",
+  "check": "NULL",
+  "apply": "NULL"
+ },
+ {
+  "name": "rdb-key-save-delay",
+  "alias": "",
+  "flags": [
+   "hidden"
+  ],
+  "type": "num",
+  "signed": true,
+  "lo": "-2147483648",
+  "hi": "2147483647",
+  "fmt": [],
+  "default": "0",
+  "check": "NULL",
+  "apply": "NULL"
+ },
+ {
+  "name": "key-load-delay",
+  "alias": "",
+  "flags": [
+   "hidden"
+  ],
+  "type": "num",
+  "signed": true,
+  "lo": "-2147483648",
+  "hi": "2147483647",
+  "fmt": [],
+  "default": "0",
+  "check": "NULL",
+  "apply": "NULL"
+ },
+ {
+  "name": "active-expire-effort",
+  "alias": "",
+  "flags": [],
+  "type": "num",
+  "signed": true,
+  "lo": "1",
+  "hi": "10",
+  "fmt": [],
+  "default": "1",
+  "check": "NULL",
+  "apply": "NULL"
+ },
+ {
+  "name": "hz",
+  "alias": "",
+  "flags": [],
+  "type": "num",
+  "signed": true,
+  "lo": "0",
+  "hi": "2147483647",
+  "fmt": [],
+  "default": "10",
+  "check": "NULL",
+  "apply": "updateHZ"
+ },
+ {
+  "name": "min-replicas-to-write",
+  "alias": "min-slaves-to-write",
+  "flags": [],
+  "type": "num",
+  "signed": true,
+  "lo": "0",
+  "hi": "2147483647",
+  "fmt": [],
+  "default": "0",
+  "check": "NULL",
+  "apply": "updateGoodSlaves"
+ },
+ {
+  "name": "min-replicas-max-lag",
+  "alias": "min-slaves-max-lag",
+  "flags": [],
+  "type": "num",
+  "signed": true,
+  "lo": "0",
+  "hi": "2147483647",
+  "fmt": [],
+  "default": "10",
+  "check": "NULL",
+  "apply": "updateGoodSlaves"
+ },
+ {
+  "name": "watchdog-period",
+  "alias": "",
+  "flags": [
+   "hidden"
+  ],
+  "type": "num",
+  "signed": true,
+  "lo": "0",
+  "hi": "2147483647",
+  "fmt": [],
+  "default": "0",
+  "check": "NULL",
+  "apply": "updateWatchdogPeriod"
+ },
+ {
+  "name": "shutdown-timeout",
+  "alias": "",
+  "flags": [],
+  "type": "num",
+  "signed": true,
+  "lo": "0",
+  "hi": "2147483647",
+  "fmt": [],
+  "default": "10",
+  "check": "NULL",
+  "apply": "NULL"
+ },
+ {
+  "name": "repl-diskless-sync-max-replicas",
+  "alias": "",
+  "flags": [],
+  "type": "num",
+  "signed": true,
+  "lo": "0",
+  "hi": "2147483647",
+  "fmt": [],
+  "default": "0",
+  "check": "NULL",
+  "apply": "NULL"
+ },
+ {
+  "name": "maxclients",
+  "alias": "",
+  "flags": [],
+  "type": "num",
+  "signed": false,
+  "lo": "1",
+  "hi": "4294967295",
+  "fmt": [],
+  "default": "10000",
+  "check": "NULL",
+  "apply": "updateMaxclients"
+ },
+ {
+  "name": "unixsocketperm",
+  "alias": "",
+  "flags": [
+   "immutable"
+  ],
+  "type": "num",
+  "signed": false,
+  "lo": "0",
+  "hi": "511",
+  "fmt": [
+   "octal"
+  ],
+  "default": "0",
+  "check": "NULL",
+  "apply": "NULL"
+ },
+ {
+  "name": "socket-mark-id",
+  "alias": "",
+  "flags": [
+   "immutable"
+  ],
+  "type": "num",
+  "signed": false,
+  "lo": "0",
+  "hi": "4294967295",
+  "fmt": [],
+  "default": "0",
+  "check": "NULL",
+  "apply": "NULL"
+ },
+ {
+  "name": "active-defrag-max-scan-fields",
+  "alias": "",
+  "flags": [],
+  "type": "num",
+  "signed": false,
+  "lo": "1",
+  "hi": "9223372036854775807",
+  "fmt": [],
+  "default": "1000",
+  "check": "NULL",
+  "apply": "NULL"
+ },
+ {
+  "name": "slowlog-max-len",
+  "alias": "",
+  "flags": [],
+  "type": "num",
+  "signed": false,
+  "lo": "0",
+  "hi": "9223372036854775807",
+  "fmt": [],
+  "default": "128",
+  "check": "NULL",
+  "apply": "NULL"
+ },
+ {
+  "name": "acllog-max-len",
+  "alias": "",
+  "flags": [],
+  "type": "num",
+  "signed": false,
+  "lo": "0",
+  "hi": "9223372036854775807",
+  "fmt": [],
+  "default": "128",
+  "check": "NULL",
+  "apply": "NULL"
+ },
+ {
+  "name": "busy-reply-threshold",
+  "alias": "lua-time-limit",
+  "flags": [],
+  "type": "num",
+  "signed": true,
+  "lo": "0",
+  "hi": "9223372036854775807",
+  "fmt": [],
+  "default": "5000",
+  "check": "NULL",
+  "apply": "NULL"
+ },
+ {
+  "name": "cluster-node-timeout",
+  "alias": "",
+  "flags": [],
+  "type": "num",
+  "signed": true,
+  "lo": "0",
+  "hi": "9223372036854775807",
+  "fmt": [],
+  "default": "15000",
+  "check": "NULL",
+  "apply": "NULL"
+ },
+ {
+  "name": "slowlog-log-slower-than",
+  "alias": "",
+  "flags": [],
+  "type": "num",
+  "signed": true,
+  "lo": "-1",
+  "hi": "9223372036854775807",
+  "fmt": [],
+  "default": "10000",
+  "check": "NULL",
+  "apply": "NULL"
+ },
+ {
+  "name": "latency-monitor-threshold",
+  "alias": "",
+  "flags": [],
+  "type": "num",
+  "signed": true,
+  "lo": "0",
+  "hi": "9223372036854775807",
+  "fmt": [],
+  "default": "0",
+  "check": "NULL",
+  "apply": "NULL"
+ },
+ {
+  "name": "proto-max-bulk-len",
+  "alias": "",
+  "flags": [
+   "debug"
+  ],
+  "type": "num",
+  "signed": true,
+  "lo": "1048576",
+  "hi": "9223372036854775807",
+  "fmt": [
+   "memory"
+  ],
+  "default": "536870912",
+  "check": "NULL",
+  "apply": "NULL"
+ },
+ {
+  "name": "stream-node-max-entries",
+  "alias": "",
+  "flags": [],
+  "type": "num",
+  "signed": true,
+  "lo": "0",
+  "hi": "9223372036854775807",
+  "fmt": [],
+  "default": "100",
+  "check": "NULL",
+  "apply": "NULL"
+ },
+ {
+  "name": "repl-backlog-size",
+  "alias": "",
+  "flags": [],
+  "type": "num",
+  "signed": true,
+  "lo": "1",
+  "hi": "9223372036854775807",
+  "fmt": [
+   "memory"
+  ],
+  "default": "1048576",
+  "check": "NULL",
+  "apply": "updateReplBacklogSize"
+ },
+ {
+  "name": "maxmemory",
+  "alias": "",
+  "flags": [],
+  "type": "num",
+  "signed": false,
+  "lo": "0",
+  "hi": "18446744073709551615",
+  "fmt": [
+   "memory"
+  ],
+  "default": "0",
+  "check": "NULL",
+  "apply": "updateMaxmemory"
+ },
+ {
+  "name": "cluster-link-sendbuf-limit",
+  "alias": "",
+  "flags": [],
+  "type": "num",
+  "signed": false,
+  "lo": "0",
+  "hi": "18446744073709551615",
+  "fmt": [
+   "memory"
+  ],
+  "default": "0",
+  "check": "NULL",
+  "apply": "NULL"
+ },
+ {
+  "name": "hash-max-listpack-entries",
+  "alias": "hash-max-ziplist-entries",
+  "flags": [],
+  "type": "num",
+  "signed": false,
+  "lo": "0",
+  "hi": "9223372036854775807",
+  "fmt": [],
+  "default": "512",
+  "check": "NULL",
+  "apply": "NULL"
+ },
+ {
+  "name": "set-max-intset-entries",
+  "alias": "",
+  "flags": [],
+  "type": "num",
+  "signed": false,
+  "lo": "0",
+  "hi": "9223372036854775807",
+  "fmt": [],
+  "default": "512",
+  "check": "NULL",
+  "apply": "NULL"
+ },
+ {
+  "name": "zset-max-listpack-entries",
+  "alias": "zset-max-ziplist-entries",
+  "flags": [],
+  "type": "num",
+  "signed": false,
+  "lo": "0",
+  "hi": "9223372036854775807",
+  "fmt": [],
+  "default": "128",
+  "check": "NULL",
+  "apply": "NULL"
+ },
+ {
+  "name": "active-defrag-ignore-bytes",
+  "alias": "",
+  "flags": [],
+  "type": "num",
+  "signed": false,
+  "lo": "1",
+  "hi": "9223372036854775807",
+  "fmt": [
+   "memory"
+  ],
+  "default": "104857600",
+  "check": "NULL",
+  "apply": "NULL"
+ },
+ {
+  "name": "hash-max-listpack-value",
+  "alias": "hash-max-ziplist-value",
+  "flags": [],
+  "type": "num",
+  "signed": false,
+  "lo": "0",
+  "hi": "9223372036854775807",
+  "fmt": [
+   "memory"
+  ],
+  "default": "64",
+  "check": "NULL",
+  "apply": "NULL"
+ },
+ {
+  "name": "stream-node-max-bytes",
+  "alias": "",
+  "flags": [],
+  "type": "num",
+  "signed": false,
+  "lo": "0",
+  "hi": "9223372036854775807",
+  "fmt": [
+   "memory"
+  ],
+  "default": "4096",
+  "check": "NULL",
+  "apply": "NULL"
+ },
+ {
+  "name": "zset-max-listpack-value",
+  "alias": "zset-max-ziplist-value",
+  "flags": [],
+  "type": "num",
+  "signed": false,
+  "lo": "0",
+  "hi": "9223372036854775807",
+  "fmt": [
+   "memory"
+  ],
+  "default": "64",
+  "check": "NULL",
+  "apply": "NULL"
+ },
+ {
+  "name": "hll-sparse-max-bytes",
+  "alias": "",
+  "flags": [],
+  "type": "num",
+  "signed": false,
+  "lo": "0",
+  "hi": "9223372036854775807",
+  "fmt": [
+   "memory"
+  ],
+  "default": "3000",
+  "check": "NULL",
+  "apply": "NULL"
+ },
+ {
+  "name": "tracking-table-max-keys",
+  "alias": "",
+  "flags": [],
+  "type": "num",
+  "signed": false,
+  "lo": "0",
+  "hi": "9223372036854775807",
+  "fmt": [],
+  "default": "1000000",
+  "check": "NULL",
+  "apply": "NULL"
+ },
+ {
+  "name": "client-query-buffer-limit",
+  "alias": "",
+  "flags": [
+   "debug"
+  ],
+  "type": "num",
+  "signed": false,
+  "lo": "1048576",
+  "hi": "9223372036854775807",
+  "fmt": [
+   "memory"
+  ],
+  "default": "1073741824",
+  "check": "NULL",
+  "apply": "NULL"
+ },
+ {
+  "name": "maxmemory-clients",
+  "alias": "",
+  "flags": [],
+  "type": "num",
+  "signed": true,
+  "lo": "-100",
+  "hi": "9223372036854775807",
+  "fmt": [
+   "memory",
+   "percent"
+  ],
+  "default": "0",
+  "check": "NULL",
+  "apply": "applyClientMaxMemoryUsage"
+ },
+ {
+  "name": "repl-backlog-ttl",
+  "alias": "",
+  "flags": [],
+  "type": "num",
+  "signed": true,
+  "lo": "0",
+  "hi": "9223372036854775807",
+  "fmt": [],
+  "default": "3600",
+  "check": "NULL",
+  "apply": "NULL"
+ },
+ {
+  "name": "auto-aof-rewrite-min-size",
+  "alias": "",
+  "flags": [],
+  "type": "num",
+  "signed": true,
+  "lo": "0",
+  "hi": "9223372036854775807",
+  "fmt": [
+   "memory"
+  ],
+  "default": "67108864",
+  "check": "NULL",
+  "apply": "NULL"
+ },
+ {
+  "name": "loading-process-events-interval-bytes",
+  "alias": "",
+  "flags": [
+   "hidden"
+  ],
+  "type": "num",
+  "signed": true,
+  "lo": "1024",
+  "hi": "2147483647",
+  "fmt": [],
+  "default": "2097152",
+  "check": "NULL",
+  "apply": "NULL"
+ },
+ {
+  "name": "tls-port",
+  "alias": "",
+  "flags": [],
+  "type": "num",
+  "signed": true,
+  "lo": "0",
+  "hi": "65535",
+  "fmt": [],
+  "default": "0",
+  "check": "NULL",
+  "apply": "applyTLSPort"
+ },
+ {
+  "name": "tls-session-cache-size",
+  "alias": "",
+  "flags": [],
+  "type": "num",
+  "signed": true,
+  "lo": "0",
+  "hi": "2147483647",
+  "fmt": [],
+  "default": "20480",
+  "check": "NULL",
+  "apply": "applyTlsCfg"
+ },
+ {
+  "name": "tls-session-cache-timeout",
+  "alias": "",
+  "flags": [],
+  "type": "num",
+  "signed": true,
+  "lo": "0",
+  "hi": "2147483647",
+  "fmt": [],
+  "default": "300",
+  "check": "NULL",
+  "apply": "applyTlsCfg"
+ },
+ {
+  "name": "tls-cluster",
+  "alias": "",
+  "flags": [],
+  "type": "bool",
+  "default": "no",
+  "check": "NULL",
+  "apply": "applyTlsCfg"
+ },
+ {
+  "name": "tls-replication",
+  "alias": "",
+  "flags": [],
+  "type": "bool",
+  "default": "no",
+  "check": "NULL",
+  "apply": "applyTlsCfg"
+ },
+ {
+  "name": "tls-auth-clients",
+  "alias": "",
+  "flags": [],
+  "type": "enum",
+  "names": [
+   "no",
+   "yes",
+   "optional"
+  ],
+  "values": [
+   0,
+   1,
+   2
+  ],
+  "bits": false,
+  "default": "yes",
+  "check": "NULL",
+  "apply": "NULL"
+ },
+ {
+  "name": "tls-prefer-server-ciphers",
+  "alias": "",
+  "flags": [],
+  "type": "bool",
+  "default": "no",
+  "check": "NULL",
+  "apply": "applyTlsCfg"
+ },
+ {
+  "name": "tls-session-caching",
+  "alias": "",
+  "flags": [],
+  "type": "bool",
+  "default": "yes",
+  "check": "NULL",
+  "apply": "applyTlsCfg"
+ },
+ {
+  "name": "tls-cert-file",
+  "alias": "",
+  "flags": [
+   "volatile"
+  ],
+  "type": "string",
+  "null": true,
+  "default": "",
+  "check": "NULL",
+  "apply": "applyTlsCfg"
+ },
+ {
+  "name": "tls-key-file",
+  "alias": "",
+  "flags": [
+   "volatile"
+  ],
+  "type": "string",
+  "null": true,
+  "default": "",
+  "check": "NULL",
+  "apply": "applyTlsCfg"
+ },
+ {
+  "name": "tls-key-file-pass",
+  "alias": "",
+  "flags": [],
+  "type": "string",
+  "null": true,
+  "default": "",
+  "check": "NULL",
+  "apply": "applyTlsCfg"
+ },
+ {
+  "name": "tls-client-cert-file",
+  "alias": "",
+  "flags": [
+   "volatile"
+  ],
+  "type": "string",
+  "null": true,
+  "default": "",
+  "check": "NULL",
+  "apply": "applyTlsCfg"
+ },
+ {
+  "name": "tls-client-key-file",
+  "alias": "",
+  "flags": [
+   "volatile"
+  ],
+  "type": "string",
+  "null": true,
+  "default": "",
+  "check": "NULL",
+  "apply": "applyTlsCfg"
+ },
+ {
+  "name": "tls-client-key-file-pass",
+  "alias": "",
+  "flags": [],
+  "type": "string",
+  "null": true,
+  "default": "",
+  "check": "NULL",
+  "apply": "applyTlsCfg"
+ },
+ {
+  "name": "tls-dh-params-file",
+  "alias": "",
+  "flags": [
+   "volatile"
+  ],
+  "type": "string",
+  "null": true,
+  "default": "",
+  "check": "NULL",
+  "apply": "applyTlsCfg"
+ },
+ {
+  "name": "tls-ca-cert-file",
+  "alias": "",
+  "flags": [
+   "volatile"
+  ],
+  "type": "string",
+  "null": true,
+  "default": "",
+  "check": "NULL",
+  "apply": "applyTlsCfg"
+ },
+ {
+  "name": "tls-ca-cert-dir",
+  "alias": "",
+  "flags": [
+   "volatile"
+  ],
+  "type": "string",
+  "null": true,
+  "default": "",
+  "check": "NULL",
+  "apply": "applyTlsCfg"
+ },
+ {
+  "name": "tls-protocols",
+  "alias": "",
+  "flags": [],
+  "type": "string",
+  "null": true,
+  "default": "",
+  "check": "NULL",
+  "apply": "applyTlsCfg"
+ },
+ {
+  "name": "tls-ciphers",
+  "alias": "",
+  "flags": [],
+  "type": "string",
+  "null": true,
+  "default": "",
+  "check": "NULL",
+  "apply": "applyTlsCfg"
+ },
+ {
+  "name": "tls-ciphersuites",
+  "alias": "",
+  "flags": [],
+  "type": "string",
+  "null": true,
+  "default": "",
+  "check": "NULL",
+  "apply": "applyTlsCfg"
+ },
+ {
+  "name": "dir",
+  "alias": "",
+  "flags": [
+   "deny_loading",
+   "protected"
+  ],
+  "type": "special",
+  "special": "dir",
+  "default": "",
+  "apply": "NULL"
+ },
+ {
+  "name": "save",
+  "alias": "",
+  "flags": [
+   "multi_arg"
+  ],
+  "type": "special",
+  "special": "save",
+  "default": "3600 1 300 100 60 10000",
+  "apply": "NULL"
+ },
+ {
+  "name": "client-output-buffer-limit",
+  "alias": "",
+  "flags": [
+   "multi_arg"
+  ],
+  "type": "special",
+  "special": "obuf",
+  "default": "normal 0 0 0 slave 268435456 67108864 60 pubsub 33554432 8388608 60",
+  "apply": "NULL"
+ },
+ {
+  "name": "oom-score-adj-values",
+  "alias": "",
+  "flags": [
+   "multi_arg"
+  ],
+  "type": "special",
+  "special": "oom",
+  "default": "0 200 800",
+  "apply": "updateOOMScoreAdj"
+ },
+ {
+  "name": "notify-keyspace-events",
+  "alias": "",
+  "flags": [],
+  "type": "special",
+  "special": "notify",
+  "default": "",
+  "apply": "NULL"
+ },
+ {
+  "name": "bind",
+  "alias": "",
+  "flags": [
+   "multi_arg"
+  ],
+  "type": "special",
+  "special": "bind",
+  "default": "* -::*",
+  "apply": "applyBind"
+ },
+ {
+  "name": "replicaof",
+  "alias": "slaveof",
+  "flags": [
+   "immutable",
+   "multi_arg"
+  ],
+  "type": "special",
+  "special": "replicaof",
+  "default": "",
+  "apply": "NULL"
+ },
+ {
+  "name": "latency-tracking-info-percentiles",
+  "alias": "",
+  "flags": [
+   "multi_arg"
+  ],
+  "type": "special",
+  "special": "pct",
+  "default": "50 99 99.9",
+  "apply": "NULL"
+ }
+]

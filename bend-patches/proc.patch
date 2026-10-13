@@ -1,0 +1,297 @@
+diff --git a/bend2/base.bend b/bend2/base.bend
+index 0d3d99e..a482223 100644
+--- a/bend2/base.bend
++++ b/bend2/base.bend
+@@ -226,6 +226,27 @@ def IO.thread_count() -> IO(U32):
+   import "./effs/thread_count.c"
+   import "./effs/thread_count.js"
+ 
++# The process's id.
++def IO.pid() -> IO(U32):
++  import "./effs/pid.c"
++  import "./effs/pid.js"
++
++# The process's working directory, and a change of it, for every thread
++# (relative paths resolve from the new one afterwards).
++def IO.cwd() -> IO(Result<&1, &1, U32 & String, String>):
++  import "./effs/cwd.c"
++  import "./effs/cwd.js"
++
++def IO.chdir(path: String) -> IO(Result<&1, &1, U32 & String, Unit>):
++  import "./effs/cwd.c"
++  import "./effs/cwd.js"
++
++# The wall clock: whole seconds since the Unix epoch, and the microseconds
++# past them. IO.now is the monotonic clock, for spans of time.
++def IO.clock() -> IO(U32 & U32):
++  import "./effs/clock.c"
++  import "./effs/clock.js"
++
+ def Chan.new(-A: Type, room: U32) -> IO(Chan(A)):
+   import "./effs/chan.c"
+   import "./effs/chan.js"
+diff --git a/bend2/comp.ts b/bend2/comp.ts
+index c5dc206..e147ed1 100644
+--- a/bend2/comp.ts
++++ b/bend2/comp.ts
+@@ -8462,6 +8462,18 @@ OUTLINE void io_errs(Env e, Term s) {
+   free(text);
+ }
+ 
++// A halt's message, unless it has none: IO.die with "" exits silently.
++OUTLINE void io_halt(Env e, Term s) {
++  u64   n    = 0;
++  char* text = io_cstr(e, s, &n);
++  io_sync();
++  if (n > 0) {
++    io_out(stderr, text, n);
++    io_out(stderr, "\n", 1);
++  }
++  free(text);
++}
++
+ #define io_nul(s, n) (strlen(s) != (n))
+ 
+ #define io_seal(e, t, cid) \
+@@ -8969,7 +8981,7 @@ static void io_step(Env e, IoWork* a) {
+     u32  n = cid_arity(c);
+     spare_free(e, cls_fit(n), ctr_take(e, req, n, fs));
+     if (c == CID(Halt)) {
+-      io_errs(e, fs[1]);
++      io_halt(e, fs[1]);
+       exit((int)(u32)fs[0]);
+     }
+     if (io_eff_rows[c] == NULL) {
+@@ -9494,7 +9506,9 @@ function io_run(m) {
+           break;
+         }
+         if (op.$ === "Halt") {
+-          io_errs(op.message);
++          if (op.message !== "") {
++            io_errs(op.message);
++          }
+           return op.code;
+         }
+         const run = $0eff[op.$];
+diff --git a/bend2/effs/clock.c b/bend2/effs/clock.c
+new file mode 100644
+index 0000000..3a26af6
+--- /dev/null
++++ b/bend2/effs/clock.c
+@@ -0,0 +1,17 @@
++// IO
++// ==
++
++#include <sys/time.h>
++
++// The wall clock, as gettimeofday reads it: whole seconds since the Unix
++// epoch, and the microseconds past them. IO.now is the monotonic clock,
++// for spans; this one is for dates.
++Term io_clock_run(Env e, Term* f, IoWork* w) {
++  struct timeval tv;
++  gettimeofday(&tv, NULL);
++  return io_tup(e, (u32)tv.tv_sec, (u32)tv.tv_usec);
++}
++
++static void __attribute__((constructor)) io_clock_use(void) {
++  io_eff(CID(IO.clock), io_clock_run);
++}
+diff --git a/bend2/effs/clock.js b/bend2/effs/clock.js
+new file mode 100644
+index 0000000..399268a
+--- /dev/null
++++ b/bend2/effs/clock.js
+@@ -0,0 +1,9 @@
++// IO
++// ==
++
++function io_clock() {
++  const us = Math.floor((performance.timeOrigin + performance.now()) * 1000);
++  return io_tup(Math.floor(us / 1000000) >>> 0, (us % 1000000) >>> 0);
++}
++
++io_eff(CID(IO.clock), io_clock);
+diff --git a/bend2/effs/cwd.c b/bend2/effs/cwd.c
+new file mode 100644
+index 0000000..18f7c0c
+--- /dev/null
++++ b/bend2/effs/cwd.c
+@@ -0,0 +1,38 @@
++// IO
++// ==
++
++#include <unistd.h>
++
++// The process's working directory, as getcwd gives it (getcwd allocates a
++// buffer of the size the path needs).
++Term io_cwd_run(Env e, Term* f, IoWork* w) {
++  char* got = getcwd(NULL, 0);
++  if (got == NULL) {
++    return io_fail(e, (u32)errno, NULL);
++  }
++  Term t = io_done(e, io_str(e, got, strlen(got)));
++  free(got);
++  return t;
++}
++
++// Changes the working directory of the whole process: every thread's
++// relative paths resolve from the new one afterwards.
++Term io_chdir_run(Env e, Term* f, IoWork* w) {
++  u64   n    = 0;
++  char* path = io_cstr(e, f[0], &n);
++  int   bad  = io_nul(path, n);
++  int   got  = bad ? -1 : chdir(path);
++  u32   code = bad ? EINVAL : (u32)errno;
++  free(path);
++  return got == 0 ? io_done(e, term_pak(CID(Unit), 0))
++    : io_fail(e, code, NULL);
++}
++
++static void __attribute__((constructor)) io_cwd_use(void) {
++#ifdef CID(IO.cwd)
++  io_eff(CID(IO.cwd), io_cwd_run);
++#endif
++#ifdef CID(IO.chdir)
++  io_eff(CID(IO.chdir), io_chdir_run);
++#endif
++}
+diff --git a/bend2/effs/cwd.js b/bend2/effs/cwd.js
+new file mode 100644
+index 0000000..2ebef73
+--- /dev/null
++++ b/bend2/effs/cwd.js
+@@ -0,0 +1,22 @@
++// IO
++// ==
++
++function io_cwd() {
++  try {
++    return io_done(process.cwd());
++  } catch (e) {
++    return io_fail(Math.abs(e.errno ?? 2));
++  }
++}
++
++function io_chdir(path) {
++  try {
++    process.chdir(path);
++    return io_done({ $: CID(Unit) });
++  } catch (e) {
++    return io_fail(Math.abs(e.errno ?? 2));
++  }
++}
++
++io_eff(CID(IO.cwd), io_cwd);
++io_eff(CID(IO.chdir), io_chdir);
+diff --git a/bend2/effs/pid.c b/bend2/effs/pid.c
+new file mode 100644
+index 0000000..4e35922
+--- /dev/null
++++ b/bend2/effs/pid.c
+@@ -0,0 +1,13 @@
++// IO
++// ==
++
++#include <unistd.h>
++
++// The process's id.
++Term io_pid_run(Env e, Term* f, IoWork* w) {
++  return (Term)(u32)getpid();
++}
++
++static void __attribute__((constructor)) io_pid_use(void) {
++  io_eff(CID(IO.pid), io_pid_run);
++}
+diff --git a/bend2/effs/pid.js b/bend2/effs/pid.js
+new file mode 100644
+index 0000000..20dbff5
+--- /dev/null
++++ b/bend2/effs/pid.js
+@@ -0,0 +1,8 @@
++// IO
++// ==
++
++function io_pid() {
++  return process.pid >>> 0;
++}
++
++io_eff(CID(IO.pid), io_pid);
+diff --git a/tests/io/proc.bend b/tests/io/proc.bend
+new file mode 100644
+index 0000000..ed145fd
+--- /dev/null
++++ b/tests/io/proc.bend
+@@ -0,0 +1,73 @@
++# io (io_proc): IO.pid is the process's id, above 0; IO.cwd is its working
++# directory and IO.chdir changes it: after a change to "/" the directory is
++# "/", and a file opened by a relative path is found from there; a change
++# to a directory not there fails with ENOENT and changes nothing. IO.clock
++# is the wall clock: seconds past 2020, microseconds under a million.
++import Base
++
++def check(name: String, ok: Bool) -> IO(Unit):
++  match ok:
++    case True{}:
++      IO.print(name)
++    case False{}:
++      IO.die(Unit, 1, "FAIL " ++ name)
++
++def cwd_is(r: Result<&1, &1, U32 & String, String>, want: String, name: String) -> IO(Unit):
++  match r:
++    case Done{d}:
++      check(name, String.eq(d, want))
++    case Fail{e}:
++      IO.die(Unit, 1, "FAIL " ++ name)
++
++def chdir_ok(r: Result<&1, &1, U32 & String, Unit>, name: String) -> IO(Unit):
++  match r:
++    case Done{u}:
++      IO.print(name)
++    case Fail{e}:
++      IO.die(Unit, 1, "FAIL " ++ name)
++
++def chdir_fails(r: Result<&1, &1, U32 & String, Unit>, want: U32, name: String) -> IO(Unit):
++  match r:
++    case Done{u}:
++      IO.die(Unit, 1, "FAIL " ++ name)
++    case Fail{e}:
++      (code, msg) = e
++      check(name, U32.is_eq(code, want))
++
++def opened(r: Result<&1, &1, U32 & String, File>, name: String) -> IO(Unit):
++  match r:
++    case Done{f}:
++      do IO<Unit>:
++        IO.print(name)
++        File.close(f)
++    case Fail{e}:
++      IO.die(Unit, 1, "FAIL " ++ name)
++
++def clock_ok(t: U32 & U32) -> IO(Unit):
++  (s, us) = t
++  check("the clock is past 2020", Bool.and(U32.is_lt(1577836800, s), U32.is_lt(us, 1000000)))
++
++def main() -> IO(Unit):
++  do IO<Unit>:
++    pid : U32 <- IO.pid()
++    check("a pid", U32.is_lt(0, pid))
++    r : Result<&1, &1, U32 & String, Unit> <- IO.chdir("/")
++    chdir_ok(r, "changed to /")
++    d : Result<&1, &1, U32 & String, String> <- IO.cwd()
++    cwd_is(d, "/", "the directory is /")
++    f : Result<&1, &1, U32 & String, File> <- File.open("etc/hostname", "r")
++    opened(f, "a relative path opens from /")
++    r : Result<&1, &1, U32 & String, Unit> <- IO.chdir("/no/such/dir/here")
++    chdir_fails(r, 2, "a missing directory is ENOENT")
++    d : Result<&1, &1, U32 & String, String> <- IO.cwd()
++    cwd_is(d, "/", "the directory is still /")
++    t : U32 & U32 <- IO.clock()
++    clock_ok(t)
++
++#|a pid
++#|changed to /
++#|the directory is /
++#|a relative path opens from /
++#|a missing directory is ENOENT
++#|the directory is still /
++#|the clock is past 2020

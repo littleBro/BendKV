@@ -277,26 +277,49 @@ Where performance and proof meet: **batched execution under proved laws.**
    what a drop-in Redis must.
 
 5. **Done: persistence with recovery proved** ([FINDINGS.md](FINDINGS.md), section
-   3e). An append-only file in Redis's own format, written with group commit, and eight
+   3e). An append-only file in Redis's own format, written with group commit, and nine
    laws: logging changes no reply, nor do the hints before it, a batch's effects
    replay to its database, they
    parse back to themselves, a file loads as the entries written to it, after any
-   history the restored database is the one the server held, and a file cut by a
-   crash at any byte restores the database after some prefix of the commands, the
-   server cutting off exactly the part of an entry the crash left. (With the shards,
-   each shard logged to a file of its own, with three more laws; section 3g.) Not yet:
-   the rewrite of the log from a snapshot (BGREWRITEAOF), whose law would be about what
-   keys read, not the trie's shape, and that a file cut back and written on is the log
-   of the prefix and the new batches. The persistent trie makes that snapshot free (a
-   root is one), and the file format is the requests clients send, so the same kind of
-   law would cover the network parser of `resp.bend`, and with it the server's
-   decision to cut a file (`cut_short`).
+   history the restored databases are the ones the server held, a file cut by a
+   crash at any byte restores the databases after some prefix of the acts, the
+   server cutting off exactly the part of an entry the crash left, and the start's
+   replay, which refuses a file with an entry it cannot replay as written, is that
+   replay whenever it refuses none. (With the shards,
+   each shard logged to a file of its own, with three more laws; section 3g.) The
+   rewrite of the log from a snapshot (BGREWRITEAOF) is done and tested against Redis
+   (section 3zv): the persistent trie made the snapshot free, a root is one. Not yet
+   proved: that the rewritten file replays to the databases it was written from, a law
+   about what keys read, not the trie's shape, which needs a scan from the first bucket
+   to read every key once (the invariant that a bucket holds a key once) and a double
+   written as `%.17g` to read back as itself; and that a file cut back and written on
+   is the log of the prefix and the new batches. The file format is the requests
+   clients send, so the same kind of law would cover the network parser of `resp.bend`,
+   and with it the server's decision to cut a file (`cut_short`). Nor is it proved yet
+   that the start's check accepts every file the server writes (the tests show it on
+   theirs).
 6. **Next: a drop-in Redis for one node.** Strings, hashes, lists, sets and sorted sets
-   with WRONGTYPE, TTL with a model of time in the state, MULTI/EXEC/WATCH, pub/sub,
-   the connection commands clients send on connect (HELLO, SELECT, CLIENT, AUTH, INFO,
-   COMMAND, CONFIG), SCAN, and the log's rewrite, measured by Redis's own test suite
-   run against BendKV and by client libraries' tests. Lua, streams, cluster,
-   replication and modules are out of scope.
+   with WRONGTYPE (a value of a type, with WRONGTYPE: done, section 3zf; hashes: done,
+   section 3zg; lists: done, section 3zh; sets: done, section 3zj; floats in software
+   and INCRBYFLOAT: done, section 3zk; sorted sets: done, section 3zl; the blocking
+   commands of lists and sorted sets: done, section 3zp),
+   times to live with time in the state and a sweep of expired keys
+   (done; FINDINGS.md, sections 3v and 3w), several databases with SELECT, MOVE and
+   SWAPDB (done; section 3x), the ranges and bits of strings (GETRANGE, SETRANGE,
+   GETBIT, SETBIT, BITCOUNT, BITPOS; done, section 3y), MSETNX and RENAME (done,
+   section 3za), COPY (done, section 3zb), BITOP and LCS (done, section 3zd), BITFIELD
+   (done, section 3ze), MULTI/EXEC/WATCH (done, section 3zq), pub/sub and keyspace
+   notifications (done, section 3zr), the connection commands clients send on connect
+   (HELLO, SELECT, CLIENT, AUTH, INFO, COMMAND, CONFIG; done), CLIENT LIST, INFO and KILL
+   (done, section 3zs), SCAN and RANDOMKEY (done), MONITOR (done, section 3zt), the
+   log's rewrite (done, section 3zv), and maxmemory and RESP3 (next),
+   measured by Redis's own test suite run against BendKV
+   and by client libraries' tests. Lua, streams, cluster,
+   replication and modules are out of scope. The suite's count: of the 1,677 tests
+   Redis 7.0.15 passes against a server it did not start, BendKV passes 797, 792 of the
+   1,172 in what it has ([COMPATIBILITY.md](COMPATIBILITY.md)); RESP3 now holds back the
+   most tests of what it has (203 of unit/type/list's and 82 of unit/type/zset's run
+   after their HELLO 3).
 
 After that comes proving the native strings (section 5, step 1): a small piece of
 work that makes the word "verified" much stronger.
