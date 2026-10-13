@@ -378,7 +378,8 @@ VM (medians over 8–13 interleaved pairs):
 With Redis's own benchmark specs run by `memtier_benchmark`, BendKV reaches 1.26–1.39×
 Redis. Without pipelining both are bound by network latency and stay within noise of each
 other. About 950 thousand keys with 3-byte values take 60 MB RSS against Redis's 121 MB.
-What the measurements found, and how they were made, is in
+The full record, with every measurement and method, is in
+[docs/PERFORMANCE.md](docs/PERFORMANCE.md) and
 [docs/FINDINGS.md](docs/FINDINGS.md).
 
 ## Building
@@ -516,7 +517,7 @@ tools/      measurement scripts, the runner of Redis's test suite, and the gener
             the trie, of the parameter table and of the command table, with the facts
             they take from Redis (tools/data/)
 bend-patches/  the 28 patches to the Bend compiler and runtime
-docs/       FINDINGS.md, DIRECTIONS.md, COMPATIBILITY.md
+docs/       FINDINGS.md, DIRECTIONS.md, COMPATIBILITY.md, PERFORMANCE.md
 ```
 
 ## Documentation
@@ -526,7 +527,13 @@ docs/       FINDINGS.md, DIRECTIONS.md, COMPATIBILITY.md
   and where the work goes next.
 - [docs/COMPATIBILITY.md](docs/COMPATIBILITY.md): Redis's own test suite against BendKV,
   unit by unit, and why the tests it fails fail.
+- [docs/PERFORMANCE.md](docs/PERFORMANCE.md): every optimization, section by
+  section, with measurements.
+- [OVERVIEW.md](OVERVIEW.md): the full project report, including the
+  feasibility study (SQLite, Redis, memcached, LMDB in Bend2) and Bend2's limitations
+  met in practice.
 - [tools/README.md](tools/README.md): how it was measured.
+- [bend-patches/README.md](bend-patches/README.md): the compiler patches.
 
 ## History
 

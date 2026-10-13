@@ -1,6 +1,6 @@
 # Tools
 
-Scripts behind the numbers in
+Scripts behind the numbers in [PERFORMANCE.md](../docs/PERFORMANCE.md) and
 [docs/FINDINGS.md](../docs/FINDINGS.md). The servers they drive take their port as
 their first argument: `build/bendkv` (a second argument, `post` or `send`, picks how
 replies go out, and a third names an append-only file), or any build of the same C from

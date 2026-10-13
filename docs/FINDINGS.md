@@ -2,7 +2,10 @@
 
 BendKV is a Redis-compatible key-value store written in Bend2, with its core proved
 against 65 laws. This file sums up what building it and making it fast
-showed us. Where the work goes next, and why, is in [DIRECTIONS.md](DIRECTIONS.md).
+showed us. The detailed record, with every table and measurement, is in
+[PERFORMANCE.md](PERFORMANCE.md) (performance, section by section) and
+[OVERVIEW.md](../OVERVIEW.md) (the project, the proofs, how to run). Where the work goes
+next, and why, is in [DIRECTIONS.md](DIRECTIONS.md).
 
 ## 1. The result
 
@@ -1072,7 +1075,8 @@ took them out, keeping every series of measurements within 5% of before, measure
 before: pairs over three code layouts, callgrind, `make perfcheck`. The branch
 [`archive/shards`](https://github.com/littleBro/BendKV/tree/archive/shards) keeps all of it, so the shards can come back into a finished project in a
 later round of optimization. From here the work goes after features rather than speed:
-a drop-in Redis for one node ([DIRECTIONS.md](DIRECTIONS.md), section 7).
+a drop-in Redis for one node (OVERVIEW.md, "What next"; [DIRECTIONS.md](DIRECTIONS.md),
+section 7).
 
 - **Shards.** `shard.bend` and `wire.bend`; in `server.bend` the connection's link to N
   actors, cutting batches and collecting the parts' replies, the per-shard journal files

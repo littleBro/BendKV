@@ -54,11 +54,11 @@ make perfcheck BEND="$B"   # no more than 3% more instructions per request
   describes (interleaved pairs over several code layouts), not from a single run.
 - **Bend constraints** worth knowing: a function can call only functions defined above
   it (except `@unsafe` ones), there is no mutual recursion, recursion is structural,
-  and `match` takes a parameter, not a computed value.
+  and `match` takes a parameter, not a computed value. OVERVIEW.md lists more.
 
 ## Style
 
-- Code comments and documents in English.
+- Everything in English: code, comments, documents and commit messages.
 - Comments say what a definition means and why, in plain sentences, as the existing code
   does.
 - Commits are small and say what changed and why.
