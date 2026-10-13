@@ -44,22 +44,327 @@ type Mute is Data:
 type Conn is Data:
   Conn{id: Nat, auth: Bool, name: String, mode: Mute, quit: Bool, db: Nat}
 
+# an entry of the eviction's pool (server.bend, Eviction): a key of
+# database db, and its score, the higher the better a key to evict
+type Pe is Data:
+  Pe{score: Nat, db: Nat, key: String}
+
+# What the server keeps for maxmemory (Memory, below), with the state of
+# its random numbers (RANDOMKEY's, HRANDFIELD's, SPOP's): the parameters
+# of maxmemory as the start and each CONFIG SET leave them (maxmemory in
+# bytes, 0 for none; maxmemory-policy as a number, mm.pol.of;
+# maxmemory-samples; maxmemory-eviction-tenacity; lfu-log-factor;
+# lfu-decay-time), and the eviction's state (server.bend, Eviction):
+# whether a CONFIG SET changed maxmemory (to one), which the actor sees to
+# at once (kick), the pool (best first), the database the next random
+# eviction starts after, and the bytes evicted while a rewrite of the
+# append-only file runs, which its snapshot still holds (debt). MmOf,
+# never built, makes Mm a type that holds itself, which the compiler makes
+# a node of its own: Srv stays four words, as with the random numbers'
+# word alone.
+type Mm is Data:
+  Mm{rng: U32, max: Nat, pol: Nat, smp: Nat, ten: Nat, lfl: Nat, lfd: Nat, kick: Bool, pool: List<&2, Pe>, next: Nat, debt: Nat}
+  MmOf{m: Mm}
+
 # the server, besides its database: its password (empty for none), its
 # parameters (config.bend), of which requirepass is the password, what
-# INFO shows of it that they do not (info.bend), and the state of its
-# random numbers (RANDOMKEY's)
+# INFO shows of it that they do not (info.bend), and what it keeps for
+# maxmemory, with its random numbers (Mm)
 type Srv is Data:
-  Srv{pass: String, cfg: List<&2, C.CItem>, info: I.Info, rng: U32}
+  Srv{pass: String, cfg: List<&2, C.CItem>, info: I.Info, mm: Mm}
 
 def conn_new(id: Nat) -> Conn:
   Conn{id, False{}, "", MOn{}, False{}, 0n}
+
+# Memory
+# ------
+# maxmemory's parameters as numbers: a number of bytes past 10^14 (100
+# TB, which no heap reaches) as 10^14, so that it stays within a Nat;
+# maxmemory-policy as 0 noeviction, 1 allkeys-lru, 2 volatile-lru, 3
+# allkeys-lfu, 4 volatile-lfu, 5 allkeys-random, 6 volatile-random, 7
+# volatile-ttl
+def mm.nat.of(long: Bool, +v: String) -> Nat:
+  match long:
+    case True{}:
+      Nat.mul(1000000000n, 100000n)
+    case False{}:
+      C.dec.small(v, 0n)
+
+# (a match, not Bool.pick, which would read the long number too)
+def mm.nat(+v: String) -> Nat:
+  mm.nat.of(Nat.is_lt(14n, String.length(v)), v)
+
+def mm.pol.of(+p: String) -> Nat:
+  Bool.pick(Nat, String.eq(p, "allkeys-lru"), 1n,
+    Bool.pick(Nat, String.eq(p, "volatile-lru"), 2n,
+      Bool.pick(Nat, String.eq(p, "allkeys-lfu"), 3n,
+        Bool.pick(Nat, String.eq(p, "volatile-lfu"), 4n,
+          Bool.pick(Nat, String.eq(p, "allkeys-random"), 5n,
+            Bool.pick(Nat, String.eq(p, "volatile-random"), 6n,
+              Bool.pick(Nat, String.eq(p, "volatile-ttl"), 7n, 0n)))))))
+
+def mm.get(+cfg: List<&2, C.CItem>, +name: String) -> Nat:
+  mm.nat(C.config.get_value(cfg, name))
+
+# what the server keeps for maxmemory with these parameters, its random
+# numbers at rng
+def mm.of(+rng: U32, +cfg: List<&2, C.CItem>) -> Mm:
+  Mm{rng, mm.get(cfg, "maxmemory"), mm.pol.of(C.config.get_value(cfg, "maxmemory-policy")), mm.get(cfg, "maxmemory-samples"), mm.get(cfg, "maxmemory-eviction-tenacity"), mm.get(cfg, "lfu-log-factor"), mm.get(cfg, "lfu-decay-time"), False{}, Nil{}, 0n, 0n}
+
+def mm.rng(+m: Mm) -> U32:
+  match m:
+    case Mm{rng, max, pol, smp, ten, lfl, lfd, kick, pool, next, debt}:
+      rng
+    case MmOf{+n}:
+      mm.rng(n)
+
+def mm.max(+m: Mm) -> Nat:
+  match m:
+    case Mm{rng, max, pol, smp, ten, lfl, lfd, kick, pool, next, debt}:
+      max
+    case MmOf{+n}:
+      mm.max(n)
+
+def mm.pol(+m: Mm) -> Nat:
+  match m:
+    case Mm{rng, max, pol, smp, ten, lfl, lfd, kick, pool, next, debt}:
+      pol
+    case MmOf{+n}:
+      mm.pol(n)
+
+# after CONFIG SET: the parameters read again, the random numbers and the
+# eviction's state kept; a maxmemory changed to one (not 0) is to be seen
+# to at once (kick), as Redis's updateMaxmemory starts its eviction
+def mm.cfg(+m: Mm, +cfg: List<&2, C.CItem>) -> Mm:
+  match m:
+    case Mm{rng, +max, pol, smp, ten, lfl, lfd, +kick, pool, next, debt}:
+      +mx = mm.get(cfg, "maxmemory")
+      Mm{rng, mx, mm.pol.of(C.config.get_value(cfg, "maxmemory-policy")), mm.get(cfg, "maxmemory-samples"), mm.get(cfg, "maxmemory-eviction-tenacity"), mm.get(cfg, "lfu-log-factor"), mm.get(cfg, "lfu-decay-time"), Bool.and(Bool.or(kick, Bool.not(Nat.is_eq(mx, max))), Nat.is_lt(0n, mx)), pool, next, debt}
+    case MmOf{+n}:
+      mm.cfg(n, cfg)
+
+# RANDOMKEY: the next state of the random numbers (a Weyl sequence, that
+# KV.mix scrambles)
+def mm.rand(m: Mm) -> Mm:
+  match m:
+    case Mm{rng, max, pol, smp, ten, lfl, lfd, kick, pool, next, debt}:
+      Mm{U32.add(rng, 2654435769), max, pol, smp, ten, lfl, lfd, kick, pool, next, debt}
+    case MmOf{n}:
+      mm.rand(n)
+
+# lfu-log-factor and lfu-decay-time
+def mm.lfl(+m: Mm) -> Nat:
+  match m:
+    case Mm{rng, max, pol, smp, ten, lfl, lfd, kick, pool, next, debt}:
+      lfl
+    case MmOf{+n}:
+      mm.lfl(n)
+
+def mm.lfd(+m: Mm) -> Nat:
+  match m:
+    case Mm{rng, max, pol, smp, ten, lfl, lfd, kick, pool, next, debt}:
+      lfd
+    case MmOf{+n}:
+      mm.lfd(n)
+
+# whether the policy is an LFU one (allkeys-lfu, volatile-lfu)
+def mm.lfu(+m: Mm) -> Bool:
+  +p = mm.pol(m)
+  Bool.or(Nat.is_eq(p, 3n), Nat.is_eq(p, 4n))
+
+# whether a CONFIG SET changed maxmemory, and the eviction's debt
+def mm.kick(+m: Mm) -> Bool:
+  match m:
+    case Mm{rng, max, pol, smp, ten, lfl, lfd, kick, pool, next, debt}:
+      kick
+    case MmOf{+n}:
+      mm.kick(n)
+
+def mm.debt(+m: Mm) -> Nat:
+  match m:
+    case Mm{rng, max, pol, smp, ten, lfl, lfd, kick, pool, next, debt}:
+      debt
+    case MmOf{+n}:
+      mm.debt(n)
+
+# what the actor does about memory, the heap's live bytes used: 0
+# nothing, within maxmemory (none for 0), less the debt; 1 see to a
+# CONFIG SET's change of maxmemory first; 2 evict
+def mm.what(+m: Mm, +used: Nat) -> Nat:
+  match m:
+    case Mm{rng, +max, pol, smp, ten, lfl, lfd, +kick, pool, next, +debt}:
+      Bool.pick(Nat, kick, 1n, Bool.pick(Nat, Bool.and(Nat.is_lt(0n, max), Nat.is_lt(max, Nat.sub(used, debt))), 2n, 0n))
+    case MmOf{+n}:
+      mm.what(n, used)
+
+# the change of maxmemory seen to
+def mm.kicked(m: Mm) -> Mm:
+  match m:
+    case Mm{rng, max, pol, smp, ten, lfl, lfd, kick, pool, next, debt}:
+      Mm{rng, max, pol, smp, ten, lfl, lfd, False{}, pool, next, debt}
+    case MmOf{n}:
+      mm.kicked(n)
+
+def mm.smp(+m: Mm) -> Nat:
+  match m:
+    case Mm{rng, max, pol, smp, ten, lfl, lfd, kick, pool, next, debt}:
+      smp
+    case MmOf{+n}:
+      mm.smp(n)
+
+def mm.ten(+m: Mm) -> Nat:
+  match m:
+    case Mm{rng, max, pol, smp, ten, lfl, lfd, kick, pool, next, debt}:
+      ten
+    case MmOf{+n}:
+      mm.ten(n)
+
+def mm.next(+m: Mm) -> Nat:
+  match m:
+    case Mm{rng, max, pol, smp, ten, lfl, lfd, kick, pool, next, debt}:
+      next
+    case MmOf{+n}:
+      mm.next(n)
+
+def mm.pool(+m: Mm) -> List<&2, Pe>:
+  match m:
+    case Mm{rng, max, pol, smp, ten, lfl, lfd, kick, pool, next, debt}:
+      pool
+    case MmOf{+n}:
+      mm.pool(n)
+
+# the pool taken out of the eviction's state (none left in its place), so
+# that a pick changes its entries in place, and the state
+type Mp is Data:
+  Mp{ps: List<&2, Pe>, m: Mm}
+
+def mm.pool.take(m: Mm) -> Mp:
+  match m:
+    case Mm{rng, max, pol, smp, ten, lfl, lfd, kick, pool, next, debt}:
+      Mp{pool, Mm{rng, max, pol, smp, ten, lfl, lfd, kick, Nil{}, next, debt}}
+    case MmOf{x}:
+      mm.pool.take(x)
+
+# the random numbers after a pick that took n + 1 of them
+def mm.step(+rng: U32, +n: Nat) -> U32:
+  U32.add(rng, U32.mul(2654435769, U32.from_nat(1n+n)))
+
+# the eviction's state after a pick from a pool (its pool after it) or at
+# random (the database it picked from), of n databases
+def mm.pool.set(m: Mm, ps: List<&2, Pe>, +n: Nat) -> Mm:
+  match m:
+    case Mm{+rng, max, pol, smp, ten, lfl, lfd, kick, pool, next, debt}:
+      Mm{mm.step(rng, n), max, pol, smp, ten, lfl, lfd, kick, ps, next, debt}
+    case MmOf{x}:
+      mm.pool.set(x, ps, n)
+
+def mm.next.set(m: Mm, +j: Nat, +n: Nat) -> Mm:
+  match m:
+    case Mm{+rng, max, pol, smp, ten, lfl, lfd, kick, pool, next, debt}:
+      Mm{mm.step(rng, n), max, pol, smp, ten, lfl, lfd, kick, pool, j, debt}
+    case MmOf{x}:
+      mm.next.set(x, j, n)
+
+# b bytes more of debt (a key evicted while a rewrite runs)
+def mm.owe(m: Mm, +b: Nat) -> Mm:
+  match m:
+    case Mm{rng, max, pol, smp, ten, lfl, lfd, kick, pool, next, +debt}:
+      Mm{rng, max, pol, smp, ten, lfl, lfd, kick, pool, next, Nat.add(debt, b)}
+    case MmOf{x}:
+      mm.owe(x, b)
+
+# the debt paid: the rewrite whose snapshot held what eviction freed ended
+def mm.paid(m: Mm) -> Mm:
+  match m:
+    case Mm{rng, max, pol, smp, ten, lfl, lfd, kick, pool, next, debt}:
+      Mm{rng, max, pol, smp, ten, lfl, lfd, kick, pool, next, 0n}
+    case MmOf{n}:
+      mm.paid(n)
+
+# Access
+# ------
+# When each key was last used, for OBJECT IDLETIME and FREQ and the
+# eviction's LRU and LFU, is kept outside the databases, in 2^20 words by
+# the low twenty bits of a key's hash (Mem.touch and Mem.cell; the server
+# marks the keys of a batch, by its hints, before the batch runs), as
+# Redis keeps it in 24 bits of each value: under any policy but an LFU
+# one, the second of the key's last use, its low 24 bits (acc.lru); under
+# an LFU one, the minute of the last decay of its counter, its low 16
+# bits, and the counter (lfu.word); with a bit of its kind above them
+# (24, 25), so that a word set is never 0. A word of the other kind, after
+# a change of policy, is read as Redis reads a value's 24 bits then (an
+# LRU second as an LFU minute and counter, and the reverse). A word never
+# set counts as a key's that was made at the server's start, never used
+# since, with a counter of 5 (LFU_INIT_VAL), as Redis's values loaded at
+# the start; its first use under an LFU policy gives it a counter of 5,
+# as Redis gives a value it makes. Keys whose hashes have the same low
+# twenty bits share a word, which no key's deletion clears.
+
+def acc.secs(+now: Nat) -> U32:
+  U32.from_nat(Nat.div(now, 1000n))
+
+# the word of a use at now (ms) under any policy but LFU
+def acc.lru(+now: Nat) -> U32:
+  U32.or(U32.and(acc.secs(now), 16777215), 16777216)
+
+# the minute of now (ms), as Redis's LFUGetTimeInMinutes: its low 16 bits
+def acc.min(+now: Nat) -> U32:
+  U32.and(U32.from_nat(Nat.div(now, 60000n)), 65535)
+
+def lfu.word(+min: U32, +c: U32) -> U32:
+  U32.or(33554432, U32.or(U32.shln(min, 8n), c))
+
+# the minutes from ldt to now, which wrap at 2^16 (LFUTimeElapsed)
+def lfu.elapsed(+now: U32, +ldt: U32) -> U32:
+  Bool.pick(U32, U32.is_le(ldt, now), U32.sub(now, ldt), U32.add(U32.sub(65535, ldt), now))
+
+def lfu.periods(+el: Nat, +dt: Nat) -> Nat:
+  match dt:
+    case 0n:
+      0n
+    case _:
+      Nat.div(el, dt)
+
+# the counter of an LFU word decayed to the minute now, by one for each
+# lfu-decay-time minutes since its last decay, none with a decay time of
+# 0 (LFUDecrAndReturn)
+def lfu.decr(+w: U32, +now: U32, +dt: Nat) -> U32:
+  +c = U32.and(w, 255)
+  +n = lfu.periods(U32.to_nat(lfu.elapsed(now, U32.and(U32.shrn(w, 8n), 65535))), dt)
+  Bool.pick(U32, Nat.is_lt(U32.to_nat(c), n), 0, U32.sub(c, U32.from_nat(n)))
+
+# a counter after a use, r a random word: up by one with a chance of
+# 1/((c-5)*lfu-log-factor+1), which is 1 for a counter of 5 or less, as
+# r/2^32 falls below it; 255 stays (LFULogIncr)
+def lfu.incr(+c: U32, +r: U32, +lf: Nat) -> U32:
+  +m = Nat.add(Nat.mul(Nat.sub(U32.to_nat(c), 5n), lf), 1n)
+  Bool.pick(U32, Bool.and(U32.is_lt(c, 255), Nat.is_lt(U32.to_nat(r), Nat.div(4294967295n, m))), U32.add(c, 1), c)
+
+# an LFU word after a use at the minute now: its counter decayed, then
+# taken up (updateLFU); a word never set a new value's
+def lfu.use(+w: U32, +now: U32, +r: U32, +lf: Nat, +dt: Nat) -> U32:
+  Bool.pick(U32, U32.is_ne(w, 0), lfu.word(now, lfu.incr(lfu.decr(w, now, dt), r, lf)), lfu.word(now, 5))
+
+# the LFU counter of a key's word at now (ms), the server started at
+# start (s)
+def acc.freq(+w: U32, +now: Nat, +start: U32, +dt: Nat) -> U32:
+  lfu.decr(Bool.pick(U32, U32.is_ne(w, 0), w, lfu.word(U32.and(U32.div(start, 60), 65535), 5)), acc.min(now), dt)
+
+# the seconds since a key's last use at now (ms): from its word's 24 bits
+# to the second of now, as Redis's estimateObjectIdleTime counts them
+# (past their wrap, one less: LRU_CLOCK_MAX), else since the server's
+# start
+def acc.idle(+w: U32, +now: Nat, +start: U32) -> Nat:
+  +c = U32.and(acc.secs(now), 16777215)
+  +l = U32.and(w, 16777215)
+  Bool.pick(Nat, U32.is_ne(w, 0), U32.to_nat(Bool.pick(U32, U32.is_le(l, c), U32.sub(c, l), U32.sub(U32.add(c, 16777215), l))), Nat.sub(Nat.div(now, 1000n), U32.to_nat(start)))
 
 # the server with these parameters: its password is requirepass; its
 # random numbers start from its run id
 def srv_of(+cfg: List<&2, C.CItem>, info: I.Info) -> Srv:
   +i = info
   +r = I.info.seed(i)
-  Srv{C.config.get_value(cfg, "requirepass"), cfg, i, r}
+  Srv{C.config.get_value(cfg, "requirepass"), cfg, i, mm.of(r, cfg)}
 
 def srv.puts(sets: List<&2, String>, cfg: List<&2, C.CItem>) -> List<&2, C.CItem>:
   match sets:
@@ -107,23 +412,30 @@ def conn.db(+c: Conn) -> Nat:
 
 def srv.pass(+s: Srv) -> String:
   match s:
-    case Srv{pass, cfg, info, rng}:
+    case Srv{pass, cfg, info, mm}:
       pass
 
 def srv.cfg(+s: Srv) -> List<&2, C.CItem>:
   match s:
-    case Srv{pass, cfg, info, rng}:
+    case Srv{pass, cfg, info, mm}:
       cfg
 
 def srv.info(+s: Srv) -> I.Info:
   match s:
-    case Srv{pass, cfg, info, rng}:
+    case Srv{pass, cfg, info, mm}:
       info
 
-def srv.rng(+s: Srv) -> U32:
+def srv.mm(+s: Srv) -> Mm:
   match s:
-    case Srv{pass, cfg, info, rng}:
-      rng
+    case Srv{pass, cfg, info, mm}:
+      mm
+
+def srv.rng(+s: Srv) -> U32:
+  mm.rng(srv.mm(s))
+
+# maxmemory (0 for none)
+def srv.max(+s: Srv) -> Nat:
+  mm.max(srv.mm(s))
 
 # how many databases the server has (databases, which cannot change while
 # it runs)
@@ -143,23 +455,23 @@ def srv.dbs(+s: Srv) -> Nat:
 # append-only file, new facts, a sample of the rates
 def srv.ran(s: Srv, +calls: Nat, +r: Nat, rs: List<&2, Nat>, +inb: Nat, +outb: Nat) -> Srv:
   match s:
-    case Srv{pass, cfg, info, rng}:
-      Srv{pass, cfg, I.info.ran(info, calls, r, rs, inb, outb), rng}
+    case Srv{pass, cfg, info, mm}:
+      Srv{pass, cfg, I.info.ran(info, calls, r, rs, inb, outb), mm}
 
 def srv.errs(s: Srv, xs: List<&2, R.Erred>) -> Srv:
   match s:
-    case Srv{pass, cfg, info, rng}:
-      Srv{pass, cfg, I.info.errs(info, xs), rng}
+    case Srv{pass, cfg, info, mm}:
+      Srv{pass, cfg, I.info.errs(info, xs), mm}
 
 def srv.erred(s: Srv, +m: String) -> Srv:
   match s:
-    case Srv{pass, cfg, info, rng}:
-      Srv{pass, cfg, I.info.erred(info, m), rng}
+    case Srv{pass, cfg, info, mm}:
+      Srv{pass, cfg, I.info.erred(info, m), mm}
 
 def srv.aof(s: Srv, +n: Nat) -> Srv:
   match s:
-    case Srv{pass, cfg, info, rng}:
-      Srv{pass, cfg, I.info.aof(info, n), rng}
+    case Srv{pass, cfg, info, mm}:
+      Srv{pass, cfg, I.info.aof(info, n), mm}
 
 # the rewrite of the append-only file (info.bend: Rws): whether one runs,
 # whether one is scheduled, how many failed in a row; one started at ms;
@@ -167,86 +479,117 @@ def srv.aof(s: Srv, +n: Nat) -> Srv:
 # ms, the file of size bytes then; or failed at ms
 def srv.rw.on(+s: Srv) -> Bool:
   match s:
-    case Srv{pass, cfg, +info, rng}:
+    case Srv{pass, cfg, +info, mm}:
       I.rws.on(I.info.rw(info))
 
 def srv.rw.sched(+s: Srv) -> Bool:
   match s:
-    case Srv{pass, cfg, +info, rng}:
+    case Srv{pass, cfg, +info, mm}:
       I.rws.sched(I.info.rw(info))
 
 def srv.rw.fails(+s: Srv) -> Nat:
   match s:
-    case Srv{pass, cfg, +info, rng}:
+    case Srv{pass, cfg, +info, mm}:
       I.rws.fails(I.info.rw(info))
 
 def srv.rw.go(s: Srv, +ms: Nat) -> Srv:
   match s:
-    case Srv{pass, cfg, info, rng}:
-      Srv{pass, cfg, I.info.rw.go(info, ms), rng}
+    case Srv{pass, cfg, info, mm}:
+      Srv{pass, cfg, I.info.rw.go(info, ms), mm}
 
 def srv.rw.later(s: Srv) -> Srv:
   match s:
-    case Srv{pass, cfg, info, rng}:
-      Srv{pass, cfg, I.info.rw.later(info), rng}
+    case Srv{pass, cfg, info, mm}:
+      Srv{pass, cfg, I.info.rw.later(info), mm}
 
 def srv.rw.done(s: Srv, +size: Nat, +ms: Nat) -> Srv:
   match s:
-    case Srv{pass, cfg, info, rng}:
-      Srv{pass, cfg, I.info.rw.done(info, size, ms), rng}
+    case Srv{pass, cfg, info, mm}:
+      Srv{pass, cfg, I.info.rw.done(info, size, ms), mm.paid(mm)}
 
 def srv.rw.failed(s: Srv, +ms: Nat) -> Srv:
   match s:
-    case Srv{pass, cfg, info, rng}:
-      Srv{pass, cfg, I.info.rw.failed(info, ms), rng}
+    case Srv{pass, cfg, info, mm}:
+      Srv{pass, cfg, I.info.rw.failed(info, ms), mm.paid(mm)}
+
+# an eviction at now that deleted k keys and left the heap past
+# maxmemory or not (over)
+def srv.evicted(s: Srv, +k: Nat, +over: Bool, +now: Nat) -> Srv:
+  match s:
+    case Srv{pass, cfg, info, mm}:
+      Srv{pass, cfg, I.info.evicted(info, k, over, now), mm}
+
+def srv.debt(+s: Srv) -> Nat:
+  mm.debt(srv.mm(s))
+
+def srv.mem.what(+s: Srv, +used: Nat) -> Nat:
+  match s:
+    case Srv{pass, cfg, info, +mm}:
+      mm.what(mm, used)
+
+def srv.pol(+s: Srv) -> Nat:
+  match s:
+    case Srv{pass, cfg, info, +mm}:
+      mm.pol(mm)
+
+def srv.ten(+s: Srv) -> Nat:
+  match s:
+    case Srv{pass, cfg, info, +mm}:
+      mm.ten(mm)
+
+# the change of maxmemory seen to (Mm's kick)
+def srv.kicked(s: Srv) -> Srv:
+  match s:
+    case Srv{pass, cfg, info, mm}:
+      Srv{pass, cfg, info, mm.kicked(mm)}
 
 # the size of the append-only file now, and after its last rewrite (or at
 # the start)
 def srv.aof.size(+s: Srv) -> Nat:
   match s:
-    case Srv{pass, cfg, +info, rng}:
+    case Srv{pass, cfg, +info, mm}:
       I.info.aof.size(info)
 
 def srv.aof.base(+s: Srv) -> Nat:
   match s:
-    case Srv{pass, cfg, +info, rng}:
+    case Srv{pass, cfg, +info, mm}:
       I.info.aof.base(info)
 
 def srv.live(s: Srv, l: I.Live) -> Srv:
   match s:
-    case Srv{pass, cfg, info, rng}:
-      Srv{pass, cfg, I.info.live(info, l), rng}
+    case Srv{pass, cfg, info, mm}:
+      Srv{pass, cfg, I.info.live(info, l), mm}
 
 def srv.tick(s: Srv, +ms: Nat) -> Srv:
   match s:
-    case Srv{pass, cfg, info, rng}:
-      Srv{pass, cfg, I.info.tick(info, ms), rng}
+    case Srv{pass, cfg, info, mm}:
+      Srv{pass, cfg, I.info.tick(info, ms), mm}
 
 # a call of code k that failed after it was counted (a blocked client
 # that CLIENT UNBLOCK unblocked), and the clients that wait (INFO's
 # blocked_clients) and those of them with a timeout
 def srv.failed(s: Srv, +k: Nat) -> Srv:
   match s:
-    case Srv{pass, cfg, info, rng}:
-      Srv{pass, cfg, I.info.failed(info, k), rng}
+    case Srv{pass, cfg, info, mm}:
+      Srv{pass, cfg, I.info.failed(info, k), mm}
 
 def srv.blocked(s: Srv, +n: Nat, +t: Nat) -> Srv:
   match s:
-    case Srv{pass, cfg, info, rng}:
-      Srv{pass, cfg, I.info.blocked(info, n, t), rng}
+    case Srv{pass, cfg, info, mm}:
+      Srv{pass, cfg, I.info.blocked(info, n, t), mm}
 
 # the sweep of expired keys (redis.bend: reap): where the next one starts
 # in database j, and a sweep of j that stopped at next having deleted k
 # keys
 def srv.reap_at(+s: Srv, +j: Nat) -> Nat:
   match s:
-    case Srv{pass, cfg, +info, rng}:
+    case Srv{pass, cfg, +info, mm}:
       I.info.reap_at(info, j)
 
 def srv.reaped(s: Srv, +j: Nat, +next: Nat, +k: Nat) -> Srv:
   match s:
-    case Srv{pass, cfg, info, rng}:
-      Srv{pass, cfg, I.info.reaped(info, j, next, k), rng}
+    case Srv{pass, cfg, info, mm}:
+      Srv{pass, cfg, I.info.reaped(info, j, next, k), mm}
 
 # Authentication
 # --------------
@@ -259,7 +602,7 @@ def srv.reaped(s: Srv, +j: Nat, +next: Nat, +k: Nat) -> Srv:
 # String where it lies; String.is_empty would take it apart)
 def nopass(+s: Srv) -> Bool:
   match s:
-    case Srv{+pass, cfg, info, rng}:
+    case Srv{+pass, cfg, info, mm}:
       Nat.is_eq(String.length(pass), 0n)
 
 def authed(+c: Conn, +s: Srv) -> Bool:
@@ -1145,12 +1488,28 @@ def time.reply(+now: Nat) -> R.Reply:
 # ("int" for a long, "embstr" up to 44 bytes, else "raw"; a value Redis
 # made by APPEND, SETRANGE or SETBIT is "raw" there whatever it holds),
 # REFCOUNT by the integers 0 to 9999 Redis shares (INT_MAX for one, unless
-# maxmemory is set with an LRU or LFU policy, else 1), IDLETIME and FREQ
-# 0: it does not track accesses. IDLETIME is refused under an LFU policy,
-# FREQ under any other, as in Redis.
+# maxmemory is set with an LRU or LFU policy, else 1), and IDLETIME and
+# FREQ (obj.use) as a key's that no command used since the server's start:
+# the server answers them from the key's word (Access; server.bend,
+# bg.obj), which is the runtime's alone and which no law reads.
 def obj.lfu(+cfg: List<&2, C.CItem>) -> Bool:
   +p = C.config.get_value(cfg, "maxmemory-policy")
   Bool.or(String.eq(p, "allkeys-lfu"), String.eq(p, "volatile-lfu"))
+
+# OBJECT IDLETIME and FREQ of a key whose word is w (Access), at now (ms),
+# the server started at start (s): IDLETIME the seconds since its last
+# use, refused under an LFU policy; FREQ its counter, decayed to now,
+# refused under any other, as in Redis
+def obj.use(+sub: Nat, +w: U32, +now: Nat, +start: U32, +lfu: Bool, +dt: Nat) -> R.Reply:
+  match sub lfu:
+    case 2n True{}:
+      R.r_int(U32.to_nat(acc.freq(w, now, start, dt)))
+    case 2n False{}:
+      R.RError{"ERR An LFU maxmemory policy is not selected, access frequency not tracked. Please note that when switching between policies at runtime LRU and LFU data will take some time to adjust."}
+    case _ True{}:
+      R.RError{"ERR An LFU maxmemory policy is selected, idle time not tracked. Please note that when switching between policies at runtime LRU and LFU data will take some time to adjust."}
+    case _ False{}:
+      R.r_int(acc.idle(w, now, start))
 
 def obj.shared(+cfg: List<&2, C.CItem>) -> Bool:
   +p = C.config.get_value(cfg, "maxmemory-policy")
@@ -1171,16 +1530,14 @@ def obj.refcount(l: R.LL, +shared: Bool) -> R.Reply:
     case R.LLBad{}:
       R.r_int(1n)
 
-def obj.of(+sub: Nat, +v: String, +cfg: List<&2, C.CItem>) -> R.Reply:
+def obj.of(+sub: Nat, +v: String, +cfg: List<&2, C.CItem>, u: R.Reply) -> R.Reply:
   match sub:
-    case 2n:
-      Bool.pick(R.Reply, obj.lfu(cfg), R.r_int(0n), R.RError{"ERR An LFU maxmemory policy is not selected, access frequency not tracked. Please note that when switching between policies at runtime LRU and LFU data will take some time to adjust."})
     case 3n:
       obj.encoding(R.ll.read(v), String.length(v))
     case 4n:
       obj.refcount(R.ll.read(v), obj.shared(cfg))
     case _:
-      Bool.pick(R.Reply, obj.lfu(cfg), R.RError{"ERR An LFU maxmemory policy is selected, idle time not tracked. Please note that when switching between policies at runtime LRU and LFU data will take some time to adjust."}, R.r_int(0n))
+      u
 
 # OBJECT of a collection: its encoding as Redis 7.0 names it, a count of
 # references of 1, and the rest as for a string. A hash is a listpack
@@ -1245,21 +1602,22 @@ def obj.coll.enc(+c: KV.Coll, +cfg: List<&2, C.CItem>) -> String:
     case KV.CZset{+z}:
       obj.zset.enc(z, cfg)
 
-def obj.coll(+sub: Nat, +c: KV.Coll, +cfg: List<&2, C.CItem>) -> R.Reply:
+def obj.coll(+sub: Nat, +c: KV.Coll, +cfg: List<&2, C.CItem>, u: R.Reply) -> R.Reply:
   match sub:
     case 3n:
       R.RBulk{obj.coll.enc(c, cfg)}
     case 4n:
       R.r_int(1n)
     case _:
-      obj.of(sub, "", cfg)
+      u
 
-def obj.reply(+sub: Nat, m: Maybe<&2, KV.Item<KV.Val>>, +cfg: List<&2, C.CItem>) -> R.Reply:
+# OBJECT's reply of a key there, u that of IDLETIME or FREQ (obj.use)
+def obj.reply(+sub: Nat, m: Maybe<&2, KV.Item<KV.Val>>, +cfg: List<&2, C.CItem>, u: R.Reply) -> R.Reply:
   match m:
     case Some{KV.Item{KV.VStr{+v}, e}}:
-      obj.of(sub, v, cfg)
+      obj.of(sub, v, cfg, u)
     case Some{KV.Item{KV.VColl{+c}, e}}:
-      obj.coll(sub, c, cfg)
+      obj.coll(sub, c, cfg, u)
     case None{}:
       R.RNull{}
 
@@ -1763,6 +2121,14 @@ def mem.size(+k: String, m: Maybe<&2, KV.Item<KV.Val>>) -> R.Reply:
       R.r_int(Nat.add(Nat.add(40n, String.length(k)), mem.val(v)))
     case None{}:
       R.RNull{}
+
+# MEMORY USAGE's estimate of the bytes of key k and its entry (0 for none)
+def mem.est(+k: String, m: Maybe<&2, KV.Item<KV.Val>>) -> Nat:
+  match m:
+    case Some{KV.Item{+v, e}}:
+      Nat.add(Nat.add(40n, String.length(k)), mem.val(v))
+    case None{}:
+      0n
 
 def mem.usage(bad: Maybe<&2, R.Reply>, +k: String, m: Maybe<&2, KV.Item<KV.Val>>) -> R.Reply:
   match bad:
@@ -2289,7 +2655,7 @@ def own_reply(+o: R.SessOp, +c: Conn, +s: Srv, +ds: R.Ds) -> Maybe<&2, R.Reply>:
     case R.STime{}:
       say(conn.mode(c), time.reply(R.ds.now(ds)))
     case R.SObject{+sub, +k}:
-      say(conn.mode(c), obj.reply(sub, R.db.ent(R.ds.focused(ds), k), srv.cfg(s)))
+      say(conn.mode(c), obj.reply(sub, R.db.ent(R.ds.focused(ds), k), srv.cfg(s), obj.use(sub, 0, R.ds.now(ds), I.info.start(srv.info(s)), mm.lfu(srv.mm(s)), mm.lfd(srv.mm(s)))))
     case R.SCopy{+args}:
       say(conn.mode(c), copy.reply(copy.of(args, c, s), ds))
     case R.SLcs{args}:
@@ -2446,22 +2812,21 @@ def own_acts(+o: R.SessOp, +c: Conn, +s: Srv) -> List<&2, R.Act>:
 def srv.set(r: Result<&2, &2, R.Reply, List<&2, C.CItem>>, +s: Srv) -> Srv:
   match r:
     case Done{+cfg}:
-      Srv{C.config.get_value(cfg, "requirepass"), cfg, srv.info(s), srv.rng(s)}
+      Srv{C.config.get_value(cfg, "requirepass"), cfg, srv.info(s), mm.cfg(srv.mm(s), cfg)}
     case Fail{e}:
       s
 
 # CONFIG RESETSTAT: INFO's counts start again
 def srv.reset(s: Srv) -> Srv:
   match s:
-    case Srv{pass, cfg, info, rng}:
-      Srv{pass, cfg, I.info.reset(info), rng}
+    case Srv{pass, cfg, info, mm}:
+      Srv{pass, cfg, I.info.reset(info), mm}
 
-# RANDOMKEY: the next state of the random numbers (a Weyl sequence, that
-# KV.mix scrambles)
+# RANDOMKEY: the next state of the random numbers (mm.rand)
 def srv.rand(s: Srv) -> Srv:
   match s:
-    case Srv{pass, cfg, info, rng}:
-      Srv{pass, cfg, info, U32.add(rng, 2654435769)}
+    case Srv{pass, cfg, info, mm}:
+      Srv{pass, cfg, info, mm.rand(mm)}
 
 # the server after a session command: CONFIG SET changes it when it
 # succeeds, CONFIG RESETSTAT its counts, and RANDOMKEY and HRANDFIELD its

@@ -386,6 +386,20 @@ def flag_sets(facts):
             out[sub[0]] = {f["+"] for f in sub[2]}
     return out
 
+# the commands that look their key up without touching it (Redis's
+# LOOKUP_NOTOUCH): EXISTS, TYPE, and the TTLs (ttlGenericCommand); OBJECT's
+# key is not its first argument
+NOTOUCH = {"exists", "type", "ttl", "pttl", "expiretime", "pexpiretime"}
+
+# the position of each command's first key (COMMAND's first key; 0 for none)
+def first_keys(facts):
+    out = {}
+    for name, c in facts["commands"].items():
+        out[name] = c["info"][3]
+        for sub in c["info"][9]:
+            out[sub[0]] = sub[3]
+    return out
+
 def arities(facts):
     out = {}
     for name, c in facts["commands"].items():
@@ -459,6 +473,22 @@ def stats_block(src, facts):
             "def stat.keyspace(+key: Nat) -> Bool:", "  match key:"]
     for k, (name, kind, i) in enumerate(keys, 1):
         if fl[name] & {"write", "readonly"} or name in MAY_REPLICATE:
+            out += ["    case %dn:" % k, "      True{}"]
+    out += ["    case _:", "      False{}", ""]
+    out += ["# whether the command of a key may take memory (denyoom): past",
+            "# maxmemory with nothing left to evict, Redis refuses it",
+            "def stat.denyoom(+key: Nat) -> Bool:", "  match key:"]
+    for k, (name, kind, i) in enumerate(keys, 1):
+        if "denyoom" in fl[name]:
+            out += ["    case %dn:" % k, "      True{}"]
+    out += ["    case _:", "      False{}", ""]
+    fk = first_keys(facts)
+    out += ["# whether the command of a key touches the key of its first argument",
+            "# (its first key is there), as Redis's lookups set a key's access time:",
+            "# all but those that look a key up without touching it (LOOKUP_NOTOUCH)",
+            "def stat.touch(+key: Nat) -> Bool:", "  match key:"]
+    for k, (name, kind, i) in enumerate(keys, 1):
+        if fk[name] == 1 and name not in NOTOUCH:
             out += ["    case %dn:" % k, "      True{}"]
     out += ["    case _:", "      False{}", ""]
     ncodes = 4 * (len(keys) + 1)

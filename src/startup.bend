@@ -607,9 +607,8 @@ def warn.if(c: Bool, +w: String, ws: List<&2, String>) -> List<&2, String>:
 # what BendKV keeps and does nothing with
 def warnings(+items: List<&2, C.CItem>) -> List<&2, String>:
   warn.if(Bool.not(String.is_empty(cfg(items, "save"))), "BendKV writes no RDB snapshots: save is kept but saves nothing (appendonly yes keeps the data)",
-  warn.if(Bool.not(String.eq(cfg(items, "maxmemory"), "0")), "BendKV has no eviction: maxmemory is kept but limits nothing",
   warn.if(Bool.not(String.is_empty(cfg(items, "unixsocket"))), "BendKV listens on TCP only: unixsocket " ++ cfg(items, "unixsocket") ++ " is ignored",
-  warn.if(String.eq(cfg(items, "syslog-enabled"), "yes"), "BendKV does not log to syslog", Nil{}))))
+  warn.if(String.eq(cfg(items, "syslog-enabled"), "yes"), "BendKV does not log to syslog", Nil{})))
 
 # The addresses
 # -------------

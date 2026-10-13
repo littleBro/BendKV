@@ -9,7 +9,7 @@ numbers are in [tools/](../tools/README.md).
    verification and not from the logic of the commands.** The original SET cost ~390
    heap cell allocations and ~150 atomic reference-count operations. Redis makes a
    handful of allocations per SET.
-2. **Bend itself is fixed by twenty-six patches to the compiler**
+2. **Bend itself is fixed by thirty patches to the compiler**
    ([`bend-patches/`](../bend-patches/)). The first eight switch on by themselves for
    programs without GPU calls `!`, the ninth and tenth where a program calls them, the
    eleventh changes every program's event loop on Linux, the twelfth and thirteenth only
@@ -20,13 +20,16 @@ numbers are in [tools/](../tools/README.md).
    twenty-first lays out a type wider than 32 words as a node of its own (section 16),
    the twenty-second makes `String.order` native (section 39), the twenty-third keeps a
    socket with no room from holding up the `TCP.post` writer (section 40), and the
-   twenty-sixth fixes the fifth (section 41). Three more only add effects: the
+   twenty-sixth fixes the fifth (section 41). Seven more only add effects: the
    twentieth, the process and the clock for starting as `redis-server` does; the
    twenty-fourth, cutting a file of any size and syncing a directory (`File.sync_dir`);
-   the twenty-fifth, waiting for a socket on a channel (`TCP.watch`, section 41). Before
-   section 14 there were twenty patches: the sixteenth (effect pairs) was taken out in
-   section 14, and the sections before 14 number the patches the old way — there, 17–20
-   are today's 16–19.
+   the twenty-fifth, waiting for a socket on a channel (`TCP.watch`, section 41); the
+   twenty-seventh, a socket's addresses, killing it and channel marks (section 44); the
+   twenty-eighth, a file put in another's place and a name removed (section 47); the
+   twenty-ninth, the heap's account (`IO.heap`); the thirtieth, words outside the heap
+   (`Mem.touch`, `Mem.cell`; both section 48). Before section 14 there were twenty
+   patches: the sixteenth (effect pairs) was taken out in section 14, and the sections
+   before 14 number the patches the old way — there, 17–20 are today's 16–19.
    - **Lazy sealing** (section 3): a reference count is created when a value is
      actually shared, not at every construction.
    - **Packed strings** (section 4): in the C runtime a `String` is a chain of byte
@@ -3545,7 +3548,7 @@ p17…p20 became 16…19; there too, by this scale, the shards, the key hashed o
 load the change was made for: time, and where time is in the noise (±5–15%, sections
 7.23 and 9.6), instructions or memory. The cost is the growth of `comp.ts` in `ttok`
 tokens (the Bend repository limits this file by them: a cap of 64 thousand, the original
-has 62,940, with the patches 101,922), the lines of BendKV's code and proofs, and what
+has 62,940, with the patches 102,266), the lines of BendKV's code and proofs, and what
 lines do not measure: a new data representation, threads, heuristics with tuned
 thresholds, non-local effects.
 
@@ -3585,7 +3588,10 @@ commits, the seventh two):
 | 26. waiting on a channel and a socket at once (now the twenty-fifth, section 41) | 0 | — | `base.bend` (+16), effects `chan.c/.js` |
 | 27. a shared field of a spare node (now the twenty-sixth, section 41) | 193 | +15 | — |
 | 28. a socket's addresses, killing it, channel marks (now the twenty-seventh, section 44) | 635 | +55 | `base.bend` (+32), effects `tcp_name.c/.js`, `tcp_kill.c/.js` |
-| total | 38,982 | | |
+| 29. a file in another's place, a name removed (now the twenty-eighth, section 47) | 0 | — | `base.bend` (+15), effects `file_rename.c/.js` |
+| 30. the heap's account `IO.heap` (now the twenty-ninth, section 48) | 3 | ±3 | `base.bend` (+7), effects `heap.c/.js` |
+| 31. words outside the heap `Mem.touch`, `Mem.cell` (now the thirtieth, section 48) | 341 | +33 | `base.bend` (+15) |
+| total | 39,326 | | |
 
 Tests for the patches are not in the table. A map (p is a patch, 7.N a section):
 
@@ -6206,3 +6212,172 @@ that cannot be created is a rewrite that ended with an error, as a child's failu
 Redis. The temporary file's name has the pid of the server itself, and the log has the
 Redis 6 lines that apply to one file (no "Successfully created the temporary AOF base
 file").
+
+## 48. maxmemory and eviction
+
+**What there is.** maxmemory and its eviction as Redis 7.0.15 runs them (`evict.c`). With
+maxmemory set, the actor reads the heap's account before each group of requests it runs,
+as Redis's `processCommand` calls `performEvictions` before each command, and while the
+heap is past maxmemory it evicts keys by `maxmemory-policy`: `allkeys-lru`,
+`volatile-lru`, `allkeys-lfu`, `volatile-lfu`, `allkeys-random`, `volatile-random`,
+`volatile-ttl` or `noeviction`. Past maxmemory with nothing it may evict (`noeviction`,
+or no key the policy may take), Redis's `EVICT_FAIL`, the group's commands that may take
+memory (the `denyoom` flag of Redis's command table) are refused with "OOM command not
+allowed when used memory > 'maxmemory'.", after the client's authentication is checked
+and before the rest, as Redis's `rejectCommand` refuses them: counted as rejected calls
+and as OOM errors; in MULTI any command but EXEC, DISCARD, QUIT and RESET is refused and
+flags the transaction, and EXEC aborts a transaction that queued a command that may take
+memory ("EXECABORT Transaction discarded because of: OOM ..."); a group with such a
+refusal runs the general way, a command at a time. A CONFIG SET of maxmemory starts an
+eviction at once, with Redis's warning when the heap is past the new value ("WARNING: the
+new maxmemory value set via CONFIG SET (...) is smaller than the current memory usage
+(...)"), as Redis's `updateMaxmemory` (the start's warning of a maxmemory below 1 MB is
+Redis's too). INFO counts as Redis counts: `evicted_keys`, `total_eviction_exceeded_time`
+and `current_eviction_exceeded_time` (in ms, how long the heap was past maxmemory with
+keys left to evict, Redis's `update_metrics`), and CONFIG RESETSTAT counts them again.
+
+**What the memory is.** `IO.heap` (the twenty-ninth patch) gives the bytes the heap's
+live values hold: what the heap has taken from its corpus less the free chains of the
+rows in use, their parked generations and the bank's, a walk of 32 size classes and not
+of the nodes, cheap enough for each group. That is INFO's `used_memory`, as Redis's is
+what its allocator handed out (`zmalloc_used_memory`), and what maxmemory limits;
+`allocator_active` is what the heap has taken, which it keeps. Redis subtracts what it
+does not count for eviction (replication and AOF buffers); BendKV has no buffer in its
+heap that it would leave out, and `mem_not_counted_for_evict` is 0. maxmemory takes
+Redis's values up to 2^64-1, and INFO shows them as Redis does; past 10^14 bytes, which
+no heap reaches, the eviction reads them as 10^14, so that they stay within a `Nat`.
+
+**When each key was used.** Redis keeps 24 bits in each value: the second of its last use
+(the LRU clock), or under an LFU policy the minute its counter last decayed and the
+counter, a logarithmic one (`LFULogIncr`, with `lfu-log-factor`), which starts at 5 and
+loses one for each `lfu-decay-time` minutes since it last decayed (`LFUDecrAndReturn`).
+BendKV's values are values: a word in each would make every read a write, a new node
+along the key's path and a change of the database every law speaks of. The words are kept
+outside the heap instead (the thirtieth patch: `Mem.touch` writes a word, `Mem.cell`
+reads one), 2^20 of them by the low twenty bits of the key's hash, in Redis's 24-bit
+layout with a bit for each kind (LRU or LFU) above it, so that a word written is never 0.
+A word of the other kind, after a change of policy, is read as Redis reads a value's 24
+bits then (an LRU second as an LFU minute and counter, which decays at once to 0, and the
+reverse); a word never written counts as a key's made at the start and never used since,
+with a counter of 5, as Redis counts a value loaded at its start. Before a batch runs,
+the actor marks the first key of each of its requests, by the hash the parser already
+took (its hint), unless the command looks its key up without touching it (Redis's
+`LOOKUP_NOTOUCH`: EXISTS, TYPE, TTL, PTTL, EXPIRETIME, PEXPIRETIME, and OBJECT, whose key
+is not its first argument; a predicate the command table's generator writes,
+`R.stat.touch`). OBJECT IDLETIME and FREQ answer from the word, each refused under the
+kind of policy Redis refuses it under, and the eviction scores keys by it.
+
+**The eviction.** A pick, then a delete, then the heap read again, until the heap is
+within maxmemory. The LRU, LFU and volatile-ttl policies keep a pool of 16 keys, best
+first, from one eviction to the next, as Redis's `EvictionPoolLRU`: each pick samples
+`maxmemory-samples` keys of each database that holds keys the policy may take, scores
+them (the seconds since the key's last use; 255 less its LFU counter; 2^47 less the time
+it expires at), puts them in the pool as Redis's `evictionPoolPopulate` does, and takes
+the best key that is still there (a key deleted meanwhile is dropped as it comes up,
+Redis's ghosts). A sample reads the trie's buckets one after another from a random one,
+as many as should hold three times `maxmemory-samples` keys (64 at least), as Redis's
+`dictGetSomeKeys` reads a bounded number of buckets and may find fewer; a sample that
+finds none in any database reads on until it finds keys. The random policies take a key
+of the next database with keys after the one they took from last (Redis's static
+`next_db`): `allkeys-random` one at random of 16 from a random bucket on, as RANDOMKEY
+picks one, `volatile-random` the first key with a time from a random bucket on. The
+volatile policies take keys with a time alone. Every 16 keys the actor looks at the time:
+past the limit of `maxmemory-eviction-tenacity` (50 us for each step up to 10, 15% more
+for each step past it, none at 100: Redis's `evictionTimeLimitUs`), it stops with keys
+left to evict, Redis's `EVICT_RUNNING`, and goes on between groups, after a turn of the
+event loop for the connections, as Redis's `evictionTimeProc` goes on from its event
+loop. A key evicted is deleted as a DEL of its database (`R.exec`), as the sweep deletes
+an expired key: a DEL in the append-only file, the key's WATCHes touched, `evicted` to
+the keyspace's subscribers; a database emptied so gets a fresh trie (below).
+
+**During a rewrite.** Redis's parent frees what it evicts while its child writes, and its
+account comes down, though the child's copy of the pages still holds it. BendKV's rewrite
+holds the databases as they were (section 47): a key evicted while it runs frees nothing
+until it ends, and an eviction that waited for the heap to come down would evict every
+key. So, while a rewrite runs, an evicted key counts as freed by MEMORY USAGE's estimate
+of it, the debt, which the heap is credited with until the rewrite ends.
+
+**What it cost.** GET, SET and INCR take 3,328, 4,252 and 4,514 instructions (3,301,
+4,228 and 4,493 before, counted in turn): +27, +24 and +21, the marks (a load and a store
+of a word, and the hash's walk of the batch's hints), and a quarter of a cache miss more
+a request (the words are 4 MB, and a random key's is seldom in the cache). With maxmemory
+set and not reached, the read of the heap's account adds 15, 15 and 13. The eviction
+itself is slower than Redis's: 200,000 keys evicted in 3.6 s, against 0.3 s for Redis,
+about 190,000 instructions a key, most of them in the walks of the samples, whose buckets
+are mostly empty as the database empties (#155). An earlier version took twice as many,
+380,000 a key. Its samples read the buckets with the trie's scan, which recurses on the
+stack (the runtime's work loop) and so takes the nodes it is passed: a node it reads is
+shared with the database, and taking it copied it. They now read the buckets with a walk
+of the hash's digits written as a loop (`tget_kb`), which reads the nodes lent; the
+databases are read in place where they sit (`dbs.len`, not `List.length`, which takes the
+list it counts), and the pool is handed from one pick to the next rather than copied.
+
+**What the trie keeps.** A database's trie keeps its nodes when its keys are deleted:
+200,000 keys deleted leave 8.6 MB, a million 9.0 MB (the trie's 2^20 buckets, which a few
+hundred thousand keys fill). Eviction counts them, so it evicts more keys than Redis
+would to get within the limit: halving the memory of 200,000 keys leaves 27,904 of them,
+and a limit of a tenth leaves none, where the nodes alone are past the limit. Redis does
+the like on a smaller scale: its hash table keeps its buckets until the cron shrinks it,
+and the first eviction of 200,000 keys to a tenth evicted them all on Redis too. A
+database the eviction empties gets a fresh trie, so that what the heap holds comes down.
+Pruning the nodes a delete empties would end it (DIRECTIONS.md, #155).
+
+**Tests.** `tests/maxmemory_test.py` runs in make test. Transcripts on BendKV and
+redis-server, compared line by line: the commands refused past maxmemory with noeviction,
+and in MULTI (the transaction flagged, EXEC aborted, a transaction of reads let run,
+DISCARD let run), with INFO's counts of the refused calls and of the OOM error; OBJECT
+IDLETIME as keys are read, written, touched (TOUCH) and looked at without being touched
+(TTL, TYPE, EXISTS), and OBJECT FREQ under an LFU policy (5 for a key made, 6 after a
+read, the counter's steps with lfu-log-factor 0), each refused under the other kind of
+policy; and the `evicted` event of a key evicted at once by a CONFIG SET of maxmemory
+(unit/pubsub.tcl). Then Redis's own tests of the policies (unit/maxmemory.tcl, which its
+suite runs only against a server it starts itself), on both: for each policy, keys added
+past a limit of the memory used and 100 KB, then as many again, and the memory stays
+within the limit and 4 KB; with keys without a time the volatile policies refuse writes
+where the allkeys ones evict; and the volatile policies evict only keys with a time. And
+BendKV alone: the warnings of its log; an eviction that runs out of time and goes on with
+no request to drive it (200,000 keys, the memory back within the limit, `evicted_keys`
+and the time past maxmemory counted); keys evicted with the append-only file on, gone
+from the file too (a restart holds what was left); and an eviction while a rewrite runs,
+which leaves between half and all of 300,000 keys rather than none. Redis's suite: 805 of
+the 1,677 tests Redis passes (48.0%; 797 before): unit/pubsub's test of `evicted` events
+and the two it held back, unit/multi's DISCARD past maxmemory and its EXEC aborted after
+a command refused while it queued, unit/introspection-2's test that TTL, TYPE and EXISTS
+leave a key's last use as it was, and unit/lazyfree's two tests of the memory UNLINK and
+FLUSHDB ASYNC give back. The runtime test `tests/io/heap.bend` of the twenty-ninth patch
+passes on C and on JS, and `tests/run/mem_cells.bend` of the thirtieth on C, on JS and in
+the interpreter.
+
+**Two ways to stop the server.** The tests found two, both the old trap of `Bool.pick`,
+which works out both its values. maxmemory's parameters were read as numbers with one: a
+maxmemory of 20 digits took its cap of 10^14, but was parsed all the same, past a `Nat`,
+and the runtime stopped. And INFO's `maxmemory_human`, since INFO had a memory section,
+worked out the value in each unit and took the one that applies: the kilobytes of 2^64-1
+are past a `Nat` too. Both are matches now, which work out the branch taken alone, and
+the test sets maxmemory up to 2^64-1 and reads INFO back against Redis's.
+
+**Proofs.** An eviction is a DEL by the proved `R.exec` on its database, and its entry in
+the append-only file is that DEL: the laws of DEL and of recovery cover it as they cover
+a client's. Which key is evicted, and when, is the server's, as the sweep's choice of
+expired keys is, and is tested, not proved. The access words are the runtime's alone: no
+law reads them, and the proved session answers OBJECT IDLETIME and FREQ as for a key no
+command used since the start, its reply then made again from the word by the server
+(`bg.obj`); a proved function cannot read `Mem.cell`, since the checker refuses proofs
+that rest on unsafe code. The law `config_pass` says what a CONFIG SET that succeeds
+leaves: the server's eviction state reads its maxmemory parameters again, and keeps its
+random numbers.
+
+**Where BendKV differs.** The same maxmemory holds another number of keys, since a key
+takes other bytes in BendKV's heap than in Redis's allocator, and the trie's nodes stay
+(above). A word of use is shared by keys whose hashes have the same low twenty bits, in
+any database, and no delete clears it: a new key may find an old key's word. A request
+marks its first key alone (MGET's others, MSET's and DEL's are not marked), before its
+batch runs, whether the key is there or not, and a command queued in a transaction marks
+its key as it is queued. Redis marks a key as a command finds it, and not while a child
+runs; BendKV marks it during a rewrite too. The random step of an LFU counter mixes the
+key's hash and word with the time and the request's place in its batch, where Redis calls
+`rand()`. The volatile policies sample the database's keys for those with a time, where
+Redis samples its table of keys with a time; `volatile-random` takes the first key with a
+time from a random bucket on, which is not quite uniform. An eviction writes DEL to the
+append-only file even with `lazyfree-lazy-eviction` (Redis writes UNLINK; both replay to
+the same). Evictions are about ten times slower than Redis's.

@@ -1,0 +1,198 @@
+diff --git a/bend2/base.bend b/bend2/base.bend
+index 3e7d47a..b436ab8 100644
+--- a/bend2/base.bend
++++ b/bend2/base.bend
+@@ -247,6 +247,13 @@ def IO.clock() -> IO(U32 & U32):
+   import "./effs/clock.c"
+   import "./effs/clock.js"
+ 
++# The heap's account, in bytes: what its live values hold (an allocator's
++# allocated bytes), and what it has taken from the system, which it keeps
++# (its active bytes).
++def IO.heap() -> IO(Nat & Nat):
++  import "./effs/heap.c"
++  import "./effs/heap.js"
++
+ def Chan.new(-A: Type, room: U32) -> IO(Chan(A)):
+   import "./effs/chan.c"
+   import "./effs/chan.js"
+diff --git a/bend2/comp.ts b/bend2/comp.ts
+index 41cdfc6..abd027a 100644
+--- a/bend2/comp.ts
++++ b/bend2/comp.ts
+@@ -4385,6 +4385,7 @@ static u32    bank_lock;
+ static u32             pool_size;
+ static u32             pool_row;
+ static u32             pool_done;
++static bool            pool_up;
+ static pthread_mutex_t pool_lock = PTHREAD_MUTEX_INITIALIZER;
+ static pthread_cond_t  pool_wake = PTHREAD_COND_INITIALIZER;
+ static pthread_cond_t  pool_join = PTHREAD_COND_INITIALIZER;
+@@ -7058,11 +7059,10 @@ static void* pool_work(void* arg) {
+ }
+ 
+ OUTLINE void pool_open(void) {
+-  static bool up;
+-  if (up) {
++  if (pool_up) {
+     return;
+   }
+-  up = true;
++  pool_up = true;
+   for (u32 w = 1; w < pool_size; w += 1) {
+     pthread_t tid;
+     if (pthread_create(&tid, NULL, pool_work, (void*)(uintptr_t)w)) {
+diff --git a/bend2/effs/heap.c b/bend2/effs/heap.c
+new file mode 100644
+index 0000000..5e6e148
+--- /dev/null
++++ b/bend2/effs/heap.c
+@@ -0,0 +1,43 @@
++// IO
++// ==
++
++// The heap's account, in bytes: what its live nodes hold, and what it has
++// taken from the corpus (its bump, which a free never gives back), as an
++// allocator's allocated and active bytes. A node is live from its
++// allocation to its free; the free chains of the rows in use (the main
++// loop's, the pool's once it has opened, every other open event loop's),
++// their parked generations and the bank's generations are not. Other
++// threads' rows are read as they are: the account may be off by the
++// nodes they move meanwhile.
++static u64 io_heap_free_row(const u64* alc) {
++  u64 n = 0;
++  for (u32 c = 0; c < NCLS_ALL; c += 1) {
++    n += alc[NCLS_ALL + c];
++    n += alc[2 * NCLS_ALL + c] ? (u64)KEEP(c) << c : 0;
++  }
++  return n;
++}
++
++Term io_heap_run(Env e, Term* f, IoWork* w) {
++  u64* H    = CORPUS;
++  u64  bump = (u64)(a32_load(a32_at(H, H_BUMP)) - 1) << PAGE_BITS;
++  u64  free = io_heap_free_row(ALC[0]);
++  for (u32 r = 1; pool_up && r < pool_size; r += 1) {
++    free += io_heap_free_row(ALC[r]);
++  }
++  for (u32 i = 1; i < IO_LOOPS; i += 1) {
++    if (__atomic_load_n(&io_loops[i].up, __ATOMIC_ACQUIRE)) {
++      free += io_heap_free_row(ALC[CUBE_T + i]);
++    }
++  }
++  for (u32 c = 0; c < NCLS_ALL; c += 1) {
++    u32 n = __atomic_load_n(&bank_at(H, c)->rd, __ATOMIC_RELAXED);
++    free += (u64)n * ((u64)KEEP(c) << c);
++  }
++  u64 used = bump > free ? bump - free : 0;
++  return io_tup(e, used * 8, bump * 8);
++}
++
++static void __attribute__((constructor)) io_heap_use(void) {
++  io_eff(CID(IO.heap), io_heap_run);
++}
+diff --git a/bend2/effs/heap.js b/bend2/effs/heap.js
+new file mode 100644
+index 0000000..1e18533
+--- /dev/null
++++ b/bend2/effs/heap.js
+@@ -0,0 +1,28 @@
++// IO
++// ==
++
++// The heap's account, in bytes: what live values hold after a collection,
++// and what the heap has taken. Under Bun, JavaScriptCore's own account
++// (bun:jsc), which process.memoryUsage reads only now and then; elsewhere
++// process.memoryUsage; 0 and 0 where neither is.
++function io_heap() {
++  let used = 0;
++  let total = 0;
++  if (typeof Bun !== "undefined") {
++    Bun.gc(true);
++    try {
++      const s = require("bun:jsc").heapStats();
++      used = s.heapSize;
++      total = s.heapCapacity;
++    } catch (e) {
++    }
++  }
++  if (used === 0 && typeof process !== "undefined") {
++    const m = process.memoryUsage();
++    used = m.heapUsed;
++    total = m.heapTotal;
++  }
++  return io_tup(BigInt(used), BigInt(Math.max(used, total)));
++}
++
++io_eff(CID(IO.heap), io_heap);
+diff --git a/tests/io/heap.bend b/tests/io/heap.bend
+new file mode 100644
+index 0000000..4ccffd0
+--- /dev/null
++++ b/tests/io/heap.bend
+@@ -0,0 +1,65 @@
++# io (io_heap): IO.heap's account: the live bytes are at most the heap's,
++# and a list of a hundred thousand cells raises the live bytes by more than
++# a megabyte. (On the C lane a dropped list's cells go back to the free
++# chains and leave the live bytes; a JS engine's collector may keep one it
++# still finds on its stack, so the test does not ask.)
++import Base
++
++type Mem is Data:
++  Mem{used: Nat, heap: Nat}
++
++def mem.of(p: Nat & Nat) -> Mem:
++  (u, h) = p
++  Mem{u, h}
++
++# how many cells xs has, read through in a loop
++def count(xs: List<&2, Nat>, +n: Nat) -> Nat:
++  match xs:
++    case Nil{}:
++      n
++    case Con{x, rest}:
++      count(rest, 1n+n)
++
++def ok(name: String, c: Bool) -> IO(Unit):
++  match c:
++    case True{}:
++      IO.print(name)
++    case False{}:
++      IO.die(Unit, 1, "FAIL " ++ name)
++
++def within(a: Mem) -> Bool:
++  match a:
++    case Mem{u, h}:
++      Nat.is_le(u, h)
++
++def grew(a: Mem, b: Mem) -> Bool:
++  match a b:
++    case Mem{u0, h0} Mem{u1, h1}:
++      Nat.is_lt(Nat.add(u0, 1000000n), u1)
++
++def counted(+a: Mem, +b: Mem) -> IO(Unit):
++  do IO<Unit>:
++    Unit <- ok("a list of 100000 cells holds more than a megabyte", grew(a, b))
++    ok("and the live bytes are within the heap's then", within(b))
++
++# the list read through first, so that every way of running it has built
++# it before the heap is asked, and read again after, so that it is live
++def held(+a: Mem, +xs: List<&2, Nat>) -> IO(Unit):
++  +n = count(xs, 0n)
++  do IO<Unit>:
++    Unit <- ok("the live bytes are within the heap's", within(a))
++    Unit <- ok("its length is 100000", Nat.is_eq(n, 100000n))
++    b : Nat & Nat <- IO.heap()
++    Unit <- counted(a, mem.of(b))
++    ok("and read again, still 100000", Nat.is_eq(count(xs, 0n), 100000n))
++
++def main() -> IO(Unit):
++  do IO<Unit>:
++    a : Nat & Nat <- IO.heap()
++    held(mem.of(a), List.range(100000n))
++
++#|the live bytes are within the heap's
++#|its length is 100000
++#|a list of 100000 cells holds more than a megabyte
++#|and the live bytes are within the heap's then
++#|and read again, still 100000

@@ -1,6 +1,6 @@
 # Patches to Bend
 
-Twenty-eight patches to the Bend compiler (`bendlang/bend` @ `1cce499`, Bend 2.0.35).
+Thirty patches to the Bend compiler (`bendlang/bend` @ `1cce499`, Bend 2.0.35).
 They apply in order, each on top of the one before:
 
 1. **`lazy-seal.patch`** — lazy sealing of reference counts: `bend2/comp.ts`, +46/−3.
@@ -346,17 +346,48 @@ They apply in order, each on top of the one before:
    replaces it, the new name reads its bytes, the old one is gone (`ENOENT`), a handle
    opened before the rename goes on writing to the file under its new name; a rename and
    an unlink of a name that is not there give `ENOENT`.
+29. **`heap.patch`** — the heap's account: what `used_memory` and eviction by `maxmemory`
+   rest on. `IO.heap()` gives two numbers in bytes: what the heap's live values hold
+   (what it has taken from the corpus, the pointer it grows by, less the free chains of
+   the allocator's rows in use: the main loop's, the pool's while it is open, and those of
+   the other open event loops, their parked generations and the bank's generations) and
+   what the heap has taken from the corpus (which it never gives back), as an allocator's
+   `allocated` and `active` bytes. The rows of other threads are read as they are: the
+   account may be off by the nodes they move meanwhile. The account is a walk of the 32
+   classes of a row and of the bank, not of the nodes, so it can be asked for at each
+   group of requests. The flag of an open pool (`pool_up`) moves out of `pool_open` into
+   the file. Under JS, JavaScriptCore's account after a collection (`bun:jsc`,
+   `heapStats`; Bun's `process.memoryUsage` is updated only now and then), and where there
+   is none, `process.memoryUsage`. `bend2/base.bend` (+7), `bend2/comp.ts` (±3),
+   `bend2/effs/heap.c` (+43), `heap.js` (+28) and the test `tests/io/heap.bend`, on C and
+   on JS: the live bytes are no more than those taken, and a list of a hundred thousand
+   cells raises them by more than a megabyte (the test does not ask that a dropped list
+   gives them back: the JS collector may keep it, finding it on its stack).
+30. **`mem-cells.patch`** — words outside the heap: what the table of when each key was
+   last used rests on, for LRU and LFU eviction and `OBJECT IDLETIME`/`OBJECT FREQ`.
+   `Mem.touch(k, i, v)` puts `v` in the word of the low 20 bits of `i` and gives `k` back,
+   `Mem.cell(i)` reads the word (0 for a word never written). There are 2^20 words of 32
+   bits, outside the heap, made at the first write (zero pages until they are written).
+   The words belong to the one computation that writes and reads them (the actor: when
+   each of its keys was last used, a word per key's hash), so they need no locks: marking
+   a key costs one store, not a value that would have to be threaded through every call
+   (a `Data` type cannot hold an `Array`). Their bodies in Bend are stubs (`k` and `0`),
+   as `Chan.mark`'s are: no law reads these words. `bend2/base.bend` (+15),
+   `bend2/comp.ts` (+33: two operations and the words in C) and the test
+   `tests/run/mem_cells.bend`, on C, on JS and in the interpreter: a word touched reads
+   back, one never touched is 0, and an index past 2^20 falls in the word of its low 20
+   bits.
 
 What the patches do and what they give is worked through in
 [../PERFORMANCE.md](../docs/PERFORMANCE.md), sections 3–6, 7.7–7.17, 7.23–7.25, 16, 39,
-40, 41 and 44, and what each costs in tokens and what it gave, in section 12. There, and
-in the sections before 14, the patches are numbered the old way: the sixteenth was
+40, 41, 44, 47 and 48, and what each costs in tokens and what it gave, in section 12.
+There, and in the sections before 14, the patches are numbered the old way: the sixteenth was
 `effect-pairs.patch` (`Chan.call` and `TCP.post_recv_raw`, one step of the event loop
 each where there had been two), and their 17–20 are today's 16–19. The sixteenth, and
 `TCP.post_list` of the eleventh, were taken out together with the paths of BendKV they
 served (section 14); they remain in the branch
 [`archive/shards`](https://github.com/littleBro/BendKV/tree/archive/shards). With the
-patches `comp.ts` takes 101,922 `ttok` tokens against the Bend repository's cap of 64
+patches `comp.ts` takes 102,266 `ttok` tokens against the Bend repository's cap of 64
 thousand (the original takes 62,940): to upstream them, they will have to be made
 smaller.
 
@@ -364,7 +395,7 @@ From the `bendkv/` directory:
 
 ```bash
 git clone https://github.com/bendlang/bend ../bend-patched
-sh bend-patches/apply.sh ../bend-patched   # the bendkv-patches branch from 1cce499 with twenty-seven patches
+sh bend-patches/apply.sh ../bend-patched   # the bendkv-patches branch from 1cce499 with thirty patches
 bun ../bend-patched/bend2/main.ts server.bend -o build/bendkv
 ```
 
@@ -384,8 +415,10 @@ of types wider than 32 words in every program, the twenty-second speeds up
 where a program calls `TCP.post`, the twenty-fourth changes the type of the size in
 `File.truncate` (`Nat` instead of `U32`) and adds the effect `File.sync_dir`, the
 twenty-fifth only adds the effects `TCP.watch` and `TCP.unwatch`, and the twenty-sixth
-fixes the fifth where the fifth acts, and the twenty-seventh only adds the effects
-`TCP.name` and `TCP.kill` and the channel marks `Chan.mark` and `Chan.marked`.
+fixes the fifth where the fifth acts, the twenty-seventh only adds the effects
+`TCP.name` and `TCP.kill` and the channel marks `Chan.mark` and `Chan.marked`, the
+twenty-eighth the effects `File.rename` and `File.unlink`, the twenty-ninth the effect
+`IO.heap`, and the thirtieth the words `Mem.touch` and `Mem.cell`.
 The theory does not change:
 `String` in the proofs is still a list, and `IO` a function of `R` and `k`.
 

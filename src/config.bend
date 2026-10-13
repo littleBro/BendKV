@@ -8,9 +8,12 @@
 # BendKV acts on few of them: requirepass is the password (session.bend),
 # hz is capped as Redis caps it, and the port, the addresses, TLS and the
 # append-only file cannot change while the server runs, so a new value for
-# them fails as it fails in Redis when Redis cannot apply it. The others
-# are kept and read back, and tune nothing: BendKV has no eviction, no
-# replication and no encodings for them to tune.
+# them fails as it fails in Redis when Redis cannot apply it; maxmemory,
+# maxmemory-policy, maxmemory-samples, maxmemory-eviction-tenacity,
+# lfu-log-factor and lfu-decay-time limit the memory and choose what is
+# evicted (session.bend and server.bend, Memory). The others are kept and
+# read back, and tune nothing: BendKV has no replication and no encodings
+# for them to tune.
 
 import Base
 import ./redis.bend as R

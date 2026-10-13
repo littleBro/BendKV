@@ -1,0 +1,104 @@
+diff --git a/bend2/base.bend b/bend2/base.bend
+index b436ab8..b3eb165 100644
+--- a/bend2/base.bend
++++ b/bend2/base.bend
+@@ -2536,6 +2536,21 @@ def List.show(~a: Quant, ~A: Kind(a), ~f: A -> String, xs: List<a, A>) ->
+ def Mem.prefetch(-A: Data, +x: A, k: U32) -> U32:
+   k
+ 
++# Mem.touch(k, i, v) is k, and Mem.cell(i) is 0. On the C and JS lanes
++# they also keep 2^20 words outside the heap: touch sets the word of i's
++# low 20 bits to v, and cell reads it back (0 for one never set). The
++# words belong to the one computation that touches and reads them, as an
++# actor keeps when each of its keys was last used (a word per key's hash),
++# so a touch costs a store, not a value threaded through every call. No
++# law reads a word: these values are the compiled lanes' alone.
++@unsafe
++def Mem.touch(k: U32, +i: U32, +v: U32) -> U32:
++  k
++
++@unsafe
++def Mem.cell(+i: U32) -> U32:
++  0
++
+ # Array
+ # -----
+ 
+diff --git a/bend2/comp.ts b/bend2/comp.ts
+index abd027a..55f5d47 100644
+--- a/bend2/comp.ts
++++ b/bend2/comp.ts
+@@ -285,6 +285,12 @@ const OPERATIONS: Record<string, Intr> = Object.setPrototypeOf({
+   string_slice: { C: "str_slice(e, $0, $1, $2)", brw: [true, false, false] },
+   mem_prefetch: { C: "mem_prefetch(e.mem, $0, $1)", JS: "$1",
+     brw: [true, false] },
++  mem_touch: { C: "mem_touch($0, $1, $2)",
++    JS: "((globalThis.MEM_CELLS ??= new Uint32Array(1048576))[$1 & 0xFFFFF] = $2, $0)",
++    brw: [false, true, true] },
++  mem_cell: { C: "mem_cell($0)",
++    JS: "(globalThis.MEM_CELLS ? globalThis.MEM_CELLS[$0 & 0xFFFFF] : 0)",
++    brw: [true] },
+   chan_mark: { C: "chan_mark($0, $1, $2)",
+     JS: "($0.mark = [$1 & 0xFFFF, $2], $0)", brw: [false, false, false] },
+   chan_marked: { C: ["chan_marked($0)", "($1 & 0xFFFF)", "($1 >> 16)"],
+@@ -4763,6 +4769,33 @@ INLINE u64 mem_prefetch(DEV u64* H, Term t, u64 k) {
+   return k;
+ }
+ 
++// The cells of Mem.touch and Mem.cell: 2^20 words outside the heap, made
++// on the first touch (zero pages until written), indexed by an index's low
++// 20 bits. They belong to the one computation that touches and reads them
++// (an actor, of when each of its keys was last used), so they take no lock.
++#if !DEVICE
++static u32* mem_cells;
++
++OUTLINE void mem_cells_make(void) {
++  mem_cells = calloc(1u << 20, sizeof(u32));
++  if (mem_cells == NULL) {
++    err_fail("host allocation failed");
++  }
++}
++
++INLINE u64 mem_touch(u64 k, u64 i, u64 v) {
++  if (mem_cells == NULL) {
++    mem_cells_make();
++  }
++  mem_cells[i & 0xFFFFF] = (u32)v;
++  return k;
++}
++
++INLINE u64 mem_cell(u64 i) {
++  return mem_cells == NULL ? 0 : mem_cells[i & 0xFFFFF];
++}
++#endif
++
+ // The marks of channels (Chan.mark, Chan.marked): for each channel's row
+ // (its handle's low 24 bits, the generation above them), the generation it
+ // was marked under, a word and a time. They belong to the one computation
+diff --git a/tests/run/mem_cells.bend b/tests/run/mem_cells.bend
+new file mode 100644
+index 0000000..0af7fb2
+--- /dev/null
++++ b/tests/run/mem_cells.bend
+@@ -0,0 +1,21 @@
++# run (mem_cells): Mem.touch keeps a word per index's low 20 bits, which
++# Mem.cell reads back; a word never touched reads 0, and an index past 2^20
++# names the word of its low 20 bits. A touch gives back its first argument,
++# through which the touches are ordered.
++import Base
++
++def touches(+k: U32) -> U32:
++  Mem.touch(Mem.touch(Mem.touch(k, 5, 50), 6, 60), 1048581, 70)
++
++def main() -> IO(Unit):
++  +k = touches(9)
++  do IO<Unit>:
++    Unit <- IO.print(U32.show(k))
++    Unit <- IO.print(U32.show(Mem.cell(5)))
++    Unit <- IO.print(U32.show(Mem.cell(6)))
++    IO.print(U32.show(Mem.cell(7)))
++
++#|9
++#|70
++#|60
++#|0

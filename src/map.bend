@@ -282,6 +282,26 @@ def kput(ok: Bool, +k: String, acc: List<&2, String>) -> List<&2, String>:
     case False{}:
       acc
 
+# whether a scan of mode takes an entry of time e at now: 0 when it is
+# there, 1 when its time has passed, 2 when it is there and has a time
+def scan.ok(+mode: Nat, +now: Nat, +e: Nat) -> Bool:
+  match mode:
+    case 0n:
+      live(now, e)
+    case 1n:
+      Bool.not(live(now, e))
+    case _:
+      Bool.and(live(now, e), Nat.is_lt(0n, e))
+
+# the keys of bucket b that a scan of mode takes at now (scan.ok), before
+# acc (eviction's samples: tget_kb)
+def bkeys(-V: Data, +b: Trie<V>, +now: Nat, +mode: Nat, acc: List<&2, String>) -> List<&2, String>:
+  match b:
+    case Ent{+k, +v, +e, +rest}:
+      bkeys(V, rest, now, mode, kput(scan.ok(mode, now, e), k, acc))
+    case _:
+      acc
+
 # the value of the first entry for k; same is bhead(V, k, b), computed
 # before b is passed on, so that b is not shared
 def bget.go(-V: Data, +k: String, b: Trie<V>, same: Bool) -> Maybe<&2, V>:
@@ -617,6 +637,48 @@ def tget_kx(-V: Data, d: Nat, +t: Trie<V>, x: Hex, +h: U32, +k: String) -> Nat:
     case 1n+p other _:
       0n
 
+# the keys of the bucket a walk ends at that a scan of mode takes at now
+# (bkeys), before acc: eviction's samples read buckets one walk each,
+# which reads the trie lent, as get's do
+def tget_kb(-V: Data, d: Nat, +t: Trie<V>, x: Hex, +h: U32, +now: Nat, +mode: Nat, acc: List<&2, String>) -> List<&2, String>:
+  match d t x:
+    case 0n t0 _:
+      bkeys(V, t0, now, mode, acc)
+    case 1n+p Node{c0, c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13, c14, c15} H0{}:
+      tget_kb(V, p, c0, hex(shr4(h)), shr4(h), now, mode, acc)
+    case 1n+p Node{c0, c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13, c14, c15} H1{}:
+      tget_kb(V, p, c1, hex(shr4(h)), shr4(h), now, mode, acc)
+    case 1n+p Node{c0, c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13, c14, c15} H2{}:
+      tget_kb(V, p, c2, hex(shr4(h)), shr4(h), now, mode, acc)
+    case 1n+p Node{c0, c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13, c14, c15} H3{}:
+      tget_kb(V, p, c3, hex(shr4(h)), shr4(h), now, mode, acc)
+    case 1n+p Node{c0, c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13, c14, c15} H4{}:
+      tget_kb(V, p, c4, hex(shr4(h)), shr4(h), now, mode, acc)
+    case 1n+p Node{c0, c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13, c14, c15} H5{}:
+      tget_kb(V, p, c5, hex(shr4(h)), shr4(h), now, mode, acc)
+    case 1n+p Node{c0, c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13, c14, c15} H6{}:
+      tget_kb(V, p, c6, hex(shr4(h)), shr4(h), now, mode, acc)
+    case 1n+p Node{c0, c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13, c14, c15} H7{}:
+      tget_kb(V, p, c7, hex(shr4(h)), shr4(h), now, mode, acc)
+    case 1n+p Node{c0, c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13, c14, c15} H8{}:
+      tget_kb(V, p, c8, hex(shr4(h)), shr4(h), now, mode, acc)
+    case 1n+p Node{c0, c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13, c14, c15} H9{}:
+      tget_kb(V, p, c9, hex(shr4(h)), shr4(h), now, mode, acc)
+    case 1n+p Node{c0, c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13, c14, c15} H10{}:
+      tget_kb(V, p, c10, hex(shr4(h)), shr4(h), now, mode, acc)
+    case 1n+p Node{c0, c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13, c14, c15} H11{}:
+      tget_kb(V, p, c11, hex(shr4(h)), shr4(h), now, mode, acc)
+    case 1n+p Node{c0, c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13, c14, c15} H12{}:
+      tget_kb(V, p, c12, hex(shr4(h)), shr4(h), now, mode, acc)
+    case 1n+p Node{c0, c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13, c14, c15} H13{}:
+      tget_kb(V, p, c13, hex(shr4(h)), shr4(h), now, mode, acc)
+    case 1n+p Node{c0, c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13, c14, c15} H14{}:
+      tget_kb(V, p, c14, hex(shr4(h)), shr4(h), now, mode, acc)
+    case 1n+p Node{c0, c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13, c14, c15} H15{}:
+      tget_kb(V, p, c15, hex(shr4(h)), shr4(h), now, mode, acc)
+    case 1n+p other _:
+      acc
+
 # tget_k answering k's entry, its value and its time (bent)
 def tget_ke(-V: Data, d: Nat, +t: Trie<V>, x: Hex, +h: U32, +k: String) -> Maybe<&2, Item<V>>:
   match d t x:
@@ -929,7 +991,8 @@ def tsize(-V: Data, t: Trie<V>) -> Nat:
 # an iteration to its last is found by one of them. A subtrie that lies
 # before the cursor, or at or past the bound to (RANDOMKEY's), is
 # skipped whole. The sweep of expired keys (reap) scans the same way for
-# the keys whose time has passed (dead).
+# the keys whose time has passed, and eviction's samples for the keys
+# there, or those there with a time (the scan's mode: scan.ok).
 type Scan is Data:
   Scan{want: Nat, acc: List<&2, String>}
   Stop{at: Nat, acc: List<&2, String>}
@@ -941,34 +1004,34 @@ def bscan.end(done: Bool, +base: Nat, want: Nat, acc: List<&2, String>) -> Scan:
     case False{}:
       Scan{want, acc}
 
-# the keys of the bucket b of index base that are there at now (or, when
-# dead, whose time has passed), before acc, counted off want: every entry
-# when all (SCAN's COUNT bounds the entries it reads, as Redis's bounds
-# the work; and so the sweep's), else the keys taken only (RANDOMKEY's
-# window)
-def bscan(-V: Data, +b: Trie<V>, +base: Nat, +want: Nat, acc: List<&2, String>, +now: Nat, +all: Bool, +dead: Bool) -> Scan:
+# the keys of the bucket b of index base that the scan's mode takes at
+# now (scan.ok), before acc, counted off want: every entry when all
+# (SCAN's COUNT bounds the entries it reads, as Redis's bounds the work;
+# and so the sweep's), else the keys taken only (RANDOMKEY's window,
+# eviction's samples)
+def bscan(-V: Data, +b: Trie<V>, +base: Nat, +want: Nat, acc: List<&2, String>, +now: Nat, +all: Bool, +mode: Nat) -> Scan:
   match b:
-    case Ent{+k, v, +e, +rest}:
-      +ok = Bool.xor(live(now, e), dead)
-      bscan(V, rest, base, Nat.sub(want, Bool.pick(Nat, Bool.or(all, ok), 1n, 0n)), kput(ok, k, acc), now, all, dead)
+    case Ent{+k, +v, +e, +rest}:
+      +ok = scan.ok(mode, now, e)
+      bscan(V, rest, base, Nat.sub(want, Bool.pick(Nat, Bool.or(all, ok), 1n, 0n)), kput(ok, k, acc), now, all, mode)
     case _:
       bscan.end(Nat.is_eq(want, 0n), base, want, acc)
 
 # BEGIN gen_trie: scan
-def tscan(-V: Data, +d: Nat, +t: Trie<V>, skip: Bool, +base: Nat, +span: Nat, +from: Nat, +to: Nat, +now: Nat, +all: Bool, +dead: Bool, s: Scan) -> Scan:
-  match d t skip s:
-    case _ _ True{} s:
+def tscan(-V: Data, +d: Nat, skip: Bool, +t: Trie<V>, +base: Nat, +span: Nat, +from: Nat, +to: Nat, +now: Nat, +all: Bool, +mode: Nat, s: Scan) -> Scan:
+  match d skip t s:
+    case _ True{} _ s:
       s
-    case _ _ False{} Stop{at, acc}:
+    case _ False{} _ Stop{at, acc}:
       Stop{at, acc}
-    case 0n b False{} Scan{want, acc}:
-      bscan(V, b, base, want, acc, now, all, dead)
-    case 1n+p Tip{} False{} s:
+    case 0n False{} b Scan{want, acc}:
+      bscan(V, b, base, want, acc, now, all, mode)
+    case 1n+p False{} Tip{} s:
       s
-    case 1n+p Node{c0, c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13, c14, c15} False{} s:
+    case 1n+p False{} Node{+c0, +c1, +c2, +c3, +c4, +c5, +c6, +c7, +c8, +c9, +c10, +c11, +c12, +c13, +c14, +c15} s:
       +q = Nat.div(span, 16n)
-      tscan(V, p, c15, Bool.or(Nat.is_le(Nat.add(base, Nat.mul(16n, q)), from), Nat.is_le(to, Nat.add(base, Nat.mul(15n, q)))), Nat.add(base, Nat.mul(15n, q)), q, from, to, now, all, dead, tscan(V, p, c14, Bool.or(Nat.is_le(Nat.add(base, Nat.mul(15n, q)), from), Nat.is_le(to, Nat.add(base, Nat.mul(14n, q)))), Nat.add(base, Nat.mul(14n, q)), q, from, to, now, all, dead, tscan(V, p, c13, Bool.or(Nat.is_le(Nat.add(base, Nat.mul(14n, q)), from), Nat.is_le(to, Nat.add(base, Nat.mul(13n, q)))), Nat.add(base, Nat.mul(13n, q)), q, from, to, now, all, dead, tscan(V, p, c12, Bool.or(Nat.is_le(Nat.add(base, Nat.mul(13n, q)), from), Nat.is_le(to, Nat.add(base, Nat.mul(12n, q)))), Nat.add(base, Nat.mul(12n, q)), q, from, to, now, all, dead, tscan(V, p, c11, Bool.or(Nat.is_le(Nat.add(base, Nat.mul(12n, q)), from), Nat.is_le(to, Nat.add(base, Nat.mul(11n, q)))), Nat.add(base, Nat.mul(11n, q)), q, from, to, now, all, dead, tscan(V, p, c10, Bool.or(Nat.is_le(Nat.add(base, Nat.mul(11n, q)), from), Nat.is_le(to, Nat.add(base, Nat.mul(10n, q)))), Nat.add(base, Nat.mul(10n, q)), q, from, to, now, all, dead, tscan(V, p, c9, Bool.or(Nat.is_le(Nat.add(base, Nat.mul(10n, q)), from), Nat.is_le(to, Nat.add(base, Nat.mul(9n, q)))), Nat.add(base, Nat.mul(9n, q)), q, from, to, now, all, dead, tscan(V, p, c8, Bool.or(Nat.is_le(Nat.add(base, Nat.mul(9n, q)), from), Nat.is_le(to, Nat.add(base, Nat.mul(8n, q)))), Nat.add(base, Nat.mul(8n, q)), q, from, to, now, all, dead, tscan(V, p, c7, Bool.or(Nat.is_le(Nat.add(base, Nat.mul(8n, q)), from), Nat.is_le(to, Nat.add(base, Nat.mul(7n, q)))), Nat.add(base, Nat.mul(7n, q)), q, from, to, now, all, dead, tscan(V, p, c6, Bool.or(Nat.is_le(Nat.add(base, Nat.mul(7n, q)), from), Nat.is_le(to, Nat.add(base, Nat.mul(6n, q)))), Nat.add(base, Nat.mul(6n, q)), q, from, to, now, all, dead, tscan(V, p, c5, Bool.or(Nat.is_le(Nat.add(base, Nat.mul(6n, q)), from), Nat.is_le(to, Nat.add(base, Nat.mul(5n, q)))), Nat.add(base, Nat.mul(5n, q)), q, from, to, now, all, dead, tscan(V, p, c4, Bool.or(Nat.is_le(Nat.add(base, Nat.mul(5n, q)), from), Nat.is_le(to, Nat.add(base, Nat.mul(4n, q)))), Nat.add(base, Nat.mul(4n, q)), q, from, to, now, all, dead, tscan(V, p, c3, Bool.or(Nat.is_le(Nat.add(base, Nat.mul(4n, q)), from), Nat.is_le(to, Nat.add(base, Nat.mul(3n, q)))), Nat.add(base, Nat.mul(3n, q)), q, from, to, now, all, dead, tscan(V, p, c2, Bool.or(Nat.is_le(Nat.add(base, Nat.mul(3n, q)), from), Nat.is_le(to, Nat.add(base, Nat.mul(2n, q)))), Nat.add(base, Nat.mul(2n, q)), q, from, to, now, all, dead, tscan(V, p, c1, Bool.or(Nat.is_le(Nat.add(base, Nat.mul(2n, q)), from), Nat.is_le(to, Nat.add(base, Nat.mul(1n, q)))), Nat.add(base, Nat.mul(1n, q)), q, from, to, now, all, dead, tscan(V, p, c0, Bool.or(Nat.is_le(Nat.add(base, Nat.mul(1n, q)), from), Nat.is_le(to, base)), base, q, from, to, now, all, dead, s))))))))))))))))
-    case 1n+p Ent{k, v, e, rest} False{} s:
+      tscan(V, p, Bool.or(Nat.is_le(Nat.add(base, Nat.mul(16n, q)), from), Nat.is_le(to, Nat.add(base, Nat.mul(15n, q)))), c15, Nat.add(base, Nat.mul(15n, q)), q, from, to, now, all, mode, tscan(V, p, Bool.or(Nat.is_le(Nat.add(base, Nat.mul(15n, q)), from), Nat.is_le(to, Nat.add(base, Nat.mul(14n, q)))), c14, Nat.add(base, Nat.mul(14n, q)), q, from, to, now, all, mode, tscan(V, p, Bool.or(Nat.is_le(Nat.add(base, Nat.mul(14n, q)), from), Nat.is_le(to, Nat.add(base, Nat.mul(13n, q)))), c13, Nat.add(base, Nat.mul(13n, q)), q, from, to, now, all, mode, tscan(V, p, Bool.or(Nat.is_le(Nat.add(base, Nat.mul(13n, q)), from), Nat.is_le(to, Nat.add(base, Nat.mul(12n, q)))), c12, Nat.add(base, Nat.mul(12n, q)), q, from, to, now, all, mode, tscan(V, p, Bool.or(Nat.is_le(Nat.add(base, Nat.mul(12n, q)), from), Nat.is_le(to, Nat.add(base, Nat.mul(11n, q)))), c11, Nat.add(base, Nat.mul(11n, q)), q, from, to, now, all, mode, tscan(V, p, Bool.or(Nat.is_le(Nat.add(base, Nat.mul(11n, q)), from), Nat.is_le(to, Nat.add(base, Nat.mul(10n, q)))), c10, Nat.add(base, Nat.mul(10n, q)), q, from, to, now, all, mode, tscan(V, p, Bool.or(Nat.is_le(Nat.add(base, Nat.mul(10n, q)), from), Nat.is_le(to, Nat.add(base, Nat.mul(9n, q)))), c9, Nat.add(base, Nat.mul(9n, q)), q, from, to, now, all, mode, tscan(V, p, Bool.or(Nat.is_le(Nat.add(base, Nat.mul(9n, q)), from), Nat.is_le(to, Nat.add(base, Nat.mul(8n, q)))), c8, Nat.add(base, Nat.mul(8n, q)), q, from, to, now, all, mode, tscan(V, p, Bool.or(Nat.is_le(Nat.add(base, Nat.mul(8n, q)), from), Nat.is_le(to, Nat.add(base, Nat.mul(7n, q)))), c7, Nat.add(base, Nat.mul(7n, q)), q, from, to, now, all, mode, tscan(V, p, Bool.or(Nat.is_le(Nat.add(base, Nat.mul(7n, q)), from), Nat.is_le(to, Nat.add(base, Nat.mul(6n, q)))), c6, Nat.add(base, Nat.mul(6n, q)), q, from, to, now, all, mode, tscan(V, p, Bool.or(Nat.is_le(Nat.add(base, Nat.mul(6n, q)), from), Nat.is_le(to, Nat.add(base, Nat.mul(5n, q)))), c5, Nat.add(base, Nat.mul(5n, q)), q, from, to, now, all, mode, tscan(V, p, Bool.or(Nat.is_le(Nat.add(base, Nat.mul(5n, q)), from), Nat.is_le(to, Nat.add(base, Nat.mul(4n, q)))), c4, Nat.add(base, Nat.mul(4n, q)), q, from, to, now, all, mode, tscan(V, p, Bool.or(Nat.is_le(Nat.add(base, Nat.mul(4n, q)), from), Nat.is_le(to, Nat.add(base, Nat.mul(3n, q)))), c3, Nat.add(base, Nat.mul(3n, q)), q, from, to, now, all, mode, tscan(V, p, Bool.or(Nat.is_le(Nat.add(base, Nat.mul(3n, q)), from), Nat.is_le(to, Nat.add(base, Nat.mul(2n, q)))), c2, Nat.add(base, Nat.mul(2n, q)), q, from, to, now, all, mode, tscan(V, p, Bool.or(Nat.is_le(Nat.add(base, Nat.mul(2n, q)), from), Nat.is_le(to, Nat.add(base, Nat.mul(1n, q)))), c1, Nat.add(base, Nat.mul(1n, q)), q, from, to, now, all, mode, tscan(V, p, Bool.or(Nat.is_le(Nat.add(base, Nat.mul(1n, q)), from), Nat.is_le(to, base)), c0, base, q, from, to, now, all, mode, s))))))))))))))))
+    case 1n+p False{} Ent{+k, +v, +e, +rest} s:
       s
 # END gen_trie: scan
 
@@ -1013,7 +1076,7 @@ def pick.wrap(-V: Data, +t: Trie<V>, +b: Nat, +r: U32, +now: Nat, s: Scan) -> Ma
     case Stop{at, acc}:
       pick.of(acc, r)
     case Scan{want, acc}:
-      pick.of(scan.acc(tscan(V, 5n, t, False{}, 0n, 1048576n, 0n, b, now, False{}, False{}, Scan{want, acc})), r)
+      pick.of(scan.acc(tscan(V, 5n, False{}, t, 0n, 1048576n, 0n, b, now, False{}, 0n, Scan{want, acc})), r)
 
 # API
 # ---
@@ -1118,17 +1181,55 @@ def size(-V: Data, t: Trie<V>) -> Nat:
 # the keys there at now of the buckets from index from on, until want
 # entries are read (Scans); the keys newest first
 def scan(-V: Data, +t: Trie<V>, +from: Nat, want: Nat, +now: Nat) -> Scan:
-  tscan(V, 5n, t, False{}, 0n, 1048576n, from, 1048576n, now, True{}, False{}, Scan{want, Nil{}})
+  tscan(V, 5n, False{}, t, 0n, 1048576n, from, 1048576n, now, True{}, 0n, Scan{want, Nil{}})
 
 # the keys whose time has passed at now of the buckets from index from
 # on, until want entries are read (the sweep of expired keys)
 def reap(-V: Data, +t: Trie<V>, +from: Nat, want: Nat, +now: Nat) -> Scan:
-  tscan(V, 5n, t, False{}, 0n, 1048576n, from, 1048576n, now, True{}, True{}, Scan{want, Nil{}})
+  tscan(V, 5n, False{}, t, 0n, 1048576n, from, 1048576n, now, True{}, 1n, Scan{want, Nil{}})
 
 # a key of t there at now, by r (Random picks), None when there is none
 def pick(-V: Data, +t: Trie<V>, +r: U32, +now: Nat) -> Maybe<&2, String>:
   +b = U32.to_nat(U32.and(r, 1048575))
-  pick.wrap(V, t, b, mix(r), now, tscan(V, 5n, t, False{}, 0n, 1048576n, b, 1048576n, now, False{}, False{}, Scan{16n, Nil{}}))
+  pick.wrap(V, t, b, mix(r), now, tscan(V, 5n, False{}, t, 0n, 1048576n, b, 1048576n, now, False{}, 0n, Scan{16n, Nil{}}))
+
+# Eviction's samples read the buckets one walk each (tget_kb), which reads
+# the trie lent: a scan's walk (tscan) takes each node it reads, which
+# shares it with the trie and costs a copy of it.
+
+# the walk's hash of bucket index b: the index's five hex digits, the
+# highest first (Scans), as the hash's digits from its lowest, which the
+# walks take first
+def bucket.h(+b: Nat) -> U32:
+  +x = U32.from_nat(b)
+  U32.or(U32.or(U32.or(U32.and(U32.shrn(x, 16n), 15), U32.shln(U32.and(U32.shrn(x, 12n), 15), 4n)), U32.or(U32.shln(U32.and(U32.shrn(x, 8n), 15), 8n), U32.shln(U32.and(U32.shrn(x, 4n), 15), 12n))), U32.shln(U32.and(x, 15), 16n))
+
+def keys.len.go(+xs: List<&2, String>, +n: Nat) -> Nat:
+  match xs:
+    case Nil{}:
+      n
+    case Con{k, +rest}:
+      keys.len.go(rest, 1n+n)
+
+# eviction's sample: the keys of left buckets from b on (past the last
+# bucket, from the first), that a scan of mode takes at now, until want
+# of them are found (done)
+def sample.go(-V: Data, +t: Trie<V>, left: Nat, done: Bool, +b: Nat, +now: Nat, +mode: Nat, +want: Nat, acc: List<&2, String>) -> List<&2, String>:
+  match left done:
+    case _ True{}:
+      acc
+    case 0n False{}:
+      acc
+    case 1n+l False{}:
+      +h = bucket.h(b)
+      +ks = tget_kb(V, 5n, t, hex(h), h, now, mode, acc)
+      sample.go(V, t, l, Nat.is_le(want, keys.len.go(ks, 0n)), Nat.mod(1n+b, 1048576n), now, mode, want, ks)
+
+# the keys (mode 0: there at now; 2: there with a time) of win buckets
+# from a random one (r) on, until want of them are found; whole buckets,
+# so that a sample may hold a few more; win 2^20: all of them
+def sample(-V: Data, +t: Trie<V>, +r: U32, +want: Nat, +now: Nat, +mode: Nat, win: Nat) -> List<&2, String>:
+  sample.go(V, t, win, False{}, U32.to_nat(U32.and(r, 1048575)), now, mode, want, Nil{})
 
 # Hashes
 # ------
