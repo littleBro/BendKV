@@ -218,6 +218,11 @@ def stats.err(st: Stats, +k: Nat, +m: String) -> Stats:
       +c = err.code(m)
       Stats{stats.err.ent(Bool.and(Nat.is_eq(Nat.mod(k, 4n), 0n), Nat.is_lt(3n, k)), es, k), cur, pend, errs.add(errs, c, errs.cmp(c, errs)), big.add(total, 1n)}
 
+def stats.failed(st: Stats, +k: Nat) -> Stats:
+  match st:
+    case Stats{es, cur, pend, errs, total}:
+      Stats{ents.add(es, Nat.div(k, 4n), 0n, 0n, 1n), cur, pend, errs, total}
+
 def stats.errs(xs: List<&2, R.Erred>, st: Stats) -> Stats:
   match xs:
     case Nil{}:
@@ -354,9 +359,11 @@ type Boot is Data:
 # what the shell saw last: the wall clock (seconds since 1970 and
 # microseconds), the processor time of the process and of its main
 # thread (user, system; clock ticks of 10 ms), the resident memory, the
-# connections taken since the start and those open
+# connections taken since the start and those open, and the clients that
+# wait (blocked) and those of them with a timeout, as the actor counts
+# them (a connection's facts leave them as they were)
 type Live is Data:
-  ILive{secs: U32, usec: U32, ut: Nat, st: Nat, mut: Nat, mst: Nat, rss: Nat, conns: Nat, clients: Nat}
+  ILive{secs: U32, usec: U32, ut: Nat, st: Nat, mut: Nat, mst: Nat, rss: Nat, conns: Nat, clients: Nat, blk: Nat, tmo: Nat}
 
 # commands run, bytes read and bytes sent
 type Count is Data:
@@ -402,17 +409,17 @@ def samples.zero() -> List<&2, Nat>:
 
 def live.ms(+l: Live) -> Nat:
   match l:
-    case ILive{+secs, +usec, ut, st, mut, mst, rss, conns, clients}:
+    case ILive{+secs, +usec, ut, st, mut, mst, rss, conns, clients, b, t}:
       Nat.add(Nat.mul(U32.to_nat(secs), 1000n), U32.to_nat(U32.div(usec, 1000)))
 
 def live.rss(+l: Live) -> Nat:
   match l:
-    case ILive{secs, usec, ut, st, mut, mst, rss, conns, clients}:
+    case ILive{secs, usec, ut, st, mut, mst, rss, conns, clients, b, t}:
       rss
 
 def live.conns(+l: Live) -> Nat:
   match l:
-    case ILive{secs, usec, ut, st, mut, mst, rss, conns, clients}:
+    case ILive{secs, usec, ut, st, mut, mst, rss, conns, clients, b, t}:
       conns
 
 # the server's facts at its start
@@ -458,10 +465,34 @@ def info.aof(i: Info, +n: Nat) -> Info:
       IInfo{b, l, c, inst, pk, c0, a0, Nat.add(a, n), st, ex}
 
 # new facts from the shell; the peak of memory follows them
+# new facts, the clients that wait as the actor counted them
+def live.keep(l: Live, old: Live) -> Live:
+  match l old:
+    case ILive{secs, usec, ut, st, mut, mst, rss, conns, clients, b0, t0} ILive{s1, u1, ut1, st1, mu1, ms1, r1, n1, c1, blk, tmo}:
+      ILive{secs, usec, ut, st, mut, mst, rss, conns, clients, blk, tmo}
+
+def live.waits(l: Live, +n: Nat, +t: Nat) -> Live:
+  match l:
+    case ILive{secs, usec, ut, st, mut, mst, rss, conns, clients, b0, t0}:
+      ILive{secs, usec, ut, st, mut, mst, rss, conns, clients, n, t}
+
 def info.live(i: Info, +l: Live) -> Info:
   match i:
     case IInfo{b, old, c, inst, pk, c0, a0, a, st, ex}:
-      IInfo{b, l, c, inst, Nat.max(pk, live.rss(l)), c0, a0, a, st, ex}
+      IInfo{b, live.keep(l, old), c, inst, Nat.max(pk, live.rss(l)), c0, a0, a, st, ex}
+
+# the clients that wait, n of them, t of them with a timeout
+def info.blocked(i: Info, +n: Nat, +t: Nat) -> Info:
+  match i:
+    case IInfo{b, l, c, inst, pk, c0, a0, a, st, ex}:
+      IInfo{b, live.waits(l, n, t), c, inst, pk, c0, a0, a, st, ex}
+
+# a call of code k that failed after it was counted: a blocked client
+# that CLIENT UNBLOCK unblocked (Redis's updateStatsOnUnblock)
+def info.failed(i: Info, +k: Nat) -> Info:
+  match i:
+    case IInfo{b, l, c, inst, pk, c0, a0, a, st, ex}:
+      IInfo{b, l, c, inst, pk, c0, a0, a, stats.failed(st, k), ex}
 
 def take15(n: Nat, xs: List<&2, Nat>) -> List<&2, Nat>:
   match n xs:
@@ -658,7 +689,7 @@ def flag(b: Bool) -> String:
 
 def sec.server(+items: List<&2, C.CItem>, +b: Boot, +l: Live) -> String:
   match b l:
-    case IBoot{+os, +pid, +run, +replid, +exe, +conf, sysmem, +start, rss0} ILive{+secs, +usec, ut, st, mut, mst, rss, conns, clients}:
+    case IBoot{+os, +pid, +run, +replid, +exe, +conf, sysmem, +start, rss0} ILive{+secs, +usec, ut, st, mut, mst, rss, conns, clients, bk, tm}:
       +up = Bool.pick(U32, U32.is_le(start, secs), U32.sub(secs, start), 0)
       "# Server\r\n" ++ kv("redis_version", "7.0.15") ++ kv("redis_git_sha1", "00000000") ++ kv("redis_git_dirty", "0") ++
       kv("redis_build_id", "0000000000000000") ++ kv("redis_mode", "standalone") ++ kv("os", os) ++ kv("arch_bits", "64") ++
@@ -671,11 +702,11 @@ def sec.server(+items: List<&2, C.CItem>, +b: Boot, +l: Live) -> String:
 
 def sec.clients(+items: List<&2, C.CItem>, +l: Live) -> String:
   match l:
-    case ILive{secs, usec, ut, st, mut, mst, rss, conns, +clients}:
+    case ILive{secs, usec, ut, st, mut, mst, rss, conns, +clients, +blk, +tmo}:
       "# Clients\r\n" ++ kv("connected_clients", Nat.show(clients)) ++ kv("cluster_connections", "0") ++
       kv("maxclients", cfg(items, "maxclients")) ++ kv("client_recent_max_input_buffer", "0") ++
-      kv("client_recent_max_output_buffer", "0") ++ kv("blocked_clients", "0") ++ kv("tracking_clients", "0") ++
-      kv("clients_in_timeout_table", "0")
+      kv("client_recent_max_output_buffer", "0") ++ kv("blocked_clients", Nat.show(blk)) ++ kv("tracking_clients", "0") ++
+      kv("clients_in_timeout_table", Nat.show(tmo))
 
 # memory: what BendKV has is its resident memory; its heap keeps no
 # allocator's account, so used_memory is the resident memory too, and its
@@ -770,7 +801,7 @@ def sec.replication(+items: List<&2, C.CItem>, +replid: String) -> String:
 
 def sec.cpu(+l: Live) -> String:
   match l:
-    case ILive{secs, usec, +ut, +st, +mut, +mst, rss, conns, clients}:
+    case ILive{secs, usec, +ut, +st, +mut, +mst, rss, conns, clients, b, t}:
       "# CPU\r\n" ++ kv("used_cpu_sys", cpu(st)) ++ kv("used_cpu_user", cpu(ut)) ++ kv("used_cpu_sys_children", "0.000000") ++
       kv("used_cpu_user_children", "0.000000") ++ kv("used_cpu_sys_main_thread", cpu(mst)) ++ kv("used_cpu_user_main_thread", cpu(mut))
 

@@ -72,7 +72,8 @@ COMMANDS = {
     "zremrangebyrank": [], "zremrangebyscore": [], "zremrangebylex": [], "zpopmin": [],
     "zpopmax": [], "zscan": [], "zunion": [], "zinter": [], "zdiff": [], "zintercard": [],
     "zunionstore": [], "zinterstore": [], "zdiffstore": [], "zrangestore": [], "zmpop": [],
-    "zrandmember": []}
+    "zrandmember": [], "blpop": [], "brpop": [], "brpoplpush": [], "blmove": [],
+    "blmpop": [], "bzpopmin": [], "bzpopmax": [], "bzmpop": []}
 
 # Step 1: redis-server -> facts
 # -----------------------------
@@ -181,12 +182,14 @@ GETKEYS = {"set": "KBySet{}", "bitfield": "KByBitfield{}"}
 # COMMAND GETKEYS runs BendKV's copy of what Redis does for them (the
 # spec, then the command's own function when the spec does not read):
 # ZUNION and its kin find their keys as SINTERCARD does, ZMPOP as LMPOP,
-# and the STOREs their destination first (OW, update) and then the keys,
-# or, by their function, the keys and then the destination
+# BLMPOP and BZMPOP as LMPOP after their timeout, and the STOREs their
+# destination first (OW, update) and then the keys, or, by their function,
+# the keys and then the destination
 KEYNUM = {"eval": "KByEval{}", "lmpop": "KByLmpop{}", "sintercard": "KBySintercard{}",
           "zunion": "KBySintercard{}", "zinter": "KBySintercard{}", "zdiff": "KBySintercard{}",
           "zintercard": "KBySintercard{}", "zmpop": "KByLmpop{}", "zunionstore": "KByZstore{}",
-          "zinterstore": "KByZstore{}", "zdiffstore": "KByZstore{}"}
+          "zinterstore": "KByZstore{}", "zdiffstore": "KByZstore{}", "blmpop": "KByBlmpop{}",
+          "bzmpop": "KByBlmpop{}"}
 
 def bstr(s):
     if any(ord(ch) > 126 or ord(ch) < 32 for ch in s):

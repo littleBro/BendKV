@@ -12,10 +12,10 @@ with it. Under pipelined load it serves GET at 1.6×, SET at 1.8× and INCR at 1
 throughput of Redis 7.0.15 on the same machine, with half its memory for small values.
 
 > **Status: research prototype.** BendKV implements a subset of Redis (strings, hashes,
-> lists, sets, sorted sets and their times to live, the keyspace, several databases,
-> connection commands, an append-only file). The goal now is a drop-in
+> lists, sets, sorted sets and their times to live, the blocking commands, the keyspace,
+> several databases, connection commands, an append-only file). The goal now is a drop-in
 > replacement for a single Redis node, measured by Redis's own test suite: of the 1,673
-> tests Redis 7.0.15 passes against a server it did not start, BendKV passes 733, and 726
+> tests Redis 7.0.15 passes against a server it did not start, BendKV passes 746, and 739
 > of the 1,089 in what it implements ([docs/COMPATIBILITY.md](docs/COMPATIBILITY.md)). Do
 > not use it for data you cannot lose.
 
@@ -143,8 +143,8 @@ translation stays in the trusted base.
   the DEL of the key); a list made where a key whose time had passed still lay is logged
   as the EVAL of the hash's script with the pushes, and a move onto such a key as one
   EVAL of a fixed script that deletes the destination and runs the LMOVE, which Redis
-  runs as it loads the file and BendKV reads back. The blocking commands (BLPOP, BRPOP,
-  BLMOVE, BLMPOP, BRPOPLPUSH) are not there yet.
+  runs as it loads the file and BendKV reads back. The blocking BLPOP, BRPOP, BLMOVE,
+  BRPOPLPUSH and BLMPOP are below (clients that wait).
 - **Sets:** SADD, SREM, SCARD, SISMEMBER, SMISMEMBER, SMEMBERS, SSCAN (MATCH, COUNT),
   SPOP and SRANDMEMBER (with a count, repeating when negative; picked with the server's
   random numbers in Redis's ways of picking), SMOVE, SINTER, SUNION, SDIFF, SINTERSTORE,
@@ -181,7 +181,24 @@ translation stays in the trusted base.
   held an entry (a STORE's destination, a key whose time had passed) is logged as one
   EVAL of a fourth fixed script that deletes the key and runs the ZADD of its elements. A
   STORE of more than 128 elements loses the sign of a `-0` score where Redis keeps it.
-  The blocking BZPOPMIN, BZPOPMAX and BZMPOP are not there yet.
+  The blocking BZPOPMIN, BZPOPMAX and BZMPOP are below (clients that wait).
+- **Clients that wait:** BLPOP, BRPOP, BLMOVE, BRPOPLPUSH, BLMPOP, BZPOPMIN, BZPOPMAX
+  and BZMPOP, their timeouts (seconds, a double; 0 waits for ever) read as Redis reads
+  them, with its errors. A command that finds nothing to pop makes its client wait, and
+  its call is counted then, as in Redis; the commands the client sent after it wait with
+  it, run once it is served. After each command the clients that wait are served in the
+  order they came, as long as a key of one holds what it waits for, its pop made on that
+  key and logged as the command that makes it (LPOP or RPOP with its count, LMOVE,
+  ZPOPMIN or ZPOPMAX); a client whose time is up gets a null array at the next tick of
+  the cron (Redis's precision too); CLIENT UNBLOCK ends a wait with a null array
+  (TIMEOUT) or an UNBLOCKED error (ERROR); a client that closes its connection while it
+  waits is forgotten. INFO's `blocked_clients` and `clients_in_timeout_table` count them,
+  and the failed calls and errors are counted as Redis counts them. A command run while
+  replies are off (CLIENT REPLY OFF or SKIP) pops as it does with them on. Where BendKV
+  differs: Redis serves the clients of the keys a command added (`signalKeyAsReady`, from
+  `dbAdd`), key by key in the order they became ready, where BendKV looks at every client
+  after every command, in the order they came; MULTI, which would make a blocking command
+  answer at once, is not there yet; WAIT and XREAD are not there.
 - **Times to live:** EXPIRE, PEXPIRE, EXPIREAT and PEXPIREAT (with NX, XX, GT, LT), TTL,
   PTTL, EXPIRETIME, PEXPIRETIME, PERSIST; SET with NX, XX, GET, EX, PX, EXAT, PXAT and
   KEEPTTL; SETEX, PSETEX, GETEX (EX, PX, EXAT, PXAT, PERSIST) and GETDEL. Times are read
@@ -197,7 +214,7 @@ translation stays in the trusted base.
 - **Connection:** PING, ECHO, TIME (the time the batch runs at, to the ms), HELLO (RESP2,
   with AUTH and SETNAME), AUTH, SELECT, QUIT,
   RESET (which selects database 0 again), CLIENT (ID, GETNAME, SETNAME,
-  REPLY ON/OFF/SKIP, NO-EVICT, GETREDIR, TRACKINGINFO, CACHING, UNBLOCK, HELP),
+  REPLY ON/OFF/SKIP, NO-EVICT, GETREDIR, TRACKINGINFO, CACHING, UNBLOCK (TIMEOUT or ERROR), HELP),
   FUNCTION FLUSH.
 - **Configuration:** CONFIG GET (names, aliases and glob patterns), SET (several
   parameters at once, all or none), RESETSTAT, REWRITE, HELP, over all 178 parameters of
@@ -256,7 +273,7 @@ translation stays in the trusted base.
   transaction left open) stops the start, naming the entry and the byte it starts at,
   the file left as it was, where Redis stops at an unknown command.
 
-Not yet: streams and the other types (HyperLogLog, geo), the blocking commands, Lua
+Not yet: streams and the other types (HyperLogLog, geo), Lua
 scripts, MULTI/EXEC, pub/sub, RESP3, timing of commands
 (usec in INFO commandstats, latencystats), CONFIG REWRITE (it answers as Redis does without a configuration file),
 RDB files. Integers, and times in ms, are limited to 14 digits.
@@ -286,7 +303,7 @@ also needs Lean 4.34.0 (through elan).
 
 ```bash
 git clone https://github.com/bendlang/bend ../bend-patched
-sh bend-patches/apply.sh ../bend-patched      # Bend 2.0.35 + 24 patches
+sh bend-patches/apply.sh ../bend-patched      # Bend 2.0.35 + 26 patches
 B="bun ../bend-patched/bend2/main.ts"
 
 make check   BEND="$B"   # check the proofs
@@ -353,7 +370,10 @@ listpack's limits, STOREs and pops of keys whose time has passed, and at random,
 walk compared by its pairs and each random pick checked against the sorted set it came
 from),
 robustness and concurrency checks, a client that stops reading while the others are
-served (`tests/writer_test.py`), connections that end every way one can, many times
+served (`tests/writer_test.py`), clients that wait (`tests/blocking_test.py`: 18 scenarios
+of the blocking commands on BendKV and on Redis, their transcripts compared line by line,
+then 300 clients served at once, 100 timeouts at once, clients that leave while they wait,
+and 50 consumers moving 1,000 items while some leave), connections that end every way one can, many times
 (the client closing or resetting, QUIT, a protocol error), on a BendKV of their own whose
 table of channels is read to show that each closed the channel it opened,
 restarts from the append-only file (every database read back, including after a
@@ -388,7 +408,7 @@ bench/      in-process benchmarks of the map, the core and channels
 tools/      measurement scripts, the runner of Redis's test suite, and the generators of
             the trie, of the parameter table and of the command table, with the facts
             they take from Redis (tools/data/)
-bend-patches/  the 24 patches to the Bend compiler and runtime
+bend-patches/  the 26 patches to the Bend compiler and runtime
 docs/       FINDINGS.md, DIRECTIONS.md, COMPATIBILITY.md
 ```
 

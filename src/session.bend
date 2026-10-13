@@ -26,6 +26,7 @@ import ./aof.bend as A
 import ./config.bend as C
 import ./info.bend as I
 import ./command.bend as K
+import ./float.bend as F
 
 # Types
 # -----
@@ -169,6 +170,19 @@ def srv.tick(s: Srv, +ms: Nat) -> Srv:
   match s:
     case Srv{pass, cfg, info, rng}:
       Srv{pass, cfg, I.info.tick(info, ms), rng}
+
+# a call of code k that failed after it was counted (a blocked client
+# that CLIENT UNBLOCK unblocked), and the clients that wait (INFO's
+# blocked_clients) and those of them with a timeout
+def srv.failed(s: Srv, +k: Nat) -> Srv:
+  match s:
+    case Srv{pass, cfg, info, rng}:
+      Srv{pass, cfg, I.info.failed(info, k), rng}
+
+def srv.blocked(s: Srv, +n: Nat, +t: Nat) -> Srv:
+  match s:
+    case Srv{pass, cfg, info, rng}:
+      Srv{pass, cfg, I.info.blocked(info, n, t), rng}
 
 # the sweep of expired keys (redis.bend: reap): where the next one starts
 # in database j, and a sweep of j that stopped at next having deleted k
@@ -406,6 +420,347 @@ def auth.conn(ok: Bool, +c: Conn, +s: Srv) -> Conn:
       Conn{id, True{}, name, after(mode), quit, db}
     case False{} c0:
       step_conn(c0, s)
+
+# Blocking commands
+# -----------------
+# BLPOP, BRPOP, BRPOPLPUSH, BLMOVE, BLMPOP, BZPOPMIN, BZPOPMAX and BZMPOP
+# (R.SBlock: the command's number and its arguments), read as Redis reads
+# them, are the pop each makes once a key it waits on has elements: LMPOP
+# of the keys (BLPOP and BRPOP pop one element and answer [key, element],
+# form 1), LMOVE (BRPOPLPUSH, BLMOVE: a move from the source alone) or
+# ZMPOP (BZPOPMIN and BZPOPMAX: [key, member, score], form 2), and the
+# timeout in ms (a big integer, F's; 0 waits for ever). A session runs
+# the pop once: a key with elements answers as the blocking command
+# answers, and none as it answers a client that may not wait (a null
+# array; a null for BRPOPLPUSH and BLMOVE, as LMOVE answers). The server
+# makes such a client wait instead (server.bend, Blocked clients): it runs
+# the same pop again once a write gives one of the keys elements, or
+# answers a null array when the time is up.
+type Blk is Data:
+  BlkPop{c: R.Cmd, form: Nat, ms: List<&2, Nat>}
+  BlkBad{r: R.Reply}
+
+# The timeout, as getTimeoutFromObjectOrReply reads one in seconds: a
+# long double as string2ld reads it, times 1000 (rounded as x87 rounds),
+# up to the next integer (ceill), as a long long, which x87 makes its
+# least (negative) for any number past its range, an infinity too.
+type Tmo is Data:
+  TmoMs{ms: List<&2, Nat>}
+  TmoBad{r: R.Reply}
+
+def blk.k1000() -> F.Fl:
+  F.FNum{False{}, F.big.of(1000n), F.fl.eb()}
+
+# |x| = m * 2^(e - eb) cut to an integer, and whether bits were cut
+def blk.int.if(up: Bool, +m: List<&2, Nat>, +e: Nat) -> List<&2, Nat> & Bool:
+  match up:
+    case True{}:
+      (F.big.shl(m, Nat.sub(e, F.fl.eb())), False{})
+    case False{}:
+      +sh = Nat.sub(F.fl.eb(), e)
+      (F.big.shr(m, sh), F.big.low_nz(m, sh))
+
+# a positive count of ms, a long long below 2^63
+def blk.ms.pos(+n: List<&2, Nat>) -> Maybe<&2, List<&2, Nat>>:
+  Bool.pick(Maybe<&2, List<&2, Nat>>, Nat.is_le(F.big.bitlen(n), 63n), Some{n}, None{})
+
+# ceill of a negative number is its integer part (-0 is 0, no error)
+def blk.ms.neg(p: List<&2, Nat> & Bool) -> Maybe<&2, List<&2, Nat>>:
+  (+n, cut) = p
+  Bool.pick(Maybe<&2, List<&2, Nat>>, F.big.is_zero(n), Some{Nil{}}, None{})
+
+def blk.ms.up(p: List<&2, Nat> & Bool) -> Maybe<&2, List<&2, Nat>>:
+  (+n, cut) = p
+  blk.ms.pos(Bool.pick(List<&2, Nat>, cut, F.big.add(n, F.big.of(1n)), n))
+
+def blk.ms.of(neg: Bool, p: List<&2, Nat> & Bool) -> Maybe<&2, List<&2, Nat>>:
+  match neg:
+    case True{}:
+      blk.ms.neg(p)
+    case False{}:
+      blk.ms.up(p)
+
+# (long long) ceill(x): the ms, or None for a negative long long
+def blk.ll(x: F.Fl) -> Maybe<&2, List<&2, Nat>>:
+  match x:
+    case F.FNum{+neg, +m, +e}:
+      blk.ms.of(neg, blk.int.if(Nat.is_le(F.fl.eb(), e), m, e))
+    case F.FInf{neg}:
+      None{}
+    case F.FNaN{}:
+      None{}
+
+def blk.tmo.ms(m: Maybe<&2, List<&2, Nat>>) -> Tmo:
+  match m:
+    case Some{ms}:
+      TmoMs{ms}
+    case None{}:
+      TmoBad{R.RError{"ERR timeout is negative"}}
+
+def blk.tmo.of(m: Maybe<&2, F.Fl>) -> Tmo:
+  match m:
+    case Some{v}:
+      blk.tmo.ms(blk.ll(F.fl.mul(F.fmt.ld(), v, blk.k1000())))
+    case None{}:
+      TmoBad{R.RError{"ERR timeout is not a float or out of range"}}
+
+def blk.tmo(+s: String) -> Tmo:
+  blk.tmo.of(F.ld.parse(s))
+
+# the pop c with the timeout t, or t's error
+def blk.with(t: Tmo, c: R.Cmd, +form: Nat) -> Blk:
+  match t:
+    case TmoMs{ms}:
+      BlkPop{c, form, ms}
+    case TmoBad{r}:
+      BlkBad{r}
+
+# a pop of LMPOP's or ZMPOP's parse, its timeout read after its other
+# arguments (BLMPOP, BZMPOP), as Redis reads them
+def blk.mpop(c: R.Cmd, +t: String) -> Blk:
+  match c:
+    case R.Bad{r}:
+      BlkBad{r}
+    case _:
+      blk.with(blk.tmo(t), c, 0n)
+
+# the arguments' last (the timeout) and the others before it, in order
+def blk.last.go(xs: List<&2, String>, acc: List<&2, String>) -> List<&2, String> & String:
+  match xs:
+    case Nil{}:
+      (List.reverse(&2, String, acc), "")
+    case Con{x, Nil{}}:
+      (List.reverse(&2, String, acc), x)
+    case Con{x, rest}:
+      blk.last.go(rest, x <> acc)
+
+# BLPOP, BRPOP (keys, then the timeout): LMPOP of a count of 1; BZPOPMIN,
+# BZPOPMAX: ZMPOP of a count of 1
+def blk.keys.list(p: List<&2, String> & String, +left: Bool) -> Blk:
+  (ks, +t) = p
+  blk.with(blk.tmo(t), R.LMPop{ks, left, "1"}, 1n)
+
+def blk.keys.zset(p: List<&2, String> & String, +max: Bool) -> Blk:
+  (ks, +t) = p
+  blk.with(blk.tmo(t), R.ZMPop{ks, max, "1"}, 2n)
+
+# BLMOVE src dst from to timeout: the ends first, then the timeout
+def blk.move(m: Maybe<&2, R.LEnds>, s: String, d: String, +t: String) -> Blk:
+  match m:
+    case Some{e}:
+      blk.with(blk.tmo(t), R.LMove{s, d, e}, 0n)
+    case None{}:
+      BlkBad{R.RError{"ERR syntax error"}}
+
+# a blocking command's pop, its arguments read as Redis reads them (their
+# number checked by the parser)
+def blk.parse(+id: Nat, args: List<&2, String>) -> Blk:
+  match id args:
+    case 155n Con{s, Con{d, Con{+t, rest}}}:
+      blk.with(blk.tmo(t), R.LMove{s, d, R.RtoL{}}, 0n)
+    case 156n Con{s, Con{d, Con{+a, Con{+b, Con{+t, rest}}}}}:
+      blk.move(R.lends.of(R.lend.word(a), R.lend.word(b)), s, d, t)
+    case 157n Con{+t, rest}:
+      blk.mpop(R.parse_lmpop(rest), t)
+    case 160n Con{+t, rest}:
+      blk.mpop(R.parse_zmpop(rest), t)
+    case 153n xs:
+      blk.keys.list(blk.last.go(xs, Nil{}), True{})
+    case 154n xs:
+      blk.keys.list(blk.last.go(xs, Nil{}), False{})
+    case 158n xs:
+      blk.keys.zset(blk.last.go(xs, Nil{}), False{})
+    case 159n xs:
+      blk.keys.zset(blk.last.go(xs, Nil{}), True{})
+    case _ _:
+      BlkBad{R.RError{"ERR syntax error"}}
+
+# a reply's array, or nothing; its first and second item
+def blk.items(r: R.Reply) -> List<&2, R.Reply>:
+  match r:
+    case R.RArray{xs}:
+      xs
+    case _:
+      Nil{}
+
+def blk.at0(xs: List<&2, R.Reply>) -> R.Reply:
+  match xs:
+    case Con{x, rest}:
+      x
+    case Nil{}:
+      R.RNull{}
+
+def blk.at1(xs: List<&2, R.Reply>) -> R.Reply:
+  match xs:
+    case Con{x, rest}:
+      blk.at0(rest)
+    case Nil{}:
+      R.RNull{}
+
+# [key, element] of LMPOP's [key, [element]]; [key, member, score] of
+# ZMPOP's [key, [[member, score]]]
+def blk.flat1(+xs: List<&2, R.Reply>) -> R.Reply:
+  R.RArray{[blk.at0(xs), blk.at0(blk.items(blk.at1(xs)))]}
+
+def blk.flat2(+xs: List<&2, R.Reply>) -> R.Reply:
+  +e = blk.items(blk.at0(blk.items(blk.at1(xs))))
+  R.RArray{[blk.at0(xs), blk.at0(e), blk.at1(e)]}
+
+def blk.shape.arr(+form: Nat, +xs: List<&2, R.Reply>) -> R.Reply:
+  match form:
+    case 1n:
+      blk.flat1(xs)
+    case 2n:
+      blk.flat2(xs)
+    case _:
+      R.RArray{xs}
+
+# a blocking command's reply made of its pop's (form): a null or an error
+# as it is
+def blk.shape(+form: Nat, r: R.Reply) -> R.Reply:
+  match r:
+    case R.RArray{+xs}:
+      blk.shape.arr(form, xs)
+    case R.RStatus{x}:
+      R.RStatus{x}
+    case R.RError{x}:
+      R.RError{x}
+    case R.RInt{i}:
+      R.RInt{i}
+    case R.RBulk{x}:
+      R.RBulk{x}
+    case R.RNull{}:
+      R.RNull{}
+    case R.RIntS{x}:
+      R.RIntS{x}
+    case R.RNullA{}:
+      R.RNullA{}
+
+# the pop run once on db: its reply as the blocking command's
+def blk.reply(b: Blk, db: R.Db) -> R.Reply:
+  match b:
+    case BlkPop{c, +form, ms}:
+      blk.shape(form, R.reply_of(R.exec(c, db)))
+    case BlkBad{r}:
+      r
+
+def blk.acts(b: Blk) -> List<&2, R.Act>:
+  match b:
+    case BlkPop{c, form, ms}:
+      [R.ARun{c}]
+    case BlkBad{r}:
+      Nil{}
+
+# whether the pop finds nothing on db: its reply a null (an array for
+# LMPOP and ZMPOP, a null for LMOVE); an error is an answer
+def blk.none(r: R.Reply) -> Bool:
+  match r:
+    case R.RNullA{}:
+      True{}
+    case R.RNull{}:
+      True{}
+    case _:
+      False{}
+
+# whether a blocking command would wait on db: it reads, and finds
+# nothing (server.bend)
+def blk.waits(b: Blk, db: R.Db) -> Bool:
+  match b:
+    case BlkPop{c, form, ms}:
+      blk.none(R.reply_of(R.exec(c, db)))
+    case BlkBad{r}:
+      False{}
+
+# the keys a blocking command waits on: LMPOP's and ZMPOP's, LMOVE's
+# source
+def blk.keys(b: Blk) -> List<&2, String>:
+  match b:
+    case BlkPop{R.LMPop{ks, left, n}, form, ms}:
+      ks
+    case BlkPop{R.ZMPop{ks, max, n}, form, ms}:
+      ks
+    case BlkPop{R.LMove{s, d, e}, form, ms}:
+      [s]
+    case _:
+      Nil{}
+
+# a big integer below 2^48 (two limbs at most) as a Nat
+def blk.nat.hi(xs: List<&2, Nat>) -> Nat:
+  match xs:
+    case Con{+l, rest}:
+      Nat.mul(l, 16777216n)
+    case Nil{}:
+      0n
+
+def blk.nat(xs: List<&2, Nat>) -> Nat:
+  match xs:
+    case Con{+l, rest}:
+      Nat.add(l, blk.nat.hi(rest))
+    case Nil{}:
+      0n
+
+# when a client that waits from now (ms since 1970) times out: 0 never
+# (a timeout of 0, or one past 2^46 ms, thousands of years: a deadline
+# past a long long's range wraps in Redis to a negative one, which its
+# table of timeouts reads as unsigned, past any time), else the ms
+def blk.until.of(z: Bool, far: Bool, +now: Nat, ms: List<&2, Nat>) -> Nat:
+  match z far:
+    case True{} _:
+      0n
+    case False{} True{}:
+      0n
+    case False{} False{}:
+      Nat.add(now, blk.nat(ms))
+
+def blk.until(+now: Nat, +ms: List<&2, Nat>) -> Nat:
+  blk.until.of(F.big.is_zero(ms), Nat.is_lt(46n, F.big.bitlen(ms)), now, ms)
+
+def blk.ms(b: Blk) -> List<&2, Nat>:
+  match b:
+    case BlkPop{c, form, ms}:
+      ms
+    case BlkBad{r}:
+      Nil{}
+
+# the form of a pop's reply (blk.shape)
+def blk.form(+b: Blk) -> Nat:
+  match b:
+    case BlkPop{c, +form, ms}:
+      form
+    case BlkBad{r}:
+      0n
+
+# whether a pop waits for a sorted set (ZMPOP) rather than a list
+def blk.zset(+b: Blk) -> Bool:
+  match b:
+    case BlkPop{R.ZMPop{ks, max, n}, form, ms}:
+      True{}
+    case _:
+      False{}
+
+# whether an entry holds what a pop waits for: a list, or a sorted set
+# (z); a key never holds an empty one
+def blk.has(+z: Bool, m: Maybe<&2, KV.Item<KV.Val>>) -> Bool:
+  match m:
+    case Some{KV.Item{KV.VColl{KV.CList{l}}, e}}:
+      Bool.not(z)
+    case Some{KV.Item{KV.VColl{KV.CZset{t}}, e}}:
+      z
+    case _:
+      False{}
+
+# the pop made from key k alone, once k holds what it waits for (the
+# server, as Redis serves a client from the key a write made ready)
+def blk.at(b: Blk, +k: String) -> R.Cmd:
+  match b:
+    case BlkPop{R.LMPop{ks, left, n}, form, ms}:
+      R.LMPop{[k], left, n}
+    case BlkPop{R.ZMPop{ks, max, n}, form, ms}:
+      R.ZMPop{[k], max, n}
+    case BlkPop{c, form, ms}:
+      c
+    case BlkBad{r}:
+      R.Bad{r}
 
 # Databases
 # ---------
@@ -1745,6 +2100,10 @@ def own_reply(+o: R.SessOp, +c: Conn, +s: Srv, +ds: R.Ds) -> Maybe<&2, R.Reply>:
       say(conn.mode(c), sr.reply(sr.args(args), R.db.ent(R.ds.focused(ds), k), KV.mix(srv.rng(s))))
     case R.SZRandMember{+k, args}:
       say(conn.mode(c), zr.reply(zr.args(args), R.db.ent(R.ds.focused(ds), k), KV.mix(srv.rng(s))))
+    case R.SBlock{+id, args}:
+      say(conn.mode(c), blk.reply(blk.parse(id, args), R.ds.focused(ds)))
+    case R.SUnblock{i, e}:
+      say(conn.mode(c), R.RInt{R.IPos{0n}})
 
 # the connection after a session command
 def own_conn(+o: R.SessOp, +c: Conn, +s: Srv) -> Conn:
@@ -1807,6 +2166,10 @@ def own_conn(+o: R.SessOp, +c: Conn, +s: Srv) -> Conn:
       step_conn(c, s)
     case R.SZRandMember{k, a}:
       step_conn(c, s)
+    case R.SBlock{i, a}:
+      step_conn(c, s)
+    case R.SUnblock{i, e}:
+      step_conn(c, s)
 
 # what a session command does to the databases: SELECT and RESET move the
 # focus to the connection's new database, SWAPDB, MOVE, COPY and FLUSHALL
@@ -1827,6 +2190,8 @@ def own_acts(+o: R.SessOp, +c: Conn, +s: Srv) -> List<&2, R.Act>:
       [R.AWipe{}]
     case R.SSPop{+k, args}:
       sp.acts(sp.args(args), k, KV.mix(srv.rng(s)))
+    case R.SBlock{+id, args}:
+      blk.acts(blk.parse(id, args))
     case _:
       Nil{}
 
