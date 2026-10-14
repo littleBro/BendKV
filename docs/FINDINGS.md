@@ -4484,6 +4484,123 @@ instructions (8,496,827, −62%), less a key than a whole GET; SORT BY nosort GE
 keys 2,603,797 (8,018,304, −68%), 1.19 times Redis's; SORT BY a key that holds a double
 14,718,297 (20,053,648, −27%). GET, SET and INCR take what they took.
 
+## 3zzj. HyperLogLog
+
+**What there is.** PFADD, PFCOUNT, PFMERGE, PFDEBUG (GETREG, DECODE, ENCODING, TODENSE)
+and PFSELFTEST as Redis 7.0.15's `hyperloglog.c` runs them, in `src/hll.bend`. A
+HyperLogLog is a string, its bytes Redis's: a header of 16 bytes ("HYLL", the encoding,
+three unused bytes, and the cardinality last counted, its top bit set when a change made
+it stale), then 16384 registers of 6 bits, dense in 12,288 bytes or sparse as runs of
+opcodes (ZERO, XZERO and VAL). An element counts in the register that MurmurHash64A, with
+Redis's seed, gives it, the 64-bit products taken as halves of 32 bits. Every value the
+commands write is the one Redis writes, byte for byte: `hllSparseSet`'s split of an opcode
+and its merge of the VALs around it, the turn to dense past 3,000 bytes or for a register
+past 32, PFMERGE's sparse result when every HyperLogLog it reads is sparse (its registers
+set in turn, in order, as Redis sets them), and the count kept in the header. A string
+that is not a HyperLogLog answers Redis's WRONGTYPE of its own ("Key is not a valid
+HyperLogLog string value."), a sparse one whose opcodes do not hold 16384 registers
+INVALIDOBJ.
+
+**Corrupt values.** Redis 7.0.15 as Ubuntu ships it, which the tests compare with,
+carries the fix of CVE-2025-32023: a walk of the opcodes that would pass the last
+register stops, and the value is invalid, so a sparse value is valid when its runs add
+up to 16384 (before the fix, a run of zeros ran on, and a VAL past the end stopped the
+walk where it stood, valid if that was at 16384). BendKV judges as the fix does. Opcodes
+that end within an XZERO read the byte past the string's end as its second byte, as
+Redis reads its sds string: the NUL there when a command starts, and, after a set that
+split such an XZERO, the last byte of the opcodes the set made (Redis's `memcpy` writes it
+past the new end, over the NUL that `sdsIncrLen` wrote a moment before), which the sets
+after it in the same PFADD or PFMERGE read.
+
+**The count.** Ertl's estimator as `hllCount` takes it: the histogram of the registers,
+the loops of tau and sigma, their sum and the final division in the float library's
+doubles (`src/float.bend` gained division and square roots, each rounded once from its
+exact result), and `llroundl`'s rounding, with 2^63 past what a long long holds. glibc's
+`pow(1 - x, 2)` in tau is the product rounded once, which it is but for a result within a
+sliver of a tie between two doubles. PFCOUNT of one key keeps the count it made in the
+header (the SETRANGE of its 8 bytes, as Redis writes them in place); PFCOUNT of several
+keys counts the maxima of their registers and keeps nothing.
+
+**Writes, events and the log.** PFADD, PFCOUNT of one key and PFDEBUG are updates of
+their key (`UHll`): PFADD's change is the value it makes (a new key, or the value kept
+with its time), PFCOUNT's the SETRANGE of the count, PFDEBUG GETREG's and TODENSE's the
+dense value they leave; each is logged as that change (a SET, a SET with KEEPTTL, a
+SETRANGE). PFMERGE is an act of the database in focus (`APfMerge`), as SORT with STORE
+is: it reads its keys and writes their union over its destination, logged as a SET with
+KEEPTTL. A file of Redis's, which holds the PF commands themselves, is read by running
+them. The `pfadd` event, WATCH and COMMAND's table, made from Redis's JSON files, follow
+Redis; PFDEBUG, which Redis does not signal, touches no watched key.
+
+**The laws.** The proofs of updates take `UHll` with the change each command makes (a
+PFADD of a key not there puts its value, also when a walk of its opcodes fails, as Redis
+adds the key first), and those of sessions and acts take PFCOUNT of several keys, PFMERGE
+and PFSELFTEST as they take SORT (`SPfCount`, `SPfMerge`, `SPfSelfTest`, `APfMerge`).
+What the registers hold and what the estimate counts are not proved: the laws speak of
+which keys the commands read and write, the tests of the bytes. `make check`, `make
+verdict` and `make gencheck` pass.
+
+**Without an Array.** The first version kept the registers of a merge in an Array. A
+program that holds an Array anywhere makes the compiler pass every boxed argument of
+every loop with its location (`arr_q`) and read shared blocks through their counts
+(`BLK_SHR 1`): GET took 125 instructions more per request, SET 125 and INCR 150 (3,442,
+4,203 and 4,541), past `make perfcheck`'s 3%, `Nat.div` among others no longer inlined.
+The registers are lists now: those above 0, in order, while every HyperLogLog is sparse,
+and 4096 words of four registers once one is dense (a register is below 64, so each
+byte's top bit is free, and one subtraction gives the larger of two words' bytes); a
+histogram is 26 words of two counts of 16 bits, which its loops keep in their parameters.
+
+**Reading the bytes.** A walk of the opcodes matched the value a byte at a time, and
+`String.code_at` read each view a run at a time (`str_code_at_far`), with a choice of
+`Bool.pick` for each of an opcode's fields: 240 instructions an opcode, where Redis takes
+about twenty. A walk now reads the value by index, a copy of it in one chunk (`flat`,
+which a command makes when it reads a sparse value, and each set of a register makes of
+what it wrote), whose bytes `String.code_at` reads where they lie; an opcode's kind,
+length and value are sums of its bits: 80 instructions an opcode. A value past 2,048
+bytes takes two chunks,
+which `String.code_at` still reads a run at a time. The dense histogram reads the bytes
+the same way, a piece of 1,536 at a time, with no list of words between. In the estimate,
+a halving, a product by 2^k and a quotient by 2^14 move a double's exponent (exact for
+these numbers, far from where a double's range ends), and a count of 0 adds nothing: the
+float library rounds what is left.
+
+**Its cost** (section 59 of PERFORMANCE.md). PFADD of an element a sparse HyperLogLog of
+100 elements holds takes 41,277 instructions, five times Redis's 8,264; of a new one,
+66,086 (Redis 10,793); on a dense one about four times Redis's. PFCOUNT of a count kept
+takes four times Redis's; a count it makes, which runs the estimate on doubles in
+software (about half a million instructions), 13 to 18 times Redis's for one dense
+HyperLogLog or two sparse ones (886,216 for two of 100 elements, Redis 49,632), and 2.6
+times for two dense ones, where most of Redis's time goes to their 16384 registers.
+PFMERGE of two sparse ones takes 1.2 times Redis's, of two dense ones 2.4 times. GET, SET
+and INCR take what they take on main.
+
+**Tests.** `tests/hll_test.py`, against Redis: the cases of unit/hyperloglog and of
+`hyperloglog.c`, values made by hand (registers past 32, opcodes short of 16384 registers
+or past them, an XZERO cut at the end, with the sets that split it), values corrupted at
+random bytes, and random sequences of the commands, each reply compared and each written
+value read back byte for byte: 17,264 commands, each answered as Redis answers it, and
+again over RESP3. The PF commands run in the scenarios of keyspace events, of WATCH and
+of transactions, of the append-only file both ways, and in the restart test; redis-py's
+tests of PFADD, PFCOUNT and PFMERGE come off the client suites' known failures.
+
+**Redis's suite.** 1,173 of the 1,677 tests Redis passes (69.9%; 1,153 before), 1,166
+of the 1,244 in what BendKV has (94%): unit/hyperloglog passes its 20 tests. Its fuzzing
+test (1,000 PFADDs of up to 3,000 elements, bytes set at random, a PFCOUNT) takes 53
+seconds on BendKV and 41 on Redis in the same harness, whose client takes most of both,
+under the suite's limit of 60; it ran past that limit on the first version, whose walks
+cost twice as much, and the six tests after it never ran.
+
+**Where BendKV differs.** `hll-sparse-max-bytes` is not read: a sparse HyperLogLog turns
+dense past 3,000 bytes, its default. PFSELFTEST runs Redis's checks on fewer cases. Redis
+keeps the byte past a string's end from one command to the next, where BendKV reads 0 as
+each command starts: a sparse value whose last set split an XZERO cut at its end, which
+only a value written by hand ends with, reads its second byte differently in the next
+command. A PFADD that a corrupt value stops after it changed registers keeps the change in
+Redis without a signal, an event or a log of it; BendKV writes the value, with its event,
+a touch of WATCH and its log. The log holds SETs and SETRANGEs where Redis's holds the PF
+commands, and Redis 7.0.15 without Ubuntu's fix takes some values BendKV finds invalid.
+OBJECT ENCODING answers `embstr` for a HyperLogLog of up to 44 bytes, which Redis made
+`raw`, and MEMORY USAGE differs as it does for any value.
+
 ## 4. Where a request's time goes, and hiding the memory waits
 
 With the eight patches, BendKV ran fewer instructions on GET and SET than Redis, missed

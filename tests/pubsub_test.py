@@ -393,6 +393,25 @@ def keyspace(port, log):
     r.cmd("SET", "sostr", "x")
     ev("sort wrongtype", "SORT", "sostr", "STORE", "sod")
     ev("sort bad", "SORT", "sl", "LIMIT", "x", "1", "STORE", "sod")
+    # HyperLogLogs: pfadd when a register changes (or the key is made),
+    # PFMERGE as pfadd, none of PFCOUNT and PFDEBUG
+    ev("pfadd new", "PFADD", "pf", "a")
+    ev("pfadd same", "PFADD", "pf", "a")
+    ev("pfadd none", "PFADD", "pf")
+    ev("pfadd more", "PFADD", "pf", "b", "c")
+    ev("pfcount", "PFCOUNT", "pf")
+    ev("pfcount several", "PFCOUNT", "pf", "nopf")
+    ev("pfmerge", "PFMERGE", "pfd", "pf")
+    ev("pfmerge again", "PFMERGE", "pfd", "pf")
+    ev("pfmerge new", "PFMERGE", "pfe")
+    ev("pfdebug", "PFDEBUG", "TODENSE", "pfd")
+    r.cmd("SET", "pfstr", "x", "PX", "1")
+    time.sleep(0.01)
+    ev("pfadd expired", "PFADD", "pfstr", "a")
+    ev("pfadd wrongtype", "PFADD", "sl", "a")
+    r.cmd("SET", "pfstr", "x")
+    ev("pfadd not one", "PFADD", "pfstr", "a")
+    ev("pfmerge not one", "PFMERGE", "pfd", "pfstr")
     # a transaction, a client that waits
     ev("exec", "EVAL", "return 1", "0") if False else None
     w = Client(port)

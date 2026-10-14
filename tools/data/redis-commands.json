@@ -14836,6 +14836,645 @@
     }
    ]
   },
+  "pfadd": {
+   "docs": {
+    "%": [
+     "summary",
+     "Adds the specified elements to the specified HyperLogLog.",
+     "since",
+     "2.8.9",
+     "group",
+     "hyperloglog",
+     "complexity",
+     "O(1) to add every element.",
+     "arguments",
+     [
+      {
+       "%": [
+        "name",
+        "key",
+        "type",
+        "key",
+        "key_spec_index",
+        0
+       ]
+      },
+      {
+       "%": [
+        "name",
+        "element",
+        "type",
+        "string",
+        "flags",
+        {
+         "~": [
+          {
+           "+": "optional"
+          },
+          {
+           "+": "multiple"
+          }
+         ]
+        }
+       ]
+      }
+     ]
+    ]
+   },
+   "info": [
+    "pfadd",
+    -2,
+    {
+     "~": [
+      {
+       "+": "write"
+      },
+      {
+       "+": "denyoom"
+      },
+      {
+       "+": "fast"
+      }
+     ]
+    },
+    1,
+    1,
+    1,
+    {
+     "~": [
+      {
+       "+": "@write"
+      },
+      {
+       "+": "@hyperloglog"
+      },
+      {
+       "+": "@fast"
+      }
+     ]
+    },
+    {
+     "~": []
+    },
+    {
+     "~": [
+      {
+       "%": [
+        "flags",
+        {
+         "~": [
+          {
+           "+": "RW"
+          },
+          {
+           "+": "insert"
+          }
+         ]
+        },
+        "begin_search",
+        {
+         "%": [
+          "type",
+          "index",
+          "spec",
+          {
+           "%": [
+            "index",
+            1
+           ]
+          }
+         ]
+        },
+        "find_keys",
+        {
+         "%": [
+          "type",
+          "range",
+          "spec",
+          {
+           "%": [
+            "lastkey",
+            0,
+            "keystep",
+            1,
+            "limit",
+            0
+           ]
+          }
+         ]
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "~": []
+    }
+   ]
+  },
+  "pfcount": {
+   "docs": {
+    "%": [
+     "summary",
+     "Return the approximated cardinality of the set(s) observed by the HyperLogLog at key(s).",
+     "since",
+     "2.8.9",
+     "group",
+     "hyperloglog",
+     "complexity",
+     "O(1) with a very small average constant time when called with a single key. O(N) with N being the number of keys, and much bigger constant times, when called with multiple keys.",
+     "arguments",
+     [
+      {
+       "%": [
+        "name",
+        "key",
+        "type",
+        "key",
+        "key_spec_index",
+        0,
+        "flags",
+        {
+         "~": [
+          {
+           "+": "multiple"
+          }
+         ]
+        }
+       ]
+      }
+     ]
+    ]
+   },
+   "info": [
+    "pfcount",
+    -2,
+    {
+     "~": [
+      {
+       "+": "readonly"
+      }
+     ]
+    },
+    1,
+    -1,
+    1,
+    {
+     "~": [
+      {
+       "+": "@read"
+      },
+      {
+       "+": "@hyperloglog"
+      },
+      {
+       "+": "@slow"
+      }
+     ]
+    },
+    {
+     "~": []
+    },
+    {
+     "~": [
+      {
+       "%": [
+        "notes",
+        "RW because it may change the internal representation of the key, and propagate to replicas",
+        "flags",
+        {
+         "~": [
+          {
+           "+": "RW"
+          },
+          {
+           "+": "access"
+          }
+         ]
+        },
+        "begin_search",
+        {
+         "%": [
+          "type",
+          "index",
+          "spec",
+          {
+           "%": [
+            "index",
+            1
+           ]
+          }
+         ]
+        },
+        "find_keys",
+        {
+         "%": [
+          "type",
+          "range",
+          "spec",
+          {
+           "%": [
+            "lastkey",
+            -1,
+            "keystep",
+            1,
+            "limit",
+            0
+           ]
+          }
+         ]
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "~": []
+    }
+   ]
+  },
+  "pfdebug": {
+   "docs": {
+    "%": [
+     "summary",
+     "Internal commands for debugging HyperLogLog values",
+     "since",
+     "2.8.9",
+     "group",
+     "hyperloglog",
+     "complexity",
+     "N/A",
+     "doc_flags",
+     {
+      "~": [
+       {
+        "+": "syscmd"
+       }
+      ]
+     },
+     "arguments",
+     [
+      {
+       "%": [
+        "name",
+        "subcommand",
+        "type",
+        "string"
+       ]
+      },
+      {
+       "%": [
+        "name",
+        "key",
+        "type",
+        "key",
+        "key_spec_index",
+        0
+       ]
+      }
+     ]
+    ]
+   },
+   "info": [
+    "pfdebug",
+    3,
+    {
+     "~": [
+      {
+       "+": "write"
+      },
+      {
+       "+": "denyoom"
+      },
+      {
+       "+": "admin"
+      }
+     ]
+    },
+    2,
+    2,
+    1,
+    {
+     "~": [
+      {
+       "+": "@write"
+      },
+      {
+       "+": "@hyperloglog"
+      },
+      {
+       "+": "@admin"
+      },
+      {
+       "+": "@slow"
+      },
+      {
+       "+": "@dangerous"
+      }
+     ]
+    },
+    {
+     "~": []
+    },
+    {
+     "~": [
+      {
+       "%": [
+        "flags",
+        {
+         "~": [
+          {
+           "+": "RW"
+          },
+          {
+           "+": "access"
+          }
+         ]
+        },
+        "begin_search",
+        {
+         "%": [
+          "type",
+          "index",
+          "spec",
+          {
+           "%": [
+            "index",
+            2
+           ]
+          }
+         ]
+        },
+        "find_keys",
+        {
+         "%": [
+          "type",
+          "range",
+          "spec",
+          {
+           "%": [
+            "lastkey",
+            0,
+            "keystep",
+            1,
+            "limit",
+            0
+           ]
+          }
+         ]
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "~": []
+    }
+   ]
+  },
+  "pfmerge": {
+   "docs": {
+    "%": [
+     "summary",
+     "Merge N different HyperLogLogs into a single one.",
+     "since",
+     "2.8.9",
+     "group",
+     "hyperloglog",
+     "complexity",
+     "O(N) to merge N HyperLogLogs, but with high constant times.",
+     "arguments",
+     [
+      {
+       "%": [
+        "name",
+        "destkey",
+        "type",
+        "key",
+        "key_spec_index",
+        0
+       ]
+      },
+      {
+       "%": [
+        "name",
+        "sourcekey",
+        "type",
+        "key",
+        "key_spec_index",
+        1,
+        "flags",
+        {
+         "~": [
+          {
+           "+": "multiple"
+          }
+         ]
+        }
+       ]
+      }
+     ]
+    ]
+   },
+   "info": [
+    "pfmerge",
+    -2,
+    {
+     "~": [
+      {
+       "+": "write"
+      },
+      {
+       "+": "denyoom"
+      }
+     ]
+    },
+    1,
+    -1,
+    1,
+    {
+     "~": [
+      {
+       "+": "@write"
+      },
+      {
+       "+": "@hyperloglog"
+      },
+      {
+       "+": "@slow"
+      }
+     ]
+    },
+    {
+     "~": []
+    },
+    {
+     "~": [
+      {
+       "%": [
+        "flags",
+        {
+         "~": [
+          {
+           "+": "RW"
+          },
+          {
+           "+": "access"
+          },
+          {
+           "+": "insert"
+          }
+         ]
+        },
+        "begin_search",
+        {
+         "%": [
+          "type",
+          "index",
+          "spec",
+          {
+           "%": [
+            "index",
+            1
+           ]
+          }
+         ]
+        },
+        "find_keys",
+        {
+         "%": [
+          "type",
+          "range",
+          "spec",
+          {
+           "%": [
+            "lastkey",
+            0,
+            "keystep",
+            1,
+            "limit",
+            0
+           ]
+          }
+         ]
+        }
+       ]
+      },
+      {
+       "%": [
+        "flags",
+        {
+         "~": [
+          {
+           "+": "RO"
+          },
+          {
+           "+": "access"
+          }
+         ]
+        },
+        "begin_search",
+        {
+         "%": [
+          "type",
+          "index",
+          "spec",
+          {
+           "%": [
+            "index",
+            2
+           ]
+          }
+         ]
+        },
+        "find_keys",
+        {
+         "%": [
+          "type",
+          "range",
+          "spec",
+          {
+           "%": [
+            "lastkey",
+            -1,
+            "keystep",
+            1,
+            "limit",
+            0
+           ]
+          }
+         ]
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "~": []
+    }
+   ]
+  },
+  "pfselftest": {
+   "docs": {
+    "%": [
+     "summary",
+     "An internal command for testing HyperLogLog values",
+     "since",
+     "2.8.9",
+     "group",
+     "hyperloglog",
+     "complexity",
+     "N/A",
+     "doc_flags",
+     {
+      "~": [
+       {
+        "+": "syscmd"
+       }
+      ]
+     }
+    ]
+   },
+   "info": [
+    "pfselftest",
+    1,
+    {
+     "~": [
+      {
+       "+": "admin"
+      }
+     ]
+    },
+    0,
+    0,
+    0,
+    {
+     "~": [
+      {
+       "+": "@hyperloglog"
+      },
+      {
+       "+": "@admin"
+      },
+      {
+       "+": "@slow"
+      },
+      {
+       "+": "@dangerous"
+      }
+     ]
+    },
+    {
+     "~": []
+    },
+    {
+     "~": []
+    },
+    {
+     "~": []
+    }
+   ]
+  },
   "ping": {
    "docs": {
     "%": [

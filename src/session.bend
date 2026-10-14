@@ -1534,7 +1534,8 @@ def time.reply(+now: Nat) -> R.Reply:
 # OBJECT of a key there (none: nil). BendKV keeps a value as its bytes
 # alone, so it answers ENCODING as Redis 7.0.15 encodes a value set whole
 # ("int" for a long, "embstr" up to 44 bytes, else "raw"; a value Redis
-# made by APPEND, SETRANGE or SETBIT is "raw" there whatever it holds),
+# made by APPEND, SETRANGE, SETBIT or a command of HyperLogLogs is "raw"
+# there whatever it holds),
 # REFCOUNT by the integers 0 to 9999 Redis shares (INT_MAX for one, unless
 # maxmemory is set with an LRU or LFU policy, else 1), and IDLETIME and
 # FREQ (obj.use) as a key's that no command used since the server's start:
@@ -2758,6 +2759,12 @@ def own_reply(+o: R.SessOp, +c: Conn, +s: Srv, +ds: R.Ds) -> Maybe<&2, R.Reply>:
       say(conn.mode(c), R.RStatus{"Background append only file rewriting started"})
     case R.SSortStore{+k, o}:
       say(conn.mode(c), sort.reply(ds, k, o))
+    case R.SPfCount{ks}:
+      say(conn.mode(c), R.pf.count(ks, R.ds.focused(ds)))
+    case R.SPfMerge{+d, srcs}:
+      say(conn.mode(c), R.pf.merge.reply(d, srcs, R.ds.focused(ds)))
+    case R.SPfSelfTest{}:
+      say(conn.mode(c), R.pf.selftest())
 
 # the connection after a session command
 def own_conn(+o: R.SessOp, +c: Conn, +s: Srv) -> Conn:
@@ -2846,6 +2853,12 @@ def own_conn(+o: R.SessOp, +c: Conn, +s: Srv) -> Conn:
       step_conn(c, s)
     case R.SSortStore{k, o}:
       step_conn(c, s)
+    case R.SPfCount{ks}:
+      step_conn(c, s)
+    case R.SPfMerge{d, srcs}:
+      step_conn(c, s)
+    case R.SPfSelfTest{}:
+      step_conn(c, s)
 
 # what a session command does to the databases: SELECT and RESET move the
 # focus to the connection's new database, SWAPDB, MOVE, COPY and FLUSHALL
@@ -2872,6 +2885,8 @@ def own_acts(+o: R.SessOp, +c: Conn, +s: Srv) -> List<&2, R.Act>:
       blk.acts(blk.parse(id, args))
     case R.SSortStore{+k, o}:
       [R.ASort{k, o}]
+    case R.SPfMerge{+d, srcs}:
+      [R.APfMerge{d, srcs}]
     case _:
       Nil{}
 

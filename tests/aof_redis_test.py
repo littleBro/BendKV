@@ -40,7 +40,12 @@ SORT with STORE is logged by Redis as the client sent it, which BendKV's
 load runs again, and by BendKV as the list it stored: the RPUSH of its
 elements onto a key not there, the like script of the pushes onto a key
 there (whose time it takes away), or the DEL of the destination when
-there is nothing to store. A transaction is logged by both as the
+there is nothing to store. PFADD, PFCOUNT (of one key, when it keeps
+the count it made), PFMERGE and PFDEBUG (when it makes a value dense)
+are logged by Redis as the client sent them, which BendKV's load runs
+again, and by BendKV as the value they leave: its SET with KEEPTTL (a
+new key's SET), and the count PFCOUNT keeps as the SETRANGE of its 8
+bytes at 8. A transaction is logged by both as the
 effects of its commands between a MULTI and an EXEC (one of a single
 effect, as that effect alone), and read by both.
 
@@ -146,6 +151,13 @@ CMDS = [
     [b"SET", b"ex11", b"v", b"PX", b"3"], [b"RPUSH", b"ex12", b"a"], [b"PEXPIRE", b"ex12", b"3"],
     [b"SLEEP"], [b"ZADD", b"ex9", b"NX", b"2", b"b", b"3", b"b"], [b"ZUNIONSTORE", b"ex10", b"1", b"zsrc"],
     [b"SORT", b"so", b"STORE", b"ex11"], [b"SORT", b"nope", b"STORE", b"ex12"],
+    [b"PFADD", b"pf1", b"a", b"b", b"c"], [b"PFADD", b"pf1", b"a"], [b"PFCOUNT", b"pf1"], [b"PFADD", b"pf1", b"d"],
+    [b"PFADD", b"pf2"] + [b"e%d" % j for j in range(3000)], [b"PFCOUNT", b"pf2"], [b"PFCOUNT", b"pf1", b"pf2"],
+    [b"PFMERGE", b"pf3", b"pf1", b"pf2"], [b"PFMERGE", b"pf1", b"pf1"], [b"PEXPIREAT", b"pf1", b"%d" % (T + 15)],
+    [b"PFADD", b"pf1", b"z"], [b"PFCOUNT", b"pf1"], [b"PFMERGE", b"pf4", b"pf1"], [b"PFDEBUG", b"TODENSE", b"pf4"],
+    [b"PFADD", b"pf5", b"x"], [b"PFDEBUG", b"GETREG", b"pf5"], [b"SET", b"pfs", b"x"], [b"PFADD", b"pfs", b"y"],
+    [b"PFADD", b"ex13", b"a"], [b"PEXPIRE", b"ex13", b"3"], [b"PFADD", b"ex14", b"a"], [b"PEXPIRE", b"ex14", b"3"],
+    [b"SLEEP"], [b"PFADD", b"ex13", b"b"], [b"PFMERGE", b"ex14", b"pf1"],
     [b"MULTI"], [b"SET", b"tx1", b"a"], [b"INCR", b"txn"], [b"RPUSH", b"txl", b"1", b"2"], [b"SELECT", b"4"],
     [b"SET", b"tx4", b"b"], [b"EXEC"], [b"SELECT", b"0"], [b"MULTI"], [b"SET", b"tx2", b"c"], [b"EXEC"],
     [b"MULTI"], [b"SET", b"tx3", b"d"], [b"DISCARD"], [b"MULTI"], [b"GET", b"tx1"], [b"EXEC"],
