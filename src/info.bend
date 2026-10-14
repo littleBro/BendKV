@@ -14,6 +14,7 @@ import Base
 import ./map.bend as KV
 import ./redis.bend as R
 import ./config.bend as C
+import ./float.bend as F
 
 # Counts
 # ------
@@ -192,7 +193,7 @@ def stats.run.if(none: Bool, es: List<&2, Ent>, +code: Nat, +n: Nat) -> List<&2,
     case True{}:
       es
     case False{}:
-      stats.run.at(es, Nat.div(code, 4n), Nat.mod(code, 4n), n)
+      stats.run.at(es, R.code.key(code), R.code.class(code), n)
 
 def stats.runs(rs: List<&2, Nat>, es: List<&2, Ent>) -> List<&2, Ent>:
   match rs:
@@ -200,7 +201,7 @@ def stats.runs(rs: List<&2, Nat>, es: List<&2, Ent>) -> List<&2, Ent>:
       es
     case Con{+r, rest}:
       +code = R.run.code(r)
-      stats.runs(rest, stats.run.if(Nat.is_lt(code, 4n), es, code, R.run.n(r)))
+      stats.runs(rest, stats.run.if(Nat.is_eq(R.code.key(code), 0n), es, code, R.run.n(r)))
 
 # an error reply of a call of code k: one more of its error code, and of
 # all; a call that ran (class 0) failed with it (the parser's errors are
@@ -208,7 +209,7 @@ def stats.runs(rs: List<&2, Nat>, es: List<&2, Ent>) -> List<&2, Ent>:
 def stats.err.ent(ran: Bool, es: List<&2, Ent>, +k: Nat) -> List<&2, Ent>:
   match ran:
     case True{}:
-      ents.add(es, Nat.div(k, 4n), 0n, 0n, 1n)
+      ents.add(es, R.code.key(k), 0n, 0n, 1n)
     case False{}:
       es
 
@@ -216,12 +217,12 @@ def stats.err(st: Stats, +k: Nat, +m: String) -> Stats:
   match st:
     case Stats{es, cur, pend, +errs, total}:
       +c = err.code(m)
-      Stats{stats.err.ent(Bool.and(Nat.is_eq(Nat.mod(k, 4n), 0n), Nat.is_lt(3n, k)), es, k), cur, pend, errs.add(errs, c, errs.cmp(c, errs)), big.add(total, 1n)}
+      Stats{stats.err.ent(Bool.and(Nat.is_eq(R.code.class(k), 0n), Nat.is_lt(0n, R.code.key(k))), es, k), cur, pend, errs.add(errs, c, errs.cmp(c, errs)), big.add(total, 1n)}
 
 def stats.failed(st: Stats, +k: Nat) -> Stats:
   match st:
     case Stats{es, cur, pend, errs, total}:
-      Stats{ents.add(es, Nat.div(k, 4n), 0n, 0n, 1n), cur, pend, errs, total}
+      Stats{ents.add(es, R.code.key(k), 0n, 0n, 1n), cur, pend, errs, total}
 
 def stats.errs(xs: List<&2, R.Erred>, st: Stats) -> Stats:
   match xs:
@@ -1124,6 +1125,11 @@ def boot.start(+b: Boot) -> U32:
     case IBoot{os, pid, run, replid, exe, conf, sysmem, start, heap0}:
       start
 
+def boot.heap0(+b: Boot) -> Nat:
+  match b:
+    case IBoot{os, pid, run, replid, exe, conf, sysmem, start, heap0}:
+      heap0
+
 def boot.replid(+b: Boot) -> String:
   match b:
     case IBoot{os, pid, run, replid, exe, conf, sysmem, start, heap0}:
@@ -1216,3 +1222,162 @@ def text(args: List<&2, String>, +items: List<&2, C.CItem>, +i: Info, +ds: R.Ds)
     on.head(sel.has(s, "latencystats"), "# Latencystats\r\n"),
     on.head(sel.has(s, "cluster"), "# Cluster\r\n" ++ kv("cluster_enabled", "0")),
     on.keyspace(sel.has(s, "keyspace"), ds)], "")
+
+# MEMORY STATS and MEMORY DOCTOR
+# ------------------------------
+# As Redis's memoryCommand answers them from getMemoryOverheadData, with
+# the numbers INFO's memory section shows: used_memory and its peak, the
+# start's bytes as the overhead, the allocator's bytes and the resident
+# memory; no replication backlog, no client buffers apart (INFO's
+# mem_clients_normal is 0), no AOF buffer, no scripts. Each database
+# with keys is listed, its tables' overheads 0: the trie's nodes are in
+# the dataset, as INFO counts them. The ratios are C floats, each
+# operation rounded to a float as Redis computes them in float, and sent
+# as the double the float is.
+
+def mem.f(+n: Nat) -> F.Fl:
+  F.fl.round(F.fmt.f(), False{}, F.big.of(n), F.fl.eb(), False{})
+
+# (float)a / b, and (float)a * 100 / b
+def mem.ratio(+a: Nat, +b: Nat) -> F.Fl:
+  F.fl.div(F.fmt.f(), mem.f(a), mem.f(b))
+
+def mem.pct(+a: Nat, +b: Nat) -> F.Fl:
+  F.fl.div(F.fmt.f(), F.fl.mul(F.fmt.f(), mem.f(a), mem.f(100n)), mem.f(b))
+
+def mem.dbl(x: F.Fl) -> R.Reply:
+  R.RDbl{F.fl.show_g(F.fl.to(F.fmt.d(), x))}
+
+# a - b, signed (ssize_t)
+def mem.diff(+a: Nat, +b: Nat) -> R.Int:
+  Bool.pick(R.Int, Nat.is_le(b, a), R.IPos{Nat.sub(a, b)}, R.INeg{Nat.sub(Nat.sub(b, a), 1n)})
+
+def mem.keys(dbs: List<&2, R.Db>, +acc: Nat) -> Nat:
+  match dbs:
+    case Nil{}:
+      acc
+    case Con{+d, rest}:
+      mem.keys(rest, Nat.add(acc, R.db.n(d)))
+
+def mem.db(+i: Nat) -> List<&2, R.Reply>:
+  [R.RBulk{"db." ++ Nat.show(i)}, R.RMap{[R.RBulk{"overhead.hashtable.main"}, R.r_int(0n), R.RBulk{"overhead.hashtable.expires"}, R.r_int(0n), R.RBulk{"overhead.hashtable.slot-to-keys"}, R.r_int(0n)]}]
+
+def mem.dbs.if(has: Bool, +i: Nat, rest: List<&2, R.Reply>) -> List<&2, R.Reply>:
+  match has:
+    case True{}:
+      List.append(&2, R.Reply, mem.db(i), rest)
+    case False{}:
+      rest
+
+# the databases with keys (i: the first's number), before tail
+def mem.dbs(dbs: List<&2, R.Db>, +i: Nat, tail: List<&2, R.Reply>) -> List<&2, R.Reply>:
+  match dbs:
+    case Nil{}:
+      tail
+    case Con{+d, rest}:
+      mem.dbs.if(Nat.is_lt(0n, R.db.n(d)), i, mem.dbs(rest, 1n+i, tail))
+
+def mem.stats.go(+used: Nat, +pk: Nat, +used0: Nat, +rss: Nat, +act: Nat, +keys: Nat, dbs: List<&2, R.Reply>) -> R.Reply:
+  +data = Nat.sub(used, used0)
+  +net = Bool.pick(Nat, Nat.is_lt(used0, used), Nat.sub(used, used0), 1n)
+  R.RMap{List.append(&2, R.Reply, [
+    R.RBulk{"peak.allocated"}, R.r_int(pk), R.RBulk{"total.allocated"}, R.r_int(used),
+    R.RBulk{"startup.allocated"}, R.r_int(used0), R.RBulk{"replication.backlog"}, R.r_int(0n),
+    R.RBulk{"clients.slaves"}, R.r_int(0n), R.RBulk{"clients.normal"}, R.r_int(0n),
+    R.RBulk{"cluster.links"}, R.r_int(0n), R.RBulk{"aof.buffer"}, R.r_int(0n),
+    R.RBulk{"lua.caches"}, R.r_int(0n), R.RBulk{"functions.caches"}, R.r_int(0n)], List.append(&2, R.Reply, dbs, [
+    R.RBulk{"overhead.total"}, R.r_int(used0), R.RBulk{"keys.count"}, R.r_int(keys),
+    R.RBulk{"keys.bytes-per-key"}, R.r_int(Bool.pick(Nat, Nat.is_eq(keys, 0n), 0n, Nat.div(net, Nat.max(keys, 1n)))),
+    R.RBulk{"dataset.bytes"}, R.r_int(data), R.RBulk{"dataset.percentage"}, mem.dbl(mem.pct(data, net)),
+    R.RBulk{"peak.percentage"}, mem.dbl(mem.pct(used, pk)),
+    R.RBulk{"allocator.allocated"}, R.r_int(used), R.RBulk{"allocator.active"}, R.r_int(act),
+    R.RBulk{"allocator.resident"}, R.r_int(rss),
+    R.RBulk{"allocator-fragmentation.ratio"}, mem.dbl(mem.ratio(act, used)),
+    R.RBulk{"allocator-fragmentation.bytes"}, R.RInt{mem.diff(act, used)},
+    R.RBulk{"allocator-rss.ratio"}, mem.dbl(mem.ratio(rss, act)),
+    R.RBulk{"allocator-rss.bytes"}, R.RInt{mem.diff(rss, act)},
+    R.RBulk{"rss-overhead.ratio"}, mem.dbl(mem.ratio(rss, rss)), R.RBulk{"rss-overhead.bytes"}, R.r_int(0n),
+    R.RBulk{"fragmentation"}, mem.dbl(mem.ratio(rss, used)),
+    R.RBulk{"fragmentation.bytes"}, R.RInt{mem.diff(rss, used)}]))}
+
+# MEMORY STATS of the server whose facts are i, its databases dbs
+def mem.stats(+i: Info, +dbs: List<&2, R.Db>) -> R.Reply:
+  match i:
+    case IInfo{+b, +l, c, inst, +pk, c0, a0, a, st, ex, rw}:
+      +used = live.heap(l)
+      mem.stats.go(used, Nat.max(pk, used), boot.heap0(b), live.rss(l), live.act(l), mem.keys(dbs, 0n), mem.dbs(dbs, 0n, Nil{}))
+
+# whether a float is past a double (hi, lo: its bits), as C compares them
+def mem.gt(x: F.Fl, +hi: Nat, +lo: Nat) -> Bool:
+  Cmp.is_gt(F.f64.cmp(F.f64.of(F.fl.to(F.fmt.d(), x)), F.F64{hi, lo}))
+
+# MEMORY DOCTOR (getMemoryDoctorReport): under 5 MB of used_memory, the
+# instance is empty; past it, a peak past 1.5 times the memory in use,
+# and fragmentation past 1.4 (the resident memory to used_memory) or 1.1
+# (the allocator's) with more than 10 MB of it. The other issues Redis
+# looks for need what BendKV has none of (the RSS of something else than
+# the heap, client buffers, replicas, scripts). The ratios are floats
+# compared with the doubles 1.5, 1.4 and 1.1.
+def doc.empty() -> String:
+  "Hi Sam, this instance is empty or is using very little memory, my issues detector can't be used in these conditions. Please, leave for your mission on Earth and fill it with some data. The new Sam and I will be back to our programming as soon as I finished rebooting.\n"
+
+def doc.none() -> String:
+  "Hi Sam, I can't find any memory issue in your instance. I can only account for what occurs on this base.\n"
+
+def doc.peak(on: Bool) -> String:
+  match on:
+    case True{}:
+      " * Peak memory: In the past this instance used more than 150% the memory that is currently using. The allocator is normally not able to release memory after a peak, so you can expect to see a big fragmentation ratio, however this is actually harmless and is only due to the memory peak, and if the Redis instance Resident Set Size (RSS) is currently bigger than expected, the memory will be used as soon as you fill the Redis instance with more data. If the memory peak was only occasional and you want to try to reclaim memory, please try the MEMORY PURGE command, otherwise the only other option is to shutdown and restart the instance.\n\n"
+    case False{}:
+      ""
+
+def doc.frag(on: Bool) -> String:
+  match on:
+    case True{}:
+      " * High total RSS: This instance has a memory fragmentation and RSS overhead greater than 1.4 (this means that the Resident Set Size of the Redis process is much larger than the sum of the logical allocations Redis performed). This problem is usually due either to a large peak memory (check if there is a peak memory entry above in the report) or may result from a workload that causes the allocator to fragment memory a lot. If the problem is a large peak memory, then there is no issue. Otherwise, make sure you are using the Jemalloc allocator and not the default libc malloc. Note: The currently used allocator is \"libc\".\n\n"
+    case False{}:
+      ""
+
+def doc.afrag(on: Bool) -> String:
+  match on:
+    case True{}:
+      " * High allocator fragmentation: This instance has an allocator external fragmentation greater than 1.1. This problem is usually due either to a large peak memory (check if there is a peak memory entry above in the report) or may result from a workload that causes the allocator to fragment memory a lot. You can try enabling 'activedefrag' config option.\n\n"
+    case False{}:
+      ""
+
+def doc.arss(on: Bool) -> String:
+  match on:
+    case True{}:
+      " * High allocator RSS overhead: This instance has an RSS memory overhead is greater than 1.1 (this means that the Resident Set Size of the allocator is much larger than the sum what the allocator actually holds). This problem is usually due to a large peak memory (check if there is a peak memory entry above in the report), you can try the MEMORY PURGE command to reclaim it.\n\n"
+    case False{}:
+      ""
+
+def doc.issues(any: Bool, +peak: Bool, +frag: Bool, +afrag: Bool, +arss: Bool) -> String:
+  match any:
+    case True{}:
+      "Sam, I detected a few issues in this Redis instance memory implants:\n\n" ++ doc.peak(peak) ++ doc.frag(frag) ++ doc.afrag(afrag) ++ doc.arss(arss) ++ "I'm here to keep you safe, Sam. I want to help you.\n"
+    case False{}:
+      doc.none()
+
+def doc.ten() -> Nat:
+  10485760n
+
+def doc.look(+used: Nat, +pk: Nat, +rss: Nat, +act: Nat) -> String:
+  +peak = mem.gt(mem.ratio(pk, used), 1073217536n, 0n)
+  +frag = Bool.and(mem.gt(mem.ratio(rss, used), 1073112678n, 1717986918n), Nat.is_lt(Nat.add(used, doc.ten()), rss))
+  +afrag = Bool.and(mem.gt(mem.ratio(act, used), 1072798105n, 2576980378n), Nat.is_lt(Nat.add(used, doc.ten()), act))
+  +arss = Bool.and(mem.gt(mem.ratio(rss, act), 1072798105n, 2576980378n), Nat.is_lt(Nat.add(act, doc.ten()), rss))
+  doc.issues(Bool.or(Bool.or(peak, frag), Bool.or(afrag, arss)), peak, frag, afrag, arss)
+
+def doc.of(empty: Bool, +used: Nat, +pk: Nat, +rss: Nat, +act: Nat) -> String:
+  match empty:
+    case True{}:
+      doc.empty()
+    case False{}:
+      doc.look(used, pk, rss, act)
+
+def mem.doctor(+i: Info) -> String:
+  match i:
+    case IInfo{b, +l, c, inst, +pk, c0, a0, a, st, ex, rw}:
+      +used = live.heap(l)
+      doc.of(Nat.is_lt(used, 5242880n), used, Nat.max(pk, used), live.rss(l), live.act(l))

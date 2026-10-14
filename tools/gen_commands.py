@@ -65,7 +65,7 @@ COMMANDS = {
     "bitfield_ro": [], "hset": [], "hsetnx": [], "hget": [], "hmget": [], "hmset": [],
     "hdel": [], "hlen": [], "hstrlen": [], "hexists": [], "hkeys": [], "hvals": [],
     "hgetall": [], "hincrby": [], "hscan": [], "hrandfield": [], "eval": [],
-    "memory": ["help", "usage"], "lpush": [], "rpush": [], "lpushx": [], "rpushx": [],
+    "memory": ["doctor", "help", "malloc-stats", "purge", "stats", "usage"], "lpush": [], "rpush": [], "lpushx": [], "rpushx": [],
     "lpop": [], "rpop": [], "llen": [], "lindex": [], "lrange": [], "lset": [],
     "linsert": [], "lrem": [], "ltrim": [], "lpos": [], "lmove": [], "rpoplpush": [],
     "lmpop": [], "sadd": [], "srem": [], "scard": [], "sismember": [], "smismember": [],
@@ -84,7 +84,8 @@ COMMANDS = {
     "psubscribe": [], "punsubscribe": [], "ssubscribe": [], "sunsubscribe": [],
     "publish": [], "spublish": [], "pubsub": ["channels", "help", "numpat", "numsub",
     "shardchannels", "shardnumsub"], "monitor": [], "bgrewriteaof": [], "sort": [],
-    "sort_ro": [], "pfadd": [], "pfcount": [], "pfmerge": [], "pfdebug": [], "pfselftest": []}
+    "sort_ro": [], "pfadd": [], "pfcount": [], "pfmerge": [], "pfdebug": [], "pfselftest": [],
+    "lastsave": [], "role": [], "wait": [], "shutdown": [], "lolwut": []}
 
 # Step 1: redis-server -> facts
 # -----------------------------
@@ -341,7 +342,7 @@ def generate():
 # parse_id, parse_sess), then the subcommands of each container in the
 # order of their own (client_id, function_id, config_id, command_id); 0 is
 # none. What a
-# call counts as is a code, 4 times its key plus its class (0 runs, 1 is
+# call counts as is a code, 3 times its key plus its class (0 runs, 1 is
 # refused, 2 fails as it parses), and a request carries its code as a
 # word of twelve bits with six of them set (the code-th such word, in
 # increasing order): the words or-ed together over a batch have six bits
@@ -484,7 +485,7 @@ def stats_keys(src):
 def stats_block(src, facts):
     ar = arities(facts)
     tops, keys = stats_keys(src)
-    if 4 * (len(keys) + 1) > len(WORDS):
+    if 3 * (len(keys) + 1) > len(WORDS):
         raise SystemExit("gen_commands.py: more codes than words")
     out = ["# a command's key, by its number in the parser (cmd_id); 0 for none",
            "def stat.top(+id: Nat) -> Nat:", "  match id:"]
@@ -558,7 +559,7 @@ def stats_block(src, facts):
         if fk[name] == 1 and name not in NOTOUCH:
             out += ["    case %dn:" % k, "      True{}"]
     out += ["    case _:", "      False{}", ""]
-    ncodes = 4 * (len(keys) + 1)
+    ncodes = 3 * (len(keys) + 1)
     out += ["# a code's word", "def stat.cw(+code: Nat) -> U32:", "  match code:"]
     for c in range(ncodes):
         out += ["    case %dn:" % c, "      %d" % WORDS[c]]
@@ -583,7 +584,7 @@ def stats_block(src, facts):
             "# runs, as the parser writes them"]
     for name in ("get", "set", "incr"):
         k = [x[0] for x in keys].index(name) + 1
-        out += ["def stat.mark.%s() -> U32:" % name, "  %d" % (WORDS[4 * k] << 20), ""]
+        out += ["def stat.mark.%s() -> U32:" % name, "  %d" % (WORDS[3 * k] << 20), ""]
     return "\n".join(out[:-1]) + "\n"
 
 # Step 4: the parser's numbers -> dispatch

@@ -179,15 +179,15 @@ def gen.pre.ran(ran: Bool, +c: R.Cmd, +code: Nat) -> Pre:
 def gen.pre(ok: Bool, +c: R.Cmd, +code: Nat) -> Pre:
   match ok:
     case False{}:
-      +refused = Nat.add(Nat.mul(Nat.div(code, 4n), 4n), 1n)
+      +refused = R.code.refused(code)
       Pre{refused, Some{[R.Erred{refused, "NOAUTH Authentication required."}]}}
     case True{}:
-      gen.pre.ran(Nat.is_eq(Nat.mod(code, 4n), 0n), c, code)
+      gen.pre.ran(Nat.is_eq(R.code.class(code), 0n), c, code)
 
 # whether a call runs while its client's replies are held back (CLIENT
 # REPLY OFF or SKIP): its reply counts all the same
 def gen.muted(+ok: Bool, +code: Nat, +conn: S.Conn) -> Bool:
-  Bool.and(ok, Bool.and(Nat.is_eq(Nat.mod(code, 4n), 0n), Bool.not(mute.on(S.conn.mode(conn)))))
+  Bool.and(ok, Bool.and(Nat.is_eq(R.code.class(code), 0n), Bool.not(mute.on(S.conn.mode(conn)))))
 
 def gen.errs(xs: Maybe<&2, List<&2, R.Erred>>, +rs1: List<&2, R.Reply>, +code: Nat) -> List<&2, R.Erred>:
   match xs:
@@ -399,15 +399,15 @@ def ups.drop(us: List<&2, Up>, hit: Bool, +n: Nat) -> List<&2, Up>:
     case Con{u, +rest} False{}:
       u <> ups.drop(rest, ups.is(n, rest), n)
 
-# the clients whose time is up at now unblocked with a null array (late:
-# whether the first of ws's is), in the order they came, the others kept
-# in order (keep: those before, newest first)
+# the clients whose time is up at now unblocked (late: whether the first
+# of ws's is) with a null array, or 0 for WAIT (S.blk.late), in the order
+# they came, the others kept in order (keep: those before, newest first)
 def waits.expire(ws: Waits, late: Bool, +now: Nat, keep: Waits, up: List<&2, Up>) -> Waits & List<&2, Up>:
   match ws late:
     case WaitNone{} _:
       (waits.rev(keep, WaitNone{}), up)
-    case WaitOn{id, back, +c0, c1, b, argv, code, db, until, cmds, codes, av, +rest} True{}:
-      waits.expire(rest, waits.late(now, rest), now, keep, Up{back, c1, S.put(S.say(S.conn.mode(c0), R.RNullA{}), Nil{}), cmds, codes, av} <> up)
+    case WaitOn{id, back, +c0, c1, +b, argv, code, db, until, cmds, codes, av, +rest} True{}:
+      waits.expire(rest, waits.late(now, rest), now, keep, Up{back, c1, S.put(S.say(S.conn.mode(c0), S.blk.late(b)), Nil{}), cmds, codes, av} <> up)
     case WaitOn{id, back, c0, c1, b, argv, code, db, until, cmds, codes, av, +rest} False{}:
       waits.expire(rest, waits.late(now, rest), now, WaitOn{id, back, c0, c1, b, argv, code, db, until, cmds, codes, av, keep}, up)
 
@@ -1062,7 +1062,8 @@ def touch.by(+c: R.Cmd, t: Tx, +xs: List<&2, A.Ent>, +pre: Maybe<&2, R.Ds>, +pos
 # (conn_end), so an fd in the registry or in kills is still its client's
 # open socket. The monitors (MONITOR, below) are a list, in the order
 # they came, as Redis keeps them; the registry also keeps the pause of
-# CLIENT PAUSE (The pause, below).
+# CLIENT PAUSE (The pause, below), and a SHUTDOWN asked for in the group
+# (down: SHUTDOWN, below).
 type Cl is Data:
   Cl{id: Nat, back: Chan(Ans), fd: U32, addr: String, laddr: String, since: Nat, name: String, db: Nat, noev: Bool, r3: Bool}
 
@@ -1080,14 +1081,15 @@ type Mon is Data:
   Mon{id: Nat, back: Chan(Ans), on: Bool}
 
 type Cls is Data:
-  Cls{tab: KV.Trie<Cl>, killed: List<&2, Nat>, kills: List<&2, U32>, mons: List<&2, Mon>, pause: Pz}
+  Cls{tab: KV.Trie<Cl>, killed: List<&2, Nat>, kills: List<&2, U32>, mons: List<&2, Mon>, pause: Pz, down: Nat}
 
 def cls.new() -> Cls:
-  Cls{KV.empty(Cl), Nil{}, Nil{}, Nil{}, PzOff{}}
+  Cls{KV.empty(Cl), Nil{}, Nil{}, Nil{}, PzOff{}, 0n}
 
 # the bits of Ps's ev that keep the fast way off while a killed client's
-# connection has not ended (the 31st), a client monitors (the 30th) or
-# clients are paused (the 25th): no class of keyspace event has them
+# connection has not ended (the 31st), a client monitors (the 30th),
+# clients are paused (the 25th), or a SHUTDOWN stops the server (the
+# 24th) or failed (the 23rd): no class of keyspace event has them
 def kill.bit(+kd: List<&2, Nat>) -> U32:
   match kd:
     case Nil{}:
@@ -1109,25 +1111,34 @@ def pz.bit(+p: Pz) -> U32:
     case PzOn{all, end}:
       33554432
 
+def dn.bit(+dn: Nat) -> U32:
+  match dn:
+    case 0n:
+      0
+    case 1n:
+      8388608
+    case _:
+      16777216
+
 def cls.bit(+cs: Cls) -> U32:
   match cs:
-    case Cls{tab, +kd, ks, +ms, +pz}:
-      U32.or(U32.or(kill.bit(kd), mon.bit(ms)), pz.bit(pz))
+    case Cls{tab, +kd, ks, +ms, +pz, +dn}:
+      U32.or(U32.or(U32.or(kill.bit(kd), mon.bit(ms)), pz.bit(pz)), dn.bit(dn))
 
 def cls.get(+id: Nat, +cs: Cls) -> Maybe<&2, Cl>:
   match cs:
-    case Cls{+tab, kd, ks, ms, pz}:
+    case Cls{+tab, kd, ks, ms, pz, dn}:
       KV.get(Cl, tab, Nat.show(id))
 
 def cls.put(+id: Nat, c: Cl, cs: Cls) -> Cls:
   match cs:
-    case Cls{tab, kd, ks, ms, pz}:
-      Cls{KV.set(Cl, tab, Nat.show(id), c), kd, ks, ms, pz}
+    case Cls{tab, kd, ks, ms, pz, dn}:
+      Cls{KV.set(Cl, tab, Nat.show(id), c), kd, ks, ms, pz, dn}
 
 def cls.del(+id: Nat, cs: Cls) -> Cls:
   match cs:
-    case Cls{tab, kd, ks, ms, pz}:
-      Cls{KV.del(Cl, tab, Nat.show(id)), kd, ks, ms, pz}
+    case Cls{tab, kd, ks, ms, pz, dn}:
+      Cls{KV.del(Cl, tab, Nat.show(id)), kd, ks, ms, pz, dn}
 
 # whether xs holds n
 def nats.has(+n: Nat, +xs: List<&2, Nat>) -> Bool:
@@ -1149,21 +1160,21 @@ def nats.drop(+n: Nat, xs: List<&2, Nat>) -> List<&2, Nat>:
 # whether the client of id was killed and its connection has not ended
 def cls.killed(+id: Nat, +cs: Cls) -> Bool:
   match cs:
-    case Cls{tab, +kd, ks, ms, pz}:
+    case Cls{tab, +kd, ks, ms, pz, dn}:
       nats.has(id, kd)
 
 # the client of id's connection ended: out of the registry, and of the
 # killed
 def cls.left(+id: Nat, cs: Cls) -> Cls:
   match cs:
-    case Cls{tab, kd, ks, ms, pz}:
-      Cls{KV.del(Cl, tab, Nat.show(id)), nats.drop(id, kd), ks, ms, pz}
+    case Cls{tab, kd, ks, ms, pz, dn}:
+      Cls{KV.del(Cl, tab, Nat.show(id)), nats.drop(id, kd), ks, ms, pz, dn}
 
 # the fds to shut down taken (at the end of the group)
 def cls.kills(cs: Cls) -> List<&2, U32> & Cls:
   match cs:
-    case Cls{tab, kd, ks, ms, pz}:
-      (ks, Cls{tab, kd, Nil{}, ms, pz})
+    case Cls{tab, kd, ks, ms, pz, dn}:
+      (ks, Cls{tab, kd, Nil{}, ms, pz, dn})
 
 # a client's name, database and protocol set from its connection
 def cl.conn(+cn: S.Conn, c: Cl) -> Cl:
@@ -1245,8 +1256,8 @@ def mons.push(+id: Nat, +out: String, +ms: List<&2, Mon>, px: List<&2, Sigma<&2,
 # the client of id no monitor (RESET, its end, CLIENT KILL)
 def cls.unmon(+id: Nat, cs: Cls) -> Cls:
   match cs:
-    case Cls{tab, kd, ks, ms, pz}:
-      Cls{tab, kd, ks, mons.drop(id, ms), pz}
+    case Cls{tab, kd, ks, ms, pz, dn}:
+      Cls{tab, kd, ks, mons.drop(id, ms), pz, dn}
 
 # Pub/Sub
 # -------
@@ -1746,36 +1757,36 @@ def ps.cls(+pb: Ps) -> Cls:
 # batch left them, and a line to the others
 def ps.mon.any(+pb: Ps) -> Bool:
   match pb:
-    case Ps{reg, ev, px, Cls{tab, kd, ks, +ms, pz}, own}:
+    case Ps{reg, ev, px, Cls{tab, kd, ks, +ms, pz, dn}, own}:
       Bool.not(U32.is_eq(mon.bit(ms), 0))
     case PsOf{+p}:
       ps.mon.any(p)
 
 def ps.mon.is(+id: Nat, +pb: Ps) -> Bool:
   match pb:
-    case Ps{reg, ev, px, Cls{tab, kd, ks, +ms, pz}, own}:
+    case Ps{reg, ev, px, Cls{tab, kd, ks, +ms, pz, dn}, own}:
       mons.has(id, ms)
     case PsOf{+p}:
       ps.mon.is(id, p)
 
 def ps.mon.add(+id: Nat, +back: Chan(Ans), pb: Ps) -> Ps:
   match pb:
-    case Ps{reg, ev, px, Cls{tab, kd, ks, ms, pz}, own}:
-      Ps{reg, ev, px, Cls{tab, kd, ks, List.append(&2, Mon, ms, [Mon{id, back, True{}}]), pz}, own}
+    case Ps{reg, ev, px, Cls{tab, kd, ks, ms, pz, dn}, own}:
+      Ps{reg, ev, px, Cls{tab, kd, ks, List.append(&2, Mon, ms, [Mon{id, back, True{}}]), pz, dn}, own}
     case PsOf{p}:
       ps.mon.add(id, back, p)
 
 def ps.mon.mute(+id: Nat, +on: Bool, pb: Ps) -> Ps:
   match pb:
-    case Ps{reg, ev, px, Cls{tab, kd, ks, ms, pz}, own}:
-      Ps{reg, ev, px, Cls{tab, kd, ks, mons.mute(id, on, ms), pz}, own}
+    case Ps{reg, ev, px, Cls{tab, kd, ks, ms, pz, dn}, own}:
+      Ps{reg, ev, px, Cls{tab, kd, ks, mons.mute(id, on, ms), pz, dn}, own}
     case PsOf{p}:
       ps.mon.mute(id, on, p)
 
 def ps.mon.push(+id: Nat, +out: String, pb: Ps) -> Ps:
   match pb:
-    case Ps{reg, ev, px, Cls{tab, kd, ks, +ms, pz}, own}:
-      Ps{reg, ev, mons.push(id, out, ms, px), Cls{tab, kd, ks, ms, pz}, own}
+    case Ps{reg, ev, px, Cls{tab, kd, ks, +ms, pz, dn}, own}:
+      Ps{reg, ev, mons.push(id, out, ms, px), Cls{tab, kd, ks, ms, pz, dn}, own}
     case PsOf{p}:
       ps.mon.push(id, out, p)
 
@@ -1789,7 +1800,7 @@ def cl.addr.or(m: Maybe<&2, Cl>) -> String:
 
 def ps.addr(+id: Nat, +pb: Ps) -> String:
   match pb:
-    case Ps{reg, ev, px, Cls{+tab, kd, ks, ms, pz}, own}:
+    case Ps{reg, ev, px, Cls{+tab, kd, ks, ms, pz, dn}, own}:
       cl.addr.or(KV.get(Cl, tab, Nat.show(id)))
     case PsOf{+p}:
       ps.addr(id, p)
@@ -1798,8 +1809,8 @@ def ps.addr(+id: Nat, +pb: Ps) -> String:
 # and the fast way off until its connection ends
 def ps.kill(+id: Nat, +fd: U32, pb: Ps) -> Ps:
   match pb:
-    case Ps{reg, ev, px, Cls{tab, kd, ks, ms, pz}, own}:
-      Ps{reg, U32.or(ev, 2147483648), px, Cls{KV.del(Cl, tab, Nat.show(id)), id <> kd, fd <> ks, ms, pz}, own}
+    case Ps{reg, ev, px, Cls{tab, kd, ks, ms, pz, dn}, own}:
+      Ps{reg, U32.or(ev, 2147483648), px, Cls{KV.del(Cl, tab, Nat.show(id)), id <> kd, fd <> ks, ms, pz, dn}, own}
     case PsOf{p}:
       ps.kill(id, fd, p)
 
@@ -2052,10 +2063,27 @@ def mem.need(+pb: Ps) -> Nat:
 # the pause (The pause)
 def ps.pz(+pb: Ps) -> Pz:
   match pb:
-    case Ps{reg, ev, px, Cls{tab, kd, ks, ms, +pz}, own}:
+    case Ps{reg, ev, px, Cls{tab, kd, ks, ms, +pz, dn}, own}:
       pz
     case PsOf{+p}:
       ps.pz(p)
+
+# the SHUTDOWN asked for in the group (SHUTDOWN, below): 0 none, 1 one
+# that failed, 2 one that stops the server, 3 one that stops it after a
+# save it could not make (SAVE FORCE); and the group with one asked for
+def ps.down(+pb: Ps) -> Nat:
+  match pb:
+    case Ps{reg, ev, px, Cls{tab, kd, ks, ms, pz, +dn}, own}:
+      dn
+    case PsOf{+p}:
+      ps.down(p)
+
+def ps.down.set(+d: Nat, pb: Ps) -> Ps:
+  match pb:
+    case Ps{reg, ev, px, Cls{tab, kd, ks, ms, pz, dn}, own}:
+      Ps{reg, U32.or(U32.and(ev, 4269801471), dn.bit(d)), px, Cls{tab, kd, ks, ms, pz, d}, own}
+    case PsOf{p}:
+      ps.down.set(d, p)
 
 # the pushes of a batch put before the group's answers
 def ps.flush(pb: Ps, outs: List<&2, Sigma<&2, &2, Chan(Ans), _ => Ans>>) -> Ps & List<&2, Sigma<&2, &2, Chan(Ans), _ => Ans>>:
@@ -2874,15 +2902,15 @@ def bg.wait(+id: Nat, +back: Chan(Ans), b: S.Blk, +c: R.Cmd, +code: Nat, rest: L
       LHeld{h}
 
 # CLIENT UNBLOCK: the client of the id, if it waits, unblocked with a
-# null array or an UNBLOCKED error, its call failed (an error reply's
-# counted as one); the command answers 1, or 0 when no client of the id
-# waits. Redis counts CLIENT UNBLOCK's own call failed when it sends the
+# null array (0 for WAIT: S.blk.late) or an UNBLOCKED error, its call
+# failed (an error reply's counted as one); the command answers 1, or 0
+# when no client of the id waits. Redis counts CLIENT UNBLOCK's own call failed when it sends the
 # error: the error reply came while it ran (incrCommandStatsOnError).
 def unblock.msg() -> String:
   "UNBLOCKED client unblocked via CLIENT UNBLOCK"
 
-def unblock.reply(+err: Bool) -> R.Reply:
-  Bool.pick(R.Reply, err, R.RError{unblock.msg()}, R.RNullA{})
+def unblock.reply(+err: Bool, +b: S.Blk) -> R.Reply:
+  Bool.pick(R.Reply, err, R.RError{unblock.msg()}, S.blk.late(b))
 
 def unblock.stat(+err: Bool, +code: Nat, +own: Nat, srv: S.Srv) -> S.Srv:
   match err:
@@ -2894,8 +2922,8 @@ def unblock.stat(+err: Bool, +code: Nat, +own: Nat, srv: S.Srv) -> S.Srv:
 def bg.unblocked(p: Waits & Waits, +err: Bool, +code: Nat, rs: List<&2, R.Reply>, es: List<&2, A.Ent>, conn: S.Conn, srv: S.Srv, ds: R.Ds, up: List<&2, Up>, tx: Tx, pb: Ps) -> LRun:
   (w, +ws) = p
   match w:
-    case WaitOn{id, back, +c0, c1, b, argv, +wc, db, until, cmds, codes, av, rest}:
-      bg.one(R.Own{R.SReply{R.RInt{R.IPos{1n}}}}, code, LRun{rs, es, conn, waits.count(ws, unblock.stat(err, wc, code, srv)), ds, ws, Up{back, c1, S.put(S.say(S.conn.mode(c0), unblock.reply(err)), Nil{}), cmds, codes, av} <> up, tx, pb})
+    case WaitOn{id, back, +c0, c1, +b, argv, +wc, db, until, cmds, codes, av, rest}:
+      bg.one(R.Own{R.SReply{R.RInt{R.IPos{1n}}}}, code, LRun{rs, es, conn, waits.count(ws, unblock.stat(err, wc, code, srv)), ds, ws, Up{back, c1, S.put(S.say(S.conn.mode(c0), unblock.reply(err, b)), Nil{}), cmds, codes, av} <> up, tx, pb})
     case WaitNone{}:
       bg.one(R.Own{R.SReply{R.RInt{R.IPos{0n}}}}, code, LRun{rs, es, conn, srv, ds, ws, up, tx, pb})
 
@@ -2930,8 +2958,9 @@ def bg.unblock(+n: Nat, +err: Bool, +code: Nat, g: LRun) -> LRun:
 # append-only file (BGREWRITEAOF: The rewrite of the append-only file); or
 # refuse a command past maxmemory (Memory: in MULTI, flagging the
 # transaction); or hold a command back while clients are paused (The
-# pause); a command that does not run (after a QUIT, or before the
-# client authenticates) runs as the session runs it.
+# pause); stop the server (SHUTDOWN, its save failed or not), or refuse
+# SHUTDOWN in MULTI (SHUTDOWN); a command that does not run (after a
+# QUIT, or before the client authenticates) runs as the session runs it.
 type Sh is Data:
   ShRun{}
   ShWait{b: S.Blk}
@@ -2957,6 +2986,8 @@ type Sh is Data:
   ShRewrite{}
   ShOom{inm: Bool}
   ShPause{}
+  ShDown{fail: Bool, save: Bool}
+  ShNoMulti{}
 
 def sh.blk(b: S.Blk, +ds: R.Ds) -> Sh:
   +x = b
@@ -2974,7 +3005,7 @@ def oom.msg() -> String:
 def sh.refused(+c: R.Cmd, +code: Nat) -> Sh:
   match c:
     case R.Own{R.SBad{R.RError{+m}}}:
-      Bool.pick(Sh, Nat.is_eq(Nat.div(code, 4n), R.stat.top(162n)), ShAbort{abort.why(m)}, ShRefuse{})
+      Bool.pick(Sh, Nat.is_eq(R.code.key(code), R.stat.top(162n)), ShAbort{abort.why(m)}, ShRefuse{})
     case _:
       ShRefuse{}
 
@@ -2985,6 +3016,20 @@ def sh.abort.if(hit: Bool, +m: String) -> Sh:
     case True{}:
       ShAbort{abort.why(m)}
     case False{}:
+      ShRun{}
+
+# SHUTDOWN stops the server, its save failed (SAVE: BendKV writes no RDB
+# snapshot) or not, but when that failure stops it (SAVE without FORCE);
+# the other administrative commands run as the session runs them
+def sh.down(+sd: R.Sd) -> Sh:
+  +save = R.sd.save(sd)
+  ShDown{Bool.and(save, Bool.not(R.sd.force(sd))), save}
+
+def sh.admin(+k: Nat, +a: List<&2, String>) -> Sh:
+  match k:
+    case 4n:
+      sh.down(R.sd.flags(a))
+    case _:
       ShRun{}
 
 # a command of a client with no open transaction, that may run
@@ -3016,8 +3061,10 @@ def sh.plain(+c: R.Cmd, +code: Nat, +ds: R.Ds) -> Sh:
       ShMonitor{}
     case R.Own{R.SRewrite{}}:
       ShRewrite{}
+    case R.Own{R.SAdmin{+k, +a}}:
+      sh.admin(k, a)
     case R.Own{R.SBad{R.RError{+m}}}:
-      sh.abort.if(Nat.is_eq(Nat.div(code, 4n), R.stat.top(162n)), m)
+      sh.abort.if(Nat.is_eq(R.code.key(code), R.stat.top(162n)), m)
     case _:
       ShRun{}
 
@@ -3039,7 +3086,7 @@ def sh.queue.if(refused: Bool, +c: R.Cmd, +code: Nat) -> Sh:
       ShQueue{}
 
 def sh.queue(+c: R.Cmd, +code: Nat) -> Sh:
-  sh.queue.if(Nat.is_eq(Nat.mod(code, 4n), 1n), c, code)
+  sh.queue.if(Nat.is_eq(R.code.class(code), 1n), c, code)
 
 # a command of a client in MULTI (may: whether it may run)
 def sh.multi(may: Bool, +c: R.Cmd, +code: Nat) -> Sh:
@@ -3069,8 +3116,8 @@ def sh.multi(may: Bool, +c: R.Cmd, +code: Nat) -> Sh:
 # when the parser failed them; any other is refused (EXEC aborts its
 # transaction with why)
 def sh.deny(+code: Nat) -> Sh:
-  +key = Nat.div(code, 4n)
-  Bool.pick(Sh, Bool.or(Nat.is_eq(Nat.mod(code, 4n), 1n), sub.allowed(key)), ShRun{}, ShDeny{R.stat.name(key)})
+  +key = R.code.key(code)
+  Bool.pick(Sh, Bool.or(Nat.is_eq(R.code.class(code), 1n), sub.allowed(key)), ShRun{}, ShDeny{R.stat.name(key)})
 
 def sh.echo(ping: Bool, m: String, +code: Nat) -> Sh:
   match ping:
@@ -3095,7 +3142,7 @@ def sh.sub(+c: R.Cmd, +code: Nat) -> Sh:
     case R.Ping{}:
       ShPing{""}
     case R.Echo{m}:
-      sh.echo(Nat.is_eq(Nat.div(code, 4n), R.stat.top(1n)), m, code)
+      sh.echo(Nat.is_eq(R.code.key(code), R.stat.top(1n)), m, code)
     case R.Own{R.SQuit{}}:
       ShRun{}
     case R.Own{R.SReset{}}:
@@ -3144,6 +3191,8 @@ def sh.held.of(s: Sh) -> Sh:
       ShMonDeny{i}
     case ShRefuse{}:
       ShRefuse{}
+    case ShNoMulti{}:
+      ShNoMulti{}
     case _:
       ShPause{}
 
@@ -3159,7 +3208,7 @@ def sh.of.may(may: Bool, subd: Bool, inm: Bool, mon: Bool, held: Bool, +c: R.Cmd
     case True{} True{}:
       sh.held(held, sh.sub(c, code))
     case True{} False{}:
-      sh.held(held, sh.mon(Bool.and(mon, Bool.and(R.stat.keyspace(Nat.div(code, 4n)), Bool.not(Nat.is_eq(Nat.mod(code, 4n), 1n)))), inm, c, code, ds))
+      sh.held(held, sh.mon(Bool.and(mon, Bool.and(R.stat.keyspace(R.code.key(code)), Bool.not(Nat.is_eq(R.code.class(code), 1n)))), inm, c, code, ds))
     case False{} _:
       sh.of.noauth(inm, c, code)
 
@@ -3185,8 +3234,8 @@ def sh.oom.multi(+c: R.Cmd) -> Bool:
       True{}
 
 def sh.oomy(+inm: Bool, +c: R.Cmd, +code: Nat) -> Bool:
-  Bool.and(Bool.not(Nat.is_eq(Nat.mod(code, 4n), 1n)),
-    Bool.or(R.stat.denyoom(Nat.div(code, 4n)), Bool.and(inm, sh.oom.multi(c))))
+  Bool.and(Bool.not(Nat.is_eq(R.code.class(code), 1n)),
+    Bool.or(R.stat.denyoom(R.code.key(code)), Bool.and(inm, sh.oom.multi(c))))
 
 def sh.of.run(rej: Bool, may: Bool, subd: Bool, inm: Bool, mon: Bool, held: Bool, +c: R.Cmd, +code: Nat, +ds: R.Ds) -> Sh:
   match rej:
@@ -3195,6 +3244,20 @@ def sh.of.run(rej: Bool, may: Bool, subd: Bool, inm: Bool, mon: Bool, held: Bool
     case False{}:
       sh.of.may(may, subd, inm, mon, held, c, code, ds)
 
+# SHUTDOWN in MULTI is refused (NO_MULTI) once the client may run it,
+# before the rest, as processCommand refuses it right after AUTH: its
+# arguments have not been read, so a SHUTDOWN the parser failed is
+# refused too
+def sh.nomulti(+code: Nat) -> Bool:
+  Bool.and(Nat.is_eq(R.code.key(code), R.stat.top(187n)), Bool.not(Nat.is_eq(R.code.class(code), 1n)))
+
+def sh.of.nm(nm: Bool, +m: Bool, subd: Bool, +i: Bool, mon: Bool, oom: Bool, held: Bool, +c: R.Cmd, +code: Nat, +ds: R.Ds) -> Sh:
+  match nm:
+    case True{}:
+      ShNoMulti{}
+    case False{}:
+      sh.of.run(Bool.and(m, Bool.and(oom, sh.oomy(i, c, code))), m, subd, i, mon, held, c, code, ds)
+
 def sh.of(quit: Bool, may: Bool, inm: Bool, subd: Bool, mon: Bool, oom: Bool, held: Bool, +c: R.Cmd, +code: Nat, +ds: R.Ds) -> Sh:
   match quit:
     case True{}:
@@ -3202,7 +3265,7 @@ def sh.of(quit: Bool, may: Bool, inm: Bool, subd: Bool, mon: Bool, oom: Bool, he
     case False{}:
       +m = may
       +i = inm
-      sh.of.run(Bool.and(m, Bool.and(oom, sh.oomy(i, c, code))), m, subd, i, mon, held, c, code, ds)
+      sh.of.nm(Bool.and(m, Bool.and(i, sh.nomulti(code))), m, subd, i, mon, oom, held, c, code, ds)
 
 # the client's transaction state, changed (its client first in the chain)
 def bg.open(+id: Nat, g: LRun) -> LRun:
@@ -3419,7 +3482,7 @@ def mon.redact(+key: Nat, xs: List<&2, String>) -> List<&2, String>:
 # whether a call of code that ran (may: its client may run it) sends a
 # line: one the parser did not refuse, of a command not administrative
 def mon.ran(+may: Bool, +code: Nat) -> Bool:
-  Bool.and(may, Bool.and(Bool.not(Nat.is_eq(Nat.mod(code, 4n), 1n)), Bool.not(R.stat.unseen(Nat.div(code, 4n)))))
+  Bool.and(may, Bool.and(Bool.not(Nat.is_eq(R.code.class(code), 1n)), Bool.not(R.stat.unseen(R.code.key(code)))))
 
 # whether a command of a batch sends a line, by what the shell did with
 # it (q: a QUIT before it dropped it)
@@ -3438,6 +3501,8 @@ def mon.seen.sh(+may: Bool, +sh: Sh, +code: Nat) -> Bool:
     case ShOom{i}:
       False{}
     case ShPause{}:
+      False{}
+    case ShNoMulti{}:
       False{}
     case _:
       mon.ran(may, code)
@@ -3531,7 +3596,7 @@ def fed.held(f: Fed) -> Fed:
 def bg.fed(+id: Nat, +k: Nat, +m0: S.Mute, got: Got, g: LRun) -> Fed:
   match got g:
     case Got{args, rest} LRun{rs, es, +conn, srv, +ds, ws, up, tx, +pb}:
-      +line = mon.line(R.ds.now(ds), S.conn.db(conn), ps.addr(id, pb), mon.redact(Nat.div(k, 4n), args))
+      +line = mon.line(R.ds.now(ds), S.conn.db(conn), ps.addr(id, pb), mon.redact(R.code.key(k), args))
       Fed{LRun{mon.mine(mon.self(ps.mon.is(id, pb), m0, conn), line, rs), es, conn, srv, ds, ws, up, tx, ps.mon.push(id, "+" ++ line ++ "\r\n", pb)}, rest}
     case Got{args, rest} LHeld{h}:
       Fed{LHeld{h}, rest}
@@ -3560,7 +3625,7 @@ type Xr is Data:
 def bg.x.fed(+id: Nat, +k: Nat, +m0: S.Mute, got: Got, g: LRun, mine: List<&2, String>) -> Xr:
   match got g:
     case Got{args, rest} LRun{rs, es, +conn, srv, +ds, ws, up, tx, +pb}:
-      +line = mon.line(R.ds.now(ds), S.conn.db(conn), ps.addr(id, pb), mon.redact(Nat.div(k, 4n), args))
+      +line = mon.line(R.ds.now(ds), S.conn.db(conn), ps.addr(id, pb), mon.redact(R.code.key(k), args))
       Xr{LRun{rs, es, conn, srv, ds, ws, up, tx, ps.mon.push(id, "+" ++ line ++ "\r\n", pb)}, mon.add(mon.self(ps.mon.is(id, pb), m0, conn), line, mine)}
     case Got{args, rest} LHeld{h}:
       Xr{LHeld{h}, mine}
@@ -3856,7 +3921,7 @@ def mine.or(m: Maybe<&2, Mine>) -> Mine:
 
 # the name of the command of code w (its channel's mark: 0 before any)
 def cl.cmd.of(+w: U32) -> String:
-  +k = Nat.div(U32.to_nat(w), 4n)
+  +k = R.code.key(U32.to_nat(w))
   Bool.pick(String, Nat.is_eq(k, 0n), "NULL", R.stat.name(k))
 
 # whole seconds between two times in ms, as Redis subtracts its unixtime
@@ -3975,7 +4040,7 @@ def cls.of(ks: List<&2, String>, +tab: KV.Trie<Cl>, acc: List<&2, Cl>) -> List<&
 
 def cls.all(+cs: Cls) -> List<&2, Cl>:
   match cs:
-    case Cls{+tab, kd, ks, ms, pz}:
+    case Cls{+tab, kd, ks, ms, pz, dn}:
       cls.sort(cls.of(KV.keys(Cl, tab, 0n), tab, Nil{}))
 
 # a client's type as CLIENT LIST TYPE and CLIENT KILL TYPE read it: 3
@@ -4319,16 +4384,16 @@ def pz.with(p: Pz, +all: Bool, +end: Nat) -> Pz:
 
 def ps.pause(+all: Bool, +end: Nat, pb: Ps) -> Ps:
   match pb:
-    case Ps{reg, ev, px, Cls{tab, kd, ks, ms, pz}, own}:
+    case Ps{reg, ev, px, Cls{tab, kd, ks, ms, pz, dn}, own}:
       +p = pz.with(pz, all, end)
-      Ps{reg, U32.or(ev, pz.bit(p)), px, Cls{tab, kd, ks, ms, p}, own}
+      Ps{reg, U32.or(ev, pz.bit(p)), px, Cls{tab, kd, ks, ms, p, dn}, own}
     case PsOf{p}:
       ps.pause(all, end, p)
 
 def ps.unpause(pb: Ps) -> Ps:
   match pb:
-    case Ps{reg, ev, px, Cls{tab, kd, ks, ms, pz}, own}:
-      Ps{reg, U32.and(ev, 4261412863), px, Cls{tab, kd, ks, ms, PzOff{}}, own}
+    case Ps{reg, ev, px, Cls{tab, kd, ks, ms, pz, dn}, own}:
+      Ps{reg, U32.and(ev, 4261412863), px, Cls{tab, kd, ks, ms, PzOff{}, dn}, own}
     case PsOf{p}:
       ps.unpause(p)
 
@@ -4353,8 +4418,8 @@ def pz.over(+p: Pz, +now: Nat) -> Bool:
 # (Redis holds back a script that does not declare no-writes, and runs
 # it after)
 def code.pausable(+code: Nat) -> Bool:
-  +k = Nat.div(code, 4n)
-  Bool.and(R.stat.pausable(k), Bool.not(Bool.and(Nat.is_eq(k, R.stat.top(65n)), Nat.is_eq(Nat.mod(code, 4n), 2n))))
+  +k = R.code.key(code)
+  Bool.and(R.stat.pausable(k), Bool.not(Bool.and(Nat.is_eq(k, R.stat.top(65n)), Nat.is_eq(R.code.class(code), 2n))))
 
 # whether the codes of a transaction's queued commands hold one the
 # pause of writes holds back
@@ -4383,7 +4448,7 @@ def pause.holds(+p: Pz, +mon: Bool, +c: R.Cmd, +code: Nat, +id: Nat, +tx: Tx) ->
     case PzOff{}:
       False{}
     case PzOn{+all, end}:
-      Bool.and(Bool.not(Bool.or(mon, Nat.is_eq(Nat.mod(code, 4n), 1n))), Bool.or(all, Bool.or(code.pausable(code), pause.exec(c, id, tx))))
+      Bool.and(Bool.not(Bool.or(mon, Nat.is_eq(R.code.class(code), 1n))), Bool.or(all, Bool.or(code.pausable(code), pause.exec(c, id, tx))))
 
 # the clients the pause held back (hit: whether the first of ws is one),
 # in the order they came, their batches to go on (up, newest first), from
@@ -4526,7 +4591,7 @@ def bg.x.cmd(may: Bool, +id: Nat, +back: Chan(Ans), +inb: Nat, +n: Nat, +c: R.Cm
     case True{} R.Ping{}:
       bg.x.pong(id, "", c, code, g)
     case True{} R.Echo{+m}:
-      bg.x.echo(Nat.is_eq(Nat.div(code, 4n), R.stat.top(1n)), id, m, c, code, g)
+      bg.x.echo(Nat.is_eq(R.code.key(code), R.stat.top(1n)), id, m, c, code, g)
     case _ _:
       bg.one(c, code, g)
 
@@ -4565,7 +4630,7 @@ def codes.denyoom(+ks: List<&2, Nat>) -> Bool:
     case Nil{}:
       False{}
     case Con{+k, rest}:
-      Bool.or(R.stat.denyoom(Nat.div(k, 4n)), codes.denyoom(rest))
+      Bool.or(R.stat.denyoom(R.code.key(k)), codes.denyoom(rest))
 
 def tx.denyoom(+t: Tx) -> Bool:
   match t:
@@ -4588,7 +4653,7 @@ def bg.exec.go(mine: Tx, others: Tx, +id: Nat, +back: Chan(Ans), +inb: Nat, +cod
 def bg.exec.oom(oom: Bool, mine: Tx, others: Tx, +id: Nat, +back: Chan(Ans), +inb: Nat, +code: Nat, rs: List<&2, R.Reply>, es: List<&2, A.Ent>, conn: S.Conn, srv: S.Srv, +ds: R.Ds, ws: Waits, up: List<&2, Up>, pb: Ps) -> LRun:
   match oom:
     case True{}:
-      bg.one(R.Own{R.SBad{R.RError{"EXECABORT Transaction discarded because of: " ++ abort.why(oom.msg())}}}, Nat.add(Nat.mul(Nat.div(code, 4n), 4n), 1n), LRun{rs, es, conn, srv, ds, ws, up, others, pb})
+      bg.one(R.Own{R.SBad{R.RError{"EXECABORT Transaction discarded because of: " ++ abort.why(oom.msg())}}}, R.code.refused(code), LRun{rs, es, conn, srv, ds, ws, up, others, pb})
     case False{}:
       bg.exec.go(mine, others, id, back, inb, code, rs, es, conn, srv, ds, ws, up, pb)
 
@@ -4602,6 +4667,38 @@ def bg.exec(+id: Nat, +back: Chan(Ans), +inb: Nat, +code: Nat, g: LRun) -> LRun:
       bg.exec.of(tx.take(tx, tx.is(id, tx), id, TxNone{}), id, back, inb, code, rs, es, conn, srv, ds, ws, up, pb)
     case LHeld{h}:
       LHeld{h}
+
+# SHUTDOWN
+# --------
+# SHUTDOWN stops the server as Redis 7.0.15's shutdownCommand does when no
+# replica waits (prepareForShutdown, finishShutdown): the group's entries
+# written to the append-only file as after any group, and the file synced,
+# a rewrite's temporary file removed, the pid file too, then exit(0); its
+# client is answered nothing, its connection ending with the process. The
+# commands after it in its batch and the requests after it in the group do
+# not run (ps.killed answers their clients Bye), nor does the end of the
+# group (grp.end) or a tick in it, as Redis exits within the command. SAVE
+# asks for an RDB snapshot, which BendKV does not write (the save points
+# of `save` save nothing: startup.bend): SHUTDOWN SAVE fails as Redis's
+# does when its save fails, answered "Errors trying to SHUTDOWN. Check
+# logs." (the session's reply), the log saying why, and SAVE FORCE goes
+# on and stops the server all the same. The registry of clients keeps the
+# SHUTDOWN asked for (ps.down), and bits 23 and 24 of Ps's ev keep the
+# batches after it off the fast way; the shell acts on it once the group
+# is run (db_group, aof_reply).
+def bg.down.at(+d: Nat, g: LRun) -> LRun:
+  match g:
+    case LRun{rs, es, conn, srv, ds, ws, up, tx, pb}:
+      LRun{rs, es, conn, srv, ds, ws, up, tx, ps.down.set(d, pb)}
+    case LHeld{h}:
+      LHeld{h}
+
+def bg.down(fail: Bool, +save: Bool, +c: R.Cmd, +code: Nat, g: LRun) -> LRun:
+  match fail:
+    case True{}:
+      bg.one(c, code, bg.down.at(1n, g))
+    case False{}:
+      LHeld{bg.down.at(Bool.pick(Nat, save, 3n, 2n), g)}
 
 def bg.cmd(+id: Nat, +back: Chan(Ans), +inb: Nat, sh: Sh, +c: R.Cmd, +code: Nat, rest: List<&2, R.Cmd>, more: List<&2, Nat>, +a: Av, +ar: Av, g: LRun) -> LRun:
   match sh:
@@ -4618,7 +4715,7 @@ def bg.cmd(+id: Nat, +back: Chan(Ans), +inb: Nat, sh: Sh, +c: R.Cmd, +code: Nat,
     case ShExec{}:
       bg.serve(bg.exec(id, back, inb, code, g))
     case ShAbort{m}:
-      bg.one(R.Own{R.SBad{R.RError{"EXECABORT Transaction discarded because of: " ++ m}}}, Nat.add(Nat.mul(Nat.div(code, 4n), 4n), 1n), bg.close(id, g))
+      bg.one(R.Own{R.SBad{R.RError{"EXECABORT Transaction discarded because of: " ++ m}}}, R.code.refused(code), bg.close(id, g))
     case ShDiscard{}:
       bg.say(R.r_ok(), code, bg.close(id, g))
     case ShWatch{ks}:
@@ -4638,7 +4735,7 @@ def bg.cmd(+id: Nat, +back: Chan(Ans), +inb: Nat, sh: Sh, +c: R.Cmd, +code: Nat,
     case ShPing{m}:
       bg.say(R.RArray{[R.RBulk{"pong"}, R.RBulk{m}]}, code, g)
     case ShDeny{name}:
-      bg.one(R.Own{R.SBad{R.RError{"ERR " ++ sub.deny(name)}}}, Nat.add(Nat.mul(Nat.div(code, 4n), 4n), 1n), g)
+      bg.one(R.Own{R.SBad{R.RError{"ERR " ++ sub.deny(name)}}}, R.code.refused(code), g)
     case ShClient{op, +argv}:
       bg.client(id, op, argv, inb, None{}, code, g)
     case ShConn{}:
@@ -4648,11 +4745,15 @@ def bg.cmd(+id: Nat, +back: Chan(Ans), +inb: Nat, sh: Sh, +c: R.Cmd, +code: Nat,
     case ShRewrite{}:
       bg.rewrite(False{}, code, g)
     case ShOom{inm}:
-      bg.one(R.Own{R.SBad{R.RError{oom.msg()}}}, Nat.add(Nat.mul(Nat.div(code, 4n), 4n), 1n), bg.oom.tx(inm, g))
+      bg.one(R.Own{R.SBad{R.RError{oom.msg()}}}, R.code.refused(code), bg.oom.tx(inm, g))
     case ShMonDeny{inm}:
-      bg.one(R.Own{R.SBad{R.RError{"ERR Replica can't interact with the keyspace"}}}, Nat.add(Nat.mul(Nat.div(code, 4n), 4n), 1n), bg.mon.bad(inm, g))
+      bg.one(R.Own{R.SBad{R.RError{"ERR Replica can't interact with the keyspace"}}}, R.code.refused(code), bg.mon.bad(inm, g))
     case ShPause{}:
       bg.postpone(id, back, c, code, rest, more, a, g)
+    case ShDown{+fail, +save}:
+      bg.down(fail, save, c, code, g)
+    case ShNoMulti{}:
+      bg.one(R.Own{R.SBad{R.RError{"ERR Command not allowed inside a transaction"}}}, R.code.refused(code), bg.bad(g))
 
 # a batch the general way: a command at a time, until its client waits;
 # after each, its line to the monitors (MONITOR), the arguments of the
@@ -4764,8 +4865,9 @@ def grp.late(p: Waits & List<&2, Up>, outs: List<&2, Sigma<&2, &2, Chan(Ans), _ 
   bg.ups(ups.fuel(), Grp{outs, es, waits.count(ws, srv), ds, ws, up, tx, pb})
 
 # the end of a group: the clients whose time is up unblocked, then the
-# unblocked clients' batches go on
-def grp.end(g: Grp) -> Grp:
+# unblocked clients' batches go on; nothing after a SHUTDOWN that stops
+# the server
+def grp.end.go(g: Grp) -> Grp:
   match g:
     case Grp{outs, es, srv, ds, WaitNone{}, Nil{}, tx, pb}:
       Grp{outs, es, srv, ds, WaitNone{}, Nil{}, tx, pb}
@@ -4774,6 +4876,22 @@ def grp.end(g: Grp) -> Grp:
     case Grp{outs, es, srv, +ds, +ws, up, tx, pb}:
       +now = R.ds.now(ds)
       grp.late(waits.expire(ws, waits.late(now, ws), now, WaitNone{}, up), outs, es, srv, ds, tx, pb)
+
+def grp.down(+g: Grp) -> Nat:
+  match g:
+    case Grp{outs, es, srv, ds, ws, up, tx, +pb}:
+      ps.down(pb)
+
+def grp.end.if(stop: Bool, g: Grp) -> Grp:
+  match stop:
+    case True{}:
+      g
+    case False{}:
+      grp.end.go(g)
+
+def grp.end(g: Grp) -> Grp:
+  +x = g
+  grp.end.if(Nat.is_le(2n, grp.down(x)), x)
 
 # a client gone (its connection closed while it waits): forgotten, its
 # batch dropped, and its connection answered Bye, after any answer before
@@ -5590,8 +5708,9 @@ def bg.used(lfu: Bool, +cn: S.Conn, +back: Chan(Ans), +inb: Nat, raw: String, cm
       +now = R.ds.now(ds)
       bg.batch(cn, mark.hs(back, hs, now, use.lfu(hs, now, S.acc.min(now), S.mm.lfl(mm), S.mm.lfd(mm), 0, 0)), inb, raw, cmds, R.codes.of(hs), Grp{outs, es, S.Srv{pass, cfg, info, mm}, ds, ws, up, tx, pb})
 
+# (after a SHUTDOWN that stops the server, every client's: SHUTDOWN)
 def ps.killed(+id: Nat, +pb: Ps) -> Bool:
-  cls.killed(id, ps.cls(pb))
+  Bool.or(Nat.is_le(2n, ps.down(pb)), cls.killed(id, ps.cls(pb)))
 
 # a batch the general way, unless its client was killed (its connection
 # answered Bye, the batch not run)
@@ -5706,6 +5825,14 @@ def group.tick(on: Bool, over: Bool, outs: List<&2, Sigma<&2, &2, Chan(Ans), _ =
       +w = ws
       group.resumed(waits.unpause(w, waits.held(w), WaitNone{}, up), outs, es, srv, ds, tx, ps.unpause(pb))
 
+# no tick after a SHUTDOWN that stops the server (SHUTDOWN)
+def group.tick.if(stop: Bool, on: Bool, over: Bool, outs: List<&2, Sigma<&2, &2, Chan(Ans), _ => Ans>>, es: List<&2, A.Ent>, srv: S.Srv, +ms: Nat, ds: R.Ds, ws: Waits, up: List<&2, Up>, +tx: Tx, pb: Ps) -> Grp:
+  match stop:
+    case True{}:
+      Grp{outs, es, srv, ds, ws, up, tx, pb}
+    case False{}:
+      group.tick(on, over, outs, es, S.srv.tick(srv, ms), ds, ws, up, tx, pb)
+
 def group_req(+log: Bool, q: Req, g: Grp) -> Grp:
   match q g:
     case Req{+cn, job, back, +tl, +inb, raw} Grp{outs, es, srv, ds, ws, up, tx, +pb}:
@@ -5716,7 +5843,7 @@ def group_req(+log: Bool, q: Req, g: Grp) -> Grp:
       Grp{outs, es, S.srv.live(srv, live), ds, ws, up, tx, pb}
     case Tick{+ms} Grp{outs, es, srv, +ds, ws, up, tx, +pb}:
       +p = ps.pz(pb)
-      group.tick(pz.on(p), pz.over(p, R.ds.now(ds)), outs, es, S.srv.tick(srv, ms), ds, ws, up, tx, pb)
+      group.tick.if(Nat.is_le(2n, ps.down(pb)), pz.on(p), pz.over(p, R.ds.now(ds)), outs, es, srv, ms, ds, ws, up, tx, pb)
     case Oops{} Grp{outs, es, srv, ds, ws, up, tx, pb}:
       Grp{outs, es, S.srv.erred(srv, "ERR Protocol error"), ds, ws, up, tx, pb}
     case Gone{+id, +back} Grp{outs, es, srv, ds, +ws, +up, tx, pb}:
@@ -5908,7 +6035,24 @@ def db_serve(srv: S.Srv, ds: R.Ds, ws: Waits, tx: Tx, pb: Ps, rw: Rw, +reqs: Cha
 def db_group(g: Grp, rw: Rw, +reqs: Chan(Req)) -> IO(Unit):
   match g:
     case Grp{outs, es, srv, ds, ws, up, tx, +pb}:
+      db_down(ps.down(pb), pb, outs, srv, ds, ws, tx, rw, reqs)
+
+# a group that asked for a SHUTDOWN (SHUTDOWN): one that failed has its
+# lines in the log, one that stops the server stops it
+@unsafe
+def db_down(+d: Nat, +pb: Ps, outs: List<&2, Sigma<&2, &2, Chan(Ans), _ => Ans>>, srv: S.Srv, ds: R.Ds, ws: Waits, tx: Tx, rw: Rw, +reqs: Chan(Req)) -> IO(Unit):
+  match d:
+    case 0n:
       db_kill(ps.calm(pb), pb, outs, srv, ds, ws, tx, rw, reqs)
+    case 1n:
+      +x = srv
+      +w = rw
+      +p = ps.down.set(0n, pb)
+      do IO<Unit>:
+        Unit <- down.failed(down.lg(x, w))
+        db_kill(ps.calm(p), p, outs, x, ds, ws, tx, w, reqs)
+    case _:
+      down.stop(Nat.is_eq(d, 3n), srv, rw, None{})
 
 # after a group is answered, the rewrite's step, if any (rw.what)
 @unsafe
@@ -7491,7 +7635,39 @@ def aof_rw.back(p: Maybe<&1, File> & Rx, ws: Waits, tx: Tx, pb: Ps) -> IO(File &
 
 @unsafe
 def aof_reply(outs: List<&2, Sigma<&2, &2, Chan(Ans), _ => Ans>>, st: St, f: File, +sync: Sync, +reqs: Chan(Req)) -> IO(Unit):
-  aof_answer(st.kills(st), outs, f, sync, reqs)
+  +x = st
+  aof_down(st.down(x), outs, x, f, sync, reqs)
+
+# the SHUTDOWN a group asked for, as db_down acts on it: the file synced
+# before the server stops
+def st.down(+st: St) -> Nat:
+  match st:
+    case St{srv, ds, sel, ws, tx, +pb, rw}:
+      ps.down(pb)
+
+def st.down.clear(st: St) -> St:
+  match st:
+    case St{srv, ds, sel, ws, tx, pb, rw}:
+      St{srv, ds, sel, ws, tx, ps.down.set(0n, pb), rw}
+
+@unsafe
+def aof_stop(+save: Bool, st: St, f: File) -> IO(Unit):
+  match st:
+    case St{srv, ds, sel, ws, tx, pb, rw}:
+      down.stop(save, srv, rw, Some{f})
+
+@unsafe
+def aof_down(+d: Nat, outs: List<&2, Sigma<&2, &2, Chan(Ans), _ => Ans>>, st: St, f: File, +sync: Sync, +reqs: Chan(Req)) -> IO(Unit):
+  match d:
+    case 0n:
+      aof_answer(st.kills(st), outs, f, sync, reqs)
+    case 1n:
+      +x = st
+      do IO<Unit>:
+        Unit <- down.failed(st.lg(x))
+        aof_answer(st.kills(st.down.clear(x)), outs, f, sync, reqs)
+    case _:
+      aof_stop(Nat.is_eq(d, 3n), st, f)
 
 # everysec: the file synced each second, through a handle of its own,
 # opened at its path each time: a rewrite puts a new file there
@@ -7719,6 +7895,99 @@ def rw.size(+rw: Rw) -> Nat:
       run.size(run)
     case RwOf{+r}:
       rw.size(r)
+
+# SHUTDOWN's log and its exit (SHUTDOWN, above), with Redis's lines: the
+# log of the server (its pid the rewrite's)
+def down.lg(+srv: S.Srv, +rw: Rw) -> Log:
+  log.up(log.of(S.srv.cfg(srv), rw.pid(rw)))
+
+def st.lg(+st: St) -> Log:
+  match st:
+    case St{+srv, ds, sel, ws, tx, pb, +rw}:
+      down.lg(srv, rw)
+
+def down.nosave() -> String:
+  "BendKV writes no RDB snapshot: it cannot save the data set (appendonly yes keeps it)"
+
+# a SHUTDOWN that failed: what Redis logs when its save fails
+@unsafe
+def down.failed(+lg: Log) -> IO(Unit):
+  do IO<Unit>:
+    Unit <- log(lg, 3, "User requested shutdown...")
+    Unit <- log(lg, 2, "Saving the final RDB snapshot before exiting.")
+    Unit <- log(lg, 3, down.nosave())
+    Unit <- log(lg, 3, "Error trying to save the DB, can't exit.")
+    log(lg, 3, "Errors trying to shut down the server. Check the logs for more information.")
+
+# a rewrite that runs: its temporary file removed, as Redis kills its
+# child and removes its file
+@unsafe
+def down.rewrite(runs: Bool, +lg: Log, +tmp: String) -> IO(Unit):
+  match runs:
+    case False{}:
+      IO.pure(Unit, Unit{})
+    case True{}:
+      do IO<Unit>:
+        Unit <- log(lg, 3, "There is a child rewriting the AOF. Killing it!")
+        r : Result<&1, &1, U32 & String, Unit> <- File.unlink(tmp)
+        IO.pure(Unit, Unit{})
+
+# the append-only file synced, if the server appends to one
+@unsafe
+def down.synced(p: File & Result<&1, &1, U32 & String, Unit>) -> IO(Unit):
+  (f, r) = p
+  match r:
+    case Fail{e}:
+      IO.die(Unit, 1, aof_fail(e))
+    case Done{u}:
+      IO.pure(Unit, Unit{})
+
+@unsafe
+def down.sync(m: Maybe<&1, File>, +lg: Log) -> IO(Unit):
+  match m:
+    case None{}:
+      IO.pure(Unit, Unit{})
+    case Some{f}:
+      do IO<Unit>:
+        Unit <- log(lg, 2, "Calling fsync() on the AOF file.")
+        p : File & Result<&1, &1, U32 & String, Unit> <- File.sync(f)
+        down.synced(p)
+
+# SAVE FORCE: the save that fails, and the exit all the same
+@unsafe
+def down.save(save: Bool, +lg: Log) -> IO(Unit):
+  match save:
+    case False{}:
+      IO.pure(Unit, Unit{})
+    case True{}:
+      do IO<Unit>:
+        Unit <- log(lg, 2, "Saving the final RDB snapshot before exiting.")
+        Unit <- log(lg, 3, down.nosave())
+        log(lg, 3, "Error trying to save the DB. Exit anyway.")
+
+@unsafe
+def down.pid(none: Bool, +lg: Log, +path: String) -> IO(Unit):
+  match none:
+    case True{}:
+      IO.pure(Unit, Unit{})
+    case False{}:
+      do IO<Unit>:
+        Unit <- log(lg, 2, "Removing the pid file.")
+        r : Result<&1, &1, U32 & String, Unit> <- File.unlink(path)
+        IO.pure(Unit, Unit{})
+
+@unsafe
+def down.stop(+save: Bool, +srv: S.Srv, +rw: Rw, m: Maybe<&1, File>) -> IO(Unit):
+  +lg = down.lg(srv, rw)
+  +pid = T.cfg(S.srv.cfg(srv), "pidfile")
+  do IO<Unit>:
+    Unit <- log(lg, 3, "User requested shutdown...")
+    Unit <- down.rewrite(rw.runs(rw), lg, rw.tmp(rw))
+    Unit <- down.sync(m, lg)
+    Unit <- down.save(save, lg)
+    Unit <- down.pid(String.is_empty(pid), lg, pid)
+    Unit <- log(lg, 3, "BendKV is now ready to exit, bye bye...")
+    IO.die(Unit, 0, "")
 
 # the same state with run as the rewrite that runs; with a slice of its
 # snapshot taken; with n more bytes in its temporary file

@@ -308,8 +308,9 @@ them, and failed calls and errors are counted as Redis counts them. A command wi
 replies turned off (CLIENT REPLY OFF or SKIP) pops as it does with them on. Where BendKV
 differs: Redis serves the clients of the keys a command added (`signalKeyAsReady` from
 `dbAdd`), key by key in order of readiness, while BendKV looks at all waiting clients
-after each command, in order of their arrival; there is no WAIT and no XREAD. In a
-transaction a blocking command does not wait, as in Redis (below).
+after each command, in order of their arrival; there is no XREAD, and WAIT's wait ends
+only by its time or CLIENT UNBLOCK (below). In a transaction a blocking command does not
+wait, as in Redis (below).
 Transactions: MULTI, EXEC, DISCARD, WATCH and UNWATCH, as Redis 7.0.15 runs them. After
 MULTI a command is queued (QUEUED), except EXEC, DISCARD, MULTI (an error: transactions
 do not nest), WATCH (an error inside MULTI), QUIT and RESET, which run; a command refused
@@ -385,6 +386,16 @@ it, and CLIENT LIST shows it with the flag O. Where BendKV differs: a line's tim
 time of the actor's group, in ms (the microseconds end in 000), and a monitor gets the
 lines of the calls EXEC runs after EXEC's array, whereas Redis writes them between its
 replies.
+The server's administrative commands, as Redis 7.0.15 answers them on a master with no
+replica: LASTSAVE (the start, as BendKV writes no RDB snapshot), ROLE, WAIT (0: at once
+when it asks for no replica, otherwise when its timeout ends, its client waiting as a
+blocking command's does), MEMORY STATS, DOCTOR, PURGE and MALLOC-STATS (Redis's fields
+and advice from the numbers of INFO's memory section; no allocator's statistics), LOLWUT
+(Redis 7.0.15's line, and VERSION 5's and 6's drawings, byte for byte those that take
+no random number), and SHUTDOWN with its flags: the append-only file written and synced,
+a rewrite that runs stopped, the pid file removed, the process ended with code 0.
+SHUTDOWN SAVE fails, as Redis's does when it cannot save, since BendKV writes no RDB
+snapshot; SAVE FORCE stops it all the same (section 3zzl of docs/FINDINGS.md).
 Times to live: EXPIRE, PEXPIRE, EXPIREAT and PEXPIREAT (with NX, XX, GT, LT), TTL, PTTL,
 EXPIRETIME, PEXPIRETIME, PERSIST; SET with NX, XX, GET, EX, PX, EXAT, PXAT and KEEPTTL;
 SETEX, PSETEX, GETEX (EX, PX, EXAT, PXAT, PERSIST) and GETDEL. Times are read as Redis
@@ -858,7 +869,8 @@ The translation the kernel reads can be dumped with
   left in MULTI by a test that failed on a command that does not exist), Pub/Sub and
   keyspace notifications 26, CLIENT LIST, INFO and KILL 9, MONITOR 3, maxmemory and its
   eviction 8, RESP3 292 (`unit/type/list` and `unit/type/zset` no longer stop at their
-  HELLO 3), SORT 56, HyperLogLogs 20, CLIENT PAUSE and UNPAUSE 9.
+  HELLO 3), SORT 56, HyperLogLogs 20, CLIENT PAUSE and UNPAUSE 9, the administrative
+  commands none (their tests need servers of their own).
   The suite found one bug in what there is: KEYS matched with a naive glob, and the
   pattern `a*a*…a*b` against a key of forty `a` characters hung the server for minutes;
   there were no classes `[...]` and no escaping either. Fixed: KEYS matches as Redis's
@@ -868,8 +880,8 @@ The translation the kernel reads can be dumped with
   CI on every pull request): redis-py 8.1.0's tests of its sync and asyncio clients, in
   RESP2 and in RESP3, and go-redis v9.23.0's specs, in RESP3, each against Redis 7.0.15
   and against BendKV, each on a server started for it, without their tests of modules,
-  clusters, sentinels and TLS. Of the tests Redis passes, BendKV passes 2,433 of 2,753 in
-  redis-py, the same tests in RESP2 and in RESP3, and 392 of 460 in go-redis; every other
+  clusters, sentinels and TLS. Of the tests Redis passes, BendKV passes 2,442 of 2,753 in
+  redis-py, the same tests in RESP2 and in RESP3, and 393 of 460 in go-redis; every other
   one fails on what BendKV does not have (Lua, streams, geo, DUMP, ACL, the
   slow log, CLIENT TRACKING, and COMMAND's entries of those), none on a
   command BendKV has. A test Redis passes that BendKV fails, and that is not among the
@@ -967,6 +979,17 @@ The translation the kernel reads can be dumped with
   on in; a client held back that leaves or is killed; the parser's errors); then BendKV
   alone: CLIENT UNBLOCK and EVAL where Redis differs, 100 clients held back and answered
   in order, and 100 let go by a pause's end (section 3zzk of docs/FINDINGS.md).
+- **The administrative commands** (`tests/admin_test.py`, in each server mode):
+  scenarios on BendKV and on Redis, their replies compared (97 lines: LASTSAVE as INFO's
+  rdb_last_save_time; ROLE; WAIT's errors, its answers at once and when its time is up,
+  in MULTI, a client that waits as CLIENT LIST and INFO show it, CLIENT UNBLOCK both ways;
+  MEMORY's subcommands, STATS's fields in order and the kinds of their values; LOLWUT's
+  text, errors and eleven drawings of VERSION 5 byte for byte, the shapes of random ones
+  and of VERSION 6; SHUTDOWN's errors and its refusal in MULTI; the statistics); then
+  SHUTDOWN and its forms on a redis-server and a BendKV of their own (the exit code, the
+  closed connection, the append-only file and the pid file after it), and BendKV alone:
+  MEMORY STATS's numbers as INFO's, SHUTDOWN SAVE failing and SAVE FORCE stopping, a
+  SHUTDOWN while a rewrite of 200,000 keys runs (section 3zzl of docs/FINDINGS.md).
 - **AUTH** (`tests/auth_test.py`, in each server mode): scenarios on BendKV and on
   Redis, their transcripts compared line by line — when a client must authenticate and
   what it is answered before that: commands with errors of each kind, one at a time and
@@ -1471,8 +1494,12 @@ make clients BEND="$B" # redis-py's and go-redis's test suites on Redis and on B
    checked by tests against Redis byte for byte. CLIENT PAUSE and CLIENT UNPAUSE: the
    commands a pause holds back wait, with the rest of their clients' batches, until it
    ends, while the data set is kept still (section 3zzk of FINDINGS.md); checked by tests
-   against Redis. What the client libraries' suites find missing within the scope above
-   (DUMP and RESTORE, CLIENT TRACKING, the slow log, SHUTDOWN) is the next step.
+   against Redis. The administrative commands LASTSAVE, ROLE, WAIT, SHUTDOWN, MEMORY and
+   LOLWUT: answered from the server's state as Redis answers them on a master with no
+   replica, WAIT a blocking command that no replica ends, SHUTDOWN an exit after the
+   append-only file is synced (section 3zzl of FINDINGS.md); checked by tests against
+   Redis. What the client libraries' suites find missing within the scope above (geo,
+   DUMP and RESTORE, CLIENT TRACKING, the slow log, ACL's users) is the next step.
 2. **The append-only file, further.** A law of the rewrite: the rewritten file replays
    to the databases it was written from (key by key, not by the shape of the trie); it
    needs a law that a scan from the first bucket reads every key once (the invariant "a

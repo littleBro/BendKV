@@ -4667,7 +4667,7 @@ failover, CLUSTER FAILOVER) have no counterpart.
 
 **The command codes.** Two more keys of INFO's statistics take 904 of the 924 words of
 twelve bits with six set (`stat.cw`) that a request's code rides in: the next commands
-(GEO's ten) need words of another kind.
+(GEO's ten) need words of another kind. (Section 3zzl makes the room.)
 
 **The laws.** The proofs speak of what commands do to the databases; the pause holds
 commands back without changing what any does, and CLIENT PAUSE and UNPAUSE are commands
@@ -4689,6 +4689,165 @@ pause: 28 lines, each as Redis's. Then BendKV alone: CLIENT UNBLOCK and EVAL as 
 **Redis's suite.** unit/pause passes 9 of its 14 tests; the other five run Lua scripts
 (EVAL, EVAL_RO, FUNCTION LOAD) under a pause. 1,182 of the 1,677 tests Redis passes
 (70.5%; 1,173 before), 1,175 of the 1,258 in what BendKV has (93%); no other test changed.
+
+## 3zzl. LASTSAVE, ROLE, WAIT, SHUTDOWN, MEMORY and LOLWUT
+
+**What there is.** The administrative commands a server alone answers, as Redis 7.0.15
+answers them on a master with no replica:
+
+- LASTSAVE: the time of the last save, which is the start: BendKV writes no RDB
+  snapshot, and Redis's `lastsave` is its start until it saves one (INFO's
+  rdb_last_save_time, which LASTSAVE equals in both).
+- ROLE: `["master", 0, []]`, a master at the replication offset 0 with no replica
+  (`roleCommand`).
+- WAIT numreplicas timeout: its arguments read as `waitCommand` reads them (numreplicas
+  a long, the timeout a long long of ms, not negative, each with Redis's error). No
+  replica acknowledges anything, so WAIT answers 0 at once when it asks for none
+  (numreplicas up to 0) and in MULTI, and otherwise its client waits, in the chain of
+  the clients that wait (`BlkWait`), until its time is up (0 never), then answers 0, as
+  Redis's `replyToBlockedClientTimedOut` answers the replicas that acknowledged. CLIENT
+  UNBLOCK answers it 0 (TIMEOUT) or the UNBLOCKED error (ERROR); CLIENT LIST shows it
+  (flag b, its command), INFO counts it (blocked_clients, clients_in_timeout_table), and
+  its statistics are Redis's (a call unblocked by CLIENT UNBLOCK is a failed call).
+- MEMORY STATS, DOCTOR, PURGE and MALLOC-STATS (`memoryCommand`; MEMORY HELP already
+  listed them). STATS is Redis's 27 fields and a map for each database with keys, the
+  numbers those INFO's memory section shows (`info.bend`, MEMORY STATS and MEMORY
+  DOCTOR): used_memory and its peak, the start's bytes as the overhead, the allocator's
+  bytes and the resident memory, no replication backlog, no client buffers apart (INFO's
+  mem_clients_normal is 0), no AOF buffer, no scripts; a database's tables' overheads
+  are 0, the trie's nodes being in the dataset as INFO counts them. The ratios are C
+  floats as `getMemoryOverheadData` computes them, each operation rounded to a float
+  (`F.fmt.f`), sent as the double the float is ("99.51629638671875"). DOCTOR reads the
+  same numbers: an instance under 5 MB is empty (Redis's text, its Sam and all), past it
+  a peak past 1.5 times the memory in use and fragmentation past 1.4 (of the process)
+  or 1.1 (of the allocator, and of its resident memory) with more than 10 MB of it are
+  issues, each with Redis's paragraph, a float compared with the double as C compares
+  them. PURGE answers OK; MALLOC-STATS answers as Redis built with libc's malloc does
+  ("Stats not supported for the current allocator"), as INFO's mem_allocator says
+  BendKV's is.
+- LOLWUT [VERSION v ...]: 7.0.15's own LOLWUT writes "Redis ver. 7.0.15", and VERSION 5
+  and VERSION 6 draw the art of Redis 5 and Redis 6, picked as `lolwutCommand` picks
+  them, by the version as an unsigned int (`%u.0.0`: VERSION 4294967301 is 5), their
+  arguments longs clamped as `lolwut5Command` and `lolwut6Command` clamp them
+  (`src/lolwut.bend`, below).
+- SHUTDOWN [NOSAVE|SAVE] [NOW] [FORCE] [ABORT]: the flags read as `shutdownCommand`
+  reads them (a word that is none of them, ABORT with another, NOSAVE with SAVE: a syntax
+  error; ABORT alone: "No shutdown in progress.", as none ever waits for replicas), and
+  in MULTI refused as `processCommand` refuses a command flagged no-multi, right after
+  AUTH, the transaction flagged; the server stops (below).
+
+COMMAND's table gains lastsave, role, wait, shutdown, lolwut and memory's doctor,
+malloc-stats, purge and stats, generated from Redis's JSON files with the rest.
+
+**The command codes.** A call counts as a code, its key and its class (0 runs, 1 is
+refused, 2 fails as it parses), and a request carries its code as a word of twelve bits
+with six set, of which there are 924. A code was 4 times its key plus its class, a fourth
+of the words never used, room for 230 keys: CLIENT PAUSE and UNPAUSE took the keyspace
+to 225. A code is 3 times its key plus its class now (`code.key`, `code.class` and
+`code.refused` in redis.bend), room for 307 keys, of which these commands take 234.
+
+**SHUTDOWN stops the server** as Redis's `prepareForShutdown` and `finishShutdown` do
+when no replica waits (`src/server.bend`, SHUTDOWN): the group's entries are written to
+the append-only file as after any group, and the file synced whatever appendfsync says
+("Calling fsync() on the AOF file."); a rewrite that runs is stopped and its temporary
+file removed ("There is a child rewriting the AOF. Killing it!"); the pid file is
+removed; then the log's last line and `exit(0)` (`IO.die` with code 0, which the runtime
+ends the process with, saying nothing). Its client is answered nothing, its connection
+ending with the process, as in Redis. The commands after it in its batch and the requests
+after it in the group do not run, nor do the end of the group (the clients whose time is
+up, the batches of those unblocked) and a tick in it: Redis exits within the command.
+The replies of the commands before it in the group are not sent, as Redis writes a
+round's replies after it and exits within it. The registry of clients keeps the SHUTDOWN
+asked for (`Cls`'s down: 1 one that failed, 2 one that stops the server, 3 one that
+stops it after a save it could not make), whose bits 23 and 24 of Ps's ev keep the
+batches after it off the fast way; the batches after it are dropped as a killed client's
+(`ps.killed`); the shell acts on it once the group has run (`db_down`, `aof_down`).
+Nothing of it reaches the fast way: GET, SET and INCR take what they took.
+
+**SAVE.** SHUTDOWN SAVE asks for an RDB snapshot, which BendKV does not write: it fails
+as Redis's SHUTDOWN does when its save fails: "ERR Errors trying to SHUTDOWN. Check
+logs.", a failed call, the log saying why (Redis's lines, and "BendKV writes no RDB
+snapshot: it cannot save the data set (appendonly yes keeps it)"), and the server goes
+on; SAVE FORCE stops it all the same ("Error trying to save the DB. Exit anyway."). The
+save points of `save` save nothing in BendKV (its start warns of it), so a SHUTDOWN
+without SAVE stops the server where Redis would save first.
+
+**LOLWUT's drawings** (`src/lolwut.bend`). VERSION 5 is Georg Nees's Schotter: rows of
+squares, turned and moved a little more at random from the third row down, drawn with
+Bresenham's lines on a canvas of pixels written in braille, a character for each 2x4
+pixels, each row of them followed by a newline but the one that starts on the canvas's
+last row of pixels (whence the empty line before Redis's last one). Its numbers are
+Redis's C floats and doubles, each operation rounded as the C code rounds it: the
+canvas's height (`square_side * squares_per_col + padding*2`, in float, cut to an int),
+each square's place, its size over 1.4142135623 (in double, then to a float, then
+`round`), its corners' angles (`M_PI/4 + angle`, each `M_PI/2` more, in double, rounded
+to a float) and the corners themselves (`round(sin(k) * size + x)`). A square that is
+not turned has its corners at four fixed floats, whose sines and cosines are glibc's,
+kept as doubles' bits: so a drawing of one or two rows, which rand() has no part in, is
+the bytes Redis sends (`tests/admin_test.py` compares eleven, up to the 750 KB of
+`LOLWUT VERSION 5 500 1 2`). A turned square's angle comes from rand(), whose numbers
+no client can know: its sines and cosines are a series to the 13th power in fixed point
+(2^-20), within a hundred-thousandth of glibc's, which moves a corner by a pixel once in
+a thousand. VERSION 6 is a skyline: skyscrapers in two grays on white, then black ones
+in front with windows of the two grays, their places, sizes and window colors at random
+(`generateSkyline`'s numbers), written with the terminal's colors, a space for each
+pixel. Both take their random numbers from the server's (a stream of 31-bit numbers from
+the seed `KV.mix` makes of its state, which the drawing moves on, as RANDOMKEY's), so the
+random drawings are ones Redis could have drawn, their sizes and shapes Redis's. The
+canvas is no array (an Array anywhere costs every loop of the program): VERSION 5's lit
+pixels are codes of the cells they light, sorted (a merge sort, as SORT's) and or-ed a
+cell at a time, VERSION 6's colors are found pixel by pixel, from the last skyscraper
+drawn over it; the text is built from its end, a character at a time.
+
+**Its cost.** LOLWUT VERSION 5 takes 16 ms (Redis 4 ms), VERSION 6 1 ms, as Redis. The
+float library rounds each of a square's ninety operations in software, about 200 µs a
+square: VERSION 5 of 200 columns and 50 by 50 squares takes 0.4 s (Redis 3 ms), of 1,000
+columns and 100 by 100 squares 2 s (Redis 19 ms), the server answering nothing else
+meanwhile; VERSION 6 of 1,000 by 1,000 pixels takes 0.7 s (Redis 0.24 s).
+
+**The laws.** The administrative commands are commands of the server (`SAdmin`, its
+kind and its arguments, as `SClient` is for CLIENT), which the session answers with the
+server's state and the databases (`admin.reply`): LASTSAVE, MEMORY STATS and DOCTOR read
+them, LOLWUT's drawings take the server's random numbers (`own_srv`, as RANDOMKEY), and
+none changes a database. The three laws of a session that enumerate its commands take
+`SAdmin` as they take `SClient` (an unauthenticated client's changes nothing). WAIT is a
+blocking command (`SBlock`) whose pop is none: it acts on nothing, and a session answers
+it 0. SHUTDOWN's stop is the shell's, outside the laws, as the rest of the shell is.
+`make check`, `make verdict` and `make gencheck` pass.
+
+**Where BendKV differs.** SHUTDOWN SAVE fails, as above, and a SHUTDOWN that fails leaves
+a rewrite that runs as it was (Redis stops it before it tries to save). MEMORY
+MALLOC-STATS has no allocator's statistics, MEMORY STATS no tables' overheads, and its
+functions.caches is 0 (Redis's empty libraries take 200 bytes); DOCTOR looks for the
+issues of what BendKV has (no RSS but the heap's, no client buffers apart, no replicas,
+no scripts). LOLWUT's random drawings are drawn from other random numbers than Redis's
+(none can be compared), and take longer, as above. WAIT never sees a replica. A
+SHUTDOWN of a client waiting in a pause of all is held back like any command, and stops
+the server as the pause ends, as in Redis.
+
+**Tests.** `tests/admin_test.py`, in `make test` (each mode of the server): against Redis,
+97 lines: LASTSAVE as rdb_last_save_time; ROLE; WAIT's twelve errors, its answers at once
+and once its time is up, in MULTI, a client that waits as CLIENT LIST and INFO show it,
+CLIENT UNBLOCK both ways, one whose connection closes, a pipeline behind it; MEMORY's
+help, errors, PURGE, DOCTOR, and STATS's fields in order and the kinds of their values,
+with two databases that hold keys; LOLWUT's text and errors, eleven drawings of VERSION
+5 byte for byte, the shapes of three random ones and of six of VERSION 6, the verbatim
+reply of RESP3; SHUTDOWN's errors and its refusal in MULTI; their statistics. Then, on
+servers of their own (a redis-server and BendKV, each in a fresh directory), SHUTDOWN and
+its forms stop the server (exit code 0, the connection closed), the append-only file
+holds what came before it and not what came after it in the pipeline, the pid file is
+removed, a SHUTDOWN in MULTI and one with a bad flag leave it running. Then BendKV alone:
+MALLOC-STATS, MEMORY STATS's numbers as INFO's, SHUTDOWN SAVE failing with its log and
+SAVE FORCE stopping, and a SHUTDOWN while a rewrite of 200,000 keys runs (its temporary
+file removed, the old file whole on a restart). redis-py's 9 tests of LASTSAVE,
+LOLWUT, MEMORY STATS, MEMORY MALLOC-STATS and ROLE (sync and asyncio, in each protocol)
+and go-redis's test of WAIT come off the client suites' known failures.
+
+**Redis's suite.** Its tests of these commands need servers of their own (unit/shutdown,
+unit/wait and unit/acl's, with RDB files, signals and replicas), but one: unit/multi's
+MULTI with SHUTDOWN, which passes run alone, fails in its unit's run as five tests around
+it do, on a client that an earlier test, which queues a REPLICAOF, leaves in a
+transaction. 1,182 of the 1,677 tests Redis passes, as before; no test changed.
 
 ## 4. Where a request's time goes, and hiding the memory waits
 

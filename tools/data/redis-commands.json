@@ -10899,6 +10899,64 @@
     }
    ]
   },
+  "lastsave": {
+   "docs": {
+    "%": [
+     "summary",
+     "Get the UNIX time stamp of the last successful save to disk",
+     "since",
+     "1.0.0",
+     "group",
+     "server",
+     "complexity",
+     "O(1)"
+    ]
+   },
+   "info": [
+    "lastsave",
+    1,
+    {
+     "~": [
+      {
+       "+": "loading"
+      },
+      {
+       "+": "stale"
+      },
+      {
+       "+": "fast"
+      }
+     ]
+    },
+    0,
+    0,
+    0,
+    {
+     "~": [
+      {
+       "+": "@admin"
+      },
+      {
+       "+": "@fast"
+      },
+      {
+       "+": "@dangerous"
+      }
+     ]
+    },
+    {
+     "~": [
+      "nondeterministic_output"
+     ]
+    },
+    {
+     "~": []
+    },
+    {
+     "~": []
+    }
+   ]
+  },
   "lcs": {
    "docs": {
     "%": [
@@ -11895,6 +11953,75 @@
        ]
       }
      ]
+    },
+    {
+     "~": []
+    }
+   ]
+  },
+  "lolwut": {
+   "docs": {
+    "%": [
+     "summary",
+     "Display some computer art and the Redis version",
+     "since",
+     "5.0.0",
+     "group",
+     "server",
+     "arguments",
+     [
+      {
+       "%": [
+        "name",
+        "version",
+        "type",
+        "integer",
+        "token",
+        "VERSION",
+        "flags",
+        {
+         "~": [
+          {
+           "+": "optional"
+          }
+         ]
+        }
+       ]
+      }
+     ]
+    ]
+   },
+   "info": [
+    "lolwut",
+    -1,
+    {
+     "~": [
+      {
+       "+": "readonly"
+      },
+      {
+       "+": "fast"
+      }
+     ]
+    },
+    0,
+    0,
+    0,
+    {
+     "~": [
+      {
+       "+": "@read"
+      },
+      {
+       "+": "@fast"
+      }
+     ]
+    },
+    {
+     "~": []
+    },
+    {
+     "~": []
     },
     {
      "~": []
@@ -13027,11 +13154,63 @@
      "subcommands",
      {
       "%": [
+       "memory|doctor",
+       {
+        "%": [
+         "summary",
+         "Outputs memory problems report",
+         "since",
+         "4.0.0",
+         "group",
+         "server",
+         "complexity",
+         "O(1)"
+        ]
+       },
        "memory|help",
        {
         "%": [
          "summary",
          "Show helpful text about the different subcommands",
+         "since",
+         "4.0.0",
+         "group",
+         "server",
+         "complexity",
+         "O(1)"
+        ]
+       },
+       "memory|malloc-stats",
+       {
+        "%": [
+         "summary",
+         "Show allocator internal stats",
+         "since",
+         "4.0.0",
+         "group",
+         "server",
+         "complexity",
+         "Depends on how much memory is allocated, could be slow"
+        ]
+       },
+       "memory|purge",
+       {
+        "%": [
+         "summary",
+         "Ask the allocator to release memory",
+         "since",
+         "4.0.0",
+         "group",
+         "server",
+         "complexity",
+         "Depends on how much memory is allocated, could be slow"
+        ]
+       },
+       "memory|stats",
+       {
+        "%": [
+         "summary",
+         "Show memory usage details",
          "since",
          "4.0.0",
          "group",
@@ -13112,6 +13291,36 @@
     },
     [
      [
+      "memory|doctor",
+      2,
+      {
+       "~": []
+      },
+      0,
+      0,
+      0,
+      {
+       "~": [
+        {
+         "+": "@slow"
+        }
+       ]
+      },
+      {
+       "~": [
+        "nondeterministic_output",
+        "request_policy:all_shards",
+        "response_policy:special"
+       ]
+      },
+      {
+       "~": []
+      },
+      {
+       "~": []
+      }
+     ],
+     [
       "memory|help",
       2,
       {
@@ -13136,6 +13345,95 @@
       },
       {
        "~": []
+      },
+      {
+       "~": []
+      },
+      {
+       "~": []
+      }
+     ],
+     [
+      "memory|malloc-stats",
+      2,
+      {
+       "~": []
+      },
+      0,
+      0,
+      0,
+      {
+       "~": [
+        {
+         "+": "@slow"
+        }
+       ]
+      },
+      {
+       "~": [
+        "nondeterministic_output",
+        "request_policy:all_shards",
+        "response_policy:special"
+       ]
+      },
+      {
+       "~": []
+      },
+      {
+       "~": []
+      }
+     ],
+     [
+      "memory|purge",
+      2,
+      {
+       "~": []
+      },
+      0,
+      0,
+      0,
+      {
+       "~": [
+        {
+         "+": "@slow"
+        }
+       ]
+      },
+      {
+       "~": [
+        "request_policy:all_shards",
+        "response_policy:all_succeeded"
+       ]
+      },
+      {
+       "~": []
+      },
+      {
+       "~": []
+      }
+     ],
+     [
+      "memory|stats",
+      2,
+      {
+       "~": []
+      },
+      0,
+      0,
+      0,
+      {
+       "~": [
+        {
+         "+": "@slow"
+        }
+       ]
+      },
+      {
+       "~": [
+        "nondeterministic_output",
+        "request_policy:all_shards",
+        "response_policy:special"
+       ]
       },
       {
        "~": []
@@ -17184,6 +17482,65 @@
     }
    ]
   },
+  "role": {
+   "docs": {
+    "%": [
+     "summary",
+     "Return the role of the instance in the context of replication",
+     "since",
+     "2.8.12",
+     "group",
+     "server",
+     "complexity",
+     "O(1)"
+    ]
+   },
+   "info": [
+    "role",
+    1,
+    {
+     "~": [
+      {
+       "+": "noscript"
+      },
+      {
+       "+": "loading"
+      },
+      {
+       "+": "stale"
+      },
+      {
+       "+": "fast"
+      }
+     ]
+    },
+    0,
+    0,
+    0,
+    {
+     "~": [
+      {
+       "+": "@admin"
+      },
+      {
+       "+": "@fast"
+      },
+      {
+       "+": "@dangerous"
+      }
+     ]
+    },
+    {
+     "~": []
+    },
+    {
+     "~": []
+    },
+    {
+     "~": []
+    }
+   ]
+  },
   "rpop": {
    "docs": {
     "%": [
@@ -19347,6 +19704,182 @@
        ]
       }
      ]
+    },
+    {
+     "~": []
+    }
+   ]
+  },
+  "shutdown": {
+   "docs": {
+    "%": [
+     "summary",
+     "Synchronously save the dataset to disk and then shut down the server",
+     "since",
+     "1.0.0",
+     "group",
+     "server",
+     "complexity",
+     "O(N) when saving, where N is the total number of keys in all databases when saving data, otherwise O(1)",
+     "history",
+     {
+      "~": [
+       [
+        "7.0.0",
+        "Added the `NOW`, `FORCE` and `ABORT` modifiers."
+       ]
+      ]
+     },
+     "arguments",
+     [
+      {
+       "%": [
+        "name",
+        "nosave_save",
+        "type",
+        "oneof",
+        "flags",
+        {
+         "~": [
+          {
+           "+": "optional"
+          }
+         ]
+        },
+        "arguments",
+        [
+         {
+          "%": [
+           "name",
+           "nosave",
+           "type",
+           "pure-token",
+           "token",
+           "NOSAVE"
+          ]
+         },
+         {
+          "%": [
+           "name",
+           "save",
+           "type",
+           "pure-token",
+           "token",
+           "SAVE"
+          ]
+         }
+        ]
+       ]
+      },
+      {
+       "%": [
+        "name",
+        "now",
+        "type",
+        "pure-token",
+        "token",
+        "NOW",
+        "since",
+        "7.0.0",
+        "flags",
+        {
+         "~": [
+          {
+           "+": "optional"
+          }
+         ]
+        }
+       ]
+      },
+      {
+       "%": [
+        "name",
+        "force",
+        "type",
+        "pure-token",
+        "token",
+        "FORCE",
+        "since",
+        "7.0.0",
+        "flags",
+        {
+         "~": [
+          {
+           "+": "optional"
+          }
+         ]
+        }
+       ]
+      },
+      {
+       "%": [
+        "name",
+        "abort",
+        "type",
+        "pure-token",
+        "token",
+        "ABORT",
+        "since",
+        "7.0.0",
+        "flags",
+        {
+         "~": [
+          {
+           "+": "optional"
+          }
+         ]
+        }
+       ]
+      }
+     ]
+    ]
+   },
+   "info": [
+    "shutdown",
+    -1,
+    {
+     "~": [
+      {
+       "+": "admin"
+      },
+      {
+       "+": "noscript"
+      },
+      {
+       "+": "loading"
+      },
+      {
+       "+": "stale"
+      },
+      {
+       "+": "no_multi"
+      },
+      {
+       "+": "allow_busy"
+      }
+     ]
+    },
+    0,
+    0,
+    0,
+    {
+     "~": [
+      {
+       "+": "@admin"
+      },
+      {
+       "+": "@slow"
+      },
+      {
+       "+": "@dangerous"
+      }
+     ]
+    },
+    {
+     "~": []
+    },
+    {
+     "~": []
     },
     {
      "~": []
@@ -23319,6 +23852,75 @@
     },
     {
      "~": []
+    },
+    {
+     "~": []
+    },
+    {
+     "~": []
+    }
+   ]
+  },
+  "wait": {
+   "docs": {
+    "%": [
+     "summary",
+     "Wait for the synchronous replication of all the write commands sent in the context of the current connection",
+     "since",
+     "3.0.0",
+     "group",
+     "generic",
+     "complexity",
+     "O(1)",
+     "arguments",
+     [
+      {
+       "%": [
+        "name",
+        "numreplicas",
+        "type",
+        "integer"
+       ]
+      },
+      {
+       "%": [
+        "name",
+        "timeout",
+        "type",
+        "integer"
+       ]
+      }
+     ]
+    ]
+   },
+   "info": [
+    "wait",
+    3,
+    {
+     "~": [
+      {
+       "+": "noscript"
+      }
+     ]
+    },
+    0,
+    0,
+    0,
+    {
+     "~": [
+      {
+       "+": "@slow"
+      },
+      {
+       "+": "@connection"
+      }
+     ]
+    },
+    {
+     "~": [
+      "request_policy:all_shards",
+      "response_policy:agg_min"
+     ]
     },
     {
      "~": []
