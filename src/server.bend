@@ -4835,26 +4835,11 @@ type Ev1 is Data:
   EvOne{x: Evs}
   EvNone{x: Evs}
 
-# a database the eviction left without a key, its trie's nodes let go: a
-# trie keeps its nodes as its keys are deleted (KV's Scans), which hold
-# memory that would keep the heap past maxmemory with no key left to
-# evict (as Redis shrinks a hash table it emptied)
-def evict.compact.if(empty: Bool, d: R.Db) -> R.Db:
-  match empty:
-    case True{}:
-      R.db.at(R.db.now(d), R.db.empty())
-    case False{}:
-      d
-
-def evict.compact(d: R.Db) -> R.Db:
-  +y = d
-  evict.compact.if(Nat.is_eq(R.db.n(y), 0n), y)
-
 # the databases with key k of the j-th deleted, the focus where it was
 def evict.del.focused(+k: String, ds: R.Ds) -> R.Ds:
   match ds:
     case R.Ds{d, pre, post}:
-      R.Ds{evict.compact(R.db_of(R.exec(R.Del{[k]}, d))), pre, post}
+      R.Ds{R.db_of(R.exec(R.Del{[k]}, d)), pre, post}
 
 def evict.del(+j: Nat, +k: String, ds: R.Ds) -> R.Ds:
   +x = ds

@@ -2660,7 +2660,8 @@ scan as a full one: SRANDMEMBER of a set of 100,000, 41,000/s against 714,000; o
 members, 111,000 against 1.1 M; SPOP of all of 100,000 members, 7,240/s against 709,000,
 falling as the set empties. A delete that gives back empty nodes, and a pick that goes
 down the trie by counts, are the remedy, a change of the map and of its laws, which comes
-next among the costs.
+next among the costs. (The delete came in section 3zz: the last SPOPs of a set run as
+fast as its first.)
 
 **Where BendKV differs.** A hashtable's order; the picks themselves; MEMORY USAGE, an
 estimate; set-max-intset-entries, read by OBJECT ENCODING alone; SRANDMEMBER of a negative
@@ -3877,7 +3878,9 @@ and a limit of a tenth leaves none, where the nodes alone are past the limit. Re
 the like on a smaller scale: its hash table keeps its buckets until the cron shrinks it,
 and the first eviction of 200,000 keys to a tenth evicted them all on Redis too. A
 database the eviction empties gets a fresh trie, so that what the heap holds comes down.
-Pruning the nodes a delete empties would end it (DIRECTIONS.md).
+Pruning the nodes a delete empties would end it (DIRECTIONS.md). (It came in section
+3zz: a delete takes the nodes it empties, and 200,000 keys evicted to a tenth of their
+memory leave 10,208, in 1.6 s.)
 
 **Tests.** `tests/maxmemory_test.py` runs in make test. Transcripts on BendKV and
 redis-server, compared line by line: the commands refused past maxmemory with noeviction,
@@ -4059,6 +4062,51 @@ counts 216 where redis-py waits for more than 300, and COMMAND GETKEYS knows no 
 test finds a command BendKV has answering otherwise than Redis does, in either protocol.
 The runs also showed that BendKV has no SHUTDOWN, which test harnesses send to stop a
 server: `tools/client_suite.py` stops the servers it starts with SIGTERM.
+
+## 3zz. Deletes that take the nodes they empty
+
+**What there is.** A delete walks the trie with `tdel_h`, which takes the nodes it leaves
+empty: when the bucket a key leaves is empty, the node above it goes too if its other 15
+subtries are empty, and so up to the root, so a trie keeps no more nodes than its keys
+take, and a trie whose last key goes is the empty trie again. A delete of a key that is
+not there changes nothing, where the walk of the other writes (`tmod_h`), which a delete
+took before, builds the nodes down to the key's bucket: a DEL of a missing key no longer
+adds nodes. The walk looks at the subtrie it changed (`tis_tip`), and only when the delete
+emptied it does it look at the node's 16 subtries (`tnode_if`, `tnode`). Every trie of the
+server deletes so: the keyspace's, a hash's fields, a set's members, a sorted set's, and
+the server's own tables, of clients by id and of channels and patterns by name, which a
+server whose clients come and go filled with a path of nodes for each id it gave. The
+eviction no longer gives a database it empties a fresh trie: its trie is empty.
+
+**What it gives.** 200,000 keys deleted give back what they took: 400 bytes stay of the
+22.9 MB they held, where 8.6 MB stayed, and half of them deleted leave 14.4 MB (15.8 MB
+before). An eviction gets within its limit with the keys Redis keeps: 200,000 keys
+evicted to a tenth of their memory under allkeys-lru leave 10,208, where every key went
+before, the nodes alone being past the limit (Redis leaves 9,888), and the eviction takes
+1.6 s (2.9 s before, Redis 0.16 s); to half their memory, 65,648 (27,776 before, Redis
+86,352: the trie's nodes are a larger share of a smaller database). A pick or a scan of
+a trie that deletes drained goes by the keys left: a set of 100,000 members popped to its
+end gives its last 10,000 SPOPs at 28,700 a second, as many as its first (1,330 a second
+before; Redis 420,000), RANDOMKEY with 1,000 keys left of 100,000 answers 56,800 a second
+(5,000 before; Redis 319,000), and a whole SCAN of them takes 2.3 ms (21 ms before).
+
+**What it costs.** A DEL that empties its bucket takes about 75 instructions more (5,118
+against 5,041, 100,000 keys and 20,000 of them deleted): the look at the node's 16
+subtries and the node given back. One that does not, or of a key that is not there,
+about 8: the look at each changed subtrie. GET, SET and INCR do not change: 3,334, 4,255
+and 4,548 instructions against 3,335, 4,260 and 4,540, counted in turn.
+
+**The proofs.** The laws of DEL rest on two of the walks: a read of the bucket the walk
+changes sees the change, and every other bucket reads as it did (`tget_tmod_same`,
+`tget_tmod_other`), proved of `tmod_h`. A trie `tdel_h` leaves holds fewer nodes than the
+one `tmod_h` leaves with `ODel`, but every bucket reads the same in both (`tdel_eq`), so
+the laws of DEL come from `tmod_h`'s lemmas as they did, each through one rewrite.
+`tdel_eq` goes by induction on the depth: a node reads as the trie `tnode` makes of it
+(`tnode_read`: a node of 16 empty subtries reads empty, as the empty trie does); two
+nodes whose children read alike read alike (`node_same`); and where `tmod_h` builds the
+nodes down to the bucket of an empty trie, every bucket they hold is empty (`del_tip`,
+from the two lemmas of `tmod_h`). `tools/gen_trie.py` writes the 16-way steps: 227 lines
+of `PROOF.bend`, and 26 more by hand.
 
 ## 4. Where a request's time goes, and hiding the memory waits
 

@@ -882,9 +882,9 @@ def tetouch(-V: Data, d: Nat, t: Trie<V>, x: Hex, +h: U32, acc: U32) -> U32:
     case 1n+p other _:
       acc
 
-# the trie with op applied to the bucket where the walk ends. A node
-# that a delete leaves without entries stays: at most 69905 of them,
-# 9MB, for the 2^20 buckets.
+# the trie with op applied to the bucket where the walk ends; a walk
+# into an empty subtrie builds the nodes down to the bucket. A delete
+# walks with tdel_h, which reads as this walk with ODel.
 def tmod_h(-V: Data, d: Nat, t: Trie<V>, x: Hex, +h: U32, op: Op<V>) -> Trie<V>:
   match d t x:
     case 0n t0 _:
@@ -953,6 +953,91 @@ def tmod_h(-V: Data, d: Nat, t: Trie<V>, x: Hex, +h: U32, op: Op<V>) -> Trie<V>:
       Node{Tip{}, Tip{}, Tip{}, Tip{}, Tip{}, Tip{}, Tip{}, Tip{}, Tip{}, Tip{}, Tip{}, Tip{}, Tip{}, Tip{}, tmod_h(V, p, Tip{}, hex(shr4(h)), shr4(h), op), Tip{}}
     case 1n+p other H15{}:
       Node{Tip{}, Tip{}, Tip{}, Tip{}, Tip{}, Tip{}, Tip{}, Tip{}, Tip{}, Tip{}, Tip{}, Tip{}, Tip{}, Tip{}, Tip{}, tmod_h(V, p, Tip{}, hex(shr4(h)), shr4(h), op)}
+
+# t, but the empty trie for a node of 16 empty subtries
+def tnode(-V: Data, t: Trie<V>) -> Trie<V>:
+  match t:
+    case Node{Tip{}, Tip{}, Tip{}, Tip{}, Tip{}, Tip{}, Tip{}, Tip{}, Tip{}, Tip{}, Tip{}, Tip{}, Tip{}, Tip{}, Tip{}, Tip{}}:
+      Tip{}
+    case other:
+      other
+
+# whether t is the empty trie
+def tis_tip(-V: Data, +t: Trie<V>) -> Bool:
+  match t:
+    case Tip{}:
+      True{}
+    case other:
+      False{}
+
+# tnode of t when e says so (a delete emptied one of its subtries),
+# else t: a node with a subtrie that is not empty is kept unread
+def tnode_if(-V: Data, e: Bool, t: Trie<V>) -> Trie<V>:
+  match e:
+    case True{}:
+      tnode(V, t)
+    case False{}:
+      t
+
+# the trie without k's entries in the bucket where the walk ends
+# (bdel). A node that this leaves empty goes too (tnode_if), so a
+# trie keeps no more nodes than its keys take, and a walk into an
+# empty subtrie changes nothing. It reads as tmod_h with ODel{k},
+# bucket by bucket (PROOF.bend: tdel_eq).
+def tdel_h(-V: Data, d: Nat, t: Trie<V>, x: Hex, +h: U32, +k: String) -> Trie<V>:
+  match d t x:
+    case 0n t0 _:
+      bdel(V, k, t0)
+    case 1n+p Node{c0, c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13, c14, c15} H0{}:
+      +a = tdel_h(V, p, c0, hex(shr4(h)), shr4(h), k)
+      tnode_if(V, tis_tip(V, a), Node{a, c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13, c14, c15})
+    case 1n+p Node{c0, c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13, c14, c15} H1{}:
+      +a = tdel_h(V, p, c1, hex(shr4(h)), shr4(h), k)
+      tnode_if(V, tis_tip(V, a), Node{c0, a, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13, c14, c15})
+    case 1n+p Node{c0, c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13, c14, c15} H2{}:
+      +a = tdel_h(V, p, c2, hex(shr4(h)), shr4(h), k)
+      tnode_if(V, tis_tip(V, a), Node{c0, c1, a, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13, c14, c15})
+    case 1n+p Node{c0, c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13, c14, c15} H3{}:
+      +a = tdel_h(V, p, c3, hex(shr4(h)), shr4(h), k)
+      tnode_if(V, tis_tip(V, a), Node{c0, c1, c2, a, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13, c14, c15})
+    case 1n+p Node{c0, c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13, c14, c15} H4{}:
+      +a = tdel_h(V, p, c4, hex(shr4(h)), shr4(h), k)
+      tnode_if(V, tis_tip(V, a), Node{c0, c1, c2, c3, a, c5, c6, c7, c8, c9, c10, c11, c12, c13, c14, c15})
+    case 1n+p Node{c0, c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13, c14, c15} H5{}:
+      +a = tdel_h(V, p, c5, hex(shr4(h)), shr4(h), k)
+      tnode_if(V, tis_tip(V, a), Node{c0, c1, c2, c3, c4, a, c6, c7, c8, c9, c10, c11, c12, c13, c14, c15})
+    case 1n+p Node{c0, c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13, c14, c15} H6{}:
+      +a = tdel_h(V, p, c6, hex(shr4(h)), shr4(h), k)
+      tnode_if(V, tis_tip(V, a), Node{c0, c1, c2, c3, c4, c5, a, c7, c8, c9, c10, c11, c12, c13, c14, c15})
+    case 1n+p Node{c0, c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13, c14, c15} H7{}:
+      +a = tdel_h(V, p, c7, hex(shr4(h)), shr4(h), k)
+      tnode_if(V, tis_tip(V, a), Node{c0, c1, c2, c3, c4, c5, c6, a, c8, c9, c10, c11, c12, c13, c14, c15})
+    case 1n+p Node{c0, c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13, c14, c15} H8{}:
+      +a = tdel_h(V, p, c8, hex(shr4(h)), shr4(h), k)
+      tnode_if(V, tis_tip(V, a), Node{c0, c1, c2, c3, c4, c5, c6, c7, a, c9, c10, c11, c12, c13, c14, c15})
+    case 1n+p Node{c0, c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13, c14, c15} H9{}:
+      +a = tdel_h(V, p, c9, hex(shr4(h)), shr4(h), k)
+      tnode_if(V, tis_tip(V, a), Node{c0, c1, c2, c3, c4, c5, c6, c7, c8, a, c10, c11, c12, c13, c14, c15})
+    case 1n+p Node{c0, c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13, c14, c15} H10{}:
+      +a = tdel_h(V, p, c10, hex(shr4(h)), shr4(h), k)
+      tnode_if(V, tis_tip(V, a), Node{c0, c1, c2, c3, c4, c5, c6, c7, c8, c9, a, c11, c12, c13, c14, c15})
+    case 1n+p Node{c0, c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13, c14, c15} H11{}:
+      +a = tdel_h(V, p, c11, hex(shr4(h)), shr4(h), k)
+      tnode_if(V, tis_tip(V, a), Node{c0, c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, a, c12, c13, c14, c15})
+    case 1n+p Node{c0, c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13, c14, c15} H12{}:
+      +a = tdel_h(V, p, c12, hex(shr4(h)), shr4(h), k)
+      tnode_if(V, tis_tip(V, a), Node{c0, c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, a, c13, c14, c15})
+    case 1n+p Node{c0, c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13, c14, c15} H13{}:
+      +a = tdel_h(V, p, c13, hex(shr4(h)), shr4(h), k)
+      tnode_if(V, tis_tip(V, a), Node{c0, c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, a, c14, c15})
+    case 1n+p Node{c0, c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13, c14, c15} H14{}:
+      +a = tdel_h(V, p, c14, hex(shr4(h)), shr4(h), k)
+      tnode_if(V, tis_tip(V, a), Node{c0, c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13, a, c15})
+    case 1n+p Node{c0, c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13, c14, c15} H15{}:
+      +a = tdel_h(V, p, c15, hex(shr4(h)), shr4(h), k)
+      tnode_if(V, tis_tip(V, a), Node{c0, c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13, c14, a})
+    case 1n+p other _:
+      other
 # END gen_trie: walks
 
 # Folds
@@ -1165,7 +1250,7 @@ def expire(-V: Data, t: Trie<V>, +k: String, +e: Nat) -> Trie<V>:
   expire.at(V, t, k, e, hash(k))
 
 def del.at(-V: Data, t: Trie<V>, +k: String, +h: U32) -> Trie<V>:
-  tmod_h(V, 5n, t, hex(h), h, ODel{k})
+  tdel_h(V, 5n, t, hex(h), h, k)
 
 def del(-V: Data, t: Trie<V>, +k: String) -> Trie<V>:
   del.at(V, t, k, hash(k))

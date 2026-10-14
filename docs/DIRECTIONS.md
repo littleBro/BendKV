@@ -321,11 +321,11 @@ Where performance and proof meet: **batched execution under proved laws.**
    the 1,172 in what it has ([COMPATIBILITY.md](COMPATIBILITY.md)); most of the other 82
    need commands BendKV does not have (replication's SYNC, Lua, SORT, DUMP, streams) or
    run after a test that left its client in MULTI on one of them.
-   What maxmemory left to do (section 3zw): a trie keeps its nodes when its keys go, up
-   to 9 MB, so the eviction evicts more keys than Redis would to get within a limit, and
-   its samples walk empty buckets (an eviction takes ten times Redis's time). Pruning
-   the nodes a delete empties needs the trie's delete, and the laws of its
-   buckets, to make an emptied node a leaf again. And the compiler copies a node a
+   What maxmemory left to do (section 3zw): a delete takes the nodes it empties now
+   (section 3zz), so the eviction gets within a limit with the keys Redis keeps, but its
+   samples still walk the trie's empty buckets, and an eviction takes ten times Redis's
+   time; a pick that goes down the trie by counts would end that, for RANDOMKEY and
+   SRANDMEMBER too. And the compiler copies a node a
    function takes while its caller still shares it: a walk that recurses on the
    stack takes the nodes it reads, where a loop reads them lent, so the hot walks are
    written as loops for now.

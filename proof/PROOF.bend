@@ -1185,12 +1185,12 @@ def hex_eq_sound(x: KV.Hex, y: KV.Hex) -> {hex_eq(x, y) == True{} : Bool} -> {x 
 
 # Walks
 # =====
-# get, set and del walk the hex digits of a key's hash (tget_k, tmod_h);
-# the lemmas reason about tget_h, the bucket where a walk ends, by
-# induction on the depth: a step takes the digit as a parameter, so that a
-# match can take it apart. A node has 16 children, so a step splits 16
-# ways, and 256 ways where two walks meet; tools/gen_trie.py writes those
-# steps out.
+# get, set and del walk the hex digits of a key's hash (tget_k, tmod_h,
+# tdel_h); the lemmas reason about tget_h, the bucket where a walk ends,
+# by induction on the depth: a step takes the digit as a parameter, so
+# that a match can take it apart. A node has 16 children, so a step splits
+# 16 ways, and 256 ways where two walks meet; tools/gen_trie.py writes
+# those steps out.
 
 # whether two walks of depth d take the same digits
 def dsame(d: Nat, x1: KV.Hex, +h1: U32, x2: KV.Hex, +h2: U32) -> Bool:
@@ -2422,6 +2422,257 @@ def tget_tmod_other(-V: Data, d: Nat, +t: KV.Trie<V>, +x1: KV.Hex, +h1: U32, +x2
     case 1n++p:
       other_step(V, p, t, x1, h1, x2, h2, op, hex_eq(x1, x2), u => tget_tmod_other(V, p, u, KV.hex(KV.shr4(h1)), KV.shr4(h1), KV.hex(KV.shr4(h2)), KV.shr4(h2), op))({==})
 
+# Deletes
+# =======
+# A delete walks with tdel_h, which takes the nodes it leaves empty and
+# builds none where the trie is empty; the walk that keeps them, tmod_h
+# with ODel, reads the same in every bucket (tdel_eq), so the laws of a
+# delete come from those of tmod_h. Where tmod_h builds the nodes down to
+# the bucket in an empty trie, every bucket they hold is empty (del_tip).
+
+# a delete in the empty trie leaves every bucket empty: the step of
+# del_tip, c saying whether the two walks take the same digits
+def del_tip_step(-V: Data, +p: Nat, +x1: KV.Hex, +h1: U32, +k: String, +y: KV.Hex, +g: U32, c: Bool) -> {dsame(p, x1, h1, y, g) == c : Bool} -> {KV.tget_h(V, p, KV.tmod_h(V, p, KV.Tip{}, x1, h1, KV.ODel{k}), y, g) == KV.tget_h(V, p, KV.Tip{}, y, g) : KV.Trie<V>}:
+  match c:
+    case True{}:
+      e => %walk_same(V, p, KV.tmod_h(V, p, KV.Tip{}, x1, h1, KV.ODel{k}), x1, h1, y, g)(e) : {_ == KV.tget_h(V, p, KV.Tip{}, y, g) : KV.Trie<V>}
+           %tget_tmod_same(V, p, KV.Tip{}, x1, h1, KV.ODel{k}) : {_ == KV.tget_h(V, p, KV.Tip{}, y, g) : KV.Trie<V>}
+           %Equal.sym(KV.Trie<V>, KV.tget_h(V, p, KV.Tip{}, x1, h1), KV.Tip{}, tget_h_tip(V, p, x1, h1)) : {KV.bdel(V, k, _) == KV.tget_h(V, p, KV.Tip{}, y, g) : KV.Trie<V>}
+           Equal.sym(KV.Trie<V>, KV.tget_h(V, p, KV.Tip{}, y, g), KV.Tip{}, tget_h_tip(V, p, y, g))
+    case False{}:
+      e => tget_tmod_other(V, p, KV.Tip{}, x1, h1, y, g, KV.ODel{k})(e)
+
+def del_tip(-V: Data, +p: Nat, +x1: KV.Hex, +h1: U32, +k: String, +y: KV.Hex, +g: U32) -> {KV.tget_h(V, p, KV.tmod_h(V, p, KV.Tip{}, x1, h1, KV.ODel{k}), y, g) == KV.tget_h(V, p, KV.Tip{}, y, g) : KV.Trie<V>}:
+  del_tip_step(V, p, x1, h1, k, y, g, dsame(p, x1, h1, y, g))({==})
+
+# BEGIN gen_trie: del
+# a node and the trie tnode makes of it read alike
+def tnode_read(-V: Data, +p: Nat, t: KV.Trie<V>, x: KV.Hex, +h: U32) -> {KV.tget_h(V, 1n+p, t, x, h) == KV.tget_h(V, 1n+p, KV.tnode(V, t), x, h) : KV.Trie<V>}:
+  match t:
+    case KV.Node{KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}}:
+      n2_tip(V, p, x, h)
+    case KV.Node{KV.Node{d0, d1, d2, d3, d4, d5, d6, d7, d8, d9, d10, d11, d12, d13, d14, d15}, c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13, c14, c15}:
+      {==}
+    case KV.Node{KV.Ent{a, b, e, c}, c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13, c14, c15}:
+      {==}
+    case KV.Node{KV.Tip{}, KV.Node{d0, d1, d2, d3, d4, d5, d6, d7, d8, d9, d10, d11, d12, d13, d14, d15}, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13, c14, c15}:
+      {==}
+    case KV.Node{KV.Tip{}, KV.Ent{a, b, e, c}, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13, c14, c15}:
+      {==}
+    case KV.Node{KV.Tip{}, KV.Tip{}, KV.Node{d0, d1, d2, d3, d4, d5, d6, d7, d8, d9, d10, d11, d12, d13, d14, d15}, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13, c14, c15}:
+      {==}
+    case KV.Node{KV.Tip{}, KV.Tip{}, KV.Ent{a, b, e, c}, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13, c14, c15}:
+      {==}
+    case KV.Node{KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Node{d0, d1, d2, d3, d4, d5, d6, d7, d8, d9, d10, d11, d12, d13, d14, d15}, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13, c14, c15}:
+      {==}
+    case KV.Node{KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Ent{a, b, e, c}, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13, c14, c15}:
+      {==}
+    case KV.Node{KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Node{d0, d1, d2, d3, d4, d5, d6, d7, d8, d9, d10, d11, d12, d13, d14, d15}, c5, c6, c7, c8, c9, c10, c11, c12, c13, c14, c15}:
+      {==}
+    case KV.Node{KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Ent{a, b, e, c}, c5, c6, c7, c8, c9, c10, c11, c12, c13, c14, c15}:
+      {==}
+    case KV.Node{KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Node{d0, d1, d2, d3, d4, d5, d6, d7, d8, d9, d10, d11, d12, d13, d14, d15}, c6, c7, c8, c9, c10, c11, c12, c13, c14, c15}:
+      {==}
+    case KV.Node{KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Ent{a, b, e, c}, c6, c7, c8, c9, c10, c11, c12, c13, c14, c15}:
+      {==}
+    case KV.Node{KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Node{d0, d1, d2, d3, d4, d5, d6, d7, d8, d9, d10, d11, d12, d13, d14, d15}, c7, c8, c9, c10, c11, c12, c13, c14, c15}:
+      {==}
+    case KV.Node{KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Ent{a, b, e, c}, c7, c8, c9, c10, c11, c12, c13, c14, c15}:
+      {==}
+    case KV.Node{KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Node{d0, d1, d2, d3, d4, d5, d6, d7, d8, d9, d10, d11, d12, d13, d14, d15}, c8, c9, c10, c11, c12, c13, c14, c15}:
+      {==}
+    case KV.Node{KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Ent{a, b, e, c}, c8, c9, c10, c11, c12, c13, c14, c15}:
+      {==}
+    case KV.Node{KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Node{d0, d1, d2, d3, d4, d5, d6, d7, d8, d9, d10, d11, d12, d13, d14, d15}, c9, c10, c11, c12, c13, c14, c15}:
+      {==}
+    case KV.Node{KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Ent{a, b, e, c}, c9, c10, c11, c12, c13, c14, c15}:
+      {==}
+    case KV.Node{KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Node{d0, d1, d2, d3, d4, d5, d6, d7, d8, d9, d10, d11, d12, d13, d14, d15}, c10, c11, c12, c13, c14, c15}:
+      {==}
+    case KV.Node{KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Ent{a, b, e, c}, c10, c11, c12, c13, c14, c15}:
+      {==}
+    case KV.Node{KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Node{d0, d1, d2, d3, d4, d5, d6, d7, d8, d9, d10, d11, d12, d13, d14, d15}, c11, c12, c13, c14, c15}:
+      {==}
+    case KV.Node{KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Ent{a, b, e, c}, c11, c12, c13, c14, c15}:
+      {==}
+    case KV.Node{KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Node{d0, d1, d2, d3, d4, d5, d6, d7, d8, d9, d10, d11, d12, d13, d14, d15}, c12, c13, c14, c15}:
+      {==}
+    case KV.Node{KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Ent{a, b, e, c}, c12, c13, c14, c15}:
+      {==}
+    case KV.Node{KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Node{d0, d1, d2, d3, d4, d5, d6, d7, d8, d9, d10, d11, d12, d13, d14, d15}, c13, c14, c15}:
+      {==}
+    case KV.Node{KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Ent{a, b, e, c}, c13, c14, c15}:
+      {==}
+    case KV.Node{KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Node{d0, d1, d2, d3, d4, d5, d6, d7, d8, d9, d10, d11, d12, d13, d14, d15}, c14, c15}:
+      {==}
+    case KV.Node{KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Ent{a, b, e, c}, c14, c15}:
+      {==}
+    case KV.Node{KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Node{d0, d1, d2, d3, d4, d5, d6, d7, d8, d9, d10, d11, d12, d13, d14, d15}, c15}:
+      {==}
+    case KV.Node{KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Ent{a, b, e, c}, c15}:
+      {==}
+    case KV.Node{KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Node{d0, d1, d2, d3, d4, d5, d6, d7, d8, d9, d10, d11, d12, d13, d14, d15}}:
+      {==}
+    case KV.Node{KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Ent{a, b, e, c}}:
+      {==}
+    case KV.Tip{}:
+      {==}
+    case KV.Ent{a, b, e, c}:
+      {==}
+
+# and the trie tnode_if makes of it
+def tnode_if_read(-V: Data, +p: Nat, z: Bool, t: KV.Trie<V>, x: KV.Hex, +h: U32) -> {KV.tget_h(V, 1n+p, t, x, h) == KV.tget_h(V, 1n+p, KV.tnode_if(V, z, t), x, h) : KV.Trie<V>}:
+  match z:
+    case True{}:
+      tnode_read(V, p, t, x, h)
+    case False{}:
+      {==}
+
+# two nodes whose children read alike read alike
+def node_same(-V: Data, -p: Nat, -a0: KV.Trie<V>, -a1: KV.Trie<V>, -a2: KV.Trie<V>, -a3: KV.Trie<V>, -a4: KV.Trie<V>, -a5: KV.Trie<V>, -a6: KV.Trie<V>, -a7: KV.Trie<V>, -a8: KV.Trie<V>, -a9: KV.Trie<V>, -a10: KV.Trie<V>, -a11: KV.Trie<V>, -a12: KV.Trie<V>, -a13: KV.Trie<V>, -a14: KV.Trie<V>, -a15: KV.Trie<V>, -b0: KV.Trie<V>, -b1: KV.Trie<V>, -b2: KV.Trie<V>, -b3: KV.Trie<V>, -b4: KV.Trie<V>, -b5: KV.Trie<V>, -b6: KV.Trie<V>, -b7: KV.Trie<V>, -b8: KV.Trie<V>, -b9: KV.Trie<V>, -b10: KV.Trie<V>, -b11: KV.Trie<V>, -b12: KV.Trie<V>, -b13: KV.Trie<V>, -b14: KV.Trie<V>, -b15: KV.Trie<V>, x: KV.Hex, +h: U32, e0: @y: KV.Hex -> @g: U32 -> {KV.tget_h(V, p, a0, y, g) == KV.tget_h(V, p, b0, y, g) : KV.Trie<V>}, e1: @y: KV.Hex -> @g: U32 -> {KV.tget_h(V, p, a1, y, g) == KV.tget_h(V, p, b1, y, g) : KV.Trie<V>}, e2: @y: KV.Hex -> @g: U32 -> {KV.tget_h(V, p, a2, y, g) == KV.tget_h(V, p, b2, y, g) : KV.Trie<V>}, e3: @y: KV.Hex -> @g: U32 -> {KV.tget_h(V, p, a3, y, g) == KV.tget_h(V, p, b3, y, g) : KV.Trie<V>}, e4: @y: KV.Hex -> @g: U32 -> {KV.tget_h(V, p, a4, y, g) == KV.tget_h(V, p, b4, y, g) : KV.Trie<V>}, e5: @y: KV.Hex -> @g: U32 -> {KV.tget_h(V, p, a5, y, g) == KV.tget_h(V, p, b5, y, g) : KV.Trie<V>}, e6: @y: KV.Hex -> @g: U32 -> {KV.tget_h(V, p, a6, y, g) == KV.tget_h(V, p, b6, y, g) : KV.Trie<V>}, e7: @y: KV.Hex -> @g: U32 -> {KV.tget_h(V, p, a7, y, g) == KV.tget_h(V, p, b7, y, g) : KV.Trie<V>}, e8: @y: KV.Hex -> @g: U32 -> {KV.tget_h(V, p, a8, y, g) == KV.tget_h(V, p, b8, y, g) : KV.Trie<V>}, e9: @y: KV.Hex -> @g: U32 -> {KV.tget_h(V, p, a9, y, g) == KV.tget_h(V, p, b9, y, g) : KV.Trie<V>}, e10: @y: KV.Hex -> @g: U32 -> {KV.tget_h(V, p, a10, y, g) == KV.tget_h(V, p, b10, y, g) : KV.Trie<V>}, e11: @y: KV.Hex -> @g: U32 -> {KV.tget_h(V, p, a11, y, g) == KV.tget_h(V, p, b11, y, g) : KV.Trie<V>}, e12: @y: KV.Hex -> @g: U32 -> {KV.tget_h(V, p, a12, y, g) == KV.tget_h(V, p, b12, y, g) : KV.Trie<V>}, e13: @y: KV.Hex -> @g: U32 -> {KV.tget_h(V, p, a13, y, g) == KV.tget_h(V, p, b13, y, g) : KV.Trie<V>}, e14: @y: KV.Hex -> @g: U32 -> {KV.tget_h(V, p, a14, y, g) == KV.tget_h(V, p, b14, y, g) : KV.Trie<V>}, e15: @y: KV.Hex -> @g: U32 -> {KV.tget_h(V, p, a15, y, g) == KV.tget_h(V, p, b15, y, g) : KV.Trie<V>}) -> {KV.tget_h(V, 1n+p, KV.Node{a0, a1, a2, a3, a4, a5, a6, a7, a8, a9, a10, a11, a12, a13, a14, a15}, x, h) == KV.tget_h(V, 1n+p, KV.Node{b0, b1, b2, b3, b4, b5, b6, b7, b8, b9, b10, b11, b12, b13, b14, b15}, x, h) : KV.Trie<V>}:
+  match x:
+    case KV.H0{}:
+      e0(KV.hex(KV.shr4(h)), KV.shr4(h))
+    case KV.H1{}:
+      e1(KV.hex(KV.shr4(h)), KV.shr4(h))
+    case KV.H2{}:
+      e2(KV.hex(KV.shr4(h)), KV.shr4(h))
+    case KV.H3{}:
+      e3(KV.hex(KV.shr4(h)), KV.shr4(h))
+    case KV.H4{}:
+      e4(KV.hex(KV.shr4(h)), KV.shr4(h))
+    case KV.H5{}:
+      e5(KV.hex(KV.shr4(h)), KV.shr4(h))
+    case KV.H6{}:
+      e6(KV.hex(KV.shr4(h)), KV.shr4(h))
+    case KV.H7{}:
+      e7(KV.hex(KV.shr4(h)), KV.shr4(h))
+    case KV.H8{}:
+      e8(KV.hex(KV.shr4(h)), KV.shr4(h))
+    case KV.H9{}:
+      e9(KV.hex(KV.shr4(h)), KV.shr4(h))
+    case KV.H10{}:
+      e10(KV.hex(KV.shr4(h)), KV.shr4(h))
+    case KV.H11{}:
+      e11(KV.hex(KV.shr4(h)), KV.shr4(h))
+    case KV.H12{}:
+      e12(KV.hex(KV.shr4(h)), KV.shr4(h))
+    case KV.H13{}:
+      e13(KV.hex(KV.shr4(h)), KV.shr4(h))
+    case KV.H14{}:
+      e14(KV.hex(KV.shr4(h)), KV.shr4(h))
+    case KV.H15{}:
+      e15(KV.hex(KV.shr4(h)), KV.shr4(h))
+
+# and the trie tnode_if makes of the second
+def tnode_same(-V: Data, +p: Nat, -a0: KV.Trie<V>, -a1: KV.Trie<V>, -a2: KV.Trie<V>, -a3: KV.Trie<V>, -a4: KV.Trie<V>, -a5: KV.Trie<V>, -a6: KV.Trie<V>, -a7: KV.Trie<V>, -a8: KV.Trie<V>, -a9: KV.Trie<V>, -a10: KV.Trie<V>, -a11: KV.Trie<V>, -a12: KV.Trie<V>, -a13: KV.Trie<V>, -a14: KV.Trie<V>, -a15: KV.Trie<V>, b0: KV.Trie<V>, b1: KV.Trie<V>, b2: KV.Trie<V>, b3: KV.Trie<V>, b4: KV.Trie<V>, b5: KV.Trie<V>, b6: KV.Trie<V>, b7: KV.Trie<V>, b8: KV.Trie<V>, b9: KV.Trie<V>, b10: KV.Trie<V>, b11: KV.Trie<V>, b12: KV.Trie<V>, b13: KV.Trie<V>, b14: KV.Trie<V>, b15: KV.Trie<V>, z: Bool, +x: KV.Hex, +h: U32, e0: @y: KV.Hex -> @g: U32 -> {KV.tget_h(V, p, a0, y, g) == KV.tget_h(V, p, b0, y, g) : KV.Trie<V>}, e1: @y: KV.Hex -> @g: U32 -> {KV.tget_h(V, p, a1, y, g) == KV.tget_h(V, p, b1, y, g) : KV.Trie<V>}, e2: @y: KV.Hex -> @g: U32 -> {KV.tget_h(V, p, a2, y, g) == KV.tget_h(V, p, b2, y, g) : KV.Trie<V>}, e3: @y: KV.Hex -> @g: U32 -> {KV.tget_h(V, p, a3, y, g) == KV.tget_h(V, p, b3, y, g) : KV.Trie<V>}, e4: @y: KV.Hex -> @g: U32 -> {KV.tget_h(V, p, a4, y, g) == KV.tget_h(V, p, b4, y, g) : KV.Trie<V>}, e5: @y: KV.Hex -> @g: U32 -> {KV.tget_h(V, p, a5, y, g) == KV.tget_h(V, p, b5, y, g) : KV.Trie<V>}, e6: @y: KV.Hex -> @g: U32 -> {KV.tget_h(V, p, a6, y, g) == KV.tget_h(V, p, b6, y, g) : KV.Trie<V>}, e7: @y: KV.Hex -> @g: U32 -> {KV.tget_h(V, p, a7, y, g) == KV.tget_h(V, p, b7, y, g) : KV.Trie<V>}, e8: @y: KV.Hex -> @g: U32 -> {KV.tget_h(V, p, a8, y, g) == KV.tget_h(V, p, b8, y, g) : KV.Trie<V>}, e9: @y: KV.Hex -> @g: U32 -> {KV.tget_h(V, p, a9, y, g) == KV.tget_h(V, p, b9, y, g) : KV.Trie<V>}, e10: @y: KV.Hex -> @g: U32 -> {KV.tget_h(V, p, a10, y, g) == KV.tget_h(V, p, b10, y, g) : KV.Trie<V>}, e11: @y: KV.Hex -> @g: U32 -> {KV.tget_h(V, p, a11, y, g) == KV.tget_h(V, p, b11, y, g) : KV.Trie<V>}, e12: @y: KV.Hex -> @g: U32 -> {KV.tget_h(V, p, a12, y, g) == KV.tget_h(V, p, b12, y, g) : KV.Trie<V>}, e13: @y: KV.Hex -> @g: U32 -> {KV.tget_h(V, p, a13, y, g) == KV.tget_h(V, p, b13, y, g) : KV.Trie<V>}, e14: @y: KV.Hex -> @g: U32 -> {KV.tget_h(V, p, a14, y, g) == KV.tget_h(V, p, b14, y, g) : KV.Trie<V>}, e15: @y: KV.Hex -> @g: U32 -> {KV.tget_h(V, p, a15, y, g) == KV.tget_h(V, p, b15, y, g) : KV.Trie<V>}) -> {KV.tget_h(V, 1n+p, KV.Node{a0, a1, a2, a3, a4, a5, a6, a7, a8, a9, a10, a11, a12, a13, a14, a15}, x, h) == KV.tget_h(V, 1n+p, KV.tnode_if(V, z, KV.Node{b0, b1, b2, b3, b4, b5, b6, b7, b8, b9, b10, b11, b12, b13, b14, b15}), x, h) : KV.Trie<V>}:
+  %tnode_if_read(V, p, z, KV.Node{b0, b1, b2, b3, b4, b5, b6, b7, b8, b9, b10, b11, b12, b13, b14, b15}, x, h) : {KV.tget_h(V, 1n+p, KV.Node{a0, a1, a2, a3, a4, a5, a6, a7, a8, a9, a10, a11, a12, a13, a14, a15}, x, h) == _ : KV.Trie<V>}
+  node_same(V, p, a0, a1, a2, a3, a4, a5, a6, a7, a8, a9, a10, a11, a12, a13, a14, a15, b0, b1, b2, b3, b4, b5, b6, b7, b8, b9, b10, b11, b12, b13, b14, b15, x, h, e0, e1, e2, e3, e4, e5, e6, e7, e8, e9, e10, e11, e12, e13, e14, e15)
+
+# a delete that takes the nodes it empties (tdel_h) reads as the walk
+# that deletes and keeps them (tmod_h with ODel), bucket by bucket
+def tdel_eq(-V: Data, d: Nat, +t: KV.Trie<V>, x1: KV.Hex, +h1: U32, +k: String, +x2: KV.Hex, +h2: U32) -> {KV.tget_h(V, d, KV.tmod_h(V, d, t, x1, h1, KV.ODel{k}), x2, h2) == KV.tget_h(V, d, KV.tdel_h(V, d, t, x1, h1, k), x2, h2) : KV.Trie<V>}:
+  match d t x1:
+    case 0n t0 _:
+      {==}
+    case 1n++p KV.Node{+c0, +c1, +c2, +c3, +c4, +c5, +c6, +c7, +c8, +c9, +c10, +c11, +c12, +c13, +c14, +c15} KV.H0{}:
+      tnode_same(V, p, KV.tmod_h(V, p, c0, KV.hex(KV.shr4(h1)), KV.shr4(h1), KV.ODel{k}), c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13, c14, c15, KV.tdel_h(V, p, c0, KV.hex(KV.shr4(h1)), KV.shr4(h1), k), c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13, c14, c15, KV.tis_tip(V, KV.tdel_h(V, p, c0, KV.hex(KV.shr4(h1)), KV.shr4(h1), k)), x2, h2, y => g => tdel_eq(V, p, c0, KV.hex(KV.shr4(h1)), KV.shr4(h1), k, y, g), y => g => {==}, y => g => {==}, y => g => {==}, y => g => {==}, y => g => {==}, y => g => {==}, y => g => {==}, y => g => {==}, y => g => {==}, y => g => {==}, y => g => {==}, y => g => {==}, y => g => {==}, y => g => {==}, y => g => {==})
+    case 1n++p KV.Node{+c0, +c1, +c2, +c3, +c4, +c5, +c6, +c7, +c8, +c9, +c10, +c11, +c12, +c13, +c14, +c15} KV.H1{}:
+      tnode_same(V, p, c0, KV.tmod_h(V, p, c1, KV.hex(KV.shr4(h1)), KV.shr4(h1), KV.ODel{k}), c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13, c14, c15, c0, KV.tdel_h(V, p, c1, KV.hex(KV.shr4(h1)), KV.shr4(h1), k), c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13, c14, c15, KV.tis_tip(V, KV.tdel_h(V, p, c1, KV.hex(KV.shr4(h1)), KV.shr4(h1), k)), x2, h2, y => g => {==}, y => g => tdel_eq(V, p, c1, KV.hex(KV.shr4(h1)), KV.shr4(h1), k, y, g), y => g => {==}, y => g => {==}, y => g => {==}, y => g => {==}, y => g => {==}, y => g => {==}, y => g => {==}, y => g => {==}, y => g => {==}, y => g => {==}, y => g => {==}, y => g => {==}, y => g => {==}, y => g => {==})
+    case 1n++p KV.Node{+c0, +c1, +c2, +c3, +c4, +c5, +c6, +c7, +c8, +c9, +c10, +c11, +c12, +c13, +c14, +c15} KV.H2{}:
+      tnode_same(V, p, c0, c1, KV.tmod_h(V, p, c2, KV.hex(KV.shr4(h1)), KV.shr4(h1), KV.ODel{k}), c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13, c14, c15, c0, c1, KV.tdel_h(V, p, c2, KV.hex(KV.shr4(h1)), KV.shr4(h1), k), c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13, c14, c15, KV.tis_tip(V, KV.tdel_h(V, p, c2, KV.hex(KV.shr4(h1)), KV.shr4(h1), k)), x2, h2, y => g => {==}, y => g => {==}, y => g => tdel_eq(V, p, c2, KV.hex(KV.shr4(h1)), KV.shr4(h1), k, y, g), y => g => {==}, y => g => {==}, y => g => {==}, y => g => {==}, y => g => {==}, y => g => {==}, y => g => {==}, y => g => {==}, y => g => {==}, y => g => {==}, y => g => {==}, y => g => {==}, y => g => {==})
+    case 1n++p KV.Node{+c0, +c1, +c2, +c3, +c4, +c5, +c6, +c7, +c8, +c9, +c10, +c11, +c12, +c13, +c14, +c15} KV.H3{}:
+      tnode_same(V, p, c0, c1, c2, KV.tmod_h(V, p, c3, KV.hex(KV.shr4(h1)), KV.shr4(h1), KV.ODel{k}), c4, c5, c6, c7, c8, c9, c10, c11, c12, c13, c14, c15, c0, c1, c2, KV.tdel_h(V, p, c3, KV.hex(KV.shr4(h1)), KV.shr4(h1), k), c4, c5, c6, c7, c8, c9, c10, c11, c12, c13, c14, c15, KV.tis_tip(V, KV.tdel_h(V, p, c3, KV.hex(KV.shr4(h1)), KV.shr4(h1), k)), x2, h2, y => g => {==}, y => g => {==}, y => g => {==}, y => g => tdel_eq(V, p, c3, KV.hex(KV.shr4(h1)), KV.shr4(h1), k, y, g), y => g => {==}, y => g => {==}, y => g => {==}, y => g => {==}, y => g => {==}, y => g => {==}, y => g => {==}, y => g => {==}, y => g => {==}, y => g => {==}, y => g => {==}, y => g => {==})
+    case 1n++p KV.Node{+c0, +c1, +c2, +c3, +c4, +c5, +c6, +c7, +c8, +c9, +c10, +c11, +c12, +c13, +c14, +c15} KV.H4{}:
+      tnode_same(V, p, c0, c1, c2, c3, KV.tmod_h(V, p, c4, KV.hex(KV.shr4(h1)), KV.shr4(h1), KV.ODel{k}), c5, c6, c7, c8, c9, c10, c11, c12, c13, c14, c15, c0, c1, c2, c3, KV.tdel_h(V, p, c4, KV.hex(KV.shr4(h1)), KV.shr4(h1), k), c5, c6, c7, c8, c9, c10, c11, c12, c13, c14, c15, KV.tis_tip(V, KV.tdel_h(V, p, c4, KV.hex(KV.shr4(h1)), KV.shr4(h1), k)), x2, h2, y => g => {==}, y => g => {==}, y => g => {==}, y => g => {==}, y => g => tdel_eq(V, p, c4, KV.hex(KV.shr4(h1)), KV.shr4(h1), k, y, g), y => g => {==}, y => g => {==}, y => g => {==}, y => g => {==}, y => g => {==}, y => g => {==}, y => g => {==}, y => g => {==}, y => g => {==}, y => g => {==}, y => g => {==})
+    case 1n++p KV.Node{+c0, +c1, +c2, +c3, +c4, +c5, +c6, +c7, +c8, +c9, +c10, +c11, +c12, +c13, +c14, +c15} KV.H5{}:
+      tnode_same(V, p, c0, c1, c2, c3, c4, KV.tmod_h(V, p, c5, KV.hex(KV.shr4(h1)), KV.shr4(h1), KV.ODel{k}), c6, c7, c8, c9, c10, c11, c12, c13, c14, c15, c0, c1, c2, c3, c4, KV.tdel_h(V, p, c5, KV.hex(KV.shr4(h1)), KV.shr4(h1), k), c6, c7, c8, c9, c10, c11, c12, c13, c14, c15, KV.tis_tip(V, KV.tdel_h(V, p, c5, KV.hex(KV.shr4(h1)), KV.shr4(h1), k)), x2, h2, y => g => {==}, y => g => {==}, y => g => {==}, y => g => {==}, y => g => {==}, y => g => tdel_eq(V, p, c5, KV.hex(KV.shr4(h1)), KV.shr4(h1), k, y, g), y => g => {==}, y => g => {==}, y => g => {==}, y => g => {==}, y => g => {==}, y => g => {==}, y => g => {==}, y => g => {==}, y => g => {==}, y => g => {==})
+    case 1n++p KV.Node{+c0, +c1, +c2, +c3, +c4, +c5, +c6, +c7, +c8, +c9, +c10, +c11, +c12, +c13, +c14, +c15} KV.H6{}:
+      tnode_same(V, p, c0, c1, c2, c3, c4, c5, KV.tmod_h(V, p, c6, KV.hex(KV.shr4(h1)), KV.shr4(h1), KV.ODel{k}), c7, c8, c9, c10, c11, c12, c13, c14, c15, c0, c1, c2, c3, c4, c5, KV.tdel_h(V, p, c6, KV.hex(KV.shr4(h1)), KV.shr4(h1), k), c7, c8, c9, c10, c11, c12, c13, c14, c15, KV.tis_tip(V, KV.tdel_h(V, p, c6, KV.hex(KV.shr4(h1)), KV.shr4(h1), k)), x2, h2, y => g => {==}, y => g => {==}, y => g => {==}, y => g => {==}, y => g => {==}, y => g => {==}, y => g => tdel_eq(V, p, c6, KV.hex(KV.shr4(h1)), KV.shr4(h1), k, y, g), y => g => {==}, y => g => {==}, y => g => {==}, y => g => {==}, y => g => {==}, y => g => {==}, y => g => {==}, y => g => {==}, y => g => {==})
+    case 1n++p KV.Node{+c0, +c1, +c2, +c3, +c4, +c5, +c6, +c7, +c8, +c9, +c10, +c11, +c12, +c13, +c14, +c15} KV.H7{}:
+      tnode_same(V, p, c0, c1, c2, c3, c4, c5, c6, KV.tmod_h(V, p, c7, KV.hex(KV.shr4(h1)), KV.shr4(h1), KV.ODel{k}), c8, c9, c10, c11, c12, c13, c14, c15, c0, c1, c2, c3, c4, c5, c6, KV.tdel_h(V, p, c7, KV.hex(KV.shr4(h1)), KV.shr4(h1), k), c8, c9, c10, c11, c12, c13, c14, c15, KV.tis_tip(V, KV.tdel_h(V, p, c7, KV.hex(KV.shr4(h1)), KV.shr4(h1), k)), x2, h2, y => g => {==}, y => g => {==}, y => g => {==}, y => g => {==}, y => g => {==}, y => g => {==}, y => g => {==}, y => g => tdel_eq(V, p, c7, KV.hex(KV.shr4(h1)), KV.shr4(h1), k, y, g), y => g => {==}, y => g => {==}, y => g => {==}, y => g => {==}, y => g => {==}, y => g => {==}, y => g => {==}, y => g => {==})
+    case 1n++p KV.Node{+c0, +c1, +c2, +c3, +c4, +c5, +c6, +c7, +c8, +c9, +c10, +c11, +c12, +c13, +c14, +c15} KV.H8{}:
+      tnode_same(V, p, c0, c1, c2, c3, c4, c5, c6, c7, KV.tmod_h(V, p, c8, KV.hex(KV.shr4(h1)), KV.shr4(h1), KV.ODel{k}), c9, c10, c11, c12, c13, c14, c15, c0, c1, c2, c3, c4, c5, c6, c7, KV.tdel_h(V, p, c8, KV.hex(KV.shr4(h1)), KV.shr4(h1), k), c9, c10, c11, c12, c13, c14, c15, KV.tis_tip(V, KV.tdel_h(V, p, c8, KV.hex(KV.shr4(h1)), KV.shr4(h1), k)), x2, h2, y => g => {==}, y => g => {==}, y => g => {==}, y => g => {==}, y => g => {==}, y => g => {==}, y => g => {==}, y => g => {==}, y => g => tdel_eq(V, p, c8, KV.hex(KV.shr4(h1)), KV.shr4(h1), k, y, g), y => g => {==}, y => g => {==}, y => g => {==}, y => g => {==}, y => g => {==}, y => g => {==}, y => g => {==})
+    case 1n++p KV.Node{+c0, +c1, +c2, +c3, +c4, +c5, +c6, +c7, +c8, +c9, +c10, +c11, +c12, +c13, +c14, +c15} KV.H9{}:
+      tnode_same(V, p, c0, c1, c2, c3, c4, c5, c6, c7, c8, KV.tmod_h(V, p, c9, KV.hex(KV.shr4(h1)), KV.shr4(h1), KV.ODel{k}), c10, c11, c12, c13, c14, c15, c0, c1, c2, c3, c4, c5, c6, c7, c8, KV.tdel_h(V, p, c9, KV.hex(KV.shr4(h1)), KV.shr4(h1), k), c10, c11, c12, c13, c14, c15, KV.tis_tip(V, KV.tdel_h(V, p, c9, KV.hex(KV.shr4(h1)), KV.shr4(h1), k)), x2, h2, y => g => {==}, y => g => {==}, y => g => {==}, y => g => {==}, y => g => {==}, y => g => {==}, y => g => {==}, y => g => {==}, y => g => {==}, y => g => tdel_eq(V, p, c9, KV.hex(KV.shr4(h1)), KV.shr4(h1), k, y, g), y => g => {==}, y => g => {==}, y => g => {==}, y => g => {==}, y => g => {==}, y => g => {==})
+    case 1n++p KV.Node{+c0, +c1, +c2, +c3, +c4, +c5, +c6, +c7, +c8, +c9, +c10, +c11, +c12, +c13, +c14, +c15} KV.H10{}:
+      tnode_same(V, p, c0, c1, c2, c3, c4, c5, c6, c7, c8, c9, KV.tmod_h(V, p, c10, KV.hex(KV.shr4(h1)), KV.shr4(h1), KV.ODel{k}), c11, c12, c13, c14, c15, c0, c1, c2, c3, c4, c5, c6, c7, c8, c9, KV.tdel_h(V, p, c10, KV.hex(KV.shr4(h1)), KV.shr4(h1), k), c11, c12, c13, c14, c15, KV.tis_tip(V, KV.tdel_h(V, p, c10, KV.hex(KV.shr4(h1)), KV.shr4(h1), k)), x2, h2, y => g => {==}, y => g => {==}, y => g => {==}, y => g => {==}, y => g => {==}, y => g => {==}, y => g => {==}, y => g => {==}, y => g => {==}, y => g => {==}, y => g => tdel_eq(V, p, c10, KV.hex(KV.shr4(h1)), KV.shr4(h1), k, y, g), y => g => {==}, y => g => {==}, y => g => {==}, y => g => {==}, y => g => {==})
+    case 1n++p KV.Node{+c0, +c1, +c2, +c3, +c4, +c5, +c6, +c7, +c8, +c9, +c10, +c11, +c12, +c13, +c14, +c15} KV.H11{}:
+      tnode_same(V, p, c0, c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, KV.tmod_h(V, p, c11, KV.hex(KV.shr4(h1)), KV.shr4(h1), KV.ODel{k}), c12, c13, c14, c15, c0, c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, KV.tdel_h(V, p, c11, KV.hex(KV.shr4(h1)), KV.shr4(h1), k), c12, c13, c14, c15, KV.tis_tip(V, KV.tdel_h(V, p, c11, KV.hex(KV.shr4(h1)), KV.shr4(h1), k)), x2, h2, y => g => {==}, y => g => {==}, y => g => {==}, y => g => {==}, y => g => {==}, y => g => {==}, y => g => {==}, y => g => {==}, y => g => {==}, y => g => {==}, y => g => {==}, y => g => tdel_eq(V, p, c11, KV.hex(KV.shr4(h1)), KV.shr4(h1), k, y, g), y => g => {==}, y => g => {==}, y => g => {==}, y => g => {==})
+    case 1n++p KV.Node{+c0, +c1, +c2, +c3, +c4, +c5, +c6, +c7, +c8, +c9, +c10, +c11, +c12, +c13, +c14, +c15} KV.H12{}:
+      tnode_same(V, p, c0, c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, KV.tmod_h(V, p, c12, KV.hex(KV.shr4(h1)), KV.shr4(h1), KV.ODel{k}), c13, c14, c15, c0, c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, KV.tdel_h(V, p, c12, KV.hex(KV.shr4(h1)), KV.shr4(h1), k), c13, c14, c15, KV.tis_tip(V, KV.tdel_h(V, p, c12, KV.hex(KV.shr4(h1)), KV.shr4(h1), k)), x2, h2, y => g => {==}, y => g => {==}, y => g => {==}, y => g => {==}, y => g => {==}, y => g => {==}, y => g => {==}, y => g => {==}, y => g => {==}, y => g => {==}, y => g => {==}, y => g => {==}, y => g => tdel_eq(V, p, c12, KV.hex(KV.shr4(h1)), KV.shr4(h1), k, y, g), y => g => {==}, y => g => {==}, y => g => {==})
+    case 1n++p KV.Node{+c0, +c1, +c2, +c3, +c4, +c5, +c6, +c7, +c8, +c9, +c10, +c11, +c12, +c13, +c14, +c15} KV.H13{}:
+      tnode_same(V, p, c0, c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, KV.tmod_h(V, p, c13, KV.hex(KV.shr4(h1)), KV.shr4(h1), KV.ODel{k}), c14, c15, c0, c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, KV.tdel_h(V, p, c13, KV.hex(KV.shr4(h1)), KV.shr4(h1), k), c14, c15, KV.tis_tip(V, KV.tdel_h(V, p, c13, KV.hex(KV.shr4(h1)), KV.shr4(h1), k)), x2, h2, y => g => {==}, y => g => {==}, y => g => {==}, y => g => {==}, y => g => {==}, y => g => {==}, y => g => {==}, y => g => {==}, y => g => {==}, y => g => {==}, y => g => {==}, y => g => {==}, y => g => {==}, y => g => tdel_eq(V, p, c13, KV.hex(KV.shr4(h1)), KV.shr4(h1), k, y, g), y => g => {==}, y => g => {==})
+    case 1n++p KV.Node{+c0, +c1, +c2, +c3, +c4, +c5, +c6, +c7, +c8, +c9, +c10, +c11, +c12, +c13, +c14, +c15} KV.H14{}:
+      tnode_same(V, p, c0, c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13, KV.tmod_h(V, p, c14, KV.hex(KV.shr4(h1)), KV.shr4(h1), KV.ODel{k}), c15, c0, c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13, KV.tdel_h(V, p, c14, KV.hex(KV.shr4(h1)), KV.shr4(h1), k), c15, KV.tis_tip(V, KV.tdel_h(V, p, c14, KV.hex(KV.shr4(h1)), KV.shr4(h1), k)), x2, h2, y => g => {==}, y => g => {==}, y => g => {==}, y => g => {==}, y => g => {==}, y => g => {==}, y => g => {==}, y => g => {==}, y => g => {==}, y => g => {==}, y => g => {==}, y => g => {==}, y => g => {==}, y => g => {==}, y => g => tdel_eq(V, p, c14, KV.hex(KV.shr4(h1)), KV.shr4(h1), k, y, g), y => g => {==})
+    case 1n++p KV.Node{+c0, +c1, +c2, +c3, +c4, +c5, +c6, +c7, +c8, +c9, +c10, +c11, +c12, +c13, +c14, +c15} KV.H15{}:
+      tnode_same(V, p, c0, c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13, c14, KV.tmod_h(V, p, c15, KV.hex(KV.shr4(h1)), KV.shr4(h1), KV.ODel{k}), c0, c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13, c14, KV.tdel_h(V, p, c15, KV.hex(KV.shr4(h1)), KV.shr4(h1), k), KV.tis_tip(V, KV.tdel_h(V, p, c15, KV.hex(KV.shr4(h1)), KV.shr4(h1), k)), x2, h2, y => g => {==}, y => g => {==}, y => g => {==}, y => g => {==}, y => g => {==}, y => g => {==}, y => g => {==}, y => g => {==}, y => g => {==}, y => g => {==}, y => g => {==}, y => g => {==}, y => g => {==}, y => g => {==}, y => g => {==}, y => g => tdel_eq(V, p, c15, KV.hex(KV.shr4(h1)), KV.shr4(h1), k, y, g))
+    case 1n++p KV.Tip{} KV.H0{}:
+      del_tip(V, 1n+p, KV.H0{}, h1, k, x2, h2)
+    case 1n++p KV.Tip{} KV.H1{}:
+      del_tip(V, 1n+p, KV.H1{}, h1, k, x2, h2)
+    case 1n++p KV.Tip{} KV.H2{}:
+      del_tip(V, 1n+p, KV.H2{}, h1, k, x2, h2)
+    case 1n++p KV.Tip{} KV.H3{}:
+      del_tip(V, 1n+p, KV.H3{}, h1, k, x2, h2)
+    case 1n++p KV.Tip{} KV.H4{}:
+      del_tip(V, 1n+p, KV.H4{}, h1, k, x2, h2)
+    case 1n++p KV.Tip{} KV.H5{}:
+      del_tip(V, 1n+p, KV.H5{}, h1, k, x2, h2)
+    case 1n++p KV.Tip{} KV.H6{}:
+      del_tip(V, 1n+p, KV.H6{}, h1, k, x2, h2)
+    case 1n++p KV.Tip{} KV.H7{}:
+      del_tip(V, 1n+p, KV.H7{}, h1, k, x2, h2)
+    case 1n++p KV.Tip{} KV.H8{}:
+      del_tip(V, 1n+p, KV.H8{}, h1, k, x2, h2)
+    case 1n++p KV.Tip{} KV.H9{}:
+      del_tip(V, 1n+p, KV.H9{}, h1, k, x2, h2)
+    case 1n++p KV.Tip{} KV.H10{}:
+      del_tip(V, 1n+p, KV.H10{}, h1, k, x2, h2)
+    case 1n++p KV.Tip{} KV.H11{}:
+      del_tip(V, 1n+p, KV.H11{}, h1, k, x2, h2)
+    case 1n++p KV.Tip{} KV.H12{}:
+      del_tip(V, 1n+p, KV.H12{}, h1, k, x2, h2)
+    case 1n++p KV.Tip{} KV.H13{}:
+      del_tip(V, 1n+p, KV.H13{}, h1, k, x2, h2)
+    case 1n++p KV.Tip{} KV.H14{}:
+      del_tip(V, 1n+p, KV.H14{}, h1, k, x2, h2)
+    case 1n++p KV.Tip{} KV.H15{}:
+      del_tip(V, 1n+p, KV.H15{}, h1, k, x2, h2)
+    case 1n++p KV.Ent{a, b, e, c} KV.H0{}:
+      del_tip(V, 1n+p, KV.H0{}, h1, k, x2, h2)
+    case 1n++p KV.Ent{a, b, e, c} KV.H1{}:
+      del_tip(V, 1n+p, KV.H1{}, h1, k, x2, h2)
+    case 1n++p KV.Ent{a, b, e, c} KV.H2{}:
+      del_tip(V, 1n+p, KV.H2{}, h1, k, x2, h2)
+    case 1n++p KV.Ent{a, b, e, c} KV.H3{}:
+      del_tip(V, 1n+p, KV.H3{}, h1, k, x2, h2)
+    case 1n++p KV.Ent{a, b, e, c} KV.H4{}:
+      del_tip(V, 1n+p, KV.H4{}, h1, k, x2, h2)
+    case 1n++p KV.Ent{a, b, e, c} KV.H5{}:
+      del_tip(V, 1n+p, KV.H5{}, h1, k, x2, h2)
+    case 1n++p KV.Ent{a, b, e, c} KV.H6{}:
+      del_tip(V, 1n+p, KV.H6{}, h1, k, x2, h2)
+    case 1n++p KV.Ent{a, b, e, c} KV.H7{}:
+      del_tip(V, 1n+p, KV.H7{}, h1, k, x2, h2)
+    case 1n++p KV.Ent{a, b, e, c} KV.H8{}:
+      del_tip(V, 1n+p, KV.H8{}, h1, k, x2, h2)
+    case 1n++p KV.Ent{a, b, e, c} KV.H9{}:
+      del_tip(V, 1n+p, KV.H9{}, h1, k, x2, h2)
+    case 1n++p KV.Ent{a, b, e, c} KV.H10{}:
+      del_tip(V, 1n+p, KV.H10{}, h1, k, x2, h2)
+    case 1n++p KV.Ent{a, b, e, c} KV.H11{}:
+      del_tip(V, 1n+p, KV.H11{}, h1, k, x2, h2)
+    case 1n++p KV.Ent{a, b, e, c} KV.H12{}:
+      del_tip(V, 1n+p, KV.H12{}, h1, k, x2, h2)
+    case 1n++p KV.Ent{a, b, e, c} KV.H13{}:
+      del_tip(V, 1n+p, KV.H13{}, h1, k, x2, h2)
+    case 1n++p KV.Ent{a, b, e, c} KV.H14{}:
+      del_tip(V, 1n+p, KV.H14{}, h1, k, x2, h2)
+    case 1n++p KV.Ent{a, b, e, c} KV.H15{}:
+      del_tip(V, 1n+p, KV.H15{}, h1, k, x2, h2)
+# END gen_trie: del
+
 # The laws
 # ========
 # The map: a write of key k through the trie is a bucket write (an Op) on
@@ -2472,10 +2723,12 @@ def Laws.entry_expire_other(V, t, k, j, e, ne):
   op_other(V, t, k, j, KV.OExp{k, e}, b => bent_bexp_other(V, j, k, e, b, str_eq_ne(j, k, ne)))
 
 def Laws.entry_del_same(V, t, k):
+  %tdel_eq(V, 5n, t, KV.hex(KV.hash(k)), KV.hash(k), k, KV.hex(KV.hash(k)), KV.hash(k)) : {KV.bent(V, k, _) == None{} : Maybe<&2, KV.Item<V>>}
   %tget_tmod_same(V, 5n, t, KV.hex(KV.hash(k)), KV.hash(k), KV.ODel{k}) : {KV.bent(V, k, _) == None{} : Maybe<&2, KV.Item<V>>}
   Equal.sym(Maybe<&2, KV.Item<V>>, None{}, KV.bent(V, k, KV.bdel(V, k, KV.tget_h(V, 5n, t, KV.hex(KV.hash(k)), KV.hash(k)))), bent_bdel_same(V, k, KV.tget_h(V, 5n, t, KV.hex(KV.hash(k)), KV.hash(k))))
 
 def Laws.entry_del_other(V, t, k, j, ne):
+  %tdel_eq(V, 5n, t, KV.hex(KV.hash(k)), KV.hash(k), k, KV.hex(KV.hash(j)), KV.hash(j)) : {KV.bent(V, j, _) == KV.entry(V, t, j) : Maybe<&2, KV.Item<V>>}
   op_other(V, t, k, j, KV.ODel{k}, b => bent_bdel_other(V, j, k, b, str_eq_ne(j, k, ne)))
 
 def Laws.get_entry(V, t, k):
