@@ -35,10 +35,14 @@ logged as the commands that changed it (ZINCRBY as ZADD with INCR, ZMPOP
 as the ZPOPMIN or ZPOPMAX of the key it took from), and a sorted set a
 STORE makes, or a ZADD where a key whose time had passed still lay, as a
 script that deletes the key and runs ZADD with the options before each
-thousand words of pairs; a file of the scripts is read by both alike. A
-transaction is logged by both as the effects of its commands between a
-MULTI and an EXEC (one of a single effect, as that effect alone), and read
-by both.
+thousand words of pairs; a file of the scripts is read by both alike.
+SORT with STORE is logged by Redis as the client sent it, which BendKV's
+load runs again, and by BendKV as the list it stored: the RPUSH of its
+elements onto a key not there, the like script of the pushes onto a key
+there (whose time it takes away), or the DEL of the destination when
+there is nothing to store. A transaction is logged by both as the
+effects of its commands between a MULTI and an EXEC (one of a single
+effect, as that effect alone), and read by both.
 
     python3 tests/aof_redis_test.py --bin build/bendkv --bendkv 6380 --redis 6391 --dir build/aofio
 """
@@ -131,7 +135,17 @@ CMDS = [
     [b"ZUNIONSTORE", b"zstr", b"1", b"zs"], [b"SADD", b"zsrc", b"a", b"q"], [b"ZINTERSTORE", b"zi2", b"2", b"zs", b"zsrc"],
     [b"ZINTERSTORE", b"zi2", b"2", b"zs", b"nope"], [b"ZRANGESTORE", b"zr", b"nope", b"0", b"-1"],
     [b"ZADD", b"ex9", b"1", b"a"], [b"PEXPIRE", b"ex9", b"3"], [b"ZADD", b"ex10", b"1", b"a"], [b"PEXPIRE", b"ex10", b"3"],
+    [b"RPUSH", b"so", b"3", b"1", b"2", b"10"], [b"MSET", b"sow_1", b"9", b"sow_2", b"8", b"sow_3", b"7"],
+    [b"HSET", b"soh_3", b"w", b"x3"], [b"SORT", b"so", b"STORE", b"sod"],
+    [b"SORT", b"so", b"BY", b"sow_*", b"GET", b"#", b"GET", b"soh_*->w", b"STORE", b"sod2"],
+    [b"SORT", b"so", b"ALPHA", b"DESC", b"LIMIT", b"1", b"2", b"STORE", b"sod3"], [b"SADD", b"sos", b"b", b"a", b"c"],
+    [b"SORT", b"sos", b"BY", b"nosort", b"STORE", b"sod4"], [b"ZADD", b"soz", b"2", b"x", b"1", b"y", b"3", b"z" * 70],
+    [b"SORT", b"soz", b"BY", b"nosort", b"DESC", b"STORE", b"sod5"], [b"SORT", b"nope", b"STORE", b"sod3"],
+    [b"SET", b"sostr", b"x"], [b"EXPIRE", b"sostr", b"1000"], [b"SORT", b"so", b"STORE", b"sostr"],
+    [b"SORT", b"sostr", b"STORE", b"sod"], [b"SORT", b"so", b"by", b"sow_*", b"store", b"sod6", b"store", b"sod7"],
+    [b"SET", b"ex11", b"v", b"PX", b"3"], [b"RPUSH", b"ex12", b"a"], [b"PEXPIRE", b"ex12", b"3"],
     [b"SLEEP"], [b"ZADD", b"ex9", b"NX", b"2", b"b", b"3", b"b"], [b"ZUNIONSTORE", b"ex10", b"1", b"zsrc"],
+    [b"SORT", b"so", b"STORE", b"ex11"], [b"SORT", b"nope", b"STORE", b"ex12"],
     [b"MULTI"], [b"SET", b"tx1", b"a"], [b"INCR", b"txn"], [b"RPUSH", b"txl", b"1", b"2"], [b"SELECT", b"4"],
     [b"SET", b"tx4", b"b"], [b"EXEC"], [b"SELECT", b"0"], [b"MULTI"], [b"SET", b"tx2", b"c"], [b"EXEC"],
     [b"MULTI"], [b"SET", b"tx3", b"d"], [b"DISCARD"], [b"MULTI"], [b"GET", b"tx1"], [b"EXEC"],

@@ -412,6 +412,24 @@ def pub.op(+kind: Nat, args: List<&2, String>) -> PubOp:
     case _:
       PNumPat{}
 
+# SORT's options (Sorting, below): what it sorts by (SortBy: each element
+# itself; the values a pattern with a '*' names, BY's; or nothing, the
+# elements left in their order, as a BY without a '*' leaves them, for
+# good once given), LIMIT's offset and count (longs as lnum reads them;
+# none is 0 and -1), the patterns of GET in order, DESC and ALPHA; or
+# such options with STORE's destination (SortStore: SORT with STORE,
+# which the session runs, session.bend). As the options with STORE hold
+# the options, the compiler makes them a node of their own, and SORT is
+# two words wide (Cmd, below).
+type SortBy is Data:
+  SByElem{}
+  SByPat{p: String}
+  SByNone{}
+
+type SortO is Data:
+  SortO{by: SortBy, off: Int, cnt: Int, gets: List<&2, String>, desc: Bool, alpha: Bool}
+  SortStore{dst: String, o: SortO}
+
 # The commands of a connection and of the server: session.bend runs
 # them, with the state of the connection and of the server. None of them
 # changes a database but the commands of several databases (SWAPDB, MOVE,
@@ -458,7 +476,10 @@ def pub.op(+kind: Nat, args: List<&2, String>) -> PubOp:
 # MONITOR). BGREWRITEAOF is SRewrite: a session alone answers that the
 # rewrite started, as Redis does when none runs; the server writes its
 # append-only file again from a snapshot of its databases (server.bend,
-# The rewrite of the append-only file).
+# The rewrite of the append-only file). SORT with STORE is SSortStore: it
+# reads the keys SORT reads and writes its destination with what it
+# makes of them, an act of the session's database (ASort, below), so
+# that the laws of exec meet SORT as a read alone (Sort).
 
 type SessOp is Data:
   SHello{args: List<&2, String>}
@@ -502,6 +523,7 @@ type SessOp is Data:
   SClient{kind: Nat, args: List<&2, String>}
   SMonitor{}
   SRewrite{}
+  SSortStore{key: String, o: SortO}
 
 # BITOP's operation
 type BitK is Data:
@@ -577,7 +599,10 @@ type SMem is Data:
 # set an operation makes of the keys at srcs, set at dst), ZRangeStore
 # (ZRANGESTORE: a range of the sorted set at src, set at dst) and ZMPop
 # (ZMPOP: up to c elements popped from the first of the keys that is
-# there, from its last end when max)
+# there, from its last end when max), and last Sort (SORT and SORT_RO
+# without STORE: the elements of the list, set or sorted set at key,
+# sorted as o says, or the values its patterns name for them, a read of
+# those keys as well; Sorting, below)
 type Cmd is Data:
   Ping{}
   Echo{msg: String}
@@ -608,6 +633,7 @@ type Cmd is Data:
   ZStore{k: ZSetK, dst: String, srcs: List<&2, String>}
   ZRangeStore{dst: String, src: String, q: ZQ}
   ZMPop{keys: List<&2, String>, max: Bool, c: String}
+  Sort{key: String, o: SortO}
 
 # Integers
 # --------
@@ -4303,6 +4329,102 @@ def parse_zmpop(args: List<&2, String>) -> Cmd:
     case _:
       e_arity("zmpop")
 
+# SORT key [BY pattern] [LIMIT offset count] [GET pattern ...] [ASC|DESC]
+# [ALPHA] [STORE destination], and SORT_RO, which takes no STORE: the
+# options as Redis 7.0.15 reads them (sort.c), word by word, each word in
+# any case up to its first NUL, a later one over an earlier one (a BY
+# without a '*' leaves the elements in their order for good); a word it
+# does not know, or one of these without the words it takes, is a syntax
+# error, and a LIMIT whose numbers do not read as longs answers that at
+# once. The options read so far (the GET patterns last first) and STORE's
+# destination, or the error they make:
+type SortSt is Data:
+  SortSt{by: SortBy, off: Int, cnt: Int, gets: List<&2, String>, desc: Bool, alpha: Bool, dst: Maybe<&2, String>}
+  SortErr{r: Reply}
+
+# a word of SORT's options: 1 ASC, 2 DESC, 3 ALPHA, 4 LIMIT, 5 STORE, 6
+# BY, 7 GET, 0 another
+def sort.word(+w: String) -> Nat:
+  +up = String.to_upper(cstr(w))
+  Bool.pick(Nat, String.eq(up, "ASC"), 1n, Bool.pick(Nat, String.eq(up, "DESC"), 2n, Bool.pick(Nat, String.eq(up, "ALPHA"), 3n, Bool.pick(Nat, String.eq(up, "LIMIT"), 4n, Bool.pick(Nat, String.eq(up, "STORE"), 5n, Bool.pick(Nat, String.eq(up, "BY"), 6n, Bool.pick(Nat, String.eq(up, "GET"), 7n, 0n)))))))
+
+def sort.head(+xs: List<&2, String>) -> Nat:
+  match xs:
+    case Nil{}:
+      0n
+    case Con{+w, r}:
+      sort.word(w)
+
+# whether s holds a '*' before its first NUL, as strchr finds one
+def sort.star(+s: String) -> Bool:
+  +c = cstr(s)
+  Nat.is_lt(String.find(c, '*', 0n), String.length(c))
+
+# BY p after by: a BY without a '*' leaves the elements in their order,
+# and so does any BY after it
+def sort.by(by: SortBy, +p: String) -> SortBy:
+  match by:
+    case SByNone{}:
+      SByNone{}
+    case _:
+      Bool.pick(SortBy, sort.star(p), SByPat{p}, SByNone{})
+
+def sort.limit(ma: Maybe<&2, Int>, mb: Maybe<&2, Int>, by: SortBy, gs: List<&2, String>, desc: Bool, alpha: Bool, dst: Maybe<&2, String>) -> SortSt:
+  match ma mb:
+    case Some{a} Some{b}:
+      SortSt{by, a, b, gs, desc, alpha, dst}
+    case _ _:
+      SortErr{e_int()}
+
+def sort.store(ro: Bool, d: String, by: SortBy, off: Int, cnt: Int, gs: List<&2, String>, desc: Bool, alpha: Bool) -> SortSt:
+  match ro:
+    case True{}:
+      SortErr{RError{"ERR syntax error"}}
+    case False{}:
+      SortSt{by, off, cnt, gs, desc, alpha, Some{d}}
+
+# the options xs read into st; c is the first word's (sort.word); ro:
+# SORT_RO's
+def sort.go(xs: List<&2, String>, c: Nat, st: SortSt, +ro: Bool) -> SortSt:
+  match xs c st:
+    case _ _ SortErr{r}:
+      SortErr{r}
+    case Nil{} _ s:
+      s
+    case Con{w, +rest} 1n SortSt{by, off, cnt, gs, desc, alpha, dst}:
+      sort.go(rest, sort.head(rest), SortSt{by, off, cnt, gs, False{}, alpha, dst}, ro)
+    case Con{w, +rest} 2n SortSt{by, off, cnt, gs, desc, alpha, dst}:
+      sort.go(rest, sort.head(rest), SortSt{by, off, cnt, gs, True{}, alpha, dst}, ro)
+    case Con{w, +rest} 3n SortSt{by, off, cnt, gs, desc, alpha, dst}:
+      sort.go(rest, sort.head(rest), SortSt{by, off, cnt, gs, desc, True{}, dst}, ro)
+    case Con{w, Con{+a, Con{+b, +rest}}} 4n SortSt{by, off, cnt, gs, desc, alpha, dst}:
+      sort.go(rest, sort.head(rest), sort.limit(lnum(a), lnum(b), by, gs, desc, alpha, dst), ro)
+    case Con{w, Con{d, +rest}} 5n SortSt{by, off, cnt, gs, desc, alpha, dst}:
+      sort.go(rest, sort.head(rest), sort.store(ro, d, by, off, cnt, gs, desc, alpha), ro)
+    case Con{w, Con{+p, +rest}} 6n SortSt{by, off, cnt, gs, desc, alpha, dst}:
+      sort.go(rest, sort.head(rest), SortSt{sort.by(by, p), off, cnt, gs, desc, alpha, dst}, ro)
+    case Con{w, Con{p, +rest}} 7n SortSt{by, off, cnt, gs, desc, alpha, dst}:
+      sort.go(rest, sort.head(rest), SortSt{by, off, cnt, p <> gs, desc, alpha, dst}, ro)
+    case _ _ _:
+      SortErr{RError{"ERR syntax error"}}
+
+# the command the options make: a read (Sort), or SORT with STORE
+def sort.cmd(st: SortSt, k: String) -> Cmd:
+  match st:
+    case SortErr{r}:
+      Bad{r}
+    case SortSt{by, off, cnt, gs, desc, alpha, None{}}:
+      Sort{k, SortO{by, off, cnt, List.reverse(&2, String, gs), desc, alpha}}
+    case SortSt{by, off, cnt, gs, desc, alpha, Some{d}}:
+      Own{SSortStore{k, SortStore{d, SortO{by, off, cnt, List.reverse(&2, String, gs), desc, alpha}}}}
+
+def parse_sort(args: List<&2, String>, +ro: Bool, name: String) -> Cmd:
+  match args:
+    case Con{k, +rest}:
+      sort.cmd(sort.go(rest, sort.head(rest), SortSt{SByElem{}, IPos{0n}, INeg{0n}, Nil{}, False{}, False{}, None{}}, ro), k)
+    case Nil{}:
+      e_arity(name)
+
 # Sets: SADD, SREM and SMISMEMBER take a key and at least one member;
 # SSCAN's cursor is read as the command parses, before the key is looked
 # for, as HSCAN's
@@ -4456,7 +4578,8 @@ def cmd_id.l4(+n: String, c: Nat) -> Nat:
       Bool.pick(Nat, String.eq(n, "SCAN"), 22n,
       Bool.pick(Nat, String.eq(n, "SADD"), 83n,
       Bool.pick(Nat, String.eq(n, "SREM"), 84n,
-      Bool.pick(Nat, String.eq(n, "SPOP"), 119n, 0n))))
+      Bool.pick(Nat, String.eq(n, "SPOP"), 119n,
+      Bool.pick(Nat, String.eq(n, "SORT"), 177n, 0n)))))
     case 20n:  # T
       Bool.pick(Nat, String.eq(n, "TYPE"), 25n,
       Bool.pick(Nat, String.eq(n, "TIME"), 113n, 0n))
@@ -4592,6 +4715,8 @@ def cmd_id.l7(+n: String, c: Nat) -> Nat:
       Bool.pick(Nat, String.eq(n, "PEXPIRE"), 29n,
       Bool.pick(Nat, String.eq(n, "PERSIST"), 36n,
       Bool.pick(Nat, String.eq(n, "PUBLISH"), 172n, 0n)))
+    case 19n:  # S
+      Bool.pick(Nat, String.eq(n, "SORT_RO"), 178n, 0n)
     case 21n:  # U
       Bool.pick(Nat, String.eq(n, "UNWATCH"), 165n, 0n)
     case 26n:  # Z
@@ -5376,6 +5501,10 @@ def parse_id(id: Nat, name: String, args: List<&2, String>) -> Cmd:
       parse_zrangestore(args)
     case 151n:  # ZMPOP
       parse_zmpop(args)
+    case 177n:  # SORT
+      parse_sort(args, False{}, "sort")
+    case 178n:  # SORT_RO
+      parse_sort(args, True{}, "sort_ro")
     case _:
       e_unknown(name, args)
 
@@ -6022,6 +6151,10 @@ def stat.top(+id: Nat) -> Nat:
       175n
     case 176n:
       176n
+    case 177n:
+      177n
+    case 178n:
+      178n
     case _:
       0n
 
@@ -6029,31 +6162,31 @@ def stat.top(+id: Nat) -> Nat:
 def stat.sub.client(+sub: Nat) -> Nat:
   match sub:
     case 1n:
-      177n
-    case 2n:
-      178n
-    case 3n:
       179n
-    case 4n:
+    case 2n:
       180n
-    case 5n:
+    case 3n:
       181n
-    case 6n:
+    case 4n:
       182n
-    case 7n:
+    case 5n:
       183n
-    case 8n:
+    case 6n:
       184n
-    case 9n:
+    case 7n:
       185n
-    case 10n:
+    case 8n:
       186n
-    case 11n:
+    case 9n:
       187n
-    case 12n:
+    case 10n:
       188n
-    case 13n:
+    case 11n:
       189n
+    case 12n:
+      190n
+    case 13n:
+      191n
     case _:
       0n
 
@@ -6061,9 +6194,9 @@ def stat.sub.client(+sub: Nat) -> Nat:
 def stat.sub.function(+sub: Nat) -> Nat:
   match sub:
     case 1n:
-      190n
+      192n
     case 2n:
-      191n
+      193n
     case _:
       0n
 
@@ -6071,15 +6204,15 @@ def stat.sub.function(+sub: Nat) -> Nat:
 def stat.sub.config(+sub: Nat) -> Nat:
   match sub:
     case 1n:
-      192n
-    case 2n:
-      193n
-    case 3n:
       194n
-    case 4n:
+    case 2n:
       195n
-    case 5n:
+    case 3n:
       196n
+    case 4n:
+      197n
+    case 5n:
+      198n
     case _:
       0n
 
@@ -6087,19 +6220,19 @@ def stat.sub.config(+sub: Nat) -> Nat:
 def stat.sub.command(+sub: Nat) -> Nat:
   match sub:
     case 1n:
-      197n
-    case 2n:
-      198n
-    case 3n:
       199n
-    case 4n:
+    case 2n:
       200n
-    case 5n:
+    case 3n:
       201n
-    case 6n:
+    case 4n:
       202n
-    case 7n:
+    case 5n:
       203n
+    case 6n:
+      204n
+    case 7n:
+      205n
     case _:
       0n
 
@@ -6107,15 +6240,15 @@ def stat.sub.command(+sub: Nat) -> Nat:
 def stat.sub.object(+sub: Nat) -> Nat:
   match sub:
     case 1n:
-      204n
-    case 2n:
-      205n
-    case 3n:
       206n
-    case 4n:
+    case 2n:
       207n
-    case 5n:
+    case 3n:
       208n
+    case 4n:
+      209n
+    case 5n:
+      210n
     case _:
       0n
 
@@ -6123,9 +6256,9 @@ def stat.sub.object(+sub: Nat) -> Nat:
 def stat.sub.memory(+sub: Nat) -> Nat:
   match sub:
     case 1n:
-      209n
+      211n
     case 2n:
-      210n
+      212n
     case _:
       0n
 
@@ -6133,17 +6266,17 @@ def stat.sub.memory(+sub: Nat) -> Nat:
 def stat.sub.pubsub(+sub: Nat) -> Nat:
   match sub:
     case 1n:
-      211n
-    case 2n:
-      212n
-    case 3n:
       213n
-    case 4n:
+    case 2n:
       214n
-    case 5n:
+    case 3n:
       215n
-    case 6n:
+    case 4n:
       216n
+    case 5n:
+      217n
+    case 6n:
+      218n
     case _:
       0n
 
@@ -6503,84 +6636,88 @@ def stat.name(+key: Nat) -> String:
     case 176n:
       "bgrewriteaof"
     case 177n:
-      "client|id"
+      "sort"
     case 178n:
-      "client|help"
+      "sort_ro"
     case 179n:
-      "client|reply"
+      "client|id"
     case 180n:
-      "client|getname"
+      "client|help"
     case 181n:
-      "client|setname"
+      "client|reply"
     case 182n:
-      "client|caching"
+      "client|getname"
     case 183n:
-      "client|unblock"
+      "client|setname"
     case 184n:
-      "client|getredir"
+      "client|caching"
     case 185n:
-      "client|no-evict"
+      "client|unblock"
     case 186n:
-      "client|trackinginfo"
+      "client|getredir"
     case 187n:
-      "client|list"
+      "client|no-evict"
     case 188n:
-      "client|info"
+      "client|trackinginfo"
     case 189n:
-      "client|kill"
+      "client|list"
     case 190n:
-      "function|flush"
+      "client|info"
     case 191n:
-      "function|help"
+      "client|kill"
     case 192n:
-      "config|get"
+      "function|flush"
     case 193n:
-      "config|set"
+      "function|help"
     case 194n:
-      "config|resetstat"
+      "config|get"
     case 195n:
-      "config|rewrite"
+      "config|set"
     case 196n:
-      "config|help"
+      "config|resetstat"
     case 197n:
-      "command|info"
+      "config|rewrite"
     case 198n:
-      "command|docs"
+      "config|help"
     case 199n:
-      "command|list"
+      "command|info"
     case 200n:
-      "command|help"
+      "command|docs"
     case 201n:
-      "command|count"
+      "command|list"
     case 202n:
-      "command|getkeys"
+      "command|help"
     case 203n:
-      "command|getkeysandflags"
+      "command|count"
     case 204n:
-      "object|help"
+      "command|getkeys"
     case 205n:
-      "object|freq"
+      "command|getkeysandflags"
     case 206n:
-      "object|encoding"
+      "object|help"
     case 207n:
-      "object|refcount"
+      "object|freq"
     case 208n:
-      "object|idletime"
+      "object|encoding"
     case 209n:
-      "memory|help"
+      "object|refcount"
     case 210n:
-      "memory|usage"
+      "object|idletime"
     case 211n:
-      "pubsub|channels"
+      "memory|help"
     case 212n:
-      "pubsub|help"
+      "memory|usage"
     case 213n:
-      "pubsub|numpat"
+      "pubsub|channels"
     case 214n:
-      "pubsub|numsub"
+      "pubsub|help"
     case 215n:
-      "pubsub|shardchannels"
+      "pubsub|numpat"
     case 216n:
+      "pubsub|numsub"
+    case 217n:
+      "pubsub|shardchannels"
+    case 218n:
       "pubsub|shardnumsub"
     case _:
       ""
@@ -6942,84 +7079,88 @@ def stat.arity(+key: Nat) -> Nat:
     case 176n:
       2n
     case 177n:
-      4n
+      5n
     case 178n:
-      4n
+      5n
     case 179n:
-      6n
+      4n
     case 180n:
       4n
     case 181n:
       6n
     case 182n:
-      6n
-    case 183n:
-      7n
-    case 184n:
       4n
-    case 185n:
+    case 183n:
       6n
+    case 184n:
+      6n
+    case 185n:
+      7n
     case 186n:
       4n
     case 187n:
-      5n
+      6n
     case 188n:
       4n
     case 189n:
-      7n
-    case 190n:
       5n
+    case 190n:
+      4n
     case 191n:
-      4n
-    case 192n:
       7n
+    case 192n:
+      5n
     case 193n:
-      9n
+      4n
     case 194n:
-      4n
+      7n
     case 195n:
-      4n
+      9n
     case 196n:
       4n
     case 197n:
-      5n
+      4n
     case 198n:
-      5n
+      4n
     case 199n:
       5n
     case 200n:
-      4n
+      5n
     case 201n:
-      4n
+      5n
     case 202n:
-      9n
-    case 203n:
-      9n
-    case 204n:
       4n
+    case 203n:
+      4n
+    case 204n:
+      9n
     case 205n:
-      6n
+      9n
     case 206n:
-      6n
+      4n
     case 207n:
       6n
     case 208n:
       6n
     case 209n:
-      4n
+      6n
     case 210n:
-      7n
+      6n
     case 211n:
-      5n
+      4n
     case 212n:
-      4n
+      7n
     case 213n:
-      4n
+      5n
     case 214n:
-      5n
+      4n
     case 215n:
-      5n
+      4n
     case 216n:
+      5n
+    case 217n:
+      5n
+    case 218n:
       5n
     case _:
       1n
@@ -7225,11 +7366,15 @@ def stat.risky(+key: Nat) -> Bool:
       True{}
     case 152n:
       True{}
-    case 205n:
+    case 177n:
       True{}
-    case 208n:
+    case 178n:
+      True{}
+    case 207n:
       True{}
     case 210n:
+      True{}
+    case 212n:
       True{}
     case _:
       False{}
@@ -7245,21 +7390,21 @@ def stat.unseen(+key: Nat) -> Bool:
       True{}
     case 176n:
       True{}
-    case 183n:
-      True{}
     case 185n:
       True{}
     case 187n:
       True{}
     case 189n:
       True{}
-    case 192n:
-      True{}
-    case 193n:
+    case 191n:
       True{}
     case 194n:
       True{}
     case 195n:
+      True{}
+    case 196n:
+      True{}
+    case 197n:
       True{}
     case _:
       False{}
@@ -7562,17 +7707,21 @@ def stat.keyspace(+key: Nat) -> Bool:
       True{}
     case 173n:
       True{}
-    case 190n:
+    case 177n:
       True{}
-    case 205n:
+    case 178n:
       True{}
-    case 206n:
+    case 192n:
       True{}
     case 207n:
       True{}
     case 208n:
       True{}
+    case 209n:
+      True{}
     case 210n:
+      True{}
+    case 212n:
       True{}
     case _:
       False{}
@@ -7666,6 +7815,8 @@ def stat.denyoom(+key: Nat) -> Bool:
     case 155n:
       True{}
     case 156n:
+      True{}
+    case 177n:
       True{}
     case _:
       False{}
@@ -7924,6 +8075,10 @@ def stat.touch(+key: Nat) -> Bool:
     case 171n:
       True{}
     case 173n:
+      True{}
+    case 177n:
+      True{}
+    case 178n:
       True{}
     case _:
       False{}
@@ -9667,6 +9822,22 @@ def stat.cw(+code: Nat) -> U32:
       3665
     case 867n:
       3666
+    case 868n:
+      3668
+    case 869n:
+      3672
+    case 870n:
+      3681
+    case 871n:
+      3682
+    case 872n:
+      3684
+    case 873n:
+      3688
+    case 874n:
+      3696
+    case 875n:
+      3715
     case _:
       63
 
@@ -11693,6 +11864,27 @@ def stat.code.lo57(+lo: Nat) -> Nat:
       866n
     case 18n:
       867n
+    case 20n:
+      868n
+    case 24n:
+      869n
+    case 33n:
+      870n
+    case 34n:
+      871n
+    case 36n:
+      872n
+    case 40n:
+      873n
+    case 48n:
+      874n
+    case _:
+      0n
+
+def stat.code.lo58(+lo: Nat) -> Nat:
+  match lo:
+    case 3n:
+      875n
     case _:
       0n
 
@@ -11814,6 +12006,8 @@ def stat.code.hl(+hi: Nat, +lo: Nat) -> Nat:
       stat.code.lo56(lo)
     case 57n:
       stat.code.lo57(lo)
+    case 58n:
+      stat.code.lo58(lo)
     case _:
       0n
 
@@ -17177,6 +17371,581 @@ def db.zmpop(db: Db, ks: List<&2, String>, +max: Bool, c: String) -> Reply & Db:
   +k = ks
   zmpop.at(lmpop.first(k, lmpop.head(k, x), x), max, c, x)
 
+# Sorting
+# -------
+# SORT and SORT_RO as Redis 7.0.15 runs them (sort.c). The elements of
+# the list, set or sorted set at the key (a key not there: none, as Redis
+# sorts an empty list for it; another kind: WRONGTYPE) are sorted by
+# their own values or by the values a BY pattern names for each, as
+# doubles (a value strtod reads to its end or to a NUL, past blanks, with
+# no range error and no NaN; a value not there is 0; ties in the order of
+# the elements' bytes) or with ALPHA as strings (bytes for a STORE; up to
+# the first NUL else, as strcoll compares them in the C locale; with BY,
+# a value not there first), DESC turning each comparison around. The sort
+# is stable, as glibc's qsort is. A BY without a '*' leaves a list's and
+# a sorted set's elements in their order (reversed for DESC) and a set's
+# in its own (an intset's, increasing; a hashtable's, the trie's, which
+# is not Redis's), but SORT with STORE sorts a set's elements with ALPHA
+# then, as Redis does. LIMIT takes a range of the result, and each
+# element of it answers itself or, with GETs, the values the patterns
+# name ("#": the element; none not there, the empty string for a STORE).
+# The patterns name values as lookupKeyByPattern does: the first '*'
+# before the pattern's first NUL stands for the element, and "->" with a
+# field after it (before the NUL) names that field of the hash at the key
+# made of what comes before "->"; the key holds a string otherwise; no
+# '*', or a key not there at now or of another kind, names none.
+
+# the elements SORT sorts: a list's, a set's or a sorted set's, or
+# WRONGTYPE
+type SortSrc is Data:
+  SrcList{xs: List<&2, String>}
+  SrcSet{xs: List<&2, String>}
+  SrcZset{xs: List<&2, String>}
+  SrcWrong{}
+
+def sort.members(xs: List<&2, KV.ZEl>) -> List<&2, String>:
+  match xs:
+    case Nil{}:
+      Nil{}
+    case Con{KV.ZEl{m, d}, rest}:
+      m <> sort.members(rest)
+
+def sort.src(m: Maybe<&2, KV.Val>) -> SortSrc:
+  match m:
+    case None{}:
+      SrcList{Nil{}}
+    case Some{KV.VColl{KV.CList{+l}}}:
+      SrcList{KV.deq.all(l)}
+    case Some{KV.VColl{KV.CMems{+s}}}:
+      SrcSet{KV.mems.all(s)}
+    case Some{KV.VColl{KV.CZset{+z}}}:
+      SrcZset{sort.members(KV.zset.all(z))}
+    case Some{v}:
+      SrcWrong{}
+
+# whether "->" starts s
+def sort.arrow.hit(+s: String) -> Bool:
+  Bool.and(U32.is_eq(String.code_at(s, 0n), 45), U32.is_eq(String.code_at(s, 1n), 62))
+
+# the index of the first "->" in s, plus k (hit: whether one starts s);
+# k plus s's length when s holds none
+def sort.arrow(s: String, +k: Nat, hit: Bool) -> Nat:
+  match s hit:
+    case _ True{}:
+      k
+    case SNil{} False{}:
+      k
+    case SCon{h, +t} False{}:
+      sort.arrow(t, Nat.add(k, 1n), sort.arrow.hit(t))
+
+# a pattern of BY or GET, read once for a SORT as lookupKeyByPattern
+# reads it: "#" (up to its first NUL), which names the element itself; no
+# '*' before its first NUL, which names nothing; or a key made of what
+# comes before its first '*' (pre), the element, and what comes after it
+# (post), up to "->" when a field follows that before the NUL, and then
+# the field of the hash at that key (f)
+type SPat is Data:
+  PSelf{}
+  PNone{}
+  PKey{pre: String, post: String, f: Maybe<&2, String>}
+
+# the pattern p with its '*' at index i and "->" at index a (field: a
+# field follows it before p's first NUL)
+def sort.pat.key(field: Bool, +p: String, +i: Nat, +a: Nat) -> SPat:
+  match field:
+    case True{}:
+      PKey{String.take(p, i), String.slice(p, Nat.add(i, 1n), Nat.sub(Nat.sub(a, i), 1n)), Some{String.drop(p, Nat.add(a, 2n))}}
+    case False{}:
+      PKey{String.take(p, i), String.drop(p, Nat.add(i, 1n)), None{}}
+
+# the pattern p, c being p up to its first NUL, with a '*' at index i of c
+# (found: c holds one)
+def sort.pat.star(found: Bool, +p: String, +c: String, +i: Nat) -> SPat:
+  match found:
+    case False{}:
+      PNone{}
+    case True{}:
+      +r = String.drop(c, Nat.add(i, 1n))
+      +a = Nat.add(Nat.add(i, 1n), sort.arrow(r, 0n, sort.arrow.hit(r)))
+      sort.pat.key(Nat.is_lt(Nat.add(a, 2n), String.length(c)), p, i, a)
+
+def sort.pat.of(self: Bool, +p: String, +c: String) -> SPat:
+  match self:
+    case True{}:
+      PSelf{}
+    case False{}:
+      +i = String.find(c, '*', 0n)
+      sort.pat.star(Nat.is_lt(i, String.length(c)), p, c, i)
+
+def sort.pat(+p: String) -> SPat:
+  +c = cstr(p)
+  sort.pat.of(String.eq(c, "#"), p, c)
+
+def sort.pats(gs: List<&2, String>) -> List<&2, SPat>:
+  match gs:
+    case Nil{}:
+      Nil{}
+    case Con{+g, rest}:
+      sort.pat(g) <> sort.pats(rest)
+
+# the value of a key a pattern names: a string, or the field f of a hash
+def sort.val(m: Maybe<&2, KV.Val>, +f: Maybe<&2, String>) -> Maybe<&2, String>:
+  match m f:
+    case Some{KV.VStr{s}} None{}:
+      Some{s}
+    case Some{KV.VColl{KV.CHash{+h}}} Some{+x}:
+      KV.hash.get(x, h)
+    case _ _:
+      None{}
+
+# the value the pattern q names for element e at now
+def sort.look(+t: KV.Trie<KV.Val>, +now: Nat, +q: SPat, +e: String) -> Maybe<&2, String>:
+  match q:
+    case PSelf{}:
+      Some{e}
+    case PNone{}:
+      None{}
+    case PKey{+pre, +post, +f}:
+      sort.val(KV.read(KV.Val, t, pre ++ e ++ post, now), f)
+
+# an element and what it sorts by: its score (a numeric sort), or the
+# value ALPHA compares (none: not there)
+type SEl is Data:
+  SEl{e: String, d: F.F64, c: Maybe<&2, String>}
+
+# a score: 0 for a value not there; none for a value that is no score
+def sort.sc(+m: Maybe<&2, String>) -> Maybe<&2, F.F64>:
+  match m:
+    case None{}:
+      Some{F.F64{0n, 0n}}
+    case Some{+v}:
+      F.f64.parse_sort(v)
+
+# an element's score: by its own value (by: none), or by the value of the
+# BY pattern
+def sort.score(+t: KV.Trie<KV.Val>, +now: Nat, +by: Maybe<&2, SPat>, +e: String) -> Maybe<&2, F.F64>:
+  match by:
+    case None{}:
+      F.f64.parse_sort(e)
+    case Some{+q}:
+      sort.sc(sort.look(t, now, q, e))
+
+def sort.sc.bad(+m: Maybe<&2, F.F64>) -> Bool:
+  Maybe.is_none(&2, F.F64, m)
+
+def sort.sc.d(+m: Maybe<&2, F.F64>) -> F.F64:
+  match m:
+    case Some{+d}:
+      d
+    case None{}:
+      F.F64{0n, 0n}
+
+# the elements with their scores, or none when one is no score (bad: one
+# before was not)
+def sort.nums(xs: List<&2, String>, bad: Bool, +t: KV.Trie<KV.Val>, +now: Nat, +by: Maybe<&2, SPat>, acc: List<&2, SEl>) -> Maybe<&2, List<&2, SEl>>:
+  match xs bad:
+    case _ True{}:
+      None{}
+    case Nil{} False{}:
+      Some{List.reverse(&2, SEl, acc)}
+    case Con{+e, rest} False{}:
+      +sc = sort.score(t, now, by, e)
+      sort.nums(rest, sort.sc.bad(sc), t, now, by, SEl{e, sort.sc.d(sc), None{}} <> acc)
+
+# a string up to its first NUL, at i (nul: the string holds one)
+def sort.cut(nul: Bool, +s: String, +i: Nat) -> String:
+  match nul:
+    case True{}:
+      String.take(s, i)
+    case False{}:
+      s
+
+# what ALPHA compares of a string: all its bytes in a STORE (bin), as
+# Redis compares them then, else those up to its first NUL, as strcoll
+# compares them in the C locale
+def sort.key(+bin: Bool, +s: String) -> String:
+  match bin:
+    case True{}:
+      s
+    case False{}:
+      +i = String.find(s, Chr{0}, 0n)
+      sort.cut(Nat.is_lt(i, String.length(s)), s, i)
+
+def sort.key.m(+bin: Bool, +m: Maybe<&2, String>) -> Maybe<&2, String>:
+  match m:
+    case None{}:
+      None{}
+    case Some{+v}:
+      Some{sort.key(bin, v)}
+
+# the value ALPHA compares for element e: its own (by: none), or the one
+# the BY pattern names
+def sort.alpha.key(+t: KV.Trie<KV.Val>, +now: Nat, +bin: Bool, +by: Maybe<&2, SPat>, +e: String) -> Maybe<&2, String>:
+  match by:
+    case None{}:
+      Some{sort.key(bin, e)}
+    case Some{+q}:
+      sort.key.m(bin, sort.look(t, now, q, e))
+
+# the elements with the values ALPHA compares, each read once
+def sort.alphas(xs: List<&2, String>, +bin: Bool, +t: KV.Trie<KV.Val>, +now: Nat, +by: Maybe<&2, SPat>) -> List<&2, SEl>:
+  match xs:
+    case Nil{}:
+      Nil{}
+    case Con{+e, rest}:
+      SEl{e, F.F64{0n, 0n}, sort.alpha.key(t, now, bin, by, e)} <> sort.alphas(rest, bin, t, now, by)
+
+def sort.elems(xs: List<&2, SEl>) -> List<&2, String>:
+  match xs:
+    case Nil{}:
+      Nil{}
+    case Con{SEl{e, d, c}, rest}:
+      e <> sort.elems(rest)
+
+# two values ALPHA compares: one not there first, else by their bytes
+def sort.obj.cmp(+a: Maybe<&2, String>, +b: Maybe<&2, String>) -> Cmp:
+  match a b:
+    case None{} None{}:
+      EQ{}
+    case None{} Some{+y}:
+      LT{}
+    case Some{+x} None{}:
+      GT{}
+    case Some{+x} Some{+y}:
+      String.order(x, y)
+
+# equal scores: the elements' bytes
+def sort.tie(c: Cmp, +a: String, +b: String) -> Cmp:
+  match c:
+    case LT{}:
+      LT{}
+    case EQ{}:
+      String.order(a, b)
+    case GT{}:
+      GT{}
+
+# how two elements compare: by their scores, or (alpha) by the values
+# ALPHA compares
+def sort.cmp(+alpha: Bool, +x: SEl, +y: SEl) -> Cmp:
+  match alpha x y:
+    case False{} SEl{+a, +da, +ca} SEl{+b, +db, +cb}:
+      sort.tie(F.f64.cmp(da, db), a, b)
+    case True{} SEl{+a, +da, +ca} SEl{+b, +db, +cb}:
+      sort.obj.cmp(ca, cb)
+
+def sort.le.of(+desc: Bool, c: Cmp) -> Bool:
+  match c:
+    case LT{}:
+      Bool.not(desc)
+    case EQ{}:
+      True{}
+    case GT{}:
+      desc
+
+# whether x goes no later than y (DESC turns the comparison around)
+def sort.le(+alpha: Bool, +desc: Bool, +x: SEl, +y: SEl) -> Bool:
+  sort.le.of(desc, sort.cmp(alpha, x, y))
+
+# whether the first of xs goes no later than y (none: it does)
+def sort.le.l(+alpha: Bool, +desc: Bool, +xs: List<&2, SEl>, +y: SEl) -> Bool:
+  match xs:
+    case Nil{}:
+      True{}
+    case Con{+x, +r}:
+      sort.le(alpha, desc, x, y)
+
+# whether x goes no later than the first of ys (none: it does)
+def sort.le.r(+alpha: Bool, +desc: Bool, +x: SEl, +ys: List<&2, SEl>) -> Bool:
+  match ys:
+    case Nil{}:
+      True{}
+    case Con{+y, +r}:
+      sort.le(alpha, desc, x, y)
+
+def sort.le.ab(+alpha: Bool, +desc: Bool, +xs: List<&2, SEl>, +ys: List<&2, SEl>) -> Bool:
+  match xs:
+    case Nil{}:
+      True{}
+    case Con{+x, +r}:
+      sort.le.r(alpha, desc, x, ys)
+
+# xs and ys, each in order, merged in order after acc (reversed), the
+# first of xs before the first of ys when le: when the two compare equal,
+# so that the sort is stable; fuel bounds the steps (the number of
+# elements sorted, which no merge passes)
+def sort.merge(fuel: Nat, xs: List<&2, SEl>, ys: List<&2, SEl>, le: Bool, +alpha: Bool, +desc: Bool, acc: List<&2, SEl>) -> List<&2, SEl>:
+  match fuel xs ys le:
+    case 0n a b _:
+      List.reverse.go(&2, SEl, acc, List.append(&2, SEl, a, b))
+    case _ Nil{} b _:
+      List.reverse.go(&2, SEl, acc, b)
+    case _ a Nil{} _:
+      List.reverse.go(&2, SEl, acc, a)
+    case 1n+f Con{x, +xt} Con{+y, +yt} True{}:
+      sort.merge(f, xt, Con{y, yt}, sort.le.l(alpha, desc, xt, y), alpha, desc, x <> acc)
+    case 1n+f Con{+x, +xt} Con{y, +yt} False{}:
+      sort.merge(f, Con{x, xt}, yt, sort.le.r(alpha, desc, x, yt), alpha, desc, y <> acc)
+
+# the elements, each a run of its own, and how many there are
+type SRuns is Data:
+  SRuns{n: Nat, rs: List<&2, List<&2, SEl>>}
+
+def sort.runs.con(x: SEl, r: SRuns) -> SRuns:
+  match r:
+    case SRuns{n, rs}:
+      SRuns{Nat.add(n, 1n), [x] <> rs}
+
+def sort.runs(xs: List<&2, SEl>) -> SRuns:
+  match xs:
+    case Nil{}:
+      SRuns{0n, Nil{}}
+    case Con{x, rest}:
+      sort.runs.con(x, sort.runs(rest))
+
+def sort.two(+n: Nat, +alpha: Bool, +desc: Bool, +a: List<&2, SEl>, +b: List<&2, SEl>) -> List<&2, SEl>:
+  sort.merge(n, a, b, sort.le.ab(alpha, desc, a, b), alpha, desc, Nil{})
+
+# the runs merged two by two, in order (n: how many elements they hold)
+def sort.pass(rs: List<&2, List<&2, SEl>>, +n: Nat, +alpha: Bool, +desc: Bool) -> List<&2, List<&2, SEl>>:
+  match rs:
+    case Con{+a, Con{+b, rest}}:
+      sort.two(n, alpha, desc, a, b) <> sort.pass(rest, n, alpha, desc)
+    case other:
+      other
+
+# the runs merged pass after pass until one is left (a stable merge
+# sort); fuel bounds the passes
+def sort.passes(fuel: Nat, rs: List<&2, List<&2, SEl>>, +n: Nat, +alpha: Bool, +desc: Bool) -> List<&2, SEl>:
+  match fuel rs:
+    case _ Nil{}:
+      Nil{}
+    case _ Con{r, Nil{}}:
+      r
+    case 0n other:
+      List.concat(&2, SEl, other)
+    case 1n+f other:
+      sort.passes(f, sort.pass(other, n, alpha, desc), n, alpha, desc)
+
+def sort.sorted.of(r: SRuns, +alpha: Bool, +desc: Bool) -> List<&2, String>:
+  match r:
+    case SRuns{+n, rs}:
+      sort.elems(sort.passes(n, rs, n, alpha, desc))
+
+def sort.sorted(xs: List<&2, SEl>, +alpha: Bool, +desc: Bool) -> List<&2, String>:
+  sort.sorted.of(sort.runs(xs), alpha, desc)
+
+# the elements in the order SORT leaves them: none when a value is no
+# score. by: the BY pattern (none: the elements themselves)
+def sort.num(m: Maybe<&2, List<&2, SEl>>, +desc: Bool) -> Maybe<&2, List<&2, String>>:
+  match m:
+    case Some{xs}:
+      Some{sort.sorted(xs, False{}, desc)}
+    case None{}:
+      None{}
+
+def sort.order(alpha: Bool, +by: Maybe<&2, SPat>, xs: List<&2, String>, +t: KV.Trie<KV.Val>, +now: Nat, +desc: Bool, +bin: Bool) -> Maybe<&2, List<&2, String>>:
+  match alpha:
+    case False{}:
+      sort.num(sort.nums(xs, False{}, t, now, by, Nil{}), desc)
+    case True{}:
+      Some{sort.sorted(sort.alphas(xs, bin, t, now, by), True{}, desc)}
+
+# the elements left in their order: a list's and a sorted set's reversed
+# for DESC, a set's as they are
+def sort.kept.of(rev: Bool, xs: List<&2, String>) -> List<&2, String>:
+  match rev:
+    case True{}:
+      List.reverse(&2, String, xs)
+    case False{}:
+      xs
+
+def sort.kept(+src: Nat, +desc: Bool, xs: List<&2, String>) -> List<&2, String>:
+  sort.kept.of(Bool.and(desc, Nat.is_ne(src, 1n)), xs)
+
+# LIMIT's range among n elements: its start, and how many it takes
+def sort.start(+off: Int, +n: Nat) -> Nat:
+  match off:
+    case IPos{+x}:
+      Nat.min(x, n)
+    case INeg{x}:
+      0n
+
+def sort.count(+cnt: Int, +n: Nat, +s: Nat) -> Nat:
+  match cnt:
+    case IPos{+x}:
+      Nat.min(x, Nat.sub(n, s))
+    case INeg{x}:
+      Nat.sub(n, s)
+
+def sort.range(+off: Int, +cnt: Int, xs: List<&2, String>) -> List<&2, String>:
+  +ys = xs
+  +n = List.length(&2, String, ys)
+  +s = sort.start(off, n)
+  List.take(&2, String, List.drop(&2, String, ys, s), sort.count(cnt, n, s))
+
+# the values GET's patterns name for each element, in turn (no GET: the
+# elements), after acc (reversed)
+def sort.gets.of(+t: KV.Trie<KV.Val>, +now: Nat, +qs: List<&2, SPat>, +e: String, acc: List<&2, Maybe<&2, String>>) -> List<&2, Maybe<&2, String>>:
+  match qs:
+    case Nil{}:
+      acc
+    case Con{+q, +rest}:
+      sort.gets.of(t, now, rest, e, sort.look(t, now, q, e) <> acc)
+
+def sort.gets(+t: KV.Trie<KV.Val>, +now: Nat, +qs: List<&2, SPat>, xs: List<&2, String>, acc: List<&2, Maybe<&2, String>>) -> List<&2, Maybe<&2, String>>:
+  match xs:
+    case Nil{}:
+      List.reverse(&2, Maybe<&2, String>, acc)
+    case Con{+e, rest}:
+      sort.gets(t, now, qs, rest, sort.gets.of(t, now, qs, e, acc))
+
+def sort.selves(xs: List<&2, String>) -> List<&2, Maybe<&2, String>>:
+  match xs:
+    case Nil{}:
+      Nil{}
+    case Con{e, rest}:
+      Some{e} <> sort.selves(rest)
+
+def sort.out(+t: KV.Trie<KV.Val>, +now: Nat, gs: List<&2, String>, xs: List<&2, String>) -> List<&2, Maybe<&2, String>>:
+  match gs:
+    case Nil{}:
+      sort.selves(xs)
+    case Con{g, rest}:
+      sort.gets(t, now, sort.pats(Con{g, rest}), xs, Nil{})
+
+# SORT's result: the values it answers (none: not there), or WRONGTYPE,
+# or a value that is no score
+type SortOut is Data:
+  SortOut{xs: List<&2, Maybe<&2, String>>}
+  SortWrong{}
+  SortBad{}
+
+def sort.fin(m: Maybe<&2, List<&2, String>>, +off: Int, +cnt: Int, gs: List<&2, String>, +t: KV.Trie<KV.Val>, +now: Nat) -> SortOut:
+  match m:
+    case Some{xs}:
+      SortOut{sort.out(t, now, gs, sort.range(off, cnt, xs))}
+    case None{}:
+      SortBad{}
+
+# the elements of src (0 a list, 1 a set, 2 a sorted set) sorted as by
+# says (none: left in their order)
+def sort.all(by: SortBy, +src: Nat, +alpha: Bool, xs: List<&2, String>, +t: KV.Trie<KV.Val>, +now: Nat, +desc: Bool, +bin: Bool) -> Maybe<&2, List<&2, String>>:
+  match by:
+    case SByNone{}:
+      Some{sort.kept(src, desc, xs)}
+    case SByElem{}:
+      sort.order(alpha, None{}, xs, t, now, desc, bin)
+    case SByPat{+p}:
+      sort.order(alpha, Some{sort.pat(p)}, xs, t, now, desc, bin)
+
+# a set left in its order by a STORE is sorted with ALPHA, as Redis sorts
+# it so that a replica stores what it stores
+def sort.by.of(+src: Nat, +store: Bool, by: SortBy) -> SortBy:
+  match by:
+    case SByNone{}:
+      Bool.pick(SortBy, Bool.and(store, Nat.is_eq(src, 1n)), SByElem{}, SByNone{})
+    case SByElem{}:
+      SByElem{}
+    case SByPat{p}:
+      SByPat{p}
+
+def sort.alpha.of(+src: Nat, +store: Bool, +by: SortBy, +alpha: Bool) -> Bool:
+  match by:
+    case SByNone{}:
+      Bool.or(alpha, Bool.and(store, Nat.is_eq(src, 1n)))
+    case _:
+      alpha
+
+def sort.go.src(+src: Nat, xs: List<&2, String>, o: SortO, +t: KV.Trie<KV.Val>, +now: Nat, +store: Bool) -> SortOut:
+  match o:
+    case SortO{+by, +off, +cnt, gs, +desc, +alpha}:
+      sort.fin(sort.all(sort.by.of(src, store, by), src, sort.alpha.of(src, store, by, alpha), xs, t, now, desc, store), off, cnt, gs, t, now)
+    case SortStore{d, x}:
+      sort.go.src(src, xs, x, t, now, store)
+
+def sort.run.of(s: SortSrc, o: SortO, +t: KV.Trie<KV.Val>, +now: Nat, +store: Bool) -> SortOut:
+  match s:
+    case SrcList{xs}:
+      sort.go.src(0n, xs, o, t, now, store)
+    case SrcSet{xs}:
+      sort.go.src(1n, xs, o, t, now, store)
+    case SrcZset{xs}:
+      sort.go.src(2n, xs, o, t, now, store)
+    case SrcWrong{}:
+      SortWrong{}
+
+# SORT of the key k at now with the options o (store: for a STORE)
+def sort.run(+t: KV.Trie<KV.Val>, +now: Nat, +k: String, o: SortO, +store: Bool) -> SortOut:
+  sort.run.of(sort.src(KV.read(KV.Val, t, k, now)), o, t, now, store)
+
+def e_score() -> Reply:
+  RError{"ERR One or more scores can't be converted into double"}
+
+# SORT's reply: an array of its values (one not there: a null)
+def sort.bulks(xs: List<&2, Maybe<&2, String>>) -> List<&2, Reply>:
+  match xs:
+    case Nil{}:
+      Nil{}
+    case Con{m, rest}:
+      r_get(m) <> sort.bulks(rest)
+
+def sort.reply(o: SortOut) -> Reply:
+  match o:
+    case SortOut{xs}:
+      RArray{sort.bulks(xs)}
+    case SortWrong{}:
+      e_wrongtype()
+    case SortBad{}:
+      e_score()
+
+# the values a STORE pushes, one not there as the empty string
+def sort.strs(xs: List<&2, Maybe<&2, String>>) -> List<&2, String>:
+  match xs:
+    case Nil{}:
+      Nil{}
+    case Con{m, rest}:
+      Maybe.default(&2, String, m, "") <> sort.strs(rest)
+
+# SORT with STORE: the command that writes its destination d (session.bend
+# runs it as an act of its database, ASort, below): the DEL of d when the
+# sort leaves no value, else the list of them where d was, whatever it
+# held (LWNew), which drops d's time to live as Redis's setKey does; an
+# error writes nothing (Bad)
+def sort.write.of(o: SortOut, +d: String) -> Cmd:
+  match o:
+    case SortOut{Nil{}}:
+      Del{[d]}
+    case SortOut{Con{x, rest}}:
+      Upd{d, UList{LWNew{False{}, sort.strs(Con{x, rest})}}}
+    case SortWrong{}:
+      Bad{e_wrongtype()}
+    case SortBad{}:
+      Bad{e_score()}
+
+def sort.write(+t: KV.Trie<KV.Val>, +now: Nat, +k: String, o: SortO) -> Cmd:
+  match o:
+    case SortStore{+d, x}:
+      sort.write.of(sort.run(t, now, k, x, True{}), d)
+    case SortO{by, off, cnt, gs, desc, alpha}:
+      Bad{RError{"ERR syntax error"}}
+
+# SORT with STORE's reply: how many values it stored
+def sort.stored(o: SortOut) -> Reply:
+  match o:
+    case SortOut{+xs}:
+      r_int(List.length(&2, Maybe<&2, String>, xs))
+    case SortWrong{}:
+      e_wrongtype()
+    case SortBad{}:
+      e_score()
+
+def sort.store.reply(+t: KV.Trie<KV.Val>, +now: Nat, +k: String, o: SortO) -> Reply:
+  match o:
+    case SortStore{d, x}:
+      sort.stored(sort.run(t, now, k, x, True{}))
+    case SortO{by, off, cnt, gs, desc, alpha}:
+      RError{"ERR syntax error"}
+
 def exec(cmd: Cmd, db: Db) -> Reply & Db:
   match cmd:
     case Ping{}:
@@ -17246,6 +18015,9 @@ def exec(cmd: Cmd, db: Db) -> Reply & Db:
       db.zrangestore(db, d, s, q)
     case ZMPop{ks, +max, c}:
       db.zmpop(db, ks, max, c)
+    case Sort{+k, o}:
+      +d = db
+      (sort.reply(sort.run(db.trie(d), db.now(d), k, o, False{})), d)
 
 # a batch of commands, in order: the replies in order, and the database
 # after the last
@@ -17566,7 +18338,8 @@ def ds.copy(+src: String, +dst: String, +j: Nat, rep: Bool, ds: Ds) -> Bool & Ds
 # (SELECT, and RESET to 0); two databases swapped (SWAPDB); MOVE's two
 # steps; a key copied (COPY) to a database it names, or within the focus
 # (a COPY without DB in a file Redis wrote); every database emptied
-# (FLUSHALL)
+# (FLUSHALL); SORT with STORE, which writes what it makes of the keys of
+# the focus to its destination there (sort.write)
 type Act is Data:
   ARun{c: Cmd}
   AFocus{db: Nat}
@@ -17576,6 +18349,7 @@ type Act is Data:
   ACopy{src: String, dst: String, db: Nat, rep: Bool}
   ACopyHere{src: String, dst: String, rep: Bool}
   AWipe{}
+  ASort{key: String, o: SortO}
 
 def act.run(r: Reply & Db, pre: List<&2, Db>, post: List<&2, Db>) -> Reply & Ds:
   (x, d) = r
@@ -17590,11 +18364,23 @@ def act.moved(r: Bool & Ds) -> Reply & Ds:
   (b, ds) = r
   (r_int(Bool.pick(Nat, b, 1n, 0n)), ds)
 
-# an act's reply, and the databases after it
+# a command of one database run on the focus
+def act.cmd(c: Cmd, ds: Ds) -> Reply & Ds:
+  match ds:
+    case Ds{d, pre, post}:
+      act.run(exec(c, d), pre, post)
+
+# SORT with STORE's command (sort.write) on the focus
+def sort.write.ds(+ds: Ds, +k: String, o: SortO) -> Cmd:
+  +d = ds.focused(ds)
+  sort.write(db.trie(d), db.now(d), k, o)
+
+# an act's reply, and the databases after it (SORT with STORE runs the
+# command it makes, so it acts as ARun of that command does)
 def act(a: Act, ds: Ds) -> Reply & Ds:
   match a ds:
-    case ARun{c} Ds{d, pre, post}:
-      act.run(exec(c, d), pre, post)
+    case ARun{c} x:
+      act.cmd(c, x)
     case AFocus{+j} x:
       (r_ok(), ds.focus(j, x))
     case ASwap{+a, +b} x:
@@ -17610,6 +18396,9 @@ def act(a: Act, ds: Ds) -> Reply & Ds:
       act.moved(ds.copy(s, d, ds.index(y), rep, y))
     case AWipe{} x:
       (r_ok(), ds.wipe(x))
+    case ASort{+k, o} x:
+      +y = x
+      act.cmd(sort.write.ds(y, k, o), y)
 
 def ds_of(r: Reply & Ds) -> Ds:
   (x, ds) = r

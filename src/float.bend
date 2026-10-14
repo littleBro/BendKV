@@ -98,6 +98,21 @@ def big.cmp.go(a: List<&2, Nat>, b: List<&2, Nat>, acc: Cmp) -> Cmp:
 def big.cmp(a: List<&2, Nat>, b: List<&2, Nat>) -> Cmp:
   big.cmp.go(a, b, EQ{})
 
+# 2^b of bit b of k (1 when the bit is 0)
+def nat.pow2.bit(+k: Nat, +b: Nat, +v: Nat) -> Nat:
+  Bool.pick(Nat, Nat.is_eq(Nat.mod(Nat.div(k, b), 2n), 1n), v, 1n)
+
+def nat.pow2.of(small: Bool, +k: Nat) -> Nat:
+  match small:
+    case True{}:
+      Nat.mul(Nat.mul(Nat.mul(nat.pow2.bit(k, 1n, 2n), nat.pow2.bit(k, 2n, 4n)), Nat.mul(nat.pow2.bit(k, 4n, 16n), nat.pow2.bit(k, 8n, 256n))), Nat.mul(nat.pow2.bit(k, 16n, 65536n), nat.pow2.bit(k, 32n, Nat.mul(65536n, 65536n))))
+    case False{}:
+      Nat.pow(2n, k)
+
+# 2^k: below 2^64 by the bits of k, at once (Nat.pow multiplies k times)
+def nat.pow2(+k: Nat) -> Nat:
+  nat.pow2.of(Nat.is_lt(k, 64n), k)
+
 # a * k + c, for k and c below 2^24
 def big.mul_small(a: List<&2, Nat>, +k: Nat, +c: Nat) -> List<&2, Nat>:
   match a:
@@ -127,7 +142,7 @@ def big.shl.if(z: Bool, +a: List<&2, Nat>, +n: Nat) -> List<&2, Nat>:
     case True{}:
       Nil{}
     case False{}:
-      big.zeros(Nat.div(n, 24n), big.mul_small(a, Nat.pow(2n, Nat.mod(n, 24n)), 0n))
+      big.zeros(Nat.div(n, 24n), big.mul_small(a, nat.pow2(Nat.mod(n, 24n)), 0n))
 
 # a * 2^n
 def big.shl(+a: List<&2, Nat>, +n: Nat) -> List<&2, Nat>:
@@ -199,7 +214,7 @@ def big.bit.go(a: List<&2, Nat>, +q: Nat, +r: Nat) -> Bool:
     case Con{+x, xs}:
       match q:
         case 0n:
-          Nat.is_eq(Nat.mod(Nat.div(x, Nat.pow(2n, r)), 2n), 1n)
+          Nat.is_eq(Nat.mod(Nat.div(x, nat.pow2(r)), 2n), 1n)
         case 1n+p:
           big.bit.go(xs, p, r)
 
@@ -214,7 +229,7 @@ def big.low.go(a: List<&2, Nat>, +q: Nat, +r: Nat) -> Bool:
     case Con{+x, xs}:
       match q:
         case 0n:
-          Nat.is_ne(Nat.mod(x, Nat.pow(2n, r)), 0n)
+          Nat.is_ne(Nat.mod(x, nat.pow2(r)), 0n)
         case 1n+p:
           Bool.or(Nat.is_ne(x, 0n), big.low.go(xs, p, r))
 
@@ -223,7 +238,7 @@ def big.low_nz(a: List<&2, Nat>, +n: Nat) -> Bool:
 
 # a divided by 2^n, rounded down
 def big.shr(a: List<&2, Nat>, +n: Nat) -> List<&2, Nat>:
-  big.fst(big.divmod_small(List.drop(&2, Nat, a, Nat.div(n, 24n)), Nat.pow(2n, Nat.mod(n, 24n))))
+  big.fst(big.divmod_small(List.drop(&2, Nat, a, Nat.div(n, 24n)), nat.pow2(Nat.mod(n, 24n))))
 
 def big.is_odd(a: List<&2, Nat>) -> Bool:
   match a:
@@ -751,27 +766,53 @@ def scan(+s: String, +i: Nat) -> Scan:
 
 # a value read, and whether strtod reports a range error for it (ERANGE
 # with an infinity or a zero: a finite number past the format's range, or
-# one that is not 0 rounding to 0)
+# one that is not 0 rounding to 0), and whether it is tiny: subnormal (or
+# 0) and inexact, for which glibc's strtod reports ERANGE too (with the
+# number it rounds to, which the readers of doubles of Redis take; SORT
+# takes it for an error)
 type Rv is Data:
-  Rv{v: Fl, er: Bool}
+  Rv{v: Fl, er: Bool, tiny: Bool}
 
-def fl.rv(v: Fl, +nonzero: Bool) -> Rv:
+# whether m * 2^e, and below it something more than 0 when sticky, loses
+# bits rounded to f (as fl.round rounds it)
+def fl.inexact(+f: Fmt, +m: List<&2, Nat>, +e: Nat, +sticky: Bool) -> Bool:
+  match f:
+    case Fmt{+p, +emin, emax}:
+      +lead = Nat.sub(Nat.add(e, big.bitlen(m)), 1n)
+      +lsb = Nat.sub(Nat.add(Nat.max(lead, Nat.sub(fl.eb(), emin)), 1n), p)
+      Bool.or(sticky, Bool.and(Nat.is_lt(e, lsb), big.low_nz(m, Nat.sub(lsb, e))))
+
+# whether a value rounded to fewer bits than f's (small: subnormal, or 0)
+# is tiny, from what was rounded (m0 * 2^e0, sticky): the bits it lost,
+# which only such a value is asked for
+def fl.tiny(small: Bool, +f: Fmt, +m0: List<&2, Nat>, +e0: Nat, +sticky: Bool) -> Bool:
+  match small:
+    case False{}:
+      False{}
+    case True{}:
+      fl.inexact(f, m0, e0, sticky)
+
+# v, the value m0 * 2^e0 (sticky) rounded to f, as strtod reads it: a
+# range error for an infinity, or for a 0 that a number not 0 rounds to
+# (nonzero), and whether it is tiny
+def fl.rv(v: Fl, +nonzero: Bool, +f: Fmt, +m0: List<&2, Nat>, +e0: Nat, +sticky: Bool) -> Rv:
   match v:
     case FNaN{}:
-      Rv{FNaN{}, False{}}
+      Rv{FNaN{}, False{}, False{}}
     case FInf{+neg}:
-      Rv{FInf{neg}, True{}}
+      Rv{FInf{neg}, True{}, False{}}
     case FNum{+neg, +m, +e}:
-      Rv{FNum{neg, m, e}, Bool.and(nonzero, big.is_zero(m))}
+      Rv{FNum{neg, m, e}, Bool.and(nonzero, big.is_zero(m)), fl.tiny(Nat.is_lt(big.bitlen(m), fmt.p(f)), f, m0, e0, sticky)}
 
 def fl.dec.q(qs: List<&2, Nat> & Bool, +f: Fmt, +neg: Bool, +s: Nat) -> Rv:
-  (q, st) = qs
-  fl.rv(fl.round(f, neg, q, Nat.sub(fl.eb(), s), st), True{})
+  (+q, +st) = qs
+  +e = Nat.sub(fl.eb(), s)
+  fl.rv(fl.round(f, neg, q, e, st), True{}, f, q, e, st)
 
 def fl.dec.neg(under: Bool, +f: Fmt, +neg: Bool, +d: List<&2, Nat>, +bl: Nat, +k: Nat) -> Rv:
   match under:
     case True{}:
-      Rv{fl.zero(neg), True{}}
+      Rv{fl.zero(neg), True{}, True{}}
     case False{}:
       +s = Nat.sub(Nat.add(Nat.add(fmt.p(f), 6n), Nat.div(Nat.mul(k, 3322n), 1000n)), bl)
       fl.dec.q(big.div10(big.shl(d, s), k), f, neg, s)
@@ -779,9 +820,10 @@ def fl.dec.neg(under: Bool, +f: Fmt, +neg: Bool, +d: List<&2, Nat>, +bl: Nat, +k
 def fl.dec.pos(over: Bool, +f: Fmt, +neg: Bool, +d: List<&2, Nat>, +k: Nat) -> Rv:
   match over:
     case True{}:
-      Rv{FInf{neg}, True{}}
+      Rv{FInf{neg}, True{}, False{}}
     case False{}:
-      fl.rv(fl.round(f, neg, big.mul_pow(d, 10n, k), fl.eb(), False{}), True{})
+      +m = big.mul_pow(d, 10n, k)
+      fl.rv(fl.round(f, neg, m, fl.eb(), False{}), True{}, f, m, fl.eb(), False{})
 
 def fl.dec.up(up: Bool, +p: Nat, +emin: Nat, +emax: Nat, +neg: Bool, +d: List<&2, Nat>, +e10: Nat, +bl: Nat) -> Rv:
   match up:
@@ -795,7 +837,7 @@ def fl.dec.up(up: Bool, +p: Nat, +emin: Nat, +emax: Nat, +neg: Bool, +d: List<&2
 def fl.dec.of(z: Bool, up: Bool, f: Fmt, +neg: Bool, +d: List<&2, Nat>, +e10: Nat) -> Rv:
   match z:
     case True{}:
-      Rv{fl.zero(neg), False{}}
+      Rv{fl.zero(neg), False{}, False{}}
     case False{}:
       match f:
         case Fmt{+p, +emin, +emax}:
@@ -808,13 +850,13 @@ def fl.dec(+f: Fmt, +neg: Bool, +d: List<&2, Nat>, +e10: Nat) -> Rv:
 def fl.hex.go(over: Bool, under: Bool, +f: Fmt, +neg: Bool, +h: List<&2, Nat>, +e2: Nat) -> Rv:
   match over:
     case True{}:
-      Rv{FInf{neg}, True{}}
+      Rv{FInf{neg}, True{}, False{}}
     case False{}:
       match under:
         case True{}:
-          Rv{fl.zero(neg), True{}}
+          Rv{fl.zero(neg), True{}, True{}}
         case False{}:
-          fl.rv(fl.round(f, neg, h, e2, False{}), True{})
+          fl.rv(fl.round(f, neg, h, e2, False{}), True{}, f, h, e2, False{})
 
 def fl.hex.bl(+p: Nat, +emin: Nat, +emax: Nat, +neg: Bool, +h: List<&2, Nat>, +e2: Nat, +bl: Nat) -> Rv:
   fl.hex.go(Nat.is_lt(Nat.add(fl.eb(), emax), Nat.sub(Nat.add(e2, bl), 1n)), Nat.is_le(Nat.add(Nat.add(Nat.add(e2, bl), p), emin), fl.eb()), Fmt{p, emin, emax}, neg, h, e2)
@@ -822,7 +864,7 @@ def fl.hex.bl(+p: Nat, +emin: Nat, +emax: Nat, +neg: Bool, +h: List<&2, Nat>, +e
 def fl.hex.of(z: Bool, f: Fmt, +neg: Bool, +h: List<&2, Nat>, +e2: Nat) -> Rv:
   match z:
     case True{}:
-      Rv{fl.zero(neg), False{}}
+      Rv{fl.zero(neg), False{}, False{}}
     case False{}:
       match f:
         case Fmt{+p, +emin, +emax}:
@@ -833,14 +875,14 @@ def fl.hex(+f: Fmt, +neg: Bool, +h: List<&2, Nat>, +e2: Nat) -> Rv:
 
 # what strtod reads at index p of s (start: where it began, past which it
 # skipped blanks): the value, where it ends (start when it reads nothing),
-# and whether it reports a range error
+# whether it reports a range error, and whether the value is tiny (Rv)
 type Rd is Data:
-  Rd{v: Fl, end: Nat, er: Bool}
+  Rd{v: Fl, end: Nat, er: Bool, tiny: Bool}
 
 def fl.rd(r: Rv, +end: Nat) -> Rd:
   match r:
-    case Rv{v, +er}:
-      Rd{v, end, er}
+    case Rv{v, +er, +tiny}:
+      Rd{v, end, er, tiny}
 
 # a number's exponent: x with its sign, less k (biased by 2^40)
 def fl.exp(+xn: Bool, +x: Nat, +k: Nat) -> Nat:
@@ -849,11 +891,11 @@ def fl.exp(+xn: Bool, +x: Nat, +k: Nat) -> Nat:
 def fl.strtod.of(+f: Fmt, +s: String, +start: Nat, sc: Scan) -> Rd:
   match sc:
     case SNone{}:
-      Rd{fl.zero(False{}), start, False{}}
+      Rd{fl.zero(False{}), start, False{}, False{}}
     case SNaN{+end}:
-      Rd{FNaN{}, end, False{}}
+      Rd{FNaN{}, end, False{}, False{}}
     case SInf{+neg, +end}:
-      Rd{FInf{neg}, end, False{}}
+      Rd{FInf{neg}, end, False{}, False{}}
     case SDec{+neg, +i0, +n0, +i1, +n1, +xn, +x, +end}:
       fl.rd(fl.dec(f, neg, big.digits(big.digits(Nil{}, s, i0, n0), s, i1, n1), fl.exp(xn, x, n1)), end)
     case SHex{+neg, +i0, +n0, +i1, +n1, +xn, +x, +end}:
@@ -950,7 +992,7 @@ def f64.same(+a: F64, +b: F64) -> Bool:
       Bool.and(Nat.is_eq(ha, hb), Nat.is_eq(la, lb))
 
 # how two doubles compare, neither a NaN: -0 equals +0
-def f64.cmp(a: F64, b: F64) -> Cmp:
+def f64.cmp(+a: F64, +b: F64) -> Cmp:
   match a b:
     case F64{+ha, +la} F64{+hb, +lb}:
       +ma = Nat.mod(ha, 2147483648n)
@@ -974,7 +1016,7 @@ def f64.parse.ok(ok: Bool, v: Fl) -> Maybe<&2, F64>:
 
 def f64.parse.rd(r: Rd, +n: Nat) -> Maybe<&2, F64>:
   match r:
-    case Rd{v, +end, +er}:
+    case Rd{v, +end, +er, tiny}:
       f64.parse.ok(Bool.and(Nat.is_eq(end, n), Bool.not(er)), v)
 
 def f64.parse.of(bad: Bool, +s: String, +n: Nat) -> Maybe<&2, F64>:
@@ -995,15 +1037,19 @@ def nat.bl48.if(lo: Bool, +n: Nat) -> Nat:
 def nat.bl48(+n: Nat) -> Nat:
   nat.bl48.if(Nat.is_lt(n, 16777216n), n)
 
-# the double of an integer n (not 0) below 2^48: its leading bit at e, the
-# r below it put on the top of the 52 bits of the fraction
-def f64.of.int.e(big: Bool, +neg: Bool, +e: Nat, +r: Nat) -> F64:
+# the double of an integer n (not 0) below 2^48: its leading bit at e (p
+# is 2^e, the one power of two it takes), the r below it put on the top
+# of the 52 bits of the fraction
+def f64.of.int.e(big: Bool, +neg: Bool, +e: Nat, +p: Nat, +r: Nat) -> F64:
   match big:
     case True{}:
-      +sh = Nat.pow(2n, Nat.sub(e, 20n))
-      F64{Nat.add(Nat.add(f64.sign(neg), Nat.mul(Nat.add(e, 1023n), 1048576n)), Nat.div(r, sh)), Nat.mul(Nat.mod(r, sh), Nat.pow(2n, Nat.sub(52n, e)))}
+      +sh = Nat.div(p, 1048576n)
+      F64{Nat.add(Nat.add(f64.sign(neg), Nat.mul(Nat.add(e, 1023n), 1048576n)), Nat.div(r, sh)), Nat.mul(Nat.mod(r, sh), Nat.div(Nat.mul(65536n, 65536n), sh))}
     case False{}:
-      F64{Nat.add(Nat.add(f64.sign(neg), Nat.mul(Nat.add(e, 1023n), 1048576n)), Nat.mul(r, Nat.pow(2n, Nat.sub(20n, e)))), 0n}
+      F64{Nat.add(Nat.add(f64.sign(neg), Nat.mul(Nat.add(e, 1023n), 1048576n)), Nat.mul(r, Nat.div(1048576n, p))), 0n}
+
+def f64.of.int.p(+neg: Bool, +n: Nat, +e: Nat, +p: Nat) -> F64:
+  f64.of.int.e(Nat.is_le(20n, e), neg, e, p, Nat.sub(n, p))
 
 def f64.of.int.z(z: Bool, +neg: Bool, +n: Nat) -> F64:
   match z:
@@ -1011,7 +1057,7 @@ def f64.of.int.z(z: Bool, +neg: Bool, +n: Nat) -> F64:
       F64{f64.sign(neg), 0n}
     case False{}:
       +e = Nat.sub(nat.bl48(n), 1n)
-      f64.of.int.e(Nat.is_le(20n, e), neg, e, Nat.sub(n, Nat.pow(2n, e)))
+      f64.of.int.p(neg, n, e, nat.pow2(e))
 
 # the double of -n (neg) or n, n below 2^48
 def f64.of_int(+neg: Bool, +n: Nat) -> F64:
@@ -1048,8 +1094,33 @@ def f64.range.ok(ok: Bool, v: Fl) -> Maybe<&2, F64>:
 
 def f64.range.rd(r: Rd, +s: String, +n: Nat) -> Maybe<&2, F64>:
   match r:
-    case Rd{v, +end, er}:
+    case Rd{v, +end, er, tiny}:
       f64.range.ok(Bool.or(Nat.is_eq(end, n), U32.is_eq(String.code_at(s, end), 0)), v)
+
+# a score as SORT reads one (sort.c), with strtod: blanks first, up to the
+# end or a NUL, with no range error (errno's ERANGE: an infinity or a 0
+# that a finite number rounds to, or a tiny number), and no NaN ("" reads
+# as 0)
+def f64.sort.rd(r: Rd, +s: String) -> Maybe<&2, F64>:
+  match r:
+    case Rd{v, +end, +er, +tiny}:
+      +x = String.code_at(s, end)
+      f64.parse.ok(Bool.and(Bool.or(U32.is_eq(x, 0), U32.is_eq(x, 4294967295)), Bool.not(Bool.or(er, tiny))), v)
+
+def f64.parse_sort.of(int: Bool, +s: String, +n: Nat, +a: Nat) -> Maybe<&2, F64>:
+  match int:
+    case True{}:
+      Some{f64.of_int(Nat.is_eq(a, 1n), String.dec_at(s, a, Nat.sub(n, a)))}
+    case False{}:
+      f64.sort.rd(fl.strtod(fmt.d(), s, 0n, blank.count(s)), s)
+
+# a score as SORT reads one; an integer of up to 14 digits (no blank, no
+# NUL) at once, as f64.parse reads one
+def f64.parse_sort(+s: String) -> Maybe<&2, F64>:
+  +n = String.length(s)
+  +a = Bool.pick(Nat, U32.is_eq(String.code_at(s, 0n), 45), 1n, 0n)
+  +d = Nat.sub(n, a)
+  f64.parse_sort.of(Bool.and(Bool.and(Nat.is_lt(0n, d), Nat.is_le(d, 14n)), Nat.is_eq(String.digits_at(s, a), d)), s, n, a)
 
 # a bound of a score range, as zslParseRange reads one with strtod:
 # blanks first, up to the end or a NUL, an overflow or underflow taken
@@ -1072,7 +1143,7 @@ def ld.parse.ok(ok: Bool, v: Fl) -> Maybe<&2, Fl>:
 
 def ld.parse.rd(r: Rd, +n: Nat) -> Maybe<&2, Fl>:
   match r:
-    case Rd{v, +end, +er}:
+    case Rd{v, +end, +er, tiny}:
       ld.parse.ok(Bool.and(Nat.is_eq(end, n), Bool.not(er)), v)
 
 def ld.parse.of(bad: Bool, +s: String, +n: Nat) -> Maybe<&2, Fl>:
@@ -1211,11 +1282,11 @@ def fl.show_g(x: Fl) -> String:
 def f64.int.go(hi: Bool, +neg: Bool, +s: Nat, +m: Nat, +lo: Nat) -> Maybe<&2, String>:
   match hi:
     case True{}:
-      +k = Nat.pow(2n, Nat.sub(s, 32n))
+      +k = nat.pow2(Nat.sub(s, 32n))
       Bool.pick(Maybe<&2, String>, Bool.and(Nat.is_eq(lo, 0n), Nat.is_eq(Nat.mod(m, k), 0n)), Some{Bool.pick(String, neg, "-", "") ++ Nat.show(Nat.div(m, k))}, None{})
     case False{}:
-      +k = Nat.pow(2n, s)
-      Bool.pick(Maybe<&2, String>, Nat.is_eq(Nat.mod(lo, k), 0n), Some{Bool.pick(String, neg, "-", "") ++ Nat.show(Nat.add(Nat.mul(m, Nat.pow(2n, Nat.sub(32n, s))), Nat.div(lo, k)))}, None{})
+      +k = nat.pow2(s)
+      Bool.pick(Maybe<&2, String>, Nat.is_eq(Nat.mod(lo, k), 0n), Some{Bool.pick(String, neg, "-", "") ++ Nat.show(Nat.add(Nat.mul(m, Nat.div(Nat.mul(65536n, 65536n), k)), Nat.div(lo, k)))}, None{})
 
 # a double of exponent field ex (1023 to 1069: an integer part below 2^47
 # when the bits below its point are 0), as an integer's text, or None

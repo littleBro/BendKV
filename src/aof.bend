@@ -535,12 +535,18 @@ def act.copy(+s: String, +d: String, +i: Nat, +j: Nat, r: Bool & R.Ds) -> R.Repl
   (+ok, ds) = r
   (R.r_int(Bool.pick(Nat, ok, 1n, 0n)), (act.if(ok, ECopy{s, d, i, j}), ds))
 
+# a command of one database run on the focus, with its effects
+def act.cmd(+c: R.Cmd, ds: R.Ds) -> R.Reply & (List<&2, Eff> & R.Ds):
+  match ds:
+    case R.Ds{d, +pre, post}:
+      act.run(List.length(&2, R.Db, pre), run(c, d), pre, post)
+
 # an act run with its effect: its reply, its effects, and the databases
 # after it, as R.act runs it
 def act(a: R.Act, ds: R.Ds) -> R.Reply & (List<&2, Eff> & R.Ds):
   match a ds:
-    case R.ARun{+c} R.Ds{d, +pre, post}:
-      act.run(List.length(&2, R.Db, pre), run(c, d), pre, post)
+    case R.ARun{+c} x:
+      act.cmd(c, x)
     case R.AFocus{+j} x:
       (R.r_ok(), (Nil{}, R.ds.focus(j, x)))
     case R.ASwap{+a, +b} x:
@@ -558,6 +564,9 @@ def act(a: R.Act, ds: R.Ds) -> R.Reply & (List<&2, Eff> & R.Ds):
       act.copy(s, d, R.ds.index(y), R.ds.index(y), R.ds.copy(s, d, R.ds.index(y), rep, y))
     case R.AWipe{} x:
       (R.r_ok(), ([EWipe{}], R.ds.wipe(x)))
+    case R.ASort{+k, o} x:
+      +y = x
+      act.cmd(R.sort.write.ds(y, k, o), y)
 
 def acts.put(es: List<&2, Eff>, r: R.Reply & (List<&2, Eff> & R.Ds)) -> List<&2, Eff> & R.Ds:
   (x, q) = r
@@ -1188,8 +1197,9 @@ def file.copy(args: List<&2, String>, c: R.Cmd) -> R.Act:
       file.copy.any(c)
 
 # a command of a file as an act: SELECT moves the focus, SWAPDB, MOVE,
-# COPY and FLUSHALL act on the databases, and any other command runs on
-# the focus (a SELECT, SWAPDB, MOVE or COPY whose numbers or options do
+# COPY and FLUSHALL act on the databases, SORT with STORE (as Redis
+# writes it, the command that ran) writes its destination, and any other
+# command runs on the focus (a SELECT, SWAPDB, MOVE or COPY whose numbers or options do
 # not read too: exec answers it with an error and changes nothing, as
 # Redis's load ignores a command that fails)
 def file.act(+c: R.Cmd) -> R.Act:
@@ -1204,6 +1214,8 @@ def file.act(+c: R.Cmd) -> R.Act:
       file.copy(args, c)
     case R.Own{R.SFlushAll{}}:
       R.AWipe{}
+    case R.Own{R.SSortStore{k, o}}:
+      R.ASort{k, o}
     case _:
       R.ARun{c}
 

@@ -26,7 +26,9 @@ type KSpec is Data:
 # BITFIELD (on its subcommands), or for EVAL, LMPOP (and ZMPOP), BLMPOP
 # (and BZMPOP), SINTERCARD (and ZUNION, ZINTER, ZDIFF, ZINTERCARD) and
 # ZUNIONSTORE (and ZINTERSTORE, ZDIFFSTORE), whose spec counts their keys
-# with an argument, and whose function reads them when the spec does not
+# with an argument, and whose function reads them when the spec does not,
+# or for SORT and SORT_RO, whose patterns name keys of their own, and
+# SORT's STORE may come anywhere among its options
 type KWay is Data:
   KBySpecs{}
   KBySet{}
@@ -36,6 +38,8 @@ type KWay is Data:
   KBySintercard{}
   KByZstore{}
   KByBlmpop{}
+  KBySort{}
+  KBySortRo{}
 
 # a command or a subcommand: its full name ("client|id" for a
 # subcommand), its arity, its ACL categories, its key specs, how its keys
@@ -871,6 +875,18 @@ def cmd.smove() -> Top:
     [R.RBulk{"summary"}, R.RBulk{"Move a member from one set to another"}, R.RBulk{"since"}, R.RBulk{"1.0.0"}, R.RBulk{"group"}, R.RBulk{"set"}, R.RBulk{"complexity"}, R.RBulk{"O(1)"}, R.RBulk{"arguments"}, R.RArray{[R.RMap{[R.RBulk{"name"}, R.RBulk{"source"}, R.RBulk{"type"}, R.RBulk{"key"}, R.RBulk{"key_spec_index"}, R.RInt{R.IPos{0n}}]}, R.RMap{[R.RBulk{"name"}, R.RBulk{"destination"}, R.RBulk{"type"}, R.RBulk{"key"}, R.RBulk{"key_spec_index"}, R.RInt{R.IPos{1n}}]}, R.RMap{[R.RBulk{"name"}, R.RBulk{"member"}, R.RBulk{"type"}, R.RBulk{"string"}]}]}]},
   []}
 
+def cmd.sort() -> Top:
+  Top{Desc{"sort", R.INeg{1n}, ["write", "set", "sortedset", "list", "slow", "dangerous"], [], KBySort{}, False{},
+    [R.RBulk{"sort"}, R.RInt{R.INeg{1n}}, R.RSet{[R.RStatus{"write"}, R.RStatus{"denyoom"}, R.RStatus{"movablekeys"}]}, R.RInt{R.IPos{1n}}, R.RInt{R.IPos{1n}}, R.RInt{R.IPos{1n}}, R.RSet{[R.RStatus{"@write"}, R.RStatus{"@set"}, R.RStatus{"@sortedset"}, R.RStatus{"@list"}, R.RStatus{"@slow"}, R.RStatus{"@dangerous"}]}, R.RSet{[]}, R.RSet{[R.RMap{[R.RBulk{"flags"}, R.RSet{[R.RStatus{"RO"}, R.RStatus{"access"}]}, R.RBulk{"begin_search"}, R.RMap{[R.RBulk{"type"}, R.RBulk{"index"}, R.RBulk{"spec"}, R.RMap{[R.RBulk{"index"}, R.RInt{R.IPos{1n}}]}]}, R.RBulk{"find_keys"}, R.RMap{[R.RBulk{"type"}, R.RBulk{"range"}, R.RBulk{"spec"}, R.RMap{[R.RBulk{"lastkey"}, R.RInt{R.IPos{0n}}, R.RBulk{"keystep"}, R.RInt{R.IPos{1n}}, R.RBulk{"limit"}, R.RInt{R.IPos{0n}}]}]}]}, R.RMap{[R.RBulk{"notes"}, R.RBulk{"For the optional BY/GET keyword. It is marked 'unknown' because the key names derive from the content of the key we sort"}, R.RBulk{"flags"}, R.RSet{[R.RStatus{"RO"}, R.RStatus{"access"}]}, R.RBulk{"begin_search"}, R.RMap{[R.RBulk{"type"}, R.RBulk{"unknown"}, R.RBulk{"spec"}, R.RMap{[]}]}, R.RBulk{"find_keys"}, R.RMap{[R.RBulk{"type"}, R.RBulk{"unknown"}, R.RBulk{"spec"}, R.RMap{[]}]}]}, R.RMap{[R.RBulk{"notes"}, R.RBulk{"For the optional STORE keyword. It is marked 'unknown' because the keyword can appear anywhere in the argument array"}, R.RBulk{"flags"}, R.RSet{[R.RStatus{"OW"}, R.RStatus{"update"}]}, R.RBulk{"begin_search"}, R.RMap{[R.RBulk{"type"}, R.RBulk{"unknown"}, R.RBulk{"spec"}, R.RMap{[]}]}, R.RBulk{"find_keys"}, R.RMap{[R.RBulk{"type"}, R.RBulk{"unknown"}, R.RBulk{"spec"}, R.RMap{[]}]}]}]}],
+    [R.RBulk{"summary"}, R.RBulk{"Sort the elements in a list, set or sorted set"}, R.RBulk{"since"}, R.RBulk{"1.0.0"}, R.RBulk{"group"}, R.RBulk{"generic"}, R.RBulk{"complexity"}, R.RBulk{"O(N+M*log(M)) where N is the number of elements in the list or set to sort, and M the number of returned elements. When the elements are not sorted, complexity is O(N)."}, R.RBulk{"arguments"}, R.RArray{[R.RMap{[R.RBulk{"name"}, R.RBulk{"key"}, R.RBulk{"type"}, R.RBulk{"key"}, R.RBulk{"key_spec_index"}, R.RInt{R.IPos{0n}}]}, R.RMap{[R.RBulk{"name"}, R.RBulk{"pattern"}, R.RBulk{"type"}, R.RBulk{"pattern"}, R.RBulk{"key_spec_index"}, R.RInt{R.IPos{1n}}, R.RBulk{"token"}, R.RBulk{"BY"}, R.RBulk{"flags"}, R.RSet{[R.RStatus{"optional"}]}]}, R.RMap{[R.RBulk{"name"}, R.RBulk{"offset_count"}, R.RBulk{"type"}, R.RBulk{"block"}, R.RBulk{"token"}, R.RBulk{"LIMIT"}, R.RBulk{"flags"}, R.RSet{[R.RStatus{"optional"}]}, R.RBulk{"arguments"}, R.RArray{[R.RMap{[R.RBulk{"name"}, R.RBulk{"offset"}, R.RBulk{"type"}, R.RBulk{"integer"}]}, R.RMap{[R.RBulk{"name"}, R.RBulk{"count"}, R.RBulk{"type"}, R.RBulk{"integer"}]}]}]}, R.RMap{[R.RBulk{"name"}, R.RBulk{"pattern"}, R.RBulk{"type"}, R.RBulk{"pattern"}, R.RBulk{"key_spec_index"}, R.RInt{R.IPos{1n}}, R.RBulk{"token"}, R.RBulk{"GET"}, R.RBulk{"flags"}, R.RSet{[R.RStatus{"optional"}, R.RStatus{"multiple"}, R.RStatus{"multiple_token"}]}]}, R.RMap{[R.RBulk{"name"}, R.RBulk{"order"}, R.RBulk{"type"}, R.RBulk{"oneof"}, R.RBulk{"flags"}, R.RSet{[R.RStatus{"optional"}]}, R.RBulk{"arguments"}, R.RArray{[R.RMap{[R.RBulk{"name"}, R.RBulk{"asc"}, R.RBulk{"type"}, R.RBulk{"pure-token"}, R.RBulk{"token"}, R.RBulk{"ASC"}]}, R.RMap{[R.RBulk{"name"}, R.RBulk{"desc"}, R.RBulk{"type"}, R.RBulk{"pure-token"}, R.RBulk{"token"}, R.RBulk{"DESC"}]}]}]}, R.RMap{[R.RBulk{"name"}, R.RBulk{"sorting"}, R.RBulk{"type"}, R.RBulk{"pure-token"}, R.RBulk{"token"}, R.RBulk{"ALPHA"}, R.RBulk{"flags"}, R.RSet{[R.RStatus{"optional"}]}]}, R.RMap{[R.RBulk{"name"}, R.RBulk{"destination"}, R.RBulk{"type"}, R.RBulk{"key"}, R.RBulk{"key_spec_index"}, R.RInt{R.IPos{2n}}, R.RBulk{"token"}, R.RBulk{"STORE"}, R.RBulk{"flags"}, R.RSet{[R.RStatus{"optional"}]}]}]}]},
+  []}
+
+def cmd.sort_ro() -> Top:
+  Top{Desc{"sort_ro", R.INeg{1n}, ["read", "set", "sortedset", "list", "slow", "dangerous"], [], KBySortRo{}, False{},
+    [R.RBulk{"sort_ro"}, R.RInt{R.INeg{1n}}, R.RSet{[R.RStatus{"readonly"}, R.RStatus{"movablekeys"}]}, R.RInt{R.IPos{1n}}, R.RInt{R.IPos{1n}}, R.RInt{R.IPos{1n}}, R.RSet{[R.RStatus{"@read"}, R.RStatus{"@set"}, R.RStatus{"@sortedset"}, R.RStatus{"@list"}, R.RStatus{"@slow"}, R.RStatus{"@dangerous"}]}, R.RSet{[]}, R.RSet{[R.RMap{[R.RBulk{"flags"}, R.RSet{[R.RStatus{"RO"}, R.RStatus{"access"}]}, R.RBulk{"begin_search"}, R.RMap{[R.RBulk{"type"}, R.RBulk{"index"}, R.RBulk{"spec"}, R.RMap{[R.RBulk{"index"}, R.RInt{R.IPos{1n}}]}]}, R.RBulk{"find_keys"}, R.RMap{[R.RBulk{"type"}, R.RBulk{"range"}, R.RBulk{"spec"}, R.RMap{[R.RBulk{"lastkey"}, R.RInt{R.IPos{0n}}, R.RBulk{"keystep"}, R.RInt{R.IPos{1n}}, R.RBulk{"limit"}, R.RInt{R.IPos{0n}}]}]}]}, R.RMap{[R.RBulk{"notes"}, R.RBulk{"For the optional BY/GET keyword. It is marked 'unknown' because the key names derive from the content of the key we sort"}, R.RBulk{"flags"}, R.RSet{[R.RStatus{"RO"}, R.RStatus{"access"}]}, R.RBulk{"begin_search"}, R.RMap{[R.RBulk{"type"}, R.RBulk{"unknown"}, R.RBulk{"spec"}, R.RMap{[]}]}, R.RBulk{"find_keys"}, R.RMap{[R.RBulk{"type"}, R.RBulk{"unknown"}, R.RBulk{"spec"}, R.RMap{[]}]}]}]}],
+    [R.RBulk{"summary"}, R.RBulk{"Sort the elements in a list, set or sorted set. Read-only variant of SORT."}, R.RBulk{"since"}, R.RBulk{"7.0.0"}, R.RBulk{"group"}, R.RBulk{"generic"}, R.RBulk{"complexity"}, R.RBulk{"O(N+M*log(M)) where N is the number of elements in the list or set to sort, and M the number of returned elements. When the elements are not sorted, complexity is O(N)."}, R.RBulk{"arguments"}, R.RArray{[R.RMap{[R.RBulk{"name"}, R.RBulk{"key"}, R.RBulk{"type"}, R.RBulk{"key"}, R.RBulk{"key_spec_index"}, R.RInt{R.IPos{0n}}]}, R.RMap{[R.RBulk{"name"}, R.RBulk{"pattern"}, R.RBulk{"type"}, R.RBulk{"pattern"}, R.RBulk{"key_spec_index"}, R.RInt{R.IPos{1n}}, R.RBulk{"token"}, R.RBulk{"BY"}, R.RBulk{"flags"}, R.RSet{[R.RStatus{"optional"}]}]}, R.RMap{[R.RBulk{"name"}, R.RBulk{"offset_count"}, R.RBulk{"type"}, R.RBulk{"block"}, R.RBulk{"token"}, R.RBulk{"LIMIT"}, R.RBulk{"flags"}, R.RSet{[R.RStatus{"optional"}]}, R.RBulk{"arguments"}, R.RArray{[R.RMap{[R.RBulk{"name"}, R.RBulk{"offset"}, R.RBulk{"type"}, R.RBulk{"integer"}]}, R.RMap{[R.RBulk{"name"}, R.RBulk{"count"}, R.RBulk{"type"}, R.RBulk{"integer"}]}]}]}, R.RMap{[R.RBulk{"name"}, R.RBulk{"pattern"}, R.RBulk{"type"}, R.RBulk{"pattern"}, R.RBulk{"key_spec_index"}, R.RInt{R.IPos{1n}}, R.RBulk{"token"}, R.RBulk{"GET"}, R.RBulk{"flags"}, R.RSet{[R.RStatus{"optional"}, R.RStatus{"multiple"}, R.RStatus{"multiple_token"}]}]}, R.RMap{[R.RBulk{"name"}, R.RBulk{"order"}, R.RBulk{"type"}, R.RBulk{"oneof"}, R.RBulk{"flags"}, R.RSet{[R.RStatus{"optional"}]}, R.RBulk{"arguments"}, R.RArray{[R.RMap{[R.RBulk{"name"}, R.RBulk{"asc"}, R.RBulk{"type"}, R.RBulk{"pure-token"}, R.RBulk{"token"}, R.RBulk{"ASC"}]}, R.RMap{[R.RBulk{"name"}, R.RBulk{"desc"}, R.RBulk{"type"}, R.RBulk{"pure-token"}, R.RBulk{"token"}, R.RBulk{"DESC"}]}]}]}, R.RMap{[R.RBulk{"name"}, R.RBulk{"sorting"}, R.RBulk{"type"}, R.RBulk{"pure-token"}, R.RBulk{"token"}, R.RBulk{"ALPHA"}, R.RBulk{"flags"}, R.RSet{[R.RStatus{"optional"}]}]}]}]},
+  []}
+
 def cmd.spop() -> Top:
   Top{Desc{"spop", R.INeg{1n}, ["write", "set", "fast"], [KSpec{["RW", "access", "delete"], 1n, R.IPos{0n}, 1n, 0n}], KBySpecs{}, False{},
     [R.RBulk{"spop"}, R.RInt{R.INeg{1n}}, R.RSet{[R.RStatus{"write"}, R.RStatus{"fast"}]}, R.RInt{R.IPos{1n}}, R.RInt{R.IPos{1n}}, R.RInt{R.IPos{1n}}, R.RSet{[R.RStatus{"@write"}, R.RStatus{"@set"}, R.RStatus{"@fast"}]}, R.RSet{[R.RBulk{"nondeterministic_output"}]}, R.RSet{[R.RMap{[R.RBulk{"flags"}, R.RSet{[R.RStatus{"RW"}, R.RStatus{"access"}, R.RStatus{"delete"}]}, R.RBulk{"begin_search"}, R.RMap{[R.RBulk{"type"}, R.RBulk{"index"}, R.RBulk{"spec"}, R.RMap{[R.RBulk{"index"}, R.RInt{R.IPos{1n}}]}]}, R.RBulk{"find_keys"}, R.RMap{[R.RBulk{"type"}, R.RBulk{"range"}, R.RBulk{"spec"}, R.RMap{[R.RBulk{"lastkey"}, R.RInt{R.IPos{0n}}, R.RBulk{"keystep"}, R.RInt{R.IPos{1n}}, R.RBulk{"limit"}, R.RInt{R.IPos{0n}}]}]}]}]}],
@@ -1191,7 +1207,7 @@ def cmd.zunionstore() -> Top:
 
 # the commands, by name
 def table() -> List<&2, Top>:
-  [cmd.append(), cmd.auth(), cmd.bgrewriteaof(), cmd.bitcount(), cmd.bitfield(), cmd.bitfield_ro(), cmd.bitop(), cmd.bitpos(), cmd.blmove(), cmd.blmpop(), cmd.blpop(), cmd.brpop(), cmd.brpoplpush(), cmd.bzmpop(), cmd.bzpopmax(), cmd.bzpopmin(), cmd.client(), cmd.command(), cmd.config(), cmd.copy(), cmd.dbsize(), cmd.decr(), cmd.decrby(), cmd.del(), cmd.discard(), cmd.echo(), cmd.eval(), cmd.exec(), cmd.exists(), cmd.expire(), cmd.expireat(), cmd.expiretime(), cmd.flushall(), cmd.flushdb(), cmd.function(), cmd.get(), cmd.getbit(), cmd.getdel(), cmd.getex(), cmd.getrange(), cmd.getset(), cmd.hdel(), cmd.hello(), cmd.hexists(), cmd.hget(), cmd.hgetall(), cmd.hincrby(), cmd.hincrbyfloat(), cmd.hkeys(), cmd.hlen(), cmd.hmget(), cmd.hmset(), cmd.hrandfield(), cmd.hscan(), cmd.hset(), cmd.hsetnx(), cmd.hstrlen(), cmd.hvals(), cmd.incr(), cmd.incrby(), cmd.incrbyfloat(), cmd.info(), cmd.keys(), cmd.lcs(), cmd.lindex(), cmd.linsert(), cmd.llen(), cmd.lmove(), cmd.lmpop(), cmd.lpop(), cmd.lpos(), cmd.lpush(), cmd.lpushx(), cmd.lrange(), cmd.lrem(), cmd.lset(), cmd.ltrim(), cmd.memory(), cmd.mget(), cmd.monitor(), cmd.move(), cmd.mset(), cmd.msetnx(), cmd.multi(), cmd.object(), cmd.persist(), cmd.pexpire(), cmd.pexpireat(), cmd.pexpiretime(), cmd.ping(), cmd.psetex(), cmd.psubscribe(), cmd.pttl(), cmd.publish(), cmd.pubsub(), cmd.punsubscribe(), cmd.quit(), cmd.randomkey(), cmd.rename(), cmd.renamenx(), cmd.reset(), cmd.rpop(), cmd.rpoplpush(), cmd.rpush(), cmd.rpushx(), cmd.sadd(), cmd.scan(), cmd.scard(), cmd.sdiff(), cmd.sdiffstore(), cmd.select(), cmd.set(), cmd.setbit(), cmd.setex(), cmd.setnx(), cmd.setrange(), cmd.sinter(), cmd.sintercard(), cmd.sinterstore(), cmd.sismember(), cmd.smembers(), cmd.smismember(), cmd.smove(), cmd.spop(), cmd.spublish(), cmd.srandmember(), cmd.srem(), cmd.sscan(), cmd.ssubscribe(), cmd.strlen(), cmd.subscribe(), cmd.substr(), cmd.sunion(), cmd.sunionstore(), cmd.sunsubscribe(), cmd.swapdb(), cmd.time(), cmd.touch(), cmd.ttl(), cmd.type(), cmd.unlink(), cmd.unsubscribe(), cmd.unwatch(), cmd.watch(), cmd.zadd(), cmd.zcard(), cmd.zcount(), cmd.zdiff(), cmd.zdiffstore(), cmd.zincrby(), cmd.zinter(), cmd.zintercard(), cmd.zinterstore(), cmd.zlexcount(), cmd.zmpop(), cmd.zmscore(), cmd.zpopmax(), cmd.zpopmin(), cmd.zrandmember(), cmd.zrange(), cmd.zrangebylex(), cmd.zrangebyscore(), cmd.zrangestore(), cmd.zrank(), cmd.zrem(), cmd.zremrangebylex(), cmd.zremrangebyrank(), cmd.zremrangebyscore(), cmd.zrevrange(), cmd.zrevrangebylex(), cmd.zrevrangebyscore(), cmd.zrevrank(), cmd.zscan(), cmd.zscore(), cmd.zunion(), cmd.zunionstore()]
+  [cmd.append(), cmd.auth(), cmd.bgrewriteaof(), cmd.bitcount(), cmd.bitfield(), cmd.bitfield_ro(), cmd.bitop(), cmd.bitpos(), cmd.blmove(), cmd.blmpop(), cmd.blpop(), cmd.brpop(), cmd.brpoplpush(), cmd.bzmpop(), cmd.bzpopmax(), cmd.bzpopmin(), cmd.client(), cmd.command(), cmd.config(), cmd.copy(), cmd.dbsize(), cmd.decr(), cmd.decrby(), cmd.del(), cmd.discard(), cmd.echo(), cmd.eval(), cmd.exec(), cmd.exists(), cmd.expire(), cmd.expireat(), cmd.expiretime(), cmd.flushall(), cmd.flushdb(), cmd.function(), cmd.get(), cmd.getbit(), cmd.getdel(), cmd.getex(), cmd.getrange(), cmd.getset(), cmd.hdel(), cmd.hello(), cmd.hexists(), cmd.hget(), cmd.hgetall(), cmd.hincrby(), cmd.hincrbyfloat(), cmd.hkeys(), cmd.hlen(), cmd.hmget(), cmd.hmset(), cmd.hrandfield(), cmd.hscan(), cmd.hset(), cmd.hsetnx(), cmd.hstrlen(), cmd.hvals(), cmd.incr(), cmd.incrby(), cmd.incrbyfloat(), cmd.info(), cmd.keys(), cmd.lcs(), cmd.lindex(), cmd.linsert(), cmd.llen(), cmd.lmove(), cmd.lmpop(), cmd.lpop(), cmd.lpos(), cmd.lpush(), cmd.lpushx(), cmd.lrange(), cmd.lrem(), cmd.lset(), cmd.ltrim(), cmd.memory(), cmd.mget(), cmd.monitor(), cmd.move(), cmd.mset(), cmd.msetnx(), cmd.multi(), cmd.object(), cmd.persist(), cmd.pexpire(), cmd.pexpireat(), cmd.pexpiretime(), cmd.ping(), cmd.psetex(), cmd.psubscribe(), cmd.pttl(), cmd.publish(), cmd.pubsub(), cmd.punsubscribe(), cmd.quit(), cmd.randomkey(), cmd.rename(), cmd.renamenx(), cmd.reset(), cmd.rpop(), cmd.rpoplpush(), cmd.rpush(), cmd.rpushx(), cmd.sadd(), cmd.scan(), cmd.scard(), cmd.sdiff(), cmd.sdiffstore(), cmd.select(), cmd.set(), cmd.setbit(), cmd.setex(), cmd.setnx(), cmd.setrange(), cmd.sinter(), cmd.sintercard(), cmd.sinterstore(), cmd.sismember(), cmd.smembers(), cmd.smismember(), cmd.smove(), cmd.sort(), cmd.sort_ro(), cmd.spop(), cmd.spublish(), cmd.srandmember(), cmd.srem(), cmd.sscan(), cmd.ssubscribe(), cmd.strlen(), cmd.subscribe(), cmd.substr(), cmd.sunion(), cmd.sunionstore(), cmd.sunsubscribe(), cmd.swapdb(), cmd.time(), cmd.touch(), cmd.ttl(), cmd.type(), cmd.unlink(), cmd.unsubscribe(), cmd.unwatch(), cmd.watch(), cmd.zadd(), cmd.zcard(), cmd.zcount(), cmd.zdiff(), cmd.zdiffstore(), cmd.zincrby(), cmd.zinter(), cmd.zintercard(), cmd.zinterstore(), cmd.zlexcount(), cmd.zmpop(), cmd.zmscore(), cmd.zpopmax(), cmd.zpopmin(), cmd.zrandmember(), cmd.zrange(), cmd.zrangebylex(), cmd.zrangebyscore(), cmd.zrangestore(), cmd.zrank(), cmd.zrem(), cmd.zremrangebylex(), cmd.zremrangebyrank(), cmd.zremrangebyscore(), cmd.zrevrange(), cmd.zrevrangebylex(), cmd.zrevrangebyscore(), cmd.zrevrank(), cmd.zscan(), cmd.zscore(), cmd.zunion(), cmd.zunionstore()]
 
 # Redis's ACL categories (ACL CAT)
 def categories() -> List<&2, String>:
@@ -1766,6 +1782,41 @@ def zstore.keys(argv: List<&2, String>) -> List<&2, KeyAt>:
     case _:
       Nil{}
 
+# SORT's keys, as Redis's sortGetKeys finds them: the key (RO, access),
+# and the destination of the last STORE that has a word after it (OW,
+# update), passing over the words LIMIT, GET and BY take (and none after
+# STORE). A word of SORT's options to it: 2 LIMIT, 1 GET or BY, 3 STORE, 0
+# another
+def sort.kind(+w: String) -> Nat:
+  +up = String.to_upper(R.cstr(w))
+  Bool.pick(Nat, String.eq(up, "LIMIT"), 2n, Bool.pick(Nat, Bool.or(String.eq(up, "GET"), String.eq(up, "BY")), 1n, Bool.pick(Nat, String.eq(up, "STORE"), 3n, 0n)))
+
+# the words xs from index i on, k of them passed over first; st: the
+# index of STORE's destination so far
+def sort.dst(xs: List<&2, String>, +k: Nat, +i: Nat, st: Maybe<&2, Nat>) -> Maybe<&2, Nat>:
+  match xs k:
+    case Nil{} _:
+      st
+    case Con{x, rest} 1n+j:
+      sort.dst(rest, j, Nat.add(i, 1n), st)
+    case Con{+x, +rest} 0n:
+      +c = sort.kind(x)
+      sort.dst(rest, Bool.pick(Nat, Nat.is_eq(c, 3n), 0n, c), Nat.add(i, 1n), Bool.pick(Maybe<&2, Nat>, Bool.and(Nat.is_eq(c, 3n), Bool.not(List.is_empty(&2, String, rest))), Some{Nat.add(i, 1n)}, st))
+
+def sort.dst.at(m: Maybe<&2, Nat>) -> List<&2, KeyAt>:
+  match m:
+    case Some{i}:
+      [KeyAt{i, ["OW", "update"]}]
+    case None{}:
+      Nil{}
+
+def sort.keys(argv: List<&2, String>) -> List<&2, KeyAt>:
+  match argv:
+    case Con{c, Con{k, rest}}:
+      KeyAt{1n, ["RO", "access"]} <> sort.dst.at(sort.dst(rest, 0n, 2n, None{}))
+    case _:
+      Nil{}
+
 def keys.find(way: KWay, sps: List<&2, KSpec>, +argv: List<&2, String>) -> Maybe<&2, List<&2, KeyAt>>:
   match way:
     case KBySpecs{}:
@@ -1784,6 +1835,10 @@ def keys.find(way: KWay, sps: List<&2, KSpec>, +argv: List<&2, String>) -> Maybe
       Some{zstore.keys(argv)}
     case KByBlmpop{}:
       Some{blmpop.keys(argv)}
+    case KBySort{}:
+      Some{sort.keys(argv)}
+    case KBySortRo{}:
+      Some{[KeyAt{1n, ["RO", "access"]}]}
 
 def keys.has.specs(sps: List<&2, KSpec>) -> Bool:
   match sps:
@@ -1808,6 +1863,10 @@ def keys.has(+way: KWay, sps: List<&2, KSpec>) -> Bool:
     case KByZstore{}:
       True{}
     case KByBlmpop{}:
+      True{}
+    case KBySort{}:
+      True{}
+    case KBySortRo{}:
       True{}
     case KBySpecs{}:
       keys.has.specs(sps)

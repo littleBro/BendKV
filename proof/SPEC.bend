@@ -427,6 +427,9 @@ def exec(cmd: R.Cmd, db: KV.Trie<KV.Val>, +now: Nat) -> R.Reply & KV.Trie<KV.Val
       zrangestore(db, d, s, q, now)
     case R.ZMPop{ks, +max, c}:
       zmpop(db, ks, max, c, now)
+    case R.Sort{+k, o}:
+      +d = db
+      (R.sort.reply(R.sort.run(d, now, k, o, False{})), d)
 
 # a batch's replies, and the trie after it
 def replies(r: List<&2, R.Reply> & KV.Trie<KV.Val>) -> List<&2, R.Reply>:

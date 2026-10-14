@@ -19523,6 +19523,672 @@
     }
    ]
   },
+  "sort": {
+   "docs": {
+    "%": [
+     "summary",
+     "Sort the elements in a list, set or sorted set",
+     "since",
+     "1.0.0",
+     "group",
+     "generic",
+     "complexity",
+     "O(N+M*log(M)) where N is the number of elements in the list or set to sort, and M the number of returned elements. When the elements are not sorted, complexity is O(N).",
+     "arguments",
+     [
+      {
+       "%": [
+        "name",
+        "key",
+        "type",
+        "key",
+        "key_spec_index",
+        0
+       ]
+      },
+      {
+       "%": [
+        "name",
+        "pattern",
+        "type",
+        "pattern",
+        "key_spec_index",
+        1,
+        "token",
+        "BY",
+        "flags",
+        {
+         "~": [
+          {
+           "+": "optional"
+          }
+         ]
+        }
+       ]
+      },
+      {
+       "%": [
+        "name",
+        "offset_count",
+        "type",
+        "block",
+        "token",
+        "LIMIT",
+        "flags",
+        {
+         "~": [
+          {
+           "+": "optional"
+          }
+         ]
+        },
+        "arguments",
+        [
+         {
+          "%": [
+           "name",
+           "offset",
+           "type",
+           "integer"
+          ]
+         },
+         {
+          "%": [
+           "name",
+           "count",
+           "type",
+           "integer"
+          ]
+         }
+        ]
+       ]
+      },
+      {
+       "%": [
+        "name",
+        "pattern",
+        "type",
+        "pattern",
+        "key_spec_index",
+        1,
+        "token",
+        "GET",
+        "flags",
+        {
+         "~": [
+          {
+           "+": "optional"
+          },
+          {
+           "+": "multiple"
+          },
+          {
+           "+": "multiple_token"
+          }
+         ]
+        }
+       ]
+      },
+      {
+       "%": [
+        "name",
+        "order",
+        "type",
+        "oneof",
+        "flags",
+        {
+         "~": [
+          {
+           "+": "optional"
+          }
+         ]
+        },
+        "arguments",
+        [
+         {
+          "%": [
+           "name",
+           "asc",
+           "type",
+           "pure-token",
+           "token",
+           "ASC"
+          ]
+         },
+         {
+          "%": [
+           "name",
+           "desc",
+           "type",
+           "pure-token",
+           "token",
+           "DESC"
+          ]
+         }
+        ]
+       ]
+      },
+      {
+       "%": [
+        "name",
+        "sorting",
+        "type",
+        "pure-token",
+        "token",
+        "ALPHA",
+        "flags",
+        {
+         "~": [
+          {
+           "+": "optional"
+          }
+         ]
+        }
+       ]
+      },
+      {
+       "%": [
+        "name",
+        "destination",
+        "type",
+        "key",
+        "key_spec_index",
+        2,
+        "token",
+        "STORE",
+        "flags",
+        {
+         "~": [
+          {
+           "+": "optional"
+          }
+         ]
+        }
+       ]
+      }
+     ]
+    ]
+   },
+   "info": [
+    "sort",
+    -2,
+    {
+     "~": [
+      {
+       "+": "write"
+      },
+      {
+       "+": "denyoom"
+      },
+      {
+       "+": "movablekeys"
+      }
+     ]
+    },
+    1,
+    1,
+    1,
+    {
+     "~": [
+      {
+       "+": "@write"
+      },
+      {
+       "+": "@set"
+      },
+      {
+       "+": "@sortedset"
+      },
+      {
+       "+": "@list"
+      },
+      {
+       "+": "@slow"
+      },
+      {
+       "+": "@dangerous"
+      }
+     ]
+    },
+    {
+     "~": []
+    },
+    {
+     "~": [
+      {
+       "%": [
+        "flags",
+        {
+         "~": [
+          {
+           "+": "RO"
+          },
+          {
+           "+": "access"
+          }
+         ]
+        },
+        "begin_search",
+        {
+         "%": [
+          "type",
+          "index",
+          "spec",
+          {
+           "%": [
+            "index",
+            1
+           ]
+          }
+         ]
+        },
+        "find_keys",
+        {
+         "%": [
+          "type",
+          "range",
+          "spec",
+          {
+           "%": [
+            "lastkey",
+            0,
+            "keystep",
+            1,
+            "limit",
+            0
+           ]
+          }
+         ]
+        }
+       ]
+      },
+      {
+       "%": [
+        "notes",
+        "For the optional BY/GET keyword. It is marked 'unknown' because the key names derive from the content of the key we sort",
+        "flags",
+        {
+         "~": [
+          {
+           "+": "RO"
+          },
+          {
+           "+": "access"
+          }
+         ]
+        },
+        "begin_search",
+        {
+         "%": [
+          "type",
+          "unknown",
+          "spec",
+          {
+           "%": []
+          }
+         ]
+        },
+        "find_keys",
+        {
+         "%": [
+          "type",
+          "unknown",
+          "spec",
+          {
+           "%": []
+          }
+         ]
+        }
+       ]
+      },
+      {
+       "%": [
+        "notes",
+        "For the optional STORE keyword. It is marked 'unknown' because the keyword can appear anywhere in the argument array",
+        "flags",
+        {
+         "~": [
+          {
+           "+": "OW"
+          },
+          {
+           "+": "update"
+          }
+         ]
+        },
+        "begin_search",
+        {
+         "%": [
+          "type",
+          "unknown",
+          "spec",
+          {
+           "%": []
+          }
+         ]
+        },
+        "find_keys",
+        {
+         "%": [
+          "type",
+          "unknown",
+          "spec",
+          {
+           "%": []
+          }
+         ]
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "~": []
+    }
+   ]
+  },
+  "sort_ro": {
+   "docs": {
+    "%": [
+     "summary",
+     "Sort the elements in a list, set or sorted set. Read-only variant of SORT.",
+     "since",
+     "7.0.0",
+     "group",
+     "generic",
+     "complexity",
+     "O(N+M*log(M)) where N is the number of elements in the list or set to sort, and M the number of returned elements. When the elements are not sorted, complexity is O(N).",
+     "arguments",
+     [
+      {
+       "%": [
+        "name",
+        "key",
+        "type",
+        "key",
+        "key_spec_index",
+        0
+       ]
+      },
+      {
+       "%": [
+        "name",
+        "pattern",
+        "type",
+        "pattern",
+        "key_spec_index",
+        1,
+        "token",
+        "BY",
+        "flags",
+        {
+         "~": [
+          {
+           "+": "optional"
+          }
+         ]
+        }
+       ]
+      },
+      {
+       "%": [
+        "name",
+        "offset_count",
+        "type",
+        "block",
+        "token",
+        "LIMIT",
+        "flags",
+        {
+         "~": [
+          {
+           "+": "optional"
+          }
+         ]
+        },
+        "arguments",
+        [
+         {
+          "%": [
+           "name",
+           "offset",
+           "type",
+           "integer"
+          ]
+         },
+         {
+          "%": [
+           "name",
+           "count",
+           "type",
+           "integer"
+          ]
+         }
+        ]
+       ]
+      },
+      {
+       "%": [
+        "name",
+        "pattern",
+        "type",
+        "pattern",
+        "key_spec_index",
+        1,
+        "token",
+        "GET",
+        "flags",
+        {
+         "~": [
+          {
+           "+": "optional"
+          },
+          {
+           "+": "multiple"
+          },
+          {
+           "+": "multiple_token"
+          }
+         ]
+        }
+       ]
+      },
+      {
+       "%": [
+        "name",
+        "order",
+        "type",
+        "oneof",
+        "flags",
+        {
+         "~": [
+          {
+           "+": "optional"
+          }
+         ]
+        },
+        "arguments",
+        [
+         {
+          "%": [
+           "name",
+           "asc",
+           "type",
+           "pure-token",
+           "token",
+           "ASC"
+          ]
+         },
+         {
+          "%": [
+           "name",
+           "desc",
+           "type",
+           "pure-token",
+           "token",
+           "DESC"
+          ]
+         }
+        ]
+       ]
+      },
+      {
+       "%": [
+        "name",
+        "sorting",
+        "type",
+        "pure-token",
+        "token",
+        "ALPHA",
+        "flags",
+        {
+         "~": [
+          {
+           "+": "optional"
+          }
+         ]
+        }
+       ]
+      }
+     ]
+    ]
+   },
+   "info": [
+    "sort_ro",
+    -2,
+    {
+     "~": [
+      {
+       "+": "readonly"
+      },
+      {
+       "+": "movablekeys"
+      }
+     ]
+    },
+    1,
+    1,
+    1,
+    {
+     "~": [
+      {
+       "+": "@read"
+      },
+      {
+       "+": "@set"
+      },
+      {
+       "+": "@sortedset"
+      },
+      {
+       "+": "@list"
+      },
+      {
+       "+": "@slow"
+      },
+      {
+       "+": "@dangerous"
+      }
+     ]
+    },
+    {
+     "~": []
+    },
+    {
+     "~": [
+      {
+       "%": [
+        "flags",
+        {
+         "~": [
+          {
+           "+": "RO"
+          },
+          {
+           "+": "access"
+          }
+         ]
+        },
+        "begin_search",
+        {
+         "%": [
+          "type",
+          "index",
+          "spec",
+          {
+           "%": [
+            "index",
+            1
+           ]
+          }
+         ]
+        },
+        "find_keys",
+        {
+         "%": [
+          "type",
+          "range",
+          "spec",
+          {
+           "%": [
+            "lastkey",
+            0,
+            "keystep",
+            1,
+            "limit",
+            0
+           ]
+          }
+         ]
+        }
+       ]
+      },
+      {
+       "%": [
+        "notes",
+        "For the optional BY/GET keyword. It is marked 'unknown' because the key names derive from the content of the key we sort",
+        "flags",
+        {
+         "~": [
+          {
+           "+": "RO"
+          },
+          {
+           "+": "access"
+          }
+         ]
+        },
+        "begin_search",
+        {
+         "%": [
+          "type",
+          "unknown",
+          "spec",
+          {
+           "%": []
+          }
+         ]
+        },
+        "find_keys",
+        {
+         "%": [
+          "type",
+          "unknown",
+          "spec",
+          {
+           "%": []
+          }
+         ]
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "~": []
+    }
+   ]
+  },
   "spop": {
    "docs": {
     "%": [
