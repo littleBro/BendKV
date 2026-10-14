@@ -329,10 +329,10 @@ Where performance and proof meet: **batched execution under proved laws.**
    nodes a walk of a tree reads when the walk's caller owns the tree and the keyspace
    shares it (Bend patch 31, section 3zza): KEYS, SCAN, RANDOMKEY and the ranges of a
    sorted set borrow their trees now, and so do the reads of a key's entry (section
-   3zzc), so a read of a collection costs a GET and the read. A write of a collection
-   still copies the path it changes and drops the old one's, as the keyspace holds the
-   old version meanwhile: an update in place (take the value out, change it, put it
-   back) would save both.
+   3zzc), so a read of a collection costs a GET and the read. HSET takes its hash out of
+   the keyspace and changes it in place (section 3zzd); the other writes of a collection
+   still copy the path they change and drop the old one's, and each needs a proved test
+   that it changes its collection before it can take it.
 
 After that comes proving the native strings (section 5, step 1): a small piece of
 work that makes the word "verified" much stronger.

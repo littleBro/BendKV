@@ -482,12 +482,32 @@ def block_del():
                     f"      del_tip(V, 1n+p, {K[i]}, h1, k, x2, h2)"]
     return out
 
+def block_twice():
+    hb = "hb: @b: KV.Trie<V> -> {KV.bapply(V, o2, KV.bapply(V, o1, b)) == KV.bapply(V, o2, b) : KV.Trie<V>}"
+    out = ["# two writes along the same walk, where the second written over the",
+           "# first is as the second alone on a bucket (hb): as the second alone",
+           f"def tmod_twice(-V: Data, d: Nat, +t: KV.Trie<V>, x: KV.Hex, +h: U32, +o1: KV.Op<V>, +o2: KV.Op<V>, {hb}) -> {{KV.tmod_h(V, d, KV.tmod_h(V, d, t, x, h, o1), x, h, o2) == KV.tmod_h(V, d, t, x, h, o2) : KV.Trie<V>}}:",
+           "  match d t x:",
+           "    case 0n t0 _:",
+           "      hb(t0)"]
+    def step(i, c, around):
+        a = f"KV.tmod_h(V, p, KV.tmod_h(V, p, {c}, {nxt('h')}, o1), {nxt('h')}, o2)"
+        b = f"KV.tmod_h(V, p, {c}, {nxt('h')}, o2)"
+        return (f"      Equal.cong(KV.Trie<V>, KV.Trie<V>, z => {kv_node(with_at(around, i, 'z'))}, {a}, {b}, "
+                f"tmod_twice(V, p, {c}, {nxt('h')}, o1, o2, hb))")
+    for i in range(N):
+        out += [f"    case 1n++p {kv_node(cs)} {K[i]}:", step(i, cs[i], cs)]
+    for pat in ["KV.Tip{}", "KV.Ent{a, b, e, c}"]:
+        for i in range(N):
+            out += [f"    case 1n++p {pat} {K[i]}:", step(i, "KV.Tip{}", kv_tips())]
+    return out
+
 BLOCKS = {"src/map.bend": {"types": block_types, "hex": block_hex,
                        "walks": block_walks, "folds": block_folds, "scan": block_scan},
           "proof/PROOF.bend": {"digits": block_digits, "tget_k": block_tget_k, "tget_kx": block_tget_kx,
                          "tget_ke": block_tget_ke, "tget_kl": block_tget_kl, "tget_kc": block_tget_kc,
                          "same": block_same, "walk_same": block_walk_same,
-                         "other": block_other, "del": block_del}}
+                         "other": block_other, "del": block_del, "twice": block_twice}}
 
 def fill(path, blocks, check):
     text = path.read_text()

@@ -4235,6 +4235,37 @@ costs a GET and the read of the collection now. A write still copies the path of
 collection it changes and drops the old one's, since the keyspace holds the old version
 while the command makes the new one: the update in place of section 3zm is what is left.
 
+## 3zzd. HSET in place: the hash taken out of the keyspace
+
+**What was left** (section 3zzc). A write of a collection made the new version while the
+keyspace held the old one, so it copied the path it changed and the keyspace dropped the
+old path after: of HSET's 28,412 instructions on a hash of 100,000 fields, 5,290 went to
+the drop and 2,652 to the copies.
+
+**The change.** An HSET of pairs to a key that holds a hash at now (`R.upd.takes`) takes
+the hash out of the keyspace first: it writes a hole in the key's place, the write
+changes the hash, held once, in place, and the change writes the new hash over the hole.
+The update reads its entry's code before it gives the entry to `ent.live`, and
+`KV.hash.put` and `hset.go` read whether a field is there before they write it: in a
+node built of both the compiler ran the write first and held the trie for the read after
+it, which made the write copy the path anyway. Only HSET takes its value: a write that
+may leave its collection as it was answers CKeep and drops the collection it was given,
+which a collection out of the keyspace cannot afford.
+
+**The proofs.** An update reads as the change made where its key's entry lies, taken out
+or not (`db_upd_unfold`, `run_upd_unfold`), since a change that writes its key's value
+over writes the same trie over the hole as over the value (`upd_put_take`: a write after
+a keep of the same key is as the write alone, through `tmod_twice`, which
+`tools/gen_trie.py` writes, and two lemmas of a bucket), and an HSET of pairs to a hash
+writes its value over (`takes_over`). The proofs that unfolded the update rewrite
+through `db_upd_unfold` (thirteen places).
+
+**What it gives** (`tools/colls.sh`): HSET of a field there 21,178 instructions (28,412,
+−25%), of a new field 21,311 (27,818, −23%); the other commands as before. A prototype
+that took every write's value, with no care for the writes that leave their collection
+as it was, put SADD at −25%, ZADD at −28% and ZINCRBY at −34%: each needs a test before
+the take that the write changes the collection, and its proof.
+
 ## 4. Where a request's time goes, and hiding the memory waits
 
 With the eight patches, BendKV ran fewer instructions on GET and SET than Redis, missed

@@ -169,14 +169,27 @@ def run.out(r: R.Reply & R.Db, es: List<&2, R.Cmd>) -> R.Reply & (List<&2, R.Cmd
   (x, db) = r
   (x, (es, db))
 
+# an update of k from the code c of k's entry and the entry there at now
+# (lm), its value taken out of the keyspace while it changes as
+# R.db.upd.go takes it
+def run.upd.go(take: Bool, t: KV.Trie<KV.Val>, +k: String, +h: U32, +n: Nat, +x: Nat, +now: Nat, rr: Maybe<&2, R.Db>, op: R.UpdOp, +c: Nat, lm: Maybe<&2, KV.Item<KV.Val>>) -> R.Reply & (List<&2, R.Cmd> & R.Db):
+  match take:
+    case True{}:
+      u = KV.keep.at(KV.Val, t, k, R.upd.hole(), h)
+      +o = R.upd.v(op, now, lm)
+      run.out(R.upd.put(u, k, h, n, x, now, rr, c, o), upd.effect(k, c, o))
+    case False{}:
+      +o = R.upd.v(op, now, lm)
+      run.out(R.upd.put(t, k, h, n, x, now, rr, c, o), upd.effect(k, c, o))
+
 def run.upd(db: R.Db, +k: String, +op: R.UpdOp) -> R.Reply & (List<&2, R.Cmd> & R.Db):
   match db:
-    case R.Db{t, +n, +x, +now, rr}:
-      +u = t
+    case R.Db{+t, +n, +x, +now, rr}:
       +h = KV.hash(k)
-      +m = KV.entry.at(KV.Val, u, k, h)
-      +o = R.upd.v(op, now, R.ent.live(now, m))
-      run.out(R.upd.put(u, k, h, n, x, now, rr, R.ent.code(m), o), upd.effect(k, R.ent.code(m), o))
+      +m = KV.entry.at(KV.Val, t, k, h)
+      +c = R.ent.code(m)
+      +lm = R.ent.live(now, m)
+      run.upd.go(R.upd.takes(op, lm), t, k, h, n, x, now, rr, op, c, lm)
 
 def run.put(c: R.Cmd, r: R.Reply & R.Db) -> R.Reply & (List<&2, R.Cmd> & R.Db):
   (x, db) = r
