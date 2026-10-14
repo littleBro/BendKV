@@ -1,6 +1,6 @@
 # Patches to Bend
 
-Thirty-one patches to the Bend compiler (`bendlang/bend` @ `1cce499`, Bend 2.0.35).
+Thirty-two patches to the Bend compiler (`bendlang/bend` @ `1cce499`, Bend 2.0.35).
 They apply in order, each on top of the one before:
 
 1. **`lazy-seal.patch`** — lazy sealing of reference counts: `bend2/comp.ts`, +46/−3.
@@ -398,17 +398,38 @@ They apply in order, each on top of the one before:
    gives the same keys; a rebuilt (mirrored) tree and one made for the call give theirs
    too. Bend's tests on the C lane pass with it as they pass without it, test by test
    (739 of 870), and the new one with them.
+32. **`string-variant.patch`** — a value that is a string or else something else keeps
+   its string as the string itself, with no node: what BendKV's values stand on
+   (`KV.Val`: `VStr{s}` or `VColl{c}`), whose string lay in the keyspace behind a node
+   of its own. A datatype with one constructor whose one field is a `String`
+   (`str_var`) boxes that constructor as the String's own term. A box is how a value
+   lies in a field of a generic datatype (a trie's entry) or of a recursive one, and a
+   box of such a datatype that is no node or packed word of its other constructors
+   (`term_is`: the tag of a node or of a packed word, and the constructor's id) is that
+   String: no String is a constructor's node or packed word (a chunk has a constructor
+   id of its own, the empty String is `SNil`'s packed word, and blobs, immediates and
+   views have other tags). Building the constructor where a box goes, boxing a flat
+   value, unboxing a box and matching a box take the String for the box; a match tests
+   the other constructors first, so the String's arm is its chain's else. Main's printer
+   finds the variant in its descriptor. Only on the C lane of a program whose Strings
+   are packed (no GPU calls). `bend2/comp.ts` (+96/−14) and the test
+   `tests/rfc/str_variant.bend`, on C and on JS: values of a datatype with a String
+   variant, two packed words and a node, with empty, immediate, one-chunk and
+   several-chunk strings, in a list, matched owned and lent, unboxed into a record and
+   back, and a recursive datatype with a String variant matched as a box, all printed
+   by main. Bend's tests on the C lane pass with it as they pass without it, test by
+   test (740 of 871), and the new one with them.
 
 What the patches do and what they give is worked through in
 [../PERFORMANCE.md](../docs/PERFORMANCE.md), sections 3–6, 7.7–7.17, 7.23–7.25, 16, 39,
-40, 41, 44, 47, 48 and 51, and what each costs in tokens and what it gave, in section 12.
+40, 41, 44, 47, 48, 51 and 56, and what each costs in tokens and what it gave, in section 12.
 There, and in the sections before 14, the patches are numbered the old way: the sixteenth was
 `effect-pairs.patch` (`Chan.call` and `TCP.post_recv_raw`, one step of the event loop
 each where there had been two), and their 17–20 are today's 16–19. The sixteenth, and
 `TCP.post_list` of the eleventh, were taken out together with the paths of BendKV they
 served (section 14); they remain in the branch
 [`archive/shards`](https://github.com/littleBro/BendKV/tree/archive/shards). With the
-patches `comp.ts` takes 103,088 `ttok` tokens against the Bend repository's cap of 64
+patches `comp.ts` takes 104,155 `ttok` tokens against the Bend repository's cap of 64
 thousand (the original takes 62,940): to upstream them, they will have to be made
 smaller.
 
@@ -416,7 +437,7 @@ From the `bendkv/` directory:
 
 ```bash
 git clone https://github.com/bendlang/bend ../bend-patched
-sh bend-patches/apply.sh ../bend-patched   # the bendkv-patches branch from 1cce499 with thirty-one patches
+sh bend-patches/apply.sh ../bend-patched   # the bendkv-patches branch from 1cce499 with thirty-two patches
 bun ../bend-patched/bend2/main.ts server.bend -o build/bendkv
 ```
 
@@ -439,9 +460,10 @@ twenty-fifth only adds the effects `TCP.watch` and `TCP.unwatch`, and the twenty
 fixes the fifth where the fifth acts, the twenty-seventh only adds the effects
 `TCP.name` and `TCP.kill` and the channel marks `Chan.mark` and `Chan.marked`, the
 twenty-eighth the effects `File.rename` and `File.unlink`, the twenty-ninth the effect
-`IO.heap`, the thirtieth the words `Mem.touch` and `Mem.cell`, and the thirty-first
+`IO.heap`, the thirtieth the words `Mem.touch` and `Mem.cell`, the thirty-first
 changes how a tail call gives a tree its caller owns to a walker that reads it, in
-every program.
+every program, and the thirty-second boxes a datatype's String variant as the String
+itself, in a program without GPU calls.
 The theory does not change:
 `String` in the proofs is still a list, and `IO` a function of `R` and `k`.
 

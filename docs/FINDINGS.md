@@ -128,7 +128,7 @@ represented data:
   reader an owner of the whole value: O(depth) reference-count operations per read.
 - **A deep trie.** The first map was a binary trie of 20 levels: 20 dependent loads.
 
-## 3. Thirty-one patches to the Bend compiler
+## 3. Thirty-two patches to the Bend compiler
 
 All live in [`bend-patches/`](../bend-patches/) (against `bendlang/bend` at `1cce499`,
 Bend 2.0.35). The first eight switch on by themselves for programs without GPU calls;
@@ -149,8 +149,10 @@ the twenty-sixth fixes the fifth where a field of the node it keeps across a cal
 shared before the call (section 3zp); the twenty-seventh adds a socket's addresses,
 killing it and channel marks (section 3zs); the twenty-eighth `File.rename` and
 `File.unlink` (section 3zv); the twenty-ninth the heap's account and the thirtieth
-words outside the heap (section 3zw); and the thirty-first has a walker that reads a
-tree borrow it from a caller that owns it, in every program (section 3zza).
+words outside the heap (section 3zw); the thirty-first has a walker that reads a
+tree borrow it from a caller that owns it, in every program (section 3zza); and the
+thirty-second keeps the string of a value that is a string or else something else as
+the string itself, with no node, in every program without GPU calls (section 3zzg).
 The sections before 3l
 number the patches as they were then: patch 16 was effect pairs, taken out in 3l with
 `TCP.post_list` of patch 11, and their patches 17–20 are today's 16–19. None changes the
@@ -191,6 +193,7 @@ to agree with the list definition, and `IO` is still a function of `R` and `k`.
 | heap (29th) | `IO.heap` gives what the heap's live values hold and what it has taken, in bytes | `used_memory` and eviction by `maxmemory` (section 3zw) |
 | mem cells (30th) | `Mem.touch` and `Mem.cell`: 2^20 words outside the heap that one computation writes and reads | when each key was last used, for LRU and LFU eviction and OBJECT IDLETIME and FREQ (section 3zw) |
 | walk lend (31st) | a tail call that gives a walker that reads a tree (it calls itself, takes a tree, builds none of its nodes) a value its caller owns, at its last use, holds the value and drops it after the call, so the walker borrows the tree instead of copying each shared node it reads | KEYS 29% fewer instructions a key, RANDOMKEY 28%, ZRANGE of 10 of 100,000 18% (section 3zza) |
+| string variant (32nd) | a datatype with one constructor whose one field is a `String` boxes that constructor as the String itself, told from the other constructors by its tag | a string value takes no node: at a million keys 24% fewer last-level misses per GET, 32% per INCR; SET ×1.08, INCR ×1.03; one word less per key (section 3zzg) |
 
 The ratios in the last column come from different series and drift by ±0.06–0.08
 between series; PERFORMANCE.md gives each one with its pairs.
@@ -200,7 +203,7 @@ slower than lists on one thread and 1.7 times on four: short strings built and t
 apart character by character are their worst case. The other 16 runtime benchmarks
 do not change (geometric mean ×0.99). Huge pages add about 0.4 ms to the start of a
 short program and 0.4–0.9 s of kernel time to programs whose heaps reach hundreds of
-megabytes. The patches grow `bend2/comp.ts` from 62,940 to 101,287 tokens, over the
+megabytes. The patches grow `bend2/comp.ts` from 62,940 to 104,155 tokens, over the
 repository's 64,000 cap, so upstreaming them means making them smaller first. With all
 sixteen, the C lane of Bend's own test suite passes exactly the tests it passes with
 thirteen, plus the three new ones; with nineteen, its C and JS lanes pass exactly the
@@ -2350,7 +2353,8 @@ drops the old one. Memory: a million keys with 3-byte values take 64 bytes each 
 56 (`VmRSS`), 8 more, one word. The way back is in the compiler, not in BendKV: a type
 whose one variant holds a String and whose other variants are constructors could keep
 that variant as the String's own word (a string's tag is not a constructor's), with no
-node and no proof touched. It is on the list for after the types.
+node and no proof touched. It is on the list for after the types. (Done: patch 32,
+section 3zzg.)
 
 ## 3zg. Hashes
 
@@ -4330,6 +4334,25 @@ both. They go up in four steps:
 No code changed: the counts were right. The proofs add 198 lemmas, about 940 lines by
 hand and 760 written by the script, not counting comments and blank lines. `make check`
 takes 13.6 s (11.3 s before), `make verdict` 63 s (57 s).
+
+## 3zzg. Strings in the keyspace without a node of their own
+
+**What was left** (section 3zf). A value is a string or a collection (`KV.Val`), and in
+the keyspace a string lay behind a node of its own, `VStr`: the trie is generic in its
+values, so its entries hold them boxed, and the box of a constructor was a node. Every
+string value cost a node: an allocation on SET, a read on GET, a miss of its own in a
+large keyspace, and a word of memory.
+
+**The change** is in the compiler (patch 32): a datatype with one constructor whose one
+field is a `String` boxes that constructor as the String itself, and tells the box from
+the other constructors' by its tag (a node or a packed word of one of them is theirs;
+no String is). No line of BendKV changed, nor of its proofs, which never saw the node.
+
+**What it gives** (section 56 of PERFORMANCE.md): at a million keys, 24% fewer
+last-level misses per GET (5.49 → 4.18), 19% per SET and 32% per INCR; 4.3% and 3.7%
+fewer instructions per SET and INCR; one word less per key (about 981,000 keys of 3
+bytes: 63.96 → 56.09 MB); in time, SET ×1.08 and INCR ×1.03, GET as before. Bend's own
+tests pass with the patch as without it, test by test.
 
 ## 4. Where a request's time goes, and hiding the memory waits
 
