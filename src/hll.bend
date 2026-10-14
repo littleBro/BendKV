@@ -273,14 +273,6 @@ def ws.onto(rev: List<&2, U32>, rest: List<&2, U32>) -> List<&2, U32>:
     case Con{+x, r}:
       ws.onto(r, x <> rest)
 
-# whether a's first word is 0 (or a has none)
-def ws.z(+a: List<&2, U32>) -> Bool:
-  match a:
-    case Con{+x, r}:
-      U32.is_eq(x, 0)
-    case Nil{}:
-      True{}
-
 # a with its first word's bytes at least those of y
 def ws.lane(a: List<&2, U32>, +y: U32) -> List<&2, U32>:
   match a:
@@ -575,23 +567,105 @@ def d.words.c(k: Nat, +c: String, +i: Nat, done: List<&2, U32>) -> List<&2, U32>
       +x2 = String.code_at(c, Nat.add(i, 2n))
       d.words.c(q, c, Nat.add(i, 3n), w4.of(d.r0(x0), d.r1(x0, x1), d.r2(x1, x2), d.r3(x2)) <> done)
 
-# the registers of the dense bytes s, from byte j on (k pieces), as
-# words after done (the last first)
-def d.words.go(k: Nat, +s: String, +j: Nat, done: List<&2, U32>) -> List<&2, U32>:
+# the four registers of the block of three bytes at i of c, as a word
+def d.word(+c: String, +i: Nat) -> U32:
+  +x0 = String.code_at(c, i)
+  +x1 = String.code_at(c, Nat.add(i, 1n))
+  +x2 = String.code_at(c, Nat.add(i, 2n))
+  w4.of(d.r0(x0), d.r1(x0, x1), d.r2(x1, x2), d.r3(x2))
+
+# the histogram of the registers of the dense bytes of the piece c, left
+# blocks of three from byte i, as hist.ws counts the registers of words
+def hist.dn(k: Nat, at: Nat, g: Nat, +d: U32, n: Nat, +c: String, +i: Nat, +w: U32, +left: Nat, +h0: U32, +h1: U32, +h2: U32, +h3: U32, +h4: U32, +h5: U32, +h6: U32, +h7: U32, +h8: U32, +h9: U32, +h10: U32, +h11: U32, +h12: U32, +h13: U32, +h14: U32, +h15: U32, +h16: U32, +h17: U32, +h18: U32, +h19: U32, +h20: U32, +h21: U32, +h22: U32, +h23: U32, +h24: U32, +h25: U32) -> Hist:
   match k:
     case 0n:
-      ws.onto(done, Nil{})
+      Hist{h0, h1, h2, h3, h4, h5, h6, h7, h8, h9, h10, h11, h12, h13, h14, h15, h16, h17, h18, h19, h20, h21, h22, h23, h24, h25}
+    case 1n+q:
+      match at:
+        case 0n:
+          match g:
+            case 0n:
+              hist.dn(q, 1n, 0n, d, n, c, i, w, left, U32.add(h0, d), h1, h2, h3, h4, h5, h6, h7, h8, h9, h10, h11, h12, h13, h14, h15, h16, h17, h18, h19, h20, h21, h22, h23, h24, h25)
+            case 1n:
+              hist.dn(q, 1n, 0n, d, n, c, i, w, left, h0, U32.add(h1, d), h2, h3, h4, h5, h6, h7, h8, h9, h10, h11, h12, h13, h14, h15, h16, h17, h18, h19, h20, h21, h22, h23, h24, h25)
+            case 2n:
+              hist.dn(q, 1n, 0n, d, n, c, i, w, left, h0, h1, U32.add(h2, d), h3, h4, h5, h6, h7, h8, h9, h10, h11, h12, h13, h14, h15, h16, h17, h18, h19, h20, h21, h22, h23, h24, h25)
+            case 3n:
+              hist.dn(q, 1n, 0n, d, n, c, i, w, left, h0, h1, h2, U32.add(h3, d), h4, h5, h6, h7, h8, h9, h10, h11, h12, h13, h14, h15, h16, h17, h18, h19, h20, h21, h22, h23, h24, h25)
+            case 4n:
+              hist.dn(q, 1n, 0n, d, n, c, i, w, left, h0, h1, h2, h3, U32.add(h4, d), h5, h6, h7, h8, h9, h10, h11, h12, h13, h14, h15, h16, h17, h18, h19, h20, h21, h22, h23, h24, h25)
+            case 5n:
+              hist.dn(q, 1n, 0n, d, n, c, i, w, left, h0, h1, h2, h3, h4, U32.add(h5, d), h6, h7, h8, h9, h10, h11, h12, h13, h14, h15, h16, h17, h18, h19, h20, h21, h22, h23, h24, h25)
+            case 6n:
+              hist.dn(q, 1n, 0n, d, n, c, i, w, left, h0, h1, h2, h3, h4, h5, U32.add(h6, d), h7, h8, h9, h10, h11, h12, h13, h14, h15, h16, h17, h18, h19, h20, h21, h22, h23, h24, h25)
+            case 7n:
+              hist.dn(q, 1n, 0n, d, n, c, i, w, left, h0, h1, h2, h3, h4, h5, h6, U32.add(h7, d), h8, h9, h10, h11, h12, h13, h14, h15, h16, h17, h18, h19, h20, h21, h22, h23, h24, h25)
+            case 8n:
+              hist.dn(q, 1n, 0n, d, n, c, i, w, left, h0, h1, h2, h3, h4, h5, h6, h7, U32.add(h8, d), h9, h10, h11, h12, h13, h14, h15, h16, h17, h18, h19, h20, h21, h22, h23, h24, h25)
+            case 9n:
+              hist.dn(q, 1n, 0n, d, n, c, i, w, left, h0, h1, h2, h3, h4, h5, h6, h7, h8, U32.add(h9, d), h10, h11, h12, h13, h14, h15, h16, h17, h18, h19, h20, h21, h22, h23, h24, h25)
+            case 10n:
+              hist.dn(q, 1n, 0n, d, n, c, i, w, left, h0, h1, h2, h3, h4, h5, h6, h7, h8, h9, U32.add(h10, d), h11, h12, h13, h14, h15, h16, h17, h18, h19, h20, h21, h22, h23, h24, h25)
+            case 11n:
+              hist.dn(q, 1n, 0n, d, n, c, i, w, left, h0, h1, h2, h3, h4, h5, h6, h7, h8, h9, h10, U32.add(h11, d), h12, h13, h14, h15, h16, h17, h18, h19, h20, h21, h22, h23, h24, h25)
+            case 12n:
+              hist.dn(q, 1n, 0n, d, n, c, i, w, left, h0, h1, h2, h3, h4, h5, h6, h7, h8, h9, h10, h11, U32.add(h12, d), h13, h14, h15, h16, h17, h18, h19, h20, h21, h22, h23, h24, h25)
+            case 13n:
+              hist.dn(q, 1n, 0n, d, n, c, i, w, left, h0, h1, h2, h3, h4, h5, h6, h7, h8, h9, h10, h11, h12, U32.add(h13, d), h14, h15, h16, h17, h18, h19, h20, h21, h22, h23, h24, h25)
+            case 14n:
+              hist.dn(q, 1n, 0n, d, n, c, i, w, left, h0, h1, h2, h3, h4, h5, h6, h7, h8, h9, h10, h11, h12, h13, U32.add(h14, d), h15, h16, h17, h18, h19, h20, h21, h22, h23, h24, h25)
+            case 15n:
+              hist.dn(q, 1n, 0n, d, n, c, i, w, left, h0, h1, h2, h3, h4, h5, h6, h7, h8, h9, h10, h11, h12, h13, h14, U32.add(h15, d), h16, h17, h18, h19, h20, h21, h22, h23, h24, h25)
+            case 16n:
+              hist.dn(q, 1n, 0n, d, n, c, i, w, left, h0, h1, h2, h3, h4, h5, h6, h7, h8, h9, h10, h11, h12, h13, h14, h15, U32.add(h16, d), h17, h18, h19, h20, h21, h22, h23, h24, h25)
+            case 17n:
+              hist.dn(q, 1n, 0n, d, n, c, i, w, left, h0, h1, h2, h3, h4, h5, h6, h7, h8, h9, h10, h11, h12, h13, h14, h15, h16, U32.add(h17, d), h18, h19, h20, h21, h22, h23, h24, h25)
+            case 18n:
+              hist.dn(q, 1n, 0n, d, n, c, i, w, left, h0, h1, h2, h3, h4, h5, h6, h7, h8, h9, h10, h11, h12, h13, h14, h15, h16, h17, U32.add(h18, d), h19, h20, h21, h22, h23, h24, h25)
+            case 19n:
+              hist.dn(q, 1n, 0n, d, n, c, i, w, left, h0, h1, h2, h3, h4, h5, h6, h7, h8, h9, h10, h11, h12, h13, h14, h15, h16, h17, h18, U32.add(h19, d), h20, h21, h22, h23, h24, h25)
+            case 20n:
+              hist.dn(q, 1n, 0n, d, n, c, i, w, left, h0, h1, h2, h3, h4, h5, h6, h7, h8, h9, h10, h11, h12, h13, h14, h15, h16, h17, h18, h19, U32.add(h20, d), h21, h22, h23, h24, h25)
+            case 21n:
+              hist.dn(q, 1n, 0n, d, n, c, i, w, left, h0, h1, h2, h3, h4, h5, h6, h7, h8, h9, h10, h11, h12, h13, h14, h15, h16, h17, h18, h19, h20, U32.add(h21, d), h22, h23, h24, h25)
+            case 22n:
+              hist.dn(q, 1n, 0n, d, n, c, i, w, left, h0, h1, h2, h3, h4, h5, h6, h7, h8, h9, h10, h11, h12, h13, h14, h15, h16, h17, h18, h19, h20, h21, U32.add(h22, d), h23, h24, h25)
+            case 23n:
+              hist.dn(q, 1n, 0n, d, n, c, i, w, left, h0, h1, h2, h3, h4, h5, h6, h7, h8, h9, h10, h11, h12, h13, h14, h15, h16, h17, h18, h19, h20, h21, h22, U32.add(h23, d), h24, h25)
+            case 24n:
+              hist.dn(q, 1n, 0n, d, n, c, i, w, left, h0, h1, h2, h3, h4, h5, h6, h7, h8, h9, h10, h11, h12, h13, h14, h15, h16, h17, h18, h19, h20, h21, h22, h23, U32.add(h24, d), h25)
+            case 25n:
+              hist.dn(q, 1n, 0n, d, n, c, i, w, left, h0, h1, h2, h3, h4, h5, h6, h7, h8, h9, h10, h11, h12, h13, h14, h15, h16, h17, h18, h19, h20, h21, h22, h23, h24, U32.add(h25, d))
+            case _:
+              hist.dn(q, 1n, 0n, d, n, c, i, w, left, h0, h1, h2, h3, h4, h5, h6, h7, h8, h9, h10, h11, h12, h13, h14, h15, h16, h17, h18, h19, h20, h21, h22, h23, h24, h25)
+        case _:
+          match n:
+            case 0n:
+              match left:
+                case 0n:
+                  Hist{h0, h1, h2, h3, h4, h5, h6, h7, h8, h9, h10, h11, h12, h13, h14, h15, h16, h17, h18, h19, h20, h21, h22, h23, h24, h25}
+                case 1n+l:
+                  +x = d.word(c, i)
+                  hist.dn(q, 0n, hist.g(w4.r0(x)), hist.d(w4.r0(x), 1), 3n, c, Nat.add(i, 3n), U32.shrn(x, 8n), l, h0, h1, h2, h3, h4, h5, h6, h7, h8, h9, h10, h11, h12, h13, h14, h15, h16, h17, h18, h19, h20, h21, h22, h23, h24, h25)
+            case 1n+m:
+              hist.dn(q, 0n, hist.g(U32.and(w, 255)), hist.d(U32.and(w, 255), 1), m, c, i, U32.shrn(w, 8n), left, h0, h1, h2, h3, h4, h5, h6, h7, h8, h9, h10, h11, h12, h13, h14, h15, h16, h17, h18, h19, h20, h21, h22, h23, h24, h25)
+def d.hist.c(h: Hist, +c: String) -> Hist:
+  match h:
+    case Hist{h0, h1, h2, h3, h4, h5, h6, h7, h8, h9, h10, h11, h12, h13, h14, h15, h16, h17, h18, h19, h20, h21, h22, h23, h24, h25}:
+      hist.dn(4100n, 1n, 0n, 0, 0n, c, 0n, 0, Nat.div(String.length(c), 3n), h0, h1, h2, h3, h4, h5, h6, h7, h8, h9, h10, h11, h12, h13, h14, h15, h16, h17, h18, h19, h20, h21, h22, h23, h24, h25)
+
+# h with the registers of the dense bytes s, from byte j on (k pieces)
+def d.hist.go(k: Nat, h: Hist, +s: String, +j: Nat) -> Hist:
+  match k:
+    case 0n:
+      h
     case 1n+q:
       +c = String.take(String.drop(s, j), 1536n)
-      d.words.go(q, s, Nat.add(j, 1536n), d.words.c(Nat.div(String.length(c), 3n), c, 0n, done))
-
-# the registers of the dense bytes s as words
-def d.words(+s: String) -> List<&2, U32>:
-  d.words.go(8n, s, 0n, Nil{})
+      d.hist.go(q, d.hist.c(h, c), s, Nat.add(j, 1536n))
 
 # the histogram of a dense v's registers (hllDenseRegHisto)
 def d.hist(+v: String) -> Hist:
-  ws.hist(d.words(String.drop(v, 16n)))
+  d.hist.go(8n, Hist{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}, String.drop(v, 16n), 0n)
 
 # a with each register at least the dense one of the piece c (k blocks
 # from byte i), after done (the last first): the words of a after the
@@ -674,26 +748,56 @@ def xset(+len: Nat) -> String:
 def zrun(+len: Nat) -> String:
   Bool.pick(String, Nat.is_lt(64n, len), xset(len), b1(U32.from_nat(Nat.sub(len, 1n))))
 
-# the opcode at the head of s, as Redis reads it: whether there is one
+# the opcode at p of a value, as Redis reads it: whether there is one
 # (more), whether it is an XZERO (two bytes: the second of an XZERO cut
-# at the end is the byte past the end, pe), its bytes, the registers it
-# holds and their value (0 for a run of zeros)
+# at the end is the byte past the end, pe), its byte c and the next, lo,
+# the registers it holds and their value (0 for a run of zeros)
 type Op is Data:
   Op{more: Bool, x: Bool, c: U32, lo: U32, len: Nat, val: Nat}
 
-# byte 1 of s, or the byte past the end (a code past 255 is not a byte)
-def op.lo(+s: String, +pe: U32) -> U32:
-  +b = String.code_at(s, 1n)
-  Bool.pick(U32, U32.is_lt(b, 256), b, pe)
+# The walks read the value by index, String.code_at, which reads a String
+# of one chunk where its bytes lie (a match takes a byte apart from the
+# rest, and String.code_at reads a view or a String of several chunks a
+# run at a time): a value is one chunk when a command has copied it
+# (flat) and it is at most 2048 bytes. Past the end, String.code_at gives
+# 2^32 - 1. Of an opcode's byte c, t = c >> 6 & 3 is 0 for a ZERO, 1 for
+# an XZERO, 2 or 3 for a VAL: c >> 7 is 1 for a VAL alone, t & (t >> 1 ^
+# 1) for an XZERO alone; sums of these take the place of choices between
+# the kinds (a Bool.pick is a call).
 
-def op.at(+s: String, +pe: U32) -> Op:
-  +c0 = String.code_at(s, 0n)
-  +more = U32.is_lt(c0, 256)
-  +c = Bool.pick(U32, more, c0, 0)
-  +isval = U32.is_ne(U32.and(c, 128), 0)
-  +x = Bool.and(Bool.not(isval), U32.is_ne(U32.and(c, 64), 0))
-  +lo = Bool.pick(U32, x, op.lo(s, pe), 0)
-  Op{more, x, c, lo, Bool.pick(Nat, isval, vlen(c), Bool.pick(Nat, x, xlen(c, lo), zlen(c))), Bool.pick(Nat, isval, vval(c), 0n)}
+# v as one String of one chunk, up to 2048 bytes (String.take copies)
+def flat(+v: String) -> String:
+  String.take(v, String.length(v))
+
+# byte i of v, or pe past the end: there String.code_at's 2^32 - 1 has a
+# low byte of 255, which its top byte, 255, turns into pe
+def op.lo(+v: String, +i: Nat, +pe: U32) -> U32:
+  +b = String.code_at(v, i)
+  U32.xor(U32.and(b, 255), U32.and(U32.shrn(b, 24n), U32.xor(pe, 255)))
+
+# 1 for an XZERO's byte c, else 0
+def op.xz(+c: U32) -> U32:
+  +t = U32.and(U32.shrn(c, 6n), 3)
+  U32.and(t, U32.xor(U32.shrn(t, 1n), 1))
+
+# the registers of the opcode c, lo: a VAL's c & 3, a ZERO's c & 63, an
+# XZERO's (c & 63) * 256 + lo, plus 1
+def op.n(+c: U32, +lo: U32) -> Nat:
+  +x = op.xz(c)
+  U32.to_nat(U32.add(U32.add(U32.mul(U32.and(c, U32.sub(63, U32.mul(U32.and(U32.shrn(c, 7n), 1), 60))), U32.add(U32.mul(x, 255), 1)), U32.mul(lo, x)), 1))
+
+# a VAL's value, c >> 2 & 31 plus 1; 0 for a run of zeros
+def op.val(+c: U32) -> Nat:
+  U32.to_nat(U32.mul(U32.and(U32.shrn(c, 7n), 1), U32.add(U32.and(U32.shrn(c, 2n), 31), 1)))
+
+# the bytes of the opcode c: 2 for an XZERO, else 1
+def op.step(+c: U32) -> Nat:
+  U32.to_nat(U32.add(op.xz(c), 1))
+
+def op.at(+v: String, +p: Nat, +pe: U32) -> Op:
+  +c = String.code_at(v, p)
+  +lo = op.lo(v, Nat.add(p, 1n), pe)
+  Op{U32.is_lt(c, 256), U32.is_eq(op.xz(c), 1), c, lo, op.n(c, lo), op.val(c)}
 
 def op.len(+o: Op) -> Nat:
   match o:
@@ -705,15 +809,15 @@ def op.more(+o: Op) -> Bool:
     case Op{+more, x, c, lo, len, val}:
       more
 
-# The walks of the opcodes s (the bytes after the header), o the one at
-# its head. The histogram and DECODE walk a value as a command finds it,
-# the byte past its end 0; the merge walks it as the sets before it in a
+# The walks of the opcodes of v (the bytes after the header), o the one
+# at p. The histogram and DECODE walk a value as a command finds it, the
+# byte past its end 0; the merge walks it as the sets before it in a
 # command left it (pe).
 
 # the histogram of the registers the opcodes hold (hllSparseRegHisto),
-# and how many they hold: o the opcode at the head of s, the registers
-# before it idx; at = 0: count the run of g, d, then go on
-def hist.sp(k: Nat, at: Nat, g: Nat, +d: U32, o: Op, +s: String, +idx: Nat, +h0: U32, +h1: U32, +h2: U32, +h3: U32, +h4: U32, +h5: U32, +h6: U32, +h7: U32, +h8: U32, +h9: U32, +h10: U32, +h11: U32, +h12: U32, +h13: U32, +h14: U32, +h15: U32, +h16: U32, +h17: U32, +h18: U32, +h19: U32, +h20: U32, +h21: U32, +h22: U32, +h23: U32, +h24: U32, +h25: U32) -> Hist & Nat:
+# and how many they hold: o the opcode at p, the registers before it idx;
+# at = 0: count the run of g, d, then go on
+def hist.sp(k: Nat, at: Nat, g: Nat, +d: U32, o: Op, +v: String, +p: Nat, +idx: Nat, +h0: U32, +h1: U32, +h2: U32, +h3: U32, +h4: U32, +h5: U32, +h6: U32, +h7: U32, +h8: U32, +h9: U32, +h10: U32, +h11: U32, +h12: U32, +h13: U32, +h14: U32, +h15: U32, +h16: U32, +h17: U32, +h18: U32, +h19: U32, +h20: U32, +h21: U32, +h22: U32, +h23: U32, +h24: U32, +h25: U32) -> Hist & Nat:
   match k:
     case 0n:
       (Hist{h0, h1, h2, h3, h4, h5, h6, h7, h8, h9, h10, h11, h12, h13, h14, h15, h16, h17, h18, h19, h20, h21, h22, h23, h24, h25}, idx)
@@ -722,112 +826,89 @@ def hist.sp(k: Nat, at: Nat, g: Nat, +d: U32, o: Op, +s: String, +idx: Nat, +h0:
         case 0n:
           match g:
             case 0n:
-              hist.sp(q, 1n, 0n, d, o, s, idx, U32.add(h0, d), h1, h2, h3, h4, h5, h6, h7, h8, h9, h10, h11, h12, h13, h14, h15, h16, h17, h18, h19, h20, h21, h22, h23, h24, h25)
+              hist.sp(q, 1n, 0n, d, o, v, p, idx, U32.add(h0, d), h1, h2, h3, h4, h5, h6, h7, h8, h9, h10, h11, h12, h13, h14, h15, h16, h17, h18, h19, h20, h21, h22, h23, h24, h25)
             case 1n:
-              hist.sp(q, 1n, 0n, d, o, s, idx, h0, U32.add(h1, d), h2, h3, h4, h5, h6, h7, h8, h9, h10, h11, h12, h13, h14, h15, h16, h17, h18, h19, h20, h21, h22, h23, h24, h25)
+              hist.sp(q, 1n, 0n, d, o, v, p, idx, h0, U32.add(h1, d), h2, h3, h4, h5, h6, h7, h8, h9, h10, h11, h12, h13, h14, h15, h16, h17, h18, h19, h20, h21, h22, h23, h24, h25)
             case 2n:
-              hist.sp(q, 1n, 0n, d, o, s, idx, h0, h1, U32.add(h2, d), h3, h4, h5, h6, h7, h8, h9, h10, h11, h12, h13, h14, h15, h16, h17, h18, h19, h20, h21, h22, h23, h24, h25)
+              hist.sp(q, 1n, 0n, d, o, v, p, idx, h0, h1, U32.add(h2, d), h3, h4, h5, h6, h7, h8, h9, h10, h11, h12, h13, h14, h15, h16, h17, h18, h19, h20, h21, h22, h23, h24, h25)
             case 3n:
-              hist.sp(q, 1n, 0n, d, o, s, idx, h0, h1, h2, U32.add(h3, d), h4, h5, h6, h7, h8, h9, h10, h11, h12, h13, h14, h15, h16, h17, h18, h19, h20, h21, h22, h23, h24, h25)
+              hist.sp(q, 1n, 0n, d, o, v, p, idx, h0, h1, h2, U32.add(h3, d), h4, h5, h6, h7, h8, h9, h10, h11, h12, h13, h14, h15, h16, h17, h18, h19, h20, h21, h22, h23, h24, h25)
             case 4n:
-              hist.sp(q, 1n, 0n, d, o, s, idx, h0, h1, h2, h3, U32.add(h4, d), h5, h6, h7, h8, h9, h10, h11, h12, h13, h14, h15, h16, h17, h18, h19, h20, h21, h22, h23, h24, h25)
+              hist.sp(q, 1n, 0n, d, o, v, p, idx, h0, h1, h2, h3, U32.add(h4, d), h5, h6, h7, h8, h9, h10, h11, h12, h13, h14, h15, h16, h17, h18, h19, h20, h21, h22, h23, h24, h25)
             case 5n:
-              hist.sp(q, 1n, 0n, d, o, s, idx, h0, h1, h2, h3, h4, U32.add(h5, d), h6, h7, h8, h9, h10, h11, h12, h13, h14, h15, h16, h17, h18, h19, h20, h21, h22, h23, h24, h25)
+              hist.sp(q, 1n, 0n, d, o, v, p, idx, h0, h1, h2, h3, h4, U32.add(h5, d), h6, h7, h8, h9, h10, h11, h12, h13, h14, h15, h16, h17, h18, h19, h20, h21, h22, h23, h24, h25)
             case 6n:
-              hist.sp(q, 1n, 0n, d, o, s, idx, h0, h1, h2, h3, h4, h5, U32.add(h6, d), h7, h8, h9, h10, h11, h12, h13, h14, h15, h16, h17, h18, h19, h20, h21, h22, h23, h24, h25)
+              hist.sp(q, 1n, 0n, d, o, v, p, idx, h0, h1, h2, h3, h4, h5, U32.add(h6, d), h7, h8, h9, h10, h11, h12, h13, h14, h15, h16, h17, h18, h19, h20, h21, h22, h23, h24, h25)
             case 7n:
-              hist.sp(q, 1n, 0n, d, o, s, idx, h0, h1, h2, h3, h4, h5, h6, U32.add(h7, d), h8, h9, h10, h11, h12, h13, h14, h15, h16, h17, h18, h19, h20, h21, h22, h23, h24, h25)
+              hist.sp(q, 1n, 0n, d, o, v, p, idx, h0, h1, h2, h3, h4, h5, h6, U32.add(h7, d), h8, h9, h10, h11, h12, h13, h14, h15, h16, h17, h18, h19, h20, h21, h22, h23, h24, h25)
             case 8n:
-              hist.sp(q, 1n, 0n, d, o, s, idx, h0, h1, h2, h3, h4, h5, h6, h7, U32.add(h8, d), h9, h10, h11, h12, h13, h14, h15, h16, h17, h18, h19, h20, h21, h22, h23, h24, h25)
+              hist.sp(q, 1n, 0n, d, o, v, p, idx, h0, h1, h2, h3, h4, h5, h6, h7, U32.add(h8, d), h9, h10, h11, h12, h13, h14, h15, h16, h17, h18, h19, h20, h21, h22, h23, h24, h25)
             case 9n:
-              hist.sp(q, 1n, 0n, d, o, s, idx, h0, h1, h2, h3, h4, h5, h6, h7, h8, U32.add(h9, d), h10, h11, h12, h13, h14, h15, h16, h17, h18, h19, h20, h21, h22, h23, h24, h25)
+              hist.sp(q, 1n, 0n, d, o, v, p, idx, h0, h1, h2, h3, h4, h5, h6, h7, h8, U32.add(h9, d), h10, h11, h12, h13, h14, h15, h16, h17, h18, h19, h20, h21, h22, h23, h24, h25)
             case 10n:
-              hist.sp(q, 1n, 0n, d, o, s, idx, h0, h1, h2, h3, h4, h5, h6, h7, h8, h9, U32.add(h10, d), h11, h12, h13, h14, h15, h16, h17, h18, h19, h20, h21, h22, h23, h24, h25)
+              hist.sp(q, 1n, 0n, d, o, v, p, idx, h0, h1, h2, h3, h4, h5, h6, h7, h8, h9, U32.add(h10, d), h11, h12, h13, h14, h15, h16, h17, h18, h19, h20, h21, h22, h23, h24, h25)
             case 11n:
-              hist.sp(q, 1n, 0n, d, o, s, idx, h0, h1, h2, h3, h4, h5, h6, h7, h8, h9, h10, U32.add(h11, d), h12, h13, h14, h15, h16, h17, h18, h19, h20, h21, h22, h23, h24, h25)
+              hist.sp(q, 1n, 0n, d, o, v, p, idx, h0, h1, h2, h3, h4, h5, h6, h7, h8, h9, h10, U32.add(h11, d), h12, h13, h14, h15, h16, h17, h18, h19, h20, h21, h22, h23, h24, h25)
             case 12n:
-              hist.sp(q, 1n, 0n, d, o, s, idx, h0, h1, h2, h3, h4, h5, h6, h7, h8, h9, h10, h11, U32.add(h12, d), h13, h14, h15, h16, h17, h18, h19, h20, h21, h22, h23, h24, h25)
+              hist.sp(q, 1n, 0n, d, o, v, p, idx, h0, h1, h2, h3, h4, h5, h6, h7, h8, h9, h10, h11, U32.add(h12, d), h13, h14, h15, h16, h17, h18, h19, h20, h21, h22, h23, h24, h25)
             case 13n:
-              hist.sp(q, 1n, 0n, d, o, s, idx, h0, h1, h2, h3, h4, h5, h6, h7, h8, h9, h10, h11, h12, U32.add(h13, d), h14, h15, h16, h17, h18, h19, h20, h21, h22, h23, h24, h25)
+              hist.sp(q, 1n, 0n, d, o, v, p, idx, h0, h1, h2, h3, h4, h5, h6, h7, h8, h9, h10, h11, h12, U32.add(h13, d), h14, h15, h16, h17, h18, h19, h20, h21, h22, h23, h24, h25)
             case 14n:
-              hist.sp(q, 1n, 0n, d, o, s, idx, h0, h1, h2, h3, h4, h5, h6, h7, h8, h9, h10, h11, h12, h13, U32.add(h14, d), h15, h16, h17, h18, h19, h20, h21, h22, h23, h24, h25)
+              hist.sp(q, 1n, 0n, d, o, v, p, idx, h0, h1, h2, h3, h4, h5, h6, h7, h8, h9, h10, h11, h12, h13, U32.add(h14, d), h15, h16, h17, h18, h19, h20, h21, h22, h23, h24, h25)
             case 15n:
-              hist.sp(q, 1n, 0n, d, o, s, idx, h0, h1, h2, h3, h4, h5, h6, h7, h8, h9, h10, h11, h12, h13, h14, U32.add(h15, d), h16, h17, h18, h19, h20, h21, h22, h23, h24, h25)
+              hist.sp(q, 1n, 0n, d, o, v, p, idx, h0, h1, h2, h3, h4, h5, h6, h7, h8, h9, h10, h11, h12, h13, h14, U32.add(h15, d), h16, h17, h18, h19, h20, h21, h22, h23, h24, h25)
             case 16n:
-              hist.sp(q, 1n, 0n, d, o, s, idx, h0, h1, h2, h3, h4, h5, h6, h7, h8, h9, h10, h11, h12, h13, h14, h15, U32.add(h16, d), h17, h18, h19, h20, h21, h22, h23, h24, h25)
+              hist.sp(q, 1n, 0n, d, o, v, p, idx, h0, h1, h2, h3, h4, h5, h6, h7, h8, h9, h10, h11, h12, h13, h14, h15, U32.add(h16, d), h17, h18, h19, h20, h21, h22, h23, h24, h25)
             case 17n:
-              hist.sp(q, 1n, 0n, d, o, s, idx, h0, h1, h2, h3, h4, h5, h6, h7, h8, h9, h10, h11, h12, h13, h14, h15, h16, U32.add(h17, d), h18, h19, h20, h21, h22, h23, h24, h25)
+              hist.sp(q, 1n, 0n, d, o, v, p, idx, h0, h1, h2, h3, h4, h5, h6, h7, h8, h9, h10, h11, h12, h13, h14, h15, h16, U32.add(h17, d), h18, h19, h20, h21, h22, h23, h24, h25)
             case 18n:
-              hist.sp(q, 1n, 0n, d, o, s, idx, h0, h1, h2, h3, h4, h5, h6, h7, h8, h9, h10, h11, h12, h13, h14, h15, h16, h17, U32.add(h18, d), h19, h20, h21, h22, h23, h24, h25)
+              hist.sp(q, 1n, 0n, d, o, v, p, idx, h0, h1, h2, h3, h4, h5, h6, h7, h8, h9, h10, h11, h12, h13, h14, h15, h16, h17, U32.add(h18, d), h19, h20, h21, h22, h23, h24, h25)
             case 19n:
-              hist.sp(q, 1n, 0n, d, o, s, idx, h0, h1, h2, h3, h4, h5, h6, h7, h8, h9, h10, h11, h12, h13, h14, h15, h16, h17, h18, U32.add(h19, d), h20, h21, h22, h23, h24, h25)
+              hist.sp(q, 1n, 0n, d, o, v, p, idx, h0, h1, h2, h3, h4, h5, h6, h7, h8, h9, h10, h11, h12, h13, h14, h15, h16, h17, h18, U32.add(h19, d), h20, h21, h22, h23, h24, h25)
             case 20n:
-              hist.sp(q, 1n, 0n, d, o, s, idx, h0, h1, h2, h3, h4, h5, h6, h7, h8, h9, h10, h11, h12, h13, h14, h15, h16, h17, h18, h19, U32.add(h20, d), h21, h22, h23, h24, h25)
+              hist.sp(q, 1n, 0n, d, o, v, p, idx, h0, h1, h2, h3, h4, h5, h6, h7, h8, h9, h10, h11, h12, h13, h14, h15, h16, h17, h18, h19, U32.add(h20, d), h21, h22, h23, h24, h25)
             case 21n:
-              hist.sp(q, 1n, 0n, d, o, s, idx, h0, h1, h2, h3, h4, h5, h6, h7, h8, h9, h10, h11, h12, h13, h14, h15, h16, h17, h18, h19, h20, U32.add(h21, d), h22, h23, h24, h25)
+              hist.sp(q, 1n, 0n, d, o, v, p, idx, h0, h1, h2, h3, h4, h5, h6, h7, h8, h9, h10, h11, h12, h13, h14, h15, h16, h17, h18, h19, h20, U32.add(h21, d), h22, h23, h24, h25)
             case 22n:
-              hist.sp(q, 1n, 0n, d, o, s, idx, h0, h1, h2, h3, h4, h5, h6, h7, h8, h9, h10, h11, h12, h13, h14, h15, h16, h17, h18, h19, h20, h21, U32.add(h22, d), h23, h24, h25)
+              hist.sp(q, 1n, 0n, d, o, v, p, idx, h0, h1, h2, h3, h4, h5, h6, h7, h8, h9, h10, h11, h12, h13, h14, h15, h16, h17, h18, h19, h20, h21, U32.add(h22, d), h23, h24, h25)
             case 23n:
-              hist.sp(q, 1n, 0n, d, o, s, idx, h0, h1, h2, h3, h4, h5, h6, h7, h8, h9, h10, h11, h12, h13, h14, h15, h16, h17, h18, h19, h20, h21, h22, U32.add(h23, d), h24, h25)
+              hist.sp(q, 1n, 0n, d, o, v, p, idx, h0, h1, h2, h3, h4, h5, h6, h7, h8, h9, h10, h11, h12, h13, h14, h15, h16, h17, h18, h19, h20, h21, h22, U32.add(h23, d), h24, h25)
             case 24n:
-              hist.sp(q, 1n, 0n, d, o, s, idx, h0, h1, h2, h3, h4, h5, h6, h7, h8, h9, h10, h11, h12, h13, h14, h15, h16, h17, h18, h19, h20, h21, h22, h23, U32.add(h24, d), h25)
+              hist.sp(q, 1n, 0n, d, o, v, p, idx, h0, h1, h2, h3, h4, h5, h6, h7, h8, h9, h10, h11, h12, h13, h14, h15, h16, h17, h18, h19, h20, h21, h22, h23, U32.add(h24, d), h25)
             case 25n:
-              hist.sp(q, 1n, 0n, d, o, s, idx, h0, h1, h2, h3, h4, h5, h6, h7, h8, h9, h10, h11, h12, h13, h14, h15, h16, h17, h18, h19, h20, h21, h22, h23, h24, U32.add(h25, d))
+              hist.sp(q, 1n, 0n, d, o, v, p, idx, h0, h1, h2, h3, h4, h5, h6, h7, h8, h9, h10, h11, h12, h13, h14, h15, h16, h17, h18, h19, h20, h21, h22, h23, h24, U32.add(h25, d))
             case _:
-              hist.sp(q, 1n, 0n, d, o, s, idx, h0, h1, h2, h3, h4, h5, h6, h7, h8, h9, h10, h11, h12, h13, h14, h15, h16, h17, h18, h19, h20, h21, h22, h23, h24, h25)
+              hist.sp(q, 1n, 0n, d, o, v, p, idx, h0, h1, h2, h3, h4, h5, h6, h7, h8, h9, h10, h11, h12, h13, h14, h15, h16, h17, h18, h19, h20, h21, h22, h23, h24, h25)
         case _:
           match o:
-            case Op{more, x, c, lo, +len, +val}:
+            case Op{more, x, +c, lo, +len, +val}:
               match more:
                 case False{}:
                   (Hist{h0, h1, h2, h3, h4, h5, h6, h7, h8, h9, h10, h11, h12, h13, h14, h15, h16, h17, h18, h19, h20, h21, h22, h23, h24, h25}, idx)
                 case True{}:
-                  match x:
-                    case True{}:
-                      match s:
-                        case SCon{p0, SCon{p1, r}}:
-                          hist.sp(q, 0n, 0n, U32.from_nat(len), op.at(r, 0), r, Nat.add(idx, len), h0, h1, h2, h3, h4, h5, h6, h7, h8, h9, h10, h11, h12, h13, h14, h15, h16, h17, h18, h19, h20, h21, h22, h23, h24, h25)
-                        case _:
-                          (Hist{U32.add(h0, U32.from_nat(len)), h1, h2, h3, h4, h5, h6, h7, h8, h9, h10, h11, h12, h13, h14, h15, h16, h17, h18, h19, h20, h21, h22, h23, h24, h25}, Nat.add(idx, len))
-                    case False{}:
-                      match s:
-                        case SCon{p0, r}:
-                          hist.sp(q, 0n, hist.g(U32.from_nat(val)), hist.d(U32.from_nat(val), U32.from_nat(len)), op.at(r, 0), r, Nat.add(idx, len), h0, h1, h2, h3, h4, h5, h6, h7, h8, h9, h10, h11, h12, h13, h14, h15, h16, h17, h18, h19, h20, h21, h22, h23, h24, h25)
-                        case SNil{}:
-                          (Hist{h0, h1, h2, h3, h4, h5, h6, h7, h8, h9, h10, h11, h12, h13, h14, h15, h16, h17, h18, h19, h20, h21, h22, h23, h24, h25}, idx)
+                  +p2 = Nat.add(p, op.step(c))
+                  hist.sp(q, 0n, hist.g(U32.from_nat(val)), hist.d(U32.from_nat(val), U32.from_nat(len)), op.at(v, p2, 0), v, p2, Nat.add(idx, len), h0, h1, h2, h3, h4, h5, h6, h7, h8, h9, h10, h11, h12, h13, h14, h15, h16, h17, h18, h19, h20, h21, h22, h23, h24, h25)
 
-# whether the opcodes hold 16384 registers (hllMerge, hllSparseToDense):
-# an opcode that would pass the last register ends the walk, and makes
-# them invalid, as the fix of CVE-2025-32023 has it (Redis 7.0.15 as
-# Ubuntu ships it, which the tests compare with; before it, the zeros ran
-# on, and a VAL past the last register ended the walk where the opcodes
-# were valid if it ended at 16384); else they are valid if it ends at
-# 16384
-def sp.valid(k: Nat, o: Op, +s: String, +i: Nat, +pe: U32) -> Bool:
+# whether the opcodes hold 16384 registers (hllMerge, hllSparseToDense),
+# i the registers before p: an opcode that would pass the last register
+# ends the walk, and makes them invalid, as the fix of CVE-2025-32023 has
+# it (Redis 7.0.15 as Ubuntu ships it, which the tests compare with;
+# before it, the zeros ran on, and a VAL past the last register ended
+# the walk where the opcodes were valid if it ended at 16384); so they
+# are valid when their runs add up to 16384
+def sp.valid(k: Nat, o: Op, +v: String, +p: Nat, +i: Nat, +pe: U32) -> Bool:
   match k:
     case 0n:
       Nat.is_eq(i, 16384n)
     case 1n+k1:
       match o:
-        case Op{more, x, c, lo, +len, val}:
+        case Op{more, x, +c, lo, +len, val}:
           match more:
             case False{}:
               Nat.is_eq(i, 16384n)
             case True{}:
-              match x:
-                case True{}:
-                  match s:
-                    case SCon{p0, SCon{p1, r}}:
-                      sp.valid(k1, op.at(r, pe), r, Nat.add(i, len), pe)
-                    case _:
-                      Nat.is_eq(Nat.add(i, len), 16384n)
-                case False{}:
-                  match s:
-                    case SCon{p0, r}:
-                      +over = Nat.is_lt(16384n, Nat.add(i, len))
-                      sp.valid(k1, Bool.pick(Op, over, Op{False{}, False{}, 0, 0, 0n, 0n}, op.at(r, pe)), r, Nat.add(i, len), pe)
-                    case SNil{}:
-                      Nat.is_eq(i, 16384n)
+              +p2 = Nat.add(p, op.step(c))
+              sp.valid(k1, op.at(v, p2, pe), v, p2, Nat.add(i, len), pe)
 
 # registers i on, n of them, of value v, before rest
 def sp.run(n: Nat, +i: Nat, +v: U32, rest: List<&2, RV>) -> List<&2, RV>:
@@ -846,39 +927,32 @@ def sp.vals(zero: Bool, +n: Nat, +i: Nat, +v: U32, rest: List<&2, RV>) -> List<&
 
 # the registers the VALs hold, from register i, with their values, in
 # order (of opcodes that hold 16384)
-def sp.pairs(k: Nat, o: Op, +s: String, +i: Nat, +pe: U32) -> List<&2, RV>:
+def sp.pairs(k: Nat, o: Op, +v: String, +p: Nat, +i: Nat, +pe: U32) -> List<&2, RV>:
   match k:
     case 0n:
       Nil{}
     case 1n+k1:
       match o:
-        case Op{more, x, c, lo, +len, +val}:
+        case Op{more, x, +c, lo, +len, +val}:
           match more:
             case False{}:
               Nil{}
             case True{}:
-              match x:
-                case True{}:
-                  match s:
-                    case SCon{p0, SCon{p1, r}}:
-                      sp.pairs(k1, op.at(r, pe), r, Nat.add(i, len), pe)
-                    case _:
-                      Nil{}
-                case False{}:
-                  match s:
-                    case SCon{p0, r}:
-                      sp.vals(Nat.is_eq(val, 0n), len, i, U32.from_nat(val), sp.pairs(k1, op.at(r, pe), r, Nat.add(i, len), pe))
-                    case SNil{}:
-                      Nil{}
+              +p2 = Nat.add(p, op.step(c))
+              sp.vals(Nat.is_eq(val, 0n), len, i, U32.from_nat(val), sp.pairs(k1, op.at(v, p2, pe), v, p2, Nat.add(i, len), pe))
 
-# the registers of the opcodes s, of a valid sparse value, as words
-def sp.words(+s: String, a: List<&2, U32>, +pe: U32) -> List<&2, U32>:
-  ws.add(a, sp.pairs(Nat.add(String.length(s), 1n), op.at(s, pe), s, 0n, pe))
+# the registers of a valid sparse v, as words
+def sp.words(+v: String, a: List<&2, U32>, +pe: U32) -> List<&2, U32>:
+  ws.add(a, sp.pairs(Nat.add(String.length(v), 1n), op.at(v, 16n, pe), v, 16n, 0n, pe))
 
-def sp.dense.of(ok: Bool, +v: String, +s: String, +pe: U32) -> Maybe<&2, String>:
+# whether the opcodes of a sparse v hold 16384 registers
+def sp.ok(+v: String, +pe: U32) -> Bool:
+  sp.valid(Nat.add(String.length(v), 1n), op.at(v, 16n, pe), v, 16n, 0n, pe)
+
+def sp.dense.of(ok: Bool, +v: String, +pe: U32) -> Maybe<&2, String>:
   match ok:
     case True{}:
-      Some{String.take(v, 4n) ++ b1(0) ++ String.slice(v, 5n, 11n) ++ ws.enc(sp.words(s, Nil{}, pe))}
+      Some{String.take(v, 4n) ++ b1(0) ++ String.slice(v, 5n, 11n) ++ ws.enc(sp.words(v, Nil{}, pe))}
     case False{}:
       None{}
 
@@ -886,11 +960,10 @@ def sp.dense.of(ok: Bool, +v: String, +s: String, +pe: U32) -> Maybe<&2, String>
 # then its registers; none when its opcodes do not hold 16384 (pe: the
 # byte past its end)
 def sp.dense(+v: String, +pe: U32) -> Maybe<&2, String>:
-  +s = String.drop(v, 16n)
-  sp.dense.of(sp.valid(Nat.add(String.length(s), 1n), op.at(s, pe), s, 0n, pe), v, s, pe)
+  sp.dense.of(sp.ok(v, pe), v, pe)
 
 # PFDEBUG DECODE: each opcode as "z:len", "Z:len" or "v:value,len"
-def sp.dec(k: Nat, o: Op, +s: String) -> String:
+def sp.dec(k: Nat, o: Op, +v: String, +p: Nat) -> String:
   match k:
     case 0n:
       ""
@@ -903,24 +976,15 @@ def sp.dec(k: Nat, o: Op, +s: String) -> String:
             case True{}:
               match x:
                 case True{}:
-                  match s:
-                    case SCon{a, SCon{b, r}}:
-                      "Z:" ++ Nat.show(len) ++ " " ++ sp.dec(k1, op.at(r, 0), r)
-                    case _:
-                      "Z:" ++ Nat.show(len) ++ " "
+                  "Z:" ++ Nat.show(len) ++ " " ++ sp.dec(k1, op.at(v, Nat.add(p, 2n), 0), v, Nat.add(p, 2n))
                 case False{}:
-                  match s:
-                    case SCon{a, r}:
-                      Bool.pick(String, Nat.is_eq(val, 0n), "z:" ++ Nat.show(len), "v:" ++ Nat.show(val) ++ "," ++ Nat.show(len)) ++ " " ++ sp.dec(k1, op.at(r, 0), r)
-                    case SNil{}:
-                      ""
+                  Bool.pick(String, Nat.is_eq(val, 0n), "z:" ++ Nat.show(len), "v:" ++ Nat.show(val) ++ "," ++ Nat.show(len)) ++ " " ++ sp.dec(k1, op.at(v, Nat.add(p, 1n), 0), v, Nat.add(p, 1n))
 
 def sp.decode.of(+t: String) -> String:
   String.take(t, Nat.sub(String.length(t), 1n))
 
 def sp.decode(+v: String) -> String:
-  +s = String.drop(v, 16n)
-  sp.decode.of(sp.dec(Nat.add(String.length(s), 1n), op.at(s, 0), s))
+  sp.decode.of(sp.dec(Nat.add(String.length(v), 1n), op.at(v, 16n, 0), v, 16n))
 
 # Setting a register of a sparse HLL (hllSparseSet)
 # --------------------------------------------------
@@ -933,8 +997,8 @@ type At is Data:
   ANone{}
   At{p: Nat, first: Nat, q: Nat, o: Nat, f: Nat, c: U32, lo: U32}
 
-# here: whether o, the opcode at p, holds idx
-def sp.find(k: Nat, here: Bool, o: Op, +s: String, +p: Nat, +first: Nat, +q: Nat, +qf: Nat, +po: Nat, +pf: Nat, +idx: Nat, +pe: U32) -> At:
+# here: whether o, the opcode at p of v, holds idx
+def sp.find(k: Nat, here: Bool, o: Op, +v: String, +p: Nat, +first: Nat, +q: Nat, +qf: Nat, +po: Nat, +pf: Nat, +idx: Nat, +pe: U32) -> At:
   match k:
     case 0n:
       ANone{}
@@ -946,28 +1010,15 @@ def sp.find(k: Nat, here: Bool, o: Op, +s: String, +p: Nat, +first: Nat, +q: Nat
               At{p, first, q, po, pf, c, lo}
         case False{}:
           match o:
-            case Op{more, x, c, lo, +len, val}:
+            case Op{more, x, +c, lo, +len, val}:
               match more:
                 case False{}:
                   ANone{}
                 case True{}:
-                  match x:
-                    case True{}:
-                      match s:
-                        case SCon{a, SCon{b, r}}:
-                          +o2 = op.at(r, pe)
-                          +f2 = Nat.add(first, len)
-                          sp.find(k1, Bool.and(op.more(o2), Nat.is_lt(idx, Nat.add(f2, op.len(o2)))), o2, r, Nat.add(p, 2n), f2, p, first, q, qf, idx, pe)
-                        case _:
-                          ANone{}
-                    case False{}:
-                      match s:
-                        case SCon{a, r}:
-                          +o2 = op.at(r, pe)
-                          +f2 = Nat.add(first, len)
-                          sp.find(k1, Bool.and(op.more(o2), Nat.is_lt(idx, Nat.add(f2, op.len(o2)))), o2, r, Nat.add(p, 1n), f2, p, first, q, qf, idx, pe)
-                        case SNil{}:
-                          ANone{}
+                  +p2 = Nat.add(p, op.step(c))
+                  +o2 = op.at(v, p2, pe)
+                  +f2 = Nat.add(first, len)
+                  sp.find(k1, Bool.and(op.more(o2), Nat.is_lt(idx, Nat.add(f2, op.len(o2)))), o2, v, p2, f2, p, first, q, qf, idx, pe)
 
 # What a set did: nothing, as the opcodes do not hold the register (-1);
 # nothing, as it holds as much already (0); the new opcodes (1), n bytes
@@ -1018,9 +1069,10 @@ def sp.mg(k: Nat, m: Mg, +v: String, +n: Nat, +p: Nat) -> String & Nat:
                   sp.mg(s, mg.at(v, n, p1), v, n, p1)
 
 # a merge moves the string's end down a byte and writes its NUL there
-# (sdsIncrLen): the byte past the end is 0 after one
-def sp.updated.fin(v: String, +n: Nat, +o: Nat, +f: Nat, +n0: Nat, +pe: U32) -> SpSet:
-  SNew{v, n, o, f, Bool.pick(U32, Nat.is_lt(n, n0), 0, pe)}
+# (sdsIncrLen): the byte past the end is 0 after one. The new value is
+# copied into one chunk (flat) for the walks of the sets after it.
+def sp.updated.fin(+v: String, +n: Nat, +o: Nat, +f: Nat, +n0: Nat, +pe: U32) -> SpSet:
+  SNew{flat(v), n, o, f, Bool.pick(U32, Nat.is_lt(n, n0), 0, pe)}
 
 def sp.updated.of(r: String & Nat, +o: Nat, +f: Nat, +n0: Nat, +pe: U32) -> SpSet:
   (v, n) = r
@@ -1117,9 +1169,8 @@ def sp.set.go(big: Bool, +v: String, +n: Nat, +mx: Nat, +idx: Nat, +cnt: Nat, +p
     case True{}:
       SProm{}
     case False{}:
-      +s = String.drop(v, p0)
-      +o = op.at(s, pe)
-      sp.set.at(sp.find(Nat.add(Nat.sub(n, p0), 1n), Bool.and(op.more(o), Nat.is_lt(idx, Nat.add(f0, op.len(o)))), o, s, p0, f0, 0n, 0n, 0n, 0n, idx, pe), v, n, mx, idx, cnt, pe)
+      +o = op.at(v, p0, pe)
+      sp.set.at(sp.find(Nat.add(Nat.sub(n, p0), 1n), Bool.and(op.more(o), Nat.is_lt(idx, Nat.add(f0, op.len(o)))), o, v, p0, f0, 0n, 0n, 0n, 0n, idx, pe), v, n, mx, idx, cnt, pe)
 
 # register idx of a sparse v (n bytes, pe the byte past its end) set to
 # cnt if that is more, its opcodes walked from p0 (holding register f0
@@ -1141,6 +1192,28 @@ def fl.num(+n: Nat) -> F.Fl:
 
 def fl.half() -> F.Fl:
   F.fl.round(F.fmt.d(), False{}, [1n], Nat.sub(F.fl.eb(), 1n), False{})
+
+# a * 2^k and a / 2, exactly, a number's exponent moved (a zero's stays 0):
+# the estimate's numbers stay far from where a double's range ends, where
+# this would have to round. The operations take any m and e, and round
+# what they make; only fl.eq needs its numbers as they round them.
+def fl.scale(a: F.Fl, +k: Nat) -> F.Fl:
+  match a:
+    case F.FNum{n, +m, +e}:
+      F.FNum{n, m, Bool.pick(Nat, F.big.is_zero(m), 0n, Nat.add(e, k))}
+    case F.FInf{n}:
+      F.FInf{n}
+    case F.FNaN{}:
+      F.FNaN{}
+
+def fl.halve(a: F.Fl) -> F.Fl:
+  match a:
+    case F.FNum{n, m, +e}:
+      F.FNum{n, m, Nat.sub(e, 1n)}
+    case F.FInf{n}:
+      F.FInf{n}
+    case F.FNaN{}:
+      F.FNaN{}
 
 def fl.neg(a: F.Fl) -> F.Fl:
   match a:
@@ -1179,8 +1252,8 @@ def fl.is0(+a: F.Fl) -> Bool:
       False{}
 
 # hllSigma (Ertl's sigma): z = x, then x squared, z + x * y, y doubled,
-# until z stops changing (same)
-def sigma.go(fuel: Nat, same: Bool, +x: F.Fl, +y: F.Fl, +z: F.Fl) -> F.Fl:
+# until z stops changing (same); y is 2^k, which x * y takes exactly
+def sigma.go(fuel: Nat, same: Bool, +x: F.Fl, +k: Nat, +z: F.Fl) -> F.Fl:
   match fuel:
     case 0n:
       z
@@ -1190,15 +1263,15 @@ def sigma.go(fuel: Nat, same: Bool, +x: F.Fl, +y: F.Fl, +z: F.Fl) -> F.Fl:
           z
         case False{}:
           +x2 = F.fl.mul(fl.d(), x, x)
-          +z2 = F.fl.add(fl.d(), z, F.fl.mul(fl.d(), x2, y))
-          sigma.go(f, fl.eq(z, z2), x2, F.fl.add(fl.d(), y, y), z2)
+          +z2 = F.fl.add(fl.d(), z, fl.scale(x2, k))
+          sigma.go(f, fl.eq(z, z2), x2, Nat.add(k, 1n), z2)
 
 def sigma.of(one: Bool, +x: F.Fl) -> F.Fl:
   match one:
     case True{}:
       F.FInf{False{}}
     case False{}:
-      sigma.go(4096n, False{}, x, fl.num(1n), x)
+      sigma.go(4096n, False{}, x, 0n, x)
 
 def sigma(+x: F.Fl) -> F.Fl:
   sigma.of(fl.eq(x, fl.num(1n)), x)
@@ -1232,13 +1305,22 @@ def tau.of(none: Bool, +x: F.Fl) -> F.Fl:
 def tau(+x: F.Fl) -> F.Fl:
   tau.of(Bool.or(fl.is0(x), fl.eq(x, fl.num(1n))), x)
 
+# z + c, c a count: a double as it is (the sum rounds), nothing for 0
+def est.add(zero: Bool, +c: Nat, z: F.Fl) -> F.Fl:
+  match zero:
+    case True{}:
+      z
+    case False{}:
+      F.fl.add(fl.d(), z, F.FNum{False{}, F.big.of(c), F.fl.eb()})
+
 # z after the registers of values j down to 1: z + count, halved, each
-def est.loop(j: Nat, +h: Hist, +z: F.Fl) -> F.Fl:
+def est.loop(j: Nat, +h: Hist, z: F.Fl) -> F.Fl:
   match j:
     case 0n:
       z
     case 1n++i:
-      est.loop(i, h, F.fl.mul(fl.d(), F.fl.add(fl.d(), z, fl.num(hist.get(h, Nat.add(i, 1n)))), fl.half()))
+      +c = hist.get(h, Nat.add(i, 1n))
+      est.loop(i, h, fl.halve(est.add(Nat.is_eq(c, 0n), c, z)))
 
 # HLL_ALPHA_INF * m * m: 0.721347520444481703680 (as a double) * 2^28
 def est.alpha() -> F.Fl:
@@ -1288,12 +1370,16 @@ def llround(q: F.Fl) -> W:
     case _:
       W{2147483648, 0}
 
+# n / m as a double, m = 2^14 registers (n below 2^48): exact
+def fl.reg(+n: Nat) -> F.Fl:
+  F.fl.round(F.fmt.d(), False{}, F.big.of(n), Nat.sub(F.fl.eb(), 14n), False{})
+
 # the cardinality a histogram h of the registers gives (hllCount), as
-# Ertl's new estimator takes it
+# Ertl's new estimator takes it: x / m and m * x, m = 2^14, move x's
+# exponent
 def est(+h: Hist) -> W:
-  +m = fl.num(16384n)
-  +z1 = est.loop(50n, h, F.fl.mul(fl.d(), m, tau(F.fl.div(fl.d(), fl.num(Nat.sub(16384n, hist.get(h, 51n))), m))))
-  +z = F.fl.add(fl.d(), z1, F.fl.mul(fl.d(), m, sigma(F.fl.div(fl.d(), fl.num(hist.get(h, 0n)), m))))
+  +z1 = est.loop(50n, h, fl.scale(tau(fl.reg(Nat.sub(16384n, hist.get(h, 51n)))), 14n))
+  +z = F.fl.add(fl.d(), z1, fl.scale(sigma(fl.reg(hist.get(h, 0n))), 14n))
   llround(F.fl.div(fl.d(), est.alpha(), z))
 
 # PFADD
@@ -1361,7 +1447,7 @@ def add.all(es: List<&2, String>, +mx: Nat, st: Add) -> Add:
 def add.start(sparse: Bool, +v: String) -> Add:
   match sparse:
     case True{}:
-      AddS{v, String.length(v), False{}, 0}
+      AddS{flat(v), String.length(v), False{}, 0}
     case False{}:
       AddD{v, False{}}
 
@@ -1425,8 +1511,8 @@ def count.sp(r: Hist & Nat) -> Count:
 def count.new(sparse: Bool, +v: String) -> Count:
   match sparse:
     case True{}:
-      +s = String.drop(v, 16n)
-      count.sp(hist.sp(Nat.add(Nat.mul(String.length(s), 2n), 2n), 1n, 0n, 0, op.at(s, 0), s, 0n, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0))
+      +f = flat(v)
+      count.sp(hist.sp(Nat.add(Nat.mul(String.length(f), 2n), 2n), 1n, 0n, 0, op.at(f, 16n, 0), f, 16n, 0n, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0))
     case False{}:
       CntNew{est(d.hist(v))}
 
@@ -1584,37 +1670,33 @@ def hist.ps(k: Nat, at: Nat, g: Nat, +d: U32, +ps: List<&2, RV>, +n: Nat, +h0: U
             case Nil{}:
               Hist{U32.add(h0, U32.from_nat(Nat.sub(16384n, n))), h1, h2, h3, h4, h5, h6, h7, h8, h9, h10, h11, h12, h13, h14, h15, h16, h17, h18, h19, h20, h21, h22, h23, h24, h25}
 
-# whether the opcodes s hold 16384 registers
-def acc.ok(+s: String) -> Bool:
-  sp.valid(Nat.add(String.length(s), 1n), op.at(s, 0), s, 0n, 0)
-
-def acc.sp.s(ok: Bool, +s: String, +ps: List<&2, RV>) -> Acc:
+def acc.sp.s(ok: Bool, +v: String, +ps: List<&2, RV>) -> Acc:
   match ok:
     case True{}:
-      AccS{ps.max(ps, sp.pairs(Nat.add(String.length(s), 1n), op.at(s, 0), s, 0n, 0))}
+      AccS{ps.max(ps, sp.pairs(Nat.add(String.length(v), 1n), op.at(v, 16n, 0), v, 16n, 0n, 0))}
     case False{}:
       AccBad{}
 
-def acc.sp.d(ok: Bool, +s: String, a: List<&2, U32>) -> Acc:
+def acc.sp.d(ok: Bool, +v: String, a: List<&2, U32>) -> Acc:
   match ok:
     case True{}:
-      AccD{sp.words(s, a, 0)}
+      AccD{sp.words(v, a, 0)}
     case False{}:
       AccBad{}
 
 def acc.of.s(sparse: Bool, +v: String, +ps: List<&2, RV>) -> Acc:
   match sparse:
     case True{}:
-      +s = String.drop(v, 16n)
-      acc.sp.s(acc.ok(s), s, ps)
+      +f = flat(v)
+      acc.sp.s(sp.ok(f, 0), f, ps)
     case False{}:
       AccD{d.merge(v, ws.add(Nil{}, ps))}
 
 def acc.of.d(sparse: Bool, +v: String, a: List<&2, U32>) -> Acc:
   match sparse:
     case True{}:
-      +s = String.drop(v, 16n)
-      acc.sp.d(acc.ok(s), s, a)
+      +f = flat(v)
+      acc.sp.d(sp.ok(f, 0), f, a)
     case False{}:
       AccD{d.merge(v, a)}
 
@@ -1734,7 +1816,7 @@ def merge(+v: String, a: Acc, +mx: Nat) -> Maybe<&2, String>:
     case AccD{w}:
       merge.dense(merge.to(is_sparse(v), v), w)
     case AccS{+ps}:
-      Some{stale(merge.ps(16385n, MS{v, String.length(v), 16n, 0n, 0}, ps, ps, mx))}
+      Some{stale(merge.ps(16385n, MS{flat(v), String.length(v), 16n, 0n, 0}, ps, ps, mx))}
     case AccBad{}:
       None{}
 
