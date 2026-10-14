@@ -7,6 +7,7 @@ import Base
 import ./map.bend as KV
 import ./float.bend as F
 import ./hll.bend as H
+import ./geo.bend as G
 
 # Types
 # -----
@@ -226,8 +227,17 @@ type ZQ is Data:
 # they came, as LRANGE keeps its own, read as the command parses and
 # again as it runs), a range (ZRANGE and its kin, read as the command
 # parses), each read to answer its errors before the key is looked for,
-# as Redis does; or a scan of it (ZSCAN, its arguments after the key as
-# they came, as HSCAN keeps them)
+# as Redis does; a scan of it (ZSCAN, its arguments after the key as they
+# came, as HSCAN keeps them); or a read of GEO, whose scores are geohashes
+# (geo.bend): the positions of members (GEOPOS), their geohashes
+# (GEOHASH), the distance of two (GEODIST: its members and unit as they
+# came, the unit read as the command parses, its error before the key is
+# looked for, as Redis reads it), or a search without STORE (GEORADIUS,
+# GEORADIUSBYMEMBER, their _RO forms and GEOSEARCH: its arguments as they
+# came, the name it was called by first, which tells its kind, read as it
+# runs, as georadiusGeneric reads them once it has looked the key up). A
+# command travels in registers as wide as its widest form, so each has
+# one field of a word.
 type ZRead is Data:
   ZRCard{}
   ZRScore{m: String}
@@ -238,6 +248,10 @@ type ZRead is Data:
   ZRLexCount{args: List<&2, String>}
   ZRRange{q: ZQ}
   ZRScan{args: List<&2, String>}
+  ZRGeoPos{ms: List<&2, String>}
+  ZRGeoHash{ms: List<&2, String>}
+  ZRGeoDist{args: List<&2, String>}
+  ZRGeoFind{args: List<&2, String>}
 
 # A write of a sorted set (UZset, below): ZADD of pairs with options
 # (ZINCRBY: with INCR), ZREM of members, a new sorted set of a ZADD where
@@ -498,7 +512,11 @@ type SortO is Data:
 # their kind and arguments (The administrative commands, below): they
 # read the server's state, the drawings its random numbers, and SHUTDOWN
 # stops the server (server.bend, SHUTDOWN), which a session alone does
-# not.
+# not. A GEO search that stores (GEORADIUS's and GEORADIUSBYMEMBER's
+# STORE and STOREDIST, GEOSEARCHSTORE) is SGeoStore, its kind and its
+# arguments, the name it was called by first (GEO, below): it reads its
+# key and writes its destination with what it finds, an act of the
+# session's database (AGeo, below), as SORT with STORE does.
 
 type SessOp is Data:
   SHello{args: List<&2, String>}
@@ -547,6 +565,7 @@ type SessOp is Data:
   SPfMerge{dst: String, srcs: List<&2, String>}
   SPfSelfTest{}
   SAdmin{kind: Nat, args: List<&2, String>}
+  SGeoStore{kind: Nat, args: List<&2, String>}
 
 # BITOP's operation
 type BitK is Data:
@@ -4620,6 +4639,953 @@ def parse_sintercard(args: List<&2, String>) -> Cmd:
     case _:
       e_arity("sintercard")
 
+# GEO
+# ---
+# GEO keeps positions in a sorted set, each member's score its geohash
+# (geo.bend: as Redis 7.0.15's geo.c, geohash.c and geohash_helper.c
+# compute them, in C's doubles). GEOADD is ZADD of the scores its
+# positions make (geoaddCommand calls zaddCommand), its options and
+# positions read as it parses, each error as Redis answers it. GEOPOS,
+# GEOHASH and GEODIST read the sorted set of their key (ZRGeoPos,
+# ZRGeoHash and ZRGeoDist, a Peek), GEODIST's unit read as it parses. The searches (GEORADIUS,
+# GEORADIUSBYMEMBER, their _RO forms and GEOSEARCH) read theirs too,
+# their arguments read as georadiusGeneric reads them once it has looked
+# the key up (ZRGeoFind): the center (a member's position, which only the
+# key holds), the shape and the options. A search that stores (STORE and
+# STOREDIST of GEORADIUS and GEORADIUSBYMEMBER, GEOSEARCHSTORE) is
+# SGeoStore, which writes what it finds at its destination as an act of
+# the session's database (AGeo, below), as SORT with STORE does.
+
+def e_syntax_r() -> Reply:
+  RError{"ERR syntax error"}
+
+def e_unit() -> Reply:
+  RError{"ERR unsupported unit provided. please use M, KM, FT, MI"}
+
+# extractUnitOrReply: the meters of a unit, M, KM, FT or MI in any case
+# (1, 1000, 0.3048 and 1609.34 as doubles)
+def geo.unit(+u: String) -> Maybe<&2, G.D>:
+  +up = String.to_upper(cstr(u))
+  Bool.pick(Maybe<&2, G.D>, String.eq(up, "M"), Some{G.D{1072693248, 0}},
+    Bool.pick(Maybe<&2, G.D>, String.eq(up, "KM"), Some{G.D{1083129856, 0}},
+      Bool.pick(Maybe<&2, G.D>, String.eq(up, "FT"), Some{G.D{1070825943, 3690235901}},
+        Bool.pick(Maybe<&2, G.D>, String.eq(up, "MI"), Some{G.D{1083778396, 687194767}}, None{}))))
+
+# a position read: the point, or the error that answers it
+type GPt is Data:
+  GPtOk{p: G.Pos}
+  GPtErr{r: Reply}
+
+# printf's "%f" of a double (the error of a position out of range)
+def geo.f6(+x: G.D) -> String:
+  F.fl.show_f(F.f64.to(G.d.score(x)))
+
+def geo.lonlat.at(bad: Bool, out: Bool, +lon: G.D, +lat: G.D) -> GPt:
+  match bad out:
+    case True{} _:
+      GPtErr{RError{"ERR value is not a valid float"}}
+    case False{} True{}:
+      GPtErr{RError{"ERR invalid longitude,latitude pair " ++ geo.f6(lon) ++ "," ++ geo.f6(lat)}}
+    case False{} False{}:
+      GPtOk{G.Pos{lon, lat}}
+
+# extractLongLatOrReply: a longitude and a latitude, each a float (as
+# string2d reads one), within Redis's ranges (-180 to 180, and
+# -85.05112878 to 85.05112878)
+def geo.lonlat(+a: String, +b: String) -> GPt:
+  +lon = G.d.read(a)
+  +lat = G.d.read(b)
+  geo.lonlat.at(Bool.or(G.d.is_nan(lon), G.d.is_nan(lat)), Bool.or(G.rng.out(G.geo.lon_rng(), lon), G.rng.out(G.geo.lat_rng(), lat)), lon, lat)
+
+# a shape read (a radius, or a box's width and height) and the meters of
+# its unit, or the error that answers it
+type GDst is Data:
+  GDstOk{s: G.Shape, conv: G.D}
+  GDstErr{r: Reply}
+
+def geo.radius.at(bad: Bool, neg: Bool, u: Maybe<&2, G.D>, +r: G.D) -> GDst:
+  match bad neg u:
+    case True{} _ _:
+      GDstErr{RError{"ERR need numeric radius"}}
+    case False{} True{} _:
+      GDstErr{RError{"ERR radius cannot be negative"}}
+    case False{} False{} None{}:
+      GDstErr{e_unit()}
+    case False{} False{} Some{c}:
+      GDstOk{G.Circle{r}, c}
+
+# extractDistanceOrReply: a radius (a float, not negative), then its unit
+def geo.radius(+a: String, +u: String) -> GDst:
+  +r = G.d.read(a)
+  geo.radius.at(G.d.is_nan(r), G.d.lt(r, G.d.zero()), geo.unit(u), r)
+
+def geo.box.at(bw: Bool, bh: Bool, neg: Bool, u: Maybe<&2, G.D>, +w: G.D, +h: G.D) -> GDst:
+  match bw bh neg u:
+    case True{} _ _ _:
+      GDstErr{RError{"ERR need numeric width"}}
+    case False{} True{} _ _:
+      GDstErr{RError{"ERR need numeric height"}}
+    case False{} False{} True{} _:
+      GDstErr{RError{"ERR height or width cannot be negative"}}
+    case False{} False{} False{} None{}:
+      GDstErr{e_unit()}
+    case False{} False{} False{} Some{c}:
+      GDstOk{G.Box{w, h}, c}
+
+# extractBoxOrReply: a width and a height (floats, not negative), then
+# their unit
+def geo.box(+a: String, +b: String, +u: String) -> GDst:
+  +w = G.d.read(a)
+  +h = G.d.read(b)
+  geo.box.at(G.d.is_nan(w), G.d.is_nan(h), Bool.or(G.d.lt(h, G.d.zero()), G.d.lt(w, G.d.zero())), geo.unit(u), w, h)
+
+# A search's options, as georadiusGeneric reads them: WITHDIST, WITHHASH,
+# WITHCOORD, ANY, the order (0 none, 1 ASC, 2 DESC), COUNT (0 none; a
+# count past 10^14, which no sorted set reaches, as 10^14), the
+# destination of STORE or STOREDIST, whether the distances are stored
+# (STOREDIST), whether FROMMEMBER, FROMLONLAT, BYRADIUS and BYBOX came,
+# and the center, the shape and the meters of its unit. GOptOf, options
+# that hold options, is never built: it makes GOpt a type that holds
+# itself, which the compiler makes a node of its own, so that it travels
+# as one word; flat, it would be 24 words in the results of the options'
+# loop, and the widest result sets what every return of the program
+# copies (WL_RESW: 26 words where it is 17).
+type GOpt is Data:
+  GOpt{wd: Bool, wh: Bool, wc: Bool, any: Bool, sort: Nat, count: Nat, store: Maybe<&2, String>, sdist: Bool, fm: Bool, fl: Bool, br: Bool, bb: Bool, ctr: G.Pos, shp: G.Shape, conv: G.D}
+  GOptOf{o: GOpt}
+
+# the options before any word: the center, the shape and its unit's
+# meters those of GEORADIUS and GEORADIUSBYMEMBER, read first
+def gopt.shape(p: G.Pos, s: G.Shape, c: G.D) -> GOpt:
+  GOpt{False{}, False{}, False{}, False{}, 0n, 0n, None{}, False{}, False{}, False{}, False{}, False{}, p, s, c}
+
+def gopt.new() -> GOpt:
+  gopt.shape(G.Pos{G.d.zero(), G.d.zero()}, G.Circle{G.d.zero()}, G.d.zero())
+
+# o with the flag of word c: 1 WITHDIST, 2 WITHHASH, 3 WITHCOORD, 4 ANY,
+# 5 ASC, 6 DESC
+def gopt.word(c: Nat, o: GOpt) -> GOpt:
+  match c o:
+    case 1n GOpt{wd, wh, wc, any, sort, count, store, sdist, fm, fl, br, bb, ctr, shp, conv}:
+      GOpt{True{}, wh, wc, any, sort, count, store, sdist, fm, fl, br, bb, ctr, shp, conv}
+    case 2n GOpt{wd, wh, wc, any, sort, count, store, sdist, fm, fl, br, bb, ctr, shp, conv}:
+      GOpt{wd, True{}, wc, any, sort, count, store, sdist, fm, fl, br, bb, ctr, shp, conv}
+    case 3n GOpt{wd, wh, wc, any, sort, count, store, sdist, fm, fl, br, bb, ctr, shp, conv}:
+      GOpt{wd, wh, True{}, any, sort, count, store, sdist, fm, fl, br, bb, ctr, shp, conv}
+    case 4n GOpt{wd, wh, wc, any, sort, count, store, sdist, fm, fl, br, bb, ctr, shp, conv}:
+      GOpt{wd, wh, wc, True{}, sort, count, store, sdist, fm, fl, br, bb, ctr, shp, conv}
+    case 5n GOpt{wd, wh, wc, any, sort, count, store, sdist, fm, fl, br, bb, ctr, shp, conv}:
+      GOpt{wd, wh, wc, any, 1n, count, store, sdist, fm, fl, br, bb, ctr, shp, conv}
+    case 6n GOpt{wd, wh, wc, any, sort, count, store, sdist, fm, fl, br, bb, ctr, shp, conv}:
+      GOpt{wd, wh, wc, any, 2n, count, store, sdist, fm, fl, br, bb, ctr, shp, conv}
+    case _ x:
+      x
+
+def gopt.count(+n: Nat, o: GOpt) -> GOpt:
+  match o:
+    case GOpt{wd, wh, wc, any, sort, count, store, sdist, fm, fl, br, bb, ctr, shp, conv}:
+      GOpt{wd, wh, wc, any, sort, n, store, sdist, fm, fl, br, bb, ctr, shp, conv}
+    case GOptOf{x}:
+      gopt.count(n, x)
+
+def gopt.store(k: String, dist: Bool, o: GOpt) -> GOpt:
+  match o:
+    case GOpt{wd, wh, wc, any, sort, count, store, sdist, fm, fl, br, bb, ctr, shp, conv}:
+      GOpt{wd, wh, wc, any, sort, count, Some{k}, dist, fm, fl, br, bb, ctr, shp, conv}
+    case GOptOf{x}:
+      gopt.store(k, dist, x)
+
+def gopt.sdist(o: GOpt) -> GOpt:
+  match o:
+    case GOpt{wd, wh, wc, any, sort, count, store, sdist, fm, fl, br, bb, ctr, shp, conv}:
+      GOpt{wd, wh, wc, any, sort, count, store, True{}, fm, fl, br, bb, ctr, shp, conv}
+    case GOptOf{x}:
+      gopt.sdist(x)
+
+def gopt.at(m: Maybe<&2, G.Pos>, c: G.Pos) -> G.Pos:
+  match m:
+    case Some{p}:
+      p
+    case None{}:
+      c
+
+# FROMMEMBER (mem) or FROMLONLAT: the center, when it is known
+def gopt.from(m: Maybe<&2, G.Pos>, +mem: Bool, o: GOpt) -> GOpt:
+  match o:
+    case GOpt{wd, wh, wc, any, sort, count, store, sdist, +fm, +fl, br, bb, ctr, shp, conv}:
+      GOpt{wd, wh, wc, any, sort, count, store, sdist, Bool.or(fm, mem), Bool.or(fl, Bool.not(mem)), br, bb, gopt.at(m, ctr), shp, conv}
+    case GOptOf{x}:
+      gopt.from(m, mem, x)
+
+# BYBOX (box) or BYRADIUS: the shape and its unit's meters
+def gopt.by(s: G.Shape, c: G.D, +box: Bool, o: GOpt) -> GOpt:
+  match o:
+    case GOpt{wd, wh, wc, any, sort, count, store, sdist, fm, fl, +br, +bb, ctr, shp, conv}:
+      GOpt{wd, wh, wc, any, sort, count, store, sdist, fm, fl, Bool.or(br, Bool.not(box)), Bool.or(bb, box), ctr, s, c}
+    case GOptOf{x}:
+      gopt.by(s, c, box, x)
+
+def gopt.fm(+o: GOpt) -> Bool:
+  match o:
+    case GOpt{wd, wh, wc, any, sort, count, store, sdist, +fm, fl, br, bb, ctr, shp, conv}:
+      fm
+    case GOptOf{x}:
+      gopt.fm(x)
+
+def gopt.fl(+o: GOpt) -> Bool:
+  match o:
+    case GOpt{wd, wh, wc, any, sort, count, store, sdist, fm, +fl, br, bb, ctr, shp, conv}:
+      fl
+    case GOptOf{x}:
+      gopt.fl(x)
+
+def gopt.br(+o: GOpt) -> Bool:
+  match o:
+    case GOpt{wd, wh, wc, any, sort, count, store, sdist, fm, fl, +br, bb, ctr, shp, conv}:
+      br
+    case GOptOf{x}:
+      gopt.br(x)
+
+def gopt.bb(+o: GOpt) -> Bool:
+  match o:
+    case GOpt{wd, wh, wc, any, sort, count, store, sdist, fm, fl, br, +bb, ctr, shp, conv}:
+      bb
+    case GOptOf{x}:
+      gopt.bb(x)
+
+# the loop of the options: the words left and the options so far, or the
+# error that ends it
+type GSt is Data:
+  GGo{xs: List<&2, String>, o: GOpt}
+  GErr{r: Reply}
+
+# a word of the options (strcasecmp's, up to a NUL): 1 WITHDIST, 2
+# WITHHASH, 3 WITHCOORD, 4 ANY, 5 ASC, 6 DESC, 7 COUNT, 8 STORE, 9
+# STOREDIST, 10 FROMMEMBER, 11 FROMLONLAT, 12 BYRADIUS, 13 BYBOX, 0
+# another
+def geo.word(+w: String) -> Nat:
+  +up = String.to_upper(cstr(w))
+  Bool.pick(Nat, String.eq(up, "WITHDIST"), 1n, Bool.pick(Nat, String.eq(up, "WITHHASH"), 2n,
+    Bool.pick(Nat, String.eq(up, "WITHCOORD"), 3n, Bool.pick(Nat, String.eq(up, "ANY"), 4n,
+      Bool.pick(Nat, String.eq(up, "ASC"), 5n, Bool.pick(Nat, String.eq(up, "DESC"), 6n,
+        Bool.pick(Nat, String.eq(up, "COUNT"), 7n, Bool.pick(Nat, String.eq(up, "STORE"), 8n,
+          Bool.pick(Nat, String.eq(up, "STOREDIST"), 9n, Bool.pick(Nat, String.eq(up, "FROMMEMBER"), 10n,
+            Bool.pick(Nat, String.eq(up, "FROMLONLAT"), 11n, Bool.pick(Nat, String.eq(up, "BYRADIUS"), 12n,
+              Bool.pick(Nat, String.eq(up, "BYBOX"), 13n, 0n)))))))))))))
+
+# A search's kind, as georadiusGeneric's flags: 0 GEORADIUS
+# (RADIUS_COORDS), 1 GEORADIUS_RO (with RADIUS_NOSTORE), 2
+# GEORADIUSBYMEMBER (RADIUS_MEMBER), 3 GEORADIUSBYMEMBER_RO, 4 GEOSEARCH
+# (GEOSEARCH), 5 GEOSEARCHSTORE (with GEOSEARCHSTORE)
+
+# whether STORE and STOREDIST take a key (GEORADIUS, GEORADIUSBYMEMBER)
+def geo.kstore(+kind: Nat) -> Bool:
+  Bool.or(Nat.is_eq(kind, 0n), Nat.is_eq(kind, 2n))
+
+# whether FROMMEMBER, FROMLONLAT, BYRADIUS and BYBOX are its options
+def geo.ksearch(+kind: Nat) -> Bool:
+  Nat.is_le(4n, kind)
+
+# a count of hi * 10^9 + lo, 10^14 when it is past that
+def geo.count.n(big: Bool, +hi: Nat, +lo: Nat) -> Nat:
+  match big:
+    case True{}:
+      Nat.mul(100000n, 1000000000n)
+    case False{}:
+      Nat.add(Nat.mul(hi, 1000000000n), lo)
+
+# COUNT n: a long long past 0
+def geo.count.pos(bad: Bool, +hi: Nat, +lo: Nat, more: List<&2, String>, o: GOpt) -> GSt:
+  match bad:
+    case True{}:
+      GErr{RError{"ERR COUNT must be > 0"}}
+    case False{}:
+      GGo{more, gopt.count(geo.count.n(Nat.is_le(100000n, hi), hi, lo), o)}
+
+def geo.count.of(l: LL, more: List<&2, String>, o: GOpt) -> GSt:
+  match l:
+    case LL{+neg, +hi, +lo}:
+      geo.count.pos(Bool.or(neg, Bool.and(Nat.is_eq(hi, 0n), Nat.is_eq(lo, 0n))), hi, lo, more, o)
+    case LLBad{}:
+      GErr{e_int()}
+
+def geo.count(rest: List<&2, String>, o: GOpt) -> GSt:
+  match rest:
+    case Con{+n, more}:
+      geo.count.of(ll.read(n), more, o)
+    case Nil{}:
+      GErr{e_syntax_r()}
+
+# STORE key (ok: the kind takes it)
+def geo.store(ok: Bool, rest: List<&2, String>, o: GOpt) -> GSt:
+  match ok rest:
+    case True{} Con{k, more}:
+      GGo{more, gopt.store(k, False{}, o)}
+    case _ _:
+      GErr{e_syntax_r()}
+
+# STOREDIST key, or GEOSEARCHSTORE's STOREDIST alone (ss)
+def geo.sdist(ss: Bool, rest: List<&2, String>, o: GOpt) -> GSt:
+  match ss:
+    case True{}:
+      GGo{rest, gopt.sdist(o)}
+    case False{}:
+      GErr{e_syntax_r()}
+
+def geo.storedist(ok: Bool, +ss: Bool, rest: List<&2, String>, o: GOpt) -> GSt:
+  match ok rest:
+    case True{} Con{k, more}:
+      GGo{more, gopt.store(k, True{}, o)}
+    case _ ys:
+      geo.sdist(ss, ys, o)
+
+# FROMMEMBER m: the member's position (none read when the key is not
+# there, as Redis goes on to answer the rest)
+def geo.fm.pos(s: Maybe<&2, F.F64>, more: List<&2, String>, o: GOpt) -> GSt:
+  match s:
+    case Some{+sc}:
+      GGo{more, gopt.from(Some{G.geo.pos(G.d.of_score(sc))}, True{}, o)}
+    case None{}:
+      GErr{RError{"ERR could not decode requested zset member"}}
+
+def geo.fm.at(z: Maybe<&2, KV.Zset>, +m: String, more: List<&2, String>, o: GOpt) -> GSt:
+  match z:
+    case None{}:
+      GGo{more, gopt.from(None{}, True{}, o)}
+    case Some{+zz}:
+      geo.fm.pos(KV.zset.score(m, zz), more, o)
+
+def geo.frommember(ok: Bool, rest: List<&2, String>, o: GOpt, +z: Maybe<&2, KV.Zset>) -> GSt:
+  match ok rest:
+    case True{} Con{+m, more}:
+      geo.fm.at(z, m, more, o)
+    case _ _:
+      GErr{e_syntax_r()}
+
+def geo.fl.at(p: GPt, more: List<&2, String>, o: GOpt) -> GSt:
+  match p:
+    case GPtOk{x}:
+      GGo{more, gopt.from(Some{x}, False{}, o)}
+    case GPtErr{r}:
+      GErr{r}
+
+def geo.fromlonlat(ok: Bool, rest: List<&2, String>, o: GOpt) -> GSt:
+  match ok rest:
+    case True{} Con{+a, Con{+b, more}}:
+      geo.fl.at(geo.lonlat(a, b), more, o)
+    case _ _:
+      GErr{e_syntax_r()}
+
+def geo.by.at(d: GDst, +box: Bool, more: List<&2, String>, o: GOpt) -> GSt:
+  match d:
+    case GDstOk{s, c}:
+      GGo{more, gopt.by(s, c, box, o)}
+    case GDstErr{r}:
+      GErr{r}
+
+def geo.byradius(ok: Bool, rest: List<&2, String>, o: GOpt) -> GSt:
+  match ok rest:
+    case True{} Con{+r, Con{+u, more}}:
+      geo.by.at(geo.radius(r, u), False{}, more, o)
+    case _ _:
+      GErr{e_syntax_r()}
+
+def geo.bybox(ok: Bool, rest: List<&2, String>, o: GOpt) -> GSt:
+  match ok rest:
+    case True{} Con{+w, Con{+h, Con{+u, more}}}:
+      geo.by.at(geo.box(w, h, u), True{}, more, o)
+    case _ _:
+      GErr{e_syntax_r()}
+
+# a word of the options (its code c) and those after it: each where the
+# kind takes it and the words it takes follow, else a syntax error
+def geo.step(c: Nat, rest: List<&2, String>, +o: GOpt, +kind: Nat, +z: Maybe<&2, KV.Zset>) -> GSt:
+  match c:
+    case 0n:
+      GErr{e_syntax_r()}
+    case 1n:
+      GGo{rest, gopt.word(1n, o)}
+    case 2n:
+      GGo{rest, gopt.word(2n, o)}
+    case 3n:
+      GGo{rest, gopt.word(3n, o)}
+    case 4n:
+      GGo{rest, gopt.word(4n, o)}
+    case 5n:
+      GGo{rest, gopt.word(5n, o)}
+    case 6n:
+      GGo{rest, gopt.word(6n, o)}
+    case 7n:
+      geo.count(rest, o)
+    case 8n:
+      geo.store(geo.kstore(kind), rest, o)
+    case 9n:
+      geo.storedist(geo.kstore(kind), Nat.is_eq(kind, 5n), rest, o)
+    case 10n:
+      geo.frommember(Bool.and(geo.ksearch(kind), Bool.not(gopt.fl(o))), rest, o, z)
+    case 11n:
+      geo.fromlonlat(Bool.and(geo.ksearch(kind), Bool.not(gopt.fm(o))), rest, o)
+    case 12n:
+      geo.byradius(Bool.and(geo.ksearch(kind), Bool.not(gopt.bb(o))), rest, o)
+    case 13n:
+      geo.bybox(Bool.and(geo.ksearch(kind), Bool.not(gopt.br(o))), rest, o)
+    case _:
+      GErr{e_syntax_r()}
+
+# the loop of the options, a word at a time (fuel: the words)
+def geo.loop(fuel: Nat, st: GSt, +kind: Nat, +z: Maybe<&2, KV.Zset>) -> GSt:
+  match fuel st:
+    case 1n+f GGo{Con{+w, rest}, o}:
+      geo.loop(f, geo.step(geo.word(w), rest, o, kind, z), kind, z)
+    case _ x:
+      x
+
+# GEORADIUS's and GEORADIUSBYMEMBER's circle, read before the options
+def geo.circle(d: GDst, p: G.Pos, opts: List<&2, String>) -> GSt:
+  match d:
+    case GDstOk{s, c}:
+      GGo{opts, gopt.shape(p, s, c)}
+    case GDstErr{r}:
+      GErr{r}
+
+def geo.pre.xy.of(p: GPt, +r: String, +u: String, opts: List<&2, String>) -> GSt:
+  match p:
+    case GPtOk{x}:
+      geo.circle(geo.radius(r, u), x, opts)
+    case GPtErr{e}:
+      GErr{e}
+
+# GEORADIUS key lon lat radius unit: the center, then the radius
+def geo.pre.xy(args: List<&2, String>) -> GSt:
+  match args:
+    case Con{k, Con{+lon, Con{+lat, Con{+r, Con{+u, opts}}}}}:
+      geo.pre.xy.of(geo.lonlat(lon, lat), r, u, opts)
+    case _:
+      GErr{e_syntax_r()}
+
+def geo.pre.m.of(s: Maybe<&2, F.F64>, +r: String, +u: String, opts: List<&2, String>) -> GSt:
+  match s:
+    case Some{+sc}:
+      geo.circle(geo.radius(r, u), G.geo.pos(G.d.of_score(sc)), opts)
+    case None{}:
+      GErr{RError{"ERR could not decode requested zset member"}}
+
+def geo.pre.m.at(z: Maybe<&2, KV.Zset>, +m: String, +r: String, +u: String, opts: List<&2, String>) -> GSt:
+  match z:
+    case None{}:
+      GGo{opts, gopt.new()}
+    case Some{+zz}:
+      geo.pre.m.of(KV.zset.score(m, zz), r, u, opts)
+
+# GEORADIUSBYMEMBER key member radius unit: the member's position, then
+# the radius; neither read when the key is not there
+def geo.pre.m(args: List<&2, String>, +z: Maybe<&2, KV.Zset>) -> GSt:
+  match args:
+    case Con{k, Con{+m, Con{+r, Con{+u, opts}}}}:
+      geo.pre.m.at(z, m, r, u, opts)
+    case _:
+      GErr{e_syntax_r()}
+
+# GEOSEARCH key
+def geo.pre.s(args: List<&2, String>) -> GSt:
+  match args:
+    case Con{k, opts}:
+      GGo{opts, gopt.new()}
+    case Nil{}:
+      GErr{e_syntax_r()}
+
+# GEOSEARCHSTORE dst src: its destination first
+def geo.pre.ss(args: List<&2, String>) -> GSt:
+  match args:
+    case Con{d, Con{s, opts}}:
+      GGo{opts, gopt.store(d, False{}, gopt.new())}
+    case _:
+      GErr{e_syntax_r()}
+
+def geo.pre(kind: Nat, args: List<&2, String>, +z: Maybe<&2, KV.Zset>) -> GSt:
+  match kind:
+    case 0n:
+      geo.pre.xy(args)
+    case 1n:
+      geo.pre.xy(args)
+    case 2n:
+      geo.pre.m(args, z)
+    case 3n:
+      geo.pre.m(args, z)
+    case 4n:
+      geo.pre.s(args)
+    case _:
+      geo.pre.ss(args)
+
+# the checks after the options, in Redis's order: STORE with WITHDIST,
+# WITHHASH or WITHCOORD (1); GEOSEARCH without FROMMEMBER or FROMLONLAT
+# (2), or without BYRADIUS or BYBOX (3); ANY without COUNT (4); 0 none
+def geo.post.code(+kind: Nat, +o: GOpt) -> Nat:
+  match o:
+    case GOpt{+wd, +wh, +wc, +any, sort, +count, +store, sdist, +fm, +fl, +br, +bb, ctr, shp, conv}:
+      +srch = geo.ksearch(kind)
+      Bool.pick(Nat, Bool.and(Maybe.is_some(&2, String, store), Bool.or(wd, Bool.or(wh, wc))), 1n,
+        Bool.pick(Nat, Bool.and(srch, Bool.not(Bool.or(fm, fl))), 2n,
+          Bool.pick(Nat, Bool.and(srch, Bool.not(Bool.or(br, bb))), 3n,
+            Bool.pick(Nat, Bool.and(any, Nat.is_eq(count, 0n)), 4n, 0n))))
+    case GOptOf{x}:
+      geo.post.code(kind, x)
+
+def geo.post.err(c: Nat, +kind: Nat, +name: String, o: GOpt) -> GSt:
+  match c:
+    case 0n:
+      GGo{Nil{}, o}
+    case 1n:
+      GErr{RError{"ERR " ++ Bool.pick(String, Nat.is_eq(kind, 5n), "GEOSEARCHSTORE", "STORE option in GEORADIUS") ++ " is not compatible with WITHDIST, WITHHASH and WITHCOORD options"}}
+    case 2n:
+      GErr{RError{"ERR exactly one of FROMMEMBER or FROMLONLAT can be specified for " ++ name}}
+    case 3n:
+      GErr{RError{"ERR exactly one of BYRADIUS and BYBOX can be specified for " ++ name}}
+    case _:
+      GErr{RError{"ERR the ANY argument requires COUNT argument"}}
+
+def geo.post(st: GSt, +kind: Nat, +name: String) -> GSt:
+  match st:
+    case GGo{xs, +o}:
+      geo.post.err(geo.post.code(kind, o), kind, name, o)
+    case GErr{r}:
+      GErr{r}
+
+# What a search finds: the error it answers, nothing for a key not there
+# (its options say what it answers), or the points it answers, sorted as
+# asked and cut to COUNT
+type GFound is Data:
+  GFErr{r: Reply}
+  GFNone{o: GOpt}
+  GFPts{o: GOpt, ps: List<&2, G.GP>}
+
+def geo.cut(full: Bool, ps: List<&2, G.GP>, +n: Nat, +k: Nat, +desc: Bool) -> List<&2, G.GP>:
+  match full:
+    case True{}:
+      G.geo.sort(ps, n, desc)
+    case False{}:
+      List.take(&2, G.GP, G.geo.psort(ps, n, k, desc), k)
+
+# the n points found, sorted as asked (0: not sorted), k of them kept: by
+# glibc's qsort when all are kept, by Redis's pqsort when COUNT keeps
+# fewer
+def geo.order(srt: Nat, ps: List<&2, G.GP>, +n: Nat, +k: Nat) -> List<&2, G.GP>:
+  match srt:
+    case 0n:
+      ps
+    case 1n:
+      geo.cut(Nat.is_eq(k, n), ps, n, k, False{})
+    case _:
+      geo.cut(Nat.is_eq(k, n), ps, n, k, True{})
+
+# COUNT without an order and without ANY sorts ASC
+def geo.kept(+o: GOpt, +ps: List<&2, G.GP>) -> List<&2, G.GP>:
+  match o:
+    case GOpt{wd, wh, wc, +any, +sort, +count, store, sdist, fm, fl, br, bb, ctr, shp, conv}:
+      +n = List.length(&2, G.GP, ps)
+      +k = Bool.pick(Nat, Bool.or(Nat.is_eq(count, 0n), Nat.is_lt(n, count)), n, count)
+      geo.order(Bool.pick(Nat, Bool.and(Bool.and(Nat.is_lt(0n, count), Nat.is_eq(sort, 0n)), Bool.not(any)), 1n, sort), ps, n, k)
+    case GOptOf{x}:
+      geo.kept(x, ps)
+
+# membersOfAllNeighbors's points (ANY: up to COUNT of them)
+def geo.scan(+o: GOpt, +z: KV.Zset) -> List<&2, G.GP>:
+  match o:
+    case GOpt{wd, wh, wc, +any, sort, +count, store, sdist, fm, fl, br, bb, +ctr, +shp, +conv}:
+      G.geo.search(z, G.Search{G.pos.lon(ctr), G.pos.lat(ctr), shp, conv}, Bool.pick(Nat, any, count, 0n))
+    case GOptOf{x}:
+      geo.scan(x, z)
+
+def geo.found.at(st: GSt, z: Maybe<&2, KV.Zset>) -> GFound:
+  match st z:
+    case GErr{r} _:
+      GFErr{r}
+    case GGo{xs, o} None{}:
+      GFNone{o}
+    case GGo{xs, +o} Some{+zz}:
+      GFPts{o, geo.kept(o, geo.scan(o, zz))}
+
+# a search of a kind on the sorted set z (None: its key is not there),
+# its arguments args (the name it was called by first), as
+# georadiusGeneric runs it once the key's type is checked
+def geo.found(+kind: Nat, args: List<&2, String>, +z: Maybe<&2, KV.Zset>) -> GFound:
+  match args:
+    case Con{+name, +rest}:
+      geo.found.at(geo.post(geo.loop(Nat.add(List.length(&2, String, rest), 1n), geo.pre(kind, rest, z), kind, z), kind, name), z)
+    case Nil{}:
+      GFErr{e_syntax_r()}
+
+# A point as a search answers it: its member, or, with WITHDIST, WITHHASH
+# or WITHCOORD, an array of it and its distance (in the unit, with four
+# decimals: addReplyDoubleDistance), its score (an integer) and its
+# position (addReplyHumanLongDouble's: a double in RESP3)
+def geo.w.dist(on: Bool, +dist: G.D, +conv: G.D, rest: List<&2, Reply>) -> List<&2, Reply>:
+  match on:
+    case True{}:
+      RBulk{G.geo.dist_text(G.d.div(dist, conv))} <> rest
+    case False{}:
+      rest
+
+def geo.w.hash(on: Bool, +sc: G.D, rest: List<&2, Reply>) -> List<&2, Reply>:
+  match on:
+    case True{}:
+      RIntS{G.geo.hash_int(sc)} <> rest
+    case False{}:
+      rest
+
+def geo.w.coord(on: Bool, +lon: G.D, +lat: G.D, rest: List<&2, Reply>) -> List<&2, Reply>:
+  match on:
+    case True{}:
+      RArray{[RDbl{G.geo.coord_text(lon)}, RDbl{G.geo.coord_text(lat)}]} <> rest
+    case False{}:
+      rest
+
+def geo.item(any: Bool, +wd: Bool, +wh: Bool, +wc: Bool, +conv: G.D, p: G.GP) -> Reply:
+  match any p:
+    case False{} G.GP{m, lon, lat, dist, sc}:
+      RBulk{m}
+    case True{} G.GP{m, +lon, +lat, +dist, +sc}:
+      RArray{RBulk{m} <> geo.w.dist(wd, dist, conv, geo.w.hash(wh, sc, geo.w.coord(wc, lon, lat, Nil{})))}
+
+def geo.items(ps: List<&2, G.GP>, +any: Bool, +wd: Bool, +wh: Bool, +wc: Bool, +conv: G.D) -> List<&2, Reply>:
+  match ps:
+    case Nil{}:
+      Nil{}
+    case Con{p, rest}:
+      geo.item(any, wd, wh, wc, conv, p) <> geo.items(rest, any, wd, wh, wc, conv)
+
+def geo.reply.of(+o: GOpt, ps: List<&2, G.GP>) -> Reply:
+  match o:
+    case GOpt{+wd, +wh, +wc, any, sort, count, store, sdist, fm, fl, br, bb, ctr, shp, +conv}:
+      RArray{geo.items(ps, Bool.or(wd, Bool.or(wh, wc)), wd, wh, wc, conv)}
+    case GOptOf{x}:
+      geo.reply.of(x, ps)
+
+# a search's reply (with no STORE): its error, an empty array for a key
+# not there, or its points
+def geo.reply(f: GFound) -> Reply:
+  match f:
+    case GFErr{r}:
+      r
+    case GFNone{o}:
+      RArray{Nil{}}
+    case GFPts{+o, ps}:
+      geo.reply.of(o, ps)
+
+# a STORE's reply: how many points it stores (0 for a key not there), or
+# its error
+def geo.stored(f: GFound) -> Reply:
+  match f:
+    case GFErr{r}:
+      r
+    case GFNone{o}:
+      r_int(0n)
+    case GFPts{o, ps}:
+      r_int(List.length(&2, G.GP, ps))
+
+# the pairs a STORE's ZADD takes: each point's score (STOREDIST: its
+# distance in the unit), as Redis writes a double, and its member
+def geo.pairs(ps: List<&2, G.GP>, +sdist: Bool, +conv: G.D) -> List<&2, ZPair>:
+  match ps:
+    case Nil{}:
+      Nil{}
+    case Con{G.GP{m, lon, lat, +dist, +sc}, rest}:
+      ZPair{F.f64.show(G.d.score(Bool.pick(G.D, sdist, G.d.div(dist, conv), sc))), m} <> geo.pairs(rest, sdist, conv)
+
+def geo.put(m: Maybe<&2, String>, ps: List<&2, ZPair>) -> Cmd:
+  match m ps:
+    case Some{d} Nil{}:
+      Del{[d]}
+    case Some{d} Con{p, rest}:
+      Upd{d, UZset{ZWNew{zopts.none(), Con{p, rest}}}}
+    case None{} _:
+      Bad{r_int(0n)}
+
+def geo.put.of(+o: GOpt, ps: List<&2, G.GP>) -> Cmd:
+  match o:
+    case GOpt{wd, wh, wc, any, sort, count, +store, +sdist, fm, fl, br, bb, ctr, shp, +conv}:
+      geo.put(store, geo.pairs(ps, sdist, conv))
+    case GOptOf{x}:
+      geo.put.of(x, ps)
+
+# a STORE's write of its destination: the sorted set of the points it
+# finds, whatever the key held, with no time (setKey), or the DEL of the
+# destination when it finds none or its key is not there (dbDelete); an
+# error writes nothing
+def geo.write(f: GFound) -> Cmd:
+  match f:
+    case GFErr{r}:
+      Bad{r}
+    case GFNone{+o}:
+      geo.put.of(o, Nil{})
+    case GFPts{+o, ps}:
+      geo.put.of(o, ps)
+
+# GEOPOS, GEOHASH and GEODIST of a member's score (none when the member
+# is not there: a null array, a null, and a null for either of GEODIST's)
+def geo.pos.reply(+p: G.Pos) -> Reply:
+  RArray{[RDbl{G.geo.coord_text(G.pos.lon(p))}, RDbl{G.geo.coord_text(G.pos.lat(p))}]}
+
+def geo.pos.of(s: Maybe<&2, F.F64>) -> Reply:
+  match s:
+    case Some{+sc}:
+      geo.pos.reply(G.geo.pos(G.d.of_score(sc)))
+    case None{}:
+      RNullA{}
+
+def geo.poss(ms: List<&2, String>, +z: KV.Zset) -> List<&2, Reply>:
+  match ms:
+    case Nil{}:
+      Nil{}
+    case Con{+m, rest}:
+      geo.pos.of(KV.zset.score(m, z)) <> geo.poss(rest, z)
+
+def geo.hash.of(s: Maybe<&2, F.F64>) -> Reply:
+  match s:
+    case Some{+sc}:
+      RBulk{G.geo.hash11(G.d.of_score(sc))}
+    case None{}:
+      RNull{}
+
+def geo.hashes(ms: List<&2, String>, +z: KV.Zset) -> List<&2, Reply>:
+  match ms:
+    case Nil{}:
+      Nil{}
+    case Con{+m, rest}:
+      geo.hash.of(KV.zset.score(m, z)) <> geo.hashes(rest, z)
+
+def geo.nulls(ms: List<&2, String>, +r: Reply) -> List<&2, Reply>:
+  match ms:
+    case Nil{}:
+      Nil{}
+    case Con{m, rest}:
+      r <> geo.nulls(rest, r)
+
+def geo.dist.at(a: Maybe<&2, F.F64>, b: Maybe<&2, F.F64>, +conv: G.D) -> Reply:
+  match a b:
+    case Some{+x} Some{+y}:
+      +p = G.geo.pos(G.d.of_score(x))
+      +q = G.geo.pos(G.d.of_score(y))
+      RBulk{G.geo.dist_text(G.d.div(G.geo.dist(G.pos.lon(p), G.pos.lat(p), G.pos.lon(q), G.pos.lat(q)), conv))}
+    case _ _:
+      RNull{}
+
+# the meters of a unit read already (as the command parsed)
+def geo.conv(m: Maybe<&2, G.D>) -> G.D:
+  match m:
+    case Some{c}:
+      c
+    case None{}:
+      G.D{1072693248, 0}
+
+# GEODIST of members a and b in a unit (args: as they came), of the
+# sorted set z
+def geo.dist(args: List<&2, String>, +z: KV.Zset) -> Reply:
+  match args:
+    case Con{a, Con{b, Nil{}}}:
+      geo.dist.at(KV.zset.score(a, z), KV.zset.score(b, z), G.D{1072693248, 0})
+    case Con{a, Con{b, Con{u, more}}}:
+      geo.dist.at(KV.zset.score(a, z), KV.zset.score(b, z), geo.conv(geo.unit(u)))
+    case _:
+      RNull{}
+
+# a search's kind (GEO, below) from the name it was called by, in any
+# case: GEORADIUS 0 and GEOSEARCH 4 (nine letters, the fourth an R or an
+# S), GEORADIUS_RO 1, GEORADIUSBYMEMBER 2 and GEORADIUSBYMEMBER_RO 3 (by
+# their lengths)
+def geo.kind9(+c: U32) -> Nat:
+  Bool.pick(Nat, U32.is_eq(U32.or(c, 32), 114), 0n, 4n)
+
+def geo.kind.len(+n: Nat, +name: String) -> Nat:
+  match n:
+    case 9n:
+      geo.kind9(String.code_at(name, 3n))
+    case 12n:
+      1n
+    case 17n:
+      2n
+    case 20n:
+      3n
+    case _:
+      4n
+
+def geo.kind(+args: List<&2, String>) -> Nat:
+  match args:
+    case Con{+nm, rest}:
+      geo.kind.len(String.length(nm), nm)
+    case Nil{}:
+      4n
+
+# a search without STORE (args: as they came, the name it was called by
+# first) of the sorted set z (None: its key is not there)
+def geo.find(+args: List<&2, String>, +z: Maybe<&2, KV.Zset>) -> Reply:
+  geo.reply(geo.found(geo.kind(args), args, z))
+
+# GEOADD key [NX|XX] [CH] lon lat member ...: its options (NX, XX and CH,
+# each as often as it comes), then the triples, read as geoaddCommand
+# reads them: a syntax error for words after the options that make no
+# triples or for NX with XX, then each position in turn (a float, within
+# the ranges), then ZADD of the scores of their geohashes (its own check:
+# no triple, a syntax error). Its WRONGTYPE comes as ZADD's, as it runs.
+def geoadd.word(+w: String) -> Nat:
+  +c = zopt.word(w)
+  Bool.pick(Nat, Bool.or(Bool.or(Nat.is_eq(c, 1n), Nat.is_eq(c, 2n)), Nat.is_eq(c, 5n)), c, 0n)
+
+def geoadd.head(+xs: List<&2, String>) -> Nat:
+  match xs:
+    case Nil{}:
+      0n
+    case Con{+w, r}:
+      geoadd.word(w)
+
+def geoadd.opts(xs: List<&2, String>, c: Nat, o: ZOpts) -> ZOpts & List<&2, String>:
+  match xs c:
+    case Con{w, +rest} 1n+p:
+      geoadd.opts(rest, geoadd.head(rest), zopts.set(1n+p, o))
+    case ys _:
+      (o, ys)
+
+# the positions as ZADD's pairs, or the error of the first that does not
+# read
+type GAdd is Data:
+  GAOk{ps: List<&2, ZPair>}
+  GAErr{r: Reply}
+
+def geoadd.score(+p: G.Pos) -> String:
+  G.geo.score_text(G.pos.lon(p), G.pos.lat(p))
+
+def geoadd.con(p: GPt, m: String, rest: GAdd) -> GAdd:
+  match p rest:
+    case GPtErr{r} _:
+      GAErr{r}
+    case GPtOk{x} GAErr{r}:
+      GAErr{r}
+    case GPtOk{+x} GAOk{ps}:
+      GAOk{ZPair{geoadd.score(x), m} <> ps}
+
+def geoadd.pairs(xs: List<&2, String>) -> GAdd:
+  match xs:
+    case Con{+a, Con{+b, Con{m, rest}}}:
+      geoadd.con(geo.lonlat(a, b), m, geoadd.pairs(rest))
+    case _:
+      GAOk{Nil{}}
+
+def geoadd.of(r: GAdd, +k: String, o: ZOpts) -> Cmd:
+  match r:
+    case GAErr{e}:
+      Bad{e}
+    case GAOk{Nil{}}:
+      e_syntax()
+    case GAOk{Con{p, ps}}:
+      Upd{k, UZset{ZWAdd{o, Con{p, ps}}}}
+
+def geoadd.nxx(+o: ZOpts) -> Bool:
+  match o:
+    case ZOpts{+nx, +xx, gt, lt, ch, incr}:
+      Bool.and(nx, xx)
+
+def geoadd.check(bad: Bool, +k: String, o: ZOpts, ws: List<&2, String>) -> Cmd:
+  match bad:
+    case True{}:
+      e_syntax()
+    case False{}:
+      geoadd.of(geoadd.pairs(ws), k, o)
+
+def geoadd.go(+k: String, +o: ZOpts, +ws: List<&2, String>) -> Cmd:
+  geoadd.check(Bool.or(Nat.is_ne(Nat.mod(List.length(&2, String, ws), 3n), 0n), geoadd.nxx(o)), k, o, ws)
+
+def geoadd.at(+k: String, p: ZOpts & List<&2, String>) -> Cmd:
+  (o, ws) = p
+  geoadd.go(k, o, ws)
+
+def parse_geoadd(+k: String, +rest: List<&2, String>) -> Cmd:
+  geoadd.at(k, geoadd.opts(rest, geoadd.head(rest), zopts.none()))
+
+# GEODIST key a b [unit]: the unit read first (a word after it: a syntax
+# error), then the key
+def geodist.of(ok: Bool, +k: String, +a: String, +b: String, +u: String) -> Cmd:
+  match ok:
+    case True{}:
+      Peek{k, PZset{ZRGeoDist{[a, b, u]}}}
+    case False{}:
+      Bad{e_unit()}
+
+def parse_geodist(args: List<&2, String>) -> Cmd:
+  match args:
+    case Con{k, Con{a, Con{b, Nil{}}}}:
+      Peek{k, PZset{ZRGeoDist{[a, b]}}}
+    case Con{+k, Con{+a, Con{+b, Con{+u, Nil{}}}}}:
+      geodist.of(Maybe.is_some(&2, G.D, geo.unit(u)), k, a, b, u)
+    case Con{k, Con{a, Con{b, Con{u, more}}}}:
+      e_syntax()
+    case _:
+      e_arity("geodist")
+
+# the options of a GEORADIUS or GEORADIUSBYMEMBER, read as their loop
+# reads them (nothing in them needs the key): the destination of the last
+# STORE or STOREDIST before any error, if one comes
+def gopt.dst(o: GOpt) -> Maybe<&2, String>:
+  match o:
+    case GOpt{wd, wh, wc, any, sort, count, store, sdist, fm, fl, br, bb, ctr, shp, conv}:
+      store
+    case GOptOf{x}:
+      gopt.dst(x)
+
+def geo.walk.of(st: GSt) -> Maybe<&2, String>:
+  match st:
+    case GGo{xs, o}:
+      gopt.dst(o)
+    case GErr{r}:
+      None{}
+
+def geo.walk(+kind: Nat, +opts: List<&2, String>) -> Maybe<&2, String>:
+  geo.walk.of(geo.loop(Nat.add(List.length(&2, String, opts), 1n), GGo{opts, gopt.new()}, kind, None{}))
+
+# whether a search stores: GEOSEARCHSTORE always, GEORADIUS and
+# GEORADIUSBYMEMBER with a STORE or a STOREDIST (opts: their options)
+def geo.walk.if(+kind: Nat, +opts: List<&2, String>) -> Maybe<&2, String>:
+  match kind:
+    case 0n:
+      geo.walk(0n, opts)
+    case 2n:
+      geo.walk(2n, opts)
+    case 5n:
+      Some{""}
+    case _:
+      None{}
+
+# the destination a GEO store writes (SGeoStore's args, its name first)
+def geo.dst(+kind: Nat, args: List<&2, String>) -> Maybe<&2, String>:
+  match kind args:
+    case 5n Con{nm, Con{d, rest}}:
+      Some{d}
+    case 0n Con{nm, Con{k, +rest}}:
+      geo.walk(0n, List.drop(&2, String, rest, 4n))
+    case 2n Con{nm, Con{k, +rest}}:
+      geo.walk(2n, List.drop(&2, String, rest, 3n))
+    case _ _:
+      None{}
+
+def geo.route(m: Maybe<&2, String>, +kind: Nat, k: String, args: List<&2, String>) -> Cmd:
+  match m:
+    case Some{d}:
+      Own{SGeoStore{kind, args}}
+    case None{}:
+      Peek{k, PZset{ZRGeoFind{args}}}
+
+def geo.parse.of(ok: Bool, +kind: Nat, +name: String, args: List<&2, String>, +n: Nat, lname: String) -> Cmd:
+  match ok args:
+    case True{} Con{+k, +rest}:
+      geo.route(geo.walk.if(kind, List.drop(&2, String, rest, Nat.sub(n, 1n))), kind, k, name <> Con{k, rest})
+    case _ _:
+      e_arity(lname)
+
+# a search of a kind (n: Redis's arity, the arguments it takes at least):
+# a read of its key (a Peek, its arguments read as it runs), or SGeoStore
+# when it stores
+def geo.parse(+kind: Nat, +name: String, +args: List<&2, String>, +n: Nat, lname: String) -> Cmd:
+  geo.parse.of(Nat.is_le(n, List.length(&2, String, args)), kind, name, args, n, lname)
+
 # The administrative commands
 # ---------------------------
 # LASTSAVE, MEMORY STATS and MEMORY DOCTOR read the server's state, and
@@ -4956,7 +5922,9 @@ def cmd_id.l6(+n: String, c: Nat) -> Nat:
     case 7n:  # G
       Bool.pick(Nat, String.eq(n, "GETSET"), 6n,
       Bool.pick(Nat, String.eq(n, "GETDEL"), 27n,
-      Bool.pick(Nat, String.eq(n, "GETBIT"), 40n, 0n)))
+      Bool.pick(Nat, String.eq(n, "GETBIT"), 40n,
+      Bool.pick(Nat, String.eq(n, "GEOADD"), 189n,
+      Bool.pick(Nat, String.eq(n, "GEOPOS"), 192n, 0n)))))
     case 8n:  # H
       Bool.pick(Nat, String.eq(n, "HSETNX"), 52n, 0n)
     case 9n:  # I
@@ -5004,6 +5972,9 @@ def cmd_id.l7(+n: String, c: Nat) -> Nat:
       Bool.pick(Nat, String.eq(n, "DISCARD"), 163n, 0n)
     case 6n:  # F
       Bool.pick(Nat, String.eq(n, "FLUSHDB"), 20n, 0n)
+    case 7n:  # G
+      Bool.pick(Nat, String.eq(n, "GEODIST"), 190n,
+      Bool.pick(Nat, String.eq(n, "GEOHASH"), 191n, 0n))
     case 8n:  # H
       Bool.pick(Nat, String.eq(n, "HSTRLEN"), 58n,
       Bool.pick(Nat, String.eq(n, "HEXISTS"), 59n,
@@ -5062,6 +6033,9 @@ def cmd_id.l8(+n: String, c: Nat) -> Nat:
 
 def cmd_id.l9(+n: String, c: Nat) -> Nat:
   match c:
+    case 7n:  # G
+      Bool.pick(Nat, String.eq(n, "GEORADIUS"), 193n,
+      Bool.pick(Nat, String.eq(n, "GEOSEARCH"), 197n, 0n))
     case 16n:  # P
       Bool.pick(Nat, String.eq(n, "PEXPIREAT"), 31n, 0n)
     case 18n:  # R
@@ -5125,6 +6099,8 @@ def cmd_id.l12(+n: String, c: Nat) -> Nat:
   match c:
     case 2n:  # B
       Bool.pick(Nat, String.eq(n, "BGREWRITEAOF"), 176n, 0n)
+    case 7n:  # G
+      Bool.pick(Nat, String.eq(n, "GEORADIUS_RO"), 194n, 0n)
     case 8n:  # H
       Bool.pick(Nat, String.eq(n, "HINCRBYFLOAT"), 99n, 0n)
     case 16n:  # P
@@ -5143,6 +6119,8 @@ def cmd_id.l13(+n: String, c: Nat) -> Nat:
 
 def cmd_id.l14(+n: String, c: Nat) -> Nat:
   match c:
+    case 7n:  # G
+      Bool.pick(Nat, String.eq(n, "GEOSEARCHSTORE"), 198n, 0n)
     case 26n:  # Z
       Bool.pick(Nat, String.eq(n, "ZREVRANGEBYLEX"), 135n,
       Bool.pick(Nat, String.eq(n, "ZREMRANGEBYLEX"), 139n, 0n))
@@ -5161,6 +6139,20 @@ def cmd_id.l16(+n: String, c: Nat) -> Nat:
     case 26n:  # Z
       Bool.pick(Nat, String.eq(n, "ZREVRANGEBYSCORE"), 133n,
       Bool.pick(Nat, String.eq(n, "ZREMRANGEBYSCORE"), 138n, 0n))
+    case _:
+      0n
+
+def cmd_id.l17(+n: String, c: Nat) -> Nat:
+  match c:
+    case 7n:  # G
+      Bool.pick(Nat, String.eq(n, "GEORADIUSBYMEMBER"), 195n, 0n)
+    case _:
+      0n
+
+def cmd_id.l20(+n: String, c: Nat) -> Nat:
+  match c:
+    case 7n:  # G
+      Bool.pick(Nat, String.eq(n, "GEORADIUSBYMEMBER_RO"), 196n, 0n)
     case _:
       0n
 
@@ -5194,6 +6186,10 @@ def cmd_id(+n: String, len: Nat) -> Nat:
       cmd_id.l15(n, Nat.sub(U32.to_nat(String.code_at(n, 0n)), 64n))
     case 16n:
       cmd_id.l16(n, Nat.sub(U32.to_nat(String.code_at(n, 0n)), 64n))
+    case 17n:
+      cmd_id.l17(n, Nat.sub(U32.to_nat(String.code_at(n, 0n)), 64n))
+    case 20n:
+      cmd_id.l20(n, Nat.sub(U32.to_nat(String.code_at(n, 0n)), 64n))
     case _:
       0n
 
@@ -5864,6 +6860,38 @@ def parse_id(id: Nat, name: String, args: List<&2, String>) -> Cmd:
       shutdown.cmd(args)
     case 188n:  # LOLWUT
       lolwut.of(args)
+    case 189n:  # GEOADD
+      match args:
+        case Con{+k, Con{+a, Con{+b, Con{+c, rest}}}}:
+          parse_geoadd(k, Con{a, Con{b, Con{c, rest}}})
+        case _:
+          e_arity("geoadd")
+    case 190n:  # GEODIST
+      parse_geodist(args)
+    case 191n:  # GEOHASH
+      match args:
+        case Con{k, ms}:
+          Peek{k, PZset{ZRGeoHash{ms}}}
+        case Nil{}:
+          e_arity("geohash")
+    case 192n:  # GEOPOS
+      match args:
+        case Con{k, ms}:
+          Peek{k, PZset{ZRGeoPos{ms}}}
+        case Nil{}:
+          e_arity("geopos")
+    case 193n:  # GEORADIUS
+      geo.parse(0n, name, args, 5n, "georadius")
+    case 194n:  # GEORADIUS_RO
+      geo.parse(1n, name, args, 5n, "georadius_ro")
+    case 195n:  # GEORADIUSBYMEMBER
+      geo.parse(2n, name, args, 4n, "georadiusbymember")
+    case 196n:  # GEORADIUSBYMEMBER_RO
+      geo.parse(3n, name, args, 4n, "georadiusbymember_ro")
+    case 197n:  # GEOSEARCH
+      geo.parse(4n, name, args, 6n, "geosearch")
+    case 198n:  # GEOSEARCHSTORE
+      geo.parse(5n, name, args, 7n, "geosearchstore")
     case _:
       e_unknown(name, args)
 
@@ -6534,6 +7562,26 @@ def stat.top(+id: Nat) -> Nat:
       187n
     case 188n:
       188n
+    case 189n:
+      189n
+    case 190n:
+      190n
+    case 191n:
+      191n
+    case 192n:
+      192n
+    case 193n:
+      193n
+    case 194n:
+      194n
+    case 195n:
+      195n
+    case 196n:
+      196n
+    case 197n:
+      197n
+    case 198n:
+      198n
     case _:
       0n
 
@@ -6541,35 +7589,35 @@ def stat.top(+id: Nat) -> Nat:
 def stat.sub.client(+sub: Nat) -> Nat:
   match sub:
     case 1n:
-      189n
-    case 2n:
-      190n
-    case 3n:
-      191n
-    case 4n:
-      192n
-    case 5n:
-      193n
-    case 6n:
-      194n
-    case 7n:
-      195n
-    case 8n:
-      196n
-    case 9n:
-      197n
-    case 10n:
-      198n
-    case 11n:
       199n
-    case 12n:
+    case 2n:
       200n
-    case 13n:
+    case 3n:
       201n
-    case 14n:
+    case 4n:
       202n
-    case 15n:
+    case 5n:
       203n
+    case 6n:
+      204n
+    case 7n:
+      205n
+    case 8n:
+      206n
+    case 9n:
+      207n
+    case 10n:
+      208n
+    case 11n:
+      209n
+    case 12n:
+      210n
+    case 13n:
+      211n
+    case 14n:
+      212n
+    case 15n:
+      213n
     case _:
       0n
 
@@ -6577,9 +7625,9 @@ def stat.sub.client(+sub: Nat) -> Nat:
 def stat.sub.function(+sub: Nat) -> Nat:
   match sub:
     case 1n:
-      204n
+      214n
     case 2n:
-      205n
+      215n
     case _:
       0n
 
@@ -6587,15 +7635,15 @@ def stat.sub.function(+sub: Nat) -> Nat:
 def stat.sub.config(+sub: Nat) -> Nat:
   match sub:
     case 1n:
-      206n
+      216n
     case 2n:
-      207n
+      217n
     case 3n:
-      208n
+      218n
     case 4n:
-      209n
+      219n
     case 5n:
-      210n
+      220n
     case _:
       0n
 
@@ -6603,19 +7651,19 @@ def stat.sub.config(+sub: Nat) -> Nat:
 def stat.sub.command(+sub: Nat) -> Nat:
   match sub:
     case 1n:
-      211n
+      221n
     case 2n:
-      212n
+      222n
     case 3n:
-      213n
+      223n
     case 4n:
-      214n
+      224n
     case 5n:
-      215n
+      225n
     case 6n:
-      216n
+      226n
     case 7n:
-      217n
+      227n
     case _:
       0n
 
@@ -6623,15 +7671,15 @@ def stat.sub.command(+sub: Nat) -> Nat:
 def stat.sub.object(+sub: Nat) -> Nat:
   match sub:
     case 1n:
-      218n
+      228n
     case 2n:
-      219n
+      229n
     case 3n:
-      220n
+      230n
     case 4n:
-      221n
+      231n
     case 5n:
-      222n
+      232n
     case _:
       0n
 
@@ -6639,17 +7687,17 @@ def stat.sub.object(+sub: Nat) -> Nat:
 def stat.sub.memory(+sub: Nat) -> Nat:
   match sub:
     case 1n:
-      223n
+      233n
     case 2n:
-      224n
+      234n
     case 3n:
-      225n
+      235n
     case 4n:
-      226n
+      236n
     case 5n:
-      227n
+      237n
     case 6n:
-      228n
+      238n
     case _:
       0n
 
@@ -6657,17 +7705,17 @@ def stat.sub.memory(+sub: Nat) -> Nat:
 def stat.sub.pubsub(+sub: Nat) -> Nat:
   match sub:
     case 1n:
-      229n
+      239n
     case 2n:
-      230n
+      240n
     case 3n:
-      231n
+      241n
     case 4n:
-      232n
+      242n
     case 5n:
-      233n
+      243n
     case 6n:
-      234n
+      244n
     case _:
       0n
 
@@ -7051,96 +8099,116 @@ def stat.name(+key: Nat) -> String:
     case 188n:
       "lolwut"
     case 189n:
-      "client|id"
+      "geoadd"
     case 190n:
-      "client|help"
+      "geodist"
     case 191n:
-      "client|reply"
+      "geohash"
     case 192n:
-      "client|getname"
+      "geopos"
     case 193n:
-      "client|setname"
+      "georadius"
     case 194n:
-      "client|caching"
+      "georadius_ro"
     case 195n:
-      "client|unblock"
+      "georadiusbymember"
     case 196n:
-      "client|getredir"
+      "georadiusbymember_ro"
     case 197n:
-      "client|no-evict"
+      "geosearch"
     case 198n:
-      "client|trackinginfo"
+      "geosearchstore"
     case 199n:
-      "client|list"
+      "client|id"
     case 200n:
-      "client|info"
+      "client|help"
     case 201n:
-      "client|kill"
+      "client|reply"
     case 202n:
-      "client|pause"
+      "client|getname"
     case 203n:
-      "client|unpause"
+      "client|setname"
     case 204n:
-      "function|flush"
+      "client|caching"
     case 205n:
-      "function|help"
+      "client|unblock"
     case 206n:
-      "config|get"
+      "client|getredir"
     case 207n:
-      "config|set"
+      "client|no-evict"
     case 208n:
-      "config|resetstat"
+      "client|trackinginfo"
     case 209n:
-      "config|rewrite"
+      "client|list"
     case 210n:
-      "config|help"
+      "client|info"
     case 211n:
-      "command|info"
+      "client|kill"
     case 212n:
-      "command|docs"
+      "client|pause"
     case 213n:
-      "command|list"
+      "client|unpause"
     case 214n:
-      "command|help"
+      "function|flush"
     case 215n:
-      "command|count"
+      "function|help"
     case 216n:
-      "command|getkeys"
+      "config|get"
     case 217n:
-      "command|getkeysandflags"
+      "config|set"
     case 218n:
-      "object|help"
+      "config|resetstat"
     case 219n:
-      "object|freq"
+      "config|rewrite"
     case 220n:
-      "object|encoding"
+      "config|help"
     case 221n:
-      "object|refcount"
+      "command|info"
     case 222n:
-      "object|idletime"
+      "command|docs"
     case 223n:
-      "memory|help"
+      "command|list"
     case 224n:
-      "memory|usage"
+      "command|help"
     case 225n:
-      "memory|stats"
+      "command|count"
     case 226n:
-      "memory|doctor"
+      "command|getkeys"
     case 227n:
-      "memory|purge"
+      "command|getkeysandflags"
     case 228n:
-      "memory|malloc-stats"
+      "object|help"
     case 229n:
-      "pubsub|channels"
+      "object|freq"
     case 230n:
-      "pubsub|help"
+      "object|encoding"
     case 231n:
-      "pubsub|numpat"
+      "object|refcount"
     case 232n:
-      "pubsub|numsub"
+      "object|idletime"
     case 233n:
-      "pubsub|shardchannels"
+      "memory|help"
     case 234n:
+      "memory|usage"
+    case 235n:
+      "memory|stats"
+    case 236n:
+      "memory|doctor"
+    case 237n:
+      "memory|purge"
+    case 238n:
+      "memory|malloc-stats"
+    case 239n:
+      "pubsub|channels"
+    case 240n:
+      "pubsub|help"
+    case 241n:
+      "pubsub|numpat"
+    case 242n:
+      "pubsub|numsub"
+    case 243n:
+      "pubsub|shardchannels"
+    case 244n:
       "pubsub|shardnumsub"
     case _:
       ""
@@ -7526,96 +8594,116 @@ def stat.arity(+key: Nat) -> Nat:
     case 188n:
       3n
     case 189n:
-      4n
+      11n
     case 190n:
-      4n
+      9n
     case 191n:
-      6n
-    case 192n:
-      4n
-    case 193n:
-      6n
-    case 194n:
-      6n
-    case 195n:
-      7n
-    case 196n:
-      4n
-    case 197n:
-      6n
-    case 198n:
-      4n
-    case 199n:
       5n
+    case 192n:
+      5n
+    case 193n:
+      13n
+    case 194n:
+      13n
+    case 195n:
+      11n
+    case 196n:
+      11n
+    case 197n:
+      15n
+    case 198n:
+      17n
+    case 199n:
+      4n
     case 200n:
       4n
     case 201n:
-      7n
+      6n
     case 202n:
-      7n
+      4n
     case 203n:
-      4n
+      6n
     case 204n:
-      5n
+      6n
     case 205n:
-      4n
-    case 206n:
       7n
+    case 206n:
+      4n
     case 207n:
-      9n
+      6n
     case 208n:
       4n
     case 209n:
-      4n
+      5n
     case 210n:
       4n
     case 211n:
-      5n
+      7n
     case 212n:
-      5n
+      7n
     case 213n:
-      5n
-    case 214n:
       4n
+    case 214n:
+      5n
     case 215n:
       4n
     case 216n:
-      9n
+      7n
     case 217n:
       9n
     case 218n:
       4n
     case 219n:
-      6n
-    case 220n:
-      6n
-    case 221n:
-      6n
-    case 222n:
-      6n
-    case 223n:
       4n
+    case 220n:
+      4n
+    case 221n:
+      5n
+    case 222n:
+      5n
+    case 223n:
+      5n
     case 224n:
-      7n
+      4n
     case 225n:
       4n
     case 226n:
-      4n
+      9n
     case 227n:
-      4n
+      9n
     case 228n:
       4n
     case 229n:
-      5n
+      6n
     case 230n:
-      4n
+      6n
     case 231n:
-      4n
+      6n
     case 232n:
-      5n
+      6n
     case 233n:
-      5n
+      4n
     case 234n:
+      7n
+    case 235n:
+      4n
+    case 236n:
+      4n
+    case 237n:
+      4n
+    case 238n:
+      4n
+    case 239n:
+      5n
+    case 240n:
+      4n
+    case 241n:
+      4n
+    case 242n:
+      5n
+    case 243n:
+      5n
+    case 244n:
       5n
     case _:
       1n
@@ -7835,11 +8923,31 @@ def stat.risky(+key: Nat) -> Bool:
       True{}
     case 183n:
       True{}
-    case 219n:
+    case 189n:
       True{}
-    case 222n:
+    case 190n:
       True{}
-    case 224n:
+    case 191n:
+      True{}
+    case 192n:
+      True{}
+    case 193n:
+      True{}
+    case 194n:
+      True{}
+    case 195n:
+      True{}
+    case 196n:
+      True{}
+    case 197n:
+      True{}
+    case 198n:
+      True{}
+    case 229n:
+      True{}
+    case 232n:
+      True{}
+    case 234n:
       True{}
     case _:
       False{}
@@ -7861,25 +8969,25 @@ def stat.unseen(+key: Nat) -> Bool:
       True{}
     case 187n:
       True{}
-    case 195n:
-      True{}
-    case 197n:
-      True{}
-    case 199n:
-      True{}
-    case 201n:
-      True{}
-    case 202n:
-      True{}
-    case 203n:
-      True{}
-    case 206n:
+    case 205n:
       True{}
     case 207n:
       True{}
-    case 208n:
-      True{}
     case 209n:
+      True{}
+    case 211n:
+      True{}
+    case 212n:
+      True{}
+    case 213n:
+      True{}
+    case 216n:
+      True{}
+    case 217n:
+      True{}
+    case 218n:
+      True{}
+    case 219n:
       True{}
     case _:
       False{}
@@ -8196,17 +9304,37 @@ def stat.keyspace(+key: Nat) -> Bool:
       True{}
     case 188n:
       True{}
-    case 204n:
+    case 189n:
       True{}
-    case 219n:
+    case 190n:
       True{}
-    case 220n:
+    case 191n:
       True{}
-    case 221n:
+    case 192n:
       True{}
-    case 222n:
+    case 193n:
       True{}
-    case 224n:
+    case 194n:
+      True{}
+    case 195n:
+      True{}
+    case 196n:
+      True{}
+    case 197n:
+      True{}
+    case 198n:
+      True{}
+    case 214n:
+      True{}
+    case 229n:
+      True{}
+    case 230n:
+      True{}
+    case 231n:
+      True{}
+    case 232n:
+      True{}
+    case 234n:
       True{}
     case _:
       False{}
@@ -8391,7 +9519,15 @@ def stat.pausable(+key: Nat) -> Bool:
       True{}
     case 182n:
       True{}
-    case 204n:
+    case 189n:
+      True{}
+    case 193n:
+      True{}
+    case 195n:
+      True{}
+    case 198n:
+      True{}
+    case 214n:
       True{}
     case _:
       False{}
@@ -8493,6 +9629,14 @@ def stat.denyoom(+key: Nat) -> Bool:
     case 181n:
       True{}
     case 182n:
+      True{}
+    case 189n:
+      True{}
+    case 193n:
+      True{}
+    case 195n:
+      True{}
+    case 198n:
       True{}
     case _:
       False{}
@@ -8761,6 +9905,26 @@ def stat.touch(+key: Nat) -> Bool:
     case 180n:
       True{}
     case 181n:
+      True{}
+    case 189n:
+      True{}
+    case 190n:
+      True{}
+    case 191n:
+      True{}
+    case 192n:
+      True{}
+    case 193n:
+      True{}
+    case 194n:
+      True{}
+    case 195n:
+      True{}
+    case 196n:
+      True{}
+    case 197n:
+      True{}
+    case 198n:
       True{}
     case _:
       False{}
@@ -10178,6 +11342,66 @@ def stat.cw(+code: Nat) -> U32:
       2977
     case 704n:
       2978
+    case 705n:
+      2980
+    case 706n:
+      2984
+    case 707n:
+      2992
+    case 708n:
+      3009
+    case 709n:
+      3010
+    case 710n:
+      3012
+    case 711n:
+      3016
+    case 712n:
+      3024
+    case 713n:
+      3040
+    case 714n:
+      3087
+    case 715n:
+      3095
+    case 716n:
+      3099
+    case 717n:
+      3101
+    case 718n:
+      3102
+    case 719n:
+      3111
+    case 720n:
+      3115
+    case 721n:
+      3117
+    case 722n:
+      3118
+    case 723n:
+      3123
+    case 724n:
+      3125
+    case 725n:
+      3126
+    case 726n:
+      3129
+    case 727n:
+      3130
+    case 728n:
+      3132
+    case 729n:
+      3143
+    case 730n:
+      3147
+    case 731n:
+      3149
+    case 732n:
+      3150
+    case 733n:
+      3155
+    case 734n:
+      3157
     case _:
       63
 
@@ -11823,6 +13047,81 @@ def stat.code.lo46(+lo: Nat) -> Nat:
       703n
     case 34n:
       704n
+    case 36n:
+      705n
+    case 40n:
+      706n
+    case 48n:
+      707n
+    case _:
+      0n
+
+def stat.code.lo47(+lo: Nat) -> Nat:
+  match lo:
+    case 1n:
+      708n
+    case 2n:
+      709n
+    case 4n:
+      710n
+    case 8n:
+      711n
+    case 16n:
+      712n
+    case 32n:
+      713n
+    case _:
+      0n
+
+def stat.code.lo48(+lo: Nat) -> Nat:
+  match lo:
+    case 15n:
+      714n
+    case 23n:
+      715n
+    case 27n:
+      716n
+    case 29n:
+      717n
+    case 30n:
+      718n
+    case 39n:
+      719n
+    case 43n:
+      720n
+    case 45n:
+      721n
+    case 46n:
+      722n
+    case 51n:
+      723n
+    case 53n:
+      724n
+    case 54n:
+      725n
+    case 57n:
+      726n
+    case 58n:
+      727n
+    case 60n:
+      728n
+    case _:
+      0n
+
+def stat.code.lo49(+lo: Nat) -> Nat:
+  match lo:
+    case 7n:
+      729n
+    case 11n:
+      730n
+    case 13n:
+      731n
+    case 14n:
+      732n
+    case 19n:
+      733n
+    case 21n:
+      734n
     case _:
       0n
 
@@ -11922,6 +13221,12 @@ def stat.code.hl(+hi: Nat, +lo: Nat) -> Nat:
       stat.code.lo45(lo)
     case 46n:
       stat.code.lo46(lo)
+    case 47n:
+      stat.code.lo47(lo)
+    case 48n:
+      stat.code.lo48(lo)
+    case 49n:
+      stat.code.lo49(lo)
     case _:
       0n
 
@@ -14047,6 +15352,14 @@ def zread(op: ZRead, +z: KV.Zset) -> Reply:
       zq.reply(q, z)
     case ZRScan{args}:
       zscan.of(hscan.args(args), z)
+    case ZRGeoPos{ms}:
+      RArray{geo.poss(ms, z)}
+    case ZRGeoHash{ms}:
+      RArray{geo.hashes(ms, z)}
+    case ZRGeoDist{args}:
+      geo.dist(args, z)
+    case ZRGeoFind{args}:
+      geo.find(args, Some{z})
 
 # of a key not there
 def zread.none(op: ZRead) -> Reply:
@@ -14069,6 +15382,14 @@ def zread.none(op: ZRead) -> Reply:
       RArray{Nil{}}
     case ZRScan{args}:
       RArray{[RBulk{"0"}, RArray{Nil{}}]}
+    case ZRGeoPos{ms}:
+      RArray{geo.nulls(ms, RNullA{})}
+    case ZRGeoHash{ms}:
+      RArray{geo.nulls(ms, RNull{})}
+    case ZRGeoDist{args}:
+      RNull{}
+    case ZRGeoFind{args}:
+      geo.find(args, None{})
 
 # of a key that holds a string (m: the string's entry, or none)
 def zread.str(op: ZRead, m: Maybe<&2, KV.Item<String>>) -> Reply:
@@ -18545,7 +19866,8 @@ def ds.copy(+src: String, +dst: String, +j: Nat, rep: Bool, ds: Ds) -> Bool & Ds
 # (a COPY without DB in a file Redis wrote); every database emptied
 # (FLUSHALL); SORT with STORE, which writes what it makes of the keys of
 # the focus to its destination there (sort.write); PFMERGE, which writes
-# the union of its keys to its destination (pf.merge.cmd)
+# the union of its keys to its destination (pf.merge.cmd); a GEO search
+# that stores, which writes what it finds to its destination (geo.write)
 type Act is Data:
   ARun{c: Cmd}
   AFocus{db: Nat}
@@ -18557,6 +19879,7 @@ type Act is Data:
   AWipe{}
   ASort{key: String, o: SortO}
   APfMerge{dst: String, srcs: List<&2, String>}
+  AGeo{kind: Nat, args: List<&2, String>}
 
 def act.run(r: Reply & Db, pre: List<&2, Db>, post: List<&2, Db>) -> Reply & Ds:
   (x, d) = r
@@ -18587,8 +19910,43 @@ def pf.merge.ds(+ds: Ds, +dst: String, srcs: List<&2, String>) -> Cmd:
   +d = ds.focused(ds)
   pf.merge.cmd(db.trie(d), db.now(d), dst, srcs)
 
-# an act's reply, and the databases after it (SORT with STORE runs the
-# command it makes, so it acts as ARun of that command does)
+# a GEO store's source: GEOSEARCHSTORE's second key, the others' first
+def geo.src(+kind: Nat, args: List<&2, String>) -> String:
+  match kind args:
+    case 5n Con{nm, Con{d, Con{k, rest}}}:
+      k
+    case _ Con{nm, Con{k, rest}}:
+      k
+    case _ _:
+      ""
+
+def geo.on(m: Maybe<&2, KV.Val>, +kind: Nat, args: List<&2, String>) -> GFound:
+  match m:
+    case None{}:
+      geo.found(kind, args, None{})
+    case Some{KV.VColl{KV.CZset{+z}}}:
+      geo.found(kind, args, Some{z})
+    case Some{v}:
+      GFErr{e_wrongtype()}
+
+# what a GEO store finds at now in the trie t: its source looked up first
+# (WRONGTYPE for a key of another kind), then its search
+def geo.store.found(+t: KV.Trie<KV.Val>, +now: Nat, +kind: Nat, +args: List<&2, String>) -> GFound:
+  geo.on(KV.read(KV.Val, t, geo.src(kind, args), now), kind, args)
+
+# a GEO store's reply (session.bend), on the database in focus as it is
+# before the act that writes (AGeo)
+def geo.store.reply(+d: Db, +kind: Nat, args: List<&2, String>) -> Reply:
+  geo.stored(geo.store.found(db.trie(d), db.now(d), kind, args))
+
+# a GEO store's command (geo.write) on the focus
+def geo.store.ds(+ds: Ds, +kind: Nat, args: List<&2, String>) -> Cmd:
+  +d = ds.focused(ds)
+  geo.write(geo.store.found(db.trie(d), db.now(d), kind, args))
+
+# an act's reply, and the databases after it (SORT with STORE, PFMERGE
+# and a GEO store run the command they make, so each acts as ARun of that
+# command does)
 def act(a: Act, ds: Ds) -> Reply & Ds:
   match a ds:
     case ARun{c} x:
@@ -18614,6 +19972,9 @@ def act(a: Act, ds: Ds) -> Reply & Ds:
     case APfMerge{+d, srcs} x:
       +y = x
       act.cmd(pf.merge.ds(y, d, srcs), y)
+    case AGeo{+k, args} x:
+      +y = x
+      act.cmd(geo.store.ds(y, k, args), y)
 
 def ds_of(r: Reply & Ds) -> Ds:
   (x, ds) = r

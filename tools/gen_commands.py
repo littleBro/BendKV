@@ -85,7 +85,9 @@ COMMANDS = {
     "publish": [], "spublish": [], "pubsub": ["channels", "help", "numpat", "numsub",
     "shardchannels", "shardnumsub"], "monitor": [], "bgrewriteaof": [], "sort": [],
     "sort_ro": [], "pfadd": [], "pfcount": [], "pfmerge": [], "pfdebug": [], "pfselftest": [],
-    "lastsave": [], "role": [], "wait": [], "shutdown": [], "lolwut": []}
+    "lastsave": [], "role": [], "wait": [], "shutdown": [], "lolwut": [], "geoadd": [],
+    "geodist": [], "geohash": [], "geopos": [], "georadius": [], "georadius_ro": [],
+    "georadiusbymember": [], "georadiusbymember_ro": [], "geosearch": [], "geosearchstore": []}
 
 # Step 1: redis-server -> facts
 # -----------------------------
@@ -273,16 +275,22 @@ def reply(v):
 def statuses(xs):
     return [x["+"] for x in xs]
 
-# a key specification of an index and a range, the only kind BendKV's
-# commands have
+# a key specification of a range from an index, or from the word after a
+# keyword searched from an index on (GEORADIUS's STORE and STOREDIST),
+# the only kinds BendKV's commands have
 def kspec(name, ks):
     m = dict(pairs(ks))
     bs, fk = dict(pairs(m["begin_search"])), dict(pairs(m["find_keys"]))
-    if bs["type"] != "index" or fk["type"] != "range":
-        raise SystemExit(f"gen_commands.py: {name} has a key spec other than an index and a range")
+    if bs["type"] not in ("index", "keyword") or fk["type"] != "range":
+        raise SystemExit(f"gen_commands.py: {name} has a key spec other than a range")
     b, f = dict(pairs(bs["spec"])), dict(pairs(fk["spec"]))
-    return (f"KSpec{{{blist([bstr(x) for x in statuses(m['flags'])])}, {b['index']}n, "
-            f"{bint(f['lastkey'])}, {f['keystep']}n, {f['limit']}n}}")
+    flags = blist([bstr(x) for x in statuses(m['flags'])])
+    rng = f"{bint(f['lastkey'])}, {f['keystep']}n, {f['limit']}n"
+    if bs["type"] == "keyword":
+        if b["startfrom"] <= 0:
+            raise SystemExit(f"gen_commands.py: {name} searches a keyword from the end")
+        return f"KSpecKw{{{flags}, {bstr(b['keyword'])}, {b['startfrom']}n, {rng}}}"
+    return f"KSpec{{{flags}, {b['index']}n, {rng}}}"
 
 # a command's description and documentation, as RESP2 has them (for
 # what they say) and as RESP3 types them (info3, docs3: for its replies)
@@ -374,7 +382,9 @@ SBEGIN, SEND = "# BEGIN gen_commands: stats\n", "# END gen_commands: stats\n"
 # another kind (WRONGTYPE) and on values that are no scores, the commands
 # of HyperLogLogs on a value that is none (WRONGTYPE) or whose opcodes
 # are invalid (INVALIDOBJ), PFDEBUG on a key not there or on a
-# subcommand read once the key is found, PFSELFTEST on a check it fails.
+# subcommand read once the key is found, PFSELFTEST on a check it fails,
+# the commands of GEO on a key of another kind (WRONGTYPE), and the
+# searches on arguments read once their key is found.
 # (SET's time
 # can overflow too, past 9 * 10^18 ms only: SET is left out, so that a
 # batch of SETs needs no look at its replies.)
@@ -391,7 +401,9 @@ RISKY = {"incr", "decr", "incrby", "decrby", "expire", "pexpire", "setex", "pset
          "zrangebylex", "zrevrangebylex", "zrevrange", "zremrangebyrank", "zremrangebyscore",
          "zremrangebylex", "zpopmin", "zpopmax", "zscan", "zunion", "zinter", "zdiff",
          "zintercard", "zunionstore", "zinterstore", "zdiffstore", "zrangestore", "zmpop",
-         "zrandmember", "sort", "sort_ro", "pfadd", "pfcount", "pfmerge", "pfdebug", "pfselftest"}
+         "zrandmember", "sort", "sort_ro", "pfadd", "pfcount", "pfmerge", "pfdebug", "pfselftest",
+         "geoadd", "geodist", "geohash", "geopos", "georadius", "georadius_ro", "georadiusbymember",
+         "georadiusbymember_ro", "geosearch", "geosearchstore"}
 
 # BendKV's commands that may be replicated (MAY_REPLICATE in Redis's
 # src/commands/*.json), a flag COMMAND INFO hides: a monitor may not run

@@ -2471,6 +2471,15 @@ def ek.sort(o: R.SortO, +j: Nat) -> List<&2, Ek>:
     case R.SortO{by, off, cnt, gs, desc, alpha}:
       Nil{}
 
+# a GEO search that stores: georadiusstore (geosearchstore for
+# GEOSEARCHSTORE) when it set its destination, del when it deleted it
+def ek.geo(m: Maybe<&2, String>, +kind: Nat, +j: Nat) -> List<&2, Ek>:
+  match m:
+    case Some{d}:
+      [EkS{j, d, Bool.pick(String, Nat.is_eq(kind, 5n), "geosearchstore", "georadiusstore"), ev.z()}]
+    case None{}:
+      Nil{}
+
 # what a command did to each key it wrote (j: its database), in order
 def ek.base(+c: R.Cmd, +j: Nat, +pre: R.Ds, +es: List<&2, A.Ent>) -> List<&2, Ek>:
   match c:
@@ -2516,6 +2525,8 @@ def ek.base(+c: R.Cmd, +j: Nat, +pre: R.Ds, +es: List<&2, A.Ent>) -> List<&2, Ek
       ek.sort(o, j)
     case R.Own{R.SPfMerge{+d, srcs}}:
       [EkW{j, d, "pfadd", ev.str()}]
+    case R.Own{R.SGeoStore{+k, a}}:
+      ek.geo(R.geo.dst(k, a), k, j)
     case R.Own{o}:
       ek.ents(es)
     case _:

@@ -1,0 +1,630 @@
+diff --git a/bend2/base.bend b/bend2/base.bend
+index b3eb165..568111a 100644
+--- a/bend2/base.bend
++++ b/bend2/base.bend
+@@ -1930,6 +1930,235 @@ def F32.from_nat(n: Nat) -> F32:
+ def F32.to_nat(a: F32) -> Nat:
+   U32.to_nat(F32.to_u32(a))
+ 
++# F64
++# ---
++# C's double (IEEE 754's binary64) as the two 32-bit halves of its bits,
++# the high one first, since a term holds no 64-bit word: F64.add(ah, al,
++# bh, bl) is the sum of the doubles (ah, al) and (bh, bl), as its halves.
++# Each is native: the C lane runs C's own double arithmetic, strtod and
++# libm, so a program reads, computes and rounds as a C program that links
++# the same libm; the JS lane runs Number and Math.
++
++# the double that the whole of s reads as by C's strtod: s not empty, its
++# first byte not a space, none left over, no overflow and no underflow to
++# 0, and not NaN; a NaN when s does not read so
++law F64.read:
++  for s: String
++  U32 & U32
++
++law F64.add:
++  for ah: U32
++  for al: U32
++  for bh: U32
++  for bl: U32
++  U32 & U32
++
++law F64.sub:
++  for ah: U32
++  for al: U32
++  for bh: U32
++  for bl: U32
++  U32 & U32
++
++law F64.mul:
++  for ah: U32
++  for al: U32
++  for bh: U32
++  for bl: U32
++  U32 & U32
++
++law F64.div:
++  for ah: U32
++  for al: U32
++  for bh: U32
++  for bl: U32
++  U32 & U32
++
++law F64.atan2:
++  for ah: U32
++  for al: U32
++  for bh: U32
++  for bl: U32
++  U32 & U32
++
++law F64.pow:
++  for ah: U32
++  for al: U32
++  for bh: U32
++  for bl: U32
++  U32 & U32
++
++law F64.mod:
++  for ah: U32
++  for al: U32
++  for bh: U32
++  for bl: U32
++  U32 & U32
++
++law F64.neg:
++  for h: U32
++  for l: U32
++  U32 & U32
++
++law F64.abs:
++  for h: U32
++  for l: U32
++  U32 & U32
++
++law F64.sqrt:
++  for h: U32
++  for l: U32
++  U32 & U32
++
++law F64.exp:
++  for h: U32
++  for l: U32
++  U32 & U32
++
++law F64.log:
++  for h: U32
++  for l: U32
++  U32 & U32
++
++law F64.log2:
++  for h: U32
++  for l: U32
++  U32 & U32
++
++law F64.log10:
++  for h: U32
++  for l: U32
++  U32 & U32
++
++law F64.sin:
++  for h: U32
++  for l: U32
++  U32 & U32
++
++law F64.cos:
++  for h: U32
++  for l: U32
++  U32 & U32
++
++law F64.tan:
++  for h: U32
++  for l: U32
++  U32 & U32
++
++law F64.asin:
++  for h: U32
++  for l: U32
++  U32 & U32
++
++law F64.acos:
++  for h: U32
++  for l: U32
++  U32 & U32
++
++law F64.atan:
++  for h: U32
++  for l: U32
++  U32 & U32
++
++law F64.sinh:
++  for h: U32
++  for l: U32
++  U32 & U32
++
++law F64.cosh:
++  for h: U32
++  for l: U32
++  U32 & U32
++
++law F64.tanh:
++  for h: U32
++  for l: U32
++  U32 & U32
++
++law F64.floor:
++  for h: U32
++  for l: U32
++  U32 & U32
++
++law F64.ceil:
++  for h: U32
++  for l: U32
++  U32 & U32
++
++law F64.trunc:
++  for h: U32
++  for l: U32
++  U32 & U32
++
++law F64.is_eq:
++  for ah: U32
++  for al: U32
++  for bh: U32
++  for bl: U32
++  Bool
++
++law F64.is_ne:
++  for ah: U32
++  for al: U32
++  for bh: U32
++  for bl: U32
++  Bool
++
++law F64.is_lt:
++  for ah: U32
++  for al: U32
++  for bh: U32
++  for bl: U32
++  Bool
++
++law F64.is_le:
++  for ah: U32
++  for al: U32
++  for bh: U32
++  for bl: U32
++  Bool
++
++law F64.is_gt:
++  for ah: U32
++  for al: U32
++  for bh: U32
++  for bl: U32
++  Bool
++
++law F64.is_ge:
++  for ah: U32
++  for al: U32
++  for bh: U32
++  for bl: U32
++  Bool
++
++# a U32 as the double it is
++law U32.to_f64:
++  for a: U32
++  U32 & U32
++
++# a 64-bit unsigned integer (its halves) as the nearest double, the even
++# one on a tie, as C converts it
++law F64.of_u64:
++  for h: U32
++  for l: U32
++  U32 & U32
++
++# the double cut toward 0 to a 64-bit signed integer (its halves, two's
++# complement), as C converts it; NaN and a double out of its range give
++# 2^63, as x86-64's conversion does
++law F64.to_i64:
++  for h: U32
++  for l: U32
++  U32 & U32
++
++# the double rounded to the nearest 64-bit signed integer, the even one on
++# a tie, as C's llrint does; NaN and a double out of its range give 2^63
++law F64.rint_i64:
++  for h: U32
++  for l: U32
++  U32 & U32
++
+ # Char
+ # ----
+ 
+diff --git a/bend2/comp.ts b/bend2/comp.ts
+index 7a66884..a73c535 100644
+--- a/bend2/comp.ts
++++ b/bend2/comp.ts
+@@ -256,6 +256,38 @@ const OPERATIONS: Record<string, Intr> = Object.setPrototypeOf({
+   f32_bits: { C: "$0", JS: "f32_bits($0)" },
+   f32_show: { C: "f32_show(e, $0)", JS: "f32_show($0)" },
+   f32_read: { C: "f32_read(e, $0)", JS: "f32_read($0)" },
++  f64_read: {
++    C: ["f64_read(e, $0)", "($1 >> 32)", "($1 & 0xFFFFFFFF)"],
++    JS: "f64_out(f64_read($0))",
++  },
++  ...f64_ops("add:+ sub:- mul:* div:/", 4, "f64_of(e, $0, $1) $o"
++    + " f64_of(e, $2, $3)", "f64_in($0, $1) $o f64_in($2, $3)"),
++  ...f64_ops("atan2:atan2:Math.atan2 pow:pow:f64_pow mod:fmod:f64_mod", 4,
++    "$o(f64_of(e, $0, $1), f64_of(e, $2, $3))",
++    "$o(f64_in($0, $1), f64_in($2, $3))"),
++  ...f64_ops("sqrt exp log log2 log10 sin cos tan asin acos atan sinh cosh"
++    + " tanh floor ceil trunc abs:fabs:abs", 2, "$o(f64_of(e, $0, $1))",
++    "Math.$o(f64_in($0, $1))"),
++  ...f64_ops("neg:-", 2, "($o f64_of(e, $0, $1))", "($o f64_in($0, $1))"),
++  ...tpl_ops("f64_", CMPS, "((u64)(f64_of(e, $0, $1) $o f64_of(e, $2, $3)))",
++    "(f64_in($0, $1) $o f64_in($2, $3))"),
++  u32_to_f64: {
++    C: ["f64_bits(e, (double)(u32)($0))", "($1 >> 32)", "($1 & 0xFFFFFFFF)"],
++    JS: "f64_out($0)",
++  },
++  f64_of_u64: {
++    C: ["f64_bits(e, (double)((u64)(u32)($0) << 32 | (u32)($1)))",
++      "($2 >> 32)", "($2 & 0xFFFFFFFF)"],
++    JS: "f64_out(Number(BigInt($0) << 32n | BigInt($1)))",
++  },
++  f64_to_i64: {
++    C: ["f64_to_i64(f64_of(e, $0, $1))", "($2 >> 32)", "($2 & 0xFFFFFFFF)"],
++    JS: "f64_int(Math.trunc(f64_in($0, $1)))",
++  },
++  f64_rint_i64: {
++    C: ["f64_rint_i64(f64_of(e, $0, $1))", "($2 >> 32)", "($2 & 0xFFFFFFFF)"],
++    JS: "f64_int(f64_rint(f64_in($0, $1)))",
++  },
+   nat_add: { C: "nat_chk(e, $0 + $1)", JS: "nat_chk($0 + $1)" },
+   nat_mul: { C: "nat_mul(e, $0, $1)", JS: "nat_chk($0 * $1)" },
+   nat_double: { C: "nat_chk(e, $0 + $0)", JS: "nat_chk($0 + $0)" },
+@@ -446,11 +478,45 @@ INLINE u64 nat_mul(Env e, u64 a, u64 b) {
+ #define f32_show(e, x) (err_post(e.mem, ERR_FIDS), 0)
+ #define f32_read(e, s) (err_post(e.mem, ERR_FIDS), 0)
+ 
++// a device has no double: F64 fails there
++#define f64_of(e, h, l) (err_post(e.mem, ERR_FIDS), 0.0f)
++#define f64_bits(e, x) ((u64)(x) * 0)
++#define f64_to_i64(x) ((u64)(x) * 0)
++#define f64_rint_i64(x) ((u64)(x) * 0)
++#define f64_read(e, s) (err_post(e.mem, ERR_FIDS), 0)
++
+ #else
+ 
+ static Term f32_show(Env e, Term x);
+ static Term f32_read(Env e, Term s);
+ 
++// F64: a double from the two halves of its bits, and back
++INLINE double f64_of(Env e, u64 h, u64 l) {
++  union { u64 u; double f; } p = { (u64)(u32)h << 32 | (u32)l };
++  (void)e;
++  return p.f;
++}
++
++INLINE u64 f64_bits(Env e, double x) {
++  union { double f; u64 u; } p = { x };
++  (void)e;
++  return p.u;
++}
++
++// C's conversion to a 64-bit integer, cut toward 0 or (llrint) to the
++// nearest; x86-64's 2^63 for NaN and out of range, where C says nothing
++INLINE u64 f64_to_i64(double x) {
++  return x >= -9223372036854775808.0 && x < 9223372036854775808.0
++    ? (u64)(long long)x : (u64)1 << 63;
++}
++
++INLINE u64 f64_rint_i64(double x) {
++  return x >= -9223372036854775808.0 && x < 9223372036854775808.0
++    ? (u64)llrint(x) : (u64)1 << 63;
++}
++
++static u64 f64_read(Env e, Term s);
++
+ #endif
+ `.slice(1),
+   IO: String.raw`
+@@ -499,6 +565,25 @@ static Term f32_read(Env e, Term s) {
+   free(text);
+   return out;
+ }
++
++// F64.read: the bits of the double that the whole of s reads as by
++// strtod, or a NaN's
++static u64 f64_read(Env e, Term s) {
++  u64   n    = 0;
++  char* text = io_cstr(e, s, &n);
++  if (text == NULL) {
++    return 0x7FF8000000000000ull;
++  }
++  char* end;
++  errno = 0;
++  double v = strtod(text, &end);
++  u8 c0 = (u8)text[0];
++  int bad = n == 0 || c0 == ' ' || (c0 >= '\t' && c0 <= '\r')
++    || (u64)(end - text) != n || v != v || (errno == ERANGE
++      && (v == HUGE_VAL || v == -HUGE_VAL || v == 0));
++  free(text);
++  return bad ? 0x7FF8000000000000ull : f64_bits(e, v);
++}
+ `.slice(1),
+   JS: String.raw`
+ function word_to_u32(w) {
+@@ -574,6 +659,86 @@ function f32_read(s) {
+ 
+ const f32_round = ${Bend.f32_round};
+ 
++const F64_VIEW = new DataView(new ArrayBuffer(8));
++
++function f64_in(h, l) {
++  F64_VIEW.setUint32(0, h);
++  F64_VIEW.setUint32(4, l);
++  return F64_VIEW.getFloat64(0);
++}
++
++function f64_out(x) {
++  F64_VIEW.setFloat64(0, x);
++  return {$: "Tuple", fst: F64_VIEW.getUint32(0), snd: F64_VIEW.getUint32(4)};
++}
++
++function f64_int(x) {
++  const n = x !== x || x < -(2 ** 63) || x >= 2 ** 63 ? 1n << 63n
++    : BigInt.asUintN(64, BigInt(x));
++  return {$: "Tuple", fst: Number(n >> 32n), snd: Number(n & 0xFFFFFFFFn)};
++}
++
++function f64_rint(x) {
++  const r = Math.round(x);
++  return r - x === 0.5 && r % 2 !== 0 ? r - 1 : r;
++}
++
++function f64_pow(a, b) {
++  return a === 1 || a === -1 && Math.abs(b) === Infinity ? 1 : Math.pow(a, b);
++}
++
++function f64_mod(a, b) {
++  return a % b;
++}
++
++// the JS lane reads what glibc's strtod reads: decimal and hex numbers,
++// rounded to the nearest (ties to even), and inf; a NaN, an overflow and
++// an underflow to 0 read NaN
++function f64_read(s) {
++  const hex = /^([+-]?)0x([\da-f]*)(?:\.([\da-f]*))?(?:p([+-]?\d+))?$/i.exec(s);
++  if (hex !== null && hex[2] + (hex[3] ?? "") !== "") {
++    return f64_hex(hex[1] === "-", hex[2] + (hex[3] ?? ""),
++      (hex[3] ?? "").length, hex[4] ?? "0");
++  }
++  const re = /^[+-]?((\d+\.?\d*|\.\d+)(e[+-]?\d+)?|inf(inity)?)$/i;
++  if (!re.test(s)) {
++    return NaN;
++  }
++  const inf = /inf/i.test(s);
++  const v = Number(inf ? s.replace(/inf(inity)?/i, "Infinity") : s);
++  const zero = !/[1-9]/.test(s.replace(/e.*$/i, ""));
++  return !inf && !Number.isFinite(v) || v === 0 && !zero ? NaN : v;
++}
++
++// f64_hex is the double nearest to the hex digits ds times 2^(ex - 4*nf)
++function f64_hex(neg, ds, nf, ex) {
++  const m = BigInt("0x" + ds);
++  const e = BigInt(ex) - 4n * BigInt(nf);
++  const t = e + BigInt(m.toString(2).length) - 1n;
++  if (m === 0n) {
++    return neg ? -0 : 0;
++  } else if (t > 1023n || t < -1100n) {
++    return NaN;
++  }
++  let u = t - 52n > -1074n ? t - 52n : -1074n;
++  let q = m << (e > u ? e - u : 0n) >> (u > e ? u - e : 0n);
++  if (u > e) {
++    const r = m - (q << (u - e));
++    const h = 1n << (u - e - 1n);
++    q += r > h || r === h && (q & 1n) === 1n ? 1n : 0n;
++  }
++  if (q === 1n << 53n) {
++    q >>= 1n;
++    u += 1n;
++  }
++  if (q === 0n || u + 52n > 1023n) {
++    return NaN;
++  }
++  const bits = q < 1n << 52n ? q : (u + 1075n) << 52n | (q - (1n << 52n));
++  F64_VIEW.setBigUint64(0, (neg ? 1n << 63n : 0n) | bits);
++  return F64_VIEW.getFloat64(0);
++}
++
+ function char_new(code) {
+   if (code > 0x10FFFF || (code >= 0xD800 && code <= 0xDFFF)) {
+     throw "bend: " + code + " is not a Unicode scalar value";
+@@ -636,6 +801,20 @@ function tpl_ops(pre: string, names: string, C: string, JS = C):
+   }));
+ }
+ 
++// Natives of doubles (F64): k words in, the bits of the result as a
++// local of its own, then its high and its low half.
++function f64_ops(names: string, k: number, C: string, JS: string):
++  Record<string, Intr> {
++  return Object.fromEntries(names.split(" ").map((p) => {
++    const [n, o = n, jo = o] = p.split(":");
++    return ["f64_" + n, {
++      C: [`f64_bits(e, ${C.replaceAll("$o", o)})`, `($${k} >> 32)`,
++        `($${k} & 0xFFFFFFFF)`],
++      JS: `f64_out(${JS.replaceAll("$o", jo)})`,
++    }];
++  }));
++}
++
+ function tpl_deep(e: string): boolean {
+   let d = 0;
+   return [...e].some((c) =>
+diff --git a/tests/base/f64_ops.bend b/tests/base/f64_ops.bend
+new file mode 100644
+index 0000000..3b6cdd2
+--- /dev/null
++++ b/tests/base/f64_ops.bend
+@@ -0,0 +1,161 @@
++# F64's natives, a C double as the two 32-bit halves of its bits: strtod's
++# reads (decimal and hex, each rounded to the nearest) and refusals, IEEE
++# arithmetic, libm, the conversions and the comparisons, each result printed
++# as its halves
++import Base
++
++def hl(r: U32 & U32) -> String:
++  (h, l) = r
++  String.append(U32.show(h), String.append(" ", U32.show(l)))
++
++law bu:
++  for b: Bool
++  U32
++
++def bu(b):
++  match b:
++    case False{}:
++      0
++    case True{}:
++      1
++
++law main:
++  IO(Unit)
++
++def main():
++  do IO<Unit>:
++    IO.print(hl(F64.read("1.5")))
++    IO.print(hl(F64.read("-0.1")))
++    IO.print(hl(F64.read(" 1")))
++    IO.print(hl(F64.read("1 ")))
++    IO.print(hl(F64.read("")))
++    IO.print(hl(F64.read("1e400")))
++    IO.print(hl(F64.read("1e-400")))
++    IO.print(hl(F64.read("4e-320")))
++    IO.print(hl(F64.read("inf")))
++    IO.print(hl(F64.read("-Infinity")))
++    IO.print(hl(F64.read("nan")))
++    IO.print(hl(F64.read("12x")))
++    IO.print(hl(F64.read("81.634948934258375")))
++    IO.print(hl(F64.read("1e308")))
++    IO.print(hl(F64.read("0x1p-1023")))
++    IO.print(hl(F64.read("-0x1.8p1")))
++    IO.print(hl(F64.read("0X.8P+1")))
++    IO.print(hl(F64.read("0x1.00000000000008p0")))
++    IO.print(hl(F64.read("0x1.00000000000018p0")))
++    IO.print(hl(F64.read("0x1.fffffffffffff8p1023")))
++    IO.print(hl(F64.read("0x1p-1075")))
++    IO.print(hl(F64.read("0x1.0000000000001p-1075")))
++    IO.print(hl(F64.read("0x")))
++    IO.print(hl(F64.read("0x1p")))
++    IO.print(hl(F64.read("INFINITY")))
++    IO.print(hl(F64.add(1069128089, 2576980378, 1070176665, 2576980378)))
++    IO.print(hl(F64.sub(1069128089, 2576980378, 1070176665, 2576980378)))
++    IO.print(hl(F64.mul(1069128089, 2576980378, 1070176665, 2576980378)))
++    IO.print(hl(F64.div(1072693248, 0, 1074266112, 0)))
++    IO.print(hl(F64.sqrt(1073741824, 0)))
++    IO.print(hl(F64.sin(1072693248, 0)))
++    IO.print(hl(F64.cos(1072693248, 0)))
++    IO.print(hl(F64.asin(1071644672, 0)))
++    IO.print(hl(F64.abs(3221487616, 0)))
++    IO.print(hl(F64.neg(1074003968, 0)))
++    IO.print(hl(F64.floor(3221487616, 0)))
++    IO.print(hl(F64.mod(1075707904, 0, 1073741824, 0)))
++    IO.print(hl(F64.pow(1073741824, 0, 1076101120, 0)))
++    IO.print(hl(F64.atan2(1072693248, 0, 1072693248, 0)))
++    IO.print(hl(U32.to_f64(4000000000)))
++    IO.print(hl(F64.of_u64(2097152, 1)))
++    IO.print(hl(F64.of_u64(4294967295, 4294967295)))
++    IO.print(hl(F64.to_i64(3221487616, 0)))
++    IO.print(hl(F64.to_i64(2117592124, 2281731484)))
++    IO.print(hl(F64.to_i64(2146959360, 0)))
++    IO.print(hl(F64.rint_i64(1074003968, 0)))
++    IO.print(hl(F64.rint_i64(3222011904, 0)))
++    IO.print(hl(F64.rint_i64(1086206847, 4185016133)))
++    IO.print(hl(F64.rint_i64(3286325476, 1620131072)))
++    IO.print(U32.show(bu(F64.is_lt(1073217536, 0, 1073741824, 0))))
++    IO.print(U32.show(bu(F64.is_lt(1073741824, 0, 1073741824, 0))))
++    IO.print(U32.show(bu(F64.is_lt(2146959360, 0, 1072693248, 0))))
++    IO.print(U32.show(bu(F64.is_le(1073217536, 0, 1073741824, 0))))
++    IO.print(U32.show(bu(F64.is_le(1073741824, 0, 1073741824, 0))))
++    IO.print(U32.show(bu(F64.is_le(2146959360, 0, 1072693248, 0))))
++    IO.print(U32.show(bu(F64.is_eq(1073217536, 0, 1073741824, 0))))
++    IO.print(U32.show(bu(F64.is_eq(1073741824, 0, 1073741824, 0))))
++    IO.print(U32.show(bu(F64.is_eq(2146959360, 0, 1072693248, 0))))
++    IO.print(U32.show(bu(F64.is_ne(1073217536, 0, 1073741824, 0))))
++    IO.print(U32.show(bu(F64.is_ne(1073741824, 0, 1073741824, 0))))
++    IO.print(U32.show(bu(F64.is_ne(2146959360, 0, 1072693248, 0))))
++    IO.print(U32.show(bu(F64.is_gt(1073217536, 0, 1073741824, 0))))
++    IO.print(U32.show(bu(F64.is_gt(1073741824, 0, 1073741824, 0))))
++    IO.print(U32.show(bu(F64.is_gt(2146959360, 0, 1072693248, 0))))
++    IO.print(U32.show(bu(F64.is_ge(1073217536, 0, 1073741824, 0))))
++    IO.print(U32.show(bu(F64.is_ge(1073741824, 0, 1073741824, 0))))
++    IO.print(U32.show(bu(F64.is_ge(2146959360, 0, 1072693248, 0))))
++
++#|1073217536 0
++#|3216611737 2576980378
++#|2146959360 0
++#|2146959360 0
++#|2146959360 0
++#|2146959360 0
++#|2146959360 0
++#|0 8096
++#|2146435072 0
++#|4293918720 0
++#|2146959360 0
++#|2146959360 0
++#|1079273635 14340420
++#|2145504499 2246822048
++#|524288 0
++#|3221749760 0
++#|1072693248 0
++#|1072693248 0
++#|1072693248 2
++#|2146959360 0
++#|2146959360 0
++#|0 1
++#|2146959360 0
++#|2146959360 0
++#|2146435072 0
++#|1070805811 858993460
++#|3216611737 2576980378
++#|1066695393 1202590844
++#|1070945621 1431655765
++#|1073127582 1719614413
++#|1072360788 2399735022
++#|1071729192 263521932
++#|1071694162 942502758
++#|1074003968 0
++#|3221487616 0
++#|3221749760 0
++#|1073217536 0
++#|1083179008 0
++#|1072243195 1413754136
++#|1106103653 0
++#|1128267776 0
++#|1139802112 0
++#|4294967295 4294967294
++#|2147483648 0
++#|2147483648 0
++#|0 2
++#|4294967295 4294967292
++#|0 7731
++#|2147483648 0
++#|1
++#|0
++#|0
++#|1
++#|1
++#|0
++#|0
++#|1
++#|0
++#|1
++#|0
++#|1
++#|0
++#|0
++#|0
++#|0
++#|1
++#|0

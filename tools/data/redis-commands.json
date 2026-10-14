@@ -7283,6 +7283,3302 @@
     ]
    ]
   },
+  "geoadd": {
+   "docs": {
+    "%": [
+     "summary",
+     "Add one or more geospatial items in the geospatial index represented using a sorted set",
+     "since",
+     "3.2.0",
+     "group",
+     "geo",
+     "complexity",
+     "O(log(N)) for each item added, where N is the number of elements in the sorted set.",
+     "history",
+     {
+      "~": [
+       [
+        "6.2.0",
+        "Added the `CH`, `NX` and `XX` options."
+       ]
+      ]
+     },
+     "arguments",
+     [
+      {
+       "%": [
+        "name",
+        "key",
+        "type",
+        "key",
+        "key_spec_index",
+        0
+       ]
+      },
+      {
+       "%": [
+        "name",
+        "condition",
+        "type",
+        "oneof",
+        "since",
+        "6.2.0",
+        "flags",
+        {
+         "~": [
+          {
+           "+": "optional"
+          }
+         ]
+        },
+        "arguments",
+        [
+         {
+          "%": [
+           "name",
+           "nx",
+           "type",
+           "pure-token",
+           "token",
+           "NX"
+          ]
+         },
+         {
+          "%": [
+           "name",
+           "xx",
+           "type",
+           "pure-token",
+           "token",
+           "XX"
+          ]
+         }
+        ]
+       ]
+      },
+      {
+       "%": [
+        "name",
+        "change",
+        "type",
+        "pure-token",
+        "token",
+        "CH",
+        "since",
+        "6.2.0",
+        "flags",
+        {
+         "~": [
+          {
+           "+": "optional"
+          }
+         ]
+        }
+       ]
+      },
+      {
+       "%": [
+        "name",
+        "longitude_latitude_member",
+        "type",
+        "block",
+        "flags",
+        {
+         "~": [
+          {
+           "+": "multiple"
+          }
+         ]
+        },
+        "arguments",
+        [
+         {
+          "%": [
+           "name",
+           "longitude",
+           "type",
+           "double"
+          ]
+         },
+         {
+          "%": [
+           "name",
+           "latitude",
+           "type",
+           "double"
+          ]
+         },
+         {
+          "%": [
+           "name",
+           "member",
+           "type",
+           "string"
+          ]
+         }
+        ]
+       ]
+      }
+     ]
+    ]
+   },
+   "info": [
+    "geoadd",
+    -5,
+    {
+     "~": [
+      {
+       "+": "write"
+      },
+      {
+       "+": "denyoom"
+      }
+     ]
+    },
+    1,
+    1,
+    1,
+    {
+     "~": [
+      {
+       "+": "@write"
+      },
+      {
+       "+": "@geo"
+      },
+      {
+       "+": "@slow"
+      }
+     ]
+    },
+    {
+     "~": []
+    },
+    {
+     "~": [
+      {
+       "%": [
+        "flags",
+        {
+         "~": [
+          {
+           "+": "RW"
+          },
+          {
+           "+": "update"
+          }
+         ]
+        },
+        "begin_search",
+        {
+         "%": [
+          "type",
+          "index",
+          "spec",
+          {
+           "%": [
+            "index",
+            1
+           ]
+          }
+         ]
+        },
+        "find_keys",
+        {
+         "%": [
+          "type",
+          "range",
+          "spec",
+          {
+           "%": [
+            "lastkey",
+            0,
+            "keystep",
+            1,
+            "limit",
+            0
+           ]
+          }
+         ]
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "~": []
+    }
+   ]
+  },
+  "geodist": {
+   "docs": {
+    "%": [
+     "summary",
+     "Returns the distance between two members of a geospatial index",
+     "since",
+     "3.2.0",
+     "group",
+     "geo",
+     "complexity",
+     "O(log(N))",
+     "arguments",
+     [
+      {
+       "%": [
+        "name",
+        "key",
+        "type",
+        "key",
+        "key_spec_index",
+        0
+       ]
+      },
+      {
+       "%": [
+        "name",
+        "member1",
+        "type",
+        "string"
+       ]
+      },
+      {
+       "%": [
+        "name",
+        "member2",
+        "type",
+        "string"
+       ]
+      },
+      {
+       "%": [
+        "name",
+        "unit",
+        "type",
+        "oneof",
+        "flags",
+        {
+         "~": [
+          {
+           "+": "optional"
+          }
+         ]
+        },
+        "arguments",
+        [
+         {
+          "%": [
+           "name",
+           "m",
+           "type",
+           "pure-token",
+           "token",
+           "M"
+          ]
+         },
+         {
+          "%": [
+           "name",
+           "km",
+           "type",
+           "pure-token",
+           "token",
+           "KM"
+          ]
+         },
+         {
+          "%": [
+           "name",
+           "ft",
+           "type",
+           "pure-token",
+           "token",
+           "FT"
+          ]
+         },
+         {
+          "%": [
+           "name",
+           "mi",
+           "type",
+           "pure-token",
+           "token",
+           "MI"
+          ]
+         }
+        ]
+       ]
+      }
+     ]
+    ]
+   },
+   "info": [
+    "geodist",
+    -4,
+    {
+     "~": [
+      {
+       "+": "readonly"
+      }
+     ]
+    },
+    1,
+    1,
+    1,
+    {
+     "~": [
+      {
+       "+": "@read"
+      },
+      {
+       "+": "@geo"
+      },
+      {
+       "+": "@slow"
+      }
+     ]
+    },
+    {
+     "~": []
+    },
+    {
+     "~": [
+      {
+       "%": [
+        "flags",
+        {
+         "~": [
+          {
+           "+": "RO"
+          },
+          {
+           "+": "access"
+          }
+         ]
+        },
+        "begin_search",
+        {
+         "%": [
+          "type",
+          "index",
+          "spec",
+          {
+           "%": [
+            "index",
+            1
+           ]
+          }
+         ]
+        },
+        "find_keys",
+        {
+         "%": [
+          "type",
+          "range",
+          "spec",
+          {
+           "%": [
+            "lastkey",
+            0,
+            "keystep",
+            1,
+            "limit",
+            0
+           ]
+          }
+         ]
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "~": []
+    }
+   ]
+  },
+  "geohash": {
+   "docs": {
+    "%": [
+     "summary",
+     "Returns members of a geospatial index as standard geohash strings",
+     "since",
+     "3.2.0",
+     "group",
+     "geo",
+     "complexity",
+     "O(log(N)) for each member requested, where N is the number of elements in the sorted set.",
+     "arguments",
+     [
+      {
+       "%": [
+        "name",
+        "key",
+        "type",
+        "key",
+        "key_spec_index",
+        0
+       ]
+      },
+      {
+       "%": [
+        "name",
+        "member",
+        "type",
+        "string",
+        "flags",
+        {
+         "~": [
+          {
+           "+": "multiple"
+          }
+         ]
+        }
+       ]
+      }
+     ]
+    ]
+   },
+   "info": [
+    "geohash",
+    -2,
+    {
+     "~": [
+      {
+       "+": "readonly"
+      }
+     ]
+    },
+    1,
+    1,
+    1,
+    {
+     "~": [
+      {
+       "+": "@read"
+      },
+      {
+       "+": "@geo"
+      },
+      {
+       "+": "@slow"
+      }
+     ]
+    },
+    {
+     "~": []
+    },
+    {
+     "~": [
+      {
+       "%": [
+        "flags",
+        {
+         "~": [
+          {
+           "+": "RO"
+          },
+          {
+           "+": "access"
+          }
+         ]
+        },
+        "begin_search",
+        {
+         "%": [
+          "type",
+          "index",
+          "spec",
+          {
+           "%": [
+            "index",
+            1
+           ]
+          }
+         ]
+        },
+        "find_keys",
+        {
+         "%": [
+          "type",
+          "range",
+          "spec",
+          {
+           "%": [
+            "lastkey",
+            0,
+            "keystep",
+            1,
+            "limit",
+            0
+           ]
+          }
+         ]
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "~": []
+    }
+   ]
+  },
+  "geopos": {
+   "docs": {
+    "%": [
+     "summary",
+     "Returns longitude and latitude of members of a geospatial index",
+     "since",
+     "3.2.0",
+     "group",
+     "geo",
+     "complexity",
+     "O(N) where N is the number of members requested.",
+     "arguments",
+     [
+      {
+       "%": [
+        "name",
+        "key",
+        "type",
+        "key",
+        "key_spec_index",
+        0
+       ]
+      },
+      {
+       "%": [
+        "name",
+        "member",
+        "type",
+        "string",
+        "flags",
+        {
+         "~": [
+          {
+           "+": "multiple"
+          }
+         ]
+        }
+       ]
+      }
+     ]
+    ]
+   },
+   "info": [
+    "geopos",
+    -2,
+    {
+     "~": [
+      {
+       "+": "readonly"
+      }
+     ]
+    },
+    1,
+    1,
+    1,
+    {
+     "~": [
+      {
+       "+": "@read"
+      },
+      {
+       "+": "@geo"
+      },
+      {
+       "+": "@slow"
+      }
+     ]
+    },
+    {
+     "~": []
+    },
+    {
+     "~": [
+      {
+       "%": [
+        "flags",
+        {
+         "~": [
+          {
+           "+": "RO"
+          },
+          {
+           "+": "access"
+          }
+         ]
+        },
+        "begin_search",
+        {
+         "%": [
+          "type",
+          "index",
+          "spec",
+          {
+           "%": [
+            "index",
+            1
+           ]
+          }
+         ]
+        },
+        "find_keys",
+        {
+         "%": [
+          "type",
+          "range",
+          "spec",
+          {
+           "%": [
+            "lastkey",
+            0,
+            "keystep",
+            1,
+            "limit",
+            0
+           ]
+          }
+         ]
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "~": []
+    }
+   ]
+  },
+  "georadius": {
+   "docs": {
+    "%": [
+     "summary",
+     "Query a sorted set representing a geospatial index to fetch members matching a given maximum distance from a point",
+     "since",
+     "3.2.0",
+     "group",
+     "geo",
+     "complexity",
+     "O(N+log(M)) where N is the number of elements inside the bounding box of the circular area delimited by center and radius and M is the number of items inside the index.",
+     "doc_flags",
+     {
+      "~": [
+       {
+        "+": "deprecated"
+       }
+      ]
+     },
+     "deprecated_since",
+     "6.2.0",
+     "replaced_by",
+     "`GEOSEARCH` and `GEOSEARCHSTORE` with the `BYRADIUS` argument",
+     "history",
+     {
+      "~": [
+       [
+        "6.2.0",
+        "Added the `ANY` option for `COUNT`."
+       ],
+       [
+        "7.0.0",
+        "Added support for uppercase unit names."
+       ]
+      ]
+     },
+     "arguments",
+     [
+      {
+       "%": [
+        "name",
+        "key",
+        "type",
+        "key",
+        "key_spec_index",
+        0
+       ]
+      },
+      {
+       "%": [
+        "name",
+        "longitude",
+        "type",
+        "double"
+       ]
+      },
+      {
+       "%": [
+        "name",
+        "latitude",
+        "type",
+        "double"
+       ]
+      },
+      {
+       "%": [
+        "name",
+        "radius",
+        "type",
+        "double"
+       ]
+      },
+      {
+       "%": [
+        "name",
+        "unit",
+        "type",
+        "oneof",
+        "arguments",
+        [
+         {
+          "%": [
+           "name",
+           "m",
+           "type",
+           "pure-token",
+           "token",
+           "M"
+          ]
+         },
+         {
+          "%": [
+           "name",
+           "km",
+           "type",
+           "pure-token",
+           "token",
+           "KM"
+          ]
+         },
+         {
+          "%": [
+           "name",
+           "ft",
+           "type",
+           "pure-token",
+           "token",
+           "FT"
+          ]
+         },
+         {
+          "%": [
+           "name",
+           "mi",
+           "type",
+           "pure-token",
+           "token",
+           "MI"
+          ]
+         }
+        ]
+       ]
+      },
+      {
+       "%": [
+        "name",
+        "withcoord",
+        "type",
+        "pure-token",
+        "token",
+        "WITHCOORD",
+        "flags",
+        {
+         "~": [
+          {
+           "+": "optional"
+          }
+         ]
+        }
+       ]
+      },
+      {
+       "%": [
+        "name",
+        "withdist",
+        "type",
+        "pure-token",
+        "token",
+        "WITHDIST",
+        "flags",
+        {
+         "~": [
+          {
+           "+": "optional"
+          }
+         ]
+        }
+       ]
+      },
+      {
+       "%": [
+        "name",
+        "withhash",
+        "type",
+        "pure-token",
+        "token",
+        "WITHHASH",
+        "flags",
+        {
+         "~": [
+          {
+           "+": "optional"
+          }
+         ]
+        }
+       ]
+      },
+      {
+       "%": [
+        "name",
+        "count",
+        "type",
+        "block",
+        "flags",
+        {
+         "~": [
+          {
+           "+": "optional"
+          }
+         ]
+        },
+        "arguments",
+        [
+         {
+          "%": [
+           "name",
+           "count",
+           "type",
+           "integer",
+           "token",
+           "COUNT"
+          ]
+         },
+         {
+          "%": [
+           "name",
+           "any",
+           "type",
+           "pure-token",
+           "token",
+           "ANY",
+           "since",
+           "6.2.0",
+           "flags",
+           {
+            "~": [
+             {
+              "+": "optional"
+             }
+            ]
+           }
+          ]
+         }
+        ]
+       ]
+      },
+      {
+       "%": [
+        "name",
+        "order",
+        "type",
+        "oneof",
+        "flags",
+        {
+         "~": [
+          {
+           "+": "optional"
+          }
+         ]
+        },
+        "arguments",
+        [
+         {
+          "%": [
+           "name",
+           "asc",
+           "type",
+           "pure-token",
+           "token",
+           "ASC"
+          ]
+         },
+         {
+          "%": [
+           "name",
+           "desc",
+           "type",
+           "pure-token",
+           "token",
+           "DESC"
+          ]
+         }
+        ]
+       ]
+      },
+      {
+       "%": [
+        "name",
+        "key",
+        "type",
+        "key",
+        "key_spec_index",
+        1,
+        "token",
+        "STORE",
+        "flags",
+        {
+         "~": [
+          {
+           "+": "optional"
+          }
+         ]
+        }
+       ]
+      },
+      {
+       "%": [
+        "name",
+        "key",
+        "type",
+        "key",
+        "key_spec_index",
+        2,
+        "token",
+        "STOREDIST",
+        "flags",
+        {
+         "~": [
+          {
+           "+": "optional"
+          }
+         ]
+        }
+       ]
+      }
+     ]
+    ]
+   },
+   "info": [
+    "georadius",
+    -6,
+    {
+     "~": [
+      {
+       "+": "write"
+      },
+      {
+       "+": "denyoom"
+      },
+      {
+       "+": "movablekeys"
+      }
+     ]
+    },
+    1,
+    1,
+    1,
+    {
+     "~": [
+      {
+       "+": "@write"
+      },
+      {
+       "+": "@geo"
+      },
+      {
+       "+": "@slow"
+      }
+     ]
+    },
+    {
+     "~": []
+    },
+    {
+     "~": [
+      {
+       "%": [
+        "flags",
+        {
+         "~": [
+          {
+           "+": "RO"
+          },
+          {
+           "+": "access"
+          }
+         ]
+        },
+        "begin_search",
+        {
+         "%": [
+          "type",
+          "index",
+          "spec",
+          {
+           "%": [
+            "index",
+            1
+           ]
+          }
+         ]
+        },
+        "find_keys",
+        {
+         "%": [
+          "type",
+          "range",
+          "spec",
+          {
+           "%": [
+            "lastkey",
+            0,
+            "keystep",
+            1,
+            "limit",
+            0
+           ]
+          }
+         ]
+        }
+       ]
+      },
+      {
+       "%": [
+        "flags",
+        {
+         "~": [
+          {
+           "+": "OW"
+          },
+          {
+           "+": "update"
+          }
+         ]
+        },
+        "begin_search",
+        {
+         "%": [
+          "type",
+          "keyword",
+          "spec",
+          {
+           "%": [
+            "keyword",
+            "STORE",
+            "startfrom",
+            6
+           ]
+          }
+         ]
+        },
+        "find_keys",
+        {
+         "%": [
+          "type",
+          "range",
+          "spec",
+          {
+           "%": [
+            "lastkey",
+            0,
+            "keystep",
+            1,
+            "limit",
+            0
+           ]
+          }
+         ]
+        }
+       ]
+      },
+      {
+       "%": [
+        "flags",
+        {
+         "~": [
+          {
+           "+": "OW"
+          },
+          {
+           "+": "update"
+          }
+         ]
+        },
+        "begin_search",
+        {
+         "%": [
+          "type",
+          "keyword",
+          "spec",
+          {
+           "%": [
+            "keyword",
+            "STOREDIST",
+            "startfrom",
+            6
+           ]
+          }
+         ]
+        },
+        "find_keys",
+        {
+         "%": [
+          "type",
+          "range",
+          "spec",
+          {
+           "%": [
+            "lastkey",
+            0,
+            "keystep",
+            1,
+            "limit",
+            0
+           ]
+          }
+         ]
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "~": []
+    }
+   ]
+  },
+  "georadius_ro": {
+   "docs": {
+    "%": [
+     "summary",
+     "A read-only variant for GEORADIUS",
+     "since",
+     "3.2.10",
+     "group",
+     "geo",
+     "complexity",
+     "O(N+log(M)) where N is the number of elements inside the bounding box of the circular area delimited by center and radius and M is the number of items inside the index.",
+     "doc_flags",
+     {
+      "~": [
+       {
+        "+": "deprecated"
+       }
+      ]
+     },
+     "deprecated_since",
+     "6.2.0",
+     "replaced_by",
+     "`GEOSEARCH` with the `BYRADIUS` argument",
+     "history",
+     {
+      "~": [
+       [
+        "6.2.0",
+        "Added the `ANY` option for `COUNT`."
+       ]
+      ]
+     },
+     "arguments",
+     [
+      {
+       "%": [
+        "name",
+        "key",
+        "type",
+        "key",
+        "key_spec_index",
+        0
+       ]
+      },
+      {
+       "%": [
+        "name",
+        "longitude",
+        "type",
+        "double"
+       ]
+      },
+      {
+       "%": [
+        "name",
+        "latitude",
+        "type",
+        "double"
+       ]
+      },
+      {
+       "%": [
+        "name",
+        "radius",
+        "type",
+        "double"
+       ]
+      },
+      {
+       "%": [
+        "name",
+        "unit",
+        "type",
+        "oneof",
+        "arguments",
+        [
+         {
+          "%": [
+           "name",
+           "m",
+           "type",
+           "pure-token",
+           "token",
+           "M"
+          ]
+         },
+         {
+          "%": [
+           "name",
+           "km",
+           "type",
+           "pure-token",
+           "token",
+           "KM"
+          ]
+         },
+         {
+          "%": [
+           "name",
+           "ft",
+           "type",
+           "pure-token",
+           "token",
+           "FT"
+          ]
+         },
+         {
+          "%": [
+           "name",
+           "mi",
+           "type",
+           "pure-token",
+           "token",
+           "MI"
+          ]
+         }
+        ]
+       ]
+      },
+      {
+       "%": [
+        "name",
+        "withcoord",
+        "type",
+        "pure-token",
+        "token",
+        "WITHCOORD",
+        "flags",
+        {
+         "~": [
+          {
+           "+": "optional"
+          }
+         ]
+        }
+       ]
+      },
+      {
+       "%": [
+        "name",
+        "withdist",
+        "type",
+        "pure-token",
+        "token",
+        "WITHDIST",
+        "flags",
+        {
+         "~": [
+          {
+           "+": "optional"
+          }
+         ]
+        }
+       ]
+      },
+      {
+       "%": [
+        "name",
+        "withhash",
+        "type",
+        "pure-token",
+        "token",
+        "WITHHASH",
+        "flags",
+        {
+         "~": [
+          {
+           "+": "optional"
+          }
+         ]
+        }
+       ]
+      },
+      {
+       "%": [
+        "name",
+        "count",
+        "type",
+        "block",
+        "flags",
+        {
+         "~": [
+          {
+           "+": "optional"
+          }
+         ]
+        },
+        "arguments",
+        [
+         {
+          "%": [
+           "name",
+           "count",
+           "type",
+           "integer",
+           "token",
+           "COUNT"
+          ]
+         },
+         {
+          "%": [
+           "name",
+           "any",
+           "type",
+           "pure-token",
+           "token",
+           "ANY",
+           "since",
+           "6.2.0",
+           "flags",
+           {
+            "~": [
+             {
+              "+": "optional"
+             }
+            ]
+           }
+          ]
+         }
+        ]
+       ]
+      },
+      {
+       "%": [
+        "name",
+        "order",
+        "type",
+        "oneof",
+        "flags",
+        {
+         "~": [
+          {
+           "+": "optional"
+          }
+         ]
+        },
+        "arguments",
+        [
+         {
+          "%": [
+           "name",
+           "asc",
+           "type",
+           "pure-token",
+           "token",
+           "ASC"
+          ]
+         },
+         {
+          "%": [
+           "name",
+           "desc",
+           "type",
+           "pure-token",
+           "token",
+           "DESC"
+          ]
+         }
+        ]
+       ]
+      }
+     ]
+    ]
+   },
+   "info": [
+    "georadius_ro",
+    -6,
+    {
+     "~": [
+      {
+       "+": "readonly"
+      }
+     ]
+    },
+    1,
+    1,
+    1,
+    {
+     "~": [
+      {
+       "+": "@read"
+      },
+      {
+       "+": "@geo"
+      },
+      {
+       "+": "@slow"
+      }
+     ]
+    },
+    {
+     "~": []
+    },
+    {
+     "~": [
+      {
+       "%": [
+        "flags",
+        {
+         "~": [
+          {
+           "+": "RO"
+          },
+          {
+           "+": "access"
+          }
+         ]
+        },
+        "begin_search",
+        {
+         "%": [
+          "type",
+          "index",
+          "spec",
+          {
+           "%": [
+            "index",
+            1
+           ]
+          }
+         ]
+        },
+        "find_keys",
+        {
+         "%": [
+          "type",
+          "range",
+          "spec",
+          {
+           "%": [
+            "lastkey",
+            0,
+            "keystep",
+            1,
+            "limit",
+            0
+           ]
+          }
+         ]
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "~": []
+    }
+   ]
+  },
+  "georadiusbymember": {
+   "docs": {
+    "%": [
+     "summary",
+     "Query a sorted set representing a geospatial index to fetch members matching a given maximum distance from a member",
+     "since",
+     "3.2.0",
+     "group",
+     "geo",
+     "complexity",
+     "O(N+log(M)) where N is the number of elements inside the bounding box of the circular area delimited by center and radius and M is the number of items inside the index.",
+     "doc_flags",
+     {
+      "~": [
+       {
+        "+": "deprecated"
+       }
+      ]
+     },
+     "deprecated_since",
+     "6.2.0",
+     "replaced_by",
+     "`GEOSEARCH` and `GEOSEARCHSTORE` with the `BYRADIUS` and `FROMMEMBER` arguments",
+     "history",
+     {
+      "~": [
+       [
+        "7.0.0",
+        "Added support for uppercase unit names."
+       ]
+      ]
+     },
+     "arguments",
+     [
+      {
+       "%": [
+        "name",
+        "key",
+        "type",
+        "key",
+        "key_spec_index",
+        0
+       ]
+      },
+      {
+       "%": [
+        "name",
+        "member",
+        "type",
+        "string"
+       ]
+      },
+      {
+       "%": [
+        "name",
+        "radius",
+        "type",
+        "double"
+       ]
+      },
+      {
+       "%": [
+        "name",
+        "unit",
+        "type",
+        "oneof",
+        "arguments",
+        [
+         {
+          "%": [
+           "name",
+           "m",
+           "type",
+           "pure-token",
+           "token",
+           "M"
+          ]
+         },
+         {
+          "%": [
+           "name",
+           "km",
+           "type",
+           "pure-token",
+           "token",
+           "KM"
+          ]
+         },
+         {
+          "%": [
+           "name",
+           "ft",
+           "type",
+           "pure-token",
+           "token",
+           "FT"
+          ]
+         },
+         {
+          "%": [
+           "name",
+           "mi",
+           "type",
+           "pure-token",
+           "token",
+           "MI"
+          ]
+         }
+        ]
+       ]
+      },
+      {
+       "%": [
+        "name",
+        "withcoord",
+        "type",
+        "pure-token",
+        "token",
+        "WITHCOORD",
+        "flags",
+        {
+         "~": [
+          {
+           "+": "optional"
+          }
+         ]
+        }
+       ]
+      },
+      {
+       "%": [
+        "name",
+        "withdist",
+        "type",
+        "pure-token",
+        "token",
+        "WITHDIST",
+        "flags",
+        {
+         "~": [
+          {
+           "+": "optional"
+          }
+         ]
+        }
+       ]
+      },
+      {
+       "%": [
+        "name",
+        "withhash",
+        "type",
+        "pure-token",
+        "token",
+        "WITHHASH",
+        "flags",
+        {
+         "~": [
+          {
+           "+": "optional"
+          }
+         ]
+        }
+       ]
+      },
+      {
+       "%": [
+        "name",
+        "count",
+        "type",
+        "block",
+        "flags",
+        {
+         "~": [
+          {
+           "+": "optional"
+          }
+         ]
+        },
+        "arguments",
+        [
+         {
+          "%": [
+           "name",
+           "count",
+           "type",
+           "integer",
+           "token",
+           "COUNT"
+          ]
+         },
+         {
+          "%": [
+           "name",
+           "any",
+           "type",
+           "pure-token",
+           "token",
+           "ANY",
+           "flags",
+           {
+            "~": [
+             {
+              "+": "optional"
+             }
+            ]
+           }
+          ]
+         }
+        ]
+       ]
+      },
+      {
+       "%": [
+        "name",
+        "order",
+        "type",
+        "oneof",
+        "flags",
+        {
+         "~": [
+          {
+           "+": "optional"
+          }
+         ]
+        },
+        "arguments",
+        [
+         {
+          "%": [
+           "name",
+           "asc",
+           "type",
+           "pure-token",
+           "token",
+           "ASC"
+          ]
+         },
+         {
+          "%": [
+           "name",
+           "desc",
+           "type",
+           "pure-token",
+           "token",
+           "DESC"
+          ]
+         }
+        ]
+       ]
+      },
+      {
+       "%": [
+        "name",
+        "key",
+        "type",
+        "key",
+        "key_spec_index",
+        1,
+        "token",
+        "STORE",
+        "flags",
+        {
+         "~": [
+          {
+           "+": "optional"
+          }
+         ]
+        }
+       ]
+      },
+      {
+       "%": [
+        "name",
+        "key",
+        "type",
+        "key",
+        "key_spec_index",
+        2,
+        "token",
+        "STOREDIST",
+        "flags",
+        {
+         "~": [
+          {
+           "+": "optional"
+          }
+         ]
+        }
+       ]
+      }
+     ]
+    ]
+   },
+   "info": [
+    "georadiusbymember",
+    -5,
+    {
+     "~": [
+      {
+       "+": "write"
+      },
+      {
+       "+": "denyoom"
+      },
+      {
+       "+": "movablekeys"
+      }
+     ]
+    },
+    1,
+    1,
+    1,
+    {
+     "~": [
+      {
+       "+": "@write"
+      },
+      {
+       "+": "@geo"
+      },
+      {
+       "+": "@slow"
+      }
+     ]
+    },
+    {
+     "~": []
+    },
+    {
+     "~": [
+      {
+       "%": [
+        "flags",
+        {
+         "~": [
+          {
+           "+": "RO"
+          },
+          {
+           "+": "access"
+          }
+         ]
+        },
+        "begin_search",
+        {
+         "%": [
+          "type",
+          "index",
+          "spec",
+          {
+           "%": [
+            "index",
+            1
+           ]
+          }
+         ]
+        },
+        "find_keys",
+        {
+         "%": [
+          "type",
+          "range",
+          "spec",
+          {
+           "%": [
+            "lastkey",
+            0,
+            "keystep",
+            1,
+            "limit",
+            0
+           ]
+          }
+         ]
+        }
+       ]
+      },
+      {
+       "%": [
+        "flags",
+        {
+         "~": [
+          {
+           "+": "OW"
+          },
+          {
+           "+": "update"
+          }
+         ]
+        },
+        "begin_search",
+        {
+         "%": [
+          "type",
+          "keyword",
+          "spec",
+          {
+           "%": [
+            "keyword",
+            "STORE",
+            "startfrom",
+            5
+           ]
+          }
+         ]
+        },
+        "find_keys",
+        {
+         "%": [
+          "type",
+          "range",
+          "spec",
+          {
+           "%": [
+            "lastkey",
+            0,
+            "keystep",
+            1,
+            "limit",
+            0
+           ]
+          }
+         ]
+        }
+       ]
+      },
+      {
+       "%": [
+        "flags",
+        {
+         "~": [
+          {
+           "+": "OW"
+          },
+          {
+           "+": "update"
+          }
+         ]
+        },
+        "begin_search",
+        {
+         "%": [
+          "type",
+          "keyword",
+          "spec",
+          {
+           "%": [
+            "keyword",
+            "STOREDIST",
+            "startfrom",
+            5
+           ]
+          }
+         ]
+        },
+        "find_keys",
+        {
+         "%": [
+          "type",
+          "range",
+          "spec",
+          {
+           "%": [
+            "lastkey",
+            0,
+            "keystep",
+            1,
+            "limit",
+            0
+           ]
+          }
+         ]
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "~": []
+    }
+   ]
+  },
+  "georadiusbymember_ro": {
+   "docs": {
+    "%": [
+     "summary",
+     "A read-only variant for GEORADIUSBYMEMBER",
+     "since",
+     "3.2.10",
+     "group",
+     "geo",
+     "complexity",
+     "O(N+log(M)) where N is the number of elements inside the bounding box of the circular area delimited by center and radius and M is the number of items inside the index.",
+     "doc_flags",
+     {
+      "~": [
+       {
+        "+": "deprecated"
+       }
+      ]
+     },
+     "deprecated_since",
+     "6.2.0",
+     "replaced_by",
+     "`GEOSEARCH` with the `BYRADIUS` and `FROMMEMBER` arguments",
+     "arguments",
+     [
+      {
+       "%": [
+        "name",
+        "key",
+        "type",
+        "key",
+        "key_spec_index",
+        0
+       ]
+      },
+      {
+       "%": [
+        "name",
+        "member",
+        "type",
+        "string"
+       ]
+      },
+      {
+       "%": [
+        "name",
+        "radius",
+        "type",
+        "double"
+       ]
+      },
+      {
+       "%": [
+        "name",
+        "unit",
+        "type",
+        "oneof",
+        "arguments",
+        [
+         {
+          "%": [
+           "name",
+           "m",
+           "type",
+           "pure-token",
+           "token",
+           "M"
+          ]
+         },
+         {
+          "%": [
+           "name",
+           "km",
+           "type",
+           "pure-token",
+           "token",
+           "KM"
+          ]
+         },
+         {
+          "%": [
+           "name",
+           "ft",
+           "type",
+           "pure-token",
+           "token",
+           "FT"
+          ]
+         },
+         {
+          "%": [
+           "name",
+           "mi",
+           "type",
+           "pure-token",
+           "token",
+           "MI"
+          ]
+         }
+        ]
+       ]
+      },
+      {
+       "%": [
+        "name",
+        "withcoord",
+        "type",
+        "pure-token",
+        "token",
+        "WITHCOORD",
+        "flags",
+        {
+         "~": [
+          {
+           "+": "optional"
+          }
+         ]
+        }
+       ]
+      },
+      {
+       "%": [
+        "name",
+        "withdist",
+        "type",
+        "pure-token",
+        "token",
+        "WITHDIST",
+        "flags",
+        {
+         "~": [
+          {
+           "+": "optional"
+          }
+         ]
+        }
+       ]
+      },
+      {
+       "%": [
+        "name",
+        "withhash",
+        "type",
+        "pure-token",
+        "token",
+        "WITHHASH",
+        "flags",
+        {
+         "~": [
+          {
+           "+": "optional"
+          }
+         ]
+        }
+       ]
+      },
+      {
+       "%": [
+        "name",
+        "count",
+        "type",
+        "block",
+        "flags",
+        {
+         "~": [
+          {
+           "+": "optional"
+          }
+         ]
+        },
+        "arguments",
+        [
+         {
+          "%": [
+           "name",
+           "count",
+           "type",
+           "integer",
+           "token",
+           "COUNT"
+          ]
+         },
+         {
+          "%": [
+           "name",
+           "any",
+           "type",
+           "pure-token",
+           "token",
+           "ANY",
+           "flags",
+           {
+            "~": [
+             {
+              "+": "optional"
+             }
+            ]
+           }
+          ]
+         }
+        ]
+       ]
+      },
+      {
+       "%": [
+        "name",
+        "order",
+        "type",
+        "oneof",
+        "flags",
+        {
+         "~": [
+          {
+           "+": "optional"
+          }
+         ]
+        },
+        "arguments",
+        [
+         {
+          "%": [
+           "name",
+           "asc",
+           "type",
+           "pure-token",
+           "token",
+           "ASC"
+          ]
+         },
+         {
+          "%": [
+           "name",
+           "desc",
+           "type",
+           "pure-token",
+           "token",
+           "DESC"
+          ]
+         }
+        ]
+       ]
+      }
+     ]
+    ]
+   },
+   "info": [
+    "georadiusbymember_ro",
+    -5,
+    {
+     "~": [
+      {
+       "+": "readonly"
+      }
+     ]
+    },
+    1,
+    1,
+    1,
+    {
+     "~": [
+      {
+       "+": "@read"
+      },
+      {
+       "+": "@geo"
+      },
+      {
+       "+": "@slow"
+      }
+     ]
+    },
+    {
+     "~": []
+    },
+    {
+     "~": [
+      {
+       "%": [
+        "flags",
+        {
+         "~": [
+          {
+           "+": "RO"
+          },
+          {
+           "+": "access"
+          }
+         ]
+        },
+        "begin_search",
+        {
+         "%": [
+          "type",
+          "index",
+          "spec",
+          {
+           "%": [
+            "index",
+            1
+           ]
+          }
+         ]
+        },
+        "find_keys",
+        {
+         "%": [
+          "type",
+          "range",
+          "spec",
+          {
+           "%": [
+            "lastkey",
+            0,
+            "keystep",
+            1,
+            "limit",
+            0
+           ]
+          }
+         ]
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "~": []
+    }
+   ]
+  },
+  "geosearch": {
+   "docs": {
+    "%": [
+     "summary",
+     "Query a sorted set representing a geospatial index to fetch members inside an area of a box or a circle.",
+     "since",
+     "6.2.0",
+     "group",
+     "geo",
+     "complexity",
+     "O(N+log(M)) where N is the number of elements in the grid-aligned bounding box area around the shape provided as the filter and M is the number of items inside the shape",
+     "history",
+     {
+      "~": [
+       [
+        "7.0.0",
+        "Added support for uppercase unit names."
+       ]
+      ]
+     },
+     "arguments",
+     [
+      {
+       "%": [
+        "name",
+        "key",
+        "type",
+        "key",
+        "key_spec_index",
+        0
+       ]
+      },
+      {
+       "%": [
+        "name",
+        "from",
+        "type",
+        "oneof",
+        "arguments",
+        [
+         {
+          "%": [
+           "name",
+           "member",
+           "type",
+           "string",
+           "token",
+           "FROMMEMBER"
+          ]
+         },
+         {
+          "%": [
+           "name",
+           "longitude_latitude",
+           "type",
+           "block",
+           "token",
+           "FROMLONLAT",
+           "arguments",
+           [
+            {
+             "%": [
+              "name",
+              "longitude",
+              "type",
+              "double"
+             ]
+            },
+            {
+             "%": [
+              "name",
+              "latitude",
+              "type",
+              "double"
+             ]
+            }
+           ]
+          ]
+         }
+        ]
+       ]
+      },
+      {
+       "%": [
+        "name",
+        "by",
+        "type",
+        "oneof",
+        "arguments",
+        [
+         {
+          "%": [
+           "name",
+           "circle",
+           "type",
+           "block",
+           "arguments",
+           [
+            {
+             "%": [
+              "name",
+              "radius",
+              "type",
+              "double",
+              "token",
+              "BYRADIUS"
+             ]
+            },
+            {
+             "%": [
+              "name",
+              "unit",
+              "type",
+              "oneof",
+              "arguments",
+              [
+               {
+                "%": [
+                 "name",
+                 "m",
+                 "type",
+                 "pure-token",
+                 "token",
+                 "M"
+                ]
+               },
+               {
+                "%": [
+                 "name",
+                 "km",
+                 "type",
+                 "pure-token",
+                 "token",
+                 "KM"
+                ]
+               },
+               {
+                "%": [
+                 "name",
+                 "ft",
+                 "type",
+                 "pure-token",
+                 "token",
+                 "FT"
+                ]
+               },
+               {
+                "%": [
+                 "name",
+                 "mi",
+                 "type",
+                 "pure-token",
+                 "token",
+                 "MI"
+                ]
+               }
+              ]
+             ]
+            }
+           ]
+          ]
+         },
+         {
+          "%": [
+           "name",
+           "box",
+           "type",
+           "block",
+           "arguments",
+           [
+            {
+             "%": [
+              "name",
+              "width",
+              "type",
+              "double",
+              "token",
+              "BYBOX"
+             ]
+            },
+            {
+             "%": [
+              "name",
+              "height",
+              "type",
+              "double"
+             ]
+            },
+            {
+             "%": [
+              "name",
+              "unit",
+              "type",
+              "oneof",
+              "arguments",
+              [
+               {
+                "%": [
+                 "name",
+                 "m",
+                 "type",
+                 "pure-token",
+                 "token",
+                 "M"
+                ]
+               },
+               {
+                "%": [
+                 "name",
+                 "km",
+                 "type",
+                 "pure-token",
+                 "token",
+                 "KM"
+                ]
+               },
+               {
+                "%": [
+                 "name",
+                 "ft",
+                 "type",
+                 "pure-token",
+                 "token",
+                 "FT"
+                ]
+               },
+               {
+                "%": [
+                 "name",
+                 "mi",
+                 "type",
+                 "pure-token",
+                 "token",
+                 "MI"
+                ]
+               }
+              ]
+             ]
+            }
+           ]
+          ]
+         }
+        ]
+       ]
+      },
+      {
+       "%": [
+        "name",
+        "order",
+        "type",
+        "oneof",
+        "flags",
+        {
+         "~": [
+          {
+           "+": "optional"
+          }
+         ]
+        },
+        "arguments",
+        [
+         {
+          "%": [
+           "name",
+           "asc",
+           "type",
+           "pure-token",
+           "token",
+           "ASC"
+          ]
+         },
+         {
+          "%": [
+           "name",
+           "desc",
+           "type",
+           "pure-token",
+           "token",
+           "DESC"
+          ]
+         }
+        ]
+       ]
+      },
+      {
+       "%": [
+        "name",
+        "count",
+        "type",
+        "block",
+        "flags",
+        {
+         "~": [
+          {
+           "+": "optional"
+          }
+         ]
+        },
+        "arguments",
+        [
+         {
+          "%": [
+           "name",
+           "count",
+           "type",
+           "integer",
+           "token",
+           "COUNT"
+          ]
+         },
+         {
+          "%": [
+           "name",
+           "any",
+           "type",
+           "pure-token",
+           "token",
+           "ANY",
+           "flags",
+           {
+            "~": [
+             {
+              "+": "optional"
+             }
+            ]
+           }
+          ]
+         }
+        ]
+       ]
+      },
+      {
+       "%": [
+        "name",
+        "withcoord",
+        "type",
+        "pure-token",
+        "token",
+        "WITHCOORD",
+        "flags",
+        {
+         "~": [
+          {
+           "+": "optional"
+          }
+         ]
+        }
+       ]
+      },
+      {
+       "%": [
+        "name",
+        "withdist",
+        "type",
+        "pure-token",
+        "token",
+        "WITHDIST",
+        "flags",
+        {
+         "~": [
+          {
+           "+": "optional"
+          }
+         ]
+        }
+       ]
+      },
+      {
+       "%": [
+        "name",
+        "withhash",
+        "type",
+        "pure-token",
+        "token",
+        "WITHHASH",
+        "flags",
+        {
+         "~": [
+          {
+           "+": "optional"
+          }
+         ]
+        }
+       ]
+      }
+     ]
+    ]
+   },
+   "info": [
+    "geosearch",
+    -7,
+    {
+     "~": [
+      {
+       "+": "readonly"
+      }
+     ]
+    },
+    1,
+    1,
+    1,
+    {
+     "~": [
+      {
+       "+": "@read"
+      },
+      {
+       "+": "@geo"
+      },
+      {
+       "+": "@slow"
+      }
+     ]
+    },
+    {
+     "~": []
+    },
+    {
+     "~": [
+      {
+       "%": [
+        "flags",
+        {
+         "~": [
+          {
+           "+": "RO"
+          },
+          {
+           "+": "access"
+          }
+         ]
+        },
+        "begin_search",
+        {
+         "%": [
+          "type",
+          "index",
+          "spec",
+          {
+           "%": [
+            "index",
+            1
+           ]
+          }
+         ]
+        },
+        "find_keys",
+        {
+         "%": [
+          "type",
+          "range",
+          "spec",
+          {
+           "%": [
+            "lastkey",
+            0,
+            "keystep",
+            1,
+            "limit",
+            0
+           ]
+          }
+         ]
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "~": []
+    }
+   ]
+  },
+  "geosearchstore": {
+   "docs": {
+    "%": [
+     "summary",
+     "Query a sorted set representing a geospatial index to fetch members inside an area of a box or a circle, and store the result in another key.",
+     "since",
+     "6.2.0",
+     "group",
+     "geo",
+     "complexity",
+     "O(N+log(M)) where N is the number of elements in the grid-aligned bounding box area around the shape provided as the filter and M is the number of items inside the shape",
+     "history",
+     {
+      "~": [
+       [
+        "7.0.0",
+        "Added support for uppercase unit names."
+       ]
+      ]
+     },
+     "arguments",
+     [
+      {
+       "%": [
+        "name",
+        "destination",
+        "type",
+        "key",
+        "key_spec_index",
+        0
+       ]
+      },
+      {
+       "%": [
+        "name",
+        "source",
+        "type",
+        "key",
+        "key_spec_index",
+        1
+       ]
+      },
+      {
+       "%": [
+        "name",
+        "from",
+        "type",
+        "oneof",
+        "arguments",
+        [
+         {
+          "%": [
+           "name",
+           "member",
+           "type",
+           "string",
+           "token",
+           "FROMMEMBER"
+          ]
+         },
+         {
+          "%": [
+           "name",
+           "longitude_latitude",
+           "type",
+           "block",
+           "token",
+           "FROMLONLAT",
+           "arguments",
+           [
+            {
+             "%": [
+              "name",
+              "longitude",
+              "type",
+              "double"
+             ]
+            },
+            {
+             "%": [
+              "name",
+              "latitude",
+              "type",
+              "double"
+             ]
+            }
+           ]
+          ]
+         }
+        ]
+       ]
+      },
+      {
+       "%": [
+        "name",
+        "by",
+        "type",
+        "oneof",
+        "arguments",
+        [
+         {
+          "%": [
+           "name",
+           "circle",
+           "type",
+           "block",
+           "arguments",
+           [
+            {
+             "%": [
+              "name",
+              "radius",
+              "type",
+              "double",
+              "token",
+              "BYRADIUS"
+             ]
+            },
+            {
+             "%": [
+              "name",
+              "unit",
+              "type",
+              "oneof",
+              "arguments",
+              [
+               {
+                "%": [
+                 "name",
+                 "m",
+                 "type",
+                 "pure-token",
+                 "token",
+                 "M"
+                ]
+               },
+               {
+                "%": [
+                 "name",
+                 "km",
+                 "type",
+                 "pure-token",
+                 "token",
+                 "KM"
+                ]
+               },
+               {
+                "%": [
+                 "name",
+                 "ft",
+                 "type",
+                 "pure-token",
+                 "token",
+                 "FT"
+                ]
+               },
+               {
+                "%": [
+                 "name",
+                 "mi",
+                 "type",
+                 "pure-token",
+                 "token",
+                 "MI"
+                ]
+               }
+              ]
+             ]
+            }
+           ]
+          ]
+         },
+         {
+          "%": [
+           "name",
+           "box",
+           "type",
+           "block",
+           "arguments",
+           [
+            {
+             "%": [
+              "name",
+              "width",
+              "type",
+              "double",
+              "token",
+              "BYBOX"
+             ]
+            },
+            {
+             "%": [
+              "name",
+              "height",
+              "type",
+              "double"
+             ]
+            },
+            {
+             "%": [
+              "name",
+              "unit",
+              "type",
+              "oneof",
+              "arguments",
+              [
+               {
+                "%": [
+                 "name",
+                 "m",
+                 "type",
+                 "pure-token",
+                 "token",
+                 "M"
+                ]
+               },
+               {
+                "%": [
+                 "name",
+                 "km",
+                 "type",
+                 "pure-token",
+                 "token",
+                 "KM"
+                ]
+               },
+               {
+                "%": [
+                 "name",
+                 "ft",
+                 "type",
+                 "pure-token",
+                 "token",
+                 "FT"
+                ]
+               },
+               {
+                "%": [
+                 "name",
+                 "mi",
+                 "type",
+                 "pure-token",
+                 "token",
+                 "MI"
+                ]
+               }
+              ]
+             ]
+            }
+           ]
+          ]
+         }
+        ]
+       ]
+      },
+      {
+       "%": [
+        "name",
+        "order",
+        "type",
+        "oneof",
+        "flags",
+        {
+         "~": [
+          {
+           "+": "optional"
+          }
+         ]
+        },
+        "arguments",
+        [
+         {
+          "%": [
+           "name",
+           "asc",
+           "type",
+           "pure-token",
+           "token",
+           "ASC"
+          ]
+         },
+         {
+          "%": [
+           "name",
+           "desc",
+           "type",
+           "pure-token",
+           "token",
+           "DESC"
+          ]
+         }
+        ]
+       ]
+      },
+      {
+       "%": [
+        "name",
+        "count",
+        "type",
+        "block",
+        "flags",
+        {
+         "~": [
+          {
+           "+": "optional"
+          }
+         ]
+        },
+        "arguments",
+        [
+         {
+          "%": [
+           "name",
+           "count",
+           "type",
+           "integer",
+           "token",
+           "COUNT"
+          ]
+         },
+         {
+          "%": [
+           "name",
+           "any",
+           "type",
+           "pure-token",
+           "token",
+           "ANY",
+           "flags",
+           {
+            "~": [
+             {
+              "+": "optional"
+             }
+            ]
+           }
+          ]
+         }
+        ]
+       ]
+      },
+      {
+       "%": [
+        "name",
+        "storedist",
+        "type",
+        "pure-token",
+        "token",
+        "STOREDIST",
+        "flags",
+        {
+         "~": [
+          {
+           "+": "optional"
+          }
+         ]
+        }
+       ]
+      }
+     ]
+    ]
+   },
+   "info": [
+    "geosearchstore",
+    -8,
+    {
+     "~": [
+      {
+       "+": "write"
+      },
+      {
+       "+": "denyoom"
+      }
+     ]
+    },
+    1,
+    2,
+    1,
+    {
+     "~": [
+      {
+       "+": "@write"
+      },
+      {
+       "+": "@geo"
+      },
+      {
+       "+": "@slow"
+      }
+     ]
+    },
+    {
+     "~": []
+    },
+    {
+     "~": [
+      {
+       "%": [
+        "flags",
+        {
+         "~": [
+          {
+           "+": "OW"
+          },
+          {
+           "+": "update"
+          }
+         ]
+        },
+        "begin_search",
+        {
+         "%": [
+          "type",
+          "index",
+          "spec",
+          {
+           "%": [
+            "index",
+            1
+           ]
+          }
+         ]
+        },
+        "find_keys",
+        {
+         "%": [
+          "type",
+          "range",
+          "spec",
+          {
+           "%": [
+            "lastkey",
+            0,
+            "keystep",
+            1,
+            "limit",
+            0
+           ]
+          }
+         ]
+        }
+       ]
+      },
+      {
+       "%": [
+        "flags",
+        {
+         "~": [
+          {
+           "+": "RO"
+          },
+          {
+           "+": "access"
+          }
+         ]
+        },
+        "begin_search",
+        {
+         "%": [
+          "type",
+          "index",
+          "spec",
+          {
+           "%": [
+            "index",
+            2
+           ]
+          }
+         ]
+        },
+        "find_keys",
+        {
+         "%": [
+          "type",
+          "range",
+          "spec",
+          {
+           "%": [
+            "lastkey",
+            0,
+            "keystep",
+            1,
+            "limit",
+            0
+           ]
+          }
+         ]
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "~": []
+    }
+   ]
+  },
   "get": {
    "docs": {
     "%": [

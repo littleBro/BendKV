@@ -315,14 +315,14 @@ Where performance and proof meet: **batched execution under proved laws.**
    (done, section 3zs), SCAN and RANDOMKEY (done), MONITOR (done, section 3zt), the
    log's rewrite (done, section 3zv), maxmemory and its eviction (done, section 3zw),
    RESP3 (done, section 3zx), SORT and SORT_RO (done, section 3zzh), HyperLogLogs (done,
-   section 3zzj), CLIENT PAUSE and UNPAUSE (done, section 3zzk), and the administrative
-   commands LASTSAVE, ROLE, WAIT, SHUTDOWN, MEMORY and LOLWUT (done, section 3zzl),
-   measured by Redis's
+   section 3zzj), CLIENT PAUSE and UNPAUSE (done, section 3zzk), the administrative
+   commands LASTSAVE, ROLE, WAIT, SHUTDOWN, MEMORY and LOLWUT (done, section 3zzl), and
+   GEO (done, section 3zzm), measured by Redis's
    own test suite run against BendKV and by client libraries' test suites (redis-py's and
    go-redis's, in CI: done, section 3zy).
    Lua, streams, cluster, replication and modules are out of scope. The suite's count: of the 1,677 tests
-   Redis 7.0.15 passes against a server it did not start, BendKV passes 1,182, 1,175 of
-   the 1,258 in what it has ([COMPATIBILITY.md](COMPATIBILITY.md)); most of the other 83
+   Redis 7.0.15 passes against a server it did not start, BendKV passes 1,261, 1,254 of
+   the 1,317 in what it has ([COMPATIBILITY.md](COMPATIBILITY.md)); most of the other 63
    need commands BendKV does not have (replication's SYNC, Lua, DUMP, streams) or run
    after a test that left its client in MULTI on one of them.
    What maxmemory left to do (section 3zw): a delete takes the nodes it empties now
@@ -349,14 +349,20 @@ Where performance and proof meet: **batched execution under proved laws.**
    the walk behind `KV.read` copied each node on a key's path until ZRANGESTORE lent it
    the keyspace (section 3zzi). A PFADD costs four to six times Redis's instructions, and
    a PFCOUNT that counts one HyperLogLog 13 times (section 3zzj): the estimate runs on
-   doubles in software, about half a million instructions (doubles in the runtime would
-   end it), a step of a walk of the sparse opcodes takes 80 instructions where Redis's
+   doubles in software, about half a million instructions (the runtime's doubles of Bend
+   patch 33, section 3zzm, would end it), a step of a walk of the sparse opcodes takes 80 instructions where Redis's
    takes about 20, and a sparse value past 2,048 bytes is two chunks, which
    `String.code_at` reads a run at a time. LOLWUT VERSION 5 rounds each of a square's
    ninety float operations in software (section 3zzl): a drawing of 10,000 squares takes
-   2 s where Redis takes 19 ms, the server answering nothing else meanwhile. Next within
-   the scope: geo, the slow log and the latency monitor, DUMP and RESTORE, CLIENT
-   TRACKING, and ACL's users.
+   2 s where Redis takes 19 ms, the server answering nothing else meanwhile; the
+   runtime's doubles would make each one operation of C's. GEO runs on them (section
+   3zzm): a search takes 2.5 to 4 times Redis's time, 7 times with WITHCOORD, whose
+   coordinates are `%.17Lf` of long doubles written in software, and 13 times with
+   COUNT's partial sort, Redis's pqsort made a comparison and a swap at a time on a vector
+   that is a tree; a GEOADD of 20,000 points takes 9 times, as a ZADD of their scores does
+   (PERFORMANCE.md, section 60). A request of tens of thousands of arguments takes 7 to 11
+   times Redis's time, its parse linear since section 3zzn. Next within the scope: the
+   slow log and the latency monitor, DUMP and RESTORE, CLIENT TRACKING, and ACL's users.
 
 After that comes proving the native strings (section 5, step 1): a small piece of
 work that makes the word "verified" much stronger.

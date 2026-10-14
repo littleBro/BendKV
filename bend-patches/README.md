@@ -1,6 +1,6 @@
 # Patches to Bend
 
-Thirty-two patches to the Bend compiler (`bendlang/bend` @ `1cce499`, Bend 2.0.35).
+Thirty-three patches to the Bend compiler (`bendlang/bend` @ `1cce499`, Bend 2.0.35).
 They apply in order, each on top of the one before:
 
 1. **`lazy-seal.patch`** — lazy sealing of reference counts: `bend2/comp.ts`, +46/−3.
@@ -419,6 +419,35 @@ They apply in order, each on top of the one before:
    back, and a recursive datatype with a String variant matched as a box, all printed
    by main. Bend's tests on the C lane pass with it as they pass without it, test by
    test (740 of 871), and the new one with them.
+33. **`f64-natives.patch`** — C's doubles: `F64`, IEEE 754's binary64 as the two 32-bit
+   halves of its bits, the high one first (a term holds no 64-bit word), for what has to
+   compute as Redis's C code does, GEO's sines and square roots first among it. Base
+   gains `F64.read` (the double that the whole of a String reads as by strtod, a NaN
+   when it does not read so: an empty string, a blank first, bytes left over, an
+   overflow, an underflow to 0), the four operations, `neg`, `abs`, `sqrt`, `exp`,
+   `log`, `log2`, `log10`, `sin`, `cos`, `tan`, `asin`, `acos`, `atan`, `atan2`, `sinh`,
+   `cosh`, `tanh`, `pow`, `mod` (fmod), `floor`, `ceil`, `trunc`, the comparisons
+   (`is_lt`, `is_le`, `is_eq`, `is_ne`, `is_gt`, `is_ge`), and the conversions
+   `U32.to_f64`, `F64.of_u64`, `F64.to_i64` (cut, 2^63 for a NaN and past the range) and
+   `F64.rint_i64` (llrint, to the even integer on a tie), each a law of base, which the
+   checker knows by its type alone. The C lane runs each as C does (`f64_of` and
+   `f64_bits` move a double in and out of its halves; Bend's C already turns off the
+   fusing of a product into a sum, `fp contract(off)`): C's own double arithmetic,
+   glibc's strtod and the libm the program links, so a program reads, computes and
+   rounds as a C program built with the same libm does. The JS lane runs Number and
+   Math, and reads what glibc's strtod reads: decimal numbers (Number's correct
+   rounding), hex numbers (rounded to the nearest, ties to even, subnormals and
+   overflow as glibc rounds them), `inf` and `infinity`. A program that calls none of
+   them compiles to the C it compiled to before, but for the runtime's helpers of
+   doubles (BendKV before GEO: 56 lines added, the rest byte for byte).
+   `bend2/base.bend` (+229),
+   `bend2/comp.ts` (+179) and the test `tests/base/f64_ops.bend`, on C and on JS: reads
+   and refusals (decimal and hex, ties, subnormals, overflow, underflow), the
+   arithmetic, libm, the conversions and the comparisons, each result printed as its
+   halves. Bend's tests on the C and JS lanes pass with it as they pass without it, test
+   by test (742 of 873 on C, 769 of 897 on JS, where the test of files, which shares its
+   temporary file with its C twin, failed once in a parallel run and passes alone), and
+   the new one with them.
 
 What the patches do and what they give is worked through in
 [../PERFORMANCE.md](../docs/PERFORMANCE.md), sections 3–6, 7.7–7.17, 7.23–7.25, 16, 39,
@@ -437,7 +466,7 @@ From the `bendkv/` directory:
 
 ```bash
 git clone https://github.com/bendlang/bend ../bend-patched
-sh bend-patches/apply.sh ../bend-patched   # the bendkv-patches branch from 1cce499 with thirty-two patches
+sh bend-patches/apply.sh ../bend-patched   # the bendkv-patches branch from 1cce499 with thirty-three patches
 bun ../bend-patched/bend2/main.ts server.bend -o build/bendkv
 ```
 
@@ -462,8 +491,8 @@ fixes the fifth where the fifth acts, the twenty-seventh only adds the effects
 twenty-eighth the effects `File.rename` and `File.unlink`, the twenty-ninth the effect
 `IO.heap`, the thirtieth the words `Mem.touch` and `Mem.cell`, the thirty-first
 changes how a tail call gives a tree its caller owns to a walker that reads it, in
-every program, and the thirty-second boxes a datatype's String variant as the String
-itself, in a program without GPU calls.
+every program, the thirty-second boxes a datatype's String variant as the String
+itself, in a program without GPU calls, and the thirty-third only adds natives (`F64`).
 The theory does not change:
 `String` in the proofs is still a list, and `IO` a function of `R` and `k`.
 
