@@ -1,3 +1,3 @@
-get 3371
-set 4268
-incr 4543
+get 3312
+set 4119
+incr 4419
