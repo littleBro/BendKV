@@ -432,9 +432,8 @@ long the memory was past the limit (`total_eviction_exceeded_time`,
 LRU clock (seconds) or the LFU counter (logarithmic, with `lfu-log-factor`, decaying by
 `lfu-decay-time`); OBJECT IDLETIME and FREQ answer by them. Where BendKV differs: the same
 `maxmemory` holds another number of keys, a key taking another number of bytes in BendKV's
-heap than in Redis's allocator; a deleted key leaves the nodes of its trie, so to get
-under the limit the eviction deletes more keys than Redis would; the marks are kept in a
-table of 2^20 words by the key's hash, and keys whose hashes have the same low 20 bits
+heap (with its share of the trie's nodes) than in Redis's allocator; the marks are kept in
+a table of 2^20 words by the key's hash, and keys whose hashes have the same low 20 bits
 share a word; a request marks only its first key, and before it runs (the other keys of
 MGET are not marked); evicting many keys at once is about ten times slower than in Redis.
 Start-up is as for `redis-server`: a configuration file, `--name value` parameters and

@@ -342,11 +342,11 @@ translation stays in the trusted base.
   clock (seconds) or its LFU counter (logarithmic, with `lfu-log-factor`, decayed by
   `lfu-decay-time`), and OBJECT IDLETIME and FREQ answer from it. Where BendKV differs:
   the same maxmemory holds another number of keys, since a key takes other bytes in
-  BendKV's heap than in Redis's allocator; a deleted key leaves its trie's nodes, so
-  eviction deletes more keys than Redis would to get under the limit; the uses are kept
-  in a table of 2^20 words by the key's hash, which keys whose hashes share their low 20
-  bits share, and a request marks its first key alone, before it runs (MGET's others are
-  not marked); and evicting many keys at once is about ten times slower than in Redis.
+  BendKV's heap (with its share of the trie's nodes) than in Redis's allocator; the uses
+  are kept in a table of 2^20 words by the key's hash, which keys whose hashes share
+  their low 20 bits share, and a request marks its first key alone, before it runs
+  (MGET's others are not marked); and evicting many keys at once is about ten times
+  slower than in Redis.
 - **Start:** as `redis-server` starts: a configuration file, `--name value` options and
   `-` for the standard input, read line by line as Redis reads them (includes, `dir`
   changing the directory at once, save points that add up, the same errors at the same

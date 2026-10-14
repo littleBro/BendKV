@@ -150,9 +150,9 @@ def block_walks():
         out += [f"    case 1n+p {node(cs)} {H[i]}{{}}:",
                 f"      tetouch(V, p, {cs[i]}, {STEP}, acc)"]
     out += ["    case 1n+p other _:", "      acc", ""]
-    out += ["# the trie with op applied to the bucket where the walk ends. A node",
-            "# that a delete leaves without entries stays: at most 69905 of them,",
-            "# 9MB, for the 2^20 buckets.",
+    out += ["# the trie with op applied to the bucket where the walk ends; a walk",
+            "# into an empty subtrie builds the nodes down to the bucket. A delete",
+            "# walks with tdel_h, which reads as this walk with ODel.",
             "def tmod_h(-V: Data, d: Nat, t: Trie<V>, x: Hex, +h: U32, op: Op<V>) -> Trie<V>:",
             "  match d t x:",
             "    case 0n t0 _:",
@@ -165,6 +165,46 @@ def block_walks():
         rec = f"tmod_h(V, p, Tip{{}}, {STEP}, op)"
         out += [f"    case 1n+p other {H[i]}{{}}:",
                 f"      {node(tips(i, rec))}"]
+    out += ["",
+            "# t, but the empty trie for a node of 16 empty subtries",
+            "def tnode(-V: Data, t: Trie<V>) -> Trie<V>:",
+            "  match t:",
+            f"    case {node(['Tip{}'] * N)}:",
+            "      Tip{}",
+            "    case other:",
+            "      other",
+            "",
+            "# whether t is the empty trie",
+            "def tis_tip(-V: Data, +t: Trie<V>) -> Bool:",
+            "  match t:",
+            "    case Tip{}:",
+            "      True{}",
+            "    case other:",
+            "      False{}",
+            "",
+            "# tnode of t when e says so (a delete emptied one of its subtries),",
+            "# else t: a node with a subtrie that is not empty is kept unread",
+            "def tnode_if(-V: Data, e: Bool, t: Trie<V>) -> Trie<V>:",
+            "  match e:",
+            "    case True{}:",
+            "      tnode(V, t)",
+            "    case False{}:",
+            "      t",
+            "",
+            "# the trie without k's entries in the bucket where the walk ends",
+            "# (bdel). A node that this leaves empty goes too (tnode_if), so a",
+            "# trie keeps no more nodes than its keys take, and a walk into an",
+            "# empty subtrie changes nothing. It reads as tmod_h with ODel{k},",
+            "# bucket by bucket (PROOF.bend: tdel_eq).",
+            "def tdel_h(-V: Data, d: Nat, t: Trie<V>, x: Hex, +h: U32, +k: String) -> Trie<V>:",
+            "  match d t x:",
+            "    case 0n t0 _:",
+            "      bdel(V, k, t0)"]
+    for i in range(N):
+        out += [f"    case 1n+p {node(cs)} {H[i]}{{}}:",
+                f"      +a = tdel_h(V, p, {cs[i]}, {STEP}, k)",
+                f"      tnode_if(V, tis_tip(V, a), {node(with_at(cs, i, 'a'))})"]
+    out += ["    case 1n+p other _:", "      other"]
     return out
 
 def block_folds():
@@ -383,12 +423,71 @@ def block_other():
                 out.append("      e => {==}")
     return out
 
+def block_del():
+    tips = kv_node(kv_tips())
+    a = [f"a{i}" for i in range(N)]
+    b = [f"b{i}" for i in range(N)]
+    # tnode keeps a node at its first child that is not empty: a case
+    # for each such child, a node or an entry, so that tnode reduces
+    out = ["# a node and the trie tnode makes of it read alike",
+           "def tnode_read(-V: Data, +p: Nat, t: KV.Trie<V>, x: KV.Hex, +h: U32) -> {KV.tget_h(V, 1n+p, t, x, h) == KV.tget_h(V, 1n+p, KV.tnode(V, t), x, h) : KV.Trie<V>}:",
+           "  match t:",
+           f"    case {tips}:",
+           "      n2_tip(V, p, x, h)"]
+    for j in range(N):
+        for pat in [kv_node([f"d{i}" for i in range(N)]), "KV.Ent{a, b, e, c}"]:
+            out += [f"    case {kv_node(['KV.Tip{}'] * j + [pat] + cs[j + 1:])}:", "      {==}"]
+    out += ["    case KV.Tip{}:", "      {==}", "    case KV.Ent{a, b, e, c}:", "      {==}"]
+    es = [f"e{i}: @y: KV.Hex -> @g: U32 -> {{KV.tget_h(V, p, a{i}, y, g) == KV.tget_h(V, p, b{i}, y, g) : KV.Trie<V>}}"
+          for i in range(N)]
+    sig = ("(-V: Data, -p: Nat, " + fields(f"-{v}: KV.Trie<V>" for v in a + b)
+           + ", x: KV.Hex, +h: U32, " + fields(es) + ")")
+    out += ["", "# and the trie tnode_if makes of it",
+            "def tnode_if_read(-V: Data, +p: Nat, z: Bool, t: KV.Trie<V>, x: KV.Hex, +h: U32) -> {KV.tget_h(V, 1n+p, t, x, h) == KV.tget_h(V, 1n+p, KV.tnode_if(V, z, t), x, h) : KV.Trie<V>}:",
+            "  match z:",
+            "    case True{}:",
+            "      tnode_read(V, p, t, x, h)",
+            "    case False{}:",
+            "      {==}"]
+    out += ["", "# two nodes whose children read alike read alike",
+            f"def node_same{sig} -> {{KV.tget_h(V, 1n+p, {kv_node(a)}, x, h) == KV.tget_h(V, 1n+p, {kv_node(b)}, x, h) : KV.Trie<V>}}:",
+            "  match x:"]
+    for i in range(N):
+        out += [f"    case {K[i]}:", f"      e{i}(KV.hex(KV.shr4(h)), KV.shr4(h))"]
+    # tnode_read takes the second node: its children are not erased
+    tsig = ("(-V: Data, +p: Nat, " + fields([f"-{v}: KV.Trie<V>" for v in a] + [f"{v}: KV.Trie<V>" for v in b])
+            + ", z: Bool, +x: KV.Hex, +h: U32, " + fields(es) + ")")
+    out += ["", "# and the trie tnode_if makes of the second",
+            f"def tnode_same{tsig} -> {{KV.tget_h(V, 1n+p, {kv_node(a)}, x, h) == KV.tget_h(V, 1n+p, KV.tnode_if(V, z, {kv_node(b)}), x, h) : KV.Trie<V>}}:",
+            f"  %tnode_if_read(V, p, z, {kv_node(b)}, x, h) : {{KV.tget_h(V, 1n+p, {kv_node(a)}, x, h) == _ : KV.Trie<V>}}",
+            f"  node_same(V, p, {fields(a + b)}, x, h, {fields(f'e{i}' for i in range(N))})"]
+    nx1 = nxt("h1")
+    refl = "y => g => {==}"
+    out += ["", "# a delete that takes the nodes it empties (tdel_h) reads as the walk",
+            "# that deletes and keeps them (tmod_h with ODel), bucket by bucket",
+            "def tdel_eq(-V: Data, d: Nat, +t: KV.Trie<V>, x1: KV.Hex, +h1: U32, +k: String, +x2: KV.Hex, +h2: U32) -> {KV.tget_h(V, d, KV.tmod_h(V, d, t, x1, h1, KV.ODel{k}), x2, h2) == KV.tget_h(V, d, KV.tdel_h(V, d, t, x1, h1, k), x2, h2) : KV.Trie<V>}:",
+            "  match d t x1:",
+            "    case 0n t0 _:",
+            "      {==}"]
+    for i in range(N):
+        da = f"KV.tdel_h(V, p, {cs[i]}, {nx1}, k)"
+        na = with_at(cs, i, da)
+        nb = with_at(cs, i, f"KV.tmod_h(V, p, {cs[i]}, {nx1}, KV.ODel{{k}})")
+        hs = with_at([refl] * N, i, f"y => g => tdel_eq(V, p, {cs[i]}, {nx1}, k, y, g)")
+        out += [f"    case 1n++p {kv_node(['+' + c for c in cs])} {K[i]}:",
+                f"      tnode_same(V, p, {fields(nb + na)}, KV.tis_tip(V, {da}), x2, h2, {fields(hs)})"]
+    for pat in ["KV.Tip{}", "KV.Ent{a, b, e, c}"]:
+        for i in range(N):
+            out += [f"    case 1n++p {pat} {K[i]}:",
+                    f"      del_tip(V, 1n+p, {K[i]}, h1, k, x2, h2)"]
+    return out
+
 BLOCKS = {"src/map.bend": {"types": block_types, "hex": block_hex,
                        "walks": block_walks, "folds": block_folds, "scan": block_scan},
           "proof/PROOF.bend": {"digits": block_digits, "tget_k": block_tget_k, "tget_kx": block_tget_kx,
                          "tget_ke": block_tget_ke, "tget_kl": block_tget_kl, "tget_kc": block_tget_kc,
                          "same": block_same, "walk_same": block_walk_same,
-                         "other": block_other}}
+                         "other": block_other, "del": block_del}}
 
 def fill(path, blocks, check):
     text = path.read_text()
