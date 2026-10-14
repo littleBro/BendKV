@@ -39,13 +39,16 @@ make suite REDIS_SRC=../redis      # both runs and the table, in build/suite/
 ## The result
 
 Redis 7.0.15, October 2026. Of the 1,677 tests Redis passes in this mode, BendKV passes
-**1,153 (68.8%)**; of the 1,224 in the units of what BendKV has, 1,146 (94%). SORT and
-SORT_RO (section 3zzh of [FINDINGS.md](FINDINGS.md)) brought 56: unit/sort passes 51 of its
-52 tests (the other calls SORT from a Lua script), unit/type/list 214 of its 218 (the two
-tests that make their list with SORT's STORE, and the two that failed on the client the
-test of SORT's STORE left waiting, above), unit/multi the test of a watched key that SORT
-with STORE deletes, its result empty (28 of its 53), and unit/violations its one test that
-runs in this mode, a SORT that stores an integer it GETs into a list. RESP3
+**1,173 (69.9%)**; of the 1,244 in the units of what BendKV has, 1,166 (94%).
+HyperLogLogs (section 3zzj of [FINDINGS.md](FINDINGS.md)) brought 20: unit/hyperloglog
+passes all its tests, its fuzzing test (1,000 PFADDs of up to 3,000 elements, bytes set at
+random, a PFCOUNT) in 53 seconds where Redis takes 41, under the suite's limit of 60.
+SORT and SORT_RO (section 3zzh of [FINDINGS.md](FINDINGS.md)) brought 56: unit/sort passes
+51 of its 52 tests (the other calls SORT from a Lua script), unit/type/list 214 of its
+218 (the two tests that make their list with SORT's STORE, and the two that failed on the
+client the test of SORT's STORE left waiting, above), unit/multi the test of a watched key
+that SORT with STORE deletes, its result empty (28 of its 53), and unit/violations its one
+test that runs in this mode, a SORT that stores an integer it GETs into a list. RESP3
 (section 3zx of [FINDINGS.md](FINDINGS.md)) brought 292: unit/type/list runs past its
 HELLO 3 now and passes 210 of its 218 tests, unit/type/zset 287 of its 289, unit/type/hash
 its test of HRANDFIELD over RESP3 (69 of its 72) and unit/pubsub its test of messages with
@@ -165,8 +168,8 @@ need MULTI and WATCH, Lua or lists (then).
 
 | area | units | Redis passes | BendKV passes |
 |---|---|---:|---:|
-| what BendKV has: the protocol, connections and clients, the keyspace and its databases, strings and their ranges, bits and fields, counters and floats, hashes, lists, sets, sorted sets and the commands that wait on them, SORT, times to live, transactions, pub/sub and keyspace notifications, introspection | protocol, quit, keyspace, type/string, type/incr, type/hash, type/list, list-2, list-3, type/set, type/zset, sort, scan, bitops, bitfield, expire, multi, pubsub, introspection, introspection-2, other, info-command | 1224 | **1146** |
-| data types, not yet | geo, hyperloglog, dump, lazyfree, violations | 95 | 4 |
+| what BendKV has: the protocol, connections and clients, the keyspace and its databases, strings and their ranges, bits and fields, counters and floats, hashes, lists, sets, sorted sets and the commands that wait on them, SORT, HyperLogLogs, times to live, transactions, pub/sub and keyspace notifications, introspection | protocol, quit, keyspace, type/string, type/incr, type/hash, type/list, list-2, list-3, type/set, type/zset, sort, hyperloglog, scan, bitops, bitfield, expire, multi, pubsub, introspection, introspection-2, other, info-command | 1244 | **1166** |
+| data types, not yet | geo, dump, lazyfree, violations | 75 | 4 |
 | client-side caching, CLIENT PAUSE, the latency monitor, the slow log, the query buffer, not yet | tracking, pause, latency-monitor, slowlog, querybuf | 48 | 0 |
 | out of scope: Lua scripts, functions, streams | scripting, functions, type/stream, type/stream-cgroups | 310 | 3 |
 
@@ -189,7 +192,7 @@ pubsubshard, shutdown, tls, type/list-common, wait):
 | unit/expire | 65 | 59 | 57 |
 | unit/functions | 94 | 90 | 2 |
 | unit/geo | 59 | 59 | 0 |
-| unit/hyperloglog | 20 | 20 | 0 |
+| unit/hyperloglog | 20 | 20 | 20 |
 | unit/info-command | 3 | 3 | 3 |
 | unit/introspection | 28 | 28 | 25 |
 | unit/introspection-2 | 43 | 43 | 17 |
@@ -220,14 +223,14 @@ pubsubshard, shutdown, tls, type/list-common, wait):
 | unit/type/string | 77 | 77 | 74 |
 | unit/type/zset | 291 | 289 | 287 |
 | unit/violations | 1 | 1 | 1 |
-| **all** | **1757** | **1677** | **1153 (68.8%)** |
+| **all** | **1757** | **1677** | **1173 (69.9%)** |
 
-## Why the other 524 fail
+## Why the other 504 fail
 
-- **375 stop on a command BendKV does not have.** By the number of tests each one stops:
+- **355 stop on a command BendKV does not have.** By the number of tests each one stops:
   FUNCTION LOAD 125, XADD 61, GEOADD 38, SYNC 20 (tests that read the replication
-  stream, 12 of them unit/multi's of what a transaction propagates), PFADD 19, XGROUP 13,
-  DUMP 10, GEORADIUS 10, CLIENT PAUSE 10, SLOWLOG 9, and 25 more below nine (60 tests).
+  stream, 12 of them unit/multi's of what a transaction propagates), XGROUP 13, CLIENT
+  PAUSE 11, DUMP 10, GEORADIUS 10, SLOWLOG 9, and 23 more below nine (58 tests).
 - **94 never ran**: their unit ended before them, on a command outside any test:
   LATENCY RESET (latency-monitor), `CONFIG SET appendonly yes` (type/stream; BendKV turns
   its append-only file on only at its start); or on a test that waits for a reply that
@@ -251,7 +254,7 @@ pubsubshard, shutdown, tls, type/list-common, wait):
   SCAN and RANDOMKEY pass all their tests on keys: SCAN's basic iteration, COUNT, MATCH,
   TYPE, and its guarantee under a load of writes, and RANDOMKEY's three.)
 
-So what the suite counts next is the data types not yet there (95 tests) and the
+So what the suite counts next is the data types not yet there (75 tests) and the
 clients' features of the third row (48 tests: client-side caching, CLIENT PAUSE, the
 latency monitor, the slow log, the query buffer). Scripts, functions and streams (310
 tests) stay out of scope.
@@ -320,8 +323,8 @@ make clients                       # the three suites, against Redis and build/b
 
 | suite | Redis 7.0.15 passes | BendKV passes |
 |---|---:|---:|
-| redis-py 8.1.0, RESP2 | 2,753 | **2,419 (87.9%)** |
-| redis-py 8.1.0, RESP3 | 2,753 | **2,419 (87.9%)** |
+| redis-py 8.1.0, RESP2 | 2,753 | **2,428 (88.2%)** |
+| redis-py 8.1.0, RESP3 | 2,753 | **2,428 (88.2%)** |
 | go-redis v9.23.0, RESP3 | 460 | **392 (85.2%)** |
 
 redis-py's tests give in RESP3 what they give in RESP2, test by test, against Redis and
@@ -330,13 +333,14 @@ against BendKV: the same tests pass, and the same fail.
 Every test BendKV fails of those Redis passes fails on what BendKV does not have:
 
 - **A command it does not have:** in redis-py, Lua's (EVALSHA 74, SCRIPT 30, FUNCTION 7),
-  geo (59), streams (73), ACL 34, DUMP 12, PFADD 9, SLOWLOG 9, CLIENT PAUSE and UNPAUSE 5,
+  geo (59), streams (73), ACL 34, DUMP 12, SLOWLOG 9, CLIENT PAUSE and UNPAUSE 5,
   LASTSAVE 3, MEMORY STATS 3, LATENCY 3, MODULE 2, and BGSAVE, CLIENT TRACKING, LOLWUT,
-  MEMORY MALLOC-STATS, REPLICAOF and ROLE one each (329 tests in each protocol); in
+  MEMORY MALLOC-STATS, REPLICAOF and ROLE one each (320 tests in each protocol); in
   go-redis, streams (26), geo (11), Lua's (12), DUMP and RESTORE (3), ACL, SLOWLOG and WAIT
   (55 tests). SORT's tests, 37 in redis-py and 2 in go-redis, pass since SORT (section 3zzh
   of [FINDINGS.md](FINDINGS.md)), and so does go-redis's test of COMMAND GETKEYS, which
-  asks for SORT's keys.
+  asks for SORT's keys; redis-py's 9 tests of PFADD, PFCOUNT and PFMERGE pass since
+  HyperLogLogs (section 3zzj).
 - **Another error, on the same ground:** client-side caching (CLIENT TRACKING and its
   invalidations: go-redis's 9 specs of its cache), Lua (a script's calls in MONITOR, EVAL's
   replies), and COMMAND, which lists only BendKV's commands: COMMAND LIST counts 218 where

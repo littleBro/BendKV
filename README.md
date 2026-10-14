@@ -13,13 +13,13 @@ with it. Under pipelined load it serves GET at 1.6×, SET at 1.8× and INCR at 1
 throughput of Redis 7.0.15 on the same machine, with half its memory for small values.
 
 > **Status: research prototype.** BendKV implements a subset of Redis (strings, hashes,
-> lists, sets, sorted sets and their times to live, the blocking commands, transactions,
-> pub/sub and keyspace notifications, the keyspace, several databases, connection
-> commands, CLIENT LIST, INFO and KILL, MONITOR, an append-only file and its rewrite,
-> maxmemory and its eviction, RESP3). The goal now is a drop-in replacement for a single
-> Redis node, measured by Redis's own test suite: of the 1,677 tests Redis 7.0.15 passes
-> against a server it did not start, BendKV passes 1,153, and 1,146 of the 1,224 in what
-> it implements
+> lists, sets, sorted sets, HyperLogLogs and their times to live, the blocking commands,
+> transactions, pub/sub and keyspace notifications, the keyspace, several databases,
+> connection commands, CLIENT LIST, INFO and KILL, MONITOR, an append-only file and its
+> rewrite, maxmemory and its eviction, RESP3). The goal now is a drop-in replacement for a
+> single Redis node, measured by Redis's own test suite: of the 1,677 tests Redis 7.0.15
+> passes against a server it did not start, BendKV passes 1,173, and 1,166 of the 1,244 in
+> what it implements
 > ([docs/COMPATIBILITY.md](docs/COMPATIBILITY.md)). Do not use it for data you cannot
 > lose.
 
@@ -56,7 +56,7 @@ proved to be the trie's own.
 |---|---:|---|
 | Map | 11 | the trie is a finite map from keys to a value and a time: after any sequence of writes (a value with a time, a value with its time kept, a time alone, a deletion), every key holds what was last written to it, with no stale, lost or foreign entries; a read sees a key only until its time |
 | Keys | 2 | key comparison is exactly string equality, down to the bits of `U32` |
-| Commands | 24 | no command changes a key it does not write, neither its value nor its time (`frame`); reads keep the database (the commands of hashes, lists, sets and sorted sets are reads and updates of their key, LMOVE, LMPOP, SMOVE, ZMPOP and the operations of several sets and sorted sets of their keys, so these laws and those below hold of them); a key whose time has passed is there for no command, and the sweep of expired keys deletes no key that is there; GET, DEL, APPEND, SETRANGE, SETNX, INCR, GETDEL, PERSIST, PTTL, SET with KEEPTTL, RENAME, MSETNX and BITOP behave as specified, on keys of the types they take (SET, SETNX, the times and the key commands take any), a key they add counted; a pipelined batch runs exactly as its commands in order; the cache hints before a batch change nothing |
+| Commands | 24 | no command changes a key it does not write, neither its value nor its time (`frame`); reads keep the database (the commands of hashes, lists, sets and sorted sets, PFADD, PFCOUNT of one key and PFDEBUG are reads and updates of their key, LMOVE, LMPOP, SMOVE, ZMPOP and the operations of several sets and sorted sets of their keys, so these laws and those below hold of them); a key whose time has passed is there for no command, and the sweep of expired keys deletes no key that is there; GET, DEL, APPEND, SETRANGE, SETNX, INCR, GETDEL, PERSIST, PTTL, SET with KEEPTTL, RENAME, MSETNX and BITOP behave as specified, on keys of the types they take (SET, SETNX, the times and the key commands take any), a key they add counted; a pipelined batch runs exactly as its commands in order; the cache hints before a batch change nothing |
 | Commuting | 5 | commands on different keys commute: replies and key contents are the same in either order, and adjacent independent commands in a batch can be swapped, when neither writes a key the other's writes depend on (RENAME moves a value from one key to another, MSETNX sets its keys only when none is there, BITOP sets its destination from its sources, LMOVE pushes onto its destination what it pops from its source, LMPOP pops from the first of its keys that is there, a STORE of a set operation sets its destination to what its sources make, SMOVE moves a member from its source to its destination, a STORE of a sorted-set operation or of a range sets its destination to what its sources or its source make, ZMPOP pops from the first of its keys that is there); SORT, whose patterns may read any key, swaps with reads alone |
 | Persistence | 9 | logging changes no reply; the file reads back as written, times included; after any history, each batch at its own time, on any of the databases, the server restores exactly the databases it held; a file cut by a crash at any byte restores the databases after some prefix of its acts in which every transaction is whole, never a partial act or transaction; the start's replay, which first checks that each entry replays as written, is that replay whenever the check refuses none |
 | Databases | 6 | SELECT changes no database and focuses the one it names; SWAPDB puts each of two databases in the other's place; FLUSHALL empties them all; MOVE takes a key's entry, its value and its time, out of the selected database and sets it in the other; COPY sets a key's entry at another key, in the selected database or another, when that key is not there or REPLACE is given |
@@ -213,6 +213,26 @@ translation stays in the trusted base.
   after one that met a weight too large or too small fails on weights that are not
   integers, until a command clears errno; and SORT of a small sorted set leaves it a
   listpack, where Redis makes it a skiplist for good.
+- **HyperLogLogs:** PFADD, PFCOUNT, PFMERGE, PFDEBUG (GETREG, DECODE, ENCODING, TODENSE)
+  and PFSELFTEST, as Redis 7.0.15's `hyperloglog.c` runs them, on the bytes of a string:
+  Redis's header and registers, dense or sparse, and every value written byte for byte as
+  Redis writes it (the sparse opcodes split and merged as `hllSparseSet` does it, the turn
+  to dense past 3,000 bytes or for a register past 32, PFMERGE's sparse result, the count
+  kept in the header and made stale by a change). The count is Ertl's estimator as Redis
+  takes it, on doubles in software. A string that is not a HyperLogLog answers Redis's
+  WRONGTYPE, a corrupt sparse one INVALIDOBJ, as Redis 7.0.15 with the fix of
+  CVE-2025-32023 judges it (as Ubuntu ships it). PFADD, PFCOUNT of one key and PFDEBUG
+  are logged as the changes they make (a SET, a SET with KEEPTTL, the SETRANGE of the
+  count), PFMERGE as the SET of its destination; a file of Redis's, which holds the PF
+  commands, is read by running them. PFADD takes four to six times Redis's instructions,
+  a PFCOUNT that counts 13 to 18 times (2.6 times on two dense HyperLogLogs), PFMERGE 1.2
+  to 2.4 times (section 59 of [docs/PERFORMANCE.md](docs/PERFORMANCE.md)). Where BendKV
+  differs: `hll-sparse-max-bytes` is not read (3,000); PFSELFTEST checks fewer cases; the
+  byte past a sparse string's end, which an XZERO cut at its end reads, is 0 as each
+  command starts, where Redis keeps what a set wrote there; a PFADD that a corrupt value
+  stops keeps its change with an event and a log, where Redis keeps it silently; and
+  OBJECT ENCODING answers `embstr` for a HyperLogLog of up to 44 bytes, where Redis's is
+  `raw`.
 - **Clients that wait:** BLPOP, BRPOP, BLMOVE, BRPOPLPUSH, BLMPOP, BZPOPMIN, BZPOPMAX
   and BZMPOP, their timeouts (seconds, a double; 0 waits for ever) read as Redis reads
   them, with its errors. A command that finds nothing to pop makes its client wait, and
@@ -416,7 +436,7 @@ translation stays in the trusted base.
   groups of requests the server answers meanwhile; with INFO's fields of a rewrite
   (FINDINGS.md, section 3zv).
 
-Not yet: streams and the other types (HyperLogLog, geo), Lua
+Not yet: streams and geo, Lua
 scripts, CLIENT PAUSE and TRACKING, timing of commands
 (usec in INFO commandstats, latencystats), CONFIG REWRITE (it answers as Redis does without a configuration file),
 RDB files. Integers, and times in ms, are limited to 14 digits.
@@ -516,7 +536,9 @@ walk compared by its pairs and each random pick checked against the sorted set i
 from), SORT and SORT_RO (`tests/sort_test.py`: the cases of Redis's tests and of its
 `sort.c`, lists, sets and sorted sets of up to 10,000 elements sorted every way, and
 random SORTs with BY and GET patterns over strings and hashes, each STORE's destination
-read back),
+read back), HyperLogLogs (`tests/hll_test.py`: the cases of Redis's tests and of its
+`hyperloglog.c`, values made by hand and corrupted at random, and random sequences of the
+PF commands, each reply compared and each value written read back byte for byte),
 robustness and concurrency checks, a client that stops reading while the others are
 served (`tests/writer_test.py`), clients that wait (`tests/blocking_test.py`: 18 scenarios
 of the blocking commands on BendKV and on Redis, their transcripts compared line by line,
@@ -526,7 +548,7 @@ and 50 consumers moving 1,000 items while some leave), transactions (`tests/mult
 transcripts compared line by line, then a counter raised by 20 clients with WATCH, each
 lost race retried, a reader that never sees half of a transaction, and 100 clients that
 leave in MULTI or with keys watched; random transactions in the differential test too),
-Pub/Sub (`tests/pubsub_test.py`: scenarios of Pub/Sub and the events of 148 commands
+Pub/Sub (`tests/pubsub_test.py`: scenarios of Pub/Sub and the events of 162 commands
 on BendKV and on Redis, their transcripts compared line by line, then 20 subscribers that
 each get the 2,000 messages of 4 publishers in order, and 50 subscribers that leave while
 messages are published), CLIENT LIST, INFO and KILL (`tests/client_test.py`: scenarios on
@@ -572,6 +594,7 @@ passes that BendKV fails and that is not among the known failures of
 src/        the server
   map.bend      hash trie with string keys                         verified
   float.bend    doubles and long doubles in software               tested
+  hll.bend      HyperLogLogs on a string's bytes, as Redis's       tested
   redis.bend    command semantics: exec(cmd, db) -> (reply, db')   verified
   batch.bend    a pipelined batch with cache hints                 verified
   aof.bend      append-only file: effects, encoding, loading       verified
@@ -583,7 +606,7 @@ src/        the server
   startup.bend  the command line and the configuration file        tested
   server.bend   TCP, connections, the database actor, the log      tested
 proof/      LAWS.bend (the laws), PROOF.bend (their proofs), SPEC.bend (the commands on the trie alone)
-tests/      float, start, differential, expiry, protocol, session, CONFIG, INFO, COMMAND, SCAN, BITFIELD, hash, list, set, sorted set, SORT, blocking, transaction, Pub/Sub, CLIENT, MONITOR, AUTH, RESP3, maxmemory, robustness, stalled reader, concurrency, AOF and AOF rewrite tests
+tests/      float, start, differential, expiry, protocol, session, CONFIG, INFO, COMMAND, SCAN, BITFIELD, hash, list, set, sorted set, SORT, HyperLogLog, blocking, transaction, Pub/Sub, CLIENT, MONITOR, AUTH, RESP3, maxmemory, robustness, stalled reader, concurrency, AOF and AOF rewrite tests
 bench/      in-process benchmarks of the map, the core and channels
 tools/      measurement scripts, the runner of Redis's test suite, and the generators of
             the trie, of the parameter table and of the command table, with the facts

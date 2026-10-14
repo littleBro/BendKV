@@ -6921,3 +6921,59 @@ time, as in section 57):
 The other readers of `KV.read` gain as MGET does for each key they read: EXISTS of
 several keys, MSETNX, BITOP, SINTER and the operations of several sets and sorted sets,
 SCAN with TYPE.
+
+## 59. HyperLogLog
+
+**What it costs** (`tools/hllcost.sh`: instructions per command under callgrind, one
+client, one request at a time, on sparse HyperLogLogs of 100 elements and dense ones of
+10,000; Redis 7.0.15 the same way; the first version kept the registers of a merge in an
+Array):
+
+| command | first version | now | Redis | now / Redis |
+|---|---:|---:|---:|---:|
+| PFADD of an element there, sparse | 89,840 | 41,277 | 8,264 | 5.0 |
+| PFADD of an element there, dense | 22,151 | 20,824 | 5,494 | 3.8 |
+| PFADD of a new element, sparse | 150,277 | 66,086 | 10,793 | 6.1 |
+| PFADD of a new element, dense | 27,666 | 25,968 | 5,693 | 4.6 |
+| PFADD that makes its key | 34,056 | 31,541 | 7,440 | 4.2 |
+| PFCOUNT of a dense one, its count kept | 23,683 | 22,104 | 5,228 | 4.2 |
+| SETRANGE of byte 15 of a dense one | 26,365 | 25,690 | 7,003 | 3.7 |
+| the same SETRANGE, then PFCOUNT (its count made) | 2,734,765 | 1,450,138 | 112,800 | 12.9 |
+| PFCOUNT of two sparse ones | 3,419,664 | 886,216 | 49,632 | 17.9 |
+| PFCOUNT of two dense ones | 4,503,353 | 2,114,614 | 802,730 | 2.6 |
+| PFMERGE of two sparse ones | 3,078,374 | 1,072,772 | 905,223 | 1.2 |
+| PFMERGE of two dense ones | 6,772,239 | 3,999,421 | 1,641,701 | 2.4 |
+
+**What changed from the first version**, each found in callgrind's profile of it:
+
+- An Array anywhere in a program makes the compiler pass every boxed argument of every
+  loop with its location and read shared blocks through their counts: GET, SET and INCR
+  took 125 to 150 instructions more per request (FINDINGS 3zzj). The registers of a
+  merge are lists now (the registers above 0 while every HyperLogLog is sparse, 4096
+  words of four registers once one is dense), and so is a histogram (26 words in the
+  loops' parameters).
+- A walk of the sparse opcodes matched the value a byte at a time, and read each opcode
+  from a view of it (`str_code_at_far`, a quarter of a PFADD) with five `Bool.pick`s for
+  its fields: 240 instructions an opcode. It reads the value by index now, a copy of it in
+  one chunk (a command makes one when it reads a sparse value, and each set of a register
+  makes one of the value it wrote), and takes an opcode's kind, length and value from
+  sums of its bits: 80 instructions an opcode.
+- The estimate made each of its doubles through the float library's rounding, a halving
+  and a product by 2^k and a quotient by 2^14 among them, and added the count of each
+  value of the registers, 0 or not: a halving, a product by a power of two and a quotient
+  by 2^14 move the exponent now (exact for these numbers), and a count of 0 adds nothing.
+  An estimate takes about half a million instructions (1.3 million before).
+- A dense histogram made a list of 4096 words of the dense bytes and dropped it: it reads
+  the bytes a piece of 1,536 at a time and counts each register where it reads it.
+
+**What is left.** The estimate runs on doubles in software, a number a list of limbs of
+24 bits: about half a million instructions, where Redis's whole PFCOUNT of a dense
+HyperLogLog takes 105,000. A step of a sparse walk takes 80 instructions, where Redis's
+takes about 20, and a value past 2,048 bytes is two chunks, which `String.code_at` reads a
+run at a time; a set of a dense register copies the bytes before it (a string cannot be
+written in place), about 6,000 bytes on average. In Redis's suite, the fuzzing test of
+unit/hyperloglog (1,000 PFADDs of up to 3,000 elements, then PFCOUNT) takes 53 seconds on
+BendKV and 41 on Redis, its Tcl client most of both.
+
+**The other commands.** `make perfcheck`: GET 3,321, SET 4,075 and INCR 4,395
+instructions per request (3,317, 4,078 and 4,391 on main).
