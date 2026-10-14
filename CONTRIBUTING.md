@@ -47,9 +47,9 @@ pass.
   the tests under `tests/` that compares it with Redis byte for byte.
 - **Laws are stated by people.** A change to `proof/LAWS.bend` that weakens a law needs
   a reason in the pull request.
-- **The 16-way parts** of `src/map.bend` and `proof/PROOF.bend`, between
-  `BEGIN gen_trie` and `END gen_trie`, are written by `tools/gen_trie.py`, and the table
-  of parameters in `src/config.bend` by `tools/gen_config.py` (from
+- **The 16-way parts** of `src/map.bend`, `proof/LAWS.bend` and `proof/PROOF.bend`,
+  between `BEGIN gen_trie` and `END gen_trie`, are written by `tools/gen_trie.py`, and the
+  table of parameters in `src/config.bend` by `tools/gen_config.py` (from
   `tools/data/redis-configs.json`, which it extracts from Redis's `src/config.c`):
   change the script and rerun it, not the blocks.
 - **Patterns of literal characters** nested inside a String (`SCon{a, SCon{'-', ...}}`)

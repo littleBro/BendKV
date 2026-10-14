@@ -1128,6 +1128,103 @@ law copy_key:
   for  ok: {Bool.or(rep, Bool.not(Maybe.is_some(&2, KV.Item<KV.Val>, R.ent.live(R.ds.now(ds), R.db.entry(y, d))))) == True{} : Bool}
   {zero(R.ds_of(R.act(R.ACopy{s, d, j, rep}, ds))) == R.ds.put(j, R.db.at(0n, R.db.setx(y, d, v, e)), zero(ds)) : List<&2, R.Db>}
 
+# The key count
+# =============
+# A database keeps beside its trie how many keys it holds (R.db.n: what
+# DBSIZE answers, and INFO's keyspace keys) and how many of them have a
+# time (R.db.x: INFO's keyspace expires), so that neither is counted when
+# it is read; each write changes them as it changes the trie (R.cnt.n,
+# R.cnt.x). Both counts are sums over the trie's entries (tsum): of 1 for
+# each entry, and of 1 for each entry with a time. Each key counts once:
+# the trie is well formed (twf: nodes down to the buckets, and a key at
+# most once in its bucket; a delete takes every entry of its key, so a
+# key there twice would make the counts drift).
+
+# what an entry weighs in a count: 1 (WAll: the keys), or 1 when it has a
+# time and 0 when it has none (WTimed: the keys that can expire)
+type Wt is Data:
+  WAll{}
+  WTimed{}
+
+def wt(+w: Wt, +e: Nat) -> Nat:
+  match w:
+    case WAll{}:
+      1n
+    case WTimed{}:
+      Bool.pick(Nat, Nat.is_eq(e, 0n), 0n, 1n)
+
+# the weights of t's entries, summed
+# BEGIN gen_trie: tsum
+def tsum(-V: Data, +w: Wt, t: KV.Trie<V>) -> Nat:
+  match t:
+    case KV.Tip{}:
+      0n
+    case KV.Node{c0, c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13, c14, c15}:
+      Nat.add(tsum(V, w, c0), Nat.add(tsum(V, w, c1), Nat.add(tsum(V, w, c2), Nat.add(tsum(V, w, c3), Nat.add(tsum(V, w, c4), Nat.add(tsum(V, w, c5), Nat.add(tsum(V, w, c6), Nat.add(tsum(V, w, c7), Nat.add(tsum(V, w, c8), Nat.add(tsum(V, w, c9), Nat.add(tsum(V, w, c10), Nat.add(tsum(V, w, c11), Nat.add(tsum(V, w, c12), Nat.add(tsum(V, w, c13), Nat.add(tsum(V, w, c14), tsum(V, w, c15))))))))))))))))
+    case KV.Ent{k, v, +e, rest}:
+      Nat.add(wt(w, e), tsum(V, w, rest))
+# END gen_trie: tsum
+
+# a bucket holds a key at most once
+def bwf(-V: Data, b: KV.Trie<V>) -> Bool:
+  match b:
+    case KV.Ent{+k, v, e, +rest}:
+      Bool.and(Nat.is_eq(KV.bcode(V, k, rest), 0n), bwf(V, rest))
+    case _:
+      True{}
+
+# a well-formed trie of depth d: nodes down to the buckets (an empty
+# subtrie anywhere), each bucket as bwf says
+# BEGIN gen_trie: twf
+def twf(-V: Data, t: KV.Trie<V>, d: Nat) -> Bool:
+  match t d:
+    case KV.Tip{} _:
+      True{}
+    case KV.Node{c0, c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13, c14, c15} 0n:
+      True{}
+    case KV.Node{c0, c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13, c14, c15} 1n++p:
+      Bool.and(twf(V, c0, p), Bool.and(twf(V, c1, p), Bool.and(twf(V, c2, p), Bool.and(twf(V, c3, p), Bool.and(twf(V, c4, p), Bool.and(twf(V, c5, p), Bool.and(twf(V, c6, p), Bool.and(twf(V, c7, p), Bool.and(twf(V, c8, p), Bool.and(twf(V, c9, p), Bool.and(twf(V, c10, p), Bool.and(twf(V, c11, p), Bool.and(twf(V, c12, p), Bool.and(twf(V, c13, p), Bool.and(twf(V, c14, p), twf(V, c15, p))))))))))))))))
+    case KV.Ent{k, v, e, rest} 0n:
+      bwf(V, KV.Ent{k, v, e, rest})
+    case KV.Ent{k, v, e, rest} 1n+p:
+      False{}
+# END gen_trie: twf
+
+# a database whose counts are its trie's own, its trie well formed (the
+# keys' buckets lie 5 nodes deep)
+def counted(+db: R.Db) -> Bool:
+  match db:
+    case R.Db{+t, +n, +x, now, rr}:
+      Bool.and(twf(KV.Val, t, 5n), Bool.and(Nat.is_eq(n, tsum(KV.Val, WAll{}, t)), Nat.is_eq(x, tsum(KV.Val, WTimed{}, t))))
+
+# every database of a list counted, and every one of the databases
+def counted_list(xs: List<&2, R.Db>) -> Bool:
+  match xs:
+    case Nil{}:
+      True{}
+    case Con{+x, rest}:
+      Bool.and(counted(x), counted_list(rest))
+
+def counted_ds(+ds: R.Ds) -> Bool:
+  match ds:
+    case R.Ds{+d, +pre, +post}:
+      Bool.and(counted(d), Bool.and(counted_list(pre), counted_list(post)))
+
+# LAW: after any history, the counts of every database are its trie's
+# own, and its trie is well formed
+law counts_hold:
+  for +hist: List<&2, Run>
+  for +n: Nat
+  {counted_ds(single(hist, n)) == True{} : Bool}
+
+# LAW: so DBSIZE answers the number of keys of the database in focus: the
+# entries of its trie (KV.size), those whose time has passed and that no
+# command or sweep has deleted yet among them, as Redis counts them
+law dbsize_size:
+  for +hist: List<&2, Run>
+  for +n: Nat
+  {R.reply_of(R.exec(R.DbSize{}, R.ds.focused(single(hist, n)))) == R.r_int(KV.size(KV.Val, R.db.t(R.ds.focused(single(hist, n))))) : R.Reply}
+
 # Sessions
 # ========
 # A batch runs with the state of its connection and of the server

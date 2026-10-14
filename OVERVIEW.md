@@ -27,10 +27,10 @@ where the work goes next), [tools/README.md](tools/README.md) (how it was measur
   of a connection and of the server), ~70 lines of hints to the processor, ~520 lines of
   append-only file (AOF), ~1,040 lines of configuration (CONFIG by Redis's table, plus
   ~180 lines of table written by a generator), ~440 lines of INFO, ~410 lines of COMMAND
-  (plus ~300 lines of command table from a generator) and ~6,960 lines of handwritten
-  proofs, plus ~1,700 lines of 16-way case splits of the trie written by a generator, and
-  65 laws (not counting comments and blank lines). Bend checks them in about 5 s, and the
-  BendTT kernel (whose soundness is proved in Lean) in ~50 s.
+  (plus ~300 lines of command table from a generator) and ~13,250 lines of handwritten
+  proofs, plus ~2,790 lines of 16-way case splits of the trie written by a generator, and
+  67 laws (not counting comments and blank lines). Bend checks them in about 14 s, and the
+  BendTT kernel (whose soundness is proved in Lean) in about a minute.
   Recovery after a restart is proved too: a server with an append-only file (AOF in
   Redis's format) restores from the file exactly the databases it held (16 of them, as in
   Redis), and from a file cut by a crash at any byte, the databases after some prefix of
@@ -657,8 +657,8 @@ keys read and what commands answer are proved about the specification, `exec` on
 trie at a moment of time (`proof/SPEC.bend`); a bridge (`bridge_go`) proves that the
 server's `exec` answers as the specification does and leaves the same trie (except the
 reply of DBSIZE, which is the count). The laws about the database as a whole are proved
-on the record together with the count. That the count equals the trie's size is not
-proved yet.
+on the record together with the count, and the counts are the trie's own (the key count,
+below).
 
 **Commutativity (5 laws).** Commands on different keys can run in any order. A key
 after a command depends only on how, before it, the key itself read and how the keys
@@ -749,6 +749,14 @@ arguments reads as what had arrived (DEL a b c would run as DEL a b).
 - `copy_key` — COPY of a key that is there gives its entry (the value and the time to
   live) to the target key in the database it names (or in the selected one), if the
   target key is not there or REPLACE is given, and changes nothing else.
+
+**The key count (2 laws)** about the counts a database keeps beside its trie:
+- `counts_hold` — **after any history, the counts of every database are its trie's
+  own**: how many keys it holds and how many of them have a time; and its trie is well
+  formed, each key at most once in its bucket;
+- `dbsize_size` — so DBSIZE answers the number of keys in the trie of the database in
+  focus, keys whose time has passed among them until a command or the sweep deletes
+  them, as in Redis.
 
 **Sessions (5 laws)** about `session.bend`:
 - `run_gen` and `run_log_gen` — **however the server took a batch apart, it runs it as

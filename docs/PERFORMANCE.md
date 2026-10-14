@@ -4258,8 +4258,8 @@ answers with the count. The laws about the whole database are proved on the reco
 together with the count. Not proved yet: that the count equals the trie's size; this
 needs the invariant "a bucket has no repeated key" (`bdel` deletes all the entries of its
 key) and the arithmetic of a sum over 16 children; it will come together with the count
-of keys with a time to live. `make check` takes 4.0 s, `make verdict` 24 s on this
-machine (before the step 3.6 and 23.7).
+of keys with a time to live (proved since: FINDINGS.md, section 3zzf). `make check` takes
+4.0 s, `make verdict` 24 s on this machine (before the step 3.6 and 23.7).
 
 ## 21. Keys' times to live
 

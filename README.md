@@ -3,7 +3,7 @@
 A Redis-compatible key-value server written in [Bend2](https://github.com/bendlang/bend),
 whose core is formally verified: the command semantics, the hash trie behind them, the
 append-only file, the databases, the connection state and the configuration are proved
-against 65 laws,
+against 67 laws,
 checked by Bend
 and rechecked by the BendTT kernel, whose soundness is proved in Lean.
 
@@ -49,8 +49,8 @@ server holds several (16, as Redis), with the one a connection selected in focus
 its batch runs. A key whose time has passed is there for no command. The laws about what keys read and what
 commands answer are proved of a specification, the commands on the trie alone at a time
 ([`proof/SPEC.bend`](proof/SPEC.bend)), and a bridge proves that the server's commands
-answer as it does (DBSIZE answers the count) and leave the trie it leaves. That the count
-is the trie's size is not proved yet.
+answer as it does (DBSIZE answers the count) and leave the trie it leaves; the counts are
+proved to be the trie's own.
 
 | group | laws | what they say |
 |---|---:|---|
@@ -60,6 +60,7 @@ is the trie's size is not proved yet.
 | Commuting | 5 | commands on different keys commute: replies and key contents are the same in either order, and adjacent independent commands in a batch can be swapped, when neither writes a key the other's writes depend on (RENAME moves a value from one key to another, MSETNX sets its keys only when none is there, BITOP sets its destination from its sources, LMOVE pushes onto its destination what it pops from its source, LMPOP pops from the first of its keys that is there, a STORE of a set operation sets its destination to what its sources make, SMOVE moves a member from its source to its destination, a STORE of a sorted-set operation or of a range sets its destination to what its sources or its source make, ZMPOP pops from the first of its keys that is there) |
 | Persistence | 9 | logging changes no reply; the file reads back as written, times included; after any history, each batch at its own time, on any of the databases, the server restores exactly the databases it held; a file cut by a crash at any byte restores the databases after some prefix of its acts in which every transaction is whole, never a partial act or transaction; the start's replay, which first checks that each entry replays as written, is that replay whenever the check refuses none |
 | Databases | 6 | SELECT changes no database and focuses the one it names; SWAPDB puts each of two databases in the other's place; FLUSHALL empties them all; MOVE takes a key's entry, its value and its time, out of the selected database and sets it in the other; COPY sets a key's entry at another key, in the selected database or another, when that key is not there or REPLACE is given |
+| Key count | 2 | after any history, the counts every database keeps are its trie's own, how many keys it holds and how many of them have a time, and its trie holds each key once; so DBSIZE answers the number of keys in its trie |
 | Sessions | 5 | however the server dispatches a batch, it runs as its commands in order; a batch changes the databases and the log as its executed commands do; a client that has not authenticated against a password cannot read or change any key |
 | Configuration | 3 | a CONFIG SET that fails changes nothing; one that succeeds makes the new requirepass the password; after a CONFIG SET of a parameter, CONFIG GET finds the value its check gave |
 
