@@ -21,8 +21,11 @@ operation, BITFIELD's subcommands); errors with codes
 other than ERR (WRONGPASS, NOAUTH); calls while CLIENT REPLY holds
 replies back (counted all the same); commands after a QUIT (dropped); a
 protocol error (counted, then the connection closes); and random
-pipelines mixing all of these. SCAN and RANDOMKEY answer keys of their
-own choice: their replies are compared by their kind.
+pipelines mixing all of these. And replies with lines that begin with
+'-' and are no errors (a bulk "-5", negative scores, members "-x"), alone
+and in pipelines of one command with an error among them. SCAN and
+RANDOMKEY answer keys of their own choice: their replies are compared by
+their kind.
 
     python3 tests/stats_test.py --bendkv 6380 --redis 6390 [--rounds 200]
 """
@@ -211,6 +214,28 @@ def pipelines(c, port):
     return out
 
 
+def dash_payloads(c, port):
+    # replies with lines that begin with '-' and are no errors (a bulk
+    # "-5", a negative score, a member "-x"), one at a time and in
+    # pipelines of one command, two with an error among them, and a long
+    # reply of many chunks
+    out = []
+    for args in (["SET", "k", "-5"], ["GET", "k"], ["INCRBY", "n", "-7"], ["DECRBY", "n", "3"],
+                 ["RPUSH", "l", "-x", "-y", "z"], ["LRANGE", "l", "0", "-1"], ["LINDEX", "l", "0"],
+                 ["HSET", "h", "-f", "-v"], ["HGETALL", "h"], ["HGET", "h", "-f"], ["HKEYS", "h"],
+                 ["SADD", "s", "-m"], ["SMEMBERS", "s"], ["ZADD", "z", "-1.5", "a", "-2", "-b"],
+                 ["ZRANGE", "z", "0", "-1", "WITHSCORES"], ["ZSCORE", "z", "a"], ["ZINCRBY", "z", "-1", "a"],
+                 ["INCRBYFLOAT", "f", "-1.5"], ["LPOP", "l"]):
+        out.append(c.ask(*args))
+    out += c.pipe([["LRANGE", "l", "0", "-1"] for i in range(16)])
+    out += c.pipe([["LRANGE", "l", "0", "-1"], ["LRANGE", "k", "0", "-1"], ["LRANGE", "l", "0", "-1"]])
+    out += c.pipe([["ZRANGE", "z", "0", "-1", "WITHSCORES"] for i in range(16)])
+    out += c.pipe([["HGETALL", "h"], ["HGETALL", "k"], ["HGETALL", "h"]])
+    c.pipe([["ZADD", "big", "-%d.25" % i, "m%d" % i] for i in range(2000)])
+    out.append(len(c.ask("ZRANGE", "big", "0", "-1", "WITHSCORES")))
+    return out
+
+
 def big_pipeline(c, port):
     # a batch of one command over 64 KB: tl does not count it all
     cmds = [["SET", "big%d" % i, "x" * 64] for i in range(1200)] + [["INCR", "big%d" % i] for i in range(3)]
@@ -305,6 +330,7 @@ def main():
     same("one command at a time", b, r, ports, one_at_a_time)
     same("errors one at a time", b, r, ports, errors_at_a_time)
     same("pipelines", b, r, ports, pipelines)
+    same("replies with a '-' that are no errors", b, r, ports, dash_payloads)
     same("a pipeline over 64 KB", b, r, ports, big_pipeline)
     same("replies held back", b, r, ports, held_replies)
     same("NOAUTH and WRONGPASS", b, r, ports, noauth)

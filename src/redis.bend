@@ -12094,6 +12094,14 @@ def err.put(+r: Reply, +k: Nat, acc: List<&2, Erred>) -> List<&2, Erred>:
     case _:
       acc
 
+# the error replies among the replies of a batch of calls of one code k
+def errs.one(+rs: List<&2, Reply>, +k: Nat, acc: List<&2, Erred>) -> List<&2, Erred>:
+  match rs:
+    case Con{+r, +rest}:
+      errs.one(rest, k, err.put(r, k, acc))
+    case Nil{}:
+      acc
+
 # the error replies among replies, each with the code of its call (ks, in
 # the same order)
 def errs.zip(+rs: List<&2, Reply>, ks: List<&2, Nat>, acc: List<&2, Erred>) -> List<&2, Erred>:

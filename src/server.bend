@@ -126,41 +126,6 @@ def ans.len(+a: Ans) -> Nat:
     case _:
       0n
 
-# The error replies of a batch of one code k, from its bytes: each reply
-# of such a batch is a line (INCR's integers and errors, or the errors of
-# calls the parser refused or failed), and an error reply's begins with
-# '-'. Bytes without a '-', as most batches of INCR have, have none.
-def ans.err(err: Bool, +out: String, +i: Nat, +j: Nat, +k: Nat, acc: List<&2, R.Erred>) -> List<&2, R.Erred>:
-  match err:
-    case True{}:
-      R.Erred{k, String.slice(out, Nat.add(i, 1n), Nat.sub(Nat.sub(j, i), 2n))} <> acc
-    case False{}:
-      acc
-
-def ans.errs.go(fuel: Nat, more: Bool, +out: String, +l: Nat, +i: Nat, +k: Nat, acc: List<&2, R.Erred>) -> List<&2, R.Erred>:
-  match fuel more:
-    case 1n+f True{}:
-      +j = String.find(out, '\n', i)
-      ans.errs.go(f, Nat.is_lt(Nat.add(j, 1n), l), out, l, Nat.add(j, 1n), k, ans.err(U32.is_eq(String.code_at(out, i), 45), out, i, j, k, acc))
-    case _ _:
-      acc
-
-def ans.errs(+a: Ans, +k: Nat) -> List<&2, R.Erred>:
-  match a:
-    case Ans{Some{+out}, cn}:
-      +l = String.length(out)
-      ans.errs.go(l, Nat.is_lt(0n, l), out, l, 0n, k, Nil{})
-    case _:
-      Nil{}
-
-# whether an answer of l bytes has a '-'
-def ans.dash(+a: Ans, +l: Nat) -> Bool:
-  match a:
-    case Ans{Some{+out}, cn}:
-      Nat.is_lt(String.find(out, '-', 0n), l)
-    case _:
-      False{}
-
 # Statistics of a batch
 # ---------------------
 # INFO counts each call as Redis does (info.bend, Statistics): what it
@@ -5109,32 +5074,25 @@ def errs.put(xs: List<&2, R.Erred>, srv: S.Srv) -> S.Srv:
     case _:
       S.srv.errs(srv, xs)
 
-# a batch of one code run the fast way, its replies looked at for errors
-# when they have a '-' (ans.errs)
-def run_put.one(dash: Bool, outs: List<&2, Sigma<&2, &2, Chan(Ans), _ => Ans>>, es: List<&2, A.Ent>, back: Chan(Ans), a: Ans, +calls: Nat, +run: Nat, +inb: Nat, +outb: Nat, srv: S.Srv, ds: R.Ds, up: List<&2, Up>, pb: Ps) -> Grp:
-  match dash:
-    case False{}:
-      Grp{(back, a) <> outs, es, S.srv.ran(srv, calls, run, Nil{}, inb, outb), ds, WaitNone{}, up, TxNone{}, pb}
-    case True{}:
-      +b = a
-      +xs = ans.errs(b, R.run.code(run))
-      Grp{(back, b) <> outs, es, errs.put(xs, S.srv.ran(srv, calls, run, Nil{}, inb, outb)), ds, WaitNone{}, up, TxNone{}, pb}
-
 # a batch run the fast way: its calls counted, and its replies looked at
-# for errors only where a call may have one (R.Tally): those of a batch
-# of one code in its bytes (ans.errs), those of any other as they are,
-# before they are encoded (each call has one reply, in order); with the
-# append-only file, its effects put before the group's
+# for errors only where a call may have one (R.Tally), as they are, before
+# they are encoded (each call has one reply, in order; the errors of a
+# batch of one code all have its code, R.errs.one); with the append-only
+# file, its effects put before the group's. Not in the encoded bytes: a
+# '-' also begins a line of a reply that is no error (a bulk "-5", a
+# negative score), and an answer of many chunks is read from its start
+# for each index of a line.
 def run_put(outs: List<&2, Sigma<&2, &2, Chan(Ans), _ => Ans>>, es: List<&2, A.Ent>, back: Chan(Ans), t: R.Tally, +inb: Nat, d: S.Fin, up: List<&2, Up>, pb: Ps) -> Grp:
   match t d:
     case R.Tally{+calls, False{}, +run, runs} S.Fin{rs, cn, srv, ds}:
       +a = ans_of(rs, cn)
       +outb = ans.len(a)
       Grp{(back, a) <> outs, es, S.srv.ran(srv, calls, run, runs, inb, outb), ds, WaitNone{}, up, TxNone{}, pb}
-    case R.Tally{+calls, True{}, +run, Nil{}} S.Fin{rs, cn, srv, ds}:
+    case R.Tally{+calls, True{}, +run, Nil{}} S.Fin{+rs, cn, srv, ds}:
+      +xs = R.errs.one(rs, R.run.code(run), Nil{})
       +a = ans_of(rs, cn)
       +outb = ans.len(a)
-      run_put.one(ans.dash(a, outb), outs, es, back, a, calls, run, inb, outb, srv, ds, up, pb)
+      Grp{(back, a) <> outs, es, errs.put(xs, S.srv.ran(srv, calls, run, Nil{}, inb, outb)), ds, WaitNone{}, up, TxNone{}, pb}
     case R.Tally{+calls, True{}, +run, +runs} S.Fin{+rs, cn, srv, ds}:
       +xs = R.errs.zip(rs, R.codes.runs(runs, Nil{}), Nil{})
       +a = ans_of(rs, cn)
@@ -5147,10 +5105,11 @@ def group_put(outs: List<&2, Sigma<&2, &2, Chan(Ans), _ => Ans>>, es: List<&2, A
       +a = ans_of(rs, cn)
       +outb = ans.len(a)
       Grp{(back, a) <> outs, A.ents.onto(e, es), S.srv.ran(srv, calls, run, runs, inb, outb), ds, WaitNone{}, up, TxNone{}, pb}
-    case R.Tally{+calls, True{}, +run, Nil{}} S.Logged{rs, e, cn, srv, ds}:
+    case R.Tally{+calls, True{}, +run, Nil{}} S.Logged{+rs, e, cn, srv, ds}:
+      +xs = R.errs.one(rs, R.run.code(run), Nil{})
       +a = ans_of(rs, cn)
       +outb = ans.len(a)
-      run_put.one(ans.dash(a, outb), outs, A.ents.onto(e, es), back, a, calls, run, inb, outb, srv, ds, up, pb)
+      Grp{(back, a) <> outs, A.ents.onto(e, es), errs.put(xs, S.srv.ran(srv, calls, run, Nil{}, inb, outb)), ds, WaitNone{}, up, TxNone{}, pb}
     case R.Tally{+calls, True{}, +run, +runs} S.Logged{+rs, e, cn, srv, ds}:
       +xs = R.errs.zip(rs, R.codes.runs(runs, Nil{}), Nil{})
       +a = ans_of(rs, cn)

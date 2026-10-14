@@ -4100,7 +4100,9 @@ without looking at the requests; any other batch by the hashes. Errors are looke
 only where they are possible: in calls refused or failed while parsing, and in INCR,
 DECR, INCRBY, DECRBY. In a batch of one code each reply is one line, an error begins with
 `-`, and if there is no `-` at all in the reply's bytes (one `memchr`), there are no
-errors; a batch of several codes looks through the replies before encoding.
+errors; a batch of several codes looks through the replies before encoding. (Section
+52: a batch of one code looks through its replies too, since the collections' commands
+that may fail answer many lines.)
 
 The first version cost +2.9% on GET and +2.8% on INCR. Each row is the next step
 (callgrind, as in `make perfcheck`):
@@ -6583,3 +6585,36 @@ to the next. With the patch alone, a test of `tests/maxmemory_test.py` failed: a
 volatile-lru eviction of the keys with a time could not get within its limit, since the
 trie kept the nodes of the keys it evicted, where the sweep's copies, which went with
 those keys, had made up for them. With the deletes of section 50 it passes.
+
+## 52. Errors found among the replies, not in their bytes
+
+**The change.** The actor counted the error replies of a batch of one command from its
+encoded bytes: when they had a `-`, it read them a line at a time (`String.find` of the
+next `\n`, `String.code_at` of the line's first byte) and took each line that began
+with `-` for an error. The collections' commands that may fail (WRONGTYPE) answer many
+lines, a bulk's line may begin with `-`, and an index into an answer of many chunks walks
+it from its start. Now the replies are looked at before they are encoded (`R.errs.one`),
+as those of a batch of several commands were (section 18), and the bytes are not read.
+
+**Measured.** ZRANGE key 0 -1 WITHSCORES, one client, the time of the reply:
+
+| sorted set | before | now |
+|---|---:|---:|
+| 20,000 members, scores from −100 to 100 with three decimals | 14.7 s | 0.145 s |
+| 20,000 members, integer scores from −10^6 to 10^6 | 7.2 s | 0.029 s |
+| the first 1,000 of the 20,000, with scores | 0.060 s | 0.004 s |
+
+Under callgrind, one connection pipelining 16 deep (instructions a request):
+
+| requests | before | now |
+|---|---:|---:|
+| ZRANGE 0 -1 WITHSCORES of 1,000 members, half the scores negative | 247,766,764 | 13,926,506 |
+| DECR of 1,000 counters below zero | 6,751 | 6,679 |
+| GET, SET, INCR (`tools/perf_guard.sh`) | 3,335, 4,257, 4,539 | 3,334, 4,257, 4,548 |
+
+The answers of the batches of INCR in `make perfcheck` have no `-`: they paid one
+`memchr` and now pay the look at each reply's tag, 9 instructions. A first version
+looked at the bytes first and among the replies only when they had a `-`: the replies
+were then held across their encoding, which every batch paid for, not only those it
+looked at: GET 3,905 (+17%), SET 4,586 (+8%), INCR 5,193 (+14%). Looking at the replies
+first, as the batches of several codes do, hands them to the encoder after.
