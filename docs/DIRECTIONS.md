@@ -341,11 +341,10 @@ Where performance and proof meet: **batched execution under proved laws.**
    cells; a weight that is not an integer is read by strtod in software (Clinger's fast
    path, one rounding for up to 15 digits and a power of ten up to 22, would read most of
    them at once, and every other reader of doubles with them); SORT with STORE sorts
-   twice, once for the session's reply and once for its act's write; and the keys its
-   patterns name are read as MGET reads its keys, the walk behind `KV.read` copying each
-   node on a key's path from the shared keyspace (8,000 instructions a key, where a GET
-   takes 3,312 in all): lending those reads the keyspace, as section 53 of PERFORMANCE.md
-   did for the reads of a key's entry, would speed MGET as much.
+   twice, once for the session's reply and once for its act's write. The keys its
+   patterns name are read as MGET reads its keys, each now for less than a whole GET:
+   the walk behind `KV.read` copied each node on a key's path until ZRANGESTORE lent it
+   the keyspace (section 3zzi).
 
 After that comes proving the native strings (section 5, step 1): a small piece of
 work that makes the word "verified" much stronger.

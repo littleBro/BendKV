@@ -6895,3 +6895,29 @@ takes 8,496,827.
 instructions per request (3,311, 4,075 and 4,387 before). `tools/colls.sh`: ZADD of a
 member there with an integer score 23,680 (25,383, −6.7%), ZINCRBY 68,724 (70,310,
 −2.3%), ZSCORE 17,793 (17,754); the others as before, within 0.3%.
+
+## 58. Reads of keys that lend the keyspace
+
+**What was left** (section 57). A key that SORT's BY or GET names, and a key of MGET, cost
+about 8,000 instructions: the walk behind `KV.read` took each node on the key's path from
+the keyspace (`ctr_own`), which shares it, and so copied it. ZRANGESTORE gave `KV.read` the
+trie that `db.trie` answers, a value made for the call, and the compiler made `KV.read`,
+`live.at` and `tget_kl` own their trie for every caller (section 53).
+
+**The change.** ZRANGESTORE reads its source with `R.db.read`, which lends the trie of the
+database it is lent. The walk reads each node where it lies (`term_peek`).
+
+**Measured** (instructions per command under callgrind, one client, one request at a
+time, as in section 57):
+
+| | before | now | |
+|---|---:|---:|---:|
+| MGET of 1,000 keys | 8,496,827 | 3,240,949 | −62% |
+| SORT of 1,000 BY nosort GET a key | 8,018,304 | 2,603,797 | −68% (Redis 2,193,691) |
+| SORT of 1,000 BY a key that holds a double | 20,053,648 | 14,718,297 | −27% (Redis 3,845,533) |
+| the other SORTs of section 57 | | within 1.3% | |
+| GET, SET, INCR pipelined (`make perfcheck`) | 3,312, 4,072, 4,392 | 3,316, 4,079, 4,392 | |
+
+The other readers of `KV.read` gain as MGET does for each key they read: EXISTS of
+several keys, MSETNX, BITOP, SINTER and the operations of several sets and sorted sets,
+SCAN with TYPE.

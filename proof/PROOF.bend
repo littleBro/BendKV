@@ -7685,7 +7685,7 @@ def eff(c: R.Cmd, +db: R.Db) -> List<&2, R.Cmd>:
     case R.ZStore{+op, +d, +srcs}:
       zstore_eff(R.zsrcs.at(srcs, R.db.now(db), R.db.trie(db)), op, d, db)
     case R.ZRangeStore{+d, +s, q}:
-      zrs_eff(KV.read(KV.Val, R.db.trie(db), s, R.db.now(db)), q, d, db)
+      zrs_eff(R.db.read(db, s), q, d, db)
     case R.ZMPop{+ks, +max, c}:
       zmpop_eff(R.lmpop.first(ks, R.lmpop.head(ks, db), db), max, c, db)
     case R.Own{o}:
@@ -7917,7 +7917,7 @@ def run_split(c: R.Cmd, +db: R.Db) -> {(R.reply_of(R.exec(c, db)), (eff(c, db), 
     case R.ZStore{+op, +d, +srcs}:
       zstore_split(R.zsrcs.at(srcs, R.db.now(db), R.db.trie(db)), op, d, db)
     case R.ZRangeStore{+d, +s, +q}:
-      zrs_split(KV.read(KV.Val, R.db.trie(db), s, R.db.now(db)), q, d, db)
+      zrs_split(R.db.read(db, s), q, d, db)
     case R.ZMPop{+ks, +max, +c}:
       zmpop_split(R.lmpop.first(ks, R.lmpop.head(ks, db), db), max, c, db)
     case R.Own{+o}:
@@ -18668,7 +18668,7 @@ def counted_exec(c: R.Cmd, +db: R.Db) -> {Laws.counted(db) == True{} : Bool} -> 
     case R.ZStore{+op, +d, +ks}:
       counted_zstore_do(R.zsrcs.at(ks, R.db.now(db), R.db.trie(db)), op, d, db)
     case R.ZRangeStore{+d, +s, +q}:
-      counted_zrs_of(KV.read(KV.Val, R.db.trie(db), s, R.db.now(db)), q, d, db)
+      counted_zrs_of(R.db.read(db, s), q, d, db)
     case R.ZMPop{+ks, +max, +c}:
       counted_zmpop_at(R.lmpop.first(ks, R.lmpop.head(ks, db), db), max, c, db)
 
