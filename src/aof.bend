@@ -358,7 +358,7 @@ def zrs.run(m: Maybe<&2, KV.Val>, q: R.ZQ, +d: String, db: R.Db) -> R.Reply & (L
 
 def run.zrangestore(+d: String, +s: String, q: R.ZQ, db: R.Db) -> R.Reply & (List<&2, R.Cmd> & R.Db):
   +x = db
-  zrs.run(KV.read(KV.Val, R.db.trie(x), s, R.db.now(x)), q, d, x)
+  zrs.run(R.db.read(x, s), q, d, x)
 
 # ZMPOP's effect: the update of the key it pops from (a ZPOPMIN or
 # ZPOPMAX of the count, or the DEL of its last elements), as run.upd

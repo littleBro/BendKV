@@ -12846,6 +12846,15 @@ def db.ent(+d: Db, +k: String) -> Maybe<&2, KV.Item<KV.Val>>:
     case Db{+t, n, x, +now, rr}:
       ent.live(now, KV.entry.at(KV.Val, t, k, KV.hash(k)))
 
+# k's value in a database it lends, when the key is there at now. A read
+# of the trie that db.trie answers would give KV.read a value made for
+# the call, and the compiler would make KV.read own its trie for every
+# caller: a copy of each node on the key's path
+def db.read(+d: Db, +k: String) -> Maybe<&2, KV.Val>:
+  match d:
+    case Db{+t, n, x, +now, rr}:
+      KV.read(KV.Val, t, k, now)
+
 def strlen_of(m: Maybe<&2, KV.Item<String>>) -> Nat:
   match m:
     case Some{KV.Item{v, e}}:
@@ -17336,7 +17345,7 @@ def zrs.of(m: Maybe<&2, KV.Val>, q: ZQ, +d: String, db: Db) -> Reply & Db:
 
 def db.zrangestore(db: Db, +d: String, +s: String, q: ZQ) -> Reply & Db:
   +x = db
-  zrs.of(KV.read(KV.Val, db.trie(x), s, db.now(x)), q, d, x)
+  zrs.of(db.read(x, s), q, d, x)
 
 # ZMPOP: as LMPOP, from the first of the keys there at now: its elements
 # popped (ZWPopN), answered with the key, each element as a pair of its

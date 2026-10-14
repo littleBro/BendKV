@@ -4458,6 +4458,32 @@ that clears errno runs, such as INCRBYFLOAT; BendKV judges each SORT alone. And 
 a sorted set it sorts a skiplist for good, so OBJECT ENCODING answers `skiplist` for a
 small one after a SORT, where BendKV's stays a listpack.
 
+## 3zzi. Reads of keys that lend the keyspace
+
+**What was left** (section 3zzh). A key that SORT's BY or GET names cost about 8,000
+instructions, and a key of MGET as much (8,496,827 for 1,000 keys), where a whole GET takes
+3,312. The walk down the trie behind `KV.read` took each of the five nodes on the key's
+path (`ctr_own`): the keyspace shares them, so it copied each, its sixteen counts raised
+and fifteen of them dropped, and dropped the copies after.
+
+**Why.** As in section 3zzc: the compiler makes a parameter owned for every caller when
+one caller gives it a value it does not keep. ZRANGESTORE gave `KV.read` the trie that
+`db.trie` answers (`KV.read(KV.Val, db.trie(x), s, db.now(x))`, in `redis.bend` and in
+`aof.bend`), a value made for the call, so `KV.read` owned its trie, and so did `live.at`
+and the walk under it, `tget_kl`, for MGET, EXISTS, MSETNX, BITOP, the operations of
+several sets and sorted sets, SCAN's TYPE and SORT alike.
+
+**The change.** `R.db.read` reads a key's value in a database it lends (a match on the
+database, which lends its trie), and ZRANGESTORE reads its source with it. The walk now
+reads each node where it lies (`term_peek`, no copy). Three proofs that spelled the read
+as `KV.read` of `R.db.trie` spell it as `R.db.read`; `make check`, `make verdict` and
+`make gencheck` pass.
+
+**What it gives** (section 58 of PERFORMANCE.md): MGET of 1,000 keys 3,240,949
+instructions (8,496,827, −62%), less a key than a whole GET; SORT BY nosort GET of 1,000
+keys 2,603,797 (8,018,304, −68%), 1.19 times Redis's; SORT BY a key that holds a double
+14,718,297 (20,053,648, −27%). GET, SET and INCR take what they took.
+
 ## 4. Where a request's time goes, and hiding the memory waits
 
 With the eight patches, BendKV ran fewer instructions on GET and SET than Redis, missed

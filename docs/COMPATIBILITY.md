@@ -320,9 +320,9 @@ make clients                       # the three suites, against Redis and build/b
 
 | suite | Redis 7.0.15 passes | BendKV passes |
 |---|---:|---:|
-| redis-py 8.1.0, RESP2 | 2,753 | **2,382 (86.5%)** |
-| redis-py 8.1.0, RESP3 | 2,753 | **2,382 (86.5%)** |
-| go-redis v9.23.0, RESP3 | 460 | **389 (84.6%)** |
+| redis-py 8.1.0, RESP2 | 2,753 | **2,419 (87.9%)** |
+| redis-py 8.1.0, RESP3 | 2,753 | **2,419 (87.9%)** |
+| go-redis v9.23.0, RESP3 | 460 | **392 (85.2%)** |
 
 redis-py's tests give in RESP3 what they give in RESP2, test by test, against Redis and
 against BendKV: the same tests pass, and the same fail.
@@ -330,16 +330,18 @@ against BendKV: the same tests pass, and the same fail.
 Every test BendKV fails of those Redis passes fails on what BendKV does not have:
 
 - **A command it does not have:** in redis-py, Lua's (EVALSHA 74, SCRIPT 30, FUNCTION 7),
-  geo (59), streams (73), SORT 37, ACL 34, DUMP 12, PFADD 9, SLOWLOG 9, CLIENT PAUSE and
-  UNPAUSE 5, LASTSAVE 3, MEMORY STATS 3, LATENCY 3, MODULE 2, and BGSAVE, CLIENT TRACKING,
-  LOLWUT, MEMORY MALLOC-STATS, REPLICAOF and ROLE one each (366 tests in each protocol); in
-  go-redis, streams (26), geo (11), Lua's (12), DUMP and RESTORE (3), SORT (2), ACL,
-  SLOWLOG and WAIT (57 tests).
+  geo (59), streams (73), ACL 34, DUMP 12, PFADD 9, SLOWLOG 9, CLIENT PAUSE and UNPAUSE 5,
+  LASTSAVE 3, MEMORY STATS 3, LATENCY 3, MODULE 2, and BGSAVE, CLIENT TRACKING, LOLWUT,
+  MEMORY MALLOC-STATS, REPLICAOF and ROLE one each (329 tests in each protocol); in
+  go-redis, streams (26), geo (11), Lua's (12), DUMP and RESTORE (3), ACL, SLOWLOG and WAIT
+  (55 tests). SORT's tests, 37 in redis-py and 2 in go-redis, pass since SORT (section 3zzh
+  of [FINDINGS.md](FINDINGS.md)), and so does go-redis's test of COMMAND GETKEYS, which
+  asks for SORT's keys.
 - **Another error, on the same ground:** client-side caching (CLIENT TRACKING and its
   invalidations: go-redis's 9 specs of its cache), Lua (a script's calls in MONITOR, EVAL's
-  replies), and COMMAND, which lists only BendKV's commands: COMMAND LIST counts 216 where
-  redis-py waits for more than 300, COMMAND GETKEYS of SORT, redis-py's parser of
-  commands that reads XREAD's keys, and go-redis's filter of commands by ACL category.
+  replies), and COMMAND, which lists only BendKV's commands: COMMAND LIST counts 218 where
+  redis-py waits for more than 300, redis-py's parser of commands that reads XREAD's keys,
+  and go-redis's filter of commands by ACL category.
 
 So no test of these suites finds a command BendKV has answering otherwise than Redis.
 
