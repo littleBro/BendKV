@@ -493,7 +493,12 @@ type SortO is Data:
 # that the laws of exec meet SORT as a read alone (Sort). PFCOUNT of
 # several keys reads them (SPfCount); PFMERGE reads its keys and writes
 # its destination with their union, an act of the session's database
-# (APfMerge, below); PFSELFTEST (SPfSelfTest) reads nothing.
+# (APfMerge, below); PFSELFTEST (SPfSelfTest) reads nothing. LASTSAVE,
+# MEMORY STATS, MEMORY DOCTOR, LOLWUT's drawings and SHUTDOWN are SAdmin,
+# their kind and arguments (The administrative commands, below): they
+# read the server's state, the drawings its random numbers, and SHUTDOWN
+# stops the server (server.bend, SHUTDOWN), which a session alone does
+# not.
 
 type SessOp is Data:
   SHello{args: List<&2, String>}
@@ -541,6 +546,7 @@ type SessOp is Data:
   SPfCount{keys: List<&2, String>}
   SPfMerge{dst: String, srcs: List<&2, String>}
   SPfSelfTest{}
+  SAdmin{kind: Nat, args: List<&2, String>}
 
 # BITOP's operation
 type BitK is Data:
@@ -1750,13 +1756,20 @@ def parse_object(id: Nat, sub: String, args: List<&2, String>) -> SessOp:
     case _:
       e_unknown_sub(sub, "OBJECT")
 
-# MEMORY: USAGE of a key (its options read as it runs) and HELP
+# MEMORY: USAGE of a key (its options read as it runs), STATS and DOCTOR
+# (SAdmin: they read the server's state), PURGE and MALLOC-STATS (as Redis
+# answers them built with libc's malloc, as INFO's mem_allocator says
+# BendKV is: purgeless, and with no statistics of its own), and HELP
 def memory_id(+n: String, len: Nat) -> Nat:
   match len:
     case 4n:
       Bool.pick(Nat, String.eq(n, "HELP"), 1n, 0n)
     case 5n:
-      Bool.pick(Nat, String.eq(n, "USAGE"), 2n, 0n)
+      Bool.pick(Nat, String.eq(n, "USAGE"), 2n, Bool.pick(Nat, String.eq(n, "STATS"), 3n, Bool.pick(Nat, String.eq(n, "PURGE"), 5n, 0n)))
+    case 6n:
+      Bool.pick(Nat, String.eq(n, "DOCTOR"), 4n, 0n)
+    case 12n:
+      Bool.pick(Nat, String.eq(n, "MALLOC-STATS"), 6n, 0n)
     case _:
       0n
 
@@ -1787,6 +1800,30 @@ def parse_memory(id: Nat, sub: String, args: List<&2, String>) -> SessOp:
           SMemUsage{k, rest}
         case Nil{}:
           s_arity("memory|usage")
+    case 3n:  # STATS
+      match args:
+        case Nil{}:
+          SAdmin{1n, Nil{}}
+        case _:
+          s_arity("memory|stats")
+    case 4n:  # DOCTOR
+      match args:
+        case Nil{}:
+          SAdmin{2n, Nil{}}
+        case _:
+          s_arity("memory|doctor")
+    case 5n:  # PURGE
+      match args:
+        case Nil{}:
+          SReply{r_ok()}
+        case _:
+          s_arity("memory|purge")
+    case 6n:  # MALLOC-STATS
+      match args:
+        case Nil{}:
+          SReply{RBulk{"Stats not supported for the current allocator"}}
+        case _:
+          s_arity("memory|malloc-stats")
     case _:
       e_unknown_sub(sub, "MEMORY")
 
@@ -4583,6 +4620,190 @@ def parse_sintercard(args: List<&2, String>) -> Cmd:
     case _:
       e_arity("sintercard")
 
+# The administrative commands
+# ---------------------------
+# LASTSAVE, MEMORY STATS and MEMORY DOCTOR read the server's state, and
+# LOLWUT's drawings its random numbers: SAdmin, its kind (0 LASTSAVE, 1
+# MEMORY STATS, 2 MEMORY DOCTOR, 3 LOLWUT VERSION 5, 4 SHUTDOWN, 5 LOLWUT
+# VERSION 6) and its arguments (session.bend, The administrative
+# commands). ROLE answers as a master with no replica answers. WAIT is a
+# blocking command (SBlock) when it asks for a replica, which none will
+# acknowledge.
+
+# ROLE: a master at the replication offset 0, with no replica
+# (roleCommand)
+def role.reply() -> Reply:
+  RArray{[RBulk{"master"}, RInt{IPos{0n}}, RArray{Nil{}}]}
+
+# WAIT numreplicas timeout, read as waitCommand reads them: numreplicas a
+# long, the timeout a long long of ms, not negative. No replica
+# acknowledges anything, so WAIT answers 0 at once for numreplicas up to
+# 0, and otherwise once its time is up (SBlock: session.bend, BlkWait)
+def wait.go(n: LL, t: LL, +args: List<&2, String>) -> Cmd:
+  match n t:
+    case LLBad{} _:
+      Bad{e_int()}
+    case LL{nn, nh, nl} LLBad{}:
+      Bad{RError{"ERR timeout is not an integer or out of range"}}
+    case LL{nn, nh, nl} LL{True{}, th, tl}:
+      Bad{RError{"ERR timeout is negative"}}
+    case LL{+nn, +nh, +nl} LL{False{}, th, tl}:
+      Bool.pick(Cmd, Bool.or(nn, Bool.and(Nat.is_eq(nh, 0n), Nat.is_eq(nl, 0n))), Own{SReply{RInt{IPos{0n}}}}, Own{SBlock{186n, args}})
+
+def wait.of(+args: List<&2, String>) -> Cmd:
+  match args:
+    case Con{+n, Con{+t, Nil{}}}:
+      wait.go(ll.read(n), ll.read(t), args)
+    case _:
+      e_arity("wait")
+
+# SHUTDOWN's flags, NOSAVE, SAVE, NOW, FORCE and ABORT, in any case, as
+# shutdownCommand reads them: SdBad at a word that is none of them
+type Sd is Data:
+  Sd{nosave: Bool, save: Bool, now: Bool, force: Bool, abort: Bool}
+  SdBad{}
+
+def sd.word(+u: String, s: Sd) -> Sd:
+  match s:
+    case Sd{+nosave, +save, +now, +force, +abort}:
+      Bool.pick(Sd, String.eq(u, "NOSAVE"), Sd{True{}, save, now, force, abort},
+        Bool.pick(Sd, String.eq(u, "SAVE"), Sd{nosave, True{}, now, force, abort},
+          Bool.pick(Sd, String.eq(u, "NOW"), Sd{nosave, save, True{}, force, abort},
+            Bool.pick(Sd, String.eq(u, "FORCE"), Sd{nosave, save, now, True{}, abort},
+              Bool.pick(Sd, String.eq(u, "ABORT"), Sd{nosave, save, now, force, True{}}, SdBad{})))))
+    case SdBad{}:
+      SdBad{}
+
+def sd.of(args: List<&2, String>, s: Sd) -> Sd:
+  match args:
+    case Nil{}:
+      s
+    case Con{+w, rest}:
+      sd.of(rest, sd.word(String.to_upper(cstr(w)), s))
+
+def sd.flags(+args: List<&2, String>) -> Sd:
+  sd.of(args, Sd{False{}, False{}, False{}, False{}, False{}})
+
+# whether SHUTDOWN is to save the data set (SAVE, which BendKV cannot do:
+# it writes no RDB snapshot, server.bend), and whether FORCE goes on
+# when it cannot
+def sd.save(+s: Sd) -> Bool:
+  match s:
+    case Sd{nosave, +save, now, force, abort}:
+      save
+    case SdBad{}:
+      False{}
+
+def sd.force(+s: Sd) -> Bool:
+  match s:
+    case Sd{nosave, save, now, +force, abort}:
+      force
+    case SdBad{}:
+      False{}
+
+# SHUTDOWN: ABORT with another flag, and NOSAVE with SAVE, are a syntax
+# error; ABORT finds no shutdown to abort (Redis's waits for its replicas,
+# and BendKV has none), as Redis answers when none waits; the others are
+# SAdmin's kind 4, the flags read again as it runs
+def shutdown.of(s: Sd, +args: List<&2, String>) -> Cmd:
+  match s:
+    case Sd{+nosave, +save, +now, +force, +abort}:
+      Bool.pick(Cmd, Bool.or(Bool.and(abort, Bool.or(Bool.or(nosave, save), Bool.or(now, force))), Bool.and(nosave, save)), e_syntax(),
+        Bool.pick(Cmd, abort, Bad{RError{"ERR No shutdown in progress."}}, Own{SAdmin{4n, args}}))
+    case SdBad{}:
+      e_syntax()
+
+def shutdown.cmd(+args: List<&2, String>) -> Cmd:
+  shutdown.of(sd.flags(args), args)
+
+# LOLWUT [VERSION v ...]: 7.0.15's own LOLWUT writes Redis's version;
+# VERSION 5 and VERSION 6 draw the art of Redis 5 and Redis 6, as
+# lolwutCommand picks them by the version as an unsigned int ("%u.0.0"),
+# the arguments after it longs, clamped as lolwut5Command and
+# lolwut6Command clamp them; any other version is 7.0.15's, which takes
+# no argument
+def lolwut.text() -> Reply:
+  RVerb{"Redis ver. 7.0.15\n"}
+
+# a long clamped to 1..hi (None: no long)
+def lw.clamp(l: LL, +hi: Nat) -> Maybe<&2, Nat>:
+  match l:
+    case LL{+neg, +h, +lo}:
+      Some{Bool.pick(Nat, Bool.or(neg, Bool.and(Nat.is_eq(h, 0n), Nat.is_eq(lo, 0n))), 1n, Bool.pick(Nat, Bool.or(Nat.is_lt(0n, h), Nat.is_lt(hi, lo)), hi, lo))}
+    case LLBad{}:
+      None{}
+
+# the first argument clamped to 1..hi, or d when there is none
+def lw.arg(args: List<&2, String>, +hi: Nat, +d: Nat) -> Maybe<&2, Nat>:
+  match args:
+    case Con{+a, rest}:
+      lw.clamp(ll.read(a), hi)
+    case Nil{}:
+      Some{d}
+
+def lw.tail(args: List<&2, String>) -> List<&2, String>:
+  match args:
+    case Con{a, rest}:
+      rest
+    case Nil{}:
+      Nil{}
+
+# LOLWUT VERSION 5 [cols [squares-per-row [squares-per-col]]] (66, 8, 12)
+def lw.five(c: Maybe<&2, Nat>, r: Maybe<&2, Nat>, q: Maybe<&2, Nat>) -> Cmd:
+  match c r q:
+    case Some{+cols} Some{+per} Some{+rows}:
+      Own{SAdmin{3n, [Nat.show(cols), Nat.show(per), Nat.show(rows)]}}
+    case _ _ _:
+      Bad{e_int()}
+
+# LOLWUT VERSION 6 [cols [rows]] (80, 20)
+def lw.six(c: Maybe<&2, Nat>, r: Maybe<&2, Nat>) -> Cmd:
+  match c r:
+    case Some{+cols} Some{+rows}:
+      Own{SAdmin{5n, [Nat.show(cols), Nat.show(rows)]}}
+    case _ _:
+      Bad{e_int()}
+
+# a long's low 32 bits, as (unsigned int) keeps them: its magnitude
+# hi * 10^9 + lo mod 2^32 (hi's high and low 16 bits apart, so that no
+# product passes 2^48), and the complement of that for a negative long
+def lw.u32.mag(+hi: Nat, +lo: Nat) -> Nat:
+  +w = Nat.mul(65536n, 65536n)
+  +a = Nat.mod(hi, w)
+  +a1 = Nat.div(a, 65536n)
+  +a0 = Nat.mod(a, 65536n)
+  Nat.mod(Nat.add(Nat.add(Nat.mul(Nat.mod(Nat.mul(a1, 1000000000n), 65536n), 65536n), Nat.mul(a0, 1000000000n)), lo), w)
+
+def lw.ver(l: LL) -> Maybe<&2, Nat>:
+  match l:
+    case LL{+neg, +hi, +lo}:
+      +m = lw.u32.mag(hi, lo)
+      Some{Bool.pick(Nat, Bool.and(neg, Nat.is_lt(0n, m)), Nat.sub(Nat.mul(65536n, 65536n), m), m)}
+    case LLBad{}:
+      None{}
+
+def lw.pick(m: Maybe<&2, Nat>, +rest: List<&2, String>) -> Cmd:
+  match m:
+    case Some{+v}:
+      Bool.pick(Cmd, Nat.is_eq(v, 5n), lw.five(lw.arg(rest, 1000n, 66n), lw.arg(lw.tail(rest), 200n, 8n), lw.arg(lw.tail(lw.tail(rest)), 200n, 12n)),
+        Bool.pick(Cmd, Nat.is_eq(v, 6n), lw.six(lw.arg(rest, 1000n, 80n), lw.arg(lw.tail(rest), 1000n, 20n)), Own{SReply{lolwut.text()}}))
+    case None{}:
+      Bad{e_int()}
+
+def lw.if(ver: Bool, +n: String, +rest: List<&2, String>) -> Cmd:
+  match ver:
+    case True{}:
+      lw.pick(lw.ver(ll.read(n)), rest)
+    case False{}:
+      Own{SReply{lolwut.text()}}
+
+def lolwut.of(+args: List<&2, String>) -> Cmd:
+  match args:
+    case Con{+v, Con{+n, +rest}}:
+      lw.if(is_word(v, "VERSION"), n, rest)
+    case _:
+      Own{SReply{lolwut.text()}}
+
 # A command's name, in upper case, picks how its arguments parse: cmd_id
 # gives the name's number in the parser (parse_id, or parse_sess for a
 # number cmd_own names), 0 for a name no command has, and parse_id has
@@ -4648,7 +4869,8 @@ def cmd_id.l4(+n: String, c: Nat) -> Nat:
     case 17n:  # Q
       Bool.pick(Nat, String.eq(n, "QUIT"), 103n, 0n)
     case 18n:  # R
-      Bool.pick(Nat, String.eq(n, "RPOP"), 71n, 0n)
+      Bool.pick(Nat, String.eq(n, "RPOP"), 71n,
+      Bool.pick(Nat, String.eq(n, "ROLE"), 185n, 0n))
     case 19n:  # S
       Bool.pick(Nat, String.eq(n, "SCAN"), 22n,
       Bool.pick(Nat, String.eq(n, "SADD"), 83n,
@@ -4658,6 +4880,8 @@ def cmd_id.l4(+n: String, c: Nat) -> Nat:
     case 20n:  # T
       Bool.pick(Nat, String.eq(n, "TYPE"), 25n,
       Bool.pick(Nat, String.eq(n, "TIME"), 113n, 0n))
+    case 23n:  # W
+      Bool.pick(Nat, String.eq(n, "WAIT"), 186n, 0n)
     case 26n:  # Z
       Bool.pick(Nat, String.eq(n, "ZADD"), 121n,
       Bool.pick(Nat, String.eq(n, "ZREM"), 123n, 0n))
@@ -4740,7 +4964,8 @@ def cmd_id.l6(+n: String, c: Nat) -> Nat:
     case 12n:  # L
       Bool.pick(Nat, String.eq(n, "LPUSHX"), 68n,
       Bool.pick(Nat, String.eq(n, "LINDEX"), 73n,
-      Bool.pick(Nat, String.eq(n, "LRANGE"), 74n, 0n)))
+      Bool.pick(Nat, String.eq(n, "LRANGE"), 74n,
+      Bool.pick(Nat, String.eq(n, "LOLWUT"), 188n, 0n))))
     case 13n:  # M
       Bool.pick(Nat, String.eq(n, "MSETNX"), 45n,
       Bool.pick(Nat, String.eq(n, "MEMORY"), 118n, 0n))
@@ -4821,12 +5046,15 @@ def cmd_id.l8(+n: String, c: Nat) -> Nat:
       Bool.pick(Nat, String.eq(n, "FUNCTION"), 106n, 0n))
     case 7n:  # G
       Bool.pick(Nat, String.eq(n, "GETRANGE"), 37n, 0n)
+    case 12n:  # L
+      Bool.pick(Nat, String.eq(n, "LASTSAVE"), 184n, 0n)
     case 18n:  # R
       Bool.pick(Nat, String.eq(n, "RENAMENX"), 47n, 0n)
     case 19n:  # S
       Bool.pick(Nat, String.eq(n, "SETRANGE"), 39n,
       Bool.pick(Nat, String.eq(n, "SMEMBERS"), 88n,
-      Bool.pick(Nat, String.eq(n, "SPUBLISH"), 173n, 0n)))
+      Bool.pick(Nat, String.eq(n, "SPUBLISH"), 173n,
+      Bool.pick(Nat, String.eq(n, "SHUTDOWN"), 187n, 0n))))
     case 26n:  # Z
       Bool.pick(Nat, String.eq(n, "ZREVRANK"), 128n, 0n)
     case _:
@@ -5618,6 +5846,24 @@ def parse_id(id: Nat, name: String, args: List<&2, String>) -> Cmd:
           Own{SPfSelfTest{}}
         case _:
           e_arity("pfselftest")
+    case 184n:  # LASTSAVE
+      match args:
+        case Nil{}:
+          Own{SAdmin{0n, Nil{}}}
+        case _:
+          e_arity("lastsave")
+    case 185n:  # ROLE
+      match args:
+        case Nil{}:
+          Own{SReply{role.reply()}}
+        case _:
+          e_arity("role")
+    case 186n:  # WAIT
+      wait.of(args)
+    case 187n:  # SHUTDOWN
+      shutdown.cmd(args)
+    case 188n:  # LOLWUT
+      lolwut.of(args)
     case _:
       e_unknown(name, args)
 
@@ -6278,6 +6524,16 @@ def stat.top(+id: Nat) -> Nat:
       182n
     case 183n:
       183n
+    case 184n:
+      184n
+    case 185n:
+      185n
+    case 186n:
+      186n
+    case 187n:
+      187n
+    case 188n:
+      188n
     case _:
       0n
 
@@ -6285,35 +6541,35 @@ def stat.top(+id: Nat) -> Nat:
 def stat.sub.client(+sub: Nat) -> Nat:
   match sub:
     case 1n:
-      184n
-    case 2n:
-      185n
-    case 3n:
-      186n
-    case 4n:
-      187n
-    case 5n:
-      188n
-    case 6n:
       189n
-    case 7n:
+    case 2n:
       190n
-    case 8n:
+    case 3n:
       191n
-    case 9n:
+    case 4n:
       192n
-    case 10n:
+    case 5n:
       193n
-    case 11n:
+    case 6n:
       194n
-    case 12n:
+    case 7n:
       195n
-    case 13n:
+    case 8n:
       196n
-    case 14n:
+    case 9n:
       197n
-    case 15n:
+    case 10n:
       198n
+    case 11n:
+      199n
+    case 12n:
+      200n
+    case 13n:
+      201n
+    case 14n:
+      202n
+    case 15n:
+      203n
     case _:
       0n
 
@@ -6321,30 +6577,14 @@ def stat.sub.client(+sub: Nat) -> Nat:
 def stat.sub.function(+sub: Nat) -> Nat:
   match sub:
     case 1n:
-      199n
+      204n
     case 2n:
-      200n
+      205n
     case _:
       0n
 
 # a subcommand of CONFIG's key, by its number; 0 for none
 def stat.sub.config(+sub: Nat) -> Nat:
-  match sub:
-    case 1n:
-      201n
-    case 2n:
-      202n
-    case 3n:
-      203n
-    case 4n:
-      204n
-    case 5n:
-      205n
-    case _:
-      0n
-
-# a subcommand of COMMAND's key, by its number; 0 for none
-def stat.sub.command(+sub: Nat) -> Nat:
   match sub:
     case 1n:
       206n
@@ -6356,10 +6596,26 @@ def stat.sub.command(+sub: Nat) -> Nat:
       209n
     case 5n:
       210n
-    case 6n:
+    case _:
+      0n
+
+# a subcommand of COMMAND's key, by its number; 0 for none
+def stat.sub.command(+sub: Nat) -> Nat:
+  match sub:
+    case 1n:
       211n
-    case 7n:
+    case 2n:
       212n
+    case 3n:
+      213n
+    case 4n:
+      214n
+    case 5n:
+      215n
+    case 6n:
+      216n
+    case 7n:
+      217n
     case _:
       0n
 
@@ -6367,15 +6623,15 @@ def stat.sub.command(+sub: Nat) -> Nat:
 def stat.sub.object(+sub: Nat) -> Nat:
   match sub:
     case 1n:
-      213n
+      218n
     case 2n:
-      214n
+      219n
     case 3n:
-      215n
+      220n
     case 4n:
-      216n
+      221n
     case 5n:
-      217n
+      222n
     case _:
       0n
 
@@ -6383,9 +6639,17 @@ def stat.sub.object(+sub: Nat) -> Nat:
 def stat.sub.memory(+sub: Nat) -> Nat:
   match sub:
     case 1n:
-      218n
+      223n
     case 2n:
-      219n
+      224n
+    case 3n:
+      225n
+    case 4n:
+      226n
+    case 5n:
+      227n
+    case 6n:
+      228n
     case _:
       0n
 
@@ -6393,17 +6657,17 @@ def stat.sub.memory(+sub: Nat) -> Nat:
 def stat.sub.pubsub(+sub: Nat) -> Nat:
   match sub:
     case 1n:
-      220n
+      229n
     case 2n:
-      221n
+      230n
     case 3n:
-      222n
+      231n
     case 4n:
-      223n
+      232n
     case 5n:
-      224n
+      233n
     case 6n:
-      225n
+      234n
     case _:
       0n
 
@@ -6777,88 +7041,106 @@ def stat.name(+key: Nat) -> String:
     case 183n:
       "pfselftest"
     case 184n:
-      "client|id"
+      "lastsave"
     case 185n:
-      "client|help"
+      "role"
     case 186n:
-      "client|reply"
+      "wait"
     case 187n:
-      "client|getname"
+      "shutdown"
     case 188n:
-      "client|setname"
+      "lolwut"
     case 189n:
-      "client|caching"
+      "client|id"
     case 190n:
-      "client|unblock"
+      "client|help"
     case 191n:
-      "client|getredir"
+      "client|reply"
     case 192n:
-      "client|no-evict"
+      "client|getname"
     case 193n:
-      "client|trackinginfo"
+      "client|setname"
     case 194n:
-      "client|list"
+      "client|caching"
     case 195n:
-      "client|info"
+      "client|unblock"
     case 196n:
-      "client|kill"
+      "client|getredir"
     case 197n:
-      "client|pause"
+      "client|no-evict"
     case 198n:
-      "client|unpause"
+      "client|trackinginfo"
     case 199n:
-      "function|flush"
+      "client|list"
     case 200n:
-      "function|help"
+      "client|info"
     case 201n:
-      "config|get"
+      "client|kill"
     case 202n:
-      "config|set"
+      "client|pause"
     case 203n:
-      "config|resetstat"
+      "client|unpause"
     case 204n:
-      "config|rewrite"
+      "function|flush"
     case 205n:
-      "config|help"
+      "function|help"
     case 206n:
-      "command|info"
+      "config|get"
     case 207n:
-      "command|docs"
+      "config|set"
     case 208n:
-      "command|list"
+      "config|resetstat"
     case 209n:
-      "command|help"
+      "config|rewrite"
     case 210n:
-      "command|count"
+      "config|help"
     case 211n:
-      "command|getkeys"
+      "command|info"
     case 212n:
-      "command|getkeysandflags"
+      "command|docs"
     case 213n:
-      "object|help"
+      "command|list"
     case 214n:
-      "object|freq"
+      "command|help"
     case 215n:
-      "object|encoding"
+      "command|count"
     case 216n:
-      "object|refcount"
+      "command|getkeys"
     case 217n:
-      "object|idletime"
+      "command|getkeysandflags"
     case 218n:
-      "memory|help"
+      "object|help"
     case 219n:
-      "memory|usage"
+      "object|freq"
     case 220n:
-      "pubsub|channels"
+      "object|encoding"
     case 221n:
-      "pubsub|help"
+      "object|refcount"
     case 222n:
-      "pubsub|numpat"
+      "object|idletime"
     case 223n:
-      "pubsub|numsub"
+      "memory|help"
     case 224n:
-      "pubsub|shardchannels"
+      "memory|usage"
     case 225n:
+      "memory|stats"
+    case 226n:
+      "memory|doctor"
+    case 227n:
+      "memory|purge"
+    case 228n:
+      "memory|malloc-stats"
+    case 229n:
+      "pubsub|channels"
+    case 230n:
+      "pubsub|help"
+    case 231n:
+      "pubsub|numpat"
+    case 232n:
+      "pubsub|numsub"
+    case 233n:
+      "pubsub|shardchannels"
+    case 234n:
       "pubsub|shardnumsub"
     case _:
       ""
@@ -7234,33 +7516,33 @@ def stat.arity(+key: Nat) -> Nat:
     case 183n:
       2n
     case 184n:
-      4n
+      2n
     case 185n:
-      4n
+      2n
     case 186n:
       6n
     case 187n:
-      4n
+      3n
     case 188n:
-      6n
+      3n
     case 189n:
-      6n
+      4n
     case 190n:
-      7n
+      4n
     case 191n:
-      4n
-    case 192n:
       6n
+    case 192n:
+      4n
     case 193n:
-      4n
+      6n
     case 194n:
-      5n
+      6n
     case 195n:
-      4n
+      7n
     case 196n:
-      7n
+      4n
     case 197n:
-      7n
+      6n
     case 198n:
       4n
     case 199n:
@@ -7270,52 +7552,70 @@ def stat.arity(+key: Nat) -> Nat:
     case 201n:
       7n
     case 202n:
-      9n
+      7n
     case 203n:
       4n
     case 204n:
-      4n
+      5n
     case 205n:
       4n
     case 206n:
-      5n
+      7n
     case 207n:
-      5n
+      9n
     case 208n:
-      5n
+      4n
     case 209n:
       4n
     case 210n:
       4n
     case 211n:
-      9n
+      5n
     case 212n:
-      9n
+      5n
     case 213n:
-      4n
+      5n
     case 214n:
-      6n
+      4n
     case 215n:
-      6n
+      4n
     case 216n:
-      6n
+      9n
     case 217n:
-      6n
+      9n
     case 218n:
       4n
     case 219n:
-      7n
+      6n
     case 220n:
-      5n
+      6n
     case 221n:
-      4n
+      6n
     case 222n:
-      4n
+      6n
     case 223n:
-      5n
+      4n
     case 224n:
-      5n
+      7n
     case 225n:
+      4n
+    case 226n:
+      4n
+    case 227n:
+      4n
+    case 228n:
+      4n
+    case 229n:
+      5n
+    case 230n:
+      4n
+    case 231n:
+      4n
+    case 232n:
+      5n
+    case 233n:
+      5n
+    case 234n:
       5n
     case _:
       1n
@@ -7535,11 +7835,11 @@ def stat.risky(+key: Nat) -> Bool:
       True{}
     case 183n:
       True{}
-    case 214n:
-      True{}
-    case 217n:
-      True{}
     case 219n:
+      True{}
+    case 222n:
+      True{}
+    case 224n:
       True{}
     case _:
       False{}
@@ -7559,17 +7859,13 @@ def stat.unseen(+key: Nat) -> Bool:
       True{}
     case 183n:
       True{}
-    case 190n:
+    case 187n:
       True{}
-    case 192n:
-      True{}
-    case 194n:
-      True{}
-    case 196n:
+    case 195n:
       True{}
     case 197n:
       True{}
-    case 198n:
+    case 199n:
       True{}
     case 201n:
       True{}
@@ -7577,7 +7873,13 @@ def stat.unseen(+key: Nat) -> Bool:
       True{}
     case 203n:
       True{}
-    case 204n:
+    case 206n:
+      True{}
+    case 207n:
+      True{}
+    case 208n:
+      True{}
+    case 209n:
       True{}
     case _:
       False{}
@@ -7892,17 +8194,19 @@ def stat.keyspace(+key: Nat) -> Bool:
       True{}
     case 182n:
       True{}
-    case 199n:
+    case 188n:
       True{}
-    case 214n:
-      True{}
-    case 215n:
-      True{}
-    case 216n:
-      True{}
-    case 217n:
+    case 204n:
       True{}
     case 219n:
+      True{}
+    case 220n:
+      True{}
+    case 221n:
+      True{}
+    case 222n:
+      True{}
+    case 224n:
       True{}
     case _:
       False{}
@@ -8087,7 +8391,7 @@ def stat.pausable(+key: Nat) -> Bool:
       True{}
     case 182n:
       True{}
-    case 199n:
+    case 204n:
       True{}
     case _:
       False{}
@@ -9820,6 +10124,60 @@ def stat.cw(+code: Nat) -> U32:
       2868
     case 677n:
       2872
+    case 678n:
+      2883
+    case 679n:
+      2885
+    case 680n:
+      2886
+    case 681n:
+      2889
+    case 682n:
+      2890
+    case 683n:
+      2892
+    case 684n:
+      2897
+    case 685n:
+      2898
+    case 686n:
+      2900
+    case 687n:
+      2904
+    case 688n:
+      2913
+    case 689n:
+      2914
+    case 690n:
+      2916
+    case 691n:
+      2920
+    case 692n:
+      2928
+    case 693n:
+      2947
+    case 694n:
+      2949
+    case 695n:
+      2950
+    case 696n:
+      2953
+    case 697n:
+      2954
+    case 698n:
+      2956
+    case 699n:
+      2961
+    case 700n:
+      2962
+    case 701n:
+      2964
+    case 702n:
+      2968
+    case 703n:
+      2977
+    case 704n:
+      2978
     case _:
       63
 
@@ -11404,6 +11762,70 @@ def stat.code.lo44(+lo: Nat) -> Nat:
     case _:
       0n
 
+def stat.code.lo45(+lo: Nat) -> Nat:
+  match lo:
+    case 3n:
+      678n
+    case 5n:
+      679n
+    case 6n:
+      680n
+    case 9n:
+      681n
+    case 10n:
+      682n
+    case 12n:
+      683n
+    case 17n:
+      684n
+    case 18n:
+      685n
+    case 20n:
+      686n
+    case 24n:
+      687n
+    case 33n:
+      688n
+    case 34n:
+      689n
+    case 36n:
+      690n
+    case 40n:
+      691n
+    case 48n:
+      692n
+    case _:
+      0n
+
+def stat.code.lo46(+lo: Nat) -> Nat:
+  match lo:
+    case 3n:
+      693n
+    case 5n:
+      694n
+    case 6n:
+      695n
+    case 9n:
+      696n
+    case 10n:
+      697n
+    case 12n:
+      698n
+    case 17n:
+      699n
+    case 18n:
+      700n
+    case 20n:
+      701n
+    case 24n:
+      702n
+    case 33n:
+      703n
+    case 34n:
+      704n
+    case _:
+      0n
+
 def stat.code.hl(+hi: Nat, +lo: Nat) -> Nat:
   match hi:
     case 0n:
@@ -11496,6 +11918,10 @@ def stat.code.hl(+hi: Nat, +lo: Nat) -> Nat:
       stat.code.lo43(lo)
     case 44n:
       stat.code.lo44(lo)
+    case 45n:
+      stat.code.lo45(lo)
+    case 46n:
+      stat.code.lo46(lo)
     case _:
       0n
 

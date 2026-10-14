@@ -15,8 +15,9 @@ throughput of Redis 7.0.15 on the same machine, with half its memory for small v
 > **Status: research prototype.** BendKV implements a subset of Redis (strings, hashes,
 > lists, sets, sorted sets, HyperLogLogs and their times to live, the blocking commands,
 > transactions, pub/sub and keyspace notifications, the keyspace, several databases,
-> connection commands, CLIENT LIST, INFO, KILL, PAUSE and UNPAUSE, MONITOR, an
-> append-only file and its rewrite, maxmemory and its eviction, RESP3). The goal now is a
+> connection commands, CLIENT LIST, INFO, KILL, PAUSE and UNPAUSE, MONITOR, the server's
+> administrative commands, an append-only file and its rewrite, maxmemory and its
+> eviction, RESP3). The goal now is a
 > drop-in replacement for a single Redis node, measured by Redis's own test suite: of the
 > 1,677 tests Redis 7.0.15 passes against a server it did not start, BendKV passes 1,182,
 > and 1,175 of the 1,258 in what it implements
@@ -248,8 +249,9 @@ translation stays in the trusted base.
   replies are off (CLIENT REPLY OFF or SKIP) pops as it does with them on. Where BendKV
   differs: Redis serves the clients of the keys a command added (`signalKeyAsReady`, from
   `dbAdd`), key by key in the order they became ready, where BendKV looks at every client
-  after every command, in the order they came; WAIT and XREAD are not there. In a
-  transaction a blocking command does not wait, as in Redis (below).
+  after every command, in the order they came; XREAD is not there, and WAIT's wait ends
+  only by its time or CLIENT UNBLOCK (The server, below). In a transaction a blocking
+  command does not wait, as in Redis (below).
 - **Transactions:** MULTI, EXEC, DISCARD, WATCH and UNWATCH, as Redis 7.0.15 runs them.
   After MULTI a command is queued (QUEUED), but for EXEC, DISCARD, MULTI (an error:
   transactions do not nest), WATCH (an error inside MULTI), QUIT and RESET, which run; a
@@ -355,6 +357,18 @@ translation stays in the trusted base.
   with the flag O. Where BendKV differs: a line's time is that of the actor's group, in
   ms (its microseconds end in 000), and a monitor's own lines for the calls EXEC runs
   come after EXEC's array, where Redis writes them between its replies.
+- **The server:** LASTSAVE (the start, as BendKV writes no RDB snapshot), ROLE (a master
+  with no replica), WAIT (0, as no replica acknowledges: at once when it asks for none,
+  otherwise once its timeout ends, its client waiting as a blocking command's does),
+  MEMORY STATS, DOCTOR, PURGE and MALLOC-STATS (Redis's fields and advice, from the
+  numbers INFO's memory section shows), LOLWUT (Redis 7.0.15's line, and the drawings of
+  VERSION 5 and 6, those that take no random number byte for byte as Redis draws them),
+  and SHUTDOWN [NOSAVE|SAVE] [NOW] [FORCE] [ABORT], read as Redis 7.0.15 reads it: the
+  append-only file written and synced, a rewrite that runs stopped, the pid file
+  removed, the process ended with code 0. Where BendKV differs: SHUTDOWN SAVE fails as
+  Redis's does when it cannot save, BendKV writing no RDB snapshot (SAVE FORCE stops it
+  all the same); MEMORY MALLOC-STATS has no allocator's statistics; LOLWUT's large
+  drawings take up to a hundred times Redis's time (FINDINGS.md, section 3zzl).
 - **Configuration:** CONFIG GET (names, aliases and glob patterns), SET (several
   parameters at once, all or none), RESETSTAT, REWRITE, HELP, over all 178 parameters of
   Redis 7.0.15, taken from Redis's own table by `tools/gen_config.py`: every value is
@@ -572,7 +586,10 @@ with their time and address put aside, then 4 monitors that each get every line 
 clients that pipeline 200 SETs each, each client's lines in order), CLIENT PAUSE and
 UNPAUSE (`tests/pause_test.py`: scenarios on BendKV and on Redis of what a pause holds
 back and lets run, its end and the order the clients go on in, their transcripts compared
-line by line, then 100 clients held back and let go in order), AUTH
+line by line, then 100 clients held back and let go in order), the administrative
+commands (`tests/admin_test.py`: LASTSAVE, ROLE, WAIT, MEMORY, LOLWUT's drawings byte for
+byte and SHUTDOWN's errors on BendKV and on Redis, then SHUTDOWN on servers of their own,
+the append-only file and the pid file after it, and a SHUTDOWN while a rewrite runs), AUTH
 (`tests/auth_test.py`: scenarios on BendKV and on Redis of when a client must
 authenticate and what it is answered before it does), RESP3 (`tests/resp3_test.py`: 11
 scenarios on BendKV and on Redis compared byte for byte, of HELLO and the switch of
@@ -610,6 +627,7 @@ src/        the server
   map.bend      hash trie with string keys                         verified
   float.bend    doubles and long doubles in software               tested
   hll.bend      HyperLogLogs on a string's bytes, as Redis's       tested
+  lolwut.bend   LOLWUT's drawings, as Redis draws them             tested
   redis.bend    command semantics: exec(cmd, db) -> (reply, db')   verified
   batch.bend    a pipelined batch with cache hints                 verified
   aof.bend      append-only file: effects, encoding, loading       verified
@@ -621,7 +639,7 @@ src/        the server
   startup.bend  the command line and the configuration file        tested
   server.bend   TCP, connections, the database actor, the log      tested
 proof/      LAWS.bend (the laws), PROOF.bend (their proofs), SPEC.bend (the commands on the trie alone)
-tests/      float, start, differential, expiry, protocol, session, CONFIG, INFO, COMMAND, SCAN, BITFIELD, hash, list, set, sorted set, SORT, HyperLogLog, blocking, transaction, Pub/Sub, CLIENT, MONITOR, CLIENT PAUSE, AUTH, RESP3, maxmemory, robustness, stalled reader, concurrency, AOF and AOF rewrite tests
+tests/      float, start, differential, expiry, protocol, session, CONFIG, INFO, COMMAND, SCAN, BITFIELD, hash, list, set, sorted set, SORT, HyperLogLog, blocking, transaction, Pub/Sub, CLIENT, MONITOR, CLIENT PAUSE, administrative commands, AUTH, RESP3, maxmemory, robustness, stalled reader, concurrency, AOF and AOF rewrite tests
 bench/      in-process benchmarks of the map, the core and channels
 tools/      measurement scripts, the runner of Redis's test suite, and the generators of
             the trie, of the parameter table and of the command table, with the facts

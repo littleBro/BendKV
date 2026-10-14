@@ -372,6 +372,10 @@ def fmt.d() -> Fmt:
 def fmt.ld() -> Fmt:
   Fmt{64n, 16382n, 16383n}
 
+# C's float on x86-64 (MEMORY STATS's ratios)
+def fmt.f() -> Fmt:
+  Fmt{24n, 126n, 127n}
+
 def fmt.p(f: Fmt) -> Nat:
   match f:
     case Fmt{p, emin, emax}:
@@ -433,6 +437,24 @@ def fl.round.of(+f: Fmt, +neg: Bool, +m: List<&2, Nat>, +e: Nat, +sticky: Bool, 
 # the nearest number of f, to the even one on a tie
 def fl.round(+f: Fmt, +neg: Bool, +m: List<&2, Nat>, +e: Nat, +sticky: Bool) -> Fl:
   fl.round.of(f, neg, m, e, sticky, Nat.sub(Nat.add(e, big.bitlen(m)), 1n))
+
+# x as a number of f, rounded to the nearest one (exact when f holds x:
+# a float as the double it is)
+def fl.to.num(z: Bool, +f: Fmt, +neg: Bool, +m: List<&2, Nat>, +e: Nat) -> Fl:
+  match z:
+    case True{}:
+      fl.zero(neg)
+    case False{}:
+      fl.round(f, neg, m, e, False{})
+
+def fl.to(+f: Fmt, x: Fl) -> Fl:
+  match x:
+    case FNum{+neg, +m, +e}:
+      fl.to.num(big.is_zero(m), f, neg, m, e)
+    case FInf{neg}:
+      FInf{neg}
+    case FNaN{}:
+      FNaN{}
 
 # Arithmetic
 # ----------

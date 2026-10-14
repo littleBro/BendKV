@@ -65,7 +65,7 @@ COMMANDS = {
     "bitfield_ro": [], "hset": [], "hsetnx": [], "hget": [], "hmget": [], "hmset": [],
     "hdel": [], "hlen": [], "hstrlen": [], "hexists": [], "hkeys": [], "hvals": [],
     "hgetall": [], "hincrby": [], "hscan": [], "hrandfield": [], "eval": [],
-    "memory": ["help", "usage"], "lpush": [], "rpush": [], "lpushx": [], "rpushx": [],
+    "memory": ["doctor", "help", "malloc-stats", "purge", "stats", "usage"], "lpush": [], "rpush": [], "lpushx": [], "rpushx": [],
     "lpop": [], "rpop": [], "llen": [], "lindex": [], "lrange": [], "lset": [],
     "linsert": [], "lrem": [], "ltrim": [], "lpos": [], "lmove": [], "rpoplpush": [],
     "lmpop": [], "sadd": [], "srem": [], "scard": [], "sismember": [], "smismember": [],
@@ -84,7 +84,8 @@ COMMANDS = {
     "psubscribe": [], "punsubscribe": [], "ssubscribe": [], "sunsubscribe": [],
     "publish": [], "spublish": [], "pubsub": ["channels", "help", "numpat", "numsub",
     "shardchannels", "shardnumsub"], "monitor": [], "bgrewriteaof": [], "sort": [],
-    "sort_ro": [], "pfadd": [], "pfcount": [], "pfmerge": [], "pfdebug": [], "pfselftest": []}
+    "sort_ro": [], "pfadd": [], "pfcount": [], "pfmerge": [], "pfdebug": [], "pfselftest": [],
+    "lastsave": [], "role": [], "wait": [], "shutdown": [], "lolwut": []}
 
 # Step 1: redis-server -> facts
 # -----------------------------

@@ -315,7 +315,9 @@ Where performance and proof meet: **batched execution under proved laws.**
    (done, section 3zs), SCAN and RANDOMKEY (done), MONITOR (done, section 3zt), the
    log's rewrite (done, section 3zv), maxmemory and its eviction (done, section 3zw),
    RESP3 (done, section 3zx), SORT and SORT_RO (done, section 3zzh), HyperLogLogs (done,
-   section 3zzj), and CLIENT PAUSE and UNPAUSE (done, section 3zzk), measured by Redis's
+   section 3zzj), CLIENT PAUSE and UNPAUSE (done, section 3zzk), and the administrative
+   commands LASTSAVE, ROLE, WAIT, SHUTDOWN, MEMORY and LOLWUT (done, section 3zzl),
+   measured by Redis's
    own test suite run against BendKV and by client libraries' test suites (redis-py's and
    go-redis's, in CI: done, section 3zy).
    Lua, streams, cluster, replication and modules are out of scope. The suite's count: of the 1,677 tests
@@ -350,7 +352,11 @@ Where performance and proof meet: **batched execution under proved laws.**
    doubles in software, about half a million instructions (doubles in the runtime would
    end it), a step of a walk of the sparse opcodes takes 80 instructions where Redis's
    takes about 20, and a sparse value past 2,048 bytes is two chunks, which
-   `String.code_at` reads a run at a time.
+   `String.code_at` reads a run at a time. LOLWUT VERSION 5 rounds each of a square's
+   ninety float operations in software (section 3zzl): a drawing of 10,000 squares takes
+   2 s where Redis takes 19 ms, the server answering nothing else meanwhile. Next within
+   the scope: geo, the slow log and the latency monitor, DUMP and RESTORE, CLIENT
+   TRACKING, and ACL's users.
 
 After that comes proving the native strings (section 5, step 1): a small piece of
 work that makes the word "verified" much stronger.

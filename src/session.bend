@@ -27,6 +27,7 @@ import ./config.bend as C
 import ./info.bend as I
 import ./command.bend as K
 import ./float.bend as F
+import ./lolwut.bend as L
 
 # Types
 # -----
@@ -871,11 +872,16 @@ def auth.conn(ok: Bool, +c: Conn, +s: Srv) -> Conn:
 # the same pop again once a write gives one of the keys elements, or
 # answers a null array when the time is up. A client the server holds
 # back while clients are paused waits as BlkPause (server.bend, The
-# pause), which no key serves and no time ends.
+# pause), which no key serves and no time ends. WAIT, which asks for
+# acknowledgements no replica will send, waits as BlkWait for its timeout
+# (in ms, the parser's: R.wait.of), which no key serves either; it
+# answers 0, as Redis answers when no replica acknowledged, at once in
+# MULTI and when its time is up.
 type Blk is Data:
   BlkPop{c: R.Cmd, form: Nat, ms: List<&2, Nat>}
   BlkBad{r: R.Reply}
   BlkPause{}
+  BlkWait{ms: List<&2, Nat>}
 
 # The timeout, as getTimeoutFromObjectOrReply reads one in seconds: a
 # long double as string2ld reads it, times 1000 (rounded as x87 rounds),
@@ -989,10 +995,21 @@ def blk.move(m: Maybe<&2, R.LEnds>, s: String, d: String, +t: String) -> Blk:
     case None{}:
       BlkBad{R.RError{"ERR syntax error"}}
 
+# WAIT's timeout, a long long the parser read (R.wait.of), as ms: its
+# magnitude hi * 10^9 + lo
+def blk.wait(l: R.LL) -> Blk:
+  match l:
+    case R.LL{neg, +hi, +lo}:
+      BlkWait{F.big.add(F.big.mul_small(F.big.mul_small(F.big.of(hi), 1000n, 0n), 1000000n, 0n), F.big.of(lo))}
+    case R.LLBad{}:
+      BlkBad{R.RError{"ERR timeout is not an integer or out of range"}}
+
 # a blocking command's pop, its arguments read as Redis reads them (their
 # number checked by the parser)
 def blk.parse(+id: Nat, args: List<&2, String>) -> Blk:
   match id args:
+    case 186n Con{n, Con{+t, rest}}:
+      blk.wait(R.ll.read(t))
     case 155n Con{s, Con{d, Con{+t, rest}}}:
       blk.with(blk.tmo(t), R.LMove{s, d, R.RtoL{}}, 0n)
     case 156n Con{s, Con{d, Con{+a, Con{+b, Con{+t, rest}}}}}:
@@ -1098,6 +1115,18 @@ def blk.reply(b: Blk, db: R.Db) -> R.Reply:
       r
     case BlkPause{}:
       R.RNullA{}
+    case BlkWait{ms}:
+      R.RInt{R.IPos{0n}}
+
+# the reply of a client whose time is up, or that CLIENT UNBLOCK unblocks
+# without an error, as Redis's replyToBlockedClientTimedOut: a null array
+# for a pop, and for WAIT the replicas that acknowledged, none
+def blk.late(+b: Blk) -> R.Reply:
+  match b:
+    case BlkWait{ms}:
+      R.RInt{R.IPos{0n}}
+    case _:
+      R.RNullA{}
 
 def blk.acts(b: Blk) -> List<&2, R.Act>:
   match b:
@@ -1123,6 +1152,8 @@ def blk.waits(b: Blk, db: R.Db) -> Bool:
   match b:
     case BlkPop{c, form, ms}:
       blk.none(R.reply_of(R.exec(c, db)))
+    case BlkWait{ms}:
+      True{}
     case _:
       False{}
 
@@ -1174,6 +1205,8 @@ def blk.ms(b: Blk) -> List<&2, Nat>:
   match b:
     case BlkPop{c, form, ms}:
       ms
+    case BlkWait{ms}:
+      ms
     case _:
       Nil{}
 
@@ -1218,6 +1251,8 @@ def blk.at(b: Blk, +k: String) -> R.Cmd:
       R.Bad{r}
     case BlkPause{}:
       R.Bad{R.RNullA{}}
+    case BlkWait{ms}:
+      R.Bad{R.RInt{R.IPos{0n}}}
 
 # Databases
 # ---------
@@ -2683,6 +2718,35 @@ def sort.reply(+ds: R.Ds, +k: String, o: R.SortO) -> R.Reply:
   +d = R.ds.focused(ds)
   R.sort.store.reply(R.db.trie(d), R.db.now(d), k, o)
 
+# The administrative commands
+# ---------------------------
+# LASTSAVE answers the time of the last save, which is the start, as
+# BendKV writes no RDB snapshot (Redis's lastsave is its start until it
+# saves one); MEMORY STATS and MEMORY DOCTOR the numbers INFO's memory
+# section shows (info.bend, MEMORY STATS and MEMORY DOCTOR); LOLWUT
+# VERSION 5 and 6 their drawings (lolwut.bend), from the server's random
+# numbers. SHUTDOWN stops the server (server.bend, SHUTDOWN) but when it
+# is to save (SAVE without FORCE): BendKV writes no RDB snapshot, and
+# answers as Redis answers when its save fails. A session alone stops
+# nothing, and answers OK for a SHUTDOWN that would stop the server.
+def admin.down(+sd: R.Sd) -> R.Reply:
+  Bool.pick(R.Reply, Bool.and(R.sd.save(sd), Bool.not(R.sd.force(sd))), R.RError{"ERR Errors trying to SHUTDOWN. Check logs."}, R.r_ok())
+
+def admin.reply(+k: Nat, +args: List<&2, String>, +s: Srv, +ds: R.Ds) -> R.Reply:
+  match k:
+    case 0n:
+      R.r_int(U32.to_nat(I.info.start(srv.info(s))))
+    case 1n:
+      I.mem.stats(srv.info(s), R.ds.list(ds))
+    case 2n:
+      R.RVerb{I.mem.doctor(srv.info(s))}
+    case 3n:
+      R.RVerb{L.five(args, KV.mix(srv.rng(s)))}
+    case 4n:
+      admin.down(R.sd.flags(args))
+    case _:
+      R.RVerb{L.six(args, KV.mix(srv.rng(s)))}
+
 # a session command's reply, sent or not; the databases are there for
 # the commands that read them
 def own_reply(+o: R.SessOp, +c: Conn, +s: Srv, +ds: R.Ds) -> Maybe<&2, R.Reply>:
@@ -2777,6 +2841,8 @@ def own_reply(+o: R.SessOp, +c: Conn, +s: Srv, +ds: R.Ds) -> Maybe<&2, R.Reply>:
       say(conn.mode(c), R.pf.merge.reply(d, srcs, R.ds.focused(ds)))
     case R.SPfSelfTest{}:
       say(conn.mode(c), R.pf.selftest())
+    case R.SAdmin{+k, +a}:
+      say(conn.mode(c), admin.reply(k, a, s, ds))
 
 # the connection after a session command
 def own_conn(+o: R.SessOp, +c: Conn, +s: Srv) -> Conn:
@@ -2871,6 +2937,8 @@ def own_conn(+o: R.SessOp, +c: Conn, +s: Srv) -> Conn:
       step_conn(c, s)
     case R.SPfSelfTest{}:
       step_conn(c, s)
+    case R.SAdmin{k, a}:
+      step_conn(c, s)
 
 # what a session command does to the databases: SELECT and RESET move the
 # focus to the connection's new database, SWAPDB, MOVE, COPY and FLUSHALL
@@ -2921,9 +2989,14 @@ def srv.rand(s: Srv) -> Srv:
     case Srv{pass, cfg, info, mm}:
       Srv{pass, cfg, info, mm.rand(mm)}
 
-# the server after a session command: CONFIG SET changes it when it
-# succeeds, CONFIG RESETSTAT its counts, and RANDOMKEY and HRANDFIELD its
+# the server after an administrative command: LOLWUT's drawings take its
 # random numbers
+def admin.srv(+k: Nat, +s: Srv) -> Srv:
+  Bool.pick(Srv, Bool.or(Nat.is_eq(k, 3n), Nat.is_eq(k, 5n)), srv.rand(s), s)
+
+# the server after a session command: CONFIG SET changes it when it
+# succeeds, CONFIG RESETSTAT its counts, and RANDOMKEY, HRANDFIELD and
+# LOLWUT's drawings its random numbers
 def own_srv(+o: R.SessOp, +c: Conn, +s: Srv) -> Srv:
   match o:
     case R.SConfigSet{args}:
@@ -2940,6 +3013,8 @@ def own_srv(+o: R.SessOp, +c: Conn, +s: Srv) -> Srv:
       srv.rand(s)
     case R.SZRandMember{k, a}:
       srv.rand(s)
+    case R.SAdmin{+k, a}:
+      admin.srv(k, s)
     case _:
       s
 
