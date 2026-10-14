@@ -6431,9 +6431,9 @@ baseline is now RESP3's counts in CI: GET 3,371, SET 4,268, INCR 4,543.
 
 **The change.** A delete walked the trie as every write does (`tmod_h`, with `ODel`): it
 rebuilt the nodes on the key's path and changed the bucket at its end, and a node it left
-without entries stayed. A trie kept the nodes of every path a key had taken, up to
-69,905 nodes over its 2^20 buckets (9 MB), and a delete of a key that was not there
-built the nodes down to its bucket. Now a delete walks with `tdel_h` (`tools/gen_trie.py`): at each
+without entries stayed. A trie kept the nodes of every path a key had taken, up to 69,905
+nodes over its 2^20 buckets (9 MB), and a delete of a key that was not there built the
+nodes down to its bucket. Now a delete walks with `tdel_h` (`tools/gen_trie.py`): at each
 level it looks at the subtrie it changed (`tis_tip`, a tag); when that is empty, it looks
 at the node's 16 subtries from the first (`tnode_if`, `tnode`), and a node of 16 empty
 subtries goes, and its parent looks at it in turn; a walk that meets an empty subtrie
