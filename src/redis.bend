@@ -15850,13 +15850,18 @@ def upd.put(t: KV.Trie<KV.Val>, +k: String, +h: U32, +n: Nat, +x: Nat, now: Nat,
 
 # whether an update of a key whose entry there at now is m takes the key's
 # value out of the keyspace while it changes it: an HSET of pairs to a
-# hash, which writes the hash over for sure (PROOF.bend: takes_over). The
-# keyspace holding the hash meanwhile would make the write copy the path
-# it changes in it, and the keyspace drop the old path after.
+# hash, or an SADD to a set kept as a hashtable that lacks its first
+# member, which write the collection over for sure (PROOF.bend:
+# takes_over). The keyspace holding the collection meanwhile would make
+# the write copy the path it changes in it, and the keyspace drop the old
+# path after. An intset is not taken: the test of its member walks its
+# list, which costs more than the take saves.
 def upd.takes(+op: UpdOp, +m: Maybe<&2, KV.Item<KV.Val>>) -> Bool:
   match op m:
     case UHash{HWSet{Con{p, rest}, mset}} Some{KV.Item{KV.VColl{KV.CHash{h}}, e}}:
       True{}
+    case UMems{SWAdd{Con{+x, rest}}} Some{KV.Item{KV.VColl{KV.CMems{KV.MBig{n, +t}}}, e}}:
+      Bool.not(KV.has(Unit, t, x))
     case _ _:
       False{}
 

@@ -6749,3 +6749,44 @@ generated.
 care for the writes that leave it as it was: SADD of a new member took 25% fewer
 instructions, ZADD of a new score 28% and ZINCRBY 34%. Each of those needs a test before
 the take that the write changes its collection, and a proof of it.
+
+## 55. SADD in place: the set taken out of the keyspace
+
+**What was left** (section 54). SADD of a member new to a set copied the path it changed
+in the set's trie and the keyspace dropped the old path after, as HSET did before
+section 54: 26,284 instructions on a set of 100,000 members. The write could not take
+every set it was given: SADD of members all there leaves the set as it was, answers
+CKeep and drops the set.
+
+**The change.** An SADD to a key that holds a set kept as a hashtable at now, whose
+first member the set lacks, takes the set out of the keyspace as HSET does
+(`R.upd.takes`): it adds that member for sure, so it writes the set over. An intset is
+not taken: the test of its member walks its list, and SADD of a new integer to an intset
+of 100 to 500 members took 511,928 instructions with the take against 449,438 without.
+
+**The proofs.** `takes_over` covers the new case (`takes_mems`): an SADD whose first
+member a hashtable lacks adds one or more members (`sadd_adds`), since the members added
+to a set leave it no smaller (`le_add_mem`, `len_adds_ge`), the member it lacks makes it
+one larger (`le_big_new`), and a size one or more larger, less the old size, is not 0
+(`sub_pos`); so it answers CMems, which writes the set over. Two proofs that unfolded
+the update (`mems_replay`, `snew_sadd`) rewrite through `db_upd_eq`, as thirteen did in
+section 54, and `le`, `le_succ` and `le_refl` move before the take, which uses them. 120
+lines of `PROOF.bend`.
+
+**Measured** (`tools/colls.sh`, and SADD of 400 new members one at a time, instructions
+per command):
+
+| command | before | now | |
+|---|---:|---:|---:|
+| SADD of a new member, set of 100,000 | 26,284 | 20,273 | −23% |
+| SADD of a new member, set of 10 to 410 strings | 22,555 | 19,959 | −12% |
+| SADD of a new integer, intset of 100 to 500 | 449,438 | 449,545 | as before |
+| GET, SET, LLEN, LPUSH, HGET, HSET, HINCRBY, ZADD | | as before (±0.6%) | |
+
+**What is left.** SADD to an intset costs twenty times SADD to a hashtable. An intset is
+the list of its members, as strings in increasing order, and `ints.at` compares a member
+with each one it passes as integers, reading the digits of both strings again each time;
+an add walks the list twice (the test of the member, then the put) and builds again the
+part it passed. Redis keeps an intset as an array of integers of one width and finds a
+member by binary search. ZADD of a new member and ZINCRBY (−28% and −34% in the
+prototype) still need the test that their write changes the sorted set.

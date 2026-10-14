@@ -5579,6 +5579,150 @@ def takes_hash(hop: R.HWrite, lm: Maybe<&2, KV.Item<KV.Val>>, +now: Nat) -> {R.u
     case R.HWIncrF{a, b}:
       g => Empty.absurd({ch_over(ch_of(R.upd.v(R.UHash{R.HWIncrF{a, b}}, now, lm))) == True{} : Bool}, false_true(g))
 
+# a <= b
+def le(a: Nat, b: Nat) -> Bool:
+  match a b:
+    case 0n _:
+      True{}
+    case 1n+p 0n:
+      False{}
+    case 1n+p 1n+q:
+      le(p, q)
+
+def le_succ(a: Nat, b: Nat) -> {le(a, b) == True{} : Bool} -> {le(a, 1n+b) == True{} : Bool}:
+  match a b:
+    case 0n _:
+      e => {==}
+    case 1n+p 0n:
+      e => Empty.absurd({le(1n+p, 1n) == True{} : Bool}, false_true(e))
+    case 1n+p 1n+q:
+      e => le_succ(p, q)(e)
+
+def le_refl(n: Nat) -> {le(n, n) == True{} : Bool}:
+  match n:
+    case 0n:
+      {==}
+    case 1n+p:
+      le_refl(p)
+
+# An SADD to a set kept as a hashtable that lacks its first member
+# writes the set over (takes_mems, for takes_over): the members added to
+# a set leave it no smaller (le_add_mem, len_adds_ge), a member it lacks
+# makes it one larger (le_big_new), and a size one or more larger, less
+# the old size, is not 0 (sub_pos), so SADD adds one or more.
+def le_ints_putm(fits: Bool, +m: Nat, +n: Nat, -xs: List<&2, String>, -y: String) -> {le(m, n) == True{} : Bool} -> {le(m, KV.mems.len(KV.mems.ints.put(fits, n, xs, y))) == True{} : Bool}:
+  match fits:
+    case True{}:
+      e => le_succ(m, n)(e)
+    case False{}:
+      e => le_succ(m, n)(e)
+
+def le_ints_more(int: Bool, +m: Nat, +n: Nat, -xs: List<&2, String>, -y: String) -> {le(m, n) == True{} : Bool} -> {le(m, KV.mems.len(KV.mems.ints.add(False{}, int, n, xs, y))) == True{} : Bool}:
+  match int:
+    case True{}:
+      e => le_ints_putm(Nat.is_lt(n, 512n), m, n, xs, y)(e)
+    case False{}:
+      e => le_succ(m, n)(e)
+
+def le_ints_add(had: Bool, int: Bool, +m: Nat, +n: Nat, -xs: List<&2, String>, -y: String) -> {le(m, n) == True{} : Bool} -> {le(m, KV.mems.len(KV.mems.ints.add(had, int, n, xs, y))) == True{} : Bool}:
+  match had:
+    case True{}:
+      e => e
+    case False{}:
+      e => le_ints_more(int, m, n, xs, y)(e)
+
+def le_big_add(had: Bool, +m: Nat, +n: Nat, -t: KV.Trie<Unit>, -y: String) -> {le(m, n) == True{} : Bool} -> {le(m, KV.mems.len(KV.mems.big.add(had, n, t, y))) == True{} : Bool}:
+  match had:
+    case True{}:
+      e => e
+    case False{}:
+      e => le_succ(m, n)(e)
+
+def le_add_mem(s: KV.Mems, +m: Nat, +y: String) -> {le(m, KV.mems.len(s)) == True{} : Bool} -> {le(m, KV.mems.len(KV.mems.add(s, y))) == True{} : Bool}:
+  match s:
+    case KV.MInts{+n, +xs}:
+      le_ints_add(KV.mems.ints.has(KV.ints.ok(y), y, xs), KV.ints.ok(y), m, n, xs, y)
+    case KV.MBig{+n, +t}:
+      le_big_add(KV.has(Unit, t, y), m, n, t, y)
+
+def len_adds_ge(xs: List<&2, String>, +s: KV.Mems, +m: Nat) -> {le(m, KV.mems.len(s)) == True{} : Bool} -> {le(m, KV.mems.len(KV.mems.adds(xs, s))) == True{} : Bool}:
+  match xs:
+    case Nil{}:
+      e => e
+    case Con{+x, rest}:
+      e => len_adds_ge(rest, KV.mems.add(s, x), m)(le_add_mem(s, m, x)(e))
+
+def le_big_new(had: Bool, +n: Nat, -t: KV.Trie<Unit>, -y: String) -> {Bool.not(had) == True{} : Bool} -> {le(1n+n, KV.mems.len(KV.mems.big.add(had, n, t, y))) == True{} : Bool}:
+  match had:
+    case True{}:
+      e => Empty.absurd({le(1n+n, KV.mems.len(KV.mems.big.add(True{}, n, t, y))) == True{} : Bool}, false_true(e))
+    case False{}:
+      e => le_refl(n)
+
+def sub_pos(a: Nat, b: Nat) -> {le(1n+b, a) == True{} : Bool} -> {Nat.is_eq(Nat.sub(a, b), 0n) == False{} : Bool}:
+  match a b:
+    case 0n _:
+      e => Empty.absurd({Nat.is_eq(Nat.sub(0n, b), 0n) == False{} : Bool}, false_true(e))
+    case 1n+p 0n:
+      e => {==}
+    case 1n+p 1n+q:
+      e => sub_pos(p, q)(e)
+
+def sadd_adds(+x: String, +rest: List<&2, String>, +n: Nat, +t: KV.Trie<Unit>) -> {Bool.not(KV.has(Unit, t, x)) == True{} : Bool} -> {Nat.is_eq(Nat.sub(KV.mems.len(KV.mems.adds(rest, KV.mems.add(KV.MBig{n, t}, x))), n), 0n) == False{} : Bool}:
+  g => sub_pos(KV.mems.len(KV.mems.adds(rest, KV.mems.add(KV.MBig{n, t}, x))), n)(len_adds_ge(rest, KV.mems.add(KV.MBig{n, t}, x), 1n+n)(le_big_new(KV.has(Unit, t, x), n, t, x)(g)))
+
+def sadd_of_over(b: Bool, +ms: List<&2, String>, -t: KV.Mems, -added: Nat) -> {b == False{} : Bool} -> {ch_over(ch_of(R.sadd.of(b, False{}, ms, t, added))) == True{} : Bool}:
+  match b:
+    case True{}:
+      e => Empty.absurd({ch_over(ch_of(R.sadd.of(True{}, False{}, ms, t, added))) == True{} : Bool}, true_false(e))
+    case False{}:
+      e => {==}
+
+def takes_madd(+x: String, +rest: List<&2, String>, +n: Nat, +t: KV.Trie<Unit>, -e: Nat, +now: Nat) -> {R.upd.takes(R.UMems{R.SWAdd{Con{x, rest}}}, Some{KV.Item{KV.VColl{KV.CMems{KV.MBig{n, t}}}, e}}) == True{} : Bool} -> {ch_over(ch_of(R.upd.v(R.UMems{R.SWAdd{Con{x, rest}}}, now, Some{KV.Item{KV.VColl{KV.CMems{KV.MBig{n, t}}}, e}}))) == True{} : Bool}:
+  g => sadd_of_over(Nat.is_eq(Nat.sub(KV.mems.len(KV.mems.adds(rest, KV.mems.add(KV.MBig{n, t}, x))), n), 0n), Con{x, rest}, KV.mems.adds(rest, KV.mems.add(KV.MBig{n, t}, x)), Nat.sub(KV.mems.len(KV.mems.adds(rest, KV.mems.add(KV.MBig{n, t}, x))), n))(sadd_adds(x, rest, n, t)(g))
+
+def takes_madd_s(s: KV.Mems, -e: Nat, +x: String, +rest: List<&2, String>, +now: Nat) -> {R.upd.takes(R.UMems{R.SWAdd{Con{x, rest}}}, Some{KV.Item{KV.VColl{KV.CMems{s}}, e}}) == True{} : Bool} -> {ch_over(ch_of(R.upd.v(R.UMems{R.SWAdd{Con{x, rest}}}, now, Some{KV.Item{KV.VColl{KV.CMems{s}}, e}}))) == True{} : Bool}:
+  match s:
+    case KV.MBig{n, t}:
+      takes_madd(x, rest, n, t, e, now)
+    case KV.MInts{n, xs}:
+      g => Empty.absurd({ch_over(ch_of(R.upd.v(R.UMems{R.SWAdd{Con{x, rest}}}, now, Some{KV.Item{KV.VColl{KV.CMems{KV.MInts{n, xs}}}, e}}))) == True{} : Bool}, false_true(g))
+
+def takes_madd_c(cl: KV.Coll, -e: Nat, +x: String, +rest: List<&2, String>, +now: Nat) -> {R.upd.takes(R.UMems{R.SWAdd{Con{x, rest}}}, Some{KV.Item{KV.VColl{cl}, e}}) == True{} : Bool} -> {ch_over(ch_of(R.upd.v(R.UMems{R.SWAdd{Con{x, rest}}}, now, Some{KV.Item{KV.VColl{cl}, e}}))) == True{} : Bool}:
+  match cl:
+    case KV.CMems{s}:
+      takes_madd_s(s, e, x, rest, now)
+    case KV.CHash{a}:
+      g => Empty.absurd({ch_over(ch_of(R.upd.v(R.UMems{R.SWAdd{Con{x, rest}}}, now, Some{KV.Item{KV.VColl{KV.CHash{a}}, e}}))) == True{} : Bool}, false_true(g))
+    case KV.CList{a}:
+      g => Empty.absurd({ch_over(ch_of(R.upd.v(R.UMems{R.SWAdd{Con{x, rest}}}, now, Some{KV.Item{KV.VColl{KV.CList{a}}, e}}))) == True{} : Bool}, false_true(g))
+    case KV.CZset{a}:
+      g => Empty.absurd({ch_over(ch_of(R.upd.v(R.UMems{R.SWAdd{Con{x, rest}}}, now, Some{KV.Item{KV.VColl{KV.CZset{a}}, e}}))) == True{} : Bool}, false_true(g))
+
+def takes_madd_m(+x: String, +rest: List<&2, String>, lm: Maybe<&2, KV.Item<KV.Val>>, +now: Nat) -> {R.upd.takes(R.UMems{R.SWAdd{Con{x, rest}}}, lm) == True{} : Bool} -> {ch_over(ch_of(R.upd.v(R.UMems{R.SWAdd{Con{x, rest}}}, now, lm))) == True{} : Bool}:
+  match lm:
+    case Some{KV.Item{KV.VColl{cl}, e}}:
+      takes_madd_c(cl, e, x, rest, now)
+    case Some{KV.Item{KV.VStr{w}, e}}:
+      g => Empty.absurd({ch_over(ch_of(R.upd.v(R.UMems{R.SWAdd{Con{x, rest}}}, now, Some{KV.Item{KV.VStr{w}, e}}))) == True{} : Bool}, false_true(g))
+    case None{}:
+      g => Empty.absurd({ch_over(ch_of(R.upd.v(R.UMems{R.SWAdd{Con{x, rest}}}, now, None{}))) == True{} : Bool}, false_true(g))
+
+def takes_mems(sop: R.SWrite, lm: Maybe<&2, KV.Item<KV.Val>>, +now: Nat) -> {R.upd.takes(R.UMems{sop}, lm) == True{} : Bool} -> {ch_over(ch_of(R.upd.v(R.UMems{sop}, now, lm))) == True{} : Bool}:
+  match sop:
+    case R.SWAdd{Con{x, rest}}:
+      takes_madd_m(x, rest, lm, now)
+    case R.SWAdd{Nil{}}:
+      g => Empty.absurd({ch_over(ch_of(R.upd.v(R.UMems{R.SWAdd{Nil{}}}, now, lm))) == True{} : Bool}, false_true(g))
+    case R.SWRem{a}:
+      g => Empty.absurd({ch_over(ch_of(R.upd.v(R.UMems{R.SWRem{a}}, now, lm))) == True{} : Bool}, false_true(g))
+    case R.SWNew{a}:
+      g => Empty.absurd({ch_over(ch_of(R.upd.v(R.UMems{R.SWNew{a}}, now, lm))) == True{} : Bool}, false_true(g))
+    case R.SWPop{a}:
+      g => Empty.absurd({ch_over(ch_of(R.upd.v(R.UMems{R.SWPop{a}}, now, lm))) == True{} : Bool}, false_true(g))
+    case R.SWPopN{a, b}:
+      g => Empty.absurd({ch_over(ch_of(R.upd.v(R.UMems{R.SWPopN{a, b}}, now, lm))) == True{} : Bool}, false_true(g))
+
 def takes_over(op: R.UpdOp, lm: Maybe<&2, KV.Item<KV.Val>>, +now: Nat) -> {R.upd.takes(op, lm) == True{} : Bool} -> {ch_over(ch_of(R.upd.v(op, now, lm))) == True{} : Bool}:
   match op:
     case R.UHash{hop}:
@@ -5609,8 +5753,8 @@ def takes_over(op: R.UpdOp, lm: Maybe<&2, KV.Item<KV.Val>>, +now: Nat) -> {R.upd
       g => Empty.absurd({ch_over(ch_of(R.upd.v(R.UBitfield{a}, now, lm))) == True{} : Bool}, false_true(g))
     case R.UList{a}:
       g => Empty.absurd({ch_over(ch_of(R.upd.v(R.UList{a}, now, lm))) == True{} : Bool}, false_true(g))
-    case R.UMems{a}:
-      g => Empty.absurd({ch_over(ch_of(R.upd.v(R.UMems{a}, now, lm))) == True{} : Bool}, false_true(g))
+    case R.UMems{sop}:
+      takes_mems(sop, lm, now)
     case R.UIncrF{a}:
       g => Empty.absurd({ch_over(ch_of(R.upd.v(R.UIncrF{a}, now, lm))) == True{} : Bool}, false_true(g))
     case R.UZset{a}:
@@ -7148,25 +7292,6 @@ def quot_spec(n: Nat) -> {n == Nat.add(Nat.mul(quot10(n), 10n), dval(rem10(n))) 
     case 10n+m:
       Equal.cong(Nat, Nat, x => 10n+x, m, Nat.add(Nat.mul(quot10(m), 10n), dval(rem10(m))), quot_spec(m))
 
-# a <= b
-def le(a: Nat, b: Nat) -> Bool:
-  match a b:
-    case 0n _:
-      True{}
-    case 1n+p 0n:
-      False{}
-    case 1n+p 1n+q:
-      le(p, q)
-
-def le_succ(a: Nat, b: Nat) -> {le(a, b) == True{} : Bool} -> {le(a, 1n+b) == True{} : Bool}:
-  match a b:
-    case 0n _:
-      e => {==}
-    case 1n+p 0n:
-      e => Empty.absurd({le(1n+p, 1n) == True{} : Bool}, false_true(e))
-    case 1n+p 1n+q:
-      e => le_succ(p, q)(e)
-
 def le_self(n: Nat) -> {le(n, 1n+n) == True{} : Bool}:
   match n:
     case 0n:
@@ -8482,6 +8607,7 @@ def lnew_replay(m: Maybe<&2, KV.Item<KV.Val>>, +t: KV.Trie<KV.Val>, +k: String, 
 # a set changed, made again by its write (SADD or SREM) at time 0
 def mems_replay(+t: KV.Trie<KV.Val>, +k: String, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>, +r: R.Reply, +op: R.SWrite, +sv: KV.Mems, +s0: KV.Mems, +e: Nat, eq: {KV.entry.at(KV.Val, t, k, KV.hash(k)) == Some{KV.Item{KV.VColl{KV.CMems{s0}}, e}} : Maybe<&2, KV.Item<KV.Val>>}, gs: {ch_of(R.swrite(op, False{}, s0)) == R.CMems{op, sv} : R.Change}) -> {Laws.final(R.exec_all(A.ch.effect(k, 1n+e, R.CMems{op, sv}), R.Db{t, n, x, 0n, rr})) == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, 1n+e, r, R.CMems{op, sv}))) : R.Db}:
   %fin_cons(R.Upd{k, R.UMems{op}}, Nil{}, R.Db{t, n, x, 0n, rr}) : {_ == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, 1n+e, r, R.CMems{op, sv}))) : R.Db}
+  %db_upd_eq(t, k, n, x, 0n, rr, R.UMems{op}) : {R.db_of(_) == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, 1n+e, r, R.CMems{op, sv}))) : R.Db}
   %Equal.sym(Maybe<&2, KV.Item<KV.Val>>, KV.entry.at(KV.Val, t, k, KV.hash(k)), Some{KV.Item{KV.VColl{KV.CMems{s0}}, e}}, eq) : {R.db_of(R.upd.put(t, k, KV.hash(k), n, x, 0n, rr, R.ent.code(_), R.upd.v(R.UMems{op}, 0n, R.ent.live(0n, _)))) == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, 1n+e, r, R.CMems{op, sv}))) : R.Db}
   %Equal.sym(Maybe<&2, KV.Item<KV.Val>>, R.ent.live(0n, Some{KV.Item{KV.VColl{KV.CMems{s0}}, e}}), Some{KV.Item{KV.VColl{KV.CMems{s0}}, e}}, live0_ent(Some{KV.Item{KV.VColl{KV.CMems{s0}}, e}})) : {R.db_of(R.upd.put(t, k, KV.hash(k), n, x, 0n, rr, 1n+e, R.upd.v(R.UMems{op}, 0n, _))) == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, 1n+e, r, R.CMems{op, sv}))) : R.Db}
   %put_db(t, k, KV.hash(k), n, x, 0n, rr, 1n+e, R.swrite(op, False{}, s0)) : {_ == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, 1n+e, r, R.CMems{op, sv}))) : R.Db}
@@ -8509,6 +8635,7 @@ def mems_replay_v(w: KV.Val, +t: KV.Trie<KV.Val>, +k: String, +n: Nat, +x: Nat, 
 # entry for the key, by the script of a new set where it held one
 def snew_sadd(+t: KV.Trie<KV.Val>, +k: String, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>, +r: R.Reply, +ms: List<&2, String>, +sv: KV.Mems, eq: {KV.entry.at(KV.Val, t, k, KV.hash(k)) == None{} : Maybe<&2, KV.Item<KV.Val>>}, gn: {KV.mems.of(ms) == sv : KV.Mems}, ne: {List.is_empty(&2, String, ms) == False{} : Bool}) -> {Laws.final(R.exec_all([R.Upd{k, R.UMems{R.SWAdd{ms}}}], R.Db{t, n, x, 0n, rr})) == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, 0n, r, R.CMemsNew{ms, sv}))) : R.Db}:
   %fin_cons(R.Upd{k, R.UMems{R.SWAdd{ms}}}, Nil{}, R.Db{t, n, x, 0n, rr}) : {_ == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, 0n, r, R.CMemsNew{ms, sv}))) : R.Db}
+  %db_upd_eq(t, k, n, x, 0n, rr, R.UMems{R.SWAdd{ms}}) : {R.db_of(_) == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, 0n, r, R.CMemsNew{ms, sv}))) : R.Db}
   %Equal.sym(Maybe<&2, KV.Item<KV.Val>>, KV.entry.at(KV.Val, t, k, KV.hash(k)), None{}, eq) : {R.db_of(R.upd.put(t, k, KV.hash(k), n, x, 0n, rr, R.ent.code(_), R.upd.v(R.UMems{R.SWAdd{ms}}, 0n, R.ent.live(0n, _)))) == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, 0n, r, R.CMemsNew{ms, sv}))) : R.Db}
   %Equal.sym(Bool, List.is_empty(&2, String, ms), False{}, ne) : {R.db_of(R.upd.put(t, k, KV.hash(k), n, x, 0n, rr, 0n, R.sadd.of(_, True{}, ms, KV.mems.adds(ms, KV.mems.empty()), Nat.sub(KV.mems.len(KV.mems.adds(ms, KV.mems.empty())), 0n)))) == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, 0n, r, R.CMemsNew{ms, sv}))) : R.Db}
   %gn : {R.db_of(R.upd.put(t, k, KV.hash(k), n, x, 0n, rr, 0n, R.sadd.of(False{}, True{}, ms, KV.mems.adds(ms, KV.mems.empty()), Nat.sub(KV.mems.len(KV.mems.adds(ms, KV.mems.empty())), 0n)))) == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, 0n, r, R.CMemsNew{ms, _}))) : R.Db}
@@ -14542,13 +14669,6 @@ def ltake(-A: Data, k: Nat, xs: List<&2, A>) -> List<&2, A>:
       Nil{}
     case 1n+j Con{h, t}:
       h <> ltake(A, j, t)
-
-def le_refl(n: Nat) -> {le(n, n) == True{} : Bool}:
-  match n:
-    case 0n:
-      {==}
-    case 1n+p:
-      le_refl(p)
 
 # fuel for the rest of a file is fuel for its suffix
 def le_suffix(p: String, +t: String, +g: Nat) -> {le(String.length(p ++ t), g) == True{} : Bool} -> {le(String.length(t), g) == True{} : Bool}:
