@@ -179,15 +179,15 @@ def gen.pre.ran(ran: Bool, +c: R.Cmd, +code: Nat) -> Pre:
 def gen.pre(ok: Bool, +c: R.Cmd, +code: Nat) -> Pre:
   match ok:
     case False{}:
-      +refused = Nat.add(Nat.mul(Nat.div(code, 4n), 4n), 1n)
+      +refused = R.code.refused(code)
       Pre{refused, Some{[R.Erred{refused, "NOAUTH Authentication required."}]}}
     case True{}:
-      gen.pre.ran(Nat.is_eq(Nat.mod(code, 4n), 0n), c, code)
+      gen.pre.ran(Nat.is_eq(R.code.class(code), 0n), c, code)
 
 # whether a call runs while its client's replies are held back (CLIENT
 # REPLY OFF or SKIP): its reply counts all the same
 def gen.muted(+ok: Bool, +code: Nat, +conn: S.Conn) -> Bool:
-  Bool.and(ok, Bool.and(Nat.is_eq(Nat.mod(code, 4n), 0n), Bool.not(mute.on(S.conn.mode(conn)))))
+  Bool.and(ok, Bool.and(Nat.is_eq(R.code.class(code), 0n), Bool.not(mute.on(S.conn.mode(conn)))))
 
 def gen.errs(xs: Maybe<&2, List<&2, R.Erred>>, +rs1: List<&2, R.Reply>, +code: Nat) -> List<&2, R.Erred>:
   match xs:
@@ -2974,7 +2974,7 @@ def oom.msg() -> String:
 def sh.refused(+c: R.Cmd, +code: Nat) -> Sh:
   match c:
     case R.Own{R.SBad{R.RError{+m}}}:
-      Bool.pick(Sh, Nat.is_eq(Nat.div(code, 4n), R.stat.top(162n)), ShAbort{abort.why(m)}, ShRefuse{})
+      Bool.pick(Sh, Nat.is_eq(R.code.key(code), R.stat.top(162n)), ShAbort{abort.why(m)}, ShRefuse{})
     case _:
       ShRefuse{}
 
@@ -3017,7 +3017,7 @@ def sh.plain(+c: R.Cmd, +code: Nat, +ds: R.Ds) -> Sh:
     case R.Own{R.SRewrite{}}:
       ShRewrite{}
     case R.Own{R.SBad{R.RError{+m}}}:
-      sh.abort.if(Nat.is_eq(Nat.div(code, 4n), R.stat.top(162n)), m)
+      sh.abort.if(Nat.is_eq(R.code.key(code), R.stat.top(162n)), m)
     case _:
       ShRun{}
 
@@ -3039,7 +3039,7 @@ def sh.queue.if(refused: Bool, +c: R.Cmd, +code: Nat) -> Sh:
       ShQueue{}
 
 def sh.queue(+c: R.Cmd, +code: Nat) -> Sh:
-  sh.queue.if(Nat.is_eq(Nat.mod(code, 4n), 1n), c, code)
+  sh.queue.if(Nat.is_eq(R.code.class(code), 1n), c, code)
 
 # a command of a client in MULTI (may: whether it may run)
 def sh.multi(may: Bool, +c: R.Cmd, +code: Nat) -> Sh:
@@ -3069,8 +3069,8 @@ def sh.multi(may: Bool, +c: R.Cmd, +code: Nat) -> Sh:
 # when the parser failed them; any other is refused (EXEC aborts its
 # transaction with why)
 def sh.deny(+code: Nat) -> Sh:
-  +key = Nat.div(code, 4n)
-  Bool.pick(Sh, Bool.or(Nat.is_eq(Nat.mod(code, 4n), 1n), sub.allowed(key)), ShRun{}, ShDeny{R.stat.name(key)})
+  +key = R.code.key(code)
+  Bool.pick(Sh, Bool.or(Nat.is_eq(R.code.class(code), 1n), sub.allowed(key)), ShRun{}, ShDeny{R.stat.name(key)})
 
 def sh.echo(ping: Bool, m: String, +code: Nat) -> Sh:
   match ping:
@@ -3095,7 +3095,7 @@ def sh.sub(+c: R.Cmd, +code: Nat) -> Sh:
     case R.Ping{}:
       ShPing{""}
     case R.Echo{m}:
-      sh.echo(Nat.is_eq(Nat.div(code, 4n), R.stat.top(1n)), m, code)
+      sh.echo(Nat.is_eq(R.code.key(code), R.stat.top(1n)), m, code)
     case R.Own{R.SQuit{}}:
       ShRun{}
     case R.Own{R.SReset{}}:
@@ -3159,7 +3159,7 @@ def sh.of.may(may: Bool, subd: Bool, inm: Bool, mon: Bool, held: Bool, +c: R.Cmd
     case True{} True{}:
       sh.held(held, sh.sub(c, code))
     case True{} False{}:
-      sh.held(held, sh.mon(Bool.and(mon, Bool.and(R.stat.keyspace(Nat.div(code, 4n)), Bool.not(Nat.is_eq(Nat.mod(code, 4n), 1n)))), inm, c, code, ds))
+      sh.held(held, sh.mon(Bool.and(mon, Bool.and(R.stat.keyspace(R.code.key(code)), Bool.not(Nat.is_eq(R.code.class(code), 1n)))), inm, c, code, ds))
     case False{} _:
       sh.of.noauth(inm, c, code)
 
@@ -3185,8 +3185,8 @@ def sh.oom.multi(+c: R.Cmd) -> Bool:
       True{}
 
 def sh.oomy(+inm: Bool, +c: R.Cmd, +code: Nat) -> Bool:
-  Bool.and(Bool.not(Nat.is_eq(Nat.mod(code, 4n), 1n)),
-    Bool.or(R.stat.denyoom(Nat.div(code, 4n)), Bool.and(inm, sh.oom.multi(c))))
+  Bool.and(Bool.not(Nat.is_eq(R.code.class(code), 1n)),
+    Bool.or(R.stat.denyoom(R.code.key(code)), Bool.and(inm, sh.oom.multi(c))))
 
 def sh.of.run(rej: Bool, may: Bool, subd: Bool, inm: Bool, mon: Bool, held: Bool, +c: R.Cmd, +code: Nat, +ds: R.Ds) -> Sh:
   match rej:
@@ -3419,7 +3419,7 @@ def mon.redact(+key: Nat, xs: List<&2, String>) -> List<&2, String>:
 # whether a call of code that ran (may: its client may run it) sends a
 # line: one the parser did not refuse, of a command not administrative
 def mon.ran(+may: Bool, +code: Nat) -> Bool:
-  Bool.and(may, Bool.and(Bool.not(Nat.is_eq(Nat.mod(code, 4n), 1n)), Bool.not(R.stat.unseen(Nat.div(code, 4n)))))
+  Bool.and(may, Bool.and(Bool.not(Nat.is_eq(R.code.class(code), 1n)), Bool.not(R.stat.unseen(R.code.key(code)))))
 
 # whether a command of a batch sends a line, by what the shell did with
 # it (q: a QUIT before it dropped it)
@@ -3531,7 +3531,7 @@ def fed.held(f: Fed) -> Fed:
 def bg.fed(+id: Nat, +k: Nat, +m0: S.Mute, got: Got, g: LRun) -> Fed:
   match got g:
     case Got{args, rest} LRun{rs, es, +conn, srv, +ds, ws, up, tx, +pb}:
-      +line = mon.line(R.ds.now(ds), S.conn.db(conn), ps.addr(id, pb), mon.redact(Nat.div(k, 4n), args))
+      +line = mon.line(R.ds.now(ds), S.conn.db(conn), ps.addr(id, pb), mon.redact(R.code.key(k), args))
       Fed{LRun{mon.mine(mon.self(ps.mon.is(id, pb), m0, conn), line, rs), es, conn, srv, ds, ws, up, tx, ps.mon.push(id, "+" ++ line ++ "\r\n", pb)}, rest}
     case Got{args, rest} LHeld{h}:
       Fed{LHeld{h}, rest}
@@ -3560,7 +3560,7 @@ type Xr is Data:
 def bg.x.fed(+id: Nat, +k: Nat, +m0: S.Mute, got: Got, g: LRun, mine: List<&2, String>) -> Xr:
   match got g:
     case Got{args, rest} LRun{rs, es, +conn, srv, +ds, ws, up, tx, +pb}:
-      +line = mon.line(R.ds.now(ds), S.conn.db(conn), ps.addr(id, pb), mon.redact(Nat.div(k, 4n), args))
+      +line = mon.line(R.ds.now(ds), S.conn.db(conn), ps.addr(id, pb), mon.redact(R.code.key(k), args))
       Xr{LRun{rs, es, conn, srv, ds, ws, up, tx, ps.mon.push(id, "+" ++ line ++ "\r\n", pb)}, mon.add(mon.self(ps.mon.is(id, pb), m0, conn), line, mine)}
     case Got{args, rest} LHeld{h}:
       Xr{LHeld{h}, mine}
@@ -3856,7 +3856,7 @@ def mine.or(m: Maybe<&2, Mine>) -> Mine:
 
 # the name of the command of code w (its channel's mark: 0 before any)
 def cl.cmd.of(+w: U32) -> String:
-  +k = Nat.div(U32.to_nat(w), 4n)
+  +k = R.code.key(U32.to_nat(w))
   Bool.pick(String, Nat.is_eq(k, 0n), "NULL", R.stat.name(k))
 
 # whole seconds between two times in ms, as Redis subtracts its unixtime
@@ -4353,8 +4353,8 @@ def pz.over(+p: Pz, +now: Nat) -> Bool:
 # (Redis holds back a script that does not declare no-writes, and runs
 # it after)
 def code.pausable(+code: Nat) -> Bool:
-  +k = Nat.div(code, 4n)
-  Bool.and(R.stat.pausable(k), Bool.not(Bool.and(Nat.is_eq(k, R.stat.top(65n)), Nat.is_eq(Nat.mod(code, 4n), 2n))))
+  +k = R.code.key(code)
+  Bool.and(R.stat.pausable(k), Bool.not(Bool.and(Nat.is_eq(k, R.stat.top(65n)), Nat.is_eq(R.code.class(code), 2n))))
 
 # whether the codes of a transaction's queued commands hold one the
 # pause of writes holds back
@@ -4383,7 +4383,7 @@ def pause.holds(+p: Pz, +mon: Bool, +c: R.Cmd, +code: Nat, +id: Nat, +tx: Tx) ->
     case PzOff{}:
       False{}
     case PzOn{+all, end}:
-      Bool.and(Bool.not(Bool.or(mon, Nat.is_eq(Nat.mod(code, 4n), 1n))), Bool.or(all, Bool.or(code.pausable(code), pause.exec(c, id, tx))))
+      Bool.and(Bool.not(Bool.or(mon, Nat.is_eq(R.code.class(code), 1n))), Bool.or(all, Bool.or(code.pausable(code), pause.exec(c, id, tx))))
 
 # the clients the pause held back (hit: whether the first of ws is one),
 # in the order they came, their batches to go on (up, newest first), from
@@ -4526,7 +4526,7 @@ def bg.x.cmd(may: Bool, +id: Nat, +back: Chan(Ans), +inb: Nat, +n: Nat, +c: R.Cm
     case True{} R.Ping{}:
       bg.x.pong(id, "", c, code, g)
     case True{} R.Echo{+m}:
-      bg.x.echo(Nat.is_eq(Nat.div(code, 4n), R.stat.top(1n)), id, m, c, code, g)
+      bg.x.echo(Nat.is_eq(R.code.key(code), R.stat.top(1n)), id, m, c, code, g)
     case _ _:
       bg.one(c, code, g)
 
@@ -4565,7 +4565,7 @@ def codes.denyoom(+ks: List<&2, Nat>) -> Bool:
     case Nil{}:
       False{}
     case Con{+k, rest}:
-      Bool.or(R.stat.denyoom(Nat.div(k, 4n)), codes.denyoom(rest))
+      Bool.or(R.stat.denyoom(R.code.key(k)), codes.denyoom(rest))
 
 def tx.denyoom(+t: Tx) -> Bool:
   match t:
@@ -4588,7 +4588,7 @@ def bg.exec.go(mine: Tx, others: Tx, +id: Nat, +back: Chan(Ans), +inb: Nat, +cod
 def bg.exec.oom(oom: Bool, mine: Tx, others: Tx, +id: Nat, +back: Chan(Ans), +inb: Nat, +code: Nat, rs: List<&2, R.Reply>, es: List<&2, A.Ent>, conn: S.Conn, srv: S.Srv, +ds: R.Ds, ws: Waits, up: List<&2, Up>, pb: Ps) -> LRun:
   match oom:
     case True{}:
-      bg.one(R.Own{R.SBad{R.RError{"EXECABORT Transaction discarded because of: " ++ abort.why(oom.msg())}}}, Nat.add(Nat.mul(Nat.div(code, 4n), 4n), 1n), LRun{rs, es, conn, srv, ds, ws, up, others, pb})
+      bg.one(R.Own{R.SBad{R.RError{"EXECABORT Transaction discarded because of: " ++ abort.why(oom.msg())}}}, R.code.refused(code), LRun{rs, es, conn, srv, ds, ws, up, others, pb})
     case False{}:
       bg.exec.go(mine, others, id, back, inb, code, rs, es, conn, srv, ds, ws, up, pb)
 
@@ -4618,7 +4618,7 @@ def bg.cmd(+id: Nat, +back: Chan(Ans), +inb: Nat, sh: Sh, +c: R.Cmd, +code: Nat,
     case ShExec{}:
       bg.serve(bg.exec(id, back, inb, code, g))
     case ShAbort{m}:
-      bg.one(R.Own{R.SBad{R.RError{"EXECABORT Transaction discarded because of: " ++ m}}}, Nat.add(Nat.mul(Nat.div(code, 4n), 4n), 1n), bg.close(id, g))
+      bg.one(R.Own{R.SBad{R.RError{"EXECABORT Transaction discarded because of: " ++ m}}}, R.code.refused(code), bg.close(id, g))
     case ShDiscard{}:
       bg.say(R.r_ok(), code, bg.close(id, g))
     case ShWatch{ks}:
@@ -4638,7 +4638,7 @@ def bg.cmd(+id: Nat, +back: Chan(Ans), +inb: Nat, sh: Sh, +c: R.Cmd, +code: Nat,
     case ShPing{m}:
       bg.say(R.RArray{[R.RBulk{"pong"}, R.RBulk{m}]}, code, g)
     case ShDeny{name}:
-      bg.one(R.Own{R.SBad{R.RError{"ERR " ++ sub.deny(name)}}}, Nat.add(Nat.mul(Nat.div(code, 4n), 4n), 1n), g)
+      bg.one(R.Own{R.SBad{R.RError{"ERR " ++ sub.deny(name)}}}, R.code.refused(code), g)
     case ShClient{op, +argv}:
       bg.client(id, op, argv, inb, None{}, code, g)
     case ShConn{}:
@@ -4648,9 +4648,9 @@ def bg.cmd(+id: Nat, +back: Chan(Ans), +inb: Nat, sh: Sh, +c: R.Cmd, +code: Nat,
     case ShRewrite{}:
       bg.rewrite(False{}, code, g)
     case ShOom{inm}:
-      bg.one(R.Own{R.SBad{R.RError{oom.msg()}}}, Nat.add(Nat.mul(Nat.div(code, 4n), 4n), 1n), bg.oom.tx(inm, g))
+      bg.one(R.Own{R.SBad{R.RError{oom.msg()}}}, R.code.refused(code), bg.oom.tx(inm, g))
     case ShMonDeny{inm}:
-      bg.one(R.Own{R.SBad{R.RError{"ERR Replica can't interact with the keyspace"}}}, Nat.add(Nat.mul(Nat.div(code, 4n), 4n), 1n), bg.mon.bad(inm, g))
+      bg.one(R.Own{R.SBad{R.RError{"ERR Replica can't interact with the keyspace"}}}, R.code.refused(code), bg.mon.bad(inm, g))
     case ShPause{}:
       bg.postpone(id, back, c, code, rest, more, a, g)
 

@@ -192,7 +192,7 @@ def stats.run.if(none: Bool, es: List<&2, Ent>, +code: Nat, +n: Nat) -> List<&2,
     case True{}:
       es
     case False{}:
-      stats.run.at(es, Nat.div(code, 4n), Nat.mod(code, 4n), n)
+      stats.run.at(es, R.code.key(code), R.code.class(code), n)
 
 def stats.runs(rs: List<&2, Nat>, es: List<&2, Ent>) -> List<&2, Ent>:
   match rs:
@@ -200,7 +200,7 @@ def stats.runs(rs: List<&2, Nat>, es: List<&2, Ent>) -> List<&2, Ent>:
       es
     case Con{+r, rest}:
       +code = R.run.code(r)
-      stats.runs(rest, stats.run.if(Nat.is_lt(code, 4n), es, code, R.run.n(r)))
+      stats.runs(rest, stats.run.if(Nat.is_eq(R.code.key(code), 0n), es, code, R.run.n(r)))
 
 # an error reply of a call of code k: one more of its error code, and of
 # all; a call that ran (class 0) failed with it (the parser's errors are
@@ -208,7 +208,7 @@ def stats.runs(rs: List<&2, Nat>, es: List<&2, Ent>) -> List<&2, Ent>:
 def stats.err.ent(ran: Bool, es: List<&2, Ent>, +k: Nat) -> List<&2, Ent>:
   match ran:
     case True{}:
-      ents.add(es, Nat.div(k, 4n), 0n, 0n, 1n)
+      ents.add(es, R.code.key(k), 0n, 0n, 1n)
     case False{}:
       es
 
@@ -216,12 +216,12 @@ def stats.err(st: Stats, +k: Nat, +m: String) -> Stats:
   match st:
     case Stats{es, cur, pend, +errs, total}:
       +c = err.code(m)
-      Stats{stats.err.ent(Bool.and(Nat.is_eq(Nat.mod(k, 4n), 0n), Nat.is_lt(3n, k)), es, k), cur, pend, errs.add(errs, c, errs.cmp(c, errs)), big.add(total, 1n)}
+      Stats{stats.err.ent(Bool.and(Nat.is_eq(R.code.class(k), 0n), Nat.is_lt(0n, R.code.key(k))), es, k), cur, pend, errs.add(errs, c, errs.cmp(c, errs)), big.add(total, 1n)}
 
 def stats.failed(st: Stats, +k: Nat) -> Stats:
   match st:
     case Stats{es, cur, pend, errs, total}:
-      Stats{ents.add(es, Nat.div(k, 4n), 0n, 0n, 1n), cur, pend, errs, total}
+      Stats{ents.add(es, R.code.key(k), 0n, 0n, 1n), cur, pend, errs, total}
 
 def stats.errs(xs: List<&2, R.Erred>, st: Stats) -> Stats:
   match xs:
