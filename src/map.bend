@@ -1186,9 +1186,16 @@ def touch.node(-V: Data, t: Trie<V>, +h: U32, d: Nat, acc: U32) -> U32:
 def touch.entry(-V: Data, t: Trie<V>, +h: U32, acc: U32) -> U32:
   tetouch(V, 5n, t, hex(h), h, acc)
 
+# k's entry. The bucket is held while bent reads it, and dropped after:
+# Bend makes a parameter owned for every caller when one caller gives it
+# a value it does not keep, as bent(V, k, tget_h(..)) would give the
+# bucket, and bent owning its bucket would make the walk that reads the
+# keyspace for it (tget_ke) own, and copy, every node it passes.
 def entry(-V: Data, t: Trie<V>, +k: String) -> Maybe<&2, Item<V>>:
   +h = hash(k)
-  bent(V, k, tget_h(V, 5n, t, hex(h), h))
+  b = tget_h(V, 5n, t, hex(h), h)
+  m = bent(V, k, b)
+  m
 
 # k's entry, h being k's hash
 def entry.at(-V: Data, +t: Trie<V>, +k: String, +h: U32) -> Maybe<&2, Item<V>>:

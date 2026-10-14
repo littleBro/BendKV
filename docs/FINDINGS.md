@@ -4205,6 +4205,36 @@ and in pipelines of one command, two with a WRONGTYPE among them, and a ZRANGE o
 negative scores. On the build before, BendKV counted 2,087 error replies where Redis
 counted 2.
 
+## 3zzc. Reads of the keyspace that borrow it
+
+**What was left.** A parameter is owned for every caller when one caller gives it a
+value it does not keep (section 3zm). Three callers did so to the reads of a key's
+entry: `KV.entry` gave `bent` the bucket `tget_h` answers, so that `bent`, the walk
+`tget_ke` that gives it its bucket, and `entry.at` owned what they read; and OBJECT,
+HRANDFIELD, MEMORY USAGE, SRANDMEMBER and ZRANDMEMBER, and the server's reads for WATCH
+and the clients that wait, gave `R.db.ent` and `R.db.entry` the database `R.ds.focused`
+answers. Every command that reads a key's entry before it runs (LLEN, HGET, SISMEMBER,
+ZSCORE, and the writes of a collection) then copied the database's record, which the
+actor keeps, and the five nodes on the key's path, and dropped the copies after.
+
+**The change.** `KV.entry` holds the bucket in a variable and calls `bent` before its
+tail, which lends the bucket; the session and the server read the focus with `R.ds.ent`
+and `R.ds.entry`, which lend its record, and a database out of focus with `R.dbs.entry`.
+41 parameters that were owned are borrowed now, among them those of the eviction's and
+the sweep's reads of the keyspace. They were found by logging, in a copy of the
+compiler, which call made which parameter owned. No proof changed.
+
+**What it gives** (`tools/colls.sh`: instructions per command under callgrind, one
+request at a time, collections of 100,000 members): LLEN 15,874 (19,794 before, −20%),
+LPUSH 18,264 (23,523, −22%), HGET 16,990 (20,906, −19%), HSET 28,412 (33,659, −16%),
+SADD 26,341 (31,615, −17%), ZSCORE 17,751 (21,698, −18%), ZADD 25,324 (29,144, −13%);
+GET and SET as before (14,307 and 15,184), and GET, SET and INCR pipelined too (3,334,
+4,259 and 4,550). The eviction of 200,000 keys to a tenth of their memory takes 1.03 s
+(allkeys-lru, 1.62 s before) and 1.4 s (allkeys-random, 5.1 s). A read of a collection
+costs a GET and the read of the collection now. A write still copies the path of the
+collection it changes and drops the old one's, since the keyspace holds the old version
+while the command makes the new one: the update in place of section 3zm is what is left.
+
 ## 4. Where a request's time goes, and hiding the memory waits
 
 With the eight patches, BendKV ran fewer instructions on GET and SET than Redis, missed

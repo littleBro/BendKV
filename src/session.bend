@@ -2706,15 +2706,15 @@ def own_reply(+o: R.SessOp, +c: Conn, +s: Srv, +ds: R.Ds) -> Maybe<&2, R.Reply>:
     case R.STime{}:
       say(conn.mode(c), time.reply(R.ds.now(ds)))
     case R.SObject{+sub, +k}:
-      say(conn.mode(c), obj.reply(sub, R.db.ent(R.ds.focused(ds), k), srv.cfg(s), obj.use(sub, 0, R.ds.now(ds), I.info.start(srv.info(s)), mm.lfu(srv.mm(s)), mm.lfd(srv.mm(s)))))
+      say(conn.mode(c), obj.reply(sub, R.ds.ent(ds, k), srv.cfg(s), obj.use(sub, 0, R.ds.now(ds), I.info.start(srv.info(s)), mm.lfu(srv.mm(s)), mm.lfd(srv.mm(s)))))
     case R.SCopy{+args}:
       say(conn.mode(c), copy.reply(copy.of(args, c, s), ds))
     case R.SLcs{args}:
       say(conn.mode(c), lcs.reply(args, R.ds.focused(ds), srv.cfg(s)))
     case R.SHRandField{+k, args}:
-      say(conn.mode(c), hr.reply(hr.args(args), R.db.ent(R.ds.focused(ds), k), KV.mix(srv.rng(s))))
+      say(conn.mode(c), hr.reply(hr.args(args), R.ds.ent(ds, k), KV.mix(srv.rng(s))))
     case R.SMemUsage{+k, args}:
-      say(conn.mode(c), mem.usage(mem.opts(args, None{}), k, R.db.ent(R.ds.focused(ds), k)))
+      say(conn.mode(c), mem.usage(mem.opts(args, None{}), k, R.ds.ent(ds, k)))
     case R.SReply{r}:
       say(conn.mode(c), r)
     case R.SBad{r}:
@@ -2724,9 +2724,9 @@ def own_reply(+o: R.SessOp, +c: Conn, +s: Srv, +ds: R.Ds) -> Maybe<&2, R.Reply>:
     case R.SSPop{+k, args}:
       say(conn.mode(c), sp.reply(sp.args(args), k, KV.mix(srv.rng(s)), R.ds.focused(ds)))
     case R.SSRandMember{+k, args}:
-      say(conn.mode(c), sr.reply(sr.args(args), R.db.ent(R.ds.focused(ds), k), KV.mix(srv.rng(s))))
+      say(conn.mode(c), sr.reply(sr.args(args), R.ds.ent(ds, k), KV.mix(srv.rng(s))))
     case R.SZRandMember{+k, args}:
-      say(conn.mode(c), zr.reply(zr.args(args), R.db.ent(R.ds.focused(ds), k), KV.mix(srv.rng(s))))
+      say(conn.mode(c), zr.reply(zr.args(args), R.ds.ent(ds, k), KV.mix(srv.rng(s))))
     case R.SBlock{+id, args}:
       say(conn.mode(c), blk.reply(blk.parse(id, args), R.ds.focused(ds)))
     case R.SUnblock{i, e}:

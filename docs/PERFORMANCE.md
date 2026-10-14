@@ -6618,3 +6618,81 @@ looked at the bytes first and among the replies only when they had a `-`: the re
 were then held across their encoding, which every batch paid for, not only those it
 looked at: GET 3,905 (+17%), SET 4,586 (+8%), INCR 5,193 (+14%). Looking at the replies
 first, as the batches of several codes do, hands them to the encoder after.
+
+## 53. Reads of the keyspace that borrow it
+
+**What was left** (sections 38 and 51). The compiler makes a parameter owned for every
+caller when one caller gives it a value it does not keep: a value made for the call, or
+the last use of a value the caller owns passed in a tail call. Three callers did so to
+the reads of a key's entry:
+
+- `KV.entry` gave `bent` the bucket that `tget_h` answers (`bent(V, k, tget_h(..))`), so
+  `bent` owned its bucket; `tget_ke`, the walk that reads a key's entry and gives it its
+  bucket, owned the trie it walks; and `entry.at`, which gives it the trie, owned it
+  too.
+- OBJECT, HRANDFIELD, MEMORY USAGE, SRANDMEMBER and ZRANDMEMBER gave `R.db.ent` the
+  database `R.ds.focused` answers, and the server's `ds.entry.at` gave `R.db.entry` the
+  same: `db.ent` and `db.entry` owned their database.
+
+Every command that reads a key's entry first (LLEN, HGET, SISMEMBER, ZSCORE, and the
+writes of a collection: LPUSH, HSET, SADD, ZADD, ...) then took the database's record,
+which the actor keeps, so a copy of it (`ctr_take` of a shared node), and walked the
+trie owning it: a copy of each of the five nodes on the key's path (`ctr_own`), sixteen
+counts raised and fifteen dropped at each, and the copies dropped after.
+
+**The change.** `KV.entry` holds the bucket in a variable and calls `bent` before its
+tail (`b = tget_h(..); m = bent(V, k, b); m`): it drops the bucket after the call, which
+lends it to `bent`. The session reads the focus with `R.ds.ent`, and the server with
+`R.ds.entry` (new): a match on the databases that lends the focus's record. A database
+out of focus is read with `R.dbs.entry` (new) from the list of the databases, held while
+it reads. 41 parameters that were owned are borrowed now: `db.ent`, `db.entry`,
+`ds.ent`, `ds.has`, `entry.at`, `tget_ke` and `bent`; those of the eviction's reads of
+the keyspace (24 of `evict.*`, `pool.pick`, `keys.has`) and of the sweep of expired keys
+(`reap`, `reap.of`, `reap.keys`); and those of the reads of LMPOP, LMOVE, SMOVE and
+RENAME (`lmpop.first`, `lmpop.head`, `mv.find`, `smv.of`, `ren.find`). The two new
+functions own theirs: the server calls them, for WATCH and the clients that wait, with
+databases it gives. The proofs see these reads as values, and `KV.entry`'s variables
+reduce away: no proof changed.
+
+**Measured** (`tools/colls.sh`, new: instructions per command under callgrind, one
+client, one request at a time; a list, a hash, a set and a sorted set of 100,000 members
+each):
+
+| command | before | now | |
+|---|---:|---:|---:|
+| GET | 14,337 | 14,307 | |
+| SET | 15,375 | 15,184 | |
+| LLEN | 19,794 | 15,874 | −20% |
+| LINDEX 0 | 21,972 | 18,055 | −18% |
+| LPUSH | 23,523 | 18,264 | −22% |
+| LPOP | 22,881 | 17,601 | −23% |
+| HGET | 20,906 | 16,990 | −19% |
+| HSET of a field there | 33,659 | 28,412 | −16% |
+| HSET of a new field | 33,077 | 27,818 | −16% |
+| HINCRBY | 34,471 | 29,219 | −15% |
+| SISMEMBER | 21,002 | 17,105 | −19% |
+| SADD of a new member | 31,615 | 26,341 | −17% |
+| SPOP | 143,557 | 136,037 | −5% |
+| ZSCORE | 21,698 | 17,751 | −18% |
+| ZADD of a member there | 29,144 | 25,324 | −13% |
+| ZINCRBY | 75,752 | 70,239 | −7% |
+| GET, SET, INCR pipelined (`make perfcheck`) | 3,334, 4,257, 4,548 | 3,334, 4,259, 4,550 | |
+
+The eviction reads the keyspace for each key it samples. 200,000 keys, then maxmemory
+set as in section 50, the time until the memory is within the limit (runs of two or
+three):
+
+| | before | now |
+|---|---:|---:|
+| to a tenth, allkeys-lru | 1.62 s, 10,224 keys left | 1.03 s, 10,880 left |
+| to a half, allkeys-lru | 1.0 s, 66,000 left | 0.6 s, 71,500 left |
+| to a tenth, allkeys-random | 5.1 s, 10,200 left | 1.4 s, 10,250 left |
+
+**What is left.** A read of a collection costs a GET and the read of the collection now,
+1,600 to 3,700 instructions more. A write still copies the path of the collection it
+changes, since the keyspace holds the old version while the command makes the new one,
+and the keyspace drops the old version's path after: of HSET's 28,412 instructions,
+5,290 are the drops of the old path (in `bkeep.go`, which puts the new hash in its
+place) and 2,652 the copies of the path (`ctr_own` in `tmod_h` and `bset.go`). Taking
+the value out of the keyspace before the change, and putting the new one back, would
+save both (section 3zm).
