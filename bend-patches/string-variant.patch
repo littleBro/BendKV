@@ -1,0 +1,372 @@
+diff --git a/bend2/comp.ts b/bend2/comp.ts
+index 2a631a3..7a66884 100644
+--- a/bend2/comp.ts
++++ b/bend2/comp.ts
+@@ -83,6 +83,7 @@ type File = {
+   brws: Map<Name, boolean[]>;
+   rdrs: Map<string, boolean>;
+   nodes: Map<Name, Lay>;
++  svars: Map<Name, Name | null>;
+   lays: Map<string, Lay>;
+   lay_ids: Map<Lay, number>;
+   memo: {
+@@ -1182,6 +1183,47 @@ function str_fields(sc: Scope, t: string): Val[] {
+     node.ks), node));
+ }
+ 
++// A datatype with one constructor whose one field is a String (as a
++// value that is a string or else a collection) boxes that constructor as
++// the String itself, with no node: a box of the datatype that is no node
++// or packed word of its other constructors (term_is) is that String. A
++// CPU-only program does so, on the C lane: its Strings are packed, and
++// none is a constructor's node or packed word.
++function str_var(k: Name | undefined): Name | null {
++  if (k === undefined || FL.js || !str_pack() || OWNED.includes(k)) {
++    return null;
++  }
++  return memo(FL.svars, k, () => {
++    const tld = FL.book.tlds[k];
++    const cs = tld?.$ === "ADT" ? tld.c.filter((c) => {
++      const ds = ctr_doms(c);
++      return ds.length === 1 && ty_adt(ds[0])?.k === "String";
++    }) : [];
++    return cs.length === 1 ? cs[0].k : null;
++  });
++}
++
++// the datatype of constructor k
++function ctr_dt(k: Name): Name | undefined {
++  const ctr = FL.book.ctrs[k];
++  return ctr ? ty_adt(tele_unbind(ctr.T).ret)?.k : undefined;
++}
++
++// the C test that box t is constructor k's
++function box_is(t: string, k: Name): string {
++  const dt = ctr_dt(k);
++  const sv = str_var(dt);
++  if (sv === null) {
++    return `term_aux(${t}) == ${cid_mac(k)}`;
++  }
++  if (k !== sv) {
++    return `term_is(${t}, ${cid_mac(k)})`;
++  }
++  const os = (FL.book.tlds[dt!] as Bend.ADT).c.filter((c) => c.k !== sv);
++  return os.length === 0 ? "1"
++    : `!(${os.map((c) => `term_is(${t}, ${cid_mac(c.k)})`).join(" || ")})`;
++}
++
+ function facts_packed(t: HTerm): boolean {
+   const s = term_strip(t);
+   return s.$ === "Ctr" && lay_packed(lay_node(s.k));
+@@ -1693,6 +1735,7 @@ function file_new(book: Bend.Book, js: boolean): File {
+     brws: new Map(),
+     rdrs: new Map(),
+     nodes: new Map(),
++    svars: new Map(),
+     lays: new Map(),
+     lay_ids: new Map(),
+     memo: {
+@@ -2121,8 +2164,10 @@ function val_to(sc: Scope, v: Val, lay: Lay,
+ }
+ 
+ function val_arms(sc: Scope, lay: Lay, sel: string, read: (k: Name) => Val[],
+-  cond = (t: string, i: number) => `${t} == ${i}`): Val {
++  cond = (t: string, i: number) => `${t} == ${i}`, last = -1): Val {
+   const arms = Object.keys(lay.arms!);
++  const order = arms.map((_, i) => i).filter((i) => i !== last)
++    .concat(last < 0 ? [] : [last]);
+   const ws = (al: Scope, k: Name) => read(k).flatMap((f, j) =>
+     val_to(al, f, lay.arms![k][j]).ws);
+   if (arms.length <= 1) {
+@@ -2132,9 +2177,9 @@ function val_arms(sc: Scope, lay: Lay, sel: string, read: (k: Name) => Val[],
+   const t = emit_alias(sc, sel, "t");
+   const rs: string[][] = out.map(() => []);
+   const os: (string[] | undefined)[][] = out.map(() => []);
+-  emit_chain(sc, (i) => cond(t, i), arms.map((k, i) => () => {
++  emit_chain(sc, (j) => cond(t, order[j]), order.map((i) => () => {
+     file_push(sc, `${out[0]} = ${i};`);
+-    ws({ ...sc, spares: [] }, k).forEach((w, n) => {
++    ws({ ...sc, spares: [] }, arms[i]).forEach((w, n) => {
+       rs[1 + n].push(sc.brwl.get(w) ?? "");
+       os[1 + n].push(sc.orig.get(w));
+       file_push(sc, `${out[1 + n]} = ${w};`);
+@@ -2164,8 +2209,11 @@ function val_box(sc: Scope, v: Val): string {
+     return val_own(sc, v)[0];
+   }
+   const arms = Object.keys(v.lay.arms);
+-  const build = (bl: Scope, k: Name) => ctr_build(bl, k, val_arm(v, k).flatMap(
+-    (f, j) => val_own(bl, val_to(bl, f, lay_node(k).arms![k][j]))));
++  const sv = str_var(ctr_dt(arms[0]));
++  const build = (bl: Scope, k: Name) => k === sv
++    ? val_own(bl, val_to(bl, val_arm(v, k)[0], BOX))[0]
++    : ctr_build(bl, k, val_arm(v, k).flatMap(
++      (f, j) => val_own(bl, val_to(bl, f, lay_node(k).arms![k][j]))));
+   if (arms.length <= 1) {
+     return arms.length === 0 ? "0" : build(sc, arms[0]);
+   }
+@@ -2182,8 +2230,11 @@ function val_unbox(sc: Scope, v: Val, lay: Lay,
+     return val_new(v.ws, lay);
+   }
+   const t = emit_alias(sc, v.ws[0], "u");
+-  return val_arms(sc, lay, t, (k) => node_fields(sc, t, k, false, adt),
+-    (_, i) => `term_aux(${t}) == ${cid_mac(Object.keys(lay.arms!)[i])}`);
++  const ks = Object.keys(lay.arms!);
++  const sv = str_var(ctr_dt(ks[0]));
++  return val_arms(sc, lay, t, (k) => k === sv ? [val_new([t], BOX)]
++    : node_fields(sc, t, k, false, adt), (_, i) => box_is(t, ks[i]),
++  sv === null ? -1 : ks.indexOf(sv));
+ }
+ 
+ // Arr
+@@ -2343,7 +2394,8 @@ function memo_gc(): void {
+ // A pure main prints through a descriptor of its type, a node per (type,
+ // layout): 0 U32, 1 F32, 2 Nat, 3 Char, 4 String, 5 Eql, 6 Array (element,
+ // lgs), 7 Data (boxed?, arms; per arm name, cid, fields, bracket, then an
+-// (offset, node) per field). An IO main has none; an unprintable type (a
++// (offset, node) per field). A boxed Data's word is 1 plus twice 1 plus
++// the arm of its String variant (str_var), 0 for none. An IO main has none; an unprintable type (a
+ // function, a Type, an erased or dependent field) refuses the build.
+ 
+ function show_main(): (number | Name)[] | null {
+@@ -2387,7 +2439,8 @@ function show_main(): (number | Name)[] | null {
+       const el = lay_el(adt!.x[0]);
+       refs.push([show.push(0, lay_arr(el).lgs) - 2, adt!.x[0], el]);
+     } else if (kind === 7 && tld?.$ === "ADT") {
+-      show.push(Number(box), tld.c.length);
++      const sv = box ? tld.c.findIndex((c) => c.k === str_var(adt!.k)) : -1;
++      show.push(box ? 1 + 2 * (sv + 1) : 0, tld.c.length);
+       for (const c of tld.c) {
+         const fs = (box ? lay_node(c.k) : lay).arms![c.k];
+         const doms = ctr_tail(c, adt!.x);
+@@ -2935,6 +2988,7 @@ function emit_ctr(sc: Scope, x: Of<"Ctr">, ty: HTerm | null,
+   const out = lay === pos ? v
+     : val_new([x.k === "SCon" && !v.stat && str_pack()
+       ? str_build(sc, val_own(sc, v))
++      : x.k === str_var(adt.k) ? val_own(sc, v)[0]
+       : ctr_build(sc, x.k, val_own(sc, v), stat)], BOX, stat);
+   if (out.stat) {
+     seen.set(x, out);
+@@ -3357,7 +3411,8 @@ function emit_match(sc: Scope, x: Of<"Mat"> | Of<"Efq">,
+       }
+       return e === 1 ? [v] : val_arm(v).slice(0, e);
+     }])
+-    : mat_ctrs(x, adt).map(([k, h]) => {
++    : mat_last(mat_ctrs(x, adt), lay_box(lay) ? str_var(adt.k) : null)
++      .map(([k, h]) => {
+       if (k === "" || k === "_") {
+         return [k && mat_ops((c) => `term_aux(${sw}) == ${cid_mac(c)}`), h,
+           () => [u]];
+@@ -3377,8 +3432,9 @@ function emit_match(sc: Scope, x: Of<"Mat"> | Of<"Efq">,
+         return k === "SNil" ? [`str_nil(${sw})`, h, () => []]
+           : [`!str_nil(${sw})`, h, (al) => str_fields(al, sw)];
+       }
+-      return lay_box(lay) ? [`term_aux(${sw}) == ${cid_mac(k)}`, h,
+-        (al) => node_fields(al, sw, k, true, adt)]
++      return lay_box(lay) ? [box_is(sw, k), h,
++        (al) => k === str_var(adt.k) ? [val_new([sw], BOX)]
++          : node_fields(al, sw, k, true, adt)]
+         : [`${sw} == ${Object.keys(lay.arms!).indexOf(k)}`, h,
+           () => val_arm(u, k)];
+     });
+@@ -3395,6 +3451,15 @@ function emit_match(sc: Scope, x: Of<"Mat"> | Of<"Efq">,
+   }
+ }
+ 
++// the arms with k's last, unless a default arm is: the last arm of a chain
++// is its else, and the test of a String variant is that the box is no
++// other constructor's
++function mat_last(ctrs: [Name, HTerm][], k: Name | null): [Name, HTerm][] {
++  const end = ctrs.at(-1)?.[0];
++  return k === null || end === "" || end === "_" ? ctrs
++    : [...ctrs.filter(([c]) => c !== k), ...ctrs.filter(([c]) => c === k)];
++}
++
+ function emit_chain(sc: Scope, cond: (i: number) => string,
+   bodies: (() => void)[]): void {
+   if (bodies.length === 1) {
+@@ -4805,6 +4870,13 @@ INLINE u64 term_aux(Term t) {
+   return (t >> 40) & 0xFFFF;
+ }
+ 
++// whether t is the node or the packed word of constructor cid: a box of a
++// datatype with a String variant (str_var) that is neither is that String
++INLINE bool term_is(Term t, u32 cid) {
++  u64 g = term_tag(t);
++  return (g == TAG_CTR || g == TAG_PAK) && term_aux(t) == cid;
++}
++
+ INLINE u64 term_loc(Term t) {
+   return t & LOC_MASK;
+ }
+@@ -9378,12 +9450,22 @@ static void show_val(Env e, u32 d, const Term* w, char chain) {
+     default: {
+       Term t   = w[0];
+       bool box = D[d + 1] != 0;
++      u32  sv  = D[d + 1] >> 1;
+       u32  key = box ? (u32)term_aux(t) : D[d + 2] > 1 ? (u32)t : 0;
+       u32  a   = d + 3;
+-      for (u32 i = 0; box ? D[a + 1] != key : i != key; i += 1) {
++      u32  i   = 0;
++      for (; box ? i < D[d + 2] && !(D[a + 1] == key && (sv == 0
++        || (i + 1 != sv && term_is(t, key)))) : i != key; i += 1) {
+         a += 4 + 2 * D[a + 2];
+       }
+-      if (box) {
++      if (box && sv != 0 && i == D[d + 2]) {
++        // no other arm's node: the String variant's String itself
++        for (a = d + 3, i = 0; i + 1 != sv; i += 1) {
++          a += 4 + 2 * D[a + 2];
++        }
++        one = t;
++        w   = &one;
++      } else if (box) {
+         one = term_loc(t);
+         w   = term_tag(t) == TAG_PAK ? &one : e.mem + term_peek(e.mem, t);
+       }
+diff --git a/tests/rfc/str_variant.bend b/tests/rfc/str_variant.bend
+new file mode 100644
+index 0000000..330169d
+--- /dev/null
++++ b/tests/rfc/str_variant.bend
+@@ -0,0 +1,141 @@
++# rfc (rfc_str_variant): a datatype with one constructor whose one field
++# is a String boxes that constructor as the String itself (str_var). A
++# list of V holds each VStr as its String, and a match tells it from the
++# other constructors, packed words (VNum, VNone) and nodes (VPair), by
++# their tags. The strings are empty, immediate, of one chunk and of
++# several. size matches the values owned, tags lent, rec unboxes them into
++# a record; J, a recursive datatype, is matched as a box; main prints
++# both. A VStr read as a node, or a string taken for VNone, shows as a
++# wrong sum; a double free or a lost count as a "bend: error". Expect
++# on every lane:
++#| (75, 164, 22981, 5, [VStr{""}, VStr{"abc"}, VNum{7}, VPair{"x", "yz"}, VNone{}, VStr{"abcd"}], JArr{[JStr{"a"}, JArr{[JStr{""}]}, JStr{"0123456789"}]})
++import Base
++
++type V is Data:
++  VStr{s: String}
++  VNum{n: U32}
++  VPair{a: String, b: String}
++  VNone{}
++
++type J is Data:
++  JStr{s: String}
++  JArr{xs: List<&2, J>}
++
++def len(s: String) -> U32:
++  match s:
++    case SNil{}:
++      0
++    case SCon{c, r}:
++      U32.add(1, len(r))
++
++def long(n: Nat, acc: String) -> String:
++  match n:
++    case 0n:
++      acc
++    case 1n++m:
++      long(m, String.append(acc, "0123456789"))
++
++def vals() -> List<&2, V>:
++  [VStr{""}, VStr{"abc"}, VNum{7}, VStr{"exactly"}, VPair{"x", "yz"}, VNone{}, VStr{long(5n, "")}, VStr{String.append("ab", "cd")}]
++
++# owned matches
++def size(v: V) -> U32:
++  match v:
++    case VStr{s}:
++      len(s)
++    case VNum{n}:
++      n
++    case VPair{a, b}:
++      U32.add(len(a), len(b))
++    case VNone{}:
++      1
++
++def sizes(xs: List<&2, V>) -> U32:
++  match xs:
++    case Nil{}:
++      0
++    case h <> t:
++      U32.add(size(h), sizes(t))
++
++# lent matches: a digit per value, newest last
++def tag(+v: V) -> U32:
++  match v:
++    case VStr{+s}:
++      U32.add(1, U32.mul(len(s), 0))
++    case VNum{n}:
++      2
++    case VPair{+a, +b}:
++      3
++    case VNone{}:
++      0
++
++def tags(+xs: List<&2, V>, acc: U32) -> U32:
++  match xs:
++    case Nil{}:
++      acc
++    case h <> t:
++      tags(t, U32.add(U32.mul(acc, 4), tag(h)))
++
++# a value unboxed into a record and back
++type R is Data:
++  R{v: V, k: U32}
++
++def rec(xs: List<&2, V>) -> List<&2, R>:
++  match xs:
++    case Nil{}:
++      []
++    case Con{+h, t}:
++      R{h, size(h)} <> rec(t)
++
++def rsum(rs: List<&2, R>) -> U32:
++  match rs:
++    case Nil{}:
++      0
++    case R{v, k} <> t:
++      U32.add(U32.add(k, size(v)), rsum(t))
++
++def strs(+xs: List<&2, V>) -> U32:
++  match xs:
++    case Nil{}:
++      0
++    case VStr{+s} <> t:
++      U32.add(1, strs(t))
++    case h <> t:
++      strs(t)
++
++def keep.k(big: Bool, s: String, rest: List<&2, V>) -> List<&2, V>:
++  match big:
++    case True{}:
++      rest
++    case False{}:
++      VStr{s} <> rest
++
++# the values but the strings longer than 6 bytes
++def keep(xs: List<&2, V>) -> List<&2, V>:
++  match xs:
++    case Nil{}:
++      []
++    case VStr{+s} <> t:
++      keep.k(U32.is_gt(len(s), 6), s, keep(t))
++    case h <> t:
++      h <> keep(t)
++
++def jsizes(xs: List<&2, J>) -> U32:
++  match xs:
++    case Nil{}:
++      0
++    case JStr{s} <> t:
++      U32.add(U32.add(1, len(s)), jsizes(t))
++    case JArr{ys} <> t:
++      U32.add(jsizes(ys), jsizes(t))
++
++def jsize(j: J) -> U32:
++  jsizes([j])
++
++def jval() -> J:
++  JArr{[JStr{"a"}, JArr{[JStr{""}]}, JStr{long(1n, "")}]}
++
++def main() -> U32 & U32 & U32 & U32 & List<&2, V> & J:
++  +xs = vals()
++  +j = jval()
++  (U32.add(sizes(xs), U32.mul(100, 0)), U32.add(rsum(rec(xs)), jsize(j)), tags(xs, 0), strs(xs), keep(xs), j)

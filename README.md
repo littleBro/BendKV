@@ -34,7 +34,7 @@ well. BendKV asks how far one can get writing a real, fast server in a language 
 the code that runs is the code that is proved, without a separate model and a
 refinement proof. The answer so far: the verified core is not what makes it slow;
 the data representation of the runtime was, and most of the work went into fixing it
-(31 patches to the Bend compiler, in [`bend-patches/`](bend-patches/): most speed up its
+(32 patches to the Bend compiler, in [`bend-patches/`](bend-patches/): most speed up its
 data representation and its runtime, and the others add what a server needs from the
 system, from the process's directory, id and clock to the files it cuts and the heap's
 account).
@@ -421,7 +421,7 @@ also needs Lean 4.34.0 (through elan).
 
 ```bash
 git clone https://github.com/bendlang/bend ../bend-patched
-sh bend-patches/apply.sh ../bend-patched      # Bend 2.0.35 + 31 patches
+sh bend-patches/apply.sh ../bend-patched      # Bend 2.0.35 + 32 patches
 B="bun ../bend-patched/bend2/main.ts"
 
 make check   BEND="$B"   # check the proofs
@@ -559,7 +559,7 @@ bench/      in-process benchmarks of the map, the core and channels
 tools/      measurement scripts, the runner of Redis's test suite, and the generators of
             the trie, of the parameter table and of the command table, with the facts
             they take from Redis (tools/data/)
-bend-patches/  the 31 patches to the Bend compiler and runtime
+bend-patches/  the 32 patches to the Bend compiler and runtime
 docs/       FINDINGS.md, DIRECTIONS.md, COMPATIBILITY.md, PERFORMANCE.md
 ```
 

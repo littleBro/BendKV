@@ -1196,7 +1196,7 @@ The proofs cover `map.bend`, `redis.bend`, `batch.bend`, `aof.bend`, `session.be
    runtime a 64-bit word with an abort past 2^48−1; `String` in theory is a list, and in
    the C runtime with the patch a chain of byte buffers, and `String.eq`, `String.hash`
    and the other operations on it are C functions. That the runtime agrees with the
-   definitions is not proved. The server is built by Bend with thirty-one patches from
+   definitions is not proved. The server is built by Bend with thirty-two patches from
    [`bend-patches/`](bend-patches/). They are in the trusted base too: checked by Bend's
    test suite and by differential tests against Redis, but not proved. The same goes for
    event loops on several threads, `epoll`, the atomicity of `Chan.send_all`, the writer
@@ -1303,7 +1303,7 @@ The Makefile passes `CC=clang-19` to Bend if there is one: clang 18 ignores the
 `preserve_none` convention, and the code comes out ~8% slower.
 
 ```bash
-# Bend with the patches: a clone of bendlang/bend with the thirty-one patches of bend-patches/ on it;
+# Bend with the patches: a clone of bendlang/bend with the thirty-two patches of bend-patches/ on it;
 # --verdict needs Lean 4.34.0 (elan)
 git clone https://github.com/bendlang/bend ../bend-patched
 sh bend-patches/apply.sh ../bend-patched
@@ -1363,8 +1363,8 @@ make clients BEND="$B" # redis-py's and go-redis's test suites on Redis and on B
    laws of commutativity; LCS. BITFIELD and BITFIELD_RO — fields of up to 64 bits (words
    of two U32 halves) logged as a SETRANGE of the bytes the writes reached. A value is a
    string or a collection, with the WRONGTYPE error, as in Redis, for a command of the
-   wrong type (the basis for types; the price is a node per value, section 31 of
-   PERFORMANCE.md). Hashes (HSET and its kin, HINCRBY, HSCAN, HRANDFIELD; MEMORY USAGE)
+   wrong type (the basis for types; the price was a node per value, section 31 of
+   PERFORMANCE.md, until patch 32 boxed a string as itself, section 56). Hashes (HSET and its kin, HINCRBY, HSCAN, HRANDFIELD; MEMORY USAGE)
    — a small hash in order of the fields' arrival, a large one in a trie of its own, as
    listpack and hashtable in Redis; logged as HSET and HDEL, and a hash over an expired
    key as one EVAL entry of a constant script (the laws of the append-only file require

@@ -9,7 +9,7 @@ numbers are in [tools/](../tools/README.md).
    verification and not from the logic of the commands.** The original SET cost ~390
    heap cell allocations and ~150 atomic reference-count operations. Redis makes a
    handful of allocations per SET.
-2. **Bend itself is fixed by thirty-one patches to the compiler**
+2. **Bend itself is fixed by thirty-two patches to the compiler**
    ([`bend-patches/`](../bend-patches/)). The first eight switch on by themselves for
    programs without GPU calls `!`, the ninth and tenth where a program calls them, the
    eleventh changes every program's event loop on Linux, the twelfth and thirteenth only
@@ -20,8 +20,10 @@ numbers are in [tools/](../tools/README.md).
    a type wider than 32 words as a node of its own (section 16), the twenty-second makes
    `String.order` native (section 39), the twenty-third keeps a socket with no room from
    holding up the `TCP.post` writer (section 40), the twenty-sixth fixes the fifth
-   (section 41), and the thirty-first has a walker that reads a tree borrow it from a
-   caller that owns it (section 51). Seven more only add effects: the twentieth, the
+   (section 41), the thirty-first has a walker that reads a tree borrow it from a caller
+   that owns it (section 51), and the thirty-second keeps the string of a value that is a
+   string or else something else as the string itself, with no node (section 56). Seven
+   more only add effects: the twentieth, the
    process and the clock for starting as `redis-server` does; the twenty-fourth, cutting a
    file of any size and syncing a directory (`File.sync_dir`); the twenty-fifth, waiting
    for a socket on a channel (`TCP.watch`, section 41); the twenty-seventh, a socket's
@@ -4798,7 +4800,7 @@ it reads the node, builds a new one and frees the old. Memory: a million keys wi
 in the compiler, not in BendKV: a type in which one variant holds a String and the rest
 are constructors could keep that variant as the string's own word (a string's tag is not
 a constructor's tag), without a node and without a single change in the proofs. This is
-planned for after the types.
+planned for after the types. (Done: patch 32, section 56.)
 
 ## 32. Hashes
 
@@ -6790,3 +6792,53 @@ an add walks the list twice (the test of the member, then the put) and builds ag
 part it passed. Redis keeps an intset as an array of integers of one width and finds a
 member by binary search. ZADD of a new member and ZINCRBY (−28% and −34% in the
 prototype) still need the test that their write changes the sorted set.
+
+## 56. Strings in the keyspace without a node of their own
+
+**What was left** (section 31). A value is a string or a collection (`KV.Val`: `VStr{s}`
+or `VColl{c}`), and in the keyspace a string lay behind a node of its own: the trie is
+generic in its values (`KV.Trie<V>`), so its entries hold them boxed, and the box of a
+constructor was a node. Every string value cost that node: an allocation on SET, a read
+on GET, a miss of its own once the keyspace outgrows the cache, and a word of memory.
+
+**The change** is in the compiler, patch 32 (`bend-patches/string-variant.patch`): a
+datatype with one constructor whose one field is a `String` boxes that constructor as
+the String itself, and tells the box from the other constructors' by its tag: a node or
+a packed word of one of them (`term_is`, a tag and a constructor id) is theirs, anything
+else is the String, as no String is a constructor's node or packed word. Building
+`VStr{s}` where a box goes is `s`, and a match on a box tests `VColl` first, so the
+string's arm is the else of its test. No line of BendKV changed, nor of its proofs. Bend's
+own tests on the C lane pass with the patch as without it, test by test (740 of 871), and
+its new test with them; BendKV's tests against Redis pass.
+
+**Measured** (instructions per request: `make perfcheck`, 100,000 keys; last-level misses:
+`tools/callgrind_req.sh` with a million keys and a 2 MiB last-level cache; memory: about
+981,000 keys of 3 bytes, `used_memory`):
+
+| | before | now | |
+|---|---:|---:|---:|
+| GET, instructions (100,000 keys) | 3,338 | 3,311 | −0.8% |
+| SET, instructions | 4,259 | 4,075 | −4.3% |
+| INCR, instructions | 4,554 | 4,387 | −3.7% |
+| GET, a million keys: instructions, last-level misses | 3,418, 5.49 | 3,412, 4.18 | −24% misses |
+| SET, a million keys | 4,372, 5.50 | 4,193, 4.48 | −19% misses |
+| INCR, a million keys | 4,911, 7.92 | 4,804, 5.41 | −32% misses |
+| memory, ~981,000 keys of 3 bytes | 63.96 MB | 56.09 MB | −8 bytes a key |
+| collections (`tools/colls.sh`) | | as before (±0.6%) | |
+
+In time (`tools/bench_pairs.sh`, a million keys, pipeline 16, 20 clients, five pairs,
+medians of the pairs' ratios): GET 1.01 of the old build, SET 1.08, INCR 1.03; the
+server's CPU per request: GET 565 + 335 ns before and 540 + 355 now, SET 700 + 340 and
+640 + 340, INCR 855 + 560 and 820 + 500. The cost of section 31 is back for SET and INCR
+(+4.7% and +6.5% of instructions then, −4.3% and −3.7% now) and for memory (one word a
+key); GET reads a string where it lies without taking it, so the node cost it a miss
+more than instructions, and the miss is what it saves.
+
+**The baseline.** CI's perfcheck counted this build's GET at 3,312 in one run and 3,425
+in the next (SET 4,119 and 4,115, INCR 4,419 and 4,421), where the build counts GET at
+3,310 to 3,313 in four runs here; before it, CI counted GET at 3,338 to 3,371 over five
+runs. A baseline at the lower count left the upper one 3.4% past it, beyond the guard's
+3%: GET's baseline stays at 3,371, the middle of what CI has counted, and SET's and
+INCR's are the counts above, 4,119 and 4,419. `tools/perf_guard.sh` prints the CPU of
+the machine that counted after the counts, so that a count far from the others can be
+told from its machine.
