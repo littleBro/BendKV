@@ -81,7 +81,8 @@ COMMANDS = {
     "discard": [], "watch": [], "unwatch": [], "subscribe": [], "unsubscribe": [],
     "psubscribe": [], "punsubscribe": [], "ssubscribe": [], "sunsubscribe": [],
     "publish": [], "spublish": [], "pubsub": ["channels", "help", "numpat", "numsub",
-    "shardchannels", "shardnumsub"], "monitor": [], "bgrewriteaof": []}
+    "shardchannels", "shardnumsub"], "monitor": [], "bgrewriteaof": [], "sort": [],
+    "sort_ro": []}
 
 # Step 1: redis-server -> facts
 # -----------------------------
@@ -233,6 +234,12 @@ KEYNUM = {"eval": "KByEval{}", "lmpop": "KByLmpop{}", "sintercard": "KBySinterca
           "zinterstore": "KByZstore{}", "zdiffstore": "KByZstore{}", "blmpop": "KByBlmpop{}",
           "bzmpop": "KByBlmpop{}"}
 
+# Commands with key specs Redis cannot read (of kind "unknown": the keys
+# SORT's BY and GET patterns name, and its STORE, which may come anywhere
+# among its options): COMMAND GETKEYS runs BendKV's copy of the
+# command's own function (sortGetKeys, sortROGetKeys)
+UNKNOWN = {"sort": "KBySort{}", "sort_ro": "KBySortRo{}"}
+
 def bstr(s):
     if any(ord(ch) > 126 or ord(ch) < 32 for ch in s):
         raise SystemExit("gen_commands.py: a string BendKV would send as other bytes: " + repr(s))
@@ -281,6 +288,8 @@ def desc(info, docs, info3, docs3):
     cats = [c[1:] for c in statuses(info[6])]
     if name in KEYNUM:
         specs, way = [], KEYNUM[name]
+    elif name in UNKNOWN:
+        specs, way = [], UNKNOWN[name]
     else:
         specs = [kspec(name, ks) for ks in info[8]]
         varies = any("variable_flags" in statuses(dict(pairs(ks))["flags"]) for ks in info[8])
@@ -358,7 +367,8 @@ SBEGIN, SEND = "# BEGIN gen_commands: stats\n", "# END gen_commands: stats\n"
 # found, INCRBYFLOAT and HINCRBYFLOAT on values that are not floats and
 # sums that are not finite, a command of a sorted set on a key of another
 # kind (WRONGTYPE, and ZINCRBY's sums that are not a number), ZSCAN on
-# options read once the sorted set is found.
+# options read once the sorted set is found, SORT and SORT_RO on a key of
+# another kind (WRONGTYPE) and on values that are no scores.
 # (SET's time
 # can overflow too, past 9 * 10^18 ms only: SET is left out, so that a
 # batch of SETs needs no look at its replies.)
@@ -375,7 +385,7 @@ RISKY = {"incr", "decr", "incrby", "decrby", "expire", "pexpire", "setex", "pset
          "zrangebylex", "zrevrangebylex", "zrevrange", "zremrangebyrank", "zremrangebyscore",
          "zremrangebylex", "zpopmin", "zpopmax", "zscan", "zunion", "zinter", "zdiff",
          "zintercard", "zunionstore", "zinterstore", "zdiffstore", "zrangestore", "zmpop",
-         "zrandmember"}
+         "zrandmember", "sort", "sort_ro"}
 
 # BendKV's commands that may be replicated (MAY_REPLICATE in Redis's
 # src/commands/*.json), a flag COMMAND INFO hides: a monitor may not run

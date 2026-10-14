@@ -4354,6 +4354,110 @@ fewer instructions per SET and INCR; one word less per key (about 981,000 keys o
 bytes: 63.96 → 56.09 MB); in time, SET ×1.08 and INCR ×1.03, GET as before. Bend's own
 tests pass with the patch as without it, test by test.
 
+## 3zzh. SORT and SORT_RO
+
+**What there is.** SORT and SORT_RO as Redis 7.0.15's `sort.c` runs them. The options are
+read in order, each word compared as Redis compares it (`strcasecmp`, so up to a NUL),
+LIMIT's two numbers as longs; STORE is a syntax error in SORT_RO, as is a word Redis does
+not know or one without its arguments, and every such error comes before the key's type is
+looked at. A list, a set or a sorted set is sorted; a key not there is an empty list, any
+other type WRONGTYPE. BY with a pattern weighs each element by what the pattern names: its
+first `*` (before a NUL) replaced by the element names a key that holds a string, or, with
+`->` after the star and a byte after that, a hash's field; `#` names the element itself. A
+BY whose pattern has no `*` sorts nothing: a list and a sorted set keep their order
+(reversed by DESC), a set its own, but a set whose result is stored is sorted ALPHA, as
+Redis sorts it then, so that what it writes does not hang on its hashtable's order. GET
+answers what its patterns name for each element, a null where nothing is (an empty string
+in a STORE), and LIMIT cuts the result where Redis clamps its start and count.
+
+**Comparisons.** The weights are doubles, read as Redis reads them with strtod: blanks
+first, then the number, and nothing after it but a NUL. A weight that does not read so, or
+reads with a range error (an overflow, or a result below the smallest normal double that
+is not exact, for which glibc sets ERANGE too), or as a NaN, fails the SORT with Redis's
+error ("One or more scores can't be converted into double"); a weight not there counts as
+0, and ties are broken by the elements' bytes. `src/float.bend`'s strtod now tells whether
+its result is tiny and inexact, and `tests/float_test.py` checks the new reader against a
+C one that reads as Redis does (`tests/float_ref.c`), on the numbers the test draws and on
+subnormals at their edges. ALPHA compares bytes up to the first NUL, as strcoll does in
+the C locale, or all of them in a STORE (where Redis compares with memcmp, so that what it
+writes does not hang on the locale), a weight not there first.
+
+**The sort.** Redis calls glibc's qsort, which sorts with a merge sort when it can take
+the memory for a copy of the array (up to a quarter of the machine's), so Redis's sort is
+stable: elements that compare equal keep the order they came in. BendKV's is a bottom-up merge sort: runs of
+two, merged in passes. Bend checks that every recursion ends on a smaller argument, and a
+merge makes one of its two lists smaller, not always the same one, so the merge and the
+passes take a count of steps as their first argument (the number of elements, which
+bounds both). Redis sorts with its own pqsort, which is not stable, when it sorts BY a
+pattern under a LIMIT that does not take all (it sorts only the part it answers); BendKV
+sorts all of it, stably.
+
+**STORE.** SORT with STORE writes its result over its destination as a new list (whatever
+the key held, with no time to live), or deletes the destination when the result is empty,
+and answers the count, with the `sortstore` event (`del` for a delete), as Redis's
+`setKey` and `dbDelete`; a WATCH of the destination sees a change even when the list is
+the one there. In BendKV it is an act of the database in focus (`ASort`): it reads the
+keyspace, makes the list, and runs the write it makes (`R.sort.write`), whose effect is
+logged: the RPUSH of its elements onto a key not there, the EVAL of the lists' script onto
+a key there, the DEL of the destination. Redis logs the SORT as the client sent it, and
+BendKV's load runs it, so a file of Redis's restores as Redis held it. COMMAND GETKEYS
+finds the destination as Redis's `sortGetKeys` does: the last STORE with a word after it,
+LIMIT's two words and GET's and BY's one skipped.
+
+**The laws.** SORT without STORE is a read (`is_read`). Its reply hangs on the keys its
+patterns name, any key of the database, so it is not `keywise`, and any write disturbs it,
+as any write disturbs KEYS: the laws let it swap with reads alone. Its proofs take it as
+they take KEYS, through the spec, the bridge to `R.exec`, the frame, the replay and the
+count of keys (25 proofs), and those of acts take `ASort` as the act of the command it
+computes (`act_split`, `act_inv`, `act_now`, `one_eff`, `counted_act`). The order of the
+sort itself is not proved: the laws speak of which keys SORT reads and writes, and the
+tests of what it answers. `make check` and `make verdict` pass.
+
+**Its cost** (section 57 of PERFORMANCE.md). A SORT of 1,000 integers takes 6.1 million
+instructions, three times Redis's 2.0 million; of 1,000 words with ALPHA, twice Redis's;
+BY a key that holds a double, five times, as strtod in software reads a double that is
+not an integer in about 10,000 instructions; with STORE, nearly six times, as it sorts
+twice, once for the session's reply and once for the act's write. The first version took
+three times as many: its merges counted their runs, ALPHA cut its values at each
+comparison, the patterns were read for each element, and integers digit by digit. A key
+that BY or GET names is read as MGET reads one, about 8,000 instructions, where a whole
+GET takes 3,312: the walk behind `KV.read` takes each node on the key's path from the
+keyspace, which shares it, and so copies it. GET, SET and INCR take what they took, and
+ZADD with an integer score 6.7% less (the powers of two of the float library).
+
+**Tests.** `tests/sort_test.py`: a script of the cases of Redis's unit/sort and of
+`sort.c` (BY with and without a `*`, hash fields, GET with `#` and with patterns that name
+nothing, LIMIT at its edges, STORE that makes, replaces and deletes its destination, the
+errors and their order, NULs in patterns, weights and elements, COMMAND GETKEYS), lists,
+sets and sorted sets of 0 to 10,000 elements sorted every way, and 2,000 rounds of random
+SORTs of random keys with BY and GET patterns over strings and hashes, each STORE's
+destination read back: 4,183 commands, each answered as Redis answers it, and again over
+RESP3. Where Redis's order is not its own to keep (a set kept as a hashtable, pqsort's
+ties), the test compares the replies as multisets, or their sizes. SORT with STORE runs in
+the scenarios of keyspace events, of WATCH and of transactions, of the append-only file
+both ways (a file of Redis's with the SORTs in it, one of BendKV's with their lists), and
+in the random batches of the restart test.
+
+**Redis's suite.** 1,153 of the 1,677 tests Redis passes (68.8%; 1,097 before), 1,146
+of the 1,224 in what BendKV has (94%). unit/sort passes 51 of its 52 tests (the other
+calls SORT from a Lua script); unit/type/list 214 of its 218: the two tests that make
+their list with SORT's STORE pass, and so do the two that failed on the client the test of
+SORT's STORE, stopped at SORT, left waiting on its key; unit/multi the test of a watched
+key that a SORT with STORE deletes, its result empty (28 of its 53); and unit/violations
+its one test in this mode, a SORT that GETs an integer into the list it stores.
+
+**Where BendKV differs.** A set kept as a hashtable comes in BendKV's order where Redis's
+is its hashtable's: BY a constant without STORE, and elements whose weights tie under
+ALPHA by a pattern. A sort BY a pattern under a LIMIT that does not take all leaves
+elements whose weights tie in a stable sort's order, where Redis's pqsort may not. Redis
+compares ALPHA in the locale it was started in (BendKV as in the C locale; `make test`
+starts Redis with `LC_ALL=C`). Redis reads a range error from errno without clearing it
+first, so after a weight that overflows or is tiny every SORT that reads a weight with
+strtod fails (an element or weight kept as an integer is read without it) until a command
+that clears errno runs, such as INCRBYFLOAT; BendKV judges each SORT alone. And Redis makes
+a sorted set it sorts a skiplist for good, so OBJECT ENCODING answers `skiplist` for a
+small one after a SORT, where BendKV's stays a listpack.
+
 ## 4. Where a request's time goes, and hiding the memory waits
 
 With the eight patches, BendKV ran fewer instructions on GET and SET than Redis, missed

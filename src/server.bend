@@ -2369,6 +2369,15 @@ def ek.ents(es: List<&2, A.Ent>) -> List<&2, Ek>:
     case Con{A.ETx{xs}, rest}:
       ek.ents(rest)
 
+# SORT with STORE: sortstore when it set its destination, del when it
+# deleted it
+def ek.sort(o: R.SortO, +j: Nat) -> List<&2, Ek>:
+  match o:
+    case R.SortStore{d, x}:
+      [EkS{j, d, "sortstore", ev.l()}]
+    case R.SortO{by, off, cnt, gs, desc, alpha}:
+      Nil{}
+
 # what a command did to each key it wrote (j: its database), in order
 def ek.base(+c: R.Cmd, +j: Nat, +pre: R.Ds, +es: List<&2, A.Ent>) -> List<&2, Ek>:
   match c:
@@ -2410,6 +2419,8 @@ def ek.base(+c: R.Cmd, +j: Nat, +pre: R.Ds, +es: List<&2, A.Ent>) -> List<&2, Ek
       ek.upd(j, k, op)
     case R.Own{R.SSPop{+k, a}}:
       [EkW{j, k, "spop", ev.s()}]
+    case R.Own{R.SSortStore{k, o}}:
+      ek.sort(o, j)
     case R.Own{o}:
       ek.ents(es)
     case _:

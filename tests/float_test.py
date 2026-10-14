@@ -4,9 +4,10 @@ numbers, decimal and hex, with up to 800 digits, exact ties between two
 doubles or two long doubles, numbers near each end of both ranges, and
 forms strtod reads only in part (inf, infinity, nan, a sign, a point, an
 exponent with no digit), each read as Redis reads a double (string2d) and
-written as it writes one ("%.17g"), and read as a long double (string2ld)
+written as it writes one ("%.17g"), read as a long double (string2ld)
 and written for people ("%.17Lf", the zeros that end its fraction taken
-out); and sums and products of doubles and sums of long doubles. A Bend
+out), and read as SORT reads a score (strtod, then errno and the end it
+reached); and sums and products of doubles and sums of long doubles. A Bend
 program (build/float_check.bend) answers each line, a C program with
 glibc's strtod, strtold and printf (tests/float_ref.c) answers it as
 Redis 7.0.15 does on x86-64, and the answers must be the same bytes.
@@ -111,7 +112,9 @@ special = ["inf", "INF", "Infinity", "-iNfInItY", "+inf", "infinit", "infx", "na
   "0x1.fffffffffffff8p1023", "0x1.fffffffffffff7ffp1023", "1e4932", "1.18973149535723176502e4932", "1.2e4932",
   "3.6e-4951", "1.8e-4951", "1e-4951", "1e-4952", "10.5", "1.5", "0.1", "0.2", "0.3", "-1.1", "9007199254740993",
   "9007199254740992", "18446744073709551616", "1e1000000000000", "1e-1000000000000", "0e1000000000000",
-  "1e0000000000000000005", "00", "0x00", "0x0p0", "-0x0p0"]
+  "1e0000000000000000005", "00", "0x00", "0x0p0", "-0x0p0", " 3", "   -1e2", "3 ", " ", "", "\x0b7",
+  "1e-310", "2.2250738585072009e-308", "-4e-320", "0x1.8p-1074", "0x1p-1023", "0x1.0000000000001p-1022",
+  "007", "-007", "12345678901234", "-99999999999999", "123456789012345", "-123456789012345", "-x"]
 
 
 
@@ -204,7 +207,7 @@ def l2(m: Maybe<&2, F.Fl>, n: Maybe<&2, F.Fl>) -> String:
 def one(t: T) -> String:
   match t:
     case T{+op, +a, +b}:
-      Bool.pick(String, String.eq(op, "p"), show.d(F.f64.parse(a)) ++ " | " ++ show.ld(F.ld.parse(a)),
+      Bool.pick(String, String.eq(op, "p"), show.d(F.f64.parse(a)) ++ " | " ++ show.ld(F.ld.parse(a)) ++ " | " ++ show.d(F.f64.parse_sort(a)),
         Bool.pick(String, String.eq(op, "al"), l2(F.ld.parse(a), F.ld.parse(b)), d2(F.f64.parse(a), F.f64.parse(b), String.eq(op, "md"))))
 
 def run(xs: List<&2, T>) -> IO(Unit):

@@ -151,6 +151,12 @@ def main():
             batch.append([b"SPOP", b"t:%d" % i] + ([b"2"] if i % 300 == 0 else []))
             batch.append([b"SMOVE", b"s:%d" % i, b"s:%d" % (i + 100), b"%d" % r.randint(-50, 50)])
             batch.append([r.choice([b"SINTERSTORE", b"SUNIONSTORE", b"SDIFFSTORE"]), b"u:%d" % i, b"s:%d" % i, b"t:%d" % i])
+            # sorted copies stored by SORT: a list's (ALPHA, in its own
+            # order, or cut), a set's of integers, or nothing (which
+            # deletes the key)
+            batch.append(r.choice([[b"SORT", b"l:%d" % i, b"ALPHA"], [b"SORT", b"l:%d" % i, b"BY", b"nosort", b"DESC"],
+                                   [b"SORT", b"l:%d" % i, b"ALPHA", b"LIMIT", b"1", b"2"], [b"SORT", b"s:%d" % i, b"DESC"],
+                                   [b"SORT", b"nope"]]) + [b"STORE", b"o:%d" % (i - i % 300)])
             if i % 900 == 0:
                 batch.append([b"PEXPIREAT", b"s:%d" % i, b"%d" % (NOW_S * 1000 + r.randint(10**6, 10**9))])
             # sorted sets: small ones and now and then one past a listpack

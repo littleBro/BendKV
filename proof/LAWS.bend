@@ -304,6 +304,8 @@ def is_read(c: R.Cmd) -> Bool:
       True{}
     case R.ZOp{op, ks}:
       True{}
+    case R.Sort{k, o}:
+      True{}
     case R.Own{o}:
       True{}
     case R.Bad{r}:
@@ -622,8 +624,9 @@ def spoils(+c2: R.Cmd, c1: R.Cmd) -> Bool:
   writes_any(c2, deps(c1))
 
 # whether c2, run first, may change what c1 answers: c2 writes a key c1
-# reads, or c1 reads the whole database (DBSIZE, KEYS, SCAN) and c2 writes
-# at all
+# reads, or c1 reads the whole database (DBSIZE, KEYS, SCAN), or keys
+# that the values of others name (SORT, SORT_RO: its BY and GET
+# patterns), and c2 writes at all
 def disturbs(+c2: R.Cmd, c1: R.Cmd) -> Bool:
   match c1:
     case R.Get{+k}:
@@ -669,6 +672,8 @@ def disturbs(+c2: R.Cmd, c1: R.Cmd) -> Bool:
     case R.Keys{p}:
       Bool.not(is_read(c2))
     case R.Scan{a}:
+      Bool.not(is_read(c2))
+    case R.Sort{k, o}:
       Bool.not(is_read(c2))
     case _:
       False{}
@@ -766,8 +771,9 @@ def clash(+c2: R.Cmd, +c1: R.Cmd) -> Bool:
 def interferes(+c1: R.Cmd, +c2: R.Cmd) -> Bool:
   Bool.or(Bool.or(disturbs(c1, c2), disturbs(c2, c1)), clash(c2, c1))
 
-# the commands whose replies depend only on what keys read: all but
-# DBSIZE, KEYS and SCAN, which see the trie itself
+# the commands whose replies depend only on what keys read, as the laws
+# follow them: all but DBSIZE, KEYS and SCAN, which see the trie itself,
+# and SORT, which reads keys that the values of others name
 def keywise(c: R.Cmd) -> Bool:
   match c:
     case R.DbSize{}:
@@ -775,6 +781,8 @@ def keywise(c: R.Cmd) -> Bool:
     case R.Keys{p}:
       False{}
     case R.Scan{a}:
+      False{}
+    case R.Sort{k, o}:
       False{}
     case _:
       True{}

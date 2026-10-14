@@ -378,6 +378,21 @@ def keyspace(port, log):
     ev("zrangestore", "ZRANGESTORE", "zr", "za", "0", "0")
     ev("zinterstore empty", "ZINTERSTORE", "zu", "2", "za", "noz")
     ev("zmpop", "ZMPOP", "2", "noz", "za", "MIN", "COUNT", "5")
+    # SORT ... STORE
+    r.cmd("RPUSH", "sl", "2", "1")
+    ev("sort store", "SORT", "sl", "STORE", "sod")
+    ev("sort store again", "SORT", "sl", "DESC", "STORE", "sod")
+    r.cmd("SET", "sostr", "x", "EX", "100")
+    ev("sort store over", "SORT", "sl", "STORE", "sostr")
+    log("19 sort store ttl", r.cmd("TTL", "sostr"), r.cmd("TYPE", "sostr"))
+    ev("sort store empty", "SORT", "nosl", "STORE", "sod")
+    ev("sort store empty none", "SORT", "nosl", "STORE", "sod")
+    ev("sort store limit", "SORT", "sl", "LIMIT", "5", "5", "STORE", "sostr")
+    ev("sort read", "SORT", "sl")
+    ev("sort ro", "SORT_RO", "sl", "DESC")
+    r.cmd("SET", "sostr", "x")
+    ev("sort wrongtype", "SORT", "sostr", "STORE", "sod")
+    ev("sort bad", "SORT", "sl", "LIMIT", "x", "1", "STORE", "sod")
     # a transaction, a client that waits
     ev("exec", "EVAL", "return 1", "0") if False else None
     w = Client(port)

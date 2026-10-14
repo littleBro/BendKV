@@ -32,6 +32,15 @@ static int string2ld(const char *s, size_t slen, long double *dp) {
     if (dp) *dp = value;
     return 1;
 }
+// a score as SORT reads one (sort.c): strtod, then the end of what it
+// read must be a NUL, with no ERANGE and no NaN (errno cleared first: Redis
+// does not clear it, tests/sort_test.py)
+static int sortscore(const char *s, double *dp) {
+    char *eptr; errno = 0;
+    *dp = strtod(s, &eptr);
+    if (eptr[0] != '\0' || errno == ERANGE || isnan(*dp)) return 0;
+    return 1;
+}
 static int ld2human(char *buf, size_t len, long double value) {
     size_t l = 0;
     if (isnan(value)) { strcpy(buf, "nan"); return 3; }
@@ -56,7 +65,7 @@ static void showld(long double x) {
     static char buf[MAX_LONG_DOUBLE_CHARS+32];
     ld2human(buf, MAX_LONG_DOUBLE_CHARS, x); fputs(buf, stdout);
 }
-// a line: op TAB a [TAB b]; ops: p (parse both ways), ad, md (double add,
+// a line: op TAB a [TAB b]; ops: p (parse all three ways), ad, md (double add,
 // mul), al (long double add)
 int main(int argc, char **argv) {
     FILE *f = fopen(argv[1], "rb");
@@ -71,6 +80,8 @@ int main(int argc, char **argv) {
             if (string2d(a, strlen(a), &d)) showd(d); else printf("ERR");
             printf(" | ");
             if (string2ld(a, strlen(a), &x)) showld(x); else printf("ERR");
+            printf(" | ");
+            if (sortscore(a, &d)) showd(d); else printf("ERR");
         } else if (!strcmp(line, "ad") || !strcmp(line, "md")) {
             double x, y;
             if (!string2d(a, strlen(a), &x) || !string2d(b, strlen(b), &y)) printf("ERR");

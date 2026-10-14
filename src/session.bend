@@ -2663,6 +2663,13 @@ def cl.reply(op: R.ClOp, +c: Conn, +argv: Nat) -> R.Reply:
     case R.CoBad{r}:
       r
 
+# SORT with STORE's reply: how many values it stores at its destination,
+# or its error, on the database in focus as it is before the act that
+# writes them (ASort)
+def sort.reply(+ds: R.Ds, +k: String, o: R.SortO) -> R.Reply:
+  +d = R.ds.focused(ds)
+  R.sort.store.reply(R.db.trie(d), R.db.now(d), k, o)
+
 # a session command's reply, sent or not; the databases are there for
 # the commands that read them
 def own_reply(+o: R.SessOp, +c: Conn, +s: Srv, +ds: R.Ds) -> Maybe<&2, R.Reply>:
@@ -2749,6 +2756,8 @@ def own_reply(+o: R.SessOp, +c: Conn, +s: Srv, +ds: R.Ds) -> Maybe<&2, R.Reply>:
       say(conn.mode(c), R.r_ok())
     case R.SRewrite{}:
       say(conn.mode(c), R.RStatus{"Background append only file rewriting started"})
+    case R.SSortStore{+k, o}:
+      say(conn.mode(c), sort.reply(ds, k, o))
 
 # the connection after a session command
 def own_conn(+o: R.SessOp, +c: Conn, +s: Srv) -> Conn:
@@ -2835,10 +2844,14 @@ def own_conn(+o: R.SessOp, +c: Conn, +s: Srv) -> Conn:
       step_conn(c, s)
     case R.SRewrite{}:
       step_conn(c, s)
+    case R.SSortStore{k, o}:
+      step_conn(c, s)
 
 # what a session command does to the databases: SELECT and RESET move the
 # focus to the connection's new database, SWAPDB, MOVE, COPY and FLUSHALL
-# act on the databases, and the others do nothing to them
+# act on the databases, SPOP and a blocking command that runs at once on
+# the focus, SORT with STORE writes its destination there, and the others
+# do nothing to them
 def own_acts(+o: R.SessOp, +c: Conn, +s: Srv) -> List<&2, R.Act>:
   match o:
     case R.SSelect{+d}:
@@ -2857,6 +2870,8 @@ def own_acts(+o: R.SessOp, +c: Conn, +s: Srv) -> List<&2, R.Act>:
       sp.acts(sp.args(args), k, KV.mix(srv.rng(s)))
     case R.SBlock{+id, args}:
       blk.acts(blk.parse(id, args))
+    case R.SSortStore{+k, o}:
+      [R.ASort{k, o}]
     case _:
       Nil{}
 

@@ -3001,6 +3001,8 @@ def t_reads_go(c: R.Cmd, +db: KV.Trie<KV.Val>, +now: Nat) -> {Laws.is_read(c) ==
       e => Empty.absurd({T.db_of(T.exec(R.FlushDb{}, db, now)) == db : KV.Trie<KV.Val>}, false_true(e))
     case R.Keys{p}:
       e => {==}
+    case R.Sort{k, o}:
+      e => {==}
     case R.Scan{a}:
       e => {==}
     case R.Peek{k, o}:
@@ -3529,6 +3531,8 @@ def frame_go(c: R.Cmd, +db: KV.Trie<KV.Val>, +j: String, +now: Nat) -> {Laws.wri
       e => Empty.absurd({KV.entry(KV.Val, KV.empty(KV.Val), j) == KV.entry(KV.Val, db, j) : Maybe<&2, KV.Item<KV.Val>>}, true_false(e))
     case R.Keys{p}:
       e => {==}
+    case R.Sort{k, o}:
+      e => {==}
     case R.Scan{a}:
       e => {==}
     case R.Peek{k, o}:
@@ -3858,6 +3862,8 @@ def loc_reply(c: R.Cmd, +t: KV.Trie<KV.Val>, +u: KV.Trie<KV.Val>, +now: Nat) -> 
       kd => e => Empty.absurd({T.reply_of(T.exec(R.FlushDb{}, t, now)) == T.reply_of(T.exec(R.FlushDb{}, u, now)) : R.Reply}, false_true(kd))
     case R.Keys{p}:
       kd => e => Empty.absurd({T.reply_of(T.exec(R.Keys{p}, t, now)) == T.reply_of(T.exec(R.Keys{p}, u, now)) : R.Reply}, false_true(kd))
+    case R.Sort{k, o}:
+      kd => e => Empty.absurd({T.reply_of(T.exec(R.Sort{k, o}, t, now)) == T.reply_of(T.exec(R.Sort{k, o}, u, now)) : R.Reply}, false_true(kd))
     case R.Scan{a}:
       kd => e => Empty.absurd({T.reply_of(T.exec(R.Scan{a}, t, now)) == T.reply_of(T.exec(R.Scan{a}, u, now)) : R.Reply}, false_true(kd))
     case R.Peek{+k, +o}:
@@ -4023,6 +4029,8 @@ def loc_key(c: R.Cmd, +t: KV.Trie<KV.Val>, +u: KV.Trie<KV.Val>, +now: Nat) -> {k
       kd => e => Empty.absurd({KV.entry(KV.Val, T.db_of(T.exec(R.FlushDb{}, t, now)), "") == KV.entry(KV.Val, T.db_of(T.exec(R.FlushDb{}, u, now)), "") : Maybe<&2, KV.Item<KV.Val>>}, false_true(kd))
     case R.Keys{p}:
       kd => e => Empty.absurd({KV.entry(KV.Val, T.db_of(T.exec(R.Keys{p}, t, now)), "") == KV.entry(KV.Val, T.db_of(T.exec(R.Keys{p}, u, now)), "") : Maybe<&2, KV.Item<KV.Val>>}, false_true(kd))
+    case R.Sort{k, o}:
+      kd => e => Empty.absurd({KV.entry(KV.Val, T.db_of(T.exec(R.Sort{k, o}, t, now)), "") == KV.entry(KV.Val, T.db_of(T.exec(R.Sort{k, o}, u, now)), "") : Maybe<&2, KV.Item<KV.Val>>}, false_true(kd))
     case R.Scan{a}:
       kd => e => Empty.absurd({KV.entry(KV.Val, T.db_of(T.exec(R.Scan{a}, t, now)), "") == KV.entry(KV.Val, T.db_of(T.exec(R.Scan{a}, u, now)), "") : Maybe<&2, KV.Item<KV.Val>>}, false_true(kd))
     case R.Peek{+k, o}:
@@ -4099,6 +4107,8 @@ def writes_one(c: R.Cmd, +j: String) -> {keyed(c) == True{} : Bool} -> {False{} 
       kd => nb => Empty.absurd({Laws.writes(R.FlushDb{}, j) == False{} : Bool}, false_true(kd))
     case R.Keys{p}:
       kd => nb => Empty.absurd({Laws.writes(R.Keys{p}, j) == False{} : Bool}, false_true(kd))
+    case R.Sort{k, o}:
+      kd => nb => Empty.absurd({Laws.writes(R.Sort{k, o}, j) == False{} : Bool}, false_true(kd))
     case R.Scan{a}:
       kd => nb => Empty.absurd({Laws.writes(R.Scan{a}, j) == False{} : Bool}, false_true(kd))
     case R.Peek{k, o}:
@@ -4622,6 +4632,8 @@ def point_cmd(c: R.Cmd, +t: KV.Trie<KV.Val>, +u: KV.Trie<KV.Val>, +j: String, +n
       ag => e => {==}
     case R.Keys{p}:
       ag => e => e
+    case R.Sort{k, o}:
+      ag => e => e
     case R.Scan{a}:
       ag => e => e
     case R.Peek{k, o}:
@@ -4951,6 +4963,9 @@ def reply_after(c1: R.Cmd, +c2: R.Cmd, +db: KV.Trie<KV.Val>, +now: Nat) -> {Laws
     case R.Keys{p}:
       e => %Equal.sym(KV.Trie<KV.Val>, T.db_of(T.exec(c2, db, now)), db, t_reads_keep_db(c2, db, now, not_false(Laws.is_read(c2))(e))) : {T.reply_of(T.exec(R.Keys{p}, _, now)) == T.reply_of(T.exec(R.Keys{p}, db, now)) : R.Reply}
            {==}
+    case R.Sort{k, o}:
+      e => %Equal.sym(KV.Trie<KV.Val>, T.db_of(T.exec(c2, db, now)), db, t_reads_keep_db(c2, db, now, not_false(Laws.is_read(c2))(e))) : {T.reply_of(T.exec(R.Sort{k, o}, _, now)) == T.reply_of(T.exec(R.Sort{k, o}, db, now)) : R.Reply}
+           {==}
     case R.Scan{a}:
       e => %Equal.sym(KV.Trie<KV.Val>, T.db_of(T.exec(c2, db, now)), db, t_reads_keep_db(c2, db, now, not_false(Laws.is_read(c2))(e))) : {T.reply_of(T.exec(R.Scan{a}, _, now)) == T.reply_of(T.exec(R.Scan{a}, db, now)) : R.Reply}
            {==}
@@ -5056,6 +5071,8 @@ def read_writes(c: R.Cmd, +j: String) -> {Laws.is_read(c) == True{} : Bool} -> {
       e => Empty.absurd({Laws.writes(R.FlushDb{}, j) == False{} : Bool}, false_true(e))
     case R.Keys{p}:
       e => {==}
+    case R.Sort{k, o}:
+      e => {==}
     case R.Scan{a}:
       e => {==}
     case R.Peek{k, o}:
@@ -5133,6 +5150,8 @@ def clash_w_at(c1: R.Cmd, +c2: R.Cmd, +j: String) -> {Laws.clash_w(c2, c1) == Fa
     case R.FlushDb{}:
       e => read_writes(c2, j)(not_false(Laws.is_read(c2))(e))
     case R.Keys{p}:
+      e => {==}
+    case R.Sort{k, o}:
       e => {==}
     case R.Scan{a}:
       e => {==}
@@ -5272,6 +5291,8 @@ def rep_tw(+c1: R.Cmd, +c2: R.Cmd, +db: KV.Trie<KV.Val>, +H: List<&2, R.Cmd>, +n
       kw => {==}
     case R.Keys{p}:
       kw => Empty.absurd({T.reply_of(T.exec(R.Keys{p}, tw(H, T.db_of(T.exec(c2, T.db_of(T.exec(c1, db, now)), now)), now), now)) == T.reply_of(T.exec(R.Keys{p}, tw(H, T.db_of(T.exec(c1, T.db_of(T.exec(c2, db, now)), now)), now), now)) : R.Reply}, false_true(kw))
+    case R.Sort{k, o}:
+      kw => Empty.absurd({T.reply_of(T.exec(R.Sort{k, o}, tw(H, T.db_of(T.exec(c2, T.db_of(T.exec(c1, db, now)), now)), now), now)) == T.reply_of(T.exec(R.Sort{k, o}, tw(H, T.db_of(T.exec(c1, T.db_of(T.exec(c2, db, now)), now)), now), now)) : R.Reply}, false_true(kw))
     case R.Scan{a}:
       kw => Empty.absurd({T.reply_of(T.exec(R.Scan{a}, tw(H, T.db_of(T.exec(c2, T.db_of(T.exec(c1, db, now)), now)), now), now)) == T.reply_of(T.exec(R.Scan{a}, tw(H, T.db_of(T.exec(c1, T.db_of(T.exec(c2, db, now)), now)), now), now)) : R.Reply}, false_true(kw))
     case R.Peek{+k, +o}:
@@ -6105,6 +6126,8 @@ def bridge_go(c: R.Cmd, +t: KV.Trie<KV.Val>, +n: Nat, +x: Nat, +now: Nat, +rr: M
       kw => {==}
     case R.Keys{p}:
       kw => {==}
+    case R.Sort{k, o}:
+      kw => {==}
     case R.Scan{a}:
       kw => {==}
     case R.Peek{k, o}:
@@ -6378,6 +6401,8 @@ def now_go(c: R.Cmd, +t: KV.Trie<KV.Val>, +n: Nat, +x: Nat, +now: Nat, +rr: Mayb
       {==}
     case R.Keys{p}:
       {==}
+    case R.Sort{k, o}:
+      {==}
     case R.Scan{a}:
       {==}
     case R.Peek{k, o}:
@@ -6447,6 +6472,8 @@ def bt_go(c: R.Cmd, +t: KV.Trie<KV.Val>, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe
     case R.FlushDb{}:
       {==}
     case R.Keys{p}:
+      {==}
+    case R.Sort{k, o}:
       {==}
     case R.Scan{a}:
       {==}
@@ -6574,6 +6601,8 @@ def reads_go(c: R.Cmd, +db: R.Db) -> {Laws.is_read(c) == True{} : Bool} -> {R.db
     case R.FlushDb{}:
       e => Empty.absurd({R.db_of(R.exec(R.FlushDb{}, db)) == db : R.Db}, false_true(e))
     case R.Keys{p}:
+      e => {==}
+    case R.Sort{k, o}:
       e => {==}
     case R.Scan{a}:
       e => {==}
@@ -7008,6 +7037,9 @@ def reply_after_db(c1: R.Cmd, +c2: R.Cmd, +db: R.Db) -> {Laws.disturbs(c2, c1) =
       e => reply_via(R.FlushDb{}, c2, db, {==}, e)
     case R.Keys{p}:
       e => %Equal.sym(R.Db, R.db_of(R.exec(c2, db)), db, Laws.reads_keep_db(c2, db, not_false(Laws.is_read(c2))(e))) : {R.reply_of(R.exec(R.Keys{p}, _)) == R.reply_of(R.exec(R.Keys{p}, db)) : R.Reply}
+           {==}
+    case R.Sort{k, o}:
+      e => %Equal.sym(R.Db, R.db_of(R.exec(c2, db)), db, Laws.reads_keep_db(c2, db, not_false(Laws.is_read(c2))(e))) : {R.reply_of(R.exec(R.Sort{k, o}, _)) == R.reply_of(R.exec(R.Sort{k, o}, db)) : R.Reply}
            {==}
     case R.Scan{a}:
       e => %Equal.sym(R.Db, R.db_of(R.exec(c2, db)), db, Laws.reads_keep_db(c2, db, not_false(Laws.is_read(c2))(e))) : {R.reply_of(R.exec(R.Scan{a}, _)) == R.reply_of(R.exec(R.Scan{a}, db)) : R.Reply}
@@ -7624,6 +7656,8 @@ def eff(c: R.Cmd, +db: R.Db) -> List<&2, R.Cmd>:
       A.effect(R.FlushDb{})
     case R.Keys{p}:
       A.effect(R.Keys{p})
+    case R.Sort{k, o}:
+      A.effect(R.Sort{k, o})
     case R.Scan{a}:
       A.effect(R.Scan{a})
     case R.Peek{k, o}:
@@ -7854,6 +7888,8 @@ def run_split(c: R.Cmd, +db: R.Db) -> {(R.reply_of(R.exec(c, db)), (eff(c, db), 
       put_split(R.FlushDb{}, R.exec(R.FlushDb{}, db))
     case R.Keys{+p}:
       put_split(R.Keys{p}, R.exec(R.Keys{p}, db))
+    case R.Sort{+k, +o}:
+      put_split(R.Sort{k, o}, R.exec(R.Sort{k, o}, db))
     case R.Scan{+a}:
       put_split(R.Scan{a}, R.exec(R.Scan{a}, db))
     case R.Peek{+k, +o}:
@@ -10848,6 +10884,8 @@ def effect_go(c: R.Cmd, +t: KV.Trie<KV.Val>, +n: Nat, +x: Nat, +now: Nat, +rr: M
       {==}
     case R.Keys{p}:
       {==}
+    case R.Sort{k, o}:
+      {==}
     case R.Scan{a}:
       {==}
     case R.Peek{k, o}:
@@ -11965,6 +12003,8 @@ def args_go(c: R.Cmd, +t: KV.Trie<KV.Val>, +n: Nat, +x: Nat, +now: Nat, +rr: May
       {==}
     case R.Keys{p}:
       {==}
+    case R.Sort{k, o}:
+      {==}
     case R.Scan{a}:
       {==}
     case R.Peek{k, o}:
@@ -12121,13 +12161,19 @@ def copy_split(+s: String, +d: String, +i: Nat, +j: Nat, p: Bool & R.Ds) -> {(R.
   (ok, ds) = p
   {==}
 
-# an act runs with its effects as R.act runs it
-def act_split(+a: R.Act, +ds: R.Ds) -> {(R.reply_ds(R.act(a, ds)), (aeff(a, ds), R.ds_of(R.act(a, ds)))) == A.act(a, ds) : R.Reply & (List<&2, A.Eff> & R.Ds)}:
-  match a ds:
-    case R.ARun{+c} R.Ds{+d, +pre, +post}:
+# a command of one database runs with its effects as R.act runs it
+def act_split_cmd(+c: R.Cmd, +ds: R.Ds) -> {(R.reply_ds(R.act(R.ARun{c}, ds)), (aeff(R.ARun{c}, ds), R.ds_of(R.act(R.ARun{c}, ds)))) == A.act(R.ARun{c}, ds) : R.Reply & (List<&2, A.Eff> & R.Ds)}:
+  match ds:
+    case R.Ds{+d, +pre, +post}:
       %run_split(c, d) : {(R.reply_ds(R.act.run(R.exec(c, d), pre, post)), (tmid(A.act.run(List.length(&2, R.Db, pre), _, pre, post)), R.ds_of(R.act.run(R.exec(c, d), pre, post)))) == A.act.run(List.length(&2, R.Db, pre), _, pre, post) : R.Reply & (List<&2, A.Eff> & R.Ds)}
       %eta_r(R.exec(c, d)) : {(R.reply_ds(R.act.run(_, pre, post)), (tmid(A.act.run(List.length(&2, R.Db, pre), (R.reply_of(R.exec(c, d)), (eff(c, d), R.db_of(R.exec(c, d)))), pre, post)), R.ds_of(R.act.run(_, pre, post)))) == A.act.run(List.length(&2, R.Db, pre), (R.reply_of(R.exec(c, d)), (eff(c, d), R.db_of(R.exec(c, d)))), pre, post) : R.Reply & (List<&2, A.Eff> & R.Ds)}
       {==}
+
+# an act runs with its effects as R.act runs it
+def act_split(+a: R.Act, +ds: R.Ds) -> {(R.reply_ds(R.act(a, ds)), (aeff(a, ds), R.ds_of(R.act(a, ds)))) == A.act(a, ds) : R.Reply & (List<&2, A.Eff> & R.Ds)}:
+  match a ds:
+    case R.ARun{+c} x:
+      act_split_cmd(c, x)
     case R.AFocus{+j} x:
       {==}
     case R.ASwap{+a, +b} x:
@@ -12142,6 +12188,8 @@ def act_split(+a: R.Act, +ds: R.Ds) -> {(R.reply_ds(R.act(a, ds)), (aeff(a, ds),
       copy_split(s, d, R.ds.index(x), R.ds.index(x), R.ds.copy(s, d, R.ds.index(x), rep, x))
     case R.AWipe{} x:
       {==}
+    case R.ASort{+k, +ob} x:
+      act_split_cmd(R.sort.write.ds(x, k, ob), x)
 
 def app_nil_e(xs: List<&2, A.Eff>) -> {List.append(&2, A.Eff, xs, Nil{}) == xs : List<&2, A.Eff>}:
   match xs:
@@ -12440,6 +12488,8 @@ def eff_one_go(c: R.Cmd, +t: KV.Trie<KV.Val>, +n: Nat, +x: Nat, +now: Nat, +rr: 
     case R.FlushDb{}:
       Inr{(R.FlushDb{}, {==})}
     case R.Keys{p}:
+      Inl{{==}}
+    case R.Sort{k, o}:
       Inl{{==}}
     case R.Scan{a}:
       Inl{{==}}
@@ -13353,6 +13403,8 @@ def fa_of(e: R.Cmd) -> {R.parse(A.args(e)) == e : R.Cmd} -> {A.file.act(e) == R.
       h => {==}
     case R.Keys{p}:
       h => {==}
+    case R.Sort{k, o}:
+      h => {==}
     case R.Scan{a}:
       h => {==}
     case R.Peek{k, o}:
@@ -13732,6 +13784,11 @@ def act_inv(t: R.Act, +o: R.Ds, +r: R.Ds, +sel: Nat, +n: Nat, +sm: {KV.small(n) 
       (ez, q) = inv
       (ei, en) = q
       post_wipe(o, r, sel, n, ln, ez, ei, en)
+    case R.ASort{+k, +ob}:
+      (inv, ln) = st
+      (ez, q) = inv
+      (ei, en) = q
+      post_run(R.sort.write.ds(o, k, ob), o, r, sel, n)(ln)(sm)(ez)(ei)(en)
 
 # acts one after another keep it, effect after effect
 def acts_inv(as: List<&2, R.Act>, +o: R.Ds, +r: R.Ds, +sel: Nat, +n: Nat, +sm: {KV.small(n) == True{} : Bool}, st: Inv(r, o, sel) & Len(o, n)) -> Inv(rp(aeffs(as, o), sel, r), R.acts(as, o), A.effs.sel(aeffs(as, o), sel)) & Len(R.acts(as, o), n):
@@ -14163,6 +14220,8 @@ def mark_args(c: R.Cmd) -> {A.mark(A.args(c)) == 0n : Nat}:
     case R.FlushDb{}:
       {==}
     case R.Keys{p}:
+      {==}
+    case R.Sort{k, o}:
       {==}
     case R.Scan{a}:
       {==}
@@ -14876,6 +14935,8 @@ def act_now(t: R.Act, +o: R.Ds) -> {R.ds.now(R.ds_of(R.act(t, o))) == R.ds.now(o
       now_copy(s, d, R.ds.index(o), rep, o, R.ds.copy(s, d, R.ds.index(o), rep, o), copy_spec(s, d, R.ds.index(o), rep, o))
     case R.AWipe{}:
       now_wipe(o)
+    case R.ASort{+k, +ob}:
+      now_run(R.sort.write.ds(o, k, ob), o)
 
 # an act run at a time leaves the databases at that time
 def act_at(+t: R.Act, +now: Nat, +x: R.Ds) -> {R.ds.at(now, R.ds_of(R.act(t, R.ds.at(now, x)))) == R.ds_of(R.act(t, R.ds.at(now, x))) : R.Ds}:
@@ -15243,6 +15304,8 @@ def one_eff(t: R.Act, +o: R.Ds) -> OneE(aeff(t, o)):
       one_copy(s, d, R.ds.index(o), R.ds.index(o), R.ds.copy(s, d, R.ds.index(o), rep, o))
     case R.AWipe{}:
       Inr{(A.EWipe{}, {==})}
+    case R.ASort{+k, +ob}:
+      one_run(R.sort.write.ds(o, k, ob), o)
 
 # the first i entries of the steps ss, run from x, replayed after r: the
 # databases after the first j steps, for some j
@@ -15878,6 +15941,8 @@ def unzip_gen(+conn: S.Conn, +srv: S.Srv, rs: List<&2, B.Req>, +cs: List<&2, R.C
       e => unzip_gen(conn, srv, rest, R.ZRangeStore{x0, x1, x2} <> cs, h <> hs, ds)(e)
     case Con{B.Req{R.ZMPop{x0, x1, x2}, h}, rest}:
       e => unzip_gen(conn, srv, rest, R.ZMPop{x0, x1, x2} <> cs, h <> hs, ds)(e)
+    case Con{B.Req{R.Sort{x0, x1}, h}, rest}:
+      e => unzip_gen(conn, srv, rest, R.Sort{x0, x1} <> cs, h <> hs, ds)(e)
     case Con{B.Req{R.Own{x0}, h}, rest}:
       e => mixed_gen(conn, srv, rest, R.Own{x0} <> cs, h <> hs, ds)
     case Con{B.Req{R.Bad{x0}, h}, rest}:
@@ -15998,6 +16063,8 @@ def unzip_gen_log(+conn: S.Conn, +srv: S.Srv, rs: List<&2, B.Req>, +cs: List<&2,
       e => unzip_gen_log(conn, srv, rest, R.ZRangeStore{x0, x1, x2} <> cs, h <> hs, ds)(e)
     case Con{B.Req{R.ZMPop{x0, x1, x2}, h}, rest}:
       e => unzip_gen_log(conn, srv, rest, R.ZMPop{x0, x1, x2} <> cs, h <> hs, ds)(e)
+    case Con{B.Req{R.Sort{x0, x1}, h}, rest}:
+      e => unzip_gen_log(conn, srv, rest, R.Sort{x0, x1} <> cs, h <> hs, ds)(e)
     case Con{B.Req{R.Own{x0}, h}, rest}:
       e => mixed_gen_log(conn, srv, rest, R.Own{x0} <> cs, h <> hs, ds)
     case Con{B.Req{R.Bad{x0}, h}, rest}:
@@ -16104,6 +16171,8 @@ def srv_same.o(o: R.SessOp, +conn: S.Conn, +srv: S.Srv, +ef: {S.authed(conn, srv
       e => Empty.absurd({S.own_srv(R.SMonitor{}, conn, srv) == srv : S.Srv}, true_false(Equal.trans(Bool, True{}, S.authed(conn, srv), False{}, e, ef)))
     case R.SRewrite{}:
       e => Empty.absurd({S.own_srv(R.SRewrite{}, conn, srv) == srv : S.Srv}, true_false(Equal.trans(Bool, True{}, S.authed(conn, srv), False{}, e, ef)))
+    case R.SSortStore{y0, y1}:
+      e => Empty.absurd({S.own_srv(R.SSortStore{y0, y1}, conn, srv) == srv : S.Srv}, true_false(Equal.trans(Bool, True{}, S.authed(conn, srv), False{}, e, ef)))
     case R.SFail{y0}:
       e => Empty.absurd({S.own_srv(R.SFail{y0}, conn, srv) == srv : S.Srv}, true_false(Equal.trans(Bool, True{}, S.authed(conn, srv), False{}, e, ef)))
     case R.SMemUsage{y0, y1}:
@@ -16279,6 +16348,10 @@ def own_bad(o: R.SessOp, +ps: List<&2, R.Act>, +id: Nat, +a: Bool, +n: String, +
       ih =>
         %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel, r3}, srv), False{}, ef) : {Laws.all_bad(List.append(&2, R.Act, S.acts.k(S.KSess{R.SRewrite{}}, _, R.Own{R.SRewrite{}}, S.Conn{id, a, n, m, False{}, sel, r3}, srv), ps)) == True{} : Bool}
         ih
+    case R.SSortStore{y0, y1}:
+      ih =>
+        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel, r3}, srv), False{}, ef) : {Laws.all_bad(List.append(&2, R.Act, S.acts.k(S.KSess{R.SSortStore{y0, y1}}, _, R.Own{R.SSortStore{y0, y1}}, S.Conn{id, a, n, m, False{}, sel, r3}, srv), ps)) == True{} : Bool}
+        ih
     case R.SFail{y0}:
       ih =>
         %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel, r3}, srv), False{}, ef) : {Laws.all_bad(List.append(&2, R.Act, S.acts.k(S.KSess{R.SFail{y0}}, _, R.Own{R.SFail{y0}}, S.Conn{id, a, n, m, False{}, sel, r3}, srv), ps)) == True{} : Bool}
@@ -16395,6 +16468,10 @@ def ran_bad(c: R.Cmd, +ps: List<&2, R.Act>, +id: Nat, +a: Bool, +n: String, +m: 
     case R.Keys{x0}:
       ih =>
         %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel, r3}, srv), False{}, ef) : {Laws.all_bad(List.append(&2, R.Act, S.acts.k(S.KData{}, _, R.Keys{x0}, S.Conn{id, a, n, m, False{}, sel, r3}, srv), ps)) == True{} : Bool}
+        ih
+    case R.Sort{x0, x1}:
+      ih =>
+        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel, r3}, srv), False{}, ef) : {Laws.all_bad(List.append(&2, R.Act, S.acts.k(S.KData{}, _, R.Sort{x0, x1}, S.Conn{id, a, n, m, False{}, sel, r3}, srv), ps)) == True{} : Bool}
         ih
     case R.Scan{x0}:
       ih =>
@@ -16557,6 +16634,10 @@ def auth_own(o: R.SessOp, +id: Nat, +a: Bool, +n: String, +m: S.Mute, +sel: Nat,
       el =>
         %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel, r3}, srv), False{}, ef) : {S.conn.auth(S.next_conn.k(S.KSess{R.SRewrite{}}, _, S.Conn{id, a, n, m, False{}, sel, r3}, srv)) == False{} : Bool}
         or_false_l(a, S.nopass(srv))(ef)
+    case R.SSortStore{y0, y1}:
+      el =>
+        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel, r3}, srv), False{}, ef) : {S.conn.auth(S.next_conn.k(S.KSess{R.SSortStore{y0, y1}}, _, S.Conn{id, a, n, m, False{}, sel, r3}, srv)) == False{} : Bool}
+        or_false_l(a, S.nopass(srv))(ef)
     case R.SFail{y0}:
       el =>
         %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel, r3}, srv), False{}, ef) : {S.conn.auth(S.next_conn.k(S.KSess{R.SFail{y0}}, _, S.Conn{id, a, n, m, False{}, sel, r3}, srv)) == False{} : Bool}
@@ -16624,6 +16705,8 @@ def auth_nc(c: R.Cmd, +id: Nat, +a: Bool, +n: String, +m: S.Mute, +sel: Nat, +r3
     case R.FlushDb{}:
       el => or_false_l(a, S.nopass(srv))(ef)
     case R.Keys{x0}:
+      el => or_false_l(a, S.nopass(srv))(ef)
+    case R.Sort{x0, x1}:
       el => or_false_l(a, S.nopass(srv))(ef)
     case R.Scan{x0}:
       el => or_false_l(a, S.nopass(srv))(ef)
@@ -18552,6 +18635,8 @@ def counted_exec(c: R.Cmd, +db: R.Db) -> {Laws.counted(db) == True{} : Bool} -> 
       ok => counted_flush(db)
     case R.Keys{p}:
       ok => ok
+    case R.Sort{k, o}:
+      ok => ok
     case R.Scan{a}:
       ok => ok
     case R.Peek{k, o}:
@@ -18765,11 +18850,17 @@ def act_run_ds(r: R.Reply & R.Db, -pre: List<&2, R.Db>, -post: List<&2, R.Db>) -
       {==}
 
 # an act keeps every database counted
-def counted_act(a: R.Act, +ds: R.Ds) -> {Laws.counted_ds(ds) == True{} : Bool} -> {Laws.counted_ds(R.ds_of(R.act(a, ds))) == True{} : Bool}:
-  match a ds:
-    case R.ARun{+c} R.Ds{+d, +pre, +post}:
+# a command of one database run on the focus keeps every database counted
+def counted_cmd(+c: R.Cmd, +ds: R.Ds) -> {Laws.counted_ds(ds) == True{} : Bool} -> {Laws.counted_ds(R.ds_of(R.act(R.ARun{c}, ds))) == True{} : Bool}:
+  match ds:
+    case R.Ds{+d, +pre, +post}:
       +e => %Equal.sym(R.Ds, R.ds_of(R.act.run(R.exec(c, d), pre, post)), R.Ds{R.db_of(R.exec(c, d)), pre, post}, act_run_ds(R.exec(c, d), pre, post)) : {Laws.counted_ds(_) == True{} : Bool}
             and_true(Laws.counted(R.db_of(R.exec(c, d))), Bool.and(Laws.counted_list(pre), Laws.counted_list(post)))(counted_exec(c, d)(and_l(Laws.counted(d), Bool.and(Laws.counted_list(pre), Laws.counted_list(post)))(e)))(and_r(Laws.counted(d), Bool.and(Laws.counted_list(pre), Laws.counted_list(post)))(e))
+
+def counted_act(a: R.Act, +ds: R.Ds) -> {Laws.counted_ds(ds) == True{} : Bool} -> {Laws.counted_ds(R.ds_of(R.act(a, ds))) == True{} : Bool}:
+  match a ds:
+    case R.ARun{+c} x:
+      counted_cmd(c, x)
     case R.AFocus{+j} x:
       counted_focus_if(Nat.is_eq(R.ds.index(x), j), j, x)
     case R.ASwap{+a, +b} x:
@@ -18784,6 +18875,8 @@ def counted_act(a: R.Act, +ds: R.Ds) -> {Laws.counted_ds(ds) == True{} : Bool} -
       +e => counted_copy_of(s, d, R.ds.index(x), rep, R.ds.nth(R.ds.index(x), R.ds.list(x)), x)(counted_nth(R.ds.index(x), R.ds.list(x))(counted_ds_list(x)(e)))(e)
     case R.AWipe{} x:
       e => counted_wipe(x)
+    case R.ASort{+k, +ob} x:
+      counted_cmd(R.sort.write.ds(x, k, ob), x)
 
 def counted_acts(as: List<&2, R.Act>, +ds: R.Ds) -> {Laws.counted_ds(ds) == True{} : Bool} -> {Laws.counted_ds(R.acts(as, ds)) == True{} : Bool}:
   match as:

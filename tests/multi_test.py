@@ -11,7 +11,9 @@ command runs (in EXEC's array), EXEC and DISCARD without MULTI, EXEC
 refused (its arity) in MULTI and out of it, a QUIT and a RESET inside a
 transaction; WATCH of keys another client changes or does not change, a
 DEL of a key not there (no change), SADD of a member there (no change),
-SMOVE of a member the destination holds (no change to it),
+SMOVE of a member the destination holds (no change to it), SORT with
+STORE (a change even when it stores the list there, none when it
+deletes a key not there), SORT without it (no change),
 FLUSHALL, FLUSHDB and SWAPDB of keys there and not there, MOVE, COPY,
 RENAME, EXPIRE, a key that expires (active expiry, or found expired at
 EXEC), a key of another database, a transaction of another client, UNWATCH
@@ -94,6 +96,19 @@ def scenarios(port, log):
         a.cmd("EXEC"))
     log("5 smove new", a.cmd("WATCH", "st"), b.cmd("SMOVE", "sm", "st", "q"), a.cmd("MULTI"), a.cmd("PING"),
         a.cmd("EXEC"))
+    r.cmd("RPUSH", "sol", "2", "1")
+    log("5 sort store", a.cmd("WATCH", "sod"), b.cmd("SORT", "sol", "STORE", "sod"), a.cmd("MULTI"), a.cmd("PING"),
+        a.cmd("EXEC"))
+    log("5 sort store same", a.cmd("WATCH", "sod"), b.cmd("SORT", "sol", "STORE", "sod"), a.cmd("MULTI"),
+        a.cmd("PING"), a.cmd("EXEC"))
+    log("5 sort store empty", a.cmd("WATCH", "sod"), b.cmd("SORT", "nosol", "STORE", "sod"), a.cmd("MULTI"),
+        a.cmd("PING"), a.cmd("EXEC"))
+    log("5 sort store empty none", a.cmd("WATCH", "sod"), b.cmd("SORT", "nosol", "STORE", "sod"), a.cmd("MULTI"),
+        a.cmd("PING"), a.cmd("EXEC"))
+    log("5 sort read", a.cmd("WATCH", "sol"), b.cmd("SORT", "sol", "BY", "nosort"), b.cmd("SORT_RO", "sol", "ALPHA"),
+        a.cmd("MULTI"), a.cmd("PING"), a.cmd("EXEC"))
+    log("5 sort in multi", a.cmd("MULTI"), a.cmd("SORT", "sol", "DESC", "STORE", "sod"), a.cmd("LRANGE", "sod", "0", "-1"),
+        a.cmd("SORT", "sol", "LIMIT", "x", "1"), a.cmd("SORT_RO", "sod", "ALPHA"), a.cmd("EXEC"))
     log("5 tx of another", a.cmd("WATCH", "t"), b.cmd("MULTI"), b.cmd("SET", "t", "1"), b.cmd("EXEC"), a.cmd("MULTI"),
         a.cmd("PING"), a.cmd("EXEC"))
     # 6. FLUSHALL, FLUSHDB and SWAPDB

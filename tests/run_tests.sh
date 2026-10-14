@@ -28,8 +28,9 @@
 # for byte against Redis, INFO's sections and fields, its statistics per
 # command, COMMAND, SCAN and RANDOMKEY, keys that expire, numbers at
 # their edges in every argument that is one, BITFIELD's fields at
-# random, hashes, lists, sets and sorted sets, and RESP3 (its scenarios,
-# and the differential tests again in RESP3); then stops them. Then the append-only file: a
+# random, hashes, lists, sets and sorted sets, SORT and SORT_RO, and RESP3
+# (its scenarios, and the differential tests again in RESP3); then stops
+# them. Then the append-only file: a
 # random stream, a restart from the file, the keyspace compared; then
 # the file's last entry cut short, as a crash in a write leaves it, a
 # restart that cuts it back, and the keyspace compared again. Then the
@@ -60,7 +61,9 @@ echo "== the start"
 python3 tests/start_test.py --bin build/bendkv
 echo "== connections that end"
 python3 tests/conn_test.py --bin build/bendkv --port "$PORT"
-redis-server --port "$REDIS_PORT" --save '' --appendonly no --bind 127.0.0.1 > build/redis.log 2>&1 &
+# Redis collates SORT's ALPHA by the locale it starts in (strcoll),
+# BendKV as the C locale does
+LC_ALL=C redis-server --port "$REDIS_PORT" --save '' --appendonly no --bind 127.0.0.1 > build/redis.log 2>&1 &
 RDS=$!
 BKV=
 trap 'kill $BKV $RDS 2>/dev/null || true' EXIT
@@ -93,10 +96,11 @@ for n in "" post send "post build/test.aof everysec"; do
     python3 tests/list_test.py --bendkv "$PORT" --redis "$REDIS_PORT"
     python3 tests/set_test.py --bendkv "$PORT" --redis "$REDIS_PORT"
     python3 tests/zset_test.py --bendkv "$PORT" --redis "$REDIS_PORT"
+    python3 tests/sort_test.py --bendkv "$PORT" --redis "$REDIS_PORT"
     # RESP3: its scenarios, then the differential tests again with each
     # connection in RESP3 (HELLO 3)
     python3 tests/resp3_test.py --bendkv "$PORT" --redis "$REDIS_PORT"
-    for t in ttl numbers bitfield hash list set zset; do
+    for t in ttl numbers bitfield hash list set zset sort; do
       RESP=3 python3 "tests/${t}_test.py" --bendkv "$PORT" --redis "$REDIS_PORT"
     done
   fi
