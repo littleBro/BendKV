@@ -1,0 +1,208 @@
+diff --git a/bend2/comp.ts b/bend2/comp.ts
+index 55f5d47..2a631a3 100644
+--- a/bend2/comp.ts
++++ b/bend2/comp.ts
+@@ -81,6 +81,7 @@ type File = {
+   flats: Map<Name, boolean>;
+   funs: Map<Name, Fun>;
+   brws: Map<Name, boolean[]>;
++  rdrs: Map<string, boolean>;
+   nodes: Map<Name, Lay>;
+   lays: Map<string, Lay>;
+   lay_ids: Map<Lay, number>;
+@@ -1327,6 +1328,59 @@ function brw_of(k: Name): boolean[] {
+   });
+ }
+ 
++// A walker that reads: a def that calls itself, whose parameter i is a
++// tree (a datatype with a node of two or more subtrees of its own type),
++// and that builds none of that datatype's nodes. A caller that owns what it
++// passes there at its last use lends it and drops it after the call
++// (tail_lends), rather than give it: a walker that owned its tree would
++// own each node it reads, and copy each node another value shares, as a
++// persistent tree's versions share their subtrees; one that rebuilds the
++// tree takes its nodes over.
++function walk_reads(k: Name, i: number): boolean {
++  return memo(FL.rdrs, k + "~" + i, () => {
++    if (!done_live(FL.book.tlds[k])) {
++      return false;
++    }
++    const adt = ty_adt(fun_of(k).live[i]?.[2] ?? null);
++    const dt = adt && FL.book.tlds[adt.k];
++    if (dt?.$ !== "ADT" || !dt.c.some((c) => tele_unbind(c.T).doms
++      .filter(([, , A]) => ty_adt(A)?.k === adt!.k).length >= 2)) {
++      return false;
++    }
++    let self = false;
++    let builds = false;
++    term_any(fun_of(k).h!, (s) => {
++      self ||= term_spine(s).k === k;
++      builds ||= s.$ === "Ctr" && Bend.book_fam(FL.book, s.k) === adt!.k;
++      return false;
++    });
++    return self && !builds;
++  });
++}
++
++// A tail call that passes a walker that reads a value the caller owns, at
++// its last use, is held instead (r = f(..); r), so that the walker borrows
++// it; not one into the caller's own loop, whose tail calls stay jumps.
++function tail_lends(sc: Scope, ck: Spine): boolean {
++  const k = ck.k!;
++  const sd = sc.seg.def.split("$")[0];
++  if (k === sd || k === sc.def || loop_of(sd).includes(k)
++    || loop_of(sc.def).includes(k)) {
++    return false;
++  }
++  const brw = brw_of(k);
++  const xs = ck.xs.map(term_strip);
++  return xs.some((x, i) => {
++    if (x.$ !== "Var" || !brw[i] || !walk_reads(k, i)) {
++      return false;
++    }
++    const p = probe_of(x);
++    const bd = sc.uses.get(p);
++    return bd !== undefined && !val_brw(sc, bd.val)
++      && xs.filter((y) => y.$ === "Var" && probe_of(y) === p).length === 1;
++  });
++}
++
+ function def_raise(t: HTerm, left: number): number {
+   const s = term_strip(t);
+   if (s.$ === "Lam") {
+@@ -1637,6 +1691,7 @@ function file_new(book: Bend.Book, js: boolean): File {
+     flats: new Map(),
+     funs: new Map(),
+     brws: new Map(),
++    rdrs: new Map(),
+     nodes: new Map(),
+     lays: new Map(),
+     lay_ids: new Map(),
+@@ -2536,6 +2591,10 @@ function emit_args(sc: Scope, ck: Spine, jump = false, fork = false): string[] {
+         FL.lend.add(at);
+       } else {
+         val_own(sc, bd.val, at, !jump);
++        if (!jump && !fork && brw[i] && walk_reads(k, i)
++          && !val_brw(sc, bd.val)) {
++          FL.lend.add(at);
++        }
+       }
+       if (dead && !twin && val_brw(sc, bd.val)) {
+         sc.uses.delete(p);
+@@ -3097,6 +3156,10 @@ function emit_body(sc: Scope, tm: HTerm, ty0: HTerm | null,
+         return emit_body(sc, Bend.Let(["r"], [0], [Bend.Ann(x, ty!)],
+           (xs) => xs[0]), ty, ers, args, dst);
+       }
++      if (ty !== null && !ck.b && tail_lends(sc, ck)) {
++        return emit_body(sc, Bend.Let(["r"], [0], [Bend.Ann(x, ty)],
++          (xs) => xs[0]), ty, ers, args, dst);
++      }
+       const cargs = emit_args(sc, ck, true);
+       spare_flush(sc);
+       emit_jump(sc, cargs, ck.k, ck.b);
+@@ -3654,8 +3717,13 @@ export function compile_book(book: Bend.Book): string {
+       const [a, r] = l.split("<");
+       return r === undefined ? [] : [[r, a]];
+     }));
++    // a reading walker passed a word of a root that ends up owned is lent
++    // in the next pass, its caller holding what it then owns (tail_lends)
++    const held = new Set([...FL.lend].flatMap((l) =>
++      l.includes("<") ? [l.split("<")[0]] : []));
+     FL.brws.forEach((bs, k) => bs.forEach((b, i) => {
+-      if (b && !FL.lend.has(k + "~" + i)) {
++      if (b && !FL.lend.has(k + "~" + i)
++        && !(held.has(k + "~" + i) && walk_reads(k, i))) {
+         FL.own.add(k + "~" + i);
+       }
+     }));
+diff --git a/tests/compile/walk_lend_tree.bend b/tests/compile/walk_lend_tree.bend
+new file mode 100644
+index 0000000..ecb9103
+--- /dev/null
++++ b/tests/compile/walk_lend_tree.bend
+@@ -0,0 +1,85 @@
++# A walker that reads a tree (it calls itself, takes a tree, builds none
++# of its nodes) borrows it from a caller that owns it at its last use in
++# a tail call: the caller holds it, calls the walker and drops it after.
++# The tree here is shared (read three times), so a walker that owned it
++# would copy each node it reads, as keys did once fresh made all own its
++# tree; mirror rebuilds it and owns its own.
++import Base
++
++type T is Data:
++  Lf{}
++  Nd{k: Nat, l: T, r: T}
++
++def pow2(+d: Nat) -> Nat:
++  match d:
++    case 0n:
++      1n
++    case 1n+p:
++      +x = pow2(p)
++      Nat.add(x, x)
++
++# a complete tree of depth d whose keys, in order, are lo to lo + 2^d - 2
++def gen(+d: Nat, +lo: Nat) -> T:
++  match d:
++    case 0n:
++      Lf{}
++    case 1n+p:
++      +m = Nat.add(lo, Nat.sub(pow2(p), 1n))
++      Nd{m, gen(p, lo), gen(p, Nat.add(m, 1n))}
++
++# the keys of t in order, before acc
++def keys(+t: T, acc: List<&2, Nat>) -> List<&2, Nat>:
++  match t:
++    case Lf{}:
++      acc
++    case Nd{+k, +l, +r}:
++      keys(l, k <> keys(r, acc))
++
++# a caller that owns its tree and passes it at its last use, in a tail call
++def all(t: T) -> List<&2, Nat>:
++  keys(t, Nil{})
++
++# a caller that gives all a tree made for it, in a tail call: all owns its
++# tree for every caller
++def fresh(+d: Nat) -> List<&2, Nat>:
++  all(gen(d, 0n))
++
++def mirror(t: T) -> T:
++  match t:
++    case Lf{}:
++      Lf{}
++    case Nd{k, l, r}:
++      Nd{k, mirror(r), mirror(l)}
++
++def sum(xs: List<&2, Nat>, +acc: Nat) -> Nat:
++  match xs:
++    case Nil{}:
++      acc
++    case x <> rest:
++      sum(rest, Nat.add(acc, x))
++
++def head(xs: List<&2, Nat>) -> Nat:
++  match xs:
++    case Nil{}:
++      0n
++    case x <> rest:
++      x
++
++def line(+xs: List<&2, Nat>) -> String:
++  +n = List.length(&2, Nat, xs)
++  String.append(Nat.show(n), String.append(" ", String.append(Nat.show(head(xs)), String.append(" ", Nat.show(sum(xs, 0n))))))
++
++def main() -> IO(Unit):
++  +t = gen(10n, 0n)
++  a = all(t)
++  b = all(t)
++  c = all(mirror(t))
++  d = all(gen(3n, 5n))
++  e = fresh(4n)
++  IO.print(String.append(line(a), String.append("\n", String.append(line(b), String.append("\n", String.append(line(c), String.append("\n", String.append(line(d), String.append("\n", line(e))))))))))
++
++#|1023 0 522753
++#|1023 0 522753
++#|1023 1022 522753
++#|7 5 56
++#|15 0 105

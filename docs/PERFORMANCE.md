@@ -9,27 +9,28 @@ numbers are in [tools/](../tools/README.md).
    verification and not from the logic of the commands.** The original SET cost ~390
    heap cell allocations and ~150 atomic reference-count operations. Redis makes a
    handful of allocations per SET.
-2. **Bend itself is fixed by thirty patches to the compiler**
+2. **Bend itself is fixed by thirty-one patches to the compiler**
    ([`bend-patches/`](../bend-patches/)). The first eight switch on by themselves for
    programs without GPU calls `!`, the ninth and tenth where a program calls them, the
    eleventh changes every program's event loop on Linux, the twelfth and thirteenth only
    add effects, the fourteenth speeds up `String.code_at` everywhere, the fifteenth and
-   sixteenth act where a program calls `TCP.post`, the seventeenth adds string
-   functions, the eighteenth changes how every program's `IO` compiles, the nineteenth
-   speeds up `Mem.prefetch` of buffers and `String.take` of short strings, the
-   twenty-first lays out a type wider than 32 words as a node of its own (section 16),
-   the twenty-second makes `String.order` native (section 39), the twenty-third keeps a
-   socket with no room from holding up the `TCP.post` writer (section 40), and the
-   twenty-sixth fixes the fifth (section 41). Seven more only add effects: the
-   twentieth, the process and the clock for starting as `redis-server` does; the
-   twenty-fourth, cutting a file of any size and syncing a directory (`File.sync_dir`);
-   the twenty-fifth, waiting for a socket on a channel (`TCP.watch`, section 41); the
-   twenty-seventh, a socket's addresses, killing it and channel marks (section 44); the
-   twenty-eighth, a file put in another's place and a name removed (section 47); the
-   twenty-ninth, the heap's account (`IO.heap`); the thirtieth, words outside the heap
-   (`Mem.touch`, `Mem.cell`; both section 48). Before section 14 there were twenty
-   patches: the sixteenth (effect pairs) was taken out in section 14, and the sections
-   before 14 number the patches the old way — there, 17–20 are today's 16–19.
+   sixteenth act where a program calls `TCP.post`, the seventeenth adds string functions,
+   the eighteenth changes how every program's `IO` compiles, the nineteenth speeds up
+   `Mem.prefetch` of buffers and `String.take` of short strings, the twenty-first lays out
+   a type wider than 32 words as a node of its own (section 16), the twenty-second makes
+   `String.order` native (section 39), the twenty-third keeps a socket with no room from
+   holding up the `TCP.post` writer (section 40), the twenty-sixth fixes the fifth
+   (section 41), and the thirty-first has a walker that reads a tree borrow it from a
+   caller that owns it (section 51). Seven more only add effects: the twentieth, the
+   process and the clock for starting as `redis-server` does; the twenty-fourth, cutting a
+   file of any size and syncing a directory (`File.sync_dir`); the twenty-fifth, waiting
+   for a socket on a channel (`TCP.watch`, section 41); the twenty-seventh, a socket's
+   addresses, killing it and channel marks (section 44); the twenty-eighth, a file put in
+   another's place and a name removed (section 47); the twenty-ninth, the heap's account
+   (`IO.heap`); the thirtieth, words outside the heap (`Mem.touch`, `Mem.cell`; both
+   section 48). Before section 14 there were twenty patches: the sixteenth (effect pairs)
+   was taken out in section 14, and the sections before 14 number the patches the old way
+   — there, 17–20 are today's 16–19.
    - **Lazy sealing** (section 3): a reference count is created when a value is
      actually shared, not at every construction.
    - **Packed strings** (section 4): in the C runtime a `String` is a chain of byte
@@ -3550,7 +3551,7 @@ p17…p20 became 16…19; there too, by this scale, the shards, the key hashed o
 load the change was made for: time, and where time is in the noise (±5–15%, sections
 7.23 and 9.6), instructions or memory. The cost is the growth of `comp.ts` in `ttok`
 tokens (the Bend repository limits this file by them: a cap of 64 thousand, the original
-has 62,940, with the patches 102,266), the lines of BendKV's code and proofs, and what
+has 62,940, with the patches 103,088), the lines of BendKV's code and proofs, and what
 lines do not measure: a new data representation, threads, heuristics with tuned
 thresholds, non-local effects.
 
@@ -3593,7 +3594,8 @@ commits, the seventh two):
 | 29. a file in another's place, a name removed (now the twenty-eighth, section 47) | 0 | — | `base.bend` (+15), effects `file_rename.c/.js` |
 | 30. the heap's account `IO.heap` (now the twenty-ninth, section 48) | 3 | ±3 | `base.bend` (+7), effects `heap.c/.js` |
 | 31. words outside the heap `Mem.touch`, `Mem.cell` (now the thirtieth, section 48) | 341 | +33 | `base.bend` (+15) |
-| total | 39,326 | | |
+| 32. trees lent to the walkers that read them (now the thirty-first, section 51) | 822 | +69/−1 | — |
+| total | 40,148 | | |
 
 Tests for the patches are not in the table. A map (p is a patch, 7.N a section):
 
@@ -5377,7 +5379,7 @@ as it was, and the reads of sorted sets stay as this change leaves them until a 
 one is found. A native `String.order` came first (section 39). The rest of the cost of a
 write to a sorted set is mostly its path, copied because the keyspace still holds the old
 path, and the drop of the old path: an update in place (take the value out, change it,
-put it back) would save both.
+put it back) would save both. (The narrower rule is the thirty-first patch, section 51.)
 
 ## 39. Members are compared a chunk at a time
 
@@ -6519,3 +6521,65 @@ empty buckets (`del_tip`, from `walk_same`, `tget_tmod_same` and `tget_tmod_othe
 `tools/gen_trie.py` writes `tdel_h` (and `tnode`) into `src/map.bend` and the 16-way
 lemmas into `proof/PROOF.bend` (227 lines, and 26 by hand); `make check` takes 11 s and
 the verdict 55 s.
+
+## 51. Walks that borrow the trees their callers own
+
+**What was left** (section 38). The compiler decides once for each function whether a
+parameter is borrowed or owned, and one caller that gives a function a value it owns,
+at its last use in a tail call, makes the parameter owned for every caller. `keys`
+gives its trie to `tkeys` that way, `scan`, `reap` and `pick` theirs to `tscan`,
+`zt.slice` and `zt.rslice` their trees to `zt.slice.go` and `zt.rslice.go`; and a walk
+that owns its tree takes each node it reads (`ctr_own`), which copies a node the
+keyspace shares, and drops the copy after.
+
+**The thirty-first patch** (`walk-lend.patch`, `comp.ts` +69/−1, 822 `ttok` tokens). A
+walker that reads is a def that calls itself, takes a tree (a datatype with a node of
+two or more subtrees of its own type: a trie's node has sixteen, a sorted set's two)
+and builds none of that datatype's nodes (`walk_reads`). A tail call that gives one a
+value its caller owns, at its last use, is emitted as `r = f(t); r` (`tail_lends`): the
+caller holds the value in its frame, the walker borrows it, and the caller drops it
+after the call; a call that holds such a value registers a lend for the walker. A tail
+call into the caller's own loop (`loop_of`) stays a jump, so a loop does not grow the
+stack. A function that rebuilds what it is given, or takes a list or a record (a
+request's command, whose fields its execution takes over), owns it as before. One
+detail of the fixed point: a walker passed a word of a root that ends up owned is not
+made owned at the end of that pass (its caller holds what it then owns in the next),
+since an owned parameter stays owned. In BendKV eight functions borrow their trees now
+(`tkeys`, `tscan`, `zt.slice.go`, `zt.rslice.go`, `zt.trie`, `zt.drain`, `zt.cutl` and
+`zt.cutr`), and 34 of its 1,134 compile otherwise, their callers holding what they gave.
+
+**Measured** (`tools/walks.sh`, instructions per command under callgrind, one client,
+against the same build without the patch):
+
+| command | before | with the patch | |
+|---|---:|---:|---:|
+| KEYS of 9,800 keys, a key | 2,779 | 1,961 | −29% |
+| SCAN 0 COUNT 1000 | 4,869,617 | 4,306,006 | −12% |
+| RANDOMKEY | 134,027 | 96,611 | −28% |
+| ZRANGE of 10 of 100,000, WITHSCORES | 73,222 | 59,686 | −18% |
+| ZREVRANGE of 10 of 100,000 | 58,777 | 45,745 | −22% |
+| ZRANGE of all 100,000 | 139,487,197 | 111,135,782 | −20% |
+| ZUNIONSTORE of two of 10 | 316,448 | 290,733 | −8% |
+| ZUNIONSTORE of two of 1,000 | 41,177,280 | 39,459,267 | −4% |
+| ZREMRANGEBYRANK of one of 1,000 | 56,795 | 50,907 | −10% |
+| ZRANK, ZSCORE, ZINCRBY, ZADD of 100,000 | 25,496 … 31,851 | 25,088 … 31,655 | −1 to −2% |
+| GET, SET, INCR (`make perfcheck`) | 3,332, 4,257, 4,543 | 3,332, 4,259, 4,542 | |
+
+`zt.drain` takes apart a tree made for a STORE, which no one shares: borrowed, it keeps
+the members it puts in its list and its caller drops the tree after, a little more
+work than taking the nodes over, and the STOREs above still came out cheaper.
+
+**The sweep's memory.** The sweep of expired keys (`reap`, ten times a second) reads the
+trie with `tscan`, and took the nodes it read. 4,000 keys set with SETEX, then INFO's
+`used_memory` once a second for twelve seconds:
+
+| | growth after a second, and after twelve |
+|---|---:|
+| without the patch | 69,152 bytes, 69,152 |
+| with the patch | 96 bytes, 96 |
+
+The 69 KB are copies of the nodes the keyspace shares, held from one pass of the sweep
+to the next. With the patch alone, a test of `tests/maxmemory_test.py` failed: a
+volatile-lru eviction of the keys with a time could not get within its limit, since the
+trie kept the nodes of the keys it evicted, where the sweep's copies, which went with
+those keys, had made up for them. With the deletes of section 50 it passes.

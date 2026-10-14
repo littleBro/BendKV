@@ -1,6 +1,6 @@
 # Patches to Bend
 
-Thirty patches to the Bend compiler (`bendlang/bend` @ `1cce499`, Bend 2.0.35).
+Thirty-one patches to the Bend compiler (`bendlang/bend` @ `1cce499`, Bend 2.0.35).
 They apply in order, each on top of the one before:
 
 1. **`lazy-seal.patch`** — lazy sealing of reference counts: `bend2/comp.ts`, +46/−3.
@@ -377,17 +377,38 @@ They apply in order, each on top of the one before:
    `tests/run/mem_cells.bend`, on C, on JS and in the interpreter: a word touched reads
    back, one never touched is 0, and an index past 2^20 falls in the word of its low 20
    bits.
+31. **`walk-lend.patch`** — walkers of trees borrow what their callers own: what KEYS,
+   SCAN, RANDOMKEY and the ranges of a sorted set stand on. The compiler decides once for
+   each def whether a parameter is borrowed or owned, and one caller that gave a def a
+   value it owned, at its last use in a tail call, made the parameter owned for every
+   caller; a walk that owns its tree takes each node it reads (`ctr_own`) and copies each
+   one another value shares. A walker that reads is a def that calls itself, takes a tree
+   (a datatype with a node of two or more subtrees of its own type) and builds none of
+   that datatype's nodes (`walk_reads`). A tail call that gives one a value its caller
+   owns, at its last use, is emitted as `r = f(t); r` (`tail_lends`): the caller holds
+   the value in its frame and drops it after the call, and the walker borrows it; a held
+   call registers a lend there too. A tail call into the caller's own loop (`loop_of`)
+   stays a jump, and a def that rebuilds what it is given, or takes a list or a record,
+   owns it as before. At the end of a pass, a walker passed a word of a root that ended
+   up owned is not made owned (an owned parameter stays owned): in the next pass its
+   caller holds what it then owns. `bend2/comp.ts` (+69/−1) and the test
+   `tests/compile/walk_lend_tree.bend`, in C, in JS and in the interpreter: a walk of a
+   tree that three callers read, through a caller that owns its tree because another
+   gives it a tree made for it, borrows it (without the patch it takes each node), and
+   gives the same keys; a rebuilt (mirrored) tree and one made for the call give theirs
+   too. Bend's tests on the C lane pass with it as they pass without it, test by test
+   (739 of 870), and the new one with them.
 
 What the patches do and what they give is worked through in
 [../PERFORMANCE.md](../docs/PERFORMANCE.md), sections 3–6, 7.7–7.17, 7.23–7.25, 16, 39,
-40, 41, 44, 47 and 48, and what each costs in tokens and what it gave, in section 12.
+40, 41, 44, 47, 48 and 51, and what each costs in tokens and what it gave, in section 12.
 There, and in the sections before 14, the patches are numbered the old way: the sixteenth was
 `effect-pairs.patch` (`Chan.call` and `TCP.post_recv_raw`, one step of the event loop
 each where there had been two), and their 17–20 are today's 16–19. The sixteenth, and
 `TCP.post_list` of the eleventh, were taken out together with the paths of BendKV they
 served (section 14); they remain in the branch
 [`archive/shards`](https://github.com/littleBro/BendKV/tree/archive/shards). With the
-patches `comp.ts` takes 102,266 `ttok` tokens against the Bend repository's cap of 64
+patches `comp.ts` takes 103,088 `ttok` tokens against the Bend repository's cap of 64
 thousand (the original takes 62,940): to upstream them, they will have to be made
 smaller.
 
@@ -395,7 +416,7 @@ From the `bendkv/` directory:
 
 ```bash
 git clone https://github.com/bendlang/bend ../bend-patched
-sh bend-patches/apply.sh ../bend-patched   # the bendkv-patches branch from 1cce499 with thirty patches
+sh bend-patches/apply.sh ../bend-patched   # the bendkv-patches branch from 1cce499 with thirty-one patches
 bun ../bend-patched/bend2/main.ts server.bend -o build/bendkv
 ```
 
@@ -418,7 +439,9 @@ twenty-fifth only adds the effects `TCP.watch` and `TCP.unwatch`, and the twenty
 fixes the fifth where the fifth acts, the twenty-seventh only adds the effects
 `TCP.name` and `TCP.kill` and the channel marks `Chan.mark` and `Chan.marked`, the
 twenty-eighth the effects `File.rename` and `File.unlink`, the twenty-ninth the effect
-`IO.heap`, and the thirtieth the words `Mem.touch` and `Mem.cell`.
+`IO.heap`, the thirtieth the words `Mem.touch` and `Mem.cell`, and the thirty-first
+changes how a tail call gives a tree its caller owns to a walker that reads it, in
+every program.
 The theory does not change:
 `String` in the proofs is still a list, and `IO` a function of `R` and `k`.
 
