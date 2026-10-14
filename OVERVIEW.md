@@ -821,10 +821,11 @@ The translation the kernel reads can be dumped with
   skipped. The reference is the same run on redis-server 7.0.15 with default settings,
   each unit on a freshly started server instance: in this mode 1,757 tests run, and
   Redis passes 1,677 (almost all the others need DEBUG, off by default in 7.0). BendKV
-  passes 1,173 of them (69.9%), and in the units of what it has (the protocol, the
-  connection and clients, the keyspace and databases, strings with ranges, bits and
-  fields, counters, hashes, lists, sets, sorted sets, SORT, HyperLogLogs, times to live,
-  transactions, Pub/Sub and keyspace notifications, introspection), 1,166 of 1,244 (94%):
+  passes 1,182 of them (70.5%), and in the units of what it has (the protocol, the
+  connection and clients and their pause, the keyspace and databases, strings with
+  ranges, bits and fields, counters, hashes, lists, sets, sorted sets, SORT, HyperLogLogs,
+  times to live, transactions, Pub/Sub and keyspace notifications, introspection), 1,175
+  of 1,258 (93%):
   `unit/introspection` 25 of 28 (the two others need Lua, and the third MIGRATE),
   `unit/other` 15 of 19, `unit/multi` 28 of 53 (the others read the replication stream,
   need Lua or XGROUP, or run after a test that left the client in MULTI),
@@ -835,20 +836,20 @@ The translation the kernel reads can be dumped with
   integers longer than 14 digits), `unit/type/incr` all 24, `unit/type/list-3` all 11,
   `unit/type/list-2` both, `unit/type/list` 214 of 218 (the others need replication or
   DUMP), `unit/sort` 51 of 52 (the other calls SORT from a Lua script),
-  `unit/hyperloglog` all 20,
+  `unit/hyperloglog` all 20, `unit/pause` 9 of 14 (the others run Lua scripts),
   `unit/type/set` all 94, `unit/type/zset` 287 of 289 (the other two need replication),
   `unit/bitops` 44 of 45 (the remaining one counts changes since the last save, which
   BendKV does not count), `unit/bitfield` all 16, `unit/protocol` all 17; SCAN and
   RANDOMKEY pass all their tests on keys, HSCAN, SSCAN and ZSCAN all theirs; of the 17
   tests with several databases that Redis passes, 9 (SET and GET in different databases,
   DEL in database 1, four tests of MOVE and three of COPY).
-  The others hit commands that do not exist (355 tests: FUNCTION LOAD, XADD, GEOADD,
+  The others hit commands that do not exist (344 tests: FUNCTION LOAD, XADD, GEOADD,
   SYNC…), do not run because the unit stopped earlier (94), or fail on a client
   left in MULTI by a test that failed inside a transaction on a command that does not
   exist, on COMMAND GETKEYS for commands that do not exist, on keys and clients left by
   tests stopped earlier, on Lua, on the number of changes since the last save, which
   BendKV does not count, on the size of a client's query buffer, which it does not have
-  (two tests of `unit/querybuf`), and on HINCRBY past 14 digits (55). Times to live and
+  (two tests of `unit/querybuf`), and on HINCRBY past 14 digits (57). Times to live and
   the sweep of expired keys added 78 passed tests: before them there were 135, and 30
   tests failed on SET's options; ranges and bits added 49 more, TOUCH, TIME and OBJECT
   4, MSETNX, RENAME and RENAMENX 13, COPY 7, BITOP and LCS 19, BITFIELD 16, hashes 64,
@@ -857,7 +858,7 @@ The translation the kernel reads can be dumped with
   left in MULTI by a test that failed on a command that does not exist), Pub/Sub and
   keyspace notifications 26, CLIENT LIST, INFO and KILL 9, MONITOR 3, maxmemory and its
   eviction 8, RESP3 292 (`unit/type/list` and `unit/type/zset` no longer stop at their
-  HELLO 3), SORT 56, HyperLogLogs 20.
+  HELLO 3), SORT 56, HyperLogLogs 20, CLIENT PAUSE and UNPAUSE 9.
   The suite found one bug in what there is: KEYS matched with a naive glob, and the
   pattern `a*a*…a*b` against a key of forty `a` characters hung the server for minutes;
   there were no classes `[...]` and no escaping either. Fixed: KEYS matches as Redis's
@@ -867,10 +868,10 @@ The translation the kernel reads can be dumped with
   CI on every pull request): redis-py 8.1.0's tests of its sync and asyncio clients, in
   RESP2 and in RESP3, and go-redis v9.23.0's specs, in RESP3, each against Redis 7.0.15
   and against BendKV, each on a server started for it, without their tests of modules,
-  clusters, sentinels and TLS. Of the tests Redis passes, BendKV passes 2,428 of 2,753 in
+  clusters, sentinels and TLS. Of the tests Redis passes, BendKV passes 2,433 of 2,753 in
   redis-py, the same tests in RESP2 and in RESP3, and 392 of 460 in go-redis; every other
   one fails on what BendKV does not have (Lua, streams, geo, DUMP, ACL, the
-  slow log, CLIENT PAUSE and TRACKING, and COMMAND's entries of those), none on a
+  slow log, CLIENT TRACKING, and COMMAND's entries of those), none on a
   command BendKV has. A test Redis passes that BendKV fails, and that is not among the
   known failures of `tools/data/clients.json`, fails CI.
 - **Differential testing against Redis 7.0.15** (`tests/diff_test.py`). Random streams
@@ -956,6 +957,16 @@ The translation the kernel reads can be dumped with
   INFO's statistics); then under load: four monitors each get all the lines of 20
   clients that pipeline 200 SETs each, each client's lines in order (section 45 of
   docs/PERFORMANCE.md).
+- **CLIENT PAUSE and UNPAUSE** (`tests/pause_test.py`, in each server mode): scenarios
+  on BendKV and on Redis, their transcripts compared line by line (28 lines: the errors;
+  a pause of writes, what it holds back and lets run, and its client as CLIENT LIST and
+  INFO show it; a pause of all ended by its time, with a CLIENT UNPAUSE and a QUIT held
+  back; MULTI, EXEC and DISCARD under a pause; a pause a transaction starts, and one in a
+  pipeline; keys whose time passes while it holds; a subscriber, PUBLISH and a monitor; a
+  pause of writes made one of all; a blocking command's timeout; the order the clients go
+  on in; a client held back that leaves or is killed; the parser's errors); then BendKV
+  alone: CLIENT UNBLOCK and EVAL where Redis differs, 100 clients held back and answered
+  in order, and 100 let go by a pause's end (section 3zzk of docs/FINDINGS.md).
 - **AUTH** (`tests/auth_test.py`, in each server mode): scenarios on BendKV and on
   Redis, their transcripts compared line by line — when a client must authenticate and
   what it is answered before that: commands with errors of each kind, one at a time and
@@ -1374,8 +1385,8 @@ make clients BEND="$B" # redis-py's and go-redis's test suites on Redis and on B
    FLUSHDB, FLUSHALL, keyspace lines per database — with laws and recovery of all the
    databases from the append-only file), the ranges and bits of strings (GETRANGE,
    SETRANGE, GETBIT, SETBIT, BITCOUNT, BITPOS — with a law of SETRANGE and recovery from
-   the append-only file). Redis's suite in external mode: BendKV passes 1,173 of the
-   1,677 tests Redis itself passes, and 1,166 of 1,244 in the units of what it has
+   the append-only file). Redis's suite in external mode: BendKV passes 1,182 of the
+   1,677 tests Redis itself passes, and 1,175 of 1,258 in the units of what it has
    ([docs/COMPATIBILITY.md](docs/COMPATIBILITY.md)). Start-up as for redis-server (the
    command line and the configuration file). The database as a record with a count of
    keys (DBSIZE in O(1)).
@@ -1457,9 +1468,11 @@ make clients BEND="$B" # redis-py's and go-redis's test suites on Redis and on B
    list it makes (section 3zzh of FINDINGS.md); checked by tests against Redis.
    HyperLogLogs: PFADD, PFCOUNT, PFMERGE, PFDEBUG and PFSELFTEST on a string's bytes as
    Redis writes them, the estimate on doubles in software (section 3zzj of FINDINGS.md);
-   checked by tests against Redis byte for byte. What the
-   client libraries' suites find missing within the scope above (DUMP and RESTORE,
-   CLIENT PAUSE and TRACKING, the slow log, SHUTDOWN) is the next step.
+   checked by tests against Redis byte for byte. CLIENT PAUSE and CLIENT UNPAUSE: the
+   commands a pause holds back wait, with the rest of their clients' batches, until it
+   ends, while the data set is kept still (section 3zzk of FINDINGS.md); checked by tests
+   against Redis. What the client libraries' suites find missing within the scope above
+   (DUMP and RESTORE, CLIENT TRACKING, the slow log, SHUTDOWN) is the next step.
 2. **The append-only file, further.** A law of the rewrite: the rewritten file replays
    to the databases it was written from (key by key, not by the shape of the trie); it
    needs a law that a scan from the first bucket reads every key once (the invariant "a

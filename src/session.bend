@@ -869,10 +869,13 @@ def auth.conn(ok: Bool, +c: Conn, +s: Srv) -> Conn:
 # array; a null for BRPOPLPUSH and BLMOVE, as LMOVE answers). The server
 # makes such a client wait instead (server.bend, Blocked clients): it runs
 # the same pop again once a write gives one of the keys elements, or
-# answers a null array when the time is up.
+# answers a null array when the time is up. A client the server holds
+# back while clients are paused waits as BlkPause (server.bend, The
+# pause), which no key serves and no time ends.
 type Blk is Data:
   BlkPop{c: R.Cmd, form: Nat, ms: List<&2, Nat>}
   BlkBad{r: R.Reply}
+  BlkPause{}
 
 # The timeout, as getTimeoutFromObjectOrReply reads one in seconds: a
 # long double as string2ld reads it, times 1000 (rounded as x87 rounds),
@@ -1093,12 +1096,14 @@ def blk.reply(b: Blk, db: R.Db) -> R.Reply:
       blk.shape(form, R.reply_of(R.exec(c, db)))
     case BlkBad{r}:
       r
+    case BlkPause{}:
+      R.RNullA{}
 
 def blk.acts(b: Blk) -> List<&2, R.Act>:
   match b:
     case BlkPop{c, form, ms}:
       [R.ARun{c}]
-    case BlkBad{r}:
+    case _:
       Nil{}
 
 # whether the pop finds nothing on db: its reply a null (an array for
@@ -1118,7 +1123,7 @@ def blk.waits(b: Blk, db: R.Db) -> Bool:
   match b:
     case BlkPop{c, form, ms}:
       blk.none(R.reply_of(R.exec(c, db)))
-    case BlkBad{r}:
+    case _:
       False{}
 
 # the keys a blocking command waits on: LMPOP's and ZMPOP's, LMOVE's
@@ -1169,7 +1174,7 @@ def blk.ms(b: Blk) -> List<&2, Nat>:
   match b:
     case BlkPop{c, form, ms}:
       ms
-    case BlkBad{r}:
+    case _:
       Nil{}
 
 # the form of a pop's reply (blk.shape)
@@ -1177,7 +1182,7 @@ def blk.form(+b: Blk) -> Nat:
   match b:
     case BlkPop{c, +form, ms}:
       form
-    case BlkBad{r}:
+    case _:
       0n
 
 # whether a pop waits for a sorted set (ZMPOP) rather than a list
@@ -1211,6 +1216,8 @@ def blk.at(b: Blk, +k: String) -> R.Cmd:
       c
     case BlkBad{r}:
       R.Bad{r}
+    case BlkPause{}:
+      R.Bad{R.RNullA{}}
 
 # Databases
 # ---------
@@ -2613,12 +2620,13 @@ def pub.say(m: Mute, p: R.PubOp) -> Maybe<&2, R.Reply>:
 
 # Clients
 # -------
-# CLIENT LIST, INFO, KILL and NO-EVICT (R.SClient), as Redis answers a
-# client alone on the server: LIST and INFO show the client's own line,
-# its addresses and its socket unknown here ("?:0", fd 0), KILL finds no
-# other client to kill and its old form no address, NO-EVICT answers OK.
-# The server answers them with every client it holds (server.bend,
-# Clients). MONITOR (R.SMonitor) answers OK, as Redis answers a client
+# CLIENT LIST, INFO, KILL, NO-EVICT, PAUSE and UNPAUSE (R.SClient), as
+# Redis answers a client alone on the server: LIST and INFO show the
+# client's own line, its addresses and its socket unknown here ("?:0", fd
+# 0), KILL finds no other client to kill and its old form no address,
+# NO-EVICT, PAUSE and UNPAUSE answer OK (a pause holds back no other
+# client). The server answers them with every client it holds, and
+# pauses them (server.bend, Clients, The pause). MONITOR (R.SMonitor) answers OK, as Redis answers a client
 # alone on the server, which sees no command but its own; the server
 # makes the client a monitor (server.bend, MONITOR).
 def cl.cmd(+info: Bool) -> String:
@@ -2660,6 +2668,10 @@ def cl.reply(op: R.ClOp, +c: Conn, +argv: Nat) -> R.Reply:
     case R.CoKillAddr{a}:
       R.RError{"ERR No such client"}
     case R.CoNoEvict{on}:
+      R.r_ok()
+    case R.CoPause{hi, lo, all}:
+      R.r_ok()
+    case R.CoUnpause{}:
       R.r_ok()
     case R.CoBad{r}:
       r

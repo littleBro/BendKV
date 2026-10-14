@@ -14,7 +14,7 @@
 # step needs no Redis. The table holds them typed (R.RMap, R.RSet), as
 # BendKV answers them in RESP3; RESP2 writes them as the arrays Redis
 # writes in RESP2. Only the subcommands BendKV has are kept (BendKV's
-# CLIENT has thirteen of Redis's sixteen), in the order of their names: Redis
+# CLIENT has fifteen of Redis's sixteen), in the order of their names: Redis
 # lists commands in the order of a hash table with a random seed, so no
 # order is Redis's own. The second step writes the block between
 # "# BEGIN gen_commands: table" and "# END gen_commands: table" in
@@ -29,8 +29,9 @@
 # numbers, its name, its arity from the same JSON (the statistics count a
 # call with the wrong number of arguments as refused only when it fails
 # Redis's own check of the arity), whether its calls may fail as they run,
-# whether MONITOR sees its calls and whether a monitor may run it (from its
-# flags), and the word each code rides in (twelve bits, six of them set). The
+# whether MONITOR sees its calls, whether a monitor may run it and whether
+# CLIENT PAUSE WRITE holds it back (from its flags), and the word each code
+# rides in (twelve bits, six of them set). The
 # fourth writes there how a request's name finds its command (Step 4
 # below), from the same numbers.
 #
@@ -47,7 +48,8 @@ REDIS = HERE / "src" / "redis.bend"
 # BendKV's commands, and of a command with subcommands the ones BendKV has
 COMMANDS = {
     "append": [], "auth": [], "client": ["caching", "getname", "getredir", "help", "id",
-    "info", "kill", "list", "no-evict", "reply", "setname", "trackinginfo", "unblock"], "command": ["count", "docs",
+    "info", "kill", "list", "no-evict", "pause", "reply", "setname", "trackinginfo", "unblock",
+    "unpause"], "command": ["count", "docs",
     "getkeys", "getkeysandflags", "help", "info", "list"], "config": ["get", "help",
     "resetstat", "rewrite", "set"], "dbsize": [], "decr": [], "decrby": [], "del": [],
     "echo": [], "exists": [], "flushall": [], "flushdb": [], "function": ["flush", "help"],
@@ -392,7 +394,8 @@ RISKY = {"incr", "decr", "incrby", "decrby", "expire", "pexpire", "setex", "pset
 
 # BendKV's commands that may be replicated (MAY_REPLICATE in Redis's
 # src/commands/*.json), a flag COMMAND INFO hides: a monitor may not run
-# them, as it may not run a command that reads or writes a key
+# them, as it may not run a command that reads or writes a key, and
+# CLIENT PAUSE WRITE holds them back, as it holds back those that write
 MAY_REPLICATE = {"publish", "spublish", "eval", "pfcount"}
 
 # the parser's commands with subcommands, by the function that numbers
@@ -530,6 +533,13 @@ def stats_block(src, facts):
             "def stat.keyspace(+key: Nat) -> Bool:", "  match key:"]
     for k, (name, kind, i) in enumerate(keys, 1):
         if fl[name] & {"write", "readonly"} or name in MAY_REPLICATE:
+            out += ["    case %dn:" % k, "      True{}"]
+    out += ["    case _:", "      False{}", ""]
+    out += ["# whether CLIENT PAUSE WRITE holds a call of the command of a key back:",
+            "# one that writes or may be replicated (write, may_replicate)",
+            "def stat.pausable(+key: Nat) -> Bool:", "  match key:"]
+    for k, (name, kind, i) in enumerate(keys, 1):
+        if "write" in fl[name] or name in MAY_REPLICATE:
             out += ["    case %dn:" % k, "      True{}"]
     out += ["    case _:", "      False{}", ""]
     out += ["# whether the command of a key may take memory (denyoom): past",

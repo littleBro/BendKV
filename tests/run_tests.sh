@@ -17,8 +17,10 @@
 # load), Pub/Sub and keyspace notifications (scenarios against Redis, and
 # checks under load), CLIENT LIST, INFO and KILL (scenarios against Redis,
 # and checks under load), MONITOR (scenarios against Redis, and a check
-# under load), AUTH (scenarios against Redis: when a client must
-# authenticate, and what it is answered before), the differential test
+# under load), CLIENT PAUSE and UNPAUSE (scenarios against Redis, and
+# checks of BendKV alone and under load), AUTH (scenarios against Redis:
+# when a client must authenticate, and what it is answered before), the
+# differential test
 # against Redis (a fresh
 # Redis database for each run)
 # and the consistency checks under concurrent clients, against the first
@@ -80,6 +82,7 @@ for n in "" post send "post build/test.aof everysec"; do
   python3 tests/pubsub_test.py --bendkv "$PORT" --redis "$REDIS_PORT"
   python3 tests/client_test.py --bendkv "$PORT" --redis "$REDIS_PORT"
   python3 tests/monitor_test.py --bendkv "$PORT" --redis "$REDIS_PORT"
+  python3 tests/pause_test.py --bendkv "$PORT" --redis "$REDIS_PORT"
   python3 tests/auth_test.py --bendkv "$PORT" --redis "$REDIS_PORT"
   if [ -z "$n" ]; then
     python3 tests/protocol_test.py --bendkv "$PORT" --redis "$REDIS_PORT"

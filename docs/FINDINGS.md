@@ -4601,6 +4601,95 @@ commands, and Redis 7.0.15 without Ubuntu's fix takes some values BendKV finds i
 OBJECT ENCODING answers `embstr` for a HyperLogLog of up to 44 bytes, which Redis made
 `raw`, and MEMORY USAGE differs as it does for any value.
 
+## 3zzk. CLIENT PAUSE and CLIENT UNPAUSE
+
+**What there is.** CLIENT PAUSE timeout [WRITE|ALL] and CLIENT UNPAUSE as Redis 7.0.15
+runs them (`pauseClients`, `unpauseClients` and the check of `processCommand`), in the
+actor (`src/server.bend`, The pause). A pause of writes holds back the commands that
+write or may be replicated (`stat.pausable`, generated from Redis's flags `write` and
+`may_replicate`: PFCOUNT and PUBLISH among them), and an EXEC whose transaction queued
+one; a pause of all holds back every command, CLIENT UNPAUSE and QUIT too, as Redis does.
+A pause while one holds keeps the more restrictive kind and the later end, and one of a
+timeout of 0 adds no end (CLIENT PAUSE 0 ALL turns a pause of writes into one of all
+until the same time). The timeout is read as Redis reads it, after the mode: "ERR CLIENT
+PAUSE mode must be WRITE or ALL", then a long long ("ERR timeout is not an integer or out
+of range", "ERR timeout is negative"); one whose end passes a long long's range wraps in
+Redis to a time long past and ends no pause, and so it does in BendKV. COMMAND's table
+gains `client|pause` and `client|unpause` (CLIENT has 15 of Redis's 16 subcommands), and
+CLIENT HELP their lines.
+
+**Where the pause comes in.** As in `processCommand`: after the checks of the command's
+name and arguments, of authentication, of maxmemory, of a RESP2 subscriber's commands and
+of a monitor's (which Redis makes as for a replica), and before MULTI queues the command.
+So a command refused before them (an unknown one, a wrong number of arguments) is
+answered at once, a write in MULTI waits before it is queued, and EXEC waits when its
+transaction holds a write. A monitor is never held back: Redis never pauses a replica,
+and a monitor is one to it; under a pause of all, a monitor's CLIENT UNPAUSE is the only
+one that runs before the pause's end.
+
+**A client held back** waits as the client of a blocking command waits (Blocked
+clients): in the chain of the clients that wait, as `BlkPause`, with the command at the
+head of the rest of its batch and the batch's arguments as sent from it on, its call not
+yet counted, its channel marked with the command. CLIENT LIST shows it with flag b, the
+command as its last and the size of its arguments, and INFO's blocked_clients counts it,
+as Redis counts a postponed client. No key serves it and no time ends it. When the pause
+ends (CLIENT UNPAUSE, or the first tick past its end, as Redis's cron ends it), the
+clients it held back go on at the end of the group, in the order they came, each from the
+command held back, which runs as if it came then: counted, fed to the monitors, held back
+again if a new pause holds. A client held back whose connection closes, or that CLIENT
+KILL kills, is forgotten as a waiting client is.
+
+**The data set kept still.** While a pause holds, the sweep of expired keys and eviction
+do not run, and nothing is refused past maxmemory, as Redis's `activeExpireCycle` and
+`isSafeToPerformEvictions` stop while clients are paused: a key whose time passed reads
+as gone, as it always does in BendKV, and DBSIZE still counts it, as Redis's does. The
+sweep runs as the pause ends, at CLIENT UNPAUSE or at the tick that ends it, where Redis
+deletes such keys as lookups find them after the pause (unit/pause reads expired_keys
+right after CLIENT UNPAUSE and two GETs).
+
+**The fast way.** While a pause holds, bit 25 of Ps's ev keeps every batch on the
+general way, a command at a time, where the shell of each command sees the pause
+(`sh.of`, `pause.holds`). The pause lives in the registry of clients (`Cls`, a node that
+Ps holds), so nothing grows on the fast way: GET, SET and INCR take what they took
+(3,320, 4,077 and 4,394 instructions per request; 3,321, 4,075 and 4,395 on main).
+
+**Where BendKV differs.** CLIENT UNBLOCK of a client held back answers 0 and leaves it
+held back: Redis 7.0.15 crashes on it with TIMEOUT (`replyToBlockedClientTimedOut` knows
+no postponed client) and, with ERROR, sends the client the error and later runs its
+command all the same. EVAL of a script BendKV does not run (an error its parser finds)
+is not held back, as it writes nothing; Redis holds back a script that does not declare
+no-writes, and runs it after the pause. EVAL of the scripts of BendKV's own append-only
+file, which write, is held back. A pause's end is seen at the tick after it (every 100
+ms), where Redis also sees it when a lookup, an eviction or a cycle of its event loop
+checks it. A timeout of 2^47 ms or more (thousands of years) ends at a time past any
+other, a runtime's Nat staying below 2^48. Redis's other purposes of a pause (a
+failover, CLUSTER FAILOVER) have no counterpart.
+
+**The command codes.** Two more keys of INFO's statistics take 904 of the 924 words of
+twelve bits with six set (`stat.cw`) that a request's code rides in: the next commands
+(GEO's ten) need words of another kind.
+
+**The laws.** The proofs speak of what commands do to the databases; the pause holds
+commands back without changing what any does, and CLIENT PAUSE and UNPAUSE are commands
+of the server (`SClient`, as CLIENT KILL is), which a session answers OK, as Redis
+answers a client alone. `make check`, `make verdict` and `make gencheck` pass.
+
+**Tests.** `tests/pause_test.py`, against Redis: the commands' errors; a pause of writes
+(reads, PING and CLIENT run; a write, PFCOUNT, PUBLISH and BLPOP wait; CLIENT LIST, INFO
+and the statistics of a client held back); a pause of all ended by its time, with a
+CLIENT UNPAUSE and a QUIT held back until then; MULTI, EXEC and DISCARD under a pause;
+a pause a transaction starts; a pause and a write in one pipeline; keys whose time passes
+while the pause holds; a subscriber, PUBLISH and a monitor; a pause of writes made one
+of all; a blocking command's timeout while a pause holds; the order the clients held back
+go on in; a client held back that leaves or is killed; the parser's errors under a
+pause: 28 lines, each as Redis's. Then BendKV alone: CLIENT UNBLOCK and EVAL as above,
+100 clients held back and answered in order, and 100 let go by a pause's end. redis-py's
+5 tests of CLIENT PAUSE and UNPAUSE come off the client suites' known failures.
+
+**Redis's suite.** unit/pause passes 9 of its 14 tests; the other five run Lua scripts
+(EVAL, EVAL_RO, FUNCTION LOAD) under a pause. 1,182 of the 1,677 tests Redis passes
+(70.5%; 1,173 before), 1,175 of the 1,258 in what BendKV has (93%); no other test changed.
+
 ## 4. Where a request's time goes, and hiding the memory waits
 
 With the eight patches, BendKV ran fewer instructions on GET and SET than Redis, missed

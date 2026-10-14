@@ -15,11 +15,11 @@ throughput of Redis 7.0.15 on the same machine, with half its memory for small v
 > **Status: research prototype.** BendKV implements a subset of Redis (strings, hashes,
 > lists, sets, sorted sets, HyperLogLogs and their times to live, the blocking commands,
 > transactions, pub/sub and keyspace notifications, the keyspace, several databases,
-> connection commands, CLIENT LIST, INFO and KILL, MONITOR, an append-only file and its
-> rewrite, maxmemory and its eviction, RESP3). The goal now is a drop-in replacement for a
-> single Redis node, measured by Redis's own test suite: of the 1,677 tests Redis 7.0.15
-> passes against a server it did not start, BendKV passes 1,173, and 1,166 of the 1,244 in
-> what it implements
+> connection commands, CLIENT LIST, INFO, KILL, PAUSE and UNPAUSE, MONITOR, an
+> append-only file and its rewrite, maxmemory and its eviction, RESP3). The goal now is a
+> drop-in replacement for a single Redis node, measured by Redis's own test suite: of the
+> 1,677 tests Redis 7.0.15 passes against a server it did not start, BendKV passes 1,182,
+> and 1,175 of the 1,258 in what it implements
 > ([docs/COMPATIBILITY.md](docs/COMPATIBILITY.md)). Do not use it for data you cannot
 > lose.
 
@@ -308,7 +308,8 @@ translation stays in the trusted base.
   with AUTH and SETNAME), AUTH, SELECT, QUIT, RESET (which selects database 0 again, and
   RESP2),
   CLIENT (ID, GETNAME, SETNAME, REPLY ON/OFF/SKIP, NO-EVICT, GETREDIR, TRACKINGINFO,
-  CACHING, UNBLOCK (TIMEOUT or ERROR), LIST, INFO, KILL, HELP), FUNCTION FLUSH. A client
+  CACHING, UNBLOCK (TIMEOUT or ERROR), LIST, INFO, KILL, PAUSE, UNPAUSE, HELP), FUNCTION
+  FLUSH. A client
   must authenticate where Redis asks it to: once a command's name and number of arguments
   are checked, before it runs (a syntax error is NOAUTH for a client that has not
   authenticated); a client is authenticated as it connects, and at RESET, when there is
@@ -330,6 +331,17 @@ translation stays in the trusted base.
   holds the commands after a blocking one; BendKV holds them as commands); idle counts
   from the client's last batch, where Redis also counts a reply written (to a subscriber
   that gets messages, to a client that waited); user is `default`, redir -1, resp 2.
+- **CLIENT PAUSE and CLIENT UNPAUSE**, as Redis 7.0.15 runs them: a pause of the
+  commands that write or may be replicated (WRITE: PFCOUNT and PUBLISH too, and an EXEC
+  whose transaction queued one) or of every command (ALL), for a timeout in ms; a second
+  pause keeps the more restrictive kind and the later end. A command the pause holds
+  back, once Redis's checks before it passed and before MULTI queues it, waits with the
+  rest of its client's batch (CLIENT LIST's flag b, INFO's blocked_clients) and runs when
+  the pause ends, at CLIENT UNPAUSE or at its time, in the order the clients came; a
+  monitor is never held back. While the pause holds, keys are not swept as they expire,
+  nor evicted, as Redis keeps the data set still. Where BendKV differs: CLIENT UNBLOCK of
+  a client held back answers 0 (Redis 7.0.15 crashes on it), and EVAL of a script BendKV
+  does not run is answered at once (FINDINGS.md, section 3zzk).
 - **MONITOR**, as Redis 7.0.15 runs it: each call that runs after it, of any client,
   sends every monitor a line, `+<s>.<us> [<db> <ip:port>]` and the call's arguments as
   the client sent them, quoted as Redis quotes them. As in Redis, a command refused
@@ -437,7 +449,7 @@ translation stays in the trusted base.
   (FINDINGS.md, section 3zv).
 
 Not yet: streams and geo, Lua
-scripts, CLIENT PAUSE and TRACKING, timing of commands
+scripts, CLIENT TRACKING, timing of commands
 (usec in INFO commandstats, latencystats), CONFIG REWRITE (it answers as Redis does without a configuration file),
 RDB files. Integers, and times in ms, are limited to 14 digits.
 
@@ -557,7 +569,10 @@ aside, then 100 clients listed and half of them killed by id, and 200 killed by 
 while other clients connect and close, none killed but those named), MONITOR
 (`tests/monitor_test.py`: scenarios on BendKV and on Redis, a monitor's lines compared
 with their time and address put aside, then 4 monitors that each get every line of 20
-clients that pipeline 200 SETs each, each client's lines in order), AUTH
+clients that pipeline 200 SETs each, each client's lines in order), CLIENT PAUSE and
+UNPAUSE (`tests/pause_test.py`: scenarios on BendKV and on Redis of what a pause holds
+back and lets run, its end and the order the clients go on in, their transcripts compared
+line by line, then 100 clients held back and let go in order), AUTH
 (`tests/auth_test.py`: scenarios on BendKV and on Redis of when a client must
 authenticate and what it is answered before it does), RESP3 (`tests/resp3_test.py`: 11
 scenarios on BendKV and on Redis compared byte for byte, of HELLO and the switch of
@@ -606,7 +621,7 @@ src/        the server
   startup.bend  the command line and the configuration file        tested
   server.bend   TCP, connections, the database actor, the log      tested
 proof/      LAWS.bend (the laws), PROOF.bend (their proofs), SPEC.bend (the commands on the trie alone)
-tests/      float, start, differential, expiry, protocol, session, CONFIG, INFO, COMMAND, SCAN, BITFIELD, hash, list, set, sorted set, SORT, HyperLogLog, blocking, transaction, Pub/Sub, CLIENT, MONITOR, AUTH, RESP3, maxmemory, robustness, stalled reader, concurrency, AOF and AOF rewrite tests
+tests/      float, start, differential, expiry, protocol, session, CONFIG, INFO, COMMAND, SCAN, BITFIELD, hash, list, set, sorted set, SORT, HyperLogLog, blocking, transaction, Pub/Sub, CLIENT, MONITOR, CLIENT PAUSE, AUTH, RESP3, maxmemory, robustness, stalled reader, concurrency, AOF and AOF rewrite tests
 bench/      in-process benchmarks of the map, the core and channels
 tools/      measurement scripts, the runner of Redis's test suite, and the generators of
             the trie, of the parameter table and of the command table, with the facts
