@@ -128,7 +128,7 @@ represented data:
   reader an owner of the whole value: O(depth) reference-count operations per read.
 - **A deep trie.** The first map was a binary trie of 20 levels: 20 dependent loads.
 
-## 3. Twenty-six patches to the Bend compiler
+## 3. Thirty-one patches to the Bend compiler
 
 All live in [`bend-patches/`](../bend-patches/) (against `bendlang/bend` at `1cce499`,
 Bend 2.0.35). The first eight switch on by themselves for programs without GPU calls;
@@ -145,8 +145,12 @@ twenty-third keeps a socket with no room from holding up the writer, where a pro
 calls `TCP.post` (section 3zo); the twenty-fourth makes `File.truncate` take its
 size as a `Nat` and adds `File.sync_dir` (section 3e); the twenty-fifth adds `TCP.watch`
 and `TCP.unwatch`, a wait for a socket that puts a message on a channel (section 3zp);
-and the twenty-sixth fixes the fifth where a field of the node it keeps across a call
-is shared before the call (section 3zp).
+the twenty-sixth fixes the fifth where a field of the node it keeps across a call is
+shared before the call (section 3zp); the twenty-seventh adds a socket's addresses,
+killing it and channel marks (section 3zs); the twenty-eighth `File.rename` and
+`File.unlink` (section 3zv); the twenty-ninth the heap's account and the thirtieth
+words outside the heap (section 3zw); and the thirty-first has a walker that reads a
+tree borrow it from a caller that owns it, in every program (section 3zza).
 The sections before 3l
 number the patches as they were then: patch 16 was effect pairs, taken out in 3l with
 `TCP.post_list` of patch 11, and their patches 17–20 are today's 16–19. None changes the
@@ -182,6 +186,11 @@ to agree with the list definition, and `IO` is still a function of `R` and `k`.
 | file durable (today's 24th) | `File.truncate` takes its size as a `Nat`, a 64-bit word, not a `U32` (a size `off_t` cannot hold fails with `EOVERFLOW` before the file is touched); `File.sync_dir` syncs the directory that holds a path, as Redis's `fsyncFileDir` | a file of 4 GiB or more cut back to its last whole entry keeps the entries before it, not its size modulo 2^32 of them; a new file's name is on the disk before the first write is acknowledged (section 3e) |
 | tcp watch (25th) | `TCP.watch(sock, chan, msg)` puts `msg` on `chan` once the socket has bytes to read or its peer closed it, waiting in the socket's slot as a recv does; `TCP.unwatch` takes it back, `True` if it had not fired; a watch that a stale edge or flag wakes peeks at the socket and waits on when there is nothing to read | a connection whose client waits waits at once for the actor's answer and for its client's bytes or close (section 3zp) |
 | spare share (26th) | a field of a node kept across a call (patch 5) that is shared before the call is written back to the node once `term_keep` has wrapped it, so the read after the call and a rebuild that skips the slot hold the shared word, not the raw one the wrap owns | no use after free in the batches that run a command at a time while clients wait; 27 stores in BendKV, all on that path, and the same instructions per request (section 3zp) |
+| tcp clients (27th) | `TCP.name` gives a socket's fd and both addresses, `TCP.kill` shuts it down; `Chan.mark` and `Chan.marked` mark a channel with a client's last command and its time | CLIENT LIST, INFO and KILL (section 3zs) |
+| file rename (28th) | `File.rename` puts a file in another's place in one step; `File.unlink` removes a name | the rewrite of the append-only file (section 3zv) |
+| heap (29th) | `IO.heap` gives what the heap's live values hold and what it has taken, in bytes | `used_memory` and eviction by `maxmemory` (section 3zw) |
+| mem cells (30th) | `Mem.touch` and `Mem.cell`: 2^20 words outside the heap that one computation writes and reads | when each key was last used, for LRU and LFU eviction and OBJECT IDLETIME and FREQ (section 3zw) |
+| walk lend (31st) | a tail call that gives a walker that reads a tree (it calls itself, takes a tree, builds none of its nodes) a value its caller owns, at its last use, holds the value and drops it after the call, so the walker borrows the tree instead of copying each shared node it reads | KEYS 29% fewer instructions a key, RANDOMKEY 28%, ZRANGE of 10 of 100,000 18% (section 3zza) |
 
 The ratios in the last column come from different series and drift by ±0.06–0.08
 between series; PERFORMANCE.md gives each one with its pairs.
@@ -2941,7 +2950,8 @@ the zset reads stay as this change leaves them until a narrower one is found. A 
 `String.order` came first (section 3zn). What a write of a sorted set costs past that
 is mostly its path, copied because the keyspace still holds the old one, and the old
 path's drop: an update in place (take the value out, change it, put it back) would save
-both.
+both. (The narrower rule is Bend patch 31, section 3zza: a walker that reads a tree
+borrows it from a caller that owns it.)
 
 ## 3zn. Members compared a run at a time
 
@@ -4107,6 +4117,53 @@ nodes whose children read alike read alike (`node_same`); and where `tmod_h` bui
 nodes down to the bucket of an empty trie, every bucket they hold is empty (`del_tip`,
 from the two lemmas of `tmod_h`). `tools/gen_trie.py` writes the 16-way steps: 227 lines
 of `PROOF.bend`, and 26 more by hand.
+
+## 3zza. Walks that borrow the trees their callers own
+
+**What was left.** The compiler decides once for each function whether a parameter is
+borrowed or owned, and one caller that gives a function a value it owns, at its last
+use in a tail call, makes the parameter owned for every caller (section 3zm). The walks
+of the keyspace's trie and of a sorted set's tree had such callers: `keys` gives its
+trie to `tkeys` (KEYS), `scan`, `reap` and `pick` give theirs to `tscan` (SCAN, the
+sweep of expired keys, RANDOMKEY), `zt.slice` and `zt.rslice` give their trees to
+`zt.slice.go` and `zt.rslice.go` (ZRANGE and its family). A walk that owns its tree
+takes each node it reads, and a node another value shares (the keyspace shares every
+node of a stored trie or tree, and a version of a tree shares the subtrees it kept from
+the one before) is copied before it is read and the copy dropped after: KEYS copied
+every node of the trie, ZRANGE every node on the way to its range.
+
+**The change** (Bend patch 31, `walk-lend.patch`). A walker that reads is a function that
+calls itself, takes a tree (a datatype with a node of two or more subtrees of its own
+type) and builds none of that datatype's nodes. A tail call that gives one a value its
+caller owns, at its last use, becomes a call that holds the value and drops it after,
+as `r = f(t); r` does: the walker borrows the tree, and the caller drops it once, a
+count less where the keyspace shares it. A call that holds such a value lends it too,
+where it gave it. A tail call into the caller's own loop stays a jump. A function that
+rebuilds what it is given (it builds the tree's nodes), or takes a list or a record,
+owns it as before: the in-place update of a node it owns needs the node. In BendKV
+eight functions borrow their trees now (`tkeys`, `tscan`, `zt.slice.go`,
+`zt.rslice.go`, `zt.trie`, `zt.drain` and the cuts of a node, `zt.cutl` and `zt.cutr`),
+and 34 of its 1,134 compile otherwise, their callers holding what they gave.
+
+**What it gave.** Instructions per command under callgrind, from one client
+(`tools/walks.sh`): KEYS of 9,800 keys 2,779 a key against 1,961 (−29%), SCAN 0 COUNT
+1000 4.87 million against 4.31 (−12%), RANDOMKEY 134,000 against 96,600 (−28%); ZRANGE of
+10 elements of a sorted set of 100,000, with their scores, 73,200 against 59,700 (−18%),
+ZREVRANGE of 10 58,800 against 45,700 (−22%), ZRANGE of all 100,000 139.5 million
+against 111.1 (−20%); ZUNIONSTORE of two of 10 316,400 against 290,700 (−8%), of two of
+1,000 41.2 million against 39.5 (−4%), ZREMRANGEBYRANK of one element of 1,000 56,800
+against 50,900 (−10%); ZRANK, ZSCORE, ZINCRBY and ZADD within 2%. GET, SET and INCR
+take what they took (3,332, 4,259 and 4,542). A held call costs a frame where the tail
+call jumped, once per walk. `comp.ts` takes 103,088 `ttok` tokens (102,266 before).
+
+**The sweep.** The sweep of expired keys reads the trie with `tscan` ten times a second
+(`reap`), and took the nodes it read: with 4,000 keys with a time to live, the heap held
+69,152 bytes more a second after they were set, and as many from then on, copies of the
+nodes the keyspace shares. With the patch it holds 96 more. With the patch alone, a test
+of the eviction failed: a volatile-lru eviction of the keys with a time could not get
+within its limit, since the trie kept the nodes of the keys it evicted, where the
+sweep's copies, which went with those keys, had made up for them. With the deletes of
+section 3zz, which take their nodes, it passes.
 
 ## 4. Where a request's time goes, and hiding the memory waits
 

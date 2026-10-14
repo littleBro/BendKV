@@ -1188,7 +1188,7 @@ The proofs cover `map.bend`, `redis.bend`, `batch.bend`, `aof.bend`, `session.be
    runtime a 64-bit word with an abort past 2^48−1; `String` in theory is a list, and in
    the C runtime with the patch a chain of byte buffers, and `String.eq`, `String.hash`
    and the other operations on it are C functions. That the runtime agrees with the
-   definitions is not proved. The server is built by Bend with thirty patches from
+   definitions is not proved. The server is built by Bend with thirty-one patches from
    [`bend-patches/`](bend-patches/). They are in the trusted base too: checked by Bend's
    test suite and by differential tests against Redis, but not proved. The same goes for
    event loops on several threads, `epoll`, the atomicity of `Chan.send_all`, the writer
@@ -1295,7 +1295,7 @@ The Makefile passes `CC=clang-19` to Bend if there is one: clang 18 ignores the
 `preserve_none` convention, and the code comes out ~8% slower.
 
 ```bash
-# Bend with the patches: a clone of bendlang/bend with the thirty patches of bend-patches/ on it;
+# Bend with the patches: a clone of bendlang/bend with the thirty-one patches of bend-patches/ on it;
 # --verdict needs Lean 4.34.0 (elan)
 git clone https://github.com/bendlang/bend ../bend-patched
 sh bend-patches/apply.sh ../bend-patched

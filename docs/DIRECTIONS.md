@@ -325,10 +325,9 @@ Where performance and proof meet: **batched execution under proved laws.**
    (section 3zz), so the eviction gets within a limit with the keys Redis keeps, but its
    samples still walk the trie's empty buckets, and an eviction takes ten times Redis's
    time; a pick that goes down the trie by counts would end that, for RANDOMKEY and
-   SRANDMEMBER too. And the compiler copies a node a
-   function takes while its caller still shares it: a walk that recurses on the
-   stack takes the nodes it reads, where a loop reads them lent, so the hot walks are
-   written as loops for now.
+   SRANDMEMBER too. The compiler no longer copies the nodes a walk of a tree reads when
+   the walk's caller owns the tree and the keyspace shares it (Bend patch 31, section
+   3zza): KEYS, SCAN, RANDOMKEY and the ranges of a sorted set borrow their trees now.
 
 After that comes proving the native strings (section 5, step 1): a small piece of
 work that makes the word "verified" much stronger.
