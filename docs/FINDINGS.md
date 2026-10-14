@@ -1555,7 +1555,9 @@ failed, and INCR, DECR, INCRBY and DECRBY, which meet strings that are not integ
 batch of one code answers a line per call (an integer or an error), so its errors are
 its lines that begin with `-`, and a batch whose bytes have no `-` at all (most batches
 of INCR; one `memchr`) has none. A batch of several codes walks its replies before they
-are encoded. A batch with a command of the connection or of the server runs a command at
+are encoded. (Since section 3zzb a batch of one code walks its replies too: the commands
+of the collections that may fail answer many lines, and a line of a bulk may begin with
+`-`.) A batch with a command of the connection or of the server runs a command at
 a time, each counted as it runs, so an INFO in the batch sees the commands before it.
 
 Two of Redis's rules showed up only when the counts were compared. Redis refuses a call
@@ -4164,6 +4166,44 @@ of the eviction failed: a volatile-lru eviction of the keys with a time could no
 within its limit, since the trie kept the nodes of the keys it evicted, where the
 sweep's copies, which went with those keys, had made up for them. With the deletes of
 section 3zz, which take their nodes, it passes.
+
+## 3zzb. Errors found among the replies, not in their bytes
+
+**What was wrong.** INFO's errorstats, `total_error_replies` and each command's
+`failed_calls` count a batch's error replies. The actor looked for those of a batch of
+one command, most batches, in its encoded bytes, a line at a time, taking a line that
+begins with `-` for an error reply. That held while the commands that may fail as they
+run were INCR, DECR, INCRBY and DECRBY, whose replies are a line each (section 3s). The
+collections brought dozens of commands that may fail (WRONGTYPE) and answer many lines:
+LRANGE, HGETALL, SMEMBERS, ZRANGE and the like. A line of a bulk that begins with `-`
+(the string "-5", a negative score, a member "-x") counted as an error: a ZRANGE
+WITHSCORES of 2,000 negative scores added 2,000 to `errorstat_ERR`, to
+`total_error_replies` and to ZRANGE's `failed_calls`, where Redis counts none. And the
+scan read each line with `String.find` and `String.code_at` at its index, which walk an
+answer of many chunks from its start: ZRANGE 0 -1 WITHSCORES of a sorted set of 20,000
+members took 15 s (7 s with integer scores), and held every other client meanwhile.
+
+**The change.** The errors of a batch of one command are found among its replies before
+they are encoded, as those of a batch of several commands were: a look at each reply's
+tag, the error replies taking the batch's code (`R.errs.one`). The scan of the bytes
+goes.
+
+**What it gives.** ZRANGE 0 -1 WITHSCORES of 20,000 members takes 0.145 s (14.7 s
+before), 0.029 s with integer scores (7.2 s); of 1,000 with half the scores negative,
+13.9 million instructions (247.8 million). DECR pipelined 16 deep on counters below zero,
+whose answers all have a `-`, takes 6,679 instructions a request (6,751). GET, SET and
+INCR take 3,334, 4,257 and 4,548 (3,335, 4,257 and 4,539): INCR pays the look at its
+replies, about 9 instructions, where its bytes had no `-`. A first version looked at the
+bytes for a `-` and then among the replies: it held the replies across their encoding,
+which every batch paid for, not only those it looked at (GET +17%, INCR +14%). The look
+before the encoding hands the replies on to the encoder after, as the batches of several
+commands did.
+
+**Tests.** `tests/stats_test.py` has a case of replies with lines that begin with `-` and
+are no errors: a bulk "-5", negative scores and increments, members "-x", one at a time
+and in pipelines of one command, two with a WRONGTYPE among them, and a ZRANGE of 2,000
+negative scores. On the build before, BendKV counted 2,087 error replies where Redis
+counted 2.
 
 ## 4. Where a request's time goes, and hiding the memory waits
 
