@@ -314,12 +314,13 @@ Where performance and proof meet: **batched execution under proved laws.**
    (HELLO, SELECT, CLIENT, AUTH, INFO, COMMAND, CONFIG; done), CLIENT LIST, INFO and KILL
    (done, section 3zs), SCAN and RANDOMKEY (done), MONITOR (done, section 3zt), the
    log's rewrite (done, section 3zv), maxmemory and its eviction (done, section 3zw),
-   RESP3 (done, section 3zx), SORT and SORT_RO (done, section 3zzh), and HyperLogLogs
-   (done, section 3zzj), measured by Redis's own test suite run against BendKV and by
-   client libraries' test suites (redis-py's and go-redis's, in CI: done, section 3zy).
+   RESP3 (done, section 3zx), SORT and SORT_RO (done, section 3zzh), HyperLogLogs (done,
+   section 3zzj), and CLIENT PAUSE and UNPAUSE (done, section 3zzk), measured by Redis's
+   own test suite run against BendKV and by client libraries' test suites (redis-py's and
+   go-redis's, in CI: done, section 3zy).
    Lua, streams, cluster, replication and modules are out of scope. The suite's count: of the 1,677 tests
-   Redis 7.0.15 passes against a server it did not start, BendKV passes 1,173, 1,166 of
-   the 1,244 in what it has ([COMPATIBILITY.md](COMPATIBILITY.md)); most of the other 78
+   Redis 7.0.15 passes against a server it did not start, BendKV passes 1,182, 1,175 of
+   the 1,258 in what it has ([COMPATIBILITY.md](COMPATIBILITY.md)); most of the other 83
    need commands BendKV does not have (replication's SYNC, Lua, DUMP, streams) or run
    after a test that left its client in MULTI on one of them.
    What maxmemory left to do (section 3zw): a delete takes the nodes it empties now
