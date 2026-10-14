@@ -82,7 +82,7 @@ COMMANDS = {
     "psubscribe": [], "punsubscribe": [], "ssubscribe": [], "sunsubscribe": [],
     "publish": [], "spublish": [], "pubsub": ["channels", "help", "numpat", "numsub",
     "shardchannels", "shardnumsub"], "monitor": [], "bgrewriteaof": [], "sort": [],
-    "sort_ro": []}
+    "sort_ro": [], "pfadd": [], "pfcount": [], "pfmerge": [], "pfdebug": [], "pfselftest": []}
 
 # Step 1: redis-server -> facts
 # -----------------------------
@@ -368,7 +368,10 @@ SBEGIN, SEND = "# BEGIN gen_commands: stats\n", "# END gen_commands: stats\n"
 # sums that are not finite, a command of a sorted set on a key of another
 # kind (WRONGTYPE, and ZINCRBY's sums that are not a number), ZSCAN on
 # options read once the sorted set is found, SORT and SORT_RO on a key of
-# another kind (WRONGTYPE) and on values that are no scores.
+# another kind (WRONGTYPE) and on values that are no scores, the commands
+# of HyperLogLogs on a value that is none (WRONGTYPE) or whose opcodes
+# are invalid (INVALIDOBJ), PFDEBUG on a key not there or on a
+# subcommand read once the key is found, PFSELFTEST on a check it fails.
 # (SET's time
 # can overflow too, past 9 * 10^18 ms only: SET is left out, so that a
 # batch of SETs needs no look at its replies.)
@@ -385,12 +388,12 @@ RISKY = {"incr", "decr", "incrby", "decrby", "expire", "pexpire", "setex", "pset
          "zrangebylex", "zrevrangebylex", "zrevrange", "zremrangebyrank", "zremrangebyscore",
          "zremrangebylex", "zpopmin", "zpopmax", "zscan", "zunion", "zinter", "zdiff",
          "zintercard", "zunionstore", "zinterstore", "zdiffstore", "zrangestore", "zmpop",
-         "zrandmember", "sort", "sort_ro"}
+         "zrandmember", "sort", "sort_ro", "pfadd", "pfcount", "pfmerge", "pfdebug", "pfselftest"}
 
 # BendKV's commands that may be replicated (MAY_REPLICATE in Redis's
 # src/commands/*.json), a flag COMMAND INFO hides: a monitor may not run
 # them, as it may not run a command that reads or writes a key
-MAY_REPLICATE = {"publish", "spublish", "eval"}
+MAY_REPLICATE = {"publish", "spublish", "eval", "pfcount"}
 
 # the parser's commands with subcommands, by the function that numbers
 # their subcommands

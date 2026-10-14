@@ -532,6 +532,122 @@ def fl.mul(+f: Fmt, a: Fl, b: Fl) -> Fl:
     case FNum{+na, +ma, +ea} FNum{+nb, +mb, +eb}:
       fl.mul.z(Bool.or(big.is_zero(ma), big.is_zero(mb)), f, Bool.xor(na, nb), ma, ea, mb, eb)
 
+# Division and square roots, as HyperLogLog's estimate takes them
+# (hll.bend): the exact quotient or root of the numbers' big integers,
+# with p + 3 bits at least, rounded with what is left below it as a
+# sticky bit.
+
+def cmp.ge(c: Cmp) -> Bool:
+  match c:
+    case LT{}:
+      False{}
+    case EQ{}:
+      True{}
+    case GT{}:
+      True{}
+
+# a's quotient q and remainder r by b (b not 0), a bit of a at a time
+# from its top (k bits of a left to bring down), after the step the last
+# one took: ge, whether r with the last bit brought down is at least b
+def big.dm.bits(k: Nat, +ge: Bool, +a: List<&2, Nat>, +b: List<&2, Nat>, +q: List<&2, Nat>, +r: List<&2, Nat>) -> List<&2, Nat> & List<&2, Nat>:
+  match k:
+    case 0n:
+      (Bool.pick(List<&2, Nat>, ge, big.add(big.shl(q, 1n), [1n]), big.shl(q, 1n)), Bool.pick(List<&2, Nat>, ge, big.sub(r, b), r))
+    case 1n++i:
+      +q1 = Bool.pick(List<&2, Nat>, ge, big.add(big.shl(q, 1n), [1n]), big.shl(q, 1n))
+      +r1 = big.add(big.shl(Bool.pick(List<&2, Nat>, ge, big.sub(r, b), r), 1n), Bool.pick(List<&2, Nat>, big.bit(a, i), [1n], Nil{}))
+      big.dm.bits(i, cmp.ge(big.cmp(r1, b)), a, b, q1, r1)
+
+def big.divmod(+a: List<&2, Nat>, +b: List<&2, Nat>) -> List<&2, Nat> & List<&2, Nat>:
+  big.dm.bits(big.bitlen(a), False{}, a, b, Nil{}, Nil{})
+
+# a's square root s, rounded down, and the remainder a - s^2: two bits of
+# a at a time from its top (j pairs left), after the step the last one
+# took: ge, whether r is at least t (4s + 1)
+def big.sq.bits(j: Nat, +ge: Bool, +a: List<&2, Nat>, +s: List<&2, Nat>, +r: List<&2, Nat>, +t: List<&2, Nat>) -> List<&2, Nat> & List<&2, Nat>:
+  match j:
+    case 0n:
+      (Bool.pick(List<&2, Nat>, ge, big.add(big.shl(s, 1n), [1n]), big.shl(s, 1n)), Bool.pick(List<&2, Nat>, ge, big.sub(r, t), r))
+    case 1n++i:
+      +s1 = Bool.pick(List<&2, Nat>, ge, big.add(big.shl(s, 1n), [1n]), big.shl(s, 1n))
+      +two = Nat.add(Bool.pick(Nat, big.bit(a, Nat.add(Nat.mul(i, 2n), 1n)), 2n, 0n), Bool.pick(Nat, big.bit(a, Nat.mul(i, 2n)), 1n, 0n))
+      +r1 = big.add(big.shl(Bool.pick(List<&2, Nat>, ge, big.sub(r, t), r), 2n), big.of(two))
+      +t1 = big.add(big.shl(s1, 2n), [1n])
+      big.sq.bits(i, cmp.ge(big.cmp(r1, t1)), a, s1, r1, t1)
+
+def big.isqrt(+a: List<&2, Nat>) -> List<&2, Nat> & List<&2, Nat>:
+  big.sq.bits(Nat.div(Nat.add(big.bitlen(a), 1n), 2n), False{}, a, Nil{}, Nil{}, Nil{})
+
+# (ma * 2^ea) / (mb * 2^eb), neither 0: ma shifted up by k so that the
+# quotient has p + 3 bits at least
+def fl.div.qr(qr: List<&2, Nat> & List<&2, Nat>, +f: Fmt, +n: Bool, +e: Nat) -> Fl:
+  (q, r) = qr
+  fl.round(f, n, q, e, Bool.not(big.is_zero(r)))
+
+def fl.div.num(+f: Fmt, +n: Bool, +ma: List<&2, Nat>, +ea: Nat, +mb: List<&2, Nat>, +eb: Nat) -> Fl:
+  +k = Nat.add(Nat.add(fmt.p(f), 3n), Nat.sub(big.bitlen(mb), big.bitlen(ma)))
+  fl.div.qr(big.divmod(big.shl(ma, k), mb), f, n, Nat.sub(Nat.add(ea, fl.eb()), Nat.add(eb, k)))
+
+def fl.div.z(za: Bool, zb: Bool, +f: Fmt, +n: Bool, +ma: List<&2, Nat>, +ea: Nat, +mb: List<&2, Nat>, +eb: Nat) -> Fl:
+  match za zb:
+    case True{} True{}:
+      FNaN{}
+    case True{} False{}:
+      fl.zero(n)
+    case False{} True{}:
+      FInf{n}
+    case False{} False{}:
+      fl.div.num(f, n, ma, ea, mb, eb)
+
+# a / b in f, as IEEE 754 divides: a number but 0 over 0 is an infinity,
+# 0 / 0 and inf / inf are NaN
+def fl.div(+f: Fmt, a: Fl, b: Fl) -> Fl:
+  match a b:
+    case FNaN{} _:
+      FNaN{}
+    case _ FNaN{}:
+      FNaN{}
+    case FInf{na} FInf{nb}:
+      FNaN{}
+    case FInf{+na} FNum{+nb, mb, eb}:
+      FInf{Bool.xor(na, nb)}
+    case FNum{+na, ma, ea} FInf{+nb}:
+      fl.zero(Bool.xor(na, nb))
+    case FNum{+na, +ma, +ea} FNum{+nb, +mb, +eb}:
+      fl.div.z(big.is_zero(ma), big.is_zero(mb), f, Bool.xor(na, nb), ma, ea, mb, eb)
+
+# the root of m * 2^e, not 0: m shifted up by k so that its root has p +
+# 2 bits at least, and e - k even
+def fl.sqrt.num(+f: Fmt, +m: List<&2, Nat>, +e: Nat) -> Fl:
+  +k0 = Nat.sub(Nat.add(Nat.mul(fmt.p(f), 2n), 4n), big.bitlen(m))
+  +k = Nat.add(k0, Nat.mod(Nat.add(e, k0), 2n))
+  fl.div.qr(big.isqrt(big.shl(m, k)), f, False{}, Nat.div(Nat.sub(Nat.add(e, fl.eb()), k), 2n))
+
+def fl.sqrt.neg(neg: Bool, +f: Fmt, +m: List<&2, Nat>, +e: Nat) -> Fl:
+  match neg:
+    case True{}:
+      FNaN{}
+    case False{}:
+      fl.sqrt.num(f, m, e)
+
+def fl.sqrt.z(z: Bool, neg: Bool, +f: Fmt, +m: List<&2, Nat>, +e: Nat) -> Fl:
+  match z:
+    case True{}:
+      fl.zero(neg)
+    case False{}:
+      fl.sqrt.neg(neg, f, m, e)
+
+# the square root of a in f, as IEEE 754 takes it: -0 for -0, NaN below
+# 0
+def fl.sqrt(+f: Fmt, a: Fl) -> Fl:
+  match a:
+    case FNaN{}:
+      FNaN{}
+    case FInf{+n}:
+      Bool.pick(Fl, n, FNaN{}, FInf{False{}})
+    case FNum{+n, +m, +e}:
+      fl.sqrt.z(big.is_zero(m), n, f, m, e)
+
 def fl.is_nan(x: Fl) -> Bool:
   match x:
     case FNaN{}:

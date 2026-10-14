@@ -97,6 +97,8 @@ for n in "" post send "post build/test.aof everysec"; do
     python3 tests/set_test.py --bendkv "$PORT" --redis "$REDIS_PORT"
     python3 tests/zset_test.py --bendkv "$PORT" --redis "$REDIS_PORT"
     python3 tests/sort_test.py --bendkv "$PORT" --redis "$REDIS_PORT"
+    # each case in RESP2, then again in RESP3
+    python3 tests/hll_test.py --bendkv "$PORT" --redis "$REDIS_PORT"
     # RESP3: its scenarios, then the differential tests again with each
     # connection in RESP3 (HELLO 3)
     python3 tests/resp3_test.py --bendkv "$PORT" --redis "$REDIS_PORT"

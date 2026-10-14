@@ -6,6 +6,7 @@ import Base
 import ../src/map.bend as KV
 import ../src/redis.bend as R
 import ../src/float.bend as F
+import ../src/hll.bend as H
 import ../src/batch.bend as B
 import ../src/resp.bend as P
 import ../src/aof.bend as A
@@ -5780,6 +5781,8 @@ def takes_over(op: R.UpdOp, lm: Maybe<&2, KV.Item<KV.Val>>, +now: Nat) -> {R.upd
       g => Empty.absurd({ch_over(ch_of(R.upd.v(R.UIncrF{a}, now, lm))) == True{} : Bool}, false_true(g))
     case R.UZset{a}:
       g => Empty.absurd({ch_over(ch_of(R.upd.v(R.UZset{a}, now, lm))) == True{} : Bool}, false_true(g))
+    case R.UHll{a}:
+      g => Empty.absurd({ch_over(ch_of(R.upd.v(R.UHll{a}, now, lm))) == True{} : Bool}, false_true(g))
 
 # an update reads as its change made where its key's entry lies, the
 # key's value taken out of the keyspace or not
@@ -9889,6 +9892,33 @@ def good_coll_zset(op: R.ZWrite, c: KV.Coll, -e: Nat) -> Good(Some{KV.Item{KV.VC
     case KV.CMems{+s}:
       zw_wrong_good(op, Some{KV.Item{KV.VColl{KV.CMems{s}}, e}})
 
+# PFADD of a key not there: a new HyperLogLog put (also when its walk
+# fails, as Redis adds the key first), or nothing; PFCOUNT and PFDEBUG
+# change nothing
+def pfadd_none(o: H.AddOut, -m: Maybe<&2, KV.Item<KV.Val>>) -> Good(m, ch_of(R.pfadd.out(o, True{}))):
+  match o:
+    case H.AddDone{ch, v}:
+      match ch:
+        case True{}:
+          {==}
+        case False{}:
+          {==}
+    case H.AddErr{ch, v}:
+      match ch:
+        case True{}:
+          {==}
+        case False{}:
+          {==}
+
+def hll_none(op: R.HllOp, -m: Maybe<&2, KV.Item<KV.Val>>) -> Good(m, ch_of(R.hll.upd(op, None{}))):
+  match op:
+    case R.HAdd{+els}:
+      pfadd_none(H.add(True{}, H.fresh(), R.hll.max(), els), m)
+    case R.HCount{}:
+      {==}
+    case R.HDebug{sub}:
+      {==}
+
 # of a key that is not there: none or a put
 def good_none(op: R.UpdOp, +now: Nat, -m: Maybe<&2, KV.Item<KV.Val>>) -> Good(m, ch_of(R.upd(op, now, None{}))):
   match op:
@@ -9927,6 +9957,8 @@ def good_none(op: R.UpdOp, +now: Nat, -m: Maybe<&2, KV.Item<KV.Val>>) -> Good(m,
       incrf_add_none(Some{F.fl.zero(False{})}, F.ld.parse(by), m)
     case R.UZset{+zop}:
       zw_fresh_good(zop, m)
+    case R.UHll{+hop}:
+      hll_none(hop, m)
 
 # a time set alone, to f, of a key there with e: none given none is
 # nothing
@@ -10037,6 +10069,101 @@ def incrf_add_some(a: Maybe<&2, F.Fl>, b: Maybe<&2, F.Fl>, -w: KV.Val, -e: Nat) 
     case None{} None{}:
       {==}
 
+# PFADD, PFCOUNT and PFDEBUG of a key there that holds a string: its
+# value with its time kept, the SETRANGE of the count kept in it (of 8
+# bytes at 8), or nothing
+def pfadd_some_out(o: H.AddOut, -w: String, -e: Nat) -> Good(Some{KV.Item{KV.VStr{w}, e}}, ch_of(R.pfadd.out(o, False{}))):
+  match o:
+    case H.AddDone{ch, v}:
+      match ch:
+        case True{}:
+          {==}
+        case False{}:
+          {==}
+    case H.AddErr{ch, v}:
+      match ch:
+        case True{}:
+          {==}
+        case False{}:
+          {==}
+
+def pfadd_some(ok: Bool, +w: String, els: List<&2, String>, -e: Nat) -> Good(Some{KV.Item{KV.VStr{w}, e}}, ch_of(R.pfadd.some(ok, w, els))):
+  match ok:
+    case True{}:
+      pfadd_some_out(H.add(False{}, w, R.hll.max(), els), w, e)
+    case False{}:
+      {==}
+
+def pfcount_cnt(c: H.Count, +w: String, -e: Nat) -> Good(Some{KV.Item{KV.VStr{w}, e}}, ch_of(R.pfcount.cnt(c, w))):
+  match c:
+    case H.CntBad{}:
+      {==}
+    case H.CntKept{x}:
+      {==}
+    case H.CntNew{H.W{hi, lo}}:
+      ({==}, {==})
+
+def pfcount_some(ok: Bool, +w: String, -e: Nat) -> Good(Some{KV.Item{KV.VStr{w}, e}}, ch_of(R.pfcount.some(ok, w))):
+  match ok:
+    case True{}:
+      pfcount_cnt(H.count(w), w, e)
+    case False{}:
+      {==}
+
+def pfdebug_dense(m: Maybe<&2, String>, regs: Bool, -w: String, -e: Nat) -> Good(Some{KV.Item{KV.VStr{w}, e}}, ch_of(R.pfdebug.dense(m, regs))):
+  match m:
+    case Some{v}:
+      {==}
+    case None{}:
+      {==}
+
+def pfdebug_sub(id: Nat, sparse: Bool, +sub: String, +w: String, -e: Nat) -> Good(Some{KV.Item{KV.VStr{w}, e}}, ch_of(R.pfdebug.sub(id, sparse, sub, w))):
+  match id:
+    case 0n:
+      {==}
+    case 1n+p:
+      match p:
+        case 0n:
+          match sparse:
+            case True{}:
+              pfdebug_dense(H.sp.dense(w, 0), True{}, w, e)
+            case False{}:
+              {==}
+        case 1n+q:
+          match q:
+            case 0n:
+              {==}
+            case 1n+r:
+              match r:
+                case 0n:
+                  {==}
+                case 1n+t:
+                  match t:
+                    case 0n:
+                      match sparse:
+                        case True{}:
+                          pfdebug_dense(H.sp.dense(w, 0), False{}, w, e)
+                        case False{}:
+                          {==}
+                    case 1n+u:
+                      {==}
+
+def pfdebug_some(ok: Bool, +sub: String, +w: String, -e: Nat) -> Good(Some{KV.Item{KV.VStr{w}, e}}, ch_of(R.pfdebug.some(ok, sub, w))):
+  match ok:
+    case True{}:
+      pfdebug_sub(R.pfdebug.id(sub), H.is_sparse(w), sub, w, e)
+    case False{}:
+      {==}
+
+def hll_some(op: R.HllOp, +w: String, -e: Nat) -> Good(Some{KV.Item{KV.VStr{w}, e}}, ch_of(R.hll.upd(op, Some{KV.Item{w, e}}))):
+  match op:
+    case R.HAdd{+els}:
+      pfadd_some(H.valid(w), w, els, e)
+    case R.HCount{}:
+      pfcount_some(H.valid(w), w, e)
+    case R.HDebug{+sub}:
+      pfdebug_some(H.valid(w), sub, w, e)
+
 # of a key there, with value w and time e
 def good_some(op: R.UpdOp, +now: Nat, +w: String, +e: Nat) -> Good(Some{KV.Item{KV.VStr{w}, e}}, ch_of(R.upd(op, now, Some{KV.Item{w, e}}))):
   match op:
@@ -10075,6 +10202,8 @@ def good_some(op: R.UpdOp, +now: Nat, +w: String, +e: Nat) -> Good(Some{KV.Item{
       incrf_add_some(F.ld.parse(w), F.ld.parse(by), KV.VStr{w}, e)
     case R.UZset{+zop}:
       zw_wrong_good(zop, Some{KV.Item{KV.VStr{w}, e}})
+    case R.UHll{+hop}:
+      hll_some(hop, w, e)
 
 # SET with GET of a key that holds a collection changes nothing
 def get_wrong_at(a: Maybe<&2, R.At>, -name: String) -> {ch_of(R.get.wrong.at(a, name)) == R.CKeep{} : R.Change}:
@@ -10129,6 +10258,8 @@ def get_wrong_keep(o: R.UpdOp, +now: Nat) -> {ch_of(R.get.wrong(o, now)) == R.CK
       {==}
     case R.UZset{x}:
       {==}
+    case R.UHll{x}:
+      {==}
 
 # of a key there that holds a collection: SET, SETNX, EXPIRE and its kin
 # and PERSIST act on it as on a string, any other changes nothing
@@ -10169,6 +10300,8 @@ def good_coll(op: R.UpdOp, +now: Nat, +c: KV.Coll, +e: Nat) -> Good(Some{KV.Item
       {==}
     case R.UZset{+zop}:
       good_coll_zset(zop, c, e)
+    case R.UHll{h}:
+      {==}
 
 def ug_v(w: KV.Val, op: R.UpdOp, +now: Nat, +e: Nat) -> Good(Some{KV.Item{w, e}}, ch_of(R.upd.v(op, now, Some{KV.Item{w, e}}))):
   match w:
@@ -12190,6 +12323,8 @@ def act_split(+a: R.Act, +ds: R.Ds) -> {(R.reply_ds(R.act(a, ds)), (aeff(a, ds),
       {==}
     case R.ASort{+k, +ob} x:
       act_split_cmd(R.sort.write.ds(x, k, ob), x)
+    case R.APfMerge{+d, +srcs} x:
+      act_split_cmd(R.pf.merge.ds(x, d, srcs), x)
 
 def app_nil_e(xs: List<&2, A.Eff>) -> {List.append(&2, A.Eff, xs, Nil{}) == xs : List<&2, A.Eff>}:
   match xs:
@@ -13789,6 +13924,11 @@ def act_inv(t: R.Act, +o: R.Ds, +r: R.Ds, +sel: Nat, +n: Nat, +sm: {KV.small(n) 
       (ez, q) = inv
       (ei, en) = q
       post_run(R.sort.write.ds(o, k, ob), o, r, sel, n)(ln)(sm)(ez)(ei)(en)
+    case R.APfMerge{+d, +srcs}:
+      (inv, ln) = st
+      (ez, q) = inv
+      (ei, en) = q
+      post_run(R.pf.merge.ds(o, d, srcs), o, r, sel, n)(ln)(sm)(ez)(ei)(en)
 
 # acts one after another keep it, effect after effect
 def acts_inv(as: List<&2, R.Act>, +o: R.Ds, +r: R.Ds, +sel: Nat, +n: Nat, +sm: {KV.small(n) == True{} : Bool}, st: Inv(r, o, sel) & Len(o, n)) -> Inv(rp(aeffs(as, o), sel, r), R.acts(as, o), A.effs.sel(aeffs(as, o), sel)) & Len(R.acts(as, o), n):
@@ -14179,6 +14319,8 @@ def mk_upd(-k: String, op: R.UpdOp) -> {A.mark(A.upd.args(k, op)) == 0n : Nat}:
       {==}
     case R.UZset{op}:
       mk_zset(k, op)
+    case R.UHll{op}:
+      {==}
 
 def mk_lmove(b: Bool, -s: String, -t: String, -e: R.LEnds) -> {A.mark(A.lmove.args.of(b, s, t, e)) == 0n : Nat}:
   match b:
@@ -14937,6 +15079,8 @@ def act_now(t: R.Act, +o: R.Ds) -> {R.ds.now(R.ds_of(R.act(t, o))) == R.ds.now(o
       now_wipe(o)
     case R.ASort{+k, +ob}:
       now_run(R.sort.write.ds(o, k, ob), o)
+    case R.APfMerge{+d, +srcs}:
+      now_run(R.pf.merge.ds(o, d, srcs), o)
 
 # an act run at a time leaves the databases at that time
 def act_at(+t: R.Act, +now: Nat, +x: R.Ds) -> {R.ds.at(now, R.ds_of(R.act(t, R.ds.at(now, x)))) == R.ds_of(R.act(t, R.ds.at(now, x))) : R.Ds}:
@@ -15306,6 +15450,8 @@ def one_eff(t: R.Act, +o: R.Ds) -> OneE(aeff(t, o)):
       Inr{(A.EWipe{}, {==})}
     case R.ASort{+k, +ob}:
       one_run(R.sort.write.ds(o, k, ob), o)
+    case R.APfMerge{+d, +srcs}:
+      one_run(R.pf.merge.ds(o, d, srcs), o)
 
 # the first i entries of the steps ss, run from x, replayed after r: the
 # databases after the first j steps, for some j
@@ -16173,6 +16319,12 @@ def srv_same.o(o: R.SessOp, +conn: S.Conn, +srv: S.Srv, +ef: {S.authed(conn, srv
       e => Empty.absurd({S.own_srv(R.SRewrite{}, conn, srv) == srv : S.Srv}, true_false(Equal.trans(Bool, True{}, S.authed(conn, srv), False{}, e, ef)))
     case R.SSortStore{y0, y1}:
       e => Empty.absurd({S.own_srv(R.SSortStore{y0, y1}, conn, srv) == srv : S.Srv}, true_false(Equal.trans(Bool, True{}, S.authed(conn, srv), False{}, e, ef)))
+    case R.SPfCount{y0}:
+      e => Empty.absurd({S.own_srv(R.SPfCount{y0}, conn, srv) == srv : S.Srv}, true_false(Equal.trans(Bool, True{}, S.authed(conn, srv), False{}, e, ef)))
+    case R.SPfMerge{y0, y1}:
+      e => Empty.absurd({S.own_srv(R.SPfMerge{y0, y1}, conn, srv) == srv : S.Srv}, true_false(Equal.trans(Bool, True{}, S.authed(conn, srv), False{}, e, ef)))
+    case R.SPfSelfTest{}:
+      e => Empty.absurd({S.own_srv(R.SPfSelfTest{}, conn, srv) == srv : S.Srv}, true_false(Equal.trans(Bool, True{}, S.authed(conn, srv), False{}, e, ef)))
     case R.SFail{y0}:
       e => Empty.absurd({S.own_srv(R.SFail{y0}, conn, srv) == srv : S.Srv}, true_false(Equal.trans(Bool, True{}, S.authed(conn, srv), False{}, e, ef)))
     case R.SMemUsage{y0, y1}:
@@ -16351,6 +16503,18 @@ def own_bad(o: R.SessOp, +ps: List<&2, R.Act>, +id: Nat, +a: Bool, +n: String, +
     case R.SSortStore{y0, y1}:
       ih =>
         %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel, r3}, srv), False{}, ef) : {Laws.all_bad(List.append(&2, R.Act, S.acts.k(S.KSess{R.SSortStore{y0, y1}}, _, R.Own{R.SSortStore{y0, y1}}, S.Conn{id, a, n, m, False{}, sel, r3}, srv), ps)) == True{} : Bool}
+        ih
+    case R.SPfCount{y0}:
+      ih =>
+        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel, r3}, srv), False{}, ef) : {Laws.all_bad(List.append(&2, R.Act, S.acts.k(S.KSess{R.SPfCount{y0}}, _, R.Own{R.SPfCount{y0}}, S.Conn{id, a, n, m, False{}, sel, r3}, srv), ps)) == True{} : Bool}
+        ih
+    case R.SPfMerge{y0, y1}:
+      ih =>
+        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel, r3}, srv), False{}, ef) : {Laws.all_bad(List.append(&2, R.Act, S.acts.k(S.KSess{R.SPfMerge{y0, y1}}, _, R.Own{R.SPfMerge{y0, y1}}, S.Conn{id, a, n, m, False{}, sel, r3}, srv), ps)) == True{} : Bool}
+        ih
+    case R.SPfSelfTest{}:
+      ih =>
+        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel, r3}, srv), False{}, ef) : {Laws.all_bad(List.append(&2, R.Act, S.acts.k(S.KSess{R.SPfSelfTest{}}, _, R.Own{R.SPfSelfTest{}}, S.Conn{id, a, n, m, False{}, sel, r3}, srv), ps)) == True{} : Bool}
         ih
     case R.SFail{y0}:
       ih =>
@@ -16637,6 +16801,18 @@ def auth_own(o: R.SessOp, +id: Nat, +a: Bool, +n: String, +m: S.Mute, +sel: Nat,
     case R.SSortStore{y0, y1}:
       el =>
         %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel, r3}, srv), False{}, ef) : {S.conn.auth(S.next_conn.k(S.KSess{R.SSortStore{y0, y1}}, _, S.Conn{id, a, n, m, False{}, sel, r3}, srv)) == False{} : Bool}
+        or_false_l(a, S.nopass(srv))(ef)
+    case R.SPfCount{y0}:
+      el =>
+        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel, r3}, srv), False{}, ef) : {S.conn.auth(S.next_conn.k(S.KSess{R.SPfCount{y0}}, _, S.Conn{id, a, n, m, False{}, sel, r3}, srv)) == False{} : Bool}
+        or_false_l(a, S.nopass(srv))(ef)
+    case R.SPfMerge{y0, y1}:
+      el =>
+        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel, r3}, srv), False{}, ef) : {S.conn.auth(S.next_conn.k(S.KSess{R.SPfMerge{y0, y1}}, _, S.Conn{id, a, n, m, False{}, sel, r3}, srv)) == False{} : Bool}
+        or_false_l(a, S.nopass(srv))(ef)
+    case R.SPfSelfTest{}:
+      el =>
+        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel, r3}, srv), False{}, ef) : {S.conn.auth(S.next_conn.k(S.KSess{R.SPfSelfTest{}}, _, S.Conn{id, a, n, m, False{}, sel, r3}, srv)) == False{} : Bool}
         or_false_l(a, S.nopass(srv))(ef)
     case R.SFail{y0}:
       el =>
@@ -18877,6 +19053,8 @@ def counted_act(a: R.Act, +ds: R.Ds) -> {Laws.counted_ds(ds) == True{} : Bool} -
       e => counted_wipe(x)
     case R.ASort{+k, +ob} x:
       counted_cmd(R.sort.write.ds(x, k, ob), x)
+    case R.APfMerge{+d, +srcs} x:
+      counted_cmd(R.pf.merge.ds(x, d, srcs), x)
 
 def counted_acts(as: List<&2, R.Act>, +ds: R.Ds) -> {Laws.counted_ds(ds) == True{} : Bool} -> {Laws.counted_ds(R.acts(as, ds)) == True{} : Bool}:
   match as:

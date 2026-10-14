@@ -13,7 +13,10 @@ transaction; WATCH of keys another client changes or does not change, a
 DEL of a key not there (no change), SADD of a member there (no change),
 SMOVE of a member the destination holds (no change to it), SORT with
 STORE (a change even when it stores the list there, none when it
-deletes a key not there), SORT without it (no change),
+deletes a key not there), SORT without it (no change), PFADD (a change
+when a register changes), PFCOUNT (a change when it keeps the count it
+made in the value, none when it reads the count kept), PFMERGE (always a
+change), PFDEBUG (no change, though it makes a sparse value dense),
 FLUSHALL, FLUSHDB and SWAPDB of keys there and not there, MOVE, COPY,
 RENAME, EXPIRE, a key that expires (active expiry, or found expired at
 EXEC), a key of another database, a transaction of another client, UNWATCH
@@ -109,6 +112,17 @@ def scenarios(port, log):
         a.cmd("MULTI"), a.cmd("PING"), a.cmd("EXEC"))
     log("5 sort in multi", a.cmd("MULTI"), a.cmd("SORT", "sol", "DESC", "STORE", "sod"), a.cmd("LRANGE", "sod", "0", "-1"),
         a.cmd("SORT", "sol", "LIMIT", "x", "1"), a.cmd("SORT_RO", "sod", "ALPHA"), a.cmd("EXEC"))
+    for name, cmds in [("pfadd new", [("PFADD", "pf", "a")]), ("pfadd same", [("PFADD", "pf", "a")]),
+                       ("pfcount made", [("PFADD", "pf", "b"), ("PFCOUNT", "pf")]), ("pfcount kept", [("PFCOUNT", "pf")]),
+                       ("pfcount several", [("PFCOUNT", "pf", "nopf")]), ("pfmerge", [("PFMERGE", "pf", "nopf")]),
+                       ("pfmerge none", [("PFMERGE", "pf")]), ("pfdebug", [("PFDEBUG", "TODENSE", "pf")]),
+                       ("pfdebug dense", [("PFDEBUG", "TODENSE", "pf"), ("PFDEBUG", "GETREG", "pf")])]:
+        out = [a.cmd("WATCH", "pf")]
+        for c in cmds:
+            out.append(b.cmd(*c))
+        log("5 " + name, *(out + [a.cmd("MULTI"), a.cmd("PING"), a.cmd("EXEC")]))
+    log("5 pf in multi", a.cmd("MULTI"), a.cmd("PFADD", "pf2", "x", "y"), a.cmd("PFCOUNT", "pf2"), a.cmd("PFCOUNT", "pf2", "pf"),
+        a.cmd("PFMERGE", "pf3", "pf2", "pf"), a.cmd("PFDEBUG", "ENCODING", "pf3"), a.cmd("PFADD", "pfstr"), a.cmd("EXEC"))
     log("5 tx of another", a.cmd("WATCH", "t"), b.cmd("MULTI"), b.cmd("SET", "t", "1"), b.cmd("EXEC"), a.cmd("MULTI"),
         a.cmd("PING"), a.cmd("EXEC"))
     # 6. FLUSHALL, FLUSHDB and SWAPDB

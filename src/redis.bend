@@ -6,6 +6,7 @@
 import Base
 import ./map.bend as KV
 import ./float.bend as F
+import ./hll.bend as H
 
 # Types
 # -----
@@ -325,10 +326,19 @@ type ExpIf is Data:
 # way, faster), SETRANGE (s at offset off), SETBIT (the bit at offset
 # off, to on), BITFIELD with a write among its operations, a write of a
 # hash (UHash), of a list (UList) or of a set (UMems), and INCRBYFLOAT
-# (its increment as it came, read once the key's value is). The laws
+# (its increment as it came, read once the key's value is), and a write
+# of a HyperLogLog (UHll: PFADD, PFCOUNT of one key, PFDEBUG). The laws
 # see them as one command, Upd, so one more needs no more proof. UGet holds an update, so the compiler makes an update a
 # node of its own: a command travels in registers as wide as its widest
 # form, and an update's options are many.
+# A write of a HyperLogLog's key (HyperLogLog, below): PFADD of elements,
+# PFCOUNT of one key (it keeps the count it makes in the value), and
+# PFDEBUG's subcommand as it came (Redis reads it once the key is found)
+type HllOp is Data:
+  HAdd{els: List<&2, String>}
+  HCount{}
+  HDebug{sub: String}
+
 type UpdOp is Data:
   USetNx{v: String}
   UGet{op: UpdOp}
@@ -347,6 +357,7 @@ type UpdOp is Data:
   UMems{op: SWrite}
   UIncrF{by: String}
   UZset{op: ZWrite}
+  UHll{op: HllOp}
 
 # A command of Pub/Sub: SUBSCRIBE, PSUBSCRIBE and SSUBSCRIBE of their
 # channels, patterns or shard channels (kind 0, 1, 2: PSub), UNSUBSCRIBE
@@ -479,7 +490,10 @@ type SortO is Data:
 # The rewrite of the append-only file). SORT with STORE is SSortStore: it
 # reads the keys SORT reads and writes its destination with what it
 # makes of them, an act of the session's database (ASort, below), so
-# that the laws of exec meet SORT as a read alone (Sort).
+# that the laws of exec meet SORT as a read alone (Sort). PFCOUNT of
+# several keys reads them (SPfCount); PFMERGE reads its keys and writes
+# its destination with their union, an act of the session's database
+# (APfMerge, below); PFSELFTEST (SPfSelfTest) reads nothing.
 
 type SessOp is Data:
   SHello{args: List<&2, String>}
@@ -524,6 +538,9 @@ type SessOp is Data:
   SMonitor{}
   SRewrite{}
   SSortStore{key: String, o: SortO}
+  SPfCount{keys: List<&2, String>}
+  SPfMerge{dst: String, srcs: List<&2, String>}
+  SPfSelfTest{}
 
 # BITOP's operation
 type BitK is Data:
@@ -4611,6 +4628,8 @@ def cmd_id.l5(+n: String, c: Nat) -> Nat:
       Bool.pick(Nat, String.eq(n, "LMPOP"), 82n, 0n))))
     case 13n:  # M
       Bool.pick(Nat, String.eq(n, "MULTI"), 161n, 0n)
+    case 16n:  # P
+      Bool.pick(Nat, String.eq(n, "PFADD"), 179n, 0n)
     case 18n:  # R
       Bool.pick(Nat, String.eq(n, "RPUSH"), 67n,
       Bool.pick(Nat, String.eq(n, "RESET"), 104n, 0n))
@@ -4714,7 +4733,10 @@ def cmd_id.l7(+n: String, c: Nat) -> Nat:
     case 16n:  # P
       Bool.pick(Nat, String.eq(n, "PEXPIRE"), 29n,
       Bool.pick(Nat, String.eq(n, "PERSIST"), 36n,
-      Bool.pick(Nat, String.eq(n, "PUBLISH"), 172n, 0n)))
+      Bool.pick(Nat, String.eq(n, "PUBLISH"), 172n,
+      Bool.pick(Nat, String.eq(n, "PFCOUNT"), 180n,
+      Bool.pick(Nat, String.eq(n, "PFMERGE"), 181n,
+      Bool.pick(Nat, String.eq(n, "PFDEBUG"), 182n, 0n))))))
     case 19n:  # S
       Bool.pick(Nat, String.eq(n, "SORT_RO"), 178n, 0n)
     case 21n:  # U
@@ -4777,7 +4799,8 @@ def cmd_id.l10(+n: String, c: Nat) -> Nat:
     case 8n:  # H
       Bool.pick(Nat, String.eq(n, "HRANDFIELD"), 117n, 0n)
     case 16n:  # P
-      Bool.pick(Nat, String.eq(n, "PSUBSCRIBE"), 168n, 0n)
+      Bool.pick(Nat, String.eq(n, "PSUBSCRIBE"), 168n,
+      Bool.pick(Nat, String.eq(n, "PFSELFTEST"), 183n, 0n))
     case 19n:  # S
       Bool.pick(Nat, String.eq(n, "SMISMEMBER"), 87n,
       Bool.pick(Nat, String.eq(n, "SINTERCARD"), 92n,
@@ -5505,6 +5528,38 @@ def parse_id(id: Nat, name: String, args: List<&2, String>) -> Cmd:
       parse_sort(args, False{}, "sort")
     case 178n:  # SORT_RO
       parse_sort(args, True{}, "sort_ro")
+    case 179n:  # PFADD
+      match args:
+        case Con{k, rest}:
+          Upd{k, UHll{HAdd{rest}}}
+        case Nil{}:
+          e_arity("pfadd")
+    case 180n:  # PFCOUNT
+      match args:
+        case Con{k, Nil{}}:
+          Upd{k, UHll{HCount{}}}
+        case Con{k, rest}:
+          Own{SPfCount{k <> rest}}
+        case Nil{}:
+          e_arity("pfcount")
+    case 181n:  # PFMERGE
+      match args:
+        case Con{d, rest}:
+          Own{SPfMerge{d, rest}}
+        case Nil{}:
+          e_arity("pfmerge")
+    case 182n:  # PFDEBUG
+      match args:
+        case Con{sub, Con{k, Nil{}}}:
+          Upd{k, UHll{HDebug{sub}}}
+        case _:
+          e_arity("pfdebug")
+    case 183n:  # PFSELFTEST
+      match args:
+        case Nil{}:
+          Own{SPfSelfTest{}}
+        case _:
+          e_arity("pfselftest")
     case _:
       e_unknown(name, args)
 
@@ -6155,6 +6210,16 @@ def stat.top(+id: Nat) -> Nat:
       177n
     case 178n:
       178n
+    case 179n:
+      179n
+    case 180n:
+      180n
+    case 181n:
+      181n
+    case 182n:
+      182n
+    case 183n:
+      183n
     case _:
       0n
 
@@ -6162,31 +6227,31 @@ def stat.top(+id: Nat) -> Nat:
 def stat.sub.client(+sub: Nat) -> Nat:
   match sub:
     case 1n:
-      179n
-    case 2n:
-      180n
-    case 3n:
-      181n
-    case 4n:
-      182n
-    case 5n:
-      183n
-    case 6n:
       184n
-    case 7n:
+    case 2n:
       185n
-    case 8n:
+    case 3n:
       186n
-    case 9n:
+    case 4n:
       187n
-    case 10n:
+    case 5n:
       188n
-    case 11n:
+    case 6n:
       189n
-    case 12n:
+    case 7n:
       190n
-    case 13n:
+    case 8n:
       191n
+    case 9n:
+      192n
+    case 10n:
+      193n
+    case 11n:
+      194n
+    case 12n:
+      195n
+    case 13n:
+      196n
     case _:
       0n
 
@@ -6194,30 +6259,14 @@ def stat.sub.client(+sub: Nat) -> Nat:
 def stat.sub.function(+sub: Nat) -> Nat:
   match sub:
     case 1n:
-      192n
+      197n
     case 2n:
-      193n
+      198n
     case _:
       0n
 
 # a subcommand of CONFIG's key, by its number; 0 for none
 def stat.sub.config(+sub: Nat) -> Nat:
-  match sub:
-    case 1n:
-      194n
-    case 2n:
-      195n
-    case 3n:
-      196n
-    case 4n:
-      197n
-    case 5n:
-      198n
-    case _:
-      0n
-
-# a subcommand of COMMAND's key, by its number; 0 for none
-def stat.sub.command(+sub: Nat) -> Nat:
   match sub:
     case 1n:
       199n
@@ -6229,10 +6278,26 @@ def stat.sub.command(+sub: Nat) -> Nat:
       202n
     case 5n:
       203n
-    case 6n:
+    case _:
+      0n
+
+# a subcommand of COMMAND's key, by its number; 0 for none
+def stat.sub.command(+sub: Nat) -> Nat:
+  match sub:
+    case 1n:
       204n
-    case 7n:
+    case 2n:
       205n
+    case 3n:
+      206n
+    case 4n:
+      207n
+    case 5n:
+      208n
+    case 6n:
+      209n
+    case 7n:
+      210n
     case _:
       0n
 
@@ -6240,15 +6305,15 @@ def stat.sub.command(+sub: Nat) -> Nat:
 def stat.sub.object(+sub: Nat) -> Nat:
   match sub:
     case 1n:
-      206n
+      211n
     case 2n:
-      207n
+      212n
     case 3n:
-      208n
+      213n
     case 4n:
-      209n
+      214n
     case 5n:
-      210n
+      215n
     case _:
       0n
 
@@ -6256,9 +6321,9 @@ def stat.sub.object(+sub: Nat) -> Nat:
 def stat.sub.memory(+sub: Nat) -> Nat:
   match sub:
     case 1n:
-      211n
+      216n
     case 2n:
-      212n
+      217n
     case _:
       0n
 
@@ -6266,17 +6331,17 @@ def stat.sub.memory(+sub: Nat) -> Nat:
 def stat.sub.pubsub(+sub: Nat) -> Nat:
   match sub:
     case 1n:
-      213n
-    case 2n:
-      214n
-    case 3n:
-      215n
-    case 4n:
-      216n
-    case 5n:
-      217n
-    case 6n:
       218n
+    case 2n:
+      219n
+    case 3n:
+      220n
+    case 4n:
+      221n
+    case 5n:
+      222n
+    case 6n:
+      223n
     case _:
       0n
 
@@ -6640,84 +6705,94 @@ def stat.name(+key: Nat) -> String:
     case 178n:
       "sort_ro"
     case 179n:
-      "client|id"
+      "pfadd"
     case 180n:
-      "client|help"
+      "pfcount"
     case 181n:
-      "client|reply"
+      "pfmerge"
     case 182n:
-      "client|getname"
+      "pfdebug"
     case 183n:
-      "client|setname"
+      "pfselftest"
     case 184n:
-      "client|caching"
+      "client|id"
     case 185n:
-      "client|unblock"
+      "client|help"
     case 186n:
-      "client|getredir"
+      "client|reply"
     case 187n:
-      "client|no-evict"
+      "client|getname"
     case 188n:
-      "client|trackinginfo"
+      "client|setname"
     case 189n:
-      "client|list"
+      "client|caching"
     case 190n:
-      "client|info"
+      "client|unblock"
     case 191n:
-      "client|kill"
+      "client|getredir"
     case 192n:
-      "function|flush"
+      "client|no-evict"
     case 193n:
-      "function|help"
+      "client|trackinginfo"
     case 194n:
-      "config|get"
+      "client|list"
     case 195n:
-      "config|set"
+      "client|info"
     case 196n:
-      "config|resetstat"
+      "client|kill"
     case 197n:
-      "config|rewrite"
+      "function|flush"
     case 198n:
-      "config|help"
+      "function|help"
     case 199n:
-      "command|info"
+      "config|get"
     case 200n:
-      "command|docs"
+      "config|set"
     case 201n:
-      "command|list"
+      "config|resetstat"
     case 202n:
-      "command|help"
+      "config|rewrite"
     case 203n:
-      "command|count"
+      "config|help"
     case 204n:
-      "command|getkeys"
+      "command|info"
     case 205n:
-      "command|getkeysandflags"
+      "command|docs"
     case 206n:
-      "object|help"
+      "command|list"
     case 207n:
-      "object|freq"
+      "command|help"
     case 208n:
-      "object|encoding"
+      "command|count"
     case 209n:
-      "object|refcount"
+      "command|getkeys"
     case 210n:
-      "object|idletime"
+      "command|getkeysandflags"
     case 211n:
-      "memory|help"
+      "object|help"
     case 212n:
-      "memory|usage"
+      "object|freq"
     case 213n:
-      "pubsub|channels"
+      "object|encoding"
     case 214n:
-      "pubsub|help"
+      "object|refcount"
     case 215n:
-      "pubsub|numpat"
+      "object|idletime"
     case 216n:
-      "pubsub|numsub"
+      "memory|help"
     case 217n:
-      "pubsub|shardchannels"
+      "memory|usage"
     case 218n:
+      "pubsub|channels"
+    case 219n:
+      "pubsub|help"
+    case 220n:
+      "pubsub|numpat"
+    case 221n:
+      "pubsub|numsub"
+    case 222n:
+      "pubsub|shardchannels"
+    case 223n:
       "pubsub|shardnumsub"
     case _:
       ""
@@ -7083,84 +7158,94 @@ def stat.arity(+key: Nat) -> Nat:
     case 178n:
       5n
     case 179n:
-      4n
+      5n
     case 180n:
-      4n
+      5n
     case 181n:
-      6n
+      5n
     case 182n:
-      4n
+      6n
     case 183n:
-      6n
+      2n
     case 184n:
-      6n
+      4n
     case 185n:
-      7n
+      4n
     case 186n:
-      4n
-    case 187n:
       6n
+    case 187n:
+      4n
     case 188n:
-      4n
+      6n
     case 189n:
-      5n
+      6n
     case 190n:
-      4n
-    case 191n:
       7n
+    case 191n:
+      4n
     case 192n:
-      5n
+      6n
     case 193n:
       4n
     case 194n:
-      7n
+      5n
     case 195n:
-      9n
+      4n
     case 196n:
-      4n
+      7n
     case 197n:
-      4n
+      5n
     case 198n:
       4n
     case 199n:
-      5n
+      7n
     case 200n:
-      5n
+      9n
     case 201n:
-      5n
+      4n
     case 202n:
       4n
     case 203n:
       4n
     case 204n:
-      9n
+      5n
     case 205n:
-      9n
+      5n
     case 206n:
-      4n
+      5n
     case 207n:
-      6n
+      4n
     case 208n:
-      6n
+      4n
     case 209n:
-      6n
+      9n
     case 210n:
-      6n
+      9n
     case 211n:
       4n
     case 212n:
-      7n
+      6n
     case 213n:
-      5n
+      6n
     case 214n:
-      4n
+      6n
     case 215n:
-      4n
+      6n
     case 216n:
-      5n
+      4n
     case 217n:
-      5n
+      7n
     case 218n:
+      5n
+    case 219n:
+      4n
+    case 220n:
+      4n
+    case 221n:
+      5n
+    case 222n:
+      5n
+    case 223n:
       5n
     case _:
       1n
@@ -7370,11 +7455,21 @@ def stat.risky(+key: Nat) -> Bool:
       True{}
     case 178n:
       True{}
-    case 207n:
+    case 179n:
       True{}
-    case 210n:
+    case 180n:
+      True{}
+    case 181n:
+      True{}
+    case 182n:
+      True{}
+    case 183n:
       True{}
     case 212n:
+      True{}
+    case 215n:
+      True{}
+    case 217n:
       True{}
     case _:
       False{}
@@ -7390,21 +7485,25 @@ def stat.unseen(+key: Nat) -> Bool:
       True{}
     case 176n:
       True{}
-    case 185n:
+    case 182n:
       True{}
-    case 187n:
+    case 183n:
       True{}
-    case 189n:
+    case 190n:
       True{}
-    case 191n:
+    case 192n:
       True{}
     case 194n:
       True{}
-    case 195n:
-      True{}
     case 196n:
       True{}
-    case 197n:
+    case 199n:
+      True{}
+    case 200n:
+      True{}
+    case 201n:
+      True{}
+    case 202n:
       True{}
     case _:
       False{}
@@ -7711,17 +7810,25 @@ def stat.keyspace(+key: Nat) -> Bool:
       True{}
     case 178n:
       True{}
-    case 192n:
+    case 179n:
       True{}
-    case 207n:
+    case 180n:
       True{}
-    case 208n:
+    case 181n:
       True{}
-    case 209n:
+    case 182n:
       True{}
-    case 210n:
+    case 197n:
       True{}
     case 212n:
+      True{}
+    case 213n:
+      True{}
+    case 214n:
+      True{}
+    case 215n:
+      True{}
+    case 217n:
       True{}
     case _:
       False{}
@@ -7817,6 +7924,12 @@ def stat.denyoom(+key: Nat) -> Bool:
     case 156n:
       True{}
     case 177n:
+      True{}
+    case 179n:
+      True{}
+    case 181n:
+      True{}
+    case 182n:
       True{}
     case _:
       False{}
@@ -8079,6 +8192,12 @@ def stat.touch(+key: Nat) -> Bool:
     case 177n:
       True{}
     case 178n:
+      True{}
+    case 179n:
+      True{}
+    case 180n:
+      True{}
+    case 181n:
       True{}
     case _:
       False{}
@@ -9838,6 +9957,46 @@ def stat.cw(+code: Nat) -> U32:
       3696
     case 875n:
       3715
+    case 876n:
+      3717
+    case 877n:
+      3718
+    case 878n:
+      3721
+    case 879n:
+      3722
+    case 880n:
+      3724
+    case 881n:
+      3729
+    case 882n:
+      3730
+    case 883n:
+      3732
+    case 884n:
+      3736
+    case 885n:
+      3745
+    case 886n:
+      3746
+    case 887n:
+      3748
+    case 888n:
+      3752
+    case 889n:
+      3760
+    case 890n:
+      3777
+    case 891n:
+      3778
+    case 892n:
+      3780
+    case 893n:
+      3784
+    case 894n:
+      3792
+    case 895n:
+      3808
     case _:
       63
 
@@ -11885,6 +12044,51 @@ def stat.code.lo58(+lo: Nat) -> Nat:
   match lo:
     case 3n:
       875n
+    case 5n:
+      876n
+    case 6n:
+      877n
+    case 9n:
+      878n
+    case 10n:
+      879n
+    case 12n:
+      880n
+    case 17n:
+      881n
+    case 18n:
+      882n
+    case 20n:
+      883n
+    case 24n:
+      884n
+    case 33n:
+      885n
+    case 34n:
+      886n
+    case 36n:
+      887n
+    case 40n:
+      888n
+    case 48n:
+      889n
+    case _:
+      0n
+
+def stat.code.lo59(+lo: Nat) -> Nat:
+  match lo:
+    case 1n:
+      890n
+    case 2n:
+      891n
+    case 4n:
+      892n
+    case 8n:
+      893n
+    case 16n:
+      894n
+    case 32n:
+      895n
     case _:
       0n
 
@@ -12008,6 +12212,8 @@ def stat.code.hl(+hi: Nat, +lo: Nat) -> Nat:
       stat.code.lo57(lo)
     case 58n:
       stat.code.lo58(lo)
+    case 59n:
+      stat.code.lo59(lo)
     case _:
       0n
 
@@ -15904,6 +16110,277 @@ def zwrite.coll(op: ZWrite, +cl: KV.Coll) -> Out:
     case _:
       zwrite.wrong(op)
 
+# HyperLogLog
+# -----------
+# PFADD, PFCOUNT, PFMERGE, PFDEBUG and PFSELFTEST as Redis 7.0.15 runs
+# them (hyperloglog.c) on a string that holds a HyperLogLog (hll.bend).
+# A string that is none (H.valid) answers the WRONGTYPE error of its
+# own, a key of another kind the usual one; a sparse HyperLogLog whose
+# opcodes Redis finds invalid answers INVALIDOBJ. A sparse one turns
+# dense past 3000 bytes, hll-sparse-max-bytes's default: BendKV does not
+# read the parameter, as a write of one key runs on its database alone.
+
+def e_hll_type() -> Reply:
+  RError{"WRONGTYPE Key is not a valid HyperLogLog string value."}
+
+def e_hll_bad() -> Reply:
+  RError{"INVALIDOBJ Corrupted HLL object detected"}
+
+def hll.max() -> Nat:
+  3000n
+
+# a cardinality as addReplyLongLong sends a uint64_t: as a long long
+def hll.reply(c: H.W) -> Reply:
+  match c:
+    case H.W{+hi, +lo}:
+      RIntS{w64.show(W64{hi, lo})}
+
+# PFADD: of a key not there, a new HyperLogLog with the elements in it
+# (1, its value set with no time); of one there, 1 and its value with
+# its time when a register changed, else 0; the error of an invalid one
+# (its value changed by the elements before, which Redis keeps; a key
+# made keeps its value, as Redis adds the key before it adds to it)
+def pfadd.out(o: H.AddOut, made: Bool) -> Out:
+  match o:
+    case H.AddDone{ch, v}:
+      match ch made:
+        case True{} True{}:
+          Out{r_int(1n), CPut{v, 0n}}
+        case True{} False{}:
+          Out{r_int(1n), CKeepT{v}}
+        case False{} _:
+          Out{r_int(0n), CKeep{}}
+    case H.AddErr{ch, v}:
+      match ch made:
+        case _ True{}:
+          Out{e_hll_bad(), CPut{v, 0n}}
+        case True{} False{}:
+          Out{e_hll_bad(), CKeepT{v}}
+        case False{} False{}:
+          Out{e_hll_bad(), CKeep{}}
+
+def pfadd.some(ok: Bool, +w: String, els: List<&2, String>) -> Out:
+  match ok:
+    case True{}:
+      pfadd.out(H.add(False{}, w, hll.max(), els), False{})
+    case False{}:
+      Out{e_hll_type(), CKeep{}}
+
+def pfadd.of(els: List<&2, String>, m: Maybe<&2, KV.Item<String>>) -> Out:
+  match m:
+    case Some{KV.Item{+w, e}}:
+      pfadd.some(H.valid(w), w, els)
+    case None{}:
+      pfadd.out(H.add(True{}, H.fresh(), hll.max(), els), True{})
+
+# PFCOUNT of one key: 0 for a key not there; the count kept in the value,
+# when it is valid; else the count made, which the value keeps (the
+# SETRANGE of its 8 bytes at 8)
+def pfcount.cnt(c: H.Count, +w: String) -> Out:
+  match c:
+    case H.CntBad{}:
+      Out{e_hll_bad(), CKeep{}}
+    case H.CntKept{x}:
+      Out{hll.reply(x), CKeep{}}
+    case H.CntNew{+x}:
+      +s = H.card.bytes(x)
+      Out{hll.reply(x), CRange{8n, s, range.put(w, 8n, s)}}
+
+def pfcount.some(ok: Bool, +w: String) -> Out:
+  match ok:
+    case True{}:
+      pfcount.cnt(H.count(w), w)
+    case False{}:
+      Out{e_hll_type(), CKeep{}}
+
+def pfcount.of(m: Maybe<&2, KV.Item<String>>) -> Out:
+  match m:
+    case Some{KV.Item{+w, e}}:
+      pfcount.some(H.valid(w), w)
+    case None{}:
+      Out{r_int(0n), CKeep{}}
+
+# PFDEBUG's subcommands, as strcasecmp compares them: 1 GETREG, 2 DECODE,
+# 3 ENCODING, 4 TODENSE, 0 none
+def pfdebug.id(+sub: String) -> Nat:
+  +u = String.to_upper(cstr(sub))
+  Bool.pick(Nat, String.eq(u, "GETREG"), 1n,
+  Bool.pick(Nat, String.eq(u, "DECODE"), 2n,
+  Bool.pick(Nat, String.eq(u, "ENCODING"), 3n,
+  Bool.pick(Nat, String.eq(u, "TODENSE"), 4n, 0n))))
+
+def pfdebug.regs(xs: List<&2, Nat>) -> List<&2, Reply>:
+  match xs:
+    case Nil{}:
+      Nil{}
+    case Con{x, rest}:
+      r_int(x) <> pfdebug.regs(rest)
+
+# a sparse value made dense, which the key keeps: the reply r says what
+# of it (GETREG: its registers; TODENSE: 1)
+def pfdebug.dense(m: Maybe<&2, String>, regs: Bool) -> Out:
+  match m:
+    case Some{+v}:
+      Out{Bool.pick(Reply, regs, RArray{pfdebug.regs(H.d.regs(v))}, r_int(1n)), CKeepT{v}}
+    case None{}:
+      Out{e_hll_bad(), CKeep{}}
+
+def pfdebug.sub(id: Nat, sparse: Bool, +sub: String, +w: String) -> Out:
+  match id:
+    case 1n:
+      match sparse:
+        case True{}:
+          pfdebug.dense(H.sp.dense(w, 0), True{})
+        case False{}:
+          Out{RArray{pfdebug.regs(H.d.regs(w))}, CKeep{}}
+    case 2n:
+      Out{Bool.pick(Reply, sparse, RBulk{H.sp.decode(w)}, RError{"ERR HLL encoding is not sparse"}), CKeep{}}
+    case 3n:
+      Out{RStatus{Bool.pick(String, sparse, "sparse", "dense")}, CKeep{}}
+    case 4n:
+      match sparse:
+        case True{}:
+          pfdebug.dense(H.sp.dense(w, 0), False{})
+        case False{}:
+          Out{r_int(0n), CKeep{}}
+    case _:
+      Out{RError{e_fmt("ERR Unknown PFDEBUG subcommand '" ++ cstr(sub) ++ "'")}, CKeep{}}
+
+def pfdebug.some(ok: Bool, +sub: String, +w: String) -> Out:
+  match ok:
+    case True{}:
+      pfdebug.sub(pfdebug.id(sub), H.is_sparse(w), sub, w)
+    case False{}:
+      Out{e_hll_type(), CKeep{}}
+
+# PFDEBUG: the key must be there, and hold a HyperLogLog; GETREG and
+# TODENSE make a sparse one dense
+def pfdebug.of(+sub: String, m: Maybe<&2, KV.Item<String>>) -> Out:
+  match m:
+    case Some{KV.Item{+w, e}}:
+      pfdebug.some(H.valid(w), sub, w)
+    case None{}:
+      Out{RError{"ERR The specified key does not exist"}, CKeep{}}
+
+# a write of a HyperLogLog's key, from the string it holds there at now
+def hll.upd(op: HllOp, m: Maybe<&2, KV.Item<String>>) -> Out:
+  match op:
+    case HAdd{els}:
+      pfadd.of(els, m)
+    case HCount{}:
+      pfcount.of(m)
+    case HDebug{+sub}:
+      pfdebug.of(sub, m)
+
+# The HyperLogLogs of several keys (PFCOUNT of several, PFMERGE): their
+# registers' maxima so far, or the error of the first key that is not
+# one (or whose opcodes are invalid), in the keys' order
+type PfRead is Type:
+  PfOk{acc: H.Acc}
+  PfErr{r: Reply}
+
+def pf.read.acc(a: H.Acc) -> PfRead:
+  match a:
+    case H.Acc{x, d}:
+      PfOk{H.Acc{x, d}}
+    case H.AccBad{}:
+      PfErr{e_hll_bad()}
+
+def pf.read.s(ok: Bool, +w: String, acc: H.Acc) -> PfRead:
+  match ok:
+    case True{}:
+      pf.read.acc(H.acc.add(acc, w))
+    case False{}:
+      PfErr{e_hll_type()}
+
+def pf.read.v(m: Maybe<&2, KV.Val>, acc: H.Acc) -> PfRead:
+  match m:
+    case None{}:
+      PfOk{acc}
+    case Some{KV.VStr{+w}}:
+      pf.read.s(H.valid(w), w, acc)
+    case Some{KV.VColl{c}}:
+      PfErr{e_wrongtype()}
+
+def pf.read(ks: List<&2, String>, st: PfRead, +t: KV.Trie<KV.Val>, +now: Nat) -> PfRead:
+  match ks:
+    case Nil{}:
+      st
+    case Con{+k, rest}:
+      match st:
+        case PfOk{acc}:
+          pf.read(rest, pf.read.v(KV.read(KV.Val, t, k, now), acc), t, now)
+        case PfErr{r}:
+          PfErr{r}
+
+def pf.count.of(r: PfRead) -> Reply:
+  match r:
+    case PfOk{H.Acc{a, d}}:
+      hll.reply(H.acc.count(a))
+    case PfOk{H.AccBad{}}:
+      e_hll_bad()
+    case PfErr{e}:
+      e
+
+# PFCOUNT of several keys: the count of their union (a key not there as
+# an empty HyperLogLog); none of them keeps it
+def pf.count(ks: List<&2, String>, +d: Db) -> Reply:
+  pf.count.of(pf.read(ks, PfOk{H.acc.new()}, db.trie(d), db.now(d)))
+
+# PFMERGE's reply, as its act (APfMerge) answers: OK, or the error of the
+# first key that is no HyperLogLog
+def pf.merge.reply.of(r: PfRead) -> Reply:
+  match r:
+    case PfErr{e}:
+      e
+    case PfOk{a}:
+      r_ok()
+
+def pf.merge.reply(+dst: String, srcs: List<&2, String>, +d: Db) -> Reply:
+  pf.merge.reply.of(pf.read(dst <> srcs, PfOk{H.acc.new()}, db.trie(d), db.now(d)))
+
+def pf.merge.put(m: Maybe<&2, String>, +dst: String) -> Cmd:
+  match m:
+    case Some{v}:
+      Upd{dst, USet{v, 0n, TKeep{}, "set"}}
+    case None{}:
+      Bad{e_hll_bad()}
+
+def pf.merge.at(v: Maybe<&2, KV.Val>, +dst: String, a: Array<Nat>, dense: Bool) -> Cmd:
+  match v:
+    case Some{KV.VStr{+w}}:
+      pf.merge.put(H.merge(w, a, dense, hll.max()), dst)
+    case _:
+      pf.merge.put(H.merge(H.fresh(), a, dense, hll.max()), dst)
+
+def pf.merge.of(r: PfRead, +dst: String, +t: KV.Trie<KV.Val>, +now: Nat) -> Cmd:
+  match r:
+    case PfOk{H.Acc{a, dense}}:
+      pf.merge.at(KV.read(KV.Val, t, dst, now), dst, a, dense)
+    case PfOk{H.AccBad{}}:
+      Bad{e_hll_bad()}
+    case PfErr{e}:
+      Bad{e}
+
+# PFMERGE's write of its destination (APfMerge): the union of the
+# HyperLogLogs of its keys (the destination's among them), which the
+# destination keeps with its time, or holds as a new key; the SET of the
+# value that makes, with KEEPTTL, which answers OK as PFMERGE does; or
+# the error of a key, which writes nothing
+def pf.merge.cmd(+t: KV.Trie<KV.Val>, +now: Nat, +dst: String, srcs: List<&2, String>) -> Cmd:
+  pf.merge.of(pf.read(dst <> srcs, PfOk{H.acc.new()}, t, now), dst, t, now)
+
+def pf.selftest.of(m: Maybe<&2, String>) -> Reply:
+  match m:
+    case None{}:
+      r_ok()
+    case Some{e}:
+      RError{"ERR " ++ e}
+
+# PFSELFTEST's reply (H.selftest)
+def pf.selftest() -> Reply:
+  pf.selftest.of(H.selftest())
+
 def upd(op: UpdOp, +now: Nat, m: Maybe<&2, KV.Item<String>>) -> Out:
   match op:
     case USetNx{v}:
@@ -15942,6 +16419,8 @@ def upd(op: UpdOp, +now: Nat, m: Maybe<&2, KV.Item<String>>) -> Out:
       uincrf.of(by, m)
     case UZset{op}:
       zwrite.str(op, m)
+    case UHll{op}:
+      hll.upd(op, m)
 
 # An update of a key that holds a collection: SET (and SETEX, PSETEX)
 # replaces it, SETNX finds it there, EXPIRE and its kin and PERSIST set
@@ -18348,7 +18827,8 @@ def ds.copy(+src: String, +dst: String, +j: Nat, rep: Bool, ds: Ds) -> Bool & Ds
 # steps; a key copied (COPY) to a database it names, or within the focus
 # (a COPY without DB in a file Redis wrote); every database emptied
 # (FLUSHALL); SORT with STORE, which writes what it makes of the keys of
-# the focus to its destination there (sort.write)
+# the focus to its destination there (sort.write); PFMERGE, which writes
+# the union of its keys to its destination (pf.merge.cmd)
 type Act is Data:
   ARun{c: Cmd}
   AFocus{db: Nat}
@@ -18359,6 +18839,7 @@ type Act is Data:
   ACopyHere{src: String, dst: String, rep: Bool}
   AWipe{}
   ASort{key: String, o: SortO}
+  APfMerge{dst: String, srcs: List<&2, String>}
 
 def act.run(r: Reply & Db, pre: List<&2, Db>, post: List<&2, Db>) -> Reply & Ds:
   (x, d) = r
@@ -18384,6 +18865,11 @@ def sort.write.ds(+ds: Ds, +k: String, o: SortO) -> Cmd:
   +d = ds.focused(ds)
   sort.write(db.trie(d), db.now(d), k, o)
 
+# PFMERGE's command (pf.merge.cmd) on the focus
+def pf.merge.ds(+ds: Ds, +dst: String, srcs: List<&2, String>) -> Cmd:
+  +d = ds.focused(ds)
+  pf.merge.cmd(db.trie(d), db.now(d), dst, srcs)
+
 # an act's reply, and the databases after it (SORT with STORE runs the
 # command it makes, so it acts as ARun of that command does)
 def act(a: Act, ds: Ds) -> Reply & Ds:
@@ -18408,6 +18894,9 @@ def act(a: Act, ds: Ds) -> Reply & Ds:
     case ASort{+k, o} x:
       +y = x
       act.cmd(sort.write.ds(y, k, o), y)
+    case APfMerge{+d, srcs} x:
+      +y = x
+      act.cmd(pf.merge.ds(y, d, srcs), y)
 
 def ds_of(r: Reply & Ds) -> Ds:
   (x, ds) = r

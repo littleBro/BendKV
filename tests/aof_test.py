@@ -159,6 +159,17 @@ def main():
                                    [b"SORT", b"nope"]]) + [b"STORE", b"o:%d" % (i - i % 300)])
             if i % 900 == 0:
                 batch.append([b"PEXPIREAT", b"s:%d" % i, b"%d" % (NOW_S * 1000 + r.randint(10**6, 10**9))])
+            # HyperLogLogs: elements added (now and then enough to make
+            # one dense), the count kept in the value, the union of two
+            # stored, and now and then one made dense and given a time
+            ne = 2000 if i % 4000 == 0 else r.randint(0, 5)
+            batch.append([b"PFADD", b"p:%d" % i] + [b"e%d" % r.randint(0, 10**6) for _ in range(ne)])
+            batch.append([b"PFCOUNT", b"p:%d" % i])
+            batch.append([b"PFMERGE", b"q:%d" % (i - i % 300), b"p:%d" % i, b"p:%d" % (i - 100)])
+            if i % 1000 == 0:
+                batch.append([b"PFDEBUG", b"TODENSE", b"p:%d" % i])
+                batch.append([b"PEXPIREAT", b"p:%d" % i, b"%d" % (NOW_S * 1000 + r.randint(10**6, 10**9))])
+                batch.append([b"PFADD", b"p:%d" % i, b"late"])
             # sorted sets: small ones and now and then one past a listpack
             # (300 members, or a long one), with ZADD's options, changed
             # by ZINCRBY, ZREM, the ZREMRANGEs and the pops, combined

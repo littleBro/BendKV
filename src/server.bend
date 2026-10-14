@@ -1004,6 +1004,15 @@ def touch.ents(t: Tx, +xs: List<&2, A.Ent>, +pre: Maybe<&2, R.Ds>, +post: R.Ds) 
   +x = t
   touch.ents.if(tx.on(x), x, xs, pre, post)
 
+# the keys a command's effects touch: all of them, but PFDEBUG's, which
+# changes a value's encoding without signalModifiedKey
+def touch.by(+c: R.Cmd, t: Tx, +xs: List<&2, A.Ent>, +pre: Maybe<&2, R.Ds>, +post: R.Ds) -> Tx:
+  match c:
+    case R.Upd{k, R.UHll{R.HDebug{s}}}:
+      t
+    case _:
+      touch.ents(t, xs, pre, post)
+
 # Clients
 # -------
 # Every client the server holds, by id, from its connection's start
@@ -2309,6 +2318,10 @@ def ek.upd(+j: Nat, +k: String, op: R.UpdOp) -> List<&2, Ek>:
       [EkW{j, k, "incrbyfloat", ev.str()}]
     case R.UZset{z}:
       [EkW{j, k, ek.zset(z), ev.z()}]
+    case R.UHll{R.HAdd{es}}:
+      [EkW{j, k, "pfadd", ev.str()}]
+    case R.UHll{h}:
+      Nil{}
 
 # DEL's keys, each deleted
 def ek.dels(+j: Nat, ks: List<&2, String>) -> List<&2, Ek>:
@@ -2421,6 +2434,8 @@ def ek.base(+c: R.Cmd, +j: Nat, +pre: R.Ds, +es: List<&2, A.Ent>) -> List<&2, Ek
       [EkW{j, k, "spop", ev.s()}]
     case R.Own{R.SSortStore{k, o}}:
       ek.sort(o, j)
+    case R.Own{R.SPfMerge{+d, srcs}}:
+      [EkW{j, d, "pfadd", ev.str()}]
     case R.Own{o}:
       ek.ents(es)
     case _:
@@ -2636,7 +2651,7 @@ def bg.touched.of(rs: List<&2, R.Reply>, es: List<&2, A.Ent>, conn: S.Conn, srv:
 def bg.touched(+pre: Maybe<&2, R.Ds>, +c: R.Cmd, es: List<&2, A.Ent>, g: LRun) -> LRun:
   match g:
     case LRun{rs, +e1, +conn, srv, +ds, ws, up, tx, pb}:
-      bg.touched.of(rs, List.append(&2, A.Ent, e1, es), conn, srv, ds, ws, up, touch.ents(tx, e1, pre, ds), ps.own.take(ps.cmd(c, e1, pre, ds, S.conn.id(conn), pb)))
+      bg.touched.of(rs, List.append(&2, A.Ent, e1, es), conn, srv, ds, ws, up, touch.by(c, tx, e1, pre, ds), ps.own.take(ps.cmd(c, e1, pre, ds, S.conn.id(conn), pb)))
     case LHeld{h}:
       LHeld{h}
 
