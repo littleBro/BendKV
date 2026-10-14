@@ -8,10 +8,12 @@
 # to a hot function and add reference counting to every request. The
 # server sends from its loop (no writer thread, whose spinning would add
 # noise). The baseline is CI's count (the perfcheck job: Ubuntu 24.04's
-# clang 19, the patches of bend-patches/), where one build counts up to
-# 0.7% apart from one run to the next, and a local count about as far;
-# after a deliberate change, rewrite it from the job's output (or with
-# UPDATE=1).
+# clang 19, the patches of bend-patches/), where one build has counted up
+# to 3.4% apart from one run to the next (GET 3,312 and 3,425 for patch
+# 32's, which counts 3,310 to 3,313 locally), and a local count about 1%
+# below; after a deliberate change, rewrite it from the job's output (or
+# with UPDATE=1), a count in the middle of those CI has seen. The CPU of
+# the machine that counted is printed after the counts.
 set -e
 here=$(cd "$(dirname "$0")" && pwd)
 SERVER=${1:-build/bendkv}
@@ -27,6 +29,7 @@ if [ -n "$UPDATE" ]; then
   cat "$BASE"
   exit 0
 fi
+st=0
 awk -v tol="$TOL" '
   FNR == NR { base[$1] = $2; next }
   { t = $1; ir = $3; b = base[t]
@@ -34,4 +37,6 @@ awk -v tol="$TOL" '
     bad = pct > tol
     printf "%-5s %6d instructions per request (baseline %d, %+.1f%%)%s\n", t, ir, b, pct, bad ? "  REGRESSION" : ""
     if (bad) fail = 1 }
-  END { exit fail }' "$BASE" "$W/out.txt"
+  END { exit fail }' "$BASE" "$W/out.txt" || st=$?
+sed -n 's/^model name[^:]*: */cpu: /p' /proc/cpuinfo 2>/dev/null | head -n 1
+exit $st

@@ -6832,5 +6832,13 @@ server's CPU per request: GET 565 + 335 ns before and 540 + 355 now, SET 700 + 3
 640 + 340, INCR 855 + 560 and 820 + 500. The cost of section 31 is back for SET and INCR
 (+4.7% and +6.5% of instructions then, −4.3% and −3.7% now) and for memory (one word a
 key); GET reads a string where it lies without taking it, so the node cost it a miss
-more than instructions, and the miss is what it saves. The perfcheck baseline is
-rewritten from CI's count.
+more than instructions, and the miss is what it saves.
+
+**The baseline.** CI's perfcheck counted this build's GET at 3,312 in one run and 3,425
+in the next (SET 4,119 and 4,115, INCR 4,419 and 4,421), where the build counts GET at
+3,310 to 3,313 in four runs here; before it, CI counted GET at 3,338 to 3,371 over five
+runs. A baseline at the lower count left the upper one 3.4% past it, beyond the guard's
+3%: GET's baseline stays at 3,371, the middle of what CI has counted, and SET's and
+INCR's are the counts above, 4,119 and 4,419. `tools/perf_guard.sh` prints the CPU of
+the machine that counted after the counts, so that a count far from the others can be
+told from its machine.
