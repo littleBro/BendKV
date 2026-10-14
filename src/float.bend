@@ -102,16 +102,17 @@ def big.cmp(a: List<&2, Nat>, b: List<&2, Nat>) -> Cmp:
 def nat.pow2.bit(+k: Nat, +b: Nat, +v: Nat) -> Nat:
   Bool.pick(Nat, Nat.is_eq(Nat.mod(Nat.div(k, b), 2n), 1n), v, 1n)
 
-def nat.pow2.of(small: Bool, +k: Nat) -> Nat:
-  match small:
+def nat.pow2.of(few: Bool, +k: Nat) -> Nat:
+  match few:
     case True{}:
-      Nat.mul(Nat.mul(Nat.mul(nat.pow2.bit(k, 1n, 2n), nat.pow2.bit(k, 2n, 4n)), Nat.mul(nat.pow2.bit(k, 4n, 16n), nat.pow2.bit(k, 8n, 256n))), Nat.mul(nat.pow2.bit(k, 16n, 65536n), nat.pow2.bit(k, 32n, Nat.mul(65536n, 65536n))))
-    case False{}:
       Nat.pow(2n, k)
+    case False{}:
+      Nat.mul(Nat.mul(Nat.mul(nat.pow2.bit(k, 1n, 2n), nat.pow2.bit(k, 2n, 4n)), Nat.mul(nat.pow2.bit(k, 4n, 16n), nat.pow2.bit(k, 8n, 256n))), Nat.mul(nat.pow2.bit(k, 16n, 65536n), nat.pow2.bit(k, 32n, Nat.mul(65536n, 65536n))))
 
-# 2^k: below 2^64 by the bits of k, at once (Nat.pow multiplies k times)
+# 2^k, k below 64: Nat.pow multiplies k times, which is the cheaper way
+# below 12; past it, the six bits of k at once
 def nat.pow2(+k: Nat) -> Nat:
-  nat.pow2.of(Nat.is_lt(k, 64n), k)
+  nat.pow2.of(Nat.is_lt(k, 12n), k)
 
 # a * k + c, for k and c below 2^24
 def big.mul_small(a: List<&2, Nat>, +k: Nat, +c: Nat) -> List<&2, Nat>:

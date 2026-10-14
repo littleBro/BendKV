@@ -314,14 +314,14 @@ Where performance and proof meet: **batched execution under proved laws.**
    (HELLO, SELECT, CLIENT, AUTH, INFO, COMMAND, CONFIG; done), CLIENT LIST, INFO and KILL
    (done, section 3zs), SCAN and RANDOMKEY (done), MONITOR (done, section 3zt), the
    log's rewrite (done, section 3zv), maxmemory and its eviction (done, section 3zw),
-   and RESP3 (done, section 3zx), measured by Redis's own test suite run against BendKV
-   and by client libraries' test suites (redis-py's and go-redis's, in CI: done, section
-   3zy). Lua, streams, cluster,
+   RESP3 (done, section 3zx), and SORT and SORT_RO (done, section 3zzh), measured by
+   Redis's own test suite run against BendKV and by client libraries' test suites
+   (redis-py's and go-redis's, in CI: done, section 3zy). Lua, streams, cluster,
    replication and modules are out of scope. The suite's count: of the 1,677 tests
-   Redis 7.0.15 passes against a server it did not start, BendKV passes 1,097, 1,090 of
-   the 1,172 in what it has ([COMPATIBILITY.md](COMPATIBILITY.md)); most of the other 82
-   need commands BendKV does not have (replication's SYNC, Lua, SORT, DUMP, streams) or
-   run after a test that left its client in MULTI on one of them.
+   Redis 7.0.15 passes against a server it did not start, BendKV passes 1,153, 1,146 of
+   the 1,224 in what it has ([COMPATIBILITY.md](COMPATIBILITY.md)); most of the other 78
+   need commands BendKV does not have (replication's SYNC, Lua, DUMP, streams) or run
+   after a test that left its client in MULTI on one of them.
    What maxmemory left to do (section 3zw): a delete takes the nodes it empties now
    (section 3zz), so the eviction gets within a limit with the keys Redis keeps, but its
    samples still walk the trie's empty buckets, and an eviction takes six times Redis's
@@ -336,7 +336,16 @@ Where performance and proof meet: **batched execution under proved laws.**
    old one's, and each needs a proved test that it changes its sorted set before it can
    take it. SADD to an intset costs twenty times SADD to a hashtable (section 3zze): its
    members are strings compared as integers along a list, where Redis searches an array
-   of integers by halves.
+   of integers by halves. SORT of 1,000 elements costs two to six times Redis's
+   instructions (section 3zzh): each step of the merge sort shares and drops its runs'
+   cells; a weight that is not an integer is read by strtod in software (Clinger's fast
+   path, one rounding for up to 15 digits and a power of ten up to 22, would read most of
+   them at once, and every other reader of doubles with them); SORT with STORE sorts
+   twice, once for the session's reply and once for its act's write; and the keys its
+   patterns name are read as MGET reads its keys, the walk behind `KV.read` copying each
+   node on a key's path from the shared keyspace (8,000 instructions a key, where a GET
+   takes 3,312 in all): lending those reads the keyspace, as section 53 of PERFORMANCE.md
+   did for the reads of a key's entry, would speed MGET as much.
 
 After that comes proving the native strings (section 5, step 1): a small piece of
 work that makes the word "verified" much stronger.

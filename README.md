@@ -18,7 +18,7 @@ throughput of Redis 7.0.15 on the same machine, with half its memory for small v
 > commands, CLIENT LIST, INFO and KILL, MONITOR, an append-only file and its rewrite,
 > maxmemory and its eviction, RESP3). The goal now is a drop-in replacement for a single
 > Redis node, measured by Redis's own test suite: of the 1,677 tests Redis 7.0.15 passes
-> against a server it did not start, BendKV passes 1,097, and 1,090 of the 1,172 in what
+> against a server it did not start, BendKV passes 1,153, and 1,146 of the 1,224 in what
 > it implements
 > ([docs/COMPATIBILITY.md](docs/COMPATIBILITY.md)). Do not use it for data you cannot
 > lose.
@@ -57,7 +57,7 @@ proved to be the trie's own.
 | Map | 11 | the trie is a finite map from keys to a value and a time: after any sequence of writes (a value with a time, a value with its time kept, a time alone, a deletion), every key holds what was last written to it, with no stale, lost or foreign entries; a read sees a key only until its time |
 | Keys | 2 | key comparison is exactly string equality, down to the bits of `U32` |
 | Commands | 24 | no command changes a key it does not write, neither its value nor its time (`frame`); reads keep the database (the commands of hashes, lists, sets and sorted sets are reads and updates of their key, LMOVE, LMPOP, SMOVE, ZMPOP and the operations of several sets and sorted sets of their keys, so these laws and those below hold of them); a key whose time has passed is there for no command, and the sweep of expired keys deletes no key that is there; GET, DEL, APPEND, SETRANGE, SETNX, INCR, GETDEL, PERSIST, PTTL, SET with KEEPTTL, RENAME, MSETNX and BITOP behave as specified, on keys of the types they take (SET, SETNX, the times and the key commands take any), a key they add counted; a pipelined batch runs exactly as its commands in order; the cache hints before a batch change nothing |
-| Commuting | 5 | commands on different keys commute: replies and key contents are the same in either order, and adjacent independent commands in a batch can be swapped, when neither writes a key the other's writes depend on (RENAME moves a value from one key to another, MSETNX sets its keys only when none is there, BITOP sets its destination from its sources, LMOVE pushes onto its destination what it pops from its source, LMPOP pops from the first of its keys that is there, a STORE of a set operation sets its destination to what its sources make, SMOVE moves a member from its source to its destination, a STORE of a sorted-set operation or of a range sets its destination to what its sources or its source make, ZMPOP pops from the first of its keys that is there) |
+| Commuting | 5 | commands on different keys commute: replies and key contents are the same in either order, and adjacent independent commands in a batch can be swapped, when neither writes a key the other's writes depend on (RENAME moves a value from one key to another, MSETNX sets its keys only when none is there, BITOP sets its destination from its sources, LMOVE pushes onto its destination what it pops from its source, LMPOP pops from the first of its keys that is there, a STORE of a set operation sets its destination to what its sources make, SMOVE moves a member from its source to its destination, a STORE of a sorted-set operation or of a range sets its destination to what its sources or its source make, ZMPOP pops from the first of its keys that is there); SORT, whose patterns may read any key, swaps with reads alone |
 | Persistence | 9 | logging changes no reply; the file reads back as written, times included; after any history, each batch at its own time, on any of the databases, the server restores exactly the databases it held; a file cut by a crash at any byte restores the databases after some prefix of its acts in which every transaction is whole, never a partial act or transaction; the start's replay, which first checks that each entry replays as written, is that replay whenever the check refuses none |
 | Databases | 6 | SELECT changes no database and focuses the one it names; SWAPDB puts each of two databases in the other's place; FLUSHALL empties them all; MOVE takes a key's entry, its value and its time, out of the selected database and sets it in the other; COPY sets a key's entry at another key, in the selected database or another, when that key is not there or REPLACE is given |
 | Key count | 2 | after any history, the counts every database keeps are its trie's own, how many keys it holds and how many of them have a time, and its trie holds each key once; so DBSIZE answers the number of keys in its trie |
@@ -187,6 +187,32 @@ translation stays in the trusted base.
   EVAL of a fourth fixed script that deletes the key and runs the ZADD of its elements. A
   STORE of more than 128 elements loses the sign of a `-0` score where Redis keeps it.
   The blocking BZPOPMIN, BZPOPMAX and BZMPOP are below (clients that wait).
+- **Sorting:** SORT and SORT_RO (BY, LIMIT, GET, ASC, DESC, ALPHA and, for SORT, STORE),
+  their options read in order and their errors given where and as Redis gives them, all
+  before WRONGTYPE. A list, a set or a sorted set is sorted, a key not there as an empty
+  list: its elements read as doubles, as Redis reads them with strtod (blanks first,
+  nothing after, no overflow, no NaN), ties broken by their bytes, or with ALPHA compared
+  by their bytes up to the first NUL, as strcoll compares in the C locale (all of them
+  with STORE, as Redis then compares). BY with a pattern weighs each element by the string
+  at the key its first `*` names, or a hash's field after `->`, a weight not there
+  counting as 0 (or first, with ALPHA); BY without a `*` leaves a list or a sorted set in
+  its order (reversed by DESC) and a set in its own, which a STORE sorts ALPHA, as Redis
+  sorts it. GET answers the element (`#`) or what a pattern names, a null where nothing is
+  (an empty string in a STORE). The sort is a merge sort, stable as glibc's qsort, which
+  Redis calls, and takes two to six times Redis's instructions for 1,000 elements (section
+  57 of [docs/PERFORMANCE.md](docs/PERFORMANCE.md)). STORE writes the result over its
+  destination as a new list (the `sortstore` event), or deletes it when there is nothing
+  (`del`), and answers the count; it is logged as the list it wrote (the RPUSH of its
+  elements, or the EVAL of the lists' script onto a key there), and a file of Redis's,
+  which holds the SORT, is read by running it again. Where BendKV differs: a set kept as a
+  hashtable comes in BendKV's order where Redis's is its hashtable's (BY a constant
+  without STORE, and elements whose weights tie under ALPHA by a pattern); a sort BY a
+  pattern under a LIMIT that does not take all leaves elements whose weights tie in a
+  stable sort's order, where Redis's pqsort may not; Redis compares ALPHA in the locale it
+  started in; Redis reads a range error from errno without clearing it, so that a SORT
+  after one that met a weight too large or too small fails on weights that are not
+  integers, until a command clears errno; and SORT of a small sorted set leaves it a
+  listpack, where Redis makes it a skiplist for good.
 - **Clients that wait:** BLPOP, BRPOP, BLMOVE, BRPOPLPUSH, BLMPOP, BZPOPMIN, BZPOPMAX
   and BZMPOP, their timeouts (seconds, a double; 0 waits for ever) read as Redis reads
   them, with its errors. A command that finds nothing to pop makes its client wait, and
@@ -487,7 +513,10 @@ compared as sets and each random pick checked against the set it came from), sor
 (each command at its edges, sorted sets of up to 20,000 elements on both sides of a
 listpack's limits, STOREs and pops of keys whose time has passed, and at random, ZSCAN's
 walk compared by its pairs and each random pick checked against the sorted set it came
-from),
+from), SORT and SORT_RO (`tests/sort_test.py`: the cases of Redis's tests and of its
+`sort.c`, lists, sets and sorted sets of up to 10,000 elements sorted every way, and
+random SORTs with BY and GET patterns over strings and hashes, each STORE's destination
+read back),
 robustness and concurrency checks, a client that stops reading while the others are
 served (`tests/writer_test.py`), clients that wait (`tests/blocking_test.py`: 18 scenarios
 of the blocking commands on BendKV and on Redis, their transcripts compared line by line,
@@ -497,7 +526,7 @@ and 50 consumers moving 1,000 items while some leave), transactions (`tests/mult
 transcripts compared line by line, then a counter raised by 20 clients with WATCH, each
 lost race retried, a reader that never sees half of a transaction, and 100 clients that
 leave in MULTI or with keys watched; random transactions in the differential test too),
-Pub/Sub (`tests/pubsub_test.py`: scenarios of Pub/Sub and the events of 138 commands
+Pub/Sub (`tests/pubsub_test.py`: scenarios of Pub/Sub and the events of 148 commands
 on BendKV and on Redis, their transcripts compared line by line, then 20 subscribers that
 each get the 2,000 messages of 4 publishers in order, and 50 subscribers that leave while
 messages are published), CLIENT LIST, INFO and KILL (`tests/client_test.py`: scenarios on
@@ -554,7 +583,7 @@ src/        the server
   startup.bend  the command line and the configuration file        tested
   server.bend   TCP, connections, the database actor, the log      tested
 proof/      LAWS.bend (the laws), PROOF.bend (their proofs), SPEC.bend (the commands on the trie alone)
-tests/      float, start, differential, expiry, protocol, session, CONFIG, INFO, COMMAND, SCAN, BITFIELD, hash, list, set, sorted set, blocking, transaction, Pub/Sub, CLIENT, MONITOR, AUTH, RESP3, maxmemory, robustness, stalled reader, concurrency, AOF and AOF rewrite tests
+tests/      float, start, differential, expiry, protocol, session, CONFIG, INFO, COMMAND, SCAN, BITFIELD, hash, list, set, sorted set, SORT, blocking, transaction, Pub/Sub, CLIENT, MONITOR, AUTH, RESP3, maxmemory, robustness, stalled reader, concurrency, AOF and AOF rewrite tests
 bench/      in-process benchmarks of the map, the core and channels
 tools/      measurement scripts, the runner of Redis's test suite, and the generators of
             the trie, of the parameter table and of the command table, with the facts

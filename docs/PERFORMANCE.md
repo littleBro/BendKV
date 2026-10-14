@@ -6842,3 +6842,56 @@ runs. A baseline at the lower count left the upper one 3.4% past it, beyond the 
 INCR's are the counts above, 4,119 and 4,419. `tools/perf_guard.sh` prints the CPU of
 the machine that counted after the counts, so that a count far from the others can be
 told from its machine.
+
+## 57. SORT
+
+**What it costs** (`SORT` of 1,000 elements from one client, one request at a time,
+instructions per command under callgrind, and Redis 7.0.15 the same way; the first
+version counted with Bend's 31 patches, now with 32):
+
+| SORT of 1,000 elements | first version | now | Redis | now / Redis |
+|---|---:|---:|---:|---:|
+| a list of integers | 18,304,199 | 6,148,541 | 1,969,282 | 3.1 |
+| a list of words, ALPHA | 15,253,724 | 5,779,683 | 2,875,746 | 2.0 |
+| a list BY a key that holds a double | 25,952,831 | 20,053,648 | 3,845,533 | 5.2 |
+| a list of integers, LIMIT 0 10 | 17,447,931 | 5,291,684 | 1,294,267 | 4.1 |
+| a list BY nosort, GET a key | 8,872,094 | 8,018,304 | 2,193,691 | 3.7 |
+| a set of integers | 16,972,345 | 6,573,141 | 2,645,909 | 2.5 |
+| a list of integers, STORE | 35,868,264 | 11,557,496 | 1,995,218 | 5.8 |
+
+**What changed from the first version**, each found in callgrind's profile of it:
+
+- A merge counted its two runs to bound its steps, and the count walked copies of them
+  and dropped them (a tenth of a numeric SORT): the bound is the number of elements,
+  counted once with the runs (`SRuns`).
+- ALPHA cut both values at their first NUL in every comparison, a search and a copy each
+  (a quarter of an ALPHA SORT): each value is cut once, as its element's record is made
+  (`sort.key`), and a comparison is `String.order` of two cut values.
+- The patterns of BY and GET were read for each element, the `*`, the `->` and the parts
+  around them: they are read once per SORT (`SPat`).
+- A weight was read by strtod in software, digit by digit into a big number, even an
+  integer: an integer of up to 14 digits is read at once, as ZADD reads its scores.
+- strtod's test of a tiny result ran on every number it read: it runs on a number that
+  rounds below the normal range alone (`fl.tiny`).
+- A power of two was taken by `Nat.pow`, one multiplication per unit of the exponent, two
+  or three times per integer converted to a double: once per integer now, and from 2^12
+  by the six bits of the exponent (`nat.pow2`).
+- `F.f64.cmp` took its doubles, so a comparison of two scores copied both: it borrows
+  them.
+
+**What is left.** A step of the merge sort shares the cells of the run it passes on and
+drops the cell it takes apart: about two million instructions of a numeric SORT of 1,000,
+a third of it. strtod in software reads a double that is not an integer in about 10,000
+instructions, half of a SORT BY a key that holds a double. SORT with STORE sorts twice:
+the session answers it from the database before its act, and the act sorts again to make
+the list it writes. And a key that BY or GET names is read as MGET reads one, about 8,000
+instructions a key, where a whole GET takes 3,312: the walk down the trie behind
+`KV.read` takes each of the five nodes on the key's path from the keyspace, which shares
+them, so it copies each (`ctr_own_slow`, 26% of `SORT ... BY nosort GET`), as the reads of
+section 53 did before their callers lent them the database; MGET of the same 1,000 keys
+takes 8,496,827.
+
+**The other commands.** `make perfcheck`: GET 3,312, SET 4,072 and INCR 4,392
+instructions per request (3,311, 4,075 and 4,387 before). `tools/colls.sh`: ZADD of a
+member there with an integer score 23,680 (25,383, −6.7%), ZINCRBY 68,724 (70,310,
+−2.3%), ZSCORE 17,793 (17,754); the others as before, within 0.3%.
