@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
-# gen_trie.py: writes the 16-way parts of src/map.bend (and of proof/PROOF.bend)
-# between their "# BEGIN gen_trie: NAME" and "# END gen_trie: NAME"
-# lines. A 16-way node spelled out by hand is 16 fields in every pattern
-# and 16 or 256 cases in every proof; this script spells them instead.
+# gen_trie.py: writes the 16-way parts of src/map.bend (and of
+# proof/LAWS.bend and proof/PROOF.bend) between their
+# "# BEGIN gen_trie: NAME" and "# END gen_trie: NAME" lines. A 16-way
+# node spelled out by hand is 16 fields in every pattern and 16 or 256
+# cases in every proof; this script spells them instead.
 #
 #   python3 tools/gen_trie.py          # rewrites the blocks in place
 #   python3 tools/gen_trie.py --check  # fails if a block is out of date
@@ -502,12 +503,320 @@ def block_twice():
             out += [f"    case 1n++p {pat} {K[i]}:", step(i, "KV.Tip{}", kv_tips())]
     return out
 
+# The key count: the sums over a trie's entries and the form of a trie
+# (proof/LAWS.bend: tsum, twf), and the lemmas that take them through a
+# node's 16 subtries (proof/PROOF.bend), which name the definitions of
+# LAWS.bend with Laws.
+NODE = kv_node(cs)
+BNODE = kv_node(["+" + c for c in cs])
+NXH = nxt("h")
+LAW_NAMES = re.compile(r"(?<![\w.])(tsum|twf|bwf|wt|Wt|WAll|WTimed)(?!\w)")
+
+def laws(lines):
+    return [l if l.startswith("#") else LAW_NAMES.sub(r"Laws.\1", l) for l in lines]
+
+# xs added, or and-ed, nested to the right
+def nest(xs):
+    s = None
+    for x in reversed(xs):
+        s = x if s is None else f"Nat.add({x}, {s})"
+    return s
+
+def chain(xs):
+    s = None
+    for x in reversed(xs):
+        s = x if s is None else f"Bool.and({x}, {s})"
+    return s
+
+def block_tsum():
+    return ["def tsum(-V: Data, +w: Wt, t: KV.Trie<V>) -> Nat:",
+            "  match t:",
+            "    case KV.Tip{}:",
+            "      0n",
+            f"    case {NODE}:",
+            f"      {nest([f'tsum(V, w, {c})' for c in cs])}",
+            "    case KV.Ent{k, v, +e, rest}:",
+            "      Nat.add(wt(w, e), tsum(V, w, rest))"]
+
+def block_twf():
+    return ["def twf(-V: Data, t: KV.Trie<V>, d: Nat) -> Bool:",
+            "  match t d:",
+            "    case KV.Tip{} _:",
+            "      True{}",
+            f"    case {NODE} 0n:",
+            "      True{}",
+            f"    case {NODE} 1n++p:",
+            f"      {chain([f'twf(V, {c}, p)' for c in cs])}",
+            "    case KV.Ent{k, v, e, rest} 0n:",
+            "      bwf(V, KV.Ent{k, v, e, rest})",
+            "    case KV.Ent{k, v, e, rest} 1n+p:",
+            "      False{}"]
+
+# the sum of terms with z in place i
+def ctx(terms, i, z):
+    return nest(with_at(terms, i, z))
+
+# a proof that the sum of terms[j..] with z in place i, plus w, is that
+# sum with z + w in place i
+def slot_proof(terms, i, z, w, j=0):
+    def S(jj, zz):
+        return nest(with_at(terms, i, zz)[jj:])
+    if j == i:
+        if i < N - 1:
+            return f"add_swap({z}, {nest(terms[i + 1:])}, {w})"
+        return "{==}"
+    a = terms[j]
+    inner = slot_proof(terms, i, z, w, j + 1)
+    return (f"Equal.trans(Nat, Nat.add(Nat.add({a}, {S(j + 1, z)}), {w}), Nat.add({a}, Nat.add({S(j + 1, z)}, {w})), "
+            f"Nat.add({a}, {S(j + 1, f'Nat.add({z}, {w})')}), add_assoc({a}, {S(j + 1, z)}, {w}), "
+            f"Equal.cong(Nat, Nat, y => Nat.add({a}, y), Nat.add({S(j + 1, z)}, {w}), {S(j + 1, f'Nat.add({z}, {w})')}, {inner}))")
+
+def block_slots():
+    out = ["# a sum over a node's subtries with z in place i, plus w, is the sum",
+           "# with z + w in place i"]
+    for i in range(N):
+        ts = [f"a{j}" for j in range(N)]
+        ts[i] = "z"
+        params = fields([f"+a{j}: Nat" for j in range(N) if j != i] + ["+z: Nat", "+w: Nat"])
+        out += ([""] if i > 0 else []) + [
+                f"def slot{i}({params}) -> {{Nat.add({nest(ts)}, w) == {ctx(ts, i, 'Nat.add(z, w)')} : Nat}}:",
+                f"  {slot_proof(ts, i, 'z', 'w')}"]
+    return out
+
+# the well-formedness of a node's subtries at depth p, with z in place i
+def chain_t(i=None, z=None, p="p"):
+    xs = [f"twf(V, {c}, {p})" for c in cs]
+    if i is not None:
+        xs[i] = z
+    return chain(xs)
+
+# a proof that subtrie i is well formed, from wf, that the node is
+def get_i(i, wf, p="p"):
+    xs = [f"twf(V, {c}, {p})" for c in cs]
+    rest = wf
+    for j in range(i):
+        rest = f"and_r({xs[j]}, {chain(xs[j + 1:])})({rest})"
+    if i < N - 1:
+        return f"and_l({xs[i]}, {chain(xs[i + 1:])})({rest})"
+    return rest
+
+def block_twf_set():
+    out = ["# a node whose subtries are well formed, with subtrie i replaced by a",
+           "# well-formed one, is well formed"]
+    for i in range(N):
+        node_z = kv_node(with_at(cs, i, "z"))
+        out += ([""] if i > 0 else []) + [
+                f"def twf_set{i}(-V: Data, +p: Nat, {fields([f'+{c}: KV.Trie<V>' for c in cs])}, +z: KV.Trie<V>) -> {{twf(V, {NODE}, 1n+p) == True{{}} : Bool}} -> {{twf(V, z, p) == True{{}} : Bool}} -> {{twf(V, {node_z}, 1n+p) == True{{}} : Bool}}:",
+                f"  +wf => ez => %Equal.sym(Bool, twf(V, z, p), True{{}}, ez) : {{{chain_t(i, '_')} == True{{}} : Bool}}",
+                f"               %{get_i(i, 'wf')} : {{{chain_t(i, '_')} == True{{}} : Bool}}",
+                "               wf"]
+    return laws(out)
+
+# the step of a sum through subtrie i: from what it adds below (ih), what
+# it adds to the node
+def step_through(i, Tp, C, ih):
+    terms = [f"tsum(V, w, {c})" for c in cs]
+    a_args = fields([terms[j] for j in range(N) if j != i])
+    cT = ctx(terms, i, Tp)
+    cC = ctx(terms, i, C)
+    return (f"Equal.trans(Nat, Nat.add({cT}, A), {ctx(terms, i, f'Nat.add({Tp}, A)')}, Nat.add({cC}, B), slot{i}({a_args}, {Tp}, A), "
+            f"Equal.trans(Nat, {ctx(terms, i, f'Nat.add({Tp}, A)')}, {ctx(terms, i, f'Nat.add({C}, B)')}, Nat.add({cC}, B), "
+            f"Equal.cong(Nat, Nat, z => {ctx(terms, i, 'z')}, Nat.add({Tp}, A), Nat.add({C}, B), {ih}), "
+            f"Equal.sym(Nat, Nat.add({cC}, B), {ctx(terms, i, f'Nat.add({C}, B)')}, slot{i}({a_args}, {C}, B))))")
+
+def block_tmod():
+    TS = lambda c: f"tsum(V, w, {c})"
+    E = "KV.Ent{a, b, e, c}"
+    out = ["# a write through an empty subtrie: as the write of the empty bucket",
+           "def tsum_mod_tip(-V: Data, +w: Wt, d: Nat, x: KV.Hex, +h: U32, +o: KV.Op<V>, +A: Nat, +B: Nat) -> {Nat.add(tsum(V, w, KV.bapply(V, o, KV.Tip{})), A) == B : Nat} -> {Nat.add(tsum(V, w, KV.tmod_h(V, d, KV.Tip{}, x, h, o)), A) == B : Nat}:",
+           "  match d x:",
+           "    case 0n _:",
+           "      g => g"]
+    for i in range(N):
+        M = f"KV.tmod_h(V, p, KV.Tip{{}}, {NXH}, o)"
+        out += [f"    case 1n++p {K[i]}:"]
+        if i < N - 1:
+            out += [f"      g => %add_zero({TS(M)}) : {{Nat.add(_, A) == B : Nat}}",
+                    f"           tsum_mod_tip(V, w, p, {NXH}, o, A, B)(g)"]
+        else:
+            out += [f"      g => tsum_mod_tip(V, w, p, {NXH}, o, A, B)(g)"]
+    out += ["",
+            "# a write of the bucket where a walk ends weighs the trie as it weighs",
+            "# the bucket (A and B: what each side adds)",
+            "def tsum_mod(-V: Data, +w: Wt, d: Nat, +t: KV.Trie<V>, x: KV.Hex, +h: U32, +o: KV.Op<V>, +A: Nat, +B: Nat) -> {twf(V, t, d) == True{} : Bool} -> {Nat.add(tsum(V, w, KV.bapply(V, o, KV.tget_h(V, d, t, x, h))), A) == Nat.add(tsum(V, w, KV.tget_h(V, d, t, x, h)), B) : Nat} -> {Nat.add(tsum(V, w, KV.tmod_h(V, d, t, x, h, o)), A) == Nat.add(tsum(V, w, t), B) : Nat}:",
+            "  match d t x:",
+            "    case 0n t0 _:",
+            "      wf => g => g"]
+    for i in range(N):
+        Tp = TS(f"KV.tmod_h(V, p, {cs[i]}, {NXH}, o)")
+        ih = f"tsum_mod(V, w, p, {cs[i]}, {NXH}, o, A, B)({get_i(i, 'wf')})(g)"
+        out += [f"    case 1n++p {BNODE} {K[i]}:",
+                f"      wf => g => {step_through(i, Tp, TS(cs[i]), ih)}"]
+    for i in range(N):
+        M = f"KV.tmod_h(V, p, KV.Tip{{}}, {NXH}, o)"
+        out += [f"    case 1n++p KV.Tip{{}} {K[i]}:"]
+        if i < N - 1:
+            out += [f"      wf => g => %add_zero({TS(M)}) : {{Nat.add(_, A) == B : Nat}}",
+                    f"                 tsum_mod_tip(V, w, p, {NXH}, o, A, B)(g)"]
+        else:
+            out += [f"      wf => g => tsum_mod_tip(V, w, p, {NXH}, o, A, B)(g)"]
+    for i in range(N):
+        out += [f"    case 1n++p {E} {K[i]}:",
+                f"      wf => g => Empty.absurd({{Nat.add(tsum(V, w, KV.tmod_h(V, 1n+p, {E}, {K[i]}, h, o)), A) == Nat.add(tsum(V, w, {E}), B) : Nat}}, false_true(wf))"]
+    out += ["",
+            "# a write through an empty subtrie builds a well-formed trie",
+            "def twf_mod_tip(-V: Data, d: Nat, x: KV.Hex, +h: U32, +o: KV.Op<V>) -> {twf(V, KV.bapply(V, o, KV.Tip{}), 0n) == True{} : Bool} -> {twf(V, KV.tmod_h(V, d, KV.Tip{}, x, h, o), d) == True{} : Bool}:",
+            "  match d x:",
+            "    case 0n _:",
+            "      g => g"]
+    for i in range(N):
+        M = f"KV.tmod_h(V, p, KV.Tip{{}}, {NXH}, o)"
+        out += [f"    case 1n++p {K[i]}:"]
+        if i < N - 1:
+            out += [f"      g => %Equal.sym(Bool, twf(V, {M}, p), True{{}}, twf_mod_tip(V, p, {NXH}, o)(g)) : {{Bool.and(_, True{{}}) == True{{}} : Bool}}",
+                    "           {==}"]
+        else:
+            out += [f"      g => twf_mod_tip(V, p, {NXH}, o)(g)"]
+    out += ["",
+            "# and a write of a well-formed trie, whose bucket stays well formed,",
+            "# leaves it well formed",
+            "def twf_mod(-V: Data, d: Nat, +t: KV.Trie<V>, x: KV.Hex, +h: U32, +o: KV.Op<V>) -> {twf(V, t, d) == True{} : Bool} -> {twf(V, KV.bapply(V, o, KV.tget_h(V, d, t, x, h)), 0n) == True{} : Bool} -> {twf(V, KV.tmod_h(V, d, t, x, h, o), d) == True{} : Bool}:",
+            "  match d t x:",
+            "    case 0n t0 _:",
+            "      wf => g => g"]
+    for i in range(N):
+        M = f"KV.tmod_h(V, p, {cs[i]}, {NXH}, o)"
+        out += [f"    case 1n++p {BNODE} {K[i]}:",
+                f"      +wf => g => twf_set{i}(V, p, {fields(cs)}, {M})(wf)(twf_mod(V, p, {cs[i]}, {NXH}, o)({get_i(i, 'wf')})(g))"]
+    for i in range(N):
+        M = f"KV.tmod_h(V, p, KV.Tip{{}}, {NXH}, o)"
+        out += [f"    case 1n++p KV.Tip{{}} {K[i]}:"]
+        if i < N - 1:
+            out += [f"      wf => g => %Equal.sym(Bool, twf(V, {M}, p), True{{}}, twf_mod_tip(V, p, {NXH}, o)(g)) : {{Bool.and(_, True{{}}) == True{{}} : Bool}}",
+                    "                 {==}"]
+        else:
+            out += [f"      wf => g => twf_mod_tip(V, p, {NXH}, o)(g)"]
+    for i in range(N):
+        out += [f"    case 1n++p {E} {K[i]}:",
+                f"      wf => g => Empty.absurd({{twf(V, KV.tmod_h(V, 1n+p, {E}, {K[i]}, h, o), 1n+p) == True{{}} : Bool}}, false_true(wf))"]
+    out += ["",
+            "# the bucket where a walk of a well-formed trie ends holds a key once",
+            "def twf_b(-V: Data, d: Nat, +t: KV.Trie<V>, x: KV.Hex, +h: U32) -> {twf(V, t, d) == True{} : Bool} -> {bwf(V, KV.tget_h(V, d, t, x, h)) == True{} : Bool}:",
+            "  match d t x:",
+            "    case 0n KV.Tip{} _:",
+            "      wf => {==}",
+            f"    case 0n {NODE} _:",
+            "      wf => {==}",
+            f"    case 0n {E} _:",
+            "      wf => wf"]
+    for i in range(N):
+        out += [f"    case 1n++p {BNODE} {K[i]}:",
+                f"      wf => twf_b(V, p, {cs[i]}, {NXH})({get_i(i, 'wf')})"]
+    out += ["    case 1n+p KV.Tip{} _:", "      wf => {==}",
+            f"    case 1n+p {E} _:", "      wf => {==}",
+            "",
+            "# a bucket that holds a key once is a well-formed trie of depth 0",
+            "def twf0(-V: Data, b: KV.Trie<V>) -> {bwf(V, b) == True{} : Bool} -> {twf(V, b, 0n) == True{} : Bool}:",
+            "  match b:",
+            "    case KV.Tip{}:",
+            "      g => {==}",
+            f"    case {NODE}:",
+            "      g => {==}",
+            "    case KV.Ent{k, v, e, rest}:",
+            "      g => g"]
+    return laws(out)
+
+# the nodes KV.tnode looks into: all empty, or empty up to subtrie j,
+# which holds a node or an entry
+def tnode_cases():
+    pats = [kv_node(kv_tips())]
+    for j in range(N):
+        for pat in [kv_node([f"d{i}" for i in range(N)]), "KV.Ent{a, b, e, c}"]:
+            pats.append(kv_node(kv_tips()[:j] + [pat] + cs[j + 1:]))
+    return pats
+
+def block_tdel():
+    out = ["# tnode keeps a trie's weights and its form",
+           "def tsum_tnode(-V: Data, +w: Wt, t: KV.Trie<V>) -> {tsum(V, w, KV.tnode(V, t)) == tsum(V, w, t) : Nat}:",
+           "  match t:"]
+    for pat in tnode_cases():
+        out += [f"    case {pat}:", "      {==}"]
+    out += ["    case KV.Tip{}:", "      {==}", "    case KV.Ent{a, b, e, c}:", "      {==}", "",
+            "def tsum_tnode_if(-V: Data, +w: Wt, z: Bool, t: KV.Trie<V>) -> {tsum(V, w, KV.tnode_if(V, z, t)) == tsum(V, w, t) : Nat}:",
+            "  match z:",
+            "    case True{}:",
+            "      tsum_tnode(V, w, t)",
+            "    case False{}:",
+            "      {==}", "",
+            "def twf_tnode(-V: Data, t: KV.Trie<V>, d: Nat) -> {twf(V, t, d) == True{} : Bool} -> {twf(V, KV.tnode(V, t), d) == True{} : Bool}:",
+            "  match t:"]
+    for j, pat in enumerate(tnode_cases()):
+        out += [f"    case {pat}:", "      wf => {==}" if j == 0 else "      wf => wf"]
+    out += ["    case KV.Tip{}:", "      wf => wf", "    case KV.Ent{a, b, e, c}:", "      wf => wf", "",
+            "def twf_tnode_if(-V: Data, z: Bool, t: KV.Trie<V>, d: Nat) -> {twf(V, t, d) == True{} : Bool} -> {twf(V, KV.tnode_if(V, z, t), d) == True{} : Bool}:",
+            "  match z:",
+            "    case True{}:",
+            "      twf_tnode(V, t, d)",
+            "    case False{}:",
+            "      wf => wf"]
+    TS = lambda c: f"tsum(V, w, {c})"
+    out += ["",
+            "# a delete that takes the nodes it empties weighs the trie as the",
+            "# delete weighs the bucket, and keeps it well formed",
+            "def tsum_del(-V: Data, +w: Wt, d: Nat, +t: KV.Trie<V>, x: KV.Hex, +h: U32, +k: String, +A: Nat, +B: Nat) -> {twf(V, t, d) == True{} : Bool} -> {Nat.add(tsum(V, w, KV.bdel(V, k, KV.tget_h(V, d, t, x, h))), A) == Nat.add(tsum(V, w, KV.tget_h(V, d, t, x, h)), B) : Nat} -> {Nat.add(tsum(V, w, KV.tdel_h(V, d, t, x, h, k)), A) == Nat.add(tsum(V, w, t), B) : Nat}:",
+            "  match d t x:",
+            "    case 0n t0 _:",
+            "      wf => g => g"]
+    for i in range(N):
+        a = f"KV.tdel_h(V, p, {cs[i]}, {NXH}, k)"
+        node_a = kv_node(with_at(cs, i, a))
+        ih = f"tsum_del(V, w, p, {cs[i]}, {NXH}, k, A, B)({get_i(i, 'wf')})(g)"
+        out += [f"    case 1n++p {BNODE} {K[i]}:",
+                f"      wf => g => %Equal.sym(Nat, {TS(f'KV.tnode_if(V, KV.tis_tip(V, {a}), {node_a})')}, {TS(node_a)}, tsum_tnode_if(V, w, KV.tis_tip(V, {a}), {node_a})) : {{Nat.add(_, A) == Nat.add({TS(NODE)}, B) : Nat}}",
+                f"                 {step_through(i, TS(a), TS(cs[i]), ih)}"]
+    out += ["    case 1n+p KV.Tip{} _:", "      wf => g => g",
+            "    case 1n+p KV.Ent{a, b, e, c} _:",
+            "      wf => g => Empty.absurd({Nat.add(tsum(V, w, KV.tdel_h(V, 1n+p, KV.Ent{a, b, e, c}, x, h, k)), A) == Nat.add(tsum(V, w, KV.Ent{a, b, e, c}), B) : Nat}, false_true(wf))",
+            "",
+            "def twf_del(-V: Data, d: Nat, +t: KV.Trie<V>, x: KV.Hex, +h: U32, +k: String) -> {twf(V, t, d) == True{} : Bool} -> {twf(V, KV.bdel(V, k, KV.tget_h(V, d, t, x, h)), 0n) == True{} : Bool} -> {twf(V, KV.tdel_h(V, d, t, x, h, k), d) == True{} : Bool}:",
+            "  match d t x:",
+            "    case 0n t0 _:",
+            "      wf => g => g"]
+    for i in range(N):
+        a = f"KV.tdel_h(V, p, {cs[i]}, {NXH}, k)"
+        node_a = kv_node(with_at(cs, i, a))
+        out += [f"    case 1n++p {BNODE} {K[i]}:",
+                f"      +wf => g => twf_tnode_if(V, KV.tis_tip(V, {a}), {node_a}, 1n+p)(twf_set{i}(V, p, {fields(cs)}, {a})(wf)(twf_del(V, p, {cs[i]}, {NXH}, k)({get_i(i, 'wf')})(g)))"]
+    out += ["    case 1n+p KV.Tip{} _:", "      wf => g => {==}",
+            "    case 1n+p KV.Ent{a, b, e, c} _:",
+            "      wf => g => Empty.absurd({twf(V, KV.tdel_h(V, 1n+p, KV.Ent{a, b, e, c}, x, h, k), 1n+p) == True{} : Bool}, false_true(wf))"]
+    return laws(out)
+
+def block_tsize():
+    out = ["# the entries summed one each: the trie's size (KV.size)",
+           "def tsum_size(-V: Data, t: KV.Trie<V>) -> {tsum(V, WAll{}, t) == KV.tsize(V, t) : Nat}:",
+           "  match t:",
+           "    case KV.Tip{}:",
+           "      {==}",
+           f"    case {BNODE}:"]
+    lhs = nest([f"tsum(V, WAll{{}}, {c})" for c in cs])
+    for i in range(N):
+        terms = [f"tsum(V, WAll{{}}, {cs[j]})" for j in range(i)] + ["_"] + [f"KV.tsize(V, {cs[j]})" for j in range(i + 1, N)]
+        out.append(f"      %tsum_size(V, {cs[i]}) : {{{lhs} == {nest(terms)} : Nat}}")
+    out += ["      {==}",
+            "    case KV.Ent{k, v, e, +rest}:",
+            "      Equal.cong(Nat, Nat, z => 1n+z, tsum(V, WAll{}, rest), KV.tsize(V, rest), tsum_size(V, rest))"]
+    return laws(out)
+
 BLOCKS = {"src/map.bend": {"types": block_types, "hex": block_hex,
                        "walks": block_walks, "folds": block_folds, "scan": block_scan},
           "proof/PROOF.bend": {"digits": block_digits, "tget_k": block_tget_k, "tget_kx": block_tget_kx,
                          "tget_ke": block_tget_ke, "tget_kl": block_tget_kl, "tget_kc": block_tget_kc,
                          "same": block_same, "walk_same": block_walk_same,
-                         "other": block_other, "del": block_del, "twice": block_twice}}
+                         "other": block_other, "del": block_del, "twice": block_twice,
+                         "slots": block_slots, "twf_set": block_twf_set, "tmod": block_tmod,
+                         "tdel": block_tdel, "tsize": block_tsize},
+          "proof/LAWS.bend": {"tsum": block_tsum, "twf": block_twf}}
 
 def fill(path, blocks, check):
     text = path.read_text()

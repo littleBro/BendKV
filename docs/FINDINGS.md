@@ -1,7 +1,7 @@
 # BendKV: what we found
 
 BendKV is a Redis-compatible key-value store written in Bend2, with its core proved
-against 65 laws. This file sums up what building it and making it fast
+against 67 laws. This file sums up what building it and making it fast
 showed us. The detailed record, with every table and measurement, is in
 [PERFORMANCE.md](PERFORMANCE.md) (performance, section by section) and
 [OVERVIEW.md](../OVERVIEW.md) (the project, the proofs, how to run). Where the work goes
@@ -13,11 +13,11 @@ next, and why, is in [DIRECTIONS.md](DIRECTIONS.md).
 times and options, Redis's pattern matching, several databases, the ranges and bits of
 strings and BITFIELD's words of 64 bits), about 950 lines of
 sessions (a connection's state and the server's), about 70 lines of batch hints, about
-520 lines of append-only file, about 6,960 lines of handwritten proofs with a
-specification of about 130 that they bridge to (section 3u), and about 1,700 lines of
+520 lines of append-only file, about 13,250 lines of handwritten proofs with a
+specification of about 370 that they bridge to (section 3u), and about 2,790 lines of
 16-way case splits written by a script ([`tools/gen_trie.py`](../tools/gen_trie.py)), not
-counting comments and blank lines. Bend checks the 65 laws in about 5 s; the BendTT
-kernel, whose soundness is proved in Lean, rechecks them in about 50 s. Among them: after
+counting comments and blank lines. Bend checks the 67 laws in about 14 s; the BendTT
+kernel, whose soundness is proved in Lean, rechecks them in a minute. Among them: after
 any history, the server restores from its append-only file exactly the databases it
 held, and from a file cut by a crash at any byte, the databases it held after some prefix
 of its acts (sections 3e and 3x). On about 266 thousand random commands the replies
@@ -1783,7 +1783,8 @@ into 0 and a successor.
 Not proved yet: that the count is the trie's size. That needs a well-formed trie, with
 each key at most once in its bucket: `bdel` removes every entry for its key, so a
 duplicate would make the count drift. It also needs the arithmetic of a sum over 16
-children. The proof will come with the count of keys that can expire.
+children. The proof will come with the count of keys that can expire. (Proved since,
+both counts together: section 3zzf.)
 
 ## 3v. Keys that expire
 
@@ -4288,6 +4289,47 @@ of 100,000 (26,284, −23%), 19,959 on a set of 10 to 410 strings (22,555, −12
 other commands as before. SADD to an intset of 100 to 500 members takes 449,545, twenty
 times SADD to a hashtable: its members are strings, compared as integers at each step of
 a walk along their list, which Redis keeps as an array of integers searched by halves.
+
+## 3zzf. The key count proved
+
+**What was left** (section 3u). A database keeps beside its trie how many keys it holds
+and how many of them have a time, so that DBSIZE and INFO's keyspace line answer without
+walking the trie; each write changes the two counts as it changes the trie (`R.cnt.n`,
+`R.cnt.x`). That they are the trie's own was not proved. It needs the trie well formed,
+each key at most once in its bucket: a delete takes every entry of its key, so a key
+there twice would make the counts drift. And it needs sums over the 16 subtries of a
+node.
+
+**The laws** (`proof/LAWS.bend`, "The key count"). After any history, the counts of
+every database are its trie's own, and its trie is well formed: nodes down to the
+buckets, and each key at most once in its bucket (`counts_hold`). So DBSIZE answers the
+number of entries in the trie of the database in focus (`dbsize_size`, `KV.size`); keys
+whose time has passed are among them until a command or the sweep deletes them, as in
+Redis.
+
+**The proofs.** Both counts are one sum over the trie's entries, with a weight for each
+entry (`tsum`: 1 for every entry, or 1 for an entry with a time), so each lemma serves
+both. They go up in four steps:
+
+- in a bucket, a write of a key weighs the new entry more and the entry it replaces
+  less (`bset_sum`, `bkeep_sum`, `bexp_sum`, `bdel_sum`), and keeps each key once;
+- in the trie, a write of a key weighs the trie as it weighs the key's bucket, in terms
+  of the key's code before it, and keeps the trie well formed (`tsum_mod`, `tsum_del`,
+  `twf_mod`, `twf_del`; a delete also takes the nodes it empties, `tsum_tnode`). These
+  are the 16-way parts that `tools/gen_trie.py` writes: a sum over a node's subtries
+  with one of them changed (`slot0` to `slot15`), and the cases of a walk;
+- in a database, each write changes the counts as `R.cnt.n` and `R.cnt.x` say, so every
+  command keeps a database counted (`counted_exec`): the change an update makes finds
+  its key there whenever it deletes the key, sets its time or changes its collection
+  (`Good`), DEL deletes its keys one after another, and RENAME, LMOVE and INCRBY know
+  from what they read that their keys are there;
+- among the databases, every act keeps every database counted (`counted_act`: a
+  command on the focus, SELECT, SWAPDB, MOVE, COPY, FLUSHALL), and a history starts
+  from empty databases (`counted_single`).
+
+No code changed: the counts were right. The proofs add 198 lemmas, about 940 lines by
+hand and 760 written by the script, not counting comments and blank lines. `make check`
+takes 13.6 s (11.3 s before), `make verdict` 63 s (57 s).
 
 ## 4. Where a request's time goes, and hiding the memory waits
 

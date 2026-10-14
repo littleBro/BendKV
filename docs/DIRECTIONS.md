@@ -291,7 +291,8 @@ Where performance and proof meet: **batched execution under proved laws.**
    (section 3zv): the persistent trie made the snapshot free, a root is one. Not yet
    proved: that the rewritten file replays to the databases it was written from, a law
    about what keys read, not the trie's shape, which needs a scan from the first bucket
-   to read every key once (the invariant that a bucket holds a key once) and a double
+   to read every key once (with the invariant that a bucket holds a key once, proved
+   now: [FINDINGS.md](FINDINGS.md), section 3zzf) and a double
    written as `%.17g` to read back as itself; and that a file cut back and written on
    is the log of the prefix and the new batches. The file format is the requests
    clients send, so the same kind of law would cover the network parser of `resp.bend`,
