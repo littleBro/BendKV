@@ -1452,14 +1452,18 @@ def hash.small(fits: Bool, +m: Nat, ps: List<&2, HPair>) -> Hash:
     case False{}:
       HBig{m, hps.trie(ps, empty(String))}
 
-# h with f's value set to v
+# h with f's value set to v. The read of f comes before the write: in a
+# node built of both the write would run first, the trie held for the
+# read after it, and a held trie is shared, so the write would copy the
+# path it changes
 def hash.put(h: Hash, +f: String, +v: String) -> Hash:
   match h:
     case HSmall{+n, +ps}:
       +m = Bool.pick(Nat, Maybe.is_some(&2, String, hps.get(f, ps)), n, 1n+n)
       hash.small(hash.fits(m, f, v), m, hps.put(f, v, ps))
     case HBig{+n, +t}:
-      HBig{Bool.pick(Nat, has(String, t, f), n, 1n+n), set(String, t, f, v)}
+      +had = has(String, t, f)
+      HBig{Bool.pick(Nat, had, n, 1n+n), set(String, t, f, v)}
 
 # h without f, which it holds
 def hash.del(h: Hash, +f: String) -> Hash:

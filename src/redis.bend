@@ -14619,12 +14619,14 @@ def hchange(fresh: Bool, ps: List<&2, KV.HPair>, h: KV.Hash) -> Change:
 type HPut is Data:
   HPut{h: KV.Hash, made: Nat}
 
+# (the read of each field before its write, as in KV.hash.put)
 def hset.go(ps: List<&2, KV.HPair>, acc: HPut) -> HPut:
   match ps acc:
     case Nil{} acc:
       acc
     case Con{KV.HP{+f, +v}, rest} HPut{+h, +made}:
-      hset.go(rest, HPut{KV.hash.put(h, f, v), Bool.pick(Nat, KV.hash.has(f, h), made, 1n+made)})
+      +had = KV.hash.has(f, h)
+      hset.go(rest, HPut{KV.hash.put(h, f, v), Bool.pick(Nat, had, made, 1n+made)})
 
 def hset.ch(+fresh: Bool, ps: List<&2, KV.HPair>, h: KV.Hash) -> Change:
   match ps:
@@ -15846,15 +15848,46 @@ def upd.put(t: KV.Trie<KV.Val>, +k: String, +h: U32, +n: Nat, +x: Nat, now: Nat,
     case Out{r, ch}:
       upd.ch(t, k, h, n, x, now, rr, c, r, ch)
 
+# whether an update of a key whose entry there at now is m takes the key's
+# value out of the keyspace while it changes it: an HSET of pairs to a
+# hash, which writes the hash over for sure (PROOF.bend: takes_over). The
+# keyspace holding the hash meanwhile would make the write copy the path
+# it changes in it, and the keyspace drop the old path after.
+def upd.takes(+op: UpdOp, +m: Maybe<&2, KV.Item<KV.Val>>) -> Bool:
+  match op m:
+    case UHash{HWSet{Con{p, rest}, mset}} Some{KV.Item{KV.VColl{KV.CHash{h}}, e}}:
+      True{}
+    case _ _:
+      False{}
+
+# the key's value in the keyspace while an update takes it out: an empty
+# string, which the change writes over
+def upd.hole() -> KV.Val:
+  KV.VStr{""}
+
+# an Upd of k from the code c of k's entry and the entry there at now
+# (lm): taken, the value leaves the keyspace before the change, which
+# writes the new one in its place (PROOF.bend: db_upd_unfold)
+def db.upd.go(take: Bool, t: KV.Trie<KV.Val>, +k: String, +h: U32, +n: Nat, +x: Nat, +now: Nat, rr: Maybe<&2, Db>, op: UpdOp, +c: Nat, lm: Maybe<&2, KV.Item<KV.Val>>) -> Reply & Db:
+  match take:
+    case True{}:
+      u = KV.keep.at(KV.Val, t, k, upd.hole(), h)
+      upd.put(u, k, h, n, x, now, rr, c, upd.v(op, now, lm))
+    case False{}:
+      upd.put(t, k, h, n, x, now, rr, c, upd.v(op, now, lm))
+
 # an Upd of k: k's entry is read while the trie is lent, then the change
-# is made where it lies
+# is made where it lies. The entry's code is read before the entry is
+# given to ent.live, so that the value the entry holds is held once.
 def db.upd(db: Db, +k: String, op: UpdOp) -> Reply & Db:
   match db:
-    case Db{t, +n, +x, +now, rr}:
-      +u = t
+    case Db{+t, +n, +x, +now, rr}:
       +h = KV.hash(k)
-      +m = KV.entry.at(KV.Val, u, k, h)
-      upd.put(u, k, h, n, x, now, rr, ent.code(m), upd.v(op, now, ent.live(now, m)))
+      +m = KV.entry.at(KV.Val, t, k, h)
+      +c = ent.code(m)
+      +lm = ent.live(now, m)
+      +o = op
+      db.upd.go(upd.takes(o, lm), t, k, h, n, x, now, rr, o, c, lm)
 
 def db.flush(db: Db) -> Db:
   match db:

@@ -6696,3 +6696,56 @@ and the keyspace drops the old version's path after: of HSET's 28,412 instructio
 place) and 2,652 the copies of the path (`ctr_own` in `tmod_h` and `bset.go`). Taking
 the value out of the keyspace before the change, and putting the new one back, would
 save both (section 3zm).
+
+## 54. HSET in place: the hash taken out of the keyspace
+
+**What was left** (section 53). A write of a collection made its new version while the
+keyspace still held the old one: it copied the path it changed (each node of it shared
+by the two versions), and the keyspace dropped the old version's path when the new one
+took its place. Of HSET's 28,412 instructions on a hash of 100,000 fields, 5,290 were
+that drop and 2,652 the copies.
+
+**The change.** An update whose operation is an HSET of pairs (HSET, HMSET) to a key
+that holds a hash at now (`R.upd.takes`) takes the hash out of the keyspace before it
+changes it: it writes a hole, an empty string, in the key's place (`KV.keep.at`), so
+that the hash is held once and the write changes it in place, and the change then writes
+the new hash over the hole (`R.db.upd.go`; `A.run.upd.go` with an append-only file). Two
+orders of evaluation had to change for the hash to be held once:
+
+- the update reads its entry's code before it gives the entry to `ent.live`, which would
+  otherwise keep the entry, and the hash in it, for the read after;
+- `KV.hash.put` and `hset.go` read whether a field is there before they write it: in a
+  node built of both, the compiler ran the write first and held the trie for the read
+  after it, so the write copied the path anyway.
+
+Only HSET takes its value. A write that may leave its collection as it was (HSETNX of a
+field there, HDEL of no field, HINCRBY of a field that is no integer, SADD of a member
+there, ZADD of a score it has) answers CKeep and drops the collection it was given,
+which a collection out of the keyspace cannot afford; and a list costs little to copy (a
+push builds a node at one end).
+
+**The proofs.** `db_upd_unfold` and `run_upd_unfold`: an update reads as the change made
+where its key's entry lies, taken out or not; the proofs that unfolded `R.db.upd` and
+`A.run.upd` rewrite through them (thirteen places). They rest on `upd_put_take`: a
+change that writes its key's value over, keeping or setting it (`ch_over`), writes the
+same trie over the hole as over the value, by `keep_keep` and `setx_keep` (a write after
+a keep of the same key is as the write alone), by `tmod_twice` (two writes along the
+same walk; `tools/gen_trie.py` writes its 16-way cases) and two lemmas of a bucket
+(`bkeep2`, `bset_bkeep`); and on `takes_over`: an update that takes its value writes it
+over (an HSET of pairs to a hash answers CHash). 390 lines of `PROOF.bend`, 104 of them
+generated.
+
+**Measured** (`tools/colls.sh`, instructions per command):
+
+| command | before | now | |
+|---|---:|---:|---:|
+| HSET of a field there, hash of 100,000 | 28,412 | 21,178 | −25% |
+| HSET of a new field | 27,818 | 21,311 | −23% |
+| HSET of a field there, hash of 10 fields (a list of pairs) | 25,795 | 22,125 | −14% |
+| HSET of a field there, hash of one field | 20,559 | 20,328 | −1% |
+| GET, SET, LLEN, LPUSH, HGET, HINCRBY, SADD, ZADD | | as before (±0.3%) | |
+
+**What is left.** A prototype took the value of every write of a collection, with no
+care for the writes that leave it as it was: SADD of a new member took 25% fewer
+instructions, ZADD of a new score 28% and ZINCRBY 34%. Each of those needs a test before
+the take that the write changes its collection, and a proof of it.

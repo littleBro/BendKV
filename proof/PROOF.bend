@@ -511,6 +511,53 @@ def bent_bdel_other(-V: Data, +j: String, +k: String, +b: KV.Trie<V>, +nb: {Fals
     case KV.Node{c0, c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13, c14, c15}:
       {==}
 
+# A write of a key's value after a keep of the same key: as the write
+# alone, whatever the keep wrote (an update that takes a value out of the
+# keyspace keeps a hole in its place, and its change writes over it)
+def bkeep2_step(-V: Data, +k: String, -w0: V, -w: V, -key: String, -val: V, -ex: Nat, -rest: KV.Trie<V>, c: Bool, ih: {KV.bkeep(V, k, w, KV.bkeep(V, k, w0, rest)) == KV.bkeep(V, k, w, rest) : KV.Trie<V>})
+  -> {c == KV.str_eq(k, key) : Bool}
+  -> {KV.bkeep(V, k, w, KV.bkeep.go(V, k, w0, KV.Ent{key, val, ex, rest}, c)) == KV.bkeep.go(V, k, w, KV.Ent{key, val, ex, rest}, c) : KV.Trie<V>}:
+  match c:
+    case True{}:
+      h => %h : {KV.bkeep.go(V, k, w, KV.Ent{key, w0, ex, rest}, _) == KV.Ent{key, w, ex, rest} : KV.Trie<V>}
+           {==}
+    case False{}:
+      h => %h : {KV.bkeep.go(V, k, w, KV.Ent{key, val, ex, KV.bkeep(V, k, w0, rest)}, _) == KV.Ent{key, val, ex, KV.bkeep(V, k, w, rest)} : KV.Trie<V>}
+           Equal.cong(KV.Trie<V>, KV.Trie<V>, z => KV.Ent{key, val, ex, z}, KV.bkeep(V, k, w, KV.bkeep(V, k, w0, rest)), KV.bkeep(V, k, w, rest), ih)
+
+def bkeep2(-V: Data, +k: String, +w0: V, +w: V, +b: KV.Trie<V>) -> {KV.bkeep(V, k, w, KV.bkeep(V, k, w0, b)) == KV.bkeep(V, k, w, b) : KV.Trie<V>}:
+  match b:
+    case KV.Ent{+key, +val, +ex, +rest}:
+      bkeep2_step(V, k, w0, w, key, val, ex, rest, KV.str_eq(k, key), bkeep2(V, k, w0, w, rest))({==})
+    case KV.Tip{}:
+      %str_eq_self(k) : {KV.bkeep.go(V, k, w, KV.Ent{k, w0, 0n, KV.Tip{}}, _) == KV.Ent{k, w, 0n, KV.Tip{}} : KV.Trie<V>}
+      {==}
+    case KV.Node{c0, c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13, c14, c15}:
+      %str_eq_self(k) : {KV.bkeep.go(V, k, w, KV.Ent{k, w0, 0n, KV.Node{c0, c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13, c14, c15}}, _) == KV.Ent{k, w, 0n, KV.Node{c0, c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13, c14, c15}} : KV.Trie<V>}
+      {==}
+
+def bset_bkeep_step(-V: Data, +k: String, -w0: V, -w: V, -e: Nat, -key: String, -val: V, -ex: Nat, -rest: KV.Trie<V>, c: Bool, ih: {KV.bset(V, k, w, e, KV.bkeep(V, k, w0, rest)) == KV.bset(V, k, w, e, rest) : KV.Trie<V>})
+  -> {c == KV.str_eq(k, key) : Bool}
+  -> {KV.bset(V, k, w, e, KV.bkeep.go(V, k, w0, KV.Ent{key, val, ex, rest}, c)) == KV.bset.go(V, k, w, e, KV.Ent{key, val, ex, rest}, c) : KV.Trie<V>}:
+  match c:
+    case True{}:
+      h => %h : {KV.bset.go(V, k, w, e, KV.Ent{key, w0, ex, rest}, _) == KV.Ent{key, w, e, rest} : KV.Trie<V>}
+           {==}
+    case False{}:
+      h => %h : {KV.bset.go(V, k, w, e, KV.Ent{key, val, ex, KV.bkeep(V, k, w0, rest)}, _) == KV.Ent{key, val, ex, KV.bset(V, k, w, e, rest)} : KV.Trie<V>}
+           Equal.cong(KV.Trie<V>, KV.Trie<V>, z => KV.Ent{key, val, ex, z}, KV.bset(V, k, w, e, KV.bkeep(V, k, w0, rest)), KV.bset(V, k, w, e, rest), ih)
+
+def bset_bkeep(-V: Data, +k: String, +w0: V, +w: V, +e: Nat, +b: KV.Trie<V>) -> {KV.bset(V, k, w, e, KV.bkeep(V, k, w0, b)) == KV.bset(V, k, w, e, b) : KV.Trie<V>}:
+  match b:
+    case KV.Ent{+key, +val, +ex, +rest}:
+      bset_bkeep_step(V, k, w0, w, e, key, val, ex, rest, KV.str_eq(k, key), bset_bkeep(V, k, w0, w, e, rest))({==})
+    case KV.Tip{}:
+      %str_eq_self(k) : {KV.bset.go(V, k, w, e, KV.Ent{k, w0, 0n, KV.Tip{}}, _) == KV.Ent{k, w, e, KV.Tip{}} : KV.Trie<V>}
+      {==}
+    case KV.Node{c0, c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13, c14, c15}:
+      %str_eq_self(k) : {KV.bset.go(V, k, w, e, KV.Ent{k, w0, 0n, KV.Node{c0, c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13, c14, c15}}, _) == KV.Ent{k, w, e, KV.Node{c0, c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13, c14, c15}} : KV.Trie<V>}
+      {==}
+
 # the reads of a bucket see its entry: bget its value, bcode its code,
 # blive its value when it is there at now
 def bget_go_eq(-V: Data, +k: String, b: KV.Trie<V>, same: Bool) -> {Laws.item_val(V, KV.bent.go(V, k, b, same)) == KV.bget.go(V, k, b, same) : Maybe<&2, V>}:
@@ -2672,6 +2719,111 @@ def tdel_eq(-V: Data, d: Nat, +t: KV.Trie<V>, x1: KV.Hex, +h1: U32, +k: String, 
     case 1n++p KV.Ent{a, b, e, c} KV.H15{}:
       del_tip(V, 1n+p, KV.H15{}, h1, k, x2, h2)
 # END gen_trie: del
+
+# BEGIN gen_trie: twice
+# two writes along the same walk, where the second written over the
+# first is as the second alone on a bucket (hb): as the second alone
+def tmod_twice(-V: Data, d: Nat, +t: KV.Trie<V>, x: KV.Hex, +h: U32, +o1: KV.Op<V>, +o2: KV.Op<V>, hb: @b: KV.Trie<V> -> {KV.bapply(V, o2, KV.bapply(V, o1, b)) == KV.bapply(V, o2, b) : KV.Trie<V>}) -> {KV.tmod_h(V, d, KV.tmod_h(V, d, t, x, h, o1), x, h, o2) == KV.tmod_h(V, d, t, x, h, o2) : KV.Trie<V>}:
+  match d t x:
+    case 0n t0 _:
+      hb(t0)
+    case 1n++p KV.Node{c0, c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13, c14, c15} KV.H0{}:
+      Equal.cong(KV.Trie<V>, KV.Trie<V>, z => KV.Node{z, c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13, c14, c15}, KV.tmod_h(V, p, KV.tmod_h(V, p, c0, KV.hex(KV.shr4(h)), KV.shr4(h), o1), KV.hex(KV.shr4(h)), KV.shr4(h), o2), KV.tmod_h(V, p, c0, KV.hex(KV.shr4(h)), KV.shr4(h), o2), tmod_twice(V, p, c0, KV.hex(KV.shr4(h)), KV.shr4(h), o1, o2, hb))
+    case 1n++p KV.Node{c0, c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13, c14, c15} KV.H1{}:
+      Equal.cong(KV.Trie<V>, KV.Trie<V>, z => KV.Node{c0, z, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13, c14, c15}, KV.tmod_h(V, p, KV.tmod_h(V, p, c1, KV.hex(KV.shr4(h)), KV.shr4(h), o1), KV.hex(KV.shr4(h)), KV.shr4(h), o2), KV.tmod_h(V, p, c1, KV.hex(KV.shr4(h)), KV.shr4(h), o2), tmod_twice(V, p, c1, KV.hex(KV.shr4(h)), KV.shr4(h), o1, o2, hb))
+    case 1n++p KV.Node{c0, c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13, c14, c15} KV.H2{}:
+      Equal.cong(KV.Trie<V>, KV.Trie<V>, z => KV.Node{c0, c1, z, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13, c14, c15}, KV.tmod_h(V, p, KV.tmod_h(V, p, c2, KV.hex(KV.shr4(h)), KV.shr4(h), o1), KV.hex(KV.shr4(h)), KV.shr4(h), o2), KV.tmod_h(V, p, c2, KV.hex(KV.shr4(h)), KV.shr4(h), o2), tmod_twice(V, p, c2, KV.hex(KV.shr4(h)), KV.shr4(h), o1, o2, hb))
+    case 1n++p KV.Node{c0, c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13, c14, c15} KV.H3{}:
+      Equal.cong(KV.Trie<V>, KV.Trie<V>, z => KV.Node{c0, c1, c2, z, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13, c14, c15}, KV.tmod_h(V, p, KV.tmod_h(V, p, c3, KV.hex(KV.shr4(h)), KV.shr4(h), o1), KV.hex(KV.shr4(h)), KV.shr4(h), o2), KV.tmod_h(V, p, c3, KV.hex(KV.shr4(h)), KV.shr4(h), o2), tmod_twice(V, p, c3, KV.hex(KV.shr4(h)), KV.shr4(h), o1, o2, hb))
+    case 1n++p KV.Node{c0, c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13, c14, c15} KV.H4{}:
+      Equal.cong(KV.Trie<V>, KV.Trie<V>, z => KV.Node{c0, c1, c2, c3, z, c5, c6, c7, c8, c9, c10, c11, c12, c13, c14, c15}, KV.tmod_h(V, p, KV.tmod_h(V, p, c4, KV.hex(KV.shr4(h)), KV.shr4(h), o1), KV.hex(KV.shr4(h)), KV.shr4(h), o2), KV.tmod_h(V, p, c4, KV.hex(KV.shr4(h)), KV.shr4(h), o2), tmod_twice(V, p, c4, KV.hex(KV.shr4(h)), KV.shr4(h), o1, o2, hb))
+    case 1n++p KV.Node{c0, c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13, c14, c15} KV.H5{}:
+      Equal.cong(KV.Trie<V>, KV.Trie<V>, z => KV.Node{c0, c1, c2, c3, c4, z, c6, c7, c8, c9, c10, c11, c12, c13, c14, c15}, KV.tmod_h(V, p, KV.tmod_h(V, p, c5, KV.hex(KV.shr4(h)), KV.shr4(h), o1), KV.hex(KV.shr4(h)), KV.shr4(h), o2), KV.tmod_h(V, p, c5, KV.hex(KV.shr4(h)), KV.shr4(h), o2), tmod_twice(V, p, c5, KV.hex(KV.shr4(h)), KV.shr4(h), o1, o2, hb))
+    case 1n++p KV.Node{c0, c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13, c14, c15} KV.H6{}:
+      Equal.cong(KV.Trie<V>, KV.Trie<V>, z => KV.Node{c0, c1, c2, c3, c4, c5, z, c7, c8, c9, c10, c11, c12, c13, c14, c15}, KV.tmod_h(V, p, KV.tmod_h(V, p, c6, KV.hex(KV.shr4(h)), KV.shr4(h), o1), KV.hex(KV.shr4(h)), KV.shr4(h), o2), KV.tmod_h(V, p, c6, KV.hex(KV.shr4(h)), KV.shr4(h), o2), tmod_twice(V, p, c6, KV.hex(KV.shr4(h)), KV.shr4(h), o1, o2, hb))
+    case 1n++p KV.Node{c0, c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13, c14, c15} KV.H7{}:
+      Equal.cong(KV.Trie<V>, KV.Trie<V>, z => KV.Node{c0, c1, c2, c3, c4, c5, c6, z, c8, c9, c10, c11, c12, c13, c14, c15}, KV.tmod_h(V, p, KV.tmod_h(V, p, c7, KV.hex(KV.shr4(h)), KV.shr4(h), o1), KV.hex(KV.shr4(h)), KV.shr4(h), o2), KV.tmod_h(V, p, c7, KV.hex(KV.shr4(h)), KV.shr4(h), o2), tmod_twice(V, p, c7, KV.hex(KV.shr4(h)), KV.shr4(h), o1, o2, hb))
+    case 1n++p KV.Node{c0, c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13, c14, c15} KV.H8{}:
+      Equal.cong(KV.Trie<V>, KV.Trie<V>, z => KV.Node{c0, c1, c2, c3, c4, c5, c6, c7, z, c9, c10, c11, c12, c13, c14, c15}, KV.tmod_h(V, p, KV.tmod_h(V, p, c8, KV.hex(KV.shr4(h)), KV.shr4(h), o1), KV.hex(KV.shr4(h)), KV.shr4(h), o2), KV.tmod_h(V, p, c8, KV.hex(KV.shr4(h)), KV.shr4(h), o2), tmod_twice(V, p, c8, KV.hex(KV.shr4(h)), KV.shr4(h), o1, o2, hb))
+    case 1n++p KV.Node{c0, c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13, c14, c15} KV.H9{}:
+      Equal.cong(KV.Trie<V>, KV.Trie<V>, z => KV.Node{c0, c1, c2, c3, c4, c5, c6, c7, c8, z, c10, c11, c12, c13, c14, c15}, KV.tmod_h(V, p, KV.tmod_h(V, p, c9, KV.hex(KV.shr4(h)), KV.shr4(h), o1), KV.hex(KV.shr4(h)), KV.shr4(h), o2), KV.tmod_h(V, p, c9, KV.hex(KV.shr4(h)), KV.shr4(h), o2), tmod_twice(V, p, c9, KV.hex(KV.shr4(h)), KV.shr4(h), o1, o2, hb))
+    case 1n++p KV.Node{c0, c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13, c14, c15} KV.H10{}:
+      Equal.cong(KV.Trie<V>, KV.Trie<V>, z => KV.Node{c0, c1, c2, c3, c4, c5, c6, c7, c8, c9, z, c11, c12, c13, c14, c15}, KV.tmod_h(V, p, KV.tmod_h(V, p, c10, KV.hex(KV.shr4(h)), KV.shr4(h), o1), KV.hex(KV.shr4(h)), KV.shr4(h), o2), KV.tmod_h(V, p, c10, KV.hex(KV.shr4(h)), KV.shr4(h), o2), tmod_twice(V, p, c10, KV.hex(KV.shr4(h)), KV.shr4(h), o1, o2, hb))
+    case 1n++p KV.Node{c0, c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13, c14, c15} KV.H11{}:
+      Equal.cong(KV.Trie<V>, KV.Trie<V>, z => KV.Node{c0, c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, z, c12, c13, c14, c15}, KV.tmod_h(V, p, KV.tmod_h(V, p, c11, KV.hex(KV.shr4(h)), KV.shr4(h), o1), KV.hex(KV.shr4(h)), KV.shr4(h), o2), KV.tmod_h(V, p, c11, KV.hex(KV.shr4(h)), KV.shr4(h), o2), tmod_twice(V, p, c11, KV.hex(KV.shr4(h)), KV.shr4(h), o1, o2, hb))
+    case 1n++p KV.Node{c0, c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13, c14, c15} KV.H12{}:
+      Equal.cong(KV.Trie<V>, KV.Trie<V>, z => KV.Node{c0, c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, z, c13, c14, c15}, KV.tmod_h(V, p, KV.tmod_h(V, p, c12, KV.hex(KV.shr4(h)), KV.shr4(h), o1), KV.hex(KV.shr4(h)), KV.shr4(h), o2), KV.tmod_h(V, p, c12, KV.hex(KV.shr4(h)), KV.shr4(h), o2), tmod_twice(V, p, c12, KV.hex(KV.shr4(h)), KV.shr4(h), o1, o2, hb))
+    case 1n++p KV.Node{c0, c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13, c14, c15} KV.H13{}:
+      Equal.cong(KV.Trie<V>, KV.Trie<V>, z => KV.Node{c0, c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, z, c14, c15}, KV.tmod_h(V, p, KV.tmod_h(V, p, c13, KV.hex(KV.shr4(h)), KV.shr4(h), o1), KV.hex(KV.shr4(h)), KV.shr4(h), o2), KV.tmod_h(V, p, c13, KV.hex(KV.shr4(h)), KV.shr4(h), o2), tmod_twice(V, p, c13, KV.hex(KV.shr4(h)), KV.shr4(h), o1, o2, hb))
+    case 1n++p KV.Node{c0, c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13, c14, c15} KV.H14{}:
+      Equal.cong(KV.Trie<V>, KV.Trie<V>, z => KV.Node{c0, c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13, z, c15}, KV.tmod_h(V, p, KV.tmod_h(V, p, c14, KV.hex(KV.shr4(h)), KV.shr4(h), o1), KV.hex(KV.shr4(h)), KV.shr4(h), o2), KV.tmod_h(V, p, c14, KV.hex(KV.shr4(h)), KV.shr4(h), o2), tmod_twice(V, p, c14, KV.hex(KV.shr4(h)), KV.shr4(h), o1, o2, hb))
+    case 1n++p KV.Node{c0, c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13, c14, c15} KV.H15{}:
+      Equal.cong(KV.Trie<V>, KV.Trie<V>, z => KV.Node{c0, c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13, c14, z}, KV.tmod_h(V, p, KV.tmod_h(V, p, c15, KV.hex(KV.shr4(h)), KV.shr4(h), o1), KV.hex(KV.shr4(h)), KV.shr4(h), o2), KV.tmod_h(V, p, c15, KV.hex(KV.shr4(h)), KV.shr4(h), o2), tmod_twice(V, p, c15, KV.hex(KV.shr4(h)), KV.shr4(h), o1, o2, hb))
+    case 1n++p KV.Tip{} KV.H0{}:
+      Equal.cong(KV.Trie<V>, KV.Trie<V>, z => KV.Node{z, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}}, KV.tmod_h(V, p, KV.tmod_h(V, p, KV.Tip{}, KV.hex(KV.shr4(h)), KV.shr4(h), o1), KV.hex(KV.shr4(h)), KV.shr4(h), o2), KV.tmod_h(V, p, KV.Tip{}, KV.hex(KV.shr4(h)), KV.shr4(h), o2), tmod_twice(V, p, KV.Tip{}, KV.hex(KV.shr4(h)), KV.shr4(h), o1, o2, hb))
+    case 1n++p KV.Tip{} KV.H1{}:
+      Equal.cong(KV.Trie<V>, KV.Trie<V>, z => KV.Node{KV.Tip{}, z, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}}, KV.tmod_h(V, p, KV.tmod_h(V, p, KV.Tip{}, KV.hex(KV.shr4(h)), KV.shr4(h), o1), KV.hex(KV.shr4(h)), KV.shr4(h), o2), KV.tmod_h(V, p, KV.Tip{}, KV.hex(KV.shr4(h)), KV.shr4(h), o2), tmod_twice(V, p, KV.Tip{}, KV.hex(KV.shr4(h)), KV.shr4(h), o1, o2, hb))
+    case 1n++p KV.Tip{} KV.H2{}:
+      Equal.cong(KV.Trie<V>, KV.Trie<V>, z => KV.Node{KV.Tip{}, KV.Tip{}, z, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}}, KV.tmod_h(V, p, KV.tmod_h(V, p, KV.Tip{}, KV.hex(KV.shr4(h)), KV.shr4(h), o1), KV.hex(KV.shr4(h)), KV.shr4(h), o2), KV.tmod_h(V, p, KV.Tip{}, KV.hex(KV.shr4(h)), KV.shr4(h), o2), tmod_twice(V, p, KV.Tip{}, KV.hex(KV.shr4(h)), KV.shr4(h), o1, o2, hb))
+    case 1n++p KV.Tip{} KV.H3{}:
+      Equal.cong(KV.Trie<V>, KV.Trie<V>, z => KV.Node{KV.Tip{}, KV.Tip{}, KV.Tip{}, z, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}}, KV.tmod_h(V, p, KV.tmod_h(V, p, KV.Tip{}, KV.hex(KV.shr4(h)), KV.shr4(h), o1), KV.hex(KV.shr4(h)), KV.shr4(h), o2), KV.tmod_h(V, p, KV.Tip{}, KV.hex(KV.shr4(h)), KV.shr4(h), o2), tmod_twice(V, p, KV.Tip{}, KV.hex(KV.shr4(h)), KV.shr4(h), o1, o2, hb))
+    case 1n++p KV.Tip{} KV.H4{}:
+      Equal.cong(KV.Trie<V>, KV.Trie<V>, z => KV.Node{KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, z, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}}, KV.tmod_h(V, p, KV.tmod_h(V, p, KV.Tip{}, KV.hex(KV.shr4(h)), KV.shr4(h), o1), KV.hex(KV.shr4(h)), KV.shr4(h), o2), KV.tmod_h(V, p, KV.Tip{}, KV.hex(KV.shr4(h)), KV.shr4(h), o2), tmod_twice(V, p, KV.Tip{}, KV.hex(KV.shr4(h)), KV.shr4(h), o1, o2, hb))
+    case 1n++p KV.Tip{} KV.H5{}:
+      Equal.cong(KV.Trie<V>, KV.Trie<V>, z => KV.Node{KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, z, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}}, KV.tmod_h(V, p, KV.tmod_h(V, p, KV.Tip{}, KV.hex(KV.shr4(h)), KV.shr4(h), o1), KV.hex(KV.shr4(h)), KV.shr4(h), o2), KV.tmod_h(V, p, KV.Tip{}, KV.hex(KV.shr4(h)), KV.shr4(h), o2), tmod_twice(V, p, KV.Tip{}, KV.hex(KV.shr4(h)), KV.shr4(h), o1, o2, hb))
+    case 1n++p KV.Tip{} KV.H6{}:
+      Equal.cong(KV.Trie<V>, KV.Trie<V>, z => KV.Node{KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, z, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}}, KV.tmod_h(V, p, KV.tmod_h(V, p, KV.Tip{}, KV.hex(KV.shr4(h)), KV.shr4(h), o1), KV.hex(KV.shr4(h)), KV.shr4(h), o2), KV.tmod_h(V, p, KV.Tip{}, KV.hex(KV.shr4(h)), KV.shr4(h), o2), tmod_twice(V, p, KV.Tip{}, KV.hex(KV.shr4(h)), KV.shr4(h), o1, o2, hb))
+    case 1n++p KV.Tip{} KV.H7{}:
+      Equal.cong(KV.Trie<V>, KV.Trie<V>, z => KV.Node{KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, z, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}}, KV.tmod_h(V, p, KV.tmod_h(V, p, KV.Tip{}, KV.hex(KV.shr4(h)), KV.shr4(h), o1), KV.hex(KV.shr4(h)), KV.shr4(h), o2), KV.tmod_h(V, p, KV.Tip{}, KV.hex(KV.shr4(h)), KV.shr4(h), o2), tmod_twice(V, p, KV.Tip{}, KV.hex(KV.shr4(h)), KV.shr4(h), o1, o2, hb))
+    case 1n++p KV.Tip{} KV.H8{}:
+      Equal.cong(KV.Trie<V>, KV.Trie<V>, z => KV.Node{KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, z, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}}, KV.tmod_h(V, p, KV.tmod_h(V, p, KV.Tip{}, KV.hex(KV.shr4(h)), KV.shr4(h), o1), KV.hex(KV.shr4(h)), KV.shr4(h), o2), KV.tmod_h(V, p, KV.Tip{}, KV.hex(KV.shr4(h)), KV.shr4(h), o2), tmod_twice(V, p, KV.Tip{}, KV.hex(KV.shr4(h)), KV.shr4(h), o1, o2, hb))
+    case 1n++p KV.Tip{} KV.H9{}:
+      Equal.cong(KV.Trie<V>, KV.Trie<V>, z => KV.Node{KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, z, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}}, KV.tmod_h(V, p, KV.tmod_h(V, p, KV.Tip{}, KV.hex(KV.shr4(h)), KV.shr4(h), o1), KV.hex(KV.shr4(h)), KV.shr4(h), o2), KV.tmod_h(V, p, KV.Tip{}, KV.hex(KV.shr4(h)), KV.shr4(h), o2), tmod_twice(V, p, KV.Tip{}, KV.hex(KV.shr4(h)), KV.shr4(h), o1, o2, hb))
+    case 1n++p KV.Tip{} KV.H10{}:
+      Equal.cong(KV.Trie<V>, KV.Trie<V>, z => KV.Node{KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, z, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}}, KV.tmod_h(V, p, KV.tmod_h(V, p, KV.Tip{}, KV.hex(KV.shr4(h)), KV.shr4(h), o1), KV.hex(KV.shr4(h)), KV.shr4(h), o2), KV.tmod_h(V, p, KV.Tip{}, KV.hex(KV.shr4(h)), KV.shr4(h), o2), tmod_twice(V, p, KV.Tip{}, KV.hex(KV.shr4(h)), KV.shr4(h), o1, o2, hb))
+    case 1n++p KV.Tip{} KV.H11{}:
+      Equal.cong(KV.Trie<V>, KV.Trie<V>, z => KV.Node{KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, z, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}}, KV.tmod_h(V, p, KV.tmod_h(V, p, KV.Tip{}, KV.hex(KV.shr4(h)), KV.shr4(h), o1), KV.hex(KV.shr4(h)), KV.shr4(h), o2), KV.tmod_h(V, p, KV.Tip{}, KV.hex(KV.shr4(h)), KV.shr4(h), o2), tmod_twice(V, p, KV.Tip{}, KV.hex(KV.shr4(h)), KV.shr4(h), o1, o2, hb))
+    case 1n++p KV.Tip{} KV.H12{}:
+      Equal.cong(KV.Trie<V>, KV.Trie<V>, z => KV.Node{KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, z, KV.Tip{}, KV.Tip{}, KV.Tip{}}, KV.tmod_h(V, p, KV.tmod_h(V, p, KV.Tip{}, KV.hex(KV.shr4(h)), KV.shr4(h), o1), KV.hex(KV.shr4(h)), KV.shr4(h), o2), KV.tmod_h(V, p, KV.Tip{}, KV.hex(KV.shr4(h)), KV.shr4(h), o2), tmod_twice(V, p, KV.Tip{}, KV.hex(KV.shr4(h)), KV.shr4(h), o1, o2, hb))
+    case 1n++p KV.Tip{} KV.H13{}:
+      Equal.cong(KV.Trie<V>, KV.Trie<V>, z => KV.Node{KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, z, KV.Tip{}, KV.Tip{}}, KV.tmod_h(V, p, KV.tmod_h(V, p, KV.Tip{}, KV.hex(KV.shr4(h)), KV.shr4(h), o1), KV.hex(KV.shr4(h)), KV.shr4(h), o2), KV.tmod_h(V, p, KV.Tip{}, KV.hex(KV.shr4(h)), KV.shr4(h), o2), tmod_twice(V, p, KV.Tip{}, KV.hex(KV.shr4(h)), KV.shr4(h), o1, o2, hb))
+    case 1n++p KV.Tip{} KV.H14{}:
+      Equal.cong(KV.Trie<V>, KV.Trie<V>, z => KV.Node{KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, z, KV.Tip{}}, KV.tmod_h(V, p, KV.tmod_h(V, p, KV.Tip{}, KV.hex(KV.shr4(h)), KV.shr4(h), o1), KV.hex(KV.shr4(h)), KV.shr4(h), o2), KV.tmod_h(V, p, KV.Tip{}, KV.hex(KV.shr4(h)), KV.shr4(h), o2), tmod_twice(V, p, KV.Tip{}, KV.hex(KV.shr4(h)), KV.shr4(h), o1, o2, hb))
+    case 1n++p KV.Tip{} KV.H15{}:
+      Equal.cong(KV.Trie<V>, KV.Trie<V>, z => KV.Node{KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, z}, KV.tmod_h(V, p, KV.tmod_h(V, p, KV.Tip{}, KV.hex(KV.shr4(h)), KV.shr4(h), o1), KV.hex(KV.shr4(h)), KV.shr4(h), o2), KV.tmod_h(V, p, KV.Tip{}, KV.hex(KV.shr4(h)), KV.shr4(h), o2), tmod_twice(V, p, KV.Tip{}, KV.hex(KV.shr4(h)), KV.shr4(h), o1, o2, hb))
+    case 1n++p KV.Ent{a, b, e, c} KV.H0{}:
+      Equal.cong(KV.Trie<V>, KV.Trie<V>, z => KV.Node{z, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}}, KV.tmod_h(V, p, KV.tmod_h(V, p, KV.Tip{}, KV.hex(KV.shr4(h)), KV.shr4(h), o1), KV.hex(KV.shr4(h)), KV.shr4(h), o2), KV.tmod_h(V, p, KV.Tip{}, KV.hex(KV.shr4(h)), KV.shr4(h), o2), tmod_twice(V, p, KV.Tip{}, KV.hex(KV.shr4(h)), KV.shr4(h), o1, o2, hb))
+    case 1n++p KV.Ent{a, b, e, c} KV.H1{}:
+      Equal.cong(KV.Trie<V>, KV.Trie<V>, z => KV.Node{KV.Tip{}, z, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}}, KV.tmod_h(V, p, KV.tmod_h(V, p, KV.Tip{}, KV.hex(KV.shr4(h)), KV.shr4(h), o1), KV.hex(KV.shr4(h)), KV.shr4(h), o2), KV.tmod_h(V, p, KV.Tip{}, KV.hex(KV.shr4(h)), KV.shr4(h), o2), tmod_twice(V, p, KV.Tip{}, KV.hex(KV.shr4(h)), KV.shr4(h), o1, o2, hb))
+    case 1n++p KV.Ent{a, b, e, c} KV.H2{}:
+      Equal.cong(KV.Trie<V>, KV.Trie<V>, z => KV.Node{KV.Tip{}, KV.Tip{}, z, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}}, KV.tmod_h(V, p, KV.tmod_h(V, p, KV.Tip{}, KV.hex(KV.shr4(h)), KV.shr4(h), o1), KV.hex(KV.shr4(h)), KV.shr4(h), o2), KV.tmod_h(V, p, KV.Tip{}, KV.hex(KV.shr4(h)), KV.shr4(h), o2), tmod_twice(V, p, KV.Tip{}, KV.hex(KV.shr4(h)), KV.shr4(h), o1, o2, hb))
+    case 1n++p KV.Ent{a, b, e, c} KV.H3{}:
+      Equal.cong(KV.Trie<V>, KV.Trie<V>, z => KV.Node{KV.Tip{}, KV.Tip{}, KV.Tip{}, z, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}}, KV.tmod_h(V, p, KV.tmod_h(V, p, KV.Tip{}, KV.hex(KV.shr4(h)), KV.shr4(h), o1), KV.hex(KV.shr4(h)), KV.shr4(h), o2), KV.tmod_h(V, p, KV.Tip{}, KV.hex(KV.shr4(h)), KV.shr4(h), o2), tmod_twice(V, p, KV.Tip{}, KV.hex(KV.shr4(h)), KV.shr4(h), o1, o2, hb))
+    case 1n++p KV.Ent{a, b, e, c} KV.H4{}:
+      Equal.cong(KV.Trie<V>, KV.Trie<V>, z => KV.Node{KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, z, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}}, KV.tmod_h(V, p, KV.tmod_h(V, p, KV.Tip{}, KV.hex(KV.shr4(h)), KV.shr4(h), o1), KV.hex(KV.shr4(h)), KV.shr4(h), o2), KV.tmod_h(V, p, KV.Tip{}, KV.hex(KV.shr4(h)), KV.shr4(h), o2), tmod_twice(V, p, KV.Tip{}, KV.hex(KV.shr4(h)), KV.shr4(h), o1, o2, hb))
+    case 1n++p KV.Ent{a, b, e, c} KV.H5{}:
+      Equal.cong(KV.Trie<V>, KV.Trie<V>, z => KV.Node{KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, z, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}}, KV.tmod_h(V, p, KV.tmod_h(V, p, KV.Tip{}, KV.hex(KV.shr4(h)), KV.shr4(h), o1), KV.hex(KV.shr4(h)), KV.shr4(h), o2), KV.tmod_h(V, p, KV.Tip{}, KV.hex(KV.shr4(h)), KV.shr4(h), o2), tmod_twice(V, p, KV.Tip{}, KV.hex(KV.shr4(h)), KV.shr4(h), o1, o2, hb))
+    case 1n++p KV.Ent{a, b, e, c} KV.H6{}:
+      Equal.cong(KV.Trie<V>, KV.Trie<V>, z => KV.Node{KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, z, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}}, KV.tmod_h(V, p, KV.tmod_h(V, p, KV.Tip{}, KV.hex(KV.shr4(h)), KV.shr4(h), o1), KV.hex(KV.shr4(h)), KV.shr4(h), o2), KV.tmod_h(V, p, KV.Tip{}, KV.hex(KV.shr4(h)), KV.shr4(h), o2), tmod_twice(V, p, KV.Tip{}, KV.hex(KV.shr4(h)), KV.shr4(h), o1, o2, hb))
+    case 1n++p KV.Ent{a, b, e, c} KV.H7{}:
+      Equal.cong(KV.Trie<V>, KV.Trie<V>, z => KV.Node{KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, z, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}}, KV.tmod_h(V, p, KV.tmod_h(V, p, KV.Tip{}, KV.hex(KV.shr4(h)), KV.shr4(h), o1), KV.hex(KV.shr4(h)), KV.shr4(h), o2), KV.tmod_h(V, p, KV.Tip{}, KV.hex(KV.shr4(h)), KV.shr4(h), o2), tmod_twice(V, p, KV.Tip{}, KV.hex(KV.shr4(h)), KV.shr4(h), o1, o2, hb))
+    case 1n++p KV.Ent{a, b, e, c} KV.H8{}:
+      Equal.cong(KV.Trie<V>, KV.Trie<V>, z => KV.Node{KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, z, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}}, KV.tmod_h(V, p, KV.tmod_h(V, p, KV.Tip{}, KV.hex(KV.shr4(h)), KV.shr4(h), o1), KV.hex(KV.shr4(h)), KV.shr4(h), o2), KV.tmod_h(V, p, KV.Tip{}, KV.hex(KV.shr4(h)), KV.shr4(h), o2), tmod_twice(V, p, KV.Tip{}, KV.hex(KV.shr4(h)), KV.shr4(h), o1, o2, hb))
+    case 1n++p KV.Ent{a, b, e, c} KV.H9{}:
+      Equal.cong(KV.Trie<V>, KV.Trie<V>, z => KV.Node{KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, z, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}}, KV.tmod_h(V, p, KV.tmod_h(V, p, KV.Tip{}, KV.hex(KV.shr4(h)), KV.shr4(h), o1), KV.hex(KV.shr4(h)), KV.shr4(h), o2), KV.tmod_h(V, p, KV.Tip{}, KV.hex(KV.shr4(h)), KV.shr4(h), o2), tmod_twice(V, p, KV.Tip{}, KV.hex(KV.shr4(h)), KV.shr4(h), o1, o2, hb))
+    case 1n++p KV.Ent{a, b, e, c} KV.H10{}:
+      Equal.cong(KV.Trie<V>, KV.Trie<V>, z => KV.Node{KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, z, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}}, KV.tmod_h(V, p, KV.tmod_h(V, p, KV.Tip{}, KV.hex(KV.shr4(h)), KV.shr4(h), o1), KV.hex(KV.shr4(h)), KV.shr4(h), o2), KV.tmod_h(V, p, KV.Tip{}, KV.hex(KV.shr4(h)), KV.shr4(h), o2), tmod_twice(V, p, KV.Tip{}, KV.hex(KV.shr4(h)), KV.shr4(h), o1, o2, hb))
+    case 1n++p KV.Ent{a, b, e, c} KV.H11{}:
+      Equal.cong(KV.Trie<V>, KV.Trie<V>, z => KV.Node{KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, z, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}}, KV.tmod_h(V, p, KV.tmod_h(V, p, KV.Tip{}, KV.hex(KV.shr4(h)), KV.shr4(h), o1), KV.hex(KV.shr4(h)), KV.shr4(h), o2), KV.tmod_h(V, p, KV.Tip{}, KV.hex(KV.shr4(h)), KV.shr4(h), o2), tmod_twice(V, p, KV.Tip{}, KV.hex(KV.shr4(h)), KV.shr4(h), o1, o2, hb))
+    case 1n++p KV.Ent{a, b, e, c} KV.H12{}:
+      Equal.cong(KV.Trie<V>, KV.Trie<V>, z => KV.Node{KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, z, KV.Tip{}, KV.Tip{}, KV.Tip{}}, KV.tmod_h(V, p, KV.tmod_h(V, p, KV.Tip{}, KV.hex(KV.shr4(h)), KV.shr4(h), o1), KV.hex(KV.shr4(h)), KV.shr4(h), o2), KV.tmod_h(V, p, KV.Tip{}, KV.hex(KV.shr4(h)), KV.shr4(h), o2), tmod_twice(V, p, KV.Tip{}, KV.hex(KV.shr4(h)), KV.shr4(h), o1, o2, hb))
+    case 1n++p KV.Ent{a, b, e, c} KV.H13{}:
+      Equal.cong(KV.Trie<V>, KV.Trie<V>, z => KV.Node{KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, z, KV.Tip{}, KV.Tip{}}, KV.tmod_h(V, p, KV.tmod_h(V, p, KV.Tip{}, KV.hex(KV.shr4(h)), KV.shr4(h), o1), KV.hex(KV.shr4(h)), KV.shr4(h), o2), KV.tmod_h(V, p, KV.Tip{}, KV.hex(KV.shr4(h)), KV.shr4(h), o2), tmod_twice(V, p, KV.Tip{}, KV.hex(KV.shr4(h)), KV.shr4(h), o1, o2, hb))
+    case 1n++p KV.Ent{a, b, e, c} KV.H14{}:
+      Equal.cong(KV.Trie<V>, KV.Trie<V>, z => KV.Node{KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, z, KV.Tip{}}, KV.tmod_h(V, p, KV.tmod_h(V, p, KV.Tip{}, KV.hex(KV.shr4(h)), KV.shr4(h), o1), KV.hex(KV.shr4(h)), KV.shr4(h), o2), KV.tmod_h(V, p, KV.Tip{}, KV.hex(KV.shr4(h)), KV.shr4(h), o2), tmod_twice(V, p, KV.Tip{}, KV.hex(KV.shr4(h)), KV.shr4(h), o1, o2, hb))
+    case 1n++p KV.Ent{a, b, e, c} KV.H15{}:
+      Equal.cong(KV.Trie<V>, KV.Trie<V>, z => KV.Node{KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, KV.Tip{}, z}, KV.tmod_h(V, p, KV.tmod_h(V, p, KV.Tip{}, KV.hex(KV.shr4(h)), KV.shr4(h), o1), KV.hex(KV.shr4(h)), KV.shr4(h), o2), KV.tmod_h(V, p, KV.Tip{}, KV.hex(KV.shr4(h)), KV.shr4(h), o2), tmod_twice(V, p, KV.Tip{}, KV.hex(KV.shr4(h)), KV.shr4(h), o1, o2, hb))
+# END gen_trie: twice
 
 # The laws
 # ========
@@ -5293,10 +5445,217 @@ def upd_ch_br(+t: KV.Trie<KV.Val>, +k: String, +h: U32, +n: Nat, +x: Nat, +now: 
     case R.CZsetNew{o, ps, z}:
       {==}
 
+# an update's change
+def ch_of(o: R.Out) -> R.Change:
+  match o:
+    case R.Out{r, ch}:
+      ch
+
+# The take of an update (R.db.upd.go, A.run.upd.go): an update that takes
+# its key's value out of the keyspace keeps a hole in its place before
+# its change (KV.keep.at), and a change that writes the value over,
+# keeping or setting it (ch_over), writes the same trie over the hole
+# as over the value: a write after a keep of the same key is as the
+# write alone (keep_keep, setx_keep).
+def keep_keep(-V: Data, +t: KV.Trie<V>, +k: String, +w0: V, +w: V, +h: U32) -> {KV.keep.at(V, KV.keep.at(V, t, k, w0, h), k, w, h) == KV.keep.at(V, t, k, w, h) : KV.Trie<V>}:
+  tmod_twice(V, 5n, t, KV.hex(h), h, KV.OKeep{k, w0}, KV.OKeep{k, w}, b => bkeep2(V, k, w0, w, b))
+
+def setx_keep(-V: Data, +t: KV.Trie<V>, +k: String, +w0: V, +w: V, +e: Nat, +h: U32) -> {KV.setx.at(V, KV.keep.at(V, t, k, w0, h), k, w, e, h) == KV.setx.at(V, t, k, w, e, h) : KV.Trie<V>}:
+  tmod_twice(V, 5n, t, KV.hex(h), h, KV.OKeep{k, w0}, KV.OSet{k, w, e}, b => bset_bkeep(V, k, w0, w, e, b))
+
+# whether a change writes its key's value over
+def ch_over(ch: R.Change) -> Bool:
+  match ch:
+    case R.CKeep{}:
+      False{}
+    case R.CDel{}:
+      False{}
+    case R.CExp{e}:
+      False{}
+    case R.CPut{v, e}:
+      True{}
+    case R.CKeepT{v}:
+      True{}
+    case R.CApp{s, v}:
+      True{}
+    case R.CRange{o, s, v}:
+      True{}
+    case R.CHash{op, hv}:
+      True{}
+    case R.CHashNew{ps, hv}:
+      True{}
+    case R.CList{op, lv}:
+      True{}
+    case R.CListNew{left, xs, lv}:
+      True{}
+    case R.CMems{op, sv}:
+      True{}
+    case R.CMemsNew{ms, sv}:
+      True{}
+    case R.CZset{op, zv}:
+      True{}
+    case R.CZsetNew{o, ps, zv}:
+      True{}
+
+def upd_ch_take(+t: KV.Trie<KV.Val>, +k: String, +h: U32, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>, +c: Nat, r: R.Reply, ch: R.Change, +w: KV.Val) -> {ch_over(ch) == True{} : Bool} -> {R.upd.ch(KV.keep.at(KV.Val, t, k, w, h), k, h, n, x, now, rr, c, r, ch) == R.upd.ch(t, k, h, n, x, now, rr, c, r, ch) : R.Reply & R.Db}:
+  match ch:
+    case R.CKeep{}:
+      g => Empty.absurd({R.upd.ch(KV.keep.at(KV.Val, t, k, w, h), k, h, n, x, now, rr, c, r, R.CKeep{}) == R.upd.ch(t, k, h, n, x, now, rr, c, r, R.CKeep{}) : R.Reply & R.Db}, false_true(g))
+    case R.CDel{}:
+      g => Empty.absurd({R.upd.ch(KV.keep.at(KV.Val, t, k, w, h), k, h, n, x, now, rr, c, r, R.CDel{}) == R.upd.ch(t, k, h, n, x, now, rr, c, r, R.CDel{}) : R.Reply & R.Db}, false_true(g))
+    case R.CExp{e}:
+      g => Empty.absurd({R.upd.ch(KV.keep.at(KV.Val, t, k, w, h), k, h, n, x, now, rr, c, r, R.CExp{e}) == R.upd.ch(t, k, h, n, x, now, rr, c, r, R.CExp{e}) : R.Reply & R.Db}, false_true(g))
+    case R.CPut{v, e}:
+      g => Equal.cong(KV.Trie<KV.Val>, R.Reply & R.Db, z => (r, R.Db{z, R.cnt.n(c, n), R.cnt.x(c, e, x), now, rr}), KV.setx.at(KV.Val, KV.keep.at(KV.Val, t, k, w, h), k, KV.VStr{v}, e, h), KV.setx.at(KV.Val, t, k, KV.VStr{v}, e, h), setx_keep(KV.Val, t, k, w, KV.VStr{v}, e, h))
+    case R.CKeepT{v}:
+      g => Equal.cong(KV.Trie<KV.Val>, R.Reply & R.Db, z => (r, R.Db{z, R.cnt.n(c, n), x, now, rr}), KV.keep.at(KV.Val, KV.keep.at(KV.Val, t, k, w, h), k, KV.VStr{v}, h), KV.keep.at(KV.Val, t, k, KV.VStr{v}, h), keep_keep(KV.Val, t, k, w, KV.VStr{v}, h))
+    case R.CApp{s, v}:
+      g => Equal.cong(KV.Trie<KV.Val>, R.Reply & R.Db, z => (r, R.Db{z, R.cnt.n(c, n), x, now, rr}), KV.keep.at(KV.Val, KV.keep.at(KV.Val, t, k, w, h), k, KV.VStr{v}, h), KV.keep.at(KV.Val, t, k, KV.VStr{v}, h), keep_keep(KV.Val, t, k, w, KV.VStr{v}, h))
+    case R.CRange{o, s, v}:
+      g => Equal.cong(KV.Trie<KV.Val>, R.Reply & R.Db, z => (r, R.Db{z, R.cnt.n(c, n), x, now, rr}), KV.keep.at(KV.Val, KV.keep.at(KV.Val, t, k, w, h), k, KV.VStr{v}, h), KV.keep.at(KV.Val, t, k, KV.VStr{v}, h), keep_keep(KV.Val, t, k, w, KV.VStr{v}, h))
+    case R.CHash{op, hv}:
+      g => Equal.cong(KV.Trie<KV.Val>, R.Reply & R.Db, z => (r, R.Db{z, n, x, now, rr}), KV.keep.at(KV.Val, KV.keep.at(KV.Val, t, k, w, h), k, KV.VColl{KV.CHash{hv}}, h), KV.keep.at(KV.Val, t, k, KV.VColl{KV.CHash{hv}}, h), keep_keep(KV.Val, t, k, w, KV.VColl{KV.CHash{hv}}, h))
+    case R.CHashNew{ps, hv}:
+      g => Equal.cong(KV.Trie<KV.Val>, R.Reply & R.Db, z => (r, R.Db{z, R.cnt.n(c, n), R.cnt.x(c, 0n, x), now, rr}), KV.setx.at(KV.Val, KV.keep.at(KV.Val, t, k, w, h), k, KV.VColl{KV.CHash{hv}}, 0n, h), KV.setx.at(KV.Val, t, k, KV.VColl{KV.CHash{hv}}, 0n, h), setx_keep(KV.Val, t, k, w, KV.VColl{KV.CHash{hv}}, 0n, h))
+    case R.CList{op, lv}:
+      g => Equal.cong(KV.Trie<KV.Val>, R.Reply & R.Db, z => (r, R.Db{z, n, x, now, rr}), KV.keep.at(KV.Val, KV.keep.at(KV.Val, t, k, w, h), k, KV.VColl{KV.CList{lv}}, h), KV.keep.at(KV.Val, t, k, KV.VColl{KV.CList{lv}}, h), keep_keep(KV.Val, t, k, w, KV.VColl{KV.CList{lv}}, h))
+    case R.CListNew{left, xs, lv}:
+      g => Equal.cong(KV.Trie<KV.Val>, R.Reply & R.Db, z => (r, R.Db{z, R.cnt.n(c, n), R.cnt.x(c, 0n, x), now, rr}), KV.setx.at(KV.Val, KV.keep.at(KV.Val, t, k, w, h), k, KV.VColl{KV.CList{lv}}, 0n, h), KV.setx.at(KV.Val, t, k, KV.VColl{KV.CList{lv}}, 0n, h), setx_keep(KV.Val, t, k, w, KV.VColl{KV.CList{lv}}, 0n, h))
+    case R.CMems{op, sv}:
+      g => Equal.cong(KV.Trie<KV.Val>, R.Reply & R.Db, z => (r, R.Db{z, n, x, now, rr}), KV.keep.at(KV.Val, KV.keep.at(KV.Val, t, k, w, h), k, KV.VColl{KV.CMems{sv}}, h), KV.keep.at(KV.Val, t, k, KV.VColl{KV.CMems{sv}}, h), keep_keep(KV.Val, t, k, w, KV.VColl{KV.CMems{sv}}, h))
+    case R.CMemsNew{ms, sv}:
+      g => Equal.cong(KV.Trie<KV.Val>, R.Reply & R.Db, z => (r, R.Db{z, R.cnt.n(c, n), R.cnt.x(c, 0n, x), now, rr}), KV.setx.at(KV.Val, KV.keep.at(KV.Val, t, k, w, h), k, KV.VColl{KV.CMems{sv}}, 0n, h), KV.setx.at(KV.Val, t, k, KV.VColl{KV.CMems{sv}}, 0n, h), setx_keep(KV.Val, t, k, w, KV.VColl{KV.CMems{sv}}, 0n, h))
+    case R.CZset{op, zv}:
+      g => Equal.cong(KV.Trie<KV.Val>, R.Reply & R.Db, z => (r, R.Db{z, n, x, now, rr}), KV.keep.at(KV.Val, KV.keep.at(KV.Val, t, k, w, h), k, KV.VColl{KV.CZset{zv}}, h), KV.keep.at(KV.Val, t, k, KV.VColl{KV.CZset{zv}}, h), keep_keep(KV.Val, t, k, w, KV.VColl{KV.CZset{zv}}, h))
+    case R.CZsetNew{o, ps, zv}:
+      g => Equal.cong(KV.Trie<KV.Val>, R.Reply & R.Db, z => (r, R.Db{z, R.cnt.n(c, n), R.cnt.x(c, 0n, x), now, rr}), KV.setx.at(KV.Val, KV.keep.at(KV.Val, t, k, w, h), k, KV.VColl{KV.CZset{zv}}, 0n, h), KV.setx.at(KV.Val, t, k, KV.VColl{KV.CZset{zv}}, 0n, h), setx_keep(KV.Val, t, k, w, KV.VColl{KV.CZset{zv}}, 0n, h))
+
+def upd_put_take(+t: KV.Trie<KV.Val>, +k: String, +h: U32, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>, +c: Nat, o: R.Out, +w: KV.Val) -> {ch_over(ch_of(o)) == True{} : Bool} -> {R.upd.put(KV.keep.at(KV.Val, t, k, w, h), k, h, n, x, now, rr, c, o) == R.upd.put(t, k, h, n, x, now, rr, c, o) : R.Reply & R.Db}:
+  match o:
+    case R.Out{r, ch}:
+      g => upd_ch_take(t, k, h, n, x, now, rr, c, r, ch, w)(g)
+
+# an HSET of pairs to a hash writes the hash over
+def hset_over(r: R.HPut, -p: KV.HPair, -rest: List<&2, KV.HPair>, -mset: Bool) -> {ch_over(ch_of(R.hset.out(r, False{}, Con{p, rest}, mset))) == True{} : Bool}:
+  match r:
+    case R.HPut{h, made}:
+      {==}
+
+# an update that takes its key's value out writes the value over
+def takes_coll(cl: KV.Coll, -e: Nat, +p: KV.HPair, +rest: List<&2, KV.HPair>, +mset: Bool, +now: Nat) -> {R.upd.takes(R.UHash{R.HWSet{Con{p, rest}, mset}}, Some{KV.Item{KV.VColl{cl}, e}}) == True{} : Bool} -> {ch_over(ch_of(R.upd.v(R.UHash{R.HWSet{Con{p, rest}, mset}}, now, Some{KV.Item{KV.VColl{cl}, e}}))) == True{} : Bool}:
+  match cl:
+    case KV.CHash{h}:
+      g => hset_over(R.hset.go(Con{p, rest}, R.HPut{h, 0n}), p, rest, mset)
+    case KV.CList{a}:
+      g => Empty.absurd({ch_over(ch_of(R.upd.v(R.UHash{R.HWSet{Con{p, rest}, mset}}, now, Some{KV.Item{KV.VColl{KV.CList{a}}, e}}))) == True{} : Bool}, false_true(g))
+    case KV.CMems{a}:
+      g => Empty.absurd({ch_over(ch_of(R.upd.v(R.UHash{R.HWSet{Con{p, rest}, mset}}, now, Some{KV.Item{KV.VColl{KV.CMems{a}}, e}}))) == True{} : Bool}, false_true(g))
+    case KV.CZset{a}:
+      g => Empty.absurd({ch_over(ch_of(R.upd.v(R.UHash{R.HWSet{Con{p, rest}, mset}}, now, Some{KV.Item{KV.VColl{KV.CZset{a}}, e}}))) == True{} : Bool}, false_true(g))
+
+def takes_set(+p: KV.HPair, +rest: List<&2, KV.HPair>, +mset: Bool, lm: Maybe<&2, KV.Item<KV.Val>>, +now: Nat) -> {R.upd.takes(R.UHash{R.HWSet{Con{p, rest}, mset}}, lm) == True{} : Bool} -> {ch_over(ch_of(R.upd.v(R.UHash{R.HWSet{Con{p, rest}, mset}}, now, lm))) == True{} : Bool}:
+  match lm:
+    case Some{KV.Item{KV.VColl{cl}, e}}:
+      takes_coll(cl, e, p, rest, mset, now)
+    case Some{KV.Item{KV.VStr{s}, e}}:
+      g => Empty.absurd({ch_over(ch_of(R.upd.v(R.UHash{R.HWSet{Con{p, rest}, mset}}, now, Some{KV.Item{KV.VStr{s}, e}}))) == True{} : Bool}, false_true(g))
+    case None{}:
+      g => Empty.absurd({ch_over(ch_of(R.upd.v(R.UHash{R.HWSet{Con{p, rest}, mset}}, now, None{}))) == True{} : Bool}, false_true(g))
+
+def takes_hash(hop: R.HWrite, lm: Maybe<&2, KV.Item<KV.Val>>, +now: Nat) -> {R.upd.takes(R.UHash{hop}, lm) == True{} : Bool} -> {ch_over(ch_of(R.upd.v(R.UHash{hop}, now, lm))) == True{} : Bool}:
+  match hop:
+    case R.HWSet{Con{p, rest}, mset}:
+      takes_set(p, rest, mset, lm, now)
+    case R.HWSet{Nil{}, mset}:
+      g => Empty.absurd({ch_over(ch_of(R.upd.v(R.UHash{R.HWSet{Nil{}, mset}}, now, lm))) == True{} : Bool}, false_true(g))
+    case R.HWSetNx{a, b}:
+      g => Empty.absurd({ch_over(ch_of(R.upd.v(R.UHash{R.HWSetNx{a, b}}, now, lm))) == True{} : Bool}, false_true(g))
+    case R.HWDel{a}:
+      g => Empty.absurd({ch_over(ch_of(R.upd.v(R.UHash{R.HWDel{a}}, now, lm))) == True{} : Bool}, false_true(g))
+    case R.HWIncr{a, b}:
+      g => Empty.absurd({ch_over(ch_of(R.upd.v(R.UHash{R.HWIncr{a, b}}, now, lm))) == True{} : Bool}, false_true(g))
+    case R.HWNew{a}:
+      g => Empty.absurd({ch_over(ch_of(R.upd.v(R.UHash{R.HWNew{a}}, now, lm))) == True{} : Bool}, false_true(g))
+    case R.HWIncrF{a, b}:
+      g => Empty.absurd({ch_over(ch_of(R.upd.v(R.UHash{R.HWIncrF{a, b}}, now, lm))) == True{} : Bool}, false_true(g))
+
+def takes_over(op: R.UpdOp, lm: Maybe<&2, KV.Item<KV.Val>>, +now: Nat) -> {R.upd.takes(op, lm) == True{} : Bool} -> {ch_over(ch_of(R.upd.v(op, now, lm))) == True{} : Bool}:
+  match op:
+    case R.UHash{hop}:
+      takes_hash(hop, lm, now)
+    case R.USetNx{a}:
+      g => Empty.absurd({ch_over(ch_of(R.upd.v(R.USetNx{a}, now, lm))) == True{} : Bool}, false_true(g))
+    case R.UGet{a}:
+      g => Empty.absurd({ch_over(ch_of(R.upd.v(R.UGet{a}, now, lm))) == True{} : Bool}, false_true(g))
+    case R.UAppend{a}:
+      g => Empty.absurd({ch_over(ch_of(R.upd.v(R.UAppend{a}, now, lm))) == True{} : Bool}, false_true(g))
+    case R.USet{a, b, d, f}:
+      g => Empty.absurd({ch_over(ch_of(R.upd.v(R.USet{a, b, d, f}, now, lm))) == True{} : Bool}, false_true(g))
+    case R.UGetEx{a}:
+      g => Empty.absurd({ch_over(ch_of(R.upd.v(R.UGetEx{a}, now, lm))) == True{} : Bool}, false_true(g))
+    case R.UGetDel{}:
+      g => Empty.absurd({ch_over(ch_of(R.upd.v(R.UGetDel{}, now, lm))) == True{} : Bool}, false_true(g))
+    case R.UExpire{a, b, d}:
+      g => Empty.absurd({ch_over(ch_of(R.upd.v(R.UExpire{a, b, d}, now, lm))) == True{} : Bool}, false_true(g))
+    case R.UPersist{}:
+      g => Empty.absurd({ch_over(ch_of(R.upd.v(R.UPersist{}, now, lm))) == True{} : Bool}, false_true(g))
+    case R.UIncr{a}:
+      g => Empty.absurd({ch_over(ch_of(R.upd.v(R.UIncr{a}, now, lm))) == True{} : Bool}, false_true(g))
+    case R.URange{a, b}:
+      g => Empty.absurd({ch_over(ch_of(R.upd.v(R.URange{a, b}, now, lm))) == True{} : Bool}, false_true(g))
+    case R.USetBit{a, b}:
+      g => Empty.absurd({ch_over(ch_of(R.upd.v(R.USetBit{a, b}, now, lm))) == True{} : Bool}, false_true(g))
+    case R.UBitfield{a}:
+      g => Empty.absurd({ch_over(ch_of(R.upd.v(R.UBitfield{a}, now, lm))) == True{} : Bool}, false_true(g))
+    case R.UList{a}:
+      g => Empty.absurd({ch_over(ch_of(R.upd.v(R.UList{a}, now, lm))) == True{} : Bool}, false_true(g))
+    case R.UMems{a}:
+      g => Empty.absurd({ch_over(ch_of(R.upd.v(R.UMems{a}, now, lm))) == True{} : Bool}, false_true(g))
+    case R.UIncrF{a}:
+      g => Empty.absurd({ch_over(ch_of(R.upd.v(R.UIncrF{a}, now, lm))) == True{} : Bool}, false_true(g))
+    case R.UZset{a}:
+      g => Empty.absurd({ch_over(ch_of(R.upd.v(R.UZset{a}, now, lm))) == True{} : Bool}, false_true(g))
+
+# an update reads as its change made where its key's entry lies, the
+# key's value taken out of the keyspace or not
+def db_upd_go(b: Bool, +t: KV.Trie<KV.Val>, +k: String, +h: U32, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>, +op: R.UpdOp, +c: Nat, +lm: Maybe<&2, KV.Item<KV.Val>>) -> {b == R.upd.takes(op, lm) : Bool} -> {R.db.upd.go(b, t, k, h, n, x, now, rr, op, c, lm) == R.upd.put(t, k, h, n, x, now, rr, c, R.upd.v(op, now, lm)) : R.Reply & R.Db}:
+  match b:
+    case True{}:
+      g => upd_put_take(t, k, h, n, x, now, rr, c, R.upd.v(op, now, lm), R.upd.hole())(takes_over(op, lm, now)(Equal.sym(Bool, True{}, R.upd.takes(op, lm), g)))
+    case False{}:
+      g => {==}
+
+def db_upd_unfold(+t: KV.Trie<KV.Val>, +k: String, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>, +op: R.UpdOp) -> {R.db.upd(R.Db{t, n, x, now, rr}, k, op) == R.upd.put(t, k, KV.hash(k), n, x, now, rr, R.ent.code(KV.entry.at(KV.Val, t, k, KV.hash(k))), R.upd.v(op, now, R.ent.live(now, KV.entry.at(KV.Val, t, k, KV.hash(k))))) : R.Reply & R.Db}:
+  db_upd_go(R.upd.takes(op, R.ent.live(now, KV.entry.at(KV.Val, t, k, KV.hash(k)))), t, k, KV.hash(k), n, x, now, rr, op, R.ent.code(KV.entry.at(KV.Val, t, k, KV.hash(k))), R.ent.live(now, KV.entry.at(KV.Val, t, k, KV.hash(k))))({==})
+
+# and so does an update run with its effects
+def run_upd_go(b: Bool, +t: KV.Trie<KV.Val>, +k: String, +h: U32, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>, +op: R.UpdOp, +c: Nat, +lm: Maybe<&2, KV.Item<KV.Val>>) -> {b == R.upd.takes(op, lm) : Bool} -> {A.run.upd.go(b, t, k, h, n, x, now, rr, op, c, lm) == A.run.out(R.upd.put(t, k, h, n, x, now, rr, c, R.upd.v(op, now, lm)), A.upd.effect(k, c, R.upd.v(op, now, lm))) : R.Reply & (List<&2, R.Cmd> & R.Db)}:
+  match b:
+    case True{}:
+      g => Equal.cong(R.Reply & R.Db, R.Reply & (List<&2, R.Cmd> & R.Db), z => A.run.out(z, A.upd.effect(k, c, R.upd.v(op, now, lm))), R.upd.put(KV.keep.at(KV.Val, t, k, R.upd.hole(), h), k, h, n, x, now, rr, c, R.upd.v(op, now, lm)), R.upd.put(t, k, h, n, x, now, rr, c, R.upd.v(op, now, lm)), upd_put_take(t, k, h, n, x, now, rr, c, R.upd.v(op, now, lm), R.upd.hole())(takes_over(op, lm, now)(Equal.sym(Bool, True{}, R.upd.takes(op, lm), g))))
+    case False{}:
+      g => {==}
+
+def run_upd_unfold(+t: KV.Trie<KV.Val>, +k: String, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>, +op: R.UpdOp) -> {A.run.upd(R.Db{t, n, x, now, rr}, k, op) == A.run.out(R.upd.put(t, k, KV.hash(k), n, x, now, rr, R.ent.code(KV.entry.at(KV.Val, t, k, KV.hash(k))), R.upd.v(op, now, R.ent.live(now, KV.entry.at(KV.Val, t, k, KV.hash(k))))), A.upd.effect(k, R.ent.code(KV.entry.at(KV.Val, t, k, KV.hash(k))), R.upd.v(op, now, R.ent.live(now, KV.entry.at(KV.Val, t, k, KV.hash(k)))))) : R.Reply & (List<&2, R.Cmd> & R.Db)}:
+  run_upd_go(R.upd.takes(op, R.ent.live(now, KV.entry.at(KV.Val, t, k, KV.hash(k)))), t, k, KV.hash(k), n, x, now, rr, op, R.ent.code(KV.entry.at(KV.Val, t, k, KV.hash(k))), R.ent.live(now, KV.entry.at(KV.Val, t, k, KV.hash(k))))({==})
+
+# A.run.upd as the change made where the key's entry lies, the other way
+def run_upd_eq(+t: KV.Trie<KV.Val>, +k: String, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>, +op: R.UpdOp) -> {A.run.out(R.upd.put(t, k, KV.hash(k), n, x, now, rr, R.ent.code(KV.entry.at(KV.Val, t, k, KV.hash(k))), R.upd.v(op, now, R.ent.live(now, KV.entry.at(KV.Val, t, k, KV.hash(k))))), A.upd.effect(k, R.ent.code(KV.entry.at(KV.Val, t, k, KV.hash(k))), R.upd.v(op, now, R.ent.live(now, KV.entry.at(KV.Val, t, k, KV.hash(k)))))) == A.run.upd(R.Db{t, n, x, now, rr}, k, op) : R.Reply & (List<&2, R.Cmd> & R.Db)}:
+  Equal.sym(R.Reply & (List<&2, R.Cmd> & R.Db), A.run.upd(R.Db{t, n, x, now, rr}, k, op), A.run.out(R.upd.put(t, k, KV.hash(k), n, x, now, rr, R.ent.code(KV.entry.at(KV.Val, t, k, KV.hash(k))), R.upd.v(op, now, R.ent.live(now, KV.entry.at(KV.Val, t, k, KV.hash(k))))), A.upd.effect(k, R.ent.code(KV.entry.at(KV.Val, t, k, KV.hash(k))), R.upd.v(op, now, R.ent.live(now, KV.entry.at(KV.Val, t, k, KV.hash(k)))))), run_upd_unfold(t, k, n, x, now, rr, op))
+
 def upd_br(+t: KV.Trie<KV.Val>, +k: String, +h: U32, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>, +c: Nat, o: R.Out) -> {proj(R.upd.put(t, k, h, n, x, now, rr, c, o)) == T.upd.put(t, k, h, o) : R.Reply & KV.Trie<KV.Val>}:
   match o:
     case R.Out{r, ch}:
       upd_ch_br(t, k, h, n, x, now, rr, c, r, ch)
+
+# R.db.upd as the change made where the key's entry lies, the other way
+def db_upd_eq(+t: KV.Trie<KV.Val>, +k: String, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>, +op: R.UpdOp) -> {R.upd.put(t, k, KV.hash(k), n, x, now, rr, R.ent.code(KV.entry.at(KV.Val, t, k, KV.hash(k))), R.upd.v(op, now, R.ent.live(now, KV.entry.at(KV.Val, t, k, KV.hash(k))))) == R.db.upd(R.Db{t, n, x, now, rr}, k, op) : R.Reply & R.Db}:
+  Equal.sym(R.Reply & R.Db, R.db.upd(R.Db{t, n, x, now, rr}, k, op), R.upd.put(t, k, KV.hash(k), n, x, now, rr, R.ent.code(KV.entry.at(KV.Val, t, k, KV.hash(k))), R.upd.v(op, now, R.ent.live(now, KV.entry.at(KV.Val, t, k, KV.hash(k))))), db_upd_unfold(t, k, n, x, now, rr, op))
+
+# an update's bridge to the spec (upd_br) through db_upd_unfold
+def upd_db_br(+t: KV.Trie<KV.Val>, +k: String, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>, +op: R.UpdOp) -> {proj(R.db.upd(R.Db{t, n, x, now, rr}, k, op)) == T.upd.run(t, k, op, now) : R.Reply & KV.Trie<KV.Val>}:
+  %db_upd_eq(t, k, n, x, now, rr, op) : {proj(_) == T.upd.run(t, k, op, now) : R.Reply & KV.Trie<KV.Val>}
+  upd_br(t, k, KV.hash(k), n, x, now, rr, R.ent.code(KV.entry.at(KV.Val, t, k, KV.hash(k))), R.upd.v(op, now, R.ent.live(now, KV.entry.at(KV.Val, t, k, KV.hash(k)))))
 
 # MSETNX and RENAME, for a given verdict, as the spec's
 def msetnx_br(b: Bool, ps: List<&2, R.KVPair>, +t: KV.Trie<KV.Val>, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>) -> {proj(R.msetnx.of(b, ps, R.Db{t, n, x, now, rr})) == T.msetnx(b, ps, t) : R.Reply & KV.Trie<KV.Val>}:
@@ -5430,7 +5789,7 @@ def lmpop_at_br(m: Maybe<&2, String>, +left: Bool, +c: String, +t: KV.Trie<KV.Va
       Equal.trans(R.Reply & KV.Trie<KV.Val>, proj(R.lmpop.out(k, R.db.upd(R.Db{t, n, x, now, rr}, k, R.UList{R.LWPopN{left, c}}))), T.lmpop.out(k, proj(R.db.upd(R.Db{t, n, x, now, rr}, k, R.UList{R.LWPopN{left, c}}))), T.lmpop.out(k, T.upd.run(t, k, R.UList{R.LWPopN{left, c}}, now)),
         out_br(k, R.db.upd(R.Db{t, n, x, now, rr}, k, R.UList{R.LWPopN{left, c}})),
         Equal.cong(R.Reply & KV.Trie<KV.Val>, R.Reply & KV.Trie<KV.Val>, z => T.lmpop.out(k, z), proj(R.db.upd(R.Db{t, n, x, now, rr}, k, R.UList{R.LWPopN{left, c}})), T.upd.run(t, k, R.UList{R.LWPopN{left, c}}, now),
-          upd_br(t, k, KV.hash(k), n, x, now, rr, R.ent.code(KV.entry.at(KV.Val, t, k, KV.hash(k))), R.upd.v(R.UList{R.LWPopN{left, c}}, now, R.ent.live(now, KV.entry.at(KV.Val, t, k, KV.hash(k)))))))
+          upd_db_br(t, k, n, x, now, rr, R.UList{R.LWPopN{left, c}})))
     case None{}:
       {==}
 
@@ -5481,11 +5840,12 @@ def upd_t(d: R.Db, +k: String, +op: R.UpdOp) -> {R.db.t(R.db_of(R.db.upd(d, k, o
       Equal.trans(KV.Trie<KV.Val>, R.db.t(R.db_of(R.db.upd(R.Db{t, n, x, now, rr}, k, op))), T.db_of(proj(R.db.upd(R.Db{t, n, x, now, rr}, k, op))), T.db_of(T.upd.run(t, k, op, now)),
         Equal.sym(KV.Trie<KV.Val>, T.db_of(proj(R.db.upd(R.Db{t, n, x, now, rr}, k, op))), R.db.t(R.db_of(R.db.upd(R.Db{t, n, x, now, rr}, k, op))), proj_db(R.db.upd(R.Db{t, n, x, now, rr}, k, op))),
         Equal.cong(R.Reply & KV.Trie<KV.Val>, KV.Trie<KV.Val>, z => T.db_of(z), proj(R.db.upd(R.Db{t, n, x, now, rr}, k, op)), T.upd.run(t, k, op, now),
-          upd_br(t, k, KV.hash(k), n, x, now, rr, R.ent.code(KV.entry.at(KV.Val, t, k, KV.hash(k))), R.upd.v(op, now, R.ent.live(now, KV.entry.at(KV.Val, t, k, KV.hash(k)))))))
+          upd_db_br(t, k, n, x, now, rr, op)))
 
 def upd_now_d(d: R.Db, +k: String, +op: R.UpdOp) -> {R.db.now(R.db_of(R.db.upd(d, k, op))) == R.db.now(d) : Nat}:
   match d:
     case R.Db{+t, +n, +x, +now, +rr}:
+      %db_upd_eq(t, k, n, x, now, rr, op) : {R.db.now(R.db_of(_)) == now : Nat}
       upd_now(t, k, KV.hash(k), n, x, now, rr, R.ent.code(KV.entry.at(KV.Val, t, k, KV.hash(k))), R.upd.v(op, now, R.ent.live(now, KV.entry.at(KV.Val, t, k, KV.hash(k)))))
 
 def sstore_del_br(r: R.Dels, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>) -> {proj((R.r_int(0n), R.db_of(R.del.db(r, n, x, now, rr)))) == (R.r_int(0n), T.db_of(T.del_reply(r))) : R.Reply & KV.Trie<KV.Val>}:
@@ -5569,7 +5929,7 @@ def zmpop_at_br(m: Maybe<&2, String>, +max: Bool, +c: String, +t: KV.Trie<KV.Val
       Equal.trans(R.Reply & KV.Trie<KV.Val>, proj(R.zmpop.out(k, R.db.upd(R.Db{t, n, x, now, rr}, k, R.UZset{R.ZWPopN{max, c}}))), T.zmpop.out(k, proj(R.db.upd(R.Db{t, n, x, now, rr}, k, R.UZset{R.ZWPopN{max, c}}))), T.zmpop.out(k, T.upd.run(t, k, R.UZset{R.ZWPopN{max, c}}, now)),
         zout_br(k, R.db.upd(R.Db{t, n, x, now, rr}, k, R.UZset{R.ZWPopN{max, c}})),
         Equal.cong(R.Reply & KV.Trie<KV.Val>, R.Reply & KV.Trie<KV.Val>, z => T.zmpop.out(k, z), proj(R.db.upd(R.Db{t, n, x, now, rr}, k, R.UZset{R.ZWPopN{max, c}})), T.upd.run(t, k, R.UZset{R.ZWPopN{max, c}}, now),
-          upd_br(t, k, KV.hash(k), n, x, now, rr, R.ent.code(KV.entry.at(KV.Val, t, k, KV.hash(k))), R.upd.v(R.UZset{R.ZWPopN{max, c}}, now, R.ent.live(now, KV.entry.at(KV.Val, t, k, KV.hash(k)))))))
+          upd_db_br(t, k, n, x, now, rr, R.UZset{R.ZWPopN{max, c}})))
     case None{}:
       {==}
 
@@ -5606,7 +5966,7 @@ def bridge_go(c: R.Cmd, +t: KV.Trie<KV.Val>, +n: Nat, +x: Nat, +now: Nat, +rr: M
     case R.Peek{k, o}:
       kw => {==}
     case R.Upd{+k, +op}:
-      kw => upd_br(t, k, KV.hash(k), n, x, now, rr, R.ent.code(KV.entry.at(KV.Val, t, k, KV.hash(k))), R.upd.v(op, now, R.ent.live(now, KV.entry.at(KV.Val, t, k, KV.hash(k)))))
+      kw => upd_db_br(t, k, n, x, now, rr, op)
     case R.MSetNx{+ps}:
       kw => msetnx_br(R.pairs.live(ps, now, t), ps, t, n, x, now, rr)
     case R.Rename{+s, +d, +nx}:
@@ -5769,7 +6129,7 @@ def lmpop_at_now(m: Maybe<&2, String>, +left: Bool, +c: String, +t: KV.Trie<KV.V
     case Some{+k}:
       Equal.trans(Nat, R.db.now(R.db_of(R.lmpop.out(k, R.db.upd(R.Db{t, n, x, now, rr}, k, R.UList{R.LWPopN{left, c}})))), R.db.now(R.db_of(R.db.upd(R.Db{t, n, x, now, rr}, k, R.UList{R.LWPopN{left, c}}))), now,
         Equal.cong(R.Db, Nat, z => R.db.now(z), R.db_of(R.lmpop.out(k, R.db.upd(R.Db{t, n, x, now, rr}, k, R.UList{R.LWPopN{left, c}}))), R.db_of(R.db.upd(R.Db{t, n, x, now, rr}, k, R.UList{R.LWPopN{left, c}})), out_db_R(k, R.db.upd(R.Db{t, n, x, now, rr}, k, R.UList{R.LWPopN{left, c}}))),
-        upd_now(t, k, KV.hash(k), n, x, now, rr, R.ent.code(KV.entry.at(KV.Val, t, k, KV.hash(k))), R.upd.v(R.UList{R.LWPopN{left, c}}, now, R.ent.live(now, KV.entry.at(KV.Val, t, k, KV.hash(k))))))
+        upd_now_d(R.Db{t, n, x, now, rr}, k, R.UList{R.LWPopN{left, c}}))
     case None{}:
       {==}
 
@@ -5844,7 +6204,7 @@ def zmpop_at_now(m: Maybe<&2, String>, +max: Bool, +c: String, +t: KV.Trie<KV.Va
     case Some{+k}:
       Equal.trans(Nat, R.db.now(R.db_of(R.zmpop.out(k, R.db.upd(R.Db{t, n, x, now, rr}, k, R.UZset{R.ZWPopN{max, c}})))), R.db.now(R.db_of(R.db.upd(R.Db{t, n, x, now, rr}, k, R.UZset{R.ZWPopN{max, c}}))), now,
         Equal.cong(R.Db, Nat, z => R.db.now(z), R.db_of(R.zmpop.out(k, R.db.upd(R.Db{t, n, x, now, rr}, k, R.UZset{R.ZWPopN{max, c}}))), R.db_of(R.db.upd(R.Db{t, n, x, now, rr}, k, R.UZset{R.ZWPopN{max, c}})), zout_db_R(k, R.db.upd(R.Db{t, n, x, now, rr}, k, R.UZset{R.ZWPopN{max, c}}))),
-        upd_now(t, k, KV.hash(k), n, x, now, rr, R.ent.code(KV.entry.at(KV.Val, t, k, KV.hash(k))), R.upd.v(R.UZset{R.ZWPopN{max, c}}, now, R.ent.live(now, KV.entry.at(KV.Val, t, k, KV.hash(k))))))
+        upd_now_d(R.Db{t, n, x, now, rr}, k, R.UZset{R.ZWPopN{max, c}}))
     case None{}:
       {==}
 
@@ -5879,7 +6239,7 @@ def now_go(c: R.Cmd, +t: KV.Trie<KV.Val>, +n: Nat, +x: Nat, +now: Nat, +rr: Mayb
     case R.Peek{k, o}:
       {==}
     case R.Upd{+k, +op}:
-      upd_now(t, k, KV.hash(k), n, x, now, rr, R.ent.code(KV.entry.at(KV.Val, t, k, KV.hash(k))), R.upd.v(op, now, R.ent.live(now, KV.entry.at(KV.Val, t, k, KV.hash(k)))))
+      upd_now_d(R.Db{t, n, x, now, rr}, k, op)
     case R.MSetNx{+ps}:
       msetnx_now(R.pairs.live(ps, now, t), ps, t, n, x, now, rr)
     case R.Rename{+s, +d, +nx}:
@@ -7251,6 +7611,8 @@ def out_split(p: R.Reply & R.Db, -es: List<&2, R.Cmd>) -> {(R.reply_of(p), (es, 
 def upd_split(+db: R.Db, +k: String, +op: R.UpdOp) -> {(R.reply_of(R.exec(R.Upd{k, op}, db)), (upd_eff(db, k, op), R.db_of(R.exec(R.Upd{k, op}, db)))) == A.run(R.Upd{k, op}, db) : R.Reply & (List<&2, R.Cmd> & R.Db)}:
   match db:
     case R.Db{+t, +n, +x, +now, +rr}:
+      %db_upd_eq(t, k, n, x, now, rr, op) : {(R.reply_of(_), (upd_eff(R.Db{t, n, x, now, rr}, k, op), R.db_of(_))) == A.run(R.Upd{k, op}, R.Db{t, n, x, now, rr}) : R.Reply & (List<&2, R.Cmd> & R.Db)}
+      %run_upd_eq(t, k, n, x, now, rr, op) : {(R.reply_of(R.upd.put(t, k, KV.hash(k), n, x, now, rr, R.ent.code(KV.entry.at(KV.Val, t, k, KV.hash(k))), R.upd.v(op, now, R.ent.live(now, KV.entry.at(KV.Val, t, k, KV.hash(k)))))), (upd_eff(R.Db{t, n, x, now, rr}, k, op), R.db_of(R.upd.put(t, k, KV.hash(k), n, x, now, rr, R.ent.code(KV.entry.at(KV.Val, t, k, KV.hash(k))), R.upd.v(op, now, R.ent.live(now, KV.entry.at(KV.Val, t, k, KV.hash(k)))))))) == _ : R.Reply & (List<&2, R.Cmd> & R.Db)}
       out_split(R.upd.put(t, k, KV.hash(k), n, x, now, rr, R.ent.code(KV.entry.at(KV.Val, t, k, KV.hash(k))), R.upd.v(op, now, R.ent.live(now, KV.entry.at(KV.Val, t, k, KV.hash(k))))), A.upd.effect(k, R.ent.code(KV.entry.at(KV.Val, t, k, KV.hash(k))), R.upd.v(op, now, R.ent.live(now, KV.entry.at(KV.Val, t, k, KV.hash(k))))))
 
 def incr_split(+db: R.Db, +k: String, +by: R.Int) -> {(R.reply_of(R.exec(R.IncrBy{k, by}, db)), (upd_eff(db, k, R.UIncr{by}), R.db_of(R.exec(R.IncrBy{k, by}, db)))) == A.run(R.IncrBy{k, by}, db) : R.Reply & (List<&2, R.Cmd> & R.Db)}:
@@ -7597,11 +7959,6 @@ def GoodRange(m: Maybe<&2, KV.Item<KV.Val>>, o: Nat, s: String, v: String) -> Ty
       GoodRangeV(w, o, s, v)
     case None{}:
       Empty
-
-def ch_of(o: R.Out) -> R.Change:
-  match o:
-    case R.Out{r, ch}:
-      ch
 
 # A write of a hash: its change replayed. A hash changed is one the key
 # held (h0), and the write it keeps, replayed on h0, makes the same change:
@@ -7968,6 +8325,7 @@ def hnew_out_ch(r: R.HPut, +ps: List<&2, KV.HPair>) -> {R.hset.ch(True{}, ps, hp
 # a hash changed, made again by its write (HSET or HDEL) at time 0
 def hash_replay(+t: KV.Trie<KV.Val>, +k: String, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>, +r: R.Reply, +op: R.HWrite, +hv: KV.Hash, +h0: KV.Hash, +e: Nat, eq: {KV.entry.at(KV.Val, t, k, KV.hash(k)) == Some{KV.Item{KV.VColl{KV.CHash{h0}}, e}} : Maybe<&2, KV.Item<KV.Val>>}, gh: {ch_of(R.hwrite(op, False{}, h0)) == R.CHash{op, hv} : R.Change}) -> {Laws.final(R.exec_all(A.ch.effect(k, 1n+e, R.CHash{op, hv}), R.Db{t, n, x, 0n, rr})) == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, 1n+e, r, R.CHash{op, hv}))) : R.Db}:
   %fin_cons(R.Upd{k, R.UHash{op}}, Nil{}, R.Db{t, n, x, 0n, rr}) : {_ == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, 1n+e, r, R.CHash{op, hv}))) : R.Db}
+  %db_upd_eq(t, k, n, x, 0n, rr, R.UHash{op}) : {R.db_of(_) == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, 1n+e, r, R.CHash{op, hv}))) : R.Db}
   %Equal.sym(Maybe<&2, KV.Item<KV.Val>>, KV.entry.at(KV.Val, t, k, KV.hash(k)), Some{KV.Item{KV.VColl{KV.CHash{h0}}, e}}, eq) : {R.db_of(R.upd.put(t, k, KV.hash(k), n, x, 0n, rr, R.ent.code(_), R.upd.v(R.UHash{op}, 0n, R.ent.live(0n, _)))) == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, 1n+e, r, R.CHash{op, hv}))) : R.Db}
   %Equal.sym(Maybe<&2, KV.Item<KV.Val>>, R.ent.live(0n, Some{KV.Item{KV.VColl{KV.CHash{h0}}, e}}), Some{KV.Item{KV.VColl{KV.CHash{h0}}, e}}, live0_ent(Some{KV.Item{KV.VColl{KV.CHash{h0}}, e}})) : {R.db_of(R.upd.put(t, k, KV.hash(k), n, x, 0n, rr, 1n+e, R.upd.v(R.UHash{op}, 0n, _))) == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, 1n+e, r, R.CHash{op, hv}))) : R.Db}
   %put_db(t, k, KV.hash(k), n, x, 0n, rr, 1n+e, R.hwrite(op, False{}, h0)) : {_ == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, 1n+e, r, R.CHash{op, hv}))) : R.Db}
@@ -7995,6 +8353,7 @@ def hash_replay_v(w: KV.Val, +t: KV.Trie<KV.Val>, +k: String, +n: Nat, +x: Nat, 
 # entry for the key, by the script of a new hash where it held one
 def hnew_hset(+t: KV.Trie<KV.Val>, +k: String, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>, +r: R.Reply, +ps: List<&2, KV.HPair>, +hv: KV.Hash, eq: {KV.entry.at(KV.Val, t, k, KV.hash(k)) == None{} : Maybe<&2, KV.Item<KV.Val>>}, gn: {R.hset.ch(True{}, ps, hput.h(R.hset.go(ps, R.HPut{KV.hash.empty(), 0n}))) == R.CHashNew{ps, hv} : R.Change}) -> {Laws.final(R.exec_all([R.Upd{k, R.UHash{R.HWSet{ps, False{}}}}], R.Db{t, n, x, 0n, rr})) == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, 0n, r, R.CHashNew{ps, hv}))) : R.Db}:
   %fin_cons(R.Upd{k, R.UHash{R.HWSet{ps, False{}}}}, Nil{}, R.Db{t, n, x, 0n, rr}) : {_ == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, 0n, r, R.CHashNew{ps, hv}))) : R.Db}
+  %db_upd_eq(t, k, n, x, 0n, rr, R.UHash{R.HWSet{ps, False{}}}) : {R.db_of(_) == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, 0n, r, R.CHashNew{ps, hv}))) : R.Db}
   %Equal.sym(Maybe<&2, KV.Item<KV.Val>>, KV.entry.at(KV.Val, t, k, KV.hash(k)), None{}, eq) : {R.db_of(R.upd.put(t, k, KV.hash(k), n, x, 0n, rr, R.ent.code(_), R.upd.v(R.UHash{R.HWSet{ps, False{}}}, 0n, R.ent.live(0n, _)))) == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, 0n, r, R.CHashNew{ps, hv}))) : R.Db}
   %put_db(t, k, KV.hash(k), n, x, 0n, rr, 0n, R.hset.out(R.hset.go(ps, R.HPut{KV.hash.empty(), 0n}), True{}, ps, False{})) : {_ == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, 0n, r, R.CHashNew{ps, hv}))) : R.Db}
   %hset_out_ch(R.hset.go(ps, R.HPut{KV.hash.empty(), 0n}), True{}, ps, False{}) : {R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, 0n, rr, 0n, R.RNull{}, _)) == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, 0n, r, R.CHashNew{ps, hv}))) : R.Db}
@@ -10125,8 +10484,10 @@ def ch_at0(ch: R.Change, +t: KV.Trie<KV.Val>, +k: String, +h: U32, +n: Nat, +x: 
 
 def upd0_ch(+t: KV.Trie<KV.Val>, +k: String, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>, +op: R.UpdOp, +op2: R.UpdOp) -> {ch_of(R.upd.v(op2, 0n, KV.entry.at(KV.Val, t, k, KV.hash(k)))) == ch_of(R.upd.v(op, now, R.ent.live(now, KV.entry.at(KV.Val, t, k, KV.hash(k))))) : R.Change} -> {R.db_of(R.db.upd(R.Db{t, n, x, 0n, rr}, k, op2)) == R.db.at(0n, R.db_of(R.db.upd(R.Db{t, n, x, now, rr}, k, op))) : R.Db}:
   ec =>
-    %Equal.sym(Maybe<&2, KV.Item<KV.Val>>, R.ent.live(0n, KV.entry.at(KV.Val, t, k, KV.hash(k))), KV.entry.at(KV.Val, t, k, KV.hash(k)), live0_ent(KV.entry.at(KV.Val, t, k, KV.hash(k)))) : {R.db_of(R.upd.put(t, k, KV.hash(k), n, x, 0n, rr, R.ent.code(KV.entry.at(KV.Val, t, k, KV.hash(k))), R.upd.v(op2, 0n, _))) == R.db.at(0n, R.db_of(R.db.upd(R.Db{t, n, x, now, rr}, k, op))) : R.Db}
-    %put_db(t, k, KV.hash(k), n, x, 0n, rr, R.ent.code(KV.entry.at(KV.Val, t, k, KV.hash(k))), R.upd.v(op2, 0n, KV.entry.at(KV.Val, t, k, KV.hash(k)))) : {_ == R.db.at(0n, R.db_of(R.db.upd(R.Db{t, n, x, now, rr}, k, op))) : R.Db}
+    %db_upd_eq(t, k, n, x, 0n, rr, op2) : {R.db_of(_) == R.db.at(0n, R.db_of(R.db.upd(R.Db{t, n, x, now, rr}, k, op))) : R.Db}
+    %db_upd_eq(t, k, n, x, now, rr, op) : {R.db_of(R.upd.put(t, k, KV.hash(k), n, x, 0n, rr, R.ent.code(KV.entry.at(KV.Val, t, k, KV.hash(k))), R.upd.v(op2, 0n, R.ent.live(0n, KV.entry.at(KV.Val, t, k, KV.hash(k)))))) == R.db.at(0n, R.db_of(_)) : R.Db}
+    %Equal.sym(Maybe<&2, KV.Item<KV.Val>>, R.ent.live(0n, KV.entry.at(KV.Val, t, k, KV.hash(k))), KV.entry.at(KV.Val, t, k, KV.hash(k)), live0_ent(KV.entry.at(KV.Val, t, k, KV.hash(k)))) : {R.db_of(R.upd.put(t, k, KV.hash(k), n, x, 0n, rr, R.ent.code(KV.entry.at(KV.Val, t, k, KV.hash(k))), R.upd.v(op2, 0n, _))) == R.db.at(0n, R.db_of(R.upd.put(t, k, KV.hash(k), n, x, now, rr, R.ent.code(KV.entry.at(KV.Val, t, k, KV.hash(k))), R.upd.v(op, now, R.ent.live(now, KV.entry.at(KV.Val, t, k, KV.hash(k))))))) : R.Db}
+    %put_db(t, k, KV.hash(k), n, x, 0n, rr, R.ent.code(KV.entry.at(KV.Val, t, k, KV.hash(k))), R.upd.v(op2, 0n, KV.entry.at(KV.Val, t, k, KV.hash(k)))) : {_ == R.db.at(0n, R.db_of(R.upd.put(t, k, KV.hash(k), n, x, now, rr, R.ent.code(KV.entry.at(KV.Val, t, k, KV.hash(k))), R.upd.v(op, now, R.ent.live(now, KV.entry.at(KV.Val, t, k, KV.hash(k))))))) : R.Db}
     %put_db(t, k, KV.hash(k), n, x, now, rr, R.ent.code(KV.entry.at(KV.Val, t, k, KV.hash(k))), R.upd.v(op, now, R.ent.live(now, KV.entry.at(KV.Val, t, k, KV.hash(k))))) : {R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, 0n, rr, R.ent.code(KV.entry.at(KV.Val, t, k, KV.hash(k))), R.RNull{}, ch_of(R.upd.v(op2, 0n, KV.entry.at(KV.Val, t, k, KV.hash(k)))))) == R.db.at(0n, _) : R.Db}
     %Equal.sym(R.Change, ch_of(R.upd.v(op2, 0n, KV.entry.at(KV.Val, t, k, KV.hash(k)))), ch_of(R.upd.v(op, now, R.ent.live(now, KV.entry.at(KV.Val, t, k, KV.hash(k))))), ec) : {R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, 0n, rr, R.ent.code(KV.entry.at(KV.Val, t, k, KV.hash(k))), R.RNull{}, _)) == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, R.ent.code(KV.entry.at(KV.Val, t, k, KV.hash(k))), R.RNull{}, ch_of(R.upd.v(op, now, R.ent.live(now, KV.entry.at(KV.Val, t, k, KV.hash(k)))))))) : R.Db}
     ch_at0(ch_of(R.upd.v(op, now, R.ent.live(now, KV.entry.at(KV.Val, t, k, KV.hash(k))))), t, k, KV.hash(k), n, x, now, rr, R.ent.code(KV.entry.at(KV.Val, t, k, KV.hash(k))), R.RNull{})
@@ -10365,6 +10726,7 @@ def effect_go(c: R.Cmd, +t: KV.Trie<KV.Val>, +n: Nat, +x: Nat, +now: Nat, +rr: M
     case R.Peek{k, o}:
       {==}
     case R.Upd{+k, +op}:
+      %db_upd_eq(t, k, n, x, now, rr, op) : {Laws.final(R.exec_all(eff(R.Upd{k, op}, R.Db{t, n, x, now, rr}), R.Db{t, n, x, 0n, rr})) == R.db.at(0n, R.db_of(_)) : R.Db}
       out_replay(R.upd.v(op, now, R.ent.live(now, KV.entry.at(KV.Val, t, k, KV.hash(k)))), KV.entry.at(KV.Val, t, k, KV.hash(k)), t, k, n, x, now, rr)({==})(upd_good(op, now, KV.entry.at(KV.Val, t, k, KV.hash(k))))
     case R.MSetNx{+ps}:
       msetnx_at0(R.pairs.live(ps, now, t), ps, t, n, x, now, rr)
