@@ -323,11 +323,16 @@ Where performance and proof meet: **batched execution under proved laws.**
    run after a test that left its client in MULTI on one of them.
    What maxmemory left to do (section 3zw): a delete takes the nodes it empties now
    (section 3zz), so the eviction gets within a limit with the keys Redis keeps, but its
-   samples still walk the trie's empty buckets, and an eviction takes ten times Redis's
-   time; a pick that goes down the trie by counts would end that, for RANDOMKEY and
-   SRANDMEMBER too. The compiler no longer copies the nodes a walk of a tree reads when
-   the walk's caller owns the tree and the keyspace shares it (Bend patch 31, section
-   3zza): KEYS, SCAN, RANDOMKEY and the ranges of a sorted set borrow their trees now.
+   samples still walk the trie's empty buckets, and an eviction takes six times Redis's
+   time (ten before the reads of section 3zzc); a pick that goes down the trie by counts
+   would end that, for RANDOMKEY and SRANDMEMBER too. The compiler no longer copies the
+   nodes a walk of a tree reads when the walk's caller owns the tree and the keyspace
+   shares it (Bend patch 31, section 3zza): KEYS, SCAN, RANDOMKEY and the ranges of a
+   sorted set borrow their trees now, and so do the reads of a key's entry (section
+   3zzc), so a read of a collection costs a GET and the read. A write of a collection
+   still copies the path it changes and drops the old one's, as the keyspace holds the
+   old version meanwhile: an update in place (take the value out, change it, put it
+   back) would save both.
 
 After that comes proving the native strings (section 5, step 1): a small piece of
 work that makes the word "verified" much stronger.

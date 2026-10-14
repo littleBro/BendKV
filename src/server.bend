@@ -606,21 +606,17 @@ def tx.unwatch(+n: Nat, t: Tx) -> Tx:
   +x = t
   tx.unwatch.of(tx.is(n, x), x)
 
-# k's entry in database j of ds (there at now or not)
-def ds.entry.of(m: Maybe<&2, R.Db>, +k: String) -> Maybe<&2, KV.Item<KV.Val>>:
-  match m:
-    case Some{+d}:
-      R.db.entry(d, k)
-    case None{}:
-      None{}
-
+# k's entry in database j of ds (there at now or not). The list of the
+# databases is held while R.dbs.entry reads it, so that the reads of the
+# keyspace borrow it.
 def ds.entry.at(focus: Bool, +j: Nat, +k: String, +ds: R.Ds) -> Maybe<&2, KV.Item<KV.Val>>:
   match focus:
     case True{}:
-      R.db.entry(R.ds.focused(ds), k)
+      R.ds.entry(ds, k)
     case False{}:
-      +xs = R.ds.list(ds)
-      ds.entry.of(R.ds.nth(j, xs), k)
+      xs = R.ds.list(ds)
+      m = R.dbs.entry(j, k, xs)
+      m
 
 def ds.entry(+j: Nat, +k: String, +ds: R.Ds) -> Maybe<&2, KV.Item<KV.Val>>:
   ds.entry.at(Nat.is_eq(j, R.ds.index(ds)), j, k, ds)

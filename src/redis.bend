@@ -17413,6 +17413,23 @@ def ds.ent(+ds: Ds, +k: String) -> Maybe<&2, KV.Item<KV.Val>>:
     case Ds{+d, pre, post}:
       db.ent(d, k)
 
+# k's entry in the focus, there at now or not
+def ds.entry(+ds: Ds, +k: String) -> Maybe<&2, KV.Item<KV.Val>>:
+  match ds:
+    case Ds{+d, pre, post}:
+      db.entry(d, k)
+
+# k's entry in the j-th of xs, there at now or not; none when xs has
+# fewer
+def dbs.entry(j: Nat, +k: String, +xs: List<&2, Db>) -> Maybe<&2, KV.Item<KV.Val>>:
+  match j xs:
+    case 0n Con{+x, rest}:
+      db.entry(x, k)
+    case 1n+i Con{x, +rest}:
+      dbs.entry(i, k, rest)
+    case _ Nil{}:
+      None{}
+
 def ds.purge.if(ok: Bool, +k: String, +j: Nat, y: Db, xs: List<&2, Db>, ds: Ds) -> Bool & Ds:
   match ok:
     case True{}:
