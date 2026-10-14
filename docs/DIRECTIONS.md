@@ -329,10 +329,13 @@ Where performance and proof meet: **batched execution under proved laws.**
    nodes a walk of a tree reads when the walk's caller owns the tree and the keyspace
    shares it (Bend patch 31, section 3zza): KEYS, SCAN, RANDOMKEY and the ranges of a
    sorted set borrow their trees now, and so do the reads of a key's entry (section
-   3zzc), so a read of a collection costs a GET and the read. HSET takes its hash out of
-   the keyspace and changes it in place (section 3zzd); the other writes of a collection
-   still copy the path they change and drop the old one's, and each needs a proved test
-   that it changes its collection before it can take it.
+   3zzc), so a read of a collection costs a GET and the read. HSET, and SADD to a set
+   kept as a hashtable, take their collection out of the keyspace and change it in place
+   (sections 3zzd, 3zze); ZADD and ZINCRBY still copy the path they change and drop the
+   old one's, and each needs a proved test that it changes its sorted set before it can
+   take it. SADD to an intset costs twenty times SADD to a hashtable (section 3zze): its
+   members are strings compared as integers along a list, where Redis searches an array
+   of integers by halves.
 
 After that comes proving the native strings (section 5, step 1): a small piece of
 work that makes the word "verified" much stronger.

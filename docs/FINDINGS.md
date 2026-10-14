@@ -4266,6 +4266,29 @@ that took every write's value, with no care for the writes that leave their coll
 as it was, put SADD at −25%, ZADD at −28% and ZINCRBY at −34%: each needs a test before
 the take that the write changes the collection, and its proof.
 
+## 3zze. SADD in place: the set taken out of the keyspace
+
+**What was left** (section 3zzd). SADD of a member new to a set still copied the path it
+changed and the keyspace dropped the old path after: 26,284 instructions on a set of
+100,000 members.
+
+**The change.** An SADD to a set kept as a hashtable that lacks the SADD's first member
+takes the set out of the keyspace, as HSET takes its hash: it adds that member, so it
+writes the set over for sure. An intset is not taken: the test of its member walks its
+list, which cost more than the take saved (511,928 instructions against 449,438).
+
+**The proofs.** Such an SADD adds one or more members, so it answers CMems and writes
+the set over (`takes_mems`, under `takes_over`): the members added to a set leave it no
+smaller, the member it lacks makes it one larger, and a size one or more larger, less
+the old size, is not 0 (`sadd_adds`, `sub_pos`). Two proofs that unfolded the update
+rewrite through `db_upd_eq`.
+
+**What it gives** (`tools/colls.sh`): SADD of a new member 20,273 instructions on a set
+of 100,000 (26,284, −23%), 19,959 on a set of 10 to 410 strings (22,555, −12%); the
+other commands as before. SADD to an intset of 100 to 500 members takes 449,545, twenty
+times SADD to a hashtable: its members are strings, compared as integers at each step of
+a walk along their list, which Redis keeps as an array of integers searched by halves.
+
 ## 4. Where a request's time goes, and hiding the memory waits
 
 With the eight patches, BendKV ran fewer instructions on GET and SET than Redis, missed
