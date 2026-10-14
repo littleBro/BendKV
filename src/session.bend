@@ -1534,7 +1534,8 @@ def time.reply(+now: Nat) -> R.Reply:
 # OBJECT of a key there (none: nil). BendKV keeps a value as its bytes
 # alone, so it answers ENCODING as Redis 7.0.15 encodes a value set whole
 # ("int" for a long, "embstr" up to 44 bytes, else "raw"; a value Redis
-# made by APPEND, SETRANGE or SETBIT is "raw" there whatever it holds),
+# made by APPEND, SETRANGE, SETBIT or a command of HyperLogLogs is "raw"
+# there whatever it holds),
 # REFCOUNT by the integers 0 to 9999 Redis shares (INT_MAX for one, unless
 # maxmemory is set with an LRU or LFU policy, else 1), and IDLETIME and
 # FREQ (obj.use) as a key's that no command used since the server's start:

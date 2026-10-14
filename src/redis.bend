@@ -16275,14 +16275,16 @@ def hll.upd(op: HllOp, m: Maybe<&2, KV.Item<String>>) -> Out:
 # The HyperLogLogs of several keys (PFCOUNT of several, PFMERGE): their
 # registers' maxima so far, or the error of the first key that is not
 # one (or whose opcodes are invalid), in the keys' order
-type PfRead is Type:
+type PfRead is Data:
   PfOk{acc: H.Acc}
   PfErr{r: Reply}
 
 def pf.read.acc(a: H.Acc) -> PfRead:
   match a:
-    case H.Acc{x, d}:
-      PfOk{H.Acc{x, d}}
+    case H.AccS{x}:
+      PfOk{H.AccS{x}}
+    case H.AccD{x}:
+      PfOk{H.AccD{x}}
     case H.AccBad{}:
       PfErr{e_hll_bad()}
 
@@ -16315,10 +16317,8 @@ def pf.read(ks: List<&2, String>, st: PfRead, +t: KV.Trie<KV.Val>, +now: Nat) ->
 
 def pf.count.of(r: PfRead) -> Reply:
   match r:
-    case PfOk{H.Acc{a, d}}:
+    case PfOk{a}:
       hll.reply(H.acc.count(a))
-    case PfOk{H.AccBad{}}:
-      e_hll_bad()
     case PfErr{e}:
       e
 
@@ -16346,19 +16346,17 @@ def pf.merge.put(m: Maybe<&2, String>, +dst: String) -> Cmd:
     case None{}:
       Bad{e_hll_bad()}
 
-def pf.merge.at(v: Maybe<&2, KV.Val>, +dst: String, a: Array<Nat>, dense: Bool) -> Cmd:
+def pf.merge.at(v: Maybe<&2, KV.Val>, +dst: String, a: H.Acc) -> Cmd:
   match v:
     case Some{KV.VStr{+w}}:
-      pf.merge.put(H.merge(w, a, dense, hll.max()), dst)
+      pf.merge.put(H.merge(w, a, hll.max()), dst)
     case _:
-      pf.merge.put(H.merge(H.fresh(), a, dense, hll.max()), dst)
+      pf.merge.put(H.merge(H.fresh(), a, hll.max()), dst)
 
 def pf.merge.of(r: PfRead, +dst: String, +t: KV.Trie<KV.Val>, +now: Nat) -> Cmd:
   match r:
-    case PfOk{H.Acc{a, dense}}:
-      pf.merge.at(KV.read(KV.Val, t, dst, now), dst, a, dense)
-    case PfOk{H.AccBad{}}:
-      Bad{e_hll_bad()}
+    case PfOk{a}:
+      pf.merge.at(KV.read(KV.Val, t, dst, now), dst, a)
     case PfErr{e}:
       Bad{e}
 
