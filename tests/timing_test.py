@@ -227,6 +227,24 @@ def slowlog(port, log):
 
 
 DOCTOR_THP = re.compile(r"- I detected a non zero amount of anonymous huge pages[^\n]*\n")
+DOCTOR_ADVICES = "\nI have a few advices for you:\n\n"
+DOCTOR_NO_SPIKE = ("Dave, no latency spike was observed during the lifetime of this Redis instance, not in the "
+                   "slightest bit. I honestly think you ought to sit down calmly, take a stress pill, and think "
+                   "things over.\n")
+DOCTOR_NO_FIX = ("\nWhile there are latency events logged, I'm not able to suggest any easy fix. Please use the "
+                 "Redis community to get some help, providing this report in your help request.\n")
+
+
+# LATENCY DOCTOR's report as it reads on a machine without transparent
+# huge pages: Redis advises against them when its process has some, and
+# BendKV, whose heap asks for them, never does. Without that advice, a
+# report whose only advice it was ends as one with none ends.
+def doctor_no_thp(doc):
+    doc = DOCTOR_THP.sub("", doc)
+    if not doc.endswith(DOCTOR_ADVICES):
+        return doc
+    events = doc[:-len(DOCTOR_ADVICES)]
+    return events + DOCTOR_NO_FIX if events else DOCTOR_NO_SPIKE
 
 
 def latency(port, log):
@@ -238,8 +256,7 @@ def latency(port, log):
     log("graph", c.cmd("LATENCY", "GRAPH", "command"))
     log("doctor off", c.cmd("LATENCY", "DOCTOR"))
     c.cmd("CONFIG", "SET", "latency-monitor-threshold", "100000")
-    doc = DOCTOR_THP.sub("", c.cmd("LATENCY", "DOCTOR"))
-    log("doctor on", doc.replace("\nI have a few advices for you:\n\n", "") if doc.endswith("advices for you:\n\n") else doc)
+    log("doctor on", doctor_no_thp(c.cmd("LATENCY", "DOCTOR")))
     log("reset", c.cmd("LATENCY", "RESET", "command", "fast-command"))
     c.cmd("CONFIG", "SET", "latency-monitor-threshold", "0")
     c.close()
