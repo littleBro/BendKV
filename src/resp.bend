@@ -485,7 +485,7 @@ def set.of(+s: String, +l: Nat, b: Key) -> One:
 def incr.of(b: Key) -> One:
   match b:
     case KeyOk{k, h, j}:
-      OneOk{B.Req{R.IncrBy{k, R.IPos{1n}}, U32.or(U32.and(h, 1048575), R.stat.mark.incr())}, j}
+      OneOk{B.Req{R.IncrBy{k, R.ByPos{0n, 1n}}, U32.or(U32.and(h, 1048575), R.stat.mark.incr())}, j}
     case KeyMore{n}:
       OneMore{n}
     case KeyBad{msg}:

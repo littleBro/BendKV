@@ -6,9 +6,10 @@ in BITFIELD, wraps to 64), and in forms Redis refuses (+5, 1e5, 0x10,
 " 5", -0, 00, 3.5). BITFIELD reads at the number as an offset, or writes
 it at a small one (a write far out would make a value of up to 512MB).
 BendKV must answer each command, and answer as Redis does,
-but where BendKV is known to differ: INCRBY and DECRBY past 14 digits (its
-integers), and SCAN with a cursor it did not give (the cursor is the place
-in each server's own table). A full SCAN's keys are compared as a set:
+but where BendKV is known to differ: SCAN with a cursor it did not give
+(the cursor is the place in each server's own table). INCRBY, DECRBY and
+HINCRBY add each to 5, to LLONG_MAX and LLONG_MIN, and to a key and a
+field that are not there. A full SCAN's keys are compared as a set:
 each server lists them in the order of its own table; the set the set
 commands take is an intset, which SSCAN answers whole whatever the
 cursor, and SPOP's random picks are compared by how many (SRANDMEMBER
@@ -39,6 +40,8 @@ TEMPL = [
     "HELLO n", "EXPIRE k n", "PEXPIRE k n", "EXPIREAT k n", "PEXPIREAT k n", "SETEX k n v",
     "PSETEX k n v", "SET k v EX n", "SET k v PX n", "SET k v EXAT n", "SET k v PXAT n",
     "GETEX k EX n", "GETEX k PX n", "GETEX k EXAT n", "GETEX k PXAT n", "INCRBY i n", "DECRBY i n",
+    "INCRBY big n", "DECRBY big n", "INCRBY nbig n", "DECRBY nbig n", "INCRBY nope n", "DECRBY nope n",
+    "HINCRBY h big n", "HINCRBY h nbig n", "HINCRBY h g n",
     "GETRANGE k n n", "GETRANGE k 0 n", "SUBSTR k n 1", "SETRANGE k n x", "GETBIT k n",
     "SETBIT k n 1", "BITCOUNT k n n", "BITCOUNT k 0 n BIT", "BITPOS k 1 n", "BITPOS k 1 0 n BIT",
     "SCAN n", "SCAN 0 COUNT n", "CONFIG SET hz n", "CONFIG SET proto-max-bulk-len n",
@@ -59,7 +62,7 @@ TEMPL = [
     "ZMPOP 1 zz MIN COUNT n", "ZINTERCARD n zz", "ZINTERCARD 1 zz LIMIT n", "ZUNION n zz", "ZUNION 1 zz WEIGHTS n",
     "ZUNIONSTORE d n zz", "ZRANGESTORE d zz n n", "ZSCAN zz n", "ZSCAN zz 0 COUNT n", "ZRANDMEMBER nope n",
 ]
-ANSWER_ONLY = ("INCRBY", "DECRBY", "SCAN n")
+ANSWER_ONLY = ("SCAN n",)
 
 
 def norm(t, x):
@@ -75,7 +78,8 @@ def norm(t, x):
 # the state each command starts from on both servers
 RESET = [[b"SELECT", b"0"], [b"SET", b"k", b"hello"], [b"SET", b"i", b"5"], [b"DEL", b"l"],
          [b"RPUSH", b"l", b"a", b"b", b"a", b"c", b"a"], [b"DEL", b"s", b"s2"], [b"SADD", b"s", b"1", b"2", b"3", b"4", b"5"],
-         [b"DEL", b"nope", b"h"], [b"HSET", b"h", b"f", b"1.5"], [b"DEL", b"zz", b"d"],
+         [b"DEL", b"nope", b"h"], [b"HSET", b"h", b"f", b"1.5", b"big", b"9223372036854775807", b"nbig", b"-9223372036854775808"],
+         [b"SET", b"big", b"9223372036854775807"], [b"SET", b"nbig", b"-9223372036854775808"], [b"DEL", b"zz", b"d"],
          [b"ZADD", b"zz", b"1", b"a", b"2", b"b", b"3", b"c", b"4", b"d", b"5", b"e"],
          [b"CONFIG", b"SET", b"proto-max-bulk-len", b"536870912"], [b"CONFIG", b"SET", b"hz", b"10"],
          [b"CONFIG", b"SET", b"maxmemory", b"0"]]
