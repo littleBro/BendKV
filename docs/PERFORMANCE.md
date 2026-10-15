@@ -7353,6 +7353,7 @@ at the end, which keeps it whole until then (a resident memory of the file's siz
 after the start); a scan that gives the entries themselves, rather than keys to look
 up, would take the drops out of SAVE, and of the rewrite of the append-only file too.
 
-**The other commands.** `make perfcheck`: GET 3,421, SET 4,181 and INCR 4,527
-instructions per request (3,422, 4,183 and 4,531 on main, built here); with 100 clients
-in BLPOP, GET 3,523 and SET 4,322, 3.0% and 3.4% above.
+**The other commands.** `make perfcheck`: GET 3,421, SET 4,182 and INCR 4,528
+instructions per request (3,419, 4,183 and 4,527 on main, built here and counted in
+turn); with 100 clients in BLPOP, GET 3,525 and SET 4,310, 3.0% and 3.1% above (main
+3.1% and 3.4%).
