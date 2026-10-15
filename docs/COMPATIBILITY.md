@@ -316,7 +316,8 @@ BendKV starts as `redis-server` starts, with the same command line and configura
 file, so the next step is the suite's own mode with BendKV in place of
 `src/redis-server`. Until then BendKV's own tests cover part of that ground: the start
 (`tests/start_test.py`, against `redis-server`), restarts from the append-only file
-(`tests/aof_test.py`), and its rewrite (`tests/rewrite_test.py`: BGREWRITEAOF's replies
+(`tests/aof_test.py`, and after kills under load: `tests/crash_test.py`), and its
+rewrite (`tests/rewrite_test.py`: BGREWRITEAOF's replies
 and INFO's fields against Redis's, the rewritten file against Redis's base, writes during a
 rewrite, BendKV and Redis started from the new file; Redis's unit/aofrw is tagged
 `external:skip`, and most of it needs `DEBUG LOADAOF` and `CONFIG SET appendonly yes`).
@@ -340,10 +341,16 @@ registry, each run against a server started for it, in a directory of its own:
 A client's suite is written for the newest Redis: its tests of versions after 7.0 skip
 themselves (go-redis is told the server is 7.0), and of the rest what counts is what
 Redis 7.0.15 passes. A test that fails runs again up to twice before it counts as
-failed, in both suites. CI runs the three suites on every pull request, in three jobs
+failed, in both suites; one that passes on BendKV only after such a rerun, where Redis
+passes it at the first attempt, is reported (a race in BendKV passes so), and from
+2026-11-15 on it counts as failed. CI runs the three suites on every pull request,
+in three jobs
 after `build`: a test Redis passes that BendKV fails, and that is not among the known
 failures of `tools/data/clients.json`, fails the job; a known failure that passes is
 reported, to be taken off the list.
+Each known failure is kept with the reason it fails for (the command BendKV does not
+have, as "unknown command 'XADD'", or the line of another error, its numbers as `#`),
+and one that fails for another reason fails the job too.
 
 ```bash
 make clients                       # the three suites, against Redis and build/bendkv
