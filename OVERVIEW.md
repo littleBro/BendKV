@@ -930,11 +930,10 @@ The translation the kernel reads can be dumped with
   CI on every pull request): redis-py 8.1.0's tests of its sync and asyncio clients, in
   RESP2 and in RESP3, and go-redis v9.23.0's specs, in RESP3, each against Redis 7.0.15
   and against BendKV, each on a server started for it, without their tests of modules,
-  clusters, sentinels and TLS. Of the tests Redis passes, BendKV passes 2,513 of 2,753 in
-  redis-py, the same tests in RESP2 and in RESP3, and 408 of 460 in go-redis; every other
-  one fails on what BendKV does not have (Lua, streams, ACL, the
-  slow log, CLIENT TRACKING, and COMMAND's entries of those), none on a
-  command BendKV has. A test Redis passes that BendKV fails, and that is not among the
+  clusters, sentinels and TLS. Of the tests Redis passes, BendKV passes 2,525 of 2,753 in
+  redis-py, the same tests in RESP2 and in RESP3, and 409 of 460 in go-redis; every other
+  one fails on what BendKV does not have (Lua, streams, ACL, CLIENT
+  TRACKING, and COMMAND's entries of those), none on a command BendKV has. A test Redis passes that BendKV fails, and that is not among the
   known failures of `tools/data/clients.json`, fails CI.
 - **Differential testing against Redis 7.0.15** (`tests/diff_test.py`). Random streams
   of commands with random binary arguments, pipelines of different lengths, and arity
