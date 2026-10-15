@@ -87,7 +87,8 @@ COMMANDS = {
     "sort_ro": [], "pfadd": [], "pfcount": [], "pfmerge": [], "pfdebug": [], "pfselftest": [],
     "lastsave": [], "role": [], "wait": [], "shutdown": [], "lolwut": [], "geoadd": [],
     "geodist": [], "geohash": [], "geopos": [], "georadius": [], "georadius_ro": [],
-    "georadiusbymember": [], "georadiusbymember_ro": [], "geosearch": [], "geosearchstore": []}
+    "georadiusbymember": [], "georadiusbymember_ro": [], "geosearch": [], "geosearchstore": [],
+    "dump": [], "restore": []}
 
 # Step 1: redis-server -> facts
 # -----------------------------
@@ -383,8 +384,9 @@ SBEGIN, SEND = "# BEGIN gen_commands: stats\n", "# END gen_commands: stats\n"
 # of HyperLogLogs on a value that is none (WRONGTYPE) or whose opcodes
 # are invalid (INVALIDOBJ), PFDEBUG on a key not there or on a
 # subcommand read once the key is found, PFSELFTEST on a check it fails,
-# the commands of GEO on a key of another kind (WRONGTYPE), and the
-# searches on arguments read once their key is found.
+# the commands of GEO on a key of another kind (WRONGTYPE), the
+# searches on arguments read once their key is found, and RESTORE on a
+# key there (BUSYKEY), a time or a payload read once the key is found.
 # (SET's time
 # can overflow too, past 9 * 10^18 ms only: SET is left out, so that a
 # batch of SETs needs no look at its replies.)
@@ -403,7 +405,7 @@ RISKY = {"incr", "decr", "incrby", "decrby", "expire", "pexpire", "setex", "pset
          "zintercard", "zunionstore", "zinterstore", "zdiffstore", "zrangestore", "zmpop",
          "zrandmember", "sort", "sort_ro", "pfadd", "pfcount", "pfmerge", "pfdebug", "pfselftest",
          "geoadd", "geodist", "geohash", "geopos", "georadius", "georadius_ro", "georadiusbymember",
-         "georadiusbymember_ro", "geosearch", "geosearchstore"}
+         "georadiusbymember_ro", "geosearch", "geosearchstore", "restore"}
 
 # BendKV's commands that may be replicated (MAY_REPLICATE in Redis's
 # src/commands/*.json), a flag COMMAND INFO hides: a monitor may not run
