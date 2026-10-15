@@ -17,7 +17,7 @@ Claude Code reads this file only while the repository has no `CLAUDE.md`,
     src/session.bend   connection and server state, whole batches  verified
     src/config.bend    CONFIG GET and SET                          verified
     src/resp.bend, info.bend, command.bend, startup.bend,
-        float.bend, hll.bend, geo.bend, lolwut.bend              tested only
+        float.bend, hll.bend, geo.bend, lolwut.bend, rdb.bend    tested only
     src/server.bend    the shell: actor, connections, AOF I/O, waits,
                        transactions, pub/sub, eviction, rewrite     tested only
     proof/LAWS.bend    the laws: stated by people
