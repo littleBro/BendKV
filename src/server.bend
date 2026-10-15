@@ -528,6 +528,14 @@ def tx.multi(+n: Nat, +t: Tx) -> Bool:
     case TxNone{}:
       False{}
 
+# whether the client of id n is in MULTI, wherever it is in t, or hit
+def tx.in.multi(+t: Tx, +n: Nat, hit: Bool) -> Bool:
+  match t:
+    case TxNone{}:
+      hit
+    case TxOn{+i, +mu, bd, cs, qs, qc, qa, wk, +r}:
+      tx.in.multi(r, n, Bool.or(hit, Bool.and(Nat.is_eq(i, n), mu)))
+
 # acc (newest first) put back in order before t
 def tx.rev(acc: Tx, t: Tx) -> Tx:
   match acc:
@@ -1080,11 +1088,18 @@ type Pz is Data:
 type Mon is Data:
   Mon{id: Nat, back: Chan(Ans), on: Bool}
 
+# the keys that clients heed, the earliest time a client's wait ends, or
+# one before it (0: no client's wait ends), the clients that started to
+# heed keys since the set was made (adds), and how many heeded keys then
+# (base): Heeded keys
+type Hd is Data:
+  Hd{keys: KV.Trie<Nat>, soon: Nat, adds: Nat, base: Nat}
+
 type Cls is Data:
-  Cls{tab: KV.Trie<Cl>, killed: List<&2, Nat>, kills: List<&2, U32>, mons: List<&2, Mon>, pause: Pz, down: Nat}
+  Cls{tab: KV.Trie<Cl>, killed: List<&2, Nat>, kills: List<&2, U32>, mons: List<&2, Mon>, pause: Pz, down: Nat, heed: Hd}
 
 def cls.new() -> Cls:
-  Cls{KV.empty(Cl), Nil{}, Nil{}, Nil{}, PzOff{}, 0n}
+  Cls{KV.empty(Cl), Nil{}, Nil{}, Nil{}, PzOff{}, 0n, Hd{KV.empty(Nat), 0n, 0n, 0n}}
 
 # the bits of Ps's ev that keep the fast way off while a killed client's
 # connection has not ended (the 31st), a client monitors (the 30th),
@@ -1122,23 +1137,23 @@ def dn.bit(+dn: Nat) -> U32:
 
 def cls.bit(+cs: Cls) -> U32:
   match cs:
-    case Cls{tab, +kd, ks, +ms, +pz, +dn}:
+    case Cls{tab, +kd, ks, +ms, +pz, +dn, hd}:
       U32.or(U32.or(U32.or(kill.bit(kd), mon.bit(ms)), pz.bit(pz)), dn.bit(dn))
 
 def cls.get(+id: Nat, +cs: Cls) -> Maybe<&2, Cl>:
   match cs:
-    case Cls{+tab, kd, ks, ms, pz, dn}:
+    case Cls{+tab, kd, ks, ms, pz, dn, hd}:
       KV.get(Cl, tab, Nat.show(id))
 
 def cls.put(+id: Nat, c: Cl, cs: Cls) -> Cls:
   match cs:
-    case Cls{tab, kd, ks, ms, pz, dn}:
-      Cls{KV.set(Cl, tab, Nat.show(id), c), kd, ks, ms, pz, dn}
+    case Cls{tab, kd, ks, ms, pz, dn, hd}:
+      Cls{KV.set(Cl, tab, Nat.show(id), c), kd, ks, ms, pz, dn, hd}
 
 def cls.del(+id: Nat, cs: Cls) -> Cls:
   match cs:
-    case Cls{tab, kd, ks, ms, pz, dn}:
-      Cls{KV.del(Cl, tab, Nat.show(id)), kd, ks, ms, pz, dn}
+    case Cls{tab, kd, ks, ms, pz, dn, hd}:
+      Cls{KV.del(Cl, tab, Nat.show(id)), kd, ks, ms, pz, dn, hd}
 
 # whether xs holds n
 def nats.has(+n: Nat, +xs: List<&2, Nat>) -> Bool:
@@ -1160,21 +1175,21 @@ def nats.drop(+n: Nat, xs: List<&2, Nat>) -> List<&2, Nat>:
 # whether the client of id was killed and its connection has not ended
 def cls.killed(+id: Nat, +cs: Cls) -> Bool:
   match cs:
-    case Cls{tab, +kd, ks, ms, pz, dn}:
+    case Cls{tab, +kd, ks, ms, pz, dn, hd}:
       nats.has(id, kd)
 
 # the client of id's connection ended: out of the registry, and of the
 # killed
 def cls.left(+id: Nat, cs: Cls) -> Cls:
   match cs:
-    case Cls{tab, kd, ks, ms, pz, dn}:
-      Cls{KV.del(Cl, tab, Nat.show(id)), nats.drop(id, kd), ks, ms, pz, dn}
+    case Cls{tab, kd, ks, ms, pz, dn, hd}:
+      Cls{KV.del(Cl, tab, Nat.show(id)), nats.drop(id, kd), ks, ms, pz, dn, hd}
 
 # the fds to shut down taken (at the end of the group)
 def cls.kills(cs: Cls) -> List<&2, U32> & Cls:
   match cs:
-    case Cls{tab, kd, ks, ms, pz, dn}:
-      (ks, Cls{tab, kd, Nil{}, ms, pz, dn})
+    case Cls{tab, kd, ks, ms, pz, dn, hd}:
+      (ks, Cls{tab, kd, Nil{}, ms, pz, dn, hd})
 
 # a client's name, database and protocol set from its connection
 def cl.conn(+cn: S.Conn, c: Cl) -> Cl:
@@ -1256,8 +1271,8 @@ def mons.push(+id: Nat, +out: String, +ms: List<&2, Mon>, px: List<&2, Sigma<&2,
 # the client of id no monitor (RESET, its end, CLIENT KILL)
 def cls.unmon(+id: Nat, cs: Cls) -> Cls:
   match cs:
-    case Cls{tab, kd, ks, ms, pz, dn}:
-      Cls{tab, kd, ks, mons.drop(id, ms), pz, dn}
+    case Cls{tab, kd, ks, ms, pz, dn, hd}:
+      Cls{tab, kd, ks, mons.drop(id, ms), pz, dn, hd}
 
 # Pub/Sub
 # -------
@@ -1331,6 +1346,308 @@ def ps.calm(+pb: Ps) -> Bool:
       U32.is_eq(U32.and(ev, 3825205247), 0)
     case PsOf{+p}:
       ps.calm(p)
+
+# Heeded keys
+# -----------
+# The keys that clients heed: those a client waits on (Blocked clients)
+# or watches (Transactions), in any database, kept with the registry of
+# the clients (heed). While some client waits or watches, a batch of
+# database commands runs the fast way when its client is in no MULTI and
+# none of its commands may write a heeded key, and the clients that wait
+# and watch stay as they were: a command leaves as it was the entry of
+# each key its writes do not name (LAWS.bend, frame), and the keys a
+# command of the database touches for the clients that watch are keys
+# its writes name (Touches), so no client that waits finds what it
+# waits for, and no watched key is touched. Redis looks a key up in
+# blocking_keys and watched_keys as a command writes it. The general way
+# serves the clients that wait only after a command that may make one
+# ready (bg.stir). A key goes in as a client starts to wait on it or
+# watches it, and a tick makes the set anew from the clients that wait
+# and watch then, when one that heeded keys stopped since it was made
+# (heed.tick: a count, which walks the chains without a lookup): until
+# it does, a key that no client heeds any more still sends the batches
+# that write it the general way. With the keys goes the earliest time a
+# client's wait ends (soon): at the end of a group the actor walks the
+# chain of the clients that wait, for those whose time is up, only once
+# that time has passed (grp.end.due), where it walked the chain at the
+# end of every group; Redis keeps the clients that wait in a radix tree
+# by their timeouts.
+
+# The checks below only read what they are lent, and each is a tight
+# loop: a walk of a list tells the next step whether an item so far was
+# one it looks for (hit). A Cmd is laid out in words that hold a string
+# in one constructor and a number in another, and one read out of a
+# list is unpacked with a reference count on each of its strings,
+# whatever reads it (FINDINGS 7): the batch then keeps its keys and
+# values in the database with counts, a word more to read for each. So
+# a batch's commands are read (heed.cmds) only when the hashes of its
+# requests cannot tell (heed.quick, below).
+
+# whether h holds k (KV.code.at: 0 when it does not), or one of ks, or
+# the key of one of ps
+def heed.has(+h: KV.Trie<Nat>, +k: String) -> Bool:
+  Bool.not(Nat.is_eq(KV.code.at(Nat, h, k, KV.hash(k)), 0n))
+
+def heed.keys(+ks: List<&2, String>, +h: KV.Trie<Nat>, hit: Bool) -> Bool:
+  match ks:
+    case Nil{}:
+      hit
+    case Con{+k, +rest}:
+      heed.keys(rest, h, Bool.or(hit, heed.has(h, k)))
+
+def heed.pairs(+ps: List<&2, R.KVPair>, +h: KV.Trie<Nat>, hit: Bool) -> Bool:
+  match ps:
+    case Nil{}:
+      hit
+    case Con{R.KP{+k, v}, +rest}:
+      heed.pairs(rest, h, Bool.or(hit, heed.has(h, k)))
+
+# whether a command may make a client that waits ready, or touch a
+# watched key: one of the connection or of the server (SWAPDB, MOVE and
+# COPY among them; a batch the fast way has none), or one of the
+# database that may write a key of h, one that LAWS.bend's writes names
+# (each key for FLUSHDB). A command of the database that writes must
+# have its case here and there both.
+def heed.cmd(+h: KV.Trie<Nat>, +c: R.Cmd) -> Bool:
+  match c:
+    case R.Set{+k, v}:
+      heed.has(h, k)
+    case R.Del{+ks}:
+      heed.keys(ks, h, False{})
+    case R.IncrBy{+k, by}:
+      heed.has(h, k)
+    case R.MSet{+ps}:
+      heed.pairs(ps, h, False{})
+    case R.FlushDb{}:
+      True{}
+    case R.Upd{+k, op}:
+      heed.has(h, k)
+    case R.MSetNx{+ps}:
+      heed.pairs(ps, h, False{})
+    case R.Rename{+s, +d, nx}:
+      Bool.or(heed.has(h, s), heed.has(h, d))
+    case R.BitOp{op, +d, srcs}:
+      heed.has(h, d)
+    case R.LMove{+s, +d, e}:
+      Bool.or(heed.has(h, s), heed.has(h, d))
+    case R.LMPop{+ks, left, n}:
+      heed.keys(ks, h, False{})
+    case R.SStore{op, +d, srcs}:
+      heed.has(h, d)
+    case R.SMv{+s, +d, m}:
+      Bool.or(heed.has(h, s), heed.has(h, d))
+    case R.ZStore{op, +d, srcs}:
+      heed.has(h, d)
+    case R.ZRangeStore{+d, s, q}:
+      heed.has(h, d)
+    case R.ZMPop{+ks, max, n}:
+      heed.keys(ks, h, False{})
+    case R.Own{o}:
+      True{}
+    case _:
+      False{}
+
+# heed.cmd of each command of cs, or hit
+def heed.cmds(+cs: List<&2, R.Cmd>, +h: KV.Trie<Nat>, hit: Bool) -> Bool:
+  match cs:
+    case Nil{}:
+      hit
+    case Con{+c, +rest}:
+      heed.cmds(rest, h, Bool.or(hit, heed.cmd(h, c)))
+
+# Most batches need no command read: the hash of a request carries its
+# call's code (redis.bend, Statistics), and the hashes of a call of GET,
+# SET and INCR that runs carry the marks the parser writes for them (as
+# the stats of a batch count them). GET writes nothing; SET and INCR
+# write their key alone, their first argument, whose hash is the
+# request's (resp.bend: req.hash, and the parser's ways for the three),
+# so a heeded key they may write is in the bucket of that hash
+# (KV.filled.at). A batch of these alone, none of whose writes has a
+# heeded key in its bucket, goes the fast way unread (heed.quick); any
+# other is read command by command (heed.cmds).
+
+# whether a request may run the fast way unread: a GET, or a SET or INCR
+# (sw) whose key's bucket holds no heeded key
+def heed.quick.sw(sw: Bool, +h: KV.Trie<Nat>, +x: U32) -> Bool:
+  match sw:
+    case True{}:
+      Bool.not(KV.filled.at(Nat, h, x))
+    case False{}:
+      False{}
+
+def heed.quick.one(get: Bool, +h: KV.Trie<Nat>, +m: U32, +x: U32) -> Bool:
+  match get:
+    case True{}:
+      True{}
+    case False{}:
+      heed.quick.sw(Bool.or(U32.is_eq(m, R.stat.mark.set()), U32.is_eq(m, R.stat.mark.incr())), h, x)
+
+# whether every request of hs may run the fast way unread, and ok
+def heed.quick(+hs: List<&2, U32>, +h: KV.Trie<Nat>, ok: Bool) -> Bool:
+  match hs:
+    case Nil{}:
+      ok
+    case Con{+x, +rest}:
+      +m = U32.and(x, 4293918720)
+      heed.quick(rest, h, Bool.and(ok, heed.quick.one(U32.is_eq(m, R.stat.mark.get()), h, m, x)))
+
+# whether a batch writes no heeded key: unread (heed.quick), or read
+def heed.free.of(quick: Bool, +h: KV.Trie<Nat>, +cs: List<&2, R.Cmd>) -> Bool:
+  match quick:
+    case True{}:
+      True{}
+    case False{}:
+      Bool.not(heed.cmds(cs, h, False{}))
+
+def ps.heed.free(+cs: List<&2, R.Cmd>, +hs: List<&2, U32>, +pb: Ps) -> Bool:
+  match pb:
+    case Ps{reg, ev, px, Cls{tab, kd, ks, ms, pz, dn, Hd{+hk, sn, ad, bs}}, own}:
+      heed.free.of(heed.quick(hs, hk, True{}), hk, cs)
+    case PsOf{+p}:
+      ps.heed.free(cs, hs, p)
+
+# whether a batch of database commands may run the fast way while some
+# client waits or watches (group_job): its client may run it so, is in
+# no MULTI (looked for only while some client has a transaction or
+# watches keys) and none of its commands may write a heeded key
+def heed.ok.of(ready: Bool, +n: Nat, +t: Tx, +cs: List<&2, R.Cmd>, +hs: List<&2, U32>, +pb: Ps) -> Bool:
+  match ready t:
+    case False{} _:
+      False{}
+    case True{} TxNone{}:
+      ps.heed.free(cs, hs, pb)
+    case True{} t0:
+      Bool.and(Bool.not(tx.in.multi(t0, n, False{})), ps.heed.free(cs, hs, pb))
+
+def heed.ok(+cn: S.Conn, +srv: S.Srv, +t: Tx, +cs: List<&2, R.Cmd>, +hs: List<&2, U32>, +pb: Ps) -> Bool:
+  heed.ok.of(S.ready(cn, srv), S.conn.id(cn), t, cs, hs, pb)
+
+def ps.heed.stir(+c: R.Cmd, +pb: Ps) -> Bool:
+  match pb:
+    case Ps{reg, ev, px, Cls{tab, kd, ks, ms, pz, dn, Hd{+hk, sn, ad, bs}}, own}:
+      heed.cmd(hk, c)
+    case PsOf{+p}:
+      ps.heed.stir(c, p)
+
+# h with the keys ks, with those the clients of ws wait on, and with
+# those the clients of t watch
+def heed.put(+ks: List<&2, String>, h: KV.Trie<Nat>) -> KV.Trie<Nat>:
+  match ks:
+    case Nil{}:
+      h
+    case Con{+k, +rest}:
+      heed.put(rest, KV.set(Nat, h, k, 0n))
+
+def heed.waits(+ws: Waits, h: KV.Trie<Nat>) -> KV.Trie<Nat>:
+  match ws:
+    case WaitNone{}:
+      h
+    case WaitOn{id, back, c0, c1, +b, argv, code, db, until, cmds, codes, av, +rest}:
+      heed.waits(rest, heed.put(S.blk.keys(b), h))
+
+def heed.wks(+ks: List<&2, Wk>, h: KV.Trie<Nat>) -> KV.Trie<Nat>:
+  match ks:
+    case Nil{}:
+      h
+    case Con{Wk{d, +k, old}, +rest}:
+      heed.wks(rest, KV.set(Nat, h, k, 0n))
+
+def heed.tx(+t: Tx, h: KV.Trie<Nat>) -> KV.Trie<Nat>:
+  match t:
+    case TxNone{}:
+      h
+    case TxOn{i, mu, bd, cs, qs, qc, qa, +wk, +r}:
+      heed.tx(r, heed.wks(wk, h))
+
+# the earlier of two ends of a wait (0: none), and the earliest of the
+# clients of ws, s or earlier; whether the time of a client may be up at
+# now (some end before now: waits.late)
+def soon.min(+a: Nat, +b: Nat) -> Nat:
+  Bool.pick(Nat, Bool.or(Nat.is_eq(a, 0n), Bool.and(Nat.is_lt(0n, b), Nat.is_lt(b, a))), b, a)
+
+def waits.soon(+ws: Waits, +s: Nat) -> Nat:
+  match ws:
+    case WaitNone{}:
+      s
+    case WaitOn{id, back, c0, c1, b, argv, code, db, +until, cmds, codes, av, +rest}:
+      waits.soon(rest, soon.min(s, until))
+
+def waits.due(+now: Nat, +soon: Nat) -> Bool:
+  Bool.and(Nat.is_lt(0n, soon), Nat.is_lt(soon, now))
+
+def ps.soon(+pb: Ps) -> Nat:
+  match pb:
+    case Ps{reg, ev, px, Cls{tab, kd, ks, ms, pz, dn, Hd{hk, +sn, ad, bs}}, own}:
+      sn
+    case PsOf{+p}:
+      ps.soon(p)
+
+# a client that starts to heed keys xs, its wait ending at until (0:
+# never): the keys put in the set, the earliest end put anew, and the
+# client counted among those that started to heed keys since the set was
+# made
+def ps.heed.add(+xs: List<&2, String>, +until: Nat, pb: Ps) -> Ps:
+  match pb:
+    case Ps{reg, ev, px, Cls{tab, kd, ks, ms, pz, dn, Hd{hk, +sn, ad, bs}}, own}:
+      Ps{reg, ev, px, Cls{tab, kd, ks, ms, pz, dn, Hd{heed.put(xs, hk), soon.min(sn, until), 1n+ad, bs}}, own}
+    case PsOf{p}:
+      ps.heed.add(xs, until, p)
+
+def ps.soon.set(+s: Nat, pb: Ps) -> Ps:
+  match pb:
+    case Ps{reg, ev, px, Cls{tab, kd, ks, ms, pz, dn, Hd{hk, sn, ad, bs}}, own}:
+      Ps{reg, ev, px, Cls{tab, kd, ks, ms, pz, dn, Hd{hk, s, ad, bs}}, own}
+    case PsOf{p}:
+      ps.soon.set(s, p)
+
+# how many clients heed keys: those that wait on keys (a pop; not one
+# the pause holds back, nor WAIT's) and those that watch some
+def blk.pops(+b: S.Blk) -> Bool:
+  match b:
+    case S.BlkPop{c, form, ms}:
+      True{}
+    case _:
+      False{}
+
+def heed.n.waits(+ws: Waits, +n: Nat) -> Nat:
+  match ws:
+    case WaitNone{}:
+      n
+    case WaitOn{id, back, c0, c1, +b, argv, code, db, until, cmds, codes, av, +rest}:
+      heed.n.waits(rest, Nat.add(n, Bool.pick(Nat, blk.pops(b), 1n, 0n)))
+
+def wks.some(+ks: List<&2, Wk>) -> Bool:
+  match ks:
+    case Nil{}:
+      False{}
+    case Con{w, rest}:
+      True{}
+
+def heed.n.tx(+t: Tx, +n: Nat) -> Nat:
+  match t:
+    case TxNone{}:
+      n
+    case TxOn{i, mu, bd, cs, qs, qc, qa, +wk, +r}:
+      heed.n.tx(r, Nat.add(n, Bool.pick(Nat, wks.some(wk), 1n, 0n)))
+
+# at a tick, the set made anew from the clients that wait and watch, but
+# when as many heed keys as did when it was made, and as started to since
+# (live: how many do): then no client that heeded keys stopped, and the
+# set holds no key that none heeds (a client that started to heed keys
+# while another stopped may leave its keys in it until a later tick)
+def heed.tick(same: Bool, +live: Nat, +ws: Waits, +t: Tx, hd: Hd) -> Hd:
+  match same:
+    case True{}:
+      hd
+    case False{}:
+      Hd{heed.tx(t, heed.waits(ws, KV.empty(Nat))), waits.soon(ws, 0n), 0n, live}
+
+def ps.heed.tick(+live: Nat, +ws: Waits, +t: Tx, pb: Ps) -> Ps:
+  match pb:
+    case Ps{reg, ev, px, Cls{tab, kd, ks, ms, pz, dn, Hd{hk, sn, +ad, +bs}}, own}:
+      Ps{reg, ev, px, Cls{tab, kd, ks, ms, pz, dn, heed.tick(Nat.is_eq(live, Nat.add(ad, bs)), live, ws, t, Hd{hk, sn, ad, bs})}, own}
+    case PsOf{p}:
+      ps.heed.tick(live, ws, t, p)
 
 # Each walk of a list below is told whether its first item is the one
 # it looks for (hit), as the item before it is looked at.
@@ -1757,36 +2074,36 @@ def ps.cls(+pb: Ps) -> Cls:
 # batch left them, and a line to the others
 def ps.mon.any(+pb: Ps) -> Bool:
   match pb:
-    case Ps{reg, ev, px, Cls{tab, kd, ks, +ms, pz, dn}, own}:
+    case Ps{reg, ev, px, Cls{tab, kd, ks, +ms, pz, dn, hd}, own}:
       Bool.not(U32.is_eq(mon.bit(ms), 0))
     case PsOf{+p}:
       ps.mon.any(p)
 
 def ps.mon.is(+id: Nat, +pb: Ps) -> Bool:
   match pb:
-    case Ps{reg, ev, px, Cls{tab, kd, ks, +ms, pz, dn}, own}:
+    case Ps{reg, ev, px, Cls{tab, kd, ks, +ms, pz, dn, hd}, own}:
       mons.has(id, ms)
     case PsOf{+p}:
       ps.mon.is(id, p)
 
 def ps.mon.add(+id: Nat, +back: Chan(Ans), pb: Ps) -> Ps:
   match pb:
-    case Ps{reg, ev, px, Cls{tab, kd, ks, ms, pz, dn}, own}:
-      Ps{reg, ev, px, Cls{tab, kd, ks, List.append(&2, Mon, ms, [Mon{id, back, True{}}]), pz, dn}, own}
+    case Ps{reg, ev, px, Cls{tab, kd, ks, ms, pz, dn, hd}, own}:
+      Ps{reg, ev, px, Cls{tab, kd, ks, List.append(&2, Mon, ms, [Mon{id, back, True{}}]), pz, dn, hd}, own}
     case PsOf{p}:
       ps.mon.add(id, back, p)
 
 def ps.mon.mute(+id: Nat, +on: Bool, pb: Ps) -> Ps:
   match pb:
-    case Ps{reg, ev, px, Cls{tab, kd, ks, ms, pz, dn}, own}:
-      Ps{reg, ev, px, Cls{tab, kd, ks, mons.mute(id, on, ms), pz, dn}, own}
+    case Ps{reg, ev, px, Cls{tab, kd, ks, ms, pz, dn, hd}, own}:
+      Ps{reg, ev, px, Cls{tab, kd, ks, mons.mute(id, on, ms), pz, dn, hd}, own}
     case PsOf{p}:
       ps.mon.mute(id, on, p)
 
 def ps.mon.push(+id: Nat, +out: String, pb: Ps) -> Ps:
   match pb:
-    case Ps{reg, ev, px, Cls{tab, kd, ks, +ms, pz, dn}, own}:
-      Ps{reg, ev, mons.push(id, out, ms, px), Cls{tab, kd, ks, ms, pz, dn}, own}
+    case Ps{reg, ev, px, Cls{tab, kd, ks, +ms, pz, dn, hd}, own}:
+      Ps{reg, ev, mons.push(id, out, ms, px), Cls{tab, kd, ks, ms, pz, dn, hd}, own}
     case PsOf{p}:
       ps.mon.push(id, out, p)
 
@@ -1800,7 +2117,7 @@ def cl.addr.or(m: Maybe<&2, Cl>) -> String:
 
 def ps.addr(+id: Nat, +pb: Ps) -> String:
   match pb:
-    case Ps{reg, ev, px, Cls{+tab, kd, ks, ms, pz, dn}, own}:
+    case Ps{reg, ev, px, Cls{+tab, kd, ks, ms, pz, dn, hd}, own}:
       cl.addr.or(KV.get(Cl, tab, Nat.show(id)))
     case PsOf{+p}:
       ps.addr(id, p)
@@ -1809,8 +2126,8 @@ def ps.addr(+id: Nat, +pb: Ps) -> String:
 # and the fast way off until its connection ends
 def ps.kill(+id: Nat, +fd: U32, pb: Ps) -> Ps:
   match pb:
-    case Ps{reg, ev, px, Cls{tab, kd, ks, ms, pz, dn}, own}:
-      Ps{reg, U32.or(ev, 2147483648), px, Cls{KV.del(Cl, tab, Nat.show(id)), id <> kd, fd <> ks, ms, pz, dn}, own}
+    case Ps{reg, ev, px, Cls{tab, kd, ks, ms, pz, dn, hd}, own}:
+      Ps{reg, U32.or(ev, 2147483648), px, Cls{KV.del(Cl, tab, Nat.show(id)), id <> kd, fd <> ks, ms, pz, dn, hd}, own}
     case PsOf{p}:
       ps.kill(id, fd, p)
 
@@ -2063,7 +2380,7 @@ def mem.need(+pb: Ps) -> Nat:
 # the pause (The pause)
 def ps.pz(+pb: Ps) -> Pz:
   match pb:
-    case Ps{reg, ev, px, Cls{tab, kd, ks, ms, +pz, dn}, own}:
+    case Ps{reg, ev, px, Cls{tab, kd, ks, ms, +pz, dn, hd}, own}:
       pz
     case PsOf{+p}:
       ps.pz(p)
@@ -2073,15 +2390,15 @@ def ps.pz(+pb: Ps) -> Pz:
 # save it could not make (SAVE FORCE); and the group with one asked for
 def ps.down(+pb: Ps) -> Nat:
   match pb:
-    case Ps{reg, ev, px, Cls{tab, kd, ks, ms, pz, +dn}, own}:
+    case Ps{reg, ev, px, Cls{tab, kd, ks, ms, pz, +dn, hd}, own}:
       dn
     case PsOf{+p}:
       ps.down(p)
 
 def ps.down.set(+d: Nat, pb: Ps) -> Ps:
   match pb:
-    case Ps{reg, ev, px, Cls{tab, kd, ks, ms, pz, dn}, own}:
-      Ps{reg, U32.or(U32.and(ev, 4269801471), dn.bit(d)), px, Cls{tab, kd, ks, ms, pz, d}, own}
+    case Ps{reg, ev, px, Cls{tab, kd, ks, ms, pz, dn, hd}, own}:
+      Ps{reg, U32.or(U32.and(ev, 4269801471), dn.bit(d)), px, Cls{tab, kd, ks, ms, pz, d, hd}, own}
     case PsOf{p}:
       ps.down.set(d, p)
 
@@ -2987,6 +3304,31 @@ def bg.serve(g: LRun) -> LRun:
     case LHeld{h}:
       LHeld{h}
 
+# after a command c, the clients that wait served while one is ready,
+# when some client waits and c may have made one ready (stir: Heeded
+# keys): before it none was, and a command that does not stir leaves
+# each entry they wait on as it was. Whether c stirs is asked before c
+# runs, which changes neither the clients that wait nor the heeded keys:
+# c is lent to the check, then given to the run (bg.one.serve)
+def bg.serve.if(on: Bool, g: LRun) -> LRun:
+  match on:
+    case True{}:
+      bg.serve(g)
+    case False{}:
+      g
+
+def bg.stir(+c: R.Cmd, +g: LRun) -> Bool:
+  match g:
+    case LRun{rs, es, conn, srv, ds, WaitNone{}, up, tx, pb}:
+      False{}
+    case LRun{rs, es, conn, srv, ds, ws, up, tx, +pb}:
+      ps.heed.stir(c, pb)
+    case LHeld{h}:
+      False{}
+
+def bg.one.serve(stir: Bool, c: R.Cmd, code: Nat, g: LRun) -> LRun:
+  bg.serve.if(stir, bg.one(c, code, g))
+
 # the size of a blocking command's arguments, its name's too: Redis's
 # argv-mem of a client while it waits
 def wait.argv(+c: R.Cmd) -> Nat:
@@ -3003,8 +3345,9 @@ def bg.wait(+id: Nat, +back: Chan(Ans), b: S.Blk, +c: R.Cmd, +code: Nat, rest: L
   match g:
     case LRun{rs, es, +conn, +srv, +ds, ws, up, tx, pb}:
       +x = b
-      +ws2 = waits.add(ws, WaitOn{id, Chan.mark(Ans, back, U32.from_nat(code), R.ds.now(ds)), conn, S.next_conn(False{}, c, conn, srv), x, wait.argv(c), code, S.conn.db(conn), S.blk.until(R.ds.now(ds), S.blk.ms(x)), rest, more, av, WaitNone{}})
-      LHeld{LRun{rs, es, conn, waits.count(ws2, gen.count(srv, code, Nil{})), ds, ws2, up, tx, pb}}
+      +u = S.blk.until(R.ds.now(ds), S.blk.ms(x))
+      +ws2 = waits.add(ws, WaitOn{id, Chan.mark(Ans, back, U32.from_nat(code), R.ds.now(ds)), conn, S.next_conn(False{}, c, conn, srv), x, wait.argv(c), code, S.conn.db(conn), u, rest, more, av, WaitNone{}})
+      LHeld{LRun{rs, es, conn, waits.count(ws2, gen.count(srv, code, Nil{})), ds, ws2, up, tx, ps.heed.add(S.blk.keys(x), u, pb)}}
     case LHeld{h}:
       LHeld{h}
 
@@ -3414,7 +3757,8 @@ def bg.unwatch(+id: Nat, g: LRun) -> LRun:
 def bg.watch(+id: Nat, ks: List<&2, String>, g: LRun) -> LRun:
   match g:
     case LRun{rs, es, +conn, srv, +ds, ws, up, tx, pb}:
-      LRun{rs, es, conn, srv, ds, ws, up, tx.watch(id, S.conn.db(conn), ks, ds, tx), pb}
+      +x = ks
+      LRun{rs, es, conn, srv, ds, ws, up, tx.watch(id, S.conn.db(conn), x, ds, tx), ps.heed.add(x, 0n, pb)}
     case LHeld{h}:
       LHeld{h}
 
@@ -4147,7 +4491,7 @@ def cls.of(ks: List<&2, String>, +tab: KV.Trie<Cl>, acc: List<&2, Cl>) -> List<&
 
 def cls.all(+cs: Cls) -> List<&2, Cl>:
   match cs:
-    case Cls{+tab, kd, ks, ms, pz, dn}:
+    case Cls{+tab, kd, ks, ms, pz, dn, hd}:
       cls.sort(cls.of(KV.keys(Cl, tab, 0n), tab, Nil{}))
 
 # a client's type as CLIENT LIST TYPE and CLIENT KILL TYPE read it: 3
@@ -4491,16 +4835,16 @@ def pz.with(p: Pz, +all: Bool, +end: Nat) -> Pz:
 
 def ps.pause(+all: Bool, +end: Nat, pb: Ps) -> Ps:
   match pb:
-    case Ps{reg, ev, px, Cls{tab, kd, ks, ms, pz, dn}, own}:
+    case Ps{reg, ev, px, Cls{tab, kd, ks, ms, pz, dn, hd}, own}:
       +p = pz.with(pz, all, end)
-      Ps{reg, U32.or(ev, pz.bit(p)), px, Cls{tab, kd, ks, ms, p, dn}, own}
+      Ps{reg, U32.or(ev, pz.bit(p)), px, Cls{tab, kd, ks, ms, p, dn, hd}, own}
     case PsOf{p}:
       ps.pause(all, end, p)
 
 def ps.unpause(pb: Ps) -> Ps:
   match pb:
-    case Ps{reg, ev, px, Cls{tab, kd, ks, ms, pz, dn}, own}:
-      Ps{reg, U32.and(ev, 4261412863), px, Cls{tab, kd, ks, ms, PzOff{}, dn}, own}
+    case Ps{reg, ev, px, Cls{tab, kd, ks, ms, pz, dn, hd}, own}:
+      Ps{reg, U32.and(ev, 4261412863), px, Cls{tab, kd, ks, ms, PzOff{}, dn, hd}, own}
     case PsOf{p}:
       ps.unpause(p)
 
@@ -4810,7 +5154,8 @@ def bg.down(fail: Bool, +save: Bool, +c: R.Cmd, +code: Nat, g: LRun) -> LRun:
 def bg.cmd(+id: Nat, +back: Chan(Ans), +inb: Nat, sh: Sh, +c: R.Cmd, +code: Nat, rest: List<&2, R.Cmd>, more: List<&2, Nat>, +a: Av, +ar: Av, g: LRun) -> LRun:
   match sh:
     case ShRun{}:
-      bg.serve(bg.one(c, code, g))
+      +l = g
+      bg.one.serve(bg.stir(c, l), c, code, l)
     case ShWait{b}:
       bg.wait(id, back, b, c, code, rest, more, ar, g)
     case ShUnblock{+n, +e}:
@@ -4969,7 +5314,22 @@ def ups.fuel() -> Nat:
 
 def grp.late(p: Waits & List<&2, Up>, outs: List<&2, Sigma<&2, &2, Chan(Ans), _ => Ans>>, es: List<&2, A.Ent>, srv: S.Srv, ds: R.Ds, tx: Tx, pb: Ps) -> Grp:
   (+ws, up) = p
-  bg.ups(ups.fuel(), Grp{outs, es, waits.count(ws, srv), ds, ws, up, tx, pb})
+  bg.ups(ups.fuel(), Grp{outs, es, waits.count(ws, srv), ds, ws, up, tx, ps.soon.set(waits.soon(ws, 0n), pb)})
+
+# the end of a group while some client waits: the clients whose time is
+# up unblocked when one's may be (due: before now the earliest end, kept
+# with the heeded keys: Heeded keys), the earliest end found anew; else
+# the chain as it was, without a walk of it, and the unblocked clients'
+# batches on
+def grp.end.due(due: Bool, +now: Nat, outs: List<&2, Sigma<&2, &2, Chan(Ans), _ => Ans>>, es: List<&2, A.Ent>, srv: S.Srv, ds: R.Ds, ws: Waits, up: List<&2, Up>, tx: Tx, pb: Ps) -> Grp:
+  match due up:
+    case True{} u0:
+      +w = ws
+      grp.late(waits.expire(w, waits.late(now, w), now, WaitNone{}, u0), outs, es, srv, ds, tx, pb)
+    case False{} Nil{}:
+      Grp{outs, es, srv, ds, ws, Nil{}, tx, pb}
+    case False{} Con{u, more}:
+      bg.ups(ups.fuel(), Grp{outs, es, srv, ds, ws, u <> more, tx, pb})
 
 # the end of a group: the clients whose time is up unblocked, then the
 # unblocked clients' batches go on; nothing after a SHUTDOWN that stops
@@ -4980,9 +5340,9 @@ def grp.end.go(g: Grp) -> Grp:
       Grp{outs, es, srv, ds, WaitNone{}, Nil{}, tx, pb}
     case Grp{outs, es, srv, ds, WaitNone{}, Con{u, more}, tx, pb}:
       bg.ups(ups.fuel(), Grp{outs, es, srv, ds, WaitNone{}, u <> more, tx, pb})
-    case Grp{outs, es, srv, +ds, +ws, up, tx, pb}:
+    case Grp{outs, es, srv, +ds, ws, up, tx, +pb}:
       +now = R.ds.now(ds)
-      grp.late(waits.expire(ws, waits.late(now, ws), now, WaitNone{}, up), outs, es, srv, ds, tx, pb)
+      grp.end.due(waits.due(now, ps.soon(pb)), now, outs, es, srv, ds, ws, up, tx, pb)
 
 def grp.down(+g: Grp) -> Nat:
   match g:
@@ -5864,13 +6224,36 @@ def fast(+log: Bool, ready: Bool, outs: List<&2, Sigma<&2, &2, Chan(Ans), _ => A
       +p = pb
       bg.used(ps.lfu(p), cn, back, inb, raw, cmds, hs, Grp{outs, es, srv, ds, WaitNone{}, up, TxNone{}, p})
 
+# a batch run the fast way while some client waits or watches: the
+# clients that wait and watch as they were (the fast way gives none)
+def grp.keep(ws: Waits, tx: Tx, g: Grp) -> Grp:
+  match g:
+    case Grp{outs, es, srv, ds, w0, up, t0, pb}:
+      Grp{outs, es, srv, ds, ws, up, tx, pb}
+
+# a batch of database commands while some client waits or watches: the
+# fast way when its client may run it so, is in no MULTI and writes no
+# heeded key (ok: Heeded keys), else the general way
+def group.heeded(ok: Bool, +log: Bool, ws: Waits, tx: Tx, outs: List<&2, Sigma<&2, &2, Chan(Ans), _ => Ans>>, es: List<&2, A.Ent>, +cn: S.Conn, cmds: List<&2, R.Cmd>, +hs: List<&2, U32>, back: Chan(Ans), +tl: U32, +inb: Nat, raw: String, +srv: S.Srv, ds: R.Ds, up: List<&2, Up>, pb: Ps) -> Grp:
+  match ok:
+    case True{}:
+      grp.keep(ws, tx, fast(log, True{}, outs, es, cn, cmds, hs, back, tl, inb, raw, srv, ds, up, pb))
+    case False{}:
+      job.slow(cn, back, inb, raw, cmds, hs, Grp{outs, es, srv, ds, ws, up, tx, pb})
+
 # a batch from a client with no subscription: the fast way while no
-# client waits, none has a transaction or watches a key and no keyspace
-# event is to be sent (calm)
+# keyspace event is to be sent (calm) and no client waits, has a
+# transaction or watches a key; while some client does, the fast way
+# for a batch of database commands that writes no heeded key, from a
+# client in no MULTI (group.heeded)
 def group_job(+log: Bool, job: B.Job, ws: Waits, tx: Tx, calm: Bool, outs: List<&2, Sigma<&2, &2, Chan(Ans), _ => Ans>>, es: List<&2, A.Ent>, +cn: S.Conn, back: Chan(Ans), +tl: U32, +inb: Nat, raw: String, +srv: S.Srv, ds: R.Ds, up: List<&2, Up>, pb: Ps) -> Grp:
   match job ws tx calm:
     case B.Plain{cmds, hs} WaitNone{} TxNone{} True{}:
       fast(log, S.ready(cn, srv), outs, es, cn, cmds, hs, back, tl, inb, raw, srv, ds, up, pb)
+    case B.Plain{+cmds, +hs} w t True{}:
+      +x = t
+      +p = pb
+      group.heeded(heed.ok(cn, srv, x, cmds, hs, p), log, w, x, outs, es, cn, cmds, hs, back, tl, inb, raw, srv, ds, up, p)
     case B.Plain{cmds, +hs} w t c:
       job.slow(cn, back, inb, raw, cmds, hs, Grp{outs, es, srv, ds, w, up, t, pb})
     case B.Mixed{cmds, +hs} w t c:
@@ -5940,6 +6323,14 @@ def group.tick.if(stop: Bool, on: Bool, over: Bool, outs: List<&2, Sigma<&2, &2,
     case False{}:
       group.tick(on, over, outs, es, S.srv.tick(srv, ms), ds, ws, up, tx, pb)
 
+# at a tick, the heeded keys made anew from the clients that wait and
+# watch, when one that heeded keys stopped since they were made
+# (heed.tick: Heeded keys)
+def grp.heed(g: Grp) -> Grp:
+  match g:
+    case Grp{outs, es, srv, ds, +ws, up, +tx, pb}:
+      Grp{outs, es, srv, ds, ws, up, tx, ps.heed.tick(heed.n.tx(tx, heed.n.waits(ws, 0n)), ws, tx, pb)}
+
 def group_req(+log: Bool, q: Req, g: Grp) -> Grp:
   match q g:
     case Req{+cn, job, back, +tl, +inb, raw} Grp{outs, es, srv, ds, ws, up, tx, +pb}:
@@ -5950,7 +6341,7 @@ def group_req(+log: Bool, q: Req, g: Grp) -> Grp:
       Grp{outs, es, S.srv.live(srv, live), ds, ws, up, tx, pb}
     case Tick{+ms} Grp{outs, es, srv, +ds, ws, up, tx, +pb}:
       +p = ps.pz(pb)
-      group.tick.if(Nat.is_le(2n, ps.down(pb)), pz.on(p), pz.over(p, R.ds.now(ds)), outs, es, srv, ms, ds, ws, up, tx, pb)
+      grp.heed(group.tick.if(Nat.is_le(2n, ps.down(pb)), pz.on(p), pz.over(p, R.ds.now(ds)), outs, es, srv, ms, ds, ws, up, tx, pb))
     case Oops{} Grp{outs, es, srv, ds, ws, up, tx, pb}:
       Grp{outs, es, S.srv.erred(srv, "ERR Protocol error"), ds, ws, up, tx, pb}
     case Gone{+id, +back} Grp{outs, es, srv, ds, +ws, +up, tx, pb}:
