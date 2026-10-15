@@ -21,16 +21,15 @@ where the work goes next), [tools/README.md](tools/README.md) (how it was measur
   Dafny, FSCQ and DaisyNFS in Coq) are person-years of work, and no verified SQL engine
   at SQLite's level exists.
 - **Redis is realistic as "a verified core + a shell checked by tests"** — and the PoC
-  confirms it. The result is ~3,320 lines of core code (with the parsing of commands, of
-  their times and options, matching against Redis's patterns, several databases, the
-  ranges and bits of strings, BITFIELD's 64-bit words), ~950 lines of sessions (the state
-  of a connection and of the server), ~70 lines of hints to the processor, ~520 lines of
-  append-only file (AOF), ~1,040 lines of configuration (CONFIG by Redis's table, plus
-  ~180 lines of table written by a generator), ~440 lines of INFO, ~410 lines of COMMAND
-  (plus ~300 lines of command table from a generator) and ~13,250 lines of handwritten
-  proofs, plus ~2,790 lines of 16-way case splits of the trie written by a generator, and
-  67 laws (not counting comments and blank lines). Bend checks them in about 14 s, and the
-  BendTT kernel (whose soundness is proved in Lean) in about a minute.
+  confirms it. The result is core code (with the parsing of commands, of their times
+  and options, matching against Redis's patterns, several databases, the ranges and bits
+  of strings, BITFIELD's 64-bit words), sessions (the state of a connection and of the
+  server), hints to the processor, an append-only file (AOF) and configuration (CONFIG by
+  Redis's table, which a generator writes), with INFO and COMMAND (its command table from
+  a generator) beside them, handwritten proofs, 16-way case splits of the trie written by
+  a generator, and the laws: [README.md](README.md#in-numbers) counts the lines of each
+  file (not counting comments and blank lines) and the laws. Bend checks the proofs in
+  about 14 s, and the BendTT kernel (whose soundness is proved in Lean) in about a minute.
   Recovery after a restart is proved too: a server with an append-only file (AOF in
   Redis's format) restores from the file exactly the databases it held (16 of them, as in
   Redis), and from a file cut by a crash at any byte, the databases after some prefix of
@@ -43,8 +42,9 @@ where the work goes next), [tools/README.md](tools/README.md) (how it was measur
 - **The price is speed and memory, and most of it has been taken off.** On the original
   Bend, when bound by the CPU (pipeline 16), BendKV was 7–21 times slower than Redis and
   needed ~5 times more memory per key. The cause was the memory model of the Bend
-  runtime, not verification. Twenty patches to the Bend compiler
-  ([`bend-patches/`](bend-patches/): lazy sealing of reference counts, packed strings
+  runtime, not verification. Patches to the Bend compiler
+  ([`bend-patches/`](bend-patches/), counted in [README.md](README.md#in-numbers); those
+  behind the numbers below: lazy sealing of reference counts, packed strings
   with byte I/O, borrowed reads, native string operations, rebuilding a node in place,
   2 MiB pages for the heap, field selection by digit without a jump table, a string of
   one chunk without a node, a prefetch hint to the processor, several cores: event loops
@@ -166,6 +166,9 @@ src/batch.bend   a batch with hints to the processor              │ + proof/PR
 src/redis.bend   command semantics: exec(cmd, db) → (reply, db')  │
 src/map.bend     hash trie with string keys                      ─┘
 src/float.bend   double and long double in software (checked against glibc)
+src/hll.bend     HyperLogLogs on a string's bytes, as Redis's (checked by tests)
+src/geo.bend     geohashes, cells, distances and sorts, as Redis's (checked by tests)
+src/lolwut.bend  LOLWUT's drawings, as Redis draws them (checked by tests)
 ```
 
 **Commands:** PING, ECHO, GET, SET, SETNX, GETSET, DEL/UNLINK, EXISTS, INCR, DECR, INCRBY,
@@ -430,7 +433,8 @@ syntax error for an unauthenticated client is NOAUTH); a client is authenticated
 connecting and on RESET if there is no password then, and after AUTH or AUTH in HELLO,
 and nothing else changes that.
 Configuration: CONFIG GET (names, alias names, glob patterns), SET (several parameters
-at once, all or none), RESETSTAT, REWRITE, HELP over all 178 parameters of Redis 7.0.15:
+at once, all or none), RESETSTAT, REWRITE, HELP over every parameter of Redis 7.0.15
+(counted in [README.md](README.md#in-numbers)):
 `tools/gen_config.py` writes the table from Redis's own `config.c`, each value is
 checked as Redis checks it and read back as Redis prints it. `requirepass` (the
 password), `hz` (with a limit, as in Redis) and `notify-keyspace-events` (which keyspace
@@ -580,7 +584,7 @@ Redis does ("Revert incomplete MULTI/EXEC transaction"): the file is cut back to
 MULTI, and with `aof-load-truncated no` the start stops, as for an entry cut short. If
 the file ends in the middle of an entry (a crash during `write`), it is cut back to the
 last whole entry, as in Redis with `aof-load-truncated yes`, at any size:
-`File.truncate` of the twenty-second patch takes the size as a `Nat`, while before the
+`File.truncate` of the twenty-fourth patch takes the size as a `Nat`, while before the
 size went through a `U32`, and a file of 4 GiB or more would have been cut to its size
 modulo 2^32. It is proved that the databases are then those after some prefix of the
 acts in which every transaction is whole; anything else after the entries makes it
@@ -616,17 +620,19 @@ advance and passed as a parameter. A key read (`get`) searches the bucket right 
 end of the walk and only borrows the database: the compiler with the `borrow-reads`
 patch keeps the value found in place instead of sharing the whole trie. The server's
 GET answers with a copy of the value made right there (`get_copy`): the value in the
-database stays unshared, with no counter cell, and the batch hints reach its bytes; it
-is proved that the copy is the value (`tget_kc_eq`). A write rebuilds the path in place.
+database stays unshared, with no counter cell, and the batch hints reach its bytes; the
+laws of GET (`get_after_set`, `get_missing`) are proved of this GET, which answers the
+copy. A write rebuilds the path in place.
 The 16-way and 256-way case splits in the code and in the proofs are written by
 `tools/gen_trie.py`.
 
 ### What is proved (proof/LAWS.bend)
 
 A person states the laws; the proofs (`PROOF.bend`) are written and checked by the
-machine.
+machine. How many laws each group holds is in README.md's
+[table](README.md#what-is-proved).
 
-**The map (11 laws).** This is a complete axiomatization of a finite map from keys to an
+**The map.** This is a complete axiomatization of a finite map from keys to an
 entry, a value and a time: after any sequence of writes of four kinds (a value with a
 time, a value with the old time, the time alone, a deletion) the entry of any key is
 uniquely determined, so there are no stale, lost or "foreign" entries.
@@ -643,15 +649,16 @@ uniquely determined, so there are no stale, lost or "foreign" entries.
 - `get_entry`, `read_entry` — a read gives the entry's value; `read`, which commands read
   with, does so only while the key's time has not passed.
 
-**Keys (2 laws).** `key_eq_true` and `key_eq_false`: the key comparison `str_eq` is
+**Keys.** `key_eq_true` and `key_eq_false`: the key comparison `str_eq` is
 exactly the equality of strings. `str_eq` is `String.eq` from Base (in the C runtime
 with the patch, a `memcmp` by chunks); it is proved to agree with comparison character
 by character, and the proof goes down the representation to the 32 bits of a `U32`.
 
-**Commands (24 laws)** about the function `exec`, which is what the server runs:
+**Commands:** laws about the function `exec`, which is what the server runs:
 - `frame` — **no command changes a key it does not write, neither its value nor its
   time**: SET/DEL/MSET/INCR/EXPIRE/… touch only the keys they name, FLUSHALL all of
-  them. Proved for all 17 kinds of commands (with the groups `Peek`, `Upd` and `Own`);
+  them. Proved for every kind of command, each constructor of `Cmd` (counted in
+  [README.md](README.md#in-numbers)), with the groups `Peek`, `Upd` and `Own`;
 - `reads_keep_db` — read commands (GET, EXISTS, MGET, STRLEN, KEYS, SCAN, DBSIZE, SORT
   without STORE, PING, ECHO, errors) do not change the database as a whole;
 - `get_after_set`, `get_missing` — GET after SET, and GET of a key that is not there
@@ -697,14 +704,14 @@ by character, and the proof goes down the representation to the 32 bits of a `U3
 A database is the record `Db`: the trie, the number of keys in it (DBSIZE and INFO's
 keyspace line give it), the number of keys with a time, and the time the batch runs at;
 there are several databases, and a batch runs on the one in focus. The laws about how
-keys read and what commands answer are proved about the specification, `exec` on one
-trie at a moment of time (`proof/SPEC.bend`); a bridge (`bridge_go`) proves that the
-server's `exec` answers as the specification does and leaves the same trie (except the
-reply of DBSIZE, which is the count). The laws about the database as a whole are proved
+keys read and what commands answer are stated of the server's `exec` and proved through
+the specification, `exec` on one trie at a moment of time (`proof/SPEC.bend`), which a
+bridge in the proofs (`bridge_go`) relates to the server's `exec` (DBSIZE, whose reply
+is the count, aside). The laws about the database as a whole are proved
 on the record together with the count, and the counts are the trie's own (the key count,
 below).
 
-**Commutativity (5 laws).** Commands on different keys can run in any order. A key
+**Commutativity.** Commands on different keys can run in any order. A key
 after a command depends only on how, before it, the key itself read and how the keys
 read that the command's writes depend on (`deps`): RENAME moves a value from one key to
 another, MSETNX sets its keys only if none of them is there, BITOP sets the target key
@@ -728,7 +735,7 @@ in the order they were written, and KEYS and SCAN may list them in another order
 promises no order anyway). So DBSIZE, KEYS and SCAN after a swap are left out: they
 would need the invariant "a bucket holds no key twice".
 
-**Persistence (9 laws)** about the append-only file (`aof.bend`):
+**Persistence:** laws about the append-only file (`aof.bend`):
 - `log_exec` — `exec_log` answers and changes the database exactly as `exec_all` does:
   with the append-only file the server answers as it does without it;
 - `log_hints` — the hints to the processor change nothing here either: the actor runs
@@ -782,7 +789,7 @@ file, and only the laws about a cut catch them: a bulk cut in the middle of its 
 reads as a shorter string (a value nobody wrote), and an entry cut between its
 arguments reads as what had arrived (DEL a b c would run as DEL a b).
 
-**Databases (6 laws)** about the acts that change whole databases (`R.Act`), at time 0:
+**Databases:** laws about the acts that change whole databases (`R.Act`), at time 0:
 - `focus_keeps` and `focus_on` — SELECT changes no database and puts in focus the one
   it names, if it is there;
 - `swap_dbs` — SWAPDB puts each of the two databases in the other's place;
@@ -794,7 +801,7 @@ arguments reads as what had arrived (DEL a b c would run as DEL a b).
   live) to the target key in the database it names (or in the selected one), if the
   target key is not there or REPLACE is given, and changes nothing else.
 
-**The key count (2 laws)** about the counts a database keeps beside its trie:
+**The key count:** laws about the counts a database keeps beside its trie:
 - `counts_hold` — **after any history, the counts of every database are its trie's
   own**: how many keys it holds and how many of them have a time; and its trie is well
   formed, each key at most once in its bucket;
@@ -802,7 +809,7 @@ arguments reads as what had arrived (DEL a b c would run as DEL a b).
   focus, keys whose time has passed among them until a command or the sweep deletes
   them, as in Redis.
 
-**Sessions (5 laws)** about `session.bend`:
+**Sessions:** laws about `session.bend`:
 - `run_gen` and `run_log_gen` — **however the server took a batch apart, it runs it as
   the general path runs its commands in order**: the fast path (`exec_batch`,
   `log_batch`) for a batch of database commands only from a ready client is the same
@@ -816,7 +823,7 @@ arguments reads as what had arrived (DEL a b c would run as DEL a b).
   nothing on the database but parser errors until AUTH or HELLO**: it can neither read
   nor change a single key.
 
-**Configuration (3 laws)** about `config.bend`:
+**Configuration:** laws about `config.bend`:
 - `config_fail` — **a CONFIG SET that failed leaves the server as it was** (Redis sets
   the parameters before the failing one and puts them back, BendKV sets none);
 - `config_pass` — one that succeeded leaves the server with the new parameters, and
@@ -923,7 +930,7 @@ The translation the kernel reads can be dumped with
   Ranges and bits (GETRANGE, SETRANGE, GETBIT, SETBIT, BITCOUNT, BITPOS) take small
   offsets, and now and then wrong and huge ones, but never such that a value would grow
   to nearly 512 MB.
-- **Key expiry** (`tests/ttl_test.py`): six scenarios set keys with short times on both
+- **Key expiry** (`tests/ttl_test.py`): seven scenarios set keys with short times on both
   servers, wait for the times to pass and compare the replies: reads of expired keys,
   KEYS, SCAN and RANDOMKEY when only expired keys are left, writes over expired keys
   (SETNX, SET with XX and NX, GETSET, APPEND, INCR, MSET, KEEPTTL), time commands on
@@ -958,11 +965,11 @@ The translation the kernel reads can be dumped with
   watched keys (section 42 of docs/PERFORMANCE.md). The differential test sends random
   transactions too.
 - **Pub/Sub** (`tests/pubsub_test.py`, in each server mode): Pub/Sub scenarios on BendKV
-  and on Redis, their transcripts compared line by line (191 lines: PING of a subscribed
+  and on Redis, their transcripts compared line by line (216 lines: PING of a subscribed
   client, UNSUBSCRIBE of some and of all, patterns with classes and escaping, NUMSUB and
   NUMPAT, commands a subscribed client may not run, RESET, QUIT and a closed connection,
   CLIENT REPLY OFF and SKIP, SUBSCRIBE in a transaction, shard channels, a message of
-  100 KB, INFO's statistics, then the events of 138 commands with `KEA` and with masks,
+  100 KB, INFO's statistics, then the events of 162 commands with `KEA` and with masks,
   `new`, `expired` from the sweep, a waiting client served, a transaction); then under
   load: 20 subscribers of a channel and a pattern each get 2,000 messages from 4
   publishers in each publisher's order, while 50 subscribers close their connections as
@@ -1084,7 +1091,7 @@ The translation the kernel reads can be dumped with
   closes the connection: an open connection shows in INFO's connected_clients, a closed
   one by the end of file, not by silence on the socket; and each reply of BendKV is
   parsed as RESP.
-- **Connection commands** (`tests/session_test.py`): 45 cases — HELLO with versions and
+- **Connection commands** (`tests/session_test.py`): 51 cases — HELLO with versions and
   options, AUTH without a password, SELECT with numbers of all kinds, databases kept
   apart, MOVE (with a time to live too), SWAPDB, RESET, which selects database 0 again,
   TYPE, TOUCH, OBJECT (under the LFU policy too), CLIENT subcommands with arity errors
@@ -1117,7 +1124,7 @@ The translation the kernel reads can be dumped with
   and SKIP, NOAUTH and WRONGPASS, commands after QUIT, protocol errors, random
   pipelines — then commandstats (calls, refused and failed), errorstats and the totals
   are compared as maps (the order of Redis's lines comes from a hash table, and BendKV's
-  usec is 0): 40 checks.
+  usec is 0): 44 checks.
 - **COMMAND** (`tests/command_test.py`): COMMAND INFO and DOCS of each command and
   subcommand, one at a time, several at once, in another case, unknown ones and those
   Redis does not find (`get|key`, `config|get|key`); COMMAND, INFO and DOCS of all;
@@ -1149,7 +1156,7 @@ The translation the kernel reads can be dumped with
   name) or the same last line of the log; 32 cases that both start (parameters after the
   file, `save` adding up and reset, also after `include`, `--save` without a value,
   alias names, quotes and escapes, `hz` out of bounds, memory units, a relative `dir`
-  and an `include` after it, standard input) — the same values of CONFIG GET; 15
+  and an `include` after it, standard input) — the same values of CONFIG GET; 16
   refusals of BendKV itself, and what is BendKV's alone: `--version`, the short form, a
   log in a file, a pid file, protected mode, two addresses with shared numbering of
   clients.
@@ -1158,7 +1165,7 @@ The translation the kernel reads can be dumped with
 - **Numbers at the edges** (`tests/numbers_test.py`): each command that takes a number
   gets numbers above long long, LLONG_MAX and LLONG_MIN, 2^48, 2^32, 2^31, 2^58 + 1 (an
   offset `#k` of an i64 field that, multiplied by 64, wraps around to 64) and the forms
-  Redis refuses (`+5`, `1e5`, `0x10`, `" 5"`, `-0`, `00`, `3.5`) — 1,092 commands,
+  Redis refuses (`+5`, `1e5`, `0x10`, `" 5"`, `-0`, `00`, `3.5`) — 2,352 commands,
   replies as in Redis (except the differences described: INCRBY longer than 14 digits,
   SCAN with a foreign cursor). The test found that `SELECT 9223372036854775807` stopped
   the server (section 28 of PERFORMANCE.md).
@@ -1281,8 +1288,9 @@ The proofs cover `map.bend`, `redis.bend`, `batch.bend`, `aof.bend`, `session.be
    runtime a 64-bit word with an abort past 2^48−1; `String` in theory is a list, and in
    the C runtime with the patch a chain of byte buffers, and `String.eq`, `String.hash`
    and the other operations on it are C functions. That the runtime agrees with the
-   definitions is not proved. The server is built by Bend with thirty-three patches from
-   [`bend-patches/`](bend-patches/). They are in the trusted base too: checked by Bend's
+   definitions is not proved. The server is built by Bend with the patches of
+   [`bend-patches/`](bend-patches/) (counted in [README.md](README.md#in-numbers)). They
+   are in the trusted base too: checked by Bend's
    test suite and by differential tests against Redis, but not proved. The same goes for
    event loops on several threads, `epoll`, the atomicity of `Chan.send_all`, the writer
    thread and the sends the loop shares with it, the file
@@ -1299,13 +1307,19 @@ The proofs cover `map.bend`, `redis.bend`, `batch.bend`, `aof.bend`, `session.be
    Their conditions do not occur in BendKV's proofs (no specialized parameters of empty
    types, no law helpers named like Base's constructors, no name clashes through a colon
    and a dot), but the translation stays in the trusted base.
-2. **`resp.bend`, `info.bend`, `server.bend` and `startup.bend`** — the protocol, INFO,
-   the network and start-up; they are checked only by tests (start-up against
-   `redis-server`, `tests/start_test.py`, INFO by `tests/info_test.py`).
+2. **`resp.bend`, `info.bend`, `command.bend`, `server.bend`, `startup.bend`,
+   `float.bend`, `hll.bend`, `geo.bend` and `lolwut.bend`** — the protocol, INFO,
+   COMMAND, the network, start-up, the doubles in software and what HyperLogLogs, GEO and
+   LOLWUT compute; they are checked only by tests (start-up against `redis-server`,
+   `tests/start_test.py`, INFO by `tests/info_test.py`, COMMAND by
+   `tests/command_test.py`, the doubles against glibc by `tests/float_test.py`, the
+   others against Redis by `tests/hll_test.py`, `tests/geo_test.py` and
+   `tests/admin_test.py`).
    With the append-only file, it is also trusted that the server appends to the file
-   exactly the effects of each batch (a group of batches is written as one write: the
-   `encode` of a concatenation is the concatenation of `encode`s, which is proved in
-   `enc_cat`). When the file ends in the middle of an entry, it is proved which database
+   exactly the effects of each batch (a group of batches is written as one write: that
+   the `encode` of a concatenation is the concatenation of `encode`s is a lemma of the
+   proofs, `enc_cat`, which no law states). When the file ends in the middle of an
+   entry, it is proved which database
    the server brings up and to which byte it cuts the file (`recover_cut`, `load_cut`);
    only the decision to cut is trusted: that the leftover is the start of an entry and
    not garbage, the server learns from the network parser of `resp.bend` (`cut_short`).
@@ -1342,7 +1356,8 @@ The proofs cover `map.bend`, `redis.bend`, `batch.bend`, `aof.bend`, `session.be
 - **`case other` in a proof does not refine the goal.** In a function `case other`
   covers the remaining constructors, while in a proof the variable stays abstract
   ("`c`, but not `Get`"), and functions of it do not reduce. So the lemmas about
-  commands list all 19 constructors, most of them by refutations. That is why the
+  commands list every constructor of `Cmd` (counted in
+  [README.md](README.md#in-numbers)), most of them by refutations. That is why the
   connection commands are gathered into one command `Own`, and reads of one key into
   `Peek`: each group is one constructor in these lemmas, however many commands it holds.
 - **The checker computes `Nat` in unary form.** A constant such as 10^14 overflows the
@@ -1382,13 +1397,14 @@ puts the new file in place of the old one (`File.rename`) and removes the tempor
 (`File.unlink`) with functions of the twenty-eighth. INFO's `used_memory` and
 `maxmemory` read the heap's account (`IO.heap`) of the twenty-ninth, and OBJECT IDLETIME
 and FREQ and the eviction's LRU and LFU keep when a key was last touched with functions of
-the thirtieth (`Mem.touch`, `Mem.cell`). The others only speed up the runtime and the
-code.
+the thirtieth (`Mem.touch`, `Mem.cell`). GEO computes, and ZADD reads its scores, with
+C's doubles, `F64` and `F64.read` of the thirty-third. The others only speed up the
+runtime and the code.
 The Makefile passes `CC=clang-19` to Bend if there is one: clang 18 ignores the
 `preserve_none` convention, and the code comes out ~8% slower.
 
 ```bash
-# Bend with the patches: a clone of bendlang/bend with the thirty-three patches of bend-patches/ on it;
+# Bend with the patches: a clone of bendlang/bend with the patches of bend-patches/ on it;
 # --verdict needs Lean 4.34.0 (elan)
 git clone https://github.com/bendlang/bend ../bend-patched
 sh bend-patches/apply.sh ../bend-patched

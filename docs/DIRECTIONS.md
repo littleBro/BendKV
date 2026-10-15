@@ -100,8 +100,8 @@ languages that also compile to C and count references:
 references, which LLVM's optimizer uses; `#[cold]` and `#[inline]`. rustc itself is
 built with PGO.
 
-**Zig:** `comptime` (the 1,800 lines of 16-way trie code that a Python script writes
-would be ordinary code); arena allocators that free a whole request at once instead
+**Zig:** `comptime` (the 16-way trie code that a Python script writes would be
+ordinary code); arena allocators that free a whole request at once instead
 of counting; built-in `@prefetch` and `@branchHint`.
 
 **GHC:** strictness analysis with the worker/wrapper split (unboxed arguments),
