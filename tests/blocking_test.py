@@ -8,13 +8,17 @@ UNBLOCK with TIMEOUT and with ERROR (and its errors), a client whose
 connection closes while it waits, the fairness of a pipeline that pushes
 and then waits itself, moves that serve each other (BLMOVE chains, a
 circle of BRPOPLPUSH), a move to a key of the wrong kind, commands
-pipelined behind a blocking one and bytes that come while it waits, sorted
-sets (BZPOPMIN, BZMPOP), a list key that does not serve a client waiting
-for a sorted set, the statistics of INFO (calls counted once, failed calls,
-UNBLOCKED errors), a timeout with a pipeline behind it, RENAME, MOVE and
-SWAPDB, CLIENT REPLY OFF, a client served then waiting again in the rest
-of its batch, blocked_clients and clients_in_timeout_table, a SELECT in the
-batch of a blocking command, and a QUIT behind one.
+pipelined behind a blocking one and bytes that come while it waits,
+sorted sets (BZPOPMIN, BZMPOP), a list key that does not serve a client
+waiting for a sorted set, the statistics of INFO (calls counted once,
+failed calls, UNBLOCKED errors), a timeout with a pipeline behind it,
+RENAME, MOVE and SWAPDB, CLIENT REPLY OFF, a client served then waiting
+again in the rest of its batch, blocked_clients and
+clients_in_timeout_table, a SELECT in the batch of a blocking command, a
+QUIT behind one, a pipeline that pushes to a key a client waits on and
+then pops (the client is served between them), and pipelines that write
+other keys while 100 clients wait (the fast way, server.bend's Heeded
+keys; one of GETs, SETs and INCRs alone), then a key among theirs.
 
 The checks under load: 300 clients waiting on 300 keys, each served; 100
 timeouts at once; 100 clients that close their connections while they
@@ -271,6 +275,37 @@ def scenarios(port, log):
     except EOFError:
         x = "EOF"
     log("18 closed", x)
+    # 19. a pipeline that pushes to a key a client waits on, then pops:
+    # the client is served right after the push, the pop finds nothing
+    a = Client(port)
+    a.send("BLPOP", "p19", "0")
+    wait_blocked(r, 1)
+    r.raw(enc(["RPUSH", "p19", "x"]) + enc(["LPOP", "p19"]) + enc(["LLEN", "p19"]))
+    log("19 pipeline", r.read(), r.read(), r.read(), a.read())
+    # 20. pipelines that write other keys while 100 clients wait, then
+    # one that writes a key among theirs in the middle
+    ws = [Client(port) for _ in range(100)]
+    for i, w in enumerate(ws):
+        w.send("BLPOP", "w20:%d" % i, "0")
+    log("20 blocked", wait_blocked(r, 100, 1000))
+    other = [["SET", "o20", "1"], ["INCR", "o20"], ["MSET", "o20a", "x", "o20b", "y"], ["RPUSH", "l20", "a", "b"],
+             ["LPOP", "l20"], ["SADD", "s20", "m"], ["HSET", "h20", "f", "v"], ["ZADD", "z20", "1", "m"],
+             ["RENAME", "o20a", "o20c"], ["DEL", "o20b", "nokey"], ["GET", "o20"], ["MGET", "o20", "o20c"]]
+    r.raw(b"".join(enc(c) for c in other))
+    log("20 others", [r.read() for _ in other], wait_blocked(r, 100))
+    # GETs, SETs and INCRs alone (read by their hashes, not command by
+    # command), on other keys
+    quick = [["SET", "q20", "1"], ["INCR", "q20"], ["GET", "q20"], ["SET", "q20b", "x"], ["GET", "w20:3"]]
+    r.raw(b"".join(enc(c) for c in quick))
+    log("20 quick", [r.read() for _ in quick], wait_blocked(r, 100))
+    r.raw(enc(["SET", "o20", "2"]) + enc(["RPUSH", "w20:7", "v"]) + enc(["LLEN", "w20:7"]) + enc(["GET", "o20"]))
+    log("20 one", [r.read() for _ in range(4)], ws[7].read(), wait_blocked(r, 99))
+    r.raw(enc(["LMOVE", "l20", "w20:9", "LEFT", "RIGHT"]) + enc(["LLEN", "w20:9"]))
+    log("20 move", r.read(), r.read(), ws[9].read(), wait_blocked(r, 98))
+    for w in ws:
+        w.close()
+    log("20 gone", wait_blocked(r, 0, 1000))
+    a.close()
     b.close()
     r.cmd("FLUSHALL")
     r.close()

@@ -32,9 +32,12 @@ Enterprise database (RE_CLUSTER, an endpoints file naming the server), so
 that it starts no ring, sentinel or cluster of its own, and leaves out the
 specs of those and of modules. A failing test runs again up to twice
 before it counts as failed, in both suites (in redis-py, but one that
-fails on an unknown command).
+fails on an unknown command). A test that passes on BendKV only after a
+rerun, where it passes at its first attempt on Redis, is reported (a race
+in BendKV passes so); from RERUN_GRACE on (RERUN_GRACE in the environment
+gives another day), it counts as failed.
 """
-import argparse, collections, json, os, re, shutil, signal, socket, subprocess, sys, tempfile, time
+import argparse, collections, datetime, json, os, re, shutil, signal, socket, subprocess, sys, tempfile, time
 import xml.etree.ElementTree as ET
 
 HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -56,6 +59,11 @@ PY_SKIP_DIRS = ["maint_notifications", "test_auth", "test_http", "test_multidb",
 GO_LABELS = "!json && !search && !timeseries && !probabilistic && !vectorset && !array && !NonRedisEnterprise"
 GO_SKIP = ("Ring|Sentinel|Failover|ClusterClient|cluster|Cluster|UniversalClient|TLS|newClusterState|"
            "isLoopback|Command Tips|HIMPORT|HotKeys|RediSearch|FT\\.|JSON|TS\\.|NewScriptServerSHA")
+
+# the day from which a test that passes on BendKV only after a rerun (and
+# at its first attempt on Redis) counts as failed; until then it is only
+# reported, so that the races it shows can be fixed first
+RERUN_GRACE = "2026-11-15"
 
 def up(port, timeout=20):
     end = time.time() + timeout
@@ -243,8 +251,47 @@ def compare(redis_xml, bendkv_xml):
     fails = {k: b.get(k, ("err", "did not run"))[1] for k in ok if b.get(k, ("err",))[0] != "ok"}
     return a, b, ok, fails
 
+# How many attempts each test took in a suite's results. pytest writes each
+# attempt of a test it reruns as a case of its own, those before the last
+# with no child (and an error in the teardown after a failed call as one
+# more case, which is no attempt); ginkgo writes one case, whose timeline
+# names each "Attempt #N Failed.  Retrying" (and two specs of one name
+# are two cases).
+RETRY = re.compile(r"Attempt #\d+ Failed\.\s+Retrying")
+
+def attempts(path):
+    root = ET.parse(path).getroot()
+    pytest = any(s.get("name") == "pytest" for s in root.iter("testsuite"))
+    tries, failed = {}, {}
+    for tc in root.iter("testcase"):
+        name = "%s::%s" % (tc.get("classname") or "", tc.get("name") or "")
+        kids = [ch for ch in tc if ch.tag in ("failure", "error", "skipped")]
+        if not pytest:
+            tries[name] = max(tries.get(name, 0), 1 + len(RETRY.findall("".join(ch.text or "" for ch in tc))))
+            continue
+        teardown = (len(kids) == 1 and kids[0].tag == "error" and failed.get(name)
+                    and (kids[0].get("message") or "").startswith("failed on teardown"))
+        if not teardown:
+            tries[name] = tries.get(name, 0) + 1
+        failed[name] = any(ch.tag == "failure" for ch in kids)
+    return tries
+
+# the tests BendKV passes only after a rerun and Redis passes at their
+# first attempt, with BendKV's attempts
+def reruns(redis_xml, bendkv_xml):
+    a, b = load(redis_xml), load(bendkv_xml)
+    ta, tb = attempts(redis_xml), attempts(bendkv_xml)
+    return {k: n for k, n in sorted(tb.items()) if n > 1 and b.get(k, ("",))[0] == "ok"
+            and a.get(k, ("",))[0] == "ok" and ta.get(k, 1) == 1}
+
 def report(redis_xml, bendkv_xml, title):
     a, b, ok, fails = compare(redis_xml, bendkv_xml)
+    flaky = reruns(redis_xml, bendkv_xml)
+    grace = os.environ.get("RERUN_GRACE") or RERUN_GRACE
+    late = datetime.date.today() >= datetime.date.fromisoformat(grace)
+    if late:
+        for k, n in flaky.items():
+            fails[k] = "passed only after %d attempts on BendKV, at its first on Redis" % n
     lines = ["### %s" % title, "",
              "Redis 7.0.15 passes %d of the %d tests that run; BendKV passes **%d** of those (%.1f%%)." % (
                  len(ok), sum(1 for v in a.values() if v[0] != "skip"), len(ok) - len(fails),
@@ -262,6 +309,10 @@ def report(redis_xml, bendkv_xml, title):
     if other:
         lines += ["", "Another error (%d tests):" % len(other), ""]
         lines += ["- `%s`: %s" % (k, why) for k, why in sorted(other)]
+    if flaky:
+        lines += ["", "Passed on BendKV only after a rerun, at the first attempt on Redis (%d tests; %s):" % (
+            len(flaky), ("failures since %s" if late else "failures from %s on") % grace), ""]
+        lines += ["- `%s`: %d attempts" % (k, n) for k, n in flaky.items()]
     return "\n".join(lines) + "\n", fails
 
 def main():

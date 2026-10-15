@@ -326,10 +326,11 @@ waiting is forgotten. `blocked_clients` and `clients_in_timeout_table` in INFO c
 them, and failed calls and errors are counted as Redis counts them. A command with
 replies turned off (CLIENT REPLY OFF or SKIP) pops as it does with them on. Where BendKV
 differs: Redis serves the clients of the keys a command added (`signalKeyAsReady` from
-`dbAdd`), key by key in order of readiness, while BendKV looks at all waiting clients
-after each command, in order of their arrival; there is no XREAD, and WAIT's wait ends
-only by its time or CLIENT UNBLOCK (below). In a transaction a blocking command does not
-wait, as in Redis (below).
+`dbAdd`), key by key in order of readiness, while BendKV looks at all waiting clients,
+in order of their arrival, after each command that may make one ready (one that may
+write a key a client waits on, or a command of the connection or of the server); there
+is no XREAD, and WAIT's wait ends only by its time or CLIENT UNBLOCK (below). In a
+transaction a blocking command does not wait, as in Redis (below).
 Transactions: MULTI, EXEC, DISCARD, WATCH and UNWATCH, as Redis 7.0.15 runs them. After
 MULTI a command is queued (QUEUED), except EXEC, DISCARD, MULTI (an error: transactions
 do not nest), WATCH (an error inside MULTI), QUIT and RESET, which run; a command refused
@@ -1214,7 +1215,10 @@ The translation the kernel reads can be dumped with
   moves keys and swaps databases) plus 20 thousand keys, a restart from the file, a
   comparison of the whole keyspace of each of the 16 databases (matched: 20,237 keys);
   an entry cut short appended, a restart that cuts it off, and the same keyspace again.
-  `tests/aof_fail_test.py` breaks the disk under the log with the shim
+  `tests/crash_test.py` kills the server (SIGKILL) at random moments while clients
+  write, 20 rounds on one file, and each start must hold the databases after a prefix of
+  the commands sent, every acknowledged one among them (section 3zzq of
+  docs/FINDINGS.md). `tests/aof_fail_test.py` breaks the disk under the log with the shim
   `tests/fail_io.c` (`LD_PRELOAD`): a file that is there but does not read makes the
   server refuse to start, with the file untouched; a failed `fsync` with `everysec` and
   `always` stops it; a new file is made, its directory is synced, and only then does the
@@ -1299,9 +1303,10 @@ The proofs cover `map.bend`, `redis.bend`, `batch.bend`, `aof.bend`, `session.be
    runtime a 64-bit word with an abort past 2^48−1; `String` in theory is a list, and in
    the C runtime with the patch a chain of byte buffers, and `String.eq`, `String.hash`
    and the other operations on it are C functions. That the runtime agrees with the
-   definitions is not proved. The server is built by Bend with thirty-three patches from
+   definitions is not proved. The server is built by Bend with thirty-four patches from
    [`bend-patches/`](bend-patches/). They are in the trusted base too: checked by Bend's
-   test suite and by differential tests against Redis, but not proved. The same goes for
+   test suite, by differential tests against Redis and under the sanitizers
+   (`tools/sanitize.sh`), but not proved. The same goes for
    event loops on several threads, `epoll`, the atomicity of `Chan.send_all`, the writer
    thread and the sends the loop shares with it, the file
    `write`/`read`/`fdatasync`/`ftruncate`, `Chan.drain`, the native
@@ -1407,7 +1412,7 @@ The Makefile passes `CC=clang-19` to Bend if there is one: clang 18 ignores the
 `preserve_none` convention, and the code comes out ~8% slower.
 
 ```bash
-# Bend with the patches: a clone of bendlang/bend with the thirty-three patches of bend-patches/ on it;
+# Bend with the patches: a clone of bendlang/bend with the thirty-four patches of bend-patches/ on it;
 # --verdict needs Lean 4.34.0 (elan)
 git clone https://github.com/bendlang/bend ../bend-patched
 sh bend-patches/apply.sh ../bend-patched
@@ -1489,17 +1494,19 @@ make clients BEND="$B" # redis-py's and go-redis's test suites on Redis and on B
    resulting pairs (the fourth constant script). The blocking commands of lists and
    sorted sets (BLPOP, BRPOP, BLMOVE, BRPOPLPUSH, BLMPOP, BZPOPMIN, BZPOPMAX, BZMPOP) and
    CLIENT UNBLOCK: the waiting clients are a chain in order of arrival that the actor
-   looks through after each command, and a connection waits at once for the actor's
-   answer and for its socket (`TCP.watch`, the twenty-fifth patch); for them a compiler
-   bug (the twenty-sixth patch) and a false firing of the socket watch were found and
-   fixed (section 41 of PERFORMANCE.md). Transactions (MULTI, EXEC, DISCARD, WATCH,
-   UNWATCH): the actor keeps a chain of the clients with a transaction or watched keys,
-   the effects of each command touch the watched keys, and a transaction is logged
-   between MULTI and EXEC; the laws of the append-only file are restated for
-   transactions: a cut file gives the databases after a prefix of steps, where a
-   transaction is one step, and the start reverts the transaction inside which the file
-   was cut (section 42 of PERFORMANCE.md). Pub/Sub (SUBSCRIBE and its kin, PUBLISH,
-   SPUBLISH, PUBSUB) and keyspace notifications (`notify-keyspace-events`): the session
+   looks through after each command that may make one ready (a batch that writes no key a
+   client waits on or watches runs the fast way: section 3zzo of FINDINGS.md), and a
+   connection waits at once for the actor's answer and for its socket (`TCP.watch`, the
+   twenty-fifth patch); for them a compiler bug (the twenty-sixth patch) and a false
+   firing of the socket watch were found and fixed (section 41 of PERFORMANCE.md).
+   Transactions (MULTI, EXEC, DISCARD, WATCH, UNWATCH): the actor keeps a chain of the
+   clients with a transaction or watched keys, the effects of each command touch the
+   watched keys, and a transaction is logged between MULTI and EXEC; the laws of the
+   append-only file are restated for transactions: a cut file gives the databases after a
+   prefix of steps, where a transaction is one step, and the start reverts the transaction
+   inside which the file was cut (section 42 of PERFORMANCE.md). Pub/Sub (SUBSCRIBE and
+   its kin, PUBLISH, SPUBLISH, PUBSUB) and keyspace notifications
+   (`notify-keyspace-events`): the session
    answers them as Redis answers a client alone on the server, so its laws did not
    change; the actor holds the subscriptions, a message to a client is a push onto its
    reply channel, a subscribed client waits at once for its socket and its channel with

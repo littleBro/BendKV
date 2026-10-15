@@ -1341,12 +1341,13 @@ def mems.trie(xs: List<&2, String>, t: KV.Trie<Unit>) -> KV.Trie<Unit>:
     case Con{x, rest}:
       mems.trie(rest, KV.set(Unit, t, x, Unit{}))
 
-def ints.sorted(xs: List<&2, String>, acc: List<&2, String>) -> List<&2, String>:
+# the tree of the integers xs, each added in its place
+def ints.tree(xs: List<&2, String>, t: KV.ITree) -> KV.ITree:
   match xs:
     case Nil{}:
-      acc
+      t
     case Con{x, rest}:
-      ints.sorted(rest, KV.ints.put(x, acc))
+      ints.tree(rest, KV.ints.put(x, t))
 
 def all.ints(xs: List<&2, String>) -> Bool:
   match xs:
@@ -1371,21 +1372,31 @@ def val.list(+xs: List<&2, String>) -> Maybe<&2, KV.Val>:
   +n = List.length(&2, String, xs)
   Bool.pick(Maybe<&2, KV.Val>, Nat.is_lt(0n, n), Some{KV.VColl{KV.CList{KV.deq.of(n, xs)}}}, None{})
 
-def val.set.of(ints: Bool, +n: Nat, sorted: Bool, xs: List<&2, String>, t: KV.Trie<Unit>) -> KV.Val:
-  match ints sorted:
-    case True{} True{}:
-      KV.VColl{KV.CMems{KV.MInts{n, xs}}}
-    case True{} False{}:
-      KV.VColl{KV.CMems{KV.MInts{n, ints.sorted(xs, Nil{})}}}
-    case False{} _:
+def val.set.of(ints: Bool, +n: Nat, xs: List<&2, String>, t: KV.Trie<Unit>) -> KV.Val:
+  match ints:
+    case True{}:
+      KV.VColl{KV.CMems{KV.MInts{n, ints.tree(xs, KV.ITip{})}}}
+    case False{}:
       KV.VColl{KV.CMems{KV.MBig{n, t}}}
 
+# a set of the n members xs, the trie of which finds a member twice
+def val.set.any(+n: Nat, +xs: List<&2, String>) -> Maybe<&2, KV.Val>:
+  +t = mems.trie(xs, KV.empty(Unit))
+  Bool.pick(Maybe<&2, KV.Val>, Bool.and(Nat.is_lt(0n, n), Nat.is_eq(KV.size(Unit, t), n)), Some{val.set.of(Bool.and(Nat.is_le(n, 512n), all.ints(xs)), n, xs, t)}, None{})
+
+def val.set.go(ints: Bool, +n: Nat, +xs: List<&2, String>) -> Maybe<&2, KV.Val>:
+  match ints:
+    case True{}:
+      Some{KV.VColl{KV.CMems{KV.MInts{n, KV.ints.build(n, xs)}}}}
+    case False{}:
+      val.set.any(n, xs)
+
 # a set of the members xs (sorted: integers in increasing order, from an
-# intset)
+# intset, which are an intset at once when they are 512 at most: each is
+# there once, so no trie of them is made)
 def val.set(+sorted: Bool, +xs: List<&2, String>) -> Maybe<&2, KV.Val>:
   +n = List.length(&2, String, xs)
-  +t = mems.trie(xs, KV.empty(Unit))
-  Bool.pick(Maybe<&2, KV.Val>, Bool.and(Nat.is_lt(0n, n), Nat.is_eq(KV.size(Unit, t), n)), Some{val.set.of(Bool.and(Nat.is_le(n, 512n), Bool.or(sorted, all.ints(xs))), n, sorted, xs, t)}, None{})
+  val.set.go(Bool.and(sorted, Bool.and(Nat.is_lt(0n, n), Nat.is_le(n, 512n))), n, xs)
 
 def zel.trie(es: List<&2, KV.ZEl>, t: KV.Trie<F.F64>) -> KV.Trie<F.F64>:
   match es:
@@ -2007,7 +2018,7 @@ def is.blob(+n: Nat, +xs: List<&2, String>) -> String:
 def put.mems(m: KV.Mems, rest: String) -> String:
   match m:
     case KV.MInts{+n, xs}:
-      b1(11) ++ put.blob(is.blob(n, xs), rest)
+      b1(11) ++ put.blob(is.blob(n, KV.ints.list(xs)), rest)
     case KV.MBig{+n, +t}:
       b1(2) ++ len.put(n, put.strs(KV.keys(Unit, t, 0n), rest))
 
