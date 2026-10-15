@@ -2930,13 +2930,6 @@ def ps.trk.waits.if(on: Bool, +id: Nat, +pb: Ps) -> Bool:
 def ps.trk.waits(+id: Nat, +pb: Ps) -> Bool:
   ps.trk.waits.if(ps.trk.hot(pb), id, pb)
 
-def ps.trk.of.if(on: Bool, +id: Nat, +pb: Ps) -> Tk:
-  match on:
-    case True{}:
-      ps.tk(id, pb)
-    case False{}:
-      TkOff{}
-
 # the counts INFO shows: the tracking clients, the table's keys and ids,
 # the prefixes
 def trk.info(+t: Trk, srv: S.Srv) -> S.Srv:
@@ -4527,10 +4520,15 @@ def bg.restored(+key: String, +ac: Nat, es: List<&2, A.Ent>, g: LRun) -> LRun:
     case LHeld{h}:
       LHeld{h}
 
+# a command run the general way, in EXEC too; INFO with the tracking's
+# counts (trk.info) set before it runs
 def bg.cmd.run(held: Bool, +ok: Bool, +k: S.Role, +c: R.Cmd, +code: Nat, rs: List<&2, R.Reply>, es: List<&2, A.Ent>, +conn: S.Conn, +srv: S.Srv, ds: R.Ds, ws: Waits, up: List<&2, Up>, tx: Tx, pb: Ps) -> LRun:
   match c:
     case R.Own{R.SRestore{+key, R.URestore{p, t, rep, +ac}}}:
       bg.restored(key, ac, es, bg.run(held, ok, k, c, code, rs, Nil{}, conn, srv, ds, ws, up, tx, pb))
+    case R.Own{R.SInfo{a}}:
+      +p = pb
+      bg.run(held, ok, k, c, code, rs, es, conn, trk.info(ps.trk(p), srv), ds, ws, up, tx, p)
     case _:
       bg.run(held, ok, k, c, code, rs, es, conn, srv, ds, ws, up, tx, pb)
 
@@ -6549,14 +6547,63 @@ def bg.trk.hot(+g: LRun) -> Bool:
     case LHeld{+h}:
       bg.trk.hot(h)
 
-# after a command of the client of id while the tracking had work before
-# it or has after it (on): rk, whether its keys go to the table
-def bg.trk.after(on: Bool, +rk: Bool, +id: Nat, +code: Nat, +kt: Tk, +a: Av, g: LRun) -> LRun:
+# a call's tracking, read before it runs: none while the tracking has no
+# work (Ps's bit 22), or the tracking of its client (kt) and whether the
+# call's keys go to the table (rk: trk.wants). One value, so that the
+# general way's loop (bg.go) makes one call for it, and saves its frame
+# once, while no client tracks
+type TkPre is Data:
+  TkPreOff{}
+  TkPreOn{kt: Tk, rk: Bool}
+
+def bg.trk.pre.on(on: Bool, +id: Nat, +code: Nat, +s: Sh, +q: Bool, +may: Bool, +pb: Ps) -> TkPre:
   match on:
     case True{}:
-      bg.trk.after.go(g, rk, id, code, kt, a)
+      +kt = ps.tk(id, pb)
+      TkPreOn{kt, trk.wants(kt, code, sh.ran(s, q, may, code))}
+    case False{}:
+      TkPreOff{}
+
+def bg.trk.pre(+id: Nat, +code: Nat, +s: Sh, +q: Bool, +may: Bool, +pb: Ps) -> TkPre:
+  bg.trk.pre.on(ps.trk.hot(pb), id, code, s, q, may, pb)
+
+# the call's own arguments, read from the batch's bytes when its keys go
+# to the table (av.if)
+def trk.pre.av(+p: TkPre, +a: Av) -> Av:
+  match p:
+    case TkPreOn{kt, +rk}:
+      av.if(rk, a)
+    case TkPreOff{}:
+      a
+
+def bg.trk.after.hot(on: Bool, +id: Nat, +code: Nat, +a: Av, g: LRun) -> LRun:
+  match on:
+    case True{}:
+      bg.trk.after.go(g, False{}, id, code, TkOff{}, a)
     case False{}:
       g
+
+# after a command of the client of id: the tracking's step when it had
+# work before the command (p) or has after it
+def bg.trk.after(+p: TkPre, +id: Nat, +code: Nat, +a: Av, g: LRun) -> LRun:
+  match p:
+    case TkPreOn{+kt, +rk}:
+      bg.trk.after.go(g, rk, id, code, kt, a)
+    case TkPreOff{}:
+      +h = g
+      bg.trk.after.hot(bg.trk.hot(h), id, code, a, h)
+
+# whether a call of EXEC's that only reads goes to the table: its client
+# tracks its keys, while the tracking has work (on)
+def bg.x.rk.on(on: Bool, +id: Nat, +may: Bool, +code: Nat, +pb: Ps) -> Bool:
+  match on:
+    case True{}:
+      trk.wants(ps.tk(id, pb), code, mon.ran(may, code))
+    case False{}:
+      False{}
+
+def bg.x.rk(+id: Nat, +may: Bool, +code: Nat, +pb: Ps) -> Bool:
+  bg.x.rk.on(ps.trk.hot(pb), id, may, code, pb)
 
 # a call of EXEC's that only reads, of a client that tracks its keys
 def bg.x.trk(on: Bool, +id: Nat, +code: Nat, +a: Av, g: LRun) -> LRun:
@@ -6565,14 +6612,6 @@ def bg.x.trk(on: Bool, +id: Nat, +code: Nat, +a: Av, g: LRun) -> LRun:
       LRun{rs, es, conn, srv, ds, ws, up, tx, ps.trk.read(id, M.keys.read(R.code.key(code), av.now(a)), pb)}
     case _ g0:
       g0
-
-# INFO's counts of the tracking (trk.info), set before INFO runs
-def trk.srv(+c: R.Cmd, srv: S.Srv, +pb: Ps) -> S.Srv:
-  match c:
-    case R.Own{R.SInfo{a}}:
-      trk.info(ps.trk(pb), srv)
-    case _:
-      srv
 
 def bg.client(+id: Nat, op: R.ClOp, +argv: Nat, +inb: Nat, +ex: Maybe<&2, Nat>, +code: Nat, g: LRun) -> LRun:
   match op:
@@ -6660,8 +6699,8 @@ def bg.x.go(+id: Nat, +back: Chan(Ans), +inb: Nat, +n: Nat, cmds: List<&2, R.Cmd
   match cmds codes avs x:
     case Con{+c, rest} Con{+k, more} Con{+a, ar} Xr{LRun{rs, es, +conn, +srv, ds, ws, up, tx, +pb}, mine}:
       +may = S.may(S.kind(c), conn, srv)
-      +rk = trk.wants(ps.trk.of.if(ps.trk.hot(pb), id, pb), k, mon.ran(may, k))
-      bg.x.go(id, back, inb, n, rest, more, ar, bg.x.feed(mon.ran(may, k), id, k, S.conn.mode(conn), a, bg.x.trk(rk, id, k, a, bg.x.cmd(may, id, back, inb, n, c, k, LRun{rs, es, conn, trk.srv(c, S.srv.call(srv, id, av.arg(a)), pb), ds, ws, up, tx, pb})), mine))
+      +rk = bg.x.rk(id, may, k, pb)
+      bg.x.go(id, back, inb, n, rest, more, ar, bg.x.feed(mon.ran(may, k), id, k, S.conn.mode(conn), a, bg.x.trk(rk, id, k, a, bg.x.cmd(may, id, back, inb, n, c, k, LRun{rs, es, conn, S.srv.call(srv, id, av.arg(a)), ds, ws, up, tx, pb})), mine))
     case _ _ _ x0:
       x0
 
@@ -6828,13 +6867,11 @@ def bg.go(+id: Nat, +back: Chan(Ans), +inb: Nat, cmds: List<&2, R.Cmd>, codes: L
       +may = S.may(S.kind(c), conn, srv)
       +mo = ps.mon.is(id, pb)
       +sh = sh.of(q, may, tx.multi(id, tx), Bool.and(ps.has(id, pb), Bool.not(S.conn.r3(conn))), mo, ps.oom.is(pb), pause.holds(ps.pz(pb), mo, c, k, id, tx), c, k, ds)
-      +hot = ps.trk.hot(pb)
-      +kt = ps.trk.of.if(hot, id, pb)
-      +rk = trk.wants(kt, k, sh.ran(sh, q, may, k))
-      +a = av.if(rk, av)
+      +pre = bg.trk.pre(id, k, sh, q, may, pb)
+      +a = trk.pre.av(pre, av)
       +ar = av.rest(a)
-      +g1 = bg.cmd(id, back, inb, sh, c, k, rest, more, a, ar, LRun{rs, es, conn, trk.srv(c, S.srv.call(srv, id, av.arg(a)), pb), ds, ws, up, tx, pb})
-      bg.go(id, back, inb, rest, more, bg.feed(mon.seen(q, may, sh, k), id, k, S.conn.mode(conn), a, ar, bg.trk.after(Bool.or(hot, bg.trk.hot(g1)), rk, id, k, kt, a, g1)))
+      +g1 = bg.cmd(id, back, inb, sh, c, k, rest, more, a, ar, LRun{rs, es, conn, S.srv.call(srv, id, av.arg(a)), ds, ws, up, tx, pb})
+      bg.go(id, back, inb, rest, more, bg.feed(mon.seen(q, may, sh, k), id, k, S.conn.mode(conn), a, ar, bg.trk.after(pre, id, k, a, g1)))
     case _ _ Fed{g0, av}:
       g0
 
