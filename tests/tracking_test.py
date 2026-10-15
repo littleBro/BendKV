@@ -27,7 +27,17 @@ LIST's lines cut to their ids, flags and redirects).
   the table's limit (tracking-table-max-keys: which keys go is random,
   so their number).
 - A client served by BLMOVE: its destination's invalidation after its
-  reply.
+  reply. Clients served by BLMPOP, BZPOPMIN and BZMPOP: the key they
+  popped from invalidated (BLPOP's and BRPOP's is not), after another
+  client read it again in a transaction; in BCAST mode with NOLOOP, the
+  served client's own change.
+- LMOVE's and RPOPLPUSH's keys: the destination's invalidation first.
+- CLIENT CACHING yes inside EXEC lasts until EXEC ends; CLIENT alone (an
+  error of arity) clears it.
+- CLIENT KILL of a client that tracks, and of one in BCAST mode: INFO's
+  counts after it.
+- BCAST with many keys under a prefix in one batch (a group's keys sent
+  in the order of their bytes, each once).
 
     python3 tests/tracking_test.py --bendkv 6380 --redis 6390
 """
@@ -509,6 +519,78 @@ def limit(r):
     r.do(b, "CONFIG", "SET", "tracking-table-max-keys", "1000000")
 
 
+def served(r):
+    t, w, v, b = r.conn("t", 3), r.conn("w"), r.conn("v"), r.conn("b")
+    r.do(b, "FLUSHALL")
+    r.do(t, "CLIENT", "TRACKING", "on")
+    # BZPOPMIN, BZMPOP, BLMPOP: the key they pop from signalled as they pop
+    for wait, write, read in ((["BZPOPMIN", "z", "0"], ["ZADD", "z", "1", "m"], ["ZSCORE", "z", "m"]),
+                              (["BZMPOP", "0", "1", "z", "MIN"], ["ZADD", "z", "2", "n"], ["ZSCORE", "z", "n"]),
+                              (["BLMPOP", "0", "1", "l", "LEFT"], ["RPUSH", "l", "a", "b"], ["LRANGE", "l", "0", "-1"]),
+                              (["BLPOP", "p", "0"], ["RPUSH", "p", "a", "b"], ["LRANGE", "p", "0", "-1"])):
+        r.do(w, *wait)
+        for args in (["MULTI"], write, read, ["EXEC"]):
+            r.do(t, *args)
+        r.do(t, *read)
+    # LMOVE and RPOPLPUSH: the destination, then the source
+    r.do(b, "RPUSH", "s1", "a", "b")
+    r.do(t, "MGET", "s1", "d1")
+    r.do(t, "LRANGE", "s1", "0", "-1")
+    r.do(t, "LRANGE", "d1", "0", "-1")
+    r.do(v, "LMOVE", "s1", "d1", "LEFT", "RIGHT")
+    r.do(t, "LRANGE", "s1", "0", "-1")
+    r.do(t, "LRANGE", "d1", "0", "-1")
+    r.do(v, "RPOPLPUSH", "s1", "d1")
+    # in BCAST mode: the key a served BLMPOP popped from is its client's
+    # change, which NOLOOP leaves out; a served BLPOP's is the pusher's
+    n, m = r.conn("n", 3), r.conn("m", 3)
+    r.do(n, "CLIENT", "TRACKING", "on", "BCAST", "NOLOOP", "PREFIX", "q")
+    r.do(m, "CLIENT", "TRACKING", "on", "BCAST", "PREFIX", "q")
+    for wait, key in ((["BLMPOP", "0", "1", "q1", "LEFT"], "q1"), (["BLPOP", "q2", "0"], "q2")):
+        r.do(n, *wait)
+        r.do(b, "RPUSH", key, "a", "b")
+
+
+def caching(r):
+    a, b = r.conn("a", 3), r.conn("b")
+    r.do(b, "FLUSHALL")
+    r.do(a, "CLIENT", "TRACKING", "on", "OPTIN")
+    for args in (["MULTI"], ["GET", "m1"], ["CLIENT", "CACHING", "yes"], ["GET", "m2"], ["EXEC"]):
+        r.do(a, *args)
+    r.do(a, "GET", "m3")
+    r.do(a, "CLIENT", "CACHING", "yes")
+    r.do(a, "CLIENT")
+    r.do(a, "GET", "m4")
+    r.do(b, "MSET", "m1", "x", "m2", "x", "m3", "x", "m4", "x")
+
+
+def killed(r):
+    a, n, b = r.conn("a", 3), r.conn("n", 3), r.conn("b")
+    r.do(b, "FLUSHALL")
+    r.do(a, "CLIENT", "TRACKING", "on")
+    r.do(a, "GET", "kk")
+    r.do(n, "CLIENT", "TRACKING", "on", "BCAST", "PREFIX", "kp")
+    tracking_info(r)
+    r.do(b, "CLIENT", "KILL", "ID", tid(a))
+    r.do(b, "CLIENT", "KILL", "ID", tid(n))
+    r.take("closed", 0.2)
+    tracking_info(r)
+    r.do(b, "SET", "kk", "v")
+    r.do(b, "SET", "kp1", "v")
+    tracking_info(r)
+
+
+def many(r):
+    a, n, b = r.conn("a", 3), r.conn("n", 3), r.conn("b")
+    r.do(b, "FLUSHALL")
+    r.do(a, "CLIENT", "TRACKING", "on", "BCAST", "PREFIX", "x")
+    r.do(n, "CLIENT", "TRACKING", "on", "BCAST", "NOLOOP", "PREFIX", "x")
+    b.sendmany([["SET", "x%03d" % (i * 37 % 200), "v"] for i in range(200)] + [["SET", "x007", "again"]])
+    r.take("batch", 0.5)
+    n.sendmany([["SET", "x%03d" % i, "w"] for i in range(0, 200, 3)] + [["DEL", "x001"]])
+    r.take("noloop", 0.5)
+
+
 def blocked(r):
     t, u, b = r.conn("t", 3), r.conn("u", 3), r.conn("b")
     r.do(b, "FLUSHALL")
@@ -527,7 +609,8 @@ def blocked(r):
 SCENARIOS = [("errors", errors), ("self, RESP3", self_resp3), ("keys of reads", reads), ("redirects", redirects),
              ("broken redirects", broken), ("optin and optout", optin), ("bcast", bcast), ("flushes", flushes),
              ("states", states), ("expiry", expiry), ("eviction", evicted), ("table limit", limit),
-             ("blocked", blocked)]
+             ("blocked", blocked), ("served pops", served), ("caching", caching), ("killed", killed),
+             ("bcast keys", many)]
 
 
 def run(port, scenario):

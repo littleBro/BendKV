@@ -1092,7 +1092,9 @@ type Bk is Data:
   Bk{key: String, by: Nat}
 
 # a BCAST prefix: the clients that listen to it (their ids), and the keys
-# changed under it (Bk), in the order of their bytes
+# changed under it (Bk), newest first, a key once for each change
+# (bk.sorted puts them in the order of their bytes, each once, at the end
+# of the group)
 type Bc is Data:
   Bc{p: String, ids: List<&2, Nat>, keys: List<&2, Bk>}
 
@@ -1102,35 +1104,27 @@ type Bc is Data:
 # redirected to (one id for each client that redirects), the BCAST
 # prefixes in the order of their bytes, the invalidations of the client
 # whose command runs, kept for after its reply (newest first), how many
-# keys left the table since the heeded keys were made (stale), and the
-# table's limit (max: tracking-table-max-keys, 0 for none) as the
+# ticks in a row found the table over its limit (over: the effort of the
+# next one), and the table's limit (max: tracking-table-max-keys, 0 for
+# none) as the
 # parameters held it after the last command that may have set it
 # (bg.trk.max), so that a tick reads no parameter by its name. TrkOf, a
 # tracking that holds a tracking, is never built: it makes Trk a node of
 # its own, one word of the heeded keys' record.
 type Trk is Data:
-  TrkOn{tab: KV.Trie<List<&2, Nat>>, keys: Nat, items: Nat, ids: List<&2, Nat>, rds: List<&2, Nat>, pfx: List<&2, Bc>, pend: List<&2, R.Reply>, stale: Nat, max: Nat}
+  TrkOn{tab: KV.Trie<List<&2, Nat>>, keys: Nat, items: Nat, ids: List<&2, Nat>, rds: List<&2, Nat>, pfx: List<&2, Bc>, pend: List<&2, R.Reply>, over: Nat, max: Nat}
   TrkOf{t: Trk}
 
 def trk.new() -> Trk:
   TrkOn{KV.empty(List<&2, Nat>), 0n, 0n, Nil{}, Nil{}, Nil{}, Nil{}, 0n, 0n}
 
-# whether many keys left the table since the heeded keys were made: as
-# many as it holds, and a thousand at least
-def trk.stale(+t: Trk) -> Bool:
+# the table, lent (Heeded keys: its keys are heeded keys)
+def trk.tab(+t: Trk) -> KV.Trie<List<&2, Nat>>:
   match t:
-    case TrkOn{tab, +keys, items, ids, rds, pfx, pend, +stale, mx}:
-      Bool.and(Nat.is_le(1024n, stale), Nat.is_le(keys, stale))
+    case TrkOn{+tab, keys, items, ids, rds, pfx, pend, over, mx}:
+      tab
     case TrkOf{+x}:
-      trk.stale(x)
-
-# the tracking once the heeded keys are made anew
-def trk.fresh(t: Trk) -> Trk:
-  match t:
-    case TrkOn{tab, keys, items, ids, rds, pfx, pend, stale, mx}:
-      TrkOn{tab, keys, items, ids, rds, pfx, pend, 0n, mx}
-    case TrkOf{x}:
-      trk.fresh(x)
+      trk.tab(x)
 
 # whether xs holds n
 def ids.has(+n: Nat, +xs: List<&2, Nat>) -> Bool:
@@ -1328,7 +1322,7 @@ def tk.line.redir(+t: Tk) -> String:
 # general way)
 def trk.bits(+t: Trk) -> U32:
   match t:
-    case TrkOn{tab, +keys, items, +ids, rds, +pfx, +pend, stale, mx}:
+    case TrkOn{tab, +keys, items, +ids, rds, +pfx, +pend, over, mx}:
       U32.or(Bool.pick(U32, Bool.or(Bool.or(Nat.is_lt(0n, keys), Bool.not(List.is_empty(&2, Nat, ids))), Bool.not(List.is_empty(&2, R.Reply, pend))), 4194304, 0), Bool.pick(U32, List.is_empty(&2, Bc, pfx), 0, 2097152))
     case TrkOf{+x}:
       trk.bits(x)
@@ -1370,8 +1364,8 @@ def rds.add(+rd: Nat, xs: List<&2, Nat>) -> List<&2, Nat>:
 # stay in the table (disableTracking)
 def trk.off(+id: Nat, +cur: Tk, t: Trk) -> Trk:
   match cur t:
-    case TkOn{+rd, b, i, o, l, c, br, +p} TrkOn{tab, keys, items, ids, rds, pfx, pend, stale, mx}:
-      TrkOn{tab, keys, items, ids.drop(id, ids), rds.drop(rd, rds), bc.drop.all(p, id, pfx), pend, stale, mx}
+    case TkOn{+rd, b, i, o, l, c, br, +p} TrkOn{tab, keys, items, ids, rds, pfx, pend, over, mx}:
+      TrkOn{tab, keys, items, ids.drop(id, ids), rds.drop(rd, rds), bc.drop.all(p, id, pfx), pend, over, mx}
     case TkOn{rd, b, i, o, l, c, br, p} TrkOf{x}:
       trk.off(id, cur, x)
     case TkOff{} t0:
@@ -1422,7 +1416,7 @@ type Mon is Data:
 # one before it (0: no client's wait ends), the clients that started to
 # heed keys since the set was made (adds), and how many heeded keys then
 # (base): Heeded keys; and the tracking (Tracking, above), whose table's
-# keys are heeded keys too
+# keys are heeded keys too (the checks look in the table itself)
 type Hd is Data:
   Hd{keys: KV.Trie<Nat>, soon: Nat, adds: Nat, base: Nat, trk: Trk}
 
@@ -1765,24 +1759,25 @@ def ps.gate(+pb: Ps) -> Nat:
 # a batch's commands are read (heed.cmds) only when the hashes of its
 # requests cannot tell (heed.quick, below).
 
-# whether h holds k (KV.code.at: 0 when it does not), or one of ks, or
-# the key of one of ps
-def heed.has(+h: KV.Trie<Nat>, +k: String) -> Bool:
-  Bool.not(Nat.is_eq(KV.code.at(Nat, h, k, KV.hash(k)), 0n))
+# whether h or the tracking table tb holds k (KV.code.at: 0 when it does
+# not), or one of ks, or the key of one of ps
+def heed.has(+h: KV.Trie<Nat>, +tb: KV.Trie<List<&2, Nat>>, +k: String) -> Bool:
+  +x = KV.hash(k)
+  Bool.not(Bool.and(Nat.is_eq(KV.code.at(Nat, h, k, x), 0n), Nat.is_eq(KV.code.at(List<&2, Nat>, tb, k, x), 0n)))
 
-def heed.keys(+ks: List<&2, String>, +h: KV.Trie<Nat>, hit: Bool) -> Bool:
+def heed.keys(+ks: List<&2, String>, +h: KV.Trie<Nat>, +tb: KV.Trie<List<&2, Nat>>, hit: Bool) -> Bool:
   match ks:
     case Nil{}:
       hit
     case Con{+k, +rest}:
-      heed.keys(rest, h, Bool.or(hit, heed.has(h, k)))
+      heed.keys(rest, h, tb, Bool.or(hit, heed.has(h, tb, k)))
 
-def heed.pairs(+ps: List<&2, R.KVPair>, +h: KV.Trie<Nat>, hit: Bool) -> Bool:
+def heed.pairs(+ps: List<&2, R.KVPair>, +h: KV.Trie<Nat>, +tb: KV.Trie<List<&2, Nat>>, hit: Bool) -> Bool:
   match ps:
     case Nil{}:
       hit
     case Con{R.KP{+k, v}, +rest}:
-      heed.pairs(rest, h, Bool.or(hit, heed.has(h, k)))
+      heed.pairs(rest, h, tb, Bool.or(hit, heed.has(h, tb, k)))
 
 # whether a command may make a client that waits ready, or touch a
 # watched key: one of the connection or of the server (SWAPDB, MOVE and
@@ -1790,52 +1785,52 @@ def heed.pairs(+ps: List<&2, R.KVPair>, +h: KV.Trie<Nat>, hit: Bool) -> Bool:
 # database that may write a key of h, one that LAWS.bend's writes names
 # (each key for FLUSHDB). A command of the database that writes must
 # have its case here and there both.
-def heed.cmd(+h: KV.Trie<Nat>, +c: R.Cmd) -> Bool:
+def heed.cmd(+h: KV.Trie<Nat>, +tb: KV.Trie<List<&2, Nat>>, +c: R.Cmd) -> Bool:
   match c:
     case R.Set{+k, v}:
-      heed.has(h, k)
+      heed.has(h, tb, k)
     case R.Del{+ks}:
-      heed.keys(ks, h, False{})
+      heed.keys(ks, h, tb, False{})
     case R.IncrBy{+k, by}:
-      heed.has(h, k)
+      heed.has(h, tb, k)
     case R.MSet{+ps}:
-      heed.pairs(ps, h, False{})
+      heed.pairs(ps, h, tb, False{})
     case R.FlushDb{}:
       True{}
     case R.Upd{+k, op}:
-      heed.has(h, k)
+      heed.has(h, tb, k)
     case R.MSetNx{+ps}:
-      heed.pairs(ps, h, False{})
+      heed.pairs(ps, h, tb, False{})
     case R.Rename{+s, +d, nx}:
-      Bool.or(heed.has(h, s), heed.has(h, d))
+      Bool.or(heed.has(h, tb, s), heed.has(h, tb, d))
     case R.BitOp{op, +d, srcs}:
-      heed.has(h, d)
+      heed.has(h, tb, d)
     case R.LMove{+s, +d, e}:
-      Bool.or(heed.has(h, s), heed.has(h, d))
+      Bool.or(heed.has(h, tb, s), heed.has(h, tb, d))
     case R.LMPop{+ks, left, n}:
-      heed.keys(ks, h, False{})
+      heed.keys(ks, h, tb, False{})
     case R.SStore{op, +d, srcs}:
-      heed.has(h, d)
+      heed.has(h, tb, d)
     case R.SMv{+s, +d, m}:
-      Bool.or(heed.has(h, s), heed.has(h, d))
+      Bool.or(heed.has(h, tb, s), heed.has(h, tb, d))
     case R.ZStore{op, +d, srcs}:
-      heed.has(h, d)
+      heed.has(h, tb, d)
     case R.ZRangeStore{+d, s, q}:
-      heed.has(h, d)
+      heed.has(h, tb, d)
     case R.ZMPop{+ks, max, n}:
-      heed.keys(ks, h, False{})
+      heed.keys(ks, h, tb, False{})
     case R.Own{o}:
       True{}
     case _:
       False{}
 
 # heed.cmd of each command of cs, or hit
-def heed.cmds(+cs: List<&2, R.Cmd>, +h: KV.Trie<Nat>, hit: Bool) -> Bool:
+def heed.cmds(+cs: List<&2, R.Cmd>, +h: KV.Trie<Nat>, +tb: KV.Trie<List<&2, Nat>>, hit: Bool) -> Bool:
   match cs:
     case Nil{}:
       hit
     case Con{+c, +rest}:
-      heed.cmds(rest, h, Bool.or(hit, heed.cmd(h, c)))
+      heed.cmds(rest, h, tb, Bool.or(hit, heed.cmd(h, tb, c)))
 
 # Most batches need no command read: the hash of a request carries its
 # call's code (redis.bend, Statistics), and the hashes of a call of GET,
@@ -1850,41 +1845,42 @@ def heed.cmds(+cs: List<&2, R.Cmd>, +h: KV.Trie<Nat>, hit: Bool) -> Bool:
 
 # whether a request may run the fast way unread: a GET, or a SET or INCR
 # (sw) whose key's bucket holds no heeded key
-def heed.quick.sw(sw: Bool, +h: KV.Trie<Nat>, +x: U32) -> Bool:
+def heed.quick.sw(sw: Bool, +h: KV.Trie<Nat>, +tb: KV.Trie<List<&2, Nat>>, +x: U32) -> Bool:
   match sw:
     case True{}:
-      Bool.not(KV.filled.at(Nat, h, x))
+      Bool.not(Bool.or(KV.filled.at(Nat, h, x), KV.filled.at(List<&2, Nat>, tb, x)))
     case False{}:
       False{}
 
-def heed.quick.one(get: Bool, +h: KV.Trie<Nat>, +m: U32, +x: U32) -> Bool:
+def heed.quick.one(get: Bool, +h: KV.Trie<Nat>, +tb: KV.Trie<List<&2, Nat>>, +m: U32, +x: U32) -> Bool:
   match get:
     case True{}:
       True{}
     case False{}:
-      heed.quick.sw(Bool.or(U32.is_eq(m, R.stat.mark.set()), U32.is_eq(m, R.stat.mark.incr())), h, x)
+      heed.quick.sw(Bool.or(U32.is_eq(m, R.stat.mark.set()), U32.is_eq(m, R.stat.mark.incr())), h, tb, x)
 
 # whether every request of hs may run the fast way unread, and ok
-def heed.quick(+hs: List<&2, U32>, +h: KV.Trie<Nat>, ok: Bool) -> Bool:
+def heed.quick(+hs: List<&2, U32>, +h: KV.Trie<Nat>, +tb: KV.Trie<List<&2, Nat>>, ok: Bool) -> Bool:
   match hs:
     case Nil{}:
       ok
     case Con{+x, +rest}:
       +m = U32.and(x, 4293918720)
-      heed.quick(rest, h, Bool.and(ok, heed.quick.one(U32.is_eq(m, R.stat.mark.get()), h, m, x)))
+      heed.quick(rest, h, tb, Bool.and(ok, heed.quick.one(U32.is_eq(m, R.stat.mark.get()), h, tb, m, x)))
 
 # whether a batch writes no heeded key: unread (heed.quick), or read
-def heed.free.of(quick: Bool, +h: KV.Trie<Nat>, +cs: List<&2, R.Cmd>) -> Bool:
+def heed.free.of(quick: Bool, +h: KV.Trie<Nat>, +tb: KV.Trie<List<&2, Nat>>, +cs: List<&2, R.Cmd>) -> Bool:
   match quick:
     case True{}:
       True{}
     case False{}:
-      Bool.not(heed.cmds(cs, h, False{}))
+      Bool.not(heed.cmds(cs, h, tb, False{}))
 
 def ps.heed.free(+cs: List<&2, R.Cmd>, +hs: List<&2, U32>, +pb: Ps) -> Bool:
   match pb:
-    case Ps{reg, ev, px, Cls{tab, kd, ks, ms, pz, dn, Hd{+hk, sn, ad, bs, tr}}, own}:
-      heed.free.of(heed.quick(hs, hk, True{}), hk, cs)
+    case Ps{reg, ev, px, Cls{tab, kd, ks, ms, pz, dn, Hd{+hk, sn, ad, bs, +tr}}, own}:
+      +tb = trk.tab(tr)
+      heed.free.of(heed.quick(hs, hk, tb, True{}), hk, tb, cs)
     case PsOf{+p}:
       ps.heed.free(cs, hs, p)
 
@@ -1907,7 +1903,7 @@ def heed.ok(+cn: S.Conn, +srv: S.Srv, +t: Tx, +cs: List<&2, R.Cmd>, +hs: List<&2
 def ps.heed.stir(+c: R.Cmd, +pb: Ps) -> Bool:
   match pb:
     case Ps{reg, ev, px, Cls{tab, kd, ks, ms, pz, dn, Hd{+hk, sn, ad, bs, tr}}, own}:
-      heed.cmd(hk, c)
+      heed.cmd(hk, KV.empty(List<&2, Nat>), c)
     case PsOf{+p}:
       ps.heed.stir(c, p)
 
@@ -2012,32 +2008,23 @@ def heed.n.tx(+t: Tx, +n: Nat) -> Nat:
     case TxOn{i, mu, bd, cs, qs, qc, qa, +wk, +r}:
       heed.n.tx(r, Nat.add(n, Bool.pick(Nat, wks.some(wk), 1n, 0n)))
 
-# h with the keys of the tracking table (Tracking)
-def trk.heed(+t: Trk, h: KV.Trie<Nat>) -> KV.Trie<Nat>:
-  match t:
-    case TrkOn{+tab, keys, items, ids, rds, pfx, pend, stale, mx}:
-      heed.put(KV.keys(List<&2, Nat>, tab, 0n), h)
-    case TrkOf{+x}:
-      trk.heed(x, h)
-
-# at a tick, the set made anew from the clients that wait and watch and
-# from the keys of the tracking table (Tracking), but when as many heed
-# keys as did when it was made, and as started to since (live: how many
-# do), and few tracked keys left the table since: then no client that
-# heeded keys stopped, and the set holds no key that none heeds (a client
-# that started to heed keys while another stopped may leave its keys in
-# it until a later tick), or few
+# at a tick, the set made anew from the clients that wait and watch, but
+# when as many heed keys as did when it was made, and as started to since
+# (live: how many do): then no client that heeded keys stopped, and the
+# set holds no key that none heeds (a client that started to heed keys
+# while another stopped may leave its keys in it until a later tick). The
+# tracking table's keys are not in it: the checks look in the table.
 def heed.tick(same: Bool, +live: Nat, +ws: Waits, +t: Tx, hd: Hd) -> Hd:
   match same hd:
     case True{} h:
       h
-    case False{} Hd{hk, sn, ad, bs, +tr}:
-      Hd{trk.heed(tr, heed.tx(t, heed.waits(ws, KV.empty(Nat)))), waits.soon(ws, 0n), 0n, live, trk.fresh(tr)}
+    case False{} Hd{hk, sn, ad, bs, tr}:
+      Hd{heed.tx(t, heed.waits(ws, KV.empty(Nat))), waits.soon(ws, 0n), 0n, live, tr}
 
 def ps.heed.tick(+live: Nat, +ws: Waits, +t: Tx, pb: Ps) -> Ps:
   match pb:
-    case Ps{reg, ev, px, Cls{tab, kd, ks, ms, pz, dn, Hd{hk, sn, +ad, +bs, +tr}}, own}:
-      Ps{reg, ev, px, Cls{tab, kd, ks, ms, pz, dn, heed.tick(Bool.and(Nat.is_eq(live, Nat.add(ad, bs)), Bool.not(trk.stale(tr))), live, ws, t, Hd{hk, sn, ad, bs, tr})}, own}
+    case Ps{reg, ev, px, Cls{tab, kd, ks, ms, pz, dn, Hd{hk, sn, +ad, +bs, tr}}, own}:
+      Ps{reg, ev, px, Cls{tab, kd, ks, ms, pz, dn, heed.tick(Nat.is_eq(live, Nat.add(ad, bs)), live, ws, t, Hd{hk, sn, ad, bs, tr})}, own}
     case PsOf{p}:
       ps.heed.tick(live, ws, t, p)
 
@@ -2895,7 +2882,7 @@ def ps.trk(+pb: Ps) -> Trk:
 # tracks, or is a redirect's client (its pushes must go out at once)
 def trk.waits(+id: Nat, +t: Trk) -> Bool:
   match t:
-    case TrkOn{tab, keys, items, +ids, +rds, pfx, pend, stale, mx}:
+    case TrkOn{tab, keys, items, +ids, +rds, pfx, pend, over, mx}:
       Bool.or(ids.has(id, ids), ids.has(id, rds))
     case TrkOf{+x}:
       trk.waits(id, x)
@@ -2934,7 +2921,7 @@ def ps.trk.waits(+id: Nat, +pb: Ps) -> Bool:
 # the prefixes
 def trk.info(+t: Trk, srv: S.Srv) -> S.Srv:
   match t:
-    case TrkOn{tab, +keys, +items, +ids, rds, +pfx, pend, stale, mx}:
+    case TrkOn{tab, +keys, +items, +ids, rds, +pfx, pend, over, mx}:
       S.srv.tracking(srv, List.length(&2, Nat, ids), keys, items, List.length(&2, Bc, pfx))
     case TrkOf{+x}:
       trk.info(x, srv)
@@ -2942,15 +2929,15 @@ def trk.info(+t: Trk, srv: S.Srv) -> S.Srv:
 # Reading: a call's keys remembered for the client of id
 def trk.remember.add(has: Bool, +k: String, +id: Nat, xs: List<&2, Nat>, t: Trk) -> Trk:
   match has t:
-    case False{} TrkOn{tab, keys, items, ids, rds, pfx, pend, stale, mx}:
-      TrkOn{KV.set(List<&2, Nat>, tab, k, id <> xs), keys, 1n+items, ids, rds, pfx, pend, stale, mx}
+    case False{} TrkOn{tab, keys, items, ids, rds, pfx, pend, over, mx}:
+      TrkOn{KV.set(List<&2, Nat>, tab, k, id <> xs), keys, 1n+items, ids, rds, pfx, pend, over, mx}
     case _ t0:
       t0
 
 def trk.remember.of(m: Maybe<&2, List<&2, Nat>>, +k: String, +id: Nat, t: Trk) -> Trk:
   match m t:
-    case None{} TrkOn{tab, keys, items, ids, rds, pfx, pend, stale, mx}:
-      TrkOn{KV.set(List<&2, Nat>, tab, k, [id]), 1n+keys, 1n+items, ids, rds, pfx, pend, stale, mx}
+    case None{} TrkOn{tab, keys, items, ids, rds, pfx, pend, over, mx}:
+      TrkOn{KV.set(List<&2, Nat>, tab, k, [id]), 1n+keys, 1n+items, ids, rds, pfx, pend, over, mx}
     case Some{+xs} t0:
       trk.remember.add(ids.has(id, xs), k, id, xs, t0)
     case _ t0:
@@ -2958,8 +2945,8 @@ def trk.remember.of(m: Maybe<&2, List<&2, Nat>>, +k: String, +id: Nat, t: Trk) -
 
 def trk.remember(+k: String, +id: Nat, t: Trk) -> Trk:
   match t:
-    case TrkOn{+tab, keys, items, ids, rds, pfx, pend, stale, mx}:
-      trk.remember.of(KV.read(List<&2, Nat>, tab, k, 0n), k, id, TrkOn{tab, keys, items, ids, rds, pfx, pend, stale, mx})
+    case TrkOn{+tab, keys, items, ids, rds, pfx, pend, over, mx}:
+      trk.remember.of(KV.read(List<&2, Nat>, tab, k, 0n), k, id, TrkOn{tab, keys, items, ids, rds, pfx, pend, over, mx})
     case TrkOf{x}:
       trk.remember(k, id, x)
 
@@ -2970,12 +2957,12 @@ def trk.reads(+xs: List<&2, String>, +id: Nat, t: Trk) -> Trk:
     case Con{+k, +rest}:
       trk.reads(rest, id, trk.remember(k, id, t))
 
-# the keys xs a call of the client of id read, in the table and among the
-# heeded keys
+# the keys xs a call of the client of id read, in the table (whose keys
+# are heeded keys)
 def ps.trk.read(+id: Nat, +xs: List<&2, String>, pb: Ps) -> Ps:
   match pb:
     case Ps{reg, ev, px, Cls{tab, kd, ks, ms, pz, dn, Hd{hk, sn, ad, bs, tr}}, own}:
-      Ps{reg, U32.or(ev, 4194304), px, Cls{tab, kd, ks, ms, pz, dn, Hd{heed.put(xs, hk), sn, ad, bs, trk.reads(xs, id, tr)}}, own}
+      Ps{reg, U32.or(ev, 4194304), px, Cls{tab, kd, ks, ms, pz, dn, Hd{hk, sn, ad, bs, trk.reads(xs, id, tr)}}, own}
     case PsOf{p}:
       ps.trk.read(id, xs, p)
 
@@ -3061,8 +3048,8 @@ def bc.add.if(on: Bool, +gs: List<&2, String>, +id: Nat, bs: List<&2, Bc>) -> Li
 
 def trk.on(+id: Nat, +was: Bool, +old: Nat, +rd: Nat, +b: Bool, +gs: List<&2, String>, t: Trk) -> Trk:
   match t:
-    case TrkOn{tab, keys, items, ids, rds, pfx, pend, stale, mx}:
-      TrkOn{tab, keys, items, ids.add.if(was, id, ids), rds.add(rd, rds.drop(Bool.pick(Nat, was, old, 0n), rds)), bc.add.if(b, gs, id, pfx), pend, stale, mx}
+    case TrkOn{tab, keys, items, ids, rds, pfx, pend, over, mx}:
+      TrkOn{tab, keys, items, ids.add.if(was, id, ids), rds.add(rd, rds.drop(Bool.pick(Nat, was, old, 0n), rds)), bc.add.if(b, gs, id, pfx), pend, over, mx}
     case TrkOf{x}:
       trk.on(id, was, old, rd, b, gs, x)
 
@@ -3188,125 +3175,154 @@ def trk.err(+cur: Tk, +b: Bool, +i: Bool, +o: Bool, +gs: List<&2, String>) -> Ma
 # channel; to the client whose command runs (cur), among its replies,
 # before its command's when it is another client's (own), after it when
 # it is its own, kept for after the call (the tracking's pend).
-def iv.route(me: Bool, mine: Bool, +dback: Chan(Ans), +dr3: Bool, +p: Pl, v: Iv) -> Iv:
-  match me mine v:
-    case True{} True{} Iv{reg, ev, px, cs, own, TrkOn{tab, keys, items, ids, rds, pfx, pend, stale, mx}}:
-      Iv{reg, ev, px, cs, own, TrkOn{tab, keys, items, ids, rds, pfx, inv.reply(dr3, p) <> pend, stale, mx}}
-    case True{} False{} Iv{reg, ev, px, cs, own, t}:
+#
+# While a blocked client is served (out: Some of the id of the client
+# whose command served it, else None), the served client is cur: what it
+# gets as another's goes on its channel, which its reply follows (bg.ups);
+# what the client out gets goes after that client's reply, as Redis
+# writes it once its call is over (own collects it meanwhile, and
+# pd.aside puts it with that client's pending ones).
+def iv.route.me(mine: Bool, srv: Bool, +dback: Chan(Ans), +dr3: Bool, +p: Pl, v: Iv) -> Iv:
+  match mine srv v:
+    case True{} _ Iv{reg, ev, px, cs, own, TrkOn{tab, keys, items, ids, rds, pfx, pend, over, mx}}:
+      Iv{reg, ev, px, cs, own, TrkOn{tab, keys, items, ids, rds, pfx, inv.reply(dr3, p) <> pend, over, mx}}
+    case False{} False{} Iv{reg, ev, px, cs, own, t}:
       Iv{reg, ev, px, cs, inv.reply(dr3, p) <> own, t}
-    case False{} _ Iv{reg, ev, px, cs, own, t}:
+    case False{} True{} Iv{reg, ev, px, cs, own, t}:
       Iv{reg, ev, (dback, Push{inv.bytes(dr3, p)}) <> px, cs, own, t}
     case _ _ v0:
       v0
 
-def iv.put.as(go: Bool, +did: Nat, +dback: Chan(Ans), +dr3: Bool, +p: Pl, +tid: Nat, +cur: Nat, v: Iv) -> Iv:
+def iv.route.other(late: Bool, +dback: Chan(Ans), +dr3: Bool, +p: Pl, v: Iv) -> Iv:
+  match late v:
+    case True{} Iv{reg, ev, px, cs, own, t}:
+      Iv{reg, ev, px, cs, inv.reply(dr3, p) <> own, t}
+    case False{} Iv{reg, ev, px, cs, own, t}:
+      Iv{reg, ev, (dback, Push{inv.bytes(dr3, p)}) <> px, cs, own, t}
+
+def iv.route(me: Bool, mine: Bool, late: Bool, srv: Bool, +dback: Chan(Ans), +dr3: Bool, +p: Pl, v: Iv) -> Iv:
+  match me:
+    case True{}:
+      iv.route.me(mine, srv, dback, dr3, p, v)
+    case False{}:
+      iv.route.other(late, dback, dr3, p, v)
+
+# whether the client of id is the one whose command served a client (out)
+def iv.late(+id: Nat, +out: Maybe<&2, Nat>) -> Bool:
+  match out:
+    case Some{+o}:
+      Nat.is_eq(id, o)
+    case None{}:
+      False{}
+
+def iv.put.as(go: Bool, +did: Nat, +dback: Chan(Ans), +dr3: Bool, +p: Pl, +tid: Nat, +cur: Nat, +out: Maybe<&2, Nat>, v: Iv) -> Iv:
   match go:
     case True{}:
-      iv.route(Nat.is_eq(did, cur), Nat.is_eq(tid, cur), dback, dr3, p, v)
+      iv.route(Nat.is_eq(did, cur), Nat.is_eq(tid, cur), iv.late(did, out), Maybe.is_some(&2, Nat, out), dback, dr3, p, v)
     case False{}:
       v
 
-def iv.put(red: Bool, +did: Nat, +dback: Chan(Ans), +dr3: Bool, +p: Pl, +tid: Nat, +cur: Nat, v: Iv) -> Iv:
+def iv.put(red: Bool, +did: Nat, +dback: Chan(Ans), +dr3: Bool, +p: Pl, +tid: Nat, +cur: Nat, +out: Maybe<&2, Nat>, v: Iv) -> Iv:
   match v:
     case Iv{+reg, ev, px, cs, own, t}:
-      iv.put.as(Bool.or(dr3, Bool.and(red, Maybe.is_some(&2, Mine, reg.mine(did, reg)))), did, dback, dr3, p, tid, cur, Iv{reg, ev, px, cs, own, t})
+      iv.put.as(Bool.or(dr3, Bool.and(red, Maybe.is_some(&2, Mine, reg.mine(did, reg)))), did, dback, dr3, p, tid, cur, out, Iv{reg, ev, px, cs, own, t})
 
 # a client whose redirect is gone: flagged broken, and told so in RESP3
-# (after its reply when its own command runs)
-def iv.notice(on: Bool, me: Bool, +back: Chan(Ans), +rd: Nat, v: Iv) -> Iv:
-  match on me v:
-    case True{} True{} Iv{reg, ev, px, cs, own, TrkOn{tab, keys, items, ids, rds, pfx, pend, stale, mx}}:
-      Iv{reg, ev, px, cs, own, TrkOn{tab, keys, items, ids, rds, pfx, broken.reply(rd) <> pend, stale, mx}}
-    case True{} False{} Iv{reg, ev, px, cs, own, t}:
+# (after its reply when its own command runs, or when its command served
+# the client whose change it hears of: late)
+def iv.notice.other(late: Bool, +back: Chan(Ans), +rd: Nat, v: Iv) -> Iv:
+  match late v:
+    case True{} Iv{reg, ev, px, cs, own, t}:
+      Iv{reg, ev, px, cs, broken.reply(rd) <> own, t}
+    case False{} Iv{reg, ev, px, cs, own, t}:
       Iv{reg, ev, (back, Push{broken.bytes(rd)}) <> px, cs, own, t}
+
+def iv.notice(on: Bool, me: Bool, late: Bool, +back: Chan(Ans), +rd: Nat, v: Iv) -> Iv:
+  match on me v:
+    case True{} True{} Iv{reg, ev, px, cs, own, TrkOn{tab, keys, items, ids, rds, pfx, pend, over, mx}}:
+      Iv{reg, ev, px, cs, own, TrkOn{tab, keys, items, ids, rds, pfx, broken.reply(rd) <> pend, over, mx}}
+    case True{} False{} v0:
+      iv.notice.other(late, back, rd, v0)
     case _ _ v0:
       v0
 
-def iv.broken(+id: Nat, +back: Chan(Ans), +r3: Bool, +rd: Nat, +cur: Nat, v: Iv) -> Iv:
+def iv.broken(+id: Nat, +back: Chan(Ans), +r3: Bool, +rd: Nat, +cur: Nat, +out: Maybe<&2, Nat>, v: Iv) -> Iv:
   match v:
     case Iv{reg, ev, px, cs, own, t}:
       +c = cs
-      iv.notice(r3, Nat.is_eq(id, cur), back, rd, Iv{reg, ev, px, cls.tk.set(id, tk.broken.set(cls.tk(id, c)), c), own, t})
+      iv.notice(r3, Nat.is_eq(id, cur), iv.late(id, out), back, rd, Iv{reg, ev, px, cls.tk.set(id, tk.broken.set(cls.tk(id, c)), c), own, t})
 
-def iv.redir.of(m: Maybe<&2, Cl>, +rd: Nat, +id: Nat, +back: Chan(Ans), +r3: Bool, +p: Pl, +cur: Nat, v: Iv) -> Iv:
+def iv.redir.of(m: Maybe<&2, Cl>, +rd: Nat, +id: Nat, +back: Chan(Ans), +r3: Bool, +p: Pl, +cur: Nat, +out: Maybe<&2, Nat>, v: Iv) -> Iv:
   match m:
     case Some{Cl{+rid, +rback, fd, addr, laddr, since, name, db, noev, +rr3, kt}}:
-      iv.put(True{}, rid, rback, rr3, p, id, cur, v)
+      iv.put(True{}, rid, rback, rr3, p, id, cur, out, v)
     case None{}:
-      iv.broken(id, back, r3, rd, cur, v)
+      iv.broken(id, back, r3, rd, cur, out, v)
 
-def iv.to(+rd: Nat, +id: Nat, +back: Chan(Ans), +r3: Bool, +p: Pl, +cur: Nat, v: Iv) -> Iv:
+def iv.to(+rd: Nat, +id: Nat, +back: Chan(Ans), +r3: Bool, +p: Pl, +cur: Nat, +out: Maybe<&2, Nat>, v: Iv) -> Iv:
   match rd v:
     case 0n v0:
-      iv.put(False{}, id, back, r3, p, id, cur, v0)
+      iv.put(False{}, id, back, r3, p, id, cur, out, v0)
     case _ Iv{reg, ev, px, +cs, own, t}:
-      iv.redir.of(cls.get(rd, cs), rd, id, back, r3, p, cur, Iv{reg, ev, px, cs, own, t})
+      iv.redir.of(cls.get(rd, cs), rd, id, back, r3, p, cur, out, Iv{reg, ev, px, cs, own, t})
 
 # an invalidation p for the tracking client c, cur being the client whose
-# command runs (0: none)
-def iv.send(+c: Cl, +p: Pl, +cur: Nat, v: Iv) -> Iv:
+# command runs (0: none), out as iv.route reads it
+def iv.send(+c: Cl, +p: Pl, +cur: Nat, +out: Maybe<&2, Nat>, v: Iv) -> Iv:
   match c:
     case Cl{+id, +back, fd, addr, laddr, since, name, db, noev, +r3, +kt}:
-      iv.to(tk.redir(kt), id, back, r3, p, cur, v)
+      iv.to(tk.redir(kt), id, back, r3, p, cur, out, v)
 
 # a key of the table that changed: each of its clients that hears of it
 # told, the key out of the table
-def iv.one.if(on: Bool, +c: Cl, +k: String, +cur: Nat, v: Iv) -> Iv:
+def iv.one.if(on: Bool, +c: Cl, +k: String, +cur: Nat, +out: Maybe<&2, Nat>, v: Iv) -> Iv:
   match on:
     case True{}:
-      iv.send(c, PlKeys{[k]}, cur, v)
+      iv.send(c, PlKeys{[k]}, cur, out, v)
     case False{}:
       v
 
-def iv.one.of(m: Maybe<&2, Cl>, +id: Nat, +k: String, +cur: Nat, v: Iv) -> Iv:
+def iv.one.of(m: Maybe<&2, Cl>, +id: Nat, +k: String, +cur: Nat, +out: Maybe<&2, Nat>, v: Iv) -> Iv:
   match m:
     case Some{+c}:
-      iv.one.if(tk.hears(cl.tk(c), Nat.is_eq(id, cur)), c, k, cur, v)
+      iv.one.if(tk.hears(cl.tk(c), Nat.is_eq(id, cur)), c, k, cur, out, v)
     case None{}:
       v
 
-def iv.one(+id: Nat, +k: String, +cur: Nat, v: Iv) -> Iv:
+def iv.one(+id: Nat, +k: String, +cur: Nat, +out: Maybe<&2, Nat>, v: Iv) -> Iv:
   match v:
     case Iv{reg, ev, px, +cs, own, t}:
-      iv.one.of(cls.get(id, cs), id, k, cur, Iv{reg, ev, px, cs, own, t})
+      iv.one.of(cls.get(id, cs), id, k, cur, out, Iv{reg, ev, px, cs, own, t})
 
-def iv.ids(+xs: List<&2, Nat>, +k: String, +cur: Nat, v: Iv) -> Iv:
+def iv.ids(+xs: List<&2, Nat>, +k: String, +cur: Nat, +out: Maybe<&2, Nat>, v: Iv) -> Iv:
   match xs:
     case Nil{}:
       v
     case Con{+id, +rest}:
-      iv.ids(rest, k, cur, iv.one(id, k, cur, v))
+      iv.ids(rest, k, cur, out, iv.one(id, k, cur, out, v))
 
 # the key k out of the table: the ids of its clients (none when it is not
 # there), and the tracking without it
 def trk.take.of(m: Maybe<&2, List<&2, Nat>>, +k: String, t: Trk) -> List<&2, Nat> & Trk:
   match m t:
-    case Some{+xs} TrkOn{tab, keys, items, ids, rds, pfx, pend, stale, mx}:
-      (xs, TrkOn{KV.del(List<&2, Nat>, tab, k), Nat.sub(keys, 1n), Nat.sub(items, List.length(&2, Nat, xs)), ids, rds, pfx, pend, 1n+stale, mx})
+    case Some{+xs} TrkOn{tab, keys, items, ids, rds, pfx, pend, over, mx}:
+      (xs, TrkOn{KV.del(List<&2, Nat>, tab, k), Nat.sub(keys, 1n), Nat.sub(items, List.length(&2, Nat, xs)), ids, rds, pfx, pend, over, mx})
     case _ t0:
       (Nil{}, t0)
 
 def trk.take(+k: String, t: Trk) -> List<&2, Nat> & Trk:
   match t:
-    case TrkOn{+tab, keys, items, ids, rds, pfx, pend, stale, mx}:
-      trk.take.of(KV.read(List<&2, Nat>, tab, k, 0n), k, TrkOn{tab, keys, items, ids, rds, pfx, pend, stale, mx})
+    case TrkOn{+tab, keys, items, ids, rds, pfx, pend, over, mx}:
+      trk.take.of(KV.read(List<&2, Nat>, tab, k, 0n), k, TrkOn{tab, keys, items, ids, rds, pfx, pend, over, mx})
     case TrkOf{x}:
       trk.take(k, x)
 
-# BCAST: a key changed by the client cur, among the keys of each prefix it
-# begins with, in the order of their bytes (the last change's client kept)
-def bk.put(+k: String, +by: Nat, xs: List<&2, Bk>) -> List<&2, Bk>:
-  match xs:
-    case Nil{}:
-      [Bk{k, by}]
-    case Con{Bk{+x, +b}, +rest}:
-      +o = String.order(x, k)
-      Bool.pick(List<&2, Bk>, Cmp.is_lt(o), Bk{x, b} <> bk.put(k, by, rest), Bool.pick(List<&2, Bk>, Cmp.is_eq(o), Bk{k, by} <> rest, Bk{k, by} <> (Bk{x, b} <> rest)))
-
+# BCAST: a key changed by the client by, among the keys of each prefix it
+# begins with, first (bk.sorted orders them at the end of the group)
 def bk.put.if(on: Bool, +k: String, +by: Nat, xs: List<&2, Bk>) -> List<&2, Bk>:
   match on:
     case True{}:
-      bk.put(k, by, xs)
+      Bk{k, by} <> xs
     case False{}:
       xs
 
@@ -3319,24 +3335,27 @@ def bc.mark(+k: String, +by: Nat, bs: List<&2, Bc>) -> List<&2, Bc>:
 
 def trk.mark(+on: Bool, +k: String, +by: Nat, t: Trk) -> Trk:
   match on t:
-    case True{} TrkOn{tab, keys, items, ids, rds, pfx, pend, stale, mx}:
-      TrkOn{tab, keys, items, ids, rds, bc.mark(k, by, pfx), pend, stale, mx}
+    case True{} TrkOn{tab, keys, items, ids, rds, pfx, pend, over, mx}:
+      TrkOn{tab, keys, items, ids, rds, bc.mark(k, by, pfx), pend, over, mx}
     case True{} TrkOf{x}:
       trk.mark(on, k, by, x)
     case False{} t0:
       t0
 
-def iv.key.of(p: List<&2, Nat> & Trk, +k: String, +cur: Nat, reg: Reg, ev: U32, px: List<&2, Sigma<&2, &2, Chan(Ans), _ => Ans>>, cs: Cls, own: List<&2, R.Reply>) -> Iv:
+def iv.key.of(p: List<&2, Nat> & Trk, +k: String, +cur: Nat, +out: Maybe<&2, Nat>, reg: Reg, ev: U32, px: List<&2, Sigma<&2, &2, Chan(Ans), _ => Ans>>, cs: Cls, own: List<&2, R.Reply>) -> Iv:
   (+xs, t) = p
-  iv.ids(xs, k, cur, Iv{reg, ev, px, cs, own, t})
+  iv.ids(xs, k, cur, out, Iv{reg, ev, px, cs, own, t})
 
 # key k changed by the client cur (0: none), as trackingInvalidateKey:
 # under the BCAST prefixes (bc: but for a key the table's limit evicts),
-# then to the clients in the table
-def iv.key(+k: String, +cur: Nat, +bc: Bool, v: Iv) -> Iv:
+# then to the clients in the table (out as iv.route reads it)
+def iv.key.as(+k: String, +cur: Nat, +out: Maybe<&2, Nat>, +bc: Bool, v: Iv) -> Iv:
   match v:
     case Iv{reg, ev, px, cs, own, t}:
-      iv.key.of(trk.take(k, trk.mark(bc, k, cur, t)), k, cur, reg, ev, px, cs, own)
+      iv.key.of(trk.take(k, trk.mark(bc, k, cur, t)), k, cur, out, reg, ev, px, cs, own)
+
+def iv.key(+k: String, +cur: Nat, +bc: Bool, v: Iv) -> Iv:
+  iv.key.as(k, cur, None{}, bc, v)
 
 # FLUSHDB and FLUSHALL: a null to every tracking client (after its reply
 # to the client whose command runs, whatever NOLOOP says), then the table
@@ -3344,7 +3363,7 @@ def iv.key(+k: String, +cur: Nat, +bc: Bool, v: Iv) -> Iv:
 def iv.null.of(m: Maybe<&2, Cl>, +cur: Nat, v: Iv) -> Iv:
   match m:
     case Some{Cl{+id, +back, fd, addr, laddr, since, name, db, noev, +r3, +kt}}:
-      iv.to(tk.redir(kt), id, back, r3, PlNull{r3}, cur, v)
+      iv.to(tk.redir(kt), id, back, r3, PlNull{r3}, cur, None{}, v)
     case None{}:
       v
 
@@ -3362,15 +3381,15 @@ def iv.null.all(+xs: List<&2, Nat>, +cur: Nat, v: Iv) -> Iv:
 
 def trk.ids(+t: Trk) -> List<&2, Nat>:
   match t:
-    case TrkOn{tab, keys, items, +ids, rds, pfx, pend, stale, mx}:
+    case TrkOn{tab, keys, items, +ids, rds, pfx, pend, over, mx}:
       ids
     case TrkOf{+x}:
       trk.ids(x)
 
 def trk.clear(t: Trk) -> Trk:
   match t:
-    case TrkOn{tab, +keys, items, ids, rds, pfx, pend, stale, mx}:
-      TrkOn{KV.empty(List<&2, Nat>), 0n, 0n, ids, rds, pfx, pend, Nat.add(stale, keys), mx}
+    case TrkOn{tab, +keys, items, ids, rds, pfx, pend, over, mx}:
+      TrkOn{KV.empty(List<&2, Nat>), 0n, 0n, ids, rds, pfx, pend, Nat.add(over, keys), mx}
     case TrkOf{x}:
       trk.clear(x)
 
@@ -3435,7 +3454,7 @@ def iv.cmd(+c: R.Cmd, +j: Nat, +pre: Maybe<&2, R.Ds>, +post: R.Ds, +cur: Nat, v:
     case R.Rename{+s, +d, nx}:
       iv.write(j, d, pre, post, cur, iv.write(j, s, pre, post, cur, v))
     case R.LMove{+s, +d, e}:
-      iv.write(j, d, pre, post, cur, iv.write(j, s, pre, post, cur, v))
+      iv.write(j, s, pre, post, cur, iv.write(j, d, pre, post, cur, v))
     case R.SMv{+s, +d, +w}:
       iv.dst(smv.added(pre, j, d, R.smv.member(w)), j, d, pre, post, cur, iv.write(j, s, pre, post, cur, v))
     case _:
@@ -3501,8 +3520,8 @@ def ps.trk.gone(+xs: List<&2, A.Ent>, +post: R.Ds, pb: Ps) -> Ps:
 # ran, taken (oldest last: they go on top of its replies, newest first)
 def trk.pend.take(t: Trk) -> List<&2, R.Reply> & Trk:
   match t:
-    case TrkOn{tab, keys, items, ids, rds, pfx, pend, stale, mx}:
-      (pend, TrkOn{tab, keys, items, ids, rds, pfx, Nil{}, stale, mx})
+    case TrkOn{tab, keys, items, ids, rds, pfx, pend, over, mx}:
+      (pend, TrkOn{tab, keys, items, ids, rds, pfx, Nil{}, over, mx})
     case TrkOf{x}:
       trk.pend.take(x)
 
@@ -3519,8 +3538,8 @@ def ps.pend.take(pb: Ps) -> List<&2, R.Reply> & Ps:
 
 def trk.pend.put(xs: List<&2, R.Reply>, t: Trk) -> Trk:
   match t:
-    case TrkOn{tab, keys, items, ids, rds, pfx, pend, stale, mx}:
-      TrkOn{tab, keys, items, ids, rds, pfx, xs, stale, mx}
+    case TrkOn{tab, keys, items, ids, rds, pfx, pend, over, mx}:
+      TrkOn{tab, keys, items, ids, rds, pfx, xs, over, mx}
     case TrkOf{x}:
       trk.pend.put(xs, x)
 
@@ -3532,55 +3551,172 @@ def ps.pend.put(xs: List<&2, R.Reply>, pb: Ps) -> Ps:
     case PsOf{p}:
       ps.pend.put(xs, p)
 
-# A client served (blocked clients: bg.popped) by BLMOVE or BRPOPLPUSH:
-# its destination changed, as Redis signals it when it pushes there, the
-# served client the one whose command runs (the key it popped from was
-# signalled by the push that made it ready); the invalidations it gets
-# before its reply (own) and after it (pend), each newest first, the
-# pending ones of the command that served it kept aside meanwhile
+# A client served (blocked clients: bg.popped), the served client the one
+# whose command runs, as Redis serves it: BLMOVE and BRPOPLPUSH change
+# their destination (lmoveHandlePush signals it; the key they popped from
+# was signalled by the push that made it ready, as serveClientBlockedOnList
+# says); BLMPOP's pop (listElementsRemoved), BZPOPMIN's, BZPOPMAX's and
+# BZMPOP's (genericZpopCommand) signal the key they popped from, and
+# BLPOP's and BRPOP's (form 1) do not. The invalidations the served
+# client gets after its reply (pend, newest first); those it gets as
+# another's go on its channel, before its reply (iv.route). Those for the
+# client out, whose command served it, go after that client's reply, with
+# its own pending ones (kept aside meanwhile), as Redis writes them once
+# that client's call is over
 type Pd is Data:
-  Pd{own: List<&2, R.Reply>, pend: List<&2, R.Reply>, pb: Ps}
+  Pd{pend: List<&2, R.Reply>, pb: Ps}
 
-def ps.trk.served.go(+pc: R.Cmd, +id: Nat, pb: Ps) -> Ps:
+def ps.trk.popped(on: Bool, +ks: List<&2, String>, +id: Nat, +out: Maybe<&2, Nat>, pb: Ps) -> Ps:
+  match on ks:
+    case True{} Con{+k, rest}:
+      iv.ps(iv.key.as(k, id, out, True{}, iv.of(pb)))
+    case _ _:
+      pb
+
+def ps.trk.served.go(+pc: R.Cmd, +form: Nat, +id: Nat, +out: Maybe<&2, Nat>, pb: Ps) -> Ps:
   match pc:
     case R.LMove{s, +d, e}:
-      iv.ps(iv.key(d, id, True{}, iv.of(pb)))
+      iv.ps(iv.key.as(d, id, out, True{}, iv.of(pb)))
+    case R.LMPop{+ks, l, n}:
+      ps.trk.popped(Bool.not(Nat.is_eq(form, 1n)), ks, id, out, pb)
+    case R.ZMPop{+ks, m, n}:
+      ps.trk.popped(True{}, ks, id, out, pb)
     case _:
       pb
 
-def pd.of(p: List<&2, R.Reply> & Ps, own: List<&2, R.Reply>, old: List<&2, R.Reply>) -> Pd:
+# the served client's pending invalidations (p), and the client out's
+# again: those the serving made for it (late, newer) on top of its own
+def pd.of(p: List<&2, R.Reply> & Ps, late: List<&2, R.Reply>, old: List<&2, R.Reply>) -> Pd:
   (pend, pb) = p
-  Pd{own, pend, ps.pend.put(old, pb)}
+  Pd{pend, ps.pend.put(List.append(&2, R.Reply, late, old), pb)}
 
 def pd.mk(p: List<&2, R.Reply> & Ps, old: List<&2, R.Reply>) -> Pd:
-  (own, pb) = p
-  pd.of(ps.pend.take(pb), own, old)
+  (late, pb) = p
+  pd.of(ps.pend.take(pb), late, old)
 
-def pd.aside(p: List<&2, R.Reply> & Ps, +pc: R.Cmd, +id: Nat) -> Pd:
+def pd.aside(p: List<&2, R.Reply> & Ps, +pc: R.Cmd, +form: Nat, +id: Nat, +out: Nat) -> Pd:
   (old, pb) = p
-  pd.mk(ps.own.take(ps.trk.served.go(pc, id, pb)), old)
+  pd.mk(ps.own.take(ps.trk.served.go(pc, form, id, Some{out}, pb)), old)
 
-def ps.trk.served.if(on: Bool, +pc: R.Cmd, +id: Nat, pb: Ps) -> Pd:
+def ps.trk.served.if(on: Bool, +pc: R.Cmd, +form: Nat, +id: Nat, +out: Nat, pb: Ps) -> Pd:
   match on:
     case True{}:
-      pd.aside(ps.pend.take(pb), pc, id)
+      pd.aside(ps.pend.take(pb), pc, form, id, out)
     case False{}:
-      Pd{Nil{}, Nil{}, pb}
+      Pd{Nil{}, pb}
 
-def ps.trk.served(+pc: R.Cmd, +id: Nat, pb: Ps) -> Pd:
+def ps.trk.served(+pc: R.Cmd, +form: Nat, +id: Nat, +out: Nat, pb: Ps) -> Pd:
   +p = pb
-  ps.trk.served.if(ps.trk.hot(p), pc, id, p)
+  ps.trk.served.if(ps.trk.hot(p), pc, form, id, out, p)
 
 # The end of a group (Redis's beforeSleep): the keys changed under each
 # BCAST prefix to the clients that listen to it, each of them but the
 # keys its own commands changed last when it is in NOLOOP mode, nothing
-# when none is left; then no key is pending
+# when none is left; then no key is pending. The keys go in the order of
+# their bytes, each once with the client of its last change, as Redis's
+# radix tree of them holds them: a merge sort that keeps the newest first
+# among equal keys (it takes the left one first, and merges neighbouring
+# runs), then the first of each.
+
+# a merge of two sorted lists, one key at a time (out: the merged ones,
+# last first)
+type Mg is Data:
+  Mg{out: List<&2, Bk>, xs: List<&2, Bk>, ys: List<&2, Bk>}
+
+def mg.pick(gt: Bool, out: List<&2, Bk>, x: Bk, xr: List<&2, Bk>, y: Bk, yr: List<&2, Bk>) -> Mg:
+  match gt:
+    case True{}:
+      Mg{y <> out, x <> xr, yr}
+    case False{}:
+      Mg{x <> out, xr, y <> yr}
+
+def mg.step(m: Mg) -> Mg:
+  match m:
+    case Mg{out, Con{Bk{+x, bx}, xr}, Con{Bk{+y, by}, yr}}:
+      mg.pick(Cmp.is_gt(String.order(x, y)), out, Bk{x, bx}, xr, Bk{y, by}, yr)
+    case Mg{out, Con{x, xr}, Nil{}}:
+      Mg{x <> out, xr, Nil{}}
+    case Mg{out, Nil{}, Con{y, yr}}:
+      Mg{y <> out, Nil{}, yr}
+    case other:
+      other
+
+def mg.run(n: Nat, m: Mg) -> Mg:
+  match n:
+    case 0n:
+      m
+    case 1n+p:
+      mg.run(p, mg.step(m))
+
+def mg.out(m: Mg) -> List<&2, Bk>:
+  match m:
+    case Mg{out, xs, ys}:
+      List.reverse(&2, Bk, out)
+
+def bk.merge(xs: List<&2, Bk>, ys: List<&2, Bk>) -> List<&2, Bk>:
+  +a = xs
+  +b = ys
+  mg.out(mg.run(Nat.add(List.length(&2, Bk, a), List.length(&2, Bk, b)), Mg{Nil{}, a, b}))
+
+# a bottom-up merge sort: runs of one key, merged two by two, left before
+# right, until one is left (n: fuel, the number of keys)
+def bk.runs(xs: List<&2, Bk>) -> List<&2, List<&2, Bk>>:
+  match xs:
+    case Nil{}:
+      Nil{}
+    case Con{x, rest}:
+      [x] <> bk.runs(rest)
+
+def bk.pairs(rs: List<&2, List<&2, Bk>>) -> List<&2, List<&2, Bk>>:
+  match rs:
+    case Con{a, Con{b, rest}}:
+      bk.merge(a, b) <> bk.pairs(rest)
+    case other:
+      other
+
+def bk.passes(n: Nat, rs: List<&2, List<&2, Bk>>) -> List<&2, Bk>:
+  match n rs:
+    case _ Nil{}:
+      Nil{}
+    case _ Con{a, Nil{}}:
+      a
+    case 0n Con{a, rest}:
+      a
+    case 1n+p r0:
+      bk.passes(p, bk.pairs(r0))
+
+def bk.uniq.keep(same: Bool, x: Bk, rest: List<&2, Bk>) -> List<&2, Bk>:
+  match same:
+    case True{}:
+      rest
+    case False{}:
+      x <> rest
+
+# xs without a key that follows itself (prev: the key before, first: none)
+def bk.uniq(xs: List<&2, Bk>, +prev: String, +first: Bool) -> List<&2, Bk>:
+  match xs:
+    case Nil{}:
+      Nil{}
+    case Con{Bk{+k, b}, rest}:
+      bk.uniq.keep(Bool.and(Bool.not(first), String.eq(k, prev)), Bk{k, b}, bk.uniq(rest, k, False{}))
+
+def bk.sorted(xs: List<&2, Bk>) -> List<&2, Bk>:
+  +x0 = xs
+  bk.uniq(bk.passes(List.length(&2, Bk, x0), bk.runs(x0)), "", True{})
+
+def bk.not.keep(same: Bool, +k: String, rest: List<&2, String>) -> List<&2, String>:
+  match same:
+    case True{}:
+      rest
+    case False{}:
+      k <> rest
+
 def bk.not.by(+id: Nat, +xs: List<&2, Bk>) -> List<&2, String>:
   match xs:
     case Nil{}:
       Nil{}
     case Con{Bk{+k, +b}, +rest}:
-      Bool.pick(List<&2, String>, Nat.is_eq(b, id), bk.not.by(id, rest), k <> bk.not.by(id, rest))
+      bk.not.keep(Nat.is_eq(b, id), k, bk.not.by(id, rest))
 
 def bk.keys(+xs: List<&2, Bk>) -> List<&2, String>:
   match xs:
@@ -3594,12 +3730,21 @@ def iv.bc.send(+c: Cl, +ks: List<&2, String>, v: Iv) -> Iv:
     case Nil{}:
       v
     case Con{k, rest}:
-      iv.send(c, PlKeys{ks}, 0n, v)
+      iv.send(c, PlKeys{ks}, 0n, None{}, v)
+
+# the keys a BCAST client is told: in NOLOOP mode, but those it changed
+# last
+def bc.keys.of(noloop: Bool, +id: Nat, +xs: List<&2, Bk>) -> List<&2, String>:
+  match noloop:
+    case True{}:
+      bk.not.by(id, xs)
+    case False{}:
+      bk.keys(xs)
 
 def iv.bc.of(m: Maybe<&2, Cl>, +id: Nat, +xs: List<&2, Bk>, v: Iv) -> Iv:
   match m:
     case Some{+c}:
-      iv.bc.send(c, Bool.pick(List<&2, String>, tk.noloop(cl.tk(c)), bk.not.by(id, xs), bk.keys(xs)), v)
+      iv.bc.send(c, bc.keys.of(tk.noloop(cl.tk(c)), id, xs), v)
     case None{}:
       v
 
@@ -3615,7 +3760,7 @@ def iv.bcs(+bs: List<&2, Bc>, v: Iv) -> Iv:
     case Nil{}:
       v
     case Con{Bc{p, +ids, +keys}, +rest}:
-      iv.bcs(rest, iv.bc.ids(ids, keys, v))
+      iv.bcs(rest, iv.bc.ids(ids, bk.sorted(keys), v))
 
 def bc.clean(bs: List<&2, Bc>) -> List<&2, Bc>:
   match bs:
@@ -3626,15 +3771,15 @@ def bc.clean(bs: List<&2, Bc>) -> List<&2, Bc>:
 
 def trk.pfx(+t: Trk) -> List<&2, Bc>:
   match t:
-    case TrkOn{tab, keys, items, ids, rds, +pfx, pend, stale, mx}:
+    case TrkOn{tab, keys, items, ids, rds, +pfx, pend, over, mx}:
       pfx
     case TrkOf{+x}:
       trk.pfx(x)
 
 def trk.pfx.clean(t: Trk) -> Trk:
   match t:
-    case TrkOn{tab, keys, items, ids, rds, pfx, pend, stale, mx}:
-      TrkOn{tab, keys, items, ids, rds, bc.clean(pfx), pend, stale, mx}
+    case TrkOn{tab, keys, items, ids, rds, pfx, pend, over, mx}:
+      TrkOn{tab, keys, items, ids, rds, bc.clean(pfx), pend, over, mx}
     case TrkOf{x}:
       trk.pfx.clean(x)
 
@@ -3651,35 +3796,55 @@ def iv.bcast(v: Iv) -> Iv:
 def ps.trk.bcast(pb: Ps) -> Ps:
   iv.ps(iv.bcast(iv.of(pb)))
 
-# tracking-table-max-keys (max; 0: no limit): the table evicts keys at
-# random until it holds no more, each key's clients told as of a change
-# of it, but under no prefix (trackingLimitUsedSlots); r picks them
+# tracking-table-max-keys (max; 0: no limit): while some client tracks,
+# the table evicts keys at random until it holds no more, each key's
+# clients told as of a change of it, but under no prefix, at most 100
+# keys a tick for each tick in a row that found it over its limit, as
+# Redis's trackingLimitUsedSlots bounds its effort; r picks them
 def trk.keys(+t: Trk) -> Nat:
   match t:
-    case TrkOn{tab, +keys, items, ids, rds, pfx, pend, stale, mx}:
+    case TrkOn{tab, +keys, items, ids, rds, pfx, pend, over, mx}:
       keys
     case TrkOf{+x}:
       trk.keys(x)
 
 def trk.max(+t: Trk) -> Nat:
   match t:
-    case TrkOn{tab, keys, items, ids, rds, pfx, pend, stale, +mx}:
+    case TrkOn{tab, keys, items, ids, rds, pfx, pend, over, +mx}:
       mx
     case TrkOf{+x}:
       trk.max(x)
 
-# whether the table holds more keys than its limit
+# whether the table holds more keys than its limit, while some client
+# tracks
 def trk.over(+t: Trk) -> Bool:
   match t:
-    case TrkOn{tab, +keys, items, ids, rds, pfx, pend, stale, +mx}:
-      Bool.and(Nat.is_lt(0n, mx), Nat.is_lt(mx, keys))
+    case TrkOn{tab, +keys, items, +ids, rds, pfx, pend, over, +mx}:
+      Bool.and(Bool.not(List.is_empty(&2, Nat, ids)), Bool.and(Nat.is_lt(0n, mx), Nat.is_lt(mx, keys)))
     case TrkOf{+x}:
       trk.over(x)
 
+# the keys a tick may evict: 100 for each tick in a row over the limit
+def trk.effort(+t: Trk) -> Nat:
+  match t:
+    case TrkOn{tab, keys, items, ids, rds, pfx, pend, +over, mx}:
+      Nat.mul(100n, 1n+over)
+    case TrkOf{+x}:
+      trk.effort(x)
+
+# the ticks in a row over the limit, after one: one more while the table
+# is still over it, none once it is not
+def trk.overs(t: Trk) -> Trk:
+  match t:
+    case TrkOn{tab, +keys, items, ids, rds, pfx, pend, over, +mx}:
+      TrkOn{tab, keys, items, ids, rds, pfx, pend, Bool.pick(Nat, Nat.is_lt(mx, keys), 1n+over, 0n), mx}
+    case TrkOf{x}:
+      trk.overs(x)
+
 def trk.max.put(+n: Nat, t: Trk) -> Trk:
   match t:
-    case TrkOn{tab, keys, items, ids, rds, pfx, pend, stale, mx}:
-      TrkOn{tab, keys, items, ids, rds, pfx, pend, stale, n}
+    case TrkOn{tab, keys, items, ids, rds, pfx, pend, over, mx}:
+      TrkOn{tab, keys, items, ids, rds, pfx, pend, over, n}
     case TrkOf{x}:
       trk.max.put(n, x)
 
@@ -3693,7 +3858,7 @@ def ps.trk.max.put(+n: Nat, pb: Ps) -> Ps:
 
 def trk.pick(+t: Trk, +r: U32) -> Maybe<&2, String>:
   match t:
-    case TrkOn{+tab, keys, items, ids, rds, pfx, pend, stale, mx}:
+    case TrkOn{+tab, keys, items, ids, rds, pfx, pend, over, mx}:
       KV.pick(List<&2, Nat>, tab, r, 0n)
     case TrkOf{+x}:
       trk.pick(x, r)
@@ -3720,18 +3885,27 @@ def iv.evict(+n: Nat, +max: Nat, +r: U32, v: Iv) -> Iv:
     case 1n+h:
       iv.evict(h, max, KV.mix(r), iv.evict.one(max, r, v))
 
+def ps.trk.overs(pb: Ps) -> Ps:
+  match pb:
+    case Ps{reg, ev, px, cs, own}:
+      +c = cs
+      Ps{reg, ev, px, cls.trk.put(trk.overs(cls.trk(c)), c), own}
+    case PsOf{p}:
+      ps.trk.overs(p)
+
 def ps.trk.limit.if(on: Bool, +n: Nat, +max: Nat, +r: U32, pb: Ps) -> Ps:
   match on:
     case True{}:
-      iv.ps(iv.evict(n, max, r, iv.of(pb)))
+      ps.trk.overs(iv.ps(iv.evict(n, max, r, iv.of(pb))))
     case False{}:
       pb
 
 def ps.trk.limit(+r: U32, pb: Ps) -> Ps:
   +p = pb
-  +n = trk.keys(ps.trk(p))
-  +max = trk.max(ps.trk(p))
-  ps.trk.limit.if(Bool.and(Nat.is_lt(0n, max), Nat.is_lt(max, n)), Nat.sub(n, max), max, r, p)
+  +t = ps.trk(p)
+  +n = trk.keys(t)
+  +max = trk.max(t)
+  ps.trk.limit.if(Bool.and(Nat.is_lt(0n, max), Nat.is_lt(max, n)), Nat.min(Nat.sub(n, max), trk.effort(t)), max, r, p)
 
 # Keyspace notifications
 # ----------------------
@@ -4566,21 +4740,21 @@ def bg.errs(srv: S.Srv, +code: Nat, +r: R.Reply) -> S.Srv:
 def bg.popped.put(+e: List<&2, A.Eff>, +ds: R.Ds, rs: List<&2, R.Reply>, es: List<&2, A.Ent>, conn: S.Conn, srv: S.Srv, ws: Waits, up: List<&2, Up>, tx: Tx, pb: Ps, +pc: R.Cmd, +pre: R.Ds) -> LRun:
   LRun{rs, A.ents.onto(e, es), conn, srv, ds, ws, up, touch.effs(tx, e, None{}, ds), ps.cmd(pc, A.ents.of(e), Some{pre}, ds, 0n, pb)}
 
-# a client served, with the invalidations its pop made for it before its
-# reply and after it (ps.trk.served)
+# a client served, with the invalidations its pop made for it after its
+# reply (ps.trk.served)
 def bg.popped.up(d: Pd, +back: Chan(Ans), +c0: S.Conn, c1: S.Conn, +y: R.Reply, cmds: List<&2, R.Cmd>, codes: List<&2, Nat>, av: Av, +e: List<&2, A.Eff>, +ds: R.Ds, rs: List<&2, R.Reply>, es: List<&2, A.Ent>, conn: S.Conn, srv: S.Srv, ws: Waits, up: List<&2, Up>, tx: Tx, +pc: R.Cmd, +pre: R.Ds) -> LRun:
   match d:
-    case Pd{own, pend, pb}:
-      bg.popped.put(e, ds, rs, es, conn, srv, ws, Up{back, c1, List.append(&2, R.Reply, pend, S.put(S.say(S.conn.mode(c0), y), own)), cmds, codes, av} <> up, tx, pb, pc, pre)
+    case Pd{pend, pb}:
+      bg.popped.put(e, ds, rs, es, conn, srv, ws, Up{back, c1, List.append(&2, R.Reply, pend, S.put(S.say(S.conn.mode(c0), y), Nil{})), cmds, codes, av} <> up, tx, pb, pc, pre)
 
-def bg.popped(w: Waits, r: R.Reply & (List<&2, A.Eff> & R.Ds), rs: List<&2, R.Reply>, es: List<&2, A.Ent>, conn: S.Conn, srv: S.Srv, ws: Waits, up: List<&2, Up>, tx: Tx, pb: Ps, +pc: R.Cmd, +pre: R.Ds) -> LRun:
+def bg.popped(w: Waits, r: R.Reply & (List<&2, A.Eff> & R.Ds), rs: List<&2, R.Reply>, es: List<&2, A.Ent>, +conn: S.Conn, srv: S.Srv, ws: Waits, up: List<&2, Up>, tx: Tx, pb: Ps, +pc: R.Cmd, +pre: R.Ds) -> LRun:
   match w:
     case WaitOn{+id, back, +c0, c1, +b, argv, +code, db, until, cmds, codes, av, rest}:
       (x, q) = r
       (e, ds) = q
       +y = S.blk.shape(S.blk.form(b), x)
       +left = ws
-      bg.popped.up(ps.trk.served(pc, id, pb), back, c0, c1, y, cmds, codes, av, e, ds, rs, es, conn, waits.count(left, S.srv.served(bg.errs(srv, code, y), id)), left, up, tx, pc, pre)
+      bg.popped.up(ps.trk.served(pc, S.blk.form(b), id, S.conn.id(conn), pb), back, c0, c1, y, cmds, codes, av, e, ds, rs, es, conn, waits.count(left, S.srv.served(bg.errs(srv, code, y), id)), left, up, tx, pc, pre)
     case WaitNone{}:
       (x, q) = r
       (e, ds) = q
@@ -5971,13 +6145,14 @@ def cl.pick(xs: List<&2, Cl>, +f: R.Kill, +me: Nat, +pb: Ps) -> List<&2, Cl>:
       Bool.pick(List<&2, Cl>, cl.picked(f, c, me, pb), c <> r, r)
 
 # a client the actor holds dropped, as if its connection had ended: its
-# wait, its unblocked batch, its transaction, its subscriptions; out of
+# wait, its unblocked batch, its transaction, its subscriptions, its
+# tracking (before it leaves the registry, which keeps its Tk); out of
 # the registry, its fd to be shut down
 def bg.kill1(+v: Nat, +fd: U32, g: LRun) -> LRun:
   match g:
     case LRun{rs, es, conn, srv, ds, +ws, +up, tx, pb}:
       +left = waits.rest(waits.take(ws, waits.is(v, ws), v, WaitNone{}))
-      LRun{rs, es, conn, waits.count(left, srv), ds, left, ups.drop(up, ups.is(v, up), v), tx.drop(v, tx), ps.kill(v, fd, ps.drop(v, pb))}
+      LRun{rs, es, conn, waits.count(left, srv), ds, left, ups.drop(up, ups.is(v, up), v), tx.drop(v, tx), ps.kill(v, fd, ps.trk.off(v, ps.drop(v, pb)))}
     case LHeld{h}:
       LHeld{h}
 
@@ -6480,10 +6655,12 @@ def av.if(on: Bool, +a: Av) -> Av:
     case False{}:
       a
 
-# whether a call's key is CLIENT's or one of its subcommands' (after any
-# of them Redis keeps CLIENT CACHING's flag: resetClient)
+# whether a call's key is one of CLIENT's subcommands' (after any of them
+# Redis keeps CLIENT CACHING's flag: resetClient; CLIENT alone, which
+# Redis refuses before any runs, and an unknown subcommand, have no
+# clientCommand, and clear it)
 def trk.client.key(+key: Nat) -> Bool:
-  Bool.or(Nat.is_eq(key, R.stat.top(105n)), Bool.and(Nat.is_le(R.stat.sub.client(1n), key), Nat.is_le(key, R.stat.sub.client(16n))))
+  Bool.and(Nat.is_le(R.stat.sub.client(1n), key), Nat.is_le(key, R.stat.sub.client(16n)))
 
 # whether a command the shell runs as the session runs it was called: its
 # client may run it, has not quit, and the parser did not refuse it
@@ -6534,7 +6711,8 @@ def bg.trk.max(on: Bool, g: LRun) -> LRun:
 def bg.trk.after.go(g: LRun, +rk: Bool, +id: Nat, +code: Nat, +kt: Tk, +a: Av) -> LRun:
   match g:
     case LRun{rs, es, conn, srv, ds, ws, up, +tx, pb}:
-      +clear = Bool.and(tk.caching(kt), Bool.and(Bool.not(trk.client.key(R.code.key(code))), Bool.not(tx.multi(id, tx))))
+      +key = R.code.key(code)
+      +clear = Bool.and(Bool.or(tk.caching(kt), Nat.is_eq(key, R.stat.top(162n))), Bool.and(Bool.not(trk.client.key(key)), Bool.not(tx.multi(id, tx))))
       bg.trk.max(trk.max.key(R.code.key(code)), bg.trk.pend(ps.pend.take(bg.trk.cache.if(clear, id, bg.trk.read.if(rk, id, code, a, pb))), rs, es, conn, srv, ds, ws, up, tx))
     case LHeld{h}:
       LHeld{bg.trk.after.go(h, False{}, id, code, kt, a)}
