@@ -1,9 +1,9 @@
 # smoke.bend: parses a pipelined buffer, runs it, prints the RESP replies,
 # escaped one per line, and the bytes left unparsed, and checks each line
 # against the one expected: a line that differs, and a reply too many or
-# too few, makes the run exit with 1, naming the first. INCR of
-# 99999999999999 overflows, as BendKV's integers stop at 14 digits (Redis
-# answers 100000000000000). A number the parser refuses (INCRBY n x) is
+# too few, makes the run exit with 1, naming the first. INCR adds long
+# longs, as Redis does: 99999999999999 becomes 100000000000000, and
+# LLONG_MAX overflows. A number the parser refuses (INCRBY n x) is
 # the session's to answer, after it checks the client's authentication,
 # as Redis does: the database alone answers that the command is the
 # connection's. With BENDKV_CHECK_BREAK=smoke the first line expected is
@@ -53,7 +53,7 @@ def buf() -> String:
   "*2\r\n$3\r\nGET\r\n$3\r\nfoo\r\n" ++
   "get missing\r\n" ++
   "INCR n\r\nINCRBY n 41\r\nDECRBY n 100\r\n" ++
-  "set s 99999999999999\r\nincr s\r\nincr foo\r\n" ++
+  "set s 99999999999999\r\nincr s\r\nset s 9223372036854775807\r\nincr s\r\nincr foo\r\n" ++
   "APPEND foo baz\r\nSTRLEN foo\r\nMSET a 1 b 2\r\nMGET a b c\r\n" ++
   "EXISTS a b c a\r\nDEL a b c\r\nSETNX foo x\r\nGETSET foo y\r\nDBSIZE\r\n" ++
   "KEYS *\r\nKEYS f?o\r\nPING\r\nECHO hi\r\nNOPE 1 2\r\nSET k\r\nINCRBY n x\r\n" ++
@@ -67,6 +67,8 @@ def want(+mode: String) -> List<&2, String>:
    ":1\\r\\n",
    ":42\\r\\n",
    ":-58\\r\\n",
+   "+OK\\r\\n",
+   ":100000000000000\\r\\n",
    "+OK\\r\\n",
    "-ERR increment or decrement would overflow\\r\\n",
    "-ERR value is not an integer or out of range\\r\\n",

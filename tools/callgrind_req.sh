@@ -10,17 +10,26 @@
 # pipeline depth 16 (PIPE), with values of DATA bytes (3, redis-benchmark's
 # default), and the flags of RB_FLAGS (-3: each client in RESP3); CG_FLAGS
 # adds flags to callgrind's (tools/perf_guard.sh: counts per instruction,
-# and L1 caches of a fixed size). Prints, per request: instructions,
-# last-level data read misses, mispredicted indirect and conditional
-# branches. valgrind 3.22 cannot decode some code built with -march
-# (a register-to-register vmovq, for one).
+# and L1 caches of a fixed size). IDLE ("blpop 100", "watch 1"): idle
+# clients, held by tools/idle_clients.py from before the keys are set to
+# the end. Prints, per request: instructions, last-level data read misses,
+# mispredicted indirect and conditional branches. valgrind 3.22 cannot
+# decode some code built with -march (a register-to-register vmovq, for
+# one).
 NAME=$1; PORT=$2; shift 2
+here=$(cd "$(dirname "$0")" && pwd)
 KEYS=${KEYS:-100000}; TESTS=${TESTS:-get incr}; PIPE=${PIPE:-16}; CLIENTS=${CLIENTS:-20}; DATA=${DATA:-3}
 rm -f "$NAME".cg*
 valgrind --tool=callgrind --cache-sim=yes --branch-sim=yes --LL=2097152,16,64 $CG_FLAGS \
   --callgrind-out-file="$NAME.cg" "$@" > "$NAME.log" 2>&1 &
 VP=$!
 for i in $(seq 1 60); do redis-cli -p "$PORT" ping > /dev/null 2>&1 && break; sleep 1; done
+IP=
+if [ -n "$IDLE" ]; then
+  python3 "$here/idle_clients.py" "$PORT" $IDLE > "$NAME.idle" 2>&1 &
+  IP=$!
+  for i in $(seq 1 60); do grep -q READY "$NAME.idle" && break; sleep 1; done
+fi
 redis-benchmark -p "$PORT" -t set -r "$KEYS" -n $((KEYS * 2)) -d "$DATA" -P "$PIPE" -c "$CLIENTS" $RB_FLAGS -q > /dev/null 2>&1
 for t in $TESTS; do
   redis-benchmark -p "$PORT" -t "$t" -r "$KEYS" -n $((KEYS * 3)) -d "$DATA" -P "$PIPE" -c "$CLIENTS" $RB_FLAGS -q > /dev/null 2>&1
@@ -28,6 +37,7 @@ for t in $TESTS; do
   redis-benchmark -p "$PORT" -t "$t" -r "$KEYS" -n 20000 -d "$DATA" -P "$PIPE" -c "$CLIENTS" $RB_FLAGS -q > /dev/null 2>&1
   callgrind_control -d "$t" $VP > /dev/null
 done
+[ -n "$IP" ] && kill $IP
 kill $VP; wait $VP 2>/dev/null
 for f in "$NAME".cg.*; do
   [ -f "$f" ] || continue
