@@ -7295,3 +7295,49 @@ clock twice, adds the time to the command's counters and records it in the comma
 histogram. The histogram's four levels take a quarter of them. Most of the rest are the
 updates of `Info` and the passes of the group, which travels in 13 registers and is saved
 to the frame and loaded back around each call that is not a tail call.
+
+## 67. The RDB file
+
+**What was added** (FINDINGS 3zzzc). SAVE writes the RDB file, SHUTDOWN and FLUSHALL save
+it with save points, and the start loads it with `appendonly no`. The file is written a
+slice at a time (a scan of 4,096 entries of a database's trie, its CRC64 carried from
+slice to slice) and loaded whole: the start reads the file into one String, as it reads
+the append-only file.
+
+**Measured** (`tools/rdb_cost.py`: each server in a fresh directory, filled with the
+same keys, then SAVE timed as its client waits for it, the file's size, and a start from
+the file timed until it answers PING, with the time its log gives and the resident
+memory before and after; medians of three rounds, the servers in turn). The values are
+random bytes, which LZF does not make shorter, so Redis's file and BendKV's, which has
+no LZF, are of a size:
+
+| data | file | SAVE | Redis's SAVE | start | Redis's start | RSS after the start | Redis's |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| 100,000 keys of 100 bytes | 11.3 MB | 0.36 s | 0.28 s | 0.15 s | 0.10 s | 58 MB (42 before) | 32 MB |
+| 1,000,000 keys of 100 bytes | 113.9 MB | 3.36 s | 2.38 s | 1.93 s | 0.94 s | 361 MB (203 before) | 201 MB |
+| 100,000 hashes of 10 fields of 100 bytes | 106.0 MB | 2.34 s | 1.78 s | 2.45 s | 0.53 s | 872 MB (731 before) | 195 MB |
+
+The append-only file of the million keys (138 MB) starts in 3.0 s and leaves 609 MB
+resident. A hash of 10 fields takes BendKV seven times the memory it takes Redis, as
+before; that is the hash's representation, not the file's.
+
+**Where the time goes.** A SAVE of 100,000 keys under `sprof` (a build with `-g -no-pie`,
+samples every 100 µs): 44% in `term_drop` and `span_fade`, the drops of the shared
+trie's nodes that each key's lookup takes apart (`file.keys` looks each key of a scan
+up in the trie it lends, as the rewrite's `rw.keys` does), 26% in the checksum
+(`crc.k`: two steps of four bits a byte, section 62), 7% in the scan. The load: half in
+`file.load`, where the checksum of the whole file is inlined, 17% in `term_drop`, the
+rest in the readers and the trie's inserts.
+
+**On the way.** The first load was quadratic in the file's size: each step measured what
+was left of the file, a list of 2 KB chunks, to name its offset (FINDINGS.md, section
+3zzzc, with its times). The offset is now worked out only for a line that names it.
+
+**What is left.** The file whole in memory at the start, and the checksum checked over it
+at the end, which keeps it whole until then (a resident memory of the file's size more
+after the start); a scan that gives the entries themselves, rather than keys to look
+up, would take the drops out of SAVE, and of the rewrite of the append-only file too.
+
+**The other commands.** `make perfcheck`: GET 3,421, SET 4,181 and INCR 4,527
+instructions per request (3,422, 4,183 and 4,531 on main, built here); with 100 clients
+in BLPOP, GET 3,523 and SET 4,322, 3.0% and 3.4% above.
