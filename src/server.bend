@@ -10505,15 +10505,28 @@ def listen.unix.got(m: Result<&1, &1, U32 & String, Listener>, +lg: Log, ls: Lis
       (code, msg) = e
       log.die(List<&1, Listener>, lg, "Failed opening Unix socket: bind: " ++ msg)
 
+# the unix socket's path, as Redis's initServer and anetUnixServer take
+# it: one longer than sun_path holds stops the start with Redis's line;
+# else the file a run before left there removed, whether that works or
+# not, then the listener (TCP.listen_unix)
+@unsafe
+def listen.unix.at(long: Bool, +path: String, +perm: U32, +lg: Log, ls: List<&1, Listener>) -> IO(List<&1, Listener>):
+  match long:
+    case True{}:
+      log.die(List<&1, Listener>, lg, "Failed opening Unix socket: unix socket path too long (" ++ Nat.show(String.length(path)) ++ "), must be under 108")
+    case False{}:
+      do IO<List<&1, Listener>>:
+        u : Result<&1, &1, U32 & String, Unit> <- File.unlink(path)
+        m : Result<&1, &1, U32 & String, Listener> <- TCP.listen_unix(path, perm)
+        listen.unix.got(m, lg, ls)
+
 @unsafe
 def listen.unix(none: Bool, +path: String, +perm: U32, +lg: Log, ls: List<&1, Listener>) -> IO(List<&1, Listener>):
   match none:
     case True{}:
       IO.pure(List<&1, Listener>, ls)
     case False{}:
-      do IO<List<&1, Listener>>:
-        m : Result<&1, &1, U32 & String, Listener> <- TCP.listen_unix(path, perm)
-        listen.unix.got(m, lg, ls)
+      listen.unix.at(Nat.is_lt(107n, String.length(path)), path, perm, lg, ls)
 
 @unsafe
 def listen.up(tcp: List<&1, Listener>, +path: String, +perm: U32, +lg: Log) -> IO(Bool & List<&1, Listener>):

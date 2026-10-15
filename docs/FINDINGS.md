@@ -6160,9 +6160,11 @@ systemd a datagram.
 - `TCP.listen` takes an IPv6 address (a host with a `:`), its socket IPv6 alone
   (`IPV6_V6ONLY`), as Redis's `anetV6Only` sets it, so that `0.0.0.0` and `::` can both
   be bound.
-- `TCP.listen_unix(path, perm)` listens on a unix socket as Redis's `anetUnixServer` and
-  `initServer` do: the path removed first, then bound, given `perm`'s mode when `perm` is
-  not 0, listening. `TCP.accept` takes its connections.
+- `TCP.listen_unix(path, perm)` listens on a unix socket as Redis's `anetUnixServer`
+  does: bound, given `perm`'s mode when `perm` is not 0, listening. A path that is there
+  already fails (EADDRINUSE): the effect deletes nothing, and BendKV removes the file a
+  run before left (`File.unlink`) before it listens, as Redis's `initServer` does.
+  `TCP.accept` takes its connections.
 - `TCP.name` names either end of a unix socket `/unixsocket:0`, as Redis's
   `anetFdToString` does.
 - `IO.notify(msg)` sends one datagram to the unix socket `$NOTIFY_SOCKET` names (a path,
@@ -6176,8 +6178,10 @@ start, SHUTDOWN).
   97"). Protected mode with no password listens on `::1` for `::`, as it listens on
   `127.0.0.1` for `0.0.0.0`.
 - `unixsocket` and `unixsocketperm` are listened on after the TCP addresses. A socket that
-  cannot be had stops the start with Redis's line ("Failed opening Unix socket: ...").
-  A unix socket alone (port 0) is a start.
+  cannot be had stops the start with Redis's line ("Failed opening Unix socket: ...");
+  a path longer than `sun_path` holds is checked first, as `anetUnixServer` checks it
+  ("unix socket path too long (120), must be under 108"). A unix socket alone (port 0)
+  is a start.
 - The log says "The server is now ready to accept connections at <path>", and "Ready to
   accept connections" only when some TCP listener is up, as Redis's `main` says them.
   SHUTDOWN removes the socket's file ("Removing the unix socket file.").
@@ -6209,11 +6213,13 @@ parameter's bounds in octal, as Redis's message gives them ("between 0 and 777")
   - the datagrams systemd gets, Redis's "Redis is loading" read as BendKV's;
   - the log's lines;
   - the socket's file after SHUTDOWN.
+
+  The case runs twice: `NOTIFY_SOCKET` names a path, then an abstract name (`@`).
 - IPv6's loopback in Redis's own `bind 127.0.0.1 -::1`. On a host with IPv6 both servers
   answer on `::1`; on a host without it, both let it go with the same line. The VM of
   these measurements has no IPv6.
-- Refused as Redis refuses them: an octal value past its bound, a digit 8, and a unix
-  socket whose directory is not there. Started as Redis starts: an octal value with a
+- Refused as Redis refuses them: an octal value past its bound, a digit 8, a unix
+  socket whose directory is not there, and one whose path is too long. Started as Redis starts: an octal value with a
   leading zero.
 
 **What it costs.** Nothing on a request's path: the listeners act at the start, the

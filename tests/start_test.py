@@ -232,6 +232,7 @@ REFUSED = [
     ("an octal value past its bound", ["--port", "{port}", "--unixsocketperm", "1000"], {}, None),
     ("an octal value with an 8", ["--port", "{port}", "--unixsocketperm", "8"], {}, None),
     ("a unix socket that cannot open", ["--port", "{port}", "--unixsocket", "nodir/s.sock"], {}, None),
+    ("a unix socket's path too long", ["--port", "{port}", "--unixsocket", "s" * 120], {}, None),
 ]
 
 # Cases both start: name, arguments, files, standard input, the
@@ -353,14 +354,15 @@ def bendkv_refuses(a, case):
         b.stop()
 
 
-def unix_seen(a, cmd):
+def unix_seen(a, cmd, abstract=False):
     """a server with a unix socket under systemd's supervision: the
     socket's mode, its client as CLIENT LIST and MONITOR show it, what
-    systemd is told, the log's lines of both, and the socket's file
-    after SHUTDOWN"""
-    note = os.path.join(a.tmp, "n%d.sock" % len(os.listdir(a.tmp)))
+    systemd is told (at a path, or at an abstract name: NOTIFY_SOCKET's
+    "@"), the log's lines of both, and the socket's file after SHUTDOWN"""
+    n = len(os.listdir(a.tmp))
+    note = "@bendkv-start-%d-%d" % (os.getpid(), n) if abstract else os.path.join(a.tmp, "n%d.sock" % n)
     ns = socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM)
-    ns.bind(note)
+    ns.bind("\0" + note[1:] if abstract else note)
     ns.settimeout(0.3)
     s = Server(a, cmd, ["--port", "{port}", "--unixsocket", "s.sock", "--unixsocketperm", "700",
                         "--supervised", "systemd"], {}, None, {"NOTIFY_SOCKET": note})
@@ -430,6 +432,9 @@ def against_redis(a):
     ok = True
     r, b = unix_seen(a, a.redis), unix_seen(a, a.bin)
     ok &= check("a unix socket under systemd, as Redis", r == b and "mode" in r, "redis %r\n      bendkv %r" % (r, b))
+    r, b = unix_seen(a, a.redis, True), unix_seen(a, a.bin, True)
+    ok &= check("systemd at an abstract name, as Redis", r == b and len(r.get("systemd", [])) >= 3,
+                "redis %r\n      bendkv %r" % (r, b))
     v6 = host_ipv6()
     r, b = ipv6_seen(a, a.redis, v6), ipv6_seen(a, a.bin, v6)
     ok &= check("IPv6's loopback (%s)" % ("the host has IPv6" if v6 else "the host has no IPv6"), r == b and r[1] is True,
