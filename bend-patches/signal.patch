@@ -1,5 +1,5 @@
 diff --git a/bend2/base.bend b/bend2/base.bend
-index 7e116e0..1b73beb 100644
+index 62be808..1803f92 100644
 --- a/bend2/base.bend
 +++ b/bend2/base.bend
 @@ -240,6 +240,22 @@ def IO.notify(msg: String) -> IO(Bool):
