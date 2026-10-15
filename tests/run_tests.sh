@@ -40,7 +40,11 @@
 # them. Then the append-only file: a
 # random stream, a restart from the file, the keyspace compared; then
 # the file's last entry cut short, as a crash in a write leaves it, a
-# restart that cuts it back, and the keyspace compared again. Then the
+# restart that cuts it back, and the keyspace compared again. Then 20
+# rounds of the server killed (SIGKILL) at a random moment while clients
+# write to it, then started again: each start must hold the databases
+# after a prefix of the commands sent, every acknowledged one among them
+# (tests/crash_test.py). Then the
 # disk failing under the file (tests/fail_io.c injects it): a file that
 # is there but cannot be read must stop the start, and a failed fsync
 # must stop the server, with everysec as with always. Last, the files
@@ -62,23 +66,52 @@ cd "$(dirname "$0")/.."
 PORT=${PORT:-6380}
 REDIS_PORT=${REDIS_PORT:-6390}
 ROUNDS=${ROUNDS:-1000}
+# The differential tests (tests/diff_test.py) run DIFF_ROUNDS (ROUNDS)
+# rounds from seeds SEED, SEED+1 and SEED+2 against each server, and from
+# SEED+3 in RESP3. SEED is 1 by default (seeds 1 to 4, as always); in CI
+# it is 4 * GITHUB_RUN_ID + 1, so that each run sends commands no run sent
+# before (a job run again sends the same ones). SEED=N, with the same
+# DIFF_ROUNDS, sends them again.
+SEED=${SEED:-$((4 * ${GITHUB_RUN_ID:-0} + 1))}
+DIFF_ROUNDS=${DIFF_ROUNDS:-$ROUNDS}
+echo "== seeds $SEED to $((SEED + 3)), $DIFF_ROUNDS rounds: SEED=$SEED DIFF_ROUNDS=$DIFF_ROUNDS make test repeats them"
 echo "== the float library against glibc"
 python3 tests/float_test.py --bend "${BEND:-bend}" --cc "${CC:-cc}" --seed 1 --n 1500
 echo "== the start"
 python3 tests/start_test.py --bin build/bendkv
 echo "== connections that end"
 python3 tests/conn_test.py --bin build/bendkv --port "$PORT"
+# up PID PORT: waits until the server started as PID answers on PORT (its
+# INFO names PID), so that no test starts before it listens, nor runs
+# against another server that holds the port; fails when PID exits first
+# or has not answered in 30 seconds
+up() {
+  i=0
+  until redis-cli -p "$2" info server 2> /dev/null | tr -d '\r' | grep -qx "process_id:$1"; do
+    if ! kill -0 "$1" 2> /dev/null; then
+      echo "the server on port $2 (pid $1) exited before it answered" >&2
+      return 1
+    fi
+    i=$((i + 1))
+    if [ "$i" -ge 300 ]; then
+      echo "the server on port $2 (pid $1) has not answered in 30 seconds" >&2
+      return 1
+    fi
+    sleep 0.1
+  done
+}
 # Redis collates SORT's ALPHA by the locale it starts in (strcoll),
 # BendKV as the C locale does
 LC_ALL=C redis-server --port "$REDIS_PORT" --save '' --appendonly no --bind 127.0.0.1 > build/redis.log 2>&1 &
 RDS=$!
 BKV=
 trap 'kill $BKV $RDS 2>/dev/null || true' EXIT
+up "$RDS" "$REDIS_PORT"
 rm -f build/test.aof build/aof_dump.txt
 for n in "" post send "post build/test.aof everysec"; do
   ./build/bendkv "$PORT" $n > build/server.log 2>&1 &
   BKV=$!
-  sleep 0.5
+  up "$BKV" "$PORT"
   echo "== ${n:-defaults}"
   python3 tests/robust_test.py --port "$PORT"
   python3 tests/writer_test.py --port "$PORT"
@@ -124,15 +157,15 @@ for n in "" post send "post build/test.aof everysec"; do
   if [ "$n" = send ]; then
     python3 tests/protocol_test.py --bendkv "$PORT" --redis "$REDIS_PORT"
   fi
-  for seed in 1 2 3; do
+  for seed in "$SEED" $((SEED + 1)) $((SEED + 2)); do
     redis-cli -p "$REDIS_PORT" flushall > /dev/null
     redis-cli -p "$PORT" flushall > /dev/null
-    python3 tests/diff_test.py --bendkv "$PORT" --redis "$REDIS_PORT" --rounds "$ROUNDS" --seed "$seed"
+    python3 tests/diff_test.py --bendkv "$PORT" --redis "$REDIS_PORT" --rounds "$DIFF_ROUNDS" --seed "$seed"
   done
   if [ -z "$n" ]; then
     redis-cli -p "$REDIS_PORT" flushall > /dev/null
     redis-cli -p "$PORT" flushall > /dev/null
-    RESP=3 python3 tests/diff_test.py --bendkv "$PORT" --redis "$REDIS_PORT" --rounds "$ROUNDS" --seed 4
+    RESP=3 python3 tests/diff_test.py --bendkv "$PORT" --redis "$REDIS_PORT" --rounds "$DIFF_ROUNDS" --seed $((SEED + 3))
   fi
   python3 tests/concurrency_test.py --port "$PORT"
   kill "$BKV"
@@ -146,21 +179,21 @@ restart() {
   rm -f "$f"
   ./build/bendkv "$PORT" send "$f" always > build/server.log 2>&1 &
   BKV=$!
-  sleep 0.5
+  up "$BKV" "$PORT"
   python3 tests/aof_test.py --port "$PORT" --rounds "$ROUNDS" --write build/aof_dump.txt
   kill "$BKV"
   wait "$BKV" 2>/dev/null || true
   size=$(wc -c < "$f")
   ./build/bendkv "$PORT" send "$f" always > build/server.log 2>&1 &
   BKV=$!
-  sleep 0.5
+  up "$BKV" "$PORT"
   python3 tests/aof_test.py --port "$PORT" --check build/aof_dump.txt
   kill "$BKV"
   wait "$BKV" 2>/dev/null || true
   printf '*3\r\n$3\r\nSET\r\n$4\r\nlost\r\n$5\r\nhel' >> "$f"
   ./build/bendkv "$PORT" send "$f" always > build/server.log 2>&1 &
   BKV=$!
-  sleep 0.5
+  up "$BKV" "$PORT"
   python3 tests/aof_test.py --port "$PORT" --check build/aof_dump.txt
   kill "$BKV"
   wait "$BKV" 2>/dev/null || true
@@ -173,6 +206,7 @@ restart() {
 }
 echo "== append-only file"
 restart build/test.aof
+python3 tests/crash_test.py --bin build/bendkv --port "$PORT" --dir build/crash --rounds 20
 echo "== append-only file failures"
 ${CC:-cc} -shared -fPIC -o build/fail_io.so tests/fail_io.c -ldl
 python3 tests/aof_fail_test.py --port "$PORT" --shim build/fail_io.so

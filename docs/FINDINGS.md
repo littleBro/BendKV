@@ -154,9 +154,10 @@ killing it and channel marks (section 3zs); the twenty-eighth `File.rename` and
 words outside the heap (section 3zw); the thirty-first has a walker that reads a
 tree borrow it from a caller that owns it, in every program (section 3zza); the
 thirty-second keeps the string of a value that is a string or else something else as
-the string itself, with no node, in every program without GPU calls (section 3zzg); and
+the string itself, with no node, in every program without GPU calls (section 3zzg);
 the thirty-third adds C's doubles, `F64`, run as C runs them, strtod and libm with them
-(section 3zzm).
+(section 3zzm); and the thirty-fourth lets AddressSanitizer check the heap, in a build
+with ASan only (section 3zzp).
 The sections before 3l
 number the patches as they were then: patch 16 was effect pairs, taken out in 3l with
 `TCP.post_list` of patch 11, and their patches 17–20 are today's 16–19. None changes the
@@ -199,6 +200,7 @@ to agree with the list definition, and `IO` is still a function of `R` and `k`.
 | walk lend (31st) | a tail call that gives a walker that reads a tree (it calls itself, takes a tree, builds none of its nodes) a value its caller owns, at its last use, holds the value and drops it after the call, so the walker borrows the tree instead of copying each shared node it reads | KEYS 29% fewer instructions a key, RANDOMKEY 28%, ZRANGE of 10 of 100,000 18% (section 3zza) |
 | string variant (32nd) | a datatype with one constructor whose one field is a `String` boxes that constructor as the String itself, told from the other constructors by its tag | a string value takes no node: at a million keys 24% fewer last-level misses per GET, 32% per INCR; SET ×1.08, INCR ×1.03; one word less per key (section 3zzg) |
 | f64 natives (33rd) | `F64`, C's double as the two 32-bit halves of its bits, with `F64.read` (strtod), the four operations, libm's functions, the comparisons and the conversions, each a law of base that the C lane runs as C runs it, on the libm it links | GEO's positions, geohashes, cells and distances, Redis's bit for bit on 309 positions and 80 searches; ZADD's scores read by glibc's strtod itself (section 3zzm) |
+| heap asan (34th) | in a build with AddressSanitizer alone, `heap_free` poisons the node it frees and holds it in a quarantine of its size class before its free chain hands it out again, so that a read through a stale pointer gets ASan's report and stack; any other build is byte for byte as before | the `sanitize` job (`tools/sanitize.sh`): the server under ASan, UBSan and TSan with no report, and patch 26's bug found again when it is taken out (section 3zzp) |
 
 The ratios in the last column come from different series and drift by ±0.06–0.08
 between series; PERFORMANCE.md gives each one with its pairs.
@@ -2596,8 +2598,9 @@ SRANDMEMBER (with a count), SMOVE, SINTER, SUNION, SDIFF, their STOREs, and SINT
 with LIMIT. A set is an intset or a hashtable, as in Redis 7.0 (which has no listpack
 sets yet). An intset holds canonical 64-bit integers alone (as Redis's `string2ll` reads
 them: no sign but a minus, no leading zero, no `-0`), at most 512 of them, as a list of
-their strings in numeric order; any other member, or a 513th, turns the set into a
-hashtable for good, a trie of its members (`Trie<Unit>`, the keyspace's own map). An
+their strings in numeric order (a tree of them since section 3zzy); any other member, or
+a 513th, turns the set into a hashtable for good, a trie of its members (`Trie<Unit>`,
+the keyspace's own map). An
 intset answers its members in numeric order, as Redis's does, and SSCAN gives it whole
 with cursor 0; a hashtable answers in the order of its trie, where Redis answers in the
 order of its dict, so the tests compare a hashtable's members as a set. A key never holds
@@ -4300,6 +4303,7 @@ of 100,000 (26,284, −23%), 19,959 on a set of 10 to 410 strings (22,555, −12
 other commands as before. SADD to an intset of 100 to 500 members takes 449,545, twenty
 times SADD to a hashtable: its members are strings, compared as integers at each step of
 a walk along their list, which Redis keeps as an array of integers searched by halves.
+Section 3zzy keeps them in a tree, and takes an intset too.
 
 ## 3zzf. The key count proved
 
@@ -5022,6 +5026,339 @@ bytes as it did, so that the protocol's errors and their timing are as they were
 GEOADD of 20,000 points now takes 194 ms, an EXISTS of 40,000 keys 29 ms (Redis 3.6 ms),
 an RPUSH of 40,000 elements 30 ms where it took 249 (PERFORMANCE.md, section 60).
 
+## 3zzo. Clients that wait or watch, and the fast way
+
+**What it cost.** The fast way ran a batch only while no client waited in a blocking
+command, none had a transaction or watched a key, and no keyspace event was to go out
+(`group_job`). So one client in BLPOP or one WATCH put every batch of every client on the
+general way, a command at a time. After each command the actor also walked the whole
+chain of the clients that wait, with a lookup in the trie for each of their keys (3zp said
+so; its cost was not measured). GET at pipeline 16 lost two thirds of its throughput with
+one client in BLPOP or one after WATCH, nine tenths with 100 in BLPOP, and almost all of
+it with 1,000 (#30; [PERFORMANCE section 61](PERFORMANCE.md)). Redis looks a written key up
+in `blocking_keys` and `watched_keys`, and a client that waits or watches costs nothing to
+the commands on other keys.
+
+**What runs now** (`src/server.bend`, Heeded keys).
+- The registry of the clients (`Cls`, in Ps) keeps the keys that clients heed (`Hd`): the
+  keys a client waits on and the keys a client watches, in any database, as a trie. A key
+  goes in as a client starts to wait on it (`bg.wait`) or watches it (`bg.watch`).
+- While some client waits or watches, a batch of database commands (no command of the
+  connection or of the server) runs the fast way when three things hold: its client may
+  run it so; it is in no MULTI (`tx.in.multi`, where its commands are queued); and none of
+  its commands may write a heeded key. The keys a command may write are those LAWS.bend's
+  `writes` names (every key for FLUSHDB). The clients that wait and the transactions stay
+  as they were (`grp.keep`). Any other batch runs the general way, as before.
+- Why that is enough: the law `frame` makes a command leave as it was the entry of each key
+  its `writes` does not name, and the keys a command of the database touches for the
+  clients that watch (Touches, in `src/server.bend`) are keys its `writes` names. So after
+  such a batch no client that waits finds what it waits for, and no watched key is
+  touched.
+- A batch that writes a key some client waits on still runs a command at a time, and its
+  waiter is served right after the command that wrote the key: with a client in `BLPOP q`,
+  the pipeline `RPUSH q x`, `LPOP q` answers nil to LPOP, as Redis does.
+- On the general way the clients that wait are looked at only after a command that may
+  make one ready (`bg.stir`): a command of the connection or of the server (SWAPDB, MOVE,
+  COPY, SORT with STORE, EXEC among them), or a command of the database that may write a
+  heeded key. Before such a command none was ready, and after any other none is. The check
+  runs before the command, which changes neither the clients that wait nor the heeded keys,
+  so the command is lent to it and then given to the run.
+- The set is made anew at a tick when a client that heeded keys stopped since it was made
+  (`heed.tick`: two counts, compared without a walk of the keys). With it goes the earliest
+  time a wait ends (`soon`): at the end of a group the actor walks the chain of the clients
+  that wait, for those whose time is up, only once that time has passed (`grp.end.due`),
+  where it walked the chain at the end of every group.
+
+**How a batch is checked without reading its commands.** The first check read each
+command of the batch (`heed.cmd` over the list) and cost far more than it read:
+- `Cmd` is laid out unboxed, and the same word holds a string in one constructor and a
+  number in another (`BitOp`'s op, `IncrBy`'s amount). A `Cmd` read out of a list is
+  unpacked into those words, and the compiler cannot keep a word borrowed whose
+  constructors disagree (`val_arms` in `comp.ts`): it calls `slot_keep` on every string
+  field of every command, whatever the check then does with it. Nested patterns
+  (`Con{R.Set{k, v}, rest}`) unpack the same way. Section 7 says as much: a borrowed match
+  on `Cmd` gives every pointer field it binds a reference count.
+- `slot_keep` seals the string in place. A batch of SETs then put its keys and values in
+  the keyspace sealed, and every later GET of those keys read one more word: under
+  callgrind with 100 clients in BLPOP, GET counted 9.6% more than without them, with 0.57
+  more last-level misses per GET on the seals (`term_peek`), and the prefetches of `btouch`
+  reached only the seal (the same number of prefetches, none of them of a key's bytes).
+So the batch is checked by the hashes its requests carry. A request's hash holds in its
+high twelve bits its call's code, and the parser writes fixed marks there for a call of
+GET, SET and INCR that runs (`R.stat.mark.*`). GET writes nothing; SET and INCR write their
+key alone, their first argument, and the low twenty bits of the hash are that key's (the
+parser's ways for the three, and `req.hash`: both commands touch their first key). A heeded
+key such a write may write lies in the bucket of that hash. `KV.tget_hn` (generated with the
+other walks) says whether the bucket holds an entry, reading the trie it is lent. A batch of
+GETs, SETs and INCRs alone, none of whose writes finds a heeded key in its bucket, runs the
+fast way with no command read (`heed.quick`). Any other batch is read command by command
+(`heed.cmds`), with the counts above, and a SET whose bucket holds a heeded key is one of
+those; a key in the bucket that is not the one written then costs a read, not the general
+way. The walks are tight loops that match their list alone: one that matched a flag beside
+the list dropped the command it had bound in one arm, and so took it over in all of them.
+
+**What it costs.** Nothing while no client waits or watches: the first case of
+`group_job` is as it was, and the generated C of the fast way is the same, function for
+function (the per-function diff of `bend src/server.bend -o x.c`: the functions of the
+registry, `bg.cmd`, WATCH and `group_req` change; `fast` becomes a function of its own,
+entered by a jump, where `group_req` held it inline). GET, SET and INCR take 3,335, 4,083
+and 4,411 instructions per request under callgrind (3,323, 4,080 and 4,395 on main,
+counted the same way: two runs of one build differ by as much). With 100 clients in BLPOP,
+GET and SET take 3,418 and 4,215, 2.5% and 3.2% more than without them in the same run,
+and miss the last level 2.83 and 3.17 times per request, where they miss 2.80 and 3.11
+without them (the build that read every command: GET 9.6% more, 3.54 misses). On main,
+one client in BLPOP took GET and SET to 13,706 and 15,030 (PERFORMANCE section 61, with
+the throughput). `make perfcheck` counts GET and SET with 100 clients in BLPOP and fails
+past 5%.
+
+**What is left.**
+- A batch that writes a key some client heeds runs the general way, a command at a time,
+  as before; on it the actor still walks the whole chain after a command that stirs
+  (`waits.find`), where Redis serves from the key's list of clients.
+- A batch with a command other than GET, SET and INCR is read, with the counts above: its
+  strings go into the keyspace sealed while some client waits or watches. The general way
+  seals them too (`bg.one.q` uses a command after running it), as it did before this change.
+- A key no client heeds any more sends the batches that write it the general way until the
+  tick after its client stopped.
+- While keyspace events are on, a monitor is connected, a pause holds or the server is past
+  maxmemory with nothing left to evict, every batch runs the general way, as before.
+
+**Tests.**
+- `tests/blocking_test.py`:
+  - a pipeline that pushes to a key a client waits on and then pops it (the client served
+    between them);
+  - with 100 clients waiting, pipelines that write twelve kinds of commands to other keys,
+    one of GETs, SETs and INCRs alone, then one that writes a key among theirs in the
+    middle, and an LMOVE to one;
+  - each against Redis.
+- `tests/multi_test.py`:
+  - a pipeline of commands in MULTI (each queued: the check of MULTI);
+  - WATCH with another client's pipeline that writes other keys only (EXEC runs), or the
+    watched one among them (EXEC answers a null array);
+  - the same with GETs, SETs and INCRs alone, untouched and touched by an INCR.
+
+## 3zzp. The heap under AddressSanitizer, the writer under ThreadSanitizer
+
+**What was missing.** Eight of the compiler's patches change reference counts,
+ownership, borrowing and the reuse of nodes in place (1, 3, 5, 7, 8, 26, 31 and 32), and
+one bug of that kind shipped: after the fifth, the general way kept a node across a call
+and freed the server's statistics while a shared cell still pointed at them, and under
+CLIENT REPLY OFF the server read them from freed memory at the next tick and died
+(`SIGSEGV`, section 3zp; the twenty-sixth patch fixed it). The proofs cannot see such a
+bug, and nothing else looked for one: CI ran no memory checker, and valgrind served
+callgrind only. AddressSanitizer alone would not have seen it either. To ASan the
+runtime's heap is one mapping, all of it addressable, and a free chain is LIFO: a node
+read after its free is no error, and the next allocation of its class takes the node
+over at once.
+
+**What there is.** The thirty-fourth patch (`heap-asan.patch`) gives a build with ASan a
+heap it can check: the allocator poisons a free node's words, its chain's link among
+them, and lifts the poison off a node it hands out; a free first puts the node in a
+quarantine of its thread and class, a ring that lets it go to its chain once 2^22 more
+words of its class have been freed. A stale pointer meanwhile finds poison, and ASan
+reports the read or the write with its stack. Built without ASan, BendKV's C preprocesses
+to the same bytes with the patch and without, and the server is the same binary.
+`tools/sanitize.sh`, CI's `sanitize` job, builds the generated C at `-O1` with ASan and
+UBSan, and with TSan, and runs under each, with replies posted and sent: a client that
+stops reading, clients that wait, transactions, Pub/Sub, the protocol's edge cases, the
+statistics per command, RESP3, the differential test (three seeds), the concurrency
+checks, a load from redis-benchmark (50 clients pipelined, then 100 not, under which the
+loop falls behind and posts to its writer), and connections that end. A report, a
+failed test or a server that dies fails it. ASan leaves out one check, a stack frame used
+after its function returns: the check moves the frames it instruments to a heap of its
+own, and LLVM 19 cannot realign such a frame under the runtime's `preserve_none` and
+`preserve_most` calling conventions (the build stops: "Stack realignment in presence of
+dynamic allocas is not supported with this calling convention"). UBSan runs every check
+of `-fsanitize=undefined`, and TSan suppresses nothing.
+
+**What it found on main.** Nothing: no report from ASan, UBSan or TSan, and every test
+passes under each. TSan watched the writer at work (4.3 s of its thread's time under a
+load of redis-benchmark like the job's) and holding the posts of a client that stops
+reading (`tests/writer_test.py`); outside the job, an append-only file synced at every
+write, and its rewrite, gave no report either. The writer's queue, its held posts and the
+loop's own sends pass between the threads through atomic operations, a mutex with its
+condition variable, and a pipe, all of which TSan follows, so nothing needed a
+suppression. The one read the runtime makes
+racily by design, `IO.heap`'s account of other threads' allocator rows, had nothing to
+race with: BendKV runs all its computations on one event loop.
+
+**Patch 26 reverted.** `spare-share.patch` reverse-applies cleanly on the thirty-three,
+and 59 write-backs leave BendKV's C and nothing else changes, in segments of the general
+way (`bg.cmd`, `bg.run`, `bg.serve`, `bg.subs`, `bg.exec`, `bg.go`, `bg.watch`,
+`bg.client`, `bg.put` and others), of SORT and of the RESP encoders. The plain server
+shows nothing: of the 29 test files run on it, the job's and most of `make test`'s first
+mode, all pass but MONITOR's, which fails now and then here on main's server too, under
+the load of other builds. The job fails it at `tests/resp3_test.py`: in its scenario of
+a RESP3 client subscribed to keyspace events that runs commands, ASan reports a
+use-after-poison in `ctr_take` (from `ctr_own`, from `bg.put`): a node read after its
+free, at the same address in every run of a build. The scenario that crashed then
+(CLIENT REPLY OFF, then PING, then a tick of the cron reading the statistics) passes
+clean without the patch on today's code, under the poisoned heap too; the job keeps it
+(`tests/stats_test.py`'s replies held back). On Bend's own test of the patch,
+`tests/rfc/spare_share.bend`, the plain build prints a wrong sum, 206 for 46; ASan alone
+prints the same in silence, and so does the poison without the quarantine, since the
+freed cells go to the next list at once; with the quarantine, ASan reports the read of a
+freed cell in `sum`.
+
+**What it costs.** Nothing in the normal build. The job's script took 19 minutes here,
+on 4 cores shared with other builds, the generated C already made (making it is a Bend
+compile of about 2.5 minutes more): the ASan build 7.4 minutes and its tests 3.2, the TSan
+build 4.3 and its tests 3.7. CI gives the job an hour.
+
+## 3zzq. The append-only file killed under load
+
+**What was missing.** The laws prove recovery for the model of the file (`recover`,
+`recover_cut`, `checked_replay`, section 3e). What the shell writes, when it syncs and
+when it answers a client was tested three ways: restarts after a clean kill, a tail cut
+on purpose (`restart()` in `tests/run_tests.sh`) and one SIGKILL while a rewrite runs
+(`tests/rewrite_test.py`). Nothing killed the server at a random moment under load and
+checked every write it had acknowledged (issue #39).
+
+**What the test checks.** `tests/crash_test.py` runs rounds on one file: clients write,
+the server is killed with SIGKILL after a random time, the replies left in the sockets
+are read, the server starts again from its file, and the next round writes on. The
+server runs the batches of all its connections through one actor, so it ran its
+commands in one order, and its file holds their effects in that order. A unit is a
+command, or a transaction whole. A start must hold the databases that a prefix of that
+order leaves from those of the round's start, and the prefix must hold every unit
+acknowledged. The test does not see the order whole, so the load is made for the check
+to be exact: one connection's order is the order it sent its units in; with several,
+each connection writes keys of its own, where the commands of different connections
+commute, and they push ids onto lists they share, whose order is the server's, each
+acknowledged push at the place its RPUSH answered. The databases after each prefix come
+from a model of the 38 commands the load sends (and of MULTI, EXEC and DISCARD around
+them); checked once against redis-server 7.0.15, it gave every reply of 285,000 units
+and the keyspace after them, and BendKV's replies are compared with it in every round.
+A round draws 1 to 16 connections that pipeline 1 to 128 units, the fsync policy, the
+writer thread or the loop, a BGREWRITEAOF or the cron's rewrites made frequent, values
+of up to 512 KB in some rounds, and in some a second kill while the start loads the
+file. The units mix MSET, MSETNX, RENAME, COPY, MOVE, SWAPDB, FLUSHDB, SMOVE, LMOVE, the
+stores of sets and transactions (a SELECT inside now and then) with writes of one key,
+beside 20,000 keys no unit touches, so that a rewrite and a start take a while. A start
+must also leave the file as the kill left it but for an entry or a transaction cut short
+at its end, the bytes its log names.
+
+SIGKILL stops the process and not the machine: what the server wrote is in the page
+cache, and the next start reads it. The server writes a group's effects before it
+answers (and with always syncs them first), so every policy must keep every
+acknowledged unit. What sets always apart shows only when the machine stops: with
+`--lazyfs`, the server's directory is on a LazyFS mount, and after each kill LazyFS drops
+every write not synced, as a machine that stops loses its page cache; every round then
+runs with always.
+
+**What it found.** No durability problem. 200 rounds took 487 s here, on four cores
+shared with other builds: 3,368,013 units acknowledged, all restored, and 5,132 more of
+those sent after them; 59 kills while a rewrite ran, 59 starts killed again, 40 of them
+while they loaded the file. On LazyFS (built here, with a libfuse 3.16 of its own), 60
+rounds with always: 1,022,132 units acknowledged, all restored once the writes not
+synced were dropped; with `--policy no` the first round fails, as it must, nothing
+having been synced. And the test fails when the file is damaged after each kill as a
+durability bug would leave it (`--break lose`: its last whole entry dropped, as if the
+server had answered before writing it; `--break hole`: one of the twenty before it),
+naming the connection, its units acknowledged and sent, the closest prefix and the keys
+that differ.
+
+One failure was the test's own. A round on LazyFS with one connection had two SWAPDBs
+in the file that were sent and not acknowledged; stepping through one, the check compared
+again only the keys the swapped databases held after it, so a key that had differed only
+before it stayed counted, and no prefix matched. The check now compares again every key
+that differed in a database a step changes whole, and tries itself first, before any
+server (`--self-check`): a model plays the server, every connection's units in one order
+that keeps each one's, cut at random, and the check must accept the databases after the
+cut and refuse them without one acknowledged unit's effect, with SWAPDB and FLUSHDB
+frequent. On 2,000 simulated rounds of each kind it accepted all 4,000 and refused all
+1,670 such damages; without the fix it fails at its first. A failed round now keeps what
+the check ran on, and `--recheck` runs the check again on it.
+
+A kill seldom stops a write in its middle (the kernel looks for a fatal signal only
+between the pages of a write): of about 1,400 rounds run here, three did, two of them in
+rounds with values of up to 512 KB; their starts cut the entries cut short (3,396 to
+144,667 bytes), and the rounds after them appended to the files so cut. The tail cut of
+`tests/run_tests.sh` and the laws `recover_cut` and `load_cut` cover that path too.
+
+**What it costs.** `make test` runs 20 rounds: about 50 s here, a second of it the
+check's own test.
+
+**What it does not check.** The syncs of the directory: LazyFS makes a file and renames
+one at once and never drops a name (`tests/aof_fail_test.py` traces the file's creation,
+its directory's sync and the first reply instead). everysec on LazyFS, which may lose the
+last second's acknowledged writes: the test does not know when the syncer last ran. CI
+runs no LazyFS: the job would need FUSE 3 and LazyFS built in it.
+
+## 3zzr. Seeds of each run, and a nightly run
+
+**What it was.** `make test` ran the differential test (`tests/diff_test.py`) 13 times,
+three seeds against each of its four servers and one in RESP3, from seeds 1 to 4 and
+for 1,000 rounds each: some 75,000 commands, the same ones in every run. A stream those
+four seeds do not draw went unsent however often CI ran.
+
+**What it is.** `tests/run_tests.sh` takes the seeds from `SEED` (and the three after
+it): 1 by default, the seeds `make test` always took, and 4 ×
+`GITHUB_RUN_ID` + 1 in CI, so that each run sends commands of its own and no two runs
+share a seed (a job run again keeps its run's id, and sends the same ones). It prints
+them first, with the line that sends them again (`SEED=N DIFF_ROUNDS=R make test`),
+and a mismatch prints the line of `diff_test.py` that replays its stream up to the
+batch that failed. `.github/workflows/nightly.yml` runs `make test` on main every night
+with `DIFF_ROUNDS=13500`: 13 runs of 13,500 rounds, about a million commands. A round
+is 5.8 commands on average and takes about 0.4 ms here (50,000 rounds, 290,577
+commands, in 19.5 s), so the million take about 80 s of a job whose build and other
+tests take the rest.
+
+**What it found.** The first eight seeds run at that length (620,000 commands against
+the defaults) found a mismatch in the test itself: an SPOP of a set {1, a}, answered
+`a` by BendKV and `1` by Redis. Both are right: SPOP of a key alone pops a member at
+random. The stream sent it from its line of set commands with a wrong number of
+arguments (none, or a key), where every other command is an error, a plain read
+(SINTER of one key) or a read whose random pick the comparison puts aside
+(SRANDMEMBER), and the comparison knew SPOP's arrays (sorted) but not its one member.
+Seeds 1 to 3 never draw such an SPOP, and the two that seed 4 draws happen to pass; of
+200 new seeds of 1,000 rounds, one failed on it (seed 1064: `SPOP k5`), so about one
+CI run in 15 would have failed for nothing. That line now sends SPOP without the key
+(its error of arity) after the same draws, so the rest of every stream is as it was.
+With it, the same 200 seeds pass (1.16 million commands), and so do 21 more of 13,500
+rounds against each kind of server `make test` starts (the defaults in RESP2 and
+RESP3, post, send, and an append-only file: 1.63 million commands).
+
+**What it costs.** Nothing in CI's time; the nightly run is one job a day. A failure
+CI meets can now be one no earlier run met, which is the point: its seed is in the
+log.
+
+## 3zzs. Tests that pass only after a rerun
+
+**What it was.** The client suites run a failing test again: redis-py up to twice
+(`--reruns 2`, but not one that fails on an unknown command), go-redis's specs up to
+three attempts in all (`-ginkgo.flake-attempts=3`). A test that passed on a rerun
+counted as passed, so a race in BendKV that shows once in three runs passed CI unseen.
+
+**What it is.** `tools/client_suite.py` counts each test's attempts in a suite's
+results (`attempts`): pytest writes each attempt of a test it reruns as a case of its
+own, those before the last with no child, as a pass reads, and an error in the teardown
+after a failed call as one more case, which is no attempt; ginkgo keeps one case and
+names each retry in its timeline (`Attempt #1 Failed.  Retrying`). A test BendKV
+passes only after a rerun, where Redis passes it at its first attempt, is reported in
+the job's report; from `RERUN_GRACE` on (2026-11-15; `RERUN_GRACE` in the environment
+gives another day) it counts as failed, so that the job fails on it as on any test
+Redis passes and BendKV fails. Until then a race it shows can be fixed without failing
+CI. A test that needs a rerun on Redis too is the suite's or the machine's, and is not
+reported. The reruns stay: they keep the job from failing on what fails on Redis too.
+
+**What it shows.** In two CI runs of main, every test that took more than one attempt
+failed at the last, on Redis (37 tests of redis-py in each protocol, 3 of go-redis) as
+on BendKV (14 and 74, all on commands BendKV does not have): none passes only after a
+rerun, and the job passes as before. On a copy of main's results where redis-py's
+`test_incrby` passes on BendKV at its second attempt, written as pytest writes it,
+main's job passes without a word; this one reports it ("Passed on BendKV only after a
+rerun, at the first attempt on Redis (1 tests; failures from 2026-11-15 on)") and exits
+0, and with `RERUN_GRACE=2026-10-01` it fails, with "1 regressions ... passed only after
+2 attempts on BendKV, at its first on Redis". go-redis's spec "Commands strings should
+Incr", retried once, gives the same. On results written by pytest 9.1.1 with
+pytest-rerunfailures 16.7 as the job runs them, and by bsm/ginkgo v2.12.0 (go-redis's),
+the count finds 2 attempts for a test that passes at its second, 3 for one that always
+fails (with an error in its teardown or not), and 1 for one that fails on an unknown
+command.
+
+**What it costs.** Nothing in CI's time: the results are read once more.
+
 ## 3zzu. DUMP and RESTORE
 
 **What there is.** DUMP and RESTORE as Redis 7.0.15 runs them (`src/rdb.bend`, from
@@ -5263,6 +5600,75 @@ deletes it, under `allkeys-lru` first, so that RESTORE finds an LRU second in it
 every run. With main's server that fails at `lfu3` and `lfu4` at every run (3 of 3 on
 fresh servers, 1 against 5); with this change it passes, on fresh servers (2 of 2) and
 after the million random SETs above (3 of 3).
+
+## 3zzy. Intsets as trees of integers
+
+**What was left** (sections 3zj, 3zze). An intset kept its members as a list of their
+strings in increasing order. SADD, SREM and SISMEMBER walked the list from its start,
+and each step compared two members as integers, reading the digits of both again (four
+`String.dec_at` of ten digits each): on an intset of 100 to 500 members, SADD of a new
+member took 270,366 instructions, SISMEMBER 155,772 and SREM 274,643, where a
+hashtable's took 8,347, 5,403 and 14,598. SADD took no intset out of the keyspace, since
+the test of its member cost more than the take saved (section 3zze).
+
+**The change** (`src/map.bend`, Sets).
+
+- An intset's members are a weight-balanced tree (`ITree`: a tip, or a node of n members
+  whose member comes after those of its left side and before those of its right),
+  balanced as a sorted set's tree is (section 3zl).
+- Two members compare as integers: by their signs, then by their numbers of digits (an
+  intset's integers have no leading zero), then by their bytes as memcmp orders them
+  (`String.order`), the other way for two negative ones (`ints.cmp`).
+- A member is found, added or taken out in O(log n) steps (`ints.has`, `ints.put`,
+  `ints.del`), and the member at a rank in as many (`ints.nth`), which SRANDMEMBER and
+  SPOP pick by its rank.
+- SMEMBERS, SSCAN, DUMP and the rewrite of the append-only file read the members in
+  increasing order from the tree (`ints.list`). RESTORE of an intset, whose members come
+  in increasing order, makes the tree at once (`ints.build`, a walk with a list of jobs,
+  as `zel.build` makes a sorted set's: section 3zzu) and no trie of the members to find
+  one there twice, which members in increasing order cannot be.
+- SADD of a member that an intset lacks takes the set out of the keyspace (`upd.takes`),
+  as it takes a hashtable: the test of the member is a walk of log n steps now.
+
+**The proofs.** The lemmas of SADD's sizes take a tree where they took a list
+(`le_ints_*`), and `has_none` the empty tree. SADD of a member an intset lacks makes it
+one larger (`le_ints_new`, `le_ints_putn`), so it writes the set over and may take it
+(`takes_madd_ints`, under `takes_over`). `make check` and `make verdict` pass.
+
+**What it gives.** Instructions per command (callgrind, pipelined: 400 new members
+added in a random order to an intset of 100, then tested, then taken out; the same on a
+hashtable of as many short strings):
+
+| command | before | after | a hashtable |
+|---|---:|---:|---:|
+| SADD of a new member | 270,366 | 14,013 | 8,347 |
+| SISMEMBER | 155,772 | 6,992 | 5,403 |
+| SREM | 274,643 | 15,519 | 14,598 |
+| DUMP of an intset of 500 | 913,736 | 900,901 | |
+| RESTORE of it, with REPLACE | 3,992,621 | 1,225,958 | |
+
+An SADD and an SREM of one member took 37,297 instructions on an intset of 8 members,
+139,567 on one of 64 and 158,995 on one of 400; they take 21,866, 28,374 and 31,989 (on a
+hashtable: 23,943 to 24,653). The take saves SADD 2,418 of them. Wall time, one request
+at a time (the median of three runs, each the median of five): SADD 75 µs before, 53 now
+and 51 on Redis; SISMEMBER 64, 51 and 48; SREM 74, 53 and 50: an intset's command takes a
+round trip now, as Redis's does. An SADD of 500 integers takes 0.46 ms (7.9 before, 0.16
+on Redis), and a RESTORE of them 0.19 ms (0.42 before, 0.05 on Redis). GET, SET and INCR
+as before (`make perfcheck`: 3,306, 4,067 and 4,411 instructions per request; main 3,302,
+4,069 and 4,411).
+
+**Where BendKV differs.** A member takes a node of four words: an intset of 500 members
+takes 16,768 bytes of BendKV's heap (8,824 as a list), where Redis's takes 1,080 (2, 4 or
+8 bytes a member, the width of its widest). An add or a deletion makes a new node at
+each step back up the tree and drops the old one, where Redis moves the members after the
+new one with a memmove.
+
+**Tests.** `tests/set_test.py`: an intset of 512 members of every width (400 of them long
+longs at random), added in a random order and taken out in another, its members compared
+in order with Redis's every 64 adds and every 32 deletions, with SCARD, SISMEMBER,
+SRANDMEMBER and SPOP along the way: 6,244 commands, each answered as Redis answers it.
+Redis's suite: unit/type/set, unit/sort, unit/scan, unit/dump and unit/keyspace pass the
+tests they passed (222 of the 226 Redis passes).
 
 ## 4. Where a request's time goes, and hiding the memory waits
 

@@ -441,6 +441,17 @@ def rnd_sintercard(r, ks):
     return [b"SINTERCARD", n] + ks + r.choice([[], [], [b"LIMIT", rnd_lnum(r)], [b"LIMIT"], [b"LIMIT", b"1", b"FOO"]])
 
 
+# a set command with no argument or one, most often a wrong number of
+# them; but SPOP of a key alone pops a member at random, which two servers
+# need not pick alike (and then hold different sets), so SPOP goes without
+# it: the draws are the same, and so is the rest of the stream
+def rnd_set_arity(r, k):
+    name = r.choice([b"SADD", b"SREM", b"SMOVE", b"SINTER", b"SINTERCARD", b"SPOP", b"SRANDMEMBER", b"SSCAN",
+                     b"SMISMEMBER", b"SUNIONSTORE"])
+    keys = [k() for _ in range(r.choice([0, 1]))]
+    return [name] + ([] if name == b"SPOP" else keys)
+
+
 def rnd_lmpop(r, ks):
     n = r.choice([str(len(ks)).encode()] * 8 + [b"0", b"x", b"-1", str(len(ks) + 1).encode()])
     return [b"LMPOP", n] + ks + [rnd_end(r)] + r.choice([[], [], [b"COUNT", rnd_lnum(r)], [b"COUNT"]])
@@ -668,8 +679,7 @@ def rnd_cmd(r):
         (0.01, lambda: [b"SPOP", k(), r.choice([b"0", b"1000000", b"-1", b"x", b""])]),
         (0.01, lambda: [b"SRANDMEMBER", k()] + r.choice([[], [b"2"], [b"-3"], [b"0"], [b"1000000"], [b"x"]])),
         (0.01, lambda: [b"SSCAN", k(), b"0", b"COUNT", b"1000"] + ([b"MATCH", rnd_pattern(r)] if r.random() < 0.5 else [])),
-        (0.005, lambda: [r.choice([b"SADD", b"SREM", b"SMOVE", b"SINTER", b"SINTERCARD", b"SPOP", b"SRANDMEMBER", b"SSCAN",
-                                   b"SMISMEMBER", b"SUNIONSTORE"])] + [k() for _ in range(r.choice([0, 1]))]),
+        (0.005, lambda: rnd_set_arity(r, k)),
         (0.05, lambda: [r.choice([b"ZADD", b"zadd"]), k()] + rnd_zopts(r) + rnd_zpairs(r, False)),
         (0.02, lambda: [b"ZADD", lk()] + r.choice([[], [], [b"NX"], [b"XX", b"CH"], [b"GT"]]) + rnd_zpairs(r, True)),
         (0.02, lambda: [b"ZINCRBY", k(), rnd_zscore(r), rnd_zmember(r)]),
@@ -839,6 +849,8 @@ def main():
                 print("  command:", cmd)
                 print("  bendkv: ", got)
                 print("  redis:  ", want)
+                print("  again:   %spython3 tests/diff_test.py --bendkv %d --redis %d --rounds %d --seed %d" % (
+                    "RESP=3 " if RESP3 else "", a.bendkv, a.redis, rnd + 1, a.seed))
                 sys.exit(1)
     print("OK: %d commands in %d pipelined batches, all replies identical" % (total, a.rounds))
 
