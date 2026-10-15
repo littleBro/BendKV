@@ -5947,7 +5947,13 @@ account does not move with the keys alone.
 - With maxmemory 100 KB above an empty server's memory and `noeviction`, every SET past
   the limit was refused, so no key was added or deleted. The account still climbed by
   about 390 bytes for each refused SET and INFO, and fell by 35 to 50 KB at once every 60
-  to 100 requests (#79).
+  to 100 requests.
+
+The account itself is exact. What climbs is the timing of the calls (section 3zzz). Each
+run of calls goes, with a histogram of its own, to the runs not yet counted (`Stats`'
+`cur` and `pend`). They are counted in the entries at the cron's tick, every 100 ms, so
+a run is held until then. With `latency-tracking` on, that is about 300 bytes a call
+(#79).
 
 So:
 
@@ -6013,9 +6019,9 @@ this branch and 10,000 on main.
   the second half, the keys never take the heap past the limit. The test's three
   volatile policies, run alone 25 times on a server of their own, failed 3 times of 75
   with this change and 5 times of 75 on main. Two of the 20 runs above failed on it
-  (volatile-ttl), as one of main's CI runs did (volatile-random). Why the account falls
-  that much at once, with no key deleted, is for the runtime's account of free nodes
-  (`IO.heap`, the twenty-ninth patch) to answer: issue #79.
+  (volatile-ttl), as one of main's CI runs did (volatile-random). Bounding the runs
+  not yet counted would end it, and with it most of what the eviction sees move: issue
+  #79.
 
 ## 4. Where a request's time goes, and hiding the memory waits
 
