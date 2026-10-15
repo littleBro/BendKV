@@ -5332,6 +5332,91 @@ SRANDMEMBER and SPOP along the way: 6,244 commands, each answered as Redis answe
 Redis's suite: unit/type/set, unit/sort, unit/scan, unit/dump and unit/keyspace pass the
 tests they passed (222 of the 226 Redis passes).
 
+## 3zzza. ZADD and ZINCRBY in place: the sorted set taken out of the keyspace
+
+**What was left** (sections 3zzd, 3zze). HSET, and SADD of a member new to a set, take
+their collection out of the keyspace and change it in place. ZADD and ZINCRBY still made
+a new version of the sorted set while the keyspace held the old one, so each copied the
+paths it changed in the tree and in the trie, and the keyspace dropped the old ones
+after: on a sorted set of 100,000 elements, ZADD of a new score to a member there took
+76,830 instructions, ZINCRBY 68,728 and ZADD of a new member 47,807. A ZADD can change
+nothing: a member there with the score it has, XX of a member not there, NX of one there,
+a GT or an LT that keeps the score, or an INCR whose sum is a NaN. Such a write answers
+CKeep and drops the sorted set it was given, which a sorted set taken out of the
+keyspace cannot afford, so the take needs a test, proved, that the write changes it.
+
+**The test** (`src/redis.bend`: `upd.takes`, `zadd.takes`).
+
+- A ZADD (or a ZINCRBY: a ZADD with INCR) to a large sorted set (a skiplist, which keeps a
+  trie of its members' scores) takes it when its first pair adds its member (but under
+  XX), or gives it another score: not under NX, no NaN under INCR, not kept by GT or LT,
+  and a score other than the one it has. That is the last case of `zadd.old.of`, and the
+  test reads it as ZADD does: the member's score in the trie, the pair's score parsed,
+  and under INCR their sum.
+- Under INCR that pair is alone. Then, and only then, the options and pairs pass
+  `zadd.check`.
+- The pairs after the first add members, give them other scores or leave them be: none
+  takes one away. So a ZADD whose first pair changes the sorted set changes it.
+- A small sorted set (a listpack) is not taken. The test would find its member by a walk
+  of its elements in order, which the write walks again, and the paths its write copies
+  are short.
+- ZADD's NaN test runs under INCR alone, as Redis's `zsetAdd` tests it. Without INCR a
+  score is one `F.f64.parse` read, which is never a NaN, so no reply changes, and the
+  proof needs no lemma about the parser.
+
+**The tree** (`src/map.bend`: Sorted sets). The take alone gave less than it should:
+ZADD of a new member took 43,874 instructions with it, of which 6,400 went to dropping
+an old path at the end. The tree was shared while the insertion ran.
+
+- `zt.ins` (and `zt.rm`) compared the element with the side it was about to go down
+  only after giving that side to the insertion. A field read after it is given away is
+  shared first (the twenty-sixth patch's `term_keep`).
+- So the insertion found each node of its path shared, copied it, and the old path lived
+  until the write's end.
+- Now each side is compared before it goes down (`+cl = zt.at(l, d, m)`).
+- `zset.add`, `zset.set` and `zset.del` give the tree and the trie to their writes:
+  `zt.add.own` and `zt.del.own` compare the root where they match it.
+- A tree held once is then changed in place, as the trie is.
+
+**The proofs.** `takes_over` covers the new case (`takes_zset`, then `takes_zadd`).
+
+- The first pair's state adds or changes a member (`zadd_sure_some`, through
+  `zadd_of_sure` and `zadd_new_sure`).
+- Without INCR, the pairs after it keep that so (`zadd_go_some`, `zadd_step_some`,
+  `zadd_at_some`: with the NaN test under INCR, they never answer a NaN). Under INCR
+  there are none (`zadd_rest_some`).
+- A state that added or changed a member answers CZset, which writes the sorted set over
+  (`zadd_res_over`, `zadd_fin_over`).
+- Two proofs that unfolded the update (`zset_replay`, `znew_zadd`) rewrite through
+  `db_upd_eq`, as `mems_replay` and `snew_sadd` did in section 3zze.
+
+`make check` and `make verdict` pass.
+
+**What it gives** (`tools/colls.sh`, instructions per command; ZADD of a new score and of
+a new member are new there):
+
+| command | before | after | |
+|---|---:|---:|---:|
+| ZADD of a new score to a member there | 76,830 | 49,443 | −35.6% |
+| ZINCRBY | 68,728 | 50,220 | −26.9% |
+| ZADD of a new member | 47,807 | 33,854 | −29.2% |
+| ZADD of the score a member has | 23,695 | 24,950 | +5.3% |
+| the other commands of `colls.sh` | | as before (±0.4%) | |
+
+The take alone, before the tree's change, gave −20.6%, −15.7% and −8.0% on the first
+three; the rest is the tree. A ZADD of three new members took 103,228 instructions and
+takes 58,387 (−43%). `make perfcheck`: GET 3,302, SET 4,067, INCR 4,417 (main 3,302,
+4,069, 4,411).
+
+**What is left.**
+
+- The test reads the trie and parses the first score, and the write does both again.
+  ZINCRBY adds its increment twice, in software (section 3zk). A ZADD that changes
+  nothing pays the test: +5%.
+- ZREM, ZPOPMIN, ZPOPMAX and the ZREMRANGEBY family still copy their paths: each needs a
+  test of its own (ZREM's: that the members it removes leave the sorted set not empty).
+- A small sorted set finds a member by a walk of its elements.
+
 ## 4. Where a request's time goes, and hiding the memory waits
 
 With the eight patches, BendKV ran fewer instructions on GET and SET than Redis, missed

@@ -7174,3 +7174,49 @@ hashtable: each step of an add or a deletion makes a new node on its way back up
 drops the old one, and an SADD that takes the set walks the tree three times (the take's
 test of the member, `mems.add`'s, then the add). A member takes 34 bytes of the heap,
 where Redis's intset takes 2 to 8.
+
+## 65. ZADD and ZINCRBY in place
+
+**What was left** (sections 54, 55). HSET, and SADD of a new member, take their collection
+out of the keyspace and change it in place. ZADD and ZINCRBY still copied the paths they
+changed in a sorted set's tree and trie, and the keyspace dropped the old ones after. A
+prototype that took every write's value (section 54) put ZADD at −28% and ZINCRBY at −34%;
+each needed a test before the take that the write changes the sorted set, and a proof
+of it.
+
+**The change** (FINDINGS 3zzza). A ZADD to a large sorted set whose first pair adds its
+member or gives it another score takes the sorted set out of the keyspace; the test reads
+the member's score in the trie and the pair's score as ZADD reads them, and only then
+checks the options and the pairs. The sorted set's tree then turned out shared while a
+write changed it: `zt.ins` read the side it went down after giving it to the insertion,
+which shares it first, so the insertion copied each node of its path. Each side is now
+compared before it goes down, and the tree and the trie go to their writes whole.
+
+**Measured** (callgrind, instructions per command, one at a time; a sorted set of 100,000
+elements, as `tools/colls.sh` makes it, and one of 100):
+
+| command | before | the take alone | both | |
+|---|---:|---:|---:|---:|
+| ZADD of a new score to a member there | 76,861 | 61,025 | 49,427 | −35.7% |
+| ZINCRBY | 77,882 | 65,684 | 53,807 | −30.9% |
+| ZADD of a new member | 47,668 | 43,874 | 33,922 | −28.8% |
+| ZADD of three new members | 103,228 | 90,131 | 58,387 | −43.4% |
+| ZADD of the score a member has | 23,696 | 25,035 | 24,955 | +5.3% |
+| ZADD XX of a member not there | 24,894 | 25,928 | 25,849 | +3.8% |
+| ZINCRBY on the sorted set of 100 (not taken) | 93,911 | 94,047 | 89,607 | −4.6% |
+| ZSCORE | 17,790 | 17,845 | 17,789 | |
+
+The first test checked the options and the pairs before it read the member: a ZADD that
+changes nothing paid 2,929 instructions for it (+12%); checked last, 1,339. Of the rest of
+a ZINCRBY's test, its increment, added in software (section 3zk), is most. `tools/colls.sh`
+(which now also runs ZADD of a new score and of a new member): ZINCRBY 68,728 → 50,220,
+ZADD of a new score 76,830 → 49,443, of a new member 47,807 → 33,854, of the score a
+member has 23,695 → 24,950; the other commands as before, within 0.4%. `make perfcheck`:
+GET 3,302, SET 4,067 and INCR 4,417 instructions per request (main 3,302, 4,069 and
+4,411).
+
+**What is left.** The test reads the trie and parses the first score, and the write does
+both again; an update given the test's reading would do each once. ZINCRBY's soft-float
+addition takes thousands of instructions where C's takes one; the runtime's doubles
+(section 60) would serve it. ZREM, the ZPOPs and the ZREMRANGEBYs still copy their paths:
+each needs a test of its own.
