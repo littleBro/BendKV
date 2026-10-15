@@ -66,6 +66,7 @@ COMMANDS = {
     "bitfield_ro": [], "hset": [], "hsetnx": [], "hget": [], "hmget": [], "hmset": [],
     "hdel": [], "hlen": [], "hstrlen": [], "hexists": [], "hkeys": [], "hvals": [],
     "hgetall": [], "hincrby": [], "hscan": [], "hrandfield": [], "eval": [],
+    "evalsha": [], "eval_ro": [], "evalsha_ro": [], "script": ["exists", "flush", "help", "kill", "load"],
     "memory": ["doctor", "help", "malloc-stats", "purge", "stats", "usage"], "lpush": [], "rpush": [], "lpushx": [], "rpushx": [],
     "lpop": [], "rpop": [], "llen": [], "lindex": [], "lrange": [], "lset": [],
     "linsert": [], "lrem": [], "ltrim": [], "lpos": [], "lmove": [], "rpoplpush": [],
@@ -236,7 +237,8 @@ GETKEYS = {"set": "KBySet{}", "bitfield": "KByBitfield{}"}
 # BLMPOP and BZMPOP as LMPOP after their timeout, and the STOREs their
 # destination first (OW, update) and then the keys, or, by their function,
 # the keys and then the destination
-KEYNUM = {"eval": "KByEval{}", "lmpop": "KByLmpop{}", "sintercard": "KBySintercard{}",
+KEYNUM = {"eval": "KByEval{}", "evalsha": "KByEval{}", "eval_ro": "KByEval{}", "evalsha_ro": "KByEval{}",
+          "lmpop": "KByLmpop{}", "sintercard": "KBySintercard{}",
           "zunion": "KBySintercard{}", "zinter": "KBySintercard{}", "zdiff": "KBySintercard{}",
           "zintercard": "KBySintercard{}", "zmpop": "KByLmpop{}", "zunionstore": "KByZstore{}",
           "zinterstore": "KByZstore{}", "zdiffstore": "KByZstore{}", "blmpop": "KByBlmpop{}",
@@ -413,13 +415,20 @@ RISKY = {"incr", "decr", "incrby", "decrby", "expire", "pexpire", "setex", "pset
 # src/commands/*.json), a flag COMMAND INFO hides: a monitor may not run
 # them, as it may not run a command that reads or writes a key, and
 # CLIENT PAUSE WRITE holds them back, as it holds back those that write
-MAY_REPLICATE = {"publish", "spublish", "eval", "pfcount"}
+MAY_REPLICATE = {"publish", "spublish", "eval", "evalsha", "pfcount"}
+# the commands of scripts, which feed the monitors themselves (stat.unseen)
+EVALS = {"eval", "evalsha", "eval_ro", "evalsha_ro"}
+# the commands that need the engine of scripts (stat.engine): the server
+# runs them once the group is run (server.bend, Scripts), EXEC with one
+# queued too
+ENGINE = EVALS | {"script|load", "script|exists", "script|flush"}
 
 # the parser's commands with subcommands, by the function that numbers
 # their subcommands
 CONTAINERS = {"client": "client_id", "function": "function_id", "config": "config_id",
               "command": "command_id", "object": "object_id", "memory": "memory_id",
-              "pubsub": "pubsub_id", "slowlog": "slowlog_id", "latency": "latency_id"}
+              "pubsub": "pubsub_id", "slowlog": "slowlog_id", "latency": "latency_id",
+              "script": "script_id"}
 
 # the names a numbering def of redis.bend gives its numbers
 def numbering(src, fn):
@@ -537,12 +546,21 @@ def stats_block(src, facts):
             out += ["    case %dn:" % k, "      True{}"]
     out += ["    case _:", "      False{}", ""]
     fl = flag_sets(facts)
+    out += ["# whether a call of the command of a key needs the engine of scripts:",
+            "# EVAL and its kin, SCRIPT LOAD, EXISTS and FLUSH (server.bend, Scripts)",
+            "def stat.engine(+key: Nat) -> Bool:", "  match key:"]
+    for k, (name, kind, i) in enumerate(keys, 1):
+        if name in ENGINE:
+            out += ["    case %dn:" % k, "      True{}"]
+    out += ["    case _:", "      False{}", ""]
     out += ["# whether a call of the command of a key goes unseen by MONITOR: an",
             "# administrative command (admin), or one that feeds the monitors",
-            "# itself (skip_monitor), as Redis's call() leaves them out",
+            "# itself (skip_monitor), as Redis's call() leaves them out; EVAL and",
+            "# its kin feed them before they run (evalCommand), as the server",
+            "# feeds them when their script starts (server.bend, Scripts)",
             "def stat.unseen(+key: Nat) -> Bool:", "  match key:"]
     for k, (name, kind, i) in enumerate(keys, 1):
-        if fl[name] & {"admin", "skip_monitor"}:
+        if fl[name] & {"admin", "skip_monitor"} and name not in EVALS:
             out += ["    case %dn:" % k, "      True{}"]
     out += ["    case _:", "      False{}", ""]
     out += ["# whether the command of a key reads or writes keys, or may be",
@@ -557,6 +575,26 @@ def stats_block(src, facts):
             "def stat.pausable(+key: Nat) -> Bool:", "  match key:"]
     for k, (name, kind, i) in enumerate(keys, 1):
         if "write" in fl[name] or name in MAY_REPLICATE:
+            out += ["    case %dn:" % k, "      True{}"]
+    out += ["    case _:", "      False{}", ""]
+    out += ["# whether the command of a key writes (write): a script that may not",
+            "# write is refused it, and a script that ran one cannot be killed",
+            "def stat.write(+key: Nat) -> Bool:", "  match key:"]
+    for k, (name, kind, i) in enumerate(keys, 1):
+        if "write" in fl[name]:
+            out += ["    case %dn:" % k, "      True{}"]
+    out += ["    case _:", "      False{}", ""]
+    out += ["# whether a script may not call the command of a key (noscript)",
+            "def stat.noscript(+key: Nat) -> Bool:", "  match key:"]
+    for k, (name, kind, i) in enumerate(keys, 1):
+        if "noscript" in fl[name]:
+            out += ["    case %dn:" % k, "      True{}"]
+    out += ["    case _:", "      False{}", ""]
+    out += ["# whether the command of a key runs while a script is busy (allow_busy):",
+            "# every other answers BUSY then",
+            "def stat.allow_busy(+key: Nat) -> Bool:", "  match key:"]
+    for k, (name, kind, i) in enumerate(keys, 1):
+        if "allow_busy" in fl[name]:
             out += ["    case %dn:" % k, "      True{}"]
     out += ["    case _:", "      False{}", ""]
     out += ["# whether the command of a key may take memory (denyoom): past",

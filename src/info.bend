@@ -1482,9 +1482,15 @@ type Boot is Data:
 # (IO.heap: an allocator's allocated and active bytes), the
 # connections taken since the start and those open, and the clients that
 # wait (blocked) and those of them with a timeout, as the actor counts
-# them (a connection's facts leave them as they were)
+# them (a connection's facts leave them as they were), and the engine's
+# facts of scripts, as the actor read them last (server.bend, Scripts):
+# the scripts cached, the Lua state's bytes and the cache's. ILiveOf,
+# never built, makes Live a type that holds itself, which the compiler
+# makes a node of its own: Info stays well within the 64 words it is
+# rebuilt in place up to (3zzz), whatever Live holds.
 type Live is Data:
-  ILive{secs: U32, usec: U32, ut: Nat, st: Nat, mut: Nat, mst: Nat, rss: Nat, heap: Nat, act: Nat, conns: Nat, clients: Nat, blk: Nat, tmo: Nat}
+  ILive{secs: U32, usec: U32, ut: Nat, st: Nat, mut: Nat, mst: Nat, rss: Nat, heap: Nat, act: Nat, conns: Nat, clients: Nat, blk: Nat, tmo: Nat, scn: Nat, scm: Nat, scc: Nat}
+  ILiveOf{l: Live}
 
 # commands run, bytes read and bytes sent
 type Count is Data:
@@ -1625,28 +1631,38 @@ def samples.zero() -> List<&2, Nat>:
 
 def live.ms(+l: Live) -> Nat:
   match l:
-    case ILive{+secs, +usec, ut, st, mut, mst, rss, heap, act, conns, clients, b, t}:
+    case ILive{+secs, +usec, ut, st, mut, mst, rss, heap, act, conns, clients, b, t, sn, sm, sc}:
       Nat.add(Nat.mul(U32.to_nat(secs), 1000n), U32.to_nat(U32.div(usec, 1000)))
+    case ILiveOf{+x}:
+      live.ms(x)
 
 def live.rss(+l: Live) -> Nat:
   match l:
-    case ILive{secs, usec, ut, st, mut, mst, rss, heap, act, conns, clients, b, t}:
+    case ILive{secs, usec, ut, st, mut, mst, rss, heap, act, conns, clients, b, t, sn, sm, sc}:
       rss
+    case ILiveOf{+x}:
+      live.rss(x)
 
 def live.heap(+l: Live) -> Nat:
   match l:
-    case ILive{secs, usec, ut, st, mut, mst, rss, heap, act, conns, clients, b, t}:
+    case ILive{secs, usec, ut, st, mut, mst, rss, heap, act, conns, clients, b, t, sn, sm, sc}:
       heap
+    case ILiveOf{+x}:
+      live.heap(x)
 
 def live.act(+l: Live) -> Nat:
   match l:
-    case ILive{secs, usec, ut, st, mut, mst, rss, heap, act, conns, clients, b, t}:
+    case ILive{secs, usec, ut, st, mut, mst, rss, heap, act, conns, clients, b, t, sn, sm, sc}:
       act
+    case ILiveOf{+x}:
+      live.act(x)
 
 def live.conns(+l: Live) -> Nat:
   match l:
-    case ILive{secs, usec, ut, st, mut, mst, rss, heap, act, conns, clients, b, t}:
+    case ILive{secs, usec, ut, st, mut, mst, rss, heap, act, conns, clients, b, t, sn, sm, sc}:
       conns
+    case ILiveOf{+x}:
+      live.conns(x)
 
 # the server's facts at its start
 def info.new(b: Boot, +l: Live) -> Info:
@@ -1734,13 +1750,49 @@ def info.aof.base(+i: Info) -> Nat:
 # new facts, the clients that wait as the actor counted them
 def live.keep(l: Live, old: Live) -> Live:
   match l old:
-    case ILive{secs, usec, ut, st, mut, mst, rss, heap, act, conns, clients, b0, t0} ILive{s1, u1, ut1, st1, mu1, ms1, r1, h1, a1, n1, c1, blk, tmo}:
-      ILive{secs, usec, ut, st, mut, mst, rss, heap, act, conns, clients, blk, tmo}
+    case ILive{secs, usec, ut, st, mut, mst, rss, heap, act, conns, clients, b0, t0, sn, sm, sc} ILive{s1, u1, ut1, st1, mu1, ms1, r1, h1, a1, n1, c1, blk, tmo, sn1, sm1, sc1}:
+      ILive{secs, usec, ut, st, mut, mst, rss, heap, act, conns, clients, blk, tmo, sn1, sm1, sc1}
+    case ILiveOf{x} o:
+      live.keep(x, o)
+    case n ILiveOf{x}:
+      live.keep(n, x)
 
 def live.waits(l: Live, +n: Nat, +t: Nat) -> Live:
   match l:
-    case ILive{secs, usec, ut, st, mut, mst, rss, heap, act, conns, clients, b0, t0}:
-      ILive{secs, usec, ut, st, mut, mst, rss, heap, act, conns, clients, n, t}
+    case ILive{secs, usec, ut, st, mut, mst, rss, heap, act, conns, clients, b0, t0, sn, sm, sc}:
+      ILive{secs, usec, ut, st, mut, mst, rss, heap, act, conns, clients, n, t, sn, sm, sc}
+    case ILiveOf{x}:
+      live.waits(x, n, t)
+
+# the engine's facts: n scripts cached, the Lua state's bytes (m), the
+# cache's (c)
+def live.scripts(l: Live, +n: Nat, +m: Nat, +c: Nat) -> Live:
+  match l:
+    case ILive{secs, usec, ut, st, mut, mst, rss, heap, act, conns, clients, blk, tmo, s0, m0, c0}:
+      ILive{secs, usec, ut, st, mut, mst, rss, heap, act, conns, clients, blk, tmo, n, m, c}
+    case ILiveOf{x}:
+      live.scripts(x, n, m, c)
+
+def live.scn(+l: Live) -> Nat:
+  match l:
+    case ILive{secs, usec, ut, st, mut, mst, rss, heap, act, conns, clients, blk, tmo, +scn, scm, scc}:
+      scn
+    case ILiveOf{+x}:
+      live.scn(x)
+
+def live.scm(+l: Live) -> Nat:
+  match l:
+    case ILive{secs, usec, ut, st, mut, mst, rss, heap, act, conns, clients, blk, tmo, scn, +scm, scc}:
+      scm
+    case ILiveOf{+x}:
+      live.scm(x)
+
+def live.scc(+l: Live) -> Nat:
+  match l:
+    case ILive{secs, usec, ut, st, mut, mst, rss, heap, act, conns, clients, blk, tmo, scn, scm, +scc}:
+      scc
+    case ILiveOf{+x}:
+      live.scc(x)
 
 def info.live(i: Info, +l: Live) -> Info:
   match i:
@@ -1752,6 +1804,12 @@ def info.blocked(i: Info, +n: Nat, +t: Nat) -> Info:
   match i:
     case IInfo{b, l, c, inst, pk, c0, a0, a, st, ex, rw, tm}:
       IInfo{b, live.waits(l, n, t), c, inst, pk, c0, a0, a, st, ex, rw, tm}
+
+# the engine's facts of scripts (live.scripts)
+def info.scripts(i: Info, +n: Nat, +m: Nat, +c: Nat) -> Info:
+  match i:
+    case IInfo{b, l, cn, inst, pk, c0, a0, a, st, ex, rw, tm}:
+      IInfo{b, live.scripts(l, n, m, c), cn, inst, pk, c0, a0, a, st, ex, rw, tm}
 
 # a call of code k that failed after it was counted: a blocked client
 # that CLIENT UNBLOCK unblocked (Redis's updateStatsOnUnblock)
@@ -2219,7 +2277,7 @@ def flag(b: Bool) -> String:
 
 def sec.server(+items: List<&2, C.CItem>, +b: Boot, +l: Live) -> String:
   match b l:
-    case IBoot{+os, +pid, +run, +replid, +exe, +conf, sysmem, +start, heap0} ILive{+secs, +usec, ut, st, mut, mst, rss, heap, act, conns, clients, bk, tm}:
+    case IBoot{+os, +pid, +run, +replid, +exe, +conf, sysmem, +start, heap0} ILive{+secs, +usec, ut, st, mut, mst, rss, heap, act, conns, clients, bk, tm, sn, sm, sc}:
       +up = Bool.pick(U32, U32.is_le(start, secs), U32.sub(secs, start), 0)
       "# Server\r\n" ++ kv("redis_version", "7.0.15") ++ kv("redis_git_sha1", "00000000") ++ kv("redis_git_dirty", "0") ++
       kv("redis_build_id", "0000000000000000") ++ kv("redis_mode", "standalone") ++ kv("os", os) ++ kv("arch_bits", "64") ++
@@ -2229,14 +2287,18 @@ def sec.server(+items: List<&2, C.CItem>, +b: Boot, +l: Live) -> String:
       kv("uptime_in_seconds", U32.show(up)) ++ kv("uptime_in_days", U32.show(U32.div(up, 86400))) ++
       kv("hz", cfg(items, "hz")) ++ kv("configured_hz", cfg(items, "hz")) ++ kv("lru_clock", U32.show(U32.and(secs, 16777215))) ++
       kv("executable", exe) ++ kv("config_file", conf) ++ kv("io_threads_active", "0")
+    case b0 ILiveOf{+x}:
+      sec.server(items, b0, x)
 
 def sec.clients(+items: List<&2, C.CItem>, +l: Live) -> String:
   match l:
-    case ILive{secs, usec, ut, st, mut, mst, rss, heap, act, conns, +clients, +blk, +tmo}:
+    case ILive{secs, usec, ut, st, mut, mst, rss, heap, act, conns, +clients, +blk, +tmo, sn, sm, sc}:
       "# Clients\r\n" ++ kv("connected_clients", Nat.show(clients)) ++ kv("cluster_connections", "0") ++
       kv("maxclients", cfg(items, "maxclients")) ++ kv("client_recent_max_input_buffer", "0") ++
       kv("client_recent_max_output_buffer", "0") ++ kv("blocked_clients", Nat.show(blk)) ++ kv("tracking_clients", "0") ++
       kv("clients_in_timeout_table", Nat.show(tmo))
+    case ILiveOf{+x}:
+      sec.clients(items, x)
 
 # memory: used_memory is what the heap's live values hold (IO.heap, as
 # zmalloc counts what Redis allocated), from which maxmemory evicts;
@@ -2249,7 +2311,9 @@ def sdiff(+a: Nat, +b: Nat) -> String:
 def ratio(+a: Nat, +b: Nat) -> String:
   fix2(Nat.show(a), Nat.max(b, 1n))
 
-def sec.memory.go(+items: List<&2, C.CItem>, +used: Nat, +pk: Nat, +used0: Nat, +rss: Nat, +act: Nat, +sysmem: Nat) -> String:
+# (lua: the Lua state's bytes, scripts: the cache's, n: the scripts
+# cached; functions are none)
+def sec.memory.go(+items: List<&2, C.CItem>, +used: Nat, +pk: Nat, +used0: Nat, +rss: Nat, +act: Nat, +sysmem: Nat, +lua: Nat, +scripts: Nat, +n: Nat) -> String:
   +data = Nat.sub(used, used0)
   +net = Bool.pick(Nat, Nat.is_lt(used0, used), Nat.sub(used, used0), 1n)
   "# Memory\r\n" ++ kv("used_memory", Nat.show(used)) ++ kv("used_memory_human", human(Nat.show(used))) ++
@@ -2260,11 +2324,11 @@ def sec.memory.go(+items: List<&2, C.CItem>, +used: Nat, +pk: Nat, +used0: Nat, 
   kv("used_memory_dataset", Nat.show(data)) ++ kv("used_memory_dataset_perc", fix2(C.dec.mul(Nat.show(data), 100n), net) ++ "%") ++
   kv("allocator_allocated", Nat.show(used)) ++ kv("allocator_active", Nat.show(act)) ++ kv("allocator_resident", Nat.show(rss)) ++
   kv("total_system_memory", Nat.show(sysmem)) ++ kv("total_system_memory_human", human(Nat.show(sysmem))) ++
-  kv("used_memory_lua", "0") ++ kv("used_memory_vm_eval", "0") ++ kv("used_memory_lua_human", "0B") ++
-  kv("used_memory_scripts_eval", "0") ++ kv("number_of_cached_scripts", "0") ++ kv("number_of_functions", "0") ++
-  kv("number_of_libraries", "0") ++ kv("used_memory_vm_functions", "0") ++ kv("used_memory_vm_total", "0") ++
-  kv("used_memory_vm_total_human", "0B") ++ kv("used_memory_functions", "0") ++ kv("used_memory_scripts", "0") ++
-  kv("used_memory_scripts_human", "0B") ++ kv("maxmemory", signed64(cfg(items, "maxmemory"))) ++
+  kv("used_memory_lua", Nat.show(lua)) ++ kv("used_memory_vm_eval", Nat.show(lua)) ++ kv("used_memory_lua_human", human(Nat.show(lua))) ++
+  kv("used_memory_scripts_eval", Nat.show(scripts)) ++ kv("number_of_cached_scripts", Nat.show(n)) ++ kv("number_of_functions", "0") ++
+  kv("number_of_libraries", "0") ++ kv("used_memory_vm_functions", "0") ++ kv("used_memory_vm_total", Nat.show(lua)) ++
+  kv("used_memory_vm_total_human", human(Nat.show(lua))) ++ kv("used_memory_functions", "0") ++ kv("used_memory_scripts", Nat.show(scripts)) ++
+  kv("used_memory_scripts_human", human(Nat.show(scripts))) ++ kv("maxmemory", signed64(cfg(items, "maxmemory"))) ++
   kv("maxmemory_human", human(cfg(items, "maxmemory"))) ++ kv("maxmemory_policy", cfg(items, "maxmemory-policy")) ++
   kv("allocator_frag_ratio", ratio(act, used)) ++ kv("allocator_frag_bytes", Nat.show(Nat.sub(act, used))) ++
   kv("allocator_rss_ratio", ratio(rss, act)) ++ kv("allocator_rss_bytes", sdiff(rss, act)) ++
@@ -2278,7 +2342,7 @@ def sec.memory.go(+items: List<&2, C.CItem>, +used: Nat, +pk: Nat, +used0: Nat, 
 def sec.memory(+items: List<&2, C.CItem>, +b: Boot, +l: Live, +pk: Nat) -> String:
   match b:
     case IBoot{os, pid, run, replid, exe, conf, +sysmem, start, +heap0}:
-      sec.memory.go(items, live.heap(l), Nat.max(pk, live.heap(l)), heap0, live.rss(l), live.act(l), sysmem)
+      sec.memory.go(items, live.heap(l), Nat.max(pk, live.heap(l)), heap0, live.rss(l), live.act(l), sysmem, live.scm(l), live.scc(l), live.scn(l))
 
 def sec.aof(on: Bool, +a0: Nat, +a: Nat, +sched: Bool) -> String:
   match on:
@@ -2364,9 +2428,11 @@ def sec.replication(+items: List<&2, C.CItem>, +replid: String) -> String:
 
 def sec.cpu(+l: Live) -> String:
   match l:
-    case ILive{secs, usec, +ut, +st, +mut, +mst, rss, heap, act, conns, clients, b, t}:
+    case ILive{secs, usec, +ut, +st, +mut, +mst, rss, heap, act, conns, clients, b, t, sn, sm, sc}:
       "# CPU\r\n" ++ kv("used_cpu_sys", cpu(st)) ++ kv("used_cpu_user", cpu(ut)) ++ kv("used_cpu_sys_children", "0.000000") ++
       kv("used_cpu_user_children", "0.000000") ++ kv("used_cpu_sys_main_thread", cpu(mst)) ++ kv("used_cpu_user_main_thread", cpu(mut))
+    case ILiveOf{+x}:
+      sec.cpu(x)
 
 # a line for each database that holds keys
 def ks.line(has: Bool, +i: Nat, +n: Nat, +x: Nat) -> String:

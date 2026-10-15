@@ -6291,6 +6291,515 @@
     }
    ]
   },
+  "eval_ro": {
+   "docs": {
+    "%": [
+     "summary",
+     "Execute a read-only Lua script server side",
+     "since",
+     "7.0.0",
+     "group",
+     "scripting",
+     "complexity",
+     "Depends on the script that is executed.",
+     "arguments",
+     [
+      {
+       "%": [
+        "name",
+        "script",
+        "type",
+        "string"
+       ]
+      },
+      {
+       "%": [
+        "name",
+        "numkeys",
+        "type",
+        "integer"
+       ]
+      },
+      {
+       "%": [
+        "name",
+        "key",
+        "type",
+        "key",
+        "key_spec_index",
+        0,
+        "flags",
+        {
+         "~": [
+          {
+           "+": "optional"
+          },
+          {
+           "+": "multiple"
+          }
+         ]
+        }
+       ]
+      },
+      {
+       "%": [
+        "name",
+        "arg",
+        "type",
+        "string",
+        "flags",
+        {
+         "~": [
+          {
+           "+": "optional"
+          },
+          {
+           "+": "multiple"
+          }
+         ]
+        }
+       ]
+      }
+     ]
+    ]
+   },
+   "info": [
+    "eval_ro",
+    -3,
+    {
+     "~": [
+      {
+       "+": "readonly"
+      },
+      {
+       "+": "noscript"
+      },
+      {
+       "+": "stale"
+      },
+      {
+       "+": "skip_monitor"
+      },
+      {
+       "+": "no_mandatory_keys"
+      },
+      {
+       "+": "movablekeys"
+      }
+     ]
+    },
+    0,
+    0,
+    0,
+    {
+     "~": [
+      {
+       "+": "@slow"
+      },
+      {
+       "+": "@scripting"
+      }
+     ]
+    },
+    {
+     "~": []
+    },
+    {
+     "~": [
+      {
+       "%": [
+        "notes",
+        "We cannot tell how the keys will be used so we assume the worst, RO and ACCESS",
+        "flags",
+        {
+         "~": [
+          {
+           "+": "RO"
+          },
+          {
+           "+": "access"
+          }
+         ]
+        },
+        "begin_search",
+        {
+         "%": [
+          "type",
+          "index",
+          "spec",
+          {
+           "%": [
+            "index",
+            2
+           ]
+          }
+         ]
+        },
+        "find_keys",
+        {
+         "%": [
+          "type",
+          "keynum",
+          "spec",
+          {
+           "%": [
+            "keynumidx",
+            0,
+            "firstkey",
+            1,
+            "keystep",
+            1
+           ]
+          }
+         ]
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "~": []
+    }
+   ]
+  },
+  "evalsha": {
+   "docs": {
+    "%": [
+     "summary",
+     "Execute a Lua script server side",
+     "since",
+     "2.6.0",
+     "group",
+     "scripting",
+     "complexity",
+     "Depends on the script that is executed.",
+     "arguments",
+     [
+      {
+       "%": [
+        "name",
+        "sha1",
+        "type",
+        "string"
+       ]
+      },
+      {
+       "%": [
+        "name",
+        "numkeys",
+        "type",
+        "integer"
+       ]
+      },
+      {
+       "%": [
+        "name",
+        "key",
+        "type",
+        "key",
+        "key_spec_index",
+        0,
+        "flags",
+        {
+         "~": [
+          {
+           "+": "optional"
+          },
+          {
+           "+": "multiple"
+          }
+         ]
+        }
+       ]
+      },
+      {
+       "%": [
+        "name",
+        "arg",
+        "type",
+        "string",
+        "flags",
+        {
+         "~": [
+          {
+           "+": "optional"
+          },
+          {
+           "+": "multiple"
+          }
+         ]
+        }
+       ]
+      }
+     ]
+    ]
+   },
+   "info": [
+    "evalsha",
+    -3,
+    {
+     "~": [
+      {
+       "+": "noscript"
+      },
+      {
+       "+": "stale"
+      },
+      {
+       "+": "skip_monitor"
+      },
+      {
+       "+": "no_mandatory_keys"
+      },
+      {
+       "+": "movablekeys"
+      }
+     ]
+    },
+    0,
+    0,
+    0,
+    {
+     "~": [
+      {
+       "+": "@slow"
+      },
+      {
+       "+": "@scripting"
+      }
+     ]
+    },
+    {
+     "~": []
+    },
+    {
+     "~": [
+      {
+       "%": [
+        "flags",
+        {
+         "~": [
+          {
+           "+": "RW"
+          },
+          {
+           "+": "access"
+          },
+          {
+           "+": "update"
+          }
+         ]
+        },
+        "begin_search",
+        {
+         "%": [
+          "type",
+          "index",
+          "spec",
+          {
+           "%": [
+            "index",
+            2
+           ]
+          }
+         ]
+        },
+        "find_keys",
+        {
+         "%": [
+          "type",
+          "keynum",
+          "spec",
+          {
+           "%": [
+            "keynumidx",
+            0,
+            "firstkey",
+            1,
+            "keystep",
+            1
+           ]
+          }
+         ]
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "~": []
+    }
+   ]
+  },
+  "evalsha_ro": {
+   "docs": {
+    "%": [
+     "summary",
+     "Execute a read-only Lua script server side",
+     "since",
+     "7.0.0",
+     "group",
+     "scripting",
+     "complexity",
+     "Depends on the script that is executed.",
+     "arguments",
+     [
+      {
+       "%": [
+        "name",
+        "sha1",
+        "type",
+        "string"
+       ]
+      },
+      {
+       "%": [
+        "name",
+        "numkeys",
+        "type",
+        "integer"
+       ]
+      },
+      {
+       "%": [
+        "name",
+        "key",
+        "type",
+        "key",
+        "key_spec_index",
+        0,
+        "flags",
+        {
+         "~": [
+          {
+           "+": "optional"
+          },
+          {
+           "+": "multiple"
+          }
+         ]
+        }
+       ]
+      },
+      {
+       "%": [
+        "name",
+        "arg",
+        "type",
+        "string",
+        "flags",
+        {
+         "~": [
+          {
+           "+": "optional"
+          },
+          {
+           "+": "multiple"
+          }
+         ]
+        }
+       ]
+      }
+     ]
+    ]
+   },
+   "info": [
+    "evalsha_ro",
+    -3,
+    {
+     "~": [
+      {
+       "+": "readonly"
+      },
+      {
+       "+": "noscript"
+      },
+      {
+       "+": "stale"
+      },
+      {
+       "+": "skip_monitor"
+      },
+      {
+       "+": "no_mandatory_keys"
+      },
+      {
+       "+": "movablekeys"
+      }
+     ]
+    },
+    0,
+    0,
+    0,
+    {
+     "~": [
+      {
+       "+": "@slow"
+      },
+      {
+       "+": "@scripting"
+      }
+     ]
+    },
+    {
+     "~": []
+    },
+    {
+     "~": [
+      {
+       "%": [
+        "flags",
+        {
+         "~": [
+          {
+           "+": "RO"
+          },
+          {
+           "+": "access"
+          }
+         ]
+        },
+        "begin_search",
+        {
+         "%": [
+          "type",
+          "index",
+          "spec",
+          {
+           "%": [
+            "index",
+            2
+           ]
+          }
+         ]
+        },
+        "find_keys",
+        {
+         "%": [
+          "type",
+          "keynum",
+          "spec",
+          {
+           "%": [
+            "keynumidx",
+            0,
+            "firstkey",
+            1,
+            "keystep",
+            1
+           ]
+          }
+         ]
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "~": []
+    }
+   ]
+  },
   "exec": {
    "docs": {
     "%": [
@@ -22701,6 +23210,384 @@
     {
      "~": []
     }
+   ]
+  },
+  "script": {
+   "docs": {
+    "%": [
+     "summary",
+     "A container for Lua scripts management commands",
+     "since",
+     "2.6.0",
+     "group",
+     "scripting",
+     "complexity",
+     "Depends on subcommand.",
+     "subcommands",
+     {
+      "%": [
+       "script|exists",
+       {
+        "%": [
+         "summary",
+         "Check existence of scripts in the script cache.",
+         "since",
+         "2.6.0",
+         "group",
+         "scripting",
+         "complexity",
+         "O(N) with N being the number of scripts to check (so checking a single script is an O(1) operation).",
+         "arguments",
+         [
+          {
+           "%": [
+            "name",
+            "sha1",
+            "type",
+            "string",
+            "flags",
+            {
+             "~": [
+              {
+               "+": "multiple"
+              }
+             ]
+            }
+           ]
+          }
+         ]
+        ]
+       },
+       "script|flush",
+       {
+        "%": [
+         "summary",
+         "Remove all the scripts from the script cache.",
+         "since",
+         "2.6.0",
+         "group",
+         "scripting",
+         "complexity",
+         "O(N) with N being the number of scripts in cache",
+         "history",
+         {
+          "~": [
+           [
+            "6.2.0",
+            "Added the `ASYNC` and `SYNC` flushing mode modifiers."
+           ]
+          ]
+         },
+         "arguments",
+         [
+          {
+           "%": [
+            "name",
+            "async",
+            "type",
+            "oneof",
+            "since",
+            "6.2.0",
+            "flags",
+            {
+             "~": [
+              {
+               "+": "optional"
+              }
+             ]
+            },
+            "arguments",
+            [
+             {
+              "%": [
+               "name",
+               "async",
+               "type",
+               "pure-token",
+               "token",
+               "ASYNC"
+              ]
+             },
+             {
+              "%": [
+               "name",
+               "sync",
+               "type",
+               "pure-token",
+               "token",
+               "SYNC"
+              ]
+             }
+            ]
+           ]
+          }
+         ]
+        ]
+       },
+       "script|help",
+       {
+        "%": [
+         "summary",
+         "Show helpful text about the different subcommands",
+         "since",
+         "5.0.0",
+         "group",
+         "scripting",
+         "complexity",
+         "O(1)"
+        ]
+       },
+       "script|kill",
+       {
+        "%": [
+         "summary",
+         "Kill the script currently in execution.",
+         "since",
+         "2.6.0",
+         "group",
+         "scripting",
+         "complexity",
+         "O(1)"
+        ]
+       },
+       "script|load",
+       {
+        "%": [
+         "summary",
+         "Load the specified Lua script into the script cache.",
+         "since",
+         "2.6.0",
+         "group",
+         "scripting",
+         "complexity",
+         "O(N) with N being the length in bytes of the script body.",
+         "arguments",
+         [
+          {
+           "%": [
+            "name",
+            "script",
+            "type",
+            "string"
+           ]
+          }
+         ]
+        ]
+       }
+      ]
+     }
+    ]
+   },
+   "info": [
+    "script",
+    -2,
+    {
+     "~": []
+    },
+    0,
+    0,
+    0,
+    {
+     "~": [
+      {
+       "+": "@slow"
+      }
+     ]
+    },
+    {
+     "~": []
+    },
+    {
+     "~": []
+    },
+    [
+     [
+      "script|exists",
+      -3,
+      {
+       "~": [
+        {
+         "+": "noscript"
+        }
+       ]
+      },
+      0,
+      0,
+      0,
+      {
+       "~": [
+        {
+         "+": "@slow"
+        },
+        {
+         "+": "@scripting"
+        }
+       ]
+      },
+      {
+       "~": [
+        "request_policy:all_shards",
+        "response_policy:agg_logical_and"
+       ]
+      },
+      {
+       "~": []
+      },
+      {
+       "~": []
+      }
+     ],
+     [
+      "script|flush",
+      -2,
+      {
+       "~": [
+        {
+         "+": "noscript"
+        }
+       ]
+      },
+      0,
+      0,
+      0,
+      {
+       "~": [
+        {
+         "+": "@slow"
+        },
+        {
+         "+": "@scripting"
+        }
+       ]
+      },
+      {
+       "~": [
+        "request_policy:all_nodes",
+        "response_policy:all_succeeded"
+       ]
+      },
+      {
+       "~": []
+      },
+      {
+       "~": []
+      }
+     ],
+     [
+      "script|help",
+      2,
+      {
+       "~": [
+        {
+         "+": "loading"
+        },
+        {
+         "+": "stale"
+        }
+       ]
+      },
+      0,
+      0,
+      0,
+      {
+       "~": [
+        {
+         "+": "@slow"
+        },
+        {
+         "+": "@scripting"
+        }
+       ]
+      },
+      {
+       "~": []
+      },
+      {
+       "~": []
+      },
+      {
+       "~": []
+      }
+     ],
+     [
+      "script|kill",
+      2,
+      {
+       "~": [
+        {
+         "+": "noscript"
+        },
+        {
+         "+": "allow_busy"
+        }
+       ]
+      },
+      0,
+      0,
+      0,
+      {
+       "~": [
+        {
+         "+": "@slow"
+        },
+        {
+         "+": "@scripting"
+        }
+       ]
+      },
+      {
+       "~": [
+        "request_policy:all_shards",
+        "response_policy:one_succeeded"
+       ]
+      },
+      {
+       "~": []
+      },
+      {
+       "~": []
+      }
+     ],
+     [
+      "script|load",
+      3,
+      {
+       "~": [
+        {
+         "+": "noscript"
+        },
+        {
+         "+": "stale"
+        }
+       ]
+      },
+      0,
+      0,
+      0,
+      {
+       "~": [
+        {
+         "+": "@slow"
+        },
+        {
+         "+": "@scripting"
+        }
+       ]
+      },
+      {
+       "~": [
+        "request_policy:all_nodes",
+        "response_policy:all_succeeded"
+       ]
+      },
+      {
+       "~": []
+      },
+      {
+       "~": []
+      }
+     ]
+    ]
    ]
   },
   "sdiff": {

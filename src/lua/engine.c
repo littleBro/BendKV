@@ -1431,7 +1431,7 @@ static void sc_set_field_num(lua_State* L, const char* name, lua_Number n) {
 
 // REDIS_VERSION and REDIS_VERSION_NUM, Redis 7.0.15's
 #define SC_REDIS_VERSION "7.0.15"
-#define SC_REDIS_VERSION_NUM 0x00070015
+#define SC_REDIS_VERSION_NUM 0x0007000f
 
 static void sc_register_redis_api(lua_State* L) {
   lua_pushvalue(L, LUA_GLOBALSINDEX);
@@ -1682,11 +1682,12 @@ static int sc_shebang_flags(const char* body, size_t len, uint32_t* out_flags,
         char* list = parts[j] + 6;
         char* save = NULL;
         // the flags between the commas, an empty one taken as "" (as
-        // sdssplitlen gives it), which no flag matches
+        // sdssplitlen gives it), which no flag matches; an empty list
+        // holds none (sdssplitlen gives no element)
         char* copy = sc_strdup(list);
         char* at = copy;
         int bad = 0;
-        for (;;) {
+        for (; copy[0] != '\0';) {
           char* comma = strchr(at, ',');
           if (comma != NULL) *comma = '\0';
           const ScFlagDef* sf;
