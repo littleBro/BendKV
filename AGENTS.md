@@ -25,8 +25,8 @@ Claude Code reads this file only while the repository has no `CLAUDE.md`,
     tests/             tests against redis-server, run by tests/run_tests.sh
     tools/             generators (gen_*.py), measurement and CI scripts
                        (tools/README.md lists them)
-    bend-patches/      32 patches to bendlang/bend@1cce499: the compiler and its
-                       runtime are part of the trusted base
+    bend-patches/      the patches to bendlang/bend@1cce499, in apply.sh's order:
+                       the compiler and its runtime are part of the trusted base
     docs/FINDINGS.md   what each change found and cost, one section per change
 
 ## Toolchain
