@@ -39,7 +39,10 @@ make suite REDIS_SRC=../redis      # both runs and the table, in build/suite/
 ## The result
 
 Redis 7.0.15, October 2026. Of the 1,677 tests Redis passes in this mode, BendKV passes
-**1,273 (75.9%)**; of the 1,333 in the units of what BendKV has, 1,270 (95%).
+**1,274 (76.0%)**; of the 1,333 in the units of what BendKV has, 1,271 (95%).
+INCRBY's family on long longs (section 3zzv of [FINDINGS.md](FINDINGS.md)) brought 1:
+unit/type/hash's test of HINCRBY's overflows, which starts from -9223372036854775484
+(70 of its 72 tests).
 DUMP and RESTORE (section 3zzu of [FINDINGS.md](FINDINGS.md)) brought 12: unit/dump
 passes the 11 of its 12 tests that Redis passes (the twelfth uses DEBUG), and
 unit/type/list its two tests of a ziplist of various encodings, which restore one (216 of
@@ -232,7 +235,7 @@ pubsubshard, shutdown, tls, type/list-common, wait):
 | unit/slowlog | 16 | 9 | 0 |
 | unit/sort | 52 | 52 | 51 |
 | unit/tracking | 13 | 10 | 0 |
-| unit/type/hash | 73 | 72 | 69 |
+| unit/type/hash | 73 | 72 | 70 |
 | unit/type/incr | 25 | 24 | 24 |
 | unit/type/list | 235 | 218 | 216 |
 | unit/type/list-2 | 2 | 2 | 2 |
@@ -243,9 +246,9 @@ pubsubshard, shutdown, tls, type/list-common, wait):
 | unit/type/string | 77 | 77 | 74 |
 | unit/type/zset | 291 | 289 | 287 |
 | unit/violations | 1 | 1 | 1 |
-| **all** | **1757** | **1677** | **1273 (75.9%)** |
+| **all** | **1757** | **1677** | **1274 (76.0%)** |
 
-## Why the other 404 fail
+## Why the other 403 fail
 
 - **271 stop on a command BendKV does not have.** By the number of tests each one stops:
   FUNCTION LOAD 125, XADD 61, SYNC 20 (tests that read the replication stream, 12 of them
@@ -257,7 +260,7 @@ pubsubshard, shutdown, tls, type/list-common, wait):
   never comes, because the command before it is missing (tracking: the invalidations of
   CLIENT TRACKING; scripting: the second line of FUNCTION LOAD's reply, read raw). One test runs
   only on a server that names jemalloc as its allocator.
-- **39 fail with another error.** 9 fail on a client left in MULTI by a test before them
+- **38 fail with another error.** 9 fail on a client left in MULTI by a test before them
   that failed inside a transaction on what BendKV does not have: REPLICAOF in unit/multi
   (6) and XADD in unit/type/stream (3); and the others fail for what BendKV does not have
   yet: COMMAND's entries of commands it does not have (GETKEYS, LIST, movablekeys), Lua (a script's BUSY, the statistics of EVAL, a script's calls in a monitor, a
@@ -265,7 +268,7 @@ pubsubshard, shutdown, tls, type/list-common, wait):
   the order of a hash Redis keeps in a listpack past the parameters' defaults (above),
   replication (`min-replicas-to-write`, EXEC's NOREPLICAS),
   `rdb_changes_since_last_save` (0), the size of a client's query buffer (CLIENT LIST's
-  qbuf, 0), streams, HINCRBY past 14 digits, and MOVE's basic usage (above). (Before
+  qbuf, 0), streams, and MOVE's basic usage (above). (Before
   times to live, SET's options failed 30 more tests here, answered `ERR syntax error`.
   INFO's statistics per command, which `info-command` looked for, made 3 more tests pass;
   SCAN and RANDOMKEY pass all their tests on keys: SCAN's basic iteration, COUNT, MATCH,
@@ -313,7 +316,8 @@ BendKV starts as `redis-server` starts, with the same command line and configura
 file, so the next step is the suite's own mode with BendKV in place of
 `src/redis-server`. Until then BendKV's own tests cover part of that ground: the start
 (`tests/start_test.py`, against `redis-server`), restarts from the append-only file
-(`tests/aof_test.py`), and its rewrite (`tests/rewrite_test.py`: BGREWRITEAOF's replies
+(`tests/aof_test.py`, and after kills under load: `tests/crash_test.py`), and its
+rewrite (`tests/rewrite_test.py`: BGREWRITEAOF's replies
 and INFO's fields against Redis's, the rewritten file against Redis's base, writes during a
 rewrite, BendKV and Redis started from the new file; Redis's unit/aofrw is tagged
 `external:skip`, and most of it needs `DEBUG LOADAOF` and `CONFIG SET appendonly yes`).

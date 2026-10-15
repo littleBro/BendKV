@@ -9,7 +9,7 @@ numbers are in [tools/](../tools/README.md).
    verification and not from the logic of the commands.** The original SET cost ~390
    heap cell allocations and ~150 atomic reference-count operations. Redis makes a
    handful of allocations per SET.
-2. **Bend itself is fixed by thirty-three patches to the compiler**
+2. **Bend itself is fixed by thirty-four patches to the compiler**
    ([`bend-patches/`](../bend-patches/)). The first eight switch on by themselves for
    programs without GPU calls `!`, the ninth and tenth where a program calls them, the
    eleventh changes every program's event loop on Linux, the twelfth and thirteenth only
@@ -30,7 +30,9 @@ numbers are in [tools/](../tools/README.md).
    addresses, killing it and channel marks (section 44); the twenty-eighth, a file put in
    another's place and a name removed (section 47); the twenty-ninth, the heap's account
    (`IO.heap`); the thirtieth, words outside the heap (`Mem.touch`, `Mem.cell`; both
-   section 48); the thirty-third, C's doubles (`F64`, section 60). Before section 14
+   section 48); the thirty-third, C's doubles (`F64`, section 60). The thirty-fourth
+   changes only a build with AddressSanitizer, whose heap it lets ASan check
+   (FINDINGS.md, section 3zzp). Before section 14
    there were twenty patches: the sixteenth (effect pairs) was taken out in section 14,
    and the sections before 14 number the patches the old way — there, 17–20 are today's
    16–19.
@@ -7031,6 +7033,50 @@ instructions per request under callgrind (`make perfcheck`), 90 more than main's
 4,077 and 4,390. Each read of GEO is a form of one word now, and the options a node of
 their own: 3,316, 4,075 and 4,393.
 
+## 61. Clients that wait or watch
+
+**Measured.** GET at pipeline 16 from 20 clients on 100,000 keys, by
+`tools/waiters_bench.sh`: each server on one CPU, as `bench_pairs.sh` pins it, and idle
+clients started after the keys are set and before the GETs, in BLPOP on keys of their own
+or one after WATCH. Thousands of GETs per second: on main, two runs of 200,000 GETs each;
+now and on Redis, the median of five runs of a million (and the share of the first row):
+
+| condition | main | now | Redis 7.0.15 |
+|---|---:|---:|---:|
+| no other client | 957 / 1,136 | 975 | 657 |
+| 1 client in BLPOP | 337 / 315 | 914 (94%) | 701 |
+| 100 clients in BLPOP | 49 / 46 | 903 (93%) | 662 |
+| 1,000 clients in BLPOP | 5.4 / 5.3 | 923 (95%) | 648 |
+| 1 client after WATCH | 324 / 323 | 937 (96%) | 684 |
+
+The machine is a shared VM, and two runs of one condition can be 20% apart (Redis's
+numbers move as much); the medians are what #30's bound of 90% is read against.
+
+**Instructions per request** under callgrind (`tools/callgrind_req.sh`, the same script
+for both builds):
+
+| | GET | SET | last-level misses, GET and SET |
+|---|---:|---:|---:|
+| main, no other client | 3,323 | 4,080 | 2.81, 3.10 |
+| main, 1 client in BLPOP | 13,706 | 15,030 | 3.50, 3.98 |
+| now, no other client | 3,328 | 4,086 | 2.80, 3.11 |
+| now, 100 clients in BLPOP | 3,419 | 4,219 | 2.83, 3.17 |
+
+On main every batch ran the general way, a command at a time, once one client waited;
+with 100 clients in BLPOP its count did not finish in 40 minutes under callgrind. `make
+perfcheck` now counts GET and SET with 100 clients in BLPOP too, and fails when either is
+more than 5% above its count without them in the same run.
+
+**Where it went** (FINDINGS 3zzo). A batch that writes no key a client waits on or
+watches runs the fast way. A batch of GETs, SETs and INCRs alone is cleared by the hashes
+its requests carry, without a command read: reading the commands of a batch gave every
+string of every command a reference count, and the keys and values a SET stored with
+them cost each later GET a word more to read and 0.7 more last-level misses (GET 9.6%
+above its count without waiters, where it is 2.5% now). The end of a group walks the
+chain of the clients that wait only once the earliest end of a wait has passed, and a
+tick makes the set of heeded keys anew only when a client that heeded keys has stopped;
+made at every tick, the set cost more than the checks of the batches.
+
 ## 62. DUMP and RESTORE
 
 **Measured.** Wall time from a request's send to its reply's last byte, one client, one
@@ -7057,7 +7103,7 @@ value (RESTORE a sixth to a half of their time). Where Redis holds a value as a 
 (a list's nodes, a small hash or sorted set), its DUMP copies the bytes it holds and its
 RESTORE checks them and keeps them; BendKV writes and reads each element. SADD to an
 intset is section 55's: a list of the members as strings in increasing order, which each
-add walks.
+add walks (a tree since section 63).
 
 **Where it goes** (callgrind, instructions per command):
 
@@ -7075,11 +7121,102 @@ add walks.
   375 million, the checksum 137 million, the payload's bytes put one before another 122
   million (`str_append`).
 
-**What is left.** The checksum a byte at a time through a table of 256, the String read
-by index through a window of one chunk, as a long request's parse reads it (section 60);
-`count_upto` a chunk at a time (`String.length`), which every request of a large value
-pays, not RESTORE's alone; and a sorted set's tree made at once from its elements in
-order, as a balanced tree of them, with no path copied and dropped.
+**What changed after.** Three changes, each where the profile above pointed:
+
+- `count_upto` takes a piece's length a chunk at a time (`String.length`), at most the
+  bytes the request still needs: every request of a large value paid the walk, not
+  RESTORE's alone.
+- The checksum reads its bytes by index (`String.code_at`) in windows of 2,048
+  (`crc.run`, `crc.in`), where the walk of the String by its characters made a view of
+  each.
+- A sorted set whose elements come in order, as a listpack keeps them, or in reverse
+  order, as a skiplist is dumped from the greatest, is made into a tree at once
+  (`zel.build`): as balanced as a tree of its size can be, each node made once, by a walk
+  with a list of jobs (build a side of n elements, take a root, join), since Bend has
+  no mutual recursion and a match cannot take a computed pair apart. Elements in any
+  other order still go in one at a time.
+
+Instructions per command (callgrind, one client, one request at a time; each RESTORE
+with REPLACE over the value the one before restored, whose drop it counts):
+
+| | before | after |
+|---|---:|---:|
+| SET of a string of 1 MB | 83,710,592 | 943,865 |
+| DUMP of it | 97,252,076 | 37,732,010 |
+| RESTORE of it | 189,443,609 | 38,268,042 |
+| DUMP of a list of 100,000 | 420,603,584 | 375,841,656 |
+| RESTORE of it | 331,074,412 | 219,017,676 |
+| DUMP of a hash of 100,000 | 334,012,153 | 257,025,410 |
+| RESTORE of it | 597,215,266 | 397,064,560 |
+| DUMP of a set of 100,000 | 164,445,704 | 125,952,449 |
+| RESTORE of it | 403,089,684 | 306,060,286 |
+| DUMP of a sorted set of 100,000 | 375,155,983 | 291,961,522 |
+| RESTORE of it | 2,378,826,476 | 509,478,630 |
+
+GET, SET and INCR take 3,308, 4,067 and 4,384 instructions per request after the change
+(`make perfcheck`; 3,316, 4,075 and 4,391 before it, in the same run).
+
+**What is left.** The checksum takes 36 instructions a byte, two steps of four bits
+through a table of 16. DUMP writes its payload a few bytes at a time, each put before the
+rest (`str_append`: 1,200 instructions an element of the sorted set), and works out each
+element's integer form twice. RESTORE with REPLACE drops the value it replaces, about
+1,000 instructions an element of a large one, as a DEL of it does; and a set's, hash's or
+sorted set's trie of its members is made one member at a time.
 
 **The other commands.** `make perfcheck`: GET 3,316, SET 4,076 and INCR 4,392
 instructions per request (3,316, 4,075 and 4,393 on main).
+
+## 63. Intsets as trees of integers
+
+**What was left** (sections 55 and 62). SADD to an intset cost twenty times SADD to a
+hashtable. An intset was the list of its members, as strings in increasing order, and
+`ints.at` compared a member with each one it passed as integers, reading the digits of
+both strings again each time; an add walked the list twice (the test of the member, then
+the put) and built again the part it passed.
+
+**The change** (FINDINGS 3zzy). An intset's members are a weight-balanced tree, as a
+sorted set's elements are, compared as integers by sign, number of digits and bytes
+(`String.order`): a member is found, added or taken out in O(log n) steps. SADD of a
+member the intset lacks takes it out of the keyspace, as section 55 takes a hashtable.
+RESTORE of an intset makes its tree at once, and no trie of its members.
+
+**Measured** (callgrind, instructions per command, pipelined: 400 new members added in a
+random order to an intset of 100, then tested, then taken out; the same on a hashtable
+of as many short strings):
+
+| command | before | after | a hashtable |
+|---|---:|---:|---:|
+| SADD of a new member | 270,366 | 14,013 | 8,347 |
+| SISMEMBER | 155,772 | 6,992 | 5,403 |
+| SREM | 274,643 | 15,519 | 14,598 |
+| DUMP of an intset of 500 | 913,736 | 900,901 | |
+| RESTORE of it, with REPLACE | 3,992,621 | 1,225,958 | |
+
+An SADD and an SREM of one member, by the intset's size:
+
+| members | before | after | a hashtable |
+|---:|---:|---:|---:|
+| 8 | 37,297 | 21,866 | 23,943 |
+| 64 | 139,567 | 28,374 | 24,332 |
+| 400 | 158,995 | 31,989 | 24,653 |
+
+Without the take, SADD costs 16,431, and the pairs 22,144, 29,506 and 33,849. Wall time,
+one request at a time, the median of three runs of medians (µs):
+
+| | before | after | Redis |
+|---|---:|---:|---:|
+| SADD of a new member | 75 | 53 | 51 |
+| SISMEMBER | 64 | 51 | 48 |
+| SREM | 74 | 53 | 50 |
+| SADD of 500 integers at once | 7,897 | 458 | 164 |
+| DUMP of them | 147 | 137 | 56 |
+| RESTORE of them | 416 | 185 | 48 |
+
+`make perfcheck`: GET 3,306, SET 4,067 and INCR 4,411 instructions per request (main
+3,302, 4,069 and 4,411).
+
+**What is left.** On an intset of 400, a pair costs 7,300 instructions more than on a
+hashtable: each step of an add or a deletion makes a new node on its way back up and
+drops the old one, and an SADD that takes the set walks the tree three times (the take's
+test of the member, `mems.add`'s, then the add). A member takes 34 bytes of the heap,
+where Redis's intset takes 2 to 8.

@@ -41,10 +41,9 @@ where the server's choice is the order alone (a count of 0, or one past
 every member, which takes them all and deletes the key) and with wrong
 counts; SRANDMEMBER's picks are compared by how many.
 
-Known, documented divergences that the generator avoids: BendKV's
-integers have at most 14 digits (Redis allows int64), and so have its
-times: a time at or past 10^14 ms (the year 5138) gives a key no time at
-all, as it would never come, where Redis keeps any int64 time. Times are
+A known, documented divergence that the generator avoids: a time at or
+past 10^14 ms (the year 5138) gives a key no time at all in BendKV, as
+it would never come, where Redis keeps any int64 time. Times are
 relative ones of 100 s and more, or absolute
 ones far in the past or the future, so no key expires while the test
 runs; TTL, PTTL, EXPIRETIME and PEXPIRETIME, which read the clock of each
@@ -140,7 +139,10 @@ def rnd_value(r):
     if c < 0.35:
         return str(r.randint(-10**6, 10**6)).encode()
     if c < 0.45:
-        return r.choice([b"0", b"-0", b"007", b"+5", b" 1", b"1 ", b"", b"99999999999998", b"-99999999999998"])
+        return r.choice([b"0", b"-0", b"007", b"+5", b" 1", b"1 ", b"", b"99999999999998", b"-99999999999998",
+                         b"9223372036854775807", b"-9223372036854775808", b"9223372036854775806", b"-9223372036854775807",
+                         b"9223372036854775808", b"4611686018427387904", b"-4611686018427387905", b"1000000000",
+                         b"-999999999", b"18446744073709551615"])
     if c < 0.7:
         return bytes(r.randrange(256) for _ in range(r.randint(0, 12)))
     return r.choice([b"a", b"bar", b"hello world", b"\xd0\xbc\xd0\xb8\xd1\x80", b"x" * r.randint(0, 300)])
@@ -780,19 +782,6 @@ def close(cmd, got, want):
     return g >= 0 and w >= 0 and abs(g - w) <= tol
 
 
-def known_divergence(got, want):
-    # BendKV refuses integers past 14 digits, where Redis goes on to int64
-    if got == (b"-", b"ERR increment or decrement would overflow") and want[0] == b":":
-        return len(want[1].lstrip(b"-")) >= 15
-    # a stored value of 15+ digits is no integer to BendKV; Redis then
-    # answers a 15+ digit sum, or its own int64 overflow
-    if got == (b"-", b"ERR value is not an integer or out of range"):
-        if want[0] == b":":
-            return len(want[1].lstrip(b"-")) >= 15
-        return want == (b"-", b"ERR increment or decrement would overflow")
-    return False
-
-
 # The commands a transaction queued, as Redis answered them (QUEUED),
 # so that EXEC's array is normalized command by command: None while no
 # transaction is open
@@ -818,17 +807,15 @@ class Tx:
 
 
 # EXEC's arrays, compared reply by reply as the commands' replies are
-# (a TTL within its second); known: a known divergence is allowed among
-# them
-def same_exec(cmd, got, want, queued, known=False):
+# (a TTL within its second)
+def same_exec(cmd, got, want, queued):
     if got == want:
         return True
     if cmd[0].upper() != b"EXEC" or got[0] != b"*" or want[0] != b"*" or queued is None:
         return False
     if got[1] is None or want[1] is None or len(got[1]) != len(want[1]) or len(want[1]) != len(queued):
         return False
-    return all(g == w or close(c, g, w) or known and known_divergence(g, w)
-               for c, g, w in zip(queued, got[1], want[1]))
+    return all(g == w or close(c, g, w) for c, g, w in zip(queued, got[1], want[1]))
 
 
 def main():
@@ -844,7 +831,6 @@ def main():
         c.send([[b"FLUSHALL"]])
         c.reply()
     total = 0
-    known = 0
     tx = Tx()
     for rnd in range(a.rounds):
         if r.random() < 0.05:
@@ -853,21 +839,12 @@ def main():
             batch = [rnd_cmd(r) for _ in range(r.choice([1, 1, 2, 5, 20]))]
         b.send(batch)
         s.send(batch)
-        diverged = False
         for cmd in batch:
             got, want = tx.norm(cmd, b.reply()), tx.norm(cmd, s.reply())
             queued = tx.queued
             tx.see(cmd, want)
-            if diverged:
-                continue
             total += 1
             if got != want and not close(cmd, got, want) and not same_exec(cmd, got, want, queued):
-                if known_divergence(got, want) or same_exec(cmd, got, want, queued, True):
-                    # the states now differ on one key: compare no more of
-                    # this batch, and start the next from empty databases
-                    known += 1
-                    diverged = True
-                    continue
                 print("MISMATCH after %d commands (round %d)" % (total, rnd))
                 print("  command:", cmd)
                 print("  bendkv: ", got)
@@ -875,13 +852,7 @@ def main():
                 print("  again:   %spython3 tests/diff_test.py --bendkv %d --redis %d --rounds %d --seed %d" % (
                     "RESP=3 " if RESP3 else "", a.bendkv, a.redis, rnd + 1, a.seed))
                 sys.exit(1)
-        if diverged:
-            for c in (b, s):
-                c.send([[b"DISCARD"], [b"UNWATCH"], [b"FLUSHALL"]])
-                c.reply(), c.reply(), c.reply()
-            tx.queued = None
-    print("OK: %d commands in %d pipelined batches, all replies identical"
-          " (%d known 64-bit integer divergences skipped)" % (total, a.rounds, known))
+    print("OK: %d commands in %d pipelined batches, all replies identical" % (total, a.rounds))
 
 
 if __name__ == "__main__":
