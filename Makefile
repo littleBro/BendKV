@@ -4,8 +4,9 @@
 # end, the append-only file; any that fails stops it), make test (needs
 # redis-server, redis-cli, python3 and a C compiler for the disk-failure
 # shim, tests/fail_io.c; redis-check-aof if there is one),
-# make bench (needs redis-benchmark), make perfcheck (instructions per
-# request against a baseline; needs valgrind), make suite (Redis's own
+# make bench (needs redis-benchmark), make perfcheck (instructions, misses
+# and prefetches per request against a baseline; needs valgrind and
+# objdump), make suite (Redis's own
 # test suite; needs a Redis 7.0.15 source tree in REDIS_SRC, its
 # redis-server on the PATH, and tclsh), make clients (the test suites of
 # redis-py and go-redis; needs python3, go, and PyPI and the Go module
@@ -91,8 +92,9 @@ test: build
 bench: build
 	PORT=$(PORT) REDIS_PORT=$(REDIS_PORT) sh bench/run_bench.sh
 
-# instructions per GET, SET and INCR under callgrind against
-# tools/perf_baseline.txt (needs valgrind and redis-benchmark)
+# instructions, last-level misses and prefetches per GET, SET and INCR
+# under callgrind against tools/perf_baseline.txt (needs valgrind,
+# redis-benchmark and objdump)
 perfcheck: build
 	sh tools/perf_guard.sh build/bendkv
 

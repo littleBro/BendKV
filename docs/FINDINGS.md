@@ -5359,6 +5359,49 @@ command.
 
 **What it costs.** Nothing in CI's time: the results are read once more.
 
+## 3zzt. The perf guard looks both ways, at misses and at prefetches
+
+**What it was.** `make perfcheck` (`tools/perf_guard.sh`) failed only when a request's
+instructions rose more than 3% above their baseline. A change that loses work, as a
+hint the compiler drops (section 7), counts fewer instructions, and passed; so did a
+lost prefetch, which saves a few instructions and costs a cache miss.
+
+**What it is.** The guard counts three things per GET, SET and INCR under callgrind:
+instructions, last-level data misses, and the server's software prefetches that ran.
+It fails when the instructions are more than 3% above or below their baseline (a count
+that falls is a change too: work lost, or a baseline to rewrite), the misses more than
+10% off theirs, or the prefetches more than 5% off theirs, and when it counts nothing.
+callgrind's caches do not see a prefetch: valgrind decodes one and makes no access of
+it, so that a program that hints each of 200,000 random reads 8 reads ahead counts the
+same last-level misses as one that does not (236,078 each). A lost prefetch thus shows
+in no count of misses; the guard counts the prefetches themselves, from callgrind's
+counts per instruction (`--dump-instr=yes`) at the addresses objdump gives the server's
+prefetch instructions. The misses are counted with L1 caches of 32 KiB whatever the
+machine's (the last level was 2 MiB already), so that they follow the code, not the CPU.
+`tools/perf_baseline.txt` keeps its instructions, CI's, and gains the misses and the
+prefetches, counted here with clang 19: GET 2.81 and 3.68, SET 3.12 and 3.99, INCR 3.29
+and 3.92.
+
+**How robust.** Six runs of main's build here, under a load of 4.6 to 7 on 4 cores:
+instructions within 0.7% (GET 3,324 to 3,339, 0.9% to 1.4% below CI's baseline; SET
+4,077 to 4,104), misses within 1.5%, prefetches within 0.3%. The prefetches are the
+server's own instructions, as many as the lines of the nodes it hints, whatever the
+CPU or glibc, whose `memcpy` moves the instruction count between CI's machines (3.4%);
+load moves only how many requests a batch holds. So 10% and 5% are several times the
+spread, and far below what a lost hint or a new indirection costs. CI's build of main
+has the same `.text` as the one counted here (the two binaries differ in 25 bytes,
+outside it).
+
+**The example.** A build of main without the hints of `btouch` (`src/map.bend`: `acc`
+in place of the prefetch of the key and the value of a bucket's first entry), not
+committed. Main's guard passes it: GET 3,269 instructions (−3.0%), SET 4,038 (−2.0%),
+INCR 4,350 (−1.6%). This one fails it: 2.81, 2.99 and 2.96 prefetches per request
+(−23.7%, −25.1%, −24.4%), with the same misses (+0.4%, −0.3%, +0.3%) and instructions
+within their bound (−2.5%, −2.1%, −1.7%).
+
+**What it costs.** A parse of each dump, in Python, after the run; the run itself is the
+same.
+
 ## 3zzu. DUMP and RESTORE
 
 **What there is.** DUMP and RESTORE as Redis 7.0.15 runs them (`src/rdb.bend`, from
