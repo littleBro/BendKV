@@ -635,7 +635,10 @@ connections that end every way one can, many times
 (the client closing or resetting, QUIT, a protocol error), on a BendKV of their own whose
 table of channels is read to show that each closed the channel it opened,
 restarts from the append-only file (every database read back, including after a
-truncated tail or a transaction left open), disk failures
+truncated tail or a transaction left open), kills at random moments while clients write
+(`tests/crash_test.py`: rounds of a SIGKILL under load, some while a rewrite runs, some
+starts killed as they load the file, each start holding the databases after a prefix of
+the commands sent, every one acknowledged among them), disk failures
 under the file, injected with an `LD_PRELOAD` shim (the order of the file's creation,
 its directory's sync and the first reply traced through it), files the start must
 refuse, each left as it was, and the files both ways: BendKV
@@ -676,7 +679,7 @@ src/        the server
   startup.bend  the command line and the configuration file        tested
   server.bend   TCP, connections, the database actor, the log      tested
 proof/      LAWS.bend (the laws), PROOF.bend (their proofs), SPEC.bend (the commands on the trie alone)
-tests/      float, start, differential, expiry, protocol, session, CONFIG, INFO, COMMAND, SCAN, BITFIELD, hash, list, set, sorted set, SORT, HyperLogLog, GEO, DUMP and RESTORE, blocking, transaction, Pub/Sub, CLIENT, MONITOR, CLIENT PAUSE, administrative commands, AUTH, RESP3, maxmemory, robustness, stalled reader, concurrency, AOF and AOF rewrite tests
+tests/      float, start, differential, expiry, protocol, session, CONFIG, INFO, COMMAND, SCAN, BITFIELD, hash, list, set, sorted set, SORT, HyperLogLog, GEO, DUMP and RESTORE, blocking, transaction, Pub/Sub, CLIENT, MONITOR, CLIENT PAUSE, administrative commands, AUTH, RESP3, maxmemory, robustness, stalled reader, concurrency, AOF, AOF crash and AOF rewrite tests
 bench/      in-process benchmarks of the map, the core and channels
 tools/      measurement scripts, the runner of Redis's test suite, and the generators of
             the trie, of the parameter table and of the command table, with the facts
