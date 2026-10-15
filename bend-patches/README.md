@@ -486,6 +486,30 @@ They apply in order, each on top of the one before:
    not call it compiles to the C it compiled to before, but for the twelve lines of the
    C function. BendKV's actor times each window of its group with it (FINDINGS.md,
    section 3zzz).
+36. **`unix-v6.patch`** — IPv6 and unix sockets, and systemd's notification, as effects.
+   `TCP.listen` takes an IPv6 address (a host with a `:`, read by `inet_pton`), its
+   socket IPv6 alone (`IPV6_V6ONLY`, as Redis's `anetV6Only` sets it, so that `0.0.0.0`
+   and `::` can both be bound); it took IPv4 alone. `TCP.listen_unix(path, perm)` is a
+   listener on a unix socket, made as Redis's `anetUnixServer` and `initServer` make
+   one: the path removed first, bound, given `perm`'s mode when `perm` is not 0,
+   listening and non-blocking; a path with a NUL, empty, or longer than `sun_path`
+   fails (EINVAL). `TCP.accept` takes its connections, and `TCP.name` names either end
+   of a unix socket `/unixsocket:0`, as Redis's `anetFdToString` does (it was `?:0`).
+   `IO.notify(msg)` sends `msg` as one datagram to the unix socket the environment's
+   `NOTIFY_SOCKET` names (a path, or an abstract name after `@`), as systemd's
+   `sd_notify` does: `True` when it went out whole, `False` when the variable is not
+   set or the send failed. On C and on JS (whose `io_sys` gets `unlink` and `chmod`):
+   `bend2/base.bend` (+17), `bend2/comp.ts` (+1), `bend2/effs/` (`tcp_listen.c` and
+   `.js` changed, `tcp_name.c` and `.js` changed, `tcp_listen_unix.c` and `.js` and
+   `io_notify.c` and `.js` new), and the tests `tests/io/tcp_listen_unix.bend` (a unix
+   listener twice on one path, its refusals, a malformed IPv6 address refused, `::1`
+   listened on or let go where the host has no IPv6) and `tests/io/io_notify.bend`
+   (`False` with no `NOTIFY_SOCKET`; its datagram, to a path and to an abstract name,
+   was read by a socket of the test's own on both lanes). Bend's 24 tests of TCP and
+   UDP pass on C and on JS with it, the new one among them. A program that calls none
+   of the new effects compiles to the C it compiled to before, but for the effects'
+   code it links. BendKV listens on `bind`'s IPv6 addresses and on `unixsocket`, and
+   tells systemd it loads, is ready and stops (FINDINGS.md, section 3zzzd).
 
 What the patches do and what they give is worked through in
 [../PERFORMANCE.md](../docs/PERFORMANCE.md), sections 3–6, 7.7–7.17, 7.23–7.25, 16, 39,
@@ -504,7 +528,7 @@ From the `bendkv/` directory:
 
 ```bash
 git clone https://github.com/bendlang/bend ../bend-patched
-sh bend-patches/apply.sh ../bend-patched   # the bendkv-patches branch from 1cce499 with thirty-five patches
+sh bend-patches/apply.sh ../bend-patched   # the bendkv-patches branch from 1cce499 with thirty-six patches
 bun ../bend-patched/bend2/main.ts server.bend -o build/bendkv
 ```
 
@@ -531,8 +555,9 @@ twenty-eighth the effects `File.rename` and `File.unlink`, the twenty-ninth the 
 changes how a tail call gives a tree its caller owns to a walker that reads it, in
 every program, the thirty-second boxes a datatype's String variant as the String
 itself, in a program without GPU calls, the thirty-third only adds natives (`F64`), and
-the thirty-fourth changes only a build with AddressSanitizer, and the thirty-fifth
-only adds a native (`Clock.us`).
+the thirty-fourth changes only a build with AddressSanitizer, the thirty-fifth
+only adds a native (`Clock.us`), and the thirty-sixth changes `TCP.listen` (IPv6) and
+`TCP.name` (unix sockets) and adds the effects `TCP.listen_unix` and `IO.notify`.
 The theory does not change:
 `String` in the proofs is still a list, and `IO` a function of `R` and `k`.
 
