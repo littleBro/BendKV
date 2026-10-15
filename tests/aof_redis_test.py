@@ -49,7 +49,13 @@ the count it made), PFMERGE and PFDEBUG (when it makes a value dense)
 are logged by Redis as the client sent them, which BendKV's load runs
 again, and by BendKV as the value they leave: its SET with KEEPTTL (a
 new key's SET), and the count PFCOUNT keeps as the SETRANGE of its 8
-bytes at 8. A transaction is logged by both as the
+bytes at 8. RESTORE is logged by Redis as the client sent it, which
+BendKV's load runs again (with IDLETIME or FREQ too), and by BendKV as
+the RESTORE of its payload with REPLACE (and ABSTTL with the time it
+gave), or the DEL of the key REPLACE found with a time already past; the
+payloads here are of the plain types (strings, and lists, sets, hashes
+and sorted sets of types 1, 2, 4 and 5), their times absolute. A
+transaction is logged by both as the
 effects of its commands between a MULTI and an EXEC (one of a single
 effect, as that effect alone), and read by both.
 
@@ -58,6 +64,7 @@ effect, as that effect alone), and read by both.
 import argparse
 import os
 import shutil
+import struct
 import subprocess
 import sys
 import time
@@ -67,6 +74,34 @@ from diff_test import Conn
 
 # times far away and absolute, so that both servers set the same ones
 T = int(time.time() * 1000) + 10**9
+
+# DUMP's payloads: a value's type, the value, version 10 of the RDB
+# format and the CRC64 of all that (Jones's polynomial, reflected)
+CRC = []
+for i in range(256):
+    c = i
+    for _ in range(8):
+        c = (c >> 1) ^ (0x95ac9329ac4bc9b5 if c & 1 else 0)
+    CRC.append(c)
+
+
+def payload(body):
+    body += b"\x0a\x00"
+    c = 0
+    for x in body:
+        c = CRC[(c ^ x) & 0xff] ^ (c >> 8)
+    return body + struct.pack("<Q", c)
+
+
+def rstr(s):
+    return bytes([len(s)]) + s
+
+
+P_STR = payload(b"\x00" + rstr(b"hello"))
+P_LIST = payload(b"\x01\x03" + rstr(b"a") + rstr(b"bb") + rstr(b"7"))
+P_SET = payload(b"\x02\x02" + rstr(b"x") + rstr(b"y"))
+P_HASH = payload(b"\x04\x02" + rstr(b"f") + rstr(b"v") + rstr(b"g") + rstr(b"w" * 60))
+P_ZSET = payload(b"\x05\x02" + rstr(b"m") + struct.pack("<d", 1.5) + rstr(b"n") + struct.pack("<d", -2.0))
 
 CMDS = [
     [b"SET", b"a", b"1"], [b"SET", b"b", b"2", b"PXAT", b"%d" % T], [b"set", b"c", b"3"],
@@ -183,6 +218,15 @@ CMDS = [
     [b"GEORADIUS", b"geo", b"15", b"37", b"300", b"km", b"STORE", b"ex15"],
     [b"GEOSEARCHSTORE", b"ex16", b"geo", b"FROMLONLAT", b"15", b"37", b"BYRADIUS", b"300", b"km", b"STOREDIST"],
     [b"GEOADD", b"ex17", b"2", b"2", b"b"],
+    [b"RESTORE", b"rs1", b"0", P_STR], [b"RESTORE", b"rs1", b"0", P_STR],
+    [b"RESTORE", b"rs2", b"%d" % (T + 20), P_LIST, b"ABSTTL"], [b"RESTORE", b"rs3", b"0", P_HASH, b"ABSTTL"],
+    [b"RESTORE", b"rs1", b"%d" % (T + 21), P_ZSET, b"REPLACE", b"ABSTTL"],
+    [b"restore", b"rs4", b"0", P_SET, b"idletime", b"10"], [b"RESTORE", b"rs5", b"0", P_HASH, b"FREQ", b"5", b"REPLACE"],
+    [b"RESTORE", b"rs6", b"0", b"bad"], [b"SET", b"rs7", b"x"], [b"RESTORE", b"rs7", b"1", P_STR, b"ABSTTL", b"REPLACE"],
+    [b"RESTORE", b"rs8", b"1", P_STR, b"ABSTTL"], [b"SELECT", b"3"], [b"RESTORE", b"rs9", b"0", P_STR], [b"SELECT", b"0"],
+    [b"SET", b"ex18", b"v", b"PX", b"3"], [b"HSET", b"ex19", b"f", b"v"], [b"PEXPIRE", b"ex19", b"3"], [b"SLEEP"],
+    [b"RESTORE", b"ex18", b"0", P_LIST], [b"RESTORE", b"ex19", b"%d" % (T + 22), P_ZSET, b"ABSTTL", b"REPLACE"],
+    [b"MULTI"], [b"RESTORE", b"rs10", b"0", P_STR], [b"RESTORE", b"rs11", b"0", P_SET, b"IDLETIME", b"3"], [b"EXEC"],
     [b"MULTI"], [b"SET", b"tx1", b"a"], [b"INCR", b"txn"], [b"RPUSH", b"txl", b"1", b"2"], [b"SELECT", b"4"],
     [b"SET", b"tx4", b"b"], [b"EXEC"], [b"SELECT", b"0"], [b"MULTI"], [b"SET", b"tx2", b"c"], [b"EXEC"],
     [b"MULTI"], [b"SET", b"tx3", b"d"], [b"DISCARD"], [b"MULTI"], [b"GET", b"tx1"], [b"EXEC"],

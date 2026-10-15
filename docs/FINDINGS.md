@@ -5020,6 +5020,125 @@ bytes as it did, so that the protocol's errors and their timing are as they were
 GEOADD of 20,000 points now takes 194 ms, an EXISTS of 40,000 keys 29 ms (Redis 3.6 ms),
 an RPUSH of 40,000 elements 30 ms where it took 249 (PERFORMANCE.md, section 60).
 
+## 3zzu. DUMP and RESTORE
+
+**What there is.** DUMP and RESTORE as Redis 7.0.15 runs them (`src/rdb.bend`, from
+`rdb.c`'s `rdbSaveObject` and `rdbLoadObject` and `cluster.c`'s `createDumpPayload`,
+`verifyDumpPayload` and `restoreCommand`, with `listpack.c`, `ziplist.c`, `zipmap.c`,
+`intset.c`, `lzf_d.c` and `crc64.c` as far as a payload needs them; and the section
+"Dump and restore" of `src/redis.bend`). A payload is a value's type (a byte), the value
+as RDB writes it, the version of the format (10, two bytes, the low first) and the CRC64
+of all that (Jones's polynomial, reflected, from 0), eight bytes, the low first.
+
+- DUMP writes a value as Redis 7.0.15 does with `rdbcompression no`: a string as the
+  integer of 1, 2 or 4 bytes it is the text of, else its length and its bytes; a list as
+  a quicklist of listpacks (type 18), cut into nodes where Redis's own (8 KB,
+  `list-max-listpack-size -2`) would cut it, pushed at its last end; a hash of the small
+  kind as a listpack (16), a large one as its pairs (4); a set kept as an intset as one
+  (11), of the narrowest width, another as its members (2); a sorted set of the small
+  kind as a listpack (17), a large one as its members with their scores as binary
+  doubles, from the greatest (5). Each length, listpack entry, back-length and header is
+  Redis's, so that a payload is Redis's byte for byte where both servers hold the value
+  alike: a string, a list pushed at its last end, a hash, set or sorted set in a listpack
+  or an intset, a sorted set in a skiplist.
+- RESTORE reads every type Redis 7.0.15 reads but streams' and modules': strings in
+  each of their encodings, LZF's too; lists of type 1, ziplists (10) and quicklists of
+  ziplists (14) or listpacks (18); sets of type 2 and intsets (11); hashes of type 4,
+  zipmaps (9), ziplists (13) and listpacks (16); sorted sets of types 3 (scores as text,
+  read as `strtod` reads them) and 5, ziplists (12) and listpacks (17). It makes the value
+  Redis makes, of the kind Redis's load picks: a hash or sorted set from a listpack or a
+  ziplist stays small by its count alone, its elements however long (`rdbLoadObject`
+  converts these by `hash-max-listpack-entries` and `zset-max-listpack-entries` only),
+  one of type 4, 3 or 5, or a zipmap, by its count and its longest element; a sorted set's
+  -0 keeps the sign each of Redis's encodings keeps. It checks a payload as deep as Redis
+  does with `sanitize-dump-payload yes`: every length against what is left, each
+  listpack's and ziplist's header, entries, back-lengths and previous lengths, an intset's
+  width and order, a zipmap's free bytes, pairs, duplicates and empty values, a member or
+  field twice, a score that is no number; what Redis refuses there, BendKV refuses ("Bad
+  data format").
+- RESTORE key ttl payload [REPLACE] [ABSTTL] [IDLETIME s] [FREQ f] checks what Redis
+  checks, in its order: its options first (IDLETIME not after FREQ, nor FREQ after
+  IDLETIME, each with a value: "Invalid IDLETIME value, must be >= 0", "Invalid FREQ value,
+  must be >= 0 and <= 255"), then, once the key is looked up, BUSYKEY, the time (not a long
+  long; "Invalid TTL value, must be >= 0"), the payload's version and checksum ("DUMP
+  payload version or checksum are wrong") and its value; then OK, and the key set with
+  the time (none for 0; from 1970 with ABSTTL, else from now), or, for a time already
+  past, or one from now past LLONG_MAX (which Redis's sum wraps into the past), the key
+  deleted when REPLACE found it, else nothing. Its keyspace events are Redis's: `new` and
+  `restore`, after `expired` without REPLACE for a key whose time had passed (REPLACE
+  deletes such a key without one); `del` for the key REPLACE deleted.
+- IDLETIME and FREQ set the key's word of use (section 3zw) as Redis's
+  `objectSetLRUOrLFU` sets a value's 24 bits: FREQ's counter under an LFU policy,
+  IDLETIME's time under any other, as Redis reckons it on its LRU clock of 24 bits (the
+  clock less the seconds, plus `LRU_CLOCK_MAX`, 2^24 - 1, when that is below 0, cut to 24
+  bits), the other option left aside. RESTORE with either is a command of the session
+  (`SRestore`): the session runs its update on its database, and the server, which runs
+  such a command one at a time, sets the word once the update restored the key, as its
+  effects show, in MULTI too.
+
+The append-only file logs a RESTORE as the RESTORE of its payload with REPLACE (the key
+may be there when the file loads, its time passed), and ABSTTL with the time it gave the
+key, from 1970; or the DEL of the key REPLACE deleted. A file of Redis's, where RESTORE is
+as the client sent it (a time from now made one from 1970, with ABSTTL), loads as Redis
+loads it, IDLETIME's and FREQ's aside (below).
+
+**The laws.** DUMP is a read of its key (`PDump`, a Peek). RESTORE is an update of its key
+(`URestore`, an Upd: its payload, its time as it read it, REPLACE, and IDLETIME or FREQ)
+whose change sets the key to a payload's value (`CRestore`: the payload, the value, the
+time). Such a change is good when the payload's version and checksum and its value read as
+the value (`D.verify`, `D.load`) and the time is one a key keeps; every RESTORE makes good
+changes (`rs_busy_good` and the lemmas under it, each over one step of `restore.of`), and
+the change's effect, run at time 0, makes it again (`restore_replay`: the RESTORE logged
+finds the payload good and the time not past) and parses back to itself
+(`restore_args`). The laws of a session that enumerate its commands take `SRestore` as
+they take `SGeoStore`. `make check` and `make verdict` pass.
+
+**Where BendKV differs.**
+- DUMP writes no LZF: its payloads are those of `rdbcompression no` (Redis compresses by
+  default the strings of more than 20 bytes that LZF makes shorter). RESTORE reads both.
+- A hash or a set in a hashtable dumps its pairs or members in the order of BendKV's trie,
+  not of Redis's dict; a list pushed at its first end, or trimmed, or changed inside, as
+  the quicklist Redis makes pushing at its last end; an intset at the narrowest width
+  (Redis keeps a width a member that is gone needed). Each is the same value, as each
+  server reads the other's.
+- RESTORE checks every payload in depth, as Redis does with `sanitize-dump-payload yes`
+  (its default, `no`, checks less and takes some broken payloads that it may crash on
+  later). A sorted set in a listpack whose members are out of order, which those checks
+  let through, BendKV keeps sorted.
+- A time at or past 10^14 ms (the year 5138) gives the key none, as everywhere in BendKV.
+- REPLACE with a time already past, over a key whose time had passed but that still lay
+  there: Redis deletes it (a DEL logged, `del`), BendKV leaves it to expire (`expired`).
+- IDLETIME past LLONG_MAX / 1000 s, where Redis's product of it and 1000 overflows: BendKV
+  takes the seconds as they are. IDLETIME and FREQ in a file that loads set no word.
+- A value of 100,000 elements takes RESTORE 7 to 38 times Redis's time, DUMP 3 to 31
+  times, and both less than the commands that make the value (PERFORMANCE.md, section
+  62).
+
+**Tests.** `tests/dump_test.py`, in `make test`, against Redis with `rdbcompression no`
+and `sanitize-dump-payload yes`: values of every kind and encoding made by the same
+commands on both servers, their DUMPs compared byte for byte where both hold them alike,
+each payload restored on each server and Redis's compressed ones on both, the values and
+their encodings read back; RESTORE's options, errors and times in RESP2 and RESP3; payloads
+of the encodings Redis no longer writes, then 1,500 payloads cut, grown and changed at
+random (their checksums made right), each restored on both, replies and values compared;
+the keyspace events, IDLETIME and FREQ under LRU and LFU policies (OBJECT IDLETIME and
+FREQ, past the clock's turn too), in MULTI and on a key there, WATCH, COMMAND GETKEYS,
+INFO's statistics, and values of up to 5 MB and 100,000 elements: 3,167 checks, none
+different. `tests/aof_redis_test.py` takes RESTORE both ways, with REPLACE, ABSTTL,
+IDLETIME and FREQ, times past, keys whose time had passed and a transaction.
+
+**Redis's suite.** unit/dump passes the 11 of its 12 tests that Redis passes in this mode
+(1 before; the twelfth uses DEBUG, which Redis refuses here), and unit/type/list its two
+tests of a ziplist of various encodings, which restore one (216 of its 218).
+unit/type/hash's two tests of the same kind run past DUMP and RESTORE now and fail on the
+order of HGETALL of the hash they make: its values of 8 and 64 KB, which Redis keeps in a
+listpack under `hash-max-ziplist-value 1000000000`, make BendKV's a table (its small
+hashes are those of the parameters' defaults). 1,273 of the 1,677 tests Redis passes
+(75.9%; 1,261 before), 1,270 of the 1,333 in what BendKV has (95%). The client libraries'
+suites: redis-py's 12 tests of DUMP and RESTORE pass, in RESP2 and in RESP3, and
+go-redis's 3, which leaves 2,513 of the 2,753 tests Redis passes in redis-py and 408 of
+460 in go-redis.
+
 ## 4. Where a request's time goes, and hiding the memory waits
 
 With the eight patches, BendKV ran fewer instructions on GET and SET than Redis, missed

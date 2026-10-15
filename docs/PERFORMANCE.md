@@ -7031,3 +7031,56 @@ where it copied 17 (FINDINGS 3zzm). GET, SET and INCR took 3,407, 4,168 and 4,47
 instructions per request under callgrind (`make perfcheck`), 90 more than main's 3,316,
 4,077 and 4,390. Each read of GEO is a form of one word now, and the options a node of
 their own: 3,316, 4,075 and 4,393.
+
+## 62. DUMP and RESTORE
+
+**Measured.** Wall time from a request's send to its reply's last byte, one client, one
+request at a time, the median of 7 (of 5 for the commands that make the value, each on a
+key deleted before), on BendKV and on Redis 7.0.15 with `rdbcompression no`, each
+RESTORE with REPLACE over the value the one before made:
+
+| value | payload | make it | DUMP | RESTORE | Redis: make it | DUMP | RESTORE |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| a string of 100 bytes | 113 B | 0.04 ms | 0.04 ms | 0.04 ms | 0.05 ms | 0.04 ms | 0.04 ms |
+| a string of 1 MB | 1.0 MB | 4.5 ms | 6.4 ms | 11.4 ms | 0.85 ms | 1.6 ms | 1.4 ms |
+| a list of 100 | 512 B | 0.05 ms | 0.06 ms | 0.06 ms | 0.06 ms | 0.05 ms | 0.05 ms |
+| a list of 100,000 | 0.8 MB | 198 ms | 45.1 ms | 50.8 ms | 11.1 ms | 1.4 ms | 1.3 ms |
+| a hash of 100 (a listpack) | 1,000 B | 0.38 ms | 0.09 ms | 0.16 ms | 0.14 ms | 0.05 ms | 0.05 ms |
+| a hash of 100,000 | 1.4 MB | 832 ms | 73.3 ms | 153 ms | 48.9 ms | 14.1 ms | 16.8 ms |
+| a set of 500 integers (an intset) | 1,021 B | 7.5 ms | 0.11 ms | 0.59 ms | 0.10 ms | 0.04 ms | 0.04 ms |
+| a set of 100,000 | 0.7 MB | 190 ms | 23.1 ms | 91.2 ms | 25.7 ms | 7.1 ms | 12.4 ms |
+| a sorted set of 100 (a listpack) | 710 B | 0.36 ms | 0.08 ms | 0.23 ms | 0.18 ms | 0.05 ms | 0.04 ms |
+| a sorted set of 100,000 | 1.5 MB | 2,024 ms | 56.9 ms | 351 ms | 109 ms | 11.2 ms | 31.3 ms |
+
+A small value takes about Redis's time, a round trip's. A large one takes RESTORE 7 to 38
+times Redis's time and DUMP 3 to 31 times, and both less than the commands that make the
+value (RESTORE a sixth to a half of their time). Where Redis holds a value as a listpack
+(a list's nodes, a small hash or sorted set), its DUMP copies the bytes it holds and its
+RESTORE checks them and keeps them; BendKV writes and reads each element. SADD to an
+intset is section 55's: a list of the members as strings in increasing order, which each
+add walks.
+
+**Where it goes** (callgrind, instructions per command):
+
+- DUMP of the string of 1 MB: 97 million, 93 a byte, all but 1% of them the checksum: a
+  byte's CRC64 is two steps of four bits through a table of 16 (60 instructions), and the
+  String is walked a character at a time (`str_vtail`, 35). RESTORE of it: 189 million,
+  the checksum again (105 million) and the read of the request (83 million:
+  `count_upto` in `server.bend` counts the bytes of each piece of 64 KB the socket gives
+  a request that is not whole yet, a character at a time; a SET of the same megabyte
+  takes 84 million instructions, nearly all of them there).
+- RESTORE of the sorted set of 100,000: 2.3 billion. Its elements go into the tree as
+  ZADD puts them there: `zt.add` copies the path from the root to an element's place, and
+  the old path is dropped, 7,400 instructions an element for the drops alone (0.74
+  billion), 0.33 billion for the insertions; the checksum takes 0.2 billion. DUMP of it:
+  375 million, the checksum 137 million, the payload's bytes put one before another 122
+  million (`str_append`).
+
+**What is left.** The checksum a byte at a time through a table of 256, the String read
+by index through a window of one chunk, as a long request's parse reads it (section 60);
+`count_upto` a chunk at a time (`String.length`), which every request of a large value
+pays, not RESTORE's alone; and a sorted set's tree made at once from its elements in
+order, as a balanced tree of them, with no path copied and dropped.
+
+**The other commands.** `make perfcheck`: GET 3,316, SET 4,076 and INCR 4,392
+instructions per request (3,316, 4,075 and 4,393 on main).
