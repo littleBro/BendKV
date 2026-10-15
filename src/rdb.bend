@@ -205,16 +205,29 @@ def crc.byte(c: C, +x: U32) -> C:
     case C{hi, +lo}:
       crc.nib(crc.nib(C{hi, U32.xor(lo, x)}))
 
-# the CRC of s's bytes after c
-def crc.go(s: String, c: C) -> C:
-  match s:
-    case SCon{Chr{+x}, t}:
-      crc.go(t, crc.byte(c, x))
-    case SNil{}:
+# the CRC of the bytes of w from its j-th, f of them, after c: w is a
+# window of one chunk, which String.code_at reads at once
+def crc.in(f: Nat, +w: String, +j: Nat, c: C) -> C:
+  match f:
+    case 0n:
       c
+    case 1n+g:
+      crc.in(g, w, Nat.add(j, 1n), crc.byte(c, String.code_at(w, j)))
 
-def crc(+s: String) -> C:
-  crc.go(s, C{0, 0})
+# the CRC of the first n bytes of s after c, a window of 2,048 bytes at
+# a time (a walk of s by its characters makes a view of each; f bounds
+# the windows)
+def crc.run(f: Nat, +s: String, +n: Nat, c: C) -> C:
+  match f:
+    case 0n:
+      c
+    case 1n+g:
+      +k = Nat.min(n, 2048n)
+      crc.run(g, String.drop(s, k), Nat.sub(n, k), crc.in(k, String.take(s, k), 0n, c))
+
+# the CRC of the k bytes of s after c
+def crc.k(+k: Nat, +s: String, c: C) -> C:
+  crc.run(Nat.div(Nat.add(k, 2047n), 2048n), s, k, c)
 
 # its eight bytes, the low first, before rest
 def crc.le(c: C, rest: String) -> String:
@@ -383,9 +396,10 @@ def rd.num.l(l: Len, t: String) -> Maybe<&1, Nat & String>:
     case LNum{n}:
       Some{(n, t)}
     case LEnc{k}:
-      None{}
+      Some{(k, t)}
 
-# a length that is a number
+# a length that is a number (rdbLoadLen without isencoded: a byte whose
+# two high bits mark an encoded string reads as its other six, a count)
 def rd.num.of(m: Maybe<&1, Len & String>) -> Maybe<&1, Nat & String>:
   match m:
     case Some{p}:
@@ -1269,11 +1283,13 @@ def is.vals(ok: Bool, +w: Nat, +n: Nat, t: String) -> Maybe<&2, List<&2, String>
     case False{}:
       None{}
 
+# n values of w bytes in l bytes, w 2, 4 or 8 (the product taken of w
+# cut to 8, as w and n are each any 32 bits until checked)
 def is.count(+l: Nat, +w: Nat, m: Maybe<&1, Nat & String>) -> Maybe<&2, List<&2, String>>:
   match m:
     case Some{p}:
       (+n, t) = p
-      is.vals(Bool.and(Bool.and(Bool.or(Nat.is_eq(w, 2n), Bool.or(Nat.is_eq(w, 4n), Nat.is_eq(w, 8n))), Nat.is_lt(0n, n)), Nat.is_eq(Nat.add(8n, Nat.mul(n, w)), l)), w, n, t)
+      is.vals(Bool.and(Bool.and(Bool.or(Nat.is_eq(w, 2n), Bool.or(Nat.is_eq(w, 4n), Nat.is_eq(w, 8n))), Nat.is_lt(0n, n)), Nat.is_eq(Nat.add(8n, Nat.mul(n, Nat.min(w, 8n))), l)), w, n, t)
     case None{}:
       None{}
 
@@ -1325,12 +1341,13 @@ def mems.trie(xs: List<&2, String>, t: KV.Trie<Unit>) -> KV.Trie<Unit>:
     case Con{x, rest}:
       mems.trie(rest, KV.set(Unit, t, x, Unit{}))
 
-def ints.sorted(xs: List<&2, String>, acc: List<&2, String>) -> List<&2, String>:
+# the tree of the integers xs, each added in its place
+def ints.tree(xs: List<&2, String>, t: KV.ITree) -> KV.ITree:
   match xs:
     case Nil{}:
-      acc
+      t
     case Con{x, rest}:
-      ints.sorted(rest, KV.ints.put(x, acc))
+      ints.tree(rest, KV.ints.put(x, t))
 
 def all.ints(xs: List<&2, String>) -> Bool:
   match xs:
@@ -1355,21 +1372,31 @@ def val.list(+xs: List<&2, String>) -> Maybe<&2, KV.Val>:
   +n = List.length(&2, String, xs)
   Bool.pick(Maybe<&2, KV.Val>, Nat.is_lt(0n, n), Some{KV.VColl{KV.CList{KV.deq.of(n, xs)}}}, None{})
 
-def val.set.of(ints: Bool, +n: Nat, sorted: Bool, xs: List<&2, String>, t: KV.Trie<Unit>) -> KV.Val:
-  match ints sorted:
-    case True{} True{}:
-      KV.VColl{KV.CMems{KV.MInts{n, xs}}}
-    case True{} False{}:
-      KV.VColl{KV.CMems{KV.MInts{n, ints.sorted(xs, Nil{})}}}
-    case False{} _:
+def val.set.of(ints: Bool, +n: Nat, xs: List<&2, String>, t: KV.Trie<Unit>) -> KV.Val:
+  match ints:
+    case True{}:
+      KV.VColl{KV.CMems{KV.MInts{n, ints.tree(xs, KV.ITip{})}}}
+    case False{}:
       KV.VColl{KV.CMems{KV.MBig{n, t}}}
 
+# a set of the n members xs, the trie of which finds a member twice
+def val.set.any(+n: Nat, +xs: List<&2, String>) -> Maybe<&2, KV.Val>:
+  +t = mems.trie(xs, KV.empty(Unit))
+  Bool.pick(Maybe<&2, KV.Val>, Bool.and(Nat.is_lt(0n, n), Nat.is_eq(KV.size(Unit, t), n)), Some{val.set.of(Bool.and(Nat.is_le(n, 512n), all.ints(xs)), n, xs, t)}, None{})
+
+def val.set.go(ints: Bool, +n: Nat, +xs: List<&2, String>) -> Maybe<&2, KV.Val>:
+  match ints:
+    case True{}:
+      Some{KV.VColl{KV.CMems{KV.MInts{n, KV.ints.build(n, xs)}}}}
+    case False{}:
+      val.set.any(n, xs)
+
 # a set of the members xs (sorted: integers in increasing order, from an
-# intset)
+# intset, which are an intset at once when they are 512 at most: each is
+# there once, so no trie of them is made)
 def val.set(+sorted: Bool, +xs: List<&2, String>) -> Maybe<&2, KV.Val>:
   +n = List.length(&2, String, xs)
-  +t = mems.trie(xs, KV.empty(Unit))
-  Bool.pick(Maybe<&2, KV.Val>, Bool.and(Nat.is_lt(0n, n), Nat.is_eq(KV.size(Unit, t), n)), Some{val.set.of(Bool.and(Nat.is_le(n, 512n), Bool.or(sorted, all.ints(xs))), n, sorted, xs, t)}, None{})
+  val.set.go(Bool.and(sorted, Bool.and(Nat.is_lt(0n, n), Nat.is_le(n, 512n))), n, xs)
 
 def zel.trie(es: List<&2, KV.ZEl>, t: KV.Trie<F.F64>) -> KV.Trie<F.F64>:
   match es:
@@ -1386,6 +1413,77 @@ def zel.tree(+norm: Bool, es: List<&2, KV.ZEl>, tr: KV.ZTree) -> KV.ZTree:
     case Con{KV.ZEl{m, +d}, rest}:
       zel.tree(norm, rest, KV.zt.add(tr, m, Bool.pick(F.F64, norm, KV.zset.norm(d), d)))
 
+# The tree of elements that come in order, made at once: as balanced as
+# a tree of them can be, each node made once, where adding the elements
+# one at a time copies a path and drops the old one for each. A walk with
+# a list of jobs: build a tree of n elements (its left side first); take
+# the next element as the root of a node of n whose left side is the tree
+# just made (a its size), then build its right side; join that node.
+type ZJob is Data:
+  ZJBuild{n: Nat}
+  ZJRoot{n: Nat, a: Nat}
+  ZJJoin{n: Nat, e: KV.ZEl, l: KV.ZTree}
+
+def zel.join(+norm: Bool, +n: Nat, l: KV.ZTree, e: KV.ZEl, r: KV.ZTree) -> KV.ZTree:
+  match e:
+    case KV.ZEl{m, +d}:
+      KV.ZBin{n, m, Bool.pick(F.F64, norm, KV.zset.norm(d), d), l, r}
+
+# the jobs js run on the elements es, t the tree last made (f bounds the
+# steps: four for each element and one)
+def zel.mach(f: Nat, js: List<&2, ZJob>, es: List<&2, KV.ZEl>, +norm: Bool, t: KV.ZTree) -> KV.ZTree:
+  match f js:
+    case 1n+g Con{ZJBuild{n}, rest}:
+      match n:
+        case 0n:
+          zel.mach(g, rest, es, norm, t)
+        case 1n+(+k):
+          +a = Nat.div(k, 2n)
+          zel.mach(g, ZJBuild{a} <> (ZJRoot{1n+k, a} <> rest), es, norm, t)
+    case 1n+g Con{ZJRoot{+n, +a}, rest}:
+      match es:
+        case Con{e, more}:
+          zel.mach(g, ZJBuild{Nat.sub(Nat.sub(n, 1n), a)} <> (ZJJoin{n, e, t} <> rest), more, norm, KV.ZTip{})
+        case Nil{}:
+          t
+    case 1n+g Con{ZJJoin{+n, e, l}, rest}:
+      zel.mach(g, rest, es, norm, zel.join(norm, n, l, e, t))
+    case _ _:
+      t
+
+def zel.build(+n: Nat, +norm: Bool, es: List<&2, KV.ZEl>) -> KV.ZTree:
+  zel.mach(Nat.add(Nat.mul(4n, n), 4n), [ZJBuild{n}], es, norm, KV.ZTip{})
+
+# 1 for LT, 2 for GT, 0 for EQ
+def zel.cmp.n(c: Cmp) -> Nat:
+  match c:
+    case LT{}:
+      1n
+    case GT{}:
+      2n
+    case EQ{}:
+      0n
+
+# how the elements (d, m) and es come, c the way the ones before came (3:
+# none yet), while ok: 1 each before the next (as a listpack keeps them),
+# 2 each after it (as a skiplist is dumped, from the greatest), 0 other
+def zel.order.go(es: List<&2, KV.ZEl>, ok: Bool, +c: Nat, +d: F.F64, +m: String) -> Nat:
+  match es ok:
+    case _ False{}:
+      0n
+    case Nil{} True{}:
+      Bool.pick(Nat, Nat.is_eq(c, 3n), 1n, c)
+    case Con{KV.ZEl{+k, +e}, rest} True{}:
+      +o = zel.cmp.n(KV.zel.cmp(d, m, e, k))
+      zel.order.go(rest, Bool.and(Nat.is_lt(0n, o), Bool.or(Nat.is_eq(c, 3n), Nat.is_eq(o, c))), o, e, k)
+
+def zel.order(es: List<&2, KV.ZEl>) -> Nat:
+  match es:
+    case Nil{}:
+      1n
+    case Con{KV.ZEl{+m, +d}, rest}:
+      zel.order.go(rest, True{}, 3n, d, m)
+
 def zel.nan(es: List<&2, KV.ZEl>) -> Bool:
   match es:
     case Nil{}:
@@ -1400,12 +1498,24 @@ def zel.gt(es: List<&2, KV.ZEl>, +l: Nat) -> Bool:
     case Con{KV.ZEl{+m, d}, rest}:
       Bool.or(Nat.is_lt(l, String.length(m)), zel.gt(rest, l))
 
-def val.zset.of(small: Bool, +norm: Bool, +es: List<&2, KV.ZEl>, t: KV.Trie<F.F64>) -> KV.Val:
+# the tree of the n elements es, made at once when they come in order
+# (o 1: from a listpack; o 2: from the greatest, as a skiplist is dumped),
+# else an element at a time
+def zel.tree.of(+o: Nat, +norm: Bool, +n: Nat, es: List<&2, KV.ZEl>) -> KV.ZTree:
+  match o:
+    case 1n:
+      zel.build(n, norm, es)
+    case 2n:
+      zel.build(n, norm, List.reverse(&2, KV.ZEl, es))
+    case _:
+      zel.tree(norm, es, KV.ZTip{})
+
+def val.zset.of(small: Bool, +norm: Bool, +n: Nat, +es: List<&2, KV.ZEl>, t: KV.Trie<F.F64>) -> KV.Val:
   match small:
     case True{}:
-      KV.VColl{KV.CZset{KV.ZSmall{zel.tree(norm, es, KV.ZTip{})}}}
+      KV.VColl{KV.CZset{KV.ZSmall{zel.tree.of(zel.order(es), norm, n, es)}}}
     case False{}:
-      KV.VColl{KV.CZset{KV.ZBig{zel.tree(False{}, es, KV.ZTip{}), t}}}
+      KV.VColl{KV.CZset{KV.ZBig{zel.tree.of(zel.order(es), False{}, n, es), t}}}
 
 # a sorted set of the elements es (small: small with them, at most 128;
 # lp: as a listpack or ziplist kept them, each score as its text reads, a
@@ -1413,7 +1523,7 @@ def val.zset.of(small: Bool, +norm: Bool, +es: List<&2, KV.ZEl>, t: KV.Trie<F.F6
 def val.zset(+lp: Bool, +small: Bool, +es: List<&2, KV.ZEl>) -> Maybe<&2, KV.Val>:
   +n = List.length(&2, KV.ZEl, es)
   +t = zel.trie(es, KV.empty(F.F64))
-  Bool.pick(Maybe<&2, KV.Val>, Bool.and(Bool.and(Nat.is_lt(0n, n), Bool.not(zel.nan(es))), Nat.is_eq(KV.size(F.F64, t), n)), Some{val.zset.of(Bool.and(small, Nat.is_le(n, 128n)), Bool.not(lp), es, t)}, None{})
+  Bool.pick(Maybe<&2, KV.Val>, Bool.and(Bool.and(Nat.is_lt(0n, n), Bool.not(zel.nan(es))), Nat.is_eq(KV.size(F.F64, t), n)), Some{val.zset.of(Bool.and(small, Nat.is_le(n, 128n)), Bool.not(lp), n, es, t)}, None{})
 
 # the pairs of a flat list of fields and values (None for an odd one out)
 def pairs.of(xs: List<&2, String>, acc: List<&2, KV.HPair>) -> Maybe<&2, List<&2, KV.HPair>>:
@@ -1736,7 +1846,10 @@ def obj.blob(k: Nat, m: Maybe<&1, String & String>) -> Maybe<&2, KV.Val>:
     case None{}:
       None{}
 
-def obj.n.at(k: Nat, +n: Nat, t: String) -> Maybe<&2, KV.Val>:
+# the value of type k, of n elements, in t (a hash's 2n strings: no more
+# than t's bytes are asked for, as each string takes one at least, so
+# that a count past them, up to 2^48, makes no product past 2^48)
+def obj.n.at(k: Nat, +n: Nat, +t: String) -> Maybe<&2, KV.Val>:
   match k:
     case 1n:
       obj.list(rd.strs.n(n, t))
@@ -1745,7 +1858,7 @@ def obj.n.at(k: Nat, +n: Nat, t: String) -> Maybe<&2, KV.Val>:
     case 3n:
       obj.zels(False{}, z.els.n(n, False{}, t))
     case 4n:
-      obj.hash(rd.strs.n(Nat.mul(2n, n), t))
+      obj.hash(rd.strs.n(Nat.mul(2n, Nat.min(n, String.length(t))), t))
     case 5n:
       obj.zels(False{}, z.els.n(n, True{}, t))
     case 14n:
@@ -1905,7 +2018,7 @@ def is.blob(+n: Nat, +xs: List<&2, String>) -> String:
 def put.mems(m: KV.Mems, rest: String) -> String:
   match m:
     case KV.MInts{+n, xs}:
-      b1(11) ++ put.blob(is.blob(n, xs), rest)
+      b1(11) ++ put.blob(is.blob(n, KV.ints.list(xs)), rest)
     case KV.MBig{+n, +t}:
       b1(2) ++ len.put(n, put.strs(KV.keys(Unit, t, 0n), rest))
 
@@ -1947,19 +2060,11 @@ def put.val(v: KV.Val, rest: String) -> String:
 # Payloads
 # --------
 
-# the CRC of the k bytes of s after c
-def crc.k(k: Nat, s: String, c: C) -> C:
-  match k s:
-    case 1n+j SCon{Chr{+x}, t}:
-      crc.k(j, t, crc.byte(c, x))
-    case _ _:
-      c
-
 # DUMP's payload of v (createDumpPayload): the value, version 10 of the
 # format, and the CRC64 of both
 def dump(v: KV.Val) -> String:
   +body = put.val(v, b1(10) ++ b1(0))
-  body ++ crc.le(crc(body), "")
+  body ++ crc.le(crc.k(String.length(body), body, C{0, 0}), "")
 
 def verify.of(ok: Bool, +p: String, +n: Nat) -> Bool:
   match ok:

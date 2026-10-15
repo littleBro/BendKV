@@ -435,7 +435,7 @@ law incr_missing:
   for +db: R.Db
   for +k: String
   for  e: {there(db, k) == None{} : Maybe<&2, KV.Item<KV.Val>>}
-  {at_key(R.exec(R.IncrBy{k, R.IPos{1n}}, db), k) == (R.RInt{R.IPos{1n}}, Some{KV.Item{KV.VStr{"1"}, 0n}}) : R.Reply & Maybe<&2, KV.Item<KV.Val>>}
+  {at_key(R.exec(R.IncrBy{k, R.ByPos{0n, 1n}}, db), k) == (R.RIntS{"1"}, Some{KV.Item{KV.VStr{"1"}, 0n}}) : R.Reply & Maybe<&2, KV.Item<KV.Val>>}
 
 # LAW: PTTL of a key there with a time answers the time left, in ms
 law pttl_left:

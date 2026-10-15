@@ -72,17 +72,37 @@ echo "== the start"
 python3 tests/start_test.py --bin build/bendkv
 echo "== connections that end"
 python3 tests/conn_test.py --bin build/bendkv --port "$PORT"
+# up PID PORT: waits until the server started as PID answers on PORT (its
+# INFO names PID), so that no test starts before it listens, nor runs
+# against another server that holds the port; fails when PID exits first
+# or has not answered in 30 seconds
+up() {
+  i=0
+  until redis-cli -p "$2" info server 2> /dev/null | tr -d '\r' | grep -qx "process_id:$1"; do
+    if ! kill -0 "$1" 2> /dev/null; then
+      echo "the server on port $2 (pid $1) exited before it answered" >&2
+      return 1
+    fi
+    i=$((i + 1))
+    if [ "$i" -ge 300 ]; then
+      echo "the server on port $2 (pid $1) has not answered in 30 seconds" >&2
+      return 1
+    fi
+    sleep 0.1
+  done
+}
 # Redis collates SORT's ALPHA by the locale it starts in (strcoll),
 # BendKV as the C locale does
 LC_ALL=C redis-server --port "$REDIS_PORT" --save '' --appendonly no --bind 127.0.0.1 > build/redis.log 2>&1 &
 RDS=$!
 BKV=
 trap 'kill $BKV $RDS 2>/dev/null || true' EXIT
+up "$RDS" "$REDIS_PORT"
 rm -f build/test.aof build/aof_dump.txt
 for n in "" post send "post build/test.aof everysec"; do
   ./build/bendkv "$PORT" $n > build/server.log 2>&1 &
   BKV=$!
-  sleep 0.5
+  up "$BKV" "$PORT"
   echo "== ${n:-defaults}"
   python3 tests/robust_test.py --port "$PORT"
   python3 tests/writer_test.py --port "$PORT"
@@ -150,21 +170,21 @@ restart() {
   rm -f "$f"
   ./build/bendkv "$PORT" send "$f" always > build/server.log 2>&1 &
   BKV=$!
-  sleep 0.5
+  up "$BKV" "$PORT"
   python3 tests/aof_test.py --port "$PORT" --rounds "$ROUNDS" --write build/aof_dump.txt
   kill "$BKV"
   wait "$BKV" 2>/dev/null || true
   size=$(wc -c < "$f")
   ./build/bendkv "$PORT" send "$f" always > build/server.log 2>&1 &
   BKV=$!
-  sleep 0.5
+  up "$BKV" "$PORT"
   python3 tests/aof_test.py --port "$PORT" --check build/aof_dump.txt
   kill "$BKV"
   wait "$BKV" 2>/dev/null || true
   printf '*3\r\n$3\r\nSET\r\n$4\r\nlost\r\n$5\r\nhel' >> "$f"
   ./build/bendkv "$PORT" send "$f" always > build/server.log 2>&1 &
   BKV=$!
-  sleep 0.5
+  up "$BKV" "$PORT"
   python3 tests/aof_test.py --port "$PORT" --check build/aof_dump.txt
   kill "$BKV"
   wait "$BKV" 2>/dev/null || true

@@ -19,8 +19,8 @@ throughput of Redis 7.0.15 on the same machine, with half its memory for small v
 > administrative commands, an append-only file and its rewrite, maxmemory and its
 > eviction, RESP3). The goal now is a
 > drop-in replacement for a single Redis node, measured by Redis's own test suite: of the
-> 1,677 tests Redis 7.0.15 passes against a server it did not start, BendKV passes 1,273,
-> and 1,270 of the 1,333 in what it implements
+> 1,677 tests Redis 7.0.15 passes against a server it did not start, BendKV passes 1,274,
+> and 1,271 of the 1,333 in what it implements
 > ([docs/COMPATIBILITY.md](docs/COMPATIBILITY.md)). Do not use it for data you cannot
 > lose.
 
@@ -35,10 +35,10 @@ well. BendKV asks how far one can get writing a real, fast server in a language 
 the code that runs is the code that is proved, without a separate model and a
 refinement proof. The answer so far: the verified core is not what makes it slow;
 the data representation of the runtime was, and most of the work went into fixing it
-(33 patches to the Bend compiler, in [`bend-patches/`](bend-patches/): most speed up its
-data representation and its runtime, and the others add what a server needs from the
+(34 patches to the Bend compiler, in [`bend-patches/`](bend-patches/): most speed up its
+data representation and its runtime, the others add what a server needs from the
 system, from the process's directory, id and clock to the files it cuts, the heap's
-account and C's doubles).
+account and C's doubles, and one lets AddressSanitizer check the heap).
 
 ## What is proved
 
@@ -100,7 +100,8 @@ translation stays in the trusted base.
   since BendKV keeps no encodings, ENCODING as Redis encodes a value set whole (where Redis
   answers `raw` for one made by APPEND, SETRANGE or SETBIT), REFCOUNT by Redis's shared
   integers under the current eviction policy; IDLETIME and FREQ from when the key was last
-  used (Memory, below), each refused under the policy Redis refuses it under.
+  used (Memory, below), each refused under the policy Redis refuses it under. INCR and
+  its kin add Redis's long longs, and refuse a sum past one as Redis does.
 - **Floats:** INCRBYFLOAT and HINCRBYFLOAT, as Redis 7.0.15 computes them on x86-64: the
   value and the increment read as glibc's strtold reads them, added as an x87 long double
   adds them, and the sum written as `"%.17Lf"` writes it, the zeros that end its fraction
@@ -277,10 +278,12 @@ translation stays in the trusted base.
   and the failed calls and errors are counted as Redis counts them. A command run while
   replies are off (CLIENT REPLY OFF or SKIP) pops as it does with them on. Where BendKV
   differs: Redis serves the clients of the keys a command added (`signalKeyAsReady`, from
-  `dbAdd`), key by key in the order they became ready, where BendKV looks at every client
-  after every command, in the order they came; XREAD is not there, and WAIT's wait ends
-  only by its time or CLIENT UNBLOCK (The server, below). In a transaction a blocking
-  command does not wait, as in Redis (below).
+  `dbAdd`), key by key in the order they became ready, where BendKV looks at every client,
+  in the order they came, after every command that may make one ready (one that may write
+  a key a client waits on, or a command of the connection or of the server). A client that
+  waits costs nothing to the commands on other keys (PERFORMANCE.md, section 61). XREAD
+  is not there, and WAIT's wait ends only by its time or CLIENT UNBLOCK (The server,
+  below). In a transaction a blocking command does not wait, as in Redis (below).
 - **Transactions:** MULTI, EXEC, DISCARD, WATCH and UNWATCH, as Redis 7.0.15 runs them.
   After MULTI a command is queued (QUEUED), but for EXEC, DISCARD, MULTI (an error:
   transactions do not nest), WATCH (an error inside MULTI), QUIT and RESET, which run; a
@@ -294,13 +297,14 @@ translation stays in the trusted base.
   is there, FLUSHDB, FLUSHALL and SWAPDB of a database that holds it, MOVE, COPY, RENAME,
   the sweep of expired keys; a key watched after its time passed changes only when it is
   set again (its deletion is no change). EXEC, DISCARD, UNWATCH, RESET and a closed
-  connection unwatch. The calls are counted as Redis counts them (a queued command when
-  EXEC runs it, EXEC once). The append-only file has a transaction's effects between a
-  MULTI and an EXEC when they are two or more, as Redis writes them. Where BendKV
-  differs: an LTRIM that removes nothing changes no watched key (Redis signals the key
-  anyway), and a DEL of a key not there is logged (BendKV logs every DEL), so a
-  transaction with one may be wrapped in MULTI and EXEC where Redis writes its one other
-  effect alone.
+  connection unwatch. A watched key costs nothing to the commands on other keys
+  (PERFORMANCE.md, section 61). The calls are counted as Redis counts them (a queued
+  command when EXEC runs it, EXEC once). The append-only file has a transaction's
+  effects between a MULTI and an EXEC when they are two or more, as Redis writes them.
+  Where BendKV differs: an LTRIM that removes nothing changes no watched key (Redis
+  signals the key anyway), and a DEL of a key not there is logged (BendKV logs every
+  DEL), so a transaction with one may be wrapped in MULTI and EXEC where Redis writes its
+  one other effect alone.
 - **Pub/Sub:** SUBSCRIBE, UNSUBSCRIBE, PSUBSCRIBE, PUNSUBSCRIBE, SSUBSCRIBE, SUNSUBSCRIBE,
   PUBLISH, SPUBLISH and PUBSUB (CHANNELS, NUMSUB, NUMPAT, SHARDCHANNELS, SHARDNUMSUB,
   HELP), as Redis 7.0.15 runs them. Each name is answered with the client's count of
@@ -494,7 +498,7 @@ translation stays in the trusted base.
 Not yet: streams, Lua
 scripts, CLIENT TRACKING, timing of commands
 (usec in INFO commandstats, latencystats), CONFIG REWRITE (it answers as Redis does without a configuration file),
-RDB files. Integers, and times in ms, are limited to 14 digits.
+RDB files. Times in ms are limited to 14 digits.
 
 ## Performance
 
@@ -522,7 +526,7 @@ also needs Lean 4.34.0 (through elan).
 
 ```bash
 git clone https://github.com/bendlang/bend ../bend-patched
-sh bend-patches/apply.sh ../bend-patched      # Bend 2.0.35 + 32 patches
+sh bend-patches/apply.sh ../bend-patched      # Bend 2.0.35 + 34 patches
 B="bun ../bend-patched/bend2/main.ts"
 
 make check   BEND="$B"   # check the proofs
@@ -656,7 +660,11 @@ Redis and on BendKV, and counts the tests Redis passes that BendKV passes
 two client libraries the same way, redis-py's in RESP2 and in RESP3 and go-redis's
 (`tools/client_suite.py`); CI runs them on every pull request, and fails on a test Redis
 passes that BendKV fails and that is not among the known failures of
-`tools/data/clients.json`.
+`tools/data/clients.json`. `tools/sanitize.sh` builds the server with AddressSanitizer
+and UndefinedBehaviorSanitizer (the Bend heap's free nodes poisoned, patch 34) and with
+ThreadSanitizer, and runs under each the tests that stress its memory and its writer
+thread most; CI runs it on every pull request too, and fails on any report
+([docs/FINDINGS.md](docs/FINDINGS.md), section 3zzp).
 
 ## Layout
 
@@ -684,7 +692,7 @@ bench/      in-process benchmarks of the map, the core and channels
 tools/      measurement scripts, the runner of Redis's test suite, and the generators of
             the trie, of the parameter table and of the command table, with the facts
             they take from Redis (tools/data/)
-bend-patches/  the 33 patches to the Bend compiler and runtime
+bend-patches/  the 34 patches to the Bend compiler and runtime
 docs/       FINDINGS.md, DIRECTIONS.md, COMPATIBILITY.md, PERFORMANCE.md
 ```
 
