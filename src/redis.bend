@@ -31,6 +31,22 @@ type Int is Data:
   IPos{n: Nat}
   INeg{n: Nat}
 
+# a long long, as Redis's string2ll reads one and INCRBY's family adds
+# two (Long longs, below): its sign and its magnitude hi * 10^9 + lo (lo
+# below 10^9, so that each part stays below 2^48, where a Nat must), or
+# none (LLBad: no long long, or a sum past one)
+type LL is Data:
+  LL{neg: Bool, hi: Nat, lo: Nat}
+  LLBad{}
+
+# INCRBY's increment, a long long with its sign in its constructor: ByPos
+# adds hi * 10^9 + lo, ByNeg takes it away. A command travels in
+# registers as wide as its widest form (Cmd, below), and an LL's three
+# fields would make IncrBy, and so every command, a word wider.
+type By is Data:
+  ByPos{hi: Nat, lo: Nat}
+  ByNeg{hi: Nat, lo: Nat}
+
 # a reply; an array holds replies, so arrays nest (HELLO, the tracking
 # info of CLIENT). RIntS is an integer as its decimal text: BITFIELD's, of
 # up to 64 bits, past what an Int holds. It comes last, so that the others
@@ -115,7 +131,7 @@ type HWrite is Data:
   HWSet{ps: List<&2, KV.HPair>, mset: Bool}
   HWSetNx{f: String, v: String}
   HWDel{fs: List<&2, String>}
-  HWIncr{f: String, by: Int}
+  HWIncr{f: String, by: By}
   HWNew{ps: List<&2, KV.HPair>}
   HWIncrF{f: String, by: F.Fl}
 
@@ -374,7 +390,7 @@ type UpdOp is Data:
   UGetDel{}
   UExpire{t: Tm, c: ExpIf, name: String}
   UPersist{}
-  UIncr{by: Int}
+  UIncr{by: By}
   URange{off: Nat, s: String}
   USetBit{off: Nat, on: Bool}
   UBitfield{ops: List<&2, BfOp>}
@@ -670,7 +686,7 @@ type Cmd is Data:
   Set{key: String, val: String}
   Del{keys: List<&2, String>}
   Exists{keys: List<&2, String>}
-  IncrBy{key: String, by: Int}
+  IncrBy{key: String, by: By}
   MGet{keys: List<&2, String>}
   MSet{pairs: List<&2, KVPair>}
   DbSize{}
@@ -697,47 +713,10 @@ type Cmd is Data:
 
 # Integers
 # --------
-# Redis integers are 64-bit; BendKV's are bounded by 14 decimal digits,
-# so every sum of two stays below 2^48, where Bend's Nat must stay.
-
-def int_sub_nat(+x: Nat, +y: Nat) -> Int:
-  Bool.pick(Int, Nat.is_lt(x, y), INeg{Nat.sub(Nat.sub(y, x), 1n)}, IPos{Nat.sub(x, y)})
-
-def int_add(a: Int, b: Int) -> Int:
-  match a b:
-    case IPos{x} IPos{y}:
-      IPos{Nat.add(x, y)}
-    case INeg{x} INeg{y}:
-      INeg{1n+Nat.add(x, y)}
-    case IPos{x} INeg{y}:
-      int_sub_nat(x, 1n+y)
-    case INeg{x} IPos{y}:
-      int_sub_nat(y, 1n+x)
-
-def int_neg(a: Int) -> Int:
-  match a:
-    case IPos{n}:
-      match n:
-        case 0n:
-          IPos{0n}
-        case 1n+p:
-          INeg{p}
-    case INeg{n}:
-      IPos{1n+n}
-
-def int_show(a: Int) -> String:
-  match a:
-    case IPos{n}:
-      Nat.show(n)
-    case INeg{n}:
-      "-" ++ Nat.show(1n+n)
-
-def int_mag(a: Int) -> Nat:
-  match a:
-    case IPos{n}:
-      n
-    case INeg{n}:
-      1n+n
+# An Int holds what a Nat holds, below 2^48: a reply's count, an index.
+# int_read reads one of 14 digits at most (a client's id, the number of
+# databases). Redis's integers are long longs, which INCRBY's family adds
+# as such (Long longs, below).
 
 # the digit a code point stands for, when it is one
 def int_digit.if(x: U32, ok: Bool) -> Maybe<&2, Nat>:
@@ -808,10 +787,6 @@ def int_read.sign(+s: String, +n: Nat, neg: Bool) -> Maybe<&2, Int>:
 def int_read(+s: String) -> Maybe<&2, Int>:
   +n = String.length(s)
   int_read.sign(s, n, U32.is_eq(String.code_at(s, 0n), 45))
-
-# an integer fits when its magnitude has at most 14 digits
-def int_fits(a: Int) -> Bool:
-  Nat.is_le(String.length(Nat.show(int_mag(a))), 14n)
 
 # Replies
 # -------
@@ -994,20 +969,6 @@ def parse_msetnx(ps: Maybe<&2, List<&2, KVPair>>) -> Cmd:
       MSetNx{p <> rest}
     case None{}:
       e_arity("msetnx")
-
-def parse_incrby(k: String, by: Maybe<&2, Int>) -> Cmd:
-  match by:
-    case Some{n}:
-      IncrBy{k, n}
-    case None{}:
-      Bad{e_int()}
-
-def parse_decrby(k: String, by: Maybe<&2, Int>) -> Cmd:
-  match by:
-    case Some{n}:
-      IncrBy{k, int_neg(n)}
-    case None{}:
-      Bad{e_int()}
 
 # Container commands (CLIENT, FUNCTION) pick a subcommand by their first
 # argument. An unknown one, and a wrong number of arguments, are errors
@@ -1215,7 +1176,7 @@ type Kill is Data:
   Kill{addr: Maybe<&2, String>, laddr: Maybe<&2, String>, id: Maybe<&2, Nat>, ty: Nat, skip: Bool}
 
 # a client id as Redis reads one, a long long (string2ll): one that can
-# be a client's (14 digits at most, as BendKV reads integers; ids start at
+# be a client's (14 digits at most, as int_read reads them; ids start at
 # 1), a long long past 14 digits (no client has it), one that is 0 or
 # negative, or none
 type Cid is Data:
@@ -2173,6 +2134,180 @@ def scan.check(a: ScanArgs, args: List<&2, String>) -> Cmd:
 def scan.parse(+args: List<&2, String>) -> Cmd:
   scan.check(scan.args(args), args)
 
+# Long longs
+# ----------
+# A long long is read as Redis's string2ll reads one, and INCRBY's family
+# (INCR, DECR, INCRBY, DECRBY, HINCRBY) adds two as incrDecrCommand and
+# hincrbyCommand do, refusing a sum past LLONG_MAX or below LLONG_MIN. A
+# magnitude is kept as hi * 10^9 + lo (LL, Types), so that no Nat here
+# passes 2^48: hi is below 10^10, and a sum of two below 2 * 10^10.
+
+# whether a magnitude hi * 10^9 + lo is at most hb * 10^9 + lb
+def ll.le(+hi: Nat, +lo: Nat, +hb: Nat, +lb: Nat) -> Bool:
+  Bool.or(Nat.is_lt(hi, hb), Bool.and(Nat.is_eq(hi, hb), Nat.is_le(lo, lb)))
+
+# the long long of sign neg and magnitude hi * 10^9 + lo, or none past
+# 2^63 - 1 (past 2^63 when neg)
+def ll.in(+neg: Bool, +hi: Nat, +lo: Nat) -> LL:
+  Bool.pick(LL, ll.le(hi, lo, dec.llmax(), Bool.pick(Nat, neg, 854775808n, 854775807n)), LL{neg, hi, lo}, LLBad{})
+
+# the d digits of s from index i as a magnitude, when ok: the last nine
+# are lo, those before them hi
+def ll.at.of(ok: Bool, +neg: Bool, +s: String, +i: Nat, +d: Nat) -> LL:
+  match ok:
+    case True{}:
+      +k = Nat.sub(d, 9n)
+      ll.in(neg, String.dec_at(s, i, k), String.dec_at(s, Nat.add(i, k), Nat.min(d, 9n)))
+    case False{}:
+      LLBad{}
+
+# d chars from index i, 1 to 19 of them (short): all digits, the first
+# not 0 unless it is the only one and no '-' came before it
+def ll.at.short(short: Bool, +neg: Bool, +s: String, +i: Nat, +d: Nat) -> LL:
+  match short:
+    case True{}:
+      ll.at.of(Bool.and(Nat.is_le(d, String.digits_at(s, i)), Bool.or(U32.is_ne(String.code_at(s, i), 48), Bool.and(Nat.is_eq(d, 1n), Bool.not(neg)))), neg, s, i, d)
+    case False{}:
+      LLBad{}
+
+# the long long the chars of s from index a to index e spell, as
+# string2ll reads one: an optional '-', then 1 to 19 digits, no 0 first
+# but in "0" ("-0" is none), at most 2^63 - 1 (2^63 after a '-'). The
+# digits are read where they lie (String.digits_at, String.dec_at).
+def ll.at(+s: String, +a: Nat, +e: Nat) -> LL:
+  +neg = U32.is_eq(String.code_at(s, a), 45)
+  +i = Bool.pick(Nat, neg, 1n+a, a)
+  +d = Nat.sub(e, i)
+  ll.at.short(Bool.and(Nat.is_lt(0n, d), Nat.is_le(d, 19n)), neg, s, i, d)
+
+# a value of 1 to 9 chars (nine) that is digits alone, the first not 0
+# unless it is the only one, reads at once; any other the general way
+def ll.read.nine(ok: Bool, +s: String, +n: Nat) -> LL:
+  match ok:
+    case True{}:
+      LL{False{}, 0n, String.dec_at(s, 0n, n)}
+    case False{}:
+      ll.at(s, 0n, n)
+
+def ll.read.of(nine: Bool, +s: String, +n: Nat) -> LL:
+  match nine:
+    case True{}:
+      ll.read.nine(Bool.and(Nat.is_eq(String.digits_at(s, 0n), n), Bool.or(Nat.is_eq(n, 1n), U32.is_ne(String.code_at(s, 0n), 48))), s, n)
+    case False{}:
+      ll.at(s, 0n, n)
+
+def ll.read(+s: String) -> LL:
+  +n = String.length(s)
+  ll.read.of(Bool.and(Nat.is_lt(0n, n), Nat.is_le(n, 9n)), s, n)
+
+# a magnitude q * 10^9 + r as its decimal digits: r's nine, zeros first,
+# after q's (10^9 + r has ten digits, a 1 first)
+def ll.digits(+q: Nat, +r: Nat) -> String:
+  match q:
+    case 0n:
+      Nat.show(r)
+    case 1n+p:
+      Nat.show(q) ++ String.drop(Nat.show(Nat.add(r, 1000000000n)), 1n)
+
+# a long long's text, as Redis writes one (ll2string)
+def ll.show(+neg: Bool, +hi: Nat, +lo: Nat) -> String:
+  match neg:
+    case True{}:
+      "-" ++ ll.digits(hi, lo)
+    case False{}:
+      ll.digits(hi, lo)
+
+# a magnitude hi * 10^9 + lo of sign neg (lo below 10^9): a long long
+# at once when hi is below 922337203 (the magnitude below 2^63), else
+# when ll.in finds it one
+def ll.top(below: Bool, +neg: Bool, +hi: Nat, +lo: Nat) -> LL:
+  match below:
+    case True{}:
+      LL{neg, hi, lo}
+    case False{}:
+      ll.in(neg, hi, lo)
+
+# the sum of two magnitudes of sign neg, hi * 10^9 + lo with lo below
+# 2 * 10^9: its carry (c) taken, or none past a long long
+def ll.add.carry(c: Bool, +neg: Bool, +hi: Nat, +lo: Nat) -> LL:
+  match c:
+    case False{}:
+      ll.top(Nat.is_lt(hi, 922337203n), neg, hi, lo)
+    case True{}:
+      +h = Nat.add(hi, 1n)
+      ll.top(Nat.is_lt(h, 922337203n), neg, h, Nat.sub(lo, 1000000000n))
+
+def ll.add.same(+neg: Bool, +hi: Nat, +lo: Nat) -> LL:
+  ll.add.carry(Nat.is_le(1000000000n, lo), neg, hi, lo)
+
+# magnitude x (xh * 10^9 + xl) less y (yh, yl), x at least y, of sign
+# neg (0 has none)
+def ll.sub(+neg: Bool, +xh: Nat, +xl: Nat, +yh: Nat, +yl: Nat) -> LL:
+  +b = Nat.is_lt(xl, yl)
+  +h = Nat.sub(Nat.sub(xh, yh), Bool.pick(Nat, b, 1n, 0n))
+  +l = Nat.sub(Bool.pick(Nat, b, Nat.add(xl, 1000000000n), xl), yl)
+  LL{Bool.and(neg, Bool.not(Bool.and(Nat.is_eq(h, 0n), Nat.is_eq(l, 0n)))), h, l}
+
+# a and b of signs that differ: the sign of the greater magnitude (ge:
+# a's), and the difference
+def ll.add.diff(ge: Bool, +an: Bool, +ah: Nat, +al: Nat, +bn: Bool, +bh: Nat, +bl: Nat) -> LL:
+  match ge:
+    case True{}:
+      ll.sub(an, ah, al, bh, bl)
+    case False{}:
+      ll.sub(bn, bh, bl, ah, al)
+
+def ll.add.of(differ: Bool, +an: Bool, +ah: Nat, +al: Nat, +bn: Bool, +bh: Nat, +bl: Nat) -> LL:
+  match differ:
+    case False{}:
+      ll.add.same(an, Nat.add(ah, bh), Nat.add(al, bl))
+    case True{}:
+      ll.add.diff(ll.le(bh, bl, ah, al), an, ah, al, bn, bh, bl)
+
+# the long long of sign an and magnitude ah * 10^9 + al, plus b: none
+# past LLONG_MAX or below LLONG_MIN (Redis's check of overflow)
+def ll.add(+an: Bool, +ah: Nat, +al: Nat, b: By) -> LL:
+  match b:
+    case ByPos{+bh, +bl}:
+      ll.add.of(an, an, ah, al, False{}, bh, bl)
+    case ByNeg{+bh, +bl}:
+      ll.add.of(Bool.not(an), an, ah, al, True{}, bh, bl)
+
+# an increment as the long long it is: the sum when the key is not there
+def by.ll(b: By) -> LL:
+  match b:
+    case ByPos{hi, lo}:
+      LL{False{}, hi, lo}
+    case ByNeg{hi, lo}:
+      LL{True{}, hi, lo}
+
+def by.of(neg: Bool, hi: Nat, lo: Nat) -> By:
+  match neg:
+    case True{}:
+      ByNeg{hi, lo}
+    case False{}:
+      ByPos{hi, lo}
+
+# INCRBY's increment, read before the key is looked at
+def parse_incrby(k: String, by: LL) -> Cmd:
+  match by:
+    case LL{neg, hi, lo}:
+      IncrBy{k, by.of(neg, hi, lo)}
+    case LLBad{}:
+      Bad{e_int()}
+
+# DECRBY's increment is by negated (0 stays ByPos{0, 0}, so that a key
+# not there gets "0"): LLONG_MIN has no negation, and Redis refuses it
+# before it looks at the key
+def parse_decrby(k: String, by: LL) -> Cmd:
+  match by:
+    case LL{+neg, +hi, +lo}:
+      +zero = Bool.and(Nat.is_eq(hi, 0n), Nat.is_eq(lo, 0n))
+      +min = Bool.and(neg, Bool.and(Nat.is_eq(hi, dec.llmax()), Nat.is_eq(lo, 854775808n)))
+      Bool.pick(Cmd, min, Bad{RError{"ERR decrement would overflow"}}, IncrBy{k, by.of(Bool.not(Bool.or(neg, zero)), hi, lo)})
+    case LLBad{}:
+      Bad{e_int()}
+
 # Times
 # -----
 # A time a command names is a long long, read as Redis's string2ll reads
@@ -2180,9 +2315,9 @@ def scan.parse(+args: List<&2, String>) -> Cmd:
 # times the append-only file holds, as PXAT and PEXPIREAT give them). A
 # short one reads digit by digit as a Nat (num14), as the file's lengths
 # do, and PROOF.bend shows that what Nat.show writes reads back so
-# (num14_show); any other goes through Dec, which keeps its magnitude as
-# hi * 10^9 + lo, so that Redis's checks of overflow near 2^63 come out
-# exactly. A time in s counts as 1000 times as many ms. A time from 1970
+# (num14_show); any other as a long long (ll.read), whose magnitude is
+# kept as hi * 10^9 + lo, so that Redis's checks of overflow near 2^63
+# come out exactly. A time in s counts as 1000 times as many ms. A time from 1970
 # at or past 10^14 ms (the year 5138) is far (AtFar): a key gets no time
 # for it, as it would never come (a Nat holds 2^48 - 1 at most). No
 # number here is built from 10^13 or 10^14: digits are counted instead,
@@ -2238,12 +2373,6 @@ def num14(s: String, acc: Nat, +n: Nat, lead: Bool, c: NCh) -> Maybe<&2, Nat>:
     case _ _:
       None{}
 
-# a long long as Redis's string2ll reads one, past what num14 reads: its
-# sign and its magnitude (hi * 10^9 + lo), or none
-type LL is Data:
-  LL{neg: Bool, hi: Nat, lo: Nat}
-  LLBad{}
-
 def pow10(k: Nat) -> Nat:
   match k:
     case 0n:
@@ -2260,16 +2389,16 @@ def ll.mk(+neg: Bool, +sig: Nat, +hi: Nat, +lo: Nat) -> LL:
   Bool.pick(LL, Nat.is_le(sig, 10n), LL{neg, Nat.div(hi, 1000000000n), Nat.mod(hi, 1000000000n)},
     LL{neg, Nat.div(hi, p), Nat.add(Nat.mul(Nat.mod(hi, p), pow10(j)), lo)})
 
+# the long long a Dec spells, as string2ll reads one: the reader of a
+# length line of the protocol that the fast one does not take (resp.bend,
+# len.read). With ll.at there, the parser compiled otherwise, and SET
+# took 62 instructions more a request.
 def ll.of(+d: Dec, +neg: Bool) -> LL:
   match d:
     case Dec{+ok, +n, +zero, +sig, +hi, +lo}:
       +canon = Bool.or(Bool.not(zero), Bool.and(Nat.is_eq(n, 1n), Bool.not(neg)))
       +fits = dec.le(sig, hi, lo, 19n, dec.llmax(), Bool.pick(Nat, neg, 854775808n, 854775807n))
       Bool.pick(LL, Bool.and(Bool.and(Bool.and(ok, Nat.is_lt(0n, n)), canon), fits), ll.mk(neg, sig, hi, lo), LLBad{})
-
-def ll.read(+s: String) -> LL:
-  +neg = U32.is_eq(String.code_at(s, 0n), 45)
-  ll.of(dec.of(s, Bool.pick(Nat, neg, 1n, 0n), String.length(s)), neg)
 
 # CLIENT PAUSE's timeout, read as a long long after its mode, as
 # getTimeoutFromObjectOrReply reads one in milliseconds
@@ -2315,10 +2444,6 @@ def client.op(+kind: Nat, args: List<&2, String>) -> ClOp:
       pause.of(args)
     case _:
       CoUnpause{}
-
-# whether a magnitude hi * 10^9 + lo is at most hb * 10^9 + lb
-def ll.le(+hi: Nat, +lo: Nat, +hb: Nat, +lb: Nat) -> Bool:
-  Bool.or(Nat.is_lt(hi, hb), Bool.and(Nat.is_eq(hi, hb), Nat.is_le(lo, lb)))
 
 # a time in s as ms: its magnitude times 1000, at most LLONG_MAX / 1000
 # (9223372036854775) before
@@ -2563,14 +2688,6 @@ def w64.sext(a: W64, +bits: Nat) -> W64:
 # a word's decimal digits, unsigned: its value divided by 10^9 by long
 # division over its four 16-bit limbs (no Nat past 10^9 * 2^16 is made),
 # the quotient (below 2^35) and the remainder put together
-def w64.digits(+q: Nat, +r: Nat) -> String:
-  match q:
-    case 0n:
-      Nat.show(r)
-    case 1n+p:
-      +d = Nat.show(r)
-      Nat.show(q) ++ String.repeat("0", Nat.sub(9n, String.length(d))) ++ d
-
 def w64.ushow(+a: W64) -> String:
   match a:
     case W64{+h, +l}:
@@ -2578,7 +2695,7 @@ def w64.ushow(+a: W64) -> String:
       +ln = U32.to_nat(l)
       +c1 = Nat.add(Nat.mul(Nat.mod(hn, 1000000000n), 65536n), Nat.div(ln, 65536n))
       +c0 = Nat.add(Nat.mul(Nat.mod(c1, 1000000000n), 65536n), Nat.mod(ln, 65536n))
-      w64.digits(Nat.add(Nat.mul(Nat.add(Nat.mul(Nat.div(hn, 1000000000n), 65536n), Nat.div(c1, 1000000000n)), 65536n), Nat.div(c0, 1000000000n)), Nat.mod(c0, 1000000000n))
+      ll.digits(Nat.add(Nat.mul(Nat.add(Nat.mul(Nat.div(hn, 1000000000n), 65536n), Nat.div(c1, 1000000000n)), 65536n), Nat.div(c0, 1000000000n)), Nat.mod(c0, 1000000000n))
 
 # a word as a long long's decimal text
 def w64.show.of(neg: Bool, +a: W64) -> String:
@@ -3302,11 +3419,11 @@ def parse_hset(args: List<&2, String>, mset: Bool, name: String) -> Cmd:
     case _:
       e_arity(name)
 
-def parse_hincrby(+k: String, +f: String, by: Maybe<&2, Int>) -> Cmd:
+def parse_hincrby(+k: String, +f: String, by: LL) -> Cmd:
   match by:
-    case Some{n}:
-      Upd{k, UHash{HWIncr{f, n}}}
-    case None{}:
+    case LL{neg, hi, lo}:
+      Upd{k, UHash{HWIncr{f, by.of(neg, hi, lo)}}}
+    case LLBad{}:
       Bad{e_int()}
 
 # HINCRBYFLOAT's increment, read as a long double before the key is
@@ -6400,25 +6517,25 @@ def parse_id(id: Nat, name: String, args: List<&2, String>) -> Cmd:
     case 10n:  # INCR
       match args:
         case Con{k, Nil{}}:
-          IncrBy{k, IPos{1n}}
+          IncrBy{k, ByPos{0n, 1n}}
         case _:
           e_arity("incr")
     case 11n:  # DECR
       match args:
         case Con{k, Nil{}}:
-          IncrBy{k, INeg{0n}}
+          IncrBy{k, ByNeg{0n, 1n}}
         case _:
           e_arity("decr")
     case 12n:  # INCRBY
       match args:
         case Con{k, Con{n, Nil{}}}:
-          parse_incrby(k, int_read(n))
+          parse_incrby(k, ll.read(n))
         case _:
           e_arity("incrby")
     case 13n:  # DECRBY
       match args:
         case Con{k, Con{n, Nil{}}}:
-          parse_decrby(k, int_read(n))
+          parse_decrby(k, ll.read(n))
         case _:
           e_arity("decrby")
     case 14n:  # APPEND
@@ -6695,7 +6812,7 @@ def parse_id(id: Nat, name: String, args: List<&2, String>) -> Cmd:
     case 63n:  # HINCRBY
       match args:
         case Con{k, Con{f, Con{n, Nil{}}}}:
-          parse_hincrby(k, f, int_read(n))
+          parse_hincrby(k, f, ll.read(n))
         case _:
           e_arity("hincrby")
     case 64n:  # HSCAN
@@ -14199,10 +14316,10 @@ def mset_pairs(ps: List<&2, KVPair>, db: Db) -> Db:
     case Con{KP{k, v}, rest}:
       mset_pairs(rest, db.set(db, k, v))
 
-# INCRBY: the stored value must read as an integer, and the sum must fit.
-# A key there at now keeps its time (keep); a new one, or one whose time
-# has passed, gets none: m and y are the counts once the sum is stored, n
-# and x before.
+# INCRBY: the stored value must read as a long long, and the sum must be
+# one (s: none when it is not). A key there at now keeps its time (keep);
+# a new one, or one whose time has passed, gets none: m and y are the
+# counts once the sum is stored, n and x before.
 def incr.put(keep: Bool, t: KV.Trie<KV.Val>, +k: String, v: String, +h: U32) -> KV.Trie<KV.Val>:
   match keep:
     case True{}:
@@ -14210,39 +14327,39 @@ def incr.put(keep: Bool, t: KV.Trie<KV.Val>, +k: String, v: String, +h: U32) -> 
     case False{}:
       KV.set.at(KV.Val, t, k, KV.VStr{v}, h)
 
-def incr.fit(t: KV.Trie<KV.Val>, +k: String, +h: U32, +i: Int, ok: Bool, keep: Bool, m: Nat, n: Nat, y: Nat, x: Nat, now: Nat, rr: Maybe<&2, Db>) -> Reply & Db:
-  match ok:
-    case True{}:
-      (RInt{i}, Db{incr.put(keep, t, k, int_show(i), h), m, y, now, rr})
-    case False{}:
+def incr.fit(t: KV.Trie<KV.Val>, +k: String, +h: U32, s: LL, keep: Bool, m: Nat, n: Nat, y: Nat, x: Nat, now: Nat, rr: Maybe<&2, Db>) -> Reply & Db:
+  match s:
+    case LL{+neg, +hi, +lo}:
+      +v = ll.show(neg, hi, lo)
+      (RIntS{v}, Db{incr.put(keep, t, k, v, h), m, y, now, rr})
+    case LLBad{}:
       (RError{"ERR increment or decrement would overflow"}, Db{t, n, x, now, rr})
 
-# the integer a key there holds, or none
-def incr.num(t: KV.Trie<KV.Val>, +k: String, +h: U32, by: Int, +n: Nat, +x: Nat, now: Nat, rr: Maybe<&2, Db>, cur: Maybe<&2, Int>) -> Reply & Db:
+# the long long a key there holds, or none
+def incr.num(t: KV.Trie<KV.Val>, +k: String, +h: U32, by: By, +n: Nat, +x: Nat, now: Nat, rr: Maybe<&2, Db>, cur: LL) -> Reply & Db:
   match cur:
-    case Some{i}:
-      +s = int_add(i, by)
-      incr.fit(t, k, h, s, int_fits(s), True{}, n, n, x, x, now, rr)
-    case None{}:
+    case LL{+neg, +hi, +lo}:
+      incr.fit(t, k, h, ll.add(neg, hi, lo, by), True{}, n, n, x, x, now, rr)
+    case LLBad{}:
       (e_int(), Db{t, n, x, now, rr})
 
 # a key that is not there reads as 0: the sum is by; c is its code
-def incr.new(t: KV.Trie<KV.Val>, +k: String, +h: U32, +by: Int, +n: Nat, +x: Nat, now: Nat, rr: Maybe<&2, Db>, +c: Nat) -> Reply & Db:
-  incr.fit(t, k, h, by, int_fits(by), False{}, cnt.n(c, n), n, cnt.x(c, 0n, x), x, now, rr)
+def incr.new(t: KV.Trie<KV.Val>, +k: String, +h: U32, by: By, +n: Nat, +x: Nat, now: Nat, rr: Maybe<&2, Db>, +c: Nat) -> Reply & Db:
+  incr.fit(t, k, h, by.ll(by), False{}, cnt.n(c, n), n, cnt.x(c, 0n, x), x, now, rr)
 
 # the value of INCRBY's key there at now (old), or none; a value of
 # another kind is WRONGTYPE
-def incr.got(t: KV.Trie<KV.Val>, +k: String, +h: U32, +by: Int, +n: Nat, +x: Nat, now: Nat, rr: Maybe<&2, Db>, old: KV.Got) -> Reply & Db:
+def incr.got(t: KV.Trie<KV.Val>, +k: String, +h: U32, by: By, +n: Nat, +x: Nat, now: Nat, rr: Maybe<&2, Db>, old: KV.Got) -> Reply & Db:
   match old:
     case KV.GStr{s}:
-      incr.num(t, k, h, by, n, x, now, rr, int_read(s))
+      incr.num(t, k, h, by, n, x, now, rr, ll.read(s))
     case KV.GColl{}:
       (e_wrongtype(), Db{t, n, x, now, rr})
     case KV.GNone{}:
       +u = t
       incr.new(u, k, h, by, n, x, now, rr, KV.code.at(KV.Val, u, k, h))
 
-def db.incr(db: Db, +k: String, by: Int) -> Reply & Db:
+def db.incr(db: Db, +k: String, by: By) -> Reply & Db:
   match db:
     case Db{t, n, x, +now, rr}:
       +u = t
@@ -15751,9 +15868,9 @@ def append.of(+v: String, m: Maybe<&2, KV.Item<String>>) -> Out:
       +s = v
       Out{r_int(String.length(s)), CPut{s, 0n}}
 
-# INCRBY as an update (as db.incr runs it): the integer the key holds
+# INCRBY as an update (as db.incr runs it): the long long the key holds
 # plus by, keeping the key's time (keep), or by for a key that is not
-# there; the value must read as an integer, and the sum must fit
+# there; the value must read as a long long, and the sum must be one
 def uincr.ch(keep: Bool, v: String) -> Change:
   match keep:
     case True{}:
@@ -15761,27 +15878,27 @@ def uincr.ch(keep: Bool, v: String) -> Change:
     case False{}:
       CPut{v, 0n}
 
-def uincr.fit(+i: Int, ok: Bool, keep: Bool) -> Out:
-  match ok:
-    case True{}:
-      Out{RInt{i}, uincr.ch(keep, int_show(i))}
-    case False{}:
+def uincr.fit(s: LL, keep: Bool) -> Out:
+  match s:
+    case LL{+neg, +hi, +lo}:
+      +v = ll.show(neg, hi, lo)
+      Out{RIntS{v}, uincr.ch(keep, v)}
+    case LLBad{}:
       Out{RError{"ERR increment or decrement would overflow"}, CKeep{}}
 
-def uincr.num(by: Int, cur: Maybe<&2, Int>) -> Out:
+def uincr.num(by: By, cur: LL) -> Out:
   match cur:
-    case Some{i}:
-      +s = int_add(i, by)
-      uincr.fit(s, int_fits(s), True{})
-    case None{}:
+    case LL{+neg, +hi, +lo}:
+      uincr.fit(ll.add(neg, hi, lo, by), True{})
+    case LLBad{}:
       Out{e_int(), CKeep{}}
 
-def uincr.of(+by: Int, m: Maybe<&2, KV.Item<String>>) -> Out:
+def uincr.of(by: By, m: Maybe<&2, KV.Item<String>>) -> Out:
   match m:
     case Some{KV.Item{+w, e}}:
-      uincr.num(by, int_read(w))
+      uincr.num(by, ll.read(w))
     case None{}:
-      uincr.fit(by, int_fits(by), False{})
+      uincr.fit(by.ll(by), False{})
 
 # INCRBYFLOAT, as Redis 7.0.15 runs it on x86-64 (float.bend): the value
 # and the increment read as long doubles (string2ld), added in x87's
@@ -16345,30 +16462,29 @@ def hdel.out(r: HDel, +fs: List<&2, String>) -> Out:
     case HDel{+h, +gone}:
       hdel.of(Nat.is_eq(gone, 0n), Nat.is_eq(KV.hash.len(h), 0n), fs, h, gone)
 
-# HINCRBY: the field's integer (0 when it is not there) plus by, which
-# must fit (14 digits, as INCRBY's)
-def hincr.fit(ok: Bool, +s: Int, +fresh: Bool, +f: String, h: KV.Hash) -> Out:
-  match ok:
-    case True{}:
-      +v = int_show(s)
-      Out{RInt{s}, hchange(fresh, [KV.HP{f, v}], KV.hash.put(h, f, v))}
-    case False{}:
+# HINCRBY: the field's long long (0 when it is not there) plus by, which
+# must make one, as INCRBY's
+def hincr.fit(s: LL, +fresh: Bool, +f: String, h: KV.Hash) -> Out:
+  match s:
+    case LL{+neg, +hi, +lo}:
+      +v = ll.show(neg, hi, lo)
+      Out{RIntS{v}, hchange(fresh, [KV.HP{f, v}], KV.hash.put(h, f, v))}
+    case LLBad{}:
       Out{RError{"ERR increment or decrement would overflow"}, CKeep{}}
 
-def hincr.num(m: Maybe<&2, Int>, +fresh: Bool, +f: String, +by: Int, h: KV.Hash) -> Out:
+def hincr.num(m: LL, +fresh: Bool, +f: String, by: By, h: KV.Hash) -> Out:
   match m:
-    case Some{i}:
-      +s = int_add(i, by)
-      hincr.fit(int_fits(s), s, fresh, f, h)
-    case None{}:
+    case LL{+neg, +hi, +lo}:
+      hincr.fit(ll.add(neg, hi, lo, by), fresh, f, h)
+    case LLBad{}:
       Out{RError{"ERR hash value is not an integer"}, CKeep{}}
 
-def hincr.of(cur: Maybe<&2, String>, +fresh: Bool, +f: String, +by: Int, h: KV.Hash) -> Out:
+def hincr.of(cur: Maybe<&2, String>, +fresh: Bool, +f: String, by: By, h: KV.Hash) -> Out:
   match cur:
     case Some{s}:
-      hincr.num(int_read(s), fresh, f, by, h)
+      hincr.num(ll.read(s), fresh, f, by, h)
     case None{}:
-      hincr.fit(int_fits(by), by, fresh, f, h)
+      hincr.fit(by.ll(by), fresh, f, h)
 
 # HINCRBYFLOAT: the field's value read as a long double (0 when the field
 # is not there) plus by, the sum written as INCRBYFLOAT writes it; the
