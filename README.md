@@ -19,8 +19,8 @@ throughput of Redis 7.0.15 on the same machine, with half its memory for small v
 > administrative commands, an append-only file and its rewrite, maxmemory and its
 > eviction, RESP3). The goal now is a
 > drop-in replacement for a single Redis node, measured by Redis's own test suite: of the
-> 1,677 tests Redis 7.0.15 passes against a server it did not start, BendKV passes 1,273,
-> and 1,270 of the 1,333 in what it implements
+> 1,677 tests Redis 7.0.15 passes against a server it did not start, BendKV passes 1,274,
+> and 1,271 of the 1,333 in what it implements
 > ([docs/COMPATIBILITY.md](docs/COMPATIBILITY.md)). Do not use it for data you cannot
 > lose.
 
@@ -100,7 +100,8 @@ translation stays in the trusted base.
   since BendKV keeps no encodings, ENCODING as Redis encodes a value set whole (where Redis
   answers `raw` for one made by APPEND, SETRANGE or SETBIT), REFCOUNT by Redis's shared
   integers under the current eviction policy; IDLETIME and FREQ from when the key was last
-  used (Memory, below), each refused under the policy Redis refuses it under.
+  used (Memory, below), each refused under the policy Redis refuses it under. INCR and
+  its kin add Redis's long longs, and refuse a sum past one as Redis does.
 - **Floats:** INCRBYFLOAT and HINCRBYFLOAT, as Redis 7.0.15 computes them on x86-64: the
   value and the increment read as glibc's strtold reads them, added as an x87 long double
   adds them, and the sum written as `"%.17Lf"` writes it, the zeros that end its fraction
@@ -494,7 +495,7 @@ translation stays in the trusted base.
 Not yet: streams, Lua
 scripts, CLIENT TRACKING, timing of commands
 (usec in INFO commandstats, latencystats), CONFIG REWRITE (it answers as Redis does without a configuration file),
-RDB files. Integers, and times in ms, are limited to 14 digits.
+RDB files. Times in ms are limited to 14 digits.
 
 ## Performance
 

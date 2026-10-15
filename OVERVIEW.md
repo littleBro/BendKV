@@ -143,7 +143,7 @@ where the work goes next), [tools/README.md](tools/README.md) (how it was measur
 | Candidate | Size of the original | What it needs from the platform | Blockers in Bend2 today | Verdict |
 |---|---|---|---|---|
 | **SQLite** | ~220k lines of C/H in `src/` (B-tree 11.7k, pager 7.9k, WAL 4.8k, VDBE 9.6k) | 64-bit INTEGER and REAL, files > 4 GiB, writing pages at an offset, `fsync`, locks, SQL parsing (mutual recursion) | No I64/F64 (F32 is axiomatic: nothing can be proved about it). Files: only open/read/read_at/size/write/close, U32 offsets, no `fsync`/`rename`/lock. No mutual recursion. Strings are lists | **No.** A sensible step: a verified core of tables (an in-memory B+-tree + relational algebra) |
-| **Redis** | ~212k lines of C/H, 240 commands in 7.0.15 (the string ones, `t_string.c`, ~1.7k lines) | A hash table, binary-safe strings, int64, RESP, an event loop, AOF/RDB, TTL | int64 → integers had to be limited to 14 digits. Persistence in stock Bend is blocked by the lack of `fsync` (patch 12 adds it; an AOF with proved recovery is done). TTL needs a model of time | **Yes, in parts.** The semantics of commands is a pure function `(command, state) → (reply, state)`, ideal for proofs. The PoC is done |
+| **Redis** | ~212k lines of C/H, 240 commands in 7.0.15 (the string ones, `t_string.c`, ~1.7k lines) | A hash table, binary-safe strings, int64, RESP, an event loop, AOF/RDB, TTL | int64 → integers were limited to 14 digits at first; a long long is now kept as two parts below 2^48 (FINDINGS.md, section 3zzv). Persistence in stock Bend is blocked by the lack of `fsync` (patch 12 adds it; an AOF with proved recovery is done). TTL needs a model of time | **Yes, in parts.** The semantics of commands is a pure function `(command, state) → (reply, state)`, ideal for proofs. The PoC is done |
 | **A memcached-like cache** | Smaller than Redis | GET/SET/DELETE/INCR, LRU eviction | The same as Redis's, plus proofs of the eviction policy | **Yes.** Simpler still than Redis |
 | **An LMDB/LevelDB-like embedded on-disk KV** | ~10–30k lines | An on-disk B+-tree/LSM, atomic commits, recovery after a crash | No `fsync`/`rename`/writes at an offset. Needs a crash model (like Crash Hoare Logic in FSCQ) | **Not now.** Needs effects of its own in C and a disk model of its own |
 
@@ -851,11 +851,11 @@ The translation the kernel reads can be dumped with
   skipped. The reference is the same run on redis-server 7.0.15 with default settings,
   each unit on a freshly started server instance: in this mode 1,757 tests run, and
   Redis passes 1,677 (almost all the others need DEBUG, off by default in 7.0). BendKV
-  passes 1,273 of them (75.9%), and in the units of what it has (the protocol, the
+  passes 1,274 of them (76.0%), and in the units of what it has (the protocol, the
   connection and clients and their pause, the keyspace and databases, strings with
   ranges, bits and fields, counters, hashes, lists, sets, sorted sets, SORT, HyperLogLogs,
   GEO, DUMP and RESTORE, times to live, lazy freeing, transactions, Pub/Sub and keyspace
-  notifications, introspection), 1,270 of 1,333 (95%): `unit/dump` all 11,
+  notifications, introspection), 1,271 of 1,333 (95%): `unit/dump` all 11,
   `unit/geo` all 59, `unit/introspection-2` 37 of 43 (the others need Lua, streams, MIGRATE
   and COMMAND's entries of commands BendKV does not have),
   `unit/introspection` 25 of 28 (the two others need Lua, and the third MIGRATE),
@@ -864,9 +864,9 @@ The translation the kernel reads can be dumped with
   `unit/pubsub` 29 of 30 (the other needs streams), `unit/expire` 57 of 59 (the others
   need replication), `unit/type/string` 74 of 77 (two others need replication, the third
   runs only with jemalloc), `unit/keyspace` 49 of 52 (the others need streams, and MOVE
-  counts keys left by earlier tests), `unit/type/hash` 69 of 72 (the others need
-  integers longer than 14 digits, and a hash Redis keeps in a listpack past the
-  parameters' defaults), `unit/type/incr` all 24, `unit/type/list-3` all 11,
+  counts keys left by earlier tests), `unit/type/hash` 70 of 72 (the others need a hash
+  Redis keeps in a listpack past the parameters' defaults), `unit/type/incr` all 24,
+  `unit/type/list-3` all 11,
   `unit/type/list-2` both, `unit/type/list` 216 of 218 (the others need replication), `unit/sort` 51 of 52 (the other calls SORT from a Lua script),
   `unit/hyperloglog` all 20, `unit/pause` 9 of 14 (the others run Lua scripts),
   `unit/type/set` all 94, `unit/type/zset` 287 of 289 (the other two need replication),
@@ -881,8 +881,8 @@ The translation the kernel reads can be dumped with
   exist, on COMMAND GETKEYS for commands that do not exist, on keys and clients left by
   tests stopped earlier, on Lua, on the number of changes since the last save, which
   BendKV does not count, on the size of a client's query buffer, which it does not have
-  (two tests of `unit/querybuf`), on HINCRBY past 14 digits, and on the order of a hash
-  Redis keeps in a listpack past the parameters' defaults (39). Times to live and
+  (two tests of `unit/querybuf`), and on the order of a hash Redis keeps in a listpack
+  past the parameters' defaults (38). Times to live and
   the sweep of expired keys added 78 passed tests: before them there were 135, and 30
   tests failed on SET's options; ranges and bits added 49 more, TOUCH, TIME and OBJECT
   4, MSETNX, RENAME and RENAMENX 13, COPY 7, BITOP and LCS 19, BITFIELD 16, hashes 64,
@@ -1176,10 +1176,10 @@ The translation the kernel reads can be dumped with
 - **Numbers at the edges** (`tests/numbers_test.py`): each command that takes a number
   gets numbers above long long, LLONG_MAX and LLONG_MIN, 2^48, 2^32, 2^31, 2^58 + 1 (an
   offset `#k` of an i64 field that, multiplied by 64, wraps around to 64) and the forms
-  Redis refuses (`+5`, `1e5`, `0x10`, `" 5"`, `-0`, `00`, `3.5`) — 1,092 commands,
-  replies as in Redis (except the differences described: INCRBY longer than 14 digits,
-  SCAN with a foreign cursor). The test found that `SELECT 9223372036854775807` stopped
-  the server (section 28 of PERFORMANCE.md).
+  Redis refuses (`+5`, `1e5`, `0x10`, `" 5"`, `-0`, `00`, `3.5`), INCRBY, DECRBY and
+  HINCRBY on values at LLONG_MAX and LLONG_MIN too — 2,541 commands, replies as in Redis
+  (except SCAN with a foreign cursor). The test found that `SELECT 9223372036854775807`
+  stopped the server (section 28 of PERFORMANCE.md).
 - **Floating-point numbers** (`tests/float_test.py`): the library `src/float.bend`
   against glibc — random texts of numbers (decimal and hex of up to 800 digits, exact
   midpoints between adjacent doubles and long doubles, the edges of the ranges, forms
@@ -1334,9 +1334,10 @@ The proofs cover `map.bend`, `redis.bend`, `batch.bend`, `aof.bend`, `session.be
    honestly stand outside the guarantees.
 3. **clang, libc, the OS.**
 4. **Resource limits** are outside Bend's logic. `Nat` overflow is prevented by
-   construction: integers of ≤14 digits, lengths of ≤10 digits, the parser's fuel
-   2^32−1 (a request is no shorter than 4 bytes). But this is an argument, not a proved
-   law. Running out of heap is an abort.
+   construction: a long long kept as hi·10^9 + lo (hi below 10^10), times and other
+   integers of ≤14 digits, lengths of ≤10 digits, the parser's fuel 2^32−1 (a request is
+   no shorter than 4 bytes). But this is an argument, not a proved law. Running out of
+   heap is an abort.
 
 ## Limits of Bend2 found in practice
 
@@ -1454,8 +1455,8 @@ make clients BEND="$B" # redis-py's and go-redis's test suites on Redis and on B
    FLUSHDB, FLUSHALL, keyspace lines per database — with laws and recovery of all the
    databases from the append-only file), the ranges and bits of strings (GETRANGE,
    SETRANGE, GETBIT, SETBIT, BITCOUNT, BITPOS — with a law of SETRANGE and recovery from
-   the append-only file). Redis's suite in external mode: BendKV passes 1,273 of the
-   1,677 tests Redis itself passes, and 1,270 of 1,333 in the units of what it has
+   the append-only file). Redis's suite in external mode: BendKV passes 1,274 of the
+   1,677 tests Redis itself passes, and 1,271 of 1,333 in the units of what it has
    ([docs/COMPATIBILITY.md](docs/COMPATIBILITY.md)). Start-up as for redis-server (the
    command line and the configuration file). The database as a record with a count of
    keys (DBSIZE in O(1)).
