@@ -490,10 +490,12 @@ They apply in order, each on top of the one before:
    `TCP.listen` takes an IPv6 address (a host with a `:`, read by `inet_pton`), its
    socket IPv6 alone (`IPV6_V6ONLY`, as Redis's `anetV6Only` sets it, so that `0.0.0.0`
    and `::` can both be bound); it took IPv4 alone. `TCP.listen_unix(path, perm)` is a
-   listener on a unix socket, made as Redis's `anetUnixServer` and `initServer` make
-   one: the path removed first, bound, given `perm`'s mode when `perm` is not 0,
-   listening and non-blocking; a path with a NUL, empty, or longer than `sun_path`
-   fails (EINVAL). `TCP.accept` takes its connections, and `TCP.name` names either end
+   listener on a unix socket, made as Redis's `anetUnixServer` makes one: bound, given
+   `perm`'s mode when `perm` is not 0, listening and non-blocking; a path that is there
+   already fails as `bind` fails (EADDRINUSE), so the program removes a socket an
+   earlier run left with `File.unlink` (patch 28), as Redis's `initServer` removes it
+   before it listens, and the effect deletes nothing; a path with a NUL, empty, or
+   longer than `sun_path` fails (EINVAL). `TCP.accept` takes its connections, and `TCP.name` names either end
    of a unix socket `/unixsocket:0`, as Redis's `anetFdToString` does (it was `?:0`).
    `IO.notify(msg)` sends `msg` as one datagram to the unix socket the environment's
    `NOTIFY_SOCKET` names (a path, or an abstract name after `@`), as systemd's
@@ -502,10 +504,14 @@ They apply in order, each on top of the one before:
    `bend2/base.bend` (+17), `bend2/comp.ts` (+1), `bend2/effs/` (`tcp_listen.c` and
    `.js` changed, `tcp_name.c` and `.js` changed, `tcp_listen_unix.c` and `.js` and
    `io_notify.c` and `.js` new), and the tests `tests/io/tcp_listen_unix.bend` (a unix
-   listener twice on one path, its refusals, a malformed IPv6 address refused, `::1`
-   listened on or let go where the host has no IPv6) and `tests/io/io_notify.bend`
-   (`False` with no `NOTIFY_SOCKET`; its datagram, to a path and to an abstract name,
-   was read by a socket of the test's own on both lanes). Bend's 24 tests of TCP and
+   listener on a path of the process's own, a second one there refused until the path
+   is removed, its refusals, a malformed IPv6 address refused, `::1` listened on, on a
+   port of the system's choice, or let go where the host has no IPv6; the path removed
+   at the end), `tests/io/io_notify.bend` (`False` with no `NOTIFY_SOCKET`, both
+   lanes) and `tests/io/io_notify_peer.bend` (the datagram read whole by a socket of
+   the test's own, at a path and at an abstract name, then `False` once the variable is
+   unset; C alone, through an effect of the test's own, `io_notify_peer.c`; the JS
+   lane's datagram was read the same way once, by hand). Bend's 24 tests of TCP and
    UDP pass on C and on JS with it, the new one among them. A program that calls none
    of the new effects compiles to the C it compiled to before, but for the effects'
    code it links. BendKV listens on `bind`'s IPv6 addresses and on `unixsocket`, and
