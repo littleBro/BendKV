@@ -128,7 +128,7 @@ represented data:
   reader an owner of the whole value: O(depth) reference-count operations per read.
 - **A deep trie.** The first map was a binary trie of 20 levels: 20 dependent loads.
 
-## 3. Thirty-three patches to the Bend compiler
+## 3. Thirty-four patches to the Bend compiler
 
 All live in [`bend-patches/`](../bend-patches/) (against `bendlang/bend` at `1cce499`,
 Bend 2.0.35). The first eight switch on by themselves for programs without GPU calls;
@@ -152,9 +152,10 @@ killing it and channel marks (section 3zs); the twenty-eighth `File.rename` and
 words outside the heap (section 3zw); the thirty-first has a walker that reads a
 tree borrow it from a caller that owns it, in every program (section 3zza); the
 thirty-second keeps the string of a value that is a string or else something else as
-the string itself, with no node, in every program without GPU calls (section 3zzg); and
+the string itself, with no node, in every program without GPU calls (section 3zzg);
 the thirty-third adds C's doubles, `F64`, run as C runs them, strtod and libm with them
-(section 3zzm).
+(section 3zzm); and the thirty-fourth lets AddressSanitizer check the heap, in a build
+with ASan only (section 3zzp).
 The sections before 3l
 number the patches as they were then: patch 16 was effect pairs, taken out in 3l with
 `TCP.post_list` of patch 11, and their patches 17–20 are today's 16–19. None changes the
@@ -5131,6 +5132,74 @@ past 5%.
   - WATCH with another client's pipeline that writes other keys only (EXEC runs), or the
     watched one among them (EXEC answers a null array);
   - the same with GETs, SETs and INCRs alone, untouched and touched by an INCR.
+
+## 3zzp. The heap under AddressSanitizer, the writer under ThreadSanitizer
+
+**What was missing.** Eight of the compiler's patches change reference counts,
+ownership, borrowing and the reuse of nodes in place (1, 3, 5, 7, 8, 26, 31 and 32), and
+one bug of that kind shipped: after the fifth, the general way kept a node across a call
+and freed the server's statistics while a shared cell still pointed at them, and under
+CLIENT REPLY OFF the server read them from freed memory at the next tick and died
+(`SIGSEGV`, section 3zp; the twenty-sixth patch fixed it). The proofs cannot see such a
+bug, and nothing else looked for one: CI ran no memory checker, and valgrind served
+callgrind only. AddressSanitizer alone would not have seen it either. To ASan the
+runtime's heap is one mapping, all of it addressable, and a free chain is LIFO: a node
+read after its free is no error, and the next allocation of its class takes the node
+over at once.
+
+**What there is.** The thirty-fourth patch (`heap-asan.patch`) gives a build with ASan a
+heap it can check: the allocator poisons a free node's words, its chain's link among
+them, and lifts the poison off a node it hands out; a free first puts the node in a
+quarantine of its thread and class, a ring that lets it go to its chain once 2^22 more
+words of its class have been freed. A stale pointer meanwhile finds poison, and ASan
+reports the read or the write with its stack. Built without ASan, BendKV's C preprocesses
+to the same bytes with the patch and without, and the server is the same binary.
+`tools/sanitize.sh`, CI's `sanitize` job, builds the generated C at `-O1` with ASan and
+UBSan, and with TSan, and runs under each, with replies posted and sent: a client that
+stops reading, clients that wait, transactions, Pub/Sub, the protocol's edge cases, the
+statistics per command, RESP3, the differential test (three seeds), the concurrency
+checks, a load from redis-benchmark (50 clients pipelined, then 100 not, under which the
+loop falls behind and posts to its writer), and connections that end. A report, a
+failed test or a server that dies fails it. ASan leaves out one check, a stack frame used
+after its function returns: the check moves the frames it instruments to a heap of its
+own, and LLVM 19 cannot realign such a frame under the runtime's `preserve_none` and
+`preserve_most` calling conventions (the build stops: "Stack realignment in presence of
+dynamic allocas is not supported with this calling convention"). UBSan runs every check
+of `-fsanitize=undefined`, and TSan suppresses nothing.
+
+**What it found on main.** Nothing: no report from ASan, UBSan or TSan, and every test
+passes under each. TSan watched the writer at work (4.3 s of its thread's time under a
+load of redis-benchmark like the job's) and holding the posts of a client that stops
+reading (`tests/writer_test.py`); outside the job, an append-only file synced at every
+write, and its rewrite, gave no report either. The writer's queue, its held posts and the
+loop's own sends pass between the threads through atomic operations, a mutex with its
+condition variable, and a pipe, all of which TSan follows, so nothing needed a
+suppression. The one read the runtime makes
+racily by design, `IO.heap`'s account of other threads' allocator rows, had nothing to
+race with: BendKV runs all its computations on one event loop.
+
+**Patch 26 reverted.** `spare-share.patch` reverse-applies cleanly on the thirty-three,
+and 59 write-backs leave BendKV's C and nothing else changes, in segments of the general
+way (`bg.cmd`, `bg.run`, `bg.serve`, `bg.subs`, `bg.exec`, `bg.go`, `bg.watch`,
+`bg.client`, `bg.put` and others), of SORT and of the RESP encoders. The plain server
+shows nothing: of the 29 test files run on it, the job's and most of `make test`'s first
+mode, all pass but MONITOR's, which fails now and then here on main's server too, under
+the load of other builds. The job fails it at `tests/resp3_test.py`: in its scenario of
+a RESP3 client subscribed to keyspace events that runs commands, ASan reports a
+use-after-poison in `ctr_take` (from `ctr_own`, from `bg.put`): a node read after its
+free, at the same address in every run of a build. The scenario that crashed then
+(CLIENT REPLY OFF, then PING, then a tick of the cron reading the statistics) passes
+clean without the patch on today's code, under the poisoned heap too; the job keeps it
+(`tests/stats_test.py`'s replies held back). On Bend's own test of the patch,
+`tests/rfc/spare_share.bend`, the plain build prints a wrong sum, 206 for 46; ASan alone
+prints the same in silence, and so does the poison without the quarantine, since the
+freed cells go to the next list at once; with the quarantine, ASan reports the read of a
+freed cell in `sum`.
+
+**What it costs.** Nothing in the normal build. The job's script took 19 minutes here,
+on 4 cores shared with other builds, the generated C already made (making it is a Bend
+compile of about 2.5 minutes more): the ASan build 7.4 minutes and its tests 3.2, the TSan
+build 4.3 and its tests 3.7. CI gives the job an hour.
 
 ## 3zzu. DUMP and RESTORE
 

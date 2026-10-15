@@ -37,6 +37,7 @@ and, for profiles, `valgrind`.
 | `scale_bench.sh` | throughput as a server gets more cores: each server on CPUs 1–3, `loadgen` on CPU 0, for several load shapes (pipeline depth, GET share), interleaved trials. `redis,3` runs Redis with 3 io-threads |
 | `iocount.c` | an `LD_PRELOAD` shim that counts a server's `recv` (and empty `EAGAIN` ones), `send`, `select`, `epoll_wait`, pipe reads and writes; `kill -USR1` resets, `kill -USR2` writes the counts |
 | `pgo_build.sh` | `make pgo`: builds the generated C with profile-guided optimization, trained by redis-benchmark with replies posted to the writer and sent from the loop |
+| `sanitize.sh` | CI's `sanitize` job: builds the generated C with AddressSanitizer and UndefinedBehaviorSanitizer (the Bend heap's free nodes poisoned and held in a quarantine, `bend-patches/heap-asan.patch`) and with ThreadSanitizer, and runs under each, with replies posted and sent, the tests of a client that stops reading, clients that wait, transactions, Pub/Sub, the protocol, the statistics per command, RESP3, the differential test, concurrency and connections that end, and redis-benchmark's load; any report, failed test or dead server fails it (needs clang 19's sanitizer runtimes, `libclang-rt-19-dev`; FINDINGS.md, section 3zzp) |
 
 `bench/run_bench.sh` (`make bench`) is the quick comparison with Redis on an empty
 database; `bench/bench_map.bend` times the map alone, in process, without the network.

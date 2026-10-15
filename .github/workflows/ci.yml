@@ -9,7 +9,8 @@
 # RESP2 and in RESP3, go-redis) run against Redis 7.0.15 and the server
 # built, in three more jobs (tools/client_suite.py): a test Redis passes
 # that BendKV fails, and that is not among the known failures of
-# tools/data/clients.json, fails the job.
+# tools/data/clients.json, fails the job. The server is also built with
+# the sanitizers, in one more job (tools/sanitize.sh): a report fails it.
 name: CI
 
 on:
@@ -183,5 +184,41 @@ jobs:
         with:
           name: clients-${{ matrix.client }}-resp${{ matrix.protocol }}
           path: build/clients
+          if-no-files-found: ignore
+          retention-days: 7
+
+  # the server's C built with AddressSanitizer and UndefinedBehaviorSanitizer
+  # (the Bend heap poisoned, bend-patches/heap-asan.patch), and with
+  # ThreadSanitizer, each serving the tests that stress its memory and its
+  # writer thread most (tools/sanitize.sh): a report fails the job
+  sanitize:
+    name: sanitize (ASan and UBSan, TSan)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup
+      # clang 19's sanitizer runtimes and llvm-symbolizer, which Ubuntu
+      # ships apart from clang-19, and Redis 7.0.15 for the tests that
+      # compare; the sanitizers' shadow memory needs mappings placed with
+      # at most 28 random bits (vm.mmap_rnd_bits), which a runner's kernel
+      # may set higher
+      - name: the sanitizers and Redis 7.0.15
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -yq libclang-rt-19-dev llvm-19 redis-server redis-tools
+          sudo systemctl stop redis-server || true
+          redis-server --version | grep -q 'v=7\.0\.15 '
+          sudo sysctl -w vm.mmap_rnd_bits=28
+      - name: tools/sanitize.sh
+        run: CC=clang-19 PORT=6380 REDIS_PORT=6390 sh tools/sanitize.sh
+      - name: the reports and logs of a failed run
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: sanitize-logs
+          path: |
+            build/sanitize
+            build/*.log
           if-no-files-found: ignore
           retention-days: 7
