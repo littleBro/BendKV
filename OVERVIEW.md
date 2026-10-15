@@ -1215,7 +1215,10 @@ The translation the kernel reads can be dumped with
   moves keys and swaps databases) plus 20 thousand keys, a restart from the file, a
   comparison of the whole keyspace of each of the 16 databases (matched: 20,237 keys);
   an entry cut short appended, a restart that cuts it off, and the same keyspace again.
-  `tests/aof_fail_test.py` breaks the disk under the log with the shim
+  `tests/crash_test.py` kills the server (SIGKILL) at random moments while clients
+  write, 20 rounds on one file, and each start must hold the databases after a prefix of
+  the commands sent, every acknowledged one among them (section 3zzq of
+  docs/FINDINGS.md). `tests/aof_fail_test.py` breaks the disk under the log with the shim
   `tests/fail_io.c` (`LD_PRELOAD`): a file that is there but does not read makes the
   server refuse to start, with the file untouched; a failed `fsync` with `everysec` and
   `always` stops it; a new file is made, its directory is synced, and only then does the

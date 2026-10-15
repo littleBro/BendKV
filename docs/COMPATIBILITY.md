@@ -316,7 +316,8 @@ BendKV starts as `redis-server` starts, with the same command line and configura
 file, so the next step is the suite's own mode with BendKV in place of
 `src/redis-server`. Until then BendKV's own tests cover part of that ground: the start
 (`tests/start_test.py`, against `redis-server`), restarts from the append-only file
-(`tests/aof_test.py`), and its rewrite (`tests/rewrite_test.py`: BGREWRITEAOF's replies
+(`tests/aof_test.py`, and after kills under load: `tests/crash_test.py`), and its
+rewrite (`tests/rewrite_test.py`: BGREWRITEAOF's replies
 and INFO's fields against Redis's, the rewritten file against Redis's base, writes during a
 rewrite, BendKV and Redis started from the new file; Redis's unit/aofrw is tagged
 `external:skip`, and most of it needs `DEBUG LOADAOF` and `CONFIG SET appendonly yes`).
