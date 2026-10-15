@@ -5914,6 +5914,165 @@ need Lua: one fills a set with a script, and the next resets the events that set
 expiry would have given. unit/slowlog passes 7 of its 9. The other two use ACL and
 MIGRATE.
 
+## 3zzzb. CLIENT TRACKING: client-side caching
+
+**What was left.** CLIENT TRACKING was an unknown subcommand. CLIENT CACHING, GETREDIR
+and TRACKINGINFO answered as Redis answers a client that does not track, and INFO's
+tracking counts were 0. The client-side caches of go-redis and redis-py stopped there:
+eleven of their tests (`tools/data/clients.json`).
+
+**What is kept** (`src/server.bend`: Tracking, Tracking in the actor, Tracking in the
+shell).
+
+- A client's tracking, in its record of the registry (`Cl`'s `tk`): the client its
+  invalidations go to, its mode (BCAST, OPTIN, OPTOUT, NOLOOP), CLIENT CACHING's flag,
+  whether its redirect was found gone, and its prefixes.
+- The tracking table, with the heeded keys (`Hd`'s `trk`): each key a tracking client
+  read, with the ids of the clients that read it, whatever their database (Redis's table
+  has no database either), and its counts of keys and ids.
+- The tracking clients, the clients that others redirect to, and the BCAST prefixes, each
+  prefix with the keys changed under it since the end of the last group and the client
+  that changed each last.
+
+**A read.** After a call that only reads (Redis's `readonly` flag), the call's keys go to
+the table when its client tracks and is not in BCAST mode: in OPTIN mode only after
+CLIENT CACHING yes, in OPTOUT mode unless after CLIENT CACHING no
+(trackingRememberKeys). The keys come from the call's arguments as sent, by the
+command's key specs (`ro.key`, which `tools/gen_commands.py` writes from Redis's command
+table: the arity, the key specs, and the way COMMAND GETKEYS reads them), as Redis's
+getKeysFromCommand finds them. The arguments are read from the batch's bytes once for
+the batch, when a call first needs its own (`av.if`). EXEC's calls read as any call does.
+CLIENT CACHING's flag is cleared after each command but a CLIENT command, while its
+client is in no MULTI, as Redis's resetClient clears it.
+
+**A write.** The keys a command changed come from its effects, as Touches finds them for
+WATCH (Redis's signalModifiedKey does both): the keys its writes name that were there
+before it or are after it, SMOVE's destination when it gained the member, MOVE's key,
+COPY's destination. For each key, in the order the command changed them:
+
+- under each BCAST prefix the key starts with, the key is kept with the client whose
+  command changed it;
+- each client that read the key is told, but one that no longer tracks, one in BCAST
+  mode, and one in NOLOOP mode for its own change; then the key leaves the table.
+
+FLUSHDB and FLUSHALL send every tracking client a null and empty the table, even an empty
+one (trackingInvalidateKeysOnFlush). SWAPDB invalidates nothing. The sweep of expired
+keys and eviction invalidate the keys they delete as no client's change.
+
+**Where a message goes**, as Redis's sendTrackingMessage sends it:
+
+- to the client itself in RESP3, a push;
+- to the client it redirects to: a push in RESP3, or to a client of RESP2 with a
+  subscription a message of the channel `__redis__:invalidate`; to any other client of
+  RESP2, nothing;
+- a redirect gone: the client's flag R (CLIENT LIST, TRACKINGINFO's
+  `broken_redirect`), and in RESP3 the push `tracking-redir-broken`.
+
+The client whose command runs gets its own invalidations after its reply: after EXEC's
+for EXEC's commands, and after its reply for a client that BLMOVE serves. Redis keeps them
+for after the call. One it gets as the client another redirects to comes before its
+reply, as Redis writes it while the command runs. At the end of each group (Redis's
+beforeSleep), each prefix's keys go to its clients, in the order of their bytes, one
+push per prefix. A NOLOOP client gets them without the keys its own commands changed
+last, and nothing when none is left.
+
+**Pushes at once.** A connection waits on its socket alone, except while its client has
+a subscription or monitors: then it waits on the actor's pushes as well (A subscribed
+client). A client that tracks now waits so too, and so does a client whose batch ran the
+general way while another redirects to it. Their batches then run as a subscribed
+client's do, a command at a time, the general way: that is how a client's reads reach the
+table.
+
+**The fast way.** The table's keys are heeded keys (Heeded keys): a batch that may write
+one runs the general way, as a batch that writes a key a client waits on or watches.
+Every other batch of a client that does not track keeps the fast way. A read adds its
+keys to the heeded set as it adds them to the table. A tick makes the set anew from the
+clients that wait and watch and from the table, once as many keys have left the table as
+it holds (a thousand at least). While a client is in BCAST mode, every batch runs the
+general way: any key written may be under a prefix. The review session proposed another
+way: let the heeded keys' checks look in the table as well, with no second insertion per
+read and no rebuild, for a second lookup per write checked.
+
+**The rest.** CLIENT TRACKING reads its options in order, as Redis does, before it looks
+at ON or OFF. A REDIRECT's id is read as a long long, and its client looked for there;
+an error ends the reading. ON then checks, in Redis's order, a PREFIX without BCAST, a
+switch of BCAST, OPTIN or OPTOUT with BCAST, both of them, a switch of OPTIN or OPTOUT,
+and prefixes that overlap. CLIENT CACHING, GETREDIR, TRACKINGINFO, CLIENT LIST's flags (t,
+R, B) and `redir`, and INFO's tracking_clients, tracking_total_keys, tracking_total_items
+and tracking_total_prefixes answer as Redis's. RESET and a connection's end stop the
+client's tracking, and its ids stay in the table, as Redis leaves them. At each tick,
+past `tracking-table-max-keys`, keys picked at random leave the table, each invalidated
+under no prefix. The limit is kept with the table, read again from the parameters after
+CONFIG SET, EXEC and CLIENT TRACKING, so that a tick reads no parameter by its name.
+
+**Where BendKV differs.**
+
+- A key that expired is invalidated when the sweep deletes it, or a write meets it. Redis
+  invalidates it also when a read finds it expired (lazy expiry), as with the `expired`
+  event.
+- `tracking-table-max-keys` applies at each tick. Redis applies it before each command
+  too, 100 keys at a time, the more the longer it stays past the limit.
+- Redis 7.0.15 answers an overlap of two given prefixes past the first with the error and
+  then OK, and tracks (checkPrefixCollisionsOrReply returns the prefix's index). BendKV
+  answers the error alone and leaves the client as it was.
+- A client in RESP3 that others redirect to, with no subscription and whose batches all
+  run the fast way, waits for its socket alone: its invalidations come with its next
+  reply, where Redis writes them at once.
+- A command's and an eviction's invalidations come before their keyspace events, and the
+  sweep's after them, as Redis orders them for each key; but where Redis sends them key by
+  key, each key's invalidation next to its event, BendKV sends all of one kind first.
+
+**What it costs** (PERFORMANCE 66).
+
+- With no client tracking, a request of the fast way pays for the tracking's two bits in
+  the test that picks the way, and a command of the general way for the checks after it.
+- A client that tracks costs the batches of other clients what clients that wait cost
+  them: their hashes are looked for in the heeded keys. Its own batches, and the batches
+  that may write a key it read, run the general way, a command at a time.
+- While a client is in BCAST mode, every batch runs the general way. That is a cliff, as
+  the clients that waited were before section 3zzo.
+
+**Found on the way.**
+
+- `ps.loud`, the test of whether keyspace events are to be sent, counted bits 0 to 25 of
+  `Ps`'s word as classes of events: the tracking's two bits, and on main a SHUTDOWN asked
+  for and a pause. While one of them was on, the general way built each command's events
+  and dropped them; with the SHUTDOWN or the pause, it also kept the databases from before
+  each command, which only the events and the tracking read. `ps.loud` reads the classes
+  alone now, and the general way looks at a command's effects (`ps.looks`) when events are
+  to be sent or the tracking has work.
+- The general way's loop (`bg.go`) read a command's tracking with eight calls, each saving
+  and loading its frame, whether a client tracked or not. One value (`TkPre`) carries a
+  call's tracking now, read with one call, and INFO's counts of the tracking are set where
+  INFO runs.
+- Eviction did not invalidate the keys it deleted (`mem.done`). It does now, as the sweep
+  does, and `tracking_test.py` has a scenario for it.
+
+**Tests.** `tests/tracking_test.py` runs scenarios on BendKV and Redis, each with clients
+of its own, and compares what each client received after each step:
+
+- CLIENT TRACKING's options and errors, CLIENT CACHING, GETREDIR and TRACKINGINFO, in
+  RESP2 and RESP3;
+- invalidations of the keys a client read: by another client, by itself (after its reply
+  and EXEC's), in NOLOOP mode, of another database, by the reads' key specs (SINTER,
+  ZUNION, SORT_RO, LCS, GEOSEARCH, PFCOUNT, BITFIELD_RO, OBJECT, DUMP and more), and
+  none for writes that change nothing;
+- redirects: to a client of RESP2 subscribed to the channel, to one of RESP3, to one of
+  RESP2 without a subscription; a redirect's own write; a redirect gone, in RESP3 and
+  RESP2;
+- OPTIN and OPTOUT with CLIENT CACHING, in MULTI and after a CLIENT command;
+- BCAST: prefixes, NOLOOP, the empty prefix, a redirect, the writes of one batch in one
+  push;
+- FLUSHDB and FLUSHALL (in MULTI too), SWAPDB, MOVE, COPY, RENAME;
+- INFO's counts as clients start and stop tracking and go; RESET; CLIENT REPLY OFF;
+- a key that expires, a key evicted past maxmemory, the table's limit, and a client
+  BLMOVE serves.
+
+Redis's suite: unit/tracking passes the 10 of its 13 tests that Redis passes, and
+unit/other its test of RESET clearing a client's state (COMPATIBILITY.md). The client
+libraries' tests of their caches pass as on Redis: redis-py's `test_client_tracking` in
+RESP2 and RESP3, and go-redis's specs of its client-side cache and of ClientTracking.
+
 ## 4. Where a request's time goes, and hiding the memory waits
 
 With the eight patches, BendKV ran fewer instructions on GET and SET than Redis, missed

@@ -19,8 +19,8 @@ throughput of Redis 7.0.15 on the same machine, with half its memory for small v
 > and the latency monitor, the server's administrative commands, an append-only file and
 > its rewrite, maxmemory and its eviction, RESP3). The goal now is a
 > drop-in replacement for a single Redis node, measured by Redis's own test suite: of the
-> 1,677 tests Redis 7.0.15 passes against a server it did not start, BendKV passes 1,292,
-> and 1,289 of the 1,355 in what it implements
+> 1,677 tests Redis 7.0.15 passes against a server it did not start, BendKV passes 1,303,
+> and 1,300 of the 1,365 in what it implements
 > ([docs/COMPATIBILITY.md](docs/COMPATIBILITY.md)). Do not use it for data you cannot
 > lose.
 
@@ -421,11 +421,12 @@ translation stays in the trusted base.
   client's prefixes, OPTIN and OPTOUT with CLIENT CACHING choose the reads that count,
   NOLOOP leaves out the client's own changes, and `tracking-table-max-keys` bounds the
   keys kept. CLIENT CACHING, GETREDIR and TRACKINGINFO, CLIENT LIST's flags and redir,
-  and INFO's tracking fields answer as Redis's. Keys a client tracks cost nothing to the
-  commands on other keys; while a client is in BCAST mode, every command runs on its own
-  (PERFORMANCE.md, section 66). Where BendKV differs: an expired key is invalidated when
-  the sweep deletes it, not when a read finds it; the table's limit is applied at each
-  tick of the cron, not before each command (FINDINGS.md, section 3zzzb).
+  and INFO's tracking fields answer as Redis's. Batches on keys no client tracks keep the
+  fast way; a client that tracks runs its own commands one at a time, as a subscribed
+  client does, and while a client is in BCAST mode every command runs so (PERFORMANCE.md,
+  section 66). Where BendKV differs: an expired key is invalidated when the sweep deletes
+  it, not when a read finds it; the table's limit is applied at each tick of the cron, not
+  before each command (FINDINGS.md, section 3zzzb).
 - **The server:** LASTSAVE (the start, as BendKV writes no RDB snapshot), ROLE (a master
   with no replica), WAIT (0, as no replica acknowledges: at once when it asks for none,
   otherwise once its timeout ends, its client waiting as a blocking command's does),
