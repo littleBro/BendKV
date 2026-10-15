@@ -5124,6 +5124,22 @@ INFO's statistics, and values of up to 5 MB and 100,000 elements: 3,167 checks, 
 different. `tests/aof_redis_test.py` takes RESTORE both ways, with REPLACE, ABSTTL,
 IDLETIME and FREQ, times past, keys whose time had passed and a transaction.
 
+**What the tests found after the merge.** Run with other seeds, the random payloads found
+two things. One stopped the server: an intset whose header gave a width of 0x03000008 and
+a count of 0x27000000. The check that the intset's bytes hold its count of values of
+that width multiplied the two before the check that the width is 2, 4 or 8, and the
+product passed 2^48, where a runtime's Nat stops (`bend: a Nat past the largest
+immediate`). A hash's count near 2^48 doubled past it the same way. The width in the
+product is now cut to 8, and a hash's count to the bytes left, as each of its strings
+takes one at least; no other number read from a payload is multiplied or added past
+2^48 (a length read as 64 bits stops below 2^40 times 256). The other was a count whose
+byte has the two high bits of an encoded string's kind: Redis reads a count with
+`rdbLoadLen(rdb, NULL)`, which takes such a byte's six other bits for the count, where
+BendKV refused the payload; it reads them so now. `tests/dump_test.py` now also restores
+each payload with each of its first 16 bytes on overwritten by numbers at their
+extremes, so that its headers' lengths, counts and widths pass 2^32 and 2^48, on both
+servers.
+
 **Redis's suite.** unit/dump passes the 11 of its 12 tests that Redis passes in this mode
 (1 before; the twelfth uses DEBUG, which Redis refuses here), and unit/type/list its two
 tests of a ziplist of various encodings, which restore one (216 of its 218).

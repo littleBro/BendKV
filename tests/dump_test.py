@@ -25,6 +25,7 @@ as deep as Redis does then); both are set back after.
     python3 tests/dump_test.py --bendkv 6380 --redis 6390 [--seed 1] [--corrupt 1500]
 """
 import argparse
+import os
 import random
 import struct
 import sys
@@ -449,6 +450,16 @@ def payloads(b, r, rnd, ncorrupt):
     bodies = old_bodies(rnd) + new_bodies(r, rnd)
     for name, body in bodies:
         restore_both(b, r, name, payload(body), False)
+    # each body with the bytes from each of its first 16 on overwritten
+    # by numbers at their extremes, so that the lengths, counts and widths
+    # of its headers pass 2^32 and 2^48 (an intset of width 0x03000008 and
+    # 0x27000000 values made BendKV's product of the two pass a Nat's
+    # 2^48, and the server stop)
+    for name, body in bodies:
+        for i in range(1, min(16, len(body))):
+            for ext in (b"\xff" * 8, b"\xff\xff\xff\xff", b"\x08\x00\x00\x03\x00\x00\x00\x27", b"\x81\xff\xff"):
+                x = body[:i] + ext + body[i + len(ext):]
+                restore_both(b, r, "extreme " + name, payload(x), True)
     # broken payloads, their checksums right: Redis accepts a sorted set
     # in a listpack out of order, which BendKV keeps sorted, so sorted sets
     # are compared as sets of pairs
@@ -523,6 +534,9 @@ def events(b, r):
 
 
 def access(b, r):
+    # keys of names new to the server: a word of use outlives its key in
+    # BendKV, so a key made again, of an earlier run, would find its word
+    tag = os.urandom(4).hex()
     both(b, r, cmd("SET", "src", "v"))
     p = run(r, cmd("DUMP", "src"))[1]
 
@@ -535,7 +549,7 @@ def access(b, r):
     for i, opts in enumerate((["IDLETIME", "1000"], ["IDLETIME", "0"], ["IDLETIME", "16777215"],
                               ["IDLETIME", "16777216"], ["IDLETIME", "100000000"], ["IDLETIME", "1000000000000"],
                               ["IDLETIME", "9223372036854775"], ["FREQ", "100"], [])):
-        k = "lru%d" % i
+        k = "lru%d.%s" % (i, tag)
         same(b, r, cmd("RESTORE", k, 0, p, *opts))
         near("OBJECT IDLETIME after RESTORE %s" % opts, *both(b, r, cmd("OBJECT", "IDLETIME", k)), 2)
         same(b, r, cmd("OBJECT", "FREQ", k))
@@ -549,7 +563,7 @@ def access(b, r):
     near("OBJECT IDLETIME after RESTORE in MULTI", *both(b, r, cmd("OBJECT", "IDLETIME", "inmulti")), 2)
     both(b, r, cmd("CONFIG", "SET", "maxmemory-policy", "allkeys-lfu"))
     for i, opts in enumerate((["FREQ", "100"], ["FREQ", "0"], ["FREQ", "255"], ["IDLETIME", "1000"], [])):
-        k = "lfu%d" % i
+        k = "lfu%d.%s" % (i, tag)
         same(b, r, cmd("RESTORE", k, 0, p, *opts))
         same(b, r, cmd("OBJECT", "FREQ", k))
         same(b, r, cmd("OBJECT", "IDLETIME", k))
