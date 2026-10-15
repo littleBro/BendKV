@@ -103,14 +103,21 @@ type Hash is Data:
 type Deq is Data:
   Deq{nf: Nat, f: List<&2, String>, nb: Nat, b: List<&2, String>}
 
+# An intset's members (Mems, below) in increasing order, as a
+# weight-balanced tree: a tip, or a node of n members, its member x after
+# those of l and before those of r (Sets, below)
+type ITree is Data:
+  ITip{}
+  IBin{n: Nat, x: String, l: ITree, r: ITree}
+
 # A set, as Redis 7.0 keeps one: one whose members all read as 64-bit
 # integers in the form Redis writes them (ints.ok), at most
-# set-max-intset-entries of them (512), as the list of its n members in
+# set-max-intset-entries of them (512), as the tree of its n members in
 # increasing order (an intset: SMEMBERS answers them so); any other as a
 # trie of its members (a hashtable, in no order), which it stays (Sets,
 # below)
 type Mems is Data:
-  MInts{n: Nat, xs: List<&2, String>}
+  MInts{n: Nat, tr: ITree}
   MBig{n: Nat, t: Trie<Unit>}
 
 # A sorted set's elements in order (Sorted sets, below), as a
@@ -1735,7 +1742,7 @@ def deq.of(+n: Nat, xs: List<&2, String>) -> Deq:
 
 # Sets
 # ----
-# A set's members (Mems, above): a small set of integers is the list of
+# A set's members (Mems, above): a small set of integers is a tree of
 # its members in increasing order, any other a trie of its members, each
 # with no time. Redis 7.0 keeps a set as an intset while its members all
 # read as 64-bit integers and they are at most set-max-intset-entries
@@ -1774,94 +1781,323 @@ def ints.ok.of(+s: String, +n: Nat, +a: Nat) -> Bool:
 def ints.ok(+s: String) -> Bool:
   ints.ok.of(s, String.length(s), Bool.pick(Nat, U32.is_eq(String.code_at(s, 0n), 45), 1n, 0n))
 
-# whether the digits of integers a and b (of ints.ok, a's from index i,
-# b's from j, each l of them) are fewer for a, or as many and smaller:
-# read as two parts of at most ten digits, each below 2^48
-def ints.mag_lt(+a: String, +i: Nat, +la: Nat, +b: String, +j: Nat, +lb: Nat) -> Bool:
-  +ha = String.dec_at(a, i, 10n)
-  +hb = String.dec_at(b, j, 10n)
-  Bool.or(Nat.is_lt(la, lb), Bool.and(Nat.is_eq(la, lb), Bool.or(Nat.is_lt(ha, hb), Bool.and(Nat.is_eq(ha, hb), Nat.is_lt(String.dec_at(a, Nat.add(i, 10n), 10n), String.dec_at(b, Nat.add(j, 10n), 10n))))))
+# An intset's tree (ITree, above) is weight-balanced, as a sorted set's
+# is (Sorted sets, below): a member is found, added or taken out in
+# O(log n) steps, each a compare of two integers (ints.cmp), and the
+# member at a rank is found as well (SRANDMEMBER, SPOP). Redis's intset
+# finds a member by binary search, and moves the ones after it to add or
+# take out one.
 
-def ints.lt.of(na: Bool, nb: Bool, +a: String, +b: String) -> Bool:
+# how integers a and b (of ints.ok) compare, c how their numbers of
+# digits do: by their bytes when as many (as memcmp orders them,
+# String.order: a digit's byte is in the digit's order)
+def ints.cmp.of(c: Cmp, +a: String, +b: String) -> Cmp:
+  match c:
+    case EQ{}:
+      String.order(a, b)
+    case LT{}:
+      LT{}
+    case GT{}:
+      GT{}
+
+# na and nb whether a and b are negative: one that is comes first; two
+# that are not by their numbers of digits (no leading zero) and then
+# bytes, two that are the other way
+def ints.cmp.sign(na: Bool, nb: Bool, +a: String, +b: String) -> Cmp:
   match na nb:
     case True{} False{}:
-      True{}
+      LT{}
     case False{} True{}:
-      False{}
+      GT{}
     case False{} False{}:
-      ints.mag_lt(a, 0n, String.length(a), b, 0n, String.length(b))
+      ints.cmp.of(Nat.cmp(String.length(a), String.length(b)), a, b)
     case True{} True{}:
-      ints.mag_lt(b, 1n, String.length(b), a, 1n, String.length(a))
+      ints.cmp.of(Nat.cmp(String.length(b), String.length(a)), b, a)
 
-# whether integer a (of ints.ok) is below integer b
-def ints.lt(+a: String, +b: String) -> Bool:
-  ints.lt.of(U32.is_eq(String.code_at(a, 0n), 45), U32.is_eq(String.code_at(b, 0n), 45), a, b)
+# how integer a compares with integer b (both of ints.ok)
+def ints.cmp(+a: String, +b: String) -> Cmp:
+  ints.cmp.sign(U32.is_eq(String.code_at(a, 0n), 45), U32.is_eq(String.code_at(b, 0n), 45), a, b)
 
-# where integer m falls against the first of xs: 0 before it, 1 at it,
-# 2 after it (or xs is empty)
-def ints.at(+m: String, xs: List<&2, String>) -> Nat:
-  match xs:
-    case Con{+x, rest}:
-      Bool.pick(Nat, str_eq(m, x), 1n, Bool.pick(Nat, ints.lt(m, x), 0n, 2n))
-    case Nil{}:
-      2n
+def it.size(+t: ITree) -> Nat:
+  match t:
+    case ITip{}:
+      0n
+    case IBin{n, x, l, r}:
+      n
 
-# whether xs (increasing) holds integer m; c is ints.at(m, xs), computed
-# before xs is passed on
-def ints.has.go(+m: String, xs: List<&2, String>, c: Nat) -> Bool:
-  match xs c:
-    case Con{x, +rest} 2n:
-      c2 = ints.at(m, rest)
-      ints.has.go(m, rest, c2)
-    case Con{x, rest} 1n:
-      True{}
-    case _ _:
+# the size of t's left side (0 for a tip)
+def it.lsize(+t: ITree) -> Nat:
+  match t:
+    case ITip{}:
+      0n
+    case IBin{n, x, +l, r}:
+      it.size(l)
+
+def it.bin(+x: String, +l: ITree, +r: ITree) -> ITree:
+  IBin{Nat.add(Nat.add(it.size(l), it.size(r)), 1n), x, l, r}
+
+# how integer m compares with t's root (GT for a tip)
+def it.at(+t: ITree, +m: String) -> Cmp:
+  match t:
+    case ITip{}:
+      GT{}
+    case IBin{n, +x, l, r}:
+      ints.cmp(m, x)
+
+# A node of x between l and r, rebalanced after an insertion or a
+# deletion on one side, as a sorted set's (zt.balance, below).
+
+# r is the larger side
+def it.dbll(+x: String, l: ITree, +rx: String, rr: ITree, rl: ITree) -> ITree:
+  match rl:
+    case ITip{}:
+      it.bin(rx, it.bin(x, l, ITip{}), rr)
+    case IBin{n, +y, +yl, +yr}:
+      it.bin(y, it.bin(x, l, yl), it.bin(rx, yr, rr))
+
+def it.rotl.of(single: Bool, +x: String, l: ITree, +rx: String, rl: ITree, rr: ITree) -> ITree:
+  match single:
+    case True{}:
+      it.bin(rx, it.bin(x, l, rl), rr)
+    case False{}:
+      it.dbll(x, l, rx, rr, rl)
+
+def it.rotl(+x: String, l: ITree, r: ITree) -> ITree:
+  match r:
+    case ITip{}:
+      it.bin(x, l, ITip{})
+    case IBin{n, +rx, +rl, +rr}:
+      it.rotl.of(Nat.is_lt(it.size(rl), Nat.mul(2n, it.size(rr))), x, l, rx, rl, rr)
+
+# l is the larger side
+def it.dblr(+x: String, r: ITree, +lx: String, ll: ITree, lr: ITree) -> ITree:
+  match lr:
+    case ITip{}:
+      it.bin(lx, ll, it.bin(x, ITip{}, r))
+    case IBin{n, +y, +yl, +yr}:
+      it.bin(y, it.bin(lx, ll, yl), it.bin(x, yr, r))
+
+def it.rotr.of(single: Bool, +x: String, r: ITree, +lx: String, ll: ITree, lr: ITree) -> ITree:
+  match single:
+    case True{}:
+      it.bin(lx, ll, it.bin(x, lr, r))
+    case False{}:
+      it.dblr(x, r, lx, ll, lr)
+
+def it.rotr(+x: String, l: ITree, r: ITree) -> ITree:
+  match l:
+    case ITip{}:
+      it.bin(x, ITip{}, r)
+    case IBin{n, +lx, +ll, +lr}:
+      it.rotr.of(Nat.is_lt(it.size(lr), Nat.mul(2n, it.size(ll))), x, r, lx, ll, lr)
+
+def it.bal.of(few: Bool, rh: Bool, lh: Bool, +x: String, l: ITree, r: ITree) -> ITree:
+  match few rh lh:
+    case True{} _ _:
+      it.bin(x, l, r)
+    case False{} True{} _:
+      it.rotl(x, l, r)
+    case False{} False{} True{}:
+      it.rotr(x, l, r)
+    case False{} False{} False{}:
+      it.bin(x, l, r)
+
+def it.balance(+x: String, +l: ITree, +r: ITree) -> ITree:
+  +sl = it.size(l)
+  +sr = it.size(r)
+  it.bal.of(Nat.is_le(Nat.add(sl, sr), 1n), Nat.is_lt(Nat.mul(3n, sl), sr), Nat.is_lt(Nat.mul(3n, sr), sl), x, l, r)
+
+# whether t holds integer m; c is how m compares with t's root
+def it.has(+t: ITree, c: Cmp, +m: String) -> Bool:
+  match t c:
+    case ITip{} _:
       False{}
+    case IBin{n, x, +l, r} LT{}:
+      it.has(l, it.at(l, m), m)
+    case IBin{n, x, l, +r} GT{}:
+      it.has(r, it.at(r, m), m)
+    case IBin{n, x, l, r} EQ{}:
+      True{}
 
-def ints.has(+m: String, +xs: List<&2, String>) -> Bool:
-  c = ints.at(m, xs)
-  ints.has.go(m, xs, c)
+def ints.has(+m: String, +t: ITree) -> Bool:
+  it.has(t, it.at(t, m), m)
 
-# xs with integer m in its place (xs does not hold it)
-def ints.put.go(+m: String, xs: List<&2, String>, c: Nat) -> List<&2, String>:
-  match xs c:
-    case Con{x, +rest} 2n:
-      c2 = ints.at(m, rest)
-      Con{x, ints.put.go(m, rest, c2)}
-    case Nil{} _:
-      [m]
-    case Con{x, rest} _:
-      m <> Con{x, rest}
+# t with integer m in its place (t does not hold it); c is how m
+# compares with t's root
+def it.ins(t: ITree, c: Cmp, +m: String) -> ITree:
+  match t c:
+    case ITip{} _:
+      IBin{1n, m, ITip{}, ITip{}}
+    case IBin{n, +x, +l, +r} LT{}:
+      it.balance(x, it.ins(l, it.at(l, m), m), r)
+    case IBin{n, +x, +l, +r} _:
+      it.balance(x, l, it.ins(r, it.at(r, m), m))
 
-def ints.put(+m: String, +xs: List<&2, String>) -> List<&2, String>:
-  c = ints.at(m, xs)
-  ints.put.go(m, xs, c)
+def ints.put(+m: String, +t: ITree) -> ITree:
+  it.ins(t, it.at(t, m), m)
 
-# xs without integer m (xs holds it)
-def ints.del.go(+m: String, xs: List<&2, String>, c: Nat) -> List<&2, String>:
-  match xs c:
-    case Con{x, +rest} 2n:
-      c2 = ints.at(m, rest)
-      Con{x, ints.del.go(m, rest, c2)}
-    case Con{x, rest} 1n:
-      rest
-    case ys _:
-      ys
+# a member cut from the end of a tree, and the tree left
+type ICut is Data:
+  ICut{x: String, t: ITree}
 
-def ints.del(+m: String, +xs: List<&2, String>) -> List<&2, String>:
-  c = ints.at(m, xs)
-  ints.del.go(m, xs, c)
+def it.cutl.fix(c: ICut, +x: String, r: ITree) -> ICut:
+  match c:
+    case ICut{+cx, +ct}:
+      ICut{cx, it.balance(x, ct, r)}
 
-# the members xs added to the trie t
-def ints.trie(xs: List<&2, String>, t: Trie<Unit>) -> Trie<Unit>:
-  match xs:
-    case Nil{}:
+# the first member of the node of x between l and r, cut from it
+def it.cutl(l: ITree, +x: String, r: ITree) -> ICut:
+  match l:
+    case ITip{}:
+      ICut{x, r}
+    case IBin{n, +lx, ll, lr}:
+      it.cutl.fix(it.cutl(ll, lx, lr), x, r)
+
+def it.cutr.fix(c: ICut, +x: String, l: ITree) -> ICut:
+  match c:
+    case ICut{+cx, +ct}:
+      ICut{cx, it.balance(x, l, ct)}
+
+# the last member of the node of x between l and r, cut from it
+def it.cutr(r: ITree, +x: String, l: ITree) -> ICut:
+  match r:
+    case ITip{}:
+      ICut{x, l}
+    case IBin{n, +rx, rl, rr}:
+      it.cutr.fix(it.cutr(rr, rx, rl), x, l)
+
+def it.glue.lfix(c: ICut, r: ITree) -> ITree:
+  match c:
+    case ICut{+x, +l}:
+      it.balance(x, l, r)
+
+def it.glue.rfix(l: ITree, c: ICut) -> ITree:
+  match c:
+    case ICut{+x, +r}:
+      it.balance(x, l, r)
+
+# the larger side l's last member takes the place of the one taken out
+def it.glue.l(l: ITree, r: ITree) -> ITree:
+  match l:
+    case ITip{}:
+      r
+    case IBin{n, +lx, ll, lr}:
+      it.glue.lfix(it.cutr(lr, lx, ll), r)
+
+# or r's first member (r a tip: both sides are)
+def it.glue.r(l: ITree, r: ITree) -> ITree:
+  match r:
+    case ITip{}:
+      l
+    case IBin{n, +rx, rl, rr}:
+      it.glue.rfix(l, it.cutl(rl, rx, rr))
+
+def it.glue.of(lbig: Bool, l: ITree, r: ITree) -> ITree:
+  match lbig:
+    case True{}:
+      it.glue.l(l, r)
+    case False{}:
+      it.glue.r(l, r)
+
+# the members of l and then those of r, the sides of a node whose member
+# is taken out
+def it.glue(+l: ITree, +r: ITree) -> ITree:
+  it.glue.of(Nat.is_lt(it.size(r), it.size(l)), l, r)
+
+# t without integer m, which it holds; c is how m compares with t's root
+def it.rm(t: ITree, c: Cmp, +m: String) -> ITree:
+  match t c:
+    case ITip{} _:
+      ITip{}
+    case IBin{n, +x, +l, +r} LT{}:
+      it.balance(x, it.rm(l, it.at(l, m), m), r)
+    case IBin{n, +x, +l, +r} GT{}:
+      it.balance(x, l, it.rm(r, it.at(r, m), m))
+    case IBin{n, x, +l, +r} EQ{}:
+      it.glue(l, r)
+
+def ints.del(+m: String, +t: ITree) -> ITree:
+  it.rm(t, it.at(t, m), m)
+
+# the member at rank i of t (none when i is not below its size); c is
+# how i compares with the size of t's left side
+def it.nth(+t: ITree, c: Cmp, +i: Nat) -> Maybe<&2, String>:
+  match t c:
+    case ITip{} _:
+      None{}
+    case IBin{n, x, +l, r} LT{}:
+      it.nth(l, Nat.cmp(i, it.lsize(l)), i)
+    case IBin{n, +x, l, r} EQ{}:
+      Some{x}
+    case IBin{n, x, +l, +r} GT{}:
+      +j = Nat.sub(i, Nat.add(it.size(l), 1n))
+      it.nth(r, Nat.cmp(j, it.lsize(r)), j)
+
+def ints.nth(+t: ITree, +i: Nat) -> Maybe<&2, String>:
+  it.nth(t, Nat.cmp(i, it.lsize(t)), i)
+
+# a node's member, made before the walk goes on (as zt.el, below)
+def it.el(+x: String) -> String:
+  x
+
+# the members of t in increasing order, before acc
+def it.list(+t: ITree, acc: List<&2, String>) -> List<&2, String>:
+  match t:
+    case ITip{}:
+      acc
+    case IBin{n, +x, +l, +r}:
+      y = it.el(x)
+      acc2 = it.list(r, acc)
+      it.list(l, y <> acc2)
+
+def ints.list(+t: ITree) -> List<&2, String>:
+  it.list(t, Nil{})
+
+# the members of t added to the trie s
+def it.trie(+t: ITree, s: Trie<Unit>) -> Trie<Unit>:
+  match t:
+    case ITip{}:
+      s
+    case IBin{n, +x, +l, +r}:
+      it.trie(r, set(Unit, it.trie(l, s), x, Unit{}))
+
+# The tree of n members that come in increasing order, made at once (as
+# a sorted set's is, zel.build in rdb.bend): a walk with a list of jobs:
+# build a tree of n members (its left side first); take the next member
+# as the root of a node of n whose left side is the tree just made (a its
+# size), then build its right side; join that node.
+type IJob is Data:
+  IJBuild{n: Nat}
+  IJRoot{n: Nat, a: Nat}
+  IJJoin{n: Nat, x: String, l: ITree}
+
+# the jobs js run on the members xs, t the tree last made (f bounds the
+# steps: four for each member and one)
+def it.mach(f: Nat, js: List<&2, IJob>, xs: List<&2, String>, t: ITree) -> ITree:
+  match f js:
+    case 1n+g Con{IJBuild{n}, rest}:
+      match n:
+        case 0n:
+          it.mach(g, rest, xs, t)
+        case 1n+(+k):
+          +a = Nat.div(k, 2n)
+          it.mach(g, IJBuild{a} <> (IJRoot{1n+k, a} <> rest), xs, t)
+    case 1n+g Con{IJRoot{+n, +a}, rest}:
+      match xs:
+        case Con{x, more}:
+          it.mach(g, IJBuild{Nat.sub(Nat.sub(n, 1n), a)} <> (IJJoin{n, x, t} <> rest), more, ITip{})
+        case Nil{}:
+          t
+    case 1n+g Con{IJJoin{+n, x, l}, rest}:
+      it.mach(g, rest, xs, IBin{n, x, l, t})
+    case _ _:
       t
-    case Con{+x, rest}:
-      ints.trie(rest, set(Unit, t, x, Unit{}))
+
+def ints.build(+n: Nat, xs: List<&2, String>) -> ITree:
+  it.mach(Nat.add(Nat.mul(4n, n), 4n), [IJBuild{n}], xs, ITip{})
 
 def mems.empty() -> Mems:
-  MInts{0n, Nil{}}
+  MInts{0n, ITip{}}
 
 def mems.len(+s: Mems) -> Nat:
   match s:
@@ -1870,7 +2106,7 @@ def mems.len(+s: Mems) -> Nat:
     case MBig{+n, t}:
       n
 
-def mems.ints.has(int: Bool, +m: String, +xs: List<&2, String>) -> Bool:
+def mems.ints.has(int: Bool, +m: String, +xs: ITree) -> Bool:
   match int:
     case True{}:
       ints.has(m, xs)
@@ -1887,17 +2123,17 @@ def mems.has(+m: String, +s: Mems) -> Bool:
 
 # n members xs of an intset, and m, which they do not hold, as a
 # hashtable
-def mems.grow(+n: Nat, xs: List<&2, String>, +m: String) -> Mems:
-  MBig{1n+n, set(Unit, ints.trie(xs, empty(Unit)), m, Unit{})}
+def mems.grow(+n: Nat, xs: ITree, +m: String) -> Mems:
+  MBig{1n+n, set(Unit, it.trie(xs, empty(Unit)), m, Unit{})}
 
-def mems.ints.put(fits: Bool, +n: Nat, xs: List<&2, String>, +m: String) -> Mems:
+def mems.ints.put(fits: Bool, +n: Nat, xs: ITree, +m: String) -> Mems:
   match fits:
     case True{}:
       MInts{1n+n, ints.put(m, xs)}
     case False{}:
       mems.grow(n, xs, m)
 
-def mems.ints.add(had: Bool, int: Bool, +n: Nat, xs: List<&2, String>, +m: String) -> Mems:
+def mems.ints.add(had: Bool, int: Bool, +n: Nat, xs: ITree, +m: String) -> Mems:
   match had int:
     case True{} _:
       MInts{n, xs}
@@ -1949,7 +2185,7 @@ def mems.del(s: Mems, +m: String) -> Mems:
 def mems.all(+s: Mems) -> List<&2, String>:
   match s:
     case MInts{n, +xs}:
-      xs
+      ints.list(xs)
     case MBig{n, +t}:
       keys(Unit, t, 0n)
 

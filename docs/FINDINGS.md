@@ -2592,8 +2592,9 @@ SRANDMEMBER (with a count), SMOVE, SINTER, SUNION, SDIFF, their STOREs, and SINT
 with LIMIT. A set is an intset or a hashtable, as in Redis 7.0 (which has no listpack
 sets yet). An intset holds canonical 64-bit integers alone (as Redis's `string2ll` reads
 them: no sign but a minus, no leading zero, no `-0`), at most 512 of them, as a list of
-their strings in numeric order; any other member, or a 513th, turns the set into a
-hashtable for good, a trie of its members (`Trie<Unit>`, the keyspace's own map). An
+their strings in numeric order (a tree of them since section 3zzy); any other member, or
+a 513th, turns the set into a hashtable for good, a trie of its members (`Trie<Unit>`,
+the keyspace's own map). An
 intset answers its members in numeric order, as Redis's does, and SSCAN gives it whole
 with cursor 0; a hashtable answers in the order of its trie, where Redis answers in the
 order of its dict, so the tests compare a hashtable's members as a set. A key never holds
@@ -4295,6 +4296,7 @@ of 100,000 (26,284, −23%), 19,959 on a set of 10 to 410 strings (22,555, −12
 other commands as before. SADD to an intset of 100 to 500 members takes 449,545, twenty
 times SADD to a hashtable: its members are strings, compared as integers at each step of
 a walk along their list, which Redis keeps as an array of integers searched by halves.
+Section 3zzy keeps them in a tree, and takes an intset too.
 
 ## 3zzf. The key count proved
 
@@ -5151,6 +5153,75 @@ hashes are those of the parameters' defaults). 1,273 of the 1,677 tests Redis pa
 suites: redis-py's 12 tests of DUMP and RESTORE pass, in RESP2 and in RESP3, and
 go-redis's 3, which leaves 2,513 of the 2,753 tests Redis passes in redis-py and 408 of
 460 in go-redis.
+
+## 3zzy. Intsets as trees of integers
+
+**What was left** (sections 3zj, 3zze). An intset kept its members as a list of their
+strings in increasing order. SADD, SREM and SISMEMBER walked the list from its start,
+and each step compared two members as integers, reading the digits of both again (four
+`String.dec_at` of ten digits each): on an intset of 100 to 500 members, SADD of a new
+member took 270,366 instructions, SISMEMBER 155,772 and SREM 274,643, where a
+hashtable's took 8,347, 5,403 and 14,598. SADD took no intset out of the keyspace, since
+the test of its member cost more than the take saved (section 3zze).
+
+**The change** (`src/map.bend`, Sets).
+
+- An intset's members are a weight-balanced tree (`ITree`: a tip, or a node of n members
+  whose member comes after those of its left side and before those of its right),
+  balanced as a sorted set's tree is (section 3zl).
+- Two members compare as integers: by their signs, then by their numbers of digits (an
+  intset's integers have no leading zero), then by their bytes as memcmp orders them
+  (`String.order`), the other way for two negative ones (`ints.cmp`).
+- A member is found, added or taken out in O(log n) steps (`ints.has`, `ints.put`,
+  `ints.del`), and the member at a rank in as many (`ints.nth`), which SRANDMEMBER and
+  SPOP pick by its rank.
+- SMEMBERS, SSCAN, DUMP and the rewrite of the append-only file read the members in
+  increasing order from the tree (`ints.list`). RESTORE of an intset, whose members come
+  in increasing order, makes the tree at once (`ints.build`, a walk with a list of jobs,
+  as `zel.build` makes a sorted set's: section 3zzu) and no trie of the members to find
+  one there twice, which members in increasing order cannot be.
+- SADD of a member that an intset lacks takes the set out of the keyspace (`upd.takes`),
+  as it takes a hashtable: the test of the member is a walk of log n steps now.
+
+**The proofs.** The lemmas of SADD's sizes take a tree where they took a list
+(`le_ints_*`), and `has_none` the empty tree. SADD of a member an intset lacks makes it
+one larger (`le_ints_new`, `le_ints_putn`), so it writes the set over and may take it
+(`takes_madd_ints`, under `takes_over`). `make check` and `make verdict` pass.
+
+**What it gives.** Instructions per command (callgrind, pipelined: 400 new members
+added in a random order to an intset of 100, then tested, then taken out; the same on a
+hashtable of as many short strings):
+
+| command | before | after | a hashtable |
+|---|---:|---:|---:|
+| SADD of a new member | 270,366 | 14,013 | 8,347 |
+| SISMEMBER | 155,772 | 6,992 | 5,403 |
+| SREM | 274,643 | 15,519 | 14,598 |
+| DUMP of an intset of 500 | 913,736 | 900,901 | |
+| RESTORE of it, with REPLACE | 3,992,621 | 1,225,958 | |
+
+An SADD and an SREM of one member took 37,297 instructions on an intset of 8 members,
+139,567 on one of 64 and 158,995 on one of 400; they take 21,866, 28,374 and 31,989 (on a
+hashtable: 23,943 to 24,653). The take saves SADD 2,418 of them. Wall time, one request
+at a time (the median of three runs, each the median of five): SADD 75 µs before, 53 now
+and 51 on Redis; SISMEMBER 64, 51 and 48; SREM 74, 53 and 50: an intset's command takes a
+round trip now, as Redis's does. An SADD of 500 integers takes 0.46 ms (7.9 before, 0.16
+on Redis), and a RESTORE of them 0.19 ms (0.42 before, 0.05 on Redis). GET, SET and INCR
+as before (`make perfcheck`: 3,306, 4,065 and 4,384 instructions per request; main 3,309,
+4,069 and 4,384).
+
+**Where BendKV differs.** A member takes a node of four words: an intset of 500 members
+takes 16,768 bytes of BendKV's heap (8,824 as a list), where Redis's takes 1,080 (2, 4 or
+8 bytes a member, the width of its widest). An add or a deletion makes a new node at
+each step back up the tree and drops the old one, where Redis moves the members after the
+new one with a memmove.
+
+**Tests.** `tests/set_test.py`: an intset of 512 members of every width (400 of them long
+longs at random), added in a random order and taken out in another, its members compared
+in order with Redis's every 64 adds and every 32 deletions, with SCARD, SISMEMBER,
+SRANDMEMBER and SPOP along the way: 6,244 commands, each answered as Redis answers it.
+Redis's suite: unit/type/set, unit/sort, unit/scan, unit/dump and unit/keyspace pass the
+tests they passed (222 of the 226 Redis passes).
 
 ## 4. Where a request's time goes, and hiding the memory waits
 
