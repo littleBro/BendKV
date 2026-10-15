@@ -91,6 +91,18 @@ class Marks:
                 out.append(nm(x, cs))
 
 
+    def own(self, m, cs):
+        """What a monitor gets of its own commands, then up to a marker. The
+        marker is sent once the monitor's first reply or line has come: a
+        server runs a client's batch through before it reads another's
+        bytes, but the monitor's batch and the marker reach it from two
+        sockets, and it may read the marker first (seen on Redis under
+        load), so the marker waits until the monitor's batch has run."""
+        first = m.read(3.0)
+        head = [] if first == "TIMEOUT" or skip(first, cs) else [nm(first, cs)]
+        return head + self.lines(m, cs)
+
+
 def drain(m, cs, t=0.4):
     """What a monitor gets in a while (when a marker's line would not come)."""
     out = []
@@ -168,13 +180,13 @@ def scenarios(port, log):
     # Redis reads them)
     m.raw(b"".join(enc(c) for c in (["PING"], ["GET", "x"], ["PUBLISH", "c", "msg"], ["ECHO", "hi"], ["DBSIZE"],
                                     ["CLIENT", "INFO"], ["SELECT", "2"], ["SELECT", "9"])))
-    log("8 own", mk.lines(m, cs))
+    log("8 own", mk.own(m, cs))
     m.raw(enc(["MONITOR"]) + enc(["PING", "again"]))
-    log("8 again", mk.lines(m, cs))
+    log("8 again", mk.own(m, cs))
     m.raw(enc(["MULTI"]) + enc(["PING"]) + enc(["GET", "x"]) + enc(["EXEC"]))
-    log("8 multi", mk.lines(m, cs))
+    log("8 multi", mk.own(m, cs))
     m.raw(enc(["MULTI"]) + enc(["PING"]) + enc(["EXEC"]))
-    log("8 exec", mk.lines(m, cs))
+    log("8 exec", mk.own(m, cs))
     # 9. a subscribed client, and a subscribed monitor
     a.send("SUBSCRIBE", "ch")
     log("9 sub", a.read(), mk.lines(m, cs))
@@ -183,9 +195,9 @@ def scenarios(port, log):
     m.send("SUBSCRIBE", "c2")
     log("9 monitor sub", m.read(), b.cmd("PUBLISH", "c2", "hello"), mk.lines(m, cs))
     m.raw(enc(["PING"]) + enc(["CLIENT", "INFO"]))
-    log("9 monitor sub ping", mk.lines(m, cs))
+    log("9 monitor sub ping", mk.own(m, cs))
     m.send("UNSUBSCRIBE")
-    log("9 monitor unsub", mk.lines(m, cs))
+    log("9 monitor unsub", mk.own(m, cs))
     # 10. CLIENT REPLY OFF and SKIP of a monitor
     m.send("CLIENT", "REPLY", "OFF")
     log("10 off", a.cmd("SET", "k1", "v1"), drain(m, cs))
