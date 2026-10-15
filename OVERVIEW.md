@@ -293,6 +293,17 @@ changes they make, PFMERGE as the SET of its destination. Where it differs from 
 sparse string's end is 0 as each command starts (Redis keeps what a set wrote there), a
 PFADD that a corrupt value stops keeps its change with an event and a log, and a
 HyperLogLog of up to 44 bytes is `embstr` to OBJECT ENCODING.
+GEO: GEOADD, GEOPOS, GEOHASH, GEODIST, GEORADIUS and GEORADIUSBYMEMBER with their `_RO`
+forms, GEOSEARCH and GEOSEARCHSTORE, as Redis 7.0.15's `geo.c` runs them: a position is
+a member of a sorted set whose score is its 52-bit geohash, GEOADD is the ZADD of its
+scores (and is logged as that ZADD), and a search reads the nine cells Redis reads, keeps
+the points within its circle or its box by their haversine distances, sorts them as
+glibc's qsort does, or as Redis's pqsort does when COUNT keeps fewer than it found, and
+answers each with Redis's text (four decimals of a distance, `%.17Lf` of a coordinate).
+Its doubles are C's: Bend's base runs them on the CPU and its libm (patch 33), so a
+distance is the double Redis computes on the same libm. A search's options and errors
+come in Redis's order; STORE, STOREDIST and GEOSEARCHSTORE write their destination as a
+sorted set, or delete it when they find nothing (section 3zzm of docs/FINDINGS.md).
 Clients that wait: BLPOP, BRPOP, BLMOVE, BRPOPLPUSH, BLMPOP, BZPOPMIN, BZPOPMAX and
 BZMPOP; their timeout (seconds, a double; 0 means wait forever) is read as Redis reads
 it, with its errors. A command that has nothing to pop makes the client wait, and its
@@ -832,11 +843,13 @@ The translation the kernel reads can be dumped with
   skipped. The reference is the same run on redis-server 7.0.15 with default settings,
   each unit on a freshly started server instance: in this mode 1,757 tests run, and
   Redis passes 1,677 (almost all the others need DEBUG, off by default in 7.0). BendKV
-  passes 1,182 of them (70.5%), and in the units of what it has (the protocol, the
+  passes 1,261 of them (75.2%), and in the units of what it has (the protocol, the
   connection and clients and their pause, the keyspace and databases, strings with
   ranges, bits and fields, counters, hashes, lists, sets, sorted sets, SORT, HyperLogLogs,
-  times to live, transactions, Pub/Sub and keyspace notifications, introspection), 1,175
-  of 1,258 (93%):
+  GEO, times to live, transactions, Pub/Sub and keyspace notifications, introspection),
+  1,254 of 1,317 (95%):
+  `unit/geo` all 59, `unit/introspection-2` 37 of 43 (the others need Lua, streams, MIGRATE
+  and COMMAND's entries of commands BendKV does not have),
   `unit/introspection` 25 of 28 (the two others need Lua, and the third MIGRATE),
   `unit/other` 15 of 19, `unit/multi` 28 of 53 (the others read the replication stream,
   need Lua or XGROUP, or run after a test that left the client in MULTI),
@@ -854,13 +867,13 @@ The translation the kernel reads can be dumped with
   RANDOMKEY pass all their tests on keys, HSCAN, SSCAN and ZSCAN all theirs; of the 17
   tests with several databases that Redis passes, 9 (SET and GET in different databases,
   DEL in database 1, four tests of MOVE and three of COPY).
-  The others hit commands that do not exist (344 tests: FUNCTION LOAD, XADD, GEOADD,
-  SYNC…), do not run because the unit stopped earlier (94), or fail on a client
+  The others hit commands that do not exist (283 tests: FUNCTION LOAD, XADD, SYNC,
+  XGROUP…), do not run because the unit stopped earlier (94), or fail on a client
   left in MULTI by a test that failed inside a transaction on a command that does not
   exist, on COMMAND GETKEYS for commands that do not exist, on keys and clients left by
   tests stopped earlier, on Lua, on the number of changes since the last save, which
   BendKV does not count, on the size of a client's query buffer, which it does not have
-  (two tests of `unit/querybuf`), and on HINCRBY past 14 digits (57). Times to live and
+  (two tests of `unit/querybuf`), and on HINCRBY past 14 digits (39). Times to live and
   the sweep of expired keys added 78 passed tests: before them there were 135, and 30
   tests failed on SET's options; ranges and bits added 49 more, TOUCH, TIME and OBJECT
   4, MSETNX, RENAME and RENAMENX 13, COPY 7, BITOP and LCS 19, BITFIELD 16, hashes 64,
@@ -870,19 +883,26 @@ The translation the kernel reads can be dumped with
   keyspace notifications 26, CLIENT LIST, INFO and KILL 9, MONITOR 3, maxmemory and its
   eviction 8, RESP3 292 (`unit/type/list` and `unit/type/zset` no longer stop at their
   HELLO 3), SORT 56, HyperLogLogs 20, CLIENT PAUSE and UNPAUSE 9, the administrative
-  commands none (their tests need servers of their own).
-  The suite found one bug in what there is: KEYS matched with a naive glob, and the
+  commands none (their tests need servers of their own), GEO 79 (`unit/geo`'s 59, and 20
+  of `unit/introspection-2`, 16 of them run after a test that left its client in MULTI
+  on GEOADD).
+  The suite found two bugs in what there is. KEYS matched with a naive glob, and the
   pattern `a*a*…a*b` against a key of forty `a` characters hung the server for minutes;
   there were no classes `[...]` and no escaping either. Fixed: KEYS matches as Redis's
   `stringmatchlen` does, together with the limit of 1,000 nested stars that Redis
-  introduced against CVE-2024-31228.
+  introduced against CVE-2024-31228. And a request's parse took time in proportion to
+  the square of its length (a GEOADD of 20,000 points 3.6 to 6.2 s, past the limit of
+  `unit/geo`'s fuzzing tests): its arguments were read by index in a packed String that
+  a read by index walks from its start. Fixed: a long request's arguments are read
+  through a window of one chunk (the GEOADD takes 0.19 s; section 3zzn of
+  docs/FINDINGS.md).
 - **The test suites of client libraries** (`tools/client_suite.py`, `make clients`; and in
   CI on every pull request): redis-py 8.1.0's tests of its sync and asyncio clients, in
   RESP2 and in RESP3, and go-redis v9.23.0's specs, in RESP3, each against Redis 7.0.15
   and against BendKV, each on a server started for it, without their tests of modules,
-  clusters, sentinels and TLS. Of the tests Redis passes, BendKV passes 2,442 of 2,753 in
-  redis-py, the same tests in RESP2 and in RESP3, and 393 of 460 in go-redis; every other
-  one fails on what BendKV does not have (Lua, streams, geo, DUMP, ACL, the
+  clusters, sentinels and TLS. Of the tests Redis passes, BendKV passes 2,501 of 2,753 in
+  redis-py, the same tests in RESP2 and in RESP3, and 405 of 460 in go-redis; every other
+  one fails on what BendKV does not have (Lua, streams, DUMP, ACL, the
   slow log, CLIENT TRACKING, and COMMAND's entries of those), none on a
   command BendKV has. A test Redis passes that BendKV fails, and that is not among the
   known failures of `tools/data/clients.json`, fails CI.
@@ -990,6 +1010,14 @@ The translation the kernel reads can be dumped with
   closed connection, the append-only file and the pid file after it), and BendKV alone:
   MEMORY STATS's numbers as INFO's, SHUTDOWN SAVE failing and SAVE FORCE stopping, a
   SHUTDOWN while a rewrite of 200,000 keys runs (section 3zzl of docs/FINDINGS.md).
+- **GEO** (`tests/geo_test.py`, with the server's defaults): the same commands on BendKV and on
+  Redis, in RESP2 and RESP3, every reply compared byte for byte and, after each write,
+  the sorted set it leaves and its time to live: the cases of Redis's unit/geo and of
+  `geo.c` (GEOADD's options and errors, the searches' options, their errors and the
+  order they come in, STORE and STOREDIST, COUNT and ANY, points at the same distance,
+  which pqsort leaves in an order of its own, boxes across the antimeridian and near the
+  poles), random sets and searches, a search of 20,000 points, the keyspace events,
+  MULTI, COMMAND GETKEYS and the statistics (section 3zzm of docs/FINDINGS.md).
 - **AUTH** (`tests/auth_test.py`, in each server mode): scenarios on BendKV and on
   Redis, their transcripts compared line by line — when a client must authenticate and
   what it is answered before that: commands with errors of each kind, one at a time and
@@ -1253,7 +1281,7 @@ The proofs cover `map.bend`, `redis.bend`, `batch.bend`, `aof.bend`, `session.be
    runtime a 64-bit word with an abort past 2^48−1; `String` in theory is a list, and in
    the C runtime with the patch a chain of byte buffers, and `String.eq`, `String.hash`
    and the other operations on it are C functions. That the runtime agrees with the
-   definitions is not proved. The server is built by Bend with thirty-two patches from
+   definitions is not proved. The server is built by Bend with thirty-three patches from
    [`bend-patches/`](bend-patches/). They are in the trusted base too: checked by Bend's
    test suite and by differential tests against Redis, but not proved. The same goes for
    event loops on several threads, `epoll`, the atomicity of `Chan.send_all`, the writer
@@ -1360,7 +1388,7 @@ The Makefile passes `CC=clang-19` to Bend if there is one: clang 18 ignores the
 `preserve_none` convention, and the code comes out ~8% slower.
 
 ```bash
-# Bend with the patches: a clone of bendlang/bend with the thirty-two patches of bend-patches/ on it;
+# Bend with the patches: a clone of bendlang/bend with the thirty-three patches of bend-patches/ on it;
 # --verdict needs Lean 4.34.0 (elan)
 git clone https://github.com/bendlang/bend ../bend-patched
 sh bend-patches/apply.sh ../bend-patched
@@ -1408,8 +1436,8 @@ make clients BEND="$B" # redis-py's and go-redis's test suites on Redis and on B
    FLUSHDB, FLUSHALL, keyspace lines per database — with laws and recovery of all the
    databases from the append-only file), the ranges and bits of strings (GETRANGE,
    SETRANGE, GETBIT, SETBIT, BITCOUNT, BITPOS — with a law of SETRANGE and recovery from
-   the append-only file). Redis's suite in external mode: BendKV passes 1,182 of the
-   1,677 tests Redis itself passes, and 1,175 of 1,258 in the units of what it has
+   the append-only file). Redis's suite in external mode: BendKV passes 1,261 of the
+   1,677 tests Redis itself passes, and 1,254 of 1,317 in the units of what it has
    ([docs/COMPATIBILITY.md](docs/COMPATIBILITY.md)). Start-up as for redis-server (the
    command line and the configuration file). The database as a record with a count of
    keys (DBSIZE in O(1)).
@@ -1498,8 +1526,11 @@ make clients BEND="$B" # redis-py's and go-redis's test suites on Redis and on B
    LOLWUT: answered from the server's state as Redis answers them on a master with no
    replica, WAIT a blocking command that no replica ends, SHUTDOWN an exit after the
    append-only file is synced (section 3zzl of FINDINGS.md); checked by tests against
-   Redis. What the client libraries' suites find missing within the scope above (geo,
-   DUMP and RESTORE, CLIENT TRACKING, the slow log, ACL's users) is the next step.
+   Redis. GEO: its ten commands as Redis's `geo.c` runs them, on C's doubles (Bend's
+   base runs them natively, patch 33), its sorts glibc's qsort and Redis's pqsort made
+   step by step (section 3zzm of FINDINGS.md); checked by tests against Redis byte for
+   byte. What the client libraries' suites find missing within the scope above (DUMP and
+   RESTORE, CLIENT TRACKING, the slow log, ACL's users) is the next step.
 2. **The append-only file, further.** A law of the rewrite: the rewritten file replays
    to the databases it was written from (key by key, not by the shape of the trie); it
    needs a law that a scan from the first bucket reads every key once (the invariant "a

@@ -128,7 +128,7 @@ represented data:
   reader an owner of the whole value: O(depth) reference-count operations per read.
 - **A deep trie.** The first map was a binary trie of 20 levels: 20 dependent loads.
 
-## 3. Thirty-two patches to the Bend compiler
+## 3. Thirty-three patches to the Bend compiler
 
 All live in [`bend-patches/`](../bend-patches/) (against `bendlang/bend` at `1cce499`,
 Bend 2.0.35). The first eight switch on by themselves for programs without GPU calls;
@@ -150,9 +150,11 @@ shared before the call (section 3zp); the twenty-seventh adds a socket's address
 killing it and channel marks (section 3zs); the twenty-eighth `File.rename` and
 `File.unlink` (section 3zv); the twenty-ninth the heap's account and the thirtieth
 words outside the heap (section 3zw); the thirty-first has a walker that reads a
-tree borrow it from a caller that owns it, in every program (section 3zza); and the
+tree borrow it from a caller that owns it, in every program (section 3zza); the
 thirty-second keeps the string of a value that is a string or else something else as
-the string itself, with no node, in every program without GPU calls (section 3zzg).
+the string itself, with no node, in every program without GPU calls (section 3zzg); and
+the thirty-third adds C's doubles, `F64`, run as C runs them, strtod and libm with them
+(section 3zzm).
 The sections before 3l
 number the patches as they were then: patch 16 was effect pairs, taken out in 3l with
 `TCP.post_list` of patch 11, and their patches 17–20 are today's 16–19. None changes the
@@ -4848,6 +4850,172 @@ unit/wait and unit/acl's, with RDB files, signals and replicas), but one: unit/m
 MULTI with SHUTDOWN, which passes run alone, fails in its unit's run as five tests around
 it do, on a client that an earlier test, which queues a REPLICAOF, leaves in a
 transaction. 1,182 of the 1,677 tests Redis passes, as before; no test changed.
+
+## 3zzm. GEO
+
+**What there is.** The ten commands of Redis 7.0.15's `geo.c`: GEOADD, GEOPOS, GEOHASH,
+GEODIST, GEORADIUS and GEORADIUSBYMEMBER with their `_RO` forms, GEOSEARCH and
+GEOSEARCHSTORE (`src/geo.bend`, from `geo.c`, `geohash.c` and `geohash_helper.c`, and
+the GEO section of `src/redis.bend`). A position is a member of a sorted set whose score
+is its geohash, as in Redis: its longitude and its latitude each as 26 bits of their
+place in their range (-180 to 180, and -85.05112878 to 85.05112878), interleaved into an
+integer of 52 bits.
+
+- GEOADD key [NX|XX] [CH] lon lat member ...: its options and its triples read as
+  `geoaddCommand` reads them, each error Redis's (a syntax error for words after the
+  options that make no triples, or for NX with XX; "value is not a valid float"; "invalid
+  longitude,latitude pair" with printf's `%f` of each, `F.fl.show_f`), then the ZADD of
+  the scores its positions make, as Redis's GEOADD calls ZADD: its WRONGTYPE is ZADD's,
+  and its entry in the append-only file is that ZADD, each score the integer Redis
+  writes.
+- GEOPOS, GEOHASH and GEODIST read the sorted set of their key: a position as
+  `decodeGeohash` makes it from a score (the middle of its cell), GEOHASH's eleven
+  characters of the position in the standard ranges (latitudes from -90 to 90), GEODIST's
+  great-circle distance (haversine, on a sphere of Redis's radius) in its unit (M, KM,
+  FT or MI, read before the key is looked up); a member not there is a null.
+- The searches read their arguments as `georadiusGeneric` reads them once it has looked
+  the key up: GEORADIUS's center and radius even for a key not there, GEORADIUSBYMEMBER's
+  member only in a key that is there; then the options a word at a time, each taken only
+  where its kind takes it and the words it takes follow (STORE and STOREDIST with a key
+  for GEORADIUS and GEORADIUSBYMEMBER, a bare STOREDIST for GEOSEARCHSTORE, FROMMEMBER,
+  FROMLONLAT, BYRADIUS and BYBOX for GEOSEARCH and GEOSEARCHSTORE), then the checks in
+  Redis's order (STORE with WITHDIST, WITHHASH or WITHCOORD; no FROM; no BY; ANY without
+  COUNT). A search reads the cells Redis reads (`geohashCalculateAreasByShapeWGS84`: the
+  step its radius or its box picks, fewer toward the poles, the center's cell and the
+  eight around it, those a step too small makes useless left out), the members of each
+  in the order of their scores (`membersOfGeoHashBox`), keeps those within its circle or
+  its box (`geoWithinShape`), and stops at ANY's count.
+- ASC and DESC sort what a search finds by distance as glibc's `qsort` does (a stable
+  merge sort, in glibc's own order of merges, so that points at the same distance, and a
+  NaN distance near the antipodes, come out where Redis's do); when COUNT keeps fewer
+  points than were found, as Redis's `pqsort` does (NetBSD's quicksort that sorts only
+  the parts that reach the places kept): its steps are made one by one, each comparison
+  and each swap, on a vector of the points, so that the points it keeps and their order
+  are Redis's. COUNT without ASC, DESC or ANY sorts ASC, as Redis does.
+- A point answers as Redis answers it: WITHDIST its distance in the unit with four
+  decimals (`fixedpoint_d2string`), WITHHASH its score as an integer, WITHCOORD its
+  position as `addReplyHumanLongDouble` writes it (`%.17Lf` with its last zeros taken
+  out; a double in RESP3).
+- STORE, STOREDIST and GEOSEARCHSTORE write what they find at the destination as a
+  sorted set (the scores, or the distances in the unit), with no time, whatever the key
+  held (`setKey`), with the keyspace event `georadiusstore` (`geosearchstore`); when they
+  find nothing, or the key is not there, they delete the destination (`del`) and answer
+  0.
+
+COMMAND's table gains the ten, generated from Redis's JSON files with the rest, and
+COMMAND GETKEYS finds the destination of GEORADIUS's STORE and STOREDIST as Redis's key
+specs find it, by a keyword: a key spec of a new kind (`KSpecKw` in `command.bend`), the
+keyword looked for from its start to the argument before the last, the key the argument
+after it.
+
+**Doubles in the runtime** (patch 33, `f64-natives.patch`). A distance is sines, cosines,
+an arcsine and a square root of doubles, and Redis's are glibc's libm: float.bend's
+doubles in software round as C rounds the four operations, but a sine is libm's own
+polynomials. Bend's base gains the double, `F64`: C's binary64 as the two 32-bit halves
+of its bits (a term holds no 64-bit word), with `F64.read` (strtod), the four operations,
+`neg`, `abs`, `sqrt`, `exp`, `log`, `log2`, `log10`, `sin`, `cos`, `tan`, `asin`,
+`acos`, `atan`, `atan2`, `sinh`, `cosh`, `tanh`, `pow`, `mod` (fmod), `floor`, `ceil`,
+`trunc`, the six comparisons and the conversions from a U32 and a 64-bit integer and to
+a 64-bit integer (cut, or rounded to the even one), each a law of base (a function the checker knows only by its
+type) that the C lane runs as C's own double arithmetic, strtod and the libm it links:
+a program reads, computes and rounds as a C program built with the same libm does. The
+JS lane runs Number and Math, and reads what glibc's strtod reads (decimal and hex,
+each rounded to the nearest, ties to even). `src/geo.bend` makes each operation of
+Redis's in its order, each conversion as C makes it (a double to an unsigned 64-bit
+integer as gcc makes it on x86-64, `(long long)` of a score): its positions, geohashes,
+cells and distances are Redis's, bit for bit, on 309 positions and on 80 searches of a
+set of 462, compared with Redis's C (`geohash.c`, `geohash_helper.c`) built alone; its
+sorts are glibc's `qsort` and Redis's `pqsort`, built alone, on 640 lists (ties and NaN
+distances among them); its `%f` is printf's on 329 values.
+float.bend's `f64.parse`, Redis's `string2d` (ZADD's and ZINCRBY's scores, ZUNIONSTORE's
+weights), reads with `F64.read` now, which is glibc's strtod itself, in place of
+float.bend's strtod in software, which reads what it reads (`tests/float_test.py`
+compares both with glibc).
+
+**Its cost** (PERFORMANCE.md, section 60). On a sorted set of 20,000 positions, a
+GEOSEARCH that finds 698 of them takes 0.66 ms (Redis 0.27 ms), sorted and with WITHDIST,
+WITHHASH and WITHCOORD 7.4 ms (Redis 1.1 ms: each coordinate is `%.17Lf` of a long double,
+made in software), COUNT 10 of them 2.5 ms (Redis 0.20 ms: `pqsort` made a step at a
+time on a vector that is a tree); a GEOADD of the 20,000 takes 194 ms (Redis 22 ms), as
+much as a ZADD of their scores.
+
+**The fast way.** Two things that GEO first added cost every request. A command travels
+in registers as wide as its widest form, from the parse of a request to its reply, so
+each form keeps one field of a word. GEO's reads first went as one form holding the
+read, a GEODIST among them with its members and its unit's meters (a double, two words):
+a command four words wider (a parsed request twelve words where it was eight), which
+every request pays for, in each push of the parse's continuation, each copy into the
+batch and each step of exec. Each read of GEO is a form of its own now, of one word:
+GEOPOS's and GEOHASH's members, GEODIST's members and unit as they came (the unit read
+as the command parses, for its error, and again as it runs), a search's arguments as
+they came, its kind told by the name it was called by. And the widest result of any
+function sets what every return of the program copies (`WL_RESW`): a search's options
+(`GOpt`: the flags, COUNT, STORE's key, the center, the shape and the unit's meters,
+doubles of two words each) went flat in the results of the options' loop, 26 words
+where the widest had been 17. `GOptOf`, options that hold options, never built, makes
+`GOpt` a node of its own, as `RwOf` does the rewrite's state (section 3zv). GET, SET and
+INCR took 90 instructions more per request with both (3,407, 4,168 and 4,479 against
+3,316, 4,077 and 4,390 on main, under callgrind: the parse's loop 31 more, the work
+loop's returns 26, exec's steps 24), 27 more with the second alone, and 3,316, 4,075 and 4,393 now.
+
+**The laws.** GEOPOS, GEOHASH, GEODIST and a search that does not store read their key
+(`ZRGeoPos`, `ZRGeoHash`, `ZRGeoDist` and `ZRGeoFind`, reads of a sorted set, as ZSCAN's
+is), and change nothing. GEOADD is ZADD. A
+search that stores is a command of the session (`SGeoStore`, its kind and its
+arguments) that writes its destination with what it finds, an act of the session's
+database (`AGeo`), as SORT with STORE and PFMERGE are: the laws of acts (their split,
+their effects, the invariant of the databases) take it as they take those, and the three
+laws of a session that enumerate its commands take `SGeoStore` as they take `SPfMerge`.
+`make check`, `make verdict` and `make gencheck` pass.
+
+**Where BendKV differs.** A COUNT past 10^14 counts as 10^14 (a runtime's Nat stays
+below 2^48; no sorted set holds as many members). The doubles are those of the libm the
+server is linked with, as Redis's are: two machines with different libms answer
+different last digits, as two Redises would. The time, above.
+
+**Tests.** `tests/geo_test.py`, in `make test`: against Redis, in RESP2 and RESP3, every
+reply byte for byte and, after each write, the sorted set it leaves and its time to
+live: the cases of Redis's unit/geo and of `geo.c` (GEOADD's options and errors, a
+position's text, the searches' options, their errors and the order they come in, a key
+not there and one of another kind, STORE and STOREDIST, COUNT and ANY, ASC and DESC,
+points at the same distance, which `pqsort` leaves in an order of its own, boxes across
+the antimeridian and near the poles), random sets and random searches (5,078 and 5,016
+commands for seeds 1 and 2, none different), a search of 20,000 points, the keyspace events of the
+writes, MULTI, COMMAND GETKEYS and INFO's statistics. `tests/aof_redis_test.py` takes
+GEOADD and the searches that store, with destinations that are strings, have a time, or
+expired: Redis's file loaded by BendKV and BendKV's by Redis hold the same sorted sets.
+
+**Redis's suite.** unit/geo passes all its 59 tests, its fuzzing tests (random sets of
+up to 20,000 points, each search compared with a search in Tcl) in 29.5 s where Redis
+takes 16.4 s. unit/introspection-2 passes 37 of its 43 (17 before): the statistics of
+GEOADD, of its errors and of MULTI (which queues a GEOADD), GEORADIUS marked
+movablekeys (its STORE's key found by a keyword), and the 16 tests after the one of
+MULTI, whose client it had left in MULTI on GEOADD, so that they were answered QUEUED.
+1,261 of the 1,677 tests Redis passes (75.2%; 1,182 before), 1,254 of the 1,317 in what
+BendKV has (95%); no other test changed.
+
+## 3zzn. Long requests in time proportional to their length
+
+**What it was.** unit/geo's fuzzing test sends GEOADDs of 20,000 points, 60,000
+arguments in one request, and such a GEOADD took BendKV 3.6 to 6.2 s, past the suite's
+limit; main's server takes 1.4 s to parse one before it answers that it does not know
+the command, and an EXISTS of 40,000 keys takes 245 ms. A request is parsed
+where it lies, in the buffer of the bytes read, a packed String of chunks of up to 2,048
+bytes; a read by index (`String.code_at`) walks the chunks from the String's start, so
+each argument read near the end of a request of n bytes walked n / 2,048 chunks, and a
+request's parse took time in proportion to the square of its length. A long request
+arrives in reads of 64 KB, each followed by a parse from its start, so this was paid
+several times over.
+
+**What it is.** The arguments of a request longer than a chunk are read through a
+window (`args.from` in `src/resp.bend`): a copy of one chunk's worth of the buffer
+(`String.slice`, 2,048 bytes from where the next argument starts), moved on once fewer
+than 1,024 of its bytes are left, so that each read walks one chunk. An argument that
+runs past the window, with more of the buffer after it, is read from the buffer itself,
+as before (a long argument is one read). A request that is not whole yet asks for more
+bytes as it did, so that the protocol's errors and their timing are as they were. A
+GEOADD of 20,000 points now takes 194 ms, an EXISTS of 40,000 keys 29 ms (Redis 3.6 ms),
+an RPUSH of 40,000 elements 30 ms where it took 249 (PERFORMANCE.md, section 60).
 
 ## 4. Where a request's time goes, and hiding the memory waits
 

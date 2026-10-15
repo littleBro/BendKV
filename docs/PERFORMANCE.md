@@ -9,7 +9,7 @@ numbers are in [tools/](../tools/README.md).
    verification and not from the logic of the commands.** The original SET cost ~390
    heap cell allocations and ~150 atomic reference-count operations. Redis makes a
    handful of allocations per SET.
-2. **Bend itself is fixed by thirty-two patches to the compiler**
+2. **Bend itself is fixed by thirty-three patches to the compiler**
    ([`bend-patches/`](../bend-patches/)). The first eight switch on by themselves for
    programs without GPU calls `!`, the ninth and tenth where a program calls them, the
    eleventh changes every program's event loop on Linux, the twelfth and thirteenth only
@@ -22,17 +22,18 @@ numbers are in [tools/](../tools/README.md).
    holding up the `TCP.post` writer (section 40), the twenty-sixth fixes the fifth
    (section 41), the thirty-first has a walker that reads a tree borrow it from a caller
    that owns it (section 51), and the thirty-second keeps the string of a value that is a
-   string or else something else as the string itself, with no node (section 56). Seven
-   more only add effects: the twentieth, the
+   string or else something else as the string itself, with no node (section 56). Eight
+   more only add effects or natives: the twentieth, the
    process and the clock for starting as `redis-server` does; the twenty-fourth, cutting a
    file of any size and syncing a directory (`File.sync_dir`); the twenty-fifth, waiting
    for a socket on a channel (`TCP.watch`, section 41); the twenty-seventh, a socket's
    addresses, killing it and channel marks (section 44); the twenty-eighth, a file put in
    another's place and a name removed (section 47); the twenty-ninth, the heap's account
    (`IO.heap`); the thirtieth, words outside the heap (`Mem.touch`, `Mem.cell`; both
-   section 48). Before section 14 there were twenty patches: the sixteenth (effect pairs)
-   was taken out in section 14, and the sections before 14 number the patches the old way
-   — there, 17–20 are today's 16–19.
+   section 48); the thirty-third, C's doubles (`F64`, section 60). Before section 14
+   there were twenty patches: the sixteenth (effect pairs) was taken out in section 14,
+   and the sections before 14 number the patches the old way — there, 17–20 are today's
+   16–19.
    - **Lazy sealing** (section 3): a reference count is created when a value is
      actually shared, not at every construction.
    - **Packed strings** (section 4): in the C runtime a `String` is a chain of byte
@@ -6977,3 +6978,55 @@ BendKV and 41 on Redis, its Tcl client most of both.
 
 **The other commands.** `make perfcheck`: GET 3,321, SET 4,075 and INCR 4,395
 instructions per request (3,317, 4,078 and 4,391 on main).
+
+## 60. GEO, and long requests
+
+**Measured.** Wall time from a request's send to its reply's last byte, one client, one
+request at a time, the median of 7 (of 4 for the writes, each on a key deleted
+before), on main's server (the administrative commands, before this change), on this
+one, and on Redis 7.0.15, on 20,000 positions drawn at random over 40 by 25 degrees:
+
+| | main | now | Redis | now / Redis |
+|---|---:|---:|---:|---:|
+| EXISTS of 40,000 keys | 245 ms | 28.9 ms | 3.6 ms | 8.0 |
+| RPUSH of 40,000 elements | 249 ms | 29.7 ms | 2.8 ms | 10.7 |
+| MSET of 20,000 pairs | 200 ms | 27.5 ms | 4.2 ms | 6.6 |
+| ZADD of 20,000 scores with decimals | 605 ms | 114 ms | 14.0 ms | 8.2 |
+| GEOADD of 20,000 points | (1,424 ms to refuse it) | 194 ms | 21.5 ms | 9.0 |
+| GEOSEARCH BYRADIUS 300 km (698 points) | | 0.66 ms | 0.27 ms | 2.4 |
+| the same, ASC WITHDIST WITHHASH WITHCOORD | | 7.37 ms | 1.08 ms | 6.8 |
+| the same, COUNT 10 ASC | | 2.52 ms | 0.20 ms | 12.6 |
+| the same, COUNT 10 ANY | | 0.10 ms | 0.04 ms | 2.5 |
+| GEOSEARCH BYBOX 600 by 600 km (889 points) | | 1.72 ms | 0.43 ms | 4.0 |
+| GEORADIUSBYMEMBER 50 km (12 points) | | 0.10 ms | 0.04 ms | 2.5 |
+| GEOPOS of 100 members | | 0.92 ms | 0.16 ms | 5.8 |
+| GEOHASH of 100 members | | 0.23 ms | 0.07 ms | 3.3 |
+| GEODIST | | 0.04 ms | 0.04 ms | 1.0 |
+
+**Long requests** (FINDINGS 3zzn). A request's arguments were read by index in the
+buffer of its bytes, a packed String that a read by index walks from its start, a chunk
+of 2,048 bytes at a time: a parse took time in proportion to the square of the
+request's length, and a long request, which arrives in reads of 64 KB, was parsed again
+after each. Its arguments are read through a window of one chunk now: the first four
+rows, seven to nine times faster, and main took 1.4 s to parse a GEOADD of 20,000 points
+before answering that it did not know it. ZADD's scores with decimals are read by
+glibc's strtod too (`F64.read`, Bend patch 33), where float.bend read them in software.
+What is left is the commands' own work, a node of the trie or of a list for each
+argument, and the batch's, a request of 40,000 arguments parsed once its last bytes are
+in (1.6 MB of bulks).
+
+**GEO.** A search is Redis's: the cells it reads, the points it keeps, their order. What
+costs more than Redis's: a coordinate of WITHCOORD is `%.17Lf` of a long double, made in
+software (float.bend's `fl.show_human`), two for each point; COUNT's partial sort is
+Redis's `pqsort` made a step at a time on a vector that is a tree of the points by the
+bits of their indices, each comparison and swap a walk down it; GEOPOS writes each
+position the same way. A GEOADD costs what a ZADD of its scores costs, the positions'
+geohashes little.
+
+**The fast way.** Two things that GEO's first version added cost every request: a read
+of GEO that held a double made every command four words wider in registers, and a
+search's options, flat in the results of their loop, made every return copy 26 words
+where it copied 17 (FINDINGS 3zzm). GET, SET and INCR took 3,407, 4,168 and 4,479
+instructions per request under callgrind (`make perfcheck`), 90 more than main's 3,316,
+4,077 and 4,390. Each read of GEO is a form of one word now, and the options a node of
+their own: 3,316, 4,075 and 4,393.

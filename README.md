@@ -13,14 +13,14 @@ with it. Under pipelined load it serves GET at 1.6×, SET at 1.8× and INCR at 1
 throughput of Redis 7.0.15 on the same machine, with half its memory for small values.
 
 > **Status: research prototype.** BendKV implements a subset of Redis (strings, hashes,
-> lists, sets, sorted sets, HyperLogLogs and their times to live, the blocking commands,
+> lists, sets, sorted sets, HyperLogLogs, GEO and their times to live, the blocking commands,
 > transactions, pub/sub and keyspace notifications, the keyspace, several databases,
 > connection commands, CLIENT LIST, INFO, KILL, PAUSE and UNPAUSE, MONITOR, the server's
 > administrative commands, an append-only file and its rewrite, maxmemory and its
 > eviction, RESP3). The goal now is a
 > drop-in replacement for a single Redis node, measured by Redis's own test suite: of the
-> 1,677 tests Redis 7.0.15 passes against a server it did not start, BendKV passes 1,182,
-> and 1,175 of the 1,258 in what it implements
+> 1,677 tests Redis 7.0.15 passes against a server it did not start, BendKV passes 1,261,
+> and 1,254 of the 1,317 in what it implements
 > ([docs/COMPATIBILITY.md](docs/COMPATIBILITY.md)). Do not use it for data you cannot
 > lose.
 
@@ -35,10 +35,10 @@ well. BendKV asks how far one can get writing a real, fast server in a language 
 the code that runs is the code that is proved, without a separate model and a
 refinement proof. The answer so far: the verified core is not what makes it slow;
 the data representation of the runtime was, and most of the work went into fixing it
-(32 patches to the Bend compiler, in [`bend-patches/`](bend-patches/): most speed up its
+(33 patches to the Bend compiler, in [`bend-patches/`](bend-patches/): most speed up its
 data representation and its runtime, and the others add what a server needs from the
-system, from the process's directory, id and clock to the files it cuts and the heap's
-account).
+system, from the process's directory, id and clock to the files it cuts, the heap's
+account and C's doubles).
 
 ## What is proved
 
@@ -234,6 +234,21 @@ translation stays in the trusted base.
   stops keeps its change with an event and a log, where Redis keeps it silently; and
   OBJECT ENCODING answers `embstr` for a HyperLogLog of up to 44 bytes, where Redis's is
   `raw`.
+- **GEO:** GEOADD, GEOPOS, GEOHASH, GEODIST, GEORADIUS and GEORADIUSBYMEMBER with their
+  `_RO` forms, GEOSEARCH and GEOSEARCHSTORE, as Redis 7.0.15's `geo.c` runs them: a
+  position is a member of a sorted set whose score is its 52-bit geohash, GEOADD the ZADD
+  of its scores (logged as that ZADD), and a search reads the cells Redis reads, keeps
+  the points within its circle or box by their haversine distances, and sorts them as
+  glibc's qsort does, or as Redis's pqsort does, step by step, when COUNT keeps fewer
+  than it found, so that points at the same distance come in Redis's order; each point
+  answers with Redis's text (a distance's four decimals, a coordinate's `%.17Lf`). The
+  doubles are C's: Bend's base runs them natively (patch 33), on the C library's libm,
+  so that a distance is the double Redis computes with the same libm. The options, their
+  errors and the order they come in are `georadiusGeneric`'s; STORE, STOREDIST and
+  GEOSEARCHSTORE write their destination as a sorted set, or delete it when they find
+  nothing, with Redis's keyspace events. A search takes 2.5 to 4 times Redis's time, 7
+  times with WITHCOORD (a coordinate is written by the float library in software) and 13
+  times with COUNT's partial sort (PERFORMANCE.md, section 60).
 - **Clients that wait:** BLPOP, BRPOP, BLMOVE, BRPOPLPUSH, BLMPOP, BZPOPMIN, BZPOPMAX
   and BZMPOP, their timeouts (seconds, a double; 0 waits for ever) read as Redis reads
   them, with its errors. A command that finds nothing to pop makes its client wait, and
@@ -462,7 +477,7 @@ translation stays in the trusted base.
   groups of requests the server answers meanwhile; with INFO's fields of a rewrite
   (FINDINGS.md, section 3zv).
 
-Not yet: streams and geo, Lua
+Not yet: streams, Lua
 scripts, CLIENT TRACKING, timing of commands
 (usec in INFO commandstats, latencystats), CONFIG REWRITE (it answers as Redis does without a configuration file),
 RDB files. Integers, and times in ms, are limited to 14 digits.
@@ -564,7 +579,10 @@ from), SORT and SORT_RO (`tests/sort_test.py`: the cases of Redis's tests and of
 random SORTs with BY and GET patterns over strings and hashes, each STORE's destination
 read back), HyperLogLogs (`tests/hll_test.py`: the cases of Redis's tests and of its
 `hyperloglog.c`, values made by hand and corrupted at random, and random sequences of the
-PF commands, each reply compared and each value written read back byte for byte),
+PF commands, each reply compared and each value written read back byte for byte), GEO
+(`tests/geo_test.py`: the cases of Redis's tests and of its `geo.c`, random sets and
+searches, each reply compared byte for byte in RESP2 and RESP3, and each write's sorted
+set read back),
 robustness and concurrency checks, a client that stops reading while the others are
 served (`tests/writer_test.py`), clients that wait (`tests/blocking_test.py`: 18 scenarios
 of the blocking commands on BendKV and on Redis, their transcripts compared line by line,
@@ -627,6 +645,7 @@ src/        the server
   map.bend      hash trie with string keys                         verified
   float.bend    doubles and long doubles in software               tested
   hll.bend      HyperLogLogs on a string's bytes, as Redis's       tested
+  geo.bend      geohashes, cells, distances and sorts, as Redis's  tested
   lolwut.bend   LOLWUT's drawings, as Redis draws them             tested
   redis.bend    command semantics: exec(cmd, db) -> (reply, db')   verified
   batch.bend    a pipelined batch with cache hints                 verified
@@ -639,12 +658,12 @@ src/        the server
   startup.bend  the command line and the configuration file        tested
   server.bend   TCP, connections, the database actor, the log      tested
 proof/      LAWS.bend (the laws), PROOF.bend (their proofs), SPEC.bend (the commands on the trie alone)
-tests/      float, start, differential, expiry, protocol, session, CONFIG, INFO, COMMAND, SCAN, BITFIELD, hash, list, set, sorted set, SORT, HyperLogLog, blocking, transaction, Pub/Sub, CLIENT, MONITOR, CLIENT PAUSE, administrative commands, AUTH, RESP3, maxmemory, robustness, stalled reader, concurrency, AOF and AOF rewrite tests
+tests/      float, start, differential, expiry, protocol, session, CONFIG, INFO, COMMAND, SCAN, BITFIELD, hash, list, set, sorted set, SORT, HyperLogLog, GEO, blocking, transaction, Pub/Sub, CLIENT, MONITOR, CLIENT PAUSE, administrative commands, AUTH, RESP3, maxmemory, robustness, stalled reader, concurrency, AOF and AOF rewrite tests
 bench/      in-process benchmarks of the map, the core and channels
 tools/      measurement scripts, the runner of Redis's test suite, and the generators of
             the trie, of the parameter table and of the command table, with the facts
             they take from Redis (tools/data/)
-bend-patches/  the 32 patches to the Bend compiler and runtime
+bend-patches/  the 33 patches to the Bend compiler and runtime
 docs/       FINDINGS.md, DIRECTIONS.md, COMPATIBILITY.md, PERFORMANCE.md
 ```
 

@@ -570,6 +570,9 @@ def act(a: R.Act, ds: R.Ds) -> R.Reply & (List<&2, Eff> & R.Ds):
     case R.APfMerge{+d, srcs} x:
       +y = x
       act.cmd(R.pf.merge.ds(y, d, srcs), y)
+    case R.AGeo{+k, args} x:
+      +y = x
+      act.cmd(R.geo.store.ds(y, k, args), y)
 
 def acts.put(es: List<&2, Eff>, r: R.Reply & (List<&2, Eff> & R.Ds)) -> List<&2, Eff> & R.Ds:
   (x, q) = r
@@ -1200,8 +1203,9 @@ def file.copy(args: List<&2, String>, c: R.Cmd) -> R.Act:
       file.copy.any(c)
 
 # a command of a file as an act: SELECT moves the focus, SWAPDB, MOVE,
-# COPY and FLUSHALL act on the databases, SORT with STORE and PFMERGE (as
-# Redis writes them, the command that ran) write their destination, and
+# COPY and FLUSHALL act on the databases, SORT with STORE, PFMERGE and a
+# GEO search that stores (as Redis writes them, the command that ran)
+# write their destination, and
 # any other command runs on the focus (a SELECT, SWAPDB, MOVE or COPY
 # whose numbers or options do not read too: exec answers it with an
 # error and changes nothing, as Redis's load ignores a command that
@@ -1222,6 +1226,8 @@ def file.act(+c: R.Cmd) -> R.Act:
       R.ASort{k, o}
     case R.Own{R.SPfMerge{d, srcs}}:
       R.APfMerge{d, srcs}
+    case R.Own{R.SGeoStore{k, args}}:
+      R.AGeo{k, args}
     case _:
       R.ARun{c}
 

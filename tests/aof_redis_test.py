@@ -40,7 +40,11 @@ SORT with STORE is logged by Redis as the client sent it, which BendKV's
 load runs again, and by BendKV as the list it stored: the RPUSH of its
 elements onto a key not there, the like script of the pushes onto a key
 there (whose time it takes away), or the DEL of the destination when
-there is nothing to store. PFADD, PFCOUNT (of one key, when it keeps
+there is nothing to store. GEOADD is logged by both as the ZADD of the
+scores it makes (Redis's GEOADD calls ZADD); a GEO search with STORE or
+STOREDIST, and GEOSEARCHSTORE, by Redis as the client sent it, which
+BendKV's load runs again, and by BendKV as the sorted set it stored (the
+script of its ZADD) or the DEL of its destination. PFADD, PFCOUNT (of one key, when it keeps
 the count it made), PFMERGE and PFDEBUG (when it makes a value dense)
 are logged by Redis as the client sent them, which BendKV's load runs
 again, and by BendKV as the value they leave: its SET with KEEPTTL (a
@@ -158,6 +162,27 @@ CMDS = [
     [b"PFADD", b"pf5", b"x"], [b"PFDEBUG", b"GETREG", b"pf5"], [b"SET", b"pfs", b"x"], [b"PFADD", b"pfs", b"y"],
     [b"PFADD", b"ex13", b"a"], [b"PEXPIRE", b"ex13", b"3"], [b"PFADD", b"ex14", b"a"], [b"PEXPIRE", b"ex14", b"3"],
     [b"SLEEP"], [b"PFADD", b"ex13", b"b"], [b"PFMERGE", b"ex14", b"pf1"],
+    [b"GEOADD", b"geo", b"13.361389", b"38.115556", b"Palermo", b"15.087269", b"37.502669", b"Catania"],
+    [b"GEOADD", b"geo", b"CH", b"XX", b"13.361389", b"38.115557", b"Palermo", b"1", b"1", b"no"],
+    [b"geoadd", b"geo2"] + [x for j in range(200) for x in (b"%d.5" % (j % 90), b"%d.25" % (j % 80), b"g%d" % j)],
+    [b"GEOADD", b"geo", b"200", b"0", b"bad"], [b"GEOADD", b"geo", b"NX", b"0.5", b"0.25", b"Palermo", b"0", b"0", b"o"],
+    [b"GEORADIUS", b"geo", b"15", b"37", b"200", b"km", b"STORE", b"geod"],
+    [b"GEORADIUS", b"geo", b"15", b"37", b"200", b"km", b"STOREDIST", b"geod2", b"COUNT", b"1"],
+    [b"georadiusbymember", b"geo", b"Palermo", b"100", b"km", b"store", b"geod3"],
+    [b"GEOSEARCHSTORE", b"geod4", b"geo2", b"FROMLONLAT", b"10", b"10", b"BYBOX", b"3000", b"3000", b"km", b"STOREDIST"],
+    [b"GEOSEARCHSTORE", b"geod5", b"geo2", b"FROMLONLAT", b"10", b"10", b"BYBOX", b"3000", b"3000", b"km", b"COUNT",
+     b"20", b"DESC"],
+    [b"GEORADIUS", b"geo", b"0", b"0", b"1", b"m", b"STORE", b"geod3"], [b"GEORADIUS", b"nope", b"0", b"0", b"1", b"m",
+                                                                        b"STORE", b"geod"],
+    [b"GEOSEARCH", b"geo", b"FROMMEMBER", b"Palermo", b"BYRADIUS", b"300", b"km"],
+    [b"GEORADIUS", b"geo", b"15", b"37", b"200", b"km", b"STORE", b"geod6", b"WITHDIST"],
+    [b"SET", b"geos", b"x"], [b"EXPIRE", b"geos", b"1000"],
+    [b"GEOSEARCHSTORE", b"geos", b"geo", b"FROMLONLAT", b"15", b"37", b"BYRADIUS", b"300", b"km"],
+    [b"GEOADD", b"ex15", b"1", b"1", b"a"], [b"PEXPIRE", b"ex15", b"3"], [b"SET", b"ex16", b"v", b"PX", b"3"],
+    [b"GEOADD", b"ex17", b"1", b"1", b"a"], [b"PEXPIRE", b"ex17", b"3"], [b"SLEEP"],
+    [b"GEORADIUS", b"geo", b"15", b"37", b"300", b"km", b"STORE", b"ex15"],
+    [b"GEOSEARCHSTORE", b"ex16", b"geo", b"FROMLONLAT", b"15", b"37", b"BYRADIUS", b"300", b"km", b"STOREDIST"],
+    [b"GEOADD", b"ex17", b"2", b"2", b"b"],
     [b"MULTI"], [b"SET", b"tx1", b"a"], [b"INCR", b"txn"], [b"RPUSH", b"txl", b"1", b"2"], [b"SELECT", b"4"],
     [b"SET", b"tx4", b"b"], [b"EXEC"], [b"SELECT", b"0"], [b"MULTI"], [b"SET", b"tx2", b"c"], [b"EXEC"],
     [b"MULTI"], [b"SET", b"tx3", b"d"], [b"DISCARD"], [b"MULTI"], [b"GET", b"tx1"], [b"EXEC"],

@@ -12325,6 +12325,8 @@ def act_split(+a: R.Act, +ds: R.Ds) -> {(R.reply_ds(R.act(a, ds)), (aeff(a, ds),
       act_split_cmd(R.sort.write.ds(x, k, ob), x)
     case R.APfMerge{+d, +srcs} x:
       act_split_cmd(R.pf.merge.ds(x, d, srcs), x)
+    case R.AGeo{+k, +args} x:
+      act_split_cmd(R.geo.store.ds(x, k, args), x)
 
 def app_nil_e(xs: List<&2, A.Eff>) -> {List.append(&2, A.Eff, xs, Nil{}) == xs : List<&2, A.Eff>}:
   match xs:
@@ -13929,6 +13931,11 @@ def act_inv(t: R.Act, +o: R.Ds, +r: R.Ds, +sel: Nat, +n: Nat, +sm: {KV.small(n) 
       (ez, q) = inv
       (ei, en) = q
       post_run(R.pf.merge.ds(o, d, srcs), o, r, sel, n)(ln)(sm)(ez)(ei)(en)
+    case R.AGeo{+k, +args}:
+      (inv, ln) = st
+      (ez, q) = inv
+      (ei, en) = q
+      post_run(R.geo.store.ds(o, k, args), o, r, sel, n)(ln)(sm)(ez)(ei)(en)
 
 # acts one after another keep it, effect after effect
 def acts_inv(as: List<&2, R.Act>, +o: R.Ds, +r: R.Ds, +sel: Nat, +n: Nat, +sm: {KV.small(n) == True{} : Bool}, st: Inv(r, o, sel) & Len(o, n)) -> Inv(rp(aeffs(as, o), sel, r), R.acts(as, o), A.effs.sel(aeffs(as, o), sel)) & Len(R.acts(as, o), n):
@@ -15081,6 +15088,8 @@ def act_now(t: R.Act, +o: R.Ds) -> {R.ds.now(R.ds_of(R.act(t, o))) == R.ds.now(o
       now_run(R.sort.write.ds(o, k, ob), o)
     case R.APfMerge{+d, +srcs}:
       now_run(R.pf.merge.ds(o, d, srcs), o)
+    case R.AGeo{+k, +args}:
+      now_run(R.geo.store.ds(o, k, args), o)
 
 # an act run at a time leaves the databases at that time
 def act_at(+t: R.Act, +now: Nat, +x: R.Ds) -> {R.ds.at(now, R.ds_of(R.act(t, R.ds.at(now, x)))) == R.ds_of(R.act(t, R.ds.at(now, x))) : R.Ds}:
@@ -15452,6 +15461,8 @@ def one_eff(t: R.Act, +o: R.Ds) -> OneE(aeff(t, o)):
       one_run(R.sort.write.ds(o, k, ob), o)
     case R.APfMerge{+d, +srcs}:
       one_run(R.pf.merge.ds(o, d, srcs), o)
+    case R.AGeo{+k, +args}:
+      one_run(R.geo.store.ds(o, k, args), o)
 
 # the first i entries of the steps ss, run from x, replayed after r: the
 # databases after the first j steps, for some j
@@ -16327,6 +16338,8 @@ def srv_same.o(o: R.SessOp, +conn: S.Conn, +srv: S.Srv, +ef: {S.authed(conn, srv
       e => Empty.absurd({S.own_srv(R.SPfSelfTest{}, conn, srv) == srv : S.Srv}, true_false(Equal.trans(Bool, True{}, S.authed(conn, srv), False{}, e, ef)))
     case R.SAdmin{y0, y1}:
       e => Empty.absurd({S.own_srv(R.SAdmin{y0, y1}, conn, srv) == srv : S.Srv}, true_false(Equal.trans(Bool, True{}, S.authed(conn, srv), False{}, e, ef)))
+    case R.SGeoStore{y0, y1}:
+      e => Empty.absurd({S.own_srv(R.SGeoStore{y0, y1}, conn, srv) == srv : S.Srv}, true_false(Equal.trans(Bool, True{}, S.authed(conn, srv), False{}, e, ef)))
     case R.SFail{y0}:
       e => Empty.absurd({S.own_srv(R.SFail{y0}, conn, srv) == srv : S.Srv}, true_false(Equal.trans(Bool, True{}, S.authed(conn, srv), False{}, e, ef)))
     case R.SMemUsage{y0, y1}:
@@ -16521,6 +16534,10 @@ def own_bad(o: R.SessOp, +ps: List<&2, R.Act>, +id: Nat, +a: Bool, +n: String, +
     case R.SAdmin{y0, y1}:
       ih =>
         %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel, r3}, srv), False{}, ef) : {Laws.all_bad(List.append(&2, R.Act, S.acts.k(S.KSess{R.SAdmin{y0, y1}}, _, R.Own{R.SAdmin{y0, y1}}, S.Conn{id, a, n, m, False{}, sel, r3}, srv), ps)) == True{} : Bool}
+        ih
+    case R.SGeoStore{y0, y1}:
+      ih =>
+        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel, r3}, srv), False{}, ef) : {Laws.all_bad(List.append(&2, R.Act, S.acts.k(S.KSess{R.SGeoStore{y0, y1}}, _, R.Own{R.SGeoStore{y0, y1}}, S.Conn{id, a, n, m, False{}, sel, r3}, srv), ps)) == True{} : Bool}
         ih
     case R.SFail{y0}:
       ih =>
@@ -16823,6 +16840,10 @@ def auth_own(o: R.SessOp, +id: Nat, +a: Bool, +n: String, +m: S.Mute, +sel: Nat,
     case R.SAdmin{y0, y1}:
       el =>
         %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel, r3}, srv), False{}, ef) : {S.conn.auth(S.next_conn.k(S.KSess{R.SAdmin{y0, y1}}, _, S.Conn{id, a, n, m, False{}, sel, r3}, srv)) == False{} : Bool}
+        or_false_l(a, S.nopass(srv))(ef)
+    case R.SGeoStore{y0, y1}:
+      el =>
+        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel, r3}, srv), False{}, ef) : {S.conn.auth(S.next_conn.k(S.KSess{R.SGeoStore{y0, y1}}, _, S.Conn{id, a, n, m, False{}, sel, r3}, srv)) == False{} : Bool}
         or_false_l(a, S.nopass(srv))(ef)
     case R.SFail{y0}:
       el =>
@@ -19065,6 +19086,8 @@ def counted_act(a: R.Act, +ds: R.Ds) -> {Laws.counted_ds(ds) == True{} : Bool} -
       counted_cmd(R.sort.write.ds(x, k, ob), x)
     case R.APfMerge{+d, +srcs} x:
       counted_cmd(R.pf.merge.ds(x, d, srcs), x)
+    case R.AGeo{+k, +args} x:
+      counted_cmd(R.geo.store.ds(x, k, args), x)
 
 def counted_acts(as: List<&2, R.Act>, +ds: R.Ds) -> {Laws.counted_ds(ds) == True{} : Bool} -> {Laws.counted_ds(R.acts(as, ds)) == True{} : Bool}:
   match as:

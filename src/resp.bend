@@ -332,13 +332,86 @@ def bulks(n: Nat, +s: String, +l: Nat, b: Bulk, acc: List<&2, String>) -> Args:
     case _ BulkBad{msg}:
       ArgsBad{msg}
 
+# The arguments of a long request. A request longer than a window
+# (Long buffers, below) is parsed in the buffer where it lies, and a read
+# of a packed String by index walks its runs from its start: its
+# arguments are read through a window of their own, a copy of one run of
+# the buffer (2048 bytes), moved on (sliced again at the next bulk) once
+# fewer than 1024 of its bytes are left, so that each read walks one run
+# and the parse takes time in proportion to the request, not to its
+# square. A bulk that runs past the window, with more of the buffer after
+# the window, is read from the buffer itself.
+
+def run.max() -> Nat:
+  2048n
+
+# the window of s at index j: up to a run of its bytes, a copy
+def wnd.from(+s: String, +j: Nat, +l: Nat) -> String:
+  String.slice(s, j, Nat.min(run.max(), Nat.sub(l, j)))
+
+# a bulk read in the window w, whose first byte is at index base of s,
+# its next index back in s; one that runs past w (s goes on past w) is
+# read from s itself, at j
+def wnd.bulk.of(b: Bulk, +base: Nat, past: Bool, +s: String, +j: Nat, +l: Nat) -> Bulk:
+  match b past:
+    case BulkOk{arg, +nj} _:
+      BulkOk{arg, Nat.add(nj, base)}
+    case BulkMore{k} True{}:
+      bulk_at(s, j, l)
+    case BulkMore{k} False{}:
+      BulkMore{k}
+    case BulkBad{m} _:
+      BulkBad{m}
+
+def wnd.bulk(+w: String, +base: Nat, +s: String, +j: Nat, +l: Nat) -> Bulk:
+  +wl = String.length(w)
+  wnd.bulk.of(bulk_at(w, Nat.sub(j, base), wl), base, Nat.is_lt(Nat.add(base, wl), l), s, j, l)
+
+# the window for the bulk at j: w (at base) while 1024 of its bytes are
+# left or it reaches the end of s, else the window at j
+def wnd.next(re: Bool, +w: String, +s: String, +j: Nat, +l: Nat) -> String:
+  match re:
+    case True{}:
+      wnd.from(s, j, l)
+    case False{}:
+      w
+
+def wnd.re(+w: String, +base: Nat, +j: Nat, +l: Nat) -> Bool:
+  +end = Nat.add(base, String.length(w))
+  Bool.and(Nat.is_lt(end, Nat.add(j, 1024n)), Nat.is_lt(end, l))
+
+# bulks's loop through a window: w at index base of s
+def wbulks(n: Nat, +s: String, +l: Nat, +w: String, +base: Nat, b: Bulk, acc: List<&2, String>) -> Args:
+  match n b:
+    case 0n BulkOk{arg, j}:
+      ArgsOk{List.reverse(&2, String, arg <> acc), j}
+    case 1n+m BulkOk{arg, +j}:
+      +re = wnd.re(w, base, j, l)
+      +w2 = wnd.next(re, w, s, j, l)
+      +b2 = Bool.pick(Nat, re, j, base)
+      wbulks(m, s, l, w2, b2, wnd.bulk(w2, b2, s, j, l), arg <> acc)
+    case _ BulkMore{k}:
+      ArgsMore{k}
+    case _ BulkBad{msg}:
+      ArgsBad{msg}
+
+# the k bulks after the first of a request's arguments at index j: in
+# place in a buffer of one run, through a window in a longer one
+def args.from(long: Bool, +k: Nat, +s: String, +l: Nat, +j: Nat) -> Args:
+  match long:
+    case False{}:
+      bulks(k, s, l, bulk_at(s, j, l), Nil{})
+    case True{}:
+      +w = wnd.from(s, j, l)
+      wbulks(k, s, l, w, j, wnd.bulk(w, j, s, j, l), Nil{})
+
 # the m bulks of a request's arguments at index j
 def args.at(m: Nat, +s: String, +l: Nat, +j: Nat) -> Args:
   match m:
     case 0n:
       ArgsOk{Nil{}, j}
     case 1n+k:
-      bulks(k, s, l, bulk_at(s, j, l), Nil{})
+      args.from(Nat.is_lt(run.max(), l), k, s, l, j)
 
 # a request, its hash marked with its code: its key and what its
 # command counts as; a failed call's error as the server runs it

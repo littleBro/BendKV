@@ -2843,6 +2843,8 @@ def own_reply(+o: R.SessOp, +c: Conn, +s: Srv, +ds: R.Ds) -> Maybe<&2, R.Reply>:
       say(conn.mode(c), R.pf.selftest())
     case R.SAdmin{+k, +a}:
       say(conn.mode(c), admin.reply(k, a, s, ds))
+    case R.SGeoStore{+k, a}:
+      say(conn.mode(c), R.geo.store.reply(R.ds.focused(ds), k, a))
 
 # the connection after a session command
 def own_conn(+o: R.SessOp, +c: Conn, +s: Srv) -> Conn:
@@ -2939,12 +2941,14 @@ def own_conn(+o: R.SessOp, +c: Conn, +s: Srv) -> Conn:
       step_conn(c, s)
     case R.SAdmin{k, a}:
       step_conn(c, s)
+    case R.SGeoStore{k, a}:
+      step_conn(c, s)
 
 # what a session command does to the databases: SELECT and RESET move the
 # focus to the connection's new database, SWAPDB, MOVE, COPY and FLUSHALL
 # act on the databases, SPOP and a blocking command that runs at once on
-# the focus, SORT with STORE writes its destination there, and the others
-# do nothing to them
+# the focus, SORT with STORE, PFMERGE and a GEO search that stores write
+# their destination there, and the others do nothing to them
 def own_acts(+o: R.SessOp, +c: Conn, +s: Srv) -> List<&2, R.Act>:
   match o:
     case R.SSelect{+d}:
@@ -2967,6 +2971,8 @@ def own_acts(+o: R.SessOp, +c: Conn, +s: Srv) -> List<&2, R.Act>:
       [R.ASort{k, o}]
     case R.SPfMerge{+d, srcs}:
       [R.APfMerge{d, srcs}]
+    case R.SGeoStore{+k, a}:
+      [R.AGeo{k, a}]
     case _:
       Nil{}
 

@@ -1153,17 +1153,21 @@ def f64.parse.ok(ok: Bool, v: Fl) -> Maybe<&2, F64>:
         case FNum{neg, m, e}:
           Some{f64.of(FNum{neg, m, e})}
 
-def f64.parse.rd(r: Rd, +n: Nat) -> Maybe<&2, F64>:
-  match r:
-    case Rd{v, +end, +er, tiny}:
-      f64.parse.ok(Bool.and(Nat.is_eq(end, n), Bool.not(er)), v)
+# the double whose bits F64.read gives (base's native: glibc's strtod, as
+# Redis's string2d calls it), None when it gives a NaN: s does not read
+def f64.read.pick(+x: F64) -> Maybe<&2, F64>:
+  Bool.pick(Maybe<&2, F64>, f64.is_nan(x), None{}, Some{x})
+
+def f64.read.of(r: U32 & U32) -> Maybe<&2, F64>:
+  (h, l) = r
+  f64.read.pick(F64{U32.to_nat(h), U32.to_nat(l)})
 
 def f64.parse.of(bad: Bool, +s: String, +n: Nat) -> Maybe<&2, F64>:
   match bad:
     case True{}:
       None{}
     case False{}:
-      f64.parse.rd(fl.strtod(fmt.d(), s, 0n, 0n), n)
+      f64.read.of(F64.read(s))
 
 # the bits of n, below 2^48
 def nat.bl48.if(lo: Bool, +n: Nat) -> Nat:
@@ -1211,7 +1215,8 @@ def f64.parse.int(int: Bool, +s: String, +n: Nat, +a: Nat) -> Maybe<&2, F64>:
 
 # a double as Redis's string2d reads one (getDoubleFromObject): all of s,
 # no blank first; None for no number, a NaN, or a range error. An integer
-# of up to 14 digits is read at once.
+# of up to 14 digits is read at once, any other text by glibc's strtod
+# (F64.read), which fl.strtod reads as it does.
 def f64.parse(+s: String) -> Maybe<&2, F64>:
   +n = String.length(s)
   +a = Bool.pick(Nat, U32.is_eq(String.code_at(s, 0n), 45), 1n, 0n)
@@ -1563,3 +1568,61 @@ def fl.show_human(x: Fl) -> String:
       Bool.pick(String, neg, "-inf", "inf")
     case FNum{+neg, +m, +e}:
       f.fin(big.is_zero(m), neg, m, e)
+
+# the digits of n, a number times 10^6, with the point 6 digits from the
+# right, as printf's "%f" writes them (a 0 before the point at least)
+def f6.point(+ds: String) -> String:
+  +d7 = str.zeros(Nat.sub(7n, String.length(ds))) ++ ds
+  +k = Nat.sub(String.length(d7), 6n)
+  String.take(d7, k) ++ "." ++ String.drop(d7, k)
+
+def f6.out(+neg: Bool, n: List<&2, Nat>) -> String:
+  Bool.pick(String, neg, "-", "") ++ f6.point(big.to_dec(n))
+
+def f6.round.up(up: Bool, +neg: Bool, +q: List<&2, Nat>) -> String:
+  match up:
+    case True{}:
+      f6.out(neg, big.add(q, [1n]))
+    case False{}:
+      f6.out(neg, q)
+
+# t * 2^-r, rounded to an integer, to the even one on a tie (r past 0)
+def f6.round(+neg: Bool, +t: List<&2, Nat>, +r: Nat) -> String:
+  +q = big.shr(t, r)
+  f6.round.up(Bool.and(big.bit(t, Nat.sub(r, 1n)), Bool.or(big.low_nz(t, Nat.sub(r, 1n)), big.is_odd(q))), neg, q)
+
+# m * 2^-s times 10^6 = m * 5^6 * 2^(6 - s): exact for s up to 6
+def f6.frac(small: Bool, +neg: Bool, +t: List<&2, Nat>, +s: Nat) -> String:
+  match small:
+    case True{}:
+      f6.out(neg, big.shl(t, Nat.sub(6n, s)))
+    case False{}:
+      f6.round(neg, t, Nat.sub(s, 6n))
+
+def f6.num(int: Bool, +neg: Bool, +m: List<&2, Nat>, +e: Nat) -> String:
+  match int:
+    case True{}:
+      f6.out(neg, big.mul_pow(big.shl(m, Nat.sub(e, fl.eb())), 10n, 6n))
+    case False{}:
+      +s = Nat.sub(fl.eb(), e)
+      f6.frac(Nat.is_le(s, 6n), neg, big.mul_pow(m, 5n, 6n), s)
+
+def f6.fin(z: Bool, +neg: Bool, +m: List<&2, Nat>, +e: Nat) -> String:
+  match z:
+    case True{}:
+      Bool.pick(String, neg, "-0.000000", "0.000000")
+    case False{}:
+      f6.num(Nat.is_le(fl.eb(), e), neg, m, e)
+
+# a number as printf's "%f" writes it: its exact value rounded to six
+# decimals, to the even one on a tie, with its sign (a negative zero, and
+# a negative number that rounds to 0, are "-0.000000"); "inf", "-inf",
+# "nan"
+def fl.show_f(x: Fl) -> String:
+  match x:
+    case FNaN{}:
+      "nan"
+    case FInf{+neg}:
+      Bool.pick(String, neg, "-inf", "inf")
+    case FNum{+neg, +m, +e}:
+      f6.fin(big.is_zero(m), neg, m, e)
