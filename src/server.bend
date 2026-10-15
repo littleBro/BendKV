@@ -6148,6 +6148,11 @@ def mark.hs(+back: Chan(Ans), +hs: List<&2, U32>, +now: Nat, k: U32) -> Chan(Ans
 # as they were, and a command queued in a transaction marks its key as
 # it is queued). The random number of an LFU counter's step scrambles the
 # key's hash and word with the time and the request's place in the batch.
+# A RESTORE makes its key anew, as Redis makes a new value: under an LFU
+# policy its mark gives the key's word a counter of 5 at the minute
+# (use.lfu.word), whatever word another key that shares it left, where
+# any other request steps the word as a use (S.lfu.use); RESTORE's FREQ
+# then sets it once the key is restored (bg.restored).
 
 def use.lru(+hs: List<&2, U32>, +w: U32, k: U32) -> U32:
   match hs:
@@ -6156,13 +6161,18 @@ def use.lru(+hs: List<&2, U32>, +w: U32, k: U32) -> U32:
     case Con{+h, +rest}:
       use.lru(rest, w, Mem.touch(k, h, w))
 
+# the word a request of hash h leaves in its key's word w under an LFU
+# policy, at the minute min, r its random number
+def use.lfu.word(+h: U32, +w: U32, +min: U32, +r: U32, +lf: Nat, +dt: Nat) -> U32:
+  Bool.pick(U32, U32.is_eq(U32.and(h, 4293918720), R.stat.mark.restore()), S.lfu.word(min, 5), S.lfu.use(w, min, r, lf, dt))
+
 def use.lfu(+hs: List<&2, U32>, +now: Nat, +min: U32, +lf: Nat, +dt: Nat, +i: U32, k: U32) -> U32:
   match hs:
     case Nil{}:
       k
     case Con{+h, +rest}:
       +w = Mem.cell(h)
-      use.lfu(rest, now, min, lf, dt, U32.add(i, 2654435769), Mem.touch(k, h, S.lfu.use(w, min, KV.mix(U32.xor(U32.xor(h, w), U32.xor(U32.from_nat(now), i))), lf, dt)))
+      use.lfu(rest, now, min, lf, dt, U32.add(i, 2654435769), Mem.touch(k, h, use.lfu.word(h, w, min, KV.mix(U32.xor(U32.xor(h, w), U32.xor(U32.from_nat(now), i))), lf, dt)))
 
 # a batch the general way, its keys marked used first (lfu: under an LFU
 # policy) and its client's channel marked with its last command (mark.hs)

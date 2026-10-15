@@ -13434,8 +13434,8 @@ def stat.code.hl(+hi: Nat, +lo: Nat) -> Nat:
 def stat.code.cw(+w: Nat) -> Nat:
   stat.code.hl(Nat.div(w, 64n), Nat.mod(w, 64n))
 
-# the high twelve bits of the hash of a call of GET, SET and INCR that
-# runs, as the parser writes them
+# the high twelve bits of the hash of a call of GET, SET, INCR and
+# RESTORE that runs, as the parser writes them
 def stat.mark.get() -> U32:
   191889408
 
@@ -13444,6 +13444,9 @@ def stat.mark.set() -> U32:
 
 def stat.mark.incr() -> U32:
   326107136
+
+def stat.mark.restore() -> U32:
+  2744123392
 # END gen_commands: stats
 
 # a container (CLIENT, FUNCTION, CONFIG, COMMAND, OBJECT, MEMORY, PUBSUB)
