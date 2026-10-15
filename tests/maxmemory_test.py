@@ -348,9 +348,17 @@ def main():
         if not wait_for(lambda: cmd(kc, "DBSIZE") == (b":", b"0")):
             fail("the keys are not evicted")
         cmd(kc, "CONFIG", "SET", "maxmemory", "0")
-        # an eviction that runs out of time goes on with no request
+        # an eviction that runs out of time goes on with no request. The
+        # connection that watches the memory opens, and asks once, before
+        # base is measured: the server keeps what a client takes (about 1 KB
+        # for the first one past those it held before) after the client has
+        # gone, so a connection opened later would put that above the limit,
+        # and once the eviction had stopped within that much of it, INFO
+        # would never set another going
         cmd(kc, "FLUSHALL")
         cmd(kc, "CONFIG", "RESETSTAT")
+        quiet = Conn(args.bendkv)
+        used(quiet)
         base = used(kc)
         fill(kc, 200000)
         full = used(kc)
@@ -358,7 +366,6 @@ def main():
         cmd(kc, "CONFIG", "SET", "maxmemory", limit)
         t0 = time.time()
         time.sleep(0.5)
-        quiet = Conn(args.bendkv)
         if not wait_for(lambda: used(quiet) <= limit, 30):
             fail("the eviction does not bring the memory within maxmemory (%d > %d)" % (used(quiet), limit))
         i = info(kc)

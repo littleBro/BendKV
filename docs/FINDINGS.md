@@ -3922,10 +3922,14 @@ past a limit of the memory used and 100 KB, then as many again, and the memory s
 within the limit and 4 KB; with keys without a time the volatile policies refuse writes
 where the allkeys ones evict; and the volatile policies evict only keys with a time. And
 BendKV alone: the warnings of its log; an eviction that runs out of time and goes on with
-no request to drive it (200,000 keys, the memory back within the limit, `evicted_keys`
-and the time past maxmemory counted); keys evicted with the append-only file on, gone
-from the file too (a restart holds what was left); and an eviction while a rewrite runs,
-which leaves between half and all of 300,000 keys rather than none. Redis's suite: 805 of
+no request to drive it (200,000 keys, the memory back within the limit, `evicted_keys` and
+the time past maxmemory counted; the connection that watches the memory opens before the
+limit is measured, since the server keeps the kilobyte the first client past those it held
+takes after the client has gone, and once the eviction had stopped within that of the
+limit, nothing would have set another going: CI saw it 496 bytes over); keys evicted with
+the append-only file on, gone from the file too (a restart holds what was left); and an
+eviction while a rewrite runs, which leaves between half and all of 300,000 keys rather
+than none. Redis's suite: 805 of
 the 1,677 tests Redis passes (48.0%; 797 before): unit/pubsub's test of `evicted` events
 and the two it held back, unit/multi's DISCARD past maxmemory and its EXEC aborted after
 a command refused while it queued, unit/introspection-2's test that TTL, TYPE and EXISTS
