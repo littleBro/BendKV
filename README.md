@@ -419,11 +419,11 @@ translation stays in the trusted base.
   append-only file written and synced, a rewrite that runs stopped, the RDB file saved
   with save points or SAVE and not with NOSAVE (a save that fails stops nothing, Redis's
   error answered, but with FORCE), the pid file removed, the process ended with code 0.
-  Where BendKV differs: SIGTERM and SIGINT end the process at once, without the
-  shutdown Redis runs for them (`shutdown-on-sigterm`, `shutdown-on-sigint`: its save
-  with save points among it), as the runtime has no handler for them; MEMORY
-  MALLOC-STATS has no allocator's statistics; LOLWUT's large drawings take up to a
-  hundred times Redis's time (FINDINGS.md, sections 3zzl and 3zzzc).
+  SIGTERM and SIGINT run that shutdown, as Redis's handler has them run it, with the
+  flags of `shutdown-on-sigterm` and `shutdown-on-sigint` (the signal's line logged at
+  once, a second SIGINT ending the process). Where BendKV differs: MEMORY MALLOC-STATS
+  has no allocator's statistics; LOLWUT's large drawings take up to a hundred times
+  Redis's time (FINDINGS.md, sections 3zzl, 3zzzc and 3zzzf).
 - **Configuration:** CONFIG GET (names, aliases and glob patterns), SET (several
   parameters at once, all or none), RESETSTAT, REWRITE, HELP, over every parameter of
   Redis 7.0.15 (counted in [In numbers](#in-numbers)), taken from Redis's own table by
@@ -540,8 +540,7 @@ translation stays in the trusted base.
   reads but a stream's and a module's, AUX fields it does not know, and drops the keys
   whose time has passed, counting them. Where BendKV differs: no BGSAVE and no save at
   the save points (BendKV's default `save` is empty, where Redis's is `3600 1 300 100 60
-  10000`, and its start warns of save points set), nor on SIGTERM or SIGINT (above);
-  `rdb_changes_since_last_save` stays 0; no LZF written; no IDLE or FREQ written, and
+  10000`, and its start warns of save points set); `rdb_changes_since_last_save` stays 0; no LZF written; no IDLE or FREQ written, and
   those read set no word of use; the start reads the whole file before it loads it, and
   takes several times Redis's time (PERFORMANCE.md, section 67; FINDINGS.md, section
   3zzzc).
@@ -766,7 +765,7 @@ away.
 | what | how many | counted in |
 |---|---:|---|
 | laws | 67 | `proof/LAWS.bend` (by group: [What is proved](#what-is-proved)) |
-| patches to the Bend compiler | 36 | `bend-patches/apply.sh` |
+| patches to the Bend compiler | 37 | `bend-patches/apply.sh` |
 | constructors of `Cmd`, a parsed command | 30 | `src/redis.bend` |
 | Redis 7.0.15's parameters, all of which CONFIG serves | 178 | `tools/data/redis-configs.json` |
 

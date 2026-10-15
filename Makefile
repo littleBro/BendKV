@@ -37,7 +37,8 @@
 # of calls reads the monotonic clock with the thirty-fifth's Clock.us; the
 # start listens on IPv6 addresses and on a unix socket, and tells systemd
 # it is ready and stops, with the thirty-sixth's TCP.listen,
-# TCP.listen_unix and IO.notify; the others
+# TCP.listen_unix and IO.notify; SIGTERM and SIGINT shut the server down as
+# Redis's handler has them do, with the thirty-seventh's IO.signal; the others
 # only speed up the runtime and the code):
 #   make build BEND="bun <patched bend>/bend2/main.ts"
 # Bend compiles with $(BEND_CC) when it has one: clang 19 honors the

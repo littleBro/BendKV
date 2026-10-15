@@ -321,9 +321,9 @@ synced, renamed onto `dbfilename`, the directory synced), SHUTDOWN saves it with
 with save points, FLUSHALL with save points saves the emptied databases, and the start
 loads it with `appendonly no`: every version from 1 to 10 and every encoding the codec
 reads, keys whose time has passed dropped and counted, Redis's lines for a file that does
-not load. No BGSAVE and no save at the save points yet, no LZF or IDLE and FREQ written,
-and no save on SIGTERM, which the runtime does not catch (section 3zzzc of
-docs/FINDINGS.md).
+not load. SIGTERM and SIGINT run SHUTDOWN's shutdown, as Redis's handler has them run
+it. No BGSAVE and no save at the save points yet, and no LZF or IDLE and FREQ written
+(sections 3zzzc and 3zzzf of docs/FINDINGS.md).
 Clients that wait: BLPOP, BRPOP, BLMOVE, BRPOPLPUSH, BLMPOP, BZPOPMIN, BZPOPMAX and
 BZMPOP; their timeout (seconds, a double; 0 means wait forever) is read as Redis reads
 it, with its errors. A command that has nothing to pop makes the client wait, and its
