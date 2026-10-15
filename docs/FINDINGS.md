@@ -5017,6 +5017,117 @@ bytes as it did, so that the protocol's errors and their timing are as they were
 GEOADD of 20,000 points now takes 194 ms, an EXISTS of 40,000 keys 29 ms (Redis 3.6 ms),
 an RPUSH of 40,000 elements 30 ms where it took 249 (PERFORMANCE.md, section 60).
 
+## 3zzo. Clients that wait or watch, and the fast way
+
+**What it cost.** The fast way ran a batch only while no client waited in a blocking
+command, none had a transaction or watched a key, and no keyspace event was to go out
+(`group_job`). So one client in BLPOP or one WATCH put every batch of every client on the
+general way, a command at a time. After each command the actor also walked the whole
+chain of the clients that wait, with a lookup in the trie for each of their keys (3zp said
+so; its cost was not measured). GET at pipeline 16 lost two thirds of its throughput with
+one client in BLPOP or one after WATCH, nine tenths with 100 in BLPOP, and almost all of
+it with 1,000 (#30; [PERFORMANCE section 61](PERFORMANCE.md)). Redis looks a written key up
+in `blocking_keys` and `watched_keys`, and a client that waits or watches costs nothing to
+the commands on other keys.
+
+**What runs now** (`src/server.bend`, Heeded keys).
+- The registry of the clients (`Cls`, in Ps) keeps the keys that clients heed (`Hd`): the
+  keys a client waits on and the keys a client watches, in any database, as a trie. A key
+  goes in as a client starts to wait on it (`bg.wait`) or watches it (`bg.watch`).
+- While some client waits or watches, a batch of database commands (no command of the
+  connection or of the server) runs the fast way when three things hold: its client may
+  run it so; it is in no MULTI (`tx.in.multi`, where its commands are queued); and none of
+  its commands may write a heeded key. The keys a command may write are those LAWS.bend's
+  `writes` names (every key for FLUSHDB). The clients that wait and the transactions stay
+  as they were (`grp.keep`). Any other batch runs the general way, as before.
+- Why that is enough: the law `frame` makes a command leave as it was the entry of each key
+  its `writes` does not name, and the keys a command of the database touches for the
+  clients that watch (Touches, in `src/server.bend`) are keys its `writes` names. So after
+  such a batch no client that waits finds what it waits for, and no watched key is
+  touched.
+- A batch that writes a key some client waits on still runs a command at a time, and its
+  waiter is served right after the command that wrote the key: with a client in `BLPOP q`,
+  the pipeline `RPUSH q x`, `LPOP q` answers nil to LPOP, as Redis does.
+- On the general way the clients that wait are looked at only after a command that may
+  make one ready (`bg.stir`): a command of the connection or of the server (SWAPDB, MOVE,
+  COPY, SORT with STORE, EXEC among them), or a command of the database that may write a
+  heeded key. Before such a command none was ready, and after any other none is. The check
+  runs before the command, which changes neither the clients that wait nor the heeded keys,
+  so the command is lent to it and then given to the run.
+- The set is made anew at a tick when a client that heeded keys stopped since it was made
+  (`heed.tick`: two counts, compared without a walk of the keys). With it goes the earliest
+  time a wait ends (`soon`): at the end of a group the actor walks the chain of the clients
+  that wait, for those whose time is up, only once that time has passed (`grp.end.due`),
+  where it walked the chain at the end of every group.
+
+**How a batch is checked without reading its commands.** The first check read each
+command of the batch (`heed.cmd` over the list) and cost far more than it read:
+- `Cmd` is laid out unboxed, and the same word holds a string in one constructor and a
+  number in another (`BitOp`'s op, `IncrBy`'s amount). A `Cmd` read out of a list is
+  unpacked into those words, and the compiler cannot keep a word borrowed whose
+  constructors disagree (`val_arms` in `comp.ts`): it calls `slot_keep` on every string
+  field of every command, whatever the check then does with it. Nested patterns
+  (`Con{R.Set{k, v}, rest}`) unpack the same way. Section 7 says as much: a borrowed match
+  on `Cmd` gives every pointer field it binds a reference count.
+- `slot_keep` seals the string in place. A batch of SETs then put its keys and values in
+  the keyspace sealed, and every later GET of those keys read one more word: under
+  callgrind with 100 clients in BLPOP, GET counted 9.6% more than without them, with 0.57
+  more last-level misses per GET on the seals (`term_peek`), and the prefetches of `btouch`
+  reached only the seal (the same number of prefetches, none of them of a key's bytes).
+So the batch is checked by the hashes its requests carry. A request's hash holds in its
+high twelve bits its call's code, and the parser writes fixed marks there for a call of
+GET, SET and INCR that runs (`R.stat.mark.*`). GET writes nothing; SET and INCR write their
+key alone, their first argument, and the low twenty bits of the hash are that key's (the
+parser's ways for the three, and `req.hash`: both commands touch their first key). A heeded
+key such a write may write lies in the bucket of that hash. `KV.tget_hn` (generated with the
+other walks) says whether the bucket holds an entry, reading the trie it is lent. A batch of
+GETs, SETs and INCRs alone, none of whose writes finds a heeded key in its bucket, runs the
+fast way with no command read (`heed.quick`). Any other batch is read command by command
+(`heed.cmds`), with the counts above, and a SET whose bucket holds a heeded key is one of
+those; a key in the bucket that is not the one written then costs a read, not the general
+way. The walks are tight loops that match their list alone: one that matched a flag beside
+the list dropped the command it had bound in one arm, and so took it over in all of them.
+
+**What it costs.** Nothing while no client waits or watches: the first case of
+`group_job` is as it was, and the generated C of the fast way is the same, function for
+function (the per-function diff of `bend src/server.bend -o x.c`: the functions of the
+registry, `bg.cmd`, WATCH and `group_req` change; `fast` becomes a function of its own,
+entered by a jump, where `group_req` held it inline). GET, SET and INCR take 3,335, 4,083
+and 4,411 instructions per request under callgrind (3,323, 4,080 and 4,395 on main,
+counted the same way: two runs of one build differ by as much). With 100 clients in BLPOP,
+GET and SET take 3,418 and 4,215, 2.5% and 3.2% more than without them in the same run,
+and miss the last level 2.83 and 3.17 times per request, where they miss 2.80 and 3.11
+without them (the build that read every command: GET 9.6% more, 3.54 misses). On main,
+one client in BLPOP took GET and SET to 13,706 and 15,030 (PERFORMANCE section 61, with
+the throughput). `make perfcheck` counts GET and SET with 100 clients in BLPOP and fails
+past 5%.
+
+**What is left.**
+- A batch that writes a key some client heeds runs the general way, a command at a time,
+  as before; on it the actor still walks the whole chain after a command that stirs
+  (`waits.find`), where Redis serves from the key's list of clients.
+- A batch with a command other than GET, SET and INCR is read, with the counts above: its
+  strings go into the keyspace sealed while some client waits or watches. The general way
+  seals them too (`bg.one.q` uses a command after running it), as it did before this change.
+- A key no client heeds any more sends the batches that write it the general way until the
+  tick after its client stopped.
+- While keyspace events are on, a monitor is connected, a pause holds or the server is past
+  maxmemory with nothing left to evict, every batch runs the general way, as before.
+
+**Tests.**
+- `tests/blocking_test.py`:
+  - a pipeline that pushes to a key a client waits on and then pops it (the client served
+    between them);
+  - with 100 clients waiting, pipelines that write twelve kinds of commands to other keys,
+    one of GETs, SETs and INCRs alone, then one that writes a key among theirs in the
+    middle, and an LMOVE to one;
+  - each against Redis.
+- `tests/multi_test.py`:
+  - a pipeline of commands in MULTI (each queued: the check of MULTI);
+  - WATCH with another client's pipeline that writes other keys only (EXEC runs), or the
+    watched one among them (EXEC answers a null array);
+  - the same with GETs, SETs and INCRs alone, untouched and touched by an INCR.
+
 ## 3zzu. DUMP and RESTORE
 
 **What there is.** DUMP and RESTORE as Redis 7.0.15 runs them (`src/rdb.bend`, from
