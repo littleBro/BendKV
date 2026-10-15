@@ -1,7 +1,8 @@
 # BendKV: what we found
 
 BendKV is a Redis-compatible key-value store written in Bend2, with its core proved
-against 67 laws. This file sums up what building it and making it fast
+against the laws of [`proof/LAWS.bend`](../proof/LAWS.bend), counted in
+[README.md](../README.md#in-numbers). This file sums up what building it and making it fast
 showed us. The detailed record, with every table and measurement, is in
 [PERFORMANCE.md](PERFORMANCE.md) (performance, section by section) and
 [OVERVIEW.md](../OVERVIEW.md) (the project, the proofs, how to run). Where the work goes
@@ -9,14 +10,14 @@ next, and why, is in [DIRECTIONS.md](DIRECTIONS.md).
 
 ## 1. The result
 
-**Correctness.** About 3,320 lines of core code (with the parsing of commands, of their
-times and options, Redis's pattern matching, several databases, the ranges and bits of
-strings and BITFIELD's words of 64 bits), about 950 lines of
-sessions (a connection's state and the server's), about 70 lines of batch hints, about
-520 lines of append-only file, about 13,250 lines of handwritten proofs with a
-specification of about 370 that they bridge to (section 3u), and about 2,790 lines of
-16-way case splits written by a script ([`tools/gen_trie.py`](../tools/gen_trie.py)), not
-counting comments and blank lines. Bend checks the 67 laws in about 14 s; the BendTT
+**Correctness.** Core code (with the parsing of commands, of their times and options,
+Redis's pattern matching, several databases, the ranges and bits of strings and
+BITFIELD's words of 64 bits), sessions (a connection's state and the server's), batch
+hints and an append-only file; handwritten proofs with a specification that they bridge
+to (section 3u), and 16-way case splits written by a script
+([`tools/gen_trie.py`](../tools/gen_trie.py)): [README.md](../README.md#in-numbers)
+counts the lines of each, not counting comments and blank lines, and the laws. Bend
+checks the laws in about 14 s; the BendTT
 kernel, whose soundness is proved in Lean, rechecks them in a minute. Among them: after
 any history, the server restores from its append-only file exactly the databases it
 held, and from a file cut by a crash at any byte, the databases it held after some prefix
@@ -128,10 +129,11 @@ represented data:
   reader an owner of the whole value: O(depth) reference-count operations per read.
 - **A deep trie.** The first map was a binary trie of 20 levels: 20 dependent loads.
 
-## 3. Thirty-four patches to the Bend compiler
+## 3. The patches to the Bend compiler
 
 All live in [`bend-patches/`](../bend-patches/) (against `bendlang/bend` at `1cce499`,
-Bend 2.0.35). The first eight switch on by themselves for programs without GPU calls;
+Bend 2.0.35; [README.md](../README.md#in-numbers) counts them). The first eight switch on
+by themselves for programs without GPU calls;
 the ninth and tenth work where a program calls them; the eleventh changes every
 program's event loop on Linux; the twelfth and thirteenth only add effects; the
 fourteenth speeds up `String.code_at` everywhere; the fifteenth and sixteenth work where
@@ -197,6 +199,8 @@ to agree with the list definition, and `IO` is still a function of `R` and `k`.
 | mem cells (30th) | `Mem.touch` and `Mem.cell`: 2^20 words outside the heap that one computation writes and reads | when each key was last used, for LRU and LFU eviction and OBJECT IDLETIME and FREQ (section 3zw) |
 | walk lend (31st) | a tail call that gives a walker that reads a tree (it calls itself, takes a tree, builds none of its nodes) a value its caller owns, at its last use, holds the value and drops it after the call, so the walker borrows the tree instead of copying each shared node it reads | KEYS 29% fewer instructions a key, RANDOMKEY 28%, ZRANGE of 10 of 100,000 18% (section 3zza) |
 | string variant (32nd) | a datatype with one constructor whose one field is a `String` boxes that constructor as the String itself, told from the other constructors by its tag | a string value takes no node: at a million keys 24% fewer last-level misses per GET, 32% per INCR; SET ×1.08, INCR ×1.03; one word less per key (section 3zzg) |
+| f64 natives (33rd) | `F64`, C's double as the two 32-bit halves of its bits, with `F64.read` (strtod), the four operations, libm's functions, the comparisons and the conversions, each a law of base that the C lane runs as C runs it, on the libm it links | GEO's positions, geohashes, cells and distances, Redis's bit for bit on 309 positions and 80 searches; ZADD's scores read by glibc's strtod itself (section 3zzm) |
+| heap asan (34th) | in a build with AddressSanitizer alone, `heap_free` poisons the node it frees and holds it in a quarantine of its size class before its free chain hands it out again, so that a read through a stale pointer gets ASan's report and stack; any other build is byte for byte as before | the `sanitize` job (`tools/sanitize.sh`): the server under ASan, UBSan and TSan with no report, and patch 26's bug found again when it is taken out (section 3zzp) |
 
 The ratios in the last column come from different series and drift by ±0.06–0.08
 between series; PERFORMANCE.md gives each one with its pairs.
@@ -5914,8 +5918,9 @@ What got in the way:
 - No tactics: every rewrite step is written by hand. The proofs are about as long as
   the code, and checking them is fast.
 - In a proof, `case other` does not refine the goal: the variable stays abstract ("`c`,
-  but not `Get`"), and functions of it do not reduce. Lemmas about commands list all 20
-  constructors, most of them as refutations; so commands come in groups (`Own` for those
+  but not `Get`"), and functions of it do not reduce. Lemmas about commands list every
+  constructor of `Cmd` (counted in [README.md](../README.md#in-numbers)), most of them as
+  refutations; so commands come in groups (`Own` for those
   of a connection, `Peek` for the reads of one key), one constructor each (section 3m).
 - No 64-bit integers, few effects (stock files have no `fsync`; patch 12 adds it), and
   in stock Bend strings are lists. For a database these are the practical blockers.
@@ -5965,8 +5970,8 @@ What helped:
 - The theory and the runtime representation are separate ("native kinds"): strings
   became buffers without touching a single proof.
 - The C backend is readable, so each runtime idea became a patch and a measurement.
-- Checking is fast: about a second for all 38 laws, plus an independent kernel proved
-  in Lean.
+- Checking is fast: about 15 s for all the laws, plus an independent kernel proved in
+  Lean.
 
 ## 9. What our patches rediscovered
 

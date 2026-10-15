@@ -58,8 +58,15 @@ sends about a million of them to main's server.
 - **The 16-way parts** of `src/map.bend`, `proof/LAWS.bend` and `proof/PROOF.bend`,
   between `BEGIN gen_trie` and `END gen_trie`, are written by `tools/gen_trie.py`, and the
   table of parameters in `src/config.bend` by `tools/gen_config.py` (from
-  `tools/data/redis-configs.json`, which it extracts from Redis's `src/config.c`):
+  `tools/data/redis-configs.json`, which it extracts from Redis's `src/config.c`), and the
+  table of commands in `src/command.bend` and the commands' arities, statistics and
+  dispatch in `src/redis.bend` by `tools/gen_commands.py` (from
+  `tools/data/redis-commands.json`, which it asks a `redis-server` for):
   change the script and rerun it, not the blocks.
+- **The counts** in README.md's [In numbers](README.md#in-numbers) (the laws, the
+  patches, `Cmd`'s constructors, Redis's parameters, the lines of each file) are written
+  by `tools/gen_counts.py`; rerun it when `make gencheck` finds one out of date, and link
+  to them from another document rather than copy a count into it.
 - **Patterns of literal characters** nested inside a String (`SCon{a, SCon{'-', ...}}`)
   make `--verdict` explode: a Char is a 32-bit word in the kernel, and its decision
   trees multiply. Compare bytes with `U32.is_eq` instead (see `cls.kind` in

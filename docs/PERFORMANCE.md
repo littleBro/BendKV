@@ -9,8 +9,9 @@ numbers are in [tools/](../tools/README.md).
    verification and not from the logic of the commands.** The original SET cost ~390
    heap cell allocations and ~150 atomic reference-count operations. Redis makes a
    handful of allocations per SET.
-2. **Bend itself is fixed by thirty-four patches to the compiler**
-   ([`bend-patches/`](../bend-patches/)). The first eight switch on by themselves for
+2. **Bend itself is fixed by patches to the compiler**
+   ([`bend-patches/`](../bend-patches/), counted in [README.md](../README.md#in-numbers)).
+   The first eight switch on by themselves for
    programs without GPU calls `!`, the ninth and tenth where a program calls them, the
    eleventh changes every program's event loop on Linux, the twelfth and thirteenth only
    add effects, the fourteenth speeds up `String.code_at` everywhere, the fifteenth and
@@ -112,7 +113,7 @@ numbers are in [tools/](../tools/README.md).
    end into one chunk, and a command is chosen by the length of its name (section 7.7);
    a request is parsed straight into a command with its key's hash for the hints
    (section 7.24). A batch runs after the hints to the processor (section 7.14), and the
-   law `batch_hints` proves that they change nothing, for any hashes. All 33 laws check,
+   law `batch_hints` proves that they change nothing, for any hashes. All the laws check,
    including in the BendTT kernel. With a file (`./bendkv PORT post|send FILE`) the
    server keeps an append-only file in Redis's AOF format, and it is proved that after
    any history it restores from the file exactly the database it held, and from a file

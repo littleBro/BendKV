@@ -32,8 +32,9 @@
 # back with its File.unlink; INFO's used_memory and maxmemory read the
 # heap's account with the twenty-ninth's IO.heap; OBJECT IDLETIME and FREQ
 # and the eviction's LRU and LFU keep when each key was last used with the
-# thirtieth's Mem.touch and Mem.cell; the others only speed up the runtime
-# and the code):
+# thirtieth's Mem.touch and Mem.cell; GEO computes, and ZADD reads its
+# scores, with C's doubles, the thirty-third's F64 and F64.read; the others
+# only speed up the runtime and the code):
 #   make build BEND="bun <patched bend>/bend2/main.ts"
 # Bend compiles with $(BEND_CC) when it has one: clang 19 honors the
 # preserve_none calling convention of the runtime's segments, clang 18
@@ -114,15 +115,17 @@ clients: build
 	python3 tools/client_suite.py ci --client redis-py --protocol 3 --server build/bendkv --out build/clients
 	python3 tools/client_suite.py ci --client go-redis --server build/bendkv --out build/clients
 
-# the generated blocks are up to date: the 16-way parts of src/map.bend
-# and proof/PROOF.bend (tools/gen_trie.py), the table of parameters in
-# src/config.bend (tools/gen_config.py), and the table of commands in
+# the generated blocks are up to date: the 16-way parts of src/map.bend,
+# proof/LAWS.bend and proof/PROOF.bend (tools/gen_trie.py), the table of parameters in
+# src/config.bend (tools/gen_config.py), the table of commands in
 # src/command.bend and their arities in src/redis.bend
-# (tools/gen_commands.py)
+# (tools/gen_commands.py), and the counts of README.md's In numbers, and
+# of its laws (tools/gen_counts.py)
 gencheck:
 	python3 tools/gen_trie.py --check
 	python3 tools/gen_config.py --check
 	python3 tools/gen_commands.py --check
+	python3 tools/gen_counts.py --check
 
 clean:
 	rm -rf build

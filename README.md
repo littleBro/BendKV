@@ -35,10 +35,11 @@ well. BendKV asks how far one can get writing a real, fast server in a language 
 the code that runs is the code that is proved, without a separate model and a
 refinement proof. The answer so far: the verified core is not what makes it slow;
 the data representation of the runtime was, and most of the work went into fixing it
-(34 patches to the Bend compiler, in [`bend-patches/`](bend-patches/): most speed up its
-data representation and its runtime, the others add what a server needs from the
-system, from the process's directory, id and clock to the files it cuts, the heap's
-account and C's doubles, and one lets AddressSanitizer check the heap).
+(the patches to the Bend compiler in [`bend-patches/`](bend-patches/), counted in
+[In numbers](#in-numbers): most speed up its data representation and its runtime, and
+the others add what a server needs from the system, from the process's directory, id
+and clock to the files it cuts, the heap's account and C's doubles, and one lets
+AddressSanitizer check the heap).
 
 ## What is proved
 
@@ -48,10 +49,10 @@ entries hold each key's value (a string, or a collection) and the time it expire
 DBSIZE answers) and how many of them have a time; and the time its batch runs at. The
 server holds several (16, as Redis), with the one a connection selected in focus while
 its batch runs. A key whose time has passed is there for no command. The laws about what keys read and what
-commands answer are proved of a specification, the commands on the trie alone at a time
-([`proof/SPEC.bend`](proof/SPEC.bend)), and a bridge proves that the server's commands
-answer as it does (DBSIZE answers the count) and leave the trie it leaves; the counts are
-proved to be the trie's own.
+commands answer are stated of the server's commands and proved through a specification,
+the commands on the trie alone at a time ([`proof/SPEC.bend`](proof/SPEC.bend)), which a
+bridge in the proofs ties to the server's commands (DBSIZE answers the count); the
+counts are proved to be the trie's own.
 
 | group | laws | what they say |
 |---|---:|---|
@@ -69,10 +70,14 @@ proved to be the trie's own.
 in about a minute.
 
 **Trust boundary.** The proofs cover `src/map.bend`, `src/redis.bend`, `src/batch.bend`,
-`src/aof.bend`, `src/session.bend` and `src/config.bend`. Trusted without proof: the Bend
-compiler and its C runtime (with the patches), the RESP parser and the network shell
-(`src/resp.bend`, `src/server.bend`, tested only), the start (`src/startup.bend`, tested
-against `redis-server`), clang, libc and the OS. This is not
+`src/aof.bend`, `src/session.bend` and `src/config.bend`, the files the laws import
+([In numbers](#in-numbers)). Trusted without proof: the Bend compiler and its C runtime
+(with the patches); the RESP parser and the network shell (`src/resp.bend`,
+`src/server.bend`), the start (`src/startup.bend`), INFO and COMMAND (`src/info.bend`,
+`src/command.bend`), the doubles in software (`src/float.bend`, tested against glibc as
+well), what HyperLogLogs, GEO and LOLWUT compute (`src/hll.bend`, `src/geo.bend`,
+`src/lolwut.bend`) and DUMP's payloads (`src/rdb.bend`), all tested against
+`redis-server`; clang, libc and the OS. This is not
 end-to-end verification in the sense of CompCert or seL4; see
 [docs/FINDINGS.md](docs/FINDINGS.md), section 1.
 
@@ -403,8 +408,9 @@ translation stays in the trusted base.
   all the same); MEMORY MALLOC-STATS has no allocator's statistics; LOLWUT's large
   drawings take up to a hundred times Redis's time (FINDINGS.md, section 3zzl).
 - **Configuration:** CONFIG GET (names, aliases and glob patterns), SET (several
-  parameters at once, all or none), RESETSTAT, REWRITE, HELP, over all 178 parameters of
-  Redis 7.0.15, taken from Redis's own table by `tools/gen_config.py`: every value is
+  parameters at once, all or none), RESETSTAT, REWRITE, HELP, over every parameter of
+  Redis 7.0.15 (counted in [In numbers](#in-numbers)), taken from Redis's own table by
+  `tools/gen_config.py`: every value is
   checked as Redis checks it and read back as Redis prints it. requirepass is the
   password, hz is capped as in Redis and notify-keyspace-events picks the events
   published (above); the port, the addresses, TLS and the append-only
@@ -526,7 +532,7 @@ also needs Lean 4.34.0 (through elan).
 
 ```bash
 git clone https://github.com/bendlang/bend ../bend-patched
-sh bend-patches/apply.sh ../bend-patched      # Bend 2.0.35 + 34 patches
+sh bend-patches/apply.sh ../bend-patched      # Bend 2.0.35 and the patches
 B="bun ../bend-patched/bend2/main.ts"
 
 make check   BEND="$B"   # check the proofs
@@ -550,7 +556,7 @@ stops reading holds up only its own replies), and from the event loop with
 make smoke     BEND="$B"   # the pure path end to end and the append-only file, no network; fails on any mismatch
 make test      BEND="$B"   # needs redis-server, redis-cli and a C compiler
 make perfcheck BEND="$B"   # instructions, misses and prefetches per request against a baseline (needs valgrind)
-make gencheck              # the generated parts (trie, its proofs, the parameter and command tables) are up to date
+make gencheck              # the generated parts (trie, its proofs, the parameter and command tables, the counts) are up to date
 make bench     BEND="$B"   # redis-benchmark: BendKV against Redis
 make suite     BEND="$B" REDIS_SRC=../redis   # Redis's own test suite, on Redis and on BendKV (needs tclsh)
 make clients   BEND="$B"   # redis-py's and go-redis's test suites, on Redis and on BendKV (needs go)
@@ -687,14 +693,56 @@ src/        the server
   startup.bend  the command line and the configuration file        tested
   server.bend   TCP, connections, the database actor, the log      tested
 proof/      LAWS.bend (the laws), PROOF.bend (their proofs), SPEC.bend (the commands on the trie alone)
-tests/      float, start, differential, expiry, protocol, session, CONFIG, INFO, COMMAND, SCAN, BITFIELD, hash, list, set, sorted set, SORT, HyperLogLog, GEO, DUMP and RESTORE, blocking, transaction, Pub/Sub, CLIENT, MONITOR, CLIENT PAUSE, administrative commands, AUTH, RESP3, maxmemory, robustness, stalled reader, concurrency, AOF, AOF crash and AOF rewrite tests
-bench/      in-process benchmarks of the map, the core and channels
-tools/      measurement scripts, the runner of Redis's test suite, and the generators of
-            the trie, of the parameter table and of the command table, with the facts
-            they take from Redis (tools/data/)
-bend-patches/  the 34 patches to the Bend compiler and runtime
+tests/      smoke (the pure checks), float, start, differential, expiry, protocol, session, the end of a connection, CONFIG, INFO, statistics per command, COMMAND, SCAN, numbers at their edges, BITFIELD, hash, list, set, sorted set, SORT, HyperLogLog, GEO, DUMP and RESTORE, blocking, transaction, Pub/Sub, CLIENT, MONITOR, CLIENT PAUSE, administrative commands, AUTH, RESP3, maxmemory, robustness, stalled reader, concurrency, AOF, AOF crash and AOF rewrite tests
+bench/      in-process benchmarks of the map, the core and channels, and `make bench` against Redis
+tools/      measurement scripts, the runners of Redis's test suite and of the client libraries'
+            suites, and the generators of the trie, of the parameter table, of the command
+            table and of the counts, with the facts they take from Redis (tools/data/)
+bend-patches/  the patches to the Bend compiler and runtime
 docs/       FINDINGS.md, DIRECTIONS.md, COMPATIBILITY.md, PERFORMANCE.md
 ```
+
+## In numbers
+
+The counts the other documents link to, written by
+[`tools/gen_counts.py`](tools/gen_counts.py) from the files they count; `make gencheck`
+fails when one is out of date. Lines of code leave out comments and blank lines and are
+rounded to two significant figures; they are out of date once a file's count is a tenth
+away.
+
+<!-- BEGIN gen_counts: numbers -->
+| what | how many | counted in |
+|---|---:|---|
+| laws | 67 | `proof/LAWS.bend` (by group: [What is proved](#what-is-proved)) |
+| patches to the Bend compiler | 34 | `bend-patches/apply.sh` |
+| constructors of `Cmd`, a parsed command | 30 | `src/redis.bend` |
+| Redis 7.0.15's parameters, all of which CONFIG serves | 178 | `tools/data/redis-configs.json` |
+
+| file | lines of code | of them written by a generator | the laws import it |
+|---|---:|---:|---|
+| `src/map.bend` | 2,000 | 640 | yes |
+| `src/redis.bend` | 16,000 | 6,400 | yes |
+| `src/batch.bend` | 84 |  | yes |
+| `src/aof.bend` | 1,200 |  | yes |
+| `src/session.bend` | 2,400 |  | yes |
+| `src/config.bend` | 1,200 | 180 | yes |
+| `src/command.bend` | 1,700 | 1,100 | no |
+| `src/float.bend` | 1,200 |  | no |
+| `src/geo.bend` | 870 |  | no |
+| `src/hll.bend` | 1,400 |  | no |
+| `src/info.bend` | 960 |  | no |
+| `src/lolwut.bend` | 470 |  | no |
+| `src/rdb.bend` | 1,500 |  | no |
+| `src/resp.bend` | 880 |  | no |
+| `src/server.bend` | 6,600 |  | no |
+| `src/startup.bend` | 460 |  | no |
+| `proof/LAWS.bend` | 920 | 20 |  |
+| `proof/SPEC.bend` | 370 |  |  |
+| `proof/PROOF.bend` | 16,000 | 2,800 |  |
+| `src/`, the 6 files the laws import | 23,000 | 7,100 |  |
+| `src/`, the 10 others | 16,000 | 1,100 |  |
+| `proof/` | 18,000 | 2,800 |  |
+<!-- END gen_counts: numbers -->
 
 ## Documentation
 
