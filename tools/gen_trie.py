@@ -92,6 +92,20 @@ def block_walks():
         out += [f"    case 1n+p {node(cs)} {H[i]}{{}}:",
                 f"      tget_kx(V, p, {cs[i]}, {STEP}, k)"]
     out += ["    case 1n+p other _:", "      0n", ""]
+    out += ["# whether the bucket a walk ends at holds an entry: a key whose hash",
+            "# has h's low digits can be in t only there, so an empty one shows that",
+            "# t holds no such key (the server looks its heeded keys up so, by the",
+            "# hashes its requests carry); the walk only reads t",
+            "def tget_hn(-V: Data, d: Nat, +t: Trie<V>, x: Hex, +h: U32) -> Bool:",
+            "  match d t x:",
+            "    case 0n Tip{} _:",
+            "      False{}",
+            "    case 0n other _:",
+            "      True{}"]
+    for i in range(N):
+        out += [f"    case 1n+p {node(cs)} {H[i]}{{}}:",
+                f"      tget_hn(V, p, {cs[i]}, {STEP})"]
+    out += ["    case 1n+p other _:", "      False{}", ""]
     out += ["# the keys of the bucket a walk ends at that a scan of mode takes at now",
             "# (bkeys), before acc: eviction's samples read buckets one walk each,",
             "# which reads the trie lent, as get's do",

@@ -28,7 +28,7 @@ make test      BEND="$B"   # byte-for-byte against Redis
 make perfcheck BEND="$B"   # no more than 3% more instructions per request
 ```
 
-CI runs the same on every pull request and on every push to `main` and `claude/step-b`
+CI runs the same on every pull request and on every push to `main`
 ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)): the proofs, `make gencheck` and
 `make smoke` in one job; the server built once, then `make test` against the Redis 7.0.15
 that Ubuntu 24.04 ships and `make perfcheck` in two jobs side by side; and the server built

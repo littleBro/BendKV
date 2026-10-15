@@ -321,8 +321,8 @@ Where performance and proof meet: **batched execution under proved laws.**
    own test suite run against BendKV and by client libraries' test suites (redis-py's and
    go-redis's, in CI: done, section 3zy).
    Lua, streams, cluster, replication and modules are out of scope. The suite's count: of the 1,677 tests
-   Redis 7.0.15 passes against a server it did not start, BendKV passes 1,273, 1,270 of
-   the 1,333 in what it has ([COMPATIBILITY.md](COMPATIBILITY.md)); most of the other 63
+   Redis 7.0.15 passes against a server it did not start, BendKV passes 1,274, 1,271 of
+   the 1,333 in what it has ([COMPATIBILITY.md](COMPATIBILITY.md)); most of the other 62
    need commands BendKV does not have (replication's SYNC, Lua, streams) or run after a
    test that left its client in MULTI on one of them.
    What maxmemory left to do (section 3zw): a delete takes the nodes it empties now
@@ -333,13 +333,15 @@ Where performance and proof meet: **batched execution under proved laws.**
    nodes a walk of a tree reads when the walk's caller owns the tree and the keyspace
    shares it (Bend patch 31, section 3zza): KEYS, SCAN, RANDOMKEY and the ranges of a
    sorted set borrow their trees now, and so do the reads of a key's entry (section
-   3zzc), so a read of a collection costs a GET and the read. HSET, and SADD to a set
-   kept as a hashtable, take their collection out of the keyspace and change it in place
-   (sections 3zzd, 3zze); ZADD and ZINCRBY still copy the path they change and drop the
-   old one's, and each needs a proved test that it changes its sorted set before it can
-   take it. SADD to an intset costs twenty times SADD to a hashtable (section 3zze): its
-   members are strings compared as integers along a list, where Redis searches an array
-   of integers by halves. SORT of 1,000 elements costs two to six times Redis's
+   3zzc), so a read of a collection costs a GET and the read. HSET, and SADD of a member
+   new to a set, take their collection out of the keyspace and change it in place
+   (sections 3zzd, 3zze, 3zzy); ZADD and ZINCRBY still copy the path they change and drop
+   the old one's, and each needs a proved test that it changes its sorted set before it
+   can take it. An intset is a tree of its members compared as integers (section 3zzy):
+   its SADD, SISMEMBER and SREM take 1.7, 1.3 and 1.1 times a hashtable's instructions,
+   where a list of them took twenty times, and a round trip as Redis's do; a member takes
+   34 bytes of the heap, where Redis's array of integers takes 2 to 8. SORT of 1,000
+   elements costs two to six times Redis's
    instructions (section 3zzh): each step of the merge sort shares and drops its runs'
    cells; a weight that is not an integer is read by strtod in software (Clinger's fast
    path, one rounding for up to 15 digits and a power of ten up to 22, would read most of
