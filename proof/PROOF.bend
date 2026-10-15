@@ -3201,32 +3201,32 @@ def t_del_effect(+ks: List<&2, String>, +db: KV.Trie<KV.Val>, +j: String, +now: 
 # a write of another key leaves j's entry as it was: INCRBY's, MSET's and
 # an update's, whatever they read
 
-def incr_fit_frame(+db: KV.Trie<KV.Val>, +k: String, +n: R.Int, +j: String, ok: Bool, keep: Bool, ne: {j != k : String}) -> {KV.entry(KV.Val, T.db_of(T.incr.fit(db, k, KV.hash(k), n, ok, keep)), j) == KV.entry(KV.Val, db, j) : Maybe<&2, KV.Item<KV.Val>>}:
-  match ok keep:
-    case True{} True{}:
-      Laws.entry_keep_other(KV.Val, db, k, j, KV.VStr{R.int_show(n)}, ne)
-    case True{} False{}:
-      Laws.entry_setx_other(KV.Val, db, k, j, KV.VStr{R.int_show(n)}, 0n, ne)
-    case False{} True{}:
+def incr_fit_frame(+db: KV.Trie<KV.Val>, +k: String, s: R.LL, +j: String, keep: Bool, ne: {j != k : String}) -> {KV.entry(KV.Val, T.db_of(T.incr.fit(db, k, KV.hash(k), s, keep)), j) == KV.entry(KV.Val, db, j) : Maybe<&2, KV.Item<KV.Val>>}:
+  match s keep:
+    case R.LL{+neg, +hi, +lo} True{}:
+      Laws.entry_keep_other(KV.Val, db, k, j, KV.VStr{R.ll.show(neg, hi, lo)}, ne)
+    case R.LL{+neg, +hi, +lo} False{}:
+      Laws.entry_setx_other(KV.Val, db, k, j, KV.VStr{R.ll.show(neg, hi, lo)}, 0n, ne)
+    case R.LLBad{} True{}:
       {==}
-    case False{} False{}:
+    case R.LLBad{} False{}:
       {==}
 
-def incr_num_frame(+db: KV.Trie<KV.Val>, +k: String, +by: R.Int, +j: String, cur: Maybe<&2, R.Int>, ne: {j != k : String}) -> {KV.entry(KV.Val, T.db_of(T.incr.num(db, k, KV.hash(k), by, cur)), j) == KV.entry(KV.Val, db, j) : Maybe<&2, KV.Item<KV.Val>>}:
+def incr_num_frame(+db: KV.Trie<KV.Val>, +k: String, +by: R.By, +j: String, cur: R.LL, ne: {j != k : String}) -> {KV.entry(KV.Val, T.db_of(T.incr.num(db, k, KV.hash(k), by, cur)), j) == KV.entry(KV.Val, db, j) : Maybe<&2, KV.Item<KV.Val>>}:
   match cur:
-    case Some{+i}:
-      incr_fit_frame(db, k, R.int_add(i, by), j, R.int_fits(R.int_add(i, by)), True{}, ne)
-    case None{}:
+    case R.LL{+neg, +hi, +lo}:
+      incr_fit_frame(db, k, R.ll.add(neg, hi, lo, by), j, True{}, ne)
+    case R.LLBad{}:
       {==}
 
-def incr_frame(+db: KV.Trie<KV.Val>, +k: String, +by: R.Int, +j: String, old: KV.Got, ne: {j != k : String}) -> {KV.entry(KV.Val, T.db_of(T.incr.got(db, k, KV.hash(k), by, old)), j) == KV.entry(KV.Val, db, j) : Maybe<&2, KV.Item<KV.Val>>}:
+def incr_frame(+db: KV.Trie<KV.Val>, +k: String, +by: R.By, +j: String, old: KV.Got, ne: {j != k : String}) -> {KV.entry(KV.Val, T.db_of(T.incr.got(db, k, KV.hash(k), by, old)), j) == KV.entry(KV.Val, db, j) : Maybe<&2, KV.Item<KV.Val>>}:
   match old:
     case KV.GStr{s}:
-      incr_num_frame(db, k, by, j, R.int_read(s), ne)
+      incr_num_frame(db, k, by, j, R.ll.read(s), ne)
     case KV.GColl{}:
       {==}
     case KV.GNone{}:
-      incr_fit_frame(db, k, by, j, R.int_fits(by), False{}, ne)
+      incr_fit_frame(db, k, R.by.ll(by), j, False{}, ne)
 
 def upd_ch_frame(+t: KV.Trie<KV.Val>, +k: String, +j: String, r: R.Reply, ch: R.Change, ne: {j != k : String}) -> {KV.entry(KV.Val, T.db_of(T.upd.ch(t, k, KV.hash(k), r, ch)), j) == KV.entry(KV.Val, t, j) : Maybe<&2, KV.Item<KV.Val>>}:
   match ch:
@@ -3750,28 +3750,28 @@ def keyed(c: R.Cmd) -> Bool:
 
 # INCRBY's and an update's replies depend on what they read, not on the
 # trie they write
-def incr_fit_rep(ok: Bool, -keep: Bool, -t: KV.Trie<KV.Val>, -u: KV.Trie<KV.Val>, -k: String, -h: U32, -n: R.Int) -> {T.reply_of(T.incr.fit(t, k, h, n, ok, keep)) == T.reply_of(T.incr.fit(u, k, h, n, ok, keep)) : R.Reply}:
-  match ok:
-    case True{}:
+def incr_fit_rep(s: R.LL, -keep: Bool, -t: KV.Trie<KV.Val>, -u: KV.Trie<KV.Val>, -k: String, -h: U32) -> {T.reply_of(T.incr.fit(t, k, h, s, keep)) == T.reply_of(T.incr.fit(u, k, h, s, keep)) : R.Reply}:
+  match s:
+    case R.LL{+neg, +hi, +lo}:
       {==}
-    case False{}:
+    case R.LLBad{}:
       {==}
 
-def incr_num_rep(cur: Maybe<&2, R.Int>, -t: KV.Trie<KV.Val>, -u: KV.Trie<KV.Val>, -k: String, -h: U32, +by: R.Int) -> {T.reply_of(T.incr.num(t, k, h, by, cur)) == T.reply_of(T.incr.num(u, k, h, by, cur)) : R.Reply}:
+def incr_num_rep(cur: R.LL, -t: KV.Trie<KV.Val>, -u: KV.Trie<KV.Val>, -k: String, -h: U32, +by: R.By) -> {T.reply_of(T.incr.num(t, k, h, by, cur)) == T.reply_of(T.incr.num(u, k, h, by, cur)) : R.Reply}:
   match cur:
-    case Some{+i}:
-      incr_fit_rep(R.int_fits(R.int_add(i, by)), True{}, t, u, k, h, R.int_add(i, by))
-    case None{}:
+    case R.LL{+neg, +hi, +lo}:
+      incr_fit_rep(R.ll.add(neg, hi, lo, by), True{}, t, u, k, h)
+    case R.LLBad{}:
       {==}
 
-def incr_rep(old: KV.Got, -t: KV.Trie<KV.Val>, -u: KV.Trie<KV.Val>, -k: String, -h: U32, +by: R.Int) -> {T.reply_of(T.incr.got(t, k, h, by, old)) == T.reply_of(T.incr.got(u, k, h, by, old)) : R.Reply}:
+def incr_rep(old: KV.Got, -t: KV.Trie<KV.Val>, -u: KV.Trie<KV.Val>, -k: String, -h: U32, +by: R.By) -> {T.reply_of(T.incr.got(t, k, h, by, old)) == T.reply_of(T.incr.got(u, k, h, by, old)) : R.Reply}:
   match old:
     case KV.GStr{s}:
-      incr_num_rep(R.int_read(s), t, u, k, h, by)
+      incr_num_rep(R.ll.read(s), t, u, k, h, by)
     case KV.GColl{}:
       {==}
     case KV.GNone{}:
-      incr_fit_rep(R.int_fits(by), False{}, t, u, k, h, by)
+      incr_fit_rep(R.by.ll(by), False{}, t, u, k, h)
 
 def upd_ch_rep(ch: R.Change, -r: R.Reply, -t: KV.Trie<KV.Val>, -u: KV.Trie<KV.Val>, -k: String, -h: U32) -> {T.reply_of(T.upd.ch(t, k, h, r, ch)) == T.reply_of(T.upd.ch(u, k, h, r, ch)) : R.Reply}:
   match ch:
@@ -3924,32 +3924,32 @@ def keep_key(+t: KV.Trie<KV.Val>, +u: KV.Trie<KV.Val>, +k: String, +v: KV.Val) -
            Equal.cong(Maybe<&2, KV.Item<KV.Val>>, Maybe<&2, KV.Item<KV.Val>>, m => Some{KV.Item{v, Laws.keep_exp(KV.Val, m)}}, KV.entry(KV.Val, t, k), KV.entry(KV.Val, u, k), e),
            Equal.sym(Maybe<&2, KV.Item<KV.Val>>, KV.entry(KV.Val, KV.keep(KV.Val, u, k, v), k), Some{KV.Item{v, Laws.keep_exp(KV.Val, KV.entry(KV.Val, u, k))}}, Laws.entry_keep_same(KV.Val, u, k, v))))
 
-def incr_fit_key(ok: Bool, keep: Bool, +t: KV.Trie<KV.Val>, +u: KV.Trie<KV.Val>, +k: String, +n: R.Int) -> {KV.entry(KV.Val, t, k) == KV.entry(KV.Val, u, k) : Maybe<&2, KV.Item<KV.Val>>} -> {KV.entry(KV.Val, T.db_of(T.incr.fit(t, k, KV.hash(k), n, ok, keep)), k) == KV.entry(KV.Val, T.db_of(T.incr.fit(u, k, KV.hash(k), n, ok, keep)), k) : Maybe<&2, KV.Item<KV.Val>>}:
-  match ok keep:
-    case True{} True{}:
-      e => keep_key(t, u, k, KV.VStr{R.int_show(n)})(e)
-    case True{} False{}:
-      e => set_key(t, u, k, R.int_show(n))
-    case False{} True{}:
+def incr_fit_key(s: R.LL, keep: Bool, +t: KV.Trie<KV.Val>, +u: KV.Trie<KV.Val>, +k: String) -> {KV.entry(KV.Val, t, k) == KV.entry(KV.Val, u, k) : Maybe<&2, KV.Item<KV.Val>>} -> {KV.entry(KV.Val, T.db_of(T.incr.fit(t, k, KV.hash(k), s, keep)), k) == KV.entry(KV.Val, T.db_of(T.incr.fit(u, k, KV.hash(k), s, keep)), k) : Maybe<&2, KV.Item<KV.Val>>}:
+  match s keep:
+    case R.LL{+neg, +hi, +lo} True{}:
+      e => keep_key(t, u, k, KV.VStr{R.ll.show(neg, hi, lo)})(e)
+    case R.LL{+neg, +hi, +lo} False{}:
+      e => set_key(t, u, k, R.ll.show(neg, hi, lo))
+    case R.LLBad{} True{}:
       e => e
-    case False{} False{}:
+    case R.LLBad{} False{}:
       e => e
 
-def incr_num_key(cur: Maybe<&2, R.Int>, +t: KV.Trie<KV.Val>, +u: KV.Trie<KV.Val>, +k: String, +by: R.Int) -> {KV.entry(KV.Val, t, k) == KV.entry(KV.Val, u, k) : Maybe<&2, KV.Item<KV.Val>>} -> {KV.entry(KV.Val, T.db_of(T.incr.num(t, k, KV.hash(k), by, cur)), k) == KV.entry(KV.Val, T.db_of(T.incr.num(u, k, KV.hash(k), by, cur)), k) : Maybe<&2, KV.Item<KV.Val>>}:
+def incr_num_key(cur: R.LL, +t: KV.Trie<KV.Val>, +u: KV.Trie<KV.Val>, +k: String, +by: R.By) -> {KV.entry(KV.Val, t, k) == KV.entry(KV.Val, u, k) : Maybe<&2, KV.Item<KV.Val>>} -> {KV.entry(KV.Val, T.db_of(T.incr.num(t, k, KV.hash(k), by, cur)), k) == KV.entry(KV.Val, T.db_of(T.incr.num(u, k, KV.hash(k), by, cur)), k) : Maybe<&2, KV.Item<KV.Val>>}:
   match cur:
-    case Some{+i}:
-      incr_fit_key(R.int_fits(R.int_add(i, by)), True{}, t, u, k, R.int_add(i, by))
-    case None{}:
+    case R.LL{+neg, +hi, +lo}:
+      incr_fit_key(R.ll.add(neg, hi, lo, by), True{}, t, u, k)
+    case R.LLBad{}:
       e => e
 
-def incr_key(old: KV.Got, +t: KV.Trie<KV.Val>, +u: KV.Trie<KV.Val>, +k: String, +by: R.Int) -> {KV.entry(KV.Val, t, k) == KV.entry(KV.Val, u, k) : Maybe<&2, KV.Item<KV.Val>>} -> {KV.entry(KV.Val, T.db_of(T.incr.got(t, k, KV.hash(k), by, old)), k) == KV.entry(KV.Val, T.db_of(T.incr.got(u, k, KV.hash(k), by, old)), k) : Maybe<&2, KV.Item<KV.Val>>}:
+def incr_key(old: KV.Got, +t: KV.Trie<KV.Val>, +u: KV.Trie<KV.Val>, +k: String, +by: R.By) -> {KV.entry(KV.Val, t, k) == KV.entry(KV.Val, u, k) : Maybe<&2, KV.Item<KV.Val>>} -> {KV.entry(KV.Val, T.db_of(T.incr.got(t, k, KV.hash(k), by, old)), k) == KV.entry(KV.Val, T.db_of(T.incr.got(u, k, KV.hash(k), by, old)), k) : Maybe<&2, KV.Item<KV.Val>>}:
   match old:
     case KV.GStr{s}:
-      incr_num_key(R.int_read(s), t, u, k, by)
+      incr_num_key(R.ll.read(s), t, u, k, by)
     case KV.GColl{}:
       e => e
     case KV.GNone{}:
-      incr_fit_key(R.int_fits(by), False{}, t, u, k, by)
+      incr_fit_key(R.by.ll(by), False{}, t, u, k)
 
 def upd_ch_key(ch: R.Change, -r: R.Reply, +t: KV.Trie<KV.Val>, +u: KV.Trie<KV.Val>, +k: String) -> {KV.entry(KV.Val, t, k) == KV.entry(KV.Val, u, k) : Maybe<&2, KV.Item<KV.Val>>} -> {KV.entry(KV.Val, T.db_of(T.upd.ch(t, k, KV.hash(k), r, ch)), k) == KV.entry(KV.Val, T.db_of(T.upd.ch(u, k, KV.hash(k), r, ch)), k) : Maybe<&2, KV.Item<KV.Val>>}:
   match ch:
@@ -5411,28 +5411,28 @@ def del_br(r: R.Dels, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>) -> {pro
     case R.Dels{live, gone, gonex, t}:
       {==}
 
-def incr_fit_br(+t: KV.Trie<KV.Val>, +k: String, +h: U32, +i: R.Int, ok: Bool, +keep: Bool, +m: Nat, +n: Nat, +y: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>) -> {proj(R.incr.fit(t, k, h, i, ok, keep, m, n, y, x, now, rr)) == T.incr.fit(t, k, h, i, ok, keep) : R.Reply & KV.Trie<KV.Val>}:
-  match ok:
-    case True{}:
+def incr_fit_br(+t: KV.Trie<KV.Val>, +k: String, +h: U32, s: R.LL, +keep: Bool, +m: Nat, +n: Nat, +y: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>) -> {proj(R.incr.fit(t, k, h, s, keep, m, n, y, x, now, rr)) == T.incr.fit(t, k, h, s, keep) : R.Reply & KV.Trie<KV.Val>}:
+  match s:
+    case R.LL{+neg, +hi, +lo}:
       {==}
-    case False{}:
+    case R.LLBad{}:
       {==}
 
-def incr_num_br(+t: KV.Trie<KV.Val>, +k: String, +h: U32, +by: R.Int, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>, cur: Maybe<&2, R.Int>) -> {proj(R.incr.num(t, k, h, by, n, x, now, rr, cur)) == T.incr.num(t, k, h, by, cur) : R.Reply & KV.Trie<KV.Val>}:
+def incr_num_br(+t: KV.Trie<KV.Val>, +k: String, +h: U32, +by: R.By, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>, cur: R.LL) -> {proj(R.incr.num(t, k, h, by, n, x, now, rr, cur)) == T.incr.num(t, k, h, by, cur) : R.Reply & KV.Trie<KV.Val>}:
   match cur:
-    case Some{+i}:
-      incr_fit_br(t, k, h, R.int_add(i, by), R.int_fits(R.int_add(i, by)), True{}, n, n, x, x, now, rr)
-    case None{}:
+    case R.LL{+neg, +hi, +lo}:
+      incr_fit_br(t, k, h, R.ll.add(neg, hi, lo, by), True{}, n, n, x, x, now, rr)
+    case R.LLBad{}:
       {==}
 
-def incr_br(+t: KV.Trie<KV.Val>, +k: String, +h: U32, +by: R.Int, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>, old: KV.Got) -> {proj(R.incr.got(t, k, h, by, n, x, now, rr, old)) == T.incr.got(t, k, h, by, old) : R.Reply & KV.Trie<KV.Val>}:
+def incr_br(+t: KV.Trie<KV.Val>, +k: String, +h: U32, +by: R.By, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>, old: KV.Got) -> {proj(R.incr.got(t, k, h, by, n, x, now, rr, old)) == T.incr.got(t, k, h, by, old) : R.Reply & KV.Trie<KV.Val>}:
   match old:
     case KV.GStr{+s}:
-      incr_num_br(t, k, h, by, n, x, now, rr, R.int_read(s))
+      incr_num_br(t, k, h, by, n, x, now, rr, R.ll.read(s))
     case KV.GColl{}:
       {==}
     case KV.GNone{}:
-      incr_fit_br(t, k, h, by, R.int_fits(by), False{}, R.cnt.n(KV.code.at(KV.Val, t, k, h), n), n, R.cnt.x(KV.code.at(KV.Val, t, k, h), 0n, x), x, now, rr)
+      incr_fit_br(t, k, h, R.by.ll(by), False{}, R.cnt.n(KV.code.at(KV.Val, t, k, h), n), n, R.cnt.x(KV.code.at(KV.Val, t, k, h), 0n, x), x, now, rr)
 
 def mset_br(ps: List<&2, R.KVPair>, +t: KV.Trie<KV.Val>, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>) -> {R.db.t(R.mset_pairs(ps, R.Db{t, n, x, now, rr})) == T.mset_pairs(ps, t) : KV.Trie<KV.Val>}:
   match ps:
@@ -6213,28 +6213,28 @@ def del_now(r: R.Dels, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>) -> {R.
     case R.Dels{live, gone, gonex, t}:
       {==}
 
-def incr_fit_now(+t: KV.Trie<KV.Val>, +k: String, +h: U32, +i: R.Int, ok: Bool, +keep: Bool, +m: Nat, +n: Nat, +y: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>) -> {R.db.now(R.db_of(R.incr.fit(t, k, h, i, ok, keep, m, n, y, x, now, rr))) == now : Nat}:
-  match ok:
-    case True{}:
+def incr_fit_now(+t: KV.Trie<KV.Val>, +k: String, +h: U32, s: R.LL, +keep: Bool, +m: Nat, +n: Nat, +y: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>) -> {R.db.now(R.db_of(R.incr.fit(t, k, h, s, keep, m, n, y, x, now, rr))) == now : Nat}:
+  match s:
+    case R.LL{+neg, +hi, +lo}:
       {==}
-    case False{}:
+    case R.LLBad{}:
       {==}
 
-def incr_num_now(+t: KV.Trie<KV.Val>, +k: String, +h: U32, +by: R.Int, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>, cur: Maybe<&2, R.Int>) -> {R.db.now(R.db_of(R.incr.num(t, k, h, by, n, x, now, rr, cur))) == now : Nat}:
+def incr_num_now(+t: KV.Trie<KV.Val>, +k: String, +h: U32, +by: R.By, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>, cur: R.LL) -> {R.db.now(R.db_of(R.incr.num(t, k, h, by, n, x, now, rr, cur))) == now : Nat}:
   match cur:
-    case Some{+i}:
-      incr_fit_now(t, k, h, R.int_add(i, by), R.int_fits(R.int_add(i, by)), True{}, n, n, x, x, now, rr)
-    case None{}:
+    case R.LL{+neg, +hi, +lo}:
+      incr_fit_now(t, k, h, R.ll.add(neg, hi, lo, by), True{}, n, n, x, x, now, rr)
+    case R.LLBad{}:
       {==}
 
-def incr_now(+t: KV.Trie<KV.Val>, +k: String, +h: U32, +by: R.Int, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>, old: KV.Got) -> {R.db.now(R.db_of(R.incr.got(t, k, h, by, n, x, now, rr, old))) == now : Nat}:
+def incr_now(+t: KV.Trie<KV.Val>, +k: String, +h: U32, +by: R.By, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>, old: KV.Got) -> {R.db.now(R.db_of(R.incr.got(t, k, h, by, n, x, now, rr, old))) == now : Nat}:
   match old:
     case KV.GStr{+s}:
-      incr_num_now(t, k, h, by, n, x, now, rr, R.int_read(s))
+      incr_num_now(t, k, h, by, n, x, now, rr, R.ll.read(s))
     case KV.GColl{}:
       {==}
     case KV.GNone{}:
-      incr_fit_now(t, k, h, by, R.int_fits(by), False{}, R.cnt.n(KV.code.at(KV.Val, t, k, h), n), n, R.cnt.x(KV.code.at(KV.Val, t, k, h), 0n, x), x, now, rr)
+      incr_fit_now(t, k, h, R.by.ll(by), False{}, R.cnt.n(KV.code.at(KV.Val, t, k, h), n), n, R.cnt.x(KV.code.at(KV.Val, t, k, h), 0n, x), x, now, rr)
 
 def mset_now(ps: List<&2, R.KVPair>, +t: KV.Trie<KV.Val>, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>) -> {R.db.now(R.mset_pairs(ps, R.Db{t, n, x, now, rr})) == now : Nat}:
   match ps:
@@ -6844,14 +6844,14 @@ def setnx_present_db(+db: R.Db, +k: String, +v: String, +y: KV.Item<KV.Val>) -> 
 def Laws.setnx_present(db, k, v, y, h):
   setnx_present_db(db, k, v, y)(h)
 
-def incr_missing_db(+db: R.Db, +k: String) -> {Laws.there(db, k) == None{} : Maybe<&2, KV.Item<KV.Val>>} -> {Laws.at_key(R.exec(R.IncrBy{k, R.IPos{1n}}, db), k) == (R.RInt{R.IPos{1n}}, Some{KV.Item{KV.VStr{"1"}, 0n}}) : R.Reply & Maybe<&2, KV.Item<KV.Val>>}:
+def incr_missing_db(+db: R.Db, +k: String) -> {Laws.there(db, k) == None{} : Maybe<&2, KV.Item<KV.Val>>} -> {Laws.at_key(R.exec(R.IncrBy{k, R.ByPos{0n, 1n}}, db), k) == (R.RIntS{"1"}, Some{KV.Item{KV.VStr{"1"}, 0n}}) : R.Reply & Maybe<&2, KV.Item<KV.Val>>}:
   match db:
     case R.Db{+t, +n, +x, +now, +rr}:
       h =>
-        %get_read(t, k, now) : {Laws.at_key(R.incr.got(t, k, KV.hash(k), R.IPos{1n}, n, x, now, rr, _), k) == (R.RInt{R.IPos{1n}}, Some{KV.Item{KV.VStr{"1"}, 0n}}) : R.Reply & Maybe<&2, KV.Item<KV.Val>>}
-        %live_val_ent(KV.entry(KV.Val, t, k), now) : {Laws.at_key(R.incr.got(t, k, KV.hash(k), R.IPos{1n}, n, x, now, rr, KV.got_of(_)), k) == (R.RInt{R.IPos{1n}}, Some{KV.Item{KV.VStr{"1"}, 0n}}) : R.Reply & Maybe<&2, KV.Item<KV.Val>>}
-        %Equal.sym(Maybe<&2, KV.Item<KV.Val>>, R.ent.live(now, KV.entry(KV.Val, t, k)), None{}, h) : {Laws.at_key(R.incr.got(t, k, KV.hash(k), R.IPos{1n}, n, x, now, rr, KV.got_of(item_val(_))), k) == (R.RInt{R.IPos{1n}}, Some{KV.Item{KV.VStr{"1"}, 0n}}) : R.Reply & Maybe<&2, KV.Item<KV.Val>>}
-        %Equal.sym(Maybe<&2, KV.Item<KV.Val>>, KV.entry(KV.Val, KV.set(KV.Val, t, k, KV.VStr{"1"}), k), Some{KV.Item{KV.VStr{"1"}, 0n}}, e_set(t, k, "1")) : {(R.RInt{R.IPos{1n}}, _) == (R.RInt{R.IPos{1n}}, Some{KV.Item{KV.VStr{"1"}, 0n}}) : R.Reply & Maybe<&2, KV.Item<KV.Val>>}
+        %get_read(t, k, now) : {Laws.at_key(R.incr.got(t, k, KV.hash(k), R.ByPos{0n, 1n}, n, x, now, rr, _), k) == (R.RIntS{"1"}, Some{KV.Item{KV.VStr{"1"}, 0n}}) : R.Reply & Maybe<&2, KV.Item<KV.Val>>}
+        %live_val_ent(KV.entry(KV.Val, t, k), now) : {Laws.at_key(R.incr.got(t, k, KV.hash(k), R.ByPos{0n, 1n}, n, x, now, rr, KV.got_of(_)), k) == (R.RIntS{"1"}, Some{KV.Item{KV.VStr{"1"}, 0n}}) : R.Reply & Maybe<&2, KV.Item<KV.Val>>}
+        %Equal.sym(Maybe<&2, KV.Item<KV.Val>>, R.ent.live(now, KV.entry(KV.Val, t, k)), None{}, h) : {Laws.at_key(R.incr.got(t, k, KV.hash(k), R.ByPos{0n, 1n}, n, x, now, rr, KV.got_of(item_val(_))), k) == (R.RIntS{"1"}, Some{KV.Item{KV.VStr{"1"}, 0n}}) : R.Reply & Maybe<&2, KV.Item<KV.Val>>}
+        %Equal.sym(Maybe<&2, KV.Item<KV.Val>>, KV.entry(KV.Val, KV.set(KV.Val, t, k, KV.VStr{"1"}), k), Some{KV.Item{KV.VStr{"1"}, 0n}}, e_set(t, k, "1")) : {(R.RIntS{"1"}, _) == (R.RIntS{"1"}, Some{KV.Item{KV.VStr{"1"}, 0n}}) : R.Reply & Maybe<&2, KV.Item<KV.Val>>}
         {==}
 
 def Laws.incr_missing(db, k, h):
@@ -7748,53 +7748,53 @@ def code_m(+t: KV.Trie<KV.Val>, +k: String, -m: Maybe<&2, KV.Item<KV.Val>>, eq: 
   %eq : {R.ent.code(_) == KV.code.at(KV.Val, t, k, KV.hash(k)) : Nat}
   Equal.trans(Nat, R.ent.code(KV.entry(KV.Val, t, k)), Laws.item_code(KV.Val, KV.entry(KV.Val, t, k)), KV.code.at(KV.Val, t, k, KV.hash(k)), ent_code_item(KV.entry(KV.Val, t, k)), code_eq(KV.Val, t, k))
 
-def incr_none(ok: Bool, +t: KV.Trie<KV.Val>, +k: String, +by: R.Int, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>, +c: Nat) -> {R.incr.fit(t, k, KV.hash(k), by, ok, False{}, R.cnt.n(c, n), n, R.cnt.x(c, 0n, x), x, now, rr) == R.upd.put(t, k, KV.hash(k), n, x, now, rr, c, R.uincr.fit(by, ok, False{})) : R.Reply & R.Db}:
-  match ok:
-    case True{}:
+def incr_none(s: R.LL, +t: KV.Trie<KV.Val>, +k: String, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>, +c: Nat) -> {R.incr.fit(t, k, KV.hash(k), s, False{}, R.cnt.n(c, n), n, R.cnt.x(c, 0n, x), x, now, rr) == R.upd.put(t, k, KV.hash(k), n, x, now, rr, c, R.uincr.fit(s, False{})) : R.Reply & R.Db}:
+  match s:
+    case R.LL{+neg, +hi, +lo}:
       {==}
-    case False{}:
-      {==}
-
-def incr_some(ok: Bool, +t: KV.Trie<KV.Val>, +k: String, +i: R.Int, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>, +e: Nat) -> {R.incr.fit(t, k, KV.hash(k), i, ok, True{}, n, n, x, x, now, rr) == R.upd.put(t, k, KV.hash(k), n, x, now, rr, 1n+e, R.uincr.fit(i, ok, True{})) : R.Reply & R.Db}:
-  match ok:
-    case True{}:
-      {==}
-    case False{}:
+    case R.LLBad{}:
       {==}
 
-def incr_cur(cur: Maybe<&2, R.Int>, +t: KV.Trie<KV.Val>, +k: String, +by: R.Int, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>, +e: Nat) -> {R.incr.num(t, k, KV.hash(k), by, n, x, now, rr, cur) == R.upd.put(t, k, KV.hash(k), n, x, now, rr, 1n+e, R.uincr.num(by, cur)) : R.Reply & R.Db}:
+def incr_some(s: R.LL, +t: KV.Trie<KV.Val>, +k: String, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>, +e: Nat) -> {R.incr.fit(t, k, KV.hash(k), s, True{}, n, n, x, x, now, rr) == R.upd.put(t, k, KV.hash(k), n, x, now, rr, 1n+e, R.uincr.fit(s, True{})) : R.Reply & R.Db}:
+  match s:
+    case R.LL{+neg, +hi, +lo}:
+      {==}
+    case R.LLBad{}:
+      {==}
+
+def incr_cur(cur: R.LL, +t: KV.Trie<KV.Val>, +k: String, +by: R.By, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>, +e: Nat) -> {R.incr.num(t, k, KV.hash(k), by, n, x, now, rr, cur) == R.upd.put(t, k, KV.hash(k), n, x, now, rr, 1n+e, R.uincr.num(by, cur)) : R.Reply & R.Db}:
   match cur:
-    case Some{+i}:
-      incr_some(R.int_fits(R.int_add(i, by)), t, k, R.int_add(i, by), n, x, now, rr, e)
-    case None{}:
+    case R.LL{+neg, +hi, +lo}:
+      incr_some(R.ll.add(neg, hi, lo, by), t, k, n, x, now, rr, e)
+    case R.LLBad{}:
       {==}
 
 # INCRBY of a key there: a string's value read, a collection WRONGTYPE
-def incr_w(w: KV.Val, +t: KV.Trie<KV.Val>, +k: String, +by: R.Int, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>, +e: Nat) -> {R.incr.got(t, k, KV.hash(k), by, n, x, now, rr, KV.got_of(Some{w})) == R.upd.put(t, k, KV.hash(k), n, x, now, rr, 1n+e, R.upd.v(R.UIncr{by}, now, Some{KV.Item{w, e}})) : R.Reply & R.Db}:
+def incr_w(w: KV.Val, +t: KV.Trie<KV.Val>, +k: String, +by: R.By, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>, +e: Nat) -> {R.incr.got(t, k, KV.hash(k), by, n, x, now, rr, KV.got_of(Some{w})) == R.upd.put(t, k, KV.hash(k), n, x, now, rr, 1n+e, R.upd.v(R.UIncr{by}, now, Some{KV.Item{w, e}})) : R.Reply & R.Db}:
   match w:
     case KV.VStr{+v}:
-      incr_cur(R.int_read(v), t, k, by, n, x, now, rr, e)
+      incr_cur(R.ll.read(v), t, k, by, n, x, now, rr, e)
     case KV.VColl{c}:
       {==}
 
-def incr_b(b: Bool, +t: KV.Trie<KV.Val>, +k: String, +by: R.Int, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>, +w: KV.Val, +e: Nat, +eq: {KV.entry(KV.Val, t, k) == Some{KV.Item{w, e}} : Maybe<&2, KV.Item<KV.Val>>}) -> {R.incr.got(t, k, KV.hash(k), by, n, x, now, rr, KV.got_of(item_val(Bool.pick(Maybe<&2, KV.Item<KV.Val>>, b, Some{KV.Item{w, e}}, None{})))) == R.upd.put(t, k, KV.hash(k), n, x, now, rr, 1n+e, R.upd.v(R.UIncr{by}, now, Bool.pick(Maybe<&2, KV.Item<KV.Val>>, b, Some{KV.Item{w, e}}, None{}))) : R.Reply & R.Db}:
+def incr_b(b: Bool, +t: KV.Trie<KV.Val>, +k: String, +by: R.By, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>, +w: KV.Val, +e: Nat, +eq: {KV.entry(KV.Val, t, k) == Some{KV.Item{w, e}} : Maybe<&2, KV.Item<KV.Val>>}) -> {R.incr.got(t, k, KV.hash(k), by, n, x, now, rr, KV.got_of(item_val(Bool.pick(Maybe<&2, KV.Item<KV.Val>>, b, Some{KV.Item{w, e}}, None{})))) == R.upd.put(t, k, KV.hash(k), n, x, now, rr, 1n+e, R.upd.v(R.UIncr{by}, now, Bool.pick(Maybe<&2, KV.Item<KV.Val>>, b, Some{KV.Item{w, e}}, None{}))) : R.Reply & R.Db}:
   match b:
     case True{}:
       incr_w(w, t, k, by, n, x, now, rr, e)
     case False{}:
-      %code_m(t, k, Some{KV.Item{w, e}}, eq) : {R.incr.fit(t, k, KV.hash(k), by, R.int_fits(by), False{}, R.cnt.n(_, n), n, R.cnt.x(_, 0n, x), x, now, rr) == R.upd.put(t, k, KV.hash(k), n, x, now, rr, 1n+e, R.uincr.fit(by, R.int_fits(by), False{})) : R.Reply & R.Db}
-      incr_none(R.int_fits(by), t, k, by, n, x, now, rr, 1n+e)
+      %code_m(t, k, Some{KV.Item{w, e}}, eq) : {R.incr.fit(t, k, KV.hash(k), R.by.ll(by), False{}, R.cnt.n(_, n), n, R.cnt.x(_, 0n, x), x, now, rr) == R.upd.put(t, k, KV.hash(k), n, x, now, rr, 1n+e, R.uincr.fit(R.by.ll(by), False{})) : R.Reply & R.Db}
+      incr_none(R.by.ll(by), t, k, n, x, now, rr, 1n+e)
 
-def incr_m(m: Maybe<&2, KV.Item<KV.Val>>, +t: KV.Trie<KV.Val>, +k: String, +by: R.Int, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>) -> {KV.entry(KV.Val, t, k) == m : Maybe<&2, KV.Item<KV.Val>>} -> {R.incr.got(t, k, KV.hash(k), by, n, x, now, rr, KV.got_of(item_val(R.ent.live(now, m)))) == R.upd.put(t, k, KV.hash(k), n, x, now, rr, R.ent.code(m), R.upd.v(R.UIncr{by}, now, R.ent.live(now, m))) : R.Reply & R.Db}:
+def incr_m(m: Maybe<&2, KV.Item<KV.Val>>, +t: KV.Trie<KV.Val>, +k: String, +by: R.By, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>) -> {KV.entry(KV.Val, t, k) == m : Maybe<&2, KV.Item<KV.Val>>} -> {R.incr.got(t, k, KV.hash(k), by, n, x, now, rr, KV.got_of(item_val(R.ent.live(now, m)))) == R.upd.put(t, k, KV.hash(k), n, x, now, rr, R.ent.code(m), R.upd.v(R.UIncr{by}, now, R.ent.live(now, m))) : R.Reply & R.Db}:
   match m:
     case None{}:
-      eq => %code_m(t, k, None{}, eq) : {R.incr.fit(t, k, KV.hash(k), by, R.int_fits(by), False{}, R.cnt.n(_, n), n, R.cnt.x(_, 0n, x), x, now, rr) == R.upd.put(t, k, KV.hash(k), n, x, now, rr, 0n, R.uincr.fit(by, R.int_fits(by), False{})) : R.Reply & R.Db}
-            incr_none(R.int_fits(by), t, k, by, n, x, now, rr, 0n)
+      eq => %code_m(t, k, None{}, eq) : {R.incr.fit(t, k, KV.hash(k), R.by.ll(by), False{}, R.cnt.n(_, n), n, R.cnt.x(_, 0n, x), x, now, rr) == R.upd.put(t, k, KV.hash(k), n, x, now, rr, 0n, R.uincr.fit(R.by.ll(by), False{})) : R.Reply & R.Db}
+            incr_none(R.by.ll(by), t, k, n, x, now, rr, 0n)
     case Some{KV.Item{+w, +e}}:
       eq => incr_b(KV.live(now, e), t, k, by, n, x, now, rr, w, e, eq)
 
 # INCRBY on a database record is the update UIncr
-def incr_upd_eq(+t: KV.Trie<KV.Val>, +k: String, +by: R.Int, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>) -> {R.exec(R.IncrBy{k, by}, R.Db{t, n, x, now, rr}) == R.upd.put(t, k, KV.hash(k), n, x, now, rr, R.ent.code(KV.entry.at(KV.Val, t, k, KV.hash(k))), R.upd.v(R.UIncr{by}, now, R.ent.live(now, KV.entry.at(KV.Val, t, k, KV.hash(k))))) : R.Reply & R.Db}:
+def incr_upd_eq(+t: KV.Trie<KV.Val>, +k: String, +by: R.By, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>) -> {R.exec(R.IncrBy{k, by}, R.Db{t, n, x, now, rr}) == R.upd.put(t, k, KV.hash(k), n, x, now, rr, R.ent.code(KV.entry.at(KV.Val, t, k, KV.hash(k))), R.upd.v(R.UIncr{by}, now, R.ent.live(now, KV.entry.at(KV.Val, t, k, KV.hash(k))))) : R.Reply & R.Db}:
   %get_read(t, k, now) : {R.incr.got(t, k, KV.hash(k), by, n, x, now, rr, _) == R.upd.put(t, k, KV.hash(k), n, x, now, rr, R.ent.code(KV.entry.at(KV.Val, t, k, KV.hash(k))), R.upd.v(R.UIncr{by}, now, R.ent.live(now, KV.entry.at(KV.Val, t, k, KV.hash(k))))) : R.Reply & R.Db}
   %live_val_ent(KV.entry(KV.Val, t, k), now) : {R.incr.got(t, k, KV.hash(k), by, n, x, now, rr, KV.got_of(_)) == R.upd.put(t, k, KV.hash(k), n, x, now, rr, R.ent.code(KV.entry.at(KV.Val, t, k, KV.hash(k))), R.upd.v(R.UIncr{by}, now, R.ent.live(now, KV.entry.at(KV.Val, t, k, KV.hash(k))))) : R.Reply & R.Db}
   %entry_at_eq(KV.Val, t, k) : {R.incr.got(t, k, KV.hash(k), by, n, x, now, rr, KV.got_of(item_val(R.ent.live(now, KV.entry(KV.Val, t, k))))) == R.upd.put(t, k, KV.hash(k), n, x, now, rr, R.ent.code(_), R.upd.v(R.UIncr{by}, now, R.ent.live(now, _))) : R.Reply & R.Db}
@@ -7816,7 +7816,7 @@ def upd_split(+db: R.Db, +k: String, +op: R.UpdOp) -> {(R.reply_of(R.exec(R.Upd{
       %run_upd_eq(t, k, n, x, now, rr, op) : {(R.reply_of(R.upd.put(t, k, KV.hash(k), n, x, now, rr, R.ent.code(KV.entry.at(KV.Val, t, k, KV.hash(k))), R.upd.v(op, now, R.ent.live(now, KV.entry.at(KV.Val, t, k, KV.hash(k)))))), (upd_eff(R.Db{t, n, x, now, rr}, k, op), R.db_of(R.upd.put(t, k, KV.hash(k), n, x, now, rr, R.ent.code(KV.entry.at(KV.Val, t, k, KV.hash(k))), R.upd.v(op, now, R.ent.live(now, KV.entry.at(KV.Val, t, k, KV.hash(k)))))))) == _ : R.Reply & (List<&2, R.Cmd> & R.Db)}
       out_split(R.upd.put(t, k, KV.hash(k), n, x, now, rr, R.ent.code(KV.entry.at(KV.Val, t, k, KV.hash(k))), R.upd.v(op, now, R.ent.live(now, KV.entry.at(KV.Val, t, k, KV.hash(k))))), A.upd.effect(k, R.ent.code(KV.entry.at(KV.Val, t, k, KV.hash(k))), R.upd.v(op, now, R.ent.live(now, KV.entry.at(KV.Val, t, k, KV.hash(k))))))
 
-def incr_split(+db: R.Db, +k: String, +by: R.Int) -> {(R.reply_of(R.exec(R.IncrBy{k, by}, db)), (upd_eff(db, k, R.UIncr{by}), R.db_of(R.exec(R.IncrBy{k, by}, db)))) == A.run(R.IncrBy{k, by}, db) : R.Reply & (List<&2, R.Cmd> & R.Db)}:
+def incr_split(+db: R.Db, +k: String, +by: R.By) -> {(R.reply_of(R.exec(R.IncrBy{k, by}, db)), (upd_eff(db, k, R.UIncr{by}), R.db_of(R.exec(R.IncrBy{k, by}, db)))) == A.run(R.IncrBy{k, by}, db) : R.Reply & (List<&2, R.Cmd> & R.Db)}:
   match db:
     case R.Db{+t, +n, +x, +now, +rr}:
       %Equal.sym(R.Reply & R.Db, R.exec(R.IncrBy{k, by}, R.Db{t, n, x, now, rr}), R.upd.put(t, k, KV.hash(k), n, x, now, rr, R.ent.code(KV.entry.at(KV.Val, t, k, KV.hash(k))), R.upd.v(R.UIncr{by}, now, R.ent.live(now, KV.entry.at(KV.Val, t, k, KV.hash(k))))), incr_upd_eq(t, k, by, n, x, now, rr)) : {(R.reply_of(_), (upd_eff(R.Db{t, n, x, now, rr}, k, R.UIncr{by}), R.db_of(_))) == A.run(R.IncrBy{k, by}, R.Db{t, n, x, now, rr}) : R.Reply & (List<&2, R.Cmd> & R.Db)}
@@ -8999,11 +8999,11 @@ def expire_none(a: Maybe<&2, R.At>, c: R.ExpIf, +name: String, +now: Nat, -m: Ma
     case None{}:
       {==}
 
-def incr_fit_none(ok: Bool, +by: R.Int, -m: Maybe<&2, KV.Item<KV.Val>>) -> Good(m, ch_of(R.uincr.fit(by, ok, False{}))):
-  match ok:
-    case True{}:
+def incr_fit_none(s: R.LL, -m: Maybe<&2, KV.Item<KV.Val>>) -> Good(m, ch_of(R.uincr.fit(s, False{}))):
+  match s:
+    case R.LL{+neg, +hi, +lo}:
       {==}
-    case False{}:
+    case R.LLBad{}:
       {==}
 
 # INCRBYFLOAT of a key not there: a put of the sum, with no time, or
@@ -9118,11 +9118,11 @@ def hdel_empty(fs: List<&2, String>) -> {R.HDel{KV.hash.empty(), 0n} == R.hdel.g
     case Con{f, rest}:
       hdel_empty(rest)
 
-def hincr_new(ok: Bool, +s: R.Int, +f: String, -m: Maybe<&2, KV.Item<KV.Val>>) -> Good(m, ch_of(R.hincr.fit(ok, s, True{}, f, KV.hash.empty()))):
-  match ok:
-    case True{}:
+def hincr_new(s: R.LL, +f: String, -m: Maybe<&2, KV.Item<KV.Val>>) -> Good(m, ch_of(R.hincr.fit(s, True{}, f, KV.hash.empty()))):
+  match s:
+    case R.LL{+neg, +hi, +lo}:
       ({==}, {==})
-    case False{}:
+    case R.LLBad{}:
       {==}
 
 # HINCRBYFLOAT of a new hash: the new hash of the field with the sum, or
@@ -9145,7 +9145,7 @@ def hw_new_good(op: R.HWrite, -m: Maybe<&2, KV.Item<KV.Val>>) -> Good(m, ch_of(R
       %hdel_empty(fs) : Good(m, ch_of(R.hdel.out(_, fs)))
       {==}
     case R.HWIncr{+f, +by}:
-      hincr_new(R.int_fits(by), by, f, m)
+      hincr_new(R.by.ll(by), f, m)
     case R.HWNew{+ps}:
       %hnew_out_ch(R.hset.go(ps, R.HPut{KV.hash.empty(), 0n}), ps) : Good(m, _)
       hw_set_new(ps, m)
@@ -9181,26 +9181,26 @@ def hsetnx_old(had: Bool, +f: String, +v: String, +h0: KV.Hash, -e: Nat) -> Good
     case False{}:
       ({==}, {==})
 
-def hincr_old_fit(ok: Bool, +s: R.Int, +f: String, +h0: KV.Hash, -e: Nat) -> Good(Some{KV.Item{KV.VColl{KV.CHash{h0}}, e}}, ch_of(R.hincr.fit(ok, s, False{}, f, h0))):
-  match ok:
-    case True{}:
+def hincr_old_fit(s: R.LL, +f: String, +h0: KV.Hash, -e: Nat) -> Good(Some{KV.Item{KV.VColl{KV.CHash{h0}}, e}}, ch_of(R.hincr.fit(s, False{}, f, h0))):
+  match s:
+    case R.LL{+neg, +hi, +lo}:
       ({==}, {==})
-    case False{}:
+    case R.LLBad{}:
       {==}
 
-def hincr_old_num(mi: Maybe<&2, R.Int>, +f: String, +by: R.Int, +h0: KV.Hash, -e: Nat) -> Good(Some{KV.Item{KV.VColl{KV.CHash{h0}}, e}}, ch_of(R.hincr.num(mi, False{}, f, by, h0))):
+def hincr_old_num(mi: R.LL, +f: String, +by: R.By, +h0: KV.Hash, -e: Nat) -> Good(Some{KV.Item{KV.VColl{KV.CHash{h0}}, e}}, ch_of(R.hincr.num(mi, False{}, f, by, h0))):
   match mi:
-    case Some{+i}:
-      hincr_old_fit(R.int_fits(R.int_add(i, by)), R.int_add(i, by), f, h0, e)
-    case None{}:
+    case R.LL{+neg, +hi, +lo}:
+      hincr_old_fit(R.ll.add(neg, hi, lo, by), f, h0, e)
+    case R.LLBad{}:
       {==}
 
-def hincr_old(cur: Maybe<&2, String>, +f: String, +by: R.Int, +h0: KV.Hash, -e: Nat) -> Good(Some{KV.Item{KV.VColl{KV.CHash{h0}}, e}}, ch_of(R.hincr.of(cur, False{}, f, by, h0))):
+def hincr_old(cur: Maybe<&2, String>, +f: String, +by: R.By, +h0: KV.Hash, -e: Nat) -> Good(Some{KV.Item{KV.VColl{KV.CHash{h0}}, e}}, ch_of(R.hincr.of(cur, False{}, f, by, h0))):
   match cur:
     case Some{+v}:
-      hincr_old_num(R.int_read(v), f, by, h0, e)
+      hincr_old_num(R.ll.read(v), f, by, h0, e)
     case None{}:
-      hincr_old_fit(R.int_fits(by), by, f, h0, e)
+      hincr_old_fit(R.by.ll(by), f, h0, e)
 
 # HINCRBYFLOAT of a hash the key held: the HSET of the field with the
 # sum, or nothing (an error)
@@ -10114,7 +10114,7 @@ def good_none(op: R.UpdOp, +now: Nat, -m: Maybe<&2, KV.Item<KV.Val>>) -> Good(m,
     case R.UPersist{}:
       {==}
     case R.UIncr{+by}:
-      incr_fit_none(R.int_fits(by), by, m)
+      incr_fit_none(R.by.ll(by), m)
     case R.URange{+o, +a}:
       range_none_good(R.range.go(o, a), o, a, String.is_empty(a), m)
     case R.USetBit{+o, +on}:
@@ -10211,18 +10211,18 @@ def expire_some(a: Maybe<&2, R.At>, +c: R.ExpIf, +name: String, +now: Nat, +w: S
     case None{}:
       {==}
 
-def incr_fit_some(ok: Bool, +i: R.Int, -w: KV.Val, -e: Nat) -> Good(Some{KV.Item{w, e}}, ch_of(R.uincr.fit(i, ok, True{}))):
-  match ok:
-    case True{}:
+def incr_fit_some(s: R.LL, -w: KV.Val, -e: Nat) -> Good(Some{KV.Item{w, e}}, ch_of(R.uincr.fit(s, True{}))):
+  match s:
+    case R.LL{+neg, +hi, +lo}:
       {==}
-    case False{}:
+    case R.LLBad{}:
       {==}
 
-def incr_num_some(cur: Maybe<&2, R.Int>, +by: R.Int, -w: KV.Val, -e: Nat) -> Good(Some{KV.Item{w, e}}, ch_of(R.uincr.num(by, cur))):
+def incr_num_some(cur: R.LL, +by: R.By, -w: KV.Val, -e: Nat) -> Good(Some{KV.Item{w, e}}, ch_of(R.uincr.num(by, cur))):
   match cur:
-    case Some{+i}:
-      incr_fit_some(R.int_fits(R.int_add(i, by)), R.int_add(i, by), w, e)
-    case None{}:
+    case R.LL{+neg, +hi, +lo}:
+      incr_fit_some(R.ll.add(neg, hi, lo, by), w, e)
+    case R.LLBad{}:
       {==}
 
 # INCRBYFLOAT of a key there: the sum set with the key's time kept, or
@@ -10361,7 +10361,7 @@ def good_some(op: R.UpdOp, +now: Nat, +w: String, +e: Nat) -> Good(Some{KV.Item{
     case R.UPersist{}:
       persist_go(Nat.is_eq(e, 0n), KV.VStr{w}, e)({==})
     case R.UIncr{+by}:
-      incr_num_some(R.int_read(w), by, KV.VStr{w}, e)
+      incr_num_some(R.ll.read(w), by, KV.VStr{w}, e)
     case R.URange{+o, +a}:
       range_some_good(R.range.go(o, a), o, a, w, e, String.is_empty(a))({==})
     case R.USetBit{+o, +on}:
@@ -18903,37 +18903,37 @@ def cnt_keep_nz(+t: KV.Trie<KV.Val>, +k: String, +v: KV.Val, +h: U32, +n: Nat, +
   nz => ok => %nz : {Laws.counted(R.Db{KV.keep.at(KV.Val, t, k, v, h), Bool.pick(Nat, _, 1n+n, n), x, now, rr}) == True{} : Bool}
               cnt_keep(t, k, v, h, n, x, now, rr)(ok)
 
-def counted_incr_fit_keep(ok0: Bool, +t: KV.Trie<KV.Val>, +k: String, +i: R.Int, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>) -> {Nat.is_eq(KV.code.at(KV.Val, t, k, KV.hash(k)), 0n) == False{} : Bool} -> {Laws.counted(R.Db{t, n, x, now, rr}) == True{} : Bool} -> {Laws.counted(R.db_of(R.incr.fit(t, k, KV.hash(k), i, ok0, True{}, n, n, x, x, now, rr))) == True{} : Bool}:
-  match ok0:
-    case True{}:
-      cnt_keep_nz(t, k, KV.VStr{R.int_show(i)}, KV.hash(k), n, x, now, rr)
-    case False{}:
+def counted_incr_fit_keep(s: R.LL, +t: KV.Trie<KV.Val>, +k: String, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>) -> {Nat.is_eq(KV.code.at(KV.Val, t, k, KV.hash(k)), 0n) == False{} : Bool} -> {Laws.counted(R.Db{t, n, x, now, rr}) == True{} : Bool} -> {Laws.counted(R.db_of(R.incr.fit(t, k, KV.hash(k), s, True{}, n, n, x, x, now, rr))) == True{} : Bool}:
+  match s:
+    case R.LL{+neg, +hi, +lo}:
+      cnt_keep_nz(t, k, KV.VStr{R.ll.show(neg, hi, lo)}, KV.hash(k), n, x, now, rr)
+    case R.LLBad{}:
       nz => ok => ok
 
-def counted_incr_num(+t: KV.Trie<KV.Val>, +k: String, +by: R.Int, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>, cur: Maybe<&2, R.Int>) -> {Nat.is_eq(KV.code.at(KV.Val, t, k, KV.hash(k)), 0n) == False{} : Bool} -> {Laws.counted(R.Db{t, n, x, now, rr}) == True{} : Bool} -> {Laws.counted(R.db_of(R.incr.num(t, k, KV.hash(k), by, n, x, now, rr, cur))) == True{} : Bool}:
+def counted_incr_num(+t: KV.Trie<KV.Val>, +k: String, +by: R.By, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>, cur: R.LL) -> {Nat.is_eq(KV.code.at(KV.Val, t, k, KV.hash(k)), 0n) == False{} : Bool} -> {Laws.counted(R.Db{t, n, x, now, rr}) == True{} : Bool} -> {Laws.counted(R.db_of(R.incr.num(t, k, KV.hash(k), by, n, x, now, rr, cur))) == True{} : Bool}:
   match cur:
-    case Some{+i}:
-      counted_incr_fit_keep(R.int_fits(R.int_add(i, by)), t, k, R.int_add(i, by), n, x, now, rr)
-    case None{}:
+    case R.LL{+neg, +hi, +lo}:
+      counted_incr_fit_keep(R.ll.add(neg, hi, lo, by), t, k, n, x, now, rr)
+    case R.LLBad{}:
       nz => ok => ok
 
-def counted_incr_fit_new(ok0: Bool, +t: KV.Trie<KV.Val>, +k: String, +by: R.Int, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>) -> {Laws.counted(R.Db{t, n, x, now, rr}) == True{} : Bool} -> {Laws.counted(R.db_of(R.incr.fit(t, k, KV.hash(k), by, ok0, False{}, R.cnt.n(KV.code.at(KV.Val, t, k, KV.hash(k)), n), n, R.cnt.x(KV.code.at(KV.Val, t, k, KV.hash(k)), 0n, x), x, now, rr))) == True{} : Bool}:
-  match ok0:
-    case True{}:
-      cnt_setx(t, k, KV.VStr{R.int_show(by)}, 0n, KV.hash(k), n, x, now, rr)
-    case False{}:
+def counted_incr_fit_new(s: R.LL, +t: KV.Trie<KV.Val>, +k: String, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>) -> {Laws.counted(R.Db{t, n, x, now, rr}) == True{} : Bool} -> {Laws.counted(R.db_of(R.incr.fit(t, k, KV.hash(k), s, False{}, R.cnt.n(KV.code.at(KV.Val, t, k, KV.hash(k)), n), n, R.cnt.x(KV.code.at(KV.Val, t, k, KV.hash(k)), 0n, x), x, now, rr))) == True{} : Bool}:
+  match s:
+    case R.LL{+neg, +hi, +lo}:
+      cnt_setx(t, k, KV.VStr{R.ll.show(neg, hi, lo)}, 0n, KV.hash(k), n, x, now, rr)
+    case R.LLBad{}:
       ok => ok
 
-def counted_incr_got(+t: KV.Trie<KV.Val>, +k: String, +by: R.Int, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>, g: KV.Got) -> {g == KV.get_copy.at(t, k, KV.hash(k), now) : KV.Got} -> {Laws.counted(R.Db{t, n, x, now, rr}) == True{} : Bool} -> {Laws.counted(R.db_of(R.incr.got(t, k, KV.hash(k), by, n, x, now, rr, g))) == True{} : Bool}:
+def counted_incr_got(+t: KV.Trie<KV.Val>, +k: String, +by: R.By, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>, g: KV.Got) -> {g == KV.get_copy.at(t, k, KV.hash(k), now) : KV.Got} -> {Laws.counted(R.Db{t, n, x, now, rr}) == True{} : Bool} -> {Laws.counted(R.db_of(R.incr.got(t, k, KV.hash(k), by, n, x, now, rr, g))) == True{} : Bool}:
   match g:
     case KV.GStr{s}:
-      eg => counted_incr_num(t, k, by, n, x, now, rr, R.int_read(s))(nz_code(t, k, now, s)(eg))
+      eg => counted_incr_num(t, k, by, n, x, now, rr, R.ll.read(s))(nz_code(t, k, now, s)(eg))
     case KV.GColl{}:
       eg => ok => ok
     case KV.GNone{}:
-      eg => counted_incr_fit_new(R.int_fits(by), t, k, by, n, x, now, rr)
+      eg => counted_incr_fit_new(R.by.ll(by), t, k, n, x, now, rr)
 
-def counted_incr(db: R.Db, +k: String, +by: R.Int) -> {Laws.counted(db) == True{} : Bool} -> {Laws.counted(R.db_of(R.db.incr(db, k, by))) == True{} : Bool}:
+def counted_incr(db: R.Db, +k: String, +by: R.By) -> {Laws.counted(db) == True{} : Bool} -> {Laws.counted(R.db_of(R.db.incr(db, k, by))) == True{} : Bool}:
   match db:
     case R.Db{+t, +n, +x, +now, +rr}:
       counted_incr_got(t, k, by, n, x, now, rr, KV.get_copy.at(t, k, KV.hash(k), now))({==})

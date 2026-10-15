@@ -1823,7 +1823,8 @@ time is read digit by digit as a Nat (14 digits at most, no leading zero), a lon
 a decimal kept as hi·10^9 + lo, so that Redis's checks near 2^63 come out exactly. The
 bound never appears as a number: neither the code nor the proofs build 10^13 or 10^14;
 they count digits instead. The checker unfolds a number literal one successor at a time,
-and a proof that meets 10^14 does not finish.
+and a proof that meets 10^14 does not finish. (INCR and its kin add Redis's long longs
+since section 3zzv; times keep the bound.)
 
 **Updates, and the changes they make.** A command that reads one key and then writes it
 (SETNX, APPEND, SET with options, GETSET, GETEX, GETDEL, EXPIRE and its kin, PERSIST) is
@@ -3948,7 +3949,8 @@ random numbers.
 **Where BendKV differs.** The same maxmemory holds another number of keys, since a key
 takes other bytes in BendKV's heap than in Redis's allocator, and the trie's nodes stay
 (above). A word of use is shared by keys whose hashes have the same low twenty bits, in
-any database, and no delete clears it: a new key may find an old key's word. A request
+any database, and no delete clears it: a new key may find an old key's word, unless
+RESTORE made it (section 3zzx). A request
 marks its first key alone (MGET's others, MSET's and DEL's are not marked), before its
 batch runs, whether the key is there or not, and a command queued in a transaction marks
 its key as it is queued. Redis marks a key as a command finds it, and not while a child
@@ -5073,7 +5075,8 @@ of all that (Jones's polynomial, reflected, from 0), eight bytes, the low first.
   bits), the other option left aside. RESTORE with either is a command of the session
   (`SRestore`): the session runs its update on its database, and the server, which runs
   such a command one at a time, sets the word once the update restored the key, as its
-  effects show, in MULTI too.
+  effects show, in MULTI too. Under an LFU policy, the mark of every RESTORE has made the
+  word a new value's before it runs (section 3zzx).
 
 The append-only file logs a RESTORE as the RESTORE of its payload with REPLACE (the key
 may be there when the file loads, its time passed), and ABSTTL with the time it gave the
@@ -5154,6 +5157,112 @@ suites: redis-py's 12 tests of DUMP and RESTORE pass, in RESP2 and in RESP3, and
 go-redis's 3, which leaves 2,513 of the 2,753 tests Redis passes in redis-py and 408 of
 460 in go-redis.
 
+## 3zzv. Long longs
+
+**What there is.** INCR, DECR, INCRBY, DECRBY and HINCRBY on Redis's whole long long, as
+`incrDecrCommand`, `decrbyCommand` and `hincrbyCommand` run them: a value or a field read
+as `string2ll` reads it, an increment read before the key is looked at, a sum past
+LLONG_MAX or below LLONG_MIN refused ("increment or decrement would overflow"), and
+DECRBY of LLONG_MIN refused before the key is looked at ("decrement would overflow").
+BendKV's integers had at most 14 digits (section 3v, "Fourteen digits"), so that a sum of
+two stayed below 2^48, where a `Nat` stops the runtime: a value or an increment past 14
+digits was not an integer to BendKV, and a sum past 14 digits an overflow. The
+differential tests skipped those replies as a known divergence; they compare them now.
+
+**How.** A long long's magnitude is two `Nat`s, hi·10^9 + lo (`LL`, which the readers of
+times and counts already used for numbers past 14 digits): hi is below 10^10, the sum of
+two below 2·10^10, far from 2^48. `ll.read` reads a value of up to nine characters at once
+(`String.digits_at` and `String.dec_at`, by index) and any other through `ll.at`;
+`ll.add` adds two, signs apart or alike, and checks the sum as Redis does; `ll.show` writes
+it, the last nine digits padded by showing 10^9 + lo and dropping its 1. The increment a
+command carries is `By`, its sign in its constructor (`ByPos{hi, lo}`, `ByNeg{hi, lo}`):
+a command travels in registers as wide as its widest form, and an `LL`'s three fields made
+`IncrBy` the widest, every command a word wider: GET and SET took 11 instructions more
+each. The reply is the sum's text (`RIntS`).
+
+**Cost.** Instructions per request (callgrind, `tools/perf_guard.sh`; main's in brackets,
+on the same machine): INCR 4,413 (4,385), GET 3,303 (3,306), SET 4,065 (4,067). The
+protocol's slow reader of a length line keeps its own reader of a long long (`ll.of`):
+with `ll.at` there, the parser compiled otherwise, and SET took 62 more. By the runtime's
+functions (callgrind, a build with lines), INCR makes its sum's text once where it made
+it twice (to see that it fit in 14 digits, and to store it), and no longer writes its
+digits into the reply (`nat_show_str` 52 instructions fewer, `nat_show_into` 30); reading
+the value by index (`str_digits_at`, `str_dec_at`) costs 54, copying the text into the
+reply (`str_mov`, `str_append`) 68, and the compiled Bend code takes 44 fewer. Two
+attempts cost more and were left: an `Int` reply for a sum below 10^9 (13 instructions
+more: the text is made anyway, for the store), and padding the digits with
+`String.repeat`, which sent `ll.show` through the work loop (2 more indirect
+mispredictions a request, 12 instructions).
+
+**Proofs.** The lemmas of INCRBY and HINCRBY (the frame, the reply, the key, the bridge to
+the specification, the time, the count of keys, the update's equivalence and its good
+changes) case on an `LL` where they cased on a `Maybe<Int>` and a `Bool` of fitting; a key
+not there gets `by.ll(by)`. `incr_missing` answers `RIntS{"1"}`. The laws keep their number.
+
+**Tests.** `tests/numbers_test.py` adds INCRBY, DECRBY and HINCRBY to values at LLONG_MAX
+and LLONG_MIN and to keys and fields not there (2,541 commands); `tests/diff_test.py`
+draws values at a long long's edges and has no known divergence left of integers;
+`tests/aof_redis_test.py` logs increments past 14 digits and overflows both ways;
+`tests/smoke.bend` checks 99999999999999 + 1 and LLONG_MAX + 1. Redis's suite:
+unit/type/hash passes HINCRBY's test of overflows, which starts from
+-9223372036854775484 (70 of its 72); 1,274 of the 1,677 tests Redis passes, 1,271 of
+the 1,333 in what BendKV has.
+
+## 3zzx. The word of use of a key RESTORE makes
+
+**What failed.** After DUMP and RESTORE merged, `make test` failed in CI on three runs of
+pull requests (#57 twice, #58 once) at one check of `tests/dump_test.py`, and passed on
+main's run: OBJECT FREQ of a key that RESTORE had just made under `allkeys-lfu`, with
+IDLETIME alone (`lfu3`) or no option (`lfu4`), was 1 on BendKV and 5 on Redis. On fresh
+servers the test passed every time, and after the servers had run five minutes too, so the
+time since the start was not the cause.
+
+**Why.** A key's word of use is one of 2^20, by the low twenty bits of its hash (section
+3zw): keys share it, and no delete clears it. Before a batch runs, each request marks its
+key (`use.lfu`). Under an LFU policy, a word never set becomes a new value's, a counter of
+5 at the minute; any other word is decayed by the minutes since its last decay and then
+stepped as a use. Most words in the table are LRU seconds, which every other policy
+writes: read as an LFU minute and counter, such a word nearly always decays to 0, and the
+step makes it 1 (another key's LFU word gives that key's counter, less one a minute,
+stepped). RESTORE's FREQ sets the word once the key is restored (section 3zzu), but
+without FREQ the word stayed as the mark left it. In `make test`, 27 test files run on the
+same server before `tests/dump_test.py`, and their keys leave words in much of the table,
+so whether `lfu3`'s or `lfu4`'s word had been another key's depended on the test's random
+names. Redis makes RESTORE's value new, with a counter of 5 at the minute, whatever key
+had the name before. A million SETs of random keys on a fresh server, then FLUSHALL, then
+`tests/dump_test.py`: 4 runs of 4 failed, at `lfu3`, `lfu4` or both, 1 against 5 each
+time.
+
+**What runs now.** Under an LFU policy, the mark of a RESTORE gives its key's word a
+counter of 5 at the minute (`use.lfu.word`), whatever word is there, as Redis makes a new
+value; FREQ then sets the word as before, and IDLETIME, which an LFU policy ignores,
+leaves it at 5. The mark tells a RESTORE by its request's hash, whose high twelve bits the
+parser writes with the call's code (`R.stat.mark.restore`, which `tools/gen_commands.py`
+now generates with GET's, SET's and INCR's). Under any other policy a mark already writes
+the second of now, whatever word is there. No other command's mark changes.
+
+**Where BendKV differs.** The mark comes before the command, so a RESTORE that fails makes
+the word new too. BUSYKEY (the key there, no REPLACE) sets the counter of the key that is
+there to 5, where Redis's lookup of that key steps its counter as a read does (after SET
+and DUMP, Redis 6 and BendKV 5); with REPLACE, a time or a payload refused leaves Redis's
+word as it was, where BendKV's becomes 5. A RESTORE queued in a transaction marks as it is
+queued (section 3zw). Other commands that make a key, SET for one, still find the word
+another key left.
+
+Two other ways were left aside. Running every RESTORE as a command of the session
+(`SRestore`) and setting the word from its effects, as IDLETIME and FREQ do, would be
+exact for a RESTORE that fails too. But the RESTORE the parser reads would no longer be
+the `Upd` that a logged RESTORE must parse back to (`restore_args`), and a batch of
+RESTOREs would run the general way. Sending a batch with a RESTORE the general way, and
+setting the word after it there, would add a test of every request to the split of every
+batch (`unzip` in `src/batch.bend`).
+
+**Tests.** `tests/dump_test.py` now makes each key it restores under an LFU policy, and
+deletes it, under `allkeys-lru` first, so that RESTORE finds an LRU second in its word at
+every run. With main's server that fails at `lfu3` and `lfu4` at every run (3 of 3 on
+fresh servers, 1 against 5); with this change it passes, on fresh servers (2 of 2) and
+after the million random SETs above (3 of 3).
+
 ## 3zzy. Intsets as trees of integers
 
 **What was left** (sections 3zj, 3zze). An intset kept its members as a list of their
@@ -5207,8 +5316,8 @@ at a time (the median of three runs, each the median of five): SADD 75 µs befor
 and 51 on Redis; SISMEMBER 64, 51 and 48; SREM 74, 53 and 50: an intset's command takes a
 round trip now, as Redis's does. An SADD of 500 integers takes 0.46 ms (7.9 before, 0.16
 on Redis), and a RESTORE of them 0.19 ms (0.42 before, 0.05 on Redis). GET, SET and INCR
-as before (`make perfcheck`: 3,306, 4,065 and 4,384 instructions per request; main 3,309,
-4,069 and 4,384).
+as before (`make perfcheck`: 3,306, 4,067 and 4,411 instructions per request; main 3,302,
+4,069 and 4,411).
 
 **Where BendKV differs.** A member takes a node of four words: an intset of 500 members
 takes 16,768 bytes of BendKV's heap (8,824 as a list), where Redis's takes 1,080 (2, 4 or

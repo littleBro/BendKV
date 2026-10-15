@@ -7166,8 +7166,8 @@ one request at a time, the median of three runs of medians (µs):
 | DUMP of them | 147 | 137 | 56 |
 | RESTORE of them | 416 | 185 | 48 |
 
-`make perfcheck`: GET 3,306, SET 4,065 and INCR 4,384 instructions per request (main
-3,309, 4,069 and 4,384).
+`make perfcheck`: GET 3,306, SET 4,067 and INCR 4,411 instructions per request (main
+3,302, 4,069 and 4,411).
 
 **What is left.** On an intset of 400, a pair costs 7,300 instructions more than on a
 hashtable: each step of an add or a deletion makes a new node on its way back up and
