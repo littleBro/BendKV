@@ -1,0 +1,537 @@
+diff --git a/bend2/base.bend b/bend2/base.bend
+index 21ee444..7e116e0 100644
+--- a/bend2/base.bend
++++ b/bend2/base.bend
+@@ -231,6 +231,15 @@ def IO.pid() -> IO(U32):
+   import "./effs/pid.c"
+   import "./effs/pid.js"
+ 
++# Sends msg as one datagram to the unix socket the environment's
++# NOTIFY_SOCKET names (a leading '@': the abstract namespace), as systemd's
++# sd_notify does for a service of Type=notify ("READY=1", "STATUS=..."):
++# True when it went out whole; False when NOTIFY_SOCKET is not set or names
++# no such socket, or the send failed.
++def IO.notify(msg: String) -> IO(Bool):
++  import "./effs/io_notify.c"
++  import "./effs/io_notify.js"
++
+ # The process's working directory, and a change of it, for every thread
+ # (relative paths resolve from the new one afterwards).
+ def IO.cwd() -> IO(Result<&1, &1, U32 & String, String>):
+@@ -433,6 +442,14 @@ def TCP.listen(host: String, port: U32) -> IO(Result<&1, &1, U32 & String, Liste
+   import "./effs/tcp_listen.c"
+   import "./effs/tcp_listen.js"
+ 
++# A listener on a unix socket at path: the path removed first, then bound,
++# given perm's mode when perm is not 0, and listening, as Redis's
++# unixsocket and unixsocketperm make one. TCP.accept takes its connections,
++# and TCP.name names both ends of each "/unixsocket:0", as Redis does.
++def TCP.listen_unix(path: String, perm: U32) -> IO(Result<&1, &1, U32 & String, Listener>):
++  import "./effs/tcp_listen_unix.c"
++  import "./effs/tcp_listen_unix.js"
++
+ def TCP.accept(listener: Listener) ->
+   IO(Listener & Result<&1, &1, U32 & String, Socket>):
+   import "./effs/tcp_accept.c"
+diff --git a/bend2/comp.ts b/bend2/comp.ts
+index 504f546..c5a188c 100644
+--- a/bend2/comp.ts
++++ b/bend2/comp.ts
+@@ -10167,6 +10167,7 @@ function io_sys() {
+         + " accept:ipp>i send:ipUi>I recv:ipUi>I read:ipU>I pread:ipUI>I"
+         + " sendto:ipUipu>I recvfrom:ipUipp>I close:i>i setsockopt:iiipu>i"
+         + " getpeername:ipp>i getsockname:ipp>i shutdown:ii>i"
++        + " unlink:p>i chmod:pu>i"
+         + " " + sel + ":ipppp>i"
+         + (vari ? " fcntl:iiiiiiiii>i" : " fcntl:iii>i") + " getsockopt:iiipp>i"
+         + " strerror:i>c " + err + ":>p").split(" ").map((s) => {
+diff --git a/bend2/effs/io_notify.c b/bend2/effs/io_notify.c
+new file mode 100644
+index 0000000..08d1aac
+--- /dev/null
++++ b/bend2/effs/io_notify.c
+@@ -0,0 +1,46 @@
++// IO
++// ==
++
++#include <stddef.h>
++#include <sys/un.h>
++#include <unistd.h>
++
++#ifndef MSG_NOSIGNAL
++#define MSG_NOSIGNAL 0
++#endif
++
++// msg as one datagram to the unix socket NOTIFY_SOCKET names, as sd_notify
++// sends one: a path, or a name in the abstract namespace after an '@'
++// (its first byte NUL, the address as long as the name). True when the
++// datagram went out whole; False when NOTIFY_SOCKET is not set, is neither
++// a path nor an abstract name, does not fit sun_path, or the send failed.
++Term io_notify_run(Env e, Term* f, IoWork* w) {
++  const char* to  = getenv("NOTIFY_SOCKET");
++  size_t      n   = to == NULL ? 0 : strlen(to);
++  u64         len;
++  char*       msg = io_cstr(e, f[0], &len);
++  bool        ok  = false;
++  struct sockaddr_un at;
++  if (n > 1 && n < sizeof(at.sun_path) && (to[0] == '/' || to[0] == '@')) {
++    memset(&at, 0, sizeof(at));
++    at.sun_family = AF_UNIX;
++    memcpy(at.sun_path, to, n);
++    if (to[0] == '@') {
++      at.sun_path[0] = 0;
++    }
++    int fd = socket(AF_UNIX, SOCK_DGRAM, 0);
++    if (fd >= 0) {
++      fcntl(fd, F_SETFD, FD_CLOEXEC);
++      socklen_t size = (socklen_t)(offsetof(struct sockaddr_un, sun_path) + n);
++      ok = sendto(fd, msg, len, MSG_NOSIGNAL, (struct sockaddr*)&at, size)
++        == (ssize_t)len;
++      close(fd);
++    }
++  }
++  free(msg);
++  return term_pak(ok ? CID(True) : CID(False), 0);
++}
++
++static void __attribute__((constructor)) io_notify_use(void) {
++  io_eff(CID(IO.notify), io_notify_run);
++}
+diff --git a/bend2/effs/io_notify.js b/bend2/effs/io_notify.js
+new file mode 100644
+index 0000000..40db156
+--- /dev/null
++++ b/bend2/effs/io_notify.js
+@@ -0,0 +1,34 @@
++// IO
++// ==
++
++// msg as one datagram to the unix socket NOTIFY_SOCKET names, as
++// io_notify.c sends it; True when it went out whole
++function io_notify(msg) {
++  const to = process.env.NOTIFY_SOCKET ?? "";
++  const sys = io_sys();
++  const room = sys.mac ? 104 : 108;
++  const path = new TextEncoder().encode(to);
++  if (path.length < 2 || path.length >= room
++    || (to[0] !== "/" && to[0] !== "@")) {
++    return false;
++  }
++  const at = new Uint8Array(2 + room);
++  at.set(sys.mac ? [2 + room, 1] : [1, 0]);
++  at.set(path, 2);
++  if (to[0] === "@") {
++    at[2] = 0;
++  }
++  const fd = sys.socket(1, 2, 0);
++  if (fd < 0) {
++    return false;
++  }
++  const bytes = new TextEncoder().encode(msg);
++  const room0 = new Uint8Array(Math.max(1, bytes.length));
++  room0.set(bytes);
++  const sent = sys.sendto(fd, sys.ptr(room0), bytes.length, 0, sys.ptr(at),
++    2 + path.length);
++  sys.close(fd);
++  return Number(sent) === bytes.length;
++}
++
++io_eff(CID(IO.notify), io_notify);
+diff --git a/bend2/effs/tcp_listen.c b/bend2/effs/tcp_listen.c
+index 2c1ad22..1f8d5ba 100644
+--- a/bend2/effs/tcp_listen.c
++++ b/bend2/effs/tcp_listen.c
+@@ -1,22 +1,44 @@
+ // TCP
+ // ===
+ 
++// An IPv6 address to listen on (a host with a ':', as Redis's listenToPort
++// tells the families apart), at port
++static int tcp_listen_addr6(const char* host, u32 port, struct sockaddr_in6* at) {
++  memset(at, 0, sizeof(*at));
++  at->sin6_family = AF_INET6;
++  at->sin6_port   = htons((uint16_t)port);
++  return port > 65535 || inet_pton(AF_INET6, host, &at->sin6_addr) != 1
++    ? -1 : 0;
++}
++
++// A listener on host and port: an IPv4 address as io_sys_addr reads it, or
++// an IPv6 one, whose socket takes IPv6 alone (IPV6_V6ONLY), as Redis's
++// anetV6Only sets it, so that "0.0.0.0" and "::" can both be bound.
+ Term tcp_listen_run(Env e, Term* f, IoWork* w) {
+-  struct sockaddr_in at;
++  struct sockaddr_storage at;
+   u64 len;
+   char* host = io_cstr(e, f[0], &len);
+-  int valid = !io_nul(host, len) && io_sys_addr(host, (u32)f[1], &at) == 0;
++  int six = strchr(host, ':') != NULL;
++  int valid = !io_nul(host, len) && (six
++    ? tcp_listen_addr6(host, (u32)f[1], (struct sockaddr_in6*)&at) == 0
++    : io_sys_addr(host, (u32)f[1], (struct sockaddr_in*)&at) == 0);
+   free(host);
+   if (!valid) {
+     return io_fail(e, EINVAL, NULL);
+   }
+-  int fd = socket(AF_INET, SOCK_STREAM, 0);
++  int fd = socket(six ? AF_INET6 : AF_INET, SOCK_STREAM, 0);
+   if (fd < 0) {
+     return io_fail(e, (uint32_t)errno, NULL);
+   }
+   int one = 1;
+   setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &one, sizeof(one));
+-  int bound = bind(fd, (struct sockaddr*)&at, sizeof(at));
++  if (six && setsockopt(fd, IPPROTO_IPV6, IPV6_V6ONLY, &one, sizeof(one)) < 0) {
++    uint32_t code = (uint32_t)errno;
++    close(fd);
++    return io_fail(e, code, NULL);
++  }
++  socklen_t size = six ? sizeof(struct sockaddr_in6) : sizeof(struct sockaddr_in);
++  int bound = bind(fd, (struct sockaddr*)&at, size);
+   if (bound < 0 || listen(fd, 512) < 0
+     || fcntl(fd, F_SETFL, fcntl(fd, F_GETFL) | O_NONBLOCK) < 0) {
+     uint32_t code = (uint32_t)errno;
+diff --git a/bend2/effs/tcp_listen.js b/bend2/effs/tcp_listen.js
+index cc66c87..f53bdf0 100644
+--- a/bend2/effs/tcp_listen.js
++++ b/bend2/effs/tcp_listen.js
+@@ -1,20 +1,88 @@
+ // TCP
+ // ===
+ 
++// An IPv6 address as inet_pton reads one: eight groups of up to four hex
++// digits, one "::" for a run of zero groups, and the last part maybe an
++// IPv4 address for the last 32 bits; its 16 bytes, or null
++function tcp_ip6(host) {
++  const halves = host.split("::");
++  if (halves.length > 2) {
++    return null;
++  }
++  const deci = (p) => /^(0|[1-9]\d{0,2})$/.test(p) && Number(p) < 256;
++  const groups = (s, last) => {
++    if (s === "") {
++      return [];
++    }
++    const parts = s.split(":");
++    const out = [];
++    for (let i = 0; i < parts.length; i += 1) {
++      const p = parts[i];
++      const v4 = p.split(".");
++      if (last && i === parts.length - 1 && v4.length === 4 && v4.every(deci)) {
++        out.push((Number(v4[0]) << 8) | Number(v4[1]),
++          (Number(v4[2]) << 8) | Number(v4[3]));
++      } else if (/^[0-9a-fA-F]{1,4}$/.test(p)) {
++        out.push(parseInt(p, 16));
++      } else {
++        return null;
++      }
++    }
++    return out;
++  };
++  const a = groups(halves[0], halves.length === 1);
++  const b = halves.length === 2 ? groups(halves[1], true) : [];
++  if (a === null || b === null) {
++    return null;
++  }
++  const n = a.length + b.length;
++  if (halves.length === 2 ? n > 7 : n !== 8) {
++    return null;
++  }
++  const all = [...a, ...new Array(8 - n).fill(0), ...b];
++  const bytes = new Uint8Array(16);
++  all.forEach((g, i) => {
++    bytes[2 * i] = g >> 8;
++    bytes[2 * i + 1] = g & 255;
++  });
++  return bytes;
++}
++
++// sockaddr_in6 of an IPv6 address and a port, or null
++function tcp_addr6(host, port) {
++  const ip = tcp_ip6(host);
++  if (ip === null || port > 65535) {
++    return null;
++  }
++  const b = new Uint8Array(28);
++  b.set(io_sys().mac ? [28, 30] : [10, 0]);
++  b.set([port >> 8, port & 255], 2);
++  b.set(ip, 8);
++  return b;
++}
++
++// A listener on host and port: IPv4, or IPv6 for a host with a ':', its
++// socket IPv6 alone (IPV6_V6ONLY), as tcp_listen.c makes one
+ function tcp_listen(host, port) {
+-  const at = io_addr(host, Number(port));
++  const six = host.includes(":");
++  const at = six ? tcp_addr6(host, Number(port)) : io_addr(host, Number(port));
+   if (at === null) {
+     return io_fail(22);
+   }
+   const sys = io_sys();
+-  const fd = sys.socket(2, 1, 0);
++  const fd = sys.socket(six ? (sys.mac ? 30 : 10) : 2, 1, 0);
+   if (fd < 0) {
+     return io_fail(sys.errno());
+   }
+   const one = new Int32Array([1]);
+   const level = sys.mac ? 0xffff : 1;
+   sys.setsockopt(fd, level, sys.mac ? 4 : 2, sys.ptr(one), 4);
+-  if (sys.bind(fd, sys.ptr(at), 16) < 0 || sys.listen(fd, 512) < 0
++  if (six && sys.setsockopt(fd, 41, sys.mac ? 27 : 26, sys.ptr(one), 4) < 0) {
++    const code = sys.errno();
++    sys.close(fd);
++    return io_fail(code);
++  }
++  if (sys.bind(fd, sys.ptr(at), at.length) < 0 || sys.listen(fd, 512) < 0
+     || sys.fcntl(fd, 4, sys.fcntl(fd, 3, 0) | (sys.mac ? 4 : 0x800)) < 0) {
+     const code = sys.errno();
+     sys.close(fd);
+diff --git a/bend2/effs/tcp_listen_unix.c b/bend2/effs/tcp_listen_unix.c
+new file mode 100644
+index 0000000..d0c8294
+--- /dev/null
++++ b/bend2/effs/tcp_listen_unix.c
+@@ -0,0 +1,54 @@
++// TCP
++// ===
++
++#include <sys/stat.h>
++#include <sys/un.h>
++#include <unistd.h>
++
++// A listener on a unix socket at path, as Redis's anetUnixServer makes one:
++// the path removed first (a socket a run before left there, as initServer
++// unlinks it, whether that works or not), bound, given perm's mode when
++// perm is not 0 (whether chmod works or not, as Redis does), listening, and
++// non-blocking. A path that holds a NUL, or does not fit sun_path, is
++// refused (EINVAL). TCP.accept takes its connections as a TCP listener's.
++Term tcp_listen_unix_run(Env e, Term* f, IoWork* w) {
++  struct sockaddr_un at;
++  u64 len;
++  char* path = io_cstr(e, f[0], &len);
++  if (io_nul(path, len) || len == 0 || len >= sizeof(at.sun_path)) {
++    free(path);
++    return io_fail(e, EINVAL, NULL);
++  }
++  memset(&at, 0, sizeof(at));
++  at.sun_family = AF_UNIX;
++  memcpy(at.sun_path, path, len);
++  unlink(path);
++  int fd = socket(AF_UNIX, SOCK_STREAM, 0);
++  if (fd < 0) {
++    uint32_t code = (uint32_t)errno;
++    free(path);
++    return io_fail(e, code, NULL);
++  }
++  if (bind(fd, (struct sockaddr*)&at, sizeof(at)) < 0) {
++    uint32_t code = (uint32_t)errno;
++    close(fd);
++    free(path);
++    return io_fail(e, code, NULL);
++  }
++  if ((u32)f[1] != 0) {
++    (void)chmod(path, (mode_t)(u32)f[1]);
++  }
++  free(path);
++  if (listen(fd, 512) < 0
++    || fcntl(fd, F_SETFL, fcntl(fd, F_GETFL) | O_NONBLOCK) < 0) {
++    uint32_t code = (uint32_t)errno;
++    close(fd);
++    return io_fail(e, code, NULL);
++  }
++  io_fd_new(fd);
++  return io_done(e, io_hand(fd));
++}
++
++static void __attribute__((constructor)) tcp_listen_unix_use(void) {
++  io_eff(CID(TCP.listen_unix), tcp_listen_unix_run);
++}
+diff --git a/bend2/effs/tcp_listen_unix.js b/bend2/effs/tcp_listen_unix.js
+new file mode 100644
+index 0000000..97aa8e4
+--- /dev/null
++++ b/bend2/effs/tcp_listen_unix.js
+@@ -0,0 +1,41 @@
++// TCP
++// ===
++
++// A listener on a unix socket at path, as tcp_listen_unix.c makes one: the
++// path removed first, bound, given perm's mode when perm is not 0, then
++// listening and non-blocking; a path with a NUL, or too long, is refused
++function tcp_listen_unix(path, perm) {
++  const sys = io_sys();
++  const name = new TextEncoder().encode(path);
++  const room = sys.mac ? 104 : 108;
++  if (name.length === 0 || name.length >= room || name.includes(0)) {
++    return io_fail(22);
++  }
++  const at = new Uint8Array(2 + room);
++  at.set(sys.mac ? [2 + room, 1] : [1, 0]);
++  at.set(name, 2);
++  const cpath = new Uint8Array(name.length + 1);
++  cpath.set(name);
++  sys.unlink(sys.ptr(cpath));
++  const fd = sys.socket(1, 1, 0);
++  if (fd < 0) {
++    return io_fail(sys.errno());
++  }
++  if (sys.bind(fd, sys.ptr(at), at.length) < 0) {
++    const code = sys.errno();
++    sys.close(fd);
++    return io_fail(code);
++  }
++  if ((Number(perm) >>> 0) !== 0) {
++    sys.chmod(sys.ptr(cpath), Number(perm) >>> 0);
++  }
++  if (sys.listen(fd, 512) < 0
++    || sys.fcntl(fd, 4, sys.fcntl(fd, 3, 0) | (sys.mac ? 4 : 0x800)) < 0) {
++    const code = sys.errno();
++    sys.close(fd);
++    return io_fail(code);
++  }
++  return io_done(fd);
++}
++
++io_eff(CID(TCP.listen_unix), tcp_listen_unix);
+diff --git a/bend2/effs/tcp_name.c b/bend2/effs/tcp_name.c
+index dfafa3b..9c81161 100644
+--- a/bend2/effs/tcp_name.c
++++ b/bend2/effs/tcp_name.c
+@@ -18,8 +18,9 @@ static u64 tcp_name_dec(char* out, unsigned v) {
+ }
+ 
+ // An address as Redis prints a client's (anetFormatAddr): "ip:port",
+-// "[ip]:port" for IPv6, and "?:0" when the call failed or the family is
+-// another. An IPv4 address is written by hand: inet_ntop and snprintf
++// "[ip]:port" for IPv6, "/unixsocket:0" for either end of a unix socket
++// (Redis 7's anetFdToString), and "?:0" when the call failed or the family
++// is another. An IPv4 address is written by hand: inet_ntop and snprintf
+ // format with printf, some thousands of instructions a connection.
+ static Term tcp_name_addr(Env e, int got, struct sockaddr_storage* sa) {
+   char buf[INET6_ADDRSTRLEN + 16];
+@@ -40,6 +41,9 @@ static Term tcp_name_addr(Env e, int got, struct sockaddr_storage* sa) {
+     buf[n++] = ']';
+     buf[n++] = ':';
+     n += tcp_name_dec(buf + n, ntohs(s->sin6_port));
++  } else if (got == 0 && sa->ss_family == AF_UNIX) {
++    memcpy(buf, "/unixsocket:0", 13);
++    n = 13;
+   } else {
+     memcpy(buf, "?:0", 3);
+     n = 3;
+diff --git a/bend2/effs/tcp_name.js b/bend2/effs/tcp_name.js
+index 70b6f46..82ab283 100644
+--- a/bend2/effs/tcp_name.js
++++ b/bend2/effs/tcp_name.js
+@@ -2,8 +2,10 @@
+ // ===
+ 
+ // An address as Redis prints a client's (anetFormatAddr): "ip:port",
+-// "[ip]:port" for IPv6 (in the shortest form, as inet_ntop gives it), and
+-// "?:0" when the call failed or the family is another.
++// "[ip]:port" for IPv6 (in the shortest form, as inet_ntop gives it),
++// "/unixsocket:0" for either end of a unix socket (Redis 7's
++// anetFdToString), and "?:0" when the call failed or the family is
++// another.
+ function tcp_name_addr(got, b) {
+   const sys = io_sys();
+   const fam = sys.mac ? b[1] : b[0] | (b[1] << 8);
+@@ -34,6 +36,9 @@ function tcp_name_addr(got, b) {
+       : hex(gs.slice(0, at)) + "::" + hex(gs.slice(at + len));
+     return "[" + ip + "]:" + port;
+   }
++  if (got === 0 && fam === 1) {
++    return "/unixsocket:0";
++  }
+   return "?:0";
+ }
+ 
+diff --git a/tests/io/io_notify.bend b/tests/io/io_notify.bend
+new file mode 100644
+index 0000000..939cfe9
+--- /dev/null
++++ b/tests/io/io_notify.bend
+@@ -0,0 +1,23 @@
++# io (io_notify): IO.notify sends nothing and answers False where the
++# environment names no NOTIFY_SOCKET, as a program not started by systemd
++# finds it (the test runner sets none). Its send to a socket is tested by
++# its users: BendKV's start, against a socket of the test's own.
++import Base
++
++def flag(b: Bool) -> String:
++  match b:
++    case True{}:
++      "T"
++    case False{}:
++      "F"
++
++law main:
++  IO(U32)
++
++def main():
++  do IO<U32>:
++    k : Bool <- IO.notify("READY=1\n")
++    p : Unit <- IO.print(flag(k))
++    return 0
++
++#|F
+diff --git a/tests/io/tcp_listen_unix.bend b/tests/io/tcp_listen_unix.bend
+new file mode 100644
+index 0000000..4c37635
+--- /dev/null
++++ b/tests/io/tcp_listen_unix.bend
+@@ -0,0 +1,54 @@
++# io (io_tcp_listen_unix): TCP.listen_unix binds a Listener on a unix
++# socket's path, and binds it again over the socket an earlier listener
++# left there (it removes the path first, as Redis's initServer does); a
++# path with nothing in it, or too long for sun_path, fails (EINVAL, 22).
++# TCP.listen takes an IPv6 address: a malformed one fails (EINVAL), and
++# "::1" listens where the host has IPv6 and fails with EAFNOSUPPORT (97)
++# where it has none, which prints "v6" either way.
++import Base
++
++def shown(r: Result<&1, &1, U32 & String, Listener>) -> IO(Unit):
++  match r:
++    case Done{l}:
++      do IO<Unit>:
++        x : Unit <- Listener.close(l)
++        IO.print("ok")
++    case Fail{e}:
++      (c, m) = e
++      IO.print("fail " ++ U32.show(c))
++
++def v6(r: Result<&1, &1, U32 & String, Listener>) -> IO(Unit):
++  match r:
++    case Done{l}:
++      do IO<Unit>:
++        x : Unit <- Listener.close(l)
++        IO.print("v6")
++    case Fail{e}:
++      (+c, m) = e
++      IO.print(Bool.pick(String, U32.is_eq(c, 97), "v6", "v6 fail " ++ U32.show(c)))
++
++law main:
++  IO(U32)
++
++def main():
++  do IO<U32>:
++    a : Result<&1, &1, U32 & String, Listener> <- TCP.listen_unix("/tmp/bend-io-listen-unix.sock", 448)
++    x : Unit <- shown(a)
++    b : Result<&1, &1, U32 & String, Listener> <- TCP.listen_unix("/tmp/bend-io-listen-unix.sock", 0)
++    y : Unit <- shown(b)
++    c : Result<&1, &1, U32 & String, Listener> <- TCP.listen_unix("", 0)
++    z : Unit <- shown(c)
++    d : Result<&1, &1, U32 & String, Listener> <- TCP.listen_unix("/tmp/" ++ String.repeat("x", 200n), 0)
++    w : Unit <- shown(d)
++    f : Result<&1, &1, U32 & String, Listener> <- TCP.listen("::1::", 19302)
++    v : Unit <- shown(f)
++    g : Result<&1, &1, U32 & String, Listener> <- TCP.listen("::1", 19303)
++    u : Unit <- v6(g)
++    return 0
++
++#|ok
++#|ok
++#|fail 22
++#|fail 22
++#|fail 22
++#|v6

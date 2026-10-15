@@ -243,7 +243,12 @@ def ty(e):
         return (f"CEnum{{{blist(bstr(n) for n in e['names'])}, {blist(str(v) for v in e['values'])}, "
                 f"{bbool(e['bits'])}, {CHECK[e['check']]}}}")
     if t == "num":
-        return f"CNum{{{bbool(e['signed'])}, {bstr(e['lo'])}, {bstr(e['hi'])}, {FMT[tuple(e['fmt'])]}}}"
+        # an octal parameter's bounds are octal, as it is read and as Redis's
+        # message gives them ("between 0 and 777")
+        lo, hi = e["lo"], e["hi"]
+        if "octal" in e["fmt"]:
+            lo, hi = format(int(lo), "o"), format(int(hi), "o")
+        return f"CNum{{{bbool(e['signed'])}, {bstr(lo)}, {bstr(hi)}, {FMT[tuple(e['fmt'])]}}}"
     return f"CSpec{{{SPEC[e['special']]}}}"
 
 def block(facts):

@@ -157,8 +157,9 @@ thirty-second keeps the string of a value that is a string or else something els
 the string itself, with no node, in every program without GPU calls (section 3zzg);
 the thirty-third adds C's doubles, `F64`, run as C runs them, strtod and libm with them
 (section 3zzm); the thirty-fourth lets AddressSanitizer check the heap, in a build
-with ASan only (section 3zzp); and the thirty-fifth reads the monotonic clock without
-an effect, `Clock.us` (section 3zzz).
+with ASan only (section 3zzp); the thirty-fifth reads the monotonic clock without
+an effect, `Clock.us` (section 3zzz); and the thirty-sixth listens on IPv6 addresses
+and unix sockets and sends systemd its notifications (section 3zzze).
 The sections before 3l
 number the patches as they were then: patch 16 was effect pairs, taken out in 3l with
 `TCP.post_list` of patch 11, and their patches 17–20 are today's 16–19. None changes the
@@ -203,6 +204,7 @@ to agree with the list definition, and `IO` is still a function of `R` and `k`.
 | f64 natives (33rd) | `F64`, C's double as the two 32-bit halves of its bits, with `F64.read` (strtod), the four operations, libm's functions, the comparisons and the conversions, each a law of base that the C lane runs as C runs it, on the libm it links | GEO's positions, geohashes, cells and distances, Redis's bit for bit on 309 positions and 80 searches; ZADD's scores read by glibc's strtod itself (section 3zzm) |
 | heap asan (34th) | in a build with AddressSanitizer alone, `heap_free` poisons the node it frees and holds it in a quarantine of its size class before its free chain hands it out again, so that a read through a stale pointer gets ASan's report and stack; any other build is byte for byte as before | the `sanitize` job (`tools/sanitize.sh`): the server under ASan, UBSan and TSan with no report, and patch 26's bug found again when it is taken out (section 3zzp) |
 | clock us (35th) | `Clock.us(k)` is the host's monotonic clock in µs mod 2^32, read once `k` is known, with no effect: a pure loop times its own steps; `@unsafe`, as no law reads it | the timing of calls: a reading after each request of the actor's group, where an `IO.clock` made the group a loop of effects; GET one at a time 13,002 → 12,215 instructions (section 3zzz) |
+| unix v6 (36th) | `TCP.listen` takes IPv6 addresses (each socket IPv6 alone); `TCP.listen_unix` listens on a unix socket; `TCP.name` names a unix socket's ends `/unixsocket:0`; `IO.notify` sends systemd's `NOTIFY_SOCKET` a datagram | the start of a stock configuration: `bind`'s IPv6 addresses, `unixsocket` and `unixsocketperm`, `supervised systemd` (section 3zzze) |
 
 The ratios in the last column come from different series and drift by ±0.06–0.08
 between series; PERFORMANCE.md gives each one with its pairs.
@@ -1337,8 +1339,9 @@ its "PID:" when asked, "Ready to accept connections", and on a busy port "Failed
 listening on port N (TCP), aborting.": Redis's test suite reads the last two, the second
 to try another port. It listens on each address of `bind` with Redis's rules: a `-` makes
 an address optional, and an address lost for a reason Redis lets go is a warning. Two
-things it cannot do as Redis does. It listens on IPv4 only, so an IPv6 address is let go,
-as on a host without IPv6. And it cannot see a client's address, so protected mode with
+things it cannot do as Redis does. It listened on IPv4 only, so an IPv6 address was let
+go, as on a host without IPv6 (section 3zzze adds IPv6, a unix socket and systemd's
+notifications). And it cannot see a client's address, so protected mode with
 no password (where Redis takes only clients on the loopback) listens on the loopback only:
 `*` and `0.0.0.0` become `127.0.0.1`, other addresses are left out, each with a warning.
 Client ids stay one sequence over all the listeners, through a channel they share.
@@ -6139,6 +6142,95 @@ of their own, each in a fresh directory, 105 checks:
 
 `tests/admin_test.py` compares SHUTDOWN SAVE and a save that fails with Redis's;
 `tests/start_test.py` starts both servers on a dump.rdb, which BendKV refused before.
+
+## 3zzze. A unix socket, IPv6 and systemd: the start of a stock configuration
+
+**What was left.** Redis's own `redis.conf` binds `127.0.0.1 -::1`; the configuration
+of Ubuntu's package binds `127.0.0.1 ::1`, and its unit is `Type=notify` with
+`supervised systemd`. Applications on the same host often reach Redis through
+`unixsocket`, and a client that resolves `localhost` to `::1` (Node.js 17 and later)
+reaches it over IPv6. BendKV listened on IPv4 alone: it let an IPv6 address go with a
+warning, ignored `unixsocket`, and refused `supervised systemd` ("cannot notify
+(READY=1)"). The runtime had no IPv6 listener, no unix listener, and no way to send
+systemd a datagram.
+
+**The runtime** (patch 36, `unix-v6.patch`, effects only).
+
+- `TCP.listen` takes an IPv6 address (a host with a `:`), its socket IPv6 alone
+  (`IPV6_V6ONLY`), as Redis's `anetV6Only` sets it, so that `0.0.0.0` and `::` can both
+  be bound.
+- `TCP.listen_unix(path, perm)` listens on a unix socket as Redis's `anetUnixServer` and
+  `initServer` do: the path removed first, then bound, given `perm`'s mode when `perm` is
+  not 0, listening. `TCP.accept` takes its connections.
+- `TCP.name` names either end of a unix socket `/unixsocket:0`, as Redis's
+  `anetFdToString` does.
+- `IO.notify(msg)` sends one datagram to the unix socket `$NOTIFY_SOCKET` names (a path,
+  or an abstract name after `@`), as `sd_notify` sends it.
+
+**The start** (`src/startup.bend`: The addresses; `src/server.bend`: Listening, The
+start, SHUTDOWN).
+
+- `bind`'s IPv6 addresses are listened on, with `::*` as every IPv6 address. One the host
+  cannot have (no IPv6) is let go with Redis's line ("unable to bind socket, errno:
+  97"). Protected mode with no password listens on `::1` for `::`, as it listens on
+  `127.0.0.1` for `0.0.0.0`.
+- `unixsocket` and `unixsocketperm` are listened on after the TCP addresses. A socket that
+  cannot be had stops the start with Redis's line ("Failed opening Unix socket: ...").
+  A unix socket alone (port 0) is a start.
+- The log says "The server is now ready to accept connections at <path>", and "Ready to
+  accept connections" only when some TCP listener is up, as Redis's `main` says them.
+  SHUTDOWN removes the socket's file ("Removing the unix socket file.").
+- `supervised systemd`, or `auto` with `NOTIFY_SOCKET` set: systemd is told
+  "STATUS=BendKV is loading...", then "STATUS=Ready to accept connections" and
+  "READY=1" once the server serves, and "STOPPING=1" at SHUTDOWN, as Redis tells it.
+  `daemonize` is then let go, as Redis lets it go under a supervisor.
+- Without `NOTIFY_SOCKET`, `supervised systemd` is a warning ("systemd supervision error:
+  NOTIFY_SOCKET not found!") and no supervision, as in a Redis built with libsystemd.
+  Upstart is still refused: BendKV cannot stop itself to signal it.
+
+**A unix socket's client** (`src/server.bend`: Clients) is named as Redis's
+`genClientAddrString` names it. CLIENT LIST's `addr` and `laddr` are the socket's path
+with port 0, and its flags have `U`. A monitor's line names it `unix:<path>`, as
+`replicationFeedMonitors` does.
+
+**A bug in the table of parameters.** `unixsocketperm` is octal, and its bounds were
+written in decimal (0 and 511), against which its octal digits were compared: 700, 755
+and 770 were refused ("between 0 and 511"). `tools/gen_config.py` now writes an octal
+parameter's bounds in octal, as Redis's message gives them ("between 0 and 777").
+
+**Tests** (`tests/start_test.py`, against redis-server 7.0.15).
+
+- A unix socket under systemd's supervision, on both servers:
+  - the socket's mode;
+  - PING through it;
+  - CLIENT LIST's `addr`, `laddr` and flags;
+  - a monitor's line;
+  - the datagrams systemd gets, Redis's "Redis is loading" read as BendKV's;
+  - the log's lines;
+  - the socket's file after SHUTDOWN.
+- IPv6's loopback in Redis's own `bind 127.0.0.1 -::1`. On a host with IPv6 both servers
+  answer on `::1`; on a host without it, both let it go with the same line. The VM of
+  these measurements has no IPv6.
+- Refused as Redis refuses them: an octal value past its bound, a digit 8, and a unix
+  socket whose directory is not there. Started as Redis starts: an octal value with a
+  leading zero.
+
+**What it costs.** Nothing on a request's path: the listeners act at the start, the
+names when a client joins, and the notifications at the start and at SHUTDOWN. A join
+almost cost more. The first `cl.at` chose a client's name with `Bool.pick`, which
+evaluates both arms, so every join walked the configuration for `unixsocket`, twice
+(the two ends). That is about 125,000 instructions per join. `make perfcheck` joins
+20 clients in its 20,000 requests, so it counted GET +3.6% on CI, past its tolerance,
+with SET and INCR at +2.5%. A `match` reads the parameter for a unix socket's client
+alone: locally GET is 3,420 (main 3,419), SET 4,186 (4,183), INCR 4,528 (4,527).
+
+**Where BendKV differs.**
+
+- STATUS says "BendKV is loading...", as its log names it.
+- A notification that cannot reach `NOTIFY_SOCKET` logs one line ("sd_notify could not
+  reach NOTIFY_SOCKET"), where Redis gives `sd_notify`'s error number.
+- Protected mode is still BendKV's: it listens on the loopback alone, where Redis
+  listens on every address and answers a client from elsewhere with a DENIED error.
 
 ## 4. Where a request's time goes, and hiding the memory waits
 

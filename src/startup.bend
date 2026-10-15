@@ -582,12 +582,13 @@ def sup.kind(+mode: String, +upstart: Bool, +systemd: Bool) -> Nat:
   Bool.pick(Nat, String.eq(m, "upstart"), Bool.pick(Nat, upstart, 1n, 3n),
     Bool.pick(Nat, String.eq(m, "systemd"), Bool.pick(Nat, systemd, 2n, 4n), 0n))
 
-# BendKV can neither stop itself to signal upstart nor notify systemd
+# BendKV cannot stop itself to signal upstart; it notifies systemd as
+# Redis's sd_notify does (server.bend: start.sup), and its messages are
+# those of a Redis built with libsystemd
 def sup.msg(+k: Nat) -> String:
   Bool.pick(String, Nat.is_eq(k, 1n), "supervised by upstart, which BendKV cannot signal (it cannot stop itself): run it unsupervised",
-  Bool.pick(String, Nat.is_eq(k, 2n), "supervised by systemd, which BendKV cannot notify (READY=1): run it as a Type=simple service with supervised no",
   Bool.pick(String, Nat.is_eq(k, 3n), "upstart supervision requested, but UPSTART_JOB not found!",
-  Bool.pick(String, Nat.is_eq(k, 4n), "systemd supervision requested or auto-detected, but NOTIFY_SOCKET not found!", ""))))
+  Bool.pick(String, Nat.is_eq(k, 4n), "systemd supervision error: NOTIFY_SOCKET not found!", "")))
 
 # what stops the start, the first of it (given whether the server is
 # supervised)
@@ -607,36 +608,36 @@ def warn.if(c: Bool, +w: String, ws: List<&2, String>) -> List<&2, String>:
 # what BendKV keeps and does less with than Redis, or nothing
 def warnings(+items: List<&2, C.CItem>) -> List<&2, String>:
   warn.if(Bool.not(String.is_empty(cfg(items, "save"))), "BendKV does not save at the save points yet: with them SHUTDOWN and FLUSHALL save the RDB file, and SAVE saves it (appendonly yes keeps every write)",
-  warn.if(Bool.not(String.is_empty(cfg(items, "unixsocket"))), "BendKV listens on TCP only: unixsocket " ++ cfg(items, "unixsocket") ++ " is ignored",
-  warn.if(String.eq(cfg(items, "syslog-enabled"), "yes"), "BendKV does not log to syslog", Nil{})))
+  warn.if(String.eq(cfg(items, "syslog-enabled"), "yes"), "BendKV does not log to syslog", Nil{}))
 
 # The addresses
 # -------------
 # bind's addresses, as Redis's listenToPort takes them: a '-' in front
-# makes one optional; "*" is every IPv4 address. BendKV listens on IPv4
-# only, so an IPv6 address is let go, as Redis lets one go on a host
-# without IPv6. In protected mode with no password, Redis takes only
-# clients on the loopback; BendKV cannot tell where a client is, so it
-# listens on the loopback only (127.0.0.1 for 0.0.0.0, no other address).
-# An address: the host to listen on ("" for none), the name Redis gives
-# it in its messages, and a warning to log ("" for none).
+# makes one optional; "*" is every IPv4 address and "::*" every IPv6 one;
+# an address with a ':' is IPv6, its socket IPv6 alone (IPV6_V6ONLY, as
+# Redis's anetV6Only sets it). An address the host does not have, or a
+# family it does not have (IPv6 on a host without it), is let go, as
+# Redis lets it go (listen.skip). In protected mode with no password,
+# Redis takes only clients on the loopback; BendKV cannot tell where a
+# client is, so it listens on the loopback only (127.0.0.1 for 0.0.0.0,
+# ::1 for ::, no other address). An address: the host to listen on (""
+# for none), the name Redis gives it in its messages, and a warning to log
+# ("" for none).
 type Addr is Data:
   Addr{host: String, name: String, warn: String}
 
-def text.has_colon(s: String) -> Bool:
-  match s:
-    case SNil{}:
-      False{}
-    case SCon{Chr{+x}, t}:
-      Bool.or(U32.is_eq(x, 58), text.has_colon(t))
+# the loopback that stands for "every address" in protected mode: 127.0.0.1
+# for 0.0.0.0, ::1 for :: ("" for any other address)
+def addr.lo(+host: String) -> String:
+  Bool.pick(String, String.eq(host, "0.0.0.0"), "127.0.0.1", Bool.pick(String, String.eq(host, "::"), "::1", ""))
 
-def addr.of(+a: String, +port: String, +prot: Bool) -> Addr:
-  +host = Bool.pick(String, String.eq(a, "*"), "0.0.0.0", Bool.pick(String, String.eq(a, "localhost"), "127.0.0.1", a))
-  +lo = String.starts_with(host, "127.")
-  Bool.pick(Addr, text.has_colon(a), Addr{"", a, "Warning: Could not create server TCP listening socket " ++ a ++ ":" ++ port ++ ": BendKV listens on IPv4 only"},
-    Bool.pick(Addr, Bool.or(Bool.not(prot), lo), Addr{host, a, ""},
-      Bool.pick(Addr, String.eq(host, "0.0.0.0"), Addr{"127.0.0.1", a, "Protected mode with no password: BendKV cannot tell local clients from remote ones, so it listens on 127.0.0.1 for " ++ a},
-        Addr{"", a, "Protected mode with no password: BendKV cannot tell local clients from remote ones, so it does not listen on " ++ a})))
+def addr.of(+a: String, +prot: Bool) -> Addr:
+  +host = Bool.pick(String, String.eq(a, "*"), "0.0.0.0", Bool.pick(String, String.eq(a, "::*"), "::", Bool.pick(String, String.eq(a, "localhost"), "127.0.0.1", a)))
+  +lo = Bool.or(String.starts_with(host, "127."), String.eq(host, "::1"))
+  +any = addr.lo(host)
+  Bool.pick(Addr, Bool.or(Bool.not(prot), lo), Addr{host, a, ""},
+    Bool.pick(Addr, Bool.not(String.is_empty(any)), Addr{any, a, "Protected mode with no password: BendKV cannot tell local clients from remote ones, so it listens on " ++ any ++ " for " ++ a},
+      Addr{"", a, "Protected mode with no password: BendKV cannot tell local clients from remote ones, so it does not listen on " ++ a}))
 
 def addr.opt(w: String) -> String:
   match w:
@@ -645,21 +646,39 @@ def addr.opt(w: String) -> String:
     case other:
       other
 
-def addrs.go(ws: List<&2, String>, +port: String, +prot: Bool) -> List<&2, Addr>:
+def addrs.go(ws: List<&2, String>, +prot: Bool) -> List<&2, Addr>:
   match ws:
     case Nil{}:
       Nil{}
     case Con{w, rest}:
-      addr.of(addr.opt(w), port, prot) <> addrs.go(rest, port, prot)
+      addr.of(addr.opt(w), prot) <> addrs.go(rest, prot)
 
 def addrs(+items: List<&2, C.CItem>) -> List<&2, Addr>:
-  addrs.go(C.words(cfg(items, "bind")), cfg(items, "port"), Bool.and(String.eq(cfg(items, "protected-mode"), "yes"), String.is_empty(cfg(items, "requirepass"))))
+  addrs.go(C.words(cfg(items, "bind")), Bool.and(String.eq(cfg(items, "protected-mode"), "yes"), String.is_empty(cfg(items, "requirepass"))))
 
 # the errors of listen that let an address go, as in Redis: ENOPROTOOPT,
 # EPROTONOSUPPORT, ESOCKTNOSUPPORT, EPFNOSUPPORT, EAFNOSUPPORT and
 # EADDRNOTAVAIL
 def listen.skip(+code: U32) -> Bool:
   Bool.or(Bool.or(Bool.or(U32.is_eq(code, 92), U32.is_eq(code, 93)), Bool.or(U32.is_eq(code, 94), U32.is_eq(code, 96))), Bool.or(U32.is_eq(code, 97), U32.is_eq(code, 99)))
+
+# why listen failed, as Redis's anetTcpGenericServer says it: a family the
+# host lacks (EAFNOSUPPORT) fails at socket(), which Redis reports by its
+# errno; any other failure at bind
+def listen.why(+code: U32, +msg: String) -> String:
+  Bool.pick(String, U32.is_eq(code, 97), "unable to bind socket, errno: 97", "bind: " ++ msg)
+
+# unixsocketperm's octal digits as a mode (0: the mode the umask leaves,
+# as Redis leaves it)
+def oct.of(s: String, acc: U32) -> U32:
+  match s:
+    case SNil{}:
+      acc
+    case SCon{Chr{+x}, t}:
+      oct.of(t, U32.add(U32.mul(acc, 8), U32.sub(x, 48)))
+
+def unix.perm(+items: List<&2, C.CItem>) -> U32:
+  oct.of(cfg(items, "unixsocketperm"), 0)
 
 # The logo, shown with always-show-logo yes: Redis's has its version, its
 # mode, its port and its pid
