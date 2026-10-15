@@ -159,7 +159,7 @@ the thirty-third adds C's doubles, `F64`, run as C runs them, strtod and libm wi
 (section 3zzm); the thirty-fourth lets AddressSanitizer check the heap, in a build
 with ASan only (section 3zzp); the thirty-fifth reads the monotonic clock without
 an effect, `Clock.us` (section 3zzz); and the thirty-sixth listens on IPv6 addresses
-and unix sockets and sends systemd its notifications (section 3zzzd).
+and unix sockets and sends systemd its notifications (section 3zzze).
 The sections before 3l
 number the patches as they were then: patch 16 was effect pairs, taken out in 3l with
 `TCP.post_list` of patch 11, and their patches 17–20 are today's 16–19. None changes the
@@ -204,7 +204,7 @@ to agree with the list definition, and `IO` is still a function of `R` and `k`.
 | f64 natives (33rd) | `F64`, C's double as the two 32-bit halves of its bits, with `F64.read` (strtod), the four operations, libm's functions, the comparisons and the conversions, each a law of base that the C lane runs as C runs it, on the libm it links | GEO's positions, geohashes, cells and distances, Redis's bit for bit on 309 positions and 80 searches; ZADD's scores read by glibc's strtod itself (section 3zzm) |
 | heap asan (34th) | in a build with AddressSanitizer alone, `heap_free` poisons the node it frees and holds it in a quarantine of its size class before its free chain hands it out again, so that a read through a stale pointer gets ASan's report and stack; any other build is byte for byte as before | the `sanitize` job (`tools/sanitize.sh`): the server under ASan, UBSan and TSan with no report, and patch 26's bug found again when it is taken out (section 3zzp) |
 | clock us (35th) | `Clock.us(k)` is the host's monotonic clock in µs mod 2^32, read once `k` is known, with no effect: a pure loop times its own steps; `@unsafe`, as no law reads it | the timing of calls: a reading after each request of the actor's group, where an `IO.clock` made the group a loop of effects; GET one at a time 13,002 → 12,215 instructions (section 3zzz) |
-| unix v6 (36th) | `TCP.listen` takes IPv6 addresses (each socket IPv6 alone); `TCP.listen_unix` listens on a unix socket; `TCP.name` names a unix socket's ends `/unixsocket:0`; `IO.notify` sends systemd's `NOTIFY_SOCKET` a datagram | the start of a stock configuration: `bind`'s IPv6 addresses, `unixsocket` and `unixsocketperm`, `supervised systemd` (section 3zzzd) |
+| unix v6 (36th) | `TCP.listen` takes IPv6 addresses (each socket IPv6 alone); `TCP.listen_unix` listens on a unix socket; `TCP.name` names a unix socket's ends `/unixsocket:0`; `IO.notify` sends systemd's `NOTIFY_SOCKET` a datagram | the start of a stock configuration: `bind`'s IPv6 addresses, `unixsocket` and `unixsocketperm`, `supervised systemd` (section 3zzze) |
 
 The ratios in the last column come from different series and drift by ±0.06–0.08
 between series; PERFORMANCE.md gives each one with its pairs.
@@ -1340,7 +1340,7 @@ listening on port N (TCP), aborting.": Redis's test suite reads the last two, th
 to try another port. It listens on each address of `bind` with Redis's rules: a `-` makes
 an address optional, and an address lost for a reason Redis lets go is a warning. Two
 things it cannot do as Redis does. It listened on IPv4 only, so an IPv6 address was let
-go, as on a host without IPv6 (section 3zzzd adds IPv6, a unix socket and systemd's
+go, as on a host without IPv6 (section 3zzze adds IPv6, a unix socket and systemd's
 notifications). And it cannot see a client's address, so protected mode with
 no password (where Redis takes only clients on the loopback) listens on the loopback only:
 `*` and `0.0.0.0` become `127.0.0.1`, other addresses are left out, each with a warning.
@@ -5917,7 +5917,7 @@ need Lua: one fills a set with a script, and the next resets the events that set
 expiry would have given. unit/slowlog passes 7 of its 9. The other two use ACL and
 MIGRATE.
 
-## 3zzzd. A unix socket, IPv6 and systemd: the start of a stock configuration
+## 3zzze. A unix socket, IPv6 and systemd: the start of a stock configuration
 
 **What was left.** Redis's own `redis.conf` binds `127.0.0.1 -::1`; the configuration
 of Ubuntu's package binds `127.0.0.1 ::1`, and its unit is `Type=notify` with
@@ -5990,7 +5990,13 @@ parameter's bounds in octal, as Redis's message gives them ("between 0 and 777")
   leading zero.
 
 **What it costs.** Nothing on a request's path: the listeners act at the start, the
-names when a client joins, and the notifications at the start and at SHUTDOWN.
+names when a client joins, and the notifications at the start and at SHUTDOWN. A join
+almost cost more. The first `cl.at` chose a client's name with `Bool.pick`, which
+evaluates both arms, so every join walked the configuration for `unixsocket`, twice
+(the two ends). That is about 125,000 instructions per join. `make perfcheck` joins
+20 clients in its 20,000 requests, so it counted GET +3.6% on CI, past its tolerance,
+with SET and INCR at +2.5%. A `match` reads the parameter for a unix socket's client
+alone: locally GET is 3,420 (main 3,419), SET 4,186 (4,183), INCR 4,528 (4,527).
 
 **Where BendKV differs.**
 

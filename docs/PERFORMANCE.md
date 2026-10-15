@@ -33,7 +33,7 @@ numbers are in [tools/](../tools/README.md).
    (`IO.heap`); the thirtieth, words outside the heap (`Mem.touch`, `Mem.cell`; both
    section 48); the thirty-third, C's doubles (`F64`, section 60); the thirty-fifth, the
    monotonic clock without an effect (`Clock.us`, section 64); the thirty-sixth, listeners
-   on IPv6 and on unix sockets and systemd's notification (FINDINGS.md, section 3zzzd).
+   on IPv6 and on unix sockets and systemd's notification (FINDINGS.md, section 3zzze).
    The thirty-fourth
    changes only a build with AddressSanitizer, whose heap it lets ASan check
    (FINDINGS.md, section 3zzp). Before section 14

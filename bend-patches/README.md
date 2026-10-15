@@ -509,7 +509,7 @@ They apply in order, each on top of the one before:
    UDP pass on C and on JS with it, the new one among them. A program that calls none
    of the new effects compiles to the C it compiled to before, but for the effects'
    code it links. BendKV listens on `bind`'s IPv6 addresses and on `unixsocket`, and
-   tells systemd it loads, is ready and stops (FINDINGS.md, section 3zzzd).
+   tells systemd it loads, is ready and stops (FINDINGS.md, section 3zzze).
 
 What the patches do and what they give is worked through in
 [../PERFORMANCE.md](../docs/PERFORMANCE.md), sections 3–6, 7.7–7.17, 7.23–7.25, 16, 39,

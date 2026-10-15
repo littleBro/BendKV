@@ -2125,10 +2125,17 @@ def ps.addr(+id: Nat, +pb: Ps) -> String:
 # the address of the client of id as a monitor's line shows it: a unix
 # socket's client (its two ends named alike, cl.at) as unix:path, as
 # Redis's replicationFeedMonitors names it
+def cl.mon.unix(unix: Bool, +addr: String) -> String:
+  match unix:
+    case True{}:
+      "unix:" ++ String.take(addr, Nat.sub(String.length(addr), 2n))
+    case False{}:
+      addr
+
 def cl.mon.or(m: Maybe<&2, Cl>) -> String:
   match m:
     case Some{Cl{id, back, fd, +addr, +laddr, since, name, db, noev, r3}}:
-      Bool.pick(String, String.eq(addr, laddr), "unix:" ++ String.take(addr, Nat.sub(String.length(addr), 2n)), addr)
+      cl.mon.unix(String.eq(addr, laddr), addr)
     case None{}:
       "?:0"
 
@@ -4431,9 +4438,19 @@ def tx.find(+n: Nat, +t: Tx) -> TxIs:
 
 # a client's address as Redis names it: TCP.name names either end of a
 # unix socket "/unixsocket:0", which becomes unixsocket's path and port 0,
-# as Redis's genClientAddrString names a unix socket's client at both ends
+# as Redis's genClientAddrString names a unix socket's client at both ends.
+# A match, not Bool.pick: the parameter is read for a unix socket's client
+# alone, since a walk of the configuration at each join cost 125
+# instructions per request of make perfcheck (20 joins in 20,000 requests)
+def cl.at.of(unix: Bool, +srv: S.Srv, +a: String) -> String:
+  match unix:
+    case True{}:
+      T.cfg(S.srv.cfg(srv), "unixsocket") ++ ":0"
+    case False{}:
+      a
+
 def cl.at(+srv: S.Srv, +a: String) -> String:
-  Bool.pick(String, String.eq(a, "/unixsocket:0"), T.cfg(S.srv.cfg(srv), "unixsocket") ++ ":0", a)
+  cl.at.of(String.eq(a, "/unixsocket:0"), srv, a)
 
 def cl.flag(+on: Bool, +f: String) -> String:
   Bool.pick(String, on, f, "")
