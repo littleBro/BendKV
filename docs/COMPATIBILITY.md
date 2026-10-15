@@ -348,6 +348,9 @@ in three jobs
 after `build`: a test Redis passes that BendKV fails, and that is not among the known
 failures of `tools/data/clients.json`, fails the job; a known failure that passes is
 reported, to be taken off the list.
+Each known failure is kept with the reason it fails for (the command BendKV does not
+have, as "unknown command 'XADD'", or the line of another error, its numbers as `#`),
+and one that fails for another reason fails the job too.
 
 ```bash
 make clients                       # the three suites, against Redis and build/bendkv

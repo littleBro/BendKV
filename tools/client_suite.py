@@ -16,10 +16,14 @@ what counts is what Redis 7.0.15 passes, and of that, what BendKV passes.
 Redis passes and how many of them BendKV passes, and says why each other
 one fails: a command BendKV does not have (named, by the tests it stops),
 or another error (listed). `ci` runs both servers and reports, against the
-known failures of tools/data/clients.json: a test Redis passes, that BendKV
-fails and that is not a known failure is a regression, and the run fails;
-a known failure that passes is reported, to be taken off the list
-(`--write-known` writes the list as the run found it).
+known failures of tools/data/clients.json, each kept with the reason it
+fails for (`reason`: the command BendKV does not have, as "unknown command
+'XADD'", a skip's reason, or the line of another error): a test Redis
+passes, that BendKV fails and that is not a known failure, or a known
+failure whose failure no longer holds its reason, is a regression, and the
+run fails; a known failure that passes is reported, to be taken off the
+list (`--write-known` writes the list, and the reasons, as the run found
+them).
 
 redis-py leaves out its tests of modules (JSON, search, time series,
 probabilistic structures, vector sets), of clusters, sentinels, TLS and
@@ -203,7 +207,7 @@ def load(path):
             if ch.tag in ("failure", "error"):
                 st, why = "err", ((ch.get("message") or "") + "\n" + (ch.text or "")).strip()
             elif ch.tag == "skipped" and st == "ok":
-                st = "skip"
+                st, why = "skip", (ch.get("message") or "skipped").strip()
         if st == "err" or name not in tests:
             tests[name] = (st, why)
     return tests
@@ -224,6 +228,22 @@ def first_line(why):
         if line:
             return line[:240]
     return ""
+
+# The reason a test fails for, as data/clients.json keeps it with a known
+# failure: the command BendKV does not have ("unknown command 'XADD'"), or
+# else the line of a Redis error (go-redis shows its ERR line under a line
+# of its own) or the first line of the failure or skip, numbers and
+# addresses as # (a count, a port or an id changes from run to run). A
+# failure has its known reason when its text, numbers so put, holds it.
+NUMBERS = re.compile(r"0x[0-9a-fA-F]+|\d+")
+REDIS_ERR = re.compile(r"\bERR [^\n]+")
+
+def reason(why):
+    m = UNKNOWN.search(why) or REDIS_ERR.search(why)
+    return NUMBERS.sub("#", m.group(0).strip() if m else first_line(why))[:120]
+
+def has_reason(why, known):
+    return NUMBERS.sub("#", known) in NUMBERS.sub("#", why)
 
 def compare(redis_xml, bendkv_xml):
     a, b = load(redis_xml), load(bendkv_xml)
@@ -333,16 +353,24 @@ def main():
         a.client, REDIS_PY if a.client == "redis-py" else GO_REDIS, key[-1]))
     known = json.load(open(a.known)) if os.path.exists(a.known) else {}
     if a.write_known:
-        known[key] = sorted(fails)
+        known[key] = {k: reason(fails[k]) for k in fails}
         with open(a.known, "w") as f:
             json.dump(known, f, indent=1, sort_keys=True)
             f.write("\n")
-    listed = set(known.get(key, []))
+    listed = known.get(key, {})
+    if not isinstance(listed, dict):
+        sys.exit("client_suite.py: the known failures of %s in %s have no reasons (--write-known writes them)" % (
+            key, a.known))
     new = sorted(k for k in fails if k not in listed)
+    other = sorted(k for k in fails if k in listed and not has_reason(fails[k], listed[k]))
     fixed = sorted(k for k in listed if k not in fails)
     if fixed:
         text += "\n%d known failures pass now (take them off %s):\n\n" % (len(fixed), os.path.relpath(a.known, HERE))
         text += "".join("- `%s`\n" % k for k in fixed)
+    if other:
+        text += "\n**%d known failures fail for another reason** than the one %s gives:\n\n" % (
+            len(other), os.path.relpath(a.known, HERE))
+        text += "".join("- `%s`: %s (known: %s)\n" % (k, reason(fails[k]), listed[k]) for k in other)
     if new:
         text += "\n**%d regressions**: tests Redis passes that BendKV fails, not known before:\n\n" % len(new)
         text += "".join("- `%s`: %s\n" % (k, first_line(fails[k])) for k in new)
@@ -353,7 +381,7 @@ def main():
             f.write(text + "\n")
     with open(os.path.join(a.out, key + ".md"), "w") as f:
         f.write(text)
-    sys.exit(1 if new else 0)
+    sys.exit(1 if new or other else 0)
 
 if __name__ == "__main__":
     main()

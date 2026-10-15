@@ -5589,6 +5589,42 @@ unit/type/hash passes HINCRBY's test of overflows, which starts from
 -9223372036854775484 (70 of its 72); 1,274 of the 1,677 tests Redis passes, 1,271 of
 the 1,333 in what BendKV has.
 
+## 3zzw. Known failures with their reasons
+
+**What it was.** The client suites' job (`tools/client_suite.py ci`) held a run against
+the known failures of `tools/data/clients.json` by their names alone: 252 tests of
+redis-py in each protocol and 55 of go-redis, with no reason. A known failure could
+start failing for a new reason unseen: a test that failed on a missing XADD failed the
+same for the job when BendKV closed its connection or answered it wrongly, and
+`--write-known` wrote the list back as the run found it, whatever the reasons.
+
+**What it is.** Each known failure is kept with the reason it fails for: the command
+BendKV does not have, as its error names it (`unknown command 'XADD'`, `unknown
+subcommand 'LOAD'. Try FUNCTION HELP`), or else the line of a Redis error (go-redis
+shows it under a line of its own) or the first line of the failure, with numbers and
+addresses written `#`, as a count, a port or an object's id changes from run to run. A
+test BendKV skips keeps its skip's reason: go-redis skips its 9 specs of client-side
+caching when CLIENT TRACKING is unknown, and the report now counts them under that
+command, where it listed them as other errors with no text. A known failure whose
+failure no longer holds its reason fails the job, as a new failure does, and the job
+names both reasons; `--write-known` writes the reasons with the names, and a list
+without reasons stops the job. The list keeps its names: 559 at 0dee674, 532 since DUMP
+and RESTORE (3zzu) took 27 off it. Their reasons come from the results of CI's run of
+main at 0dee674: 19 distinct ones in redis-py now (235 tests stop on 16 commands BendKV
+does not have, 3 on `BendKV runs no Lua scripts`, one on COMMAND LIST's count, one on
+XREAD's keys in redis-py's parser of commands) and 10 in go-redis.
+
+**What it shows.** In another CI run of the same code, every known failure fails for its
+reason, in all three suites. On a copy of main's results where redis-py's `test_xadd`
+fails with `Connection closed by server.` instead of its unknown XADD, main's job passes
+(it lists the test among the other errors, and exits 0); this one fails: "1 known
+failures fail for another reason than the one tools/data/clients.json gives", with
+`known: unknown command 'XADD'`.
+
+**What it costs.** Nothing in CI's time. A known failure whose message changes in its
+words, not in its numbers, needs its reason written again (`--write-known`, and a look
+at what changed).
+
 ## 3zzx. The word of use of a key RESTORE makes
 
 **What failed.** After DUMP and RESTORE merged, `make test` failed in CI on three runs of
