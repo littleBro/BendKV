@@ -316,15 +316,15 @@ Where performance and proof meet: **batched execution under proved laws.**
    log's rewrite (done, section 3zv), maxmemory and its eviction (done, section 3zw),
    RESP3 (done, section 3zx), SORT and SORT_RO (done, section 3zzh), HyperLogLogs (done,
    section 3zzj), CLIENT PAUSE and UNPAUSE (done, section 3zzk), the administrative
-   commands LASTSAVE, ROLE, WAIT, SHUTDOWN, MEMORY and LOLWUT (done, section 3zzl), and
-   GEO (done, section 3zzm), measured by Redis's
+   commands LASTSAVE, ROLE, WAIT, SHUTDOWN, MEMORY and LOLWUT (done, section 3zzl),
+   GEO (done, section 3zzm), and DUMP and RESTORE (done, section 3zzu), measured by Redis's
    own test suite run against BendKV and by client libraries' test suites (redis-py's and
    go-redis's, in CI: done, section 3zy).
    Lua, streams, cluster, replication and modules are out of scope. The suite's count: of the 1,677 tests
-   Redis 7.0.15 passes against a server it did not start, BendKV passes 1,261, 1,254 of
-   the 1,317 in what it has ([COMPATIBILITY.md](COMPATIBILITY.md)); most of the other 63
-   need commands BendKV does not have (replication's SYNC, Lua, DUMP, streams) or run
-   after a test that left its client in MULTI on one of them.
+   Redis 7.0.15 passes against a server it did not start, BendKV passes 1,273, 1,270 of
+   the 1,333 in what it has ([COMPATIBILITY.md](COMPATIBILITY.md)); most of the other 63
+   need commands BendKV does not have (replication's SYNC, Lua, streams) or run after a
+   test that left its client in MULTI on one of them.
    What maxmemory left to do (section 3zw): a delete takes the nodes it empties now
    (section 3zz), so the eviction gets within a limit with the keys Redis keeps, but its
    samples still walk the trie's empty buckets, and an eviction takes six times Redis's
@@ -361,8 +361,14 @@ Where performance and proof meet: **batched execution under proved laws.**
    COUNT's partial sort, Redis's pqsort made a comparison and a swap at a time on a vector
    that is a tree; a GEOADD of 20,000 points takes 9 times, as a ZADD of their scores does
    (PERFORMANCE.md, section 60). A request of tens of thousands of arguments takes 7 to 11
-   times Redis's time, its parse linear since section 3zzn. Next within the scope: the
-   slow log and the latency monitor, DUMP and RESTORE, CLIENT TRACKING, and ACL's users.
+   times Redis's time, its parse linear since section 3zzn. DUMP and RESTORE of a value of
+   100,000 elements take 3 to 38 times Redis's time, and less than the commands that make
+   the value (section 3zzu): Redis copies and checks the listpacks it holds where BendKV
+   writes and reads each element; the checksum walks a payload a character at a time,
+   two steps of four bits a byte, a sorted set's tree is made one insertion at a time,
+   each copying a path and dropping the old one, and the read of a request of a large
+   value counts its pieces' bytes one at a time (PERFORMANCE.md, section 62). Next within
+   the scope: the slow log and the latency monitor, CLIENT TRACKING, and ACL's users.
 
 After that comes proving the native strings (section 5, step 1): a small piece of
 work that makes the word "verified" much stronger.

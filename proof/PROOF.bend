@@ -10,6 +10,7 @@ import ../src/hll.bend as H
 import ../src/batch.bend as B
 import ../src/resp.bend as P
 import ../src/aof.bend as A
+import ../src/rdb.bend as D
 import ../src/session.bend as S
 import ../src/config.bend as C
 import ./LAWS.bend as Laws
@@ -3259,6 +3260,8 @@ def upd_ch_frame(+t: KV.Trie<KV.Val>, +k: String, +j: String, r: R.Reply, ch: R.
       Laws.entry_keep_other(KV.Val, t, k, j, KV.VColl{KV.CZset{z}}, ne)
     case R.CZsetNew{o, ps, +z}:
       Laws.entry_setx_other(KV.Val, t, k, j, KV.VColl{KV.CZset{z}}, 0n, ne)
+    case R.CRestore{p, +v, +e}:
+      Laws.entry_setx_other(KV.Val, t, k, j, v, e, ne)
 
 def upd_frame(+t: KV.Trie<KV.Val>, +k: String, +j: String, o: R.Out, ne: {j != k : String}) -> {KV.entry(KV.Val, T.db_of(T.upd.put(t, k, KV.hash(k), o)), j) == KV.entry(KV.Val, t, j) : Maybe<&2, KV.Item<KV.Val>>}:
   match o:
@@ -3802,6 +3805,8 @@ def upd_ch_rep(ch: R.Change, -r: R.Reply, -t: KV.Trie<KV.Val>, -u: KV.Trie<KV.Va
       {==}
     case R.CZsetNew{o, ps, z}:
       {==}
+    case R.CRestore{p, v, e}:
+      {==}
 
 def upd_rep(o: R.Out, -t: KV.Trie<KV.Val>, -u: KV.Trie<KV.Val>, -k: String, -h: U32) -> {T.reply_of(T.upd.put(t, k, h, o)) == T.reply_of(T.upd.put(u, k, h, o)) : R.Reply}:
   match o:
@@ -3981,6 +3986,8 @@ def upd_ch_key(ch: R.Change, -r: R.Reply, +t: KV.Trie<KV.Val>, +u: KV.Trie<KV.Va
       e => keep_key(t, u, k, KV.VColl{KV.CZset{z}})(e)
     case R.CZsetNew{o, ps, +z}:
       e => Equal.trans(Maybe<&2, KV.Item<KV.Val>>, KV.entry(KV.Val, KV.setx(KV.Val, t, k, KV.VColl{KV.CZset{z}}, 0n), k), Some{KV.Item{KV.VColl{KV.CZset{z}}, 0n}}, KV.entry(KV.Val, KV.setx(KV.Val, u, k, KV.VColl{KV.CZset{z}}, 0n), k), Laws.entry_setx_same(KV.Val, t, k, KV.VColl{KV.CZset{z}}, 0n), Equal.sym(Maybe<&2, KV.Item<KV.Val>>, KV.entry(KV.Val, KV.setx(KV.Val, u, k, KV.VColl{KV.CZset{z}}, 0n), k), Some{KV.Item{KV.VColl{KV.CZset{z}}, 0n}}, Laws.entry_setx_same(KV.Val, u, k, KV.VColl{KV.CZset{z}}, 0n)))
+    case R.CRestore{p, +v, +x}:
+      e => Equal.trans(Maybe<&2, KV.Item<KV.Val>>, KV.entry(KV.Val, KV.setx(KV.Val, t, k, v, x), k), Some{KV.Item{v, x}}, KV.entry(KV.Val, KV.setx(KV.Val, u, k, v, x), k), Laws.entry_setx_same(KV.Val, t, k, v, x), Equal.sym(Maybe<&2, KV.Item<KV.Val>>, KV.entry(KV.Val, KV.setx(KV.Val, u, k, v, x), k), Some{KV.Item{v, x}}, Laws.entry_setx_same(KV.Val, u, k, v, x)))
 
 def upd_key(o: R.Out, +t: KV.Trie<KV.Val>, +u: KV.Trie<KV.Val>, +k: String) -> {KV.entry(KV.Val, t, k) == KV.entry(KV.Val, u, k) : Maybe<&2, KV.Item<KV.Val>>} -> {KV.entry(KV.Val, T.db_of(T.upd.put(t, k, KV.hash(k), o)), k) == KV.entry(KV.Val, T.db_of(T.upd.put(u, k, KV.hash(k), o)), k) : Maybe<&2, KV.Item<KV.Val>>}:
   match o:
@@ -5466,6 +5473,8 @@ def upd_ch_br(+t: KV.Trie<KV.Val>, +k: String, +h: U32, +n: Nat, +x: Nat, +now: 
       {==}
     case R.CZsetNew{o, ps, z}:
       {==}
+    case R.CRestore{p, v, e}:
+      {==}
 
 # an update's change
 def ch_of(o: R.Out) -> R.Change:
@@ -5518,6 +5527,8 @@ def ch_over(ch: R.Change) -> Bool:
       True{}
     case R.CZsetNew{o, ps, zv}:
       True{}
+    case R.CRestore{p, v, e}:
+      True{}
 
 def upd_ch_take(+t: KV.Trie<KV.Val>, +k: String, +h: U32, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>, +c: Nat, r: R.Reply, ch: R.Change, +w: KV.Val) -> {ch_over(ch) == True{} : Bool} -> {R.upd.ch(KV.keep.at(KV.Val, t, k, w, h), k, h, n, x, now, rr, c, r, ch) == R.upd.ch(t, k, h, n, x, now, rr, c, r, ch) : R.Reply & R.Db}:
   match ch:
@@ -5551,6 +5562,8 @@ def upd_ch_take(+t: KV.Trie<KV.Val>, +k: String, +h: U32, +n: Nat, +x: Nat, +now
       g => Equal.cong(KV.Trie<KV.Val>, R.Reply & R.Db, z => (r, R.Db{z, n, x, now, rr}), KV.keep.at(KV.Val, KV.keep.at(KV.Val, t, k, w, h), k, KV.VColl{KV.CZset{zv}}, h), KV.keep.at(KV.Val, t, k, KV.VColl{KV.CZset{zv}}, h), keep_keep(KV.Val, t, k, w, KV.VColl{KV.CZset{zv}}, h))
     case R.CZsetNew{o, ps, zv}:
       g => Equal.cong(KV.Trie<KV.Val>, R.Reply & R.Db, z => (r, R.Db{z, R.cnt.n(c, n), R.cnt.x(c, 0n, x), now, rr}), KV.setx.at(KV.Val, KV.keep.at(KV.Val, t, k, w, h), k, KV.VColl{KV.CZset{zv}}, 0n, h), KV.setx.at(KV.Val, t, k, KV.VColl{KV.CZset{zv}}, 0n, h), setx_keep(KV.Val, t, k, w, KV.VColl{KV.CZset{zv}}, 0n, h))
+    case R.CRestore{p, v, e}:
+      g => Equal.cong(KV.Trie<KV.Val>, R.Reply & R.Db, z => (r, R.Db{z, R.cnt.n(c, n), R.cnt.x(c, e, x), now, rr}), KV.setx.at(KV.Val, KV.keep.at(KV.Val, t, k, w, h), k, v, e, h), KV.setx.at(KV.Val, t, k, v, e, h), setx_keep(KV.Val, t, k, w, v, e, h))
 
 def upd_put_take(+t: KV.Trie<KV.Val>, +k: String, +h: U32, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>, +c: Nat, o: R.Out, +w: KV.Val) -> {ch_over(ch_of(o)) == True{} : Bool} -> {R.upd.put(KV.keep.at(KV.Val, t, k, w, h), k, h, n, x, now, rr, c, o) == R.upd.put(t, k, h, n, x, now, rr, c, o) : R.Reply & R.Db}:
   match o:
@@ -5783,6 +5796,8 @@ def takes_over(op: R.UpdOp, lm: Maybe<&2, KV.Item<KV.Val>>, +now: Nat) -> {R.upd
       g => Empty.absurd({ch_over(ch_of(R.upd.v(R.UZset{a}, now, lm))) == True{} : Bool}, false_true(g))
     case R.UHll{a}:
       g => Empty.absurd({ch_over(ch_of(R.upd.v(R.UHll{a}, now, lm))) == True{} : Bool}, false_true(g))
+    case R.URestore{a, b, c, d}:
+      g => Empty.absurd({ch_over(ch_of(R.upd.v(R.URestore{a, b, c, d}, now, lm))) == True{} : Bool}, false_true(g))
 
 # an update reads as its change made where its key's entry lies, the
 # key's value taken out of the keyspace or not
@@ -5995,6 +6010,8 @@ def upd_ch_now(+t: KV.Trie<KV.Val>, +k: String, +h: U32, +n: Nat, +x: Nat, +now:
     case R.CZset{op, z}:
       {==}
     case R.CZsetNew{o, ps, z}:
+      {==}
+    case R.CRestore{p, v, e}:
       {==}
 
 def upd_now(+t: KV.Trie<KV.Val>, +k: String, +h: U32, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>, +c: Nat, o: R.Out) -> {R.db.now(R.db_of(R.upd.put(t, k, h, n, x, now, rr, c, o))) == now : Nat}:
@@ -8350,6 +8367,8 @@ def Good(m: Maybe<&2, KV.Item<KV.Val>>, ch: R.Change) -> Type:
       GoodZset(m, op, z)
     case R.CZsetNew{o, ps, z}:
       GoodNewZ(o, ps, z)
+    case R.CRestore{p, v, f}:
+      {D.verify(p) == True{} : Bool} & ({D.load(p) == Some{v} : Maybe<&2, KV.Val>} & {KV.clamp(f) == f : Nat})
 
 # a change, made again by its effects at time 0
 def del_replay(+t: KV.Trie<KV.Val>, +k: String, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>, +r: R.Reply, +w: KV.Val, +e: Nat, eq: {KV.entry.at(KV.Val, t, k, KV.hash(k)) == Some{KV.Item{w, e}} : Maybe<&2, KV.Item<KV.Val>>}) -> {Laws.final(R.exec_all([R.Del{[k]}], R.Db{t, n, x, 0n, rr})) == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, 1n+e, r, R.CDel{}))) : R.Db}:
@@ -8468,6 +8487,8 @@ def ch_db(ch: R.Change, +t: KV.Trie<KV.Val>, +k: String, +h: U32, +n: Nat, +x: N
     case R.CZset{op, z}:
       {==}
     case R.CZsetNew{o, ps, z}:
+      {==}
+    case R.CRestore{p, v, f}:
       {==}
 
 def put_db(+t: KV.Trie<KV.Val>, +k: String, +h: U32, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>, +c: Nat, o: R.Out) -> {R.db_of(R.upd.ch(t, k, h, n, x, now, rr, c, R.RNull{}, ch_of(o))) == R.db_of(R.upd.put(t, k, h, n, x, now, rr, c, o)) : R.Db}:
@@ -8797,6 +8818,54 @@ def znew_replay(m: Maybe<&2, KV.Item<KV.Val>>, +t: KV.Trie<KV.Val>, +k: String, 
     case None{}:
       eq => g => znew_zadd_g(t, k, n, x, now, rr, r, o, ps, z, eq, g)
 
+# RESTORE's change, made again by its effect at time 0: the RESTORE of
+# its payload with REPLACE (rs_out0, rs_out1: whose version, checksum
+# and value read, so that it restores the payload's value, with the time
+# logged, from 1970)
+def rs_out0(live: Bool, +p: String, +v: KV.Val, gv: {D.verify(p) == True{} : Bool}, gd: {D.load(p) == Some{v} : Maybe<&2, KV.Val>}) -> {R.restore.live(live, p, R.TOk{R.TmN{False{}, 0n}}, True{}, 0n) == R.Out{R.r_ok(), R.CRestore{p, v, 0n}} : R.Out}:
+  %Equal.sym(Bool, D.verify(p), True{}, gv) : {R.restore.check(_, p, R.TmN{False{}, 0n}, live, 0n) == R.Out{R.r_ok(), R.CRestore{p, v, 0n}} : R.Out}
+  %Equal.sym(Maybe<&2, KV.Val>, D.load(p), Some{v}, gd) : {R.restore.load(_, p, R.TmN{False{}, 0n}, live, 0n) == R.Out{R.r_ok(), R.CRestore{p, v, 0n}} : R.Out}
+  {==}
+
+def rs_out1(live: Bool, +p: String, +v: KV.Val, +q: Nat, gv: {D.verify(p) == True{} : Bool}, gd: {D.load(p) == Some{v} : Maybe<&2, KV.Val>}, +fx: {KV.clamp(1n+q) == 1n+q : Nat}) -> {R.restore.live(live, p, R.TOk{R.TmN{True{}, 1n+q}}, True{}, 0n) == R.Out{R.r_ok(), R.CRestore{p, v, 1n+q}} : R.Out}:
+  %Equal.sym(Bool, D.verify(p), True{}, gv) : {R.restore.check(_, p, R.TmN{True{}, 1n+q}, live, 0n) == R.Out{R.r_ok(), R.CRestore{p, v, 1n+q}} : R.Out}
+  %Equal.sym(Maybe<&2, KV.Val>, D.load(p), Some{v}, gd) : {R.restore.load(_, p, R.TmN{True{}, 1n+q}, live, 0n) == R.Out{R.r_ok(), R.CRestore{p, v, 1n+q}} : R.Out}
+  %Equal.sym(R.At, R.at.ms(1n+q), R.AtMs{1n+q}, ms_fixed(q, fx)) : {R.restore.at(Some{_}, p, v, live, 0n) == R.Out{R.r_ok(), R.CRestore{p, v, 1n+q}} : R.Out}
+  %Equal.sym(Nat, R.at.exp(R.AtMs{1n+q}), 1n+q, exp_ms(q)) : {R.Out{R.r_ok(), R.CRestore{p, v, KV.clamp(_)}} == R.Out{R.r_ok(), R.CRestore{p, v, 1n+q}} : R.Out}
+  %Equal.sym(Nat, KV.clamp(1n+q), 1n+q, fx) : {R.Out{R.r_ok(), R.CRestore{p, v, _}} == R.Out{R.r_ok(), R.CRestore{p, v, 1n+q}} : R.Out}
+  {==}
+
+def rs0_replay(+t: KV.Trie<KV.Val>, +k: String, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>, +r: R.Reply, +p: String, +v: KV.Val, +m: Maybe<&2, KV.Item<KV.Val>>, eq: {KV.entry.at(KV.Val, t, k, KV.hash(k)) == m : Maybe<&2, KV.Item<KV.Val>>}, gv: {D.verify(p) == True{} : Bool}, gd: {D.load(p) == Some{v} : Maybe<&2, KV.Val>}) -> {Laws.final(R.exec_all(A.ch.effect(k, R.ent.code(m), R.CRestore{p, v, 0n}), R.Db{t, n, x, 0n, rr})) == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, R.ent.code(m), r, R.CRestore{p, v, 0n}))) : R.Db}:
+  %fin_cons(R.Upd{k, R.URestore{p, R.TOk{R.TmN{False{}, 0n}}, True{}, 0n}}, Nil{}, R.Db{t, n, x, 0n, rr}) : {_ == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, R.ent.code(m), r, R.CRestore{p, v, 0n}))) : R.Db}
+  %Equal.sym(R.Out, R.upd.v(R.URestore{p, R.TOk{R.TmN{False{}, 0n}}, True{}, 0n}, 0n, R.ent.live(0n, KV.entry.at(KV.Val, t, k, KV.hash(k)))), R.upd(R.URestore{p, R.TOk{R.TmN{False{}, 0n}}, True{}, 0n}, 0n, sv_ent(R.ent.live(0n, KV.entry.at(KV.Val, t, k, KV.hash(k))))), any_ent(R.URestore{p, R.TOk{R.TmN{False{}, 0n}}, True{}, 0n}, 0n, R.ent.live(0n, KV.entry.at(KV.Val, t, k, KV.hash(k))))({==})) : {R.db_of(R.upd.put(t, k, KV.hash(k), n, x, 0n, rr, R.ent.code(KV.entry.at(KV.Val, t, k, KV.hash(k))), _)) == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, R.ent.code(m), r, R.CRestore{p, v, 0n}))) : R.Db}
+  %Equal.sym(R.Out, R.restore.live(Maybe.is_some(&2, KV.Item<String>, sv_ent(R.ent.live(0n, KV.entry.at(KV.Val, t, k, KV.hash(k))))), p, R.TOk{R.TmN{False{}, 0n}}, True{}, 0n), R.Out{R.r_ok(), R.CRestore{p, v, 0n}}, rs_out0(Maybe.is_some(&2, KV.Item<String>, sv_ent(R.ent.live(0n, KV.entry.at(KV.Val, t, k, KV.hash(k))))), p, v, gv, gd)) : {R.db_of(R.upd.put(t, k, KV.hash(k), n, x, 0n, rr, R.ent.code(KV.entry.at(KV.Val, t, k, KV.hash(k))), _)) == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, R.ent.code(m), r, R.CRestore{p, v, 0n}))) : R.Db}
+  %Equal.sym(Maybe<&2, KV.Item<KV.Val>>, KV.entry.at(KV.Val, t, k, KV.hash(k)), m, eq) : {R.db_of(R.upd.put(t, k, KV.hash(k), n, x, 0n, rr, R.ent.code(_), R.Out{R.r_ok(), R.CRestore{p, v, 0n}})) == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, R.ent.code(m), r, R.CRestore{p, v, 0n}))) : R.Db}
+  {==}
+
+def rsp_replay(+t: KV.Trie<KV.Val>, +k: String, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>, +r: R.Reply, +p: String, +v: KV.Val, +m: Maybe<&2, KV.Item<KV.Val>>, +q: Nat, eq: {KV.entry.at(KV.Val, t, k, KV.hash(k)) == m : Maybe<&2, KV.Item<KV.Val>>}, gv: {D.verify(p) == True{} : Bool}, gd: {D.load(p) == Some{v} : Maybe<&2, KV.Val>}, fx: {KV.clamp(1n+q) == 1n+q : Nat}) -> {Laws.final(R.exec_all(A.ch.effect(k, R.ent.code(m), R.CRestore{p, v, 1n+q}), R.Db{t, n, x, 0n, rr})) == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, R.ent.code(m), r, R.CRestore{p, v, 1n+q}))) : R.Db}:
+  %fin_cons(R.Upd{k, R.URestore{p, R.TOk{R.TmN{True{}, 1n+q}}, True{}, 0n}}, Nil{}, R.Db{t, n, x, 0n, rr}) : {_ == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, R.ent.code(m), r, R.CRestore{p, v, 1n+q}))) : R.Db}
+  %Equal.sym(R.Out, R.upd.v(R.URestore{p, R.TOk{R.TmN{True{}, 1n+q}}, True{}, 0n}, 0n, R.ent.live(0n, KV.entry.at(KV.Val, t, k, KV.hash(k)))), R.upd(R.URestore{p, R.TOk{R.TmN{True{}, 1n+q}}, True{}, 0n}, 0n, sv_ent(R.ent.live(0n, KV.entry.at(KV.Val, t, k, KV.hash(k))))), any_ent(R.URestore{p, R.TOk{R.TmN{True{}, 1n+q}}, True{}, 0n}, 0n, R.ent.live(0n, KV.entry.at(KV.Val, t, k, KV.hash(k))))({==})) : {R.db_of(R.upd.put(t, k, KV.hash(k), n, x, 0n, rr, R.ent.code(KV.entry.at(KV.Val, t, k, KV.hash(k))), _)) == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, R.ent.code(m), r, R.CRestore{p, v, 1n+q}))) : R.Db}
+  %Equal.sym(R.Out, R.restore.live(Maybe.is_some(&2, KV.Item<String>, sv_ent(R.ent.live(0n, KV.entry.at(KV.Val, t, k, KV.hash(k))))), p, R.TOk{R.TmN{True{}, 1n+q}}, True{}, 0n), R.Out{R.r_ok(), R.CRestore{p, v, 1n+q}}, rs_out1(Maybe.is_some(&2, KV.Item<String>, sv_ent(R.ent.live(0n, KV.entry.at(KV.Val, t, k, KV.hash(k))))), p, v, q, gv, gd, fx)) : {R.db_of(R.upd.put(t, k, KV.hash(k), n, x, 0n, rr, R.ent.code(KV.entry.at(KV.Val, t, k, KV.hash(k))), _)) == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, R.ent.code(m), r, R.CRestore{p, v, 1n+q}))) : R.Db}
+  %Equal.sym(Maybe<&2, KV.Item<KV.Val>>, KV.entry.at(KV.Val, t, k, KV.hash(k)), m, eq) : {R.db_of(R.upd.put(t, k, KV.hash(k), n, x, 0n, rr, R.ent.code(_), R.Out{R.r_ok(), R.CRestore{p, v, 1n+q}})) == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, R.ent.code(m), r, R.CRestore{p, v, 1n+q}))) : R.Db}
+  {==}
+
+def rs0_go(+t: KV.Trie<KV.Val>, +k: String, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>, +r: R.Reply, +p: String, +v: KV.Val, +m: Maybe<&2, KV.Item<KV.Val>>, eq: {KV.entry.at(KV.Val, t, k, KV.hash(k)) == m : Maybe<&2, KV.Item<KV.Val>>}, g: Good(m, R.CRestore{p, v, 0n})) -> {Laws.final(R.exec_all(A.ch.effect(k, R.ent.code(m), R.CRestore{p, v, 0n}), R.Db{t, n, x, 0n, rr})) == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, R.ent.code(m), r, R.CRestore{p, v, 0n}))) : R.Db}:
+  (gv, gr) = g
+  (gd, fx) = gr
+  rs0_replay(t, k, n, x, now, rr, r, p, v, m, eq, gv, gd)
+
+def rsp_go(+t: KV.Trie<KV.Val>, +k: String, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>, +r: R.Reply, +p: String, +v: KV.Val, +m: Maybe<&2, KV.Item<KV.Val>>, +q: Nat, eq: {KV.entry.at(KV.Val, t, k, KV.hash(k)) == m : Maybe<&2, KV.Item<KV.Val>>}, g: Good(m, R.CRestore{p, v, 1n+q})) -> {Laws.final(R.exec_all(A.ch.effect(k, R.ent.code(m), R.CRestore{p, v, 1n+q}), R.Db{t, n, x, 0n, rr})) == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, R.ent.code(m), r, R.CRestore{p, v, 1n+q}))) : R.Db}:
+  (gv, gr) = g
+  (gd, fx) = gr
+  rsp_replay(t, k, n, x, now, rr, r, p, v, m, q, eq, gv, gd, fx)
+
+def restore_replay(f: Nat, +t: KV.Trie<KV.Val>, +k: String, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>, +r: R.Reply, +p: String, +v: KV.Val, +m: Maybe<&2, KV.Item<KV.Val>>, +eq: {KV.entry.at(KV.Val, t, k, KV.hash(k)) == m : Maybe<&2, KV.Item<KV.Val>>}) -> Good(m, R.CRestore{p, v, f}) -> {Laws.final(R.exec_all(A.ch.effect(k, R.ent.code(m), R.CRestore{p, v, f}), R.Db{t, n, x, 0n, rr})) == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, R.ent.code(m), r, R.CRestore{p, v, f}))) : R.Db}:
+  match f:
+    case 0n:
+      g => rs0_go(t, k, n, x, now, rr, r, p, v, m, eq, g)
+    case 1n++q:
+      g => rsp_go(t, k, n, x, now, rr, r, p, v, m, q, eq, g)
+
 def ch_replay(ch: R.Change, m: Maybe<&2, KV.Item<KV.Val>>, +t: KV.Trie<KV.Val>, +k: String, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>, +r: R.Reply) -> {KV.entry.at(KV.Val, t, k, KV.hash(k)) == m : Maybe<&2, KV.Item<KV.Val>>} -> Good(m, ch) -> {Laws.final(R.exec_all(A.ch.effect(k, R.ent.code(m), ch), R.Db{t, n, x, 0n, rr})) == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, R.ent.code(m), r, ch))) : R.Db}:
   match ch m:
     case R.CKeep{} _:
@@ -8851,6 +8920,8 @@ def ch_replay(ch: R.Change, m: Maybe<&2, KV.Item<KV.Val>>, +t: KV.Trie<KV.Val>, 
       eq => g => Empty.absurd({Laws.final(R.exec_all(A.ch.effect(k, R.ent.code(None{}), R.CZset{op, z}), R.Db{t, n, x, 0n, rr})) == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, R.ent.code(None{}), r, R.CZset{op, z}))) : R.Db}, g)
     case R.CZsetNew{+o, +ps, +z} _:
       eq => g => znew_replay(m, t, k, n, x, now, rr, r, o, ps, z)(eq)(g)
+    case R.CRestore{+p, +v, f} _:
+      +eq => g => restore_replay(f, t, k, n, x, now, rr, r, p, v, m, eq)(g)
 
 # an update's effects make its change again
 def out_replay(o: R.Out, +m: Maybe<&2, KV.Item<KV.Val>>, +t: KV.Trie<KV.Val>, +k: String, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>) -> {KV.entry.at(KV.Val, t, k, KV.hash(k)) == m : Maybe<&2, KV.Item<KV.Val>>} -> Good(m, ch_of(o)) -> {Laws.final(R.exec_all(A.upd.effect(k, R.ent.code(m), o), R.Db{t, n, x, 0n, rr})) == R.db.at(0n, R.db_of(R.upd.put(t, k, KV.hash(k), n, x, now, rr, R.ent.code(m), o))) : R.Db}:
@@ -9292,6 +9363,8 @@ def LShape(op: R.LWrite, ch: R.Change) -> Type:
       Empty
     case R.CZsetNew{o, ps, z}:
       Empty
+    case R.CRestore{p, v, f}:
+      Empty
 
 def op_eq(-op: R.LWrite, -op2: R.LWrite, -l: KV.Deq, -l0: KV.Deq, gl: {op2 == op : R.LWrite}, eq: {ch_of(R.lwrite(op, False{}, l0)) == R.CList{op2, l} : R.Change}) -> {ch_of(R.lwrite(op2, False{}, l0)) == R.CList{op2, l} : R.Change}:
   %Equal.sym(R.LWrite, op2, op, gl) : {ch_of(R.lwrite(_, False{}, l0)) == R.CList{op2, l} : R.Change}
@@ -9333,6 +9406,8 @@ def shape_good(ch: R.Change, -op: R.LWrite, -l0: KV.Deq, -e: Nat) -> {ch_of(R.lw
       eq => sh => Empty.absurd(Good(Some{KV.Item{KV.VColl{KV.CList{l0}}, e}}, R.CZset{zop, z}), sh)
     case R.CZsetNew{o, ps, z}:
       eq => sh => Empty.absurd(Good(Some{KV.Item{KV.VColl{KV.CList{l0}}, e}}, R.CZsetNew{o, ps, z}), sh)
+    case R.CRestore{p, v, f}:
+      eq => sh => Empty.absurd(Good(Some{KV.Item{KV.VColl{KV.CList{l0}}, e}}, R.CRestore{p, v, f}), sh)
 
 def some_ok_n(-m: Maybe<&2, Nat>, -a: Nat, e: {m == Some{a} : Maybe<&2, Nat>}) -> {Maybe.is_some(&2, Nat, m) == True{} : Bool}:
   %Equal.sym(Maybe<&2, Nat>, m, Some{a}, e) : {Maybe.is_some(&2, Nat, _) == True{} : Bool}
@@ -9920,6 +9995,83 @@ def hll_none(op: R.HllOp, -m: Maybe<&2, KV.Item<KV.Val>>) -> Good(m, ch_of(R.hll
       {==}
 
 # of a key that is not there: none or a put
+# RESTORE's changes are good: a key deleted (a time already past) was
+# there (live: REPLACE found it), and a value restored is its payload's,
+# whose version, checksum and value read, with a time a key keeps
+def Live(live: Bool, m: Maybe<&2, KV.Item<KV.Val>>) -> Type:
+  {live == True{} : Bool} -> {Maybe.is_some(&2, KV.Item<KV.Val>, m) == True{} : Bool}
+
+def rs_gone_good(live: Bool, -m: Maybe<&2, KV.Item<KV.Val>>) -> Live(live, m) -> Good(m, ch_of(R.restore.gone(live))):
+  match live:
+    case True{}:
+      gl => gl({==})
+    case False{}:
+      gl => {==}
+
+def rs_past_good(past: Bool, +a: R.At, +p: String, +v: KV.Val, live: Bool, -m: Maybe<&2, KV.Item<KV.Val>>, gv: {D.verify(p) == True{} : Bool}, gd: {D.load(p) == Some{v} : Maybe<&2, KV.Val>}) -> Live(live, m) -> Good(m, ch_of(R.restore.past(past, a, p, v, live))):
+  match past:
+    case True{}:
+      gl => rs_gone_good(live, m)(gl)
+    case False{}:
+      gl => (gv, (gd, clamp_idem(R.at.exp(a))))
+
+def rs_at_good(ma: Maybe<&2, R.At>, +p: String, +v: KV.Val, live: Bool, +now: Nat, -m: Maybe<&2, KV.Item<KV.Val>>, gv: {D.verify(p) == True{} : Bool}, gd: {D.load(p) == Some{v} : Maybe<&2, KV.Val>}) -> Live(live, m) -> Good(m, ch_of(R.restore.at(ma, p, v, live, now))):
+  match ma:
+    case Some{+a}:
+      gl => rs_past_good(R.at.past(a, now), a, p, v, live, m, gv, gd)(gl)
+    case None{}:
+      gl => rs_gone_good(live, m)(gl)
+
+def rs_ms_good(ms: Nat, +at: Bool, +p: String, +v: KV.Val, live: Bool, +now: Nat, -m: Maybe<&2, KV.Item<KV.Val>>, gv: {D.verify(p) == True{} : Bool}, gd: {D.load(p) == Some{v} : Maybe<&2, KV.Val>}) -> Live(live, m) -> Good(m, ch_of(R.restore.ms(ms, at, p, v, live, now))):
+  match ms:
+    case 0n:
+      gl => (gv, (gd, {==}))
+    case 1n++q:
+      gl => rs_at_good(R.at.of(R.TmN{at, 1n+q}, now), p, v, live, now, m, gv, gd)(gl)
+
+def rs_when_good(t: R.Tm, +p: String, +v: KV.Val, live: Bool, +now: Nat, -m: Maybe<&2, KV.Item<KV.Val>>, gv: {D.verify(p) == True{} : Bool}, gd: {D.load(p) == Some{v} : Maybe<&2, KV.Val>}) -> Live(live, m) -> Good(m, ch_of(R.restore.when(t, p, v, live, now))):
+  match t:
+    case R.TmN{+at, ms}:
+      gl => rs_ms_good(ms, at, p, v, live, now, m, gv, gd)(gl)
+    case R.TmB{+at, +neg, +hi, +lo}:
+      gl => rs_at_good(R.at.of(R.TmB{at, neg, hi, lo}, now), p, v, live, now, m, gv, gd)(gl)
+
+def rs_load_good(mv: Maybe<&2, KV.Val>, +p: String, +t: R.Tm, live: Bool, +now: Nat, -m: Maybe<&2, KV.Item<KV.Val>>, gv: {D.verify(p) == True{} : Bool}) -> {mv == D.load(p) : Maybe<&2, KV.Val>} -> Live(live, m) -> Good(m, ch_of(R.restore.load(mv, p, t, live, now))):
+  match mv:
+    case Some{+v}:
+      e => gl => rs_when_good(t, p, v, live, now, m, gv, Equal.sym(Maybe<&2, KV.Val>, Some{v}, D.load(p), e))(gl)
+    case None{}:
+      e => gl => {==}
+
+def rs_check_good(ok: Bool, +p: String, +t: R.Tm, live: Bool, +now: Nat, -m: Maybe<&2, KV.Item<KV.Val>>) -> {ok == D.verify(p) : Bool} -> Live(live, m) -> Good(m, ch_of(R.restore.check(ok, p, t, live, now))):
+  match ok:
+    case True{}:
+      e => gl => rs_load_good(D.load(p), p, t, live, now, m, Equal.sym(Bool, True{}, D.verify(p), e))({==})(gl)
+    case False{}:
+      e => gl => {==}
+
+def rs_ttl_good(t: R.TmR, +p: String, live: Bool, +now: Nat, -m: Maybe<&2, KV.Item<KV.Val>>) -> Live(live, m) -> Good(m, ch_of(R.restore.ttl(t, p, live, now))):
+  match t:
+    case R.TOk{x}:
+      match x:
+        case R.TmN{+at, +ms}:
+          gl => rs_check_good(D.verify(p), p, R.TmN{at, ms}, live, now, m)({==})(gl)
+        case R.TmB{+at, neg, +hi, +lo}:
+          match neg:
+            case True{}:
+              gl => {==}
+            case False{}:
+              gl => rs_check_good(D.verify(p), p, R.TmB{at, False{}, hi, lo}, live, now, m)({==})(gl)
+    case R.TBad{r}:
+      gl => {==}
+
+def rs_busy_good(busy: Bool, +p: String, +t: R.TmR, live: Bool, +now: Nat, -m: Maybe<&2, KV.Item<KV.Val>>) -> Live(live, m) -> Good(m, ch_of(R.restore.busy(busy, p, t, live, now))):
+  match busy:
+    case True{}:
+      gl => {==}
+    case False{}:
+      gl => rs_ttl_good(t, p, live, now, m)(gl)
+
 def good_none(op: R.UpdOp, +now: Nat, -m: Maybe<&2, KV.Item<KV.Val>>) -> Good(m, ch_of(R.upd(op, now, None{}))):
   match op:
     case R.USetNx{v}:
@@ -9959,6 +10111,8 @@ def good_none(op: R.UpdOp, +now: Nat, -m: Maybe<&2, KV.Item<KV.Val>>) -> Good(m,
       zw_fresh_good(zop, m)
     case R.UHll{+hop}:
       hll_none(hop, m)
+    case R.URestore{+p, +t, +rep, ac}:
+      rs_busy_good(Bool.and(Bool.not(rep), False{}), p, t, False{}, now, m)(l => Empty.absurd({Maybe.is_some(&2, KV.Item<KV.Val>, m) == True{} : Bool}, false_true(l)))
 
 # a time set alone, to f, of a key there with e: none given none is
 # nothing
@@ -10204,6 +10358,8 @@ def good_some(op: R.UpdOp, +now: Nat, +w: String, +e: Nat) -> Good(Some{KV.Item{
       zw_wrong_good(zop, Some{KV.Item{KV.VStr{w}, e}})
     case R.UHll{+hop}:
       hll_some(hop, w, e)
+    case R.URestore{+p, +t, +rep, ac}:
+      rs_busy_good(Bool.and(Bool.not(rep), True{}), p, t, True{}, now, Some{KV.Item{KV.VStr{w}, e}})(l => {==})
 
 # SET with GET of a key that holds a collection changes nothing
 def get_wrong_at(a: Maybe<&2, R.At>, -name: String) -> {ch_of(R.get.wrong.at(a, name)) == R.CKeep{} : R.Change}:
@@ -10260,6 +10416,8 @@ def get_wrong_keep(o: R.UpdOp, +now: Nat) -> {ch_of(R.get.wrong(o, now)) == R.CK
       {==}
     case R.UHll{x}:
       {==}
+    case R.URestore{a, b, c, d}:
+      {==}
 
 # of a key there that holds a collection: SET, SETNX, EXPIRE and its kin
 # and PERSIST act on it as on a string, any other changes nothing
@@ -10302,6 +10460,8 @@ def good_coll(op: R.UpdOp, +now: Nat, +c: KV.Coll, +e: Nat) -> Good(Some{KV.Item
       good_coll_zset(zop, c, e)
     case R.UHll{h}:
       {==}
+    case R.URestore{+p, +t, +rep, ac}:
+      rs_busy_good(Bool.and(Bool.not(rep), True{}), p, t, True{}, now, Some{KV.Item{KV.VColl{c}, e}})(l => {==})
 
 def ug_v(w: KV.Val, op: R.UpdOp, +now: Nat, +e: Nat) -> Good(Some{KV.Item{w, e}}, ch_of(R.upd.v(op, now, Some{KV.Item{w, e}}))):
   match w:
@@ -10776,6 +10936,8 @@ def ch_at0(ch: R.Change, +t: KV.Trie<KV.Val>, +k: String, +h: U32, +n: Nat, +x: 
     case R.CZset{op, z}:
       {==}
     case R.CZsetNew{o, ps, z}:
+      {==}
+    case R.CRestore{p, v, e}:
       {==}
 
 def upd0_ch(+t: KV.Trie<KV.Val>, +k: String, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>, +op: R.UpdOp, +op2: R.UpdOp) -> {ch_of(R.upd.v(op2, 0n, KV.entry.at(KV.Val, t, k, KV.hash(k)))) == ch_of(R.upd.v(op, now, R.ent.live(now, KV.entry.at(KV.Val, t, k, KV.hash(k))))) : R.Change} -> {R.db_of(R.db.upd(R.Db{t, n, x, 0n, rr}, k, op2)) == R.db.at(0n, R.db_of(R.db.upd(R.Db{t, n, x, now, rr}, k, op))) : R.Db}:
@@ -11894,6 +12056,22 @@ def znew_args_g(b: Bool, +k: String, +o: R.ZOpts, +ps: List<&2, R.ZPair>, -z: KV
   (xe, ck) = gr
   znew_args(b, k, o, ps, xe, ck)
 
+# RESTORE's effect, written as an entry, parses back to itself: its time
+# is one a key keeps (clamped), so small
+def restore_args(f: Nat, +k: String, +p: String, -v: KV.Val, -c: Nat) -> {KV.clamp(f) == f : Nat} -> {A.ch.effect(k, c, R.CRestore{p, v, f}) == A.parse_all(A.args_all(A.ch.effect(k, c, R.CRestore{p, v, f}))) : List<&2, R.Cmd>}:
+  match f:
+    case 0n:
+      fx => {==}
+    case 1n++q:
+      fx =>
+        %num14_show(q, fixed_small(q, fx)) : {[R.Upd{k, R.URestore{p, R.TOk{R.TmN{True{}, 1n+q}}, True{}, 0n}}] == [R.Upd{k, R.URestore{p, R.tm.of.go(_, Nat.show(1n+q), True{}, False{}, False{}, "restore"), True{}, 0n}}] : List<&2, R.Cmd>}
+        {==}
+
+def restore_args_g(f: Nat, +k: String, +p: String, -v: KV.Val, -c: Nat, g: {D.verify(p) == True{} : Bool} & ({D.load(p) == Some{v} : Maybe<&2, KV.Val>} & {KV.clamp(f) == f : Nat})) -> {A.ch.effect(k, c, R.CRestore{p, v, f}) == A.parse_all(A.args_all(A.ch.effect(k, c, R.CRestore{p, v, f}))) : List<&2, R.Cmd>}:
+  (gv, gr) = g
+  (gd, fx) = gr
+  restore_args(f, k, p, v, c)(fx)
+
 def ch_args(ch: R.Change, m: Maybe<&2, KV.Item<KV.Val>>, +k: String) -> Good(m, ch) -> {A.ch.effect(k, R.ent.code(m), ch) == A.parse_all(A.args_all(A.ch.effect(k, R.ent.code(m), ch))) : List<&2, R.Cmd>}:
   match ch m:
     case R.CKeep{} _:
@@ -11940,6 +12118,8 @@ def ch_args(ch: R.Change, m: Maybe<&2, KV.Item<KV.Val>>, +k: String) -> Good(m, 
       g => Empty.absurd({A.ch.effect(k, R.ent.code(None{}), R.CZset{op, z}) == A.parse_all(A.args_all(A.ch.effect(k, R.ent.code(None{}), R.CZset{op, z}))) : List<&2, R.Cmd>}, g)
     case R.CZsetNew{+o, +ps, +z} _:
       g => znew_args_g(Nat.is_eq(R.ent.code(m), 0n), k, o, ps, z, g)
+    case R.CRestore{+p, +v, f} _:
+      g => restore_args_g(f, k, p, v, R.ent.code(m), g)
 
 def out_args(o: R.Out, m: Maybe<&2, KV.Item<KV.Val>>, +k: String) -> Good(m, ch_of(o)) -> {A.upd.effect(k, R.ent.code(m), o) == A.parse_all(A.args_all(A.upd.effect(k, R.ent.code(m), o))) : List<&2, R.Cmd>}:
   match o:
@@ -12468,6 +12648,12 @@ def ch_one(+k: String, +c: Nat, ch: R.Change) -> OneEff(A.ch.effect(k, c, ch)):
       Inr{(R.Upd{k, R.UZset{op}}, {==})}
     case R.CZsetNew{+o, +ps, z}:
       znew_one(Nat.is_eq(c, 0n), k, o, ps)
+    case R.CRestore{p, v, f}:
+      match f:
+        case 0n:
+          Inr{(R.Upd{k, R.URestore{p, R.TOk{R.TmN{False{}, 0n}}, True{}, 0n}}, {==})}
+        case 1n+q:
+          Inr{(R.Upd{k, R.URestore{p, R.TOk{R.TmN{True{}, 1n+q}}, True{}, 0n}}, {==})}
 
 def out_one(+k: String, +c: Nat, o: R.Out) -> OneEff(A.upd.effect(k, c, o)):
   match o:
@@ -14290,6 +14476,22 @@ def mk_zset(-k: String, op: R.ZWrite) -> {A.mark(A.zset.args(k, op)) == 0n : Nat
     case R.ZWPopN{max, c}:
       {==}
 
+# RESTORE's entry is no MULTI nor EXEC
+def mk_restore(-k: String, -p: String, t: R.TmR) -> {A.mark(A.restore.args(k, p, t)) == 0n : Nat}:
+  match t:
+    case R.TOk{x}:
+      match x:
+        case R.TmN{at, ms}:
+          match at:
+            case True{}:
+              {==}
+            case False{}:
+              {==}
+        case R.TmB{at, neg, hi, lo}:
+          {==}
+    case R.TBad{r}:
+      {==}
+
 def mk_upd(-k: String, op: R.UpdOp) -> {A.mark(A.upd.args(k, op)) == 0n : Nat}:
   match op:
     case R.USetNx{v}:
@@ -14328,6 +14530,8 @@ def mk_upd(-k: String, op: R.UpdOp) -> {A.mark(A.upd.args(k, op)) == 0n : Nat}:
       mk_zset(k, op)
     case R.UHll{op}:
       {==}
+    case R.URestore{p, t, rep, ac}:
+      mk_restore(k, p, t)
 
 def mk_lmove(b: Bool, -s: String, -t: String, -e: R.LEnds) -> {A.mark(A.lmove.args.of(b, s, t, e)) == 0n : Nat}:
   match b:
@@ -16340,6 +16544,8 @@ def srv_same.o(o: R.SessOp, +conn: S.Conn, +srv: S.Srv, +ef: {S.authed(conn, srv
       e => Empty.absurd({S.own_srv(R.SAdmin{y0, y1}, conn, srv) == srv : S.Srv}, true_false(Equal.trans(Bool, True{}, S.authed(conn, srv), False{}, e, ef)))
     case R.SGeoStore{y0, y1}:
       e => Empty.absurd({S.own_srv(R.SGeoStore{y0, y1}, conn, srv) == srv : S.Srv}, true_false(Equal.trans(Bool, True{}, S.authed(conn, srv), False{}, e, ef)))
+    case R.SRestore{y0, y1}:
+      e => Empty.absurd({S.own_srv(R.SRestore{y0, y1}, conn, srv) == srv : S.Srv}, true_false(Equal.trans(Bool, True{}, S.authed(conn, srv), False{}, e, ef)))
     case R.SFail{y0}:
       e => Empty.absurd({S.own_srv(R.SFail{y0}, conn, srv) == srv : S.Srv}, true_false(Equal.trans(Bool, True{}, S.authed(conn, srv), False{}, e, ef)))
     case R.SMemUsage{y0, y1}:
@@ -16538,6 +16744,10 @@ def own_bad(o: R.SessOp, +ps: List<&2, R.Act>, +id: Nat, +a: Bool, +n: String, +
     case R.SGeoStore{y0, y1}:
       ih =>
         %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel, r3}, srv), False{}, ef) : {Laws.all_bad(List.append(&2, R.Act, S.acts.k(S.KSess{R.SGeoStore{y0, y1}}, _, R.Own{R.SGeoStore{y0, y1}}, S.Conn{id, a, n, m, False{}, sel, r3}, srv), ps)) == True{} : Bool}
+        ih
+    case R.SRestore{y0, y1}:
+      ih =>
+        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel, r3}, srv), False{}, ef) : {Laws.all_bad(List.append(&2, R.Act, S.acts.k(S.KSess{R.SRestore{y0, y1}}, _, R.Own{R.SRestore{y0, y1}}, S.Conn{id, a, n, m, False{}, sel, r3}, srv), ps)) == True{} : Bool}
         ih
     case R.SFail{y0}:
       ih =>
@@ -16844,6 +17054,10 @@ def auth_own(o: R.SessOp, +id: Nat, +a: Bool, +n: String, +m: S.Mute, +sel: Nat,
     case R.SGeoStore{y0, y1}:
       el =>
         %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel, r3}, srv), False{}, ef) : {S.conn.auth(S.next_conn.k(S.KSess{R.SGeoStore{y0, y1}}, _, S.Conn{id, a, n, m, False{}, sel, r3}, srv)) == False{} : Bool}
+        or_false_l(a, S.nopass(srv))(ef)
+    case R.SRestore{y0, y1}:
+      el =>
+        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel, r3}, srv), False{}, ef) : {S.conn.auth(S.next_conn.k(S.KSess{R.SRestore{y0, y1}}, _, S.Conn{id, a, n, m, False{}, sel, r3}, srv)) == False{} : Bool}
         or_false_l(a, S.nopass(srv))(ef)
     case R.SFail{y0}:
       el =>
@@ -18431,6 +18645,9 @@ def counted_ch(ch: R.Change, m: Maybe<&2, KV.Item<KV.Val>>, +t: KV.Trie<KV.Val>,
     case R.CZsetNew{o, ps, zv} m:
       g => ec => ok => %Equal.sym(Nat, R.ent.code(m), KV.code.at(KV.Val, t, k, KV.hash(k)), ec) : {Laws.counted(R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, _, r, R.CZsetNew{o, ps, zv}))) == True{} : Bool}
                        cnt_setx(t, k, KV.VColl{KV.CZset{zv}}, 0n, KV.hash(k), n, x, now, rr)(ok)
+    case R.CRestore{p, v, f} m:
+      g => ec => ok => %Equal.sym(Nat, R.ent.code(m), KV.code.at(KV.Val, t, k, KV.hash(k)), ec) : {Laws.counted(R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, _, r, R.CRestore{p, v, f}))) == True{} : Bool}
+                       cnt_setx(t, k, v, f, KV.hash(k), n, x, now, rr)(ok)
 
 def counted_put(o: R.Out, m: Maybe<&2, KV.Item<KV.Val>>, +t: KV.Trie<KV.Val>, +k: String, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>) -> Good(m, ch_of(o)) -> {R.ent.code(m) == KV.code.at(KV.Val, t, k, KV.hash(k)) : Nat} -> {Laws.counted(R.Db{t, n, x, now, rr}) == True{} : Bool} -> {Laws.counted(R.db_of(R.upd.put(t, k, KV.hash(k), n, x, now, rr, R.ent.code(m), o))) == True{} : Bool}:
   match o:
