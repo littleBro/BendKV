@@ -7286,7 +7286,9 @@ trial to the next (2,400 to 3,400 ns) by more than the 13% the timing adds to it
 
 **`make perfcheck`** here: GET 3,414, SET 4,180 and INCR 4,525 instructions per request
 (main 3,316, 4,073 and 4,388); with 100 clients in BLPOP, GET 3,521 and SET 4,322, 3.1%
-and 3.4% above the counts without them (main 2.7% and 3.2%).
+and 3.4% above the counts without them (main 2.7% and 3.2%). The baseline is CI's count
+of this change: GET 3,452, SET 4,214 and INCR 4,552 (main's 3,371, 4,119 and 4,419), the
+misses and prefetches as they were.
 
 **What is left.** A window costs about 1,300 instructions, where Redis's `call()` reads the
 clock twice, adds the time to the command's counters and records it in the command's
