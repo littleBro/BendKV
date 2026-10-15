@@ -14366,6 +14366,533 @@
     }
    ]
   },
+  "latency": {
+   "docs": {
+    "%": [
+     "summary",
+     "A container for latency diagnostics commands",
+     "since",
+     "2.8.13",
+     "group",
+     "server",
+     "complexity",
+     "Depends on subcommand.",
+     "subcommands",
+     {
+      "%": [
+       "latency|doctor",
+       {
+        "%": [
+         "summary",
+         "Return a human readable latency analysis report.",
+         "since",
+         "2.8.13",
+         "group",
+         "server",
+         "complexity",
+         "O(1)"
+        ]
+       },
+       "latency|graph",
+       {
+        "%": [
+         "summary",
+         "Return a latency graph for the event.",
+         "since",
+         "2.8.13",
+         "group",
+         "server",
+         "complexity",
+         "O(1)",
+         "arguments",
+         [
+          {
+           "%": [
+            "name",
+            "event",
+            "type",
+            "string"
+           ]
+          }
+         ]
+        ]
+       },
+       "latency|help",
+       {
+        "%": [
+         "summary",
+         "Show helpful text about the different subcommands.",
+         "since",
+         "2.8.13",
+         "group",
+         "server",
+         "complexity",
+         "O(1)"
+        ]
+       },
+       "latency|histogram",
+       {
+        "%": [
+         "summary",
+         "Return the cumulative distribution of latencies of a subset of commands or all.",
+         "since",
+         "7.0.0",
+         "group",
+         "server",
+         "complexity",
+         "O(N) where N is the number of commands with latency information being retrieved.",
+         "arguments",
+         [
+          {
+           "%": [
+            "name",
+            "command",
+            "type",
+            "string",
+            "flags",
+            {
+             "~": [
+              {
+               "+": "optional"
+              },
+              {
+               "+": "multiple"
+              }
+             ]
+            }
+           ]
+          }
+         ]
+        ]
+       },
+       "latency|history",
+       {
+        "%": [
+         "summary",
+         "Return timestamp-latency samples for the event.",
+         "since",
+         "2.8.13",
+         "group",
+         "server",
+         "complexity",
+         "O(1)",
+         "arguments",
+         [
+          {
+           "%": [
+            "name",
+            "event",
+            "type",
+            "string"
+           ]
+          }
+         ]
+        ]
+       },
+       "latency|latest",
+       {
+        "%": [
+         "summary",
+         "Return the latest latency samples for all events.",
+         "since",
+         "2.8.13",
+         "group",
+         "server",
+         "complexity",
+         "O(1)"
+        ]
+       },
+       "latency|reset",
+       {
+        "%": [
+         "summary",
+         "Reset latency data for one or more events.",
+         "since",
+         "2.8.13",
+         "group",
+         "server",
+         "complexity",
+         "O(1)",
+         "arguments",
+         [
+          {
+           "%": [
+            "name",
+            "event",
+            "type",
+            "string",
+            "flags",
+            {
+             "~": [
+              {
+               "+": "optional"
+              },
+              {
+               "+": "multiple"
+              }
+             ]
+            }
+           ]
+          }
+         ]
+        ]
+       }
+      ]
+     }
+    ]
+   },
+   "info": [
+    "latency",
+    -2,
+    {
+     "~": []
+    },
+    0,
+    0,
+    0,
+    {
+     "~": [
+      {
+       "+": "@slow"
+      }
+     ]
+    },
+    {
+     "~": []
+    },
+    {
+     "~": []
+    },
+    [
+     [
+      "latency|doctor",
+      2,
+      {
+       "~": [
+        {
+         "+": "admin"
+        },
+        {
+         "+": "noscript"
+        },
+        {
+         "+": "loading"
+        },
+        {
+         "+": "stale"
+        }
+       ]
+      },
+      0,
+      0,
+      0,
+      {
+       "~": [
+        {
+         "+": "@admin"
+        },
+        {
+         "+": "@slow"
+        },
+        {
+         "+": "@dangerous"
+        }
+       ]
+      },
+      {
+       "~": [
+        "nondeterministic_output",
+        "request_policy:all_nodes",
+        "response_policy:special"
+       ]
+      },
+      {
+       "~": []
+      },
+      {
+       "~": []
+      }
+     ],
+     [
+      "latency|graph",
+      3,
+      {
+       "~": [
+        {
+         "+": "admin"
+        },
+        {
+         "+": "noscript"
+        },
+        {
+         "+": "loading"
+        },
+        {
+         "+": "stale"
+        }
+       ]
+      },
+      0,
+      0,
+      0,
+      {
+       "~": [
+        {
+         "+": "@admin"
+        },
+        {
+         "+": "@slow"
+        },
+        {
+         "+": "@dangerous"
+        }
+       ]
+      },
+      {
+       "~": [
+        "nondeterministic_output",
+        "request_policy:all_nodes",
+        "response_policy:special"
+       ]
+      },
+      {
+       "~": []
+      },
+      {
+       "~": []
+      }
+     ],
+     [
+      "latency|help",
+      2,
+      {
+       "~": [
+        {
+         "+": "loading"
+        },
+        {
+         "+": "stale"
+        }
+       ]
+      },
+      0,
+      0,
+      0,
+      {
+       "~": [
+        {
+         "+": "@slow"
+        }
+       ]
+      },
+      {
+       "~": []
+      },
+      {
+       "~": []
+      },
+      {
+       "~": []
+      }
+     ],
+     [
+      "latency|histogram",
+      -2,
+      {
+       "~": [
+        {
+         "+": "admin"
+        },
+        {
+         "+": "noscript"
+        },
+        {
+         "+": "loading"
+        },
+        {
+         "+": "stale"
+        }
+       ]
+      },
+      0,
+      0,
+      0,
+      {
+       "~": [
+        {
+         "+": "@admin"
+        },
+        {
+         "+": "@slow"
+        },
+        {
+         "+": "@dangerous"
+        }
+       ]
+      },
+      {
+       "~": [
+        "nondeterministic_output",
+        "request_policy:all_nodes",
+        "response_policy:special"
+       ]
+      },
+      {
+       "~": []
+      },
+      {
+       "~": []
+      }
+     ],
+     [
+      "latency|history",
+      3,
+      {
+       "~": [
+        {
+         "+": "admin"
+        },
+        {
+         "+": "noscript"
+        },
+        {
+         "+": "loading"
+        },
+        {
+         "+": "stale"
+        }
+       ]
+      },
+      0,
+      0,
+      0,
+      {
+       "~": [
+        {
+         "+": "@admin"
+        },
+        {
+         "+": "@slow"
+        },
+        {
+         "+": "@dangerous"
+        }
+       ]
+      },
+      {
+       "~": [
+        "nondeterministic_output",
+        "request_policy:all_nodes",
+        "response_policy:special"
+       ]
+      },
+      {
+       "~": []
+      },
+      {
+       "~": []
+      }
+     ],
+     [
+      "latency|latest",
+      2,
+      {
+       "~": [
+        {
+         "+": "admin"
+        },
+        {
+         "+": "noscript"
+        },
+        {
+         "+": "loading"
+        },
+        {
+         "+": "stale"
+        }
+       ]
+      },
+      0,
+      0,
+      0,
+      {
+       "~": [
+        {
+         "+": "@admin"
+        },
+        {
+         "+": "@slow"
+        },
+        {
+         "+": "@dangerous"
+        }
+       ]
+      },
+      {
+       "~": [
+        "nondeterministic_output",
+        "request_policy:all_nodes",
+        "response_policy:special"
+       ]
+      },
+      {
+       "~": []
+      },
+      {
+       "~": []
+      }
+     ],
+     [
+      "latency|reset",
+      -2,
+      {
+       "~": [
+        {
+         "+": "admin"
+        },
+        {
+         "+": "noscript"
+        },
+        {
+         "+": "loading"
+        },
+        {
+         "+": "stale"
+        }
+       ]
+      },
+      0,
+      0,
+      0,
+      {
+       "~": [
+        {
+         "+": "@admin"
+        },
+        {
+         "+": "@slow"
+        },
+        {
+         "+": "@dangerous"
+        }
+       ]
+      },
+      {
+       "~": [
+        "request_policy:all_nodes",
+        "response_policy:all_succeeded"
+       ]
+      },
+      {
+       "~": []
+      },
+      {
+       "~": []
+      }
+     ]
+    ]
+   ]
+  },
   "lcs": {
    "docs": {
     "%": [
@@ -24090,6 +24617,299 @@
     {
      "~": []
     }
+   ]
+  },
+  "slowlog": {
+   "docs": {
+    "%": [
+     "summary",
+     "A container for slow log commands",
+     "since",
+     "2.2.12",
+     "group",
+     "server",
+     "complexity",
+     "Depends on subcommand.",
+     "subcommands",
+     {
+      "%": [
+       "slowlog|get",
+       {
+        "%": [
+         "summary",
+         "Get the slow log's entries",
+         "since",
+         "2.2.12",
+         "group",
+         "server",
+         "complexity",
+         "O(N) where N is the number of entries returned",
+         "history",
+         {
+          "~": [
+           [
+            "4.0.0",
+            "Added client IP address, port and name to the reply."
+           ]
+          ]
+         },
+         "arguments",
+         [
+          {
+           "%": [
+            "name",
+            "count",
+            "type",
+            "integer",
+            "flags",
+            {
+             "~": [
+              {
+               "+": "optional"
+              }
+             ]
+            }
+           ]
+          }
+         ]
+        ]
+       },
+       "slowlog|help",
+       {
+        "%": [
+         "summary",
+         "Show helpful text about the different subcommands",
+         "since",
+         "6.2.0",
+         "group",
+         "server",
+         "complexity",
+         "O(1)"
+        ]
+       },
+       "slowlog|len",
+       {
+        "%": [
+         "summary",
+         "Get the slow log's length",
+         "since",
+         "2.2.12",
+         "group",
+         "server",
+         "complexity",
+         "O(1)"
+        ]
+       },
+       "slowlog|reset",
+       {
+        "%": [
+         "summary",
+         "Clear all entries from the slow log",
+         "since",
+         "2.2.12",
+         "group",
+         "server",
+         "complexity",
+         "O(N) where N is the number of entries in the slowlog"
+        ]
+       }
+      ]
+     }
+    ]
+   },
+   "info": [
+    "slowlog",
+    -2,
+    {
+     "~": []
+    },
+    0,
+    0,
+    0,
+    {
+     "~": [
+      {
+       "+": "@slow"
+      }
+     ]
+    },
+    {
+     "~": []
+    },
+    {
+     "~": []
+    },
+    [
+     [
+      "slowlog|get",
+      -2,
+      {
+       "~": [
+        {
+         "+": "admin"
+        },
+        {
+         "+": "loading"
+        },
+        {
+         "+": "stale"
+        }
+       ]
+      },
+      0,
+      0,
+      0,
+      {
+       "~": [
+        {
+         "+": "@admin"
+        },
+        {
+         "+": "@slow"
+        },
+        {
+         "+": "@dangerous"
+        }
+       ]
+      },
+      {
+       "~": [
+        "request_policy:all_nodes",
+        "nondeterministic_output"
+       ]
+      },
+      {
+       "~": []
+      },
+      {
+       "~": []
+      }
+     ],
+     [
+      "slowlog|help",
+      2,
+      {
+       "~": [
+        {
+         "+": "loading"
+        },
+        {
+         "+": "stale"
+        }
+       ]
+      },
+      0,
+      0,
+      0,
+      {
+       "~": [
+        {
+         "+": "@slow"
+        }
+       ]
+      },
+      {
+       "~": []
+      },
+      {
+       "~": []
+      },
+      {
+       "~": []
+      }
+     ],
+     [
+      "slowlog|len",
+      2,
+      {
+       "~": [
+        {
+         "+": "admin"
+        },
+        {
+         "+": "loading"
+        },
+        {
+         "+": "stale"
+        }
+       ]
+      },
+      0,
+      0,
+      0,
+      {
+       "~": [
+        {
+         "+": "@admin"
+        },
+        {
+         "+": "@slow"
+        },
+        {
+         "+": "@dangerous"
+        }
+       ]
+      },
+      {
+       "~": [
+        "request_policy:all_nodes",
+        "response_policy:agg_sum",
+        "nondeterministic_output"
+       ]
+      },
+      {
+       "~": []
+      },
+      {
+       "~": []
+      }
+     ],
+     [
+      "slowlog|reset",
+      2,
+      {
+       "~": [
+        {
+         "+": "admin"
+        },
+        {
+         "+": "loading"
+        },
+        {
+         "+": "stale"
+        }
+       ]
+      },
+      0,
+      0,
+      0,
+      {
+       "~": [
+        {
+         "+": "@admin"
+        },
+        {
+         "+": "@slow"
+        },
+        {
+         "+": "@dangerous"
+        }
+       ]
+      },
+      {
+       "~": [
+        "request_policy:all_nodes",
+        "response_policy:all_succeeded"
+       ]
+      },
+      {
+       "~": []
+      },
+      {
+       "~": []
+      }
+     ]
+    ]
    ]
   },
   "smembers": {

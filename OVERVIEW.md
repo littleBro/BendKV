@@ -155,7 +155,7 @@ work, and so do clients that speak RESP3 when the server takes it (go-redis v9, 
 ```
 src/server.bend  TCP, connections, database actor, AOF file, log ─┐ not verified (@unsafe loops),
 src/startup.bend command line and configuration file              │ checked by tests
-src/info.bend    INFO: Redis's sections and fields                │
+src/info.bend    INFO, SLOWLOG, LATENCY: as Redis keeps them      │
 src/command.bend COMMAND: BendKV's command table from Redis       │
 src/resp.bend    RESP parsing, RESP2 and RESP3 replies           ─┘
 src/session.bend connection and server: state, a whole batch     ─┐ verified:
@@ -467,8 +467,18 @@ CONFIG RESETSTAT starts the counts over. Statistics per command are counted as i
 Redis: the calls of each command and subcommand, the calls refused before they run (a
 wrong number of arguments by Redis's arity, a client without a password, a refusal for
 memory), and those that failed while running; error replies by code (errorstats), including those the
-client did not get (CLIENT REPLY OFF). BendKV does not time commands: usec is 0, and
-latencystats is empty.
+client did not get (CLIENT REPLY OFF); usec and, with `latency-tracking`, each
+command's histogram (latencystats, LATENCY HISTOGRAM) from the timing of calls below.
+SLOWLOG and LATENCY, as Redis 7.0.15 keeps them: the actor reads the clock around each
+batch of requests, as Redis around each call, and a batch's calls share its time. A call
+that takes `slowlog-log-slower-than` µs or more goes to the slow log with its arguments
+as sent (32 at most, 128 bytes each; AUTH's, HELLO's and CONFIG SET's secrets redacted;
+EXEC's commands but not EXEC; a blocking command when it is served); one that takes
+`latency-monitor-threshold` ms, when that is set, is a sample of the event "command" or
+"fast-command", and a cron's sweep of expired keys one of "expire-cycle". Where BendKV
+differs: a pipeline's calls share its time; a batch's entries go to the slow log when it
+ends; there are no events of the append-only file, of eviction or of fork (section 3zzz
+of docs/FINDINGS.md).
 COMMAND (with INFO, DOCS, COUNT, LIST and its filters, GETKEYS, GETKEYSANDFLAGS, HELP)
 describes each BendKV command and each of its subcommands that BendKV has, as Redis
 7.0.15 describes them: `tools/gen_commands.py` takes the descriptions from Redis itself.
@@ -860,11 +870,13 @@ The translation the kernel reads can be dumped with
   skipped. The reference is the same run on redis-server 7.0.15 with default settings,
   each unit on a freshly started server instance: in this mode 1,757 tests run, and
   Redis passes 1,677 (almost all the others need DEBUG, off by default in 7.0). BendKV
-  passes 1,274 of them (76.0%), and in the units of what it has (the protocol, the
+  passes 1,292 of them (77.0%), and in the units of what it has (the protocol, the
   connection and clients and their pause, the keyspace and databases, strings with
   ranges, bits and fields, counters, hashes, lists, sets, sorted sets, SORT, HyperLogLogs,
   GEO, DUMP and RESTORE, times to live, lazy freeing, transactions, Pub/Sub and keyspace
-  notifications, introspection), 1,271 of 1,333 (95%): `unit/dump` all 11,
+  notifications, introspection, the slow log and the latency monitor), 1,289 of 1,355
+  (95%): `unit/latency-monitor` 11 of 13 (the others need Lua), `unit/slowlog` 7 of 9
+  (the others use ACL and MIGRATE), `unit/dump` all 11,
   `unit/geo` all 59, `unit/introspection-2` 37 of 43 (the others need Lua, streams, MIGRATE
   and COMMAND's entries of commands BendKV does not have),
   `unit/introspection` 25 of 28 (the two others need Lua, and the third MIGRATE),
@@ -918,11 +930,10 @@ The translation the kernel reads can be dumped with
   CI on every pull request): redis-py 8.1.0's tests of its sync and asyncio clients, in
   RESP2 and in RESP3, and go-redis v9.23.0's specs, in RESP3, each against Redis 7.0.15
   and against BendKV, each on a server started for it, without their tests of modules,
-  clusters, sentinels and TLS. Of the tests Redis passes, BendKV passes 2,513 of 2,753 in
-  redis-py, the same tests in RESP2 and in RESP3, and 408 of 460 in go-redis; every other
-  one fails on what BendKV does not have (Lua, streams, ACL, the
-  slow log, CLIENT TRACKING, and COMMAND's entries of those), none on a
-  command BendKV has. A test Redis passes that BendKV fails, and that is not among the
+  clusters, sentinels and TLS. Of the tests Redis passes, BendKV passes 2,525 of 2,753 in
+  redis-py, the same tests in RESP2 and in RESP3, and 409 of 460 in go-redis; every other
+  one fails on what BendKV does not have (Lua, streams, ACL, CLIENT
+  TRACKING, and COMMAND's entries of those), none on a command BendKV has. A test Redis passes that BendKV fails, and that is not among the
   known failures of `tools/data/clients.json`, fails CI.
 - **Differential testing against Redis 7.0.15** (`tests/diff_test.py`). Random streams
   of commands with random binary arguments, pipelines of different lengths, and arity
@@ -1143,8 +1154,15 @@ The translation the kernel reads can be dumped with
   with errors among them, a pipeline over 64 KB, replies held back by CLIENT REPLY OFF
   and SKIP, NOAUTH and WRONGPASS, commands after QUIT, protocol errors, random
   pipelines — then commandstats (calls, refused and failed), errorstats and the totals
-  are compared as maps (the order of Redis's lines comes from a hash table, and BendKV's
-  usec is 0): 44 checks.
+  are compared as maps (the order of Redis's lines comes from a hash table; usec, which
+  depends on the machine, is left to `tests/timing_test.py`): 44 checks.
+- **The timing of calls** (`tests/timing_test.py`): scenarios on BendKV and Redis with
+  clients of their own, their transcripts compared with what depends on how long a call
+  took put aside: SLOWLOG's and LATENCY's errors, arities and help in RESP2 and RESP3;
+  the slow log with every call logged (arguments as sent and cut, secrets redacted,
+  rewritten commands as they came, EXEC's commands, a served BLPOP), its counts, RESET
+  and `slowlog-max-len`; LATENCY with no event; histograms after CONFIG RESETSTAT;
+  latencystats with its parameters; usec_per_call as Redis divides.
 - **COMMAND** (`tests/command_test.py`): COMMAND INFO and DOCS of each command and
   subcommand, one at a time, several at once, in another case, unknown ones and those
   Redis does not find (`get|key`, `config|get|key`); COMMAND, INFO and DOCS of all;
@@ -1477,8 +1495,8 @@ make clients BEND="$B" # redis-py's and go-redis's test suites on Redis and on B
    FLUSHDB, FLUSHALL, keyspace lines per database — with laws and recovery of all the
    databases from the append-only file), the ranges and bits of strings (GETRANGE,
    SETRANGE, GETBIT, SETBIT, BITCOUNT, BITPOS — with a law of SETRANGE and recovery from
-   the append-only file). Redis's suite in external mode: BendKV passes 1,274 of the
-   1,677 tests Redis itself passes, and 1,271 of 1,333 in the units of what it has
+   the append-only file). Redis's suite in external mode: BendKV passes 1,292 of the
+   1,677 tests Redis itself passes, and 1,289 of 1,355 in the units of what it has
    ([docs/COMPATIBILITY.md](docs/COMPATIBILITY.md)). Start-up as for redis-server (the
    command line and the configuration file). The database as a record with a count of
    keys (DBSIZE in O(1)).

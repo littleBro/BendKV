@@ -17184,7 +17184,7 @@ def Laws.config_fail(args, conn, srv, r, e):
   {==}
 
 def Laws.config_pass(args, conn, srv, cfg, e):
-  %Equal.sym(Result<&2, &2, R.Reply, List<&2, C.CItem>>, C.config.set(args, S.srv.cfg(srv)), Done{cfg}, e) : {S.srv.set(_, srv) == S.Srv{C.config.get_value(cfg, "requirepass"), cfg, S.srv.info(srv), S.mm.cfg(S.srv.mm(srv), cfg)} : S.Srv}
+  %Equal.sym(Result<&2, &2, R.Reply, List<&2, C.CItem>>, C.config.set(args, S.srv.cfg(srv)), Done{cfg}, e) : {S.srv.set(_, srv) == S.Srv{C.config.get_value(cfg, "requirepass"), cfg, S.srv.timing(S.srv.info(srv), cfg), S.mm.cfg(S.srv.mm(srv), cfg)} : S.Srv}
   {==}
 
 def cfg_some_val(m: Maybe<&2, C.CItem>, d: C.CItem) -> C.CItem:

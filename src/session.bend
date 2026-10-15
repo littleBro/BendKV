@@ -364,12 +364,18 @@ def acc.idle(+w: U32, +now: Nat, +start: U32) -> Nat:
   +l = U32.and(w, 16777215)
   Bool.pick(Nat, U32.is_ne(w, 0), U32.to_nat(Bool.pick(U32, U32.is_le(l, c), U32.sub(c, l), U32.sub(U32.add(c, 16777215), l))), Nat.sub(Nat.div(now, 1000n), U32.to_nat(start)))
 
+# INFO's facts with the timing's parameters read again (info.bend,
+# Timing: slowlog-log-slower-than, slowlog-max-len,
+# latency-monitor-threshold, latency-tracking)
+def srv.timing(i: I.Info, +cfg: List<&2, C.CItem>) -> I.Info:
+  I.info.cfg(i, cfg)
+
 # the server with these parameters: its password is requirepass; its
 # random numbers start from its run id
 def srv_of(+cfg: List<&2, C.CItem>, info: I.Info) -> Srv:
   +i = info
   +r = I.info.seed(i)
-  Srv{C.config.get_value(cfg, "requirepass"), cfg, i, mm.of(r, cfg)}
+  Srv{C.config.get_value(cfg, "requirepass"), cfg, srv.timing(i, cfg), mm.of(r, cfg)}
 
 def srv.puts(sets: List<&2, String>, cfg: List<&2, C.CItem>) -> List<&2, C.CItem>:
   match sets:
@@ -588,6 +594,55 @@ def srv.blocked(s: Srv, +n: Nat, +t: Nat) -> Srv:
   match s:
     case Srv{pass, cfg, info, mm}:
       Srv{pass, cfg, I.info.blocked(info, n, t), mm}
+
+# The timing of calls (info.bend: Timing a window): the window since the
+# clock's last reading timed, with the slow log's entries it found for
+# the shell to complete; the call of the general way about to run named,
+# and blocking; a client served after it waited, or gone; an entry of the
+# slow log
+type Tw is Data:
+  Tw{srv: Srv, js: List<&2, I.SlowJ>}
+
+def srv.tw(+pass: String, cfg: List<&2, C.CItem>, t: I.Timed, mm: Mm) -> Tw:
+  match t:
+    case I.Timed{i, js}:
+      Tw{Srv{pass, cfg, i, mm}, js}
+
+def srv.window(s: Srv, +d: Nat, +id: Nat, raw: String, +now: Nat) -> Tw:
+  match s:
+    case Srv{pass, cfg, info, mm}:
+      srv.tw(pass, cfg, I.info.window(info, d, id, raw, now), mm)
+
+def srv.call(s: Srv, +id: Nat, arg: I.Arg) -> Srv:
+  match s:
+    case Srv{pass, cfg, info, mm}:
+      Srv{pass, cfg, I.info.call(info, id, arg), mm}
+
+def srv.blk(s: Srv) -> Srv:
+  match s:
+    case Srv{pass, cfg, info, mm}:
+      Srv{pass, cfg, I.info.blk(info), mm}
+
+def srv.served(s: Srv, +id: Nat) -> Srv:
+  match s:
+    case Srv{pass, cfg, info, mm}:
+      Srv{pass, cfg, I.info.served(info, id), mm}
+
+def srv.gone(s: Srv, +id: Nat) -> Srv:
+  match s:
+    case Srv{pass, cfg, info, mm}:
+      Srv{pass, cfg, I.info.gone(info, id), mm}
+
+def srv.slow(s: Srv, +us: Nat, +at: Nat, +xs: List<&2, String>, +peer: String, +name: String) -> Srv:
+  match s:
+    case Srv{pass, cfg, info, mm}:
+      Srv{pass, cfg, I.info.slow(info, us, at, xs, peer, name), mm}
+
+# a latency of ms of event name at second now, for the latency monitor
+def srv.lat(s: Srv, +name: String, +ms: Nat, +now: Nat) -> Srv:
+  match s:
+    case Srv{pass, cfg, info, mm}:
+      Srv{pass, cfg, I.info.lat(info, name, ms, now), mm}
 
 # the sweep of expired keys (redis.bend: reap): where the next one starts
 # in database j, and a sweep of j that stopped at next having deleted k
@@ -2741,6 +2796,48 @@ def sort.reply(+ds: R.Ds, +k: String, o: R.SortO) -> R.Reply:
 def admin.down(+sd: R.Sd) -> R.Reply:
   Bool.pick(R.Reply, Bool.and(R.sd.save(sd), Bool.not(R.sd.force(sd))), R.RError{"ERR Errors trying to SHUTDOWN. Check logs."}, R.r_ok())
 
+# SLOWLOG GET's count: none for 10, -1 for all
+def slow.get(+t: I.Tim, +args: List<&2, String>) -> R.Reply:
+  match args:
+    case Con{+c, rest}:
+      I.slow.get(t, String.eq(c, "-1"), C.dec.small(c, 0n))
+    case Nil{}:
+      I.slow.get(t, False{}, 10n)
+
+# the first argument (an event's name)
+def arg.first(+args: List<&2, String>) -> String:
+  match args:
+    case Con{+x, rest}:
+      x
+    case Nil{}:
+      ""
+
+# SLOWLOG and LATENCY (info.bend, SLOWLOG and LATENCY), at the second of
+# the group's time; LATENCY DOCTOR knows of no huge pages of the process
+def latency.reply.of(+k: Nat, +args: List<&2, String>, +s: Srv, +t: I.Tim, +now: Nat) -> R.Reply:
+  match k:
+    case 6n:
+      slow.get(t, args)
+    case 7n:
+      I.slow.len(t)
+    case 8n:
+      R.r_ok()
+    case 9n:
+      R.RArray{I.lat.latest(I.tim.evs(t))}
+    case 10n:
+      I.lat.history(I.lat.get(I.tim.evs(t), arg.first(args)))
+    case 11n:
+      R.r_int(I.lat.reset.n(I.lat.reset.of(I.tim.evs(t), args)))
+    case 12n:
+      I.lat.graph(I.lat.get(I.tim.evs(t), arg.first(args)), arg.first(args), now)
+    case 13n:
+      R.RVerb{I.lat.doctor(t, srv.cfg(s), now, False{})}
+    case _:
+      I.lat.histogram(I.info.stats(srv.info(s)), args)
+
+def latency.reply(+k: Nat, +args: List<&2, String>, +s: Srv, +ds: R.Ds) -> R.Reply:
+  latency.reply.of(k, args, s, I.info.tim(srv.info(s)), Nat.div(R.ds.now(ds), 1000n))
+
 def admin.reply(+k: Nat, +args: List<&2, String>, +s: Srv, +ds: R.Ds) -> R.Reply:
   match k:
     case 0n:
@@ -2753,8 +2850,10 @@ def admin.reply(+k: Nat, +args: List<&2, String>, +s: Srv, +ds: R.Ds) -> R.Reply
       R.RVerb{L.five(args, KV.mix(srv.rng(s)))}
     case 4n:
       admin.down(R.sd.flags(args))
-    case _:
+    case 5n:
       R.RVerb{L.six(args, KV.mix(srv.rng(s)))}
+    case _:
+      latency.reply(k, args, s, ds)
 
 # a session command's reply, sent or not; the databases are there for
 # the commands that read them
@@ -2995,7 +3094,7 @@ def own_acts(+o: R.SessOp, +c: Conn, +s: Srv) -> List<&2, R.Act>:
 def srv.set(r: Result<&2, &2, R.Reply, List<&2, C.CItem>>, +s: Srv) -> Srv:
   match r:
     case Done{+cfg}:
-      Srv{C.config.get_value(cfg, "requirepass"), cfg, srv.info(s), mm.cfg(srv.mm(s), cfg)}
+      Srv{C.config.get_value(cfg, "requirepass"), cfg, srv.timing(srv.info(s), cfg), mm.cfg(srv.mm(s), cfg)}
     case Fail{e}:
       s
 
@@ -3011,10 +3110,31 @@ def srv.rand(s: Srv) -> Srv:
     case Srv{pass, cfg, info, mm}:
       Srv{pass, cfg, info, mm.rand(mm)}
 
+# SLOWLOG RESET and LATENCY RESET of events (all for none)
+def srv.slow.reset(s: Srv) -> Srv:
+  match s:
+    case Srv{pass, cfg, info, mm}:
+      Srv{pass, cfg, I.info.slow.reset(info), mm}
+
+def srv.lat.reset(s: Srv, names: List<&2, String>) -> Srv:
+  match s:
+    case Srv{pass, cfg, info, mm}:
+      Srv{pass, cfg, I.info.lat.reset(info, names), mm}
+
 # the server after an administrative command: LOLWUT's drawings take its
-# random numbers
-def admin.srv(+k: Nat, +s: Srv) -> Srv:
-  Bool.pick(Srv, Bool.or(Nat.is_eq(k, 3n), Nat.is_eq(k, 5n)), srv.rand(s), s)
+# random numbers, SLOWLOG RESET and LATENCY RESET change its timing
+def admin.srv(+k: Nat, a: List<&2, String>, +s: Srv) -> Srv:
+  match k:
+    case 3n:
+      srv.rand(s)
+    case 5n:
+      srv.rand(s)
+    case 8n:
+      srv.slow.reset(s)
+    case 11n:
+      srv.lat.reset(s, a)
+    case _:
+      s
 
 # the server after a session command: CONFIG SET changes it when it
 # succeeds, CONFIG RESETSTAT its counts, and RANDOMKEY, HRANDFIELD and
@@ -3036,7 +3156,7 @@ def own_srv(+o: R.SessOp, +c: Conn, +s: Srv) -> Srv:
     case R.SZRandMember{k, a}:
       srv.rand(s)
     case R.SAdmin{+k, a}:
-      admin.srv(k, s)
+      admin.srv(k, a, s)
     case _:
       s
 
