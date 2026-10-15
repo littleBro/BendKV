@@ -25,17 +25,25 @@ make verdict   BEND="$B"   # ... in the BendTT kernel too
 make gencheck              # generated blocks are up to date
 make smoke     BEND="$B"
 make test      BEND="$B"   # byte-for-byte against Redis
-make perfcheck BEND="$B"   # no more than 3% more instructions per request
+make perfcheck BEND="$B"   # instructions per request within 3% of the baseline, misses and prefetches too
 ```
 
-CI runs the same on every pull request and on every push to `main` and `claude/step-b`
+CI runs the same on every pull request and on every push to `main`
 ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)): the proofs, `make gencheck` and
 `make smoke` in one job; the server built once, then `make test` against the Redis 7.0.15
-that Ubuntu 24.04 ships and `make perfcheck` in two jobs side by side. Its toolchain is
+that Ubuntu 24.04 ships and `make perfcheck` in two jobs side by side; and the server built
+with AddressSanitizer and UndefinedBehaviorSanitizer and with ThreadSanitizer, the tests
+that stress its memory and its writer thread run under each (`sh tools/sanitize.sh`, which
+runs the same here; it needs clang 19's sanitizer runtimes). Its toolchain is
 the one above: bun 1.3.14, clang 19, the patched Bend (kept in the cache while
 `bend-patches/` stays the same) and, for `make verdict`, Lean 4.34.0, which builds the
 BendTT kernel once (cached too). A change goes in through a pull request whose checks
 pass.
+
+The differential tests of `make test` take their seeds from the CI run, so each run
+sends random commands of its own; the log names them first, and `SEED=N make test`
+sends them again. A nightly run ([`.github/workflows/nightly.yml`](.github/workflows/nightly.yml))
+sends about a million of them to main's server.
 
 ## How changes are made
 
@@ -50,8 +58,15 @@ pass.
 - **The 16-way parts** of `src/map.bend`, `proof/LAWS.bend` and `proof/PROOF.bend`,
   between `BEGIN gen_trie` and `END gen_trie`, are written by `tools/gen_trie.py`, and the
   table of parameters in `src/config.bend` by `tools/gen_config.py` (from
-  `tools/data/redis-configs.json`, which it extracts from Redis's `src/config.c`):
+  `tools/data/redis-configs.json`, which it extracts from Redis's `src/config.c`), and the
+  table of commands in `src/command.bend` and the commands' arities, statistics and
+  dispatch in `src/redis.bend` by `tools/gen_commands.py` (from
+  `tools/data/redis-commands.json`, which it asks a `redis-server` for):
   change the script and rerun it, not the blocks.
+- **The counts** in README.md's [In numbers](README.md#in-numbers) (the laws, the
+  patches, `Cmd`'s constructors, Redis's parameters, the lines of each file) are written
+  by `tools/gen_counts.py`; rerun it when `make gencheck` finds one out of date, and link
+  to them from another document rather than copy a count into it.
 - **Patterns of literal characters** nested inside a String (`SCon{a, SCon{'-', ...}}`)
   make `--verdict` explode: a Char is a 32-bit word in the kernel, and its decision
   trees multiply. Compare bytes with `U32.is_eq` instead (see `cls.kind` in

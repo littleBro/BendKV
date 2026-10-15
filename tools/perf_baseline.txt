@@ -1,3 +1,9 @@
 get 3371
 set 4119
 incr 4419
+get.misses 2.81
+set.misses 3.12
+incr.misses 3.29
+get.prefetches 3.68
+set.prefetches 3.99
+incr.prefetches 3.92

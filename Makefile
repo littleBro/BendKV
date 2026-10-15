@@ -4,8 +4,9 @@
 # end, the append-only file; any that fails stops it), make test (needs
 # redis-server, redis-cli, python3 and a C compiler for the disk-failure
 # shim, tests/fail_io.c; redis-check-aof if there is one),
-# make bench (needs redis-benchmark), make perfcheck (instructions per
-# request against a baseline; needs valgrind), make suite (Redis's own
+# make bench (needs redis-benchmark), make perfcheck (instructions, misses
+# and prefetches per request against a baseline; needs valgrind and
+# objdump), make suite (Redis's own
 # test suite; needs a Redis 7.0.15 source tree in REDIS_SRC, its
 # redis-server on the PATH, and tclsh), make clients (the test suites of
 # redis-py and go-redis; needs python3, go, and PyPI and the Go module
@@ -31,8 +32,9 @@
 # back with its File.unlink; INFO's used_memory and maxmemory read the
 # heap's account with the twenty-ninth's IO.heap; OBJECT IDLETIME and FREQ
 # and the eviction's LRU and LFU keep when each key was last used with the
-# thirtieth's Mem.touch and Mem.cell; the others only speed up the runtime
-# and the code):
+# thirtieth's Mem.touch and Mem.cell; GEO computes, and ZADD reads its
+# scores, with C's doubles, the thirty-third's F64 and F64.read; the others
+# only speed up the runtime and the code):
 #   make build BEND="bun <patched bend>/bend2/main.ts"
 # Bend compiles with $(BEND_CC) when it has one: clang 19 honors the
 # preserve_none calling convention of the runtime's segments, clang 18
@@ -90,8 +92,9 @@ test: build
 bench: build
 	PORT=$(PORT) REDIS_PORT=$(REDIS_PORT) sh bench/run_bench.sh
 
-# instructions per GET, SET and INCR under callgrind against
-# tools/perf_baseline.txt (needs valgrind and redis-benchmark)
+# instructions, last-level misses and prefetches per GET, SET and INCR
+# under callgrind against tools/perf_baseline.txt (needs valgrind,
+# redis-benchmark and objdump)
 perfcheck: build
 	sh tools/perf_guard.sh build/bendkv
 
@@ -112,15 +115,17 @@ clients: build
 	python3 tools/client_suite.py ci --client redis-py --protocol 3 --server build/bendkv --out build/clients
 	python3 tools/client_suite.py ci --client go-redis --server build/bendkv --out build/clients
 
-# the generated blocks are up to date: the 16-way parts of src/map.bend
-# and proof/PROOF.bend (tools/gen_trie.py), the table of parameters in
-# src/config.bend (tools/gen_config.py), and the table of commands in
+# the generated blocks are up to date: the 16-way parts of src/map.bend,
+# proof/LAWS.bend and proof/PROOF.bend (tools/gen_trie.py), the table of parameters in
+# src/config.bend (tools/gen_config.py), the table of commands in
 # src/command.bend and their arities in src/redis.bend
-# (tools/gen_commands.py)
+# (tools/gen_commands.py), and the counts of README.md's In numbers, and
+# of its laws (tools/gen_counts.py)
 gencheck:
 	python3 tools/gen_trie.py --check
 	python3 tools/gen_config.py --check
 	python3 tools/gen_commands.py --check
+	python3 tools/gen_counts.py --check
 
 clean:
 	rm -rf build

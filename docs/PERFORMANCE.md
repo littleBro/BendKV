@@ -9,8 +9,9 @@ numbers are in [tools/](../tools/README.md).
    verification and not from the logic of the commands.** The original SET cost ~390
    heap cell allocations and ~150 atomic reference-count operations. Redis makes a
    handful of allocations per SET.
-2. **Bend itself is fixed by thirty-four patches to the compiler**
-   ([`bend-patches/`](../bend-patches/)). The first eight switch on by themselves for
+2. **Bend itself is fixed by patches to the compiler**
+   ([`bend-patches/`](../bend-patches/), counted in [README.md](../README.md#in-numbers)).
+   The first eight switch on by themselves for
    programs without GPU calls `!`, the ninth and tenth where a program calls them, the
    eleventh changes every program's event loop on Linux, the twelfth and thirteenth only
    add effects, the fourteenth speeds up `String.code_at` everywhere, the fifteenth and
@@ -30,8 +31,10 @@ numbers are in [tools/](../tools/README.md).
    addresses, killing it and channel marks (section 44); the twenty-eighth, a file put in
    another's place and a name removed (section 47); the twenty-ninth, the heap's account
    (`IO.heap`); the thirtieth, words outside the heap (`Mem.touch`, `Mem.cell`; both
-   section 48); the thirty-third, C's doubles (`F64`, section 60); the thirty-fourth, the
-   monotonic clock without an effect (`Clock.us`, section 64). Before section 14
+   section 48); the thirty-third, C's doubles (`F64`, section 60); the thirty-fifth, the
+   monotonic clock without an effect (`Clock.us`, section 64). The thirty-fourth
+   changes only a build with AddressSanitizer, whose heap it lets ASan check
+   (FINDINGS.md, section 3zzp). Before section 14
    there were twenty patches: the sixteenth (effect pairs) was taken out in section 14,
    and the sections before 14 number the patches the old way — there, 17–20 are today's
    16–19.
@@ -111,7 +114,7 @@ numbers are in [tools/](../tools/README.md).
    end into one chunk, and a command is chosen by the length of its name (section 7.7);
    a request is parsed straight into a command with its key's hash for the hints
    (section 7.24). A batch runs after the hints to the processor (section 7.14), and the
-   law `batch_hints` proves that they change nothing, for any hashes. All 33 laws check,
+   law `batch_hints` proves that they change nothing, for any hashes. All the laws check,
    including in the BendTT kernel. With a file (`./bendkv PORT post|send FILE`) the
    server keeps an append-only file in Redis's AOF format, and it is proved that after
    any history it restores from the file exactly the database it held, and from a file
@@ -7258,7 +7261,7 @@ instructions of a GET go (`tools/phases.py`, a build with `-g`):
 - *The clock.* `IO.clock` after each request made the group a loop of effects. Each
   reading cost a round trip through the event loop: the effect's closure, its
   continuation and the loop's step, about 620 instructions. `Clock.us`, a native of the
-  thirty-fourth patch, reads the clock inside the pure loop: 12,215.
+  thirty-fifth patch, reads the clock inside the pure loop: 12,215.
 - *`Info` past 64 words.* The compiler rebuilds a node in place only up to 64 words
   (`node_fields`, the fifth patch). `Info` had grown to 80, and each of its updates (once
   per batch, more per window) copied 80 words out and back. With the timing's state and

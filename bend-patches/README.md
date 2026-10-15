@@ -448,7 +448,30 @@ They apply in order, each on top of the one before:
    by test (742 of 873 on C, 769 of 897 on JS, where the test of files, which shares its
    temporary file with its C twin, failed once in a parallel run and passes alone), and
    the new one with them.
-34. **`clock-us.patch`** — the monotonic clock without an effect: `Clock.us(k)` is `0` in
+34. **`heap-asan.patch`** — a heap that AddressSanitizer can check. To ASan alone the
+   runtime's heap is one mapping (the corpus), all of it addressable, and a free chain is
+   LIFO: a node read or written after its free is no error, and the next allocation of
+   its class takes the node over at once, so a bug of the kind the twenty-sixth fixed
+   reads another value's words in silence. In a build with `-fsanitize=address` (the
+   host only; `__has_feature(address_sanitizer)` or `__SANITIZE_ADDRESS__` defines
+   `HEAP_ASAN`) the allocator poisons a free node's words, its chain's link among them
+   (it lifts the poison off the link for its own read and write), and lifts the poison
+   off a node it hands out; a free first puts the node in a quarantine of its thread and
+   class, a ring that lets it go to its chain once `HEAP_HOLD_WORDS` more words of its
+   class have come in (2^22 by default, settable with `-D`; a node bigger than that is
+   not held, and 0 holds nothing). A stale pointer meanwhile finds poison, and ASan
+   reports a use-after-poison where it reads or writes, with the stack. Under ASan the
+   heap's account (`IO.heap`) counts the nodes held as live. A build without ASan
+   compiles none of it: the patch adds comments and code under `#if`s on ASan's macros
+   only, and BendKV's C, preprocessed as `make build` compiles it, is the same byte for
+   byte with the patch and without, and so is the server built from it.
+   `bend2/comp.ts` (+84). Bend's own test of the twenty-sixth,
+   `tests/rfc/spare_share.bend`, built from a compiler without the twenty-sixth: plain,
+   it prints a wrong sum (206 for 46); with ASan alone, and with the poison but no
+   quarantine, the same, in silence; with this patch, ASan reports the read of a freed
+   cell of the list (`ctr_take`, from `sum`). BendKV's `tools/sanitize.sh` builds the
+   server this way (FINDINGS.md, section 3zzp).
+35. **`clock-us.patch`** — the monotonic clock without an effect: `Clock.us(k)` is `0` in
    Bend, and on the C and JS lanes the microseconds of the host's monotonic clock, mod
    2^32, read once `k` is known (C: `clock_gettime(CLOCK_MONOTONIC)`, which the vDSO
    answers without a system call; JS: `performance.now()`). `k` orders the reading: a
@@ -481,7 +504,7 @@ From the `bendkv/` directory:
 
 ```bash
 git clone https://github.com/bendlang/bend ../bend-patched
-sh bend-patches/apply.sh ../bend-patched   # the bendkv-patches branch from 1cce499 with thirty-four patches
+sh bend-patches/apply.sh ../bend-patched   # the bendkv-patches branch from 1cce499 with thirty-five patches
 bun ../bend-patched/bend2/main.ts server.bend -o build/bendkv
 ```
 
@@ -508,7 +531,8 @@ twenty-eighth the effects `File.rename` and `File.unlink`, the twenty-ninth the 
 changes how a tail call gives a tree its caller owns to a walker that reads it, in
 every program, the thirty-second boxes a datatype's String variant as the String
 itself, in a program without GPU calls, the thirty-third only adds natives (`F64`), and
-the thirty-fourth only adds one (`Clock.us`).
+the thirty-fourth changes only a build with AddressSanitizer, and the thirty-fifth
+only adds a native (`Clock.us`).
 The theory does not change:
 `String` in the proofs is still a list, and `IO` a function of `R` and `k`.
 
