@@ -862,11 +862,13 @@ The translation the kernel reads can be dumped with
   skipped. The reference is the same run on redis-server 7.0.15 with default settings,
   each unit on a freshly started server instance: in this mode 1,757 tests run, and
   Redis passes 1,677 (almost all the others need DEBUG, off by default in 7.0). BendKV
-  passes 1,274 of them (76.0%), and in the units of what it has (the protocol, the
+  passes 1,292 of them (77.0%), and in the units of what it has (the protocol, the
   connection and clients and their pause, the keyspace and databases, strings with
   ranges, bits and fields, counters, hashes, lists, sets, sorted sets, SORT, HyperLogLogs,
   GEO, DUMP and RESTORE, times to live, lazy freeing, transactions, Pub/Sub and keyspace
-  notifications, introspection), 1,271 of 1,333 (95%): `unit/dump` all 11,
+  notifications, introspection, the slow log and the latency monitor), 1,289 of 1,355
+  (95%): `unit/latency-monitor` 11 of 13 (the others need Lua), `unit/slowlog` 7 of 9
+  (the others use ACL and MIGRATE), `unit/dump` all 11,
   `unit/geo` all 59, `unit/introspection-2` 37 of 43 (the others need Lua, streams, MIGRATE
   and COMMAND's entries of commands BendKV does not have),
   `unit/introspection` 25 of 28 (the two others need Lua, and the third MIGRATE),
@@ -1317,7 +1319,7 @@ The proofs cover `map.bend`, `redis.bend`, `batch.bend`, `aof.bend`, `session.be
    runtime a 64-bit word with an abort past 2^48−1; `String` in theory is a list, and in
    the C runtime with the patch a chain of byte buffers, and `String.eq`, `String.hash`
    and the other operations on it are C functions. That the runtime agrees with the
-   definitions is not proved. The server is built by Bend with thirty-three patches from
+   definitions is not proved. The server is built by Bend with thirty-four patches from
    [`bend-patches/`](bend-patches/). They are in the trusted base too: checked by Bend's
    test suite and by differential tests against Redis, but not proved. The same goes for
    event loops on several threads, `epoll`, the atomicity of `Chan.send_all`, the writer
@@ -1425,7 +1427,7 @@ The Makefile passes `CC=clang-19` to Bend if there is one: clang 18 ignores the
 `preserve_none` convention, and the code comes out ~8% slower.
 
 ```bash
-# Bend with the patches: a clone of bendlang/bend with the thirty-three patches of bend-patches/ on it;
+# Bend with the patches: a clone of bendlang/bend with the thirty-four patches of bend-patches/ on it;
 # --verdict needs Lean 4.34.0 (elan)
 git clone https://github.com/bendlang/bend ../bend-patched
 sh bend-patches/apply.sh ../bend-patched
@@ -1473,8 +1475,8 @@ make clients BEND="$B" # redis-py's and go-redis's test suites on Redis and on B
    FLUSHDB, FLUSHALL, keyspace lines per database — with laws and recovery of all the
    databases from the append-only file), the ranges and bits of strings (GETRANGE,
    SETRANGE, GETBIT, SETBIT, BITCOUNT, BITPOS — with a law of SETRANGE and recovery from
-   the append-only file). Redis's suite in external mode: BendKV passes 1,274 of the
-   1,677 tests Redis itself passes, and 1,271 of 1,333 in the units of what it has
+   the append-only file). Redis's suite in external mode: BendKV passes 1,292 of the
+   1,677 tests Redis itself passes, and 1,289 of 1,355 in the units of what it has
    ([docs/COMPATIBILITY.md](docs/COMPATIBILITY.md)). Start-up as for redis-server (the
    command line and the configuration file). The database as a record with a count of
    keys (DBSIZE in O(1)).

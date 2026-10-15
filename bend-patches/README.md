@@ -1,6 +1,6 @@
 # Patches to Bend
 
-Thirty-three patches to the Bend compiler (`bendlang/bend` @ `1cce499`, Bend 2.0.35).
+Thirty-four patches to the Bend compiler (`bendlang/bend` @ `1cce499`, Bend 2.0.35).
 They apply in order, each on top of the one before:
 
 1. **`lazy-seal.patch`** — lazy sealing of reference counts: `bend2/comp.ts`, +46/−3.
@@ -448,6 +448,21 @@ They apply in order, each on top of the one before:
    by test (742 of 873 on C, 769 of 897 on JS, where the test of files, which shares its
    temporary file with its C twin, failed once in a parallel run and passes alone), and
    the new one with them.
+34. **`clock-us.patch`** — the monotonic clock without an effect: `Clock.us(k)` is `0` in
+   Bend, and on the C and JS lanes the microseconds of the host's monotonic clock, mod
+   2^32, read once `k` is known (C: `clock_gettime(CLOCK_MONOTONIC)`, which the vDSO
+   answers without a system call; JS: `performance.now()`). `k` orders the reading: a
+   computation that gives each reading a word of what its last step made reads the clock
+   after that step, so a pure loop can time its own steps. An effect (`IO.clock`) costs
+   a round trip through the event loop each (about 620 instructions in BendKV's actor)
+   and makes the loop one of effects. No law reads the clock: it is `@unsafe`, as
+   `Mem.touch` and `Mem.cell` are. `bend2/base.bend` (+11), `bend2/comp.ts` (+14: an
+   operation and the C function) and the test `tests/run/clock_us.bend`, on C, on JS and
+   in the interpreter: two readings around a walk of a list of 100,000 numbers, the
+   second given a word of its sum, are less than a second apart. A program that does
+   not call it compiles to the C it compiled to before, but for the twelve lines of the
+   C function. BendKV's actor times each window of its group with it (FINDINGS.md,
+   section 3zzz).
 
 What the patches do and what they give is worked through in
 [../PERFORMANCE.md](../docs/PERFORMANCE.md), sections 3–6, 7.7–7.17, 7.23–7.25, 16, 39,
@@ -466,7 +481,7 @@ From the `bendkv/` directory:
 
 ```bash
 git clone https://github.com/bendlang/bend ../bend-patched
-sh bend-patches/apply.sh ../bend-patched   # the bendkv-patches branch from 1cce499 with thirty-three patches
+sh bend-patches/apply.sh ../bend-patched   # the bendkv-patches branch from 1cce499 with thirty-four patches
 bun ../bend-patched/bend2/main.ts server.bend -o build/bendkv
 ```
 
@@ -492,7 +507,8 @@ twenty-eighth the effects `File.rename` and `File.unlink`, the twenty-ninth the 
 `IO.heap`, the thirtieth the words `Mem.touch` and `Mem.cell`, the thirty-first
 changes how a tail call gives a tree its caller owns to a walker that reads it, in
 every program, the thirty-second boxes a datatype's String variant as the String
-itself, in a program without GPU calls, and the thirty-third only adds natives (`F64`).
+itself, in a program without GPU calls, the thirty-third only adds natives (`F64`), and
+the thirty-fourth only adds one (`Clock.us`).
 The theory does not change:
 `String` in the proofs is still a list, and `IO` a function of `R` and `k`.
 

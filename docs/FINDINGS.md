@@ -128,7 +128,7 @@ represented data:
   reader an owner of the whole value: O(depth) reference-count operations per read.
 - **A deep trie.** The first map was a binary trie of 20 levels: 20 dependent loads.
 
-## 3. Thirty-three patches to the Bend compiler
+## 3. Thirty-four patches to the Bend compiler
 
 All live in [`bend-patches/`](../bend-patches/) (against `bendlang/bend` at `1cce499`,
 Bend 2.0.35). The first eight switch on by themselves for programs without GPU calls;
@@ -152,9 +152,10 @@ killing it and channel marks (section 3zs); the twenty-eighth `File.rename` and
 words outside the heap (section 3zw); the thirty-first has a walker that reads a
 tree borrow it from a caller that owns it, in every program (section 3zza); the
 thirty-second keeps the string of a value that is a string or else something else as
-the string itself, with no node, in every program without GPU calls (section 3zzg); and
+the string itself, with no node, in every program without GPU calls (section 3zzg);
 the thirty-third adds C's doubles, `F64`, run as C runs them, strtod and libm with them
-(section 3zzm).
+(section 3zzm); and the thirty-fourth reads the monotonic clock without an effect,
+`Clock.us` (section 3zzz).
 The sections before 3l
 number the patches as they were then: patch 16 was effect pairs, taken out in 3l with
 `TCP.post_list` of patch 11, and their patches 17–20 are today's 16–19. None changes the
@@ -5442,6 +5443,169 @@ in order with Redis's every 64 adds and every 32 deletions, with SCARD, SISMEMBE
 SRANDMEMBER and SPOP along the way: 6,244 commands, each answered as Redis answers it.
 Redis's suite: unit/type/set, unit/sort, unit/scan, unit/dump and unit/keyspace pass the
 tests they passed (222 of the 226 Redis passes).
+
+## 3zzz. The timing of calls: SLOWLOG, LATENCY, latencystats
+
+**What was left.** INFO's commandstats had usec=0 for every command, and its
+latencystats section was empty. SLOWLOG and LATENCY were unknown commands.
+`slowlog-log-slower-than`, `slowlog-max-len`, `latency-monitor-threshold`,
+`latency-tracking` and `latency-tracking-info-percentiles` were parameters that CONFIG kept
+and nothing read. Redis's call() reads the clock (ustime) before and after each command
+it runs. It gives the difference to the command's usec, to its histogram (an
+hdr_histogram from 1 ns to 1 s with two significant digits), to the slow log when it
+reaches slowlog-log-slower-than, and to the latency monitor's event "command" or
+"fast-command" when it reaches latency-monitor-threshold.
+
+**What is kept** (`src/info.bend`: Histograms, Statistics, Timing).
+
+- A command's entry has its usec and its histogram, counted as Redis's hdr_histogram
+  counts (an index per value below 256 ns, then 128 per power of two: `hdr.idx`). The
+  counts sit in a trie of four levels of 8 by index, each node written in place.
+- The slow log: its entries' ids, times, durations, arguments as Redis cuts them (32 at
+  most, 128 bytes each), and the client's address and name.
+- The latency events: each second's highest sample, the last 160 of them, and the
+  highest of all.
+
+**The replies** (`src/info.bend`: SLOWLOG and LATENCY; `src/redis.bend`;
+`src/session.bend`).
+
+- SLOWLOG GET, LEN, RESET and HELP; LATENCY LATEST, HISTORY, RESET, GRAPH, DOCTOR,
+  HISTOGRAM and HELP, with Redis's errors and arities.
+- INFO latencystats: percentiles at the parameter's labels, read as Redis's
+  hdr_value_at_percentile reads them.
+- commandstats' usec_per_call: the quotient of two floats, as Redis's C divides them.
+- The graph's sparkline, the doctor's report (every branch of its advice) and the
+  histograms' cumulative counts were compared with Redis's C compiled on the same inputs:
+  1,540 random histograms, 600 quotients and about 640 graphs and reports, all the same.
+
+**The clock** (`src/server.bend`: Timing; patch 34).
+
+- The actor reads the monotonic clock when a group of requests starts, after each
+  request of it, and after the group's end when that end sees to a waiting client.
+- The window between two readings is timed (`info.window`). Its calls share it, each an
+  equal part, and the first of the remainder get one µs more.
+- A batch of one command, which a client sends when it does not pipeline, is timed
+  alone, as Redis times a call. The fast way runs a batch in one pure step and cannot
+  read the clock between its commands, so a pipeline's calls share its time.
+- A reading is the thirty-fourth patch's `Clock.us(k)`: the monotonic clock in µs mod
+  2^32, read once `k` is known. The actor gives each reading a word of the group as the
+  request left it (`grp.clock`), so the reading comes after the request.
+- The group stays one pure loop (`group_all`, which was `group_run`).
+- `IO.clock` is read once per group, as before. It places a reading in seconds since
+  1970, for the slow log's entries and the latency events.
+- An effect per reading cost about 620 instructions of round trip through the event
+  loop each, and made the group a loop of effects.
+
+**The slow log's arguments.**
+
+- A batch of the fast way gives its bytes to its window: its calls are its requests, in
+  order. A call that the slow log takes reads its arguments from them (`P.argvs`, the
+  parser MONITOR uses), and only then.
+- The general way names each call before it runs, with its arguments as MONITOR's lines
+  keep them (`Av`: the batch's bytes and the request's number, or the arguments read).
+  EXEC's commands keep the arguments they were queued with.
+- The arguments are redacted as Redis's commands redact them: AUTH's, HELLO's AUTH (as
+  MONITOR's lines), and the values of CONFIG SET's sensitive parameters (requirepass,
+  masterauth, masteruser), whatever the case of their names, when the command's pairs
+  are whole.
+
+**The rest of the timing.**
+
+- *A call that blocks* counts its share in usec when it blocks, and its client keeps the
+  share (`Wt`). When the client is served, or CLIENT UNBLOCK unblocks it, the share goes
+  to usec again, to the histogram and to the slow log, as Redis's updateStatsOnUnblock
+  adds the call's c->duration. A client whose time is up keeps its share until it blocks
+  again or goes.
+- *CONFIG RESETSTAT* in a window starts the counts again after the window's calls before
+  it. Those calls are timed for the slow log and the latency monitor, but not counted.
+- *CONFIG SET of slowlog-max-len* cuts the log while it logs, as Redis cuts it after the
+  CONFIG SET's own call.
+- *The latency monitor* takes the highest share of each kind of command in a window:
+  "fast-command" for the commands Redis flags fast, "command" for the others. The window
+  of each cron tick, whose sweep of expired keys is Redis's "expire-cycle", gives that
+  event.
+
+**Where BendKV differs.**
+
+- A pipeline's calls share its time: a slow command among fast ones lends them its time.
+  The slow log then shows each of them with the share, and commandstats' usec per call
+  is the batch's average. EXEC's usec is its share, where Redis's includes the time of
+  the commands it runs.
+- A window's entries go to the slow log when the window ends. SLOWLOG GET and LEN in the
+  same pipeline as the calls before them do not see those calls' entries, and the
+  entries' client names are the names at the window's end.
+- A served call adds no time of its own: the time it took to serve it belongs to the
+  window that served it. Redis adds that time to the served call and samples it as
+  "command-unblocking".
+- The latency monitor has no other event: none of the append-only file's, of eviction,
+  or of fork (BendKV does not fork). LATENCY DOCTOR gives no advice about transparent huge
+  pages: BendKV's heap asks for them on purpose (section 3, the sixth patch).
+
+**What it costs.** The timing adds a clock reading, the window's check and its runs'
+counts to each request. `make perfcheck`'s count (instructions per request, pipelined 16
+deep):
+
+| command | main | with the timing |
+|---|---:|---:|
+| GET | 3,316 | 3,414 (+3.0%) |
+| SET | 4,073 | 4,180 (+2.6%) |
+| INCR | 4,388 | 4,525 (+3.1%) |
+
+One request at a time (callgrind, 20,000 keys), with a window per request:
+
+| command | main | with the timing |
+|---|---:|---:|
+| GET | 10,363 | 11,709 (+13.0%) |
+| SET | 11,177 | 12,517 (+12.0%) |
+| INCR | 11,620 | 12,992 (+11.8%) |
+
+The count started at 23,661 for GET one at a time (main 10,363). These were the steps,
+for GET one at a time:
+
+| step | instructions |
+|---|---:|
+| the histogram as a sorted list of bins | 23,661 |
+| a trie of four levels of 8 for the counts | 13,002 |
+| the clock read without an effect (`Clock.us`) | 12,215 |
+| `Info` back to 63 words | 11,847 |
+| the end's window only when a client waits, requests not packed again, the newest run kept across ticks | 11,796 |
+| the trie's digits by shifts | 11,709 |
+
+Two things learned on the way hold beyond this change.
+
+- A node wider than 64 words is not rebuilt in place. `node_fields` in the compiler (the
+  fifth patch) owns a matched node in place only up to 64 words; a wider node is copied
+  whole into a buffer at each match and written back whole. `Info` had grown from 61
+  words to 80, and each update of it (`srv.ran`, once per batch) copied all 80 words in
+  and out: about 520 instructions per request. The timing's state (`Tim`) and the runs
+  not yet counted (`TRun`) are now nodes of their own, each with a constructor that holds
+  its own type and is never built (`TimOf`, `TRunOf`, as `WinOf` does for the window),
+  and the call the general way names went from a field of `Stats` to an entry of the
+  window (`FNamed`): `Info` is 63 words again.
+- Wider nodes cost more where the seventh patch selects by digit: it rebuilds a node with
+  its slots permuted, so a node of 64 children writes its 64 words where a node of 8
+  writes 8. GET one at a time took 11,924 instructions with two levels of 64, where four
+  levels of 8 took 11,847.
+
+**Tests.** `tests/timing_test.py` runs scenarios on BendKV and Redis, each with clients
+of its own, and compares the transcripts. It keeps what does not depend on how long a
+call took:
+
+- SLOWLOG's and LATENCY's errors, arities and help, in RESP2 and RESP3;
+- the slow log with slowlog-log-slower-than 0, every call logged with its arguments as
+  sent: 32 at most and 128 bytes each; AUTH's, HELLO's and CONFIG SET's secrets
+  redacted; SPOP, GETSET and a served BLPOP logged as they came; EXEC's commands and
+  not EXEC;
+- its counts, RESET and slowlog-max-len;
+- LATENCY's replies with no event;
+- histograms after CONFIG RESETSTAT;
+- latencystats with its parameters;
+- usec_per_call as Redis divides.
+
+Redis's suite: unit/latency-monitor passes 11 of the 13 tests Redis passes. The other two
+need Lua: one fills a set with a script, and the next resets the events that set's
+expiry would have given. unit/slowlog passes 7 of its 9. The other two use ACL and
+MIGRATE.
 
 ## 4. Where a request's time goes, and hiding the memory waits
 

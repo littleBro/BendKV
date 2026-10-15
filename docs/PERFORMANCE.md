@@ -9,7 +9,7 @@ numbers are in [tools/](../tools/README.md).
    verification and not from the logic of the commands.** The original SET cost ~390
    heap cell allocations and ~150 atomic reference-count operations. Redis makes a
    handful of allocations per SET.
-2. **Bend itself is fixed by thirty-three patches to the compiler**
+2. **Bend itself is fixed by thirty-four patches to the compiler**
    ([`bend-patches/`](../bend-patches/)). The first eight switch on by themselves for
    programs without GPU calls `!`, the ninth and tenth where a program calls them, the
    eleventh changes every program's event loop on Linux, the twelfth and thirteenth only
@@ -30,7 +30,8 @@ numbers are in [tools/](../tools/README.md).
    addresses, killing it and channel marks (section 44); the twenty-eighth, a file put in
    another's place and a name removed (section 47); the twenty-ninth, the heap's account
    (`IO.heap`); the thirtieth, words outside the heap (`Mem.touch`, `Mem.cell`; both
-   section 48); the thirty-third, C's doubles (`F64`, section 60). Before section 14
+   section 48); the thirty-third, C's doubles (`F64`, section 60); the thirty-fourth, the
+   monotonic clock without an effect (`Clock.us`, section 64). Before section 14
    there were twenty patches: the sixteenth (effect pairs) was taken out in section 14,
    and the sections before 14 number the patches the old way — there, 17–20 are today's
    16–19.
@@ -7218,3 +7219,74 @@ hashtable: each step of an add or a deletion makes a new node on its way back up
 drops the old one, and an SADD that takes the set walks the tree three times (the take's
 test of the member, `mems.add`'s, then the add). A member takes 34 bytes of the heap,
 where Redis's intset takes 2 to 8.
+
+## 64. The timing of calls
+
+**What was added** (FINDINGS 3zzz). Redis times every call it runs: the time goes to the
+command's usec and histogram, to the slow log and to the latency monitor. BendKV now
+reads the monotonic clock after each request of a group, and times the window since the
+last reading. Each window costs a clock reading and a check: is the window quiet, with
+one run of the fast way that gives the slow log and the latency monitor nothing? A quiet
+window then adds its time to the newest run's usec and histogram. Any other window also
+goes through the slow log's and the latency monitor's tests.
+
+**Measured** (callgrind, instructions per request; `make perfcheck`'s load, 20,000 keys
+here):
+
+| | GET | SET | INCR |
+|---|---:|---:|---:|
+| main, pipelined 16 deep | 3,304 | 4,066 | 4,364 |
+| with the timing | 3,406 (+3.1%) | 4,172 (+2.6%) | 4,497 (+3.0%) |
+| main, one at a time | 10,363 | 11,177 | 11,620 |
+| with the timing | 11,709 (+13.0%) | 12,517 (+12.0%) | 12,992 (+11.8%) |
+
+One request at a time, every request is a window of its own. Where the 1,346
+instructions of a GET go (`tools/phases.py`, a build with `-g`):
+
+| | instructions |
+|---|---:|
+| the histogram: the index (`hdr.us`), four levels of the trie | about 360 |
+| the group loop: the clock's reading, the window's arguments, two frames more | about 180 |
+| the window's check, and the quiet window's update of `Info` (`grp.timed`, `info.how`, `info.one`) | about 415 |
+| the window's run merged into the newest one (`timed.run`, `timed.add`), and its calls (`code.calls`) | about 205 |
+| the batch's run put in the window (`stats.add`), its cell and the batch's bytes dropped | about 175 |
+
+**On the way.** The first build took 23,661 instructions for GET one at a time:
+
+- *The histogram.* It was a list of bins in order of index, walked for each window and
+  copied up to its place. A trie of four levels of 8, written in place: 13,002.
+- *The clock.* `IO.clock` after each request made the group a loop of effects. Each
+  reading cost a round trip through the event loop: the effect's closure, its
+  continuation and the loop's step, about 620 instructions. `Clock.us`, a native of the
+  thirty-fourth patch, reads the clock inside the pure loop: 12,215.
+- *`Info` past 64 words.* The compiler rebuilds a node in place only up to 64 words
+  (`node_fields`, the fifth patch). `Info` had grown to 80, and each of its updates (once
+  per batch, more per window) copied 80 words out and back. With the timing's state and
+  the newest run as nodes of their own, and the named call as an entry of the window,
+  `Info` is 63 words: 11,847.
+- *The loop.* Requests are no longer packed again for `group_req`. The group's end is
+  timed only when it sees to a waiting client. The tick keeps the newest run across
+  ticks instead of merging its histogram into its entry's every 100 ms, a merge that
+  callgrind's slow run repeats far more often per request than a real one: 11,796.
+- *The trie's digits*, computed by shifts and not by a call per level: 11,709.
+- *Tried and left: two levels of 64* (11,924 against 11,847). The seventh patch's digit
+  select rebuilds a node with its slots permuted, so each update of a node of 64
+  children writes 64 words.
+
+**In time** (`tools/bench_pairs.sh`: 100,000 keys, 20 clients, five pairs of main's
+build and this one, medians of the pairs' ratios). Pipelined 16 deep: GET 0.93 of main's
+throughput, SET 1.03, INCR 1.06; the server's CPU per request, user plus kernel, is GET
+420 + 350 ns against 380 + 355, SET 415 + 350 against 385 + 345, and INCR 530 + 365
+against 555 + 380. One request at a time: GET 1.03, SET 0.94, INCR 1.03. There the
+kernel takes about 5,500 ns of a request, and the user time per request moves from one
+trial to the next (2,400 to 3,400 ns) by more than the 13% the timing adds to it.
+
+**`make perfcheck`** here: GET 3,414, SET 4,180 and INCR 4,525 instructions per request
+(main 3,316, 4,073 and 4,388); with 100 clients in BLPOP, GET 3,521 and SET 4,322, 3.1%
+and 3.4% above the counts without them (main 2.7% and 3.2%).
+
+**What is left.** A window costs about 1,300 instructions, where Redis's `call()` reads the
+clock twice, adds the time to the command's counters and records it in the command's
+histogram. The histogram's four levels take a quarter of them. Most of the rest are the
+updates of `Info` and the passes of the group, which travels in 13 registers and is saved
+to the frame and loaded back around each call that is not a tail call.

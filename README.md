@@ -19,8 +19,8 @@ throughput of Redis 7.0.15 on the same machine, with half its memory for small v
 > and the latency monitor, the server's administrative commands, an append-only file and
 > its rewrite, maxmemory and its eviction, RESP3). The goal now is a
 > drop-in replacement for a single Redis node, measured by Redis's own test suite: of the
-> 1,677 tests Redis 7.0.15 passes against a server it did not start, BendKV passes 1,274,
-> and 1,271 of the 1,333 in what it implements
+> 1,677 tests Redis 7.0.15 passes against a server it did not start, BendKV passes 1,292,
+> and 1,289 of the 1,355 in what it implements
 > ([docs/COMPATIBILITY.md](docs/COMPATIBILITY.md)). Do not use it for data you cannot
 > lose.
 
@@ -35,7 +35,7 @@ well. BendKV asks how far one can get writing a real, fast server in a language 
 the code that runs is the code that is proved, without a separate model and a
 refinement proof. The answer so far: the verified core is not what makes it slow;
 the data representation of the runtime was, and most of the work went into fixing it
-(33 patches to the Bend compiler, in [`bend-patches/`](bend-patches/): most speed up its
+(34 patches to the Bend compiler, in [`bend-patches/`](bend-patches/): most speed up its
 data representation and its runtime, and the others add what a server needs from the
 system, from the process's directory, id and clock to the files it cuts, the heap's
 account and C's doubles).
@@ -541,7 +541,7 @@ also needs Lean 4.34.0 (through elan).
 
 ```bash
 git clone https://github.com/bendlang/bend ../bend-patched
-sh bend-patches/apply.sh ../bend-patched      # Bend 2.0.35 + 32 patches
+sh bend-patches/apply.sh ../bend-patched      # Bend 2.0.35 + 34 patches
 B="bun ../bend-patched/bend2/main.ts"
 
 make check   BEND="$B"   # check the proofs
@@ -703,7 +703,7 @@ bench/      in-process benchmarks of the map, the core and channels
 tools/      measurement scripts, the runner of Redis's test suite, and the generators of
             the trie, of the parameter table and of the command table, with the facts
             they take from Redis (tools/data/)
-bend-patches/  the 33 patches to the Bend compiler and runtime
+bend-patches/  the 34 patches to the Bend compiler and runtime
 docs/       FINDINGS.md, DIRECTIONS.md, COMPATIBILITY.md, PERFORMANCE.md
 ```
 

@@ -39,7 +39,11 @@ make suite REDIS_SRC=../redis      # both runs and the table, in build/suite/
 ## The result
 
 Redis 7.0.15, October 2026. Of the 1,677 tests Redis passes in this mode, BendKV passes
-**1,274 (76.0%)**; of the 1,333 in the units of what BendKV has, 1,271 (95%).
+**1,292 (77.0%)**; of the 1,355 in the units of what BendKV has, 1,289 (95%).
+SLOWLOG and LATENCY (section 3zzz of [FINDINGS.md](FINDINGS.md)) brought 18:
+unit/latency-monitor passes 11 of the 13 tests Redis passes (the other two need Lua: one
+fills a set with a script, the next resets the events its expiry would have given), and
+unit/slowlog 7 of its 9 (the other two use ACL and MIGRATE).
 INCRBY's family on long longs (section 3zzv of [FINDINGS.md](FINDINGS.md)) brought 1:
 unit/type/hash's test of HINCRBY's overflows, which starts from -9223372036854775484
 (70 of its 72 tests).
@@ -193,8 +197,8 @@ need MULTI and WATCH, Lua or lists (then).
 
 | area | units | Redis passes | BendKV passes |
 |---|---|---:|---:|
-| what BendKV has: the protocol, connections and clients and their pause, the keyspace and its databases, strings and their ranges, bits and fields, counters and floats, hashes, lists, sets, sorted sets and the commands that wait on them, SORT, HyperLogLogs, GEO, DUMP and RESTORE, times to live, lazy freeing, transactions, pub/sub and keyspace notifications, introspection | protocol, quit, keyspace, type/string, type/incr, type/hash, type/list, list-2, list-3, type/set, type/zset, sort, hyperloglog, geo, dump, scan, bitops, bitfield, expire, lazyfree, violations, multi, pubsub, pause, introspection, introspection-2, other, info-command | 1333 | **1270** |
-| client-side caching, the latency monitor, the slow log, the query buffer, not yet | tracking, latency-monitor, slowlog, querybuf | 34 | 0 |
+| what BendKV has: the protocol, connections and clients and their pause, the keyspace and its databases, strings and their ranges, bits and fields, counters and floats, hashes, lists, sets, sorted sets and the commands that wait on them, SORT, HyperLogLogs, GEO, DUMP and RESTORE, times to live, lazy freeing, transactions, pub/sub and keyspace notifications, introspection, the slow log and the latency monitor | protocol, quit, keyspace, type/string, type/incr, type/hash, type/list, list-2, list-3, type/set, type/zset, sort, hyperloglog, geo, dump, scan, bitops, bitfield, expire, lazyfree, violations, multi, pubsub, pause, introspection, introspection-2, other, info-command, latency-monitor, slowlog | 1355 | **1289** |
+| client-side caching, the query buffer, not yet | tracking, querybuf | 12 | 0 |
 | out of scope: Lua scripts, functions, streams | scripting, functions, type/stream, type/stream-cgroups | 310 | 3 |
 
 The 3 passes outside the first row pass without the feature they test: they expect an
@@ -220,7 +224,7 @@ pubsubshard, shutdown, tls, type/list-common, wait):
 | unit/introspection | 28 | 28 | 25 |
 | unit/introspection-2 | 43 | 43 | 37 |
 | unit/keyspace | 53 | 52 | 49 |
-| unit/latency-monitor | 14 | 13 | 0 |
+| unit/latency-monitor | 14 | 13 | 11 |
 | unit/lazyfree | 4 | 4 | 2 |
 | unit/multi | 60 | 53 | 28 |
 | unit/other | 22 | 19 | 15 |
@@ -232,7 +236,7 @@ pubsubshard, shutdown, tls, type/list-common, wait):
 | unit/replybufsize | 1 | 0 | 0 |
 | unit/scan | 17 | 17 | 17 |
 | unit/scripting | 111 | 110 | 0 |
-| unit/slowlog | 16 | 9 | 0 |
+| unit/slowlog | 16 | 9 | 7 |
 | unit/sort | 52 | 52 | 51 |
 | unit/tracking | 13 | 10 | 0 |
 | unit/type/hash | 73 | 72 | 70 |
@@ -246,25 +250,26 @@ pubsubshard, shutdown, tls, type/list-common, wait):
 | unit/type/string | 77 | 77 | 74 |
 | unit/type/zset | 291 | 289 | 287 |
 | unit/violations | 1 | 1 | 1 |
-| **all** | **1757** | **1677** | **1274 (76.0%)** |
+| **all** | **1757** | **1677** | **1292 (77.0%)** |
 
-## Why the other 403 fail
+## Why the other 385 fail
 
-- **271 stop on a command BendKV does not have.** By the number of tests each one stops:
+- **264 stop on a command BendKV does not have.** By the number of tests each one stops:
   FUNCTION LOAD 125, XADD 61, SYNC 20 (tests that read the replication stream, 12 of them
-  unit/multi's of what a transaction propagates), XGROUP 13, SLOWLOG 9, and 19 more below
-  nine (43 tests).
-- **94 never ran**: their unit ended before them, on a command outside any test:
-  LATENCY RESET (latency-monitor), `CONFIG SET appendonly yes` (type/stream; BendKV turns
-  its append-only file on only at its start); or on a test that waits for a reply that
+  unit/multi's of what a transaction propagates), XGROUP 13, and 19 more below nine (45
+  tests).
+- **81 never ran**: their unit ended before them, on a command outside any test:
+  `CONFIG SET appendonly yes` (type/stream; BendKV turns its append-only file on only at
+  its start); or on a test that waits for a reply that
   never comes, because the command before it is missing (tracking: the invalidations of
   CLIENT TRACKING; scripting: the second line of FUNCTION LOAD's reply, read raw). One test runs
   only on a server that names jemalloc as its allocator.
-- **38 fail with another error.** 9 fail on a client left in MULTI by a test before them
+- **40 fail with another error.** 9 fail on a client left in MULTI by a test before them
   that failed inside a transaction on what BendKV does not have: REPLICAOF in unit/multi
   (6) and XADD in unit/type/stream (3); and the others fail for what BendKV does not have
   yet: COMMAND's entries of commands it does not have (GETKEYS, LIST, movablekeys), Lua (a script's BUSY, the statistics of EVAL, a script's calls in a monitor, a
-  SORT a script calls, scripts under a pause),
+  SORT a script calls, scripts under a pause, a set a script fills for the latency
+  monitor's expire-cycle event, and LATENCY RESET of the events it would have given),
   the order of a hash Redis keeps in a listpack past the parameters' defaults (above),
   replication (`min-replicas-to-write`, EXEC's NOREPLICAS),
   `rdb_changes_since_last_save` (0), the size of a client's query buffer (CLIENT LIST's
@@ -274,8 +279,8 @@ pubsubshard, shutdown, tls, type/list-common, wait):
   SCAN and RANDOMKEY pass all their tests on keys: SCAN's basic iteration, COUNT, MATCH,
   TYPE, and its guarantee under a load of writes, and RANDOMKEY's three.)
 
-So what the suite counts next is the clients' features of the second row (34 tests:
-client-side caching, the latency monitor, the slow log, the query buffer). Scripts, functions and streams (310
+So what the suite counts next is the clients' features of the second row (12 tests:
+client-side caching and the query buffer). Scripts, functions and streams (310
 tests) stay out of scope.
 
 ## What it found
