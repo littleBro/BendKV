@@ -1823,7 +1823,8 @@ time is read digit by digit as a Nat (14 digits at most, no leading zero), a lon
 a decimal kept as hi·10^9 + lo, so that Redis's checks near 2^63 come out exactly. The
 bound never appears as a number: neither the code nor the proofs build 10^13 or 10^14;
 they count digits instead. The checker unfolds a number literal one successor at a time,
-and a proof that meets 10^14 does not finish.
+and a proof that meets 10^14 does not finish. (INCR and its kin add Redis's long longs
+since section 3zzv; times keep the bound.)
 
 **Updates, and the changes they make.** A command that reads one key and then writes it
 (SETNX, APPEND, SET with options, GETSET, GETEX, GETDEL, EXPIRE and its kin, PERSIST) is
@@ -2592,8 +2593,9 @@ SRANDMEMBER (with a count), SMOVE, SINTER, SUNION, SDIFF, their STOREs, and SINT
 with LIMIT. A set is an intset or a hashtable, as in Redis 7.0 (which has no listpack
 sets yet). An intset holds canonical 64-bit integers alone (as Redis's `string2ll` reads
 them: no sign but a minus, no leading zero, no `-0`), at most 512 of them, as a list of
-their strings in numeric order; any other member, or a 513th, turns the set into a
-hashtable for good, a trie of its members (`Trie<Unit>`, the keyspace's own map). An
+their strings in numeric order (a tree of them since section 3zzy); any other member, or
+a 513th, turns the set into a hashtable for good, a trie of its members (`Trie<Unit>`,
+the keyspace's own map). An
 intset answers its members in numeric order, as Redis's does, and SSCAN gives it whole
 with cursor 0; a hashtable answers in the order of its trie, where Redis answers in the
 order of its dict, so the tests compare a hashtable's members as a set. A key never holds
@@ -4296,6 +4298,7 @@ of 100,000 (26,284, −23%), 19,959 on a set of 10 to 410 strings (22,555, −12
 other commands as before. SADD to an intset of 100 to 500 members takes 449,545, twenty
 times SADD to a hashtable: its members are strings, compared as integers at each step of
 a walk along their list, which Redis keeps as an array of integers searched by halves.
+Section 3zzy keeps them in a tree, and takes an intset too.
 
 ## 3zzf. The key count proved
 
@@ -5265,6 +5268,57 @@ suites: redis-py's 12 tests of DUMP and RESTORE pass, in RESP2 and in RESP3, and
 go-redis's 3, which leaves 2,513 of the 2,753 tests Redis passes in redis-py and 408 of
 460 in go-redis.
 
+## 3zzv. Long longs
+
+**What there is.** INCR, DECR, INCRBY, DECRBY and HINCRBY on Redis's whole long long, as
+`incrDecrCommand`, `decrbyCommand` and `hincrbyCommand` run them: a value or a field read
+as `string2ll` reads it, an increment read before the key is looked at, a sum past
+LLONG_MAX or below LLONG_MIN refused ("increment or decrement would overflow"), and
+DECRBY of LLONG_MIN refused before the key is looked at ("decrement would overflow").
+BendKV's integers had at most 14 digits (section 3v, "Fourteen digits"), so that a sum of
+two stayed below 2^48, where a `Nat` stops the runtime: a value or an increment past 14
+digits was not an integer to BendKV, and a sum past 14 digits an overflow. The
+differential tests skipped those replies as a known divergence; they compare them now.
+
+**How.** A long long's magnitude is two `Nat`s, hi·10^9 + lo (`LL`, which the readers of
+times and counts already used for numbers past 14 digits): hi is below 10^10, the sum of
+two below 2·10^10, far from 2^48. `ll.read` reads a value of up to nine characters at once
+(`String.digits_at` and `String.dec_at`, by index) and any other through `ll.at`;
+`ll.add` adds two, signs apart or alike, and checks the sum as Redis does; `ll.show` writes
+it, the last nine digits padded by showing 10^9 + lo and dropping its 1. The increment a
+command carries is `By`, its sign in its constructor (`ByPos{hi, lo}`, `ByNeg{hi, lo}`):
+a command travels in registers as wide as its widest form, and an `LL`'s three fields made
+`IncrBy` the widest, every command a word wider: GET and SET took 11 instructions more
+each. The reply is the sum's text (`RIntS`).
+
+**Cost.** Instructions per request (callgrind, `tools/perf_guard.sh`; main's in brackets,
+on the same machine): INCR 4,413 (4,385), GET 3,303 (3,306), SET 4,065 (4,067). The
+protocol's slow reader of a length line keeps its own reader of a long long (`ll.of`):
+with `ll.at` there, the parser compiled otherwise, and SET took 62 more. By the runtime's
+functions (callgrind, a build with lines), INCR makes its sum's text once where it made
+it twice (to see that it fit in 14 digits, and to store it), and no longer writes its
+digits into the reply (`nat_show_str` 52 instructions fewer, `nat_show_into` 30); reading
+the value by index (`str_digits_at`, `str_dec_at`) costs 54, copying the text into the
+reply (`str_mov`, `str_append`) 68, and the compiled Bend code takes 44 fewer. Two
+attempts cost more and were left: an `Int` reply for a sum below 10^9 (13 instructions
+more: the text is made anyway, for the store), and padding the digits with
+`String.repeat`, which sent `ll.show` through the work loop (2 more indirect
+mispredictions a request, 12 instructions).
+
+**Proofs.** The lemmas of INCRBY and HINCRBY (the frame, the reply, the key, the bridge to
+the specification, the time, the count of keys, the update's equivalence and its good
+changes) case on an `LL` where they cased on a `Maybe<Int>` and a `Bool` of fitting; a key
+not there gets `by.ll(by)`. `incr_missing` answers `RIntS{"1"}`. The laws keep their number.
+
+**Tests.** `tests/numbers_test.py` adds INCRBY, DECRBY and HINCRBY to values at LLONG_MAX
+and LLONG_MIN and to keys and fields not there (2,541 commands); `tests/diff_test.py`
+draws values at a long long's edges and has no known divergence left of integers;
+`tests/aof_redis_test.py` logs increments past 14 digits and overflows both ways;
+`tests/smoke.bend` checks 99999999999999 + 1 and LLONG_MAX + 1. Redis's suite:
+unit/type/hash passes HINCRBY's test of overflows, which starts from
+-9223372036854775484 (70 of its 72); 1,274 of the 1,677 tests Redis passes, 1,271 of
+the 1,333 in what BendKV has.
+
 ## 3zzx. The word of use of a key RESTORE makes
 
 **What failed.** After DUMP and RESTORE merged, `make test` failed in CI on three runs of
@@ -5319,6 +5373,75 @@ deletes it, under `allkeys-lru` first, so that RESTORE finds an LRU second in it
 every run. With main's server that fails at `lfu3` and `lfu4` at every run (3 of 3 on
 fresh servers, 1 against 5); with this change it passes, on fresh servers (2 of 2) and
 after the million random SETs above (3 of 3).
+
+## 3zzy. Intsets as trees of integers
+
+**What was left** (sections 3zj, 3zze). An intset kept its members as a list of their
+strings in increasing order. SADD, SREM and SISMEMBER walked the list from its start,
+and each step compared two members as integers, reading the digits of both again (four
+`String.dec_at` of ten digits each): on an intset of 100 to 500 members, SADD of a new
+member took 270,366 instructions, SISMEMBER 155,772 and SREM 274,643, where a
+hashtable's took 8,347, 5,403 and 14,598. SADD took no intset out of the keyspace, since
+the test of its member cost more than the take saved (section 3zze).
+
+**The change** (`src/map.bend`, Sets).
+
+- An intset's members are a weight-balanced tree (`ITree`: a tip, or a node of n members
+  whose member comes after those of its left side and before those of its right),
+  balanced as a sorted set's tree is (section 3zl).
+- Two members compare as integers: by their signs, then by their numbers of digits (an
+  intset's integers have no leading zero), then by their bytes as memcmp orders them
+  (`String.order`), the other way for two negative ones (`ints.cmp`).
+- A member is found, added or taken out in O(log n) steps (`ints.has`, `ints.put`,
+  `ints.del`), and the member at a rank in as many (`ints.nth`), which SRANDMEMBER and
+  SPOP pick by its rank.
+- SMEMBERS, SSCAN, DUMP and the rewrite of the append-only file read the members in
+  increasing order from the tree (`ints.list`). RESTORE of an intset, whose members come
+  in increasing order, makes the tree at once (`ints.build`, a walk with a list of jobs,
+  as `zel.build` makes a sorted set's: section 3zzu) and no trie of the members to find
+  one there twice, which members in increasing order cannot be.
+- SADD of a member that an intset lacks takes the set out of the keyspace (`upd.takes`),
+  as it takes a hashtable: the test of the member is a walk of log n steps now.
+
+**The proofs.** The lemmas of SADD's sizes take a tree where they took a list
+(`le_ints_*`), and `has_none` the empty tree. SADD of a member an intset lacks makes it
+one larger (`le_ints_new`, `le_ints_putn`), so it writes the set over and may take it
+(`takes_madd_ints`, under `takes_over`). `make check` and `make verdict` pass.
+
+**What it gives.** Instructions per command (callgrind, pipelined: 400 new members
+added in a random order to an intset of 100, then tested, then taken out; the same on a
+hashtable of as many short strings):
+
+| command | before | after | a hashtable |
+|---|---:|---:|---:|
+| SADD of a new member | 270,366 | 14,013 | 8,347 |
+| SISMEMBER | 155,772 | 6,992 | 5,403 |
+| SREM | 274,643 | 15,519 | 14,598 |
+| DUMP of an intset of 500 | 913,736 | 900,901 | |
+| RESTORE of it, with REPLACE | 3,992,621 | 1,225,958 | |
+
+An SADD and an SREM of one member took 37,297 instructions on an intset of 8 members,
+139,567 on one of 64 and 158,995 on one of 400; they take 21,866, 28,374 and 31,989 (on a
+hashtable: 23,943 to 24,653). The take saves SADD 2,418 of them. Wall time, one request
+at a time (the median of three runs, each the median of five): SADD 75 µs before, 53 now
+and 51 on Redis; SISMEMBER 64, 51 and 48; SREM 74, 53 and 50: an intset's command takes a
+round trip now, as Redis's does. An SADD of 500 integers takes 0.46 ms (7.9 before, 0.16
+on Redis), and a RESTORE of them 0.19 ms (0.42 before, 0.05 on Redis). GET, SET and INCR
+as before (`make perfcheck`: 3,306, 4,067 and 4,411 instructions per request; main 3,302,
+4,069 and 4,411).
+
+**Where BendKV differs.** A member takes a node of four words: an intset of 500 members
+takes 16,768 bytes of BendKV's heap (8,824 as a list), where Redis's takes 1,080 (2, 4 or
+8 bytes a member, the width of its widest). An add or a deletion makes a new node at
+each step back up the tree and drops the old one, where Redis moves the members after the
+new one with a memmove.
+
+**Tests.** `tests/set_test.py`: an intset of 512 members of every width (400 of them long
+longs at random), added in a random order and taken out in another, its members compared
+in order with Redis's every 64 adds and every 32 deletions, with SCARD, SISMEMBER,
+SRANDMEMBER and SPOP along the way: 6,244 commands, each answered as Redis answers it.
+Redis's suite: unit/type/set, unit/sort, unit/scan, unit/dump and unit/keyspace pass the
+tests they passed (222 of the 226 Redis passes).
 
 ## 4. Where a request's time goes, and hiding the memory waits
 
