@@ -9815,10 +9815,10 @@ def hex.word(r: Result<&1, &1, U32 & String, U32>) -> String:
     case Fail{e}:
       "00000000"
 
-def boot.of(+o1: String, +o2: String, +o3: String, +mem: String, h: Nat & Nat, run: String, rep: String, t: U32 & U32, +pid: U32, exe: String, conf: String) -> I.Boot:
+def boot.of(+o1: String, +o2: String, +o3: String, +mem: String, h: Nat & Nat, run: String, rep: String, key: String, t: U32 & U32, +pid: U32, exe: String, conf: String) -> I.Boot:
   (heap, act) = h
   (secs, us) = t
-  I.IBoot{T.trim(o1) ++ " " ++ T.trim(o2) ++ " " ++ T.trim(o3), U32.show(pid), run, rep, exe, conf, Nat.mul(nat.of(nth(1n, words.of(T.first(String.split(mem, '\n'))))), 1024n), secs, heap}
+  I.IBoot{T.trim(o1) ++ " " ++ T.trim(o2) ++ " " ++ T.trim(o3), U32.show(pid), run, rep, exe, conf, Nat.mul(nat.of(nth(1n, words.of(T.first(String.split(mem, '\n'))))), 1024n), secs, heap, key}
 
 @unsafe
 def proc.got(m: Result<&1, &1, U32 & String, File>) -> IO(String):
@@ -9873,8 +9873,10 @@ def boot.read(+pid: U32, +exe: String, +conf: String) -> IO(I.Boot):
     h : Nat & Nat <- IO.heap()
     run : String <- hex40()
     rep : String <- hex40()
+    k1 : String <- hex40()
+    k2 : String <- hex40()
     t : U32 & U32 <- IO.clock()
-    return boot.of(o1, o2, o3, mem, h, run, rep, t, pid, exe, conf)
+    return boot.of(o1, o2, o3, mem, h, run, rep, k1 ++ k2, t, pid, exe, conf)
 
 # INFO's account at the start, before the append-only file is read
 @unsafe
