@@ -5319,6 +5319,42 @@ RESP3, post, send, and an append-only file: 1.63 million commands).
 CI meets can now be one no earlier run met, which is the point: its seed is in the
 log.
 
+## 3zzs. Tests that pass only after a rerun
+
+**What it was.** The client suites run a failing test again: redis-py up to twice
+(`--reruns 2`, but not one that fails on an unknown command), go-redis's specs up to
+three attempts in all (`-ginkgo.flake-attempts=3`). A test that passed on a rerun
+counted as passed, so a race in BendKV that shows once in three runs passed CI unseen.
+
+**What it is.** `tools/client_suite.py` counts each test's attempts in a suite's
+results (`attempts`): pytest writes each attempt of a test it reruns as a case of its
+own, those before the last with no child, as a pass reads, and an error in the teardown
+after a failed call as one more case, which is no attempt; ginkgo keeps one case and
+names each retry in its timeline (`Attempt #1 Failed.  Retrying`). A test BendKV
+passes only after a rerun, where Redis passes it at its first attempt, is reported in
+the job's report; from `RERUN_GRACE` on (2026-11-15; `RERUN_GRACE` in the environment
+gives another day) it counts as failed, so that the job fails on it as on any test
+Redis passes and BendKV fails. Until then a race it shows can be fixed without failing
+CI. A test that needs a rerun on Redis too is the suite's or the machine's, and is not
+reported. The reruns stay: they keep the job from failing on what fails on Redis too.
+
+**What it shows.** In two CI runs of main, every test that took more than one attempt
+failed at the last, on Redis (37 tests of redis-py in each protocol, 3 of go-redis) as
+on BendKV (14 and 74, all on commands BendKV does not have): none passes only after a
+rerun, and the job passes as before. On a copy of main's results where redis-py's
+`test_incrby` passes on BendKV at its second attempt, written as pytest writes it,
+main's job passes without a word; this one reports it ("Passed on BendKV only after a
+rerun, at the first attempt on Redis (1 tests; failures from 2026-11-15 on)") and exits
+0, and with `RERUN_GRACE=2026-10-01` it fails, with "1 regressions ... passed only after
+2 attempts on BendKV, at its first on Redis". go-redis's spec "Commands strings should
+Incr", retried once, gives the same. On results written by pytest 9.1.1 with
+pytest-rerunfailures 16.7 as the job runs them, and by bsm/ginkgo v2.12.0 (go-redis's),
+the count finds 2 attempts for a test that passes at its second, 3 for one that always
+fails (with an error in its teardown or not), and 1 for one that fails on an unknown
+command.
+
+**What it costs.** Nothing in CI's time: the results are read once more.
+
 ## 3zzu. DUMP and RESTORE
 
 **What there is.** DUMP and RESTORE as Redis 7.0.15 runs them (`src/rdb.bend`, from
