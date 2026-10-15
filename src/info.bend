@@ -559,12 +559,44 @@ def trun.join(a: TRun, b: TRun) -> TRun:
     case a0 TRunOf{b0}:
       trun.join(a0, b0)
 
+# The runs not yet counted (pend) hold a run of each code at most, until
+# the cron's tick counts them: a run that leaves cur is added to the run of
+# its code there (truns.put). One for each change of code would hold a
+# histogram each, about 300 bytes, for as long, the heap's account rising
+# by megabytes between two ticks under a load of mixed commands
+# (FINDINGS.md, 3zzzj).
+
+# whether ps's first run is of code c
+def truns.head(+c: Nat, ps: List<&2, TRun>) -> Bool:
+  match ps:
+    case Con{+p, rest}:
+      Nat.is_eq(trun.code(p), c)
+    case Nil{}:
+      False{}
+
+# ps with t added to its run of code c, or t last when it has none (same:
+# truns.head(c, ps), computed before ps is passed on)
+def truns.put.go(+c: Nat, t: TRun, ps: List<&2, TRun>, same: Bool) -> List<&2, TRun>:
+  match ps same:
+    case Con{p, rest} True{}:
+      trun.join(p, t) <> rest
+    case Con{p, +rest} False{}:
+      s = truns.head(c, rest)
+      p <> truns.put.go(c, t, rest, s)
+    case Nil{} _:
+      [t]
+
+def truns.put(+t: TRun, +pend: List<&2, TRun>) -> List<&2, TRun>:
+  +c = trun.code(t)
+  s = truns.head(c, pend)
+  truns.put.go(c, t, pend, s)
+
 def trun.put(same: Bool, t: TRun, cur: TRun, pend: List<&2, TRun>) -> TRun & List<&2, TRun>:
   match same:
     case True{}:
       (trun.join(cur, t), pend)
     case False{}:
-      (t, cur <> pend)
+      (t, truns.put(cur, pend))
 
 def timed.put(+t: TRun, p: TRun & List<&2, TRun>) -> TRun & List<&2, TRun>:
   (cur, pend) = p
@@ -582,7 +614,7 @@ def timed.add(same: Bool, +r: Nat, +u: Nat, +trk: Bool, +s: Nat, +k: Nat, +x: Na
     case True{} TRunOf{c0}:
       timed.add(True{}, r, u, trk, s, k, x, c0, pend)
     case False{} c:
-      (TRun{r, u, trun.h(trk, s, k, x)}, c <> pend)
+      (TRun{r, u, trun.h(trk, s, k, x)}, truns.put(c, pend))
 
 def timed.run(+r: Nat, +u: Nat, +trk: Bool, +s: Nat, +k: Nat, +x: Nat, p: TRun & List<&2, TRun>) -> TRun & List<&2, TRun>:
   (cur, pend) = p
