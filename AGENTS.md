@@ -65,14 +65,14 @@ Every pull request passes all of these; CI runs the same.
    in `proof/PROOF.bend` are yours to write.
 2. **Do not weaken a check to make it pass.** No skipped or loosened tests, no new
    entries in `tools/data/clients.json`, no edit of `tools/perf_baseline.txt`, no
-   higher tolerance, unless the issue asks for it; when one is justified, the
-   commit message says why.
+   higher tolerance, unless the issue asks for it or the owner approves it in the
+   pull request; when one is justified, the commit message says why.
 3. **Generated blocks** (`BEGIN gen_trie` … `END gen_trie`, the tables of parameters
    and commands) come from `tools/gen_*.py`: change the generator and rerun it.
 4. **English everywhere**: code, comments, documents, commits, issues.
 5. **No stub intrinsics in verified files.** `Mem.cell`, `Mem.touch`, `Chan.mark`,
-   `Chan.marked` and `IO.heap` have Bend bodies that are constants; only
-   `src/server.bend` may call them, or the proofs are about the constant.
+   `Chan.marked`, `IO.heap` and `Clock.us` have Bend bodies that are constants;
+   only `src/server.bend` may call them, or the proofs are about the constant.
 6. **Bend's constraints.** Define before use (except `@unsafe`), no mutual
    recursion, structural recursion (fuel otherwise), `match` on parameters only.
    `Bool.pick` evaluates both arms, and a `Nat` past 2^48 − 1 aborts the process:
@@ -100,3 +100,32 @@ Every pull request passes all of these; CI runs the same.
   why, what it cost), `docs/PERFORMANCE.md` when counts or throughput change,
   README and `docs/COMPATIBILITY.md` when behavior changes. Put a number in one
   document and link to it from the others rather than copying it.
+
+## Merging
+
+While BendKV is pre-release, two sessions work on it and review each other's pull
+requests.
+
+- **Who merges.** A pull request merges into `main` when two things hold:
+  - CI is green on its head;
+  - a session that did not write it has read the whole diff and approved it in a
+    comment on the pull request.
+
+  The author then merges it. All sessions post from the owner's account, so
+  GitHub's own approval is not available.
+- **Pushes after the approval.** The reviewer looks at what a later push adds. A
+  merge of `main` without a conflict needs no new look.
+- **When the owner decides.** Some pull requests merge only once the owner has
+  approved them in the pull request. That is a pull request that does any of
+  these:
+  - adds, removes or changes the statement of a law, or changes what
+    `proof/SPEC.bend` means (rule 1);
+  - skips or loosens a test, adds an entry to `tools/data/clients.json`, edits
+    `tools/perf_baseline.txt` or raises a tolerance (rule 2);
+  - adds or changes a patch in `bend-patches/`, which is part of the trusted base;
+  - changes this file, or what CI runs (`.github/workflows/`).
+
+  Such a pull request describes that change in a section of its own: for a law,
+  its old and new statement; for the baseline, the old and new counts. Its author
+  also asks the owner in the session's own conversation. If you are not sure
+  whether a change is one of these, ask the owner.
