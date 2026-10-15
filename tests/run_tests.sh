@@ -66,6 +66,15 @@ cd "$(dirname "$0")/.."
 PORT=${PORT:-6380}
 REDIS_PORT=${REDIS_PORT:-6390}
 ROUNDS=${ROUNDS:-1000}
+# The differential tests (tests/diff_test.py) run DIFF_ROUNDS (ROUNDS)
+# rounds from seeds SEED, SEED+1 and SEED+2 against each server, and from
+# SEED+3 in RESP3. SEED is 1 by default (seeds 1 to 4, as always); in CI
+# it is 4 * GITHUB_RUN_ID + 1, so that each run sends commands no run sent
+# before (a job run again sends the same ones). SEED=N, with the same
+# DIFF_ROUNDS, sends them again.
+SEED=${SEED:-$((4 * ${GITHUB_RUN_ID:-0} + 1))}
+DIFF_ROUNDS=${DIFF_ROUNDS:-$ROUNDS}
+echo "== seeds $SEED to $((SEED + 3)), $DIFF_ROUNDS rounds: SEED=$SEED DIFF_ROUNDS=$DIFF_ROUNDS make test repeats them"
 echo "== the float library against glibc"
 python3 tests/float_test.py --bend "${BEND:-bend}" --cc "${CC:-cc}" --seed 1 --n 1500
 echo "== the start"
@@ -148,15 +157,15 @@ for n in "" post send "post build/test.aof everysec"; do
   if [ "$n" = send ]; then
     python3 tests/protocol_test.py --bendkv "$PORT" --redis "$REDIS_PORT"
   fi
-  for seed in 1 2 3; do
+  for seed in "$SEED" $((SEED + 1)) $((SEED + 2)); do
     redis-cli -p "$REDIS_PORT" flushall > /dev/null
     redis-cli -p "$PORT" flushall > /dev/null
-    python3 tests/diff_test.py --bendkv "$PORT" --redis "$REDIS_PORT" --rounds "$ROUNDS" --seed "$seed"
+    python3 tests/diff_test.py --bendkv "$PORT" --redis "$REDIS_PORT" --rounds "$DIFF_ROUNDS" --seed "$seed"
   done
   if [ -z "$n" ]; then
     redis-cli -p "$REDIS_PORT" flushall > /dev/null
     redis-cli -p "$PORT" flushall > /dev/null
-    RESP=3 python3 tests/diff_test.py --bendkv "$PORT" --redis "$REDIS_PORT" --rounds "$ROUNDS" --seed 4
+    RESP=3 python3 tests/diff_test.py --bendkv "$PORT" --redis "$REDIS_PORT" --rounds "$DIFF_ROUNDS" --seed $((SEED + 3))
   fi
   python3 tests/concurrency_test.py --port "$PORT"
   kill "$BKV"

@@ -40,6 +40,11 @@ the one above: bun 1.3.14, clang 19, the patched Bend (kept in the cache while
 BendTT kernel once (cached too). A change goes in through a pull request whose checks
 pass.
 
+The differential tests of `make test` take their seeds from the CI run, so each run
+sends random commands of its own; the log names them first, and `SEED=N make test`
+sends them again. A nightly run ([`.github/workflows/nightly.yml`](.github/workflows/nightly.yml))
+sends about a million of them to main's server.
+
 ## How changes are made
 
 - **A new command or behavior** comes with: its semantics in `src/redis.bend` (or
