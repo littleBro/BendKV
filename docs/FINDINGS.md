@@ -5969,9 +5969,17 @@ keys and eviction invalidate the keys they delete as no client's change.
   `broken_redirect`), and in RESP3 the push `tracking-redir-broken`.
 
 The client whose command runs gets its own invalidations after its reply: after EXEC's
-for EXEC's commands, and after its reply for a client that BLMOVE serves. Redis keeps them
-for after the call. One it gets as the client another redirects to comes before its
-reply, as Redis writes it while the command runs. At the end of each group (Redis's
+for EXEC's commands, and after its reply for a client that a blocking command serves.
+Redis keeps them for after the call. A served BLMOVE or BRPOPLPUSH changes its
+destination; a served BLMPOP, BZPOPMIN, BZPOPMAX or BZMPOP changes the key it popped from;
+a served BLPOP or BRPOP changes nothing more, as Redis signals each (its push made the key
+ready). LMOVE's and RPOPLPUSH's destination goes before their source, as Redis signals
+them. One it gets as the client another redirects to comes before its
+reply, as Redis writes it while the command runs. The client whose command served a
+blocked client gets that pop's invalidations after its own reply (and after its own
+invalidations), as Redis writes them once its call is over, with the served client as
+the one whose command runs: NOLOOP leaves them out for the served client, not for the
+client whose command served it. At the end of each group (Redis's
 beforeSleep), each prefix's keys go to its clients, in the order of their bytes, one
 push per prefix. A NOLOOP client gets them without the keys its own commands changed
 last, and nothing when none is left.
@@ -5985,13 +5993,12 @@ table.
 
 **The fast way.** The table's keys are heeded keys (Heeded keys): a batch that may write
 one runs the general way, as a batch that writes a key a client waits on or watches.
-Every other batch of a client that does not track keeps the fast way. A read adds its
-keys to the heeded set as it adds them to the table. A tick makes the set anew from the
-clients that wait and watch and from the table, once as many keys have left the table as
-it holds (a thousand at least). While a client is in BCAST mode, every batch runs the
-general way: any key written may be under a prefix. The review session proposed another
-way: let the heeded keys' checks look in the table as well, with no second insertion per
-read and no rebuild, for a second lookup per write checked.
+Every other batch of a client that does not track keeps the fast way. The heeded keys'
+checks look in the table itself, a second lookup per key written; a read adds its keys to
+the table alone, and the set a tick makes anew holds the keys of the clients that wait and
+watch, never the table's (Found in review). While a client is in BCAST mode, every batch
+runs the general way: any key written may be under a prefix. Its keys are kept as they
+come, and sorted once at the end of the group.
 
 **The rest.** CLIENT TRACKING reads its options in order, as Redis does, before it looks
 at ON or OFF. A REDIRECT's id is read as a long long, and its client looked for there;
@@ -6000,18 +6007,22 @@ switch of BCAST, OPTIN or OPTOUT with BCAST, both of them, a switch of OPTIN or 
 and prefixes that overlap. CLIENT CACHING, GETREDIR, TRACKINGINFO, CLIENT LIST's flags (t,
 R, B) and `redir`, and INFO's tracking_clients, tracking_total_keys, tracking_total_items
 and tracking_total_prefixes answer as Redis's. RESET and a connection's end stop the
-client's tracking, and its ids stay in the table, as Redis leaves them. At each tick,
-past `tracking-table-max-keys`, keys picked at random leave the table, each invalidated
-under no prefix. The limit is kept with the table, read again from the parameters after
-CONFIG SET, EXEC and CLIENT TRACKING, so that a tick reads no parameter by its name.
+client's tracking, and its ids stay in the table, as Redis leaves them; so does CLIENT
+KILL. At each tick, while some client tracks and the table holds more than
+`tracking-table-max-keys`, keys picked at random leave it, each invalidated under no
+prefix, 100 at most for each tick in a row that found it over the limit (the count
+starting anew at a tick that finds it within it), as Redis's trackingLimitUsedSlots
+bounds its effort. The limit is kept with the table, read again
+from the parameters after CONFIG SET, EXEC and CLIENT TRACKING, so that a tick reads no
+parameter by its name.
 
 **Where BendKV differs.**
 
 - A key that expired is invalidated when the sweep deletes it, or a write meets it. Redis
   invalidates it also when a read finds it expired (lazy expiry), as with the `expired`
   event.
-- `tracking-table-max-keys` applies at each tick. Redis applies it before each command
-  too, 100 keys at a time, the more the longer it stays past the limit.
+- `tracking-table-max-keys` applies at each tick (every 100 ms). Redis applies it before
+  each command too, so it reaches the limit sooner under load.
 - Redis 7.0.15 answers an overlap of two given prefixes past the first with the error and
   then OK, and tracks (checkPrefixCollisionsOrReply returns the prefix's index). BendKV
   answers the error alone and leaves the client as it was.
@@ -6021,6 +6032,9 @@ CONFIG SET, EXEC and CLIENT TRACKING, so that a tick reads no parameter by its n
 - A command's and an eviction's invalidations come before their keyspace events, and the
   sweep's after them, as Redis orders them for each key; but where Redis sends them key by
   key, each key's invalidation next to its event, BendKV sends all of one kind first.
+- An LTRIM that removes nothing invalidates nothing. Redis signals its key all the same
+  (`ltrimCommand` calls signalModifiedKey with nothing removed), as it touches it for WATCH
+  (section 3zp).
 
 **What it costs** (PERFORMANCE 66).
 
@@ -6048,6 +6062,42 @@ CONFIG SET, EXEC and CLIENT TRACKING, so that a tick reads no parameter by its n
 - Eviction did not invalidate the keys it deleted (`mem.done`). It does now, as the sweep
   does, and `tracking_test.py` has a scenario for it.
 
+**Found in review.**
+
+- BCAST hung the server. The keys a client in NOLOOP mode is told were picked by a
+  function that called itself in both arms of a `Bool.pick`, which evaluates both: a
+  group's keys under a prefix took time exponential in their number (24 keys took 361
+  ms; a benchmark's writes under a prefix never finished). A `match` picks them now. A
+  group's keys were also each put in their place as they came, quadratic in their
+  number; they are kept as they come now and sorted once at the end of the group, by a
+  merge sort. A batch of 24 SETs under the prefix takes 1.1 ms now, of 10,000 81 ms,
+  of 100,000 838 ms (Redis: 0.6, 12 and 132 ms).
+- CLIENT KILL left the client's tracking on: its id among the tracking clients (INFO's
+  count, and the bit that sends batches the general way), its BCAST prefixes (every
+  batch the general way, for good) and a redirect to it. CLIENT KILL turns the client's
+  tracking off now, as a connection's end does.
+- The heeded keys copied the table. The set a tick made anew held the table's keys too,
+  and a tick made it after any client that waited or watched stopped, and each time the
+  table had grown by its own size: with 300,000 keys, ticks stalled for 120 to 366 ms,
+  and a tracked key took 163 bytes. The checks look in the table itself now, by the hash
+  they look in the set by, and the set holds the keys of the clients that wait and watch
+  alone: with 300,000 keys and a client in a loop of WATCH, MULTI, SET and EXEC, PING's
+  99th percentile is 2.6 ms and its longest 7.3 ms, and a tracked key takes 102 bytes
+  (Redis: 0.7 ms, 7.5 ms and 82 bytes).
+- A served BLMPOP, BZPOPMIN, BZPOPMAX or BZMPOP did not invalidate the key it popped
+  from, LMOVE and RPOPLPUSH invalidated their source before their destination, CLIENT
+  CACHING yes inside a transaction lasted past EXEC, CLIENT alone (an error of arity)
+  kept CLIENT CACHING's flag, and `tracking-table-max-keys` lowered from a million to ten
+  emptied the table in one tick (6.7 s with no answer). Each is as Redis has it now, and
+  `tracking_test.py` has a scenario for each. The limit lowered so under 300,000 keys now
+  trims the table in about 6.7 s of ticks, PING's 99th percentile 82 ms and its longest
+  200 ms (Redis: 11 and 29 ms, as it trims before each command too, and an eviction
+  costs it less).
+- The scenario of the served pops found one more: the client whose command served a
+  blocked client got that pop's invalidations before its own reply. A client that caches
+  what its EXEC read would cache it after its invalidation came, and keep it stale. They
+  come after its reply now, as Redis writes them.
+
 **Tests.** `tests/tracking_test.py` runs scenarios on BendKV and Redis, each with clients
 of its own, and compares what each client received after each step:
 
@@ -6066,7 +6116,11 @@ of its own, and compares what each client received after each step:
 - FLUSHDB and FLUSHALL (in MULTI too), SWAPDB, MOVE, COPY, RENAME;
 - INFO's counts as clients start and stop tracking and go; RESET; CLIENT REPLY OFF;
 - a key that expires, a key evicted past maxmemory, the table's limit, and a client
-  BLMOVE serves.
+  BLMOVE serves;
+- the key a served BLMPOP, BZPOPMIN or BZMPOP popped from, and none for BLPOP, after
+  another client read it in a transaction, and in BCAST mode with NOLOOP; LMOVE's and
+  RPOPLPUSH's order; CLIENT CACHING inside a transaction and CLIENT alone; CLIENT KILL of
+  a client that tracks and of one in BCAST mode; 200 keys under a prefix in one batch.
 
 Redis's suite: unit/tracking passes the 10 of its 13 tests that Redis passes, and
 unit/other its test of RESET clearing a client's state (COMPATIBILITY.md). The client

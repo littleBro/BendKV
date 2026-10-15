@@ -7418,6 +7418,38 @@ of its effects for invalidations (`iv.ents`, `iv.write`) about 900.
 against the baseline's 3,452, 4,214 and 4,552; with 100 clients in BLPOP, GET and SET 2.9%
 and 3.4% above their counts without them; the misses and prefetches as they were.
 
+**After the review** (the review's fixes, FINDINGS 3zzzb's "Found in review"; callgrind
+as above, on the build of 479e46e):
+
+| | GET | SET |
+|---|---:|---:|
+| 1 client that tracks | 3,529 (+2.6%) | 4,318 (+2.8%) |
+| 1 client in BCAST mode, on a prefix no key has | 21,018 | 36,075 |
+| 1 client in BCAST mode, on the benchmark's keys (`idle_clients.py bcastkeys`) | | 43,880 |
+
+- The heeded keys' checks look in the tracking table itself now, where the set held a
+  copy of its keys: a batch's hashes are looked for in two tries while a client tracks.
+  A client that tracks costs other batches 2.6% and 2.8%, against 2.4% before; with 100
+  clients in BLPOP, `make perfcheck` gives GET 3,439 and SET 4,202, and 3.2% and 3.7%
+  above them (2.9% and 3.4% before).
+- The first table's row of BCAST mode measured a client on a prefix no key has, as the
+  review found: no key written reached the prefix, and so not the code that marked them,
+  which was exponential with NOLOOP. On the benchmark's keys, each SET marks its key
+  under the prefix, and at the end of each group the group's keys are sorted once and
+  pushed to the client: 7,800 instructions a request more.
+- In time (`tools/waiters_bench.sh` with TEST=set, the median of three runs of a
+  million; thousands of SETs per second):
+
+| condition | BendKV | Redis 7.0.15 |
+|---|---:|---:|
+| no other client | 1,290 | 668 |
+| 1 client that tracks | 1,174 | 627 |
+| 1 client in BCAST mode, on a prefix no key has | 151 | 612 |
+| 1 client in BCAST mode, on the benchmark's keys | 129 | 457 |
+
+  A client in BCAST mode on the keys written costs Redis a third of its SETs and BendKV
+  nine tenths of its own: BendKV's SETs are 28% of Redis's then.
+
 **What is left.**
 
 - BCAST mode sends every batch the general way. A batch of the fast way could tell the
@@ -7439,9 +7471,6 @@ and 3.4% above their counts without them; the misses and prefetches as they were
   it only names: a SET then copies the path it changes and drops the old one after it,
   about 5,800 instructions of a SET in BCAST mode (`term_drop` under `ps.cmd`). A write's
   effects could name the keys it changed, as they name those it logs.
-- The heeded keys hold a copy of the table's keys; the review session proposed that their
-  checks look in the table as well, which would save a reader's second insertion and the
-  rebuilds.
 - Found while measuring, on main too: while some client has a subscription, each batch of
   the general way reads `notify-keyspace-events` by its name (`ps.tune`, `ev.of`), about
   210,000 instructions a batch under callgrind (13,500 a request at depth 16).

@@ -45,7 +45,10 @@ passes the 10 of its 13 tests that Redis passes in this mode, and unit/other its
 RESET clearing a client's state (16 of its 19). The other three of unit/tracking fail on
 Redis too: the test of a lazily expired key uses DEBUG, which leaves its client in MULTI,
 so the two tests of HELLO after it get QUEUED; the unit then ends, on both, at a test that
-waits for an invalidation of a command queued in that MULTI.
+waits for an invalidation of a command queued in that MULTI. No test of the unit reaches
+the differences that section lists; one of them a client would see: a client of RESP3
+that others redirect to, with no subscription and whose batches all run the fast way,
+gets its invalidations with its next reply, where Redis pushes them at once.
 SLOWLOG and LATENCY (section 3zzz of [FINDINGS.md](FINDINGS.md)) brought 18:
 unit/latency-monitor passes 11 of the 13 tests Redis passes (the other two need Lua: one
 fills a set with a script, the next resets the events its expiry would have given), and

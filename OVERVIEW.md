@@ -1596,8 +1596,9 @@ make clients BEND="$B" # redis-py's and go-redis's test suites on Redis and on B
    modules', checked as deep as Redis checks them with `sanitize-dump-payload yes`
    (section 3zzu of FINDINGS.md); checked by tests against Redis byte for byte. CLIENT
    TRACKING: client-side caching as Redis's `tracking.c` keeps it, its invalidations
-   pushed at once (section 3zzzb of FINDINGS.md); checked by tests against Redis byte for
-   byte. What the client libraries' suites find missing within the scope above (ACL's
+   pushed at once but to a client of RESP3 that others redirect to and that sends
+   nothing, which gets them with its next reply (section 3zzzb of FINDINGS.md); checked
+   by tests against Redis byte for byte. What the client libraries' suites find missing within the scope above (ACL's
    users) is the next step.
 2. **The append-only file, further.** A law of the rewrite: the rewritten file replays
    to the databases it was written from (key by key, not by the shape of the trie); it

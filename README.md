@@ -426,7 +426,13 @@ translation stays in the trusted base.
   client does, and while a client is in BCAST mode every command runs so (PERFORMANCE.md,
   section 66). Where BendKV differs: an expired key is invalidated when the sweep deletes
   it, not when a read finds it; the table's limit is applied at each tick of the cron, not
-  before each command (FINDINGS.md, section 3zzzb).
+  before each command; an overlap of two given prefixes past the first gets the error
+  alone (Redis 7.0.15 answers the error, then OK, and tracks with all the prefixes); a
+  client of RESP3 that others redirect to, with no subscription and whose batches all run
+  the fast way, gets its invalidations with its next reply, where Redis pushes them at
+  once; a command's invalidations go out before all its keyspace events, where Redis
+  sends them key by key, each next to its event; an LTRIM that removes nothing
+  invalidates nothing, where Redis invalidates its key (FINDINGS.md, section 3zzzb).
 - **The server:** LASTSAVE (the start, as BendKV writes no RDB snapshot), ROLE (a master
   with no replica), WAIT (0, as no replica acknowledges: at once when it asks for none,
   otherwise once its timeout ends, its client waiting as a blocking command's does),
