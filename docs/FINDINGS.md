@@ -5017,6 +5017,44 @@ bytes as it did, so that the protocol's errors and their timing are as they were
 GEOADD of 20,000 points now takes 194 ms, an EXISTS of 40,000 keys 29 ms (Redis 3.6 ms),
 an RPUSH of 40,000 elements 30 ms where it took 249 (PERFORMANCE.md, section 60).
 
+## 3zzr. Seeds of each run, and a nightly run
+
+**What it was.** `make test` ran the differential test (`tests/diff_test.py`) 13 times,
+three seeds against each of its four servers and one in RESP3, from seeds 1 to 4 and
+for 1,000 rounds each: some 75,000 commands, the same ones in every run. A stream those
+four seeds do not draw went unsent however often CI ran.
+
+**What it is.** `tests/run_tests.sh` takes the seeds from `SEED` (and the three after
+it): 1 by default, the seeds `make test` always took, and 4 ×
+`GITHUB_RUN_ID` + 1 in CI, so that each run sends commands of its own and no two runs
+share a seed (a job run again keeps its run's id, and sends the same ones). It prints
+them first, with the line that sends them again (`SEED=N DIFF_ROUNDS=R make test`),
+and a mismatch prints the line of `diff_test.py` that replays its stream up to the
+batch that failed. `.github/workflows/nightly.yml` runs `make test` on main every night
+with `DIFF_ROUNDS=13500`: 13 runs of 13,500 rounds, about a million commands. A round
+is 5.8 commands on average and takes about 0.4 ms here (50,000 rounds, 290,577
+commands, in 19.5 s), so the million take about 80 s of a job whose build and other
+tests take the rest.
+
+**What it found.** The first eight seeds run at that length (620,000 commands against
+the defaults) found a mismatch in the test itself: an SPOP of a set {1, a}, answered
+`a` by BendKV and `1` by Redis. Both are right: SPOP of a key alone pops a member at
+random. The stream sent it from its line of set commands with a wrong number of
+arguments (none, or a key), where every other command is an error, a plain read
+(SINTER of one key) or a read whose random pick the comparison puts aside
+(SRANDMEMBER), and the comparison knew SPOP's arrays (sorted) but not its one member.
+Seeds 1 to 3 never draw such an SPOP, and the two that seed 4 draws happen to pass; of
+200 new seeds of 1,000 rounds, one failed on it (seed 1064: `SPOP k5`), so about one
+CI run in 15 would have failed for nothing. That line now sends SPOP without the key
+(its error of arity) after the same draws, so the rest of every stream is as it was.
+With it, the same 200 seeds pass (1.16 million commands), and so do 21 more of 13,500
+rounds against each kind of server `make test` starts (the defaults in RESP2 and
+RESP3, post, send, and an append-only file: 1.63 million commands).
+
+**What it costs.** Nothing in CI's time; the nightly run is one job a day. A failure
+CI meets can now be one no earlier run met, which is the point: its seed is in the
+log.
+
 ## 4. Where a request's time goes, and hiding the memory waits
 
 With the eight patches, BendKV ran fewer instructions on GET and SET than Redis, missed
