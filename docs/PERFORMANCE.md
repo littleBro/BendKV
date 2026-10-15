@@ -9,7 +9,7 @@ numbers are in [tools/](../tools/README.md).
    verification and not from the logic of the commands.** The original SET cost ~390
    heap cell allocations and ~150 atomic reference-count operations. Redis makes a
    handful of allocations per SET.
-2. **Bend itself is fixed by thirty-three patches to the compiler**
+2. **Bend itself is fixed by thirty-four patches to the compiler**
    ([`bend-patches/`](../bend-patches/)). The first eight switch on by themselves for
    programs without GPU calls `!`, the ninth and tenth where a program calls them, the
    eleventh changes every program's event loop on Linux, the twelfth and thirteenth only
@@ -30,7 +30,9 @@ numbers are in [tools/](../tools/README.md).
    addresses, killing it and channel marks (section 44); the twenty-eighth, a file put in
    another's place and a name removed (section 47); the twenty-ninth, the heap's account
    (`IO.heap`); the thirtieth, words outside the heap (`Mem.touch`, `Mem.cell`; both
-   section 48); the thirty-third, C's doubles (`F64`, section 60). Before section 14
+   section 48); the thirty-third, C's doubles (`F64`, section 60). The thirty-fourth
+   changes only a build with AddressSanitizer, whose heap it lets ASan check
+   (FINDINGS.md, section 3zzp). Before section 14
    there were twenty patches: the sixteenth (effect pairs) was taken out in section 14,
    and the sections before 14 number the patches the old way — there, 17–20 are today's
    16–19.

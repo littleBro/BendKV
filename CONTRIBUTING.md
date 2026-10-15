@@ -31,7 +31,10 @@ make perfcheck BEND="$B"   # no more than 3% more instructions per request
 CI runs the same on every pull request and on every push to `main` and `claude/step-b`
 ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)): the proofs, `make gencheck` and
 `make smoke` in one job; the server built once, then `make test` against the Redis 7.0.15
-that Ubuntu 24.04 ships and `make perfcheck` in two jobs side by side. Its toolchain is
+that Ubuntu 24.04 ships and `make perfcheck` in two jobs side by side; and the server built
+with AddressSanitizer and UndefinedBehaviorSanitizer and with ThreadSanitizer, the tests
+that stress its memory and its writer thread run under each (`sh tools/sanitize.sh`, which
+runs the same here; it needs clang 19's sanitizer runtimes). Its toolchain is
 the one above: bun 1.3.14, clang 19, the patched Bend (kept in the cache while
 `bend-patches/` stays the same) and, for `make verdict`, Lean 4.34.0, which builds the
 BendTT kernel once (cached too). A change goes in through a pull request whose checks

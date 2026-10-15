@@ -35,10 +35,10 @@ well. BendKV asks how far one can get writing a real, fast server in a language 
 the code that runs is the code that is proved, without a separate model and a
 refinement proof. The answer so far: the verified core is not what makes it slow;
 the data representation of the runtime was, and most of the work went into fixing it
-(33 patches to the Bend compiler, in [`bend-patches/`](bend-patches/): most speed up its
-data representation and its runtime, and the others add what a server needs from the
+(34 patches to the Bend compiler, in [`bend-patches/`](bend-patches/): most speed up its
+data representation and its runtime, the others add what a server needs from the
 system, from the process's directory, id and clock to the files it cuts, the heap's
-account and C's doubles).
+account and C's doubles, and one lets AddressSanitizer check the heap).
 
 ## What is proved
 
@@ -522,7 +522,7 @@ also needs Lean 4.34.0 (through elan).
 
 ```bash
 git clone https://github.com/bendlang/bend ../bend-patched
-sh bend-patches/apply.sh ../bend-patched      # Bend 2.0.35 + 32 patches
+sh bend-patches/apply.sh ../bend-patched      # Bend 2.0.35 + 34 patches
 B="bun ../bend-patched/bend2/main.ts"
 
 make check   BEND="$B"   # check the proofs
@@ -653,7 +653,11 @@ Redis and on BendKV, and counts the tests Redis passes that BendKV passes
 two client libraries the same way, redis-py's in RESP2 and in RESP3 and go-redis's
 (`tools/client_suite.py`); CI runs them on every pull request, and fails on a test Redis
 passes that BendKV fails and that is not among the known failures of
-`tools/data/clients.json`.
+`tools/data/clients.json`. `tools/sanitize.sh` builds the server with AddressSanitizer
+and UndefinedBehaviorSanitizer (the Bend heap's free nodes poisoned, patch 34) and with
+ThreadSanitizer, and runs under each the tests that stress its memory and its writer
+thread most; CI runs it on every pull request too, and fails on any report
+([docs/FINDINGS.md](docs/FINDINGS.md), section 3zzp).
 
 ## Layout
 
@@ -681,7 +685,7 @@ bench/      in-process benchmarks of the map, the core and channels
 tools/      measurement scripts, the runner of Redis's test suite, and the generators of
             the trie, of the parameter table and of the command table, with the facts
             they take from Redis (tools/data/)
-bend-patches/  the 33 patches to the Bend compiler and runtime
+bend-patches/  the 34 patches to the Bend compiler and runtime
 docs/       FINDINGS.md, DIRECTIONS.md, COMPATIBILITY.md, PERFORMANCE.md
 ```
 
