@@ -6293,14 +6293,9 @@ def glue(xs: List<&2, String>, s: String) -> String:
       glue(rest, cat(x, s))
 
 # the length of s, counted up to n: enough to compare with a need of n
-def count_upto(n: Nat, s: String) -> Nat:
-  match n s:
-    case 0n _:
-      0n
-    case 1n+m SNil{}:
-      0n
-    case 1n+m SCon{c, t}:
-      1n+count_upto(m, t)
+# (String.length reads a chunk at a time)
+def count_upto(+n: Nat, +s: String) -> Nat:
+  Nat.min(n, String.length(s))
 
 # the bytes of the pieces read, for INFO
 def got.bytes(+xs: List<&2, String>, +acc: Nat) -> Nat:
