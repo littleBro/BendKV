@@ -1633,11 +1633,13 @@ def obj.of(+sub: Nat, +v: String, +cfg: List<&2, C.CItem>, u: R.Reply) -> R.Repl
 # OBJECT of a collection: its encoding as Redis 7.0 names it, a count of
 # references of 1, and the rest as for a string. A hash is a listpack
 # while it is small (KV.Hash: as Redis turns one into a hashtable at the
-# parameters' defaults) and within hash-max-listpack-entries and
-# hash-max-listpack-value as they are now; else a hashtable. (Redis reads
-# the parameters as a hash is written, and never turns a hashtable back:
-# a small hash that once passed a lower limit, or a large one under limits
-# raised since, is named otherwise there.)
+# parameters' defaults) and within hash-max-listpack-entries and, when it
+# is below its default of 64, hash-max-listpack-value as they are now;
+# else a hashtable. (Redis reads the parameters as a hash is written, and
+# never turns a hashtable back: a small hash that once passed a lower
+# limit, or a large one under limits raised since, is named otherwise
+# there. A listpack RESTORE made keeps longer values: Redis turns one
+# into a hashtable by its length alone, as BendKV keeps it small.)
 # a parameter's number, at most 10^14 (a Nat stays below 2^48)
 def cfg.nat.of(l: R.LL) -> Nat:
   match l:
@@ -1649,10 +1651,15 @@ def cfg.nat.of(l: R.LL) -> Nat:
 def cfg.nat(+cfg: List<&2, C.CItem>, +name: String) -> Nat:
   cfg.nat.of(R.ll.read(C.config.get_value(cfg, name)))
 
+# whether a listpack's longest element w is within the limit l: any is,
+# with l at its default of 64 or more
+def obj.wide.ok(+w: Nat, +l: Nat) -> Bool:
+  Bool.or(Nat.is_le(w, l), Nat.is_le(64n, l))
+
 def obj.hash.enc(+h: KV.Hash, +cfg: List<&2, C.CItem>) -> String:
   match h:
     case KV.HSmall{+n, +ps}:
-      Bool.pick(String, Bool.and(Nat.is_le(n, cfg.nat(cfg, "hash-max-listpack-entries")), Nat.is_le(KV.hps.widest(ps, 0n), cfg.nat(cfg, "hash-max-listpack-value"))), "listpack", "hashtable")
+      Bool.pick(String, Bool.and(Nat.is_le(n, cfg.nat(cfg, "hash-max-listpack-entries")), obj.wide.ok(KV.hps.widest(ps, 0n), cfg.nat(cfg, "hash-max-listpack-value"))), "listpack", "hashtable")
     case KV.HBig{n, t}:
       "hashtable"
 
@@ -1678,7 +1685,7 @@ def obj.zwidest(xs: List<&2, KV.ZEl>, +m: Nat) -> Nat:
 def obj.zset.enc(+z: KV.Zset, +cfg: List<&2, C.CItem>) -> String:
   match z:
     case KV.ZSmall{+tr}:
-      Bool.pick(String, Bool.and(Nat.is_le(KV.zt.size(tr), cfg.nat(cfg, "zset-max-listpack-entries")), Nat.is_le(obj.zwidest(KV.zt.all(tr), 0n), cfg.nat(cfg, "zset-max-listpack-value"))), "listpack", "skiplist")
+      Bool.pick(String, Bool.and(Nat.is_le(KV.zt.size(tr), cfg.nat(cfg, "zset-max-listpack-entries")), obj.wide.ok(obj.zwidest(KV.zt.all(tr), 0n), cfg.nat(cfg, "zset-max-listpack-value"))), "listpack", "skiplist")
     case KV.ZBig{tr, t}:
       "skiplist"
 
@@ -2845,6 +2852,8 @@ def own_reply(+o: R.SessOp, +c: Conn, +s: Srv, +ds: R.Ds) -> Maybe<&2, R.Reply>:
       say(conn.mode(c), admin.reply(k, a, s, ds))
     case R.SGeoStore{+k, a}:
       say(conn.mode(c), R.geo.store.reply(R.ds.focused(ds), k, a))
+    case R.SRestore{+k, op}:
+      say(conn.mode(c), R.reply_of(R.exec(R.Upd{k, op}, R.ds.focused(ds))))
 
 # the connection after a session command
 def own_conn(+o: R.SessOp, +c: Conn, +s: Srv) -> Conn:
@@ -2943,12 +2952,15 @@ def own_conn(+o: R.SessOp, +c: Conn, +s: Srv) -> Conn:
       step_conn(c, s)
     case R.SGeoStore{k, a}:
       step_conn(c, s)
+    case R.SRestore{k, op}:
+      step_conn(c, s)
 
 # what a session command does to the databases: SELECT and RESET move the
 # focus to the connection's new database, SWAPDB, MOVE, COPY and FLUSHALL
 # act on the databases, SPOP and a blocking command that runs at once on
 # the focus, SORT with STORE, PFMERGE and a GEO search that stores write
-# their destination there, and the others do nothing to them
+# their destination there, RESTORE with IDLETIME or FREQ its key, and the
+# others do nothing to them
 def own_acts(+o: R.SessOp, +c: Conn, +s: Srv) -> List<&2, R.Act>:
   match o:
     case R.SSelect{+d}:
@@ -2973,6 +2985,8 @@ def own_acts(+o: R.SessOp, +c: Conn, +s: Srv) -> List<&2, R.Act>:
       [R.APfMerge{d, srcs}]
     case R.SGeoStore{+k, a}:
       [R.AGeo{k, a}]
+    case R.SRestore{+k, op}:
+      [R.ARun{R.Upd{k, op}}]
     case _:
       Nil{}
 

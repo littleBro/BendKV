@@ -8,6 +8,7 @@ import ./map.bend as KV
 import ./float.bend as F
 import ./hll.bend as H
 import ./geo.bend as G
+import ./rdb.bend as D
 
 # Types
 # -----
@@ -280,7 +281,8 @@ type ZWrite is Data:
 # its bytes (GETRANGE, SUBSTR), a bit (GETBIT), the bits set in a range
 # (BITCOUNT), the first bit of a value in one (BITPOS), fields of its
 # bits (BITFIELD_RO, and BITFIELD whose operations are GETs alone), a
-# read of a hash (PHash), of a list (PList) or of a set (PMems). The
+# read of a hash (PHash), of a list (PList), of a set (PMems) or of a
+# sorted set (PZset), and DUMP's payload of its value (PDump). The
 # laws see them as one command, Peek (LAWS.bend: disturbs), so one more
 # needs no more proof. A command travels in registers as wide as its
 # widest form, so each has one field of a word at most: GETRANGE,
@@ -302,6 +304,7 @@ type PeekOp is Data:
   PList{op: LRead}
   PMems{op: SRead}
   PZset{op: ZRead}
+  PDump{}
 
 # A time a command names, in ms (a time in s, times 1000; Times, below):
 # a short one (TmN, below 10^14) or any other long long (TmB: its sign and
@@ -310,6 +313,11 @@ type PeekOp is Data:
 type Tm is Data:
   TmN{at: Bool, ms: Nat}
   TmB{at: Bool, neg: Bool, hi: Nat, lo: Nat}
+
+# a time as a command reads it, or the error it answers
+type TmR is Data:
+  TOk{t: Tm}
+  TBad{r: Reply}
 
 # the time to live SET leaves: none (TNone), the one the key had (TKeep:
 # KEEPTTL), or a time (TAt; checked as SET reads it)
@@ -341,7 +349,11 @@ type ExpIf is Data:
 # off, to on), BITFIELD with a write among its operations, a write of a
 # hash (UHash), of a list (UList) or of a set (UMems), and INCRBYFLOAT
 # (its increment as it came, read once the key's value is), and a write
-# of a HyperLogLog (UHll: PFADD, PFCOUNT of one key, PFDEBUG). The laws
+# of a HyperLogLog (UHll: PFADD, PFCOUNT of one key, PFDEBUG), and
+# RESTORE (URestore: its payload, its time as it read it, REPLACE, and
+# IDLETIME or FREQ, which the server sets in the key's access cell; the
+# time's errors come once the key is looked up, as Redis checks the key
+# first). The laws
 # see them as one command, Upd, so one more needs no more proof. UGet holds an update, so the compiler makes an update a
 # node of its own: a command travels in registers as wide as its widest
 # form, and an update's options are many.
@@ -372,6 +384,7 @@ type UpdOp is Data:
   UIncrF{by: String}
   UZset{op: ZWrite}
   UHll{op: HllOp}
+  URestore{p: String, t: TmR, rep: Bool, ac: Nat}
 
 # A command of Pub/Sub: SUBSCRIBE, PSUBSCRIBE and SSUBSCRIBE of their
 # channels, patterns or shard channels (kind 0, 1, 2: PSub), UNSUBSCRIBE
@@ -516,7 +529,11 @@ type SortO is Data:
 # STORE and STOREDIST, GEOSEARCHSTORE) is SGeoStore, its kind and its
 # arguments, the name it was called by first (GEO, below): it reads its
 # key and writes its destination with what it finds, an act of the
-# session's database (AGeo, below), as SORT with STORE does.
+# session's database (AGeo, below), as SORT with STORE does. RESTORE
+# with IDLETIME or FREQ is SRestore, its key and its update (URestore):
+# the session runs the update on its database, and the server, which
+# keeps when each key was last used, sets the key's word as the option
+# says once the update restored the key (server.bend, Access).
 
 type SessOp is Data:
   SHello{args: List<&2, String>}
@@ -566,6 +583,7 @@ type SessOp is Data:
   SPfSelfTest{}
   SAdmin{kind: Nat, args: List<&2, String>}
   SGeoStore{kind: Nat, args: List<&2, String>}
+  SRestore{key: String, op: UpdOp}
 
 # BITOP's operation
 type BitK is Data:
@@ -2806,11 +2824,6 @@ def bf.cmd(st: BfSt, +k: String, ro: Bool) -> Cmd:
 
 def parse_bitfield(+k: String, args: List<&2, String>, ro: Bool) -> Cmd:
   bf.cmd(bf.go(args, BfWord{0n, False{}, Nil{}}), k, ro)
-
-# a time as a command reads it, or the error it answers
-type TmR is Data:
-  TOk{t: Tm}
-  TBad{r: Reply}
 
 def e_time(+name: String) -> Reply:
   RError{"ERR invalid expire time in '" ++ name ++ "' command"}
@@ -5804,7 +5817,8 @@ def cmd_id.l4(+n: String, c: Nat) -> Nat:
     case 3n:  # C
       Bool.pick(Nat, String.eq(n, "COPY"), 115n, 0n)
     case 4n:  # D
-      Bool.pick(Nat, String.eq(n, "DECR"), 11n, 0n)
+      Bool.pick(Nat, String.eq(n, "DECR"), 11n,
+      Bool.pick(Nat, String.eq(n, "DUMP"), 199n, 0n))
     case 5n:  # E
       Bool.pick(Nat, String.eq(n, "ECHO"), 2n,
       Bool.pick(Nat, String.eq(n, "EVAL"), 65n,
@@ -5991,6 +6005,8 @@ def cmd_id.l7(+n: String, c: Nat) -> Nat:
       Bool.pick(Nat, String.eq(n, "PFCOUNT"), 180n,
       Bool.pick(Nat, String.eq(n, "PFMERGE"), 181n,
       Bool.pick(Nat, String.eq(n, "PFDEBUG"), 182n, 0n))))))
+    case 18n:  # R
+      Bool.pick(Nat, String.eq(n, "RESTORE"), 200n, 0n)
     case 19n:  # S
       Bool.pick(Nat, String.eq(n, "SORT_RO"), 178n, 0n)
     case 21n:  # U
@@ -6198,6 +6214,128 @@ def cmd_id(+n: String, len: Nat) -> Nat:
 def cmd_own(+id: Nat) -> Bool:
   Bool.or(Bool.and(Nat.is_le(100n, id), Nat.is_le(id, 120n)), Bool.and(Nat.is_le(152n, id), Nat.is_le(id, 176n)))
 # END gen_commands: dispatch
+
+# Dump and restore
+# ----------------
+# DUMP's payload (PDump) and RESTORE's (URestore) are rdb.bend's: Redis's
+# RDB serialization of a value, its version and its CRC64. RESTORE key
+# ttl payload [REPLACE] [ABSTTL] [IDLETIME s] [FREQ f] reads its options
+# first, as restoreCommand does (rs.go: IDLETIME not after FREQ, nor FREQ
+# after IDLETIME, each with a value of its own, their errors Redis's),
+# then, once the key is looked up: BUSYKEY for a key there without
+# REPLACE, the time's errors (not a long long; less than 0), the
+# payload's version or checksum (D.verify), its value (D.load: "Bad data
+# format"); then OK, and the key set to the payload's value with its time
+# (none for 0; ABSTTL's from 1970, else from now), or, for a time already
+# past (or one from now past LLONG_MAX, which Redis's sum wraps into the
+# past), deleted when it was there (REPLACE), else left as it is.
+# IDLETIME and FREQ (ac: 0 none, 1 + f FREQ f, 257 + s IDLETIME: rs.idle.at)
+# are the server's to set, in the key's access cell.
+
+# RESTORE's options as read so far: REPLACE, ABSTTL, the access option
+# (ac), and whether the next word is IDLETIME's value (want 1) or FREQ's
+# (want 2); or the error of one
+type RsO is Data:
+  RsO{rep: Bool, abs: Bool, ac: Nat, want: Nat}
+  RsBad{r: Reply}
+
+# an option's word: 1 REPLACE, 2 ABSTTL, 3 IDLETIME, 4 FREQ, 0 another
+def rs.word(+w: String) -> Nat:
+  +up = String.to_upper(cstr(w))
+  Bool.pick(Nat, String.eq(up, "REPLACE"), 1n, Bool.pick(Nat, String.eq(up, "ABSTTL"), 2n, Bool.pick(Nat, String.eq(up, "IDLETIME"), 3n, Bool.pick(Nat, String.eq(up, "FREQ"), 4n, 0n))))
+
+# whether FREQ was given (an IDLETIME after it is a syntax error), and
+# IDLETIME (so for a FREQ after it)
+def rs.freq(+ac: Nat) -> Bool:
+  Bool.and(Nat.is_lt(0n, ac), Nat.is_le(ac, 256n))
+
+def rs.idle(+ac: Nat) -> Bool:
+  Nat.is_lt(256n, ac)
+
+def rs.after(bad: Bool, +rep: Bool, +abs: Bool, +ac: Nat, +want: Nat) -> RsO:
+  Bool.pick(RsO, bad, RsBad{e_syntax_r()}, RsO{rep, abs, ac, want})
+
+def rs.opt(+c: Nat, +rep: Bool, +abs: Bool, +ac: Nat) -> RsO:
+  match c:
+    case 1n:
+      RsO{True{}, abs, ac, 0n}
+    case 2n:
+      RsO{rep, True{}, ac, 0n}
+    case 3n:
+      rs.after(rs.freq(ac), rep, abs, ac, 1n)
+    case 4n:
+      rs.after(rs.idle(ac), rep, abs, ac, 2n)
+    case _:
+      RsBad{e_syntax_r()}
+
+# IDLETIME's value: a long long at least 0, its seconds (hi * 10^9 + lo)
+# kept as Redis's LRU clock of 24 bits reads them (objectSetLRUOrLFU):
+# below 2^24 as they are, else as 2^24 and their remainder mod 2^24, more
+# than any second the clock shows (10^9 is 10144256 mod 2^24). Past
+# LLONG_MAX / 1000 s Redis's product of them and 1000 overflows; BendKV
+# reads them as below. FREQ's value: a long long from 0 to 255.
+def rs.idle.at(+hi: Nat, +lo: Nat) -> Nat:
+  Bool.pick(Nat, Bool.and(Nat.is_eq(hi, 0n), Nat.is_lt(lo, 16777216n)), lo, Nat.add(16777216n, Nat.mod(Nat.add(Nat.mul(Nat.mod(hi, 16777216n), 10144256n), lo), 16777216n)))
+
+def rs.idle.of(l: LL, +rep: Bool, +abs: Bool) -> RsO:
+  match l:
+    case LL{neg, +hi, +lo}:
+      Bool.pick(RsO, neg, RsBad{RError{"ERR Invalid IDLETIME value, must be >= 0"}}, RsO{rep, abs, Nat.add(257n, rs.idle.at(hi, lo)), 0n})
+    case LLBad{}:
+      RsBad{e_int()}
+
+def rs.freq.of(l: LL, +rep: Bool, +abs: Bool) -> RsO:
+  match l:
+    case LL{neg, +hi, +lo}:
+      +bad = Bool.or(neg, Bool.or(Nat.is_lt(0n, hi), Nat.is_lt(255n, lo)))
+      Bool.pick(RsO, bad, RsBad{RError{"ERR Invalid FREQ value, must be >= 0 and <= 255"}}, RsO{rep, abs, Nat.add(1n, lo), 0n})
+    case LLBad{}:
+      RsBad{e_int()}
+
+# the options after one more word w
+def rs.step(+w: String, o: RsO) -> RsO:
+  match o:
+    case RsO{+rep, +abs, +ac, want}:
+      match want:
+        case 0n:
+          rs.opt(rs.word(w), rep, abs, ac)
+        case 1n:
+          rs.idle.of(ll.read(w), rep, abs)
+        case _:
+          rs.freq.of(ll.read(w), rep, abs)
+    case RsBad{r}:
+      RsBad{r}
+
+def rs.go(xs: List<&2, String>, o: RsO) -> RsO:
+  match xs:
+    case Nil{}:
+      o
+    case Con{+w, rest}:
+      rs.go(rest, rs.step(w, o))
+
+# RESTORE once its options are read: an update of its key, a command of
+# the session with IDLETIME or FREQ (SRestore); IDLETIME or FREQ last,
+# without its value, is a syntax error, as Redis takes neither without
+# one
+def restore.upd(own: Bool, +k: String, op: UpdOp) -> Cmd:
+  match own:
+    case False{}:
+      Upd{k, op}
+    case True{}:
+      Own{SRestore{k, op}}
+
+def restore.want(+want: Nat, +k: String, +ttl: String, p: String, +rep: Bool, +abs: Bool, +ac: Nat) -> Cmd:
+  Bool.pick(Cmd, Nat.is_eq(want, 0n), restore.upd(Nat.is_lt(0n, ac), k, URestore{p, tm.of(ttl, abs, False{}, False{}, "restore"), rep, ac}), e_syntax())
+
+def restore.cmd(o: RsO, +k: String, +ttl: String, p: String) -> Cmd:
+  match o:
+    case RsO{+rep, +abs, +ac, +want}:
+      restore.want(want, k, ttl, p, rep, abs, ac)
+    case RsBad{r}:
+      Bad{r}
+
+def restore.parse(+k: String, +ttl: String, p: String, xs: List<&2, String>) -> Cmd:
+  restore.cmd(rs.go(xs, RsO{False{}, False{}, 0n, 0n}), k, ttl, p)
 
 def parse_id(id: Nat, name: String, args: List<&2, String>) -> Cmd:
   match id:
@@ -6892,6 +7030,18 @@ def parse_id(id: Nat, name: String, args: List<&2, String>) -> Cmd:
       geo.parse(4n, name, args, 6n, "geosearch")
     case 198n:  # GEOSEARCHSTORE
       geo.parse(5n, name, args, 7n, "geosearchstore")
+    case 199n:  # DUMP
+      match args:
+        case Con{k, Nil{}}:
+          Peek{k, PDump{}}
+        case _:
+          e_arity("dump")
+    case 200n:  # RESTORE
+      match args:
+        case Con{k, Con{ttl, Con{p, rest}}}:
+          restore.parse(k, ttl, p, rest)
+        case _:
+          e_arity("restore")
     case _:
       e_unknown(name, args)
 
@@ -7582,6 +7732,10 @@ def stat.top(+id: Nat) -> Nat:
       197n
     case 198n:
       198n
+    case 199n:
+      199n
+    case 200n:
+      200n
     case _:
       0n
 
@@ -7589,35 +7743,35 @@ def stat.top(+id: Nat) -> Nat:
 def stat.sub.client(+sub: Nat) -> Nat:
   match sub:
     case 1n:
-      199n
-    case 2n:
-      200n
-    case 3n:
       201n
-    case 4n:
+    case 2n:
       202n
-    case 5n:
+    case 3n:
       203n
-    case 6n:
+    case 4n:
       204n
-    case 7n:
+    case 5n:
       205n
-    case 8n:
+    case 6n:
       206n
-    case 9n:
+    case 7n:
       207n
-    case 10n:
+    case 8n:
       208n
-    case 11n:
+    case 9n:
       209n
-    case 12n:
+    case 10n:
       210n
-    case 13n:
+    case 11n:
       211n
-    case 14n:
+    case 12n:
       212n
-    case 15n:
+    case 13n:
       213n
+    case 14n:
+      214n
+    case 15n:
+      215n
     case _:
       0n
 
@@ -7625,9 +7779,9 @@ def stat.sub.client(+sub: Nat) -> Nat:
 def stat.sub.function(+sub: Nat) -> Nat:
   match sub:
     case 1n:
-      214n
+      216n
     case 2n:
-      215n
+      217n
     case _:
       0n
 
@@ -7635,15 +7789,15 @@ def stat.sub.function(+sub: Nat) -> Nat:
 def stat.sub.config(+sub: Nat) -> Nat:
   match sub:
     case 1n:
-      216n
-    case 2n:
-      217n
-    case 3n:
       218n
-    case 4n:
+    case 2n:
       219n
-    case 5n:
+    case 3n:
       220n
+    case 4n:
+      221n
+    case 5n:
+      222n
     case _:
       0n
 
@@ -7651,19 +7805,19 @@ def stat.sub.config(+sub: Nat) -> Nat:
 def stat.sub.command(+sub: Nat) -> Nat:
   match sub:
     case 1n:
-      221n
-    case 2n:
-      222n
-    case 3n:
       223n
-    case 4n:
+    case 2n:
       224n
-    case 5n:
+    case 3n:
       225n
-    case 6n:
+    case 4n:
       226n
-    case 7n:
+    case 5n:
       227n
+    case 6n:
+      228n
+    case 7n:
+      229n
     case _:
       0n
 
@@ -7671,15 +7825,15 @@ def stat.sub.command(+sub: Nat) -> Nat:
 def stat.sub.object(+sub: Nat) -> Nat:
   match sub:
     case 1n:
-      228n
-    case 2n:
-      229n
-    case 3n:
       230n
-    case 4n:
+    case 2n:
       231n
-    case 5n:
+    case 3n:
       232n
+    case 4n:
+      233n
+    case 5n:
+      234n
     case _:
       0n
 
@@ -7687,17 +7841,17 @@ def stat.sub.object(+sub: Nat) -> Nat:
 def stat.sub.memory(+sub: Nat) -> Nat:
   match sub:
     case 1n:
-      233n
-    case 2n:
-      234n
-    case 3n:
       235n
-    case 4n:
+    case 2n:
       236n
-    case 5n:
+    case 3n:
       237n
-    case 6n:
+    case 4n:
       238n
+    case 5n:
+      239n
+    case 6n:
+      240n
     case _:
       0n
 
@@ -7705,17 +7859,17 @@ def stat.sub.memory(+sub: Nat) -> Nat:
 def stat.sub.pubsub(+sub: Nat) -> Nat:
   match sub:
     case 1n:
-      239n
-    case 2n:
-      240n
-    case 3n:
       241n
-    case 4n:
+    case 2n:
       242n
-    case 5n:
+    case 3n:
       243n
-    case 6n:
+    case 4n:
       244n
+    case 5n:
+      245n
+    case 6n:
+      246n
     case _:
       0n
 
@@ -8119,96 +8273,100 @@ def stat.name(+key: Nat) -> String:
     case 198n:
       "geosearchstore"
     case 199n:
-      "client|id"
+      "dump"
     case 200n:
-      "client|help"
+      "restore"
     case 201n:
-      "client|reply"
+      "client|id"
     case 202n:
-      "client|getname"
+      "client|help"
     case 203n:
-      "client|setname"
+      "client|reply"
     case 204n:
-      "client|caching"
+      "client|getname"
     case 205n:
-      "client|unblock"
+      "client|setname"
     case 206n:
-      "client|getredir"
+      "client|caching"
     case 207n:
-      "client|no-evict"
+      "client|unblock"
     case 208n:
-      "client|trackinginfo"
+      "client|getredir"
     case 209n:
-      "client|list"
+      "client|no-evict"
     case 210n:
-      "client|info"
+      "client|trackinginfo"
     case 211n:
-      "client|kill"
+      "client|list"
     case 212n:
-      "client|pause"
+      "client|info"
     case 213n:
-      "client|unpause"
+      "client|kill"
     case 214n:
-      "function|flush"
+      "client|pause"
     case 215n:
-      "function|help"
+      "client|unpause"
     case 216n:
-      "config|get"
+      "function|flush"
     case 217n:
-      "config|set"
+      "function|help"
     case 218n:
-      "config|resetstat"
+      "config|get"
     case 219n:
-      "config|rewrite"
+      "config|set"
     case 220n:
-      "config|help"
+      "config|resetstat"
     case 221n:
-      "command|info"
+      "config|rewrite"
     case 222n:
-      "command|docs"
+      "config|help"
     case 223n:
-      "command|list"
+      "command|info"
     case 224n:
-      "command|help"
+      "command|docs"
     case 225n:
-      "command|count"
+      "command|list"
     case 226n:
-      "command|getkeys"
+      "command|help"
     case 227n:
-      "command|getkeysandflags"
+      "command|count"
     case 228n:
-      "object|help"
+      "command|getkeys"
     case 229n:
-      "object|freq"
+      "command|getkeysandflags"
     case 230n:
-      "object|encoding"
+      "object|help"
     case 231n:
-      "object|refcount"
+      "object|freq"
     case 232n:
-      "object|idletime"
+      "object|encoding"
     case 233n:
-      "memory|help"
+      "object|refcount"
     case 234n:
-      "memory|usage"
+      "object|idletime"
     case 235n:
-      "memory|stats"
+      "memory|help"
     case 236n:
-      "memory|doctor"
+      "memory|usage"
     case 237n:
-      "memory|purge"
+      "memory|stats"
     case 238n:
-      "memory|malloc-stats"
+      "memory|doctor"
     case 239n:
-      "pubsub|channels"
+      "memory|purge"
     case 240n:
-      "pubsub|help"
+      "memory|malloc-stats"
     case 241n:
-      "pubsub|numpat"
+      "pubsub|channels"
     case 242n:
-      "pubsub|numsub"
+      "pubsub|help"
     case 243n:
-      "pubsub|shardchannels"
+      "pubsub|numpat"
     case 244n:
+      "pubsub|numsub"
+    case 245n:
+      "pubsub|shardchannels"
+    case 246n:
       "pubsub|shardnumsub"
     case _:
       ""
@@ -8616,94 +8774,98 @@ def stat.arity(+key: Nat) -> Nat:
     case 199n:
       4n
     case 200n:
-      4n
+      9n
     case 201n:
-      6n
+      4n
     case 202n:
       4n
     case 203n:
       6n
     case 204n:
-      6n
-    case 205n:
-      7n
-    case 206n:
       4n
-    case 207n:
+    case 205n:
       6n
+    case 206n:
+      6n
+    case 207n:
+      7n
     case 208n:
       4n
     case 209n:
-      5n
+      6n
     case 210n:
       4n
     case 211n:
-      7n
-    case 212n:
-      7n
-    case 213n:
-      4n
-    case 214n:
       5n
+    case 212n:
+      4n
+    case 213n:
+      7n
+    case 214n:
+      7n
     case 215n:
       4n
     case 216n:
-      7n
+      5n
     case 217n:
-      9n
+      4n
     case 218n:
-      4n
+      7n
     case 219n:
-      4n
+      9n
     case 220n:
       4n
     case 221n:
-      5n
+      4n
     case 222n:
-      5n
+      4n
     case 223n:
       5n
     case 224n:
-      4n
+      5n
     case 225n:
-      4n
+      5n
     case 226n:
-      9n
-    case 227n:
-      9n
-    case 228n:
       4n
+    case 227n:
+      4n
+    case 228n:
+      9n
     case 229n:
-      6n
+      9n
     case 230n:
-      6n
+      4n
     case 231n:
       6n
     case 232n:
       6n
     case 233n:
-      4n
+      6n
     case 234n:
-      7n
+      6n
     case 235n:
       4n
     case 236n:
-      4n
+      7n
     case 237n:
       4n
     case 238n:
       4n
     case 239n:
-      5n
+      4n
     case 240n:
       4n
     case 241n:
-      4n
+      5n
     case 242n:
-      5n
+      4n
     case 243n:
-      5n
+      4n
     case 244n:
+      5n
+    case 245n:
+      5n
+    case 246n:
       5n
     case _:
       1n
@@ -8943,11 +9105,13 @@ def stat.risky(+key: Nat) -> Bool:
       True{}
     case 198n:
       True{}
-    case 229n:
+    case 200n:
       True{}
-    case 232n:
+    case 231n:
       True{}
     case 234n:
+      True{}
+    case 236n:
       True{}
     case _:
       False{}
@@ -8969,25 +9133,25 @@ def stat.unseen(+key: Nat) -> Bool:
       True{}
     case 187n:
       True{}
-    case 205n:
-      True{}
     case 207n:
       True{}
     case 209n:
       True{}
     case 211n:
       True{}
-    case 212n:
-      True{}
     case 213n:
       True{}
-    case 216n:
+    case 214n:
       True{}
-    case 217n:
+    case 215n:
       True{}
     case 218n:
       True{}
     case 219n:
+      True{}
+    case 220n:
+      True{}
+    case 221n:
       True{}
     case _:
       False{}
@@ -9324,17 +9488,21 @@ def stat.keyspace(+key: Nat) -> Bool:
       True{}
     case 198n:
       True{}
-    case 214n:
+    case 199n:
       True{}
-    case 229n:
+    case 200n:
       True{}
-    case 230n:
+    case 216n:
       True{}
     case 231n:
       True{}
     case 232n:
       True{}
+    case 233n:
+      True{}
     case 234n:
+      True{}
+    case 236n:
       True{}
     case _:
       False{}
@@ -9527,7 +9695,9 @@ def stat.pausable(+key: Nat) -> Bool:
       True{}
     case 198n:
       True{}
-    case 214n:
+    case 200n:
+      True{}
+    case 216n:
       True{}
     case _:
       False{}
@@ -9637,6 +9807,8 @@ def stat.denyoom(+key: Nat) -> Bool:
     case 195n:
       True{}
     case 198n:
+      True{}
+    case 200n:
       True{}
     case _:
       False{}
@@ -9925,6 +10097,10 @@ def stat.touch(+key: Nat) -> Bool:
     case 197n:
       True{}
     case 198n:
+      True{}
+    case 199n:
+      True{}
+    case 200n:
       True{}
     case _:
       False{}
@@ -11402,6 +11578,18 @@ def stat.cw(+code: Nat) -> U32:
       3155
     case 734n:
       3157
+    case 735n:
+      3158
+    case 736n:
+      3161
+    case 737n:
+      3162
+    case 738n:
+      3164
+    case 739n:
+      3171
+    case 740n:
+      3173
     case _:
       63
 
@@ -13122,6 +13310,18 @@ def stat.code.lo49(+lo: Nat) -> Nat:
       733n
     case 21n:
       734n
+    case 22n:
+      735n
+    case 25n:
+      736n
+    case 26n:
+      737n
+    case 28n:
+      738n
+    case 35n:
+      739n
+    case 37n:
+      740n
     case _:
       0n
 
@@ -15407,6 +15607,15 @@ def zread.coll(op: ZRead, +cl: KV.Coll) -> Reply:
     case _:
       e_wrongtype()
 
+# DUMP's reply: the payload of the key's value (rdb.bend), or a null
+# when the key is not there
+def dump.of(m: Maybe<&2, KV.Item<String>>) -> Reply:
+  match m:
+    case Some{KV.Item{w, e}}:
+      RBulk{D.dump(KV.VStr{w})}
+    case None{}:
+      RNull{}
+
 # the reply of a Peek, from the entry of its key there at now
 def peek(c: PeekOp, +now: Nat, m: Maybe<&2, KV.Item<String>>) -> Reply:
   match c:
@@ -15440,9 +15649,12 @@ def peek(c: PeekOp, +now: Nat, m: Maybe<&2, KV.Item<String>>) -> Reply:
       sread.str(op, m)
     case PZset{op}:
       zread.str(op, m)
+    case PDump{}:
+      dump.of(m)
 
 # a Peek of a key that holds a collection: its type, its time, a read of
-# a hash of a hash, or WRONGTYPE for a read of a string
+# a hash of a hash (so of the others), its payload, or WRONGTYPE for a
+# read of a string
 def peek.coll(c: PeekOp, +now: Nat, +cl: KV.Coll, +e: Nat) -> Reply:
   match c:
     case PType{}:
@@ -15463,6 +15675,8 @@ def peek.coll(c: PeekOp, +now: Nat, +cl: KV.Coll, +e: Nat) -> Reply:
       sread.coll(op, cl)
     case PZset{op}:
       zread.coll(op, cl)
+    case PDump{}:
+      RBulk{D.dump(KV.VColl{cl})}
     case _:
       e_wrongtype()
 
@@ -15490,7 +15704,9 @@ def peek.v(c: PeekOp, +now: Nat, m: Maybe<&2, KV.Item<KV.Val>>) -> Reply:
 # pushed in turn at its first end, left, or its last); or set it to a
 # set: one the key held, changed by a write of a set, its time kept
 # (CMems), or a new one, with no time, made of members where the key was
-# not there at now (CMemsNew: the members ms added in turn); each keeps
+# not there at now (CMemsNew: the members ms added in turn); or set it
+# to the value v of a payload p, with its time e (CRestore: RESTORE's,
+# which the append-only file logs as the RESTORE of p); each keeps
 # the write the append-only file logs. An
 # Upd's reply and change come from the key's entry there at now alone. A
 # time a change gives a key is one the key may keep (KV.clamp: a time at
@@ -15513,6 +15729,7 @@ type Change is Data:
   CMemsNew{ms: List<&2, String>, s: KV.Mems}
   CZset{op: ZWrite, z: KV.Zset}
   CZsetNew{o: ZOpts, ps: List<&2, ZPair>, z: KV.Zset}
+  CRestore{p: String, v: KV.Val, e: Nat}
 
 type Out is Data:
   Out{r: Reply, ch: Change}
@@ -17419,6 +17636,76 @@ def pf.selftest.of(m: Maybe<&2, String>) -> Reply:
 def pf.selftest() -> Reply:
   pf.selftest.of(H.selftest())
 
+# RESTORE's update, from whether its key is there at now (live)
+def restore.gone(live: Bool) -> Out:
+  Bool.pick(Out, live, Out{r_ok(), CDel{}}, Out{r_ok(), CKeep{}})
+
+def restore.past(past: Bool, +a: At, p: String, v: KV.Val, live: Bool) -> Out:
+  match past:
+    case True{}:
+      restore.gone(live)
+    case False{}:
+      Out{r_ok(), CRestore{p, v, KV.clamp(at.exp(a))}}
+
+def restore.at(m: Maybe<&2, At>, p: String, v: KV.Val, live: Bool, +now: Nat) -> Out:
+  match m:
+    case Some{+a}:
+      restore.past(at.past(a, now), a, p, v, live)
+    case None{}:
+      restore.gone(live)
+
+def restore.ms(ms: Nat, at: Bool, p: String, v: KV.Val, live: Bool, +now: Nat) -> Out:
+  match ms:
+    case 0n:
+      Out{r_ok(), CRestore{p, v, 0n}}
+    case 1n+q:
+      restore.at(at.of(TmN{at, 1n+q}, now), p, v, live, now)
+
+def restore.when(t: Tm, p: String, v: KV.Val, live: Bool, +now: Nat) -> Out:
+  match t:
+    case TmN{at, ms}:
+      restore.ms(ms, at, p, v, live, now)
+    case TmB{at, neg, hi, lo}:
+      restore.at(at.of(TmB{at, neg, hi, lo}, now), p, v, live, now)
+
+def restore.load(m: Maybe<&2, KV.Val>, p: String, t: Tm, live: Bool, +now: Nat) -> Out:
+  match m:
+    case Some{v}:
+      restore.when(t, p, v, live, now)
+    case None{}:
+      Out{RError{"ERR Bad data format"}, CKeep{}}
+
+def restore.check(ok: Bool, +p: String, t: Tm, live: Bool, +now: Nat) -> Out:
+  match ok:
+    case True{}:
+      restore.load(D.load(p), p, t, live, now)
+    case False{}:
+      Out{RError{"ERR DUMP payload version or checksum are wrong"}, CKeep{}}
+
+def restore.ttl(t: TmR, +p: String, live: Bool, +now: Nat) -> Out:
+  match t:
+    case TOk{TmB{at, True{}, hi, lo}}:
+      Out{RError{"ERR Invalid TTL value, must be >= 0"}, CKeep{}}
+    case TOk{x}:
+      restore.check(D.verify(p), p, x, live, now)
+    case TBad{r}:
+      Out{r, CKeep{}}
+
+def restore.busy(busy: Bool, p: String, t: TmR, live: Bool, +now: Nat) -> Out:
+  match busy:
+    case True{}:
+      Out{RError{"BUSYKEY Target key name already exists."}, CKeep{}}
+    case False{}:
+      restore.ttl(t, p, live, now)
+
+def restore.live(+live: Bool, p: String, t: TmR, +rep: Bool, +now: Nat) -> Out:
+  restore.busy(Bool.and(Bool.not(rep), live), p, t, live, now)
+
+# RESTORE of a key whose entry there at now is m (a collection's seen as a
+# string's: RESTORE reads only whether the key is there)
+def restore.of(p: String, t: TmR, +rep: Bool, +now: Nat, m: Maybe<&2, KV.Item<String>>) -> Out:
+  restore.live(Maybe.is_some(&2, KV.Item<String>, m), p, t, rep, now)
+
 def upd(op: UpdOp, +now: Nat, m: Maybe<&2, KV.Item<String>>) -> Out:
   match op:
     case USetNx{v}:
@@ -17459,6 +17746,8 @@ def upd(op: UpdOp, +now: Nat, m: Maybe<&2, KV.Item<String>>) -> Out:
       zwrite.str(op, m)
     case UHll{op}:
       hll.upd(op, m)
+    case URestore{p, t, +rep, ac}:
+      restore.of(p, t, rep, now, m)
 
 # An update of a key that holds a collection: SET (and SETEX, PSETEX)
 # replaces it, SETNX finds it there, EXPIRE and its kin and PERSIST set
@@ -17476,6 +17765,8 @@ def upd.any(op: UpdOp) -> Bool:
     case UExpire{t, c, name}:
       True{}
     case UPersist{}:
+      True{}
+    case URestore{p, t, rep, ac}:
       True{}
     case _:
       False{}
@@ -17562,6 +17853,8 @@ def upd.ch(t: KV.Trie<KV.Val>, +k: String, +h: U32, +n: Nat, +x: Nat, now: Nat, 
       (r, Db{KV.keep.at(KV.Val, t, k, KV.VColl{KV.CZset{zv}}, h), n, x, now, rr})
     case CZsetNew{o, ps, zv}:
       (r, Db{KV.setx.at(KV.Val, t, k, KV.VColl{KV.CZset{zv}}, 0n, h), cnt.n(c, n), cnt.x(c, 0n, x), now, rr})
+    case CRestore{p, v, +e}:
+      (r, Db{KV.setx.at(KV.Val, t, k, v, e, h), cnt.n(c, n), cnt.x(c, e, x), now, rr})
 
 def upd.put(t: KV.Trie<KV.Val>, +k: String, +h: U32, +n: Nat, +x: Nat, now: Nat, rr: Maybe<&2, Db>, +c: Nat, o: Out) -> Reply & Db:
   match o:

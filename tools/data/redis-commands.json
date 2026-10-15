@@ -5943,6 +5943,119 @@
     }
    ]
   },
+  "dump": {
+   "docs": {
+    "%": [
+     "summary",
+     "Return a serialized version of the value stored at the specified key.",
+     "since",
+     "2.6.0",
+     "group",
+     "generic",
+     "complexity",
+     "O(1) to access the key and additional O(N*M) to serialize it, where N is the number of Redis objects composing the value and M their average size. For small string values the time complexity is thus O(1)+O(1*M) where M is small, so simply O(1).",
+     "arguments",
+     [
+      {
+       "%": [
+        "name",
+        "key",
+        "type",
+        "key",
+        "key_spec_index",
+        0
+       ]
+      }
+     ]
+    ]
+   },
+   "info": [
+    "dump",
+    2,
+    {
+     "~": [
+      {
+       "+": "readonly"
+      }
+     ]
+    },
+    1,
+    1,
+    1,
+    {
+     "~": [
+      {
+       "+": "@keyspace"
+      },
+      {
+       "+": "@read"
+      },
+      {
+       "+": "@slow"
+      }
+     ]
+    },
+    {
+     "~": [
+      "nondeterministic_output"
+     ]
+    },
+    {
+     "~": [
+      {
+       "%": [
+        "flags",
+        {
+         "~": [
+          {
+           "+": "RO"
+          },
+          {
+           "+": "access"
+          }
+         ]
+        },
+        "begin_search",
+        {
+         "%": [
+          "type",
+          "index",
+          "spec",
+          {
+           "%": [
+            "index",
+            1
+           ]
+          }
+         ]
+        },
+        "find_keys",
+        {
+         "%": [
+          "type",
+          "range",
+          "spec",
+          {
+           "%": [
+            "lastkey",
+            0,
+            "keystep",
+            1,
+            "limit",
+            0
+           ]
+          }
+         ]
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "~": []
+    }
+   ]
+  },
   "echo": {
    "docs": {
     "%": [
@@ -20772,6 +20885,236 @@
     },
     {
      "~": []
+    },
+    {
+     "~": []
+    }
+   ]
+  },
+  "restore": {
+   "docs": {
+    "%": [
+     "summary",
+     "Create a key using the provided serialized value, previously obtained using DUMP.",
+     "since",
+     "2.6.0",
+     "group",
+     "generic",
+     "complexity",
+     "O(1) to create the new key and additional O(N*M) to reconstruct the serialized value, where N is the number of Redis objects composing the value and M their average size. For small string values the time complexity is thus O(1)+O(1*M) where M is small, so simply O(1). However for sorted set values the complexity is O(N*M*log(N)) because inserting values into sorted sets is O(log(N)).",
+     "history",
+     {
+      "~": [
+       [
+        "3.0.0",
+        "Added the `REPLACE` modifier."
+       ],
+       [
+        "5.0.0",
+        "Added the `ABSTTL` modifier."
+       ],
+       [
+        "5.0.0",
+        "Added the `IDLETIME` and `FREQ` options."
+       ]
+      ]
+     },
+     "arguments",
+     [
+      {
+       "%": [
+        "name",
+        "key",
+        "type",
+        "key",
+        "key_spec_index",
+        0
+       ]
+      },
+      {
+       "%": [
+        "name",
+        "ttl",
+        "type",
+        "integer"
+       ]
+      },
+      {
+       "%": [
+        "name",
+        "serialized-value",
+        "type",
+        "string"
+       ]
+      },
+      {
+       "%": [
+        "name",
+        "replace",
+        "type",
+        "pure-token",
+        "token",
+        "REPLACE",
+        "since",
+        "3.0.0",
+        "flags",
+        {
+         "~": [
+          {
+           "+": "optional"
+          }
+         ]
+        }
+       ]
+      },
+      {
+       "%": [
+        "name",
+        "absttl",
+        "type",
+        "pure-token",
+        "token",
+        "ABSTTL",
+        "since",
+        "5.0.0",
+        "flags",
+        {
+         "~": [
+          {
+           "+": "optional"
+          }
+         ]
+        }
+       ]
+      },
+      {
+       "%": [
+        "name",
+        "seconds",
+        "type",
+        "integer",
+        "token",
+        "IDLETIME",
+        "since",
+        "5.0.0",
+        "flags",
+        {
+         "~": [
+          {
+           "+": "optional"
+          }
+         ]
+        }
+       ]
+      },
+      {
+       "%": [
+        "name",
+        "frequency",
+        "type",
+        "integer",
+        "token",
+        "FREQ",
+        "since",
+        "5.0.0",
+        "flags",
+        {
+         "~": [
+          {
+           "+": "optional"
+          }
+         ]
+        }
+       ]
+      }
+     ]
+    ]
+   },
+   "info": [
+    "restore",
+    -4,
+    {
+     "~": [
+      {
+       "+": "write"
+      },
+      {
+       "+": "denyoom"
+      }
+     ]
+    },
+    1,
+    1,
+    1,
+    {
+     "~": [
+      {
+       "+": "@keyspace"
+      },
+      {
+       "+": "@write"
+      },
+      {
+       "+": "@slow"
+      },
+      {
+       "+": "@dangerous"
+      }
+     ]
+    },
+    {
+     "~": []
+    },
+    {
+     "~": [
+      {
+       "%": [
+        "flags",
+        {
+         "~": [
+          {
+           "+": "OW"
+          },
+          {
+           "+": "update"
+          }
+         ]
+        },
+        "begin_search",
+        {
+         "%": [
+          "type",
+          "index",
+          "spec",
+          {
+           "%": [
+            "index",
+            1
+           ]
+          }
+         ]
+        },
+        "find_keys",
+        {
+         "%": [
+          "type",
+          "range",
+          "spec",
+          {
+           "%": [
+            "lastkey",
+            0,
+            "keystep",
+            1,
+            "limit",
+            0
+           ]
+          }
+         ]
+        }
+       ]
+      }
+     ]
     },
     {
      "~": []

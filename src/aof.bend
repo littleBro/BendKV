@@ -40,7 +40,8 @@ import ./float.bend as F
 # set (HSETNX's pair, HINCRBY's field with its sum) or the HDEL of the
 # fields it took, and a new hash where a key whose time had passed still
 # lay as one entry that deletes the key and sets the pairs (hnew.effect,
-# below). Every time is from 1970, so the effects mean the
+# below); a RESTORE as the RESTORE of its payload, with REPLACE and the
+# time it gave (restore.effect). Every time is from 1970, so the effects mean the
 # same whenever they run, and a time, or an offset, is of 14 digits at
 # most (KV.small): no number but such a time or offset, or a database's
 # number, is ever read back from text.
@@ -109,6 +110,16 @@ def snew.effect(gone: Bool, +k: String, ms: List<&2, String>) -> List<&2, R.Cmd>
     case False{}:
       [R.Upd{k, R.UMems{R.SWNew{ms}}}]
 
+# a value restored from a payload p with time e (0: none): the RESTORE
+# of p with REPLACE, as the key may be there when the file loads (its
+# time had passed), and ABSTTL with a time, which is from 1970
+def restore.effect(+k: String, p: String, +e: Nat) -> List<&2, R.Cmd>:
+  match e:
+    case 0n:
+      [R.Upd{k, R.URestore{p, R.TOk{R.TmN{False{}, 0n}}, True{}, 0n}}]
+    case 1n+q:
+      [R.Upd{k, R.URestore{p, R.TOk{R.TmN{True{}, 1n+q}}, True{}, 0n}}]
+
 # a new sorted set, made by a ZADD of options o and pairs ps: the ZADD
 # where the trie held no entry for the key (gone), else the script that
 # deletes the key and runs the ZADD (R.ZWNew), one entry, as for a new
@@ -154,6 +165,8 @@ def ch.effect(+k: String, +c: Nat, +ch: R.Change) -> List<&2, R.Cmd>:
       [R.Upd{k, R.UZset{op}}]
     case R.CZsetNew{o, ps, z}:
       znew.effect(Nat.is_eq(c, 0n), k, o, ps)
+    case R.CRestore{p, v, +e}:
+      restore.effect(k, p, e)
 
 def upd.effect(+k: String, +c: Nat, +o: R.Out) -> List<&2, R.Cmd>:
   match o:
@@ -746,6 +759,16 @@ def zset.args(+k: String, op: R.ZWrite) -> List<&2, String>:
     case R.ZWPopN{max, c}:
       [zpop.name(max), k, c]
 
+# RESTORE as the file logs it: with REPLACE, and ABSTTL with a time
+def restore.args(+k: String, p: String, t: R.TmR) -> List<&2, String>:
+  match t:
+    case R.TOk{R.TmN{True{}, ms}}:
+      ["RESTORE", k, Nat.show(ms), p, "REPLACE", "ABSTTL"]
+    case R.TOk{R.TmN{False{}, ms}}:
+      ["RESTORE", k, Nat.show(ms), p, "REPLACE"]
+    case _:
+      Nil{}
+
 def upd.args(+k: String, op: R.UpdOp) -> List<&2, String>:
   match op:
     case R.USet{v, cond, ttl, name}:
@@ -766,6 +789,8 @@ def upd.args(+k: String, op: R.UpdOp) -> List<&2, String>:
       mems.args(k, op)
     case R.UZset{op}:
       zset.args(k, op)
+    case R.URestore{p, t, rep, ac}:
+      restore.args(k, p, t)
     case _:
       Nil{}
 
@@ -1205,7 +1230,8 @@ def file.copy(args: List<&2, String>, c: R.Cmd) -> R.Act:
 # a command of a file as an act: SELECT moves the focus, SWAPDB, MOVE,
 # COPY and FLUSHALL act on the databases, SORT with STORE, PFMERGE and a
 # GEO search that stores (as Redis writes them, the command that ran)
-# write their destination, and
+# write their destination, RESTORE with IDLETIME or FREQ (as Redis
+# writes it, the command that ran) restores its key, and
 # any other command runs on the focus (a SELECT, SWAPDB, MOVE or COPY
 # whose numbers or options do not read too: exec answers it with an
 # error and changes nothing, as Redis's load ignores a command that
@@ -1228,6 +1254,8 @@ def file.act(+c: R.Cmd) -> R.Act:
       R.APfMerge{d, srcs}
     case R.Own{R.SGeoStore{k, args}}:
       R.AGeo{k, args}
+    case R.Own{R.SRestore{k, op}}:
+      R.ARun{R.Upd{k, op}}
     case _:
       R.ARun{c}
 
