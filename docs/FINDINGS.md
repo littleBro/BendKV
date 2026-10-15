@@ -5918,6 +5918,52 @@ need Lua: one fills a set with a script, and the next resets the events that set
 expiry would have given. unit/slowlog passes 7 of its 9. The other two use ACL and
 MIGRATE.
 
+## 3zzzj. The timing's runs not yet counted, one per command
+
+**What was left.** Each call's time goes to a run of calls of its command (section 3zzz).
+The newest run (`cur`) takes the calls of its command. A call of another command starts a
+new run, and `cur` goes to the runs not yet counted (`pend`), which the cron's tick counts
+in the entries every 100 ms. Each run has a histogram of its own: four nodes of eight
+words from its first call, about 300 bytes with the run. Under a load of mixed commands,
+where the command changes from one call to the next, `pend` held a run for nearly each
+call until the tick (issue #79).
+
+- **Memory.** Under `tools/loadgen.c -g 0.5` (GETs and SETs of 10,000 keys at random, 20
+  connections at depth 16), the heap's account went between 2.3 MB and 16 MB from one
+  tick to the next.
+- **Throughput.** Making and dropping those runs cost far more time than their
+  instructions: with `latency-tracking no` the same load ran 1.6 to 1.9 times as fast,
+  and main ran it at 0.79 times Redis's throughput.
+- **The eviction** goes by the account. Before each group it found the heap past
+  maxmemory by what the runs held, and evicted keys that the next tick would have made
+  room for.
+- **The tests.** Redis's test of the volatile policies (unit/maxmemory.tcl) works on 100 KB
+  past the memory used. Between two ticks, its own SETs and INFOs put up to 80 KB of runs
+  in that budget, and when a tick let them go during the test's second half, the keys
+  never reached the limit. Run alone 25 times, its three volatile checks failed 5 times
+  of 75.
+
+**What changed** (`src/info.bend`: `truns.put`). A run that leaves `cur` is added to the run
+of its command in `pend` when there is one (`trun.join`: its calls, its time and its
+histogram merged into that run's), and goes last when there is none. Between two ticks,
+`pend` so holds a run of each command at most. What INFO, LATENCY and SLOWLOG show is the
+same: the tick counts the same calls, times and histograms into the entries, in another
+order.
+
+**What it gives** (section 71 of [PERFORMANCE.md](PERFORMANCE.md)).
+
+- **Memory.** Under the same load, the heap's account moves by 16 KB at most.
+- **Throughput.** The mixed load runs 1.45 times as fast, 1.15 times Redis's. Instructions
+  per call fall by 4%, so most of the gain is in the cache: the heap no longer runs
+  through 14 MB of fresh nodes every 100 ms.
+- **Single-command loads.** There `cur` takes every call, as before, and `make perfcheck`'s
+  counts are main's.
+- **The volatile policies' test.** It failed in none of 75 checks. Its first half now
+  adds about 250 keys, where it added 91, the rest of the 100 KB having been the runs.
+
+**Tests.** `tests/timing_test.py`, `tests/stats_test.py` and `tests/info_test.py` against
+Redis: commandstats, latencystats, errorstats and the slow log, unchanged.
+
 ## 4. Where a request's time goes, and hiding the memory waits
 
 With the eight patches, BendKV ran fewer instructions on GET and SET than Redis, missed
