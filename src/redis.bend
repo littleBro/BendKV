@@ -5722,9 +5722,155 @@ def geo.parse(+kind: Nat, +name: String, +args: List<&2, String>, +n: Nat, lname
 # LOLWUT's drawings its random numbers: SAdmin, its kind (0 LASTSAVE, 1
 # MEMORY STATS, 2 MEMORY DOCTOR, 3 LOLWUT VERSION 5, 4 SHUTDOWN, 5 LOLWUT
 # VERSION 6) and its arguments (session.bend, The administrative
-# commands). ROLE answers as a master with no replica answers. WAIT is a
+# commands). SLOWLOG and LATENCY read the timing of the calls (info.bend,
+# Timing) and RESET changes it: SAdmin too, kinds 6 SLOWLOG GET (of a
+# count, -1 for all, or none for the default 10), 7 SLOWLOG LEN, 8
+# SLOWLOG RESET, 9 LATENCY LATEST, 10 LATENCY HISTORY (of an event), 11
+# LATENCY RESET (of events, all for none), 12 LATENCY GRAPH (of an
+# event), 13 LATENCY DOCTOR and 14 LATENCY HISTOGRAM (of commands, all
+# for none). ROLE answers as a master with no replica answers. WAIT is a
 # blocking command (SBlock) when it asks for a replica, which none will
 # acknowledge.
+
+# SLOWLOG: GET of a count, as getRangeLongFromObjectOrReply reads it (a
+# long long from -1 on; its own error for any other argument, and for a
+# second), LEN, RESET, HELP
+def slowlog_id(+n: String, len: Nat) -> Nat:
+  match len:
+    case 3n:
+      Bool.pick(Nat, String.eq(n, "GET"), 1n, Bool.pick(Nat, String.eq(n, "LEN"), 2n, 0n))
+    case 4n:
+      Bool.pick(Nat, String.eq(n, "HELP"), 4n, 0n)
+    case 5n:
+      Bool.pick(Nat, String.eq(n, "RESET"), 3n, 0n)
+    case _:
+      0n
+
+def slowlog_help() -> List<&2, String>:
+  ["GET [<count>]",
+   "    Return top <count> entries from the slowlog (default: 10, -1 mean all).",
+   "    Entries are made of:",
+   "    id, timestamp, time in microseconds, arguments array, client IP and port,",
+   "    client name",
+   "LEN",
+   "    Return the length of the slowlog.",
+   "RESET",
+   "    Reset the slowlog."]
+
+def slowlog.bad() -> SessOp:
+  SBad{RError{"ERR count should be greater than or equal to -1"}}
+
+# a count past 10^14 as 10^14, more than the log can hold
+def slowlog.count(+l: LL) -> SessOp:
+  match l:
+    case LL{+neg, +hi, +lo}:
+      Bool.pick(SessOp, neg, Bool.pick(SessOp, Bool.and(Nat.is_eq(hi, 0n), Nat.is_eq(lo, 1n)), SAdmin{6n, ["-1"]}, slowlog.bad()),
+        SAdmin{6n, [Nat.show(Nat.add(Nat.mul(Nat.min(hi, 100000n), 1000000000n), lo))]})
+    case LLBad{}:
+      slowlog.bad()
+
+def parse_slowlog(id: Nat, sub: String, args: List<&2, String>) -> SessOp:
+  match id:
+    case 1n:  # GET
+      match args:
+        case Nil{}:
+          SAdmin{6n, Nil{}}
+        case Con{+c, Nil{}}:
+          slowlog.count(ll.read(c))
+        case _:
+          SBad{e_sub_syntax(sub, "SLOWLOG")}
+    case 2n:  # LEN
+      match args:
+        case Nil{}:
+          SAdmin{7n, Nil{}}
+        case _:
+          s_arity("slowlog|len")
+    case 3n:  # RESET
+      match args:
+        case Nil{}:
+          SAdmin{8n, Nil{}}
+        case _:
+          s_arity("slowlog|reset")
+    case 4n:  # HELP
+      match args:
+        case Nil{}:
+          help("SLOWLOG", slowlog_help())
+        case _:
+          s_arity("slowlog|help")
+    case _:
+      e_unknown_sub(sub, "SLOWLOG")
+
+# LATENCY: DOCTOR, GRAPH and HISTORY of an event, HISTOGRAM of commands,
+# LATEST, RESET of events, HELP
+def latency_id(+n: String, len: Nat) -> Nat:
+  match len:
+    case 4n:
+      Bool.pick(Nat, String.eq(n, "HELP"), 3n, 0n)
+    case 5n:
+      Bool.pick(Nat, String.eq(n, "GRAPH"), 2n, Bool.pick(Nat, String.eq(n, "RESET"), 7n, 0n))
+    case 6n:
+      Bool.pick(Nat, String.eq(n, "DOCTOR"), 1n, Bool.pick(Nat, String.eq(n, "LATEST"), 6n, 0n))
+    case 7n:
+      Bool.pick(Nat, String.eq(n, "HISTORY"), 5n, 0n)
+    case 9n:
+      Bool.pick(Nat, String.eq(n, "HISTOGRAM"), 4n, 0n)
+    case _:
+      0n
+
+def latency_help() -> List<&2, String>:
+  ["DOCTOR",
+   "    Return a human readable latency analysis report.",
+   "GRAPH <event>",
+   "    Return an ASCII latency graph for the <event> class.",
+   "HISTORY <event>",
+   "    Return time-latency samples for the <event> class.",
+   "LATEST",
+   "    Return the latest latency samples for all events.",
+   "RESET [<event> ...]",
+   "    Reset latency data of one or more <event> classes.",
+   "    (default: reset all data for all event classes)",
+   "HISTOGRAM [COMMAND ...]",
+   "    Return a cumulative distribution of latencies in the format of a histogram for the specified command names.",
+   "    If no commands are specified then all histograms are replied."]
+
+def parse_latency(id: Nat, sub: String, args: List<&2, String>) -> SessOp:
+  match id:
+    case 1n:  # DOCTOR
+      match args:
+        case Nil{}:
+          SAdmin{13n, Nil{}}
+        case _:
+          s_arity("latency|doctor")
+    case 2n:  # GRAPH
+      match args:
+        case Con{e, Nil{}}:
+          SAdmin{12n, [e]}
+        case _:
+          s_arity("latency|graph")
+    case 3n:  # HELP
+      match args:
+        case Nil{}:
+          help("LATENCY", latency_help())
+        case _:
+          s_arity("latency|help")
+    case 4n:  # HISTOGRAM
+      SAdmin{14n, args}
+    case 5n:  # HISTORY
+      match args:
+        case Con{e, Nil{}}:
+          SAdmin{10n, [e]}
+        case _:
+          s_arity("latency|history")
+    case 6n:  # LATEST
+      match args:
+        case Nil{}:
+          SAdmin{9n, Nil{}}
+        case _:
+          s_arity("latency|latest")
+    case 7n:  # RESET
+      SAdmin{11n, args}
+    case _:
+      e_unknown_sub(sub, "LATENCY")
 
 # ROLE: a master at the replication offset 0, with no replica
 # (roleCommand)
@@ -6112,7 +6258,8 @@ def cmd_id.l7(+n: String, c: Nat) -> Nat:
       Bool.pick(Nat, String.eq(n, "HGETALL"), 62n,
       Bool.pick(Nat, String.eq(n, "HINCRBY"), 63n, 0n))))
     case 12n:  # L
-      Bool.pick(Nat, String.eq(n, "LINSERT"), 76n, 0n)
+      Bool.pick(Nat, String.eq(n, "LINSERT"), 76n,
+      Bool.pick(Nat, String.eq(n, "LATENCY"), 202n, 0n))
     case 13n:  # M
       Bool.pick(Nat, String.eq(n, "MONITOR"), 175n, 0n)
     case 16n:  # P
@@ -6125,7 +6272,8 @@ def cmd_id.l7(+n: String, c: Nat) -> Nat:
     case 18n:  # R
       Bool.pick(Nat, String.eq(n, "RESTORE"), 200n, 0n)
     case 19n:  # S
-      Bool.pick(Nat, String.eq(n, "SORT_RO"), 178n, 0n)
+      Bool.pick(Nat, String.eq(n, "SORT_RO"), 178n,
+      Bool.pick(Nat, String.eq(n, "SLOWLOG"), 201n, 0n))
     case 21n:  # U
       Bool.pick(Nat, String.eq(n, "UNWATCH"), 165n, 0n)
     case 26n:  # Z
@@ -7159,6 +7307,20 @@ def parse_id(id: Nat, name: String, args: List<&2, String>) -> Cmd:
           restore.parse(k, ttl, p, rest)
         case _:
           e_arity("restore")
+    case 201n:  # SLOWLOG
+      match args:
+        case Nil{}:
+          e_arity("slowlog")
+        case Con{+sub, rest}:
+          +up = String.to_upper(sub)
+          Own{parse_slowlog(slowlog_id(up, String.length(up)), sub, rest)}
+    case 202n:  # LATENCY
+      match args:
+        case Nil{}:
+          e_arity("latency")
+        case Con{+sub, rest}:
+          +up = String.to_upper(sub)
+          Own{parse_latency(latency_id(up, String.length(up)), sub, rest)}
     case _:
       e_unknown(name, args)
 
@@ -7853,6 +8015,10 @@ def stat.top(+id: Nat) -> Nat:
       199n
     case 200n:
       200n
+    case 201n:
+      201n
+    case 202n:
+      202n
     case _:
       0n
 
@@ -7860,35 +8026,35 @@ def stat.top(+id: Nat) -> Nat:
 def stat.sub.client(+sub: Nat) -> Nat:
   match sub:
     case 1n:
-      201n
-    case 2n:
-      202n
-    case 3n:
       203n
-    case 4n:
+    case 2n:
       204n
-    case 5n:
+    case 3n:
       205n
-    case 6n:
+    case 4n:
       206n
-    case 7n:
+    case 5n:
       207n
-    case 8n:
+    case 6n:
       208n
-    case 9n:
+    case 7n:
       209n
-    case 10n:
+    case 8n:
       210n
-    case 11n:
+    case 9n:
       211n
-    case 12n:
+    case 10n:
       212n
-    case 13n:
+    case 11n:
       213n
-    case 14n:
+    case 12n:
       214n
-    case 15n:
+    case 13n:
       215n
+    case 14n:
+      216n
+    case 15n:
+      217n
     case _:
       0n
 
@@ -7896,9 +8062,9 @@ def stat.sub.client(+sub: Nat) -> Nat:
 def stat.sub.function(+sub: Nat) -> Nat:
   match sub:
     case 1n:
-      216n
+      218n
     case 2n:
-      217n
+      219n
     case _:
       0n
 
@@ -7906,15 +8072,15 @@ def stat.sub.function(+sub: Nat) -> Nat:
 def stat.sub.config(+sub: Nat) -> Nat:
   match sub:
     case 1n:
-      218n
-    case 2n:
-      219n
-    case 3n:
       220n
-    case 4n:
+    case 2n:
       221n
-    case 5n:
+    case 3n:
       222n
+    case 4n:
+      223n
+    case 5n:
+      224n
     case _:
       0n
 
@@ -7922,19 +8088,19 @@ def stat.sub.config(+sub: Nat) -> Nat:
 def stat.sub.command(+sub: Nat) -> Nat:
   match sub:
     case 1n:
-      223n
-    case 2n:
-      224n
-    case 3n:
       225n
-    case 4n:
+    case 2n:
       226n
-    case 5n:
+    case 3n:
       227n
-    case 6n:
+    case 4n:
       228n
-    case 7n:
+    case 5n:
       229n
+    case 6n:
+      230n
+    case 7n:
+      231n
     case _:
       0n
 
@@ -7942,15 +8108,15 @@ def stat.sub.command(+sub: Nat) -> Nat:
 def stat.sub.object(+sub: Nat) -> Nat:
   match sub:
     case 1n:
-      230n
-    case 2n:
-      231n
-    case 3n:
       232n
-    case 4n:
+    case 2n:
       233n
-    case 5n:
+    case 3n:
       234n
+    case 4n:
+      235n
+    case 5n:
+      236n
     case _:
       0n
 
@@ -7958,17 +8124,17 @@ def stat.sub.object(+sub: Nat) -> Nat:
 def stat.sub.memory(+sub: Nat) -> Nat:
   match sub:
     case 1n:
-      235n
-    case 2n:
-      236n
-    case 3n:
       237n
-    case 4n:
+    case 2n:
       238n
-    case 5n:
+    case 3n:
       239n
-    case 6n:
+    case 4n:
       240n
+    case 5n:
+      241n
+    case 6n:
+      242n
     case _:
       0n
 
@@ -7976,17 +8142,51 @@ def stat.sub.memory(+sub: Nat) -> Nat:
 def stat.sub.pubsub(+sub: Nat) -> Nat:
   match sub:
     case 1n:
-      241n
-    case 2n:
-      242n
-    case 3n:
       243n
-    case 4n:
+    case 2n:
       244n
-    case 5n:
+    case 3n:
       245n
-    case 6n:
+    case 4n:
       246n
+    case 5n:
+      247n
+    case 6n:
+      248n
+    case _:
+      0n
+
+# a subcommand of SLOWLOG's key, by its number; 0 for none
+def stat.sub.slowlog(+sub: Nat) -> Nat:
+  match sub:
+    case 1n:
+      249n
+    case 2n:
+      250n
+    case 3n:
+      251n
+    case 4n:
+      252n
+    case _:
+      0n
+
+# a subcommand of LATENCY's key, by its number; 0 for none
+def stat.sub.latency(+sub: Nat) -> Nat:
+  match sub:
+    case 1n:
+      253n
+    case 2n:
+      254n
+    case 3n:
+      255n
+    case 4n:
+      256n
+    case 5n:
+      257n
+    case 6n:
+      258n
+    case 7n:
+      259n
     case _:
       0n
 
@@ -8394,97 +8594,123 @@ def stat.name(+key: Nat) -> String:
     case 200n:
       "restore"
     case 201n:
-      "client|id"
+      "slowlog"
     case 202n:
-      "client|help"
+      "latency"
     case 203n:
-      "client|reply"
+      "client|id"
     case 204n:
-      "client|getname"
+      "client|help"
     case 205n:
-      "client|setname"
+      "client|reply"
     case 206n:
-      "client|caching"
+      "client|getname"
     case 207n:
-      "client|unblock"
+      "client|setname"
     case 208n:
-      "client|getredir"
+      "client|caching"
     case 209n:
-      "client|no-evict"
+      "client|unblock"
     case 210n:
-      "client|trackinginfo"
+      "client|getredir"
     case 211n:
-      "client|list"
+      "client|no-evict"
     case 212n:
-      "client|info"
+      "client|trackinginfo"
     case 213n:
-      "client|kill"
+      "client|list"
     case 214n:
-      "client|pause"
+      "client|info"
     case 215n:
-      "client|unpause"
+      "client|kill"
     case 216n:
-      "function|flush"
+      "client|pause"
     case 217n:
-      "function|help"
+      "client|unpause"
     case 218n:
-      "config|get"
+      "function|flush"
     case 219n:
-      "config|set"
+      "function|help"
     case 220n:
-      "config|resetstat"
+      "config|get"
     case 221n:
-      "config|rewrite"
+      "config|set"
     case 222n:
-      "config|help"
+      "config|resetstat"
     case 223n:
-      "command|info"
+      "config|rewrite"
     case 224n:
-      "command|docs"
+      "config|help"
     case 225n:
-      "command|list"
+      "command|info"
     case 226n:
-      "command|help"
+      "command|docs"
     case 227n:
-      "command|count"
+      "command|list"
     case 228n:
-      "command|getkeys"
+      "command|help"
     case 229n:
-      "command|getkeysandflags"
+      "command|count"
     case 230n:
-      "object|help"
+      "command|getkeys"
     case 231n:
-      "object|freq"
+      "command|getkeysandflags"
     case 232n:
-      "object|encoding"
+      "object|help"
     case 233n:
-      "object|refcount"
+      "object|freq"
     case 234n:
-      "object|idletime"
+      "object|encoding"
     case 235n:
-      "memory|help"
+      "object|refcount"
     case 236n:
-      "memory|usage"
+      "object|idletime"
     case 237n:
-      "memory|stats"
+      "memory|help"
     case 238n:
-      "memory|doctor"
+      "memory|usage"
     case 239n:
-      "memory|purge"
+      "memory|stats"
     case 240n:
-      "memory|malloc-stats"
+      "memory|doctor"
     case 241n:
-      "pubsub|channels"
+      "memory|purge"
     case 242n:
-      "pubsub|help"
+      "memory|malloc-stats"
     case 243n:
-      "pubsub|numpat"
+      "pubsub|channels"
     case 244n:
-      "pubsub|numsub"
+      "pubsub|help"
     case 245n:
-      "pubsub|shardchannels"
+      "pubsub|numpat"
     case 246n:
+      "pubsub|numsub"
+    case 247n:
+      "pubsub|shardchannels"
+    case 248n:
       "pubsub|shardnumsub"
+    case 249n:
+      "slowlog|get"
+    case 250n:
+      "slowlog|len"
+    case 251n:
+      "slowlog|reset"
+    case 252n:
+      "slowlog|help"
+    case 253n:
+      "latency|doctor"
+    case 254n:
+      "latency|graph"
+    case 255n:
+      "latency|help"
+    case 256n:
+      "latency|histogram"
+    case 257n:
+      "latency|history"
+    case 258n:
+      "latency|latest"
+    case 259n:
+      "latency|reset"
     case _:
       ""
 
@@ -8893,96 +9119,122 @@ def stat.arity(+key: Nat) -> Nat:
     case 200n:
       9n
     case 201n:
-      4n
+      5n
     case 202n:
-      4n
+      5n
     case 203n:
-      6n
+      4n
     case 204n:
       4n
     case 205n:
       6n
     case 206n:
-      6n
-    case 207n:
-      7n
-    case 208n:
       4n
-    case 209n:
+    case 207n:
       6n
+    case 208n:
+      6n
+    case 209n:
+      7n
     case 210n:
       4n
     case 211n:
-      5n
+      6n
     case 212n:
       4n
     case 213n:
-      7n
-    case 214n:
-      7n
-    case 215n:
-      4n
-    case 216n:
       5n
+    case 214n:
+      4n
+    case 215n:
+      7n
+    case 216n:
+      7n
     case 217n:
       4n
     case 218n:
-      7n
+      5n
     case 219n:
-      9n
+      4n
     case 220n:
-      4n
+      7n
     case 221n:
-      4n
+      9n
     case 222n:
       4n
     case 223n:
-      5n
+      4n
     case 224n:
-      5n
+      4n
     case 225n:
       5n
     case 226n:
-      4n
+      5n
     case 227n:
-      4n
+      5n
     case 228n:
-      9n
-    case 229n:
-      9n
-    case 230n:
       4n
+    case 229n:
+      4n
+    case 230n:
+      9n
     case 231n:
-      6n
+      9n
     case 232n:
-      6n
+      4n
     case 233n:
       6n
     case 234n:
       6n
     case 235n:
-      4n
+      6n
     case 236n:
-      7n
+      6n
     case 237n:
       4n
     case 238n:
-      4n
+      7n
     case 239n:
       4n
     case 240n:
       4n
     case 241n:
-      5n
+      4n
     case 242n:
       4n
     case 243n:
-      4n
+      5n
     case 244n:
-      5n
+      4n
     case 245n:
-      5n
+      4n
     case 246n:
+      5n
+    case 247n:
+      5n
+    case 248n:
+      5n
+    case 249n:
+      5n
+    case 250n:
+      4n
+    case 251n:
+      4n
+    case 252n:
+      4n
+    case 253n:
+      4n
+    case 254n:
+      6n
+    case 255n:
+      4n
+    case 256n:
+      5n
+    case 257n:
+      6n
+    case 258n:
+      4n
+    case 259n:
       5n
     case _:
       1n
@@ -9224,11 +9476,11 @@ def stat.risky(+key: Nat) -> Bool:
       True{}
     case 200n:
       True{}
-    case 231n:
-      True{}
-    case 234n:
+    case 233n:
       True{}
     case 236n:
+      True{}
+    case 238n:
       True{}
     case _:
       False{}
@@ -9250,25 +9502,43 @@ def stat.unseen(+key: Nat) -> Bool:
       True{}
     case 187n:
       True{}
-    case 207n:
-      True{}
     case 209n:
       True{}
     case 211n:
       True{}
     case 213n:
       True{}
-    case 214n:
-      True{}
     case 215n:
       True{}
-    case 218n:
+    case 216n:
       True{}
-    case 219n:
+    case 217n:
       True{}
     case 220n:
       True{}
     case 221n:
+      True{}
+    case 222n:
+      True{}
+    case 223n:
+      True{}
+    case 249n:
+      True{}
+    case 250n:
+      True{}
+    case 251n:
+      True{}
+    case 253n:
+      True{}
+    case 254n:
+      True{}
+    case 256n:
+      True{}
+    case 257n:
+      True{}
+    case 258n:
+      True{}
+    case 259n:
       True{}
     case _:
       False{}
@@ -9609,17 +9879,17 @@ def stat.keyspace(+key: Nat) -> Bool:
       True{}
     case 200n:
       True{}
-    case 216n:
-      True{}
-    case 231n:
-      True{}
-    case 232n:
+    case 218n:
       True{}
     case 233n:
       True{}
     case 234n:
       True{}
+    case 235n:
+      True{}
     case 236n:
+      True{}
+    case 238n:
       True{}
     case _:
       False{}
@@ -9814,7 +10084,7 @@ def stat.pausable(+key: Nat) -> Bool:
       True{}
     case 200n:
       True{}
-    case 216n:
+    case 218n:
       True{}
     case _:
       False{}
@@ -9926,6 +10196,200 @@ def stat.denyoom(+key: Nat) -> Bool:
     case 198n:
       True{}
     case 200n:
+      True{}
+    case _:
+      False{}
+
+# whether Redis flags the command of a key fast: the latency monitor
+# names a slow call of it fast-command, of any other command
+def stat.fast(+key: Nat) -> Bool:
+  match key:
+    case 1n:
+      True{}
+    case 2n:
+      True{}
+    case 3n:
+      True{}
+    case 5n:
+      True{}
+    case 6n:
+      True{}
+    case 8n:
+      True{}
+    case 9n:
+      True{}
+    case 10n:
+      True{}
+    case 11n:
+      True{}
+    case 12n:
+      True{}
+    case 13n:
+      True{}
+    case 14n:
+      True{}
+    case 15n:
+      True{}
+    case 16n:
+      True{}
+    case 18n:
+      True{}
+    case 25n:
+      True{}
+    case 26n:
+      True{}
+    case 27n:
+      True{}
+    case 28n:
+      True{}
+    case 29n:
+      True{}
+    case 30n:
+      True{}
+    case 31n:
+      True{}
+    case 32n:
+      True{}
+    case 33n:
+      True{}
+    case 34n:
+      True{}
+    case 35n:
+      True{}
+    case 36n:
+      True{}
+    case 40n:
+      True{}
+    case 44n:
+      True{}
+    case 47n:
+      True{}
+    case 50n:
+      True{}
+    case 51n:
+      True{}
+    case 52n:
+      True{}
+    case 53n:
+      True{}
+    case 54n:
+      True{}
+    case 55n:
+      True{}
+    case 56n:
+      True{}
+    case 57n:
+      True{}
+    case 58n:
+      True{}
+    case 59n:
+      True{}
+    case 63n:
+      True{}
+    case 66n:
+      True{}
+    case 67n:
+      True{}
+    case 68n:
+      True{}
+    case 69n:
+      True{}
+    case 70n:
+      True{}
+    case 71n:
+      True{}
+    case 72n:
+      True{}
+    case 83n:
+      True{}
+    case 84n:
+      True{}
+    case 85n:
+      True{}
+    case 86n:
+      True{}
+    case 87n:
+      True{}
+    case 90n:
+      True{}
+    case 98n:
+      True{}
+    case 99n:
+      True{}
+    case 100n:
+      True{}
+    case 101n:
+      True{}
+    case 102n:
+      True{}
+    case 103n:
+      True{}
+    case 104n:
+      True{}
+    case 111n:
+      True{}
+    case 112n:
+      True{}
+    case 113n:
+      True{}
+    case 119n:
+      True{}
+    case 121n:
+      True{}
+    case 122n:
+      True{}
+    case 123n:
+      True{}
+    case 124n:
+      True{}
+    case 125n:
+      True{}
+    case 126n:
+      True{}
+    case 127n:
+      True{}
+    case 128n:
+      True{}
+    case 129n:
+      True{}
+    case 130n:
+      True{}
+    case 140n:
+      True{}
+    case 141n:
+      True{}
+    case 158n:
+      True{}
+    case 159n:
+      True{}
+    case 161n:
+      True{}
+    case 163n:
+      True{}
+    case 164n:
+      True{}
+    case 165n:
+      True{}
+    case 172n:
+      True{}
+    case 173n:
+      True{}
+    case 179n:
+      True{}
+    case 184n:
+      True{}
+    case 185n:
+      True{}
+    case 188n:
+      True{}
+    case _:
+      False{}
+
+# whether the slow log skips the calls of the command of a key
+# (skip_slowlog: EXEC, whose commands are logged on their own)
+def stat.noslow(+key: Nat) -> Bool:
+  match key:
+    case 162n:
       True{}
     case _:
       False{}
@@ -11707,6 +12171,84 @@ def stat.cw(+code: Nat) -> U32:
       3171
     case 740n:
       3173
+    case 741n:
+      3174
+    case 742n:
+      3177
+    case 743n:
+      3178
+    case 744n:
+      3180
+    case 745n:
+      3185
+    case 746n:
+      3186
+    case 747n:
+      3188
+    case 748n:
+      3192
+    case 749n:
+      3207
+    case 750n:
+      3211
+    case 751n:
+      3213
+    case 752n:
+      3214
+    case 753n:
+      3219
+    case 754n:
+      3221
+    case 755n:
+      3222
+    case 756n:
+      3225
+    case 757n:
+      3226
+    case 758n:
+      3228
+    case 759n:
+      3235
+    case 760n:
+      3237
+    case 761n:
+      3238
+    case 762n:
+      3241
+    case 763n:
+      3242
+    case 764n:
+      3244
+    case 765n:
+      3249
+    case 766n:
+      3250
+    case 767n:
+      3252
+    case 768n:
+      3256
+    case 769n:
+      3267
+    case 770n:
+      3269
+    case 771n:
+      3270
+    case 772n:
+      3273
+    case 773n:
+      3274
+    case 774n:
+      3276
+    case 775n:
+      3281
+    case 776n:
+      3282
+    case 777n:
+      3284
+    case 778n:
+      3288
+    case 779n:
+      3297
     case _:
       63
 
@@ -13439,6 +13981,94 @@ def stat.code.lo49(+lo: Nat) -> Nat:
       739n
     case 37n:
       740n
+    case 38n:
+      741n
+    case 41n:
+      742n
+    case 42n:
+      743n
+    case 44n:
+      744n
+    case 49n:
+      745n
+    case 50n:
+      746n
+    case 52n:
+      747n
+    case 56n:
+      748n
+    case _:
+      0n
+
+def stat.code.lo50(+lo: Nat) -> Nat:
+  match lo:
+    case 7n:
+      749n
+    case 11n:
+      750n
+    case 13n:
+      751n
+    case 14n:
+      752n
+    case 19n:
+      753n
+    case 21n:
+      754n
+    case 22n:
+      755n
+    case 25n:
+      756n
+    case 26n:
+      757n
+    case 28n:
+      758n
+    case 35n:
+      759n
+    case 37n:
+      760n
+    case 38n:
+      761n
+    case 41n:
+      762n
+    case 42n:
+      763n
+    case 44n:
+      764n
+    case 49n:
+      765n
+    case 50n:
+      766n
+    case 52n:
+      767n
+    case 56n:
+      768n
+    case _:
+      0n
+
+def stat.code.lo51(+lo: Nat) -> Nat:
+  match lo:
+    case 3n:
+      769n
+    case 5n:
+      770n
+    case 6n:
+      771n
+    case 9n:
+      772n
+    case 10n:
+      773n
+    case 12n:
+      774n
+    case 17n:
+      775n
+    case 18n:
+      776n
+    case 20n:
+      777n
+    case 24n:
+      778n
+    case 33n:
+      779n
     case _:
       0n
 
@@ -13544,6 +14174,10 @@ def stat.code.hl(+hi: Nat, +lo: Nat) -> Nat:
       stat.code.lo48(lo)
     case 49n:
       stat.code.lo49(lo)
+    case 50n:
+      stat.code.lo50(lo)
+    case 51n:
+      stat.code.lo51(lo)
     case _:
       0n
 
@@ -13566,7 +14200,8 @@ def stat.mark.restore() -> U32:
   2744123392
 # END gen_commands: stats
 
-# a container (CLIENT, FUNCTION, CONFIG, COMMAND, OBJECT, MEMORY, PUBSUB)
+# a container (CLIENT, FUNCTION, CONFIG, COMMAND, OBJECT, MEMORY, PUBSUB,
+# SLOWLOG, LATENCY)
 # by its first argument; alone, the container itself (top)
 def stat.sub.of(id: Nat, +up: String) -> Nat:
   match id:
@@ -13582,6 +14217,10 @@ def stat.sub.of(id: Nat, +up: String) -> Nat:
       stat.sub.object(object_id(up, String.length(up)))
     case 174n:
       stat.sub.pubsub(pubsub_id(up, String.length(up)))
+    case 201n:
+      stat.sub.slowlog(slowlog_id(up, String.length(up)))
+    case 202n:
+      stat.sub.latency(latency_id(up, String.length(up)))
     case _:
       stat.sub.command(command_id(up, String.length(up)))
 
@@ -13609,6 +14248,10 @@ def stat.key(+id: Nat, +args: List<&2, String>) -> Nat:
       stat.key.args(stat.top(118n), 118n, args)
     case 174n:
       stat.key.args(stat.top(174n), 174n, args)
+    case 201n:
+      stat.key.args(stat.top(201n), 201n, args)
+    case 202n:
+      stat.key.args(stat.top(202n), 202n, args)
     case _:
       stat.top(id)
 

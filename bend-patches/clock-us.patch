@@ -1,0 +1,84 @@
+diff --git a/bend2/base.bend b/bend2/base.bend
+index 568111a..21ee444 100644
+--- a/bend2/base.bend
++++ b/bend2/base.bend
+@@ -2780,6 +2780,17 @@ def Mem.touch(k: U32, +i: U32, +v: U32) -> U32:
+ def Mem.cell(+i: U32) -> U32:
+   0
+ 
++# Clock.us(k) is 0. On the C and JS lanes it reads the host's monotonic
++# clock once k is known, in microseconds mod 2^32 (it wraps every 71
++# minutes: the span between two readings is their difference mod 2^32).
++# k orders the reading: it comes after the work k was computed from, as a
++# computation times its own steps without an effect's round trip, giving
++# each reading a word of what the step before it made. No law reads the
++# clock: its values are the compiled lanes' alone.
++@unsafe
++def Clock.us(+k: U32) -> U32:
++  0
++
+ # Array
+ # -----
+ 
+diff --git a/bend2/comp.ts b/bend2/comp.ts
+index a73c535..391e4d9 100644
+--- a/bend2/comp.ts
++++ b/bend2/comp.ts
+@@ -325,6 +325,8 @@ const OPERATIONS: Record<string, Intr> = Object.setPrototypeOf({
+   mem_cell: { C: "mem_cell($0)",
+     JS: "(globalThis.MEM_CELLS ? globalThis.MEM_CELLS[$0 & 0xFFFFF] : 0)",
+     brw: [true] },
++  clock_us: { C: "clock_us($0)",
++    JS: "(Math.floor(performance.now() * 1000) >>> 0)", brw: [true] },
+   chan_mark: { C: "chan_mark($0, $1, $2)",
+     JS: "($0.mark = [$1 & 0xFFFF, $2], $0)", brw: [false, false, false] },
+   chan_marked: { C: ["chan_marked($0)", "($1 & 0xFFFF)", "($1 >> 16)"],
+@@ -5115,6 +5117,18 @@ INLINE u64 mem_cell(u64 i) {
+ }
+ #endif
+ 
++// The clock of Clock.us: the monotonic clock in microseconds, mod 2^32
++// (clock_gettime, which the vDSO answers without a system call). The word
++// it is given orders the reading after the work it was computed from.
++#if !DEVICE
++INLINE u64 clock_us(u64 k) {
++  (void)k;
++  struct timespec ts;
++  clock_gettime(CLOCK_MONOTONIC, &ts);
++  return (u32)((u64)ts.tv_sec * 1000000u + (u64)ts.tv_nsec / 1000u);
++}
++#endif
++
+ // The marks of channels (Chan.mark, Chan.marked): for each channel's row
+ // (its handle's low 24 bits, the generation above them), the generation it
+ // was marked under, a word and a time. They belong to the one computation
+diff --git a/tests/run/clock_us.bend b/tests/run/clock_us.bend
+new file mode 100644
+index 0000000..4c7b861
+--- /dev/null
++++ b/tests/run/clock_us.bend
+@@ -0,0 +1,24 @@
++# run (clock_us): Clock.us(k) reads the monotonic clock, in microseconds
++# mod 2^32, once k is known. Two readings around a walk of a list, the
++# second given a word of the walk's sum, are ordered by it: the span
++# between them, their difference mod 2^32, is under a second.
++import Base
++
++def sum(+xs: List<&2, Nat>, acc: Nat) -> Nat:
++  match xs:
++    case Nil{}:
++      acc
++    case Con{x, +rest}:
++      sum(rest, Nat.add(acc, x))
++
++def main() -> IO(Unit):
++  +a = Clock.us(0)
++  +xs = List.range(Nat.add(100000n, U32.to_nat(U32.and(a, 0))))
++  +n = sum(xs, 0n)
++  +b = Clock.us(U32.from_nat(n))
++  do IO<Unit>:
++    Unit <- IO.print(Nat.show(n))
++    IO.print(Bool.show(U32.is_lt(U32.sub(b, a), 1000000)))
++
++#|4999950000
++#|True

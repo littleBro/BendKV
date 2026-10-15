@@ -29,9 +29,10 @@
 # numbers, its name, its arity from the same JSON (the statistics count a
 # call with the wrong number of arguments as refused only when it fails
 # Redis's own check of the arity), whether its calls may fail as they run,
-# whether MONITOR sees its calls, whether a monitor may run it and whether
-# CLIENT PAUSE WRITE holds it back (from its flags), and the word each code
-# rides in (twelve bits, six of them set). The
+# whether MONITOR sees its calls, whether a monitor may run it, whether
+# CLIENT PAUSE WRITE holds it back, whether Redis flags it fast and whether
+# the slow log skips it (from its flags), and the word each code rides in
+# (twelve bits, six of them set). The
 # fourth writes there how a request's name finds its command (Step 4
 # below), from the same numbers.
 #
@@ -88,7 +89,8 @@ COMMANDS = {
     "lastsave": [], "role": [], "wait": [], "shutdown": [], "lolwut": [], "geoadd": [],
     "geodist": [], "geohash": [], "geopos": [], "georadius": [], "georadius_ro": [],
     "georadiusbymember": [], "georadiusbymember_ro": [], "geosearch": [], "geosearchstore": [],
-    "dump": [], "restore": []}
+    "dump": [], "restore": [], "slowlog": ["get", "help", "len", "reset"],
+    "latency": ["doctor", "graph", "help", "histogram", "history", "latest", "reset"]}
 
 # Step 1: redis-server -> facts
 # -----------------------------
@@ -417,7 +419,7 @@ MAY_REPLICATE = {"publish", "spublish", "eval", "pfcount"}
 # their subcommands
 CONTAINERS = {"client": "client_id", "function": "function_id", "config": "config_id",
               "command": "command_id", "object": "object_id", "memory": "memory_id",
-              "pubsub": "pubsub_id"}
+              "pubsub": "pubsub_id", "slowlog": "slowlog_id", "latency": "latency_id"}
 
 # the names a numbering def of redis.bend gives its numbers
 def numbering(src, fn):
@@ -562,6 +564,20 @@ def stats_block(src, facts):
             "def stat.denyoom(+key: Nat) -> Bool:", "  match key:"]
     for k, (name, kind, i) in enumerate(keys, 1):
         if "denyoom" in fl[name]:
+            out += ["    case %dn:" % k, "      True{}"]
+    out += ["    case _:", "      False{}", ""]
+    out += ["# whether Redis flags the command of a key fast: the latency monitor",
+            "# names a slow call of it fast-command, of any other command",
+            "def stat.fast(+key: Nat) -> Bool:", "  match key:"]
+    for k, (name, kind, i) in enumerate(keys, 1):
+        if "fast" in fl[name]:
+            out += ["    case %dn:" % k, "      True{}"]
+    out += ["    case _:", "      False{}", ""]
+    out += ["# whether the slow log skips the calls of the command of a key",
+            "# (skip_slowlog: EXEC, whose commands are logged on their own)",
+            "def stat.noslow(+key: Nat) -> Bool:", "  match key:"]
+    for k, (name, kind, i) in enumerate(keys, 1):
+        if "skip_slowlog" in fl[name]:
             out += ["    case %dn:" % k, "      True{}"]
     out += ["    case _:", "      False{}", ""]
     fk = first_keys(facts)
