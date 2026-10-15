@@ -1,0 +1,55 @@
+# Nightly: make test with about a million random commands. CI's test job
+# runs the differential tests (tests/diff_test.py, 13 runs in
+# tests/run_tests.sh) for 1,000 rounds each, some 75 thousand commands;
+# this runs them for 13,500 rounds each, about a million (a round is 5.8
+# commands on average, and takes about 0.4 ms), with the rest of make test
+# around them, on the server built from main. Each run takes seeds of its
+# own (from its run id) and prints them first; a run started by hand can
+# be given the first one again (seed).
+name: Nightly
+
+on:
+  schedule:
+    - cron: '17 4 * * *'
+  workflow_dispatch:
+    inputs:
+      seed:
+        description: The differential tests' first seed (empty for the run's own)
+        required: false
+        default: ''
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: make test, a million random commands
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup
+      - name: Redis 7.0.15
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -yq redis-server redis-tools
+          sudo systemctl stop redis-server || true
+          redis-server --version
+          redis-server --version | grep -q 'v=7\.0\.15 '
+      - name: make build
+        run: make build BEND="$BEND"
+      - name: make test
+        env:
+          SEED: ${{ inputs.seed }}
+          DIFF_ROUNDS: 13500
+        run: CC=clang-19 PORT=6380 REDIS_PORT=6390 sh tests/run_tests.sh
+      - name: the logs of a failed run
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: nightly-logs
+          path: |
+            build/*.log
+            build/**/*.log
+          if-no-files-found: ignore
+          retention-days: 7

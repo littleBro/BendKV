@@ -1,0 +1,123 @@
+diff --git a/bend2/comp.ts b/bend2/comp.ts
+index a73c535..c4e8ce8 100644
+--- a/bend2/comp.ts
++++ b/bend2/comp.ts
+@@ -4964,6 +4964,71 @@ OUTLINE void heap_hand(Env e, u32 cls) {
+ static bool corpus_grow(u64* H, u64 need);
+ #endif
+ 
++// Under AddressSanitizer (a host build with -fsanitize=address) the heap
++// is checked as malloc's blocks are. To ASan alone the corpus is one
++// mapping, all of it addressable, and a free chain is LIFO: a node read
++// after its free is no error, and the next allocation of its class takes
++// the node over. HEAP_ASAN poisons a free node's words, its chain's link
++// among them (the allocator lifts the poison off the link for its own
++// read and write), and lifts it off a node it hands out. A free first puts
++// the node in a quarantine of its thread and class, which lets it go to
++// its chain once HEAP_HOLD_WORDS more words of its class have come in (a
++// node bigger than that is not held): meanwhile a stale pointer finds
++// poison, not the node's next owner, and ASan reports the read or write.
++// HEAP_HOLD_WORDS may be set with -D (0 holds nothing). A build without
++// ASan compiles none of this.
++#if !DEVICE && defined(__has_feature)
++#if __has_feature(address_sanitizer)
++#define HEAP_ASAN 1
++#endif
++#endif
++#if !DEVICE && defined(__SANITIZE_ADDRESS__) && !defined(HEAP_ASAN)
++#define HEAP_ASAN 1
++#endif
++
++#ifdef HEAP_ASAN
++#include <sanitizer/asan_interface.h>
++
++#ifndef HEAP_HOLD_WORDS
++#define HEAP_HOLD_WORDS (1ull << 22)
++#endif
++
++#define heap_poison(H, at, n)   ASAN_POISON_MEMORY_REGION(&(H)[at], (n) * 8)
++#define heap_unpoison(H, at, n) ASAN_UNPOISON_MEMORY_REGION(&(H)[at], (n) * 8)
++
++// A ring per class of the nodes this thread freed last, mapped at first use.
++typedef struct HeapHold {
++  u64* ring;
++  u64  put;
++} HeapHold;
++
++static _Thread_local HeapHold heap_holds[NCLS_ALL];
++
++// Poisons the node at loc, of class cls, and puts it in the quarantine;
++// gives back the node that leaves it for its chain, poisoned (0 while the
++// ring fills).
++OUTLINE u64 heap_hold(DEV u64* H, u32 cls, u64 loc) {
++  u64       cap = (u64)HEAP_HOLD_WORDS >> cls;
++  HeapHold* q   = &heap_holds[cls];
++  heap_poison(H, loc, 1ull << cls);
++  if (cap == 0) {
++    return loc;
++  }
++  if (q->ring == NULL) {
++    void* p = mmap(NULL, cap * 8, PROT_READ | PROT_WRITE,
++      MAP_PRIVATE | MAP_ANON | MAP_NORESERVE, -1, 0);
++    if (p == MAP_FAILED) {
++      err_fail("the heap's quarantine failed");
++    }
++    q->ring = p;
++  }
++  u64 out = q->ring[q->put % cap];
++  q->ring[q->put % cap] = loc;
++  q->put += 1;
++  return out;
++}
++#endif
++
+ OUTLINE u64 heap_alloc_miss(Env e, u32 cls) {
+   DEV u64* H = e.mem;
+   u64  got = 0;
+@@ -4987,7 +5052,13 @@ OUTLINE u64 heap_alloc_miss(Env e, u32 cls) {
+     for (u32 i = 1; i <= n; i += 1) {
+       H[got + ((u64)(i - 1) << cls)] = i < n ? got + ((u64)i << cls) : 0;
+     }
++#ifdef HEAP_ASAN
++    heap_poison(H, got, (u64)n << cls);
++#endif
+   }
++#ifdef HEAP_ASAN
++  heap_unpoison(H, got, 1ull << cls);
++#endif
+   ALC_AT(e, cls)  = H[got];
+   ALC_LEN(e, cls) = (u64)(n - 1) << cls;
+   return got;
+@@ -4996,6 +5067,9 @@ OUTLINE u64 heap_alloc_miss(Env e, u32 cls) {
+ INLINE u64 heap_alloc(Env e, u32 cls) {
+   u64 h = ALC_AT(e, cls);
+   if (h) {
++#ifdef HEAP_ASAN
++    heap_unpoison(e.mem, h, 1ull << cls);
++#endif
+     ALC_AT(e, cls)   = e.mem[h];
+     ALC_LEN(e, cls) -= 1ull << cls;
+     return h;
+@@ -5007,12 +5081,22 @@ INLINE void heap_free(Env e, u32 cls, u64 loc) {
+   if (err_seen(e.mem)) {
+     return;
+   }
++#ifdef HEAP_ASAN
++  loc = heap_hold(e.mem, cls, loc);
++  if (loc == 0) {
++    return;
++  }
++  heap_unpoison(e.mem, loc, 1);
++#endif
+   e.mem[loc]       = ALC_AT(e, cls);
+   ALC_AT(e, cls)   = loc;
+   ALC_LEN(e, cls) += 1ull << cls;
+   if (!DEVICE && ALC_LEN(e, cls) >= KEEP_WORDS) {
+     heap_hand(e, cls);
+   }
++#ifdef HEAP_ASAN
++  heap_poison(e.mem, loc, 1);
++#endif
+ }
+ 
+ INLINE void spare_free(Env e, u32 cls, u64 loc) {

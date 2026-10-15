@@ -4,26 +4,30 @@ and UNWATCH, each run on BendKV and on Redis with clients of their own,
 the transcripts compared line by line; then checks of BendKV alone under
 load.
 
-The scenarios: a transaction's replies (of every kind, SELECT inside
-it), DISCARD, a nested MULTI, WATCH inside MULTI, commands refused while
-queued (unknown, a wrong number of arguments) and EXECABORT, errors as a
-command runs (in EXEC's array), EXEC and DISCARD without MULTI, EXEC
-refused (its arity) in MULTI and out of it, a QUIT and a RESET inside a
-transaction; WATCH of keys another client changes or does not change, a
-DEL of a key not there (no change), SADD of a member there (no change),
-SMOVE of a member the destination holds (no change to it), SORT with
-STORE (a change even when it stores the list there, none when it
-deletes a key not there), SORT without it (no change), PFADD (a change
-when a register changes), PFCOUNT (a change when it keeps the count it
-made in the value, none when it reads the count kept), PFMERGE (always a
-change), PFDEBUG (no change, though it makes a sparse value dense),
-FLUSHALL, FLUSHDB and SWAPDB of keys there and not there, MOVE, COPY,
-RENAME, EXPIRE, a key that expires (active expiry, or found expired at
-EXEC), a key of another database, a transaction of another client, UNWATCH
-and DISCARD forgetting a touch, EXEC unwatching; a blocking command inside
-EXEC (it does not wait), clients that wait served after EXEC (not between
-its commands), CLIENT REPLY OFF and SKIP around a transaction, and the
-statistics of INFO (commandstats, errorstats) as info.tcl checks them.
+The scenarios: a transaction's replies (of every kind, SELECT inside it,
+a pipeline of commands queued), DISCARD, a nested MULTI, WATCH inside
+MULTI, commands refused while queued (unknown, a wrong number of
+arguments) and EXECABORT, errors as a command runs (in EXEC's array),
+EXEC and DISCARD without MULTI, EXEC refused (its arity) in MULTI and
+out of it, a QUIT and a RESET inside a transaction; WATCH of keys
+another client changes or does not change (a command at a time, or a
+pipeline of them: the fast way, server.bend's Heeded keys, some of GETs,
+SETs and INCRs alone, read by their hashes), a DEL of a
+key not there (no change), SADD of a member there (no change), SMOVE of
+a member the destination holds (no change to it), SORT with STORE (a
+change even when it stores the list there, none when it deletes a key
+not there), SORT without it (no change), PFADD (a change when a register
+changes), PFCOUNT (a change when it keeps the count it made in the
+value, none when it reads the count kept), PFMERGE (always a change),
+PFDEBUG (no change, though it makes a sparse value dense), FLUSHALL,
+FLUSHDB and SWAPDB of keys there and not there, MOVE, COPY, RENAME,
+EXPIRE, a key that expires (active expiry, or found expired at EXEC), a
+key of another database, a transaction of another client, UNWATCH and
+DISCARD forgetting a touch, EXEC unwatching; a blocking command inside
+EXEC (it does not wait), clients that wait served after EXEC (not
+between its commands), CLIENT REPLY OFF and SKIP around a transaction,
+and the statistics of INFO (commandstats, errorstats) as info.tcl checks
+them.
 
 The checks under load: 20 clients adding 1000 to a counter with WATCH,
 GET, MULTI, SET and EXEC (each lost race retried), the counter ending at
@@ -39,7 +43,13 @@ import sys
 import threading
 import time
 
-from blocking_test import Client, wait_blocked
+from blocking_test import Client, enc, wait_blocked
+
+
+def pipe(c, cmds):
+    """Commands sent at once, as one batch; their replies."""
+    c.raw(b"".join(enc(x) for x in cmds))
+    return [c.read() for _ in cmds]
 
 
 def stats(r, *names):
@@ -62,6 +72,8 @@ def scenarios(port, log):
         a.cmd("HGETALL", "h"), a.cmd("ZADD", "z", "1.5", "m"), a.cmd("ZRANGE", "z", "0", "-1", "WITHSCORES"),
         a.cmd("SELECT", "3"), a.cmd("SET", "s3", "x"), a.cmd("EXEC"))
     log("1 after", a.cmd("GET", "s3"), a.cmd("SELECT", "9"), a.cmd("GET", "s3"), a.cmd("GET", "s"))
+    log("1 pipeline", a.cmd("MULTI"), pipe(a, [["SET", "p1", "1"], ["INCR", "p1"], ["GET", "p1"]]), a.cmd("EXEC"),
+        a.cmd("GET", "p1"))
     # 2. DISCARD, nested MULTI, WATCH inside MULTI
     log("2", a.cmd("MULTI"), a.cmd("SET", "d", "1"), a.cmd("DISCARD"), a.cmd("EXISTS", "d"), a.cmd("DISCARD"))
     log("2 nested", a.cmd("MULTI"), a.cmd("MULTI"), a.cmd("SET", "n", "1"), a.cmd("EXEC"), a.cmd("GET", "n"))
@@ -88,6 +100,15 @@ def scenarios(port, log):
     r.cmd("SET", "x", "30")
     log("5 other", a.cmd("WATCH", "x"), b.cmd("SET", "x", "40"), a.cmd("MULTI"), a.cmd("PING"), a.cmd("EXEC"))
     log("5 untouched", a.cmd("WATCH", "x", "y"), b.cmd("SET", "other", "1"), a.cmd("MULTI"), a.cmd("PING"), a.cmd("EXEC"))
+    log("5 pipeline untouched", a.cmd("WATCH", "x"),
+        pipe(b, [["SET", "o5", "1"], ["INCR", "o5"], ["MSET", "o5a", "1", "o5b", "2"], ["DEL", "o5a", "nokey"], ["GET", "x"]]),
+        a.cmd("MULTI"), a.cmd("PING"), a.cmd("EXEC"))
+    log("5 pipeline touched", a.cmd("WATCH", "x"), pipe(b, [["SET", "o5", "2"], ["SET", "x", "50"], ["GET", "o5"]]),
+        a.cmd("MULTI"), a.cmd("PING"), a.cmd("EXEC"))
+    log("5 pipeline quick", a.cmd("WATCH", "x"), pipe(b, [["SET", "o5", "3"], ["INCR", "o5n"], ["GET", "x"]]),
+        a.cmd("MULTI"), a.cmd("PING"), a.cmd("EXEC"))
+    log("5 pipeline incr", a.cmd("WATCH", "o5n"), pipe(b, [["GET", "o5"], ["INCR", "o5n"]]),
+        a.cmd("MULTI"), a.cmd("PING"), a.cmd("EXEC"))
     log("5 self", a.cmd("WATCH", "x"), a.cmd("SET", "x", "41"), a.cmd("MULTI"), a.cmd("PING"), a.cmd("EXEC"))
     log("5 del none", a.cmd("WATCH", "nokey"), b.cmd("DEL", "nokey"), a.cmd("MULTI"), a.cmd("PING"), a.cmd("EXEC"))
     log("5 del", a.cmd("WATCH", "x"), b.cmd("DEL", "x"), a.cmd("MULTI"), a.cmd("PING"), a.cmd("EXEC"))

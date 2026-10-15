@@ -1,5 +1,5 @@
 # CI: what CONTRIBUTING.md asks of a change before it is merged, on every
-# pull request and every push to the integration branches. The proofs
+# pull request and every push to main. The proofs
 # (make check, then make verdict in the BendTT kernel), the generated
 # blocks (make gencheck) and the pure checks (make smoke) in one job; the
 # server built once (make build), then tested against Redis 7.0.15
@@ -9,13 +9,14 @@
 # RESP2 and in RESP3, go-redis) run against Redis 7.0.15 and the server
 # built, in three more jobs (tools/client_suite.py): a test Redis passes
 # that BendKV fails, and that is not among the known failures of
-# tools/data/clients.json, fails the job.
+# tools/data/clients.json, fails the job. The server is also built with
+# the sanitizers, in one more job (tools/sanitize.sh): a report fails it.
 name: CI
 
 on:
   pull_request:
   push:
-    branches: [main, claude/step-b]
+    branches: [main]
   workflow_dispatch:
 
 permissions:
@@ -42,12 +43,21 @@ jobs:
           path: ~/.bend/bendtt
           key: bendtt-${{ hashFiles('bend-patches/**') }}
       # (elan fetches a toolchain at its first use; the compiler looks for
-      # it in elan's directory, so it is fetched here)
+      # it in elan's directory, so it is fetched here). elan is installed by
+      # the elan-init of its release v4.2.4, checked against the sha256 of
+      # that release's asset, not by the script of elan's master branch,
+      # which fetches whatever elan is latest and checks nothing
       - name: Lean 4.34.0
         if: steps.kernel.outputs.cache-hit != 'true'
+        env:
+          ELAN_URL: https://github.com/leanprover/elan/releases/download/v4.2.4/elan-x86_64-unknown-linux-gnu.tar.gz
+          ELAN_SHA256: 42b94d4244e8353142c456ec0e4ca6528fd898a6c604d4059f494e706e431f63
         run: |
-          curl -sSfL https://raw.githubusercontent.com/leanprover/elan/master/elan-init.sh |
-            sh -s -- -y --no-modify-path --default-toolchain none
+          cd "$RUNNER_TEMP"
+          curl -sSfL -o elan.tar.gz "$ELAN_URL"
+          echo "$ELAN_SHA256  elan.tar.gz" | sha256sum -c -
+          tar xzf elan.tar.gz
+          ./elan-init -y --no-modify-path --default-toolchain none
           ~/.elan/bin/elan toolchain install leanprover/lean4:v4.34.0
           ~/.elan/toolchains/leanprover--lean4---v4.34.0/bin/lean --version
       - name: make gencheck
@@ -174,5 +184,41 @@ jobs:
         with:
           name: clients-${{ matrix.client }}-resp${{ matrix.protocol }}
           path: build/clients
+          if-no-files-found: ignore
+          retention-days: 7
+
+  # the server's C built with AddressSanitizer and UndefinedBehaviorSanitizer
+  # (the Bend heap poisoned, bend-patches/heap-asan.patch), and with
+  # ThreadSanitizer, each serving the tests that stress its memory and its
+  # writer thread most (tools/sanitize.sh): a report fails the job
+  sanitize:
+    name: sanitize (ASan and UBSan, TSan)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup
+      # clang 19's sanitizer runtimes and llvm-symbolizer, which Ubuntu
+      # ships apart from clang-19, and Redis 7.0.15 for the tests that
+      # compare; the sanitizers' shadow memory needs mappings placed with
+      # at most 28 random bits (vm.mmap_rnd_bits), which a runner's kernel
+      # may set higher
+      - name: the sanitizers and Redis 7.0.15
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -yq libclang-rt-19-dev llvm-19 redis-server redis-tools
+          sudo systemctl stop redis-server || true
+          redis-server --version | grep -q 'v=7\.0\.15 '
+          sudo sysctl -w vm.mmap_rnd_bits=28
+      - name: tools/sanitize.sh
+        run: CC=clang-19 PORT=6380 REDIS_PORT=6390 sh tools/sanitize.sh
+      - name: the reports and logs of a failed run
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: sanitize-logs
+          path: |
+            build/sanitize
+            build/*.log
           if-no-files-found: ignore
           retention-days: 7
