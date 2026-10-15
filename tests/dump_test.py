@@ -18,9 +18,9 @@ as deep as Redis does then); both are set back after.
   payloads cut, grown and changed at random (their checksum made right):
   each restored on both, the replies and the values compared.
 - The keyspace events of RESTORE, IDLETIME and FREQ under LRU and LFU
-  policies (OBJECT IDLETIME and FREQ), in MULTI and on a key there,
-  WATCH, COMMAND GETKEYS and INFO's statistics of both commands, and
-  big values.
+  policies (OBJECT IDLETIME and FREQ), in MULTI, on a key there and on
+  keys deleted and made again, WATCH, COMMAND GETKEYS and INFO's
+  statistics of both commands, and big values.
 
     python3 tests/dump_test.py --bendkv 6380 --redis 6390 [--seed 1] [--corrupt 1500]
 """
@@ -534,8 +534,7 @@ def events(b, r):
 
 
 def access(b, r):
-    # keys of names new to the server: a word of use outlives its key in
-    # BendKV, so a key made again, of an earlier run, would find its word
+    # keys of names new to the server, which no earlier run left there
     tag = os.urandom(4).hex()
     both(b, r, cmd("SET", "src", "v"))
     p = run(r, cmd("DUMP", "src"))[1]
@@ -561,6 +560,15 @@ def access(b, r):
     for c in (cmd("MULTI"), cmd("RESTORE", "inmulti", 0, p, "IDLETIME", "700"), cmd("EXEC")):
         same(b, r, c)
     near("OBJECT IDLETIME after RESTORE in MULTI", *both(b, r, cmd("OBJECT", "IDLETIME", "inmulti")), 2)
+    # each key RESTORE makes under an LFU policy below was there before,
+    # and a word of use outlives its key in BendKV (keys whose hashes have
+    # the same low twenty bits share one, which no delete clears): RESTORE
+    # makes its key anew, with a counter of 5 unless FREQ says otherwise,
+    # as Redis makes a new value, whatever word it finds
+    for i in range(5):
+        k = "lfu%d.%s" % (i, tag)
+        both(b, r, cmd("SET", k, "v"))
+        both(b, r, cmd("DEL", k))
     both(b, r, cmd("CONFIG", "SET", "maxmemory-policy", "allkeys-lfu"))
     for i, opts in enumerate((["FREQ", "100"], ["FREQ", "0"], ["FREQ", "255"], ["IDLETIME", "1000"], [])):
         k = "lfu%d.%s" % (i, tag)

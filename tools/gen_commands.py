@@ -594,9 +594,9 @@ def stats_block(src, facts):
     out += ["    case _:", "      0n", ""]
     out += ["# a word's code (0 for one no code has)", "def stat.code.cw(+w: Nat) -> Nat:",
             "  stat.code.hl(Nat.div(w, 64n), Nat.mod(w, 64n))", ""]
-    out += ["# the high twelve bits of the hash of a call of GET, SET and INCR that",
-            "# runs, as the parser writes them"]
-    for name in ("get", "set", "incr"):
+    out += ["# the high twelve bits of the hash of a call of GET, SET, INCR and",
+            "# RESTORE that runs, as the parser writes them"]
+    for name in ("get", "set", "incr", "restore"):
         k = [x[0] for x in keys].index(name) + 1
         out += ["def stat.mark.%s() -> U32:" % name, "  %d" % (WORDS[3 * k] << 20), ""]
     return "\n".join(out[:-1]) + "\n"
