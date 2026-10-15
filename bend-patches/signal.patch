@@ -1,0 +1,307 @@
+diff --git a/bend2/base.bend b/bend2/base.bend
+index 7e116e0..1b73beb 100644
+--- a/bend2/base.bend
++++ b/bend2/base.bend
+@@ -240,6 +240,22 @@ def IO.notify(msg: String) -> IO(Bool):
+   import "./effs/io_notify.c"
+   import "./effs/io_notify.js"
+ 
++# SIGTERM and SIGINT, as Redis's sigShutdownHandler takes them, on the C
++# lane: the first call puts the handlers in (SIGHUP ignored, as Redis
++# ignores it), and a call with done 0 gives the signal taken since the
++# last (15 or 2; 0 for none). The handler logs it at once as Redis's does,
++# "<pid>:signal-handler (<secs>) Received SIGTERM scheduling shutdown...",
++# appended to log (kept from the first call; "" for the standard output).
++# A SIGINT while a shutdown is asked for (a signal taken since the last
++# call with done not 0) ends the process with code 1, after "You insist...
++# exiting now." and the removal of temp-<pid>.rdb from the working
++# directory. done not 0 says the shutdown asked for failed, as Redis's
++# cancelShutdown does; it gives 0, and a signal taken waits for the next
++# call. The JS lane traps nothing and gives 0.
++def IO.signal(log: String, done: U32) -> IO(U32):
++  import "./effs/io_signal.c"
++  import "./effs/io_signal.js"
++
+ # The process's working directory, and a change of it, for every thread
+ # (relative paths resolve from the new one afterwards).
+ def IO.cwd() -> IO(Result<&1, &1, U32 & String, String>):
+diff --git a/bend2/effs/io_signal.c b/bend2/effs/io_signal.c
+new file mode 100644
+index 0000000..05d9215
+--- /dev/null
++++ b/bend2/effs/io_signal.c
+@@ -0,0 +1,116 @@
++// IO
++// ==
++
++#include <fcntl.h>
++#include <signal.h>
++#include <time.h>
++#include <unistd.h>
++
++// SIGTERM and SIGINT taken as Redis's sigShutdownHandler takes them: the
++// handler logs the signal at once, as serverLogFromHandler logs it
++// ("<pid>:signal-handler (<secs>) <msg>", appended to the log's path, or on
++// the standard output for ""), and leaves it for IO.signal to give, so the
++// program shuts down at its next look. A SIGINT while a shutdown is asked
++// for ends the process with code 1 after "You insist... exiting now." and
++// the removal of temp-<pid>.rdb from the working directory, as Redis's
++// handler does for a second ^C. The handler calls async-signal-safe
++// functions alone (open, write, close, unlink, getpid, time, _exit).
++
++static char                  sig_log[4096];
++static volatile sig_atomic_t sig_got;
++static volatile sig_atomic_t sig_asap;
++static bool                  sig_on;
++
++// n's decimal digits at p; their count
++static size_t sig_num(char* p, u64 n) {
++  char   d[20];
++  size_t k = 0;
++  do {
++    d[k] = (char)('0' + n % 10);
++    k += 1;
++    n /= 10;
++  } while (n > 0);
++  for (size_t i = 0; i < k; i += 1) {
++    p[i] = d[k - 1 - i];
++  }
++  return k;
++}
++
++static void sig_line(const char* msg) {
++  bool out = sig_log[0] == 0;
++  int  fd  = out ? STDOUT_FILENO
++    : open(sig_log, O_APPEND | O_CREAT | O_WRONLY | O_CLOEXEC, 0644);
++  if (fd < 0) {
++    return;
++  }
++  char   buf[192];
++  size_t m = strlen(msg);
++  size_t n = sig_num(buf, (u64)getpid());
++  memcpy(buf + n, ":signal-handler (", 17);
++  n += 17;
++  n += sig_num(buf + n, (u64)time(NULL));
++  memcpy(buf + n, ") ", 2);
++  n += 2;
++  memcpy(buf + n, msg, m);
++  n += m;
++  buf[n] = '\n';
++  ssize_t w = write(fd, buf, n + 1);
++  (void)w;
++  if (!out) {
++    close(fd);
++  }
++}
++
++static void sig_take(int sig) {
++  int keep = errno;
++  if (sig_asap && sig == SIGINT) {
++    char   tmp[40];
++    size_t n = 5;
++    sig_line("You insist... exiting now.");
++    memcpy(tmp, "temp-", 5);
++    n += sig_num(tmp + n, (u64)getpid());
++    memcpy(tmp + n, ".rdb", 5);
++    unlink(tmp);
++    _exit(1);
++  }
++  sig_line(sig == SIGINT ? "Received SIGINT scheduling shutdown..."
++    : "Received SIGTERM scheduling shutdown...");
++  sig_asap = 1;
++  sig_got  = sig;
++  errno    = keep;
++}
++
++// The first call keeps f[0] as the log's path and puts the handlers in
++// (SIGHUP ignored, as Redis ignores it). f[1] 0: the signal taken since
++// the last such call (15, 2, or 0), forgotten once given. f[1] not 0: the
++// shutdown asked for failed (Redis's cancelShutdown), so that a SIGINT
++// asks for one again rather than ends the process; it gives 0 and leaves
++// a signal taken for the next look.
++Term io_signal_run(Env e, Term* f, IoWork* w) {
++  if (!sig_on) {
++    u64   len;
++    char* path = io_cstr(e, f[0], &len);
++    if (len < sizeof sig_log) {
++      memcpy(sig_log, path, len + 1);
++    }
++    free(path);
++    struct sigaction sa;
++    memset(&sa, 0, sizeof sa);
++    sa.sa_handler = sig_take;
++    sa.sa_flags   = SA_RESTART;
++    sigemptyset(&sa.sa_mask);
++    sigaction(SIGTERM, &sa, NULL);
++    sigaction(SIGINT, &sa, NULL);
++    signal(SIGHUP, SIG_IGN);
++    sig_on = true;
++  }
++  if ((u32)f[1] != 0) {
++    sig_asap = 0;
++    return (Term)0;
++  }
++  return (Term)(u32)__atomic_exchange_n(&sig_got, 0, __ATOMIC_SEQ_CST);
++}
++
++static void __attribute__((constructor)) io_signal_use(void) {
++  io_eff(CID(IO.signal), io_signal_run);
++}
+diff --git a/bend2/effs/io_signal.js b/bend2/effs/io_signal.js
+new file mode 100644
+index 0000000..cb48d8c
+--- /dev/null
++++ b/bend2/effs/io_signal.js
+@@ -0,0 +1,12 @@
++// IO
++// ==
++
++// The JS lane traps no signal: its loop runs to the end without returning
++// to bun's event loop, where a handler of process.on would run, and such a
++// handler would take SIGTERM's default (the end of the program) away. So
++// IO.signal gives 0, and SIGTERM and SIGINT end the program as before.
++function io_signal(log, done) {
++  return 0;
++}
++
++io_eff(CID(IO.signal), io_signal);
+diff --git a/tests/io/io_signal.bend b/tests/io/io_signal.bend
+new file mode 100644
+index 0000000..015d8c0
+--- /dev/null
++++ b/tests/io/io_signal.bend
+@@ -0,0 +1,70 @@
++# io (io_signal): IO.signal on the C lane. The first call puts the
++# handlers in and gives 0; a SIGTERM the program sends itself is given once
++# (15), then 0; a second SIGTERM, then a call with done 1 (a failed
++# shutdown), which gives 0 and leaves that SIGTERM for the next call (15);
++# a SIGINT after it is given (2) rather than end the program; each
++# signal's line is in the log, as Redis's handler writes it. The JS lane
++# traps nothing (its loop never returns to bun's event loop), so the
++# signals are sent by an effect of the test's own, in C alone.
++import Base
++
++def raise.sig(n: U32) -> IO(U32):
++  import "./io_signal_raise.c"
++
++def flag(b: Bool) -> String:
++  match b:
++    case True{}:
++      "T"
++    case False{}:
++      "F"
++
++# the three lines (SIGTERM, SIGTERM, SIGINT), each "<pid>:signal-handler (<secs>) <msg>"
++def log.text(+head: String, +t: String) -> Bool:
++  Bool.and(String.starts_with(t, head),
++    Bool.and(String.contains(t, ") Received SIGTERM scheduling shutdown...\n" ++ head),
++      String.ends_with(t, ") Received SIGINT scheduling shutdown...\n")))
++
++def log.is(+head: String, r: Result<&1, &1, U32 & String, String>) -> Bool:
++  match r:
++    case Done{+text}:
++      log.text(head, text)
++    case Fail{e}:
++      False{}
++
++def read.got(p: File & Result<&1, &1, U32 & String, String>, +head: String) -> IO(Bool):
++  (g, r) = p
++  do IO<Bool>:
++    Unit <- File.close(g)
++    return log.is(head, r)
++
++def read.log(m: Result<&1, &1, U32 & String, File>, +head: String) -> IO(Bool):
++  match m:
++    case Done{f}:
++      do IO<Bool>:
++        p : File & Result<&1, &1, U32 & String, String> <- File.read(f, 4096)
++        read.got(p, head)
++    case Fail{e}:
++      IO.pure(Bool, False{})
++
++def main() -> IO(Unit):
++  +log : String = "io_signal_test.log"
++  do IO<Unit>:
++    u : Result<&1, &1, U32 & String, Unit> <- File.unlink(log)
++    pid : U32 <- IO.pid()
++    a : U32 <- IO.signal(log, 0)
++    r1 : U32 <- raise.sig(15)
++    b : U32 <- IO.signal("", 0)
++    c : U32 <- IO.signal("", 0)
++    r2 : U32 <- raise.sig(15)
++    d : U32 <- IO.signal("", 1)
++    e : U32 <- IO.signal("", 0)
++    r3 : U32 <- raise.sig(2)
++    g : U32 <- IO.signal("", 0)
++    m : Result<&1, &1, U32 & String, File> <- File.open(log, "r")
++    ok : Bool <- read.log(m, U32.show(pid) ++ ":signal-handler (")
++    v : Result<&1, &1, U32 & String, Unit> <- File.unlink(log)
++    Unit <- IO.print(U32.show(a) ++ " " ++ U32.show(b) ++ " " ++ U32.show(c) ++ " " ++ U32.show(d) ++ " " ++ U32.show(e) ++ " " ++ U32.show(g))
++    IO.print(flag(ok))
++
++#|0 15 0 0 15 2
++#|T
+diff --git a/tests/io/io_signal_insist.bend b/tests/io/io_signal_insist.bend
+new file mode 100644
+index 0000000..3f9287f
+--- /dev/null
++++ b/tests/io/io_signal_insist.bend
+@@ -0,0 +1,22 @@
++# io (io_signal_insist): a SIGINT while a shutdown is asked for ends the
++# process at once with code 1, as Redis's handler does for a second ^C
++# ("You insist... exiting now."): the first SIGINT is taken, and the second
++# comes before any call with done 1. C lane alone (io_signal.bend says
++# why); the log goes to /dev/null.
++import Base
++
++def raise.sig(n: U32) -> IO(U32):
++  import "./io_signal_raise.c"
++
++def main() -> IO(Unit):
++  do IO<Unit>:
++    a : U32 <- IO.signal("/dev/null", 0)
++    r1 : U32 <- raise.sig(2)
++    b : U32 <- IO.signal("", 0)
++    Unit <- IO.print(U32.show(b))
++    Unit <- IO.sleep(1)
++    r2 : U32 <- raise.sig(2)
++    IO.print("not reached")
++
++#|2
++#|exit 1
+diff --git a/tests/io/io_signal_none.bend b/tests/io/io_signal_none.bend
+new file mode 100644
+index 0000000..1794b50
+--- /dev/null
++++ b/tests/io/io_signal_none.bend
+@@ -0,0 +1,12 @@
++# io (io_signal_none): with no signal sent, IO.signal gives 0 on both
++# lanes: on the C lane its first call puts the handlers in, on the JS lane
++# it traps nothing (io_signal.bend tests the signals, on the C lane).
++import Base
++
++def main() -> IO(Unit):
++  do IO<Unit>:
++    a : U32 <- IO.signal("/dev/null", 0)
++    b : U32 <- IO.signal("", 1)
++    IO.print(U32.show(a) ++ " " ++ U32.show(b))
++
++#|0 0
+diff --git a/tests/io/io_signal_raise.c b/tests/io/io_signal_raise.c
+new file mode 100644
+index 0000000..60a93a4
+--- /dev/null
++++ b/tests/io/io_signal_raise.c
+@@ -0,0 +1,12 @@
++#include <signal.h>
++
++// The signal n sent to the program itself: raise delivers it to the
++// calling thread, so its handler has run when raise returns.
++static Term raise_sig_run(Env e, Term* f, IoWork* w) {
++  (void)w;
++  return (Term)(u32)raise((int)(u32)f[0]);
++}
++
++static void __attribute__((constructor)) raise_sig_use(void) {
++  io_eff(CID(raise.sig), raise_sig_run);
++}
