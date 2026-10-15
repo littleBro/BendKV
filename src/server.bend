@@ -4253,15 +4253,26 @@ def ps.evs(es: List<&2, Ev>, +me: Nat, pb: Ps) -> Ps:
     case Con{e, rest}:
       ps.evs(rest, me, ps.ev1(e, me, pb))
 
-# whether keyspace events are to be sent: a class of them is on (the
-# bits past theirs say other things, and no event goes out for them:
-# mem.bits)
+# whether keyspace events are to be sent: a class of them is on (bits 0
+# to 14; the bits past theirs say other things, and no event goes out for
+# them: trk.bits, dn.bit, mem.bits)
 def ps.loud(+pb: Ps) -> Bool:
   match pb:
     case Ps{reg, +ev, px, cs, own}:
-      U32.is_ne(U32.and(ev, 67108863), 0)
+      U32.is_ne(U32.and(ev, 32767), 0)
     case PsOf{+p}:
       ps.loud(p)
+
+# whether the effects of a command, of the sweep and of an eviction are
+# looked at key by key: keyspace events are to be sent, or the tracking
+# has work or some client is in BCAST mode (Ps's bits 22 and 21:
+# trk.bits)
+def ps.looks(+pb: Ps) -> Bool:
+  match pb:
+    case Ps{reg, +ev, px, cs, own}:
+      U32.is_ne(U32.and(ev, 6324223), 0)
+    case PsOf{+p}:
+      ps.looks(p)
 
 def ents.some(+es: List<&2, A.Ent>) -> Bool:
   match es:
@@ -4421,7 +4432,7 @@ def bg.run.tx(on: Bool, held: Bool, +ok: Bool, +k: S.Role, +c: R.Cmd, +code: Nat
 def bg.run(held: Bool, +ok: Bool, +k: S.Role, +c: R.Cmd, +code: Nat, rs: List<&2, R.Reply>, es: List<&2, A.Ent>, +conn: S.Conn, +srv: S.Srv, ds: R.Ds, ws: Waits, up: List<&2, Up>, tx: Tx, pb: Ps) -> LRun:
   +t = tx
   +p = pb
-  bg.run.tx(Bool.or(tx.on(t), ps.loud(p)), held, ok, k, c, code, rs, es, conn, srv, ds, ws, up, t, p)
+  bg.run.tx(Bool.or(tx.on(t), ps.looks(p)), held, ok, k, c, code, rs, es, conn, srv, ds, ws, up, t, p)
 
 # OBJECT FREQ and IDLETIME answered from the key's word (Access): the
 # session, which is proved, answers them as a key's that no command used
@@ -7918,9 +7929,10 @@ def group.swept(outs: List<&2, Sigma<&2, &2, Chan(Ans), _ => Ans>>, r: S.Srv & (
   (es, ds) = q
   Grp{outs, es, srv, ds, ws, up, tx, pb}
 
-# a sweep while some client has a transaction or watches keys, or
-# keyspace events are to be sent: the keys it deleted are touched (each
-# was there), and expired (Keyspace notifications)
+# a sweep while some client has a transaction or watches keys, keyspace
+# events are to be sent, or the tracking has work (ps.looks): the keys it
+# deleted are touched (each was there), expired (Keyspace notifications),
+# and their readers told (Tracking)
 def group.swept.out(p: Ps & List<&2, Sigma<&2, &2, Chan(Ans), _ => Ans>>, es: List<&2, A.Ent>, srv: S.Srv, ds: R.Ds, ws: Waits, up: List<&2, Up>, tx: Tx) -> Grp:
   (pb, outs) = p
   Grp{outs, es, srv, ds, ws, up, tx, pb}
@@ -7945,13 +7957,13 @@ def group.sweep(on: Bool, outs: List<&2, Sigma<&2, &2, Chan(Ans), _ => Ans>>, es
 # of the group, and the sweep runs (The pause)
 def group.resumed(p: Waits & List<&2, Up>, outs: List<&2, Sigma<&2, &2, Chan(Ans), _ => Ans>>, es: List<&2, A.Ent>, srv: S.Srv, ds: R.Ds, +tx: Tx, +pb: Ps) -> Grp:
   (+ws, up) = p
-  group.sweep(Bool.or(tx.on(tx), ps.loud(pb)), outs, es, waits.count(ws, srv), ds, ws, up, tx, pb)
+  group.sweep(Bool.or(tx.on(tx), ps.looks(pb)), outs, es, waits.count(ws, srv), ds, ws, up, tx, pb)
 
 def group.tick(on: Bool, over: Bool, outs: List<&2, Sigma<&2, &2, Chan(Ans), _ => Ans>>, es: List<&2, A.Ent>, srv: S.Srv, ds: R.Ds, ws: Waits, up: List<&2, Up>, +tx: Tx, pb: Ps) -> Grp:
   match on over:
     case False{} _:
       +p = pb
-      group.sweep(Bool.or(tx.on(tx), ps.loud(p)), outs, es, srv, ds, ws, up, tx, p)
+      group.sweep(Bool.or(tx.on(tx), ps.looks(p)), outs, es, srv, ds, ws, up, tx, p)
     case True{} False{}:
       Grp{outs, es, srv, ds, ws, up, tx, pb}
     case True{} True{}:
