@@ -20,7 +20,7 @@ Claude Code reads this file only while the repository has no `CLAUDE.md`,
         float.bend, hll.bend, geo.bend, lolwut.bend, rdb.bend    tested only
     src/server.bend    the shell: actor, connections, AOF I/O, waits,
                        transactions, pub/sub, eviction, rewrite     tested only
-    proof/LAWS.bend    the laws: stated by people
+    proof/LAWS.bend    the laws: a human approves every change
     proof/SPEC.bend    the commands on the bare trie (the bridge's other side)
     proof/PROOF.bend   the proofs: written by machine, checked by Bend and BendTT
     tests/             tests against redis-server, run by tests/run_tests.sh
@@ -58,11 +58,11 @@ Every pull request passes all of these; CI runs the same.
 
 ## Rules
 
-1. **Laws are stated by people.** Do not add, remove or change the statement of a
-   law in `proof/LAWS.bend`, or what `proof/SPEC.bend` means, without a human's
-   approval in the issue or the pull request. When a change needs a new or
-   different law, write the exact statement in the pull request and wait. Proofs
-   in `proof/PROOF.bend` are yours to write.
+1. **A human approves every change to the laws.** Do not add, remove or change the
+   statement of a law in `proof/LAWS.bend`, or what `proof/SPEC.bend` means,
+   without a human's approval in the issue or the pull request. When a change
+   needs a new or different law, write the exact statement in the pull request
+   and wait. Proofs in `proof/PROOF.bend` are yours to write.
 2. **Do not weaken a check to make it pass.** No skipped or loosened tests, no new
    entries in `tools/data/clients.json`, no edit of `tools/perf_baseline.txt`, no
    higher tolerance, unless the issue asks for it or the owner approves it in the
@@ -103,8 +103,8 @@ Every pull request passes all of these; CI runs the same.
 
 ## Merging
 
-While BendKV is pre-release, two sessions work on it and review each other's pull
-requests.
+While BendKV is pre-release, several sessions work on it and review each other's
+pull requests.
 
 - **Who merges.** A pull request merges into `main` when two things hold:
   - CI is green on its head;
@@ -114,7 +114,8 @@ requests.
   The author then merges it. All sessions post from the owner's account, so
   GitHub's own approval is not available.
 - **Pushes after the approval.** The reviewer looks at what a later push adds. A
-  merge of `main` without a conflict needs no new look.
+  merge of `main` without a conflict needs no new look; after a merge with a
+  conflict, the reviewer looks at the merge commit alone.
 - **When the owner decides.** Some pull requests merge only once the owner has
   approved them in the pull request. That is a pull request that does any of
   these:

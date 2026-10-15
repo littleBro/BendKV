@@ -53,8 +53,9 @@ sends about a million of them to main's server.
   the existing laws extended to it in `proof/PROOF.bend` (the `frame` law covers every
   command), a new law in `proof/LAWS.bend` when it promises something new, and a case in
   the tests under `tests/` that compares it with Redis byte for byte.
-- **Laws are stated by people.** A change to `proof/LAWS.bend` that weakens a law needs
-  a reason in the pull request.
+- **A human approves every change to the laws.** A new law, a removed one or a changed
+  statement in `proof/LAWS.bend` merges once the owner has approved it in the pull
+  request, and one that weakens a law gives the reason there.
 - **The 16-way parts** of `src/map.bend`, `proof/LAWS.bend` and `proof/PROOF.bend`,
   between `BEGIN gen_trie` and `END gen_trie`, are written by `tools/gen_trie.py`, and the
   table of parameters in `src/config.bend` by `tools/gen_config.py` (from
