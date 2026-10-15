@@ -576,7 +576,7 @@ stops reading holds up only its own replies), and from the event loop with
 
 ```bash
 make smoke     BEND="$B"   # the pure path end to end and the append-only file, no network; fails on any mismatch
-make test      BEND="$B"   # needs redis-server, redis-cli and a C compiler
+make test      BEND="$B"   # needs redis-server, redis-cli, redis-benchmark and a C compiler
 make perfcheck BEND="$B"   # instructions, misses and prefetches per request against a baseline (needs valgrind)
 make gencheck              # the generated parts (trie, its proofs, the parameter and command tables, the counts) are up to date
 make bench     BEND="$B"   # redis-benchmark: BendKV against Redis
@@ -672,7 +672,8 @@ table of channels is read to show that each closed the channel it opened,
 restarts from the append-only file (every database read back, including after a
 truncated tail or a transaction left open; files whose entries, transactions and values
 straddle the windows the start reads them in, started on by BendKV and by Redis alike,
-`tests/aof_window_test.py`), kills at random moments while clients write
+`tests/aof_window_test.py`; and the resident memory after a restart from a file of a
+million SETs, `tools/restore_mem.sh`), kills at random moments while clients write
 (`tests/crash_test.py`: rounds of a SIGKILL under load, some while a rewrite runs, some
 starts killed as they load the file, each start holding the databases after a prefix of
 the commands sent, every one acknowledged among them), disk failures
