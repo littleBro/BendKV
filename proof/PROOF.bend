@@ -5640,26 +5640,26 @@ def le_refl(n: Nat) -> {le(n, n) == True{} : Bool}:
     case 1n+p:
       le_refl(p)
 
-# An SADD to a set kept as a hashtable that lacks its first member
-# writes the set over (takes_mems, for takes_over): the members added to
-# a set leave it no smaller (le_add_mem, len_adds_ge), a member it lacks
-# makes it one larger (le_big_new), and a size one or more larger, less
+# An SADD to a set that lacks its first member writes the set over
+# (takes_mems, for takes_over): the members added to a set leave it no
+# smaller (le_add_mem, len_adds_ge), a member it lacks makes it one
+# larger (le_big_new, le_ints_new), and a size one or more larger, less
 # the old size, is not 0 (sub_pos), so SADD adds one or more.
-def le_ints_putm(fits: Bool, +m: Nat, +n: Nat, -xs: List<&2, String>, -y: String) -> {le(m, n) == True{} : Bool} -> {le(m, KV.mems.len(KV.mems.ints.put(fits, n, xs, y))) == True{} : Bool}:
+def le_ints_putm(fits: Bool, +m: Nat, +n: Nat, -xs: KV.ITree, -y: String) -> {le(m, n) == True{} : Bool} -> {le(m, KV.mems.len(KV.mems.ints.put(fits, n, xs, y))) == True{} : Bool}:
   match fits:
     case True{}:
       e => le_succ(m, n)(e)
     case False{}:
       e => le_succ(m, n)(e)
 
-def le_ints_more(int: Bool, +m: Nat, +n: Nat, -xs: List<&2, String>, -y: String) -> {le(m, n) == True{} : Bool} -> {le(m, KV.mems.len(KV.mems.ints.add(False{}, int, n, xs, y))) == True{} : Bool}:
+def le_ints_more(int: Bool, +m: Nat, +n: Nat, -xs: KV.ITree, -y: String) -> {le(m, n) == True{} : Bool} -> {le(m, KV.mems.len(KV.mems.ints.add(False{}, int, n, xs, y))) == True{} : Bool}:
   match int:
     case True{}:
       e => le_ints_putm(Nat.is_lt(n, 512n), m, n, xs, y)(e)
     case False{}:
       e => le_succ(m, n)(e)
 
-def le_ints_add(had: Bool, int: Bool, +m: Nat, +n: Nat, -xs: List<&2, String>, -y: String) -> {le(m, n) == True{} : Bool} -> {le(m, KV.mems.len(KV.mems.ints.add(had, int, n, xs, y))) == True{} : Bool}:
+def le_ints_add(had: Bool, int: Bool, +m: Nat, +n: Nat, -xs: KV.ITree, -y: String) -> {le(m, n) == True{} : Bool} -> {le(m, KV.mems.len(KV.mems.ints.add(had, int, n, xs, y))) == True{} : Bool}:
   match had:
     case True{}:
       e => e
@@ -5694,6 +5694,22 @@ def le_big_new(had: Bool, +n: Nat, -t: KV.Trie<Unit>, -y: String) -> {Bool.not(h
     case False{}:
       e => le_refl(n)
 
+def le_ints_putn(fits: Bool, +n: Nat, -xs: KV.ITree, -y: String) -> {le(1n+n, KV.mems.len(KV.mems.ints.put(fits, n, xs, y))) == True{} : Bool}:
+  match fits:
+    case True{}:
+      le_refl(n)
+    case False{}:
+      le_refl(n)
+
+def le_ints_new(had: Bool, int: Bool, +n: Nat, -xs: KV.ITree, -y: String) -> {Bool.not(had) == True{} : Bool} -> {le(1n+n, KV.mems.len(KV.mems.ints.add(had, int, n, xs, y))) == True{} : Bool}:
+  match had int:
+    case True{} _:
+      e => Empty.absurd({le(1n+n, KV.mems.len(KV.mems.ints.add(True{}, int, n, xs, y))) == True{} : Bool}, false_true(e))
+    case False{} True{}:
+      e => le_ints_putn(Nat.is_lt(n, 512n), n, xs, y)
+    case False{} False{}:
+      e => le_refl(n)
+
 def sub_pos(a: Nat, b: Nat) -> {le(1n+b, a) == True{} : Bool} -> {Nat.is_eq(Nat.sub(a, b), 0n) == False{} : Bool}:
   match a b:
     case 0n _:
@@ -5706,6 +5722,9 @@ def sub_pos(a: Nat, b: Nat) -> {le(1n+b, a) == True{} : Bool} -> {Nat.is_eq(Nat.
 def sadd_adds(+x: String, +rest: List<&2, String>, +n: Nat, +t: KV.Trie<Unit>) -> {Bool.not(KV.has(Unit, t, x)) == True{} : Bool} -> {Nat.is_eq(Nat.sub(KV.mems.len(KV.mems.adds(rest, KV.mems.add(KV.MBig{n, t}, x))), n), 0n) == False{} : Bool}:
   g => sub_pos(KV.mems.len(KV.mems.adds(rest, KV.mems.add(KV.MBig{n, t}, x))), n)(len_adds_ge(rest, KV.mems.add(KV.MBig{n, t}, x), 1n+n)(le_big_new(KV.has(Unit, t, x), n, t, x)(g)))
 
+def sadd_adds_ints(+x: String, +rest: List<&2, String>, +n: Nat, +xs: KV.ITree) -> {Bool.not(KV.mems.ints.has(KV.ints.ok(x), x, xs)) == True{} : Bool} -> {Nat.is_eq(Nat.sub(KV.mems.len(KV.mems.adds(rest, KV.mems.add(KV.MInts{n, xs}, x))), n), 0n) == False{} : Bool}:
+  g => sub_pos(KV.mems.len(KV.mems.adds(rest, KV.mems.add(KV.MInts{n, xs}, x))), n)(len_adds_ge(rest, KV.mems.add(KV.MInts{n, xs}, x), 1n+n)(le_ints_new(KV.mems.ints.has(KV.ints.ok(x), x, xs), KV.ints.ok(x), n, xs, x)(g)))
+
 def sadd_of_over(b: Bool, +ms: List<&2, String>, -t: KV.Mems, -added: Nat) -> {b == False{} : Bool} -> {ch_over(ch_of(R.sadd.of(b, False{}, ms, t, added))) == True{} : Bool}:
   match b:
     case True{}:
@@ -5716,12 +5735,15 @@ def sadd_of_over(b: Bool, +ms: List<&2, String>, -t: KV.Mems, -added: Nat) -> {b
 def takes_madd(+x: String, +rest: List<&2, String>, +n: Nat, +t: KV.Trie<Unit>, -e: Nat, +now: Nat) -> {R.upd.takes(R.UMems{R.SWAdd{Con{x, rest}}}, Some{KV.Item{KV.VColl{KV.CMems{KV.MBig{n, t}}}, e}}) == True{} : Bool} -> {ch_over(ch_of(R.upd.v(R.UMems{R.SWAdd{Con{x, rest}}}, now, Some{KV.Item{KV.VColl{KV.CMems{KV.MBig{n, t}}}, e}}))) == True{} : Bool}:
   g => sadd_of_over(Nat.is_eq(Nat.sub(KV.mems.len(KV.mems.adds(rest, KV.mems.add(KV.MBig{n, t}, x))), n), 0n), Con{x, rest}, KV.mems.adds(rest, KV.mems.add(KV.MBig{n, t}, x)), Nat.sub(KV.mems.len(KV.mems.adds(rest, KV.mems.add(KV.MBig{n, t}, x))), n))(sadd_adds(x, rest, n, t)(g))
 
+def takes_madd_ints(+x: String, +rest: List<&2, String>, +n: Nat, +xs: KV.ITree, -e: Nat, +now: Nat) -> {R.upd.takes(R.UMems{R.SWAdd{Con{x, rest}}}, Some{KV.Item{KV.VColl{KV.CMems{KV.MInts{n, xs}}}, e}}) == True{} : Bool} -> {ch_over(ch_of(R.upd.v(R.UMems{R.SWAdd{Con{x, rest}}}, now, Some{KV.Item{KV.VColl{KV.CMems{KV.MInts{n, xs}}}, e}}))) == True{} : Bool}:
+  g => sadd_of_over(Nat.is_eq(Nat.sub(KV.mems.len(KV.mems.adds(rest, KV.mems.add(KV.MInts{n, xs}, x))), n), 0n), Con{x, rest}, KV.mems.adds(rest, KV.mems.add(KV.MInts{n, xs}, x)), Nat.sub(KV.mems.len(KV.mems.adds(rest, KV.mems.add(KV.MInts{n, xs}, x))), n))(sadd_adds_ints(x, rest, n, xs)(g))
+
 def takes_madd_s(s: KV.Mems, -e: Nat, +x: String, +rest: List<&2, String>, +now: Nat) -> {R.upd.takes(R.UMems{R.SWAdd{Con{x, rest}}}, Some{KV.Item{KV.VColl{KV.CMems{s}}, e}}) == True{} : Bool} -> {ch_over(ch_of(R.upd.v(R.UMems{R.SWAdd{Con{x, rest}}}, now, Some{KV.Item{KV.VColl{KV.CMems{s}}, e}}))) == True{} : Bool}:
   match s:
     case KV.MBig{n, t}:
       takes_madd(x, rest, n, t, e, now)
     case KV.MInts{n, xs}:
-      g => Empty.absurd({ch_over(ch_of(R.upd.v(R.UMems{R.SWAdd{Con{x, rest}}}, now, Some{KV.Item{KV.VColl{KV.CMems{KV.MInts{n, xs}}}, e}}))) == True{} : Bool}, false_true(g))
+      takes_madd_ints(x, rest, n, xs, e, now)
 
 def takes_madd_c(cl: KV.Coll, -e: Nat, +x: String, +rest: List<&2, String>, +now: Nat) -> {R.upd.takes(R.UMems{R.SWAdd{Con{x, rest}}}, Some{KV.Item{KV.VColl{cl}, e}}) == True{} : Bool} -> {ch_over(ch_of(R.upd.v(R.UMems{R.SWAdd{Con{x, rest}}}, now, Some{KV.Item{KV.VColl{cl}, e}}))) == True{} : Bool}:
   match cl:
@@ -9593,7 +9615,7 @@ def sub_self(n: Nat) -> {0n == Nat.sub(n, n) : Nat}:
     case 1n++p:
       sub_self(p)
 
-def has_none(b: Bool, +m: String) -> {False{} == KV.mems.ints.has(b, m, Nil{}) : Bool}:
+def has_none(b: Bool, +m: String) -> {False{} == KV.mems.ints.has(b, m, KV.ITip{}) : Bool}:
   match b:
     case True{}:
       {==}

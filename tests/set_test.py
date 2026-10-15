@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """Sets against Redis: a script of set commands at their edges, sets of
-many sizes on both sides of the intset limit (512 integers), sets whose
-key's time has passed, then random commands on a few keys (moves and the
-operations of several sets among them), replies compared one by one.
+many sizes on both sides of the intset limit (512 integers), an intset
+whose members come and go in a random order, sets whose key's time has
+passed, then random commands on a few keys (moves and the operations of
+several sets among them), replies compared one by one.
 
 An intset keeps its members in numeric order on both servers, and those
 replies are compared as they are; a hashtable answers in the order of
@@ -309,6 +310,33 @@ def sizes(b, r):
         same(b, r, [b"SREM", b"grow", b"%d" % (i * 7)])
     same(b, r, [b"OBJECT", b"ENCODING", b"grow"])
     same(b, r, [b"SMEMBERS", b"grow"])
+    # an intset changed in a random order: 512 members of every width,
+    # each added and then taken out at a random place, its members
+    # compared in order along the way, and picked from at random
+    rng = random.Random(7)
+    pool = set()
+    while len(pool) < 400:
+        pool.add(rng.randrange(-2**63, 2**63))
+    while len(pool) < 512:
+        pool.add(rng.randrange(-40000, 40000))
+    pool = [b"%d" % x for x in pool]
+    rng.shuffle(pool)
+    for i, x in enumerate(pool):
+        same(b, r, [b"SADD", b"shuf", x])
+        if i % 64 == 63:
+            exact(b, r, b"shuf")
+    for cmd in ([b"OBJECT", b"ENCODING", b"shuf"], [b"SRANDMEMBER", b"shuf", b"-20"], [b"SRANDMEMBER", b"shuf", b"300"],
+                [b"SSCAN", b"shuf", b"0"], [b"SPOP", b"shuf", b"5"]):
+        same(b, r, cmd)
+    rng.shuffle(pool)
+    for i, x in enumerate(pool):
+        same(b, r, [b"SREM", b"shuf", x, b"%d" % rng.randint(-50, 50)])
+        if i % 32 == 31:
+            exact(b, r, b"shuf")
+            same(b, r, [b"SCARD", b"shuf"])
+            same(b, r, [b"SISMEMBER", b"shuf", rng.choice(pool)])
+            same(b, r, [b"SRANDMEMBER", b"shuf"])
+    same(b, r, [b"EXISTS", b"shuf"])
 
 
 # a set whose time passed: a read finds nothing, a write makes it anew,

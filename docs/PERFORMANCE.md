@@ -7057,7 +7057,7 @@ value (RESTORE a sixth to a half of their time). Where Redis holds a value as a 
 (a list's nodes, a small hash or sorted set), its DUMP copies the bytes it holds and its
 RESTORE checks them and keeps them; BendKV writes and reads each element. SADD to an
 intset is section 55's: a list of the members as strings in increasing order, which each
-add walks.
+add walks (a tree since section 63).
 
 **Where it goes** (callgrind, instructions per command):
 
@@ -7119,3 +7119,58 @@ sorted set's trie of its members is made one member at a time.
 
 **The other commands.** `make perfcheck`: GET 3,316, SET 4,076 and INCR 4,392
 instructions per request (3,316, 4,075 and 4,393 on main).
+
+## 63. Intsets as trees of integers
+
+**What was left** (sections 55 and 62). SADD to an intset cost twenty times SADD to a
+hashtable. An intset was the list of its members, as strings in increasing order, and
+`ints.at` compared a member with each one it passed as integers, reading the digits of
+both strings again each time; an add walked the list twice (the test of the member, then
+the put) and built again the part it passed.
+
+**The change** (FINDINGS 3zzy). An intset's members are a weight-balanced tree, as a
+sorted set's elements are, compared as integers by sign, number of digits and bytes
+(`String.order`): a member is found, added or taken out in O(log n) steps. SADD of a
+member the intset lacks takes it out of the keyspace, as section 55 takes a hashtable.
+RESTORE of an intset makes its tree at once, and no trie of its members.
+
+**Measured** (callgrind, instructions per command, pipelined: 400 new members added in a
+random order to an intset of 100, then tested, then taken out; the same on a hashtable
+of as many short strings):
+
+| command | before | after | a hashtable |
+|---|---:|---:|---:|
+| SADD of a new member | 270,366 | 14,013 | 8,347 |
+| SISMEMBER | 155,772 | 6,992 | 5,403 |
+| SREM | 274,643 | 15,519 | 14,598 |
+| DUMP of an intset of 500 | 913,736 | 900,901 | |
+| RESTORE of it, with REPLACE | 3,992,621 | 1,225,958 | |
+
+An SADD and an SREM of one member, by the intset's size:
+
+| members | before | after | a hashtable |
+|---:|---:|---:|---:|
+| 8 | 37,297 | 21,866 | 23,943 |
+| 64 | 139,567 | 28,374 | 24,332 |
+| 400 | 158,995 | 31,989 | 24,653 |
+
+Without the take, SADD costs 16,431, and the pairs 22,144, 29,506 and 33,849. Wall time,
+one request at a time, the median of three runs of medians (µs):
+
+| | before | after | Redis |
+|---|---:|---:|---:|
+| SADD of a new member | 75 | 53 | 51 |
+| SISMEMBER | 64 | 51 | 48 |
+| SREM | 74 | 53 | 50 |
+| SADD of 500 integers at once | 7,897 | 458 | 164 |
+| DUMP of them | 147 | 137 | 56 |
+| RESTORE of them | 416 | 185 | 48 |
+
+`make perfcheck`: GET 3,306, SET 4,067 and INCR 4,411 instructions per request (main
+3,302, 4,069 and 4,411).
+
+**What is left.** On an intset of 400, a pair costs 7,300 instructions more than on a
+hashtable: each step of an add or a deletion makes a new node on its way back up and
+drops the old one, and an SADD that takes the set walks the tree three times (the take's
+test of the member, `mems.add`'s, then the add). A member takes 34 bytes of the heap,
+where Redis's intset takes 2 to 8.
