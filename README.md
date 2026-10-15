@@ -15,9 +15,9 @@ throughput of Redis 7.0.15 on the same machine, with half its memory for small v
 > **Status: research prototype.** BendKV implements a subset of Redis (strings, hashes,
 > lists, sets, sorted sets, HyperLogLogs, GEO and their times to live, DUMP and RESTORE, the
 > blocking commands, transactions, pub/sub and keyspace notifications, the keyspace, several databases,
-> connection commands, CLIENT LIST, INFO, KILL, PAUSE and UNPAUSE, MONITOR, the server's
-> administrative commands, an append-only file and its rewrite, maxmemory and its
-> eviction, RESP3). The goal now is a
+> connection commands, CLIENT LIST, INFO, KILL, PAUSE and UNPAUSE, MONITOR, the slow log
+> and the latency monitor, the server's administrative commands, an append-only file and
+> its rewrite, maxmemory and its eviction, RESP3). The goal now is a
 > drop-in replacement for a single Redis node, measured by Redis's own test suite: of the
 > 1,677 tests Redis 7.0.15 passes against a server it did not start, BendKV passes 1,274,
 > and 1,271 of the 1,333 in what it implements
@@ -390,6 +390,20 @@ translation stays in the trusted base.
   with the flag O. Where BendKV differs: a line's time is that of the actor's group, in
   ms (its microseconds end in 000), and a monitor's own lines for the calls EXEC runs
   come after EXEC's array, where Redis writes them between its replies.
+- **SLOWLOG and LATENCY**, as Redis 7.0.15 keeps them: the actor reads the clock around
+  each batch of requests it runs, as Redis around each call, and a batch's calls share
+  its time. A call that takes `slowlog-log-slower-than` µs or more goes to the slow log
+  (SLOWLOG GET, LEN, RESET, HELP; `slowlog-max-len` entries) with its arguments as its
+  client sent them, cut as Redis cuts them, AUTH's, HELLO's and CONFIG SET's secrets
+  redacted, EXEC's commands but not EXEC, a blocking command when it is served. With
+  `latency-monitor-threshold` set, a call that takes that many ms is a sample of the
+  event "command" (or "fast-command"), and a cron's sweep of expired keys one of
+  "expire-cycle" (LATENCY LATEST, HISTORY, RESET, GRAPH, DOCTOR, HELP); LATENCY
+  HISTOGRAM shows each command's histogram. Where BendKV differs: a pipeline's calls
+  share its time, so a slow command lends it to the others; a batch's entries go to the
+  slow log when it ends, so a SLOWLOG GET in the same pipeline does not see them; there
+  are no events of the append-only file, of eviction or of fork (FINDINGS.md, section
+  3zzz).
 - **The server:** LASTSAVE (the start, as BendKV writes no RDB snapshot), ROLE (a master
   with no replica), WAIT (0, as no replica acknowledges: at once when it asks for none,
   otherwise once its timeout ends, its client waiting as a blocking command's does),
@@ -425,8 +439,10 @@ translation stays in the trusted base.
   calls, the calls refused before they run (a wrong number of arguments by Redis's arity,
   a client that must authenticate first, a command refused for memory) and the calls
   that fail as they run, and the error replies by their code, held-back replies included
-  (CLIENT REPLY OFF); BendKV does not time its commands, so their usec is 0 and
-  latencystats is empty. CONFIG RESETSTAT starts the counts again. COMMAND (with INFO, DOCS, COUNT, LIST and its
+  (CLIENT REPLY OFF); what each call took goes to its command's usec and, with
+  `latency-tracking`, its histogram (latencystats, at the percentiles of
+  `latency-tracking-info-percentiles`), as Redis keeps them (below). CONFIG RESETSTAT
+  starts the counts again. COMMAND (with INFO, DOCS, COUNT, LIST and its
   filters, GETKEYS, GETKEYSANDFLAGS, HELP) describes each command BendKV has, and each
   subcommand it has, as Redis 7.0.15 describes it: `tools/gen_commands.py` takes the
   descriptions from Redis itself.
@@ -496,8 +512,7 @@ translation stays in the trusted base.
   (FINDINGS.md, section 3zv).
 
 Not yet: streams, Lua
-scripts, CLIENT TRACKING, timing of commands
-(usec in INFO commandstats, latencystats), CONFIG REWRITE (it answers as Redis does without a configuration file),
+scripts, CLIENT TRACKING, CONFIG REWRITE (it answers as Redis does without a configuration file),
 RDB files. Times in ms are limited to 14 digits.
 
 ## Performance
@@ -573,7 +588,10 @@ cases and thousands of random values, set and read back on both servers), INFO (
 sections and fields for 31 ways of picking them, the values that do not depend on the
 machine, the counts after CONFIG RESETSTAT), the statistics per command (commandstats,
 errorstats and the totals after the same requests, one at a time and pipelined, with
-refused, failed, held-back and protocol errors, compared as maps), COMMAND (each
+refused, failed, held-back and protocol errors, compared as maps), the timing of calls
+(SLOWLOG and LATENCY's replies, the slow log's entries with every call logged, the
+histograms and latencystats, with what depends on how long a call took put aside),
+COMMAND (each
 command's description and
 documentation, the lists and their filters, the keys of command lines, random ones
 too), SCAN and RANDOMKEY (their arguments, full iterations with COUNT, MATCH and TYPE
@@ -675,12 +693,12 @@ src/        the server
   session.bend  connection and server state, whole batches         verified
   config.bend   the parameters, CONFIG GET and SET                 verified
   resp.bend     RESP parser, RESP2 and RESP3 reply encoders         tested
-  info.bend     INFO's sections and fields                         tested
+  info.bend     INFO's sections and fields, SLOWLOG, LATENCY        tested
   command.bend  COMMAND, with Redis's table of BendKV's commands     tested
   startup.bend  the command line and the configuration file        tested
   server.bend   TCP, connections, the database actor, the log      tested
 proof/      LAWS.bend (the laws), PROOF.bend (their proofs), SPEC.bend (the commands on the trie alone)
-tests/      float, start, differential, expiry, protocol, session, CONFIG, INFO, COMMAND, SCAN, BITFIELD, hash, list, set, sorted set, SORT, HyperLogLog, GEO, DUMP and RESTORE, blocking, transaction, Pub/Sub, CLIENT, MONITOR, CLIENT PAUSE, administrative commands, AUTH, RESP3, maxmemory, robustness, stalled reader, concurrency, AOF and AOF rewrite tests
+tests/      float, start, differential, expiry, protocol, session, CONFIG, INFO, COMMAND, SCAN, BITFIELD, hash, list, set, sorted set, SORT, HyperLogLog, GEO, DUMP and RESTORE, blocking, transaction, Pub/Sub, CLIENT, MONITOR, timing of calls, CLIENT PAUSE, administrative commands, AUTH, RESP3, maxmemory, robustness, stalled reader, concurrency, AOF and AOF rewrite tests
 bench/      in-process benchmarks of the map, the core and channels
 tools/      measurement scripts, the runner of Redis's test suite, and the generators of
             the trie, of the parameter table and of the command table, with the facts

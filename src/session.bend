@@ -595,6 +595,55 @@ def srv.blocked(s: Srv, +n: Nat, +t: Nat) -> Srv:
     case Srv{pass, cfg, info, mm}:
       Srv{pass, cfg, I.info.blocked(info, n, t), mm}
 
+# The timing of calls (info.bend: Timing a window): the window since the
+# clock's last reading timed, with the slow log's entries it found for
+# the shell to complete; the call of the general way about to run named,
+# and blocking; a client served after it waited, or gone; an entry of the
+# slow log
+type Tw is Data:
+  Tw{srv: Srv, js: List<&2, I.SlowJ>}
+
+def srv.tw(+pass: String, cfg: List<&2, C.CItem>, t: I.Timed, mm: Mm) -> Tw:
+  match t:
+    case I.Timed{i, js}:
+      Tw{Srv{pass, cfg, i, mm}, js}
+
+def srv.window(s: Srv, +d: Nat, +id: Nat, raw: String, +now: Nat) -> Tw:
+  match s:
+    case Srv{pass, cfg, info, mm}:
+      srv.tw(pass, cfg, I.info.window(info, d, id, raw, now), mm)
+
+def srv.call(s: Srv, +id: Nat, arg: I.Arg) -> Srv:
+  match s:
+    case Srv{pass, cfg, info, mm}:
+      Srv{pass, cfg, I.info.call(info, id, arg), mm}
+
+def srv.blk(s: Srv) -> Srv:
+  match s:
+    case Srv{pass, cfg, info, mm}:
+      Srv{pass, cfg, I.info.blk(info), mm}
+
+def srv.served(s: Srv, +id: Nat) -> Srv:
+  match s:
+    case Srv{pass, cfg, info, mm}:
+      Srv{pass, cfg, I.info.served(info, id), mm}
+
+def srv.gone(s: Srv, +id: Nat) -> Srv:
+  match s:
+    case Srv{pass, cfg, info, mm}:
+      Srv{pass, cfg, I.info.gone(info, id), mm}
+
+def srv.slow(s: Srv, +us: Nat, +at: Nat, +xs: List<&2, String>, +peer: String, +name: String) -> Srv:
+  match s:
+    case Srv{pass, cfg, info, mm}:
+      Srv{pass, cfg, I.info.slow(info, us, at, xs, peer, name), mm}
+
+# a latency of ms of event name at second now, for the latency monitor
+def srv.lat(s: Srv, +name: String, +ms: Nat, +now: Nat) -> Srv:
+  match s:
+    case Srv{pass, cfg, info, mm}:
+      Srv{pass, cfg, I.info.lat(info, name, ms, now), mm}
+
 # the sweep of expired keys (redis.bend: reap): where the next one starts
 # in database j, and a sweep of j that stopped at next having deleted k
 # keys

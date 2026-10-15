@@ -2122,6 +2122,21 @@ def ps.addr(+id: Nat, +pb: Ps) -> String:
     case PsOf{+p}:
       ps.addr(id, p)
 
+# the name of the client of id (CLIENT SETNAME's), "" for none
+def cl.name.or(m: Maybe<&2, Cl>) -> String:
+  match m:
+    case Some{Cl{id, back, fd, addr, laddr, since, name, db, noev, r3}}:
+      name
+    case None{}:
+      ""
+
+def ps.name(+id: Nat, +pb: Ps) -> String:
+  match pb:
+    case Ps{reg, ev, px, Cls{+tab, kd, ks, ms, pz, dn, hd}, own}:
+      cl.name.or(KV.get(Cl, tab, Nat.show(id)))
+    case PsOf{+p}:
+      ps.name(id, p)
+
 # the client of id killed: out of the registry, its fd to be shut down,
 # and the fast way off until its connection ends
 def ps.kill(+id: Nat, +fd: U32, pb: Ps) -> Ps:
@@ -3251,7 +3266,7 @@ def bg.popped(w: Waits, r: R.Reply & (List<&2, A.Eff> & R.Ds), rs: List<&2, R.Re
       (e, ds) = q
       +y = S.blk.shape(S.blk.form(b), x)
       +left = ws
-      bg.popped.put(e, ds, rs, es, conn, waits.count(left, bg.errs(srv, code, y)), left, Up{back, c1, S.put(S.say(S.conn.mode(c0), y), Nil{}), cmds, codes, av} <> up, tx, pb, pc, pre)
+      bg.popped.put(e, ds, rs, es, conn, waits.count(left, S.srv.served(bg.errs(srv, code, y), id)), left, Up{back, c1, S.put(S.say(S.conn.mode(c0), y), Nil{}), cmds, codes, av} <> up, tx, pb, pc, pre)
     case WaitNone{}:
       (x, q) = r
       (e, ds) = q
@@ -3347,7 +3362,7 @@ def bg.wait(+id: Nat, +back: Chan(Ans), b: S.Blk, +c: R.Cmd, +code: Nat, rest: L
       +x = b
       +u = S.blk.until(R.ds.now(ds), S.blk.ms(x))
       +ws2 = waits.add(ws, WaitOn{id, Chan.mark(Ans, back, U32.from_nat(code), R.ds.now(ds)), conn, S.next_conn(False{}, c, conn, srv), x, wait.argv(c), code, S.conn.db(conn), u, rest, more, av, WaitNone{}})
-      LHeld{LRun{rs, es, conn, waits.count(ws2, gen.count(srv, code, Nil{})), ds, ws2, up, tx, ps.heed.add(S.blk.keys(x), u, pb)}}
+      LHeld{LRun{rs, es, conn, waits.count(ws2, gen.count(S.srv.blk(srv), code, Nil{})), ds, ws2, up, tx, ps.heed.add(S.blk.keys(x), u, pb)}}
     case LHeld{h}:
       LHeld{h}
 
@@ -3373,7 +3388,7 @@ def bg.unblocked(p: Waits & Waits, +err: Bool, +code: Nat, rs: List<&2, R.Reply>
   (w, +ws) = p
   match w:
     case WaitOn{id, back, +c0, c1, +b, argv, +wc, db, until, cmds, codes, av, rest}:
-      bg.one(R.Own{R.SReply{R.RInt{R.IPos{1n}}}}, code, LRun{rs, es, conn, waits.count(ws, unblock.stat(err, wc, code, srv)), ds, ws, Up{back, c1, S.put(S.say(S.conn.mode(c0), unblock.reply(err, b)), Nil{}), cmds, codes, av} <> up, tx, pb})
+      bg.one(R.Own{R.SReply{R.RInt{R.IPos{1n}}}}, code, LRun{rs, es, conn, waits.count(ws, S.srv.served(unblock.stat(err, wc, code, srv), id)), ds, ws, Up{back, c1, S.put(S.say(S.conn.mode(c0), unblock.reply(err, b)), Nil{}), cmds, codes, av} <> up, tx, pb})
     case WaitNone{}:
       bg.one(R.Own{R.SReply{R.RInt{R.IPos{0n}}}}, code, LRun{rs, es, conn, srv, ds, ws, up, tx, pb})
 
@@ -3930,6 +3945,47 @@ def red.of(auth: Bool, hello: Bool, xs: List<&2, String>) -> List<&2, String>:
 def mon.redact(+key: Nat, xs: List<&2, String>) -> List<&2, String>:
   red.of(Nat.is_eq(key, R.stat.top(102n)), Nat.is_eq(key, R.stat.top(101n)), xs)
 
+# CONFIG SET's parameters that Redis flags sensitive (SENSITIVE_CONFIG),
+# whose values it redacts, case aside
+def red.secret(+p: String) -> Bool:
+  Bool.or(C.text.same(p, "requirepass"), Bool.or(C.text.same(p, "masterauth"), C.text.same(p, "masteruser")))
+
+def red.pairs(xs: List<&2, String>) -> List<&2, String>:
+  match xs:
+    case Con{+p, Con{v, rest}}:
+      p <> Bool.pick(String, red.secret(p), red.word(), v) <> red.pairs(rest)
+    case other:
+      other
+
+def red.config.if(even: Bool, xs: List<&2, String>) -> List<&2, String>:
+  match even:
+    case True{}:
+      red.pairs(xs)
+    case False{}:
+      xs
+
+# CONFIG SET's arguments, its sensitive values redacted when its pairs
+# are whole (configSetCommand, before it looks at any: an odd count is an
+# error of arity first)
+def red.config(xs: List<&2, String>) -> List<&2, String>:
+  match xs:
+    case Con{c, Con{s, +rest}}:
+      c <> s <> red.config.if(Nat.is_eq(Nat.mod(List.length(&2, String, rest), 2n), 0n), rest)
+    case other:
+      other
+
+def slow.redact.if(cs: Bool, +key: Nat, xs: List<&2, String>) -> List<&2, String>:
+  match cs:
+    case True{}:
+      red.config(xs)
+    case False{}:
+      mon.redact(key, xs)
+
+# a call's arguments as the slow log keeps them: the monitor's, and
+# CONFIG SET's values of sensitive parameters redacted (redactClientCommandArgument)
+def slow.redact(+key: Nat, xs: List<&2, String>) -> List<&2, String>:
+  slow.redact.if(Nat.is_eq(key, R.stat.sub.config(2n)), key, xs)
+
 # whether a call of code that ran (may: its client may run it) sends a
 # line: one the parser did not refuse, of a command not administrative
 def mon.ran(+may: Bool, +code: Nat) -> Bool:
@@ -4032,6 +4088,22 @@ def av.get(a: Av) -> Got:
       av.got(List.drop(&2, List<&2, String>, P.argvs(raw), n))
     case AvArgs{xs}:
       av.got(xs)
+
+# where the arguments of the request an Av's next is are, for the slow
+# log (info.bend: Timing a window)
+def av.first(+xs: List<&2, List<&2, String>>) -> List<&2, String>:
+  match xs:
+    case Con{+x, rest}:
+      x
+    case Nil{}:
+      Nil{}
+
+def av.arg(+a: Av) -> I.Arg:
+  match a:
+    case AvRaw{+raw, +n}:
+      I.ArgRaw{raw, n}
+    case AvArgs{+xs}:
+      I.ArgList{av.first(xs)}
 
 # a batch's state after a call, with the Av of the rest of the batch
 type Fed is Data:
@@ -5048,9 +5120,9 @@ def bg.x.cmd(may: Bool, +id: Nat, +back: Chan(Ans), +inb: Nat, +n: Nat, +c: R.Cm
 
 def bg.x.go(+id: Nat, +back: Chan(Ans), +inb: Nat, +n: Nat, cmds: List<&2, R.Cmd>, codes: List<&2, Nat>, avs: List<&2, Av>, x: Xr) -> Xr:
   match cmds codes avs x:
-    case Con{+c, rest} Con{+k, more} Con{a, ar} Xr{LRun{rs, es, +conn, +srv, ds, ws, up, tx, pb}, mine}:
+    case Con{+c, rest} Con{+k, more} Con{+a, ar} Xr{LRun{rs, es, +conn, +srv, ds, ws, up, tx, pb}, mine}:
       +may = S.may(S.kind(c), conn, srv)
-      bg.x.go(id, back, inb, n, rest, more, ar, bg.x.feed(mon.ran(may, k), id, k, S.conn.mode(conn), a, bg.x.cmd(may, id, back, inb, n, c, k, LRun{rs, es, conn, srv, ds, ws, up, tx, pb}), mine))
+      bg.x.go(id, back, inb, n, rest, more, ar, bg.x.feed(mon.ran(may, k), id, k, S.conn.mode(conn), a, bg.x.cmd(may, id, back, inb, n, c, k, LRun{rs, es, conn, S.srv.call(srv, id, av.arg(a)), ds, ws, up, tx, pb}), mine))
     case _ _ _ x0:
       x0
 
@@ -5218,7 +5290,7 @@ def bg.go(+id: Nat, +back: Chan(Ans), +inb: Nat, cmds: List<&2, R.Cmd>, codes: L
       +mo = ps.mon.is(id, pb)
       +sh = sh.of(q, may, tx.multi(id, tx), Bool.and(ps.has(id, pb), Bool.not(S.conn.r3(conn))), mo, ps.oom.is(pb), pause.holds(ps.pz(pb), mo, c, k, id, tx), c, k, ds)
       +ar = av.rest(av)
-      bg.go(id, back, inb, rest, more, bg.feed(mon.seen(q, may, sh, k), id, k, S.conn.mode(conn), av, ar, bg.cmd(id, back, inb, sh, c, k, rest, more, av, ar, LRun{rs, es, conn, srv, ds, ws, up, tx, pb})))
+      bg.go(id, back, inb, rest, more, bg.feed(mon.seen(q, may, sh, k), id, k, S.conn.mode(conn), av, ar, bg.cmd(id, back, inb, sh, c, k, rest, more, av, ar, LRun{rs, es, conn, S.srv.call(srv, id, av.arg(av)), ds, ws, up, tx, pb})))
     case _ _ Fed{g0, av}:
       g0
 
@@ -5364,7 +5436,7 @@ def grp.end(g: Grp) -> Grp:
 # batch dropped, and its connection answered Bye, after any answer before
 def grp.gone(+id: Nat, +back: Chan(Ans), outs: List<&2, Sigma<&2, &2, Chan(Ans), _ => Ans>>, es: List<&2, A.Ent>, srv: S.Srv, ds: R.Ds, +ws: Waits, +up: List<&2, Up>, tx: Tx, pb: Ps) -> Grp:
   +left = waits.rest(waits.take(ws, waits.is(id, ws), id, WaitNone{}))
-  Grp{(back, Bye{}) <> outs, es, waits.count(left, srv), ds, left, ups.drop(up, ups.is(id, up), id), tx.drop(id, tx), ps.drop(id, pb)}
+  Grp{(back, Bye{}) <> outs, es, waits.count(left, S.srv.gone(srv, id)), ds, left, ups.drop(up, ups.is(id, up), id), tx.drop(id, tx), ps.drop(id, pb)}
 
 # Memory
 # ------
@@ -6024,18 +6096,25 @@ def mem.run(h: Nat & Nat, +s0: U32, +u0: U32, srv: S.Srv, ds: R.Ds, ws: Waits, t
 def db_mem(+w: Nat, qs: List<&1, Req>, t: U32 & U32, srv: S.Srv, ds: R.Ds, ws: Waits, tx: Tx, pb: Ps, rw: Rw, +reqs: Chan(Req)) -> IO(Unit):
   match w:
     case 0n:
-      db_group(grp.end(group_run(False{}, qs, Grp{Nil{}, Nil{}, srv, R.ds.at(clock.ms(t), ds), ws, Nil{}, tx, pb})), rw, reqs)
+      (a, b) = t
+      +s0 = a
+      +u0 = b
+      db_group(group_at(False{}, qs, s0, u0, Grp{Nil{}, Nil{}, srv, R.ds.at(clock.ms.of(s0, u0), ds), ws, Nil{}, tx, pb}), rw, reqs)
     case 1n:
-      db_group(grp.end(group_run(False{}, qs, Grp{Nil{}, Nil{}, srv, R.ds.at(clock.ms(t), ds), ws, Nil{}, tx, ps.mem(pb, 0n)})), rw, reqs)
+      (a, b) = t
+      +s0 = a
+      +u0 = b
+      db_group(group_at(False{}, qs, s0, u0, Grp{Nil{}, Nil{}, srv, R.ds.at(clock.ms.of(s0, u0), ds), ws, Nil{}, tx, ps.mem(pb, 0n)}), rw, reqs)
     case _:
       (a, b) = t
       +s0 = a
       +u0 = b
       +w2 = rw
+      +k = U32.sub(Clock.us(u0), u0)
       do IO<Unit>:
         h : Nat & Nat <- IO.heap()
         g : Grp <- mem.run(h, s0, u0, srv, R.ds.at(clock.ms.of(s0, u0), ds), ws, tx, pb, rw.runs(w2), rw.pid(w2))
-        db_group(grp.end(group_run(False{}, qs, g)), w2, reqs)
+        db_group(group_from(False{}, qs, g, s0, k), w2, reqs)
 
 # The database actor
 # ------------------
@@ -6341,12 +6420,24 @@ def grp.heed(g: Grp) -> Grp:
     case Grp{outs, es, srv, ds, +ws, up, +tx, pb}:
       Grp{outs, es, srv, ds, ws, up, tx, ps.heed.tick(heed.n.tx(tx, heed.n.waits(ws, 0n)), ws, tx, pb)}
 
+# a batch of the client of cn, of its connection's database
+def grp.req(+log: Bool, +cn: S.Conn, job: B.Job, back: Chan(Ans), +tl: U32, +inb: Nat, raw: String, g: Grp) -> Grp:
+  match g:
+    case Grp{outs, es, srv, ds, ws, up, tx, +pb}:
+      group_job(log, job, ws, tx, ps.calm(pb), outs, es, cn, back, tl, inb, raw, srv, R.ds.focus(S.conn.db(cn), ds), up, pb)
+
+# a batch of a client with a subscription (Pub/Sub)
+def grp.sub(+cn: S.Conn, job: B.Job, back: Chan(Ans), +inb: Nat, raw: String, g: Grp) -> Grp:
+  match g:
+    case Grp{outs, es, srv, ds, ws, up, tx, pb}:
+      sub_job(job, cn, back, inb, raw, Grp{outs, es, srv, R.ds.focus(S.conn.db(cn), ds), ws, up, tx, pb})
+
 def group_req(+log: Bool, q: Req, g: Grp) -> Grp:
   match q g:
-    case Req{+cn, job, back, +tl, +inb, raw} Grp{outs, es, srv, ds, ws, up, tx, +pb}:
-      group_job(log, job, ws, tx, ps.calm(pb), outs, es, cn, back, tl, inb, raw, srv, R.ds.focus(S.conn.db(cn), ds), up, pb)
-    case SubReq{+cn, job, back, tl, +inb, raw} Grp{outs, es, srv, ds, ws, up, tx, pb}:
-      sub_job(job, cn, back, inb, raw, Grp{outs, es, srv, R.ds.focus(S.conn.db(cn), ds), ws, up, tx, pb})
+    case Req{+cn, job, back, +tl, +inb, raw} g0:
+      grp.req(log, cn, job, back, tl, inb, raw, g0)
+    case SubReq{+cn, job, back, tl, +inb, raw} g0:
+      grp.sub(cn, job, back, inb, raw, g0)
     case Facts{live} Grp{outs, es, srv, ds, ws, up, tx, pb}:
       Grp{outs, es, S.srv.live(srv, live), ds, ws, up, tx, pb}
     case Tick{+ms} Grp{outs, es, srv, +ds, ws, up, tx, +pb}:
@@ -6357,7 +6448,7 @@ def group_req(+log: Bool, q: Req, g: Grp) -> Grp:
     case Gone{+id, +back} Grp{outs, es, srv, ds, +ws, +up, tx, pb}:
       grp.gone(id, back, outs, es, srv, ds, ws, up, tx, pb)
     case Left{+id, back} Grp{outs, es, srv, ds, ws, up, tx, pb}:
-      Grp{(back, Bye{}) <> outs, es, srv, ds, ws, up, tx.drop(id, tx), ps.left(id, ps.drop(id, pb))}
+      Grp{(back, Bye{}) <> outs, es, S.srv.gone(srv, id), ds, ws, up, tx.drop(id, tx), ps.left(id, ps.drop(id, pb))}
     case Join{+id, +back, fd, addr, laddr} Grp{outs, es, +srv, +ds, ws, up, tx, pb}:
       +now = R.ds.now(ds)
       Grp{(back, Ans{None{}, S.conn_join(id, srv)}) <> outs, es, srv, ds, ws, up, tx, ps.join(id, Cl{id, Chan.mark(Ans, back, 0, now), fd, addr, laddr, now, "", 0n, False{}, False{}}, pb)}
@@ -6370,12 +6461,190 @@ def clock.ms(t: U32 & U32) -> Nat:
 def clock.ms.of(+secs: U32, +us: U32) -> Nat:
   Nat.add(Nat.mul(U32.to_nat(secs), 1000n), U32.to_nat(U32.div(us, 1000)))
 
-def group_run(+log: Bool, qs: List<&1, Req>, g: Grp) -> Grp:
+# Timing
+# ------
+# The actor reads the monotonic clock (Clock.us, in us mod 2^32) when a
+# group starts, after each of its requests and after its end: the window
+# between two readings is timed (info.bend: Timing a window), its calls
+# sharing it. A reading is no effect, so the group runs as one pure step;
+# where a reading falls in s since 1970, for the slow log's entries and
+# the latency monitor's samples, comes from the wall clock's reading when
+# the group started (IO.clock, as Redis's ustime reads it). A window of a
+# batch of the fast way has the batch's bytes and its client's id with
+# it, for the slow log's entries of its calls; the general way names
+# each call before it runs (S.srv.call, with its arguments as sent: Av).
+# The slow log's entries a window finds are completed here: their
+# clients' addresses and names from the registry, their arguments read
+# from their batches' bytes, redacted as Redis redacts them.
+
+# the us from the clock's reading c0 to c1 (Clock.us)
+def us.of(+c0: U32, +c1: U32) -> Nat:
+  U32.to_nat(U32.sub(c1, c0))
+
+# the s since 1970 at the clock's reading c, in a group that started when
+# the wall clock read s0 s and the us past them that the clock read
+# less k
+def secs.of(+s0: U32, +k: U32, +c: U32) -> Nat:
+  Nat.add(U32.to_nat(s0), Nat.div(U32.to_nat(U32.sub(c, k)), 1000000n))
+
+# the arguments of a batch's requests read last (its bytes, the number of
+# the request the list starts at, the list), which the next entry of the
+# same batch reads on from
+type Sla is Data:
+  SlaNone{}
+  SlaAt{raw: String, at: Nat, xs: List<&2, List<&2, String>>}
+
+# what an entry's arguments are: those read, and what is read after them
+type Slg is Data:
+  Slg{args: List<&2, String>, rd: Sla}
+
+def sla.of(+raw: String, +n: Nat, xs: List<&2, List<&2, String>>) -> Slg:
+  match xs:
+    case Con{x, rest}:
+      Slg{x, SlaAt{raw, 1n+n, rest}}
+    case Nil{}:
+      Slg{Nil{}, SlaNone{}}
+
+def sla.from(same: Bool, +raw: String, +n: Nat, rd: Sla) -> Slg:
+  match same rd:
+    case True{} SlaAt{r, +at, xs}:
+      sla.of(raw, n, List.drop(&2, List<&2, String>, xs, Nat.sub(n, at)))
+    case _ _:
+      sla.of(raw, n, List.drop(&2, List<&2, String>, P.argvs(raw), n))
+
+def sla.same(+raw: String, +n: Nat, +rd: Sla) -> Bool:
+  match rd:
+    case SlaAt{+r, +at, xs}:
+      Bool.and(Nat.is_le(at, n), Bool.and(Nat.is_eq(String.length(r), String.length(raw)), String.eq(r, raw)))
+    case SlaNone{}:
+      False{}
+
+def sla.args(a: I.Arg, rd: Sla) -> Slg:
+  match a:
+    case I.ArgRaw{+raw, +n}:
+      +d = rd
+      sla.from(sla.same(raw, n, d), raw, n, d)
+    case I.ArgList{xs}:
+      Slg{xs, rd}
+
+def slow.put(+us: Nat, +now: Nat, +key: Nat, +id: Nat, g: Slg, srv: S.Srv, +pb: Ps) -> S.Srv & Sla:
+  match g:
+    case Slg{args, rd}:
+      (S.srv.slow(srv, us, now, slow.redact(key, args), ps.addr(id, pb), ps.name(id, pb)), rd)
+
+def slow.jobs.at(js: List<&2, I.SlowJ>, +now: Nat, p: S.Srv & Sla, +pb: Ps) -> S.Srv:
+  match js:
+    case Nil{}:
+      (srv, rd) = p
+      srv
+    case Con{I.SlowJ{+id, +us, +code, arg}, rest}:
+      (srv, rd) = p
+      slow.jobs.at(rest, now, slow.put(us, now, R.code.key(code), id, sla.args(arg, rd), srv, pb), pb)
+
+# the slow log's entries a window found, oldest first, completed and
+# logged at now (s since 1970)
+def slow.jobs(js: List<&2, I.SlowJ>, +now: Nat, srv: S.Srv, +pb: Ps) -> S.Srv:
+  match js:
+    case Nil{}:
+      srv
+    case _:
+      slow.jobs.at(js, now, (srv, SlaNone{}), pb)
+
+def grp.slow(t: S.Tw, +now: Nat, outs: List<&2, Sigma<&2, &2, Chan(Ans), _ => Ans>>, es: List<&2, A.Ent>, ds: R.Ds, ws: Waits, up: List<&2, Up>, tx: Tx, +pb: Ps) -> Grp:
+  match t:
+    case S.Tw{srv, js}:
+      Grp{outs, es, slow.jobs(js, now, srv, pb), ds, ws, up, tx, pb}
+
+# the window that ended at now (s since 1970), which took d us, of the
+# batch of raw, the client id's, if it was one (Timing)
+def grp.window(+id: Nat, raw: String, +d: Nat, +now: Nat, g: Grp) -> Grp:
+  match g:
+    case Grp{outs, es, srv, ds, ws, up, tx, +pb}:
+      grp.slow(S.srv.window(srv, d, id, raw, now), now, outs, es, ds, ws, up, tx, pb)
+
+def grp.timed.at(how: Nat, +id: Nat, raw: String, +d: Nat, +now: Nat, outs: List<&2, Sigma<&2, &2, Chan(Ans), _ => Ans>>, es: List<&2, A.Ent>, pass: String, cfg: List<&2, C.CItem>, info: I.Info, mm: S.Mm, ds: R.Ds, ws: Waits, up: List<&2, Up>, tx: Tx, pb: Ps) -> Grp:
+  match how:
+    case 0n:
+      Grp{outs, es, S.Srv{pass, cfg, info, mm}, ds, ws, up, tx, pb}
+    case 1n:
+      Grp{outs, es, S.Srv{pass, cfg, I.info.one(info, d), mm}, ds, ws, up, tx, pb}
+    case _:
+      grp.window(id, raw, d, now, Grp{outs, es, S.Srv{pass, cfg, info, mm}, ds, ws, up, tx, pb})
+
+# the window timed as it needs (I.info.how: nothing, its one run, or all
+# of its timing)
+def grp.timed(+id: Nat, raw: String, +d: Nat, +now: Nat, g: Grp) -> Grp:
+  match g:
+    case Grp{outs, es, S.Srv{pass, cfg, +info, mm}, ds, ws, up, tx, pb}:
+      grp.timed.at(I.info.how(info, d), id, raw, d, now, outs, es, pass, cfg, info, mm, ds, ws, up, tx, pb)
+
+# a tick's window: the sweep of expired keys, a sample of the latency
+# monitor's event "expire-cycle" when it took its threshold or more (as
+# Redis's activeExpireCycle samples it)
+def grp.lat(+name: String, +d: Nat, +now: Nat, g: Grp) -> Grp:
+  match g:
+    case Grp{outs, es, srv, ds, ws, up, tx, pb}:
+      Grp{outs, es, S.srv.lat(srv, name, Nat.div(d, 1000n), now), ds, ws, up, tx, pb}
+
+# the clock's reading once g is made (Clock.us, after a word of g)
+def grp.clock(+g: Grp) -> U32:
+  Clock.us(U32.from_nat(grp.down(g)))
+
+# the group's requests, each timed: the window from the clock's reading
+# c0 (Clock.us) to the one after it; s0 and k place a reading in s since
+# 1970 (secs.of)
+# the end of a group, its window timed when it has a client to see to
+# (grp.end.go: one waits, or a batch was unblocked)
+def group_end(calm: Bool, g: Grp, +s0: U32, +k: U32, +c0: U32) -> Grp:
+  match calm:
+    case True{}:
+      grp.end(g)
+    case False{}:
+      +e = grp.end(g)
+      +c1 = grp.clock(e)
+      grp.timed(0n, "", us.of(c0, c1), secs.of(s0, k, c1), e)
+
+def grp.calm(+g: Grp) -> Bool:
+  match g:
+    case Grp{outs, es, srv, ds, WaitNone{}, Nil{}, tx, pb}:
+      True{}
+    case _:
+      False{}
+
+def group_all(+log: Bool, qs: List<&1, Req>, g: Grp, +s0: U32, +k: U32, +c0: U32) -> Grp:
   match qs:
     case Nil{}:
-      g
+      +x = g
+      group_end(grp.calm(x), x, s0, k, c0)
+    case Con{Req{+cn, job, back, +tl, +inb, +raw}, rest}:
+      +g1 = grp.req(log, cn, job, back, tl, inb, raw, g)
+      +c1 = grp.clock(g1)
+      group_all(log, rest, grp.timed(S.conn.id(cn), raw, us.of(c0, c1), secs.of(s0, k, c1), g1), s0, k, c1)
+    case Con{SubReq{+cn, job, back, tl, +inb, +raw}, rest}:
+      +g1 = grp.sub(cn, job, back, inb, raw, g)
+      +c1 = grp.clock(g1)
+      group_all(log, rest, grp.timed(S.conn.id(cn), raw, us.of(c0, c1), secs.of(s0, k, c1), g1), s0, k, c1)
+    case Con{Tick{+ms}, rest}:
+      +g1 = group_req(log, Tick{ms}, g)
+      +c1 = grp.clock(g1)
+      group_all(log, rest, grp.lat("expire-cycle", us.of(c0, c1), secs.of(s0, k, c1), g1), s0, k, c1)
     case Con{q, rest}:
-      group_run(log, rest, group_req(log, q, g))
+      +g1 = group_req(log, q, g)
+      +c1 = grp.clock(g1)
+      group_all(log, rest, grp.timed(0n, "", us.of(c0, c1), secs.of(s0, k, c1), g1), s0, k, c1)
+
+# the group's requests when the wall clock read s0 s and u0 us past them
+# (IO.clock), timed from the clock's reading now
+def group_at(+log: Bool, qs: List<&1, Req>, +s0: U32, +u0: U32, g: Grp) -> Grp:
+  +c = Clock.us(u0)
+  group_all(log, qs, g, s0, U32.sub(c, u0), c)
+
+# the group's requests after an eviction (mem.run), which Redis does not
+# count in a call's time either: the first window starts after it; s0 and
+# k as group_all takes them
+def group_from(+log: Bool, qs: List<&1, Req>, g: Grp, +s0: U32, +k: U32) -> Grp:
+  +x = g
+  group_all(log, qs, x, s0, k, grp.clock(x))
 
 # The rewrite's state
 # -------------------
@@ -7992,18 +8261,25 @@ def aof_take(qs: List<&1, Req>, st: St, f: File, +sync: Sync, +reqs: Chan(Req)) 
 def aof_mem(+w: Nat, qs: List<&1, Req>, t: U32 & U32, srv: S.Srv, ds: R.Ds, ws: Waits, tx: Tx, pb: Ps, +sel: Nat, rw: Rw, f: File, +sync: Sync, +reqs: Chan(Req)) -> IO(Unit):
   match w:
     case 0n:
-      aof_group(grp.end(group_run(True{}, qs, Grp{Nil{}, Nil{}, srv, R.ds.at(clock.ms(t), ds), ws, Nil{}, tx, pb})), sel, rw, f, sync, reqs)
+      (a, b) = t
+      +s0 = a
+      +u0 = b
+      aof_group(group_at(True{}, qs, s0, u0, Grp{Nil{}, Nil{}, srv, R.ds.at(clock.ms.of(s0, u0), ds), ws, Nil{}, tx, pb}), sel, rw, f, sync, reqs)
     case 1n:
-      aof_group(grp.end(group_run(True{}, qs, Grp{Nil{}, Nil{}, srv, R.ds.at(clock.ms(t), ds), ws, Nil{}, tx, ps.mem(pb, 0n)})), sel, rw, f, sync, reqs)
+      (a, b) = t
+      +s0 = a
+      +u0 = b
+      aof_group(group_at(True{}, qs, s0, u0, Grp{Nil{}, Nil{}, srv, R.ds.at(clock.ms.of(s0, u0), ds), ws, Nil{}, tx, ps.mem(pb, 0n)}), sel, rw, f, sync, reqs)
     case _:
       (a, b) = t
       +s0 = a
       +u0 = b
       +w2 = rw
+      +k = U32.sub(Clock.us(u0), u0)
       do IO<Unit>:
         h : Nat & Nat <- IO.heap()
         g : Grp <- mem.run(h, s0, u0, srv, R.ds.at(clock.ms.of(s0, u0), ds), ws, tx, pb, rw.runs(w2), rw.pid(w2))
-        aof_group(grp.end(group_run(True{}, qs, g)), sel, w2, f, sync, reqs)
+        aof_group(group_from(True{}, qs, g, s0, k), sel, w2, f, sync, reqs)
 
 @unsafe
 def aof_more(st: St, f: File, +sync: Sync, +reqs: Chan(Req), m: Maybe<&1, Req>) -> IO(Unit):

@@ -83,8 +83,9 @@ def big.is_zero(+b: Big) -> Bool:
 # 1 ns to 1 s with two significant digits: updateCommandLatencyHistogram):
 # a count at each index of the values, where a value below 256 ns has an
 # index of its own and each power of two above it (bucket b, from 1) is
-# cut into 128 indexes of 2^b ns. A histogram is its counts that are not
-# 0, by index, the lowest first.
+# cut into 128 indexes of 2^b ns. The statistics keep a histogram as a
+# trie of its counts by index (HT, below); its readers take its counts
+# that are not 0, by index, the lowest first (HBin).
 
 type HBin is Data:
   HBin{i: Nat, n: Nat}
@@ -126,50 +127,142 @@ def hdr.low(+i: Nat) -> Nat:
 def hdr.high(+i: Nat) -> Nat:
   Nat.sub(Nat.add(hdr.low(i), F.nat.pow2(hdr.b(i))), 1n)
 
-# where index i goes among bs: its own (EQ), before the first (LT, or the
-# end), or after it (GT)
-def bins.cmp(+i: Nat, +bs: List<&2, HBin>) -> Cmp:
-  match bs:
-    case Con{HBin{+j, n}, rest}:
-      Nat.cmp(i, j)
-    case Nil{}:
-      LT{}
-
-# n more at index i (o: bins.cmp(i, bs))
-def bins.put(bs: List<&2, HBin>, +i: Nat, +n: Nat, o: Cmp) -> List<&2, HBin>:
-  match bs o:
-    case Con{HBin{j, m}, rest} EQ{}:
-      HBin{j, Nat.add(m, n)} <> rest
-    case Con{b, +rest} GT{}:
-      b <> bins.put(rest, i, n, bins.cmp(i, rest))
-    case _ _:
-      HBin{i, n} <> bs
-
-def bins.add.if(none: Bool, +bs: List<&2, HBin>, +i: Nat, +n: Nat) -> List<&2, HBin>:
-  match none:
-    case True{}:
-      bs
-    case False{}:
-      bins.put(bs, i, n, bins.cmp(i, bs))
-
-# n more at index i (none for n 0)
-def bins.add(+bs: List<&2, HBin>, +i: Nat, +n: Nat) -> List<&2, HBin>:
-  bins.add.if(Nat.is_eq(n, 0n), bs, i, n)
-
-# a's counts added to b's
-def bins.merge(a: List<&2, HBin>, b: List<&2, HBin>) -> List<&2, HBin>:
-  match a:
-    case Nil{}:
-      b
-    case Con{HBin{+i, +n}, rest}:
-      bins.merge(rest, bins.add(b, i, n))
-
+# the counts of a histogram's bins
 def bins.total(bs: List<&2, HBin>, +acc: Nat) -> Nat:
   match bs:
     case Nil{}:
       acc
     case Con{HBin{i, +n}, rest}:
       bins.total(rest, Nat.add(acc, n))
+
+# A histogram as the statistics keep it: its counts by index (0 to 4095),
+# in a trie of four levels of 8 (the index's octal digits, the highest
+# first), whose leaves hold the counts. A count added walks four nodes,
+# each written in place when the statistics hold the only reference
+# (Redis's hdr_histogram adds one to an array's cell); the readers take
+# the counts as a list of bins, lowest index first (ht.bins).
+type HT is Data:
+  HT0{}
+  HTC{n: Nat}
+  HTN{c0: HT, c1: HT, c2: HT, c3: HT, c4: HT, c5: HT, c6: HT, c7: HT}
+
+# the digit of index i that picks the child of a node of level l (4: the
+# root, 1: a node of leaves): its l-th octal digit from the right
+def ht.dig(+i: Nat, +l: Nat) -> Nat:
+  U32.to_nat(U32.and(U32.shrn(U32.from_nat(i), Nat.mul(3n, Nat.sub(l, 1n))), 7))
+
+# a node whose child at digit d is x, the others empty
+def ht.path.at(d: Nat, x: HT) -> HT:
+  match d:
+    case 0n:
+      HTN{x, HT0{}, HT0{}, HT0{}, HT0{}, HT0{}, HT0{}, HT0{}}
+    case 1n:
+      HTN{HT0{}, x, HT0{}, HT0{}, HT0{}, HT0{}, HT0{}, HT0{}}
+    case 2n:
+      HTN{HT0{}, HT0{}, x, HT0{}, HT0{}, HT0{}, HT0{}, HT0{}}
+    case 3n:
+      HTN{HT0{}, HT0{}, HT0{}, x, HT0{}, HT0{}, HT0{}, HT0{}}
+    case 4n:
+      HTN{HT0{}, HT0{}, HT0{}, HT0{}, x, HT0{}, HT0{}, HT0{}}
+    case 5n:
+      HTN{HT0{}, HT0{}, HT0{}, HT0{}, HT0{}, x, HT0{}, HT0{}}
+    case 6n:
+      HTN{HT0{}, HT0{}, HT0{}, HT0{}, HT0{}, HT0{}, x, HT0{}}
+    case _:
+      HTN{HT0{}, HT0{}, HT0{}, HT0{}, HT0{}, HT0{}, HT0{}, x}
+
+# a new path of level l to a count of k at index i
+def ht.path(l: Nat, +i: Nat, +k: Nat) -> HT:
+  match l:
+    case 0n:
+      HTC{k}
+    case 1n++m:
+      ht.path.at(ht.dig(i, 1n+m), ht.path(m, i, k))
+
+# k more at index i in t, a trie of level l (d: the digit of i at it)
+def ht.add(t: HT, l: Nat, +d: Nat, +i: Nat, +k: Nat) -> HT:
+  match t l d:
+    case HTC{n} 0n _:
+      HTC{Nat.add(n, k)}
+    case _ 0n _:
+      HTC{k}
+    case HTN{c0, c1, c2, c3, c4, c5, c6, c7} 1n++m 0n:
+      HTN{ht.add(c0, m, ht.dig(i, m), i, k), c1, c2, c3, c4, c5, c6, c7}
+    case HTN{c0, c1, c2, c3, c4, c5, c6, c7} 1n++m 1n:
+      HTN{c0, ht.add(c1, m, ht.dig(i, m), i, k), c2, c3, c4, c5, c6, c7}
+    case HTN{c0, c1, c2, c3, c4, c5, c6, c7} 1n++m 2n:
+      HTN{c0, c1, ht.add(c2, m, ht.dig(i, m), i, k), c3, c4, c5, c6, c7}
+    case HTN{c0, c1, c2, c3, c4, c5, c6, c7} 1n++m 3n:
+      HTN{c0, c1, c2, ht.add(c3, m, ht.dig(i, m), i, k), c4, c5, c6, c7}
+    case HTN{c0, c1, c2, c3, c4, c5, c6, c7} 1n++m 4n:
+      HTN{c0, c1, c2, c3, ht.add(c4, m, ht.dig(i, m), i, k), c5, c6, c7}
+    case HTN{c0, c1, c2, c3, c4, c5, c6, c7} 1n++m 5n:
+      HTN{c0, c1, c2, c3, c4, ht.add(c5, m, ht.dig(i, m), i, k), c6, c7}
+    case HTN{c0, c1, c2, c3, c4, c5, c6, c7} 1n++m 6n:
+      HTN{c0, c1, c2, c3, c4, c5, ht.add(c6, m, ht.dig(i, m), i, k), c7}
+    case HTN{c0, c1, c2, c3, c4, c5, c6, c7} 1n++m _:
+      HTN{c0, c1, c2, c3, c4, c5, c6, ht.add(c7, m, ht.dig(i, m), i, k)}
+    case _ 1n++m 0n:
+      HTN{ht.path(m, i, k), HT0{}, HT0{}, HT0{}, HT0{}, HT0{}, HT0{}, HT0{}}
+    case _ 1n++m 1n:
+      HTN{HT0{}, ht.path(m, i, k), HT0{}, HT0{}, HT0{}, HT0{}, HT0{}, HT0{}}
+    case _ 1n++m 2n:
+      HTN{HT0{}, HT0{}, ht.path(m, i, k), HT0{}, HT0{}, HT0{}, HT0{}, HT0{}}
+    case _ 1n++m 3n:
+      HTN{HT0{}, HT0{}, HT0{}, ht.path(m, i, k), HT0{}, HT0{}, HT0{}, HT0{}}
+    case _ 1n++m 4n:
+      HTN{HT0{}, HT0{}, HT0{}, HT0{}, ht.path(m, i, k), HT0{}, HT0{}, HT0{}}
+    case _ 1n++m 5n:
+      HTN{HT0{}, HT0{}, HT0{}, HT0{}, HT0{}, ht.path(m, i, k), HT0{}, HT0{}}
+    case _ 1n++m 6n:
+      HTN{HT0{}, HT0{}, HT0{}, HT0{}, HT0{}, HT0{}, ht.path(m, i, k), HT0{}}
+    case _ 1n++m _:
+      HTN{HT0{}, HT0{}, HT0{}, HT0{}, HT0{}, HT0{}, HT0{}, ht.path(m, i, k)}
+
+# k more at index i
+def ht.put(t: HT, +i: Nat, +k: Nat) -> HT:
+  match k:
+    case 0n:
+      t
+    case _:
+      ht.add(t, 4n, ht.dig(i, 4n), i, k)
+
+# the counts of a and b together
+def ht.merge(a: HT, b: HT) -> HT:
+  match a b:
+    case HT0{} y:
+      y
+    case x HT0{}:
+      x
+    case HTC{x} HTC{y}:
+      HTC{Nat.add(x, y)}
+    case HTN{a0, a1, a2, a3, a4, a5, a6, a7} HTN{b0, b1, b2, b3, b4, b5, b6, b7}:
+      HTN{ht.merge(a0, b0), ht.merge(a1, b1), ht.merge(a2, b2), ht.merge(a3, b3), ht.merge(a4, b4), ht.merge(a5, b5), ht.merge(a6, b6), ht.merge(a7, b7)}
+    case x y:
+      x
+
+# the counts of t, a trie whose indexes start at base and are w of them,
+# as bins, lowest index first, before acc
+def ht.list(t: HT, +base: Nat, +w: Nat, acc: List<&2, HBin>) -> List<&2, HBin>:
+  match t:
+    case HT0{}:
+      acc
+    case HTC{n}:
+      HBin{base, n} <> acc
+    case HTN{c0, c1, c2, c3, c4, c5, c6, c7}:
+      +v = Nat.div(w, 8n)
+      ht.list(c0, base, v, ht.list(c1, Nat.add(base, Nat.mul(1n, v)), v, ht.list(c2, Nat.add(base, Nat.mul(2n, v)), v, ht.list(c3, Nat.add(base, Nat.mul(3n, v)), v, ht.list(c4, Nat.add(base, Nat.mul(4n, v)), v, ht.list(c5, Nat.add(base, Nat.mul(5n, v)), v, ht.list(c6, Nat.add(base, Nat.mul(6n, v)), v, ht.list(c7, Nat.add(base, Nat.mul(7n, v)), v, acc))))))))
+
+def ht.bins(t: HT) -> List<&2, HBin>:
+  ht.list(t, 0n, 4096n, Nil{})
+
+def ht.some(+t: HT) -> Bool:
+  match t:
+    case HT0{}:
+      False{}
+    case _:
+      True{}
+
 
 # Statistics per command and per error
 # ------------------------------------
@@ -178,37 +271,66 @@ def bins.total(bs: List<&2, HBin>, +acc: Nat) -> Nat:
 # number of arguments its arity does not allow, a client that must
 # authenticate first) and the calls that ran and answered an error; for each error code (the first
 # word of an error reply, as afterErrorReply takes it), how many replies
-# had it; and all the error replies. A batch only puts its runs of calls
-# (R.Tally) with the others not yet counted (cur, pend); they are counted
-# in the entries, kept last used first, at the cron's tick (every 100 ms)
-# and whenever INFO shows them, which lists them by name. Each entry also
-# has the us its calls took (usec) and their histogram, which the runs
-# carry from their batch's timing (Timing a batch, below).
+# had it; and all the error replies. A batch puts its runs of calls
+# (R.Tally) in the window of the actor's time it runs in (fresh); timed
+# (Timing a window, below), they go with what their calls took to the
+# runs not yet counted (cur, pend), which are counted in the entries,
+# kept last used first, at the cron's tick (every 100 ms) and whenever
+# INFO shows them, which lists them by name. Each entry also has the us
+# its calls took (usec) and their histogram.
 
 type Ent is Data:
-  Ent{key: Nat, calls: Big, rej: Big, fail: Big, us: Big, h: List<&2, HBin>}
+  Ent{key: Nat, calls: Big, rej: Big, fail: Big, us: Big, h: HT}
 
 type ErrN is Data:
   ErrN{code: String, n: Big}
 
 # a run of calls (R.Tally's) not yet counted in the entries, with what its
-# calls took (us) and their histogram
+# calls took (us) and their histogram. TRunOf, a run that holds a run, is
+# never built: it makes TRun a node of its own, which Stats holds as one
+# word (Info)
 type TRun is Data:
-  TRun{run: Nat, us: Nat, h: List<&2, HBin>}
+  TRun{run: Nat, us: Nat, h: HT}
+  TRunOf{t: TRun}
 
+# where a call's arguments as its client sent them are: the n-th request
+# of a batch's bytes, read only when the slow log needs them, or read
+type Arg is Data:
+  ArgRaw{raw: String, n: Nat}
+  ArgList{xs: List<&2, String>}
+
+# what a window of the actor's time saw, newest first (Timing a window,
+# below): the run, or the runs (R.Tally's), of a batch of the fast way,
+# whose requests are its calls, in order; a call of the general way, with
+# its run (of one call, or of one refused) and the call it was named; the
+# call of the general way about to run, which server.bend names before
+# each (its client's id, its arguments, and whether it blocks: its
+# client waits), until its run comes; a call that blocked, served, for
+# the slow log (its client, its share, its code and arguments); a CONFIG
+# RESETSTAT
+type Fresh is Data:
+  FRun{r: Nat}
+  FRuns{rs: List<&2, Nat>}
+  FCall{r: Nat, id: Nat, arg: Arg, blk: Bool}
+  FNamed{id: Nat, arg: Arg, blk: Bool}
+  FSlow{id: Nat, us: Nat, code: Nat, arg: Arg}
+  FReset{}
+
+# the entries, the window's runs and calls, the runs timed not yet
+# counted (cur, pend), the error codes and all the error replies
 type Stats is Data:
-  Stats{ents: List<&2, Ent>, fresh: List<&2, Nat>, cur: TRun, pend: List<&2, TRun>, errs: List<&2, ErrN>, total: Big}
+  Stats{ents: List<&2, Ent>, fresh: List<&2, Fresh>, cur: TRun, pend: List<&2, TRun>, errs: List<&2, ErrN>, total: Big}
 
 def trun.zero() -> TRun:
-  TRun{0n, 0n, Nil{}}
+  TRun{0n, 0n, HT0{}}
 
 def stats.zero() -> Stats:
   Stats{Nil{}, Nil{}, trun.zero(), Nil{}, Nil{}, big.zero()}
 
-def ent.add(e: Ent, +c: Nat, +r: Nat, +f: Nat, +u: Nat, h1: List<&2, HBin>) -> Ent:
+def ent.add(e: Ent, +c: Nat, +r: Nat, +f: Nat, +u: Nat, h1: HT) -> Ent:
   match e:
     case Ent{k, calls, rej, fail, us, h}:
-      Ent{k, big.add(calls, c), big.add(rej, r), big.add(fail, f), big.add(us, u), bins.merge(h1, h)}
+      Ent{k, big.add(calls, c), big.add(rej, r), big.add(fail, f), big.add(us, u), ht.merge(h1, h)}
 
 def ent.is(+k: Nat, +es: List<&2, Ent>) -> Bool:
   match es:
@@ -230,13 +352,13 @@ def pick.keep(e: Ent, p: Pick) -> Pick:
 def ents.pick(+k: Nat, es: List<&2, Ent>, same: Bool) -> Pick:
   match es same:
     case Nil{} _:
-      Pick{Ent{k, big.zero(), big.zero(), big.zero(), big.zero(), Nil{}}, Nil{}}
+      Pick{Ent{k, big.zero(), big.zero(), big.zero(), big.zero(), HT0{}}, Nil{}}
     case Con{e, rest} True{}:
       Pick{e, rest}
     case Con{e, +rest} False{}:
       pick.keep(e, ents.pick(k, rest, ent.is(k, rest)))
 
-def ents.front(p: Pick, +c: Nat, +r: Nat, +f: Nat, +u: Nat, h: List<&2, HBin>) -> List<&2, Ent>:
+def ents.front(p: Pick, +c: Nat, +r: Nat, +f: Nat, +u: Nat, h: HT) -> List<&2, Ent>:
   match p:
     case Pick{e, rest}:
       ent.add(e, c, r, f, u, h) <> rest
@@ -244,14 +366,14 @@ def ents.front(p: Pick, +c: Nat, +r: Nat, +f: Nat, +u: Nat, h: List<&2, HBin>) -
 # what calls of key k add: c that ran, r refused, f failed, the us they
 # took and their histogram h; the entry goes first. A call of the last
 # command used costs one comparison.
-def ents.add.if(same: Bool, es: List<&2, Ent>, +k: Nat, +c: Nat, +r: Nat, +f: Nat, +u: Nat, h: List<&2, HBin>) -> List<&2, Ent>:
+def ents.add.if(same: Bool, es: List<&2, Ent>, +k: Nat, +c: Nat, +r: Nat, +f: Nat, +u: Nat, h: HT) -> List<&2, Ent>:
   match same es:
     case True{} Con{e, rest}:
       ent.add(e, c, r, f, u, h) <> rest
     case _ _:
       ents.front(ents.pick(k, es, False{}), c, r, f, u, h)
 
-def ents.add(+es: List<&2, Ent>, +k: Nat, +c: Nat, +r: Nat, +f: Nat, +u: Nat, h: List<&2, HBin>) -> List<&2, Ent>:
+def ents.add(+es: List<&2, Ent>, +k: Nat, +c: Nat, +r: Nat, +f: Nat, +u: Nat, h: HT) -> List<&2, Ent>:
   ents.add.if(ent.is(k, es), es, k, c, r, f, u, h)
 
 # the error code of an error reply: its first word, when it ends in the
@@ -283,7 +405,7 @@ def errs.add(es: List<&2, ErrN>, +c: String, o: Cmp) -> List<&2, ErrN>:
 
 # a run of calls (R.Tally) with the us they took and their histogram:
 # its key's entry; key 0, an unknown command or subcommand, has none
-def stats.run.at(es: List<&2, Ent>, +key: Nat, +class: Nat, +n: Nat, +u: Nat, h: List<&2, HBin>) -> List<&2, Ent>:
+def stats.run.at(es: List<&2, Ent>, +key: Nat, +class: Nat, +n: Nat, +u: Nat, h: HT) -> List<&2, Ent>:
   match class:
     case 0n:
       ents.add(es, key, n, 0n, 0n, u, h)
@@ -292,7 +414,7 @@ def stats.run.at(es: List<&2, Ent>, +key: Nat, +class: Nat, +n: Nat, +u: Nat, h:
     case _:
       ents.add(es, key, n, 0n, n, u, h)
 
-def stats.run.if(none: Bool, es: List<&2, Ent>, +code: Nat, +n: Nat, +u: Nat, h: List<&2, HBin>) -> List<&2, Ent>:
+def stats.run.if(none: Bool, es: List<&2, Ent>, +code: Nat, +n: Nat, +u: Nat, h: HT) -> List<&2, Ent>:
   match none:
     case True{}:
       es
@@ -306,6 +428,8 @@ def stats.runs(ts: List<&2, TRun>, es: List<&2, Ent>) -> List<&2, Ent>:
     case Con{TRun{+r, +u, h}, rest}:
       +code = R.run.code(r)
       stats.runs(rest, stats.run.if(Nat.is_eq(R.code.key(code), 0n), es, code, R.run.n(r), u, h))
+    case Con{TRunOf{t}, rest}:
+      stats.runs(rest, es)
 
 # an error reply of a call of code k: one more of its error code, and of
 # all; a call that ran (class 0) failed with it (the parser's errors are
@@ -313,7 +437,7 @@ def stats.runs(ts: List<&2, TRun>, es: List<&2, Ent>) -> List<&2, Ent>:
 def stats.err.ent(ran: Bool, es: List<&2, Ent>, +k: Nat) -> List<&2, Ent>:
   match ran:
     case True{}:
-      ents.add(es, R.code.key(k), 0n, 0n, 1n, 0n, Nil{})
+      ents.add(es, R.code.key(k), 0n, 0n, 1n, 0n, HT0{})
     case False{}:
       es
 
@@ -326,7 +450,7 @@ def stats.err(st: Stats, +k: Nat, +m: String) -> Stats:
 def stats.failed(st: Stats, +k: Nat) -> Stats:
   match st:
     case Stats{es, fresh, cur, pend, errs, total}:
-      Stats{ents.add(es, R.code.key(k), 0n, 0n, 1n, 0n, Nil{}), fresh, cur, pend, errs, total}
+      Stats{ents.add(es, R.code.key(k), 0n, 0n, 1n, 0n, HT0{}), fresh, cur, pend, errs, total}
 
 def stats.errs(xs: List<&2, R.Erred>, st: Stats) -> Stats:
   match xs:
@@ -335,28 +459,56 @@ def stats.errs(xs: List<&2, R.Erred>, st: Stats) -> Stats:
     case Con{R.Erred{+k, +m}, rest}:
       stats.errs(rest, stats.err(st, k, m))
 
-# a batch's runs of calls, put with those of the batch not yet timed
-# (fresh, newest first): the run of a batch of one code (r, 0 for none:
-# R.Tally), or the runs of any other batch (rs)
-def fresh.put(none: Bool, +r: Nat, fresh: List<&2, Nat>) -> List<&2, Nat>:
+# a batch's runs of calls in the window (fresh, newest first): the run of
+# a batch of one code (r, 0 for none: R.Tally), or the runs of any other
+# batch (rs); a call of the general way that was named (FNamed) goes with
+# its run (of one call)
+def fresh.put(none: Bool, +r: Nat, fresh: List<&2, Fresh>) -> List<&2, Fresh>:
   match none:
     case True{}:
       fresh
     case False{}:
-      r <> fresh
+      FRun{r} <> fresh
 
 def stats.add(st: Stats, +r: Nat, rs: List<&2, Nat>) -> Stats:
   match st rs:
+    case Stats{es, Con{FNamed{id, arg, blk}, fresh}, cur, pend, errs, total} _:
+      Stats{es, FCall{r, id, arg, blk} <> fresh, cur, pend, errs, total}
     case Stats{es, fresh, cur, pend, errs, total} Nil{}:
       Stats{es, fresh.put(Nat.is_lt(r, 1n), r, fresh), cur, pend, errs, total}
     case Stats{es, fresh, cur, pend, errs, total} _:
-      Stats{es, List.append(&2, Nat, rs, fresh), cur, pend, errs, total}
+      Stats{es, FRuns{rs} <> fresh, cur, pend, errs, total}
 
-# Timing a batch: it took d us, and each of its calls that ran (the
-# refused ones do not run) takes an equal share: s = d / n, and one us
-# more for d mod n of them. Its runs then go with those not yet counted:
-# a run into the newest of them (cur) when it has its code, or else in
-# its place, cur going before the others (pend).
+# the call of the general way about to run: of the client of id, with
+# arguments arg, in the place of one named that did not run
+def stats.call(st: Stats, +id: Nat, arg: Arg) -> Stats:
+  match st:
+    case Stats{es, Con{FNamed{i, a, b}, fresh}, cur, pend, errs, total}:
+      Stats{es, FNamed{id, arg, False{}} <> fresh, cur, pend, errs, total}
+    case Stats{es, fresh, cur, pend, errs, total}:
+      Stats{es, FNamed{id, arg, False{}} <> fresh, cur, pend, errs, total}
+
+# the call about to be counted blocks: its client waits
+def stats.blk(st: Stats) -> Stats:
+  match st:
+    case Stats{es, Con{FNamed{id, arg, b}, fresh}, cur, pend, errs, total}:
+      Stats{es, FNamed{id, arg, True{}} <> fresh, cur, pend, errs, total}
+    case other:
+      other
+
+# CONFIG RESETSTAT: the entries, the error codes and replies and the runs
+# timed start again; the window keeps what it saw, the reset after it
+# (its calls before it are timed, not counted)
+def stats.reset(st: Stats) -> Stats:
+  match st:
+    case Stats{es, fresh, cur, pend, errs, total}:
+      Stats{Nil{}, FReset{} <> fresh, trun.zero(), Nil{}, Nil{}, big.zero()}
+
+# A window timed (Timing a window, below): it took d us, and each of its
+# calls that ran (the refused ones do not run) takes an equal share: s =
+# d / n, and one us more for d mod n of them. Its runs then go with those
+# not yet counted: a run into the newest of them (cur) when it has its
+# code, or else in its place, cur going before the others (pend).
 
 # the calls of run r that ran
 def run.ran(+r: Nat) -> Nat:
@@ -371,23 +523,41 @@ def runs.ran(rs: List<&2, Nat>, +acc: Nat) -> Nat:
 
 # the histogram of k calls of s us, x of them of s + 1, while
 # latency-tracking is on (trk)
-def trun.h(trk: Bool, +s: Nat, +k: Nat, +x: Nat) -> List<&2, HBin>:
+def trun.h.of(h: HT, +s: Nat, +k: Nat, +x: Nat) -> HT:
+  match x:
+    case 0n:
+      ht.put(h, hdr.us(s), k)
+    case _:
+      ht.put(ht.put(h, hdr.us(s), Nat.sub(k, x)), hdr.us(1n+s), x)
+
+# the histogram h with k calls of s us more, x of them of s + 1, while
+# latency-tracking is on (trk)
+def trun.h.at(trk: Bool, h: HT, +s: Nat, +k: Nat, +x: Nat) -> HT:
   match trk:
     case True{}:
-      bins.add(bins.add(Nil{}, hdr.us(s), Nat.sub(k, x)), hdr.us(1n+s), x)
+      trun.h.of(h, s, k, x)
     case False{}:
-      Nil{}
+      h
+
+def trun.h(trk: Bool, +s: Nat, +k: Nat, +x: Nat) -> HT:
+  trun.h.at(trk, HT0{}, s, k, x)
 
 def trun.code(+t: TRun) -> Nat:
   match t:
     case TRun{+r, u, h}:
       R.run.code(r)
+    case TRunOf{+t0}:
+      trun.code(t0)
 
 # b's calls, us and histogram added to a's (of the same code)
 def trun.join(a: TRun, b: TRun) -> TRun:
   match a b:
     case TRun{r, u, h} TRun{+r2, u2, h2}:
-      TRun{Nat.add(r, R.run.n(r2)), Nat.add(u, u2), bins.merge(h2, h)}
+      TRun{Nat.add(r, R.run.n(r2)), Nat.add(u, u2), ht.merge(h2, h)}
+    case TRunOf{a0} b0:
+      trun.join(a0, b0)
+    case a0 TRunOf{b0}:
+      trun.join(a0, b0)
 
 def trun.put(same: Bool, t: TRun, cur: TRun, pend: List<&2, TRun>) -> TRun & List<&2, TRun>:
   match same:
@@ -401,35 +571,50 @@ def timed.put(+t: TRun, p: TRun & List<&2, TRun>) -> TRun & List<&2, TRun>:
   +c = cur
   trun.put(Nat.is_eq(trun.code(c), trun.code(t)), t, c, pend)
 
-# the batch's runs (oldest first) timed, s us each call, and the first x
-# of them s + 1
-def timed.go(rs: List<&2, Nat>, +s: Nat, +x: Nat, +trk: Bool, p: TRun & List<&2, TRun>) -> TRun & List<&2, TRun>:
-  match rs:
-    case Nil{}:
-      p
-    case Con{+r, rest}:
-      +k = run.ran(r)
-      +m = Nat.min(x, k)
-      timed.go(rest, s, Nat.sub(x, m), trk, timed.put(TRun{r, Nat.add(Nat.mul(k, s), m), trun.h(trk, s, k, m)}, p))
+# run r timed, its calls having taken u us (k of them s us each, x of
+# them one more, for the histogram while latency-tracking is on, trk):
+# into cur when it has cur's code, its counts added to cur's histogram,
+# else in cur's place, cur going before the others (pend)
+def timed.add(same: Bool, +r: Nat, +u: Nat, +trk: Bool, +s: Nat, +k: Nat, +x: Nat, cur: TRun, pend: List<&2, TRun>) -> TRun & List<&2, TRun>:
+  match same cur:
+    case True{} TRun{r0, u0, h0}:
+      (TRun{Nat.add(r0, R.run.n(r)), Nat.add(u0, u), trun.h.at(trk, h0, s, k, x)}, pend)
+    case True{} TRunOf{c0}:
+      timed.add(True{}, r, u, trk, s, k, x, c0, pend)
+    case False{} c:
+      (TRun{r, u, trun.h(trk, s, k, x)}, c <> pend)
 
-def stats.timed.fin(es: List<&2, Ent>, p: TRun & List<&2, TRun>, errs: List<&2, ErrN>, total: Big) -> Stats:
+def timed.run(+r: Nat, +u: Nat, +trk: Bool, +s: Nat, +k: Nat, +x: Nat, p: TRun & List<&2, TRun>) -> TRun & List<&2, TRun>:
   (cur, pend) = p
-  Stats{es, Nil{}, cur, pend, errs, total}
+  +c = cur
+  timed.add(Nat.is_eq(trun.code(c), R.run.code(r)), r, u, trk, s, k, x, c, pend)
 
-# the batch that ran last took d us
-def stats.timed(st: Stats, +d: Nat, +trk: Bool) -> Stats:
-  match st:
-    case Stats{es, +fresh, cur, pend, errs, total}:
-      +n = Nat.max(runs.ran(fresh, 0n), 1n)
-      stats.timed.fin(es, timed.go(List.reverse(&2, Nat, fresh), Nat.div(d, n), Nat.mod(d, n), trk, (cur, pend)), errs, total)
-
-# the runs not yet timed (fresh) before acc, as runs that took no time
+# runs not yet timed before acc, as runs that took no time
 def truns.of(rs: List<&2, Nat>, acc: List<&2, TRun>) -> List<&2, TRun>:
   match rs:
     case Nil{}:
       acc
     case Con{r, rest}:
-      TRun{r, 0n, Nil{}} <> truns.of(rest, acc)
+      TRun{r, 0n, HT0{}} <> truns.of(rest, acc)
+
+# the window's runs since its CONFIG RESETSTAT, newest first, before acc,
+# as runs that took no time
+def fresh.truns(fs: List<&2, Fresh>, acc: List<&2, TRun>) -> List<&2, TRun>:
+  match fs:
+    case Nil{}:
+      acc
+    case Con{FRun{r}, rest}:
+      TRun{r, 0n, HT0{}} <> fresh.truns(rest, acc)
+    case Con{FRuns{rs}, rest}:
+      truns.of(rs, fresh.truns(rest, acc))
+    case Con{FCall{r, id, arg, blk}, rest}:
+      TRun{r, 0n, HT0{}} <> fresh.truns(rest, acc)
+    case Con{FNamed{id, arg, blk}, rest}:
+      fresh.truns(rest, acc)
+    case Con{FSlow{id, us, code, arg}, rest}:
+      fresh.truns(rest, acc)
+    case Con{FReset{}, rest}:
+      acc
 
 # the runs not yet counted, the ones of one code next to each other put
 # together first (a run per batch, of one command most of the time)
@@ -454,16 +639,20 @@ def truns.merge(ts: List<&2, TRun>, acc: List<&2, TRun>) -> List<&2, TRun>:
     case Con{+t, rest}:
       truns.merge(rest, truns.merge.at(acc, t))
 
-# the entries with the runs not yet counted in them
+# the entries with the runs not yet counted in them (those of the window
+# as runs that took no time)
 def stats.view(+st: Stats) -> List<&2, Ent>:
   match st:
     case Stats{+es, +fresh, +cur, +pend, errs, total}:
-      stats.runs(truns.merge(truns.of(fresh, cur <> pend), Nil{}), es)
+      stats.runs(truns.merge(fresh.truns(fresh, cur <> pend), Nil{}), es)
 
+# the runs timed counted in the entries but the newest (the cron's tick),
+# which goes on taking the runs of its code (its histogram is not merged
+# into its entry's at every tick); the window's wait for its timing
 def stats.fold(st: Stats) -> Stats:
   match st:
     case Stats{es, fresh, cur, pend, errs, total}:
-      Stats{stats.runs(truns.merge(truns.of(fresh, cur <> pend), Nil{}), es), Nil{}, trun.zero(), Nil{}, errs, total}
+      Stats{stats.runs(truns.merge(pend, Nil{}), es), fresh, cur, Nil{}, errs, total}
 
 # Commandstats and Errorstats, as INFO writes them
 def ent.name(+e: Ent) -> String:
@@ -602,10 +791,20 @@ type LatS is Data:
 type LatEv is Data:
   LatEv{name: String, max: Nat, ss: List<&2, LatS>}
 
-# the timing's parameters, the slow log, and the latency events, in the
-# order they came (Redis keeps them in a hash table)
+# a call that blocked, kept while its client waits (Timing a window,
+# below): the client's id, the call's code, its share of its window (us)
+# and its arguments
+type Wt is Data:
+  Wt{id: Nat, code: Nat, us: Nat, arg: Arg}
+
+# the timing's parameters, the slow log, the latency events, in the order
+# they came (Redis keeps them in a hash table), and the calls that
+# blocked, of clients that wait. TimOf, a timing that holds a timing, is
+# never built: it makes Tim a node of its own, which Info holds as one
+# word, read by a quiet window and written only by the others
 type Tim is Data:
-  Tim{cf: TCfg, slow: Slow, evs: List<&2, LatEv>}
+  Tim{cf: TCfg, slow: Slow, evs: List<&2, LatEv>, wt: List<&2, Wt>}
+  TimOf{t: Tim}
 
 def tcfg.son(+c: TCfg) -> Bool:
   match c:
@@ -655,23 +854,21 @@ def tcfg.of(+items: List<&2, C.CItem>) -> TCfg:
   TCfg{on, tcfg.slow(on, sl), tim.num(C.config.get_value(items, "slowlog-max-len")), tim.num(C.config.get_value(items, "latency-monitor-threshold")), String.eq(C.config.get_value(items, "latency-tracking"), "yes")}
 
 def tim.new() -> Tim:
-  Tim{TCfg{True{}, 10000n, 128n, 0n, True{}}, Slow{0n, 0n, Nil{}}, Nil{}}
+  Tim{TCfg{True{}, 10000n, 128n, 0n, True{}}, Slow{0n, 0n, Nil{}}, Nil{}, Nil{}}
 
 def tim.cf(+t: Tim) -> TCfg:
   match t:
-    case Tim{cf, slow, evs}:
+    case Tim{cf, slow, evs, wt}:
       cf
+    case TimOf{+x}:
+      tim.cf(x)
 
 def tim.evs(+t: Tim) -> List<&2, LatEv>:
   match t:
-    case Tim{cf, slow, evs}:
+    case Tim{cf, slow, evs, wt}:
       evs
-
-# the parameters read again (the start, CONFIG SET)
-def tim.cfg(t: Tim, +items: List<&2, C.CItem>) -> Tim:
-  match t:
-    case Tim{cf, slow, evs}:
-      Tim{tcfg.of(items), slow, evs}
+    case TimOf{+x}:
+      tim.evs(x)
 
 # an argument as the slow log keeps it: 128 bytes at most, then how many
 # more it had
@@ -730,6 +927,24 @@ def slow.cut(over: Bool, sl: Slow, +max: Nat) -> Slow:
 def slow.trim(+sl: Slow, +max: Nat) -> Slow:
   slow.cut(Nat.is_lt(max, slow.n(sl)), sl, max)
 
+# the parameters read again (the start, CONFIG SET); while the slow log
+# logs, it is cut to slowlog-max-len, as Redis cuts it after each call
+# (CONFIG SET's own: slowlogPushEntryIfNeeded)
+def tim.cfg.of(on: Bool, +cf: TCfg, slow: Slow, evs: List<&2, LatEv>, wt: List<&2, Wt>) -> Tim:
+  match on:
+    case True{}:
+      Tim{cf, slow.trim(slow, tcfg.smax(cf)), evs, wt}
+    case False{}:
+      Tim{cf, slow, evs, wt}
+
+def tim.cfg(t: Tim, +items: List<&2, C.CItem>) -> Tim:
+  match t:
+    case Tim{cf, slow, evs, wt}:
+      +c = tcfg.of(items)
+      tim.cfg.of(tcfg.son(c), c, slow, evs, wt)
+    case TimOf{x}:
+      tim.cfg(x, items)
+
 def slow.add(log: Bool, sl: Slow, +d: Nat, +at: Nat, +xs: List<&2, String>, +peer: String, +name: String) -> Slow:
   match log sl:
     case True{} Slow{+next, n, es}:
@@ -750,14 +965,18 @@ def slow.push(on: Bool, sl: Slow, +cf: TCfg, +d: Nat, +at: Nat, +xs: List<&2, St
 # (slowlogPushEntryIfNeeded, after each call)
 def tim.slow(t: Tim, +d: Nat, +at: Nat, +xs: List<&2, String>, +peer: String, +name: String) -> Tim:
   match t:
-    case Tim{+cf, slow, evs}:
-      Tim{cf, slow.push(tcfg.son(cf), slow, cf, d, at, xs, peer, name), evs}
+    case Tim{+cf, slow, evs, wt}:
+      Tim{cf, slow.push(tcfg.son(cf), slow, cf, d, at, xs, peer, name), evs, wt}
+    case TimOf{x}:
+      tim.slow(x, d, at, xs, peer, name)
 
 # SLOWLOG RESET: no entry left; the ids go on
 def tim.slow.reset(t: Tim) -> Tim:
   match t:
-    case Tim{cf, Slow{next, n, es}, evs}:
-      Tim{cf, Slow{next, 0n, Nil{}}, evs}
+    case Tim{cf, Slow{next, n, es}, evs, wt}:
+      Tim{cf, Slow{next, 0n, Nil{}}, evs, wt}
+    case TimOf{x}:
+      tim.slow.reset(x)
 
 def lat.take(ss: List<&2, LatS>, k: Nat) -> List<&2, LatS>:
   match ss k:
@@ -817,8 +1036,10 @@ def lat.add(evs: List<&2, LatEv>, hit: Bool, +name: String, +ms: Nat, +now: Nat)
 
 def tim.lat.if(on: Bool, t: Tim, +name: String, +ms: Nat, +now: Nat) -> Tim:
   match on t:
-    case True{} Tim{cf, slow, +evs}:
-      Tim{cf, slow, lat.add(evs, lat.is(name, evs), name, ms, now)}
+    case True{} Tim{cf, slow, +evs, wt}:
+      Tim{cf, slow, lat.add(evs, lat.is(name, evs), name, ms, now), wt}
+    case True{} TimOf{x}:
+      tim.lat.if(True{}, x, name, ms, now)
     case False{} _:
       t
 
@@ -877,18 +1098,371 @@ def lat.reset.of(evs: List<&2, LatEv>, names: List<&2, String>) -> List<&2, LatE
     case Con{x, rest}:
       lat.resets(Con{x, rest}, evs, 0n)
 
-def tim.lat.reset.of(cf: TCfg, slow: Slow, p: List<&2, LatEv> & Nat) -> Tim:
+def tim.lat.reset.of(cf: TCfg, slow: Slow, p: List<&2, LatEv> & Nat, wt: List<&2, Wt>) -> Tim:
   (evs, n) = p
-  Tim{cf, slow, evs}
+  Tim{cf, slow, evs, wt}
 
 def tim.lat.reset(t: Tim, names: List<&2, String>) -> Tim:
   match t:
-    case Tim{cf, slow, evs}:
-      tim.lat.reset.of(cf, slow, lat.reset.of(evs, names))
+    case Tim{cf, slow, evs, wt}:
+      tim.lat.reset.of(cf, slow, lat.reset.of(evs, names), wt)
+    case TimOf{x}:
+      tim.lat.reset(x, names)
 
 def lat.reset.n(p: List<&2, LatEv> & Nat) -> Nat:
   (evs, n) = p
   n
+
+# Timing a window
+# ---------------
+# The actor reads the clock after each batch it runs, after the end of a
+# group and after each other request it takes (server.bend): what the
+# window since its last reading took (d us) is shared by the calls that
+# ran in it, each an equal share: s = d / n, and one us more for the
+# first d mod n. A batch of one command, as a client without a pipeline
+# sends, is timed as Redis times it; the calls of a pipeline share its
+# time.
+#
+# A call's share goes to its command's usec and, while latency-tracking
+# is on, its histogram (Statistics); to the slow log while it logs, when
+# the share reaches slowlog-log-slower-than (EXEC aside: Redis's
+# CMD_SKIP_SLOWLOG), with the call's arguments (a run of the fast way's:
+# the requests of its batch's bytes, in order) and its client, which the
+# shell completes (SlowJ); and to the latency monitor, while it is on, as
+# a sample of "fast-command" or "command" (Redis's CMD_FAST) when the
+# share's ms reach latency-monitor-threshold. Redis does each of these in
+# call(), with each call timed on its own.
+#
+# A call that blocked has its share in usec only, as Redis's call()
+# counts a call that blocks; the share is kept with its client (Wt), and
+# when the client is served, or CLIENT UNBLOCK unblocks it, it goes to
+# usec again, to the histogram and to the slow log, as Redis's
+# updateStatsOnUnblock adds the call's c->duration (the reply's own time,
+# which Redis adds too, is the window's that served it). A client whose
+# time is up keeps its share until it blocks again or is gone. The calls
+# of a window before a CONFIG RESETSTAT in it are timed for the slow log
+# and the latency monitor, not counted.
+
+# an entry the slow log takes from a window, for the shell to complete
+# (server.bend: the client's address and name, the arguments read and
+# redacted): its client's id, what its call took (us), its code and where
+# its arguments are
+type SlowJ is Data:
+  SlowJ{id: Nat, us: Nat, code: Nat, arg: Arg}
+
+# a window's timing as it goes: the runs timed (cur, pend: Statistics),
+# the calls that blocked (wt), the slow log's entries (js, newest first),
+# the shares of one us more left (x), the request of the batch's bytes
+# that the next run of the fast way starts at (pos), and the highest
+# share of a fast command and of another (for the latency monitor). WinOf,
+# a window that holds a window, is never built: it makes Win a node of
+# its own, which a function takes as one word.
+type Win is Data:
+  Win{cur: TRun, pend: List<&2, TRun>, wt: List<&2, Wt>, js: List<&2, SlowJ>, x: Nat, pos: Nat, fast: Nat, slow: Nat}
+  WinOf{w: Win}
+
+# the calls of the window that ran
+def fresh.ran(fs: List<&2, Fresh>, +acc: Nat) -> Nat:
+  match fs:
+    case Nil{}:
+      acc
+    case Con{FRun{+r}, rest}:
+      fresh.ran(rest, Nat.add(acc, run.ran(r)))
+    case Con{FRuns{+rs}, rest}:
+      fresh.ran(rest, runs.ran(rs, acc))
+    case Con{FCall{+r, id, arg, blk}, rest}:
+      fresh.ran(rest, Nat.add(acc, run.ran(r)))
+    case Con{FNamed{id, arg, blk}, rest}:
+      fresh.ran(rest, acc)
+    case Con{FSlow{id, us, code, arg}, rest}:
+      fresh.ran(rest, acc)
+    case Con{FReset{}, rest}:
+      fresh.ran(rest, acc)
+
+# the window's entries since its newest CONFIG RESETSTAT, oldest first
+# (acc), and those before it, newest first
+type Split is Data:
+  Split{new: List<&2, Fresh>, old: List<&2, Fresh>}
+
+def fresh.split(fs: List<&2, Fresh>, acc: List<&2, Fresh>) -> Split:
+  match fs:
+    case Nil{}:
+      Split{acc, Nil{}}
+    case Con{FReset{}, rest}:
+      Split{acc, rest}
+    case Con{FRun{r}, rest}:
+      fresh.split(rest, FRun{r} <> acc)
+    case Con{FRuns{rs}, rest}:
+      fresh.split(rest, FRuns{rs} <> acc)
+    case Con{FCall{r, id, arg, blk}, rest}:
+      fresh.split(rest, FCall{r, id, arg, blk} <> acc)
+    case Con{FNamed{id, arg, blk}, rest}:
+      fresh.split(rest, acc)
+    case Con{FSlow{id, us, code, arg}, rest}:
+      fresh.split(rest, FSlow{id, us, code, arg} <> acc)
+
+# whether the first of the calls that blocked is client id's
+def wt.is(+id: Nat, +ws: List<&2, Wt>) -> Bool:
+  match ws:
+    case Con{Wt{+j, code, us, arg}, rest}:
+      Nat.is_eq(j, id)
+    case Nil{}:
+      False{}
+
+# the calls that blocked but client id's (hit: whether the first is it);
+# a client has one at most
+def wt.drop(ws: List<&2, Wt>, hit: Bool, +id: Nat) -> List<&2, Wt>:
+  match ws hit:
+    case Con{w, rest} True{}:
+      rest
+    case Con{w, +rest} False{}:
+      w <> wt.drop(rest, wt.is(id, rest), id)
+    case Nil{} _:
+      Nil{}
+
+def wt.del(+ws: List<&2, Wt>, +id: Nat) -> List<&2, Wt>:
+  wt.drop(ws, wt.is(id, ws), id)
+
+# client id's call that blocked, if it has one (hit: whether the first
+# is it)
+def wt.find(ws: List<&2, Wt>, hit: Bool, +id: Nat) -> Maybe<&2, Wt>:
+  match ws hit:
+    case Con{w, rest} True{}:
+      Some{w}
+    case Con{w, +rest} False{}:
+      wt.find(rest, wt.is(id, rest), id)
+    case Nil{} _:
+      None{}
+
+def wt.get(+ws: List<&2, Wt>, +id: Nat) -> Maybe<&2, Wt>:
+  wt.find(ws, wt.is(id, ws), id)
+
+# a run timed into the window: with the runs timed when it counts (cnt:
+# it came after the window's CONFIG RESETSTAT)
+def win.of(p: TRun & List<&2, TRun>, wt: List<&2, Wt>, js: List<&2, SlowJ>, +x: Nat, +pos: Nat, +fast: Nat, +slow: Nat) -> Win:
+  (cur, pend) = p
+  Win{cur, pend, wt, js, x, pos, fast, slow}
+
+def win.put(cnt: Bool, +t: TRun, cur: TRun, pend: List<&2, TRun>, wt: List<&2, Wt>, js: List<&2, SlowJ>, +x: Nat, +pos: Nat, +fast: Nat, +slow: Nat) -> Win:
+  match cnt:
+    case True{}:
+      win.of(timed.put(t, (cur, pend)), wt, js, x, pos, fast, slow)
+    case False{}:
+      Win{cur, pend, wt, js, x, pos, fast, slow}
+
+# the slow log's entries of j calls of code k of the fast way, from the
+# i-th, the first m of s + 1 us, the others of s: the requests of raw from
+# pos + i
+def jobs.run(j: Nat, +i: Nat, +m: Nat, +s: Nat, +id: Nat, +k: Nat, +raw: String, +pos: Nat, js: List<&2, SlowJ>) -> List<&2, SlowJ>:
+  match j:
+    case 0n:
+      js
+    case 1n+h:
+      jobs.run(h, 1n+i, m, s, id, k, raw, pos, SlowJ{id, Bool.pick(Nat, Nat.is_lt(i, m), 1n+s, s), k, ArgRaw{raw, Nat.add(pos, i)}} <> js)
+
+# how many of n calls, the first m of s + 1 us, the others of s, the slow
+# log takes (on: whether it logs their command), from the first
+def jobs.n(+on: Bool, +slt: Nat, +s: Nat, +m: Nat, +n: Nat) -> Nat:
+  Bool.pick(Nat, on, Bool.pick(Nat, Nat.is_le(slt, s), n, Bool.pick(Nat, Nat.is_le(slt, 1n+s), m, 0n)), 0n)
+
+# the highest of the shares a command's calls took, by whether it is fast
+def win.fast(+fa: Bool, +top: Nat, +fast: Nat) -> Nat:
+  Bool.pick(Nat, fa, Nat.max(fast, top), fast)
+
+def win.slow(+fa: Bool, +top: Nat, +slow: Nat) -> Nat:
+  Bool.pick(Nat, fa, slow, Nat.max(slow, top))
+
+# a run r of the fast way timed, s us each call, the first x left of
+# them s + 1 (Win), from the request at pos of the batch's bytes (raw,
+# the client id's) on; while the slow log logs (son), the calls of slt us
+# or more go to it
+def win.run(+cnt: Bool, +r: Nat, +s: Nat, +trk: Bool, +son: Bool, +slt: Nat, +id: Nat, +raw: String, w: Win) -> Win:
+  match w:
+    case Win{cur, pend, wt, js, +x, +pos, fast, slow}:
+      +k = run.ran(r)
+      +m = Nat.min(x, k)
+      +code = R.run.code(r)
+      +key = R.code.key(code)
+      +fa = R.stat.fast(key)
+      +top = Nat.add(Nat.mul(Nat.min(k, 1n), s), Nat.min(m, 1n))
+      win.put(cnt, TRun{r, Nat.add(Nat.mul(k, s), m), trun.h(Bool.and(cnt, trk), s, k, m)}, cur, pend, wt, jobs.run(jobs.n(Bool.and(son, Bool.not(R.stat.noslow(key))), slt, s, m, k), 0n, m, s, id, code, raw, pos, js), Nat.sub(x, m), Nat.add(pos, R.run.n(r)), win.fast(fa, top, fast), win.slow(fa, top, slow))
+    case WinOf{w0}:
+      win.run(cnt, r, s, trk, son, slt, id, raw, w0)
+
+# the runs of a batch of the fast way, oldest first
+def win.runs(rs: List<&2, Nat>, +cnt: Bool, +s: Nat, +trk: Bool, +son: Bool, +slt: Nat, +id: Nat, +raw: String, w: Win) -> Win:
+  match rs:
+    case Nil{}:
+      w
+    case Con{+r, rest}:
+      win.runs(rest, cnt, s, trk, son, slt, id, raw, win.run(cnt, r, s, trk, son, slt, id, raw, w))
+
+# the calls that blocked, with client id's (its share us, its code and
+# arguments) in place of any it had, when its call blocked (blk)
+def win.wt(blk: Bool, +id: Nat, +code: Nat, +us: Nat, arg: Arg, ws: List<&2, Wt>) -> List<&2, Wt>:
+  match blk:
+    case True{}:
+      Wt{id, code, us, arg} <> wt.del(ws, id)
+    case False{}:
+      ws
+
+def win.job(log: Bool, +id: Nat, +us: Nat, +code: Nat, arg: Arg, js: List<&2, SlowJ>) -> List<&2, SlowJ>:
+  match log:
+    case True{}:
+      SlowJ{id, us, code, arg} <> js
+    case False{}:
+      js
+
+# a call of the general way (run r, of one call or of one refused) timed,
+# of client id, with arguments arg: a call that blocked (blk) has its
+# share in usec only, kept with its client
+def win.call(+cnt: Bool, +r: Nat, +id: Nat, +arg: Arg, +blk: Bool, +s: Nat, +trk: Bool, +son: Bool, +slt: Nat, w: Win) -> Win:
+  match w:
+    case Win{cur, pend, wt, js, +x, pos, fast, slow}:
+      +k = run.ran(r)
+      +m = Nat.min(x, k)
+      +us = Nat.add(Nat.mul(k, s), m)
+      +code = R.run.code(r)
+      +key = R.code.key(code)
+      +fa = R.stat.fast(key)
+      +log = Bool.and(Bool.and(son, Bool.not(blk)), Bool.and(Nat.is_lt(0n, k), Bool.and(Nat.is_le(slt, us), Bool.not(R.stat.noslow(key)))))
+      win.put(cnt, TRun{r, us, trun.h(Bool.and(cnt, Bool.and(trk, Bool.not(blk))), s, k, m)}, cur, pend, win.wt(blk, id, code, us, arg, wt), win.job(log, id, us, code, arg, js), Nat.sub(x, m), pos, win.fast(fa, us, fast), win.slow(fa, us, slow))
+    case WinOf{w0}:
+      win.call(cnt, r, id, arg, blk, s, trk, son, slt, w0)
+
+# a call that blocked, served: its entry for the slow log, as it was
+# found when it was served
+def win.served(+id: Nat, +us: Nat, +code: Nat, arg: Arg, w: Win) -> Win:
+  match w:
+    case Win{cur, pend, wt, js, x, pos, fast, slow}:
+      Win{cur, pend, wt, SlowJ{id, us, code, arg} <> js, x, pos, fast, slow}
+    case WinOf{w0}:
+      win.served(id, us, code, arg, w0)
+
+# the window's entries, oldest first, timed (cnt: whether they count)
+def win.go(fs: List<&2, Fresh>, +cnt: Bool, +s: Nat, +trk: Bool, +son: Bool, +slt: Nat, +id: Nat, +raw: String, w: Win) -> Win:
+  match fs:
+    case Nil{}:
+      w
+    case Con{FRun{+r}, rest}:
+      win.go(rest, cnt, s, trk, son, slt, id, raw, win.run(cnt, r, s, trk, son, slt, id, raw, w))
+    case Con{FRuns{rs}, rest}:
+      win.go(rest, cnt, s, trk, son, slt, id, raw, win.runs(List.reverse(&2, Nat, rs), cnt, s, trk, son, slt, id, raw, w))
+    case Con{FCall{+r, +i, arg, +blk}, rest}:
+      win.go(rest, cnt, s, trk, son, slt, id, raw, win.call(cnt, r, i, arg, blk, s, trk, son, slt, w))
+    case Con{FNamed{i, arg, blk}, rest}:
+      win.go(rest, cnt, s, trk, son, slt, id, raw, w)
+    case Con{FSlow{+i, +us, +code, arg}, rest}:
+      win.go(rest, cnt, s, trk, son, slt, id, raw, win.served(i, us, code, arg, w))
+    case Con{FReset{}, rest}:
+      win.go(rest, cnt, s, trk, son, slt, id, raw, w)
+
+# the window's entries timed: those before its newest CONFIG RESETSTAT
+# first, not counted, then those after it
+def win.both(p: Split, +s: Nat, +trk: Bool, +son: Bool, +slt: Nat, +id: Nat, +raw: String, w: Win) -> Win:
+  match p:
+    case Split{new, old}:
+      win.go(new, True{}, s, trk, son, slt, id, raw, win.go(List.reverse(&2, Fresh, old), False{}, s, trk, son, slt, id, raw, w))
+
+# the window timed: the statistics with its runs timed, and none left in
+# it
+def win.stats(es: List<&2, Ent>, errs: List<&2, ErrN>, total: Big, +w: Win) -> Stats:
+  match w:
+    case Win{+cur, +pend, wt, js, x, pos, fast, slow}:
+      Stats{es, Nil{}, cur, pend, errs, total}
+    case WinOf{+w0}:
+      win.stats(es, errs, total, w0)
+
+# a latency monitor's sample of the highest share of each kind of
+# command (each of its calls is one, and a second keeps its highest)
+def win.lat(t: Tim, +fast: Nat, +slow: Nat, +now: Nat) -> Tim:
+  tim.lat(tim.lat(t, "fast-command", Nat.div(fast, 1000n), now), "command", Nat.div(slow, 1000n), now)
+
+def win.tim.if(on: Bool, t: Tim, +fast: Nat, +slow: Nat, +now: Nat) -> Tim:
+  match on:
+    case True{}:
+      win.lat(t, fast, slow, now)
+    case False{}:
+      t
+
+# the timing's state after the window (now: its end, in s since 1970)
+def win.tim(cf: TCfg, slow: Slow, evs: List<&2, LatEv>, +now: Nat, +w: Win) -> Tim:
+  match w:
+    case Win{cur, pend, +wt, js, x, pos, +fast, +sl}:
+      +c = cf
+      win.tim.if(Nat.is_lt(0n, tcfg.lat(c)), Tim{c, slow, evs, wt}, fast, sl, now)
+    case WinOf{+w0}:
+      win.tim(cf, slow, evs, now, w0)
+
+# the slow log's entries of the window, oldest first
+def win.js(+w: Win) -> List<&2, SlowJ>:
+  match w:
+    case Win{cur, pend, wt, +js, x, pos, fast, slow}:
+      List.reverse(&2, SlowJ, js)
+    case WinOf{+w0}:
+      win.js(w0)
+
+def stats.one.of(p: TRun & List<&2, TRun>, es: List<&2, Ent>, errs: List<&2, ErrN>, total: Big) -> Stats:
+  (cur, pend) = p
+  Stats{es, Nil{}, cur, pend, errs, total}
+
+def tim.wt(+t: Tim) -> List<&2, Wt>:
+  match t:
+    case Tim{cf, slow, evs, +wt}:
+      wt
+    case TimOf{+x}:
+      tim.wt(x)
+
+# the call that client id blocked with, if any, forgotten (served, or the
+# client gone)
+def tim.unwait(t: Tim, +id: Nat) -> Tim:
+  match t:
+    case Tim{cf, slow, evs, wt}:
+      Tim{cf, slow, evs, wt.del(wt, id)}
+    case TimOf{x}:
+      tim.unwait(x, id)
+
+# the window's call of client id that blocked, timed as one that did not
+# (served in the window it blocked in)
+def fresh.unblk(fs: List<&2, Fresh>, +id: Nat) -> List<&2, Fresh>:
+  match fs:
+    case Nil{}:
+      Nil{}
+    case Con{FCall{r, +j, arg, blk}, rest}:
+      FCall{r, j, arg, Bool.and(blk, Bool.not(Nat.is_eq(j, id)))} <> fresh.unblk(rest, id)
+    case Con{FRun{r}, rest}:
+      FRun{r} <> fresh.unblk(rest, id)
+    case Con{FNamed{j, arg, blk}, rest}:
+      FNamed{j, arg, blk} <> fresh.unblk(rest, id)
+    case Con{FRuns{rs}, rest}:
+      FRuns{rs} <> fresh.unblk(rest, id)
+    case Con{FSlow{j, us, code, arg}, rest}:
+      FSlow{j, us, code, arg} <> fresh.unblk(rest, id)
+    case Con{FReset{}, rest}:
+      FReset{} <> fresh.unblk(rest, id)
+
+def served.slow(log: Bool, +id: Nat, +us: Nat, +code: Nat, arg: Arg, fs: List<&2, Fresh>) -> List<&2, Fresh>:
+  match log:
+    case True{}:
+      FSlow{id, us, code, arg} <> fs
+    case False{}:
+      fs
+
+def served.of(p: TRun & List<&2, TRun>, es: List<&2, Ent>, fresh: List<&2, Fresh>, errs: List<&2, ErrN>, total: Big) -> Stats:
+  (cur, pend) = p
+  Stats{es, fresh, cur, pend, errs, total}
+
+# the statistics after client id is served (m: the call it blocked with,
+# kept: Wt): its share to usec again, and to the histogram while
+# latency-tracking is on; its entry, when the slow log takes it, in the
+# window, for the window's order; with none kept, its call blocked in the
+# window, which times it as one that did not block
+def stats.served(m: Maybe<&2, Wt>, st: Stats, +cf: TCfg, +id: Nat) -> Stats:
+  match m st:
+    case Some{Wt{j, +code, +us, arg}} Stats{es, fresh, cur, pend, errs, total}:
+      served.of(timed.run(R.run.of(code, 0n), us, tcfg.trk(cf), us, 1n, 0n, (cur, pend)), es, served.slow(Bool.and(tcfg.son(cf), Bool.and(Nat.is_le(tcfg.slt(cf), us), Bool.not(R.stat.noslow(R.code.key(code))))), id, us, code, arg, fresh), errs, total)
+    case None{} Stats{es, fresh, cur, pend, errs, total}:
+      Stats{es, fresh.unblk(fresh, id), cur, pend, errs, total}
 
 # Facts
 # -----
@@ -994,7 +1568,11 @@ def rws.reset(r: Rws) -> Rws:
 # connections taken before the last CONFIG RESETSTAT, the size of the
 # append-only file at the start (or after its last rewrite: Redis's
 # aof_rewrite_base_size) and now, the statistics per command and per
-# error, the sweep of expired keys, and the rewrite of the file
+# error, the sweep of expired keys, the rewrite of the file, and the
+# timing (Timing). Info is a node of 63 words: the compiler rebuilds a
+# node of 64 words or fewer in place, where it copies a wider one whole
+# at every update (once a batch: srv.ran), so the timing's state and the
+# runs not yet counted are nodes of their own (Tim, TRun)
 type Info is Data:
   IInfo{boot: Boot, live: Live, cnt: Count, inst: Inst, peak: Nat, conns0: Nat, aof0: Nat, aof: Nat, st: Stats, ex: Exp, rw: Rws, tm: Tim}
 
@@ -1215,11 +1793,12 @@ def info.tick(i: Info, +ms: Nat) -> Info:
 
 # CONFIG RESETSTAT: the counts, the rates and the statistics start again,
 # as Redis's resetServerStats, resetCommandTableStats and
-# resetErrorTableStats start them
+# resetErrorTableStats start them (the window's calls before it are timed,
+# not counted: stats.reset)
 def info.reset(i: Info) -> Info:
   match i:
     case IInfo{b, +l, c, inst, pk, c0, a0, a, st, ex, rw, tm}:
-      IInfo{b, l, count.zero(), IInst{live.ms(l), count.zero(), samples.zero(), samples.zero(), samples.zero()}, pk, live.conns(l), a0, a, stats.zero(), exp.reset(ex), rws.reset(rw), tm}
+      IInfo{b, l, count.zero(), IInst{live.ms(l), count.zero(), samples.zero(), samples.zero(), samples.zero()}, pk, live.conns(l), a0, a, stats.reset(st), exp.reset(ex), rws.reset(rw), tm}
 
 # the j-th of a list of numbers (0 past its end), and the list with v in
 # its place
@@ -1282,11 +1861,76 @@ def info.stats(+i: Info) -> Stats:
     case IInfo{b, l, c, inst, pk, c0, a0, a, +st, ex, rw, tm}:
       st
 
-# the batch that ran last took d us (Statistics: Timing a batch)
-def info.timed(i: Info, +d: Nat) -> Info:
+# a window timed (Timing a window): the server's facts after it, and the
+# slow log's entries for the shell to complete, oldest first
+type Timed is Data:
+  Timed{i: Info, js: List<&2, SlowJ>}
+
+# what the window since the clock's last reading, which took d us, needs:
+# nothing when it saw nothing to time (0), its one run timed when it is
+# quiet (1: one run of the fast way, its highest share below the slow
+# log's and the latency monitor's thresholds, or they are off), else all
+# of its timing (2)
+def info.how(+i: Info, +d: Nat) -> Nat:
+  match i:
+    case IInfo{b, l, c, inst, pk, c0, a0, a, Stats{es, Nil{}, cur, pend, errs, total}, ex, rw, tm}:
+      0n
+    case IInfo{b, l, c, inst, pk, c0, a0, a, Stats{es, Con{FRun{+r}, Nil{}}, cur, pend, errs, total}, ex, rw, Tim{TCfg{+son, +slt, smax, +lat, trk}, slow, evs, wt}}:
+      +n = Nat.max(run.ran(r), 1n)
+      +top = Nat.add(Nat.div(d, n), Nat.min(Nat.mod(d, n), 1n))
+      Bool.pick(Nat, Bool.and(Bool.or(Bool.not(son), Nat.is_lt(top, slt)), Bool.or(Nat.is_eq(lat, 0n), Nat.is_lt(Nat.div(top, 1000n), lat))), 1n, 2n)
+    case _:
+      2n
+
+# a quiet window timed: its one run's calls share its d us
+def info.one(i: Info, +d: Nat) -> Info:
+  match i:
+    case IInfo{b, l, c, inst, pk, c0, a0, a, Stats{es, Con{FRun{+r}, Nil{}}, cur, pend, errs, total}, ex, rw, +tm}:
+      +k = run.ran(r)
+      +n = Nat.max(k, 1n)
+      +s = Nat.div(d, n)
+      +m = Nat.mod(d, n)
+      IInfo{b, l, c, inst, pk, c0, a0, a, stats.one.of(timed.run(r, Nat.add(Nat.mul(k, s), m), tcfg.trk(tim.cf(tm)), s, k, m, (cur, pend)), es, errs, total), ex, rw, tm}
+    case other:
+      other
+
+# the window since the clock's last reading took d us; a run of the fast
+# way in it is of the batch of raw, the client id's; now: the window's
+# end, in s since 1970
+def info.window(i: Info, +d: Nat, +id: Nat, raw: String, +now: Nat) -> Timed:
+  match i:
+    case IInfo{b, l, c, inst, pk, c0, a0, a, st, ex, rw, tm}:
+      match st tm:
+        case Stats{es, +fresh, cur, pend, errs, total} Tim{+cf, slow, evs, wt}:
+          +n = Nat.max(fresh.ran(fresh, 0n), 1n)
+          +w = win.both(fresh.split(fresh, Nil{}), Nat.div(d, n), tcfg.trk(cf), tcfg.son(cf), tcfg.slt(cf), id, raw, Win{cur, pend, wt, Nil{}, Nat.mod(d, n), 0n, 0n, 0n})
+          Timed{IInfo{b, l, c, inst, pk, c0, a0, a, win.stats(es, errs, total, w), ex, rw, win.tim(cf, slow, evs, now, w)}, win.js(w)}
+        case s0 TimOf{x}:
+          Timed{IInfo{b, l, c, inst, pk, c0, a0, a, s0, ex, rw, x}, Nil{}}
+
+# the call of the general way about to run, of the client of id, with
+# arguments arg; and that it blocks, as it is counted
+def info.call(i: Info, +id: Nat, arg: Arg) -> Info:
+  match i:
+    case IInfo{b, l, c, inst, pk, c0, a0, a, st, ex, rw, tm}:
+      IInfo{b, l, c, inst, pk, c0, a0, a, stats.call(st, id, arg), ex, rw, tm}
+
+def info.blk(i: Info) -> Info:
+  match i:
+    case IInfo{b, l, c, inst, pk, c0, a0, a, st, ex, rw, tm}:
+      IInfo{b, l, c, inst, pk, c0, a0, a, stats.blk(st), ex, rw, tm}
+
+# the client of id served after it waited, or unblocked by CLIENT UNBLOCK
+# (stats.served); gone, the call it blocked with is forgotten
+def info.served(i: Info, +id: Nat) -> Info:
   match i:
     case IInfo{b, l, c, inst, pk, c0, a0, a, st, ex, rw, +tm}:
-      IInfo{b, l, c, inst, pk, c0, a0, a, stats.timed(st, d, tcfg.trk(tim.cf(tm))), ex, rw, tm}
+      IInfo{b, l, c, inst, pk, c0, a0, a, stats.served(wt.get(tim.wt(tm), id), st, tim.cf(tm), id), ex, rw, tim.unwait(tm, id)}
+
+def info.gone(i: Info, +id: Nat) -> Info:
+  match i:
+    case IInfo{b, l, c, inst, pk, c0, a0, a, st, ex, rw, tm}:
+      IInfo{b, l, c, inst, pk, c0, a0, a, st, ex, rw, tim.unwait(tm, id)}
 
 # a call of d us at at (s since 1970), its arguments xs, its client's
 # address and name, for the slow log (Timing)
@@ -1456,7 +2100,7 @@ def mean(xs: List<&2, Nat>) -> Nat:
 def ent.timed(+e: Ent) -> Bool:
   match e:
     case Ent{k, calls, rej, fail, us, +h}:
-      Bool.not(List.is_empty(&2, HBin, h))
+      ht.some(h)
 
 # INFO's latencystats: for each command with a histogram, while
 # latency-tracking is on, the percentiles latency-tracking-info-percentiles
@@ -1539,8 +2183,9 @@ def pct.all(toks: List<&2, String>, +h: List<&2, HBin>, +t: Nat, +first: Bool) -
 
 def lat.line(+e: Ent, +toks: List<&2, String>) -> String:
   match e:
-    case Ent{+k, calls, rej, fail, us, +h}:
-      "latency_percentiles_usec_" ++ R.stat.name(k) ++ ":" ++ pct.all(toks, h, bins.total(h, 0n), True{}) ++ "\r\n"
+    case Ent{+k, calls, rej, fail, us, h}:
+      +bs = ht.bins(h)
+      "latency_percentiles_usec_" ++ R.stat.name(k) ++ ":" ++ pct.all(toks, bs, bins.total(bs, 0n), True{}) ++ "\r\n"
 
 def lat.lines(+es: List<&2, Ent>, +toks: List<&2, String>) -> String:
   match es:
@@ -2115,14 +2760,18 @@ def slow.entries(+es: List<&2, SlowE>, k: Nat) -> List<&2, R.Reply>:
 # SLOWLOG GET: the newest k entries, or all of them
 def slow.get(+t: Tim, +all: Bool, +k: Nat) -> R.Reply:
   match t:
-    case Tim{cf, Slow{next, +n, +es}, evs}:
+    case Tim{cf, Slow{next, +n, +es}, evs, wt}:
       R.RArray{slow.entries(es, Bool.pick(Nat, all, n, k))}
+    case TimOf{+x}:
+      slow.get(x, all, k)
 
 # SLOWLOG LEN
 def slow.len(+t: Tim) -> R.Reply:
   match t:
-    case Tim{cf, +slow, evs}:
+    case Tim{cf, +slow, evs, wt}:
       R.r_int(slow.n(slow))
+    case TimOf{+x}:
+      slow.len(x)
 
 # LATENCY LATEST: each event, its newest sample's second and latency, and
 # its highest
@@ -2474,9 +3123,10 @@ def cdf.go(fuel: Nat, go: Bool, c: Cdf, +j: Nat, +prev: Nat, +total: Nat) -> Lis
 
 def ent.cdf(+e: Ent) -> List<&2, R.Reply>:
   match e:
-    case Ent{+k, calls, rej, fail, us, +h}:
-      +t = bins.total(h, 0n)
-      [R.RBulk{R.stat.name(k)}, R.RMap{[R.RBulk{"calls"}, R.r_int(t), R.RBulk{"histogram_usec"}, R.RMap{cdf.go(21n, True{}, cdf.at(h, 0n, 0n), 0n, 0n, t)}]}]
+    case Ent{+k, calls, rej, fail, us, h}:
+      +bs = ht.bins(h)
+      +t = bins.total(bs, 0n)
+      [R.RBulk{R.stat.name(k)}, R.RMap{[R.RBulk{"calls"}, R.r_int(t), R.RBulk{"histogram_usec"}, R.RMap{cdf.go(21n, True{}, cdf.at(bs, 0n, 0n), 0n, 0n, t)}]}]
 
 def histo.all(+es: List<&2, Ent>) -> List<&2, R.Reply>:
   match es:

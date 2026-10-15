@@ -155,7 +155,7 @@ work, and so do clients that speak RESP3 when the server takes it (go-redis v9, 
 ```
 src/server.bend  TCP, connections, database actor, AOF file, log ─┐ not verified (@unsafe loops),
 src/startup.bend command line and configuration file              │ checked by tests
-src/info.bend    INFO: Redis's sections and fields                │
+src/info.bend    INFO, SLOWLOG, LATENCY: as Redis keeps them      │
 src/command.bend COMMAND: BendKV's command table from Redis       │
 src/resp.bend    RESP parsing, RESP2 and RESP3 replies           ─┘
 src/session.bend connection and server: state, a whole batch     ─┐ verified:
@@ -462,8 +462,18 @@ CONFIG RESETSTAT starts the counts over. Statistics per command are counted as i
 Redis: the calls of each command and subcommand, the calls refused before they run (a
 wrong number of arguments by Redis's arity, a client without a password, a refusal for
 memory), and those that failed while running; error replies by code (errorstats), including those the
-client did not get (CLIENT REPLY OFF). BendKV does not time commands: usec is 0, and
-latencystats is empty.
+client did not get (CLIENT REPLY OFF); usec and, with `latency-tracking`, each
+command's histogram (latencystats, LATENCY HISTOGRAM) from the timing of calls below.
+SLOWLOG and LATENCY, as Redis 7.0.15 keeps them: the actor reads the clock around each
+batch of requests, as Redis around each call, and a batch's calls share its time. A call
+that takes `slowlog-log-slower-than` µs or more goes to the slow log with its arguments
+as sent (32 at most, 128 bytes each; AUTH's, HELLO's and CONFIG SET's secrets redacted;
+EXEC's commands but not EXEC; a blocking command when it is served); one that takes
+`latency-monitor-threshold` ms, when that is set, is a sample of the event "command" or
+"fast-command", and a cron's sweep of expired keys one of "expire-cycle". Where BendKV
+differs: a pipeline's calls share its time; a batch's entries go to the slow log when it
+ends; there are no events of the append-only file, of eviction or of fork (section 3zzz
+of docs/FINDINGS.md).
 COMMAND (with INFO, DOCS, COUNT, LIST and its filters, GETKEYS, GETKEYSANDFLAGS, HELP)
 describes each BendKV command and each of its subcommands that BendKV has, as Redis
 7.0.15 describes them: `tools/gen_commands.py` takes the descriptions from Redis itself.
@@ -1135,8 +1145,15 @@ The translation the kernel reads can be dumped with
   with errors among them, a pipeline over 64 KB, replies held back by CLIENT REPLY OFF
   and SKIP, NOAUTH and WRONGPASS, commands after QUIT, protocol errors, random
   pipelines — then commandstats (calls, refused and failed), errorstats and the totals
-  are compared as maps (the order of Redis's lines comes from a hash table, and BendKV's
-  usec is 0): 40 checks.
+  are compared as maps (the order of Redis's lines comes from a hash table; usec, which
+  depends on the machine, is left to `tests/timing_test.py`): 40 checks.
+- **The timing of calls** (`tests/timing_test.py`): scenarios on BendKV and Redis with
+  clients of their own, their transcripts compared with what depends on how long a call
+  took put aside: SLOWLOG's and LATENCY's errors, arities and help in RESP2 and RESP3;
+  the slow log with every call logged (arguments as sent and cut, secrets redacted,
+  rewritten commands as they came, EXEC's commands, a served BLPOP), its counts, RESET
+  and `slowlog-max-len`; LATENCY with no event; histograms after CONFIG RESETSTAT;
+  latencystats with its parameters; usec_per_call as Redis divides.
 - **COMMAND** (`tests/command_test.py`): COMMAND INFO and DOCS of each command and
   subcommand, one at a time, several at once, in another case, unknown ones and those
   Redis does not find (`get|key`, `config|get|key`); COMMAND, INFO and DOCS of all;
