@@ -5,9 +5,11 @@
 # (tools/idle_clients.py) on CPU 0, as bench_pairs.sh pins them. KEYS
 # (100000) keys are set first, then N (200000) GETs run from 20 clients at
 # pipeline depth 16, with 0, 1, 100 and 1000 idle clients in BLPOP on keys
-# of their own, and with one idle client after WATCH; TRIALS (2) rounds,
-# interleaved. A waiting or watching client should cost other keys'
-# commands nothing, as in Redis.
+# of their own, with one idle client after WATCH, one that tracks keys
+# (CLIENT TRACKING) and one in BCAST mode; TRIALS (2) rounds, interleaved.
+# A waiting or watching client should cost other keys' commands nothing,
+# as in Redis; so should a client that tracks, but one in BCAST mode sends
+# every batch the general way (FINDINGS.md 3zzzb).
 here=$(cd "$(dirname "$0")" && pwd)
 SERVER=${1:-build/bendkv}
 KEYS=${KEYS:-100000}; N=${N:-200000}; TRIALS=${TRIALS:-2}; PORT=${PORT:-6653}
@@ -44,5 +46,7 @@ for t in $(seq 1 "$TRIALS"); do
     one $s blpop 100
     one $s blpop 1000
     one $s watch 1
+    one $s track 1
+    one $s bcast 1
   done
 done

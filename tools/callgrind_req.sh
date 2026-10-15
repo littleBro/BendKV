@@ -10,12 +10,12 @@
 # pipeline depth 16 (PIPE), with values of DATA bytes (3, redis-benchmark's
 # default), and the flags of RB_FLAGS (-3: each client in RESP3); CG_FLAGS
 # adds flags to callgrind's (tools/perf_guard.sh: counts per instruction,
-# and L1 caches of a fixed size). IDLE ("blpop 100", "watch 1"): idle
-# clients, held by tools/idle_clients.py from before the keys are set to
-# the end. Prints, per request: instructions, last-level data read misses,
-# mispredicted indirect and conditional branches. valgrind 3.22 cannot
-# decode some code built with -march (a register-to-register vmovq, for
-# one).
+# and L1 caches of a fixed size). IDLE ("blpop 100", "watch 1", "track 1",
+# "bcast 1"): idle clients, held by tools/idle_clients.py from before the
+# keys are set to the end. Prints, per request: instructions, last-level
+# data read misses, mispredicted indirect and conditional branches.
+# valgrind 3.22 cannot decode some code built with -march (a
+# register-to-register vmovq, for one).
 NAME=$1; PORT=$2; shift 2
 here=$(cd "$(dirname "$0")" && pwd)
 KEYS=${KEYS:-100000}; TESTS=${TESTS:-get incr}; PIPE=${PIPE:-16}; CLIENTS=${CLIENTS:-20}; DATA=${DATA:-3}
