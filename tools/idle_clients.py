@@ -4,10 +4,13 @@ tools/waiters_bench.sh: in mode blpop each waits in BLPOP on a key of its
 own (a worker of a job queue), in mode watch each has sent WATCH on a key
 of its own and nothing since; in mode track each tracks keys (CLIENT
 TRACKING, in RESP3) and has read a key of its own, in mode bcast each
-tracks in BCAST mode a prefix of its own, which no other key has. Prints
-READY once all are in place.
+tracks in BCAST mode a prefix of its own, which no other key has; in mode
+events the first sets notify-keyspace-events to KEA and each subscribes
+to a channel of its own, which no event names, so that every batch runs
+a command at a time (the general way) and a write's events go to no one.
+Prints READY once all are in place.
 
-    python3 tools/idle_clients.py PORT blpop|watch|track|bcast N
+    python3 tools/idle_clients.py PORT blpop|watch|track|bcast|events N
 """
 import socket
 import sys
@@ -33,6 +36,13 @@ def main():
             s.sendall(resp("WATCH", "idle:w:%d" % i))
             s.settimeout(5)
             s.recv(64)
+        elif mode == "events":
+            s.settimeout(5)
+            if i == 0:
+                s.sendall(resp("CONFIG", "SET", "notify-keyspace-events", "KEA"))
+                s.recv(64)
+            s.sendall(resp("SUBSCRIBE", "idle:e:%d" % i))
+            s.recv(1 << 12)
         else:
             s.settimeout(5)
             s.sendall(resp("HELLO", "3"))
