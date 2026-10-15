@@ -420,32 +420,28 @@ def rd.num(s: String) -> Maybe<&1, Nat & String>:
 # its low 5 bits and the next byte the distance back, less 1. A run or a
 # reference that passes the length the string says (len), or a reference
 # before its start, or a step past the compressed bytes, fails, and so
-# does a string that ends shorter than len. Out are the pieces made
-# (newest first) and a window of the last 8 to 16 KB of them, which a
-# reference reads (a distance is 8192 at most).
+# does a string that ends shorter than len. The bytes out so far (op of
+# them) are kept reversed, the newest first: a piece goes in front, into
+# the room of the first chunk (str_cons), so they stay a few chunks
+# however many pieces make them, a reference reads near the front (a
+# distance is 8192 at most), and the end reverses them once. (The bytes
+# out in order, with a window of the last of them, took each piece at
+# the window's end, a node more each time, and each reference and each
+# piece walked them all: a quicklist's node of 8 KB, as Redis compresses
+# it with rdbcompression yes, took milliseconds.)
 
 type Lzf is Data:
-  Lzf{inp: String, ci: Nat, out: List<&2, String>, w: String, wl: Nat, op: Nat}
-
-def lzf.win(cut: Bool, +w: String, +wl: Nat) -> String:
-  match cut:
-    case True{}:
-      String.drop(w, Nat.sub(wl, 8192n))
-    case False{}:
-      w
+  Lzf{inp: String, ci: Nat, w: String, op: Nat}
 
 # the k bytes p out
-def lzf.put(+p: String, +k: Nat, rest: String, +ci: Nat, out: List<&2, String>, w: String, +wl: Nat, +op: Nat) -> Lzf:
-  +w2 = w ++ p
-  +wl2 = Nat.add(wl, k)
-  +cut = Nat.is_lt(16384n, wl2)
-  Lzf{rest, ci, p <> out, lzf.win(cut, w2, wl2), Bool.pick(Nat, cut, 8192n, wl2), Nat.add(op, k)}
+def lzf.put(p: String, +k: Nat, rest: String, +ci: Nat, w: String, +op: Nat) -> Lzf:
+  Lzf{rest, ci, String.reverse.go(p, w), Nat.add(op, k)}
 
-def lzf.lit(ok: Bool, +k: Nat, +inp: String, +ci: Nat, out: List<&2, String>, w: String, +wl: Nat, +op: Nat) -> Maybe<&2, Lzf>:
+def lzf.lit(ok: Bool, +k: Nat, +inp: String, +ci: Nat, w: String, +op: Nat) -> Maybe<&2, Lzf>:
   match ok:
     case True{}:
       +r1 = String.drop(inp, 1n)
-      Some{lzf.put(String.take(r1, k), k, String.drop(r1, k), Nat.sub(ci, Nat.add(k, 1n)), out, w, wl, op)}
+      Some{lzf.put(String.take(r1, k), k, String.drop(r1, k), Nat.sub(ci, Nat.add(k, 1n)), w, op)}
     case False{}:
       None{}
 
@@ -460,19 +456,21 @@ def lzf.rep(f: Nat, done: Bool, +p: String, +m: Nat, +n: Nat) -> String:
       +m2 = Nat.mul(m, 2n)
       lzf.rep(g, Nat.is_le(n, m2), p ++ p, m2, n)
 
-def lzf.ref(ok: Bool, +k: Nat, +d: Nat, rest: String, +ci: Nat, out: List<&2, String>, +w: String, +wl: Nat, +op: Nat) -> Maybe<&2, Lzf>:
+# a reference: its first m bytes are the m bytes from d back, which the
+# bytes out, reversed, hold from index d - m on, newest first
+def lzf.ref(ok: Bool, +k: Nat, +d: Nat, rest: String, +ci: Nat, +w: String, +op: Nat) -> Maybe<&2, Lzf>:
   match ok:
     case True{}:
       +m = Nat.min(k, d)
-      Some{lzf.put(lzf.rep(10n, Nat.is_le(k, m), String.slice(w, Nat.sub(wl, d), m), m, k), k, rest, ci, out, w, wl, op)}
+      Some{lzf.put(lzf.rep(10n, Nat.is_le(k, m), String.reverse(String.slice(w, Nat.sub(d, m), m)), m, k), k, rest, ci, w, op)}
     case False{}:
       None{}
 
-def lzf.op(lit: Bool, +n: Nat, +c: Nat, +h: String, +inp: String, +ci: Nat, out: List<&2, String>, w: String, +wl: Nat, +op: Nat) -> Maybe<&2, Lzf>:
+def lzf.op(lit: Bool, +n: Nat, +c: Nat, +h: String, +inp: String, +ci: Nat, w: String, +op: Nat) -> Maybe<&2, Lzf>:
   match lit:
     case True{}:
       +k = Nat.add(c, 1n)
-      lzf.lit(Bool.and(Nat.is_le(Nat.add(k, 1n), ci), Nat.is_le(Nat.add(op, k), n)), k, inp, ci, out, w, wl, op)
+      lzf.lit(Bool.and(Nat.is_le(Nat.add(k, 1n), ci), Nat.is_le(Nat.add(op, k), n)), k, inp, ci, w, op)
     case False{}:
       +l0 = Nat.div(c, 32n)
       +long = Nat.is_eq(l0, 7n)
@@ -481,38 +479,30 @@ def lzf.op(lit: Bool, +n: Nat, +c: Nat, +h: String, +inp: String, +ci: Nat, out:
       +lo = U32.to_nat(String.code_at(h, Bool.pick(Nat, long, 2n, 1n)))
       +d = Nat.add(Nat.add(Nat.mul(Nat.mod(c, 32n), 256n), lo), 1n)
       +k = Nat.add(len, 2n)
-      lzf.ref(Bool.and(Bool.and(Nat.is_le(used, ci), Nat.is_le(Nat.add(op, k), n)), Nat.is_le(d, op)), k, d, String.drop(inp, used), Nat.sub(ci, used), out, w, wl, op)
+      lzf.ref(Bool.and(Bool.and(Nat.is_le(used, ci), Nat.is_le(Nat.add(op, k), n)), Nat.is_le(d, op)), k, d, String.drop(inp, used), Nat.sub(ci, used), w, op)
 
 def lzf.step(+n: Nat, st: Lzf) -> Maybe<&2, Lzf>:
   match st:
-    case Lzf{+inp, +ci, out, w, +wl, +op}:
+    case Lzf{+inp, +ci, w, +op}:
       +h = String.take(inp, 3n)
       +c = U32.to_nat(String.code_at(h, 0n))
-      lzf.op(Nat.is_lt(c, 32n), n, c, h, inp, ci, out, w, wl, op)
+      lzf.op(Nat.is_lt(c, 32n), n, c, h, inp, ci, w, op)
 
-# the pieces out, oldest first, before acc
-def lzf.cat(out: List<&2, String>, acc: String) -> String:
-  match out:
-    case Nil{}:
-      acc
-    case Con{p, rest}:
-      lzf.cat(rest, p ++ acc)
-
-def lzf.fin(ok: Bool, out: List<&2, String>) -> Maybe<&2, String>:
+def lzf.fin(ok: Bool, w: String) -> Maybe<&2, String>:
   match ok:
     case True{}:
-      Some{lzf.cat(out, "")}
+      Some{String.reverse(w)}
     case False{}:
       None{}
 
 def lzf.go(f: Nat, +n: Nat, m: Maybe<&2, Lzf>) -> Maybe<&2, String>:
   match f m:
-    case 1n+g Some{Lzf{inp, ci, out, w, wl, +op}}:
+    case 1n+g Some{Lzf{inp, ci, w, +op}}:
       match ci:
         case 0n:
-          lzf.fin(Nat.is_eq(op, n), out)
+          lzf.fin(Nat.is_eq(op, n), w)
         case 1n+c:
-          lzf.go(g, n, lzf.step(n, Lzf{inp, 1n+c, out, w, wl, op}))
+          lzf.go(g, n, lzf.step(n, Lzf{inp, 1n+c, w, op}))
     case _ _:
       None{}
 
@@ -523,7 +513,7 @@ def lzf.dec(+c: String, +clen: Nat, +len: Nat) -> Maybe<&2, String>:
     case 0n:
       Some{""}
     case _:
-      lzf.go(Nat.add(clen, 1n), len, Some{Lzf{c, clen, Nil{}, "", 0n, 0n}})
+      lzf.go(Nat.add(clen, 1n), len, Some{Lzf{c, clen, "", 0n}})
 
 def lzf.got(m: Maybe<&2, String>, rest: String) -> Maybe<&1, String & String>:
   match m:

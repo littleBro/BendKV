@@ -6045,6 +6045,17 @@ left aside, as Redis's `loadDataFromDisk` leaves it. The start no longer refuses
   walked the rest of the file at each hash of type 4 in the same way. It is a constant
   now, 2^46 pairs, which keeps any count up to 2^48 from a product past it, as before;
   a count past what is left fails at the end either way.
+- LZF, which RESTORE has read since section 3zzu, is much of what a file of Redis's
+  holds: with `rdbcompression yes`, its default, Redis compresses every string of more
+  than 20 bytes that LZF makes shorter, a listpack or a quicklist's node of 8 KB among
+  them. The decoder kept the bytes out in order, with a window of the last 8 to 16 KB of
+  them; each piece went at the window's end, a node more each time, and each piece and
+  each reference walked them all, about 4 ms for a node of 8 KB. A file of Redis's of
+  200 lists of 5,000 elements took 6.4 s to load (Redis 0.05 s). The bytes out are now
+  kept reversed, the newest first (`lzf.put`, `lzf.ref`, `lzf.fin`): a piece goes in
+  front, into the room of the first chunk, a reference reads near the front (a distance
+  is 8,192 at most), and the end reverses them once. The same file loads in 0.54 s, and
+  RESTORE of a compressed payload gains the same.
 - `Info`, of 63 words, would have been past 64 with the account's fields in it, and a
   node past 64 words is copied whole at every update (section 3zzz). The account is a
   node of its own (`Rdb`, with a constructor that holds its own type and is never built,
@@ -6053,7 +6064,7 @@ left aside, as Redis's `loadDataFromDisk` leaves it. The start no longer refuses
 
 **What it costs** (PERFORMANCE.md, section 67, which has the times and sizes against
 Redis's). A file of BendKV's is the size of Redis's when LZF gains nothing. SAVE takes
-somewhat more than Redis's time, and the start up to five times its time. The start
+somewhat more than Redis's time, and the start two to ten times its time. The start
 reads the whole file into memory first, as it reads the append-only file (issue 32),
 and checks the checksum at the end, over the file kept whole: the resident memory after
 the start holds about the file's size more than before the restart, where Redis's holds
@@ -6093,7 +6104,7 @@ pass.
 
 **Tests.** `tests/rdb_test.py`, in `make test` (and the issue's own check, `python3
 tests/rdb_test.py --bendkv build/bendkv`), runs each case on a redis-server and a BendKV
-of their own, each in a fresh directory, 103 checks:
+of their own, each in a fresh directory, 105 checks:
 
 - files Redis writes, with LZF and without, of the values of `tests/dump_test.py` (every
   kind and encoding) in five databases with empty ones between them, keys with times, a
@@ -6101,6 +6112,9 @@ of their own, each in a fresh directory, 103 checks:
   and Redis start from each, and every key of every database reads back the same (its
   type, encoding, value and the time it expires at), with DBSIZE, the counts of the load
   and its log's lines;
+- a file Redis writes of 300 strings and lists that LZF compresses (runs, repeats at
+  every distance up to past LZF's 8,192, overlapping their own start, noise; up to
+  70,000 bytes): both load the same values;
 - a file written by the test as Redis 6 and before wrote them (version 9, ziplists,
   zipmaps, quicklists of ziplists, types 1 to 4, EXPIRETIME in seconds, IDLE and FREQ,
   times past, empty keys, AUX fields of every kind, a checksum of 0): both load it alike

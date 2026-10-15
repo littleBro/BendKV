@@ -5,6 +5,9 @@ directory of its own (its dir), on a port of its own, and every
 comparison is between a redis-server and BendKV given the same file or
 the same commands.
 
+- Redis writes strings and lists that LZF compresses (runs, repeats at
+  every distance, noise; up to 70,000 bytes): both start from the file
+  and hold the same values.
 - Redis writes the file (rdbcompression yes, with LZF, and no) of keys of
   every kind and encoding in several databases (strings of each length
   and integer encoding, lists of one node and of many, sets in an intset
@@ -110,6 +113,10 @@ def shut(c, *xs):
         return "closed"
 
 
+# every server started, killed at the end whatever stopped the test
+SERVERS = []
+
+
 class Srv:
     """A server started in directory d (its dir, and its working
     directory), its log in d/out.log: up once it answers PING, or exited
@@ -117,6 +124,7 @@ class Srv:
 
     def __init__(self, exe, d, *args):
         self.exe, self.d, self.port = exe, d, free_port()
+        SERVERS.append(self)
         os.makedirs(d, exist_ok=True)
         self.p = subprocess.Popen([exe, "--port", str(self.port), "--dir", d, "--bind", "127.0.0.1"] + list(args), cwd=d,
                                   stdout=open(os.path.join(d, "out.log"), "a"), stderr=subprocess.STDOUT)
@@ -437,6 +445,60 @@ def redis_writes(a, root):
         finally:
             b.kill()
             r2.kill()
+
+
+def lzf_value(rnd):
+    """a value LZF compresses as Redis does: runs, repeats of what came
+    before at distances up to 9,000 (past LZF's 8,192, and overlapping
+    their own start), and noise, of up to 70,000 bytes"""
+    n = rnd.choice([30, 100, 1000, 8000, 20000, 70000])
+    alphabet = bytes(rnd.sample(range(256), rnd.randint(1, 40)))
+    cur = b""
+    while len(cur) < n:
+        x = rnd.random()
+        if x < 0.3 and cur:
+            d = rnd.randint(1, min(len(cur), 9000))
+            k = rnd.randint(1, 300)
+            src = cur[-d:]
+            cur += (src * (k // len(src) + 1))[:k]
+        elif x < 0.5:
+            cur += bytes([rnd.choice(alphabet)]) * rnd.randint(1, 500)
+        else:
+            cur += bytes(rnd.choice(alphabet) for _ in range(rnd.randint(1, 60)))
+    return cur[:n]
+
+
+def lzf_values(a, root):
+    """Redis writes strings and lists that LZF compresses (rdbcompression
+    yes: a string, or a list's node, of more than 20 bytes that LZF makes
+    shorter); both start from the file and hold the same values"""
+    d = os.path.join(root, "lzf")
+    r = Srv(a.redis, os.path.join(d, "redis"), "--save", "", "--rdbcompression", "yes")
+    c = r.conn()
+    rnd = random.Random(7)
+    for i in range(300):
+        v = lzf_value(rnd)
+        if i % 3 == 0:
+            run(c, "RPUSH", "l:%d" % i, *[v[j:j + 50] for j in range(0, min(len(v), 20000), 50)])
+        else:
+            run(c, "SET", "s:%d" % i, v)
+    same("SAVE (Redis, LZF)", run(c, "SAVE"), (b"+", b"OK"))
+    shut(c, "SHUTDOWN", "NOSAVE")
+    r.exit()
+    srvs = []
+    for name, exe in (("bendkv", a.bin), ("redis2", a.redis)):
+        os.makedirs(os.path.join(d, name))
+        shutil.copy(os.path.join(d, "redis", "dump.rdb"), os.path.join(d, name, "dump.rdb"))
+        srvs.append(Srv(exe, os.path.join(d, name), "--save", ""))
+    b, r2 = srvs
+    try:
+        if b.code is not None:
+            fail("BendKV starts from Redis's file of LZF values: exit %s" % b.code, b.log()[-1500:])
+            return
+        same_dbs("BendKV and Redis from Redis's file of LZF values", dump_all(b.conn(), 1), dump_all(r2.conn(), 1))
+    finally:
+        b.kill()
+        r2.kill()
 
 
 def written_here(a, root):
@@ -841,10 +903,14 @@ def main():
     root = os.path.abspath(a.dir)
     shutil.rmtree(root, ignore_errors=True)
     os.makedirs(root)
-    for part in (redis_writes, written_here, bendkv_writes, scenarios, unchecked, shutdowns, corrupt, short_form):
-        b0 = bad
-        part(a, root)
-        print("%s %s" % ("OK:  " if bad == b0 else "FAIL:", " ".join(part.__doc__.split())))
+    try:
+        for part in (redis_writes, lzf_values, written_here, bendkv_writes, scenarios, unchecked, shutdowns, corrupt, short_form):
+            b0 = bad
+            part(a, root)
+            print("%s %s" % ("OK:  " if bad == b0 else "FAIL:", " ".join(part.__doc__.split())))
+    finally:
+        for s in SERVERS:
+            s.kill()
     if bad:
         print("FAIL: %d of %d checks" % (bad, n))
         sys.exit(1)

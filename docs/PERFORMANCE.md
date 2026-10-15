@@ -7321,17 +7321,32 @@ The append-only file of the million keys (138 MB) starts in 3.0 s and leaves 609
 resident. A hash of 10 fields takes BendKV seven times the memory it takes Redis, as
 before; that is the hash's representation, not the file's.
 
-**Where the time goes.** A SAVE of 100,000 keys under `sprof` (a build with `-g -no-pie`,
-samples every 100 µs): 44% in `term_drop` and `span_fade`, the drops of the shared
-trie's nodes that each key's lookup takes apart (`file.keys` looks each key of a scan
-up in the trie it lends, as the rewrite's `rw.keys` does), 26% in the checksum
-(`crc.k`: two steps of four bits a byte, section 62), 7% in the scan. The load: half in
+Files Redis wrote with LZF (`rdbcompression yes`, its default), the start's time as the
+log gives it (DB loaded from disk), with the decoder of section 62 and with the one of
+this change (FINDINGS 3zzzc), both servers holding the same values after it:
+
+| file | BendKV, LZF in order | BendKV, LZF reversed | Redis |
+|---|---:|---:|---:|
+| 200,000 keys of 100 bytes (DEBUG POPULATE), 7.0 MB | 1.01 s | 0.82 s | 0.18 s |
+| 200 lists of 5,000 elements, their nodes of 8 KB compressed, 5.0 MB | 6.43 s | 0.54 s | 0.05 s |
+
+Redis keeps a list's nodes as the listpacks they are once LZF gives them back; BendKV
+reads each element into its own list.
+
+**Where the time goes** (`sprof`, a build with `-g -no-pie`, samples every 100 µs). A
+SAVE of 100,000 keys: 44% in `term_drop` and `span_fade`, the drops of the shared trie's
+nodes that each key's lookup takes apart (`file.keys` looks each key of a scan up in the
+trie it lends, as the rewrite's `rw.keys` does), 26% in the checksum (`crc.k`: two steps
+of four bits a byte, section 62), 7% in the scan. A load of the same keys: half in
 `file.load`, where the checksum of the whole file is inlined, 17% in `term_drop`, the
-rest in the readers and the trie's inserts.
+rest in the readers and the trie's inserts. A load of the 200 lists, LZF reversed: a
+quarter in `String.reverse.go` (each byte goes into the reversed bytes, and back at the
+end), the rest in the listpacks' reading and the lists' building.
 
 **On the way.** The first load was quadratic in the file's size: each step measured what
 was left of the file, a list of 2 KB chunks, to name its offset (FINDINGS.md, section
-3zzzc, with its times). The offset is now worked out only for a line that names it.
+3zzzc, with its times). The offset is now worked out only for a line that names it. And
+LZF's decoder walked the bytes it had put out at each piece (the table above).
 
 **What is left.** The file whole in memory at the start, and the checksum checked over it
 at the end, which keeps it whole until then (a resident memory of the file's size more
