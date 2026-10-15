@@ -5017,6 +5017,86 @@ bytes as it did, so that the protocol's errors and their timing are as they were
 GEOADD of 20,000 points now takes 194 ms, an EXISTS of 40,000 keys 29 ms (Redis 3.6 ms),
 an RPUSH of 40,000 elements 30 ms where it took 249 (PERFORMANCE.md, section 60).
 
+## 3zzq. The append-only file killed under load
+
+**What was missing.** The laws prove recovery for the model of the file (`recover`,
+`recover_cut`, `checked_replay`, section 3e). What the shell writes, when it syncs and
+when it answers a client was tested three ways: restarts after a clean kill, a tail cut
+on purpose (`restart()` in `tests/run_tests.sh`) and one SIGKILL while a rewrite runs
+(`tests/rewrite_test.py`). Nothing killed the server at a random moment under load and
+checked every write it had acknowledged (issue #39).
+
+**What the test checks.** `tests/crash_test.py` runs rounds on one file: clients write,
+the server is killed with SIGKILL after a random time, the replies left in the sockets
+are read, the server starts again from its file, and the next round writes on. The
+server runs the batches of all its connections through one actor, so it ran its
+commands in one order, and its file holds their effects in that order. A unit is a
+command, or a transaction whole. A start must hold the databases that a prefix of that
+order leaves from those of the round's start, and the prefix must hold every unit
+acknowledged. The test does not see the order whole, so the load is made for the check
+to be exact: one connection's order is the order it sent its units in; with several,
+each connection writes keys of its own, where the commands of different connections
+commute, and they push ids onto lists they share, whose order is the server's, each
+acknowledged push at the place its RPUSH answered. The databases after each prefix come
+from a model of the 38 commands the load sends (and of MULTI, EXEC and DISCARD around
+them); checked once against redis-server 7.0.15, it gave every reply of 285,000 units
+and the keyspace after them, and BendKV's replies are compared with it in every round.
+A round draws 1 to 16 connections that pipeline 1 to 128 units, the fsync policy, the
+writer thread or the loop, a BGREWRITEAOF or the cron's rewrites made frequent, values
+of up to 512 KB in some rounds, and in some a second kill while the start loads the
+file. The units mix MSET, MSETNX, RENAME, COPY, MOVE, SWAPDB, FLUSHDB, SMOVE, LMOVE, the
+stores of sets and transactions (a SELECT inside now and then) with writes of one key,
+beside 20,000 keys no unit touches, so that a rewrite and a start take a while. A start
+must also leave the file as the kill left it but for an entry or a transaction cut short
+at its end, the bytes its log names.
+
+SIGKILL stops the process and not the machine: what the server wrote is in the page
+cache, and the next start reads it. The server writes a group's effects before it
+answers (and with always syncs them first), so every policy must keep every
+acknowledged unit. What sets always apart shows only when the machine stops: with
+`--lazyfs`, the server's directory is on a LazyFS mount, and after each kill LazyFS drops
+every write not synced, as a machine that stops loses its page cache; every round then
+runs with always.
+
+**What it found.** No durability problem. 200 rounds took 487 s here, on four cores
+shared with other builds: 3,368,013 units acknowledged, all restored, and 5,132 more of
+those sent after them; 59 kills while a rewrite ran, 59 starts killed again, 40 of them
+while they loaded the file. On LazyFS (built here, with a libfuse 3.16 of its own), 60
+rounds with always: 1,022,132 units acknowledged, all restored once the writes not
+synced were dropped; with `--policy no` the first round fails, as it must, nothing
+having been synced. And the test fails when the file is damaged after each kill as a
+durability bug would leave it (`--break lose`: its last whole entry dropped, as if the
+server had answered before writing it; `--break hole`: one of the twenty before it),
+naming the connection, its units acknowledged and sent, the closest prefix and the keys
+that differ.
+
+One failure was the test's own. A round on LazyFS with one connection had two SWAPDBs
+in the file that were sent and not acknowledged; stepping through one, the check compared
+again only the keys the swapped databases held after it, so a key that had differed only
+before it stayed counted, and no prefix matched. The check now compares again every key
+that differed in a database a step changes whole, and tries itself first, before any
+server (`--self-check`): a model plays the server, every connection's units in one order
+that keeps each one's, cut at random, and the check must accept the databases after the
+cut and refuse them without one acknowledged unit's effect, with SWAPDB and FLUSHDB
+frequent. On 2,000 simulated rounds of each kind it accepted all 4,000 and refused all
+1,670 such damages; without the fix it fails at its first. A failed round now keeps what
+the check ran on, and `--recheck` runs the check again on it.
+
+A kill seldom stops a write in its middle (the kernel looks for a fatal signal only
+between the pages of a write): of about 1,400 rounds run here, three did, two of them in
+rounds with values of up to 512 KB; their starts cut the entries cut short (3,396 to
+144,667 bytes), and the rounds after them appended to the files so cut. The tail cut of
+`tests/run_tests.sh` and the laws `recover_cut` and `load_cut` cover that path too.
+
+**What it costs.** `make test` runs 20 rounds: about 50 s here, a second of it the
+check's own test.
+
+**What it does not check.** The syncs of the directory: LazyFS makes a file and renames
+one at once and never drops a name (`tests/aof_fail_test.py` traces the file's creation,
+its directory's sync and the first reply instead). everysec on LazyFS, which may lose the
+last second's acknowledged writes: the test does not know when the syncer last ran. CI
+runs no LazyFS: the job would need FUSE 3 and LazyFS built in it.
+
 ## 3zzu. DUMP and RESTORE
 
 **What there is.** DUMP and RESTORE as Redis 7.0.15 runs them (`src/rdb.bend`, from
@@ -5135,86 +5215,6 @@ hashes are those of the parameters' defaults). 1,273 of the 1,677 tests Redis pa
 suites: redis-py's 12 tests of DUMP and RESTORE pass, in RESP2 and in RESP3, and
 go-redis's 3, which leaves 2,513 of the 2,753 tests Redis passes in redis-py and 408 of
 460 in go-redis.
-
-## 3zzq. The append-only file killed under load
-
-**What was missing.** The laws prove recovery for the model of the file (`recover`,
-`recover_cut`, `checked_replay`, section 3e). What the shell writes, when it syncs and
-when it answers a client was tested three ways: restarts after a clean kill, a tail cut
-on purpose (`restart()` in `tests/run_tests.sh`) and one SIGKILL while a rewrite runs
-(`tests/rewrite_test.py`). Nothing killed the server at a random moment under load and
-checked every write it had acknowledged (issue #39).
-
-**What the test checks.** `tests/crash_test.py` runs rounds on one file: clients write,
-the server is killed with SIGKILL after a random time, the replies left in the sockets
-are read, the server starts again from its file, and the next round writes on. The
-server runs the batches of all its connections through one actor, so it ran its
-commands in one order, and its file holds their effects in that order. A unit is a
-command, or a transaction whole. A start must hold the databases that a prefix of that
-order leaves from those of the round's start, and the prefix must hold every unit
-acknowledged. The test does not see the order whole, so the load is made for the check
-to be exact: one connection's order is the order it sent its units in; with several,
-each connection writes keys of its own, where the commands of different connections
-commute, and they push ids onto lists they share, whose order is the server's, each
-acknowledged push at the place its RPUSH answered. The databases after each prefix come
-from a model of the 38 commands the load sends (and of MULTI, EXEC and DISCARD around
-them); checked once against redis-server 7.0.15, it gave every reply of 285,000 units
-and the keyspace after them, and BendKV's replies are compared with it in every round.
-A round draws 1 to 16 connections that pipeline 1 to 128 units, the fsync policy, the
-writer thread or the loop, a BGREWRITEAOF or the cron's rewrites made frequent, values
-of up to 512 KB in some rounds, and in some a second kill while the start loads the
-file. The units mix MSET, MSETNX, RENAME, COPY, MOVE, SWAPDB, FLUSHDB, SMOVE, LMOVE, the
-stores of sets and transactions (a SELECT inside now and then) with writes of one key,
-beside 20,000 keys no unit touches, so that a rewrite and a start take a while. A start
-must also leave the file as the kill left it but for an entry or a transaction cut short
-at its end, the bytes its log names.
-
-SIGKILL stops the process and not the machine: what the server wrote is in the page
-cache, and the next start reads it. The server writes a group's effects before it
-answers (and with always syncs them first), so every policy must keep every
-acknowledged unit. What sets always apart shows only when the machine stops: with
-`--lazyfs`, the server's directory is on a LazyFS mount, and after each kill LazyFS drops
-every write not synced, as a machine that stops loses its page cache; every round then
-runs with always.
-
-**What it found.** No durability problem. 200 rounds took 487 s here, on four cores
-shared with other builds: 3,368,013 units acknowledged, all restored, and 5,132 more of
-those sent after them; 59 kills while a rewrite ran, 59 starts killed again, 40 of them
-while they loaded the file. On LazyFS (built here, with a libfuse 3.16 of its own), 60
-rounds with always: 1,022,132 units acknowledged, all restored once the writes not
-synced were dropped; with `--policy no` the first round fails, as it must, nothing
-having been synced. And the test fails when the file is damaged after each kill as a
-durability bug would leave it (`--break lose`: its last whole entry dropped, as if the
-server had answered before writing it; `--break hole`: one of the twenty before it),
-naming the connection, its units acknowledged and sent, the closest prefix and the keys
-that differ.
-
-One failure was the test's own. A round on LazyFS with one connection had two SWAPDBs
-in the file that were sent and not acknowledged; stepping through one, the check compared
-again only the keys the swapped databases held after it, so a key that had differed only
-before it stayed counted, and no prefix matched. The check now compares again every key
-that differed in a database a step changes whole, and tries itself first, before any
-server (`--self-check`): a model plays the server, every connection's units in one order
-that keeps each one's, cut at random, and the check must accept the databases after the
-cut and refuse them without one acknowledged unit's effect, with SWAPDB and FLUSHDB
-frequent. On 2,000 simulated rounds of each kind it accepted all 4,000 and refused all
-1,670 such damages; without the fix it fails at its first. A failed round now keeps what
-the check ran on, and `--recheck` runs the check again on it.
-
-A kill seldom stops a write in its middle (the kernel looks for a fatal signal only
-between the pages of a write): of about 1,400 rounds run here, three did, two of them in
-rounds with values of up to 512 KB; their starts cut the entries cut short (3,396 to
-144,667 bytes), and the rounds after them appended to the files so cut. The tail cut of
-`tests/run_tests.sh` and the laws `recover_cut` and `load_cut` cover that path too.
-
-**What it costs.** `make test` runs 20 rounds: about 50 s here, a second of it the
-check's own test.
-
-**What it does not check.** The syncs of the directory: LazyFS makes a file and renames
-one at once and never drops a name (`tests/aof_fail_test.py` traces the file's creation,
-its directory's sync and the first reply instead). everysec on LazyFS, which may lose the
-last second's acknowledged writes: the test does not know when the syncer last ran. CI
-runs no LazyFS: the job would need FUSE 3 and LazyFS built in it.
 
 ## 4. Where a request's time goes, and hiding the memory waits
 
