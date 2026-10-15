@@ -434,9 +434,10 @@ with Redis's errors for a wrong number; INFO's keyspace has a line for each data
 with keys, and the sweep of expired keys goes over all databases.
 The connection: HELLO (2 or 3; with AUTH and SETNAME), AUTH (a password, or `default`
 and a password), SELECT, QUIT, RESET (selects database 0 again, and RESP2), CLIENT ID,
-GETNAME, SETNAME, REPLY ON/OFF/SKIP, NO-EVICT, GETREDIR, TRACKINGINFO, CACHING, UNBLOCK
-(TIMEOUT or ERROR), LIST, INFO, KILL, HELP (there is no key tracking, and its
-subcommands answer as Redis does when it is not on), FUNCTION FLUSH (there are no
+GETNAME, SETNAME, REPLY ON/OFF/SKIP, NO-EVICT, TRACKING (client-side caching: the keys a
+client read, invalidated when they change, as Redis's tracking.c; section 3zzzb of
+FINDINGS.md), CACHING, GETREDIR, TRACKINGINFO, UNBLOCK (TIMEOUT or ERROR), LIST, INFO,
+KILL, HELP, FUNCTION FLUSH (there are no
 functions, nothing to flush). A client must be authenticated where Redis requires it:
 after the check of the command's name and number of arguments and before it runs (a
 syntax error for an unauthenticated client is NOAUTH); a client is authenticated on
@@ -930,10 +931,10 @@ The translation the kernel reads can be dumped with
   CI on every pull request): redis-py 8.1.0's tests of its sync and asyncio clients, in
   RESP2 and in RESP3, and go-redis v9.23.0's specs, in RESP3, each against Redis 7.0.15
   and against BendKV, each on a server started for it, without their tests of modules,
-  clusters, sentinels and TLS. Of the tests Redis passes, BendKV passes 2,525 of 2,753 in
-  redis-py, the same tests in RESP2 and in RESP3, and 409 of 460 in go-redis; every other
-  one fails on what BendKV does not have (Lua, streams, ACL, CLIENT
-  TRACKING, and COMMAND's entries of those), none on a command BendKV has. A test Redis passes that BendKV fails, and that is not among the
+  clusters, sentinels and TLS. Of the tests Redis passes, BendKV passes 2,526 of 2,753 in
+  redis-py, the same tests in RESP2 and in RESP3, and 418 of 460 in go-redis; every other
+  one fails on what BendKV does not have (Lua, streams, ACL, and COMMAND's entries of
+  those), none on a command BendKV has. A test Redis passes that BendKV fails, and that is not among the
   known failures of `tools/data/clients.json`, fails CI.
 - **Differential testing against Redis 7.0.15** (`tests/diff_test.py`). Random streams
   of commands with random binary arguments, pipelines of different lengths, and arity
@@ -1592,9 +1593,11 @@ make clients BEND="$B" # redis-py's and go-redis's test suites on Redis and on B
    step by step (section 3zzm of FINDINGS.md); checked by tests against Redis byte for
    byte. DUMP and RESTORE: Redis's payloads, every type Redis reads but streams' and
    modules', checked as deep as Redis checks them with `sanitize-dump-payload yes`
-   (section 3zzu of FINDINGS.md); checked by tests against Redis byte for byte. What the
-   client libraries' suites find missing within the scope above (CLIENT TRACKING, the
-   slow log, ACL's users) is the next step.
+   (section 3zzu of FINDINGS.md); checked by tests against Redis byte for byte. CLIENT
+   TRACKING: client-side caching as Redis's `tracking.c` keeps it, its invalidations
+   pushed at once (section 3zzzb of FINDINGS.md); checked by tests against Redis byte for
+   byte. What the client libraries' suites find missing within the scope above (ACL's
+   users) is the next step.
 2. **The append-only file, further.** A law of the rewrite: the rewritten file replays
    to the databases it was written from (key by key, not by the shape of the trie); it
    needs a law that a scan from the first bucket reads every key once (the invariant "a

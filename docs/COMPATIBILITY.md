@@ -363,9 +363,9 @@ make clients                       # the three suites, against Redis and build/b
 
 | suite | Redis 7.0.15 passes | BendKV passes |
 |---|---:|---:|
-| redis-py 8.1.0, RESP2 | 2,753 | **2,525 (91.7%)** |
-| redis-py 8.1.0, RESP3 | 2,753 | **2,525 (91.7%)** |
-| go-redis v9.23.0, RESP3 | 460 | **409 (88.9%)** |
+| redis-py 8.1.0, RESP2 | 2,753 | **2,526 (91.8%)** |
+| redis-py 8.1.0, RESP3 | 2,753 | **2,526 (91.8%)** |
+| go-redis v9.23.0, RESP3 | 460 | **418 (90.9%)** |
 
 redis-py's tests give in RESP3 what they give in RESP2, test by test, against Redis and
 against BendKV: the same tests pass, and the same fail.
@@ -373,8 +373,8 @@ against BendKV: the same tests pass, and the same fail.
 Every test BendKV fails of those Redis passes fails on what BendKV does not have:
 
 - **A command it does not have:** in redis-py, Lua's (EVALSHA 74, SCRIPT 30, FUNCTION 7),
-  streams (73), ACL 34, MODULE 2, and BGSAVE, CLIENT TRACKING and REPLICAOF one each
-  (223 tests in each protocol); in go-redis, streams (26), Lua's (12) and ACL (39
+  streams (73), ACL 34, MODULE 2, and BGSAVE and REPLICAOF one each (222 tests in each
+  protocol); in go-redis, streams (26), Lua's (12) and ACL (39
   tests). SORT's tests, 37 in redis-py and 2 in go-redis, pass since SORT (section 3zzh
   of [FINDINGS.md](FINDINGS.md)), and so does go-redis's test of COMMAND GETKEYS, which
   asks for SORT's keys; redis-py's 9 tests of PFADD, PFCOUNT and PFMERGE pass since
@@ -385,9 +385,9 @@ Every test BendKV fails of those Redis passes fails on what BendKV does not have
   geo's 59 in redis-py and 11 in go-redis pass since GEO (section 3zzm), and the 12 tests
   of DUMP and RESTORE in redis-py and 3 in go-redis since DUMP and RESTORE (section
   3zzu); redis-py's 9 tests of SLOWLOG and 3 of LATENCY, and go-redis's of SLOWLOG, pass
-  since the timing of calls (section 3zzz).
-- **Another error, on the same ground:** client-side caching (CLIENT TRACKING and its
-  invalidations: go-redis's 9 specs of its cache), Lua (a script's calls in MONITOR, EVAL's
+  since the timing of calls (section 3zzz), and redis-py's test of CLIENT TRACKING and
+  go-redis's 9 specs of its client-side cache since CLIENT TRACKING (section 3zzzb).
+- **Another error, on the same ground:** Lua (a script's calls in MONITOR, EVAL's
   replies), and COMMAND, which lists only BendKV's commands: COMMAND LIST counts 259 where
   redis-py waits for more than 300, and redis-py's parser of commands reads XREAD's keys.
 
