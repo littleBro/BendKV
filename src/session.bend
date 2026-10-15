@@ -301,7 +301,9 @@ def mm.paid(m: Mm) -> Mm:
 # since, with a counter of 5 (LFU_INIT_VAL), as Redis's values loaded at
 # the start; its first use under an LFU policy gives it a counter of 5,
 # as Redis gives a value it makes. Keys whose hashes have the same low
-# twenty bits share a word, which no key's deletion clears.
+# twenty bits share a word, which no key's deletion clears: a key a
+# command makes may find another key's word, but for RESTORE's, which its
+# mark makes anew (server.bend, Access).
 
 def acc.secs(+now: Nat) -> U32:
   U32.from_nat(Nat.div(now, 1000n))

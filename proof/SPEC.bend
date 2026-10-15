@@ -17,31 +17,31 @@ def mset_pairs(ps: List<&2, R.KVPair>, db: KV.Trie<KV.Val>) -> KV.Trie<KV.Val>:
     case Con{R.KP{k, v}, rest}:
       mset_pairs(rest, KV.set(KV.Val, db, k, KV.VStr{v}))
 
-# INCRBY: the sum stored with the key's time kept (keep: the key was there)
-# or with none
-def incr.fit(db: KV.Trie<KV.Val>, +k: String, +h: U32, +n: R.Int, ok: Bool, keep: Bool) -> R.Reply & KV.Trie<KV.Val>:
-  match ok:
-    case True{}:
-      (R.RInt{n}, R.incr.put(keep, db, k, R.int_show(n), h))
-    case False{}:
+# INCRBY: the sum (none past a long long) stored with the key's time kept
+# (keep: the key was there) or with none
+def incr.fit(db: KV.Trie<KV.Val>, +k: String, +h: U32, s: R.LL, keep: Bool) -> R.Reply & KV.Trie<KV.Val>:
+  match s:
+    case R.LL{+neg, +hi, +lo}:
+      +v = R.ll.show(neg, hi, lo)
+      (R.RIntS{v}, R.incr.put(keep, db, k, v, h))
+    case R.LLBad{}:
       (R.RError{"ERR increment or decrement would overflow"}, db)
 
-def incr.num(db: KV.Trie<KV.Val>, +k: String, +h: U32, by: R.Int, cur: Maybe<&2, R.Int>) -> R.Reply & KV.Trie<KV.Val>:
+def incr.num(db: KV.Trie<KV.Val>, +k: String, +h: U32, by: R.By, cur: R.LL) -> R.Reply & KV.Trie<KV.Val>:
   match cur:
-    case Some{i}:
-      +s = R.int_add(i, by)
-      incr.fit(db, k, h, s, R.int_fits(s), True{})
-    case None{}:
+    case R.LL{+neg, +hi, +lo}:
+      incr.fit(db, k, h, R.ll.add(neg, hi, lo, by), True{})
+    case R.LLBad{}:
       (R.e_int(), db)
 
-def incr.got(db: KV.Trie<KV.Val>, +k: String, +h: U32, +by: R.Int, old: KV.Got) -> R.Reply & KV.Trie<KV.Val>:
+def incr.got(db: KV.Trie<KV.Val>, +k: String, +h: U32, by: R.By, old: KV.Got) -> R.Reply & KV.Trie<KV.Val>:
   match old:
     case KV.GStr{s}:
-      incr.num(db, k, h, by, R.int_read(s))
+      incr.num(db, k, h, by, R.ll.read(s))
     case KV.GColl{}:
       (R.e_wrongtype(), db)
     case KV.GNone{}:
-      incr.fit(db, k, h, by, R.int_fits(by), False{})
+      incr.fit(db, k, h, R.by.ll(by), False{})
 
 # DEL's reply and the trie without the keys
 def del_reply(r: R.Dels) -> R.Reply & KV.Trie<KV.Val>:

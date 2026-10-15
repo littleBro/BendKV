@@ -321,8 +321,8 @@ Where performance and proof meet: **batched execution under proved laws.**
    own test suite run against BendKV and by client libraries' test suites (redis-py's and
    go-redis's, in CI: done, section 3zy).
    Lua, streams, cluster, replication and modules are out of scope. The suite's count: of the 1,677 tests
-   Redis 7.0.15 passes against a server it did not start, BendKV passes 1,273, 1,270 of
-   the 1,333 in what it has ([COMPATIBILITY.md](COMPATIBILITY.md)); most of the other 63
+   Redis 7.0.15 passes against a server it did not start, BendKV passes 1,274, 1,271 of
+   the 1,333 in what it has ([COMPATIBILITY.md](COMPATIBILITY.md)); most of the other 62
    need commands BendKV does not have (replication's SYNC, Lua, streams) or run after a
    test that left its client in MULTI on one of them.
    What maxmemory left to do (section 3zw): a delete takes the nodes it empties now

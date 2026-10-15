@@ -106,6 +106,10 @@ P_ZSET = payload(b"\x05\x02" + rstr(b"m") + struct.pack("<d", 1.5) + rstr(b"n") 
 CMDS = [
     [b"SET", b"a", b"1"], [b"SET", b"b", b"2", b"PXAT", b"%d" % T], [b"set", b"c", b"3"],
     [b"MSET", b"m1", b"x", b"m2", b"y"], [b"INCR", b"n"], [b"incrby", b"n", b"41"],
+    [b"INCRBY", b"w", b"9223372036854775000"], [b"DECR", b"w"], [b"INCRBY", b"w", b"1000"],
+    [b"DECRBY", b"w2", b"9223372036854775807"], [b"DECR", b"w2"], [b"DECR", b"w2"],
+    [b"SET", b"w3", b"99999999999999"], [b"PEXPIREAT", b"w3", b"%d" % (T + 5)], [b"INCR", b"w3"],
+    [b"HINCRBY", b"hw", b"f", b"-9223372036854775808"], [b"HINCRBY", b"hw", b"f", b"9223372036854775807"],
     [b"APPEND", b"s", b"hello"], [b"SETRANGE", b"s", b"7", b"world"], [b"SETBIT", b"bits", b"9", b"1"],
     [b"GETSET", b"m1", b"z"], [b"GETDEL", b"m2"], [b"PEXPIREAT", b"c", b"%d" % (T + 1)],
     [b"PERSIST", b"c"], [b"GETEX", b"a", b"EXAT", b"%d" % (T // 1000)], [b"SETNX", b"a", b"9"],
