@@ -87,8 +87,16 @@ fi
 lean="$HOME/.elan/toolchains/leanprover--lean4---v4.34.0/bin/lean"
 if [ ! -x "$lean" ]; then
   if [ ! -x "$HOME/.elan/bin/elan" ]; then
-    curl -sSfL https://raw.githubusercontent.com/leanprover/elan/master/elan-init.sh 2>> "$LOG" |
-      quiet sh -s -- -y --no-modify-path --default-toolchain none
+    # elan's release v4.2.4, checked against the sha256 that CI checks
+    # (.github/workflows/ci.yml), not the script of elan's master branch
+    t=$(mktemp -d)
+    if curl -sSfL -o "$t/elan.tar.gz" \
+        https://github.com/leanprover/elan/releases/download/v4.2.4/elan-x86_64-unknown-linux-gnu.tar.gz 2>> "$LOG" &&
+      echo "42b94d4244e8353142c456ec0e4ca6528fd898a6c604d4059f494e706e431f63  $t/elan.tar.gz" | quiet sha256sum -c - &&
+      quiet tar xzf "$t/elan.tar.gz" -C "$t"; then
+      quiet "$t/elan-init" -y --no-modify-path --default-toolchain none
+    fi
+    rm -rf "$t"
   fi
   quiet "$HOME/.elan/bin/elan" toolchain install leanprover/lean4:v4.34.0 ||
     note "Lean 4.34.0 could not be installed: make verdict needs it"
