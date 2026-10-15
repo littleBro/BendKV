@@ -7571,7 +7571,9 @@ def ps.evicted(+es: List<&2, A.Ent>, pb: Ps) -> Ps:
   ps.evicted.if(ps.loud(p), es, p)
 
 # the group after an eviction of the keys es: their WATCHes touched,
-# their events pushed (before the group's answers), their DELs the
+# their readers told (Tracking: as no client's change, before their
+# events, as Redis's performEvictions signals each key before its event)
+# and their events pushed (before the group's answers), their DELs the
 # group's first effects; Ps with the outcome (ps.mem), the server with
 # its counts (I.info.evicted)
 def mem.grp(p: Ps & List<&2, Sigma<&2, &2, Chan(Ans), _ => Ans>>, es: List<&2, A.Ent>, srv: S.Srv, ds: R.Ds, ws: Waits, tx: Tx) -> Grp:
@@ -7581,7 +7583,7 @@ def mem.grp(p: Ps & List<&2, Sigma<&2, &2, Chan(Ans), _ => Ans>>, es: List<&2, A
 def mem.done(d: Evd, ws: Waits, tx: Tx, pb: Ps) -> Grp:
   match d:
     case Evd{+res, Evs{srv, +ds, +es, +n}}:
-      mem.grp(ps.flush(ps.evicted(es, ps.mem(pb, res)), Nil{}), es, S.srv.evicted(srv, n, Nat.is_lt(0n, res), R.ds.now(ds)), ds, ws, touch.ents(tx, es, None{}, ds))
+      mem.grp(ps.flush(ps.evicted(es, ps.trk.gone(es, ds, ps.mem(pb, res))), Nil{}), es, S.srv.evicted(srv, n, Nat.is_lt(0n, res), R.ds.now(ds)), ds, ws, touch.ents(tx, es, None{}, ds))
 
 # Redis's warning for a CONFIG SET that set maxmemory below the memory in
 # use (updateMaxmemory)

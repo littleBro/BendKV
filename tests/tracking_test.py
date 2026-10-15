@@ -23,8 +23,9 @@ LIST's lines cut to their ids, flags and redirects).
   RENAME.
 - INFO's counts; tracking off, RESET, a client gone (its ids stay in the
   table); CLIENT REPLY OFF (pushes still go out).
-- Keys expired by the server's sweep, and the table's limit
-  (tracking-table-max-keys: which keys go is random, so their number).
+- Keys expired by the server's sweep, keys evicted past maxmemory, and
+  the table's limit (tracking-table-max-keys: which keys go is random,
+  so their number).
 - A client served by BLMOVE: its destination's invalidation after its
   reply.
 
@@ -475,6 +476,22 @@ def expiry(r):
     tracking_info(r)
 
 
+def evicted(r):
+    a, b = r.conn("a", 3), r.conn("b")
+    r.do(b, "FLUSHALL")
+    r.do(a, "CLIENT", "TRACKING", "on")
+    r.do(b, "SET", "ev", "v")
+    r.do(a, "GET", "ev")
+    r.do(b, "CONFIG", "SET", "maxmemory-policy", "allkeys-random")
+    # Redis evicts within CONFIG SET, BendKV at its next group or tick
+    r.do(b, "CONFIG", "SET", "maxmemory", "1", secs=0.3)
+    r.do(b, "SET", "ev2", "v")
+    r.do(b, "CONFIG", "SET", "maxmemory", "0")
+    r.do(b, "CONFIG", "SET", "maxmemory-policy", "noeviction")
+    r.do(b, "DBSIZE")
+    tracking_info(r)
+
+
 def limit(r):
     s, t, b = r.conn("s"), r.conn("t"), r.conn("b")
     r.do(b, "FLUSHALL")
@@ -509,7 +526,8 @@ def blocked(r):
 
 SCENARIOS = [("errors", errors), ("self, RESP3", self_resp3), ("keys of reads", reads), ("redirects", redirects),
              ("broken redirects", broken), ("optin and optout", optin), ("bcast", bcast), ("flushes", flushes),
-             ("states", states), ("expiry", expiry), ("table limit", limit), ("blocked", blocked)]
+             ("states", states), ("expiry", expiry), ("eviction", evicted), ("table limit", limit),
+             ("blocked", blocked)]
 
 
 def run(port, scenario):
