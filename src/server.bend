@@ -6515,26 +6515,18 @@ def bg.trk.pend(p: List<&2, R.Reply> & Ps, rs: List<&2, R.Reply>, es: List<&2, A
 def trk.max.key(+key: Nat) -> Bool:
   Bool.or(Nat.is_eq(key, R.stat.sub.config(2n)), Bool.or(Nat.is_eq(key, R.stat.top(162n)), Nat.is_eq(key, R.stat.sub.client(16n))))
 
-def trk.max.read(on: Bool, +srv: S.Srv) -> Maybe<&2, Nat>:
-  match on:
-    case True{}:
-      Some{S.cfg.nat(S.srv.cfg(srv), "tracking-table-max-keys")}
-    case False{}:
-      None{}
-
-def bg.trk.max(m: Maybe<&2, Nat>, pb: Ps) -> Ps:
-  match m:
-    case Some{n}:
-      ps.trk.max.put(n, pb)
-    case None{}:
-      pb
+def bg.trk.max(on: Bool, g: LRun) -> LRun:
+  match on g:
+    case True{} LRun{rs, es, conn, +srv, ds, ws, up, tx, pb}:
+      LRun{rs, es, conn, srv, ds, ws, up, tx, ps.trk.max.put(S.cfg.nat(S.srv.cfg(srv), "tracking-table-max-keys"), pb)}
+    case _ g0:
+      g0
 
 def bg.trk.after.go(g: LRun, +rk: Bool, +id: Nat, +code: Nat, +kt: Tk, +a: Av) -> LRun:
   match g:
-    case LRun{rs, es, conn, +srv, ds, ws, up, +tx, pb}:
+    case LRun{rs, es, conn, srv, ds, ws, up, +tx, pb}:
       +clear = Bool.and(tk.caching(kt), Bool.and(Bool.not(trk.client.key(R.code.key(code))), Bool.not(tx.multi(id, tx))))
-      +lim = trk.max.read(trk.max.key(R.code.key(code)), srv)
-      bg.trk.pend(ps.pend.take(bg.trk.max(lim, bg.trk.cache.if(clear, id, bg.trk.read.if(rk, id, code, a, pb)))), rs, es, conn, srv, ds, ws, up, tx)
+      bg.trk.max(trk.max.key(R.code.key(code)), bg.trk.pend(ps.pend.take(bg.trk.cache.if(clear, id, bg.trk.read.if(rk, id, code, a, pb))), rs, es, conn, srv, ds, ws, up, tx))
     case LHeld{h}:
       LHeld{bg.trk.after.go(h, False{}, id, code, kt, a)}
 
