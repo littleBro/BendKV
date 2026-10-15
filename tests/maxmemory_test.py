@@ -366,10 +366,22 @@ def main():
         cmd(kc, "CONFIG", "SET", "maxmemory", limit)
         t0 = time.time()
         time.sleep(0.5)
-        if not wait_for(lambda: used(quiet) <= limit, 30):
-            fail("the eviction does not bring the memory within maxmemory (%d > %d)" % (used(quiet), limit))
-        i = info(kc)
-        n = int(cmd(kc, "DBSIZE")[1])
+        # the memory, the keys left and the eviction's counts of one moment:
+        # DBSIZE and INFO in one transaction, as a request after another
+        # may set the eviction going again for a few keys (the heap's
+        # account moves with the requests in flight, by more than the
+        # eviction leaves under the limit)
+        seen = []
+        def within():
+            cmd(quiet, "MULTI")
+            cmd(quiet, "DBSIZE")
+            cmd(quiet, "INFO", "all")
+            size, text = cmd(quiet, "EXEC")[1]
+            seen[:] = [int(size[1]), dict(l.split(":", 1) for l in text[1].decode().split("\r\n") if ":" in l)]
+            return int(seen[1]["used_memory"]) <= limit
+        if not wait_for(within, 30):
+            fail("the eviction does not bring the memory within maxmemory (%s > %d)" % (seen[1]["used_memory"], limit))
+        n, i = seen
         if not (0 < n < 200000 and int(i["evicted_keys"]) == 200000 - n and i["current_eviction_exceeded_time"] == "0"
                 and int(i["total_eviction_exceeded_time"]) > 0):
             fail("after the eviction: %d keys, %r" % (n, {k: i[k] for k in ("evicted_keys", "total_eviction_exceeded_time", "current_eviction_exceeded_time")}))

@@ -1747,6 +1747,27 @@ def info.live(i: Info, +l: Live) -> Info:
     case IInfo{b, old, c, inst, pk, c0, a0, a, st, ex, rw, tm}:
       IInfo{b, live.keep(l, old), c, inst, Nat.max(pk, live.heap(l)), c0, a0, a, st, ex, rw, tm}
 
+# the heap's used bytes as the actor read them (IO.heap, before a group
+# and after each key an eviction freed: the server's mem.run), which with
+# maxmemory INFO shows, as Redis's INFO and performEvictions read one
+# counter (zmalloc_used_memory); the peak follows
+def live.heap.at(l: Live, +h: Nat) -> Live:
+  match l:
+    case ILive{secs, usec, ut, st, mut, mst, rss, heap, act, conns, clients, b, t}:
+      ILive{secs, usec, ut, st, mut, mst, rss, h, act, conns, clients, b, t}
+
+def info.heap(i: Info, +h: Nat) -> Info:
+  match i:
+    case IInfo{b, l, c, inst, pk, c0, a0, a, st, ex, rw, tm}:
+      IInfo{b, live.heap.at(l, h), c, inst, Nat.max(pk, h), c0, a0, a, st, ex, rw, tm}
+
+# new facts from the shell, the heap's reading left for the actor's own
+# (info.heap), which the eviction went by
+def info.live.held(i: Info, +l: Live) -> Info:
+  match i:
+    case IInfo{b, +old, c, inst, pk, c0, a0, a, st, ex, rw, tm}:
+      IInfo{b, live.heap.at(live.keep(l, old), live.heap(old)), c, inst, pk, c0, a0, a, st, ex, rw, tm}
+
 # the clients that wait, n of them, t of them with a timeout
 def info.blocked(i: Info, +n: Nat, +t: Nat) -> Info:
   match i:
