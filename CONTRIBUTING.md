@@ -25,7 +25,7 @@ make verdict   BEND="$B"   # ... in the BendTT kernel too
 make gencheck              # generated blocks are up to date
 make smoke     BEND="$B"
 make test      BEND="$B"   # byte-for-byte against Redis
-make perfcheck BEND="$B"   # no more than 3% more instructions per request
+make perfcheck BEND="$B"   # instructions per request within 3% of the baseline, misses and prefetches too
 ```
 
 CI runs the same on every pull request and on every push to `main` and `claude/step-b`

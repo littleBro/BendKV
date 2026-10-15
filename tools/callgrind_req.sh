@@ -8,15 +8,16 @@
 # (so INCR finds its counters and the caches are warm), and 20k requests
 # are counted and dumped to NAME.cg.N, all from 20 clients (CLIENTS) at
 # pipeline depth 16 (PIPE), with values of DATA bytes (3, redis-benchmark's
-# default), and the flags of RB_FLAGS (-3: each client in RESP3). Prints,
-# per request: instructions,
+# default), and the flags of RB_FLAGS (-3: each client in RESP3); CG_FLAGS
+# adds flags to callgrind's (tools/perf_guard.sh: counts per instruction,
+# and L1 caches of a fixed size). Prints, per request: instructions,
 # last-level data read misses, mispredicted indirect and conditional
 # branches. valgrind 3.22 cannot decode some code built with -march
 # (a register-to-register vmovq, for one).
 NAME=$1; PORT=$2; shift 2
 KEYS=${KEYS:-100000}; TESTS=${TESTS:-get incr}; PIPE=${PIPE:-16}; CLIENTS=${CLIENTS:-20}; DATA=${DATA:-3}
 rm -f "$NAME".cg*
-valgrind --tool=callgrind --cache-sim=yes --branch-sim=yes --LL=2097152,16,64 \
+valgrind --tool=callgrind --cache-sim=yes --branch-sim=yes --LL=2097152,16,64 $CG_FLAGS \
   --callgrind-out-file="$NAME.cg" "$@" > "$NAME.log" 2>&1 &
 VP=$!
 for i in $(seq 1 60); do redis-cli -p "$PORT" ping > /dev/null 2>&1 && break; sleep 1; done
