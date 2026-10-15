@@ -4,8 +4,9 @@ on both, after CONFIG RESETSTAT, then commandstats (each command's and
 subcommand's calls, rejected calls and failed calls), errorstats (the
 error replies by their first word), total_error_replies and
 total_commands_processed the same. Lines are compared as maps: Redis
-lists commandstats in the order of a hash table with a random seed, and
-BendKV, which does not time its commands, writes usec=0.
+lists commandstats in the order of a hash table with a random seed; usec
+and usec_per_call, which depend on the machine and the moment, are left
+out (tests/timing_test.py checks them).
 
 The cases: commands one at a time; pipelines of one command (counted by
 BendKV without a look at each request) and of several, with errors among

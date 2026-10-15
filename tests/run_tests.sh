@@ -31,7 +31,8 @@
 # where post hands it to the writer) the protocol's edge cases, and
 # against the first the commands of a connection and CONFIG, byte
 # for byte against Redis, INFO's sections and fields, its statistics per
-# command, COMMAND, SCAN and RANDOMKEY, keys that expire, numbers at
+# command, the timing of calls (SLOWLOG, LATENCY, latencystats), COMMAND,
+# SCAN and RANDOMKEY, keys that expire, numbers at
 # their edges in every argument that is one, BITFIELD's fields at
 # random, hashes, lists, sets and sorted sets, SORT and SORT_RO,
 # HyperLogLogs and GEO (each in RESP2 and RESP3), DUMP and RESTORE, and
@@ -133,6 +134,7 @@ for n in "" post send "post build/test.aof everysec"; do
     python3 tests/config_test.py --bendkv "$PORT" --redis "$REDIS_PORT" --rounds "$ROUNDS"
     python3 tests/info_test.py --bendkv "$PORT" --redis "$REDIS_PORT"
     python3 tests/stats_test.py --bendkv "$PORT" --redis "$REDIS_PORT"
+    python3 tests/timing_test.py --bendkv "$PORT" --redis "$REDIS_PORT"
     python3 tests/command_test.py --bendkv "$PORT" --redis "$REDIS_PORT"
     python3 tests/keyspace_test.py --bendkv "$PORT" --redis "$REDIS_PORT"
     python3 tests/ttl_test.py --bendkv "$PORT" --redis "$REDIS_PORT"
