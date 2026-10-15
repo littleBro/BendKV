@@ -278,10 +278,12 @@ translation stays in the trusted base.
   and the failed calls and errors are counted as Redis counts them. A command run while
   replies are off (CLIENT REPLY OFF or SKIP) pops as it does with them on. Where BendKV
   differs: Redis serves the clients of the keys a command added (`signalKeyAsReady`, from
-  `dbAdd`), key by key in the order they became ready, where BendKV looks at every client
-  after every command, in the order they came; XREAD is not there, and WAIT's wait ends
-  only by its time or CLIENT UNBLOCK (The server, below). In a transaction a blocking
-  command does not wait, as in Redis (below).
+  `dbAdd`), key by key in the order they became ready, where BendKV looks at every client,
+  in the order they came, after every command that may make one ready (one that may write
+  a key a client waits on, or a command of the connection or of the server). A client that
+  waits costs nothing to the commands on other keys (PERFORMANCE.md, section 61). XREAD
+  is not there, and WAIT's wait ends only by its time or CLIENT UNBLOCK (The server,
+  below). In a transaction a blocking command does not wait, as in Redis (below).
 - **Transactions:** MULTI, EXEC, DISCARD, WATCH and UNWATCH, as Redis 7.0.15 runs them.
   After MULTI a command is queued (QUEUED), but for EXEC, DISCARD, MULTI (an error:
   transactions do not nest), WATCH (an error inside MULTI), QUIT and RESET, which run; a
@@ -295,13 +297,14 @@ translation stays in the trusted base.
   is there, FLUSHDB, FLUSHALL and SWAPDB of a database that holds it, MOVE, COPY, RENAME,
   the sweep of expired keys; a key watched after its time passed changes only when it is
   set again (its deletion is no change). EXEC, DISCARD, UNWATCH, RESET and a closed
-  connection unwatch. The calls are counted as Redis counts them (a queued command when
-  EXEC runs it, EXEC once). The append-only file has a transaction's effects between a
-  MULTI and an EXEC when they are two or more, as Redis writes them. Where BendKV
-  differs: an LTRIM that removes nothing changes no watched key (Redis signals the key
-  anyway), and a DEL of a key not there is logged (BendKV logs every DEL), so a
-  transaction with one may be wrapped in MULTI and EXEC where Redis writes its one other
-  effect alone.
+  connection unwatch. A watched key costs nothing to the commands on other keys
+  (PERFORMANCE.md, section 61). The calls are counted as Redis counts them (a queued
+  command when EXEC runs it, EXEC once). The append-only file has a transaction's
+  effects between a MULTI and an EXEC when they are two or more, as Redis writes them.
+  Where BendKV differs: an LTRIM that removes nothing changes no watched key (Redis
+  signals the key anyway), and a DEL of a key not there is logged (BendKV logs every
+  DEL), so a transaction with one may be wrapped in MULTI and EXEC where Redis writes its
+  one other effect alone.
 - **Pub/Sub:** SUBSCRIBE, UNSUBSCRIBE, PSUBSCRIBE, PUNSUBSCRIBE, SSUBSCRIBE, SUNSUBSCRIBE,
   PUBLISH, SPUBLISH and PUBSUB (CHANNELS, NUMSUB, NUMPAT, SHARDCHANNELS, SHARDNUMSUB,
   HELP), as Redis 7.0.15 runs them. Each name is answered with the client's count of

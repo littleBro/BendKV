@@ -644,6 +644,51 @@ def tget_kx(-V: Data, d: Nat, +t: Trie<V>, x: Hex, +h: U32, +k: String) -> Nat:
     case 1n+p other _:
       0n
 
+# whether the bucket a walk ends at holds an entry: a key whose hash
+# has h's low digits can be in t only there, so an empty one shows that
+# t holds no such key (the server looks its heeded keys up so, by the
+# hashes its requests carry); the walk only reads t
+def tget_hn(-V: Data, d: Nat, +t: Trie<V>, x: Hex, +h: U32) -> Bool:
+  match d t x:
+    case 0n Tip{} _:
+      False{}
+    case 0n other _:
+      True{}
+    case 1n+p Node{c0, c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13, c14, c15} H0{}:
+      tget_hn(V, p, c0, hex(shr4(h)), shr4(h))
+    case 1n+p Node{c0, c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13, c14, c15} H1{}:
+      tget_hn(V, p, c1, hex(shr4(h)), shr4(h))
+    case 1n+p Node{c0, c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13, c14, c15} H2{}:
+      tget_hn(V, p, c2, hex(shr4(h)), shr4(h))
+    case 1n+p Node{c0, c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13, c14, c15} H3{}:
+      tget_hn(V, p, c3, hex(shr4(h)), shr4(h))
+    case 1n+p Node{c0, c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13, c14, c15} H4{}:
+      tget_hn(V, p, c4, hex(shr4(h)), shr4(h))
+    case 1n+p Node{c0, c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13, c14, c15} H5{}:
+      tget_hn(V, p, c5, hex(shr4(h)), shr4(h))
+    case 1n+p Node{c0, c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13, c14, c15} H6{}:
+      tget_hn(V, p, c6, hex(shr4(h)), shr4(h))
+    case 1n+p Node{c0, c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13, c14, c15} H7{}:
+      tget_hn(V, p, c7, hex(shr4(h)), shr4(h))
+    case 1n+p Node{c0, c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13, c14, c15} H8{}:
+      tget_hn(V, p, c8, hex(shr4(h)), shr4(h))
+    case 1n+p Node{c0, c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13, c14, c15} H9{}:
+      tget_hn(V, p, c9, hex(shr4(h)), shr4(h))
+    case 1n+p Node{c0, c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13, c14, c15} H10{}:
+      tget_hn(V, p, c10, hex(shr4(h)), shr4(h))
+    case 1n+p Node{c0, c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13, c14, c15} H11{}:
+      tget_hn(V, p, c11, hex(shr4(h)), shr4(h))
+    case 1n+p Node{c0, c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13, c14, c15} H12{}:
+      tget_hn(V, p, c12, hex(shr4(h)), shr4(h))
+    case 1n+p Node{c0, c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13, c14, c15} H13{}:
+      tget_hn(V, p, c13, hex(shr4(h)), shr4(h))
+    case 1n+p Node{c0, c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13, c14, c15} H14{}:
+      tget_hn(V, p, c14, hex(shr4(h)), shr4(h))
+    case 1n+p Node{c0, c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13, c14, c15} H15{}:
+      tget_hn(V, p, c15, hex(shr4(h)), shr4(h))
+    case 1n+p other _:
+      False{}
+
 # the keys of the bucket a walk ends at that a scan of mode takes at now
 # (bkeys), before acc: eviction's samples read buckets one walk each,
 # which reads the trie lent, as get's do
@@ -1223,6 +1268,12 @@ def has(-V: Data, t: Trie<V>, k: String) -> Bool:
 # first)
 def code.at(-V: Data, +t: Trie<V>, +k: String, +h: U32) -> Nat:
   tget_kx(V, 5n, t, hex(h), h, k)
+
+# whether the bucket of a hash h holds an entry: when it does not, t holds
+# no key whose hash has h's low twenty bits, the digits of the walk
+# (tget_hn)
+def filled.at(-V: Data, +t: Trie<V>, +h: U32) -> Bool:
+  tget_hn(V, 5n, t, hex(h), h)
 
 # the value of k when it is there at now
 def live.at(-V: Data, +t: Trie<V>, +k: String, +h: U32, +now: Nat) -> Maybe<&2, V>:

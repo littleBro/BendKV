@@ -7031,6 +7031,50 @@ instructions per request under callgrind (`make perfcheck`), 90 more than main's
 4,077 and 4,390. Each read of GEO is a form of one word now, and the options a node of
 their own: 3,316, 4,075 and 4,393.
 
+## 61. Clients that wait or watch
+
+**Measured.** GET at pipeline 16 from 20 clients on 100,000 keys, by
+`tools/waiters_bench.sh`: each server on one CPU, as `bench_pairs.sh` pins it, and idle
+clients started after the keys are set and before the GETs, in BLPOP on keys of their own
+or one after WATCH. Thousands of GETs per second: on main, two runs of 200,000 GETs each;
+now and on Redis, the median of five runs of a million (and the share of the first row):
+
+| condition | main | now | Redis 7.0.15 |
+|---|---:|---:|---:|
+| no other client | 957 / 1,136 | 975 | 657 |
+| 1 client in BLPOP | 337 / 315 | 914 (94%) | 701 |
+| 100 clients in BLPOP | 49 / 46 | 903 (93%) | 662 |
+| 1,000 clients in BLPOP | 5.4 / 5.3 | 923 (95%) | 648 |
+| 1 client after WATCH | 324 / 323 | 937 (96%) | 684 |
+
+The machine is a shared VM, and two runs of one condition can be 20% apart (Redis's
+numbers move as much); the medians are what #30's bound of 90% is read against.
+
+**Instructions per request** under callgrind (`tools/callgrind_req.sh`, the same script
+for both builds):
+
+| | GET | SET | last-level misses, GET and SET |
+|---|---:|---:|---:|
+| main, no other client | 3,323 | 4,080 | 2.81, 3.10 |
+| main, 1 client in BLPOP | 13,706 | 15,030 | 3.50, 3.98 |
+| now, no other client | 3,328 | 4,086 | 2.80, 3.11 |
+| now, 100 clients in BLPOP | 3,419 | 4,219 | 2.83, 3.17 |
+
+On main every batch ran the general way, a command at a time, once one client waited;
+with 100 clients in BLPOP its count did not finish in 40 minutes under callgrind. `make
+perfcheck` now counts GET and SET with 100 clients in BLPOP too, and fails when either is
+more than 5% above its count without them in the same run.
+
+**Where it went** (FINDINGS 3zzo). A batch that writes no key a client waits on or
+watches runs the fast way. A batch of GETs, SETs and INCRs alone is cleared by the hashes
+its requests carry, without a command read: reading the commands of a batch gave every
+string of every command a reference count, and the keys and values a SET stored with
+them cost each later GET a word more to read and 0.7 more last-level misses (GET 9.6%
+above its count without waiters, where it is 2.5% now). The end of a group walks the
+chain of the clients that wait only once the earliest end of a wait has passed, and a
+tick makes the set of heeded keys anew only when a client that heeded keys has stopped;
+made at every tick, the set cost more than the checks of the batches.
+
 ## 62. DUMP and RESTORE
 
 **Measured.** Wall time from a request's send to its reply's last byte, one client, one
