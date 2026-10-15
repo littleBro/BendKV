@@ -40,7 +40,11 @@
 # them. Then the append-only file: a
 # random stream, a restart from the file, the keyspace compared; then
 # the file's last entry cut short, as a crash in a write leaves it, a
-# restart that cuts it back, and the keyspace compared again. Then the
+# restart that cuts it back, and the keyspace compared again. Then 20
+# rounds of the server killed (SIGKILL) at a random moment while clients
+# write to it, then started again: each start must hold the databases
+# after a prefix of the commands sent, every acknowledged one among them
+# (tests/crash_test.py). Then the
 # disk failing under the file (tests/fail_io.c injects it): a file that
 # is there but cannot be read must stop the start, and a failed fsync
 # must stop the server, with everysec as with always. Last, the files
@@ -173,6 +177,7 @@ restart() {
 }
 echo "== append-only file"
 restart build/test.aof
+python3 tests/crash_test.py --bin build/bendkv --port "$PORT" --dir build/crash --rounds 20
 echo "== append-only file failures"
 ${CC:-cc} -shared -fPIC -o build/fail_io.so tests/fail_io.c -ldl
 python3 tests/aof_fail_test.py --port "$PORT" --shim build/fail_io.so
