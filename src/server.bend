@@ -3388,8 +3388,8 @@ def trk.ids(+t: Trk) -> List<&2, Nat>:
 
 def trk.clear(t: Trk) -> Trk:
   match t:
-    case TrkOn{tab, +keys, items, ids, rds, pfx, pend, over, mx}:
-      TrkOn{KV.empty(List<&2, Nat>), 0n, 0n, ids, rds, pfx, pend, Nat.add(over, keys), mx}
+    case TrkOn{tab, keys, items, ids, rds, pfx, pend, over, mx}:
+      TrkOn{KV.empty(List<&2, Nat>), 0n, 0n, ids, rds, pfx, pend, over, mx}
     case TrkOf{x}:
       trk.clear(x)
 
@@ -3815,14 +3815,39 @@ def trk.max(+t: Trk) -> Nat:
     case TrkOf{+x}:
       trk.max(x)
 
-# whether the table holds more keys than its limit, while some client
-# tracks
+# whether a tick holds the table to its limit: while some client tracks
+# and the limit is set, as Redis calls trackingLimitUsedSlots
 def trk.over(+t: Trk) -> Bool:
   match t:
-    case TrkOn{tab, +keys, items, +ids, rds, pfx, pend, over, +mx}:
-      Bool.and(Bool.not(List.is_empty(&2, Nat, ids)), Bool.and(Nat.is_lt(0n, mx), Nat.is_lt(mx, keys)))
+    case TrkOn{tab, keys, items, +ids, rds, pfx, pend, over, +mx}:
+      Bool.and(Bool.not(List.is_empty(&2, Nat, ids)), Nat.is_lt(0n, mx))
     case TrkOf{+x}:
       trk.over(x)
+
+# the ticks in a row that found the table over its limit
+def trk.overn(+t: Trk) -> Nat:
+  match t:
+    case TrkOn{tab, keys, items, ids, rds, pfx, pend, +over, mx}:
+      over
+    case TrkOf{+x}:
+      trk.overn(x)
+
+# none, as trackingLimitUsedSlots counts them anew when the table is
+# within its limit
+def trk.rest(t: Trk) -> Trk:
+  match t:
+    case TrkOn{tab, keys, items, ids, rds, pfx, pend, over, mx}:
+      TrkOn{tab, keys, items, ids, rds, pfx, pend, 0n, mx}
+    case TrkOf{x}:
+      trk.rest(x)
+
+def ps.trk.rest(pb: Ps) -> Ps:
+  match pb:
+    case Ps{reg, ev, px, cs, own}:
+      +c = cs
+      Ps{reg, ev, px, cls.trk.put(trk.rest(cls.trk(c)), c), own}
+    case PsOf{p}:
+      ps.trk.rest(p)
 
 # the keys a tick may evict: 100 for each tick in a row over the limit
 def trk.effort(+t: Trk) -> Nat:
@@ -3893,11 +3918,15 @@ def ps.trk.overs(pb: Ps) -> Ps:
     case PsOf{p}:
       ps.trk.overs(p)
 
-def ps.trk.limit.if(on: Bool, +n: Nat, +max: Nat, +r: U32, pb: Ps) -> Ps:
-  match on:
-    case True{}:
+# over its limit, n keys of the table evicted; within it, the ticks in a
+# row over it counted anew (rest: when some were)
+def ps.trk.limit.if(on: Bool, rest: Bool, +n: Nat, +max: Nat, +r: U32, pb: Ps) -> Ps:
+  match on rest:
+    case True{} _:
       ps.trk.overs(iv.ps(iv.evict(n, max, r, iv.of(pb))))
-    case False{}:
+    case False{} True{}:
+      ps.trk.rest(pb)
+    case False{} False{}:
       pb
 
 def ps.trk.limit(+r: U32, pb: Ps) -> Ps:
@@ -3905,7 +3934,7 @@ def ps.trk.limit(+r: U32, pb: Ps) -> Ps:
   +t = ps.trk(p)
   +n = trk.keys(t)
   +max = trk.max(t)
-  ps.trk.limit.if(Bool.and(Nat.is_lt(0n, max), Nat.is_lt(max, n)), Nat.min(Nat.sub(n, max), trk.effort(t)), max, r, p)
+  ps.trk.limit.if(Nat.is_lt(max, n), Nat.is_lt(0n, trk.overn(t)), Nat.min(Nat.sub(n, max), trk.effort(t)), max, r, p)
 
 # Keyspace notifications
 # ----------------------
@@ -8196,8 +8225,9 @@ def group.tick.if(stop: Bool, on: Bool, over: Bool, outs: List<&2, Sigma<&2, &2,
       group.tick(on, over, outs, es, S.srv.tick(srv, ms), ds, ws, up, tx, pb)
 
 # at a tick, the tracking table held to tracking-table-max-keys (Tracking
-# in the actor: its keys picked at random, by the tick's time), while it
-# holds more keys than that
+# in the actor: its keys picked at random, by the tick's time) while it
+# holds more keys than that, and the ticks over it counted anew once it
+# does not (ps.trk.limit)
 def grp.limit.if(on: Bool, +ms: Nat, g: Grp) -> Grp:
   match on g:
     case True{} Grp{outs, es, srv, ds, ws, up, tx, pb}:
