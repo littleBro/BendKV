@@ -61,7 +61,11 @@
 # IDLETIME and FREQ and the evicted event against Redis's, Redis's own
 # tests of the policies on both, and BendKV's warnings, an eviction that
 # goes on alone, one with the append-only file on and one while a rewrite
-# runs.
+# runs. Last, the RDB file (tests/rdb_test.py): files Redis wrote (with
+# LZF and without) and files of the encodings Redis no longer writes,
+# BendKV and Redis started from each; BendKV's SAVE, Redis started from
+# it; SAVE, LASTSAVE, INFO and the saves of FLUSHALL and SHUTDOWN against
+# Redis's; files that do not load, each stopping both starts.
 set -e
 cd "$(dirname "$0")/.."
 PORT=${PORT:-6380}
@@ -218,3 +222,5 @@ echo "== the rewrite of the append-only file"
 python3 tests/rewrite_test.py --bin build/bendkv --bendkv "$PORT" --redis "$((REDIS_PORT + 1))" --dir build/rewrite
 echo "== maxmemory and eviction"
 python3 tests/maxmemory_test.py --bin build/bendkv --bendkv "$PORT" --redis "$((REDIS_PORT + 1))" --dir build/maxmemory
+echo "== the RDB file"
+python3 tests/rdb_test.py --bendkv build/bendkv --dir build/rdb
