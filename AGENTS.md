@@ -24,10 +24,12 @@ Claude Code reads this file only while the repository has no `CLAUDE.md`,
     proof/SPEC.bend    the commands on the bare trie (the bridge's other side)
     proof/PROOF.bend   the proofs: written by machine, checked by Bend and BendTT
     tests/             tests against redis-server, run by tests/run_tests.sh
+                       (tests/README.md lists them)
     tools/             generators (gen_*.py), measurement and CI scripts
                        (tools/README.md lists them)
     bend-patches/      the patches to bendlang/bend@1cce499, in apply.sh's order:
                        the compiler and its runtime are part of the trusted base
+    docs/COMMANDS.md   what each command does, area by area
     docs/FINDINGS.md   what each change found and cost, one section per change
 
 ## Toolchain
@@ -98,5 +100,7 @@ Every pull request passes all of these; CI runs the same.
   `src/server.bend` at once.
 - After the change: a section in `docs/FINDINGS.md` in the existing style (what,
   why, what it cost), `docs/PERFORMANCE.md` when counts or throughput change,
-  README and `docs/COMPATIBILITY.md` when behavior changes. Put a number in one
+  `docs/COMMANDS.md`, README and `docs/COMPATIBILITY.md` when behavior changes (in
+  README: What works for a new command, Where BendKV differs for a difference from
+  Redis), `tests/README.md` for a new test. Put a number in one
   document and link to it from the others rather than copying it.
