@@ -549,7 +549,7 @@ stops reading holds up only its own replies), and from the event loop with
 ```bash
 make smoke     BEND="$B"   # the pure path end to end and the append-only file, no network; fails on any mismatch
 make test      BEND="$B"   # needs redis-server, redis-cli and a C compiler
-make perfcheck BEND="$B"   # instructions per request against a baseline (needs valgrind)
+make perfcheck BEND="$B"   # instructions, misses and prefetches per request against a baseline (needs valgrind)
 make gencheck              # the generated parts (trie, its proofs, the parameter and command tables) are up to date
 make bench     BEND="$B"   # redis-benchmark: BendKV against Redis
 make suite     BEND="$B" REDIS_SRC=../redis   # Redis's own test suite, on Redis and on BendKV (needs tclsh)
