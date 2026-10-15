@@ -32,6 +32,7 @@ LIST's lines cut to their ids, flags and redirects).
 """
 import argparse
 import re
+import select
 import socket
 import sys
 import time
@@ -125,19 +126,24 @@ class Run:
     def settle(self, secs=0.05):
         time.sleep(secs)
 
-    def take(self, label, secs=0.05, ids=False):
+    # a step's bytes: what each client got within secs, and with sender
+    # (a client whose command has a reply) its reply's first bytes too,
+    # however late they come (up to 2 s)
+    def take(self, label, secs=0.05, ids=False, sender=None):
         self.settle(secs)
+        if sender is not None:
+            select.select([sender.sock], [], [], 2)
         self.step += 1
         for c in self.conns:
             got = c.drain()
             if got:
                 self.out.append("%d %s %s: %r" % (self.step, label, c.name, self.norm(got, ids)))
 
-    def do(self, c, *args, secs=0.05):
+    def do(self, c, *args, secs=0.05, reply=False):
         c.send(*args)
         words = [self.named(a) if re.fullmatch(r"\d+", str(a)) and int(a) in self.names else str(a) for a in args]
         ids = len(args) > 1 and str(args[0]).upper() == "CLIENT" and str(args[1]).upper() in ("GETREDIR", "TRACKINGINFO", "ID")
-        self.take(c.name + " " + " ".join(words), secs, ids)
+        self.take(c.name + " " + " ".join(words), secs, ids, c if reply else None)
 
     def close(self):
         for c in self.conns:
@@ -180,7 +186,7 @@ def errors(r):
                      ["CLIENT", "TRACKING", "on", "BCAST", "PREFIX", "ab"], ["CLIENT", "TRACKING", "on", "BCAST", "PREFIX", "c"],
                      ["CLIENT", "TRACKING", "on", "BCAST"], ["CLIENT", "TRACKINGINFO"], ["CLIENT", "TRACKING", "on"],
                      ["CLIENT", "GETREDIR"], ["CLIENT", "TRACKING", "off"], ["CLIENT", "TRACKINGINFO"]):
-            r.do(c, *args, secs=0.01)
+            r.do(c, *args, secs=0.01, reply=True)
 
 
 def self_resp3(r):
@@ -463,9 +469,9 @@ def expiry(r):
     a, b = r.conn("a", 3), r.conn("b")
     r.do(b, "FLUSHALL")
     r.do(a, "CLIENT", "TRACKING", "on")
-    r.do(b, "SET", "ex", "1", "PX", "100")
+    r.do(b, "SET", "ex", "v", "PX", "400")
     r.do(a, "GET", "ex")
-    r.take("expired", 0.5)
+    r.take("expired", 0.8)
     tracking_info(r)
 
 
