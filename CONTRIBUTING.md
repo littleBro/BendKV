@@ -5,7 +5,7 @@ what runs is what is proved, and what is not proved is tested against Redis.
 
 ## Setup
 
-Build the patched Bend once (see [README.md](README.md#building)):
+Build the patched Bend once (see [README.md](README.md#building-and-running)):
 
 ```bash
 git clone https://github.com/bendlang/bend ../bend-patched
@@ -79,6 +79,10 @@ sends about a million of them to main's server.
 - **Bend constraints** worth knowing: a function can call only functions defined above
   it (except `@unsafe` ones), there is no mutual recursion, recursion is structural,
   and `match` takes a parameter, not a computed value. OVERVIEW.md lists more.
+- **Documentation.** What a command does goes in [docs/COMMANDS.md](docs/COMMANDS.md),
+  under its area. README's [What works](README.md#what-works) lists the commands, and its
+  [Where BendKV differs](README.md#where-bendkv-differs) every difference from Redis
+  7.0.15, one line each. A new test gets its row in [tests/README.md](tests/README.md).
 
 ## Style
 

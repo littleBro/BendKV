@@ -3856,7 +3856,7 @@ the same way as before: pairs on three code layouts, callgrind, `make perfcheck`
 Everything removed is kept in the branch
 [`archive/shards`](https://github.com/littleBro/BendKV/tree/archive/shards): shards can
 be brought back into the finished project in the next optimization cycle. From here on,
-work goes not on speed but on features (README, "What next").
+work goes not on speed but on features (OVERVIEW.md, "What next").
 
 **What was removed.**
 - *Shards.* `shard.bend` and `wire.bend`; in `server.bend`, the link of a connection to
@@ -3982,7 +3982,7 @@ does not show in time. `tools/perf_baseline.txt` was rewritten for the new build
 ## 15. Sessions: the connection's state on the request's path
 
 The step toward replacing Redis with no changes to the client began with the commands of
-a connection (README, section "Sessions"; docs/FINDINGS.md, section 3m): the
+a connection (docs/COMMANDS.md; docs/FINDINGS.md, section 3m): the
 connection's state (`S.Conn`) travels to the actor with each batch and comes back with
 the replies, the actor keeps the server's state (`S.Srv`) next to the database, and a
 batch of database commands only, from a ready client, goes by the former fast path. The
@@ -4019,7 +4019,7 @@ pipeline 1.01 and 1.01; all within the noise. `tools/perf_baseline.txt` did not 
 
 ## 16. INFO: state that cost a quarter of a request
 
-INFO (README, section "Commands"; docs/FINDINGS.md, section 3p) keeps its own account
+INFO (docs/COMMANDS.md; docs/FINDINGS.md, section 3p) keeps its own account
 next to the server's state: the facts of the start, the shell's last facts, the counts of
 commands and bytes, the instantaneous rates, the size of the append-only file. The first
 version passed all tests but cost +28% instructions on GET and +24% on SET at
@@ -4070,7 +4070,7 @@ of 1,746.
 
 ## 17. COMMAND: one word in every command
 
-COMMAND (README, section "Commands"; docs/FINDINGS.md, section 3q) answers with Redis's
+COMMAND (docs/COMMANDS.md; docs/FINDINGS.md, section 3q) answers with Redis's
 descriptions, which lie in BendKV as ready data, and does not get onto the request's
 path. But the first version cost +0.9% instructions per request: COMMAND's subcommands
 went to the session as a parsed request of two words, and the width of a datatype is the
@@ -4092,7 +4092,7 @@ subcommands are still found by the parser, before the password check, as in Redi
 
 ## 18. Statistics per command: the request's code in the high byte of the hash
 
-The statistics per command in INFO (README, section "Commands"; docs/FINDINGS.md,
+The statistics per command in INFO (docs/COMMANDS.md; docs/FINDINGS.md,
 section 3s) count as Redis 7.0.15 does: for each command and subcommand, the calls, the
 calls refused before running, and the ones that failed while running; error replies by
 code. The work is laid out so that the request's path hardly pays. What to count a
@@ -4158,7 +4158,7 @@ here.
 
 ## 19. SCAN and RANDOMKEY; the statistics codes as twelve-bit words
 
-SCAN and RANDOMKEY (README, section "Commands"; docs/FINDINGS.md, section 3t) walk the
+SCAN and RANDOMKEY (docs/COMMANDS.md; docs/FINDINGS.md, section 3t) walk the
 trie in the order of paths: the cursor is the number of the next bucket of 2^20, a call
 reads buckets whole until it has COUNT keys, and skips a whole subtree before the cursor
 without entering it. RANDOMKEY picks as `dictGetFairRandomKey` in Redis does: from a
