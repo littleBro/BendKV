@@ -3948,7 +3948,8 @@ random numbers.
 **Where BendKV differs.** The same maxmemory holds another number of keys, since a key
 takes other bytes in BendKV's heap than in Redis's allocator, and the trie's nodes stay
 (above). A word of use is shared by keys whose hashes have the same low twenty bits, in
-any database, and no delete clears it: a new key may find an old key's word. A request
+any database, and no delete clears it: a new key may find an old key's word, unless
+RESTORE made it (section 3zzx). A request
 marks its first key alone (MGET's others, MSET's and DEL's are not marked), before its
 batch runs, whether the key is there or not, and a command queued in a transaction marks
 its key as it is queued. Redis marks a key as a command finds it, and not while a child
@@ -5140,7 +5141,8 @@ of all that (Jones's polynomial, reflected, from 0), eight bytes, the low first.
   bits), the other option left aside. RESTORE with either is a command of the session
   (`SRestore`): the session runs its update on its database, and the server, which runs
   such a command one at a time, sets the word once the update restored the key, as its
-  effects show, in MULTI too.
+  effects show, in MULTI too. Under an LFU policy, the mark of every RESTORE has made the
+  word a new value's before it runs (section 3zzx).
 
 The append-only file logs a RESTORE as the RESTORE of its payload with REPLACE (the key
 may be there when the file loads, its time passed), and ABSTTL with the time it gave the
@@ -5193,6 +5195,22 @@ INFO's statistics, and values of up to 5 MB and 100,000 elements: 3,167 checks, 
 different. `tests/aof_redis_test.py` takes RESTORE both ways, with REPLACE, ABSTTL,
 IDLETIME and FREQ, times past, keys whose time had passed and a transaction.
 
+**What the tests found after the merge.** Run with other seeds, the random payloads found
+two things. One stopped the server: an intset whose header gave a width of 0x03000008 and
+a count of 0x27000000. The check that the intset's bytes hold its count of values of
+that width multiplied the two before the check that the width is 2, 4 or 8, and the
+product passed 2^48, where a runtime's Nat stops (`bend: a Nat past the largest
+immediate`). A hash's count near 2^48 doubled past it the same way. The width in the
+product is now cut to 8, and a hash's count to the bytes left, as each of its strings
+takes one at least; no other number read from a payload is multiplied or added past
+2^48 (a length read as 64 bits stops below 2^40 times 256). The other was a count whose
+byte has the two high bits of an encoded string's kind: Redis reads a count with
+`rdbLoadLen(rdb, NULL)`, which takes such a byte's six other bits for the count, where
+BendKV refused the payload; it reads them so now. `tests/dump_test.py` now also restores
+each payload with each of its first 16 bytes on overwritten by numbers at their
+extremes, so that its headers' lengths, counts and widths pass 2^32 and 2^48, on both
+servers.
+
 **Redis's suite.** unit/dump passes the 11 of its 12 tests that Redis passes in this mode
 (1 before; the twelfth uses DEBUG, which Redis refuses here), and unit/type/list its two
 tests of a ziplist of various encodings, which restore one (216 of its 218).
@@ -5204,6 +5222,61 @@ hashes are those of the parameters' defaults). 1,273 of the 1,677 tests Redis pa
 suites: redis-py's 12 tests of DUMP and RESTORE pass, in RESP2 and in RESP3, and
 go-redis's 3, which leaves 2,513 of the 2,753 tests Redis passes in redis-py and 408 of
 460 in go-redis.
+
+## 3zzx. The word of use of a key RESTORE makes
+
+**What failed.** After DUMP and RESTORE merged, `make test` failed in CI on three runs of
+pull requests (#57 twice, #58 once) at one check of `tests/dump_test.py`, and passed on
+main's run: OBJECT FREQ of a key that RESTORE had just made under `allkeys-lfu`, with
+IDLETIME alone (`lfu3`) or no option (`lfu4`), was 1 on BendKV and 5 on Redis. On fresh
+servers the test passed every time, and after the servers had run five minutes too, so the
+time since the start was not the cause.
+
+**Why.** A key's word of use is one of 2^20, by the low twenty bits of its hash (section
+3zw): keys share it, and no delete clears it. Before a batch runs, each request marks its
+key (`use.lfu`). Under an LFU policy, a word never set becomes a new value's, a counter of
+5 at the minute; any other word is decayed by the minutes since its last decay and then
+stepped as a use. Most words in the table are LRU seconds, which every other policy
+writes: read as an LFU minute and counter, such a word nearly always decays to 0, and the
+step makes it 1 (another key's LFU word gives that key's counter, less one a minute,
+stepped). RESTORE's FREQ sets the word once the key is restored (section 3zzu), but
+without FREQ the word stayed as the mark left it. In `make test`, 27 test files run on the
+same server before `tests/dump_test.py`, and their keys leave words in much of the table,
+so whether `lfu3`'s or `lfu4`'s word had been another key's depended on the test's random
+names. Redis makes RESTORE's value new, with a counter of 5 at the minute, whatever key
+had the name before. A million SETs of random keys on a fresh server, then FLUSHALL, then
+`tests/dump_test.py`: 4 runs of 4 failed, at `lfu3`, `lfu4` or both, 1 against 5 each
+time.
+
+**What runs now.** Under an LFU policy, the mark of a RESTORE gives its key's word a
+counter of 5 at the minute (`use.lfu.word`), whatever word is there, as Redis makes a new
+value; FREQ then sets the word as before, and IDLETIME, which an LFU policy ignores,
+leaves it at 5. The mark tells a RESTORE by its request's hash, whose high twelve bits the
+parser writes with the call's code (`R.stat.mark.restore`, which `tools/gen_commands.py`
+now generates with GET's, SET's and INCR's). Under any other policy a mark already writes
+the second of now, whatever word is there. No other command's mark changes.
+
+**Where BendKV differs.** The mark comes before the command, so a RESTORE that fails makes
+the word new too. BUSYKEY (the key there, no REPLACE) sets the counter of the key that is
+there to 5, where Redis's lookup of that key steps its counter as a read does (after SET
+and DUMP, Redis 6 and BendKV 5); with REPLACE, a time or a payload refused leaves Redis's
+word as it was, where BendKV's becomes 5. A RESTORE queued in a transaction marks as it is
+queued (section 3zw). Other commands that make a key, SET for one, still find the word
+another key left.
+
+Two other ways were left aside. Running every RESTORE as a command of the session
+(`SRestore`) and setting the word from its effects, as IDLETIME and FREQ do, would be
+exact for a RESTORE that fails too. But the RESTORE the parser reads would no longer be
+the `Upd` that a logged RESTORE must parse back to (`restore_args`), and a batch of
+RESTOREs would run the general way. Sending a batch with a RESTORE the general way, and
+setting the word after it there, would add a test of every request to the split of every
+batch (`unzip` in `src/batch.bend`).
+
+**Tests.** `tests/dump_test.py` now makes each key it restores under an LFU policy, and
+deletes it, under `allkeys-lru` first, so that RESTORE finds an LRU second in its word at
+every run. With main's server that fails at `lfu3` and `lfu4` at every run (3 of 3 on
+fresh servers, 1 against 5); with this change it passes, on fresh servers (2 of 2) and
+after the million random SETs above (3 of 3).
 
 ## 4. Where a request's time goes, and hiding the memory waits
 

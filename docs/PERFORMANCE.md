@@ -7077,11 +7077,47 @@ add walks.
   375 million, the checksum 137 million, the payload's bytes put one before another 122
   million (`str_append`).
 
-**What is left.** The checksum a byte at a time through a table of 256, the String read
-by index through a window of one chunk, as a long request's parse reads it (section 60);
-`count_upto` a chunk at a time (`String.length`), which every request of a large value
-pays, not RESTORE's alone; and a sorted set's tree made at once from its elements in
-order, as a balanced tree of them, with no path copied and dropped.
+**What changed after.** Three changes, each where the profile above pointed:
+
+- `count_upto` takes a piece's length a chunk at a time (`String.length`), at most the
+  bytes the request still needs: every request of a large value paid the walk, not
+  RESTORE's alone.
+- The checksum reads its bytes by index (`String.code_at`) in windows of 2,048
+  (`crc.run`, `crc.in`), where the walk of the String by its characters made a view of
+  each.
+- A sorted set whose elements come in order, as a listpack keeps them, or in reverse
+  order, as a skiplist is dumped from the greatest, is made into a tree at once
+  (`zel.build`): as balanced as a tree of its size can be, each node made once, by a walk
+  with a list of jobs (build a side of n elements, take a root, join), since Bend has
+  no mutual recursion and a match cannot take a computed pair apart. Elements in any
+  other order still go in one at a time.
+
+Instructions per command (callgrind, one client, one request at a time; each RESTORE
+with REPLACE over the value the one before restored, whose drop it counts):
+
+| | before | after |
+|---|---:|---:|
+| SET of a string of 1 MB | 83,710,592 | 943,865 |
+| DUMP of it | 97,252,076 | 37,732,010 |
+| RESTORE of it | 189,443,609 | 38,268,042 |
+| DUMP of a list of 100,000 | 420,603,584 | 375,841,656 |
+| RESTORE of it | 331,074,412 | 219,017,676 |
+| DUMP of a hash of 100,000 | 334,012,153 | 257,025,410 |
+| RESTORE of it | 597,215,266 | 397,064,560 |
+| DUMP of a set of 100,000 | 164,445,704 | 125,952,449 |
+| RESTORE of it | 403,089,684 | 306,060,286 |
+| DUMP of a sorted set of 100,000 | 375,155,983 | 291,961,522 |
+| RESTORE of it | 2,378,826,476 | 509,478,630 |
+
+GET, SET and INCR take 3,308, 4,067 and 4,384 instructions per request after the change
+(`make perfcheck`; 3,316, 4,075 and 4,391 before it, in the same run).
+
+**What is left.** The checksum takes 36 instructions a byte, two steps of four bits
+through a table of 16. DUMP writes its payload a few bytes at a time, each put before the
+rest (`str_append`: 1,200 instructions an element of the sorted set), and works out each
+element's integer form twice. RESTORE with REPLACE drops the value it replaces, about
+1,000 instructions an element of a large one, as a DEL of it does; and a set's, hash's or
+sorted set's trie of its members is made one member at a time.
 
 **The other commands.** `make perfcheck`: GET 3,316, SET 4,076 and INCR 4,392
 instructions per request (3,316, 4,075 and 4,393 on main).
