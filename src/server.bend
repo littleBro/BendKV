@@ -2402,6 +2402,8 @@ def ek.upd(+j: Nat, +k: String, op: R.UpdOp) -> List<&2, Ek>:
       [EkW{j, k, "pfadd", ev.str()}]
     case R.UHll{h}:
       Nil{}
+    case R.URestore{p, t, rep, ac}:
+      Nil{}
 
 # DEL's keys, each deleted
 def ek.dels(+j: Nat, ks: List<&2, String>) -> List<&2, Ek>:
@@ -2480,6 +2482,34 @@ def ek.geo(m: Maybe<&2, String>, +kind: Nat, +j: Nat) -> List<&2, Ek>:
     case None{}:
       Nil{}
 
+# RESTORE's events, from its effects (es): del when it deleted its key (a
+# time already past, with REPLACE: ek.del.first); when it restored the
+# key, new and restore, with REPLACE (Redis deletes the key it finds,
+# its time passed or not, and adds the new one), else [expired] new
+# restore (Redis's lookup of the key finds its time passed)
+def ek.restore.of(del: Bool, rep: Bool, +j: Nat, +k: String) -> List<&2, Ek>:
+  match del rep:
+    case True{} _:
+      [EkD{j, k}]
+    case False{} True{}:
+      [EkA{j, k, "new", ev.n()}, EkA{j, k, "restore", ev.g()}]
+    case False{} False{}:
+      [EkW{j, k, "restore", ev.g()}]
+
+def ek.del.first(+es: List<&2, A.Ent>) -> Bool:
+  match es:
+    case Con{A.EOne{A.EDb{x, R.Del{ks}}}, rest}:
+      True{}
+    case _:
+      False{}
+
+def ek.restore(op: R.UpdOp, +j: Nat, +k: String, +es: List<&2, A.Ent>) -> List<&2, Ek>:
+  match op:
+    case R.URestore{p, t, +rep, ac}:
+      ek.restore.of(ek.del.first(es), rep, j, k)
+    case _:
+      Nil{}
+
 # what a command did to each key it wrote (j: its database), in order
 def ek.base(+c: R.Cmd, +j: Nat, +pre: R.Ds, +es: List<&2, A.Ent>) -> List<&2, Ek>:
   match c:
@@ -2517,8 +2547,12 @@ def ek.base(+c: R.Cmd, +j: Nat, +pre: R.Ds, +es: List<&2, A.Ent>) -> List<&2, Ek
       [EkS{j, d, "zrangestore", ev.z()}]
     case R.ZMPop{+ks, +max, n}:
       ek.popped(ek.first(ks, j, pre), j, ek.zpop(max), ev.z())
+    case R.Upd{+k, R.URestore{p, t, rep, ac}}:
+      ek.restore(R.URestore{p, t, rep, ac}, j, k, es)
     case R.Upd{+k, +op}:
       ek.upd(j, k, op)
+    case R.Own{R.SRestore{+k, op}}:
+      ek.restore(op, j, k, es)
     case R.Own{R.SSPop{+k, a}}:
       [EkW{j, k, "spop", ev.s()}]
     case R.Own{R.SSortStore{k, o}}:
@@ -2797,6 +2831,68 @@ def bg.obj(+c: R.Cmd, g: LRun) -> LRun:
     case _:
       g
 
+# RESTORE with IDLETIME or FREQ (R.SRestore; ac: 1 + f for FREQ f, 257 +
+# s for IDLETIME, R.rs.idle.at): run with its effects apart (e1, then put
+# before es) and, when it restored its key (its effect is the RESTORE's),
+# the key's word set as Redis's objectSetLRUOrLFU sets a value's 24 bits:
+# under an LFU policy FREQ's counter at the minute of now; under any other
+# IDLETIME's second, s seconds before the LRU clock's second c, or, past
+# the clock's 0, that less one, mod 2^24 (lru_abs + LRU_CLOCK_MAX, cut to
+# 24 bits: s of 2^24 and more keeps its remainder mod 2^24 alone); the
+# other option is ignored
+def bg.rs.made(+es: List<&2, A.Ent>) -> Bool:
+  match es:
+    case Con{A.EOne{A.EDb{x, R.Upd{k, R.URestore{p, t, rep, ac}}}}, rest}:
+      True{}
+    case _:
+      False{}
+
+def bg.rs.lru(+s: Nat, +now: Nat) -> U32:
+  +c = U32.to_nat(U32.and(S.acc.secs(now), 16777215))
+  +l = Bool.pick(Nat, Nat.is_lt(s, 16777216n), Bool.pick(Nat, Nat.is_le(s, c), Nat.sub(c, s), Nat.sub(Nat.add(c, 16777215n), s)), Nat.mod(Nat.sub(Nat.add(c, 33554431n), s), 16777216n))
+  U32.or(U32.from_nat(l), 16777216)
+
+# the word, 0 for none
+def bg.rs.word(+lfu: Bool, +ac: Nat, +now: Nat) -> U32:
+  match lfu:
+    case True{}:
+      Bool.pick(U32, Bool.and(Nat.is_lt(0n, ac), Nat.is_le(ac, 256n)), S.lfu.word(S.acc.min(now), U32.from_nat(Nat.sub(ac, 1n))), 0)
+    case False{}:
+      Bool.pick(U32, Nat.is_lt(256n, ac), bg.rs.lru(Nat.sub(ac, 257n), now), 0)
+
+def bg.cell.of(done: Bool, g: LRun) -> LRun:
+  match done:
+    case True{}:
+      g
+    case False{}:
+      g
+
+# g after a write of w in the cell of hash h, when set (its token
+# compared, so that the write is made)
+def bg.cell.if(set: Bool, +h: U32, +w: U32, g: LRun) -> LRun:
+  match set:
+    case True{}:
+      bg.cell.of(U32.is_eq(Mem.touch(0, h, w), 0), g)
+    case False{}:
+      g
+
+def bg.rs.cell(+made: Bool, +key: String, +w: U32, g: LRun) -> LRun:
+  bg.cell.if(Bool.and(made, U32.is_ne(w, 0)), KV.hash(key), w, g)
+
+def bg.restored(+key: String, +ac: Nat, es: List<&2, A.Ent>, g: LRun) -> LRun:
+  match g:
+    case LRun{rs, +e1, conn, srv, +ds, ws, up, tx, +pb}:
+      bg.rs.cell(bg.rs.made(e1), key, bg.rs.word(ps.lfu(pb), ac, R.ds.now(ds)), LRun{rs, List.append(&2, A.Ent, e1, es), conn, srv, ds, ws, up, tx, pb})
+    case LHeld{h}:
+      LHeld{h}
+
+def bg.cmd.run(held: Bool, +ok: Bool, +k: S.Role, +c: R.Cmd, +code: Nat, rs: List<&2, R.Reply>, es: List<&2, A.Ent>, +conn: S.Conn, +srv: S.Srv, ds: R.Ds, ws: Waits, up: List<&2, Up>, tx: Tx, pb: Ps) -> LRun:
+  match c:
+    case R.Own{R.SRestore{+key, R.URestore{p, t, rep, +ac}}}:
+      bg.restored(key, ac, es, bg.run(held, ok, k, c, code, rs, Nil{}, conn, srv, ds, ws, up, tx, pb))
+    case _:
+      bg.run(held, ok, k, c, code, rs, es, conn, srv, ds, ws, up, tx, pb)
+
 # one command, unless a QUIT before it dropped it
 def bg.one.q(q: Bool, +c: R.Cmd, +code: Nat, rs: List<&2, R.Reply>, es: List<&2, A.Ent>, +conn: S.Conn, +srv: S.Srv, ds: R.Ds, ws: Waits, up: List<&2, Up>, tx: Tx, pb: Ps) -> LRun:
   match q:
@@ -2805,7 +2901,7 @@ def bg.one.q(q: Bool, +c: R.Cmd, +code: Nat, rs: List<&2, R.Reply>, es: List<&2,
     case False{}:
       +k = S.kind(c)
       +ok = S.may(k, conn, srv)
-      bg.obj(c, bg.run(gen.muted(ok, code, conn), ok, k, c, code, rs, es, conn, srv, ds, ws, up, tx, pb))
+      bg.obj(c, bg.cmd.run(gen.muted(ok, code, conn), ok, k, c, code, rs, es, conn, srv, ds, ws, up, tx, pb))
 
 def bg.one(+c: R.Cmd, +code: Nat, g: LRun) -> LRun:
   match g:
