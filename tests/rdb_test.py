@@ -765,6 +765,75 @@ def shutdowns(a, root):
         same("shutdown line %d" % i, x, y)
 
 
+def races_on(exe, root, log):
+    """the transcript of another client's CLIENT UNBLOCK or CLIENT KILL of
+    a client whose SAVE (or failing SHUTDOWN SAVE) has run, in the same
+    group of requests: twelve SORT ... ALPHA of a list of 100,000 hold the
+    server while both come, so that BendKV runs them in one group. Redis
+    saves within the command: its client is never blocked, UNBLOCK
+    answers 0, and the save is made before a KILL can reach it"""
+    def busy(s):
+        c = s.conn()
+        c.send([cmd("SORT", "bl", "ALPHA", "LIMIT", 0, 1)] * 12)
+        time.sleep(0.1)
+        return c
+
+    def done(c):
+        for _ in range(12):
+            c.reply()
+        c.sock.close()
+
+    for action in ("unblock", "kill"):
+        name = "race-" + action
+        s = Srv(exe, os.path.join(root, name), "--save", "")
+        run(s.conn(), "RPUSH", "bl", *[(i * 7919) % 100003 for i in range(100000)])
+        a, b = s.conn(), s.conn()
+        ida = run(a, "CLIENT", "ID")[1]
+        c = busy(s)
+        a.send([cmd("SET", "newkey", 1), cmd("SAVE")])
+        time.sleep(0.05)
+        b.send([cmd("CLIENT", "UNBLOCK", ida) if action == "unblock" else cmd("CLIENT", "KILL", "ID", ida)])
+        done(c)
+        got = []
+        for _ in range(2):
+            try:
+                got.append(a.reply())
+            except (EOFError, ConnectionResetError):
+                got.append("closed")
+        log("6 %s" % action, got, b.reply(), talk(s.port, [["SHUTDOWN", "NOSAVE"]]), s.exit())
+        s = Srv(exe, os.path.join(root, name), "--save", "")
+        log("6 %s restart" % action, talk(s.port, [["GET", "newkey"]]), talk(s.port, [["SHUTDOWN", "NOSAVE"]]), s.exit())
+    # a SHUTDOWN SAVE whose save fails, its client unblocked by another
+    s = Srv(exe, os.path.join(root, "race-shut"), "--save", "")
+    os.mkdir(os.path.join(root, "race-shut", "temp-%s.rdb" % s.pid()))
+    run(s.conn(), "RPUSH", "bl", *[(i * 7919) % 100003 for i in range(100000)])
+    a, b = s.conn(), s.conn()
+    ida = run(a, "CLIENT", "ID")[1]
+    c = busy(s)
+    a.send([cmd("SHUTDOWN", "SAVE")])
+    time.sleep(0.05)
+    b.send([cmd("CLIENT", "UNBLOCK", ida)])
+    done(c)
+    log("6 shutdown unblock", a.reply(), b.reply(), s.p.poll(), talk(s.port, [["SHUTDOWN", "NOSAVE"]]), s.exit())
+
+
+def races(a, root):
+    """CLIENT UNBLOCK and CLIENT KILL of a client whose SAVE ran, on both"""
+    outs = []
+    for name, exe in (("bendkv", a.bin), ("redis", a.redis)):
+        lines = []
+        try:
+            races_on(exe, os.path.join(root, "race", name), lambda *x: lines.append(" ".join(repr(v) for v in x)))
+        except Exception as e:
+            fail("the races on %s: %r" % (name, e), traceback.format_exc()[-800:])
+            lines.append("EXCEPTION %r" % (e,))
+        outs.append(lines)
+    for i in range(max(len(outs[0]), len(outs[1]))):
+        x = outs[0][i] if i < len(outs[0]) else "<none>"
+        y = outs[1][i] if i < len(outs[1]) else "<none>"
+        same("race line %d" % i, x, y)
+
+
 def corrupt(a, root):
     """files that do not load, and two that load on Redis alone"""
     d = os.path.join(root, "bad", "src")
@@ -904,7 +973,7 @@ def main():
     shutil.rmtree(root, ignore_errors=True)
     os.makedirs(root)
     try:
-        for part in (redis_writes, lzf_values, written_here, bendkv_writes, scenarios, unchecked, shutdowns, corrupt, short_form):
+        for part in (redis_writes, lzf_values, written_here, bendkv_writes, scenarios, unchecked, shutdowns, races, corrupt, short_form):
             b0 = bad
             part(a, root)
             print("%s %s" % ("OK:  " if bad == b0 else "FAIL:", " ".join(part.__doc__.split())))

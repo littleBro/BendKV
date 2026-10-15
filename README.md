@@ -537,7 +537,10 @@ translation stays in the trusted base.
   the save points (BendKV's default `save` is empty, where Redis's is `3600 1 300 100 60
   10000`, and its start warns of save points set), nor on SIGTERM or SIGINT (above);
   `rdb_changes_since_last_save` stays 0; no LZF written; no IDLE or FREQ written, and
-  those read set no word of use; the start reads the whole file before it loads it, and
+  those read set no word of use; SAVE's client waits through the rest of its group, so
+  that the others in it see it blocked, the commands after SAVE in its pipeline run in a
+  group of their own, the file holds the databases as the group left them, and SAVE's
+  call time leaves the save out; the start reads the whole file before it loads it, and
   takes several times Redis's time (PERFORMANCE.md, section 67; FINDINGS.md, section
   3zzzc).
 

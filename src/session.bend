@@ -564,6 +564,16 @@ def srv.rdb.flush(+s: Srv) -> Bool:
     case Srv{pass, cfg, +info, mm}:
       I.info.rdb.flush(info)
 
+def srv.rdb.owed(+s: Srv) -> Bool:
+  match s:
+    case Srv{pass, cfg, +info, mm}:
+      I.info.rdb.owed(info)
+
+def srv.rdb.paid(s: Srv) -> Srv:
+  match s:
+    case Srv{pass, cfg, info, mm}:
+      Srv{pass, cfg, I.info.rdb.paid(info), mm}
+
 def srv.rdb.shutting(s: Srv, +on: Bool) -> Srv:
   match s:
     case Srv{pass, cfg, info, mm}:

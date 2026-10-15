@@ -6004,6 +6004,27 @@ own (`grp.saved`). The save is as late as the group's last command: the commands
 other clients in the group are in the file, which they may be, as they came while SAVE
 ran; the commands after SAVE in its own pipeline are not.
 
+A client that waits for a save is in the chain where other clients' commands can reach
+it, which Redis's never is. The first version let them undo the save:
+
+- CLIENT UNBLOCK of SAVE's client took it out of the chain, answered it as unblocked
+  (`:0`, or `-UNBLOCKED` with ERROR), answered UNBLOCK `:1`, and no save was made.
+- CLIENT KILL of it dropped the waiter, and with it the save, which the shell made only
+  while a waiter asked for one (`waits.save.any`).
+
+The adversarial review of the pull request found both: a write before SAVE was lost
+after a restart, where Redis keeps it. Now:
+
+- CLIENT UNBLOCK answers 0 for a client that waits for a save (`waits.saving.is`), as
+  for one the pause holds.
+- SAVE owes the save when it runs (the account's `owed`, set by `rdb.save`), and the
+  shell saves what is owed (`S.srv.rdb.owed`), whoever still waits, then clears it.
+
+`tests/rdb_test.py` holds the server with twelve SORT ... ALPHA so that both clients
+come in one group: UNBLOCK and KILL of SAVE's client, and UNBLOCK of a SHUTDOWN SAVE
+whose save fails. Each transcript, and the key after a restart, is Redis's; without the
+fix four of its five lines differ.
+
 **SHUTDOWN and FLUSHALL.** SHUTDOWN saves with SAVE, or with save points and without
 NOSAVE, as `finishShutdown` does: "User requested shutdown...", a rewrite that runs
 stopped, the append-only file synced, "Saving the final RDB snapshot before exiting.",
@@ -6105,6 +6126,20 @@ pass.
   exits 0 when that report finds the file whole (a module's value of type 7, which the
   report can skip), where BendKV exits 1.
 - A time at or past 10^14 ms (the year 5138) gives a key none, as everywhere in BendKV.
+- While a client waits for a save, the other clients of its group see it waiting:
+  `blocked_clients:1` in INFO and `flags=b cmd=save` in CLIENT LIST, where Redis's SAVE
+  never blocks. INFO's `rdb_saves` counts the SAVE before LASTSAVE moves.
+- SAVE splits its own pipeline: the commands after it run in a group of their own, after
+  the save, so another client's command can come between them (a WATCH before SAVE and
+  an EXEC after it can see a key another client wrote), which Redis's SAVE cannot let
+  happen.
+- The file holds the databases as the group left them, not as they were at SAVE (above):
+  a SHUTDOWN SAVE and another client's FLUSHALL in one group give Redis a file of the
+  keys and BendKV an empty one. The databases are values that do not change, so the
+  save could take them at SAVE's place in the group; that is left for later.
+- SAVE's call time does not hold the save, which runs after the group: no SLOWLOG entry
+  and a few microseconds in `cmdstat_save`, where Redis counts the whole save.
+- Two SAVEs in one group make one file ("DB saved on disk" once), counted twice.
 
 **Tests.** `tests/rdb_test.py`, in `make test` (and the issue's own check, `python3
 tests/rdb_test.py --bendkv build/bendkv`), runs each case on a redis-server and a BendKV
