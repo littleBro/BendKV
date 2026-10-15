@@ -6089,6 +6089,12 @@ The methods are in [`tools/README.md`](../tools/README.md). The lessons:
   constant is allocated statically, and then no match on that constructor anywhere in
   the program rebuilds a node in place: one constant root node made SET 29% more
   expensive (section 3c).
+- **A node wider than 64 words is copied whole at every match.** The fifth patch
+  rebuilds a matched node in place only up to 64 words; a wider one is copied into a
+  buffer and written back, all of it, each time. Adding fields to a record that is
+  matched once per request can cross that line without a word from the compiler:
+  `Info` did, and got back under it by moving parts into nodes of their own
+  (section 3zzz).
 - **clang 18 ignores `preserve_none` without a word,** and Bend's runtime is built
   around it: 8.5–9.8% more instructions. Bend's driver uses plain `clang` unless `CC`
   is set, and on Ubuntu 24.04 that is clang 18. The Makefile sets `clang-19`.
