@@ -5974,9 +5974,12 @@ entry by entry as the shell runs it. `A.start(s, n)` is what it makes of the fil
 read whole, from `A.load`, `A.untx` and `A.checked`, the functions the laws `aof_load`,
 `recover`, `recover_cut`, `load_cut` and `checked_replay` are about. The law holds for
 any windows, so for those the reads give, whatever their lengths: the laws about the
-whole file are about the start that reads it in windows. It is stated of the start's
-verdict, its count and what it leaves, not of its databases alone, so that the cut, the
-revert and the refusal are the same too.
+whole file are about the start that reads it in windows. With `checked_replay`, when
+the check refuses no entry, the databases the start builds are those `A.restore` gives
+of the file, the function `recover` and `recover_cut` are about, and the entries it
+reverts, written again, then what follows them, are what `A.restore` leaves. The law is
+stated of the start's verdict, its count and what it leaves, not of its databases
+alone, so that the cut, the revert and the refusal are the same too.
 
 **The proof** (PROOF.bend: Windows, 1,045 lines).
 
@@ -6056,12 +6059,14 @@ them. The databases are the same. README.md and COMPATIBILITY.md list it.
   patch that would `madvise` away the pages of free nodes past a threshold, which the
   start no longer needs.
 - An RDB file loaded at the start (pull request #72) is read whole, and its checksum is
-  computed over all of it. To read it in windows, its loader would need a state it can
-  resume between entries (the database selected, the next opcode, the aux fields), the
-  CRC64 carried from one window to the next (Redis's `rdbLoad` updates it as it reads),
-  windows that grow for a value longer than one (a string or a listpack of any length),
-  and a test that windows of any lengths give what the whole file gives, as
-  `tests/aof_check.bend` does here.
+  computed over all of it at the end. Its loader already goes from one opcode to the
+  next on a state (`fl.step`: what is left of the file, the databases, the counts). To
+  read the file in windows, a step that runs out of bytes would ask for the next window
+  where it now ends the load as a short read, the CRC64 would be carried from one
+  window to the next (Redis's `rdbLoad` updates it as it reads), a window would grow
+  for a value longer than one (a string or a listpack of any length), and a test would
+  read files in windows of many sizes against the whole, as `tests/aof_check.bend` does
+  here.
 
 **What it costs.** 238 lines more in `src/aof.bend` and 77 in `src/server.bend`; with
 the proof, `make check` takes 14 s here and `make verdict` 1 min 40 s.
