@@ -8094,3 +8094,78 @@ Redis's files are smaller: it writes these values, a digit repeated, with LZF, w
 BendKV does not write (3zzzc). `make perfcheck` on this change: GET 3,491, SET 4,235 and
 INCR 4,577 instructions per request (baseline 3,452, 4,214 and 4,552), with 100 clients
 in BLPOP 2.7% and 3.9% more.
+
+
+## 79. Lists in pieces
+
+FINDINGS 3zzzw. Main's build is afa98a7's, the base the change was measured on; every
+run below puts the servers in turn on the same machine, shared with other work (four
+cores).
+
+**Memory.** `used_memory` before and after the lists are written by RPUSH, a thousand
+elements a command (the last row: LPUSH, one element a command), the elements of 8 bytes
+but in the second row. Bytes an element, or a list where it says so:
+
+| lists × elements | Redis 7.0.15 | main | this change |
+|---|---:|---:|---:|
+| 2 × 500,000 | 10.1 | 40.0 | 9.3 |
+| 100 × 10,000, elements of 30 bytes | 32.4 | 56.1 | 32.0 |
+| 10,000 × 100 | 11.9 | 42.7 | 13.4 |
+| 100,000 × 10, a list | 282 | 590 | 366 |
+| 100,000 × 3, a list | 218 | 310 | 270 |
+| 100,000 × 1, a list | 202 | 230 | 254 |
+| 1 × 20,000, pushed one at a time | 11.8 | 41.6 | 9.5 |
+
+**Reads and writes in the middle.** A list of 200,000 elements (`e0`, `e1`, …) made by
+RPUSH; each command alone, its time to the reply from one client, the best of 5 runs
+(LRANGE 0 -1: one run, most of it the client's decoding of 200,000 replies). Milliseconds:
+
+| command | Redis 7.0.15 | main | this change |
+|---|---:|---:|---:|
+| LINDEX q 100000 | 0.013 | 3.354 | 0.031 |
+| LSET q 100000 y | 0.013 | 6.835 | 0.062 |
+| LRANGE q 100000 100099 | 0.048 | 3.405 | 0.071 |
+| LPOS q e199999 | 3.036 | 7.619 | 7.122 |
+| LINSERT q BEFORE e100000 z | 2.947 | 9.149 | 8.300 |
+| LREM q 1 z (after the first run, no z is left: a scan) | 2.678 | 10.078 | 21.267 |
+| LTRIM q 1 -2 | 0.011 | 0.043 | 0.046 |
+| LRANGE q 0 -1 | 102 | 144 | 148 |
+
+**Instructions** (callgrind, as `tools/colls.sh` counts: one client, one request at a
+time, the whole request; a list `l` of 100,000 elements and `q` of 200,000, both made by
+RPUSH, a hundred elements a command):
+
+| command | main | this change | |
+|---|---:|---:|---:|
+| LLEN l | 18,626 | 18,659 | +0.2% |
+| LINDEX l 0 | 20,143 | 20,933 | +3.9% |
+| LINDEX q 100000 | 20,680,204 | 178,957 | −99.1% |
+| LRANGE l 0 99 | 116,918 | 122,580 | +4.8% |
+| LRANGE q 100000 100099 | 19,847,356 | 308,932 | −98.4% |
+| LSET q 100000 y | 40,562,248 | 398,581 | −99.0% |
+| LPUSH l xyz | 21,076 | 23,701 | +12.5% |
+| RPUSH l xyz | 21,029 | 23,621 | +12.3% |
+| LPOP l | 20,373 | 21,224 | +4.2% |
+| RPOP l | 20,342 | 21,347 | +4.9% |
+| LPUSH l v0000001 | 21,162 | 24,191 | +14.3% |
+| LPUSH n:<random> xyz (a new list) | 20,230 | 21,262 | +5.1% |
+
+A push's extra instructions do not grow with its piece: with pieces of 512 bytes, LPUSH
+ran the same +13.2%, and LINDEX and LSET in the middle 3 to 4 times this change's
+counts, as they cross four times the pieces. So the pieces stay at 2,048 bytes.
+
+**Throughput** (redis-benchmark, 20 clients, pipelines of 16, the server on one CPU;
+1,000,000 requests of each push and pop, 200,000 of each LRANGE; two rounds, each server
+a fresh process). Requests a second:
+
+| test | Redis 7.0.15 | main | this change |
+|---|---:|---:|---:|
+| LPUSH | 1,145,000, 945,000 | 631,000, 707,000 | 602,000, 627,000 |
+| RPUSH | 1,145,000, 1,074,000 | 664,000, 680,000 | 602,000, 758,000 |
+| LPOP | 1,001,000, 951,000 | 644,000, 684,000 | 693,000, 766,000 |
+| RPOP | 969,000, 810,000 | 668,000, 691,000 | 847,000, 935,000 |
+| LRANGE_100 | 137,000, 161,000 | 69,800, 73,900 | 76,500, 79,800 |
+| LRANGE_300 | 45,800, 49,200 | 24,700, 23,500 | 27,200, 27,100 |
+
+The machine was shared, and a round moves by up to 15%; LPUSH serves about 5 to 10% less
+than main, the pops and the ranges 8 to 35% more.

@@ -7727,6 +7727,102 @@ start now reads in 17 windows.
 **What it costs.** Nothing on a request's path: `make perfcheck` gives GET 3,491, SET
 4,235 and INCR 4,577 instructions a request, within 1.1% of the baseline.
 
+## 3zzzw. Lists in pieces, as a quicklist of listpacks
+
+**What was left** (section 3zh). A list was a deque of two stacks of its elements: a cell
+of 16 bytes for each, and a buffer of 16 bytes or more for each element longer than 6
+bytes. An element of 8 bytes took 40 bytes, where Redis's quicklist spends 10 (a
+listpack's entry of 10 bytes in nodes of 8 KB): four times the memory for a list of small
+elements. And a read or a write in the middle went cell by cell: on a list of 200,000,
+LINDEX took 3.4 ms where Redis takes well under a tenth of one, LSET 6.8 ms
+(PERFORMANCE 79).
+
+**The change** (`src/map.bend`, Lists; MEMORY USAGE's estimate in `src/session.bend`).
+
+- **Pieces.** A list's elements are in pieces (`LPc{k, n, fw, s}`) of up to 2,048 bytes,
+  one buffer of the C runtime (3zzzm): the codes of k elements one after another in s, n
+  bytes in all, each an element's length as a small hash codes a field and the element's
+  bytes. An element longer than a buffer is a piece of its own.
+- **Two stacks of pieces** (`Deq{nf, pf, f, nb, pb, b}`): the front part's nf elements in
+  pf pieces in order, the back part's nb in pb pieces, the last first. When one stack
+  holds more than three times the other's pieces and one more, the pieces are dealt
+  again, half to each, as they are (`deq.fix`): what moves is pieces, not bytes.
+- **Which way a piece's string goes** (fw): in the list's order or the last first. Pushes
+  and pops at an end work on the start of the string of the piece at that end, so that
+  piece's string must start at that end (`lp.out`).
+  - A piece dealt to the other stack keeps its string as it is.
+  - The deal turns the first piece of each stack (`lp.head`, `lp.turn`): the reads near
+    an end then start where the elements they want are. Without it, LINDEX 0 of a list
+    made by RPUSH skipped every code of its first piece: 53,299 instructions where main
+    takes 20,143.
+  - A pop that meets a piece whose string starts at the other end codes it again the
+    other way first; a push onto one starts a piece.
+- **A push copies the piece it writes into one new buffer.**
+  - It puts the element's code before the piece's string and copies the two into one
+    buffer (`String.take`), as Redis writes a listpack anew at an insert.
+  - It cannot write in place: a write sees the list its key held as shared (`db.upd`
+    binds the entry, 3zzzm), so the room before the bytes is not its to fill, and a `++`
+    there links a new buffer before the old one.
+  - A first version left the pieces to `++` and copied a piece only when it filled. A
+    piece pushed one element at a time then became a chain of a buffer of 512 bytes for
+    each command: 49 bytes an element, more than main's 42, and a read by index walked
+    the chain from its start.
+  - The pushes of one command go in together (`deq.pushes`, `lp.onto`): one copy of the
+    piece for an RPUSH of a hundred elements.
+  - A push that would pass 2,048 bytes starts a piece.
+- **A pop** slices its element out and drops the code (`String.drop`), which moves the
+  string's start in its buffer: no copy.
+- **Reads.** LINDEX, LSET and LRANGE go from the end nearer to the index, past whole
+  pieces by their counts (`lp.find`, `lp.get`, `lp.slice`), then through the codes of one
+  piece, read in place.
+- **Writes in the middle.** LSET writes the one piece anew; a piece it makes longer than
+  a buffer is dealt into pieces. LTRIM drops whole pieces and cuts one (`lp.drop`,
+  `lp.keep`). LINSERT, LREM and LPOS read the list whole (`deq.all`), and LINSERT and LREM
+  build it again (`deq.of`), as before.
+- **The rest of the server** calls the `KV.deq.*` functions it called, with the names and
+  types they had. The RDB file writes `deq.all`'s elements as a quicklist and loads them
+  with `deq.of`; the rewrite and `tests/aof_check.bend` read `deq.all`. MEMORY USAGE
+  estimates a list from its pieces (`deq.bytes`), without decoding them.
+
+**The proofs.** No law and no line of `proof/` changed. The proofs reason about the
+deque's functions, not its shape: a push's change, replayed, is the same push, and a new
+list's change is its pushes on `deq.empty()`.
+
+**Tests.**
+- `tests/list_test.py` (in `make test`) has two new parts.
+  - Lists past one piece against Redis 7.0.15: grown an element at a time at either end,
+    read across their pieces, set to longer and shorter elements (a piece past a buffer
+    dealt again), trimmed inside pieces, emptied from the end they were not made from,
+    with elements longer than a piece among short ones. Each is dumped by BendKV and
+    restored in Redis.
+  - Random commands on two lists of elements of up to 400 bytes, with a DUMP every 500.
+- 23,261 list commands, each answered as Redis answers it (seeds 1 to 4, 6,000 rounds).
+  The test was first run with Redis on both sides.
+- A model of the deque against a plain list also agreed at every step: random pushes,
+  pops, LINDEX, LRANGE, LSET, LTRIM and rebuilds, with elements of 0 to 5,100 bytes, 2,600
+  to 4,200 steps, up to 1,126 elements. It is a script of this session, not in the
+  repository.
+
+**What it costs** (PERFORMANCE 79).
+- Memory a list element (8 bytes): 9.3 bytes in long lists, where main spends 40.0 and
+  Redis 10.1; 13.4 in lists of 100 (main 42.7, Redis 11.9). A list of one element costs
+  254 bytes with its key, against main's 230 and Redis's 202: its piece is a node and a
+  cell more than main's cell.
+- LINDEX, LSET and LRANGE in the middle of a list of 200,000 take 99% fewer
+  instructions.
+- A push copies its piece: LPUSH and RPUSH run 12% to 14% more instructions a command
+  (one client, one request at a time), a pop 4% to 5% more. Under redis-benchmark's
+  pipelines the pushes serve 5% to 10% fewer requests a second, and the pops and LRANGE
+  8% to 35% more.
+- LREM on a list of 200,000 takes twice main's time; LPOS and LINSERT, which read the
+  list whole too, take about main's.
+
+**What is left.**
+- LINSERT, LREM and LPOS by pieces, without decoding the list whole. The shape proofs
+  of LINSERT and LREM (`lins_m_shape`, `lrem_shape`) follow the code and change with it.
+- A list of one to a few elements in fewer nodes.
+- A push in place, which needs a write that owns the list it changes (3zzzm's `db.upd`).
+
 ## 4. Where a request's time goes, and hiding the memory waits
 
 With the eight patches, BendKV ran fewer instructions on GET and SET than Redis, missed
