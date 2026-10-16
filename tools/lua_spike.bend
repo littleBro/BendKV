@@ -1,6 +1,6 @@
 # A spike of the engine (src/script.bend, src/lua/engine.c): scripts
 # loaded and run with canned replies to their calls, each step printed.
-#   bun ../bend-patched/bend2/main.ts tests/lua_spike.bend -o build/lua_spike.c
+#   bun ../bend-patched/bend2/main.ts tools/lua_spike.bend -o build/lua_spike.c
 #   clang-19 -std=c11 -O1 build/lua_spike.c deps/redis/deps/lua/src/*.c deps/redis/src/*.c
 #     -I deps/redis/deps/lua/src -I deps/redis/src -DENABLE_CJSON_GLOBAL
 #     -DREDIS_STATIC= -DLUA_USE_MKSTEMP -D_GNU_SOURCE -lpthread -lm -o build/lua_spike
