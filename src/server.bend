@@ -6046,6 +6046,12 @@ def evs.over(+used: Nat, +x: Evs) -> Bool:
     case Evs{+srv, ds, es, n}:
       evict.over(used, srv)
 
+# the heap's reading kept in the server's state, for INFO (S.srv.heap)
+def evs.heap(+used: Nat, x: Evs) -> Evs:
+  match x:
+    case Evs{srv, ds, es, n}:
+      Evs{S.srv.heap(srv, used), ds, es, n}
+
 # an eviction's outcome: 0 the heap within maxmemory (EVICT_OK), 1 keys
 # left to evict when its time ran out (EVICT_RUNNING), 2 none left that
 # the policy may evict (EVICT_FAIL); and its state
@@ -6092,10 +6098,14 @@ def evict.timed(up: Bool, x: Evs, +rws: Bool, +s0: U32, +u0: U32, +lim: Nat) -> 
 
 @unsafe
 def evict.heap(x: Evs, +rws: Bool, +s0: U32, +u0: U32, +lim: Nat) -> IO(Evd):
-  +y = x
   do IO<Evd>:
     h : Nat & Nat <- IO.heap()
-    evict.loop(evs.over(heap.used(h), y), y, rws, s0, u0, lim)
+    evict.heap.at(heap.used(h), x, rws, s0, u0, lim)
+
+@unsafe
+def evict.heap.at(+used: Nat, x: Evs, +rws: Bool, +s0: U32, +u0: U32, +lim: Nat) -> IO(Evd):
+  +y = evs.heap(used, x)
+  evict.loop(evs.over(used, y), y, rws, s0, u0, lim)
 
 def heap.used(h: Nat & Nat) -> Nat:
   (used, act) = h
@@ -6212,7 +6222,7 @@ def evict.go(+pol: Nat, x: Evs, ws: Waits, tx: Tx, pb: Ps, +rws: Bool, +s0: U32,
 def mem.run(h: Nat & Nat, +s0: U32, +u0: U32, srv: S.Srv, ds: R.Ds, ws: Waits, tx: Tx, pb: Ps, +rws: Bool, +pid: U32) -> IO(Grp):
   (u, act) = h
   +used = u
-  mem.run.k(used, s0, u0, srv, ds, ws, tx, pb, rws, pid)
+  mem.run.k(used, s0, u0, S.srv.heap(srv, used), ds, ws, tx, pb, rws, pid)
 
 # a group of requests taken at t, its memory seen to (w: mem.need): with
 # maxmemory, the heap read and the eviction (mem.run); without it, the
@@ -6557,14 +6567,36 @@ def grp.sub(+cn: S.Conn, job: B.Job, back: Chan(Ans), +inb: Nat, raw: String, g:
     case Grp{outs, es, srv, ds, ws, up, tx, pb}:
       sub_job(job, cn, back, inb, raw, Grp{outs, es, srv, R.ds.focus(S.conn.db(cn), ds), ws, up, tx, pb})
 
+# the shell's facts, for INFO; the heap's used bytes left as the actor
+# read them before this group (mem.run, then after each key the eviction
+# freed: evict.heap), which the eviction went by, when it read them:
+# maxmemory set and no pause (mem.need 2), and no CONFIG SET of maxmemory
+# since (Mm's kick: the next group reads them). The shell reads the heap
+# in another thread before the request reaches the actor, and with its
+# reading INFO could show the heap past maxmemory while each group's
+# eviction found it within, the eviction stopped a few hundred bytes
+# under the limit; Redis's INFO and performEvictions read one counter.
+# A pause that ended in this group leaves a reading from before it, of a
+# dataset that the pause kept as it was
+def facts.held(+pb: Ps, +srv: S.Srv) -> Bool:
+  +m = S.srv.mm(srv)
+  Bool.and(Nat.is_eq(mem.need(pb), 2n), Bool.and(Nat.is_lt(0n, S.mm.max(m)), Bool.not(S.mm.kick(m))))
+
+def srv.facts(held: Bool, srv: S.Srv, l: I.Live) -> S.Srv:
+  match held:
+    case True{}:
+      S.srv.live.held(srv, l)
+    case False{}:
+      S.srv.live(srv, l)
+
 def group_req(+log: Bool, q: Req, g: Grp) -> Grp:
   match q g:
     case Req{+cn, job, back, +tl, +inb, raw} g0:
       grp.req(log, cn, job, back, tl, inb, raw, g0)
     case SubReq{+cn, job, back, tl, +inb, raw} g0:
       grp.sub(cn, job, back, inb, raw, g0)
-    case Facts{live} Grp{outs, es, srv, ds, ws, up, tx, pb}:
-      Grp{outs, es, S.srv.live(srv, live), ds, ws, up, tx, pb}
+    case Facts{live} Grp{outs, es, +srv, ds, ws, up, tx, +pb}:
+      Grp{outs, es, srv.facts(facts.held(pb, srv), srv, live), ds, ws, up, tx, pb}
     case Tick{+ms} Grp{outs, es, srv, +ds, ws, up, tx, +pb}:
       +p = ps.pz(pb)
       grp.heed(group.tick.if(Nat.is_le(2n, ps.down(pb)), pz.on(p), pz.over(p, R.ds.now(ds)), outs, es, srv, ms, ds, ws, up, tx, pb))
