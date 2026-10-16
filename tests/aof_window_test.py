@@ -17,10 +17,13 @@ on both, and the file must be cut to the same length (a transaction
 left open and then an entry cut short excepted, which BendKV cuts back
 to before its MULTI and Redis to after its last whole entry, the MULTI
 and the entries it queued left in the file for its next start to
-revert: README.md, "Where BendKV differs"). Last, the file with an
+revert: README.md, "Where BendKV differs"). Then the file with an
 unknown command after it, which both refuse: BendKV names the entry and
 the byte it starts at, which it finds reading the file again a window at
-a time.
+a time. Last, two small files whose transaction left open holds entries
+Redis reads but does not write (bulks with no length, a MULTI written
+*01), which both cut at the byte the MULTI starts at, and a file whose
+entry ends exactly at the first window's end.
 
     python3 tests/aof_window_test.py --bin build/bendkv --bendkv 6380 --redis 6391 --dir build/aofwin
 """
@@ -124,6 +127,20 @@ def cases():
     opened = entry(b"MULTI") + entry(b"SET", b"open:a", b"1") + entry(b"SET", b"open:long", b"o" * (2 * MIB)) + \
         entry(b"SET", b"open:b", b"2")
     bad = entry(b"SXT", b"lost", b"v") + entry(b"SET", b"after", b"x")
+    # entries written as Redis reads them but not as it writes them, in a
+    # transaction left open: the file is cut at the byte its MULTI starts
+    # at, whatever the entries' lengths written again would be. Empty
+    # bulks with no length ("$" alone: strtol reads 0), and a MULTI whose
+    # count has a leading 0 (atoi)
+    loose = entry(b"SET", b"k1", b"v") + entry(b"SET", b"k2", b"v")
+    loose_tx = entry(b"MULTI") + b"*30\r\n$5\r\nRPUSH\r\n$1\r\nl\r\n" + b"$\r\n\r\n" * 28
+    zero = entry(b"SET", b"k", b"v")
+    zero_tx = b"*01\r\n$5\r\nMULTI\r\n" + entry(b"SET", b"x", b"y")
+    # an entry that ends exactly at the first window's end
+    e = File()
+    e.pad(MIB)
+    e.put(entry(b"SET", b"edge", b"e"))
+    edge = e.bytes()
     return [("a file of several windows, ending inside one", b, len(b), EOF_WHY),
             ("its last entry cut short inside a long value", b + cut, len(b), EOF_WHY),
             ("a transaction left open, an entry longer than a window in it", b + opened, len(b), EOF_WHY),
@@ -131,7 +148,10 @@ def cases():
             ("an unknown command after it", b + bad, None,
              ("Unknown command 'SXT' reading the append only file",
               "Bad command reading the append only file appendonly.aof: entry %d, at byte %d: ERR unknown command 'SXT'"
-              % (n + 1, len(b))))]
+              % (n + 1, len(b)))),
+            ("bulks with no length in a transaction left open", loose + loose_tx, len(loose), EOF_WHY),
+            ("a MULTI written *01 left open", zero + zero_tx, len(zero), EOF_WHY),
+            ("an entry that ends at the first window's end", edge, len(edge), EOF_WHY)]
 
 
 def up(port, p, log, timeout=60):

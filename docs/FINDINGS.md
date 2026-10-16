@@ -5951,13 +5951,18 @@ entry starts at.
   (`A.Start`): the check's verdict on the entries it keeps, their number, the entries of
   a transaction the file ends inside, and what follows the last whole entry. The shell
   does with them what it did: it cuts an entry cut short, reverts a transaction left
-  open or refuses the file, with the same messages. The length it cuts a reverted file
-  to is the file's, less what follows its last whole entry and the transaction's
-  entries written again (`load_cut`: the entries written again, then what follows them,
-  are the file).
-- A refusal names the entry and the byte it starts at. For the byte, the file is read
-  again a window at a time, as the start read it, and the entries of each window are
-  counted until the window that holds the bad one (`offset_win`).
+  open or refuses the file, with the same messages.
+- Two bytes are found by reading the file again a window at a time, as the start read
+  it, counting the entries of each window until the one that holds the entry wanted
+  (`offset_win`). One is the byte a refused entry starts at, which the refusal names.
+  The other is the byte a reverted transaction's MULTI starts at, where the file is cut,
+  as Redis cuts it (`valid_before_multi`). That byte is the file's own, however its
+  entries are written: Redis reads `*01` and a bulk with no length (`$`) as it reads
+  `*1` and `$0`, and written again these would be shorter or longer. Main computed the
+  cut from the kept entries written again, and cut one byte into an entry written
+  `$01` before the MULTI. The first version of this branch computed it from the
+  transaction's entries written again, and cut whole entries away when those held
+  bulks with no length (the review of #78).
 
 **The law** (`load_windows`, LAWS.bend: Persistence). Its statement waits for a
 person's approval in the pull request:
@@ -5979,7 +5984,8 @@ the check refuses no entry, the databases the start builds are those `A.restore`
 of the file, the function `recover` and `recover_cut` are about, and the entries it
 reverts, written again, then what follows them, are what `A.restore` leaves. The law is
 stated of the start's verdict, its count and what it leaves, not of its databases
-alone, so that the cut, the revert and the refusal are the same too.
+alone. It says nothing of the read loop itself, of the byte a cut is made at, or of
+`offset_win`: those the window test checks against Redis.
 
 **The proof** (PROOF.bend: Windows, 1,045 lines).
 
@@ -6036,11 +6042,16 @@ the start's code.
   end cuts, a value the third's end cuts, values of 1.5 and 5 MiB, a transaction that
   holds one of 1.25 MiB, SELECTs; then that file with its last entry cut short inside a
   long value, with a transaction left open (an entry longer than a window in it), with
-  one left open and then an entry cut short, and with an unknown command after it. Each
-  with aof-load-truncated yes and no: both servers start or both refuse, and say why;
-  every database reads back the same on both, and the file is cut to the same length.
+  one left open and then an entry cut short, and with an unknown command after it. Then
+  two small files whose transaction left open holds entries Redis reads but does not
+  write (bulks with no length, a MULTI written `*01`), and one whose entry ends exactly
+  at the first window's end. Each with aof-load-truncated yes and no: both servers start
+  or both refuse, and say why; every database reads back the same on both, and the file
+  is cut to the same length.
 - `make test` runs `tools/restore_mem.sh`, which fails when RSS after the restart is
-  more than 1.3 times RSS before it.
+  more than 1.3 times RSS before it. It fails too when a start or the load fails, when a
+  server is gone before its RSS is read, or when the restart does not hold the keys the
+  load left: a guard that cannot read what it compares does not pass.
 
 **Where BendKV differs.** The window test found a difference that was there before the
 windows: a file that ends inside a transaction and then in an entry cut short. BendKV

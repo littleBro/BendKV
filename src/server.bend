@@ -9474,11 +9474,11 @@ def restore_checked(+lg: Log, +trunc: Bool, +path: String, +size: Nat, +n: Nat, 
       restore_refused(lg, path, i, why)
 
 # a file that ends inside a transaction (A.untx): the transaction is
-# reverted and the file cut back to before its MULTI (keep: its bytes
-# less those of the transaction, written again, and what follows it), as
-# Redis does, unless aof-load-truncated is no: then it stops the start,
-# as a file that ends in an entry cut short does; what follows the last
-# whole entry must be an entry cut short, or nothing
+# reverted and the file cut back to before its MULTI (keep: the byte the
+# MULTI starts at, restore_revert), as Redis does, unless
+# aof-load-truncated is no: then it stops the start, as a file that ends
+# in an entry cut short does; what follows the last whole entry must be
+# an entry cut short, or nothing
 @unsafe
 def restore_reverted(+lg: Log, +path: String, +size: Nat, +keep: Nat, +n: Nat, r: A.Replay) -> IO(R.Ds & Nat):
   match r:
@@ -9491,22 +9491,35 @@ def restore_reverted(+lg: Log, +path: String, +size: Nat, +keep: Nat, +n: Nat, r
       restore_refused(lg, path, i, why)
 
 @unsafe
-def restore_revert(trunc: Bool, +lg: Log, +path: String, +size: Nat, +keep: Nat, +k: Nat, r: A.Replay) -> IO(R.Ds & Nat):
+def restore_revert_at(+lg: Log, +path: String, +size: Nat, +k: Nat, r: A.Replay, p: File & Nat) -> IO(R.Ds & Nat):
+  (f, +at) = p
+  do IO<R.Ds & Nat>:
+    Unit <- File.close(f)
+    restore_reverted(lg, path, size, at, k, r)
+
+# the file cut back to the byte its transaction's MULTI starts at (entry k,
+# the first the start left out), as Redis's valid_before_multi: found by
+# reading the file again a window at a time (offset_win), which counts
+# the bytes as they are in the file, however its entries are written
+@unsafe
+def restore_revert(trunc: Bool, +lg: Log, +path: String, +size: Nat, +k: Nat, r: A.Replay) -> IO(R.Ds & Nat):
   match trunc:
     case True{}:
       do IO<R.Ds & Nat>:
         Unit <- log(lg, 3, "Revert incomplete MULTI/EXEC transaction in AOF file " ++ path)
-        restore_reverted(lg, path, size, keep, k, r)
+        f : File <- IO.try(File, File.open(path, "r"))
+        p : File & Nat <- offset_win(f, k, "", 0n)
+        restore_revert_at(lg, path, size, k, r, p)
     case False{}:
       log.die(R.Ds & Nat, lg, uxeof(path))
 
 @unsafe
-def restore_tx(open: Bool, ok: Bool, +lg: Log, +trunc: Bool, +path: String, +size: Nat, +k: Nat, r: A.Replay, +cut: Nat, +rest: String) -> IO(R.Ds & Nat):
+def restore_tx(open: Bool, ok: Bool, +lg: Log, +trunc: Bool, +path: String, +size: Nat, +k: Nat, r: A.Replay, +rest: String) -> IO(R.Ds & Nat):
   match open ok:
     case False{} _:
       restore_checked(lg, trunc, path, size, k, r, rest)
     case True{} True{}:
-      restore_revert(trunc, lg, path, size, Nat.sub(Nat.sub(size, String.length(rest)), cut), k, r)
+      restore_revert(trunc, lg, path, size, k, r)
     case True{} False{}:
       log.die(R.Ds & Nat, lg, "Bad file format reading the append only file " ++ path ++ ": no entry at byte " ++ Nat.show(Nat.sub(size, String.length(rest))))
 
@@ -9518,7 +9531,7 @@ def restore_tx(open: Bool, ok: Bool, +lg: Log, +trunc: Bool, +path: String, +siz
 def restore_start(+lg: Log, +trunc: Bool, +path: String, +size: Nat, st: A.Start) -> IO(R.Ds & Nat):
   match st:
     case A.Start{r, +k, +cut, +rest}:
-      restore_tx(Bool.not(List.is_empty(&2, List<&2, String>, cut)), Bool.or(String.is_empty(rest), cut_short(rest)), lg, trunc, path, size, k, r, String.length(A.encode(cut)), rest)
+      restore_tx(Bool.not(List.is_empty(&2, List<&2, String>, cut)), Bool.or(String.is_empty(rest), cut_short(rest)), lg, trunc, path, size, k, r, rest)
 
 @unsafe
 def restore_got(+lg: Log, +trunc: Bool, +path: String, q: A.Start & Nat) -> IO(R.Ds & Nat):
