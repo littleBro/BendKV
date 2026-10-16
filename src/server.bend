@@ -9049,28 +9049,30 @@ def got.bytes(+xs: List<&2, String>, +acc: Nat) -> Nat:
 # read with what came since is several; the batch holds the bytes they
 # were read from, whole (the parser takes them and gives them back, so
 # that nothing shares them), which go to the actor with the batch
-def parse_in(rest: String, got: List<&2, String>) -> P.Batch:
+def parse_in(rest: P.Tail, got: List<&2, String>) -> P.Batch:
   match rest got:
-    case SNil{} Con{x, Nil{}}:
+    case P.TailNone{} Con{x, Nil{}}:
       P.parse_read(x)
     case r g:
-      P.parse_runs(r ++ glue(g, SNil{}))
+      P.parse_tail(r, glue(g, SNil{}))
 
 # the connection's loop: rest is the unparsed tail of what came before
-# (at most one incomplete request); got holds the pieces read since,
-# newest first, have counts their bytes (up to need), and the tail needs
-# need more bytes before a parse can make progress, so a large value is
-# parsed once, not once per read; cn is the connection's state, as the
-# actor gave it back after the last batch. Bytes cross as they are, one
-# Char each (recv_raw, send_raw): a String of them is a packed buffer.
+# (at most one incomplete request; of a long one, the arguments read so
+# far and the bytes from its bulk not whole yet: P.Tail); got holds the
+# pieces read since, newest first, have counts their bytes (up to need),
+# and the tail needs need more bytes before a parse can make progress, so
+# a large value is parsed once, not once per read; cn is the connection's
+# state, as the actor gave it back after the last batch. Bytes cross as
+# they are, one Char each (recv_raw, send_raw): a String of them is a
+# packed buffer.
 @unsafe
-def conn_loop(s: Socket, rest: String, got: List<&2, String>, have: Nat, need: Nat, +ln: Link, cn: S.Conn) -> IO(Unit):
+def conn_loop(s: Socket, rest: P.Tail, got: List<&2, String>, have: Nat, need: Nat, +ln: Link, cn: S.Conn) -> IO(Unit):
   do IO<Unit>:
     m : Socket & Result<&1, &1, U32 & String, String> <- TCP.recv_raw(s, 65536)
     conn_got(m, rest, got, have, need, ln, cn)
 
 @unsafe
-def conn_got(m: Socket & Result<&1, &1, U32 & String, String>, rest: String, got: List<&2, String>, have: Nat, need: Nat, +ln: Link, cn: S.Conn) -> IO(Unit):
+def conn_got(m: Socket & Result<&1, &1, U32 & String, String>, rest: P.Tail, got: List<&2, String>, have: Nat, need: Nat, +ln: Link, cn: S.Conn) -> IO(Unit):
   (s, r) = m
   match r:
     case Fail{e}:
@@ -9079,7 +9081,7 @@ def conn_got(m: Socket & Result<&1, &1, U32 & String, String>, rest: String, got
       conn_data(s, Nat.is_eq(String.length(x), 0n), x, rest, got, have, need, ln, cn)
 
 @unsafe
-def conn_data(s: Socket, eof: Bool, +x: String, rest: String, got: List<&2, String>, have: Nat, +need: Nat, +ln: Link, cn: S.Conn) -> IO(Unit):
+def conn_data(s: Socket, eof: Bool, +x: String, rest: P.Tail, got: List<&2, String>, have: Nat, +need: Nat, +ln: Link, cn: S.Conn) -> IO(Unit):
   match eof:
     case True{}:
       conn_end(s, ln)
@@ -9088,7 +9090,7 @@ def conn_data(s: Socket, eof: Bool, +x: String, rest: String, got: List<&2, Stri
       conn_more(s, rest, x <> got, h, need, ln, cn, Nat.is_lt(h, need))
 
 @unsafe
-def conn_more(s: Socket, rest: String, +got: List<&2, String>, have: Nat, need: Nat, +ln: Link, cn: S.Conn, wait: Bool) -> IO(Unit):
+def conn_more(s: Socket, rest: P.Tail, +got: List<&2, String>, have: Nat, need: Nat, +ln: Link, cn: S.Conn, wait: Bool) -> IO(Unit):
   match wait:
     case True{}:
       conn_loop(s, rest, got, have, need, ln, cn)
@@ -9109,7 +9111,7 @@ def conn_batch(s: Socket, batch: P.Batch, +inb: Nat, +ln: Link, cn: S.Conn) -> I
       conn_send(s, ln, cn, reqs, tl, err, rest, need, inb, raw)
 
 @unsafe
-def conn_send(s: Socket, +ln: Link, cn: S.Conn, reqs: List<&2, B.Req>, tl: U32, err: Maybe<&2, String>, rest: String, need: Nat, +inb: Nat, raw: String) -> IO(Unit):
+def conn_send(s: Socket, +ln: Link, cn: S.Conn, reqs: List<&2, B.Req>, tl: U32, err: Maybe<&2, String>, rest: P.Tail, need: Nat, +inb: Nat, raw: String) -> IO(Unit):
   match reqs:
     case Nil{}:
       conn_err(s, ln, cn, err, rest, need)
@@ -9146,7 +9148,7 @@ def live.wants(+job: B.Job) -> Bool:
 # a batch that wants them. Each arm sends and waits itself: a step both
 # called would be a segment of its own, entered on every batch.
 @unsafe
-def conn_job(live: Bool, s: Socket, +ln: Link, job: B.Job, cn: S.Conn, n: U32, +inb: Nat, raw: String, err: Maybe<&2, String>, rest: String, need: Nat) -> IO(Unit):
+def conn_job(live: Bool, s: Socket, +ln: Link, job: B.Job, cn: S.Conn, n: U32, +inb: Nat, raw: String, err: Maybe<&2, String>, rest: P.Tail, need: Nat) -> IO(Unit):
   match live ln:
     case False{} Link{db, +back, post, tl, id}:
       do IO<Unit>:
@@ -9165,12 +9167,12 @@ def conn_job(live: Bool, s: Socket, +ln: Link, job: B.Job, cn: S.Conn, n: U32, +
 # are and the words of their codes (R.tl.add), and the bytes they came in
 # (how many, and the bytes themselves)
 @unsafe
-def conn_ask(s: Socket, +ln: Link, cn: S.Conn, rs: List<&2, B.Req>, tl: U32, err: Maybe<&2, String>, rest: String, need: Nat, +inb: Nat, raw: String) -> IO(Unit):
+def conn_ask(s: Socket, +ln: Link, cn: S.Conn, rs: List<&2, B.Req>, tl: U32, err: Maybe<&2, String>, rest: P.Tail, need: Nat, +inb: Nat, raw: String) -> IO(Unit):
   +job = B.job(B.unzip(rs, Nil{}, Nil{}))
   conn_job(live.wants(job), s, ln, job, cn, tl, inb, raw, err, rest, need)
 
 @unsafe
-def conn_ans(s: Socket, +ln: Link, got: Maybe<&1, Ans>, err: Maybe<&2, String>, rest: String, need: Nat) -> IO(Unit):
+def conn_ans(s: Socket, +ln: Link, got: Maybe<&1, Ans>, err: Maybe<&2, String>, rest: P.Tail, need: Nat) -> IO(Unit):
   match got:
     case None{}:
       conn_end(s, ln)
@@ -9190,7 +9192,7 @@ def conn_ans(s: Socket, +ln: Link, got: Maybe<&1, Ans>, err: Maybe<&2, String>, 
       conn_end(s, ln)
 
 @unsafe
-def conn_put(s: Socket, +ln: Link, post: Bool, out: String, cn: S.Conn, err: Maybe<&2, String>, rest: String, need: Nat) -> IO(Unit):
+def conn_put(s: Socket, +ln: Link, post: Bool, out: String, cn: S.Conn, err: Maybe<&2, String>, rest: P.Tail, need: Nat) -> IO(Unit):
   match post:
     case True{}:
       do IO<Unit>:
@@ -9202,7 +9204,7 @@ def conn_put(s: Socket, +ln: Link, post: Bool, out: String, cn: S.Conn, err: May
         conn_sent(m, ln, cn, err, rest, need)
 
 @unsafe
-def conn_sent(m: Socket & Result<&1, &1, U32 & String, Unit>, +ln: Link, cn: S.Conn, err: Maybe<&2, String>, rest: String, need: Nat) -> IO(Unit):
+def conn_sent(m: Socket & Result<&1, &1, U32 & String, Unit>, +ln: Link, cn: S.Conn, err: Maybe<&2, String>, rest: P.Tail, need: Nat) -> IO(Unit):
   (s, r) = m
   match r:
     case Fail{e}:
@@ -9213,11 +9215,11 @@ def conn_sent(m: Socket & Result<&1, &1, U32 & String, Unit>, +ln: Link, cn: S.C
 # after a QUIT, the connection closes once its replies are out; the rest
 # of what it sent is not read
 @unsafe
-def conn_quit(s: Socket, +ln: Link, +cn: S.Conn, err: Maybe<&2, String>, rest: String, need: Nat) -> IO(Unit):
+def conn_quit(s: Socket, +ln: Link, +cn: S.Conn, err: Maybe<&2, String>, rest: P.Tail, need: Nat) -> IO(Unit):
   conn_quit.if(S.conn.quit(cn), s, ln, cn, err, rest, need)
 
 @unsafe
-def conn_quit.if(quit: Bool, s: Socket, +ln: Link, cn: S.Conn, err: Maybe<&2, String>, rest: String, need: Nat) -> IO(Unit):
+def conn_quit.if(quit: Bool, s: Socket, +ln: Link, cn: S.Conn, err: Maybe<&2, String>, rest: P.Tail, need: Nat) -> IO(Unit):
   match quit:
     case True{}:
       conn_end(s, ln)
@@ -9293,7 +9295,7 @@ def conn_oops(on: Bool, s: Socket, +ln: Link, msg: String) -> IO(Unit):
         conn_drop(s, ln)
 
 @unsafe
-def conn_err(s: Socket, +ln: Link, cn: S.Conn, err: Maybe<&2, String>, rest: String, need: Nat) -> IO(Unit):
+def conn_err(s: Socket, +ln: Link, cn: S.Conn, err: Maybe<&2, String>, rest: P.Tail, need: Nat) -> IO(Unit):
   match err:
     case None{}:
       conn_loop(s, rest, Nil{}, 0n, need, ln, cn)
@@ -9347,7 +9349,7 @@ def conn_gone.p(p: Socket & Bool, +ln: Link) -> IO(Unit):
 # the replies of a Hold sent: then the watch put out (a first Hold), or
 # out already (a Hold while the client waits)
 @unsafe
-def conn_held.new(m: Socket & Result<&1, &1, U32 & String, Unit>, +ln: Link, got: List<&2, String>, have: Nat, need: Nat, err: Maybe<&2, String>, rest: String) -> IO(Unit):
+def conn_held.new(m: Socket & Result<&1, &1, U32 & String, Unit>, +ln: Link, got: List<&2, String>, have: Nat, need: Nat, err: Maybe<&2, String>, rest: P.Tail) -> IO(Unit):
   (s, r) = m
   match r:
     case Fail{e}:
@@ -9356,7 +9358,7 @@ def conn_held.new(m: Socket & Result<&1, &1, U32 & String, Unit>, +ln: Link, got
       conn_watch(s, ln, got, have, need, err, rest)
 
 @unsafe
-def conn_held.out(m: Socket & Result<&1, &1, U32 & String, Unit>, +ln: Link, got: List<&2, String>, have: Nat, need: Nat, err: Maybe<&2, String>, rest: String) -> IO(Unit):
+def conn_held.out(m: Socket & Result<&1, &1, U32 & String, Unit>, +ln: Link, got: List<&2, String>, have: Nat, need: Nat, err: Maybe<&2, String>, rest: P.Tail) -> IO(Unit):
   (s, r) = m
   match r:
     case Fail{e}:
@@ -9367,7 +9369,7 @@ def conn_held.out(m: Socket & Result<&1, &1, U32 & String, Unit>, +ln: Link, got
       conn_wait(s, ln, got, have, need, err, rest)
 
 @unsafe
-def conn_held(m: Socket & Result<&1, &1, U32 & String, Unit>, watch: Bool, +ln: Link, got: List<&2, String>, have: Nat, need: Nat, err: Maybe<&2, String>, rest: String) -> IO(Unit):
+def conn_held(m: Socket & Result<&1, &1, U32 & String, Unit>, watch: Bool, +ln: Link, got: List<&2, String>, have: Nat, need: Nat, err: Maybe<&2, String>, rest: P.Tail) -> IO(Unit):
   match watch:
     case True{}:
       conn_held.new(m, ln, got, have, need, err, rest)
@@ -9375,7 +9377,7 @@ def conn_held(m: Socket & Result<&1, &1, U32 & String, Unit>, watch: Bool, +ln: 
       conn_held.out(m, ln, got, have, need, err, rest)
 
 @unsafe
-def conn_hold(s: Socket, +ln: Link, post: Bool, watch: Bool, out: Maybe<&2, String>, got: List<&2, String>, have: Nat, need: Nat, err: Maybe<&2, String>, rest: String) -> IO(Unit):
+def conn_hold(s: Socket, +ln: Link, post: Bool, watch: Bool, out: Maybe<&2, String>, got: List<&2, String>, have: Nat, need: Nat, err: Maybe<&2, String>, rest: P.Tail) -> IO(Unit):
   match post out:
     case _ None{}:
       conn_held.on(s, watch, ln, got, have, need, err, rest)
@@ -9389,7 +9391,7 @@ def conn_hold(s: Socket, +ln: Link, post: Bool, watch: Bool, out: Maybe<&2, Stri
         conn_held(m, watch, ln, got, have, need, err, rest)
 
 @unsafe
-def conn_held.on(s: Socket, watch: Bool, +ln: Link, got: List<&2, String>, have: Nat, need: Nat, err: Maybe<&2, String>, rest: String) -> IO(Unit):
+def conn_held.on(s: Socket, watch: Bool, +ln: Link, got: List<&2, String>, have: Nat, need: Nat, err: Maybe<&2, String>, rest: P.Tail) -> IO(Unit):
   match watch:
     case True{}:
       conn_watch(s, ln, got, have, need, err, rest)
@@ -9397,7 +9399,7 @@ def conn_held.on(s: Socket, watch: Bool, +ln: Link, got: List<&2, String>, have:
       conn_wait(s, ln, got, have, need, err, rest)
 
 @unsafe
-def conn_watch(s: Socket, +ln: Link, got: List<&2, String>, have: Nat, need: Nat, err: Maybe<&2, String>, rest: String) -> IO(Unit):
+def conn_watch(s: Socket, +ln: Link, got: List<&2, String>, have: Nat, need: Nat, err: Maybe<&2, String>, rest: P.Tail) -> IO(Unit):
   match ln:
     case Link{db, +back, post, tl, id}:
       do IO<Unit>:
@@ -9405,7 +9407,7 @@ def conn_watch(s: Socket, +ln: Link, got: List<&2, String>, have: Nat, need: Nat
         conn_wait(s2, ln, got, have, need, err, rest)
 
 @unsafe
-def conn_wait(s: Socket, +ln: Link, got: List<&2, String>, have: Nat, need: Nat, err: Maybe<&2, String>, rest: String) -> IO(Unit):
+def conn_wait(s: Socket, +ln: Link, got: List<&2, String>, have: Nat, need: Nat, err: Maybe<&2, String>, rest: P.Tail) -> IO(Unit):
   match ln:
     case Link{db, +back, post, tl, id}:
       do IO<Unit>:
@@ -9413,7 +9415,7 @@ def conn_wait(s: Socket, +ln: Link, got: List<&2, String>, have: Nat, need: Nat,
         conn_woke(s, ln, m, got, have, need, err, rest)
 
 @unsafe
-def conn_woke(s: Socket, +ln: Link, m: Maybe<&1, Ans>, got: List<&2, String>, have: Nat, need: Nat, err: Maybe<&2, String>, rest: String) -> IO(Unit):
+def conn_woke(s: Socket, +ln: Link, m: Maybe<&1, Ans>, got: List<&2, String>, have: Nat, need: Nat, err: Maybe<&2, String>, rest: P.Tail) -> IO(Unit):
   match m:
     case None{}:
       conn_end(s, ln)
@@ -9438,7 +9440,7 @@ def conn_woke(s: Socket, +ln: Link, m: Maybe<&1, Ans>, got: List<&2, String>, ha
 
 # bytes that came while the client waits, kept; or its close
 @unsafe
-def conn_came.on(eof: Bool, s: Socket, +ln: Link, +x: String, got: List<&2, String>, have: Nat, +need: Nat, err: Maybe<&2, String>, rest: String) -> IO(Unit):
+def conn_came.on(eof: Bool, s: Socket, +ln: Link, +x: String, got: List<&2, String>, have: Nat, +need: Nat, err: Maybe<&2, String>, rest: P.Tail) -> IO(Unit):
   match eof:
     case True{}:
       conn_gone(s, ln)
@@ -9446,7 +9448,7 @@ def conn_came.on(eof: Bool, s: Socket, +ln: Link, +x: String, got: List<&2, Stri
       conn_watch(s, ln, x <> got, Nat.add(have, count_upto(need, x)), need, err, rest)
 
 @unsafe
-def conn_came(r: Socket & Result<&1, &1, U32 & String, String>, +ln: Link, got: List<&2, String>, have: Nat, need: Nat, err: Maybe<&2, String>, rest: String) -> IO(Unit):
+def conn_came(r: Socket & Result<&1, &1, U32 & String, String>, +ln: Link, got: List<&2, String>, have: Nat, need: Nat, err: Maybe<&2, String>, rest: P.Tail) -> IO(Unit):
   (s, x) = r
   match x:
     case Fail{e}:
@@ -9457,7 +9459,7 @@ def conn_came(r: Socket & Result<&1, &1, U32 & String, String>, +ln: Link, got: 
 # the batch's answer: the watch taken back (a Ready it put dropped), the
 # replies sent, then what came meanwhile read on, as after any batch
 @unsafe
-def conn_unwatched.drop(s: Socket, +ln: Link, out: Maybe<&2, String>, cn: S.Conn, got: List<&2, String>, have: Nat, need: Nat, err: Maybe<&2, String>, rest: String) -> IO(Unit):
+def conn_unwatched.drop(s: Socket, +ln: Link, out: Maybe<&2, String>, cn: S.Conn, got: List<&2, String>, have: Nat, need: Nat, err: Maybe<&2, String>, rest: P.Tail) -> IO(Unit):
   match ln:
     case Link{db, +back, post, tl, id}:
       do IO<Unit>:
@@ -9465,7 +9467,7 @@ def conn_unwatched.drop(s: Socket, +ln: Link, out: Maybe<&2, String>, cn: S.Conn
         conn_resume(s, ln, out, cn, got, have, need, err, rest)
 
 @unsafe
-def conn_unwatched(p: Socket & Bool, +ln: Link, out: Maybe<&2, String>, cn: S.Conn, got: List<&2, String>, have: Nat, need: Nat, err: Maybe<&2, String>, rest: String) -> IO(Unit):
+def conn_unwatched(p: Socket & Bool, +ln: Link, out: Maybe<&2, String>, cn: S.Conn, got: List<&2, String>, have: Nat, need: Nat, err: Maybe<&2, String>, rest: P.Tail) -> IO(Unit):
   (s, taken) = p
   match taken:
     case True{}:
@@ -9474,7 +9476,7 @@ def conn_unwatched(p: Socket & Bool, +ln: Link, out: Maybe<&2, String>, cn: S.Co
       conn_unwatched.drop(s, ln, out, cn, got, have, need, err, rest)
 
 @unsafe
-def conn_resume(s: Socket, +ln: Link, out: Maybe<&2, String>, cn: S.Conn, got: List<&2, String>, have: Nat, need: Nat, err: Maybe<&2, String>, rest: String) -> IO(Unit):
+def conn_resume(s: Socket, +ln: Link, out: Maybe<&2, String>, cn: S.Conn, got: List<&2, String>, have: Nat, need: Nat, err: Maybe<&2, String>, rest: P.Tail) -> IO(Unit):
   match ln out:
     case Link{db, back, post, tl, id} None{}:
       conn_after(s, ln, cn, got, have, need, err, rest)
@@ -9488,7 +9490,7 @@ def conn_resume(s: Socket, +ln: Link, out: Maybe<&2, String>, cn: S.Conn, got: L
         conn_resent(m, ln, cn, got, have, need, err, rest)
 
 @unsafe
-def conn_resent(m: Socket & Result<&1, &1, U32 & String, Unit>, +ln: Link, cn: S.Conn, got: List<&2, String>, have: Nat, need: Nat, err: Maybe<&2, String>, rest: String) -> IO(Unit):
+def conn_resent(m: Socket & Result<&1, &1, U32 & String, Unit>, +ln: Link, cn: S.Conn, got: List<&2, String>, have: Nat, need: Nat, err: Maybe<&2, String>, rest: P.Tail) -> IO(Unit):
   (s, r) = m
   match r:
     case Fail{e}:
@@ -9497,7 +9499,7 @@ def conn_resent(m: Socket & Result<&1, &1, U32 & String, Unit>, +ln: Link, cn: S
       conn_after(s, ln, cn, got, have, need, err, rest)
 
 @unsafe
-def conn_after.q(quit: Bool, s: Socket, +ln: Link, +cn: S.Conn, +got: List<&2, String>, +have: Nat, +need: Nat, err: Maybe<&2, String>, rest: String) -> IO(Unit):
+def conn_after.q(quit: Bool, s: Socket, +ln: Link, +cn: S.Conn, +got: List<&2, String>, +have: Nat, +need: Nat, err: Maybe<&2, String>, rest: P.Tail) -> IO(Unit):
   match quit err:
     case True{} _:
       conn_end(s, ln)
@@ -9507,7 +9509,7 @@ def conn_after.q(quit: Bool, s: Socket, +ln: Link, +cn: S.Conn, +got: List<&2, S
       conn_more(s, rest, got, have, need, ln, cn, Nat.is_lt(have, need))
 
 @unsafe
-def conn_after(s: Socket, +ln: Link, +cn: S.Conn, got: List<&2, String>, have: Nat, need: Nat, err: Maybe<&2, String>, rest: String) -> IO(Unit):
+def conn_after(s: Socket, +ln: Link, +cn: S.Conn, got: List<&2, String>, have: Nat, need: Nat, err: Maybe<&2, String>, rest: P.Tail) -> IO(Unit):
   conn_after.q(S.conn.quit(cn), s, ln, cn, got, have, need, err, rest)
 
 # A subscribed client
@@ -9528,7 +9530,7 @@ def conn_after(s: Socket, +ln: Link, +cn: S.Conn, got: List<&2, String>, have: N
 
 # a push before a batch's answer, written, then the wait for the answer
 @unsafe
-def conn_ans.wait(s: Socket, +ln: Link, err: Maybe<&2, String>, rest: String, need: Nat) -> IO(Unit):
+def conn_ans.wait(s: Socket, +ln: Link, err: Maybe<&2, String>, rest: P.Tail, need: Nat) -> IO(Unit):
   match ln:
     case Link{db, +back, post, tl, id}:
       do IO<Unit>:
@@ -9536,7 +9538,7 @@ def conn_ans.wait(s: Socket, +ln: Link, err: Maybe<&2, String>, rest: String, ne
         conn_ans(s, ln, got, err, rest, need)
 
 @unsafe
-def conn_pushed(m: Socket & Result<&1, &1, U32 & String, Unit>, +ln: Link, err: Maybe<&2, String>, rest: String, need: Nat) -> IO(Unit):
+def conn_pushed(m: Socket & Result<&1, &1, U32 & String, Unit>, +ln: Link, err: Maybe<&2, String>, rest: P.Tail, need: Nat) -> IO(Unit):
   (s, r) = m
   match r:
     case Fail{e}:
@@ -9545,7 +9547,7 @@ def conn_pushed(m: Socket & Result<&1, &1, U32 & String, Unit>, +ln: Link, err: 
       conn_ans.wait(s, ln, err, rest, need)
 
 @unsafe
-def conn_push(s: Socket, +ln: Link, post: Bool, out: String, err: Maybe<&2, String>, rest: String, need: Nat) -> IO(Unit):
+def conn_push(s: Socket, +ln: Link, post: Bool, out: String, err: Maybe<&2, String>, rest: P.Tail, need: Nat) -> IO(Unit):
   match post:
     case True{}:
       do IO<Unit>:
@@ -9560,7 +9562,7 @@ def conn_push(s: Socket, +ln: Link, post: Bool, out: String, err: Maybe<&2, Stri
 # connection then waits as a subscribed client while the answer says it
 # still has a subscription
 @unsafe
-def conn_sub.ans.wait(s: Socket, +ln: Link, err: Maybe<&2, String>, rest: String, need: Nat) -> IO(Unit):
+def conn_sub.ans.wait(s: Socket, +ln: Link, err: Maybe<&2, String>, rest: P.Tail, need: Nat) -> IO(Unit):
   match ln:
     case Link{db, +back, post, tl, id}:
       do IO<Unit>:
@@ -9568,7 +9570,7 @@ def conn_sub.ans.wait(s: Socket, +ln: Link, err: Maybe<&2, String>, rest: String
         conn_sub.ans(s, ln, got, err, rest, need)
 
 @unsafe
-def conn_sub.pushed(m: Socket & Result<&1, &1, U32 & String, Unit>, +ln: Link, err: Maybe<&2, String>, rest: String, need: Nat) -> IO(Unit):
+def conn_sub.pushed(m: Socket & Result<&1, &1, U32 & String, Unit>, +ln: Link, err: Maybe<&2, String>, rest: P.Tail, need: Nat) -> IO(Unit):
   (s, r) = m
   match r:
     case Fail{e}:
@@ -9577,7 +9579,7 @@ def conn_sub.pushed(m: Socket & Result<&1, &1, U32 & String, Unit>, +ln: Link, e
       conn_sub.ans.wait(s, ln, err, rest, need)
 
 @unsafe
-def conn_sub.ans.push(s: Socket, +ln: Link, post: Bool, out: String, err: Maybe<&2, String>, rest: String, need: Nat) -> IO(Unit):
+def conn_sub.ans.push(s: Socket, +ln: Link, post: Bool, out: String, err: Maybe<&2, String>, rest: P.Tail, need: Nat) -> IO(Unit):
   match post:
     case True{}:
       do IO<Unit>:
@@ -9589,7 +9591,7 @@ def conn_sub.ans.push(s: Socket, +ln: Link, post: Bool, out: String, err: Maybe<
         conn_sub.pushed(m, ln, err, rest, need)
 
 @unsafe
-def conn_sub.ans(s: Socket, +ln: Link, got: Maybe<&1, Ans>, err: Maybe<&2, String>, rest: String, need: Nat) -> IO(Unit):
+def conn_sub.ans(s: Socket, +ln: Link, got: Maybe<&1, Ans>, err: Maybe<&2, String>, rest: P.Tail, need: Nat) -> IO(Unit):
   match got:
     case Some{AnsSub{out, cn}}:
       conn_sub.put(s, ln, link.post(ln), out, cn, err, rest, need)
@@ -9601,7 +9603,7 @@ def conn_sub.ans(s: Socket, +ln: Link, got: Maybe<&1, Ans>, err: Maybe<&2, Strin
 # the answer's replies written, then the connection's end (QUIT), its
 # protocol error, or its wait as a subscribed client
 @unsafe
-def conn_sub.err(s: Socket, +ln: Link, cn: S.Conn, err: Maybe<&2, String>, rest: String, need: Nat) -> IO(Unit):
+def conn_sub.err(s: Socket, +ln: Link, cn: S.Conn, err: Maybe<&2, String>, rest: P.Tail, need: Nat) -> IO(Unit):
   match err:
     case None{}:
       conn_sub(s, rest, Nil{}, 0n, need, ln, cn)
@@ -9609,7 +9611,7 @@ def conn_sub.err(s: Socket, +ln: Link, cn: S.Conn, err: Maybe<&2, String>, rest:
       conn_oops(mute.on(S.conn.mode(cn)), s, ln, msg)
 
 @unsafe
-def conn_sub.quit.if(quit: Bool, s: Socket, +ln: Link, cn: S.Conn, err: Maybe<&2, String>, rest: String, need: Nat) -> IO(Unit):
+def conn_sub.quit.if(quit: Bool, s: Socket, +ln: Link, cn: S.Conn, err: Maybe<&2, String>, rest: P.Tail, need: Nat) -> IO(Unit):
   match quit:
     case True{}:
       conn_end(s, ln)
@@ -9617,11 +9619,11 @@ def conn_sub.quit.if(quit: Bool, s: Socket, +ln: Link, cn: S.Conn, err: Maybe<&2
       conn_sub.err(s, ln, cn, err, rest, need)
 
 @unsafe
-def conn_sub.quit(s: Socket, +ln: Link, +cn: S.Conn, err: Maybe<&2, String>, rest: String, need: Nat) -> IO(Unit):
+def conn_sub.quit(s: Socket, +ln: Link, +cn: S.Conn, err: Maybe<&2, String>, rest: P.Tail, need: Nat) -> IO(Unit):
   conn_sub.quit.if(S.conn.quit(cn), s, ln, cn, err, rest, need)
 
 @unsafe
-def conn_sub.sent(m: Socket & Result<&1, &1, U32 & String, Unit>, +ln: Link, cn: S.Conn, err: Maybe<&2, String>, rest: String, need: Nat) -> IO(Unit):
+def conn_sub.sent(m: Socket & Result<&1, &1, U32 & String, Unit>, +ln: Link, cn: S.Conn, err: Maybe<&2, String>, rest: P.Tail, need: Nat) -> IO(Unit):
   (s, r) = m
   match r:
     case Fail{e}:
@@ -9630,7 +9632,7 @@ def conn_sub.sent(m: Socket & Result<&1, &1, U32 & String, Unit>, +ln: Link, cn:
       conn_sub.quit(s, ln, cn, err, rest, need)
 
 @unsafe
-def conn_sub.put(s: Socket, +ln: Link, post: Bool, out: Maybe<&2, String>, cn: S.Conn, err: Maybe<&2, String>, rest: String, need: Nat) -> IO(Unit):
+def conn_sub.put(s: Socket, +ln: Link, post: Bool, out: Maybe<&2, String>, cn: S.Conn, err: Maybe<&2, String>, rest: P.Tail, need: Nat) -> IO(Unit):
   match post out:
     case _ None{}:
       conn_sub.quit(s, ln, cn, err, rest, need)
@@ -9646,7 +9648,7 @@ def conn_sub.put(s: Socket, +ln: Link, post: Bool, out: Maybe<&2, String>, cn: S
 # A batch of a subscribed client to the actor (SubReq), as conn_job sends
 # any batch
 @unsafe
-def conn_sub.job(live: Bool, s: Socket, +ln: Link, job: B.Job, cn: S.Conn, n: U32, +inb: Nat, raw: String, err: Maybe<&2, String>, rest: String, need: Nat) -> IO(Unit):
+def conn_sub.job(live: Bool, s: Socket, +ln: Link, job: B.Job, cn: S.Conn, n: U32, +inb: Nat, raw: String, err: Maybe<&2, String>, rest: P.Tail, need: Nat) -> IO(Unit):
   match live ln:
     case False{} Link{db, +back, post, tl, id}:
       do IO<Unit>:
@@ -9662,12 +9664,12 @@ def conn_sub.job(live: Bool, s: Socket, +ln: Link, job: B.Job, cn: S.Conn, n: U3
         conn_sub.ans(s, ln, got, err, rest, need)
 
 @unsafe
-def conn_sub.ask(s: Socket, +ln: Link, cn: S.Conn, rs: List<&2, B.Req>, tl: U32, err: Maybe<&2, String>, rest: String, need: Nat, +inb: Nat, raw: String) -> IO(Unit):
+def conn_sub.ask(s: Socket, +ln: Link, cn: S.Conn, rs: List<&2, B.Req>, tl: U32, err: Maybe<&2, String>, rest: P.Tail, need: Nat, +inb: Nat, raw: String) -> IO(Unit):
   +job = B.job(B.unzip(rs, Nil{}, Nil{}))
   conn_sub.job(live.wants(job), s, ln, job, cn, tl, inb, raw, err, rest, need)
 
 @unsafe
-def conn_sub.send(s: Socket, +ln: Link, cn: S.Conn, reqs: List<&2, B.Req>, tl: U32, err: Maybe<&2, String>, rest: String, need: Nat, +inb: Nat, raw: String) -> IO(Unit):
+def conn_sub.send(s: Socket, +ln: Link, cn: S.Conn, reqs: List<&2, B.Req>, tl: U32, err: Maybe<&2, String>, rest: P.Tail, need: Nat, +inb: Nat, raw: String) -> IO(Unit):
   match reqs:
     case Nil{}:
       conn_sub.err(s, ln, cn, err, rest, need)
@@ -9684,7 +9686,7 @@ def conn_sub.batch(s: Socket, batch: P.Batch, +inb: Nat, +ln: Link, cn: S.Conn) 
 # bytes read once the watch fired, as conn_got, conn_data and conn_more
 # take them
 @unsafe
-def conn_sub.more(s: Socket, rest: String, +got: List<&2, String>, have: Nat, need: Nat, +ln: Link, cn: S.Conn, wait: Bool) -> IO(Unit):
+def conn_sub.more(s: Socket, rest: P.Tail, +got: List<&2, String>, have: Nat, need: Nat, +ln: Link, cn: S.Conn, wait: Bool) -> IO(Unit):
   match wait:
     case True{}:
       conn_sub(s, rest, got, have, need, ln, cn)
@@ -9693,7 +9695,7 @@ def conn_sub.more(s: Socket, rest: String, +got: List<&2, String>, have: Nat, ne
       conn_sub.batch(s, parse_in(rest, got), inb, ln, cn)
 
 @unsafe
-def conn_sub.data(s: Socket, eof: Bool, +x: String, rest: String, got: List<&2, String>, have: Nat, +need: Nat, +ln: Link, cn: S.Conn) -> IO(Unit):
+def conn_sub.data(s: Socket, eof: Bool, +x: String, rest: P.Tail, got: List<&2, String>, have: Nat, +need: Nat, +ln: Link, cn: S.Conn) -> IO(Unit):
   match eof:
     case True{}:
       conn_end(s, ln)
@@ -9702,7 +9704,7 @@ def conn_sub.data(s: Socket, eof: Bool, +x: String, rest: String, got: List<&2, 
       conn_sub.more(s, rest, x <> got, h, need, ln, cn, Nat.is_lt(h, need))
 
 @unsafe
-def conn_sub.got(m: Socket & Result<&1, &1, U32 & String, String>, rest: String, got: List<&2, String>, have: Nat, need: Nat, +ln: Link, cn: S.Conn) -> IO(Unit):
+def conn_sub.got(m: Socket & Result<&1, &1, U32 & String, String>, rest: P.Tail, got: List<&2, String>, have: Nat, need: Nat, +ln: Link, cn: S.Conn) -> IO(Unit):
   (s, r) = m
   match r:
     case Fail{e}:
@@ -9717,7 +9719,7 @@ def conn_sub.end(p: Socket & Bool, +ln: Link) -> IO(Unit):
   conn_end(s, ln)
 
 @unsafe
-def conn_sub.wsent(m: Socket & Result<&1, &1, U32 & String, Unit>, rest: String, got: List<&2, String>, have: Nat, need: Nat, +ln: Link, cn: S.Conn) -> IO(Unit):
+def conn_sub.wsent(m: Socket & Result<&1, &1, U32 & String, Unit>, rest: P.Tail, got: List<&2, String>, have: Nat, need: Nat, +ln: Link, cn: S.Conn) -> IO(Unit):
   (s, r) = m
   match r:
     case Fail{e}:
@@ -9729,7 +9731,7 @@ def conn_sub.wsent(m: Socket & Result<&1, &1, U32 & String, Unit>, rest: String,
 
 # a push written while the watch waits
 @unsafe
-def conn_sub.push(s: Socket, post: Bool, out: String, rest: String, got: List<&2, String>, have: Nat, need: Nat, +ln: Link, cn: S.Conn) -> IO(Unit):
+def conn_sub.push(s: Socket, post: Bool, out: String, rest: P.Tail, got: List<&2, String>, have: Nat, need: Nat, +ln: Link, cn: S.Conn) -> IO(Unit):
   match post:
     case True{}:
       do IO<Unit>:
@@ -9741,7 +9743,7 @@ def conn_sub.push(s: Socket, post: Bool, out: String, rest: String, got: List<&2
         conn_sub.wsent(m, rest, got, have, need, ln, cn)
 
 @unsafe
-def conn_sub.woke(s: Socket, m: Maybe<&1, Ans>, rest: String, got: List<&2, String>, have: Nat, need: Nat, +ln: Link, cn: S.Conn) -> IO(Unit):
+def conn_sub.woke(s: Socket, m: Maybe<&1, Ans>, rest: P.Tail, got: List<&2, String>, have: Nat, need: Nat, +ln: Link, cn: S.Conn) -> IO(Unit):
   match m:
     case Some{Ready{}}:
       do IO<Unit>:
@@ -9757,7 +9759,7 @@ def conn_sub.woke(s: Socket, m: Maybe<&1, Ans>, rest: String, got: List<&2, Stri
         conn_sub.end(p, ln)
 
 @unsafe
-def conn_sub.wait(s: Socket, rest: String, got: List<&2, String>, have: Nat, need: Nat, +ln: Link, cn: S.Conn) -> IO(Unit):
+def conn_sub.wait(s: Socket, rest: P.Tail, got: List<&2, String>, have: Nat, need: Nat, +ln: Link, cn: S.Conn) -> IO(Unit):
   match ln:
     case Link{db, +back, post, tl, id}:
       do IO<Unit>:
@@ -9765,7 +9767,7 @@ def conn_sub.wait(s: Socket, rest: String, got: List<&2, String>, have: Nat, nee
         conn_sub.woke(s, m, rest, got, have, need, ln, cn)
 
 @unsafe
-def conn_sub(s: Socket, rest: String, got: List<&2, String>, have: Nat, need: Nat, +ln: Link, cn: S.Conn) -> IO(Unit):
+def conn_sub(s: Socket, rest: P.Tail, got: List<&2, String>, have: Nat, need: Nat, +ln: Link, cn: S.Conn) -> IO(Unit):
   match ln:
     case Link{db, +back, post, tl, id}:
       do IO<Unit>:
@@ -9776,7 +9778,7 @@ def conn_sub(s: Socket, rest: String, got: List<&2, String>, have: Nat, need: Na
 # batch: its answer's replies written once the watch is taken back, then
 # what came meanwhile read on as a subscribed client
 @unsafe
-def conn_sub.after.q(quit: Bool, s: Socket, +ln: Link, +cn: S.Conn, +got: List<&2, String>, +have: Nat, +need: Nat, err: Maybe<&2, String>, rest: String) -> IO(Unit):
+def conn_sub.after.q(quit: Bool, s: Socket, +ln: Link, +cn: S.Conn, +got: List<&2, String>, +have: Nat, +need: Nat, err: Maybe<&2, String>, rest: P.Tail) -> IO(Unit):
   match quit err:
     case True{} _:
       conn_end(s, ln)
@@ -9786,11 +9788,11 @@ def conn_sub.after.q(quit: Bool, s: Socket, +ln: Link, +cn: S.Conn, +got: List<&
       conn_sub.more(s, rest, got, have, need, ln, cn, Nat.is_lt(have, need))
 
 @unsafe
-def conn_sub.after(s: Socket, +ln: Link, +cn: S.Conn, got: List<&2, String>, have: Nat, need: Nat, err: Maybe<&2, String>, rest: String) -> IO(Unit):
+def conn_sub.after(s: Socket, +ln: Link, +cn: S.Conn, got: List<&2, String>, have: Nat, need: Nat, err: Maybe<&2, String>, rest: P.Tail) -> IO(Unit):
   conn_sub.after.q(S.conn.quit(cn), s, ln, cn, got, have, need, err, rest)
 
 @unsafe
-def conn_sub.resent(m: Socket & Result<&1, &1, U32 & String, Unit>, +ln: Link, cn: S.Conn, got: List<&2, String>, have: Nat, need: Nat, err: Maybe<&2, String>, rest: String) -> IO(Unit):
+def conn_sub.resent(m: Socket & Result<&1, &1, U32 & String, Unit>, +ln: Link, cn: S.Conn, got: List<&2, String>, have: Nat, need: Nat, err: Maybe<&2, String>, rest: P.Tail) -> IO(Unit):
   (s, r) = m
   match r:
     case Fail{e}:
@@ -9799,7 +9801,7 @@ def conn_sub.resent(m: Socket & Result<&1, &1, U32 & String, Unit>, +ln: Link, c
       conn_sub.after(s, ln, cn, got, have, need, err, rest)
 
 @unsafe
-def conn_sub.resume(s: Socket, +ln: Link, out: Maybe<&2, String>, cn: S.Conn, got: List<&2, String>, have: Nat, need: Nat, err: Maybe<&2, String>, rest: String) -> IO(Unit):
+def conn_sub.resume(s: Socket, +ln: Link, out: Maybe<&2, String>, cn: S.Conn, got: List<&2, String>, have: Nat, need: Nat, err: Maybe<&2, String>, rest: P.Tail) -> IO(Unit):
   match ln out:
     case Link{db, back, post, tl, id} None{}:
       conn_sub.after(s, ln, cn, got, have, need, err, rest)
@@ -9813,7 +9815,7 @@ def conn_sub.resume(s: Socket, +ln: Link, out: Maybe<&2, String>, cn: S.Conn, go
         conn_sub.resent(m, ln, cn, got, have, need, err, rest)
 
 @unsafe
-def conn_sub.unwatched.drop(s: Socket, +ln: Link, out: Maybe<&2, String>, cn: S.Conn, got: List<&2, String>, have: Nat, need: Nat, err: Maybe<&2, String>, rest: String) -> IO(Unit):
+def conn_sub.unwatched.drop(s: Socket, +ln: Link, out: Maybe<&2, String>, cn: S.Conn, got: List<&2, String>, have: Nat, need: Nat, err: Maybe<&2, String>, rest: P.Tail) -> IO(Unit):
   match ln:
     case Link{db, +back, post, tl, id}:
       do IO<Unit>:
@@ -9821,7 +9823,7 @@ def conn_sub.unwatched.drop(s: Socket, +ln: Link, out: Maybe<&2, String>, cn: S.
         conn_sub.resume(s, ln, out, cn, got, have, need, err, rest)
 
 @unsafe
-def conn_sub.unwatched(p: Socket & Bool, +ln: Link, out: Maybe<&2, String>, cn: S.Conn, got: List<&2, String>, have: Nat, need: Nat, err: Maybe<&2, String>, rest: String) -> IO(Unit):
+def conn_sub.unwatched(p: Socket & Bool, +ln: Link, out: Maybe<&2, String>, cn: S.Conn, got: List<&2, String>, have: Nat, need: Nat, err: Maybe<&2, String>, rest: P.Tail) -> IO(Unit):
   (s, taken) = p
   match taken:
     case True{}:
@@ -9841,9 +9843,9 @@ def conn_sub.unwatched(p: Socket & Bool, +ln: Link, out: Maybe<&2, String>, cn: 
 def conn_start.of(m: Maybe<&1, Ans>, s: Socket, +ln: Link, +id: Nat) -> IO(Unit):
   match m:
     case Some{Ans{o, cn}}:
-      conn_loop(s, SNil{}, Nil{}, 0n, 1n, ln, cn)
+      conn_loop(s, P.TailNone{}, Nil{}, 0n, 1n, ln, cn)
     case _:
-      conn_loop(s, SNil{}, Nil{}, 0n, 1n, ln, S.conn_new(id))
+      conn_loop(s, P.TailNone{}, Nil{}, 0n, 1n, ln, S.conn_new(id))
 
 # the connection's client joins the actor's registry (Join: its socket's
 # fd and addresses, TCP.name) before its first batch, which waits for the
