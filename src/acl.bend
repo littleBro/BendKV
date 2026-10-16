@@ -12,6 +12,7 @@ import ./resp.bend as P
 import ./float.bend as F
 import ./command.bend as K
 import ./sha.bend as Sha
+import ./map.bend as KV
 
 # The tables
 # ----------
@@ -674,12 +675,20 @@ type User is Data:
 type Ent is Data:
   Ent{count: Nat, why: String, ctx: String, obj: String, user: String, at: Nat, info: String}
 
-# the ACL: the default user, the other users in the order of their names,
-# the log (newest first), the users DELUSER removed, whose clients are to
-# close, the requirepass it last gave the default user (rp), and ACL
-# GENPASS's secret key and count of the blocks it made
+# what the checks look up, each in a trie (map.bend) read in place: the
+# ids of the restricted clients (Restricted clients, below) and how many
+# there are, and the users but the default one by name, so that a batch
+# or a call does not walk a list of clients or of users
+type Ix is Data:
+  Ix{rcl: KV.Trie<Nat>, n: Nat, by: KV.Trie<User>}
+
+# the ACL: the default user, the other users in the order of their names
+# (ACL LIST and USERS), the log (newest first), the users DELUSER removed,
+# whose clients are to close, the requirepass it last gave the default
+# user (rp), ACL GENPASS's secret key and count of the blocks it made,
+# and the lookups of the checks (Ix)
 type Acl is Data:
-  Acl{dflt: User, users: List<&2, User>, log: List<&2, Ent>, gone: List<&2, String>, rp: String, key: String, ctr: Nat, rcl: List<&2, Nat>}
+  Acl{dflt: User, users: List<&2, User>, log: List<&2, Ent>, gone: List<&2, String>, rp: String, key: String, ctr: Nat, ix: Ix}
 
 # Small things
 # ------------
@@ -1472,37 +1481,60 @@ def acl.apply.all(rs: List<&2, String>, +allch: Bool, r: Applied) -> Applied:
 def acl.name.ok(s: String) -> Bool:
   Bool.not(acl.spaced(s))
 
-# the user of a name, or none
-def users.find(us: List<&2, User>, +n: String) -> Maybe<&2, User>:
-  match us:
-    case Nil{}:
-      None{}
-    case Con{+u, rest}:
-      Bool.pick(Maybe<&2, User>, String.eq(user.name(u), n), Some{u}, users.find(rest, n))
-
 def acl.dflt(+a: Acl) -> User:
   match a:
-    case Acl{+dflt, users, log, gone, rp, key, ctr, rcl}:
+    case Acl{+dflt, users, log, gone, rp, key, ctr, ix}:
       dflt
 
 def acl.users(+a: Acl) -> List<&2, User>:
   match a:
-    case Acl{dflt, +users, log, gone, rp, key, ctr, rcl}:
+    case Acl{dflt, +users, log, gone, rp, key, ctr, ix}:
       users
 
 def acl.log(+a: Acl) -> List<&2, Ent>:
   match a:
-    case Acl{dflt, users, +log, gone, rp, key, ctr, rcl}:
+    case Acl{dflt, users, +log, gone, rp, key, ctr, ix}:
       log
 
 def acl.gone(+a: Acl) -> List<&2, String>:
   match a:
-    case Acl{dflt, users, log, +gone, rp, key, ctr, rcl}:
+    case Acl{dflt, users, log, +gone, rp, key, ctr, ix}:
       gone
+
+# a user but the default one by name, from the index
+def ix.user(+ix: Ix, +n: String) -> Maybe<&2, User>:
+  match ix:
+    case Ix{rcl, k, +by}:
+      KV.read(User, by, n, 0n)
+
+def acl.ix.user(+a: Acl, +n: String) -> Maybe<&2, User>:
+  match a:
+    case Acl{dflt, users, log, gone, rp, key, ctr, +ix}:
+      ix.user(ix, n)
+
+def acl.user.of(d: Bool, +a: Acl, +n: String) -> Maybe<&2, User>:
+  match d:
+    case True{}:
+      Some{acl.dflt(a)}
+    case False{}:
+      acl.ix.user(a, n)
 
 # a user of the ACL by name
 def acl.user(+a: Acl, +n: String) -> Maybe<&2, User>:
-  Bool.pick(Maybe<&2, User>, String.eq(n, "default"), Some{acl.dflt(a)}, users.find(acl.users(a), n))
+  acl.user.of(String.eq(n, "default"), a, n)
+
+# the index with u in it, by its name
+def ix.put(ix: Ix, u: User) -> Ix:
+  match ix:
+    case Ix{rcl, k, by}:
+      +u0 = u
+      Ix{rcl, k, KV.set(User, by, user.name(u0), u0)}
+
+# the index without the user of name n
+def ix.del(ix: Ix, +n: String) -> Ix:
+  match ix:
+    case Ix{rcl, k, by}:
+      Ix{rcl, k, KV.del(User, by, n)}
 
 # a user put among the others, in the order of their names (byte order)
 def users.put(us: List<&2, User>, u: User) -> List<&2, User>:
@@ -1525,9 +1557,9 @@ def users.del(us: List<&2, User>, +n: String) -> List<&2, User>:
 
 def acl.put(a: Acl, u: User) -> Acl:
   match a:
-    case Acl{+dflt, +users, +log, +gone, +rp, +key, +ctr, +rcl}:
+    case Acl{+dflt, +users, +log, +gone, +rp, +key, +ctr, +ix}:
       +u0 = u
-      Bool.pick(Acl, String.eq(user.name(u0), "default"), Acl{u0, users, log, gone, rp, key, ctr, rcl}, Acl{dflt, users.put(users, u0), log, gone, rp, key, ctr, rcl})
+      Bool.pick(Acl, String.eq(user.name(u0), "default"), Acl{u0, users, log, gone, rp, key, ctr, ix}, Acl{dflt, users.put(users, u0), log, gone, rp, key, ctr, ix.put(ix, u0)})
 
 def acl.set.done(r: Applied, a: Acl, old: Maybe<&2, User>) -> SetR:
   match r:
@@ -1574,15 +1606,15 @@ def acl.dflt.of(+pass: String) -> User:
 
 # key: GENPASS's secret, random hex digits the server read at its start
 def acl.new(+pass: String, key: String) -> Acl:
-  Acl{acl.dflt.of(pass), Nil{}, Nil{}, Nil{}, pass, key, 0n, Nil{}}
+  Acl{acl.dflt.of(pass), Nil{}, Nil{}, Nil{}, pass, key, 0n, Ix{KV.empty(Nat), 0n, KV.empty(User)}}
 
 # requirepass set: the default user's passwords reset, then the new one
 # or nopass (Redis's ACLUpdateDefaultUserPassword)
 def acl.requirepass(a: Acl, +pass: String) -> Acl:
   match a:
-    case Acl{dflt, users, log, gone, rp, key, ctr, rcl}:
+    case Acl{dflt, users, log, gone, rp, key, ctr, ix}:
       +none = Nat.is_eq(String.length(pass), 0n)
-      Acl{user.set.pass(dflt, none, Bool.pick(List<&2, String>, none, Nil{}, [Sha.sha256(pass)])), users, log, gone, pass, key, ctr, rcl}
+      Acl{user.set.pass(dflt, none, Bool.pick(List<&2, String>, none, Nil{}, [Sha.sha256(pass)])), users, log, gone, pass, key, ctr, ix}
 
 def acl.cfg.if(same: Bool, a: Acl, +pass: String) -> Acl:
   match same:
@@ -1595,8 +1627,8 @@ def acl.cfg.if(same: Bool, a: Acl, +pass: String) -> Acl:
 # (Redis applies a parameter only when its value changed)
 def acl.cfg(a: Acl, +pass: String) -> Acl:
   match a:
-    case Acl{dflt, users, log, gone, +rp, key, ctr, rcl}:
-      acl.cfg.if(String.eq(rp, pass), Acl{dflt, users, log, gone, rp, key, ctr, rcl}, pass)
+    case Acl{dflt, users, log, gone, +rp, key, ctr, ix}:
+      acl.cfg.if(String.eq(rp, pass), Acl{dflt, users, log, gone, rp, key, ctr, ix}, pass)
 
 # the bytes in which two hashes differ, or-ed, over their k hex digits
 # from the i-th: every digit is compared, as Redis's
@@ -1672,7 +1704,7 @@ def user.open(+u: User) -> Bool:
 # its next change would copy its state; session.bend: mm.open)
 def acl.open(+a: Acl) -> Bool:
   match a:
-    case Acl{+dflt, users, log, gone, rp, key, ctr, rcl}:
+    case Acl{+dflt, users, log, gone, rp, key, ctr, ix}:
       user.open(dflt)
 
 # whether the default user takes any password, on or off (AUTH with a
@@ -1696,57 +1728,43 @@ def user.free(+u: User) -> Bool:
 # not), which the server keeps here so that their batches run a command
 # at a time, each one checked (server.bend, ACL): it puts a client among
 # them, or out, when it logs in, when its user changes, and when it goes.
+# They are a trie by id (Ix), so that every client's batch asks whether
+# its client is among them in a few steps, however many there are.
 
-def acl.rcl(+a: Acl) -> List<&2, Nat>:
-  match a:
-    case Acl{dflt, users, log, gone, rp, key, ctr, +rcl}:
-      rcl
-
-def rcl.has(+id: Nat, +xs: List<&2, Nat>) -> Bool:
-  match xs:
-    case Nil{}:
-      False{}
-    case Con{+x, +rest}:
-      Bool.or(Nat.is_eq(x, id), rcl.has(id, rest))
+def ix.restricted(+ix: Ix, +id: Nat) -> Bool:
+  match ix:
+    case Ix{+rcl, k, by}:
+      Maybe.is_some(&2, Nat, KV.read(Nat, rcl, Nat.show(id), 0n))
 
 def acl.restricted(+a: Acl, +id: Nat) -> Bool:
   match a:
-    case Acl{dflt, users, log, gone, rp, key, ctr, +rcl}:
-      rcl.has(id, rcl)
-
-def rcl.any(+xs: List<&2, Nat>) -> Bool:
-  match xs:
-    case Nil{}:
-      False{}
-    case Con{x, rest}:
-      True{}
+    case Acl{dflt, users, log, gone, rp, key, ctr, +ix}:
+      ix.restricted(ix, id)
 
 # whether some client is restricted (server.bend: Ps's bit 20)
 def acl.any(+a: Acl) -> Bool:
   match a:
-    case Acl{dflt, users, log, gone, rp, key, ctr, +rcl}:
-      rcl.any(rcl)
+    case Acl{dflt, users, log, gone, rp, key, ctr, +ix}:
+      match ix:
+        case Ix{rcl, +k, by}:
+          Bool.not(Nat.is_eq(k, 0n))
 
-def rcl.keep(same: Bool, +x: Nat, rest: List<&2, Nat>) -> List<&2, Nat>:
-  match same:
-    case True{}:
-      rest
-    case False{}:
-      x <> rest
+# the client of id (key x) among the restricted ones or not (free), had
+# saying whether it was
+def ix.client.at(free: Bool, had: Bool, +id: Nat, +x: String, rcl: KV.Trie<Nat>, k: Nat, by: KV.Trie<User>) -> Ix:
+  match free had:
+    case True{} True{}:
+      Ix{KV.del(Nat, rcl, x), Nat.sub(k, 1n), by}
+    case False{} False{}:
+      Ix{KV.set(Nat, rcl, x, id), Nat.add(k, 1n), by}
+    case _ _:
+      Ix{rcl, k, by}
 
-def rcl.drop(+id: Nat, xs: List<&2, Nat>) -> List<&2, Nat>:
-  match xs:
-    case Nil{}:
-      Nil{}
-    case Con{+x, rest}:
-      rcl.keep(Nat.is_eq(x, id), x, rcl.drop(id, rest))
-
-def rcl.put(free: Bool, +id: Nat, xs: List<&2, Nat>) -> List<&2, Nat>:
-  match free:
-    case True{}:
-      rcl.drop(id, xs)
-    case False{}:
-      id <> rcl.drop(id, xs)
+def ix.client(free: Bool, +id: Nat, ix: Ix) -> Ix:
+  match ix:
+    case Ix{+rcl, +k, +by}:
+      +x = Nat.show(id)
+      ix.client.at(free, Maybe.is_some(&2, Nat, KV.read(Nat, rcl, x, 0n)), id, x, rcl, k, by)
 
 def acl.free.of(m: Maybe<&2, User>) -> Bool:
   match m:
@@ -1761,8 +1779,8 @@ def acl.free(+a: Acl, +n: String) -> Bool:
 
 def acl.client.of(free: Bool, +id: Nat, a: Acl) -> Acl:
   match a:
-    case Acl{dflt, users, log, gone, rp, key, ctr, rcl}:
-      Acl{dflt, users, log, gone, rp, key, ctr, rcl.put(free, id, rcl)}
+    case Acl{dflt, users, log, gone, rp, key, ctr, ix}:
+      Acl{dflt, users, log, gone, rp, key, ctr, ix.client(free, id, ix)}
 
 # the client of id, as the user of name n now
 def acl.client(a: Acl, +id: Nat, +n: String) -> Acl:
@@ -1776,8 +1794,8 @@ def acl.client.gone(a: Acl, +id: Nat) -> Acl:
 # the users DELUSER removed, forgotten once their clients are closed
 def acl.gone.clear(a: Acl) -> Acl:
   match a:
-    case Acl{dflt, users, log, gone, rp, key, ctr, rcl}:
-      Acl{dflt, users, log, Nil{}, rp, key, ctr, rcl}
+    case Acl{dflt, users, log, gone, rp, key, ctr, ix}:
+      Acl{dflt, users, log, Nil{}, rp, key, ctr, ix}
 
 # ACL DELUSER
 # -----------
@@ -1797,8 +1815,8 @@ def acl.some(m: Maybe<&2, User>) -> Bool:
 
 def acl.del.one(a: Acl, +n: String) -> Acl:
   match a:
-    case Acl{+dflt, +users, +log, +gone, +rp, +key, +ctr, +rcl}:
-      Bool.pick(Acl, acl.some(users.find(users, n)), Acl{dflt, users.del(users, n), log, n <> gone, rp, key, ctr, rcl}, Acl{dflt, users, log, gone, rp, key, ctr, rcl})
+    case Acl{+dflt, +users, +log, +gone, +rp, +key, +ctr, +ix}:
+      Bool.pick(Acl, acl.some(ix.user(ix, n)), Acl{dflt, users.del(users, n), log, n <> gone, rp, key, ctr, ix.del(ix, n)}, Acl{dflt, users, log, gone, rp, key, ctr, ix})
 
 def acl.del.go(ns: List<&2, String>, +k: Nat, a: Acl) -> DelR:
   match ns:
@@ -1806,7 +1824,7 @@ def acl.del.go(ns: List<&2, String>, +k: Nat, a: Acl) -> DelR:
       DelOk{k, a}
     case Con{+n, rest}:
       +a0 = a
-      acl.del.go(rest, Bool.pick(Nat, acl.some(users.find(acl.users(a0), n)), Nat.add(k, 1n), k), acl.del.one(a0, n))
+      acl.del.go(rest, Bool.pick(Nat, acl.some(acl.ix.user(a0, n)), Nat.add(k, 1n), k), acl.del.one(a0, n))
 
 def acl.deluser.if(dflt: Bool, a: Acl, ns: List<&2, String>) -> DelR:
   match dflt:
@@ -1985,12 +2003,12 @@ def acl.cats.reply() -> R.Reply:
 # getRandomHexChars hashes a secret seed with a counter
 def acl.key(+a: Acl) -> String:
   match a:
-    case Acl{dflt, users, log, gone, rp, +key, ctr, rcl}:
+    case Acl{dflt, users, log, gone, rp, +key, ctr, ix}:
       key
 
 def acl.ctr(+a: Acl) -> Nat:
   match a:
-    case Acl{dflt, users, log, gone, rp, key, +ctr, rcl}:
+    case Acl{dflt, users, log, gone, rp, key, +ctr, ix}:
       ctr
 
 def genpass.go(k: Nat, +key: String, +c: Nat, acc: String) -> String:
@@ -2009,8 +2027,8 @@ def acl.genpass(+a: Acl, +bits: Nat) -> String:
 # the ACL after a GENPASS of bits: its blocks counted
 def acl.genpassed(a: Acl, +bits: Nat) -> Acl:
   match a:
-    case Acl{dflt, users, log, gone, rp, key, +ctr, rcl}:
-      Acl{dflt, users, log, gone, rp, key, Nat.add(ctr, genpass.blocks(bits)), rcl}
+    case Acl{dflt, users, log, gone, rp, key, +ctr, ix}:
+      Acl{dflt, users, log, gone, rp, key, Nat.add(ctr, genpass.blocks(bits)), ix}
 
 # The check
 # ---------
@@ -2456,45 +2474,29 @@ def gone.call.check(+r: CallR) -> Verdict:
     case _:
       VOk{}
 
-# where the user of name n is among us, from i (past the last when none):
-# hit says whether the user before us, at i - 1, was it
-def users.idx.go(+us: List<&2, User>, hit: Bool, +n: String, +i: Nat) -> Nat:
-  match us hit:
-    case _ True{}:
-      Nat.sub(i, 1n)
-    case Nil{} False{}:
-      i
-    case Con{+u, +rest} False{}:
-      users.idx.go(rest, String.eq(user.name(u), n), n, Nat.add(i, 1n))
-
-def users.idx(+us: List<&2, User>, +n: String, +i: Nat) -> Nat:
-  users.idx.go(us, False{}, n, i)
-
-# the call checked against the user at i among us, read in place
-def users.call.at(+us: List<&2, User>, +i: Nat, +r: CallR) -> Verdict:
-  match us i:
-    case Nil{} _:
-      gone.call.check(r)
-    case Con{+u, +rest} 0n:
+def ix.call.of(m: Maybe<&2, User>, +r: CallR) -> Verdict:
+  match m:
+    case Some{+u}:
       user.call.check(u, r)
-    case Con{+u, +rest} 1n+p:
-      users.call.at(rest, p, r)
+    case None{}:
+      gone.call.check(r)
 
-def acl.check.pick(d: Bool, +u: User, +us: List<&2, User>, +n: String, +r: CallR) -> Verdict:
+def acl.check.pick(d: Bool, +u: User, +ix: Ix, +n: String, +r: CallR) -> Verdict:
   match d:
     case True{}:
       user.call.check(u, r)
     case False{}:
-      users.call.at(us, users.idx(us, n, 0n), r)
+      ix.call.of(ix.user(ix, n), r)
 
 def acl.check.in(+a: Acl, +n: String, +r: CallR) -> Verdict:
   match a:
-    case Acl{+dflt, +users, log, gone, rp, key, ctr, rcl}:
-      acl.check.pick(String.eq(n, "default"), dflt, users, n, r)
+    case Acl{+dflt, users, log, gone, rp, key, ctr, +ix}:
+      acl.check.pick(String.eq(n, "default"), dflt, ix, n, r)
 
 # a call of INFO key k of the user of name n (server.bend, ACL), the user
-# found and checked in place: one that acl.user gave back would be copied
-# out of the borrowed Acl, with the list of users, at every call
+# read from the index (Ix) and checked in place: one that acl.user gave
+# back through acl.users would be copied out of the borrowed Acl, with
+# the list of users, at every call
 def acl.check(+a: Acl, +n: String, +k: Nat, +argv: List<&2, String>) -> Verdict:
   acl.check.in(a, n, call.of.key(k, argv))
 
@@ -2736,14 +2738,14 @@ def log.put(p: Pick, e: Ent, +max: Nat) -> List<&2, Ent>:
 
 def acl.log.add(a: Acl, e: Ent, +max: Nat) -> Acl:
   match a:
-    case Acl{dflt, users, +log, gone, rp, key, ctr, rcl}:
+    case Acl{dflt, users, +log, gone, rp, key, ctr, ix}:
       +e0 = e
-      Acl{dflt, users, log.put(log.pick(10n, log, e0), e0, max), gone, rp, key, ctr, rcl}
+      Acl{dflt, users, log.put(log.pick(10n, log, e0), e0, max), gone, rp, key, ctr, ix}
 
 def acl.log.reset(a: Acl) -> Acl:
   match a:
-    case Acl{dflt, users, log, gone, rp, key, ctr, rcl}:
-      Acl{dflt, users, Nil{}, gone, rp, key, ctr, rcl}
+    case Acl{dflt, users, log, gone, rp, key, ctr, ix}:
+      Acl{dflt, users, Nil{}, gone, rp, key, ctr, ix}
 
 # a Nat as a double
 def acl.dbl(+n: Nat) -> F.Fl:
