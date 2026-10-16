@@ -14,7 +14,7 @@
 # step needs no Redis. The table holds them typed (R.RMap, R.RSet), as
 # BendKV answers them in RESP3; RESP2 writes them as the arrays Redis
 # writes in RESP2. Only the subcommands BendKV has are kept (BendKV's
-# CLIENT has fifteen of Redis's sixteen), in the order of their names: Redis
+# CLIENT has all sixteen of Redis's), in the order of their names: Redis
 # lists commands in the order of a hash table with a random seed, so no
 # order is Redis's own. The second step writes the block between
 # "# BEGIN gen_commands: table" and "# END gen_commands: table" in
@@ -49,8 +49,8 @@ REDIS = HERE / "src" / "redis.bend"
 # BendKV's commands, and of a command with subcommands the ones BendKV has
 COMMANDS = {
     "append": [], "auth": [], "client": ["caching", "getname", "getredir", "help", "id",
-    "info", "kill", "list", "no-evict", "pause", "reply", "setname", "trackinginfo", "unblock",
-    "unpause"], "command": ["count", "docs",
+    "info", "kill", "list", "no-evict", "pause", "reply", "setname", "tracking", "trackinginfo",
+    "unblock", "unpause"], "command": ["count", "docs",
     "getkeys", "getkeysandflags", "help", "info", "list"], "config": ["get", "help",
     "resetstat", "rewrite", "set"], "dbsize": [], "decr": [], "decrby": [], "del": [],
     "echo": [], "exists": [], "flushall": [], "flushdb": [], "function": ["flush", "help"],
@@ -341,10 +341,47 @@ def block(facts):
 
 BEGIN, END = "# BEGIN gen_commands: table\n", "# END gen_commands: table\n"
 
+# The key specs of the commands that only read, by INFO's keys (Step 3
+# below): the block between "# BEGIN gen_commands: by key" and "# END
+# gen_commands: by key" in src/command.bend holds ro.key, the arity and
+# the key specs (and how they are read, as in desc) of such a command,
+# which name the keys a call of it read (CLIENT TRACKING remembers them),
+# with no walk of the table and none of its documentation built.
+KBEGIN, KEND = "# BEGIN gen_commands: by key\n", "# END gen_commands: by key\n"
+
+def ro(info):
+    name = info[0]
+    if name in KEYNUM:
+        specs, way = [], KEYNUM[name]
+    elif name in UNKNOWN:
+        specs, way = [], UNKNOWN[name]
+    else:
+        specs, way = [kspec(name, ks) for ks in info[8]], GETKEYS.get(name, "KBySpecs{}")
+    return f"Ro{{{bint(info[1])}, {blist(specs)}, {way}}}"
+
+def by_key_block(facts):
+    fl = flag_sets(facts)
+    tops, keys = stats_keys(REDIS.read_text())
+    out = ["# the arity and key specs of the command or subcommand of a key that",
+           "# only reads (readonly); none for any other",
+           "def ro.key(+key: Nat) -> Maybe<&2, Ro>:", "  match key:"]
+    for k, (name, kind, i) in enumerate(keys, 1):
+        if "readonly" not in fl[name]:
+            continue
+        if kind == "top":
+            info = facts["commands"][name]["info"]
+        else:
+            info = next(x for x in facts["commands"][kind]["info"][9] if x[0] == name)
+        out += ["    case %dn:" % k, "      Some{%s}" % ro(info)]
+    out += ["    case _:", "      None{}"]
+    return "\n".join(out) + "\n"
+
 def generate():
     src = BEND.read_text()
     a, b = src.index(BEGIN) + len(BEGIN), src.index(END)
-    return src[:a] + block(load()) + src[b:]
+    src = src[:a] + block(load()) + src[b:]
+    a, b = src.index(KBEGIN) + len(KBEGIN), src.index(KEND)
+    return src[:a] + by_key_block(load()) + src[b:]
 
 # Step 3: facts -> INFO's keys
 # ----------------------------
@@ -585,6 +622,13 @@ def stats_block(src, facts):
             "def stat.noslow(+key: Nat) -> Bool:", "  match key:"]
     for k, (name, kind, i) in enumerate(keys, 1):
         if "skip_slowlog" in fl[name]:
+            out += ["    case %dn:" % k, "      True{}"]
+    out += ["    case _:", "      False{}", ""]
+    out += ["# whether the command of a key only reads (readonly): a client that",
+            "# tracks keys (CLIENT TRACKING) has the keys of its calls remembered",
+            "def stat.ro(+key: Nat) -> Bool:", "  match key:"]
+    for k, (name, kind, i) in enumerate(keys, 1):
+        if "readonly" in fl[name]:
             out += ["    case %dn:" % k, "      True{}"]
     out += ["    case _:", "      False{}", ""]
     fk = first_keys(facts)
