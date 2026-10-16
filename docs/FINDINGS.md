@@ -8063,7 +8063,7 @@ BLOCK, is a session command (`SXRead`) that reads the client's database.
   subcommands).
 - **INFO.** Each call is counted by a code in a word of twelve bits with six set
   (`tools/gen_commands.py`), three codes a key. The reads bring INFO's keys to 286
-  with BGSAVE's (section 3zzzx), 861 of the 924 words. The commands that write a
+  with BGSAVE's (section 3zzzk), 861 of the 924 words. The commands that write a
   stream (15 more) will take 906, and 6 keys past them need wider words.
 - **Proofs.** `proof/PROOF.bend`'s three case splits over the session commands each
   got `SXRead`'s case, that of another read of the session (`SPfCount`'s). No law
