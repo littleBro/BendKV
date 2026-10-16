@@ -7296,6 +7296,186 @@ histogram. The histogram's four levels take a quarter of them. Most of the rest 
 updates of `Info` and the passes of the group, which travels in 13 registers and is saved
 to the frame and loaded back around each call that is not a tail call.
 
+## 66. CLIENT TRACKING
+
+**What was added** (FINDINGS 3zzzb). The keys a tracking client reads go to the tracking
+table, and the table's keys are heeded keys (section 61): a batch that may write one runs
+the general way, and every other batch keeps the fast way. A client in BCAST mode hears
+of every key written under its prefixes, and the fast way does not tell which keys a
+batch wrote: while one is connected, every batch runs the general way, a command at a
+time.
+
+**Measured** (callgrind, instructions per request: `tools/callgrind_req.sh`, 100,000
+keys, 20 clients at pipeline depth 16; the idle clients of `tools/idle_clients.py`: one
+that tracks keys and has read one of its own, one in BCAST mode on a prefix no other key
+has, 100 in BLPOP, one subscribed to the keyspace events of every class):
+
+| | GET | SET | INCR | last-level misses, GET and SET |
+|---|---:|---:|---:|---:|
+| main, no other client | 3,416 | 4,181 | 4,521 | 2.82, 3.13 |
+| now, no other client | 3,438 | 4,201 | 4,543 | 2.82, 3.12 |
+| now, 1 client that tracks | 3,519 (+2.4%) | 4,300 (+2.4%) | | 2.83, 3.14 |
+| now, 100 clients in BLPOP | 3,539 (+2.9%) | 4,341 (+3.3%) | | 2.84, 3.18 |
+| main, 100 clients in BLPOP | 3,519 | 4,322 | | 2.85, 3.19 |
+| now, 1 client in BCAST mode | 21,014 (6.1×) | 35,961 (8.6×) | | 4.60, 9.35 |
+| main, keyspace events and 1 subscriber | 30,386 | | | 4.57 |
+| now, keyspace events and 1 subscriber | 31,449 (+3.5%) | | | 4.61 |
+
+With no client tracking, a request costs 20 to 22 instructions more than on main (0.5% to
+0.6%). The profile puts them in the event loop's steps (`CLO_APPLY`, `ENTER`, `EXIT`); the
+actor's loops count what they did on main. A client that tracks costs the batches on other
+keys about what 100 clients in BLPOP cost them, 2.4%: each batch's hashes are looked for
+in the heeded keys. While a client is in BCAST mode, every batch runs the general way, a
+command at a time: GET takes 6.1 times the instructions it takes with no other client, and
+SET 8.6 times. Keyspace events sent to a subscriber put every batch on the general way on
+main too (the last two rows), and there a GET pays the tracking about 1,000 instructions
+(What is left); the walk that reads `notify-keyspace-events` by its name in each batch
+takes about 13,500 of either count (What is left).
+
+**In time** (`tools/waiters_bench.sh`: GET at pipeline 16 from 20 clients on 100,000
+keys, each server on one CPU, the median of five runs of a million; thousands of GETs per
+second):
+
+| condition | BendKV | of the first row | Redis 7.0.15 |
+|---|---:|---:|---:|
+| no other client | 1,143 | | 726 |
+| 1 client in BLPOP | 1,202 | 105% | 703 |
+| 100 clients in BLPOP | 1,070 | 94% | 718 |
+| 1,000 clients in BLPOP | 1,071 | 94% | 706 |
+| 1 client after WATCH | 1,205 | 105% | 710 |
+| 1 client that tracks | 1,111 | 97% | 693 |
+| 1 client in BCAST mode | 252 | 22% | 736 |
+
+Two runs of one condition can be 20% apart on this shared VM (section 61), so the rows
+within a tenth of the first are alike. A client that tracks leaves the fast way's
+throughput as it was; one in BCAST mode cuts it to a fifth, where Redis's does not move.
+With no other client, `tools/bench_pairs.sh` (100,000 keys, 20 clients, pipeline depth
+16, five pairs of main's build and this one) gives GET 0.96 of main's throughput, SET 1.08
+and INCR 0.93, within the machine's noise.
+
+**Reads a client tracks** (one client of RESP3 reads 20,000 keys of its own in pipelines
+of 16, then another client writes them, each write sending the reader an invalidation;
+instructions per request under callgrind):
+
+| | GET | SET | last-level misses, GET and SET |
+|---|---:|---:|---:|
+| BendKV, the reader does not track | 3,697 | 4,365 | 2.04, 2.04 |
+| BendKV, the reader tracks | 30,749 | 50,345 | 9.52, 25.19 |
+| Redis 7.0.15, the reader does not track | 3,698 | 4,832 | 0.46, 0.45 |
+| Redis 7.0.15, the reader tracks | 7,867 | 9,281 | 2.09, 3.80 |
+
+Tracking costs Redis 2.1 times its GET and 1.9 times its SET, and BendKV 8.3 and 11.5
+times. The reader's GETs run the general way, one at a time, as a subscribed client's
+commands do. Each SET of a key it read runs the general way too (the key is heeded), keeps
+the databases from before it (What is left), and sends the reader its invalidation. Before
+the two changes of "On the way" below that touch the general way, these took 31,634 and
+54,381.
+
+**Where BCAST's instructions go.** A GET of the general way, a command at a time, takes
+21,014 instructions here, about 17,600 more than the fast way's. About 2,200 of them are
+the tracking's own, against the same GET with keyspace events on (`tools/phases.py`, the
+spins named by `tools/spin_names.sh`):
+
+| | instructions |
+|---|---:|
+| the client's tracking read from the registry (`ps.tk`: `cls.get` and the lookup of its id) | about 670 |
+| `Ps` taken apart and put back around the walk of the command's effects, even when there are none (`iv.of`, `iv.ents`, `iv.ps`, `trk.bits`) | about 600 |
+| the invalidations kept for after the reply, taken (`ps.pend.take`, `bg.trk.pend`) | about 360 |
+| the step after the command (`bg.trk.after.go`) | about 220 |
+
+The rest is the general way's, which a monitor or keyspace events give any batch: each
+command's state dropped (`term_drop`, 2,900), the loop (`bg.go`, 1,600), each command's
+time merged into its histogram (1,380: section 64), and the session's steps. A SET takes
+35,961: the databases kept from before it cost it about 5,800 (What is left), and the walk
+of its effects for invalidations (`iv.ents`, `iv.write`) about 900.
+
+**On the way.**
+
+- *The table's limit.* The tick held the table to `tracking-table-max-keys` by reading
+  the parameter by its name, a walk of the 180 parameters comparing strings, at every tick
+  while some client tracked: about 130 instructions a request under callgrind (GET 3,651
+  with one client that tracks), whose slow run gives a request far more ticks than a real
+  one does. The table keeps the limit now, read again after CONFIG SET, EXEC and CLIENT
+  TRACKING.
+- *A borrow of the server's state.* The step after each command of the general way
+  matched the server's state to read the limit, which made its node shared and copied:
+  about 690 instructions a command. It matches it only after a command that may set the
+  limit.
+- *The events' test* (FINDINGS 3zzzb). With the tracking's bits counted as classes of
+  events, the general way built each command's keyspace events and dropped them. With one
+  client in BCAST mode, GET took 21,924 instructions and SET 40,006 before this change and
+  the next one, 21,014 and 35,961 after: about 470 and 3,600 of that were the events', and
+  about 440 a command the loop's.
+- *The general way's loop.* `bg.go` read a command's tracking with eight calls (the
+  tracking's bit, the client's record, the test of its keys, the arguments' reading,
+  INFO's counts, the bit after the command, the step after it), each saving and loading
+  the loop's frame of 18 words: GET with keyspace events and a subscriber took 31,810
+  instructions, 1,424 more than main. One value (`TkPre`) now carries the call's tracking,
+  read with one call, and INFO's counts are set where INFO runs: 31,449, 1,063 more than
+  main.
+
+**`make perfcheck`** here: GET 3,436, SET 4,199 and INCR 4,549 instructions per request,
+against the baseline's 3,452, 4,214 and 4,552; with 100 clients in BLPOP, GET and SET 2.9%
+and 3.4% above their counts without them; the misses and prefetches as they were.
+
+**After the review** (the review's fixes, FINDINGS 3zzzb's "Found in review"; callgrind
+as above, on the build of 479e46e):
+
+| | GET | SET |
+|---|---:|---:|
+| 1 client that tracks | 3,529 (+2.6%) | 4,318 (+2.8%) |
+| 1 client in BCAST mode, on a prefix no key has | 21,018 | 36,075 |
+| 1 client in BCAST mode, on the benchmark's keys (`idle_clients.py bcastkeys`) | | 43,880 |
+
+- The heeded keys' checks look in the tracking table itself now, where the set held a
+  copy of its keys: a batch's hashes are looked for in two tries while a client tracks.
+  A client that tracks costs other batches 2.6% and 2.8%, against 2.4% before; with 100
+  clients in BLPOP, `make perfcheck` gives GET 3,439 and SET 4,202, and 3.2% and 3.7%
+  above them (2.9% and 3.4% before).
+- The first table's row of BCAST mode measured a client on a prefix no key has, as the
+  review found: no key written reached the prefix, and so not the code that marked them,
+  which was exponential with NOLOOP. On the benchmark's keys, each SET marks its key
+  under the prefix, and at the end of each group the group's keys are sorted once and
+  pushed to the client: 7,800 instructions a request more.
+- In time (`tools/waiters_bench.sh` with TEST=set, the median of three runs of a
+  million; thousands of SETs per second):
+
+| condition | BendKV | Redis 7.0.15 |
+|---|---:|---:|
+| no other client | 1,290 | 668 |
+| 1 client that tracks | 1,174 | 627 |
+| 1 client in BCAST mode, on a prefix no key has | 151 | 612 |
+| 1 client in BCAST mode, on the benchmark's keys | 129 | 457 |
+
+  A client in BCAST mode on the keys written costs Redis a third of its SETs and BendKV
+  nine tenths of its own: BendKV's SETs are 28% of Redis's then.
+
+**What is left.**
+
+- BCAST mode sends every batch the general way. A batch of the fast way could tell the
+  keys it wrote from its bytes, as the slow log reads a call's arguments (the review
+  session's proposal), and mark them under the prefixes.
+- While the tracking has work, its step reads the client's record and takes `Ps` apart
+  and back for every command, whether the command wrote or not: about 2,200 instructions
+  of a GET in BCAST mode (above). The client's tracking could travel with its batch, as
+  its id does, and the walk could start only for a command with effects.
+- A tracking client's own commands run the general way, one at a time, so that its reads
+  reach the table.
+- With no client tracking, the general way still pays about 1,000 instructions a command
+  for the tracking (GET with keyspace events and a subscriber, above): the loop's three
+  calls (`bg.trk.pre`, `trk.pre.av`, `bg.trk.after`), and the step after each command,
+  which is given the command to leave PFDEBUG out, as Touches does, and so keeps its
+  strings and drops them.
+- While the tracking has work, the general way keeps the databases from before each
+  command, as it does for WATCH, so that a write's changed keys can be told from the keys
+  it only names: a SET then copies the path it changes and drops the old one after it,
+  about 5,800 instructions of a SET in BCAST mode (`term_drop` under `ps.cmd`). A write's
+  effects could name the keys it changed, as they name those it logs.
+- Found while measuring, on main too: while some client has a subscription, each batch of
+  the general way reads `notify-keyspace-events` by its name (`ps.tune`, `ev.of`), about
+  210,000 instructions a batch under callgrind (13,500 a request at depth 16).
+  Kept in `Ps`'s bits and read again after CONFIG SET, as the table's limit now is, it
+  would cost nothing.
 ## 69. The start reads its file in windows
 
 **What changed** (FINDINGS 3zzzg). The start read its append-only file whole into one
