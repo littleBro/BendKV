@@ -6388,7 +6388,8 @@ held none on BendKV. With a save that fails, SHUTDOWN answers its error and the 
 then runs and is answered, on both. 132 checks.
 
 **What it cost.** Nothing measurable: the check runs only on a batch the general way
-(`bg.go`), and `make perfcheck` gives GET, SET and INCR the counts of main.
+(`bg.go`). `make perfcheck` gives GET 3,414, SET 4,181 and INCR 4,525 instructions per
+request, against 3,416, 4,177 and 4,518 for the build before the change: within 0.2%.
 
 ## 4. Where a request's time goes, and hiding the memory waits
 
