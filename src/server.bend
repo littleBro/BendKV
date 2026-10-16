@@ -7550,35 +7550,6 @@ def scr.exists(+xs: List<&2, String>, +s: Scr) -> List<&2, R.Reply>:
     case Con{+x, +rest}:
       R.RInt{R.IPos{Bool.pick(Nat, Maybe.is_some(&2, Nat, scr.get(x, s)), 1n, 0n)}} <> scr.exists(rest, s)
 
-# the functions' state, lent, and set
-def scr.fi(+s: Scr) -> Fni:
-  match s:
-    case Scr{shas, +fi, n, st, at, who, ks}:
-      fi
-    case ScrOf{+x}:
-      scr.fi(x)
-
-def scr.fi.set(fi: Fni, s: Scr) -> Scr:
-  match s:
-    case Scr{shas, f0, n, st, at, who, ks}:
-      Scr{shas, fi, n, st, at, who, ks}
-    case ScrOf{x}:
-      scr.fi.set(fi, x)
-
-def ps.fi(+pb: Ps) -> Fni:
-  match pb:
-    case Ps{reg, ev, px, Cls{tab, kd, ks, ms, pz, dn, hd, +scr}, own}:
-      scr.fi(scr)
-    case PsOf{+p}:
-      ps.fi(p)
-
-def ps.fi.set(fi: Fni, pb: Ps) -> Ps:
-  match pb:
-    case Ps{reg, ev, px, Cls{tab, kd, ks, ms, pz, dn, hd, s0}, own}:
-      Ps{reg, ev, px, Cls{tab, kd, ks, ms, pz, dn, hd, scr.fi.set(fi, s0)}, own}
-    case PsOf{p}:
-      ps.fi.set(fi, p)
-
 # the flags of the function of a name, in any case, as Redis's dictionary
 # of functions compares names (functionDictType)
 def fni.fn(+name: String, +f: Fni) -> Maybe<&2, Nat>:
@@ -7622,10 +7593,15 @@ def fni.fx.none(+f: Fni) -> Bool:
       List.is_empty(&2, List<&2, String>, fx)
 
 # the entries kept, oldest first, and the state without them
-def fni.fx.take(f: Fni) -> List<&2, List<&2, String>> & Fni:
+def fni.fx.of(+f: Fni) -> List<&2, List<&2, String>>:
+  match f:
+    case Fni{fns, nl, +fx, fname, fa, fd}:
+      List.reverse(&2, List<&2, String>, fx)
+
+def fni.fx.out(f: Fni) -> Fni:
   match f:
     case Fni{fns, nl, fx, fname, fa, fd}:
-      (List.reverse(&2, List<&2, String>, fx), Fni{fns, nl, Nil{}, fname, fa, fd})
+      Fni{fns, nl, Nil{}, fname, fa, fd}
 
 # the function that runs: its name, its caller's command as it came, and
 # how long it has run
@@ -7667,6 +7643,112 @@ def fni.stats(+on: Bool, +f: Fni) -> R.Reply:
   match f:
     case Fni{+fns, +nl, fx, +fname, +fa, +fd}:
       R.RMap{[R.RBulk{"running_script"}, fni.running(Bool.and(on, Bool.not(String.is_empty(fname))), fname, fa, fd), R.RBulk{"engines"}, R.RMap{[R.RBulk{"LUA"}, R.RMap{[R.RBulk{"libraries_count"}, R.r_int(nl), R.RBulk{"functions_count"}, R.r_int(KV.size(Nat, fns))]}]}]}
+
+# The functions' state read and changed in place, as the scripts' state
+# is (ps.sc.st, ps.sc.st.set): a reader computes its answer inside the
+# matches of Ps and Scr, and a change (FiOp) is made to the Fni in them.
+# An accessor that returned the Fni, and a change of its copy set back,
+# copied Scr's node (FINDINGS 8): once a script, at its end (fni.done).
+def scr.fi.fn(+name: String, +s: Scr) -> Maybe<&2, Nat>:
+  match s:
+    case Scr{shas, +fi, n, st, at, who, ks}:
+      fni.fn(name, fi)
+    case ScrOf{+x}:
+      scr.fi.fn(name, x)
+
+def scr.fi.none(+s: Scr) -> Bool:
+  match s:
+    case Scr{shas, +fi, n, st, at, who, ks}:
+      fni.fx.none(fi)
+    case ScrOf{+x}:
+      scr.fi.none(x)
+
+def scr.fi.fx(+s: Scr) -> List<&2, List<&2, String>>:
+  match s:
+    case Scr{shas, +fi, n, st, at, who, ks}:
+      fni.fx.of(fi)
+    case ScrOf{+x}:
+      scr.fi.fx(x)
+
+def scr.fi.stats(+on: Bool, +s: Scr) -> R.Reply:
+  match s:
+    case Scr{shas, +fi, n, st, at, who, ks}:
+      fni.stats(on, fi)
+    case ScrOf{+x}:
+      scr.fi.stats(on, x)
+
+# the flags of the function of a name (fni.fn)
+def ps.fi.fn(+name: String, +pb: Ps) -> Maybe<&2, Nat>:
+  match pb:
+    case Ps{reg, ev, px, Cls{tab, kd, ks, ms, pz, dn, hd, +scr}, own}:
+      scr.fi.fn(name, scr)
+    case PsOf{+p}:
+      ps.fi.fn(name, p)
+
+# whether no FUNCTION command's entry is kept (fni.fx.none), and the
+# entries kept, oldest first
+def ps.fi.none(+pb: Ps) -> Bool:
+  match pb:
+    case Ps{reg, ev, px, Cls{tab, kd, ks, ms, pz, dn, hd, +scr}, own}:
+      scr.fi.none(scr)
+    case PsOf{+p}:
+      ps.fi.none(p)
+
+def ps.fi.fx(+pb: Ps) -> List<&2, List<&2, String>>:
+  match pb:
+    case Ps{reg, ev, px, Cls{tab, kd, ks, ms, pz, dn, hd, +scr}, own}:
+      scr.fi.fx(scr)
+    case PsOf{+p}:
+      ps.fi.fx(p)
+
+# FUNCTION STATS (fni.stats)
+def ps.fi.stats(+on: Bool, +pb: Ps) -> R.Reply:
+  match pb:
+    case Ps{reg, ev, px, Cls{tab, kd, ks, ms, pz, dn, hd, +scr}, own}:
+      scr.fi.stats(on, scr)
+    case PsOf{+p}:
+      ps.fi.stats(on, p)
+
+# a change of the functions' state: the mirror made anew (fni.mirror), a
+# FUNCTION command's entry kept (fni.fx.add), the entries taken out
+# (fni.fx.out), the function that runs, how long it has run, and its end
+# (fni.run, fni.ran, fni.done)
+type FiOp is Data:
+  FiMirror{fns: KV.Trie<Nat>, nl: Nat}
+  FiFx{e: List<&2, String>}
+  FiFxOut{}
+  FiRun{name: String, a: Av}
+  FiRan{d: Nat}
+  FiDone{}
+
+def fni.do(op: FiOp, f: Fni) -> Fni:
+  match op:
+    case FiMirror{fns, nl}:
+      fni.mirror(fns, nl, f)
+    case FiFx{e}:
+      fni.fx.add(e, f)
+    case FiFxOut{}:
+      fni.fx.out(f)
+    case FiRun{name, a}:
+      fni.run(name, a, f)
+    case FiRan{d}:
+      fni.ran(d, f)
+    case FiDone{}:
+      fni.done(f)
+
+def scr.fi.do(op: FiOp, s: Scr) -> Scr:
+  match s:
+    case Scr{shas, fi, n, st, at, who, ks}:
+      Scr{shas, fni.do(op, fi), n, st, at, who, ks}
+    case ScrOf{x}:
+      scr.fi.do(op, x)
+
+def ps.fi.do(op: FiOp, pb: Ps) -> Ps:
+  match pb:
+    case Ps{reg, ev, px, Cls{tab, kd, ks, ms, pz, dn, hd, s0}, own}:
+      Ps{reg, ev, px, Cls{tab, kd, ks, ms, pz, dn, hd, scr.fi.do(op, s0)}, own}
+    case PsOf{p}:
+      ps.fi.do(op, p)
 
 # The scripts' state read in place: each reader computes its answer
 # inside the match of Ps. An accessor that returned the Scr of a Ps lent
@@ -7880,7 +7962,7 @@ def eval.rest(+xs: List<&2, String>) -> List<&2, String>:
 def sc.flags.ev(fn: Bool, +m: Nat, +s: String, +pb: Ps) -> U32:
   match fn:
     case True{}:
-      sc.flags.found(fni.fn(s, ps.fi(pb)))
+      sc.flags.found(ps.fi.fn(s, pb))
     case False{}:
       sc.flags.of(Nat.is_eq(Nat.mod(m, 2n), 1n), s, pb)
 
@@ -8058,7 +8140,7 @@ def sc.exists.if(pend: Bool, +xs: List<&2, String>, +pb: Ps) -> Maybe<&2, R.Repl
 # time limit (the libraries cannot change meanwhile), or while no wait of
 # the engine is in the chain, which may change them
 def sc.fstats.if(+busy: Bool, +pend: Bool, +pb: Ps) -> Maybe<&2, R.Reply>:
-  Bool.pick(Maybe<&2, R.Reply>, Bool.and(pend, Bool.not(busy)), None{}, Some{fni.stats(busy, ps.fi(pb))})
+  Bool.pick(Maybe<&2, R.Reply>, Bool.and(pend, Bool.not(busy)), None{}, Some{ps.fi.stats(busy, pb)})
 
 def sc.exists(+c: R.Cmd, +pb: Ps) -> Maybe<&2, R.Reply>:
   match c:
@@ -8093,7 +8175,7 @@ def sc.fcall.early.of(found: Bool, +m: Nat, +k: Nat) -> Maybe<&2, String>:
 def sc.fcall.early.if(on: Bool, +how: Nat, +xs: List<&2, String>, +pb: Ps) -> Maybe<&2, String>:
   match on:
     case True{}:
-      sc.fcall.early.of(Maybe.is_some(&2, Nat, fni.fn(eval.script(xs), ps.fi(pb))), Nat.mod(how, 8n), Nat.div(how, 8n))
+      sc.fcall.early.of(Maybe.is_some(&2, Nat, ps.fi.fn(eval.script(xs), pb)), Nat.mod(how, 8n), Nat.div(how, 8n))
     case False{}:
       None{}
 
@@ -11609,15 +11691,30 @@ def grp.sc.run(+id: Nat, ks: List<&2, String>, g: Grp) -> Grp:
     case Grp{outs, es, srv, ds, ws, up, tx, pb}:
       Grp{outs, es, srv, ds, ws, up, tx, ps.scr.run.set(id, ks, pb)}
 
-def grp.fi(+g: Grp) -> Fni:
+def grp.fi.fn(+name: String, +g: Grp) -> Maybe<&2, Nat>:
   match g:
     case Grp{outs, es, srv, ds, ws, up, tx, +pb}:
-      ps.fi(pb)
+      ps.fi.fn(name, pb)
 
-def grp.fi.set(fi: Fni, g: Grp) -> Grp:
+def grp.fi.none(+g: Grp) -> Bool:
+  match g:
+    case Grp{outs, es, srv, ds, ws, up, tx, +pb}:
+      ps.fi.none(pb)
+
+def grp.fi.fx(+g: Grp) -> List<&2, List<&2, String>>:
+  match g:
+    case Grp{outs, es, srv, ds, ws, up, tx, +pb}:
+      ps.fi.fx(pb)
+
+def grp.fi.stats(+on: Bool, +g: Grp) -> R.Reply:
+  match g:
+    case Grp{outs, es, srv, ds, ws, up, tx, +pb}:
+      ps.fi.stats(on, pb)
+
+def grp.fi.do(op: FiOp, g: Grp) -> Grp:
   match g:
     case Grp{outs, es, srv, ds, ws, up, tx, pb}:
-      Grp{outs, es, srv, ds, ws, up, tx, ps.fi.set(fi, pb)}
+      Grp{outs, es, srv, ds, ws, up, tx, ps.fi.do(op, pb)}
 
 def grp.sc.on(+bits: U32, g: Grp) -> Grp:
   match g:
@@ -11668,8 +11765,7 @@ def grp.es.take(g: Grp) -> List<&2, A.Ent> & Grp:
 def grp.sc.end(es0: List<&2, A.Ent>, g: Grp) -> Grp:
   match g:
     case Grp{outs, es, srv, ds, ws, up, tx, pb}:
-      +p = pb
-      grp.sc.run(0n, Nil{}, Grp{outs, tx.effs(es, es0), srv, ds, ws, up, tx, ps.fi.set(fni.done(ps.fi(p)), ps.sc.off(21, p))})
+      grp.sc.run(0n, Nil{}, Grp{outs, tx.effs(es, es0), srv, ds, ws, up, tx, ps.fi.do(FiDone{}, ps.sc.off(21, pb))})
 
 # a state of the general way as a group's, with the group's answers
 def lrun.grp(outs: List<&2, Sigma<&2, &2, Chan(Ans), _ => Ans>>, l: LRun) -> Grp:
@@ -12118,7 +12214,7 @@ def sc.busy.groups(sc: Sc, +aof: Bool, +pid: U32, g: Grp, +reqs: Chan(Req)) -> I
 # there every answer waits for them, after the driver (Redis writes its
 # file before the replies: flushAppendOnlyFile).
 def sc.busy.held(+aof: Bool, +sc: Sc, +g: Grp) -> Bool:
-  Bool.and(Nat.is_eq(grp.down(g), 0n), Bool.or(Bool.not(aof), Bool.and(List.is_empty(&2, A.Ent, sc.es.before(sc)), fni.fx.none(grp.fi(g)))))
+  Bool.and(Nat.is_eq(grp.down(g), 0n), Bool.or(Bool.not(aof), Bool.and(List.is_empty(&2, A.Ent, sc.es.before(sc)), grp.fi.none(g))))
 
 @unsafe
 def sc.busy.sent(p: List<&2, U32> & Ps, outs: List<&2, Sigma<&2, &2, Chan(Ans), _ => Ans>>, es: List<&2, A.Ent>, srv: S.Srv, ds: R.Ds, ws: Waits, up: List<&2, Up>, tx: Tx) -> IO(Grp):
@@ -12155,7 +12251,7 @@ def sc.busy.if(first: Bool, +now: Nat, +sc: Sc, +aof: Bool, +pid: U32, g: Grp, +
 def sc.busy(+now: Nat, sc: Sc, +aof: Bool, +pid: U32, g: Grp, +reqs: Chan(Req)) -> IO(Grp):
   +x = g
   +s = sc
-  sc.busy.if(U32.is_eq(U32.and(grp.sc.st(x), 1), 0), now, s, aof, pid, grp.fi.set(fni.ran(Nat.sub(now, sc.t0(s)), grp.fi(x)), x), reqs)
+  sc.busy.if(U32.is_eq(U32.and(grp.sc.st(x), 1), 0), now, s, aof, pid, grp.fi.do(FiRan{Nat.sub(now, sc.t0(s))}, x), reqs)
 
 @unsafe
 def sc.tick.if(late: Bool, +now: Nat, sc: Sc, +aof: Bool, +pid: U32, g: Grp, +reqs: Chan(Req)) -> IO(Grp):
@@ -12365,8 +12461,7 @@ def grp.fn.on(fn: Bool, +name: String, +w: Waits, g: Grp) -> Grp:
     case False{}:
       g
     case True{}:
-      +x = g
-      grp.sc.on(16, grp.fi.set(fni.run(name, waits.av(w), grp.fi(x)), x))
+      grp.sc.on(16, grp.fi.do(FiRun{name, waits.av(w)}, g))
 
 def sc.start.run(m: Maybe<&2, Chan(Ans)>, +fn: Bool, +sha: String, +f: U32, +ro: Bool, +aof: Bool, +pid: U32, +ks: List<&2, String>, xs: List<&2, String>, ex: Exm, +r3: Bool, +db: Nat, +w: Waits, g: Grp, +reqs: Chan(Req)) -> IO(Grp):
   match m:
@@ -12487,18 +12582,21 @@ def grp.fx.add(+aof: Bool, +e: List<&2, String>, g: Grp) -> Grp:
     case False{}:
       g
     case True{}:
-      +x = g
-      grp.fi.set(fni.fx.add(e, grp.fi(x)), x)
+      grp.fi.do(FiFx{e}, g)
 
 # the entries kept, oldest first, and the group without them (taken once
-# the driver has run: aof_group.fx)
-def grp.fx.took(p: List<&2, List<&2, String>> & Fni, g: Grp) -> List<&2, List<&2, String>> & Grp:
-  (fx, fi) = p
-  (fx, grp.fi.set(fi, g))
+# the driver has run: aof_group.fx), the group as it was while none is
+def grp.fx.take.if(none: Bool, g: Grp) -> List<&2, List<&2, String>> & Grp:
+  match none:
+    case True{}:
+      (Nil{}, g)
+    case False{}:
+      +x = g
+      (grp.fi.fx(x), grp.fi.do(FiFxOut{}, x))
 
 def grp.fx.take(g: Grp) -> List<&2, List<&2, String>> & Grp:
   +x = g
-  grp.fx.took(fni.fx.take(grp.fi(x)), x)
+  grp.fx.take.if(grp.fi.none(x), x)
 
 def fn.items(p: List<&2, List<&2, String>> & String) -> List<&2, String>:
   (reqs, rest) = p
@@ -12508,8 +12606,7 @@ def fn.items(p: List<&2, List<&2, String>> & String) -> List<&2, String>:
 # nl libraries), and INFO's facts of them (vm and mo: Engine.fmem)
 def fn.facts(+fs: String, +nl: Nat, +vm: Nat, +mo: Nat, srv: S.Srv, pb: Ps) -> S.Srv & Ps:
   +its = fn.items(A.load(fs))
-  +p = pb
-  (S.srv.funcs(srv, Nat.div(List.length(&2, String, its), 2n), nl, vm, mo), ps.fi.set(fni.mirror(fni.fns.of(its, KV.empty(Nat)), nl, ps.fi(p)), p))
+  (S.srv.funcs(srv, Nat.div(List.length(&2, String, its), 2n), nl, vm, mo), ps.fi.do(FiMirror{fni.fns.of(its, KV.empty(Nat)), nl}, pb))
 
 def grp.fn.of(p: S.Srv & Ps, outs: List<&2, Sigma<&2, &2, Chan(Ans), _ => Ans>>, es: List<&2, A.Ent>, ds: R.Ds, ws: Waits, up: List<&2, Up>, tx: Tx) -> Grp:
   (s2, p2) = p
@@ -12642,7 +12739,7 @@ def sc.function(+k: Nat, +xs: List<&2, String>, ex: Exm, +r3: Bool, w: Waits, g:
         sc.fin(ex, w, R.RRaw{bytes}, False{}, g, aof, pid, reqs)
     case 16n:
       +x = g
-      sc.fin(ex, w, fni.stats(False{}, grp.fi(x)), False{}, x, aof, pid, reqs)
+      sc.fin(ex, w, grp.fi.stats(False{}, x), False{}, x, aof, pid, reqs)
     case 18n:
       do IO<Grp>:
         cs : String <- L.Engine.fcodes()
@@ -12702,7 +12799,7 @@ def sc.fcall.of(f: Maybe<&2, Nat>, +m: Nat, +n: Nat, +name: String, rest: List<&
 @unsafe
 def sc.fcall(+m: Nat, +n: Nat, +name: String, rest: List<&2, String>, ex: Exm, +r3: Bool, +db: Nat, +aof: Bool, +pid: U32, w: Waits, g: Grp, +reqs: Chan(Req)) -> IO(Grp):
   +x = g
-  sc.fcall.of(fni.fn(name, grp.fi(x)), m, n, name, rest, ex, r3, db, aof, pid, w, x, reqs)
+  sc.fcall.of(grp.fi.fn(name, x), m, n, name, rest, ex, r3, db, aof, pid, w, x, reqs)
 
 # SEval by its mode: EVAL and its kin (m below 4), their n keys taken
 # apart (R.eval.split), or FCALL and FCALL_RO
