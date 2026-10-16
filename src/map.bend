@@ -138,6 +138,11 @@ type IVal is Data:
 type IKey is Data:
   IKey{h: Nat, l: Nat}
 
+# a view of an intset's string past one buffer, for the reads of one
+# command (Sets, below): its bytes below k in a, those from k on in b
+type IView is Data:
+  IView{a: String, b: String, k: Nat}
+
 # A set, as Redis 7.0 keeps one: one whose members all read as 64-bit
 # integers in the form Redis writes them (ints.ok), at most
 # set-max-intset-entries of them (512), as the string of its n members in
@@ -3291,10 +3296,80 @@ def is.lb(f: Nat, done: Bool, less: Bool, +b: String, +w: Nat, +k: IKey, +lo: Na
       is.lb(g, Nat.is_le(mid, lo), ik.lt(is.key(b, w, m), k), b, w, k, lo, mid, m)
 
 # the index of the first member of the intset b (n members of w bytes)
-# whose key is not below k (n when none)
-def is.find(+b: String, +w: Nat, +n: Nat, +k: IKey) -> Nat:
+# whose key is not below k (n when none), b of one buffer
+def is.find.one(+b: String, +w: Nat, +n: Nat, +k: IKey) -> Nat:
   +mid = Nat.div(n, 2n)
   is.lb(Nat.add(n, 1n), Nat.is_eq(n, 0n), ik.lt(is.key(b, w, mid), k), b, w, k, 0n, n, mid)
+
+# An intset's string past one buffer (2,048 bytes: 257 members of 8
+# bytes or more) is two buffers: the C runtime fills the last one and
+# leaves the rest to the first, and a read of a byte of a String of two
+# buffers walks them from the first (str_code_at_far), where a read of a
+# String of one buffer reads where the byte lies. A command that reads
+# several members of such a string reads them through a view of its two
+# buffers (the drop of the first takes the last as it is, the take of
+# the first copies it); a string of one buffer is read as it is.
+def iw.view(+b: String) -> IView:
+  +k = Nat.sub(String.length(b), 2048n)
+  IView{String.take(b, k), String.drop(b, k), k}
+
+# is.key.w for the view's reads alone: a call of is.key.w from here
+# would change how the compiler passes its arguments where the reads of
+# one buffer call it (FINDINGS.md, section 7)
+def iw.key.w(w: Nat, +b: String, +at: Nat) -> IKey:
+  match w:
+    case 2n:
+      IKey{0n, Nat.mod(Nat.add(is.u16(b, at), 32768n), 65536n)}
+    case 4n:
+      IKey{0n, Nat.mod(Nat.add(is.u32(b, at), 2147483648n), ints.two32())}
+    case _:
+      IKey{Nat.mod(Nat.add(is.u32(b, Nat.add(at, 4n)), 2147483648n), ints.two32()), is.u32(b, at)}
+
+def iw.key.at(lo: Bool, +a: String, +b: String, +k: Nat, +w: Nat, +at: Nat) -> IKey:
+  match lo:
+    case True{}:
+      iw.key.w(w, a, at)
+    case False{}:
+      iw.key.w(w, b, Nat.sub(at, k))
+
+# the key of the member at index i (w bytes) of the view v
+def iw.key(+v: IView, +w: Nat, +i: Nat) -> IKey:
+  match v:
+    case IView{+a, +b, +k}:
+      +at = Nat.mul(i, w)
+      iw.key.at(Nat.is_lt(at, k), a, b, k, w, at)
+
+# is.lb through a view
+def iw.lb(f: Nat, done: Bool, less: Bool, +v: IView, +w: Nat, +k: IKey, +lo: Nat, +hi: Nat, +mid: Nat) -> Nat:
+  match f done less:
+    case 0n _ _:
+      lo
+    case 1n+g True{} _:
+      lo
+    case 1n+g False{} True{}:
+      +l = Nat.add(mid, 1n)
+      +m = Nat.div(Nat.add(l, hi), 2n)
+      iw.lb(g, Nat.is_le(hi, l), ik.lt(iw.key(v, w, m), k), v, w, k, l, hi, m)
+    case 1n+g False{} False{}:
+      +m = Nat.div(Nat.add(lo, mid), 2n)
+      iw.lb(g, Nat.is_le(mid, lo), ik.lt(iw.key(v, w, m), k), v, w, k, lo, mid, m)
+
+# is.find.one through a view
+def iw.find(+v: IView, +w: Nat, +n: Nat, +k: IKey) -> Nat:
+  +mid = Nat.div(n, 2n)
+  iw.lb(Nat.add(n, 1n), Nat.is_eq(n, 0n), ik.lt(iw.key(v, w, mid), k), v, w, k, 0n, n, mid)
+
+def is.find.of(far: Bool, +b: String, +w: Nat, +n: Nat, +k: IKey) -> Nat:
+  match far:
+    case True{}:
+      iw.find(iw.view(b), w, n, k)
+    case False{}:
+      is.find.one(b, w, n, k)
+
+# the index of the first member of the intset b (n members of w bytes)
+# whose key is not below k (n when none)
+def is.find(+b: String, +w: Nat, +n: Nat, +k: IKey) -> Nat:
+  is.find.of(Nat.is_lt(2048n, Nat.mul(n, w)), b, w, n, k)
 
 # the k low bytes of u, the low first, before rest
 def is.bytes(k: Nat, +u: Nat, rest: String) -> String:
@@ -3381,6 +3456,38 @@ def is.down(k: Nat, +b: String, +w: Nat, acc: List<&2, String>) -> List<&2, Stri
     case 1n++j:
       is.down(j, b, w, is.text(b, w, j) <> acc)
 
+# is.text.w for the view's reads alone, as iw.key.w
+def iw.text.w(w: Nat, +b: String, +at: Nat) -> String:
+  match w:
+    case 2n:
+      is.text.small(is.u16(b, at), 32768n, 65536n)
+    case 4n:
+      is.text.small(is.u32(b, at), 2147483648n, ints.two32())
+    case _:
+      is.text.wide(is.u32(b, Nat.add(at, 4n)), is.u32(b, at))
+
+def iw.text.at(lo: Bool, +a: String, +b: String, +k: Nat, +w: Nat, +at: Nat) -> String:
+  match lo:
+    case True{}:
+      iw.text.w(w, a, at)
+    case False{}:
+      iw.text.w(w, b, Nat.sub(at, k))
+
+# the text of the member at index i (w bytes) of the view v
+def iw.text(+v: IView, +w: Nat, +i: Nat) -> String:
+  match v:
+    case IView{+a, +b, +k}:
+      +at = Nat.mul(i, w)
+      iw.text.at(Nat.is_lt(at, k), a, b, k, w, at)
+
+# is.down through a view
+def iw.down(k: Nat, +v: IView, +w: Nat, acc: List<&2, String>) -> List<&2, String>:
+  match k:
+    case 0n:
+      acc
+    case 1n++j:
+      iw.down(j, v, w, iw.text(v, w, j) <> acc)
+
 # k bytes x before rest
 def is.fill(k: Nat, +x: Nat, rest: String) -> String:
   match k:
@@ -3404,13 +3511,19 @@ def is.widen(k: Nat, +b: String, +w: Nat, +x: Nat, +i: Nat, rest: String) -> Str
 def ints.w(+b: String, +n: Nat) -> Nat:
   Nat.div(String.length(b), n)
 
-def ints.has.of(fits: Bool, +v: IVal, +b: String, +w: Nat, +n: Nat) -> Bool:
-  match fits:
-    case True{}:
+# far: b is past one buffer (n * w past 2,048 bytes)
+def ints.has.of(fits: Bool, far: Bool, +v: IVal, +b: String, +w: Nat, +n: Nat) -> Bool:
+  match fits far:
+    case True{} False{}:
       +k = iv.key(w, v)
-      +i = is.find(b, w, n, k)
+      +i = is.find.one(b, w, n, k)
       Bool.and(Nat.is_lt(i, n), ik.eq(is.key(b, w, i), k))
-    case False{}:
+    case True{} True{}:
+      +k = iv.key(w, v)
+      +x = iw.view(b)
+      +i = iw.find(x, w, n, k)
+      Bool.and(Nat.is_lt(i, n), ik.eq(iw.key(x, w, i), k))
+    case False{} _:
       False{}
 
 # whether the intset of n members b holds the integer m (one of
@@ -3422,7 +3535,7 @@ def ints.has(+m: String, +b: String, n: Nat) -> Bool:
     case 1n++p:
       +v = iv.of(m)
       +w = ints.w(b, 1n+p)
-      ints.has.of(Nat.is_le(iv.w(v), w), v, b, w, 1n+p)
+      ints.has.of(Nat.is_le(iv.w(v), w), Nat.is_lt(2048n, Nat.mul(1n+p, w)), v, b, w, 1n+p)
 
 def ints.put.wide(neg: Bool, +v: IVal, +x: Nat, all: String) -> String:
   match neg:
@@ -3477,8 +3590,16 @@ def ints.nth(+b: String, +n: Nat, +i: Nat) -> Maybe<&2, String>:
 
 # the members of the intset b of n members, in increasing order, before
 # acc
+def ints.list.of(far: Bool, +b: String, +n: Nat, +w: Nat, acc: List<&2, String>) -> List<&2, String>:
+  match far:
+    case True{}:
+      iw.down(n, iw.view(b), w, acc)
+    case False{}:
+      is.down(n, b, w, acc)
+
 def ints.list.on(+b: String, +n: Nat, acc: List<&2, String>) -> List<&2, String>:
-  is.down(n, b, ints.w(b, n), acc)
+  +w = ints.w(b, n)
+  ints.list.of(Nat.is_lt(2048n, Nat.mul(n, w)), b, n, w, acc)
 
 def ints.list(+b: String, +n: Nat) -> List<&2, String>:
   ints.list.on(b, n, Nil{})
@@ -3491,6 +3612,23 @@ def ints.trie(k: Nat, +b: String, +w: Nat, +i: Nat, t: Trie<Unit>) -> Trie<Unit>
       t
     case 1n+j:
       ints.trie(j, b, w, Nat.add(i, 1n), set(Unit, t, is.text(b, w, i), Unit{}))
+
+# ints.trie through a view
+def iw.trie(k: Nat, +v: IView, +w: Nat, +i: Nat, t: Trie<Unit>) -> Trie<Unit>:
+  match k:
+    case 0n:
+      t
+    case 1n+j:
+      iw.trie(j, v, w, Nat.add(i, 1n), set(Unit, t, iw.text(v, w, i), Unit{}))
+
+# the trie of the n members of the intset b, w bytes each (far: b is
+# past one buffer)
+def ints.trie.of(far: Bool, +b: String, +n: Nat, +w: Nat) -> Trie<Unit>:
+  match far:
+    case True{}:
+      iw.trie(n, iw.view(b), w, 0n, empty(Unit))
+    case False{}:
+      ints.trie(n, b, w, 0n, empty(Unit))
 
 # the intset b of n members with the integers xs (one of ints.ok each,
 # none there, none twice) added in turn (RESTORE of a set of them)
@@ -4083,7 +4221,8 @@ def mems.grow.of(fits: Bool, +n: Nat, +b: String, +m: String) -> Mems:
     case True{}:
       ml.set(1n+n, ml.of(ints.list.on(b, n, [m])))
     case False{}:
-      MBig{1n+n, set(Unit, ints.trie(n, b, ints.w(b, n), 0n, empty(Unit)), m, Unit{})}
+      +w = ints.w(b, n)
+      MBig{1n+n, set(Unit, ints.trie.of(Nat.is_lt(2048n, Nat.mul(n, w)), b, n, w), m, Unit{})}
 
 def mems.grow(+n: Nat, +b: String, +m: String) -> Mems:
   mems.grow.of(ms.fits(1n+n, m), n, b, m)
