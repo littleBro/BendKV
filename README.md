@@ -183,8 +183,9 @@ translation stays in the trusted base.
   with Redis's rules for infinities. A sorted set keeps its elements in Redis's order, by
   score and then member: while it is small (at most 128 elements, members of at most 64
   bytes, Redis's listpack defaults) in one string, each element its member and its
-  score's 8 bytes, as a listpack keeps them in one allocation, and past that in a
-  weight-balanced tree with a trie of its members, for good, as Redis turns a listpack
+  score's 8 bytes, as a listpack keeps them in one allocation (in a weight-balanced tree
+  once that string would pass one buffer of the runtime, 2,048 bytes), and past the
+  limits in the tree with a trie of its members, for good, as Redis turns a listpack
   into a skiplist: a small one answers as Redis's listpack does
   (no `-0` score, a range by member walked from its first element, ZSCAN whole with
   cursor 0, its integer scores as digits). OBJECT ENCODING answers `listpack` or

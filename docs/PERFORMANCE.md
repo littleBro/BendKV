@@ -7632,6 +7632,55 @@ the same machine:
 instructions per request, against the baseline's 3,452, 4,214 and 4,552; with 100 clients
 in BLPOP, +3.1% and +3.8%.
 
+## 74. Small sorted sets in one string
+
+**What changed** (FINDINGS 3zzzn). A sorted set of at most 128 elements of members of at
+most 64 bytes is one string of its elements while that fits one buffer (2,048 bytes), as
+Redis's listpack is one allocation, instead of a tree of nodes and buffers; past one
+buffer it keeps its tree.
+
+**In time and memory** (200,000 sorted sets `zset:000000000000` to `zset:000000199999`,
+each of 10 members `m0` to `m9` of scores 0 to 9, loaded by pipelined ZADDs; then
+redis-benchmark, 20 clients at a pipeline depth of 16, keys at random among the 200,000:
+2,000,000 ZSCORE of `m3`, 2,000,000 ZADD of `m3` with the score 5 (there: the first on a
+key moves it), 500,000 ZRANGE 0 -1 WITHSCORES, 2,000,000 ZRANK of `m3` and 2,000,000
+ZINCRBY of `m3` by 1; three rounds of main's build, this one and Redis 7.0.15, in turn:
+main at fc28490, this change before it merged main 013d9ac and the hashes' pieces, whose
+instruction ratios to main's are the same within 0.5% on these commands, FINDINGS 3zzzn):
+
+| | `used_memory` a key | ZSCORE a second | ZADD | ZRANGE | ZRANK | ZINCRBY |
+|---|---:|---:|---:|---:|---:|---:|
+| main | 859.2 | 389,000 to 436,000 | 217,000 to 238,000 | 161,000 to 186,000 | 285,000 to 308,000 | 152,000 to 155,000 |
+| this change | 307.2 | 539,000 to 619,000 | 320,000 to 358,000 | 228,000 to 239,000 | 536,000 to 567,000 | 238,000 to 271,000 |
+| Redis 7.0.15 | 170.9 | 482,000 to 512,000 | 471,000 to 555,000 | 207,000 to 255,000 | 441,000 to 644,000 | 334,000 to 403,000 |
+
+The medians of the rounds' ratios: against main, 2.8 times less memory a key, and ZSCORE
+1.42 times the requests a second (1.28 to 1.48), ZADD 1.49 times (1.34 to 1.65), ZRANGE
+1.28 times (1.23 to 1.48), ZRANK 1.84 times (1.79 to 1.88) and ZINCRBY 1.70 times (1.54
+to 1.78). Against Redis, 1.80 times its memory, and 1.18, 0.73, 1.07, 0.90 and 0.71 times
+its throughput, where main had 0.82, 0.45, 0.73, 0.48 and 0.40. A first version, whose
+writes walked to their member twice, measured 1.51, 1.65, 1.20, 1.90 and 1.82 times main
+in three rounds of its own, two hours earlier: the ratios moved by up to a tenth between
+the two sets of rounds, where the instructions of these commands moved by 3% at most.
+
+**Instructions** fall by 2% to 39% on lookups and writes and rise by 6% to 23% on the
+ranges and ZRANDMEMBER (FINDINGS 3zzzn: callgrind per request, on main 013d9ac and this
+change merged with it), and last-level misses fall by half or more: the string is two to
+four cache lines where the tree was a node and a buffer an element.
+
+**Past one buffer** a sorted set keeps its tree: on 100 sorted sets of 128 members of
+1,000 bytes, RESTOREd from Redis's listpack, ZSCORE of the last member answered 8,460
+requests a second with the first version's chain of buffers, where the tree answers
+102,564 (main) and 136,986 (this change), and Redis 152,672 to 202,020 (redis-benchmark,
+20 clients at a pipeline depth of 16; one run each of 20,000 requests, too short to tell
+main from this change). FINDINGS 3zzzn has the instructions, which the chain made 12 to
+21 times as many.
+
+**`make perfcheck`**: GET, SET and INCR unchanged: 3,443, 4,211 and 4,556 instructions
+per request, against 3,447, 4,209 and 4,553 for main 6b8bf82 built on the same machine
+(the baseline's 3,452, 4,214 and 4,552), with the same last-level misses and prefetches;
+with 100 clients in BLPOP, +3.3% and +3.7% (main's +3.1% and +3.7%).
+
 ## 75. A long request read in part
 
 **What changed** (FINDINGS 3zzzo). The arguments a parse has read of a long request are
