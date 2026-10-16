@@ -16622,6 +16622,8 @@ def srv_same.o(o: R.SessOp, +conn: S.Conn, +srv: S.Srv, +ef: {S.authed(conn, srv
       e => Empty.absurd({S.own_srv(R.SSortStore{y0, y1}, conn, srv) == srv : S.Srv}, true_false(Equal.trans(Bool, True{}, S.authed(conn, srv), False{}, e, ef)))
     case R.SPfCount{y0}:
       e => Empty.absurd({S.own_srv(R.SPfCount{y0}, conn, srv) == srv : S.Srv}, true_false(Equal.trans(Bool, True{}, S.authed(conn, srv), False{}, e, ef)))
+    case R.SXRead{y0}:
+      e => Empty.absurd({S.own_srv(R.SXRead{y0}, conn, srv) == srv : S.Srv}, true_false(Equal.trans(Bool, True{}, S.authed(conn, srv), False{}, e, ef)))
     case R.SPfMerge{y0, y1}:
       e => Empty.absurd({S.own_srv(R.SPfMerge{y0, y1}, conn, srv) == srv : S.Srv}, true_false(Equal.trans(Bool, True{}, S.authed(conn, srv), False{}, e, ef)))
     case R.SPfSelfTest{}:
@@ -16816,6 +16818,10 @@ def own_bad(o: R.SessOp, +ps: List<&2, R.Act>, +id: Nat, +a: Bool, +n: String, +
     case R.SPfCount{y0}:
       ih =>
         %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel, r3}, srv), False{}, ef) : {Laws.all_bad(List.append(&2, R.Act, S.acts.k(S.KSess{R.SPfCount{y0}}, _, R.Own{R.SPfCount{y0}}, S.Conn{id, a, n, m, False{}, sel, r3}, srv), ps)) == True{} : Bool}
+        ih
+    case R.SXRead{y0}:
+      ih =>
+        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel, r3}, srv), False{}, ef) : {Laws.all_bad(List.append(&2, R.Act, S.acts.k(S.KSess{R.SXRead{y0}}, _, R.Own{R.SXRead{y0}}, S.Conn{id, a, n, m, False{}, sel, r3}, srv), ps)) == True{} : Bool}
         ih
     case R.SPfMerge{y0, y1}:
       ih =>
@@ -17130,6 +17136,10 @@ def auth_own(o: R.SessOp, +id: Nat, +a: Bool, +n: String, +m: S.Mute, +sel: Nat,
     case R.SPfCount{y0}:
       el =>
         %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel, r3}, srv), False{}, ef) : {S.conn.auth(S.next_conn.k(S.KSess{R.SPfCount{y0}}, _, S.Conn{id, a, n, m, False{}, sel, r3}, srv)) == False{} : Bool}
+        or_false_l(a, S.nopass(srv))(ef)
+    case R.SXRead{y0}:
+      el =>
+        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel, r3}, srv), False{}, ef) : {S.conn.auth(S.next_conn.k(S.KSess{R.SXRead{y0}}, _, S.Conn{id, a, n, m, False{}, sel, r3}, srv)) == False{} : Bool}
         or_false_l(a, S.nopass(srv))(ef)
     case R.SPfMerge{y0, y1}:
       el =>

@@ -8225,6 +8225,48 @@ machine was busier; the order of the three servers was the same in each.
 Nothing on the paths `make perfcheck` measures changed: the pushes, the pops, LINDEX,
 LRANGE and LSET run the code of #112.
 
+## 82. The reads of a stream
+
+**What changed** (FINDINGS 3zzzy). XLEN, XRANGE, XREVRANGE, XREAD, XINFO and XPENDING
+read the stream of section 3zzzu of FINDINGS. A range finds its first node in the tree
+by master ID and walks the node's entries from their listpack bytes, as Redis's iterator
+walks its listpack.
+
+**Throughput** (redis-benchmark; a stream of 100,000 entries, 100 a node, so 1,000
+nodes, and a group with 5,000 pending entries, made by Redis and RESTOREd on BendKV;
+`<mid>` the 50,000th entry's ID; 20 clients at a pipeline depth of 16, but where the
+table says; one run of each, on a shared machine). Requests a second:
+
+| command | BendKV | Redis 7.0.15 | Redis's / BendKV's |
+|---|---:|---:|---:|
+| XLEN s | 1,136,000 | 1,176,000 | 1.0 |
+| XRANGE s - + COUNT 10 | 38,700 | 108,000 | 2.8 |
+| XRANGE s `<mid>` + COUNT 10 | 10,500 | 60,700 | 5.8 |
+| XREVRANGE s + - COUNT 10 | 35,700 | 98,200 | 2.8 |
+| XREAD COUNT 10 STREAMS s `<mid>` | 11,000 | 73,600 | 6.7 |
+| XINFO STREAM s | 2,230 | 224,000 | 100 |
+| XINFO STREAM s FULL | 1,910 | 36,700 | 19 |
+| XINFO GROUPS s | 235,000 | 621,000 | 2.6 |
+| XPENDING s g | 427,000 | 455,000 | 1.1 |
+| XPENDING s g - + 10 | 85,400 | 177,000 | 2.1 |
+| XRANGE s - + COUNT 1000 (4 clients, no pipeline) | 422 | 1,461 | 3.5 |
+| XRANGE s - + (1 client) | 1.9 | 7.7 | 3.9 |
+| XINFO STREAM s FULL COUNT 0 (1 client) | 1.3 | 6.3 | 4.7 |
+
+- **A range from the middle of a node** pays for the entries before its start: BendKV
+  turns the node's list of entries (kept the newest first) around and reads each
+  entry's head up to the start, where Redis steps through its listpack.
+- **XINFO STREAM** counts the rax's nodes from the master IDs at each call, each ID
+  written out as its 16 bytes, where Redis keeps the count. Its time grows with the
+  nodes: 85,800 requests a second on a stream of 1 node (Redis 299,000), 16,800 on
+  100 (Redis 328,000) and 2,280 on 1,000 (Redis 250,000). The count is to be kept with
+  the stream, moved by the writes as they add and remove nodes.
+
+**`make perfcheck`**: GET, SET and INCR unchanged: 3,484, 4,246 and 4,588 instructions
+per request, +0.8% to +0.9% from the baseline (3,452, 4,214 and 4,552), as #114's build
+counted alike on this machine (3,480, 4,243 and 4,593); last-level misses 2.84, 3.15 and
+3.29; with 100 clients in BLPOP, +3.1% and +3.7%.
+
 ## 83. The general way reads the server in place
 
 FINDINGS 3zzzz. Callgrind's instructions per request (`tools/callgrind_req.sh`: 20
