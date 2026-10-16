@@ -25,7 +25,10 @@ since it was queued; HELLO's AUTH; RESET; a blocking command refused;
 SUBSCRIBE and PUBLISH refused, and subscribers closed by SETUSER;
 DELUSER of another client's user and of the client's own; CLIENT KILL
 USER and its errors; CLIENT LIST's user; the default user restricted,
-whose plain batches are checked too; and the slow log's SETUSER.
+whose plain batches are checked too; and the slow log's SETUSER. Then
+a check of BendKV alone: AUTH and HELLO's AUTH with a password of 1 MB
+answer within a second (a SHA-256 linear in the password's length; one
+that was not took a minute).
 
     python3 tests/acl_test.py --bendkv 6380 --redis 6390
 """
@@ -253,6 +256,23 @@ def scenarios(port, log):
     r.cmd("ACL", "LOG", "RESET")
 
 
+def auth_time(port):
+    """How long the slowest of AUTH and HELLO's AUTH with a password of
+    1 MB took, and their replies."""
+    c = Client(port, db=None)
+    c.cmd("ACL", "SETUSER", "tbig", "on", ">pw", "+@all", "~*")
+    big = "x" * (1 << 20)
+    worst = 0.0
+    replies = []
+    for args in (("AUTH", "tbig", big), ("AUTH", "default", big), ("HELLO", "2", "AUTH", "tbig", big)):
+        t = time.time()
+        replies.append(c.cmd(*args))
+        worst = max(worst, time.time() - t)
+    c.cmd("ACL", "DELUSER", "tbig")
+    c.close()
+    return worst, replies
+
+
 def cleanup(port):
     """The users and the default user as a fresh server has them, after a
     scenario that failed half way."""
@@ -292,7 +312,13 @@ def main():
     if bad:
         print("FAIL: %d of %d lines of the scenarios differ" % (bad, len(outs[1])))
         sys.exit(1)
-    print("OK: %d lines of ACL scenarios as Redis answers them" % len(outs[1]))
+    worst, replies = auth_time(args.bendkv)
+    want = ["-WRONGPASS invalid username-password pair or user is disabled.", "+OK",
+            "-WRONGPASS invalid username-password pair or user is disabled."]
+    if replies != want or worst > 1.0:
+        print("FAIL: AUTH of 1 MB took %.3f s (at most 1 s), answering %r" % (worst, replies))
+        sys.exit(1)
+    print("OK: %d lines of ACL scenarios as Redis answers them, and AUTH of 1 MB in %.3f s" % (len(outs[1]), worst))
 
 
 if __name__ == "__main__":

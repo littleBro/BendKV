@@ -9,6 +9,7 @@ import ./float.bend as F
 import ./hll.bend as H
 import ./geo.bend as G
 import ./rdb.bend as D
+import ./sha.bend as Sha
 
 # Types
 # -----
@@ -553,7 +554,10 @@ type SortO is Data:
 # says once the update restored the key (server.bend, Access). ACL's
 # subcommands are SAcl, their number and arguments (ACL, below): the
 # session keeps the users and the log (session.bend, ACL), and the server
-# answers WHOAMI from its clients (server.bend, ACL).
+# answers WHOAMI from its clients (server.bend, ACL). AUTH (SAuth) and
+# HELLO (SHello) keep their arguments with each password put as its
+# SHA-256 (auth.hashed, hello.hashed), which is all the session reads of
+# one.
 
 type SessOp is Data:
   SHello{args: List<&2, String>}
@@ -7620,6 +7624,61 @@ def block.least(+id: Nat, +n: Nat, name: String, +args: List<&2, String>) -> Ses
 def block.just(+id: Nat, +n: Nat, name: String, +args: List<&2, String>) -> SessOp:
   block.of(Nat.is_eq(n, List.length(&2, String, args)), id, name, args)
 
+# AUTH's arguments, its password put as its SHA-256: the session
+# compares that with the users' hashes (session.bend, login_ok), so that a
+# call hashes its password once, here, however many of its reply, its
+# client's connection and the server's log in ask. More arguments are a
+# syntax error, which reads no password
+def auth.hashed(args: List<&2, String>) -> List<&2, String>:
+  match args:
+    case Con{p, Nil{}}:
+      [Sha.sha256(p)]
+    case Con{u, Con{p, Nil{}}}:
+      [u, Sha.sha256(p)]
+    case xs:
+      xs
+
+# what HELLO's next argument is, after an option x with n arguments from
+# it on: the user of an AUTH that has its two (1), the name of a SETNAME
+# that has its one (3), or none, past an option the session refuses (4)
+def hello.hashed.opt(au: Bool, sn: Bool) -> Nat:
+  match au sn:
+    case True{} _:
+      1n
+    case False{} True{}:
+      3n
+    case False{} False{}:
+      4n
+
+# HELLO's options from xs on, n of them, each AUTH's password put as its
+# SHA-256 (as AUTH's): they are read as the session reads them
+# (session.bend, hello.step), st saying what the next one is: an option
+# (0), the user of an AUTH (1), its password (2), the name of a SETNAME
+# (3); past an option the session refuses (4), the rest is as it was
+def hello.hashed.go(xs: List<&2, String>, +n: Nat, +st: Nat) -> List<&2, String>:
+  match xs st:
+    case Nil{} _:
+      Nil{}
+    case Con{+x, rest} 0n:
+      x <> hello.hashed.go(rest, Nat.sub(n, 1n), hello.hashed.opt(Bool.and(is_word(x, "AUTH"), Nat.is_le(3n, n)), Bool.and(is_word(x, "SETNAME"), Nat.is_le(2n, n))))
+    case Con{x, rest} 1n:
+      x <> hello.hashed.go(rest, Nat.sub(n, 1n), 2n)
+    case Con{x, rest} 2n:
+      Sha.sha256(x) <> hello.hashed.go(rest, Nat.sub(n, 1n), 0n)
+    case Con{x, rest} 3n:
+      x <> hello.hashed.go(rest, Nat.sub(n, 1n), 0n)
+    case Con{x, rest} _:
+      x <> rest
+
+# HELLO's arguments: its version, then its options with their passwords
+# hashed. A version the session refuses leaves the options unread
+def hello.hashed(args: List<&2, String>) -> List<&2, String>:
+  match args:
+    case Con{v, +rest}:
+      v <> hello.hashed.go(rest, List.length(&2, String, rest), 0n)
+    case Nil{}:
+      Nil{}
+
 # the session commands (cmd_own), parsed into their ops
 def parse_sess(id: Nat, name: String, args: List<&2, String>) -> SessOp:
   match id:
@@ -7630,13 +7689,13 @@ def parse_sess(id: Nat, name: String, args: List<&2, String>) -> SessOp:
         case _:
           s_arity("select")
     case 101n:  # HELLO
-      SHello{args}
+      SHello{hello.hashed(args)}
     case 102n:  # AUTH
       match args:
         case Nil{}:
           s_arity("auth")
         case Con{a, rest}:
-          SAuth{a <> rest}
+          SAuth{auth.hashed(a <> rest)}
     case 103n:  # QUIT
       SQuit{}
     case 104n:  # RESET

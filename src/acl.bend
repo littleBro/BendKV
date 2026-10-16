@@ -11,6 +11,7 @@ import ./redis.bend as R
 import ./resp.bend as P
 import ./float.bend as F
 import ./command.bend as K
+import ./sha.bend as Sha
 
 # The tables
 # ----------
@@ -636,157 +637,6 @@ def acl.of.key(+k: Nat) -> Nat:
     case _:
       366n
 # END gen_commands: acl
-
-# SHA-256
-# -------
-# FIPS 180-4's SHA-256 of a string's bytes, written as 64 lowercase hex
-# digits: what Redis keeps of a password (ACLHashPassword)
-
-type H8 is Data:
-  H8{a: U32, b: U32, c: U32, d: U32, e: U32, f: U32, g: U32, h: U32}
-
-def sha.h0() -> H8:
-  H8{1779033703, 3144134277, 1013904242, 2773480762, 1359893119, 2600822924, 528734635, 1541459225}
-
-# the round constants, in order
-def sha.k() -> List<&2, U32>:
-  [1116352408, 1899447441, 3049323471, 3921009573, 961987163, 1508970993, 2453635748, 2870763221,
-   3624381080, 310598401, 607225278, 1426881987, 1925078388, 2162078206, 2614888103, 3248222580,
-   3835390401, 4022224774, 264347078, 604807628, 770255983, 1249150122, 1555081692, 1996064986,
-   2554220882, 2821834349, 2952996808, 3210313671, 3336571891, 3584528711, 113926993, 338241895,
-   666307205, 773529912, 1294757372, 1396182291, 1695183700, 1986661051, 2177026350, 2456956037,
-   2730485921, 2820302411, 3259730800, 3345764771, 3516065817, 3600352804, 4094571909, 275423344,
-   430227734, 506948616, 659060556, 883997877, 958139571, 1322822218, 1537002063, 1747873779,
-   1955562222, 2024104815, 2227730452, 2361852424, 2428436474, 2756734187, 3204031479, 3329325298]
-
-def sha.rotr(+x: U32, +n: Nat) -> U32:
-  U32.or(U32.shrn(x, n), U32.shln(x, Nat.sub(32n, n)))
-
-def sha.bs0(+x: U32) -> U32:
-  U32.xor(U32.xor(sha.rotr(x, 2n), sha.rotr(x, 13n)), sha.rotr(x, 22n))
-
-def sha.bs1(+x: U32) -> U32:
-  U32.xor(U32.xor(sha.rotr(x, 6n), sha.rotr(x, 11n)), sha.rotr(x, 25n))
-
-def sha.ss0(+x: U32) -> U32:
-  U32.xor(U32.xor(sha.rotr(x, 7n), sha.rotr(x, 18n)), U32.shrn(x, 3n))
-
-def sha.ss1(+x: U32) -> U32:
-  U32.xor(U32.xor(sha.rotr(x, 17n), sha.rotr(x, 19n)), U32.shrn(x, 10n))
-
-def sha.ch(+e: U32, +f: U32, +g: U32) -> U32:
-  U32.xor(U32.and(e, f), U32.and(U32.not(e), g))
-
-def sha.maj(+a: U32, +b: U32, +c: U32) -> U32:
-  U32.xor(U32.xor(U32.and(a, b), U32.and(a, c)), U32.and(b, c))
-
-# x divided by 256, k times
-def sha.down(k: Nat, +x: Nat) -> Nat:
-  match k:
-    case 0n:
-      x
-    case 1n+p:
-      sha.down(p, Nat.div(x, 256n))
-
-# byte i of the padding after the n bytes of a message padded to t bytes:
-# 0x80, zeros, then the message's length in bits, big-endian, in the last
-# eight
-def sha.pad(+n: Nat, +t: Nat, +i: Nat) -> U32:
-  Bool.pick(U32, Nat.is_eq(i, n), 128,
-    Bool.pick(U32, Nat.is_lt(Nat.add(i, 8n), t), 0,
-      U32.from_nat(Nat.mod(sha.down(Nat.sub(Nat.sub(t, 1n), i), Nat.mul(n, 8n)), 256n))))
-
-# byte i of s, of n bytes, padded to t
-def sha.byte(+s: String, +n: Nat, +t: Nat, +i: Nat) -> U32:
-  Bool.pick(U32, Nat.is_lt(i, n), String.code_at(s, i), sha.pad(n, t, i))
-
-# the big-endian word at byte i
-def sha.word(+s: String, +n: Nat, +t: Nat, +i: Nat) -> U32:
-  U32.or(U32.or(U32.shln(sha.byte(s, n, t, i), 24n), U32.shln(sha.byte(s, n, t, Nat.add(i, 1n)), 16n)),
-    U32.or(U32.shln(sha.byte(s, n, t, Nat.add(i, 2n)), 8n), sha.byte(s, n, t, Nat.add(i, 3n))))
-
-# the k words from byte i put before ws, the last first
-def sha.words(k: Nat, +s: String, +n: Nat, +t: Nat, +i: Nat, ws: List<&2, U32>) -> List<&2, U32>:
-  match k:
-    case 0n:
-      ws
-    case 1n+p:
-      sha.words(p, s, n, t, Nat.add(i, 4n), sha.word(s, n, t, i) <> ws)
-
-# the word i places before the newest of ws (newest first)
-def sha.at(+ws: List<&2, U32>, i: Nat) -> U32:
-  match ws i:
-    case Nil{} _:
-      0
-    case Con{+w, rest} 0n:
-      w
-    case Con{w, rest} 1n+p:
-      sha.at(rest, p)
-
-# the schedule's next word, from the sixteen before it (newest first)
-def sha.next(+ws: List<&2, U32>) -> U32:
-  U32.add(U32.add(sha.ss1(sha.at(ws, 1n)), sha.at(ws, 6n)), U32.add(sha.ss0(sha.at(ws, 14n)), sha.at(ws, 15n)))
-
-# the schedule's words 16 to 63 put before its first sixteen (newest first)
-def sha.sched(k: Nat, ws: List<&2, U32>) -> List<&2, U32>:
-  match k:
-    case 0n:
-      ws
-    case 1n+p:
-      +w = ws
-      sha.sched(p, sha.next(w) <> w)
-
-def sha.step(st: H8, +kw: U32) -> H8:
-  match st:
-    case H8{+a, +b, +c, d, +e, +f, +g, h}:
-      +t1 = U32.add(U32.add(h, sha.bs1(e)), U32.add(sha.ch(e, f, g), kw))
-      H8{U32.add(t1, U32.add(sha.bs0(a), sha.maj(a, b, c))), a, b, c, U32.add(d, t1), e, f, g}
-
-# the 64 rounds of a block's schedule ws (in order) over st
-def sha.rounds(ks: List<&2, U32>, ws: List<&2, U32>, st: H8) -> H8:
-  match ks ws:
-    case Con{k, kt} Con{w, wt}:
-      sha.rounds(kt, wt, sha.step(st, U32.add(k, w)))
-    case _ _:
-      st
-
-def sha.add(x: H8, y: H8) -> H8:
-  match x y:
-    case H8{a0, b0, c0, d0, e0, f0, g0, h0} H8{a1, b1, c1, d1, e1, f1, g1, h1}:
-      H8{U32.add(a0, a1), U32.add(b0, b1), U32.add(c0, c1), U32.add(d0, d1), U32.add(e0, e1), U32.add(f0, f1), U32.add(g0, g1), U32.add(h0, h1)}
-
-# the k blocks of s (n bytes, padded to t) from byte i, over st
-def sha.blocks(k: Nat, +s: String, +n: Nat, +t: Nat, +i: Nat, st: H8) -> H8:
-  match k:
-    case 0n:
-      st
-    case 1n+p:
-      +h = st
-      +ws = List.reverse(&2, U32, sha.sched(48n, sha.words(16n, s, n, t, i, Nil{})))
-      sha.blocks(p, s, n, t, Nat.add(i, 64n), sha.add(h, sha.rounds(sha.k(), ws, h)))
-
-def sha.digit(+d: U32) -> String:
-  String.from_list([Chr{Bool.pick(U32, U32.is_lt(d, 10), U32.add(d, 48), U32.add(d, 87))}])
-
-# the k lowest hex digits of x put before acc
-def sha.hex(k: Nat, +x: U32, acc: String) -> String:
-  match k:
-    case 0n:
-      acc
-    case 1n+p:
-      sha.hex(p, U32.shrn(x, 4n), sha.digit(U32.and(x, 15)) ++ acc)
-
-def sha.out(st: H8) -> String:
-  match st:
-    case H8{a, b, c, d, e, f, g, h}:
-      sha.hex(8n, a, sha.hex(8n, b, sha.hex(8n, c, sha.hex(8n, d, sha.hex(8n, e, sha.hex(8n, f, sha.hex(8n, g, sha.hex(8n, h, ""))))))))
-
-# SHA-256 of s's bytes (each char a byte), as 64 lowercase hex digits
-def sha256(+s: String) -> String:
-  +n = String.length(s)
-  +t = Nat.mul(Nat.div(Nat.add(n, 72n), 64n), 64n)
-  sha.out(sha.blocks(Nat.div(t, 64n), s, n, t, 0n, sha.h0()))
-
 
 # Types
 # -----
@@ -1414,7 +1264,7 @@ def pw.of(hashed: Bool, +x: String) -> String:
     case True{}:
       x
     case False{}:
-      sha256(x)
+      Sha.sha256(x)
 
 def user.add.pass(bad: Bool, +h: String, u: User) -> UserR:
   match bad:
@@ -1720,7 +1570,7 @@ def acl.setuser(a: Acl, +n: String, args: List<&2, String>, +allch: Bool) -> Set
 # requirepass as its password
 def acl.dflt.of(+pass: String) -> User:
   +root = sel.cmds.set(sel.chans.set(sel.keys.set(sel.new(False{}), True{}), True{}), True{})
-  User{"default", True{}, Nat.is_eq(String.length(pass), 0n), 0n, Bool.pick(List<&2, String>, Nat.is_eq(String.length(pass), 0n), Nil{}, [sha256(pass)]), [root]}
+  User{"default", True{}, Nat.is_eq(String.length(pass), 0n), 0n, Bool.pick(List<&2, String>, Nat.is_eq(String.length(pass), 0n), Nil{}, [Sha.sha256(pass)]), [root]}
 
 # key: GENPASS's secret, random hex digits the server read at its start
 def acl.new(+pass: String, key: String) -> Acl:
@@ -1732,7 +1582,7 @@ def acl.requirepass(a: Acl, +pass: String) -> Acl:
   match a:
     case Acl{dflt, users, log, gone, rp, key, ctr, rcl}:
       +none = Nat.is_eq(String.length(pass), 0n)
-      Acl{user.set.pass(dflt, none, Bool.pick(List<&2, String>, none, Nil{}, [sha256(pass)])), users, log, gone, pass, key, ctr, rcl}
+      Acl{user.set.pass(dflt, none, Bool.pick(List<&2, String>, none, Nil{}, [Sha.sha256(pass)])), users, log, gone, pass, key, ctr, rcl}
 
 def acl.cfg.if(same: Bool, a: Acl, +pass: String) -> Acl:
   match same:
@@ -1748,20 +1598,62 @@ def acl.cfg(a: Acl, +pass: String) -> Acl:
     case Acl{dflt, users, log, gone, +rp, key, ctr, rcl}:
       acl.cfg.if(String.eq(rp, pass), Acl{dflt, users, log, gone, rp, key, ctr, rcl}, pass)
 
-# whether a user takes a password: on, and nopass or the password's
-# SHA-256 among its own (Redis's ACLCheckUserCredentials)
-def user.login(+u: User, +pass: String) -> Bool:
-  Bool.and(user.on(u), Bool.or(user.nopass(u), acl.has(sha256(pass), user.pass(u))))
+# the bytes in which two hashes differ, or-ed, over their k hex digits
+# from the i-th: every digit is compared, as Redis's
+# time_independent_strcmp compares them, so that the time tells nothing
+# of how many they share
+def hash.diff(k: Nat, +a: String, +b: String, +i: Nat, d: U32) -> U32:
+  match k:
+    case 0n:
+      d
+    case 1n+p:
+      hash.diff(p, a, b, Nat.add(i, 1n), U32.or(d, U32.xor(String.code_at(a, i), String.code_at(b, i))))
 
-def acl.login.of(m: Maybe<&2, User>, +pass: String) -> Bool:
+# whether the hash h is among hs, found (the one before it was): each is
+# compared whole, and the walk stops at the first equal
+def hash.among.go(+hs: List<&2, String>, found: Bool, +h: String) -> Bool:
+  match hs found:
+    case _ True{}:
+      True{}
+    case Nil{} False{}:
+      False{}
+    case Con{+x, +rest} False{}:
+      hash.among.go(rest, U32.is_eq(hash.diff(64n, x, h, 0n, 0), 0), h)
+
+# whether a user that is on takes a password whose SHA-256 is h: nopass
+# takes any; else h must be among the user's hashes
+def user.login.on(nopass: Bool, +u: User, +h: String) -> Bool:
+  match nopass:
+    case True{}:
+      True{}
+    case False{}:
+      hash.among.go(user.pass(u), False{}, h)
+
+# whether a user takes a password, of SHA-256 h: on, and nopass or h
+# among its own (Redis's ACLCheckUserCredentials). The parser hashes the
+# password of AUTH and HELLO as it reads them (R.parse_sess), so that a
+# call hashes it once, whichever of its reply, its client's connection
+# and the server's log in asks
+def user.login.if(on: Bool, +u: User, +h: String) -> Bool:
+  match on:
+    case True{}:
+      user.login.on(user.nopass(u), u, h)
+    case False{}:
+      False{}
+
+def user.login(+u: User, +h: String) -> Bool:
+  user.login.if(user.on(u), u, h)
+
+def acl.login.of(m: Maybe<&2, User>, +h: String) -> Bool:
   match m:
     case Some{+u}:
-      user.login(u, pass)
+      user.login(u, h)
     case None{}:
       False{}
 
-def acl.login(+a: Acl, +name: String, +pass: String) -> Bool:
-  acl.login.of(acl.user(a, name), pass)
+# whether the user of name n takes a password of SHA-256 h
+def acl.login(+a: Acl, +name: String, +h: String) -> Bool:
+  acl.login.of(acl.user(a, name), h)
 
 # whether a client must authenticate: the default user is off, or has no
 # nopass (Redis's authRequired, before the client's own state)
@@ -2106,7 +1998,7 @@ def genpass.go(k: Nat, +key: String, +c: Nat, acc: String) -> String:
     case 0n:
       acc
     case 1n+p:
-      genpass.go(p, key, Nat.add(c, 1n), acc ++ sha256(key ++ "." ++ Nat.show(c)))
+      genpass.go(p, key, Nat.add(c, 1n), acc ++ Sha.sha256(key ++ "." ++ Nat.show(c)))
 
 def genpass.blocks(+bits: Nat) -> Nat:
   Nat.div(Nat.add(Nat.div(Nat.add(bits, 3n), 4n), 63n), 64n)

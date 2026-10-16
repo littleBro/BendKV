@@ -5551,12 +5551,13 @@ def red.put(st: Red, a: String) -> String:
     case _:
       a
 
-def red.hello.opts(xs: List<&2, String>, +st: Red) -> List<&2, String>:
+# HELLO's options from xs on, n of them, read in state st
+def red.hello.opts(xs: List<&2, String>, +n: Nat, +st: Red) -> List<&2, String>:
   match xs:
     case Nil{}:
       Nil{}
-    case Con{+a, +rest}:
-      red.put(st, a) <> red.hello.opts(rest, red.step(st, a, List.length(&2, String, rest)))
+    case Con{+a, rest}:
+      red.put(st, a) <> red.hello.opts(rest, Nat.sub(n, 1n), red.step(st, a, Nat.sub(n, 1n)))
 
 # whether HELLO's version is one Redis reads its options after: 2 or 3
 def red.ver(l: R.LL) -> Bool:
@@ -5569,7 +5570,8 @@ def red.ver(l: R.LL) -> Bool:
 def red.hello.ver(ok: Bool, h: String, v: String, rest: List<&2, String>) -> List<&2, String>:
   match ok:
     case True{}:
-      h <> v <> red.hello.opts(rest, RedOpt{})
+      +r = rest
+      h <> v <> red.hello.opts(r, List.length(&2, String, r), RedOpt{})
     case False{}:
       h <> v <> rest
 

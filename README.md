@@ -797,6 +797,7 @@ src/        the server
   resp.bend     RESP parser, RESP2 and RESP3 reply encoders         tested
   info.bend     INFO's sections and fields, SLOWLOG, LATENCY        tested
   command.bend  COMMAND, with Redis's table of BendKV's commands     tested
+  sha.bend      SHA-256, as Redis keeps a password's               tested
   acl.bend      ACL users: rules, checks and the log, as Redis's   tested
   startup.bend  the command line and the configuration file        tested
   server.bend   TCP, connections, the database actor, the log      tested
@@ -844,12 +845,13 @@ away.
 | `src/rdb.bend` | 2,100 |  | no |
 | `src/resp.bend` | 880 |  | no |
 | `src/server.bend` | 8,900 |  | no |
+| `src/sha.bend` | 120 |  | no |
 | `src/startup.bend` | 460 |  | no |
 | `proof/LAWS.bend` | 920 | 20 |  |
 | `proof/SPEC.bend` | 370 |  |  |
 | `proof/PROOF.bend` | 16,000 | 2,800 |  |
 | `src/`, the 6 files the laws import | 25,000 | 7,900 |  |
-| `src/`, the 11 others | 24,000 | 2,500 |  |
+| `src/`, the 12 others | 24,000 | 2,500 |  |
 | `proof/` | 18,000 | 2,800 |  |
 <!-- END gen_counts: numbers -->
 

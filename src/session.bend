@@ -875,9 +875,11 @@ def conn_join(+id: Nat, +s: Srv) -> Conn:
   Conn{id, nopass(s), "", MOn{}, False{}, 0n, False{}}
 
 # whether a user takes a password: it is there, on, and takes any
-# password or has this one (Redis's ACLCheckUserCredentials)
-def login_ok(+u: String, +p: String, +s: Srv) -> Bool:
-  U.acl.login(srv.acl(s), u, p)
+# password or has this one (Redis's ACLCheckUserCredentials). AUTH's and
+# HELLO's passwords come as their SHA-256 (R.parse_sess hashes them), so
+# h is a hash, which the user's are compared with
+def login_ok(+u: String, +h: String, +s: Srv) -> Bool:
+  U.acl.login(srv.acl(s), u, h)
 
 # whether the default user takes any password, on or off: AUTH with a
 # password alone is then an error
@@ -1017,12 +1019,16 @@ def hello.step(+s: Srv, h: Hel, +a: String, +n: Nat) -> Hel:
     case Hel{WFail{r}, auth, name, r3, who}:
       Hel{WFail{r}, auth, name, r3, who}
 
-def hello.go(+s: Srv, args: List<&2, String>, h: Hel) -> Hel:
+# HELLO's options from args on, n of them
+def hello.go(+s: Srv, +args: List<&2, String>, +n: Nat, h: Hel) -> Hel:
   match args:
     case Nil{}:
       h
     case Con{+a, +rest}:
-      hello.go(s, rest, hello.step(s, h, a, List.length(&2, String, rest)))
+      hello.go(s, rest, Nat.sub(n, 1n), hello.step(s, h, a, Nat.sub(n, 1n)))
+
+def hello.opts(+s: Srv, +opts: List<&2, String>, h: Hel) -> Hel:
+  hello.go(s, opts, List.length(&2, String, opts), h)
 
 # HELLO's reply: the server, as Redis 7.0.15 describes itself, in the
 # protocol it switched to
@@ -1063,9 +1069,9 @@ def hello.run.if(+s: Srv, +c: Conn, v: Ver, opts: List<&2, String>) -> Hel:
     case VerBad{r}:
       Hel{WFail{r}, conn.auth(c), conn.name(c), conn.r3(c), Nil{}}
     case VerOk{r3}:
-      hello.go(s, opts, Hel{WOpt{}, conn.auth(c), conn.name(c), r3, Nil{}})
+      hello.opts(s, opts, Hel{WOpt{}, conn.auth(c), conn.name(c), r3, Nil{}})
     case VerNone{}:
-      hello.go(s, opts, Hel{WOpt{}, conn.auth(c), conn.name(c), conn.r3(c), Nil{}})
+      hello.opts(s, opts, Hel{WOpt{}, conn.auth(c), conn.name(c), conn.r3(c), Nil{}})
 
 def hello.run.of(+s: Srv, +c: Conn, p: Ver & List<&2, String>) -> Hel:
   (v, opts) = p
