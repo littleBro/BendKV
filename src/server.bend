@@ -323,7 +323,7 @@ def waits.held(+ws: Waits) -> Bool:
 # whether a client waits for its script (BlkScript: Scripts)
 def blk.script(+b: S.Blk) -> Bool:
   match b:
-    case S.BlkScript{}:
+    case S.BlkScript{rs}:
       True{}
     case _:
       False{}
@@ -475,10 +475,27 @@ def waits.ready.of(+d: R.Ds, +b: S.Blk) -> Maybe<&2, String>:
   +ks = S.blk.keys(b)
   keys.ready(ks, keys.has(d, z, ks), d, z)
 
+def blk.pop(+b: S.Blk) -> Bool:
+  match b:
+    case S.BlkPop{c, form, ms}:
+      True{}
+    case _:
+      False{}
+
+# (the databases focused only for a pop: a client held back by the pause
+# or waiting for the engine waits for no key, and the walk of the chain
+# after a script focused them for each such wait: FINDINGS 3zzzd)
+def waits.ready.if(pop: Bool, +b: S.Blk, +db: Nat, +ds: R.Ds) -> Maybe<&2, String>:
+  match pop:
+    case True{}:
+      waits.ready.of(R.ds.focus(db, ds), b)
+    case False{}:
+      None{}
+
 def waits.ready(+ds: R.Ds, +ws: Waits) -> Maybe<&2, String>:
   match ws:
     case WaitOn{id, back, c0, c1, +b, argv, code, +db, until, cmds, codes, av, rest}:
-      waits.ready.of(R.ds.focus(db, ds), b)
+      waits.ready.if(blk.pop(b), b, db, ds)
     case WaitNone{}:
       None{}
 
@@ -1140,17 +1157,22 @@ type Hd is Data:
 # the run's state (st): 1 while a script runs past lua-time-limit (busy:
 # ev's bit 16), 2 once it wrote, 4 once SCRIPT KILL asked for its end, 8
 # while a script's wait is in the chain (ev's bit 17), 16 while the
-# script is a function's (FCALL)
+# script is a function's (FCALL); and the clock's reading the driver's
+# window started at, while the driver runs (at: Timing, in The driver)
 type Scr is Data:
-  Scr{shas: KV.Trie<Nat>, n: Nat, st: U32}
+  Scr{shas: KV.Trie<Nat>, n: Nat, st: U32, at: Clk}
+
+# a reading of the wall clock (IO.clock): s and us since 1970
+type Clk is Data:
+  Clk{s: U32, u: U32}
 
 def scr.new() -> Scr:
-  Scr{KV.empty(Nat), 0n, 0}
+  Scr{KV.empty(Nat), 0n, 0, Clk{0, 0}}
 
 # ev's bits 16 and 17 (busy, a script waits), from st
 def scr.bit(+s: Scr) -> U32:
   match s:
-    case Scr{shas, n, +st}:
+    case Scr{shas, n, +st, at}:
       U32.or(U32.shln(U32.and(st, 1), 16n), U32.shln(U32.and(st, 8), 14n))
 
 # whether a script command's script, by its flags as sc.flags gives them
@@ -5445,8 +5467,8 @@ def bg.exec.drv(+id: Nat, +back: Chan(Ans), +code: Nat, x: Xg) -> Xd:
 # the engine of script.bend: Redis's own Lua, driven in steps. The
 # actor's pure core never calls the engine. A script command suspends
 # its client's batch as the pause suspends one (bg.script: a WaitOn of
-# S.BlkScript, its replies before it sent as Hold, its call counted as a
-# blocking command's), and once the group is run, the shell's driver
+# S.BlkScript, its replies before it held for the script's, its call
+# counted once its script ends), and once the group is run, the shell's driver
 # (sc.drive: The driver, below The log) takes each such wait in turn, in
 # the order the commands came, runs the engine, and the batch goes on
 # through Up and the group's end with the script's reply (sc.resume), as
@@ -5518,37 +5540,62 @@ def ps.scr.set(scr: Scr, pb: Ps) -> Ps:
 
 def scr.st(+s: Scr) -> U32:
   match s:
-    case Scr{shas, n, +st}:
+    case Scr{shas, n, +st, at}:
       st
 
 def scr.st.set(+st: U32, s: Scr) -> Scr:
   match s:
-    case Scr{shas, n, s0}:
-      Scr{shas, n, st}
+    case Scr{shas, n, s0, at}:
+      Scr{shas, n, st, at}
+
+def scr.at(+s: Scr) -> Clk:
+  match s:
+    case Scr{shas, n, st, +at}:
+      at
+
+def scr.at.set(t: Clk, s: Scr) -> Scr:
+  match s:
+    case Scr{shas, n, st, a0}:
+      Scr{shas, n, st, t}
 
 def scr.find(+sha: String, +s: Scr) -> Maybe<&2, Nat>:
   match s:
-    case Scr{+shas, n, st}:
+    case Scr{+shas, n, st, at}:
       KV.get(Nat, shas, sha)
 
-def scr.add.if(absent: Bool, +sha: String, +f: Nat, shas: KV.Trie<Nat>, +n: Nat, +st: U32) -> Scr:
+def scr.find.or(m: Maybe<&2, Nat>, +sha: String, +s: Scr) -> Maybe<&2, Nat>:
+  match m:
+    case Some{f}:
+      Some{f}
+    case None{}:
+      scr.find(sha.lower(sha), s)
+
+# the flags of the script cached under sha, in either case (as Redis's
+# dictionary of scripts compares shas): as given first, as clients send
+# them (in lower case, as the cache has them), and lowered only when the
+# cache has it not as given (a sha lowered is 40 cells made again; each
+# EVALSHA lowered its sha three times: FINDINGS 3zzzd)
+def scr.get(+sha: String, +s: Scr) -> Maybe<&2, Nat>:
+  scr.find.or(scr.find(sha, s), sha, s)
+
+def scr.add.if(absent: Bool, +sha: String, +f: Nat, shas: KV.Trie<Nat>, +n: Nat, +st: U32, at: Clk) -> Scr:
   match absent:
     case True{}:
-      Scr{KV.set(Nat, shas, sha, f), 1n+n, st}
+      Scr{KV.set(Nat, shas, sha, f), 1n+n, st, at}
     case False{}:
-      Scr{shas, n, st}
+      Scr{shas, n, st, at}
 
 # a script cached under its sha, with its flags
 def scr.add(+sha: String, +f: Nat, s: Scr) -> Scr:
   match s:
-    case Scr{shas, +n, +st}:
+    case Scr{shas, +n, +st, at}:
       +t = shas
-      scr.add.if(Maybe.is_none(&2, Nat, KV.get(Nat, t, sha)), sha, f, t, n, st)
+      scr.add.if(Maybe.is_none(&2, Nat, KV.get(Nat, t, sha)), sha, f, t, n, st, at)
 
 def scr.flush(s: Scr) -> Scr:
   match s:
-    case Scr{shas, n, st}:
-      Scr{KV.empty(Nat), 0n, st}
+    case Scr{shas, n, st, at}:
+      Scr{KV.empty(Nat), 0n, st, at}
 
 # SCRIPT EXISTS's replies: 1 for each sha cached (in either case, as
 # Redis's dictionary of scripts compares shas), 0 for the others
@@ -5557,7 +5604,7 @@ def scr.exists(+xs: List<&2, String>, +s: Scr) -> List<&2, R.Reply>:
     case Nil{}:
       Nil{}
     case Con{+x, +rest}:
-      R.RInt{R.IPos{Bool.pick(Nat, Maybe.is_some(&2, Nat, scr.find(sha.lower(x), s)), 1n, 0n)}} <> scr.exists(rest, s)
+      R.RInt{R.IPos{Bool.pick(Nat, Maybe.is_some(&2, Nat, scr.get(x, s)), 1n, 0n)}} <> scr.exists(rest, s)
 
 def ps.sc.st(+pb: Ps) -> U32:
   scr.st(ps.scr(pb))
@@ -5686,7 +5733,7 @@ def sc.flags.of(sha: Bool, +s: String, +pb: Ps) -> U32:
     case False{}:
       U32.or(32, eval.shebang(s))
     case True{}:
-      sc.flags.found(scr.find(sha.lower(s), ps.scr(pb)))
+      sc.flags.found(scr.get(s, ps.scr(pb)))
 
 # the script of SEval's arguments (its body, or its sha), and the keys
 # and arguments after it
@@ -5789,10 +5836,20 @@ def bg.script.kill(+code: Nat, g: LRun) -> LRun:
 
 # whether EVALSHA's script is not cached (NOSCRIPT at once), and SCRIPT
 # EXISTS's reply, from the mirror, unless a script's wait is in the chain
+# (the mirror looked at for EVALSHA alone: Bool.and takes both its
+# arguments, and an EVAL's body is no sha, lowered to be looked for
+# again)
+def sc.noscript.if(sha: Bool, +xs: List<&2, String>, +pb: Ps) -> Bool:
+  match sha:
+    case True{}:
+      Maybe.is_none(&2, Nat, scr.get(eval.script(xs), ps.scr(pb)))
+    case False{}:
+      False{}
+
 def sc.noscript(+c: R.Cmd, +pb: Ps) -> Bool:
   match c:
     case R.Own{R.SEval{+how, +xs}}:
-      Bool.and(Nat.is_eq(Nat.mod(how, 2n), 1n), Bool.and(Bool.not(ps.sc.pending(pb)), Maybe.is_none(&2, Nat, scr.find(sha.lower(eval.script(xs)), ps.scr(pb)))))
+      sc.noscript.if(Bool.and(Nat.is_eq(Nat.mod(how, 2n), 1n), Bool.not(ps.sc.pending(pb))), xs, pb)
     case _:
       False{}
 
@@ -5820,16 +5877,36 @@ def bg.script.flush(+c: R.Cmd, g: LRun) -> LRun:
     case _ g0:
       g0
 
+# the replies so far of a script's client: held for its script's (the
+# first), as Redis writes a script's caller's replies once the script
+# ends (sent at once as Hold, each script of a pipeline cost a write of
+# its own: FINDINGS 3zzzd); or sent before it (the second) by a client
+# with a subscription, which the script's calls may send pushes that
+# Redis writes after them
+def sc.hold(sub: Bool, rs: List<&2, R.Reply>) -> List<&2, R.Reply> & List<&2, R.Reply>:
+  match sub:
+    case True{}:
+      (Nil{}, rs)
+    case False{}:
+      (rs, Nil{})
+
+def bg.script.held(p: List<&2, R.Reply> & List<&2, R.Reply>, +id: Nat, +back: Chan(Ans), +c: R.Cmd, +code: Nat, rest: List<&2, R.Cmd>, more: List<&2, Nat>, a: Av, es: List<&2, A.Ent>, +conn: S.Conn, +srv: S.Srv, +ds: R.Ds, ws: Waits, up: List<&2, Up>, tx: Tx, pb: Ps) -> LRun:
+  (held, sent) = p
+  +ws2 = waits.add(ws, WaitOn{id, Chan.mark(Ans, back, U32.from_nat(code), R.ds.now(ds)), conn, S.next_conn(False{}, c, conn, srv), S.BlkScript{held}, 0n, code, S.conn.db(conn), 0n, c <> rest, code <> more, a, WaitNone{}})
+  LHeld{LRun{sent, es, conn, waits.count(ws2, srv), ds, ws2, up, tx, ps.sc.on(8, pb)}}
+
 # a script command's wait: its client waits for the driver with the
-# command and the rest of its batch (a: their arguments as sent; ar: the
-# rest's), its call counted as a blocking command's (bg.wait: the time
-# the script takes is the call's), its connection after the command kept
-# for the batch to go on with
+# command and the rest of its batch (a: their arguments as sent, from
+# the command on), its connection after the command kept for the batch
+# to go on with, and its replies so far (sc.hold); its call counted once
+# its script ends (The driver: Timing). The size of its arguments is not read (CLIENT LIST's argv-mem
+# leaves a script's wait out, waits.argv): it is a parse of the batch's
+# bytes up to the command, once per command of a pipeline (FINDINGS
+# 3zzzd).
 def bg.script.wait(+id: Nat, +back: Chan(Ans), +c: R.Cmd, +code: Nat, rest: List<&2, R.Cmd>, more: List<&2, Nat>, a: Av, ar: Av, g: LRun) -> LRun:
   match g:
-    case LRun{rs, es, +conn, +srv, +ds, ws, up, tx, pb}:
-      +ws2 = waits.add(ws, WaitOn{id, Chan.mark(Ans, back, U32.from_nat(code), R.ds.now(ds)), conn, S.next_conn(False{}, c, conn, srv), S.BlkScript{}, got.argv(av.get(a)), code, S.conn.db(conn), 0n, c <> rest, code <> more, ar, WaitNone{}})
-      LHeld{LRun{rs, es, conn, waits.count(ws2, gen.count(S.srv.blk(srv), code, Nil{})), ds, ws2, up, tx, ps.sc.on(8, pb)}}
+    case LRun{rs, es, +conn, +srv, +ds, ws, up, tx, +pb}:
+      bg.script.held(sc.hold(ps.has(id, pb), rs), id, back, c, code, rest, more, a, es, conn, srv, ds, ws, up, tx, pb)
     case LHeld{h}:
       LHeld{h}
 
@@ -5873,8 +5950,7 @@ def sh.lua(s: Sh, +id: Nat, +t: Tx) -> Sh:
 def bg.exec.wait(+id: Nat, +back: Chan(Ans), +c: R.Cmd, +code: Nat, rest: List<&2, R.Cmd>, more: List<&2, Nat>, a: Av, g: LRun) -> LRun:
   match g:
     case LRun{rs, es, +conn, +srv, +ds, ws, up, tx, pb}:
-      +x = a
-      +ws2 = waits.add(ws, WaitOn{id, Chan.mark(Ans, back, U32.from_nat(code), R.ds.now(ds)), conn, conn, S.BlkScript{}, got.argv(av.get(x)), code, S.conn.db(conn), 0n, c <> rest, code <> more, x, WaitNone{}})
+      +ws2 = waits.add(ws, WaitOn{id, Chan.mark(Ans, back, U32.from_nat(code), R.ds.now(ds)), conn, conn, S.BlkScript{Nil{}}, 0n, code, S.conn.db(conn), 0n, c <> rest, code <> more, a, WaitNone{}})
       LHeld{LRun{rs, es, conn, waits.count(ws2, srv), ds, ws2, up, tx, ps.sc.on(8, pb)}}
     case LHeld{h}:
       LHeld{h}
@@ -7527,7 +7603,8 @@ def db_group(g: Grp, rw: Rw, +reqs: Chan(Req)) -> IO(Unit):
   db_group.sc(grp.sc.pending(x), x, rw, reqs)
 
 # the waits for the engine run first, while one is in the chain
-# (Scripts), the driver's work timed as a window of its own (Timing)
+# (Scripts), the driver's work timed in windows of its own (The driver:
+# Timing)
 @unsafe
 def db_group.sc(any: Bool, g: Grp, rw: Rw, +reqs: Chan(Req)) -> IO(Unit):
   match any:
@@ -7537,9 +7614,9 @@ def db_group.sc(any: Bool, g: Grp, rw: Rw, +reqs: Chan(Req)) -> IO(Unit):
       +w = rw
       do IO<Unit>:
         t0 : U32 & U32 <- IO.clock()
-        g2 : Grp <- sc.drive(sc.fuel(), False{}, rw.pid(w), g, reqs)
+        g2 : Grp <- sc.drive(sc.fuel(), False{}, rw.pid(w), grp.at.set(clk.of(t0), g), reqs)
         t1 : U32 & U32 <- IO.clock()
-        db_group.go(sc.timed(t0, t1, g2), w, reqs)
+        db_group.go(sc.window(clk.of(t1), g2), w, reqs)
 
 @unsafe
 def db_group.go(g: Grp, rw: Rw, +reqs: Chan(Req)) -> IO(Unit):
@@ -8886,10 +8963,11 @@ type Ex is Data:
 # a command of an EXEC's that needs the engine, as it runs: the EXEC,
 # its replies so far (newest first), its client's connection in it, the
 # lines of its commands for its client (MONITOR: mine), the command's
-# code, and the commands after it. ExrOf, never built, makes Exr a node
+# code and arguments (for its call, counted at its end), and the
+# commands after it. ExrOf, never built, makes Exr a node
 # of its own, as ScOf makes Sc one (below).
 type Exr is Data:
-  Exr{ex: Ex, rs: List<&2, R.Reply>, conn: S.Conn, mine: List<&2, String>, k: Nat, cmds: List<&2, R.Cmd>, codes: List<&2, Nat>, avs: List<&2, Av>}
+  Exr{ex: Ex, rs: List<&2, R.Reply>, conn: S.Conn, mine: List<&2, String>, k: Nat, arg: I.Arg, cmds: List<&2, R.Cmd>, codes: List<&2, Nat>, avs: List<&2, Av>}
   ExrOf{x: Exr}
 
 # whose a command of the engine is: a client's wait's (its batch goes on
@@ -8900,57 +8978,130 @@ type Exm is Data:
 
 # a script that runs: its command's wait (a chain of one) and channel,
 # the script client's connection (its database: SELECT's), the group's
-# entries before the script (its own are wrapped after it), when it
-# started (ms since 1970) and lua-time-limit (ms), whether it is
-# read-only (EVAL_RO, EVALSHA_RO, or the no-writes flag) and whether it
-# may take memory past maxmemory (allow-oom), the log, its sha, and
-# whose its command is. ScOf, never built, makes Sc a node of its own:
+# entries before the script (its own are wrapped after it), the clock's
+# reading as it started, the configuration it reads (Scf), whether it
+# is read-only (EVAL_RO, EVALSHA_RO, or the no-writes flag) and whether
+# it may take memory past maxmemory (allow-oom), its sha, and whose its
+# command is. ScOf, never built, makes Sc a node of its own:
 # one word in the driver's calls, which go through the work loop, whose
 # registers every function shares, as many as the widest takes (the
 # compiler's WL_BANK: FINDINGS 3zzzd). The driver reads a field it needs
 # with sc.* rather than taking Sc apart across an effect.
 type Sc is Data:
-  Sc{w: Waits, back: Chan(Ans), cn: S.Conn, es0: List<&2, A.Ent>, t0: Nat, lim: Nat, ro: Bool, aoom: Bool, lg: Log, sha: String, ex: Exm}
+  Sc{w: Waits, back: Chan(Ans), cn: S.Conn, es0: List<&2, A.Ent>, t0: Clk, cf: Scf, ro: Bool, aoom: Bool, sha: String, ex: Exm}
   ScOf{s: Sc}
+
+# a reading of the clock (Clk), from IO.clock's
+def clk.of(t: U32 & U32) -> Clk:
+  (s, u) = t
+  Clk{s, u}
+
+# the us from the reading a to b: taken apart from the s, which the
+# window's few seconds keep small (0 if the clock went back)
+def clk.us(+a: Clk, +b: Clk) -> Nat:
+  match a b:
+    case Clk{+s0, +u0} Clk{+s1, +u1}:
+      Nat.sub(Nat.add(Nat.mul(Nat.sub(U32.to_nat(s1), U32.to_nat(s0)), 1000000n), U32.to_nat(u1)), U32.to_nat(u0))
+
+def clk.secs(+a: Clk) -> Nat:
+  match a:
+    case Clk{+s, u}:
+      U32.to_nat(s)
+
+def clk.ms(+a: Clk) -> Nat:
+  match a:
+    case Clk{+s, +u}:
+      clock.ms.of(s, u)
+
+def grp.lim(+g: Grp) -> Nat:
+  match g:
+    case Grp{outs, es, +srv, ds, ws, up, tx, pb}:
+      nat.of(C.config.get_value(S.srv.cfg(srv), "lua-time-limit"))
+
+def grp.lg(+pid: U32, +g: Grp) -> Log:
+  match g:
+    case Grp{outs, es, +srv, ds, ws, up, tx, pb}:
+      log.up(log.of(S.srv.cfg(srv), pid))
+
+# what a script reads of the configuration, once it needs it (a tick, a
+# line for the log; ScfNone before): lua-time-limit (ms) and the log.
+# A parameter's value is a walk of the table (config.get_value), each
+# step a compare of names; three walks at each script's start took 74%
+# of a script's instructions (FINDINGS 3zzzd). lua-time-limit cannot
+# change while a script runs: CONFIG is refused in a script, and BUSY
+# while one runs.
+type Scf is Data:
+  ScfNone{}
+  Scf{lim: Nat, lg: Log}
+
+def scf.need(f: Scf, +pid: U32, +g: Grp) -> Scf:
+  match f:
+    case ScfNone{}:
+      Scf{grp.lim(g), grp.lg(pid, g)}
+    case Scf{lim, lg}:
+      Scf{lim, lg}
+
+def scf.lim(+f: Scf) -> Nat:
+  match f:
+    case Scf{+lim, lg}:
+      lim
+    case ScfNone{}:
+      0n
+
+def scf.lg(+f: Scf) -> Log:
+  match f:
+    case Scf{lim, +lg}:
+      lg
+    case ScfNone{}:
+      log.boot(0)
+
+# the script's state with the configuration it reads
+def sc.need(s: Sc, +pid: U32, +g: Grp) -> Sc:
+  match s:
+    case Sc{w, back, cn, es0, t0, cf, ro, aoom, sha, ex}:
+      Sc{w, back, cn, es0, t0, scf.need(cf, pid, g), ro, aoom, sha, ex}
+    case ScOf{x}:
+      sc.need(x, pid, g)
 
 def sc.lg(+s: Sc) -> Log:
   match s:
-    case Sc{w, back, cn, es0, t0, lim, ro, aoom, +lg, sha, ex}:
-      lg
+    case Sc{w, back, cn, es0, t0, +cf, ro, aoom, sha, ex}:
+      scf.lg(cf)
     case ScOf{+x}:
       sc.lg(x)
 
+# when the script started, in ms since 1970
 def sc.t0(+s: Sc) -> Nat:
   match s:
-    case Sc{w, back, cn, es0, +t0, lim, ro, aoom, lg, sha, ex}:
-      t0
+    case Sc{w, back, cn, es0, +t0, cf, ro, aoom, sha, ex}:
+      clk.ms(t0)
     case ScOf{+x}:
       sc.t0(x)
 
 def sc.lim(+s: Sc) -> Nat:
   match s:
-    case Sc{w, back, cn, es0, t0, +lim, ro, aoom, lg, sha, ex}:
-      lim
+    case Sc{w, back, cn, es0, t0, +cf, ro, aoom, sha, ex}:
+      scf.lim(cf)
     case ScOf{+x}:
       sc.lim(x)
 
 def sc.ro(+s: Sc) -> Bool:
   match s:
-    case Sc{w, back, cn, es0, t0, lim, +ro, aoom, lg, sha, ex}:
+    case Sc{w, back, cn, es0, t0, cf, +ro, aoom, sha, ex}:
       ro
     case ScOf{+x}:
       sc.ro(x)
 
 def sc.aoom(+s: Sc) -> Bool:
   match s:
-    case Sc{w, back, cn, es0, t0, lim, ro, +aoom, lg, sha, ex}:
+    case Sc{w, back, cn, es0, t0, cf, ro, +aoom, sha, ex}:
       aoom
     case ScOf{+x}:
       sc.aoom(x)
 
 def sc.sha(+s: Sc) -> String:
   match s:
-    case Sc{w, back, cn, es0, t0, lim, ro, aoom, lg, +sha, ex}:
+    case Sc{w, back, cn, es0, t0, cf, ro, aoom, +sha, ex}:
       sha
     case ScOf{+x}:
       sc.sha(x)
@@ -8958,15 +9109,65 @@ def sc.sha(+s: Sc) -> String:
 def sc.fuel() -> Nat:
   1000000n
 
-# the driver's window, from the wall clock's reading t0 to t1 (IO.clock:
-# s and us since 1970), its calls sharing it (the scripts' commands, the
-# calls of the scripts, an EXEC's), as group_all times a request's: us
-# taken apart from s, which the window's few seconds keep small
-def sc.timed(t0: U32 & U32, t1: U32 & U32, g: Grp) -> Grp:
-  (s0, u0) = t0
-  (s1, u1) = t1
-  +a = U32.to_nat(s1)
-  grp.timed(0n, "", Nat.sub(Nat.add(Nat.mul(Nat.sub(a, U32.to_nat(s0)), 1000000n), U32.to_nat(u1)), U32.to_nat(u0)), a, g)
+# Timing
+# ------
+# The driver reads the wall clock (IO.clock) as the actor reads its
+# clock (Timing, above): when it starts, as each command of the engine
+# starts and ends, before and after each of a script's calls, and when
+# it ends; the
+# window between two readings is timed, its calls sharing it. A call of
+# a script is the one call of its window, timed as Redis times it; the
+# script's own time, between its calls, is no call's but its command's:
+# the command's call is named and counted once the script ended, and
+# timed as a window of its own as long as the script ran (sc.took), as
+# Redis's call() times EVAL (the slow log, the latency monitor, the
+# histogram, usec). A first version counted the call as a blocking
+# command's, kept with its client until the script ended: a walk of the
+# calls kept, one per client, three times a script (FINDINGS 3zzzd).
+
+def ps.at(+pb: Ps) -> Clk:
+  match pb:
+    case Ps{reg, ev, px, Cls{tab, kd, ks, ms, pz, dn, hd, +scr}, own}:
+      scr.at(scr)
+    case PsOf{+p}:
+      ps.at(p)
+
+def ps.at.set(t: Clk, pb: Ps) -> Ps:
+  match pb:
+    case Ps{reg, ev, px, Cls{tab, kd, ks, ms, pz, dn, hd, scr}, own}:
+      Ps{reg, ev, px, Cls{tab, kd, ks, ms, pz, dn, hd, scr.at.set(t, scr)}, own}
+    case PsOf{p}:
+      ps.at.set(t, p)
+
+def grp.at(+g: Grp) -> Clk:
+  match g:
+    case Grp{outs, es, srv, ds, ws, up, tx, +pb}:
+      ps.at(pb)
+
+def grp.at.set(t: Clk, g: Grp) -> Grp:
+  match g:
+    case Grp{outs, es, srv, ds, ws, up, tx, pb}:
+      Grp{outs, es, srv, ds, ws, up, tx, ps.at.set(t, pb)}
+
+# the driver's window from the reading t0 to t1, its calls sharing it,
+# as group_all times a request's
+def sc.timed(+t0: Clk, +t1: Clk, g: Grp) -> Grp:
+  grp.timed(0n, "", clk.us(t0, t1), clk.secs(t1), g)
+
+# the driver's window from its last reading to t timed, the next one
+# starting at t
+def sc.window(t: Clk, g: Grp) -> Grp:
+  +x = g
+  +y = t
+  sc.timed(grp.at(x), y, grp.at.set(y, x))
+
+# the clock read and the window up to it timed: as a command of the
+# engine starts (its start, grp.at, for its call's time)
+@unsafe
+def sc.mark(g: Grp) -> IO(Grp):
+  do IO<Grp>:
+    t : U32 & U32 <- IO.clock()
+    IO.pure(Grp, sc.window(clk.of(t), g))
 
 def grp.sc.pending(+g: Grp) -> Bool:
   match g:
@@ -9025,16 +9226,6 @@ def grp.sc.facts(+n: Nat, +m: Nat, +c: Nat, g: Grp) -> Grp:
     case Grp{outs, es, srv, ds, ws, up, tx, pb}:
       Grp{outs, es, S.srv.scripts(srv, n, m, c), ds, ws, up, tx, pb}
 
-def grp.lim(+g: Grp) -> Nat:
-  match g:
-    case Grp{outs, es, +srv, ds, ws, up, tx, pb}:
-      nat.of(C.config.get_value(S.srv.cfg(srv), "lua-time-limit"))
-
-def grp.lg(+pid: U32, +g: Grp) -> Log:
-  match g:
-    case Grp{outs, es, +srv, ds, ws, up, tx, pb}:
-      log.up(log.of(S.srv.cfg(srv), pid))
-
 # the group's entries taken out (the script's own come after them), and
 # the group without them
 def grp.es.take(g: Grp) -> List<&2, A.Ent> & Grp:
@@ -9043,12 +9234,13 @@ def grp.es.take(g: Grp) -> List<&2, A.Ent> & Grp:
       (es, Grp{outs, Nil{}, srv, ds, ws, up, tx, pb})
 
 # the script's entries wrapped as one transaction after those before it
-# (es0), and the run's state cleared (a script's wait may still be in
-# the chain)
+# (es0), and the run's state cleared but whether it wrote (bit 2, which
+# sc.done.at reads and clears; a script's wait may still be in the
+# chain)
 def grp.sc.end(es0: List<&2, A.Ent>, g: Grp) -> Grp:
   match g:
     case Grp{outs, es, srv, ds, ws, up, tx, pb}:
-      Grp{outs, tx.effs(es, es0), srv, ds, ws, up, tx, ps.sc.off(23, pb)}
+      Grp{outs, tx.effs(es, es0), srv, ds, ws, up, tx, ps.sc.off(21, pb)}
 
 # a state of the general way as a group's, with the group's answers
 def lrun.grp(outs: List<&2, Sigma<&2, &2, Chan(Ans), _ => Ans>>, l: LRun) -> Grp:
@@ -9086,10 +9278,31 @@ def sc.stat(+r: R.Reply, +nostats: Bool, +code: Nat, srv: S.Srv) -> S.Srv:
     case _:
       srv
 
-def sc.resume(w: Waits, +r: R.Reply, +nostats: Bool, g: Grp) -> Grp:
+# the call of client id's command of the engine, with its arguments
+# (arg), named and counted once its script ran, with its error (r)
+def sc.took(+id: Nat, +code: Nat, arg: I.Arg, +r: R.Reply, +nostats: Bool, srv: S.Srv) -> S.Srv:
+  sc.stat(r, nostats, code, gen.count(S.srv.call(srv, id, arg), code, Nil{}))
+
+# (and timed as a window of its own, as long as its script ran, d us,
+# ending at now, s since 1970: Timing, in The driver)
+def grp.took(+id: Nat, +code: Nat, arg: I.Arg, +r: R.Reply, +nostats: Bool, +d: Nat, +now: Nat, g: Grp) -> Grp:
+  match g:
+    case Grp{outs, es, srv, ds, ws, up, tx, pb}:
+      grp.timed(0n, "", d, now, Grp{outs, es, sc.took(id, code, arg, r, nostats, srv), ds, ws, up, tx, pb})
+
+# the replies a script's client had before its script, held for the
+# script's (S.BlkScript)
+def blk.replies(b: S.Blk) -> List<&2, R.Reply>:
+  match b:
+    case S.BlkScript{rs}:
+      rs
+    case _:
+      Nil{}
+
+def sc.resume(w: Waits, +r: R.Reply, +nostats: Bool, +d: Nat, +now: Nat, g: Grp) -> Grp:
   match w g:
-    case WaitOn{id, back, +c0, c1, b, argv, +code, db, until, cmds, codes, av, rest} Grp{outs, es, srv, ds, ws, up, tx, pb}:
-      Grp{outs, es, sc.stat(r, nostats, code, S.srv.served(srv, id)), ds, ws, Up{back, c1, S.put(S.say(S.conn.mode(c0), r), Nil{}), List.drop(&2, R.Cmd, cmds, 1n), List.drop(&2, Nat, codes, 1n), av} <> up, tx, pb}
+    case WaitOn{id, back, +c0, c1, b, argv, +code, db, until, cmds, codes, +av, rest} Grp{outs, es, srv, ds, ws, up, tx, pb}:
+      grp.timed(0n, "", d, now, Grp{outs, es, sc.took(id, code, av.arg(av), r, nostats, srv), ds, ws, Up{back, c1, S.put(S.say(S.conn.mode(c0), r), blk.replies(b)), List.drop(&2, R.Cmd, cmds, 1n), List.drop(&2, Nat, codes, 1n), av.rest(av)} <> up, tx, pb})
     case WaitNone{} g0:
       g0
 
@@ -9184,16 +9397,16 @@ def sc.out(rs: List<&2, R.Reply>, +r3: Bool) -> String:
     case Con{r, rest}:
       P.encode_as(r3, [r])
 
-def sc.batch.put(p: Ps & List<&2, Sigma<&2, &2, Chan(Ans), _ => Ans>>, +out: String, es: List<&2, A.Ent>, conn: S.Conn, srv: S.Srv, ds: R.Ds, ws: Waits, up: List<&2, Up>, tx: Tx, w: Waits, +back: Chan(Ans), es0: List<&2, A.Ent>, +t0: Nat, +lim: Nat, +ro: Bool, +aoom: Bool, lg: Log, +sha: String, ex: Exm) -> Sc & (Grp & String):
+def sc.batch.put(p: Ps & List<&2, Sigma<&2, &2, Chan(Ans), _ => Ans>>, +out: String, es: List<&2, A.Ent>, conn: S.Conn, srv: S.Srv, ds: R.Ds, ws: Waits, up: List<&2, Up>, tx: Tx, w: Waits, +back: Chan(Ans), es0: List<&2, A.Ent>, t0: Clk, cf: Scf, +ro: Bool, +aoom: Bool, +sha: String, ex: Exm) -> Sc & (Grp & String):
   (pb, outs) = p
-  (Sc{w, back, conn, es0, t0, lim, ro, aoom, lg, sha, ex}, (Grp{outs, es, srv, ds, ws, up, tx, pb}, out))
+  (Sc{w, back, conn, es0, t0, cf, ro, aoom, sha, ex}, (Grp{outs, es, srv, ds, ws, up, tx, pb}, out))
 
-def sc.batch.of(f: LRun, outs: List<&2, Sigma<&2, &2, Chan(Ans), _ => Ans>>, w: Waits, +back: Chan(Ans), es0: List<&2, A.Ent>, +t0: Nat, +lim: Nat, +ro: Bool, +aoom: Bool, lg: Log, +sha: String, ex: Exm) -> Sc & (Grp & String):
+def sc.batch.of(f: LRun, outs: List<&2, Sigma<&2, &2, Chan(Ans), _ => Ans>>, w: Waits, +back: Chan(Ans), es0: List<&2, A.Ent>, t0: Clk, cf: Scf, +ro: Bool, +aoom: Bool, +sha: String, ex: Exm) -> Sc & (Grp & String):
   match f:
     case LRun{rs, es, +conn, srv, ds, ws, up, tx, pb}:
-      sc.batch.put(ps.flush(pb, outs), sc.out(rs, S.conn.r3(conn)), es, conn, srv, ds, ws, up, tx, w, back, es0, t0, lim, ro, aoom, lg, sha, ex)
+      sc.batch.put(ps.flush(pb, outs), sc.out(rs, S.conn.r3(conn)), es, conn, srv, ds, ws, up, tx, w, back, es0, t0, cf, ro, aoom, sha, ex)
     case LHeld{h}:
-      sc.batch.of(h, outs, w, back, es0, t0, lim, ro, aoom, lg, sha, ex)
+      sc.batch.of(h, outs, w, back, es0, t0, cf, ro, aoom, sha, ex)
 
 def fed.run(f: Fed) -> LRun:
   match f:
@@ -9221,9 +9434,9 @@ def sc.run.call(+c: R.Cmd, +code: Nat, +back: Chan(Ans), +raw: String, l: LRun) 
 
 def sc.batch(+c: R.Cmd, +code: Nat, +r3: Bool, +raw: String, sc: Sc, g: Grp) -> Sc & (Grp & String):
   match sc g:
-    case Sc{w, +back, cn, es0, t0, lim, ro, aoom, lg, sha, ex} Grp{outs, es, srv, ds, ws, up, tx, pb}:
+    case Sc{w, +back, cn, es0, t0, cf, ro, aoom, sha, ex} Grp{outs, es, srv, ds, ws, up, tx, pb}:
       +c0 = sc.conn.r3(r3, cn)
-      sc.batch.of(sc.run.call(c, code, back, raw, LRun{Nil{}, es, c0, srv, R.ds.focus(S.conn.db(c0), ds), ws, up, tx.front(0n, tx), pb}), outs, w, back, es0, t0, lim, ro, aoom, lg, sha, ex)
+      sc.batch.of(sc.run.call(c, code, back, raw, LRun{Nil{}, es, c0, srv, R.ds.focus(S.conn.db(c0), ds), ws, up, tx.front(0n, tx), pb}), outs, w, back, es0, t0, cf, ro, aoom, sha, ex)
     case ScOf{x} g0:
       sc.batch(c, code, r3, raw, x, g0)
 
@@ -9304,16 +9517,16 @@ def sc.busy.ran(z: Bz, sc: Sc, +aof: Bool, +pid: U32, +reqs: Chan(Req)) -> IO(Gr
 # before the EXEC), the group's with them, the script's left out
 def exr.es(x: Exr) -> List<&2, A.Ent>:
   match x:
-    case Exr{Ex{w1, id, b1, rs, es, m0, mi, code, n}, rs1, conn, mine, k, cmds, codes, avs}:
+    case Exr{Ex{w1, id, b1, rs, es, m0, mi, code, n}, rs1, conn, mine, k, arg, cmds, codes, avs}:
       es
     case ExrOf{y}:
       exr.es(y)
 
 def sc.es.before(sc: Sc) -> List<&2, A.Ent>:
   match sc:
-    case Sc{w, back, cn, es0, t0, lim, ro, aoom, lg, sha, ExNone{}}:
+    case Sc{w, back, cn, es0, t0, cf, ro, aoom, sha, ExNone{}}:
       es0
-    case Sc{w, back, cn, es0, t0, lim, ro, aoom, lg, sha, ExIn{x}}:
+    case Sc{w, back, cn, es0, t0, cf, ro, aoom, sha, ExIn{x}}:
       exr.es(x)
     case ScOf{x}:
       sc.es.before(x)
@@ -9384,15 +9597,24 @@ def sc.tick.if(late: Bool, +now: Nat, sc: Sc, +aof: Bool, +pid: U32, g: Grp, +re
 def sc.tick.at(+now: Nat, +sc: Sc, +aof: Bool, +pid: U32, g: Grp, +reqs: Chan(Req)) -> IO(Grp):
   sc.tick.if(Nat.is_le(Nat.add(sc.t0(sc), sc.lim(sc)), now), now, sc, aof, pid, g, reqs)
 
-# a tick of the engine: the clock read, past lua-time-limit the script
-# is busy
 @unsafe
-def sc.tick(sc: Sc, +aof: Bool, +pid: U32, g: Grp, +reqs: Chan(Req)) -> IO(Grp):
+def sc.tick.now(sc: Sc, +aof: Bool, +pid: U32, g: Grp, +reqs: Chan(Req)) -> IO(Grp):
   do IO<Grp>:
     t : U32 & U32 <- IO.clock()
     sc.tick.at(clock.ms(t), sc, aof, pid, g, reqs)
 
-# the engine's facts read for INFO after a run, a load or a flush
+# a tick of the engine: the clock read, past lua-time-limit the script
+# is busy
+@unsafe
+def sc.tick(sc: Sc, +aof: Bool, +pid: U32, g: Grp, +reqs: Chan(Req)) -> IO(Grp):
+  +x = g
+  sc.tick.now(sc.need(sc, pid, x), aof, pid, x, reqs)
+
+# the engine's facts read for INFO: when the driver ends, and after each
+# command of an EXEC's (INFO may come next in the transaction); no
+# command but SCRIPT KILL's, which needs none, reads them meanwhile
+# (INFO is refused BUSY while a script runs): three effects a script
+# less (FINDINGS 3zzzd)
 @unsafe
 def sc.facts(g: Grp) -> IO(Grp):
   do IO<Grp>:
@@ -9401,34 +9623,74 @@ def sc.facts(g: Grp) -> IO(Grp):
     c : U32 <- L.Engine.cache_mem()
     IO.pure(Grp, grp.sc.facts(U32.to_nat(n), U32.to_nat(m), U32.to_nat(c), g))
 
+# the clients that wait served after a script that wrote (wr), as Redis
+# serves them after the command that ran it: no other command can make
+# one ready (a key it waits for given what it waits for)
+def grp.serve.if(wr: Bool, g: Grp) -> Grp:
+  match wr:
+    case True{}:
+      grp.serve(g)
+    case False{}:
+      g
+
 # a command of the engine done, with its reply: its client's batch goes
-# on, after the clients that wait are served, or its EXEC goes on
+# on, after the clients that wait are served, or its EXEC goes on, with
+# the engine's facts (d: the us its script ran; wr: whether it wrote)
 @unsafe
-def sc.fin(ex: Exm, w: Waits, +r: R.Reply, +nostats: Bool, g: Grp, +aof: Bool, +pid: U32, +reqs: Chan(Req)) -> IO(Grp):
+def sc.fin.at(+wr: Bool, ex: Exm, w: Waits, +r: R.Reply, +nostats: Bool, +d: Nat, +now: Nat, g: Grp, +aof: Bool, +pid: U32, +reqs: Chan(Req)) -> IO(Grp):
   match ex:
     case ExNone{}:
-      IO.pure(Grp, grp.serve(sc.resume(w, r, nostats, g)))
+      IO.pure(Grp, grp.serve.if(wr, sc.resume(w, r, nostats, d, now, g)))
     case ExIn{x}:
-      sc.exec.back(x, r, nostats, g, aof, pid, reqs)
+      do IO<Grp>:
+        g2 : Grp <- sc.facts(g)
+        sc.exec.back(x, r, nostats, d, now, g2, aof, pid, reqs)
+
+@unsafe
+def sc.fin.of(ex: Exm, w: Waits, +r: R.Reply, +nostats: Bool, t: Clk, g: Grp, +aof: Bool, +pid: U32, +reqs: Chan(Req)) -> IO(Grp):
+  +y = t
+  +x = g
+  sc.fin.at(False{}, ex, w, r, nostats, clk.us(grp.at(x), y), clk.secs(y), sc.window(y, x), aof, pid, reqs)
+
+# (one that ran no script: its time since the driver's last reading, a
+# load's or a flush's)
+@unsafe
+def sc.fin(ex: Exm, w: Waits, +r: R.Reply, +nostats: Bool, g: Grp, +aof: Bool, +pid: U32, +reqs: Chan(Req)) -> IO(Grp):
+  do IO<Grp>:
+    t : U32 & U32 <- IO.clock()
+    sc.fin.of(ex, w, r, nostats, clk.of(t), g, aof, pid, reqs)
 
 # the run's end: the script's entries wrapped, the engine's facts read,
 # its command done
+# the script's end at t: the window since the last reading timed, the
+# script's time its command's (sc.took)
+@unsafe
+def sc.done.at(ex: Exm, w: Waits, +r: R.Reply, +nostats: Bool, +t0: Clk, t: Clk, g: Grp, +aof: Bool, +pid: U32, +reqs: Chan(Req)) -> IO(Grp):
+  +y = t
+  +x = g
+  sc.fin.at(U32.is_ne(U32.and(grp.sc.st(x), 2), 0), ex, w, r, nostats, clk.us(t0, y), clk.secs(y), grp.sc.off(2, sc.window(y, x)), aof, pid, reqs)
+
 @unsafe
 def sc.done(+err: Bool, +nostats: Bool, +s: String, sc: Sc, g: Grp, +aof: Bool, +pid: U32, +reqs: Chan(Req)) -> IO(Grp):
   match sc:
-    case Sc{w, back, cn, es0, t0, lim, ro, aoom, lg, sha, ex}:
+    case Sc{w, back, cn, es0, +t0, cf, ro, aoom, sha, ex}:
       do IO<Grp>:
-        g2 : Grp <- sc.facts(grp.sc.end(es0, g))
-        sc.fin(ex, w, sc.reply(err, s), nostats, g2, aof, pid, reqs)
+        t : U32 & U32 <- IO.clock()
+        sc.done.at(ex, w, sc.reply(err, s), nostats, t0, clk.of(t), grp.sc.end(es0, g), aof, pid, reqs)
     case ScOf{x}:
       sc.done(err, nostats, s, x, g, aof, pid, reqs)
 
-# redis.log's line
 @unsafe
-def sc.log(+level: U32, +msg: String, +sc: Sc, +aof: Bool, +pid: U32, g: Grp, +reqs: Chan(Req)) -> IO(Grp):
+def sc.log.at(+level: U32, +msg: String, +sc: Sc, +aof: Bool, +pid: U32, g: Grp, +reqs: Chan(Req)) -> IO(Grp):
   do IO<Grp>:
     Unit <- log(sc.lg(sc), level, msg)
     sc.go(sc, aof, pid, g, reqs)
+
+# redis.log's line
+@unsafe
+def sc.log(+level: U32, +msg: String, sc: Sc, +aof: Bool, +pid: U32, g: Grp, +reqs: Chan(Req)) -> IO(Grp):
+  +x = g
+  sc.log.at(level, msg, sc.need(sc, pid, x), aof, pid, x, reqs)
 
 # redis.acl_check_cmd's check: the command known or not (no ACL here)
 @unsafe
@@ -9442,8 +9704,9 @@ def sc.call.ran(p: Sc & (Grp & String), +aof: Bool, +pid: U32, +reqs: Chan(Req))
   (sc, q) = p
   (g, out) = q
   do IO<Grp>:
+    t : U32 & U32 <- IO.clock()
     st : L.Step <- L.Engine.next(0, out)
-    sc.loop(st, sc, aof, pid, g, reqs)
+    sc.loop(st, sc, aof, pid, sc.window(clk.of(t), g), reqs)
 
 # (a call refused runs as its error: a rejected call)
 @unsafe
@@ -9474,9 +9737,12 @@ def sc.call.of(b: P.Batch, +r3: Bool, +raw: String, sc: Sc, +aof: Bool, +pid: U3
     case _:
       sc.call.run(R.Bad{R.RError{"ERR Unknown Redis command called from script"}}, 1n, r3, raw, sc, aof, pid, g, reqs)
 
+# (the clock read before it and after it: its window, Timing)
 @unsafe
 def sc.call(+r3: Bool, +raw: String, sc: Sc, +aof: Bool, +pid: U32, g: Grp, +reqs: Chan(Req)) -> IO(Grp):
-  sc.call.of(P.parse(raw), r3, raw, sc, aof, pid, g, reqs)
+  do IO<Grp>:
+    t : U32 & U32 <- IO.clock()
+    sc.call.of(P.parse(raw), r3, raw, sc, aof, pid, sc.window(clk.of(t), g), reqs)
 
 # a step of the engine, by its kind (script.bend)
 @unsafe
@@ -9501,13 +9767,14 @@ def sc.loop(st: L.Step, sc: Sc, +aof: Bool, +pid: U32, g: Grp, +reqs: Chan(Req))
 
 # the run's state made at the script's start: the group's entries taken
 # into it (the script's own come after them)
-def sc.make.of(p: List<&2, A.Ent> & Grp, w: Waits, +back: Chan(Ans), +db: Nat, +t0: Nat, +lim: Nat, +ro: Bool, +aoom: Bool, lg: Log, +sha: String, ex: Exm) -> Sc & Grp:
+def sc.make.of(p: List<&2, A.Ent> & Grp, w: Waits, +back: Chan(Ans), +db: Nat, t0: Clk, +ro: Bool, +aoom: Bool, +sha: String, ex: Exm) -> Sc & Grp:
   (es0, g) = p
-  (Sc{w, back, conn.lua(db), es0, t0, lim, ro, aoom, lg, sha, ex}, g)
+  (Sc{w, back, conn.lua(db), es0, t0, ScfNone{}, ro, aoom, sha, ex}, g)
 
-def sc.make(+w: Waits, +back: Chan(Ans), +db: Nat, +t0: Nat, +ro: Bool, +f: U32, +pid: U32, +sha: String, ex: Exm, g: Grp) -> Sc & Grp:
+# (its start: its command's, the driver's last reading, sc.mark)
+def sc.make(+w: Waits, +back: Chan(Ans), +db: Nat, +ro: Bool, +f: U32, +sha: String, ex: Exm, g: Grp) -> Sc & Grp:
   +x = g
-  sc.make.of(grp.es.take(x), w, back, db, t0, grp.lim(x), Bool.or(ro, U32.is_eq(U32.and(f, 17), 1)), U32.is_eq(U32.and(f, 18), 2), grp.lg(pid, x), sha, ex)
+  sc.make.of(grp.es.take(x), w, back, db, grp.at(x), Bool.or(ro, U32.is_eq(U32.and(f, 17), 1)), U32.is_eq(U32.and(f, 18), 2), sha, ex)
 
 @unsafe
 def sc.begin(st: L.Step, p: Sc & Grp, +aof: Bool, +pid: U32, +reqs: Chan(Req)) -> IO(Grp):
@@ -9526,9 +9793,8 @@ def sc.start.run(m: Maybe<&2, Chan(Ans)>, +sha: String, +f: U32, +ro: Bool, +aof
       IO.pure(Grp, g)
     case Some{+back}:
       do IO<Grp>:
-        t : U32 & U32 <- IO.clock()
         st : L.Step <- L.Engine.start(sha, sc.array(ks), sc.array(xs), U32.or(Bool.pick(U32, r3, 3, 2), U32.or(Bool.pick(U32, ro, 16, 0), 32)))
-        sc.begin(st, sc.make(w, back, db, clock.ms(t), ro, f, pid, sha, ex, g), aof, pid, reqs)
+        sc.begin(st, sc.make(w, back, db, ro, f, sha, ex, g), aof, pid, reqs)
 
 @unsafe
 def sc.start.go(+sha: String, +f: U32, +ro: Bool, +aof: Bool, +pid: U32, ks: List<&2, String>, xs: List<&2, String>, ex: Exm, +r3: Bool, +db: Nat, +w: Waits, g: Grp, +reqs: Chan(Req)) -> IO(Grp):
@@ -9574,12 +9840,21 @@ def sc.eval.sha(m: Maybe<&2, Nat>, +h: String, +ro: Bool, +aof: Bool, +pid: U32,
     case Some{+f}:
       sc.start(h, U32.from_nat(f), ro, aof, pid, ks, xs, ex, r3, db, w, g, reqs)
 
+# EVALSHA's sha as the cache has it: as given when the cache has it so,
+# lowered otherwise (scr.get)
+def sha.cached(m: Maybe<&2, Nat>, +s: String) -> String:
+  match m:
+    case Some{f}:
+      s
+    case None{}:
+      sha.lower(s)
+
 @unsafe
 def sc.eval.by(sha: Bool, +ro: Bool, +aof: Bool, +pid: U32, +s: String, ks: List<&2, String>, xs: List<&2, String>, ex: Exm, +r3: Bool, +db: Nat, w: Waits, g: Grp, +reqs: Chan(Req)) -> IO(Grp):
   match sha:
     case True{}:
-      +h = sha.lower(s)
       +x = g
+      +h = sha.cached(grp.sc.find(s, x), s)
       sc.eval.sha(grp.sc.find(h, x), h, ro, aof, pid, ks, xs, ex, r3, db, w, x, reqs)
     case False{}:
       do IO<Grp>:
@@ -9605,9 +9880,7 @@ def sc.loaded.if(err: Bool, +lw: U32, +s: String, ex: Exm, w: Waits, g: Grp, +ao
     case True{}:
       sc.fin(ex, w, R.RError{s}, False{}, g, aof, pid, reqs)
     case False{}:
-      do IO<Grp>:
-        g2 : Grp <- sc.facts(grp.sc.add(s, U32.to_nat(U32.shrn(lw, 1n)), g))
-        sc.fin(ex, w, R.RBulk{s}, False{}, g2, aof, pid, reqs)
+      sc.fin(ex, w, R.RBulk{s}, False{}, grp.sc.add(s, U32.to_nat(U32.shrn(lw, 1n)), g), aof, pid, reqs)
 
 @unsafe
 def sc.loaded(ld: L.Step, ex: Exm, w: Waits, g: Grp, +aof: Bool, +pid: U32, +reqs: Chan(Req)) -> IO(Grp):
@@ -9635,8 +9908,7 @@ def sc.script(+k: Nat, +xs: List<&2, String>, ex: Exm, w: Waits, g: Grp, +aof: B
     case 3n:
       do IO<Grp>:
         Unit <- L.Engine.flush()
-        g2 : Grp <- sc.facts(grp.sc.flush(g))
-        sc.fin(ex, w, R.r_ok(), False{}, g2, aof, pid, reqs)
+        sc.fin(ex, w, R.r_ok(), False{}, grp.sc.flush(g), aof, pid, reqs)
     case _:
       sc.fin(ex, w, R.RError{"ERR a wait of no script command"}, False{}, g, aof, pid, reqs)
 
@@ -9654,12 +9926,18 @@ def sc.one.of(+c: R.Cmd, ex: Exm, +r3: Bool, +db: Nat, +aof: Bool, +pid: U32, w:
     case _:
       sc.fin(ex, w, R.RError{"ERR a wait of no script command"}, False{}, g, aof, pid, reqs)
 
-# a wait run: by its command
 @unsafe
-def sc.one(+aof: Bool, +pid: U32, w: Waits, g: Grp, +reqs: Chan(Req)) -> IO(Grp):
+def sc.one.at(+aof: Bool, +pid: U32, w: Waits, g: Grp, +reqs: Chan(Req)) -> IO(Grp):
   +x = w
   +c0 = waits.c0(x)
   sc.one.of(waits.cmd(x), ExNone{}, S.conn.r3(c0), S.conn.db(c0), aof, pid, x, g, reqs)
+
+# a wait run: by its command, the clock read as it starts
+@unsafe
+def sc.one(+aof: Bool, +pid: U32, w: Waits, g: Grp, +reqs: Chan(Req)) -> IO(Grp):
+  do IO<Grp>:
+    g2 : Grp <- sc.mark(g)
+    sc.one.at(aof, pid, w, g2, reqs)
 
 # EXEC in the driver: its checks (bg.exec.check), then its commands as
 # bg.exec.run runs them, but for those that need the engine, which the
@@ -9728,34 +10006,70 @@ def sc.exec.at(eng: Bool, ex: Ex, x: Xr, +c: R.Cmd, +k: Nat, +a: Av, rest: List<
 # a command of the EXEC's that needs the engine: named and counted as
 # bg.x.go names and counts a command, its line to the monitors first
 # (EVAL feeds them before its script runs), then run by the engine, the
-# transaction's entries so far the group's (its own join them)
+# transaction's entries so far the group's (its own join them); its call
+# named and counted at its end, as a script command's is (The driver:
+# Timing)
 @unsafe
 def sc.exec.eng(ex: Ex, x: Xr, +c: R.Cmd, +k: Nat, +a: Av, rest: List<&2, R.Cmd>, more: List<&2, Nat>, ar: List<&2, Av>, outs: List<&2, Sigma<&2, &2, Chan(Ans), _ => Ans>>, +aof: Bool, +pid: U32, +reqs: Chan(Req)) -> IO(Grp):
   match ex x:
     case Ex{+w, +id, +back, rs0, es0, m0, mi, code, n} Xr{LRun{rs1, es1, +conn, +srv, ds, ws, up, tx, pb}, mine}:
-      sc.exec.eng.fed(bg.x.feed(mon.ran(True{}, k), id, k, S.conn.mode(conn), a, LRun{rs1, es1, conn, gen.count(S.srv.call(srv, id, av.arg(a)), k, Nil{}), ds, ws, up, tx, pb}, mine), w, Ex{w, id, back, rs0, es0, m0, mi, code, n}, c, k, rest, more, ar, outs, aof, pid, reqs)
+      sc.exec.eng.fed(bg.x.feed(mon.ran(True{}, k), id, k, S.conn.mode(conn), a, LRun{rs1, es1, conn, srv, ds, ws, up, tx, pb}, mine), w, Ex{w, id, back, rs0, es0, m0, mi, code, n}, c, k, av.arg(a), rest, more, ar, outs, aof, pid, reqs)
     case ex0 x0:
       IO.pure(Grp, sc.exec.end(ex0, x0, outs))
 
 @unsafe
-def sc.exec.eng.fed(f: Xr, w: Waits, ex: Ex, +c: R.Cmd, +k: Nat, rest: List<&2, R.Cmd>, more: List<&2, Nat>, ar: List<&2, Av>, outs: List<&2, Sigma<&2, &2, Chan(Ans), _ => Ans>>, +aof: Bool, +pid: U32, +reqs: Chan(Req)) -> IO(Grp):
+def sc.exec.eng.fed(f: Xr, w: Waits, ex: Ex, +c: R.Cmd, +k: Nat, arg: I.Arg, rest: List<&2, R.Cmd>, more: List<&2, Nat>, ar: List<&2, Av>, outs: List<&2, Sigma<&2, &2, Chan(Ans), _ => Ans>>, +aof: Bool, +pid: U32, +reqs: Chan(Req)) -> IO(Grp):
   match f:
     case Xr{LRun{rs1, es1, +conn, srv, ds, ws, up, tx, pb}, mine}:
-      sc.one.of(c, ExIn{Exr{ex, rs1, conn, mine, k, rest, more, ar}}, S.conn.r3(conn), S.conn.db(conn), aof, pid, w, Grp{outs, es1, srv, ds, ws, up, tx, pb}, reqs)
+      do IO<Grp>:
+        g2 : Grp <- sc.mark(Grp{outs, es1, srv, ds, ws, up, tx, pb})
+        sc.one.of(c, ExIn{Exr{ex, rs1, conn, mine, k, arg, rest, more, ar}}, S.conn.r3(conn), S.conn.db(conn), aof, pid, w, g2, reqs)
     case x0:
       IO.pure(Grp, sc.exec.end(ex, x0, outs))
 
 # a command of the EXEC's run by the engine: its reply in EXEC's array
-# (in its client's mode in EXEC), its error counted for its call, and the
-# EXEC goes on, on its client's database (the script's SELECT was the
-# script client's)
+# (in its client's mode in EXEC), and the EXEC goes on, on its client's
+# database (the script's SELECT was the script client's)
 @unsafe
-def sc.exec.back(x: Exr, +r: R.Reply, +nostats: Bool, g: Grp, +aof: Bool, +pid: U32, +reqs: Chan(Req)) -> IO(Grp):
+def sc.exec.went(x: Exr, +r: R.Reply, g: Grp, +aof: Bool, +pid: U32, +reqs: Chan(Req)) -> IO(Grp):
   match x g:
     case ExrOf{y} g0:
-      sc.exec.back(y, r, nostats, g0, aof, pid, reqs)
-    case Exr{Ex{w, +id, +back, rs0, es0, m0, mi, code, +n}, rs1, +conn, mine, +k, cmds, +codes, avs} Grp{outs, es, srv, ds, ws, up, tx, pb}:
-      sc.exec.loop(Ex{w, id, back, rs0, es0, m0, mi, code, n}, bg.x.till(id, back, 0n, n, cmds, codes, avs, Xr{LRun{S.put(S.say(S.conn.mode(conn), r), rs1), es, conn, sc.stat(r, nostats, k, srv), R.ds.focus(S.conn.db(conn), ds), ws, up, tx, pb}, mine}, codes.stop(codes)), outs, aof, pid, reqs)
+      sc.exec.went(y, r, g0, aof, pid, reqs)
+    case Exr{Ex{w, +id, +back, rs0, es0, m0, mi, code, +n}, rs1, +conn, mine, k, arg, cmds, +codes, avs} Grp{outs, es, srv, ds, ws, up, tx, pb}:
+      sc.exec.loop(Ex{w, id, back, rs0, es0, m0, mi, code, n}, bg.x.till(id, back, 0n, n, cmds, codes, avs, Xr{LRun{S.put(S.say(S.conn.mode(conn), r), rs1), es, conn, srv, R.ds.focus(S.conn.db(conn), ds), ws, up, tx, pb}, mine}, codes.stop(codes)), outs, aof, pid, reqs)
+
+def ex.id(+e: Ex) -> Nat:
+  match e:
+    case Ex{w, +id, back, rs, es, m0, mi, code, n}:
+      id
+
+def exr.id(+x: Exr) -> Nat:
+  match x:
+    case Exr{+e, rs, conn, mine, k, arg, cmds, codes, avs}:
+      ex.id(e)
+    case ExrOf{+y}:
+      exr.id(y)
+
+def exr.k(+x: Exr) -> Nat:
+  match x:
+    case Exr{e, rs, conn, mine, +k, arg, cmds, codes, avs}:
+      k
+    case ExrOf{+y}:
+      exr.k(y)
+
+def exr.arg(+x: Exr) -> I.Arg:
+  match x:
+    case Exr{e, rs, conn, mine, k, +arg, cmds, codes, avs}:
+      arg
+    case ExrOf{+y}:
+      exr.arg(y)
+
+# (its call counted and timed first, with its script's time: d us,
+# ending at now, grp.took)
+@unsafe
+def sc.exec.back(x: Exr, +r: R.Reply, +nostats: Bool, +d: Nat, +now: Nat, g: Grp, +aof: Bool, +pid: U32, +reqs: Chan(Req)) -> IO(Grp):
+  +y = x
+  sc.exec.went(y, r, grp.took(exr.id(y), exr.k(y), exr.arg(y), r, nostats, d, now, g), aof, pid, reqs)
 
 @unsafe
 def sc.drive.at(p: Waits & Waits, h: Nat, +aof: Bool, +pid: U32, outs: List<&2, Sigma<&2, &2, Chan(Ans), _ => Ans>>, es: List<&2, A.Ent>, srv: S.Srv, ds: R.Ds, up: List<&2, Up>, tx: Tx, pb: Ps, +reqs: Chan(Req)) -> IO(Grp):
@@ -9782,7 +10096,7 @@ def sc.drive.ran(g: Grp, h: Nat, +aof: Bool, +pid: U32, +reqs: Chan(Req)) -> IO(
 def sc.drive.if(some: Bool, w: Waits, h: Nat, +aof: Bool, +pid: U32, g: Grp, +reqs: Chan(Req)) -> IO(Grp):
   match some:
     case False{}:
-      IO.pure(Grp, grp.sc.off(8, g))
+      sc.facts(grp.sc.off(8, g))
     case True{}:
       do IO<Grp>:
         g2 : Grp <- sc.one(aof, pid, w, g, reqs)
@@ -9968,7 +10282,8 @@ def aof_group(g: Grp, +sel: Nat, rw: Rw, f: File, +sync: Sync, +reqs: Chan(Req))
   aof_group.sc(grp.sc.pending(x), x, sel, rw, f, sync, reqs)
 
 # the waits for the engine run first, while one is in the chain
-# (Scripts), the driver's work timed as a window of its own (Timing)
+# (Scripts), the driver's work timed in windows of its own (The driver:
+# Timing)
 @unsafe
 def aof_group.sc(any: Bool, g: Grp, +sel: Nat, rw: Rw, f: File, +sync: Sync, +reqs: Chan(Req)) -> IO(Unit):
   match any:
@@ -9978,9 +10293,9 @@ def aof_group.sc(any: Bool, g: Grp, +sel: Nat, rw: Rw, f: File, +sync: Sync, +re
       +w = rw
       do IO<Unit>:
         t0 : U32 & U32 <- IO.clock()
-        g2 : Grp <- sc.drive(sc.fuel(), True{}, rw.pid(w), g, reqs)
+        g2 : Grp <- sc.drive(sc.fuel(), True{}, rw.pid(w), grp.at.set(clk.of(t0), g), reqs)
         t1 : U32 & U32 <- IO.clock()
-        aof_group.go(sc.timed(t0, t1, g2), sel, w, f, sync, reqs)
+        aof_group.go(sc.window(clk.of(t1), g2), sel, w, f, sync, reqs)
 
 @unsafe
 def aof_group.go(g: Grp, +sel: Nat, rw: Rw, f: File, +sync: Sync, +reqs: Chan(Req)) -> IO(Unit):

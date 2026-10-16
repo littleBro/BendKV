@@ -943,13 +943,15 @@ def auth.conn(ok: Bool, +c: Conn, +s: Srv) -> Conn:
 # MULTI and when its time is up. A client whose script, or SCRIPT LOAD,
 # EXISTS or FLUSH, the server's engine runs waits as BlkScript (server.bend,
 # Scripts), which no key serves and no time ends either: the server
-# answers it when the engine is done.
+# answers it when the engine is done, its replies before the command held
+# until then (rs, newest first), as Redis writes a script's caller's
+# replies once the script ends.
 type Blk is Data:
   BlkPop{c: R.Cmd, form: Nat, ms: List<&2, Nat>}
   BlkBad{r: R.Reply}
   BlkPause{}
   BlkWait{ms: List<&2, Nat>}
-  BlkScript{}
+  BlkScript{rs: List<&2, R.Reply>}
 
 # The timeout, as getTimeoutFromObjectOrReply reads one in seconds: a
 # long double as string2ld reads it, times 1000 (rounded as x87 rounds),
@@ -1187,7 +1189,7 @@ def blk.reply(b: Blk, db: R.Db) -> R.Reply:
       R.RNullA{}
     case BlkWait{ms}:
       R.RInt{R.IPos{0n}}
-    case BlkScript{}:
+    case BlkScript{rs}:
       R.RNullA{}
 
 # the reply of a client whose time is up, or that CLIENT UNBLOCK unblocks
@@ -1226,7 +1228,7 @@ def blk.waits(b: Blk, db: R.Db) -> Bool:
       blk.none(R.reply_of(R.exec(c, db)))
     case BlkWait{ms}:
       True{}
-    case BlkScript{}:
+    case BlkScript{rs}:
       True{}
     case _:
       False{}
@@ -1327,7 +1329,7 @@ def blk.at(b: Blk, +k: String) -> R.Cmd:
       R.Bad{R.RNullA{}}
     case BlkWait{ms}:
       R.Bad{R.RInt{R.IPos{0n}}}
-    case BlkScript{}:
+    case BlkScript{rs}:
       R.Bad{R.RNullA{}}
 
 # Databases

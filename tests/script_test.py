@@ -62,6 +62,16 @@ The scenarios:
    SHUTDOWN NOSAVE; then INFO's statistics. A server that answers no
    one while a script loops, or does not kill it, ends the scenario
    there. --no-busy leaves this one out.
+9. The slow log and the latency monitor of scripts (thresholds of 50 ms
+   on both): a slow script logged with its arguments, its fast call of
+   SET not; in a pipeline, a GET after a slow script not logged; in a
+   transaction, the slow script logged and EXEC not; the latency
+   monitor's event of the script ("command"). Entries are compared by
+   their arguments and whether they took the threshold.
+10. Scripts in pipelines: scripts among other commands of one pipeline,
+   each reply in its place; a RESP3 client with a subscription whose
+   script publishes to its own channel, its pushes and replies in
+   Redis's order.
 
 Not tested: error() with a table that has no 'err' field (error({}))
 makes Redis 7.0.15 crash (sdscatfmt reads the message it does not have),
@@ -853,9 +863,100 @@ def busy(port, log):
         r.close()
 
 
+def parse(data, i=0):
+    """a RESP2 reply's value (bytes, ints, lists) and where it ends"""
+    j = data.index(b"\r\n", i)
+    kind, head = data[i:i + 1], data[i + 1:j]
+    if kind == b"$":
+        n = int(head)
+        return (None, j + 2) if n < 0 else (data[j + 2:j + 2 + n], j + 4 + n)
+    if kind == b"*":
+        out, at = [], j + 2
+        for _ in range(max(int(head), 0)):
+            v, at = parse(data, at)
+            out.append(v)
+        return out, at
+    return (int(head) if kind == b":" else head), j + 2
+
+
+def slowlog(c):
+    """the slow log's entries, newest first: each one's arguments, and
+    whether it took its threshold or more (its time is the server's)"""
+    rep = c.cmd("SLOWLOG", "GET", "10")
+    if not isinstance(rep, bytes) or rep[:1] != b"*":
+        return [repr(rep)]
+    return [(e[3], e[2] >= 50000) for e in parse(rep)[0]]
+
+
+def latest(c):
+    """the latency monitor's events (LATENCY LATEST), by name, each with
+    whether its latest sample took the threshold or more"""
+    rep = c.cmd("LATENCY", "LATEST")
+    if not isinstance(rep, bytes) or rep[:1] != b"*":
+        return [repr(rep)]
+    return sorted((e[0], e[2] >= 50) for e in parse(rep)[0])
+
+
+# the count of a loop that runs 0.1 to 0.3 s in Redis's Lua
+SLOW = 15000000
+
+
+def slow(port, log):
+    r = fresh(port, log, "9")
+    was = [r.cmd("CONFIG", "GET", x) for x in ("slowlog-log-slower-than", "latency-monitor-threshold")]
+    try:
+        log("9 thresholds", r.cmd("CONFIG", "SET", "slowlog-log-slower-than", "50000"),
+            r.cmd("CONFIG", "SET", "latency-monitor-threshold", "50"), r.cmd("SLOWLOG", "RESET"),
+            r.cmd("LATENCY", "RESET"))
+        c = Client(port)
+        body = "redis.call('SET', KEYS[1], 'v') local i = 0 while i < %d do i = i + 1 end return i" % SLOW
+        # a slow script: in the slow log with its arguments, its call of
+        # SET not (each call is timed on its own); then a slow script and
+        # a GET in one pipeline, the GET not in it either
+        log("9 slow script", ev(c, body, [k("s")]))
+        log("9 slow log", slowlog(r), latest(r))
+        log("9 reset", r.cmd("SLOWLOG", "RESET"), r.cmd("LATENCY", "RESET"))
+        c.sock.sendall(enc(["EVAL", body, "1", k("s")]) + enc(["GET", k("s")]) + enc(["EVAL", "return 1", "0"]))
+        log("9 pipeline", c.read(10.0), c.read(), c.read())
+        log("9 slow log after the pipeline", slowlog(r))
+        # a slow script in a transaction: in the slow log, EXEC not
+        log("9 reset", r.cmd("SLOWLOG", "RESET"))
+        log("9 multi", c.cmd("MULTI"), ev(c, body, [k("s")]), c.cmd("GET", k("s")), c.cmd("EXEC", timeout=10.0))
+        log("9 slow log after EXEC", slowlog(r))
+        c.close()
+    finally:
+        for name, rep in zip(("slowlog-log-slower-than", "latency-monitor-threshold"), was):
+            old = rep.split(b"\r\n")[4] if isinstance(rep, bytes) and rep.startswith(b"*2\r\n") else b""
+            r.cmd("CONFIG", "SET", name, old if old.lstrip(b"-").isdigit() else (b"10000" if name.startswith("slow") else b"0"))
+        r.cmd("SLOWLOG", "RESET")
+        r.cmd("LATENCY", "RESET")
+        r.close()
+
+
+def pipelines(port, log):
+    r = fresh(port, log, "10")
+    c = Client(port)
+    # scripts among other commands in one pipeline: each reply in its place
+    body = "return redis.call('INCR', KEYS[1])"
+    c.sock.sendall(enc(["SET", k("p"), "1"]) + enc(["EVAL", body, "1", k("p")]) + enc(["GET", k("p")]) +
+                   enc(["EVAL", body, "1", k("p")]) + enc(["EVAL", "return {1, 2}", "0"]) + enc(["PING"]) +
+                   enc(["EVALSHA", sha(body), "1", k("p")]) + enc(["EVAL", "return (", "0"]) + enc(["GET", k("p")]))
+    log("10 pipeline", *[c.read() for _ in range(9)])
+    # a client with a subscription (RESP3), whose script publishes to its
+    # own channel: the pushes and the replies in Redis's order
+    s3 = Client(port, resp3=True)
+    log("10 subscribe", s3.cmd("SUBSCRIBE", k("ch")))
+    s3.sock.sendall(enc(["PUBLISH", k("ch"), "a"]) + enc(["EVAL", "redis.call('PUBLISH', KEYS[1], 'b') return 1", "1", k("ch")]) +
+                    enc(["PUBLISH", k("ch"), "c"]) + enc(["EVAL", "return 2", "0"]))
+    log("10 subscribed pipeline", *[s3.read() for _ in range(7)])
+    for x in (c, s3):
+        x.close()
+    r.close()
+
+
 SCENARIOS = [("1 replies", replies), ("2 redis.call", calls), ("3 errors", errors), ("4 the cache", cache),
              ("5 libraries", libraries), ("6 transactions", transactions), ("7 statistics", statistics),
-             ("8 BUSY", busy)]
+             ("8 BUSY", busy), ("9 the slow log", slow), ("10 pipelines", pipelines)]
 
 
 def transcript(port, scenario):
