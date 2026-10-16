@@ -895,17 +895,17 @@ The translation the kernel reads can be dumped with
   skipped. The reference is the same run on redis-server 7.0.15 with default settings,
   each unit on a freshly started server instance: in this mode 1,757 tests run, and
   Redis passes 1,677 (almost all the others need DEBUG, off by default in 7.0). BendKV
-  passes 1,318 of them (78.6%), and in the units of what it has (the protocol, the
+  passes 1,320 of them (78.7%), and in the units of what it has (the protocol, the
   connection and clients and their pause, the keyspace and databases, strings with
   ranges, bits and fields, counters, hashes, lists, sets, sorted sets, SORT, HyperLogLogs,
   GEO, DUMP and RESTORE, times to live, lazy freeing, transactions, Pub/Sub and keyspace
   notifications, introspection, the slow log and the latency monitor, client-side
-  caching), 1,316 of 1,365 (96%): `unit/tracking` all 10, `unit/latency-monitor` all 13,
-  `unit/slowlog` 7 of 9 (the others use ACL and MIGRATE), `unit/dump` all 11,
+  caching, ACL users), 1,318 of 1,365 (97%): `unit/tracking` all 10, `unit/latency-monitor`
+  all 13, `unit/slowlog` 8 of 9 (the other uses MIGRATE), `unit/dump` all 11,
   `unit/geo` all 59, `unit/introspection-2` 39 of 43 (the others need streams, MIGRATE
   and COMMAND's entries of commands BendKV does not have),
   `unit/introspection` 26 of 28 (the others need functions and MIGRATE),
-  `unit/other` 16 of 19, `unit/multi` 32 of 53 (the others read the replication stream or
+  `unit/other` all 19, `unit/multi` 32 of 53 (the others read the replication stream or
   need replicas, need XGROUP, or run after a test that left the client in MULTI),
   `unit/pubsub` 29 of 30 (the other needs streams), `unit/expire` 57 of 59 (the others
   need replication), `unit/type/string` 74 of 77 (two others need replication, the third
@@ -958,9 +958,9 @@ The translation the kernel reads can be dumped with
   CI on every pull request): redis-py 8.1.0's tests of its sync and asyncio clients, in
   RESP2 and in RESP3, and go-redis v9.23.0's specs, in RESP3, each against Redis 7.0.15
   and against BendKV, each on a server started for it, without their tests of modules,
-  clusters, sentinels and TLS. Of the tests Redis passes, BendKV passes 2,633 of 2,753 in
-  redis-py, the same tests in RESP2 and in RESP3, and 427 of 460 in go-redis; every other
-  one fails on what BendKV does not have (Lua's functions, streams, ACL, and COMMAND's
+  clusters, sentinels and TLS. Of the tests Redis passes, BendKV passes 2,667 of 2,753 in
+  redis-py, the same tests in RESP2 and in RESP3, and 428 of 460 in go-redis; every other
+  one fails on what BendKV does not have (Lua's functions, streams, and COMMAND's
   entries of those), none on a command BendKV has. A test Redis passes that BendKV fails, and that is not among the
   known failures of `tools/data/clients.json`, fails CI.
 - **Differential testing against Redis 7.0.15** (`tests/diff_test.py`). Random streams
@@ -1541,8 +1541,8 @@ make clients BEND="$B" # redis-py's and go-redis's test suites on Redis and on B
    FLUSHDB, FLUSHALL, keyspace lines per database — with laws and recovery of all the
    databases from the append-only file), the ranges and bits of strings (GETRANGE,
    SETRANGE, GETBIT, SETBIT, BITCOUNT, BITPOS — with a law of SETRANGE and recovery from
-   the append-only file). Redis's suite in external mode: BendKV passes 1,318 of the
-   1,677 tests Redis itself passes, and 1,316 of 1,365 in the units of what it has
+   the append-only file). Redis's suite in external mode: BendKV passes 1,320 of the
+   1,677 tests Redis itself passes, and 1,318 of 1,365 in the units of what it has
    ([docs/COMPATIBILITY.md](docs/COMPATIBILITY.md)). Start-up as for redis-server (the
    command line and the configuration file). The database as a record with a count of
    keys (DBSIZE in O(1)).

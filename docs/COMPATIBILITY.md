@@ -39,9 +39,23 @@ make suite REDIS_SRC=../redis      # both runs and the table, in build/suite/
 ## The result
 
 Redis 7.0.15, October 2026. Of the 1,677 tests Redis passes in this mode, BendKV passes
-**1,318 (78.6%)**; of the 1,365 in the units of what BendKV has, 1,316 (96%).
+**1,320 (78.7%)**; of the 1,365 in the units of what BendKV has, 1,318 (97%).
+ACL users (section 3zzzh of [FINDINGS.md](FINDINGS.md)) brought 2: unit/other's test of
+RESET making its client the default user again (all 19 of its tests that Redis passes),
+and unit/slowlog's of the redaction of ACL SETUSER's rules (8 of its 9; the ninth uses
+MIGRATE). Redis's unit/acl and unit/acl-v2 are tagged `external:skip` as a whole, though
+most of their tests need no server of their own. Run in this mode with the tag taken off
+the blocks that need none, BendKV passes 67 of the 70 tests of unit/acl that Redis
+passes, and 27 of the 29 of unit/acl-v2: the others use commands BendKV does not have
+(streams', MIGRATE, FCALL_RO) or Redis 7.0's description of a selector's commands, and
+section 3zzzh lists them. Lua scripts brought three of unit/acl's (64 of the 70 on
+main): its test of SCRIPT HELP refused, its test of a script's call in the log, and the
+test after the first, which that one's failure left logged in as a user that may run
+nothing; its test of EVAL_RO and EVALSHA_RO goes on to FCALL_RO. unit/auth, run so too,
+stops at its test of the limits Redis puts on the requests of a client that must
+authenticate, which BendKV does not have yet.
 The RDB file (section 3zzzc of [FINDINGS.md](FINDINGS.md)) brought 2: unit/other's SAVE
-of a database with a value of every type, and its final SAVE (18 of its 19; its BGSAVE
+of a database with a value of every type, and its final SAVE (18 of its 19 then; its BGSAVE
 and its reload with DEBUG RELOAD need what BendKV does not have yet).
 Lua scripts (section 3zzzd of [FINDINGS.md](FINDINGS.md)) brought 13, each a test of
 another unit that runs a script: unit/pause passes 13 of its 14 tests (its four of
@@ -57,9 +71,10 @@ test fewer (1 of its 90): its test of FUNCTION KILL against EVAL leaves the scri
 starts looping, which FUNCTION KILL would have ended, and the rest of the unit meets
 BUSY. unit/scripting passes none in this run, as before: it runs its tests twice,
 functions first, and stops in that half (below). Its tests of EVAL, run alone (its loop
-`foreach is_eval {0 1}` cut to `{1}`), pass 103 of the 110 that Redis passes; each of the
-other seven needs what BendKV does not have: replication (three read the replication
-stream, one counts good replicas), streams, ACL and CLUSTER.
+`foreach is_eval {0 1}` cut to `{1}`), pass 104 of the 110 that Redis passes, its test
+of `redis.acl_check_cmd` among them since ACL users; each of the other six needs what
+BendKV does not have: replication (three read the replication stream, one counts good
+replicas), streams and CLUSTER.
 CLIENT TRACKING (section 3zzzb of [FINDINGS.md](FINDINGS.md)) brought 11: unit/tracking
 passes the 10 of its 13 tests that Redis passes in this mode, and unit/other its test of
 RESET clearing a client's state (16 of its 19). The other three of unit/tracking fail on
@@ -226,7 +241,7 @@ need MULTI and WATCH, Lua or lists (then).
 
 | area | units | Redis passes | BendKV passes |
 |---|---|---:|---:|
-| what BendKV has: the protocol, connections and clients and their pause, the keyspace and its databases, strings and their ranges, bits and fields, counters and floats, hashes, lists, sets, sorted sets and the commands that wait on them, SORT, HyperLogLogs, GEO, DUMP and RESTORE, times to live, lazy freeing, transactions, pub/sub and keyspace notifications, introspection, the slow log and the latency monitor, client-side caching, ACL users, and the scripts these units run | protocol, quit, keyspace, type/string, type/incr, type/hash, type/list, list-2, list-3, type/set, type/zset, sort, hyperloglog, geo, dump, scan, bitops, bitfield, expire, lazyfree, violations, multi, pubsub, pause, introspection, introspection-2, other, info-command, latency-monitor, slowlog, tracking | 1365 | **1316** |
+| what BendKV has: the protocol, connections and clients and their pause, the keyspace and its databases, strings and their ranges, bits and fields, counters and floats, hashes, lists, sets, sorted sets and the commands that wait on them, SORT, HyperLogLogs, GEO, DUMP and RESTORE, times to live, lazy freeing, transactions, pub/sub and keyspace notifications, introspection, the slow log and the latency monitor, client-side caching, ACL users, and the scripts these units run | protocol, quit, keyspace, type/string, type/incr, type/hash, type/list, list-2, list-3, type/set, type/zset, sort, hyperloglog, geo, dump, scan, bitops, bitfield, expire, lazyfree, violations, multi, pubsub, pause, introspection, introspection-2, other, info-command, latency-monitor, slowlog, tracking | 1365 | **1318** |
 | Lua: scripts (EVAL and its kin) done, functions (FUNCTION, FCALL) not yet; unit/scripting runs its tests of functions first and stops there | scripting, functions | 200 | 1 |
 | the query buffer, not yet | querybuf | 2 | 0 |
 | out of scope: streams | type/stream, type/stream-cgroups | 110 | 1 |
@@ -257,7 +272,7 @@ pubsubshard, shutdown, tls, type/list-common, wait):
 | unit/latency-monitor | 14 | 13 | 13 |
 | unit/lazyfree | 4 | 4 | 2 |
 | unit/multi | 60 | 53 | 32 |
-| unit/other | 22 | 19 | 18 |
+| unit/other | 22 | 19 | 19 |
 | unit/pause | 14 | 14 | 13 |
 | unit/protocol | 25 | 17 | 17 |
 | unit/pubsub | 30 | 30 | 29 |
@@ -266,7 +281,7 @@ pubsubshard, shutdown, tls, type/list-common, wait):
 | unit/replybufsize | 1 | 0 | 0 |
 | unit/scan | 17 | 17 | 17 |
 | unit/scripting | 111 | 110 | 0 |
-| unit/slowlog | 16 | 9 | 7 |
+| unit/slowlog | 16 | 9 | 8 |
 | unit/sort | 52 | 52 | 52 |
 | unit/tracking | 13 | 10 | 10 |
 | unit/type/hash | 73 | 72 | 70 |
@@ -280,7 +295,7 @@ pubsubshard, shutdown, tls, type/list-common, wait):
 | unit/type/string | 77 | 77 | 74 |
 | unit/type/zset | 291 | 289 | 287 |
 | unit/violations | 1 | 1 | 1 |
-| **all** | **1757** | **1677** | **1318 (78.6%)** |
+| **all** | **1757** | **1677** | **1320 (78.7%)** |
 
 ## Why the other 359 fail
 
@@ -396,9 +411,9 @@ make clients                       # the three suites, against Redis and build/b
 
 | suite | Redis 7.0.15 passes | BendKV passes |
 |---|---:|---:|
-| redis-py 8.1.0, RESP2 | 2,753 | **2,633 (95.6%)** |
-| redis-py 8.1.0, RESP3 | 2,753 | **2,633 (95.6%)** |
-| go-redis v9.23.0, RESP3 | 460 | **427 (92.8%)** |
+| redis-py 8.1.0, RESP2 | 2,753 | **2,667 (96.9%)** |
+| redis-py 8.1.0, RESP3 | 2,753 | **2,667 (96.9%)** |
+| go-redis v9.23.0, RESP3 | 460 | **428 (93.0%)** |
 
 redis-py's tests give in RESP3 what they give in RESP2, test by test, against Redis and
 against BendKV: the same tests pass, and the same fail. (Its three tests of subscribing
@@ -407,9 +422,9 @@ alike.)
 
 Every test BendKV fails of those Redis passes fails on what BendKV does not have:
 
-- **A command it does not have:** in redis-py, streams (73), ACL 34, FUNCTION LOAD 7,
-  MODULE 2, and BGSAVE and REPLICAOF one each (118 tests in each protocol); in go-redis,
-  streams (26), FUNCTION LOAD and KILL (6) and ACL (1; 33 tests). Lua scripts (section 3zzzd of
+- **A command it does not have:** in redis-py, streams (73), FUNCTION LOAD 7, MODULE 2,
+  and BGSAVE and REPLICAOF one each (84 tests in each protocol); in go-redis, streams
+  (26) and FUNCTION LOAD and KILL (6; 32 tests). Lua scripts (section 3zzzd of
   [FINDINGS.md](FINDINGS.md)) brought redis-py's 107 tests in each protocol that stopped
   on EVALSHA, SCRIPT or a script BendKV did not run (its locks, which are scripts, its
   scripting tests and MONITOR's test of a script) and go-redis's 9 of EVAL, EVAL_RO and a
@@ -423,10 +438,12 @@ Every test BendKV fails of those Redis passes fails on what BendKV does not have
   geo's 59 in redis-py and 11 in go-redis pass since GEO (section 3zzm), and the 12 tests
   of DUMP and RESTORE in redis-py and 3 in go-redis since DUMP and RESTORE (section
   3zzu); redis-py's 9 tests of SLOWLOG and 3 of LATENCY, and go-redis's of SLOWLOG, pass
-  since the timing of calls (section 3zzz), and redis-py's test of CLIENT TRACKING and
-  go-redis's 9 specs of its client-side cache since CLIENT TRACKING (section 3zzzb).
+  since the timing of calls (section 3zzz), redis-py's test of CLIENT TRACKING and
+  go-redis's 9 specs of its client-side cache since CLIENT TRACKING (section 3zzzb), and
+  redis-py's 34 tests of ACL, of AUTH with a user and of CLIENT KILL USER, and go-redis's
+  of ACL CAT, since ACL users (section 3zzzh).
 - **Another error, on the same ground:** COMMAND, which lists only BendKV's commands:
-  COMMAND LIST counts 269 where redis-py waits for more than 300, and redis-py's parser
+  COMMAND LIST counts 284 where redis-py waits for more than 300, and redis-py's parser
   of commands reads XREAD's keys.
 
 So no test of these suites finds a command BendKV has answering otherwise than Redis.
