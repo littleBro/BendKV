@@ -41,7 +41,7 @@ CASES = [
     # TYPE
     ("type", lines(b"TYPE k", b"SET k v", b"TYPE k", b"TYPE", b"TYPE a b"), False),
     # CLIENT
-    ("client: arity and unknown", lines(b"CLIENT", b"CLIENT FOO", b"CLIENT ID x", b"CLIENT GETNAME x", b"CLIENT SETNAME", b"CLIENT HELP x"), False),
+    ("client: help, arity and unknown", lines(b"CLIENT HELP", b"CLIENT", b"CLIENT FOO", b"CLIENT ID x", b"CLIENT GETNAME x", b"CLIENT SETNAME", b"CLIENT HELP x"), False),
     ("client: unknown subcommand with a newline", resp(b"CLIENT", b"a\r\nb"), False),
     ("client id", lines(b"CLIENT ID"), True),
     ("client names", lines(b"CLIENT GETNAME", b"CLIENT SETNAME foo", b"CLIENT GETNAME",
