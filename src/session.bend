@@ -330,19 +330,19 @@ def mm.acl.any(+m: Mm) -> Bool:
     case MmOf{+n}:
       mm.acl.any(n)
 
-def mm.acl.check(+m: Mm, +n: String, +argv: List<&2, String>) -> U.Verdict:
+def mm.acl.check(+m: Mm, +n: String, +k: Nat, +argv: List<&2, String>) -> U.Verdict:
   match m:
     case Mm{rng, max, pol, smp, ten, lfl, lfd, kick, pool, next, debt, +acl}:
-      U.acl.check(acl, n, argv)
+      U.acl.check(acl, n, k, argv)
     case MmOf{+x}:
-      mm.acl.check(x, n, argv)
+      mm.acl.check(x, n, k, argv)
 
-def mm.acl.sort(+m: Mm, +n: String, +argv: List<&2, String>) -> Maybe<&2, String>:
+def mm.acl.sort(+m: Mm, +n: String, +k: Nat, +argv: List<&2, String>) -> Maybe<&2, String>:
   match m:
     case Mm{rng, max, pol, smp, ten, lfl, lfd, kick, pool, next, debt, +acl}:
-      U.acl.sort.err(acl, n, argv)
+      U.acl.sort.err(acl, n, k, argv)
     case MmOf{+x}:
-      mm.acl.sort(x, n, argv)
+      mm.acl.sort(x, n, k, argv)
 
 # Access
 # ------
@@ -771,15 +771,15 @@ def srv.acl.any(+s: Srv) -> Bool:
     case Srv{pass, cfg, info, +mm}:
       mm.acl.any(mm)
 
-def srv.acl.check(+s: Srv, +n: String, +argv: List<&2, String>) -> U.Verdict:
+def srv.acl.check(+s: Srv, +n: String, +k: Nat, +argv: List<&2, String>) -> U.Verdict:
   match s:
     case Srv{pass, cfg, info, +mm}:
-      mm.acl.check(mm, n, argv)
+      mm.acl.check(mm, n, k, argv)
 
-def srv.acl.sort(+s: Srv, +n: String, +argv: List<&2, String>) -> Maybe<&2, String>:
+def srv.acl.sort(+s: Srv, +n: String, +k: Nat, +argv: List<&2, String>) -> Maybe<&2, String>:
   match s:
     case Srv{pass, cfg, info, +mm}:
-      mm.acl.sort(mm, n, argv)
+      mm.acl.sort(mm, n, k, argv)
 
 # the client of id now the user of name n, among the restricted clients or
 # not (acl.bend: Restricted clients), and the client of id gone

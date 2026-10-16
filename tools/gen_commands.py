@@ -344,12 +344,15 @@ def block(facts):
 
 BEGIN, END = "# BEGIN gen_commands: table\n", "# END gen_commands: table\n"
 
-# The key specs of the commands that only read, by INFO's keys (Step 3
-# below): the block between "# BEGIN gen_commands: by key" and "# END
-# gen_commands: by key" in src/command.bend holds ro.key, the arity and
-# the key specs (and how they are read, as in desc) of such a command,
-# which name the keys a call of it read (CLIENT TRACKING remembers them),
-# with no walk of the table and none of its documentation built.
+# The key specs of the commands, by INFO's keys (Step 3 below): the block
+# between "# BEGIN gen_commands: by key" and "# END gen_commands: by key"
+# in src/command.bend holds ro.key, the arity and the key specs (and how
+# they are read, as in desc) of a command that only reads, which name the
+# keys a call of it read (CLIENT TRACKING remembers them), spec.key, the
+# same of every command, which name the keys ACL checks a call's user
+# against, and acl.kind.key, the commands whose channels, user or patterns
+# that check reads, each with no walk of the table and none of its
+# documentation built.
 KBEGIN, KEND = "# BEGIN gen_commands: by key\n", "# END gen_commands: by key\n"
 
 def ro(info):
@@ -365,19 +368,39 @@ def ro(info):
 def by_key_block(facts):
     fl = flag_sets(facts)
     tops, keys = stats_keys(REDIS.read_text())
+    def info_of(name, kind):
+        if kind == "top":
+            return facts["commands"][name]["info"]
+        return next(x for x in facts["commands"][kind]["info"][9] if x[0] == name)
     out = ["# the arity and key specs of the command or subcommand of a key that",
            "# only reads (readonly); none for any other",
            "def ro.key(+key: Nat) -> Maybe<&2, Ro>:", "  match key:"]
     for k, (name, kind, i) in enumerate(keys, 1):
         if "readonly" not in fl[name]:
             continue
-        if kind == "top":
-            info = facts["commands"][name]["info"]
-        else:
-            info = next(x for x in facts["commands"][kind]["info"][9] if x[0] == name)
-        out += ["    case %dn:" % k, "      Some{%s}" % ro(info)]
-    out += ["    case _:", "      None{}"]
+        out += ["    case %dn:" % k, "      Some{%s}" % ro(info_of(name, kind))]
+    out += ["    case _:", "      None{}", "",
+            "# the same of the command or subcommand of any key, for ACL's check of",
+            "# a call (acl.bend); none for key 0",
+            "def spec.key(+key: Nat) -> Maybe<&2, Ro>:", "  match key:"]
+    for k, (name, kind, i) in enumerate(keys, 1):
+        out += ["    case %dn:" % k, "      Some{%s}" % ro(info_of(name, kind))]
+    out += ["    case _:", "      None{}", "",
+            "# what else ACL's check of a call reads of its command, by its key: 1",
+            "# PUBLISH and SPUBLISH, 2 SUBSCRIBE and SSUBSCRIBE, 3 PSUBSCRIBE (the",
+            "# channels it names), 4 AUTH, HELLO, QUIT and RESET (which every user",
+            "# may run: Redis's CMD_NO_AUTH), 5 SORT, 6 SORT_RO (whose patterns name",
+            "# keys); 0 any other",
+            "def acl.kind.key(+key: Nat) -> Nat:", "  match key:"]
+    for k, (name, kind, i) in enumerate(keys, 1):
+        if name in ACL_KIND:
+            out += ["    case %dn:" % k, "      %dn" % ACL_KIND[name]]
+    out += ["    case _:", "      0n"]
     return "\n".join(out) + "\n"
+
+# the commands acl.kind.key names (by_key_block)
+ACL_KIND = {"publish": 1, "spublish": 1, "subscribe": 2, "ssubscribe": 2, "psubscribe": 3,
+            "auth": 4, "hello": 4, "quit": 4, "reset": 4, "sort": 5, "sort_ro": 6}
 
 def generate():
     src = BEND.read_text()

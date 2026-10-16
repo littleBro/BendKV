@@ -7022,11 +7022,11 @@ def bg.acl.on(on: Bool, +id: Nat, +k: Nat, +may: Bool, +srv: S.Srv) -> Bool:
     case False{}:
       False{}
 
-# the check: the user's verdict on the call's command line
-def bg.acl.check(on: Bool, +id: Nat, +srv: S.Srv, +pb: Ps, +a: Av) -> U.Verdict:
+# the check: the user's verdict on the call of code k and its command line
+def bg.acl.check(on: Bool, +id: Nat, +srv: S.Srv, +pb: Ps, +k: Nat, +a: Av) -> U.Verdict:
   match on:
     case True{}:
-      S.srv.acl.check(srv, ps.user(id, pb), av.now(a))
+      S.srv.acl.check(srv, ps.user(id, pb), R.code.key(k), av.now(a))
     case False{}:
       U.VOk{}
 
@@ -7040,10 +7040,10 @@ def bg.acl.sort.of(m: Maybe<&2, String>, +c: R.Cmd) -> R.Cmd:
     case None{}:
       c
 
-def bg.acl.sort(on: Bool, +id: Nat, +srv: S.Srv, +pb: Ps, +a: Av, +c: R.Cmd) -> R.Cmd:
+def bg.acl.sort(on: Bool, +id: Nat, +srv: S.Srv, +pb: Ps, +k: Nat, +a: Av, +c: R.Cmd) -> R.Cmd:
   match on:
     case True{}:
-      bg.acl.sort.of(S.srv.acl.sort(srv, ps.user(id, pb), av.now(a)), c)
+      bg.acl.sort.of(S.srv.acl.sort(srv, ps.user(id, pb), R.code.key(k), av.now(a)), c)
     case False{}:
       c
 
@@ -7362,17 +7362,17 @@ def bg.x.one(+id: Nat, +back: Chan(Ans), +inb: Nat, +n: Nat, +c: R.Cmd, +k: Nat,
 # a command of EXEC checked again (ACL), as execCommand checks each, in
 # case the rules changed since it was queued: while some client is
 # restricted (on) and its client is, its user's verdict
-def bg.x.verdict(on: Bool, +id: Nat, +srv: S.Srv, +pb: Ps, +a: Av) -> U.Verdict:
+def bg.x.verdict(on: Bool, +id: Nat, +srv: S.Srv, +pb: Ps, +k: Nat, +a: Av) -> U.Verdict:
   match on:
     case True{}:
-      bg.acl.check(S.srv.restricted(srv, id), id, srv, pb, a)
+      bg.acl.check(S.srv.restricted(srv, id), id, srv, pb, k, a)
     case False{}:
       U.VOk{}
 
-def bg.x.sort(on: Bool, +id: Nat, +srv: S.Srv, +pb: Ps, +a: Av, +c: R.Cmd) -> R.Cmd:
+def bg.x.sort(on: Bool, +id: Nat, +srv: S.Srv, +pb: Ps, +k: Nat, +a: Av, +c: R.Cmd) -> R.Cmd:
   match on:
     case True{}:
-      bg.acl.sort(S.srv.restricted(srv, id), id, srv, pb, a, c)
+      bg.acl.sort(S.srv.restricted(srv, id), id, srv, pb, k, a, c)
     case False{}:
       c
 
@@ -7395,7 +7395,7 @@ def bg.x.go(+id: Nat, +back: Chan(Ans), +inb: Nat, +n: Nat, cmds: List<&2, R.Cmd
   match cmds codes avs x:
     case Con{+c, rest} Con{+k, more} Con{+a, ar} Xr{LRun{rs, es, conn, +srv, ds, ws, up, tx, +pb}, mine}:
       +on = ps.acl.on(pb)
-      bg.x.go(id, back, inb, n, rest, more, ar, bg.x.acl(bg.x.verdict(on, id, srv, pb, a), id, back, inb, n, bg.x.sort(on, id, srv, pb, a, c), k, a, Xr{LRun{rs, es, conn, srv, ds, ws, up, tx, pb}, mine}))
+      bg.x.go(id, back, inb, n, rest, more, ar, bg.x.acl(bg.x.verdict(on, id, srv, pb, k, a), id, back, inb, n, bg.x.sort(on, id, srv, pb, k, a, c), k, a, Xr{LRun{rs, es, conn, srv, ds, ws, up, tx, pb}, mine}))
     case _ _ _ x0:
       x0
 
@@ -7571,8 +7571,8 @@ def bg.go(+id: Nat, +back: Chan(Ans), +inb: Nat, cmds: List<&2, R.Cmd>, codes: L
       +mo = ps.mon.is(id, pb)
       +ck = bg.acl.on(ps.acl.on(pb), id, k, may, srv)
       +av1 = av.if(ck, av)
-      +c1 = bg.acl.sort(ck, id, srv, pb, av1, c)
-      +sh = sh.of(q, may, tx.multi(id, tx), Bool.and(ps.has(id, pb), Bool.not(S.conn.r3(conn))), mo, ps.oom.is(pb), pause.holds(ps.pz(pb), mo, c, k, id, tx), bg.acl.check(ck, id, srv, pb, av1), c1, k, ds)
+      +c1 = bg.acl.sort(ck, id, srv, pb, k, av1, c)
+      +sh = sh.of(q, may, tx.multi(id, tx), Bool.and(ps.has(id, pb), Bool.not(S.conn.r3(conn))), mo, ps.oom.is(pb), pause.holds(ps.pz(pb), mo, c, k, id, tx), bg.acl.check(ck, id, srv, pb, k, av1), c1, k, ds)
       +pre = bg.trk.pre(id, k, sh, q, may, pb)
       +a = trk.pre.av(pre, av1)
       +ar = av.rest(a)

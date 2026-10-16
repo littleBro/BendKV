@@ -841,6 +841,16 @@ def acl.nth(xs: List<&2, String>, i: Nat) -> String:
     case Con{x, rest} 1n+p:
       acl.nth(rest, p)
 
+# the same of a list read in place (a command line the check borrows)
+def acl.arg(+xs: List<&2, String>, +i: Nat) -> String:
+  match xs i:
+    case Nil{} _:
+      ""
+    case Con{+x, +rest} 0n:
+      x
+    case Con{+x, +rest} 1n+p:
+      acl.arg(rest, p)
+
 def acl.find(ns: List<&2, String>, +n: String, +i: Nat) -> Maybe<&2, Nat>:
   match ns:
     case Nil{}:
@@ -2260,9 +2270,26 @@ def sels.check(ss: List<&2, Sel>, +c: Call, worst: Verdict) -> Verdict:
       +v = sel.check(s, c)
       Bool.pick(Verdict, verdict.ok(v), VOk{}, sels.check(rest, c, verdict.max(worst, v)))
 
-# a call against a user: allowed when one of its selectors allows it
+# a call against a user: allowed when one of its selectors allows it.
+# The worst verdict starts below every reason (0), so that the command's
+# name is looked up only by a selector that refuses the command; a user
+# has its root selector at least, and none would refuse the command.
+def user.named(zero: Bool, v: Verdict, +c: Call) -> Verdict:
+  match zero:
+    case True{}:
+      VNo{1n, 0n, acl.name(call.id(c))}
+    case False{}:
+      v
+
+def user.verdict(v: Verdict, +c: Call) -> Verdict:
+  match v:
+    case VNo{+why, at, o}:
+      user.named(Nat.is_eq(why, 0n), VNo{why, at, o}, c)
+    case VOk{}:
+      VOk{}
+
 def user.check(+u: User, +c: Call) -> Verdict:
-  sels.check(user.sels(u), c, VNo{1n, 0n, acl.name(call.id(c))})
+  user.verdict(sels.check(user.sels(u), c, VNo{0n, 0n, ""}), c)
 
 # NOPERM's text for a call denied (processCommand's)
 def verdict.err(+v: Verdict) -> String:
@@ -2331,7 +2358,7 @@ def uses.keys(ks: List<&2, K.KeyAt>, +argv: List<&2, String>) -> List<&2, KeyUse
     case Nil{}:
       Nil{}
     case Con{K.KeyAt{+at, +fl}, rest}:
-      KeyUse{K.nth(at, argv), key.need(fl), at} <> uses.keys(rest, argv)
+      KeyUse{acl.arg(argv, at), key.need(fl), at} <> uses.keys(rest, argv)
 
 def uses.keys.of(m: Maybe<&2, List<&2, K.KeyAt>>, +argv: List<&2, String>) -> List<&2, KeyUse>:
   match m:
@@ -2348,6 +2375,48 @@ def uses.subs(xs: List<&2, String>, +lit: Bool, +i: Nat) -> List<&2, ChanUse>:
       Nil{}
     case Con{x, rest}:
       ChanUse{x, lit, i} <> uses.subs(rest, lit, Nat.add(i, 1n))
+
+# the same of a command line read in place, from its argument i on
+def uses.subs.at(+xs: List<&2, String>, +lit: Bool, +i: Nat) -> List<&2, ChanUse>:
+  match xs:
+    case Nil{}:
+      Nil{}
+    case Con{+x, +rest}:
+      ChanUse{x, lit, i} <> uses.subs.at(rest, lit, Nat.add(i, 1n))
+
+# the channels of a call of kind k (K.acl.kind.key), its command line read
+# in place: PUBLISH's first argument, or every argument of a subscription
+def uses.first(+xs: List<&2, String>) -> List<&2, ChanUse>:
+  match xs:
+    case Nil{}:
+      Nil{}
+    case Con{+x, +rest}:
+      [ChanUse{x, False{}, 1n}]
+
+def uses.pub(+argv: List<&2, String>) -> List<&2, ChanUse>:
+  match argv:
+    case Nil{}:
+      Nil{}
+    case Con{+c, +rest}:
+      uses.first(rest)
+
+def uses.subs.from(+argv: List<&2, String>, +lit: Bool) -> List<&2, ChanUse>:
+  match argv:
+    case Nil{}:
+      Nil{}
+    case Con{+c, +rest}:
+      uses.subs.at(rest, lit, 1n)
+
+def uses.chans.key(+k: Nat, +argv: List<&2, String>) -> List<&2, ChanUse>:
+  match k:
+    case 1n:
+      uses.pub(argv)
+    case 2n:
+      uses.subs.from(argv, False{})
+    case 3n:
+      uses.subs.from(argv, True{})
+    case _:
+      Nil{}
 
 # 1 PUBLISH and SPUBLISH, 2 SUBSCRIBE and SSUBSCRIBE, 3 PSUBSCRIBE, 0 any
 # other command
@@ -2403,23 +2472,84 @@ def call.of.desc(m: Maybe<&2, K.Desc>, +argv: List<&2, String>) -> CallR:
 def call.of(+argv: List<&2, String>) -> CallR:
   call.of.desc(K.desc.argv(argv), argv)
 
-# a call of user m by its command line, as processCommand checks it once
+# The same of a call the server checks, by its INFO key (redis.bend: its
+# code's key, which the parser found): its id (acl.of.key), arity and key
+# specs (K.spec.key), with no walk of the table of commands, which builds
+# every command's description and documentation (call.of, for ACL
+# DRYRUN). The name the checks of AUTH's kin and of channels read is the
+# command's, case aside.
+def call.of.ok(ok: Bool, +id: Nat, +kind: Nat, +specs: List<&2, K.KSpec>, +way: K.KWay, +n: Nat, +argv: List<&2, String>) -> CallR:
+  match ok:
+    case True{}:
+      CallOk{Call{id, Nat.is_eq(kind, 4n), acl.arg(argv, 1n), Nat.is_le(2n, n), uses.keys.of(Bool.pick(Maybe<&2, List<&2, K.KeyAt>>, K.keys.has(way, specs), K.keys.find(way, specs, argv), None{}), argv), uses.chans.key(kind, argv)}}
+    case False{}:
+      CallArity{acl.name(id)}
+
+def call.of.spec(m: Maybe<&2, K.Ro>, +id: Nat, +kind: Nat, +argv: List<&2, String>) -> CallR:
+  match m:
+    case Some{K.Ro{arity, +specs, +way}}:
+      +n = List.length(&2, String, argv)
+      call.of.ok(K.arity.ok(arity, n), id, kind, specs, way, n, argv)
+    case None{}:
+      CallNone{}
+
+def call.of.key(+key: Nat, +argv: List<&2, String>) -> CallR:
+  call.of.spec(K.spec.key(key), acl.of.key(key), K.acl.kind.key(key), argv)
+
+# a call of user u by its command line, as processCommand checks it once
 # it has looked the command up: allowed, or why not. A command the
 # parser refuses (unknown, or with a number of arguments its arity does
 # not allow) is refused before, so it passes here; a user that is gone
 # (ACL DELUSER, whose clients are closed) is allowed nothing.
-def acl.call.check(m: Maybe<&2, User>, r: CallR) -> Verdict:
-  match m r:
-    case Some{+u} CallOk{+c}:
+def user.call.check(+u: User, +r: CallR) -> Verdict:
+  match r:
+    case CallOk{+c}:
       user.check(u, c)
-    case None{} CallOk{+c}:
-      VNo{1n, 0n, acl.name(call.id(c))}
-    case _ _:
+    case _:
       VOk{}
 
-# a call of the user of name n (server.bend, ACL)
-def acl.check(+a: Acl, +n: String, +argv: List<&2, String>) -> Verdict:
-  acl.call.check(acl.user(a, n), call.of(argv))
+def gone.call.check(+r: CallR) -> Verdict:
+  match r:
+    case CallOk{+c}:
+      VNo{1n, 0n, acl.name(call.id(c))}
+    case _:
+      VOk{}
+
+# where the user of name n is among us, from i (past the last when none)
+def users.idx(+us: List<&2, User>, +n: String, +i: Nat) -> Nat:
+  match us:
+    case Nil{}:
+      i
+    case Con{+u, +rest}:
+      Bool.pick(Nat, String.eq(user.name(u), n), i, users.idx(rest, n, Nat.add(i, 1n)))
+
+# the call checked against the user at i among us, read in place
+def users.call.at(+us: List<&2, User>, +i: Nat, +r: CallR) -> Verdict:
+  match us i:
+    case Nil{} _:
+      gone.call.check(r)
+    case Con{+u, +rest} 0n:
+      user.call.check(u, r)
+    case Con{+u, +rest} 1n+p:
+      users.call.at(rest, p, r)
+
+def acl.check.pick(d: Bool, +u: User, +us: List<&2, User>, +n: String, +r: CallR) -> Verdict:
+  match d:
+    case True{}:
+      user.call.check(u, r)
+    case False{}:
+      users.call.at(us, users.idx(us, n, 0n), r)
+
+def acl.check.in(+a: Acl, +n: String, +r: CallR) -> Verdict:
+  match a:
+    case Acl{+dflt, +users, log, gone, rp, key, ctr, rcl}:
+      acl.check.pick(String.eq(n, "default"), dflt, users, n, r)
+
+# a call of INFO key k of the user of name n (server.bend, ACL), the user
+# found and checked in place: one that acl.user gave back would be copied
+# out of the borrowed Acl, with the list of users, at every call
+def acl.check(+a: Acl, +n: String, +k: Nat, +argv: List<&2, String>) -> Verdict:
+  acl.check.in(a, n, call.of.key(k, argv))
 
 # SORT's BY with a pattern and its GET read keys by pattern: a user gives
 # them only through a selector that allows the call and may read every
@@ -2531,17 +2661,16 @@ def sort.acl.user(m: Maybe<&2, User>, r: CallR, +argv: List<&2, String>, +ro: Bo
     case _ _:
       None{}
 
-def sort.acl.if(on: Bool, +a: Acl, +n: String, +argv: List<&2, String>, +ro: Bool) -> Maybe<&2, String>:
+def sort.acl.if(on: Bool, +a: Acl, +n: String, +k: Nat, +argv: List<&2, String>, +ro: Bool) -> Maybe<&2, String>:
   match on:
     case True{}:
-      sort.acl.user(acl.user(a, n), call.of(argv), argv, ro)
+      sort.acl.user(acl.user(a, n), call.of.key(k, argv), argv, ro)
     case False{}:
       None{}
 
-def acl.sort.err(+a: Acl, +n: String, +argv: List<&2, String>) -> Maybe<&2, String>:
-  +w = acl.nth(argv, 0n)
-  +ro = R.is_word(w, "SORT_RO")
-  sort.acl.if(Bool.or(ro, R.is_word(w, "SORT")), a, n, argv, ro)
+def acl.sort.err(+a: Acl, +n: String, +k: Nat, +argv: List<&2, String>) -> Maybe<&2, String>:
+  +kind = K.acl.kind.key(k)
+  sort.acl.if(Bool.or(Nat.is_eq(kind, 5n), Nat.is_eq(kind, 6n)), a, n, k, argv, Nat.is_eq(kind, 6n))
 
 # ACL DRYRUN user command [arg ...]: the user, then the command, its
 # arity, and the check (on or off alike, and nothing logged)

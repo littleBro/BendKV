@@ -2343,6 +2343,593 @@ def ro.key(+key: Nat) -> Maybe<&2, Ro>:
       Some{Ro{R.INeg{2n}, [KSpec{["RO"], 2n, R.IPos{0n}, 1n, 0n}], KBySpecs{}}}
     case _:
       None{}
+
+# the same of the command or subcommand of any key, for ACL's check of
+# a call (acl.bend); none for key 0
+def spec.key(+key: Nat) -> Maybe<&2, Ro>:
+  match key:
+    case 1n:
+      Some{Ro{R.INeg{0n}, [], KBySpecs{}}}
+    case 2n:
+      Some{Ro{R.IPos{2n}, [], KBySpecs{}}}
+    case 3n:
+      Some{Ro{R.IPos{2n}, [KSpec{["RO", "access"], 1n, R.IPos{0n}, 1n, 0n}], KBySpecs{}}}
+    case 4n:
+      Some{Ro{R.INeg{2n}, [KSpec{["RW", "access", "update", "variable_flags"], 1n, R.IPos{0n}, 1n, 0n}], KBySet{}}}
+    case 5n:
+      Some{Ro{R.IPos{3n}, [KSpec{["OW", "insert"], 1n, R.IPos{0n}, 1n, 0n}], KBySpecs{}}}
+    case 6n:
+      Some{Ro{R.IPos{3n}, [KSpec{["RW", "access", "update"], 1n, R.IPos{0n}, 1n, 0n}], KBySpecs{}}}
+    case 7n:
+      Some{Ro{R.INeg{1n}, [KSpec{["RM", "delete"], 1n, R.INeg{0n}, 1n, 0n}], KBySpecs{}}}
+    case 8n:
+      Some{Ro{R.INeg{1n}, [KSpec{["RM", "delete"], 1n, R.INeg{0n}, 1n, 0n}], KBySpecs{}}}
+    case 9n:
+      Some{Ro{R.INeg{1n}, [KSpec{["RO"], 1n, R.INeg{0n}, 1n, 0n}], KBySpecs{}}}
+    case 10n:
+      Some{Ro{R.IPos{2n}, [KSpec{["RW", "access", "update"], 1n, R.IPos{0n}, 1n, 0n}], KBySpecs{}}}
+    case 11n:
+      Some{Ro{R.IPos{2n}, [KSpec{["RW", "access", "update"], 1n, R.IPos{0n}, 1n, 0n}], KBySpecs{}}}
+    case 12n:
+      Some{Ro{R.IPos{3n}, [KSpec{["RW", "access", "update"], 1n, R.IPos{0n}, 1n, 0n}], KBySpecs{}}}
+    case 13n:
+      Some{Ro{R.IPos{3n}, [KSpec{["RW", "access", "update"], 1n, R.IPos{0n}, 1n, 0n}], KBySpecs{}}}
+    case 14n:
+      Some{Ro{R.IPos{3n}, [KSpec{["RW", "insert"], 1n, R.IPos{0n}, 1n, 0n}], KBySpecs{}}}
+    case 15n:
+      Some{Ro{R.IPos{2n}, [KSpec{["RO"], 1n, R.IPos{0n}, 1n, 0n}], KBySpecs{}}}
+    case 16n:
+      Some{Ro{R.INeg{1n}, [KSpec{["RO", "access"], 1n, R.INeg{0n}, 1n, 0n}], KBySpecs{}}}
+    case 17n:
+      Some{Ro{R.INeg{2n}, [KSpec{["OW", "update"], 1n, R.INeg{0n}, 2n, 0n}], KBySpecs{}}}
+    case 18n:
+      Some{Ro{R.IPos{1n}, [], KBySpecs{}}}
+    case 19n:
+      Some{Ro{R.INeg{0n}, [], KBySpecs{}}}
+    case 20n:
+      Some{Ro{R.INeg{0n}, [], KBySpecs{}}}
+    case 21n:
+      Some{Ro{R.IPos{2n}, [], KBySpecs{}}}
+    case 22n:
+      Some{Ro{R.INeg{1n}, [], KBySpecs{}}}
+    case 23n:
+      Some{Ro{R.IPos{4n}, [KSpec{["OW", "update"], 1n, R.IPos{0n}, 1n, 0n}], KBySpecs{}}}
+    case 24n:
+      Some{Ro{R.IPos{4n}, [KSpec{["OW", "update"], 1n, R.IPos{0n}, 1n, 0n}], KBySpecs{}}}
+    case 25n:
+      Some{Ro{R.IPos{2n}, [KSpec{["RO"], 1n, R.IPos{0n}, 1n, 0n}], KBySpecs{}}}
+    case 26n:
+      Some{Ro{R.INeg{1n}, [KSpec{["RW", "access", "update"], 1n, R.IPos{0n}, 1n, 0n}], KBySpecs{}}}
+    case 27n:
+      Some{Ro{R.IPos{2n}, [KSpec{["RW", "access", "delete"], 1n, R.IPos{0n}, 1n, 0n}], KBySpecs{}}}
+    case 28n:
+      Some{Ro{R.INeg{2n}, [KSpec{["RW", "update"], 1n, R.IPos{0n}, 1n, 0n}], KBySpecs{}}}
+    case 29n:
+      Some{Ro{R.INeg{2n}, [KSpec{["RW", "update"], 1n, R.IPos{0n}, 1n, 0n}], KBySpecs{}}}
+    case 30n:
+      Some{Ro{R.INeg{2n}, [KSpec{["RW", "update"], 1n, R.IPos{0n}, 1n, 0n}], KBySpecs{}}}
+    case 31n:
+      Some{Ro{R.INeg{2n}, [KSpec{["RW", "update"], 1n, R.IPos{0n}, 1n, 0n}], KBySpecs{}}}
+    case 32n:
+      Some{Ro{R.IPos{2n}, [KSpec{["RO", "access"], 1n, R.IPos{0n}, 1n, 0n}], KBySpecs{}}}
+    case 33n:
+      Some{Ro{R.IPos{2n}, [KSpec{["RO", "access"], 1n, R.IPos{0n}, 1n, 0n}], KBySpecs{}}}
+    case 34n:
+      Some{Ro{R.IPos{2n}, [KSpec{["RO", "access"], 1n, R.IPos{0n}, 1n, 0n}], KBySpecs{}}}
+    case 35n:
+      Some{Ro{R.IPos{2n}, [KSpec{["RO", "access"], 1n, R.IPos{0n}, 1n, 0n}], KBySpecs{}}}
+    case 36n:
+      Some{Ro{R.IPos{2n}, [KSpec{["RW", "update"], 1n, R.IPos{0n}, 1n, 0n}], KBySpecs{}}}
+    case 37n:
+      Some{Ro{R.IPos{4n}, [KSpec{["RO", "access"], 1n, R.IPos{0n}, 1n, 0n}], KBySpecs{}}}
+    case 38n:
+      Some{Ro{R.IPos{4n}, [KSpec{["RO", "access"], 1n, R.IPos{0n}, 1n, 0n}], KBySpecs{}}}
+    case 39n:
+      Some{Ro{R.IPos{4n}, [KSpec{["RW", "update"], 1n, R.IPos{0n}, 1n, 0n}], KBySpecs{}}}
+    case 40n:
+      Some{Ro{R.IPos{3n}, [KSpec{["RO", "access"], 1n, R.IPos{0n}, 1n, 0n}], KBySpecs{}}}
+    case 41n:
+      Some{Ro{R.IPos{4n}, [KSpec{["RW", "access", "update"], 1n, R.IPos{0n}, 1n, 0n}], KBySpecs{}}}
+    case 42n:
+      Some{Ro{R.INeg{1n}, [KSpec{["RO", "access"], 1n, R.IPos{0n}, 1n, 0n}], KBySpecs{}}}
+    case 43n:
+      Some{Ro{R.INeg{2n}, [KSpec{["RO", "access"], 1n, R.IPos{0n}, 1n, 0n}], KBySpecs{}}}
+    case 44n:
+      Some{Ro{R.INeg{1n}, [KSpec{["RO"], 1n, R.INeg{0n}, 1n, 0n}], KBySpecs{}}}
+    case 45n:
+      Some{Ro{R.INeg{2n}, [KSpec{["OW", "insert"], 1n, R.INeg{0n}, 2n, 0n}], KBySpecs{}}}
+    case 46n:
+      Some{Ro{R.IPos{3n}, [KSpec{["RW", "access", "delete"], 1n, R.IPos{0n}, 1n, 0n}, KSpec{["OW", "update"], 2n, R.IPos{0n}, 1n, 0n}], KBySpecs{}}}
+    case 47n:
+      Some{Ro{R.IPos{3n}, [KSpec{["RW", "access", "delete"], 1n, R.IPos{0n}, 1n, 0n}, KSpec{["OW", "insert"], 2n, R.IPos{0n}, 1n, 0n}], KBySpecs{}}}
+    case 48n:
+      Some{Ro{R.INeg{3n}, [KSpec{["OW", "update"], 2n, R.IPos{0n}, 1n, 0n}, KSpec{["RO", "access"], 3n, R.INeg{0n}, 1n, 0n}], KBySpecs{}}}
+    case 49n:
+      Some{Ro{R.INeg{1n}, [KSpec{["RW", "access", "update", "variable_flags"], 1n, R.IPos{0n}, 1n, 0n}], KByBitfield{}}}
+    case 50n:
+      Some{Ro{R.INeg{1n}, [KSpec{["RO", "access"], 1n, R.IPos{0n}, 1n, 0n}], KBySpecs{}}}
+    case 51n:
+      Some{Ro{R.INeg{3n}, [KSpec{["RW", "update"], 1n, R.IPos{0n}, 1n, 0n}], KBySpecs{}}}
+    case 52n:
+      Some{Ro{R.IPos{4n}, [KSpec{["RW", "insert"], 1n, R.IPos{0n}, 1n, 0n}], KBySpecs{}}}
+    case 53n:
+      Some{Ro{R.IPos{3n}, [KSpec{["RO", "access"], 1n, R.IPos{0n}, 1n, 0n}], KBySpecs{}}}
+    case 54n:
+      Some{Ro{R.INeg{2n}, [KSpec{["RO", "access"], 1n, R.IPos{0n}, 1n, 0n}], KBySpecs{}}}
+    case 55n:
+      Some{Ro{R.INeg{3n}, [KSpec{["RW", "update"], 1n, R.IPos{0n}, 1n, 0n}], KBySpecs{}}}
+    case 56n:
+      Some{Ro{R.INeg{2n}, [KSpec{["RW", "delete"], 1n, R.IPos{0n}, 1n, 0n}], KBySpecs{}}}
+    case 57n:
+      Some{Ro{R.IPos{2n}, [KSpec{["RO"], 1n, R.IPos{0n}, 1n, 0n}], KBySpecs{}}}
+    case 58n:
+      Some{Ro{R.IPos{3n}, [KSpec{["RO"], 1n, R.IPos{0n}, 1n, 0n}], KBySpecs{}}}
+    case 59n:
+      Some{Ro{R.IPos{3n}, [KSpec{["RO"], 1n, R.IPos{0n}, 1n, 0n}], KBySpecs{}}}
+    case 60n:
+      Some{Ro{R.IPos{2n}, [KSpec{["RO", "access"], 1n, R.IPos{0n}, 1n, 0n}], KBySpecs{}}}
+    case 61n:
+      Some{Ro{R.IPos{2n}, [KSpec{["RO", "access"], 1n, R.IPos{0n}, 1n, 0n}], KBySpecs{}}}
+    case 62n:
+      Some{Ro{R.IPos{2n}, [KSpec{["RO", "access"], 1n, R.IPos{0n}, 1n, 0n}], KBySpecs{}}}
+    case 63n:
+      Some{Ro{R.IPos{4n}, [KSpec{["RW", "access", "update"], 1n, R.IPos{0n}, 1n, 0n}], KBySpecs{}}}
+    case 64n:
+      Some{Ro{R.INeg{2n}, [KSpec{["RO", "access"], 1n, R.IPos{0n}, 1n, 0n}], KBySpecs{}}}
+    case 65n:
+      Some{Ro{R.INeg{2n}, [], KByEval{}}}
+    case 66n:
+      Some{Ro{R.INeg{2n}, [KSpec{["RW", "insert"], 1n, R.IPos{0n}, 1n, 0n}], KBySpecs{}}}
+    case 67n:
+      Some{Ro{R.INeg{2n}, [KSpec{["RW", "insert"], 1n, R.IPos{0n}, 1n, 0n}], KBySpecs{}}}
+    case 68n:
+      Some{Ro{R.INeg{2n}, [KSpec{["RW", "insert"], 1n, R.IPos{0n}, 1n, 0n}], KBySpecs{}}}
+    case 69n:
+      Some{Ro{R.INeg{2n}, [KSpec{["RW", "insert"], 1n, R.IPos{0n}, 1n, 0n}], KBySpecs{}}}
+    case 70n:
+      Some{Ro{R.INeg{1n}, [KSpec{["RW", "access", "delete"], 1n, R.IPos{0n}, 1n, 0n}], KBySpecs{}}}
+    case 71n:
+      Some{Ro{R.INeg{1n}, [KSpec{["RW", "access", "delete"], 1n, R.IPos{0n}, 1n, 0n}], KBySpecs{}}}
+    case 72n:
+      Some{Ro{R.IPos{2n}, [KSpec{["RO"], 1n, R.IPos{0n}, 1n, 0n}], KBySpecs{}}}
+    case 73n:
+      Some{Ro{R.IPos{3n}, [KSpec{["RO", "access"], 1n, R.IPos{0n}, 1n, 0n}], KBySpecs{}}}
+    case 74n:
+      Some{Ro{R.IPos{4n}, [KSpec{["RO", "access"], 1n, R.IPos{0n}, 1n, 0n}], KBySpecs{}}}
+    case 75n:
+      Some{Ro{R.IPos{4n}, [KSpec{["RW", "update"], 1n, R.IPos{0n}, 1n, 0n}], KBySpecs{}}}
+    case 76n:
+      Some{Ro{R.IPos{5n}, [KSpec{["RW", "insert"], 1n, R.IPos{0n}, 1n, 0n}], KBySpecs{}}}
+    case 77n:
+      Some{Ro{R.IPos{4n}, [KSpec{["RW", "delete"], 1n, R.IPos{0n}, 1n, 0n}], KBySpecs{}}}
+    case 78n:
+      Some{Ro{R.IPos{4n}, [KSpec{["RW", "delete"], 1n, R.IPos{0n}, 1n, 0n}], KBySpecs{}}}
+    case 79n:
+      Some{Ro{R.INeg{2n}, [KSpec{["RO", "access"], 1n, R.IPos{0n}, 1n, 0n}], KBySpecs{}}}
+    case 80n:
+      Some{Ro{R.IPos{5n}, [KSpec{["RW", "access", "delete"], 1n, R.IPos{0n}, 1n, 0n}, KSpec{["RW", "insert"], 2n, R.IPos{0n}, 1n, 0n}], KBySpecs{}}}
+    case 81n:
+      Some{Ro{R.IPos{3n}, [KSpec{["RW", "access", "delete"], 1n, R.IPos{0n}, 1n, 0n}, KSpec{["RW", "insert"], 2n, R.IPos{0n}, 1n, 0n}], KBySpecs{}}}
+    case 82n:
+      Some{Ro{R.INeg{3n}, [], KByLmpop{}}}
+    case 83n:
+      Some{Ro{R.INeg{2n}, [KSpec{["RW", "insert"], 1n, R.IPos{0n}, 1n, 0n}], KBySpecs{}}}
+    case 84n:
+      Some{Ro{R.INeg{2n}, [KSpec{["RW", "delete"], 1n, R.IPos{0n}, 1n, 0n}], KBySpecs{}}}
+    case 85n:
+      Some{Ro{R.IPos{2n}, [KSpec{["RO"], 1n, R.IPos{0n}, 1n, 0n}], KBySpecs{}}}
+    case 86n:
+      Some{Ro{R.IPos{3n}, [KSpec{["RO"], 1n, R.IPos{0n}, 1n, 0n}], KBySpecs{}}}
+    case 87n:
+      Some{Ro{R.INeg{2n}, [KSpec{["RO", "access"], 1n, R.IPos{0n}, 1n, 0n}], KBySpecs{}}}
+    case 88n:
+      Some{Ro{R.IPos{2n}, [KSpec{["RO", "access"], 1n, R.IPos{0n}, 1n, 0n}], KBySpecs{}}}
+    case 89n:
+      Some{Ro{R.INeg{2n}, [KSpec{["RO", "access"], 1n, R.IPos{0n}, 1n, 0n}], KBySpecs{}}}
+    case 90n:
+      Some{Ro{R.IPos{4n}, [KSpec{["RW", "access", "delete"], 1n, R.IPos{0n}, 1n, 0n}, KSpec{["RW", "insert"], 2n, R.IPos{0n}, 1n, 0n}], KBySpecs{}}}
+    case 91n:
+      Some{Ro{R.INeg{1n}, [KSpec{["RO", "access"], 1n, R.INeg{0n}, 1n, 0n}], KBySpecs{}}}
+    case 92n:
+      Some{Ro{R.INeg{2n}, [], KBySintercard{}}}
+    case 93n:
+      Some{Ro{R.INeg{2n}, [KSpec{["RW", "update"], 1n, R.IPos{0n}, 1n, 0n}, KSpec{["RO", "access"], 2n, R.INeg{0n}, 1n, 0n}], KBySpecs{}}}
+    case 94n:
+      Some{Ro{R.INeg{1n}, [KSpec{["RO", "access"], 1n, R.INeg{0n}, 1n, 0n}], KBySpecs{}}}
+    case 95n:
+      Some{Ro{R.INeg{2n}, [KSpec{["OW", "update"], 1n, R.IPos{0n}, 1n, 0n}, KSpec{["RO", "access"], 2n, R.INeg{0n}, 1n, 0n}], KBySpecs{}}}
+    case 96n:
+      Some{Ro{R.INeg{1n}, [KSpec{["RO", "access"], 1n, R.INeg{0n}, 1n, 0n}], KBySpecs{}}}
+    case 97n:
+      Some{Ro{R.INeg{2n}, [KSpec{["OW", "update"], 1n, R.IPos{0n}, 1n, 0n}, KSpec{["RO", "access"], 2n, R.INeg{0n}, 1n, 0n}], KBySpecs{}}}
+    case 98n:
+      Some{Ro{R.IPos{3n}, [KSpec{["RW", "access", "update"], 1n, R.IPos{0n}, 1n, 0n}], KBySpecs{}}}
+    case 99n:
+      Some{Ro{R.IPos{4n}, [KSpec{["RW", "access", "update"], 1n, R.IPos{0n}, 1n, 0n}], KBySpecs{}}}
+    case 100n:
+      Some{Ro{R.IPos{2n}, [], KBySpecs{}}}
+    case 101n:
+      Some{Ro{R.INeg{0n}, [], KBySpecs{}}}
+    case 102n:
+      Some{Ro{R.INeg{1n}, [], KBySpecs{}}}
+    case 103n:
+      Some{Ro{R.INeg{0n}, [], KBySpecs{}}}
+    case 104n:
+      Some{Ro{R.IPos{1n}, [], KBySpecs{}}}
+    case 105n:
+      Some{Ro{R.INeg{1n}, [], KBySpecs{}}}
+    case 106n:
+      Some{Ro{R.INeg{1n}, [], KBySpecs{}}}
+    case 107n:
+      Some{Ro{R.INeg{1n}, [], KBySpecs{}}}
+    case 108n:
+      Some{Ro{R.INeg{0n}, [], KBySpecs{}}}
+    case 109n:
+      Some{Ro{R.INeg{0n}, [], KBySpecs{}}}
+    case 110n:
+      Some{Ro{R.IPos{1n}, [], KBySpecs{}}}
+    case 111n:
+      Some{Ro{R.IPos{3n}, [], KBySpecs{}}}
+    case 112n:
+      Some{Ro{R.IPos{3n}, [KSpec{["RW", "access", "update"], 1n, R.IPos{0n}, 1n, 0n}], KBySpecs{}}}
+    case 113n:
+      Some{Ro{R.IPos{1n}, [], KBySpecs{}}}
+    case 114n:
+      Some{Ro{R.INeg{1n}, [], KBySpecs{}}}
+    case 115n:
+      Some{Ro{R.INeg{2n}, [KSpec{["RO", "access"], 1n, R.IPos{0n}, 1n, 0n}, KSpec{["OW", "update"], 2n, R.IPos{0n}, 1n, 0n}], KBySpecs{}}}
+    case 116n:
+      Some{Ro{R.INeg{2n}, [KSpec{["RO", "access"], 1n, R.IPos{1n}, 1n, 0n}], KBySpecs{}}}
+    case 117n:
+      Some{Ro{R.INeg{1n}, [KSpec{["RO", "access"], 1n, R.IPos{0n}, 1n, 0n}], KBySpecs{}}}
+    case 118n:
+      Some{Ro{R.INeg{1n}, [], KBySpecs{}}}
+    case 119n:
+      Some{Ro{R.INeg{1n}, [KSpec{["RW", "access", "delete"], 1n, R.IPos{0n}, 1n, 0n}], KBySpecs{}}}
+    case 120n:
+      Some{Ro{R.INeg{1n}, [KSpec{["RO", "access"], 1n, R.IPos{0n}, 1n, 0n}], KBySpecs{}}}
+    case 121n:
+      Some{Ro{R.INeg{3n}, [KSpec{["RW", "update"], 1n, R.IPos{0n}, 1n, 0n}], KBySpecs{}}}
+    case 122n:
+      Some{Ro{R.IPos{4n}, [KSpec{["RW", "access", "update"], 1n, R.IPos{0n}, 1n, 0n}], KBySpecs{}}}
+    case 123n:
+      Some{Ro{R.INeg{2n}, [KSpec{["RW", "delete"], 1n, R.IPos{0n}, 1n, 0n}], KBySpecs{}}}
+    case 124n:
+      Some{Ro{R.IPos{2n}, [KSpec{["RO"], 1n, R.IPos{0n}, 1n, 0n}], KBySpecs{}}}
+    case 125n:
+      Some{Ro{R.IPos{3n}, [KSpec{["RO", "access"], 1n, R.IPos{0n}, 1n, 0n}], KBySpecs{}}}
+    case 126n:
+      Some{Ro{R.INeg{2n}, [KSpec{["RO", "access"], 1n, R.IPos{0n}, 1n, 0n}], KBySpecs{}}}
+    case 127n:
+      Some{Ro{R.IPos{3n}, [KSpec{["RO", "access"], 1n, R.IPos{0n}, 1n, 0n}], KBySpecs{}}}
+    case 128n:
+      Some{Ro{R.IPos{3n}, [KSpec{["RO", "access"], 1n, R.IPos{0n}, 1n, 0n}], KBySpecs{}}}
+    case 129n:
+      Some{Ro{R.IPos{4n}, [KSpec{["RO", "access"], 1n, R.IPos{0n}, 1n, 0n}], KBySpecs{}}}
+    case 130n:
+      Some{Ro{R.IPos{4n}, [KSpec{["RO", "access"], 1n, R.IPos{0n}, 1n, 0n}], KBySpecs{}}}
+    case 131n:
+      Some{Ro{R.INeg{3n}, [KSpec{["RO", "access"], 1n, R.IPos{0n}, 1n, 0n}], KBySpecs{}}}
+    case 132n:
+      Some{Ro{R.INeg{3n}, [KSpec{["RO", "access"], 1n, R.IPos{0n}, 1n, 0n}], KBySpecs{}}}
+    case 133n:
+      Some{Ro{R.INeg{3n}, [KSpec{["RO", "access"], 1n, R.IPos{0n}, 1n, 0n}], KBySpecs{}}}
+    case 134n:
+      Some{Ro{R.INeg{3n}, [KSpec{["RO", "access"], 1n, R.IPos{0n}, 1n, 0n}], KBySpecs{}}}
+    case 135n:
+      Some{Ro{R.INeg{3n}, [KSpec{["RO", "access"], 1n, R.IPos{0n}, 1n, 0n}], KBySpecs{}}}
+    case 136n:
+      Some{Ro{R.INeg{3n}, [KSpec{["RO", "access"], 1n, R.IPos{0n}, 1n, 0n}], KBySpecs{}}}
+    case 137n:
+      Some{Ro{R.IPos{4n}, [KSpec{["RW", "delete"], 1n, R.IPos{0n}, 1n, 0n}], KBySpecs{}}}
+    case 138n:
+      Some{Ro{R.IPos{4n}, [KSpec{["RW", "delete"], 1n, R.IPos{0n}, 1n, 0n}], KBySpecs{}}}
+    case 139n:
+      Some{Ro{R.IPos{4n}, [KSpec{["RW", "delete"], 1n, R.IPos{0n}, 1n, 0n}], KBySpecs{}}}
+    case 140n:
+      Some{Ro{R.INeg{1n}, [KSpec{["RW", "access", "delete"], 1n, R.IPos{0n}, 1n, 0n}], KBySpecs{}}}
+    case 141n:
+      Some{Ro{R.INeg{1n}, [KSpec{["RW", "access", "delete"], 1n, R.IPos{0n}, 1n, 0n}], KBySpecs{}}}
+    case 142n:
+      Some{Ro{R.INeg{2n}, [KSpec{["RO", "access"], 1n, R.IPos{0n}, 1n, 0n}], KBySpecs{}}}
+    case 143n:
+      Some{Ro{R.INeg{2n}, [], KBySintercard{}}}
+    case 144n:
+      Some{Ro{R.INeg{2n}, [], KBySintercard{}}}
+    case 145n:
+      Some{Ro{R.INeg{2n}, [], KBySintercard{}}}
+    case 146n:
+      Some{Ro{R.INeg{2n}, [], KBySintercard{}}}
+    case 147n:
+      Some{Ro{R.INeg{3n}, [], KByZstore{}}}
+    case 148n:
+      Some{Ro{R.INeg{3n}, [], KByZstore{}}}
+    case 149n:
+      Some{Ro{R.INeg{3n}, [], KByZstore{}}}
+    case 150n:
+      Some{Ro{R.INeg{4n}, [KSpec{["OW", "update"], 1n, R.IPos{0n}, 1n, 0n}, KSpec{["RO", "access"], 2n, R.IPos{0n}, 1n, 0n}], KBySpecs{}}}
+    case 151n:
+      Some{Ro{R.INeg{3n}, [], KByLmpop{}}}
+    case 152n:
+      Some{Ro{R.INeg{1n}, [KSpec{["RO", "access"], 1n, R.IPos{0n}, 1n, 0n}], KBySpecs{}}}
+    case 153n:
+      Some{Ro{R.INeg{2n}, [KSpec{["RW", "access", "delete"], 1n, R.INeg{1n}, 1n, 0n}], KBySpecs{}}}
+    case 154n:
+      Some{Ro{R.INeg{2n}, [KSpec{["RW", "access", "delete"], 1n, R.INeg{1n}, 1n, 0n}], KBySpecs{}}}
+    case 155n:
+      Some{Ro{R.IPos{4n}, [KSpec{["RW", "access", "delete"], 1n, R.IPos{0n}, 1n, 0n}, KSpec{["RW", "insert"], 2n, R.IPos{0n}, 1n, 0n}], KBySpecs{}}}
+    case 156n:
+      Some{Ro{R.IPos{6n}, [KSpec{["RW", "access", "delete"], 1n, R.IPos{0n}, 1n, 0n}, KSpec{["RW", "insert"], 2n, R.IPos{0n}, 1n, 0n}], KBySpecs{}}}
+    case 157n:
+      Some{Ro{R.INeg{4n}, [], KByBlmpop{}}}
+    case 158n:
+      Some{Ro{R.INeg{2n}, [KSpec{["RW", "access", "delete"], 1n, R.INeg{1n}, 1n, 0n}], KBySpecs{}}}
+    case 159n:
+      Some{Ro{R.INeg{2n}, [KSpec{["RW", "access", "delete"], 1n, R.INeg{1n}, 1n, 0n}], KBySpecs{}}}
+    case 160n:
+      Some{Ro{R.INeg{4n}, [], KByBlmpop{}}}
+    case 161n:
+      Some{Ro{R.IPos{1n}, [], KBySpecs{}}}
+    case 162n:
+      Some{Ro{R.IPos{1n}, [], KBySpecs{}}}
+    case 163n:
+      Some{Ro{R.IPos{1n}, [], KBySpecs{}}}
+    case 164n:
+      Some{Ro{R.INeg{1n}, [KSpec{["RO"], 1n, R.INeg{0n}, 1n, 0n}], KBySpecs{}}}
+    case 165n:
+      Some{Ro{R.IPos{1n}, [], KBySpecs{}}}
+    case 166n:
+      Some{Ro{R.INeg{1n}, [], KBySpecs{}}}
+    case 167n:
+      Some{Ro{R.INeg{0n}, [], KBySpecs{}}}
+    case 168n:
+      Some{Ro{R.INeg{1n}, [], KBySpecs{}}}
+    case 169n:
+      Some{Ro{R.INeg{0n}, [], KBySpecs{}}}
+    case 170n:
+      Some{Ro{R.INeg{1n}, [KSpec{["not_key"], 1n, R.INeg{0n}, 1n, 0n}], KBySpecs{}}}
+    case 171n:
+      Some{Ro{R.INeg{0n}, [KSpec{["not_key"], 1n, R.INeg{0n}, 1n, 0n}], KBySpecs{}}}
+    case 172n:
+      Some{Ro{R.IPos{3n}, [], KBySpecs{}}}
+    case 173n:
+      Some{Ro{R.IPos{3n}, [KSpec{["not_key"], 1n, R.IPos{0n}, 1n, 0n}], KBySpecs{}}}
+    case 174n:
+      Some{Ro{R.INeg{1n}, [], KBySpecs{}}}
+    case 175n:
+      Some{Ro{R.IPos{1n}, [], KBySpecs{}}}
+    case 176n:
+      Some{Ro{R.IPos{1n}, [], KBySpecs{}}}
+    case 177n:
+      Some{Ro{R.INeg{1n}, [], KBySort{}}}
+    case 178n:
+      Some{Ro{R.INeg{1n}, [], KBySortRo{}}}
+    case 179n:
+      Some{Ro{R.INeg{1n}, [KSpec{["RW", "insert"], 1n, R.IPos{0n}, 1n, 0n}], KBySpecs{}}}
+    case 180n:
+      Some{Ro{R.INeg{1n}, [KSpec{["RW", "access"], 1n, R.INeg{0n}, 1n, 0n}], KBySpecs{}}}
+    case 181n:
+      Some{Ro{R.INeg{1n}, [KSpec{["RW", "access", "insert"], 1n, R.IPos{0n}, 1n, 0n}, KSpec{["RO", "access"], 2n, R.INeg{0n}, 1n, 0n}], KBySpecs{}}}
+    case 182n:
+      Some{Ro{R.IPos{3n}, [KSpec{["RW", "access"], 2n, R.IPos{0n}, 1n, 0n}], KBySpecs{}}}
+    case 183n:
+      Some{Ro{R.IPos{1n}, [], KBySpecs{}}}
+    case 184n:
+      Some{Ro{R.IPos{1n}, [], KBySpecs{}}}
+    case 185n:
+      Some{Ro{R.IPos{1n}, [], KBySpecs{}}}
+    case 186n:
+      Some{Ro{R.IPos{3n}, [], KBySpecs{}}}
+    case 187n:
+      Some{Ro{R.INeg{0n}, [], KBySpecs{}}}
+    case 188n:
+      Some{Ro{R.INeg{0n}, [], KBySpecs{}}}
+    case 189n:
+      Some{Ro{R.INeg{4n}, [KSpec{["RW", "update"], 1n, R.IPos{0n}, 1n, 0n}], KBySpecs{}}}
+    case 190n:
+      Some{Ro{R.INeg{3n}, [KSpec{["RO", "access"], 1n, R.IPos{0n}, 1n, 0n}], KBySpecs{}}}
+    case 191n:
+      Some{Ro{R.INeg{1n}, [KSpec{["RO", "access"], 1n, R.IPos{0n}, 1n, 0n}], KBySpecs{}}}
+    case 192n:
+      Some{Ro{R.INeg{1n}, [KSpec{["RO", "access"], 1n, R.IPos{0n}, 1n, 0n}], KBySpecs{}}}
+    case 193n:
+      Some{Ro{R.INeg{5n}, [KSpec{["RO", "access"], 1n, R.IPos{0n}, 1n, 0n}, KSpecKw{["OW", "update"], "STORE", 6n, R.IPos{0n}, 1n, 0n}, KSpecKw{["OW", "update"], "STOREDIST", 6n, R.IPos{0n}, 1n, 0n}], KBySpecs{}}}
+    case 194n:
+      Some{Ro{R.INeg{5n}, [KSpec{["RO", "access"], 1n, R.IPos{0n}, 1n, 0n}], KBySpecs{}}}
+    case 195n:
+      Some{Ro{R.INeg{4n}, [KSpec{["RO", "access"], 1n, R.IPos{0n}, 1n, 0n}, KSpecKw{["OW", "update"], "STORE", 5n, R.IPos{0n}, 1n, 0n}, KSpecKw{["OW", "update"], "STOREDIST", 5n, R.IPos{0n}, 1n, 0n}], KBySpecs{}}}
+    case 196n:
+      Some{Ro{R.INeg{4n}, [KSpec{["RO", "access"], 1n, R.IPos{0n}, 1n, 0n}], KBySpecs{}}}
+    case 197n:
+      Some{Ro{R.INeg{6n}, [KSpec{["RO", "access"], 1n, R.IPos{0n}, 1n, 0n}], KBySpecs{}}}
+    case 198n:
+      Some{Ro{R.INeg{7n}, [KSpec{["OW", "update"], 1n, R.IPos{0n}, 1n, 0n}, KSpec{["RO", "access"], 2n, R.IPos{0n}, 1n, 0n}], KBySpecs{}}}
+    case 199n:
+      Some{Ro{R.IPos{2n}, [KSpec{["RO", "access"], 1n, R.IPos{0n}, 1n, 0n}], KBySpecs{}}}
+    case 200n:
+      Some{Ro{R.INeg{3n}, [KSpec{["OW", "update"], 1n, R.IPos{0n}, 1n, 0n}], KBySpecs{}}}
+    case 201n:
+      Some{Ro{R.INeg{1n}, [], KBySpecs{}}}
+    case 202n:
+      Some{Ro{R.INeg{1n}, [], KBySpecs{}}}
+    case 203n:
+      Some{Ro{R.INeg{1n}, [], KBySpecs{}}}
+    case 204n:
+      Some{Ro{R.IPos{2n}, [], KBySpecs{}}}
+    case 205n:
+      Some{Ro{R.IPos{2n}, [], KBySpecs{}}}
+    case 206n:
+      Some{Ro{R.IPos{3n}, [], KBySpecs{}}}
+    case 207n:
+      Some{Ro{R.IPos{2n}, [], KBySpecs{}}}
+    case 208n:
+      Some{Ro{R.IPos{3n}, [], KBySpecs{}}}
+    case 209n:
+      Some{Ro{R.IPos{3n}, [], KBySpecs{}}}
+    case 210n:
+      Some{Ro{R.INeg{2n}, [], KBySpecs{}}}
+    case 211n:
+      Some{Ro{R.IPos{2n}, [], KBySpecs{}}}
+    case 212n:
+      Some{Ro{R.IPos{3n}, [], KBySpecs{}}}
+    case 213n:
+      Some{Ro{R.IPos{2n}, [], KBySpecs{}}}
+    case 214n:
+      Some{Ro{R.INeg{1n}, [], KBySpecs{}}}
+    case 215n:
+      Some{Ro{R.IPos{2n}, [], KBySpecs{}}}
+    case 216n:
+      Some{Ro{R.INeg{2n}, [], KBySpecs{}}}
+    case 217n:
+      Some{Ro{R.INeg{2n}, [], KBySpecs{}}}
+    case 218n:
+      Some{Ro{R.IPos{2n}, [], KBySpecs{}}}
+    case 219n:
+      Some{Ro{R.INeg{2n}, [], KBySpecs{}}}
+    case 220n:
+      Some{Ro{R.INeg{1n}, [], KBySpecs{}}}
+    case 221n:
+      Some{Ro{R.IPos{2n}, [], KBySpecs{}}}
+    case 222n:
+      Some{Ro{R.INeg{2n}, [], KBySpecs{}}}
+    case 223n:
+      Some{Ro{R.INeg{3n}, [], KBySpecs{}}}
+    case 224n:
+      Some{Ro{R.IPos{2n}, [], KBySpecs{}}}
+    case 225n:
+      Some{Ro{R.IPos{2n}, [], KBySpecs{}}}
+    case 226n:
+      Some{Ro{R.IPos{2n}, [], KBySpecs{}}}
+    case 227n:
+      Some{Ro{R.INeg{1n}, [], KBySpecs{}}}
+    case 228n:
+      Some{Ro{R.INeg{1n}, [], KBySpecs{}}}
+    case 229n:
+      Some{Ro{R.INeg{1n}, [], KBySpecs{}}}
+    case 230n:
+      Some{Ro{R.IPos{2n}, [], KBySpecs{}}}
+    case 231n:
+      Some{Ro{R.IPos{2n}, [], KBySpecs{}}}
+    case 232n:
+      Some{Ro{R.INeg{3n}, [], KBySpecs{}}}
+    case 233n:
+      Some{Ro{R.INeg{3n}, [], KBySpecs{}}}
+    case 234n:
+      Some{Ro{R.IPos{2n}, [], KBySpecs{}}}
+    case 235n:
+      Some{Ro{R.IPos{3n}, [KSpec{["RO"], 2n, R.IPos{0n}, 1n, 0n}], KBySpecs{}}}
+    case 236n:
+      Some{Ro{R.IPos{3n}, [KSpec{["RO"], 2n, R.IPos{0n}, 1n, 0n}], KBySpecs{}}}
+    case 237n:
+      Some{Ro{R.IPos{3n}, [KSpec{["RO"], 2n, R.IPos{0n}, 1n, 0n}], KBySpecs{}}}
+    case 238n:
+      Some{Ro{R.IPos{3n}, [KSpec{["RO"], 2n, R.IPos{0n}, 1n, 0n}], KBySpecs{}}}
+    case 239n:
+      Some{Ro{R.IPos{2n}, [], KBySpecs{}}}
+    case 240n:
+      Some{Ro{R.INeg{2n}, [KSpec{["RO"], 2n, R.IPos{0n}, 1n, 0n}], KBySpecs{}}}
+    case 241n:
+      Some{Ro{R.IPos{2n}, [], KBySpecs{}}}
+    case 242n:
+      Some{Ro{R.IPos{2n}, [], KBySpecs{}}}
+    case 243n:
+      Some{Ro{R.IPos{2n}, [], KBySpecs{}}}
+    case 244n:
+      Some{Ro{R.IPos{2n}, [], KBySpecs{}}}
+    case 245n:
+      Some{Ro{R.INeg{1n}, [], KBySpecs{}}}
+    case 246n:
+      Some{Ro{R.IPos{2n}, [], KBySpecs{}}}
+    case 247n:
+      Some{Ro{R.IPos{2n}, [], KBySpecs{}}}
+    case 248n:
+      Some{Ro{R.INeg{1n}, [], KBySpecs{}}}
+    case 249n:
+      Some{Ro{R.INeg{1n}, [], KBySpecs{}}}
+    case 250n:
+      Some{Ro{R.INeg{1n}, [], KBySpecs{}}}
+    case 251n:
+      Some{Ro{R.INeg{1n}, [], KBySpecs{}}}
+    case 252n:
+      Some{Ro{R.IPos{2n}, [], KBySpecs{}}}
+    case 253n:
+      Some{Ro{R.IPos{2n}, [], KBySpecs{}}}
+    case 254n:
+      Some{Ro{R.IPos{2n}, [], KBySpecs{}}}
+    case 255n:
+      Some{Ro{R.IPos{2n}, [], KBySpecs{}}}
+    case 256n:
+      Some{Ro{R.IPos{3n}, [], KBySpecs{}}}
+    case 257n:
+      Some{Ro{R.IPos{2n}, [], KBySpecs{}}}
+    case 258n:
+      Some{Ro{R.INeg{1n}, [], KBySpecs{}}}
+    case 259n:
+      Some{Ro{R.IPos{3n}, [], KBySpecs{}}}
+    case 260n:
+      Some{Ro{R.IPos{2n}, [], KBySpecs{}}}
+    case 261n:
+      Some{Ro{R.INeg{1n}, [], KBySpecs{}}}
+    case 262n:
+      Some{Ro{R.INeg{1n}, [], KBySpecs{}}}
+    case 263n:
+      Some{Ro{R.INeg{2n}, [], KBySpecs{}}}
+    case 264n:
+      Some{Ro{R.INeg{3n}, [], KBySpecs{}}}
+    case 265n:
+      Some{Ro{R.INeg{1n}, [], KBySpecs{}}}
+    case 266n:
+      Some{Ro{R.IPos{3n}, [], KBySpecs{}}}
+    case 267n:
+      Some{Ro{R.IPos{2n}, [], KBySpecs{}}}
+    case 268n:
+      Some{Ro{R.IPos{2n}, [], KBySpecs{}}}
+    case 269n:
+      Some{Ro{R.IPos{2n}, [], KBySpecs{}}}
+    case 270n:
+      Some{Ro{R.INeg{1n}, [], KBySpecs{}}}
+    case 271n:
+      Some{Ro{R.IPos{2n}, [], KBySpecs{}}}
+    case 272n:
+      Some{Ro{R.INeg{2n}, [], KBySpecs{}}}
+    case 273n:
+      Some{Ro{R.IPos{2n}, [], KBySpecs{}}}
+    case 274n:
+      Some{Ro{R.IPos{2n}, [], KBySpecs{}}}
+    case _:
+      None{}
+
+# what else ACL's check of a call reads of its command, by its key: 1
+# PUBLISH and SPUBLISH, 2 SUBSCRIBE and SSUBSCRIBE, 3 PSUBSCRIBE (the
+# channels it names), 4 AUTH, HELLO, QUIT and RESET (which every user
+# may run: Redis's CMD_NO_AUTH), 5 SORT, 6 SORT_RO (whose patterns name
+# keys); 0 any other
+def acl.kind.key(+key: Nat) -> Nat:
+  match key:
+    case 101n:
+      4n
+    case 102n:
+      4n
+    case 103n:
+      4n
+    case 104n:
+      4n
+    case 166n:
+      2n
+    case 168n:
+      3n
+    case 170n:
+      2n
+    case 172n:
+      1n
+    case 173n:
+      1n
+    case 177n:
+      5n
+    case 178n:
+      6n
+    case _:
+      0n
 # END gen_commands: by key
 
 # the keys a call read, as Redis's getKeysFromCommand finds them for a
