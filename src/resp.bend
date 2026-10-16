@@ -36,34 +36,64 @@ type Bulk is Data:
   BulkMore{need: Nat}
   BulkBad{msg: String}
 
-# the arguments of a request after its name
+# A long request read in part (issue #85): a request longer than a read
+# comes in several reads, and parsed again from its start after each one
+# it took time in proportion to the square of its size. When the
+# arguments of a request read through windows (wbulks) stop at a bulk not
+# whole yet, the parse keeps those it has read, as Redis keeps multibulklen
+# and bulklen, and the next parse goes on from that bulk (parse_part).
+# The request's number and name (once req.of knows them), how many bulks
+# come after the one not whole yet, the arguments read before it (newest
+# first), its index, how many more bytes it needs at least, and the bytes
+# the request was read from so far, newest piece first (the batch it ends
+# in holds them all, for MONITOR). PartOf, a part that holds a part, is
+# never built: it makes Part a node of its own, one word.
+type Part is Data:
+  Part{id: Nat, nm: String, more: Nat, acc: List<&2, String>, at: Nat, need: Nat, raw: List<&2, String>}
+  PartOf{p: Part}
+
+# the arguments of a request after its name; or those of a long request
+# read in part
 type Args is Data:
   ArgsOk{args: List<&2, String>, next: Nat}
   ArgsMore{need: Nat}
   ArgsBad{msg: String}
+  ArgsPart{p: Part}
 
 # one request: its command, with the hash of its key for the hints and
 # its code for INFO's statistics in the hash's high twelve bits (B.Req,
 # R.stat.hash); or none for an empty one (*0, or a blank inline line),
-# which Redis skips without a reply
+# which Redis skips without a reply; or a long request read in part
 type One is Data:
   OneOk{req: B.Req, next: Nat}
   OneNone{next: Nat}
   OneMore{need: Nat}
   OneBad{msg: String}
+  OnePart{p: Part}
+
+# what a parse leaves for the next read: nothing; the bytes from the first
+# request not whole yet; or a long request read in part, with the bytes
+# from its bulk not whole yet. TailOf, a tail that holds a tail, is never
+# built: it makes Tail a node of its own, one word, as a String is, in
+# every step of a connection's loop that carries it.
+type Tail is Data:
+  TailNone{}
+  TailBytes{s: String}
+  TailPart{p: Part, s: String}
+  TailOf{t: Tail}
 
 # a buffer's worth of requests: the complete ones, newest first (as the
 # parser meets them, each put before the ones it read already; the server
 # puts them in order in the same pass that takes their commands and
 # hashes apart, B.unzip), how many they are and the words of their codes
 # together (R.tl.add: whether they all have one code, and which), the
-# unparsed tail, a protocol error that ends the connection, if any, how
-# many bytes the tail needs at least before a parse can make progress,
-# and the buffer itself, whole (the server sends it to the actor with the
-# batch, for MONITOR: the parser takes the buffer and gives it back, so
-# that nothing shares it)
+# unparsed tail (Tail), a protocol error that ends the connection, if
+# any, how many bytes the tail needs at least before a parse can make
+# progress, and the buffer itself, whole (the server sends it to the
+# actor with the batch, for MONITOR: the parser takes the buffer and gives
+# it back, so that nothing shares it)
 type Batch is Data:
-  Batch{reqs: List<&2, B.Req>, tl: U32, rest: String, err: Maybe<&2, String>, need: Nat, raw: String}
+  Batch{reqs: List<&2, B.Req>, tl: U32, rest: Tail, err: Maybe<&2, String>, need: Nat, raw: String}
 
 # Lexing
 # ------
@@ -380,8 +410,9 @@ def wnd.re(+w: String, +base: Nat, +j: Nat, +l: Nat) -> Bool:
   +end = Nat.add(base, String.length(w))
   Bool.and(Nat.is_lt(end, Nat.add(j, 1024n)), Nat.is_lt(end, l))
 
-# bulks's loop through a window: w at index base of s
-def wbulks(n: Nat, +s: String, +l: Nat, +w: String, +base: Nat, b: Bulk, acc: List<&2, String>) -> Args:
+# bulks's loop through a window: w at index base of s, b the bulk at
+# index jb; one not whole yet leaves the request read in part (Part)
+def wbulks(n: Nat, +s: String, +l: Nat, +w: String, +base: Nat, +jb: Nat, b: Bulk, acc: List<&2, String>) -> Args:
   match n b:
     case 0n BulkOk{arg, j}:
       ArgsOk{List.reverse(&2, String, arg <> acc), j}
@@ -389,9 +420,9 @@ def wbulks(n: Nat, +s: String, +l: Nat, +w: String, +base: Nat, b: Bulk, acc: Li
       +re = wnd.re(w, base, j, l)
       +w2 = wnd.next(re, w, s, j, l)
       +b2 = Bool.pick(Nat, re, j, base)
-      wbulks(m, s, l, w2, b2, wnd.bulk(w2, b2, s, j, l), arg <> acc)
-    case _ BulkMore{k}:
-      ArgsMore{k}
+      wbulks(m, s, l, w2, b2, j, wnd.bulk(w2, b2, s, j, l), arg <> acc)
+    case m BulkMore{k}:
+      ArgsPart{Part{0n, SNil{}, m, acc, jb, k, Nil{}}}
     case _ BulkBad{msg}:
       ArgsBad{msg}
 
@@ -403,7 +434,7 @@ def args.from(long: Bool, +k: Nat, +s: String, +l: Nat, +j: Nat) -> Args:
       bulks(k, s, l, bulk_at(s, j, l), Nil{})
     case True{}:
       +w = wnd.from(s, j, l)
-      wbulks(k, s, l, w, j, wnd.bulk(w, j, s, j, l), Nil{})
+      wbulks(k, s, l, w, j, j, wnd.bulk(w, j, s, j, l), Nil{})
 
 # the m bulks of a request's arguments at index j
 def args.at(m: Nat, +s: String, +l: Nat, +j: Nat) -> Args:
@@ -443,6 +474,14 @@ def req.mk(own: Bool, +id: Nat, +nm: String, +args: List<&2, String>, +key: Nat,
     case False{}:
       req.ok(R.parse_id(id, nm, args), req.hash(R.stat.touch(key), args), key, args, j)
 
+# a long request read in part, with its command's number and name
+def part.named(p: Part, +id: Nat, nm: String) -> Part:
+  match p:
+    case Part{i, x, more, acc, at, need, raw}:
+      Part{id, nm, more, acc, at, need, raw}
+    case PartOf{q}:
+      part.named(q, id, nm)
+
 def req.of(+id: Nat, +nm: String, a: Args) -> One:
   match a:
     case ArgsOk{+args, j}:
@@ -451,6 +490,8 @@ def req.of(+id: Nat, +nm: String, a: Args) -> One:
       OneMore{k}
     case ArgsBad{msg}:
       OneBad{msg}
+    case ArgsPart{p}:
+      OnePart{part.named(p, id, nm)}
 
 # GET k
 def get.of(b: Key) -> One:
@@ -779,9 +820,11 @@ def one(+s: String, +i: Nat, +l: Nat) -> One:
 
 # a batch's requests before its tail is cut off, newest first, how many
 # they are and the words of their codes (R.tl.add): at is the index where
-# the tail starts, the first request not parsed on
+# the tail starts, the first request not parsed on; or the requests
+# before a long request read in part, which starts at index start
 type Cut is Data:
   Cut{reqs: List<&2, B.Req>, tl: U32, at: Nat, err: Maybe<&2, String>, need: Nat}
+  CutPart{reqs: List<&2, B.Req>, tl: U32, start: Nat, p: Part}
 
 # every complete request of s from index i on, put before acc, and
 # counted with its code's word in tl: o is the parse of the one at i;
@@ -800,21 +843,35 @@ def batch.go(fuel: Nat, +s: String, +l: Nat, +i: Nat, o: One, acc: List<&2, B.Re
       Cut{acc, tl, i, None{}, k}
     case 1n+f OneBad{m}:
       Cut{acc, tl, l, Some{m}, 0n}
+    case 1n+f OnePart{p}:
+      CutPart{acc, tl, i, p}
 
 # the tail is what follows the parsed requests, from index at of s (of
 # length l): none when they took all of s, as they mostly do, else a copy
 # of the rest of s; s goes back whole with the batch
-def batch.tail(none: Bool, +s: String, +at: Nat, +l: Nat) -> String:
+def batch.tail(none: Bool, +s: String, +at: Nat, +l: Nat) -> Tail:
   match none:
     case True{}:
-      SNil{}
+      TailNone{}
     case False{}:
-      String.slice(s, at, Nat.sub(l, at))
+      TailBytes{String.slice(s, at, Nat.sub(l, at))}
+
+# a long request read in part, from index start of s, leaves as the tail
+# the bytes from its bulk not whole yet, and keeps those before it (from
+# start) with the bytes of the reads before
+def part.batch(reqs: List<&2, B.Req>, tl: U32, +start: Nat, p: Part, +s: String, +l: Nat) -> Batch:
+  match p:
+    case Part{id, nm, more, acc, +at, +need, raw}:
+      Batch{reqs, tl, TailPart{Part{id, nm, more, acc, 0n, need, String.slice(s, start, Nat.sub(at, start)) <> raw}, String.slice(s, at, Nat.sub(l, at))}, None{}, need, s}
+    case PartOf{q}:
+      part.batch(reqs, tl, start, q, s, l)
 
 def batch.fin(c: Cut, +s: String, +l: Nat) -> Batch:
   match c:
     case Cut{reqs, tl, +at, err, need}:
       Batch{reqs, tl, batch.tail(Nat.is_le(l, at), s, at, l), err, need, s}
+    case CutPart{reqs, tl, +start, p}:
+      part.batch(reqs, tl, start, p, s, l)
 
 # the requests of s from index at on, put before acc, counted in tl with
 # those read before them: fuel must be at least the number of requests in
@@ -862,7 +919,7 @@ def win.on(reqs: List<&2, B.Req>, tl: U32, +at: Nat, +done: Nat, stuck: Bool) ->
     case False{}:
       WinOn{reqs, tl, Nat.add(at, done)}
 
-def win.judge(reqs: List<&2, B.Req>, tl: U32, rest: String, err: Maybe<&2, String>, need: Nat, +at: Nat, +done: Nat, last: Bool) -> Win:
+def win.judge(reqs: List<&2, B.Req>, tl: U32, rest: Tail, err: Maybe<&2, String>, need: Nat, +at: Nat, +done: Nat, last: Bool) -> Win:
   match err last:
     case Some{m} _:
       WinLast{Batch{reqs, tl, rest, Some{m}, need, SNil{}}}
@@ -871,12 +928,38 @@ def win.judge(reqs: List<&2, B.Req>, tl: U32, rest: String, err: Maybe<&2, Strin
     case None{} False{}:
       win.on(reqs, tl, at, done, Nat.is_eq(done, 0n))
 
+# the bytes of a tail (a window's holds no request read in part: a
+# window is parsed where it lies, as one run)
+def tail.len(+t: Tail) -> Nat:
+  match t:
+    case TailNone{}:
+      0n
+    case TailBytes{+r}:
+      String.length(r)
+    case TailPart{p, +r}:
+      String.length(r)
+    case TailOf{+u}:
+      tail.len(u)
+
+# the bytes a tail holds: none, those of a request not whole yet, or
+# those of a long request's bulk not whole yet
+def tail.bytes(t: Tail) -> String:
+  match t:
+    case TailNone{}:
+      SNil{}
+    case TailBytes{r}:
+      r
+    case TailPart{p, r}:
+      r
+    case TailOf{u}:
+      tail.bytes(u)
+
 # the window of w bytes at index at, of a buffer of l bytes, and its parse
 # (the window, a copy, dropped)
 def win.of(b: Batch, +at: Nat, +w: Nat, +l: Nat) -> Win:
   match b:
     case Batch{reqs, tl, +rest, err, need, win}:
-      win.judge(reqs, tl, rest, err, need, at, Nat.sub(w, String.length(rest)), Nat.is_le(l, Nat.add(at, w)))
+      win.judge(reqs, tl, rest, err, need, at, Nat.sub(w, tail.len(rest)), Nat.is_le(l, Nat.add(at, w)))
 
 # the window at index at, its requests put before acc, counted with
 # those of the windows before it (tl)
@@ -921,6 +1004,79 @@ def parse_read.if(short: Bool, +s: String, +l: Nat) -> Batch:
 def parse_read(+s: String) -> Batch:
   +l = String.length(s)
   parse_read.if(Nat.is_le(l, win.max()), s, l)
+
+# Long requests in part
+# ---------------------
+# The parse of a long request read in part goes on from its bulk not
+# whole yet, at index 0 of what came since, through a window (wbulks),
+# with the arguments it read before: each read is parsed once, and the
+# request takes time in proportion to its size (issue #85). Once it is
+# whole, the requests after it are parsed in windows, as in any buffer,
+# and the batch holds the request's bytes from the reads before too,
+# before its own (for MONITOR, which reads a batch's arguments again).
+
+# the pieces, newest first, before s
+def pieces.onto(xs: List<&2, String>, s: String) -> String:
+  match xs:
+    case Nil{}:
+      s
+    case Con{x, rest}:
+      pieces.onto(rest, x ++ s)
+
+# the batch a long request read in part ends in, with the request's
+# bytes from the reads before
+def part.raw(b: Batch, raw: List<&2, String>) -> Batch:
+  match b:
+    case Batch{reqs, tl, rest, err, need, x}:
+      Batch{reqs, tl, rest, err, need, pieces.onto(raw, x)}
+
+# a long request still in part: the bytes of s before its bulk not whole
+# yet (at) go with those of the reads before
+def part.more(p: Part, raw: List<&2, String>, +s: String, +l: Nat) -> Batch:
+  match p:
+    case Part{id, nm, more, acc, +at, +need, x}:
+      Batch{Nil{}, 0, TailPart{Part{id, nm, more, acc, 0n, need, String.slice(s, 0n, at) <> raw}, String.slice(s, at, Nat.sub(l, at))}, None{}, need, s}
+    case PartOf{q}:
+      part.more(q, raw, s, l)
+
+# the rest of a long request read in part, parsed: whole, it is the
+# batch's first request; or still in part; or a protocol error (wbulks
+# leaves no other)
+def part.fin(o: One, raw: List<&2, String>, +s: String, +l: Nat) -> Batch:
+  match o:
+    case OneOk{B.Req{c, +h}, +j}:
+      part.raw(win.go(1n+l, s, l, win.at(s, j, l, B.Req{c, h} <> Nil{}, R.tl.add(0, h))), raw)
+    case OnePart{p}:
+      part.more(p, raw, s, l)
+    case OneBad{m}:
+      Batch{Nil{}, 0, TailNone{}, Some{m}, 0n, s}
+    case _:
+      Batch{Nil{}, 0, TailNone{}, Some{"Protocol error: invalid bulk length"}, 0n, s}
+
+def part.on(p: Part, +s: String, +l: Nat) -> Batch:
+  match p:
+    case Part{+id, nm, more, acc, at, need, raw}:
+      +w = wnd.from(s, 0n, l)
+      part.fin(req.of(id, nm, wbulks(more, s, l, w, 0n, 0n, wnd.bulk(w, 0n, s, 0n, l), acc)), raw, s, l)
+    case PartOf{q}:
+      part.on(q, s, l)
+
+# the requests of s, a long request read in part first
+def parse_part(p: Part, +s: String) -> Batch:
+  +l = String.length(s)
+  part.on(p, s, l)
+
+# the requests of what the last parse left (t) and what came since (s)
+def parse_tail(t: Tail, s: String) -> Batch:
+  match t:
+    case TailNone{}:
+      parse_runs(s)
+    case TailBytes{r}:
+      parse_runs(r ++ s)
+    case TailPart{p, r}:
+      parse_part(p, r ++ s)
+    case TailOf{u}:
+      parse_tail(u, s)
 
 # Arguments as sent
 # ------------------

@@ -3755,9 +3755,11 @@ def ps.pend.put(xs: List<&2, R.Reply>, pb: Ps) -> Ps:
 # whose command runs, as Redis serves it: BLMOVE and BRPOPLPUSH change
 # their destination (lmoveHandlePush signals it; the key they popped from
 # was signalled by the push that made it ready, as serveClientBlockedOnList
-# says); BLMPOP's pop (listElementsRemoved), BZPOPMIN's, BZPOPMAX's and
-# BZMPOP's (genericZpopCommand) signal the key they popped from, and
-# BLPOP's and BRPOP's (form 1) do not. The invalidations the served
+# says), unless it holds another type: then they answer WRONGTYPE, change
+# nothing and signal nothing (ok is False); BLMPOP's pop
+# (listElementsRemoved), BZPOPMIN's, BZPOPMAX's and BZMPOP's
+# (genericZpopCommand) signal the key they popped from, and BLPOP's and
+# BRPOP's (form 1) do not. The invalidations the served
 # client gets after its reply (pend, newest first); those it gets as
 # another's go on its channel, before its reply (iv.route). Those for the
 # client out, whose command served it, go after that client's reply, with
@@ -3773,10 +3775,17 @@ def ps.trk.popped(on: Bool, +ks: List<&2, String>, +id: Nat, +out: Maybe<&2, Nat
     case _ _:
       pb
 
-def ps.trk.served.go(+pc: R.Cmd, +form: Nat, +id: Nat, +out: Maybe<&2, Nat>, pb: Ps) -> Ps:
+def ps.trk.moved(on: Bool, +d: String, +id: Nat, +out: Maybe<&2, Nat>, pb: Ps) -> Ps:
+  match on:
+    case True{}:
+      iv.ps(iv.key.as(d, id, out, True{}, iv.of(pb)))
+    case False{}:
+      pb
+
+def ps.trk.served.go(+pc: R.Cmd, +form: Nat, ok: Bool, +id: Nat, +out: Maybe<&2, Nat>, pb: Ps) -> Ps:
   match pc:
     case R.LMove{s, +d, e}:
-      iv.ps(iv.key.as(d, id, out, True{}, iv.of(pb)))
+      ps.trk.moved(ok, d, id, out, pb)
     case R.LMPop{+ks, l, n}:
       ps.trk.popped(Bool.not(Nat.is_eq(form, 1n)), ks, id, out, pb)
     case R.ZMPop{+ks, m, n}:
@@ -3794,20 +3803,20 @@ def pd.mk(p: List<&2, R.Reply> & Ps, old: List<&2, R.Reply>) -> Pd:
   (late, pb) = p
   pd.of(ps.pend.take(pb), late, old)
 
-def pd.aside(p: List<&2, R.Reply> & Ps, +pc: R.Cmd, +form: Nat, +id: Nat, +out: Nat) -> Pd:
+def pd.aside(p: List<&2, R.Reply> & Ps, +pc: R.Cmd, +form: Nat, ok: Bool, +id: Nat, +out: Nat) -> Pd:
   (old, pb) = p
-  pd.mk(ps.own.take(ps.trk.served.go(pc, form, id, Some{out}, pb)), old)
+  pd.mk(ps.own.take(ps.trk.served.go(pc, form, ok, id, Some{out}, pb)), old)
 
-def ps.trk.served.if(on: Bool, +pc: R.Cmd, +form: Nat, +id: Nat, +out: Nat, pb: Ps) -> Pd:
+def ps.trk.served.if(on: Bool, +pc: R.Cmd, +form: Nat, ok: Bool, +id: Nat, +out: Nat, pb: Ps) -> Pd:
   match on:
     case True{}:
-      pd.aside(ps.pend.take(pb), pc, form, id, out)
+      pd.aside(ps.pend.take(pb), pc, form, ok, id, out)
     case False{}:
       Pd{Nil{}, pb}
 
-def ps.trk.served(+pc: R.Cmd, +form: Nat, +id: Nat, +out: Nat, pb: Ps) -> Pd:
+def ps.trk.served(+pc: R.Cmd, +form: Nat, ok: Bool, +id: Nat, +out: Nat, pb: Ps) -> Pd:
   +p = pb
-  ps.trk.served.if(ps.trk.hot(p), pc, form, id, out, p)
+  ps.trk.served.if(ps.trk.hot(p), pc, form, ok, id, out, p)
 
 # The end of a group (Redis's beforeSleep): the keys changed under each
 # BCAST prefix to the clients that listen to it, each of them but the
@@ -4984,7 +4993,7 @@ def bg.popped(w: Waits, r: R.Reply & (List<&2, A.Eff> & R.Ds), rs: List<&2, R.Re
       (e, ds) = q
       +y = S.blk.shape(S.blk.form(b), x)
       +left = ws
-      bg.popped.up(ps.trk.served(pc, S.blk.form(b), id, S.conn.id(conn), pb), back, c0, c1, y, cmds, codes, av, e, ds, rs, es, conn, waits.count(left, S.srv.served(bg.errs(srv, code, y), id)), left, up, tx, pc, pre)
+      bg.popped.up(ps.trk.served(pc, S.blk.form(b), Bool.not(R.r_is_err(y)), id, S.conn.id(conn), pb), back, c0, c1, y, cmds, codes, av, e, ds, rs, es, conn, waits.count(left, S.srv.served(bg.errs(srv, code, y), id)), left, up, tx, pc, pre)
     case WaitNone{}:
       (x, q) = r
       (e, ds) = q
@@ -6828,6 +6837,13 @@ def code.pausable(+code: Nat) -> Bool:
   +k = R.code.key(code)
   Bool.and(R.stat.pausable(k), Bool.not(Bool.and(Nat.is_eq(k, R.stat.top(65n)), Nat.is_eq(R.code.class(code), 2n))))
 
+# whether a SHUTDOWN that saves ran earlier in the group (ps.down 1, the
+# server's S.srv.rdb.shut set) and holds a command (code) back until its
+# save's result is known, as a pause of every command would: but a
+# monitor's, and one the parser refused (The RDB file: SHUTDOWN)
+def down.holds(+srv: S.Srv, +pb: Ps, +mon: Bool, +code: Nat) -> Bool:
+  Bool.and(Bool.and(Nat.is_eq(ps.down(pb), 1n), S.srv.rdb.shut(srv)), Bool.not(Bool.or(mon, Nat.is_eq(R.code.class(code), 1n))))
+
 # the clients the pause held back (hit: whether the first of ws is one),
 # in the order they came, their batches to go on (up, newest first), from
 # the command held back; the others kept in order (keep: those before,
@@ -8312,13 +8328,15 @@ def bg.wait.or(lua: Bool, +id: Nat, +back: Chan(Ans), b: S.Blk, +c: R.Cmd, +code
 # "Errors trying to SHUTDOWN. Check logs.", the rest of its batch going
 # on (its client waited for the save, as SAVE's does). As that save may
 # fail, the group goes on after such a SHUTDOWN without FORCE, its end
-# and ticks too, as after a SAVE: when the save ends well and the server
-# stops, the replies of the requests after it are not sent, and what they
-# wrote is in the files, written and not acknowledged, as a crash may
-# leave a write (Redis would not have run them). The registry of clients
-# keeps what the group asked for (ps.down), and bits 23 and 24 of Ps's ev
-# keep the batches after it off the fast way; the shell acts on it once
-# the group is run (db_group, aof_reply).
+# and ticks too, but its other clients' commands after it are held back
+# as a pause of every command holds them (down.holds): Redis saves and
+# exits within SHUTDOWN, so none of them runs, and none of what they
+# would write reaches either file. When the save ends well the server
+# stops and they are never answered; when it fails, they go on after
+# SHUTDOWN's client, in the order they came (grp.saved.down). The
+# registry of clients keeps what the group asked for (ps.down), and bits
+# 23 and 24 of Ps's ev keep the batches after it off the fast way; the
+# shell acts on it once the group is run (db_group, aof_reply).
 def bg.down.at(+d: Nat, g: LRun) -> LRun:
   match g:
     case LRun{rs, es, conn, srv, ds, ws, up, tx, pb}:
@@ -8438,7 +8456,7 @@ def bg.go(+id: Nat, +back: Chan(Ans), +inb: Nat, cmds: List<&2, R.Cmd>, codes: L
       +mo = ps.mon.is(id, pb)
       +lua = Nat.is_eq(id, 0n)
       +sf = sc.flags.at(code.engine(k), c, pb)
-      +sh = sh.lua(sh.of(q, may, tx.multi(id, tx), Bool.and(ps.has(id, pb), Bool.not(S.conn.r3(conn))), mo, Bool.and(ps.oom.is(pb), Bool.not(lua)), pause.holds(ps.pz(pb), mo, c, k, id, tx, sf, pb), Bool.and(ps.busy(pb), Bool.not(lua)), sf, c, k, ds), id, tx)
+      +sh = sh.lua(sh.of(q, may, tx.multi(id, tx), Bool.and(ps.has(id, pb), Bool.not(S.conn.r3(conn))), mo, Bool.and(ps.oom.is(pb), Bool.not(lua)), Bool.or(pause.holds(ps.pz(pb), mo, c, k, id, tx, sf, pb), Bool.and(down.holds(srv, pb, mo, k), Bool.not(lua))), Bool.and(ps.busy(pb), Bool.not(lua)), sf, c, k, ds), id, tx)
       +pre = bg.trk.pre(id, k, sh, q, may, pb)
       +a = trk.pre.av(pre, av)
       +ar = av.rest(a)
@@ -9019,13 +9037,14 @@ def evict.pick(+pol: Nat, mm: S.Mm, +ds: R.Ds, +n: Nat, +now: Nat, +start: U32) 
       evict.pooled(pol, mm, ds, n, now, start)
 
 # eviction's state as it goes: the server, the databases, the DELs of the
-# keys it evicted (newest first), and how many
+# keys it evicted (newest first), how many, and the heap's used bytes at
+# its last reading
 type Evs is Data:
-  Evs{srv: S.Srv, ds: R.Ds, es: List<&2, A.Ent>, n: Nat}
+  Evs{srv: S.Srv, ds: R.Ds, es: List<&2, A.Ent>, n: Nat, last: Nat}
 
 def evs.n(+x: Evs) -> Nat:
   match x:
-    case Evs{srv, ds, es, +n}:
+    case Evs{srv, ds, es, +n, last}:
       n
 
 # a key evicted, or none the policy may evict
@@ -9069,18 +9088,18 @@ def evict.pick.of(+rws: Bool, mm: S.Mm, +ds: R.Ds, +start: U32) -> Ed:
   evict.debt(evict.pick(S.mm.pol(m), m, ds, dbs.count(ds), R.ds.now(ds), start), rws, ds)
 
 # the key picked deleted: its DEL with the others, the server's debt up
-def evict.done(p: Ed, pass: String, cfg: List<&2, C.CItem>, info: I.Info, ds: R.Ds, es: List<&2, A.Ent>, +n: Nat) -> Ev1:
+def evict.done(p: Ed, pass: String, cfg: List<&2, C.CItem>, info: I.Info, ds: R.Ds, es: List<&2, A.Ent>, +n: Nat, +last: Nat) -> Ev1:
   match p:
     case Ed{mm, Vic{+j, +k}, +debt}:
-      EvOne{Evs{S.Srv{pass, cfg, info, S.mm.owe(mm, debt)}, evict.del(j, k, ds), A.EOne{A.EDb{j, R.Del{[k]}}} <> es, 1n+n}}
+      EvOne{Evs{S.Srv{pass, cfg, info, S.mm.owe(mm, debt)}, evict.del(j, k, ds), A.EOne{A.EDb{j, R.Del{[k]}}} <> es, 1n+n, last}}
     case Ed{mm, VicNone{}, debt}:
-      EvNone{Evs{S.Srv{pass, cfg, info, mm}, ds, es, n}}
+      EvNone{Evs{S.Srv{pass, cfg, info, mm}, ds, es, n, last}}
 
 # one key evicted (rws: while a rewrite runs)
 def evict.one(x: Evs, +rws: Bool) -> Ev1:
   match x:
-    case Evs{S.Srv{pass, cfg, +info, mm}, +ds, es, +n}:
-      evict.done(evict.pick.of(rws, mm, ds, I.info.start(info)), pass, cfg, info, ds, es, n)
+    case Evs{S.Srv{pass, cfg, +info, mm}, +ds, es, +n, +last}:
+      evict.done(evict.pick.of(rws, mm, ds, I.info.start(info)), pass, cfg, info, ds, es, n, last)
 
 # whether the heap's used bytes, less the debt, are past maxmemory (none
 # with maxmemory 0)
@@ -9090,14 +9109,36 @@ def evict.over(+used: Nat, +srv: S.Srv) -> Bool:
 
 def evs.over(+used: Nat, +x: Evs) -> Bool:
   match x:
-    case Evs{+srv, ds, es, n}:
+    case Evs{+srv, ds, es, n, last}:
       evict.over(used, srv)
 
-# the heap's reading kept in the server's state, for INFO (S.srv.heap)
-def evs.heap(+used: Nat, x: Evs) -> Evs:
+# the debt up by b: what the snapshot of a rewrite that runs holds of
+# what the eviction let go (S.mm.owe)
+def evs.owe(srv: S.Srv, +b: Nat) -> S.Srv:
+  match srv:
+    case S.Srv{pass, cfg, info, mm}:
+      S.Srv{pass, cfg, info, S.mm.owe(mm, b)}
+
+# while a rewrite runs, what the heap grew by since the eviction's last
+# reading: no client's command runs inside the eviction, so this is the
+# nodes its DELs copied on the way to their keys, whose old ones the
+# snapshot still holds, as it holds the keys (evict.est); counted as debt,
+# or the eviction, its own copies growing the heap as fast as its debt,
+# would go on until the rewrite ends (issue #100). Without a rewrite the
+# old nodes are let go, and nothing is owed (a match, not Bool.pick).
+def evs.grown(rws: Bool, +used: Nat, +last: Nat) -> Nat:
+  match rws:
+    case True{}:
+      Nat.sub(used, last)
+    case False{}:
+      0n
+
+# the heap's reading kept in the server's state, for INFO (S.srv.heap),
+# and as the eviction's last; its growth while a rewrite runs owed
+def evs.heap(+used: Nat, +act: Nat, rws: Bool, x: Evs) -> Evs:
   match x:
-    case Evs{srv, ds, es, n}:
-      Evs{S.srv.heap(srv, used), ds, es, n}
+    case Evs{srv, ds, es, n, +last}:
+      Evs{evs.owe(S.srv.heap(srv, used, act), evs.grown(rws, used, last)), ds, es, n, used}
 
 # an eviction's outcome: 0 the heap within maxmemory (EVICT_OK), 1 keys
 # left to evict when its time ran out (EVICT_RUNNING), 2 none left that
@@ -9147,16 +9188,18 @@ def evict.timed(up: Bool, x: Evs, +rws: Bool, +s0: U32, +u0: U32, +lim: Nat) -> 
 def evict.heap(x: Evs, +rws: Bool, +s0: U32, +u0: U32, +lim: Nat) -> IO(Evd):
   do IO<Evd>:
     h : Nat & Nat <- IO.heap()
-    evict.heap.at(heap.used(h), x, rws, s0, u0, lim)
+    evict.heap.of(h, x, rws, s0, u0, lim)
 
 @unsafe
-def evict.heap.at(+used: Nat, x: Evs, +rws: Bool, +s0: U32, +u0: U32, +lim: Nat) -> IO(Evd):
-  +y = evs.heap(used, x)
+def evict.heap.at(+used: Nat, +act: Nat, x: Evs, +rws: Bool, +s0: U32, +u0: U32, +lim: Nat) -> IO(Evd):
+  +y = evs.heap(used, act, rws, x)
   evict.loop(evs.over(used, y), y, rws, s0, u0, lim)
 
-def heap.used(h: Nat & Nat) -> Nat:
-  (used, act) = h
-  used
+# the heap's reading taken apart, for evict.heap.at
+@unsafe
+def evict.heap.of(h: Nat & Nat, x: Evs, +rws: Bool, +s0: U32, +u0: U32, +lim: Nat) -> IO(Evd):
+  (u, a) = h
+  evict.heap.at(u, a, x, rws, s0, u0, lim)
 
 # the evicted keys' events (expired's: ps.swept)
 def ev.e() -> U32:
@@ -9201,7 +9244,7 @@ def mem.grp(p: Ps & List<&2, Sigma<&2, &2, Chan(Ans), _ => Ans>>, es: List<&2, A
 
 def mem.done(d: Evd, ws: Waits, tx: Tx, pb: Ps) -> Grp:
   match d:
-    case Evd{+res, Evs{srv, +ds, +es, +n}}:
+    case Evd{+res, Evs{srv, +ds, +es, +n, last}}:
       mem.grp(ps.flush(ps.evicted(es, ps.trk.gone(es, ds, ps.mem(pb, res))), Nil{}), es, S.srv.evicted(srv, n, Nat.is_lt(0n, res), R.ds.now(ds)), ds, ws, touch.ents(tx, es, None{}, ds))
 
 # Redis's warning for a CONFIG SET that set maxmemory below the memory in
@@ -9222,7 +9265,7 @@ def mem.ok(was: Bool, srv: S.Srv, ds: R.Ds, ws: Waits, tx: Tx, pb: Ps) -> Grp:
     case False{}:
       Grp{Nil{}, Nil{}, srv, ds, ws, Nil{}, tx, pb}
     case True{}:
-      mem.done(Evd{0n, Evs{srv, ds, Nil{}, 0n}}, ws, tx, pb)
+      mem.done(Evd{0n, Evs{srv, ds, Nil{}, 0n, 0n}}, ws, tx, pb)
 
 def ps.mem.was(+pb: Ps) -> Bool:
   match pb:
@@ -9249,7 +9292,7 @@ def mem.run.w(w: Nat, +used: Nat, +s0: U32, +u0: U32, srv: S.Srv, ds: R.Ds, ws: 
         mem.run.k(used, s0, u0, S.srv.kicked(sv), ds, ws, tx, pb, rws, pid)
     case _:
       +sv = srv
-      evict.go(S.srv.pol(sv), Evs{sv, ds, Nil{}, 0n}, ws, tx, pb, rws, s0, u0, evict.limit(S.srv.ten(sv)))
+      evict.go(S.srv.pol(sv), Evs{sv, ds, Nil{}, 0n, used}, ws, tx, pb, rws, s0, u0, evict.limit(S.srv.ten(sv)))
 
 @unsafe
 def mem.run.k(+used: Nat, +s0: U32, +u0: U32, srv: S.Srv, ds: R.Ds, ws: Waits, tx: Tx, pb: Ps, +rws: Bool, +pid: U32) -> IO(Grp):
@@ -9269,9 +9312,10 @@ def evict.go(+pol: Nat, x: Evs, ws: Waits, tx: Tx, pb: Ps, +rws: Bool, +s0: U32,
 
 @unsafe
 def mem.run(h: Nat & Nat, +s0: U32, +u0: U32, srv: S.Srv, ds: R.Ds, ws: Waits, tx: Tx, pb: Ps, +rws: Bool, +pid: U32) -> IO(Grp):
-  (u, act) = h
+  (u, a) = h
   +used = u
-  mem.run.k(used, s0, u0, S.srv.heap(srv, used), ds, ws, tx, pb, rws, pid)
+  +act = a
+  mem.run.k(used, s0, u0, S.srv.heap(srv, used, act), ds, ws, tx, pb, rws, pid)
 
 # a group of requests taken at t, its memory seen to (w: mem.need): with
 # maxmemory, the heap read and the eviction (mem.run); without it, the
@@ -10124,7 +10168,7 @@ def db_shut.end(ok: Bool, +force: Bool, +ok1: Bool, +srv: S.Srv, outs: List<&2, 
     case False{} False{}:
       do IO<Unit>:
         Unit <- down.cant(down.lg(srv, rw))
-        db_group(grp.saved(ok1, outs, S.srv.rw.stop(srv), ds, ws, tx, pb), rw.with(rw, None{}), reqs)
+        db_group(grp.saved.down(ok1, outs, S.srv.rw.stop(srv), ds, ws, tx, pb), rw.with(rw, None{}), reqs)
 
 @unsafe
 def db_shut(p: S.Srv & Bool, +force: Bool, outs: List<&2, Sigma<&2, &2, Chan(Ans), _ => Ans>>, +ds: R.Ds, ws: Waits, tx: Tx, pb: Ps, +rw: Rw, +reqs: Chan(Req)) -> IO(Unit):
@@ -10285,28 +10329,30 @@ def got.bytes(+xs: List<&2, String>, +acc: Nat) -> Nat:
 # read with what came since is several; the batch holds the bytes they
 # were read from, whole (the parser takes them and gives them back, so
 # that nothing shares them), which go to the actor with the batch
-def parse_in(rest: String, got: List<&2, String>) -> P.Batch:
+def parse_in(rest: P.Tail, got: List<&2, String>) -> P.Batch:
   match rest got:
-    case SNil{} Con{x, Nil{}}:
+    case P.TailNone{} Con{x, Nil{}}:
       P.parse_read(x)
     case r g:
-      P.parse_runs(r ++ glue(g, SNil{}))
+      P.parse_tail(r, glue(g, SNil{}))
 
 # the connection's loop: rest is the unparsed tail of what came before
-# (at most one incomplete request); got holds the pieces read since,
-# newest first, have counts their bytes (up to need), and the tail needs
-# need more bytes before a parse can make progress, so a large value is
-# parsed once, not once per read; cn is the connection's state, as the
-# actor gave it back after the last batch. Bytes cross as they are, one
-# Char each (recv_raw, send_raw): a String of them is a packed buffer.
+# (at most one incomplete request; of a long one, the arguments read so
+# far and the bytes from its bulk not whole yet: P.Tail); got holds the
+# pieces read since, newest first, have counts their bytes (up to need),
+# and the tail needs need more bytes before a parse can make progress, so
+# a large value is parsed once, not once per read; cn is the connection's
+# state, as the actor gave it back after the last batch. Bytes cross as
+# they are, one Char each (recv_raw, send_raw): a String of them is a
+# packed buffer.
 @unsafe
-def conn_loop(s: Socket, rest: String, got: List<&2, String>, have: Nat, need: Nat, +ln: Link, cn: S.Conn) -> IO(Unit):
+def conn_loop(s: Socket, rest: P.Tail, got: List<&2, String>, have: Nat, need: Nat, +ln: Link, cn: S.Conn) -> IO(Unit):
   do IO<Unit>:
     m : Socket & Result<&1, &1, U32 & String, String> <- TCP.recv_raw(s, 65536)
     conn_got(m, rest, got, have, need, ln, cn)
 
 @unsafe
-def conn_got(m: Socket & Result<&1, &1, U32 & String, String>, rest: String, got: List<&2, String>, have: Nat, need: Nat, +ln: Link, cn: S.Conn) -> IO(Unit):
+def conn_got(m: Socket & Result<&1, &1, U32 & String, String>, rest: P.Tail, got: List<&2, String>, have: Nat, need: Nat, +ln: Link, cn: S.Conn) -> IO(Unit):
   (s, r) = m
   match r:
     case Fail{e}:
@@ -10315,7 +10361,7 @@ def conn_got(m: Socket & Result<&1, &1, U32 & String, String>, rest: String, got
       conn_data(s, Nat.is_eq(String.length(x), 0n), x, rest, got, have, need, ln, cn)
 
 @unsafe
-def conn_data(s: Socket, eof: Bool, +x: String, rest: String, got: List<&2, String>, have: Nat, +need: Nat, +ln: Link, cn: S.Conn) -> IO(Unit):
+def conn_data(s: Socket, eof: Bool, +x: String, rest: P.Tail, got: List<&2, String>, have: Nat, +need: Nat, +ln: Link, cn: S.Conn) -> IO(Unit):
   match eof:
     case True{}:
       conn_end(s, ln)
@@ -10324,7 +10370,7 @@ def conn_data(s: Socket, eof: Bool, +x: String, rest: String, got: List<&2, Stri
       conn_more(s, rest, x <> got, h, need, ln, cn, Nat.is_lt(h, need))
 
 @unsafe
-def conn_more(s: Socket, rest: String, +got: List<&2, String>, have: Nat, need: Nat, +ln: Link, cn: S.Conn, wait: Bool) -> IO(Unit):
+def conn_more(s: Socket, rest: P.Tail, +got: List<&2, String>, have: Nat, need: Nat, +ln: Link, cn: S.Conn, wait: Bool) -> IO(Unit):
   match wait:
     case True{}:
       conn_loop(s, rest, got, have, need, ln, cn)
@@ -10345,7 +10391,7 @@ def conn_batch(s: Socket, batch: P.Batch, +inb: Nat, +ln: Link, cn: S.Conn) -> I
       conn_send(s, ln, cn, reqs, tl, err, rest, need, inb, raw)
 
 @unsafe
-def conn_send(s: Socket, +ln: Link, cn: S.Conn, reqs: List<&2, B.Req>, tl: U32, err: Maybe<&2, String>, rest: String, need: Nat, +inb: Nat, raw: String) -> IO(Unit):
+def conn_send(s: Socket, +ln: Link, cn: S.Conn, reqs: List<&2, B.Req>, tl: U32, err: Maybe<&2, String>, rest: P.Tail, need: Nat, +inb: Nat, raw: String) -> IO(Unit):
   match reqs:
     case Nil{}:
       conn_err(s, ln, cn, err, rest, need)
@@ -10382,7 +10428,7 @@ def live.wants(+job: B.Job) -> Bool:
 # a batch that wants them. Each arm sends and waits itself: a step both
 # called would be a segment of its own, entered on every batch.
 @unsafe
-def conn_job(live: Bool, s: Socket, +ln: Link, job: B.Job, cn: S.Conn, n: U32, +inb: Nat, raw: String, err: Maybe<&2, String>, rest: String, need: Nat) -> IO(Unit):
+def conn_job(live: Bool, s: Socket, +ln: Link, job: B.Job, cn: S.Conn, n: U32, +inb: Nat, raw: String, err: Maybe<&2, String>, rest: P.Tail, need: Nat) -> IO(Unit):
   match live ln:
     case False{} Link{db, +back, post, tl, id}:
       do IO<Unit>:
@@ -10401,12 +10447,12 @@ def conn_job(live: Bool, s: Socket, +ln: Link, job: B.Job, cn: S.Conn, n: U32, +
 # are and the words of their codes (R.tl.add), and the bytes they came in
 # (how many, and the bytes themselves)
 @unsafe
-def conn_ask(s: Socket, +ln: Link, cn: S.Conn, rs: List<&2, B.Req>, tl: U32, err: Maybe<&2, String>, rest: String, need: Nat, +inb: Nat, raw: String) -> IO(Unit):
+def conn_ask(s: Socket, +ln: Link, cn: S.Conn, rs: List<&2, B.Req>, tl: U32, err: Maybe<&2, String>, rest: P.Tail, need: Nat, +inb: Nat, raw: String) -> IO(Unit):
   +job = B.job(B.unzip(rs, Nil{}, Nil{}))
   conn_job(live.wants(job), s, ln, job, cn, tl, inb, raw, err, rest, need)
 
 @unsafe
-def conn_ans(s: Socket, +ln: Link, got: Maybe<&1, Ans>, err: Maybe<&2, String>, rest: String, need: Nat) -> IO(Unit):
+def conn_ans(s: Socket, +ln: Link, got: Maybe<&1, Ans>, err: Maybe<&2, String>, rest: P.Tail, need: Nat) -> IO(Unit):
   match got:
     case None{}:
       conn_end(s, ln)
@@ -10426,7 +10472,7 @@ def conn_ans(s: Socket, +ln: Link, got: Maybe<&1, Ans>, err: Maybe<&2, String>, 
       conn_end(s, ln)
 
 @unsafe
-def conn_put(s: Socket, +ln: Link, post: Bool, out: String, cn: S.Conn, err: Maybe<&2, String>, rest: String, need: Nat) -> IO(Unit):
+def conn_put(s: Socket, +ln: Link, post: Bool, out: String, cn: S.Conn, err: Maybe<&2, String>, rest: P.Tail, need: Nat) -> IO(Unit):
   match post:
     case True{}:
       do IO<Unit>:
@@ -10438,7 +10484,7 @@ def conn_put(s: Socket, +ln: Link, post: Bool, out: String, cn: S.Conn, err: May
         conn_sent(m, ln, cn, err, rest, need)
 
 @unsafe
-def conn_sent(m: Socket & Result<&1, &1, U32 & String, Unit>, +ln: Link, cn: S.Conn, err: Maybe<&2, String>, rest: String, need: Nat) -> IO(Unit):
+def conn_sent(m: Socket & Result<&1, &1, U32 & String, Unit>, +ln: Link, cn: S.Conn, err: Maybe<&2, String>, rest: P.Tail, need: Nat) -> IO(Unit):
   (s, r) = m
   match r:
     case Fail{e}:
@@ -10449,11 +10495,11 @@ def conn_sent(m: Socket & Result<&1, &1, U32 & String, Unit>, +ln: Link, cn: S.C
 # after a QUIT, the connection closes once its replies are out; the rest
 # of what it sent is not read
 @unsafe
-def conn_quit(s: Socket, +ln: Link, +cn: S.Conn, err: Maybe<&2, String>, rest: String, need: Nat) -> IO(Unit):
+def conn_quit(s: Socket, +ln: Link, +cn: S.Conn, err: Maybe<&2, String>, rest: P.Tail, need: Nat) -> IO(Unit):
   conn_quit.if(S.conn.quit(cn), s, ln, cn, err, rest, need)
 
 @unsafe
-def conn_quit.if(quit: Bool, s: Socket, +ln: Link, cn: S.Conn, err: Maybe<&2, String>, rest: String, need: Nat) -> IO(Unit):
+def conn_quit.if(quit: Bool, s: Socket, +ln: Link, cn: S.Conn, err: Maybe<&2, String>, rest: P.Tail, need: Nat) -> IO(Unit):
   match quit:
     case True{}:
       conn_end(s, ln)
@@ -10529,7 +10575,7 @@ def conn_oops(on: Bool, s: Socket, +ln: Link, msg: String) -> IO(Unit):
         conn_drop(s, ln)
 
 @unsafe
-def conn_err(s: Socket, +ln: Link, cn: S.Conn, err: Maybe<&2, String>, rest: String, need: Nat) -> IO(Unit):
+def conn_err(s: Socket, +ln: Link, cn: S.Conn, err: Maybe<&2, String>, rest: P.Tail, need: Nat) -> IO(Unit):
   match err:
     case None{}:
       conn_loop(s, rest, Nil{}, 0n, need, ln, cn)
@@ -10583,7 +10629,7 @@ def conn_gone.p(p: Socket & Bool, +ln: Link) -> IO(Unit):
 # the replies of a Hold sent: then the watch put out (a first Hold), or
 # out already (a Hold while the client waits)
 @unsafe
-def conn_held.new(m: Socket & Result<&1, &1, U32 & String, Unit>, +ln: Link, got: List<&2, String>, have: Nat, need: Nat, err: Maybe<&2, String>, rest: String) -> IO(Unit):
+def conn_held.new(m: Socket & Result<&1, &1, U32 & String, Unit>, +ln: Link, got: List<&2, String>, have: Nat, need: Nat, err: Maybe<&2, String>, rest: P.Tail) -> IO(Unit):
   (s, r) = m
   match r:
     case Fail{e}:
@@ -10592,7 +10638,7 @@ def conn_held.new(m: Socket & Result<&1, &1, U32 & String, Unit>, +ln: Link, got
       conn_watch(s, ln, got, have, need, err, rest)
 
 @unsafe
-def conn_held.out(m: Socket & Result<&1, &1, U32 & String, Unit>, +ln: Link, got: List<&2, String>, have: Nat, need: Nat, err: Maybe<&2, String>, rest: String) -> IO(Unit):
+def conn_held.out(m: Socket & Result<&1, &1, U32 & String, Unit>, +ln: Link, got: List<&2, String>, have: Nat, need: Nat, err: Maybe<&2, String>, rest: P.Tail) -> IO(Unit):
   (s, r) = m
   match r:
     case Fail{e}:
@@ -10603,7 +10649,7 @@ def conn_held.out(m: Socket & Result<&1, &1, U32 & String, Unit>, +ln: Link, got
       conn_wait(s, ln, got, have, need, err, rest)
 
 @unsafe
-def conn_held(m: Socket & Result<&1, &1, U32 & String, Unit>, watch: Bool, +ln: Link, got: List<&2, String>, have: Nat, need: Nat, err: Maybe<&2, String>, rest: String) -> IO(Unit):
+def conn_held(m: Socket & Result<&1, &1, U32 & String, Unit>, watch: Bool, +ln: Link, got: List<&2, String>, have: Nat, need: Nat, err: Maybe<&2, String>, rest: P.Tail) -> IO(Unit):
   match watch:
     case True{}:
       conn_held.new(m, ln, got, have, need, err, rest)
@@ -10611,7 +10657,7 @@ def conn_held(m: Socket & Result<&1, &1, U32 & String, Unit>, watch: Bool, +ln: 
       conn_held.out(m, ln, got, have, need, err, rest)
 
 @unsafe
-def conn_hold(s: Socket, +ln: Link, post: Bool, watch: Bool, out: Maybe<&2, String>, got: List<&2, String>, have: Nat, need: Nat, err: Maybe<&2, String>, rest: String) -> IO(Unit):
+def conn_hold(s: Socket, +ln: Link, post: Bool, watch: Bool, out: Maybe<&2, String>, got: List<&2, String>, have: Nat, need: Nat, err: Maybe<&2, String>, rest: P.Tail) -> IO(Unit):
   match post out:
     case _ None{}:
       conn_held.on(s, watch, ln, got, have, need, err, rest)
@@ -10625,7 +10671,7 @@ def conn_hold(s: Socket, +ln: Link, post: Bool, watch: Bool, out: Maybe<&2, Stri
         conn_held(m, watch, ln, got, have, need, err, rest)
 
 @unsafe
-def conn_held.on(s: Socket, watch: Bool, +ln: Link, got: List<&2, String>, have: Nat, need: Nat, err: Maybe<&2, String>, rest: String) -> IO(Unit):
+def conn_held.on(s: Socket, watch: Bool, +ln: Link, got: List<&2, String>, have: Nat, need: Nat, err: Maybe<&2, String>, rest: P.Tail) -> IO(Unit):
   match watch:
     case True{}:
       conn_watch(s, ln, got, have, need, err, rest)
@@ -10633,7 +10679,7 @@ def conn_held.on(s: Socket, watch: Bool, +ln: Link, got: List<&2, String>, have:
       conn_wait(s, ln, got, have, need, err, rest)
 
 @unsafe
-def conn_watch(s: Socket, +ln: Link, got: List<&2, String>, have: Nat, need: Nat, err: Maybe<&2, String>, rest: String) -> IO(Unit):
+def conn_watch(s: Socket, +ln: Link, got: List<&2, String>, have: Nat, need: Nat, err: Maybe<&2, String>, rest: P.Tail) -> IO(Unit):
   match ln:
     case Link{db, +back, post, tl, id}:
       do IO<Unit>:
@@ -10641,7 +10687,7 @@ def conn_watch(s: Socket, +ln: Link, got: List<&2, String>, have: Nat, need: Nat
         conn_wait(s2, ln, got, have, need, err, rest)
 
 @unsafe
-def conn_wait(s: Socket, +ln: Link, got: List<&2, String>, have: Nat, need: Nat, err: Maybe<&2, String>, rest: String) -> IO(Unit):
+def conn_wait(s: Socket, +ln: Link, got: List<&2, String>, have: Nat, need: Nat, err: Maybe<&2, String>, rest: P.Tail) -> IO(Unit):
   match ln:
     case Link{db, +back, post, tl, id}:
       do IO<Unit>:
@@ -10649,7 +10695,7 @@ def conn_wait(s: Socket, +ln: Link, got: List<&2, String>, have: Nat, need: Nat,
         conn_woke(s, ln, m, got, have, need, err, rest)
 
 @unsafe
-def conn_woke(s: Socket, +ln: Link, m: Maybe<&1, Ans>, got: List<&2, String>, have: Nat, need: Nat, err: Maybe<&2, String>, rest: String) -> IO(Unit):
+def conn_woke(s: Socket, +ln: Link, m: Maybe<&1, Ans>, got: List<&2, String>, have: Nat, need: Nat, err: Maybe<&2, String>, rest: P.Tail) -> IO(Unit):
   match m:
     case None{}:
       conn_end(s, ln)
@@ -10674,7 +10720,7 @@ def conn_woke(s: Socket, +ln: Link, m: Maybe<&1, Ans>, got: List<&2, String>, ha
 
 # bytes that came while the client waits, kept; or its close
 @unsafe
-def conn_came.on(eof: Bool, s: Socket, +ln: Link, +x: String, got: List<&2, String>, have: Nat, +need: Nat, err: Maybe<&2, String>, rest: String) -> IO(Unit):
+def conn_came.on(eof: Bool, s: Socket, +ln: Link, +x: String, got: List<&2, String>, have: Nat, +need: Nat, err: Maybe<&2, String>, rest: P.Tail) -> IO(Unit):
   match eof:
     case True{}:
       conn_gone(s, ln)
@@ -10682,7 +10728,7 @@ def conn_came.on(eof: Bool, s: Socket, +ln: Link, +x: String, got: List<&2, Stri
       conn_watch(s, ln, x <> got, Nat.add(have, count_upto(need, x)), need, err, rest)
 
 @unsafe
-def conn_came(r: Socket & Result<&1, &1, U32 & String, String>, +ln: Link, got: List<&2, String>, have: Nat, need: Nat, err: Maybe<&2, String>, rest: String) -> IO(Unit):
+def conn_came(r: Socket & Result<&1, &1, U32 & String, String>, +ln: Link, got: List<&2, String>, have: Nat, need: Nat, err: Maybe<&2, String>, rest: P.Tail) -> IO(Unit):
   (s, x) = r
   match x:
     case Fail{e}:
@@ -10693,7 +10739,7 @@ def conn_came(r: Socket & Result<&1, &1, U32 & String, String>, +ln: Link, got: 
 # the batch's answer: the watch taken back (a Ready it put dropped), the
 # replies sent, then what came meanwhile read on, as after any batch
 @unsafe
-def conn_unwatched.drop(s: Socket, +ln: Link, out: Maybe<&2, String>, cn: S.Conn, got: List<&2, String>, have: Nat, need: Nat, err: Maybe<&2, String>, rest: String) -> IO(Unit):
+def conn_unwatched.drop(s: Socket, +ln: Link, out: Maybe<&2, String>, cn: S.Conn, got: List<&2, String>, have: Nat, need: Nat, err: Maybe<&2, String>, rest: P.Tail) -> IO(Unit):
   match ln:
     case Link{db, +back, post, tl, id}:
       do IO<Unit>:
@@ -10701,7 +10747,7 @@ def conn_unwatched.drop(s: Socket, +ln: Link, out: Maybe<&2, String>, cn: S.Conn
         conn_resume(s, ln, out, cn, got, have, need, err, rest)
 
 @unsafe
-def conn_unwatched(p: Socket & Bool, +ln: Link, out: Maybe<&2, String>, cn: S.Conn, got: List<&2, String>, have: Nat, need: Nat, err: Maybe<&2, String>, rest: String) -> IO(Unit):
+def conn_unwatched(p: Socket & Bool, +ln: Link, out: Maybe<&2, String>, cn: S.Conn, got: List<&2, String>, have: Nat, need: Nat, err: Maybe<&2, String>, rest: P.Tail) -> IO(Unit):
   (s, taken) = p
   match taken:
     case True{}:
@@ -10710,7 +10756,7 @@ def conn_unwatched(p: Socket & Bool, +ln: Link, out: Maybe<&2, String>, cn: S.Co
       conn_unwatched.drop(s, ln, out, cn, got, have, need, err, rest)
 
 @unsafe
-def conn_resume(s: Socket, +ln: Link, out: Maybe<&2, String>, cn: S.Conn, got: List<&2, String>, have: Nat, need: Nat, err: Maybe<&2, String>, rest: String) -> IO(Unit):
+def conn_resume(s: Socket, +ln: Link, out: Maybe<&2, String>, cn: S.Conn, got: List<&2, String>, have: Nat, need: Nat, err: Maybe<&2, String>, rest: P.Tail) -> IO(Unit):
   match ln out:
     case Link{db, back, post, tl, id} None{}:
       conn_after(s, ln, cn, got, have, need, err, rest)
@@ -10724,7 +10770,7 @@ def conn_resume(s: Socket, +ln: Link, out: Maybe<&2, String>, cn: S.Conn, got: L
         conn_resent(m, ln, cn, got, have, need, err, rest)
 
 @unsafe
-def conn_resent(m: Socket & Result<&1, &1, U32 & String, Unit>, +ln: Link, cn: S.Conn, got: List<&2, String>, have: Nat, need: Nat, err: Maybe<&2, String>, rest: String) -> IO(Unit):
+def conn_resent(m: Socket & Result<&1, &1, U32 & String, Unit>, +ln: Link, cn: S.Conn, got: List<&2, String>, have: Nat, need: Nat, err: Maybe<&2, String>, rest: P.Tail) -> IO(Unit):
   (s, r) = m
   match r:
     case Fail{e}:
@@ -10733,7 +10779,7 @@ def conn_resent(m: Socket & Result<&1, &1, U32 & String, Unit>, +ln: Link, cn: S
       conn_after(s, ln, cn, got, have, need, err, rest)
 
 @unsafe
-def conn_after.q(quit: Bool, s: Socket, +ln: Link, +cn: S.Conn, +got: List<&2, String>, +have: Nat, +need: Nat, err: Maybe<&2, String>, rest: String) -> IO(Unit):
+def conn_after.q(quit: Bool, s: Socket, +ln: Link, +cn: S.Conn, +got: List<&2, String>, +have: Nat, +need: Nat, err: Maybe<&2, String>, rest: P.Tail) -> IO(Unit):
   match quit err:
     case True{} _:
       conn_end(s, ln)
@@ -10743,7 +10789,7 @@ def conn_after.q(quit: Bool, s: Socket, +ln: Link, +cn: S.Conn, +got: List<&2, S
       conn_more(s, rest, got, have, need, ln, cn, Nat.is_lt(have, need))
 
 @unsafe
-def conn_after(s: Socket, +ln: Link, +cn: S.Conn, got: List<&2, String>, have: Nat, need: Nat, err: Maybe<&2, String>, rest: String) -> IO(Unit):
+def conn_after(s: Socket, +ln: Link, +cn: S.Conn, got: List<&2, String>, have: Nat, need: Nat, err: Maybe<&2, String>, rest: P.Tail) -> IO(Unit):
   conn_after.q(S.conn.quit(cn), s, ln, cn, got, have, need, err, rest)
 
 # A subscribed client
@@ -10764,7 +10810,7 @@ def conn_after(s: Socket, +ln: Link, +cn: S.Conn, got: List<&2, String>, have: N
 
 # a push before a batch's answer, written, then the wait for the answer
 @unsafe
-def conn_ans.wait(s: Socket, +ln: Link, err: Maybe<&2, String>, rest: String, need: Nat) -> IO(Unit):
+def conn_ans.wait(s: Socket, +ln: Link, err: Maybe<&2, String>, rest: P.Tail, need: Nat) -> IO(Unit):
   match ln:
     case Link{db, +back, post, tl, id}:
       do IO<Unit>:
@@ -10772,7 +10818,7 @@ def conn_ans.wait(s: Socket, +ln: Link, err: Maybe<&2, String>, rest: String, ne
         conn_ans(s, ln, got, err, rest, need)
 
 @unsafe
-def conn_pushed(m: Socket & Result<&1, &1, U32 & String, Unit>, +ln: Link, err: Maybe<&2, String>, rest: String, need: Nat) -> IO(Unit):
+def conn_pushed(m: Socket & Result<&1, &1, U32 & String, Unit>, +ln: Link, err: Maybe<&2, String>, rest: P.Tail, need: Nat) -> IO(Unit):
   (s, r) = m
   match r:
     case Fail{e}:
@@ -10781,7 +10827,7 @@ def conn_pushed(m: Socket & Result<&1, &1, U32 & String, Unit>, +ln: Link, err: 
       conn_ans.wait(s, ln, err, rest, need)
 
 @unsafe
-def conn_push(s: Socket, +ln: Link, post: Bool, out: String, err: Maybe<&2, String>, rest: String, need: Nat) -> IO(Unit):
+def conn_push(s: Socket, +ln: Link, post: Bool, out: String, err: Maybe<&2, String>, rest: P.Tail, need: Nat) -> IO(Unit):
   match post:
     case True{}:
       do IO<Unit>:
@@ -10796,7 +10842,7 @@ def conn_push(s: Socket, +ln: Link, post: Bool, out: String, err: Maybe<&2, Stri
 # connection then waits as a subscribed client while the answer says it
 # still has a subscription
 @unsafe
-def conn_sub.ans.wait(s: Socket, +ln: Link, err: Maybe<&2, String>, rest: String, need: Nat) -> IO(Unit):
+def conn_sub.ans.wait(s: Socket, +ln: Link, err: Maybe<&2, String>, rest: P.Tail, need: Nat) -> IO(Unit):
   match ln:
     case Link{db, +back, post, tl, id}:
       do IO<Unit>:
@@ -10804,7 +10850,7 @@ def conn_sub.ans.wait(s: Socket, +ln: Link, err: Maybe<&2, String>, rest: String
         conn_sub.ans(s, ln, got, err, rest, need)
 
 @unsafe
-def conn_sub.pushed(m: Socket & Result<&1, &1, U32 & String, Unit>, +ln: Link, err: Maybe<&2, String>, rest: String, need: Nat) -> IO(Unit):
+def conn_sub.pushed(m: Socket & Result<&1, &1, U32 & String, Unit>, +ln: Link, err: Maybe<&2, String>, rest: P.Tail, need: Nat) -> IO(Unit):
   (s, r) = m
   match r:
     case Fail{e}:
@@ -10813,7 +10859,7 @@ def conn_sub.pushed(m: Socket & Result<&1, &1, U32 & String, Unit>, +ln: Link, e
       conn_sub.ans.wait(s, ln, err, rest, need)
 
 @unsafe
-def conn_sub.ans.push(s: Socket, +ln: Link, post: Bool, out: String, err: Maybe<&2, String>, rest: String, need: Nat) -> IO(Unit):
+def conn_sub.ans.push(s: Socket, +ln: Link, post: Bool, out: String, err: Maybe<&2, String>, rest: P.Tail, need: Nat) -> IO(Unit):
   match post:
     case True{}:
       do IO<Unit>:
@@ -10825,7 +10871,7 @@ def conn_sub.ans.push(s: Socket, +ln: Link, post: Bool, out: String, err: Maybe<
         conn_sub.pushed(m, ln, err, rest, need)
 
 @unsafe
-def conn_sub.ans(s: Socket, +ln: Link, got: Maybe<&1, Ans>, err: Maybe<&2, String>, rest: String, need: Nat) -> IO(Unit):
+def conn_sub.ans(s: Socket, +ln: Link, got: Maybe<&1, Ans>, err: Maybe<&2, String>, rest: P.Tail, need: Nat) -> IO(Unit):
   match got:
     case Some{AnsSub{out, cn}}:
       conn_sub.put(s, ln, link.post(ln), out, cn, err, rest, need)
@@ -10837,7 +10883,7 @@ def conn_sub.ans(s: Socket, +ln: Link, got: Maybe<&1, Ans>, err: Maybe<&2, Strin
 # the answer's replies written, then the connection's end (QUIT), its
 # protocol error, or its wait as a subscribed client
 @unsafe
-def conn_sub.err(s: Socket, +ln: Link, cn: S.Conn, err: Maybe<&2, String>, rest: String, need: Nat) -> IO(Unit):
+def conn_sub.err(s: Socket, +ln: Link, cn: S.Conn, err: Maybe<&2, String>, rest: P.Tail, need: Nat) -> IO(Unit):
   match err:
     case None{}:
       conn_sub(s, rest, Nil{}, 0n, need, ln, cn)
@@ -10845,7 +10891,7 @@ def conn_sub.err(s: Socket, +ln: Link, cn: S.Conn, err: Maybe<&2, String>, rest:
       conn_oops(mute.on(S.conn.mode(cn)), s, ln, msg)
 
 @unsafe
-def conn_sub.quit.if(quit: Bool, s: Socket, +ln: Link, cn: S.Conn, err: Maybe<&2, String>, rest: String, need: Nat) -> IO(Unit):
+def conn_sub.quit.if(quit: Bool, s: Socket, +ln: Link, cn: S.Conn, err: Maybe<&2, String>, rest: P.Tail, need: Nat) -> IO(Unit):
   match quit:
     case True{}:
       conn_end(s, ln)
@@ -10853,11 +10899,11 @@ def conn_sub.quit.if(quit: Bool, s: Socket, +ln: Link, cn: S.Conn, err: Maybe<&2
       conn_sub.err(s, ln, cn, err, rest, need)
 
 @unsafe
-def conn_sub.quit(s: Socket, +ln: Link, +cn: S.Conn, err: Maybe<&2, String>, rest: String, need: Nat) -> IO(Unit):
+def conn_sub.quit(s: Socket, +ln: Link, +cn: S.Conn, err: Maybe<&2, String>, rest: P.Tail, need: Nat) -> IO(Unit):
   conn_sub.quit.if(S.conn.quit(cn), s, ln, cn, err, rest, need)
 
 @unsafe
-def conn_sub.sent(m: Socket & Result<&1, &1, U32 & String, Unit>, +ln: Link, cn: S.Conn, err: Maybe<&2, String>, rest: String, need: Nat) -> IO(Unit):
+def conn_sub.sent(m: Socket & Result<&1, &1, U32 & String, Unit>, +ln: Link, cn: S.Conn, err: Maybe<&2, String>, rest: P.Tail, need: Nat) -> IO(Unit):
   (s, r) = m
   match r:
     case Fail{e}:
@@ -10866,7 +10912,7 @@ def conn_sub.sent(m: Socket & Result<&1, &1, U32 & String, Unit>, +ln: Link, cn:
       conn_sub.quit(s, ln, cn, err, rest, need)
 
 @unsafe
-def conn_sub.put(s: Socket, +ln: Link, post: Bool, out: Maybe<&2, String>, cn: S.Conn, err: Maybe<&2, String>, rest: String, need: Nat) -> IO(Unit):
+def conn_sub.put(s: Socket, +ln: Link, post: Bool, out: Maybe<&2, String>, cn: S.Conn, err: Maybe<&2, String>, rest: P.Tail, need: Nat) -> IO(Unit):
   match post out:
     case _ None{}:
       conn_sub.quit(s, ln, cn, err, rest, need)
@@ -10882,7 +10928,7 @@ def conn_sub.put(s: Socket, +ln: Link, post: Bool, out: Maybe<&2, String>, cn: S
 # A batch of a subscribed client to the actor (SubReq), as conn_job sends
 # any batch
 @unsafe
-def conn_sub.job(live: Bool, s: Socket, +ln: Link, job: B.Job, cn: S.Conn, n: U32, +inb: Nat, raw: String, err: Maybe<&2, String>, rest: String, need: Nat) -> IO(Unit):
+def conn_sub.job(live: Bool, s: Socket, +ln: Link, job: B.Job, cn: S.Conn, n: U32, +inb: Nat, raw: String, err: Maybe<&2, String>, rest: P.Tail, need: Nat) -> IO(Unit):
   match live ln:
     case False{} Link{db, +back, post, tl, id}:
       do IO<Unit>:
@@ -10898,12 +10944,12 @@ def conn_sub.job(live: Bool, s: Socket, +ln: Link, job: B.Job, cn: S.Conn, n: U3
         conn_sub.ans(s, ln, got, err, rest, need)
 
 @unsafe
-def conn_sub.ask(s: Socket, +ln: Link, cn: S.Conn, rs: List<&2, B.Req>, tl: U32, err: Maybe<&2, String>, rest: String, need: Nat, +inb: Nat, raw: String) -> IO(Unit):
+def conn_sub.ask(s: Socket, +ln: Link, cn: S.Conn, rs: List<&2, B.Req>, tl: U32, err: Maybe<&2, String>, rest: P.Tail, need: Nat, +inb: Nat, raw: String) -> IO(Unit):
   +job = B.job(B.unzip(rs, Nil{}, Nil{}))
   conn_sub.job(live.wants(job), s, ln, job, cn, tl, inb, raw, err, rest, need)
 
 @unsafe
-def conn_sub.send(s: Socket, +ln: Link, cn: S.Conn, reqs: List<&2, B.Req>, tl: U32, err: Maybe<&2, String>, rest: String, need: Nat, +inb: Nat, raw: String) -> IO(Unit):
+def conn_sub.send(s: Socket, +ln: Link, cn: S.Conn, reqs: List<&2, B.Req>, tl: U32, err: Maybe<&2, String>, rest: P.Tail, need: Nat, +inb: Nat, raw: String) -> IO(Unit):
   match reqs:
     case Nil{}:
       conn_sub.err(s, ln, cn, err, rest, need)
@@ -10920,7 +10966,7 @@ def conn_sub.batch(s: Socket, batch: P.Batch, +inb: Nat, +ln: Link, cn: S.Conn) 
 # bytes read once the watch fired, as conn_got, conn_data and conn_more
 # take them
 @unsafe
-def conn_sub.more(s: Socket, rest: String, +got: List<&2, String>, have: Nat, need: Nat, +ln: Link, cn: S.Conn, wait: Bool) -> IO(Unit):
+def conn_sub.more(s: Socket, rest: P.Tail, +got: List<&2, String>, have: Nat, need: Nat, +ln: Link, cn: S.Conn, wait: Bool) -> IO(Unit):
   match wait:
     case True{}:
       conn_sub(s, rest, got, have, need, ln, cn)
@@ -10929,7 +10975,7 @@ def conn_sub.more(s: Socket, rest: String, +got: List<&2, String>, have: Nat, ne
       conn_sub.batch(s, parse_in(rest, got), inb, ln, cn)
 
 @unsafe
-def conn_sub.data(s: Socket, eof: Bool, +x: String, rest: String, got: List<&2, String>, have: Nat, +need: Nat, +ln: Link, cn: S.Conn) -> IO(Unit):
+def conn_sub.data(s: Socket, eof: Bool, +x: String, rest: P.Tail, got: List<&2, String>, have: Nat, +need: Nat, +ln: Link, cn: S.Conn) -> IO(Unit):
   match eof:
     case True{}:
       conn_end(s, ln)
@@ -10938,7 +10984,7 @@ def conn_sub.data(s: Socket, eof: Bool, +x: String, rest: String, got: List<&2, 
       conn_sub.more(s, rest, x <> got, h, need, ln, cn, Nat.is_lt(h, need))
 
 @unsafe
-def conn_sub.got(m: Socket & Result<&1, &1, U32 & String, String>, rest: String, got: List<&2, String>, have: Nat, need: Nat, +ln: Link, cn: S.Conn) -> IO(Unit):
+def conn_sub.got(m: Socket & Result<&1, &1, U32 & String, String>, rest: P.Tail, got: List<&2, String>, have: Nat, need: Nat, +ln: Link, cn: S.Conn) -> IO(Unit):
   (s, r) = m
   match r:
     case Fail{e}:
@@ -10953,7 +10999,7 @@ def conn_sub.end(p: Socket & Bool, +ln: Link) -> IO(Unit):
   conn_end(s, ln)
 
 @unsafe
-def conn_sub.wsent(m: Socket & Result<&1, &1, U32 & String, Unit>, rest: String, got: List<&2, String>, have: Nat, need: Nat, +ln: Link, cn: S.Conn) -> IO(Unit):
+def conn_sub.wsent(m: Socket & Result<&1, &1, U32 & String, Unit>, rest: P.Tail, got: List<&2, String>, have: Nat, need: Nat, +ln: Link, cn: S.Conn) -> IO(Unit):
   (s, r) = m
   match r:
     case Fail{e}:
@@ -10965,7 +11011,7 @@ def conn_sub.wsent(m: Socket & Result<&1, &1, U32 & String, Unit>, rest: String,
 
 # a push written while the watch waits
 @unsafe
-def conn_sub.push(s: Socket, post: Bool, out: String, rest: String, got: List<&2, String>, have: Nat, need: Nat, +ln: Link, cn: S.Conn) -> IO(Unit):
+def conn_sub.push(s: Socket, post: Bool, out: String, rest: P.Tail, got: List<&2, String>, have: Nat, need: Nat, +ln: Link, cn: S.Conn) -> IO(Unit):
   match post:
     case True{}:
       do IO<Unit>:
@@ -10977,7 +11023,7 @@ def conn_sub.push(s: Socket, post: Bool, out: String, rest: String, got: List<&2
         conn_sub.wsent(m, rest, got, have, need, ln, cn)
 
 @unsafe
-def conn_sub.woke(s: Socket, m: Maybe<&1, Ans>, rest: String, got: List<&2, String>, have: Nat, need: Nat, +ln: Link, cn: S.Conn) -> IO(Unit):
+def conn_sub.woke(s: Socket, m: Maybe<&1, Ans>, rest: P.Tail, got: List<&2, String>, have: Nat, need: Nat, +ln: Link, cn: S.Conn) -> IO(Unit):
   match m:
     case Some{Ready{}}:
       do IO<Unit>:
@@ -10993,7 +11039,7 @@ def conn_sub.woke(s: Socket, m: Maybe<&1, Ans>, rest: String, got: List<&2, Stri
         conn_sub.end(p, ln)
 
 @unsafe
-def conn_sub.wait(s: Socket, rest: String, got: List<&2, String>, have: Nat, need: Nat, +ln: Link, cn: S.Conn) -> IO(Unit):
+def conn_sub.wait(s: Socket, rest: P.Tail, got: List<&2, String>, have: Nat, need: Nat, +ln: Link, cn: S.Conn) -> IO(Unit):
   match ln:
     case Link{db, +back, post, tl, id}:
       do IO<Unit>:
@@ -11001,7 +11047,7 @@ def conn_sub.wait(s: Socket, rest: String, got: List<&2, String>, have: Nat, nee
         conn_sub.woke(s, m, rest, got, have, need, ln, cn)
 
 @unsafe
-def conn_sub(s: Socket, rest: String, got: List<&2, String>, have: Nat, need: Nat, +ln: Link, cn: S.Conn) -> IO(Unit):
+def conn_sub(s: Socket, rest: P.Tail, got: List<&2, String>, have: Nat, need: Nat, +ln: Link, cn: S.Conn) -> IO(Unit):
   match ln:
     case Link{db, +back, post, tl, id}:
       do IO<Unit>:
@@ -11012,7 +11058,7 @@ def conn_sub(s: Socket, rest: String, got: List<&2, String>, have: Nat, need: Na
 # batch: its answer's replies written once the watch is taken back, then
 # what came meanwhile read on as a subscribed client
 @unsafe
-def conn_sub.after.q(quit: Bool, s: Socket, +ln: Link, +cn: S.Conn, +got: List<&2, String>, +have: Nat, +need: Nat, err: Maybe<&2, String>, rest: String) -> IO(Unit):
+def conn_sub.after.q(quit: Bool, s: Socket, +ln: Link, +cn: S.Conn, +got: List<&2, String>, +have: Nat, +need: Nat, err: Maybe<&2, String>, rest: P.Tail) -> IO(Unit):
   match quit err:
     case True{} _:
       conn_end(s, ln)
@@ -11022,11 +11068,11 @@ def conn_sub.after.q(quit: Bool, s: Socket, +ln: Link, +cn: S.Conn, +got: List<&
       conn_sub.more(s, rest, got, have, need, ln, cn, Nat.is_lt(have, need))
 
 @unsafe
-def conn_sub.after(s: Socket, +ln: Link, +cn: S.Conn, got: List<&2, String>, have: Nat, need: Nat, err: Maybe<&2, String>, rest: String) -> IO(Unit):
+def conn_sub.after(s: Socket, +ln: Link, +cn: S.Conn, got: List<&2, String>, have: Nat, need: Nat, err: Maybe<&2, String>, rest: P.Tail) -> IO(Unit):
   conn_sub.after.q(S.conn.quit(cn), s, ln, cn, got, have, need, err, rest)
 
 @unsafe
-def conn_sub.resent(m: Socket & Result<&1, &1, U32 & String, Unit>, +ln: Link, cn: S.Conn, got: List<&2, String>, have: Nat, need: Nat, err: Maybe<&2, String>, rest: String) -> IO(Unit):
+def conn_sub.resent(m: Socket & Result<&1, &1, U32 & String, Unit>, +ln: Link, cn: S.Conn, got: List<&2, String>, have: Nat, need: Nat, err: Maybe<&2, String>, rest: P.Tail) -> IO(Unit):
   (s, r) = m
   match r:
     case Fail{e}:
@@ -11035,7 +11081,7 @@ def conn_sub.resent(m: Socket & Result<&1, &1, U32 & String, Unit>, +ln: Link, c
       conn_sub.after(s, ln, cn, got, have, need, err, rest)
 
 @unsafe
-def conn_sub.resume(s: Socket, +ln: Link, out: Maybe<&2, String>, cn: S.Conn, got: List<&2, String>, have: Nat, need: Nat, err: Maybe<&2, String>, rest: String) -> IO(Unit):
+def conn_sub.resume(s: Socket, +ln: Link, out: Maybe<&2, String>, cn: S.Conn, got: List<&2, String>, have: Nat, need: Nat, err: Maybe<&2, String>, rest: P.Tail) -> IO(Unit):
   match ln out:
     case Link{db, back, post, tl, id} None{}:
       conn_sub.after(s, ln, cn, got, have, need, err, rest)
@@ -11049,7 +11095,7 @@ def conn_sub.resume(s: Socket, +ln: Link, out: Maybe<&2, String>, cn: S.Conn, go
         conn_sub.resent(m, ln, cn, got, have, need, err, rest)
 
 @unsafe
-def conn_sub.unwatched.drop(s: Socket, +ln: Link, out: Maybe<&2, String>, cn: S.Conn, got: List<&2, String>, have: Nat, need: Nat, err: Maybe<&2, String>, rest: String) -> IO(Unit):
+def conn_sub.unwatched.drop(s: Socket, +ln: Link, out: Maybe<&2, String>, cn: S.Conn, got: List<&2, String>, have: Nat, need: Nat, err: Maybe<&2, String>, rest: P.Tail) -> IO(Unit):
   match ln:
     case Link{db, +back, post, tl, id}:
       do IO<Unit>:
@@ -11057,7 +11103,7 @@ def conn_sub.unwatched.drop(s: Socket, +ln: Link, out: Maybe<&2, String>, cn: S.
         conn_sub.resume(s, ln, out, cn, got, have, need, err, rest)
 
 @unsafe
-def conn_sub.unwatched(p: Socket & Bool, +ln: Link, out: Maybe<&2, String>, cn: S.Conn, got: List<&2, String>, have: Nat, need: Nat, err: Maybe<&2, String>, rest: String) -> IO(Unit):
+def conn_sub.unwatched(p: Socket & Bool, +ln: Link, out: Maybe<&2, String>, cn: S.Conn, got: List<&2, String>, have: Nat, need: Nat, err: Maybe<&2, String>, rest: P.Tail) -> IO(Unit):
   (s, taken) = p
   match taken:
     case True{}:
@@ -11077,9 +11123,9 @@ def conn_sub.unwatched(p: Socket & Bool, +ln: Link, out: Maybe<&2, String>, cn: 
 def conn_start.of(m: Maybe<&1, Ans>, s: Socket, +ln: Link, +id: Nat) -> IO(Unit):
   match m:
     case Some{Ans{o, cn}}:
-      conn_loop(s, SNil{}, Nil{}, 0n, 1n, ln, cn)
+      conn_loop(s, P.TailNone{}, Nil{}, 0n, 1n, ln, cn)
     case _:
-      conn_loop(s, SNil{}, Nil{}, 0n, 1n, ln, S.conn_new(id))
+      conn_loop(s, P.TailNone{}, Nil{}, 0n, 1n, ln, S.conn_new(id))
 
 # the connection's client joins the actor's registry (Join: its socket's
 # fd and addresses, TCP.name) before its first batch, which waits for the
@@ -13474,7 +13520,7 @@ def aof_shut.end(ok: Bool, +force: Bool, +ok1: Bool, +srv: S.Srv, outs: List<&2,
     case False{} False{}:
       do IO<Unit>:
         Unit <- down.cant(down.lg(srv, rw))
-        aof_group(grp.saved(ok1, List.reverse(&2, Sigma<&2, &2, Chan(Ans), _ => Ans>, outs), S.srv.rw.stop(srv), ds, ws, tx, pb), sel, rw.with(rw, None{}), f, sync, reqs)
+        aof_group(grp.saved.down(ok1, List.reverse(&2, Sigma<&2, &2, Chan(Ans), _ => Ans>, outs), S.srv.rw.stop(srv), ds, ws, tx, pb), sel, rw.with(rw, None{}), f, sync, reqs)
 
 @unsafe
 def aof_shut.go(p: S.Srv & Bool, +force: Bool, outs: List<&2, Sigma<&2, &2, Chan(Ans), _ => Ans>>, +ds: R.Ds, +sel: Nat, ws: Waits, tx: Tx, pb: Ps, +rw: Rw, f: File, +sync: Sync, +reqs: Chan(Req)) -> IO(Unit):
@@ -14616,16 +14662,16 @@ def fn.start.made(r: Bool & String, +lg: Log, +at: Nat) -> IO(Unit):
       fn.start.fail(D.fl.short(at, [D.FLine{3, "Failed loading library, " ++ fn.start.why(s)}]), lg)
 
 @unsafe
-def fn.start.rdb(+lg: Log, +len: Nat, libs: List<&2, D.FLib>) -> IO(Unit):
+def fn.start.rdb(+lg: Log, libs: List<&2, D.FLib>) -> IO(Unit):
   match libs:
     case Nil{}:
       IO.pure(Unit, Unit{})
-    case Con{D.FLib{code, +left}, rest}:
+    case Con{D.FLib{code, +at}, rest}:
       do IO<Unit>:
         st : L.Step <- L.Engine.fload(sc.array([code]), 0)
         r : Bool & String <- fn.start.run(st, lg)
-        Unit <- fn.start.made(r, lg, Nat.sub(len, String.length(left)))
-        fn.start.rdb(lg, len, rest)
+        Unit <- fn.start.made(r, lg, at)
+        fn.start.rdb(lg, rest)
 
 # the actor's state at its start: the mirror of the functions the start
 # made, and INFO's facts of them
@@ -15158,6 +15204,25 @@ def grp.saved.of(p: Waits & (List<&2, Up> & S.Srv), outs: List<&2, Sigma<&2, &2,
 def grp.saved(+ok: Bool, outs: List<&2, Sigma<&2, &2, Chan(Ans), _ => Ans>>, srv: S.Srv, ds: R.Ds, +ws: Waits, tx: Tx, pb: Ps) -> Grp:
   grp.saved.of(waits.saved(ws, waits.saving(ws), ok, WaitNone{}, Nil{}, srv), outs, ds, tx, pb)
 
+# a SHUTDOWN's save failed: as grp.saved, and then the clients its save
+# held back (down.holds) go on after them, in the order they came; but
+# while a pause holds, they wait for its end, as the pause's own do
+def saved.free(p: Waits & List<&2, Up>, srv: S.Srv) -> Waits & (List<&2, Up> & S.Srv):
+  (ws, up) = p
+  (ws, (up, srv))
+
+def grp.saved.free(on: Bool, p: Waits & (List<&2, Up> & S.Srv), outs: List<&2, Sigma<&2, &2, Chan(Ans), _ => Ans>>, ds: R.Ds, tx: Tx, pb: Ps) -> Grp:
+  match on:
+    case True{}:
+      grp.saved.of(p, outs, ds, tx, pb)
+    case False{}:
+      (+ws, q) = p
+      (up, srv) = q
+      grp.saved.of(saved.free(waits.unpause(ws, waits.held(ws), WaitNone{}, up), srv), outs, ds, tx, pb)
+
+def grp.saved.down(+ok: Bool, outs: List<&2, Sigma<&2, &2, Chan(Ans), _ => Ans>>, srv: S.Srv, ds: R.Ds, +ws: Waits, tx: Tx, +pb: Ps) -> Grp:
+  grp.saved.free(pz.on(ps.pz(pb)), waits.saved(ws, waits.saving(ws), ok, WaitNone{}, Nil{}, srv), outs, ds, tx, pb)
+
 # The start: without an append-only file (and not in the short form), the
 # file loaded, as loadDataFromDisk loads it: a file not there is empty
 # databases; one that cannot be opened stops the start, as one that does
@@ -15196,10 +15261,10 @@ def rdb.log(+lg: Log, ls: List<&2, D.FLine>) -> IO(Unit):
         Unit <- log(lg, level, msg)
         rdb.log(lg, rest)
 
-# (len: the file's length; the libraries are made before the load's last
-# line, Done loading RDB, as Redis makes each as it reads it)
+# (the libraries are made before the load's last line, Done loading RDB,
+# as Redis makes each as it reads it)
 @unsafe
-def rdb.loaded(d: D.FLd, +t0: Nat, +lg: Log, info: I.Info, +more: Nat, +len: Nat) -> IO(R.Ds & I.Info):
+def rdb.loaded(d: D.FLd, +t0: Nat, +lg: Log, info: I.Info, +more: Nat) -> IO(R.Ds & I.Info):
   match d:
     case D.FFail{ls}:
       do IO<R.Ds & I.Info>:
@@ -15208,44 +15273,85 @@ def rdb.loaded(d: D.FLd, +t0: Nat, +lg: Log, info: I.Info, +more: Nat, +len: Nat
     case D.FOk{dbs, +ld, +ex, em, libs, +ls, sm}:
       do IO<R.Ds & I.Info>:
         Unit <- rdb.log(lg, List.reverse(&2, D.FLine, List.drop(&2, D.FLine, ls, 1n)))
-        Unit <- fn.start.rdb(lg, len, libs)
+        Unit <- fn.start.rdb(lg, libs)
         Unit <- rdb.log(lg, List.take(&2, D.FLine, ls, 1n))
         t1 : Nat <- IO.now()
         Unit <- log(lg, 2, "DB loaded from disk: " ++ secs3(Nat.sub(t1, t0)) ++ " seconds")
         IO.pure(R.Ds & I.Info, (rdb.ds(dbs, more), I.info.rdb.loaded(info, ld, ex)))
 
-# the file's bytes, read until a read comes back empty; a read that fails
-# stops the start as a short read does
-@unsafe
-def rdb.read(f: File, got: List<&2, String>, +lg: Log) -> IO(File & String):
-  do IO<File & String>:
-    p : File & Result<&1, &1, U32 & String, String> <- File.read_raw(f, 16777216)
-    rdb.read.more(p, got, lg)
+# The file read in windows (issue #107): 1 MiB at a time, or as many bytes
+# as the window held when a value runs past it (the window doubles), so
+# that the start holds a window and the databases it fills, not the file
+# (the heap gives no memory back: a file read whole stayed resident). A
+# window's bytes the load has gone past go into the CRC64 before the next
+# one is read; its last bytes, up to EOF, once the load is done.
+def rdb.window() -> Nat:
+  1048576n
+
+def rdb.w.size(+left: Nat) -> U32:
+  U32.from_nat(Nat.max(rdb.window(), left))
+
+def rdb.w.crc(sum: Bool, +k: Nat, +w: String, c: D.C) -> D.C:
+  match sum:
+    case True{}:
+      D.crc.k(k, w, c)
+    case False{}:
+      c
 
 @unsafe
-def rdb.read.more(p: File & Result<&1, &1, U32 & String, String>, got: List<&2, String>, +lg: Log) -> IO(File & String):
+def rdb.w.more(eof: Bool, +x: String, f: File, r: D.FR, fail: D.FLd, c: D.C, +left: String, +base: Nat, +llen: Nat, +sum: Bool, +t0: Nat, +lg: Log, info: I.Info, +more: Nat) -> IO(R.Ds & I.Info):
+  match eof:
+    case True{}:
+      do IO<R.Ds & I.Info>:
+        Unit <- File.close(f)
+        rdb.loaded(fail, t0, lg, info, more)
+    case False{}:
+      +xlen = String.length(x)
+      +w = left ++ x
+      rdb.w.went(D.file.next(r, w, Nat.add(llen, xlen), xlen), f, c, w, base, Nat.add(llen, xlen), sum, t0, lg, info, more)
+
+@unsafe
+def rdb.w.read(p: File & Result<&1, &1, U32 & String, String>, r: D.FR, fail: D.FLd, c: D.C, +left: String, +base: Nat, +llen: Nat, +sum: Bool, +t0: Nat, +lg: Log, info: I.Info, +more: Nat) -> IO(R.Ds & I.Info):
+  (f, q) = p
+  match q:
+    case Fail{e}:
+      log.die(R.Ds & I.Info, lg, "Short read or OOM loading DB. Unrecoverable error, aborting now.")
+    case Done{+x}:
+      rdb.w.more(String.is_empty(x), x, f, r, fail, c, left, base, llen, sum, t0, lg, info, more)
+
+# the load s on the window w (wlen bytes, at the file's offset base), the
+# CRC64 of the bytes before it c
+@unsafe
+def rdb.w.went(s: D.FS, f: File, c: D.C, +w: String, +base: Nat, +wlen: Nat, +sum: Bool, +t0: Nat, +lg: Log, info: I.Info, +more: Nat) -> IO(R.Ds & I.Info):
+  match s:
+    case D.FEnd{d}:
+      do IO<R.Ds & I.Info>:
+        Unit <- File.close(f)
+        rdb.loaded(D.file.checked(d, c, w, base), t0, lg, info, more)
+    case D.FMore{+r, fail}:
+      +left = D.file.left(r)
+      +llen = String.length(left)
+      +used = Nat.sub(wlen, llen)
+      do IO<R.Ds & I.Info>:
+        p : File & Result<&1, &1, U32 & String, String> <- File.read_raw(f, rdb.w.size(llen))
+        rdb.w.read(p, r, fail, rdb.w.crc(sum, used, w, c), left, Nat.add(base, used), llen, sum, t0, lg, info, more)
+    case D.FGo{r}:
+      do IO<R.Ds & I.Info>:
+        Unit <- File.close(f)
+        rdb.loaded(D.file.end(D.FGo{r}), t0, lg, info, more)
+
+@unsafe
+def rdb.w.first(p: File & Result<&1, &1, U32 & String, String>, +t0: Nat, +lg: Log, +items: List<&2, C.CItem>, info: I.Info, +more: Nat) -> IO(R.Ds & I.Info):
   (f, r) = p
   match r:
     case Fail{e}:
-      log.die(File & String, lg, "Short read or OOM loading DB. Unrecoverable error, aborting now.")
+      log.die(R.Ds & I.Info, lg, "Short read or OOM loading DB. Unrecoverable error, aborting now.")
     case Done{+x}:
-      rdb.read.next(f, String.is_empty(x), x, got, lg)
-
-@unsafe
-def rdb.read.next(f: File, eof: Bool, x: String, got: List<&2, String>, +lg: Log) -> IO(File & String):
-  match eof:
-    case True{}:
-      IO.pure(File & String, (f, glue(got, SNil{})))
-    case False{}:
-      rdb.read(f, x <> got, lg)
-
-@unsafe
-def rdb.start.read(p: File & String, +t0: Nat, +lg: Log, +items: List<&2, C.CItem>, info: I.Info, +more: Nat) -> IO(R.Ds & I.Info):
-  (f, +s) = p
-  do IO<R.Ds & I.Info>:
-    Unit <- File.close(f)
-    t : U32 & U32 <- IO.clock()
-    rdb.loaded(D.file.load(s, 1n+more, clock.ms(t), String.eq(T.cfg(items, "rdbchecksum"), "yes")), t0, lg, info, more, String.length(s))
+      +xlen = String.length(x)
+      +sum = String.eq(T.cfg(items, "rdbchecksum"), "yes")
+      do IO<R.Ds & I.Info>:
+        t : U32 & U32 <- IO.clock()
+        rdb.w.went(D.file.first(x, xlen, 1n+more, clock.ms(t), sum), f, D.C{0, 0}, x, 0n, xlen, sum, t0, lg, info, more)
 
 @unsafe
 def rdb.start.none(none: Bool, +msg: String, +lg: Log, info: I.Info, +more: Nat) -> IO(R.Ds & I.Info):
@@ -15264,8 +15370,8 @@ def rdb.start.open(m: Result<&1, &1, U32 & String, File>, +lg: Log, +items: List
     case Done{f}:
       do IO<R.Ds & I.Info>:
         t0 : Nat <- IO.now()
-        p : File & String <- rdb.read(f, Nil{}, lg)
-        rdb.start.read(p, t0, lg, items, info, more)
+        p : File & Result<&1, &1, U32 & String, String> <- File.read_raw(f, U32.from_nat(rdb.window()))
+        rdb.w.first(p, t0, lg, items, info, more)
 
 # the databases at the start (1 + more of them), and the server's facts
 # with the keys the load loaded and found expired

@@ -632,12 +632,13 @@ def srv.live(s: Srv, l: I.Live) -> Srv:
     case Srv{pass, cfg, info, mm}:
       Srv{pass, cfg, I.info.live(info, l), mm}
 
-# the heap's used bytes as the actor read them (I.info.heap); and new
-# facts from the shell that leave that reading as it is
-def srv.heap(s: Srv, +h: Nat) -> Srv:
+# the heap's used and active bytes as the actor read them
+# (I.info.heap); and new facts from the shell that leave that reading as
+# it is
+def srv.heap(s: Srv, +h: Nat, +ac: Nat) -> Srv:
   match s:
     case Srv{pass, cfg, info, mm}:
-      Srv{pass, cfg, I.info.heap(info, h), mm}
+      Srv{pass, cfg, I.info.heap(info, h, ac), mm}
 
 def srv.live.held(s: Srv, l: I.Live) -> Srv:
   match s:
@@ -1816,10 +1817,12 @@ def obj.wide.ok(+w: Nat, +l: Nat) -> Bool:
 
 def obj.hash.enc(+h: KV.Hash, +cfg: List<&2, C.CItem>) -> String:
   match h:
-    case KV.HSmall{+n, +ps}:
-      Bool.pick(String, Bool.and(Nat.is_le(n, cfg.nat(cfg, "hash-max-listpack-entries")), obj.wide.ok(KV.hps.widest(ps, 0n), cfg.nat(cfg, "hash-max-listpack-value"))), "listpack", "hashtable")
+    case KV.HSmall{+n, +b}:
+      Bool.pick(String, Bool.and(Nat.is_le(n, cfg.nat(cfg, "hash-max-listpack-entries")), obj.wide.ok(KV.hb.widest(n, b, 0n, 0n), cfg.nat(cfg, "hash-max-listpack-value"))), "listpack", "hashtable")
     case KV.HBig{n, t}:
       "hashtable"
+    case KV.HLong{+n, +ps}:
+      Bool.pick(String, Bool.and(Nat.is_le(n, cfg.nat(cfg, "hash-max-listpack-entries")), obj.wide.ok(KV.hl.widest(ps, 0n), cfg.nat(cfg, "hash-max-listpack-value"))), "listpack", "hashtable")
 
 def obj.mems.enc(+m: KV.Mems, +cfg: List<&2, C.CItem>) -> String:
   match m:

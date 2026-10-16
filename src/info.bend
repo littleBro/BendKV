@@ -508,7 +508,8 @@ def stats.reset(st: Stats) -> Stats:
 # calls that ran (the refused ones do not run) takes an equal share: s =
 # d / n, and one us more for d mod n of them. Its runs then go with those
 # not yet counted: a run into the newest of them (cur) when it has its
-# code, or else in its place, cur going before the others (pend).
+# code, or else in its place, cur joining the run of its code among the
+# others (pend), or going last (truns.put).
 
 # the calls of run r that ran
 def run.ran(+r: Nat) -> Nat:
@@ -606,7 +607,8 @@ def timed.put(+t: TRun, p: TRun & List<&2, TRun>) -> TRun & List<&2, TRun>:
 # run r timed, its calls having taken u us (k of them s us each, x of
 # them one more, for the histogram while latency-tracking is on, trk):
 # into cur when it has cur's code, its counts added to cur's histogram,
-# else in cur's place, cur going before the others (pend)
+# else in cur's place, cur joining the run of its code in pend, or going
+# last (truns.put)
 def timed.add(same: Bool, +r: Nat, +u: Nat, +trk: Bool, +s: Nat, +k: Nat, +x: Nat, cur: TRun, pend: List<&2, TRun>) -> TRun & List<&2, TRun>:
   match same cur:
     case True{} TRun{r0, u0, h0}:
@@ -678,13 +680,36 @@ def stats.view(+st: Stats) -> List<&2, Ent>:
     case Stats{+es, +fresh, +cur, +pend, errs, total}:
       stats.runs(truns.merge(fresh.truns(fresh, cur <> pend), Nil{}), es)
 
+# whether a run holds 2^31 calls or more: from 2^32 its count would carry
+# into its code (R.run.of)
+def trun.full(+t: TRun) -> Bool:
+  match t:
+    case TRun{+r, u, h}:
+      Nat.is_lt(2147483647n, R.run.n(r))
+    case TRunOf{+t0}:
+      trun.full(t0)
+
+def stats.full(+st: Stats) -> Bool:
+  match st:
+    case Stats{es, fresh, +cur, pend, errs, total}:
+      trun.full(cur)
+
 # the runs timed counted in the entries but the newest (the cron's tick),
 # which goes on taking the runs of its code (its histogram is not merged
-# into its entry's at every tick); the window's wait for its timing
-def stats.fold(st: Stats) -> Stats:
-  match st:
-    case Stats{es, fresh, cur, pend, errs, total}:
+# into its entry's at every tick) until it holds 2^31 calls (full): it is
+# counted then, and cur starts again. A tick every 100 ms counts it long
+# before 2^32, which one command alone reaches in 72 minutes at a million
+# calls a second. The window's wait for its timing.
+def stats.fold.at(full: Bool, st: Stats) -> Stats:
+  match full st:
+    case False{} Stats{es, fresh, cur, pend, errs, total}:
       Stats{stats.runs(truns.merge(pend, Nil{}), es), fresh, cur, Nil{}, errs, total}
+    case True{} Stats{es, fresh, cur, pend, errs, total}:
+      Stats{stats.runs(truns.merge(cur <> pend, Nil{}), es), fresh, trun.zero(), Nil{}, errs, total}
+
+def stats.fold(st: Stats) -> Stats:
+  +s = st
+  stats.fold.at(stats.full(s), s)
 
 # Commandstats and Errorstats, as INFO writes them
 def ent.name(+e: Ent) -> String:
@@ -2039,26 +2064,28 @@ def info.live(i: Info, +l: Live) -> Info:
     case IInfo{b, old, c, inst, pk, c0, a0, a, st, ex, rw, tm, rf}:
       IInfo{b, live.keep(l, old), c, inst, Nat.max(pk, live.heap(l)), c0, a0, a, st, ex, rw, tm, rf}
 
-# the heap's used bytes as the actor read them (IO.heap, before a group
-# and after each key an eviction freed: the server's mem.run), which with
-# maxmemory INFO shows, as Redis's INFO and performEvictions read one
-# counter (zmalloc_used_memory); the peak follows
-def live.heap.at(l: Live, +h: Nat) -> Live:
+# the heap's used bytes as the actor read them, and what the heap has
+# taken (IO.heap, before a group and after each key an eviction freed: the
+# server's mem.run), which with maxmemory INFO shows, as Redis's INFO and
+# performEvictions read one counter (zmalloc_used_memory): its
+# allocator_active and the ratios read with it at the same moment; the
+# peak follows
+def live.heap.at(l: Live, +h: Nat, +ac: Nat) -> Live:
   match l:
     case ILive{secs, usec, ut, st, mut, mst, rss, heap, act, conns, clients, cn}:
-      ILive{secs, usec, ut, st, mut, mst, rss, h, act, conns, clients, cn}
+      ILive{secs, usec, ut, st, mut, mst, rss, h, ac, conns, clients, cn}
 
-def info.heap(i: Info, +h: Nat) -> Info:
+def info.heap(i: Info, +h: Nat, +ac: Nat) -> Info:
   match i:
     case IInfo{b, l, c, inst, pk, c0, a0, a, st, ex, rw, tm, rf}:
-      IInfo{b, live.heap.at(l, h), c, inst, Nat.max(pk, h), c0, a0, a, st, ex, rw, tm, rf}
+      IInfo{b, live.heap.at(l, h, ac), c, inst, Nat.max(pk, h), c0, a0, a, st, ex, rw, tm, rf}
 
 # new facts from the shell, the heap's reading left for the actor's own
 # (info.heap), which the eviction went by
 def info.live.held(i: Info, +l: Live) -> Info:
   match i:
     case IInfo{b, +old, c, inst, pk, c0, a0, a, st, ex, rw, tm, rf}:
-      IInfo{b, live.heap.at(live.keep(l, old), live.heap(old)), c, inst, pk, c0, a0, a, st, ex, rw, tm, rf}
+      IInfo{b, live.heap.at(live.keep(l, old), live.heap(old), live.act(old)), c, inst, pk, c0, a0, a, st, ex, rw, tm, rf}
 
 # the clients that wait, n of them, t of them with a timeout
 def info.blocked(i: Info, +n: Nat, +t: Nat) -> Info:

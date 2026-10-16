@@ -69,9 +69,11 @@
 # runs. Last, the RDB file (tests/rdb_test.py): files Redis wrote (with
 # LZF and without) and files of the encodings Redis no longer writes,
 # BendKV and Redis started from each; BendKV's SAVE, Redis started from
-# it; SAVE, LASTSAVE, INFO and the saves of FLUSHALL and SHUTDOWN against
-# Redis's; files that do not load, each stopping both starts; libraries
-# of functions in the file, both ways.
+# it; files read in windows (values longer than a window, cuts and a
+# wrong checksum past the first one, and the resident memory after the
+# start); SAVE, LASTSAVE, INFO and the saves of FLUSHALL and SHUTDOWN
+# against Redis's; files that do not load, each stopping both starts;
+# libraries of functions in the file, both ways.
 set -e
 cd "$(dirname "$0")/.."
 PORT=${PORT:-6380}

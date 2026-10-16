@@ -1349,7 +1349,7 @@ def all.ints(xs: List<&2, String>) -> Bool:
 def val.hash.of(small: Bool, +n: Nat, ps: List<&2, KV.HPair>, t: KV.Trie<String>) -> KV.Val:
   match small:
     case True{}:
-      KV.VColl{KV.CHash{KV.HSmall{n, ps}}}
+      KV.VColl{KV.CHash{KV.hash.of(n, ps)}}
     case False{}:
       KV.VColl{KV.CHash{KV.HBig{n, t}}}
 
@@ -2014,8 +2014,10 @@ def hps.words(ps: List<&2, KV.HPair>) -> List<&2, String>:
 
 def put.hash(h: KV.Hash, rest: String) -> String:
   match h:
-    case KV.HSmall{+n, ps}:
-      put.blob(lp.blob(hps.words(ps), Nat.mul(2n, n)), rest)
+    case KV.HSmall{+n, +b}:
+      put.blob(lp.blob(hps.words(KV.hb.pairs(n, b, 0n)), Nat.mul(2n, n)), rest)
+    case KV.HLong{+n, +ps}:
+      put.blob(lp.blob(hps.words(KV.hl.pairs(ps)), Nat.mul(2n, n)), rest)
     case KV.HBig{+n, +t}:
       len.put(n, put.strs(hps.words(KV.hash.kv(t, KV.keys(String, t, 0n))), rest))
 
@@ -2147,10 +2149,12 @@ def put.body(v: KV.Val, rest: String) -> String:
 # (2), a sorted set in a listpack (17) or in a skiplist (5)
 def put.hash.kind(+h: KV.Hash) -> U32:
   match h:
-    case KV.HSmall{n, ps}:
+    case KV.HSmall{n, b}:
       16
     case KV.HBig{n, t}:
       4
+    case KV.HLong{n, ps}:
+      16
 
 def put.mems.kind(+m: KV.Mems) -> U32:
   match m:
@@ -2555,10 +2559,10 @@ type FSum is Data:
   FSumZero{}
   FSumAt{n: Nat, hi: Nat, lo: Nat}
 
-# a library of functions a load read: its code, and the bytes left after
-# it (where a start that cannot make it says the load stopped)
+# a library of functions a load read: its code, and the file's offset
+# after it (where a start that cannot make it says the load stopped)
 type FLib is Data:
-  FLib{code: String, left: String}
+  FLib{code: String, at: Nat}
 
 # what a load came to: the databases, in order, the keys loaded, those
 # dropped as their time had passed and those skipped as empty, the
@@ -2795,10 +2799,14 @@ def ft.secs(+u: Nat, +now: Nat) -> FT:
 type FR is Data:
   FR{left: String, k: FK, dbs: FDs, exp: FT, n: FN, ls: List<&2, FLine>}
 
-# a step of a load: on, or done
+# a step of a load: on, or done, or out of bytes: the load as it was
+# before the step, to run again once more of the file is there (the
+# start reads it in windows: file.next), and fail, what the load comes
+# to when the file has no more
 type FS is Data:
   FGo{r: FR}
   FEnd{d: FLd}
+  FMore{r: FR, fail: FLd}
 
 # The offset of a step's first byte: the file's length less what is left
 # of it, worked out only for a line that names it (a load that fails) or
@@ -2813,6 +2821,26 @@ def fat.n(a: FAt) -> Nat:
     case FAt{+len, +left}:
       Nat.sub(len, String.length(left))
 
+def fat.left(+a: FAt) -> String:
+  match a:
+    case FAt{len, +left}:
+      left
+
+# the offset of t, the bytes left after a step at a
+def fat.to(+a: FAt, +t: String) -> Nat:
+  match a:
+    case FAt{+len, left}:
+      Nat.sub(len, String.length(t))
+
+# a step at at that ran out of bytes: the load as it was before it, and
+# fail
+def fl.more(+at: FAt, k: FK, dbs: FDs, exp: FT, n: FN, ls: List<&2, FLine>, fail: FLd) -> FS:
+  FMore{FR{fat.left(at), k, dbs, exp, n, ls}, fail}
+
+# the same, its read come short (fl.short) at the step's first byte
+def fl.short.at(+at: FAt, k: FK, dbs: FDs, exp: FT, n: FN, +ls: List<&2, FLine>) -> FS:
+  fl.more(at, k, dbs, exp, n, ls, fl.short(fat.n(at), ls))
+
 # The steps of a load: each reads an opcode and what follows it
 
 # an opcode's bytes skipped (IDLE, FREQ, RESIZEDB's second length)
@@ -2822,7 +2850,7 @@ def fl.skip(m: Maybe<&1, Nat & String>, +at: FAt, k: FK, dbs: FDs, exp: FT, n: F
       (x, t) = p
       FGo{FR{t, k, dbs, exp, n, ls}}
     case None{}:
-      FEnd{fl.short(fat.n(at), ls)}
+      fl.short.at(at, k, dbs, exp, n, ls)
 
 def fl.resize(m: Maybe<&1, Nat & String>, +at: FAt, k: FK, dbs: FDs, exp: FT, n: FN, ls: List<&2, FLine>) -> FS:
   match m:
@@ -2830,7 +2858,7 @@ def fl.resize(m: Maybe<&1, Nat & String>, +at: FAt, k: FK, dbs: FDs, exp: FT, n:
       (x, t) = p
       fl.skip(rd.num(t), at, k, dbs, exp, n, ls)
     case None{}:
-      FEnd{fl.short(fat.n(at), ls)}
+      fl.short.at(at, k, dbs, exp, n, ls)
 
 def fl.aux.v(+name: String, m: Maybe<&1, String & String>, +at: FAt, +k: FK, dbs: FDs, exp: FT, n: FN, ls: List<&2, FLine>) -> FS:
   match m:
@@ -2838,7 +2866,7 @@ def fl.aux.v(+name: String, m: Maybe<&1, String & String>, +at: FAt, +k: FK, dbs
       (+v, t) = p
       FGo{FR{t, k, dbs, exp, n, fl.aux.log(name, v, fk.now(k), ls)}}
     case None{}:
-      FEnd{fl.short(fat.n(at), ls)}
+      fl.short.at(at, k, dbs, exp, n, ls)
 
 def fl.aux(m: Maybe<&1, String & String>, +at: FAt, k: FK, dbs: FDs, exp: FT, n: FN, ls: List<&2, FLine>) -> FS:
   match m:
@@ -2846,31 +2874,31 @@ def fl.aux(m: Maybe<&1, String & String>, +at: FAt, k: FK, dbs: FDs, exp: FT, n:
       (+name, t) = p
       fl.aux.v(name, rd.str(t), at, k, dbs, exp, n, ls)
     case None{}:
-      FEnd{fl.short(fat.n(at), ls)}
+      fl.short.at(at, k, dbs, exp, n, ls)
 
-def fl.ms.hi(+lo: Nat, m: Maybe<&1, Nat & String>, +at: FAt, +k: FK, dbs: FDs, n: FN, ls: List<&2, FLine>) -> FS:
+def fl.ms.hi(+lo: Nat, m: Maybe<&1, Nat & String>, +at: FAt, +k: FK, dbs: FDs, exp: FT, n: FN, ls: List<&2, FLine>) -> FS:
   match m:
     case Some{p}:
       (+hi, t) = p
       FGo{FR{t, k, dbs, ft.ms(hi, lo, fk.now(k)), n, ls}}
     case None{}:
-      FEnd{fl.short(fat.n(at), ls)}
+      fl.short.at(at, k, dbs, exp, n, ls)
 
-def fl.ms(m: Maybe<&1, Nat & String>, +at: FAt, k: FK, dbs: FDs, n: FN, ls: List<&2, FLine>) -> FS:
+def fl.ms(m: Maybe<&1, Nat & String>, +at: FAt, k: FK, dbs: FDs, exp: FT, n: FN, ls: List<&2, FLine>) -> FS:
   match m:
     case Some{p}:
       (+lo, t) = p
-      fl.ms.hi(lo, rd.le(4n, t, 1n, 0n), at, k, dbs, n, ls)
+      fl.ms.hi(lo, rd.le(4n, t, 1n, 0n), at, k, dbs, exp, n, ls)
     case None{}:
-      FEnd{fl.short(fat.n(at), ls)}
+      fl.short.at(at, k, dbs, exp, n, ls)
 
-def fl.secs(m: Maybe<&1, Nat & String>, +at: FAt, +k: FK, dbs: FDs, n: FN, ls: List<&2, FLine>) -> FS:
+def fl.secs(m: Maybe<&1, Nat & String>, +at: FAt, +k: FK, dbs: FDs, exp: FT, n: FN, ls: List<&2, FLine>) -> FS:
   match m:
     case Some{p}:
       (+u, t) = p
       FGo{FR{t, k, dbs, ft.secs(u, fk.now(k)), n, ls}}
     case None{}:
-      FEnd{fl.short(fat.n(at), ls)}
+      fl.short.at(at, k, dbs, exp, n, ls)
 
 # SELECTDB: a database past the server's stops the load, as Redis exits
 def fl.focus(m: Maybe<&2, FDs>, +count: Nat, t: String, k: FK, exp: FT, n: FN, ls: List<&2, FLine>) -> FS:
@@ -2886,7 +2914,7 @@ def fl.select(m: Maybe<&1, Nat & String>, +at: FAt, k: FK, +dbs: FDs, exp: FT, n
       (+j, t) = p
       fl.focus(fds.pick(j, Nil{}, fds.list(dbs)), fds.count(dbs), t, k, exp, n, ls)
     case None{}:
-      FEnd{fl.short(fat.n(at), ls)}
+      fl.short.at(at, k, dbs, exp, n, ls)
 
 # A key read with its value: kept, the time it has (exp) given, unless
 # that time has passed; a key a database holds already stops the load
@@ -2916,14 +2944,14 @@ def fl.put(exp: FT, +key: String, v: KV.Val, t: String, k: FK, dbs: FDs, n: FN, 
 def fl.empty.log(+key: String, +em: Nat, +ls: List<&2, FLine>) -> List<&2, FLine>:
   Bool.pick(List<&2, FLine>, Nat.is_lt(em, 10n), fl.line(3, "rdbLoadObject skipping empty key: " ++ key, ls), ls)
 
-def fl.val(r: Vr, +op: Nat, +key: String, +at: FAt, k: FK, dbs: FDs, exp: FT, +n: FN, ls: List<&2, FLine>) -> FS:
+def fl.val(r: Vr, +op: Nat, +key: String, +at: FAt, k: FK, dbs: FDs, exp: FT, +n: FN, +ls: List<&2, FLine>) -> FS:
   match r:
     case VrVal{v, t}:
       fl.put(exp, key, v, t, k, dbs, n, ls)
     case VrEmpty{t}:
       FGo{FR{t, k, dbs, FTNone{}, fn.empty(n), fl.empty.log(key, fn.em(n), ls)}}
     case VrBad{}:
-      FEnd{FFail{fl.line(3, "Internal error in RDB reading offset " ++ Nat.show(fat.n(at)) ++ " -> the value of key '" ++ key ++ "' (type " ++ Nat.show(op) ++ ") is cut short, or not one Redis writes", fl.line(3, "Short read or OOM loading DB. Unrecoverable error, aborting now.", ls))}}
+      fl.more(at, k, dbs, exp, n, ls, FFail{fl.line(3, "Internal error in RDB reading offset " ++ Nat.show(fat.n(at)) ++ " -> the value of key '" ++ key ++ "' (type " ++ Nat.show(op) ++ ") is cut short, or not one Redis writes", fl.line(3, "Short read or OOM loading DB. Unrecoverable error, aborting now.", ls))})
 
 # what BendKV makes of a value's type: 0 one it reads (0 to 5, 9 to 14, 16
 # to 18), 1 a module's value (6, 7), 2 a stream (15, 19), 3 none
@@ -2948,7 +2976,7 @@ def fl.key(m: Maybe<&1, String & String>, +op: Nat, +at: FAt, k: FK, dbs: FDs, e
       (+key, t) = p
       fl.kind(fl.tk(op), op, key, t, at, k, dbs, exp, n, ls)
     case None{}:
-      FEnd{fl.short(fat.n(at), ls)}
+      fl.short.at(at, k, dbs, exp, n, ls)
 
 # EOF: the load is done; from version 5 on, the CRC64 after it is read,
 # to be checked (fl.checked) over the bytes up to EOF, with it
@@ -2964,43 +2992,53 @@ def fl.sum(sum: Bool, +n: Nat, +hi: Nat, +lo: Nat) -> FSum:
     case True{}:
       Bool.pick(FSum, Bool.and(Nat.is_eq(hi, 0n), Nat.is_eq(lo, 0n)), FSumZero{}, FSumAt{n, hi, lo})
 
-def fl.crc.hi(+lo: Nat, m: Maybe<&1, Nat & String>, +at: FAt, +sum: Bool, dbs: FDs, n: FN, ls: List<&2, FLine>) -> FS:
+def fk.ver(+k: FK) -> Nat:
+  match k:
+    case FK{len, +ver, now, sum}:
+      ver
+
+def fk.sum(+k: FK) -> Bool:
+  match k:
+    case FK{len, ver, now, +sum}:
+      sum
+
+def fl.crc.hi(+lo: Nat, m: Maybe<&1, Nat & String>, +at: FAt, +k: FK, dbs: FDs, exp: FT, n: FN, +ls: List<&2, FLine>) -> FS:
   match m:
     case Some{p}:
       (+hi, t) = p
-      FEnd{fl.done(dbs, n, ls, fl.sum(sum, Nat.add(fat.n(at), 1n), hi, lo))}
+      FEnd{fl.done(dbs, n, ls, fl.sum(fk.sum(k), Nat.add(fat.n(at), 1n), hi, lo))}
     case None{}:
-      FEnd{fl.short(Nat.add(fat.n(at), 1n), ls)}
+      fl.more(at, k, dbs, exp, n, ls, fl.short(Nat.add(fat.n(at), 1n), ls))
 
-def fl.crc(m: Maybe<&1, Nat & String>, +at: FAt, +sum: Bool, dbs: FDs, n: FN, ls: List<&2, FLine>) -> FS:
+def fl.crc(m: Maybe<&1, Nat & String>, +at: FAt, k: FK, dbs: FDs, exp: FT, n: FN, +ls: List<&2, FLine>) -> FS:
   match m:
     case Some{p}:
       (+lo, t) = p
-      fl.crc.hi(lo, rd.le(4n, t, 1n, 0n), at, sum, dbs, n, ls)
+      fl.crc.hi(lo, rd.le(4n, t, 1n, 0n), at, k, dbs, exp, n, ls)
     case None{}:
-      FEnd{fl.short(Nat.add(fat.n(at), 1n), ls)}
+      fl.more(at, k, dbs, exp, n, ls, fl.short(Nat.add(fat.n(at), 1n), ls))
 
-def fl.eof.v(old: Bool, t: String, +at: FAt, +sum: Bool, dbs: FDs, n: FN, ls: List<&2, FLine>) -> FS:
+def fl.eof.v(old: Bool, t: String, +at: FAt, k: FK, dbs: FDs, exp: FT, n: FN, ls: List<&2, FLine>) -> FS:
   match old:
     case True{}:
       FEnd{fl.done(dbs, n, ls, FSumNone{})}
     case False{}:
-      fl.crc(rd.le(4n, t, 1n, 0n), at, sum, dbs, n, ls)
+      fl.crc(rd.le(4n, t, 1n, 0n), at, k, dbs, exp, n, ls)
 
-def fl.eof(t: String, +at: FAt, k: FK, dbs: FDs, n: FN, ls: List<&2, FLine>) -> FS:
-  match k:
-    case FK{len, +ver, now, +sum}:
-      fl.eof.v(Nat.is_lt(ver, 5n), t, at, sum, dbs, n, ls)
+def fl.eof(t: String, +at: FAt, +k: FK, dbs: FDs, exp: FT, n: FN, ls: List<&2, FLine>) -> FS:
+  fl.eof.v(Nat.is_lt(fk.ver(k), 5n), t, at, k, dbs, exp, n, ls)
 
 # a library of functions read (FUNCTION2 or FUNCTION) and kept; one that
-# does not read stops the load as rdbLoadRio's eoferr does, after Redis's
-# line
-def fl.lib(r: LibR, +at: FAt, k: FK, dbs: FDs, exp: FT, n: FN, ls: List<&2, FLine>) -> FS:
+# does not read (each of its reads comes short) waits for the file's next
+# window, and stops a load that has none as rdbLoadRio's eoferr does,
+# after Redis's line
+def fl.lib(r: LibR, +at: FAt, k: FK, dbs: FDs, exp: FT, n: FN, +ls: List<&2, FLine>) -> FS:
   match r:
     case LibOk{c, +t}:
-      FGo{FR{t, k, dbs, exp, fn.lib(FLib{c, t}, n), ls}}
+      +o = fat.to(at, t)
+      FGo{FR{t, k, dbs, exp, fn.lib(FLib{c, o}, n), ls}}
     case LibBad{e}:
-      FEnd{fl.short(fat.n(at), fl.line(3, "Failed loading library, " ++ e, ls))}
+      fl.more(at, k, dbs, exp, n, ls, fl.short(fat.n(at), fl.line(3, "Failed loading library, " ++ e, ls)))
 
 # an opcode (op, of code c: 0 a value's type, 1 FUNCTION2, 2 FUNCTION, 3
 # MODULE_AUX, 4 IDLE, 5 FREQ, 6 AUX, 7 RESIZEDB, 8 EXPIRETIME_MS, 9
@@ -3024,13 +3062,13 @@ def fl.code(c: Nat, +op: Nat, t: String, +at: FAt, k: FK, dbs: FDs, exp: FT, n: 
     case 7n:
       fl.resize(rd.num(t), at, k, dbs, exp, n, ls)
     case 8n:
-      fl.ms(rd.le(4n, t, 1n, 0n), at, k, dbs, n, ls)
+      fl.ms(rd.le(4n, t, 1n, 0n), at, k, dbs, exp, n, ls)
     case 9n:
-      fl.secs(rd.le(4n, t, 1n, 0n), at, k, dbs, n, ls)
+      fl.secs(rd.le(4n, t, 1n, 0n), at, k, dbs, exp, n, ls)
     case 10n:
       fl.select(rd.num(t), at, k, dbs, exp, n, ls)
     case _:
-      fl.eof(t, at, k, dbs, n, ls)
+      fl.eof(t, at, k, dbs, exp, n, ls)
 
 def fl.op(m: Maybe<&1, Nat & String>, +at: FAt, k: FK, dbs: FDs, exp: FT, n: FN, ls: List<&2, FLine>) -> FS:
   match m:
@@ -3038,7 +3076,7 @@ def fl.op(m: Maybe<&1, Nat & String>, +at: FAt, k: FK, dbs: FDs, exp: FT, n: FN,
       (+op, t) = p
       fl.code(Bool.pick(Nat, Nat.is_lt(op, 245n), 0n, Nat.sub(op, 244n)), op, t, at, k, dbs, exp, n, ls)
     case None{}:
-      FEnd{fl.short(fat.n(at), ls)}
+      fl.short.at(at, k, dbs, exp, n, ls)
 
 def fk.len(+k: FK) -> Nat:
   match k:
@@ -3050,15 +3088,18 @@ def fl.step(r: FR) -> FS:
     case FR{+left, +k, dbs, exp, n, ls}:
       fl.op(rd.u8(left), FAt{fk.len(k), left}, k, dbs, exp, n, ls)
 
-# each step reads a byte at least: the file's length and one is fuel enough
-def fl.run(f: Nat, s: FS) -> FLd:
+# each step reads a byte at least: the bytes there and one are fuel enough
+# for the steps they hold; the run ends, or stops for more bytes
+def fl.run(f: Nat, s: FS) -> FS:
   match f s:
     case 1n+g FGo{r}:
       fl.run(g, fl.step(r))
     case _ FEnd{d}:
-      d
+      FEnd{d}
+    case _ FMore{r, fail}:
+      FMore{r, fail}
     case 0n FGo{r}:
-      FFail{[FLine{3, "Short read or OOM loading DB. Unrecoverable error, aborting now."}]}
+      FEnd{FFail{[FLine{3, "Short read or OOM loading DB. Unrecoverable error, aborting now."}]}}
 
 # The start of a file: "REDIS" and the version
 def fl.version.ok(ok: Bool, +neg: Bool, +v: Nat, s: String, +len: Nat, dbs: FDs, +now: Nat, +sum: Bool) -> FS:
@@ -3099,10 +3140,13 @@ def fl.crc.cmp(c: C, +n: Nat, +hi: Nat, +lo: Nat, dbs: List<&2, FDb>, +ld: Nat, 
     case C{+ch, +cl}:
       fl.crc.ok(Bool.and(Nat.is_eq(U32.to_nat(ch), hi), Nat.is_eq(U32.to_nat(cl), lo)), hex.q(U32.to_nat(ch), U32.to_nat(cl)), hex.q(hi, lo), n, dbs, ld, ex, em, libs, ls)
 
-def fl.checked(d: FLd, +s: String) -> FLd:
+# a load's end checked against its CRC64: c the CRC of the bytes before w,
+# which starts at the file's offset base (0 for a whole file, as SAVE's
+# reads it; the start's last window otherwise)
+def file.checked(d: FLd, c: C, +w: String, +base: Nat) -> FLd:
   match d:
     case FOk{dbs, +ld, +ex, +em, libs, ls, FSumAt{+n, +hi, +lo}}:
-      fl.crc.cmp(crc.k(n, s, C{0, 0}), n, hi, lo, dbs, ld, ex, em, libs, ls)
+      fl.crc.cmp(crc.k(Nat.sub(n, base), w, c), n, hi, lo, dbs, ld, ex, em, libs, ls)
     case FOk{dbs, +ld, +ex, +em, libs, ls, FSumZero{}}:
       fl.fin(dbs, ld, ex, em, libs, fl.line(3, "RDB file was saved with checksum disabled: no check performed.", ls))
     case FOk{dbs, +ld, +ex, +em, libs, ls, FSumNone{}}:
@@ -3110,8 +3154,43 @@ def fl.checked(d: FLd, +s: String) -> FLd:
     case FFail{ls}:
       FFail{ls}
 
-# the file s loaded into ndb databases (one at least), at now (ms since
-# 1970), its CRC64 checked when sum (rdbchecksum yes)
+# what a run of the whole file comes to: its end, or what the load fails
+# with when a step needs bytes the file has not
+def file.end(s: FS) -> FLd:
+  match s:
+    case FEnd{d}:
+      d
+    case FMore{r, fail}:
+      fail
+    case FGo{r}:
+      FFail{[FLine{3, "Short read or OOM loading DB. Unrecoverable error, aborting now."}]}
+
+# the first bytes w (wlen of them) of a file loaded into ndb databases (one
+# at least), at now (ms since 1970), its CRC64 checked when sum
+# (rdbchecksum yes), run as far as they go
+def file.first(+w: String, +wlen: Nat, +ndb: Nat, +now: Nat, +sum: Bool) -> FS:
+  fl.run(Nat.add(wlen, 1n), fl.magic(Bool.pick(Nat, Nat.is_lt(wlen, 9n), 0n, Bool.pick(Nat, String.eq(String.take(w, 5n), "REDIS"), 2n, 1n)), w, wlen, FDs{fdb.empty(), Nil{}, fds.empties(Nat.sub(ndb, 1n))}, now, sum))
+
+# The load of a file in windows (the start's): the bytes a load stopped
+# for more left (file.left), and the load run again on w, those bytes then
+# the next window's xlen (wlen in all), its file's length so far grown by
+# xlen
+def file.left(+r: FR) -> String:
+  match r:
+    case FR{+left, k, dbs, exp, n, ls}:
+      left
+
+def fk.grow(k: FK, +x: Nat) -> FK:
+  match k:
+    case FK{+len, ver, now, sum}:
+      FK{Nat.add(len, x), ver, now, sum}
+
+def file.next(r: FR, +w: String, +wlen: Nat, +xlen: Nat) -> FS:
+  match r:
+    case FR{left, k, dbs, exp, n, ls}:
+      fl.run(Nat.add(wlen, 1n), FGo{FR{w, fk.grow(k, xlen), dbs, exp, n, ls}})
+
+# the file s, read whole, loaded
 def file.load(+s: String, +ndb: Nat, +now: Nat, +sum: Bool) -> FLd:
   +len = String.length(s)
-  fl.checked(fl.run(Nat.add(len, 1n), fl.magic(Bool.pick(Nat, Nat.is_lt(len, 9n), 0n, Bool.pick(Nat, String.eq(String.take(s, 5n), "REDIS"), 2n, 1n)), s, len, FDs{fdb.empty(), Nil{}, fds.empties(Nat.sub(ndb, 1n))}, now, sum)), s)
+  file.checked(file.end(file.first(s, len, ndb, now, sum)), C{0, 0}, s, 0n)
