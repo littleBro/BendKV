@@ -25,8 +25,9 @@ The scenarios:
    (%.17g), pcall's error table and pcall(redis.call, ...)'s plain
    message, the commands a script may not call (EVAL, MULTI, SUBSCRIBE,
    BLPOP, which Redis 7.0.15 refuses rather than run without blocking),
-   the blocking ones it may (BLMPOP and BZMPOP, which do not wait), and
-   SELECT in a script, which leaves the caller's database as it was.
+   the blocking ones it may (BLMPOP and BZMPOP, which do not wait),
+   SELECT in a script, which leaves the caller's database as it was, and
+   SORT of a set by a constant, which Redis sorts with ALPHA for a script.
 3. Error texts: runtime errors, compile errors, a global not there, a
    write to a global (the globals are read only), error() with a table,
    with a number, a boolean or nothing, and the suffix "script: <sha>,
@@ -415,6 +416,15 @@ def calls(port, log):
         ev(c, "return redis.call('GET', KEYS[1])", [k("str")]), ev(c, "return redis.call('SELECT', 99)"),
         ev(c, "return redis.pcall('SELECT', 'x')"), ev(c, "redis.call('SELECT', '0') return redis.call('SELECT', 9)"),
         c.cmd("GET", k("str")))
+    # SORT of a set by a constant from a script: sorted with ALPHA, as
+    # Redis sorts it then (a list keeps its order)
+    sset = [k("sset")]
+    log("2 sort keys", r.cmd("SADD", k("sset"), "pear", "apple", "fig", "10", "2", "banana"))
+    log("2 sort", ev(c, "return redis.call('SORT', KEYS[1], 'BY', 'nosort')", sset),
+        ev(c, "return redis.call('SORT', KEYS[1], 'BY', 'nosort', 'DESC', 'LIMIT', '1', '3')", sset),
+        ev(c, "return redis.call('SORT_RO', KEYS[1], 'BY', 'nosort', 'ALPHA')", sset),
+        ev(c, "return redis.call('SORT', KEYS[1], 'BY', 'nosort', 'GET', '#')", sset),
+        ev(c, "return redis.call('SORT', KEYS[1], 'BY', 'nosort')", [k("list")]))
     c.close()
     r.close()
 

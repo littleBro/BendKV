@@ -9433,11 +9433,41 @@ def sc.run.call.av(+c: R.Cmd, +code: Nat, +back: Chan(Ans), +a: Av, l: LRun) -> 
 def sc.run.call(+c: R.Cmd, +code: Nat, +back: Chan(Ans), +raw: String, l: LRun) -> LRun:
   sc.run.call.av(c, code, back, AvRaw{raw, 0n}, l)
 
+# SORT of a set by a constant (no sort), called from a script: sorted by
+# its elements with ALPHA, as Redis's sortCommand sorts a script's call
+# (CLIENT_SCRIPT) as it sorts one with STORE (redis.bend: sort.by.of), so
+# that a replica gets the same order where a set's own order is the
+# server's
+def sc.set.is(m: Maybe<&2, KV.Val>) -> Bool:
+  match m:
+    case Some{KV.VColl{KV.CMems{s}}}:
+      True{}
+    case _:
+      False{}
+
+def sc.sort.of(set: Bool, c: R.Cmd) -> R.Cmd:
+  match set c:
+    case True{} R.Sort{k, R.SortO{R.SByNone{}, off, cnt, gs, desc, alpha}}:
+      R.Sort{k, R.SortO{R.SByElem{}, off, cnt, gs, desc, True{}}}
+    case _ c0:
+      c0
+
+def sc.sort.at(c: R.Cmd, +d: R.Db) -> R.Cmd:
+  match c:
+    case R.Sort{+k, o}:
+      sc.sort.of(sc.set.is(KV.read(KV.Val, R.db.trie(d), k, R.db.now(d))), R.Sort{k, o})
+    case c0:
+      c0
+
+def sc.sort(c: R.Cmd, +d: R.Ds) -> R.Cmd:
+  sc.sort.at(c, R.ds.focused(d))
+
 def sc.batch(+c: R.Cmd, +code: Nat, +r3: Bool, +raw: String, sc: Sc, g: Grp) -> Sc & (Grp & String):
   match sc g:
     case Sc{w, +back, cn, es0, t0, cf, ro, aoom, sha, ex} Grp{outs, es, srv, ds, ws, up, tx, pb}:
       +c0 = sc.conn.r3(r3, cn)
-      sc.batch.of(sc.run.call(c, code, back, raw, LRun{Nil{}, es, c0, srv, R.ds.focus(S.conn.db(c0), ds), ws, up, tx.front(0n, tx), pb}), outs, w, back, es0, t0, cf, ro, aoom, sha, ex)
+      +fd = R.ds.focus(S.conn.db(c0), ds)
+      sc.batch.of(sc.run.call(sc.sort(c, fd), code, back, raw, LRun{Nil{}, es, c0, srv, fd, ws, up, tx.front(0n, tx), pb}), outs, w, back, es0, t0, cf, ro, aoom, sha, ex)
     case ScOf{x} g0:
       sc.batch(c, code, r3, raw, x, g0)
 
