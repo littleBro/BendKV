@@ -5867,8 +5867,10 @@ def bg.unblock(+n: Nat, +err: Bool, +code: Nat, g: LRun) -> LRun:
 # rewrite ends (BGSAVE: Background saves); or refuse a command its
 # client's user may not run (in MULTI, flagging the transaction), log its
 # client in (AUTH, HELLO), or run a subcommand of ACL that reaches the
-# clients (ACL); a command that does not run (after a QUIT, or before the
-# client authenticates) runs as the session runs it.
+# clients (ACL); or answer an XREAD with BLOCK that would wait, as BendKV
+# blocks on no stream yet (in MULTI it does not wait: the session answers
+# it a null array, as Redis does); a command that does not run (after a
+# QUIT, or before the client authenticates) runs as the session runs it.
 type Sh is Data:
   ShRun{}
   ShWait{b: S.Blk}
@@ -5904,6 +5906,7 @@ type Sh is Data:
   ShAuth{}
   ShHello{}
   ShAcl{k: Nat}
+  ShNoBlock{}
 
 def sh.blk(b: S.Blk, +ds: R.Ds) -> Sh:
   +x = b
@@ -6012,6 +6015,8 @@ def sh.plain(+c: R.Cmd, +code: Nat, +ds: R.Ds) -> Sh:
       ShFlush{}
     case R.Own{R.SAcl{+k, a}}:
       sh.acl(k)
+    case R.Own{R.SXRead{q}}:
+      Bool.pick(Sh, R.xread.waits(q, R.ds.focused(ds)), ShNoBlock{}, ShRun{})
     case R.Own{R.SBad{R.RError{+m}}}:
       sh.abort.if(Nat.is_eq(R.code.key(code), R.stat.top(162n)), m)
     case _:
@@ -8718,6 +8723,8 @@ def bg.cmd(+id: Nat, +back: Chan(Ans), +inb: Nat, sh: Sh, +c: R.Cmd, +code: Nat,
       bg.hello(id, c, code, inb, a, None{}, g)
     case ShAcl{+k}:
       bg.acl.op(id, k, c, code, g)
+    case ShNoBlock{}:
+      bg.say(R.RError{"ERR BendKV does not block on streams yet"}, code, g)
 
 # the word a request of hash h leaves in its key's word w under an LFU
 # policy, at the minute min, r its random number
