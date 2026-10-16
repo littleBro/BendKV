@@ -152,7 +152,12 @@ def cases(rnd):
     add("set of 512 integers", True, [cmd("SADD", "k", *[str(i * 7) for i in range(512)])])
     add("set of 513 integers", False, [cmd("SADD", "k", *[str(i * 7) for i in range(513)])])
     add("set of strings", False, [cmd("SADD", "k", "a", "b", "1")])
-    add("set shrunk from 64 bits", False, [cmd("SADD", "k", "1", "2", "5000000000"), cmd("SREM", "k", "5000000000")])
+    add("set shrunk from 64 bits", True, [cmd("SADD", "k", "1", "2", "5000000000"), cmd("SREM", "k", "5000000000")])
+    add("set grown from 16 to 32 bits, a negative", True, [cmd("SADD", "k", "1", "-2", "300"), cmd("SADD", "k", "-70000")])
+    add("set grown from 16 to 64 bits, a positive", True, [cmd("SADD", "k", "1", "-2", "300"), cmd("SADD", "k", "9223372036854775807")])
+    add("set of 512 integers of 64 bits", True, [cmd("SADD", "k", *[str(i * 36028797018963 - 9223372036854775808) for i in range(512)])])
+    add("set of 512 integers emptied but one", True, [cmd("SADD", "k", *[str(i * 1000003 - 256000000) for i in range(512)]),
+                                                      cmd("SREM", "k", *[str(i * 1000003 - 256000000) for i in range(511)])])
     add("set of 10 strings", False, [cmd("SADD", "k", *["m%07d" % i for i in range(10)])])
     add("set of 128 strings of 64 bytes", False, [cmd("SADD", "k", *[("m%07d" % i) * 8 for i in range(128)])])
     add("set of 129 strings", False, [cmd("SADD", "k", *["m%07d" % i for i in range(129)])])

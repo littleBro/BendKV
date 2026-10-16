@@ -120,24 +120,27 @@ type Hash is Data:
 type Deq is Data:
   Deq{nf: Nat, f: List<&2, String>, nb: Nat, b: List<&2, String>}
 
-# An intset's members (Mems, below) in increasing order, as a
-# weight-balanced tree: a tip, or a node of n members, its member x after
-# those of l and before those of r (Sets, below)
-type ITree is Data:
-  ITip{}
-  IBin{n: Nat, x: String, l: ITree, r: ITree}
+# An integer of an intset (Sets, below): its sign, and its magnitude's
+# high and low 32 bits; and a key, an integer's bits in some width with
+# its sign's turned over (h is 0 for a width of 2 or 4 bytes)
+type IVal is Data:
+  IVal{neg: Bool, hi: Nat, lo: Nat}
+
+type IKey is Data:
+  IKey{h: Nat, l: Nat}
 
 # A set, as Redis 7.0 keeps one: one whose members all read as 64-bit
 # integers in the form Redis writes them (ints.ok), at most
-# set-max-intset-entries of them (512), as the tree of its n members in
-# increasing order (an intset: SMEMBERS answers them so); any other as a
+# set-max-intset-entries of them (512), as the string of its n members in
+# increasing order, each in as many bytes as the widest needs (an intset:
+# SMEMBERS answers them so); any other as a
 # hashtable, in no order, which it stays: while it is small (n members,
 # at most 128, each of at most 64 bytes) as the string of its members in
 # the order they came (as Redis 7.2's listpack holds a small set), in
 # pieces of one buffer each past one buffer (MLong), else as a trie of
 # its members, for good (Sets, below)
 type Mems is Data:
-  MInts{n: Nat, tr: ITree}
+  MInts{n: Nat, b: String}
   MBig{n: Nat, t: Trie<Unit>}
   MSmall{n: Nat, b: String}
   MLong{n: Nat, ps: List<&2, MPiece>}
@@ -2367,10 +2370,10 @@ def deq.of(+n: Nat, xs: List<&2, String>) -> Deq:
 
 # Sets
 # ----
-# A set's members (Mems, above): a small set of integers is a tree of
-# its members in increasing order, a small set of other members the
-# string of its members in the order they came, any other a trie of its
-# members, each with no time. Redis 7.0 keeps a set as an intset while
+# A set's members (Mems, above): a small set of integers is the string
+# of its members in increasing order, as Redis's intset, a small set of
+# other members the string of its members in the order they came, any
+# other a trie of its members, each with no time. Redis 7.0 keeps a set as an intset while
 # its members all read as 64-bit integers and they are at most
 # set-max-intset-entries (512), as a hashtable from the first write that
 # passes either, for good. BendKV turns an intset into a hashtable at
@@ -2412,320 +2415,346 @@ def ints.ok.of(+s: String, +n: Nat, +a: Nat) -> Bool:
 def ints.ok(+s: String) -> Bool:
   ints.ok.of(s, String.length(s), Bool.pick(Nat, U32.is_eq(String.code_at(s, 0n), 45), 1n, 0n))
 
-# An intset's tree (ITree, above) is weight-balanced, as a sorted set's
-# is (Sorted sets, below): a member is found, added or taken out in
-# O(log n) steps, each a compare of two integers (ints.cmp), and the
-# member at a rank is found as well (SRANDMEMBER, SPOP). Redis's intset
-# finds a member by binary search, and moves the ones after it to add or
-# take out one.
+# An intset's string (MInts, above) holds its n members as Redis's intset
+# holds them (intset.c, without its header of 8 bytes): each an integer
+# of w bytes, two's complement, the low byte first, in increasing order;
+# w (2, 4 or 8) is the width the widest member needed, so the string's
+# length over n. A member wider than the others makes them all as wide
+# (Redis's intsetUpgradeAndAdd: it is then the least or the greatest),
+# and a member taken out leaves the width as it was, as Redis leaves it.
+# A member is found by halves (is.find, as intsetSearch finds one), each
+# step a compare of two keys: an integer's bits with its sign's turned
+# over, so that keys compare as the integers do, 64 bits in two halves of
+# 32 (a Nat stops at 2^48). An add or a deletion makes the string anew in
+# one buffer. 512 members of 8 bytes take 4,096 bytes, two buffers: a
+# read past the first walks to the second (Hashes, above).
 
-# how integers a and b (of ints.ok) compare, c how their numbers of
-# digits do: by their bytes when as many (as memcmp orders them,
-# String.order: a digit's byte is in the digit's order)
-def ints.cmp.of(c: Cmp, +a: String, +b: String) -> Cmp:
-  match c:
-    case EQ{}:
-      String.order(a, b)
-    case LT{}:
-      LT{}
-    case GT{}:
-      GT{}
+# 2^32 (a literal stops at 2^32 - 1)
+def ints.two32() -> Nat:
+  Nat.mul(65536n, 65536n)
 
-# na and nb whether a and b are negative: one that is comes first; two
-# that are not by their numbers of digits (no leading zero) and then
-# bytes, two that are the other way
-def ints.cmp.sign(na: Bool, nb: Bool, +a: String, +b: String) -> Cmp:
-  match na nb:
-    case True{} False{}:
-      LT{}
-    case False{} True{}:
-      GT{}
-    case False{} False{}:
-      ints.cmp.of(Nat.cmp(String.length(a), String.length(b)), a, b)
-    case True{} True{}:
-      ints.cmp.of(Nat.cmp(String.length(b), String.length(a)), b, a)
+def iv.small(+neg: Bool, +m: Nat) -> IVal:
+  IVal{neg, Nat.div(m, ints.two32()), Nat.mod(m, ints.two32())}
 
-# how integer a compares with integer b (both of ints.ok)
-def ints.cmp(+a: String, +b: String) -> Cmp:
-  ints.cmp.sign(U32.is_eq(String.code_at(a, 0n), 45), U32.is_eq(String.code_at(b, 0n), 45), a, b)
+# the magnitude x * 10^9 + y (x below 10^10, y below 10^9) in its halves:
+# x in three limbs of 16 bits, each times 10^9 below 2^46, and the carries
+# up through the low half's two limbs
+def iv.join(+neg: Bool, +x: Nat, +y: Nat) -> IVal:
+  +p0 = Nat.add(Nat.mul(Nat.mod(x, 65536n), 1000000000n), y)
+  +p1 = Nat.add(Nat.mul(Nat.mod(Nat.div(x, 65536n), 65536n), 1000000000n), Nat.div(p0, 65536n))
+  +hi = Nat.add(Nat.mul(Nat.div(x, ints.two32()), 1000000000n), Nat.div(p1, 65536n))
+  IVal{neg, hi, Nat.add(Nat.mul(Nat.mod(p1, 65536n), 65536n), Nat.mod(p0, 65536n))}
 
-def it.size(+t: ITree) -> Nat:
-  match t:
-    case ITip{}:
-      0n
-    case IBin{n, x, l, r}:
-      n
-
-# the size of t's left side (0 for a tip)
-def it.lsize(+t: ITree) -> Nat:
-  match t:
-    case ITip{}:
-      0n
-    case IBin{n, x, +l, r}:
-      it.size(l)
-
-def it.bin(+x: String, +l: ITree, +r: ITree) -> ITree:
-  IBin{Nat.add(Nat.add(it.size(l), it.size(r)), 1n), x, l, r}
-
-# how integer m compares with t's root (GT for a tip)
-def it.at(+t: ITree, +m: String) -> Cmp:
-  match t:
-    case ITip{}:
-      GT{}
-    case IBin{n, +x, l, r}:
-      ints.cmp(m, x)
-
-# A node of x between l and r, rebalanced after an insertion or a
-# deletion on one side, as a sorted set's (zt.balance, below).
-
-# r is the larger side
-def it.dbll(+x: String, l: ITree, +rx: String, rr: ITree, rl: ITree) -> ITree:
-  match rl:
-    case ITip{}:
-      it.bin(rx, it.bin(x, l, ITip{}), rr)
-    case IBin{n, +y, +yl, +yr}:
-      it.bin(y, it.bin(x, l, yl), it.bin(rx, yr, rr))
-
-def it.rotl.of(single: Bool, +x: String, l: ITree, +rx: String, rl: ITree, rr: ITree) -> ITree:
-  match single:
+def iv.of.pick(small: Bool, +neg: Bool, +s: String, +a: Nat, +d: Nat) -> IVal:
+  match small:
     case True{}:
-      it.bin(rx, it.bin(x, l, rl), rr)
+      iv.small(neg, String.dec_at(s, a, d))
     case False{}:
-      it.dbll(x, l, rx, rr, rl)
+      +k = Nat.sub(d, 9n)
+      iv.join(neg, String.dec_at(s, a, k), String.dec_at(s, Nat.add(a, k), 9n))
 
-def it.rotl(+x: String, l: ITree, r: ITree) -> ITree:
-  match r:
-    case ITip{}:
-      it.bin(x, l, ITip{})
-    case IBin{n, +rx, +rl, +rr}:
-      it.rotl.of(Nat.is_lt(it.size(rl), Nat.mul(2n, it.size(rr))), x, l, rx, rl, rr)
+# the integer whose text is s (one of ints.ok): its 14 digits at most
+# read at once, more as two parts, the last nine digits and those before
+# (19 digits pass 2^48, where a Nat stops)
+def iv.of(+s: String) -> IVal:
+  +neg = U32.is_eq(String.code_at(s, 0n), 45)
+  +a = Bool.pick(Nat, neg, 1n, 0n)
+  +d = Nat.sub(String.length(s), a)
+  iv.of.pick(Nat.is_le(d, 14n), neg, s, a, d)
 
-# l is the larger side
-def it.dblr(+x: String, r: ITree, +lx: String, ll: ITree, lr: ITree) -> ITree:
-  match lr:
-    case ITip{}:
-      it.bin(lx, ll, it.bin(x, ITip{}, r))
-    case IBin{n, +y, +yl, +yr}:
-      it.bin(y, it.bin(lx, ll, yl), it.bin(x, yr, r))
+# the width v needs: 2 bytes from -2^15 to 2^15 - 1, 4 from -2^31 to
+# 2^31 - 1, else 8
+def iv.w(+v: IVal) -> Nat:
+  match v:
+    case IVal{+neg, +hi, +lo}:
+      +b = Bool.pick(Nat, neg, 1n, 0n)
+      Bool.pick(Nat, Nat.is_eq(hi, 0n), Bool.pick(Nat, Nat.is_lt(lo, Nat.add(32768n, b)), 2n, Bool.pick(Nat, Nat.is_lt(lo, Nat.add(2147483648n, b)), 4n, 8n)), 8n)
 
-def it.rotr.of(single: Bool, +x: String, r: ITree, +lx: String, ll: ITree, lr: ITree) -> ITree:
-  match single:
+def iv.neg(+v: IVal) -> Bool:
+  match v:
+    case IVal{+neg, hi, lo}:
+      neg
+
+# 2^(8w - 1), for a width w of 2 or 4
+def iv.half(w: Nat) -> Nat:
+  match w:
+    case 2n:
+      32768n
+    case _:
+      2147483648n
+
+def iv.key.of(wide: Bool, +w: Nat, +neg: Bool, +hi: Nat, +lo: Nat) -> IKey:
+  match wide:
+    case False{}:
+      +half = iv.half(w)
+      IKey{0n, Bool.pick(Nat, neg, Nat.sub(half, lo), Nat.add(half, lo))}
     case True{}:
-      it.bin(lx, ll, it.bin(x, lr, r))
-    case False{}:
-      it.dblr(x, r, lx, ll, lr)
+      +nz = Bool.pick(Nat, Nat.is_eq(lo, 0n), 0n, 1n)
+      Bool.pick(IKey, neg, IKey{Nat.sub(Nat.sub(2147483648n, hi), nz), Nat.mod(Nat.sub(ints.two32(), lo), ints.two32())}, IKey{Nat.add(2147483648n, hi), lo})
 
-def it.rotr(+x: String, l: ITree, r: ITree) -> ITree:
-  match l:
-    case ITip{}:
-      it.bin(x, ITip{}, r)
-    case IBin{n, +lx, +ll, +lr}:
-      it.rotr.of(Nat.is_lt(it.size(lr), Nat.mul(2n, it.size(ll))), x, r, lx, ll, lr)
+# v's key in the width w, one v fits in
+def iv.key(+w: Nat, +v: IVal) -> IKey:
+  match v:
+    case IVal{+neg, +hi, +lo}:
+      iv.key.of(Nat.is_eq(w, 8n), w, neg, hi, lo)
 
-def it.bal.of(few: Bool, rh: Bool, lh: Bool, +x: String, l: ITree, r: ITree) -> ITree:
-  match few rh lh:
-    case True{} _ _:
-      it.bin(x, l, r)
-    case False{} True{} _:
-      it.rotl(x, l, r)
-    case False{} False{} True{}:
-      it.rotr(x, l, r)
-    case False{} False{} False{}:
-      it.bin(x, l, r)
+# the 2 and 4 bytes of b from index at on, the low first
+def is.u16(+b: String, +at: Nat) -> Nat:
+  Nat.add(hb.byte(b, at), Nat.mul(256n, hb.byte(b, Nat.add(at, 1n))))
 
-def it.balance(+x: String, +l: ITree, +r: ITree) -> ITree:
-  +sl = it.size(l)
-  +sr = it.size(r)
-  it.bal.of(Nat.is_le(Nat.add(sl, sr), 1n), Nat.is_lt(Nat.mul(3n, sl), sr), Nat.is_lt(Nat.mul(3n, sr), sl), x, l, r)
+def is.u32(+b: String, +at: Nat) -> Nat:
+  Nat.add(is.u16(b, at), Nat.mul(65536n, is.u16(b, Nat.add(at, 2n))))
 
-# whether t holds integer m; c is how m compares with t's root
-def it.has(+t: ITree, c: Cmp, +m: String) -> Bool:
-  match t c:
-    case ITip{} _:
-      False{}
-    case IBin{n, x, +l, r} LT{}:
-      it.has(l, it.at(l, m), m)
-    case IBin{n, x, l, +r} GT{}:
-      it.has(r, it.at(r, m), m)
-    case IBin{n, x, l, r} EQ{}:
-      True{}
+def is.key.w(w: Nat, +b: String, +at: Nat) -> IKey:
+  match w:
+    case 2n:
+      IKey{0n, Nat.mod(Nat.add(is.u16(b, at), 32768n), 65536n)}
+    case 4n:
+      IKey{0n, Nat.mod(Nat.add(is.u32(b, at), 2147483648n), ints.two32())}
+    case _:
+      IKey{Nat.mod(Nat.add(is.u32(b, Nat.add(at, 4n)), 2147483648n), ints.two32()), is.u32(b, at)}
 
-def ints.has(+m: String, +t: ITree) -> Bool:
-  it.has(t, it.at(t, m), m)
+# the key of the member at index i of an intset's string b, of width w
+def is.key(+b: String, +w: Nat, +i: Nat) -> IKey:
+  is.key.w(w, b, Nat.mul(i, w))
 
-# t with integer m in its place (t does not hold it); c is how m
-# compares with t's root
-def it.ins(t: ITree, c: Cmp, +m: String) -> ITree:
-  match t c:
-    case ITip{} _:
-      IBin{1n, m, ITip{}, ITip{}}
-    case IBin{n, +x, +l, +r} LT{}:
-      it.balance(x, it.ins(l, it.at(l, m), m), r)
-    case IBin{n, +x, +l, +r} _:
-      it.balance(x, l, it.ins(r, it.at(r, m), m))
+def ik.lt(+a: IKey, +b: IKey) -> Bool:
+  match a b:
+    case IKey{+ah, +al} IKey{+bh, +bl}:
+      Bool.or(Nat.is_lt(ah, bh), Bool.and(Nat.is_eq(ah, bh), Nat.is_lt(al, bl)))
 
-def ints.put(+m: String, +t: ITree) -> ITree:
-  it.ins(t, it.at(t, m), m)
+def ik.eq(+a: IKey, +b: IKey) -> Bool:
+  match a b:
+    case IKey{+ah, +al} IKey{+bh, +bl}:
+      Bool.and(Nat.is_eq(ah, bh), Nat.is_eq(al, bl))
 
-# a member cut from the end of a tree, and the tree left
-type ICut is Data:
-  ICut{x: String, t: ITree}
+# the first index from lo on, below hi, of a member whose key is not
+# below k, or hi: by halves, f steps at most; mid is the middle, less
+# whether its member's key is below k, done whether no index is left
+def is.lb(f: Nat, done: Bool, less: Bool, +b: String, +w: Nat, +k: IKey, +lo: Nat, +hi: Nat, +mid: Nat) -> Nat:
+  match f done less:
+    case 0n _ _:
+      lo
+    case 1n+g True{} _:
+      lo
+    case 1n+g False{} True{}:
+      +l = Nat.add(mid, 1n)
+      +m = Nat.div(Nat.add(l, hi), 2n)
+      is.lb(g, Nat.is_le(hi, l), ik.lt(is.key(b, w, m), k), b, w, k, l, hi, m)
+    case 1n+g False{} False{}:
+      +m = Nat.div(Nat.add(lo, mid), 2n)
+      is.lb(g, Nat.is_le(mid, lo), ik.lt(is.key(b, w, m), k), b, w, k, lo, mid, m)
 
-def it.cutl.fix(c: ICut, +x: String, r: ITree) -> ICut:
-  match c:
-    case ICut{+cx, +ct}:
-      ICut{cx, it.balance(x, ct, r)}
+# the index of the first member of the intset b (n members of w bytes)
+# whose key is not below k (n when none)
+def is.find(+b: String, +w: Nat, +n: Nat, +k: IKey) -> Nat:
+  +mid = Nat.div(n, 2n)
+  is.lb(Nat.add(n, 1n), Nat.is_eq(n, 0n), ik.lt(is.key(b, w, mid), k), b, w, k, 0n, n, mid)
 
-# the first member of the node of x between l and r, cut from it
-def it.cutl(l: ITree, +x: String, r: ITree) -> ICut:
-  match l:
-    case ITip{}:
-      ICut{x, r}
-    case IBin{n, +lx, ll, lr}:
-      it.cutl.fix(it.cutl(ll, lx, lr), x, r)
+# the k low bytes of u, the low first, before rest
+def is.bytes(k: Nat, +u: Nat, rest: String) -> String:
+  match k:
+    case 0n:
+      rest
+    case 1n+j:
+      hb.byte.put(Nat.mod(u, 256n), is.bytes(j, Nat.div(u, 256n), rest))
 
-def it.cutr.fix(c: ICut, +x: String, l: ITree) -> ICut:
-  match c:
-    case ICut{+cx, +ct}:
-      ICut{cx, it.balance(x, l, ct)}
+def is.enc.w(w: Nat, +neg: Bool, +hi: Nat, +lo: Nat, rest: String) -> String:
+  match w:
+    case 2n:
+      is.bytes(2n, Bool.pick(Nat, neg, Nat.sub(65536n, lo), lo), rest)
+    case 4n:
+      is.bytes(4n, Bool.pick(Nat, neg, Nat.sub(ints.two32(), lo), lo), rest)
+    case _:
+      +nz = Bool.pick(Nat, Nat.is_eq(lo, 0n), 0n, 1n)
+      +ulo = Bool.pick(Nat, neg, Nat.mod(Nat.sub(ints.two32(), lo), ints.two32()), lo)
+      +uhi = Bool.pick(Nat, neg, Nat.mod(Nat.sub(Nat.sub(ints.two32(), hi), nz), ints.two32()), hi)
+      is.bytes(4n, ulo, is.bytes(4n, uhi, rest))
 
-# the last member of the node of x between l and r, cut from it
-def it.cutr(r: ITree, +x: String, l: ITree) -> ICut:
-  match r:
-    case ITip{}:
-      ICut{x, l}
-    case IBin{n, +rx, rl, rr}:
-      it.cutr.fix(it.cutr(rr, rx, rl), x, l)
+# v's w bytes before rest
+def is.enc(+w: Nat, +v: IVal, rest: String) -> String:
+  match v:
+    case IVal{+neg, +hi, +lo}:
+      is.enc.w(w, neg, hi, lo, rest)
 
-def it.glue.lfix(c: ICut, r: ITree) -> ITree:
-  match c:
-    case ICut{+x, +l}:
-      it.balance(x, l, r)
-
-def it.glue.rfix(l: ITree, c: ICut) -> ITree:
-  match c:
-    case ICut{+x, +r}:
-      it.balance(x, l, r)
-
-# the larger side l's last member takes the place of the one taken out
-def it.glue.l(l: ITree, r: ITree) -> ITree:
-  match l:
-    case ITip{}:
-      r
-    case IBin{n, +lx, ll, lr}:
-      it.glue.lfix(it.cutr(lr, lx, ll), r)
-
-# or r's first member (r a tip: both sides are)
-def it.glue.r(l: ITree, r: ITree) -> ITree:
-  match r:
-    case ITip{}:
-      l
-    case IBin{n, +rx, rl, rr}:
-      it.glue.rfix(l, it.cutl(rl, rx, rr))
-
-def it.glue.of(lbig: Bool, l: ITree, r: ITree) -> ITree:
-  match lbig:
+# the text of a magnitude of halves hi and lo: one Nat below 2^48, else
+# divided by 10^9 a limb of 16 bits at a time (each step below 2^46), the
+# quotient (at least 281,474) and the nine digits of the remainder
+def is.dec(small: Bool, +hi: Nat, +lo: Nat) -> String:
+  match small:
     case True{}:
-      it.glue.l(l, r)
+      Nat.show(Nat.add(Nat.mul(hi, ints.two32()), lo))
     case False{}:
-      it.glue.r(l, r)
+      +c2 = hi
+      +r2 = Nat.mod(c2, 1000000000n)
+      +c1 = Nat.add(Nat.mul(r2, 65536n), Nat.div(lo, 65536n))
+      +r1 = Nat.mod(c1, 1000000000n)
+      +c0 = Nat.add(Nat.mul(r1, 65536n), Nat.mod(lo, 65536n))
+      +q = Nat.add(Nat.mul(Nat.add(Nat.mul(Nat.div(c2, 1000000000n), 65536n), Nat.div(c1, 1000000000n)), 65536n), Nat.div(c0, 1000000000n))
+      +r = Nat.show(Nat.mod(c0, 1000000000n))
+      Nat.show(q) ++ String.repeat("0", Nat.sub(9n, String.length(r))) ++ r
 
-# the members of l and then those of r, the sides of a node whose member
-# is taken out
-def it.glue(+l: ITree, +r: ITree) -> ITree:
-  it.glue.of(Nat.is_lt(it.size(r), it.size(l)), l, r)
-
-# t without integer m, which it holds; c is how m compares with t's root
-def it.rm(t: ITree, c: Cmp, +m: String) -> ITree:
-  match t c:
-    case ITip{} _:
-      ITip{}
-    case IBin{n, +x, +l, +r} LT{}:
-      it.balance(x, it.rm(l, it.at(l, m), m), r)
-    case IBin{n, +x, +l, +r} GT{}:
-      it.balance(x, l, it.rm(r, it.at(r, m), m))
-    case IBin{n, x, +l, +r} EQ{}:
-      it.glue(l, r)
-
-def ints.del(+m: String, +t: ITree) -> ITree:
-  it.rm(t, it.at(t, m), m)
-
-# the member at rank i of t (none when i is not below its size); c is
-# how i compares with the size of t's left side
-def it.nth(+t: ITree, c: Cmp, +i: Nat) -> Maybe<&2, String>:
-  match t c:
-    case ITip{} _:
-      None{}
-    case IBin{n, x, +l, r} LT{}:
-      it.nth(l, Nat.cmp(i, it.lsize(l)), i)
-    case IBin{n, +x, l, r} EQ{}:
-      Some{x}
-    case IBin{n, x, +l, +r} GT{}:
-      +j = Nat.sub(i, Nat.add(it.size(l), 1n))
-      it.nth(r, Nat.cmp(j, it.lsize(r)), j)
-
-def ints.nth(+t: ITree, +i: Nat) -> Maybe<&2, String>:
-  it.nth(t, Nat.cmp(i, it.lsize(t)), i)
-
-# a node's member, made before the walk goes on (as zt.el, below)
-def it.el(+x: String) -> String:
-  x
-
-# the members of t in increasing order, before acc
-def it.list(+t: ITree, acc: List<&2, String>) -> List<&2, String>:
-  match t:
-    case ITip{}:
-      acc
-    case IBin{n, +x, +l, +r}:
-      y = it.el(x)
-      acc2 = it.list(r, acc)
-      it.list(l, y <> acc2)
-
-def ints.list(+t: ITree) -> List<&2, String>:
-  it.list(t, Nil{})
-
-# the members of t added to the trie s
-def it.trie(+t: ITree, s: Trie<Unit>) -> Trie<Unit>:
-  match t:
-    case ITip{}:
+def is.sign(neg: Bool, s: String) -> String:
+  match neg:
+    case True{}:
+      "-" ++ s
+    case False{}:
       s
-    case IBin{n, +x, +l, +r}:
-      it.trie(r, set(Unit, it.trie(l, s), x, Unit{}))
 
-# The tree of n members that come in increasing order, made at once (as
-# a sorted set's is, zel.build in rdb.bend): a walk with a list of jobs:
-# build a tree of n members (its left side first); take the next member
-# as the root of a node of n whose left side is the tree just made (a its
-# size), then build its right side; join that node.
-type IJob is Data:
-  IJBuild{n: Nat}
-  IJRoot{n: Nat, a: Nat}
-  IJJoin{n: Nat, x: String, l: ITree}
+# the text of the two's complement u of 2 or 4 bytes (half 2^(8w - 1),
+# full 2^(8w))
+def is.text.small(+u: Nat, +half: Nat, +full: Nat) -> String:
+  +neg = Nat.is_le(half, u)
+  is.sign(neg, Nat.show(Bool.pick(Nat, neg, Nat.sub(full, u), u)))
 
-# the jobs js run on the members xs, t the tree last made (f bounds the
-# steps: four for each member and one)
-def it.mach(f: Nat, js: List<&2, IJob>, xs: List<&2, String>, t: ITree) -> ITree:
-  match f js:
-    case 1n+g Con{IJBuild{n}, rest}:
-      match n:
-        case 0n:
-          it.mach(g, rest, xs, t)
-        case 1n+(+k):
-          +a = Nat.div(k, 2n)
-          it.mach(g, IJBuild{a} <> (IJRoot{1n+k, a} <> rest), xs, t)
-    case 1n+g Con{IJRoot{+n, +a}, rest}:
-      match xs:
-        case Con{x, more}:
-          it.mach(g, IJBuild{Nat.sub(Nat.sub(n, 1n), a)} <> (IJJoin{n, x, t} <> rest), more, ITip{})
-        case Nil{}:
-          t
-    case 1n+g Con{IJJoin{+n, x, l}, rest}:
-      it.mach(g, rest, xs, IBin{n, x, l, t})
-    case _ _:
+# the text of the 64-bit two's complement of halves uhi and ulo
+def is.text.wide(+uhi: Nat, +ulo: Nat) -> String:
+  +neg = Nat.is_le(2147483648n, uhi)
+  +nz = Bool.pick(Nat, Nat.is_eq(ulo, 0n), 0n, 1n)
+  +mhi = Bool.pick(Nat, neg, Nat.sub(Nat.sub(ints.two32(), uhi), nz), uhi)
+  +mlo = Bool.pick(Nat, neg, Nat.mod(Nat.sub(ints.two32(), ulo), ints.two32()), ulo)
+  is.sign(neg, is.dec(Nat.is_lt(mhi, 65536n), mhi, mlo))
+
+def is.text.w(w: Nat, +b: String, +at: Nat) -> String:
+  match w:
+    case 2n:
+      is.text.small(is.u16(b, at), 32768n, 65536n)
+    case 4n:
+      is.text.small(is.u32(b, at), 2147483648n, ints.two32())
+    case _:
+      is.text.wide(is.u32(b, Nat.add(at, 4n)), is.u32(b, at))
+
+# the text of the member at index i of an intset's string b of width w
+def is.text(+b: String, +w: Nat, +i: Nat) -> String:
+  is.text.w(w, b, Nat.mul(i, w))
+
+# the members of indices below k, in increasing order, before acc
+def is.down(k: Nat, +b: String, +w: Nat, acc: List<&2, String>) -> List<&2, String>:
+  match k:
+    case 0n:
+      acc
+    case 1n++j:
+      is.down(j, b, w, is.text(b, w, j) <> acc)
+
+# k bytes x before rest
+def is.fill(k: Nat, +x: Nat, rest: String) -> String:
+  match k:
+    case 0n:
+      rest
+    case 1n+j:
+      hb.byte.put(x, is.fill(j, x, rest))
+
+# the k members of b from index i on (w bytes each) in x bytes each, x
+# at least w, each sign-extended, before rest
+def is.widen(k: Nat, +b: String, +w: Nat, +x: Nat, +i: Nat, rest: String) -> String:
+  match k:
+    case 0n:
+      rest
+    case 1n+j:
+      +at = Nat.mul(i, w)
+      +top = Nat.is_le(128n, hb.byte(b, Nat.add(at, Nat.sub(w, 1n))))
+      String.slice(b, at, w) ++ is.fill(Nat.sub(x, w), Bool.pick(Nat, top, 255n, 0n), is.widen(j, b, w, x, Nat.add(i, 1n), rest))
+
+# the width of the members of the intset b of n members
+def ints.w(+b: String, +n: Nat) -> Nat:
+  Nat.div(String.length(b), n)
+
+def ints.has.of(fits: Bool, +v: IVal, +b: String, +w: Nat, +n: Nat) -> Bool:
+  match fits:
+    case True{}:
+      +k = iv.key(w, v)
+      +i = is.find(b, w, n, k)
+      Bool.and(Nat.is_lt(i, n), ik.eq(is.key(b, w, i), k))
+    case False{}:
+      False{}
+
+# whether the intset of n members b holds the integer m (one of
+# ints.ok): none that needs more bytes than its members
+def ints.has(+m: String, +b: String, n: Nat) -> Bool:
+  match n:
+    case 0n:
+      False{}
+    case 1n++p:
+      +v = iv.of(m)
+      +w = ints.w(b, 1n+p)
+      ints.has.of(Nat.is_le(iv.w(v), w), v, b, w, 1n+p)
+
+def ints.put.wide(neg: Bool, +v: IVal, +x: Nat, all: String) -> String:
+  match neg:
+    case True{}:
+      is.enc(x, v, all)
+    case False{}:
+      all ++ is.enc(x, v, "")
+
+# the intset b of n members (w bytes each) with v, which it lacks: in its
+# place when v fits in w bytes, else all of them made as wide as v, v the
+# least (a negative one) or the greatest
+def ints.put.of(fits: Bool, +v: IVal, +b: String, +w: Nat, +n: Nat) -> String:
+  match fits:
+    case True{}:
+      +at = Nat.mul(is.find(b, w, n, iv.key(w, v)), w)
+      hb.flat(String.take(b, at) ++ is.enc(w, v, String.drop(b, at)), Nat.mul(Nat.add(n, 1n), w))
+    case False{}:
+      +x = iv.w(v)
+      hb.flat(ints.put.wide(iv.neg(v), v, x, is.widen(n, b, w, x, 0n, "")), Nat.mul(Nat.add(n, 1n), x))
+
+def ints.put.go(n: Nat, +v: IVal, +b: String) -> String:
+  match n:
+    case 0n:
+      +x = iv.w(v)
+      hb.flat(is.enc(x, v, ""), x)
+    case 1n++p:
+      +w = ints.w(b, 1n+p)
+      ints.put.of(Nat.is_le(iv.w(v), w), v, b, w, 1n+p)
+
+# the intset b of n members with the integer m (one of ints.ok), which it
+# lacks
+def ints.put(+m: String, +b: String, +n: Nat) -> String:
+  ints.put.go(n, iv.of(m), b)
+
+# the intset b of n members without the integer m, which it holds
+def ints.del(+m: String, +b: String, +n: Nat) -> String:
+  +w = ints.w(b, n)
+  +at = Nat.mul(is.find(b, w, n, iv.key(w, iv.of(m))), w)
+  hb.flat(String.take(b, at) ++ String.drop(b, Nat.add(at, w)), Nat.mul(Nat.sub(n, 1n), w))
+
+def ints.nth.of(ok: Bool, +b: String, +w: Nat, +i: Nat) -> Maybe<&2, String>:
+  match ok:
+    case True{}:
+      Some{is.text(b, w, i)}
+    case False{}:
+      None{}
+
+# the member at rank i of the intset b of n members (none when i is not
+# below n)
+def ints.nth(+b: String, +n: Nat, +i: Nat) -> Maybe<&2, String>:
+  ints.nth.of(Nat.is_lt(i, n), b, ints.w(b, n), i)
+
+# the members of the intset b of n members, in increasing order, before
+# acc
+def ints.list.on(+b: String, +n: Nat, acc: List<&2, String>) -> List<&2, String>:
+  is.down(n, b, ints.w(b, n), acc)
+
+def ints.list(+b: String, +n: Nat) -> List<&2, String>:
+  ints.list.on(b, n, Nil{})
+
+# the k members of an intset's string b (w bytes each) from index i on,
+# in increasing order, added to the trie t
+def ints.trie(k: Nat, +b: String, +w: Nat, +i: Nat, t: Trie<Unit>) -> Trie<Unit>:
+  match k:
+    case 0n:
       t
+    case 1n+j:
+      ints.trie(j, b, w, Nat.add(i, 1n), set(Unit, t, is.text(b, w, i), Unit{}))
 
-def ints.build(+n: Nat, xs: List<&2, String>) -> ITree:
-  it.mach(Nat.add(Nat.mul(4n, n), 4n), [IJBuild{n}], xs, ITip{})
+# the intset b of n members with the integers xs (one of ints.ok each,
+# none there, none twice) added in turn (RESTORE of a set of them)
+def ints.of(xs: List<&2, String>, +b: String, +n: Nat) -> String:
+  match xs:
+    case Nil{}:
+      b
+    case Con{+x, rest}:
+      ints.of(rest, ints.put(x, b, n), Nat.add(n, 1n))
 
 # A small hashtable's string (MSmall, above) holds its members one after
 # another, as a listpack holds a small set in one allocation: a member is
@@ -3228,7 +3257,7 @@ def ss.scan.ps(+ps: List<&2, MPiece>, +from: Nat, +want: Nat) -> Scan:
   ss.end(Nat.is_le(want, c), ss.first(xs), want, c, ss.mems.ps(xs, ps, Nil{}))
 
 def mems.empty() -> Mems:
-  MInts{0n, ITip{}}
+  MInts{0n, ""}
 
 def mems.len(+s: Mems) -> Nat:
   match s:
@@ -3241,18 +3270,18 @@ def mems.len(+s: Mems) -> Nat:
     case MLong{+n, ps}:
       n
 
-def mems.ints.has(int: Bool, +m: String, +xs: ITree) -> Bool:
+def mems.ints.has(int: Bool, +m: String, +b: String, +n: Nat) -> Bool:
   match int:
     case True{}:
-      ints.has(m, xs)
+      ints.has(m, b, n)
     case False{}:
       False{}
 
 # whether s holds m
 def mems.has(+m: String, +s: Mems) -> Bool:
   match s:
-    case MInts{n, +xs}:
-      mems.ints.has(ints.ok(m), m, xs)
+    case MInts{+n, +b}:
+      mems.ints.has(ints.ok(m), m, b, n)
     case MBig{n, +t}:
       has(Unit, t, m)
     case MSmall{+n, +b}:
@@ -3260,34 +3289,34 @@ def mems.has(+m: String, +s: Mems) -> Bool:
     case MLong{n, +ps}:
       ml.has(m, ps, False{})
 
-# n members xs of an intset, and m, which they do not hold, as a
+# n members b of an intset, and m, which they do not hold, as a
 # hashtable: small while it fits (the intset's members in increasing
 # order, then m), else a trie
-def mems.grow.of(fits: Bool, +n: Nat, xs: ITree, +m: String) -> Mems:
+def mems.grow.of(fits: Bool, +n: Nat, +b: String, +m: String) -> Mems:
   match fits:
     case True{}:
-      ml.set(1n+n, ml.of(it.list(xs, [m])))
+      ml.set(1n+n, ml.of(ints.list.on(b, n, [m])))
     case False{}:
-      MBig{1n+n, set(Unit, it.trie(xs, empty(Unit)), m, Unit{})}
+      MBig{1n+n, set(Unit, ints.trie(n, b, ints.w(b, n), 0n, empty(Unit)), m, Unit{})}
 
-def mems.grow(+n: Nat, xs: ITree, +m: String) -> Mems:
-  mems.grow.of(ms.fits(1n+n, m), n, xs, m)
+def mems.grow(+n: Nat, +b: String, +m: String) -> Mems:
+  mems.grow.of(ms.fits(1n+n, m), n, b, m)
 
-def mems.ints.put(fits: Bool, +n: Nat, xs: ITree, +m: String) -> Mems:
+def mems.ints.put(fits: Bool, +n: Nat, +b: String, +m: String) -> Mems:
   match fits:
     case True{}:
-      MInts{1n+n, ints.put(m, xs)}
+      MInts{1n+n, ints.put(m, b, n)}
     case False{}:
-      mems.grow(n, xs, m)
+      mems.grow(n, b, m)
 
-def mems.ints.add(had: Bool, int: Bool, +n: Nat, xs: ITree, +m: String) -> Mems:
+def mems.ints.add(had: Bool, int: Bool, +n: Nat, b: String, +m: String) -> Mems:
   match had int:
     case True{} _:
-      MInts{n, xs}
+      MInts{n, b}
     case False{} True{}:
-      mems.ints.put(Nat.is_lt(n, 512n), n, xs, m)
+      mems.ints.put(Nat.is_lt(n, 512n), n, b, m)
     case False{} False{}:
-      mems.grow(n, xs, m)
+      mems.grow(n, b, m)
 
 def mems.big.add(had: Bool, +n: Nat, t: Trie<Unit>, +m: String) -> Mems:
   match had:
@@ -3345,9 +3374,9 @@ def mems.long.add(had: Bool, +n: Nat, ps: List<&2, MPiece>, +m: String) -> Mems:
 # 64 bytes
 def mems.add(s: Mems, +m: String) -> Mems:
   match s:
-    case MInts{+n, +xs}:
+    case MInts{+n, +b}:
       +int = ints.ok(m)
-      mems.ints.add(mems.ints.has(int, m, xs), int, n, xs, m)
+      mems.ints.add(mems.ints.has(int, m, b, n), int, n, b, m)
     case MBig{+n, +t}:
       +had = has(Unit, t, m)
       mems.big.add(had, n, t, m)
@@ -3373,8 +3402,8 @@ def mems.of(xs: List<&2, String>) -> Mems:
 # s without m, which it holds
 def mems.del(s: Mems, +m: String) -> Mems:
   match s:
-    case MInts{+n, xs}:
-      MInts{Nat.sub(n, 1n), ints.del(m, xs)}
+    case MInts{+n, +b}:
+      MInts{Nat.sub(n, 1n), ints.del(m, b, n)}
     case MBig{+n, t}:
       MBig{Nat.sub(n, 1n), del(Unit, t, m)}
     case MSmall{+n, +b}:
@@ -3386,8 +3415,8 @@ def mems.del(s: Mems, +m: String) -> Mems:
 # hashtable's, the order they came)
 def mems.all(+s: Mems) -> List<&2, String>:
   match s:
-    case MInts{n, +xs}:
-      ints.list(xs)
+    case MInts{+n, +b}:
+      ints.list(b, n)
     case MBig{n, +t}:
       keys(Unit, t, 0n)
     case MSmall{+n, +b}:

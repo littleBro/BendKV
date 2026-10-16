@@ -16742,8 +16742,8 @@ def sscan.small(sc: KV.Scan, pat: Maybe<&2, String>) -> Reply:
 
 def sscan.go(+s: KV.Mems, +cur: Nat, +n: Nat, pat: Maybe<&2, String>) -> Reply:
   match s:
-    case KV.MInts{m, +xs}:
-      sscan.rep(0n, KV.ints.list(xs), pat)
+    case KV.MInts{+m, +b}:
+      sscan.rep(0n, KV.ints.list(b, m), pat)
     case KV.MBig{m, +t}:
       sscan.big(KV.scan(Unit, t, cur, n, 0n), pat)
     case KV.MSmall{+m, +b}:
@@ -18436,8 +18436,8 @@ def srand.at(+r: U32, +n: Nat) -> Nat:
 
 def srand.pick(+s: KV.Mems, +r: U32) -> Maybe<&2, String>:
   match s:
-    case KV.MInts{+n, +xs}:
-      KV.ints.nth(xs, srand.at(r, n))
+    case KV.MInts{+n, +b}:
+      KV.ints.nth(b, n, srand.at(r, n))
     case KV.MBig{n, +t}:
       KV.pick(Unit, t, KV.mix(r), 0n)
     case KV.MSmall{+n, +b}:
@@ -18545,8 +18545,8 @@ def srand.big(thin: Bool, +k: Nat, +n: Nat, +t: KV.Trie<Unit>, +r: U32) -> List<
 # k different members of s, k below its size
 def srand.uniq(+k: Nat, +s: KV.Mems, +r: U32) -> List<&2, String>:
   match s:
-    case KV.MInts{+n, +xs}:
-      srand.ints(k, KV.ints.list(xs), n, r)
+    case KV.MInts{+n, +b}:
+      srand.ints(k, KV.ints.list(b, n), n, r)
     case KV.MBig{+n, +t}:
       srand.big(Nat.is_lt(n, Nat.mul(k, 3n)), k, n, t, r)
     case KV.MSmall{+n, +b}:
@@ -19508,21 +19508,20 @@ def upd.put(t: KV.Trie<KV.Val>, +k: String, +h: U32, +n: Nat, +x: Nat, now: Nat,
 
 # whether an update of a key whose entry there at now is m takes the key's
 # value out of the keyspace while it changes it: an HSET of pairs to a
-# hash, or an SADD to an intset or a trie of members that lacks its first
-# member, which write the collection over for sure (PROOF.bend:
-# takes_over). The keyspace holding the collection meanwhile would make
-# the write copy the path it changes in it, and the keyspace drop the old
-# path after. A small set of strings (KV.MSmall, KV.MLong) is not taken:
-# its write makes its string anew whatever holds it, so the take would
-# save nothing and its test cost a find (FINDINGS.md, section 3zzzs).
+# hash, or an SADD to a trie of members that lacks its first member,
+# which write the collection over for sure (PROOF.bend: takes_over). The
+# keyspace holding the collection meanwhile would make the write copy the
+# path it changes in it, and the keyspace drop the old path after. A set
+# kept in a string (an intset, KV.MInts; a small set of strings, KV.MSmall
+# and KV.MLong) is not taken: its write makes its string anew whatever
+# holds it, so the take would save nothing and its test cost a find
+# (FINDINGS.md, section 3zzzs).
 def upd.takes(+op: UpdOp, +m: Maybe<&2, KV.Item<KV.Val>>) -> Bool:
   match op m:
     case UHash{HWSet{Con{p, rest}, mset}} Some{KV.Item{KV.VColl{KV.CHash{h}}, e}}:
       True{}
     case UMems{SWAdd{Con{+x, rest}}} Some{KV.Item{KV.VColl{KV.CMems{KV.MBig{n, +t}}}, e}}:
       Bool.not(KV.has(Unit, t, x))
-    case UMems{SWAdd{Con{+x, rest}}} Some{KV.Item{KV.VColl{KV.CMems{KV.MInts{n, +xs}}}, e}}:
-      Bool.not(KV.mems.ints.has(KV.ints.ok(x), x, xs))
     case _ _:
       False{}
 

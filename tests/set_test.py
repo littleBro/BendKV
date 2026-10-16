@@ -10,15 +10,16 @@ keys (moves and the operations of several sets among them), replies
 compared one by one.
 
 An intset keeps its members in numeric order on both servers, and those
-replies are compared as they are; a hashtable answers in the order of
-each server's own table, so a whole set (SMEMBERS, SINTER, SUNION,
-SDIFF) is compared as a set, and SSCAN by the members its whole walk
-answers. SRANDMEMBER and SPOP pick at random: their replies are compared
-by kind and size, each member checked against the set it was picked
-from (distinct where they must be), and the set an SPOP leaves against
-the set less the members it answered; then the key is made again on
-both servers from BendKV's members, so that the two go on alike. MEMORY
-USAGE, an estimate on each server, is compared by kind.
+replies are compared as they are, and its DUMP byte for byte (each
+member in the width Redis's intset gives it); a hashtable answers in the
+order of each server's own table, so a whole set (SMEMBERS, SINTER,
+SUNION, SDIFF) is compared as a set, and SSCAN by the members its whole
+walk answers. SRANDMEMBER and SPOP pick at random: their replies are
+compared by kind and size, each member checked against the set it was
+picked from (distinct where they must be), and the set an SPOP leaves
+against the set less the members it answered; then the key is made
+again on both servers from BendKV's members, so that the two go on
+alike. MEMORY USAGE, an estimate on each server, is compared by kind.
 
     python3 tests/set_test.py --bendkv 6380 --redis 6390 [--rounds 3000] [--seed 1]
 """
@@ -165,14 +166,22 @@ def same(b, r, cmd):
         fail(cmd, x, y)
 
 
-# a whole set as it is: in order, for an intset
+# a whole set as it is: in order, for an intset, and its DUMP byte for
+# byte (Redis runs with rdbcompression no: BendKV writes no LZF), each
+# member in the width Redis's intset gives them
 def exact(b, r, key):
     global n
     n += 1
     cmd = [b"SMEMBERS", key]
     x, y = run(b, cmd), run(r, cmd)
-    if encoding(r, key) == (b"$", b"intset") and x != y:
-        fail(cmd, x, y)
+    if encoding(r, key) == (b"$", b"intset"):
+        if x != y:
+            fail(cmd, x, y)
+        n += 1
+        cmd = [b"DUMP", key]
+        x, y = run(b, cmd), run(r, cmd)
+        if x != y:
+            fail(cmd, x, y)
 
 
 LLONG_MIN = b"-9223372036854775808"
@@ -530,6 +539,7 @@ def main():
     b, rd = Conn(a.bendkv), Conn(a.redis)
     for c in (b, rd):
         run(c, [b"FLUSHALL"])
+    run(rd, [b"CONFIG", b"SET", b"rdbcompression", b"no"])
     for cmd in SCRIPT:
         same(b, rd, cmd)
     sizes(b, rd)
@@ -543,6 +553,7 @@ def main():
         exact(b, rd, key)
     for c in (b, rd):
         run(c, [b"FLUSHALL"])
+    run(rd, [b"CONFIG", b"SET", b"rdbcompression", b"yes"])
     if bad:
         sys.exit("FAIL: %d of %d" % (bad, n))
     print("OK: %d set commands, each answered as Redis answers it" % n)
