@@ -25,9 +25,12 @@ ported from Redis's script_lua.c, eval.c and script.c).
 - SHA-1 in C (deps/redis/src/sha1.c), by Steve Reid: public domain.
 
 deps/redis/src/config.h and solarisfixes.h are BendKV's: stand-ins for
-Redis's, which give sha1.c the byte order and nothing. One change to
-Lua and its libraries: every conversion of a number to a C integer
+Redis's, which give sha1.c the byte order and nothing. Two changes to
+Lua and its libraries. Every conversion of a number to a C integer
 (luaconf.h's lua_number2int and lua_number2integer, and casts in
 lstrlib.c, lua_struct.c, lua_cmsgpack.c and lua_cjson.c) goes through
 three functions added to luaconf.h, which give the results of Redis's
-x86-64 builds (gcc) where C leaves a plain cast undefined.
+x86-64 builds (gcc) where C leaves a plain cast undefined. And two fixes
+of Redis's, which Ubuntu 24.04's Redis 7.0.15 carries as it applies
+them: CVE-2024-31449 (lua_bit.c, Redis's commit 1f7c148) and
+CVE-2025-49844 (lparser.c, Redis's commit d5728cb).

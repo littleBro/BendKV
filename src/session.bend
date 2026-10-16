@@ -62,13 +62,15 @@ type Pe is Data:
 # lfu-decay-time), and the eviction's state (server.bend, Eviction):
 # whether a CONFIG SET changed maxmemory (to one), which the actor sees to
 # at once (kick), the pool (best first), the database the next random
-# eviction starts after, and the bytes evicted while a rewrite of the
-# append-only file runs, which its snapshot still holds (debt). MmOf,
-# never built, makes Mm a type that holds itself, which the compiler makes
-# a node of its own: Srv stays four words, as with the random numbers'
-# word alone.
+# eviction starts after, and the memory as the eviction sees it while a
+# rewrite of the append-only file or a background save runs (mm.view):
+# the heap's used bytes when the job took its snapshot (h0), the keys of
+# the databases then (k0), and the bytes a key held then on average
+# (per). MmOf, never built, makes Mm a type that holds itself, which the
+# compiler makes a node of its own: Srv stays four words, as with the
+# random numbers' word alone.
 type Mm is Data:
-  Mm{rng: U32, max: Nat, pol: Nat, smp: Nat, ten: Nat, lfl: Nat, lfd: Nat, kick: Bool, pool: List<&2, Pe>, next: Nat, debt: Nat, acl: U.Acl}
+  Mm{rng: U32, max: Nat, pol: Nat, smp: Nat, ten: Nat, lfl: Nat, lfd: Nat, kick: Bool, pool: List<&2, Pe>, next: Nat, h0: Nat, k0: Nat, per: Nat, acl: U.Acl}
   MmOf{m: Mm}
 
 # the server, besides its database: the requirepass it was last given
@@ -117,25 +119,25 @@ def mm.get(+cfg: List<&2, C.CItem>, +name: String) -> Nat:
 # numbers at rng, and its users: the default user alone, with requirepass
 # as its password, GENPASS's key the start's secret
 def mm.of(+rng: U32, +cfg: List<&2, C.CItem>, key: String) -> Mm:
-  Mm{rng, mm.get(cfg, "maxmemory"), mm.pol.of(C.config.get_value(cfg, "maxmemory-policy")), mm.get(cfg, "maxmemory-samples"), mm.get(cfg, "maxmemory-eviction-tenacity"), mm.get(cfg, "lfu-log-factor"), mm.get(cfg, "lfu-decay-time"), False{}, Nil{}, 0n, 0n, U.acl.new(C.config.get_value(cfg, "requirepass"), key)}
+  Mm{rng, mm.get(cfg, "maxmemory"), mm.pol.of(C.config.get_value(cfg, "maxmemory-policy")), mm.get(cfg, "maxmemory-samples"), mm.get(cfg, "maxmemory-eviction-tenacity"), mm.get(cfg, "lfu-log-factor"), mm.get(cfg, "lfu-decay-time"), False{}, Nil{}, 0n, 0n, 0n, 0n, U.acl.new(C.config.get_value(cfg, "requirepass"), key)}
 
 def mm.rng(+m: Mm) -> U32:
   match m:
-    case Mm{rng, max, pol, smp, ten, lfl, lfd, kick, pool, next, debt, acl}:
+    case Mm{rng, max, pol, smp, ten, lfl, lfd, kick, pool, next, h0, k0, per, acl}:
       rng
     case MmOf{+n}:
       mm.rng(n)
 
 def mm.max(+m: Mm) -> Nat:
   match m:
-    case Mm{rng, max, pol, smp, ten, lfl, lfd, kick, pool, next, debt, acl}:
+    case Mm{rng, max, pol, smp, ten, lfl, lfd, kick, pool, next, h0, k0, per, acl}:
       max
     case MmOf{+n}:
       mm.max(n)
 
 def mm.pol(+m: Mm) -> Nat:
   match m:
-    case Mm{rng, max, pol, smp, ten, lfl, lfd, kick, pool, next, debt, acl}:
+    case Mm{rng, max, pol, smp, ten, lfl, lfd, kick, pool, next, h0, k0, per, acl}:
       pol
     case MmOf{+n}:
       mm.pol(n)
@@ -146,9 +148,9 @@ def mm.pol(+m: Mm) -> Nat:
 # requirepass changed is the default user's password from then on
 def mm.cfg(+m: Mm, +cfg: List<&2, C.CItem>) -> Mm:
   match m:
-    case Mm{rng, +max, pol, smp, ten, lfl, lfd, +kick, pool, next, debt, acl}:
+    case Mm{rng, +max, pol, smp, ten, lfl, lfd, +kick, pool, next, h0, k0, per, acl}:
       +mx = mm.get(cfg, "maxmemory")
-      Mm{rng, mx, mm.pol.of(C.config.get_value(cfg, "maxmemory-policy")), mm.get(cfg, "maxmemory-samples"), mm.get(cfg, "maxmemory-eviction-tenacity"), mm.get(cfg, "lfu-log-factor"), mm.get(cfg, "lfu-decay-time"), Bool.and(Bool.or(kick, Bool.not(Nat.is_eq(mx, max))), Nat.is_lt(0n, mx)), pool, next, debt, U.acl.cfg(acl, C.config.get_value(cfg, "requirepass"))}
+      Mm{rng, mx, mm.pol.of(C.config.get_value(cfg, "maxmemory-policy")), mm.get(cfg, "maxmemory-samples"), mm.get(cfg, "maxmemory-eviction-tenacity"), mm.get(cfg, "lfu-log-factor"), mm.get(cfg, "lfu-decay-time"), Bool.and(Bool.or(kick, Bool.not(Nat.is_eq(mx, max))), Nat.is_lt(0n, mx)), pool, next, h0, k0, per, U.acl.cfg(acl, C.config.get_value(cfg, "requirepass"))}
     case MmOf{+n}:
       mm.cfg(n, cfg)
 
@@ -156,22 +158,22 @@ def mm.cfg(+m: Mm, +cfg: List<&2, C.CItem>) -> Mm:
 # KV.mix scrambles)
 def mm.rand(m: Mm) -> Mm:
   match m:
-    case Mm{rng, max, pol, smp, ten, lfl, lfd, kick, pool, next, debt, acl}:
-      Mm{U32.add(rng, 2654435769), max, pol, smp, ten, lfl, lfd, kick, pool, next, debt, acl}
+    case Mm{rng, max, pol, smp, ten, lfl, lfd, kick, pool, next, h0, k0, per, acl}:
+      Mm{U32.add(rng, 2654435769), max, pol, smp, ten, lfl, lfd, kick, pool, next, h0, k0, per, acl}
     case MmOf{n}:
       mm.rand(n)
 
 # lfu-log-factor and lfu-decay-time
 def mm.lfl(+m: Mm) -> Nat:
   match m:
-    case Mm{rng, max, pol, smp, ten, lfl, lfd, kick, pool, next, debt, acl}:
+    case Mm{rng, max, pol, smp, ten, lfl, lfd, kick, pool, next, h0, k0, per, acl}:
       lfl
     case MmOf{+n}:
       mm.lfl(n)
 
 def mm.lfd(+m: Mm) -> Nat:
   match m:
-    case Mm{rng, max, pol, smp, ten, lfl, lfd, kick, pool, next, debt, acl}:
+    case Mm{rng, max, pol, smp, ten, lfl, lfd, kick, pool, next, h0, k0, per, acl}:
       lfd
     case MmOf{+n}:
       mm.lfd(n)
@@ -181,63 +183,57 @@ def mm.lfu(+m: Mm) -> Bool:
   +p = mm.pol(m)
   Bool.or(Nat.is_eq(p, 3n), Nat.is_eq(p, 4n))
 
-# whether a CONFIG SET changed maxmemory, and the eviction's debt
+# whether a CONFIG SET changed maxmemory
 def mm.kick(+m: Mm) -> Bool:
   match m:
-    case Mm{rng, max, pol, smp, ten, lfl, lfd, kick, pool, next, debt, acl}:
+    case Mm{rng, max, pol, smp, ten, lfl, lfd, kick, pool, next, h0, k0, per, acl}:
       kick
     case MmOf{+n}:
       mm.kick(n)
 
-def mm.debt(+m: Mm) -> Nat:
-  match m:
-    case Mm{rng, max, pol, smp, ten, lfl, lfd, kick, pool, next, debt, acl}:
-      debt
-    case MmOf{+n}:
-      mm.debt(n)
-
-# what the actor does about memory, the heap's live bytes used: 0
-# nothing, within maxmemory (none for 0), less the debt; 1 see to a
-# CONFIG SET's change of maxmemory first; 2 evict
+# what the actor does about memory, the memory used as the eviction sees
+# it (the heap's live bytes, or mm.view while a job runs: server.bend,
+# mem.seen): 0 nothing, within maxmemory (none for 0); 1 see to a CONFIG
+# SET's change of maxmemory first; 2 evict
 def mm.what(+m: Mm, +used: Nat) -> Nat:
   match m:
-    case Mm{rng, +max, pol, smp, ten, lfl, lfd, +kick, pool, next, +debt, acl}:
-      Bool.pick(Nat, kick, 1n, Bool.pick(Nat, Bool.and(Nat.is_lt(0n, max), Nat.is_lt(max, Nat.sub(used, debt))), 2n, 0n))
+    case Mm{rng, +max, pol, smp, ten, lfl, lfd, +kick, pool, next, h0, k0, per, acl}:
+      Bool.pick(Nat, kick, 1n, Bool.pick(Nat, Bool.and(Nat.is_lt(0n, max), Nat.is_lt(max, used)), 2n, 0n))
     case MmOf{+n}:
       mm.what(n, used)
 
 # the change of maxmemory seen to
 def mm.kicked(m: Mm) -> Mm:
   match m:
-    case Mm{rng, max, pol, smp, ten, lfl, lfd, kick, pool, next, debt, acl}:
-      Mm{rng, max, pol, smp, ten, lfl, lfd, False{}, pool, next, debt, acl}
+    case Mm{rng, max, pol, smp, ten, lfl, lfd, kick, pool, next, h0, k0, per, acl}:
+      Mm{rng, max, pol, smp, ten, lfl, lfd, False{}, pool, next, h0, k0, per, acl}
     case MmOf{n}:
       mm.kicked(n)
 
 def mm.smp(+m: Mm) -> Nat:
   match m:
-    case Mm{rng, max, pol, smp, ten, lfl, lfd, kick, pool, next, debt, acl}:
+    case Mm{rng, max, pol, smp, ten, lfl, lfd, kick, pool, next, h0, k0, per, acl}:
       smp
     case MmOf{+n}:
       mm.smp(n)
 
 def mm.ten(+m: Mm) -> Nat:
   match m:
-    case Mm{rng, max, pol, smp, ten, lfl, lfd, kick, pool, next, debt, acl}:
+    case Mm{rng, max, pol, smp, ten, lfl, lfd, kick, pool, next, h0, k0, per, acl}:
       ten
     case MmOf{+n}:
       mm.ten(n)
 
 def mm.next(+m: Mm) -> Nat:
   match m:
-    case Mm{rng, max, pol, smp, ten, lfl, lfd, kick, pool, next, debt, acl}:
+    case Mm{rng, max, pol, smp, ten, lfl, lfd, kick, pool, next, h0, k0, per, acl}:
       next
     case MmOf{+n}:
       mm.next(n)
 
 def mm.pool(+m: Mm) -> List<&2, Pe>:
   match m:
-    case Mm{rng, max, pol, smp, ten, lfl, lfd, kick, pool, next, debt, acl}:
+    case Mm{rng, max, pol, smp, ten, lfl, lfd, kick, pool, next, h0, k0, per, acl}:
       pool
     case MmOf{+n}:
       mm.pool(n)
@@ -249,8 +245,8 @@ type Mp is Data:
 
 def mm.pool.take(m: Mm) -> Mp:
   match m:
-    case Mm{rng, max, pol, smp, ten, lfl, lfd, kick, pool, next, debt, acl}:
-      Mp{pool, Mm{rng, max, pol, smp, ten, lfl, lfd, kick, Nil{}, next, debt, acl}}
+    case Mm{rng, max, pol, smp, ten, lfl, lfd, kick, pool, next, h0, k0, per, acl}:
+      Mp{pool, Mm{rng, max, pol, smp, ten, lfl, lfd, kick, Nil{}, next, h0, k0, per, acl}}
     case MmOf{x}:
       mm.pool.take(x)
 
@@ -262,46 +258,81 @@ def mm.step(+rng: U32, +n: Nat) -> U32:
 # random (the database it picked from), of n databases
 def mm.pool.set(m: Mm, ps: List<&2, Pe>, +n: Nat) -> Mm:
   match m:
-    case Mm{+rng, max, pol, smp, ten, lfl, lfd, kick, pool, next, debt, acl}:
-      Mm{mm.step(rng, n), max, pol, smp, ten, lfl, lfd, kick, ps, next, debt, acl}
+    case Mm{+rng, max, pol, smp, ten, lfl, lfd, kick, pool, next, h0, k0, per, acl}:
+      Mm{mm.step(rng, n), max, pol, smp, ten, lfl, lfd, kick, ps, next, h0, k0, per, acl}
     case MmOf{x}:
       mm.pool.set(x, ps, n)
 
 def mm.next.set(m: Mm, +j: Nat, +n: Nat) -> Mm:
   match m:
-    case Mm{+rng, max, pol, smp, ten, lfl, lfd, kick, pool, next, debt, acl}:
-      Mm{mm.step(rng, n), max, pol, smp, ten, lfl, lfd, kick, pool, j, debt, acl}
+    case Mm{+rng, max, pol, smp, ten, lfl, lfd, kick, pool, next, h0, k0, per, acl}:
+      Mm{mm.step(rng, n), max, pol, smp, ten, lfl, lfd, kick, pool, j, h0, k0, per, acl}
     case MmOf{x}:
       mm.next.set(x, j, n)
 
-# b bytes more of debt (a key evicted while a rewrite runs)
-def mm.owe(m: Mm, +b: Nat) -> Mm:
+# A rewrite of the append-only file or a background save took its
+# snapshot when the heap's used bytes were h and the databases held k
+# keys, per bytes each on average. While it runs, a key that a write
+# replaces or deletes stays in the snapshot, and so in the heap, where
+# Redis's parent lets it go (its child's pages are copied on write, and
+# its used_memory never counts them): so the eviction, and the refusal of
+# writes past maxmemory, see the heap at the snapshot, per bytes more for
+# each key made since and as many less for each key gone since (mm.view),
+# at most the heap itself (server.bend, mem.seen). A value that grows in
+# place counts once the job has ended, when the heap is read as it is.
+def mm.snap(m: Mm, +h: Nat, +k: Nat, +p: Nat) -> Mm:
   match m:
-    case Mm{rng, max, pol, smp, ten, lfl, lfd, kick, pool, next, +debt, acl}:
-      Mm{rng, max, pol, smp, ten, lfl, lfd, kick, pool, next, Nat.add(debt, b), acl}
+    case Mm{rng, max, pol, smp, ten, lfl, lfd, kick, pool, next, h0, k0, per, acl}:
+      Mm{rng, max, pol, smp, ten, lfl, lfd, kick, pool, next, h, k, p, acl}
     case MmOf{x}:
-      mm.owe(x, b)
+      mm.snap(x, h, k, p)
 
-# the debt paid: the rewrite whose snapshot held what eviction freed ended
-def mm.paid(m: Mm) -> Mm:
+# a bound past any maxmemory (mm.nat.of): a product past it is that
+# bound, as a Nat past 2^48 would stop the process (a match, not
+# Bool.pick, which would make the product all the same)
+def mm.cap() -> Nat:
+  Nat.mul(1000000000n, 100000n)
+
+def mm.times.if(ok: Bool, +a: Nat, +b: Nat) -> Nat:
+  match ok:
+    case True{}:
+      Nat.mul(a, b)
+    case False{}:
+      mm.cap()
+
+def mm.times(+a: Nat, +b: Nat) -> Nat:
+  mm.times.if(Nat.is_le(a, Nat.div(mm.cap(), Nat.max(b, 1n))), a, b)
+
+# the memory with k keys while the job runs: per bytes more than at the
+# snapshot for each key past k0 there, less for each key short of it (no
+# more than the snapshot's keys held: k0 * per is the heap's share of
+# them, at most h0)
+def mm.view.of(up: Bool, +h0: Nat, +k0: Nat, +per: Nat, +k: Nat) -> Nat:
+  match up:
+    case True{}:
+      Nat.add(h0, mm.times(Nat.sub(k, k0), per))
+    case False{}:
+      Nat.sub(h0, Nat.mul(Nat.sub(k0, k), per))
+
+def mm.view(+m: Mm, +k: Nat) -> Nat:
   match m:
-    case Mm{rng, max, pol, smp, ten, lfl, lfd, kick, pool, next, debt, acl}:
-      Mm{rng, max, pol, smp, ten, lfl, lfd, kick, pool, next, 0n, acl}
-    case MmOf{n}:
-      mm.paid(n)
+    case Mm{rng, max, pol, smp, ten, lfl, lfd, kick, pool, next, +h0, +k0, +per, acl}:
+      mm.view.of(Nat.is_le(k0, k), h0, k0, per, k)
+    case MmOf{+n}:
+      mm.view(n, k)
 
 # the users, and the server with them changed
 def mm.acl(+m: Mm) -> U.Acl:
   match m:
-    case Mm{rng, max, pol, smp, ten, lfl, lfd, kick, pool, next, debt, +acl}:
+    case Mm{rng, max, pol, smp, ten, lfl, lfd, kick, pool, next, h0, k0, per, +acl}:
       acl
     case MmOf{+n}:
       mm.acl(n)
 
 def mm.acl.set(m: Mm, a: U.Acl) -> Mm:
   match m:
-    case Mm{rng, max, pol, smp, ten, lfl, lfd, kick, pool, next, debt, acl}:
-      Mm{rng, max, pol, smp, ten, lfl, lfd, kick, pool, next, debt, a}
+    case Mm{rng, max, pol, smp, ten, lfl, lfd, kick, pool, next, h0, k0, per, acl}:
+      Mm{rng, max, pol, smp, ten, lfl, lfd, kick, pool, next, h0, k0, per, a}
     case MmOf{n}:
       mm.acl.set(n, a)
 
@@ -313,35 +344,35 @@ def mm.acl.set(m: Mm, a: U.Acl) -> Mm:
 # back only what they read.
 def mm.open(+m: Mm) -> Bool:
   match m:
-    case Mm{rng, max, pol, smp, ten, lfl, lfd, kick, pool, next, debt, +acl}:
+    case Mm{rng, max, pol, smp, ten, lfl, lfd, kick, pool, next, h0, k0, per, +acl}:
       U.acl.open(acl)
     case MmOf{+n}:
       mm.open(n)
 
 def mm.restricted(+m: Mm, +id: Nat) -> Bool:
   match m:
-    case Mm{rng, max, pol, smp, ten, lfl, lfd, kick, pool, next, debt, +acl}:
+    case Mm{rng, max, pol, smp, ten, lfl, lfd, kick, pool, next, h0, k0, per, +acl}:
       U.acl.restricted(acl, id)
     case MmOf{+n}:
       mm.restricted(n, id)
 
 def mm.acl.any(+m: Mm) -> Bool:
   match m:
-    case Mm{rng, max, pol, smp, ten, lfl, lfd, kick, pool, next, debt, +acl}:
+    case Mm{rng, max, pol, smp, ten, lfl, lfd, kick, pool, next, h0, k0, per, +acl}:
       U.acl.any(acl)
     case MmOf{+n}:
       mm.acl.any(n)
 
 def mm.acl.check(+m: Mm, +n: String, +k: Nat, +argv: List<&2, String>) -> U.Verdict:
   match m:
-    case Mm{rng, max, pol, smp, ten, lfl, lfd, kick, pool, next, debt, +acl}:
+    case Mm{rng, max, pol, smp, ten, lfl, lfd, kick, pool, next, h0, k0, per, +acl}:
       U.acl.check(acl, n, k, argv)
     case MmOf{+x}:
       mm.acl.check(x, n, k, argv)
 
 def mm.acl.sort(+m: Mm, +n: String, +k: Nat, +argv: List<&2, String>) -> Maybe<&2, String>:
   match m:
-    case Mm{rng, max, pol, smp, ten, lfl, lfd, kick, pool, next, debt, +acl}:
+    case Mm{rng, max, pol, smp, ten, lfl, lfd, kick, pool, next, h0, k0, per, +acl}:
       U.acl.sort.err(acl, n, k, argv)
     case MmOf{+x}:
       mm.acl.sort(x, n, k, argv)
@@ -537,6 +568,12 @@ def srv.ran(s: Srv, +calls: Nat, +r: Nat, rs: List<&2, Nat>, +inb: Nat, +outb: N
     case Srv{pass, cfg, info, mm}:
       Srv{pass, cfg, I.info.ran(info, calls, r, rs, inb, outb), mm}
 
+# the same, with the batch's d changes (the count of changes)
+def srv.ran.d(s: Srv, +calls: Nat, +r: Nat, rs: List<&2, Nat>, +inb: Nat, +outb: Nat, +d: Nat) -> Srv:
+  match s:
+    case Srv{pass, cfg, info, mm}:
+      Srv{pass, cfg, I.info.ran.d(info, calls, r, rs, inb, outb, d), mm}
+
 def srv.errs(s: Srv, xs: List<&2, R.Erred>) -> Srv:
   match s:
     case Srv{pass, cfg, info, mm}:
@@ -584,18 +621,18 @@ def srv.rw.later(s: Srv) -> Srv:
 def srv.rw.done(s: Srv, +size: Nat, +ms: Nat) -> Srv:
   match s:
     case Srv{pass, cfg, info, mm}:
-      Srv{pass, cfg, I.info.rw.done(info, size, ms), mm.paid(mm)}
+      Srv{pass, cfg, I.info.rw.done(info, size, ms), mm}
 
 def srv.rw.failed(s: Srv, +ms: Nat) -> Srv:
   match s:
     case Srv{pass, cfg, info, mm}:
-      Srv{pass, cfg, I.info.rw.failed(info, ms), mm.paid(mm)}
+      Srv{pass, cfg, I.info.rw.failed(info, ms), mm}
 
 # the rewrite that runs stopped (a SHUTDOWN whose save failed)
 def srv.rw.stop(s: Srv) -> Srv:
   match s:
     case Srv{pass, cfg, info, mm}:
-      Srv{pass, cfg, I.info.rw.stop(info), mm.paid(mm)}
+      Srv{pass, cfg, I.info.rw.stop(info), mm}
 
 # The RDB file (info.bend: Rdb; server.bend: The RDB file): a SAVE
 # counted as it runs; a save that ended, well or not, at the second secs;
@@ -646,6 +683,79 @@ def srv.rdb.shut(+s: Srv) -> Bool:
     case Srv{pass, cfg, +info, mm}:
       I.info.rdb.shut(info)
 
+# the count of changes and the background saves (info.bend: Rdb, Bgs;
+# server.bend: The count of changes, Background saves): the record, lent;
+# d more changes; a SAVE that ended (well: none are left); a FLUSHALL's
+# save asked for, and made; a background save started at the second now,
+# of a snapshot of total keys (snap: a group's BGSAVE took it for the
+# shell; unsched: it is the one scheduled), with the parameters it keeps
+# from then (I.BgCf); one scheduled; the snapshot taken by the shell; k
+# keys written; the save dropped once the group is answered (FLUSHALL);
+# the save ended, well or not, or dropped, at the second now
+def srv.rdb(+s: Srv) -> I.Rdb:
+  match s:
+    case Srv{pass, cfg, +info, mm}:
+      I.info.rdb(info)
+
+def srv.dirtied(s: Srv, +d: Nat) -> Srv:
+  match s:
+    case Srv{pass, cfg, info, mm}:
+      Srv{pass, cfg, I.info.dirtied(info, d), mm}
+
+def srv.rdb.clean(s: Srv, +well: Bool) -> Srv:
+  match s:
+    case Srv{pass, cfg, info, mm}:
+      Srv{pass, cfg, I.info.rdb.clean(info, well), mm}
+
+def srv.rdb.flush.mark(s: Srv) -> Srv:
+  match s:
+    case Srv{pass, cfg, info, mm}:
+      Srv{pass, cfg, I.info.rdb.flush.mark(info), mm}
+
+def srv.rdb.flush.done(s: Srv, +well: Bool) -> Srv:
+  match s:
+    case Srv{pass, cfg, info, mm}:
+      Srv{pass, cfg, I.info.rdb.flush.done(info, well), mm}
+
+def srv.bg.go(s: Srv, +now: Nat, +total: Nat, snap: Maybe<&2, List<&2, R.Db>>, +unsched: Bool) -> Srv:
+  match s:
+    case Srv{pass, +cfg, info, mm}:
+      Srv{pass, cfg, I.info.bg.go(info, now, total, snap, unsched, I.bgcf.of(cfg)), mm}
+
+def srv.bg.later(s: Srv) -> Srv:
+  match s:
+    case Srv{pass, cfg, info, mm}:
+      Srv{pass, cfg, I.info.bg.later(info), mm}
+
+def srv.bg.taken.of(p: Maybe<&2, List<&2, R.Db>> & I.Info, +pass: String, +cfg: List<&2, C.CItem>, mm: Mm) -> Maybe<&2, List<&2, R.Db>> & Srv:
+  (m, info) = p
+  (m, Srv{pass, cfg, info, mm})
+
+def srv.bg.taken(s: Srv) -> Maybe<&2, List<&2, R.Db>> & Srv:
+  match s:
+    case Srv{+pass, +cfg, info, mm}:
+      srv.bg.taken.of(I.info.bg.taken(info), pass, cfg, mm)
+
+def srv.bg.wrote(s: Srv, +k: Nat) -> Srv:
+  match s:
+    case Srv{pass, cfg, info, mm}:
+      Srv{pass, cfg, I.info.bg.wrote(info, k), mm}
+
+def srv.bg.killing(s: Srv) -> Srv:
+  match s:
+    case Srv{pass, cfg, info, mm}:
+      Srv{pass, cfg, I.info.bg.killing(info), mm}
+
+def srv.bg.end(s: Srv, +well: Bool, +now: Nat) -> Srv:
+  match s:
+    case Srv{pass, cfg, info, mm}:
+      Srv{pass, cfg, I.info.bg.end(info, well, now), mm}
+
+def srv.bg.drop(s: Srv, +now: Nat) -> Srv:
+  match s:
+    case Srv{pass, cfg, info, mm}:
+      Srv{pass, cfg, I.info.bg.drop(info, now), mm}
+
 # an eviction at now that deleted k keys and left the heap past
 # maxmemory or not (over)
 def srv.evicted(s: Srv, +k: Nat, +over: Bool, +now: Nat) -> Srv:
@@ -653,8 +763,18 @@ def srv.evicted(s: Srv, +k: Nat, +over: Bool, +now: Nat) -> Srv:
     case Srv{pass, cfg, info, mm}:
       Srv{pass, cfg, I.info.evicted(info, k, over, now), mm}
 
-def srv.debt(+s: Srv) -> Nat:
-  mm.debt(srv.mm(s))
+# a job took its snapshot when the heap's used bytes were used and the
+# databases held k keys (mm.snap): each key held, on average, the heap's
+# bytes past those it held at the start (INFO's used_memory_startup),
+# none without keys
+def srv.snap(s: Srv, +used: Nat, +k: Nat) -> Srv:
+  match s:
+    case Srv{pass, cfg, +info, mm}:
+      Srv{pass, cfg, info, mm.snap(mm, used, k, Bool.pick(Nat, Nat.is_eq(k, 0n), 0n, Nat.div(Nat.sub(used, I.info.heap0(info)), Nat.max(k, 1n))))}
+
+# the memory as the eviction sees it while a job runs, with k keys
+def srv.view(+s: Srv, +k: Nat) -> Nat:
+  mm.view(srv.mm(s), k)
 
 def srv.mem.what(+s: Srv, +used: Nat) -> Nat:
   match s:
@@ -2638,14 +2758,6 @@ def mem.size(+k: String, m: Maybe<&2, KV.Item<KV.Val>>) -> R.Reply:
     case None{}:
       R.RNull{}
 
-# MEMORY USAGE's estimate of the bytes of key k and its entry (0 for none)
-def mem.est(+k: String, m: Maybe<&2, KV.Item<KV.Val>>) -> Nat:
-  match m:
-    case Some{KV.Item{+v, e}}:
-      Nat.add(Nat.add(40n, String.length(k)), mem.val(v))
-    case None{}:
-      0n
-
 def mem.usage(bad: Maybe<&2, R.Reply>, +k: String, m: Maybe<&2, KV.Item<KV.Val>>) -> R.Reply:
   match bad:
     case Some{e}:
@@ -3188,7 +3300,9 @@ def sort.reply(+ds: R.Ds, +k: String, o: R.SortO) -> R.Reply:
 # is to save one (server.bend, The RDB file and SHUTDOWN): the shell
 # answers them once it has saved, or answers a SHUTDOWN whose save failed
 # as Redis does. A session alone writes nothing and stops nothing: it
-# answers OK for each.
+# answers OK for each. BGSAVE writes the file in the background, which
+# the shell runs too (server.bend, Background saves): a session alone
+# answers that the save started, as Redis does when nothing else runs.
 
 # SLOWLOG GET's count: none for 10, -1 for all
 def slow.get(+t: I.Tim, +args: List<&2, String>) -> R.Reply:
@@ -3248,6 +3362,8 @@ def admin.reply(+k: Nat, +args: List<&2, String>, +s: Srv, +ds: R.Ds) -> R.Reply
       R.RVerb{L.six(args, KV.mix(srv.rng(s)))}
     case 15n:
       R.r_ok()
+    case 16n:
+      R.RStatus{"Background saving started"}
     case _:
       latency.reply(k, args, s, ds)
 

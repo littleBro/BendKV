@@ -148,7 +148,12 @@ events, and the two after it that it held back (CONFIG GET and SET of the flags,
 refused for memory while it queued; unit/introspection-2's test that TTL, TYPE and
 EXISTS leave a key's last use as it was; and unit/lazyfree's two tests of the memory
 UNLINK and FLUSHDB ASYNC give back, now that `used_memory` is what the heap's live values
-hold. MONITOR (section 3zt of
+hold. While a rewrite of the append-only file or a background save runs, the eviction
+and the refusal past maxmemory count the dataset's change by its number of keys, each at
+the average size when the job started, and a value grown in place counts when the job
+ends (README.md, Memory; section 3zzzk of [FINDINGS.md](FINDINGS.md)): Redis's parent
+counts no page its child keeps, and BendKV's snapshot keeps the values the writes
+replace. MONITOR (section 3zt of
 [FINDINGS.md](FINDINGS.md)) brought 3: unit/introspection passes 25 of its 28 tests, a
 monitor's lines of the commands that run, and a transaction's in order, with its EXEC's
 line also when an error while it queued aborted it (of the other three, two look in a
@@ -240,7 +245,9 @@ passes 42 of its 52 tests (the rest need other types, or DEBUG). BITOP and LCS b
 types, or replication), and COMMAND GETKEYS of LCS passes in unit/introspection-2.
 BITFIELD brought 16, all of unit/bitfield; of unit/bitops's other two tests, one needs
 lists and the other counts the changes since the last save (`rdb_changes_since_last_save`
-in INFO), which BendKV does not keep. Several databases brought 6 of the 17 tests Redis
+in INFO), which BendKV did not keep when the suite last ran (it does since section 3zzzk
+of [FINDINGS.md](FINDINGS.md), counting some writes otherwise than Redis: README.md,
+Persistence). Several databases brought 6 of the 17 tests Redis
 passes that run only without `--singledb`: SET and GET in different databases, DEL in
 database 1, and four of MOVE's five (against a key the target holds, against a database
 that is no integer, with a time and without one). The fifth, MOVE's basic usage, passes
@@ -329,8 +336,9 @@ pubsubshard, shutdown, tls, type/list-common, wait):
     - CLUSTER called from a script (unit/scripting);
     - the order of a hash Redis keeps in a listpack past the parameters' defaults
       (above);
-    - replication: EXEC's NOREPLICAS, and a script's when it counts good replicas;
-    - `rdb_changes_since_last_save` (0);
+    - replication: `min-replicas-to-write`, EXEC's NOREPLICAS, and a script's when it
+      counts good replicas;
+    - `rdb_changes_since_last_save` (0 when the suite last ran);
     - the size of a client's query buffer (CLIENT LIST's qbuf, 0);
     - streams;
     - MOVE's basic usage (above).
@@ -383,7 +391,8 @@ file, so the next step is the suite's own mode with BendKV in place of
 (`tests/start_test.py`, against `redis-server`), restarts from the append-only file
 (`tests/aof_test.py`, and after kills under load: `tests/crash_test.py`), the RDB
 file (`tests/rdb_test.py`: files of Redis's and of BendKV's, each loaded by both, SAVE and
-the saves of SHUTDOWN and FLUSHALL), and the append-only file's
+the saves of SHUTDOWN and FLUSHALL; `tests/bgsave_test.py`: BGSAVE, the save points,
+MISCONF and the count of changes), and the append-only file's
 rewrite (`tests/rewrite_test.py`: BGREWRITEAOF's replies
 and INFO's fields against Redis's, the rewritten file against Redis's base, writes during a
 rewrite, BendKV and Redis started from the new file; Redis's unit/aofrw is tagged
@@ -437,7 +446,10 @@ alike.)
 Every test BendKV fails of those Redis passes fails on what BendKV does not have:
 
 - **A command it does not have:** in redis-py, streams (73), MODULE 2, and BGSAVE and
-  REPLICAOF one each (77 tests in each protocol); in go-redis, streams (26 tests).
+  REPLICAOF one each (77 tests in each protocol, in the run of the table above; the test
+  of BGSAVE passes since the background saves, section 3zzzk of
+  [FINDINGS.md](FINDINGS.md), and is off the known failures); in go-redis, streams (26
+  tests).
   Functions (section 3zzzp of [FINDINGS.md](FINDINGS.md)) brought redis-py's 7 tests of
   FUNCTION and FCALL in each protocol (LOAD, LIST, DELETE, FLUSH, DUMP and RESTORE, FCALL
   and FCALL_RO) and go-redis's 6 (FCALL, FCALL_RO, DELETE, FLUSH, FLUSH ASYNC, and KILL of
@@ -451,7 +463,7 @@ Every test BendKV fails of those Redis passes fails on what BendKV does not have
   HyperLogLogs (section 3zzj), its 5 of CLIENT PAUSE and UNPAUSE since the pause
   (section 3zzk), and its 9 of LASTSAVE, LOLWUT, MEMORY STATS, MEMORY MALLOC-STATS and
   ROLE, and go-redis's of WAIT and its filter of commands by the ACL category admin (it
-  wants more than 10; BendKV has 17), since the administrative commands (section 3zzl);
+  wants more than 10; BendKV has 37), since the administrative commands (section 3zzl);
   geo's 59 in redis-py and 11 in go-redis pass since GEO (section 3zzm), and the 12 tests
   of DUMP and RESTORE in redis-py and 3 in go-redis since DUMP and RESTORE (section
   3zzu); redis-py's 9 tests of SLOWLOG and 3 of LATENCY, and go-redis's of SLOWLOG, pass

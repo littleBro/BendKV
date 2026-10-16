@@ -99,7 +99,7 @@ The scenarios:
    EXEC's array, the commands after it run), and of a script whose call
    is refused; ACL LOG's entries (context lua, the caller's line, its
    command EVAL or EXEC; the volatile fields of the line left out), and
-   INFO's statistics before the transactions.
+   INFO's statistics before and after the transactions.
 
 Not tested: error() with a table that has no 'err' field (error({}))
 makes Redis 7.0.15 crash (sdscatfmt reads the message it does not have),
@@ -621,6 +621,10 @@ LIBS = [
      "bit.rshift(-1, 28), bit.arshift(-256, 4), bit.tobit(2^32 + 1), bit.tohex(65535), bit.tohex(-1, 4), "
      "bit.rol(1, 33), bit.ror(1, 1), bit.bswap(0x12345678)}", []),
     ("return bit.band()", []),
+    # the smallest width, which C cannot negate: the reference's 7.0.15
+    # carries the fix of CVE-2024-31449 (and its test in scripting.tcl); the
+    # vendored Lua without it answered 8 bytes of its stack
+    ("return {bit.tohex(65535, -2147483648), bit.tohex(-1, -2147483647), bit.tohex(255, -3), bit.tohex(1, 0)}", []),
     # struct
     ("return {struct.pack('>I2', 258), struct.pack('<i4', -2), struct.pack('>d', 1.5), struct.size('>I4i2'), "
      "struct.pack('s', 'ab'), struct.pack('>Bc0', 3, 'xyz'), struct.pack('!')}", []),
@@ -1181,11 +1185,9 @@ def acl(port, log):
         ev(c, "return redis.call('publish', 'other', 'm')"))
     log("13 stats", *stats(r))
     # EXEC of a script whose command its user lost since it was queued:
-    # NOPERM in EXEC's array, the commands after it run. (Its statistics
-    # are left out: a command refused so is counted in
-    # total_commands_processed, which Redis does not count, and EXEC whose
-    # last command is refused so is a failed call in Redis, the NOPERM
-    # coming after its last call. Both are main's ACL's, for any command.)
+    # NOPERM in EXEC's array, the commands after it run; a command refused
+    # so is no call, and EXEC fails when one comes after its last call
+    # (#117)
     log("13 multi", c.cmd("MULTI"), ev(c, "return redis.call('set', KEYS[1], '2')", [k("xb")]),
         c.cmd("SET", k("xc"), "3"), ev(c, "return 1"), c.cmd("SET", k("xe"), "5"))
     log("13 eval lost", r.cmd("ACL", "SETUSER", u, "-eval"))
@@ -1194,6 +1196,11 @@ def acl(port, log):
     log("13 eval back", r.cmd("ACL", "SETUSER", u, "+eval"))
     log("13 exec call", c.cmd("MULTI"), ev(c, "return redis.call('get', KEYS[1])", [k("xb")]), c.cmd("SET", k("xd"), "4"),
         c.cmd("EXEC"))
+    # and EXEC whose last queued command, a script's, its user lost: a
+    # failed EXEC
+    log("13 exec last", c.cmd("MULTI"), c.cmd("SET", k("xf"), "6"), ev(c, "return 1"),
+        r.cmd("ACL", "SETUSER", u, "-eval"), c.cmd("EXEC"), r.cmd("ACL", "SETUSER", u, "+eval"))
+    log("13 stats after", *stats(r))
     log("13 log", *acl_log(r))
     c.close()
     log("13 deluser", r.cmd("ACL", "DELUSER", u), r.cmd("ACL", "LOG", "RESET"))

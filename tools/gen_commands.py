@@ -95,7 +95,7 @@ COMMANDS = {
     "dump": [], "restore": [], "slowlog": ["get", "help", "len", "reset"],
     "latency": ["doctor", "graph", "help", "histogram", "history", "latest", "reset"], "save": [],
     "acl": ["cat", "deluser", "dryrun", "genpass", "getuser", "help", "list", "load", "log",
-            "save", "setuser", "users", "whoami"]}
+            "save", "setuser", "users", "whoami"], "bgsave": []}
 
 # Step 1: redis-server -> facts
 # -----------------------------
@@ -492,6 +492,54 @@ ENGINE = EVALS | {"script|load", "script|exists", "script|flush", "function|load
                   "function|delete", "function|list", "function|stats", "function|dump",
                   "function|restore", "function|flush"}
 
+# How a call of each command counts its changes, for INFO's
+# rdb_changes_since_last_save and the save points (Redis's server.dirty,
+# which each command adds to as it changes the data): a rule of
+# server.bend (The count of changes) that reads the call's reply, and the
+# weight the shell reads in its arguments, and in the state of a key it
+# names before it runs, for the rules that take one. 0 none (a read, or a
+# command that changes no data); 1 one for a reply that is no error; 2 an
+# integer reply; 3 one for OK or a bulk string (SET, with or without GET);
+# 4 one for a bulk string; 5 one for a bulk string, or the length of an
+# array or a set (the pops of a list or a set); 6 the length of the second
+# item of [key, elements] (LMPOP and ZMPOP); 7 half the length of a flat
+# array, or the pairs of an array of them (ZPOPMIN and ZPOPMAX); 8 one for
+# an array (BLPOP and BZPOPMIN at once); 9 one for a positive integer
+# (LINSERT); 10 the weight for a reply that is no error; 11 the weight for
+# a positive integer; 12 one for a positive integer, the weight (the
+# destination was there) for 0 (the STOREs of sets and sorted sets,
+# BITOP); 13 a positive integer, the weight for 0 (SORT's and GEO's
+# STORE); 14 the weight for an integer reply, or the integer when the
+# weight is 0, the weight for a score (ZADD and GEOADD; with INCR, and
+# ZINCRBY, the weight is whether the score changes); 15 the weight less
+# the nulls of an array (BITFIELD); 16 the weight, whatever the reply
+# (EVAL of BendKV's own scripts: the DEL they start with, then what the
+# command they run changes, which an error of that command does not undo)
+DIRTY_RULES = {"none": 0, "one": 1, "int": 2, "set": 3, "bulk": 4, "pop": 5, "mpop": 6, "zpop": 7,
+               "bpop": 8, "pos": 9, "wok": 10, "wpos": 11, "store": 12, "nstore": 13, "zadd": 14,
+               "bitfield": 15, "w": 16}
+DIRTY = {
+    "set": "set", "setnx": "int", "setex": "one", "psetex": "one", "getset": "one", "getdel": "bulk",
+    "getex": "wok", "setrange": "wok", "mset": "wok", "msetnx": "wpos", "incr": "one", "decr": "one",
+    "incrby": "one", "decrby": "one", "incrbyfloat": "one", "append": "one", "setbit": "wok",
+    "bitop": "store", "bitfield": "bitfield", "del": "int", "unlink": "int", "expire": "int",
+    "pexpire": "int", "expireat": "int", "pexpireat": "int", "persist": "int", "rename": "wok",
+    "renamenx": "int", "move": "int", "copy": "int", "swapdb": "one", "flushdb": "wok",
+    "flushall": "wok", "restore": "wok", "hset": "wok", "hmset": "wok", "hsetnx": "int",
+    "hincrby": "one", "hincrbyfloat": "one", "hdel": "int", "lpush": "wok", "rpush": "wok",
+    "lpushx": "wpos", "rpushx": "wpos", "linsert": "pos", "lset": "one", "lpop": "pop", "rpop": "pop",
+    "ltrim": "wok", "lrem": "int", "lmove": "bulk", "rpoplpush": "bulk", "lmpop": "mpop",
+    "blpop": "bpop", "brpop": "bpop", "blmove": "bulk", "brpoplpush": "bulk", "blmpop": "mpop",
+    "sadd": "int", "srem": "int", "smove": "wok", "spop": "pop", "sinterstore": "store",
+    "sunionstore": "store", "sdiffstore": "store", "zadd": "zadd", "zincrby": "zadd", "zrem": "int",
+    "zremrangebyscore": "int", "zremrangebyrank": "int", "zremrangebylex": "int", "zpopmin": "zpop",
+    "zpopmax": "zpop", "zmpop": "mpop", "bzpopmin": "bpop", "bzpopmax": "bpop", "bzmpop": "mpop",
+    "zunionstore": "store", "zinterstore": "store", "zdiffstore": "store", "zrangestore": "store",
+    "pfadd": "int", "pfmerge": "one", "pfdebug": "wok", "geoadd": "zadd", "georadius": "nstore",
+    "georadiusbymember": "nstore", "geosearchstore": "nstore", "sort": "nstore",
+    "function|flush": "one", "function|load": "one", "function|delete": "one",
+    "function|restore": "one", "eval": "w"}
+
 # the parser's commands with subcommands, by the function that numbers
 # their subcommands
 CONTAINERS = {"client": "client_id", "function": "function_id", "config": "config_id",
@@ -647,7 +695,9 @@ def stats_block(src, facts):
             out += ["    case %dn:" % k, "      True{}"]
     out += ["    case _:", "      False{}", ""]
     out += ["# whether the command of a key writes (write): a script that may not",
-            "# write is refused it, and a script that ran one cannot be killed",
+            "# write is refused it, and a script that ran one cannot be killed;",
+            "# while a background save that failed stops writes (MISCONF), Redis",
+            "# refuses it",
             "def stat.write(+key: Nat) -> Bool:", "  match key:"]
     for k, (name, kind, i) in enumerate(keys, 1):
         if "write" in fl[name]:
@@ -673,6 +723,20 @@ def stats_block(src, facts):
         if "denyoom" in fl[name]:
             out += ["    case %dn:" % k, "      True{}"]
     out += ["    case _:", "      False{}", ""]
+    for name in DIRTY:
+        if name not in [x[0] for x in keys]:
+            raise SystemExit("gen_commands.py: DIRTY names no command " + name)
+    for name, kind, i in keys:
+        if "write" in fl[name] and name not in DIRTY:
+            raise SystemExit("gen_commands.py: DIRTY lacks the command " + name + ", which writes")
+    out += ["# how a call of the command of a key counts its changes (DIRTY_RULES in",
+            "# tools/gen_commands.py; server.bend, The count of changes)",
+            "def stat.dirty(+key: Nat) -> Nat:", "  match key:"]
+    for k, (name, kind, i) in enumerate(keys, 1):
+        rule = DIRTY_RULES[DIRTY.get(name, "none")]
+        if rule:
+            out += ["    case %dn:" % k, "      %dn" % rule]
+    out += ["    case _:", "      0n", ""]
     out += ["# whether the command of a key may not run in a transaction (no_multi:",
             "# SHUTDOWN, SAVE): in MULTI, Redis refuses it before it is queued",
             "def stat.nomulti(+key: Nat) -> Bool:", "  match key:"]

@@ -2291,6 +2291,94 @@
     }
    ]
   },
+  "bgsave": {
+   "docs": {
+    "%": [
+     "summary",
+     "Asynchronously save the dataset to disk",
+     "since",
+     "1.0.0",
+     "group",
+     "server",
+     "complexity",
+     "O(1)",
+     "history",
+     {
+      "~": [
+       [
+        "3.2.2",
+        "Added the `SCHEDULE` option."
+       ]
+      ]
+     },
+     "arguments",
+     [
+      {
+       "%": [
+        "name",
+        "schedule",
+        "type",
+        "pure-token",
+        "token",
+        "SCHEDULE",
+        "since",
+        "3.2.2",
+        "flags",
+        {
+         "~": [
+          {
+           "+": "optional"
+          }
+         ]
+        }
+       ]
+      }
+     ]
+    ]
+   },
+   "info": [
+    "bgsave",
+    -1,
+    {
+     "~": [
+      {
+       "+": "admin"
+      },
+      {
+       "+": "noscript"
+      },
+      {
+       "+": "no_async_loading"
+      }
+     ]
+    },
+    0,
+    0,
+    0,
+    {
+     "~": [
+      {
+       "+": "@admin"
+      },
+      {
+       "+": "@slow"
+      },
+      {
+       "+": "@dangerous"
+      }
+     ]
+    },
+    {
+     "~": []
+    },
+    {
+     "~": []
+    },
+    {
+     "~": []
+    }
+   ]
+  },
   "bitcount": {
    "docs": {
     "%": [

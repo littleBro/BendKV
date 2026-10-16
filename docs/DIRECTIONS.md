@@ -223,9 +223,10 @@ optimizations*. What is "risky" in C becomes a theorem:
   section 7). Each shard owned its event loop; a heap of its own, as BEAM processes
   have, would also keep terms from crossing cores.
 - **Snapshots for free.** The trie is persistent, so an old root is a consistent
-  snapshot. That gives BGSAVE without `fork()`, rollback for MULTI/EXEC, and readers
-  on other threads without locks. Nodes shared across threads need atomic reference
-  counts; Lean marks such objects and keeps plain counts for the rest.
+  snapshot. That gives BGSAVE without `fork()` (done, [FINDINGS.md](FINDINGS.md),
+  section 3zzzk), rollback for MULTI/EXEC, and readers on other threads without locks.
+  Nodes shared across threads need atomic reference counts; Lean marks such objects
+  and keeps plain counts for the rest.
 - **Interleaving in the runtime.** Bend's runtime already runs code as segments with
   explicit continuations, which are coroutines in all but name. At a load that will
   probably miss, the runtime could issue a prefetch and switch to another pure task.
@@ -319,12 +320,12 @@ Where performance and proof meet: **batched execution under proved laws.**
    commands LASTSAVE, ROLE, WAIT, SHUTDOWN, MEMORY and LOLWUT (done, section 3zzl),
    GEO (done, section 3zzm), DUMP and RESTORE (done, section 3zzu), the slow log and
    the latency monitor (done, section 3zzz), the RDB file with SAVE, the saves of
-   SHUTDOWN and FLUSHALL and its load at the start (done, section 3zzzc; BGSAVE and the
-   save points next), CLIENT TRACKING (done, section 3zzzb), ACL users (done, section
-   3zzzh), Lua scripts on Redis's own Lua (done, section 3zzzd), and Lua's functions,
-   FUNCTION and FCALL, on the same engine (done, section 3zzzp), measured by Redis's own
-   test suite run against BendKV and by client libraries' test suites (redis-py's and
-   go-redis's, in CI: done, section 3zy).
+   SHUTDOWN and FLUSHALL and its load at the start (done, section 3zzzc), CLIENT TRACKING
+   (done, section 3zzzb), ACL users (done, section 3zzzh), BGSAVE and the save points
+   (done, section 3zzzk), Lua scripts on Redis's own Lua (done, section 3zzzd), and Lua's
+   functions, FUNCTION and FCALL, on the same engine (done, section 3zzzp), measured by
+   Redis's own test suite run against BendKV and by client libraries' test suites
+   (redis-py's and go-redis's, in CI: done, section 3zy).
    Streams are under way: a stream is a value BendKV holds (section 3zzzu), its commands
    next. Cluster, replication and modules are out of scope. The suite's count: of the 1,677 tests
    Redis 7.0.15 passes against a server it did not start, BendKV passes 1,515, 1,514 of

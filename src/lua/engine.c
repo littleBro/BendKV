@@ -2901,6 +2901,11 @@ static void __attribute__((constructor)) engine_next_use(void) {
 Term engine_flush_run(Env e, Term* f, IoWork* w) {
   (void)e; (void)f; (void)w;
   if (sc_lua != NULL) {
+    // a full collection first, as eval.c's scriptingRelease does since the
+    // fix of CVE-2024-46981, which the reference's 7.0.15 carries: closed
+    // in the middle of a cycle, Lua could free a userdata that a __gc
+    // callback still reads
+    lua_gc(sc_lua, LUA_GCCOLLECT, 0);
     lua_close(sc_lua);
     sc_lua = NULL;
   }
