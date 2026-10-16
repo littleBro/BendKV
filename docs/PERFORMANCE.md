@@ -7676,10 +7676,10 @@ requests a second with the first version's chain of buffers, where the tree answ
 main from this change). FINDINGS 3zzzn has the instructions, which the chain made 12 to
 21 times as many.
 
-**`make perfcheck`**: GET, SET and INCR unchanged: 3,443, 4,211 and 4,556 instructions
-per request, against 3,447, 4,209 and 4,553 for main 6b8bf82 built on the same machine
+**`make perfcheck`**: GET, SET and INCR unchanged: 3,448, 4,211 and 4,558 instructions
+per request, against 3,448, 4,213 and 4,552 for main 855f9b8 built on the same machine
 (the baseline's 3,452, 4,214 and 4,552), with the same last-level misses and prefetches;
-with 100 clients in BLPOP, +3.3% and +3.7% (main's +3.1% and +3.7%).
+with 100 clients in BLPOP, +3.4% and +3.6% (main's +3.2% and +3.7%).
 
 ## 75. A long request read in part
 
