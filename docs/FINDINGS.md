@@ -5979,7 +5979,8 @@ destination; a served BLMPOP, BZPOPMIN, BZPOPMAX or BZMPOP changes the key it po
 a served BLPOP or BRPOP changes nothing more, as Redis signals each (its push made the key
 ready). LMOVE's and RPOPLPUSH's destination goes before their source, as Redis signals
 them. One it gets as the client another redirects to comes before its
-reply, as Redis writes it while the command runs. The client whose command served a
+reply, as Redis writes it when the command signals the key, for most commands before
+their reply (Where BendKV differs). The client whose command served a
 blocked client gets that pop's invalidations after its own reply (and after its own
 invalidations), as Redis writes them once its call is over, with the served client as
 the one whose command runs: NOLOOP leaves them out for the served client, not for the
@@ -6039,6 +6040,11 @@ parameter by its name.
 - An LTRIM that removes nothing invalidates nothing. Redis signals its key all the same
   (`ltrimCommand` calls signalModifiedKey with nothing removed), as it touches it for WATCH
   (section 3zp).
+- A client that others redirect to gets the invalidation of a key its own command
+  writes before that command's reply. Redis writes it where the command signals the key:
+  before the reply for SET, DEL, SADD, INCR, APPEND and SETRANGE, which signal first,
+  and after it for the commands that reply first, as ZADD, ZINCRBY, HSET, HINCRBY, LPUSH
+  and RPUSH do (`addReply` before `signalModifiedKey`).
 
 **What it costs** (PERFORMANCE 66).
 
@@ -6087,7 +6093,7 @@ parameter by its name.
   they look in the set by, and the set holds the keys of the clients that wait and watch
   alone: with 300,000 keys and a client in a loop of WATCH, MULTI, SET and EXEC, PING's
   99th percentile is 2.6 ms and its longest 7.3 ms, and a tracked key takes 102 bytes
-  (Redis: 0.7 ms, 7.5 ms and 82 bytes).
+  (Redis: 0.7 ms, 7.5 ms and, with the same key names, 99 bytes).
 - A served BLMPOP, BZPOPMIN, BZPOPMAX or BZMPOP did not invalidate the key it popped
   from, LMOVE and RPOPLPUSH invalidated their source before their destination, CLIENT
   CACHING yes inside a transaction lasted past EXEC, CLIENT alone (an error of arity)
