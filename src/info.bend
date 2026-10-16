@@ -508,7 +508,8 @@ def stats.reset(st: Stats) -> Stats:
 # calls that ran (the refused ones do not run) takes an equal share: s =
 # d / n, and one us more for d mod n of them. Its runs then go with those
 # not yet counted: a run into the newest of them (cur) when it has its
-# code, or else in its place, cur going before the others (pend).
+# code, or else in its place, cur joining the run of its code among the
+# others (pend), or going last (truns.put).
 
 # the calls of run r that ran
 def run.ran(+r: Nat) -> Nat:
@@ -606,7 +607,8 @@ def timed.put(+t: TRun, p: TRun & List<&2, TRun>) -> TRun & List<&2, TRun>:
 # run r timed, its calls having taken u us (k of them s us each, x of
 # them one more, for the histogram while latency-tracking is on, trk):
 # into cur when it has cur's code, its counts added to cur's histogram,
-# else in cur's place, cur going before the others (pend)
+# else in cur's place, cur joining the run of its code in pend, or going
+# last (truns.put)
 def timed.add(same: Bool, +r: Nat, +u: Nat, +trk: Bool, +s: Nat, +k: Nat, +x: Nat, cur: TRun, pend: List<&2, TRun>) -> TRun & List<&2, TRun>:
   match same cur:
     case True{} TRun{r0, u0, h0}:
@@ -678,13 +680,36 @@ def stats.view(+st: Stats) -> List<&2, Ent>:
     case Stats{+es, +fresh, +cur, +pend, errs, total}:
       stats.runs(truns.merge(fresh.truns(fresh, cur <> pend), Nil{}), es)
 
+# whether a run holds 2^31 calls or more: from 2^32 its count would carry
+# into its code (R.run.of)
+def trun.full(+t: TRun) -> Bool:
+  match t:
+    case TRun{+r, u, h}:
+      Nat.is_lt(2147483647n, R.run.n(r))
+    case TRunOf{+t0}:
+      trun.full(t0)
+
+def stats.full(+st: Stats) -> Bool:
+  match st:
+    case Stats{es, fresh, +cur, pend, errs, total}:
+      trun.full(cur)
+
 # the runs timed counted in the entries but the newest (the cron's tick),
 # which goes on taking the runs of its code (its histogram is not merged
-# into its entry's at every tick); the window's wait for its timing
-def stats.fold(st: Stats) -> Stats:
-  match st:
-    case Stats{es, fresh, cur, pend, errs, total}:
+# into its entry's at every tick) until it holds 2^31 calls (full): it is
+# counted then, and cur starts again. A tick every 100 ms counts it long
+# before 2^32, which one command alone reaches in 72 minutes at a million
+# calls a second. The window's wait for its timing.
+def stats.fold.at(full: Bool, st: Stats) -> Stats:
+  match full st:
+    case False{} Stats{es, fresh, cur, pend, errs, total}:
       Stats{stats.runs(truns.merge(pend, Nil{}), es), fresh, cur, Nil{}, errs, total}
+    case True{} Stats{es, fresh, cur, pend, errs, total}:
+      Stats{stats.runs(truns.merge(cur <> pend, Nil{}), es), fresh, trun.zero(), Nil{}, errs, total}
+
+def stats.fold(st: Stats) -> Stats:
+  +s = st
+  stats.fold.at(stats.full(s), s)
 
 # Commandstats and Errorstats, as INFO writes them
 def ent.name(+e: Ent) -> String:
@@ -1507,6 +1532,11 @@ def stats.served(m: Maybe<&2, Wt>, st: Stats, +cf: TCfg, +id: Nat) -> Stats:
 type Boot is Data:
   IBoot{os: String, pid: String, run: String, replid: String, exe: String, conf: String, sysmem: Nat, start: U32, heap0: Nat}
 
+def boot.start(+b: Boot) -> U32:
+  match b:
+    case IBoot{os, pid, run, replid, exe, conf, sysmem, start, heap0}:
+      start
+
 # the clients the actor counts: those that wait (blk), those of them with
 # a time (tmo), those that track keys (tc), and the tracking table's keys,
 # its clients' ids and the BCAST prefixes (CLIENT TRACKING). CnOf, a count
@@ -1624,6 +1654,13 @@ def rws.end(r: Rws, +well: Bool, +ms: Nat) -> Rws:
     case IRws{on, sched, +start, last, ok, n, +fails}:
       IRws{False{}, sched, start, Some{Nat.sub(Nat.div(ms, 1000n), Nat.div(start, 1000n))}, well, n, Bool.pick(Nat, well, 0n, 1n+fails)}
 
+# a rewrite that runs stopped, neither done nor failed, as Redis's
+# killAppendOnlyChild stops it (a SHUTDOWN whose save failed)
+def rws.stop(r: Rws) -> Rws:
+  match r:
+    case IRws{on, sched, start, last, ok, n, fails}:
+      IRws{False{}, sched, start, last, ok, n, fails}
+
 # CONFIG RESETSTAT: the rewrites and the failures in a row counted again
 # (resetServerStats)
 def rws.reset(r: Rws) -> Rws:
@@ -1631,18 +1668,121 @@ def rws.reset(r: Rws) -> Rws:
     case IRws{on, sched, start, last, ok, n, fails}:
       IRws{on, sched, start, last, ok, 0n, 0n}
 
+# the RDB file (server.bend, The RDB file), as INFO shows it: when the
+# last save that ended well ended (s since 1970; the start until one
+# does, as Redis's lastsave, which LASTSAVE answers), the SAVEs run
+# (rdb_saves: CONFIG RESETSTAT counts them again), whether the last save
+# ended well (rdb_last_bgsave_status: a save that fails leaves it as it
+# was, as Redis's rdbSave does), the keys the start loaded from the file
+# and those it dropped as their time had passed
+# (rdb_last_load_keys_loaded and _expired), whether a FLUSHALL in the
+# group asked for a save, and whether a SHUTDOWN asked for one before the
+# server stops (the shell saves once the group has run). IRdbOf,
+# a record that holds a record, is never built: it makes Rdb a node of its
+# own, a word in Info, which is 64 words with it (a wider node is copied
+# whole at every update: section 3zzz of FINDINGS.md)
+type Rdb is Data:
+  IRdb{last: Nat, saves: Nat, ok: Bool, loaded: Nat, expired: Nat, flush: Bool, shut: Bool, owed: Bool}
+  IRdbOf{r: Rdb}
+
+def rdb.new(+secs: Nat) -> Rdb:
+  IRdb{secs, 0n, True{}, 0n, 0n, False{}, False{}, False{}}
+
+def rdb.last(+r: Rdb) -> Nat:
+  match r:
+    case IRdb{+last, saves, ok, loaded, expired, flush, shut, owed}:
+      last
+    case IRdbOf{+x}:
+      rdb.last(x)
+
+def rdb.flush(+r: Rdb) -> Bool:
+  match r:
+    case IRdb{last, saves, ok, loaded, expired, +flush, shut, owed}:
+      flush
+    case IRdbOf{+x}:
+      rdb.flush(x)
+
+def rdb.shut(+r: Rdb) -> Bool:
+  match r:
+    case IRdb{last, saves, ok, loaded, expired, flush, +shut, owed}:
+      shut
+    case IRdbOf{+x}:
+      rdb.shut(x)
+
+# a save that ended well at the second secs; one that failed changes
+# nothing
+def rdb.saved(r: Rdb, +well: Bool, +secs: Nat) -> Rdb:
+  match r:
+    case IRdb{+last, saves, +ok, loaded, expired, flush, shut, owed}:
+      IRdb{Bool.pick(Nat, well, secs, last), saves, Bool.or(ok, well), loaded, expired, flush, shut, owed}
+    case IRdbOf{x}:
+      rdb.saved(x, well, secs)
+
+# a SAVE, counted as it runs (saveCommand)
+def rdb.save(r: Rdb) -> Rdb:
+  match r:
+    case IRdb{last, +saves, ok, loaded, expired, flush, shut, owed}:
+      IRdb{last, 1n+saves, ok, loaded, expired, flush, shut, True{}}
+    case IRdbOf{x}:
+      rdb.save(x)
+
+def rdb.loaded(r: Rdb, +ld: Nat, +ex: Nat) -> Rdb:
+  match r:
+    case IRdb{last, saves, ok, loaded, expired, flush, shut, owed}:
+      IRdb{last, saves, ok, ld, ex, flush, shut, owed}
+    case IRdbOf{x}:
+      rdb.loaded(x, ld, ex)
+
+def rdb.flushed(r: Rdb, +on: Bool) -> Rdb:
+  match r:
+    case IRdb{last, saves, ok, loaded, expired, flush, shut, owed}:
+      IRdb{last, saves, ok, loaded, expired, on, shut, owed}
+    case IRdbOf{x}:
+      rdb.flushed(x, on)
+
+def rdb.shutting(r: Rdb, +on: Bool) -> Rdb:
+  match r:
+    case IRdb{last, saves, ok, loaded, expired, flush, shut, owed}:
+      IRdb{last, saves, ok, loaded, expired, flush, on, owed}
+    case IRdbOf{x}:
+      rdb.shutting(x, on)
+
+# whether a SAVE asked for a save the shell has not made yet; and that
+# save made
+def rdb.owed(+r: Rdb) -> Bool:
+  match r:
+    case IRdb{last, saves, ok, loaded, expired, flush, shut, +owed}:
+      owed
+    case IRdbOf{+x}:
+      rdb.owed(x)
+
+def rdb.paid(r: Rdb) -> Rdb:
+  match r:
+    case IRdb{last, saves, ok, loaded, expired, flush, shut, owed}:
+      IRdb{last, saves, ok, loaded, expired, flush, shut, False{}}
+    case IRdbOf{x}:
+      rdb.paid(x)
+
+def rdb.reset(r: Rdb) -> Rdb:
+  match r:
+    case IRdb{last, saves, ok, loaded, expired, flush, shut, owed}:
+      IRdb{last, 0n, ok, loaded, expired, flush, shut, owed}
+    case IRdbOf{x}:
+      rdb.reset(x)
+
 # everything INFO shows that the parameters and the keys do not: the
 # start, the last facts, the counts, the rates, the peak of memory, the
 # connections taken before the last CONFIG RESETSTAT, the size of the
 # append-only file at the start (or after its last rewrite: Redis's
 # aof_rewrite_base_size) and now, the statistics per command and per
 # error, the sweep of expired keys, the rewrite of the file, and the
-# timing (Timing). Info is a node of 62 words: the compiler rebuilds a
-# node of 64 words or fewer in place, where it copies a wider one whole
-# at every update (once a batch: srv.ran), so the timing's state and the
-# runs not yet counted are nodes of their own (Tim, TRun)
+# timing (Timing), and the RDB file's account (Rdb). Info is a node of 63
+# words: the compiler rebuilds a node of 64 words or fewer in place, where
+# it copies a wider one whole at every update (once a batch: srv.ran), so
+# the timing's state, the runs not yet counted and the RDB file's account
+# are nodes of their own (Tim, TRun, Rdb)
 type Info is Data:
-  IInfo{boot: Boot, live: Live, cnt: Count, inst: Inst, peak: Nat, conns0: Nat, aof0: Nat, aof: Nat, st: Stats, ex: Exp, rw: Rws, tm: Tim}
+  IInfo{boot: Boot, live: Live, cnt: Count, inst: Inst, peak: Nat, conns0: Nat, aof0: Nat, aof: Nat, st: Stats, ex: Exp, rw: Rws, tm: Tim, rdb: Rdb}
 
 # CONFIG RESETSTAT counts the keys the sweeps and eviction delete and the
 # time past maxmemory again (Redis's stat_expiredkeys, stat_evictedkeys
@@ -1717,14 +1857,14 @@ def live.conns(+l: Live) -> Nat:
       conns
 
 # the server's facts at its start
-def info.new(b: Boot, +l: Live) -> Info:
-  IInfo{b, l, count.zero(), IInst{live.ms(l), count.zero(), samples.zero(), samples.zero(), samples.zero()}, live.heap(l), 0n, 0n, 0n, stats.zero(), IExp{Nil{}, 0n, 0n, 0n, 0n}, rws.zero(), tim.new()}
+def info.new(+b: Boot, +l: Live) -> Info:
+  IInfo{b, l, count.zero(), IInst{live.ms(l), count.zero(), samples.zero(), samples.zero(), samples.zero()}, live.heap(l), 0n, 0n, 0n, stats.zero(), IExp{Nil{}, 0n, 0n, 0n, 0n}, rws.zero(), tim.new(), rdb.new(U32.to_nat(boot.start(b)))}
 
 # the append-only file the server restored at its start, of size bytes
 def info.restored(i: Info, +size: Nat) -> Info:
   match i:
-    case IInfo{b, l, c, inst, pk, c0, a0, a, st, ex, rw, tm}:
-      IInfo{b, l, c, inst, pk, c0, size, size, st, ex, rw, tm}
+    case IInfo{b, l, c, inst, pk, c0, a0, a, st, ex, rw, tm, rf}:
+      IInfo{b, l, c, inst, pk, c0, size, size, st, ex, rw, tm, rf}
 
 # a batch's commands, the bytes it came in and the bytes of its replies
 def count.add(c: Count, +n: Nat, +inb: Nat, +outb: Nat) -> Count:
@@ -1737,26 +1877,26 @@ def count.add(c: Count, +n: Nat, +inb: Nat, +outb: Nat) -> Count:
 # bytes of its replies
 def info.ran(i: Info, +calls: Nat, +r: Nat, rs: List<&2, Nat>, +inb: Nat, +outb: Nat) -> Info:
   match i:
-    case IInfo{b, l, c, inst, pk, c0, a0, a, st, ex, rw, tm}:
-      IInfo{b, l, count.add(c, calls, inb, outb), inst, pk, c0, a0, a, stats.add(st, r, rs), ex, rw, tm}
+    case IInfo{b, l, c, inst, pk, c0, a0, a, st, ex, rw, tm, rf}:
+      IInfo{b, l, count.add(c, calls, inb, outb), inst, pk, c0, a0, a, stats.add(st, r, rs), ex, rw, tm, rf}
 
 # a batch's error replies
 def info.errs(i: Info, xs: List<&2, R.Erred>) -> Info:
   match i:
-    case IInfo{b, l, c, inst, pk, c0, a0, a, st, ex, rw, tm}:
-      IInfo{b, l, c, inst, pk, c0, a0, a, stats.errs(xs, st), ex, rw, tm}
+    case IInfo{b, l, c, inst, pk, c0, a0, a, st, ex, rw, tm, rf}:
+      IInfo{b, l, c, inst, pk, c0, a0, a, stats.errs(xs, st), ex, rw, tm, rf}
 
 # an error reply the shell sent itself (a protocol error)
 def info.erred(i: Info, +m: String) -> Info:
   match i:
-    case IInfo{b, l, c, inst, pk, c0, a0, a, st, ex, rw, tm}:
-      IInfo{b, l, c, inst, pk, c0, a0, a, stats.err(st, 1n, m), ex, rw, tm}
+    case IInfo{b, l, c, inst, pk, c0, a0, a, st, ex, rw, tm, rf}:
+      IInfo{b, l, c, inst, pk, c0, a0, a, stats.err(st, 1n, m), ex, rw, tm, rf}
 
 # bytes appended to the append-only file
 def info.aof(i: Info, +n: Nat) -> Info:
   match i:
-    case IInfo{b, l, c, inst, pk, c0, a0, a, st, ex, rw, tm}:
-      IInfo{b, l, c, inst, pk, c0, a0, Nat.add(a, n), st, ex, rw, tm}
+    case IInfo{b, l, c, inst, pk, c0, a0, a, st, ex, rw, tm, rf}:
+      IInfo{b, l, c, inst, pk, c0, a0, Nat.add(a, n), st, ex, rw, tm, rf}
 
 # the rewrite of the file (Rws): its record; one started at ms; one
 # scheduled; the one that ran ended well at ms, the file of size bytes
@@ -1764,38 +1904,98 @@ def info.aof(i: Info, +n: Nat) -> Info:
 # measured from, as Redis's aof_rewrite_base_size); or failed at ms
 def info.rw(+i: Info) -> Rws:
   match i:
-    case IInfo{b, l, c, inst, pk, c0, a0, a, st, ex, +rw, tm}:
+    case IInfo{b, l, c, inst, pk, c0, a0, a, st, ex, +rw, tm, rf}:
       rw
 
 def info.rw.go(i: Info, +ms: Nat) -> Info:
   match i:
-    case IInfo{b, l, c, inst, pk, c0, a0, a, st, ex, rw, tm}:
-      IInfo{b, l, c, inst, pk, c0, a0, a, st, ex, rws.go(rw, ms), tm}
+    case IInfo{b, l, c, inst, pk, c0, a0, a, st, ex, rw, tm, rf}:
+      IInfo{b, l, c, inst, pk, c0, a0, a, st, ex, rws.go(rw, ms), tm, rf}
 
 def info.rw.later(i: Info) -> Info:
   match i:
-    case IInfo{b, l, c, inst, pk, c0, a0, a, st, ex, rw, tm}:
-      IInfo{b, l, c, inst, pk, c0, a0, a, st, ex, rws.later(rw), tm}
+    case IInfo{b, l, c, inst, pk, c0, a0, a, st, ex, rw, tm, rf}:
+      IInfo{b, l, c, inst, pk, c0, a0, a, st, ex, rws.later(rw), tm, rf}
 
 def info.rw.done(i: Info, +size: Nat, +ms: Nat) -> Info:
   match i:
-    case IInfo{b, l, c, inst, pk, c0, a0, a, st, ex, rw, tm}:
-      IInfo{b, l, c, inst, pk, c0, size, size, st, ex, rws.end(rw, True{}, ms), tm}
+    case IInfo{b, l, c, inst, pk, c0, a0, a, st, ex, rw, tm, rf}:
+      IInfo{b, l, c, inst, pk, c0, size, size, st, ex, rws.end(rw, True{}, ms), tm, rf}
+
+def info.rw.stop(i: Info) -> Info:
+  match i:
+    case IInfo{b, l, c, inst, pk, c0, a0, a, st, ex, rw, tm, rf}:
+      IInfo{b, l, c, inst, pk, c0, a0, a, st, ex, rws.stop(rw), tm, rf}
 
 def info.rw.failed(i: Info, +ms: Nat) -> Info:
   match i:
-    case IInfo{b, l, c, inst, pk, c0, a0, a, st, ex, rw, tm}:
-      IInfo{b, l, c, inst, pk, c0, a0, a, st, ex, rws.end(rw, False{}, ms), tm}
+    case IInfo{b, l, c, inst, pk, c0, a0, a, st, ex, rw, tm, rf}:
+      IInfo{b, l, c, inst, pk, c0, a0, a, st, ex, rws.end(rw, False{}, ms), tm, rf}
+
+# the RDB file (Rdb): the second of the last save that ended well
+# (LASTSAVE), whether a FLUSHALL of the group asked for a save; a save
+# ended, well or not, at the second secs; a SAVE counted; the keys the
+# start loaded and those it found expired; a FLUSHALL's save asked for
+# (on) or done; a SHUTDOWN's save asked for (on) or made
+def info.lastsave(+i: Info) -> Nat:
+  match i:
+    case IInfo{b, l, c, inst, pk, c0, a0, a, st, ex, rw, tm, +rf}:
+      rdb.last(rf)
+
+def info.rdb.flush(+i: Info) -> Bool:
+  match i:
+    case IInfo{b, l, c, inst, pk, c0, a0, a, st, ex, rw, tm, +rf}:
+      rdb.flush(rf)
+
+def info.rdb.saved(i: Info, +well: Bool, +secs: Nat) -> Info:
+  match i:
+    case IInfo{b, l, c, inst, pk, c0, a0, a, st, ex, rw, tm, rf}:
+      IInfo{b, l, c, inst, pk, c0, a0, a, st, ex, rw, tm, rdb.saved(rf, well, secs)}
+
+def info.rdb.save(i: Info) -> Info:
+  match i:
+    case IInfo{b, l, c, inst, pk, c0, a0, a, st, ex, rw, tm, rf}:
+      IInfo{b, l, c, inst, pk, c0, a0, a, st, ex, rw, tm, rdb.save(rf)}
+
+def info.rdb.loaded(i: Info, +ld: Nat, +ex2: Nat) -> Info:
+  match i:
+    case IInfo{b, l, c, inst, pk, c0, a0, a, st, ex, rw, tm, rf}:
+      IInfo{b, l, c, inst, pk, c0, a0, a, st, ex, rw, tm, rdb.loaded(rf, ld, ex2)}
+
+def info.rdb.flushed(i: Info, +on: Bool) -> Info:
+  match i:
+    case IInfo{b, l, c, inst, pk, c0, a0, a, st, ex, rw, tm, rf}:
+      IInfo{b, l, c, inst, pk, c0, a0, a, st, ex, rw, tm, rdb.flushed(rf, on)}
+
+def info.rdb.owed(+i: Info) -> Bool:
+  match i:
+    case IInfo{b, l, c, inst, pk, c0, a0, a, st, ex, rw, tm, +rf}:
+      rdb.owed(rf)
+
+def info.rdb.paid(i: Info) -> Info:
+  match i:
+    case IInfo{b, l, c, inst, pk, c0, a0, a, st, ex, rw, tm, rf}:
+      IInfo{b, l, c, inst, pk, c0, a0, a, st, ex, rw, tm, rdb.paid(rf)}
+
+def info.rdb.shut(+i: Info) -> Bool:
+  match i:
+    case IInfo{b, l, c, inst, pk, c0, a0, a, st, ex, rw, tm, +rf}:
+      rdb.shut(rf)
+
+def info.rdb.shutting(i: Info, +on: Bool) -> Info:
+  match i:
+    case IInfo{b, l, c, inst, pk, c0, a0, a, st, ex, rw, tm, rf}:
+      IInfo{b, l, c, inst, pk, c0, a0, a, st, ex, rw, tm, rdb.shutting(rf, on)}
 
 # the size of the file now and at the start or the last rewrite
 def info.aof.size(+i: Info) -> Nat:
   match i:
-    case IInfo{b, l, c, inst, pk, c0, a0, +a, st, ex, rw, tm}:
+    case IInfo{b, l, c, inst, pk, c0, a0, +a, st, ex, rw, tm, rf}:
       a
 
 def info.aof.base(+i: Info) -> Nat:
   match i:
-    case IInfo{b, l, c, inst, pk, c0, +a0, a, st, ex, rw, tm}:
+    case IInfo{b, l, c, inst, pk, c0, +a0, a, st, ex, rw, tm, rf}:
       a0
 
 # new facts from the shell; the peak of memory follows them
@@ -1822,8 +2022,8 @@ def live.cn(+l: Live, +i: Nat) -> Nat:
 
 def info.live(i: Info, +l: Live) -> Info:
   match i:
-    case IInfo{b, old, c, inst, pk, c0, a0, a, st, ex, rw, tm}:
-      IInfo{b, live.keep(l, old), c, inst, Nat.max(pk, live.heap(l)), c0, a0, a, st, ex, rw, tm}
+    case IInfo{b, old, c, inst, pk, c0, a0, a, st, ex, rw, tm, rf}:
+      IInfo{b, live.keep(l, old), c, inst, Nat.max(pk, live.heap(l)), c0, a0, a, st, ex, rw, tm, rf}
 
 # the heap's used bytes as the actor read them (IO.heap, before a group
 # and after each key an eviction freed: the server's mem.run), which with
@@ -1836,35 +2036,35 @@ def live.heap.at(l: Live, +h: Nat) -> Live:
 
 def info.heap(i: Info, +h: Nat) -> Info:
   match i:
-    case IInfo{b, l, c, inst, pk, c0, a0, a, st, ex, rw, tm}:
-      IInfo{b, live.heap.at(l, h), c, inst, Nat.max(pk, h), c0, a0, a, st, ex, rw, tm}
+    case IInfo{b, l, c, inst, pk, c0, a0, a, st, ex, rw, tm, rf}:
+      IInfo{b, live.heap.at(l, h), c, inst, Nat.max(pk, h), c0, a0, a, st, ex, rw, tm, rf}
 
 # new facts from the shell, the heap's reading left for the actor's own
 # (info.heap), which the eviction went by
 def info.live.held(i: Info, +l: Live) -> Info:
   match i:
-    case IInfo{b, +old, c, inst, pk, c0, a0, a, st, ex, rw, tm}:
-      IInfo{b, live.heap.at(live.keep(l, old), live.heap(old)), c, inst, pk, c0, a0, a, st, ex, rw, tm}
+    case IInfo{b, +old, c, inst, pk, c0, a0, a, st, ex, rw, tm, rf}:
+      IInfo{b, live.heap.at(live.keep(l, old), live.heap(old)), c, inst, pk, c0, a0, a, st, ex, rw, tm, rf}
 
 # the clients that wait, n of them, t of them with a timeout
 def info.blocked(i: Info, +n: Nat, +t: Nat) -> Info:
   match i:
-    case IInfo{b, l, c, inst, pk, c0, a0, a, st, ex, rw, tm}:
-      IInfo{b, live.waits(l, n, t), c, inst, pk, c0, a0, a, st, ex, rw, tm}
+    case IInfo{b, l, c, inst, pk, c0, a0, a, st, ex, rw, tm, rf}:
+      IInfo{b, live.waits(l, n, t), c, inst, pk, c0, a0, a, st, ex, rw, tm, rf}
 
 # the tracking's counts (CLIENT TRACKING): the clients that track, the
 # table's keys and its clients' ids, the BCAST prefixes
 def info.tracking(i: Info, +a: Nat, +b: Nat, +d: Nat, +e: Nat) -> Info:
   match i:
-    case IInfo{b0, l, c, inst, pk, c0, a0, a1, st, ex, rw, tm}:
-      IInfo{b0, live.trk(l, a, b, d, e), c, inst, pk, c0, a0, a1, st, ex, rw, tm}
+    case IInfo{b0, l, c, inst, pk, c0, a0, a1, st, ex, rw, tm, rf}:
+      IInfo{b0, live.trk(l, a, b, d, e), c, inst, pk, c0, a0, a1, st, ex, rw, tm, rf}
 
 # a call of code k that failed after it was counted: a blocked client
 # that CLIENT UNBLOCK unblocked (Redis's updateStatsOnUnblock)
 def info.failed(i: Info, +k: Nat) -> Info:
   match i:
-    case IInfo{b, l, c, inst, pk, c0, a0, a, st, ex, rw, tm}:
-      IInfo{b, l, c, inst, pk, c0, a0, a, stats.failed(st, k), ex, rw, tm}
+    case IInfo{b, l, c, inst, pk, c0, a0, a, st, ex, rw, tm, rf}:
+      IInfo{b, l, c, inst, pk, c0, a0, a, stats.failed(st, k), ex, rw, tm, rf}
 
 def take15(n: Nat, xs: List<&2, Nat>) -> List<&2, Nat>:
   match n xs:
@@ -1894,8 +2094,8 @@ def inst.tick(inst: Inst, +c: Count, +ms: Nat) -> Inst:
 # are counted
 def info.tick(i: Info, +ms: Nat) -> Info:
   match i:
-    case IInfo{b, l, +c, inst, pk, c0, a0, a, st, ex, rw, tm}:
-      IInfo{b, l, c, inst.tick(inst, c, ms), pk, c0, a0, a, stats.fold(st), ex, rw, tm}
+    case IInfo{b, l, +c, inst, pk, c0, a0, a, st, ex, rw, tm, rf}:
+      IInfo{b, l, c, inst.tick(inst, c, ms), pk, c0, a0, a, stats.fold(st), ex, rw, tm, rf}
 
 # CONFIG RESETSTAT: the counts, the rates and the statistics start again,
 # as Redis's resetServerStats, resetCommandTableStats and
@@ -1903,8 +2103,8 @@ def info.tick(i: Info, +ms: Nat) -> Info:
 # not counted: stats.reset)
 def info.reset(i: Info) -> Info:
   match i:
-    case IInfo{b, +l, c, inst, pk, c0, a0, a, st, ex, rw, tm}:
-      IInfo{b, l, count.zero(), IInst{live.ms(l), count.zero(), samples.zero(), samples.zero(), samples.zero()}, pk, live.conns(l), a0, a, stats.reset(st), exp.reset(ex), rws.reset(rw), tm}
+    case IInfo{b, +l, c, inst, pk, c0, a0, a, st, ex, rw, tm, rf}:
+      IInfo{b, l, count.zero(), IInst{live.ms(l), count.zero(), samples.zero(), samples.zero(), samples.zero()}, pk, live.conns(l), a0, a, stats.reset(st), exp.reset(ex), rws.reset(rw), tm, rdb.reset(rf)}
 
 # the j-th of a list of numbers (0 past its end), and the list with v in
 # its place
@@ -1932,39 +2132,39 @@ def cur.put(j: Nat, +v: Nat, xs: List<&2, Nat>) -> List<&2, Nat>:
 # a sweep of j that stopped at next having deleted k keys
 def info.reap_at(+i: Info, +j: Nat) -> Nat:
   match i:
-    case IInfo{b, l, c, inst, pk, c0, a0, a, st, +ex, rw, tm}:
+    case IInfo{b, l, c, inst, pk, c0, a0, a, st, +ex, rw, tm, rf}:
       match ex:
         case IExp{+cur, n, ev, xsum, xfrom}:
           cur.nth(j, cur)
 
 def info.reaped(i: Info, +j: Nat, +next: Nat, +k: Nat) -> Info:
   match i:
-    case IInfo{b, l, c, inst, pk, c0, a0, a, st, ex, rw, tm}:
+    case IInfo{b, l, c, inst, pk, c0, a0, a, st, ex, rw, tm, rf}:
       match ex:
         case IExp{cur, +n, ev, xsum, xfrom}:
-          IInfo{b, l, c, inst, pk, c0, a0, a, st, IExp{cur.put(j, next, cur), Nat.add(n, k), ev, xsum, xfrom}, rw, tm}
+          IInfo{b, l, c, inst, pk, c0, a0, a, st, IExp{cur.put(j, next, cur), Nat.add(n, k), ev, xsum, xfrom}, rw, tm, rf}
 
 # an eviction at now that deleted k keys and left the heap past maxmemory
 # or not (over)
 def info.evicted(i: Info, +k: Nat, +over: Bool, +now: Nat) -> Info:
   match i:
-    case IInfo{b, l, c, inst, pk, c0, a0, a, st, ex, rw, tm}:
-      IInfo{b, l, c, inst, pk, c0, a0, a, st, exp.evicted(ex, k, over, now), rw, tm}
+    case IInfo{b, l, c, inst, pk, c0, a0, a, st, ex, rw, tm, rf}:
+      IInfo{b, l, c, inst, pk, c0, a0, a, st, exp.evicted(ex, k, over, now), rw, tm, rf}
 
 # the timing's parameters read again (the start, CONFIG SET)
 def info.cfg(i: Info, +items: List<&2, C.CItem>) -> Info:
   match i:
-    case IInfo{b, l, c, inst, pk, c0, a0, a, st, ex, rw, tm}:
-      IInfo{b, l, c, inst, pk, c0, a0, a, st, ex, rw, tim.cfg(tm, items)}
+    case IInfo{b, l, c, inst, pk, c0, a0, a, st, ex, rw, tm, rf}:
+      IInfo{b, l, c, inst, pk, c0, a0, a, st, ex, rw, tim.cfg(tm, items), rf}
 
 def info.tim(+i: Info) -> Tim:
   match i:
-    case IInfo{b, l, c, inst, pk, c0, a0, a, st, ex, rw, +tm}:
+    case IInfo{b, l, c, inst, pk, c0, a0, a, st, ex, rw, +tm, rf}:
       tm
 
 def info.stats(+i: Info) -> Stats:
   match i:
-    case IInfo{b, l, c, inst, pk, c0, a0, a, +st, ex, rw, tm}:
+    case IInfo{b, l, c, inst, pk, c0, a0, a, +st, ex, rw, tm, rf}:
       st
 
 # a window timed (Timing a window): the server's facts after it, and the
@@ -1979,9 +2179,9 @@ type Timed is Data:
 # of its timing (2)
 def info.how(+i: Info, +d: Nat) -> Nat:
   match i:
-    case IInfo{b, l, c, inst, pk, c0, a0, a, Stats{es, Nil{}, cur, pend, errs, total}, ex, rw, tm}:
+    case IInfo{b, l, c, inst, pk, c0, a0, a, Stats{es, Nil{}, cur, pend, errs, total}, ex, rw, tm, rf}:
       0n
-    case IInfo{b, l, c, inst, pk, c0, a0, a, Stats{es, Con{FRun{+r}, Nil{}}, cur, pend, errs, total}, ex, rw, Tim{TCfg{+son, +slt, smax, +lat, trk}, slow, evs, wt}}:
+    case IInfo{b, l, c, inst, pk, c0, a0, a, Stats{es, Con{FRun{+r}, Nil{}}, cur, pend, errs, total}, ex, rw, Tim{TCfg{+son, +slt, smax, +lat, trk}, slow, evs, wt}, rf}:
       +n = Nat.max(run.ran(r), 1n)
       +top = Nat.add(Nat.div(d, n), Nat.min(Nat.mod(d, n), 1n))
       Bool.pick(Nat, Bool.and(Bool.or(Bool.not(son), Nat.is_lt(top, slt)), Bool.or(Nat.is_eq(lat, 0n), Nat.is_lt(Nat.div(top, 1000n), lat))), 1n, 2n)
@@ -1991,12 +2191,12 @@ def info.how(+i: Info, +d: Nat) -> Nat:
 # a quiet window timed: its one run's calls share its d us
 def info.one(i: Info, +d: Nat) -> Info:
   match i:
-    case IInfo{b, l, c, inst, pk, c0, a0, a, Stats{es, Con{FRun{+r}, Nil{}}, cur, pend, errs, total}, ex, rw, +tm}:
+    case IInfo{b, l, c, inst, pk, c0, a0, a, Stats{es, Con{FRun{+r}, Nil{}}, cur, pend, errs, total}, ex, rw, +tm, rf}:
       +k = run.ran(r)
       +n = Nat.max(k, 1n)
       +s = Nat.div(d, n)
       +m = Nat.mod(d, n)
-      IInfo{b, l, c, inst, pk, c0, a0, a, stats.one.of(timed.run(r, Nat.add(Nat.mul(k, s), m), tcfg.trk(tim.cf(tm)), s, k, m, (cur, pend)), es, errs, total), ex, rw, tm}
+      IInfo{b, l, c, inst, pk, c0, a0, a, stats.one.of(timed.run(r, Nat.add(Nat.mul(k, s), m), tcfg.trk(tim.cf(tm)), s, k, m, (cur, pend)), es, errs, total), ex, rw, tm, rf}
     case other:
       other
 
@@ -2005,62 +2205,62 @@ def info.one(i: Info, +d: Nat) -> Info:
 # end, in s since 1970
 def info.window(i: Info, +d: Nat, +id: Nat, raw: String, +now: Nat) -> Timed:
   match i:
-    case IInfo{b, l, c, inst, pk, c0, a0, a, st, ex, rw, tm}:
+    case IInfo{b, l, c, inst, pk, c0, a0, a, st, ex, rw, tm, rf}:
       match st tm:
         case Stats{es, +fresh, cur, pend, errs, total} Tim{+cf, slow, evs, wt}:
           +n = Nat.max(fresh.ran(fresh, 0n), 1n)
           +w = win.both(fresh.split(fresh, Nil{}), Nat.div(d, n), tcfg.trk(cf), tcfg.son(cf), tcfg.slt(cf), id, raw, Win{cur, pend, wt, Nil{}, Nat.mod(d, n), 0n, 0n, 0n})
-          Timed{IInfo{b, l, c, inst, pk, c0, a0, a, win.stats(es, errs, total, w), ex, rw, win.tim(cf, slow, evs, now, w)}, win.js(w)}
+          Timed{IInfo{b, l, c, inst, pk, c0, a0, a, win.stats(es, errs, total, w), ex, rw, win.tim(cf, slow, evs, now, w), rf}, win.js(w)}
         case s0 TimOf{x}:
-          Timed{IInfo{b, l, c, inst, pk, c0, a0, a, s0, ex, rw, x}, Nil{}}
+          Timed{IInfo{b, l, c, inst, pk, c0, a0, a, s0, ex, rw, x, rf}, Nil{}}
 
 # the call of the general way about to run, of the client of id, with
 # arguments arg; and that it blocks, as it is counted
 def info.call(i: Info, +id: Nat, arg: Arg) -> Info:
   match i:
-    case IInfo{b, l, c, inst, pk, c0, a0, a, st, ex, rw, tm}:
-      IInfo{b, l, c, inst, pk, c0, a0, a, stats.call(st, id, arg), ex, rw, tm}
+    case IInfo{b, l, c, inst, pk, c0, a0, a, st, ex, rw, tm, rf}:
+      IInfo{b, l, c, inst, pk, c0, a0, a, stats.call(st, id, arg), ex, rw, tm, rf}
 
 def info.blk(i: Info) -> Info:
   match i:
-    case IInfo{b, l, c, inst, pk, c0, a0, a, st, ex, rw, tm}:
-      IInfo{b, l, c, inst, pk, c0, a0, a, stats.blk(st), ex, rw, tm}
+    case IInfo{b, l, c, inst, pk, c0, a0, a, st, ex, rw, tm, rf}:
+      IInfo{b, l, c, inst, pk, c0, a0, a, stats.blk(st), ex, rw, tm, rf}
 
 # the client of id served after it waited, or unblocked by CLIENT UNBLOCK
 # (stats.served); gone, the call it blocked with is forgotten
 def info.served(i: Info, +id: Nat) -> Info:
   match i:
-    case IInfo{b, l, c, inst, pk, c0, a0, a, st, ex, rw, +tm}:
-      IInfo{b, l, c, inst, pk, c0, a0, a, stats.served(wt.get(tim.wt(tm), id), st, tim.cf(tm), id), ex, rw, tim.unwait(tm, id)}
+    case IInfo{b, l, c, inst, pk, c0, a0, a, st, ex, rw, +tm, rf}:
+      IInfo{b, l, c, inst, pk, c0, a0, a, stats.served(wt.get(tim.wt(tm), id), st, tim.cf(tm), id), ex, rw, tim.unwait(tm, id), rf}
 
 def info.gone(i: Info, +id: Nat) -> Info:
   match i:
-    case IInfo{b, l, c, inst, pk, c0, a0, a, st, ex, rw, tm}:
-      IInfo{b, l, c, inst, pk, c0, a0, a, st, ex, rw, tim.unwait(tm, id)}
+    case IInfo{b, l, c, inst, pk, c0, a0, a, st, ex, rw, tm, rf}:
+      IInfo{b, l, c, inst, pk, c0, a0, a, st, ex, rw, tim.unwait(tm, id), rf}
 
 # a call of d us at at (s since 1970), its arguments xs, its client's
 # address and name, for the slow log (Timing)
 def info.slow(i: Info, +d: Nat, +at: Nat, +xs: List<&2, String>, +peer: String, +name: String) -> Info:
   match i:
-    case IInfo{b, l, c, inst, pk, c0, a0, a, st, ex, rw, tm}:
-      IInfo{b, l, c, inst, pk, c0, a0, a, st, ex, rw, tim.slow(tm, d, at, xs, peer, name)}
+    case IInfo{b, l, c, inst, pk, c0, a0, a, st, ex, rw, tm, rf}:
+      IInfo{b, l, c, inst, pk, c0, a0, a, st, ex, rw, tim.slow(tm, d, at, xs, peer, name), rf}
 
 # a latency of ms of event name at second now, for the latency monitor
 def info.lat(i: Info, +name: String, +ms: Nat, +now: Nat) -> Info:
   match i:
-    case IInfo{b, l, c, inst, pk, c0, a0, a, st, ex, rw, tm}:
-      IInfo{b, l, c, inst, pk, c0, a0, a, st, ex, rw, tim.lat(tm, name, ms, now)}
+    case IInfo{b, l, c, inst, pk, c0, a0, a, st, ex, rw, tm, rf}:
+      IInfo{b, l, c, inst, pk, c0, a0, a, st, ex, rw, tim.lat(tm, name, ms, now), rf}
 
 # SLOWLOG RESET, and LATENCY RESET of names (all with none)
 def info.slow.reset(i: Info) -> Info:
   match i:
-    case IInfo{b, l, c, inst, pk, c0, a0, a, st, ex, rw, tm}:
-      IInfo{b, l, c, inst, pk, c0, a0, a, st, ex, rw, tim.slow.reset(tm)}
+    case IInfo{b, l, c, inst, pk, c0, a0, a, st, ex, rw, tm, rf}:
+      IInfo{b, l, c, inst, pk, c0, a0, a, st, ex, rw, tim.slow.reset(tm), rf}
 
 def info.lat.reset(i: Info, names: List<&2, String>) -> Info:
   match i:
-    case IInfo{b, l, c, inst, pk, c0, a0, a, st, ex, rw, tm}:
-      IInfo{b, l, c, inst, pk, c0, a0, a, st, ex, rw, tim.lat.reset(tm, names)}
+    case IInfo{b, l, c, inst, pk, c0, a0, a, st, ex, rw, tm, rf}:
+      IInfo{b, l, c, inst, pk, c0, a0, a, st, ex, rw, tim.lat.reset(tm, names), rf}
 
 # Numbers as printf writes them
 # ----------------------------
@@ -2419,14 +2619,21 @@ def sec.rewrite(r: Rws, +now: Nat) -> String:
       kv("aof_last_bgrewrite_status", Bool.pick(String, ok, "ok", "err")) ++ kv("aof_rewrites", Nat.show(n)) ++
       kv("aof_rewrites_consecutive_failures", Nat.show(fails))
 
-def sec.persistence(+items: List<&2, C.CItem>, +start: U32, +a0: Nat, +a: Nat, +rw: Rws, +now: Nat) -> String:
+def rdb.lines(+r: Rdb) -> String:
+  match r:
+    case IRdb{+last, +saves, +ok, +loaded, +expired, flush, shut, owed}:
+      kv("rdb_last_save_time", Nat.show(last)) ++ kv("rdb_last_bgsave_status", Bool.pick(String, ok, "ok", "err")) ++
+      kv("rdb_last_bgsave_time_sec", "-1") ++ kv("rdb_current_bgsave_time_sec", "-1") ++ kv("rdb_saves", Nat.show(saves)) ++
+      kv("rdb_last_cow_size", "0") ++ kv("rdb_last_load_keys_expired", Nat.show(expired)) ++ kv("rdb_last_load_keys_loaded", Nat.show(loaded))
+    case IRdbOf{+x}:
+      rdb.lines(x)
+
+def sec.persistence(+items: List<&2, C.CItem>, +rf: Rdb, +a0: Nat, +a: Nat, +rw: Rws, +now: Nat) -> String:
   +on = String.eq(cfg(items, "appendonly"), "yes")
   "# Persistence\r\n" ++ kv("loading", "0") ++ kv("async_loading", "0") ++ kv("current_cow_peak", "0") ++
   kv("current_cow_size", "0") ++ kv("current_cow_size_age", "0") ++ kv("current_fork_perc", "0.00") ++
   kv("current_save_keys_processed", "0") ++ kv("current_save_keys_total", "0") ++ kv("rdb_changes_since_last_save", "0") ++
-  kv("rdb_bgsave_in_progress", "0") ++ kv("rdb_last_save_time", U32.show(start)) ++ kv("rdb_last_bgsave_status", "ok") ++
-  kv("rdb_last_bgsave_time_sec", "-1") ++ kv("rdb_current_bgsave_time_sec", "-1") ++ kv("rdb_saves", "0") ++
-  kv("rdb_last_cow_size", "0") ++ kv("rdb_last_load_keys_expired", "0") ++ kv("rdb_last_load_keys_loaded", "0") ++
+  kv("rdb_bgsave_in_progress", "0") ++ rdb.lines(rf) ++
   kv("aof_enabled", flag(on)) ++ sec.rewrite(rw, now) ++ kv("aof_last_write_status", "ok") ++
   kv("aof_last_cow_size", "0") ++ kv("module_fork_in_progress", "0") ++ kv("module_fork_last_cow_size", "0") ++
   sec.aof(on, a0, a, rws.sched(rw))
@@ -2546,29 +2753,24 @@ def join(xs: List<&2, String>, +acc: String) -> String:
 
 def on.server(on: Bool, +items: List<&2, C.CItem>, +i: Info) -> String:
   match on i:
-    case True{} IInfo{+b, +l, c, inst, pk, c0, a0, a, st, ex, rw, tm}:
+    case True{} IInfo{+b, +l, c, inst, pk, c0, a0, a, st, ex, rw, tm, rf}:
       sec.server(items, b, l)
     case False{} _:
       ""
 
 def on.clients(on: Bool, +items: List<&2, C.CItem>, +i: Info) -> String:
   match on i:
-    case True{} IInfo{b, +l, c, inst, pk, c0, a0, a, st, ex, rw, tm}:
+    case True{} IInfo{b, +l, c, inst, pk, c0, a0, a, st, ex, rw, tm, rf}:
       sec.clients(items, l)
     case False{} _:
       ""
 
 def on.memory(on: Bool, +items: List<&2, C.CItem>, +i: Info) -> String:
   match on i:
-    case True{} IInfo{+b, +l, c, inst, +pk, c0, a0, a, st, ex, rw, tm}:
+    case True{} IInfo{+b, +l, c, inst, +pk, c0, a0, a, st, ex, rw, tm, rf}:
       sec.memory(items, b, l, pk)
     case False{} _:
       ""
-
-def boot.start(+b: Boot) -> U32:
-  match b:
-    case IBoot{os, pid, run, replid, exe, conf, sysmem, start, heap0}:
-      start
 
 def boot.heap0(+b: Boot) -> Nat:
   match b:
@@ -2583,41 +2785,41 @@ def boot.replid(+b: Boot) -> String:
 # the second the server started at (since 1970)
 def info.start(+i: Info) -> U32:
   match i:
-    case IInfo{+b, l, c, inst, pk, c0, a0, a, st, ex, rw, tm}:
+    case IInfo{+b, l, c, inst, pk, c0, a0, a, st, ex, rw, tm, rf}:
       boot.start(b)
 
 # a seed for the server's random numbers: its run id hashed
 def info.seed(+i: Info) -> U32:
   match i:
-    case IInfo{b, l, c, inst, pk, c0, a0, a, st, ex, rw, tm}:
+    case IInfo{b, l, c, inst, pk, c0, a0, a, st, ex, rw, tm, rf}:
       match b:
         case IBoot{os, pid, +run, replid, exe, conf, sysmem, start, heap0}:
           String.hash(run)
 
 def on.persistence(on: Bool, +items: List<&2, C.CItem>, +i: Info, +now: Nat) -> String:
   match on i:
-    case True{} IInfo{+b, l, c, inst, pk, c0, +a0, +a, st, ex, +rw, tm}:
-      sec.persistence(items, boot.start(b), a0, a, rw, now)
+    case True{} IInfo{b, l, c, inst, pk, c0, +a0, +a, st, ex, +rw, tm, +rf}:
+      sec.persistence(items, rf, a0, a, rw, now)
     case False{} _:
       ""
 
 def on.stats(on: Bool, +i: Info, +now: Nat) -> String:
   match on i:
-    case True{} IInfo{b, +l, +c, +inst, pk, +c0, a0, a, +st, +ex, rw, tm}:
+    case True{} IInfo{b, +l, +c, +inst, pk, +c0, a0, a, +st, +ex, rw, tm, rf}:
       sec.stats.go(c, inst, Nat.sub(live.conns(l), c0), stats.total(st), exp.n(ex), ex, now, l)
     case False{} _:
       ""
 
 def on.replication(on: Bool, +items: List<&2, C.CItem>, +i: Info) -> String:
   match on i:
-    case True{} IInfo{+b, l, c, inst, pk, c0, a0, a, st, ex, rw, tm}:
+    case True{} IInfo{+b, l, c, inst, pk, c0, a0, a, st, ex, rw, tm, rf}:
       sec.replication(items, boot.replid(b))
     case False{} _:
       ""
 
 def on.cpu(on: Bool, +i: Info) -> String:
   match on i:
-    case True{} IInfo{b, +l, c, inst, pk, c0, a0, a, st, ex, rw, tm}:
+    case True{} IInfo{b, +l, c, inst, pk, c0, a0, a, st, ex, rw, tm, rf}:
       sec.cpu(l)
     case False{} _:
       ""
@@ -2631,14 +2833,14 @@ def on.keyspace(on: Bool, +ds: R.Ds) -> String:
 
 def on.cmdstats(on: Bool, +i: Info) -> String:
   match on i:
-    case True{} IInfo{b, l, c, inst, pk, c0, a0, a, +st, ex, rw, tm}:
+    case True{} IInfo{b, l, c, inst, pk, c0, a0, a, +st, ex, rw, tm, rf}:
       "# Commandstats\r\n" ++ stats.cmds(st)
     case False{} _:
       ""
 
 def on.errstats(on: Bool, +i: Info) -> String:
   match on i:
-    case True{} IInfo{b, l, c, inst, pk, c0, a0, a, +st, ex, rw, tm}:
+    case True{} IInfo{b, l, c, inst, pk, c0, a0, a, +st, ex, rw, tm, rf}:
       "# Errorstats\r\n" ++ stats.errors(st)
     case False{} _:
       ""
@@ -2647,7 +2849,7 @@ def on.errstats(on: Bool, +i: Info) -> String:
 # (SLOWLOG and LATENCY, below)
 def on.latstats(on: Bool, +items: List<&2, C.CItem>, +i: Info) -> String:
   match on i:
-    case True{} IInfo{b, l, c, inst, pk, c0, a0, a, +st, ex, rw, tm}:
+    case True{} IInfo{b, l, c, inst, pk, c0, a0, a, +st, ex, rw, tm, rf}:
       "# Latencystats\r\n" ++ lat.stats.of(String.eq(cfg(items, "latency-tracking"), "yes"), st, items)
     case False{} _:
       ""
@@ -2757,7 +2959,7 @@ def mem.stats.go(+used: Nat, +pk: Nat, +used0: Nat, +rss: Nat, +act: Nat, +keys:
 # MEMORY STATS of the server whose facts are i, its databases dbs
 def mem.stats(+i: Info, +dbs: List<&2, R.Db>) -> R.Reply:
   match i:
-    case IInfo{+b, +l, c, inst, +pk, c0, a0, a, st, ex, rw, tm}:
+    case IInfo{+b, +l, c, inst, +pk, c0, a0, a, st, ex, rw, tm, rf}:
       +used = live.heap(l)
       mem.stats.go(used, Nat.max(pk, used), boot.heap0(b), live.rss(l), live.act(l), mem.keys(dbs, 0n), mem.dbs(dbs, 0n, Nil{}))
 
@@ -2832,7 +3034,7 @@ def doc.of(empty: Bool, +used: Nat, +pk: Nat, +rss: Nat, +act: Nat) -> String:
 
 def mem.doctor(+i: Info) -> String:
   match i:
-    case IInfo{b, +l, c, inst, +pk, c0, a0, a, st, ex, rw, tm}:
+    case IInfo{b, +l, c, inst, +pk, c0, a0, a, st, ex, rw, tm, rf}:
       +used = live.heap(l)
       doc.of(Nat.is_lt(used, 5242880n), used, Nat.max(pk, used), live.rss(l), live.act(l))
 

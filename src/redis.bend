@@ -537,15 +537,16 @@ type SortO is Data:
 # several keys reads them (SPfCount); PFMERGE reads its keys and writes
 # its destination with their union, an act of the session's database
 # (APfMerge, below); PFSELFTEST (SPfSelfTest) reads nothing. LASTSAVE,
-# MEMORY STATS, MEMORY DOCTOR, LOLWUT's drawings and SHUTDOWN are SAdmin,
-# their kind and arguments (The administrative commands, below): they
-# read the server's state, the drawings its random numbers, and SHUTDOWN
-# stops the server (server.bend, SHUTDOWN), which a session alone does
-# not. A GEO search that stores (GEORADIUS's and GEORADIUSBYMEMBER's
-# STORE and STOREDIST, GEOSEARCHSTORE) is SGeoStore, its kind and its
-# arguments, the name it was called by first (GEO, below): it reads its
-# key and writes its destination with what it finds, an act of the
-# session's database (AGeo, below), as SORT with STORE does. RESTORE
+# MEMORY STATS, MEMORY DOCTOR, LOLWUT's drawings, SHUTDOWN and SAVE are
+# SAdmin, their kind and arguments (The administrative commands, below):
+# they read the server's state, the drawings its random numbers, SAVE
+# writes the RDB file and SHUTDOWN stops the server (server.bend, The RDB
+# file and SHUTDOWN), which a session alone does not. A GEO search that
+# stores (GEORADIUS's and GEORADIUSBYMEMBER's STORE and STOREDIST,
+# GEOSEARCHSTORE) is SGeoStore, its kind and its arguments, the name it
+# was called by first (GEO, below): it reads its key and writes its
+# destination with what it finds, an act of the session's database
+# (AGeo, below), as SORT with STORE does. RESTORE
 # with IDLETIME or FREQ is SRestore, its key and its update (URestore):
 # the session runs the update on its database, and the server, which
 # keeps when each key was last used, sets the key's word as the option
@@ -5841,7 +5842,8 @@ def geo.parse(+kind: Nat, +name: String, +args: List<&2, String>, +n: Nat, lname
 # SLOWLOG RESET, 9 LATENCY LATEST, 10 LATENCY HISTORY (of an event), 11
 # LATENCY RESET (of events, all for none), 12 LATENCY GRAPH (of an
 # event), 13 LATENCY DOCTOR and 14 LATENCY HISTOGRAM (of commands, all
-# for none). ROLE answers as a master with no replica answers. WAIT is a
+# for none), and 15 SAVE (which the shell runs: server.bend, The RDB
+# file). ROLE answers as a master with no replica answers. WAIT is a
 # blocking command (SBlock) when it asks for a replica, which none will
 # acknowledge.
 
@@ -6039,9 +6041,9 @@ def sd.of(args: List<&2, String>, s: Sd) -> Sd:
 def sd.flags(+args: List<&2, String>) -> Sd:
   sd.of(args, Sd{False{}, False{}, False{}, False{}, False{}})
 
-# whether SHUTDOWN is to save the data set (SAVE, which BendKV cannot do:
-# it writes no RDB snapshot, server.bend), and whether FORCE goes on
-# when it cannot
+# whether SHUTDOWN is to save the data set (SAVE: server.bend writes the
+# RDB file, as it does with save points unless NOSAVE), and whether FORCE
+# goes on when the save fails
 def sd.save(+s: Sd) -> Bool:
   match s:
     case Sd{nosave, +save, now, force, abort}:
@@ -6232,7 +6234,8 @@ def cmd_id.l4(+n: String, c: Nat) -> Nat:
       Bool.pick(Nat, String.eq(n, "SADD"), 83n,
       Bool.pick(Nat, String.eq(n, "SREM"), 84n,
       Bool.pick(Nat, String.eq(n, "SPOP"), 119n,
-      Bool.pick(Nat, String.eq(n, "SORT"), 177n, 0n)))))
+      Bool.pick(Nat, String.eq(n, "SORT"), 177n,
+      Bool.pick(Nat, String.eq(n, "SAVE"), 203n, 0n))))))
     case 20n:  # T
       Bool.pick(Nat, String.eq(n, "TYPE"), 25n,
       Bool.pick(Nat, String.eq(n, "TIME"), 113n, 0n))
@@ -7434,6 +7437,12 @@ def parse_id(id: Nat, name: String, args: List<&2, String>) -> Cmd:
         case Con{+sub, rest}:
           +up = String.to_upper(sub)
           Own{parse_latency(latency_id(up, String.length(up)), sub, rest)}
+    case 203n:  # SAVE
+      match args:
+        case Nil{}:
+          Own{SAdmin{15n, Nil{}}}
+        case _:
+          e_arity("save")
     case _:
       e_unknown(name, args)
 
@@ -8132,6 +8141,8 @@ def stat.top(+id: Nat) -> Nat:
       201n
     case 202n:
       202n
+    case 203n:
+      203n
     case _:
       0n
 
@@ -8139,37 +8150,37 @@ def stat.top(+id: Nat) -> Nat:
 def stat.sub.client(+sub: Nat) -> Nat:
   match sub:
     case 1n:
-      203n
-    case 2n:
       204n
-    case 3n:
+    case 2n:
       205n
-    case 4n:
+    case 3n:
       206n
-    case 5n:
+    case 4n:
       207n
-    case 6n:
+    case 5n:
       208n
-    case 7n:
+    case 6n:
       209n
-    case 8n:
+    case 7n:
       210n
-    case 9n:
+    case 8n:
       211n
-    case 10n:
+    case 9n:
       212n
-    case 11n:
+    case 10n:
       213n
-    case 12n:
+    case 11n:
       214n
-    case 13n:
+    case 12n:
       215n
-    case 14n:
+    case 13n:
       216n
-    case 15n:
+    case 14n:
       217n
-    case 16n:
+    case 15n:
       218n
+    case 16n:
+      219n
     case _:
       0n
 
@@ -8177,9 +8188,9 @@ def stat.sub.client(+sub: Nat) -> Nat:
 def stat.sub.function(+sub: Nat) -> Nat:
   match sub:
     case 1n:
-      219n
-    case 2n:
       220n
+    case 2n:
+      221n
     case _:
       0n
 
@@ -8187,15 +8198,15 @@ def stat.sub.function(+sub: Nat) -> Nat:
 def stat.sub.config(+sub: Nat) -> Nat:
   match sub:
     case 1n:
-      221n
-    case 2n:
       222n
-    case 3n:
+    case 2n:
       223n
-    case 4n:
+    case 3n:
       224n
-    case 5n:
+    case 4n:
       225n
+    case 5n:
+      226n
     case _:
       0n
 
@@ -8203,19 +8214,19 @@ def stat.sub.config(+sub: Nat) -> Nat:
 def stat.sub.command(+sub: Nat) -> Nat:
   match sub:
     case 1n:
-      226n
-    case 2n:
       227n
-    case 3n:
+    case 2n:
       228n
-    case 4n:
+    case 3n:
       229n
-    case 5n:
+    case 4n:
       230n
-    case 6n:
+    case 5n:
       231n
-    case 7n:
+    case 6n:
       232n
+    case 7n:
+      233n
     case _:
       0n
 
@@ -8223,15 +8234,15 @@ def stat.sub.command(+sub: Nat) -> Nat:
 def stat.sub.object(+sub: Nat) -> Nat:
   match sub:
     case 1n:
-      233n
-    case 2n:
       234n
-    case 3n:
+    case 2n:
       235n
-    case 4n:
+    case 3n:
       236n
-    case 5n:
+    case 4n:
       237n
+    case 5n:
+      238n
     case _:
       0n
 
@@ -8239,17 +8250,17 @@ def stat.sub.object(+sub: Nat) -> Nat:
 def stat.sub.memory(+sub: Nat) -> Nat:
   match sub:
     case 1n:
-      238n
-    case 2n:
       239n
-    case 3n:
+    case 2n:
       240n
-    case 4n:
+    case 3n:
       241n
-    case 5n:
+    case 4n:
       242n
-    case 6n:
+    case 5n:
       243n
+    case 6n:
+      244n
     case _:
       0n
 
@@ -8257,17 +8268,17 @@ def stat.sub.memory(+sub: Nat) -> Nat:
 def stat.sub.pubsub(+sub: Nat) -> Nat:
   match sub:
     case 1n:
-      244n
-    case 2n:
       245n
-    case 3n:
+    case 2n:
       246n
-    case 4n:
+    case 3n:
       247n
-    case 5n:
+    case 4n:
       248n
-    case 6n:
+    case 5n:
       249n
+    case 6n:
+      250n
     case _:
       0n
 
@@ -8275,13 +8286,13 @@ def stat.sub.pubsub(+sub: Nat) -> Nat:
 def stat.sub.slowlog(+sub: Nat) -> Nat:
   match sub:
     case 1n:
-      250n
-    case 2n:
       251n
-    case 3n:
+    case 2n:
       252n
-    case 4n:
+    case 3n:
       253n
+    case 4n:
+      254n
     case _:
       0n
 
@@ -8289,19 +8300,19 @@ def stat.sub.slowlog(+sub: Nat) -> Nat:
 def stat.sub.latency(+sub: Nat) -> Nat:
   match sub:
     case 1n:
-      254n
-    case 2n:
       255n
-    case 3n:
+    case 2n:
       256n
-    case 4n:
+    case 3n:
       257n
-    case 5n:
+    case 4n:
       258n
-    case 6n:
+    case 5n:
       259n
-    case 7n:
+    case 6n:
       260n
+    case 7n:
+      261n
     case _:
       0n
 
@@ -8713,120 +8724,122 @@ def stat.name(+key: Nat) -> String:
     case 202n:
       "latency"
     case 203n:
-      "client|id"
+      "save"
     case 204n:
-      "client|help"
+      "client|id"
     case 205n:
-      "client|reply"
+      "client|help"
     case 206n:
-      "client|getname"
+      "client|reply"
     case 207n:
-      "client|setname"
+      "client|getname"
     case 208n:
-      "client|caching"
+      "client|setname"
     case 209n:
-      "client|unblock"
+      "client|caching"
     case 210n:
-      "client|getredir"
+      "client|unblock"
     case 211n:
-      "client|no-evict"
+      "client|getredir"
     case 212n:
-      "client|trackinginfo"
+      "client|no-evict"
     case 213n:
-      "client|list"
+      "client|trackinginfo"
     case 214n:
-      "client|info"
+      "client|list"
     case 215n:
-      "client|kill"
+      "client|info"
     case 216n:
-      "client|pause"
+      "client|kill"
     case 217n:
-      "client|unpause"
+      "client|pause"
     case 218n:
-      "client|tracking"
+      "client|unpause"
     case 219n:
-      "function|flush"
+      "client|tracking"
     case 220n:
-      "function|help"
+      "function|flush"
     case 221n:
-      "config|get"
+      "function|help"
     case 222n:
-      "config|set"
+      "config|get"
     case 223n:
-      "config|resetstat"
+      "config|set"
     case 224n:
-      "config|rewrite"
+      "config|resetstat"
     case 225n:
-      "config|help"
+      "config|rewrite"
     case 226n:
-      "command|info"
+      "config|help"
     case 227n:
-      "command|docs"
+      "command|info"
     case 228n:
-      "command|list"
+      "command|docs"
     case 229n:
-      "command|help"
+      "command|list"
     case 230n:
-      "command|count"
+      "command|help"
     case 231n:
-      "command|getkeys"
+      "command|count"
     case 232n:
-      "command|getkeysandflags"
+      "command|getkeys"
     case 233n:
-      "object|help"
+      "command|getkeysandflags"
     case 234n:
-      "object|freq"
+      "object|help"
     case 235n:
-      "object|encoding"
+      "object|freq"
     case 236n:
-      "object|refcount"
+      "object|encoding"
     case 237n:
-      "object|idletime"
+      "object|refcount"
     case 238n:
-      "memory|help"
+      "object|idletime"
     case 239n:
-      "memory|usage"
+      "memory|help"
     case 240n:
-      "memory|stats"
+      "memory|usage"
     case 241n:
-      "memory|doctor"
+      "memory|stats"
     case 242n:
-      "memory|purge"
+      "memory|doctor"
     case 243n:
-      "memory|malloc-stats"
+      "memory|purge"
     case 244n:
-      "pubsub|channels"
+      "memory|malloc-stats"
     case 245n:
-      "pubsub|help"
+      "pubsub|channels"
     case 246n:
-      "pubsub|numpat"
+      "pubsub|help"
     case 247n:
-      "pubsub|numsub"
+      "pubsub|numpat"
     case 248n:
-      "pubsub|shardchannels"
+      "pubsub|numsub"
     case 249n:
-      "pubsub|shardnumsub"
+      "pubsub|shardchannels"
     case 250n:
-      "slowlog|get"
+      "pubsub|shardnumsub"
     case 251n:
-      "slowlog|len"
+      "slowlog|get"
     case 252n:
-      "slowlog|reset"
+      "slowlog|len"
     case 253n:
-      "slowlog|help"
+      "slowlog|reset"
     case 254n:
-      "latency|doctor"
+      "slowlog|help"
     case 255n:
-      "latency|graph"
+      "latency|doctor"
     case 256n:
-      "latency|help"
+      "latency|graph"
     case 257n:
-      "latency|histogram"
+      "latency|help"
     case 258n:
-      "latency|history"
+      "latency|histogram"
     case 259n:
-      "latency|latest"
+      "latency|history"
     case 260n:
+      "latency|latest"
+    case 261n:
       "latency|reset"
     case _:
       ""
@@ -9240,69 +9253,69 @@ def stat.arity(+key: Nat) -> Nat:
     case 202n:
       5n
     case 203n:
-      4n
+      2n
     case 204n:
       4n
     case 205n:
-      6n
-    case 206n:
       4n
-    case 207n:
+    case 206n:
       6n
+    case 207n:
+      4n
     case 208n:
       6n
     case 209n:
-      7n
-    case 210n:
-      4n
-    case 211n:
       6n
-    case 212n:
-      4n
-    case 213n:
-      5n
-    case 214n:
-      4n
-    case 215n:
+    case 210n:
       7n
+    case 211n:
+      4n
+    case 212n:
+      6n
+    case 213n:
+      4n
+    case 214n:
+      5n
+    case 215n:
+      4n
     case 216n:
       7n
     case 217n:
-      4n
+      7n
     case 218n:
-      7n
+      4n
     case 219n:
-      5n
-    case 220n:
-      4n
-    case 221n:
       7n
-    case 222n:
-      9n
-    case 223n:
+    case 220n:
+      5n
+    case 221n:
       4n
+    case 222n:
+      7n
+    case 223n:
+      9n
     case 224n:
       4n
     case 225n:
       4n
     case 226n:
-      5n
+      4n
     case 227n:
       5n
     case 228n:
       5n
     case 229n:
-      4n
+      5n
     case 230n:
       4n
     case 231n:
-      9n
+      4n
     case 232n:
       9n
     case 233n:
-      4n
+      9n
     case 234n:
-      6n
+      4n
     case 235n:
       6n
     case 236n:
@@ -9310,11 +9323,11 @@ def stat.arity(+key: Nat) -> Nat:
     case 237n:
       6n
     case 238n:
-      4n
+      6n
     case 239n:
-      7n
-    case 240n:
       4n
+    case 240n:
+      7n
     case 241n:
       4n
     case 242n:
@@ -9322,13 +9335,13 @@ def stat.arity(+key: Nat) -> Nat:
     case 243n:
       4n
     case 244n:
-      5n
-    case 245n:
       4n
+    case 245n:
+      5n
     case 246n:
       4n
     case 247n:
-      5n
+      4n
     case 248n:
       5n
     case 249n:
@@ -9336,7 +9349,7 @@ def stat.arity(+key: Nat) -> Nat:
     case 250n:
       5n
     case 251n:
-      4n
+      5n
     case 252n:
       4n
     case 253n:
@@ -9344,16 +9357,18 @@ def stat.arity(+key: Nat) -> Nat:
     case 254n:
       4n
     case 255n:
-      6n
+      4n
     case 256n:
-      4n
-    case 257n:
-      5n
-    case 258n:
       6n
-    case 259n:
+    case 257n:
       4n
+    case 258n:
+      5n
+    case 259n:
+      6n
     case 260n:
+      4n
+    case 261n:
       5n
     case _:
       1n
@@ -9595,11 +9610,11 @@ def stat.risky(+key: Nat) -> Bool:
       True{}
     case 200n:
       True{}
-    case 234n:
+    case 235n:
       True{}
-    case 237n:
+    case 238n:
       True{}
-    case 239n:
+    case 240n:
       True{}
     case _:
       False{}
@@ -9621,19 +9636,19 @@ def stat.unseen(+key: Nat) -> Bool:
       True{}
     case 187n:
       True{}
-    case 209n:
+    case 203n:
       True{}
-    case 211n:
+    case 210n:
       True{}
-    case 213n:
+    case 212n:
       True{}
-    case 215n:
+    case 214n:
       True{}
     case 216n:
       True{}
     case 217n:
       True{}
-    case 221n:
+    case 218n:
       True{}
     case 222n:
       True{}
@@ -9641,23 +9656,25 @@ def stat.unseen(+key: Nat) -> Bool:
       True{}
     case 224n:
       True{}
-    case 250n:
+    case 225n:
       True{}
     case 251n:
       True{}
     case 252n:
       True{}
-    case 254n:
+    case 253n:
       True{}
     case 255n:
       True{}
-    case 257n:
+    case 256n:
       True{}
     case 258n:
       True{}
     case 259n:
       True{}
     case 260n:
+      True{}
+    case 261n:
       True{}
     case _:
       False{}
@@ -9998,9 +10015,7 @@ def stat.keyspace(+key: Nat) -> Bool:
       True{}
     case 200n:
       True{}
-    case 219n:
-      True{}
-    case 234n:
+    case 220n:
       True{}
     case 235n:
       True{}
@@ -10008,7 +10023,9 @@ def stat.keyspace(+key: Nat) -> Bool:
       True{}
     case 237n:
       True{}
-    case 239n:
+    case 238n:
+      True{}
+    case 240n:
       True{}
     case _:
       False{}
@@ -10203,7 +10220,7 @@ def stat.pausable(+key: Nat) -> Bool:
       True{}
     case 200n:
       True{}
-    case 219n:
+    case 220n:
       True{}
     case _:
       False{}
@@ -10315,6 +10332,17 @@ def stat.denyoom(+key: Nat) -> Bool:
     case 198n:
       True{}
     case 200n:
+      True{}
+    case _:
+      False{}
+
+# whether the command of a key may not run in a transaction (no_multi:
+# SHUTDOWN, SAVE): in MULTI, Redis refuses it before it is queued
+def stat.nomulti(+key: Nat) -> Bool:
+  match key:
+    case 187n:
+      True{}
+    case 203n:
       True{}
     case _:
       False{}
@@ -10665,15 +10693,15 @@ def stat.ro(+key: Nat) -> Bool:
       True{}
     case 199n:
       True{}
-    case 234n:
-      True{}
     case 235n:
       True{}
     case 236n:
       True{}
     case 237n:
       True{}
-    case 239n:
+    case 238n:
+      True{}
+    case 240n:
       True{}
     case _:
       False{}
@@ -12539,6 +12567,12 @@ def stat.cw(+code: Nat) -> U32:
       3300
     case 782n:
       3304
+    case 783n:
+      3312
+    case 784n:
+      3335
+    case 785n:
+      3339
     case _:
       63
 
@@ -14365,6 +14399,17 @@ def stat.code.lo51(+lo: Nat) -> Nat:
       781n
     case 40n:
       782n
+    case 48n:
+      783n
+    case _:
+      0n
+
+def stat.code.lo52(+lo: Nat) -> Nat:
+  match lo:
+    case 7n:
+      784n
+    case 11n:
+      785n
     case _:
       0n
 
@@ -14474,6 +14519,8 @@ def stat.code.hl(+hi: Nat, +lo: Nat) -> Nat:
       stat.code.lo50(lo)
     case 51n:
       stat.code.lo51(lo)
+    case 52n:
+      stat.code.lo52(lo)
     case _:
       0n
 
