@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
 """Sorted sets against Redis: a script of sorted-set commands at their
 edges, sorted sets of many sizes on both sides of the listpack limits
-(128 elements, members of 64 bytes), sorted sets whose key's time has
-passed, then random commands on a few keys (the operations of several
-sorted sets, STOREs and ZMPOP among them), replies compared one by one.
+(128 elements, members of 64 bytes) and of one buffer of BendKV's runtime
+(2,048 bytes of elements, grown one ZADD at a time, and RESTOREd), sorted
+sets whose key's time has passed, then random commands on a few keys
+(the operations of several sorted sets, STOREs and ZMPOP among them),
+replies compared one by one.
 
 Elements are in order of score, then member, on both servers, and those
 replies are compared as they are. ZSCAN of a skiplist answers in the
@@ -518,6 +520,67 @@ def sizes(b, r):
         same(b, r, cmd)
 
 
+# reads of a sorted set at a step: its elements, scores and ranks, its
+# ranges by rank, score and member, ZSCAN and its encoding (a range by
+# member and ZSCAN only of a listpack: Redis answers those of a skiplist
+# of mixed scores by its nodes' random levels and its table's order)
+def wide_reads(b, r, key, ms, rng):
+    for cmd in ([b"ZCARD", key], [b"OBJECT", b"ENCODING", key], [b"ZRANGE", key, b"0", b"-1", b"WITHSCORES"],
+                [b"ZREVRANGE", key, b"0", b"4", b"WITHSCORES"], [b"ZRANGEBYSCORE", key, b"(5", b"40", b"WITHSCORES", b"LIMIT", b"1", b"5"],
+                [b"ZCOUNT", key, b"-inf", b"(20"], [b"ZRANDMEMBER", key, b"-40", b"WITHSCORES"], [b"ZRANDMEMBER", key, b"5"]):
+        same(b, r, cmd)
+    for m in rng.sample(ms, min(3, len(ms))) + [b"nope"]:
+        for name in (b"ZSCORE", b"ZRANK", b"ZREVRANK"):
+            same(b, r, [name, key, m])
+    if run(r, [b"OBJECT", b"ENCODING", key]) == (b"$", b"listpack"):
+        for cmd in ([b"ZRANGEBYLEX", key, b"[m", b"(n"], [b"ZLEXCOUNT", key, b"-", b"+"], [b"ZSCAN", key, b"0", b"COUNT", b"1000"]):
+            same(b, r, cmd)
+
+
+# sorted sets whose elements pass one buffer of BendKV's runtime (2,048
+# bytes of their string: a small one past it keeps its tree), grown one
+# ZADD at a time and read around the crossing, then written, RESTOREd
+# from Redis's DUMP, and made large; and a listpack of members of up to
+# 3,000 bytes, which Redis keeps with zset-max-listpack-value raised,
+# RESTOREd on both
+def wide(b, r):
+    rng = random.Random(7)
+    for width in (30, 47, 64):
+        key = b"w%d" % width
+        ms = []
+        for i in range(128):
+            m = b"m%03d" % i + bytes([97 + rng.randrange(26)]) * (width - 4)
+            ms.append(m)
+            same(b, r, [b"ZADD", key, b"%d" % rng.choice([0, 1, 2, rng.randint(0, 60)]), m])
+            if i % 9 == 0 or i in (26, 27, 28, 29, 41, 42, 43, 44, 63, 64, 127):
+                wide_reads(b, r, key, ms, rng)
+        for m in rng.sample(ms, 10):
+            same(b, r, [b"ZINCRBY", key, b"%d" % rng.randint(-30, 30), m])
+            same(b, r, [b"ZADD", key, b"CH", b"%d" % rng.randint(0, 60), m])
+        for cmd in ([b"ZREM", key, ms[0], ms[5], b"nope"], [b"ZPOPMIN", key, b"2"], [b"ZPOPMAX", key],
+                    [b"ZREMRANGEBYRANK", key, b"3", b"6"]):
+            same(b, r, cmd)
+        wide_reads(b, r, key, ms, rng)
+        p = run(r, [b"DUMP", key])[1]
+        same(b, r, [b"RESTORE", key + b"r", b"0", p])
+        wide_reads(b, r, key + b"r", ms, rng)
+        same(b, r, [b"ZADD", key + b"r", b"1", b"x" * 65])
+        wide_reads(b, r, key + b"r", ms, rng)
+        same(b, r, [b"ZADD", key] + [x for i in range(9) for x in (b"%d" % (5 + i), b"a%d" % i)])
+        wide_reads(b, r, key, ms, rng)
+    run(r, [b"CONFIG", b"SET", b"zset-max-listpack-value", b"100000"])
+    run(r, [b"ZADD", b"longsrc", b"1", b"a" * 3000, b"2", b"b", b"-1", b"c" * 1500, b"2", b"d" * 254])
+    p = run(r, [b"DUMP", b"longsrc"])[1]
+    run(r, [b"DEL", b"longsrc"])
+    run(r, [b"CONFIG", b"SET", b"zset-max-listpack-value", b"64"])
+    long = [b"a" * 3000, b"b", b"c" * 1500, b"d" * 254]
+    same(b, r, [b"RESTORE", b"long", b"0", p])
+    wide_reads(b, r, b"long", long, rng)
+    for cmd in ([b"ZADD", b"long", b"0", b"e"], [b"ZINCRBY", b"long", b"5", b"c" * 1500], [b"ZREM", b"long", b"b"]):
+        same(b, r, cmd)
+    wide_reads(b, r, b"long", long, rng)
+
+
 # a sorted set whose time passed: a read finds nothing, a write makes it
 # anew, a STORE or ZMPOP takes it as not there, as a source or a
 # destination
@@ -617,6 +680,7 @@ def main():
     for cmd in SCRIPT:
         same(b, rd, cmd)
     sizes(b, rd)
+    wide(b, rd)
     expired(b, rd)
     r = random.Random(a.seed)
     for _ in range(a.rounds):

@@ -7004,6 +7004,210 @@ For the pieces, `tests/hash_test.py` gains:
 
 It passes on main's build too.
 
+## 3zzzn. Small sorted sets in one string, as a listpack
+
+**What was left** (sections 3zl and 3zzzm). A small sorted set was its weight-balanced
+tree alone: for each element a node of six words (its count, its member, its score's two
+words, its two sides) and, for a member longer than 6 bytes, the member's buffer. An
+element of an 8-byte member took about 92 bytes, where a listpack spends 12 with an
+integer score and 31 with another; 200,000 sorted sets of 10 such elements took 5.0
+times Redis's memory.
+
+**The change** (`src/map.bend`, Packed strings and Sorted sets). `ZSmall{n, b}`: b holds
+the n elements one after another in Redis's order, by score, then by member.
+
+- An element is its member's code (its length in one byte below 255, else 255 and four
+  bytes, as a hash's field), the member, and its score's 8 bytes: the double's bits as
+  they are, its high word first, each word its high byte first. They are exact, so a
+  `-0` that RESTORE keeps from a listpack's text stays `-0`, and a read converts nothing.
+- The helpers the packed hashes and sorted sets share left the hashes for a section of
+  their own (`pk.*`), as they were: the codes of lengths, the copy into one buffer, the
+  test of a coded string against a field or a member (its length, then its last byte,
+  then the whole), and the cut of a piece.
+- A member is found as a hash's field is (`zb.find`), with its index, its score's, and
+  how many elements follow it, so that ZRANK has the rank from the walk that finds the
+  member (it walked twice: to the score, then to the rank). ZADD, ZINCRBY and ZREM keep
+  the index that walk found (`zset.find`) for their write, which walks to the member no
+  more.
+- An element's place is found by its score, then, for the same score, by its member,
+  copied out only then (`zb.cmp`). Scores compare by their high words when those decide
+  (they differ, and not both hold no more than a sign, as those of 0, -0 and numbers
+  below 2^-1042 do), so that a low word is read for close scores alone. A score above
+  the last goes past the last at once, the string's last 8 bytes being the last score:
+  the pairs of a STORE, of the rewritten append-only file and of a ZADD of scores in
+  order come so.
+- A write builds the new string from the old one's pieces and copies it into one buffer,
+  as the hashes' writes do: ZADD of a new member puts it at its place; ZADD and ZINCRBY of
+  one there move it where its new score goes, in one copy of the pieces before, between
+  and after; ZREM, ZPOPMIN and ZPOPMAX cut an element out.
+- Ranges: by rank, a walk to the first and the elements decoded (`zb.slice`); by score
+  (ZRANGEBYSCORE, ZCOUNT, and GEO's cells), `zset.before` walks the string comparing
+  scores as above; by member, a small sorted set's walk from its first element, as before,
+  on the list of its elements decoded from the string, where it was the tree's.
+  ZRANDMEMBER picks an element by its rank in the string, or, for more than 32 picks of
+  each anew and for Redis's third way, from a tree made from the string once
+  (`zt.build`, moved from `src/rdb.bend`).
+- **One buffer at most.** A string past 2,048 bytes is a chain of buffers of at most
+  2,048 bytes each (`String.take` copies into one buffer that long at most), and every
+  read by index past the first buffer (`String.code_at`, `String.slice` and
+  `String.length`: `str_code_at_far`, `str_slice_far` and `str_len_far` in
+  `bend2/comp.ts`) walks the chain from its first buffer, so a walk of the elements
+  costs their number times the chain's length. A small sorted set's string therefore
+  holds at most 2,048 bytes: 120 elements of members of 8 bytes, 81 of 16, 28 of 64. One
+  whose string would pass that is kept as the tree of its elements, as before this
+  change (`ZWide{tr}`, read as the tree was: a member found along it, as along a
+  listpack), for good, until a write makes it large; RESTORE makes a tree of a listpack
+  past one buffer. Such a sorted set takes about the memory it took before: 10,483 bytes
+  a key for 128 members of 8 bytes, where it took 12,403, and Redis 1,883 (the table
+  below).
+- Outside `src/map.bend`: RESTORE makes the string from the elements in order (a
+  listpack's as they came, a skiplist's turned around, others through a tree: `zset.of`,
+  `zel.sorted`); DUMP, the RDB file and ZSCAN decode it; OBJECT ENCODING reads its
+  widest member (`zb.widest`, or the tree's); `tests/aof_check.bend` reads `zset.all`.
+
+No law changed, and no proof: the proofs name `zset.empty`, `zset.len` and `zset.dels`,
+and see the walks of ZADD and ZREM only through `zadd.go` and `zrem.go` of the empty
+sorted set, where `zset.find` still reduces to no element whatever the member
+(`zrem_empty`, `zadd_xx_go`).
+
+**What it gives.** `used_memory` per key, less what the server held before (main at
+fc28490, and this change before it merged main 013d9ac and the hashes' pieces), after
+200,000 sorted sets `zset:000000000000` to `zset:000000199999` were loaded with one
+pipelined ZADD each; members `m0000000`, `m0000001`, ... of 8 bytes, member j of score
+j (integers) or j + 0.1 (fractions, which Redis writes in 17 digits):
+
+| members, scores | Redis 7.0.15 | before | packed |
+|---|---:|---:|---:|
+| 10, integers | 218.9 | 1,099.2 | 435.2 |
+| 10, fractions | 410.9 | 1,099.2 | 435.2 |
+| 50, integers | 730.9 | 4,915.2 | 1,203.2 |
+| 128, integers | 1,882.9 | 12,403.2 | 10,483.2 |
+
+The rest of a key (its name of 17 bytes, its entry in the trie, its value's nodes) is
+about 179 bytes. The string takes the power of two above its length: 170 bytes take 256,
+850 take 1,024. Redis keeps an integer score in one to nine bytes and another as its text
+of up to 17 digits, BendKV 8 bytes for any: with fractions, the sorted set of 10 takes
+1.06 times Redis's memory, with integers 2.0 times. 128 members of 8 bytes take 2,176
+bytes, past one buffer: those sorted sets are trees, as before, 5.6 times Redis's
+memory.
+
+**What it costs.** Instructions and last-level data read misses per request (callgrind,
+a last level of 2 MiB, 20 clients at a pipeline depth of 16, 20,000 requests counted after
+20,000 more) on 100,000 sorted sets of 10 members `m0` to `m9` of scores 0 to 9, main at
+013d9ac and this change merged with it:
+
+| command | instructions before | packed | misses before | packed |
+|---|---:|---:|---:|---:|
+| ZSCORE of `m3` | 8,435 | 7,934 | 11.61 | 6.55 |
+| ZRANK of `m3` | 7,800 | 6,932 | 11.95 | 6.90 |
+| ZRANGE 0 -1 WITHSCORES | 35,787 | 38,685 | 19.16 | 8.19 |
+| ZRANGEBYSCORE 2 5 | 25,731 | 30,044 | 18.29 | 8.43 |
+| ZCOUNT 2 5 | 32,656 | 36,035 | 17.30 | 8.57 |
+| ZRANGEBYLEX [m2 [m5 | 19,311 | 23,730 | 19.49 | 8.65 |
+| ZRANDMEMBER 3 | 36,146 | 38,370 | 15.57 | 8.60 |
+| ZADD of `m3`, there (the first moves it) | 19,078 | 18,654 | 17.96 | 8.52 |
+| ZINCRBY of `m3` | 27,732 | 26,518 | 18.39 | 8.24 |
+| ZADD of a new member | 25,492 | 24,005 | 20.55 | 8.51 |
+| ZREM of a member not there and of `m9` | 21,346 | 13,014 | 20.32 | 8.95 |
+| ZPOPMIN | 13,786 | 11,713 | 14.16 | 8.62 |
+| ZPOPMAX | 14,797 | 14,532 | 14.57 | 8.54 |
+
+- Lookups and writes cost fewer instructions: no tree is walked, copied, rebalanced and
+  dropped (`term_drop`, the runtime's drop of what a request no longer holds, took 7,216
+  instructions a ZINCRBY before, 4,238 after, on main fc28490).
+- Reads that answer elements cost more: a score's 8 bytes are 8 calls of
+  `String.code_at`, each a test of the string's form and of its bounds, about 25
+  instructions a byte and 270 a score, where a node held the double; ZRANGE of 10 reads
+  10 of them, ZCOUNT compares about 10 high words.
+- Misses fall by half or more everywhere: the string is two to four cache lines where the
+  tree was a node and a buffer an element.
+
+The misses outweigh the instructions: on 200,000 sorted sets of 10 members, ZSCORE, ZADD
+of a member there, ZRANK and ZINCRBY answer 1.4, 1.5, 1.8 and 1.7 times the requests a
+second they did, and ZRANGE of the 10 with their scores 1.3 times (PERFORMANCE.md,
+section 74). Those were measured before this change merged main 013d9ac and the hashes'
+pieces, against main fc28490; for those five commands the ratio of this change's
+instructions to main's is the same within 0.5% on both bases.
+
+**Past one buffer, measured** (on main fc28490). 100 sorted sets of 128 elements, made
+by ZADD with members of 64 bytes (9,344 bytes of string, five buffers), or RESTOREd from
+Redis's listpack of members of 1,000 bytes (zset-max-listpack-value raised there:
+129,664 bytes of string, 64 buffers); instructions per request before this change, with
+the string past one buffer (a first version, a chain of buffers), and with the tree past
+one buffer (this one):
+
+| sorted sets, command | before | chain | this change |
+|---|---:|---:|---:|
+| 64 bytes, ZSCORE of the last member | 88,632 | 99,381 | 78,028 |
+| 64 bytes, ZRANK of the last member | 88,552 | 96,018 | 78,361 |
+| 64 bytes, ZADD of the 65th, a new score | 71,467 | 122,130 | 65,717 |
+| 64 bytes, ZRANGE 0 -1 | 191,473 | 502,564 | 191,298 |
+| 1,000 bytes, ZSCORE of the last member | 91,936 | 1,939,637 | 81,666 |
+| 1,000 bytes, ZRANK of the last member | 92,004 | 1,909,118 | 81,816 |
+| 1,000 bytes, ZADD of the 65th, a new score | 74,525 | 1,112,876 | 70,852 |
+| 1,000 bytes, ZRANGE 0 -1 | 324,272 | 3,794,551 | 324,635 |
+
+The chain made ZSCORE of the long members 21 times as dear, and it answered a twelfth of
+the requests a second the tree did (PERFORMANCE.md, section 74). The review of the
+packed hashes found the same of a hash of 512 pairs of 64 bytes, whose pairs are now in
+pieces of one buffer each (Hashes, in `src/map.bend`).
+
+**Two traps of the hashes, again, and three of this change.**
+
+- *A slice compared with `String.eq` and `String.order`*, natives that borrow both
+  arguments, never with `str_eq`, which a slice would make own its first argument
+  (section 3zzzm).
+- *A collection taken out of the keyspace comes shared* (`db.upd` binds `ent.code`), so
+  every write copies the string where it could write in place. Noted, not fixed here
+  (section 3zzzm).
+- *A tree made for one read costs more than the walk it saves.* The first version read a
+  small sorted set's range by member, and ZRANDMEMBER's picks, from a tree made from the
+  string (`zset.tree`), so that the rest of the code stayed the tree's: ZRANGEBYLEX took
+  59% more instructions than before, ZRANDMEMBER of 3 31% (the builder's jobs, 330
+  instructions an element, and the list of elements it builds from). Read from the
+  string and its list, they take 23% and 6% more.
+- *A test made flat reads what the nested one skips.* The first version tested a
+  string's length and its last byte at once, in one call where the hashes made three
+  nested ones, and read the last byte of every string of another length too: on the
+  hashes of *What it costs* in section 3zzzm, HSET of a new field of 13 bytes among
+  fields of 2 took 17,368 instructions where #88's took 16,406, and HGET of a field there
+  7,423 where it took 7,402. The nested test is back: HGET, HGETALL, HSET of a field there
+  and of a new one take 7,409, 27,193, 14,333 and 16,408 (#88 merged with main 013d9ac:
+  7,402, 27,168, 14,342 and 16,406), and ZADD of a new member and ZREM 2.0% and 3.9%
+  fewer than with the flat test.
+- *The bytes, not their sum, cost the instructions.* Assembling a score's bytes with
+  `U32`'s shifts and ors, which compile to C's own, in place of `Nat`'s checked products
+  and sums, cost the same (148 instructions a word, two words a score): the 25 a byte are
+  `String.code_at`'s. It was left out.
+
+**Where BendKV differs.** Nothing a client sees changes.
+
+**Tests.** `tests/zset_test.py` gains sorted sets on both sides of one buffer: members
+of 30, 47 and 64 bytes added one ZADD at a time up to 128 elements and read around the
+crossing (elements, scores, ranks, ranges by rank, score and member, ZRANDMEMBER, ZSCAN,
+OBJECT ENCODING), then written (ZINCRBY, ZADD CH, ZREM, ZPOPMIN, ZPOPMAX,
+ZREMRANGEBYRANK), RESTOREd from Redis's DUMP and made large; and Redis's listpack of
+members of 3,000, 1,500 and 254 bytes restored on both, read and written. It passes on
+main's build too. `make check`, `make verdict`, `make smoke`, `make gencheck`,
+`make test` and `tools/sanitize.sh` pass; and, run on their own, `tests/zset_test.py` and
+`tests/hash_test.py` in RESP2 and RESP3, the differential tests at 2,000 rounds (seeds 1
+to 3, and 4 in RESP3), the tests of DUMP, SORT, GEO, the keyspace, RESP3 and the
+administrative commands (MEMORY USAGE), the append-only file (a restart, a cut entry,
+Redis's and BendKV's files both ways, the rewrite) and the RDB file. Sorted sets grown
+past one buffer one ZADD at a time (2,330 commands), and Redis's listpacks of members of
+254 to 70,000 bytes restored, read, written and DUMPed (63), answer as Redis does, and
+as the server before this change once a write passes the limits (203 commands); the
+sorted-set, hash and DUMP tests pass on the build with AddressSanitizer and
+UndefinedBehaviorSanitizer, which reports nothing.
+
+**Next.** Integer scores in fewer bytes, as a listpack keeps them, would put 128 members
+of 8 bytes in one buffer and the sorted set of 10 at about 307 bytes a key. Pieces of one
+buffer each, an element never split across two (as the packed hashes keep a hash past
+one buffer, and a quicklist holds listpacks), would keep a sorted set past 2,048 bytes
+packed without the walks of a chain. A range by member read on the string, which decodes
+only the elements it answers, and ZRANDMEMBER with Redis's one walk over its sorted
+picks, would take the rest of their cost.
+
 ## 3zzzo. A long request read in part
 
 **What was slow** (issue #85). One MSET of 300,000 keys, sent at once, took BendKV 12.7 s,
@@ -7182,7 +7386,7 @@ start now reads in 17 windows.
 **What it costs.** Nothing on a request's path: `make perfcheck` gives GET 3,491, SET
 4,235 and INCR 4,577 instructions a request, within 1.1% of the baseline.
 
-## 3zzzv. Lists in pieces, as a quicklist of listpacks
+## 3zzzw. Lists in pieces, as a quicklist of listpacks
 
 **What was left** (section 3zh). A list was a deque of two stacks of its elements: a cell
 of 16 bytes for each, and a buffer of 16 bytes or more for each element longer than 6

@@ -182,10 +182,13 @@ translation stays in the trusted base.
   server's random numbers), ZSCAN, ZUNION, ZINTER, ZDIFF, their STOREs, ZINTERCARD
   (LIMIT) and ZRANGESTORE, their arguments and errors read where and as Redis reads them.
   Scores are doubles, read, written, compared and added as C's are (`src/float.bend`),
-  with Redis's rules for infinities. A sorted set is one weight-balanced tree of its
-  elements in Redis's order, by score and then member, and past a listpack's limits (128
-  elements, members of 64 bytes) the same tree with a trie of its members, for good, as
-  Redis turns a listpack into a skiplist: a small one answers as Redis's listpack does
+  with Redis's rules for infinities. A sorted set keeps its elements in Redis's order, by
+  score and then member: while it is small (at most 128 elements, members of at most 64
+  bytes, Redis's listpack defaults) in one string, each element its member and its
+  score's 8 bytes, as a listpack keeps them in one allocation (in a weight-balanced tree
+  once that string would pass one buffer of the runtime, 2,048 bytes), and past the
+  limits in the tree with a trie of its members, for good, as Redis turns a listpack
+  into a skiplist: a small one answers as Redis's listpack does
   (no `-0` score, a range by member walked from its first element, ZSCAN whole with
   cursor 0, its integer scores as digits). OBJECT ENCODING answers `listpack` or
   `skiplist`, MEMORY USAGE estimates a sorted set's bytes, and a key never holds an
@@ -840,7 +843,7 @@ away.
 
 | file | lines of code | of them written by a generator | the laws import it |
 |---|---:|---:|---|
-| `src/map.bend` | 2,800 | 640 | yes |
+| `src/map.bend` | 3,200 | 640 | yes |
 | `src/redis.bend` | 18,000 | 7,300 | yes |
 | `src/batch.bend` | 84 |  | yes |
 | `src/aof.bend` | 1,200 |  | yes |
