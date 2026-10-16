@@ -712,6 +712,27 @@ def srv.acl.set(s: Srv, a: U.Acl) -> Srv:
     case Srv{pass, cfg, info, mm}:
       Srv{pass, cfg, info, mm.acl.set(mm, a)}
 
+# the client of id now the user of name n, among the restricted clients or
+# not (acl.bend: Restricted clients), and the client of id gone
+def srv.acl.client(s: Srv, +id: Nat, +n: String) -> Srv:
+  +s0 = s
+  srv.acl.set(s0, U.acl.client(srv.acl(s0), id, n))
+
+def srv.acl.left(s: Srv, +id: Nat) -> Srv:
+  +s0 = s
+  srv.acl.set(s0, U.acl.client.gone(srv.acl(s0), id))
+
+# a client gone (its connection's end): its counts (srv.gone), and out of
+# the restricted clients
+def srv.left(s: Srv, +id: Nat) -> Srv:
+  srv.acl.left(srv.gone(s, id), id)
+
+# the users ACL DELUSER removed forgotten, once the server closed their
+# clients
+def srv.acl.cleared(s: Srv) -> Srv:
+  +s0 = s
+  srv.acl.set(s0, U.acl.gone.clear(srv.acl(s0)))
+
 # whether the server has no password: its default user is on and takes
 # any password
 def nopass(+s: Srv) -> Bool:
@@ -1794,6 +1815,12 @@ def cfg.nat.of(l: R.LL) -> Nat:
 def cfg.nat(+cfg: List<&2, C.CItem>, +name: String) -> Nat:
   cfg.nat.of(R.ll.read(C.config.get_value(cfg, name)))
 
+# the ACL LOG with an entry the server makes (a call it refused, an AUTH
+# that failed: server.bend, ACL), as many kept as acllog-max-len says
+def srv.acl.log(s: Srv, e: U.Ent) -> Srv:
+  +s0 = s
+  srv.acl.set(s0, U.acl.log.add(srv.acl(s0), e, cfg.nat(srv.cfg(s0), "acllog-max-len")))
+
 # whether a listpack's longest element w is within the limit l: any is,
 # with l at its default of 64 or more
 def obj.wide.ok(+w: Nat, +l: Nat) -> Bool:
@@ -2826,7 +2853,7 @@ def cl.argv(args: List<&2, String>, +n: Nat) -> Nat:
       cl.argv(rest, Nat.add(n, String.length(a)))
 
 def cl.alone.line(+c: Conn, +info: Bool, +argv: Nat) -> String:
-  R.client.line(R.ClLine{conn.id(c), "?:0", "?:0", 0n, conn.name(c), 0n, 0n, "N", conn.db(c), 0n, 0n, 0n, None{}, 0n, argv, cl.cmd(info), "-1", conn.r3(c)}) ++ "\n"
+  R.client.line(R.ClLine{conn.id(c), "?:0", "?:0", 0n, conn.name(c), 0n, 0n, "N", conn.db(c), 0n, 0n, 0n, None{}, 0n, argv, cl.cmd(info), "default", "-1", conn.r3(c)}) ++ "\n"
 
 def cl.ids(ids: List<&2, Nat>, +c: Conn, +argv: Nat, acc: String) -> String:
   match ids:
@@ -2842,7 +2869,33 @@ def cl.list(+ty: Nat, ids: Maybe<&2, List<&2, Nat>>, +c: Conn, +argv: Nat) -> R.
     case None{}:
       R.RVerb{Bool.pick(String, Nat.is_le(ty, 1n), cl.alone.line(c, False{}, argv), "")}
 
-def cl.reply(op: R.ClOp, +c: Conn, +argv: Nat) -> R.Reply:
+# the first of the users CLIENT KILL's USER options named that the
+# server does not keep (none: it keeps them all)
+def cl.user.miss(us: List<&2, String>, +s: Srv) -> Maybe<&2, String>:
+  match us:
+    case Nil{}:
+      None{}
+    case Con{+u, rest}:
+      Bool.pick(Maybe<&2, String>, U.acl.some(U.acl.user(srv.acl(s), u)), cl.user.miss(rest, s), Some{u})
+
+# CLIENT KILL's answer after its USER options: the error after them, or
+# none killed (a session knows no other client)
+def cl.kill.or(e: Maybe<&2, R.Reply>) -> R.Reply:
+  match e:
+    case Some{r}:
+      r
+    case None{}:
+      R.RInt{R.IPos{0n}}
+
+# CLIENT KILL's answer when a user its USER options named is not kept
+def cl.users.of(m: Maybe<&2, String>, r: R.Reply) -> R.Reply:
+  match m:
+    case Some{+u}:
+      R.e_no_user(u)
+    case None{}:
+      r
+
+def cl.reply(op: R.ClOp, +c: Conn, +argv: Nat, +s: Srv) -> R.Reply:
   match op:
     case R.CoList{+ty, ids}:
       cl.list(ty, ids, c, argv)
@@ -2852,6 +2905,8 @@ def cl.reply(op: R.ClOp, +c: Conn, +argv: Nat) -> R.Reply:
       R.RInt{R.IPos{0n}}
     case R.CoKillAddr{a}:
       R.RError{"ERR No such client"}
+    case R.CoKillUsers{us, f, e}:
+      cl.users.of(cl.user.miss(us, s), cl.kill.or(e))
     case R.CoNoEvict{on}:
       R.r_ok()
     case R.CoPause{hi, lo, all}:
@@ -3201,7 +3256,7 @@ def own_reply(+o: R.SessOp, +c: Conn, +s: Srv, +ds: R.Ds) -> Maybe<&2, R.Reply>:
     case R.SPub{+k, a}:
       pub.say(conn.mode(c), R.pub.op(k, a))
     case R.SClient{+k, +a}:
-      say(conn.mode(c), cl.reply(R.client.op(k, a), c, cl.argv(a, 10n)))
+      say(conn.mode(c), cl.reply(R.client.op(k, a), c, cl.argv(a, 10n), s))
     case R.SMonitor{}:
       say(conn.mode(c), R.r_ok())
     case R.SRewrite{}:

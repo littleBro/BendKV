@@ -827,7 +827,7 @@ type Ent is Data:
 # close, the requirepass it last gave the default user (rp), and ACL
 # GENPASS's secret key and count of the blocks it made
 type Acl is Data:
-  Acl{dflt: User, users: List<&2, User>, log: List<&2, Ent>, gone: List<&2, String>, rp: String, key: String, ctr: Nat}
+  Acl{dflt: User, users: List<&2, User>, log: List<&2, Ent>, gone: List<&2, String>, rp: String, key: String, ctr: Nat, rcl: List<&2, Nat>}
 
 # Small things
 # ------------
@@ -1620,22 +1620,22 @@ def users.find(us: List<&2, User>, +n: String) -> Maybe<&2, User>:
 
 def acl.dflt(+a: Acl) -> User:
   match a:
-    case Acl{+dflt, users, log, gone, rp, key, ctr}:
+    case Acl{+dflt, users, log, gone, rp, key, ctr, rcl}:
       dflt
 
 def acl.users(+a: Acl) -> List<&2, User>:
   match a:
-    case Acl{dflt, +users, log, gone, rp, key, ctr}:
+    case Acl{dflt, +users, log, gone, rp, key, ctr, rcl}:
       users
 
 def acl.log(+a: Acl) -> List<&2, Ent>:
   match a:
-    case Acl{dflt, users, +log, gone, rp, key, ctr}:
+    case Acl{dflt, users, +log, gone, rp, key, ctr, rcl}:
       log
 
 def acl.gone(+a: Acl) -> List<&2, String>:
   match a:
-    case Acl{dflt, users, log, +gone, rp, key, ctr}:
+    case Acl{dflt, users, log, +gone, rp, key, ctr, rcl}:
       gone
 
 # a user of the ACL by name
@@ -1663,9 +1663,9 @@ def users.del(us: List<&2, User>, +n: String) -> List<&2, User>:
 
 def acl.put(a: Acl, u: User) -> Acl:
   match a:
-    case Acl{+dflt, +users, +log, +gone, +rp, +key, +ctr}:
+    case Acl{+dflt, +users, +log, +gone, +rp, +key, +ctr, +rcl}:
       +u0 = u
-      Bool.pick(Acl, String.eq(user.name(u0), "default"), Acl{u0, users, log, gone, rp, key, ctr}, Acl{dflt, users.put(users, u0), log, gone, rp, key, ctr})
+      Bool.pick(Acl, String.eq(user.name(u0), "default"), Acl{u0, users, log, gone, rp, key, ctr, rcl}, Acl{dflt, users.put(users, u0), log, gone, rp, key, ctr, rcl})
 
 def acl.set.done(r: Applied, a: Acl, old: Maybe<&2, User>) -> SetR:
   match r:
@@ -1712,15 +1712,15 @@ def acl.dflt.of(+pass: String) -> User:
 
 # key: GENPASS's secret, random hex digits the server read at its start
 def acl.new(+pass: String, key: String) -> Acl:
-  Acl{acl.dflt.of(pass), Nil{}, Nil{}, Nil{}, pass, key, 0n}
+  Acl{acl.dflt.of(pass), Nil{}, Nil{}, Nil{}, pass, key, 0n, Nil{}}
 
 # requirepass set: the default user's passwords reset, then the new one
 # or nopass (Redis's ACLUpdateDefaultUserPassword)
 def acl.requirepass(a: Acl, +pass: String) -> Acl:
   match a:
-    case Acl{dflt, users, log, gone, rp, key, ctr}:
+    case Acl{dflt, users, log, gone, rp, key, ctr, rcl}:
       +none = Nat.is_eq(String.length(pass), 0n)
-      Acl{user.set.pass(dflt, none, Bool.pick(List<&2, String>, none, Nil{}, [sha256(pass)])), users, log, gone, pass, key, ctr}
+      Acl{user.set.pass(dflt, none, Bool.pick(List<&2, String>, none, Nil{}, [sha256(pass)])), users, log, gone, pass, key, ctr, rcl}
 
 def acl.cfg.if(same: Bool, a: Acl, +pass: String) -> Acl:
   match same:
@@ -1733,8 +1733,8 @@ def acl.cfg.if(same: Bool, a: Acl, +pass: String) -> Acl:
 # (Redis applies a parameter only when its value changed)
 def acl.cfg(a: Acl, +pass: String) -> Acl:
   match a:
-    case Acl{dflt, users, log, gone, +rp, key, ctr}:
-      acl.cfg.if(String.eq(rp, pass), Acl{dflt, users, log, gone, rp, key, ctr}, pass)
+    case Acl{dflt, users, log, gone, +rp, key, ctr, rcl}:
+      acl.cfg.if(String.eq(rp, pass), Acl{dflt, users, log, gone, rp, key, ctr, rcl}, pass)
 
 # whether a user takes a password: on, and nopass or the password's
 # SHA-256 among its own (Redis's ACLCheckUserCredentials)
@@ -1778,6 +1778,91 @@ def sel.free(+s: Sel) -> Bool:
 def user.free(+u: User) -> Bool:
   sel.free(user.root(u))
 
+# Restricted clients
+# ------------------
+# The ids of the connected clients whose user is not free (a user gone is
+# not), which the server keeps here so that their batches run a command
+# at a time, each one checked (server.bend, ACL): it puts a client among
+# them, or out, when it logs in, when its user changes, and when it goes.
+
+def acl.rcl(+a: Acl) -> List<&2, Nat>:
+  match a:
+    case Acl{dflt, users, log, gone, rp, key, ctr, +rcl}:
+      rcl
+
+def rcl.has(+id: Nat, +xs: List<&2, Nat>) -> Bool:
+  match xs:
+    case Nil{}:
+      False{}
+    case Con{+x, +rest}:
+      Bool.or(Nat.is_eq(x, id), rcl.has(id, rest))
+
+def acl.restricted(+a: Acl, +id: Nat) -> Bool:
+  rcl.has(id, acl.rcl(a))
+
+def rcl.any(+xs: List<&2, Nat>) -> Bool:
+  match xs:
+    case Nil{}:
+      False{}
+    case Con{x, rest}:
+      True{}
+
+# whether some client is restricted (server.bend: Ps's bit 20)
+def acl.any(+a: Acl) -> Bool:
+  rcl.any(acl.rcl(a))
+
+def rcl.keep(same: Bool, +x: Nat, rest: List<&2, Nat>) -> List<&2, Nat>:
+  match same:
+    case True{}:
+      rest
+    case False{}:
+      x <> rest
+
+def rcl.drop(+id: Nat, xs: List<&2, Nat>) -> List<&2, Nat>:
+  match xs:
+    case Nil{}:
+      Nil{}
+    case Con{+x, rest}:
+      rcl.keep(Nat.is_eq(x, id), x, rcl.drop(id, rest))
+
+def rcl.put(free: Bool, +id: Nat, xs: List<&2, Nat>) -> List<&2, Nat>:
+  match free:
+    case True{}:
+      rcl.drop(id, xs)
+    case False{}:
+      id <> rcl.drop(id, xs)
+
+def acl.free.of(m: Maybe<&2, User>) -> Bool:
+  match m:
+    case Some{+u}:
+      user.free(u)
+    case None{}:
+      False{}
+
+# whether the user of name n is free
+def acl.free(+a: Acl, +n: String) -> Bool:
+  acl.free.of(acl.user(a, n))
+
+def acl.client.of(free: Bool, +id: Nat, a: Acl) -> Acl:
+  match a:
+    case Acl{dflt, users, log, gone, rp, key, ctr, rcl}:
+      Acl{dflt, users, log, gone, rp, key, ctr, rcl.put(free, id, rcl)}
+
+# the client of id, as the user of name n now
+def acl.client(a: Acl, +id: Nat, +n: String) -> Acl:
+  +a0 = a
+  acl.client.of(acl.free(a0, n), id, a0)
+
+# the client of id gone (its connection's end, CLIENT KILL)
+def acl.client.gone(a: Acl, +id: Nat) -> Acl:
+  acl.client.of(True{}, id, a)
+
+# the users DELUSER removed, forgotten once their clients are closed
+def acl.gone.clear(a: Acl) -> Acl:
+  match a:
+    case Acl{dflt, users, log, gone, rp, key, ctr, rcl}:
+      Acl{dflt, users, log, Nil{}, rp, key, ctr, rcl}
+
 # ACL DELUSER
 # -----------
 
@@ -1796,8 +1881,8 @@ def acl.some(m: Maybe<&2, User>) -> Bool:
 
 def acl.del.one(a: Acl, +n: String) -> Acl:
   match a:
-    case Acl{+dflt, +users, +log, +gone, +rp, +key, +ctr}:
-      Bool.pick(Acl, acl.some(users.find(users, n)), Acl{dflt, users.del(users, n), log, n <> gone, rp, key, ctr}, Acl{dflt, users, log, gone, rp, key, ctr})
+    case Acl{+dflt, +users, +log, +gone, +rp, +key, +ctr, +rcl}:
+      Bool.pick(Acl, acl.some(users.find(users, n)), Acl{dflt, users.del(users, n), log, n <> gone, rp, key, ctr, rcl}, Acl{dflt, users, log, gone, rp, key, ctr, rcl})
 
 def acl.del.go(ns: List<&2, String>, +k: Nat, a: Acl) -> DelR:
   match ns:
@@ -1984,12 +2069,12 @@ def acl.cats.reply() -> R.Reply:
 # getRandomHexChars hashes a secret seed with a counter
 def acl.key(+a: Acl) -> String:
   match a:
-    case Acl{dflt, users, log, gone, rp, +key, ctr}:
+    case Acl{dflt, users, log, gone, rp, +key, ctr, rcl}:
       key
 
 def acl.ctr(+a: Acl) -> Nat:
   match a:
-    case Acl{dflt, users, log, gone, rp, key, +ctr}:
+    case Acl{dflt, users, log, gone, rp, key, +ctr, rcl}:
       ctr
 
 def genpass.go(k: Nat, +key: String, +c: Nat, acc: String) -> String:
@@ -2008,8 +2093,8 @@ def acl.genpass(+a: Acl, +bits: Nat) -> String:
 # the ACL after a GENPASS of bits: its blocks counted
 def acl.genpassed(a: Acl, +bits: Nat) -> Acl:
   match a:
-    case Acl{dflt, users, log, gone, rp, key, +ctr}:
-      Acl{dflt, users, log, gone, rp, key, Nat.add(ctr, genpass.blocks(bits))}
+    case Acl{dflt, users, log, gone, rp, key, +ctr, rcl}:
+      Acl{dflt, users, log, gone, rp, key, Nat.add(ctr, genpass.blocks(bits)), rcl}
 
 # The check
 # ---------
@@ -2306,6 +2391,146 @@ def call.of.desc(m: Maybe<&2, K.Desc>, +argv: List<&2, String>) -> CallR:
 def call.of(+argv: List<&2, String>) -> CallR:
   call.of.desc(K.desc.argv(argv), argv)
 
+# a call of user m by its command line, as processCommand checks it once
+# it has looked the command up: allowed, or why not. A command the
+# parser refuses (unknown, or with a number of arguments its arity does
+# not allow) is refused before, so it passes here; a user that is gone
+# (ACL DELUSER, whose clients are closed) is allowed nothing.
+def acl.call.check(m: Maybe<&2, User>, r: CallR) -> Verdict:
+  match m r:
+    case Some{+u} CallOk{+c}:
+      user.check(u, c)
+    case None{} CallOk{+c}:
+      VNo{1n, 0n, acl.name(call.id(c))}
+    case _ _:
+      VOk{}
+
+# a call of the user of name n (server.bend, ACL)
+def acl.check(+a: Acl, +n: String, +argv: List<&2, String>) -> Verdict:
+  acl.call.check(acl.user(a, n), call.of(argv))
+
+# SORT's BY with a pattern and its GET read keys by pattern: a user gives
+# them only through a selector that allows the call and may read every
+# key, all keys or a read pattern that is * itself (sortCommandGeneric,
+# ACLUserCheckCmdWithUnrestrictedKeyAccess)
+def kpats.star(ks: List<&2, KPat>) -> Bool:
+  match ks:
+    case Nil{}:
+      False{}
+    case Con{KPat{+rw, +pat}, rest}:
+      Bool.or(Bool.and(Nat.is_eq(Nat.mod(rw, 2n), 1n), String.eq(pat, "*")), kpats.star(rest))
+
+def sels.sort.ok(ss: List<&2, Sel>, +c: Call) -> Bool:
+  match ss:
+    case Nil{}:
+      False{}
+    case Con{+s, rest}:
+      Bool.or(Bool.and(verdict.ok(sel.check(s, c)), Bool.or(sel.allk(s), kpats.star(sel.keys.of(s)))), sels.sort.ok(rest, c))
+
+# SORT's options, read in order as sortCommandGeneric reads them, by a
+# user that may not read every key: st is what the argument x is (0 an
+# option, 1 BY's pattern, 2 an argument passed over, 3 and 4 LIMIT's
+# numbers), left how many arguments there are from x on. Each answers how
+# the reading goes on (0), or ends: an error of SORT's own first (1, as a
+# syntax error or a LIMIT that is not a number), BY's (2) or GET's (3).
+def sort.word(+o: String) -> Nat:
+  Bool.pick(Nat, Bool.or(R.is_word(o, "ASC"), Bool.or(R.is_word(o, "DESC"), R.is_word(o, "ALPHA"))), 1n,
+    Bool.pick(Nat, R.is_word(o, "LIMIT"), 2n, Bool.pick(Nat, R.is_word(o, "STORE"), 3n,
+      Bool.pick(Nat, R.is_word(o, "BY"), 4n, Bool.pick(Nat, R.is_word(o, "GET"), 5n, 0n)))))
+
+def ll.is(l: R.LL) -> Bool:
+  match l:
+    case R.LL{neg, hi, lo}:
+      True{}
+    case R.LLBad{}:
+      False{}
+
+# an option o with la arguments after it (ro: SORT_RO, which has no STORE)
+def sort.opt.out(+w: Nat, +la: Nat, +ro: Bool) -> Nat:
+  match w:
+    case 1n:
+      0n
+    case 2n:
+      Bool.pick(Nat, Nat.is_le(2n, la), 0n, 1n)
+    case 3n:
+      Bool.pick(Nat, Bool.and(Nat.is_le(1n, la), Bool.not(ro)), 0n, 1n)
+    case 4n:
+      Bool.pick(Nat, Nat.is_le(1n, la), 0n, 1n)
+    case 5n:
+      Bool.pick(Nat, Nat.is_le(1n, la), 3n, 1n)
+    case _:
+      1n
+
+def sort.opt.next(+w: Nat) -> Nat:
+  match w:
+    case 2n:
+      3n
+    case 3n:
+      2n
+    case 4n:
+      1n
+    case _:
+      0n
+
+def sort.acl.out(+st: Nat, +x: String, +left: Nat, +ro: Bool) -> Nat:
+  match st:
+    case 0n:
+      sort.opt.out(sort.word(x), Nat.sub(left, 1n), ro)
+    case 1n:
+      Bool.pick(Nat, Nat.is_lt(String.find(x, '*', 0n), String.length(x)), 2n, 0n)
+    case 2n:
+      0n
+    case _:
+      Bool.pick(Nat, ll.is(R.ll.read(x)), 0n, 1n)
+
+def sort.acl.next(+st: Nat, +x: String) -> Nat:
+  match st:
+    case 0n:
+      sort.opt.next(sort.word(x))
+    case 3n:
+      4n
+    case _:
+      0n
+
+def sort.acl.pick(+o: Nat, m: Maybe<&2, String>) -> Maybe<&2, String>:
+  match o:
+    case 0n:
+      m
+    case 2n:
+      Some{"ERR BY option of SORT denied due to insufficient ACL permissions."}
+    case 3n:
+      Some{"ERR GET option of SORT denied due to insufficient ACL permissions."}
+    case _:
+      None{}
+
+def sort.acl.go(args: List<&2, String>, +st: Nat, +left: Nat, +ro: Bool) -> Maybe<&2, String>:
+  match args:
+    case Nil{}:
+      None{}
+    case Con{+x, rest}:
+      sort.acl.pick(sort.acl.out(st, x, left, ro), sort.acl.go(rest, sort.acl.next(st, x), Nat.sub(left, 1n), ro))
+
+# SORT's error (or SORT_RO's) for a BY with a pattern or a GET of a user
+# that may not read every key (u), none for any other call
+def sort.acl.user(m: Maybe<&2, User>, r: CallR, +argv: List<&2, String>, +ro: Bool) -> Maybe<&2, String>:
+  match m r:
+    case Some{+u} CallOk{+c}:
+      Bool.pick(Maybe<&2, String>, sels.sort.ok(user.sels(u), c), None{}, sort.acl.go(List.drop(&2, String, argv, 2n), 0n, Nat.sub(List.length(&2, String, argv), 2n), ro))
+    case _ _:
+      None{}
+
+def sort.acl.if(on: Bool, +a: Acl, +n: String, +argv: List<&2, String>, +ro: Bool) -> Maybe<&2, String>:
+  match on:
+    case True{}:
+      sort.acl.user(acl.user(a, n), call.of(argv), argv, ro)
+    case False{}:
+      None{}
+
+def acl.sort.err(+a: Acl, +n: String, +argv: List<&2, String>) -> Maybe<&2, String>:
+  +w = acl.nth(argv, 0n)
+  +ro = R.is_word(w, "SORT_RO")
+  sort.acl.if(Bool.or(ro, R.is_word(w, "SORT")), a, n, argv, ro)
+
 # ACL DRYRUN user command [arg ...]: the user, then the command, its
 # arity, and the check (on or off alike, and nothing logged)
 def dry.call(+u: User, r: CallR, +cmd: String) -> R.Reply:
@@ -2423,14 +2648,14 @@ def log.put(p: Pick, e: Ent, +max: Nat) -> List<&2, Ent>:
 
 def acl.log.add(a: Acl, e: Ent, +max: Nat) -> Acl:
   match a:
-    case Acl{dflt, users, +log, gone, rp, key, ctr}:
+    case Acl{dflt, users, +log, gone, rp, key, ctr, rcl}:
       +e0 = e
-      Acl{dflt, users, log.put(log.pick(10n, log, e0), e0, max), gone, rp, key, ctr}
+      Acl{dflt, users, log.put(log.pick(10n, log, e0), e0, max), gone, rp, key, ctr, rcl}
 
 def acl.log.reset(a: Acl) -> Acl:
   match a:
-    case Acl{dflt, users, log, gone, rp, key, ctr}:
-      Acl{dflt, users, Nil{}, gone, rp, key, ctr}
+    case Acl{dflt, users, log, gone, rp, key, ctr, rcl}:
+      Acl{dflt, users, Nil{}, gone, rp, key, ctr, rcl}
 
 # a Nat as a double
 def acl.dbl(+n: Nat) -> F.Fl:

@@ -1183,12 +1183,16 @@ type TOpt is Data:
 # its options are read), with its options; CACHING yes (1), no (0) or
 # neither (2); GETREDIR; TRACKINGINFO. Errors in the arguments are found
 # here, in Redis's order (clientCommand), but those that depend on other
-# clients.
+# clients, and on the users the server keeps: KILL's USER options before
+# the first error, or all of them, are CoKillUsers, whose first user the
+# server does not keep answers its error, as Redis answers it when it
+# reads that option, else the error after them (err), or the kill.
 type ClOp is Data:
   CoList{ty: Nat, ids: Maybe<&2, List<&2, Nat>>}
   CoInfo{}
   CoKill{f: Kill}
   CoKillAddr{addr: String}
+  CoKillUsers{users: List<&2, String>, f: Kill, err: Maybe<&2, Reply>}
   CoNoEvict{on: Bool}
   CoPause{hi: Nat, lo: Nat, all: Bool}
   CoUnpause{}
@@ -1199,11 +1203,11 @@ type ClOp is Data:
   CoBad{r: Reply}
 
 # CLIENT KILL's filter: the client's address and its own (none: any), its
-# id (none: any; Some{0} names no client), its type (0: any) and whether
-# the client that kills is spared (SKIPME, yes unless told no). USER
-# default names every client: BendKV has no other user.
+# id (none: any; Some{0} names no client), its type (0: any), whether
+# the client that kills is spared (SKIPME, yes unless told no) and its
+# user (none: any).
 type Kill is Data:
-  Kill{addr: Maybe<&2, String>, laddr: Maybe<&2, String>, id: Maybe<&2, Nat>, ty: Nat, skip: Bool}
+  Kill{addr: Maybe<&2, String>, laddr: Maybe<&2, String>, id: Maybe<&2, Nat>, ty: Nat, skip: Bool, user: Maybe<&2, String>}
 
 # a client id as Redis reads one, a long long (string2ll): one that can
 # be a client's (14 digits at most, as int_read reads them; ids start at
@@ -1358,28 +1362,33 @@ def kill.word(+o: String) -> Nat:
 
 def kill.id(m: Maybe<&2, Nat>, f: Kill) -> Kill:
   match f:
-    case Kill{a, l, i, t, s}:
-      Kill{a, l, m, t, s}
+    case Kill{a, l, i, t, s, u}:
+      Kill{a, l, m, t, s, u}
 
 def kill.ty(+n: Nat, f: Kill) -> Kill:
   match f:
-    case Kill{a, l, i, t, s}:
-      Kill{a, l, i, n, s}
+    case Kill{a, l, i, t, s, u}:
+      Kill{a, l, i, n, s, u}
 
 def kill.addr(v: String, f: Kill) -> Kill:
   match f:
-    case Kill{a, l, i, t, s}:
-      Kill{Some{v}, l, i, t, s}
+    case Kill{a, l, i, t, s, u}:
+      Kill{Some{v}, l, i, t, s, u}
 
 def kill.laddr(v: String, f: Kill) -> Kill:
   match f:
-    case Kill{a, l, i, t, s}:
-      Kill{a, Some{v}, i, t, s}
+    case Kill{a, l, i, t, s, u}:
+      Kill{a, Some{v}, i, t, s, u}
 
 def kill.skip(b: Bool, f: Kill) -> Kill:
   match f:
-    case Kill{a, l, i, t, s}:
-      Kill{a, l, i, t, b}
+    case Kill{a, l, i, t, s, u}:
+      Kill{a, l, i, t, b, u}
+
+def kill.usr(v: String, f: Kill) -> Kill:
+  match f:
+    case Kill{a, l, i, t, s, u}:
+      Kill{a, l, i, t, s, Some{v}}
 
 # a step of CLIENT KILL's options: the filter so far, or the error that
 # ends them
@@ -1406,12 +1415,10 @@ def kill.tyv(+ty: Nat, +v: String, f: Kill) -> KSt:
     case _:
       KOk{kill.ty(ty, f)}
 
-def kill.user(ok: Bool, +v: String, f: Kill) -> KSt:
-  match ok:
-    case True{}:
-      KOk{f}
-    case False{}:
-      KErr{RError{no_newlines("ERR No such user '" ++ cstr(v) ++ "'")}}
+# CLIENT KILL's error for a USER option whose user the server does not
+# keep
+def e_no_user(+u: String) -> Reply:
+  RError{no_newlines("ERR No such user '" ++ cstr(u) ++ "'")}
 
 def kill.skipv(yes: Bool, no: Bool, f: Kill) -> KSt:
   match yes no:
@@ -1434,7 +1441,7 @@ def kill.opt(+k: Nat, +v: String, f: Kill) -> KSt:
     case 4n:
       KOk{kill.laddr(v, f)}
     case 5n:
-      kill.user(String.eq(v, "default"), v, f)
+      KOk{kill.usr(v, f)}
     case 6n:
       kill.skipv(is_word(v, "YES"), is_word(v, "NO"), f)
     case _:
@@ -1447,32 +1454,51 @@ def kill.step(st: KSt, +k: Nat, +v: String) -> KSt:
     case KErr{r}:
       KErr{r}
 
-def kill.end(st: KSt) -> ClOp:
+# the options read, an option left without its value: a syntax error,
+# unless an error came before
+def kill.odd(st: KSt) -> KSt:
   match st:
     case KOk{f}:
-      CoKill{f}
+      KErr{RError{"ERR syntax error"}}
     case KErr{r}:
-      CoBad{r}
+      KErr{r}
 
-def kill.odd(st: KSt) -> ClOp:
+# the users of USER options read before any error (us, newest first),
+# with the user of an option k read now
+def kill.users(+st: KSt, +k: Nat, +v: String, +us: List<&2, String>) -> List<&2, String>:
   match st:
     case KOk{f}:
-      e_client_syntax()
+      Bool.pick(List<&2, String>, Nat.is_eq(k, 5n), v <> us, us)
     case KErr{r}:
+      us
+
+# the options' outcome, after the users they named (CoKillUsers) when
+# they named some
+def kill.end(us: List<&2, String>, st: KSt) -> ClOp:
+  match us st:
+    case Nil{} KOk{f}:
+      CoKill{f}
+    case Nil{} KErr{r}:
       CoBad{r}
+    case Con{u, rest} KOk{f}:
+      CoKillUsers{List.reverse(&2, String, u <> rest), f, None{}}
+    case Con{u, rest} KErr{r}:
+      CoKillUsers{List.reverse(&2, String, u <> rest), Kill{None{}, None{}, None{}, 0n, True{}, None{}}, Some{r}}
 
 # The new form's options, each with its value, in order: the first error
 # ends them, as Redis's loop does; a later option of a name overrides an
 # earlier one. An option without a value, or one Redis does not know, is
-# a syntax error.
-def kill.args(args: List<&2, String>, st: KSt) -> ClOp:
+# a syntax error. Each USER option's user is looked up as Redis reads it
+# (us: kill.end).
+def kill.args(args: List<&2, String>, +st: KSt, us: List<&2, String>) -> ClOp:
   match args:
     case Nil{}:
-      kill.end(st)
+      kill.end(us, st)
     case Con{+o, Con{+v, rest}}:
-      kill.args(rest, kill.step(st, kill.word(o), v))
+      +k = kill.word(o)
+      kill.args(rest, kill.step(st, k, v), kill.users(st, k, v, us))
     case Con{o, Nil{}}:
-      kill.odd(st)
+      kill.end(us, kill.odd(st))
 
 # CLIENT KILL: one argument is the old form, an address; more are options
 def kill.of(args: List<&2, String>) -> ClOp:
@@ -1480,7 +1506,7 @@ def kill.of(args: List<&2, String>) -> ClOp:
     case Con{a, Nil{}}:
       CoKillAddr{a}
     case _:
-      kill.args(args, KOk{Kill{None{}, None{}, None{}, 0n, True{}}})
+      kill.args(args, KOk{Kill{None{}, None{}, None{}, 0n, True{}, None{}}}, Nil{})
 
 def no_evict.on(on: Bool, off: Bool) -> ClOp:
   match on off:
@@ -1503,13 +1529,13 @@ def no_evict.of(args: List<&2, String>) -> ClOp:
 # socket's fd, name, age and idle time (s), flags, database, the counts of
 # its channels, patterns and shard channels, the commands queued in its
 # MULTI (none: -1), the bytes of the batch it runs (qbuf) and of the
-# command's arguments (argv-mem), its last command (cmd), the client its
-# invalidations go to (redir: -1 when it does not track, 0 itself), and
+# command's arguments (argv-mem), its last command (cmd), its user (ACL),
+# the client its invalidations go to (redir: -1 when it does not track, 0 itself), and
 # whether it speaks RESP3 (resp). BendKV keeps no buffer of a client's own, so
 # qbuf-free, multi-mem, the reply buffer's size and peak, the output
 # lists and the memory are 0.
 type ClLine is Data:
-  ClLine{id: Nat, addr: String, laddr: String, fd: Nat, name: String, age: Nat, idle: Nat, flags: String, db: Nat, sub: Nat, psub: Nat, ssub: Nat, multi: Maybe<&2, Nat>, qbuf: Nat, argv: Nat, cmd: String, redir: String, r3: Bool}
+  ClLine{id: Nat, addr: String, laddr: String, fd: Nat, name: String, age: Nat, idle: Nat, flags: String, db: Nat, sub: Nat, psub: Nat, ssub: Nat, multi: Maybe<&2, Nat>, qbuf: Nat, argv: Nat, cmd: String, user: String, redir: String, r3: Bool}
 
 def line.multi(m: Maybe<&2, Nat>) -> String:
   match m:
@@ -1520,12 +1546,12 @@ def line.multi(m: Maybe<&2, Nat>) -> String:
 
 def client.line(l: ClLine) -> String:
   match l:
-    case ClLine{id, addr, laddr, fd, name, age, idle, flags, db, sub, psub, ssub, multi, qbuf, argv, cmd, redir, r3}:
+    case ClLine{id, addr, laddr, fd, name, age, idle, flags, db, sub, psub, ssub, multi, qbuf, argv, cmd, user, redir, r3}:
       a = "id=" ++ Nat.show(id) ++ " addr=" ++ addr ++ " laddr=" ++ laddr ++ " fd=" ++ Nat.show(fd) ++ " name=" ++ name
       b = " age=" ++ Nat.show(age) ++ " idle=" ++ Nat.show(idle) ++ " flags=" ++ flags ++ " db=" ++ Nat.show(db)
       c = " sub=" ++ Nat.show(sub) ++ " psub=" ++ Nat.show(psub) ++ " ssub=" ++ Nat.show(ssub) ++ " multi=" ++ line.multi(multi)
       d = " qbuf=" ++ Nat.show(qbuf) ++ " qbuf-free=0 argv-mem=" ++ Nat.show(argv) ++ " multi-mem=0 rbs=0 rbp=0 obl=0 oll=0 omem=0 tot-mem=0"
-      a ++ b ++ c ++ d ++ " events=r cmd=" ++ cmd ++ " user=default redir=" ++ redir ++ " resp=" ++ Bool.pick(String, r3, "3", "2")
+      a ++ b ++ c ++ d ++ " events=r cmd=" ++ cmd ++ " user=" ++ user ++ " redir=" ++ redir ++ " resp=" ++ Bool.pick(String, r3, "3", "2")
 
 def parse_client(id: Nat, sub: String, args: List<&2, String>) -> SessOp:
   match id:

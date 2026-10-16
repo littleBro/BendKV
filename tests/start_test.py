@@ -12,7 +12,8 @@ in a fresh directory of its own that holds the case's files:
   names (a server's own port and directory read as {port} and {dir}).
 
 Then what BendKV refuses although Redis starts (what it cannot do: modules,
-ACL users, renamed commands, the background, a cluster, a replica, TLS,
+ACL users from the configuration or a file, renamed commands, the
+background, a cluster, a replica, TLS,
 data it cannot read, a supervisor it cannot signal), each with its line;
 and what is BendKV's own: --version, --help, the short form, the log file,
 the pid file, protected mode and several addresses.
@@ -266,7 +267,8 @@ STARTED = [
 # environment, and the line said (on stderr, or as the log's last line)
 BENDKV_REFUSES = [
     ("renamed commands", ["c.conf"], {"c.conf": 'rename-command FLUSHALL ""\n'}, {}, "BendKV cannot rename commands yet"),
-    ("ACL users", ["c.conf"], {"c.conf": "user default on nopass ~* +@all\n"}, {}, "BendKV has no ACL users yet"),
+    ("ACL users", ["c.conf"], {"c.conf": "user default on nopass ~* +@all\n"}, {}, "BendKV cannot read ACL users from its configuration yet: set them with ACL SETUSER"),
+    ("an ACL file", ["--port", "{port}", "--aclfile", "users.acl"], {"users.acl": "user default on nopass ~* +@all\n"}, {}, "BendKV cannot load an ACL file yet: leave aclfile empty, and set the users with ACL SETUSER"),
     ("an include by a pattern", ["c.conf"], {"c.conf": "include *.inc\n"}, {}, "BendKV cannot include files by a pattern yet"),
     ("sentinel mode", ["--sentinel"], {}, {}, "BendKV has no sentinel mode"),
     ("a module", ["--port", "{port}", "--loadmodule", "/x.so"], {}, {}, "Can't load module from /x.so: server aborting"),
