@@ -7313,8 +7313,8 @@ write changed it: `zt.ins` read the side it went down after giving it to the ins
 which shares it first, so the insertion copied each node of its path. Each side is now
 compared before it goes down, and the tree and the trie go to their writes whole.
 
-**Measured** (callgrind, instructions per command, one at a time; a sorted set of 100,000
-elements, as `tools/colls.sh` makes it, and one of 100):
+**Measured on main of 15 October** (callgrind, instructions per command, one at a time; a
+sorted set of 100,000 elements, as `tools/colls.sh` makes it, and one of 100):
 
 | command | before | the take alone | both | |
 |---|---:|---:|---:|---:|
@@ -7335,6 +7335,22 @@ ZADD of a new score 76,830 → 49,443, of a new member 47,807 → 33,854, of the
 member has 23,695 → 24,950; the other commands as before, within 0.4%. `make perfcheck`:
 GET 3,302, SET 4,067 and INCR 4,417 instructions per request (main 3,302, 4,069 and
 4,411).
+
+**On main of 16 October** (merged with small sorted sets in one string, FINDINGS 3zzzn,
+and with streams). `tools/colls.sh`, main's build and the merge's:
+
+| command | main | merge | |
+|---|---:|---:|---:|
+| ZADD of a new score to a member there | 73,485 | 55,234 | −24.8% |
+| ZINCRBY | 68,182 | 57,792 | −15.2% |
+| ZADD of a new member | 55,964 | 39,738 | −29.0% |
+| ZADD of the score a member has | 29,445 | 30,682 | +4.2% |
+| the other commands of `colls.sh` | | | −1.3% to +0.1% |
+
+ZADD of a new score and ZINCRBY now keep 5,800 and 7,600 instructions more than the
+change left them on the older main (49,443 and 50,220), while main's own costs for them
+moved little; where those instructions go is not measured yet. `make perfcheck` on the
+merge: GET 3,490, SET 4,285 and INCR 4,604 (main 3,484, 4,246 and 4,588).
 
 **What is left.** The test reads the trie and parses the first score, and the write does
 both again; an update given the test's reading would do each once. ZINCRBY's soft-float

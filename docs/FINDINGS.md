@@ -5928,7 +5928,8 @@ their collection out of the keyspace and change it in place. ZADD and ZINCRBY st
 a new version of the sorted set while the keyspace held the old one, so each copied the
 paths it changed in the tree and in the trie, and the keyspace dropped the old ones
 after: on a sorted set of 100,000 elements, ZADD of a new score to a member there took
-76,830 instructions, ZINCRBY 68,728 and ZADD of a new member 47,807. A ZADD can change
+73,485 instructions, ZINCRBY 68,182 and ZADD of a new member 55,964 (main of 16 October).
+A ZADD can change
 nothing: a member there with the score it has, XX of a member not there, NX of one there,
 a GT or an LT that keeps the score, or an INCR whose sum is a NaN. Such a write answers
 CKeep and drops the sorted set it was given, which a sorted set taken out of the
@@ -5955,7 +5956,8 @@ keyspace cannot afford, so the take needs a test, proved, that the write changes
 
 **The tree** (`src/map.bend`: Sorted sets). The take alone gave less than it should:
 ZADD of a new member took 43,874 instructions with it, of which 6,400 went to dropping
-an old path at the end. The tree was shared while the insertion ran.
+an old path at the end (main of 15 October). The tree was shared while the insertion
+ran.
 
 - `zt.ins` (and `zt.rm`) compared the element with the side it was about to go down
   only after giving that side to the insertion. A field read after it is given away is
@@ -5984,29 +5986,33 @@ an old path at the end. The tree was shared while the insertion ran.
 `make check` and `make verdict` pass.
 
 **What it gives** (`tools/colls.sh`, instructions per command; ZADD of a new score and of
-a new member are new there):
+a new member are new there), on main of 16 October:
 
 | command | before | after | |
 |---|---:|---:|---:|
-| ZADD of a new score to a member there | 76,830 | 49,443 | −35.6% |
-| ZINCRBY | 68,728 | 50,220 | −26.9% |
-| ZADD of a new member | 47,807 | 33,854 | −29.2% |
-| ZADD of the score a member has | 23,695 | 24,950 | +5.3% |
-| the other commands of `colls.sh` | | as before (±0.4%) | |
+| ZADD of a new score to a member there | 73,485 | 55,234 | −24.8% |
+| ZINCRBY | 68,182 | 57,792 | −15.2% |
+| ZADD of a new member | 55,964 | 39,738 | −29.0% |
+| ZADD of the score a member has | 29,445 | 30,682 | +4.2% |
+| the other commands of `colls.sh` | | −1.3% to +0.1% | |
 
-The take alone, before the tree's change, gave −20.6%, −15.7% and −8.0% on the first
-three; the rest is the tree. A ZADD of three new members took 103,228 instructions and
-takes 58,387 (−43%). `make perfcheck`: GET 3,302, SET 4,067, INCR 4,417 (main 3,302,
-4,069, 4,411).
+On main of 15 October, before small sorted sets in one string (section 3zzzn), the
+same change gave −35.6%, −26.9% and −29.2% on the first three (from 76,830, 68,728 and
+47,807 to 49,443, 50,220 and 33,854), and the take alone −20.6%, −15.7% and −8.0%; a
+ZADD of three new members fell from 103,228 instructions to 58,387 (−43%). On the newer
+main, ZADD of a new score and ZINCRBY keep 6,000 to 8,000 instructions more of their
+cost than they did; where those go is not measured yet. `make perfcheck`: GET 3,490,
+SET 4,285, INCR 4,604 (main 3,484, 4,246, 4,588).
 
 **What is left.**
 
 - The test reads the trie and parses the first score, and the write does both again.
   ZINCRBY adds its increment twice, in software (section 3zk). A ZADD that changes
-  nothing pays the test: +5%.
+  nothing pays the test: +4%.
 - ZREM, ZPOPMIN, ZPOPMAX and the ZREMRANGEBY family still copy their paths: each needs a
   test of its own (ZREM's: that the members it removes leave the sorted set not empty).
 - A small sorted set finds a member by a walk of its elements.
+- Where the gains lost on the newer main went (above).
 
 ## 3zzzb. CLIENT TRACKING: client-side caching
 
