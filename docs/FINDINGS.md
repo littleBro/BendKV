@@ -6483,9 +6483,13 @@ command MULTI may not queue, before the rest:
 - EXEC checks each command again as it runs it, in case the rules changed since it was
   queued (or an AUTH before it in the transaction changed the user): one refused then
   answers `NOPERM ACLs rules changed between the moment the transaction was accumulated
-  and the EXEC call...` and is no call. The arguments of the commands a batch queued are
-  read from its bytes once: read again for each command, an EXEC of 8,000 SETs queued
-  before an AUTH inside the transaction restricted its client took 26 s;
+  and the EXEC call...` and is no call. Its error counts (`total_error_replies`, NOPERM
+  in errorstats), but not as a command processed or a call of its command, and EXEC
+  counts as failed when no command ran after the last one refused (Redis's
+  `prev_err_count`). The first build counted it as a call, and EXEC as never failed.
+  The arguments of the commands a batch queued are read from its bytes once: read again
+  for each command, an EXEC of 8,000 SETs queued before an AUTH inside the transaction
+  restricted its client took 26 s;
 - SORT with BY of a pattern, or GET, answers Redis's error unless a selector that allows it
   may read every key;
 - a call refused marks no key used: a restricted client's batch marks each call's key for

@@ -5858,22 +5858,25 @@ def bg.feed(seen: Bool, +id: Nat, +k: Nat, +m0: S.Mute, a: Av, ar: Av, g: LRun) 
       fed.held(bg.feed(seen, id, k, m0, a, ar, h))
 
 # The commands EXEC runs: each one's line, the client's own kept for after
-# EXEC's array (mine, newest first)
+# EXEC's array (mine, newest first); and whether an error came after the
+# last call (err: a command refused at EXEC, whose error Redis adds out of
+# call(), so that EXEC's own call() counts it as failed when no call
+# follows)
 type Xr is Data:
-  Xr{g: LRun, mine: List<&2, String>}
+  Xr{g: LRun, mine: List<&2, String>, err: Bool}
 
 def bg.x.fed(+id: Nat, +k: Nat, +m0: S.Mute, got: Got, g: LRun, mine: List<&2, String>) -> Xr:
   match got g:
     case Got{args, rest} LRun{rs, es, +conn, srv, +ds, ws, up, tx, +pb}:
       +line = mon.line(R.ds.now(ds), S.conn.db(conn), ps.addr(id, pb), mon.redact(R.code.key(k), args))
-      Xr{LRun{rs, es, conn, srv, ds, ws, up, tx, ps.mon.push(id, "+" ++ line ++ "\r\n", pb)}, mon.add(mon.self(ps.mon.is(id, pb), m0, conn), line, mine)}
+      Xr{LRun{rs, es, conn, srv, ds, ws, up, tx, ps.mon.push(id, "+" ++ line ++ "\r\n", pb)}, mon.add(mon.self(ps.mon.is(id, pb), m0, conn), line, mine), False{}}
     case Got{args, rest} LHeld{h}:
-      Xr{LHeld{h}, mine}
+      Xr{LHeld{h}, mine, False{}}
 
 def bg.x.feed.on(on: Bool, +id: Nat, +k: Nat, +m0: S.Mute, a: Av, g: LRun, mine: List<&2, String>) -> Xr:
   match on:
     case False{}:
-      Xr{g, mine}
+      Xr{g, mine, False{}}
     case True{}:
       bg.x.fed(id, k, m0, av.get(a), g, mine)
 
@@ -5882,7 +5885,7 @@ def bg.x.feed(ran: Bool, +id: Nat, +k: Nat, +m0: S.Mute, a: Av, g: LRun, mine: L
     case LRun{rs, es, conn, srv, ds, ws, up, tx, +pb}:
       bg.x.feed.on(Bool.and(ran, ps.mon.any(pb)), id, k, m0, a, LRun{rs, es, conn, srv, ds, ws, up, tx, pb}, mine)
     case LHeld{h}:
-      Xr{LHeld{h}, mine}
+      Xr{LHeld{h}, mine, False{}}
 
 # the client's own lines of EXEC's commands (newest first), after EXEC's
 # reply
@@ -6020,12 +6023,22 @@ def tx.flat(xs: List<&2, A.Ent>, acc: List<&2, A.Eff>) -> List<&2, A.Eff>:
 def tx.effs(e1: List<&2, A.Ent>, es: List<&2, A.Ent>) -> List<&2, A.Ent>:
   List.reverse.go(&2, A.Ent, A.tx.wrap(tx.flat(e1, Nil{})), es)
 
+# EXEC counted as failed when an error came after its last call (Xr's
+# err): Redis's incrCommandStatsOnError at the end of EXEC's call() sees
+# an error reply since the last call's end
+def bg.x.failed(e: Bool, +code: Nat, g: LRun) -> LRun:
+  match e g:
+    case True{} LRun{rs, es, conn, +srv, ds, ws, up, tx, pb}:
+      LRun{rs, es, conn, S.srv.failed(srv, code), ds, ws, up, tx, pb}
+    case _ other:
+      other
+
 def bg.exec.done(rs: List<&2, R.Reply>, es: List<&2, A.Ent>, +m0: S.Mute, +mi: S.Mute, +code: Nat, x: Xr) -> LRun:
   match x:
-    case Xr{LRun{rs1, es1, +conn1, srv1, ds1, ws1, up1, tx1, pb}, mine}:
+    case Xr{LRun{rs1, es1, +conn1, srv1, ds1, ws1, up1, tx1, pb}, mine, e}:
       +conn2 = Bool.pick(S.Conn, mute.same(S.conn.mode(conn1), mi), conn.mode.set(m0, conn1), conn1)
-      mon.after(mine, bg.say(R.RArray{List.reverse(&2, R.Reply, rs1)}, code, LRun{rs, tx.effs(es1, es), conn2, srv1, ds1, ws1, up1, tx1, pb}))
-    case Xr{LHeld{h}, mine}:
+      mon.after(mine, bg.x.failed(e, code, bg.say(R.RArray{List.reverse(&2, R.Reply, rs1)}, code, LRun{rs, tx.effs(es1, es), conn2, srv1, ds1, ws1, up1, tx1, pb})))
+    case Xr{LHeld{h}, mine, e}:
       LHeld{h}
 
 # A command of Pub/Sub. SUBSCRIBE and its kin: their replies sent
@@ -7505,12 +7518,12 @@ def bg.x.cmd(may: Bool, +id: Nat, +back: Chan(Ans), +inb: Nat, +n: Nat, +c: R.Cm
 # a command of EXEC run (bg.x.go)
 def bg.x.one(+id: Nat, +back: Chan(Ans), +inb: Nat, +n: Nat, +c: R.Cmd, +k: Nat, +a: Av, x: Xr) -> Xr:
   match x:
-    case Xr{LRun{rs, es, +conn, +srv, ds, ws, up, tx, +pb}, mine}:
+    case Xr{LRun{rs, es, +conn, +srv, ds, ws, up, tx, +pb}, mine, e}:
       +may = S.may(S.kind(c), conn, srv)
       +rk = bg.x.rk(id, may, k, pb)
       bg.x.feed(mon.ran(may, k), id, k, S.conn.mode(conn), a, bg.x.trk(rk, id, k, a, bg.x.cmd(may, id, back, inb, n, c, k, a, LRun{rs, es, conn, S.srv.call(srv, id, av.arg(a)), ds, ws, up, tx, pb})), mine)
-    case Xr{LHeld{h}, mine}:
-      Xr{LHeld{h}, mine}
+    case Xr{LHeld{h}, mine, e}:
+      Xr{LHeld{h}, mine, e}
 
 # Exec's arguments. A queued command's arguments are read from the bytes
 # of its batch (P.argvs) only when something reads them: the check of a
@@ -7572,13 +7585,23 @@ def xm.av.if(need: Bool, +m: Xm, a: Av) -> Av:
     case False{}:
       a
 
+# an error of EXEC's array that no call answered: with the replies, and
+# counted as an error reply alone (no call, as Redis's addReplyErrorFormat
+# out of call())
+def bg.x.err(+m: String, g: LRun) -> LRun:
+  match g:
+    case LRun{rs, es, +conn, +srv, ds, ws, up, tx, pb}:
+      LRun{S.put(S.say(S.conn.mode(conn), R.RError{m}), rs), es, S.step_conn(conn, srv), S.srv.erred(srv, m), ds, ws, up, tx, pb}
+    case LHeld{h}:
+      LHeld{h}
+
 # a command of EXEC that its user may no longer run: NOPERM with why
-# (U.verdict.exec), an entry in context multi, and no call; the error
-# alone is counted (code 0, whose key has no entry)
+# (U.verdict.exec), an entry in context multi, and no call: the error is
+# counted alone, and EXEC fails if no call comes after it (Xr's err)
 def bg.x.denied(+v: U.Verdict, +id: Nat, +inb: Nat, +n: Nat, +k: Nat, +a: Av, x: Xr) -> Xr:
   match x:
-    case Xr{g, mine}:
-      Xr{bg.say(R.RError{U.verdict.exec(v)}, 0n, bg.acl.log(id, v, True{}, Some{n}, inb, k, a, g)), mine}
+    case Xr{g, mine, e}:
+      Xr{bg.x.err(U.verdict.exec(v), bg.acl.log(id, v, True{}, Some{n}, inb, k, a, g)), mine, True{}}
 
 def bg.x.acl(v: U.Verdict, +id: Nat, +back: Chan(Ans), +inb: Nat, +n: Nat, +c: R.Cmd, +k: Nat, +a: Av, x: Xr) -> Xr:
   match v:
@@ -7594,14 +7617,14 @@ def bg.x.acl(v: U.Verdict, +id: Nat, +back: Chan(Ans), +inb: Nat, +n: Nat, +c: R
 # monitor reads them (Exec's arguments, m)
 def bg.x.go(+id: Nat, +back: Chan(Ans), +inb: Nat, +n: Nat, cmds: List<&2, R.Cmd>, codes: List<&2, Nat>, avs: List<&2, Qa>, m: Xm, x: Xr) -> Xr:
   match cmds codes avs x:
-    case Con{+c, rest} Con{+k, more} Con{Qa{+b, a0}, ar} Xr{LRun{rs, es, +conn, +srv, ds, ws, up, tx, +pb}, mine}:
+    case Con{+c, rest} Con{+k, more} Con{Qa{+b, a0}, ar} Xr{LRun{rs, es, +conn, +srv, ds, ws, up, tx, +pb}, mine, e}:
       +ck = Bool.and(ps.acl.on(pb), S.srv.restricted(srv, id))
       +may = S.may(S.kind(c), conn, srv)
       +need = Bool.or(ck, Bool.or(bg.x.rk(id, may, k, pb), Bool.and(mon.ran(may, k), ps.mon.any(pb))))
       +a1 = a0
       +m1 = xm.if(need, m, b, a1)
       +a = xm.av.if(need, m1, a1)
-      bg.x.go(id, back, inb, n, rest, more, ar, m1, bg.x.acl(bg.acl.check(ck, id, srv, pb, k, a), id, back, inb, n, bg.acl.sort(ck, id, srv, pb, k, a, c), k, a, Xr{LRun{rs, es, conn, srv, ds, ws, up, tx, pb}, mine}))
+      bg.x.go(id, back, inb, n, rest, more, ar, m1, bg.x.acl(bg.acl.check(ck, id, srv, pb, k, a), id, back, inb, n, bg.acl.sort(ck, id, srv, pb, k, a, c), k, a, Xr{LRun{rs, es, conn, srv, ds, ws, up, tx, pb}, mine, e}))
     case _ _ _ x0:
       x0
 
@@ -7610,7 +7633,7 @@ def bg.exec.run(+id: Nat, +back: Chan(Ans), +inb: Nat, +code: Nat, +cmds: List<&
     case LRun{rs, es, +conn, srv, ds, ws, up, tx, pb}:
       +m0 = S.conn.mode(conn)
       +mi = exec.mode(m0)
-      bg.exec.done(rs, es, m0, mi, code, bg.x.go(id, back, inb, List.length(&2, R.Cmd, cmds), cmds, codes, avs, XmNone{}, Xr{LRun{Nil{}, Nil{}, conn.mode.set(mi, conn), srv, ds, ws, up, tx, pb}, Nil{}}))
+      bg.exec.done(rs, es, m0, mi, code, bg.x.go(id, back, inb, List.length(&2, R.Cmd, cmds), cmds, codes, avs, XmNone{}, Xr{LRun{Nil{}, Nil{}, conn.mode.set(mi, conn), srv, ds, ws, up, tx, pb}, Nil{}, False{}}))
     case LHeld{h}:
       LHeld{h}
 
