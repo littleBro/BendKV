@@ -6371,11 +6371,10 @@ pass.
   a SHUTDOWN SAVE and another client's FLUSHALL in one group give Redis a file of the
   keys and BendKV an empty one. The databases are values that do not change, so the
   save could take them at SAVE's place in the group; that is left for later.
-- After a SHUTDOWN that saves, the other clients' requests of its group run before the
-  save (above). What they write reaches the append-only file and the RDB file, and they
-  get no reply, where Redis ends inside the SHUTDOWN and runs none of them. Holding them
-  until the save's result is known is issue #84. With Redis's default save points every
-  SHUTDOWN without NOSAVE saves, so this becomes the usual case.
+- After a SHUTDOWN that saves, the other clients' requests of its group ran before the
+  save (above): what they wrote reached the append-only file and the RDB file, and they
+  got no reply, where Redis ends inside the SHUTDOWN and runs none of them. Section
+  3zzzl holds them until the save's result is known (issue #84).
 - After a start from the file, INFO's replication section and ROLE give an offset of 0.
   Redis makes its backlog before it loads (`loadDataFromDisk`) and feeds it a SELECT and
   a DEL for each key whose time had passed, so its `master_repl_offset` counts their
@@ -6592,6 +6591,40 @@ order.
 
 **Tests.** `tests/timing_test.py`, `tests/stats_test.py` and `tests/info_test.py` against
 Redis: commandstats, latencystats, errorstats and the slow log, unchanged.
+
+## 3zzzl. A SHUTDOWN that saves holds the rest of its group
+
+**What failed** (issue #84, found by the review of #72). A SHUTDOWN that saves (SAVE,
+or save points without NOSAVE) asks the shell for its save once the group has run
+(`ps.down` 1), as the save may fail and the server must then go on. So the other
+clients' requests after it in the group ran: what they wrote reached the append-only
+file and the RDB file, and when the save ended well the server stopped without
+answering them. Redis saves and exits within SHUTDOWN (`finishShutdown`), and none of
+them runs. With save points, client A's SHUTDOWN and client B's FLUSHALL in one group
+left BendKV with no key after the restart, with and without the append-only file;
+Redis kept the key. No write that was acknowledged was lost, but the files were not
+Redis's, and with Redis's default save points every SHUTDOWN without NOSAVE saves.
+
+**The change** (`src/server.bend`: The RDB file, The pause). While such a SHUTDOWN
+waits for its save, the commands after it are held back as a pause of every command
+holds them (`down.holds`, next to `pause.holds`): each client waits from its command,
+with the rest of its batch, uncounted. A monitor's command and one the parser refused
+are not held, as a pause holds neither. When the save ends well, the server stops and
+the held clients are never answered, as Redis's. When it fails, SHUTDOWN's client is
+answered Redis's error and goes on, then the held clients go on, in the order they came
+(`grp.saved.down`, on both the path with the append-only file and the one without).
+While a pause holds, they wait for its end instead, as the pause's own clients do: a
+read that Redis would run at once after the failed SHUTDOWN then waits for the pause too.
+
+**Tests.** `tests/rdb_test.py` puts A's SHUTDOWN and B's FLUSHALL in one group with a
+pause (section 3zzzc). With save points, with the append-only file too, and with
+SHUTDOWN SAVE, the restart holds the key on both servers; before the change, all three
+held none on BendKV. With a save that fails, SHUTDOWN answers its error and the FLUSHALL
+then runs and is answered, on both. 132 checks.
+
+**What it cost.** Nothing measurable: the check runs only on a batch the general way
+(`bg.go`). `make perfcheck` gives GET 3,414, SET 4,181 and INCR 4,525 instructions per
+request, against 3,416, 4,177 and 4,518 for the build before the change: within 0.2%.
 
 ## 3zzzm. Small hashes in one string, as a listpack
 

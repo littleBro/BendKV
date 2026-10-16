@@ -6592,6 +6592,13 @@ def pause.holds(+p: Pz, +mon: Bool, +c: R.Cmd, +code: Nat, +id: Nat, +tx: Tx) ->
     case PzOn{+all, end}:
       Bool.and(Bool.not(Bool.or(mon, Nat.is_eq(R.code.class(code), 1n))), Bool.or(all, Bool.or(code.pausable(code), pause.exec(c, id, tx))))
 
+# whether a SHUTDOWN that saves ran earlier in the group (ps.down 1, the
+# server's S.srv.rdb.shut set) and holds a command (code) back until its
+# save's result is known, as a pause of every command would: but a
+# monitor's, and one the parser refused (The RDB file: SHUTDOWN)
+def down.holds(+srv: S.Srv, +pb: Ps, +mon: Bool, +code: Nat) -> Bool:
+  Bool.and(Bool.and(Nat.is_eq(ps.down(pb), 1n), S.srv.rdb.shut(srv)), Bool.not(Bool.or(mon, Nat.is_eq(R.code.class(code), 1n))))
+
 # the clients the pause held back (hit: whether the first of ws is one),
 # in the order they came, their batches to go on (up, newest first), from
 # the command held back; the others kept in order (keep: those before,
@@ -7096,13 +7103,15 @@ def bg.exec(+id: Nat, +back: Chan(Ans), +inb: Nat, +code: Nat, g: LRun) -> LRun:
 # "Errors trying to SHUTDOWN. Check logs.", the rest of its batch going
 # on (its client waited for the save, as SAVE's does). As that save may
 # fail, the group goes on after such a SHUTDOWN without FORCE, its end
-# and ticks too, as after a SAVE: when the save ends well and the server
-# stops, the replies of the requests after it are not sent, and what they
-# wrote is in the files, written and not acknowledged, as a crash may
-# leave a write (Redis would not have run them). The registry of clients
-# keeps what the group asked for (ps.down), and bits 23 and 24 of Ps's ev
-# keep the batches after it off the fast way; the shell acts on it once
-# the group is run (db_group, aof_reply).
+# and ticks too, but its other clients' commands after it are held back
+# as a pause of every command holds them (down.holds): Redis saves and
+# exits within SHUTDOWN, so none of them runs, and none of what they
+# would write reaches either file. When the save ends well the server
+# stops and they are never answered; when it fails, they go on after
+# SHUTDOWN's client, in the order they came (grp.saved.down). The
+# registry of clients keeps what the group asked for (ps.down), and bits
+# 23 and 24 of Ps's ev keep the batches after it off the fast way; the
+# shell acts on it once the group is run (db_group, aof_reply).
 def bg.down.at(+d: Nat, g: LRun) -> LRun:
   match g:
     case LRun{rs, es, conn, srv, ds, ws, up, tx, pb}:
@@ -7206,7 +7215,7 @@ def bg.go(+id: Nat, +back: Chan(Ans), +inb: Nat, cmds: List<&2, R.Cmd>, codes: L
       +q = S.conn.quit(conn)
       +may = S.may(S.kind(c), conn, srv)
       +mo = ps.mon.is(id, pb)
-      +sh = sh.of(q, may, tx.multi(id, tx), Bool.and(ps.has(id, pb), Bool.not(S.conn.r3(conn))), mo, ps.oom.is(pb), pause.holds(ps.pz(pb), mo, c, k, id, tx), c, k, ds)
+      +sh = sh.of(q, may, tx.multi(id, tx), Bool.and(ps.has(id, pb), Bool.not(S.conn.r3(conn))), mo, ps.oom.is(pb), Bool.or(pause.holds(ps.pz(pb), mo, c, k, id, tx), down.holds(srv, pb, mo, k)), c, k, ds)
       +pre = bg.trk.pre(id, k, sh, q, may, pb)
       +a = trk.pre.av(pre, av)
       +ar = av.rest(a)
@@ -8897,7 +8906,7 @@ def db_shut.end(ok: Bool, +force: Bool, +ok1: Bool, +srv: S.Srv, outs: List<&2, 
     case False{} False{}:
       do IO<Unit>:
         Unit <- down.cant(down.lg(srv, rw))
-        db_group(grp.saved(ok1, outs, S.srv.rw.stop(srv), ds, ws, tx, pb), rw.with(rw, None{}), reqs)
+        db_group(grp.saved.down(ok1, outs, S.srv.rw.stop(srv), ds, ws, tx, pb), rw.with(rw, None{}), reqs)
 
 @unsafe
 def db_shut(p: S.Srv & Bool, +force: Bool, outs: List<&2, Sigma<&2, &2, Chan(Ans), _ => Ans>>, +ds: R.Ds, ws: Waits, tx: Tx, pb: Ps, +rw: Rw, +reqs: Chan(Req)) -> IO(Unit):
@@ -10555,7 +10564,7 @@ def aof_shut.end(ok: Bool, +force: Bool, +ok1: Bool, +srv: S.Srv, outs: List<&2,
     case False{} False{}:
       do IO<Unit>:
         Unit <- down.cant(down.lg(srv, rw))
-        aof_group(grp.saved(ok1, List.reverse(&2, Sigma<&2, &2, Chan(Ans), _ => Ans>, outs), S.srv.rw.stop(srv), ds, ws, tx, pb), sel, rw.with(rw, None{}), f, sync, reqs)
+        aof_group(grp.saved.down(ok1, List.reverse(&2, Sigma<&2, &2, Chan(Ans), _ => Ans>, outs), S.srv.rw.stop(srv), ds, ws, tx, pb), sel, rw.with(rw, None{}), f, sync, reqs)
 
 @unsafe
 def aof_shut.go(p: S.Srv & Bool, +force: Bool, outs: List<&2, Sigma<&2, &2, Chan(Ans), _ => Ans>>, +ds: R.Ds, +sel: Nat, ws: Waits, tx: Tx, pb: Ps, +rw: Rw, f: File, +sync: Sync, +reqs: Chan(Req)) -> IO(Unit):
@@ -11949,6 +11958,25 @@ def grp.saved.of(p: Waits & (List<&2, Up> & S.Srv), outs: List<&2, Sigma<&2, &2,
 # whose answers go out after the group's (outs)
 def grp.saved(+ok: Bool, outs: List<&2, Sigma<&2, &2, Chan(Ans), _ => Ans>>, srv: S.Srv, ds: R.Ds, +ws: Waits, tx: Tx, pb: Ps) -> Grp:
   grp.saved.of(waits.saved(ws, waits.saving(ws), ok, WaitNone{}, Nil{}, srv), outs, ds, tx, pb)
+
+# a SHUTDOWN's save failed: as grp.saved, and then the clients its save
+# held back (down.holds) go on after them, in the order they came; but
+# while a pause holds, they wait for its end, as the pause's own do
+def saved.free(p: Waits & List<&2, Up>, srv: S.Srv) -> Waits & (List<&2, Up> & S.Srv):
+  (ws, up) = p
+  (ws, (up, srv))
+
+def grp.saved.free(on: Bool, p: Waits & (List<&2, Up> & S.Srv), outs: List<&2, Sigma<&2, &2, Chan(Ans), _ => Ans>>, ds: R.Ds, tx: Tx, pb: Ps) -> Grp:
+  match on:
+    case True{}:
+      grp.saved.of(p, outs, ds, tx, pb)
+    case False{}:
+      (+ws, q) = p
+      (up, srv) = q
+      grp.saved.of(saved.free(waits.unpause(ws, waits.held(ws), WaitNone{}, up), srv), outs, ds, tx, pb)
+
+def grp.saved.down(+ok: Bool, outs: List<&2, Sigma<&2, &2, Chan(Ans), _ => Ans>>, srv: S.Srv, ds: R.Ds, +ws: Waits, tx: Tx, +pb: Ps) -> Grp:
+  grp.saved.free(pz.on(ps.pz(pb)), waits.saved(ws, waits.saving(ws), ok, WaitNone{}, Nil{}, srv), outs, ds, tx, pb)
 
 # The start: without an append-only file (and not in the short form), the
 # file loaded, as loadDataFromDisk loads it: a file not there is empty

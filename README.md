@@ -446,13 +446,12 @@ translation stays in the trusted base.
   and SHUTDOWN [NOSAVE|SAVE] [NOW] [FORCE] [ABORT], read as Redis 7.0.15 reads it: the
   append-only file written and synced, a rewrite that runs stopped, the RDB file saved
   with save points or SAVE and not with NOSAVE (a save that fails stops nothing, Redis's
-  error answered, but with FORCE), the pid file removed, the process ended with code 0.
+  error answered, but with FORCE; other clients' commands after a SHUTDOWN that saves
+  wait for its save, and run only if it fails), the pid file removed, the process ended
+  with code 0.
   Where BendKV differs: SIGTERM and SIGINT end the process at once, without the
   shutdown Redis runs for them (`shutdown-on-sigterm`, `shutdown-on-sigint`: its save
-  with save points among it), as the runtime has no handler for them; a SHUTDOWN that
-  saves lets the other clients' requests in its group run before the save, so that what
-  they write reaches the append-only file and the RDB file and they get no reply, where
-  Redis ends inside the SHUTDOWN and runs none of them (issue #84); MEMORY
+  with save points among it), as the runtime has no handler for them; MEMORY
   MALLOC-STATS has no allocator's statistics; LOLWUT's large drawings take up to a
   hundred times Redis's time (FINDINGS.md, sections 3zzl and 3zzzc).
 - **Configuration:** CONFIG GET (names, aliases and glob patterns), SET (several

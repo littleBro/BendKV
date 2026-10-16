@@ -44,7 +44,9 @@ the same commands.
   append-only file both files are written, and the start reads the
   append-only file and leaves the RDB file aside; a SAVE with the
   append-only file, what comes after it in its pipeline and in another
-  client's requests reaching the append-only file.
+  client's requests reaching the append-only file; another client's
+  FLUSHALL in the group of a SHUTDOWN that saves, which never runs (the
+  files keep the key) unless the save fails.
 - Files that do not load: cut short, a wrong checksum, version 11, 0 and
   -1, a wrong signature, a database past the server's, a type that is
   none, an empty file, a directory, a module's data and a module's value:
@@ -860,6 +862,41 @@ def shutdowns_on(exe, root, log):
     s = fresh("aofsave", "--save", "", "--appendonly", "yes")
     after = run(s.conn(), "MGET", "a", "b", "c", "s")
     log("5 save restart", after == before, after[1][:3], talk(s.port, [["SHUTDOWN", "NOSAVE"]]), s.exit())
+    # a SHUTDOWN that saves and another client's FLUSHALL in one group (a
+    # pause holds both back): Redis saves and exits within SHUTDOWN, so the
+    # FLUSHALL never runs, and both files keep the key; with save points,
+    # with the append-only file too, and with SHUTDOWN SAVE
+    for name, args, down in (("hold", ("--save", "3600 1"), ["SHUTDOWN"]),
+                             ("hold-aof", ("--save", "3600 1", "--appendonly", "yes"), ["SHUTDOWN"]),
+                             ("hold-save", ("--save", ""), ["SHUTDOWN", "SAVE"])):
+        s = fresh(name, *args)
+        run(s.conn(), "SET", "k", "v")
+        ca, cb = s.conn(), s.conn()
+        hold = pause(s)
+        ca.send([cmd(*down)])
+        time.sleep(0.05)
+        cb.send([cmd("FLUSHALL")])
+        try:
+            rb = cb.reply()
+        except (EOFError, ConnectionResetError):
+            rb = "closed"
+        log("7 %s" % name, rb, s.exit())
+        s = fresh(name, *args)
+        log("7 %s restart" % name, talk(s.port, [["DBSIZE"]]), talk(s.port, [["SHUTDOWN", "NOSAVE"]]), s.exit())
+    # the same with a save that fails: SHUTDOWN answers its error, then the
+    # FLUSHALL runs and is answered
+    s = fresh("hold-fails", "--save", "3600 1")
+    os.mkdir(os.path.join(root, "hold-fails", "temp-%s.rdb" % s.pid()))
+    run(s.conn(), "SET", "k", "v")
+    ca, cb = s.conn(), s.conn()
+    hold = pause(s)
+    ca.send([cmd("SHUTDOWN")])
+    time.sleep(0.05)
+    cb.send([cmd("FLUSHALL")])
+    log("7 hold-fails", ca.reply(), cb.reply(), talk(s.port, [["DBSIZE"]]), s.p.poll())
+    for c in (hold, ca, cb):
+        c.sock.close()
+    log("7 hold-fails stop", talk(s.port, [["SHUTDOWN", "NOSAVE"]]), s.exit())
 
 
 def shutdowns(a, root):
