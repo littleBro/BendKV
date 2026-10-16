@@ -287,20 +287,30 @@ translation stays in the trusted base.
   out), with COUNT; XREAD of one key or several, with COUNT and `$`, and with BLOCK when
   an entry is there to serve; XINFO STREAM (FULL, with COUNT), GROUPS, CONSUMERS and
   HELP, their lag, entries read and count of the radix tree's nodes as Redis counts
-  them; XPENDING, its summary and its entries (IDLE, a consumer). The commands that
-  write one (XADD, XDEL, XTRIM, XSETID, XGROUP, XREADGROUP, XACK, XCLAIM, XAUTOCLAIM)
-  are not there yet. Where BendKV differs: XREAD with BLOCK answers an error where
-  Redis would make its client wait (in MULTI, where Redis does not wait, it answers a
-  null array, as Redis does); RESTORE and the start refuse payloads Redis takes but
-  never writes (a node with no entry, or whose counts or master entry are not its
+  them; XPENDING, its summary and its entries (IDLE, a consumer). XADD, XTRIM, XDEL and
+  XSETID write one as Redis does, node for node and byte for byte: XADD with an ID,
+  `<ms>-*` or `*`, NOMKSTREAM, MAXLEN and MINID with `=` or `~` and LIMIT, XSETID with
+  ENTRIESADDED and MAXDELETEDID, their errors in Redis's order and their keyspace
+  events; the append-only file logs each as the write it made (XADD with the ID it
+  added, a trim by `~` as the exact trim it made), which Redis loads too. The commands
+  of groups (XGROUP, XREADGROUP, XACK, XCLAIM, XAUTOCLAIM) are not there yet. Where
+  BendKV differs: XREAD with BLOCK answers an error where Redis would make its client
+  wait (in MULTI, where Redis does not wait, it answers a null array, as Redis does);
+  RESTORE and the start refuse payloads Redis takes but never writes (a node with no
+  entry, or whose counts or master entry are not its
   entries', live entries out of order, a pending entry no consumer holds or two hold,
   a time past 2^47, ...); the rewrite of the append-only file writes a stream as a
   RESTORE of its payload, where Redis writes XADD, XSETID, XGROUP and XCLAIM; MEMORY
-  USAGE estimates otherwise (sections 3zzzu and 3zzzy of
-  [docs/FINDINGS.md](docs/FINDINGS.md)); XINFO STREAM takes time with the stream's
-  nodes, as it counts the radix tree's nodes where Redis keeps the count, and the
-  ranges take 3 to 7 times Redis's time (section 82 of
-  [docs/PERFORMANCE.md](docs/PERFORMANCE.md)).
+  USAGE estimates otherwise; a node is full at Redis's defaults, 4096 bytes or 100
+  entries, whatever `stream-node-max-bytes` and `stream-node-max-entries` say; an XADD
+  whose fields and values pass 1 GiB leaves no key where there was none, where Redis
+  leaves an empty stream; a trim by `~` takes out the nodes Redis's takes out but in
+  two rare cases, where the stream is what a Redis replica holds; the start refuses a
+  Redis file that holds a trim by `~` with LIMIT, which Redis writes as `=` with LIMIT
+  (sections 3zzzu, 3zzzy and 3zzzz of [docs/FINDINGS.md](docs/FINDINGS.md)); XINFO
+  STREAM takes time with the stream's nodes, as it counts the radix tree's nodes where
+  Redis keeps the count, the ranges take 3 to 7 times Redis's time, and the writes 3 to
+  12 times (sections 82 and 83 of [docs/PERFORMANCE.md](docs/PERFORMANCE.md)).
 - **Clients that wait:** BLPOP, BRPOP, BLMOVE, BRPOPLPUSH, BLMPOP, BZPOPMIN, BZPOPMAX
   and BZMPOP, their timeouts (seconds, a double; 0 waits for ever) read as Redis reads
   them, with its errors. A command that finds nothing to pop makes its client wait, and
@@ -663,7 +673,7 @@ translation stays in the trusted base.
   background save takes longer than Redis's, and so does the start from a large file
   (PERFORMANCE.md, sections 72 and 78; FINDINGS.md, sections 3zzzk and 3zzzt).
 
-Not yet: the commands that write a stream and XREAD's wait, Lua
+Not yet: the commands of a stream's groups and XREAD's wait, Lua
 scripts, CONFIG REWRITE (it answers as Redis does without a configuration file).
 Times in ms are limited to 14 digits.
 
@@ -778,7 +788,11 @@ RESTORE's options, errors, times and keyspace events, IDLETIME and FREQ), stream
 (`tests/stream_dump_test.py`: streams of 27 shapes Redis made, restored and dumped back
 byte for byte, and 2,000 payloads changed at random; `tests/stream_read_test.py`: the
 reads of those streams, each reply compared whole in RESP2 and RESP3, over the
-streams' IDs, their neighbours and the edges, counts, groups, consumers and errors),
+streams' IDs, their neighbours and the edges, counts, groups, consumers and errors;
+`tests/stream_write_test.py`: random XADD, XTRIM, XDEL and XSETID, each reply compared
+and each stream's DUMP and XINFO after each write, the errors, the events, WATCH and
+MULTI; `tests/stream_aof_test.py`: the writes in both servers' append-only files, each
+server started from its own and from the other's),
 robustness and concurrency checks, a client that stops reading while the others are
 served (`tests/writer_test.py`), clients that wait (`tests/blocking_test.py`: 18 scenarios
 of the blocking commands on BendKV and on Redis, their transcripts compared line by line,
