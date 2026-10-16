@@ -90,11 +90,11 @@ type HPair is Data:
 
 # A hash, as Redis 7.0 keeps one: a small one (n fields, each of at most
 # hash-max-listpack-value bytes, n at most hash-max-listpack-entries) as
-# a list of its pairs in the order they came (a listpack: HGETALL answers
-# them so), a larger one as a trie of its fields (a hashtable, in no
-# order), which it stays.
+# the string of its pairs in the order they came (a listpack: HGETALL
+# answers them so; Hashes, below), a larger one as a trie of its fields
+# (a hashtable, in no order), which it stays.
 type Hash is Data:
-  HSmall{n: Nat, ps: List<&2, HPair>}
+  HSmall{n: Nat, b: String}
   HBig{n: Nat, t: Trie<String>}
 
 # A list, as a deque of two stacks: its first nf elements in order (f),
@@ -1383,8 +1383,8 @@ def sample(-V: Data, +t: Trie<V>, +r: U32, +want: Nat, +now: Nat, +mode: Nat, wi
 
 # Hashes
 # ------
-# A hash's fields and values (Hash, above): a small one is a list of its
-# pairs in the order they came, a large one a trie of its fields, each
+# A hash's fields and values (Hash, above): a small one is the string of
+# its pairs in the order they came, a large one a trie of its fields, each
 # with no time. Redis 7.0 keeps a hash as a listpack while it holds at
 # most hash-max-listpack-entries pairs (512), each of at most
 # hash-max-listpack-value bytes (64), and as a hashtable from the first
@@ -1393,6 +1393,19 @@ def sample(-V: Data, +t: Trie<V>, +r: U32, +want: Nat, +now: Nat, +mode: Nat, wi
 # hash a history of writes leaves depends on the writes alone (the
 # append-only file makes it again on any server); OBJECT ENCODING reads
 # the parameters as they are (session.bend).
+#
+# A small hash's string holds its pairs one after another, as a listpack
+# holds them in one allocation: a pair is its field's length, the field,
+# its value's length and the value. A length below 255 takes one byte; a
+# longer one (RESTORE keeps a listpack's pairs whatever their lengths)
+# takes the byte 255 and then its four bytes, the high first. A read
+# walks the lengths from the start to the pair it wants, comparing a
+# field of the right length by its last byte, then whole, and copies a
+# field or a value out with String.slice. A write makes the string anew:
+# in the C runtime, a ++ whose right side has no room before its bytes
+# links the two into a chain of chunks, and a chain reads a chunk at a
+# time, so the pieces a write puts together are copied into one buffer
+# (hb.flat), as a listpack is written anew in its allocation.
 
 # whether the first pair of ps is f's
 def hps.head(+f: String, ps: List<&2, HPair>) -> Bool:
@@ -1401,21 +1414,6 @@ def hps.head(+f: String, ps: List<&2, HPair>) -> Bool:
       str_eq(f, g)
     case Nil{}:
       False{}
-
-# f's value; same is hps.head(f, ps), computed before ps is passed on
-def hps.get.go(+f: String, ps: List<&2, HPair>, same: Bool) -> Maybe<&2, String>:
-  match ps same:
-    case Con{HP{g, v}, rest} True{}:
-      Some{v}
-    case Con{p, +rest} False{}:
-      s = hps.head(f, rest)
-      hps.get.go(f, rest, s)
-    case Nil{} _:
-      None{}
-
-def hps.get(+f: String, +ps: List<&2, HPair>) -> Maybe<&2, String>:
-  s = hps.head(f, ps)
-  hps.get.go(f, ps, s)
 
 # the pairs with f's value set to v: in its place when f is there, else
 # last
@@ -1432,21 +1430,6 @@ def hps.put.go(+f: String, +v: String, ps: List<&2, HPair>, same: Bool) -> List<
 def hps.put(+f: String, +v: String, +ps: List<&2, HPair>) -> List<&2, HPair>:
   s = hps.head(f, ps)
   hps.put.go(f, v, ps, s)
-
-# the pairs without f's
-def hps.del.go(+f: String, ps: List<&2, HPair>, same: Bool) -> List<&2, HPair>:
-  match ps same:
-    case Con{p, rest} True{}:
-      rest
-    case Con{p, +rest} False{}:
-      s = hps.head(f, rest)
-      Con{p, hps.del.go(f, rest, s)}
-    case Nil{} _:
-      Nil{}
-
-def hps.del(+f: String, +ps: List<&2, HPair>) -> List<&2, HPair>:
-  s = hps.head(f, ps)
-  hps.del.go(f, ps, s)
 
 # the pairs ps added to the trie t
 def hps.trie(ps: List<&2, HPair>, t: Trie<String>) -> Trie<String>:
@@ -1479,36 +1462,291 @@ def hash.kv(+t: Trie<String>, ks: List<&2, String>) -> List<&2, HPair>:
     case Con{+k, rest}:
       HP{k, hash.or(get(String, t, k))} <> hash.kv(t, rest)
 
+# the byte at index i of a small hash's string b (255 past its end, so
+# that a read past it stays below 2^32)
+def hb.byte(+b: String, +i: Nat) -> Nat:
+  U32.to_nat(U32.and(String.code_at(b, i), 255))
+
+# the k bytes from index i of b, the high first, after the number acc
+def hb.long(k: Nat, +b: String, +i: Nat, +acc: Nat) -> Nat:
+  match k:
+    case 0n:
+      acc
+    case 1n+j:
+      hb.long(j, b, Nat.add(i, 1n), Nat.add(Nat.mul(acc, 256n), hb.byte(b, i)))
+
+def hb.len.of(short: Bool, +b: String, +i: Nat, x: Nat) -> Nat:
+  match short:
+    case True{}:
+      x
+    case False{}:
+      hb.long(4n, b, Nat.add(i, 1n), 0n)
+
+# the length whose code starts at index i of b
+def hb.len(+b: String, +i: Nat) -> Nat:
+  +x = hb.byte(b, i)
+  hb.len.of(Nat.is_lt(x, 255n), b, i, x)
+
+# how many bytes code the length n: one below 255, else five (255 - n,
+# cut at 0, is at least 1 exactly when n is below 255)
+def hb.hdr(+n: Nat) -> Nat:
+  Nat.sub(5n, Nat.mul(4n, Nat.min(Nat.sub(255n, n), 1n)))
+
+# the byte x (below 256) before rest
+def hb.byte.put(+x: Nat, rest: String) -> String:
+  SCon{Chr{U32.from_nat(x)}, rest}
+
+# the k low bytes of n, the high first, before rest
+def hb.long.put(k: Nat, +n: Nat, rest: String) -> String:
+  match k:
+    case 0n:
+      rest
+    case 1n+j:
+      hb.long.put(j, Nat.div(n, 256n), hb.byte.put(Nat.mod(n, 256n), rest))
+
+def hb.code.of(short: Bool, +n: Nat, rest: String) -> String:
+  match short:
+    case True{}:
+      hb.byte.put(n, rest)
+    case False{}:
+      hb.byte.put(255n, hb.long.put(4n, n, rest))
+
+# the code of the length n before rest
+def hb.code(+n: Nat, rest: String) -> String:
+  hb.code.of(Nat.is_lt(n, 255n), n, rest)
+
+# the pair of the field f and its value v, before rest
+def hb.pair(+f: String, +v: String, rest: String) -> String:
+  hb.code(String.length(f), f ++ hb.code(String.length(v), v ++ rest))
+
+# the string s, of n bytes, as one buffer: String.take copies a String
+# into one buffer in the C runtime (into a chain of 2,048 bytes a buffer
+# past 2,048), and the take of all n bytes is s itself
+def hb.flat(s: String, +n: Nat) -> String:
+  String.take(s, n)
+
+# the pairs ps as a small hash's string, before rest
+def hb.enc(ps: List<&2, HPair>, rest: String) -> String:
+  match ps:
+    case Nil{}:
+      rest
+    case Con{HP{f, v}, more}:
+      hb.pair(f, v, hb.enc(more, rest))
+
+# String.eq, not str_eq: a call that gives str_eq a value of its own (the
+# slice) makes str_eq own its first argument, and every key the trie
+# compares with it be given one (FINDINGS.md, section 7)
+def hb.hit.eq(same: Bool, +f: String, +b: String, +i: Nat, +n: Nat) -> Bool:
+  match same:
+    case True{}:
+      String.eq(String.slice(b, i, n), f)
+    case False{}:
+      False{}
+
+# whether the n bytes from index i of b are f, as many as f's, whose last
+# is lb: an empty one is, and a longer one's last byte is compared before
+# the whole
+def hb.hit.last(n: Nat, +f: String, +lb: U32, +b: String, +i: Nat) -> Bool:
+  match n:
+    case 0n:
+      True{}
+    case 1n++m:
+      hb.hit.eq(U32.is_eq(String.code_at(b, Nat.add(i, m)), lb), f, b, i, 1n+m)
+
+def hb.hit.of(same: Bool, +f: String, +lb: U32, +b: String, +i: Nat, +n: Nat) -> Bool:
+  match same:
+    case True{}:
+      hb.hit.last(n, f, lb, b, i)
+    case False{}:
+      False{}
+
+# whether the pair at index i of b, one of k pairs from there on, whose
+# field is n bytes long, is the field f's (lf bytes long, its last byte
+# lb): the lengths first, then the last bytes, then the bytes
+def hb.hit(k: Nat, +f: String, +lf: Nat, +lb: U32, +b: String, +i: Nat, +n: Nat) -> Bool:
+  match k:
+    case 0n:
+      False{}
+    case 1n+j:
+      hb.hit.of(Nat.is_eq(n, lf), f, lb, b, Nat.add(i, hb.hdr(n)), n)
+
+# the length of the field of the pair at index i of b, one of k pairs
+# from there on (0 when there is none)
+def hb.flen(k: Nat, +b: String, +i: Nat) -> Nat:
+  match k:
+    case 0n:
+      0n
+    case 1n+j:
+      hb.len(b, i)
+
+# f's pair among the k pairs from index i of b on, the first of them with
+# a field of n bytes: the index of the pair and of its value's code, or
+# the index past the pairs twice; hit is hb.hit(k, f, lf, lb, b, i, n),
+# computed before b is passed on
+def hb.find.go(+f: String, +lf: Nat, +lb: U32, +b: String, k: Nat, hit: Bool, +i: Nat, +n: Nat) -> Nat & Nat:
+  match k hit:
+    case 0n _:
+      (i, i)
+    case 1n++j True{}:
+      (i, Nat.add(i, Nat.add(hb.hdr(n), n)))
+    case 1n++j False{}:
+      +vi = Nat.add(i, Nat.add(hb.hdr(n), n))
+      +vl = hb.len(b, vi)
+      +x = Nat.add(vi, Nat.add(hb.hdr(vl), vl))
+      +xn = hb.flen(j, b, x)
+      hb.find.go(f, lf, lb, b, j, hb.hit(j, f, lf, lb, b, x, xn), x, xn)
+
+# f's pair in the string b of a small hash of k pairs: the index of the
+# pair and of its value's code, or b's length twice when f is not there
+def hb.find(+f: String, +b: String, +k: Nat) -> Nat & Nat:
+  +lf = String.length(f)
+  +lb = String.code_at(f, Nat.sub(lf, 1n))
+  +n = hb.flen(k, b, 0n)
+  hb.find.go(f, lf, lb, b, k, hb.hit(k, f, lf, lb, b, 0n, n), 0n, n)
+
+# whether hb.find found its field in b
+def hb.has(+b: String, p: Nat & Nat) -> Bool:
+  (i, vi) = p
+  Nat.is_lt(i, String.length(b))
+
+# the value whose code starts at index vi of b
+def hb.val(+b: String, +vi: Nat) -> String:
+  +n = hb.len(b, vi)
+  String.slice(b, Nat.add(vi, hb.hdr(n)), n)
+
+def hb.get.of(had: Bool, +b: String, +vi: Nat) -> Maybe<&2, String>:
+  match had:
+    case True{}:
+      Some{hb.val(b, vi)}
+    case False{}:
+      None{}
+
+# the value hb.find found in b
+def hb.get(+b: String, p: Nat & Nat) -> Maybe<&2, String>:
+  (i, vi) = p
+  hb.get.of(Nat.is_lt(i, String.length(b)), b, vi)
+
+# the k pairs from index i of b on, the last first, before acc
+def hb.pairs.rev(k: Nat, +b: String, +i: Nat, acc: List<&2, HPair>) -> List<&2, HPair>:
+  match k:
+    case 0n:
+      acc
+    case 1n+j:
+      +fl = hb.len(b, i)
+      +fi = Nat.add(i, hb.hdr(fl))
+      +vi = Nat.add(fi, fl)
+      +vl = hb.len(b, vi)
+      +vj = Nat.add(vi, hb.hdr(vl))
+      hb.pairs.rev(j, b, Nat.add(vj, vl), HP{String.slice(b, fi, fl), String.slice(b, vj, vl)} <> acc)
+
+# the k pairs from index i of b on, in their order: a walk that keeps no
+# frame for each pair, then the list turned around
+def hb.pairs(k: Nat, +b: String, +i: Nat) -> List<&2, HPair>:
+  List.reverse(&2, HPair, hb.pairs.rev(k, b, i, Nil{}))
+
+# the length of the longest field or value of the k pairs from index i of
+# b on, at least m
+def hb.widest(k: Nat, +b: String, +i: Nat, +m: Nat) -> Nat:
+  match k:
+    case 0n:
+      m
+    case 1n+j:
+      +fl = hb.len(b, i)
+      +vi = Nat.add(i, Nat.add(hb.hdr(fl), fl))
+      +vl = hb.len(b, vi)
+      hb.widest(j, b, Nat.add(vi, Nat.add(hb.hdr(vl), vl)), Nat.max(m, Nat.max(fl, vl)))
+
+# the index just past the value whose code starts at index vi of b
+def hb.end(+b: String, +vi: Nat) -> Nat:
+  +n = hb.len(b, vi)
+  Nat.add(vi, Nat.add(hb.hdr(n), n))
+
+# b with the value whose code starts at index vi set to v, in its place
+def hb.reset(+b: String, +vi: Nat, +v: String) -> String:
+  +end = hb.end(b, vi)
+  +lv = String.length(v)
+  +n = Nat.add(Nat.sub(String.length(b), Nat.sub(end, vi)), Nat.add(hb.hdr(lv), lv))
+  +pre = String.take(b, vi)
+  hb.flat(pre ++ hb.code(lv, v ++ String.drop(b, end)), n)
+
+# b with f's value set to v: in its place when f is there (had: its
+# value's code at index vi), else in a pair after the last
+def hb.set(had: Bool, +b: String, +vi: Nat, +f: String, +v: String) -> String:
+  match had:
+    case True{}:
+      hb.reset(b, vi, v)
+    case False{}:
+      +lf = String.length(f)
+      +lv = String.length(v)
+      +n = Nat.add(String.length(b), Nat.add(Nat.add(hb.hdr(lf), lf), Nat.add(hb.hdr(lv), lv)))
+      hb.flat(b ++ hb.pair(f, v, ""), n)
+
+# b without its pair at index i, whose value's code is at index vi (b as
+# it is when had is False: the pair is not there)
+def hb.cut(had: Bool, +b: String, +i: Nat, +vi: Nat) -> String:
+  match had:
+    case True{}:
+      +end = hb.end(b, vi)
+      +n = Nat.sub(String.length(b), Nat.sub(end, i))
+      +pre = String.take(b, i)
+      hb.flat(pre ++ String.drop(b, end), n)
+    case False{}:
+      b
+
+# b without the pair hb.find found
+def hb.del(+b: String, p: Nat & Nat) -> String:
+  (+i, vi) = p
+  hb.cut(Nat.is_lt(i, String.length(b)), b, i, vi)
+
 def hash.empty() -> Hash:
-  HSmall{0n, Nil{}}
+  HSmall{0n, ""}
+
+# a small hash of the n pairs ps, in their order (RESTORE)
+def hash.of(+n: Nat, ps: List<&2, HPair>) -> Hash:
+  +s = hb.enc(ps, "")
+  HSmall{n, hb.flat(s, String.length(s))}
 
 def hash.len(+h: Hash) -> Nat:
   match h:
-    case HSmall{+n, ps}:
+    case HSmall{+n, b}:
       n
     case HBig{+n, t}:
       n
 
 def hash.get(+f: String, +h: Hash) -> Maybe<&2, String>:
   match h:
-    case HSmall{n, +ps}:
-      hps.get(f, ps)
+    case HSmall{n, +b}:
+      hb.get(b, hb.find(f, b, n))
     case HBig{n, +t}:
       get(String, t, f)
 
 def hash.has(+f: String, +h: Hash) -> Bool:
-  Maybe.is_some(&2, String, hash.get(f, h))
+  match h:
+    case HSmall{n, +b}:
+      hb.has(b, hb.find(f, b, n))
+    case HBig{n, +t}:
+      Maybe.is_some(&2, String, get(String, t, f))
 
 # whether a small hash of m pairs, one of them f and v, stays small
 def hash.fits(+m: Nat, +f: String, +v: String) -> Bool:
   Bool.and(Nat.is_le(m, 512n), Bool.and(Nat.is_le(String.length(f), 64n), Nat.is_le(String.length(v), 64n)))
 
-def hash.small(fits: Bool, +m: Nat, ps: List<&2, HPair>) -> Hash:
+# a small hash of n pairs b with f's value set to v (had: f is there, its
+# value's code at index vi): small with m pairs when it fits, else large
+def hb.put(fits: Bool, had: Bool, +m: Nat, +n: Nat, b: String, +vi: Nat, +f: String, +v: String) -> Hash:
   match fits:
     case True{}:
-      HSmall{m, ps}
+      HSmall{m, hb.set(had, b, vi, f, v)}
     case False{}:
-      HBig{m, hps.trie(ps, empty(String))}
+      HBig{m, hps.trie(hps.put(f, v, hb.pairs(n, b, 0n)), empty(String))}
+
+# a small hash of n pairs b with f's value set to v, where hb.find found
+# f (p)
+def hb.put.at(+n: Nat, +b: String, p: Nat & Nat, +f: String, +v: String) -> Hash:
+  (i, vi) = p
+  +had = Nat.is_lt(i, String.length(b))
+  +m = Bool.pick(Nat, had, n, 1n+n)
+  hb.put(hash.fits(m, f, v), had, m, n, b, vi, f, v)
 
 # h with f's value set to v. The read of f comes before the write: in a
 # node built of both the write would run first, the trie held for the
@@ -1516,9 +1754,9 @@ def hash.small(fits: Bool, +m: Nat, ps: List<&2, HPair>) -> Hash:
 # path it changes
 def hash.put(h: Hash, +f: String, +v: String) -> Hash:
   match h:
-    case HSmall{+n, +ps}:
-      +m = Bool.pick(Nat, Maybe.is_some(&2, String, hps.get(f, ps)), n, 1n+n)
-      hash.small(hash.fits(m, f, v), m, hps.put(f, v, ps))
+    case HSmall{+n, +b}:
+      p = hb.find(f, b, n)
+      hb.put.at(n, b, p, f, v)
     case HBig{+n, +t}:
       +had = has(String, t, f)
       HBig{Bool.pick(Nat, had, n, 1n+n), set(String, t, f, v)}
@@ -1526,16 +1764,17 @@ def hash.put(h: Hash, +f: String, +v: String) -> Hash:
 # h without f, which it holds
 def hash.del(h: Hash, +f: String) -> Hash:
   match h:
-    case HSmall{+n, ps}:
-      HSmall{Nat.sub(n, 1n), hps.del(f, ps)}
+    case HSmall{+n, +b}:
+      p = hb.find(f, b, n)
+      HSmall{Nat.sub(n, 1n), hb.del(b, p)}
     case HBig{+n, t}:
       HBig{Nat.sub(n, 1n), del(String, t, f)}
 
 # the pairs of h, in its order (a small hash's, the order they came)
 def hash.pairs(+h: Hash) -> List<&2, HPair>:
   match h:
-    case HSmall{n, +ps}:
-      ps
+    case HSmall{+n, +b}:
+      hb.pairs(n, b, 0n)
     case HBig{n, +t}:
       hash.kv(t, keys(String, t, 0n))
 

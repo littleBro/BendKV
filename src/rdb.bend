@@ -1359,7 +1359,7 @@ def all.ints(xs: List<&2, String>) -> Bool:
 def val.hash.of(small: Bool, +n: Nat, ps: List<&2, KV.HPair>, t: KV.Trie<String>) -> KV.Val:
   match small:
     case True{}:
-      KV.VColl{KV.CHash{KV.HSmall{n, ps}}}
+      KV.VColl{KV.CHash{KV.hash.of(n, ps)}}
     case False{}:
       KV.VColl{KV.CHash{KV.HBig{n, t}}}
 
@@ -1930,8 +1930,8 @@ def hps.words(ps: List<&2, KV.HPair>) -> List<&2, String>:
 
 def put.hash(h: KV.Hash, rest: String) -> String:
   match h:
-    case KV.HSmall{+n, ps}:
-      b1(16) ++ put.blob(lp.blob(hps.words(ps), Nat.mul(2n, n)), rest)
+    case KV.HSmall{+n, +b}:
+      b1(16) ++ put.blob(lp.blob(hps.words(KV.hb.pairs(n, b, 0n)), Nat.mul(2n, n)), rest)
     case KV.HBig{+n, +t}:
       b1(4) ++ len.put(n, put.strs(hps.words(KV.hash.kv(t, KV.keys(String, t, 0n))), rest))
 
