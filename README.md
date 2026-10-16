@@ -20,7 +20,7 @@ throughput of Redis 7.0.15 on the same machine, with half its memory for small v
 > append-only file and its rewrite, maxmemory and its eviction, Lua scripts and
 > functions, RESP3). The goal now is a drop-in replacement for a single Redis node,
 > measured by Redis's own test suite: of the 1,677 tests Redis 7.0.15 passes against a
-> server it did not start, BendKV passes 1,512, and 1,511 of the 1,565 in what it implements
+> server it did not start, BendKV passes 1,515, and 1,514 of the 1,565 in what it implements
 > ([docs/COMPATIBILITY.md](docs/COMPATIBILITY.md)). Do not use it for data you cannot
 > lose.
 
