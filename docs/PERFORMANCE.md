@@ -7875,14 +7875,15 @@ the replies and the count by the rule alone each looked up the rule of the batch
 | the same, and ZINCRBY's weight without its sum (below) | 3,490 | 4,286 | 4,597 |
 | the same merged with main at 65ed1d7 (#111) | 3,511 | 4,283 | 4,602 |
 | main at 65ed1d7 alone, built here | 3,493 | 4,240 | 4,585 |
+| the head, merged with main at c5cc650 (#112) | 3,491 | 4,282 | 4,601 |
 
-With 100 clients in BLPOP, the head counts GET 3,599 and SET 4,440, 2.5% and 3.7% more
+With 100 clients in BLPOP, the head counts GET 3,598 and SET 4,436, 3.1% and 3.6% more
 than without them (before the fixes, 3,593 and 4,436: 3.0% and 3.6%; main at 65ed1d7,
 3,587 and 4,394: 2.7% and 3.6%). The builds of the third to fifth rows differ only where
 a GET, a SET or an INCR never goes, and their counts differ by 2 to 5 instructions: the
-layout of the code moves them that much. Against main at 65ed1d7, the branch's head
-takes 18, 43 and 17 instructions more (0.5%, 1.0% and 0.4%): the count of changes, as
-at the start of this section.
+layout of the code moves them that much, and GET by 20 between the last two merges.
+Against main at 65ed1d7, the branch merged with it takes 18, 43 and 17 instructions more
+(0.5%, 1.0% and 0.4%): the count of changes, as at the start of this section.
 
 ZINCRBY and ZADD with INCR now read, before they run, their member's score and their
 increment, to count none for a score they leave as it was (Redis's count). On a sorted
