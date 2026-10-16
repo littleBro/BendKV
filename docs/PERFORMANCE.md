@@ -7296,6 +7296,111 @@ histogram. The histogram's four levels take a quarter of them. Most of the rest 
 updates of `Info` and the passes of the group, which travels in 13 registers and is saved
 to the frame and loaded back around each call that is not a tail call.
 
+## 68. Lua scripts
+
+**What was added** (FINDINGS 3zzzd). EVAL, EVALSHA, EVAL_RO, EVALSHA_RO and SCRIPT run
+on Redis 7.0.15's Lua. A script command suspends its client's batch as a wait. Once the
+group is answered, the driver runs each script on the engine a step at a time, each step
+two switches of C stacks (`swapcontext`). A script's calls run as EXEC runs the commands
+it queued.
+
+**Measured** (`tools/script_cost.sh`: callgrind, instructions per request, 20 clients
+pipelining 16 deep, 100,000 keys):
+
+| request | the first build | now |
+|---|---:|---:|
+| `EVAL "return 1" 0` | 438,703 | 53,985 |
+| EVALSHA of it | 457,958 | 49,745 |
+| a script that calls GET | 490,836 | 80,177 |
+| a script that calls SET | 512,055 | 94,690 |
+| GET, beside them | 3,438 | 3,494 |
+
+On main's build (fc28490) the same EVALs are answered with an error, at 500 to 1,250
+instructions, and GET beside them costs 3,466.
+
+**On the way.** `tools/phases.py` on the first build's EVAL showed costs that each grew
+with something other than the script. Each step was measured again:
+
+| step | EVAL "return 1" |
+|---|---:|
+| the first build | 438,703 |
+| the configuration read when a script needs it; the driver's windows | 110,985 |
+| a script's wait not sized; EVALSHA's sha not lowered | 78,026 |
+| the script command's call counted at its end; the engine's facts once a drive; the clients that wait served after a write | 58,137 |
+| an EVAL's body not looked up as a sha | 55,734 |
+| the replies before a script held with it | 54,318 |
+| main merged in (its timing's runs bounded, section 71); the casts of numbers defined (FINDINGS 3zzzd) | 53,985 |
+
+- *Three walks of the parameter table per script.* Each script read lua-time-limit,
+  logfile and loglevel at its start. `config.get_value` walks the table of 180
+  parameters and compares names, about 600 instructions a parameter: 324,000 of a
+  script's 438,000. A script now reads them when it first needs them, at its first tick
+  or log line. lua-time-limit cannot change while a script runs.
+- *A walk of the window's calls.* The first driver timed all its work as one window, and
+  the script command's call blocked as its wait began. Served in the same window, the
+  call was looked for among the window's calls (`fresh.unblk`): with 20 clients
+  pipelining 16 scripts, a walk of up to 320 calls per script, 72,000 instructions. The
+  driver now reads the clock as each command of the engine starts and ends and around
+  each call of a script.
+- *A parse of the batch per script.* A script's wait sized its arguments for CLIENT
+  LIST's argv-mem, which leaves a script's wait out: a parse of the batch's bytes up to
+  the command (`P.argvs`), once per command of a pipeline.
+- *EVALSHA's sha lowered three times* (72,000 instructions for EVALSHA after the step,
+  from 128,005). Redis compares shas case aside, and each lowering made the sha's 40
+  cells again. The sha is now looked up as given first.
+- *The calls kept by client.* At its script's end, the blocked call was looked for among
+  the calls kept by client (`wt.get`, `wt.del`), and keeping it had walked them once
+  already: three walks per script of the clients that wait, 20 here. The call is now
+  counted when its script ends, as a window of its own as long as the script ran. Two
+  more costs per script went with it: the engine's three facts for INFO (`Engine.count`,
+  `Engine.mem`, `Engine.cache_mem`), now read once per drive, and the walk of the clients
+  that wait after a script, now only after one that wrote.
+- *An EVAL's body looked up as a sha.* `Bool.and` takes both its arguments: the mirror
+  of the cache was asked for every EVAL's body, which was lowered when not found.
+- *A write per script.* A script's wait sent its client's replies before it at once
+  (Hold), so each script of a pipeline cost a `sendto`: 20,000 for 20,000 pipelined
+  scripts. Redis writes a script's caller's replies once the script ends, and BendKV now
+  holds them with the wait: 1,251 `sendto` for the same load, one per batch. A client
+  with a subscription still gets its replies before its script, so that the pushes its
+  script sends it come after them, as in Redis.
+
+**In time** (`tools/script_bench.sh`, 50 clients, requests per second, BendKV and Redis
+7.0.15 on the same machine, the runs of a test taking turns; medians of five runs, and of
+their ratios):
+
+| request | BendKV, one at a time | Redis | ratio | BendKV, 16 deep | Redis | ratio |
+|---|---:|---:|---:|---:|---:|---:|
+| GET | 89,767 | 87,108 | 0.98 | 1,311,475 | 750,469 | 1.82 |
+| `EVAL "return 1" 0` | 81,103 | 98,814 | 0.79 | 121,803 | 476,190 | 0.26 |
+| EVALSHA of it | 87,642 | 95,602 | 0.93 | 128,576 | 617,284 | 0.21 |
+| a script that calls GET | 57,971 | 111,982 | 0.53 | 73,206 | 318,979 | 0.23 |
+| a script that calls INCR | 50,556 | 98,328 | 0.52 | 55,540 | 300,075 | 0.19 |
+
+On the slower machine of the first measurements (one run each), the first build ran
+`EVAL "return 1" 0` at 16,480 requests per second one at a time and 14,872 pipelined, and
+the build before main was merged in at 57,604 and 74,349. One at a time, the network
+takes much of a request's time on either server, and a script that calls a command runs at
+about half of Redis's throughput, for its call (What is left, below). Pipelined, the
+actor's instructions bound a script, about 54,000 of them; writing the replies once per
+batch spared the connections' threads 19 of 20 writes but not the actor's time.
+
+**`make perfcheck`**: GET 3,419, SET 4,184 and INCR 4,522 instructions per request,
+where main (fc28490) gives 3,419, 4,180 and 4,526, all within 1% of the baseline; with
+100 clients in BLPOP, GET and SET 3.0% and 3.4% above those, as on main.
+
+**What is left.** A call of a script costs about 26,200 instructions (80,177 against
+53,985), where Redis's `scriptCall` takes a few thousand. The call runs the general way
+of EXEC's commands: naming, statistics, MONITOR's lines, keyspace events, the keys for
+WATCH, the entry for the file. Its window is timed as any call's (`info.window`, the
+histogram's merge), and its request and reply cross the engine as RESP bytes. The rest
+of a script is spread thin: the SHA1 of an EVAL's body (Redis computes it too), the
+engine's effects (`Engine.load`, `Engine.start`) and two readings of the clock, the
+general way's bookkeeping of the script command, its wait and the batch going on after
+it. Each switch of stacks also costs a system call: `swapcontext` sets the signal mask,
+three `rt_sigprocmask` per script (`getcontext` once, a switch in and one back), two
+more per call; a switch written for the purpose would not, at the price of code for each
+processor in the trusted base.
+
 ## 71. The timing's runs not yet counted, one per command
 
 **What changed** (FINDINGS 3zzzj). A run of calls that leaves the newest is added to the

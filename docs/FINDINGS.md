@@ -5918,6 +5918,201 @@ need Lua: one fills a set with a script, and the next resets the events that set
 expiry would have given. unit/slowlog passes 7 of its 9. The other two use ACL and
 MIGRATE.
 
+## 3zzzd. Lua scripts: EVAL, EVALSHA and SCRIPT
+
+**What was left.** BendKV's parser read EVAL only for the four fixed scripts its own
+append-only file writes (a hash, a list's move, a set's move and a sorted set, each made
+where a key whose time had passed still lay: 3zj). It answered any other EVAL, and every
+EVALSHA and SCRIPT, with an error. Redis's unit/scripting has 110 tests that pass on Redis
+against a server it did not start; none passed on BendKV.
+
+**The engine** (`deps/redis`, `src/lua/engine.c`, `src/script.bend`).
+
+- It is Redis 7.0.15's own Lua: Lua 5.1.5 with Redis's changes (read-only tables, the
+  protected globals), cjson, cmsgpack, struct and bit, and three helpers of Redis's
+  (`resp_parser.c`, `sha1.c`, `rand.c`). That is 35 C files, about 20,600 lines with their
+  headers, as Redis ships them but for one change (below). `make build` compiles them
+  beside the C that Bend emits.
+- The glue, about 2,100 lines of C, is ported from Redis's `script_lua.c`, `eval.c` and
+  `script.c`: the sandbox, the `redis` table and its functions, the conversions between
+  RESP and Lua values both ways, the error texts with their suffix (`script: <sha>, on
+  @user_script:<line>.`), the cache by SHA1, the shebang and its flags.
+- It is a Bend effect with a C twin, as a program may declare its own effects
+  (`guide/EFFECTS.md`). No Bend patch: the trusted base grows by the engine, not by the
+  compiler.
+- A script runs on a C stack of its own (8 MiB, with a guard page under it), switched to
+  and from with `swapcontext`. The switches carry the sanitizers' fiber annotations, so
+  ASan and TSan follow them. ASan still writes one line to the reports of each process
+  that switches so, that it "doesn't fully support makecontext/swapcontext functions and
+  may produce false positives", which failed `tools/sanitize.sh`: a report file that
+  holds that line alone is now set aside, and one with any other line fails the run.
+- UBSan (`tools/sanitize.sh`) found casts of a number to an integer past the integer's
+  range, which C leaves undefined, where Redis's own builds do not look: its Makefile gives
+  the sanitizers' flags to its sources, not to Lua's. Lua makes one for each number
+  constant and table key, to see whether it indexes the table's array (`lua_number2int`
+  in `ltable.c`: `return 3000000000` is enough), and Redis's glue for a number a script
+  returns, or passes to `redis.setresp`, `redis.log` or `redis.set_repl`. Redis's builds
+  (gcc, x86-64) give the integer's smallest value there: `return 2^63` answers
+  `:-9223372036854775808`. The other casts of the kind gave replies that differed: to an
+  unsigned long, gcc's code and clang's convert 2^64 and more differently, and
+  `string.format('%x', 2^65)` answered `0` from Redis, `8000000000000000` from BendKV;
+  `struct.pack('>L', 2^70)` other bytes. Every such conversion, in the engine and in the
+  vendored sources (`string.format`, `struct`, cmsgpack's test of an integer, cjson's
+  array length), now goes through three functions in `luaconf.h`, the place Lua leaves
+  for its conversions. They give gcc's results, defined in C (checked against gcc's casts
+  on 20 million doubles), and are the one change to the vendored sources (NOTICE).
+- Bend drives a run as an automaton of steps (`src/script.bend`):
+  - a call: the request's bytes out, the reply's bytes in;
+  - a tick, every 100,000 Lua instructions: go on, or end the script;
+  - done: the reply's bytes in the caller's protocol, or an error's text;
+  - a log line (`redis.log`), and an ACL check (`redis.acl_check_cmd`).
+
+**The shell** (`src/server.bend`: Scripts, The driver).
+
+- The actor's pure core never calls the engine. A script command suspends its client's
+  batch as the pause suspends a command: a wait in the chain (`S.BlkScript`), which holds
+  the client's replies before the command until the script's, as Redis writes a script's
+  caller's replies once the script ends (a client with a subscription gets them before,
+  so that the pushes its script may send it come after them). Once the group is run, the
+  driver (`sc.drive`, called from `db_group`
+  and `aof_group`) takes each such wait in the order the commands came and runs it on the
+  engine. The batch then goes on as an unblocked client's does.
+- A script's calls run as commands of a script client (id 0), the way EXEC runs the
+  commands it queued. Each call gets its checks, its statistics, its line to the
+  monitors (`[<db> lua]`), its keyspace events, its touches of watched keys and its entry
+  for the file.
+- Before a call, the driver makes Redis's checks of a script's call (`scriptCall`): an
+  unknown command, the arity, a command not allowed from a script, a write from a
+  read-only script, a command that may take memory past maxmemory before the script
+  wrote.
+- Clients that wait are served after the script, as Redis serves them after the command
+  that ran it. The script's writes go to the append-only file as one transaction after
+  it, as Redis propagates them.
+- An EXEC whose transaction queued a script command waits for the driver too, which runs
+  it whole: its checks, then its commands as EXEC runs them, the scripts in their turn.
+  No other client's command comes between them.
+- The driver times its work as the actor times a group's (3zzz). It reads the clock as
+  each command of the engine starts and ends, around each call of a script, and when it
+  starts and ends; each window between two readings is shared by its calls. A call of a
+  script is thus the one call of its window, timed on its own as Redis times it.
+- The script command's own call is named and counted once its script ends, and timed as
+  a window of its own as long as the script ran: its usec, its histogram, the slow log
+  and the latency monitor's "command" get the script's time, as Redis's `call()` times
+  EVAL. A first version timed all of the driver's work as one window: the script's time
+  went to its calls and to the commands its client's batch ran after it. A fast GET after
+  a slow script landed in the slow log, and the slow script did not.
+- The actor keeps a mirror of the engine's cache: the shas with their scripts' flags.
+  EVALSHA of a script not cached answers NOSCRIPT at once, and SCRIPT EXISTS answers from
+  it. The pause of writes and maxmemory read a script's flags as Redis's
+  `evalGetCommandFlags` does, the pause also for the scripts an EXEC's transaction
+  queued: an EXEC of scripts that declare no-writes runs under a pause of writes.
+- Past `lua-time-limit`, the driver serves the other clients at each tick:
+  - It first gives the event loop a turn (`IO.sleep(0)`). Without it, the connections
+    never read their sockets while a script loops.
+  - It takes the requests that wait and runs them as a group of their own, with ev's bit
+    16 on. Every command is answered BUSY but those Redis lets run then (allow-busy), EXEC
+    is aborted, and SHUTDOWN without NOSAVE is answered BUSY.
+  - SCRIPT KILL makes the next tick end the script, unless it wrote (UNKILLABLE).
+  - The clients that wait, and those the script's calls unblocked, are held aside
+    meanwhile, as Redis serves neither while a script runs.
+
+**What Redis 7.0.15 does that a reader may not expect** (found by the test's scenarios,
+each kept as Redis does it):
+
+- `EVAL "error({})" 0` crashes Redis (sdscatfmt in luaCallFunction reads a message the
+  table does not have); the test leaves it out.
+- An error raised with a CR LF in its text is sent as it is, which breaks the protocol;
+  one returned in an error table is cleaned.
+- BLPOP, BRPOP, BLMOVE, BRPOPLPUSH, BZPOPMIN and BZPOPMAX are refused from a script;
+  BLMPOP and BZMPOP run without waiting.
+- `math.random` is not seeded again for each script: its numbers go on from the last
+  script's.
+- `return 1e20`, `2^63`, `0/0` and `1/0` all give `:-9223372036854775808`.
+- `redis.call('SCRIPT', 'HELP')` runs from a script, while SCRIPT LOAD and FLUSH are
+  refused.
+- SORT of a set by a constant, called from a script, sorts the set with ALPHA, as SORT
+  with STORE does, so that a replica gets the same order: the driver rewrites a script's
+  SORT so (`sc.sort`), as the core cannot tell whose call it runs.
+
+**Where BendKV differs.**
+
+- A script runs once the group of requests that brought it has run, after the requests
+  that came with it. No client can tell the order of requests that came together, and a
+  client's own commands after a script run after it.
+- SCRIPT DEBUG is not there: it is an unknown subcommand.
+- An EVAL of the exact text of one of the four fixed scripts of the file, with arguments
+  other than the file's, is refused (`ERR a script of the append-only file, not as the
+  file writes it`); Redis runs it.
+- FUNCTION and FCALL are not there yet, and FUNCTION KILL with them.
+
+**What it costs** (section 68 of [PERFORMANCE.md](PERFORMANCE.md)). Nothing for the
+commands that are not scripts: `make perfcheck`'s counts are main's. A script costs
+about sixteen GETs' instructions, and a call of a script about eight more. The first
+build cost eight times that, in costs that each scaled with something other than the
+script:
+
+- each script read three parameters by walks of the table of 180 (now read once a
+  script needs them);
+- each script's wait sized its arguments by a parse of its batch's bytes up to it, and
+  its call was looked for among the window's calls and among the calls kept by client
+  (quadratic in a pipeline, and growing with the clients);
+- each script's caller had its replies before the script written at once: one write per
+  script of a pipeline, where Redis writes a script's caller's replies once the script
+  ends, as BendKV now does;
+- EVALSHA lowered its sha three times, and every EVAL's body was looked up as a sha.
+
+A script still switches stacks with `swapcontext`, whose signal mask costs three system
+calls a script.
+
+Three costs to every request, not only to scripts, showed in `make perfcheck` (GET 3.4%
+above main) and were taken out before this landed. Each is a way the compiler lays out
+code that a change far from the request's path can trigger:
+
+- **The work loop's register bank.** The functions that go through the work loop (WL)
+  share one bank of registers, as many as the widest segment without a frame takes
+  (`WL_BANK` in the emitted C), and every call through the loop moves them. The driver's
+  first segments took up to 89 parameters, where main's widest takes 38. A script's state
+  (`Sc`) and an EXEC's (`Exr`) are now nodes of their own, one word each: a constructor
+  that holds the type and is never built (`ScOf`, `ExrOf`) makes the compiler lay a type
+  out so. The driver reads the fields it needs through accessors, rather than taking the
+  state apart across an effect. The bank is 38 again.
+- **`Info` past 64 words.** INFO's three facts of the engine made `Live` 16 fields, and
+  `Info`, which held `Live` inline, 66 words: past the 64 the compiler rebuilds in place
+  (section 7), so each update of `Info` copied it whole. `ILiveOf` makes `Live` a node of
+  its own.
+- **A request's width.** A request (`B.Req`) travels in as many words as the widest form
+  of `Cmd`: `SEval` with four fields made `Own` 5 words and a request 7, against 6. `SEval`
+  keeps two: its mode and number of keys in one `Nat`, its script and arguments in one
+  list.
+
+**Tests.**
+
+- `tests/script_test.py` runs 11 scenarios on BendKV and on Redis, each with clients of
+  its own, and compares the replies byte for byte (617 lines): EVAL's replies in RESP2 and
+  RESP3, `redis.call` and `redis.pcall`, error texts, the cache, the libraries, scripts
+  in transactions and with WATCH, the statistics, a script past `lua-time-limit` (BUSY,
+  SCRIPT KILL, UNKILLABLE), the slow log and the latency monitor of scripts, scripts in
+  pipelines (each reply in its place, and a subscribed RESP3 client's pushes from its own
+  script in Redis's order), and scripts under a pause of writes by their flags, EXEC
+  among them.
+- `tests/pause_test.py`'s check of BendKV alone, that an EVAL BendKV did not run was
+  answered at once under a pause, is gone with the difference it checked. Its scenarios
+  were to test scripts under a pause too, but they stop at their third with the same
+  exception on both servers (a client made under a pause of every command sends SELECT
+  as it connects, which the pause holds back), on main as well: the test compares 28
+  lines. Its repair is a change of its own.
+- Redis's suite ([COMPATIBILITY.md](COMPATIBILITY.md)): 1,305 of the 1,677 tests Redis
+  passes (77.8%; 1,292 before), 1,303 of the 1,355 in what BendKV has (96%). The 14 tests
+  of other units that run a script pass: unit/pause's four of scripts under a pause,
+  unit/multi's four of a transaction and a script past its time limit,
+  unit/latency-monitor's two of a set a script fills, unit/introspection-2's statistics
+  of scripts and COMMAND LIST FILTERBY ACLCAT, unit/introspection's monitor of a script's
+  calls, and unit/sort's SORT from a script. unit/functions passes one fewer: its test of
+  FUNCTION KILL leaves looping the script FUNCTION KILL would have ended. unit/scripting
+  runs its tests of functions first and stops there; its tests of EVAL, run alone, pass
+  103 of the 110 Redis passes, and each of the other seven needs replication, streams,
+  ACL or CLUSTER.
+
 ## 3zzzi. One reading of the heap for INFO and the eviction
 
 **What failed.** One check of `tests/maxmemory_test.py` failed now and then under load,

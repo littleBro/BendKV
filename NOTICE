@@ -1,0 +1,33 @@
+BendKV includes the following third-party software, as its authors ship
+it, under the licenses that come with it. BendKV's own license is not
+decided yet (issue #42).
+
+deps/redis: the Lua engine of Redis 7.0.15 and three of Redis's helpers,
+built into the server for EVAL and its kin (src/lua/engine.c, which is
+ported from Redis's script_lua.c, eval.c and script.c).
+
+- Redis 7.0.15 (deps/redis/src: resp_parser.c, rand.c and their
+  headers; server.h, a stand-in with what resp_parser.c takes from
+  Redis's server.h and util.c), and Redis's changes to Lua: Copyright
+  (c) 2006-2020, Salvatore Sanfilippo, and Copyright (c) 2009-2021, Redis
+  Labs Ltd. BSD 3-Clause License: deps/redis/COPYING.
+- Lua 5.1.5 (deps/redis/deps/lua): Copyright (C) 1994-2012 Lua.org,
+  PUC-Rio. MIT License: deps/redis/deps/lua/COPYRIGHT.
+- lua-cjson, strbuf and fpconv (deps/redis/deps/lua/src/lua_cjson.c,
+  strbuf.c, fpconv.c): Copyright (c) 2010-2012 Mark Pulford. MIT License,
+  in each file's header.
+- lua-cmsgpack (deps/redis/deps/lua/src/lua_cmsgpack.c): Copyright (C)
+  2012 Salvatore Sanfilippo. MIT License, at the end of the file.
+- struct (deps/redis/deps/lua/src/lua_struct.c): Copyright (C) 2010-2018
+  Lua.org, PUC-Rio. MIT License, at the end of the file.
+- LuaBitOp (deps/redis/deps/lua/src/lua_bit.c): Copyright (C) 2008-2012
+  Mike Pall. MIT License, in the file's header.
+- SHA-1 in C (deps/redis/src/sha1.c), by Steve Reid: public domain.
+
+deps/redis/src/config.h and solarisfixes.h are BendKV's: stand-ins for
+Redis's, which give sha1.c the byte order and nothing. One change to
+Lua and its libraries: every conversion of a number to a C integer
+(luaconf.h's lua_number2int and lua_number2integer, and casts in
+lstrlib.c, lua_struct.c, lua_cmsgpack.c and lua_cjson.c) goes through
+three functions added to luaconf.h, which give the results of Redis's
+x86-64 builds (gcc) where C leaves a plain cast undefined.

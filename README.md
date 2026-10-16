@@ -19,8 +19,8 @@ throughput of Redis 7.0.15 on the same machine, with half its memory for small v
 > and the latency monitor, the server's administrative commands, an append-only file and
 > its rewrite, maxmemory and its eviction, RESP3). The goal now is a
 > drop-in replacement for a single Redis node, measured by Redis's own test suite: of the
-> 1,677 tests Redis 7.0.15 passes against a server it did not start, BendKV passes 1,292,
-> and 1,289 of the 1,355 in what it implements
+> 1,677 tests Redis 7.0.15 passes against a server it did not start, BendKV passes 1,305,
+> and 1,303 of the 1,355 in what it implements
 > ([docs/COMPATIBILITY.md](docs/COMPATIBILITY.md)). Do not use it for data you cannot
 > lose.
 
@@ -77,7 +77,11 @@ in about a minute.
 `src/command.bend`), the doubles in software (`src/float.bend`, tested against glibc as
 well), what HyperLogLogs, GEO and LOLWUT compute (`src/hll.bend`, `src/geo.bend`,
 `src/lolwut.bend`) and DUMP's payloads (`src/rdb.bend`), all tested against
-`redis-server`; clang, libc and the OS. This is not
+`redis-server`; the Lua engine of scripts: Redis 7.0.15's own Lua 5.1.5 and its libraries
+(`deps/redis`, C, as Redis ships them but for their casts of numbers to integers, which
+give Redis's results defined in C: NOTICE) and the glue that drives it (`src/lua/engine.c`,
+ported from Redis's `script_lua.c`, `eval.c` and `script.c`, behind the effects of
+`src/script.bend`); clang, libc and the OS. This is not
 end-to-end verification in the sense of CompCert or seL4; see
 [docs/FINDINGS.md](docs/FINDINGS.md), section 1.
 
@@ -141,8 +145,9 @@ translation stays in the trusted base.
   HINCRBYFLOAT as the HSET of the sum); a hash made where a key whose time had passed still lay is logged as
   one EVAL of a fixed script that deletes the key and sets the pairs, which Redis runs as
   it loads the file and BendKV reads back (Redis itself logs a MULTI with a DEL and the
-  HSET, two entries a crash could part). BendKV runs no other Lua but the like scripts of
-  lists, sets and sorted sets, below.
+  HSET, two entries a crash could part). BendKV's parser reads this script, and the like
+  scripts of lists, sets and sorted sets below, as the commands they stand for; any other
+  script runs on the engine (Scripts, below).
 - **Lists:** LPUSH, RPUSH, LPUSHX, RPUSHX, LPOP and RPOP (with a count), LLEN, LINDEX,
   LRANGE, LSET, LINSERT, LREM, LTRIM, LPOS (RANK, COUNT, MAXLEN, read as Redis 7.0.15
   reads them, a RANK of LLONG_MIN included), LMOVE, RPOPLPUSH and LMPOP, their arguments
@@ -371,6 +376,20 @@ translation stays in the trusted base.
   holds the commands after a blocking one; BendKV holds them as commands); idle counts
   from the client's last batch, where Redis also counts a reply written (to a subscriber
   that gets messages, to a client that waited); user is `default`, redir -1, resp 2.
+- **Scripts:** EVAL, EVALSHA, EVAL_RO, EVALSHA_RO and SCRIPT (LOAD, EXISTS, FLUSH, KILL,
+  HELP), on Redis 7.0.15's own Lua (its sandbox, `redis.call`, `redis.pcall` and the rest
+  of its API, cjson, cmsgpack, struct, bit, the shebang and its flags, `redis.setresp`,
+  Redis's random numbers), driven a step at a time from the actor: a script's calls run as
+  a client's commands run (their statistics, MONITOR's lines, keyspace events, the keys
+  they touch for WATCH), refused as Redis refuses them from a script, and its writes are
+  logged to the append-only file as one transaction; scripts in MULTI and EXEC; replies and
+  errors byte for byte as Redis's, in RESP2 and RESP3. Past `lua-time-limit` every other
+  client is answered BUSY but for the commands Redis lets run then; SCRIPT KILL ends a
+  script that has not written (UNKILLABLE otherwise), and SHUTDOWN NOSAVE stops the server.
+  Where BendKV differs: a script runs once the group of requests that brought it has run
+  (no client can tell the order of requests that came together), SCRIPT DEBUG is not
+  there, and the four fixed scripts of the file are read as commands (FINDINGS.md, section
+  3zzzd). FUNCTION and FCALL are not there yet.
 - **CLIENT PAUSE and CLIENT UNPAUSE**, as Redis 7.0.15 runs them: a pause of the
   commands that write or may be replicated (WRITE: PFCOUNT and PUBLISH too, and an EXEC
   whose transaction queued one) or of every command (ALL), for a timeout in ms; a second
@@ -379,16 +398,18 @@ translation stays in the trusted base.
   rest of its client's batch (CLIENT LIST's flag b, INFO's blocked_clients) and runs when
   the pause ends, at CLIENT UNPAUSE or at its time, in the order the clients came; a
   monitor is never held back. While the pause holds, keys are not swept as they expire,
-  nor evicted, as Redis keeps the data set still. Where BendKV differs: CLIENT UNBLOCK of
-  a client held back answers 0 (Redis 7.0.15 crashes on it), and EVAL of a script BendKV
-  does not run is answered at once (FINDINGS.md, section 3zzk).
+  nor evicted, as Redis keeps the data set still. A script is held back by its flags, as
+  Redis reads them: one that may write (EVAL without a shebang, EVALSHA, a shebang without
+  no-writes), not one that declares no-writes, and an EXEC by the scripts it queued. Where BendKV differs: CLIENT UNBLOCK of a
+  client held back answers 0 (Redis 7.0.15 crashes on it) (FINDINGS.md, section 3zzk).
 - **MONITOR**, as Redis 7.0.15 runs it: each call that runs after it, of any client,
   sends every monitor a line, `+<s>.<us> [<db> <ip:port>]` and the call's arguments as
   the client sent them, quoted as Redis quotes them. As in Redis, a command refused
   before it runs (unknown, the wrong number of arguments, before AUTH, to a subscribed
   client) sends no line, nor do the administrative commands (CONFIG, CLIENT LIST, KILL,
-  NO-EVICT and UNBLOCK) and EVAL; a queued command sends its line as EXEC runs it, a
-  blocking command as it blocks, and AUTH's password and HELLO's user and password are
+  NO-EVICT and UNBLOCK); EVAL and its kin send theirs before their script runs, and each
+  call of the script its own, from `[<db> lua]`; a queued command sends its line as EXEC
+  runs it, a blocking command as it blocks, and AUTH's password and HELLO's user and password are
   `"(redacted)"`. A monitor is refused the commands that read or write keys ("ERR Replica
   can't interact with the keyspace"), gets its own line after its reply and no line with
   CLIENT REPLY OFF or SKIP; RESET, QUIT and CLIENT KILL end it, and CLIENT LIST shows it
@@ -439,8 +460,9 @@ translation stays in the trusted base.
   process, its parameters, its connections, commands and bytes (with the instantaneous
   rates sampled every 100 ms, as Redis's cron samples them), its memory (`used_memory` is
   what its heap's live values hold, as Redis's is what its allocator handed out; Memory,
-  below), its keys, its evictions, its append-only file; for what BendKV does not have
-  (replication, forks, scripts) they are what Redis shows when it has none. The
+  below), its keys, its evictions, its append-only file, its scripts (the engine's memory,
+  the scripts cached); for what BendKV does not have (replication, forks, functions) they
+  are what Redis shows when it has none. The
   statistics per command count as Redis counts them: each command's and subcommand's
   calls, the calls refused before they run (a wrong number of arguments by Redis's arity,
   a client that must authenticate first, a command refused for memory) and the calls
@@ -520,7 +542,7 @@ translation stays in the trusted base.
   (FINDINGS.md, section 3zv).
 
 Not yet: streams, Lua
-scripts, CLIENT TRACKING, CONFIG REWRITE (it answers as Redis does without a configuration file),
+functions (FUNCTION, FCALL), CLIENT TRACKING, CONFIG REWRITE (it answers as Redis does without a configuration file),
 RDB files. Times in ms are limited to 14 digits.
 
 ## Performance
@@ -536,7 +558,9 @@ VM (medians over 8–13 interleaved pairs):
 
 With Redis's own benchmark specs run by `memtier_benchmark`, BendKV reaches 1.26–1.39×
 Redis. Without pipelining both are bound by network latency and stay within noise of each
-other. About 950 thousand keys with 3-byte values take 60 MB RSS against Redis's 121 MB.
+other. Lua scripts are the exception: pipelined, a script costs BendKV's actor several
+times Redis's work (section 68 of [docs/PERFORMANCE.md](docs/PERFORMANCE.md)). About 950
+thousand keys with 3-byte values take 60 MB RSS against Redis's 121 MB.
 The full record, with every measurement and method, is in
 [docs/PERFORMANCE.md](docs/PERFORMANCE.md) and
 [docs/FINDINGS.md](docs/FINDINGS.md).
@@ -651,7 +675,12 @@ with their time and address put aside, then 4 monitors that each get every line 
 clients that pipeline 200 SETs each, each client's lines in order), CLIENT PAUSE and
 UNPAUSE (`tests/pause_test.py`: scenarios on BendKV and on Redis of what a pause holds
 back and lets run, its end and the order the clients go on in, their transcripts compared
-line by line, then 100 clients held back and let go in order), the administrative
+line by line, then 100 clients held back and let go in order), Lua scripts
+(`tests/script_test.py`: scenarios on BendKV and on Redis of EVAL's replies in RESP2 and
+RESP3, `redis.call` and `redis.pcall`, errors, the script cache, the libraries, scripts in
+transactions and with WATCH, the statistics, a script past `lua-time-limit`, its BUSY
+and SCRIPT KILL, the slow log and the latency monitor of scripts, scripts in pipelines,
+and scripts under a pause, compared byte for byte), the administrative
 commands (`tests/admin_test.py`: LASTSAVE, ROLE, WAIT, MEMORY, LOLWUT's drawings byte for
 byte and SHUTDOWN's errors on BendKV and on Redis, then SHUTDOWN on servers of their own,
 the append-only file and the pid file after it, and a SHUTDOWN while a rewrite runs), AUTH
@@ -711,9 +740,12 @@ src/        the server
   info.bend     INFO's sections and fields, SLOWLOG, LATENCY        tested
   command.bend  COMMAND, with Redis's table of BendKV's commands     tested
   startup.bend  the command line and the configuration file        tested
+  script.bend   the effects of the Lua engine (src/lua/engine.c)   tested
   server.bend   TCP, connections, the database actor, the log      tested
+  lua/          the engine's C: Redis's Lua driven in steps         tested
+deps/redis/ Redis 7.0.15's Lua 5.1.5 with its libraries, and three of its helpers, as Redis ships them (NOTICE: their licenses, and the one change)
 proof/      LAWS.bend (the laws), PROOF.bend (their proofs), SPEC.bend (the commands on the trie alone)
-tests/      smoke (the pure checks), float, start, differential, expiry, protocol, session, the end of a connection, CONFIG, INFO, statistics per command, COMMAND, SCAN, numbers at their edges, BITFIELD, hash, list, set, sorted set, SORT, HyperLogLog, GEO, DUMP and RESTORE, blocking, transaction, Pub/Sub, CLIENT, MONITOR, timing of calls, CLIENT PAUSE, administrative commands, AUTH, RESP3, maxmemory, robustness, stalled reader, concurrency, AOF, AOF crash and AOF rewrite tests
+tests/      smoke (the pure checks), float, start, differential, expiry, protocol, session, the end of a connection, CONFIG, INFO, statistics per command, COMMAND, SCAN, numbers at their edges, BITFIELD, hash, list, set, sorted set, SORT, HyperLogLog, GEO, DUMP and RESTORE, blocking, transaction, Pub/Sub, CLIENT, MONITOR, timing of calls, CLIENT PAUSE, Lua scripts, administrative commands, AUTH, RESP3, maxmemory, robustness, stalled reader, concurrency, AOF, AOF crash and AOF rewrite tests
 bench/      in-process benchmarks of the map, the core and channels, and `make bench` against Redis
 tools/      measurement scripts, the runners of Redis's test suite and of the client libraries'
             suites, and the generators of the trie, of the parameter table, of the command
@@ -741,7 +773,7 @@ away.
 | file | lines of code | of them written by a generator | the laws import it |
 |---|---:|---:|---|
 | `src/map.bend` | 2,000 | 640 | yes |
-| `src/redis.bend` | 16,000 | 6,400 | yes |
+| `src/redis.bend` | 18,000 | 7,400 | yes |
 | `src/batch.bend` | 84 |  | yes |
 | `src/aof.bend` | 1,200 |  | yes |
 | `src/session.bend` | 2,400 |  | yes |
@@ -754,13 +786,14 @@ away.
 | `src/lolwut.bend` | 470 |  | no |
 | `src/rdb.bend` | 1,500 |  | no |
 | `src/resp.bend` | 880 |  | no |
-| `src/server.bend` | 6,600 |  | no |
+| `src/script.bend` | 27 |  | no |
+| `src/server.bend` | 8,200 |  | no |
 | `src/startup.bend` | 460 |  | no |
 | `proof/LAWS.bend` | 920 | 20 |  |
 | `proof/SPEC.bend` | 370 |  |  |
 | `proof/PROOF.bend` | 16,000 | 2,800 |  |
-| `src/`, the 6 files the laws import | 23,000 | 7,100 |  |
-| `src/`, the 10 others | 18,000 | 1,100 |  |
+| `src/`, the 6 files the laws import | 25,000 | 8,200 |  |
+| `src/`, the 11 others | 19,000 | 1,200 |  |
 | `proof/` | 18,000 | 2,800 |  |
 <!-- END gen_counts: numbers -->
 
@@ -792,4 +825,5 @@ See [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## License
 
-Not decided yet. Until a license is added, all rights are reserved by the authors.
+Not decided yet. Until a license is added, all rights are reserved by the authors. The
+third-party software in `deps/` keeps its own licenses ([NOTICE](NOTICE)).

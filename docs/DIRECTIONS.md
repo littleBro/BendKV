@@ -317,15 +317,17 @@ Where performance and proof meet: **batched execution under proved laws.**
    RESP3 (done, section 3zx), SORT and SORT_RO (done, section 3zzh), HyperLogLogs (done,
    section 3zzj), CLIENT PAUSE and UNPAUSE (done, section 3zzk), the administrative
    commands LASTSAVE, ROLE, WAIT, SHUTDOWN, MEMORY and LOLWUT (done, section 3zzl),
-   GEO (done, section 3zzm), DUMP and RESTORE (done, section 3zzu), and the slow log and
-   the latency monitor (done, section 3zzz), measured by Redis's
+   GEO (done, section 3zzm), DUMP and RESTORE (done, section 3zzu), the slow log and
+   the latency monitor (done, section 3zzz), and Lua scripts on Redis's own Lua (done,
+   section 3zzzd; Lua's functions, FUNCTION and FCALL, next, on the same engine),
+   measured by Redis's
    own test suite run against BendKV and by client libraries' test suites (redis-py's and
    go-redis's, in CI: done, section 3zy).
-   Lua, streams, cluster, replication and modules are out of scope. The suite's count: of the 1,677 tests
-   Redis 7.0.15 passes against a server it did not start, BendKV passes 1,292, 1,289 of
-   the 1,355 in what it has ([COMPATIBILITY.md](COMPATIBILITY.md)); most of the other 66
-   need commands BendKV does not have (replication's SYNC, Lua, streams) or run after a
-   test that left its client in MULTI on one of them.
+   Streams, cluster, replication and modules are out of scope. The suite's count: of the 1,677 tests
+   Redis 7.0.15 passes against a server it did not start, BendKV passes 1,305, 1,303 of
+   the 1,355 in what it has ([COMPATIBILITY.md](COMPATIBILITY.md)); most of the other 52
+   need commands BendKV does not have (replication's SYNC, functions, streams) or run
+   after a test that left its client in MULTI on one of them.
    What maxmemory left to do (section 3zw): a delete takes the nodes it empties now
    (section 3zz), so the eviction gets within a limit with the keys Redis keeps, but its
    samples still walk the trie's empty buckets, and an eviction takes six times Redis's
