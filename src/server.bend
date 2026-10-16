@@ -3561,10 +3561,16 @@ def ev.of(+srv: S.Srv) -> U32:
 # Eviction), maxmemory set (28), an LFU policy (27, Access), an eviction
 # to go on with (26: one ran out of time, or a CONFIG SET changed
 # maxmemory) and a pause (25, The pause), each keeping the fast way off
-# but 28, 27 and 26; 29 to 26 follow the server and the actor
-def mem.bits(+srv: S.Srv, +ev: U32) -> U32:
-  +m = S.srv.mm(srv)
-  U32.or(U32.or(U32.or(U32.and(ev, 603979776), Bool.pick(U32, Nat.is_lt(0n, S.mm.max(m)), 268435456, 0)), Bool.pick(U32, S.mm.lfu(m), 134217728, 0)), Bool.pick(U32, S.mm.kick(m), 67108864, 0))
+# but 28, 27 and 26; 29 to 26 follow the server and the actor. With them,
+# restricted clients (20, ACL: the gate's classes 3 and 4, ps.gate) and
+# writes refused (19, MISCONF: misconf.bit). t is what the server says of
+# them (S.srv.tune: 1 maxmemory set, 2 an LFU policy, 4 kick, 8
+# restricted clients, 16 MISCONF), its bit b as ev's bit to
+def tune.bit(+t: U32, +b: U32, +to: U32) -> U32:
+  Bool.pick(U32, U32.is_ne(U32.and(t, b), 0), to, 0)
+
+def mem.bits(+t: U32, +ev: U32) -> U32:
+  U32.or(U32.or(U32.and(ev, 603979776), U32.or(tune.bit(t, 1, 268435456), tune.bit(t, 2, 134217728))), U32.or(U32.or(tune.bit(t, 4, 67108864), tune.bit(t, 8, 1048576)), tune.bit(t, 16, 524288)))
 
 # whether the writes are refused (MISCONF: Background saves): a
 # background save failed (rdb_last_bgsave_status err) while save points
@@ -3572,32 +3578,32 @@ def mem.bits(+srv: S.Srv, +ev: U32) -> U32:
 # rdb.misconf), as the server's state has it now, which each command of
 # the general way reads (bg.go), as Redis's processCommand calls
 # writeCommandsDeniedByDiskError for each command: a CONFIG SET that
-# lifts or restores it counts for the commands after it in its batch
+# lifts or restores it counts for the commands after it in its batch.
+# Read in place (S.srv.misconf): read through S.srv.rdb, which gives back
+# a field of the server's INFO, each command copied INFO's node
+# (FINDINGS 3zzzz)
 def srv.misconf(+srv: S.Srv) -> Bool:
-  I.rdb.misconf(S.srv.rdb(srv))
+  S.srv.misconf(srv)
 
-# bit 19: the same, kept in Ps's ev once a batch has run (ps.tune) and by
-# the actor after each step and each save, only to keep the fast way off
-# (ps.calm) while the writes are refused; no keyspace event has it
-# (ps.loud)
+# bit 19: the same, kept in Ps's ev once a batch has run (ps.tune, by
+# S.srv.tune) and by the actor after each step and each save, only to
+# keep the fast way off (ps.calm) while the writes are refused; no
+# keyspace event has it (ps.loud)
 def misconf.bit(+srv: S.Srv) -> U32:
   Bool.pick(U32, srv.misconf(srv), 524288, 0)
 
-# whether the server has restricted clients (ACL), and Ps's bit 20 for
-# them (the gate's classes 3 and 4: ps.gate), set at once when a client's
-# user changes (bg.user) and after each batch of the general way
+# whether the server has restricted clients (ACL), for Ps's bit 20, set
+# at once when a client's user changes (bg.user), and after each batch of
+# the general way by ps.tune (mem.bits)
 def acl.on(+srv: S.Srv) -> Bool:
   S.srv.acl.any(srv)
-
-def acl.bit(+srv: S.Srv) -> U32:
-  Bool.pick(U32, acl.on(srv), 1048576, 0)
 
 def ps.tune(pb: Ps, +srv: S.Srv) -> Ps:
   match pb:
     case Ps{RegNone{}, +ev, px, +cs, own}:
-      Ps{RegNone{}, U32.or(U32.or(U32.or(cls.bit(cs), mem.bits(srv, ev)), misconf.bit(srv)), acl.bit(srv)), px, cs, own}
+      Ps{RegNone{}, U32.or(cls.bit(cs), mem.bits(S.srv.tune(srv), ev)), px, cs, own}
     case Ps{RegOn{c, p, sh, cl, n}, +ev, px, +cs, own}:
-      Ps{RegOn{c, p, sh, cl, n}, U32.or(U32.or(U32.or(U32.or(ev.of(srv), cls.bit(cs)), mem.bits(srv, ev)), misconf.bit(srv)), acl.bit(srv)), px, cs, own}
+      Ps{RegOn{c, p, sh, cl, n}, U32.or(U32.or(ev.of(srv), cls.bit(cs)), mem.bits(S.srv.tune(srv), ev)), px, cs, own}
     case PsOf{p}:
       ps.tune(p, srv)
 
@@ -10121,8 +10127,7 @@ def grp.sub(+cn: S.Conn, job: B.Job, back: Chan(Ans), +inb: Nat, raw: String, g:
 # A pause that ended in this group leaves a reading from before it, of a
 # dataset that the pause kept as it was
 def facts.held(+pb: Ps, +srv: S.Srv) -> Bool:
-  +m = S.srv.mm(srv)
-  Bool.and(Nat.is_eq(mem.need(pb), 2n), Bool.and(Nat.is_lt(0n, S.mm.max(m)), Bool.not(S.mm.kick(m))))
+  Bool.and(Nat.is_eq(mem.need(pb), 2n), U32.is_eq(U32.and(S.srv.tune(srv), 5), 1))
 
 def srv.facts(held: Bool, srv: S.Srv, l: I.Live) -> S.Srv:
   match held:
