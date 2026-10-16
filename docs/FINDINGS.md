@@ -7921,6 +7921,72 @@ list's change is its pushes on `deq.empty()`.
 - A list of one to a few elements in fewer nodes.
 - A push in place, which needs a write that owns the list it changes (3zzzm's `db.upd`).
 
+## 3zzzx. LPOS, LINSERT and LREM by pieces
+
+**What was left** (3zzzw). LPOS, LINSERT and LREM read the list whole: `deq.all` made
+every element a string of its own, LPOS and LINSERT's pivot then compared them one by
+one, and LINSERT and LREM built the whole list again (`deq.of`), whatever they changed.
+On a list of 200,000 in pieces, LREM took 7.9 times Redis's time, twice what it took
+when each element was a cell of its own, and LPOS and LINSERT 2.3 and 2.8 times Redis's
+(PERFORMANCE 79). LPOS of the first element read the whole list too.
+
+**The change** (`src/map.bend`, Lists: *Searches and writes along the list*).
+- **A comparison where the element lies.** An element is compared with a string in its
+  piece's string, as a small hash compares a field (`pk.hit`): the lengths first, then
+  the last bytes, then the bytes. Nothing is copied out.
+- **A walk in either direction.** In the list's order: the front stack's pieces in their
+  order, then the back stack's against theirs (a recursion that goes to the stack's end
+  first, so that no list is reversed); from the last element, the other way round. A
+  piece whose string goes the other way is read through the indices of its codes, the
+  last first (`lp.offs`).
+- **LPOS** (`deq.find`) stops at the matches it wants: the RANK-th without COUNT, the
+  COUNT-th from RANK on with it, or after MAXLEN elements. A RANK or a COUNT near 2^47 is
+  cut to the list's length first, so no larger number is made.
+- **LINSERT** (`deq.ins`) finds the pivot that way, then writes the one piece that holds
+  it, as LSET does (`lp.ins.p`, `lp.put.of`): v's code goes before or after the pivot's,
+  as the piece's string runs, and a piece made longer than a buffer is dealt into
+  pieces. The pieces before and after it are not copied.
+- **LREM** (`deq.rem`) counts the matches of each piece it meets while it still has
+  some to take; a piece with none is kept as it is. A piece with some is written anew
+  from the runs of bytes it keeps (`lp.runs`), dropping the matches the walk meets
+  first: the first ones of its string when the string goes the walk's way, else the
+  last. A piece left empty goes, and the stacks are dealt again when they tilt
+  (`deq.fix`). Once the count is taken, the rest of the pieces are not read.
+
+**The proofs.** No law changed. The shape proofs of LINSERT and LREM (`lins_m_shape`,
+`lrem_ch_shape`, `lrem_r_shape`, `lrem_shape`, `lw_shape`) follow the code: they now
+take the list `deq.ins` and `deq.rem` give.
+
+**Tests.**
+- `tests/list_test.py` adds `searches`: a list of 900 elements in both stacks, a third of
+  them five values that repeat (one of 2,500 bytes, longer than a piece), searched by
+  LPOS with RANK, COUNT and MAXLEN from either end, written by LINSERT on both sides of
+  pivots in both stacks (one insert of 1,900 bytes and one of 2,100 deal a piece again),
+  then LREM from either end with counts and with 0, each step read and the list dumped
+  by BendKV and restored in Redis; then pieces made of one value, taken whole, until the
+  key goes. The random commands on long elements get LPOS, LREM and LINSERT AFTER, with
+  values that repeat.
+- The test first ran with Redis on both sides: seeds 1 to 3 at 3,000 rounds, 18,619
+  commands each.
+- Against BendKV's build, seeds 1 to 4 at 6,000 rounds: 24,631 list commands each,
+  each answered as Redis answers it.
+- A model of the deque against a plain list (the one of 3zzzw, with LPOS, LINSERT and
+  LREM added, and values that repeat) agreed at every one of 4,000 steps. It is a script
+  of this session, not in the repository.
+
+**What it costs** (PERFORMANCE 81).
+- On a list of 200,000, the three commands now take about Redis's time: LPOS of the
+  last element 3.8 ms against Redis's 3.3 (main 6.2), LINSERT in the middle 3.7 against
+  3.2 (main 7.7), and LREM of one element in the middle 1.8 against 3.0 (main 22.9).
+- Near an end they take a fraction of a millisecond, as in Redis: LPOS of the 11th
+  element or with RANK -1, and LREM -1, read a piece or two, where main read the whole
+  list (7 to 56 ms).
+- On short lists they run fewer instructions than main: 4% to 17% for LPOS on lists of
+  20 to 400 elements, 42% to 55% for LREM with no match, 30% for LINSERT.
+- A search still builds a small node of its state for each element it reads (`LSeek`).
+  Threading its four fields through the walk would spare that node; it is left for
+  later.
+
 ## 4. Where a request's time goes, and hiding the memory waits
 
 With the eight patches, BendKV ran fewer instructions on GET and SET than Redis, missed
