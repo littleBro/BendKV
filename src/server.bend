@@ -1487,9 +1487,13 @@ type Hd is Data:
 # and while a script runs, its caller (who: 0 for none) and the keys it
 # declared (ks: its KEYS), for the tracking: its calls' changes are its
 # caller's, and a call that only reads remembers its KEYS for the caller
-# (Tracking, in The driver, below)
+# (Tracking, in The driver, below). ScrOf, never built, makes Scr a node of
+# its own: one word of Cls, which the tracking's invalidations carry
+# taken apart (Iv), in segments as wide as the work loop's register bank
+# (WL_BANK: FINDINGS 3zzzd), where Scr's own seven words widened them
 type Scr is Data:
   Scr{shas: KV.Trie<Nat>, n: Nat, st: U32, at: Clk, who: Nat, ks: List<&2, String>}
+  ScrOf{s: Scr}
 
 # a reading of the wall clock (IO.clock): s and us since 1970
 type Clk is Data:
@@ -1503,22 +1507,30 @@ def scr.who(+s: Scr) -> Nat:
   match s:
     case Scr{shas, n, st, at, +who, ks}:
       who
+    case ScrOf{+x}:
+      scr.who(x)
 
 def scr.ks(+s: Scr) -> List<&2, String>:
   match s:
     case Scr{shas, n, st, at, who, +ks}:
       ks
+    case ScrOf{+x}:
+      scr.ks(x)
 
 def scr.run.set(+id: Nat, ks: List<&2, String>, s: Scr) -> Scr:
   match s:
     case Scr{shas, n, st, at, w0, k0}:
       Scr{shas, n, st, at, id, ks}
+    case ScrOf{x}:
+      scr.run.set(id, ks, x)
 
 # ev's bits 16 and 17 (busy, a script waits), from st
 def scr.bit(+s: Scr) -> U32:
   match s:
     case Scr{shas, n, +st, at, who, ks}:
       U32.or(U32.shln(U32.and(st, 1), 16n), U32.shln(U32.and(st, 8), 14n))
+    case ScrOf{+x}:
+      scr.bit(x)
 
 # whether a script command's script, by its flags as sc.flags gives them
 # (0: no script's), makes it one past maxmemory refuses (a shebang with
@@ -7367,26 +7379,36 @@ def scr.st(+s: Scr) -> U32:
   match s:
     case Scr{shas, n, +st, at, who, ks}:
       st
+    case ScrOf{+x}:
+      scr.st(x)
 
 def scr.st.set(+st: U32, s: Scr) -> Scr:
   match s:
     case Scr{shas, n, s0, at, who, ks}:
       Scr{shas, n, st, at, who, ks}
+    case ScrOf{x}:
+      scr.st.set(st, x)
 
 def scr.at(+s: Scr) -> Clk:
   match s:
     case Scr{shas, n, st, +at, who, ks}:
       at
+    case ScrOf{+x}:
+      scr.at(x)
 
 def scr.at.set(t: Clk, s: Scr) -> Scr:
   match s:
     case Scr{shas, n, st, a0, who, ks}:
       Scr{shas, n, st, t, who, ks}
+    case ScrOf{x}:
+      scr.at.set(t, x)
 
 def scr.find(+sha: String, +s: Scr) -> Maybe<&2, Nat>:
   match s:
     case Scr{+shas, n, st, at, who, ks}:
       KV.get(Nat, shas, sha)
+    case ScrOf{+x}:
+      scr.find(sha, x)
 
 def scr.find.or(m: Maybe<&2, Nat>, +sha: String, +s: Scr) -> Maybe<&2, Nat>:
   match m:
@@ -7416,11 +7438,15 @@ def scr.add(+sha: String, +f: Nat, s: Scr) -> Scr:
     case Scr{shas, +n, +st, at, +who, ks}:
       +t = shas
       scr.add.if(Maybe.is_none(&2, Nat, KV.get(Nat, t, sha)), sha, f, t, n, st, at, who, ks)
+    case ScrOf{x}:
+      scr.add(sha, f, x)
 
 def scr.flush(s: Scr) -> Scr:
   match s:
     case Scr{shas, n, st, at, who, ks}:
       Scr{KV.empty(Nat), 0n, st, at, who, ks}
+    case ScrOf{x}:
+      scr.flush(x)
 
 # SCRIPT EXISTS's replies: 1 for each sha cached (in either case, as
 # Redis's dictionary of scripts compares shas), 0 for the others

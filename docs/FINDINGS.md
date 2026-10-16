@@ -6297,8 +6297,9 @@ script:
 A script still switches stacks with `swapcontext`, whose signal mask costs three system
 calls a script.
 
-Three costs to every request, not only to scripts, showed in `make perfcheck` (GET 3.4%
-above main) and were taken out before this landed. Each is a way the compiler lays out
+Four costs to every request, not only to scripts, showed in `make perfcheck` (GET 3.4%
+above main, and after the merge of CLIENT TRACKING 0.9%) and were taken out before this
+landed. Each is a way the compiler lays out
 code that a change far from the request's path can trigger:
 
 - **The work loop's register bank.** The functions that go through the work loop (WL)
@@ -6317,6 +6318,12 @@ code that a change far from the request's path can trigger:
   of `Cmd`: `SEval` with four fields made `Own` 5 words and a request 7, against 6. `SEval`
   keeps two: its mode and number of keys in one `Nat`, its script and arguments in one
   list.
+- **The scripts' state in `Cls`.** CLIENT TRACKING (3zzzb) carries `Cls` taken apart
+  through its invalidations (`Iv`), in segments that set the work loop's bank (main's
+  widest, `iv.send`, 47 words). The scripts' state (`Scr`) went into that with its seven
+  words: a bank of 55, and GET, SET and INCR about 35 instructions (0.9%) above main.
+  `ScrOf` makes `Scr` a node of its own: one word, a bank of 49 against main's 48, and
+  the counts main's within 5 instructions (PERFORMANCE 68).
 
 **Tests.**
 
