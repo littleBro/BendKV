@@ -28,6 +28,7 @@ import ./info.bend as I
 import ./command.bend as K
 import ./float.bend as F
 import ./lolwut.bend as L
+import ./acl.bend as U
 
 # Types
 # -----
@@ -53,26 +54,31 @@ type Pe is Data:
   Pe{score: Nat, db: Nat, key: String}
 
 # What the server keeps for maxmemory (Memory, below), with the state of
-# its random numbers (RANDOMKEY's, HRANDFIELD's, SPOP's): the parameters
+# its random numbers (RANDOMKEY's, HRANDFIELD's, SPOP's) and its users
+# (acl: ACL, below; here so that Srv stays four words): the parameters
 # of maxmemory as the start and each CONFIG SET leave them (maxmemory in
 # bytes, 0 for none; maxmemory-policy as a number, mm.pol.of;
 # maxmemory-samples; maxmemory-eviction-tenacity; lfu-log-factor;
 # lfu-decay-time), and the eviction's state (server.bend, Eviction):
 # whether a CONFIG SET changed maxmemory (to one), which the actor sees to
 # at once (kick), the pool (best first), the database the next random
-# eviction starts after, and the bytes evicted while a rewrite of the
-# append-only file runs, which its snapshot still holds (debt). MmOf,
-# never built, makes Mm a type that holds itself, which the compiler makes
-# a node of its own: Srv stays four words, as with the random numbers'
-# word alone.
+# eviction starts after, and the memory as the eviction sees it while a
+# rewrite of the append-only file or a background save runs (mm.view):
+# the heap's used bytes when the job took its snapshot (h0), the keys of
+# the databases then (k0), and the bytes a key held then on average
+# (per). MmOf, never built, makes Mm a type that holds itself, which the
+# compiler makes a node of its own: Srv stays four words, as with the
+# random numbers' word alone.
 type Mm is Data:
-  Mm{rng: U32, max: Nat, pol: Nat, smp: Nat, ten: Nat, lfl: Nat, lfd: Nat, kick: Bool, pool: List<&2, Pe>, next: Nat, debt: Nat}
+  Mm{rng: U32, max: Nat, pol: Nat, smp: Nat, ten: Nat, lfl: Nat, lfd: Nat, kick: Bool, pool: List<&2, Pe>, next: Nat, h0: Nat, k0: Nat, per: Nat, acl: U.Acl}
   MmOf{m: Mm}
 
-# the server, besides its database: its password (empty for none), its
-# parameters (config.bend), of which requirepass is the password, what
-# INFO shows of it that they do not (info.bend), and what it keeps for
-# maxmemory, with its random numbers (Mm)
+# the server, besides its database: the requirepass it was last given
+# (pass), its parameters (config.bend), what INFO shows of it that they
+# do not (info.bend), and what it keeps for maxmemory, with its random
+# numbers and its users (Mm). The users decide who must authenticate: a
+# client must when the default user is off, or on without nopass; and
+# requirepass is the default user's password (acl.bend)
 type Srv is Data:
   Srv{pass: String, cfg: List<&2, C.CItem>, info: I.Info, mm: Mm}
 
@@ -110,39 +116,41 @@ def mm.get(+cfg: List<&2, C.CItem>, +name: String) -> Nat:
   mm.nat(C.config.get_value(cfg, name))
 
 # what the server keeps for maxmemory with these parameters, its random
-# numbers at rng
-def mm.of(+rng: U32, +cfg: List<&2, C.CItem>) -> Mm:
-  Mm{rng, mm.get(cfg, "maxmemory"), mm.pol.of(C.config.get_value(cfg, "maxmemory-policy")), mm.get(cfg, "maxmemory-samples"), mm.get(cfg, "maxmemory-eviction-tenacity"), mm.get(cfg, "lfu-log-factor"), mm.get(cfg, "lfu-decay-time"), False{}, Nil{}, 0n, 0n}
+# numbers at rng, and its users: the default user alone, with requirepass
+# as its password, GENPASS's key the start's secret
+def mm.of(+rng: U32, +cfg: List<&2, C.CItem>, key: String) -> Mm:
+  Mm{rng, mm.get(cfg, "maxmemory"), mm.pol.of(C.config.get_value(cfg, "maxmemory-policy")), mm.get(cfg, "maxmemory-samples"), mm.get(cfg, "maxmemory-eviction-tenacity"), mm.get(cfg, "lfu-log-factor"), mm.get(cfg, "lfu-decay-time"), False{}, Nil{}, 0n, 0n, 0n, 0n, U.acl.new(C.config.get_value(cfg, "requirepass"), key)}
 
 def mm.rng(+m: Mm) -> U32:
   match m:
-    case Mm{rng, max, pol, smp, ten, lfl, lfd, kick, pool, next, debt}:
+    case Mm{rng, max, pol, smp, ten, lfl, lfd, kick, pool, next, h0, k0, per, acl}:
       rng
     case MmOf{+n}:
       mm.rng(n)
 
 def mm.max(+m: Mm) -> Nat:
   match m:
-    case Mm{rng, max, pol, smp, ten, lfl, lfd, kick, pool, next, debt}:
+    case Mm{rng, max, pol, smp, ten, lfl, lfd, kick, pool, next, h0, k0, per, acl}:
       max
     case MmOf{+n}:
       mm.max(n)
 
 def mm.pol(+m: Mm) -> Nat:
   match m:
-    case Mm{rng, max, pol, smp, ten, lfl, lfd, kick, pool, next, debt}:
+    case Mm{rng, max, pol, smp, ten, lfl, lfd, kick, pool, next, h0, k0, per, acl}:
       pol
     case MmOf{+n}:
       mm.pol(n)
 
 # after CONFIG SET: the parameters read again, the random numbers and the
 # eviction's state kept; a maxmemory changed to one (not 0) is to be seen
-# to at once (kick), as Redis's updateMaxmemory starts its eviction
+# to at once (kick), as Redis's updateMaxmemory starts its eviction; a
+# requirepass changed is the default user's password from then on
 def mm.cfg(+m: Mm, +cfg: List<&2, C.CItem>) -> Mm:
   match m:
-    case Mm{rng, +max, pol, smp, ten, lfl, lfd, +kick, pool, next, debt}:
+    case Mm{rng, +max, pol, smp, ten, lfl, lfd, +kick, pool, next, h0, k0, per, acl}:
       +mx = mm.get(cfg, "maxmemory")
-      Mm{rng, mx, mm.pol.of(C.config.get_value(cfg, "maxmemory-policy")), mm.get(cfg, "maxmemory-samples"), mm.get(cfg, "maxmemory-eviction-tenacity"), mm.get(cfg, "lfu-log-factor"), mm.get(cfg, "lfu-decay-time"), Bool.and(Bool.or(kick, Bool.not(Nat.is_eq(mx, max))), Nat.is_lt(0n, mx)), pool, next, debt}
+      Mm{rng, mx, mm.pol.of(C.config.get_value(cfg, "maxmemory-policy")), mm.get(cfg, "maxmemory-samples"), mm.get(cfg, "maxmemory-eviction-tenacity"), mm.get(cfg, "lfu-log-factor"), mm.get(cfg, "lfu-decay-time"), Bool.and(Bool.or(kick, Bool.not(Nat.is_eq(mx, max))), Nat.is_lt(0n, mx)), pool, next, h0, k0, per, U.acl.cfg(acl, C.config.get_value(cfg, "requirepass"))}
     case MmOf{+n}:
       mm.cfg(n, cfg)
 
@@ -150,22 +158,22 @@ def mm.cfg(+m: Mm, +cfg: List<&2, C.CItem>) -> Mm:
 # KV.mix scrambles)
 def mm.rand(m: Mm) -> Mm:
   match m:
-    case Mm{rng, max, pol, smp, ten, lfl, lfd, kick, pool, next, debt}:
-      Mm{U32.add(rng, 2654435769), max, pol, smp, ten, lfl, lfd, kick, pool, next, debt}
+    case Mm{rng, max, pol, smp, ten, lfl, lfd, kick, pool, next, h0, k0, per, acl}:
+      Mm{U32.add(rng, 2654435769), max, pol, smp, ten, lfl, lfd, kick, pool, next, h0, k0, per, acl}
     case MmOf{n}:
       mm.rand(n)
 
 # lfu-log-factor and lfu-decay-time
 def mm.lfl(+m: Mm) -> Nat:
   match m:
-    case Mm{rng, max, pol, smp, ten, lfl, lfd, kick, pool, next, debt}:
+    case Mm{rng, max, pol, smp, ten, lfl, lfd, kick, pool, next, h0, k0, per, acl}:
       lfl
     case MmOf{+n}:
       mm.lfl(n)
 
 def mm.lfd(+m: Mm) -> Nat:
   match m:
-    case Mm{rng, max, pol, smp, ten, lfl, lfd, kick, pool, next, debt}:
+    case Mm{rng, max, pol, smp, ten, lfl, lfd, kick, pool, next, h0, k0, per, acl}:
       lfd
     case MmOf{+n}:
       mm.lfd(n)
@@ -175,63 +183,57 @@ def mm.lfu(+m: Mm) -> Bool:
   +p = mm.pol(m)
   Bool.or(Nat.is_eq(p, 3n), Nat.is_eq(p, 4n))
 
-# whether a CONFIG SET changed maxmemory, and the eviction's debt
+# whether a CONFIG SET changed maxmemory
 def mm.kick(+m: Mm) -> Bool:
   match m:
-    case Mm{rng, max, pol, smp, ten, lfl, lfd, kick, pool, next, debt}:
+    case Mm{rng, max, pol, smp, ten, lfl, lfd, kick, pool, next, h0, k0, per, acl}:
       kick
     case MmOf{+n}:
       mm.kick(n)
 
-def mm.debt(+m: Mm) -> Nat:
-  match m:
-    case Mm{rng, max, pol, smp, ten, lfl, lfd, kick, pool, next, debt}:
-      debt
-    case MmOf{+n}:
-      mm.debt(n)
-
-# what the actor does about memory, the heap's live bytes used: 0
-# nothing, within maxmemory (none for 0), less the debt; 1 see to a
-# CONFIG SET's change of maxmemory first; 2 evict
+# what the actor does about memory, the memory used as the eviction sees
+# it (the heap's live bytes, or mm.view while a job runs: server.bend,
+# mem.seen): 0 nothing, within maxmemory (none for 0); 1 see to a CONFIG
+# SET's change of maxmemory first; 2 evict
 def mm.what(+m: Mm, +used: Nat) -> Nat:
   match m:
-    case Mm{rng, +max, pol, smp, ten, lfl, lfd, +kick, pool, next, +debt}:
-      Bool.pick(Nat, kick, 1n, Bool.pick(Nat, Bool.and(Nat.is_lt(0n, max), Nat.is_lt(max, Nat.sub(used, debt))), 2n, 0n))
+    case Mm{rng, +max, pol, smp, ten, lfl, lfd, +kick, pool, next, h0, k0, per, acl}:
+      Bool.pick(Nat, kick, 1n, Bool.pick(Nat, Bool.and(Nat.is_lt(0n, max), Nat.is_lt(max, used)), 2n, 0n))
     case MmOf{+n}:
       mm.what(n, used)
 
 # the change of maxmemory seen to
 def mm.kicked(m: Mm) -> Mm:
   match m:
-    case Mm{rng, max, pol, smp, ten, lfl, lfd, kick, pool, next, debt}:
-      Mm{rng, max, pol, smp, ten, lfl, lfd, False{}, pool, next, debt}
+    case Mm{rng, max, pol, smp, ten, lfl, lfd, kick, pool, next, h0, k0, per, acl}:
+      Mm{rng, max, pol, smp, ten, lfl, lfd, False{}, pool, next, h0, k0, per, acl}
     case MmOf{n}:
       mm.kicked(n)
 
 def mm.smp(+m: Mm) -> Nat:
   match m:
-    case Mm{rng, max, pol, smp, ten, lfl, lfd, kick, pool, next, debt}:
+    case Mm{rng, max, pol, smp, ten, lfl, lfd, kick, pool, next, h0, k0, per, acl}:
       smp
     case MmOf{+n}:
       mm.smp(n)
 
 def mm.ten(+m: Mm) -> Nat:
   match m:
-    case Mm{rng, max, pol, smp, ten, lfl, lfd, kick, pool, next, debt}:
+    case Mm{rng, max, pol, smp, ten, lfl, lfd, kick, pool, next, h0, k0, per, acl}:
       ten
     case MmOf{+n}:
       mm.ten(n)
 
 def mm.next(+m: Mm) -> Nat:
   match m:
-    case Mm{rng, max, pol, smp, ten, lfl, lfd, kick, pool, next, debt}:
+    case Mm{rng, max, pol, smp, ten, lfl, lfd, kick, pool, next, h0, k0, per, acl}:
       next
     case MmOf{+n}:
       mm.next(n)
 
 def mm.pool(+m: Mm) -> List<&2, Pe>:
   match m:
-    case Mm{rng, max, pol, smp, ten, lfl, lfd, kick, pool, next, debt}:
+    case Mm{rng, max, pol, smp, ten, lfl, lfd, kick, pool, next, h0, k0, per, acl}:
       pool
     case MmOf{+n}:
       mm.pool(n)
@@ -243,8 +245,8 @@ type Mp is Data:
 
 def mm.pool.take(m: Mm) -> Mp:
   match m:
-    case Mm{rng, max, pol, smp, ten, lfl, lfd, kick, pool, next, debt}:
-      Mp{pool, Mm{rng, max, pol, smp, ten, lfl, lfd, kick, Nil{}, next, debt}}
+    case Mm{rng, max, pol, smp, ten, lfl, lfd, kick, pool, next, h0, k0, per, acl}:
+      Mp{pool, Mm{rng, max, pol, smp, ten, lfl, lfd, kick, Nil{}, next, h0, k0, per, acl}}
     case MmOf{x}:
       mm.pool.take(x)
 
@@ -256,33 +258,124 @@ def mm.step(+rng: U32, +n: Nat) -> U32:
 # random (the database it picked from), of n databases
 def mm.pool.set(m: Mm, ps: List<&2, Pe>, +n: Nat) -> Mm:
   match m:
-    case Mm{+rng, max, pol, smp, ten, lfl, lfd, kick, pool, next, debt}:
-      Mm{mm.step(rng, n), max, pol, smp, ten, lfl, lfd, kick, ps, next, debt}
+    case Mm{+rng, max, pol, smp, ten, lfl, lfd, kick, pool, next, h0, k0, per, acl}:
+      Mm{mm.step(rng, n), max, pol, smp, ten, lfl, lfd, kick, ps, next, h0, k0, per, acl}
     case MmOf{x}:
       mm.pool.set(x, ps, n)
 
 def mm.next.set(m: Mm, +j: Nat, +n: Nat) -> Mm:
   match m:
-    case Mm{+rng, max, pol, smp, ten, lfl, lfd, kick, pool, next, debt}:
-      Mm{mm.step(rng, n), max, pol, smp, ten, lfl, lfd, kick, pool, j, debt}
+    case Mm{+rng, max, pol, smp, ten, lfl, lfd, kick, pool, next, h0, k0, per, acl}:
+      Mm{mm.step(rng, n), max, pol, smp, ten, lfl, lfd, kick, pool, j, h0, k0, per, acl}
     case MmOf{x}:
       mm.next.set(x, j, n)
 
-# b bytes more of debt (a key evicted while a rewrite runs)
-def mm.owe(m: Mm, +b: Nat) -> Mm:
+# A rewrite of the append-only file or a background save took its
+# snapshot when the heap's used bytes were h and the databases held k
+# keys, per bytes each on average. While it runs, a key that a write
+# replaces or deletes stays in the snapshot, and so in the heap, where
+# Redis's parent lets it go (its child's pages are copied on write, and
+# its used_memory never counts them): so the eviction, and the refusal of
+# writes past maxmemory, see the heap at the snapshot, per bytes more for
+# each key made since and as many less for each key gone since (mm.view),
+# at most the heap itself (server.bend, mem.seen). A value that grows in
+# place counts once the job has ended, when the heap is read as it is.
+def mm.snap(m: Mm, +h: Nat, +k: Nat, +p: Nat) -> Mm:
   match m:
-    case Mm{rng, max, pol, smp, ten, lfl, lfd, kick, pool, next, +debt}:
-      Mm{rng, max, pol, smp, ten, lfl, lfd, kick, pool, next, Nat.add(debt, b)}
+    case Mm{rng, max, pol, smp, ten, lfl, lfd, kick, pool, next, h0, k0, per, acl}:
+      Mm{rng, max, pol, smp, ten, lfl, lfd, kick, pool, next, h, k, p, acl}
     case MmOf{x}:
-      mm.owe(x, b)
+      mm.snap(x, h, k, p)
 
-# the debt paid: the rewrite whose snapshot held what eviction freed ended
-def mm.paid(m: Mm) -> Mm:
+# a bound past any maxmemory (mm.nat.of): a product past it is that
+# bound, as a Nat past 2^48 would stop the process (a match, not
+# Bool.pick, which would make the product all the same)
+def mm.cap() -> Nat:
+  Nat.mul(1000000000n, 100000n)
+
+def mm.times.if(ok: Bool, +a: Nat, +b: Nat) -> Nat:
+  match ok:
+    case True{}:
+      Nat.mul(a, b)
+    case False{}:
+      mm.cap()
+
+def mm.times(+a: Nat, +b: Nat) -> Nat:
+  mm.times.if(Nat.is_le(a, Nat.div(mm.cap(), Nat.max(b, 1n))), a, b)
+
+# the memory with k keys while the job runs: per bytes more than at the
+# snapshot for each key past k0 there, less for each key short of it (no
+# more than the snapshot's keys held: k0 * per is the heap's share of
+# them, at most h0)
+def mm.view.of(up: Bool, +h0: Nat, +k0: Nat, +per: Nat, +k: Nat) -> Nat:
+  match up:
+    case True{}:
+      Nat.add(h0, mm.times(Nat.sub(k, k0), per))
+    case False{}:
+      Nat.sub(h0, Nat.mul(Nat.sub(k0, k), per))
+
+def mm.view(+m: Mm, +k: Nat) -> Nat:
   match m:
-    case Mm{rng, max, pol, smp, ten, lfl, lfd, kick, pool, next, debt}:
-      Mm{rng, max, pol, smp, ten, lfl, lfd, kick, pool, next, 0n}
+    case Mm{rng, max, pol, smp, ten, lfl, lfd, kick, pool, next, +h0, +k0, +per, acl}:
+      mm.view.of(Nat.is_le(k0, k), h0, k0, per, k)
+    case MmOf{+n}:
+      mm.view(n, k)
+
+# the users, and the server with them changed
+def mm.acl(+m: Mm) -> U.Acl:
+  match m:
+    case Mm{rng, max, pol, smp, ten, lfl, lfd, kick, pool, next, h0, k0, per, +acl}:
+      acl
+    case MmOf{+n}:
+      mm.acl(n)
+
+def mm.acl.set(m: Mm, a: U.Acl) -> Mm:
+  match m:
+    case Mm{rng, max, pol, smp, ten, lfl, lfd, kick, pool, next, h0, k0, per, acl}:
+      Mm{rng, max, pol, smp, ten, lfl, lfd, kick, pool, next, h0, k0, per, a}
     case MmOf{n}:
-      mm.paid(n)
+      mm.acl.set(n, a)
+
+# The users read in place, for the checks of each batch and call. A
+# function that gives the users back (mm.acl, srv.acl) shares them with
+# the server, and the server's next change then copies its state: the
+# fast way's test that the default user is open cost a batch about 1,700
+# instructions so (PERFORMANCE 70). These go down the fields and give
+# back only what they read.
+def mm.open(+m: Mm) -> Bool:
+  match m:
+    case Mm{rng, max, pol, smp, ten, lfl, lfd, kick, pool, next, h0, k0, per, +acl}:
+      U.acl.open(acl)
+    case MmOf{+n}:
+      mm.open(n)
+
+def mm.restricted(+m: Mm, +id: Nat) -> Bool:
+  match m:
+    case Mm{rng, max, pol, smp, ten, lfl, lfd, kick, pool, next, h0, k0, per, +acl}:
+      U.acl.restricted(acl, id)
+    case MmOf{+n}:
+      mm.restricted(n, id)
+
+def mm.acl.any(+m: Mm) -> Bool:
+  match m:
+    case Mm{rng, max, pol, smp, ten, lfl, lfd, kick, pool, next, h0, k0, per, +acl}:
+      U.acl.any(acl)
+    case MmOf{+n}:
+      mm.acl.any(n)
+
+def mm.acl.check(+m: Mm, +n: String, +k: Nat, +argv: List<&2, String>) -> U.Verdict:
+  match m:
+    case Mm{rng, max, pol, smp, ten, lfl, lfd, kick, pool, next, h0, k0, per, +acl}:
+      U.acl.check(acl, n, k, argv)
+    case MmOf{+x}:
+      mm.acl.check(x, n, k, argv)
+
+def mm.acl.sort(+m: Mm, +n: String, +k: Nat, +argv: List<&2, String>) -> Maybe<&2, String>:
+  match m:
+    case Mm{rng, max, pol, smp, ten, lfl, lfd, kick, pool, next, h0, k0, per, +acl}:
+      U.acl.sort.err(acl, n, k, argv)
+    case MmOf{+x}:
+      mm.acl.sort(x, n, k, argv)
 
 # Access
 # ------
@@ -364,12 +457,18 @@ def acc.idle(+w: U32, +now: Nat, +start: U32) -> Nat:
   +l = U32.and(w, 16777215)
   Bool.pick(Nat, U32.is_ne(w, 0), U32.to_nat(Bool.pick(U32, U32.is_le(l, c), U32.sub(c, l), U32.sub(U32.add(c, 16777215), l))), Nat.sub(Nat.div(now, 1000n), U32.to_nat(start)))
 
-# the server with these parameters: its password is requirepass; its
-# random numbers start from its run id
+# INFO's facts with the timing's parameters read again (info.bend,
+# Timing: slowlog-log-slower-than, slowlog-max-len,
+# latency-monitor-threshold, latency-tracking)
+def srv.timing(i: I.Info, +cfg: List<&2, C.CItem>) -> I.Info:
+  I.info.cfg(i, cfg)
+
+# the server with these parameters: its default user's password is
+# requirepass; its random numbers start from its run id
 def srv_of(+cfg: List<&2, C.CItem>, info: I.Info) -> Srv:
   +i = info
   +r = I.info.seed(i)
-  Srv{C.config.get_value(cfg, "requirepass"), cfg, i, mm.of(r, cfg)}
+  Srv{C.config.get_value(cfg, "requirepass"), cfg, srv.timing(i, cfg), mm.of(r, cfg, I.info.key(i))}
 
 def srv.puts(sets: List<&2, String>, cfg: List<&2, C.CItem>) -> List<&2, C.CItem>:
   match sets:
@@ -469,6 +568,12 @@ def srv.ran(s: Srv, +calls: Nat, +r: Nat, rs: List<&2, Nat>, +inb: Nat, +outb: N
     case Srv{pass, cfg, info, mm}:
       Srv{pass, cfg, I.info.ran(info, calls, r, rs, inb, outb), mm}
 
+# the same, with the batch's d changes (the count of changes)
+def srv.ran.d(s: Srv, +calls: Nat, +r: Nat, rs: List<&2, Nat>, +inb: Nat, +outb: Nat, +d: Nat) -> Srv:
+  match s:
+    case Srv{pass, cfg, info, mm}:
+      Srv{pass, cfg, I.info.ran.d(info, calls, r, rs, inb, outb, d), mm}
+
 def srv.errs(s: Srv, xs: List<&2, R.Erred>) -> Srv:
   match s:
     case Srv{pass, cfg, info, mm}:
@@ -516,12 +621,140 @@ def srv.rw.later(s: Srv) -> Srv:
 def srv.rw.done(s: Srv, +size: Nat, +ms: Nat) -> Srv:
   match s:
     case Srv{pass, cfg, info, mm}:
-      Srv{pass, cfg, I.info.rw.done(info, size, ms), mm.paid(mm)}
+      Srv{pass, cfg, I.info.rw.done(info, size, ms), mm}
 
 def srv.rw.failed(s: Srv, +ms: Nat) -> Srv:
   match s:
     case Srv{pass, cfg, info, mm}:
-      Srv{pass, cfg, I.info.rw.failed(info, ms), mm.paid(mm)}
+      Srv{pass, cfg, I.info.rw.failed(info, ms), mm}
+
+# the rewrite that runs stopped (a SHUTDOWN whose save failed)
+def srv.rw.stop(s: Srv) -> Srv:
+  match s:
+    case Srv{pass, cfg, info, mm}:
+      Srv{pass, cfg, I.info.rw.stop(info), mm}
+
+# The RDB file (info.bend: Rdb; server.bend: The RDB file): a SAVE
+# counted as it runs; a save that ended, well or not, at the second secs;
+# the keys the start loaded and those it found expired; a FLUSHALL's save
+# asked for (on) or done, and whether one is; a SHUTDOWN's save, the same
+def srv.rdb.save(s: Srv) -> Srv:
+  match s:
+    case Srv{pass, cfg, info, mm}:
+      Srv{pass, cfg, I.info.rdb.save(info), mm}
+
+def srv.rdb.saved(s: Srv, +well: Bool, +secs: Nat) -> Srv:
+  match s:
+    case Srv{pass, cfg, info, mm}:
+      Srv{pass, cfg, I.info.rdb.saved(info, well, secs), mm}
+
+def srv.rdb.loaded(s: Srv, +ld: Nat, +ex: Nat) -> Srv:
+  match s:
+    case Srv{pass, cfg, info, mm}:
+      Srv{pass, cfg, I.info.rdb.loaded(info, ld, ex), mm}
+
+def srv.rdb.flushed(s: Srv, +on: Bool) -> Srv:
+  match s:
+    case Srv{pass, cfg, info, mm}:
+      Srv{pass, cfg, I.info.rdb.flushed(info, on), mm}
+
+def srv.rdb.flush(+s: Srv) -> Bool:
+  match s:
+    case Srv{pass, cfg, +info, mm}:
+      I.info.rdb.flush(info)
+
+def srv.rdb.owed(+s: Srv) -> Bool:
+  match s:
+    case Srv{pass, cfg, +info, mm}:
+      I.info.rdb.owed(info)
+
+def srv.rdb.paid(s: Srv) -> Srv:
+  match s:
+    case Srv{pass, cfg, info, mm}:
+      Srv{pass, cfg, I.info.rdb.paid(info), mm}
+
+def srv.rdb.shutting(s: Srv, +on: Bool) -> Srv:
+  match s:
+    case Srv{pass, cfg, info, mm}:
+      Srv{pass, cfg, I.info.rdb.shutting(info, on), mm}
+
+def srv.rdb.shut(+s: Srv) -> Bool:
+  match s:
+    case Srv{pass, cfg, +info, mm}:
+      I.info.rdb.shut(info)
+
+# the count of changes and the background saves (info.bend: Rdb, Bgs;
+# server.bend: The count of changes, Background saves): the record, lent;
+# d more changes; a SAVE that ended (well: none are left); a FLUSHALL's
+# save asked for, and made; a background save started at the second now,
+# of a snapshot of total keys (snap: a group's BGSAVE took it for the
+# shell; unsched: it is the one scheduled), with the parameters it keeps
+# from then (I.BgCf); one scheduled; the snapshot taken by the shell; k
+# keys written; the save dropped once the group is answered (FLUSHALL);
+# the save ended, well or not, or dropped, at the second now
+def srv.rdb(+s: Srv) -> I.Rdb:
+  match s:
+    case Srv{pass, cfg, +info, mm}:
+      I.info.rdb(info)
+
+def srv.dirtied(s: Srv, +d: Nat) -> Srv:
+  match s:
+    case Srv{pass, cfg, info, mm}:
+      Srv{pass, cfg, I.info.dirtied(info, d), mm}
+
+def srv.rdb.clean(s: Srv, +well: Bool) -> Srv:
+  match s:
+    case Srv{pass, cfg, info, mm}:
+      Srv{pass, cfg, I.info.rdb.clean(info, well), mm}
+
+def srv.rdb.flush.mark(s: Srv) -> Srv:
+  match s:
+    case Srv{pass, cfg, info, mm}:
+      Srv{pass, cfg, I.info.rdb.flush.mark(info), mm}
+
+def srv.rdb.flush.done(s: Srv, +well: Bool) -> Srv:
+  match s:
+    case Srv{pass, cfg, info, mm}:
+      Srv{pass, cfg, I.info.rdb.flush.done(info, well), mm}
+
+def srv.bg.go(s: Srv, +now: Nat, +total: Nat, snap: Maybe<&2, List<&2, R.Db>>, +unsched: Bool) -> Srv:
+  match s:
+    case Srv{pass, +cfg, info, mm}:
+      Srv{pass, cfg, I.info.bg.go(info, now, total, snap, unsched, I.bgcf.of(cfg)), mm}
+
+def srv.bg.later(s: Srv) -> Srv:
+  match s:
+    case Srv{pass, cfg, info, mm}:
+      Srv{pass, cfg, I.info.bg.later(info), mm}
+
+def srv.bg.taken.of(p: Maybe<&2, List<&2, R.Db>> & I.Info, +pass: String, +cfg: List<&2, C.CItem>, mm: Mm) -> Maybe<&2, List<&2, R.Db>> & Srv:
+  (m, info) = p
+  (m, Srv{pass, cfg, info, mm})
+
+def srv.bg.taken(s: Srv) -> Maybe<&2, List<&2, R.Db>> & Srv:
+  match s:
+    case Srv{+pass, +cfg, info, mm}:
+      srv.bg.taken.of(I.info.bg.taken(info), pass, cfg, mm)
+
+def srv.bg.wrote(s: Srv, +k: Nat) -> Srv:
+  match s:
+    case Srv{pass, cfg, info, mm}:
+      Srv{pass, cfg, I.info.bg.wrote(info, k), mm}
+
+def srv.bg.killing(s: Srv) -> Srv:
+  match s:
+    case Srv{pass, cfg, info, mm}:
+      Srv{pass, cfg, I.info.bg.killing(info), mm}
+
+def srv.bg.end(s: Srv, +well: Bool, +now: Nat) -> Srv:
+  match s:
+    case Srv{pass, cfg, info, mm}:
+      Srv{pass, cfg, I.info.bg.end(info, well, now), mm}
+
+def srv.bg.drop(s: Srv, +now: Nat) -> Srv:
+  match s:
+    case Srv{pass, cfg, info, mm}:
+      Srv{pass, cfg, I.info.bg.drop(info, now), mm}
 
 # an eviction at now that deleted k keys and left the heap past
 # maxmemory or not (over)
@@ -530,8 +763,18 @@ def srv.evicted(s: Srv, +k: Nat, +over: Bool, +now: Nat) -> Srv:
     case Srv{pass, cfg, info, mm}:
       Srv{pass, cfg, I.info.evicted(info, k, over, now), mm}
 
-def srv.debt(+s: Srv) -> Nat:
-  mm.debt(srv.mm(s))
+# a job took its snapshot when the heap's used bytes were used and the
+# databases held k keys (mm.snap): each key held, on average, the heap's
+# bytes past those it held at the start (INFO's used_memory_startup),
+# none without keys
+def srv.snap(s: Srv, +used: Nat, +k: Nat) -> Srv:
+  match s:
+    case Srv{pass, cfg, +info, mm}:
+      Srv{pass, cfg, info, mm.snap(mm, used, k, Bool.pick(Nat, Nat.is_eq(k, 0n), 0n, Nat.div(Nat.sub(used, I.info.heap0(info)), Nat.max(k, 1n))))}
+
+# the memory as the eviction sees it while a job runs, with k keys
+def srv.view(+s: Srv, +k: Nat) -> Nat:
+  mm.view(srv.mm(s), k)
 
 def srv.mem.what(+s: Srv, +used: Nat) -> Nat:
   match s:
@@ -571,6 +814,19 @@ def srv.live(s: Srv, l: I.Live) -> Srv:
     case Srv{pass, cfg, info, mm}:
       Srv{pass, cfg, I.info.live(info, l), mm}
 
+# the heap's used and active bytes as the actor read them
+# (I.info.heap); and new facts from the shell that leave that reading as
+# it is
+def srv.heap(s: Srv, +h: Nat, +ac: Nat) -> Srv:
+  match s:
+    case Srv{pass, cfg, info, mm}:
+      Srv{pass, cfg, I.info.heap(info, h, ac), mm}
+
+def srv.live.held(s: Srv, l: I.Live) -> Srv:
+  match s:
+    case Srv{pass, cfg, info, mm}:
+      Srv{pass, cfg, I.info.live.held(info, l), mm}
+
 def srv.tick(s: Srv, +ms: Nat) -> Srv:
   match s:
     case Srv{pass, cfg, info, mm}:
@@ -589,6 +845,61 @@ def srv.blocked(s: Srv, +n: Nat, +t: Nat) -> Srv:
     case Srv{pass, cfg, info, mm}:
       Srv{pass, cfg, I.info.blocked(info, n, t), mm}
 
+# the tracking's counts, for INFO (server.bend: Tracking)
+def srv.tracking(s: Srv, +a: Nat, +b: Nat, +d: Nat, +e: Nat) -> Srv:
+  match s:
+    case Srv{pass, cfg, info, mm}:
+      Srv{pass, cfg, I.info.tracking(info, a, b, d, e), mm}
+
+# The timing of calls (info.bend: Timing a window): the window since the
+# clock's last reading timed, with the slow log's entries it found for
+# the shell to complete; the call of the general way about to run named,
+# and blocking; a client served after it waited, or gone; an entry of the
+# slow log
+type Tw is Data:
+  Tw{srv: Srv, js: List<&2, I.SlowJ>}
+
+def srv.tw(+pass: String, cfg: List<&2, C.CItem>, t: I.Timed, mm: Mm) -> Tw:
+  match t:
+    case I.Timed{i, js}:
+      Tw{Srv{pass, cfg, i, mm}, js}
+
+def srv.window(s: Srv, +d: Nat, +id: Nat, raw: String, +now: Nat) -> Tw:
+  match s:
+    case Srv{pass, cfg, info, mm}:
+      srv.tw(pass, cfg, I.info.window(info, d, id, raw, now), mm)
+
+def srv.call(s: Srv, +id: Nat, arg: I.Arg) -> Srv:
+  match s:
+    case Srv{pass, cfg, info, mm}:
+      Srv{pass, cfg, I.info.call(info, id, arg), mm}
+
+def srv.blk(s: Srv) -> Srv:
+  match s:
+    case Srv{pass, cfg, info, mm}:
+      Srv{pass, cfg, I.info.blk(info), mm}
+
+def srv.served(s: Srv, +id: Nat) -> Srv:
+  match s:
+    case Srv{pass, cfg, info, mm}:
+      Srv{pass, cfg, I.info.served(info, id), mm}
+
+def srv.gone(s: Srv, +id: Nat) -> Srv:
+  match s:
+    case Srv{pass, cfg, info, mm}:
+      Srv{pass, cfg, I.info.gone(info, id), mm}
+
+def srv.slow(s: Srv, +us: Nat, +at: Nat, +xs: List<&2, String>, +peer: String, +name: String) -> Srv:
+  match s:
+    case Srv{pass, cfg, info, mm}:
+      Srv{pass, cfg, I.info.slow(info, us, at, xs, peer, name), mm}
+
+# a latency of ms of event name at second now, for the latency monitor
+def srv.lat(s: Srv, +name: String, +ms: Nat, +now: Nat) -> Srv:
+  match s:
+    case Srv{pass, cfg, info, mm}:
+      Srv{pass, cfg, I.info.lat(info, name, ms, now), mm}
+
 # the sweep of expired keys (redis.bend: reap): where the next one starts
 # in database j, and a sweep of j that stopped at next having deleted k
 # keys
@@ -604,17 +915,75 @@ def srv.reaped(s: Srv, +j: Nat, +next: Nat, +k: Nat) -> Srv:
 
 # Authentication
 # --------------
-# A client must authenticate when the server has a password; a client
-# that has run a command while the server had none has authenticated, as
-# in Redis, where a client is authenticated from the start when there is
-# no password.
+# A client must authenticate when the server has a password: its default
+# user (acl.bend) is off, or takes only its passwords. A client that has
+# run a command while it needed none has authenticated, as in Redis,
+# where a client is authenticated from the start when the default user is
+# on and takes any password (Redis's authRequired). AUTH and HELLO's AUTH
+# log a client in as a user (which the server keeps: server.bend, ACL).
 
-# whether the server has no password (String.length reads a packed
-# String where it lies; String.is_empty would take it apart)
-def nopass(+s: Srv) -> Bool:
+# the users, and the server with them changed
+def srv.acl(+s: Srv) -> U.Acl:
+  mm.acl(srv.mm(s))
+
+def srv.acl.set(s: Srv, a: U.Acl) -> Srv:
   match s:
-    case Srv{+pass, cfg, info, mm}:
-      Nat.is_eq(String.length(pass), 0n)
+    case Srv{pass, cfg, info, mm}:
+      Srv{pass, cfg, info, mm.acl.set(mm, a)}
+
+# the users read in place (mm.open): whether the default user is open,
+# whether the client of id is restricted, whether some client is, a call
+# of the user of name n checked, and SORT's check of its BY and GET
+def srv.open(+s: Srv) -> Bool:
+  match s:
+    case Srv{pass, cfg, info, +mm}:
+      mm.open(mm)
+
+def srv.restricted(+s: Srv, +id: Nat) -> Bool:
+  match s:
+    case Srv{pass, cfg, info, +mm}:
+      mm.restricted(mm, id)
+
+def srv.acl.any(+s: Srv) -> Bool:
+  match s:
+    case Srv{pass, cfg, info, +mm}:
+      mm.acl.any(mm)
+
+def srv.acl.check(+s: Srv, +n: String, +k: Nat, +argv: List<&2, String>) -> U.Verdict:
+  match s:
+    case Srv{pass, cfg, info, +mm}:
+      mm.acl.check(mm, n, k, argv)
+
+def srv.acl.sort(+s: Srv, +n: String, +k: Nat, +argv: List<&2, String>) -> Maybe<&2, String>:
+  match s:
+    case Srv{pass, cfg, info, +mm}:
+      mm.acl.sort(mm, n, k, argv)
+
+# the client of id now the user of name n, among the restricted clients or
+# not (acl.bend: Restricted clients), and the client of id gone
+def srv.acl.client(s: Srv, +id: Nat, +n: String) -> Srv:
+  +s0 = s
+  srv.acl.set(s0, U.acl.client(srv.acl(s0), id, n))
+
+def srv.acl.left(s: Srv, +id: Nat) -> Srv:
+  +s0 = s
+  srv.acl.set(s0, U.acl.client.gone(srv.acl(s0), id))
+
+# a client gone (its connection's end): its counts (srv.gone), and out of
+# the restricted clients
+def srv.left(s: Srv, +id: Nat) -> Srv:
+  srv.acl.left(srv.gone(s, id), id)
+
+# the users ACL DELUSER removed forgotten, once the server closed their
+# clients
+def srv.acl.cleared(s: Srv) -> Srv:
+  +s0 = s
+  srv.acl.set(s0, U.acl.gone.clear(srv.acl(s0)))
+
+# whether the server has no password: its default user is on and takes
+# any password
+def nopass(+s: Srv) -> Bool:
+  srv.open(s)
 
 def authed(+c: Conn, +s: Srv) -> Bool:
   Bool.or(conn.auth(c), nopass(s))
@@ -628,10 +997,17 @@ def authed.of(+auth: Bool, +s: Srv) -> Bool:
 def conn_join(+id: Nat, +s: Srv) -> Conn:
   Conn{id, nopass(s), "", MOn{}, False{}, 0n, False{}}
 
-# a user and a password: the one user is "default", and without a
-# password any password is its own
-def login_ok(+u: String, +p: String, +s: Srv) -> Bool:
-  Bool.and(String.eq(u, "default"), Bool.or(nopass(s), String.eq(p, srv.pass(s))))
+# whether a user takes a password: it is there, on, and takes any
+# password or has this one (Redis's ACLCheckUserCredentials). AUTH's and
+# HELLO's passwords come as their SHA-256 (R.parse_sess hashes them), so
+# h is a hash, which the user's are compared with
+def login_ok(+u: String, +h: String, +s: Srv) -> Bool:
+  U.acl.login(srv.acl(s), u, h)
+
+# whether the default user takes any password, on or off: AUTH with a
+# password alone is then an error
+def dflt_nopass(+s: Srv) -> Bool:
+  U.acl.dflt.nopass(srv.acl(s))
 
 def e_wrongpass() -> R.Reply:
   R.RError{"WRONGPASS invalid username-password pair or user is disabled."}
@@ -693,6 +1069,20 @@ def name_ok(s: String) -> Bool:
 def e_name() -> R.Reply:
   R.RError{"ERR Client names cannot contain spaces, newlines or special characters."}
 
+# the user an AUTH logs its client in as (LgIn), or tries and fails as
+# (LgFail: WRONGPASS, which the ACL LOG counts); none for its other errors
+type Login is Data:
+  LgIn{user: String}
+  LgFail{user: String}
+  LgNone{}
+
+def login.of(ok: Bool, +u: String) -> Login:
+  match ok:
+    case True{}:
+      LgIn{u}
+    case False{}:
+      LgFail{u}
+
 # HELLO [protover [AUTH user pass] [SETNAME name]]: the protocol (2 or
 # 3; none keeps the one there is), then the options, in order; each one
 # done stays done when a later one fails, as in Redis. The protocol
@@ -710,53 +1100,58 @@ type Want is Data:
   WFail{r: R.Reply}
 
 # the state of a HELLO: what it waits for, the connection's
-# authentication and name, and the protocol it asks for (RESP3 or not)
+# authentication and name, the protocol it asks for (RESP3 or not), and
+# what its AUTHs did, the last first (an AUTH that fails is the last)
 type Hel is Data:
-  Hel{w: Want, auth: Bool, name: String, r3: Bool}
+  Hel{w: Want, auth: Bool, name: String, r3: Bool, who: List<&2, Login>}
 
-def hello.opt(a: String, auth: Bool, name: String, r3: Bool, au: Bool, sn: Bool) -> Hel:
+def hello.opt(a: String, auth: Bool, name: String, r3: Bool, who: List<&2, Login>, au: Bool, sn: Bool) -> Hel:
   match au sn:
     case True{} _:
-      Hel{WUser{}, auth, name, r3}
+      Hel{WUser{}, auth, name, r3, who}
     case False{} True{}:
-      Hel{WName{}, auth, name, r3}
+      Hel{WName{}, auth, name, r3, who}
     case False{} False{}:
-      Hel{WFail{R.RError{R.e_fmt("ERR Syntax error in HELLO option '" ++ R.cstr(a) ++ "'")}}, auth, name, r3}
+      Hel{WFail{R.RError{R.e_fmt("ERR Syntax error in HELLO option '" ++ R.cstr(a) ++ "'")}}, auth, name, r3, who}
 
-def hello.pass(ok: Bool, auth: Bool, name: String, r3: Bool) -> Hel:
+def hello.pass(ok: Bool, auth: Bool, name: String, r3: Bool, who: List<&2, Login>, +u: String) -> Hel:
   match ok:
     case True{}:
-      Hel{WOpt{}, True{}, name, r3}
+      Hel{WOpt{}, True{}, name, r3, LgIn{u} <> who}
     case False{}:
-      Hel{WFail{e_wrongpass()}, auth, name, r3}
+      Hel{WFail{e_wrongpass()}, auth, name, r3, LgFail{u} <> who}
 
-def hello.name(ok: Bool, auth: Bool, name: String, n: String, r3: Bool) -> Hel:
+def hello.name(ok: Bool, auth: Bool, name: String, n: String, r3: Bool, who: List<&2, Login>) -> Hel:
   match ok:
     case True{}:
-      Hel{WOpt{}, auth, n, r3}
+      Hel{WOpt{}, auth, n, r3, who}
     case False{}:
-      Hel{WFail{e_name()}, auth, name, r3}
+      Hel{WFail{e_name()}, auth, name, r3, who}
 
 # one argument of HELLO's options, n the number of those after it
 def hello.step(+s: Srv, h: Hel, +a: String, +n: Nat) -> Hel:
   match h:
-    case Hel{WOpt{}, auth, name, r3}:
-      hello.opt(a, auth, name, r3, Bool.and(R.is_word(a, "AUTH"), Nat.is_le(2n, n)), Bool.and(R.is_word(a, "SETNAME"), Nat.is_le(1n, n)))
-    case Hel{WUser{}, auth, name, r3}:
-      Hel{WPass{a}, auth, name, r3}
-    case Hel{WPass{+u}, auth, name, r3}:
-      hello.pass(login_ok(u, a, s), auth, name, r3)
-    case Hel{WName{}, auth, name, r3}:
-      hello.name(name_ok(a), auth, name, a, r3)
-    case Hel{WFail{r}, auth, name, r3}:
-      Hel{WFail{r}, auth, name, r3}
+    case Hel{WOpt{}, auth, name, r3, who}:
+      hello.opt(a, auth, name, r3, who, Bool.and(R.is_word(a, "AUTH"), Nat.is_le(2n, n)), Bool.and(R.is_word(a, "SETNAME"), Nat.is_le(1n, n)))
+    case Hel{WUser{}, auth, name, r3, who}:
+      Hel{WPass{a}, auth, name, r3, who}
+    case Hel{WPass{+u}, auth, name, r3, who}:
+      hello.pass(login_ok(u, a, s), auth, name, r3, who, u)
+    case Hel{WName{}, auth, name, r3, who}:
+      hello.name(name_ok(a), auth, name, a, r3, who)
+    case Hel{WFail{r}, auth, name, r3, who}:
+      Hel{WFail{r}, auth, name, r3, who}
 
-def hello.go(+s: Srv, args: List<&2, String>, h: Hel) -> Hel:
+# HELLO's options from args on, n of them
+def hello.go(+s: Srv, +args: List<&2, String>, +n: Nat, h: Hel) -> Hel:
   match args:
     case Nil{}:
       h
     case Con{+a, +rest}:
-      hello.go(s, rest, hello.step(s, h, a, List.length(&2, String, rest)))
+      hello.go(s, rest, Nat.sub(n, 1n), hello.step(s, h, a, Nat.sub(n, 1n)))
+
+def hello.opts(+s: Srv, +opts: List<&2, String>, h: Hel) -> Hel:
+  hello.go(s, opts, List.length(&2, String, opts), h)
 
 # HELLO's reply: the server, as Redis 7.0.15 describes itself, in the
 # protocol it switched to
@@ -765,9 +1160,9 @@ def hello.map(id: Nat, r3: Bool) -> R.Reply:
 
 def hello.fin(h: Hel, id: Nat, nopass: Bool) -> R.Reply:
   match h:
-    case Hel{WFail{r}, auth, name, r3}:
+    case Hel{WFail{r}, auth, name, r3, who}:
       r
-    case Hel{w, auth, name, r3}:
+    case Hel{w, auth, name, r3, who}:
       Bool.pick(R.Reply, Bool.or(auth, nopass), hello.map(id, r3), R.RError{"NOAUTH HELLO must be called with the client already authenticated, otherwise the HELLO AUTH <user> <pass> option can be used to authenticate the client and select the RESP protocol version at the same time"})
 
 # the protocol version, a long long as Redis reads one: none, 2, 3, or
@@ -795,11 +1190,11 @@ def hello.args(args: List<&2, String>) -> Ver & List<&2, String>:
 def hello.run.if(+s: Srv, +c: Conn, v: Ver, opts: List<&2, String>) -> Hel:
   match v:
     case VerBad{r}:
-      Hel{WFail{r}, conn.auth(c), conn.name(c), conn.r3(c)}
+      Hel{WFail{r}, conn.auth(c), conn.name(c), conn.r3(c), Nil{}}
     case VerOk{r3}:
-      hello.go(s, opts, Hel{WOpt{}, conn.auth(c), conn.name(c), r3})
+      hello.opts(s, opts, Hel{WOpt{}, conn.auth(c), conn.name(c), r3, Nil{}})
     case VerNone{}:
-      hello.go(s, opts, Hel{WOpt{}, conn.auth(c), conn.name(c), conn.r3(c)})
+      hello.opts(s, opts, Hel{WOpt{}, conn.auth(c), conn.name(c), conn.r3(c), Nil{}})
 
 def hello.run.of(+s: Srv, +c: Conn, p: Ver & List<&2, String>) -> Hel:
   (v, opts) = p
@@ -821,9 +1216,20 @@ def hello.ok(+w: Want, +auth: Bool, +s: Srv) -> Bool:
 
 def hello.conn(h: Hel, +c: Conn, +s: Srv) -> Conn:
   match h c:
-    case Hel{+w, auth, name, h3} Conn{id, a, n, mode, quit, db, r3}:
+    case Hel{+w, auth, name, h3, who} Conn{id, a, n, mode, quit, db, r3}:
       +au = Bool.or(auth, a)
       Conn{id, au, name, after(mode), quit, db, Bool.pick(Bool, hello.ok(w, au, s), h3, r3)}
+
+# what a HELLO's AUTHs did, the last first: the server logs its client in
+# as the user of the last that did, and the ACL LOG counts one that
+# failed (server.bend, ACL)
+def hello.who(h: Hel) -> List<&2, Login>:
+  match h:
+    case Hel{w, auth, name, r3, who}:
+      who
+
+def hello.logins(+s: Srv, +c: Conn, args: List<&2, String>) -> List<&2, Login>:
+  hello.who(hello.run(s, c, args))
 
 # AUTH [user] password
 def auth.one(nopass: Bool, ok: Bool) -> R.Reply:
@@ -836,7 +1242,7 @@ def auth.one(nopass: Bool, ok: Bool) -> R.Reply:
 def auth.reply(+args: List<&2, String>, +s: Srv) -> R.Reply:
   match args:
     case Con{+p, Nil{}}:
-      auth.one(nopass(s), String.eq(p, srv.pass(s)))
+      auth.one(dflt_nopass(s), login_ok("default", p, s))
     case Con{+u, Con{+p, Nil{}}}:
       Bool.pick(R.Reply, login_ok(u, p, s), R.r_ok(), e_wrongpass())
     case _:
@@ -845,7 +1251,7 @@ def auth.reply(+args: List<&2, String>, +s: Srv) -> R.Reply:
 def auth.ok(+args: List<&2, String>, +s: Srv) -> Bool:
   match args:
     case Con{+p, Nil{}}:
-      Bool.and(Bool.not(nopass(s)), String.eq(p, srv.pass(s)))
+      Bool.and(Bool.not(dflt_nopass(s)), login_ok("default", p, s))
     case Con{+u, Con{+p, Nil{}}}:
       login_ok(u, p, s)
     case _:
@@ -857,6 +1263,15 @@ def auth.conn(ok: Bool, +c: Conn, +s: Srv) -> Conn:
       Conn{id, True{}, name, after(mode), quit, db, r3}
     case False{} c0:
       step_conn(c0, s)
+
+def auth.login(+args: List<&2, String>, +s: Srv) -> Login:
+  match args:
+    case Con{+p, Nil{}}:
+      Bool.pick(Login, dflt_nopass(s), LgNone{}, login.of(login_ok("default", p, s), "default"))
+    case Con{+u, Con{+p, Nil{}}}:
+      login.of(login_ok(u, p, s), u)
+    case _:
+      LgNone{}
 
 # Blocking commands
 # -----------------
@@ -1107,6 +1522,10 @@ def blk.shape(+form: Nat, r: R.Reply) -> R.Reply:
       R.RPush{xs}
     case R.RSw{p, xs}:
       R.RSw{p, xs}
+    case R.RKMap{xs}:
+      R.RKMap{xs}
+    case R.RKPair{xs}:
+      R.RKPair{xs}
 
 # the pop run once on db: its reply as the blocking command's
 def blk.reply(b: Blk, db: R.Db) -> R.Reply:
@@ -1653,6 +2072,12 @@ def cfg.nat.of(l: R.LL) -> Nat:
 def cfg.nat(+cfg: List<&2, C.CItem>, +name: String) -> Nat:
   cfg.nat.of(R.ll.read(C.config.get_value(cfg, name)))
 
+# the ACL LOG with an entry the server makes (a call it refused, an AUTH
+# that failed: server.bend, ACL), as many kept as acllog-max-len says
+def srv.acl.log(s: Srv, e: U.Ent) -> Srv:
+  +s0 = s
+  srv.acl.set(s0, U.acl.log.add(srv.acl(s0), e, cfg.nat(srv.cfg(s0), "acllog-max-len")))
+
 # whether a listpack's longest element w is within the limit l: any is,
 # with l at its default of 64 or more
 def obj.wide.ok(+w: Nat, +l: Nat) -> Bool:
@@ -1660,10 +2085,12 @@ def obj.wide.ok(+w: Nat, +l: Nat) -> Bool:
 
 def obj.hash.enc(+h: KV.Hash, +cfg: List<&2, C.CItem>) -> String:
   match h:
-    case KV.HSmall{+n, +ps}:
-      Bool.pick(String, Bool.and(Nat.is_le(n, cfg.nat(cfg, "hash-max-listpack-entries")), obj.wide.ok(KV.hps.widest(ps, 0n), cfg.nat(cfg, "hash-max-listpack-value"))), "listpack", "hashtable")
+    case KV.HSmall{+n, +b}:
+      Bool.pick(String, Bool.and(Nat.is_le(n, cfg.nat(cfg, "hash-max-listpack-entries")), obj.wide.ok(KV.hb.widest(n, b, 0n, 0n), cfg.nat(cfg, "hash-max-listpack-value"))), "listpack", "hashtable")
     case KV.HBig{n, t}:
       "hashtable"
+    case KV.HLong{+n, +ps}:
+      Bool.pick(String, Bool.and(Nat.is_le(n, cfg.nat(cfg, "hash-max-listpack-entries")), obj.wide.ok(KV.hl.widest(ps, 0n), cfg.nat(cfg, "hash-max-listpack-value"))), "listpack", "hashtable")
 
 def obj.mems.enc(+m: KV.Mems, +cfg: List<&2, C.CItem>) -> String:
   match m:
@@ -1672,22 +2099,19 @@ def obj.mems.enc(+m: KV.Mems, +cfg: List<&2, C.CItem>) -> String:
     case KV.MBig{n, t}:
       "hashtable"
 
-# the longest member of the elements xs, at least m
-def obj.zwidest(xs: List<&2, KV.ZEl>, +m: Nat) -> Nat:
-  match xs:
-    case Nil{}:
-      m
-    case Con{KV.ZEl{+k, d}, rest}:
-      obj.zwidest(rest, Nat.max(m, String.length(k)))
-
 # a sorted set is a listpack while it is small (KV.Zset: as Redis turns
 # one into a skiplist at the parameters' defaults) and within
 # zset-max-listpack-entries and zset-max-listpack-value as they are now,
 # as a hash
+def obj.zset.small(+n: Nat, +w: Nat, +cfg: List<&2, C.CItem>) -> String:
+  Bool.pick(String, Bool.and(Nat.is_le(n, cfg.nat(cfg, "zset-max-listpack-entries")), obj.wide.ok(w, cfg.nat(cfg, "zset-max-listpack-value"))), "listpack", "skiplist")
+
 def obj.zset.enc(+z: KV.Zset, +cfg: List<&2, C.CItem>) -> String:
   match z:
-    case KV.ZSmall{+tr}:
-      Bool.pick(String, Bool.and(Nat.is_le(KV.zt.size(tr), cfg.nat(cfg, "zset-max-listpack-entries")), obj.wide.ok(obj.zwidest(KV.zt.all(tr), 0n), cfg.nat(cfg, "zset-max-listpack-value"))), "listpack", "skiplist")
+    case KV.ZSmall{+n, +b}:
+      obj.zset.small(n, KV.zb.widest(n, b, 0n, 0n), cfg)
+    case KV.ZWide{+tr}:
+      obj.zset.small(KV.zt.size(tr), KV.zt.widest(tr, 0n), cfg)
     case KV.ZBig{tr, t}:
       "skiplist"
 
@@ -1701,6 +2125,8 @@ def obj.coll.enc(+c: KV.Coll, +cfg: List<&2, C.CItem>) -> String:
       obj.mems.enc(m, cfg)
     case KV.CZset{+z}:
       obj.zset.enc(z, cfg)
+    case KV.CStream{x}:
+      "stream"
 
 def obj.coll(+sub: Nat, +c: KV.Coll, +cfg: List<&2, C.CItem>, u: R.Reply) -> R.Reply:
   match sub:
@@ -1869,6 +2295,8 @@ def hr.one(m: Maybe<&2, KV.Item<KV.Val>>, +r: U32) -> R.Reply:
       R.e_wrongtype()
     case Some{KV.Item{KV.VColl{KV.CZset{z}}, e}}:
       R.e_wrongtype()
+    case Some{KV.Item{KV.VColl{KV.CStream{x}}, e}}:
+      R.e_wrongtype()
     case Some{KV.Item{KV.VStr{s}, e}}:
       R.e_wrongtype()
     case None{}:
@@ -1883,6 +2311,8 @@ def hr.many(m: Maybe<&2, KV.Item<KV.Val>>, +neg: Bool, +k: Nat, +wv: Bool, +r: U
     case Some{KV.Item{KV.VColl{KV.CMems{l}}, e}}:
       R.e_wrongtype()
     case Some{KV.Item{KV.VColl{KV.CZset{z}}, e}}:
+      R.e_wrongtype()
+    case Some{KV.Item{KV.VColl{KV.CStream{x}}, e}}:
       R.e_wrongtype()
     case Some{KV.Item{KV.VStr{s}, e}}:
       R.e_wrongtype()
@@ -2001,8 +2431,10 @@ def sp.acts(a: SrArgs, +k: String, +r: U32) -> List<&2, R.Act>:
 
 # ZRANDMEMBER key [count [WITHSCORES]]: elements of a sorted set at
 # random, by r (as HRANDFIELD's), the count read as HRANDFIELD reads its
-# own (WITHSCORES for WITHVALUES). An element is picked by its rank (the
-# tree finds it in O(log n)). A negative count picks that many elements,
+# own (WITHSCORES for WITHVALUES). An element is picked by its rank: a
+# large sorted set's tree finds it in O(log n), a small one's string in a
+# walk to it, and more than 32 picks of a small one walk a tree made from
+# its string (ZrSrc). A negative count picks that many elements,
 # each anew; a positive one that many different elements, all of them
 # from the last when it is at least the sorted set's size (Redis reads a
 # sorted set from its last element there); else, when it is more
@@ -2033,9 +2465,39 @@ def zr.args(args: List<&2, String>) -> HrArgs:
     case Con{+c, rest}:
       zr.count(R.ll.read(c), rest)
 
+# where the picks are made: a tree (a large sorted set's own, or one
+# made from a small one's string), or the sorted set as it is
+type ZrSrc is Data:
+  ZrTree{t: KV.ZTree}
+  ZrZset{z: KV.Zset}
+
+# the element at rank i of s
+def zr.at(+s: ZrSrc, +i: Nat) -> KV.ZEl:
+  match s:
+    case ZrTree{+t}:
+      KV.zt.nth(t, i)
+    case ZrZset{+z}:
+      KV.zset.nth(z, i)
+
+# the elements of s, of n, from the last
+def zr.rev(+s: ZrSrc, +n: Nat) -> List<&2, KV.ZEl>:
+  match s:
+    case ZrTree{+t}:
+      KV.zt.rslice(t, 0n, n)
+    case ZrZset{+z}:
+      KV.zset.slice(True{}, z, 0n, n)
+
+# s's elements as a tree
+def zr.tree(+s: ZrSrc) -> KV.ZTree:
+  match s:
+    case ZrTree{+t}:
+      t
+    case ZrZset{+z}:
+      KV.zset.tree(z)
+
 # the element at a rank r picks
-def zr.el(+t: KV.ZTree, +r: U32, +n: Nat) -> KV.ZEl:
-  KV.zt.nth(t, hr.at(r, n))
+def zr.el(+s: ZrSrc, +r: U32, +n: Nat) -> KV.ZEl:
+  zr.at(s, hr.at(r, n))
 
 def zr.out(e: KV.ZEl, +ws: Bool, rest: List<&2, R.Reply>) -> List<&2, R.Reply>:
   match e:
@@ -2043,13 +2505,13 @@ def zr.out(e: KV.ZEl, +ws: Bool, rest: List<&2, R.Reply>) -> List<&2, R.Reply>:
       R.zels.one(ws, m, d, rest)
 
 # k elements, each anew
-def zr.rep(k: Nat, +t: KV.ZTree, +n: Nat, +r: U32, +ws: Bool) -> List<&2, R.Reply>:
+def zr.rep(k: Nat, +s: ZrSrc, +n: Nat, +r: U32, +ws: Bool) -> List<&2, R.Reply>:
   match k:
     case 0n:
       Nil{}
     case 1n+j:
       +q = hr.next(r)
-      zr.out(zr.el(t, q, n), ws, zr.rep(j, t, n, q, ws))
+      zr.out(zr.el(s, q, n), ws, zr.rep(j, s, n, q, ws))
 
 # t without c elements taken at random
 def zr.cut(e: KV.ZEl, +t: KV.ZTree) -> KV.ZTree:
@@ -2063,7 +2525,7 @@ def zr.drop(c: Nat, +t: KV.ZTree, +r: U32) -> KV.ZTree:
       t
     case 1n+j:
       +q = hr.next(r)
-      zr.drop(j, zr.cut(zr.el(t, q, KV.zt.size(t)), t), q)
+      zr.drop(j, zr.cut(KV.zt.nth(t, hr.at(q, KV.zt.size(t))), t), q)
 
 # picks until k different elements come: the members taken, the reply so
 # far, how many
@@ -2092,7 +2554,7 @@ def zr.outs(g: ZrG) -> List<&2, R.Reply>:
     case ZrG{acc, out, c}:
       out
 
-def zr.gather(fuel: Nat, done: Bool, g: ZrG, +k: Nat, +t: KV.ZTree, +n: Nat, +r: U32, +ws: Bool) -> List<&2, R.Reply>:
+def zr.gather(fuel: Nat, done: Bool, g: ZrG, +k: Nat, +s: ZrSrc, +n: Nat, +r: U32, +ws: Bool) -> List<&2, R.Reply>:
   match fuel done:
     case _ True{}:
       zr.outs(g)
@@ -2100,34 +2562,43 @@ def zr.gather(fuel: Nat, done: Bool, g: ZrG, +k: Nat, +t: KV.ZTree, +n: Nat, +r:
       zr.outs(g)
     case 1n+f False{}:
       +q = hr.next(r)
-      +g2 = zr.step(zr.el(t, q, n), g, ws)
-      zr.gather(f, zr.done(g2, k), g2, k, t, n, q, ws)
+      +g2 = zr.step(zr.el(s, q, n), g, ws)
+      zr.gather(f, zr.done(g2, k), g2, k, s, n, q, ws)
 
-def zr.uniq(third: Bool, +k: Nat, +t: KV.ZTree, +n: Nat, +r: U32, +ws: Bool) -> List<&2, R.Reply>:
+def zr.uniq(third: Bool, +k: Nat, +s: ZrSrc, +n: Nat, +r: U32, +ws: Bool) -> List<&2, R.Reply>:
   match third:
     case True{}:
-      R.zels(KV.zt.drain(zr.drop(Nat.sub(n, k), t, r), Nil{}), ws)
+      R.zels(KV.zt.drain(zr.drop(Nat.sub(n, k), zr.tree(s), r), Nil{}), ws)
     case False{}:
-      zr.gather(Nat.add(Nat.mul(k, 16n), 64n), Nat.is_eq(k, 0n), ZrG{KV.empty(Unit), Nil{}, 0n}, k, t, n, r, ws)
+      zr.gather(Nat.add(Nat.mul(k, 16n), 64n), Nat.is_eq(k, 0n), ZrG{KV.empty(Unit), Nil{}, 0n}, k, s, n, r, ws)
 
-def zr.pos(all: Bool, +k: Nat, +t: KV.ZTree, +n: Nat, +r: U32, +ws: Bool) -> List<&2, R.Reply>:
+def zr.pos(all: Bool, +k: Nat, +s: ZrSrc, +n: Nat, +r: U32, +ws: Bool) -> List<&2, R.Reply>:
   match all:
     case True{}:
-      R.zels(KV.zt.rslice(t, 0n, n), ws)
+      R.zels(zr.rev(s, n), ws)
     case False{}:
-      zr.uniq(Nat.is_lt(n, Nat.mul(k, 3n)), k, t, n, r, ws)
+      zr.uniq(Nat.is_lt(n, Nat.mul(k, 3n)), k, s, n, r, ws)
 
-def zr.of(neg: Bool, +k: Nat, +ws: Bool, +t: KV.ZTree, +n: Nat, +r: U32) -> List<&2, R.Reply>:
+def zr.of(neg: Bool, +k: Nat, +ws: Bool, +s: ZrSrc, +n: Nat, +r: U32) -> List<&2, R.Reply>:
   match neg:
     case True{}:
-      zr.rep(k, t, n, r, ws)
+      zr.rep(k, s, n, r, ws)
     case False{}:
-      zr.pos(Nat.is_le(n, k), k, t, n, r, ws)
+      zr.pos(Nat.is_le(n, k), k, s, n, r, ws)
+
+# where k picks of z are made: z as it is, or, for more than 32 picks of
+# each anew (many), a tree of its elements
+def zr.src(many: Bool, +z: KV.Zset) -> ZrSrc:
+  match many:
+    case True{}:
+      ZrTree{KV.zset.tree(z)}
+    case False{}:
+      ZrZset{z}
 
 def zr.one(m: Maybe<&2, KV.Item<KV.Val>>, +r: U32) -> R.Reply:
   match m:
     case Some{KV.Item{KV.VColl{KV.CZset{+z}}, e}}:
-      R.RBulk{R.zel.m(zr.el(KV.zset.tree(z), hr.next(r), KV.zset.len(z)))}
+      R.RBulk{R.zel.m(KV.zset.nth(z, hr.at(hr.next(r), KV.zset.len(z))))}
     case None{}:
       R.RNull{}
     case _:
@@ -2136,7 +2607,7 @@ def zr.one(m: Maybe<&2, KV.Item<KV.Val>>, +r: U32) -> R.Reply:
 def zr.many(m: Maybe<&2, KV.Item<KV.Val>>, +neg: Bool, +k: Nat, +ws: Bool, +r: U32) -> R.Reply:
   match m:
     case Some{KV.Item{KV.VColl{KV.CZset{+z}}, e}}:
-      R.zels.wrap(ws, zr.of(neg, k, ws, KV.zset.tree(z), KV.zset.len(z), r))
+      R.zels.wrap(ws, zr.of(neg, k, ws, zr.src(Bool.and(neg, Nat.is_lt(32n, k)), z), KV.zset.len(z), r))
     case None{}:
       R.RArray{Nil{}}
     case _:
@@ -2204,6 +2675,43 @@ def mem.zels(xs: List<&2, KV.ZEl>, +acc: Nat) -> Nat:
     case Con{KV.ZEl{+m, d}, rest}:
       mem.zels(rest, Nat.add(acc, Nat.add(24n, String.length(m))))
 
+# a stream's nodes (their listpacks' bytes and a radix tree's node
+# each), and its groups (each its pending entries and its consumers)
+def mem.xnodes(xs: List<&2, KV.XNode>, +acc: Nat) -> Nat:
+  match xs:
+    case Nil{}:
+      acc
+    case Con{+x, rest}:
+      mem.xnodes(rest, Nat.add(acc, Nat.add(64n, KV.xnode.bytes(x))))
+
+def mem.xcons(cs: List<&2, KV.XCon>, +acc: Nat) -> Nat:
+  match cs:
+    case Nil{}:
+      acc
+    case Con{KV.XCon{+name, seen, +ids}, rest}:
+      mem.xcons(rest, Nat.add(acc, Nat.add(Nat.add(48n, String.length(name)), Nat.mul(32n, KV.xis.size(ids)))))
+
+def mem.xgroup(+g: KV.XGroup) -> Nat:
+  match g:
+    case KV.XGrp{+name, last, read, +pel, +cons}:
+      mem.xcons(KV.xcs.list(cons, Nil{}), Nat.add(Nat.add(64n, String.length(name)), Nat.mul(80n, KV.xpl.size(pel))))
+    case KV.XGrpOf{+y}:
+      mem.xgroup(y)
+
+def mem.xgroups(gs: List<&2, KV.XGroup>, +acc: Nat) -> Nat:
+  match gs:
+    case Nil{}:
+      acc
+    case Con{+g, rest}:
+      mem.xgroups(rest, Nat.add(acc, mem.xgroup(g)))
+
+def mem.stream(+x: KV.XStream) -> Nat:
+  match x:
+    case KV.XStr{n, last, first, maxdel, added, +nodes, +groups}:
+      mem.xgroups(KV.xgs.list(groups, Nil{}), mem.xnodes(KV.xns.list(nodes, Nil{}), 112n))
+    case KV.XStrOf{+y}:
+      mem.stream(y)
+
 def mem.val(+v: KV.Val) -> Nat:
   match v:
     case KV.VStr{+s}:
@@ -2211,11 +2719,13 @@ def mem.val(+v: KV.Val) -> Nat:
     case KV.VColl{KV.CHash{+h}}:
       mem.pairs(KV.hash.pairs(h), 48n)
     case KV.VColl{KV.CList{+l}}:
-      mem.elems(KV.deq.all(l), 48n)
+      KV.deq.bytes(l)
     case KV.VColl{KV.CMems{+m}}:
       mem.elems(KV.mems.all(m), 48n)
     case KV.VColl{KV.CZset{+z}}:
       mem.zels(KV.zset.all(z), 48n)
+    case KV.VColl{KV.CStream{+x}}:
+      mem.stream(x)
 
 def mem.size(+k: String, m: Maybe<&2, KV.Item<KV.Val>>) -> R.Reply:
   match m:
@@ -2223,14 +2733,6 @@ def mem.size(+k: String, m: Maybe<&2, KV.Item<KV.Val>>) -> R.Reply:
       R.r_int(Nat.add(Nat.add(40n, String.length(k)), mem.val(v)))
     case None{}:
       R.RNull{}
-
-# MEMORY USAGE's estimate of the bytes of key k and its entry (0 for none)
-def mem.est(+k: String, m: Maybe<&2, KV.Item<KV.Val>>) -> Nat:
-  match m:
-    case Some{KV.Item{+v, e}}:
-      Nat.add(Nat.add(40n, String.length(k)), mem.val(v))
-    case None{}:
-      0n
 
 def mem.usage(bad: Maybe<&2, R.Reply>, +k: String, m: Maybe<&2, KV.Item<KV.Val>>) -> R.Reply:
   match bad:
@@ -2685,7 +3187,7 @@ def cl.argv(args: List<&2, String>, +n: Nat) -> Nat:
       cl.argv(rest, Nat.add(n, String.length(a)))
 
 def cl.alone.line(+c: Conn, +info: Bool, +argv: Nat) -> String:
-  R.client.line(R.ClLine{conn.id(c), "?:0", "?:0", 0n, conn.name(c), 0n, 0n, "N", conn.db(c), 0n, 0n, 0n, None{}, 0n, argv, cl.cmd(info), conn.r3(c)}) ++ "\n"
+  R.client.line(R.ClLine{conn.id(c), "?:0", "?:0", 0n, conn.name(c), 0n, 0n, "N", conn.db(c), 0n, 0n, 0n, None{}, 0n, argv, cl.cmd(info), "default", "-1", conn.r3(c)}) ++ "\n"
 
 def cl.ids(ids: List<&2, Nat>, +c: Conn, +argv: Nat, acc: String) -> String:
   match ids:
@@ -2701,7 +3203,33 @@ def cl.list(+ty: Nat, ids: Maybe<&2, List<&2, Nat>>, +c: Conn, +argv: Nat) -> R.
     case None{}:
       R.RVerb{Bool.pick(String, Nat.is_le(ty, 1n), cl.alone.line(c, False{}, argv), "")}
 
-def cl.reply(op: R.ClOp, +c: Conn, +argv: Nat) -> R.Reply:
+# the first of the users CLIENT KILL's USER options named that the
+# server does not keep (none: it keeps them all)
+def cl.user.miss(us: List<&2, String>, +s: Srv) -> Maybe<&2, String>:
+  match us:
+    case Nil{}:
+      None{}
+    case Con{+u, rest}:
+      Bool.pick(Maybe<&2, String>, U.acl.some(U.acl.user(srv.acl(s), u)), cl.user.miss(rest, s), Some{u})
+
+# CLIENT KILL's answer after its USER options: the error after them, or
+# none killed (a session knows no other client)
+def cl.kill.or(e: Maybe<&2, R.Reply>) -> R.Reply:
+  match e:
+    case Some{r}:
+      r
+    case None{}:
+      R.RInt{R.IPos{0n}}
+
+# CLIENT KILL's answer when a user its USER options named is not kept
+def cl.users.of(m: Maybe<&2, String>, r: R.Reply) -> R.Reply:
+  match m:
+    case Some{+u}:
+      R.e_no_user(u)
+    case None{}:
+      r
+
+def cl.reply(op: R.ClOp, +c: Conn, +argv: Nat, +s: Srv) -> R.Reply:
   match op:
     case R.CoList{+ty, ids}:
       cl.list(ty, ids, c, argv)
@@ -2711,12 +3239,22 @@ def cl.reply(op: R.ClOp, +c: Conn, +argv: Nat) -> R.Reply:
       R.RInt{R.IPos{0n}}
     case R.CoKillAddr{a}:
       R.RError{"ERR No such client"}
+    case R.CoKillUsers{us, f, e}:
+      cl.users.of(cl.user.miss(us, s), cl.kill.or(e))
     case R.CoNoEvict{on}:
       R.r_ok()
     case R.CoPause{hi, lo, all}:
       R.r_ok()
     case R.CoUnpause{}:
       R.r_ok()
+    case R.CoTrack{on, opts}:
+      R.r_ok()
+    case R.CoCaching{yes}:
+      R.RError{"ERR CLIENT CACHING can be called only when the client is in tracking mode with OPTIN or OPTOUT mode enabled"}
+    case R.CoGetRedir{}:
+      R.RInt{R.INeg{0n}}
+    case R.CoTrackInfo{}:
+      R.tracking_info()
     case R.CoBad{r}:
       r
 
@@ -2729,22 +3267,65 @@ def sort.reply(+ds: R.Ds, +k: String, o: R.SortO) -> R.Reply:
 
 # The administrative commands
 # ---------------------------
-# LASTSAVE answers the time of the last save, which is the start, as
-# BendKV writes no RDB snapshot (Redis's lastsave is its start until it
-# saves one); MEMORY STATS and MEMORY DOCTOR the numbers INFO's memory
-# section shows (info.bend, MEMORY STATS and MEMORY DOCTOR); LOLWUT
-# VERSION 5 and 6 their drawings (lolwut.bend), from the server's random
-# numbers. SHUTDOWN stops the server (server.bend, SHUTDOWN) but when it
-# is to save (SAVE without FORCE): BendKV writes no RDB snapshot, and
-# answers as Redis answers when its save fails. A session alone stops
-# nothing, and answers OK for a SHUTDOWN that would stop the server.
-def admin.down(+sd: R.Sd) -> R.Reply:
-  Bool.pick(R.Reply, Bool.and(R.sd.save(sd), Bool.not(R.sd.force(sd))), R.RError{"ERR Errors trying to SHUTDOWN. Check logs."}, R.r_ok())
+# LASTSAVE answers the time of the last save that ended well, the start
+# until one does (Redis's lastsave; server.bend, The RDB file); MEMORY
+# STATS and MEMORY DOCTOR the numbers INFO's memory section shows
+# (info.bend, MEMORY STATS and MEMORY DOCTOR); LOLWUT VERSION 5 and 6
+# their drawings (lolwut.bend), from the server's random numbers. SAVE
+# writes the RDB file, and SHUTDOWN stops the server, after a save when it
+# is to save one (server.bend, The RDB file and SHUTDOWN): the shell
+# answers them once it has saved, or answers a SHUTDOWN whose save failed
+# as Redis does. A session alone writes nothing and stops nothing: it
+# answers OK for each. BGSAVE writes the file in the background, which
+# the shell runs too (server.bend, Background saves): a session alone
+# answers that the save started, as Redis does when nothing else runs.
+
+# SLOWLOG GET's count: none for 10, -1 for all
+def slow.get(+t: I.Tim, +args: List<&2, String>) -> R.Reply:
+  match args:
+    case Con{+c, rest}:
+      I.slow.get(t, String.eq(c, "-1"), C.dec.small(c, 0n))
+    case Nil{}:
+      I.slow.get(t, False{}, 10n)
+
+# the first argument (an event's name)
+def arg.first(+args: List<&2, String>) -> String:
+  match args:
+    case Con{+x, rest}:
+      x
+    case Nil{}:
+      ""
+
+# SLOWLOG and LATENCY (info.bend, SLOWLOG and LATENCY), at the second of
+# the group's time; LATENCY DOCTOR knows of no huge pages of the process
+def latency.reply.of(+k: Nat, +args: List<&2, String>, +s: Srv, +t: I.Tim, +now: Nat) -> R.Reply:
+  match k:
+    case 6n:
+      slow.get(t, args)
+    case 7n:
+      I.slow.len(t)
+    case 8n:
+      R.r_ok()
+    case 9n:
+      R.RArray{I.lat.latest(I.tim.evs(t))}
+    case 10n:
+      I.lat.history(I.lat.get(I.tim.evs(t), arg.first(args)))
+    case 11n:
+      R.r_int(I.lat.reset.n(I.lat.reset.of(I.tim.evs(t), args)))
+    case 12n:
+      I.lat.graph(I.lat.get(I.tim.evs(t), arg.first(args)), arg.first(args), now)
+    case 13n:
+      R.RVerb{I.lat.doctor(t, srv.cfg(s), now, False{})}
+    case _:
+      I.lat.histogram(I.info.stats(srv.info(s)), args)
+
+def latency.reply(+k: Nat, +args: List<&2, String>, +s: Srv, +ds: R.Ds) -> R.Reply:
+  latency.reply.of(k, args, s, I.info.tim(srv.info(s)), Nat.div(R.ds.now(ds), 1000n))
 
 def admin.reply(+k: Nat, +args: List<&2, String>, +s: Srv, +ds: R.Ds) -> R.Reply:
   match k:
     case 0n:
-      R.r_int(U32.to_nat(I.info.start(srv.info(s))))
+      R.r_int(I.info.lastsave(srv.info(s)))
     case 1n:
       I.mem.stats(srv.info(s), R.ds.list(ds))
     case 2n:
@@ -2752,9 +3333,186 @@ def admin.reply(+k: Nat, +args: List<&2, String>, +s: Srv, +ds: R.Ds) -> R.Reply
     case 3n:
       R.RVerb{L.five(args, KV.mix(srv.rng(s)))}
     case 4n:
-      admin.down(R.sd.flags(args))
-    case _:
+      R.r_ok()
+    case 5n:
       R.RVerb{L.six(args, KV.mix(srv.rng(s)))}
+    case 15n:
+      R.r_ok()
+    case 16n:
+      R.RStatus{"Background saving started"}
+    case _:
+      latency.reply(k, args, s, ds)
+
+# ACL
+# ---
+# ACL's subcommands (R.SAcl: their number, as R.acl_id gives it, and their
+# arguments), on the users the server keeps (srv.acl): the session answers
+# them and changes the users; the server answers WHOAMI from its clients,
+# closes the clients of the users DELUSER removed and of the channels
+# SETUSER takes away, and adds what it refuses to the log (server.bend,
+# ACL). A session alone is the default user's (WHOAMI).
+
+# ACL LOG's count, as getLongFromObjectOrReply reads it (a long long),
+# negative as 0, one past 10^14 as 10^14, more than the log holds
+def acl.count(+l: R.LL) -> Maybe<&2, Nat>:
+  match l:
+    case R.LL{+neg, +hi, +lo}:
+      Some{Bool.pick(Nat, neg, 0n, Nat.add(Nat.mul(Nat.min(hi, 100000n), 1000000000n), lo))}
+    case R.LLBad{}:
+      None{}
+
+def acl.log.of(m: Maybe<&2, Nat>, +s: Srv, +ds: R.Ds) -> R.Reply:
+  match m:
+    case Some{+n}:
+      U.acl.log.reply(srv.acl(s), n, R.ds.now(ds))
+    case None{}:
+      R.e_int()
+
+# ACL LOG: RESET (any case), a count, or the default 10
+def acl.logs.reply(+args: List<&2, String>, +s: Srv, +ds: R.Ds) -> R.Reply:
+  match args:
+    case Con{+x, Nil{}}:
+      Bool.pick(R.Reply, R.is_word(x, "RESET"), R.r_ok(), acl.log.of(acl.count(R.ll.read(x)), s, ds))
+    case _:
+      U.acl.log.reply(srv.acl(s), 10n, R.ds.now(ds))
+
+def acl.bits.of(+l: R.LL) -> Nat:
+  match l:
+    case R.LL{+neg, +hi, +lo}:
+      Bool.pick(Nat, Bool.or(neg, Bool.or(Nat.is_lt(0n, hi), Nat.is_lt(4096n, lo))), 0n, lo)
+    case R.LLBad{}:
+      0n
+
+# ACL GENPASS's bits: 256 by default, else a long from 1 to 4096; 0 for
+# an argument it refuses
+def acl.bits(+args: List<&2, String>) -> Nat:
+  match args:
+    case Con{+x, Nil{}}:
+      acl.bits.of(R.ll.read(x))
+    case _:
+      256n
+
+def acl.genpass.err.of(+l: R.LL) -> R.Reply:
+  match l:
+    case R.LL{neg, hi, lo}:
+      R.RError{"ERR ACL GENPASS argument must be the number of bits for the output password, a positive number up to 4096"}
+    case R.LLBad{}:
+      R.e_int()
+
+def acl.genpass.err(+args: List<&2, String>) -> R.Reply:
+  match args:
+    case Con{+x, Nil{}}:
+      acl.genpass.err.of(R.ll.read(x))
+    case _:
+      R.e_int()
+
+def acl.genpass.reply(+args: List<&2, String>, +s: Srv) -> R.Reply:
+  +b = acl.bits(args)
+  Bool.pick(R.Reply, Nat.is_eq(b, 0n), acl.genpass.err(args), R.RBulk{U.acl.genpass(srv.acl(s), b)})
+
+# whether new users and resetchannels get every channel
+# (acl-pubsub-default)
+def acl.allch(+s: Srv) -> Bool:
+  String.eq(C.config.get_value(srv.cfg(s), "acl-pubsub-default"), "allchannels")
+
+def acl.set.reply(r: U.SetR) -> R.Reply:
+  match r:
+    case U.SetOk{a, old}:
+      R.r_ok()
+    case U.SetErr{m}:
+      R.RError{m}
+
+def acl.set.srv(r: U.SetR, s: Srv) -> Srv:
+  match r:
+    case U.SetOk{a, old}:
+      srv.acl.set(s, a)
+    case U.SetErr{m}:
+      s
+
+def acl.del.reply(r: U.DelR) -> R.Reply:
+  match r:
+    case U.DelOk{n, a}:
+      R.r_int(n)
+    case U.DelErr{m}:
+      R.RError{m}
+
+def acl.del.srv(r: U.DelR, s: Srv) -> Srv:
+  match r:
+    case U.DelOk{n, a}:
+      srv.acl.set(s, a)
+    case U.DelErr{m}:
+      s
+
+def acl.cat.of(+args: List<&2, String>) -> R.Reply:
+  match args:
+    case Con{+c, Nil{}}:
+      U.acl.cat.reply(U.acl.cat(c), c)
+    case _:
+      U.acl.cats.reply()
+
+def acl.setuser.of(+args: List<&2, String>, +s: Srv) -> U.SetR:
+  match args:
+    case Con{+n, rules}:
+      U.acl.setuser(srv.acl(s), n, rules, acl.allch(s))
+    case Nil{}:
+      U.SetErr{"ERR wrong number of arguments for 'acl|setuser' command"}
+
+# an ACL subcommand's reply (by number: 1 CAT, 2 DELUSER, 3 DRYRUN, 4
+# GENPASS, 5 GETUSER, 7 LIST, 9 LOG, 11 SETUSER, 12 USERS, 13 WHOAMI; the
+# parser answers HELP, LOAD and SAVE)
+def acl.reply(+k: Nat, +args: List<&2, String>, +s: Srv, +ds: R.Ds) -> R.Reply:
+  match k:
+    case 1n:
+      acl.cat.of(args)
+    case 2n:
+      acl.del.reply(U.acl.deluser(srv.acl(s), args))
+    case 3n:
+      U.acl.dryrun(srv.acl(s), args)
+    case 4n:
+      acl.genpass.reply(args, s)
+    case 5n:
+      U.acl.getuser(srv.acl(s), arg.first(args))
+    case 7n:
+      U.acl.list(srv.acl(s))
+    case 9n:
+      acl.logs.reply(args, s, ds)
+    case 11n:
+      acl.set.reply(acl.setuser.of(args, s))
+    case 12n:
+      U.acl.usernames(srv.acl(s))
+    case _:
+      R.RBulk{"default"}
+
+def acl.genpass.srv(+b: Nat, s: Srv) -> Srv:
+  match b:
+    case 0n:
+      s
+    case _:
+      +s0 = s
+      srv.acl.set(s0, U.acl.genpassed(srv.acl(s0), b))
+
+def acl.log.srv(+args: List<&2, String>, s: Srv) -> Srv:
+  match args:
+    case Con{+x, Nil{}}:
+      +s0 = s
+      Bool.pick(Srv, R.is_word(x, "RESET"), srv.acl.set(s0, U.acl.log.reset(srv.acl(s0))), s0)
+    case _:
+      s
+
+# the server after an ACL subcommand: DELUSER and SETUSER change its
+# users, LOG RESET empties the log, and GENPASS counts its blocks
+def acl.srv(+k: Nat, +args: List<&2, String>, +s: Srv) -> Srv:
+  match k:
+    case 2n:
+      acl.del.srv(U.acl.deluser(srv.acl(s), args), s)
+    case 4n:
+      acl.genpass.srv(acl.bits(args), s)
+    case 9n:
+      acl.log.srv(args, s)
+    case 11n:
+      acl.set.srv(acl.setuser.of(args, s), s)
+    case _:
+      s
 
 # a session command's reply, sent or not; the databases are there for
 # the commands that read them
@@ -2837,7 +3595,7 @@ def own_reply(+o: R.SessOp, +c: Conn, +s: Srv, +ds: R.Ds) -> Maybe<&2, R.Reply>:
     case R.SPub{+k, a}:
       pub.say(conn.mode(c), R.pub.op(k, a))
     case R.SClient{+k, +a}:
-      say(conn.mode(c), cl.reply(R.client.op(k, a), c, cl.argv(a, 10n)))
+      say(conn.mode(c), cl.reply(R.client.op(k, a), c, cl.argv(a, 10n), s))
     case R.SMonitor{}:
       say(conn.mode(c), R.r_ok())
     case R.SRewrite{}:
@@ -2856,6 +3614,10 @@ def own_reply(+o: R.SessOp, +c: Conn, +s: Srv, +ds: R.Ds) -> Maybe<&2, R.Reply>:
       say(conn.mode(c), R.geo.store.reply(R.ds.focused(ds), k, a))
     case R.SRestore{+k, op}:
       say(conn.mode(c), R.reply_of(R.exec(R.Upd{k, op}, R.ds.focused(ds))))
+    case R.SAcl{+k, +a}:
+      say(conn.mode(c), acl.reply(k, a, s, ds))
+    case R.SXRead{q}:
+      say(conn.mode(c), R.xread.many(q, R.ds.focused(ds)))
 
 # the connection after a session command
 def own_conn(+o: R.SessOp, +c: Conn, +s: Srv) -> Conn:
@@ -2956,6 +3718,10 @@ def own_conn(+o: R.SessOp, +c: Conn, +s: Srv) -> Conn:
       step_conn(c, s)
     case R.SRestore{k, op}:
       step_conn(c, s)
+    case R.SAcl{k, a}:
+      step_conn(c, s)
+    case R.SXRead{q}:
+      step_conn(c, s)
 
 # what a session command does to the databases: SELECT and RESET move the
 # focus to the connection's new database, SWAPDB, MOVE, COPY and FLUSHALL
@@ -2995,7 +3761,7 @@ def own_acts(+o: R.SessOp, +c: Conn, +s: Srv) -> List<&2, R.Act>:
 def srv.set(r: Result<&2, &2, R.Reply, List<&2, C.CItem>>, +s: Srv) -> Srv:
   match r:
     case Done{+cfg}:
-      Srv{C.config.get_value(cfg, "requirepass"), cfg, srv.info(s), mm.cfg(srv.mm(s), cfg)}
+      Srv{C.config.get_value(cfg, "requirepass"), cfg, srv.timing(srv.info(s), cfg), mm.cfg(srv.mm(s), cfg)}
     case Fail{e}:
       s
 
@@ -3011,10 +3777,31 @@ def srv.rand(s: Srv) -> Srv:
     case Srv{pass, cfg, info, mm}:
       Srv{pass, cfg, info, mm.rand(mm)}
 
+# SLOWLOG RESET and LATENCY RESET of events (all for none)
+def srv.slow.reset(s: Srv) -> Srv:
+  match s:
+    case Srv{pass, cfg, info, mm}:
+      Srv{pass, cfg, I.info.slow.reset(info), mm}
+
+def srv.lat.reset(s: Srv, names: List<&2, String>) -> Srv:
+  match s:
+    case Srv{pass, cfg, info, mm}:
+      Srv{pass, cfg, I.info.lat.reset(info, names), mm}
+
 # the server after an administrative command: LOLWUT's drawings take its
-# random numbers
-def admin.srv(+k: Nat, +s: Srv) -> Srv:
-  Bool.pick(Srv, Bool.or(Nat.is_eq(k, 3n), Nat.is_eq(k, 5n)), srv.rand(s), s)
+# random numbers, SLOWLOG RESET and LATENCY RESET change its timing
+def admin.srv(+k: Nat, a: List<&2, String>, +s: Srv) -> Srv:
+  match k:
+    case 3n:
+      srv.rand(s)
+    case 5n:
+      srv.rand(s)
+    case 8n:
+      srv.slow.reset(s)
+    case 11n:
+      srv.lat.reset(s, a)
+    case _:
+      s
 
 # the server after a session command: CONFIG SET changes it when it
 # succeeds, CONFIG RESETSTAT its counts, and RANDOMKEY, HRANDFIELD and
@@ -3036,7 +3823,9 @@ def own_srv(+o: R.SessOp, +c: Conn, +s: Srv) -> Srv:
     case R.SZRandMember{k, a}:
       srv.rand(s)
     case R.SAdmin{+k, a}:
-      admin.srv(k, s)
+      admin.srv(k, a, s)
+    case R.SAcl{+k, +a}:
+      acl.srv(k, a, s)
     case _:
       s
 

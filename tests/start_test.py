@@ -12,7 +12,8 @@ in a fresh directory of its own that holds the case's files:
   names (a server's own port and directory read as {port} and {dir}).
 
 Then what BendKV refuses although Redis starts (what it cannot do: modules,
-ACL users, renamed commands, the background, a cluster, a replica, TLS,
+ACL users from the configuration or a file, renamed commands, the
+background, a cluster, a replica, TLS,
 data it cannot read, a supervisor it cannot signal), each with its line;
 and what is BendKV's own: --version, --help, the short form, the log file,
 the pid file, protected mode and several addresses.
@@ -135,7 +136,10 @@ class Server:
 
     def text(self, which):
         with open(self.out if which == "out" else self.err, "rb") as f:
-            return f.read().decode(errors="replace").replace(self.dir, "{dir}").replace(str(self.port), "{port}")
+            # the port as a number of its own: a free port can be a run of
+            # digits inside another number (47483 in Redis's "2147483647")
+            text = f.read().decode(errors="replace").replace(self.dir, "{dir}")
+            return re.sub(r"(?<![0-9])%d(?![0-9])" % self.port, "{port}", text)
 
     def report(self):
         """the fatal error on stderr without the line naming the server,
@@ -260,13 +264,17 @@ STARTED = [
     ("a directory as the file", ["d", "--port", "{port}"], {"d/x": ""}, None, ["port"], None),
     ("an include of an empty file", ["c.conf"], {"c.conf": "port {port}\ninclude e.conf\nhz 9\n", "e.conf": ""}, None, ["hz"], None),
     ("protected configs", ["--port", "{port}", "--enable-protected-configs", "yes", "--dbfilename", "x.rdb"], {}, None, ["enable-protected-configs", "dbfilename"], None),
+    # an RDB file of one key, its checksum 0 (none): loaded at the start
+    # (tests/rdb_test.py compares what both servers load)
+    ("an RDB file", ["--port", "{port}"], {"dump.rdb": b"REDIS0010\xfe\x00\xfb\x01\x00\x00\x01k\x01v\xff" + bytes(8)}, None, ["dbfilename"], None),
 ]
 
 # What BendKV refuses although Redis starts: name, arguments, files,
 # environment, and the line said (on stderr, or as the log's last line)
 BENDKV_REFUSES = [
     ("renamed commands", ["c.conf"], {"c.conf": 'rename-command FLUSHALL ""\n'}, {}, "BendKV cannot rename commands yet"),
-    ("ACL users", ["c.conf"], {"c.conf": "user default on nopass ~* +@all\n"}, {}, "BendKV has no ACL users yet"),
+    ("ACL users", ["c.conf"], {"c.conf": "user default on nopass ~* +@all\n"}, {}, "BendKV cannot read ACL users from its configuration yet: set them with ACL SETUSER"),
+    ("an ACL file", ["--port", "{port}", "--aclfile", "users.acl"], {"users.acl": "user default on nopass ~* +@all\n"}, {}, "BendKV cannot load an ACL file yet: leave aclfile empty, and set the users with ACL SETUSER"),
     ("an include by a pattern", ["c.conf"], {"c.conf": "include *.inc\n"}, {}, "BendKV cannot include files by a pattern yet"),
     ("sentinel mode", ["--sentinel"], {}, {}, "BendKV has no sentinel mode"),
     ("a module", ["--port", "{port}", "--loadmodule", "/x.so"], {}, {}, "Can't load module from /x.so: server aborting"),
@@ -277,7 +285,6 @@ BENDKV_REFUSES = [
     ("TLS", ["--port", "{port}", "--tls-port", "1"], {}, {}, "BendKV has no TLS: set tls-port 0"),
     ("systemd", ["--port", "{port}", "--supervised", "systemd"], {}, {"NOTIFY_SOCKET": "/run/x"}, "supervised by systemd, which BendKV cannot notify (READY=1): run it as a Type=simple service with supervised no"),
     ("upstart", ["--port", "{port}", "--supervised", "auto"], {}, {"UPSTART_JOB": "x"}, "supervised by upstart, which BendKV cannot signal (it cannot stop itself): run it unsupervised"),
-    ("an RDB file", ["--port", "{port}"], {"dump.rdb": "REDIS0009"}, {}, "BendKV cannot load RDB files yet: {dir}/dump.rdb would be left out; move it away, or keep the data in an append-only file (appendonly yes)"),
     ("a multi-part append-only file", ["--port", "{port}", "--appendonly", "yes"], {"appendonlydir/appendonly.aof.manifest": "file appendonly.aof.1.incr.aof seq 1 type i\n"}, {}, "BendKV cannot read Redis 7's multi-part append-only files yet: {dir}/appendonlydir holds one"),
     ("a cut file, with aof-load-truncated no", ["--port", "{port}", "--appendonly", "yes", "--aof-load-truncated", "no"], {"appendonly.aof": "*3\r\n$3\r\nSET\r\n$1\r\na\r\n$1"}, {}, "Unexpected end of file reading the append only file appendonly.aof. You can: 1) Make a backup of your AOF file, then use ./redis-check-aof --fix <filename>. 2) Alternatively you can set the 'aof-load-truncated' configuration option to yes and restart the server."),
     ("a transaction left open, with aof-load-truncated no", ["--port", "{port}", "--appendonly", "yes", "--aof-load-truncated", "no"], {"appendonly.aof": "*1\r\n$5\r\nMULTI\r\n*3\r\n$3\r\nSET\r\n$1\r\na\r\n$1\r\n1\r\n"}, {}, "Unexpected end of file reading the append only file appendonly.aof. You can: 1) Make a backup of your AOF file, then use ./redis-check-aof --fix <filename>. 2) Alternatively you can set the 'aof-load-truncated' configuration option to yes and restart the server."),

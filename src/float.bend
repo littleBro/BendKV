@@ -1569,60 +1569,65 @@ def fl.show_human(x: Fl) -> String:
     case FNum{+neg, +m, +e}:
       f.fin(big.is_zero(m), neg, m, e)
 
-# the digits of n, a number times 10^6, with the point 6 digits from the
-# right, as printf's "%f" writes them (a 0 before the point at least)
-def f6.point(+ds: String) -> String:
-  +d7 = str.zeros(Nat.sub(7n, String.length(ds))) ++ ds
-  +k = Nat.sub(String.length(d7), 6n)
-  String.take(d7, k) ++ "." ++ String.drop(d7, k)
+# the digits of n, a number times 10^k, with the point k digits from the
+# right, as printf's "%.<k>f" writes them (a 0 before the point at least;
+# k past 0)
+def fix.point(+ds: String, +k: Nat) -> String:
+  +dk = str.zeros(Nat.sub(1n+k, String.length(ds))) ++ ds
+  +i = Nat.sub(String.length(dk), k)
+  String.take(dk, i) ++ "." ++ String.drop(dk, i)
 
-def f6.out(+neg: Bool, n: List<&2, Nat>) -> String:
-  Bool.pick(String, neg, "-", "") ++ f6.point(big.to_dec(n))
+def fix.out(+neg: Bool, n: List<&2, Nat>, +k: Nat) -> String:
+  Bool.pick(String, neg, "-", "") ++ fix.point(big.to_dec(n), k)
 
-def f6.round.up(up: Bool, +neg: Bool, +q: List<&2, Nat>) -> String:
+def fix.round.up(up: Bool, +neg: Bool, +q: List<&2, Nat>, +k: Nat) -> String:
   match up:
     case True{}:
-      f6.out(neg, big.add(q, [1n]))
+      fix.out(neg, big.add(q, [1n]), k)
     case False{}:
-      f6.out(neg, q)
+      fix.out(neg, q, k)
 
 # t * 2^-r, rounded to an integer, to the even one on a tie (r past 0)
-def f6.round(+neg: Bool, +t: List<&2, Nat>, +r: Nat) -> String:
+def fix.round(+neg: Bool, +t: List<&2, Nat>, +r: Nat, +k: Nat) -> String:
   +q = big.shr(t, r)
-  f6.round.up(Bool.and(big.bit(t, Nat.sub(r, 1n)), Bool.or(big.low_nz(t, Nat.sub(r, 1n)), big.is_odd(q))), neg, q)
+  fix.round.up(Bool.and(big.bit(t, Nat.sub(r, 1n)), Bool.or(big.low_nz(t, Nat.sub(r, 1n)), big.is_odd(q))), neg, q, k)
 
-# m * 2^-s times 10^6 = m * 5^6 * 2^(6 - s): exact for s up to 6
-def f6.frac(small: Bool, +neg: Bool, +t: List<&2, Nat>, +s: Nat) -> String:
+# m * 2^-s times 10^k = m * 5^k * 2^(k - s): exact for s up to k
+def fix.frac(small: Bool, +neg: Bool, +t: List<&2, Nat>, +s: Nat, +k: Nat) -> String:
   match small:
     case True{}:
-      f6.out(neg, big.shl(t, Nat.sub(6n, s)))
+      fix.out(neg, big.shl(t, Nat.sub(k, s)), k)
     case False{}:
-      f6.round(neg, t, Nat.sub(s, 6n))
+      fix.round(neg, t, Nat.sub(s, k), k)
 
-def f6.num(int: Bool, +neg: Bool, +m: List<&2, Nat>, +e: Nat) -> String:
+def fix.num(int: Bool, +neg: Bool, +m: List<&2, Nat>, +e: Nat, +k: Nat) -> String:
   match int:
     case True{}:
-      f6.out(neg, big.mul_pow(big.shl(m, Nat.sub(e, fl.eb())), 10n, 6n))
+      fix.out(neg, big.mul_pow(big.shl(m, Nat.sub(e, fl.eb())), 10n, k), k)
     case False{}:
       +s = Nat.sub(fl.eb(), e)
-      f6.frac(Nat.is_le(s, 6n), neg, big.mul_pow(m, 5n, 6n), s)
+      fix.frac(Nat.is_le(s, k), neg, big.mul_pow(m, 5n, k), s, k)
 
-def f6.fin(z: Bool, +neg: Bool, +m: List<&2, Nat>, +e: Nat) -> String:
+def fix.fin(z: Bool, +neg: Bool, +m: List<&2, Nat>, +e: Nat, +k: Nat) -> String:
   match z:
     case True{}:
-      Bool.pick(String, neg, "-0.000000", "0.000000")
+      Bool.pick(String, neg, "-0.", "0.") ++ str.zeros(k)
     case False{}:
-      f6.num(Nat.is_le(fl.eb(), e), neg, m, e)
+      fix.num(Nat.is_le(fl.eb(), e), neg, m, e, k)
 
-# a number as printf's "%f" writes it: its exact value rounded to six
-# decimals, to the even one on a tie, with its sign (a negative zero, and
-# a negative number that rounds to 0, are "-0.000000"); "inf", "-inf",
-# "nan"
-def fl.show_f(x: Fl) -> String:
+# a number as printf's "%.<k>f" writes it (k past 0): its exact value
+# rounded to k decimals, to the even one on a tie, with its sign (a
+# negative zero, and a negative number that rounds to 0, keep their
+# "-"); "inf", "-inf", "nan"
+def fl.show_fix(+k: Nat, x: Fl) -> String:
   match x:
     case FNaN{}:
       "nan"
     case FInf{+neg}:
       Bool.pick(String, neg, "-inf", "inf")
     case FNum{+neg, +m, +e}:
-      f6.fin(big.is_zero(m), neg, m, e)
+      fix.fin(big.is_zero(m), neg, m, e, k)
+
+# a number as printf's "%f" writes it: six decimals
+def fl.show_f(x: Fl) -> String:
+  fl.show_fix(6n, x)

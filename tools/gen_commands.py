@@ -14,7 +14,7 @@
 # step needs no Redis. The table holds them typed (R.RMap, R.RSet), as
 # BendKV answers them in RESP3; RESP2 writes them as the arrays Redis
 # writes in RESP2. Only the subcommands BendKV has are kept (BendKV's
-# CLIENT has fifteen of Redis's sixteen), in the order of their names: Redis
+# CLIENT has all sixteen of Redis's), in the order of their names: Redis
 # lists commands in the order of a hash table with a random seed, so no
 # order is Redis's own. The second step writes the block between
 # "# BEGIN gen_commands: table" and "# END gen_commands: table" in
@@ -29,9 +29,10 @@
 # numbers, its name, its arity from the same JSON (the statistics count a
 # call with the wrong number of arguments as refused only when it fails
 # Redis's own check of the arity), whether its calls may fail as they run,
-# whether MONITOR sees its calls, whether a monitor may run it and whether
-# CLIENT PAUSE WRITE holds it back (from its flags), and the word each code
-# rides in (twelve bits, six of them set). The
+# whether MONITOR sees its calls, whether a monitor may run it, whether
+# CLIENT PAUSE WRITE holds it back, whether MULTI may queue it, whether
+# Redis flags it fast and whether the slow log skips it (from its flags),
+# and the word each code rides in (twelve bits, six of them set). The
 # fourth writes there how a request's name finds its command (Step 4
 # below), from the same numbers.
 #
@@ -48,8 +49,8 @@ REDIS = HERE / "src" / "redis.bend"
 # BendKV's commands, and of a command with subcommands the ones BendKV has
 COMMANDS = {
     "append": [], "auth": [], "client": ["caching", "getname", "getredir", "help", "id",
-    "info", "kill", "list", "no-evict", "pause", "reply", "setname", "trackinginfo", "unblock",
-    "unpause"], "command": ["count", "docs",
+    "info", "kill", "list", "no-evict", "pause", "reply", "setname", "tracking", "trackinginfo",
+    "unblock", "unpause"], "command": ["count", "docs",
     "getkeys", "getkeysandflags", "help", "info", "list"], "config": ["get", "help",
     "resetstat", "rewrite", "set"], "dbsize": [], "decr": [], "decrby": [], "del": [],
     "echo": [], "exists": [], "flushall": [], "flushdb": [], "function": ["flush", "help"],
@@ -88,7 +89,12 @@ COMMANDS = {
     "lastsave": [], "role": [], "wait": [], "shutdown": [], "lolwut": [], "geoadd": [],
     "geodist": [], "geohash": [], "geopos": [], "georadius": [], "georadius_ro": [],
     "georadiusbymember": [], "georadiusbymember_ro": [], "geosearch": [], "geosearchstore": [],
-    "dump": [], "restore": []}
+    "dump": [], "restore": [], "slowlog": ["get", "help", "len", "reset"],
+    "latency": ["doctor", "graph", "help", "histogram", "history", "latest", "reset"], "save": [],
+    "acl": ["cat", "deluser", "dryrun", "genpass", "getuser", "help", "list", "load", "log",
+            "save", "setuser", "users", "whoami"], "bgsave": [], "xlen": [], "xrange": [],
+    "xrevrange": [], "xread": [], "xinfo": ["consumers", "groups", "help", "stream"],
+    "xpending": []}
 
 # Step 1: redis-server -> facts
 # -----------------------------
@@ -208,6 +214,7 @@ def extract():
         if version != "redis_version:7.0.15":
             raise SystemExit("gen_commands.py: needs Redis 7.0.15, found " + version)
         cats = c.ask("ACL", "CAT")
+        acl = {cat: sorted(c.ask("ACL", "CAT", cat)) for cat in cats}
         cmds = {}
         for name, subs in sorted(COMMANDS.items()):
             info = c.ask("COMMAND", "INFO", name)[0]
@@ -216,7 +223,7 @@ def extract():
     finally:
         srv.terminate()
         srv.wait()
-    JSON.write_text(json.dumps({"redis": "7.0.15", "categories": cats, "commands": cmds},
+    JSON.write_text(json.dumps({"redis": "7.0.15", "categories": cats, "acl": acl, "commands": cmds},
                                indent=1, sort_keys=True) + "\n")
 
 # Step 2: facts -> Bend
@@ -339,10 +346,70 @@ def block(facts):
 
 BEGIN, END = "# BEGIN gen_commands: table\n", "# END gen_commands: table\n"
 
+# The key specs of the commands, by INFO's keys (Step 3 below): the block
+# between "# BEGIN gen_commands: by key" and "# END gen_commands: by key"
+# in src/command.bend holds ro.key, the arity and the key specs (and how
+# they are read, as in desc) of a command that only reads, which name the
+# keys a call of it read (CLIENT TRACKING remembers them), spec.key, the
+# same of every command, which name the keys ACL checks a call's user
+# against, and acl.kind.key, the commands whose channels, user or patterns
+# that check reads, each with no walk of the table and none of its
+# documentation built.
+KBEGIN, KEND = "# BEGIN gen_commands: by key\n", "# END gen_commands: by key\n"
+
+def ro(info):
+    name = info[0]
+    if name in KEYNUM:
+        specs, way = [], KEYNUM[name]
+    elif name in UNKNOWN:
+        specs, way = [], UNKNOWN[name]
+    else:
+        specs, way = [kspec(name, ks) for ks in info[8]], GETKEYS.get(name, "KBySpecs{}")
+    return f"Ro{{{bint(info[1])}, {blist(specs)}, {way}}}"
+
+def by_key_block(facts):
+    fl = flag_sets(facts)
+    tops, keys = stats_keys(REDIS.read_text())
+    def info_of(name, kind):
+        if kind == "top":
+            return facts["commands"][name]["info"]
+        return next(x for x in facts["commands"][kind]["info"][9] if x[0] == name)
+    out = ["# the arity and key specs of the command or subcommand of a key that",
+           "# only reads (readonly); none for any other",
+           "def ro.key(+key: Nat) -> Maybe<&2, Ro>:", "  match key:"]
+    for k, (name, kind, i) in enumerate(keys, 1):
+        if "readonly" not in fl[name]:
+            continue
+        out += ["    case %dn:" % k, "      Some{%s}" % ro(info_of(name, kind))]
+    out += ["    case _:", "      None{}", "",
+            "# the same of the command or subcommand of any key, for ACL's check of",
+            "# a call (acl.bend); none for key 0",
+            "def spec.key(+key: Nat) -> Maybe<&2, Ro>:", "  match key:"]
+    for k, (name, kind, i) in enumerate(keys, 1):
+        out += ["    case %dn:" % k, "      Some{%s}" % ro(info_of(name, kind))]
+    out += ["    case _:", "      None{}", "",
+            "# what else ACL's check of a call reads of its command, by its key: 1",
+            "# PUBLISH and SPUBLISH, 2 SUBSCRIBE and SSUBSCRIBE, 3 PSUBSCRIBE (the",
+            "# channels it names), 4 AUTH, HELLO, QUIT and RESET (which every user",
+            "# may run: Redis's CMD_NO_AUTH), 5 SORT, 6 SORT_RO (whose patterns name",
+            "# keys); 0 any other",
+            "def acl.kind.key(+key: Nat) -> Nat:", "  match key:"]
+    for k, (name, kind, i) in enumerate(keys, 1):
+        if name in ACL_KIND:
+            out += ["    case %dn:" % k, "      %dn" % ACL_KIND[name]]
+    out += ["    case _:", "      0n"]
+    return "\n".join(out) + "\n"
+
+# the commands acl.kind.key names (by_key_block)
+ACL_KIND = {"publish": 1, "spublish": 1, "subscribe": 2, "ssubscribe": 2, "psubscribe": 3,
+            "auth": 4, "hello": 4, "quit": 4, "reset": 4, "sort": 5, "sort_ro": 6}
+
 def generate():
     src = BEND.read_text()
     a, b = src.index(BEGIN) + len(BEGIN), src.index(END)
-    return src[:a] + block(load()) + src[b:]
+    src = src[:a] + block(load()) + src[b:]
+    a, b = src.index(KBEGIN) + len(KBEGIN), src.index(KEND)
+    return src[:a] + by_key_block(load()) + src[b:]
 
 # Step 3: facts -> INFO's keys
 # ----------------------------
@@ -385,8 +452,11 @@ SBEGIN, SEND = "# BEGIN gen_commands: stats\n", "# END gen_commands: stats\n"
 # are invalid (INVALIDOBJ), PFDEBUG on a key not there or on a
 # subcommand read once the key is found, PFSELFTEST on a check it fails,
 # the commands of GEO on a key of another kind (WRONGTYPE), the
-# searches on arguments read once their key is found, and RESTORE on a
-# key there (BUSYKEY), a time or a payload read once the key is found.
+# searches on arguments read once their key is found, RESTORE on a key
+# there (BUSYKEY), a time or a payload read once the key is found, and
+# the reads of a stream on a key of another kind (WRONGTYPE), XREAD's IDs
+# read once their key is found, XINFO on a key not there and on options
+# read once it is found, and XPENDING on a group not there (NOGROUP).
 # (SET's time
 # can overflow too, past 9 * 10^18 ms only: SET is left out, so that a
 # batch of SETs needs no look at its replies.)
@@ -405,7 +475,8 @@ RISKY = {"incr", "decr", "incrby", "decrby", "expire", "pexpire", "setex", "pset
          "zintercard", "zunionstore", "zinterstore", "zdiffstore", "zrangestore", "zmpop",
          "zrandmember", "sort", "sort_ro", "pfadd", "pfcount", "pfmerge", "pfdebug", "pfselftest",
          "geoadd", "geodist", "geohash", "geopos", "georadius", "georadius_ro", "georadiusbymember",
-         "georadiusbymember_ro", "geosearch", "geosearchstore", "restore"}
+         "georadiusbymember_ro", "geosearch", "geosearchstore", "restore", "xlen", "xrange",
+         "xrevrange", "xread", "xinfo|consumers", "xinfo|groups", "xinfo|stream", "xpending"}
 
 # BendKV's commands that may be replicated (MAY_REPLICATE in Redis's
 # src/commands/*.json), a flag COMMAND INFO hides: a monitor may not run
@@ -413,11 +484,59 @@ RISKY = {"incr", "decr", "incrby", "decrby", "expire", "pexpire", "setex", "pset
 # CLIENT PAUSE WRITE holds them back, as it holds back those that write
 MAY_REPLICATE = {"publish", "spublish", "eval", "pfcount"}
 
+# How a call of each command counts its changes, for INFO's
+# rdb_changes_since_last_save and the save points (Redis's server.dirty,
+# which each command adds to as it changes the data): a rule of
+# server.bend (The count of changes) that reads the call's reply, and the
+# weight the shell reads in its arguments, and in the state of a key it
+# names before it runs, for the rules that take one. 0 none (a read, or a
+# command that changes no data); 1 one for a reply that is no error; 2 an
+# integer reply; 3 one for OK or a bulk string (SET, with or without GET);
+# 4 one for a bulk string; 5 one for a bulk string, or the length of an
+# array or a set (the pops of a list or a set); 6 the length of the second
+# item of [key, elements] (LMPOP and ZMPOP); 7 half the length of a flat
+# array, or the pairs of an array of them (ZPOPMIN and ZPOPMAX); 8 one for
+# an array (BLPOP and BZPOPMIN at once); 9 one for a positive integer
+# (LINSERT); 10 the weight for a reply that is no error; 11 the weight for
+# a positive integer; 12 one for a positive integer, the weight (the
+# destination was there) for 0 (the STOREs of sets and sorted sets,
+# BITOP); 13 a positive integer, the weight for 0 (SORT's and GEO's
+# STORE); 14 the weight for an integer reply, or the integer when the
+# weight is 0, the weight for a score (ZADD and GEOADD; with INCR, and
+# ZINCRBY, the weight is whether the score changes); 15 the weight less
+# the nulls of an array (BITFIELD); 16 the weight, whatever the reply
+# (EVAL of BendKV's own scripts: the DEL they start with, then what the
+# command they run changes, which an error of that command does not undo)
+DIRTY_RULES = {"none": 0, "one": 1, "int": 2, "set": 3, "bulk": 4, "pop": 5, "mpop": 6, "zpop": 7,
+               "bpop": 8, "pos": 9, "wok": 10, "wpos": 11, "store": 12, "nstore": 13, "zadd": 14,
+               "bitfield": 15, "w": 16}
+DIRTY = {
+    "set": "set", "setnx": "int", "setex": "one", "psetex": "one", "getset": "one", "getdel": "bulk",
+    "getex": "wok", "setrange": "wok", "mset": "wok", "msetnx": "wpos", "incr": "one", "decr": "one",
+    "incrby": "one", "decrby": "one", "incrbyfloat": "one", "append": "one", "setbit": "wok",
+    "bitop": "store", "bitfield": "bitfield", "del": "int", "unlink": "int", "expire": "int",
+    "pexpire": "int", "expireat": "int", "pexpireat": "int", "persist": "int", "rename": "wok",
+    "renamenx": "int", "move": "int", "copy": "int", "swapdb": "one", "flushdb": "wok",
+    "flushall": "wok", "restore": "wok", "hset": "wok", "hmset": "wok", "hsetnx": "int",
+    "hincrby": "one", "hincrbyfloat": "one", "hdel": "int", "lpush": "wok", "rpush": "wok",
+    "lpushx": "wpos", "rpushx": "wpos", "linsert": "pos", "lset": "one", "lpop": "pop", "rpop": "pop",
+    "ltrim": "wok", "lrem": "int", "lmove": "bulk", "rpoplpush": "bulk", "lmpop": "mpop",
+    "blpop": "bpop", "brpop": "bpop", "blmove": "bulk", "brpoplpush": "bulk", "blmpop": "mpop",
+    "sadd": "int", "srem": "int", "smove": "wok", "spop": "pop", "sinterstore": "store",
+    "sunionstore": "store", "sdiffstore": "store", "zadd": "zadd", "zincrby": "zadd", "zrem": "int",
+    "zremrangebyscore": "int", "zremrangebyrank": "int", "zremrangebylex": "int", "zpopmin": "zpop",
+    "zpopmax": "zpop", "zmpop": "mpop", "bzpopmin": "bpop", "bzpopmax": "bpop", "bzmpop": "mpop",
+    "zunionstore": "store", "zinterstore": "store", "zdiffstore": "store", "zrangestore": "store",
+    "pfadd": "int", "pfmerge": "one", "pfdebug": "wok", "geoadd": "zadd", "georadius": "nstore",
+    "georadiusbymember": "nstore", "geosearchstore": "nstore", "sort": "nstore",
+    "function|flush": "one", "eval": "w"}
+
 # the parser's commands with subcommands, by the function that numbers
 # their subcommands
 CONTAINERS = {"client": "client_id", "function": "function_id", "config": "config_id",
               "command": "command_id", "object": "object_id", "memory": "memory_id",
-              "pubsub": "pubsub_id"}
+              "pubsub": "pubsub_id", "slowlog": "slowlog_id", "latency": "latency_id",
+              "acl": "acl_id", "xinfo": "xinfo_id"}
 
 # the names a numbering def of redis.bend gives its numbers
 def numbering(src, fn):
@@ -564,6 +683,55 @@ def stats_block(src, facts):
         if "denyoom" in fl[name]:
             out += ["    case %dn:" % k, "      True{}"]
     out += ["    case _:", "      False{}", ""]
+    out += ["# whether the command of a key writes (write): while a background save",
+            "# that failed stops writes (MISCONF), Redis refuses it",
+            "def stat.write(+key: Nat) -> Bool:", "  match key:"]
+    for k, (name, kind, i) in enumerate(keys, 1):
+        if "write" in fl[name]:
+            out += ["    case %dn:" % k, "      True{}"]
+    out += ["    case _:", "      False{}", ""]
+    for name in DIRTY:
+        if name not in [x[0] for x in keys]:
+            raise SystemExit("gen_commands.py: DIRTY names no command " + name)
+    for name, kind, i in keys:
+        if "write" in fl[name] and name not in DIRTY:
+            raise SystemExit("gen_commands.py: DIRTY lacks the command " + name + ", which writes")
+    out += ["# how a call of the command of a key counts its changes (DIRTY_RULES in",
+            "# tools/gen_commands.py; server.bend, The count of changes)",
+            "def stat.dirty(+key: Nat) -> Nat:", "  match key:"]
+    for k, (name, kind, i) in enumerate(keys, 1):
+        rule = DIRTY_RULES[DIRTY.get(name, "none")]
+        if rule:
+            out += ["    case %dn:" % k, "      %dn" % rule]
+    out += ["    case _:", "      0n", ""]
+    out += ["# whether the command of a key may not run in a transaction (no_multi:",
+            "# SHUTDOWN, SAVE): in MULTI, Redis refuses it before it is queued",
+            "def stat.nomulti(+key: Nat) -> Bool:", "  match key:"]
+    for k, (name, kind, i) in enumerate(keys, 1):
+        if "no_multi" in fl[name]:
+            out += ["    case %dn:" % k, "      True{}"]
+    out += ["    case _:", "      False{}", ""]
+    out += ["# whether Redis flags the command of a key fast: the latency monitor",
+            "# names a slow call of it fast-command, of any other command",
+            "def stat.fast(+key: Nat) -> Bool:", "  match key:"]
+    for k, (name, kind, i) in enumerate(keys, 1):
+        if "fast" in fl[name]:
+            out += ["    case %dn:" % k, "      True{}"]
+    out += ["    case _:", "      False{}", ""]
+    out += ["# whether the slow log skips the calls of the command of a key",
+            "# (skip_slowlog: EXEC, whose commands are logged on their own)",
+            "def stat.noslow(+key: Nat) -> Bool:", "  match key:"]
+    for k, (name, kind, i) in enumerate(keys, 1):
+        if "skip_slowlog" in fl[name]:
+            out += ["    case %dn:" % k, "      True{}"]
+    out += ["    case _:", "      False{}", ""]
+    out += ["# whether the command of a key only reads (readonly): a client that",
+            "# tracks keys (CLIENT TRACKING) has the keys of its calls remembered",
+            "def stat.ro(+key: Nat) -> Bool:", "  match key:"]
+    for k, (name, kind, i) in enumerate(keys, 1):
+        if "readonly" in fl[name]:
+            out += ["    case %dn:" % k, "      True{}"]
+    out += ["    case _:", "      False{}", ""]
     fk = first_keys(facts)
     out += ["# whether the command of a key touches the key of its first argument",
             "# (its first key is there), as Redis's lookups set a key's access time:",
@@ -655,6 +823,52 @@ def dispatch_block(nums, own):
     out += own_block(own)
     return "\n".join(out) + "\n"
 
+# Step 5: facts -> ACL's ids
+# --------------------------
+# ACL's ids number Redis 7.0.15's commands and subcommands, every one that
+# ACL CAT lists under its categories (each is in @fast or @slow), in the
+# byte order of their names, so that a rule may name a command BendKV
+# lacks, as in Redis. The block between "# BEGIN gen_commands: acl" and
+# "# END gen_commands: acl" in src/acl.bend holds their names, the ids of
+# each category, and the id of each of INFO's keys (Step 3), which a call
+# carries in its code.
+
+ABEGIN, AEND = "# BEGIN gen_commands: acl\n", "# END gen_commands: acl\n"
+ACLSRC = HERE / "src" / "acl.bend"
+
+def acl_block(src, facts):
+    names = sorted({n for ns in facts["acl"].values() for n in ns})
+    ids = {n: i for i, n in enumerate(names)}
+    tops, keys = stats_keys(src)
+    out = ["# Redis 7.0.15's commands and subcommands, by ACL id: their full names",
+           "# in byte order",
+           "def acl.names() -> List<&2, String>:",
+           "  " + blist([bstr(n) for n in names]), "",
+           "# how many there are",
+           "def acl.count() -> Nat:", "  %dn" % len(names), "",
+           "# the categories, in ACL CAT's order",
+           "def acl.cats() -> List<&2, String>:",
+           "  " + blist([bstr(c) for c in facts["categories"]]), "",
+           "# the ids of each category, by its place in ACL CAT's list",
+           "def acl.cat.ids(+c: Nat) -> List<&2, Nat>:", "  match c:"]
+    for i, cat in enumerate(facts["categories"]):
+        out += ["    case %dn:" % i, "      " + blist(["%dn" % ids[n] for n in facts["acl"][cat]])]
+    out += ["    case _:", "      []", "",
+            "# the id of a call of BendKV, by its INFO key (redis.bend); acl.count()",
+            "# for none",
+            "def acl.of.key(+k: Nat) -> Nat:", "  match k:"]
+    for k, (name, kind, i) in enumerate(keys, 1):
+        if name not in ids:
+            raise SystemExit("gen_commands.py: ACL CAT does not list " + name)
+        out += ["    case %dn:" % k, "      %dn" % ids[name]]
+    out += ["    case _:", "      %dn" % len(names)]
+    return "\n".join(out) + "\n"
+
+def generate_acl():
+    src = ACLSRC.read_text()
+    a, b = src.index(ABEGIN) + len(ABEGIN), src.index(AEND)
+    return src[:a] + acl_block(REDIS.read_text(), load()) + src[b:]
+
 def generate_redis():
     src = REDIS.read_text()
     a, b = src.index(DBEGIN) + len(DBEGIN), src.index(DEND)
@@ -670,8 +884,11 @@ if __name__ == "__main__":
             raise SystemExit("gen_commands.py: src/command.bend is out of date; run tools/gen_commands.py")
         if generate_redis() != REDIS.read_text():
             raise SystemExit("gen_commands.py: src/redis.bend is out of date; run tools/gen_commands.py")
+        if generate_acl() != ACLSRC.read_text():
+            raise SystemExit("gen_commands.py: src/acl.bend is out of date; run tools/gen_commands.py")
     elif sys.argv[1:] == []:
         BEND.write_text(generate())
         REDIS.write_text(generate_redis())
+        ACLSRC.write_text(generate_acl())
     else:
         raise SystemExit("usage: gen_commands.py [--extract | --check]")

@@ -1356,16 +1356,17 @@ law config_fail:
   {S.own_srv(R.SConfigSet{args}, conn, srv) == srv : S.Srv}
 
 # LAW: one that succeeds leaves the server with the new parameters, and
-# their requirepass is the password from then on (what INFO counts stays;
-# what the server keeps for maxmemory reads their maxmemory parameters
-# again, and keeps its random numbers)
+# their requirepass is the password from then on (what INFO counts stays,
+# and its timing reads its parameters again; what the server keeps for
+# maxmemory reads their maxmemory parameters again, and keeps its random
+# numbers)
 law config_pass:
   for  args: List<&2, String>
   for  conn: S.Conn
   for +srv: S.Srv
   for  cfg: List<&2, C.CItem>
   for  e: {C.config.set(args, S.srv.cfg(srv)) == Done{cfg} : Result<&2, &2, R.Reply, List<&2, C.CItem>>}
-  {S.own_srv(R.SConfigSet{args}, conn, srv) == S.Srv{C.config.get_value(cfg, "requirepass"), cfg, S.srv.info(srv), S.mm.cfg(S.srv.mm(srv), cfg)} : S.Srv}
+  {S.own_srv(R.SConfigSet{args}, conn, srv) == S.Srv{C.config.get_value(cfg, "requirepass"), cfg, S.srv.timing(S.srv.info(srv), cfg), S.mm.cfg(S.srv.mm(srv), cfg)} : S.Srv}
 
 # a parameter with another value
 def with(it: C.CItem, v: String) -> C.CItem:
