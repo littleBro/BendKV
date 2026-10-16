@@ -167,6 +167,7 @@ for n in "" post send "post build/test.aof everysec"; do
     python3 tests/geo_test.py --bendkv "$PORT" --redis "$REDIS_PORT"
     python3 tests/dump_test.py --bendkv "$PORT" --redis "$REDIS_PORT"
     python3 tests/stream_dump_test.py --bendkv "$PORT" --redis "$REDIS_PORT"
+    python3 tests/stream_read_test.py --bendkv "$PORT" --redis "$REDIS_PORT"
     # RESP3: its scenarios, then the differential tests again with each
     # connection in RESP3 (HELLO 3)
     python3 tests/resp3_test.py --bendkv "$PORT" --redis "$REDIS_PORT"

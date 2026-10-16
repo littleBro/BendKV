@@ -26,6 +26,7 @@ The scenarios:
    message, the commands a script may not call (EVAL, MULTI, SUBSCRIBE,
    BLPOP, which Redis 7.0.15 refuses rather than run without blocking),
    the blocking ones it may (BLMPOP and BZMPOP, which do not wait),
+   XREAD's BLOCK, which Redis refuses a script,
    SELECT in a script, which leaves the caller's database as it was, and
    SORT of a set by a constant, which Redis sorts with ALPHA for a script.
 3. Error texts: runtime errors, compile errors, a global not there, a
@@ -352,6 +353,13 @@ CALLS = [
     ("return redis.call('BLMPOP', 0, 1, KEYS[1], 'RIGHT', 'COUNT', 5)", ["list"], []),
     ("return redis.call('BZMPOP', 0, 1, KEYS[1], 'MAX')", ["zset"], []),
     ("return redis.call('BLMPOP', 'x', 1, KEYS[1], 'LEFT')", ["none"], []),
+    # XREAD's BLOCK, which a script may not use (its name as the script wrote it)
+    ("return redis.call('XREAD', 'BLOCK', 0, 'STREAMS', KEYS[1], '0')", ["none"], []),
+    ("return redis.pcall('XREAD', 'COUNT', 1, 'BLOCK', 100, 'STREAMS', KEYS[1], KEYS[2], '0', '$')", ["none", "str"], []),
+    ("return redis.pcall('xread', 'count', 2, 'block', -1, 'streams', KEYS[1])", ["none"], []),
+    ("return redis.pcall('XREAD', 'COUNT', 'x', 'BLOCK', 0, 'STREAMS', KEYS[1], '0')", ["none"], []),
+    ("return redis.pcall('XREAD', 'STREAMS', KEYS[1], 'BLOCK', '0', '0')", ["none"], []),
+    ("return redis.pcall('XREAD', 'NOACK', 'BLOCK', 0, 'STREAMS', KEYS[1], '0')", ["none"], []),
     # errors of commands, raised by call, returned by pcall
     ("return redis.call('LPUSH', KEYS[1], 'x')", ["str"], []),
     ("return redis.pcall('LPUSH', KEYS[1], 'x')", ["str"], []),

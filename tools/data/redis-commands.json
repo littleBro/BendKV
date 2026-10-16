@@ -31735,6 +31735,1323 @@
     }
    ]
   },
+  "xinfo": {
+   "docs": {
+    "%": [
+     "summary",
+     "A container for stream introspection commands",
+     "since",
+     "5.0.0",
+     "group",
+     "stream",
+     "complexity",
+     "Depends on subcommand.",
+     "subcommands",
+     {
+      "%": [
+       "xinfo|consumers",
+       {
+        "%": [
+         "summary",
+         "List the consumers in a consumer group",
+         "since",
+         "5.0.0",
+         "group",
+         "stream",
+         "complexity",
+         "O(1)",
+         "arguments",
+         [
+          {
+           "%": [
+            "name",
+            "key",
+            "type",
+            "key",
+            "key_spec_index",
+            0
+           ]
+          },
+          {
+           "%": [
+            "name",
+            "groupname",
+            "type",
+            "string"
+           ]
+          }
+         ]
+        ]
+       },
+       "xinfo|groups",
+       {
+        "%": [
+         "summary",
+         "List the consumer groups of a stream",
+         "since",
+         "5.0.0",
+         "group",
+         "stream",
+         "complexity",
+         "O(1)",
+         "history",
+         {
+          "~": [
+           [
+            "7.0.0",
+            "Added the `entries-read` and `lag` fields"
+           ]
+          ]
+         },
+         "arguments",
+         [
+          {
+           "%": [
+            "name",
+            "key",
+            "type",
+            "key",
+            "key_spec_index",
+            0
+           ]
+          }
+         ]
+        ]
+       },
+       "xinfo|help",
+       {
+        "%": [
+         "summary",
+         "Show helpful text about the different subcommands",
+         "since",
+         "5.0.0",
+         "group",
+         "stream",
+         "complexity",
+         "O(1)"
+        ]
+       },
+       "xinfo|stream",
+       {
+        "%": [
+         "summary",
+         "Get information about a stream",
+         "since",
+         "5.0.0",
+         "group",
+         "stream",
+         "complexity",
+         "O(1)",
+         "history",
+         {
+          "~": [
+           [
+            "6.0.0",
+            "Added the `FULL` modifier."
+           ],
+           [
+            "7.0.0",
+            "Added the `max-deleted-entry-id`, `entries-added`, `recorded-first-entry-id`, `entries-read` and `lag` fields"
+           ]
+          ]
+         },
+         "arguments",
+         [
+          {
+           "%": [
+            "name",
+            "key",
+            "type",
+            "key",
+            "key_spec_index",
+            0
+           ]
+          },
+          {
+           "%": [
+            "name",
+            "full",
+            "type",
+            "block",
+            "token",
+            "FULL",
+            "flags",
+            {
+             "~": [
+              {
+               "+": "optional"
+              }
+             ]
+            },
+            "arguments",
+            [
+             {
+              "%": [
+               "name",
+               "count",
+               "type",
+               "integer",
+               "token",
+               "COUNT",
+               "flags",
+               {
+                "~": [
+                 {
+                  "+": "optional"
+                 }
+                ]
+               }
+              ]
+             }
+            ]
+           ]
+          }
+         ]
+        ]
+       }
+      ]
+     }
+    ]
+   },
+   "info": [
+    "xinfo",
+    -2,
+    {
+     "~": []
+    },
+    0,
+    0,
+    0,
+    {
+     "~": [
+      {
+       "+": "@slow"
+      }
+     ]
+    },
+    {
+     "~": []
+    },
+    {
+     "~": []
+    },
+    [
+     [
+      "xinfo|consumers",
+      4,
+      {
+       "~": [
+        {
+         "+": "readonly"
+        }
+       ]
+      },
+      2,
+      2,
+      1,
+      {
+       "~": [
+        {
+         "+": "@read"
+        },
+        {
+         "+": "@stream"
+        },
+        {
+         "+": "@slow"
+        }
+       ]
+      },
+      {
+       "~": [
+        "nondeterministic_output"
+       ]
+      },
+      {
+       "~": [
+        {
+         "%": [
+          "flags",
+          {
+           "~": [
+            {
+             "+": "RO"
+            },
+            {
+             "+": "access"
+            }
+           ]
+          },
+          "begin_search",
+          {
+           "%": [
+            "type",
+            "index",
+            "spec",
+            {
+             "%": [
+              "index",
+              2
+             ]
+            }
+           ]
+          },
+          "find_keys",
+          {
+           "%": [
+            "type",
+            "range",
+            "spec",
+            {
+             "%": [
+              "lastkey",
+              0,
+              "keystep",
+              1,
+              "limit",
+              0
+             ]
+            }
+           ]
+          }
+         ]
+        }
+       ]
+      },
+      {
+       "~": []
+      }
+     ],
+     [
+      "xinfo|groups",
+      3,
+      {
+       "~": [
+        {
+         "+": "readonly"
+        }
+       ]
+      },
+      2,
+      2,
+      1,
+      {
+       "~": [
+        {
+         "+": "@read"
+        },
+        {
+         "+": "@stream"
+        },
+        {
+         "+": "@slow"
+        }
+       ]
+      },
+      {
+       "~": []
+      },
+      {
+       "~": [
+        {
+         "%": [
+          "flags",
+          {
+           "~": [
+            {
+             "+": "RO"
+            },
+            {
+             "+": "access"
+            }
+           ]
+          },
+          "begin_search",
+          {
+           "%": [
+            "type",
+            "index",
+            "spec",
+            {
+             "%": [
+              "index",
+              2
+             ]
+            }
+           ]
+          },
+          "find_keys",
+          {
+           "%": [
+            "type",
+            "range",
+            "spec",
+            {
+             "%": [
+              "lastkey",
+              0,
+              "keystep",
+              1,
+              "limit",
+              0
+             ]
+            }
+           ]
+          }
+         ]
+        }
+       ]
+      },
+      {
+       "~": []
+      }
+     ],
+     [
+      "xinfo|help",
+      2,
+      {
+       "~": [
+        {
+         "+": "loading"
+        },
+        {
+         "+": "stale"
+        }
+       ]
+      },
+      0,
+      0,
+      0,
+      {
+       "~": [
+        {
+         "+": "@stream"
+        },
+        {
+         "+": "@slow"
+        }
+       ]
+      },
+      {
+       "~": []
+      },
+      {
+       "~": []
+      },
+      {
+       "~": []
+      }
+     ],
+     [
+      "xinfo|stream",
+      -3,
+      {
+       "~": [
+        {
+         "+": "readonly"
+        }
+       ]
+      },
+      2,
+      2,
+      1,
+      {
+       "~": [
+        {
+         "+": "@read"
+        },
+        {
+         "+": "@stream"
+        },
+        {
+         "+": "@slow"
+        }
+       ]
+      },
+      {
+       "~": []
+      },
+      {
+       "~": [
+        {
+         "%": [
+          "flags",
+          {
+           "~": [
+            {
+             "+": "RO"
+            },
+            {
+             "+": "access"
+            }
+           ]
+          },
+          "begin_search",
+          {
+           "%": [
+            "type",
+            "index",
+            "spec",
+            {
+             "%": [
+              "index",
+              2
+             ]
+            }
+           ]
+          },
+          "find_keys",
+          {
+           "%": [
+            "type",
+            "range",
+            "spec",
+            {
+             "%": [
+              "lastkey",
+              0,
+              "keystep",
+              1,
+              "limit",
+              0
+             ]
+            }
+           ]
+          }
+         ]
+        }
+       ]
+      },
+      {
+       "~": []
+      }
+     ]
+    ]
+   ]
+  },
+  "xlen": {
+   "docs": {
+    "%": [
+     "summary",
+     "Return the number of entries in a stream",
+     "since",
+     "5.0.0",
+     "group",
+     "stream",
+     "complexity",
+     "O(1)",
+     "arguments",
+     [
+      {
+       "%": [
+        "name",
+        "key",
+        "type",
+        "key",
+        "key_spec_index",
+        0
+       ]
+      }
+     ]
+    ]
+   },
+   "info": [
+    "xlen",
+    2,
+    {
+     "~": [
+      {
+       "+": "readonly"
+      },
+      {
+       "+": "fast"
+      }
+     ]
+    },
+    1,
+    1,
+    1,
+    {
+     "~": [
+      {
+       "+": "@read"
+      },
+      {
+       "+": "@stream"
+      },
+      {
+       "+": "@fast"
+      }
+     ]
+    },
+    {
+     "~": []
+    },
+    {
+     "~": [
+      {
+       "%": [
+        "flags",
+        {
+         "~": [
+          {
+           "+": "RO"
+          }
+         ]
+        },
+        "begin_search",
+        {
+         "%": [
+          "type",
+          "index",
+          "spec",
+          {
+           "%": [
+            "index",
+            1
+           ]
+          }
+         ]
+        },
+        "find_keys",
+        {
+         "%": [
+          "type",
+          "range",
+          "spec",
+          {
+           "%": [
+            "lastkey",
+            0,
+            "keystep",
+            1,
+            "limit",
+            0
+           ]
+          }
+         ]
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "~": []
+    }
+   ]
+  },
+  "xpending": {
+   "docs": {
+    "%": [
+     "summary",
+     "Return information and entries from a stream consumer group pending entries list, that are messages fetched but never acknowledged.",
+     "since",
+     "5.0.0",
+     "group",
+     "stream",
+     "complexity",
+     "O(N) with N being the number of elements returned, so asking for a small fixed number of entries per call is O(1). O(M), where M is the total number of entries scanned when used with the IDLE filter. When the command returns just the summary and the list of consumers is small, it runs in O(1) time; otherwise, an additional O(N) time for iterating every consumer.",
+     "history",
+     {
+      "~": [
+       [
+        "6.2.0",
+        "Added the `IDLE` option and exclusive range intervals."
+       ]
+      ]
+     },
+     "arguments",
+     [
+      {
+       "%": [
+        "name",
+        "key",
+        "type",
+        "key",
+        "key_spec_index",
+        0
+       ]
+      },
+      {
+       "%": [
+        "name",
+        "group",
+        "type",
+        "string"
+       ]
+      },
+      {
+       "%": [
+        "name",
+        "filters",
+        "type",
+        "block",
+        "flags",
+        {
+         "~": [
+          {
+           "+": "optional"
+          }
+         ]
+        },
+        "arguments",
+        [
+         {
+          "%": [
+           "name",
+           "min-idle-time",
+           "type",
+           "integer",
+           "token",
+           "IDLE",
+           "since",
+           "6.2.0",
+           "flags",
+           {
+            "~": [
+             {
+              "+": "optional"
+             }
+            ]
+           }
+          ]
+         },
+         {
+          "%": [
+           "name",
+           "start",
+           "type",
+           "string"
+          ]
+         },
+         {
+          "%": [
+           "name",
+           "end",
+           "type",
+           "string"
+          ]
+         },
+         {
+          "%": [
+           "name",
+           "count",
+           "type",
+           "integer"
+          ]
+         },
+         {
+          "%": [
+           "name",
+           "consumer",
+           "type",
+           "string",
+           "flags",
+           {
+            "~": [
+             {
+              "+": "optional"
+             }
+            ]
+           }
+          ]
+         }
+        ]
+       ]
+      }
+     ]
+    ]
+   },
+   "info": [
+    "xpending",
+    -3,
+    {
+     "~": [
+      {
+       "+": "readonly"
+      }
+     ]
+    },
+    1,
+    1,
+    1,
+    {
+     "~": [
+      {
+       "+": "@read"
+      },
+      {
+       "+": "@stream"
+      },
+      {
+       "+": "@slow"
+      }
+     ]
+    },
+    {
+     "~": [
+      "nondeterministic_output"
+     ]
+    },
+    {
+     "~": [
+      {
+       "%": [
+        "flags",
+        {
+         "~": [
+          {
+           "+": "RO"
+          },
+          {
+           "+": "access"
+          }
+         ]
+        },
+        "begin_search",
+        {
+         "%": [
+          "type",
+          "index",
+          "spec",
+          {
+           "%": [
+            "index",
+            1
+           ]
+          }
+         ]
+        },
+        "find_keys",
+        {
+         "%": [
+          "type",
+          "range",
+          "spec",
+          {
+           "%": [
+            "lastkey",
+            0,
+            "keystep",
+            1,
+            "limit",
+            0
+           ]
+          }
+         ]
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "~": []
+    }
+   ]
+  },
+  "xrange": {
+   "docs": {
+    "%": [
+     "summary",
+     "Return a range of elements in a stream, with IDs matching the specified IDs interval",
+     "since",
+     "5.0.0",
+     "group",
+     "stream",
+     "complexity",
+     "O(N) with N being the number of elements being returned. If N is constant (e.g. always asking for the first 10 elements with COUNT), you can consider it O(1).",
+     "history",
+     {
+      "~": [
+       [
+        "6.2.0",
+        "Added exclusive ranges."
+       ]
+      ]
+     },
+     "arguments",
+     [
+      {
+       "%": [
+        "name",
+        "key",
+        "type",
+        "key",
+        "key_spec_index",
+        0
+       ]
+      },
+      {
+       "%": [
+        "name",
+        "start",
+        "type",
+        "string"
+       ]
+      },
+      {
+       "%": [
+        "name",
+        "end",
+        "type",
+        "string"
+       ]
+      },
+      {
+       "%": [
+        "name",
+        "count",
+        "type",
+        "integer",
+        "token",
+        "COUNT",
+        "flags",
+        {
+         "~": [
+          {
+           "+": "optional"
+          }
+         ]
+        }
+       ]
+      }
+     ]
+    ]
+   },
+   "info": [
+    "xrange",
+    -4,
+    {
+     "~": [
+      {
+       "+": "readonly"
+      }
+     ]
+    },
+    1,
+    1,
+    1,
+    {
+     "~": [
+      {
+       "+": "@read"
+      },
+      {
+       "+": "@stream"
+      },
+      {
+       "+": "@slow"
+      }
+     ]
+    },
+    {
+     "~": []
+    },
+    {
+     "~": [
+      {
+       "%": [
+        "flags",
+        {
+         "~": [
+          {
+           "+": "RO"
+          },
+          {
+           "+": "access"
+          }
+         ]
+        },
+        "begin_search",
+        {
+         "%": [
+          "type",
+          "index",
+          "spec",
+          {
+           "%": [
+            "index",
+            1
+           ]
+          }
+         ]
+        },
+        "find_keys",
+        {
+         "%": [
+          "type",
+          "range",
+          "spec",
+          {
+           "%": [
+            "lastkey",
+            0,
+            "keystep",
+            1,
+            "limit",
+            0
+           ]
+          }
+         ]
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "~": []
+    }
+   ]
+  },
+  "xread": {
+   "docs": {
+    "%": [
+     "summary",
+     "Return never seen elements in multiple streams, with IDs greater than the ones reported by the caller for each stream. Can block.",
+     "since",
+     "5.0.0",
+     "group",
+     "stream",
+     "complexity",
+     "For each stream mentioned: O(N) with N being the number of elements being returned, it means that XREAD-ing with a fixed COUNT is O(1). Note that when the BLOCK option is used, XADD will pay O(M) time in order to serve the M clients blocked on the stream getting new data.",
+     "arguments",
+     [
+      {
+       "%": [
+        "name",
+        "count",
+        "type",
+        "integer",
+        "token",
+        "COUNT",
+        "flags",
+        {
+         "~": [
+          {
+           "+": "optional"
+          }
+         ]
+        }
+       ]
+      },
+      {
+       "%": [
+        "name",
+        "milliseconds",
+        "type",
+        "integer",
+        "token",
+        "BLOCK",
+        "flags",
+        {
+         "~": [
+          {
+           "+": "optional"
+          }
+         ]
+        }
+       ]
+      },
+      {
+       "%": [
+        "name",
+        "streams",
+        "type",
+        "block",
+        "token",
+        "STREAMS",
+        "arguments",
+        [
+         {
+          "%": [
+           "name",
+           "key",
+           "type",
+           "key",
+           "key_spec_index",
+           0,
+           "flags",
+           {
+            "~": [
+             {
+              "+": "multiple"
+             }
+            ]
+           }
+          ]
+         },
+         {
+          "%": [
+           "name",
+           "id",
+           "type",
+           "string",
+           "flags",
+           {
+            "~": [
+             {
+              "+": "multiple"
+             }
+            ]
+           }
+          ]
+         }
+        ]
+       ]
+      }
+     ]
+    ]
+   },
+   "info": [
+    "xread",
+    -4,
+    {
+     "~": [
+      {
+       "+": "readonly"
+      },
+      {
+       "+": "blocking"
+      },
+      {
+       "+": "movablekeys"
+      }
+     ]
+    },
+    0,
+    0,
+    0,
+    {
+     "~": [
+      {
+       "+": "@read"
+      },
+      {
+       "+": "@stream"
+      },
+      {
+       "+": "@slow"
+      },
+      {
+       "+": "@blocking"
+      }
+     ]
+    },
+    {
+     "~": []
+    },
+    {
+     "~": [
+      {
+       "%": [
+        "flags",
+        {
+         "~": [
+          {
+           "+": "RO"
+          },
+          {
+           "+": "access"
+          }
+         ]
+        },
+        "begin_search",
+        {
+         "%": [
+          "type",
+          "keyword",
+          "spec",
+          {
+           "%": [
+            "keyword",
+            "STREAMS",
+            "startfrom",
+            1
+           ]
+          }
+         ]
+        },
+        "find_keys",
+        {
+         "%": [
+          "type",
+          "range",
+          "spec",
+          {
+           "%": [
+            "lastkey",
+            -1,
+            "keystep",
+            1,
+            "limit",
+            2
+           ]
+          }
+         ]
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "~": []
+    }
+   ]
+  },
+  "xrevrange": {
+   "docs": {
+    "%": [
+     "summary",
+     "Return a range of elements in a stream, with IDs matching the specified IDs interval, in reverse order (from greater to smaller IDs) compared to XRANGE",
+     "since",
+     "5.0.0",
+     "group",
+     "stream",
+     "complexity",
+     "O(N) with N being the number of elements returned. If N is constant (e.g. always asking for the first 10 elements with COUNT), you can consider it O(1).",
+     "history",
+     {
+      "~": [
+       [
+        "6.2.0",
+        "Added exclusive ranges."
+       ]
+      ]
+     },
+     "arguments",
+     [
+      {
+       "%": [
+        "name",
+        "key",
+        "type",
+        "key",
+        "key_spec_index",
+        0
+       ]
+      },
+      {
+       "%": [
+        "name",
+        "end",
+        "type",
+        "string"
+       ]
+      },
+      {
+       "%": [
+        "name",
+        "start",
+        "type",
+        "string"
+       ]
+      },
+      {
+       "%": [
+        "name",
+        "count",
+        "type",
+        "integer",
+        "token",
+        "COUNT",
+        "flags",
+        {
+         "~": [
+          {
+           "+": "optional"
+          }
+         ]
+        }
+       ]
+      }
+     ]
+    ]
+   },
+   "info": [
+    "xrevrange",
+    -4,
+    {
+     "~": [
+      {
+       "+": "readonly"
+      }
+     ]
+    },
+    1,
+    1,
+    1,
+    {
+     "~": [
+      {
+       "+": "@read"
+      },
+      {
+       "+": "@stream"
+      },
+      {
+       "+": "@slow"
+      }
+     ]
+    },
+    {
+     "~": []
+    },
+    {
+     "~": [
+      {
+       "%": [
+        "flags",
+        {
+         "~": [
+          {
+           "+": "RO"
+          },
+          {
+           "+": "access"
+          }
+         ]
+        },
+        "begin_search",
+        {
+         "%": [
+          "type",
+          "index",
+          "spec",
+          {
+           "%": [
+            "index",
+            1
+           ]
+          }
+         ]
+        },
+        "find_keys",
+        {
+         "%": [
+          "type",
+          "range",
+          "spec",
+          {
+           "%": [
+            "lastkey",
+            0,
+            "keystep",
+            1,
+            "limit",
+            0
+           ]
+          }
+         ]
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "~": []
+    }
+   ]
+  },
   "zadd": {
    "docs": {
     "%": [

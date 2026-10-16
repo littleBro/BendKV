@@ -6610,7 +6610,11 @@ each kept as Redis does it):
 - An error raised with a CR LF in its text is sent as it is, which breaks the protocol;
   one returned in an error table is cleaned.
 - BLPOP, BRPOP, BLMOVE, BRPOPLPUSH, BZPOPMIN and BZPOPMAX are refused from a script;
-  BLMPOP and BZMPOP run without waiting.
+  BLMPOP and BZMPOP run without waiting. XREAD refuses a script its BLOCK as it reads
+  its options (`xreadCommand` under `CLIENT_SCRIPT`), before BLOCK's value, the keys or
+  the IDs, but after an error of an option before it: a failed call of XREAD, "ERR
+  XREAD command is not allowed with BLOCK option from scripts", the command named as
+  the script wrote it. The driver reads the call's words then (`sc.xblock`).
 - `math.random` is not seeded again for each script: its numbers go on from the last
   script's.
 - `return 1e20`, `2^63`, `0/0` and `1/0` all give `:-9223372036854775808`.
@@ -8285,6 +8289,118 @@ take the list `deq.ins` and `deq.rem` give.
 - A search still builds a small node of its state for each element it reads (`LSeek`).
   Threading its four fields through the walk would spare that node; it is left for
   later.
+
+## 3zzzy. Streams: the commands that read one
+
+**What there is** (`src/stream.bend`, new; `src/redis.bend`, Streams and Reads of a
+stream). XLEN, XRANGE, XREVRANGE, XREAD, XINFO and XPENDING answer as Redis 7.0.15's
+`t_stream.c` does, on the stream of section 3zzzu. Each is a Peek of its key
+(`PStream`), so a batch of them runs the fast way; XREAD of several keys, or with
+BLOCK, is a session command (`SXRead`) that reads the client's database.
+- **IDs** are read as `streamGenericParseIDOrReply` reads them: none of 128 bytes or
+  more; the text ends at its first NUL, as Redis reads a C string; `-` and `+` alone,
+  but where the read is strict (XREAD's IDs, and an ID after `(`); the sequence after
+  the first `-`; each part as `string2ull` reads it, `string2ll`'s form first (which
+  must not be below 0), else `strtoull`'s: spaces, then a sign, then digits, the number
+  below 2^64, negated mod 2^64 after a `-`. So ` 8`, `+7` and `009-3` are IDs, and
+  `1--03` is 1-18446744073709551613, as on Redis. A bound after `(` is left out: the ID
+  after it for a start, before it for an end (`streamIncrID`, `streamDecrID`), with
+  Redis's errors past the last ID and before 0-0.
+- **Ranges** walk as `streamIterator` does: from the node `raxSeek` finds (the last
+  whose master ID is at most the start, else the first; backwards, the last at most the
+  end, else the last of all), through each node's entries, read from their bytes.
+  Forwards, an entry deleted or before the start is passed, and the first other one
+  past the end ends the walk; backwards the other way round. So an entry below its
+  node's master ID (section 3zzzu) is found where Redis finds it. COUNT is read as
+  `xrangeGenericCommand` reads it: the last one holds, one below 0 is 0, and 0 answers
+  a null array (a key not there, an empty array).
+- **XREAD** reads its options as `xreadCommand` does: BLOCK and COUNT in any order up to
+  STREAMS, the last of each holding; GROUP and NOACK are XREADGROUP's; as many keys as
+  IDs; Redis's errors in its order. Then each key in turn, WRONGTYPE or its ID (`$` its
+  last ID, 0-0 for a key not there; `>` an error), the first error before any key is
+  served. A key is served when its last live entry is past the ID, from the ID after
+  it. BendKV blocks on no stream yet: a BLOCK that serves no key answers "ERR BendKV
+  does not block on streams yet", from the shell (`sh.plain`, `ShNoBlock`). In MULTI,
+  the session answers it a null array, as Redis answers a client that may not wait.
+  A script's XREAD with BLOCK gets no further than its options: Redis refuses a script
+  the option (3zzzd).
+  That is why XREAD with BLOCK is `SXRead` even for one key: the shell sees it, and
+  EXEC runs it as the session does.
+- **XINFO STREAM** answers the stream's length, its count of nodes
+  (`radix-tree-keys`), the count of a rax's nodes over their master IDs
+  (`radix-tree-nodes`, below), its last, greatest deleted and first IDs, its count of
+  entries ever added, its count of groups, and its first and last entries. FULL
+  answers the entries (COUNT 10 by default, 0 for all, below 0 as 10) and each group
+  with its pending entries, and its consumers with theirs, as many as COUNT. **GROUPS**
+  answers each group's consumers, pending entries, last ID, count of entries read and
+  lag; **CONSUMERS** each consumer's pending entries and idle time (now less its seen
+  time, 0 for one past now); **HELP** its lines.
+- **The count of entries read and the lag** are Redis's
+  (`streamEstimateDistanceFromFirstEverEntry`, `streamReplyWithCGLag`): a null where
+  Redis cannot tell, such as an entry deleted after the group's last ID
+  (`streamRangeHasTombstones`). A count Redis keeps as a long long prints as one, its
+  64 bits as two's complement.
+- **The count of the radix tree's nodes** is a model of Redis's rax over the 16-byte
+  keys: a head; a node for each group of keys that branches, with a compressed node
+  before it for the bytes its keys share past their parent's branch; a leaf for each
+  key, with a compressed node before it for the bytes left. One pass over the master
+  IDs in order counts it, from each pair's common prefix, with a stack. The model
+  matched Redis's count on 1,244 states made by XADD, XDEL and XTRIM (a node an entry,
+  IDs small, huge and near powers of two), and the test compares it on each shape.
+- **XPENDING** takes 3 words, or 6 to 9, as `xpendingCommand` does: IDLE's time (a long
+  long) with 8 words at least, the count (a long long, below 0 as 0), then the bounds,
+  then the consumer. Its summary is the count, the smallest and greatest pending IDs,
+  and each consumer that has pending entries, with their count, in name order. Its
+  entries are each the ID, the consumer, the idle time (now less the time of delivery,
+  0 for one past now) and the count of deliveries; those idle less than IDLE's time are
+  left out. A key or a group not there answers "NOGROUP No such key ... or consumer
+  group ...".
+
+**What it changes elsewhere.**
+- **Replies.** XREAD's keys and a key with its entries are two new replies, `RKMap`
+  and `RKPair` (`src/resp.bend`): an array of arrays of two in RESP2, a map in RESP3.
+- **Tables.** COMMAND, COMMAND DOCS and the ACL categories come from
+  `tools/gen_commands.py`, whose table gets the six commands (XINFO with its four
+  subcommands).
+- **INFO.** Each call is counted by a code in a word of twelve bits with six set
+  (`tools/gen_commands.py`), three codes a key. The reads bring INFO's keys to 286
+  with BGSAVE's (section 3zzzk), 861 of the 924 words. The commands that write a
+  stream (15 more) will take 906, and 6 keys past them need wider words.
+- **Proofs.** `proof/PROOF.bend`'s three case splits over the session commands each
+  got `SXRead`'s case, that of another read of the session (`SPfCount`'s). No law
+  changed.
+
+**Tests.** `tests/stream_read_test.py` (new, in `make test`). Redis makes the 27 shapes
+of `stream_dump_test.py` and one of 100,000 entries. BendKV RESTOREs each payload, and
+both answer the same reads, in RESP2 and in RESP3, each reply compared whole:
+- XRANGE and XREVRANGE between the stream's IDs, their neighbours and the edges, each
+  as an ID, without its sequence and after `(`, with COUNT of none, 0, 1, 2, 7, -1 and
+  2^63 - 1;
+- XREAD after each, with `$`, with COUNT, of several keys, with BLOCK where an entry is
+  there, and with BLOCK in MULTI;
+- XINFO STREAM (FULL with COUNT none, 0, 1, 3 and -1), GROUPS and CONSUMERS;
+  XPENDING's summary of each group and its entries over ranges, counts, consumers and
+  IDLE times;
+- the errors: arity, syntax, IDs that are none, an interval past its edge, WRONGTYPE,
+  a key or a group not there, XREAD's options, XINFO's subcommands.
+
+An idle time is now less a time, read by each server at its own now: two that differ
+by less than 2 s count as the same. 28,806 checks at seed 1; seeds 2 to 5 pass too.
+BLOCK where Redis would wait is checked on BendKV alone.
+
+**What it costs** (PERFORMANCE 82). Nothing on GET, SET and INCR. On a stream of 100,000
+entries in 1,000 nodes, XLEN and XPENDING's summary answer as fast as Redis's, the
+ranges and XREAD 2.8 to 6.7 times slower, a whole range 3.9 times. XINFO STREAM counts
+the rax's nodes from the master IDs at each call, where Redis keeps the count, so its
+time grows with the nodes: 3.5 times Redis's on 1 node, 19 times on 100, 100 times on
+1,000.
+
+**What is left.**
+- The count of the rax's nodes kept with the stream, and moved by the writes as they
+  add and remove nodes, as Redis keeps `numnodes`.
+- XREAD that waits (BLOCK), with the writes that serve it.
+- A walk of a node's entries that steps over their bytes without copying them (the
+  ranges from the middle of a node), as section 3zzzu says for RESTORE.
 
 ## 4. Where a request's time goes, and hiding the memory waits
 

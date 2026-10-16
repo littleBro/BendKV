@@ -6044,12 +6044,14 @@ def bg.unblock(+n: Nat, +err: Bool, +code: Nat, g: LRun) -> LRun:
 # rewrite ends (BGSAVE: Background saves); or refuse a command its
 # client's user may not run (in MULTI, flagging the transaction), log its
 # client in (AUTH, HELLO), or run a subcommand of ACL that reaches the
-# clients (ACL); a command that does not run (after a QUIT, or before the
-# client authenticates) runs as the session runs it. A script command
-# makes its client wait for the engine (Scripts), SCRIPT KILL asks a
-# script's end, and while a script runs past lua-time-limit a command is
-# refused BUSY (in MULTI, flagging the transaction; a SHUTDOWN without
-# NOSAVE as its own failed call), or EXEC aborted with it.
+# clients (ACL); or answer an XREAD with BLOCK that would wait, as BendKV
+# blocks on no stream yet (in MULTI it does not wait: the session answers
+# it a null array, as Redis does); a command that does not run (after a
+# QUIT, or before the client authenticates) runs as the session runs it.
+# A script command makes its client wait for the engine (Scripts), SCRIPT
+# KILL asks a script's end, and while a script runs past lua-time-limit a
+# command is refused BUSY (in MULTI, flagging the transaction; a SHUTDOWN
+# without NOSAVE as its own failed call), or EXEC aborted with it.
 type Sh is Data:
   ShRun{}
   ShWait{b: S.Blk}
@@ -6090,6 +6092,7 @@ type Sh is Data:
   ShAuth{}
   ShHello{}
   ShAcl{k: Nat}
+  ShNoBlock{}
 
 def sh.blk(b: S.Blk, +ds: R.Ds) -> Sh:
   +x = b
@@ -6210,6 +6213,8 @@ def sh.plain(+c: R.Cmd, +code: Nat, +ds: R.Ds) -> Sh:
       ShFlush{}
     case R.Own{R.SAcl{+k, a}}:
       sh.acl(k)
+    case R.Own{R.SXRead{q}}:
+      Bool.pick(Sh, R.xread.waits(q, R.ds.focused(ds)), ShNoBlock{}, ShRun{})
     case R.Own{R.SBad{R.RError{+m}}}:
       sh.abort.if(Nat.is_eq(R.code.key(code), R.stat.top(162n)), m)
     case _:
@@ -9714,6 +9719,8 @@ def bg.cmd(+id: Nat, +back: Chan(Ans), +inb: Nat, sh: Sh, +c: R.Cmd, +code: Nat,
       bg.hello(id, c, code, inb, a, None{}, g)
     case ShAcl{+k}:
       bg.acl.op(id, k, c, code, g)
+    case ShNoBlock{}:
+      bg.say(R.RError{"ERR BendKV does not block on streams yet"}, code, g)
 
 # the word a request of hash h leaves in its key's word w under an LFU
 # policy, at the minute min, r its random number
@@ -14061,6 +14068,62 @@ def sc.call.go(ok: Bool, +why: String, +c: R.Cmd, +code: Nat, +r3: Bool, +raw: S
 def sc.call.at(+why: String, +c: R.Cmd, +code: Nat, +r3: Bool, +raw: String, sc: Sc, +aof: Bool, +pid: U32, g: Grp, +reqs: Chan(Req)) -> IO(Grp):
   sc.call.go(String.is_empty(why), why, c, code, r3, raw, sc, aof, pid, g, reqs)
 
+# XREAD with BLOCK from a script: xreadCommand refuses it once it reads
+# BLOCK among its options with a word after it (CLIENT_SCRIPT), before
+# BLOCK's value, the keys or the IDs, as it runs: a failed call, its
+# error naming the command as the script wrote it. The options before it
+# are read as the command reads them: a COUNT with a long long after it
+# reads on, COUNT with another word is COUNT's error, and STREAMS, an
+# option of XREADGROUP's or another word ends the options or is an error
+# of its own. ws are the words after the head, k the kind of the word at
+# the head (R.xro.word: 1 BLOCK, 2 COUNT)
+def sc.xcount.ok(m: Maybe<&2, Nat>) -> Bool:
+  match m:
+    case Some{n}:
+      True{}
+    case None{}:
+      False{}
+
+def sc.xblock.go(ws: List<&2, String>, +k: Nat) -> Bool:
+  match ws k:
+    case Con{v, rest} 1n:
+      True{}
+    case Con{v, Con{w, rest}} 2n:
+      sc.xblock.go(rest, Bool.pick(Nat, sc.xcount.ok(R.xc.of(R.ll.read(v))), R.xro.word(w), 0n))
+    case _ _:
+      False{}
+
+# (ws: the call's words, its command's name first)
+def sc.xblock(ws: List<&2, String>) -> Bool:
+  match ws:
+    case Con{name, Con{w, rest}}:
+      sc.xblock.go(rest, R.xro.word(w))
+    case _:
+      False{}
+
+def sc.xblock.name(ws: List<&2, String>) -> String:
+  match ws:
+    case Con{name, rest}:
+      name
+    case Nil{}:
+      ""
+
+# whether a call (x: of XREAD, by its key) is refused its BLOCK, read
+# from the call's bytes only then
+def sc.xblock.is(x: Bool, +raw: String) -> Bool:
+  match x:
+    case True{}:
+      sc.xblock(av.first(P.argvs(raw)))
+    case False{}:
+      False{}
+
+def sc.xblock.cmd(xb: Bool, +raw: String, +c: R.Cmd) -> R.Cmd:
+  match xb:
+    case True{}:
+      R.Own{R.SFail{R.RError{"ERR " ++ sc.xblock.name(av.first(P.argvs(raw))) ++ " command is not allowed with BLOCK option from scripts"}}}
+    case False{}:
+      c
+
 # a call (its request's bytes parsed as a client's: one command and its
 # code), checked as Redis checks a script's call, then run
 @unsafe
@@ -14072,7 +14135,8 @@ def sc.call.run(+c: R.Cmd, +code: Nat, +r3: Bool, +raw: String, +sc: Sc, +aof: B
   +noscript = R.stat.noscript(key)
   +v = grp.acl.call(Bool.not(Bool.or(unknown, Bool.or(arity, noscript))), code, raw, x)
   +clean = U32.is_eq(U32.and(grp.sc.st(x), 2), 0)
-  sc.call.at(sc.call.why(unknown, arity, noscript, sc.acl.why(v), Bool.and(sc.ro(sc), R.stat.pausable(key)), Bool.and(grp.misconf(x), Bool.and(clean, R.stat.write(key))), Bool.and(Bool.not(sc.aoom(sc)), Bool.and(grp.oom(x), Bool.and(clean, R.stat.denyoom(key))))), c, code, r3, raw, sc, aof, pid, sc.acl.log(v, sc, x), reqs)
+  +xb = sc.xblock.is(Nat.is_eq(key, R.stat.top(214n)), raw)
+  sc.call.at(sc.call.why(unknown, arity, noscript, sc.acl.why(v), Bool.and(sc.ro(sc), R.stat.pausable(key)), Bool.and(grp.misconf(x), Bool.and(clean, R.stat.write(key))), Bool.and(Bool.not(sc.aoom(sc)), Bool.and(grp.oom(x), Bool.and(clean, R.stat.denyoom(key))))), sc.xblock.cmd(xb, raw, c), Bool.pick(Nat, xb, R.stat.code(key, 2n), code), r3, raw, sc, aof, pid, sc.acl.log(v, sc, x), reqs)
 
 @unsafe
 def sc.call.of(b: P.Batch, +r3: Bool, +raw: String, sc: Sc, +aof: Bool, +pid: U32, g: Grp, +reqs: Chan(Req)) -> IO(Grp):
