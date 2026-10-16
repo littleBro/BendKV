@@ -186,7 +186,9 @@ passes 42 of its 52 tests (the rest need other types, or DEBUG). BITOP and LCS b
 types, or replication), and COMMAND GETKEYS of LCS passes in unit/introspection-2.
 BITFIELD brought 16, all of unit/bitfield; of unit/bitops's other two tests, one needs
 lists and the other counts the changes since the last save (`rdb_changes_since_last_save`
-in INFO), which BendKV does not keep. Several databases brought 6 of the 17 tests Redis
+in INFO), which BendKV did not keep when the suite last ran (it does since section 3zzzk
+of [FINDINGS.md](FINDINGS.md), counting some writes otherwise than Redis: README.md,
+Persistence). Several databases brought 6 of the 17 tests Redis
 passes that run only without `--singledb`: SET and GET in different databases, DEL in
 database 1, and four of MOVE's five (against a key the target holds, against a database
 that is no integer, with a time and without one). The fifth, MOVE's basic usage, passes
@@ -272,7 +274,7 @@ pubsubshard, shutdown, tls, type/list-common, wait):
   monitor's expire-cycle event, and LATENCY RESET of the events it would have given),
   the order of a hash Redis keeps in a listpack past the parameters' defaults (above),
   replication (`min-replicas-to-write`, EXEC's NOREPLICAS),
-  `rdb_changes_since_last_save` (0), the size of a client's query buffer (CLIENT LIST's
+  `rdb_changes_since_last_save` (0 when the suite last ran), the size of a client's query buffer (CLIENT LIST's
   qbuf, 0), streams, and MOVE's basic usage (above). (Before
   times to live, SET's options failed 30 more tests here, answered `ERR syntax error`.
   INFO's statistics per command, which `info-command` looked for, made 3 more tests pass;
@@ -323,7 +325,8 @@ file, so the next step is the suite's own mode with BendKV in place of
 (`tests/start_test.py`, against `redis-server`), restarts from the append-only file
 (`tests/aof_test.py`, and after kills under load: `tests/crash_test.py`), the RDB
 file (`tests/rdb_test.py`: files of Redis's and of BendKV's, each loaded by both, SAVE and
-the saves of SHUTDOWN and FLUSHALL), and the append-only file's
+the saves of SHUTDOWN and FLUSHALL; `tests/bgsave_test.py`: BGSAVE, the save points,
+MISCONF and the count of changes), and the append-only file's
 rewrite (`tests/rewrite_test.py`: BGREWRITEAOF's replies
 and INFO's fields against Redis's, the rewritten file against Redis's base, writes during a
 rewrite, BendKV and Redis started from the new file; Redis's unit/aofrw is tagged
@@ -375,7 +378,8 @@ against BendKV: the same tests pass, and the same fail.
 Every test BendKV fails of those Redis passes fails on what BendKV does not have:
 
 - **A command it does not have:** in redis-py, Lua's (EVALSHA 74, SCRIPT 30, FUNCTION 7),
-  streams (73), ACL 34, MODULE 2, and BGSAVE, CLIENT TRACKING and REPLICAOF one each
+  streams (73), ACL 34, MODULE 2, and BGSAVE (before section 3zzzk of FINDINGS.md),
+  CLIENT TRACKING and REPLICAOF one each
   (223 tests in each protocol); in go-redis, streams (26), Lua's (12) and ACL (39
   tests). SORT's tests, 37 in redis-py and 2 in go-redis, pass since SORT (section 3zzh
   of [FINDINGS.md](FINDINGS.md)), and so does go-redis's test of COMMAND GETKEYS, which

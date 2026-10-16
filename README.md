@@ -419,14 +419,15 @@ translation stays in the trusted base.
   append-only file written and synced, a rewrite that runs stopped, the RDB file saved
   with save points or SAVE and not with NOSAVE (a save that fails stops nothing, Redis's
   error answered, but with FORCE), the pid file removed, the process ended with code 0.
-  Where BendKV differs: SIGTERM and SIGINT end the process at once, without the
-  shutdown Redis runs for them (`shutdown-on-sigterm`, `shutdown-on-sigint`: its save
-  with save points among it), as the runtime has no handler for them; a SHUTDOWN that
-  saves lets the other clients' requests in its group run before the save, so that what
-  they write reaches the append-only file and the RDB file and they get no reply, where
-  Redis ends inside the SHUTDOWN and runs none of them (issue #84); MEMORY
-  MALLOC-STATS has no allocator's statistics; LOLWUT's large drawings take up to a
-  hundred times Redis's time (FINDINGS.md, sections 3zzl and 3zzzc).
+  Where BendKV differs: SIGTERM and SIGINT end the process at once, without the shutdown
+  Redis runs for them (`shutdown-on-sigterm`, `shutdown-on-sigint`: its save with save
+  points among it, and the removal of a background save's temporary file), as the
+  runtime has no handler for them; a SHUTDOWN that saves lets the other clients'
+  requests in its group run before the save, so that what they write reaches the
+  append-only file and the RDB file and they get no reply, where Redis ends inside the
+  SHUTDOWN and runs none of them (issue #84); MEMORY MALLOC-STATS has no allocator's
+  statistics; LOLWUT's large drawings take up to a hundred times Redis's time
+  (FINDINGS.md, sections 3zzl and 3zzzc).
 - **Configuration:** CONFIG GET (names, aliases and glob patterns), SET (several
   parameters at once, all or none), RESETSTAT, REWRITE, HELP, over every parameter of
   Redis 7.0.15 (counted in [In numbers](#in-numbers)), taken from Redis's own table by
@@ -533,31 +534,48 @@ translation stays in the trusted base.
   value as DUMP writes it, EOF and the CRC64, or eight zero bytes with `rdbchecksum
   no`): SAVE writes it into `temp-<pid>.rdb`, syncs it, renames it onto `dbfilename` and
   syncs the directory, as Redis's `rdbSave` does, with its replies and log lines;
-  SHUTDOWN saves it (above), and FLUSHALL with save points saves the emptied
-  databases, as Redis 7.0's does; LASTSAVE and INFO's `rdb_last_save_time`,
-  `rdb_saves`, `rdb_last_bgsave_status` and `rdb_last_load_keys_loaded` and `_expired`
-  follow it. The start reads every version from 1 to 10, every encoding Redis 7.0.15
-  reads but a stream's and a module's, AUX fields it does not know, and drops the keys
-  whose time has passed, counting them. Where BendKV differs: no BGSAVE and no save at
-  the save points (BendKV's default `save` is empty, where Redis's is `3600 1 300 100 60
-  10000`, and its start warns of save points set), nor on SIGTERM or SIGINT (above);
-  `rdb_changes_since_last_save` stays 0; no LZF written; no IDLE or FREQ written, and
+  SHUTDOWN saves it (above), and FLUSHALL with save points saves the emptied databases,
+  as Redis 7.0's does; BGSAVE [SCHEDULE] writes it in the background from a snapshot of
+  the databases at the command (the databases being values, without a fork, a slice at a
+  time between the groups of requests the server answers meanwhile), with Redis's
+  replies, log lines and INFO fields, and so does the cron at Redis's default save
+  points (`save 3600 1 300 100 60 10000`), five seconds apart after a save that failed;
+  one background job runs at a time (BGSAVE while a rewrite runs is refused, or
+  scheduled with SCHEDULE, BGREWRITEAOF while a save runs is scheduled, SAVE is refused,
+  and FLUSHALL and SHUTDOWN drop the save that runs); after a background save that
+  failed, with save points and `stop-writes-on-bgsave-error yes`, the writes and PING
+  are refused with Redis's MISCONF until a save ends well; INFO's
+  `rdb_changes_since_last_save` counts the changes since the last save, as Redis counts
+  them, for the save points; LASTSAVE and INFO's `rdb_last_save_time`, `rdb_saves`,
+  `rdb_last_bgsave_status` and `rdb_last_load_keys_loaded` and `_expired` follow it
+  (FINDINGS.md, section 3zzzk). The start reads every version from 1 to 10, every
+  encoding Redis 7.0.15 reads but a stream's and a module's, AUX fields it does not
+  know, and drops the keys whose time has passed, counting them. Where BendKV differs:
+  no save on SIGTERM or SIGINT (above; the start warns of it when save points are set),
+  and the short form (`bendkv PORT`) has no save points; `rdb_changes_since_last_save`
+  counts some writes otherwise (SET with GET by its reply, ZADD and GEOADD each pair,
+  BITFIELD each write that OVERFLOW FAIL let through, PFADD one, PFCOUNT none; a
+  pipeline's weights read as the batch found the databases; 0 after a start from the
+  append-only file); no fork, so no fork's fields or lines, and the progress of a save
+  in INFO follows each slice written (a rewrite's shows none); the line of a background
+  save's start comes once its group is answered; SAVE and the saves of SHUTDOWN and
+  FLUSHALL ignore `rdb-key-save-delay`; no LZF written; no IDLE or FREQ written, and
   those read set no word of use; SAVE's client waits through the rest of its group, so
   that the others in it see it blocked, the commands after SAVE in its pipeline run in a
   group of their own, the file holds the databases as the group left them, and SAVE's
   call time leaves the save out; after a start from the file, INFO's replication section
   and ROLE give an offset of 0, where Redis counts into `master_repl_offset` a DEL for
-  each key whose time had passed, and keeps the file's `repl-id` and `repl-offset` as its
-  `master_replid2` and offset, which its next save writes again (BendKV drops them);
+  each key whose time had passed, and keeps the file's `repl-id` and `repl-offset` as
+  its `master_replid2` and offset, which its next save writes again (BendKV drops them);
   the log of a file that does not load gives the byte where the reading failed, where
   Redis gives what it had read at its last report of progress, and leaves out Redis's
-  `function at rdb.c:N`; the start reads the whole file before it loads it, and
-  takes several times Redis's time (PERFORMANCE.md, section 67; FINDINGS.md, section
-  3zzzc).
+  `function at rdb.c:N`; the start reads the whole file before it loads it, and takes
+  several times Redis's time (PERFORMANCE.md, sections 67 and 72; FINDINGS.md, sections
+  3zzzc and 3zzzk).
 
 Not yet: streams, Lua
-scripts, CLIENT TRACKING, CONFIG REWRITE (it answers as Redis does without a configuration file),
-BGSAVE and saves at the save points. Times in ms are limited to 14 digits.
+scripts, CLIENT TRACKING, CONFIG REWRITE (it answers as Redis does without a configuration file).
+Times in ms are limited to 14 digits.
 
 ## Performance
 
@@ -784,7 +802,7 @@ away.
 | file | lines of code | of them written by a generator | the laws import it |
 |---|---:|---:|---|
 | `src/map.bend` | 2,000 | 640 | yes |
-| `src/redis.bend` | 16,000 | 6,400 | yes |
+| `src/redis.bend` | 18,000 | 7,300 | yes |
 | `src/batch.bend` | 84 |  | yes |
 | `src/aof.bend` | 1,200 |  | yes |
 | `src/session.bend` | 2,400 |  | yes |
@@ -793,17 +811,17 @@ away.
 | `src/float.bend` | 1,200 |  | no |
 | `src/geo.bend` | 870 |  | no |
 | `src/hll.bend` | 1,400 |  | no |
-| `src/info.bend` | 2,200 |  | no |
+| `src/info.bend` | 2,600 |  | no |
 | `src/lolwut.bend` | 470 |  | no |
 | `src/rdb.bend` | 2,100 |  | no |
 | `src/resp.bend` | 880 |  | no |
-| `src/server.bend` | 7,600 |  | no |
+| `src/server.bend` | 8,600 |  | no |
 | `src/startup.bend` | 460 |  | no |
 | `proof/LAWS.bend` | 920 | 20 |  |
 | `proof/SPEC.bend` | 370 |  |  |
 | `proof/PROOF.bend` | 16,000 | 2,800 |  |
-| `src/`, the 6 files the laws import | 23,000 | 7,100 |  |
-| `src/`, the 10 others | 18,000 | 1,100 |  |
+| `src/`, the 6 files the laws import | 25,000 | 8,100 |  |
+| `src/`, the 10 others | 20,000 | 1,100 |  |
 | `proof/` | 18,000 | 2,800 |  |
 <!-- END gen_counts: numbers -->
 

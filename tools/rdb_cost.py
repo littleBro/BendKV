@@ -11,7 +11,15 @@ resident memory before and after. Each step runs ROUNDS times, the
 servers in turn, and the medians are printed (section 67 of
 PERFORMANCE.md).
 
-    python3 tools/rdb_cost.py [--bin build/bendkv] [--redis redis-server] [--keys 1000000] [--size 100] [--hashes] [--rounds 3]
+With --bgsave, each server filled so answers a BGSAVE instead, while a
+client sends it SETs of the keys one at a time, each awaited (a value of
+SIZE random bytes for a random key): the time until INFO says the save
+has ended, the SETs served meanwhile and their latency (median, 99th
+percentile, highest), the server's resident memory before the save and
+its highest during it, and the copy on write Redis reports
+(rdb_last_cow_size; BendKV has no fork: section 72 of PERFORMANCE.md).
+
+    python3 tools/rdb_cost.py [--bin build/bendkv] [--redis redis-server] [--keys 1000000] [--size 100] [--hashes] [--rounds 3] [--bgsave]
 """
 import argparse
 import os
@@ -64,6 +72,18 @@ class Conn:
     def ask(self, *xs):
         self.s.sendall(enc(*xs))
         return self.lines(1)[0]
+
+    def bulk(self, *xs):
+        """sends a command whose reply is one bulk string, and reads it"""
+        self.s.sendall(enc(*xs))
+        n = int(self.lines(1)[0][1:])
+        while len(self.buf) < n + 2:
+            data = self.s.recv(1 << 20)
+            if not data:
+                raise EOFError("closed")
+            self.buf += data
+        out, self.buf = self.buf[:n], self.buf[n + 2:]
+        return out
 
 
 def up(port, p, limit=600):
@@ -119,11 +139,54 @@ def stop(port, p):
     p.wait(timeout=600)
 
 
-def one(exe, root, keys, size, hashes):
+def persistence(c, name):
+    m = re.search(rb"\r\n%s:([^\r]*)" % name.encode(), c.bulk("INFO", "persistence"))
+    return m.group(1) if m else b""
+
+
+def bgsave(port, pid, keys, size):
+    """BGSAVE, while a client sends SETs one at a time"""
+    c, w = Conn(port), Conn(port)
+    rnd = random.Random(2)
+    before = peak = rss(pid)
+    lat = []
+    t0 = time.time()
+    r = c.ask("BGSAVE")
+    if r != b"+Background saving started":
+        raise RuntimeError("BGSAVE answered %r" % r)
+    while True:
+        for _ in range(50):
+            x = enc("SET", "key:%d" % rnd.randrange(keys), rnd.randbytes(size))
+            t1 = time.perf_counter()
+            w.s.sendall(x)
+            if w.lines(1)[0] != b"+OK":
+                raise RuntimeError("SET failed")
+            lat.append(time.perf_counter() - t1)
+        peak = max(peak, rss(pid))
+        if persistence(c, "rdb_bgsave_in_progress") == b"0":
+            break
+    took = time.time() - t0
+    ok = persistence(c, "rdb_last_bgsave_status")
+    cow = int(persistence(c, "rdb_last_cow_size") or b"0")
+    c.s.close()
+    w.s.close()
+    if ok != b"ok":
+        raise RuntimeError("the background save failed")
+    lat.sort()
+    return {"bgsave": took, "sets": len(lat), "p50": lat[len(lat) // 2], "p99": lat[len(lat) * 99 // 100],
+            "max": lat[-1], "rss": before, "peak": peak, "cow": cow}
+
+
+def one(exe, root, keys, size, hashes, bg=False):
     d = tempfile.mkdtemp(dir=root)
     port = free_port()
     p, _ = start(exe, d, port)
     fill(port, keys, size, hashes)
+    if bg:
+        res = bgsave(port, p.pid, keys, size)
+        stop(port, p)
+        shutil.rmtree(d, ignore_errors=True)
+        return res
     before = rss(p.pid)
     c = Conn(port)
     t0 = time.time()
@@ -158,17 +221,32 @@ def main():
     ap.add_argument("--size", type=int, default=100)
     ap.add_argument("--hashes", action="store_true")
     ap.add_argument("--rounds", type=int, default=3)
+    ap.add_argument("--bgsave", action="store_true")
     a = ap.parse_args()
+    if a.bgsave and a.hashes:
+        ap.error("--bgsave writes strings: no --hashes")
     root = tempfile.mkdtemp(prefix="rdb_cost.")
     res = {"bendkv": [], "redis": []}
     try:
         for _ in range(a.rounds):
             for name, exe in (("bendkv", os.path.abspath(a.bin)), ("redis", a.redis)):
-                res[name].append(one(exe, root, a.keys, a.size, a.hashes))
+                res[name].append(one(exe, root, a.keys, a.size, a.hashes, a.bgsave))
     finally:
         shutil.rmtree(root, ignore_errors=True)
     what = "%d hashes of 10 fields of %d bytes" % (a.keys, a.size) if a.hashes else "%d keys of %d bytes" % (a.keys, a.size)
     print("%s, medians of %d rounds" % (what, a.rounds))
+    if a.bgsave:
+        print("%-8s %10s %8s %9s %9s %9s %8s %8s %8s" % ("server", "BGSAVE s", "SETs", "p50 us", "p99 us", "max us",
+                                                         "RSS MB", "peak MB", "CoW MB"))
+        for name in ("bendkv", "redis"):
+            xs = res[name]
+
+            def med(k):
+                return statistics.median(x[k] for x in xs)
+            print("%-8s %10.3f %8d %9.0f %9.0f %9.0f %8.1f %8.1f %8.1f" % (
+                name, med("bgsave"), med("sets"), med("p50") * 1e6, med("p99") * 1e6, med("max") * 1e6,
+                med("rss") / 1e6, med("peak") / 1e6, med("cow") / 1e6))
+        return
     print("%-8s %10s %14s %12s %12s %10s %10s" % ("server", "SAVE s", "file bytes", "start s", "load s", "RSS MB", "RSS2 MB"))
     for name in ("bendkv", "redis"):
         xs = res[name]

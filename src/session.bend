@@ -475,6 +475,12 @@ def srv.ran(s: Srv, +calls: Nat, +r: Nat, rs: List<&2, Nat>, +inb: Nat, +outb: N
     case Srv{pass, cfg, info, mm}:
       Srv{pass, cfg, I.info.ran(info, calls, r, rs, inb, outb), mm}
 
+# the same, with the batch's d changes (the count of changes)
+def srv.ran.d(s: Srv, +calls: Nat, +r: Nat, rs: List<&2, Nat>, +inb: Nat, +outb: Nat, +d: Nat) -> Srv:
+  match s:
+    case Srv{pass, cfg, info, mm}:
+      Srv{pass, cfg, I.info.ran.d(info, calls, r, rs, inb, outb, d), mm}
+
 def srv.errs(s: Srv, xs: List<&2, R.Erred>) -> Srv:
   match s:
     case Srv{pass, cfg, info, mm}:
@@ -583,6 +589,80 @@ def srv.rdb.shut(+s: Srv) -> Bool:
   match s:
     case Srv{pass, cfg, +info, mm}:
       I.info.rdb.shut(info)
+
+# the count of changes and the background saves (info.bend: Rdb, Bgs;
+# server.bend: The count of changes, Background saves): the record, lent;
+# d more changes; a SAVE that ended (well: none are left); a FLUSHALL's
+# save asked for, and made; a background save started at the second now,
+# of a snapshot of total keys (snap: a group's BGSAVE took it for the
+# shell; unsched: it is the one scheduled); one scheduled; the snapshot
+# taken by the shell; k keys written; the save dropped once the group is
+# answered (FLUSHALL); the save ended, well or not, or dropped, at the
+# second now: what its snapshot held is let go (Mm's debt paid, as at the
+# end of a rewrite)
+def srv.rdb(+s: Srv) -> I.Rdb:
+  match s:
+    case Srv{pass, cfg, +info, mm}:
+      I.info.rdb(info)
+
+def srv.dirtied(s: Srv, +d: Nat) -> Srv:
+  match s:
+    case Srv{pass, cfg, info, mm}:
+      Srv{pass, cfg, I.info.dirtied(info, d), mm}
+
+def srv.rdb.clean(s: Srv, +well: Bool) -> Srv:
+  match s:
+    case Srv{pass, cfg, info, mm}:
+      Srv{pass, cfg, I.info.rdb.clean(info, well), mm}
+
+def srv.rdb.flush.mark(s: Srv) -> Srv:
+  match s:
+    case Srv{pass, cfg, info, mm}:
+      Srv{pass, cfg, I.info.rdb.flush.mark(info), mm}
+
+def srv.rdb.flush.done(s: Srv, +well: Bool) -> Srv:
+  match s:
+    case Srv{pass, cfg, info, mm}:
+      Srv{pass, cfg, I.info.rdb.flush.done(info, well), mm}
+
+def srv.bg.go(s: Srv, +now: Nat, +total: Nat, snap: Maybe<&2, List<&2, R.Db>>, +unsched: Bool) -> Srv:
+  match s:
+    case Srv{pass, cfg, info, mm}:
+      Srv{pass, cfg, I.info.bg.go(info, now, total, snap, unsched), mm}
+
+def srv.bg.later(s: Srv) -> Srv:
+  match s:
+    case Srv{pass, cfg, info, mm}:
+      Srv{pass, cfg, I.info.bg.later(info), mm}
+
+def srv.bg.taken.of(p: Maybe<&2, List<&2, R.Db>> & I.Info, +pass: String, +cfg: List<&2, C.CItem>, mm: Mm) -> Maybe<&2, List<&2, R.Db>> & Srv:
+  (m, info) = p
+  (m, Srv{pass, cfg, info, mm})
+
+def srv.bg.taken(s: Srv) -> Maybe<&2, List<&2, R.Db>> & Srv:
+  match s:
+    case Srv{+pass, +cfg, info, mm}:
+      srv.bg.taken.of(I.info.bg.taken(info), pass, cfg, mm)
+
+def srv.bg.wrote(s: Srv, +k: Nat) -> Srv:
+  match s:
+    case Srv{pass, cfg, info, mm}:
+      Srv{pass, cfg, I.info.bg.wrote(info, k), mm}
+
+def srv.bg.killing(s: Srv) -> Srv:
+  match s:
+    case Srv{pass, cfg, info, mm}:
+      Srv{pass, cfg, I.info.bg.killing(info), mm}
+
+def srv.bg.end(s: Srv, +well: Bool, +now: Nat) -> Srv:
+  match s:
+    case Srv{pass, cfg, info, mm}:
+      Srv{pass, cfg, I.info.bg.end(info, well, now), mm.paid(mm)}
+
+def srv.bg.drop(s: Srv, +now: Nat) -> Srv:
+  match s:
+    case Srv{pass, cfg, info, mm}:
+      Srv{pass, cfg, I.info.bg.drop(info, now), mm.paid(mm)}
 
 # an eviction at now that deleted k keys and left the heap past
 # maxmemory or not (over)

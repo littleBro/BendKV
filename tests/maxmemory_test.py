@@ -302,7 +302,7 @@ def main():
     os.makedirs(kd)
     os.makedirs(rd)
     klog, rlog = os.path.join(args.dir, "bendkv.log"), os.path.join(args.dir, "redis.log")
-    kp, kc = start([args.bin, "--port", str(args.bendkv), "--dir", kd, "--maxmemory", "100"], args.bendkv, klog)
+    kp, kc = start([args.bin, "--port", str(args.bendkv), "--dir", kd, "--save", "", "--maxmemory", "100"], args.bendkv, klog)
     rp, rc = start(["redis-server", "--port", str(args.redis), "--bind", "127.0.0.1", "--save", "",
                     "--appendonly", "no", "--dir", rd, "--maxmemory", "100"], args.redis, rlog)
     try:
@@ -395,7 +395,7 @@ def main():
     ad = os.path.join(args.dir, "aof")
     os.makedirs(ad)
     alog = os.path.join(args.dir, "bendkv-aof.log")
-    kp, kc = start([args.bin, "--port", str(args.bendkv), "--dir", ad, "--appendonly", "yes"], args.bendkv, alog)
+    kp, kc = start([args.bin, "--port", str(args.bendkv), "--dir", ad, "--save", "", "--appendonly", "yes"], args.bendkv, alog)
     try:
         base = used(kc)
         fill(kc, 50000)
@@ -410,7 +410,7 @@ def main():
             fail("with the file: %r keys left" % (left,))
     finally:
         stop(kp)
-    kp, kc = start([args.bin, "--port", str(args.bendkv), "--dir", ad, "--appendonly", "yes"], args.bendkv, alog + ".2")
+    kp, kc = start([args.bin, "--port", str(args.bendkv), "--dir", ad, "--save", "", "--appendonly", "yes"], args.bendkv, alog + ".2")
     try:
         if cmd(kc, "DBSIZE") != left or sorted(cmd(kc, "KEYS", "*")[1]) != keys:
             fail("started again from the file: %r keys, %r before" % (cmd(kc, "DBSIZE"), left))

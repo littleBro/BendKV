@@ -321,9 +321,13 @@ synced, renamed onto `dbfilename`, the directory synced), SHUTDOWN saves it with
 with save points, FLUSHALL with save points saves the emptied databases, and the start
 loads it with `appendonly no`: every version from 1 to 10 and every encoding the codec
 reads, keys whose time has passed dropped and counted, Redis's lines for a file that does
-not load. No BGSAVE and no save at the save points yet, no LZF or IDLE and FREQ written,
-and no save on SIGTERM, which the runtime does not catch (section 3zzzc of
-docs/FINDINGS.md).
+not load. BGSAVE writes it in the background, from a snapshot of the databases at the
+command, a slice at a time between the groups the server answers (the databases are
+values: no fork), and so does the cron at the save points, Redis's by default
+(`3600 1 300 100 60 10000`), counting the changes since the last save as Redis counts
+them; a background save that fails stops the writes (MISCONF) until a save ends well.
+No LZF or IDLE and FREQ written, and no save on SIGTERM, which the runtime does not catch
+(sections 3zzzc and 3zzzk of docs/FINDINGS.md).
 Clients that wait: BLPOP, BRPOP, BLMOVE, BRPOPLPUSH, BLMPOP, BZPOPMIN, BZPOPMAX and
 BZMPOP; their timeout (seconds, a double; 0 means wait forever) is read as Redis reads
 it, with its errors. A command that has nothing to pop makes the client wait, and its
@@ -1119,6 +1123,12 @@ The translation the kernel reads can be dumped with
   INFO's fields and the saves of FLUSHALL and SHUTDOWN against Redis's transcripts;
   files that do not load, each stopping both starts with Redis's line (section 3zzzc of
   docs/FINDINGS.md).
+- **Background saves** (`tests/bgsave_test.py`): the count of changes of 170 writes of
+  every kind, alone, in a pipeline and in MULTI; BGSAVE's replies, INFO's fields while
+  it runs and after it, the file and the log; BGSAVE and BGREWRITEAOF scheduled while
+  the other runs; the save points; MISCONF after a save that failed, and the cron's next
+  try; SHUTDOWN and FLUSHALL while a save runs; the default save points, all against
+  Redis's transcripts (section 3zzzk of docs/FINDINGS.md).
 - **The end of a connection** (`tests/conn_test.py`): connections end by every path —
   the client closes after a request and before one, QUIT, a protocol error, a reset
   before the server has read the request and while it sends a reply of a megabyte — 50
