@@ -88,7 +88,9 @@ def free_port():
     return port
 
 # a server under test, in a directory of its own (tests save snapshots
-# and turn the append-only file on, in the server's directory)
+# and turn the append-only file on, in the server's directory), both with
+# no save points, so that no background save of the cron's runs under a
+# test (BendKV's default save points are Redis's)
 class Server:
     def __init__(self, cmd, home):
         self.cmd, self.home, self.p, self.port = cmd, home, None, free_port()
@@ -98,7 +100,7 @@ class Server:
         if os.path.basename(self.cmd) == "redis-server":
             args = [self.cmd, "--port", str(self.port), "--save", "", "--appendonly", "no", "--bind", "127.0.0.1"]
         else:
-            args = [os.path.abspath(self.cmd), "--port", str(self.port)]
+            args = [os.path.abspath(self.cmd), "--port", str(self.port), "--save", ""]
         self.p = subprocess.Popen(args, cwd=self.home, stdout=open(os.path.join(self.home, "server.log"), "ab"),
                                   stderr=subprocess.STDOUT)
         if not up(self.port):
