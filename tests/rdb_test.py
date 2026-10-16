@@ -29,8 +29,8 @@ the same commands.
 - Both ways again with a database of 10,000 keys (more than a slice of
   BendKV's writer, 4,096) and a file past 16 MB (more than one read of
   BendKV's start), and collections of 10,000 members.
-- SAVE, LASTSAVE and INFO's persistence fields (but
-  rdb_changes_since_last_save, which BendKV does not keep yet), SAVE
+- SAVE, LASTSAVE and INFO's persistence fields (rdb_changes_since_last_save
+  among them: tests/bgsave_test.py counts each write's), SAVE
   refused in MULTI and with arguments, COMMAND INFO and DOCS, a SAVE that
   fails (a directory where its temporary file goes), its statistics and
   CONFIG RESETSTAT; a SAVE in a pipeline saves what came before it and
@@ -664,7 +664,7 @@ def scenario(c, log, d, pid):
     def fields():
         return [info(c, "persistence", x) for x in ("rdb_saves", "rdb_last_bgsave_status", "rdb_bgsave_in_progress",
                                                     "rdb_last_bgsave_time_sec", "rdb_current_bgsave_time_sec",
-                                                    "rdb_last_cow_size")]
+                                                    "rdb_last_cow_size", "rdb_changes_since_last_save")]
     dump = os.path.join(d, "dump.rdb")
     t0 = int(run(c, "LASTSAVE")[1])
     log("1 lastsave", t0 == int(info(c, "persistence", "rdb_last_save_time")), abs(t0 - time.time()) < 60, fields())
