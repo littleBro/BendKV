@@ -8074,6 +8074,88 @@ as many members 3.8 times. A key of a long MSET costs 5,900 instructions, where 
 pipelined SET costs 4,181; where they go is not broken down here (FINDINGS 3zzzo).
 
 
+## 77. Small sets in one string
+
+**What changed** (FINDINGS 3zzzs). A set of at most 128 members of at most 64 bytes is
+one string of its members, as Redis 7.2's listpack is one allocation, where it was a trie
+of its members; an intset is one string of its integers in 2, 4 or 8 bytes each, as
+Redis's intset is, where it was a tree of their strings.
+
+**In time and memory** (200,000 sets `set:000000000000` to `set:000000199999`, each of 10
+members `m0000000` to `m0000009`, loaded by pipelined SADDs; then redis-benchmark, 20
+clients at a pipeline depth of 16, keys at random among the 200,000: 2,000,000 SISMEMBER
+of `m0000003`, 500,000 SMEMBERS, 500,000 SINTER of two sets, 2,000,000 SADD of
+`m0000003`, which is there, and 1,000,000 SADD of a new member; the server on one CPU,
+redis-benchmark on another; three rounds of main's build (a92597d, whose sets are main
+8b0993e's), this one and Redis 7.0.15, in turn; the median of each):
+
+| per second, and memory | main | this change | Redis 7.0.15 |
+|---|---:|---:|---:|
+| `used_memory` a key | 5,971.0 | 291.0 | 826.7 |
+| SISMEMBER | 285,551 | 423,639 | 367,715 |
+| SMEMBERS | 99,681 | 309,981 | 246,063 |
+| SINTER of two sets | 48,295 | 150,557 | 177,999 |
+| SADD of a member there | 266,880 | 396,354 | 372,370 |
+| SADD of a new member | 167,476 | 357,654 | 335,570 |
+
+On sets of 10 members this change serves 1.5 times main's SISMEMBER and SADD of a member
+there, 2.1 times its SADD of a new member and 3.1 times its SMEMBERS and SINTER, in a
+twentieth of its memory. Against Redis it serves SISMEMBER, SMEMBERS and both SADDs at
+106% to 126% of Redis's rate and SINTER at 85%, in a third of Redis's memory. A find runs
+more instructions than the trie's but misses the cache half as often, and the reads of a
+whole set run fewer of both (FINDINGS 3zzzs).
+
+**Sets of 128 members** (20,000 sets of 128 members of 15 bytes, `m0000000m000000` to
+`m0000127m000012`, one string of 2,048 bytes each here, loaded by pipelined SADDs; then
+redis-benchmark as above: 1,000,000 SISMEMBER of the 64th member and 1,000,000 of the
+last, 50,000 SMEMBERS and 20,000 SINTER of two sets; three rounds in turn, the median of
+each):
+
+| per second, and memory | main | this change | Redis 7.0.15 |
+|---|---:|---:|---:|
+| `used_memory` a key | 54,783.6 | 2,303.5 | 9,374.8 |
+| SISMEMBER of the 64th member | 292,997 | 339,328 | 400,962 |
+| SISMEMBER of the last | 312,989 | 278,940 | 490,436 |
+| SMEMBERS | 14,108 | 57,143 | 61,275 |
+| SINTER of two sets | 6,618 | 10,091 | 41,494 |
+
+A find of the 64th member runs twice main's instructions and still serves 16% more
+requests than main's, as it misses the cache less; a find of the last runs three times
+main's and serves 11% fewer. SMEMBERS serves 4 times main's requests and SINTER 1.5
+times, in a twenty-fourth of main's memory and a quarter of Redis's. Against Redis 7.0.15
+this change serves 85% of its rate for the 64th member, 57% for the last, 93% for
+SMEMBERS and 24% for SINTER, which finds each member of one set in the other by a walk,
+where Redis's hashtable finds it at once.
+
+**Instructions** (FINDINGS 3zzzs: callgrind per request): on these sets SISMEMBER runs
+11% more than main's and half its last-level misses, SMEMBERS 56% fewer, SINTER 30%
+fewer, SSCAN 76% fewer; on sets of 128 members a find runs twice main's instructions and
+SINTER three times and more, with a quarter of its misses or fewer; an SADD of 100
+members to a new key runs 4.4 times main's (issue #119).
+
+**Intsets** (20,000 intsets of the 511 integers j * m for j below 511, m 7, 100,000 or
+36,028,797,018,963, so that each is 2, 4 or 8 bytes in Redis's intset; loaded by pipelined
+SADDs; then redis-benchmark as above: 1,000,000 SISMEMBER of the middle member and 20,000
+SMEMBERS; three rounds in turn, the median of each):
+
+| per second | main | this change | Redis 7.0.15 |
+|---|---:|---:|---:|
+| SISMEMBER, 2 bytes | 670,691 | 537,924 | 713,776 |
+| SMEMBERS, 2 bytes | 17,841 | 16,764 | 27,360 |
+| SISMEMBER, 4 bytes | 468,165 | 485,437 | 615,385 |
+| SMEMBERS, 4 bytes | 11,403 | 7,345 | 26,702 |
+| SISMEMBER, 8 bytes | 461,255 | 330,907 | 634,115 |
+| SMEMBERS, 8 bytes | 10,724 | 4,154 | 20,429 |
+
+An intset of 512 takes 7 to 12 times less memory than on main, about what Redis's takes
+or less (FINDINGS 3zzzs), and its reads cost more: each member is read from its bytes and
+SMEMBERS writes each as text, where main's tree held the texts. SISMEMBER serves 20%
+fewer requests than main's on integers of 2 bytes, 4% more on 4 and 28% fewer on 8;
+SMEMBERS 6%, 36% and 61% fewer. Main was already below Redis's rate on each.
+
+**`make perfcheck`**: GET 3,481, SET 4,242 and INCR 4,587 instructions a request (the
+baseline's 3,452, 4,214 and 4,552), within its bounds.
+
 ## 78. The start's RDB file in windows
 
 FINDINGS 3zzzt. One server at a time on the same machine, `--save ""`: N keys of 100
