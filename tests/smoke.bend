@@ -8,13 +8,15 @@
 # as Redis does: the database alone answers that the command is the
 # connection's. With BENDKV_CHECK_BREAK=smoke the first line expected is
 # a wrong one, to show that a difference fails the run. Then replies
-# typed as RESP3 types them, written in RESP2 and in RESP3.
+# typed as RESP3 types them, written in RESP2 and in RESP3. Then the
+# calls of one command counted past 2^32 (src/info.bend, stats.fold).
 # Run: bend tests/smoke.bend
 import Base
 import ../src/map.bend as KV
 import ../src/redis.bend as R
 import ../src/resp.bend as P
 import ../src/batch.bend as B
+import ../src/info.bend as I
 
 def show_char(c: Char) -> String:
   match c:
@@ -46,7 +48,7 @@ def replies(r: List<&2, R.Reply> & R.Db) -> List<&2, R.Reply>:
 def run(b: P.Batch) -> List<&2, String>:
   match b:
     case P.Batch{reqs, tl, rest, err, need, raw}:
-      lines(replies(R.exec_all(B.cmds_of(reqs, Nil{}), R.db.empty())), rest)
+      lines(replies(R.exec_all(B.cmds_of(reqs, Nil{}), R.db.empty())), P.tail.bytes(rest))
 
 def buf() -> String:
   "*3\r\n$3\r\nSET\r\n$3\r\nfoo\r\n$3\r\nbar\r\n" ++
@@ -118,6 +120,41 @@ def typed.want() -> List<&2, String>:
    "_\\r\\n$-1\\r\\n$-1\\r\\n",
    "_\\r\\n"]
 
+# The calls of a command counted past 2^32: a run is the command's code
+# times 2^32 plus its count (R.run.of), and the newest run timed (cur)
+# takes the runs of its code until a tick counts it. 2^31 + 5 GETs, a
+# tick, 2^31 more GETs and a tick must count 2^32 + 5 GETs and nothing
+# else; had cur gone on taking them, its count would have carried into its
+# code, the code of GET's refused calls.
+def timing.get() -> Nat:
+  R.stat.code(R.stat.key(R.cmd_id("GET", 3n), Nil{}), 0n)
+
+def timing.half() -> Nat:
+  Nat.mul(32768n, 65536n)
+
+# run r timed, as taking no time, with latency-tracking off (the window
+# is empty here)
+def timing.run(st: I.Stats, +r: Nat) -> I.Stats:
+  match st:
+    case I.Stats{es, fresh, cur, pend, errs, total}:
+      I.stats.one.of(I.timed.run(r, 0n, False{}, 0n, 0n, 0n, (cur, pend)), es, errs, total)
+
+def timing.ents(es: List<&2, I.Ent>) -> List<&2, String>:
+  match es:
+    case Nil{}:
+      Nil{}
+    case Con{I.Ent{k, calls, rej, fail, us, h}, rest}:
+      ("timing: " ++ R.stat.name(k) ++ " calls " ++ I.big.show(calls) ++ " rejected " ++ I.big.show(rej) ++ " failed " ++ I.big.show(fail)) <> timing.ents(rest)
+
+def timing.lines() -> List<&2, String>:
+  +g = timing.get()
+  +h = timing.half()
+  st = I.stats.fold(timing.run(I.stats.fold(timing.run(I.stats.zero(), R.run.of(g, Nat.add(h, 5n)))), R.run.of(g, h)))
+  timing.ents(I.stats.view(st))
+
+def timing.want() -> List<&2, String>:
+  ["timing: get calls 4294967301 rejected 0 failed 0"]
+
 # where each line got differs from the one wanted ("" where they agree),
 # the lines numbered from i
 def diff.line(+i: Nat, +got: String, +want: String) -> String:
@@ -173,4 +210,4 @@ def env.or(r: Result<&1, &1, U32 & String, String>) -> String:
 def main() -> IO(Unit):
   do IO<Unit>:
     r : Result<&1, &1, U32 & String, String> <- IO.get_env("BENDKV_CHECK_BREAK")
-    check(List.append(&2, String, run(P.parse(buf())), typed.lines(typed())), List.append(&2, String, want(env.or(r)), typed.want()))
+    check(List.append(&2, String, run(P.parse(buf())), List.append(&2, String, typed.lines(typed()), timing.lines())), List.append(&2, String, want(env.or(r)), List.append(&2, String, typed.want(), timing.want())))

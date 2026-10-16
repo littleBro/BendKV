@@ -2132,10 +2132,10 @@ def put.hash.kind(+h: KV.Hash) -> U32:
   match h:
     case KV.HSmall{n, b}:
       16
-    case KV.HLong{n, ps}:
-      16
     case KV.HBig{n, t}:
       4
+    case KV.HLong{n, ps}:
+      16
 
 def put.mems.kind(+m: KV.Mems) -> U32:
   match m:
