@@ -6137,6 +6137,121 @@ unit/other its test of RESET clearing a client's state (COMPATIBILITY.md). The c
 libraries' tests of their caches pass as on Redis: redis-py's `test_client_tracking` in
 RESP2 and RESP3, and go-redis's specs of its client-side cache and of ClientTracking.
 
+## 3zzzh. ACL: users, what they may run, and the log
+
+**What was left.** ACL was an unknown command. AUTH took the one password, and a client
+was the default user or none. redis-py's tests of ACL, of AUTH with a user and of CLIENT
+KILL USER stopped there (34 in each protocol), and so did 39 of go-redis's.
+
+**The users** (`src/acl.bend`, kept in the session's `Mm`, so that `Srv` stays four words
+and no law's statement changes). A user is Redis 7.0.15's: on or off, its passwords (their
+SHA-256), nopass, its root selector and its other selectors, each with its commands (a bit
+for each command and subcommand, by Redis's ACL ids; categories by Redis's own table, which
+`tools/gen_commands.py` writes from ACL CAT), the first arguments it allows a command it
+does not allow (`+select|0`), its key patterns with what each may do (`%R~`, `%W~`, `~`),
+and its channels.
+
+- ACL SETUSER applies its rules in order to a copy, and the first that fails answers
+  Redis's error for it (`Error in ACL SETUSER modifier '...'`) and changes nothing.
+  Selectors in parentheses are joined first, as Redis joins the arguments. A new user is
+  off, with no password, no command, key or channel (`acl-pubsub-default`).
+- GETUSER, LIST, USERS, WHOAMI, CAT, DELUSER, DRYRUN, GENPASS (from a key the server reads
+  at its start, hashed with a counter, as getRandomHexChars makes them), LOG and HELP
+  answer as Redis's. LOAD and SAVE answer as Redis answers without `aclfile`.
+- A client must authenticate when the default user is off or takes only its passwords.
+  `requirepass` gives the default user its password, when the value changed (Redis applies
+  a parameter only then).
+- AUTH with a user and HELLO's AUTH log a client in as any user that is on and takes the
+  password. A failed one answers WRONGPASS.
+
+**The check** (`src/server.bend`: ACL). The server knows each client's user (`Cl`'s `user`:
+default as it connects, set by AUTH and HELLO's AUTH, default again at RESET) and which
+clients are restricted: those whose user may not run every command, read and write every
+key, and use every channel (the session's `Acl.rcl`, kept as a client's user changes, as
+SETUSER changes a user, and as a client goes). A call of a restricted client is checked as
+processCommand checks it, after NOAUTH and after the refusal of a command MULTI may not
+queue, before the rest:
+
+- its command or subcommand, then its keys (by the command's key specs, what each key
+  needs: read, write, or both), then its channels (PUBLISH's, the subscriptions'), against
+  each selector; one that allows it all lets it run;
+- refused, it answers NOPERM with the reason of the selector that got furthest (Redis's
+  order: command, key, channel, then the later argument), counts as a refused call and an
+  error, and in MULTI flags the transaction; EXEC refused aborts it;
+- EXEC checks each command again as it runs it, in case the rules changed since it was
+  queued (or an AUTH before it in the transaction changed the user): one refused then
+  answers `NOPERM ACLs rules changed between the moment the transaction was accumulated
+  and the EXEC call...` and is no call;
+- SORT with BY of a pattern, or GET, answers Redis's error unless a selector that allows it
+  may read every key.
+
+AUTH, HELLO, QUIT and RESET always pass, as Redis's CMD_NO_AUTH commands. A blocking
+command is checked as it comes; a client that waits is served without a check, as in
+Redis. The call's command, arity and key specs are found by its INFO key, which the
+parser found (`acl.of.key`, `K.spec.key`), and the command's name only for a refusal:
+looked up by name in the table of commands, a check cost 464,000 instructions
+(PERFORMANCE.md, section 70).
+
+**The fast way.** While no client is restricted, nothing changes: the default user of a
+fresh server may run everything, and a free user's client is not checked. While some
+client is (Ps's bit 20), a batch of database commands goes to the gate's class 1 (as while
+the tracking has work): the fast way when its client is not restricted and it writes no
+heeded key, else the general way, where each call is checked. The bit is set as soon as a
+client's user changes, so that the rest of a pipeline after AUTH is checked by its new
+user.
+
+**The log.** A call refused, and an AUTH or HELLO AUTH that failed, add an entry to ACL LOG:
+its reason (command, key, channel, auth), its context (toplevel, multi in MULTI and while
+EXEC runs its transaction), what it named (the command's full name, the key, the channel,
+or the command as typed for an AUTH), the user (the user tried, for an AUTH), and the
+client's CLIENT LIST line at that moment (its command is EXEC's while EXEC runs). An event
+like one of the 10 newest, within 60 s, counts in it, as Redis groups them;
+`acllog-max-len` bounds the log.
+
+**The clients.** CLIENT LIST and CLIENT INFO show each client's user. CLIENT KILL USER
+picks a user's clients, and answers `No such user` for a user the server does not keep,
+in Redis's order among the options' errors. ACL DELUSER closes the clients of the users it
+removes, the client itself after its reply (CLIENT_CLOSE_AFTER_COMMAND). ACL SETUSER that
+takes away a channel a user had closes its clients with a subscription it may no longer
+keep (ACLKillPubsubClientsIfNeeded). The slow log keeps SETUSER's arguments from the user
+on redacted, as Redis redacts them; a monitor sees CAT, GENPASS, HELP and WHOAMI, the
+subcommands Redis does not flag administrative, and no other.
+
+**Where BendKV differs.**
+
+- GETUSER and LIST describe a selector's commands in Redis 7.2's form, the rules as they
+  were given (`+@all -@geo`), where 7.0.15 rebuilds them from its bits. 7.0.15's form
+  depends on a hash order that changes with each process and on the whole command table,
+  so it cannot be matched; redis-py's test of GETUSER expects 7.2's.
+- The users come from ACL SETUSER only: a `user` line in the configuration, and
+  `aclfile`, stop the start with a line saying so; LOAD and SAVE answer as without a file.
+- 7.0.15 accepts `%~pattern` and then crashes at the next GETUSER; BendKV refuses it with
+  a syntax error.
+
+**Tests.** `tests/acl_test.py`: 54 lines of scenarios, as Redis 7.0.15 answers them: a
+user's calls allowed and refused, alone and pipelined behind AUTH, the log (grouped, its
+length, RESET), INFO's counts, MULTI and EXEC (refused at queueing, EXEC refused, the check
+again at EXEC, AUTH inside EXEC), HELLO's AUTH, RESET, a blocking command refused,
+subscribers closed by SETUSER (channels and patterns), DELUSER (another client's user, the
+client's own, a client that waits), CLIENT LIST and CLIENT KILL USER with its errors, the
+default user restricted (its plain batches checked), SORT's BY and GET, and the slow log.
+The client suites: redis-py's 82 tests of ACL, AUTH and CLIENT KILL that Redis 7.0.15
+passes, in each protocol, and go-redis's 8, pass; the other 10 of redis-py's fail on
+Redis 7.0.15 too, as they test Redis 7.2's (CLIENT SETINFO's log entries, its rule
+display, its log fields). Redis's own unit/acl and unit/acl-v2 are tagged `external:skip`;
+run in external mode with that tag taken off the blocks that need no server of their own,
+BendKV passes 64 of the 70 tests of unit/acl that Redis passes, and 27 of the 29 of
+unit/acl-v2. The others use commands BendKV does not have (XADD, XLEN, MIGRATE, SCRIPT,
+EVAL_RO), Lua's entries in the log, or Redis 7.0's description of a selector's commands
+(above); one more fails because the test before it, stopped at SCRIPT, leaves its client
+logged in as a user that may run nothing.
+
+**Found on the way, not changed here.** Redis 7.0 refuses a request of more than 10
+arguments, or with a bulk of more than 16 KB, from a client that must authenticate
+(networking.c, `unauthenticated multibulk length` and `unauthenticated bulk length`), and
+closes it. BendKV has never had these limits: unit/auth's test of them, which runs once
+its `external:skip` tag is taken off, waits for the error until its timeout.
+
 ## 3zzzi. One reading of the heap for INFO and the eviction
 
 **What failed.** One check of `tests/maxmemory_test.py` failed now and then under load,
