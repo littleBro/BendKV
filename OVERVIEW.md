@@ -262,20 +262,22 @@ ZMPOP, ZRANDMEMBER (with a count, with repeats when it is negative, WITHSCORES; 
 by the server's random numbers), ZSCAN, ZUNION, ZINTER, ZDIFF and their STORE forms,
 ZINTERCARD (LIMIT) and ZRANGESTORE; arguments and errors where and as in Redis. Scores
 are doubles, read, written, compared and added as in C (`src/float.bend`), with Redis's
-rules for infinities. A sorted set is one weight-balanced tree of its elements in
-Redis's order (by score, then by member), and past the listpack limits (128 elements,
-members up to 64 bytes) the same tree with a trie of its members beside it, for good,
-as Redis converts a listpack to a skiplist: a small one answers as a listpack does in
-Redis (it never holds a score of `-0`, a range by member is walked from the first
+rules for infinities. A sorted set keeps its elements in Redis's order (by score, then
+by member): while it is small (at most 128 elements, members up to 64 bytes: Redis's
+default listpack limits) in one string, each element its member and its score's 8 bytes,
+or in a weight-balanced tree once that string would pass one buffer of the runtime
+(2,048 bytes), and past the limits in the tree with a trie of its members beside it, for
+good, as Redis converts a listpack to a skiplist: a small one answers as a listpack does
+in Redis (it never holds a score of `-0`, a range by member is walked from the first
 element, ZSCAN returns it whole with cursor 0, integer scores as digits). OBJECT
 ENCODING answers `listpack` or `skiplist`, MEMORY USAGE estimates the size, and a key
 holds no empty sorted set. A write is logged as the command the client sent (ZINCRBY as
 ZADD INCR, ZADD's options in one order, ZMPOP as a ZPOPMIN or ZPOPMAX of the key it
-popped from; popping the last elements as a DEL); a sorted set made where the key had
-an entry (a STORE's destination, an expired key), as one EVAL entry of a fourth
-constant script that deletes the key and runs a ZADD of its elements. A STORE of more
-than 128 elements loses the sign of a `-0` score where Redis keeps it. The blocking
-BZPOPMIN, BZPOPMAX and BZMPOP are below.
+popped from; popping the last elements as a DEL); a sorted set made where the key had an
+entry (a STORE's destination, an expired key), as one EVAL entry of a fourth constant
+script that deletes the key and runs a ZADD of its elements. A STORE of more than 128
+elements loses the sign of a `-0` score where Redis keeps it. The blocking BZPOPMIN,
+BZPOPMAX and BZMPOP are below.
 Sorting: SORT and SORT_RO (BY, LIMIT, GET, ASC, DESC, ALPHA and, in SORT, STORE), the
 options read in order and the errors where and as in Redis, all before WRONGTYPE. The
 elements of a list, a set or a sorted set are sorted as doubles read as Redis reads them
@@ -1569,8 +1571,9 @@ make clients BEND="$B" # redis-py's and go-redis's test suites on Redis and on B
    in software (`src/float.bend`, double and x87 long double, checked against glibc):
    INCRBYFLOAT and HINCRBYFLOAT. Sorted sets (ZADD and its kin, ZRANGE in all its forms,
    ZREMRANGEBY*, ZPOPMIN/ZPOPMAX, ZMPOP, ZRANDMEMBER, ZSCAN, ZUNION, ZINTER, ZDIFF and
-   their STORE forms, ZINTERCARD, ZRANGESTORE) — one weight-balanced tree, and a trie of
-   members for a large set, as listpack and skiplist in Redis; STORE, ZRANGESTORE and
+   their STORE forms, ZINTERCARD, ZRANGESTORE) — one string of its elements for a small
+   set, a weight-balanced tree and a trie of members for a large one, as listpack and
+   skiplist in Redis; STORE, ZRANGESTORE and
    ZMPOP with laws of commutativity; logged as the writes themselves, and STORE as the
    resulting pairs (the fourth constant script). The blocking commands of lists and
    sorted sets (BLPOP, BRPOP, BLMOVE, BRPOPLPUSH, BLMPOP, BZPOPMIN, BZPOPMAX, BZMPOP) and

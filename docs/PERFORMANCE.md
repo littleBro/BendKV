@@ -7972,6 +7972,55 @@ the same machine:
 instructions per request, against the baseline's 3,452, 4,214 and 4,552; with 100 clients
 in BLPOP, +3.1% and +3.8%.
 
+## 74. Small sorted sets in one string
+
+**What changed** (FINDINGS 3zzzn). A sorted set of at most 128 elements of members of at
+most 64 bytes is one string of its elements while that fits one buffer (2,048 bytes), as
+Redis's listpack is one allocation, instead of a tree of nodes and buffers; past one
+buffer it keeps its tree.
+
+**In time and memory** (200,000 sorted sets `zset:000000000000` to `zset:000000199999`,
+each of 10 members `m0` to `m9` of scores 0 to 9, loaded by pipelined ZADDs; then
+redis-benchmark, 20 clients at a pipeline depth of 16, keys at random among the 200,000:
+2,000,000 ZSCORE of `m3`, 2,000,000 ZADD of `m3` with the score 5 (there: the first on a
+key moves it), 500,000 ZRANGE 0 -1 WITHSCORES, 2,000,000 ZRANK of `m3` and 2,000,000
+ZINCRBY of `m3` by 1; three rounds of main's build, this one and Redis 7.0.15, in turn:
+main at fc28490, this change before it merged main 013d9ac and the hashes' pieces, whose
+instruction ratios to main's are the same within 0.5% on these commands, FINDINGS 3zzzn):
+
+| | `used_memory` a key | ZSCORE a second | ZADD | ZRANGE | ZRANK | ZINCRBY |
+|---|---:|---:|---:|---:|---:|---:|
+| main | 859.2 | 389,000 to 436,000 | 217,000 to 238,000 | 161,000 to 186,000 | 285,000 to 308,000 | 152,000 to 155,000 |
+| this change | 307.2 | 539,000 to 619,000 | 320,000 to 358,000 | 228,000 to 239,000 | 536,000 to 567,000 | 238,000 to 271,000 |
+| Redis 7.0.15 | 170.9 | 482,000 to 512,000 | 471,000 to 555,000 | 207,000 to 255,000 | 441,000 to 644,000 | 334,000 to 403,000 |
+
+The medians of the rounds' ratios: against main, 2.8 times less memory a key, and ZSCORE
+1.42 times the requests a second (1.28 to 1.48), ZADD 1.49 times (1.34 to 1.65), ZRANGE
+1.28 times (1.23 to 1.48), ZRANK 1.84 times (1.79 to 1.88) and ZINCRBY 1.70 times (1.54
+to 1.78). Against Redis, 1.80 times its memory, and 1.18, 0.73, 1.07, 0.90 and 0.71 times
+its throughput, where main had 0.82, 0.45, 0.73, 0.48 and 0.40. A first version, whose
+writes walked to their member twice, measured 1.51, 1.65, 1.20, 1.90 and 1.82 times main
+in three rounds of its own, two hours earlier: the ratios moved by up to a tenth between
+the two sets of rounds, where the instructions of these commands moved by 3% at most.
+
+**Instructions** fall by 2% to 39% on lookups and writes and rise by 6% to 23% on the
+ranges and ZRANDMEMBER (FINDINGS 3zzzn: callgrind per request, on main 013d9ac and this
+change merged with it), and last-level misses fall by half or more: the string is two to
+four cache lines where the tree was a node and a buffer an element.
+
+**Past one buffer** a sorted set keeps its tree: on 100 sorted sets of 128 members of
+1,000 bytes, RESTOREd from Redis's listpack, ZSCORE of the last member answered 8,460
+requests a second with the first version's chain of buffers, where the tree answers
+102,564 (main) and 136,986 (this change), and Redis 152,672 to 202,020 (redis-benchmark,
+20 clients at a pipeline depth of 16; one run each of 20,000 requests, too short to tell
+main from this change). FINDINGS 3zzzn has the instructions, which the chain made 12 to
+21 times as many.
+
+**`make perfcheck`**: GET, SET and INCR unchanged: 3,448, 4,211 and 4,558 instructions
+per request, against 3,448, 4,213 and 4,552 for main 855f9b8 built on the same machine
+(the baseline's 3,452, 4,214 and 4,552), with the same last-level misses and prefetches;
+with 100 clients in BLPOP, +3.4% and +3.6% (main's +3.2% and +3.7%).
+
 ## 75. A long request read in part
 
 **What changed** (FINDINGS 3zzzo). The arguments a parse has read of a long request are
@@ -8039,3 +8088,78 @@ Redis's files are smaller: it writes these values, a digit repeated, with LZF, w
 BendKV does not write (3zzzc). `make perfcheck` on this change: GET 3,491, SET 4,235 and
 INCR 4,577 instructions per request (baseline 3,452, 4,214 and 4,552), with 100 clients
 in BLPOP 2.7% and 3.9% more.
+
+
+## 79. Lists in pieces
+
+FINDINGS 3zzzw. Main's build is afa98a7's, the base the change was measured on; every
+run below puts the servers in turn on the same machine, shared with other work (four
+cores).
+
+**Memory.** `used_memory` before and after the lists are written by RPUSH, a thousand
+elements a command (the last row: LPUSH, one element a command), the elements of 8 bytes
+but in the second row. Bytes an element, or a list where it says so:
+
+| lists × elements | Redis 7.0.15 | main | this change |
+|---|---:|---:|---:|
+| 2 × 500,000 | 10.1 | 40.0 | 9.3 |
+| 100 × 10,000, elements of 30 bytes | 32.4 | 56.1 | 32.0 |
+| 10,000 × 100 | 11.9 | 42.7 | 13.4 |
+| 100,000 × 10, a list | 282 | 590 | 366 |
+| 100,000 × 3, a list | 218 | 310 | 270 |
+| 100,000 × 1, a list | 202 | 230 | 254 |
+| 1 × 20,000, pushed one at a time | 11.8 | 41.6 | 9.5 |
+
+**Reads and writes in the middle.** A list of 200,000 elements (`e0`, `e1`, …) made by
+RPUSH; each command alone, its time to the reply from one client, the best of 5 runs
+(LRANGE 0 -1: one run, most of it the client's decoding of 200,000 replies). Milliseconds:
+
+| command | Redis 7.0.15 | main | this change |
+|---|---:|---:|---:|
+| LINDEX q 100000 | 0.013 | 3.354 | 0.031 |
+| LSET q 100000 y | 0.013 | 6.835 | 0.062 |
+| LRANGE q 100000 100099 | 0.048 | 3.405 | 0.071 |
+| LPOS q e199999 | 3.036 | 7.619 | 7.122 |
+| LINSERT q BEFORE e100000 z | 2.947 | 9.149 | 8.300 |
+| LREM q 1 z (after the first run, no z is left: a scan) | 2.678 | 10.078 | 21.267 |
+| LTRIM q 1 -2 | 0.011 | 0.043 | 0.046 |
+| LRANGE q 0 -1 | 102 | 144 | 148 |
+
+**Instructions** (callgrind, as `tools/colls.sh` counts: one client, one request at a
+time, the whole request; a list `l` of 100,000 elements and `q` of 200,000, both made by
+RPUSH, a hundred elements a command):
+
+| command | main | this change | |
+|---|---:|---:|---:|
+| LLEN l | 18,626 | 18,659 | +0.2% |
+| LINDEX l 0 | 20,143 | 20,933 | +3.9% |
+| LINDEX q 100000 | 20,680,204 | 178,957 | −99.1% |
+| LRANGE l 0 99 | 116,918 | 122,580 | +4.8% |
+| LRANGE q 100000 100099 | 19,847,356 | 308,932 | −98.4% |
+| LSET q 100000 y | 40,562,248 | 398,581 | −99.0% |
+| LPUSH l xyz | 21,076 | 23,701 | +12.5% |
+| RPUSH l xyz | 21,029 | 23,621 | +12.3% |
+| LPOP l | 20,373 | 21,224 | +4.2% |
+| RPOP l | 20,342 | 21,347 | +4.9% |
+| LPUSH l v0000001 | 21,162 | 24,191 | +14.3% |
+| LPUSH n:<random> xyz (a new list) | 20,230 | 21,262 | +5.1% |
+
+A push's extra instructions do not grow with its piece: with pieces of 512 bytes, LPUSH
+ran the same +13.2%, and LINDEX and LSET in the middle 3 to 4 times this change's
+counts, as they cross four times the pieces. So the pieces stay at 2,048 bytes.
+
+**Throughput** (redis-benchmark, 20 clients, pipelines of 16, the server on one CPU;
+1,000,000 requests of each push and pop, 200,000 of each LRANGE; two rounds, each server
+a fresh process). Requests a second:
+
+| test | Redis 7.0.15 | main | this change |
+|---|---:|---:|---:|
+| LPUSH | 1,145,000, 945,000 | 631,000, 707,000 | 602,000, 627,000 |
+| RPUSH | 1,145,000, 1,074,000 | 664,000, 680,000 | 602,000, 758,000 |
+| LPOP | 1,001,000, 951,000 | 644,000, 684,000 | 693,000, 766,000 |
+| RPOP | 969,000, 810,000 | 668,000, 691,000 | 847,000, 935,000 |
+| LRANGE_100 | 137,000, 161,000 | 69,800, 73,900 | 76,500, 79,800 |
+| LRANGE_300 | 45,800, 49,200 | 24,700, 23,500 | 27,200, 27,100 |
+
+The machine was shared, and a round moves by up to 15%; LPUSH serves about 5 to 10% less
+than main, the pops and the ranges 8 to 35% more.
