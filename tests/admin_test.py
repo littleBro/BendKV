@@ -296,6 +296,17 @@ class Srv:
         return open(os.path.join(self.d, "out.log")).read()
 
 
+# whether path is there within two seconds: a server writes its pid file
+# once it listens (Redis's main after initServer), and Srv returns as soon
+# as a connection is accepted, so the file may come a moment after
+def appears(path, secs=2.0):
+    for _ in range(int(secs / 0.02)):
+        if os.path.exists(path):
+            return True
+        time.sleep(0.02)
+    return False
+
+
 def shutdowns(exe, root, log):
     def fresh(name):
         d = os.path.join(root, name)
@@ -314,7 +325,7 @@ def shutdowns(exe, root, log):
     # restart, what came after it in the pipeline is not
     d = fresh("aof")
     s = Srv(exe, d, "--appendonly", "yes", "--appendfsync", "no", "--pidfile", os.path.join(d, "srv.pid"))
-    log("2 pid file", os.path.exists(os.path.join(d, "srv.pid")))
+    log("2 pid file", appears(os.path.join(d, "srv.pid")))
     log("2 shutdown", s.talk(enc(["SET", "k", "v"]) + enc(["RPUSH", "l", "a", "b"]) + enc(["SHUTDOWN"]) + enc(["SET", "z", "z"])), s.exit())
     log("2 pid file", os.path.exists(os.path.join(d, "srv.pid")))
     s = Srv(exe, d, "--appendonly", "yes")
