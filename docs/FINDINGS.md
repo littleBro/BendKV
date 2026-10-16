@@ -6194,9 +6194,10 @@ looked up by name in the table of commands, a check cost 464,000 instructions
 
 **The fast way.** While no client is restricted, nothing changes: the default user of a
 fresh server may run everything, and a free user's client is not checked. While some
-client is (Ps's bit 20), a batch of database commands goes to the gate's class 1 (as while
-the tracking has work): the fast way when its client is not restricted and it writes no
-heeded key, else the general way, where each call is checked. The bit is set as soon as a
+client is (Ps's bit 20), a batch of database commands goes to a class of the gate of its
+own: the fast way when its client is not restricted, else the general way, where each call
+is checked. While some client also waits or watches keys, or the tracking has work, the
+batch must also write no heeded key, as in the gate's class 1. The bit is set as soon as a
 client's user changes, so that the rest of a pipeline after AUTH is checked by its new
 user.
 

@@ -1746,16 +1746,17 @@ def ps.calm(+pb: Ps) -> Bool:
     case PsOf{+p}:
       ps.calm(p)
 
-# how a batch of a client with no subscription may run (group_job): 0 as
-# ps.calm lets it; 1 the fast way only when it writes no heeded key and
-# its client is not restricted (heed.ok), while the tracking has work but
-# no client is in BCAST mode (Ps's bit 22: the keys of the tracking table
-# are heeded keys, Tracking) or some client is restricted (bit 20: ACL),
-# and nothing else keeps the fast way off; 2 the general way
+# how a batch of a client with no subscription may run (group_job), while
+# nothing else keeps the fast way off: 0 as ps.calm lets it; 1 the fast
+# way only when it writes no heeded key (heed.ok.of), while the tracking has
+# work but no client is in BCAST mode (Ps's bit 22: the keys of the
+# tracking table are heeded keys, Tracking); 3 as 0 and 4 as 1, but only
+# for a client that is not restricted, while some client is (bit 20:
+# ACL; bit 22 adds 1, bit 20 adds 3); 2 the general way
 def ps.gate(+pb: Ps) -> Nat:
   match pb:
     case Ps{reg, +ev, px, cs, own}:
-      Bool.pick(Nat, U32.is_eq(U32.and(ev, 3819962367), 0), Bool.pick(Nat, U32.is_eq(U32.and(ev, 5242880), 0), 0n, 1n), 2n)
+      Bool.pick(Nat, U32.is_eq(U32.and(ev, 3819962367), 0), Nat.add(Bool.pick(Nat, U32.is_eq(U32.and(ev, 4194304), 0), 0n, 1n), Bool.pick(Nat, U32.is_eq(U32.and(ev, 1048576), 0), 0n, 3n)), 2n)
     case PsOf{+p}:
       ps.gate(p)
 
@@ -1920,9 +1921,15 @@ def ps.heed.free(+cs: List<&2, R.Cmd>, +hs: List<&2, U32>, +pb: Ps) -> Bool:
     case PsOf{+p}:
       ps.heed.free(cs, hs, p)
 
+# whether the client of cn may run a batch the fast way while some
+# client is restricted (ACL): as S.ready lets it, and it is not
+# restricted (each of its calls is checked, the general way)
+def acl.ready(+cn: S.Conn, +srv: S.Srv) -> Bool:
+  Bool.and(S.ready(cn, srv), Bool.not(S.srv.restricted(srv, S.conn.id(cn))))
+
 # whether a batch of database commands may run the fast way while some
-# client waits or watches (group_job): its client may run it so and is
-# not restricted (ACL: each of its calls is checked), is in no MULTI
+# client waits or watches (group_job): its client may run it so (ready:
+# S.ready, or acl.ready while some client is restricted), is in no MULTI
 # (looked for only while some client has a transaction or watches keys)
 # and none of its commands may write a heeded key
 def heed.ok.of(ready: Bool, +n: Nat, +t: Tx, +cs: List<&2, R.Cmd>, +hs: List<&2, U32>, +pb: Ps) -> Bool:
@@ -1933,10 +1940,6 @@ def heed.ok.of(ready: Bool, +n: Nat, +t: Tx, +cs: List<&2, R.Cmd>, +hs: List<&2,
       ps.heed.free(cs, hs, pb)
     case True{} t0:
       Bool.and(Bool.not(tx.in.multi(t0, n, False{})), ps.heed.free(cs, hs, pb))
-
-def heed.ok(+cn: S.Conn, +srv: S.Srv, +t: Tx, +cs: List<&2, R.Cmd>, +hs: List<&2, U32>, +pb: Ps) -> Bool:
-  +id = S.conn.id(cn)
-  heed.ok.of(Bool.and(S.ready(cn, srv), Bool.not(S.srv.restricted(srv, id))), id, t, cs, hs, pb)
 
 def ps.heed.stir(+c: R.Cmd, +pb: Ps) -> Bool:
   match pb:
@@ -2771,8 +2774,8 @@ def mem.bits(+srv: S.Srv, +ev: U32) -> U32:
   U32.or(U32.or(U32.or(U32.and(ev, 603979776), Bool.pick(U32, Nat.is_lt(0n, S.mm.max(m)), 268435456, 0)), Bool.pick(U32, S.mm.lfu(m), 134217728, 0)), Bool.pick(U32, S.mm.kick(m), 67108864, 0))
 
 # whether the server has restricted clients (ACL), and Ps's bit 20 for
-# them (the gate's class 1: ps.gate), set at once when a client's user
-# changes (bg.user) and after each batch of the general way
+# them (the gate's classes 3 and 4: ps.gate), set at once when a client's
+# user changes (bg.user) and after each batch of the general way
 def acl.on(+srv: S.Srv) -> Bool:
   S.srv.acl.any(srv)
 
@@ -7002,7 +7005,7 @@ def bg.client(+id: Nat, op: R.ClOp, +argv: Nat, +inb: Nat, +ex: Maybe<&2, Nat>, 
 # Redis 7.0.15's processCommand does: after NOAUTH and NO_MULTI, before
 # the rest (bg.acl.check, sh.of: ShNoPerm). While some client is restricted
 # (Ps's bit 20), a batch of a restricted client runs the general way
-# (heed.ok), a command at a time; EXEC checks each command it runs again
+# (acl.ready), a command at a time; EXEC checks each command it runs again
 # (bg.x.go). A call refused, and an AUTH that failed, go to the ACL LOG
 # with the client's line. ACL WHOAMI answers the client's user; ACL
 # SETUSER sets which clients of its user are restricted, and closes those
@@ -8649,23 +8652,32 @@ def group.heeded(ok: Bool, +log: Bool, ws: Waits, tx: Tx, outs: List<&2, Sigma<&
     case False{}:
       job.slow(cn, back, inb, raw, cmds, hs, Grp{outs, es, srv, ds, ws, up, tx, pb})
 
-def group.heed(+log: Bool, ws: Waits, +tx: Tx, outs: List<&2, Sigma<&2, &2, Chan(Ans), _ => Ans>>, es: List<&2, A.Ent>, +cn: S.Conn, +cmds: List<&2, R.Cmd>, +hs: List<&2, U32>, back: Chan(Ans), +tl: U32, +inb: Nat, raw: String, +srv: S.Srv, ds: R.Ds, up: List<&2, Up>, +pb: Ps) -> Grp:
-  group.heeded(heed.ok(cn, srv, tx, cmds, hs, pb), log, ws, tx, outs, es, cn, cmds, hs, back, tl, inb, raw, srv, ds, up, pb)
+# (ready: whether its client may run it so, S.ready or acl.ready, which
+# group_job's arms give, so that group.heeded has this one caller)
+def group.heed(ready: Bool, +log: Bool, ws: Waits, +tx: Tx, outs: List<&2, Sigma<&2, &2, Chan(Ans), _ => Ans>>, es: List<&2, A.Ent>, +cn: S.Conn, +cmds: List<&2, R.Cmd>, +hs: List<&2, U32>, back: Chan(Ans), +tl: U32, +inb: Nat, raw: String, +srv: S.Srv, ds: R.Ds, up: List<&2, Up>, +pb: Ps) -> Grp:
+  group.heeded(heed.ok.of(ready, S.conn.id(cn), tx, cmds, hs, pb), log, ws, tx, outs, es, cn, cmds, hs, back, tl, inb, raw, srv, ds, up, pb)
 
 # a batch from a client with no subscription: the fast way while no
 # keyspace event is to be sent and no client waits, has a transaction or
 # watches a key (calm 0: ps.gate); while some client does, or the
 # tracking has work (calm 1), the fast way for a batch of database
 # commands that writes no heeded key, from a client in no MULTI
-# (group.heeded)
+# (group.heeded); while some client is restricted (calm 3 and 4), the
+# same for a client that is not (acl.ready)
 def group_job(+log: Bool, job: B.Job, ws: Waits, tx: Tx, calm: Nat, outs: List<&2, Sigma<&2, &2, Chan(Ans), _ => Ans>>, es: List<&2, A.Ent>, +cn: S.Conn, back: Chan(Ans), +tl: U32, +inb: Nat, raw: String, +srv: S.Srv, ds: R.Ds, up: List<&2, Up>, pb: Ps) -> Grp:
   match job ws tx calm:
     case B.Plain{cmds, hs} WaitNone{} TxNone{} 0n:
       fast(log, S.ready(cn, srv), outs, es, cn, cmds, hs, back, tl, inb, raw, srv, ds, up, pb)
+    case B.Plain{cmds, hs} WaitNone{} TxNone{} 3n:
+      fast(log, acl.ready(cn, srv), outs, es, cn, cmds, hs, back, tl, inb, raw, srv, ds, up, pb)
     case B.Plain{cmds, +hs} w t 2n:
       job.slow(cn, back, inb, raw, cmds, hs, Grp{outs, es, srv, ds, w, up, t, pb})
+    case B.Plain{cmds, hs} w t 3n:
+      group.heed(acl.ready(cn, srv), log, w, t, outs, es, cn, cmds, hs, back, tl, inb, raw, srv, ds, up, pb)
+    case B.Plain{cmds, hs} w t 4n:
+      group.heed(acl.ready(cn, srv), log, w, t, outs, es, cn, cmds, hs, back, tl, inb, raw, srv, ds, up, pb)
     case B.Plain{cmds, hs} w t c:
-      group.heed(log, w, t, outs, es, cn, cmds, hs, back, tl, inb, raw, srv, ds, up, pb)
+      group.heed(S.ready(cn, srv), log, w, t, outs, es, cn, cmds, hs, back, tl, inb, raw, srv, ds, up, pb)
     case B.Mixed{cmds, +hs} w t c:
       job.slow(cn, back, inb, raw, cmds, hs, Grp{outs, es, srv, ds, w, up, t, pb})
 

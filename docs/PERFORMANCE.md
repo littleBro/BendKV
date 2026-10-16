@@ -7483,9 +7483,11 @@ as above, on the build of 479e46e):
 not run every command, read and write every key and use every channel) is checked
 against its user's selectors before it runs. While no client is restricted, nothing is
 checked: `Ps`'s bit 20 is off, and every batch goes through the gate as before. While
-one is, plain batches go to the gate's class 1, as while the tracking has work: the fast
-way for a client that is not restricted and writes no heeded key, the general way, a
-command at a time with each call checked, for a restricted client's.
+one is, plain batches go to classes of the gate of their own (3, and 4 while the tracking
+has work): the fast way for a client that is not restricted, the general way, a command
+at a time with each call checked, for a restricted client's. While some client waits or
+watches keys, or the tracking has work, a batch must also write no heeded key, as in the
+gate's class 1.
 
 **Measured** (callgrind, instructions per request: `tools/callgrind_req.sh`, 100,000
 keys, 20 clients at pipeline depth 16; the idle clients of `tools/idle_clients.py`: mode
@@ -7496,8 +7498,8 @@ command but DEBUG, on every key and channel, so restricted):
 | | GET | SET | last-level misses, GET and SET |
 |---|---:|---:|---:|
 | #66's head, no other client | 3,437 | 4,201 | 2.82, 3.13 |
-| now, no other client | 3,452 | 4,211 | 2.83, 3.13 |
-| now, 1 idle client of a restricted user | 3,551 (+2.9%) | 4,327 (+2.8%) | 2.83, 3.14 |
+| now, no other client | 3,447 | 4,213 | 2.82, 3.13 |
+| now, 1 idle client of a restricted user | 3,466 (+0.6%) | 4,233 (+0.5%) | 2.81, 3.14 |
 | Redis 7.0.15, no other client | 3,569 | 4,771 | 2.74, 3.24 |
 | Redis 7.0.15, 1 idle client of a restricted user | 3,563 | 4,778 | 2.76, 3.25 |
 | Redis 7.0.15, the benchmark's clients restricted | 3,586 (+0.5%) | 4,797 (+0.5%) | 2.74, 3.23 |
@@ -7507,25 +7509,22 @@ under callgrind):
 
 | | GET | SET |
 |---|---:|---:|
-| now, no other client | 3,428 | 4,201 |
-| now, the benchmark's clients restricted | 36,143 | 34,798 |
+| now, no other client | 3,431 | 4,205 |
+| now, the benchmark's clients restricted | 35,758 | 34,407 |
 | the first build, the benchmark's clients restricted | 464,145 | 478,309 |
 
-With no client restricted, a request costs what it costs on #66's head, within 0.5%, the
+With no client restricted, a request costs what it costs on #66's head, within 0.3%, the
 count's spread from one run to the next. An idle client of a restricted user costs the
-other clients' batches 2.9% and 2.8%, as a client that tracks does (section 66): each
-batch goes to the gate's class 1, whose check of heeded keys walks its commands though
-no key is heeded (`ps.heed.free`, `group.heed`, and the borrows they take: about 95
-instructions a request), and its client is looked for among the restricted (`rcl.has`,
-`srv.restricted`: about 5). A restricted client's own batches run the general way, a
-command at a time, and each call is checked: on 10,000 keys, a GET of such a client
-costs 36,143 instructions and a SET 34,798, ten times another client's. The check takes
-some 13,000 of a GET's (the functions of `src/acl.bend` and of the key specs, and what
-they call): 5,700 of them read the flags of the command's key spec as words, 14 string
-compares a call (`key.need`, `K.has`), and 750 look for the client among the restricted
-(`rcl.has`). The rest is the general way's: each call goes through the session, the
-timing and the reply on its own (`bg.go`, `gen.step`, `ht.merge`), where the fast way
-does them once a batch. Redis's check costs it about 20 instructions a call.
+other clients' batches 0.6% and 0.5%: each batch's client is looked for among the
+restricted (`acl.ready`: `srv.restricted`, `rcl.has`). A restricted client's own batches
+run the general way, a command at a time, and each call is checked: on 10,000 keys, a GET
+of such a client costs 35,758 instructions and a SET 34,407, ten times another client's.
+The check takes some 12,700 of a GET's (the functions of `src/acl.bend` and of the key
+specs, and what they call): 5,700 of them read the flags of the command's key spec as
+words, 14 string compares a call (`key.need`, `K.has`), and 1,100 look for the client
+among the restricted (`rcl.has`). The rest is the general way's: each call goes through
+the session, the timing and the reply on its own (`bg.go`, `gen.step`, `ht.merge`), where
+the fast way does them once a batch. Redis's check costs it about 20 instructions a call.
 
 **In time** (`tools/waiters_bench.sh`: GET and SET at pipeline 16 from 20 clients on
 100,000 keys, each server on one CPU, the median of three runs of a million; thousands of
@@ -7533,14 +7532,14 @@ requests per second):
 
 | condition | BendKV GET | of the first row | Redis GET | BendKV SET | of the first row | Redis SET |
 |---|---:|---:|---:|---:|---:|---:|
-| no other client | 923 |  | 701 | 932 |  | 593 |
-| 1 idle client of a restricted user | 927 | 100% | 661 | 843 | 90% | 590 |
-| the benchmark's clients restricted | 159 | 17% | 664 | 167 | 18% | 622 |
+| no other client | 849 |  | 633 | 798 |  | 503 |
+| 1 idle client of a restricted user | 775 | 91% | 595 | 846 | 106% | 572 |
+| the benchmark's clients restricted | 145 | 17% | 542 | 146 | 18% | 527 |
 
-The runs of one condition spread by up to a third (BendKV's GET with no other client:
-738, 1,030 and 923), so the idle client's cost is the instruction counts' 3%, not the
-table's 10% for SET. The benchmark's restricted clients get 17% of BendKV's requests with
-none, and a quarter of Redis's with the same clients.
+The runs of one condition spread by up to a third (BendKV's GET with an idle restricted
+client: 752, 1,095 and 775), so the idle client's cost is the instruction counts' 0.6%, not
+the table's 9% for GET. The benchmark's restricted clients get 17% and 18% of BendKV's
+requests with none, and 27% of Redis's with the same clients.
 
 **On the way: the users read in place.** The first build of this branch read the users
 through functions that gave them back (`srv.acl`, `mm.acl`, `acl.dflt`): the fast way's
@@ -7566,26 +7565,50 @@ by `acl.of.key`, its arity and key specs by `K.spec.key`, both written by
 `tools/gen_commands.py` as it writes `ro.key` for CLIENT TRACKING, and the command's
 name only for a refusal.
 
-**`make perfcheck`** here: GET 3,445, SET 4,213 and INCR 4,555 instructions per request,
-against the baseline's 3,452, 4,214 and 4,552, with the misses and prefetches within 1% of
-it. With 100 clients in BLPOP, +3.6% and +4.0% (the limit is 5%), against +3.2% and +3.7%
+**On the way: classes of the gate of their own.** The builds before sent every plain
+batch to the gate's class 1 while some client was restricted, as while the tracking has
+work. Each batch's check of heeded keys walked its commands, though with no client
+waiting or watching and no tracking no key is heeded (`ps.heed.free`, `group.heed`, and
+the borrows they take: about 95 instructions a request): an idle restricted client cost
+the other clients' batches 2.9% and 2.8%, as a client that tracks does (section 66). And
+while no client was restricted, class 1's `heed.ok` still looked for each batch's client
+among the restricted: with 100 clients in BLPOP (class 1 for every batch), +10
+instructions a request under callgrind, with `heed.ok` no longer inlined. Bit 20 now
+adds 3 to the class, 3 alone and 4 with bit 22: a class 3 batch, with no client waiting
+and no transaction, runs the fast way when its client is not restricted (`acl.ready`),
+with no walk for heeded keys; a class 4 batch, or one of class 3 while some client waits
+or watches, also writes no heeded key. One `group.heed` takes whether the client may run
+the batch so from the gate's arm, so that `group.heeded` keeps its one caller and stays
+inlined: a second caller had cost the batches of class 1 another 4 instructions a request.
+An idle restricted client now costs 0.6% and 0.5%, and 100 clients in BLPOP cost 3,558
+and 4,366 under callgrind (3,555 and 4,362 on #66's head).
+
+**On the way: the walks stop at the first answer.** The walks of the check (a user's
+selectors, a selector's key and channel patterns, a call's keys and channels, the users)
+answered with a `Bool.or` or a `Bool.pick` of the rest of the walk, whose arms Bend
+evaluates both, and took their lists as owned arguments, so that a borrowed list was
+copied to be walked. They now stop at the first answer and read their lists in place: a
+GET of a restricted client on 10,000 keys 35,795 instructions where it was 36,143, and
+the check 12,668 of them where it was 13,007. The lists are short here (one user, one
+selector, one pattern, one key), so most of that is the copies.
+
+**`make perfcheck`** here: GET 3,454, SET 4,209 and INCR 4,556 instructions per request,
+against the baseline's 3,452, 4,214 and 4,552, with the misses and prefetches within 1.2% of
+it. With 100 clients in BLPOP, +3.1% and +3.8% (the limit is 5%), against +3.2% and +3.7%
 on #66's head.
 
 **What is left.**
 
 - A restricted client's batches run the general way, a command at a time: some 23,000
-  instructions of a GET's 36,000. Each call of a plain batch could be checked against its
+  instructions of a GET's 35,800. Each call of a plain batch could be checked against its
   user in the gate (its INFO key and its keys, from the parsed command), and the batch
   could run the fast way when all pass, the general way when one is refused, to answer
   NOPERM and log it.
 - The key specs' flags are read as words at each call (`key.need`: 5,700 instructions of
   a GET's); the generator could write what each spec needs, as it writes the specs. The
-  client is looked for in a list of the restricted (`rcl.has`: 750 with 20 restricted
-  clients), and its user by its name among the users; the client's user could travel
-  with its batch, as its id does.
-- While a client is restricted and no key is heeded, a batch of another client could
-  skip the check of heeded keys: a class of the gate of its own for `Ps`'s bit 20 alone
-  would take the 3% off.
+  client is looked for in a list of the restricted (`rcl.has`: 1,100 with 20 restricted
+  clients, the whole list each time), and its user by its name among the users; the
+  client's user could travel with its batch, as its id does.
 
 ## 71. The timing's runs not yet counted, one per command
 

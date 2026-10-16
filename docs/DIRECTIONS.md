@@ -379,7 +379,7 @@ Where performance and proof meet: **batched execution under proved laws.**
    the general way, a command at a time (PERFORMANCE.md, section 66). ACL users cost
    nothing while no client's user is restricted (section 3zzzh); while one is, its
    batches run the general way, each call checked against its user's selectors, and the
-   other clients' batches pass the gate's check of heeded keys (PERFORMANCE.md, section
+   client of each other batch is looked for among the restricted (PERFORMANCE.md, section
    70). Next within the scope: the query buffer's limits.
 
 After that comes proving the native strings (section 5, step 1): a small piece of
