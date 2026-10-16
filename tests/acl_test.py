@@ -376,7 +376,8 @@ def main():
     if got != 8001 or dt > 3.0:
         print("FAIL: EXEC of 8,000 SETs after an AUTH inside took %.3f s (at most 3 s), answering %r" % (dt, got))
         sys.exit(1)
-    print("OK: %d lines of ACL scenarios as Redis answers them, AUTH of 1 MB in %.3f s, and EXEC of 8,000 SETs checked again in %.3f s" % (len(outs[1]), worst, dt))
+    print("OK: %d lines of ACL scenarios as Redis answers them, AUTH of 1 MB in %.3f s, and EXEC of 8,000 SETs "
+          "checked again in %.3f s" % (len(outs[1]), worst, dt))
 
 
 if __name__ == "__main__":
