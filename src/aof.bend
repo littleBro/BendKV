@@ -20,6 +20,7 @@ import ./redis.bend as R
 import ./resp.bend as P
 import ./batch.bend as B
 import ./float.bend as F
+import ./rdb.bend as D
 
 # Effects
 # -------
@@ -1782,8 +1783,10 @@ def windows(ws: List<&2, String>, +n: Nat) -> Start:
 # elements, the SADD of a set's members, the ZADD of a sorted set's
 # scores (as Redis writes a double, %.17g) and members, the HMSET of a
 # hash's fields and values, 64 elements or pairs to a command
-# (AOF_REWRITE_ITEMS_PER_CMD), and the PEXPIREAT of the time it expires
-# at when it does. A key whose time has passed at the snapshot's time is
+# (AOF_REWRITE_ITEMS_PER_CMD), the RESTORE of a stream's payload (Redis
+# writes XADD, XSETID, XGROUP CREATE and XCLAIM: BendKV has none of
+# these commands yet), and the PEXPIREAT of the time it expires at when
+# it does. A key whose time has passed at the snapshot's time is
 # left out. The snapshot is a value (the databases at a time), so the
 # server writes it a slice at a time (rw.slice: the keys of the buckets a
 # scan of a few dozen entries reads, KV.scan, from a cursor), between the
@@ -1844,6 +1847,8 @@ def rw.val(+k: String, v: KV.Val, acc: List<&2, List<&2, String>>) -> List<&2, L
       rw.chunks("SADD", k, 64n, KV.mems.all(m), acc)
     case KV.VColl{KV.CZset{+z}}:
       rw.chunks("ZADD", k, 128n, rw.zwords(KV.zset.all(z)), acc)
+    case KV.VColl{KV.CStream{x}}:
+      ["RESTORE", k, "0", D.dump(KV.VColl{KV.CStream{x}})] <> acc
 
 # and the time it expires at, when it does
 def rw.exp(+k: String, +e: Nat, acc: List<&2, List<&2, String>>) -> List<&2, List<&2, String>>:

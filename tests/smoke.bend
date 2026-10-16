@@ -8,13 +8,18 @@
 # as Redis does: the database alone answers that the command is the
 # connection's. With BENDKV_CHECK_BREAK=smoke the first line expected is
 # a wrong one, to show that a difference fails the run. Then replies
-# typed as RESP3 types them, written in RESP2 and in RESP3.
+# typed as RESP3 types them, written in RESP2 and in RESP3. Then SHA-256
+# of messages at the edges of its blocks (src/sha.bend, the passwords'
+# hashes), and the calls of one command counted past 2^32 (src/info.bend,
+# stats.fold).
 # Run: bend tests/smoke.bend
 import Base
 import ../src/map.bend as KV
 import ../src/redis.bend as R
 import ../src/resp.bend as P
 import ../src/batch.bend as B
+import ../src/sha.bend as Sha
+import ../src/info.bend as I
 
 def show_char(c: Char) -> String:
   match c:
@@ -46,7 +51,7 @@ def replies(r: List<&2, R.Reply> & R.Db) -> List<&2, R.Reply>:
 def run(b: P.Batch) -> List<&2, String>:
   match b:
     case P.Batch{reqs, tl, rest, err, need, raw}:
-      lines(replies(R.exec_all(B.cmds_of(reqs, Nil{}), R.db.empty())), rest)
+      lines(replies(R.exec_all(B.cmds_of(reqs, Nil{}), R.db.empty())), P.tail.bytes(rest))
 
 def buf() -> String:
   "*3\r\n$3\r\nSET\r\n$3\r\nfoo\r\n$3\r\nbar\r\n" ++
@@ -105,6 +110,39 @@ def typed.lines(rs: List<&2, R.Reply>) -> List<&2, String>:
     case Con{+r, more}:
       escape(P.encode_as(False{}, [r])) <> (escape(P.encode_as(True{}, [r])) <> typed.lines(more))
 
+# SHA-256 of messages of n bytes, the i-th (7 i + 3) mod 256: lengths at
+# the edges of a block (the padding takes one block or two) and of a
+# window of 2,048 bytes, and a message of 5,000 made of two strings
+# (the k bytes up to the j-th, before rest)
+def sha.msg(k: Nat, +j: Nat, rest: String) -> String:
+  match k:
+    case 0n:
+      rest
+    case 1n+p:
+      sha.msg(p, Nat.sub(j, 1n), SCon{Chr{U32.from_nat(Nat.mod(Nat.add(Nat.mul(j, 7n), 3n), 256n))}, rest})
+
+def sha.lines(ns: List<&2, Nat>) -> List<&2, String>:
+  match ns:
+    case Nil{}:
+      ["sha256 5000 in two: " ++ Sha.sha256(sha.msg(1000n, 999n, "") ++ sha.msg(4000n, 4999n, ""))]
+    case Con{+n, more}:
+      ("sha256 " ++ Nat.show(n) ++ ": " ++ Sha.sha256(sha.msg(n, Nat.sub(n, 1n), ""))) <> sha.lines(more)
+
+def sha.want() -> List<&2, String>:
+  ["sha256 0: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+   "sha256 1: 084fed08b978af4d7d196a7446a86b58009e636b611db16211b65a9aadff29c5",
+   "sha256 55: e7313d333c272e639f790978283f9eb392e843d0f29b7016828bb1daa4aac70b",
+   "sha256 56: 4324d65f3c103567f5589c710bc08f8523f929a9272e3af36fc968e52abc6c27",
+   "sha256 63: 81c80242132f230c3bd41b3e63bbcff16107339549214a99614ff26664625055",
+   "sha256 64: 39e3d7b6b5d075d37d053ad89b24b41bef4f3c29760c84447cab3f3be1882241",
+   "sha256 119: 9ce7368e4daf32341631b492e80359dc9f594b48453cd0dd5bf0b19279cc177e",
+   "sha256 120: 7836b787757e95e58b3ca5aec90b1b004e8deba1e50e9675af9cabf1a13a04b5",
+   "sha256 2047: 39f7319d9294a57ba5bd0c668bf67290e6710d5c676fb862bf6c305ab06ac961",
+   "sha256 2048: dfff795a6b8cdf421e2e0815987ba9eed246a3474ee26aeff7e70f0f2e5cc16b",
+   "sha256 2049: 50b50e74886763936dbd000db7879e648fa84d5e56780e233f52026f0f5328b3",
+   "sha256 5000: 34398b85297bf7d9dfb59b8d511d8bbb44ab23e891570e4395e7871475fc8afb",
+   "sha256 5000 in two: 34398b85297bf7d9dfb59b8d511d8bbb44ab23e891570e4395e7871475fc8afb"]
+
 def typed.want() -> List<&2, String>:
   ["$-1\\r\\n", "_\\r\\n",
    "*-1\\r\\n", "_\\r\\n",
@@ -117,6 +155,41 @@ def typed.want() -> List<&2, String>:
    "$-1\\r\\n_\\r\\n_\\r\\n",
    "_\\r\\n$-1\\r\\n$-1\\r\\n",
    "_\\r\\n"]
+
+# The calls of a command counted past 2^32: a run is the command's code
+# times 2^32 plus its count (R.run.of), and the newest run timed (cur)
+# takes the runs of its code until a tick counts it. 2^31 + 5 GETs, a
+# tick, 2^31 more GETs and a tick must count 2^32 + 5 GETs and nothing
+# else; had cur gone on taking them, its count would have carried into its
+# code, the code of GET's refused calls.
+def timing.get() -> Nat:
+  R.stat.code(R.stat.key(R.cmd_id("GET", 3n), Nil{}), 0n)
+
+def timing.half() -> Nat:
+  Nat.mul(32768n, 65536n)
+
+# run r timed, as taking no time, with latency-tracking off (the window
+# is empty here)
+def timing.run(st: I.Stats, +r: Nat) -> I.Stats:
+  match st:
+    case I.Stats{es, fresh, cur, pend, errs, total}:
+      I.stats.one.of(I.timed.run(r, 0n, False{}, 0n, 0n, 0n, (cur, pend)), es, errs, total)
+
+def timing.ents(es: List<&2, I.Ent>) -> List<&2, String>:
+  match es:
+    case Nil{}:
+      Nil{}
+    case Con{I.Ent{k, calls, rej, fail, us, h}, rest}:
+      ("timing: " ++ R.stat.name(k) ++ " calls " ++ I.big.show(calls) ++ " rejected " ++ I.big.show(rej) ++ " failed " ++ I.big.show(fail)) <> timing.ents(rest)
+
+def timing.lines() -> List<&2, String>:
+  +g = timing.get()
+  +h = timing.half()
+  st = I.stats.fold(timing.run(I.stats.fold(timing.run(I.stats.zero(), R.run.of(g, Nat.add(h, 5n)))), R.run.of(g, h)))
+  timing.ents(I.stats.view(st))
+
+def timing.want() -> List<&2, String>:
+  ["timing: get calls 4294967301 rejected 0 failed 0"]
 
 # where each line got differs from the one wanted ("" where they agree),
 # the lines numbered from i
@@ -173,4 +246,4 @@ def env.or(r: Result<&1, &1, U32 & String, String>) -> String:
 def main() -> IO(Unit):
   do IO<Unit>:
     r : Result<&1, &1, U32 & String, String> <- IO.get_env("BENDKV_CHECK_BREAK")
-    check(List.append(&2, String, run(P.parse(buf())), typed.lines(typed())), List.append(&2, String, want(env.or(r)), typed.want()))
+    check(List.append(&2, String, run(P.parse(buf())), List.append(&2, String, typed.lines(typed()), List.append(&2, String, sha.lines([0n, 1n, 55n, 56n, 63n, 64n, 119n, 120n, 2047n, 2048n, 2049n, 5000n]), timing.lines()))), List.append(&2, String, want(env.or(r)), List.append(&2, String, typed.want(), List.append(&2, String, sha.want(), timing.want()))))
