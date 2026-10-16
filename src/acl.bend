@@ -2312,25 +2312,23 @@ type CallR is Data:
 def key.need(+fl: List<&2, String>) -> Nat:
   Nat.add(Bool.pick(Nat, K.has("access", fl), 1n, 0n), Bool.pick(Nat, Bool.or(K.has("insert", fl), Bool.or(K.has("delete", fl), K.has("update", fl))), 2n, 0n))
 
-# the keys of a call, by its key specs, each with what it needs: the
-# arguments walked once while the keys' indices grow (xs: argv from its
-# index j on), an index below j read from argv's start (K.keys.names
-# walks them so). fuel: a step for each key and each argument
-def uses.keys.go(fuel: Nat, lt: Bool, eq: Bool, ks: List<&2, K.KeyAt>, xs: List<&2, String>, +j: Nat, +argv: List<&2, String>) -> List<&2, KeyUse>:
-  match fuel lt eq ks xs:
-    case 1n+f True{} _ Con{K.KeyAt{+at, +fl}, +rest} xs0:
-      KeyUse{acl.arg(argv, at), key.need(fl), at} <> uses.keys.go(f, K.keys.lt(rest, j), K.keys.eq(rest, j), rest, xs0, j, argv)
-    case 1n+f False{} True{} Con{K.KeyAt{+at, +fl}, +rest} Con{x, more}:
-      KeyUse{x, key.need(fl), at} <> uses.keys.go(f, K.keys.lt(rest, 1n+j), K.keys.eq(rest, 1n+j), rest, more, 1n+j, argv)
-    case 1n+f False{} False{} Con{K.KeyAt{+at, fl}, rest} Con{x, more}:
-      uses.keys.go(f, Nat.is_lt(at, 1n+j), Nat.is_eq(at, 1n+j), Con{K.KeyAt{at, fl}, rest}, more, 1n+j, argv)
-    case 1n+f _ _ Con{K.KeyAt{+at, +fl}, +rest} Nil{}:
-      KeyUse{acl.arg(argv, at), key.need(fl), at} <> uses.keys.go(f, False{}, False{}, rest, Nil{}, j, argv)
-    case _ _ _ _ _:
+# the keys of a call, by its key specs, each with what it needs, found
+# as K.keys.names finds them: a key at argument j or after it by dropping
+# to it from xs (argv from its index j on), so that the arguments are
+# walked once while the keys' indices grow; an index below j read from
+# argv's start
+def uses.keys.go(ks: List<&2, K.KeyAt>, ge: Bool, xs: List<&2, String>, +j: Nat, +argv: List<&2, String>) -> List<&2, KeyUse>:
+  match ks ge:
+    case Con{K.KeyAt{+at, +fl}, +rest} True{}:
+      +ys = List.drop(&2, String, xs, Nat.sub(at, j))
+      KeyUse{acl.arg(ys, 0n), key.need(fl), at} <> uses.keys.go(rest, K.keys.ge(rest, at), ys, at, argv)
+    case Con{K.KeyAt{+at, +fl}, +rest} False{}:
+      KeyUse{acl.arg(argv, at), key.need(fl), at} <> uses.keys.go(rest, K.keys.ge(rest, j), xs, j, argv)
+    case Nil{} _:
       Nil{}
 
 def uses.keys(+ks: List<&2, K.KeyAt>, +argv: List<&2, String>) -> List<&2, KeyUse>:
-  uses.keys.go(1n+Nat.add(List.length(&2, K.KeyAt, ks), List.length(&2, String, argv)), K.keys.lt(ks, 0n), K.keys.eq(ks, 0n), ks, argv, 0n, argv)
+  uses.keys.go(ks, K.keys.ge(ks, 0n), argv, 0n, argv)
 
 def uses.keys.of(m: Maybe<&2, List<&2, K.KeyAt>>, +argv: List<&2, String>) -> List<&2, KeyUse>:
   match m:

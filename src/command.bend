@@ -2940,45 +2940,34 @@ def acl.kind.key(+key: Nat) -> Nat:
       0n
 # END gen_commands: by key
 
-# whether the key at the head of ks comes before argument j (lt), or is
-# argument j (eq)
-def keys.lt(+ks: List<&2, KeyAt>, +j: Nat) -> Bool:
+# whether the key at the head of ks is argument j or one after it
+def keys.ge(+ks: List<&2, KeyAt>, +j: Nat) -> Bool:
   match ks:
     case Con{KeyAt{+at, +fl}, +rest}:
-      Nat.is_lt(at, j)
-    case Nil{}:
-      False{}
-
-def keys.eq(+ks: List<&2, KeyAt>, +j: Nat) -> Bool:
-  match ks:
-    case Con{KeyAt{+at, +fl}, +rest}:
-      Nat.is_eq(at, j)
+      Nat.is_le(j, at)
     case Nil{}:
       False{}
 
 # the keys a call read, as Redis's getKeysFromCommand finds them for a
 # client that tracks keys (trackingRememberKeys): of a command that only
-# reads, by its key specs, when its arguments fit its arity. The
-# arguments are walked once while the keys' indices grow (xs: argv from
-# its index j on); an index below j, as a command's specs may give one,
-# is read from argv's start. Read from the start each, the keys of an
-# MGET of n keys took n * n / 2 steps. fuel: a step for each key and each
-# argument; lt and eq: the head of ks against j (keys.lt, keys.eq)
-def keys.names.go(fuel: Nat, lt: Bool, eq: Bool, ks: List<&2, KeyAt>, xs: List<&2, String>, +j: Nat, +argv: List<&2, String>) -> List<&2, String>:
-  match fuel lt eq ks xs:
-    case 1n+f True{} _ Con{KeyAt{+at, fl}, +rest} xs0:
-      nth(at, argv) <> keys.names.go(f, keys.lt(rest, j), keys.eq(rest, j), rest, xs0, j, argv)
-    case 1n+f False{} True{} Con{k, +rest} Con{x, more}:
-      x <> keys.names.go(f, keys.lt(rest, 1n+j), keys.eq(rest, 1n+j), rest, more, 1n+j, argv)
-    case 1n+f False{} False{} Con{KeyAt{+at, fl}, rest} Con{x, more}:
-      keys.names.go(f, Nat.is_lt(at, 1n+j), Nat.is_eq(at, 1n+j), Con{KeyAt{at, fl}, rest}, more, 1n+j, argv)
-    case 1n+f _ _ Con{KeyAt{+at, fl}, +rest} Nil{}:
-      nth(at, argv) <> keys.names.go(f, False{}, False{}, rest, Nil{}, j, argv)
-    case _ _ _ _ _:
+# reads, by its key specs, when its arguments fit its arity. xs is argv
+# from its index j on, and a key at j or after it (ge: keys.ge of ks's
+# head) is found by dropping to it from there, so that argv is walked
+# once while the keys' indices grow; an index below j, as a command's
+# specs may give one, is read from argv's start. Read from the start
+# each, the keys of an MGET of n keys took n * n / 2 steps.
+def keys.names.go(ks: List<&2, KeyAt>, ge: Bool, xs: List<&2, String>, +j: Nat, +argv: List<&2, String>) -> List<&2, String>:
+  match ks ge:
+    case Con{KeyAt{+at, fl}, +rest} True{}:
+      +ys = List.drop(&2, String, xs, Nat.sub(at, j))
+      nth(0n, ys) <> keys.names.go(rest, keys.ge(rest, at), ys, at, argv)
+    case Con{KeyAt{+at, fl}, +rest} False{}:
+      nth(at, argv) <> keys.names.go(rest, keys.ge(rest, j), xs, j, argv)
+    case Nil{} _:
       Nil{}
 
 def keys.names(+ks: List<&2, KeyAt>, +argv: List<&2, String>) -> List<&2, String>:
-  keys.names.go(1n+Nat.add(List.length(&2, KeyAt, ks), List.length(&2, String, argv)), keys.lt(ks, 0n), keys.eq(ks, 0n), ks, argv, 0n, argv)
+  keys.names.go(ks, keys.ge(ks, 0n), argv, 0n, argv)
 
 def keys.read.at(m: Maybe<&2, List<&2, KeyAt>>, +fits: Bool, +argv: List<&2, String>) -> List<&2, String>:
   match m fits:

@@ -5950,8 +5950,8 @@ table: the arity, the key specs, and the way COMMAND GETKEYS reads them), as Red
 getKeysFromCommand finds them. The arguments are read from the batch's bytes once for
 the batch, when a call first needs its own (`av.if`), and walked once for the keys
 (`keys.names`): read from their start for each key, as the first build read them, an MGET
-of 20,000 keys by a client that tracks them took 1 to 2 s, and of 50,000 6 to 16 s, where
-one walk takes 0.06 and 0.3 s. EXEC's calls read as any call does.
+of 20,000 keys by a client that tracks them took 1 to 2 s, and of 50,000 6 to 16 s; found
+by dropping from one key to the next, 0.03 and 0.07 s. EXEC's calls read as any call does.
 CLIENT CACHING's flag is cleared after each command but a CLIENT command, while its
 client is in no MULTI, as Redis's resetClient clears it.
 
@@ -6492,9 +6492,11 @@ command MULTI may not queue, before the rest:
 - a call refused marks no key used: a restricted client's batch marks each call's key for
   LRU and LFU (OBJECT IDLETIME and FREQ) once the check lets the call through, where other
   batches mark all their keys before they run;
-- a call's keys are found in one walk of its arguments (`uses.keys`): read from their
-  start for each key, a restricted client's MGET of 20,000 keys took 1 to 2 s, and of
-  50,000 6 to 14 s, where one walk takes 0.06 and 0.25 s.
+- a call's keys are found in one walk of its arguments (`uses.keys`), by dropping from
+  one key to the next: read from their start for each key, a restricted client's MGET of
+  20,000 keys took 1 to 2 s, and of 50,000 6 to 14 s, where the walk takes 0.04 and
+  0.11 s. It costs such a client's GET some 770 instructions more than the read from the
+  start of its one key did (PERFORMANCE 70).
 
 The keys checked are those of the command's key specs, as in Redis 7.0.15, with the same
 holes: `SORT src STORE BY STORE secret` checks `BY` as STORE's key and writes `secret`;
