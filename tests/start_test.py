@@ -136,7 +136,10 @@ class Server:
 
     def text(self, which):
         with open(self.out if which == "out" else self.err, "rb") as f:
-            return f.read().decode(errors="replace").replace(self.dir, "{dir}").replace(str(self.port), "{port}")
+            # the port as a number of its own: a free port can be a run of
+            # digits inside another number (47483 in Redis's "2147483647")
+            text = f.read().decode(errors="replace").replace(self.dir, "{dir}")
+            return re.sub(r"(?<![0-9])%d(?![0-9])" % self.port, "{port}", text)
 
     def report(self):
         """the fatal error on stderr without the line naming the server,

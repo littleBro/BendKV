@@ -16433,8 +16433,10 @@ def hscan.big(+t: KV.Trie<String>, sc: KV.Scan, pat: Maybe<&2, String>) -> Reply
 
 def hscan.go(+h: KV.Hash, +cur: Nat, +n: Nat, pat: Maybe<&2, String>) -> Reply:
   match h:
-    case KV.HSmall{m, +ps}:
-      hscan.rep(0n, ps, pat)
+    case KV.HSmall{+m, +b}:
+      hscan.rep(0n, KV.hb.pairs(m, b, 0n), pat)
+    case KV.HLong{m, +ps}:
+      hscan.rep(0n, KV.hl.pairs(ps), pat)
     case KV.HBig{m, +t}:
       hscan.big(t, KV.scan(String, t, cur, n, 0n), pat)
 

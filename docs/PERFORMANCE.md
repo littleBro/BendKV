@@ -7775,6 +7775,64 @@ caches missed, and the tick counted them all at once.
 counts without them. Each of those loads runs one command, whose calls all go to the
 newest run, as before.
 
+## 73. Small hashes in one string
+
+**What changed** (FINDINGS 3zzzm). A hash of at most 512 pairs of at most 64 bytes is
+one string of its pairs, as Redis's listpack is one allocation, instead of a list of
+cells, nodes and buffers.
+
+**In time and memory** (200,000 hashes `hash:000000000000` to `hash:000000199999`, each
+of 10 fields `f0` to `f9` with values of 8 bytes, loaded by pipelined HSETs; then
+redis-benchmark, 20 clients at a pipeline depth of 16, keys at random among the
+200,000: 2,000,000 HGET of `f3`, 2,000,000 HSET of `f3`, which is there, and 500,000
+HGETALL; three rounds of main's build, this one and Redis 7.0.15, in turn):
+
+| | `used_memory` a key | HGET a second | HSET | HGETALL |
+|---|---:|---:|---:|---:|
+| main | 738.7 | 372,000 to 409,000 | 285,000 to 303,000 | 109,000 to 121,000 |
+| this change | 306.7 | 519,000 to 562,000 | 437,000 to 453,000 | 217,000 to 257,000 |
+| Redis 7.0.15 | 250.7 | 573,000 to 604,000 | 522,000 to 569,000 | 309,000 to 390,000 |
+
+The medians of the rounds' ratios: against main, 2.4 times less memory a key, and HGET
+1.38 times the requests a second (1.30 to 1.51), HSET 1.49 times (1.49 to 1.53) and
+HGETALL 2.11 times (2.00 to 2.13). Against Redis, 1.22 times its memory, and 0.96, 0.84
+and 0.70 times its throughput, where main had 0.66, 0.54 and 0.35.
+
+**Instructions** rise all the same (FINDINGS 3zzzm: callgrind per request, 6.5% to
+27.6% more on the hash commands), and last-level misses fall by half or more: the string
+is a few cache lines where the list was two nodes and a buffer a pair.
+
+**`make perfcheck`**: GET, SET and INCR unchanged (3,414, 4,177 and 4,522 instructions
+per request, against main's 3,416, 4,178 and 4,522).
+
+**Past one buffer** (FINDINGS 3zzzm). Past 2,048 bytes a small hash's pairs are in pieces
+of one buffer each; the first version kept them in one string, a chain past a buffer, and
+a find walked it from its start for every length it read.
+
+Microseconds a request: one client, each round's requests (2,000, or 200 of HGETALL and
+of the pairs, 50 of the last row's) sent at once over 100 hashes, the median of three
+rounds. Redis 7.0.15, main (fc28490), the one string (b1e6846) and the pieces, in turn on
+the same machine:
+
+| hashes, command | Redis | main | one string | pieces |
+|---|---:|---:|---:|---:|
+| 512 pairs of 64-byte fields and values: HGET of the last field | 10.0 | 11.5 | 141.5 | 17.9 |
+| the same, HGET of a field not there | 8.7 | 10.0 | 148.0 | 16.4 |
+| the same, HSET of a middle field there | 5.5 | 11.9 | 94.2 | 17.1 |
+| the same, HDEL then HSET of the last field (a pair) | 16.6 | 94.1 | 710.7 | 73.4 |
+| the same, DEL then one HSET of the 512 pairs (a pair) | 1,749 | 4,374 | 57,214 | 8,541 |
+| 128 pairs of 64-byte fields and values: HGET of the last field | 3.0 | 2.3 | 16.2 | 5.1 |
+| 512 pairs of 4-byte fields and 8-byte values: HGET of the last field | 4.4 | 8.5 | 21.3 | 7.6 |
+| the same, HSET of a middle field there | 2.5 | 15.9 | 17.6 | 8.0 |
+| Redis's listpack of 512 values of 1,000 bytes, restored: HGET of the last field | 25.8 | 9.8 | 1,384.6 | 29.1 |
+| the same, HGET of a field not there | 22.3 | 8.2 | 1,356.3 | 23.7 |
+| Redis's listpack of 100 values of 70,000 bytes, restored: HGET of a field not there | 18.5 | 4.7 | 3,637.9 | 23.5 |
+| the same, HSET of a middle field there | 10.1 | 3.6 | 3,967.1 | 16.7 |
+
+**`make perfcheck`** with the pieces (dc04a07): GET 3,439, SET 4,200 and INCR 4,544
+instructions per request, against the baseline's 3,452, 4,214 and 4,552; with 100 clients
+in BLPOP, +3.1% and +3.8%.
+
 ## 75. A long request read in part
 
 **What changed** (FINDINGS 3zzzo). The arguments a parse has read of a long request are
@@ -7819,3 +7877,26 @@ parsed as before.
 **What is left.** One MSET of 300,000 keys takes 3.6 times Redis's time, and an SADD of
 as many members 3.8 times. A key of a long MSET costs 5,900 instructions, where a whole
 pipelined SET costs 4,181; where they go is not broken down here (FINDINGS 3zzzo).
+
+
+## 78. The start's RDB file in windows
+
+FINDINGS 3zzzt. One server at a time on the same machine, `--save ""`: N keys of 100
+bytes (`key:<i>`, the value its number on 100 digits) written by commands, 1,000 at a
+time in a pipeline, `used_memory_rss` read; SAVE; the server started again from the file,
+`used_memory_rss` read once it answers; the start's time from its log line (DB loaded
+from disk). Main's build is 013d9ac's, whose start is the one main has.
+
+| N | the file | server | RSS written | RSS after the start | the start |
+|---:|---:|---|---:|---:|---:|
+| 300,000 | 32.5 MB | main | 76.9 MB | 140.5 MB (1.83 times) | 0.504 s |
+| | | this change | 76.5 MB | 79.3 MB (1.04) | 0.297 s |
+| | 8.1 MB | Redis 7.0.15 | 69.7 MB | 67.8 MB (0.97) | 0.338 s |
+| 1,000,000 | 108.6 MB | main | 194.6 MB | 344.5 MB (1.77) | 2.019 s |
+| | | this change | 194.5 MB | 200.9 MB (1.03) | 1.659 s |
+| | 27.4 MB | Redis 7.0.15 | 191.0 MB | 191.3 MB (1.00) | 1.080 s |
+
+Redis's files are smaller: it writes these values, a digit repeated, with LZF, which
+BendKV does not write (3zzzc). `make perfcheck` on this change: GET 3,491, SET 4,235 and
+INCR 4,577 instructions per request (baseline 3,452, 4,214 and 4,552), with 100 clients
+in BLPOP 2.7% and 3.9% more.
