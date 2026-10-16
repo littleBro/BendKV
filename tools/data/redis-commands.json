@@ -3569,6 +3569,167 @@
          ]
         ]
        },
+       "client|tracking",
+       {
+        "%": [
+         "summary",
+         "Enable or disable server assisted client side caching support",
+         "since",
+         "6.0.0",
+         "group",
+         "connection",
+         "complexity",
+         "O(1). Some options may introduce additional complexity.",
+         "arguments",
+         [
+          {
+           "%": [
+            "name",
+            "status",
+            "type",
+            "oneof",
+            "arguments",
+            [
+             {
+              "%": [
+               "name",
+               "on",
+               "type",
+               "pure-token",
+               "token",
+               "ON"
+              ]
+             },
+             {
+              "%": [
+               "name",
+               "off",
+               "type",
+               "pure-token",
+               "token",
+               "OFF"
+              ]
+             }
+            ]
+           ]
+          },
+          {
+           "%": [
+            "name",
+            "client-id",
+            "type",
+            "integer",
+            "token",
+            "REDIRECT",
+            "flags",
+            {
+             "~": [
+              {
+               "+": "optional"
+              }
+             ]
+            }
+           ]
+          },
+          {
+           "%": [
+            "name",
+            "prefix",
+            "type",
+            "string",
+            "token",
+            "PREFIX",
+            "flags",
+            {
+             "~": [
+              {
+               "+": "optional"
+              },
+              {
+               "+": "multiple"
+              },
+              {
+               "+": "multiple_token"
+              }
+             ]
+            }
+           ]
+          },
+          {
+           "%": [
+            "name",
+            "bcast",
+            "type",
+            "pure-token",
+            "token",
+            "BCAST",
+            "flags",
+            {
+             "~": [
+              {
+               "+": "optional"
+              }
+             ]
+            }
+           ]
+          },
+          {
+           "%": [
+            "name",
+            "optin",
+            "type",
+            "pure-token",
+            "token",
+            "OPTIN",
+            "flags",
+            {
+             "~": [
+              {
+               "+": "optional"
+              }
+             ]
+            }
+           ]
+          },
+          {
+           "%": [
+            "name",
+            "optout",
+            "type",
+            "pure-token",
+            "token",
+            "OPTOUT",
+            "flags",
+            {
+             "~": [
+              {
+               "+": "optional"
+              }
+             ]
+            }
+           ]
+          },
+          {
+           "%": [
+            "name",
+            "noloop",
+            "type",
+            "pure-token",
+            "token",
+            "NOLOOP",
+            "flags",
+            {
+             "~": [
+              {
+               "+": "optional"
+              }
+             ]
+            }
+           ]
+          }
+         ]
+        ]
+       },
        "client|trackinginfo",
        {
         "%": [
@@ -4154,6 +4315,45 @@
      [
       "client|setname",
       3,
+      {
+       "~": [
+        {
+         "+": "noscript"
+        },
+        {
+         "+": "loading"
+        },
+        {
+         "+": "stale"
+        }
+       ]
+      },
+      0,
+      0,
+      0,
+      {
+       "~": [
+        {
+         "+": "@slow"
+        },
+        {
+         "+": "@connection"
+        }
+       ]
+      },
+      {
+       "~": []
+      },
+      {
+       "~": []
+      },
+      {
+       "~": []
+      }
+     ],
+     [
+      "client|tracking",
+      -3,
       {
        "~": [
         {

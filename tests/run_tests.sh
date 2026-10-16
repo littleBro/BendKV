@@ -16,7 +16,8 @@
 # under load), transactions (scenarios against Redis, and checks under
 # load), Pub/Sub and keyspace notifications (scenarios against Redis, and
 # checks under load), CLIENT LIST, INFO and KILL (scenarios against Redis,
-# and checks under load), MONITOR (scenarios against Redis, and a check
+# and checks under load), CLIENT TRACKING (scenarios against Redis),
+# MONITOR (scenarios against Redis, and a check
 # under load), CLIENT PAUSE and UNPAUSE (scenarios against Redis, and
 # checks of BendKV alone and under load), Lua scripts (EVAL, EVALSHA,
 # SCRIPT, scripts in transactions, BUSY and SCRIPT KILL: scenarios
@@ -122,6 +123,7 @@ for n in "" post send "post build/test.aof everysec"; do
   python3 tests/multi_test.py --bendkv "$PORT" --redis "$REDIS_PORT"
   python3 tests/pubsub_test.py --bendkv "$PORT" --redis "$REDIS_PORT"
   python3 tests/client_test.py --bendkv "$PORT" --redis "$REDIS_PORT"
+  python3 tests/tracking_test.py --bendkv "$PORT" --redis "$REDIS_PORT"
   python3 tests/monitor_test.py --bendkv "$PORT" --redis "$REDIS_PORT"
   python3 tests/pause_test.py --bendkv "$PORT" --redis "$REDIS_PORT"
   python3 tests/script_test.py --bendkv "$PORT" --redis "$REDIS_PORT"

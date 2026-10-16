@@ -25,6 +25,12 @@ order in which the clients held back go on; a client held back whose
 connection closes, and one killed; errors of the parser, answered at
 once.
 
+A monitor made before the scenarios ends a pause of every command
+(Mon): no pause holds a monitor back, while a client made during such a
+pause would have its SELECT, and its MONITOR, held back with the rest.
+A scenario that raises fails the test, on either server: one that raised
+on both used to end both transcripts alike after the second scenario.
+
 The checks of BendKV alone: CLIENT UNBLOCK of a client held back answers
 0 and leaves it held back (Redis 7.0.15 crashes on it). The checks under
 load: 100 clients held back, each with a write, all answered in order
@@ -52,20 +58,39 @@ def expired(r):
     return int(info_lines(r, "stats", "expired_keys:")[0].split(":")[1])
 
 
-def unpause(port):
-    """The pause ended whatever it is: a monitor's CLIENT UNPAUSE, which
-    no pause holds back."""
-    m = Client(port, None)
-    m.cmd("MONITOR")
-    m.cmd("CLIENT", "UNPAUSE")
-    m.close()
+# a line a monitor is fed: "+<time> [<db> <addr>] <command>"
+FEED = re.compile(r"^\+\d+\.\d+ \[")
 
 
-def scenarios(port, log):
+class Mon:
+    """A monitor, made before any pause: no pause holds a monitor back
+    (Redis never pauses a replica), so its CLIENT UNPAUSE ends a pause of
+    every command, which holds back a new client's MONITOR too. Its replies
+    are read past the lines it is fed."""
+
+    def __init__(self, port):
+        self.c = Client(port, None)
+        self.first = self.c.cmd("MONITOR")
+
+    def cmd(self, *args):
+        while self.c.read(0.05) != "TIMEOUT":
+            pass
+        self.c.send(*args)
+        while True:
+            x = self.c.read()
+            if not (isinstance(x, str) and FEED.match(x)):
+                return x
+
+    def close(self):
+        self.c.close()
+
+
+def scenarios(port, log, mon):
     r = Client(port)
     r.cmd("FLUSHALL")
     r.cmd("CONFIG", "RESETSTAT")
     a, b = Named(port, "a"), Named(port, "b")
+    log("0 monitor", mon.first)
     # 1. errors, in Redis's order: the mode before the timeout
     for args in ([], ["abc", "foo"], ["abc"], ["-1"], ["-0"], ["1", "write", "x"],
                  ["99999999999999999999"], ["10", "WrItE"], ["0", "all"], ["1.5"], ["", "write"]):
@@ -91,12 +116,13 @@ def scenarios(port, log):
     r.cmd("CLIENT", "UNPAUSE")
     log("2 publish", a.read(), wait_blocked(r, 1))
     log("2 push", r.cmd("RPUSH", "bl", "v"), b.read())
-    # 3. a pause of every command, to its end
+    # 3. a pause of every command, to its end (the client that QUITs made
+    # before it, as the pause would hold its SELECT back)
+    q = Client(port, None)
     t0 = time.time()
     log("3 pause", r.cmd("CLIENT", "PAUSE", "500", "ALL"))
     a.send("PING")
     b.send("CLIENT", "UNPAUSE")
-    q = Client(port)
     q.send("QUIT")
     log("3 held", a.read(0.1), b.read(0.1), q.read(0.1))
     log("3 ended", a.read(), b.read(), q.read(), 0.4 < time.time() - t0 < 2.0)
@@ -149,11 +175,8 @@ def scenarios(port, log):
     s.send("SUBSCRIBE", "ch2")
     log("8 held", s.read(0.2))
     s.send("PING")
-    m = Client(port)
-    log("8 monitor", m.cmd("MONITOR"))
-    log("8 unpause", m.cmd("CLIENT", "UNPAUSE"), s.read(), s.read())
-    log("8 monitor get", m.cmd("GET", "x"))
-    m.close()
+    log("8 unpause", mon.cmd("CLIENT", "UNPAUSE"), s.read(), s.read())
+    log("8 monitor get", mon.cmd("GET", "x"))
     r.cmd("CLIENT", "PAUSE", "100000", "WRITE")
     a.send("PUBLISH", "ch", "hello")
     log("8 publish held", a.read(0.2), s.read(0.2))
@@ -166,10 +189,7 @@ def scenarios(port, log):
     log("9 all", r.cmd("CLIENT", "PAUSE", "0", "ALL"))
     a.send("GET", "x")
     log("9 read held", a.read(0.2))
-    m = Client(port)
-    m.cmd("MONITOR")
-    log("9 unpause", m.cmd("CLIENT", "UNPAUSE"), a.read())
-    m.close()
+    log("9 unpause", mon.cmd("CLIENT", "UNPAUSE"), a.read())
     # 10. a blocking command that waited before the pause times out
     a.send("BLPOP", "nokey", "0.3")
     wait_blocked(r, 1)
@@ -202,10 +222,7 @@ def scenarios(port, log):
     # 13. errors of the parser are answered at once
     r.cmd("CLIENT", "PAUSE", "100000", "ALL")
     log("13 errors", a.cmd("SET", "x"), a.cmd("NOSUCHCOMMAND"), a.cmd("CLIENT", "NOSUCH"))
-    m = Client(port)
-    m.cmd("MONITOR")
-    m.cmd("CLIENT", "UNPAUSE")
-    m.close()
+    log("13 unpause", mon.cmd("CLIENT", "UNPAUSE"))
     log("13 info", info_lines(r, "clients", ("blocked_clients",)))
     r.cmd("FLUSHALL")
     for c in (r, a, b):
@@ -262,12 +279,22 @@ def main():
     outs = []
     for port in (args.bendkv, args.redis):
         lines = []
+        mon = Mon(port)
         try:
-            scenarios(port, lambda *x: lines.append(" ".join(repr(v) for v in x)))
+            scenarios(port, lambda *x: lines.append(" ".join(repr(v) for v in x)), mon)
         except Exception as e:
             lines.append("EXCEPTION %r" % (e,))
-            unpause(port)
+            mon.cmd("CLIENT", "UNPAUSE")
+        mon.close()
         outs.append(lines)
+    # a scenario that raises on both servers ends both transcripts alike,
+    # and the scenarios after it never run: that fails too
+    stopped = 0
+    for name, lines in zip(("BendKV", "Redis"), outs):
+        for l in lines:
+            if l.startswith("EXCEPTION"):
+                stopped += 1
+                print("FAIL: %s's scenarios stopped: %s" % (name, l))
     bad = 0
     for i in range(max(len(outs[0]), len(outs[1]))):
         x = outs[0][i] if i < len(outs[0]) else "<none>"
@@ -279,8 +306,9 @@ def main():
     fails = alone(args.bendkv)
     for f in fails:
         print("FAIL: BendKV alone:", f)
-    if bad or fails:
-        print("FAIL: %d of %d lines of the scenarios differ, %d checks of BendKV alone fail" % (bad, len(outs[1]), len(fails)))
+    if bad or stopped or fails:
+        print("FAIL: %d of %d lines of the scenarios differ, %d transcripts stopped, %d checks of BendKV alone fail"
+              % (bad, len(outs[1]), stopped, len(fails)))
         sys.exit(1)
     print("OK: %d lines of pause scenarios as Redis answers them, and 3 checks of BendKV alone" % len(outs[1]))
 

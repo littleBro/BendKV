@@ -56,6 +56,12 @@ type Desc is Data:
 type Top is Data:
   Top{cmd: Desc, subs: List<&2, Desc>}
 
+# a command that only reads: its arity, its key specs and how its keys
+# are found, as its description has them, for the keys a call of it read
+# (ro.key, below)
+type Ro is Data:
+  Ro{arity: R.Int, specs: List<&2, KSpec>, way: KWay}
+
 # The table
 # ---------
 
@@ -184,7 +190,9 @@ def cmd.client() -> Top:
     [R.RBulk{"client|reply"}, R.RInt{R.IPos{3n}}, R.RSet{[R.RStatus{"noscript"}, R.RStatus{"loading"}, R.RStatus{"stale"}]}, R.RInt{R.IPos{0n}}, R.RInt{R.IPos{0n}}, R.RInt{R.IPos{0n}}, R.RSet{[R.RStatus{"@slow"}, R.RStatus{"@connection"}]}, R.RSet{[]}, R.RSet{[]}],
     [R.RBulk{"summary"}, R.RBulk{"Instruct the server whether to reply to commands"}, R.RBulk{"since"}, R.RBulk{"3.2.0"}, R.RBulk{"group"}, R.RBulk{"connection"}, R.RBulk{"complexity"}, R.RBulk{"O(1)"}, R.RBulk{"arguments"}, R.RArray{[R.RMap{[R.RBulk{"name"}, R.RBulk{"on_off_skip"}, R.RBulk{"type"}, R.RBulk{"oneof"}, R.RBulk{"arguments"}, R.RArray{[R.RMap{[R.RBulk{"name"}, R.RBulk{"on"}, R.RBulk{"type"}, R.RBulk{"pure-token"}, R.RBulk{"token"}, R.RBulk{"ON"}]}, R.RMap{[R.RBulk{"name"}, R.RBulk{"off"}, R.RBulk{"type"}, R.RBulk{"pure-token"}, R.RBulk{"token"}, R.RBulk{"OFF"}]}, R.RMap{[R.RBulk{"name"}, R.RBulk{"skip"}, R.RBulk{"type"}, R.RBulk{"pure-token"}, R.RBulk{"token"}, R.RBulk{"SKIP"}]}]}]}]}]}, Desc{"client|setname", R.IPos{3n}, ["slow", "connection"], [], KBySpecs{}, False{},
     [R.RBulk{"client|setname"}, R.RInt{R.IPos{3n}}, R.RSet{[R.RStatus{"noscript"}, R.RStatus{"loading"}, R.RStatus{"stale"}]}, R.RInt{R.IPos{0n}}, R.RInt{R.IPos{0n}}, R.RInt{R.IPos{0n}}, R.RSet{[R.RStatus{"@slow"}, R.RStatus{"@connection"}]}, R.RSet{[]}, R.RSet{[]}],
-    [R.RBulk{"summary"}, R.RBulk{"Set the current connection name"}, R.RBulk{"since"}, R.RBulk{"2.6.9"}, R.RBulk{"group"}, R.RBulk{"connection"}, R.RBulk{"complexity"}, R.RBulk{"O(1)"}, R.RBulk{"arguments"}, R.RArray{[R.RMap{[R.RBulk{"name"}, R.RBulk{"connection-name"}, R.RBulk{"type"}, R.RBulk{"string"}]}]}]}, Desc{"client|trackinginfo", R.IPos{2n}, ["slow", "connection"], [], KBySpecs{}, False{},
+    [R.RBulk{"summary"}, R.RBulk{"Set the current connection name"}, R.RBulk{"since"}, R.RBulk{"2.6.9"}, R.RBulk{"group"}, R.RBulk{"connection"}, R.RBulk{"complexity"}, R.RBulk{"O(1)"}, R.RBulk{"arguments"}, R.RArray{[R.RMap{[R.RBulk{"name"}, R.RBulk{"connection-name"}, R.RBulk{"type"}, R.RBulk{"string"}]}]}]}, Desc{"client|tracking", R.INeg{2n}, ["slow", "connection"], [], KBySpecs{}, False{},
+    [R.RBulk{"client|tracking"}, R.RInt{R.INeg{2n}}, R.RSet{[R.RStatus{"noscript"}, R.RStatus{"loading"}, R.RStatus{"stale"}]}, R.RInt{R.IPos{0n}}, R.RInt{R.IPos{0n}}, R.RInt{R.IPos{0n}}, R.RSet{[R.RStatus{"@slow"}, R.RStatus{"@connection"}]}, R.RSet{[]}, R.RSet{[]}],
+    [R.RBulk{"summary"}, R.RBulk{"Enable or disable server assisted client side caching support"}, R.RBulk{"since"}, R.RBulk{"6.0.0"}, R.RBulk{"group"}, R.RBulk{"connection"}, R.RBulk{"complexity"}, R.RBulk{"O(1). Some options may introduce additional complexity."}, R.RBulk{"arguments"}, R.RArray{[R.RMap{[R.RBulk{"name"}, R.RBulk{"status"}, R.RBulk{"type"}, R.RBulk{"oneof"}, R.RBulk{"arguments"}, R.RArray{[R.RMap{[R.RBulk{"name"}, R.RBulk{"on"}, R.RBulk{"type"}, R.RBulk{"pure-token"}, R.RBulk{"token"}, R.RBulk{"ON"}]}, R.RMap{[R.RBulk{"name"}, R.RBulk{"off"}, R.RBulk{"type"}, R.RBulk{"pure-token"}, R.RBulk{"token"}, R.RBulk{"OFF"}]}]}]}, R.RMap{[R.RBulk{"name"}, R.RBulk{"client-id"}, R.RBulk{"type"}, R.RBulk{"integer"}, R.RBulk{"token"}, R.RBulk{"REDIRECT"}, R.RBulk{"flags"}, R.RSet{[R.RStatus{"optional"}]}]}, R.RMap{[R.RBulk{"name"}, R.RBulk{"prefix"}, R.RBulk{"type"}, R.RBulk{"string"}, R.RBulk{"token"}, R.RBulk{"PREFIX"}, R.RBulk{"flags"}, R.RSet{[R.RStatus{"optional"}, R.RStatus{"multiple"}, R.RStatus{"multiple_token"}]}]}, R.RMap{[R.RBulk{"name"}, R.RBulk{"bcast"}, R.RBulk{"type"}, R.RBulk{"pure-token"}, R.RBulk{"token"}, R.RBulk{"BCAST"}, R.RBulk{"flags"}, R.RSet{[R.RStatus{"optional"}]}]}, R.RMap{[R.RBulk{"name"}, R.RBulk{"optin"}, R.RBulk{"type"}, R.RBulk{"pure-token"}, R.RBulk{"token"}, R.RBulk{"OPTIN"}, R.RBulk{"flags"}, R.RSet{[R.RStatus{"optional"}]}]}, R.RMap{[R.RBulk{"name"}, R.RBulk{"optout"}, R.RBulk{"type"}, R.RBulk{"pure-token"}, R.RBulk{"token"}, R.RBulk{"OPTOUT"}, R.RBulk{"flags"}, R.RSet{[R.RStatus{"optional"}]}]}, R.RMap{[R.RBulk{"name"}, R.RBulk{"noloop"}, R.RBulk{"type"}, R.RBulk{"pure-token"}, R.RBulk{"token"}, R.RBulk{"NOLOOP"}, R.RBulk{"flags"}, R.RSet{[R.RStatus{"optional"}]}]}]}]}, Desc{"client|trackinginfo", R.IPos{2n}, ["slow", "connection"], [], KBySpecs{}, False{},
     [R.RBulk{"client|trackinginfo"}, R.RInt{R.IPos{2n}}, R.RSet{[R.RStatus{"noscript"}, R.RStatus{"loading"}, R.RStatus{"stale"}]}, R.RInt{R.IPos{0n}}, R.RInt{R.IPos{0n}}, R.RInt{R.IPos{0n}}, R.RSet{[R.RStatus{"@slow"}, R.RStatus{"@connection"}]}, R.RSet{[]}, R.RSet{[]}],
     [R.RBulk{"summary"}, R.RBulk{"Return information about server assisted client side caching for the current connection"}, R.RBulk{"since"}, R.RBulk{"6.2.0"}, R.RBulk{"group"}, R.RBulk{"connection"}, R.RBulk{"complexity"}, R.RBulk{"O(1)"}]}, Desc{"client|unblock", R.INeg{2n}, ["admin", "slow", "dangerous", "connection"], [], KBySpecs{}, False{},
     [R.RBulk{"client|unblock"}, R.RInt{R.INeg{2n}}, R.RSet{[R.RStatus{"admin"}, R.RStatus{"noscript"}, R.RStatus{"loading"}, R.RStatus{"stale"}]}, R.RInt{R.IPos{0n}}, R.RInt{R.IPos{0n}}, R.RInt{R.IPos{0n}}, R.RSet{[R.RStatus{"@admin"}, R.RStatus{"@slow"}, R.RStatus{"@dangerous"}, R.RStatus{"@connection"}]}, R.RSet{[]}, R.RSet{[]}],
@@ -2171,6 +2179,204 @@ def keys.desc(m: Maybe<&2, Desc>, +flags: Bool, +argv: List<&2, String>) -> R.Re
 # COMMAND GETKEYS and GETKEYSANDFLAGS of a command line
 def keys(+flags: Bool, +argv: List<&2, String>) -> R.Reply:
   keys.desc(desc.argv(argv), flags, argv)
+
+# BEGIN gen_commands: by key
+# the arity and key specs of the command or subcommand of a key that
+# only reads (readonly); none for any other
+def ro.key(+key: Nat) -> Maybe<&2, Ro>:
+  match key:
+    case 3n:
+      Some{Ro{R.IPos{2n}, [KSpec{["RO", "access"], 1n, R.IPos{0n}, 1n, 0n}], KBySpecs{}}}
+    case 9n:
+      Some{Ro{R.INeg{1n}, [KSpec{["RO"], 1n, R.INeg{0n}, 1n, 0n}], KBySpecs{}}}
+    case 15n:
+      Some{Ro{R.IPos{2n}, [KSpec{["RO"], 1n, R.IPos{0n}, 1n, 0n}], KBySpecs{}}}
+    case 16n:
+      Some{Ro{R.INeg{1n}, [KSpec{["RO", "access"], 1n, R.INeg{0n}, 1n, 0n}], KBySpecs{}}}
+    case 18n:
+      Some{Ro{R.IPos{1n}, [], KBySpecs{}}}
+    case 21n:
+      Some{Ro{R.IPos{2n}, [], KBySpecs{}}}
+    case 22n:
+      Some{Ro{R.INeg{1n}, [], KBySpecs{}}}
+    case 25n:
+      Some{Ro{R.IPos{2n}, [KSpec{["RO"], 1n, R.IPos{0n}, 1n, 0n}], KBySpecs{}}}
+    case 32n:
+      Some{Ro{R.IPos{2n}, [KSpec{["RO", "access"], 1n, R.IPos{0n}, 1n, 0n}], KBySpecs{}}}
+    case 33n:
+      Some{Ro{R.IPos{2n}, [KSpec{["RO", "access"], 1n, R.IPos{0n}, 1n, 0n}], KBySpecs{}}}
+    case 34n:
+      Some{Ro{R.IPos{2n}, [KSpec{["RO", "access"], 1n, R.IPos{0n}, 1n, 0n}], KBySpecs{}}}
+    case 35n:
+      Some{Ro{R.IPos{2n}, [KSpec{["RO", "access"], 1n, R.IPos{0n}, 1n, 0n}], KBySpecs{}}}
+    case 37n:
+      Some{Ro{R.IPos{4n}, [KSpec{["RO", "access"], 1n, R.IPos{0n}, 1n, 0n}], KBySpecs{}}}
+    case 38n:
+      Some{Ro{R.IPos{4n}, [KSpec{["RO", "access"], 1n, R.IPos{0n}, 1n, 0n}], KBySpecs{}}}
+    case 40n:
+      Some{Ro{R.IPos{3n}, [KSpec{["RO", "access"], 1n, R.IPos{0n}, 1n, 0n}], KBySpecs{}}}
+    case 42n:
+      Some{Ro{R.INeg{1n}, [KSpec{["RO", "access"], 1n, R.IPos{0n}, 1n, 0n}], KBySpecs{}}}
+    case 43n:
+      Some{Ro{R.INeg{2n}, [KSpec{["RO", "access"], 1n, R.IPos{0n}, 1n, 0n}], KBySpecs{}}}
+    case 44n:
+      Some{Ro{R.INeg{1n}, [KSpec{["RO"], 1n, R.INeg{0n}, 1n, 0n}], KBySpecs{}}}
+    case 50n:
+      Some{Ro{R.INeg{1n}, [KSpec{["RO", "access"], 1n, R.IPos{0n}, 1n, 0n}], KBySpecs{}}}
+    case 53n:
+      Some{Ro{R.IPos{3n}, [KSpec{["RO", "access"], 1n, R.IPos{0n}, 1n, 0n}], KBySpecs{}}}
+    case 54n:
+      Some{Ro{R.INeg{2n}, [KSpec{["RO", "access"], 1n, R.IPos{0n}, 1n, 0n}], KBySpecs{}}}
+    case 57n:
+      Some{Ro{R.IPos{2n}, [KSpec{["RO"], 1n, R.IPos{0n}, 1n, 0n}], KBySpecs{}}}
+    case 58n:
+      Some{Ro{R.IPos{3n}, [KSpec{["RO"], 1n, R.IPos{0n}, 1n, 0n}], KBySpecs{}}}
+    case 59n:
+      Some{Ro{R.IPos{3n}, [KSpec{["RO"], 1n, R.IPos{0n}, 1n, 0n}], KBySpecs{}}}
+    case 60n:
+      Some{Ro{R.IPos{2n}, [KSpec{["RO", "access"], 1n, R.IPos{0n}, 1n, 0n}], KBySpecs{}}}
+    case 61n:
+      Some{Ro{R.IPos{2n}, [KSpec{["RO", "access"], 1n, R.IPos{0n}, 1n, 0n}], KBySpecs{}}}
+    case 62n:
+      Some{Ro{R.IPos{2n}, [KSpec{["RO", "access"], 1n, R.IPos{0n}, 1n, 0n}], KBySpecs{}}}
+    case 64n:
+      Some{Ro{R.INeg{2n}, [KSpec{["RO", "access"], 1n, R.IPos{0n}, 1n, 0n}], KBySpecs{}}}
+    case 72n:
+      Some{Ro{R.IPos{2n}, [KSpec{["RO"], 1n, R.IPos{0n}, 1n, 0n}], KBySpecs{}}}
+    case 73n:
+      Some{Ro{R.IPos{3n}, [KSpec{["RO", "access"], 1n, R.IPos{0n}, 1n, 0n}], KBySpecs{}}}
+    case 74n:
+      Some{Ro{R.IPos{4n}, [KSpec{["RO", "access"], 1n, R.IPos{0n}, 1n, 0n}], KBySpecs{}}}
+    case 79n:
+      Some{Ro{R.INeg{2n}, [KSpec{["RO", "access"], 1n, R.IPos{0n}, 1n, 0n}], KBySpecs{}}}
+    case 85n:
+      Some{Ro{R.IPos{2n}, [KSpec{["RO"], 1n, R.IPos{0n}, 1n, 0n}], KBySpecs{}}}
+    case 86n:
+      Some{Ro{R.IPos{3n}, [KSpec{["RO"], 1n, R.IPos{0n}, 1n, 0n}], KBySpecs{}}}
+    case 87n:
+      Some{Ro{R.INeg{2n}, [KSpec{["RO", "access"], 1n, R.IPos{0n}, 1n, 0n}], KBySpecs{}}}
+    case 88n:
+      Some{Ro{R.IPos{2n}, [KSpec{["RO", "access"], 1n, R.IPos{0n}, 1n, 0n}], KBySpecs{}}}
+    case 89n:
+      Some{Ro{R.INeg{2n}, [KSpec{["RO", "access"], 1n, R.IPos{0n}, 1n, 0n}], KBySpecs{}}}
+    case 91n:
+      Some{Ro{R.INeg{1n}, [KSpec{["RO", "access"], 1n, R.INeg{0n}, 1n, 0n}], KBySpecs{}}}
+    case 92n:
+      Some{Ro{R.INeg{2n}, [], KBySintercard{}}}
+    case 94n:
+      Some{Ro{R.INeg{1n}, [KSpec{["RO", "access"], 1n, R.INeg{0n}, 1n, 0n}], KBySpecs{}}}
+    case 96n:
+      Some{Ro{R.INeg{1n}, [KSpec{["RO", "access"], 1n, R.INeg{0n}, 1n, 0n}], KBySpecs{}}}
+    case 110n:
+      Some{Ro{R.IPos{1n}, [], KBySpecs{}}}
+    case 116n:
+      Some{Ro{R.INeg{2n}, [KSpec{["RO", "access"], 1n, R.IPos{1n}, 1n, 0n}], KBySpecs{}}}
+    case 117n:
+      Some{Ro{R.INeg{1n}, [KSpec{["RO", "access"], 1n, R.IPos{0n}, 1n, 0n}], KBySpecs{}}}
+    case 120n:
+      Some{Ro{R.INeg{1n}, [KSpec{["RO", "access"], 1n, R.IPos{0n}, 1n, 0n}], KBySpecs{}}}
+    case 124n:
+      Some{Ro{R.IPos{2n}, [KSpec{["RO"], 1n, R.IPos{0n}, 1n, 0n}], KBySpecs{}}}
+    case 125n:
+      Some{Ro{R.IPos{3n}, [KSpec{["RO", "access"], 1n, R.IPos{0n}, 1n, 0n}], KBySpecs{}}}
+    case 126n:
+      Some{Ro{R.INeg{2n}, [KSpec{["RO", "access"], 1n, R.IPos{0n}, 1n, 0n}], KBySpecs{}}}
+    case 127n:
+      Some{Ro{R.IPos{3n}, [KSpec{["RO", "access"], 1n, R.IPos{0n}, 1n, 0n}], KBySpecs{}}}
+    case 128n:
+      Some{Ro{R.IPos{3n}, [KSpec{["RO", "access"], 1n, R.IPos{0n}, 1n, 0n}], KBySpecs{}}}
+    case 129n:
+      Some{Ro{R.IPos{4n}, [KSpec{["RO", "access"], 1n, R.IPos{0n}, 1n, 0n}], KBySpecs{}}}
+    case 130n:
+      Some{Ro{R.IPos{4n}, [KSpec{["RO", "access"], 1n, R.IPos{0n}, 1n, 0n}], KBySpecs{}}}
+    case 131n:
+      Some{Ro{R.INeg{3n}, [KSpec{["RO", "access"], 1n, R.IPos{0n}, 1n, 0n}], KBySpecs{}}}
+    case 132n:
+      Some{Ro{R.INeg{3n}, [KSpec{["RO", "access"], 1n, R.IPos{0n}, 1n, 0n}], KBySpecs{}}}
+    case 133n:
+      Some{Ro{R.INeg{3n}, [KSpec{["RO", "access"], 1n, R.IPos{0n}, 1n, 0n}], KBySpecs{}}}
+    case 134n:
+      Some{Ro{R.INeg{3n}, [KSpec{["RO", "access"], 1n, R.IPos{0n}, 1n, 0n}], KBySpecs{}}}
+    case 135n:
+      Some{Ro{R.INeg{3n}, [KSpec{["RO", "access"], 1n, R.IPos{0n}, 1n, 0n}], KBySpecs{}}}
+    case 136n:
+      Some{Ro{R.INeg{3n}, [KSpec{["RO", "access"], 1n, R.IPos{0n}, 1n, 0n}], KBySpecs{}}}
+    case 142n:
+      Some{Ro{R.INeg{2n}, [KSpec{["RO", "access"], 1n, R.IPos{0n}, 1n, 0n}], KBySpecs{}}}
+    case 143n:
+      Some{Ro{R.INeg{2n}, [], KBySintercard{}}}
+    case 144n:
+      Some{Ro{R.INeg{2n}, [], KBySintercard{}}}
+    case 145n:
+      Some{Ro{R.INeg{2n}, [], KBySintercard{}}}
+    case 146n:
+      Some{Ro{R.INeg{2n}, [], KBySintercard{}}}
+    case 152n:
+      Some{Ro{R.INeg{1n}, [KSpec{["RO", "access"], 1n, R.IPos{0n}, 1n, 0n}], KBySpecs{}}}
+    case 178n:
+      Some{Ro{R.INeg{1n}, [], KBySortRo{}}}
+    case 180n:
+      Some{Ro{R.INeg{1n}, [KSpec{["RW", "access"], 1n, R.INeg{0n}, 1n, 0n}], KBySpecs{}}}
+    case 188n:
+      Some{Ro{R.INeg{0n}, [], KBySpecs{}}}
+    case 190n:
+      Some{Ro{R.INeg{3n}, [KSpec{["RO", "access"], 1n, R.IPos{0n}, 1n, 0n}], KBySpecs{}}}
+    case 191n:
+      Some{Ro{R.INeg{1n}, [KSpec{["RO", "access"], 1n, R.IPos{0n}, 1n, 0n}], KBySpecs{}}}
+    case 192n:
+      Some{Ro{R.INeg{1n}, [KSpec{["RO", "access"], 1n, R.IPos{0n}, 1n, 0n}], KBySpecs{}}}
+    case 194n:
+      Some{Ro{R.INeg{5n}, [KSpec{["RO", "access"], 1n, R.IPos{0n}, 1n, 0n}], KBySpecs{}}}
+    case 196n:
+      Some{Ro{R.INeg{4n}, [KSpec{["RO", "access"], 1n, R.IPos{0n}, 1n, 0n}], KBySpecs{}}}
+    case 197n:
+      Some{Ro{R.INeg{6n}, [KSpec{["RO", "access"], 1n, R.IPos{0n}, 1n, 0n}], KBySpecs{}}}
+    case 199n:
+      Some{Ro{R.IPos{2n}, [KSpec{["RO", "access"], 1n, R.IPos{0n}, 1n, 0n}], KBySpecs{}}}
+    case 204n:
+      Some{Ro{R.INeg{2n}, [], KByEval{}}}
+    case 205n:
+      Some{Ro{R.INeg{2n}, [], KByEval{}}}
+    case 238n:
+      Some{Ro{R.IPos{3n}, [KSpec{["RO"], 2n, R.IPos{0n}, 1n, 0n}], KBySpecs{}}}
+    case 239n:
+      Some{Ro{R.IPos{3n}, [KSpec{["RO"], 2n, R.IPos{0n}, 1n, 0n}], KBySpecs{}}}
+    case 240n:
+      Some{Ro{R.IPos{3n}, [KSpec{["RO"], 2n, R.IPos{0n}, 1n, 0n}], KBySpecs{}}}
+    case 241n:
+      Some{Ro{R.IPos{3n}, [KSpec{["RO"], 2n, R.IPos{0n}, 1n, 0n}], KBySpecs{}}}
+    case 243n:
+      Some{Ro{R.INeg{2n}, [KSpec{["RO"], 2n, R.IPos{0n}, 1n, 0n}], KBySpecs{}}}
+    case _:
+      None{}
+# END gen_commands: by key
+
+# the keys a call read, as Redis's getKeysFromCommand finds them for a
+# client that tracks keys (trackingRememberKeys): of a command that only
+# reads, by its key specs, when its arguments fit its arity
+def keys.names(ks: List<&2, KeyAt>, +argv: List<&2, String>) -> List<&2, String>:
+  match ks:
+    case Nil{}:
+      Nil{}
+    case Con{KeyAt{at, fl}, rest}:
+      nth(at, argv) <> keys.names(rest, argv)
+
+def keys.read.at(m: Maybe<&2, List<&2, KeyAt>>, +fits: Bool, +argv: List<&2, String>) -> List<&2, String>:
+  match m fits:
+    case Some{ks} True{}:
+      keys.names(ks, argv)
+    case _ _:
+      Nil{}
+
+def keys.read.of(m: Maybe<&2, Ro>, +argv: List<&2, String>) -> List<&2, String>:
+  match m:
+    case Some{Ro{arity, specs, way}}:
+      keys.read.at(keys.find(way, specs, argv), arity.ok(arity, List.length(&2, String, argv)), argv)
+    case None{}:
+      Nil{}
+
+def keys.read(+key: Nat, +argv: List<&2, String>) -> List<&2, String>:
+  keys.read.of(ro.key(key), argv)
 
 # COMMAND
 # -------
