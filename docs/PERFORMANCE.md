@@ -7775,6 +7775,152 @@ caches missed, and the tick counted them all at once.
 counts without them. Each of those loads runs one command, whose calls all go to the
 newest run, as before.
 
+## 72. Background saves
+
+**What was added** (FINDINGS 3zzzk). Each batch counts its changes for
+`rdb_changes_since_last_save` and the save points; the cron looks at the save points each
+100 ms; BGSAVE and the cron's saves write the RDB file a slice at a time between the
+groups the server answers.
+
+**The count of changes.** A batch of the fast way is counted once it has run, from its
+command's rule and its replies (`run_put`, `group_put`), and the count goes into `Info`
+with the batch's other counts, in the same rebuild (`S.srv.ran.d`). A batch of GET has
+nothing to count (its rule is none). A batch of INCR counts its calls less the errors
+that the look at its replies for errors found anyway. A batch of SET walks its replies:
+OK, or a value with GET, and none for a SET that NX or XX refused. Only a batch with a
+code that takes a weight (MSET, HSET, a push, a STORE, ...) reads anything before it
+runs.
+
+**Measured** (`make perfcheck`, instructions per request; main at 013d9ac, where this
+branch starts (#72 at 41c987d, with CLIENT TRACKING), built here and counted in turn with
+this change, twice each):
+
+| | GET | SET | INCR |
+|---|---:|---:|---:|
+| before | 3,439 | 4,204 | 4,548 |
+| with background saves | 3,455 (+0.5%) | 4,250 (+1.1%) | 4,563 (+0.3%) |
+
+The second runs counted 3,436, 4,204 and 4,544 before, and 3,454, 4,248 and 4,565 with
+this change. With 100 clients in BLPOP, GET 3,567 and SET 4,405, 3.2% and 3.6% above the
+counts without them (before: 3.2% and 3.6%). With main's #98 merged in as well, the
+branch counts GET 3,460, SET 4,249 and INCR 4,568 (baseline 3,452, 4,214 and 4,552), and
+3.1% and 3.6% more with the clients in BLPOP.
+
+Before the merge of CLIENT TRACKING, against #72 at 32b0cc1 (3,415, 4,177 and 4,521 in
+three runs, within 2 instructions), this change counted 3,434, 4,222 and 4,539, the
+same in another run and in `tools/callgrind_req.sh` (3,432, 4,228 and 4,540), but for
+the GET of one run: 3,502, with 1.99 last-level misses and 4.00 prefetches where every
+other run had 2.81 and 3.68. Another job's load on the machine had changed how the
+requests came in batches, and `make perfcheck` failed that run on its misses and
+prefetches.
+
+Where the 17, 50 and 20 instructions go (`tools/callgrind_req.sh` against 32b0cc1, each
+function's own instructions against the base's): `fast.run` 6 to 7 for each (the checks
+of the batch's rule before it runs, and the flags it keeps across the run), the
+functions compiled inline 6 for GET and 8 for INCR (the count by the rule, and the count
+passed into `Info`), and 34 for SET, whose replies are walked; the rest in reference
+counts.
+
+**On the way** (against #72's heads of the time).
+
+- *The first build* took 3,579, 4,404 and 4,735 instructions (161, 228 and 212 more than
+  its base then, 3,418, 4,176 and 4,523): `make perfcheck` failed. Its cron read `save`
+  among the parameters at each look, every 100 ms, and split and parsed it. Under
+  callgrind the server runs so slowly that 100 ms hold few requests, and the look
+  weighed about 125 instructions on each GET of callgrind's profile. And the check before
+  each batch for a code that takes a weight made `fast.run` keep its state, 27 words, and
+  the databases across that call.
+- *The save points read once*, into the account, at the start and at each CONFIG SET
+  (`rdb.cfg`), and *two tails* for `fast.run` (`fast.run.w`: only a batch that takes a
+  weight reads anything before it runs): 3,443, 4,236 and 4,557.
+- *One caller each, and loops* (FINDINGS.md, section 7). `run_put` and `group_put`,
+  called from two arms of `fast.run.w`, had become segments of their own, entered
+  through the work loop (in callgrind's profile, 18 instructions of each GET went to
+  them: their entry, and work that had been `fast.run`'s). Each now has one caller, and
+  `run_put.w` and `group_put.w` take the batches with weights. The count of a batch of
+  one code, `dirty.one`, and the check for weights became loops of their own (lengths
+  counted by a loop, not by `List.length`, which recurses outside a tail), so that their
+  callers save no frame around them: 3,434, 4,222 and 4,539.
+
+**A BGSAVE** (`tools/rdb_cost.py --bgsave`: each server in a fresh directory, filled with
+a million keys of 100 bytes, then a BGSAVE while one client sends SETs of random keys of
+the million, one at a time, each awaited; medians of three rounds, the servers in turn):
+
+| | BGSAVE | SETs served meanwhile | SET's latency: median, 99th percentile, highest | resident memory: before, highest | Redis's copy on write |
+|---|---:|---:|---:|---:|---:|
+| BendKV | 5.12 s | 12,350 | 250 µs, 1.28 ms, 57 ms | 204 MB, 235 MB | |
+| Redis 7.0.15 | 2.63 s | 31,200 | 63 µs, 195 µs, 13 ms | 205 MB, 205 MB | 140 MB |
+
+Redis's child writes the file on a core of its own while the parent answers; BendKV's
+actor writes it a slice at a time between the requests it answers, so a request that
+comes while a slice is written waits for it, and the save takes longer than a SAVE of
+the same keys (3.36 s, section 67). The snapshot costs BendKV the nodes the writes copy:
+31 MB for 12,350 SETs, where Redis's child had 140 MB of pages copied for 31,200. (The
+same measure before the merge of CLIENT TRACKING, at another hour of the shared machine:
+BendKV 4.43 s, 13,000 SETs, 213 µs, 716 µs and 45 ms; Redis 2.31 s, 32,300 SETs, 56 µs,
+169 µs and 2.5 ms.)
+
+**After the review** (FINDINGS 3zzzk: the review of the pull request). The fixes add
+nothing to a request of GET, SET or INCR, and a batch of the fast way now looks its rule
+up once (`dirty.rule.tally`, in `fast.run`), where the check for weights, the walk of
+the replies and the count by the rule alone each looked up the rule of the batch's code
+(`R.code.class`, `R.stat.dirty`). `make perfcheck`, instructions per request:
+
+| | GET | SET | INCR |
+|---|---:|---:|---:|
+| the branch merged with main at afa98a7, before the fixes | 3,487 | 4,281 | 4,596 |
+| the fixes and the rule looked up once, on the same main | 3,485 | 4,276 | 4,597 |
+| merged with main at a92597d (#96), the fixes alone | 3,495 | 4,291 | 4,606 |
+| the same, the rule looked up once | 3,493 | 4,288 | 4,601 |
+| the same, and ZINCRBY's weight without its sum (below) | 3,490 | 4,286 | 4,597 |
+| the same merged with main at 65ed1d7 (#111) | 3,511 | 4,283 | 4,602 |
+| main at 65ed1d7 alone, built here | 3,493 | 4,240 | 4,585 |
+| the head, merged with main at c5cc650 (#112) | 3,491 | 4,282 | 4,601 |
+
+With 100 clients in BLPOP, the head counts GET 3,598 and SET 4,436, 3.1% and 3.6% more
+than without them (before the fixes, 3,593 and 4,436: 3.0% and 3.6%; main at 65ed1d7,
+3,587 and 4,394: 2.7% and 3.6%). The builds of the third to fifth rows differ only where
+a GET, a SET or an INCR never goes, and their counts differ by 2 to 5 instructions: the
+layout of the code moves them that much, and GET by 20 between the last two merges.
+Against main at 65ed1d7, the branch merged with it takes 18, 43 and 17 instructions more
+(0.5%, 1.0% and 0.4%): the count of changes, as at the start of this section.
+
+ZINCRBY and ZADD with INCR now read, before they run, their member's score and their
+increment, to count none for a score they leave as it was (Redis's count). On a sorted
+set of 100,000 members, one request at a time (`tools/colls.sh`'s measure, the sorted set
+alone), instructions a command:
+
+| | ZADD of a member there | ZADD INCR 1 | ZINCRBY 1 | ZINCRBY 0 |
+|---|---:|---:|---:|---:|
+| before the fixes (on main at afa98a7) | 29,115 | 75,044 | 72,689 | 29,227 |
+| the fixes, the sum made for each | 29,391 | 83,392 | 82,811 | 33,620 |
+| on main at a92597d, the sum made for each | 29,217 | 83,331 | 82,744 | 33,555 |
+| the same, the sum made only when the doubles leave it open | 29,212 | 77,011 | 76,194 | 32,395 |
+
+The sum of the two doubles, of big numbers (`R.zadd.score`), was about 6,500 of the
+10,000 instructions the weight cost a ZINCRBY by 1; it is made now only when the
+increment is below the score's last place, or the score is not finite
+(`dw.zincr.kind`). What is left, about 2,000 to 3,500 instructions a call (5% of a
+ZINCRBY by 1 here, 3% of a ZADD INCR, 11% of a ZINCRBY by 0), is the lookup of the member
+and the parse of the increment, which the command makes again as it runs. A ZADD
+without INCR reads only its pairs, as before.
+
+A background save's writer (`bgw.loop`) takes nothing from a request: the actor sends it
+each 64 KB and waits for its answer, two operations of a channel and a switch of tasks
+for each 64 KB written.
+
+**What is left.** The walk of SET's replies (34 instructions a request) could go where the
+replies are already walked: the encoder, or the look for errors, which SET does not take.
+A slice of a background save is 32 entries of the trie while requests keep coming (64
+after a group, 256 once none has come for 10 ms, as the rewrite's), each written whole,
+as a large collection is: smaller slices would answer sooner, at the cost of a longer
+save. The writes and the syncs each 4 MB (`rdb-save-incremental-fsync`) and at the end,
+which the save's writer makes while the actor waits for its answer, and the rename and
+the directory's sync, which the actor makes, hold a request that comes meanwhile, where
+Redis's child makes them alone. ZINCRBY's weight reads the member and parses the
+increment, which the command does again as it runs: the core could give the count
+itself, a change of `src/redis.bend`, which the laws cover.
+
 ## 73. Small hashes in one string
 
 **What changed** (FINDINGS 3zzzm). A hash of at most 512 pairs of at most 64 bytes is
@@ -8024,6 +8170,60 @@ a fresh process). Requests a second:
 
 The machine was shared, and a round moves by up to 15%; LPUSH serves about 5 to 10% less
 than main, the pops and the ranges 8 to 35% more.
+
+## 81. LPOS, LINSERT and LREM by pieces
+
+FINDINGS 3zzzx. Main's build is the list code of #112 (3zzzw). The servers ran in turn on
+the same machine, idle but for them (load average 0.3).
+
+**On a list of 200,000** (`e0` to `e199999`, made by RPUSH a thousand at a time),
+milliseconds to the reply, the best of 5 runs. First the scenario of PERFORMANCE 79,
+whose LINSERT puts five `z` before `e100000` and whose LREM then takes them one at a
+time:
+
+| command | Redis 7.0.15 | main | this change |
+|---|---:|---:|---:|
+| LPOS q e199999 | 3.313 | 6.189 | 3.811 |
+| LINSERT q BEFORE e100000 z | 3.208 | 7.673 | 3.658 |
+| LREM q 1 z | 2.976 | 22.911 | 1.757 |
+
+Then each command near an end and in the middle, each write undone between runs (main's
+times here are higher than above: each of its LPOS calls makes a string of every element,
+and the calls before grew its heap):
+
+| command | Redis 7.0.15 | main | this change |
+|---|---:|---:|---:|
+| LPOS q e10 | 0.040 | 7.113 | 0.049 |
+| LPOS q e100000 | 1.520 | 11.452 | 1.626 |
+| LPOS q e199999 | 3.199 | 13.673 | 3.565 |
+| LPOS q e199990 RANK -1 | 0.041 | 24.692 | 0.056 |
+| LPOS q none | 2.837 | 23.516 | 3.283 |
+| LINSERT q BEFORE e10 z | 0.050 | 24.845 | 0.055 |
+| LINSERT q BEFORE e100000 z | 1.402 | 30.558 | 1.833 |
+| LREM q 1 e100000 | 1.460 | 40.731 | 1.013 |
+| LREM q -1 e199990 | 0.086 | 55.669 | 0.231 |
+| LREM q 0 none | 2.791 | 45.261 | 1.795 |
+
+Two earlier rounds of the second table, on the same builds, moved by up to 50% where the
+machine was busier; the order of the three servers was the same in each.
+
+**Instructions per command** (callgrind, one client, one request at a time; lists `a`,
+`c` and `b` of 20, 100 and 400 elements `e000`, `e001`, …):
+
+| command | main | this change | |
+|---|---:|---:|---:|
+| LPOS a e010 | 27,229 | 26,273 | −3.5% |
+| LPOS c e050 | 56,880 | 49,626 | −12.8% |
+| LPOS b e399 | 180,863 | 158,337 | −12.5% |
+| LPOS b e390 RANK -1 | 168,646 | 28,657 | −83.0% |
+| LPOS b none | 181,040 | 150,982 | −16.6% |
+| LREM c 0 none | 72,802 | 42,464 | −41.7% |
+| LREM b 0 none | 224,777 | 100,734 | −55.2% |
+| LINSERT c AFTER e050 z (200 runs) | 135,602 | 94,592 | −30.2% |
+| LREM c 1 z (200 runs, after them) | 157,238 | 140,965 | −10.3% |
+
+Nothing on the paths `make perfcheck` measures changed: the pushes, the pops, LINDEX,
+LRANGE and LSET run the code of #112.
 
 ## 82. The reads of a stream
 

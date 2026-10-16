@@ -3489,10 +3489,10 @@ type FDb is Data:
 type FW is Data:
   FW{dbs: List<&2, FDb>, i: Nat, at: Maybe<&2, Nat>}
 
-# a slice: its bytes, and what is left to write (None: every database is
-# written, and the end, file.tail, is next)
+# a slice: its bytes, the keys it holds, and what is left to write (None:
+# every database is written, and the end, file.tail, is next)
 type FSl is Data:
-  FSl{b: String, more: Maybe<&2, FW>}
+  FSl{b: String, k: Nat, more: Maybe<&2, FW>}
 
 def fw.next(rest: List<&2, FDb>, +i: Nat) -> Maybe<&2, FW>:
   match rest:
@@ -3510,15 +3510,17 @@ def fw.head(first: Bool, +i: Nat, +n: Nat, +x: Nat, rest: String) -> String:
 
 def fw.scanned(sc: KV.Scan, +t: KV.Trie<KV.Val>, +n: Nat, +x: Nat, rest: List<&2, FDb>, +i: Nat, +first: Bool) -> FSl:
   match sc:
-    case KV.Stop{+at, ks}:
-      FSl{fw.head(first, i, n, x, file.keys(t, ks, "")), Some{FW{FDb{t, n, x} <> rest, i, Some{at}}}}
-    case KV.Scan{w, ks}:
-      FSl{fw.head(first, i, n, x, file.keys(t, ks, "")), fw.next(rest, i)}
+    case KV.Stop{+at, +ks}:
+      +k = List.length(&2, String, ks)
+      FSl{fw.head(first, i, n, x, file.keys(t, ks, "")), k, Some{FW{FDb{t, n, x} <> rest, i, Some{at}}}}
+    case KV.Scan{w, +ks}:
+      +k = List.length(&2, String, ks)
+      FSl{fw.head(first, i, n, x, file.keys(t, ks, "")), k, fw.next(rest, i)}
 
 def fw.at(none: Bool, at: Maybe<&2, Nat>, +t: KV.Trie<KV.Val>, +n: Nat, +x: Nat, rest: List<&2, FDb>, +i: Nat, +want: Nat) -> FSl:
   match none at:
     case True{} _:
-      FSl{"", fw.next(rest, i)}
+      FSl{"", 0n, fw.next(rest, i)}
     case False{} None{}:
       fw.scanned(KV.scan(KV.Val, t, 0n, want, 0n), t, n, x, rest, i, True{})
     case False{} Some{+a}:
@@ -3530,7 +3532,7 @@ def fw.at(none: Bool, at: Maybe<&2, Nat>, +t: KV.Trie<KV.Val>, +n: Nat, +x: Nat,
 def file.slice(w: FW, +want: Nat) -> FSl:
   match w:
     case FW{Nil{}, i, at}:
-      FSl{"", None{}}
+      FSl{"", 0n, None{}}
     case FW{Con{FDb{+t, +n, +x}, rest}, +i, at}:
       fw.at(Nat.is_eq(n, 0n), at, t, n, x, rest, i, want)
 

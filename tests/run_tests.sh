@@ -71,7 +71,11 @@
 # it; files read in windows (values longer than a window, cuts and a
 # wrong checksum past the first one, and the resident memory after the
 # start); SAVE, LASTSAVE, INFO and the saves of FLUSHALL and SHUTDOWN
-# against Redis's; files that do not load, each stopping both starts.
+# against Redis's; files that do not load, each stopping both starts. And
+# the background saves (tests/bgsave_test.py): the count of changes of
+# each write, BGSAVE and its fields in INFO, BGSAVE and BGREWRITEAOF, the
+# save points, MISCONF after a save that failed and the cron's next try,
+# and SHUTDOWN and FLUSHALL while a save runs, against Redis's.
 set -e
 cd "$(dirname "$0")/.."
 PORT=${PORT:-6380}
@@ -236,3 +240,5 @@ echo "== maxmemory and eviction"
 python3 tests/maxmemory_test.py --bin build/bendkv --bendkv "$PORT" --redis "$((REDIS_PORT + 1))" --dir build/maxmemory
 echo "== the RDB file"
 python3 tests/rdb_test.py --bendkv build/bendkv --dir build/rdb
+echo "== background saves"
+python3 tests/bgsave_test.py --bendkv build/bendkv --dir build/bgsave

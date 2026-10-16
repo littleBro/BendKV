@@ -3077,6 +3077,375 @@ def deq.dropr(+k: Nat, d: Deq) -> Deq:
     case Deq{+nf, +pf, f, +nb, +pb, b}:
       deq.dropr.of(Nat.is_le(k, nb), k, nf, pf, f, nb, pb, b)
 
+# Searches and writes along the list
+# ----------------------------------
+# LPOS, LINSERT and LREM compare elements with a string where they lie, a
+# piece at a time, as a small hash compares a field (pk.hit): the
+# lengths first, then the last bytes, then the bytes. A walk goes in the
+# list's order or from its last element: the front stack's pieces in
+# their order, then the back stack's against theirs (or the other way).
+# A piece whose string goes the other way is read through the indices of
+# its codes, the last first (lp.offs). LPOS and LINSERT's pivot stop at
+# the matches they want; LINSERT then writes one piece, as LSET does, and
+# LREM writes anew only the pieces it takes elements from.
+
+# the indices of the k codes of s from index i on, the last first, before
+# acc
+def lp.offs(k: Nat, +s: String, +i: Nat, acc: List<&2, Nat>) -> List<&2, Nat>:
+  match k:
+    case 0n:
+      acc
+    case 1n+j:
+      lp.offs(j, s, lp.past(s, i), i <> acc)
+
+# x's last byte, which a comparison reads before the others (none for an
+# empty x, which pk.hit does not read)
+def lp.last(+x: String, +lx: Nat) -> U32:
+  String.code_at(x, Nat.sub(lx, 1n))
+
+# A search of x (LPOS, LINSERT's pivot): the element read next is the
+# c-th of the walk; up to w more matches are wanted and up to l more
+# elements read; the positions found, the last first
+type LSeek is Data:
+  LSeek{c: Nat, w: Nat, l: Nat, ps: List<&2, Nat>}
+
+# whether the search goes on
+def lp.seek.on(+st: LSeek) -> Bool:
+  match st:
+    case LSeek{c, +w, +l, ps}:
+      Bool.and(Nat.is_lt(0n, w), Nat.is_lt(0n, l))
+
+# the search past one element, a match (hit) or not: its position in the
+# list of n is c, or n - 1 - c from the last (back)
+def lp.seek.at(hit: Bool, +back: Bool, +n: Nat, st: LSeek) -> LSeek:
+  match hit st:
+    case True{} LSeek{+c, +w, +l, ps}:
+      LSeek{1n+c, Nat.sub(w, 1n), Nat.sub(l, 1n), Bool.pick(Nat, back, Nat.sub(Nat.sub(n, 1n), c), c) <> ps}
+    case False{} LSeek{+c, w, +l, ps}:
+      LSeek{1n+c, w, Nat.sub(l, 1n), ps}
+
+# the search through the k codes of s from index i on, in the string's
+# order
+def lp.seek.fw(k: Nat, on: Bool, +s: String, +i: Nat, +x: String, +lx: Nat, +lb: U32, +back: Bool, +n: Nat, st: LSeek) -> LSeek:
+  match k on:
+    case 1n+j True{}:
+      +m = pk.len(s, i)
+      +t = lp.seek.at(pk.hit(1n, x, lx, lb, s, i, m), back, n, st)
+      lp.seek.fw(j, lp.seek.on(t), s, Nat.add(i, Nat.add(pk.hdr(m), m)), x, lx, lb, back, n, t)
+    case _ _:
+      st
+
+# the search through the codes of s at the indices os
+def lp.seek.bw(+os: List<&2, Nat>, on: Bool, +s: String, +x: String, +lx: Nat, +lb: U32, +back: Bool, +n: Nat, st: LSeek) -> LSeek:
+  match os on:
+    case Con{+i, +rest} True{}:
+      +t = lp.seek.at(pk.hit(1n, x, lx, lb, s, i, pk.len(s, i)), back, n, st)
+      lp.seek.bw(rest, lp.seek.on(t), s, x, lx, lb, back, n, t)
+    case _ _:
+      st
+
+def lp.seek.of(same: Bool, +k: Nat, +s: String, +x: String, +lx: Nat, +lb: U32, +back: Bool, +n: Nat, st: LSeek) -> LSeek:
+  match same:
+    case True{}:
+      lp.seek.fw(k, True{}, s, 0n, x, lx, lb, back, n, st)
+    case False{}:
+      lp.seek.bw(lp.offs(k, s, 0n, Nil{}), True{}, s, x, lx, lb, back, n, st)
+
+# the search through piece p, in the walk's order: its string's order
+# when the string goes in the list's order (fw) and the walk too, or both
+# from the last
+def lp.seek.p(+p: LPiece, +x: String, +lx: Nat, +lb: U32, +back: Bool, +n: Nat, st: LSeek) -> LSeek:
+  match p:
+    case LPc{+k, n0, +fw, +s}:
+      lp.seek.of(Bool.xor(fw, back), k, s, x, lx, lb, back, n, st)
+
+def lp.seek.one(on: Bool, +p: LPiece, +x: String, +lx: Nat, +lb: U32, +back: Bool, +n: Nat, st: LSeek) -> LSeek:
+  match on:
+    case True{}:
+      lp.seek.p(p, x, lx, lb, back, n, st)
+    case False{}:
+      st
+
+# the search through the pieces ps, in their order
+def lp.seek.ps(+ps: List<&2, LPiece>, on: Bool, +x: String, +lx: Nat, +lb: U32, +back: Bool, +n: Nat, st: LSeek) -> LSeek:
+  match ps on:
+    case Con{+p, +rest} True{}:
+      +t = lp.seek.p(p, x, lx, lb, back, n, st)
+      lp.seek.ps(rest, lp.seek.on(t), x, lx, lb, back, n, t)
+    case _ _:
+      st
+
+# the search through the pieces ps, against their order: the last first
+def lp.seek.rb(+ps: List<&2, LPiece>, +x: String, +lx: Nat, +lb: U32, +back: Bool, +n: Nat, st: LSeek) -> LSeek:
+  match ps:
+    case Nil{}:
+      st
+    case Con{+p, +rest}:
+      +t = lp.seek.rb(rest, x, lx, lb, back, n, st)
+      lp.seek.one(lp.seek.on(t), p, x, lx, lb, back, n, t)
+
+def deq.find.of(back: Bool, +x: String, +lx: Nat, +lb: U32, +n: Nat, +f: List<&2, LPiece>, +b: List<&2, LPiece>, st: LSeek) -> LSeek:
+  match back:
+    case False{}:
+      +t = lp.seek.ps(f, True{}, x, lx, lb, False{}, n, st)
+      lp.seek.rb(b, x, lx, lb, False{}, n, t)
+    case True{}:
+      +t = lp.seek.ps(b, True{}, x, lx, lb, True{}, n, st)
+      lp.seek.rb(f, x, lx, lb, True{}, n, t)
+
+def lp.seek.ps.of(+st: LSeek) -> List<&2, Nat>:
+  match st:
+    case LSeek{c, w, l, +ps}:
+      ps
+
+# the positions of up to w elements that are x, among the first l read
+# (w and l at least 1), in the list's order or from its last element
+# (back): the positions found, the last first
+def deq.find(+x: String, +back: Bool, +w: Nat, +l: Nat, +d: Deq) -> List<&2, Nat>:
+  match d:
+    case Deq{+nf, pf, +f, +nb, pb, +b}:
+      +lx = String.length(x)
+      lp.seek.ps.of(deq.find.of(back, x, lx, lp.last(x, lx), Nat.add(nf, nb), f, b, LSeek{0n, w, l, Nil{}}))
+
+# piece p of the stack rv with v put next to its element at index o of
+# that stack's order: after it in that order (a), else before it. In the
+# string, v's code goes after the element's code when the string goes in
+# the stack's order (out) and v after the element, or neither.
+def lp.ins.p(+rv: Bool, +a: Bool, +o: Nat, +v: String, p: LPiece) -> Nat & List<&2, LPiece>:
+  match p:
+    case LPc{+k, +n, +fw, +s}:
+      +out = lp.out(fw, rv)
+      +i = lp.skip(lp.idx(out, k, o), s, 0n)
+      +q = Bool.pick(Nat, Bool.not(Bool.xor(a, out)), lp.past(s, i), i)
+      +m = Nat.add(n, lp.size(v))
+      lp.put.of(Nat.is_lt(lp.cap(), m), rv, 1n+k, m, fw, String.slice(s, 0n, q) ++ lp.code(v, String.drop(s, q)))
+
+def lp.ins.in(+rv: Bool, +a: Bool, +o: Nat, v: String, +pc: Nat, pre: List<&2, LPiece>, post: List<&2, LPiece>) -> Nat & List<&2, LPiece>:
+  match post:
+    case Con{p, rest}:
+      lp.set.put(pc, pre, lp.ins.p(rv, a, o, v, p), rest)
+    case Nil{}:
+      (pc, List.reverse(&2, LPiece, pre))
+
+def lp.ins.of(+rv: Bool, +a: Bool, +o: Nat, v: String, +pc: Nat, q: List<&2, LPiece> & List<&2, LPiece>) -> Nat & List<&2, LPiece>:
+  (pre, post) = q
+  lp.ins.in(rv, a, o, v, pc, pre, post)
+
+def lp.ins.at(+rv: Bool, +a: Bool, v: String, +pc: Nat, at: LAt, ps: List<&2, LPiece>) -> Nat & List<&2, LPiece>:
+  match at:
+    case LAt{t, +o, done}:
+      lp.ins.of(rv, a, o, v, pc, lp.cut(t, ps, Nil{}))
+
+# the stack ps of pc pieces (rv) with v put after its element at index j
+# of its order (a), else before it: how many pieces, and the stack
+def lp.ins(+rv: Bool, +j: Nat, +a: Bool, v: String, +pc: Nat, +ps: List<&2, LPiece>) -> Nat & List<&2, LPiece>:
+  lp.ins.at(rv, a, v, pc, lp.find(ps, LAt{0n, j, False{}}), ps)
+
+def deq.ins.of(front: Bool, +i: Nat, +after: Bool, v: String, +nf: Nat, +pf: Nat, f: List<&2, LPiece>, +nb: Nat, +pb: Nat, b: List<&2, LPiece>) -> Deq:
+  match front:
+    case True{}:
+      deq.fix(deq.with.f(1n+nf, lp.ins(False{}, i, after, v, pf, f), nb, pb, b))
+    case False{}:
+      deq.fix(deq.with.b(nf, pf, f, 1n+nb, lp.ins(True{}, Nat.sub(Nat.sub(nb, 1n), Nat.sub(i, nf)), Bool.not(after), v, pb, b)))
+
+# the list with v put after the element at position i, below its length
+# (after), else before it: in the front stack's order, or against the
+# back stack's
+def deq.ins.at(+i: Nat, +after: Bool, v: String, d: Deq) -> Deq:
+  match d:
+    case Deq{+nf, +pf, f, +nb, +pb, b}:
+      deq.ins.of(Nat.is_lt(i, nf), i, after, v, nf, pf, f, nb, pb, b)
+
+def deq.ins.if(+ps: List<&2, Nat>, +after: Bool, v: String, d: Deq) -> Maybe<&2, Deq>:
+  match ps:
+    case Con{+i, rest}:
+      Some{deq.ins.at(i, after, v, d)}
+    case Nil{}:
+      None{}
+
+# LINSERT: the list with v put after the first element that is p
+# (after), else before it; none when no element is
+def deq.ins(+p: String, +after: Bool, v: String, d: Deq) -> Maybe<&2, Deq>:
+  +e = d
+  deq.ins.if(deq.find(p, False{}, 1n, 1n+deq.len(e), e), after, v, e)
+
+# how many of the k elements whose codes start at index i of s are x,
+# after h
+def lp.hits(k: Nat, +s: String, +i: Nat, +x: String, +lx: Nat, +lb: U32, +h: Nat) -> Nat:
+  match k:
+    case 0n:
+      h
+    case 1n+j:
+      +m = pk.len(s, i)
+      lp.hits(j, s, Nat.add(i, Nat.add(pk.hdr(m), m)), x, lx, lb, Bool.pick(Nat, pk.hit(1n, x, lx, lb, s, i, m), 1n+h, h))
+
+# the bytes from index a to index b of a piece's string that a removal
+# keeps
+type LKept is Data:
+  LKept{a: Nat, b: Nat}
+
+# the run of bytes from a to i put before acc, when it holds any
+def lp.run.put(some: Bool, +a: Nat, +i: Nat, acc: List<&2, LKept>) -> List<&2, LKept>:
+  match some:
+    case True{}:
+      LKept{a, i} <> acc
+    case False{}:
+      acc
+
+# the run from a to i closed when the code at i is dropped
+def lp.run.cut(drop: Bool, +a: Nat, +i: Nat, acc: List<&2, LKept>) -> List<&2, LKept>:
+  match drop:
+    case True{}:
+      lp.run.put(Nat.is_lt(a, i), a, i, acc)
+    case False{}:
+      acc
+
+# the bytes of the k codes of s from index i on that a removal keeps: the
+# matches of x numbered lo to hi - 1 (h of them met before i) dropped; the
+# runs kept, the last first, before acc, the one from a not closed yet
+def lp.runs(k: Nat, +s: String, +i: Nat, +a: Nat, +h: Nat, +lo: Nat, +hi: Nat, +x: String, +lx: Nat, +lb: U32, acc: List<&2, LKept>) -> List<&2, LKept>:
+  match k:
+    case 0n:
+      lp.run.put(Nat.is_lt(a, i), a, i, acc)
+    case 1n+j:
+      +m = pk.len(s, i)
+      +e = Nat.add(i, Nat.add(pk.hdr(m), m))
+      +hit = pk.hit(1n, x, lx, lb, s, i, m)
+      +drop = Bool.and(hit, Bool.and(Nat.is_le(lo, h), Nat.is_lt(h, hi)))
+      lp.runs(j, s, e, Bool.pick(Nat, drop, e, a), Bool.pick(Nat, hit, 1n+h, h), lo, hi, x, lx, lb, lp.run.cut(drop, a, i, acc))
+
+# the bytes of the runs rs of s (the last first) in order, before t
+def lp.runs.str(rs: List<&2, LKept>, +s: String, t: String) -> String:
+  match rs:
+    case Nil{}:
+      t
+    case Con{LKept{+a, +b}, rest}:
+      lp.runs.str(rest, s, String.slice(s, a, Nat.sub(b, a)) ++ t)
+
+# how many bytes the runs rs hold, after c
+def lp.runs.len(+rs: List<&2, LKept>, +c: Nat) -> Nat:
+  match rs:
+    case Nil{}:
+      c
+    case Con{LKept{+a, +b}, +rest}:
+      lp.runs.len(rest, Nat.add(c, Nat.sub(b, a)))
+
+# A removal of x (LREM) through a stack: w more matches to take, gone
+# taken so far, and the stack's pieces kept or written anew, k elements in
+# c pieces (in the order the walk put them)
+type LRm is Data:
+  LRm{w: Nat, gone: Nat, k: Nat, c: Nat, ps: List<&2, LPiece>}
+
+# a piece kept as it is
+def lp.rm.keep(+p: LPiece, st: LRm) -> LRm:
+  match st:
+    case LRm{w, gone, +k, +c, ps}:
+      LRm{w, gone, Nat.add(k, lp.k(p)), 1n+c, p <> ps}
+
+# a piece kept unless it holds none (none)
+def lp.rm.put(none: Bool, p: LPiece, st: LRm) -> LRm:
+  match none:
+    case True{}:
+      st
+    case False{}:
+      lp.rm.keep(p, st)
+
+# the piece of k elements, of which r are taken, written anew from the
+# runs rs of s: none when it keeps none
+def lp.rm.new(+k: Nat, +r: Nat, fw: Bool, +s: String, +rs: List<&2, LKept>, st: LRm) -> LRm:
+  match st:
+    case LRm{+w, +gone, +kk, +c, ps}:
+      +left = Nat.sub(k, r)
+      +n = lp.runs.len(rs, 0n)
+      lp.rm.put(Nat.is_eq(left, 0n), LPc{left, n, fw, pk.flat(lp.runs.str(rs, s, ""), n)}, LRm{Nat.sub(w, r), Nat.add(gone, r), kk, c, ps})
+
+# piece LPc{k, n, fw, s} with r of its h matches taken, those the walk
+# meets first: the first r of its string when the string goes the walk's
+# way (same), else the last r
+def lp.rm.take(+r: Nat, +h: Nat, same: Bool, +x: String, +lx: Nat, +lb: U32, +k: Nat, +n: Nat, fw: Bool, +s: String, st: LRm) -> LRm:
+  +lo = Bool.pick(Nat, same, 0n, Nat.sub(h, r))
+  lp.rm.new(k, r, fw, s, lp.runs(k, s, 0n, 0n, 0n, lo, Nat.add(lo, r), x, lx, lb, Nil{}), st)
+
+def lp.rm.of(none: Bool, +h: Nat, same: Bool, +x: String, +lx: Nat, +lb: U32, +k: Nat, +n: Nat, fw: Bool, +s: String, st: LRm) -> LRm:
+  match none st:
+    case True{} st0:
+      lp.rm.keep(LPc{k, n, fw, s}, st0)
+    case False{} LRm{+w, gone, kk, c, ps}:
+      lp.rm.take(Nat.min(h, w), h, same, x, lx, lb, k, n, fw, s, LRm{w, gone, kk, c, ps})
+
+# how many of the k elements of s are x, when matches are still to take
+# (w), else none: a match, not Bool.pick, which would read them all
+def lp.rm.hits(w: Nat, +k: Nat, +s: String, +x: String, +lx: Nat, +lb: U32) -> Nat:
+  match w:
+    case 0n:
+      0n
+    case _:
+      lp.hits(k, s, 0n, x, lx, lb, 0n)
+
+# piece p met by the walk (from the last element, back): read when
+# matches are still to take, and written anew when it holds any
+def lp.rm.p(+back: Bool, +x: String, +lx: Nat, +lb: U32, p: LPiece, st: LRm) -> LRm:
+  match p st:
+    case LPc{+k, +n, +fw, +s} LRm{+w, gone, kk, c, ps}:
+      +h = lp.rm.hits(w, k, s, x, lx, lb)
+      lp.rm.of(Nat.is_eq(h, 0n), h, Bool.xor(fw, back), x, lx, lb, k, n, fw, s, LRm{w, gone, kk, c, ps})
+
+# the removal through the pieces ps, in their order (the pieces kept put
+# the last first)
+def lp.rm.ps(ps: List<&2, LPiece>, +back: Bool, +x: String, +lx: Nat, +lb: U32, st: LRm) -> LRm:
+  match ps:
+    case Nil{}:
+      st
+    case Con{p, rest}:
+      lp.rm.ps(rest, back, x, lx, lb, lp.rm.p(back, x, lx, lb, p, st))
+
+# the removal through the pieces ps, against their order (the pieces kept
+# put in their order)
+def lp.rm.rb(ps: List<&2, LPiece>, +back: Bool, +x: String, +lx: Nat, +lb: U32, st: LRm) -> LRm:
+  match ps:
+    case Nil{}:
+      st
+    case Con{p, rest}:
+      lp.rm.p(back, x, lx, lb, p, lp.rm.rb(rest, back, x, lx, lb, st))
+
+# a list after LREM, and how many elements it took
+type Rem is Data:
+  Rem{d: Deq, gone: Nat}
+
+# the list from the stacks the removal kept: the first stack's (k1
+# elements in c1 pieces ps1), then the second's (s2)
+def deq.rm.fin(back: Bool, +k1: Nat, +c1: Nat, ps1: List<&2, LPiece>, s2: LRm) -> Rem:
+  match back s2:
+    case False{} LRm{w, +gone, +k2, +c2, ps2}:
+      Rem{deq.fix(Deq{k1, c1, ps1, k2, c2, ps2}), gone}
+    case True{} LRm{w, +gone, +k2, +c2, ps2}:
+      Rem{deq.fix(Deq{k2, c2, ps2, k1, c1, ps1}), gone}
+
+# the second stack's removal, after the first's (s1, whose pieces came
+# the last first)
+def deq.rm.two(back: Bool, s1: LRm, +x: String, +lx: Nat, +lb: U32, two: List<&2, LPiece>) -> Rem:
+  match back s1:
+    case False{} LRm{w, gone, +k1, +c1, ps1}:
+      deq.rm.fin(False{}, k1, c1, List.reverse(&2, LPiece, ps1), lp.rm.rb(two, False{}, x, lx, lb, LRm{w, gone, 0n, 0n, Nil{}}))
+    case True{} LRm{w, gone, +k1, +c1, ps1}:
+      deq.rm.fin(True{}, k1, c1, List.reverse(&2, LPiece, ps1), lp.rm.rb(two, True{}, x, lx, lb, LRm{w, gone, 0n, 0n, Nil{}}))
+
+def deq.rm.of(back: Bool, +x: String, +lx: Nat, +lb: U32, +w: Nat, f: List<&2, LPiece>, b: List<&2, LPiece>) -> Rem:
+  match back:
+    case False{}:
+      deq.rm.two(False{}, lp.rm.ps(f, False{}, x, lx, lb, LRm{w, 0n, 0n, 0n, Nil{}}), x, lx, lb, b)
+    case True{}:
+      deq.rm.two(True{}, lp.rm.ps(b, True{}, x, lx, lb, LRm{w, 0n, 0n, 0n, Nil{}}), x, lx, lb, f)
+
+# LREM: the list without its first w elements that are x (all of them
+# for w 0), in its order or from its last element (back), and how many
+# it took
+def deq.rem(+x: String, +w: Nat, +back: Bool, d: Deq) -> Rem:
+  match d:
+    case Deq{+nf, pf, f, +nb, pb, b}:
+      +lx = String.length(x)
+      deq.rm.of(back, x, lx, lp.last(x, lx), Bool.pick(Nat, Nat.is_eq(w, 0n), Nat.add(nf, nb), w), f, b)
+
 # the list of n elements xs, in order: packed the last first, the pieces
 # then dealt to both stacks
 def deq.of.at(+n: Nat, q: Nat & List<&2, LPiece>) -> Deq:
