@@ -24,8 +24,9 @@ HERE = pathlib.Path(__file__).resolve().parent.parent
 JSON = HERE / "tools" / "data" / "redis-configs.json"
 BEND = HERE / "src" / "config.bend"
 
-# Where BendKV's default is not Redis's: no RDB snapshots, and the
-# loopback address it listens on.
+# Where BendKV's default is not Redis's: no save points (BendKV does not
+# save at them yet: SHUTDOWN and FLUSHALL save with them, SAVE saves), and
+# the loopback address it listens on.
 DEFAULTS = {"save": "", "bind": "127.0.0.1"}
 
 # What a change does in BendKV, by Redis's apply function: hz is capped as

@@ -270,6 +270,9 @@ STARTED = [
     ("a directory as the file", ["d", "--port", "{port}"], {"d/x": ""}, None, ["port"], None),
     ("an include of an empty file", ["c.conf"], {"c.conf": "port {port}\ninclude e.conf\nhz 9\n", "e.conf": ""}, None, ["hz"], None),
     ("protected configs", ["--port", "{port}", "--enable-protected-configs", "yes", "--dbfilename", "x.rdb"], {}, None, ["enable-protected-configs", "dbfilename"], None),
+    # an RDB file of one key, its checksum 0 (none): loaded at the start
+    # (tests/rdb_test.py compares what both servers load)
+    ("an RDB file", ["--port", "{port}"], {"dump.rdb": b"REDIS0010\xfe\x00\xfb\x01\x00\x00\x01k\x01v\xff" + bytes(8)}, None, ["dbfilename"], None),
     ("an octal value", ["--port", "{port}", "--unixsocketperm", "0755"], {}, None, ["unixsocketperm"], None),
 ]
 
@@ -287,7 +290,6 @@ BENDKV_REFUSES = [
     ("a replica", ["--port", "{port}", "--replicaof", "127.0.0.1", "1"], {}, {}, "BendKV cannot be a replica: replicaof must be no one"),
     ("TLS", ["--port", "{port}", "--tls-port", "1"], {}, {}, "BendKV has no TLS: set tls-port 0"),
     ("upstart", ["--port", "{port}", "--supervised", "auto"], {}, {"UPSTART_JOB": "x"}, "supervised by upstart, which BendKV cannot signal (it cannot stop itself): run it unsupervised"),
-    ("an RDB file", ["--port", "{port}"], {"dump.rdb": "REDIS0009"}, {}, "BendKV cannot load RDB files yet: {dir}/dump.rdb would be left out; move it away, or keep the data in an append-only file (appendonly yes)"),
     ("a multi-part append-only file", ["--port", "{port}", "--appendonly", "yes"], {"appendonlydir/appendonly.aof.manifest": "file appendonly.aof.1.incr.aof seq 1 type i\n"}, {}, "BendKV cannot read Redis 7's multi-part append-only files yet: {dir}/appendonlydir holds one"),
     ("a cut file, with aof-load-truncated no", ["--port", "{port}", "--appendonly", "yes", "--aof-load-truncated", "no"], {"appendonly.aof": "*3\r\n$3\r\nSET\r\n$1\r\na\r\n$1"}, {}, "Unexpected end of file reading the append only file appendonly.aof. You can: 1) Make a backup of your AOF file, then use ./redis-check-aof --fix <filename>. 2) Alternatively you can set the 'aof-load-truncated' configuration option to yes and restart the server."),
     ("a transaction left open, with aof-load-truncated no", ["--port", "{port}", "--appendonly", "yes", "--aof-load-truncated", "no"], {"appendonly.aof": "*1\r\n$5\r\nMULTI\r\n*3\r\n$3\r\nSET\r\n$1\r\na\r\n$1\r\n1\r\n"}, {}, "Unexpected end of file reading the append only file appendonly.aof. You can: 1) Make a backup of your AOF file, then use ./redis-check-aof --fix <filename>. 2) Alternatively you can set the 'aof-load-truncated' configuration option to yes and restart the server."),

@@ -7478,6 +7478,67 @@ as above, on the build of 479e46e):
   210,000 instructions a batch under callgrind (13,500 a request at depth 16).
   Kept in `Ps`'s bits and read again after CONFIG SET, as the table's limit now is, it
   would cost nothing.
+## 67. The RDB file
+
+**What was added** (FINDINGS 3zzzc). SAVE writes the RDB file, SHUTDOWN and FLUSHALL save
+it with save points, and the start loads it with `appendonly no`. The file is written a
+slice at a time (a scan of 4,096 entries of a database's trie, its CRC64 carried from
+slice to slice) and loaded whole: the start reads the file into one String, as it reads
+the append-only file.
+
+**Measured** (`tools/rdb_cost.py`: each server in a fresh directory, filled with the
+same keys, then SAVE timed as its client waits for it, the file's size, and a start from
+the file timed until it answers PING, with the time its log gives and the resident
+memory before and after; medians of three rounds, the servers in turn). The values are
+random bytes, which LZF does not make shorter, so Redis's file and BendKV's, which has
+no LZF, are of a size:
+
+| data | file | SAVE | Redis's SAVE | start | Redis's start | RSS after the start | Redis's |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| 100,000 keys of 100 bytes | 11.3 MB | 0.36 s | 0.28 s | 0.15 s | 0.10 s | 58 MB (42 before) | 32 MB |
+| 1,000,000 keys of 100 bytes | 113.9 MB | 3.36 s | 2.38 s | 1.93 s | 0.94 s | 361 MB (203 before) | 201 MB |
+| 100,000 hashes of 10 fields of 100 bytes | 106.0 MB | 2.34 s | 1.78 s | 2.45 s | 0.53 s | 872 MB (731 before) | 195 MB |
+
+The append-only file of the million keys (138 MB) starts in 3.0 s and leaves 609 MB
+resident. A hash of 10 fields takes BendKV seven times the memory it takes Redis, as
+before; that is the hash's representation, not the file's.
+
+Files Redis wrote with LZF (`rdbcompression yes`, its default), the start's time as the
+log gives it (DB loaded from disk), with the decoder of section 62 and with the one of
+this change (FINDINGS 3zzzc), both servers holding the same values after it:
+
+| file | BendKV, LZF in order | BendKV, LZF reversed | Redis |
+|---|---:|---:|---:|
+| 200,000 keys of 100 bytes (DEBUG POPULATE), 7.0 MB | 1.01 s | 0.82 s | 0.18 s |
+| 200 lists of 5,000 elements, their nodes of 8 KB compressed, 5.0 MB | 6.43 s | 0.54 s | 0.05 s |
+
+Redis keeps a list's nodes as the listpacks they are once LZF gives them back; BendKV
+reads each element into its own list.
+
+**Where the time goes** (`sprof`, a build with `-g -no-pie`, samples every 100 µs). A
+SAVE of 100,000 keys: 44% in `term_drop` and `span_fade`, the drops of the shared trie's
+nodes that each key's lookup takes apart (`file.keys` looks each key of a scan up in the
+trie it lends, as the rewrite's `rw.keys` does), 26% in the checksum (`crc.k`: two steps
+of four bits a byte, section 62), 7% in the scan. A load of the same keys: half in
+`file.load`, where the checksum of the whole file is inlined, 17% in `term_drop`, the
+rest in the readers and the trie's inserts. A load of the 200 lists, LZF reversed: a
+quarter in `String.reverse.go` (each byte goes into the reversed bytes, and back at the
+end), the rest in the listpacks' reading and the lists' building.
+
+**On the way.** The first load was quadratic in the file's size: each step measured what
+was left of the file, a list of 2 KB chunks, to name its offset (FINDINGS.md, section
+3zzzc, with its times). The offset is now worked out only for a line that names it. And
+LZF's decoder walked the bytes it had put out at each piece (the table above).
+
+**What is left.** The file whole in memory at the start, and the checksum checked over it
+at the end, which keeps it whole until then (a resident memory of the file's size more
+after the start); a scan that gives the entries themselves, rather than keys to look
+up, would take the drops out of SAVE, and of the rewrite of the append-only file too.
+
+**The other commands.** `make perfcheck`: GET 3,421, SET 4,182 and INCR 4,528
+instructions per request (3,419, 4,183 and 4,527 on main, built here and counted in
+turn); with 100 clients in BLPOP, GET 3,525 and SET 4,310, 3.0% and 3.1% above (main
+3.1% and 3.4%).
 
 ## 71. The timing's runs not yet counted, one per command
 

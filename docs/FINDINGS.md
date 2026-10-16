@@ -4717,7 +4717,8 @@ answers them on a master with no replica:
 
 - LASTSAVE: the time of the last save, which is the start: BendKV writes no RDB
   snapshot, and Redis's `lastsave` is its start until it saves one (INFO's
-  rdb_last_save_time, which LASTSAVE equals in both).
+  rdb_last_save_time, which LASTSAVE equals in both). (Since section 3zzzc, the last
+  save that ended well.)
 - ROLE: `["master", 0, []]`, a master at the replication offset 0 with no replica
   (`roleCommand`).
 - WAIT numreplicas timeout: its arguments read as `waitCommand` reads them (numreplicas
@@ -4790,7 +4791,9 @@ logs.", a failed call, the log saying why (Redis's lines, and "BendKV writes no 
 snapshot: it cannot save the data set (appendonly yes keeps it)"), and the server goes
 on; SAVE FORCE stops it all the same ("Error trying to save the DB. Exit anyway."). The
 save points of `save` save nothing in BendKV (its start warns of it), so a SHUTDOWN
-without SAVE stops the server where Redis would save first.
+without SAVE stops the server where Redis would save first. (Since section 3zzzc
+BendKV writes the RDB file: SHUTDOWN saves it with SAVE or with save points, and
+`Cls`'s down has other values.)
 
 **LOLWUT's drawings** (`src/lolwut.bend`). VERSION 5 is Georg Nees's Schotter: rows of
 squares, turned and moved a little more at random from the third row down, drawn with
@@ -6139,6 +6142,291 @@ Redis's suite: unit/tracking passes the 10 of its 13 tests that Redis passes, an
 unit/other its test of RESET clearing a client's state (COMPATIBILITY.md). The client
 libraries' tests of their caches pass as on Redis: redis-py's `test_client_tracking` in
 RESP2 and RESP3, and go-redis's specs of its client-side cache and of ClientTracking.
+## 3zzzc. The RDB file: SAVE, the saves of SHUTDOWN and FLUSHALL, and the start
+
+**What was left.** BendKV wrote no RDB file and refused to start where one was. A Redis
+run with its defaults (`save 3600 1 300 100 60 10000`, `appendonly no`) keeps its data
+in `dump.rdb`, so that data could not move to BendKV through its file, and BendKV, run
+with save points, came back empty after any restart. SHUTDOWN SAVE failed, and LASTSAVE
+answered the start forever. This is the first of the two pull requests of issue 67;
+BGSAVE and the saves at the save points are the second.
+
+**The file** (`src/rdb.bend`: The file, Reading a file). It is written as Redis 7.0.15's
+`rdbSaveRio` writes it, with the codec DUMP and RESTORE already had (section 3zzu):
+
+- `REDIS0010`, then the AUX fields `rdbSaveInfoAuxFields` writes for a master that never
+  had a replica: `redis-ver` 7.0.15, `redis-bits` 64, `ctime`, `used-mem` (the heap's
+  live bytes, INFO's used_memory) and `aof-base` 0;
+- for each database that holds keys, SELECTDB and RESIZEDB (its keys, and those with a
+  time);
+- for each key, EXPIRETIME_MS when it has a time, its value's type, the key, and the
+  value as DUMP writes it: `put.val` is now the type (`put.kind`) and the body
+  (`put.body`), so that the key goes between them;
+- EOF, and the CRC64 of every byte before it, or eight zero bytes with
+  `rdbchecksum no`.
+
+The file is written a slice at a time (`file.slice`: the keys of a scan of 4,096 entries
+of a database's trie, as the rewrite of the append-only file writes its own), its CRC64
+carried from slice to slice, so it is never whole in memory. Every key a database holds
+is written, one whose time has passed but that lies there still too, as Redis writes
+every entry of its dict.
+
+The start reads it as `rdbLoadRio` reads it on a master (`file.load`):
+
+- "REDIS" and a version from 1 to 10 ("Can't handle RDB format version %d" otherwise;
+  "Wrong signature trying to load DB from file");
+- AUX: the fields Redis logs, logged as it logs them ("Loading RDB produced by version",
+  "RDB age", "RDB memory usage when created %.2f Mb", "RDB has an AOF tail", "RDB is base
+  AOF", and a name that begins with '%' as "RDB '%s': %s"), any other skipped;
+- RESIZEDB; SELECTDB, a database past `databases` stopping the load with Redis's FATAL
+  line; EXPIRETIME in seconds and EXPIRETIME_MS; IDLE and FREQ, read and left aside
+  (below);
+- a value of any type the codec reads (0 to 5, 9 to 14, 16 to 18), so a file of Redis 6
+  and before loads with its ziplists, zipmaps and quicklists of ziplists. The codec's
+  readers now give back what follows the value they read (`obj.rest`, a `Vr`: a value,
+  an empty collection, or none); RESTORE's `obj` takes the value alone, as before;
+- EOF, then from version 5 on the checksum: checked with `rdbchecksum yes` unless it is
+  0 ("RDB file was saved with checksum disabled: no check performed."), with Redis's
+  lines when it is wrong.
+
+A key whose time has passed is dropped and counted (INFO's
+`rdb_last_load_keys_expired`), as Redis drops it on a master. An empty collection is
+skipped and counted, its first ten logged ("rdbLoadObject skipping empty key"). A key
+twice in a database stops the load ("RDB has duplicated key"). The load ends with
+Redis's lines: "Done loading RDB, keys loaded: %lld, keys expired: %lld." (with the empty
+keys skipped, when there are) and "DB loaded from disk: %.3f seconds". A file cut short,
+a wrong checksum or a type that is no type stops the start, with the first lines Redis
+logs then ("Short read or OOM loading DB. Unrecoverable error, aborting now.",
+"Internal error in RDB reading offset N -> ...", "Wrong RDB checksum expected: (%llx)
+but got (%llx). Aborting now.") and exit code 1. One part of one line is BendKV's own:
+in "Internal error in RDB reading offset N", N is the byte where the reading failed,
+and Redis's ", function at rdb.c:L" is left out. Redis prints, as N, what it had read
+at its last report of progress, which it makes every 2 MB (`loading_loaded_bytes`), so
+0 for a smaller file. What Redis loads and BendKV cannot
+stops the start with a line that says so: a stream ("BendKV has no streams: the RDB
+file holds a stream (key 'k'), which it cannot load"), a module's value or AUX data, a
+library of functions.
+
+**SAVE** (`src/server.bend`: The RDB file, The RDB file on the disk). SAVE writes
+`temp-<pid>.rdb`, syncs it, renames it onto `dbfilename` and syncs the directory, as
+`rdbSave` does, with the twenty-eighth patch's `File.rename` and `File.sync_dir`, which
+the rewrite uses. Then "DB saved on disk", and LASTSAVE, `rdb_last_save_time` and
+`rdb_last_bgsave_status` take the save. A save that fails logs Redis's line ("Failed
+opening the temp RDB file temp-%d.rdb (in server root dir %s) for saving: %s", "Write
+error saving DB on disk(%s): %s", "Error moving temp DB file ..."), removes the
+temporary file, and SAVE answers `-ERR`; the status stays as it was, as `rdbSave` leaves
+it. SAVE is counted in `rdb_saves` as it runs (CONFIG RESETSTAT counts them again),
+refused in MULTI (Redis's flag no-multi, now a generated table: `stat.nomulti`) and with
+an argument, and described by COMMAND from Redis's own table (`tools/gen_commands.py`).
+
+Redis saves within the command, the server still meanwhile. BendKV's group of requests
+is pure, so SAVE's client waits: in the chain of the clients that wait, as WAIT's does
+(`S.BlkWait` of no time: no key serves it, no time ends it), with the rest of its batch.
+The group asks the shell for a save (`ps.down` 1). Once the group has run, the shell
+saves the databases as the group left them, before any of the group's replies goes out,
+answers each client that waited, and their batches go on at the end of a group of their
+own (`grp.saved`). The save is as late as the group's last command: the commands of
+other clients in the group are in the file, which they may be, as they came while SAVE
+ran; the commands after SAVE in its own pipeline are not.
+
+A client that waits for a save is in the chain where other clients' commands can reach
+it, which Redis's never is. The first version let them undo the save:
+
+- CLIENT UNBLOCK of SAVE's client took it out of the chain, answered it as unblocked
+  (`:0`, or `-UNBLOCKED` with ERROR), answered UNBLOCK `:1`, and no save was made.
+- CLIENT KILL of it dropped the waiter, and with it the save, which the shell made only
+  while a waiter asked for one (`waits.save.any`).
+
+The adversarial review of the pull request found both: a write before SAVE was lost
+after a restart, where Redis keeps it. Now:
+
+- CLIENT UNBLOCK answers 0 for a client that waits for a save (`waits.saving.is`), as
+  for one the pause holds.
+- SAVE owes the save when it runs (the account's `owed`, set by `rdb.save`), and the
+  shell saves what is owed (`S.srv.rdb.owed`), whoever still waits, then clears it.
+
+`tests/rdb_test.py` puts both clients in one group: UNBLOCK and KILL of SAVE's client,
+and UNBLOCK of a SHUTDOWN SAVE whose save fails. Each transcript, and the key after a
+restart, is Redis's. A CLIENT PAUSE ALL holds both clients back as they come, and at the
+first tick past its end they go on, in the order they came, at the end of one group
+(Redis runs them in that order too). The test first held the server with twelve SORT
+... ALPHA (2.4 s), sending both clients' requests meanwhile. That makes one group only
+for connections opened before the hold and for requests that do not ask INFO. Here the
+requests of a connection opened during the hold, and a request for INFO, came in later
+groups: a third client's INFO showed `blocked_clients:0`. The pause makes one group
+whatever the requests are. Against the build before the fix, four of the five lines
+differ either way.
+
+**SHUTDOWN and FLUSHALL.** SHUTDOWN saves with SAVE, or with save points and without
+NOSAVE, as `finishShutdown` does: "User requested shutdown...", a rewrite that runs
+stopped, the append-only file synced, "Saving the final RDB snapshot before exiting.",
+then the end. A save that fails stops nothing but with FORCE ("Error trying to save the
+DB. Exit anyway."): the log says "Error trying to save the DB, can't exit." and "Errors
+trying to shut down the server. Check the logs for more information.", SHUTDOWN's client
+is answered "ERR Errors trying to SHUTDOWN. Check logs.", the rest of its batch goes on,
+and the rewrite stays stopped, as Redis killed its child before it tried to save.
+
+SHUTDOWN's client waits as SAVE's does. Without FORCE, such a SHUTDOWN asks the shell
+for a save (`ps.down` 1, and the account's `shut`), and the group goes on after it, its
+end and its ticks too: a save that fails leaves the server running, and the requests
+of other clients after it must then run, as in Redis. (The first version asked for a
+stop, and a stop drops the batches after it: those clients lost their connections when
+the save failed. `tests/rdb_test.py` holds both back with a pause so that they come in
+one group, as above.) When the save ends well, the replies of the requests after it are
+not sent, and what they wrote is in the files, written and not acknowledged, as a crash
+can leave a write; Redis would not have run them. With FORCE the batches after it are
+dropped, as before (`ps.down` 3), and so they are without a save (`ps.down` 2).
+
+FLUSHALL with save points saves the emptied databases after the flush, as Redis 7.0's
+`flushAllDataAndResetRDB` does, and answers OK whatever the save gives: the shell saves
+empty databases (`rdb.flush`), whatever the group did after the FLUSHALL, then SAVE's
+save, then SHUTDOWN's own.
+
+**The start.** With `appendonly no` (and not in the short form), `dbfilename` is loaded
+from `dir` when it is there. A file not there is empty databases; one that cannot be
+opened stops the start ("Fatal error loading the DB: %s. Exiting."), as one that does
+not load does. With `appendonly yes` the append-only file is loaded and the RDB file
+left aside, as Redis's `loadDataFromDisk` leaves it. The start no longer refuses
+`dump.rdb`; it refuses a multi-part append-only file still.
+
+**What it found.**
+
+- The first load of 100,000 keys took 1.78 s, 92% of it in `str_scan`. Each step of the
+  load worked out its offset, for the lines of a load that fails: the file's length less
+  the length of what is left. A String is a list of chunks of 2 KB, and its length is a
+  walk of them, so each step walked the rest of the file: ten times the keys, a hundred
+  times the walk. The offset is now worked out only where a line needs it (`FAt`: the
+  file's length and the String at the step's start, kept by reference), and the same
+  file loads in 0.14 s (Redis 0.08 s).
+- The bound #55 put on a hash's count, the bytes left (`String.length` of the rest),
+  walked the rest of the file at each hash of type 4 in the same way. It is a constant
+  now, 2^46 pairs, which keeps any count up to 2^48 from a product past it, as before;
+  a count past what is left fails at the end either way.
+- LZF, which RESTORE has read since section 3zzu, is much of what a file of Redis's
+  holds: with `rdbcompression yes`, its default, Redis compresses every string of more
+  than 20 bytes that LZF makes shorter, a listpack or a quicklist's node of 8 KB among
+  them. The decoder kept the bytes out in order, with a window of the last 8 to 16 KB of
+  them; each piece went at the window's end, a node more each time, and each piece and
+  each reference walked them all, about 4 ms for a node of 8 KB. A file of Redis's of
+  200 lists of 5,000 elements took 6.4 s to load (Redis 0.05 s). The bytes out are now
+  kept reversed, the newest first (`lzf.put`, `lzf.ref`, `lzf.fin`): a piece goes in
+  front, into the room of the first chunk, a reference reads near the front (a distance
+  is 8,192 at most), and the end reverses them once. The same file loads in 0.54 s, and
+  RESTORE of a compressed payload gains the same.
+- `Info`, of 63 words, would have been past 64 with the account's fields in it, and a
+  node past 64 words is copied whole at every update (section 3zzz). The account is a
+  node of its own (`Rdb`, with a constructor that holds its own type and is never built,
+  as `Tim` and `TRun` are), a word of `Info`, which is 64 words now: the next field it
+  takes must be a node's word too, or come out of it.
+
+**What it costs** (PERFORMANCE.md, section 67, which has the times and sizes against
+Redis's). A file of BendKV's is the size of Redis's when LZF gains nothing. SAVE takes
+somewhat more than Redis's time, and the start two to ten times its time. The start
+reads the whole file into memory first, as it reads the append-only file (issue 32),
+and checks the checksum at the end, over the file kept whole: the resident memory after
+the start holds about the file's size more than before the restart, where Redis's holds
+none (the start from the append-only file of the same keys costs more). The requests do
+not pay for any of it (`make perfcheck`, same section).
+
+**The laws.** SAVE is a command of the server (`SAdmin`, kind 15), which a session
+answers OK; the shell answers its client after the save. LASTSAVE answers the account
+in `Info` (`I.info.lastsave`). No law names either: the three laws of a session that
+enumerate its commands take SAVE as they take the other kinds of `SAdmin`. The file's
+writer and its load are tested, not proved: a law that a file written from databases
+loads back into them would need laws of the codec's readers and writers, value by value,
+and of a scan that reads every key once (section 3zv). `make check` and `make verdict`
+pass.
+
+**Where BendKV differs.**
+
+- No BGSAVE, and no save at the save points: they make SHUTDOWN and FLUSHALL save, and
+  BendKV's start warns that they save nothing at their times. BendKV's default `save` is
+  empty, where Redis's is `3600 1 300 100 60 10000`. `rdb_changes_since_last_save` is 0.
+- SIGTERM and SIGINT end the process at once. The runtime has no handler for them, so
+  the shutdown Redis runs for them (`shutdown-on-sigterm`, `shutdown-on-sigint`), with
+  its save when save points are set, would take a native of the runtime; SHUTDOWN saves.
+- No LZF: the file is that of `rdbcompression no`, as DUMP's payloads are (section
+  3zzu). Redis reads it.
+- No IDLE or FREQ, which Redis writes under an LRU or LFU policy and loads a file
+  without. Those of a file are read and left aside: a loaded key has the word of use of
+  a key not used since the start (section 3zw).
+- A hash or a set in a table is written in the order of BendKV's trie, not of Redis's
+  dict; an intset at its narrowest width; a list as the quicklist Redis makes pushing at
+  its last end. Each is the same value, as each server reads the other's.
+- The start reads the whole file before it loads it (above). A file that does not load
+  stops it without the report of `redis-check-rdb`, which Redis then writes; Redis
+  exits 0 when that report finds the file whole (a module's value of type 7, which the
+  report can skip), where BendKV exits 1.
+- A time at or past 10^14 ms (the year 5138) gives a key none, as everywhere in BendKV.
+- While a client waits for a save, the other clients of its group see it waiting:
+  `blocked_clients:1` in INFO and `flags=b cmd=save` in CLIENT LIST, where Redis's SAVE
+  never blocks. INFO's `rdb_saves` counts the SAVE before LASTSAVE moves.
+- SAVE splits its own pipeline: the commands after it run in a group of their own, after
+  the save, so another client's command can come between them (a WATCH before SAVE and
+  an EXEC after it can see a key another client wrote), which Redis's SAVE cannot let
+  happen.
+- The file holds the databases as the group left them, not as they were at SAVE (above):
+  a SHUTDOWN SAVE and another client's FLUSHALL in one group give Redis a file of the
+  keys and BendKV an empty one. The databases are values that do not change, so the
+  save could take them at SAVE's place in the group; that is left for later.
+- After a SHUTDOWN that saves, the other clients' requests of its group run before the
+  save (above). What they write reaches the append-only file and the RDB file, and they
+  get no reply, where Redis ends inside the SHUTDOWN and runs none of them. Holding them
+  until the save's result is known is issue #84. With Redis's default save points every
+  SHUTDOWN without NOSAVE saves, so this becomes the usual case.
+- After a start from the file, INFO's replication section and ROLE give an offset of 0.
+  Redis makes its backlog before it loads (`loadDataFromDisk`) and feeds it a SELECT and
+  a DEL for each key whose time had passed, so its `master_repl_offset` counts their
+  bytes. It also keeps a file's `repl-id` and `repl-offset` as `master_replid2` and its
+  offset (`second_repl_offset`, `repl_backlog_active:1`, ROLE's offset), and its next
+  save writes them again. BendKV logs those AUX fields and drops them.
+- SAVE's call time does not hold the save, which runs after the group: no SLOWLOG entry
+  and a few microseconds in `cmdstat_save`, where Redis counts the whole save.
+- Two SAVEs in one group make one file ("DB saved on disk" once), counted twice.
+
+**Tests.** `tests/rdb_test.py`, in `make test` (and the issue's own check, `python3
+tests/rdb_test.py --bendkv build/bendkv`), runs each case on a redis-server and a BendKV
+of their own, each in a fresh directory, 124 checks:
+
+- files Redis writes, with LZF and without, of the values of `tests/dump_test.py` (every
+  kind and encoding) in five databases with empty ones between them, keys with times, a
+  key whose time passed before the save, HyperLogLogs, GEO, an empty key name: BendKV
+  and Redis start from each, and every key of every database reads back the same (its
+  type, encoding, value and the time it expires at), with DBSIZE, the counts of the load
+  and its log's lines;
+- a file Redis writes of 300 strings and lists that LZF compresses (runs, repeats at
+  every distance up to past LZF's 8,192, overlapping their own start, noise; up to
+  70,000 bytes): both load the same values;
+- a file written by the test as Redis 6 and before wrote them (version 9, ziplists,
+  zipmaps, quicklists of ziplists, types 1 to 4, EXPIRETIME in seconds, IDLE and FREQ,
+  times past, empty keys, AUX fields of every kind, a checksum of 0): both load it alike
+  and log the same lines;
+- BendKV's SAVE of the same values: `redis-check-rdb` finds the file whole, Redis loads
+  it and holds what BendKV held, and so does BendKV;
+- both ways again with a database of 10,000 keys of 1,700 random bytes, which LZF
+  leaves as they are, and collections of 10,000 members. That is more than a slice of
+  BendKV's writer (4,096 keys: the slices after the first, the checksum carried between
+  them), and a file past 16 MB (BendKV's start reads it in several reads and joins
+  them);
+- SAVE, LASTSAVE and INFO's fields, SAVE in MULTI and with an argument, COMMAND INFO and
+  DOCS, a SAVE in a pipeline, a SAVE that fails, its statistics and CONFIG RESETSTAT,
+  FLUSHALL with save points and without, dbfilename and rdbchecksum no, against Redis's
+  transcripts;
+- SHUTDOWN with and without save points, SAVE and NOSAVE, the restarts after them, a
+  save that fails (with another client's requests served) and FORCE, the append-only
+  file with the RDB file, and the RDB file left aside with `appendonly yes`;
+- SAVE with `appendonly yes`, with the commands after it in its pipeline and another
+  client's requests in its group: all of them come back from the append-only file, in
+  the order they ran;
+- CLIENT UNBLOCK and CLIENT KILL of a client whose SAVE ran in the same group, and
+  CLIENT UNBLOCK of a SHUTDOWN SAVE whose save fails;
+- files that do not load (cut short, a wrong checksum, versions 11, 0 and -1, a wrong
+  signature, database 16, an unknown type, an empty file, a directory, a module's data
+  and values), each stopping both starts with Redis's line; a stream and a library of
+  functions, which BendKV refuses saying why; a wrong checksum with `rdbchecksum no`.
+
+`tests/admin_test.py` compares SHUTDOWN SAVE and a save that fails with Redis's;
+`tests/start_test.py` starts both servers on a dump.rdb, which BendKV refused before.
 
 ## 3zzze. A unix socket, IPv6 and systemd: the start of a stock configuration
 
