@@ -91,6 +91,28 @@ class Marks:
                 out.append(nm(x, cs))
 
 
+    def own(self, m, cs):
+        """What a monitor gets of its own commands, then up to a marker. The
+        marker is sent once the monitor's first reply or line has come: a
+        server runs a client's batch through before it reads another's
+        bytes, but the monitor's batch and the marker reach it from two
+        sockets, and it may read the marker first (seen on Redis under
+        load), so the marker waits until the monitor's batch has run."""
+        first = m.read(3.0)
+        head = [] if first == "TIMEOUT" or skip(first, cs) else [nm(first, cs)]
+        return head + self.lines(m, cs)
+
+
+def ran(r, c, name):
+    """Waits until the server has run c's command name (CLIENT LIST's
+    cmd=, which no monitor is shown): a command that answers nothing gives
+    no reply to wait on, and the next client's command could overtake it."""
+    for _ in range(500):
+        if "cmd=%s " % name in r.cmd("CLIENT", "LIST", "ID", c.id):
+            return
+        time.sleep(0.01)
+
+
 def drain(m, cs, t=0.4):
     """What a monitor gets in a while (when a marker's line would not come)."""
     out = []
@@ -168,13 +190,13 @@ def scenarios(port, log):
     # Redis reads them)
     m.raw(b"".join(enc(c) for c in (["PING"], ["GET", "x"], ["PUBLISH", "c", "msg"], ["ECHO", "hi"], ["DBSIZE"],
                                     ["CLIENT", "INFO"], ["SELECT", "2"], ["SELECT", "9"])))
-    log("8 own", mk.lines(m, cs))
+    log("8 own", mk.own(m, cs))
     m.raw(enc(["MONITOR"]) + enc(["PING", "again"]))
-    log("8 again", mk.lines(m, cs))
+    log("8 again", mk.own(m, cs))
     m.raw(enc(["MULTI"]) + enc(["PING"]) + enc(["GET", "x"]) + enc(["EXEC"]))
-    log("8 multi", mk.lines(m, cs))
+    log("8 multi", mk.own(m, cs))
     m.raw(enc(["MULTI"]) + enc(["PING"]) + enc(["EXEC"]))
-    log("8 exec", mk.lines(m, cs))
+    log("8 exec", mk.own(m, cs))
     # 9. a subscribed client, and a subscribed monitor
     a.send("SUBSCRIBE", "ch")
     log("9 sub", a.read(), mk.lines(m, cs))
@@ -183,11 +205,12 @@ def scenarios(port, log):
     m.send("SUBSCRIBE", "c2")
     log("9 monitor sub", m.read(), b.cmd("PUBLISH", "c2", "hello"), mk.lines(m, cs))
     m.raw(enc(["PING"]) + enc(["CLIENT", "INFO"]))
-    log("9 monitor sub ping", mk.lines(m, cs))
+    log("9 monitor sub ping", mk.own(m, cs))
     m.send("UNSUBSCRIBE")
-    log("9 monitor unsub", mk.lines(m, cs))
+    log("9 monitor unsub", mk.own(m, cs))
     # 10. CLIENT REPLY OFF and SKIP of a monitor
     m.send("CLIENT", "REPLY", "OFF")
+    ran(r, m, "client|reply")
     log("10 off", a.cmd("SET", "k1", "v1"), drain(m, cs))
     log("10 on", m.cmd("CLIENT", "REPLY", "ON"), a.cmd("SET", "k2", "v2"), mk.lines(m, cs))
     m.send("CLIENT", "REPLY", "SKIP")
@@ -227,7 +250,7 @@ def scenarios(port, log):
     m4 = Named(port, "m4")
     cs.append(m4)
     m4.raw(enc(["MONITOR"]) + enc(["PING"]) + enc(["MONITOR"]) + enc(["PING", "x"]))
-    log("15 pipelined", mk.lines(m4, cs))
+    log("15 pipelined", mk.own(m4, cs))
     # 16. the statistics
     log("16 stats", stats(r, "cmdstat_monitor", "cmdstat_get", "cmdstat_publish", "cmdstat_dbsize", "cmdstat_exec",
                           "errorstat_ERR", "errorstat_EXECABORT", "errorstat_NOAUTH", "errorstat_WRONGPASS"))

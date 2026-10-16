@@ -7295,3 +7295,39 @@ clock twice, adds the time to the command's counters and records it in the comma
 histogram. The histogram's four levels take a quarter of them. Most of the rest are the
 updates of `Info` and the passes of the group, which travels in 13 registers and is saved
 to the frame and loaded back around each call that is not a tail call.
+
+## 71. The timing's runs not yet counted, one per command
+
+**What changed** (FINDINGS 3zzzj). A run of calls that leaves the newest is added to the
+run of its command among those not yet counted, instead of going in front of them. Under
+a load of mixed commands, the runs no longer pile up, one per call, each with a histogram
+of its own, until the cron's tick.
+
+**In time** (`tools/loadgen.c -c 20 -P 16 -r 10000 -d 3 -g 0.5`: GETs and SETs at random,
+the command changing from one call to the next; five rounds of main's build, this one
+and Redis 7.0.15, in turn, 4 s each, with another job's callgrind run on one of the four
+cores):
+
+| requests a second | median | rounds |
+|---|---:|---|
+| main | 917,000 | 877,000 to 1,008,000 |
+| this change | 1,321,000 | 1,278,000 to 1,404,000 |
+| Redis 7.0.15 | 1,198,000 | 1,129,000 to 1,211,000 |
+
+The medians of the rounds' ratios: this change 1.45 times main's throughput (1.32 to
+1.47), and 1.15 times Redis's, where main's was 0.79 times Redis's. Main with
+`latency-tracking no`, in three rounds against main with it: 1,369,000 to 1,472,000
+against 718,000 to 872,000.
+
+**Memory.** Under the same load, `used_memory` read every 20 ms moved between 2.3 MB and
+16.0 MB on main, and within 16 KB with this change.
+
+**Instructions** (callgrind, the same load for 20 s after 20 s of warm-up, per command
+the server processed): main 5,751, this change 5,531 (-3.8%). The throughput gains far
+more than the instructions. The runs made 14 MB of fresh nodes every 100 ms, which the
+caches missed, and the tick counted them all at once.
+
+**`make perfcheck`**: GET 3,431, SET 4,213 and INCR 4,526 instructions per request
+(baseline 3,452, 4,214 and 4,552); with 100 clients in BLPOP, 2.7% and 2.7% above the
+counts without them. Each of those loads runs one command, whose calls all go to the
+newest run, as before.
