@@ -6910,19 +6910,24 @@ the heap's reading (`IO.heap`) counts them all; Redis's eviction (`performEvicti
 `getMaxmemoryState`) reads its parent's `used_memory`, which the child's pages copied
 on write never reach. So the eviction, and the refusal of writes past maxmemory with
 noeviction and of the commands that may take memory, see the memory as the heap when
-the job took its snapshot plus the change in the number of keys since then, each key at
-the average size then: when a job takes its snapshot, the eviction's state keeps the
-heap's used bytes (h0), the keys of all databases (k0) and their average (the heap past
-INFO's `used_memory_startup`, shared among the keys; none without keys); while it runs,
-the memory compared with maxmemory is the heap, or h0 and the keys made since at the
+the job started plus the change in the number of keys since then, each key at the
+average size then: when the actor starts the job (once the group of its BGSAVE or
+BGREWRITEAOF is answered, or at the cron's look), the eviction's state keeps the heap's
+used bytes (h0), the keys of all databases (k0) and their average (the heap past INFO's
+`used_memory_startup`, shared among the keys; none without keys); while it runs, the
+memory compared with maxmemory is the heap, or h0 and the keys made since at the
 average less those gone since if that is less. Values replaced by values of the same
 size cost nothing, a key made counts, and each key evicted or deleted counts less, so
 the eviction stops near the excess; a value that grows in place counts once the job has
-ended, when the heap is read as it is again. This replaces section 3zzzr's debt, which
-counted the keys the eviction itself deleted, and while a rewrite ran only: an evicted
-key now lowers the count of keys, and the debt would have counted it twice; its estimate
-of each evicted key (`AskEst`) and the heap's last reading in the eviction's state went
-with it. INFO shows the heap as it is.
+ended, when the heap is read as it is again (and so does a value that a write after the
+BGSAVE in its own group replaced: h0 is read after that group). This replaces section
+3zzzr's debt, which counted the keys the eviction itself deleted, and while a rewrite
+ran only: an evicted key now lowers the count of keys, and the debt would have counted
+it twice; its estimate of each evicted key (`AskEst`) and the heap's last reading in the
+eviction's state went with it. Section 3zzzr's scenario (300,000 keys, BGREWRITEAOF, the
+limit a tenth of the keys' share below the memory used) leaves about as many keys as with
+the debt: 238,044 and 238,170 after 3 s in two runs, 238,044 and 238,122 once the rewrite
+had ended (with the debt, 238,210 both times). INFO shows the heap as it is.
 
 **The defaults.** `save` is Redis's, `3600 1 300 100 60 10000` (`tools/gen_config.py`
 keeps only the loopback address apart from Redis's defaults). The start's warning that

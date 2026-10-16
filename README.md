@@ -594,9 +594,8 @@ translation stays in the trusted base.
   apart after a save that failed; one background job runs at a time (BGSAVE while a
   rewrite runs is refused, or scheduled with SCHEDULE, BGREWRITEAOF while a save runs is
   scheduled, SAVE is refused, and FLUSHALL and SHUTDOWN drop the save that runs); after
-  a background save that failed, with save points and `stop-writes-on-bgsave-error
-  yes`, the writes and PING are refused with Redis's MISCONF until a save ends well;
-  INFO's
+  a background save that failed, with save points and `stop-writes-on-bgsave-error yes`,
+  the writes and PING are refused with Redis's MISCONF until a save ends well; INFO's
   `rdb_changes_since_last_save` counts the changes since the last save, as Redis counts
   them, for the save points; LASTSAVE and INFO's `rdb_last_save_time`, `rdb_saves`,
   `rdb_last_bgsave_status` and `rdb_last_load_keys_loaded` and `_expired` follow it
@@ -605,34 +604,32 @@ translation stays in the trusted base.
   know, and drops the keys whose time has passed, counting them; it reads the file a
   window at a time (1 MiB, or as long as a value that runs past the window), so that
   what it holds at once is a window and the databases it builds (FINDINGS.md, section
-  3zzzt). Where BendKV differs:
-  no save on SIGTERM or SIGINT (above; the start warns of it when save points are set),
-  and the short form (`bendkv PORT`) has no save points; `rdb_changes_since_last_save`
-  counts some writes otherwise (SET with GET by its reply, ZADD and GEOADD each pair,
-  BITFIELD each write that OVERFLOW FAIL let through, PFADD one, PFCOUNT none; FLUSHDB
-  and FLUSHALL a key whose time has passed until the sweep deletes it, also after a read
-  found it missing, which Redis's read deletes, and so does `current_save_keys_total`;
-  a pipeline's weights read as the batch found the databases; an INFO after a FLUSHALL
-  with save points in its pipeline as if that FLUSHALL's save ended well; 0 after a
-  start from the append-only file); no fork, so no fork's fields or lines, and the
-  progress of a save
-  in INFO follows each slice written (a rewrite's shows none); the line of a background
-  save's start comes once its group is answered; SAVE and the saves of SHUTDOWN and
-  FLUSHALL ignore `rdb-key-save-delay`; no LZF written; no IDLE or FREQ written, and
-  those read set no word of use; SAVE's client waits through the rest of its group, so
-  that the others in it see it blocked, the commands after SAVE in its pipeline run in a
-  group of their own (a client in BCAST tracking mode gets the keys they change in an
-  invalidation push after the one of the keys changed before SAVE, where Redis sends
-  one; BGSAVE splits nothing), the file holds the databases as the group left them, and
-  SAVE's call time leaves the save out; after a start from the file, INFO's replication
-  section and ROLE give an offset of 0, where Redis counts into `master_repl_offset` a
-  DEL for each key whose time had passed, and keeps the file's `repl-id` and
-  `repl-offset` as its `master_replid2` and offset, which its next save writes again
-  (BendKV drops them); the log of a file that does not load gives the byte where the
-  reading failed, where Redis gives what it had read at its last report of progress, and
-  leaves out Redis's `function at rdb.c:N`; a background save takes longer than
-  Redis's, and so does the start from a large file (PERFORMANCE.md, sections 72 and 78;
-  FINDINGS.md, sections 3zzzk and 3zzzt).
+  3zzzt). Where BendKV differs: no save on SIGTERM or SIGINT (above; the start warns of
+  it when save points are set), and the short form (`bendkv PORT`) has no save points;
+  `rdb_changes_since_last_save` counts some writes otherwise (SET with GET by its reply,
+  ZADD and GEOADD each pair, BITFIELD each write that OVERFLOW FAIL let through, PFADD
+  one, PFCOUNT none; FLUSHDB and FLUSHALL a key whose time has passed until the sweep
+  deletes it, also after a read found it missing, which Redis's read deletes, and so
+  does `current_save_keys_total`; a pipeline's weights read as the batch found the
+  databases; an INFO after a FLUSHALL with save points in its pipeline as if that
+  FLUSHALL's save ended well; 0 after a start from the append-only file); no fork, so no
+  fork's fields or lines, and the progress of a save in INFO follows each slice written
+  (a rewrite's shows none); the line of a background save's start comes once its group
+  is answered; SAVE and the saves of SHUTDOWN and FLUSHALL ignore `rdb-key-save-delay`;
+  no LZF written; no IDLE or FREQ written, and those read set no word of use; SAVE's
+  client waits through the rest of its group, so that the others in it see it blocked,
+  the commands after SAVE in its pipeline run in a group of their own (a client in BCAST
+  tracking mode gets the keys they change in an invalidation push after the one of the
+  keys changed before SAVE, where Redis sends one; BGSAVE splits nothing), the file
+  holds the databases as the group left them, and SAVE's call time leaves the save out;
+  after a start from the file, INFO's replication section and ROLE give an offset of 0,
+  where Redis counts into `master_repl_offset` a DEL for each key whose time had passed,
+  and keeps the file's `repl-id` and `repl-offset` as its `master_replid2` and offset,
+  which its next save writes again (BendKV drops them); the log of a file that does not
+  load gives the byte where the reading failed, where Redis gives what it had read at
+  its last report of progress, and leaves out Redis's `function at rdb.c:N`; a
+  background save takes longer than Redis's, and so does the start from a large file
+  (PERFORMANCE.md, sections 72 and 78; FINDINGS.md, sections 3zzzk and 3zzzt).
 
 Not yet: streams, Lua
 scripts, CONFIG REWRITE (it answers as Redis does without a configuration file).

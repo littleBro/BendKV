@@ -689,11 +689,9 @@ def srv.rdb.shut(+s: Srv) -> Bool:
 # save asked for, and made; a background save started at the second now,
 # of a snapshot of total keys (snap: a group's BGSAVE took it for the
 # shell; unsched: it is the one scheduled), with the parameters it keeps
-# from then (I.BgCf); one scheduled; the snapshot
-# taken by the shell; k keys written; the save dropped once the group is
-# answered (FLUSHALL); the save ended, well or not, or dropped, at the
-# second now: what its snapshot held is let go (Mm's debt paid, as at the
-# end of a rewrite)
+# from then (I.BgCf); one scheduled; the snapshot taken by the shell; k
+# keys written; the save dropped once the group is answered (FLUSHALL);
+# the save ended, well or not, or dropped, at the second now
 def srv.rdb(+s: Srv) -> I.Rdb:
   match s:
     case Srv{pass, cfg, +info, mm}:

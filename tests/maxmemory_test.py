@@ -302,6 +302,7 @@ def job_writes(c, prefix, tag):
 
 
 def job_case(c, job, policy, new):
+    cmd(c, "CONFIG", "SET", "maxmemory", "0")
     cmd(c, "FLUSHALL")
     time.sleep(0.3)
     base = used(c)
