@@ -6312,7 +6312,7 @@ def cmd_id.l6(+n: String, c: Nat) -> Nat:
       Bool.pick(Nat, String.eq(n, "BLMOVE"), 156n,
       Bool.pick(Nat, String.eq(n, "BLMPOP"), 157n,
       Bool.pick(Nat, String.eq(n, "BZMPOP"), 160n,
-      Bool.pick(Nat, String.eq(n, "BGSAVE"), 204n, 0n)))))
+      Bool.pick(Nat, String.eq(n, "BGSAVE"), 211n, 0n)))))
     case 3n:  # C
       Bool.pick(Nat, String.eq(n, "CLIENT"), 105n,
       Bool.pick(Nat, String.eq(n, "CONFIG"), 107n, 0n))
@@ -7453,7 +7453,7 @@ def parse_id(id: Nat, name: String, args: List<&2, String>) -> Cmd:
           Own{SAdmin{15n, Nil{}}}
         case _:
           e_arity("save")
-    case 204n:  # BGSAVE
+    case 211n:  # BGSAVE
       bgsave.of(args)
     case _:
       e_unknown(name, args)
@@ -8155,7 +8155,7 @@ def stat.top(+id: Nat) -> Nat:
       202n
     case 203n:
       203n
-    case 204n:
+    case 211n:
       204n
     case _:
       0n
