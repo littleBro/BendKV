@@ -147,9 +147,11 @@ translation stays in the trusted base.
   LRANGE, LSET, LINSERT, LREM, LTRIM, LPOS (RANK, COUNT, MAXLEN, read as Redis 7.0.15
   reads them, a RANK of LLONG_MIN included), LMOVE, RPOPLPUSH and LMPOP, their arguments
   and errors read where and as Redis reads them (a count or an index may be any long
-  long). A list is a deque of two stacks, so a push or a pop at either end costs O(1)
-  amortized, and LINDEX and LRANGE walk from the nearer end; a key never holds an empty
-  list. OBJECT ENCODING answers `quicklist`, as Redis 7.0 does for every list, and
+  long). A list is a deque of two stacks of pieces of up to 2,048 bytes, each its
+  elements one after another, as Redis's quicklist is a chain of listpacks (a small
+  element takes its length's byte more than its bytes), so a push or a pop at either end
+  costs O(1) amortized, and LINDEX, LSET and LRANGE go from the nearer end a piece at a
+  time; a key never holds an empty list. OBJECT ENCODING answers `quicklist`, as Redis 7.0 does for every list, and
   MEMORY USAGE estimates its bytes. A list write is logged as the write itself (LMPOP as
   the LPOP or RPOP of the key it took from, with its count; a pop of the last elements as
   the DEL of the key); a list made where a key whose time had passed still lay is logged
@@ -867,7 +869,7 @@ away.
 
 | file | lines of code | of them written by a generator | the laws import it |
 |---|---:|---:|---|
-| `src/map.bend` | 3,500 | 1,200 | yes |
+| `src/map.bend` | 3,900 | 1,200 | yes |
 | `src/redis.bend` | 18,000 | 7,300 | yes |
 | `src/batch.bend` | 84 |  | yes |
 | `src/aof.bend` | 1,200 |  | yes |

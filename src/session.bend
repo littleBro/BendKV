@@ -2599,7 +2599,7 @@ def mem.val(+v: KV.Val) -> Nat:
     case KV.VColl{KV.CHash{+h}}:
       mem.pairs(KV.hash.pairs(h), 48n)
     case KV.VColl{KV.CList{+l}}:
-      mem.elems(KV.deq.all(l), 48n)
+      KV.deq.bytes(l)
     case KV.VColl{KV.CMems{+m}}:
       mem.elems(KV.mems.all(m), 48n)
     case KV.VColl{KV.CZset{+z}}:
