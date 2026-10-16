@@ -2516,7 +2516,7 @@ def cl.mon.unix(unix: Bool, +addr: String) -> String:
 
 def cl.mon.or(m: Maybe<&2, Cl>) -> String:
   match m:
-    case Some{Cl{id, back, fd, +addr, +laddr, since, name, db, noev, r3}}:
+    case Some{Cl{id, back, fd, +addr, +laddr, since, name, db, noev, r3, kt}}:
       cl.mon.unix(String.eq(addr, laddr), addr)
     case None{}:
       "?:0"
