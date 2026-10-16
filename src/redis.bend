@@ -10619,7 +10619,7 @@ def stat.dirty(+key: Nat) -> Nat:
     case 63n:
       1n
     case 65n:
-      1n
+      16n
     case 66n:
       10n
     case 67n:
@@ -10673,7 +10673,7 @@ def stat.dirty(+key: Nat) -> Nat:
     case 121n:
       14n
     case 122n:
-      1n
+      14n
     case 123n:
       2n
     case 137n:
@@ -10718,6 +10718,8 @@ def stat.dirty(+key: Nat) -> Nat:
       2n
     case 181n:
       1n
+    case 182n:
+      10n
     case 189n:
       14n
     case 193n:
@@ -10727,7 +10729,7 @@ def stat.dirty(+key: Nat) -> Nat:
     case 198n:
       13n
     case 200n:
-      1n
+      10n
     case 221n:
       1n
     case _:

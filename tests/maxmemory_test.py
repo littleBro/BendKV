@@ -16,6 +16,14 @@ INFO's maxmemory and maxmemory_human up to the largest maxmemory; and
 the "evicted" event of a key evicted at once by a
 CONFIG SET of maxmemory (unit/pubsub.tcl).
 
+Then maxmemory while a background save or a rewrite of the append-only
+file runs, on both: every key overwritten with a value of the same size
+evicts nothing and is refused nothing (Redis's parent counts none of the
+pages its child's snapshot keeps, and BendKV counts the memory by the
+keys while its snapshot holds the values replaced); new keys are evicted
+as they pass the limit, each server holding what the limit leaves room
+for at the bytes its keys took before the save.
+
 Then Redis's own tests of the policies (unit/maxmemory.tcl, which its
 suite runs only against a server it starts itself), on both: for each
 policy, keys added past a limit of the memory used and 100 KB more, then
@@ -40,6 +48,7 @@ import os
 import random
 import shutil
 import sys
+import threading
 import time
 
 from aof_redis_test import start, stop
@@ -263,6 +272,139 @@ def fill(c, n, prefix=b"key:", size=8):
             c.reply()
 
 
+# maxmemory while a job takes a snapshot: N keys of SIZE bytes, the limit
+# MARGIN above the memory they take, a BGSAVE or a BGREWRITEAOF paced by
+# rdb-key-save-delay (DELAY us a key: about 1.5 s on BendKV, about 4 s on
+# Redis, whose child sleeps at least that long for each key; both servers
+# run each case at once, in threads of their own), and while
+# it runs either every key written again with a value of the same size
+# (new False), or as many new keys (new True). The snapshot keeps every
+# value a write replaces (BendKV's heap holds them, Redis's child's pages
+# copied on write hold them, outside its used_memory): about 12 MB of
+# them here, three times MARGIN. A server's outcome: the job's reply,
+# whether it still ran once the writes were answered, the keys evicted
+# and the writes refused (OOM) by then, the keys there then (once the
+# eviction has caught up with the writes), the keys left once it has
+# ended, the bytes a key took when the N were set, and the room the limit
+# left just before the job.
+JOB_N, JOB_SIZE, JOB_MARGIN, JOB_DELAY = 50000, 100, 4 << 20, 30
+
+
+def job_writes(c, prefix, tag):
+    """the N writes of JOB_SIZE bytes, pipelined: how many were refused"""
+    refused = 0
+    for b in range(0, JOB_N, 1000):
+        c.send([[b"SET", prefix + str(i).encode(), tag * JOB_SIZE] for i in range(b, min(JOB_N, b + 1000))])
+        for _ in range(b, min(JOB_N, b + 1000)):
+            kind, r = c.reply()
+            refused += kind == b"-"
+    return refused
+
+
+def job_case(c, job, policy, new):
+    cmd(c, "FLUSHALL")
+    time.sleep(0.3)
+    base = used(c)
+    job_writes(c, b"key:", b"a")
+    time.sleep(0.3)
+    per = (used(c) - base) / JOB_N
+    cmd(c, "CONFIG", "SET", "maxmemory-policy", policy)
+    limit = used(c) + JOB_MARGIN
+    cmd(c, "CONFIG", "SET", "maxmemory", limit)
+    cmd(c, "CONFIG", "SET", "rdb-key-save-delay", JOB_DELAY)
+    cmd(c, "CONFIG", "RESETSTAT")
+    room = limit - used(c)
+    started = cmd(c, job)
+    refused = job_writes(c, b"new:" if new else b"key:", b"b")
+    # the eviction catches up with the last writes in the groups that
+    # follow: the keys once two readings 0.1 s apart agree
+    last = None
+    for _ in range(20):
+        n = int(cmd(c, "DBSIZE")[1])
+        if n == last:
+            break
+        last = n
+        time.sleep(0.1)
+    cmd(c, "MULTI")
+    cmd(c, "DBSIZE")
+    cmd(c, "INFO", "all")
+    size, text = cmd(c, "EXEC")[1]
+    mid = int(size[1])
+    inf = dict(l.split(":", 1) for l in text[1].decode().split("\r\n") if ":" in l)
+    ran = inf["rdb_bgsave_in_progress"] == "1" or inf["aof_rewrite_in_progress"] == "1"
+    evicted = int(inf["evicted_keys"])
+    def ended():
+        i = info(c, b"persistence")
+        return i["rdb_bgsave_in_progress"] == "0" and i["aof_rewrite_in_progress"] == "0"
+    wait_for(ended, 60)
+    time.sleep(0.5)
+    left = int(cmd(c, "DBSIZE")[1])
+    cmd(c, "CONFIG", "SET", "rdb-key-save-delay", "0")
+    cmd(c, "CONFIG", "SET", "maxmemory", "0")
+    cmd(c, "CONFIG", "SET", "maxmemory-policy", "noeviction")
+    cmd(c, "FLUSHALL")
+    return started, ran, evicted, refused, mid, left, per, room
+
+
+def job_both(kc, rc, job, policy, new):
+    got = [None, None]
+    def one(i, c):
+        try:
+            got[i] = job_case(c, job, policy, new)
+        except Exception as e:
+            got[i] = ("exception", e)
+    ts = [threading.Thread(target=one, args=(i, c)) for i, c in enumerate((kc, rc))]
+    for t in ts:
+        t.start()
+    for t in ts:
+        t.join()
+    for g, name in zip(got, ("BendKV", "Redis")):
+        if g is None or g[0] == "exception":
+            fail("%s %s under %s: %r" % (name, job.decode(), policy, g))
+    return got
+
+
+def snapshot_jobs(kc, rc):
+    for job, policy in ((b"BGSAVE", "allkeys-random"), (b"BGSAVE", "noeviction"),
+                        (b"BGREWRITEAOF", "allkeys-random"), (b"BGREWRITEAOF", "noeviction")):
+        got = job_both(kc, rc, job, policy, False)
+        for (started, ran, evicted, refused, mid, left, per, room), name in zip(got, ("BendKV", "Redis")):
+            if not ran:
+                fail("%s %s: the job ended before the writes did, nothing tested: %r" % (name, job.decode(), got))
+        if [g[2:6] for g in got] != [(0, 0, JOB_N, JOB_N)] * 2:
+            fail("%s under %s, every key written again: BendKV (evicted, refused, keys, left) %r, Redis %r"
+                 % (job.decode(), policy, got[0][2:6], got[1][2:6]))
+        ok("%s under %s: %d keys written again with values of the same size, none evicted or refused, on both"
+           % (job.decode(), policy, JOB_N))
+    # new keys while a save runs, under allkeys-random: both evict as they
+    # pass the limit, and while the save runs each holds more keys than
+    # before it by what the room the limit left holds of its own keys, at
+    # the bytes a key took when the N were set. BendKV counts each key made
+    # at the snapshot's average while the save runs (about 277 bytes here,
+    # 15,150 keys in the room; it held 15,170, 0.1% more). Redis's parent
+    # counts what it allocates: its dict entry, objects and allocator's
+    # size classes (about 187 bytes a key, 22,900 to 23,550 keys in the
+    # room; it held 3% to 6% more, its hash table not growing while a child
+    # runs, where the first N paid for its growth). Each within an eighth
+    # of its own. Once the save has ended, BendKV evicts as its heap holds
+    # the keys (13,800 to 13,900 of them: FINDINGS.md, section 3zzzk), and
+    # Redis evicts a few more as its memory moves (about 150): neither
+    # holds more than during the save, nor fewer than before it.
+    got = job_both(kc, rc, b"BGSAVE", "allkeys-random", True)
+    bad = []
+    for (_, ran, ev, ref, mid, left, per, room), name in zip(got, ("BendKV", "Redis")):
+        fits = room / per
+        if not (ran and ref == 0 and ev > 0 and abs((mid - JOB_N) - fits) * 8 <= fits and JOB_N < left <= mid):
+            bad.append(name)
+    if bad:
+        fail("new keys while a save runs (%s): BendKV (ran, evicted, refused, keys, left, bytes a key) %r, Redis %r"
+             % (", ".join(bad), got[0][1:], got[1][1:]))
+    (_, _, kev, _, kmid, kleft, kper, kroom), (_, _, rev, _, rmid, rleft, rper, rroom) = got
+    ok("new keys while a save runs, under allkeys-random: BendKV held %d more keys than before it, %d in its room at %.0f "
+       "bytes a key (%d evicted; %d more once it ended), Redis %d, %d at %.0f bytes (%d evicted; %d)"
+       % (kmid - JOB_N, kroom / kper, kper, kev, kleft - JOB_N, rmid - JOB_N, rroom / rper, rper, rev, rleft - JOB_N))
+
+
 def wait_for(cond, secs=20):
     end = time.time() + secs
     while time.time() < end:
@@ -333,6 +475,7 @@ def main():
         if evs[0] != evs[1] or evs[0][1][2][1] != b"__keyevent@9__:evicted":
             fail("the evicted event: BendKV %r, Redis %r" % tuple(evs))
         ok("the evicted event of a key evicted by CONFIG SET maxmemory")
+        snapshot_jobs(kc, rc)
         for c, name in ((kc, "BendKV"), (rc, "Redis")):
             for what, good in policies(c):
                 if not good:

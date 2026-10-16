@@ -43,6 +43,8 @@ import ./startup.bend as T
 import ./info.bend as I
 import ./rdb.bend as D
 import ./command.bend as M
+import ./float.bend as F
+import ./hll.bend as H
 
 # a batch from a connection in the state cn (B.Job: its commands, and
 # the hashes of their keys, for the hints of batch.bend, with the words
@@ -272,15 +274,15 @@ def d.nstore(+r: R.Reply, +w: Nat) -> Nat:
       0n
 
 # ZADD and GEOADD: the pairs (w), or the integer it answers with NX or CH
-# (w 0); one for the score of INCR
+# (w 0); the weight for the score of INCR (and ZINCRBY's: dw.zincr)
 def d.zadd(+r: R.Reply, +w: Nat) -> Nat:
   match r:
     case R.RInt{R.IPos{+n}}:
       Bool.pick(Nat, Nat.is_eq(w, 0n), n, w)
     case R.RDbl{+s}:
-      1n
+      w
     case R.RBulk{+s}:
-      1n
+      w
     case _:
       0n
 
@@ -335,8 +337,10 @@ def dirty.of(+rule: Nat, +r: R.Reply, +w: Nat) -> Nat:
       d.nstore(r, w)
     case 14n:
       d.zadd(r, w)
-    case _:
+    case 15n:
       d.bitfield(r, w)
+    case _:
+      w
 
 # a call of code k: none for one refused or failed (class 1 or 2)
 def dirty.call.if(ran: Bool, +k: Nat, +r: R.Reply, +w: Nat) -> Nat:
@@ -457,13 +461,93 @@ def dw.list(+l: R.LWrite, +k: String, +ds: R.Ds) -> Nat:
       List.length(&2, String, xs)
     case R.LWTrim{+a, +b}:
       dw.trim(a, b, R.ds.ent(ds, k))
+    case R.LWNew{+left, +xs}:
+      Nat.add(dw.live(ds, k), List.length(&2, String, xs))
     case _:
       0n
 
-def dw.zadd(+o: R.ZOpts, +ps: List<&2, R.ZPair>) -> Nat:
+# ZADD with INCR (and ZINCRBY): what its pair changes of the entry m of
+# its key (INCR takes one pair): one for a member not there, or for a
+# score the increment changes, none for one it leaves as it was (an
+# increment of 0, or one too small for the score), as zsetAdd marks an
+# update only when the score is another; NX, XX, GT and LT, which leave
+# the member alone, answer nil, which counts none whatever this is
+def dw.zincr.at(cur: Maybe<&2, F.F64>, +d: F.F64) -> Nat:
+  match cur:
+    case Some{+c}:
+      Bool.pick(Nat, Cmp.is_eq(F.f64.cmp(R.zadd.score(True{}, c, d), c)), 0n, 1n)
+    case None{}:
+      1n
+
+def dw.zincr(+ps: List<&2, R.ZPair>, +m: Maybe<&2, KV.Item<KV.Val>>) -> Nat:
+  match ps m:
+    case Con{R.ZPair{+sc, +mem}, rest} Some{KV.Item{KV.VColl{KV.CZset{+z}}, +e}}:
+      dw.zincr.at(KV.zset.score(mem, z), R.zadd.num(F.f64.parse(sc)))
+    case _ _:
+      1n
+
+def dw.zadd.if(incr: Bool, +nx: Bool, +ch: Bool, +ps: List<&2, R.ZPair>, +k: String, +ds: R.Ds) -> Nat:
+  match incr:
+    case True{}:
+      dw.zincr(ps, R.ds.ent(ds, k))
+    case False{}:
+      Bool.pick(Nat, Bool.or(nx, ch), 0n, List.length(&2, R.ZPair, ps))
+
+def dw.zadd(+o: R.ZOpts, +ps: List<&2, R.ZPair>, +k: String, +ds: R.Ds) -> Nat:
   match o:
     case R.ZOpts{+nx, +xx, +gt, +lt, +ch, +incr}:
-      Bool.pick(Nat, Bool.or(nx, ch), 0n, List.length(&2, R.ZPair, ps))
+      dw.zadd.if(incr, nx, ch, ps, k, ds)
+
+# the members a ZADD of o and ps adds or changes in an empty sorted set
+# (the script of a new sorted set, ZWNew, runs it after its DEL), as
+# zaddGenericCommand counts added and updated
+def dw.zadded(st: R.ZAdd) -> Nat:
+  match st:
+    case R.ZAdd{z, +added, +upd, done, last}:
+      Nat.add(added, upd)
+    case R.ZAddNaN{}:
+      0n
+
+def dw.znew(+o: R.ZOpts, +ps: List<&2, R.ZPair>) -> Nat:
+  dw.zadded(R.zadd.go(ps, o, R.ZAdd{KV.zset.empty(), 0n, 0n, 0n, F.F64{0n, 0n}}))
+
+# RESTORE that answers OK, at now, its key there or not (gone: one when
+# it is, as a REPLACE deletes it): one for a key restored; for a time
+# already past (or one past LLONG_MAX, which the restore drops too) the
+# key deleted, if it was there, as restoreCommand counts a change only
+# when it deleted one
+def dw.restore.at(m: Maybe<&2, R.At>, +now: Nat, +gone: Nat) -> Nat:
+  match m:
+    case Some{+a}:
+      Bool.pick(Nat, R.at.past(a, now), gone, 1n)
+    case None{}:
+      gone
+
+def dw.restore.ms(+ms: Nat, +at: Bool, +now: Nat, +gone: Nat) -> Nat:
+  match ms:
+    case 0n:
+      1n
+    case 1n+q:
+      dw.restore.at(R.at.of(R.TmN{at, 1n+q}, now), now, gone)
+
+def dw.restore(+t: R.TmR, +k: String, +ds: R.Ds) -> Nat:
+  match t:
+    case R.TOk{R.TmN{+at, +ms}}:
+      dw.restore.ms(ms, at, R.ds.now(ds), dw.live(ds, k))
+    case R.TOk{R.TmB{+at, +neg, +hi, +lo}}:
+      dw.restore.at(R.at.of(R.TmB{at, neg, hi, lo}, R.ds.now(ds)), R.ds.now(ds), dw.live(ds, k))
+    case R.TBad{+r}:
+      0n
+
+# PFDEBUG: one for a GETREG or TODENSE of a sparse HyperLogLog, which it
+# makes dense (pfdebugCommand's server.dirty++)
+def dw.pfdebug(+sub: String, +m: Maybe<&2, KV.Item<KV.Val>>) -> Nat:
+  match m:
+    case Some{KV.Item{KV.VStr{+w}, +e}}:
+      +id = R.pfdebug.id(sub)
+      Bool.pick(Nat, Bool.and(Bool.or(Nat.is_eq(id, 1n), Nat.is_eq(id, 4n)), Bool.and(H.valid(w), H.is_sparse(w))), 1n, 0n)
+    case _:
+      0n
 
 # SMOVE: the member taken from src, and added to dst when dst lacks it
 # (none when src is dst)
@@ -474,12 +558,29 @@ def dw.has(+m: Maybe<&2, KV.Item<KV.Val>>, +x: String) -> Bool:
     case _:
       False{}
 
+# (SMemNew: the script of a move to a key whose time had passed, EVAL's
+# alone, deletes dst first: that key there, then the member taken from
+# src and added to the new dst; none when src is dst, which the DEL took)
 def dw.smove(+ds: R.Ds, +s: String, +d: String, +w: R.SMem) -> Nat:
   match w:
     case R.SMem{+m}:
       Bool.pick(Nat, Bool.and(Bool.not(String.eq(s, d)), dw.has(R.ds.ent(ds, s), m)), Bool.pick(Nat, dw.has(R.ds.ent(ds, d), m), 1n, 2n), 0n)
     case R.SMemNew{+m}:
-      Bool.pick(Nat, dw.has(R.ds.ent(ds, s), m), 2n, 0n)
+      Nat.add(dw.live(ds, d), Bool.pick(Nat, Bool.and(Bool.not(String.eq(s, d)), dw.has(R.ds.ent(ds, s), m)), 2n, 0n))
+
+# LMOVE in the script of a move to a key whose time had passed (EVAL's
+# alone: dw.cmd's weight of an LMOVE counts for EVAL alone, LMOVE's rule
+# reads its reply): dst there, which the script deletes first, and the
+# element moved from a list src that is not dst (dst's DEL took it)
+def dw.is.list(+m: Maybe<&2, KV.Item<KV.Val>>) -> Bool:
+  match m:
+    case Some{KV.Item{KV.VColl{KV.CList{+l}}, +e}}:
+      True{}
+    case _:
+      False{}
+
+def dw.lmove(+ds: R.Ds, +s: String, +d: String) -> Nat:
+  Nat.add(dw.live(ds, d), Bool.pick(Nat, Bool.and(Bool.not(String.eq(s, d)), dw.is.list(R.ds.ent(ds, s))), 1n, 0n))
 
 def dw.upd(+op: R.UpdOp, +k: String, +ds: R.Ds) -> Nat:
   match op:
@@ -493,10 +594,20 @@ def dw.upd(+op: R.UpdOp, +k: String, +ds: R.Ds) -> Nat:
       dw.bf(ops)
     case R.UHash{R.HWSet{+ps, +mset}}:
       List.length(&2, KV.HPair, ps)
+    case R.UHash{R.HWNew{+ps}}:
+      Nat.add(dw.live(ds, k), List.length(&2, KV.HPair, ps))
     case R.UList{+l}:
       dw.list(l, k, ds)
+    case R.UMems{R.SWNew{+ms}}:
+      Nat.add(dw.live(ds, k), KV.mems.len(KV.mems.of(ms)))
     case R.UZset{R.ZWAdd{+o, +ps}}:
-      dw.zadd(o, ps)
+      dw.zadd(o, ps, k, ds)
+    case R.UZset{R.ZWNew{+o, +ps}}:
+      Nat.add(dw.live(ds, k), dw.znew(o, ps))
+    case R.UHll{R.HDebug{+sub}}:
+      dw.pfdebug(sub, R.ds.ent(ds, k))
+    case R.URestore{+p, +t, +rep, +ac}:
+      dw.restore(t, k, ds)
     case _:
       0n
 
@@ -538,6 +649,8 @@ def dw.cmd(+c: R.Cmd, +ds: R.Ds) -> Nat:
       dw.live(ds, d)
     case R.SMv{+s, +d, +w}:
       dw.smove(ds, s, d, w)
+    case R.LMove{+s, +d, +e}:
+      dw.lmove(ds, s, d)
     case R.Upd{+k, +op}:
       dw.upd(op, k, ds)
     case R.Own{+o}:
@@ -3323,12 +3436,22 @@ def mem.bits(+srv: S.Srv, +ev: U32) -> U32:
   +m = S.srv.mm(srv)
   U32.or(U32.or(U32.or(U32.and(ev, 603979776), Bool.pick(U32, Nat.is_lt(0n, S.mm.max(m)), 268435456, 0)), Bool.pick(U32, S.mm.lfu(m), 134217728, 0)), Bool.pick(U32, S.mm.kick(m), 67108864, 0))
 
-# bit 19: a background save failed (rdb_last_bgsave_status err) while
-# save points are set and stop-writes-on-bgsave-error is yes (info.bend:
-# rdb.misconf), and the writes and PING are refused (MISCONF: Background
-# saves); the fast way is off, and no keyspace event has it (ps.loud)
+# whether the writes are refused (MISCONF: Background saves): a
+# background save failed (rdb_last_bgsave_status err) while save points
+# are set and stop-writes-on-bgsave-error is yes (info.bend:
+# rdb.misconf), as the server's state has it now, which each command of
+# the general way reads (bg.go), as Redis's processCommand calls
+# writeCommandsDeniedByDiskError for each command: a CONFIG SET that
+# lifts or restores it counts for the commands after it in its batch
+def srv.misconf(+srv: S.Srv) -> Bool:
+  I.rdb.misconf(S.srv.rdb(srv))
+
+# bit 19: the same, kept in Ps's ev once a batch has run (ps.tune) and by
+# the actor after each step and each save, only to keep the fast way off
+# (ps.calm) while the writes are refused; no keyspace event has it
+# (ps.loud)
 def misconf.bit(+srv: S.Srv) -> U32:
-  Bool.pick(U32, I.rdb.misconf(S.srv.rdb(srv)), 524288, 0)
+  Bool.pick(U32, srv.misconf(srv), 524288, 0)
 
 def ps.tune(pb: Ps, +srv: S.Srv) -> Ps:
   match pb:
@@ -3346,14 +3469,6 @@ def ps.misconf.set(pb: Ps, +srv: S.Srv) -> Ps:
       Ps{reg, U32.or(U32.and(ev, 4294443007), misconf.bit(srv)), px, cs, own}
     case PsOf{p}:
       ps.misconf.set(p, srv)
-
-# whether the writes are refused (bit 19)
-def ps.misconf(+pb: Ps) -> Bool:
-  match pb:
-    case Ps{reg, +ev, px, cs, own}:
-      U32.is_ne(U32.and(ev, 524288), 0)
-    case PsOf{+p}:
-      ps.misconf(p)
 
 # whether a background save runs, or a group's BGSAVE took a snapshot for
 # one (Background saves: Redis's child_type RDB)
@@ -5916,7 +6031,7 @@ def sh.oomy(+inm: Bool, +c: R.Cmd, +code: Nat) -> Bool:
   Bool.and(Bool.not(Nat.is_eq(R.code.class(code), 1n)),
     Bool.or(R.stat.denyoom(R.code.key(code)), Bool.and(inm, sh.oom.multi(c))))
 
-# While a background save that failed stops the writes (Ps's bit 19:
+# While a background save that failed stops the writes (srv.misconf:
 # Background saves), Redis refuses, right after the refusal past
 # maxmemory, a command that writes and PING (writeCommandsDeniedByDiskError
 # in processCommand), never one the parser refused; in MULTI the
@@ -7832,7 +7947,8 @@ def bg.exec.oom(oom: Bool, mis: Bool, mine: Tx, others: Tx, +id: Nat, +back: Cha
 
 def bg.exec.of(p: Tx & Tx, +id: Nat, +back: Chan(Ans), +inb: Nat, +code: Nat, rs: List<&2, R.Reply>, es: List<&2, A.Ent>, conn: S.Conn, srv: S.Srv, +ds: R.Ds, ws: Waits, up: List<&2, Up>, +pb: Ps) -> LRun:
   (+mine, others) = p
-  bg.exec.oom(Bool.and(ps.oom.is(pb), tx.denyoom(mine)), tx.writes.if(ps.misconf(pb), mine), mine, others, id, back, inb, code, rs, es, conn, srv, ds, ws, up, pb)
+  +sv = srv
+  bg.exec.oom(Bool.and(ps.oom.is(pb), tx.denyoom(mine)), tx.writes.if(srv.misconf(sv), mine), mine, others, id, back, inb, code, rs, es, conn, sv, ds, ws, up, pb)
 
 def bg.exec(+id: Nat, +back: Chan(Ans), +inb: Nat, +code: Nat, g: LRun) -> LRun:
   match g:
@@ -7974,7 +8090,7 @@ def bg.go(+id: Nat, +back: Chan(Ans), +inb: Nat, cmds: List<&2, R.Cmd>, codes: L
       +q = S.conn.quit(conn)
       +may = S.may(S.kind(c), conn, srv)
       +mo = ps.mon.is(id, pb)
-      +sh = sh.of(q, may, tx.multi(id, tx), Bool.and(ps.has(id, pb), Bool.not(S.conn.r3(conn))), mo, ps.oom.is(pb), ps.misconf(pb), Bool.or(pause.holds(ps.pz(pb), mo, c, k, id, tx), down.holds(srv, pb, mo, k)), c, k, ds)
+      +sh = sh.of(q, may, tx.multi(id, tx), Bool.and(ps.has(id, pb), Bool.not(S.conn.r3(conn))), mo, ps.oom.is(pb), srv.misconf(srv), Bool.or(pause.holds(ps.pz(pb), mo, c, k, id, tx), down.holds(srv, pb, mo, k)), c, k, ds)
       +pre = bg.trk.pre(id, k, sh, q, may, pb)
       +a = trk.pre.av(pre, av)
       +ar = av.rest(a)
@@ -8158,8 +8274,8 @@ def grp.gone(+id: Nat, +back: Chan(Ans), outs: List<&2, Sigma<&2, &2, Chan(Ans),
 
 # Eviction
 # --------
-# While the heap's live bytes, less those a rewrite's snapshot still holds
-# of the keys evicted while it runs (Mm's debt), are past maxmemory, the
+# While the heap's live bytes are past maxmemory (while a rewrite or a
+# background save runs, the memory as mem.seen counts it), the
 # actor picks a key by the policy and deletes it as the sweep of expired
 # keys deletes one (a DEL in the append-only file; the WATCHes of the key
 # touched; "evicted" to the keyspace's subscribers), counts it
@@ -8179,10 +8295,10 @@ def grp.gone(+id: Nat, +back: Chan(Ans), outs: List<&2, Sigma<&2, &2, Chan(Ans),
 # that may take memory refused (FAIL). A CONFIG SET that changes
 # maxmemory starts an eviction at once (Mm's kick), with Redis's warning
 # when the heap is past the new value. While a rewrite of the append-only
-# file runs, its snapshot holds what an eviction frees: an evicted key
-# counts as freed by MEMORY USAGE's estimate (the debt, paid when the
-# rewrite ends). INFO's evicted_keys and the times past maxmemory count as
-# Redis's do (I.info.evicted).
+# file or a background save runs, its snapshot holds what an eviction
+# frees, and what each write replaces: the memory is counted by the keys
+# instead (mem.seen). INFO's evicted_keys and the times past maxmemory
+# count as Redis's do (I.info.evicted).
 
 # 2^47: volatile-ttl's score is it less the time a key expires at (ms)
 def evict.far() -> Nat:
@@ -8375,40 +8491,31 @@ def evict.rand.key(+vol: Bool, +d: R.Db, +c: Nat, +r: U32, +now: Nat) -> Maybe<&
       List.head(&2, String, KV.sample(KV.Val, t, r, 1n, now, 2n, 1048576n))
 
 # what is asked of a database: whether it holds key k as the policy takes
-# keys (with a time, when vol); MEMORY USAGE's estimate of key k; a random
-# policy's key of it, by r
+# keys (with a time, when vol); a random policy's key of it, by r
 type Ask is Data:
   AskHas{vol: Bool, k: String}
-  AskEst{k: String}
   AskKey{vol: Bool, r: U32, now: Nat}
 
-# its answer: a truth, a number or a key
+# its answer: a truth or a key
 type Ans1 is Data:
-  A1{b: Bool, n: Nat, k: Maybe<&2, String>}
+  A1{b: Bool, k: Maybe<&2, String>}
 
 def a1.b(a: Ans1) -> Bool:
   match a:
-    case A1{b, n, k}:
+    case A1{b, k}:
       b
-
-def a1.n(a: Ans1) -> Nat:
-  match a:
-    case A1{b, n, k}:
-      n
 
 def a1.k(a: Ans1) -> Maybe<&2, String>:
   match a:
-    case A1{b, n, k}:
+    case A1{b, k}:
       k
 
 def evict.ask(+a: Ask, +d: R.Db) -> Ans1:
   match a:
     case AskHas{+vol, +k}:
-      A1{evict.has.ent(vol, R.db.ent(d, k)), 0n, None{}}
-    case AskEst{+k}:
-      A1{False{}, S.mem.est(k, R.db.ent(d, k)), None{}}
+      A1{evict.has.ent(vol, R.db.ent(d, k)), None{}}
     case AskKey{+vol, +r, +now}:
-      A1{False{}, 0n, evict.rand.key(vol, d, evict.count(vol, d), r, now)}
+      A1{False{}, evict.rand.key(vol, d, evict.count(vol, d), r, now)}
 
 # what the n-th of xs answers (none past the last)
 def evict.ask.nth(+a: Ask, +n: Nat, +xs: List<&2, R.Db>) -> Ans1:
@@ -8418,7 +8525,7 @@ def evict.ask.nth(+a: Ask, +n: Nat, +xs: List<&2, R.Db>) -> Ans1:
     case 1n+m Con{d, +rest}:
       evict.ask.nth(a, m, rest)
     case _ Nil{}:
-      A1{False{}, 0n, None{}}
+      A1{False{}, None{}}
 
 # where database j is to the focus, the i-th: 0 before it, 1 it, 2 after
 def evict.where(+j: Nat, +i: Nat) -> Nat:
@@ -8555,14 +8662,13 @@ def evict.pick(+pol: Nat, mm: S.Mm, +ds: R.Ds, +n: Nat, +now: Nat, +start: U32) 
       evict.pooled(pol, mm, ds, n, now, start)
 
 # eviction's state as it goes: the server, the databases, the DELs of the
-# keys it evicted (newest first), how many, and the heap's used bytes at
-# its last reading
+# keys it evicted (newest first), and how many
 type Evs is Data:
-  Evs{srv: S.Srv, ds: R.Ds, es: List<&2, A.Ent>, n: Nat, last: Nat}
+  Evs{srv: S.Srv, ds: R.Ds, es: List<&2, A.Ent>, n: Nat}
 
 def evs.n(+x: Evs) -> Nat:
   match x:
-    case Evs{srv, ds, es, +n, last}:
+    case Evs{srv, ds, es, +n}:
       n
 
 # a key evicted, or none the policy may evict
@@ -8581,82 +8687,64 @@ def evict.del(+j: Nat, +k: String, ds: R.Ds) -> R.Ds:
   +i = R.ds.index(x)
   R.ds.focus(i, evict.del.focused(k, R.ds.focus(j, x)))
 
-# a pick and the debt of its key: MEMORY USAGE's estimate of it, while a
-# rewrite runs (rws)
-type Ed is Data:
-  Ed{mm: S.Mm, g: Vic, debt: Nat}
+def evict.pick.of(mm: S.Mm, +ds: R.Ds, +start: U32) -> Ep:
+  +m = mm
+  evict.pick(S.mm.pol(m), m, ds, dbs.count(ds), R.ds.now(ds), start)
 
-# (a match, not Bool.pick, so that no estimate is made without a rewrite)
-def evict.est(rws: Bool, +j: Nat, +k: String, +ds: R.Ds) -> Nat:
-  match rws:
-    case True{}:
-      a1.n(evict.ask.ds(AskEst{k}, j, ds))
-    case False{}:
-      0n
-
-def evict.debt(p: Ep, +rws: Bool, +ds: R.Ds) -> Ed:
+# the key picked deleted: its DEL with the others
+def evict.done(p: Ep, pass: String, cfg: List<&2, C.CItem>, info: I.Info, ds: R.Ds, es: List<&2, A.Ent>, +n: Nat) -> Ev1:
   match p:
     case Ep{mm, Vic{+j, +k}}:
-      Ed{mm, Vic{j, k}, evict.est(rws, j, k, ds)}
+      EvOne{Evs{S.Srv{pass, cfg, info, mm}, evict.del(j, k, ds), A.EOne{A.EDb{j, R.Del{[k]}}} <> es, 1n+n}}
     case Ep{mm, VicNone{}}:
-      Ed{mm, VicNone{}, 0n}
+      EvNone{Evs{S.Srv{pass, cfg, info, mm}, ds, es, n}}
 
-def evict.pick.of(+rws: Bool, mm: S.Mm, +ds: R.Ds, +start: U32) -> Ed:
-  +m = mm
-  evict.debt(evict.pick(S.mm.pol(m), m, ds, dbs.count(ds), R.ds.now(ds), start), rws, ds)
-
-# the key picked deleted: its DEL with the others, the server's debt up
-def evict.done(p: Ed, pass: String, cfg: List<&2, C.CItem>, info: I.Info, ds: R.Ds, es: List<&2, A.Ent>, +n: Nat, +last: Nat) -> Ev1:
-  match p:
-    case Ed{mm, Vic{+j, +k}, +debt}:
-      EvOne{Evs{S.Srv{pass, cfg, info, S.mm.owe(mm, debt)}, evict.del(j, k, ds), A.EOne{A.EDb{j, R.Del{[k]}}} <> es, 1n+n, last}}
-    case Ed{mm, VicNone{}, debt}:
-      EvNone{Evs{S.Srv{pass, cfg, info, mm}, ds, es, n, last}}
-
-# one key evicted (rws: while a rewrite runs)
-def evict.one(x: Evs, +rws: Bool) -> Ev1:
+def evict.one(x: Evs) -> Ev1:
   match x:
-    case Evs{S.Srv{pass, cfg, +info, mm}, +ds, es, +n, +last}:
-      evict.done(evict.pick.of(rws, mm, ds, I.info.start(info)), pass, cfg, info, ds, es, n, last)
+    case Evs{S.Srv{pass, cfg, +info, mm}, +ds, es, +n}:
+      evict.done(evict.pick.of(mm, ds, I.info.start(info)), pass, cfg, info, ds, es, n)
 
-# whether the heap's used bytes, less the debt, are past maxmemory (none
-# with maxmemory 0)
-def evict.over(+used: Nat, +srv: S.Srv) -> Bool:
-  +max = S.srv.max(srv)
-  Bool.and(Nat.is_lt(0n, max), Nat.is_lt(max, Nat.sub(used, S.srv.debt(srv))))
+# the keys of the databases (DBSIZE's, summed)
+def ds.keys(+ds: R.Ds) -> Nat:
+  match ds:
+    case R.Ds{+d, +pre, +post}:
+      Nat.add(R.db.n(d), Nat.add(dw.dbs(pre), dw.dbs(post)))
 
-def evs.over(+used: Nat, +x: Evs) -> Bool:
-  match x:
-    case Evs{+srv, ds, es, n, last}:
-      evict.over(used, srv)
-
-# the debt up by b: what the snapshot of a rewrite that runs holds of
-# what the eviction let go (S.mm.owe)
-def evs.owe(srv: S.Srv, +b: Nat) -> S.Srv:
-  match srv:
-    case S.Srv{pass, cfg, info, mm}:
-      S.Srv{pass, cfg, info, S.mm.owe(mm, b)}
-
-# while a rewrite runs, what the heap grew by since the eviction's last
-# reading: no client's command runs inside the eviction, so this is the
-# nodes its DELs copied on the way to their keys, whose old ones the
-# snapshot still holds, as it holds the keys (evict.est); counted as debt,
-# or the eviction, its own copies growing the heap as fast as its debt,
-# would go on until the rewrite ends (issue #100). Without a rewrite the
-# old nodes are let go, and nothing is owed (a match, not Bool.pick).
-def evs.grown(rws: Bool, +used: Nat, +last: Nat) -> Nat:
+# The memory the eviction and the refusal past maxmemory go by: the
+# heap's used bytes; while a rewrite or a background save runs (rws), no
+# more than the heap when the job took its snapshot and the keys made
+# since, each at the average size then, less those gone since (S.mm.snap,
+# S.mm.view), as Redis's parent counts what it allocates (its used_memory,
+# which performEvictions and getMaxmemoryState read) and not the pages its
+# child's snapshot keeps: the snapshot holds every value a write replaces
+# or deletes, and the heap with it. So a write that replaces values with
+# values of the same size costs nothing, a key made counts, and each key
+# evicted or deleted counts less; a value that grows in place counts once
+# the job has ended (a match, not Bool.pick, so that no key is counted
+# without a job). INFO shows the heap as it is.
+def mem.seen(rws: Bool, +used: Nat, +srv: S.Srv, +ds: R.Ds) -> Nat:
   match rws:
     case True{}:
-      Nat.sub(used, last)
+      Nat.min(used, S.srv.view(srv, ds.keys(ds)))
     case False{}:
-      0n
+      used
 
-# the heap's reading kept in the server's state, for INFO (S.srv.heap),
-# and as the eviction's last; its growth while a rewrite runs owed
-def evs.heap(+used: Nat, +act: Nat, rws: Bool, x: Evs) -> Evs:
+# whether the memory seen (mem.seen) is past maxmemory (none with
+# maxmemory 0)
+def evict.over(+seen: Nat, +srv: S.Srv) -> Bool:
+  +max = S.srv.max(srv)
+  Bool.and(Nat.is_lt(0n, max), Nat.is_lt(max, seen))
+
+def evs.over(+used: Nat, rws: Bool, +x: Evs) -> Bool:
   match x:
-    case Evs{srv, ds, es, n, +last}:
-      Evs{evs.owe(S.srv.heap(srv, used, act), evs.grown(rws, used, last)), ds, es, n, used}
+    case Evs{+srv, +ds, es, n}:
+      evict.over(mem.seen(rws, used, srv, ds), srv)
+
+# the heap's reading kept in the server's state, for INFO (S.srv.heap)
+def evs.heap(+used: Nat, +act: Nat, x: Evs) -> Evs:
+  match x:
+    case Evs{srv, ds, es, n}:
+      Evs{S.srv.heap(srv, used, act), ds, es, n}
 
 # an eviction's outcome: 0 the heap within maxmemory (EVICT_OK), 1 keys
 # left to evict when its time ran out (EVICT_RUNNING), 2 none left that
@@ -8664,16 +8752,17 @@ def evs.heap(+used: Nat, +act: Nat, rws: Bool, x: Evs) -> Evs:
 type Evd is Data:
   Evd{res: Nat, x: Evs}
 
-# evicting while the heap is past maxmemory (over), a key at a time, the
-# heap read after each; each 16 keys the time since the start (s0, u0)
-# looked at, against lim (us)
+# evicting while the memory is past maxmemory (over), a key at a time,
+# the heap read after each (rws: while a rewrite or a background save
+# runs, mem.seen); each 16 keys the time since the start (s0, u0) looked
+# at, against lim (us)
 @unsafe
 def evict.loop(over: Bool, x: Evs, +rws: Bool, +s0: U32, +u0: U32, +lim: Nat) -> IO(Evd):
   match over:
     case False{}:
       IO.pure(Evd, Evd{0n, x})
     case True{}:
-      evict.next(evict.one(x, rws), rws, s0, u0, lim)
+      evict.next(evict.one(x), rws, s0, u0, lim)
 
 @unsafe
 def evict.next(r: Ev1, +rws: Bool, +s0: U32, +u0: U32, +lim: Nat) -> IO(Evd):
@@ -8710,8 +8799,8 @@ def evict.heap(x: Evs, +rws: Bool, +s0: U32, +u0: U32, +lim: Nat) -> IO(Evd):
 
 @unsafe
 def evict.heap.at(+used: Nat, +act: Nat, x: Evs, +rws: Bool, +s0: U32, +u0: U32, +lim: Nat) -> IO(Evd):
-  +y = evs.heap(used, act, rws, x)
-  evict.loop(evs.over(used, y), y, rws, s0, u0, lim)
+  +y = evs.heap(used, act, x)
+  evict.loop(evs.over(used, rws, y), y, rws, s0, u0, lim)
 
 # the heap's reading taken apart, for evict.heap.at
 @unsafe
@@ -8762,7 +8851,7 @@ def mem.grp(p: Ps & List<&2, Sigma<&2, &2, Chan(Ans), _ => Ans>>, es: List<&2, A
 
 def mem.done(d: Evd, ws: Waits, tx: Tx, pb: Ps) -> Grp:
   match d:
-    case Evd{+res, Evs{srv, +ds, +es, +n, last}}:
+    case Evd{+res, Evs{srv, +ds, +es, +n}}:
       mem.grp(ps.flush(ps.evicted(es, ps.trk.gone(es, ds, ps.mem(pb, res))), Nil{}), es, S.srv.evicted(srv, n, Nat.is_lt(0n, res), R.ds.now(ds)), ds, ws, touch.ents(tx, es, None{}, ds))
 
 # Redis's warning for a CONFIG SET that set maxmemory below the memory in
@@ -8783,7 +8872,7 @@ def mem.ok(was: Bool, srv: S.Srv, ds: R.Ds, ws: Waits, tx: Tx, pb: Ps) -> Grp:
     case False{}:
       Grp{Nil{}, Nil{}, srv, ds, ws, Nil{}, tx, pb}
     case True{}:
-      mem.done(Evd{0n, Evs{srv, ds, Nil{}, 0n, 0n}}, ws, tx, pb)
+      mem.done(Evd{0n, Evs{srv, ds, Nil{}, 0n}}, ws, tx, pb)
 
 def ps.mem.was(+pb: Ps) -> Bool:
   match pb:
@@ -8792,13 +8881,14 @@ def ps.mem.was(+pb: Ps) -> Bool:
     case PsOf{+p}:
       ps.mem.was(p)
 
-# the memory seen to before a group (w: S.srv.mem.what of the heap's
-# used bytes, read at the clock's s0, u0): nothing within maxmemory; a
-# CONFIG SET's change of maxmemory first (its warning, Mm's kick cleared);
-# the eviction (rws: whether a rewrite runs; pid, the server's, for the
-# log); the group's state after it
+# the memory seen to before a group (w: S.srv.mem.what of the memory as
+# the eviction sees it, mem.seen of the heap's used bytes read at the
+# clock's s0, u0): nothing within maxmemory; a CONFIG SET's change of
+# maxmemory first (its warning, Mm's kick cleared); the eviction (rws:
+# whether a rewrite or a background save runs; pid, the server's, for
+# the log); the group's state after it
 @unsafe
-def mem.run.w(w: Nat, +used: Nat, +s0: U32, +u0: U32, srv: S.Srv, ds: R.Ds, ws: Waits, tx: Tx, pb: Ps, +rws: Bool, +pid: U32) -> IO(Grp):
+def mem.run.w(w: Nat, +seen: Nat, +s0: U32, +u0: U32, srv: S.Srv, ds: R.Ds, ws: Waits, tx: Tx, pb: Ps, +rws: Bool, +pid: U32) -> IO(Grp):
   match w:
     case 0n:
       +p = pb
@@ -8806,16 +8896,16 @@ def mem.run.w(w: Nat, +used: Nat, +s0: U32, +u0: U32, srv: S.Srv, ds: R.Ds, ws: 
     case 1n:
       +sv = srv
       do IO<Grp>:
-        Unit <- mem.warn.if(evict.over(used, sv), sv, Nat.sub(used, S.srv.debt(sv)), pid)
-        mem.run.k(used, s0, u0, S.srv.kicked(sv), ds, ws, tx, pb, rws, pid)
+        Unit <- mem.warn.if(evict.over(seen, sv), sv, seen, pid)
+        mem.run.k(seen, s0, u0, S.srv.kicked(sv), ds, ws, tx, pb, rws, pid)
     case _:
       +sv = srv
-      evict.go(S.srv.pol(sv), Evs{sv, ds, Nil{}, 0n, used}, ws, tx, pb, rws, s0, u0, evict.limit(S.srv.ten(sv)))
+      evict.go(S.srv.pol(sv), Evs{sv, ds, Nil{}, 0n}, ws, tx, pb, rws, s0, u0, evict.limit(S.srv.ten(sv)))
 
 @unsafe
-def mem.run.k(+used: Nat, +s0: U32, +u0: U32, srv: S.Srv, ds: R.Ds, ws: Waits, tx: Tx, pb: Ps, +rws: Bool, +pid: U32) -> IO(Grp):
+def mem.run.k(+seen: Nat, +s0: U32, +u0: U32, srv: S.Srv, ds: R.Ds, ws: Waits, tx: Tx, pb: Ps, +rws: Bool, +pid: U32) -> IO(Grp):
   +sv = srv
-  mem.run.w(S.srv.mem.what(sv, used), used, s0, u0, sv, ds, ws, tx, pb, rws, pid)
+  mem.run.w(S.srv.mem.what(sv, seen), seen, s0, u0, sv, ds, ws, tx, pb, rws, pid)
 
 # the eviction under policy pol: none under noeviction (EVICT_FAIL)
 @unsafe
@@ -8829,11 +8919,12 @@ def evict.go(+pol: Nat, x: Evs, ws: Waits, tx: Tx, pb: Ps, +rws: Bool, +s0: U32,
         IO.pure(Grp, mem.done(d, ws, tx, pb))
 
 @unsafe
-def mem.run(h: Nat & Nat, +s0: U32, +u0: U32, srv: S.Srv, ds: R.Ds, ws: Waits, tx: Tx, pb: Ps, +rws: Bool, +pid: U32) -> IO(Grp):
+def mem.run(h: Nat & Nat, +s0: U32, +u0: U32, srv: S.Srv, +ds: R.Ds, ws: Waits, tx: Tx, pb: Ps, +rws: Bool, +pid: U32) -> IO(Grp):
   (u, a) = h
   +used = u
   +act = a
-  mem.run.k(used, s0, u0, S.srv.heap(srv, used, act), ds, ws, tx, pb, rws, pid)
+  +sv = S.srv.heap(srv, used, act)
+  mem.run.k(mem.seen(rws, used, sv, ds), s0, u0, sv, ds, ws, tx, pb, rws, pid)
 
 # a group of requests taken at t, its memory seen to (w: mem.need): with
 # maxmemory, the heap read and the eviction (mem.run); without it, the
@@ -9549,15 +9640,34 @@ def group_from(+log: Bool, qs: List<&1, Req>, g: Grp, +s0: U32, +k: U32) -> Grp:
 type RwRun is Data:
   RwRun{snap: Maybe<&2, A.Snap>, tmp: String, size: Nat, pend: List<&2, String>, pn: Nat, buf: List<&2, String>}
 
+# what the actor asks of a background save's writer (Background saves:
+# bgw.loop), which holds its temporary file open: bytes appended, and the
+# file synced after them when sync; the file's last bytes appended, the
+# file synced and closed
+type BgW is Data:
+  BgPut{bytes: String, sync: Bool}
+  BgEnd{bytes: String}
+
+# the writer's answer: done, or the operation that failed (as rdbSave's
+# err_op names it) and why
+type BgA is Data:
+  BgOk{}
+  BgBad{op: String, msg: String}
+
+# the channels to the writer and back
+type BgCh is Data:
+  BgCh{to: Chan(BgW), back: Chan(BgA)}
+
 # a background save that runs (Background saves): what is left of its
 # snapshot to write (None: all of it is, the file's end is next), the
 # CRC64 of its bytes so far (with rdbchecksum yes when it started: sum),
 # the bytes written to its temporary file, the bytes not yet written
-# (newest first: they go to the file 64 KB at a time) and how many, and
-# the file it is renamed onto (dbfilename when it started, as Redis's
-# child takes it at the fork)
+# (newest first: they go to the file 64 KB at a time) and how many, the
+# parameters it keeps from its start (I.BgCf: the file it is renamed
+# onto, dbfilename when it started, its pace and its syncs, as Redis's
+# child keeps them from the fork), and the channels to its writer
 type BgRun is Data:
-  BgRun{w: Maybe<&2, D.FW>, c: D.C, sum: Bool, size: Nat, pend: List<&2, String>, pn: Nat, name: String}
+  BgRun{w: Maybe<&2, D.FW>, c: D.C, sum: Bool, size: Nat, pend: List<&2, String>, pn: Nat, cf: I.BgCf, ch: BgCh}
 
 # the file's path (appendfilename with appendonly no, which the rewrite
 # writes all the same), whether the server appends to it (appendonly
@@ -9863,7 +9973,7 @@ def db_shut(p: S.Srv & Bool, +force: Bool, outs: List<&2, Sigma<&2, &2, Chan(Ans
   +lg = down.lg(srv, rw)
   do IO<Unit>:
     Unit <- log(lg, 3, "User requested shutdown...")
-    Unit <- down.bgsave(bg.on(srv), lg, rw.pid(rw))
+    Unit <- down.bgsave(bg.on(srv), bgr.ch(rw.bg(rw)), lg, rw.pid(rw))
     Unit <- down.rewrite(rw.runs(rw), lg, rw.tmp(rw))
     ok : Bool <- down.final(lg, srv, ds, rw.pid(rw))
     db_shut.end(ok, force, ok1, srv, outs, ds, ws, tx, pb, rw, reqs)
@@ -11543,7 +11653,7 @@ def aof_shut.go(p: S.Srv & Bool, +force: Bool, outs: List<&2, Sigma<&2, &2, Chan
   +lg = down.lg(srv, rw)
   do IO<Unit>:
     Unit <- log(lg, 3, "User requested shutdown...")
-    Unit <- down.bgsave(bg.on(srv), lg, rw.pid(rw))
+    Unit <- down.bgsave(bg.on(srv), bgr.ch(rw.bg(rw)), lg, rw.pid(rw))
     Unit <- down.rewrite(rw.runs(rw), lg, rw.tmp(rw))
     g : File <- down.sync.f(f, lg)
     ok : Bool <- down.final(lg, srv, ds, rw.pid(rw))
@@ -11823,18 +11933,20 @@ def st.lg(+st: St) -> Log:
       down.lg(srv, rw)
 
 # a background save that runs (or that a BGSAVE of the group asked for):
-# its temporary file removed, as finishShutdown kills Redis's child and
-# removes its file; when the server goes on after all (its save failed),
-# the end of the child, as the cron's checkChildrenDone finds it, and the
-# save dropped (Background saves)
+# its writer told to close its file (m: the channels to it, when one
+# runs) and its temporary file removed, as finishShutdown kills Redis's
+# child and removes its file; when the server goes on after all (its save
+# failed), the end of the child, as the cron's checkChildrenDone finds
+# it, and the save dropped (Background saves)
 @unsafe
-def down.bgsave(on: Bool, +lg: Log, +pid: U32) -> IO(Unit):
+def down.bgsave(on: Bool, m: Maybe<&2, BgCh>, +lg: Log, +pid: U32) -> IO(Unit):
   match on:
     case False{}:
-      IO.pure(Unit, Unit{})
+      bgw.close(m)
     case True{}:
       do IO<Unit>:
         Unit <- log(lg, 3, "There is a child saving an .rdb. Killing it!")
+        Unit <- bgw.close(m)
         r : Result<&1, &1, U32 & String, Unit> <- File.unlink(rdb.tmp(pid))
         IO.pure(Unit, Unit{})
 
@@ -11921,7 +12033,7 @@ def down.stop(+srv: S.Srv, +rw: Rw, m: Maybe<&1, File>) -> IO(Unit):
   +lg = down.lg(srv, rw)
   do IO<Unit>:
     Unit <- log(lg, 3, "User requested shutdown...")
-    Unit <- down.bgsave(bg.on(srv), lg, rw.pid(rw))
+    Unit <- down.bgsave(bg.on(srv), bgr.ch(rw.bg(rw)), lg, rw.pid(rw))
     Unit <- down.rewrite(rw.runs(rw), lg, rw.tmp(rw))
     Unit <- down.sync(m, lg)
     down.exit(srv, lg)
@@ -12069,6 +12181,14 @@ def rx.lg(+x: Rx) -> Log:
 # temporary file (made empty), and the database the file has selected one
 # that is not there, so that the file's next entry comes after a SELECT
 # of its own (Redis's aof_selected_db = -1)
+# a job takes its snapshot of the databases, the heap's used bytes then
+# used: the eviction counts the memory by the keys while it runs
+# (Eviction: mem.seen)
+def rx.snap(x: Rx, +used: Nat) -> Rx:
+  match x:
+    case Rx{srv, +ds, sel, rw}:
+      Rx{S.srv.snap(srv, used, ds.keys(ds)), ds, sel, rw}
+
 def rx.begin(x: Rx, +tmp: String) -> Rx:
   match x:
     case Rx{srv, +ds, sel, rw}:
@@ -12320,12 +12440,15 @@ def step.opened(m: Result<&1, &1, U32 & String, File>, +tmp: String, +x: Rx, f: 
       do IO<Maybe<&1, File> & Rx>:
         Unit <- File.close(t)
         Unit <- step.say(x, 2, "Background append only file rewriting started by pid " ++ U32.show(rx.pid(x)))
-        return (f, rx.begin(x, tmp))
+        h : Nat & Nat <- IO.heap()
+        return (f, rx.begin(rx.snap(x, Pair.fst(Nat, Nat, h)), tmp))
     case Fail{e}:
       step.fail(x, f, tmp, "Can't open the temporary file " ++ tmp ++ " for the AOF rewrite: " ++ err.msg(e))
 
-# a slice of want entries (one with a pace: rdb-key-save-delay) of the
-# background save that runs, else of the rewrite, then what follows it
+# a slice of want entries (one with a pace: rdb-key-save-delay, as the
+# background save that runs took it at its start, or as the rewrite's is
+# now) of the background save that runs, else of the rewrite, then what
+# follows it
 @unsafe
 def step.slice(+x: Rx, f: Maybe<&1, File>, +want: Nat) -> IO(Maybe<&1, File> & Rx):
   do IO<Maybe<&1, File> & Rx>:
@@ -12336,7 +12459,7 @@ def step.slice(+x: Rx, f: Maybe<&1, File>, +want: Nat) -> IO(Maybe<&1, File> & R
 def step.slice.at(saving: Bool, +x: Rx, f: Maybe<&1, File>, +want: Nat, +ms: Nat) -> IO(Maybe<&1, File> & Rx):
   match saving:
     case True{}:
-      +dl = rx.delay(x)
+      +dl = rx.bdelay(x)
       +y = rx.bslice(x, want, ms, dl)
       step.bsliced(rx.bnext(y), y, f)
     case False{}:
@@ -13307,19 +13430,19 @@ def rdb.start(on: Bool, +lg: Log, +items: List<&2, C.CItem>, info: I.Info, +more
 # progress after each slice, where Redis's child reports it once a
 # second at most; nothing of a fork (its time, its copy on write).
 
-def bgr.slice.of(sl: D.FSl, c: D.C, +sum: Bool, +size: Nat, pend: List<&2, String>, +pn: Nat, name: String) -> Maybe<&2, BgRun> & Nat:
+def bgr.slice.of(sl: D.FSl, c: D.C, +sum: Bool, +size: Nat, pend: List<&2, String>, +pn: Nat, cf: I.BgCf, ch: BgCh) -> Maybe<&2, BgRun> & Nat:
   match sl:
     case D.FSl{+b, +k, more}:
-      (Some{BgRun{more, rdb.crc(sum, b, c), sum, size, b <> pend, Nat.add(pn, String.length(b)), name}}, k)
+      (Some{BgRun{more, rdb.crc(sum, b, c), sum, size, b <> pend, Nat.add(pn, String.length(b)), cf, ch}}, k)
 
 # a slice of want entries taken: its bytes kept, its CRC made, and the
 # keys it holds
 def bgr.slice(m: Maybe<&2, BgRun>, +want: Nat) -> Maybe<&2, BgRun> & Nat:
   match m:
-    case Some{BgRun{Some{w}, c, +sum, +size, pend, +pn, name}}:
-      bgr.slice.of(D.file.slice(w, want), c, sum, size, pend, pn, name)
-    case Some{BgRun{None{}, c, sum, size, pend, pn, name}}:
-      (Some{BgRun{None{}, c, sum, size, pend, pn, name}}, 0n)
+    case Some{BgRun{Some{w}, c, +sum, +size, pend, +pn, cf, ch}}:
+      bgr.slice.of(D.file.slice(w, want), c, sum, size, pend, pn, cf, ch)
+    case Some{BgRun{None{}, c, sum, size, pend, pn, cf, ch}}:
+      (Some{BgRun{None{}, c, sum, size, pend, pn, cf, ch}}, 0n)
     case None{}:
       (None{}, 0n)
 
@@ -13327,9 +13450,9 @@ def bgr.slice(m: Maybe<&2, BgRun>, +want: Nat) -> Maybe<&2, BgRun> & Nat:
 # them), 2 the save's end (all of the snapshot is taken)
 def bgr.next(+m: Maybe<&2, BgRun>) -> Nat:
   match m:
-    case Some{BgRun{None{}, c, sum, size, pend, pn, name}}:
+    case Some{BgRun{None{}, c, sum, size, pend, pn, cf, ch}}:
       2n
-    case Some{BgRun{Some{w}, c, sum, size, pend, +pn, name}}:
+    case Some{BgRun{Some{w}, c, sum, size, pend, +pn, cf, ch}}:
       Bool.pick(Nat, Nat.is_le(65536n, pn), 1n, 0n)
     case None{}:
       0n
@@ -13337,21 +13460,21 @@ def bgr.next(+m: Maybe<&2, BgRun>) -> Nat:
 # the bytes kept; the same, then the file's end (EOF and the CRC)
 def bgr.pending(+m: Maybe<&2, BgRun>) -> String:
   match m:
-    case Some{BgRun{w, c, sum, size, +pend, pn, name}}:
+    case Some{BgRun{w, c, sum, size, +pend, pn, cf, ch}}:
       strs.cat(pend, "")
     case None{}:
       ""
 
 def bgr.rest(+m: Maybe<&2, BgRun>) -> String:
   match m:
-    case Some{BgRun{w, +c, +sum, size, +pend, pn, name}}:
+    case Some{BgRun{w, +c, +sum, size, +pend, pn, cf, ch}}:
       strs.cat(pend, D.file.tail(sum, c))
     case None{}:
       ""
 
 def bgr.size(+m: Maybe<&2, BgRun>) -> Nat:
   match m:
-    case Some{BgRun{w, c, sum, +size, pend, pn, name}}:
+    case Some{BgRun{w, c, sum, +size, pend, pn, cf, ch}}:
       size
     case None{}:
       0n
@@ -13359,8 +13482,8 @@ def bgr.size(+m: Maybe<&2, BgRun>) -> Nat:
 # the bytes kept written: n more in the temporary file
 def bgr.flushed(m: Maybe<&2, BgRun>, +n: Nat) -> Maybe<&2, BgRun>:
   match m:
-    case Some{BgRun{w, c, sum, size, pend, pn, name}}:
-      Some{BgRun{w, c, sum, Nat.add(size, n), Nil{}, 0n, name}}
+    case Some{BgRun{w, c, sum, size, pend, pn, cf, ch}}:
+      Some{BgRun{w, c, sum, Nat.add(size, n), Nil{}, 0n, cf, ch}}
     case None{}:
       None{}
 
@@ -13426,37 +13549,56 @@ def rx.bflushed(x: Rx, +n: Nat) -> Rx:
     case Rx{srv, ds, sel, rw}:
       Rx{srv, ds, sel, rw.bflushed(rw, n)}
 
-# whether n more bytes in the temporary file pass a multiple of 4 MB, with
-# rdb-save-incremental-fsync yes (Redis's child syncs so: rioSetAutoSync)
-def rx.bautosync(+x: Rx, +n: Nat) -> Bool:
-  match x:
-    case Rx{+srv, ds, sel, +rw}:
-      +size = bgr.size(rw.bg(rw))
-      Bool.and(Bool.not(Nat.is_eq(Nat.div(size, 4194304n), Nat.div(Nat.add(size, n), 4194304n))), String.eq(C.config.get_value(S.srv.cfg(srv), "rdb-save-incremental-fsync"), "yes"))
-
-# the file's name, and whether it is summed (rdbchecksum), as the
-# parameters are now; the name a save that runs took
-def rx.dbfile(+x: Rx) -> String:
-  match x:
-    case Rx{+srv, ds, sel, rw}:
-      T.cfg(S.srv.cfg(srv), "dbfilename")
-
-def bgr.name(+m: Maybe<&2, BgRun>) -> String:
+# the parameters the save that runs kept from its start (I.BgCf), and
+# the channels to its writer
+def bgr.cf(+m: Maybe<&2, BgRun>) -> I.BgCf:
   match m:
-    case Some{BgRun{w, c, sum, size, pend, pn, +name}}:
-      name
+    case Some{BgRun{w, c, sum, size, pend, pn, +cf, ch}}:
+      cf
     case None{}:
-      ""
+      I.bgcf.none()
 
-def rx.bname(+x: Rx) -> String:
+def bgr.ch(+m: Maybe<&2, BgRun>) -> Maybe<&2, BgCh>:
+  match m:
+    case Some{BgRun{w, c, sum, size, pend, pn, cf, +ch}}:
+      Some{ch}
+    case None{}:
+      None{}
+
+def rx.bcf(+x: Rx) -> I.BgCf:
   match x:
     case Rx{srv, ds, sel, +rw}:
-      bgr.name(rw.bg(rw))
+      bgr.cf(rw.bg(rw))
 
-def rx.sum(+x: Rx) -> Bool:
+def rx.bch(+x: Rx) -> Maybe<&2, BgCh>:
+  match x:
+    case Rx{srv, ds, sel, +rw}:
+      bgr.ch(rw.bg(rw))
+
+# whether n more bytes in the temporary file pass a multiple of 4 MB, with
+# rdb-save-incremental-fsync yes when the save started (Redis's child
+# syncs so: rioSetAutoSync)
+def rx.bautosync(+x: Rx, +n: Nat) -> Bool:
+  match x:
+    case Rx{srv, ds, sel, +rw}:
+      +m = rw.bg(rw)
+      +size = bgr.size(m)
+      Bool.and(Bool.not(Nat.is_eq(Nat.div(size, 4194304n), Nat.div(Nat.add(size, n), 4194304n))), I.bgcf.auto(bgr.cf(m)))
+
+# the file the save is renamed onto, and rdb-key-save-delay, as they were
+# when it started
+def rx.bname(+x: Rx) -> String:
+  I.bgcf.name(rx.bcf(x))
+
+def rx.bdelay(+x: Rx) -> Nat:
+  I.bgcf.delay(rx.bcf(x))
+
+# the parameters a save takes from its start (S.srv.bg.go took them, at
+# the BGSAVE or at the cron's look), before the actor makes its BgRun
+def rx.bcf0(+x: Rx) -> I.BgCf:
   match x:
     case Rx{+srv, ds, sel, rw}:
-      String.eq(T.cfg(S.srv.cfg(srv), "rdbchecksum"), "yes")
+      I.bgs.cf(I.rdb.bg(S.srv.rdb(srv)))
 
 # a background save the cron starts at its look: a snapshot of the
 # databases as they are, the save counted at the group's second (unsched:
@@ -13469,13 +13611,22 @@ def rx.bgo(x: Rx, +unsched: Bool) -> Rx:
 
 # the save begun: the databases of its snapshot to write, the file's head
 # kept (made at the clock's second, with the heap's used bytes) and its
-# CRC made, its pace from now
-def rx.bbegin(x: Rx, dbs: List<&2, R.Db>, +head: String, +sum: Bool, +name: String) -> Rx:
+# CRC made (with rdbchecksum yes when it started), its parameters and its
+# writer's channels kept, its pace from now
+def rx.bbegin(x: Rx, dbs: List<&2, R.Db>, +head: String, +sum: Bool, cf: I.BgCf, ch: BgCh) -> Rx:
   match x:
     case Rx{srv, ds, sel, Rw{path, aof, pid, cron, delay, until, last, run, bg, next, carry}}:
-      Rx{srv, ds, sel, Rw{path, aof, pid, cron, delay, until, last, run, Some{BgRun{Some{D.FW{rdb.fdbs(dbs), 0n, None{}}}, rdb.crc(sum, head, D.C{0, 0}), sum, 0n, [head], String.length(head), name}}, 0n, 0n}}
+      Rx{srv, ds, sel, Rw{path, aof, pid, cron, delay, until, last, run, Some{BgRun{Some{D.FW{rdb.fdbs(dbs), 0n, None{}}}, rdb.crc(sum, head, D.C{0, 0}), sum, 0n, [head], String.length(head), cf, ch}}, 0n, 0n}}
     case Rx{srv, ds, sel, RwOf{r}}:
-      rx.bbegin(Rx{srv, ds, sel, r}, dbs, head, sum, name)
+      rx.bbegin(Rx{srv, ds, sel, r}, dbs, head, sum, cf, ch)
+
+# the save begun at the clock's k, the heap's account h read then: the
+# eviction's view of the memory starts there (rx.snap)
+def rx.bbegun(h: Nat & Nat, k: U32 & U32, dbs: List<&2, R.Db>, ch: BgCh, +x: Rx) -> Rx:
+  (u, a) = h
+  +used = u
+  +cf = rx.bcf0(x)
+  rx.bbegin(rx.snap(x, used), dbs, D.file.head(clock.secs(k), used), I.bgcf.sum(cf), cf, ch)
 
 # the save ended at the second s, well or not (backgroundSaveDoneHandler),
 # or dropped
@@ -13499,9 +13650,101 @@ def rx.clg(+x: Rx) -> Log:
 def step.child(+x: Rx, +level: U32, +msg: String) -> IO(Unit):
   log(rx.clg(x), level, msg)
 
+# The writer: a task of its own (IO.spawn) that holds the temporary file
+# open from the save's start to its end, as Redis's child holds its
+# descriptor: a file removed meanwhile is written all the same, and the
+# rename at the end fails, as Redis's does, where the file opened again by
+# its name for each 64 KB would be made anew, without its head, and put in
+# place of dbfilename. The actor sends it the bytes and waits for its
+# answer, as it waited for its own writes before; a save dropped closes
+# its channel, and the writer closes the file. Its last answer given, the
+# writer closes its own channel, and the actor the one of the answers,
+# once it has read it (a channel closed and empty is freed).
+@unsafe
+def bgw.fail(f: File, +op: String, e: U32 & String, +to: Chan(BgW), +back: Chan(BgA)) -> IO(Unit):
+  do IO<Unit>:
+    Unit <- File.close(f)
+    b : Bool <- Chan.send(BgA, back, BgBad{op, err.msg(e)})
+    Chan.close(BgW, to)
+
+@unsafe
+def bgw.answer(last: Bool, f: File, +to: Chan(BgW), +back: Chan(BgA)) -> IO(Unit):
+  match last:
+    case True{}:
+      do IO<Unit>:
+        Unit <- File.close(f)
+        b : Bool <- Chan.send(BgA, back, BgOk{})
+        Chan.close(BgW, to)
+    case False{}:
+      do IO<Unit>:
+        b : Bool <- Chan.send(BgA, back, BgOk{})
+        bgw.loop(f, to, back)
+
+# a sync's failure is rdbSaveRio's while the file is written (the
+# incremental sync), fsync's at its end, as rdbSave names them
+@unsafe
+def bgw.synced(q: File & Result<&1, &1, U32 & String, Unit>, last: Bool, +to: Chan(BgW), +back: Chan(BgA)) -> IO(Unit):
+  (f, r) = q
+  match r:
+    case Fail{e}:
+      bgw.fail(f, Bool.pick(String, last, "fsync", "rdbSaveRio"), e, to, back)
+    case Done{u}:
+      bgw.answer(last, f, to, back)
+
+@unsafe
+def bgw.sync(sync: Bool, last: Bool, f: File, +to: Chan(BgW), +back: Chan(BgA)) -> IO(Unit):
+  match sync:
+    case False{}:
+      bgw.answer(last, f, to, back)
+    case True{}:
+      do IO<Unit>:
+        q : File & Result<&1, &1, U32 & String, Unit> <- File.sync(f)
+        bgw.synced(q, last, to, back)
+
+@unsafe
+def bgw.wrote(p: File & Result<&1, &1, U32 & String, Unit>, sync: Bool, last: Bool, +to: Chan(BgW), +back: Chan(BgA)) -> IO(Unit):
+  (f, r) = p
+  match r:
+    case Fail{e}:
+      bgw.fail(f, "rdbSaveRio", e, to, back)
+    case Done{u}:
+      bgw.sync(sync, last, f, to, back)
+
+@unsafe
+def bgw.got(m: Maybe<&1, BgW>, f: File, +to: Chan(BgW), +back: Chan(BgA)) -> IO(Unit):
+  match m:
+    case None{}:
+      do IO<Unit>:
+        Unit <- File.close(f)
+        Chan.close(BgA, back)
+    case Some{BgPut{bytes, sync}}:
+      do IO<Unit>:
+        p : File & Result<&1, &1, U32 & String, Unit> <- File.write_raw(f, bytes)
+        bgw.wrote(p, sync, False{}, to, back)
+    case Some{BgEnd{bytes}}:
+      do IO<Unit>:
+        p : File & Result<&1, &1, U32 & String, Unit> <- File.write_raw(f, bytes)
+        bgw.wrote(p, True{}, True{}, to, back)
+
+@unsafe
+def bgw.loop(f: File, +to: Chan(BgW), +back: Chan(BgA)) -> IO(Unit):
+  do IO<Unit>:
+    m : Maybe<&1, BgW> <- Chan.recv(BgW, to)
+    bgw.got(m, f, to, back)
+
+# the writer told the save is dropped (a FLUSHALL, a SHUTDOWN): it closes
+# the file
+@unsafe
+def bgw.close(m: Maybe<&2, BgCh>) -> IO(Unit):
+  match m:
+    case Some{BgCh{to, back}}:
+      Chan.close(BgW, to)
+    case None{}:
+      IO.pure(Unit, Unit{})
+
 # the start: the snapshot the group's BGSAVE took (or the cron's), "Background
-# saving started by pid", the temporary file made empty, the file's head
-# kept to write
+# saving started by pid", the temporary file made empty and given to its
+# writer, the file's head kept to write
 @unsafe
 def step.bstart(x: Rx, f: Maybe<&1, File>) -> IO(Maybe<&1, File> & Rx):
   match x:
@@ -13535,10 +13778,17 @@ def step.bopened(r: Result<&1, &1, U32 & String, File>, +tmp: String, dbs: List<
         step.bfail(x, f)
     case Done{t}:
       do IO<Maybe<&1, File> & Rx>:
-        Unit <- File.close(t)
-        k : U32 & U32 <- IO.clock()
-        h : Nat & Nat <- IO.heap()
-        return (f, rx.bbegin(x, dbs, D.file.head(clock.secs(k), Pair.fst(Nat, Nat, h)), rx.sum(x), rx.dbfile(x)))
+        to : Chan(BgW) <- Chan.new(BgW, 1)
+        back : Chan(BgA) <- Chan.new(BgA, 1)
+        step.bwriter(t, to, back, dbs, x, f)
+
+@unsafe
+def step.bwriter(t: File, +to: Chan(BgW), +back: Chan(BgA), dbs: List<&2, R.Db>, +x: Rx, f: Maybe<&1, File>) -> IO(Maybe<&1, File> & Rx):
+  do IO<Maybe<&1, File> & Rx>:
+    Unit <- IO.spawn(Unit, bgw.loop(t, to, back))
+    k : U32 & U32 <- IO.clock()
+    h : Nat & Nat <- IO.heap()
+    return (f, rx.bbegun(h, k, dbs, BgCh{to, back}, x))
 
 # a save that failed (the child's line logged, its temporary file
 # removed): "Background saving error", the status err
@@ -13549,13 +13799,12 @@ def step.bfail(+x: Rx, f: Maybe<&1, File>) -> IO(Maybe<&1, File> & Rx):
     Unit <- step.say(x, 3, "Background saving error")
     return (f, rx.bend(x, False{}, clock.secs(t)))
 
-# a write that failed, as rdbSave's werr: why, the file closed and
-# removed
+# a write that failed, as rdbSave's werr: why, the file removed (its
+# writer closed it)
 @unsafe
-def step.bwerr(+x: Rx, f: Maybe<&1, File>, m: Maybe<&1, File>, +tmp: String, +op: String, +msg: String) -> IO(Maybe<&1, File> & Rx):
+def step.bwerr(+x: Rx, f: Maybe<&1, File>, +tmp: String, +op: String, +msg: String) -> IO(Maybe<&1, File> & Rx):
   do IO<Maybe<&1, File> & Rx>:
     Unit <- step.child(x, 3, "Write error saving DB on disk(" ++ op ++ "): " ++ msg)
-    Unit <- file.end(m)
     r : Result<&1, &1, U32 & String, Unit> <- File.unlink(tmp)
     step.bfail(x, f)
 
@@ -13569,100 +13818,65 @@ def step.bsliced(w: Nat, +x: Rx, f: Maybe<&1, File>) -> IO(Maybe<&1, File> & Rx)
     case _:
       step.bfinish(x, f)
 
-# the bytes kept appended to the temporary file
+# the writer's answer to w: n more bytes in the file, or at the end (last)
+# the file written whole, synced and closed, to rename; its channel of
+# answers closed after its last
+@unsafe
+def step.bsent(a: Maybe<&1, BgA>, +back: Chan(BgA), +n: Nat, last: Bool, +x: Rx, f: Maybe<&1, File>) -> IO(Maybe<&1, File> & Rx):
+  match a last:
+    case Some{BgOk{}} False{}:
+      IO.pure(Maybe<&1, File> & Rx, (f, rx.bflushed(x, n)))
+    case Some{BgOk{}} True{}:
+      do IO<Maybe<&1, File> & Rx>:
+        Unit <- Chan.close(BgA, back)
+        step.brename(x, f)
+    case Some{BgBad{+op, +msg}} _:
+      do IO<Maybe<&1, File> & Rx>:
+        Unit <- Chan.close(BgA, back)
+        step.bwerr(x, f, rdb.tmp(rx.pid(x)), op, msg)
+    case None{} _:
+      do IO<Maybe<&1, File> & Rx>:
+        Unit <- Chan.close(BgA, back)
+        step.bwerr(x, f, rdb.tmp(rx.pid(x)), "rdbSaveRio", "the writer is gone")
+
+@unsafe
+def step.bsend.to(m: Maybe<&2, BgCh>, w: BgW, +n: Nat, last: Bool, +x: Rx, f: Maybe<&1, File>) -> IO(Maybe<&1, File> & Rx):
+  match m:
+    case Some{BgCh{to, +back}}:
+      do IO<Maybe<&1, File> & Rx>:
+        b : Bool <- Chan.send(BgW, to, w)
+        a : Maybe<&1, BgA> <- Chan.recv(BgA, back)
+        step.bsent(a, back, n, last, x, f)
+    case None{}:
+      step.bwerr(x, f, rdb.tmp(rx.pid(x)), "rdbSaveRio", "the writer is gone")
+
+@unsafe
+def step.bsend(w: BgW, +n: Nat, last: Bool, +x: Rx, f: Maybe<&1, File>) -> IO(Maybe<&1, File> & Rx):
+  step.bsend.to(rx.bch(x), w, n, last, x, f)
+
+# the bytes kept appended to the temporary file, and synced after them
+# each 4 MB with rdb-save-incremental-fsync yes
 @unsafe
 def step.bflush(+x: Rx, f: Maybe<&1, File>) -> IO(Maybe<&1, File> & Rx):
-  +tmp = rdb.tmp(rx.pid(x))
-  do IO<Maybe<&1, File> & Rx>:
-    m : Result<&1, &1, U32 & String, File> <- File.open(tmp, "a")
-    step.bput(m, rx.bpending(x), tmp, x, f)
-
-@unsafe
-def step.bput(m: Result<&1, &1, U32 & String, File>, +bytes: String, +tmp: String, +x: Rx, f: Maybe<&1, File>) -> IO(Maybe<&1, File> & Rx):
-  match m:
-    case Fail{e}:
-      step.bwerr(x, f, None{}, tmp, "rdbSaveRio", err.msg(e))
-    case Done{t}:
-      do IO<Maybe<&1, File> & Rx>:
-        p : File & Result<&1, &1, U32 & String, Unit> <- File.write_raw(t, bytes)
-        step.bput.done(p, String.length(bytes), tmp, x, f)
-
-@unsafe
-def step.bput.done(p: File & Result<&1, &1, U32 & String, Unit>, +n: Nat, +tmp: String, +x: Rx, f: Maybe<&1, File>) -> IO(Maybe<&1, File> & Rx):
-  (t, r) = p
-  match r:
-    case Fail{e}:
-      step.bwerr(x, f, Some{t}, tmp, "rdbSaveRio", err.msg(e))
-    case Done{u}:
-      step.bput.auto(rx.bautosync(x, n), t, n, tmp, x, f)
-
-@unsafe
-def step.bput.auto(sync: Bool, t: File, +n: Nat, +tmp: String, +x: Rx, f: Maybe<&1, File>) -> IO(Maybe<&1, File> & Rx):
-  match sync:
-    case False{}:
-      do IO<Maybe<&1, File> & Rx>:
-        Unit <- File.close(t)
-        return (f, rx.bflushed(x, n))
-    case True{}:
-      do IO<Maybe<&1, File> & Rx>:
-        q : File & Result<&1, &1, U32 & String, Unit> <- File.sync(t)
-        step.bput.synced(q, n, tmp, x, f)
-
-@unsafe
-def step.bput.synced(q: File & Result<&1, &1, U32 & String, Unit>, +n: Nat, +tmp: String, +x: Rx, f: Maybe<&1, File>) -> IO(Maybe<&1, File> & Rx):
-  (t, r) = q
-  match r:
-    case Fail{e}:
-      step.bwerr(x, f, Some{t}, tmp, "rdbSaveRio", err.msg(e))
-    case Done{u}:
-      do IO<Maybe<&1, File> & Rx>:
-        Unit <- File.close(t)
-        return (f, rx.bflushed(x, n))
+  +bytes = rx.bpending(x)
+  +n = String.length(bytes)
+  step.bsend(BgPut{bytes, rx.bautosync(x, n)}, n, False{}, x, f)
 
 # the end, as rdbSave ends: the bytes kept and the file's end written, the
-# file synced and closed, renamed onto dbfilename, the directory synced;
-# "DB saved on disk" (the child's) and "Background saving terminated with
-# success"
+# file synced and closed (by its writer), renamed onto dbfilename (as it
+# was when the save started), the directory synced; "DB saved on disk"
+# (the child's) and "Background saving terminated with success"
 @unsafe
 def step.bfinish(+x: Rx, f: Maybe<&1, File>) -> IO(Maybe<&1, File> & Rx):
+  step.bsend(BgEnd{rx.brest(x)}, 0n, True{}, x, f)
+
+@unsafe
+def step.brename(+x: Rx, f: Maybe<&1, File>) -> IO(Maybe<&1, File> & Rx):
   +tmp = rdb.tmp(rx.pid(x))
+  +name = rx.bname(x)
   do IO<Maybe<&1, File> & Rx>:
-    m : Result<&1, &1, U32 & String, File> <- File.open(tmp, "a")
-    step.bfin(m, rx.brest(x), tmp, x, f)
-
-@unsafe
-def step.bfin(m: Result<&1, &1, U32 & String, File>, +bytes: String, +tmp: String, +x: Rx, f: Maybe<&1, File>) -> IO(Maybe<&1, File> & Rx):
-  match m:
-    case Fail{e}:
-      step.bwerr(x, f, None{}, tmp, "rdbSaveRio", err.msg(e))
-    case Done{t}:
-      do IO<Maybe<&1, File> & Rx>:
-        p : File & Result<&1, &1, U32 & String, Unit> <- File.write_raw(t, bytes)
-        step.bfin.wrote(p, tmp, x, f)
-
-@unsafe
-def step.bfin.wrote(p: File & Result<&1, &1, U32 & String, Unit>, +tmp: String, +x: Rx, f: Maybe<&1, File>) -> IO(Maybe<&1, File> & Rx):
-  (t, r) = p
-  match r:
-    case Fail{e}:
-      step.bwerr(x, f, Some{t}, tmp, "rdbSaveRio", err.msg(e))
-    case Done{u}:
-      do IO<Maybe<&1, File> & Rx>:
-        q : File & Result<&1, &1, U32 & String, Unit> <- File.sync(t)
-        step.bfin.synced(q, tmp, x, f)
-
-@unsafe
-def step.bfin.synced(q: File & Result<&1, &1, U32 & String, Unit>, +tmp: String, +x: Rx, f: Maybe<&1, File>) -> IO(Maybe<&1, File> & Rx):
-  (t, r) = q
-  match r:
-    case Fail{e}:
-      step.bwerr(x, f, Some{t}, tmp, "fsync", err.msg(e))
-    case Done{u}:
-      +name = rx.bname(x)
-      do IO<Maybe<&1, File> & Rx>:
-        Unit <- File.close(t)
-        q2 : Result<&1, &1, U32 & String, Unit> <- File.rename(tmp, name)
-        step.bfin.renamed(q2, tmp, name, x, f)
+    q2 : Result<&1, &1, U32 & String, Unit> <- File.rename(tmp, name)
+    step.bfin.renamed(q2, tmp, name, x, f)
 
 @unsafe
 def step.bfin.renamed(r: Result<&1, &1, U32 & String, Unit>, +tmp: String, +name: String, +x: Rx, f: Maybe<&1, File>) -> IO(Maybe<&1, File> & Rx):
@@ -13682,7 +13896,7 @@ def step.bfin.renamed(r: Result<&1, &1, U32 & String, Unit>, +tmp: String, +name
 def step.bfin.dir(d: Result<&1, &1, U32 & String, Unit>, +tmp: String, +x: Rx, f: Maybe<&1, File>) -> IO(Maybe<&1, File> & Rx):
   match d:
     case Fail{e}:
-      step.bwerr(x, f, None{}, tmp, "fsyncFileDir", err.msg(e))
+      step.bwerr(x, f, tmp, "fsyncFileDir", err.msg(e))
     case Done{u}:
       do IO<Maybe<&1, File> & Rx>:
         t : U32 & U32 <- IO.clock()
@@ -13690,12 +13904,14 @@ def step.bfin.dir(d: Result<&1, &1, U32 & String, Unit>, +tmp: String, +x: Rx, f
         Unit <- step.say(x, 2, "Background saving terminated with success")
         return (f, rx.bend(x, True{}, clock.secs(t)))
 
-# the save dropped (a FLUSHALL of the group: killRDBChild), its temporary
-# file removed, as the cron finds Redis's child killed
+# the save dropped (a FLUSHALL of the group: killRDBChild), its writer
+# told and its temporary file removed, as the cron finds Redis's child
+# killed
 @unsafe
 def step.bkill(+x: Rx, f: Maybe<&1, File>) -> IO(Maybe<&1, File> & Rx):
   +tmp = rdb.tmp(rx.pid(x))
   do IO<Maybe<&1, File> & Rx>:
+    Unit <- bgw.close(rx.bch(x))
     r : Result<&1, &1, U32 & String, Unit> <- File.unlink(tmp)
     t : U32 & U32 <- IO.clock()
     Unit <- step.say(x, 3, "Background saving terminated by signal 10")

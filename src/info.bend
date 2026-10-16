@@ -1668,6 +1668,43 @@ def rws.reset(r: Rws) -> Rws:
     case IRws{on, sched, start, last, ok, n, fails}:
       IRws{on, sched, start, last, ok, 0n, 0n}
 
+# The parameters a background save keeps from its start, as Redis's
+# child keeps those of its fork (rdbSaveBackground hands it
+# server.rdb_filename then): dbfilename, rdbchecksum yes,
+# rdb-key-save-delay (us a key; 0 for none, as for a value below 1) and
+# rdb-save-incremental-fsync yes
+type BgCf is Data:
+  BgCf{name: String, sum: Bool, delay: Nat, auto: Bool}
+
+def bgcf.none() -> BgCf:
+  BgCf{"", False{}, 0n, False{}}
+
+def bgcf.delay.of(+v: String) -> Nat:
+  Bool.pick(Nat, C.text.digits(v), C.dec.small(v, 0n), 0n)
+
+def bgcf.of(+items: List<&2, C.CItem>) -> BgCf:
+  BgCf{C.config.get_value(items, "dbfilename"), String.eq(C.config.get_value(items, "rdbchecksum"), "yes"), bgcf.delay.of(C.config.get_value(items, "rdb-key-save-delay")), String.eq(C.config.get_value(items, "rdb-save-incremental-fsync"), "yes")}
+
+def bgcf.name(+c: BgCf) -> String:
+  match c:
+    case BgCf{+name, sum, delay, auto}:
+      name
+
+def bgcf.sum(+c: BgCf) -> Bool:
+  match c:
+    case BgCf{name, +sum, delay, auto}:
+      sum
+
+def bgcf.delay(+c: BgCf) -> Nat:
+  match c:
+    case BgCf{name, sum, +delay, auto}:
+      delay
+
+def bgcf.auto(+c: BgCf) -> Bool:
+  match c:
+    case BgCf{name, sum, delay, +auto}:
+      auto
+
 # A background save (BGSAVE, and the cron's: server.bend, Background
 # saves), as INFO shows it and the cron reads it: whether one runs (from
 # the BGSAVE or the cron's look that starts it to its end: Redis's
@@ -1684,50 +1721,50 @@ def rws.reset(r: Rws) -> Rws:
 # emptied the databases, which its save subtracts. IBgsOf is never built:
 # it makes Bgs a node of its own.
 type Bgs is Data:
-  IBgs{on: Bool, start: Nat, before: Nat, try: Nat, sched: Bool, last: Maybe<&2, Nat>, total: Nat, done: Nat, snap: Maybe<&2, List<&2, R.Db>>, kill: Bool, fl: Nat}
+  IBgs{on: Bool, start: Nat, before: Nat, try: Nat, sched: Bool, last: Maybe<&2, Nat>, total: Nat, done: Nat, snap: Maybe<&2, List<&2, R.Db>>, kill: Bool, fl: Nat, cf: BgCf}
   IBgsOf{b: Bgs}
 
 def bgs.new() -> Bgs:
-  IBgs{False{}, 0n, 0n, 0n, False{}, None{}, 0n, 0n, None{}, False{}, 0n}
+  IBgs{False{}, 0n, 0n, 0n, False{}, None{}, 0n, 0n, None{}, False{}, 0n, bgcf.none()}
 
 def bgs.on(+b: Bgs) -> Bool:
   match b:
-    case IBgs{+on, start, before, try, sched, last, total, done, snap, kill, fl}:
+    case IBgs{+on, start, before, try, sched, last, total, done, snap, kill, fl, cf}:
       on
     case IBgsOf{+x}:
       bgs.on(x)
 
 def bgs.sched(+b: Bgs) -> Bool:
   match b:
-    case IBgs{on, start, before, try, +sched, last, total, done, snap, kill, fl}:
+    case IBgs{on, start, before, try, +sched, last, total, done, snap, kill, fl, cf}:
       sched
     case IBgsOf{+x}:
       bgs.sched(x)
 
 def bgs.try(+b: Bgs) -> Nat:
   match b:
-    case IBgs{on, start, before, +try, sched, last, total, done, snap, kill, fl}:
+    case IBgs{on, start, before, +try, sched, last, total, done, snap, kill, fl, cf}:
       try
     case IBgsOf{+x}:
       bgs.try(x)
 
 def bgs.kill(+b: Bgs) -> Bool:
   match b:
-    case IBgs{on, start, before, try, sched, last, total, done, snap, +kill, fl}:
+    case IBgs{on, start, before, try, sched, last, total, done, snap, +kill, fl, cf}:
       kill
     case IBgsOf{+x}:
       bgs.kill(x)
 
 def bgs.start(+b: Bgs) -> Nat:
   match b:
-    case IBgs{on, +start, before, try, sched, last, total, done, snap, kill, fl}:
+    case IBgs{on, +start, before, try, sched, last, total, done, snap, kill, fl, cf}:
       start
     case IBgsOf{+x}:
       bgs.start(x)
 
 def bgs.total(+b: Bgs) -> Nat:
   match b:
-    case IBgs{on, start, before, try, sched, last, +total, done, snap, kill, fl}:
+    case IBgs{on, start, before, try, sched, last, +total, done, snap, kill, fl, cf}:
       total
     case IBgsOf{+x}:
       bgs.total(x)
@@ -1742,7 +1779,7 @@ def bgs.has.snap(+m: Maybe<&2, List<&2, R.Db>>) -> Bool:
 # whether a group's BGSAVE left a snapshot for the actor to write
 def bgs.pending(+b: Bgs) -> Bool:
   match b:
-    case IBgs{on, start, before, try, sched, last, total, done, +snap, kill, fl}:
+    case IBgs{on, start, before, try, sched, last, total, done, +snap, kill, fl, cf}:
       bgs.has.snap(snap)
     case IBgsOf{+x}:
       bgs.pending(x)
@@ -1762,52 +1799,60 @@ def bgs.ask.of(on: Bool, kill: Bool, snap: Bool) -> Nat:
 
 def bgs.ask(+b: Bgs) -> Nat:
   match b:
-    case IBgs{+on, start, before, try, sched, last, total, done, +snap, +kill, fl}:
+    case IBgs{+on, start, before, try, sched, last, total, done, +snap, +kill, fl, cf}:
       bgs.ask.of(on, kill, bgs.has.snap(snap))
     case IBgsOf{+x}:
       bgs.ask(x)
 
 # one starts at the second now, with the count of changes dirty, a
 # snapshot of total keys (taken by a group's BGSAVE for the actor: snap;
-# none when the actor takes it itself), as rdbSaveBackground and
-# redisFork start one; none is scheduled any more once it starts from
-# the schedule (sched: whether it does)
-def bgs.go(b: Bgs, +now: Nat, +dirty: Nat, +total: Nat, snap: Maybe<&2, List<&2, R.Db>>, +unsched: Bool) -> Bgs:
+# none when the actor takes it itself) and the parameters cf, as
+# rdbSaveBackground and redisFork start one; none is scheduled any more
+# once it starts from the schedule (sched: whether it does)
+def bgs.go(b: Bgs, +now: Nat, +dirty: Nat, +total: Nat, snap: Maybe<&2, List<&2, R.Db>>, +unsched: Bool, cf: BgCf) -> Bgs:
   match b:
-    case IBgs{on, start, before, try, +sched, last, t0, d0, s0, kill, fl}:
-      IBgs{True{}, now, dirty, now, Bool.and(sched, Bool.not(unsched)), last, total, 0n, snap, False{}, fl}
+    case IBgs{on, start, before, try, +sched, last, t0, d0, s0, kill, fl, c0}:
+      IBgs{True{}, now, dirty, now, Bool.and(sched, Bool.not(unsched)), last, total, 0n, snap, False{}, fl, cf}
     case IBgsOf{x}:
-      bgs.go(x, now, dirty, total, snap, unsched)
+      bgs.go(x, now, dirty, total, snap, unsched, cf)
+
+# the parameters the save that runs (or the last one) kept from its start
+def bgs.cf(+b: Bgs) -> BgCf:
+  match b:
+    case IBgs{on, start, before, try, sched, last, total, done, snap, kill, fl, +cf}:
+      cf
+    case IBgsOf{+x}:
+      bgs.cf(x)
 
 # BGSAVE SCHEDULE, or BGSAVE in EXEC, while another job runs
 def bgs.later(b: Bgs) -> Bgs:
   match b:
-    case IBgs{on, start, before, try, sched, last, total, done, snap, kill, fl}:
-      IBgs{on, start, before, try, True{}, last, total, done, snap, kill, fl}
+    case IBgs{on, start, before, try, sched, last, total, done, snap, kill, fl, cf}:
+      IBgs{on, start, before, try, True{}, last, total, done, snap, kill, fl, cf}
     case IBgsOf{x}:
       bgs.later(x)
 
 # the snapshot taken by the actor, which writes it
 def bgs.taken(b: Bgs) -> Maybe<&2, List<&2, R.Db>> & Bgs:
   match b:
-    case IBgs{on, start, before, try, sched, last, total, done, snap, kill, fl}:
-      (snap, IBgs{on, start, before, try, sched, last, total, done, None{}, kill, fl})
+    case IBgs{on, start, before, try, sched, last, total, done, snap, kill, fl, cf}:
+      (snap, IBgs{on, start, before, try, sched, last, total, done, None{}, kill, fl, cf})
     case IBgsOf{x}:
       bgs.taken(x)
 
 # k keys written
 def bgs.wrote(b: Bgs, +k: Nat) -> Bgs:
   match b:
-    case IBgs{on, start, before, try, sched, last, total, +done, snap, kill, fl}:
-      IBgs{on, start, before, try, sched, last, total, Nat.add(done, k), snap, kill, fl}
+    case IBgs{on, start, before, try, sched, last, total, +done, snap, kill, fl, cf}:
+      IBgs{on, start, before, try, sched, last, total, Nat.add(done, k), snap, kill, fl, cf}
     case IBgsOf{x}:
       bgs.wrote(x, k)
 
 # a FLUSHALL drops the save that runs, once the group is answered
 def bgs.killing(b: Bgs) -> Bgs:
   match b:
-    case IBgs{+on, start, before, try, sched, last, total, done, snap, kill, fl}:
-      IBgs{on, start, before, try, sched, last, total, done, snap, on, fl}
+    case IBgs{+on, start, before, try, sched, last, total, done, snap, kill, fl, cf}:
+      IBgs{on, start, before, try, sched, last, total, done, snap, on, fl, cf}
     case IBgsOf{x}:
       bgs.killing(x)
 
@@ -1815,21 +1860,21 @@ def bgs.killing(b: Bgs) -> Bgs:
 # how long it took, the counts of its keys forgotten (resetChildState)
 def bgs.end(b: Bgs, +now: Nat) -> Bgs:
   match b:
-    case IBgs{on, +start, before, try, sched, last, total, done, snap, kill, fl}:
-      IBgs{False{}, start, before, try, sched, Some{Nat.sub(now, start)}, 0n, 0n, None{}, False{}, fl}
+    case IBgs{on, +start, before, try, sched, last, total, done, snap, kill, fl, cf}:
+      IBgs{False{}, start, before, try, sched, Some{Nat.sub(now, start)}, 0n, 0n, None{}, False{}, fl, cf}
     case IBgsOf{x}:
       bgs.end(x, now)
 
 def bgs.before(+b: Bgs) -> Nat:
   match b:
-    case IBgs{on, start, +before, try, sched, last, total, done, snap, kill, fl}:
+    case IBgs{on, start, +before, try, sched, last, total, done, snap, kill, fl, cf}:
       before
     case IBgsOf{+x}:
       bgs.before(x)
 
 def bgs.fl(+b: Bgs) -> Nat:
   match b:
-    case IBgs{on, start, before, try, sched, last, total, done, snap, kill, +fl}:
+    case IBgs{on, start, before, try, sched, last, total, done, snap, kill, +fl, cf}:
       fl
     case IBgsOf{+x}:
       bgs.fl(x)
@@ -1838,15 +1883,15 @@ def bgs.fl(+b: Bgs) -> Nat:
 # a save that ran after it subtracts from the count when the save started
 def bgs.flushing(b: Bgs, +d: Nat) -> Bgs:
   match b:
-    case IBgs{on, start, before, try, sched, last, total, done, snap, kill, fl}:
-      IBgs{on, start, before, try, sched, last, total, done, snap, kill, d}
+    case IBgs{on, start, before, try, sched, last, total, done, snap, kill, fl, cf}:
+      IBgs{on, start, before, try, sched, last, total, done, snap, kill, d, cf}
     case IBgsOf{x}:
       bgs.flushing(x, d)
 
 def bgs.cleaned(b: Bgs, +d: Nat) -> Bgs:
   match b:
-    case IBgs{on, start, +before, try, sched, last, total, done, snap, kill, fl}:
-      IBgs{on, start, Nat.sub(before, d), try, sched, last, total, done, snap, kill, fl}
+    case IBgs{on, start, +before, try, sched, last, total, done, snap, kill, fl, cf}:
+      IBgs{on, start, Nat.sub(before, d), try, sched, last, total, done, snap, kill, fl, cf}
     case IBgsOf{x}:
       bgs.cleaned(x, d)
 
@@ -2032,12 +2077,12 @@ def rdb.bg.set(r: Rdb, b: Bgs) -> Rdb:
 
 # a background save starts at the second now (rdbSaveBackground): counted
 # (stat_rdb_saves), the count of changes kept, a snapshot of total keys
-def rdb.bg.go(r: Rdb, +now: Nat, +total: Nat, snap: Maybe<&2, List<&2, R.Db>>, +unsched: Bool) -> Rdb:
+def rdb.bg.go(r: Rdb, +now: Nat, +total: Nat, snap: Maybe<&2, List<&2, R.Db>>, +unsched: Bool, cf: BgCf) -> Rdb:
   match r:
     case IRdb{last, +saves, ok, loaded, expired, flush, shut, owed, +dirty, bg, pts, stop}:
-      IRdb{last, 1n+saves, ok, loaded, expired, flush, shut, owed, dirty, bgs.go(bg, now, dirty, total, snap, unsched), pts, stop}
+      IRdb{last, 1n+saves, ok, loaded, expired, flush, shut, owed, dirty, bgs.go(bg, now, dirty, total, snap, unsched, cf), pts, stop}
     case IRdbOf{x}:
-      rdb.bg.go(x, now, total, snap, unsched)
+      rdb.bg.go(x, now, total, snap, unsched, cf)
 
 def rdb.bg.later(r: Rdb) -> Rdb:
   match r:
@@ -2448,10 +2493,10 @@ def info.rdb.flush.done(i: Info, +well: Bool) -> Info:
     case IInfo{b, l, c, inst, pk, c0, a0, a, st, ex, rw, tm, rf}:
       IInfo{b, l, c, inst, pk, c0, a0, a, st, ex, rw, tm, rdb.flush.done(rf, well)}
 
-def info.bg.go(i: Info, +now: Nat, +total: Nat, snap: Maybe<&2, List<&2, R.Db>>, +unsched: Bool) -> Info:
+def info.bg.go(i: Info, +now: Nat, +total: Nat, snap: Maybe<&2, List<&2, R.Db>>, +unsched: Bool, cf: BgCf) -> Info:
   match i:
     case IInfo{b, l, c, inst, pk, c0, a0, a, st, ex, rw, tm, rf}:
-      IInfo{b, l, c, inst, pk, c0, a0, a, st, ex, rw, tm, rdb.bg.go(rf, now, total, snap, unsched)}
+      IInfo{b, l, c, inst, pk, c0, a0, a, st, ex, rw, tm, rdb.bg.go(rf, now, total, snap, unsched, cf)}
 
 def info.bg.later(i: Info) -> Info:
   match i:
@@ -3127,7 +3172,10 @@ def sec.rewrite(r: Rws, +now: Nat) -> String:
 # resetChildState leaves them), whether one runs, how long the last one
 # took (-1 before the first) and the one that runs so far at now (ms; -1
 # while none runs), in seconds as Redis counts them (the difference of the
-# two times in whole seconds)
+# two times in whole seconds); the count of changes less those a FLUSHALL
+# of the group takes away once its save with save points has ended well
+# (fl, none once the group is answered), as Redis's FLUSHALL saves before
+# the commands after it run
 def bgs.perc(+done: Nat, +total: Nat) -> String:
   match total:
     case 0n:
@@ -3144,9 +3192,9 @@ def bgs.cur(on: Bool, +start: Nat, +now: Nat) -> String:
 
 def bgs.lines(+b: Bgs, +dirty: Nat, +last: Nat, +ok: Bool, +saves: Nat, +loaded: Nat, +expired: Nat, +now: Nat) -> String:
   match b:
-    case IBgs{+on, +start, before, try, sched, +lt, +total, +done, snap, kill, fl}:
+    case IBgs{+on, +start, before, try, sched, +lt, +total, +done, snap, kill, +fl, cf}:
       kv("current_fork_perc", bgs.perc(done, total)) ++ kv("current_save_keys_processed", Nat.show(done)) ++
-      kv("current_save_keys_total", Nat.show(total)) ++ kv("rdb_changes_since_last_save", Nat.show(dirty)) ++
+      kv("current_save_keys_total", Nat.show(total)) ++ kv("rdb_changes_since_last_save", Nat.show(Nat.sub(dirty, fl))) ++
       kv("rdb_bgsave_in_progress", flag(on)) ++ kv("rdb_last_save_time", Nat.show(last)) ++
       kv("rdb_last_bgsave_status", Bool.pick(String, ok, "ok", "err")) ++ kv("rdb_last_bgsave_time_sec", rw.last(lt)) ++
       kv("rdb_current_bgsave_time_sec", bgs.cur(on, start, now)) ++ kv("rdb_saves", Nat.show(saves)) ++
@@ -3312,6 +3360,12 @@ def boot.replid(+b: Boot) -> String:
   match b:
     case IBoot{os, pid, run, replid, exe, conf, sysmem, start, heap0}:
       replid
+
+# the heap's used bytes at the start (used_memory_startup)
+def info.heap0(+i: Info) -> Nat:
+  match i:
+    case IInfo{+b, l, c, inst, pk, c0, a0, a, st, ex, rw, tm, rf}:
+      boot.heap0(b)
 
 # the second the server started at (since 1970)
 def info.start(+i: Info) -> U32:

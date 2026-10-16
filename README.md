@@ -509,7 +509,12 @@ translation stays in the trusted base.
   the same maxmemory holds another number of keys, since a key takes other bytes in
   BendKV's heap (with its share of the trie's nodes) than in Redis's allocator, and
   about 8% fewer after a rewrite of the append-only file, until they are set again
-  (issue #102); the uses
+  (issue #102); while a rewrite of the append-only file or a background save runs, the
+  eviction and the refusal past maxmemory count the dataset's change by its number of
+  keys, each at the average size when the job started (a value grown in place counts
+  when the job ends), where Redis's parent counts what it allocates and not the pages
+  its child's snapshot keeps; BendKV's snapshot holds the values the writes replace,
+  and INFO's `used_memory` with it (FINDINGS.md, section 3zzzk); the uses
   are kept in a table of 2^20 words by the key's hash, which keys whose hashes share
   their low 20 bits share, and a request marks its first key alone, before it runs
   (MGET's others are not marked); and evicting many keys at once is about ten times
@@ -566,14 +571,16 @@ translation stays in the trusted base.
   SHUTDOWN saves it (above), and FLUSHALL with save points saves the emptied databases,
   as Redis 7.0's does; BGSAVE [SCHEDULE] writes it in the background from a snapshot of
   the databases at the command (the databases being values, without a fork, a slice at a
-  time between the groups of requests the server answers meanwhile), with Redis's
-  replies, log lines and INFO fields, and so does the cron at Redis's default save
-  points (`save 3600 1 300 100 60 10000`), five seconds apart after a save that failed;
-  one background job runs at a time (BGSAVE while a rewrite runs is refused, or
-  scheduled with SCHEDULE, BGREWRITEAOF while a save runs is scheduled, SAVE is refused,
-  and FLUSHALL and SHUTDOWN drop the save that runs); after a background save that
-  failed, with save points and `stop-writes-on-bgsave-error yes`, the writes and PING
-  are refused with Redis's MISCONF until a save ends well; INFO's
+  time between the groups of requests the server answers meanwhile; `dbfilename` and the
+  save's pace as they were then, its temporary file held open to its end, as Redis's
+  child keeps them), with Redis's replies, log lines and INFO fields, and so does the
+  cron at Redis's default save points (`save 3600 1 300 100 60 10000`), five seconds
+  apart after a save that failed; one background job runs at a time (BGSAVE while a
+  rewrite runs is refused, or scheduled with SCHEDULE, BGREWRITEAOF while a save runs is
+  scheduled, SAVE is refused, and FLUSHALL and SHUTDOWN drop the save that runs); after
+  a background save that failed, with save points and `stop-writes-on-bgsave-error
+  yes`, the writes and PING are refused with Redis's MISCONF until a save ends well;
+  INFO's
   `rdb_changes_since_last_save` counts the changes since the last save, as Redis counts
   them, for the save points; LASTSAVE and INFO's `rdb_last_save_time`, `rdb_saves`,
   `rdb_last_bgsave_status` and `rdb_last_load_keys_loaded` and `_expired` follow it
@@ -586,9 +593,13 @@ translation stays in the trusted base.
   no save on SIGTERM or SIGINT (above; the start warns of it when save points are set),
   and the short form (`bendkv PORT`) has no save points; `rdb_changes_since_last_save`
   counts some writes otherwise (SET with GET by its reply, ZADD and GEOADD each pair,
-  BITFIELD each write that OVERFLOW FAIL let through, PFADD one, PFCOUNT none; a
-  pipeline's weights read as the batch found the databases; 0 after a start from the
-  append-only file); no fork, so no fork's fields or lines, and the progress of a save
+  BITFIELD each write that OVERFLOW FAIL let through, PFADD one, PFCOUNT none; FLUSHDB
+  and FLUSHALL a key whose time has passed until the sweep deletes it, also after a read
+  found it missing, which Redis's read deletes, and so does `current_save_keys_total`;
+  a pipeline's weights read as the batch found the databases; an INFO after a FLUSHALL
+  with save points in its pipeline as if that FLUSHALL's save ended well; 0 after a
+  start from the append-only file); no fork, so no fork's fields or lines, and the
+  progress of a save
   in INFO follows each slice written (a rewrite's shows none); the line of a background
   save's start comes once its group is answered; SAVE and the saves of SHUTDOWN and
   FLUSHALL ignore `rdb-key-save-delay`; no LZF written; no IDLE or FREQ written, and

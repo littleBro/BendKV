@@ -471,11 +471,14 @@ MAY_REPLICATE = {"publish", "spublish", "eval", "pfcount"}
 # destination was there) for 0 (the STOREs of sets and sorted sets,
 # BITOP); 13 a positive integer, the weight for 0 (SORT's and GEO's
 # STORE); 14 the weight for an integer reply, or the integer when the
-# weight is 0, one for a score (ZADD and GEOADD); 15 the weight less the
-# nulls of an array (BITFIELD)
+# weight is 0, the weight for a score (ZADD and GEOADD; with INCR, and
+# ZINCRBY, the weight is whether the score changes); 15 the weight less
+# the nulls of an array (BITFIELD); 16 the weight, whatever the reply
+# (EVAL of BendKV's own scripts: the DEL they start with, then what the
+# command they run changes, which an error of that command does not undo)
 DIRTY_RULES = {"none": 0, "one": 1, "int": 2, "set": 3, "bulk": 4, "pop": 5, "mpop": 6, "zpop": 7,
                "bpop": 8, "pos": 9, "wok": 10, "wpos": 11, "store": 12, "nstore": 13, "zadd": 14,
-               "bitfield": 15}
+               "bitfield": 15, "w": 16}
 DIRTY = {
     "set": "set", "setnx": "int", "setex": "one", "psetex": "one", "getset": "one", "getdel": "bulk",
     "getex": "wok", "setrange": "wok", "mset": "wok", "msetnx": "wpos", "incr": "one", "decr": "one",
@@ -483,19 +486,19 @@ DIRTY = {
     "bitop": "store", "bitfield": "bitfield", "del": "int", "unlink": "int", "expire": "int",
     "pexpire": "int", "expireat": "int", "pexpireat": "int", "persist": "int", "rename": "wok",
     "renamenx": "int", "move": "int", "copy": "int", "swapdb": "one", "flushdb": "wok",
-    "flushall": "wok", "restore": "one", "hset": "wok", "hmset": "wok", "hsetnx": "int",
+    "flushall": "wok", "restore": "wok", "hset": "wok", "hmset": "wok", "hsetnx": "int",
     "hincrby": "one", "hincrbyfloat": "one", "hdel": "int", "lpush": "wok", "rpush": "wok",
     "lpushx": "wpos", "rpushx": "wpos", "linsert": "pos", "lset": "one", "lpop": "pop", "rpop": "pop",
     "ltrim": "wok", "lrem": "int", "lmove": "bulk", "rpoplpush": "bulk", "lmpop": "mpop",
     "blpop": "bpop", "brpop": "bpop", "blmove": "bulk", "brpoplpush": "bulk", "blmpop": "mpop",
     "sadd": "int", "srem": "int", "smove": "wok", "spop": "pop", "sinterstore": "store",
-    "sunionstore": "store", "sdiffstore": "store", "zadd": "zadd", "zincrby": "one", "zrem": "int",
+    "sunionstore": "store", "sdiffstore": "store", "zadd": "zadd", "zincrby": "zadd", "zrem": "int",
     "zremrangebyscore": "int", "zremrangebyrank": "int", "zremrangebylex": "int", "zpopmin": "zpop",
     "zpopmax": "zpop", "zmpop": "mpop", "bzpopmin": "bpop", "bzpopmax": "bpop", "bzmpop": "mpop",
     "zunionstore": "store", "zinterstore": "store", "zdiffstore": "store", "zrangestore": "store",
-    "pfadd": "int", "pfmerge": "one", "pfdebug": "none", "geoadd": "zadd", "georadius": "nstore",
+    "pfadd": "int", "pfmerge": "one", "pfdebug": "wok", "geoadd": "zadd", "georadius": "nstore",
     "georadiusbymember": "nstore", "geosearchstore": "nstore", "sort": "nstore",
-    "function|flush": "one", "eval": "one"}
+    "function|flush": "one", "eval": "w"}
 
 # the parser's commands with subcommands, by the function that numbers
 # their subcommands

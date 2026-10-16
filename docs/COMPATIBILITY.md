@@ -103,7 +103,12 @@ events, and the two after it that it held back (CONFIG GET and SET of the flags,
 refused for memory while it queued; unit/introspection-2's test that TTL, TYPE and
 EXISTS leave a key's last use as it was; and unit/lazyfree's two tests of the memory
 UNLINK and FLUSHDB ASYNC give back, now that `used_memory` is what the heap's live values
-hold. MONITOR (section 3zt of
+hold. While a rewrite of the append-only file or a background save runs, the eviction
+and the refusal past maxmemory count the dataset's change by its number of keys, each at
+the average size when the job started, and a value grown in place counts when the job
+ends (README.md, Memory; section 3zzzk of [FINDINGS.md](FINDINGS.md)): Redis's parent
+counts no page its child keeps, and BendKV's snapshot keeps the values the writes
+replace. MONITOR (section 3zt of
 [FINDINGS.md](FINDINGS.md)) brought 3: unit/introspection passes 25 of its 28 tests, a
 monitor's lines of the commands that run, and a transaction's in order, with its EXEC's
 line also when an error while it queued aborted it (of the other three, two look in a
