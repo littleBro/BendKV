@@ -1802,6 +1802,10 @@ def obj.mems.enc(+m: KV.Mems, +cfg: List<&2, C.CItem>) -> String:
       Bool.pick(String, Nat.is_le(n, cfg.nat(cfg, "set-max-intset-entries")), "intset", "hashtable")
     case KV.MBig{n, t}:
       "hashtable"
+    case KV.MSmall{n, b}:
+      "hashtable"
+    case KV.MLong{n, ps}:
+      "hashtable"
 
 # the longest member of the elements xs, at least m
 def obj.zwidest(xs: List<&2, KV.ZEl>, +m: Nat) -> Nat:

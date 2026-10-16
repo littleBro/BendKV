@@ -98,6 +98,11 @@ type HPiece is Data:
 type HAt is Data:
   HAt{i: Nat, vi: Nat}
 
+# k members of a small set past one buffer, coded as in a small set's
+# string (Sets, below)
+type MPiece is Data:
+  MPc{k: Nat, s: String}
+
 # A hash, as Redis 7.0 keeps one: a small one (n fields, each of at most
 # hash-max-listpack-value bytes, n at most hash-max-listpack-entries) as
 # the string of its pairs in the order they came (a listpack: HGETALL
@@ -126,11 +131,16 @@ type ITree is Data:
 # integers in the form Redis writes them (ints.ok), at most
 # set-max-intset-entries of them (512), as the tree of its n members in
 # increasing order (an intset: SMEMBERS answers them so); any other as a
-# trie of its members (a hashtable, in no order), which it stays (Sets,
-# below)
+# hashtable, in no order, which it stays: while it is small (n members,
+# at most 128, each of at most 64 bytes) as the string of its members in
+# the order they came (as Redis 7.2's listpack holds a small set), in
+# pieces of one buffer each past one buffer (MLong), else as a trie of
+# its members, for good (Sets, below)
 type Mems is Data:
   MInts{n: Nat, tr: ITree}
   MBig{n: Nat, t: Trie<Unit>}
+  MSmall{n: Nat, b: String}
+  MLong{n: Nat, ps: List<&2, MPiece>}
 
 # A sorted set's elements in order (Sorted sets, below), as a
 # weight-balanced tree: a tip, or a node of n elements, its element (a
@@ -2358,14 +2368,20 @@ def deq.of(+n: Nat, xs: List<&2, String>) -> Deq:
 # Sets
 # ----
 # A set's members (Mems, above): a small set of integers is a tree of
-# its members in increasing order, any other a trie of its members, each
-# with no time. Redis 7.0 keeps a set as an intset while its members all
-# read as 64-bit integers and they are at most set-max-intset-entries
-# (512), as a hashtable from the first write that passes either, for
-# good. BendKV turns an intset into a hashtable at that default, whatever
-# the parameter says, as it does a hash (Hashes, above); OBJECT ENCODING
-# reads the parameter as it is (session.bend). A key never holds an empty
-# set: a write that takes its last member deletes it.
+# its members in increasing order, a small set of other members the
+# string of its members in the order they came, any other a trie of its
+# members, each with no time. Redis 7.0 keeps a set as an intset while
+# its members all read as 64-bit integers and they are at most
+# set-max-intset-entries (512), as a hashtable from the first write that
+# passes either, for good. BendKV turns an intset into a hashtable at
+# that default, whatever the parameter says, as it does a hash (Hashes,
+# above); OBJECT ENCODING reads the parameter as it is (session.bend). A
+# hashtable is a string of its members while it holds at most 128 of at
+# most 64 bytes (Redis 7.2's set-max-listpack-entries and -value: Redis
+# 7.0 has no listpack of a set, so OBJECT ENCODING answers hashtable for
+# both, and DUMP writes both as a hashtable), and a trie from the first
+# write that passes either, for good. A key never holds an empty set: a
+# write that takes its last member deletes it.
 
 # whether s's d chars from index a on, all digits and the first not 0,
 # are at most 9223372036854775807 (with a = 1, after a '-': at most
@@ -2711,6 +2727,324 @@ def it.mach(f: Nat, js: List<&2, IJob>, xs: List<&2, String>, t: ITree) -> ITree
 def ints.build(+n: Nat, xs: List<&2, String>) -> ITree:
   it.mach(Nat.add(Nat.mul(4n, n), 4n), [IJBuild{n}], xs, ITip{})
 
+# A small hashtable's string (MSmall, above) holds its members one after
+# another, as a listpack holds a small set in one allocation: a member is
+# its length, one byte (a member of a small set has at most 64 bytes),
+# then its bytes. A read walks the lengths from the start to the member
+# it wants, comparing a member of the right length by its last byte, then
+# whole (hb.hit.of, as a small hash compares a field); a write makes the
+# string anew in one buffer (hb.flat), as a small hash's write does. The
+# string holds at most a buffer, 2,048 bytes: past one, String.code_at
+# walks a chain from its start (Hashes, above), and 128 members of 64
+# bytes take 8,320. Past that, the members are in pieces (MLong), each
+# the members that fill one buffer: a read goes through them in order
+# and finds in one, a new member goes in the last piece while it has
+# room, else in a piece of its own, a delete cuts one piece, and a piece
+# it empties goes; one piece left is a string again (ml.set).
+
+# the length of the member whose code is at index i of b, one of k
+# members from there on (0 when there is none)
+def ms.flen(k: Nat, +b: String, +i: Nat) -> Nat:
+  match k:
+    case 0n:
+      0n
+    case 1n+j:
+      hb.byte(b, i)
+
+# whether the member at index i of b, one of k from there on, n bytes
+# long, is m (lm bytes long, its last byte lb): the lengths first, then
+# the last bytes, then the bytes
+def ms.hit(k: Nat, +m: String, +lm: Nat, +lb: U32, +b: String, +i: Nat, +n: Nat) -> Bool:
+  match k:
+    case 0n:
+      False{}
+    case 1n+j:
+      hb.hit.of(Nat.is_eq(n, lm), m, lb, b, Nat.add(i, 1n), n)
+
+# the index of m's code among the k members from index i of b on, the
+# first of them n bytes long, or the index past them when m is not one;
+# hit is ms.hit(k, m, lm, lb, b, i, n), computed before b is passed on
+def ms.find.go(+m: String, +lm: Nat, +lb: U32, +b: String, k: Nat, hit: Bool, +i: Nat, +n: Nat) -> Nat:
+  match k hit:
+    case 0n _:
+      i
+    case 1n++j True{}:
+      i
+    case 1n++j False{}:
+      +x = Nat.add(i, Nat.add(1n, n))
+      +xn = ms.flen(j, b, x)
+      ms.find.go(m, lm, lb, b, j, ms.hit(j, m, lm, lb, b, x, xn), x, xn)
+
+# the index of m's code in the string b of a small set of k members, or
+# b's length when m is not there
+def ms.find(+m: String, +b: String, +k: Nat) -> Nat:
+  +lm = String.length(m)
+  +lb = String.code_at(m, Nat.sub(lm, 1n))
+  +n = ms.flen(k, b, 0n)
+  ms.find.go(m, lm, lb, b, k, ms.hit(k, m, lm, lb, b, 0n, n), 0n, n)
+
+# whether the small set of k members b holds m
+def ms.has(+m: String, +b: String, +k: Nat) -> Bool:
+  Nat.is_lt(ms.find(m, b, k), String.length(b))
+
+# the k members from index i of b on, the last first, before acc
+def ms.all.rev(k: Nat, +b: String, +i: Nat, acc: List<&2, String>) -> List<&2, String>:
+  match k:
+    case 0n:
+      acc
+    case 1n+j:
+      +n = hb.byte(b, i)
+      ms.all.rev(j, b, Nat.add(i, Nat.add(1n, n)), String.slice(b, Nat.add(i, 1n), n) <> acc)
+
+# the k members of the small set b, in its order: a walk that keeps no
+# frame for each member, then the list turned around
+def ms.all(k: Nat, +b: String) -> List<&2, String>:
+  List.reverse(&2, String, ms.all.rev(k, b, 0n, Nil{}))
+
+# the index of the code of the member r places after the one whose code
+# is at index i
+def ms.skip(r: Nat, +b: String, +i: Nat) -> Nat:
+  match r:
+    case 0n:
+      i
+    case 1n+q:
+      ms.skip(q, b, Nat.add(i, Nat.add(1n, hb.byte(b, i))))
+
+def ms.nth.of(ok: Bool, +b: String, +i: Nat) -> Maybe<&2, String>:
+  match ok:
+    case True{}:
+      Some{String.slice(b, Nat.add(i, 1n), hb.byte(b, i))}
+    case False{}:
+      None{}
+
+# the member at rank r of the small set of k members b (none when r is
+# not below k)
+def ms.nth(+k: Nat, +b: String, +r: Nat) -> Maybe<&2, String>:
+  ms.nth.of(Nat.is_lt(r, k), b, ms.skip(Nat.min(r, k), b, 0n))
+
+# b, of l bytes, with the member m (lm bytes) after its last, in one
+# buffer
+def ms.push(+b: String, +l: Nat, +m: String, +lm: Nat) -> String:
+  hb.flat(b ++ hb.byte.put(lm, m), Nat.add(l, Nat.add(1n, lm)))
+
+# b without the member whose code is at index i, in one buffer
+def ms.cut(+b: String, +i: Nat) -> String:
+  +end = Nat.add(i, Nat.add(1n, hb.byte(b, i)))
+  +n = Nat.sub(String.length(b), Nat.sub(end, i))
+  +pre = String.take(b, i)
+  hb.flat(pre ++ String.drop(b, end), n)
+
+# the k members from index i of b on added to the trie t
+def ms.trie(k: Nat, +b: String, +i: Nat, t: Trie<Unit>) -> Trie<Unit>:
+  match k:
+    case 0n:
+      t
+    case 1n+j:
+      +n = hb.byte(b, i)
+      ms.trie(j, b, Nat.add(i, Nat.add(1n, n)), set(Unit, t, String.slice(b, Nat.add(i, 1n), n), Unit{}))
+
+# whether a small set of n members, one of them m, stays small
+def ms.fits(+n: Nat, +m: String) -> Bool:
+  Bool.and(Nat.is_le(n, 128n), Nat.is_le(String.length(m), 64n))
+
+# the member m (lm bytes) alone, as a small set's string
+def ms.one(+m: String, +lm: Nat) -> String:
+  hb.flat(hb.byte.put(lm, m), Nat.add(1n, lm))
+
+# the members xs (the last first) as a small set's string, before acc
+def ms.enc.rev(xs: List<&2, String>, acc: String) -> String:
+  match xs:
+    case Nil{}:
+      acc
+    case Con{+x, more}:
+      ms.enc.rev(more, hb.byte.put(String.length(x), x ++ acc))
+
+# Pieces (MLong, above): each the k members of its string s.
+
+def ml.has.in(+m: String, +p: MPiece) -> Bool:
+  match p:
+    case MPc{+k, +s}:
+      ms.has(m, s, k)
+
+# whether m is in the pieces ps, unless had already says so
+def ml.has(+m: String, +ps: List<&2, MPiece>, had: Bool) -> Bool:
+  match ps had:
+    case Nil{} True{}:
+      True{}
+    case Nil{} False{}:
+      False{}
+    case Con{+p, +rest} True{}:
+      True{}
+    case Con{+p, +rest} False{}:
+      ml.has(m, rest, ml.has.in(m, p))
+
+def ml.all.in(+p: MPiece, acc: List<&2, String>) -> List<&2, String>:
+  match p:
+    case MPc{+k, +s}:
+      ms.all.rev(k, s, 0n, acc)
+
+# the members of the pieces ps, the last first, before acc
+def ml.all.rev(+ps: List<&2, MPiece>, acc: List<&2, String>) -> List<&2, String>:
+  match ps:
+    case Nil{}:
+      acc
+    case Con{+p, +rest}:
+      ml.all.rev(rest, ml.all.in(p, acc))
+
+# the members of the pieces ps, in their order
+def ml.all(+ps: List<&2, MPiece>) -> List<&2, String>:
+  List.reverse(&2, String, ml.all.rev(ps, Nil{}))
+
+def ml.nth.in(+p: MPiece, +r: Nat) -> Maybe<&2, String>:
+  match p:
+    case MPc{+k, +s}:
+      ms.nth(k, s, r)
+
+def ml.k(+p: MPiece) -> Nat:
+  match p:
+    case MPc{+k, s}:
+      k
+
+# the member at rank r of the pieces ps, unless m already holds the one
+# asked for (r is then past the pieces' members, and not read)
+def ml.nth(+ps: List<&2, MPiece>, +r: Nat, m: Maybe<&2, String>) -> Maybe<&2, String>:
+  match ps m:
+    case Nil{} Some{x}:
+      Some{x}
+    case Nil{} None{}:
+      None{}
+    case Con{+p, +rest} Some{x}:
+      Some{x}
+    case Con{+p, +rest} None{}:
+      ml.nth(rest, Nat.sub(r, ml.k(p)), ml.nth.in(p, r))
+
+def ml.trie.in(+p: MPiece, t: Trie<Unit>) -> Trie<Unit>:
+  match p:
+    case MPc{+k, +s}:
+      ms.trie(k, s, 0n, t)
+
+# the members of the pieces ps added to the trie t
+def ml.trie(+ps: List<&2, MPiece>, t: Trie<Unit>) -> Trie<Unit>:
+  match ps:
+    case Nil{}:
+      t
+    case Con{+p, +rest}:
+      ml.trie(rest, ml.trie.in(p, t))
+
+# the last piece, of k members s, with the member m (lm bytes) after its
+# last: in it while it fills no more than a buffer, else in a piece of
+# its own
+def ml.add.of(room: Bool, +k: Nat, +s: String, +m: String, +lm: Nat) -> List<&2, MPiece>:
+  match room:
+    case True{}:
+      [MPc{1n+k, ms.push(s, String.length(s), m, lm)}]
+    case False{}:
+      [MPc{k, s}, MPc{1n, ms.one(m, lm)}]
+
+# the piece of k members s, then rest, with m after the last member
+def ml.push.go(rest: List<&2, MPiece>, +k: Nat, +s: String, +m: String, +lm: Nat) -> List<&2, MPiece>:
+  match rest:
+    case Nil{}:
+      ml.add.of(Nat.is_le(Nat.add(String.length(s), Nat.add(1n, lm)), 2048n), k, s, m, lm)
+    case Con{MPc{+j, +r}, more}:
+      Con{MPc{k, s}, ml.push.go(more, j, r, m, lm)}
+
+# the pieces ps with the member m (lm bytes), which they lack, after the
+# last
+def ml.push(ps: List<&2, MPiece>, +m: String, +lm: Nat) -> List<&2, MPiece>:
+  match ps:
+    case Nil{}:
+      [MPc{1n, ms.one(m, lm)}]
+    case Con{MPc{+k, +s}, rest}:
+      ml.push.go(rest, k, s, m, lm)
+
+# the piece of k members s before rest, none when k is 0
+def ml.drop(k: Nat, +s: String, rest: List<&2, MPiece>) -> List<&2, MPiece>:
+  match k:
+    case 0n:
+      rest
+    case 1n+j:
+      Con{MPc{1n+j, s}, rest}
+
+# the pieces with m taken out: the piece of k members s, then rest; had:
+# m is in s, its code at index i. A piece left with no member goes
+def ml.cut.go(+m: String, rest: List<&2, MPiece>, had: Bool, +k: Nat, +s: String, +i: Nat) -> List<&2, MPiece>:
+  match rest had:
+    case Nil{} True{}:
+      ml.drop(Nat.sub(k, 1n), ms.cut(s, i), Nil{})
+    case Nil{} False{}:
+      [MPc{k, s}]
+    case Con{MPc{j, r}, more} True{}:
+      ml.drop(Nat.sub(k, 1n), ms.cut(s, i), Con{MPc{j, r}, more})
+    case Con{MPc{+j, +r}, more} False{}:
+      +q = ms.find(m, r, j)
+      Con{MPc{k, s}, ml.cut.go(m, more, Nat.is_lt(q, String.length(r)), j, r, q)}
+
+# the pieces ps with m, which they hold, taken out
+def ml.cut(+m: String, ps: List<&2, MPiece>) -> List<&2, MPiece>:
+  match ps:
+    case Nil{}:
+      Nil{}
+    case Con{MPc{+k, +s}, rest}:
+      +q = ms.find(m, s, k)
+      ml.cut.go(m, rest, Nat.is_lt(q, String.length(s)), k, s, q)
+
+# the piece of the k members cur (the last first), len bytes, before rest
+# (none when k is 0)
+def ml.close(k: Nat, cur: List<&2, String>, +len: Nat, rest: List<&2, MPiece>) -> List<&2, MPiece>:
+  match k:
+    case 0n:
+      rest
+    case 1n+j:
+      Con{MPc{1n+j, hb.flat(ms.enc.rev(cur, ""), len)}, rest}
+
+# whether the first member of xs goes in a piece of len bytes: it fills
+# no more than a buffer, or the piece is empty
+def ml.room(xs: List<&2, String>, +len: Nat) -> Bool:
+  match xs:
+    case Nil{}:
+      True{}
+    case Con{+x, more}:
+      Bool.or(Nat.is_eq(len, 0n), Nat.is_le(Nat.add(len, Nat.add(1n, String.length(x))), 2048n))
+
+# the members xs in pieces before the pieces tail, after the k members
+# cur (the last first, len bytes) of the piece being filled; room is
+# ml.room(xs, len)
+def ml.fill(xs: List<&2, String>, room: Bool, cur: List<&2, String>, +k: Nat, +len: Nat, tail: List<&2, MPiece>) -> List<&2, MPiece>:
+  match xs room:
+    case Nil{} _:
+      ml.close(k, cur, len, tail)
+    case Con{+x, +more} True{}:
+      +l = Nat.add(len, Nat.add(1n, String.length(x)))
+      ml.fill(more, ml.room(more, l), Con{x, cur}, 1n+k, l, tail)
+    case Con{+x, +more} False{}:
+      +l = Nat.add(1n, String.length(x))
+      ml.close(k, cur, len, ml.fill(more, ml.room(more, l), [x], 1n, l, tail))
+
+# the members xs, in their order, in pieces of one buffer each
+def ml.of(xs: List<&2, String>) -> List<&2, MPiece>:
+  ml.fill(xs, True{}, Nil{}, 0n, 0n, Nil{})
+
+# a small set of n members in the pieces ps: one string when one piece
+# is left (or none)
+def ml.set.of(+n: Nat, +k: Nat, +s: String, rest: List<&2, MPiece>) -> Mems:
+  match rest:
+    case Nil{}:
+      MSmall{n, s}
+    case Con{q, more}:
+      MLong{n, Con{MPc{k, s}, Con{q, more}}}
+
+def ml.set(+n: Nat, ps: List<&2, MPiece>) -> Mems:
+  match ps:
+    case Nil{}:
+      MSmall{n, ""}
+    case Con{MPc{+k, +s}, rest}:
+      ml.set.of(n, k, s, rest)
+
+# the small set of the n members xs, in their order (RESTORE)
+def ms.make(+n: Nat, xs: List<&2, String>) -> Mems:
+  ml.set(n, ml.of(xs))
+
 def mems.empty() -> Mems:
   MInts{0n, ITip{}}
 
@@ -2719,6 +3053,10 @@ def mems.len(+s: Mems) -> Nat:
     case MInts{+n, xs}:
       n
     case MBig{+n, t}:
+      n
+    case MSmall{+n, b}:
+      n
+    case MLong{+n, ps}:
       n
 
 def mems.ints.has(int: Bool, +m: String, +xs: ITree) -> Bool:
@@ -2735,11 +3073,23 @@ def mems.has(+m: String, +s: Mems) -> Bool:
       mems.ints.has(ints.ok(m), m, xs)
     case MBig{n, +t}:
       has(Unit, t, m)
+    case MSmall{+n, +b}:
+      ms.has(m, b, n)
+    case MLong{n, +ps}:
+      ml.has(m, ps, False{})
 
 # n members xs of an intset, and m, which they do not hold, as a
-# hashtable
+# hashtable: small while it fits (the intset's members in increasing
+# order, then m), else a trie
+def mems.grow.of(fits: Bool, +n: Nat, xs: ITree, +m: String) -> Mems:
+  match fits:
+    case True{}:
+      ml.set(1n+n, ml.of(it.list(xs, [m])))
+    case False{}:
+      MBig{1n+n, set(Unit, it.trie(xs, empty(Unit)), m, Unit{})}
+
 def mems.grow(+n: Nat, xs: ITree, +m: String) -> Mems:
-  MBig{1n+n, set(Unit, it.trie(xs, empty(Unit)), m, Unit{})}
+  mems.grow.of(ms.fits(1n+n, m), n, xs, m)
 
 def mems.ints.put(fits: Bool, +n: Nat, xs: ITree, +m: String) -> Mems:
   match fits:
@@ -2764,9 +3114,53 @@ def mems.big.add(had: Bool, +n: Nat, t: Trie<Unit>, +m: String) -> Mems:
     case False{}:
       MBig{1n+n, set(Unit, t, m, Unit{})}
 
+# the string b of a small set of n members with m (lm bytes), which it
+# lacks, after its last: in the string while it fills no more than a
+# buffer, else in a piece of its own
+def ms.push.of(room: Bool, +n: Nat, +b: String, +m: String, +lm: Nat) -> Mems:
+  match room:
+    case True{}:
+      MSmall{1n+n, ms.push(b, String.length(b), m, lm)}
+    case False{}:
+      MLong{1n+n, [MPc{n, b}, MPc{1n, ms.one(m, lm)}]}
+
+# a small set of n members b with m, which it lacks, after its last:
+# small while it fits, else a trie
+def mems.small.put(fits: Bool, +n: Nat, +b: String, +m: String) -> Mems:
+  match fits:
+    case True{}:
+      +lm = String.length(m)
+      ms.push.of(Nat.is_le(Nat.add(String.length(b), Nat.add(1n, lm)), 2048n), n, b, m, lm)
+    case False{}:
+      MBig{1n+n, set(Unit, ms.trie(n, b, 0n, empty(Unit)), m, Unit{})}
+
+def mems.small.add(had: Bool, +n: Nat, b: String, +m: String) -> Mems:
+  match had:
+    case True{}:
+      MSmall{n, b}
+    case False{}:
+      mems.small.put(ms.fits(1n+n, m), n, b, m)
+
+# a small set of n members in the pieces ps with m, which they lack,
+# after the last: small while it fits, else a trie
+def mems.long.put(fits: Bool, +n: Nat, ps: List<&2, MPiece>, +m: String) -> Mems:
+  match fits:
+    case True{}:
+      MLong{1n+n, ml.push(ps, m, String.length(m))}
+    case False{}:
+      MBig{1n+n, set(Unit, ml.trie(ps, empty(Unit)), m, Unit{})}
+
+def mems.long.add(had: Bool, +n: Nat, ps: List<&2, MPiece>, +m: String) -> Mems:
+  match had:
+    case True{}:
+      MLong{n, ps}
+    case False{}:
+      mems.long.put(ms.fits(1n+n, m), n, ps, m)
+
 # s with m added (s may hold it already): an integer joins an intset in
 # its place, while it holds at most 512; any other member makes it a
-# hashtable
+# hashtable, a small one while it holds at most 128 members of at most
+# 64 bytes
 def mems.add(s: Mems, +m: String) -> Mems:
   match s:
     case MInts{+n, +xs}:
@@ -2775,6 +3169,12 @@ def mems.add(s: Mems, +m: String) -> Mems:
     case MBig{+n, +t}:
       +had = has(Unit, t, m)
       mems.big.add(had, n, t, m)
+    case MSmall{+n, +b}:
+      +had = ms.has(m, b, n)
+      mems.small.add(had, n, b, m)
+    case MLong{+n, +ps}:
+      +had = ml.has(m, ps, False{})
+      mems.long.add(had, n, ps, m)
 
 # the members xs added in turn to s
 def mems.adds(xs: List<&2, String>, s: Mems) -> Mems:
@@ -2795,14 +3195,23 @@ def mems.del(s: Mems, +m: String) -> Mems:
       MInts{Nat.sub(n, 1n), ints.del(m, xs)}
     case MBig{+n, t}:
       MBig{Nat.sub(n, 1n), del(Unit, t, m)}
+    case MSmall{+n, +b}:
+      MSmall{Nat.sub(n, 1n), ms.cut(b, ms.find(m, b, n))}
+    case MLong{+n, ps}:
+      ml.set(Nat.sub(n, 1n), ml.cut(m, ps))
 
-# the members of s, in its order (an intset's, increasing)
+# the members of s, in its order (an intset's, increasing; a small
+# hashtable's, the order they came)
 def mems.all(+s: Mems) -> List<&2, String>:
   match s:
     case MInts{n, +xs}:
       ints.list(xs)
     case MBig{n, +t}:
       keys(Unit, t, 0n)
+    case MSmall{+n, +b}:
+      ms.all(n, b)
+    case MLong{n, +ps}:
+      ml.all(ps)
 
 # Sorted sets
 # -----------

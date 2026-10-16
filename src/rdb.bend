@@ -1303,8 +1303,10 @@ def is.read(+b: String) -> Maybe<&2, List<&2, String>>:
 # came as a listpack, ziplist or zipmap of at most 512 pairs (a zipmap's
 # fields and values of at most 64 bytes too), or as a hashtable of at
 # most 512 pairs of at most 64 bytes; a set an intset (MInts) when it
-# holds at most 512 members, all integers as Redis writes them; a sorted
-# set small (ZSmall) when it came as a listpack or ziplist of at most 128
+# holds at most 512 members, all integers as Redis writes them, else a
+# hashtable, small (MSmall or MLong, its members in the payload's order)
+# when it holds at most 128 members of at most 64 bytes; a sorted set small
+# (ZSmall) when it came as a listpack or ziplist of at most 128
 # elements, or as a skiplist of at most 128 whose members are of at most
 # 64 bytes. A collection with no element, or a member, field or element
 # of a sorted set twice, or a score that is no number (a NaN), is no
@@ -1362,12 +1364,20 @@ def val.list(+xs: List<&2, String>) -> Maybe<&2, KV.Val>:
   +n = List.length(&2, String, xs)
   Bool.pick(Maybe<&2, KV.Val>, Nat.is_lt(0n, n), Some{KV.VColl{KV.CList{KV.deq.of(n, xs)}}}, None{})
 
-def val.set.of(ints: Bool, +n: Nat, xs: List<&2, String>, t: KV.Trie<Unit>) -> KV.Val:
+# a hashtable of the n members xs (small: as a small one, in their order)
+def val.set.table(small: Bool, +n: Nat, xs: List<&2, String>, t: KV.Trie<Unit>) -> KV.Val:
+  match small:
+    case True{}:
+      KV.VColl{KV.CMems{KV.ms.make(n, xs)}}
+    case False{}:
+      KV.VColl{KV.CMems{KV.MBig{n, t}}}
+
+def val.set.of(ints: Bool, +n: Nat, +xs: List<&2, String>, t: KV.Trie<Unit>) -> KV.Val:
   match ints:
     case True{}:
       KV.VColl{KV.CMems{KV.MInts{n, ints.tree(xs, KV.ITip{})}}}
     case False{}:
-      KV.VColl{KV.CMems{KV.MBig{n, t}}}
+      val.set.table(Bool.and(Nat.is_le(n, 128n), Bool.not(len.gt(xs, 64n))), n, xs, t)
 
 # a set of the n members xs, the trie of which finds a member twice
 def val.set.any(+n: Nat, +xs: List<&2, String>) -> Maybe<&2, KV.Val>:
@@ -1987,13 +1997,14 @@ def obj(+k: Nat, s: String) -> Maybe<&2, KV.Val>:
 # nodes RPUSH makes of its elements (at list-max-listpack-size -2: a node
 # takes an element while its listpack's bytes, the element's and 8 stay
 # within 8192), each packed (2) as a listpack; an intset (SET_INTSET) of
-# the narrowest width that holds its members, a large set as its count and
-# members (SET); a small sorted set as one listpack (ZSET_LISTPACK) of its
-# members and scores (a score as a listpack keeps it: F.f64.show_lp), a
-# large one as its count, then its members and their scores' bits from
-# the greatest down (ZSET_2). The value's type (rdbSaveObjectType) comes
-# before it: in a payload right before it (put.val), in a file before the
-# key (The file, below).
+# the narrowest width that holds its members, any other set as its count
+# and members (SET: Redis 7.0 has no listpack of a set, and cannot read
+# Redis 7.2's, SET_LISTPACK); a small sorted set as one listpack
+# (ZSET_LISTPACK) of its members and scores (a score as a listpack keeps
+# it: F.f64.show_lp), a large one as its count, then its members and
+# their scores' bits from the greatest down (ZSET_2). The value's type
+# (rdbSaveObjectType) comes before it: in a payload right before it
+# (put.val), in a file before the key (The file, below).
 
 def put.blob(+b: String, rest: String) -> String:
   len.put(String.length(b), b ++ rest)
@@ -2107,6 +2118,10 @@ def put.mems(m: KV.Mems, rest: String) -> String:
       put.blob(is.blob(n, KV.ints.list(xs)), rest)
     case KV.MBig{+n, +t}:
       len.put(n, put.strs(KV.keys(Unit, t, 0n), rest))
+    case KV.MSmall{+n, +b}:
+      len.put(n, put.strs(KV.ms.all(n, b), rest))
+    case KV.MLong{+n, +ps}:
+      len.put(n, put.strs(KV.ml.all(ps), rest))
 
 # Sorted sets
 def zel.words(es: List<&2, KV.ZEl>) -> List<&2, String>:
@@ -2161,6 +2176,10 @@ def put.mems.kind(+m: KV.Mems) -> U32:
     case KV.MInts{n, xs}:
       11
     case KV.MBig{n, t}:
+      2
+    case KV.MSmall{n, b}:
+      2
+    case KV.MLong{n, ps}:
       2
 
 def put.zset.kind(+z: KV.Zset) -> U32:
