@@ -8309,3 +8309,57 @@ a fresh process). Requests a second:
 
 The machine was shared, and a round moves by up to 15%; LPUSH serves about 5 to 10% less
 than main, the pops and the ranges 8 to 35% more.
+
+## 81. LPOS, LINSERT and LREM by pieces
+
+FINDINGS 3zzzx. Main's build is the list code of #112 (3zzzw). The servers ran in turn on
+the same machine, idle but for them (load average 0.3).
+
+**On a list of 200,000** (`e0` to `e199999`, made by RPUSH a thousand at a time),
+milliseconds to the reply, the best of 5 runs. First the scenario of PERFORMANCE 79,
+whose LINSERT puts five `z` before `e100000` and whose LREM then takes them one at a
+time:
+
+| command | Redis 7.0.15 | main | this change |
+|---|---:|---:|---:|
+| LPOS q e199999 | 3.313 | 6.189 | 3.811 |
+| LINSERT q BEFORE e100000 z | 3.208 | 7.673 | 3.658 |
+| LREM q 1 z | 2.976 | 22.911 | 1.757 |
+
+Then each command near an end and in the middle, each write undone between runs (main's
+times here are higher than above: each of its LPOS calls makes a string of every element,
+and the calls before grew its heap):
+
+| command | Redis 7.0.15 | main | this change |
+|---|---:|---:|---:|
+| LPOS q e10 | 0.040 | 7.113 | 0.049 |
+| LPOS q e100000 | 1.520 | 11.452 | 1.626 |
+| LPOS q e199999 | 3.199 | 13.673 | 3.565 |
+| LPOS q e199990 RANK -1 | 0.041 | 24.692 | 0.056 |
+| LPOS q none | 2.837 | 23.516 | 3.283 |
+| LINSERT q BEFORE e10 z | 0.050 | 24.845 | 0.055 |
+| LINSERT q BEFORE e100000 z | 1.402 | 30.558 | 1.833 |
+| LREM q 1 e100000 | 1.460 | 40.731 | 1.013 |
+| LREM q -1 e199990 | 0.086 | 55.669 | 0.231 |
+| LREM q 0 none | 2.791 | 45.261 | 1.795 |
+
+Two earlier rounds of the second table, on the same builds, moved by up to 50% where the
+machine was busier; the order of the three servers was the same in each.
+
+**Instructions per command** (callgrind, one client, one request at a time; lists `a`,
+`c` and `b` of 20, 100 and 400 elements `e000`, `e001`, …):
+
+| command | main | this change | |
+|---|---:|---:|---:|
+| LPOS a e010 | 27,229 | 26,273 | −3.5% |
+| LPOS c e050 | 56,880 | 49,626 | −12.8% |
+| LPOS b e399 | 180,863 | 158,337 | −12.5% |
+| LPOS b e390 RANK -1 | 168,646 | 28,657 | −83.0% |
+| LPOS b none | 181,040 | 150,982 | −16.6% |
+| LREM c 0 none | 72,802 | 42,464 | −41.7% |
+| LREM b 0 none | 224,777 | 100,734 | −55.2% |
+| LINSERT c AFTER e050 z (200 runs) | 135,602 | 94,592 | −30.2% |
+| LREM c 1 z (200 runs, after them) | 157,238 | 140,965 | −10.3% |
+
+Nothing on the paths `make perfcheck` measures changed: the pushes, the pops, LINDEX,
+LRANGE and LSET run the code of #112.

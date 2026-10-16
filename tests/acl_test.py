@@ -82,6 +82,12 @@ def counts(r):
                   for l in lines if l.startswith(("cmdstat_", "errorstat_")))
 
 
+def processed(r):
+    """INFO's total_commands_processed and total_error_replies."""
+    return [l for l in r.cmd("INFO", "stats").splitlines()
+            if l.startswith(("total_commands_processed:", "total_error_replies:"))]
+
+
 def closed(c, timeout=2.0):
     """Whether the server closed c's connection (what it sent before kept)."""
     end = time.time() + timeout
@@ -151,6 +157,19 @@ def scenarios(port, log):
     log("6 exec info", line(a.cmd("CLIENT", "INFO")))
     log("6 log", log_of(r))
     log("6 counts", counts(r))
+    r.cmd("ACL", "SETUSER", "alice", "+set")
+    r.cmd("ACL", "LOG", "RESET")
+    # 6b. EXEC whose last command is refused since it was queued: the
+    # refusal is an error but no call, and EXEC counts as failed (its own
+    # call sees an error after its last inner one)
+    r.cmd("CONFIG", "RESETSTAT")
+    log("6b exec last", a.cmd("MULTI"), a.cmd("GET", "k1"), a.cmd("SET", "k1", "c"),
+        r.cmd("ACL", "SETUSER", "alice", "-set"), a.cmd("EXEC"), r.cmd("GET", "k1"))
+    log("6b counts", counts(r), processed(r))
+    r.cmd("ACL", "SETUSER", "alice", "+set")
+    log("6b all refused", a.cmd("MULTI"), a.cmd("SET", "k1", "d"), a.cmd("SET", "k2", "d"),
+        r.cmd("ACL", "SETUSER", "alice", "-set"), a.cmd("EXEC"))
+    log("6b all counts", counts(r), processed(r))
     r.cmd("ACL", "SETUSER", "alice", "+set")
     r.cmd("ACL", "LOG", "RESET")
     # 7. EXEC itself refused aborts the transaction

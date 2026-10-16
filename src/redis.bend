@@ -17561,58 +17561,45 @@ def lrange.args(args: List<&2, String>, +l: KV.Deq) -> Reply:
     case _:
       e_int()
 
-# LPOS's walk, from the end it starts from: the elements xs, the i-th read
-# next; stop says the walk is over (the matches it wants are found, or
-# MAXLEN elements are read); m matches so far, the positions found
-# reversed in acc (the answer with COUNT, else the one position)
-def lpos.put(take: Bool, +p: Nat, acc: List<&2, Reply>) -> List<&2, Reply>:
-  match take:
-    case True{}:
-      RInt{IPos{p}} <> acc
-    case False{}:
-      acc
+# LPOS's search (KV.deq.find), from the end it starts from: the matches
+# it wants are the RANK-th without COUNT, else COUNT of them from the
+# RANK-th on (0: every one), among the first MAXLEN elements (0: all).
+# Neither bound goes past the list's n elements and one, so that a RANK
+# or a COUNT near 2^47 makes no larger number.
+def lpos.want(+cnt: Maybe<&2, Nat>, +rank: Nat, +n: Nat) -> Nat:
+  match cnt:
+    case None{}:
+      Nat.min(rank, 1n+n)
+    case Some{+c}:
+      Bool.pick(Nat, Nat.is_eq(c, 0n), 1n+n, Nat.add(Nat.min(Nat.sub(rank, 1n), n), Nat.min(c, 1n+n)))
 
-def lpos.out(cnt: Maybe<&2, Nat>, acc: List<&2, Reply>) -> Reply:
-  match cnt acc:
-    case Some{c} rs:
-      RArray{List.reverse(&2, Reply, rs)}
+def lpos.reads(+maxlen: Nat, +n: Nat) -> Nat:
+  Bool.pick(Nat, Nat.is_eq(maxlen, 0n), 1n+n, maxlen)
+
+# the positions found, the last first, as replies in the order found
+def lpos.ints(ps: List<&2, Nat>, acc: List<&2, Reply>) -> List<&2, Reply>:
+  match ps:
+    case Nil{}:
+      acc
+    case Con{p, rest}:
+      lpos.ints(rest, RInt{IPos{p}} <> acc)
+
+# the answer: the positions from the RANK-th match on with COUNT, else
+# the one position (none: nil)
+def lpos.out(cnt: Maybe<&2, Nat>, rs: List<&2, Reply>) -> Reply:
+  match cnt rs:
+    case Some{c} xs:
+      RArray{xs}
     case None{} Con{r, rest}:
       r
     case None{} Nil{}:
       RNull{}
 
-# whether the match just taken (the m-th) is the last the walk wants: the
-# first one without COUNT, the c-th from RANK on with COUNT c (0: every
-# one)
-def lpos.full(+cnt: Maybe<&2, Nat>, +rank: Nat, +m: Nat) -> Bool:
-  match cnt:
-    case None{}:
-      True{}
-    case Some{+c}:
-      Bool.and(Nat.is_lt(0n, c), Nat.is_le(c, 1n+Nat.sub(m, rank)))
-
-def lpos.go(xs: List<&2, String>, stop: Bool, +x: String, +n: Nat, +back: Bool, +rank: Nat, +cnt: Maybe<&2, Nat>, +maxlen: Nat, +i: Nat, +m: Nat, acc: List<&2, Reply>) -> Reply:
-  match xs stop:
-    case Con{y, rest} False{}:
-      +hit = String.eq(y, x)
-      +m2 = Bool.pick(Nat, hit, 1n+m, m)
-      +take = Bool.and(hit, Nat.is_le(rank, m2))
-      +last = Bool.and(Nat.is_lt(0n, maxlen), Nat.is_le(maxlen, 1n+i))
-      lpos.go(rest, Bool.or(Bool.and(take, lpos.full(cnt, rank, m2)), last), x, n, back, rank, cnt, maxlen, 1n+i, m2, lpos.put(take, Bool.pick(Nat, back, Nat.sub(Nat.sub(n, 1n), i), i), acc))
-    case _ _:
-      lpos.out(cnt, acc)
-
-def lpos.elems(back: Bool, +l: KV.Deq) -> List<&2, String>:
-  match back:
-    case True{}:
-      List.reverse(&2, String, KV.deq.all(l))
-    case False{}:
-      KV.deq.all(l)
-
 def lpos.run(o: LPosOpts, +x: String, +l: KV.Deq) -> Reply:
   match o:
     case LPosOpts{+back, +rank, +cnt, +maxlen}:
-      lpos.go(lpos.elems(back, l), False{}, x, KV.deq.len(l), back, rank, cnt, maxlen, 0n, 0n, Nil{})
+      +n = KV.deq.len(l)
+      lpos.out(cnt, List.drop(&2, Reply, lpos.ints(KV.deq.find(x, back, lpos.want(cnt, rank, n), lpos.reads(maxlen, n), l), Nil{}), Nat.min(Nat.sub(rank, 1n), n)))
     case LPosBad{r}:
       r
 
@@ -19201,32 +19188,8 @@ def lset.fresh(fresh: Bool, +i: String, +v: String, l: KV.Deq) -> Out:
     case False{}:
       lset.of(lnum(i), i, v, l)
 
-# LINSERT: the elements xs with v put before the first p (after it, for
-# after), when one is there; hit says whether xs's first element is p
-def lins.head(+p: String, +xs: List<&2, String>) -> Bool:
-  match xs:
-    case Con{+y, +rest}:
-      String.eq(y, p)
-    case Nil{}:
-      False{}
-
-def lins.put(after: Bool, y: String, v: String, rest: List<&2, String>) -> List<&2, String>:
-  match after:
-    case True{}:
-      y <> (v <> rest)
-    case False{}:
-      v <> (y <> rest)
-
-def lins.go(xs: List<&2, String>, hit: Bool, +after: Bool, +p: String, +v: String, acc: List<&2, String>) -> Maybe<&2, List<&2, String>>:
-  match xs hit:
-    case Con{y, rest} True{}:
-      Some{List.reverse.go(&2, String, acc, lins.put(after, y, v, rest))}
-    case Con{y, +rest} False{}:
-      +h = lins.head(p, rest)
-      lins.go(rest, h, after, p, v, y <> acc)
-    case Nil{} _:
-      None{}
-
+# LINSERT: v put before the first element that is p (after it, for
+# after), when one is there (KV.deq.ins)
 def lins.op(after: Bool, p: String, v: String) -> LWrite:
   match after:
     case True{}:
@@ -19234,10 +19197,10 @@ def lins.op(after: Bool, p: String, v: String) -> LWrite:
     case False{}:
       LWBefore{p, v}
 
-def lins.of(m: Maybe<&2, List<&2, String>>, +n: Nat, +after: Bool, +p: String, +v: String) -> Out:
+def lins.of(m: Maybe<&2, KV.Deq>, +n: Nat, +after: Bool, +p: String, +v: String) -> Out:
   match m:
-    case Some{xs}:
-      Out{r_int(1n+n), CList{lins.op(after, p, v), KV.deq.of(1n+n, xs)}}
+    case Some{d}:
+      Out{r_int(1n+n), CList{lins.op(after, p, v), d}}
     case None{}:
       Out{RInt{INeg{0n}}, CKeep{}}
 
@@ -19247,68 +19210,33 @@ def lins.fresh(fresh: Bool, +after: Bool, +p: String, +v: String, l: KV.Deq) -> 
       Out{r_int(0n), CKeep{}}
     case False{}:
       +d = l
-      +xs = KV.deq.all(d)
-      lins.of(lins.go(xs, lins.head(p, xs), after, p, v, Nil{}), KV.deq.len(d), after, p, v)
+      lins.of(KV.deq.ins(p, after, v, d), KV.deq.len(d), after, p, v)
 
-# LREM: up to k matches of v taken (k 0: all) from the elements xs, the
-# others kept in order; how many were taken
-type LRem is Data:
-  LRem{xs: List<&2, String>, gone: Nat}
-
-def lrem.keep(hit: Bool, y: String, acc: List<&2, String>) -> List<&2, String>:
-  match hit:
-    case True{}:
-      acc
-    case False{}:
-      y <> acc
-
-def lrem.go(xs: List<&2, String>, +v: String, +k: Nat, +gone: Nat, acc: List<&2, String>) -> LRem:
-  match xs:
-    case Nil{}:
-      LRem{List.reverse(&2, String, acc), gone}
-    case Con{+y, rest}:
-      +hit = Bool.and(String.eq(y, v), Bool.or(Nat.is_eq(k, 0n), Nat.is_lt(gone, k)))
-      lrem.go(rest, v, k, Bool.pick(Nat, hit, 1n+gone, gone), lrem.keep(hit, y, acc))
-
-# from the last element (back): the elements reversed, and the rest put
-# back in order
-def lrem.back(back: Bool, r: LRem) -> LRem:
-  match back r:
-    case True{} LRem{xs, gone}:
-      LRem{List.reverse(&2, String, xs), gone}
-    case False{} r:
-      r
-
-def lrem.elems(back: Bool, +l: KV.Deq) -> List<&2, String>:
-  match back:
-    case True{}:
-      List.reverse(&2, String, KV.deq.all(l))
-    case False{}:
-      KV.deq.all(l)
-
-def lrem.ch(none: Bool, all: Bool, +gone: Nat, +n: Nat, +c: String, +v: String, xs: List<&2, String>) -> Out:
+# LREM: up to k matches of v taken (k 0: all), from the first element or
+# the last (KV.deq.rem); how many were taken
+def lrem.ch(none: Bool, all: Bool, +gone: Nat, +n: Nat, +c: String, +v: String, d: KV.Deq) -> Out:
   match none all:
     case True{} _:
       Out{r_int(0n), CKeep{}}
     case False{} True{}:
       Out{r_int(gone), CDel{}}
     case False{} False{}:
-      Out{r_int(gone), CList{LWRem{c, v}, KV.deq.of(Nat.sub(n, gone), xs)}}
+      Out{r_int(gone), CList{LWRem{c, v}, d}}
 
-def lrem.out(r: LRem, +n: Nat, +c: String, +v: String) -> Out:
+def lrem.out(r: KV.Rem, +n: Nat, +c: String, +v: String) -> Out:
   match r:
-    case LRem{xs, +gone}:
-      lrem.ch(Nat.is_eq(gone, 0n), Nat.is_eq(gone, n), gone, n, c, v, xs)
+    case KV.Rem{d, +gone}:
+      lrem.ch(Nat.is_eq(gone, 0n), Nat.is_eq(gone, n), gone, n, c, v, d)
 
 # count c: c of v from the first element (0: every one), -c from the last
 def lrem.of(m: Maybe<&2, Int>, +c: String, +v: String, l: KV.Deq) -> Out:
   match m:
     case Some{IPos{+k}}:
       +d = l
-      lrem.out(lrem.go(KV.deq.all(d), v, k, 0n, Nil{}), KV.deq.len(d), c, v)
+      lrem.out(KV.deq.rem(v, k, False{}, d), KV.deq.len(d), c, v)
     case Some{INeg{+k}}:
       +d = l
-      lrem.out(lrem.back(True{}, lrem.go(lrem.elems(True{}, d), v, 1n+k, 0n, Nil{})), KV.deq.len(d), c, v)
+      lrem.out(KV.deq.rem(v, 1n+k, True{}, d), KV.deq.len(d), c, v)
     case None{}:
       Out{e_int(), CKeep{}}
 
