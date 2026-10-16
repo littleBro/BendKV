@@ -1403,47 +1403,6 @@ def zel.tree(+norm: Bool, es: List<&2, KV.ZEl>, tr: KV.ZTree) -> KV.ZTree:
     case Con{KV.ZEl{m, +d}, rest}:
       zel.tree(norm, rest, KV.zt.add(tr, m, Bool.pick(F.F64, norm, KV.zset.norm(d), d)))
 
-# The tree of elements that come in order, made at once: as balanced as
-# a tree of them can be, each node made once, where adding the elements
-# one at a time copies a path and drops the old one for each. A walk with
-# a list of jobs: build a tree of n elements (its left side first); take
-# the next element as the root of a node of n whose left side is the tree
-# just made (a its size), then build its right side; join that node.
-type ZJob is Data:
-  ZJBuild{n: Nat}
-  ZJRoot{n: Nat, a: Nat}
-  ZJJoin{n: Nat, e: KV.ZEl, l: KV.ZTree}
-
-def zel.join(+norm: Bool, +n: Nat, l: KV.ZTree, e: KV.ZEl, r: KV.ZTree) -> KV.ZTree:
-  match e:
-    case KV.ZEl{m, +d}:
-      KV.ZBin{n, m, Bool.pick(F.F64, norm, KV.zset.norm(d), d), l, r}
-
-# the jobs js run on the elements es, t the tree last made (f bounds the
-# steps: four for each element and one)
-def zel.mach(f: Nat, js: List<&2, ZJob>, es: List<&2, KV.ZEl>, +norm: Bool, t: KV.ZTree) -> KV.ZTree:
-  match f js:
-    case 1n+g Con{ZJBuild{n}, rest}:
-      match n:
-        case 0n:
-          zel.mach(g, rest, es, norm, t)
-        case 1n+(+k):
-          +a = Nat.div(k, 2n)
-          zel.mach(g, ZJBuild{a} <> (ZJRoot{1n+k, a} <> rest), es, norm, t)
-    case 1n+g Con{ZJRoot{+n, +a}, rest}:
-      match es:
-        case Con{e, more}:
-          zel.mach(g, ZJBuild{Nat.sub(Nat.sub(n, 1n), a)} <> (ZJJoin{n, e, t} <> rest), more, norm, KV.ZTip{})
-        case Nil{}:
-          t
-    case 1n+g Con{ZJJoin{+n, e, l}, rest}:
-      zel.mach(g, rest, es, norm, zel.join(norm, n, l, e, t))
-    case _ _:
-      t
-
-def zel.build(+n: Nat, +norm: Bool, es: List<&2, KV.ZEl>) -> KV.ZTree:
-  zel.mach(Nat.add(Nat.mul(4n, n), 4n), [ZJBuild{n}], es, norm, KV.ZTip{})
-
 # 1 for LT, 2 for GT, 0 for EQ
 def zel.cmp.n(c: Cmp) -> Nat:
   match c:
@@ -1489,23 +1448,43 @@ def zel.gt(es: List<&2, KV.ZEl>, +l: Nat) -> Bool:
       Bool.or(Nat.is_lt(l, String.length(m)), zel.gt(rest, l))
 
 # the tree of the n elements es, made at once when they come in order
-# (o 1: from a listpack; o 2: from the greatest, as a skiplist is dumped),
-# else an element at a time
-def zel.tree.of(+o: Nat, +norm: Bool, +n: Nat, es: List<&2, KV.ZEl>) -> KV.ZTree:
+# (o 1: from a listpack; o 2: from the greatest, as a skiplist is dumped,
+# KV.zt.build), else an element at a time
+def zel.tree.of(+o: Nat, +n: Nat, es: List<&2, KV.ZEl>) -> KV.ZTree:
   match o:
     case 1n:
-      zel.build(n, norm, es)
+      KV.zt.build(n, es)
     case 2n:
-      zel.build(n, norm, List.reverse(&2, KV.ZEl, es))
+      KV.zt.build(n, List.reverse(&2, KV.ZEl, es))
     case _:
-      zel.tree(norm, es, KV.ZTip{})
+      zel.tree(False{}, es, KV.ZTip{})
+
+# the elements es, each score as a listpack keeps it when norm
+def zel.norms(+norm: Bool, es: List<&2, KV.ZEl>) -> List<&2, KV.ZEl>:
+  match es:
+    case Nil{}:
+      Nil{}
+    case Con{KV.ZEl{m, +d}, rest}:
+      KV.ZEl{m, Bool.pick(F.F64, norm, KV.zset.norm(d), d)} <> zel.norms(norm, rest)
+
+# the elements es in order, each score as a listpack keeps it when norm
+# (o as for zel.tree.of: those that do not come in order are put in
+# order through a tree)
+def zel.sorted(+o: Nat, +norm: Bool, es: List<&2, KV.ZEl>) -> List<&2, KV.ZEl>:
+  match o:
+    case 1n:
+      zel.norms(norm, es)
+    case 2n:
+      zel.norms(norm, List.reverse(&2, KV.ZEl, es))
+    case _:
+      KV.zt.drain(zel.tree(norm, es, KV.ZTip{}), Nil{})
 
 def val.zset.of(small: Bool, +norm: Bool, +n: Nat, +es: List<&2, KV.ZEl>, t: KV.Trie<F.F64>) -> KV.Val:
   match small:
     case True{}:
-      KV.VColl{KV.CZset{KV.ZSmall{zel.tree.of(zel.order(es), norm, n, es)}}}
+      KV.VColl{KV.CZset{KV.zset.of(n, zel.sorted(zel.order(es), norm, es))}}
     case False{}:
-      KV.VColl{KV.CZset{KV.ZBig{zel.tree.of(zel.order(es), False{}, n, es), t}}}
+      KV.VColl{KV.CZset{KV.ZBig{zel.tree.of(zel.order(es), n, es), t}}}
 
 # a sorted set of the elements es (small: small with them, at most 128;
 # lp: as a listpack or ziplist kept them, each score as its text reads, a
@@ -2125,7 +2104,9 @@ def put.z2(es: List<&2, KV.ZEl>, rest: String) -> String:
 
 def put.zset(z: KV.Zset, rest: String) -> String:
   match z:
-    case KV.ZSmall{+tr}:
+    case KV.ZSmall{+n, +b}:
+      put.blob(lp.blob(zel.words(KV.zb.all(n, b)), Nat.mul(2n, n)), rest)
+    case KV.ZWide{+tr}:
       put.blob(lp.blob(zel.words(KV.zt.all(tr)), Nat.mul(2n, KV.zt.size(tr))), rest)
     case KV.ZBig{+tr, t}:
       len.put(KV.zt.size(tr), put.z2(List.reverse(&2, KV.ZEl, KV.zt.all(tr)), rest))
@@ -2165,7 +2146,9 @@ def put.mems.kind(+m: KV.Mems) -> U32:
 
 def put.zset.kind(+z: KV.Zset) -> U32:
   match z:
-    case KV.ZSmall{tr}:
+    case KV.ZSmall{n, b}:
+      17
+    case KV.ZWide{tr}:
       17
     case KV.ZBig{tr, t}:
       5

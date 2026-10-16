@@ -152,9 +152,11 @@ translation stays in the trusted base.
   LRANGE, LSET, LINSERT, LREM, LTRIM, LPOS (RANK, COUNT, MAXLEN, read as Redis 7.0.15
   reads them, a RANK of LLONG_MIN included), LMOVE, RPOPLPUSH and LMPOP, their arguments
   and errors read where and as Redis reads them (a count or an index may be any long
-  long). A list is a deque of two stacks, so a push or a pop at either end costs O(1)
-  amortized, and LINDEX and LRANGE walk from the nearer end; a key never holds an empty
-  list. OBJECT ENCODING answers `quicklist`, as Redis 7.0 does for every list, and
+  long). A list is a deque of two stacks of pieces of up to 2,048 bytes, each its
+  elements one after another, as Redis's quicklist is a chain of listpacks (a small
+  element takes its length's byte more than its bytes), so a push or a pop at either end
+  costs O(1) amortized, and LINDEX, LSET and LRANGE go from the nearer end a piece at a
+  time; a key never holds an empty list. OBJECT ENCODING answers `quicklist`, as Redis 7.0 does for every list, and
   MEMORY USAGE estimates its bytes. A list write is logged as the write itself (LMPOP as
   the LPOP or RPOP of the key it took from, with its count; a pop of the last elements as
   the DEL of the key); a list made where a key whose time had passed still lay is logged
@@ -185,10 +187,13 @@ translation stays in the trusted base.
   server's random numbers), ZSCAN, ZUNION, ZINTER, ZDIFF, their STOREs, ZINTERCARD
   (LIMIT) and ZRANGESTORE, their arguments and errors read where and as Redis reads them.
   Scores are doubles, read, written, compared and added as C's are (`src/float.bend`),
-  with Redis's rules for infinities. A sorted set is one weight-balanced tree of its
-  elements in Redis's order, by score and then member, and past a listpack's limits (128
-  elements, members of 64 bytes) the same tree with a trie of its members, for good, as
-  Redis turns a listpack into a skiplist: a small one answers as Redis's listpack does
+  with Redis's rules for infinities. A sorted set keeps its elements in Redis's order, by
+  score and then member: while it is small (at most 128 elements, members of at most 64
+  bytes, Redis's listpack defaults) in one string, each element its member and its
+  score's 8 bytes, as a listpack keeps them in one allocation (in a weight-balanced tree
+  once that string would pass one buffer of the runtime, 2,048 bytes), and past the
+  limits in the tree with a trie of its members, for good, as Redis turns a listpack
+  into a skiplist: a small one answers as Redis's listpack does
   (no `-0` score, a range by member walked from its first element, ZSCAN whole with
   cursor 0, its integer scores as digits). OBJECT ENCODING answers `listpack` or
   `skiplist`, MEMORY USAGE estimates a sorted set's bytes, and a key never holds an
@@ -901,7 +906,7 @@ away.
 
 | file | lines of code | of them written by a generator | the laws import it |
 |---|---:|---:|---|
-| `src/map.bend` | 2,400 | 640 | yes |
+| `src/map.bend` | 3,200 | 640 | yes |
 | `src/redis.bend` | 18,000 | 7,400 | yes |
 | `src/batch.bend` | 84 |  | yes |
 | `src/aof.bend` | 1,200 |  | yes |
@@ -923,7 +928,7 @@ away.
 | `proof/LAWS.bend` | 920 | 20 |  |
 | `proof/SPEC.bend` | 370 |  |  |
 | `proof/PROOF.bend` | 16,000 | 2,800 |  |
-| `src/`, the 6 files the laws import | 25,000 | 8,200 |  |
+| `src/`, the 6 files the laws import | 28,000 | 9,000 |  |
 | `src/`, the 13 others | 26,000 | 2,600 |  |
 | `proof/` | 18,000 | 2,800 |  |
 <!-- END gen_counts: numbers -->
