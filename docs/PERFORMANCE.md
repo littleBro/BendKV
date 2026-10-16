@@ -7601,7 +7601,9 @@ this change, twice each):
 
 The second runs counted 3,436, 4,204 and 4,544 before, and 3,454, 4,248 and 4,565 with
 this change. With 100 clients in BLPOP, GET 3,567 and SET 4,405, 3.2% and 3.6% above the
-counts without them (before: 3.2% and 3.6%).
+counts without them (before: 3.2% and 3.6%). With main's #98 merged in as well, the
+branch counts GET 3,460, SET 4,249 and INCR 4,568 (baseline 3,452, 4,214 and 4,552), and
+3.1% and 3.6% more with the clients in BLPOP.
 
 Before the merge of CLIENT TRACKING, against #72 at 32b0cc1 (3,415, 4,177 and 4,521 in
 three runs, within 2 instructions), this change counted 3,434, 4,222 and 4,539, the
