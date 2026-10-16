@@ -7645,14 +7645,17 @@ the million, one at a time, each awaited; medians of three rounds, the servers i
 
 | | BGSAVE | SETs served meanwhile | SET's latency: median, 99th percentile, highest | resident memory: before, highest | Redis's copy on write |
 |---|---:|---:|---:|---:|---:|
-| BendKV | 4.43 s | 13,000 | 213 µs, 716 µs, 45 ms | 203 MB, 234 MB | |
-| Redis 7.0.15 | 2.31 s | 32,300 | 56 µs, 169 µs, 2.5 ms | 205 MB, 205 MB | 140 MB |
+| BendKV | 5.12 s | 12,350 | 250 µs, 1.28 ms, 57 ms | 204 MB, 235 MB | |
+| Redis 7.0.15 | 2.63 s | 31,200 | 63 µs, 195 µs, 13 ms | 205 MB, 205 MB | 140 MB |
 
 Redis's child writes the file on a core of its own while the parent answers; BendKV's
 actor writes it a slice at a time between the requests it answers, so a request that
 comes while a slice is written waits for it, and the save takes longer than a SAVE of
 the same keys (3.36 s, section 67). The snapshot costs BendKV the nodes the writes copy:
-31 MB for 13,000 SETs, where Redis's child had 140 MB of pages copied for 32,300.
+31 MB for 12,350 SETs, where Redis's child had 140 MB of pages copied for 31,200. (The
+same measure before the merge of CLIENT TRACKING, at another hour of the shared machine:
+BendKV 4.43 s, 13,000 SETs, 213 µs, 716 µs and 45 ms; Redis 2.31 s, 32,300 SETs, 56 µs,
+169 µs and 2.5 ms.)
 
 **What is left.** The walk of SET's replies (34 instructions a request) could go where the
 replies are already walked: the encoder, or the look for errors, which SET does not take.
