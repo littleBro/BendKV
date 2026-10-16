@@ -415,7 +415,19 @@ def main():
         if cmd(kc, "DBSIZE") != left or sorted(cmd(kc, "KEYS", "*")[1]) != keys:
             fail("started again from the file: %r keys, %r before" % (cmd(kc, "DBSIZE"), left))
         ok("keys evicted with the append-only file on: %d left, and as many started again from the file" % int(left[1]))
-        # an eviction while a rewrite runs counts the evicted keys as freed
+        # an eviction while a rewrite runs counts what it lets go as freed:
+        # the keys, and the nodes its DELs copy, which the snapshot still
+        # holds (issue #100: counted short, the eviction went on as long
+        # as the rewrite ran, 14% of the keys left after 3 s). It keeps
+        # about 91% while the rewrite runs. Once the rewrite has ended, the
+        # heap holds about 8% of the keys' share more than before it, until
+        # the keys are set again (FINDINGS.md, section 3zzzr), and the
+        # eviction goes on to about 79% (Redis, whose child frees nothing
+        # in the parent, keeps 87% whatever the wait). The count is read
+        # after 3 s, then again once the rewrite has ended, the limit still
+        # set: more than 200,000 both times. Before the fix, 41,024 were
+        # left at the rewrite's end here, and CI's runner had 128,352 left
+        # after 0.5 s.
         cmd(kc, "FLUSHALL")
         base = used(kc)
         fill(kc, 300000)
@@ -423,13 +435,15 @@ def main():
         cmd(kc, "BGREWRITEAOF")
         cmd(kc, "CONFIG", "SET", "maxmemory-policy", "allkeys-lru")
         cmd(kc, "CONFIG", "SET", "maxmemory", full - (full - base) // 10)
-        time.sleep(0.5)
+        time.sleep(3)
         n = int(cmd(kc, "DBSIZE")[1])
-        cmd(kc, "CONFIG", "SET", "maxmemory", "0")
         wait_for(lambda: info(kc, b"persistence")["aof_rewrite_in_progress"] == "0", 60)
-        if not (150000 < n < 300000):
-            fail("an eviction while a rewrite runs left %d of 300000 keys" % n)
-        ok("an eviction while a rewrite runs: %d of 300000 keys left" % n)
+        time.sleep(0.5)
+        m = int(cmd(kc, "DBSIZE")[1])
+        cmd(kc, "CONFIG", "SET", "maxmemory", "0")
+        if not (200000 < n < 300000 and 200000 < m <= n):
+            fail("an eviction while a rewrite runs left %d of 300000 keys after 3 s, %d once it ended" % (n, m))
+        ok("an eviction while a rewrite runs: %d of 300000 keys left after 3 s, %d once it ended" % (n, m))
     finally:
         stop(kp)
     print("maxmemory: all OK")

@@ -15,20 +15,20 @@ comes after those of the commands before it.
 
 The scenarios follow Redis's unit/introspection and what monitorCommand,
 call() and replicationFeedMonitors do: the lines of commands as sent
-(their case, quoted bytes, an inline request split, numbers), what is
-not shown (unknown commands, the wrong number of arguments, CONFIG,
-CLIENT LIST, KILL and NO-EVICT, MONITOR), transactions (MULTI, the
-queued commands at EXEC, before EXEC; errors, DISCARD, a nested MULTI,
-WATCH, an EXEC refused), the database after SELECT and SWAPDB, the
-redaction of AUTH and HELLO, blocking commands (shown when they block,
-not when served; the rest of a pipeline after one), the monitor's own
-commands (its reply first, then its line; a command that reads or writes
-keys refused; MONITOR again answered nothing; MULTI), a subscribed
-client, a subscribed monitor, CLIENT REPLY OFF and SKIP of a monitor,
-RESET and QUIT of a monitor, a client without a password, a monitor
-started while a transaction is queued or a client waits with a pipeline
-after its blocking command, CLIENT LIST's flag O, CLIENT KILL of a
-monitor, and the statistics of INFO.
+(their case, quoted bytes, an inline request split, numbers, a long
+request in three reads), what is not shown (unknown commands, the wrong
+number of arguments, CONFIG, CLIENT LIST, KILL and NO-EVICT, MONITOR),
+transactions (MULTI, the queued commands at EXEC, before EXEC; errors,
+DISCARD, a nested MULTI, WATCH, an EXEC refused), the database after
+SELECT and SWAPDB, the redaction of AUTH and HELLO, blocking commands
+(shown when they block, not when served; the rest of a pipeline after
+one), the monitor's own commands (its reply first, then its line; a
+command that reads or writes keys refused; MONITOR again answered
+nothing; MULTI), a subscribed client, a subscribed monitor, CLIENT REPLY
+OFF and SKIP of a monitor, RESET and QUIT of a monitor, a client without
+a password, a monitor started while a transaction is queued or a client
+waits with a pipeline after its blocking command, CLIENT LIST's flag O,
+CLIENT KILL of a monitor, and the statistics of INFO.
 
 The checks under load: four monitors and 20 clients that each pipeline
 200 commands: each monitor gets every line, each client's in its order.
@@ -153,6 +153,16 @@ def scenarios(port, log):
     a.raw(enc(["SET", "n", "12345"]) + enc(["INCR", "n"]) + enc(["SET", "n", "-0"]) + enc(["SET", "n", "007"]))
     log("2 numbers", [a.read() for _ in range(4)], mk.lines(m, cs))
     log("2 empty", a.cmd("SET", "", ""), a.cmd("GET", ""), mk.lines(m, cs))
+    # a long request in three reads: the parse goes on from the bulk each
+    # read stopped in (issue #85), and its line shows all its arguments
+    big = enc(["RPUSH", "L"] + ["e%011d" % i for i in range(400)])
+    k1, k2 = big.index(b"\r\n$", 2100) + 9, big.index(b"\r\n$", 5000) + 5
+    a.raw(big[:k1])
+    time.sleep(0.2)
+    a.raw(big[k1:k2])
+    time.sleep(0.2)
+    a.raw(big[k2:] + enc(["SET", "after", "1"]))
+    log("2 long", a.read(), a.read(), mk.lines(m, cs))
     # 3. what is not shown, and what is
     log("3 unseen", a.cmd("NOSUCH", "x"), a.cmd("GET"), a.cmd("CONFIG", "GET", "maxmemory"), a.cmd("CONFIG", "NOSUCH"),
         a.cmd("CLIENT", "NOSUCH"), a.cmd("CLIENT", "INFO", "x"), a.cmd("CLIENT", "KILL", "ID", "999999"),
