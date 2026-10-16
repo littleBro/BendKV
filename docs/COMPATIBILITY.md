@@ -334,7 +334,9 @@ files that straddle the windows the start reads them in, cut short or with a tra
 left open, against `redis-server` (`tests/aof_window_test.py`; where BendKV differs: a
 file that ends inside a transaction, then in an entry cut short, BendKV cuts back to
 before the MULTI and Redis after the transaction's last whole entry, which its next
-start reverts, the databases the same), and its
+start reverts, the databases the same), the RDB file (`tests/rdb_test.py`: files of
+Redis's and of BendKV's, each loaded by both, SAVE and the saves of SHUTDOWN and
+FLUSHALL), and the append-only file's
 rewrite (`tests/rewrite_test.py`: BGREWRITEAOF's replies
 and INFO's fields against Redis's, the rewritten file against Redis's base, writes during a
 rewrite, BendKV and Redis started from the new file; Redis's unit/aofrw is tagged

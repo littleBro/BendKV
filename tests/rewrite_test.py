@@ -679,8 +679,11 @@ def main():
         grow = size * 100 // base - 100
         cmd(cb, b"CONFIG", b"SET", b"auto-aof-rewrite-percentage", b"%d" % (grow + 50))
         none(1, "a rewrite of a file grown by less than the percentage")
-        cmd(cb, b"CONFIG", b"SET", b"auto-aof-rewrite-percentage", b"1")
+        # the minimum raised before the percentage is lowered: the other way
+        # round, a tick of the cron between the two would find the file
+        # grown past the percentage over the old minimum, and rewrite it
         cmd(cb, b"CONFIG", b"SET", b"auto-aof-rewrite-min-size", b"%d" % (size + 1000))
+        cmd(cb, b"CONFIG", b"SET", b"auto-aof-rewrite-percentage", b"1")
         none(1, "a rewrite of a file under its minimum")
         cmd(cb, b"CONFIG", b"SET", b"auto-aof-rewrite-min-size", b"0")
         rewrites(2, "no rewrite of a file grown by the percentage past its minimum")
