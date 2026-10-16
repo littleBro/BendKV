@@ -607,6 +607,12 @@ def srv.blocked(s: Srv, +n: Nat, +t: Nat) -> Srv:
     case Srv{pass, cfg, info, mm}:
       Srv{pass, cfg, I.info.blocked(info, n, t), mm}
 
+# the tracking's counts, for INFO (server.bend: Tracking)
+def srv.tracking(s: Srv, +a: Nat, +b: Nat, +d: Nat, +e: Nat) -> Srv:
+  match s:
+    case Srv{pass, cfg, info, mm}:
+      Srv{pass, cfg, I.info.tracking(info, a, b, d, e), mm}
+
 # The timing of calls (info.bend: Timing a window): the window since the
 # clock's last reading timed, with the slow log's entries it found for
 # the shell to complete; the call of the general way about to run named,
@@ -2752,7 +2758,7 @@ def cl.argv(args: List<&2, String>, +n: Nat) -> Nat:
       cl.argv(rest, Nat.add(n, String.length(a)))
 
 def cl.alone.line(+c: Conn, +info: Bool, +argv: Nat) -> String:
-  R.client.line(R.ClLine{conn.id(c), "?:0", "?:0", 0n, conn.name(c), 0n, 0n, "N", conn.db(c), 0n, 0n, 0n, None{}, 0n, argv, cl.cmd(info), conn.r3(c)}) ++ "\n"
+  R.client.line(R.ClLine{conn.id(c), "?:0", "?:0", 0n, conn.name(c), 0n, 0n, "N", conn.db(c), 0n, 0n, 0n, None{}, 0n, argv, cl.cmd(info), "-1", conn.r3(c)}) ++ "\n"
 
 def cl.ids(ids: List<&2, Nat>, +c: Conn, +argv: Nat, acc: String) -> String:
   match ids:
@@ -2784,6 +2790,14 @@ def cl.reply(op: R.ClOp, +c: Conn, +argv: Nat) -> R.Reply:
       R.r_ok()
     case R.CoUnpause{}:
       R.r_ok()
+    case R.CoTrack{on, opts}:
+      R.r_ok()
+    case R.CoCaching{yes}:
+      R.RError{"ERR CLIENT CACHING can be called only when the client is in tracking mode with OPTIN or OPTOUT mode enabled"}
+    case R.CoGetRedir{}:
+      R.RInt{R.INeg{0n}}
+    case R.CoTrackInfo{}:
+      R.tracking_info()
     case R.CoBad{r}:
       r
 
