@@ -36,7 +36,8 @@
 # SCAN and RANDOMKEY, keys that expire, numbers at
 # their edges in every argument that is one, BITFIELD's fields at
 # random, hashes, lists, sets and sorted sets, SORT and SORT_RO,
-# HyperLogLogs and GEO (each in RESP2 and RESP3), DUMP and RESTORE, and
+# HyperLogLogs and GEO (each in RESP2 and RESP3), DUMP and RESTORE (of
+# streams too, which Redis makes), and
 # RESP3 (its
 # scenarios, and the differential tests again in RESP3); then stops
 # them. Then the append-only file: a
@@ -158,6 +159,7 @@ for n in "" post send "post build/test.aof everysec"; do
     python3 tests/hll_test.py --bendkv "$PORT" --redis "$REDIS_PORT"
     python3 tests/geo_test.py --bendkv "$PORT" --redis "$REDIS_PORT"
     python3 tests/dump_test.py --bendkv "$PORT" --redis "$REDIS_PORT"
+    python3 tests/stream_dump_test.py --bendkv "$PORT" --redis "$REDIS_PORT"
     # RESP3: its scenarios, then the differential tests again with each
     # connection in RESP3 (HELLO 3)
     python3 tests/resp3_test.py --bendkv "$PORT" --redis "$REDIS_PORT"
