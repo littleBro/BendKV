@@ -7176,8 +7176,8 @@ request of issue 68.
 - The globals are protected as Redis protects them. A load sends the globals' lookups to
   the library API, a call to the real globals, both through the globals' metatable,
   which Redis leaves writable after a first load.
-- A load is held to 500 ms by a count hook, as FUNCTION LOAD is. A start's loads are held
-  to no time, as Redis holds none for a client it must obey.
+- A load is held to 500 ms by a count hook, as FUNCTION LOAD is. A start's loads are
+  held to no time, as Redis holds none for a client it must obey.
 - RESTORE's libraries are made in a set of their own, then joined as Redis's
   `libraryJoin` joins them: APPEND fails on a library or a function there already,
   REPLACE replaces the libraries of the same names, and FLUSH swaps the sets.
@@ -7253,8 +7253,8 @@ request of issue 68.
 - A library's `redis.log` line was left in the load's answer, before the library's name
   or the error.
 - FUNCTION LOAD's error for an unknown option ends with the code, and Redis's
-  `addReplyErrorFormat` drops the CRs and LFs that end it before it turns the others into
-  spaces. The parser turned them all into spaces.
+  `addReplyErrorFormat` drops the CRs and LFs that end it before it turns the others
+  into spaces. The parser turned them all into spaces.
 - The answers of the commands that came in one group with a long script waited for the
   script's end. unit/scripting's test of a false dead client, run on functions, hung on
   it. This was a fault of section 3zzzd's driver, and its pull request carries the fix
@@ -7266,8 +7266,8 @@ request of issue 68.
   (`shared.slowscripterr`).
 - FUNCTION RESTORE's error for a bad payload is DUMP's: "DUMP payload version or
   checksum are wrong".
-- LOAD quotes the library's name in "Library 'x' already exists"; RESTORE's join does not
-  ("Library x already exists").
+- LOAD quotes the library's name in "Library 'x' already exists"; RESTORE's join does
+  not ("Library x already exists").
 - A start whose RDB file holds a library that cannot be made exits with 0. Redis stops
   as for a read that fails and runs redis-check-rdb on the file. The check reads the
   libraries without making them, finds the file whole, and exits 0 ("RDB looks OK!").
@@ -7278,7 +7278,9 @@ request of issue 68.
 - FUNCTION LIST and FUNCTION DUMP give the libraries in the order they were loaded, and
   a library's functions in the order they were registered. Redis's order follows its
   dictionaries' hashes, seeded at random at each start, so no order of Redis's is
-  stable.
+  stable. So does the name an error of a load gives when more than one of the library's
+  functions is there already: BendKV names the first registered, Redis either (of 8
+  starts of redis-server, 5 named one and 3 the other).
 - A FUNCTION command in a transaction is written to the append-only file before the
   transaction's entries, not inside them. A file cut inside the transaction keeps the
   command.
@@ -7291,7 +7293,21 @@ request of issue 68.
 
 **What it costs** (section 76 of [PERFORMANCE.md](PERFORMANCE.md)). Nothing for the
 commands that are neither scripts nor functions: `make perfcheck`'s counts are #99's.
-FCALL_COST.
+Pipelined 16 deep, FCALL of a function that returns at once costs 50,060 instructions a
+request, 3,100 fewer than EVALSHA, and a call in a function about 28,200 more.
+
+- The first build made every script 5,500 instructions dearer. The functions' state in
+  the scripts' state widened its node, which the copies of section 3zzzd then copied,
+  and each script's end set the functions' state from a copy of it.
+- As the scripts' state now is, the functions' state is read and changed in place. A
+  reader computes its answer inside the matches of `Ps` and `Scr` (`ps.fi.fn`,
+  `ps.fi.none`, `ps.fi.stats`), and a change is a `FiOp` made to the `Fni` in them
+  (`ps.fi.do`: the mirror made anew, an entry for the file kept or taken out, a
+  function's run, its time and its end).
+- FCALL looks its function's name up in the mirror as given first, and lowers it only
+  when the mirror has it not as given, as EVALSHA looks up its sha.
+- EVAL costs about 1,000 instructions more than on #99's head, for the way between
+  scripts and functions.
 
 **Tests.**
 
@@ -7319,8 +7335,8 @@ FCALL_COST.
 - `tests/rewrite_test.py`: the rewritten file holds Redis's base, its FUNCTION LOADs in
   any order, and both start from it with the libraries.
 - Client suites: redis-py 8.1.0's 7 tests of functions pass in each protocol (2,640 of
-  the 2,753 tests Redis passes), and go-redis v9.23.0's 6 (433 of 460). Their entries are
-  off `tools/data/clients.json`; none is added.
+  the 2,753 tests Redis passes), and go-redis v9.23.0's 6 (433 of 460). Their entries
+  are off `tools/data/clients.json`; none is added.
 - Redis's suite ([COMPATIBILITY.md](COMPATIBILITY.md)): 1,512 of the 1,677 tests Redis
   passes (90.2%; 1,318 before), and 1,511 of the 1,565 in what BendKV has (96.5%).
   - unit/functions passes all the 90 Redis passes; its other four use DEBUG RELOAD.

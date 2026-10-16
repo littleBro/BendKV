@@ -7820,3 +7820,66 @@ Redis's files are smaller: it writes these values, a digit repeated, with LZF, w
 BendKV does not write (3zzzc). `make perfcheck` on this change: GET 3,491, SET 4,235 and
 INCR 4,577 instructions per request (baseline 3,452, 4,214 and 4,552), with 100 clients
 in BLPOP 2.7% and 3.9% more.
+
+## 76. Functions: FUNCTION and FCALL
+
+**What was added** (FINDINGS 3zzzp). FCALL and FCALL_RO run a function of a library on
+the engine of section 68, as EVAL runs a script: the client's batch waits, and the
+driver runs the function a step at a time. The actor keeps a mirror of the functions'
+names and flags in the scripts' state (`Fni`), for FCALL's lookup, for the pause and for
+maxmemory.
+
+**Measured** (`tools/script_cost.sh`, as in section 68: callgrind, instructions per
+request, 20 clients pipelining 16 deep, 100,000 keys; Redis 7.0.15 under the same load):
+
+| request | BendKV | Redis |
+|---|---:|---:|
+| `FCALL one 0`, a function that returns 1 | 50,060 | 7,784 |
+| `FCALL get1 1 <key>`, a function that calls GET | 78,250 | 13,530 |
+| `EVAL "return 1" 0` | 57,815 | 15,087 |
+| EVALSHA of it | 53,117 | 9,834 |
+| a script that calls GET | 84,867 | 19,133 |
+| GET, beside them | 3,495 | 3,538 |
+
+FCALL costs 3,100 instructions less than EVALSHA. A sha is 40 bytes, which the parser
+and the mirror hash and compare, and which the engine converts for its cache and makes a
+Lua string of, to find the script's function in Lua's registry (`f_<sha>`, as Redis
+does); a function's name is short. Redis's FCALL is the cheaper of its two as well, by
+2,050. A call of a function costs about 28,200 instructions (78,250 against 50,060), a
+call of a script about 27,100 (section 68).
+
+**On the way.** The first build of this change (252ef8d) cost `EVAL "return 1" 0` 67,221
+instructions, 5,510 more than #99's head then (61,711), and FCALL 63,761. The functions'
+state in the scripts' state made `Scr`'s node twice as wide, so each of the copies of it
+that section 68 found cost more, 713 instructions a copy against 402, and each script's
+end set the functions' state from a copy of it, a seventh copy. The scripts' state and
+the functions' are now read and changed in place (FINDINGS 3zzzd, 3zzzp), and FCALL
+looks its function's name up in the mirror as given first, lowered only when the mirror
+has it not as given (as EVALSHA's sha: a name lowered is a string made again, about 300
+instructions, three lookups an FCALL; 50,983 before). With main merged in to both, EVAL
+costs 57,815 here and 56,824 on #99's head: about 1,000 instructions for the way between
+scripts and functions (FCALL's early check, the flags of a script command, a wider
+state of a script to drop at its end).
+
+**In time** (`tools/script_bench.sh`, as in section 68: 50 clients, requests per
+second, BendKV and Redis 7.0.15 on the same machine, the runs of a test taking turns;
+medians of five runs, and of their ratios):
+
+| request | BendKV, one at a time | Redis | ratio | BendKV, 16 deep | Redis | ratio |
+|---|---:|---:|---:|---:|---:|---:|
+| GET | 88,496 | 99,305 | 0.91 | 1,194,030 | 809,717 | 1.40 |
+| EVALSHA of `return 1` | 86,356 | 90,992 | 0.89 | 123,077 | 740,741 | 0.17 |
+| `FCALL one 0` | 88,028 | 90,334 | 1.03 | 138,074 | 819,672 | 0.17 |
+| `FCALL get1 1 <key>` | 60,976 | 106,838 | 0.54 | 77,474 | 405,268 | 0.19 |
+
+One at a time, FCALL runs as fast as Redis's and a function that calls GET at about half
+of Redis's rate, for its call (section 68). Pipelined 16 deep, functions run at 0.17 to
+0.19 of Redis's throughput, bound by the actor's instructions as scripts are, and FCALL
+at 1.12 times EVALSHA's rate, as their instructions say.
+
+**`make perfcheck`**: GET 3,471, SET 4,236 and INCR 4,580 instructions per request,
+within 0.6% of the baseline, and 3.1% and 3.7% above those with 100 clients in BLPOP:
+#99's counts (section 68: 3,472, 4,241 and 4,583), with the work loop's bank of 49
+words. One run of the same build beside other work (a callgrind run of the scripts and
+a check of the proofs) gave GET 3,506 and INCR 4,607, 1% more: the counts move with the
+load of the machine, so they are compared on a quiet one.

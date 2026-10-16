@@ -412,7 +412,8 @@ translation stays in the trusted base.
   Where BendKV differs:
   - FUNCTION LIST and DUMP give the libraries in the order they were loaded, and a
     library's functions in the order they were registered. Redis's order follows its
-    dictionaries' hashes, seeded at random at each start.
+    dictionaries' hashes, seeded at random at each start, and so does the function
+    that a load's error names when more than one of the library's is there already.
   - A FUNCTION command in a transaction is written to the append-only file before the
     transaction, not inside it.
   - INFO's `used_memory_vm_functions` is 0 until the first load, where Redis makes an
