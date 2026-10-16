@@ -1140,6 +1140,16 @@ def int_into(i: R.Int, out: String) -> String:
     case R.INeg{n}:
       ":-" ++ Nat.show(1n+n) ++ crlf() ++ out
 
+# how many replies xs holds, before n: a loop over the list lent, where
+# List.length takes its list and counts it in a call per item, none of
+# them a tail call (about 70 instructions an item of LRANGE's reply)
+def replies.len(+xs: List<&2, R.Reply>, +n: Nat) -> Nat:
+  match xs:
+    case Nil{}:
+      n
+    case Con{x, +rest}:
+      replies.len(rest, 1n+n)
+
 # an aggregate's header: its mark and its count
 def agg_into(+m: String, +n: Nat, out: String) -> String:
   m ++ Nat.show(n) ++ crlf() ++ out
@@ -1164,7 +1174,7 @@ def encode_onto(rs: List<&2, R.Reply>, out: String) -> String:
     case Con{R.RNull{}, rest}:
       "$-1\r\n" ++ encode_onto(rest, out)
     case Con{R.RArray{+xs}, rest}:
-      "*" ++ Nat.show(List.length(&2, R.Reply, xs)) ++ crlf() ++ encode_onto(xs, encode_onto(rest, out))
+      "*" ++ Nat.show(replies.len(xs, 0n)) ++ crlf() ++ encode_onto(xs, encode_onto(rest, out))
     case Con{R.RIntS{s}, rest}:
       ":" ++ s ++ crlf() ++ encode_onto(rest, out)
     case Con{R.RNullA{}, rest}:
@@ -1172,17 +1182,17 @@ def encode_onto(rs: List<&2, R.Reply>, out: String) -> String:
     case Con{R.RDbl{s}, rest}:
       bulk_into(s, encode_onto(rest, out))
     case Con{R.RMap{+xs}, rest}:
-      agg_into("*", List.length(&2, R.Reply, xs), encode_onto(xs, encode_onto(rest, out)))
+      agg_into("*", replies.len(xs, 0n), encode_onto(xs, encode_onto(rest, out)))
     case Con{R.RSet{+xs}, rest}:
-      agg_into("*", List.length(&2, R.Reply, xs), encode_onto(xs, encode_onto(rest, out)))
+      agg_into("*", replies.len(xs, 0n), encode_onto(xs, encode_onto(rest, out)))
     case Con{R.RPairs{+xs}, rest}:
-      agg_into("*", Nat.mul(List.length(&2, R.Reply, xs), 2n), encode_onto(xs, encode_onto(rest, out)))
+      agg_into("*", Nat.mul(replies.len(xs, 0n), 2n), encode_onto(xs, encode_onto(rest, out)))
     case Con{R.RPair{xs}, rest}:
       encode_onto(xs, encode_onto(rest, out))
     case Con{R.RVerb{s}, rest}:
       bulk_into(s, encode_onto(rest, out))
     case Con{R.RPush{+xs}, rest}:
-      agg_into("*", List.length(&2, R.Reply, xs), encode_onto(xs, encode_onto(rest, out)))
+      agg_into("*", replies.len(xs, 0n), encode_onto(xs, encode_onto(rest, out)))
     case Con{R.RSw{r3, xs}, rest}:
       encode_onto(xs, encode_onto(rest, out))
 
@@ -1205,7 +1215,7 @@ def encode3_onto(rs: List<&2, R.Reply>, out: String) -> String:
     case Con{R.RNull{}, rest}:
       "_\r\n" ++ encode3_onto(rest, out)
     case Con{R.RArray{+xs}, rest}:
-      agg_into("*", List.length(&2, R.Reply, xs), encode3_onto(xs, encode3_onto(rest, out)))
+      agg_into("*", replies.len(xs, 0n), encode3_onto(xs, encode3_onto(rest, out)))
     case Con{R.RIntS{s}, rest}:
       ":" ++ s ++ crlf() ++ encode3_onto(rest, out)
     case Con{R.RNullA{}, rest}:
@@ -1213,17 +1223,17 @@ def encode3_onto(rs: List<&2, R.Reply>, out: String) -> String:
     case Con{R.RDbl{s}, rest}:
       "," ++ s ++ crlf() ++ encode3_onto(rest, out)
     case Con{R.RMap{+xs}, rest}:
-      agg_into("%", Nat.div(List.length(&2, R.Reply, xs), 2n), encode3_onto(xs, encode3_onto(rest, out)))
+      agg_into("%", Nat.div(replies.len(xs, 0n), 2n), encode3_onto(xs, encode3_onto(rest, out)))
     case Con{R.RSet{+xs}, rest}:
-      agg_into("~", List.length(&2, R.Reply, xs), encode3_onto(xs, encode3_onto(rest, out)))
+      agg_into("~", replies.len(xs, 0n), encode3_onto(xs, encode3_onto(rest, out)))
     case Con{R.RPairs{+xs}, rest}:
-      agg_into("*", List.length(&2, R.Reply, xs), encode3_onto(xs, encode3_onto(rest, out)))
+      agg_into("*", replies.len(xs, 0n), encode3_onto(xs, encode3_onto(rest, out)))
     case Con{R.RPair{+xs}, rest}:
-      agg_into("*", List.length(&2, R.Reply, xs), encode3_onto(xs, encode3_onto(rest, out)))
+      agg_into("*", replies.len(xs, 0n), encode3_onto(xs, encode3_onto(rest, out)))
     case Con{R.RVerb{+s}, rest}:
       "=" ++ Nat.show(Nat.add(String.length(s), 4n)) ++ crlf() ++ "txt:" ++ s ++ crlf() ++ encode3_onto(rest, out)
     case Con{R.RPush{+xs}, rest}:
-      agg_into(">", List.length(&2, R.Reply, xs), encode3_onto(xs, encode3_onto(rest, out)))
+      agg_into(">", replies.len(xs, 0n), encode3_onto(xs, encode3_onto(rest, out)))
     case Con{R.RSw{r3, xs}, rest}:
       encode3_onto(xs, encode3_onto(rest, out))
 
@@ -1276,4 +1286,4 @@ def encode_as.go(fuel: Nat, r3: Bool, c: SwCut, out: String) -> String:
 
 # a batch's replies, its client in RESP3 (r3) or RESP2 as it began
 def encode_as(r3: Bool, +rs: List<&2, R.Reply>) -> String:
-  encode_as.go(List.length(&2, R.Reply, rs), r3, sw.cut(rs, Nil{}), SNil{})
+  encode_as.go(replies.len(rs, 0n), r3, sw.cut(rs, Nil{}), SNil{})
