@@ -6445,7 +6445,7 @@ against a server it did not start; none passed on BendKV.
 - It is Redis 7.0.15's own Lua: Lua 5.1.5 with Redis's changes (read-only tables, the
   protected globals), cjson, cmsgpack, struct and bit, and three helpers of Redis's
   (`resp_parser.c`, `sha1.c`, `rand.c`). That is 35 C files, about 20,600 lines with their
-  headers, as Redis ships them but for one change (below). `make build` compiles them
+  headers, as Redis ships them but for two changes (below). `make build` compiles them
   beside the C that Bend emits.
 - The glue, about 2,100 lines of C, is ported from Redis's `script_lua.c`, `eval.c` and
   `script.c`: the sandbox, the `redis` table and its functions, the conversions between
@@ -6474,7 +6474,15 @@ against a server it did not start; none passed on BendKV.
   vendored sources (`string.format`, `struct`, cmsgpack's test of an integer, cjson's
   array length), now goes through three functions in `luaconf.h`, the place Lua leaves
   for its conversions. They give gcc's results, defined in C (checked against gcc's casts
-  on 20 million doubles), and are the one change to the vendored sources (NOTICE).
+  on 20 million doubles), and are the first change to the vendored sources (NOTICE).
+- The reference is Ubuntu 24.04's 7.0.15, which carries the fixes of three CVEs of Lua that
+  came after 7.0.15. The second change to the vendored sources is two of them, as Ubuntu
+  applies them: CVE-2024-31449, `bit.tohex` of the smallest width, which C cannot negate
+  (`lua_bit.c`); and CVE-2025-49844, the chunk's name kept on Lua's stack while the
+  parser runs, which a collection could free under it (`lparser.c`). The third is in the
+  glue: SCRIPT FLUSH collects in full before it closes the state (CVE-2024-46981, Redis's
+  `scriptingRelease`). Without the first, `bit.tohex(65535, -2147483648)` answered 8 bytes
+  of the C stack where Redis answers `0000FFFF`; `script_test` has the line now.
 - Bend drives a run as an automaton of steps (`src/script.bend`):
   - a call: the request's bytes out, the reply's bytes in;
   - a tick, every 100,000 Lua instructions: go on, or end the script;

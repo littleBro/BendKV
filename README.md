@@ -79,7 +79,7 @@ well), what HyperLogLogs, GEO and LOLWUT compute (`src/hll.bend`, `src/geo.bend`
 `src/lolwut.bend`) and DUMP's payloads (`src/rdb.bend`), all tested against
 `redis-server`; the Lua engine of scripts: Redis 7.0.15's own Lua 5.1.5 and its libraries
 (`deps/redis`, C, as Redis ships them but for their casts of numbers to integers, which
-give Redis's results defined in C: NOTICE) and the glue that drives it (`src/lua/engine.c`,
+give Redis's results defined in C, and two fixes of CVEs that the reference carries: NOTICE) and the glue that drives it (`src/lua/engine.c`,
 ported from Redis's `script_lua.c`, `eval.c` and `script.c`, behind the effects of
 `src/script.bend`); clang, libc and the OS. This is not
 end-to-end verification in the sense of CompCert or seL4; see
@@ -864,7 +864,7 @@ src/        the server
   script.bend   the effects of the Lua engine (src/lua/engine.c)   tested
   server.bend   TCP, connections, the database actor, the log      tested
   lua/          the engine's C: Redis's Lua driven in steps         tested
-deps/redis/ Redis 7.0.15's Lua 5.1.5 with its libraries, and three of its helpers, as Redis ships them (NOTICE: their licenses, and the one change)
+deps/redis/ Redis 7.0.15's Lua 5.1.5 with its libraries, and three of its helpers, as Redis ships them (NOTICE: their licenses, and the two changes)
 proof/      LAWS.bend (the laws), PROOF.bend (their proofs), SPEC.bend (the commands on the trie alone)
 tests/      smoke (the pure checks), float, start, differential, expiry, protocol, session, the end of a connection, CONFIG, INFO, statistics per command, COMMAND, SCAN, numbers at their edges, BITFIELD, hash, list, set, sorted set, SORT, HyperLogLog, GEO, DUMP and RESTORE, blocking, transaction, Pub/Sub, CLIENT, MONITOR, timing of calls, CLIENT PAUSE, Lua scripts, administrative commands, AUTH, ACL, RESP3, maxmemory, robustness, stalled reader, concurrency, AOF, AOF crash, AOF rewrite and RDB file tests
 bench/      in-process benchmarks of the map, the core and channels, and `make bench` against Redis

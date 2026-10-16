@@ -621,6 +621,10 @@ LIBS = [
      "bit.rshift(-1, 28), bit.arshift(-256, 4), bit.tobit(2^32 + 1), bit.tohex(65535), bit.tohex(-1, 4), "
      "bit.rol(1, 33), bit.ror(1, 1), bit.bswap(0x12345678)}", []),
     ("return bit.band()", []),
+    # the smallest width, which C cannot negate: the reference's 7.0.15
+    # carries the fix of CVE-2024-31449 (and its test in scripting.tcl); the
+    # vendored Lua without it answered 8 bytes of its stack
+    ("return {bit.tohex(65535, -2147483648), bit.tohex(-1, -2147483647), bit.tohex(255, -3), bit.tohex(1, 0)}", []),
     # struct
     ("return {struct.pack('>I2', 258), struct.pack('<i4', -2), struct.pack('>d', 1.5), struct.size('>I4i2'), "
      "struct.pack('s', 'ab'), struct.pack('>Bc0', 3, 'xyz'), struct.pack('!')}", []),
