@@ -318,8 +318,10 @@ Where performance and proof meet: **batched execution under proved laws.**
    section 3zzj), CLIENT PAUSE and UNPAUSE (done, section 3zzk), the administrative
    commands LASTSAVE, ROLE, WAIT, SHUTDOWN, MEMORY and LOLWUT (done, section 3zzl),
    GEO (done, section 3zzm), DUMP and RESTORE (done, section 3zzu), the slow log and
-   the latency monitor (done, section 3zzz), CLIENT TRACKING (done, section 3zzzb) and
-   ACL users (done, section 3zzzh), measured by Redis's
+   the latency monitor (done, section 3zzz), the RDB file with SAVE, the saves of
+   SHUTDOWN and FLUSHALL and its load at the start (done, section 3zzzc; BGSAVE and the
+   save points next), CLIENT TRACKING (done, section 3zzzb) and ACL users (done, section
+   3zzzh), measured by Redis's
    own test suite run against BendKV and by client libraries' test suites (redis-py's and
    go-redis's, in CI: done, section 3zy).
    Lua, streams, cluster, replication and modules are out of scope. The suite's count: of the 1,677 tests

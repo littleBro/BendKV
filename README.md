@@ -449,18 +449,24 @@ translation stays in the trusted base.
   gets the invalidation of a key its own command writes before that command's reply,
   where Redis writes it after the reply for the commands that reply before they signal
   the key (ZADD, ZINCRBY, HSET, HINCRBY, LPUSH, RPUSH) (FINDINGS.md, section 3zzzb).
-- **The server:** LASTSAVE (the start, as BendKV writes no RDB snapshot), ROLE (a master
+- **The server:** LASTSAVE (the last save that ended well, the start until one does), ROLE (a master
   with no replica), WAIT (0, as no replica acknowledges: at once when it asks for none,
   otherwise once its timeout ends, its client waiting as a blocking command's does),
   MEMORY STATS, DOCTOR, PURGE and MALLOC-STATS (Redis's fields and advice, from the
   numbers INFO's memory section shows), LOLWUT (Redis 7.0.15's line, and the drawings of
   VERSION 5 and 6, those that take no random number byte for byte as Redis draws them),
   and SHUTDOWN [NOSAVE|SAVE] [NOW] [FORCE] [ABORT], read as Redis 7.0.15 reads it: the
-  append-only file written and synced, a rewrite that runs stopped, the pid file
-  removed, the process ended with code 0. Where BendKV differs: SHUTDOWN SAVE fails as
-  Redis's does when it cannot save, BendKV writing no RDB snapshot (SAVE FORCE stops it
-  all the same); MEMORY MALLOC-STATS has no allocator's statistics; LOLWUT's large
-  drawings take up to a hundred times Redis's time (FINDINGS.md, section 3zzl).
+  append-only file written and synced, a rewrite that runs stopped, the RDB file saved
+  with save points or SAVE and not with NOSAVE (a save that fails stops nothing, Redis's
+  error answered, but with FORCE), the pid file removed, the process ended with code 0.
+  Where BendKV differs: SIGTERM and SIGINT end the process at once, without the
+  shutdown Redis runs for them (`shutdown-on-sigterm`, `shutdown-on-sigint`: its save
+  with save points among it), as the runtime has no handler for them; a SHUTDOWN that
+  saves lets the other clients' requests in its group run before the save, so that what
+  they write reaches the append-only file and the RDB file and they get no reply, where
+  Redis ends inside the SHUTDOWN and runs none of them (issue #84); MEMORY
+  MALLOC-STATS has no allocator's statistics; LOLWUT's large drawings take up to a
+  hundred times Redis's time (FINDINGS.md, sections 3zzl and 3zzzc).
 - **Configuration:** CONFIG GET (names, aliases and glob patterns), SET (several
   parameters at once, all or none), RESETSTAT, REWRITE, HELP, over every parameter of
   Redis 7.0.15 (counted in [In numbers](#in-numbers)), taken from Redis's own table by
@@ -470,7 +476,8 @@ translation stays in the trusted base.
   published (above); the port, the addresses, TLS and the append-only
   file cannot change while BendKV runs (a new value fails as it does when Redis cannot
   apply it); maxmemory and its policy, samples, tenacity and LFU parameters limit the
-  memory and choose what is evicted (below); the other parameters are kept and read
+  memory and choose what is evicted (below); `save`, `dbfilename` and `rdbchecksum`
+  act on the RDB file (Persistence, below); the other parameters are kept and read
   back but tune nothing, since BendKV has no replication or encodings for them to tune.
 - **Introspection:** INFO with Redis 7.0.15's sections and fields, in Redis's order,
   picked as Redis picks them (none, `default`, `all`, `everything`, any names in any
@@ -523,10 +530,14 @@ translation stays in the trusted base.
   lines), and a log in Redis's form, on the standard output or in `logfile`. The port,
   `bind` (IPv4), `requirepass`, `protected-mode`, the append-only file (`appendonly`,
   `appendfilename`, `appendfsync`, `aof-load-truncated`), `logfile`, `loglevel` and
-  `pidfile` act; what BendKV cannot do (modules, ACL users from the configuration or a
-  file, renamed commands, the
-  background, a cluster, a replica, TLS, a supervisor to signal, an RDB file or Redis 7's
-  multi-part append-only file to load) stops the start with a line saying so.
+  `pidfile` act. With `appendonly no` the RDB file (`dbfilename` in `dir`) is loaded
+  when it is there, as Redis loads it, with its log's lines; a file that does not load
+  stops the start with Redis's reason. With `appendonly yes` the append-only file is
+  loaded and the RDB file left aside, as in Redis. What BendKV cannot do (modules, ACL
+  users from the configuration or a file, renamed commands, the background, a cluster, a
+  replica, TLS, a supervisor to signal, Redis 7's multi-part append-only file, or an RDB
+  file that holds a stream, a module's data or functions, to load) stops the start with
+  a line saying so.
 - **Protocol:** pipelining, partial packets, inline commands with quoting,
   binary-safe values; requests framed as Redis 7.0.15 frames them (a length as `string2ll`
   reads it, with no `0` before its first digit, a count of 0 or less skipped down to
@@ -558,11 +569,36 @@ translation stays in the trusted base.
   starts, then the entries appended meanwhile, into a temporary file renamed onto the
   file; without a fork, the databases being values, a slice at a time between the
   groups of requests the server answers meanwhile; with INFO's fields of a rewrite
-  (FINDINGS.md, section 3zv).
+  (FINDINGS.md, section 3zv). The RDB file as Redis 7.0.15 writes it (`REDIS0010` and
+  its AUX fields, each database's SELECTDB and RESIZEDB, each key's EXPIRETIME_MS and
+  value as DUMP writes it, EOF and the CRC64, or eight zero bytes with `rdbchecksum
+  no`): SAVE writes it into `temp-<pid>.rdb`, syncs it, renames it onto `dbfilename` and
+  syncs the directory, as Redis's `rdbSave` does, with its replies and log lines;
+  SHUTDOWN saves it (above), and FLUSHALL with save points saves the emptied
+  databases, as Redis 7.0's does; LASTSAVE and INFO's `rdb_last_save_time`,
+  `rdb_saves`, `rdb_last_bgsave_status` and `rdb_last_load_keys_loaded` and `_expired`
+  follow it. The start reads every version from 1 to 10, every encoding Redis 7.0.15
+  reads but a stream's and a module's, AUX fields it does not know, and drops the keys
+  whose time has passed, counting them. Where BendKV differs: no BGSAVE and no save at
+  the save points (BendKV's default `save` is empty, where Redis's is `3600 1 300 100 60
+  10000`, and its start warns of save points set), nor on SIGTERM or SIGINT (above);
+  `rdb_changes_since_last_save` stays 0; no LZF written; no IDLE or FREQ written, and
+  those read set no word of use; SAVE's client waits through the rest of its group, so
+  that the others in it see it blocked, the commands after SAVE in its pipeline run in a
+  group of their own, the file holds the databases as the group left them, and SAVE's
+  call time leaves the save out; after a start from the file, INFO's replication section
+  and ROLE give an offset of 0, where Redis counts into `master_repl_offset` a DEL for
+  each key whose time had passed, and keeps the file's `repl-id` and `repl-offset` as its
+  `master_replid2` and offset, which its next save writes again (BendKV drops them);
+  the log of a file that does not load gives the byte where the reading failed, where
+  Redis gives what it had read at its last report of progress, and leaves out Redis's
+  `function at rdb.c:N`; the start reads the whole file before it loads it, and
+  takes several times Redis's time (PERFORMANCE.md, section 67; FINDINGS.md, section
+  3zzzc).
 
 Not yet: streams, Lua
 scripts, CONFIG REWRITE (it answers as Redis does without a configuration file),
-RDB files. Times in ms are limited to 14 digits.
+BGSAVE and saves at the save points. Times in ms are limited to 14 digits.
 
 ## Performance
 
@@ -606,7 +642,8 @@ replies go out from a writer thread when the process has two cores or more (a cl
 stops reading holds up only its own replies), and from the event loop with
 `io-threads 1`. `./build/bendkv --help` lists the forms. The short form
 `./build/bendkv PORT [post|send [FILE [always|everysec|no]]]` is BendKV's own: `post` or
-`send` picks how replies go out, `FILE` (any path) turns on the append-only file.
+`send` picks how replies go out, `FILE` (any path) turns on the append-only file; it
+loads no RDB file.
 
 ## Testing
 
@@ -720,10 +757,16 @@ started from a file Redis wrote and Redis from one BendKV wrote, each holding th
 databases the other held, and the rewrite of the file (`tests/rewrite_test.py`:
 BGREWRITEAOF's replies and INFO's account against Redis's, the rewritten file against
 Redis's base command for command, writes during a rewrite and a kill during one, the
-cron's rewrites, rewrites that fail, BendKV and Redis started from the new file), and
+cron's rewrites, rewrites that fail, BendKV and Redis started from the new file),
 maxmemory (`tests/maxmemory_test.py`: the refusals past it, OBJECT IDLETIME and FREQ
 and the `evicted` event against Redis's, Redis's own tests of the policies on both, an
-eviction that goes on alone, with the append-only file on and while a rewrite runs).
+eviction that goes on alone, with the append-only file on and while a rewrite runs), and
+the RDB file (`tests/rdb_test.py`: files Redis wrote, with LZF and without, and files of
+the encodings Redis no longer writes, BendKV and Redis started from each and every key
+of every database compared; BendKV's SAVE, Redis started from its file; both ways with a
+database of 10,000 keys and a file past 16 MB; SAVE, LASTSAVE, INFO and the saves of
+FLUSHALL and SHUTDOWN against Redis's, with the append-only file and with another
+client's requests in the same group; files that do not load).
 `make suite` runs Redis's own test suite in its mode for a server already started, on
 Redis and on BendKV, and counts the tests Redis passes that BendKV passes
 ([docs/COMPATIBILITY.md](docs/COMPATIBILITY.md)). `make clients` runs the test suites of
@@ -745,7 +788,7 @@ src/        the server
   hll.bend      HyperLogLogs on a string's bytes, as Redis's       tested
   geo.bend      geohashes, cells, distances and sorts, as Redis's  tested
   lolwut.bend   LOLWUT's drawings, as Redis draws them             tested
-  rdb.bend      DUMP's payloads and RESTORE's reading, as Redis's  tested
+  rdb.bend      the RDB format: DUMP, RESTORE and the file         tested
   redis.bend    command semantics: exec(cmd, db) -> (reply, db')   verified
   batch.bend    a pipelined batch with cache hints                 verified
   aof.bend      append-only file: effects, encoding, loading       verified
@@ -758,7 +801,7 @@ src/        the server
   startup.bend  the command line and the configuration file        tested
   server.bend   TCP, connections, the database actor, the log      tested
 proof/      LAWS.bend (the laws), PROOF.bend (their proofs), SPEC.bend (the commands on the trie alone)
-tests/      smoke (the pure checks), float, start, differential, expiry, protocol, session, the end of a connection, CONFIG, INFO, statistics per command, COMMAND, SCAN, numbers at their edges, BITFIELD, hash, list, set, sorted set, SORT, HyperLogLog, GEO, DUMP and RESTORE, blocking, transaction, Pub/Sub, CLIENT, MONITOR, timing of calls, CLIENT PAUSE, administrative commands, AUTH, ACL, RESP3, maxmemory, robustness, stalled reader, concurrency, AOF, AOF crash and AOF rewrite tests
+tests/      smoke (the pure checks), float, start, differential, expiry, protocol, session, the end of a connection, CONFIG, INFO, statistics per command, COMMAND, SCAN, numbers at their edges, BITFIELD, hash, list, set, sorted set, SORT, HyperLogLog, GEO, DUMP and RESTORE, blocking, transaction, Pub/Sub, CLIENT, MONITOR, timing of calls, CLIENT PAUSE, administrative commands, AUTH, ACL, RESP3, maxmemory, robustness, stalled reader, concurrency, AOF, AOF crash, AOF rewrite and RDB file tests
 bench/      in-process benchmarks of the map, the core and channels, and `make bench` against Redis
 tools/      measurement scripts, the runners of Redis's test suite and of the client libraries'
             suites, and the generators of the trie, of the parameter table, of the command
@@ -798,15 +841,15 @@ away.
 | `src/hll.bend` | 1,400 |  | no |
 | `src/info.bend` | 2,200 |  | no |
 | `src/lolwut.bend` | 470 |  | no |
-| `src/rdb.bend` | 1,500 |  | no |
+| `src/rdb.bend` | 2,100 |  | no |
 | `src/resp.bend` | 880 |  | no |
-| `src/server.bend` | 8,200 |  | no |
+| `src/server.bend` | 8,900 |  | no |
 | `src/startup.bend` | 460 |  | no |
 | `proof/LAWS.bend` | 920 | 20 |  |
 | `proof/SPEC.bend` | 370 |  |  |
 | `proof/PROOF.bend` | 16,000 | 2,800 |  |
-| `src/`, the 6 files the laws import | 25,000 | 8,200 |  |
-| `src/`, the 11 others | 23,000 | 2,500 |  |
+| `src/`, the 6 files the laws import | 25,000 | 7,900 |  |
+| `src/`, the 11 others | 24,000 | 2,500 |  |
 | `proof/` | 18,000 | 2,800 |  |
 <!-- END gen_counts: numbers -->
 

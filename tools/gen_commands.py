@@ -30,9 +30,9 @@
 # call with the wrong number of arguments as refused only when it fails
 # Redis's own check of the arity), whether its calls may fail as they run,
 # whether MONITOR sees its calls, whether a monitor may run it, whether
-# CLIENT PAUSE WRITE holds it back, whether Redis flags it fast and whether
-# the slow log skips it (from its flags), and the word each code rides in
-# (twelve bits, six of them set). The
+# CLIENT PAUSE WRITE holds it back, whether MULTI may queue it, whether
+# Redis flags it fast and whether the slow log skips it (from its flags),
+# and the word each code rides in (twelve bits, six of them set). The
 # fourth writes there how a request's name finds its command (Step 4
 # below), from the same numbers.
 #
@@ -90,7 +90,7 @@ COMMANDS = {
     "geodist": [], "geohash": [], "geopos": [], "georadius": [], "georadius_ro": [],
     "georadiusbymember": [], "georadiusbymember_ro": [], "geosearch": [], "geosearchstore": [],
     "dump": [], "restore": [], "slowlog": ["get", "help", "len", "reset"],
-    "latency": ["doctor", "graph", "help", "histogram", "history", "latest", "reset"],
+    "latency": ["doctor", "graph", "help", "histogram", "history", "latest", "reset"], "save": [],
     "acl": ["cat", "deluser", "dryrun", "genpass", "getuser", "help", "list", "load", "log",
             "save", "setuser", "users", "whoami"]}
 
@@ -628,6 +628,13 @@ def stats_block(src, facts):
             "def stat.denyoom(+key: Nat) -> Bool:", "  match key:"]
     for k, (name, kind, i) in enumerate(keys, 1):
         if "denyoom" in fl[name]:
+            out += ["    case %dn:" % k, "      True{}"]
+    out += ["    case _:", "      False{}", ""]
+    out += ["# whether the command of a key may not run in a transaction (no_multi:",
+            "# SHUTDOWN, SAVE): in MULTI, Redis refuses it before it is queued",
+            "def stat.nomulti(+key: Nat) -> Bool:", "  match key:"]
+    for k, (name, kind, i) in enumerate(keys, 1):
+        if "no_multi" in fl[name]:
             out += ["    case %dn:" % k, "      True{}"]
     out += ["    case _:", "      False{}", ""]
     out += ["# whether Redis flags the command of a key fast: the latency monitor",
