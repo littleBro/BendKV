@@ -6069,7 +6069,7 @@ order.
 **Tests.** `tests/timing_test.py`, `tests/stats_test.py` and `tests/info_test.py` against
 Redis: commandstats, latencystats, errorstats and the slow log, unchanged.
 
-## 3zzzp. Small hashes in one string, as a listpack
+## 3zzzm. Small hashes in one string, as a listpack
 
 **What was left** (section 3zg). A small hash was the list of its pairs: a cell of 16
 bytes, an `HP` node of 16, and a buffer of 16 bytes or more for each field or value
@@ -6151,6 +6151,10 @@ HGETALL, HSET of `f3`, which is there, and HSET of a new field of 13 bytes:
 
 GET, SET and INCR do not move (`make perfcheck`, locally: 3,416, 4,178 and 4,522
 instructions before, 3,414, 4,177 and 4,522 after; misses and prefetches as before).
+
+The misses outweigh the instructions: on 200,000 hashes of 10 pairs, HGET, HSET of a
+field there and HGETALL answer 1.4, 1.5 and 2.1 times the requests a second they did
+(PERFORMANCE.md, section 73).
 
 - A read misses less: the string is a few cache lines where the list was two nodes and a
   buffer a pair.

@@ -7331,3 +7331,33 @@ caches missed, and the tick counted them all at once.
 (baseline 3,452, 4,214 and 4,552); with 100 clients in BLPOP, 2.7% and 2.7% above the
 counts without them. Each of those loads runs one command, whose calls all go to the
 newest run, as before.
+
+## 73. Small hashes in one string
+
+**What changed** (FINDINGS 3zzzm). A hash of at most 512 pairs of at most 64 bytes is
+one string of its pairs, as Redis's listpack is one allocation, instead of a list of
+cells, nodes and buffers.
+
+**In time and memory** (200,000 hashes `hash:000000000000` to `hash:000000199999`, each
+of 10 fields `f0` to `f9` with values of 8 bytes, loaded by pipelined HSETs; then
+redis-benchmark, 20 clients at a pipeline depth of 16, keys at random among the
+200,000: 2,000,000 HGET of `f3`, 2,000,000 HSET of `f3`, which is there, and 500,000
+HGETALL; three rounds of main's build, this one and Redis 7.0.15, in turn):
+
+| | `used_memory` a key | HGET a second | HSET | HGETALL |
+|---|---:|---:|---:|---:|
+| main | 738.7 | 372,000 to 409,000 | 285,000 to 303,000 | 109,000 to 121,000 |
+| this change | 306.7 | 519,000 to 562,000 | 437,000 to 453,000 | 217,000 to 257,000 |
+| Redis 7.0.15 | 250.7 | 573,000 to 604,000 | 522,000 to 569,000 | 309,000 to 390,000 |
+
+The medians of the rounds' ratios: against main, 2.4 times less memory a key, and HGET
+1.38 times the requests a second (1.30 to 1.51), HSET 1.49 times (1.49 to 1.53) and
+HGETALL 2.11 times (2.00 to 2.13). Against Redis, 1.22 times its memory, and 0.96, 0.84
+and 0.70 times its throughput, where main had 0.66, 0.54 and 0.35.
+
+**Instructions** rise all the same (FINDINGS 3zzzm: callgrind per request, 7% to 27%
+more on the hash commands), and last-level misses fall by half or more: the string is a
+few cache lines where the list was two nodes and a buffer a pair.
+
+**`make perfcheck`**: GET, SET and INCR unchanged (3,414, 4,177 and 4,522 instructions
+per request, against main's 3,416, 4,178 and 4,522).
