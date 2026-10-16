@@ -151,7 +151,9 @@ translation stays in the trusted base.
   elements one after another, as Redis's quicklist is a chain of listpacks (a small
   element takes its length's byte more than its bytes), so a push or a pop at either end
   costs O(1) amortized, and LINDEX, LSET and LRANGE go from the nearer end a piece at a
-  time; a key never holds an empty list. OBJECT ENCODING answers `quicklist`, as Redis 7.0 does for every list, and
+  time. LPOS, LINSERT and LREM compare the elements where they lie, a piece at a time,
+  stop at the matches they want, and write anew only the pieces they change; a key never
+  holds an empty list. OBJECT ENCODING answers `quicklist`, as Redis 7.0 does for every list, and
   MEMORY USAGE estimates its bytes. A list write is logged as the write itself (LMPOP as
   the LPOP or RPOP of the key it took from, with its count; a pop of the last elements as
   the DEL of the key); a list made where a key whose time had passed still lay is logged

@@ -9505,14 +9505,14 @@ def lset_shape(mi: Maybe<&2, R.Int>, +i: String, +v: String, +l0: KV.Deq) -> LSh
     case None{}:
       {==}
 
-def lins_m_shape(m: Maybe<&2, List<&2, String>>, -n: Nat, -after: Bool, -p: String, -v: String, -op: R.LWrite) -> {R.lins.op(after, p, v) == op : R.LWrite} -> GoodLOp(R.lins.op(after, p, v)) -> LShape(op, ch_of(R.lins.of(m, n, after, p, v))):
+def lins_m_shape(m: Maybe<&2, KV.Deq>, -n: Nat, -after: Bool, -p: String, -v: String, -op: R.LWrite) -> {R.lins.op(after, p, v) == op : R.LWrite} -> GoodLOp(R.lins.op(after, p, v)) -> LShape(op, ch_of(R.lins.of(m, n, after, p, v))):
   match m:
-    case Some{xs}:
+    case Some{d}:
       eo => g => (eo, g)
     case None{}:
       eo => g => {==}
 
-def lrem_ch_shape(none: Bool, all: Bool, -gone: Nat, -n: Nat, -c: String, -v: String, -xs: List<&2, String>, ok: {R.lnum.ok(c) == True{} : Bool}) -> LShape(R.LWRem{c, v}, ch_of(R.lrem.ch(none, all, gone, n, c, v, xs))):
+def lrem_ch_shape(none: Bool, all: Bool, -gone: Nat, -n: Nat, -c: String, -v: String, -d: KV.Deq, ok: {R.lnum.ok(c) == True{} : Bool}) -> LShape(R.LWRem{c, v}, ch_of(R.lrem.ch(none, all, gone, n, c, v, d))):
   match none all:
     case True{} _:
       {==}
@@ -9521,17 +9521,17 @@ def lrem_ch_shape(none: Bool, all: Bool, -gone: Nat, -n: Nat, -c: String, -v: St
     case False{} False{}:
       ({==}, ok)
 
-def lrem_r_shape(r: R.LRem, +n: Nat, +c: String, +v: String, ok: {R.lnum.ok(c) == True{} : Bool}) -> LShape(R.LWRem{c, v}, ch_of(R.lrem.out(r, n, c, v))):
+def lrem_r_shape(r: KV.Rem, +n: Nat, +c: String, +v: String, ok: {R.lnum.ok(c) == True{} : Bool}) -> LShape(R.LWRem{c, v}, ch_of(R.lrem.out(r, n, c, v))):
   match r:
-    case R.LRem{+xs, +gone}:
-      lrem_ch_shape(Nat.is_eq(gone, 0n), Nat.is_eq(gone, n), gone, n, c, v, xs, ok)
+    case KV.Rem{+d, +gone}:
+      lrem_ch_shape(Nat.is_eq(gone, 0n), Nat.is_eq(gone, n), gone, n, c, v, d, ok)
 
 def lrem_shape(mi: Maybe<&2, R.Int>, +c: String, +v: String, +l0: KV.Deq) -> {R.lnum(c) == mi : Maybe<&2, R.Int>} -> LShape(R.LWRem{c, v}, ch_of(R.lrem.of(mi, c, v, l0))):
   match mi:
     case Some{R.IPos{+k}}:
-      e => lrem_r_shape(R.lrem.go(KV.deq.all(l0), v, k, 0n, Nil{}), KV.deq.len(l0), c, v, some_ok_i(R.lnum(c), R.IPos{k}, e))
+      e => lrem_r_shape(KV.deq.rem(v, k, False{}, l0), KV.deq.len(l0), c, v, some_ok_i(R.lnum(c), R.IPos{k}, e))
     case Some{R.INeg{+k}}:
-      e => lrem_r_shape(R.lrem.back(True{}, R.lrem.go(R.lrem.elems(True{}, l0), v, 1n+k, 0n, Nil{})), KV.deq.len(l0), c, v, some_ok_i(R.lnum(c), R.INeg{k}, e))
+      e => lrem_r_shape(KV.deq.rem(v, 1n+k, True{}, l0), KV.deq.len(l0), c, v, some_ok_i(R.lnum(c), R.INeg{k}, e))
     case None{}:
       e => {==}
 
@@ -9578,9 +9578,9 @@ def lw_shape(op: R.LWrite, +l0: KV.Deq) -> LShape(op, ch_of(R.lwrite(op, False{}
     case R.LWSet{+i, +v}:
       lset_shape(R.lnum(i), i, v, l0)
     case R.LWBefore{+p, +v}:
-      lins_m_shape(R.lins.go(KV.deq.all(l0), R.lins.head(p, KV.deq.all(l0)), False{}, p, v, Nil{}), KV.deq.len(l0), False{}, p, v, R.LWBefore{p, v})({==})({==})
+      lins_m_shape(KV.deq.ins(p, False{}, v, l0), KV.deq.len(l0), False{}, p, v, R.LWBefore{p, v})({==})({==})
     case R.LWAfter{+p, +v}:
-      lins_m_shape(R.lins.go(KV.deq.all(l0), R.lins.head(p, KV.deq.all(l0)), True{}, p, v, Nil{}), KV.deq.len(l0), True{}, p, v, R.LWAfter{p, v})({==})({==})
+      lins_m_shape(KV.deq.ins(p, True{}, v, l0), KV.deq.len(l0), True{}, p, v, R.LWAfter{p, v})({==})({==})
     case R.LWRem{+c, +v}:
       lrem_shape(R.lnum(c), c, v, l0)({==})
     case R.LWTrim{+a, +b}:
