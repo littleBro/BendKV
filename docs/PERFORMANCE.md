@@ -7559,33 +7559,43 @@ command but DEBUG, on every key and channel, so restricted):
 | | GET | SET | last-level misses, GET and SET |
 |---|---:|---:|---:|
 | #66's head, no other client | 3,437 | 4,201 | 2.82, 3.13 |
-| now, no other client | 3,447 | 4,213 | 2.82, 3.13 |
-| now, 1 idle client of a restricted user | 3,466 (+0.6%) | 4,233 (+0.5%) | 2.81, 3.14 |
+| now, no other client | 3,458 | 4,218 | 2.82, 3.14 |
+| now, 1 idle client of a restricted user | 3,483 (+0.7%) | 4,250 (+0.8%) | 2.83, 3.14 |
 | Redis 7.0.15, no other client | 3,569 | 4,771 | 2.74, 3.24 |
 | Redis 7.0.15, 1 idle client of a restricted user | 3,563 | 4,778 | 2.76, 3.25 |
 | Redis 7.0.15, the benchmark's clients restricted | 3,586 (+0.5%) | 4,797 (+0.5%) | 2.74, 3.23 |
 
 On 10,000 keys (the first build's restricted clients ran some 100 requests a second
-under callgrind):
+under callgrind; the idle clients of mode `acl` are each of a user of its own):
 
 | | GET | SET |
 |---|---:|---:|
-| now, no other client | 3,431 | 4,205 |
-| now, the benchmark's clients restricted | 35,758 | 34,407 |
+| now, no other client | 3,449 | 4,215 |
+| now, 1 idle client of a restricted user | 3,470 (+0.6%) | 4,237 (+0.5%) |
+| now, 1,000 idle clients of restricted users | 3,479 (+0.9%) | 4,240 (+0.6%) |
+| 3fed17a, 1,000 idle clients of restricted users (#96's review) | 7,415 | 8,217 |
+| now, the benchmark's clients restricted | 37,558 | 36,396 |
+| now, the same among 1,000 other users | 37,805 | 36,654 |
 | the first build, the benchmark's clients restricted | 464,145 | 478,309 |
 
-With no client restricted, a request costs what it costs on #66's head, within 0.3%, the
-count's spread from one run to the next. An idle client of a restricted user costs the
-other clients' batches 0.6% and 0.5%: each batch's client is looked for among the
-restricted (`acl.ready`: `srv.restricted`, `rcl.has`). A restricted client's own batches
-run the general way, a command at a time, and each call is checked: on 10,000 keys, a GET
-of such a client costs 35,758 instructions and a SET 34,407, ten times another client's.
-The check takes some 12,700 of a GET's (the functions of `src/acl.bend` and of the key
-specs, and what they call): 5,700 of them read the flags of the command's key spec as
-words, 14 string compares a call (`key.need`, `K.has`), and 1,100 look for the client
-among the restricted (`rcl.has`). The rest is the general way's: each call goes through
-the session, the timing and the reply on its own (`bg.go`, `gen.step`, `ht.merge`), where
-the fast way does them once a batch. Redis's check costs it about 20 instructions a call.
+With no client restricted, a request costs what it costs on #66's head, within 0.6% (GET
+3,458 against 3,437 on 100,000 keys), about the count's spread from one build to the next.
+An idle client of a restricted user costs the other clients' batches 0.7% and 0.8% on
+100,000 keys, and a thousand of them about what one does: each batch's client is looked up
+by its id in a trie of the restricted (`acl.ready`: `S.srv.restricted`, `acl.restricted`).
+The builds #96's review read walked a list of their ids at every batch and every call: a
+thousand idle restricted clients cost the other clients' GET 116% and SET 96% more. A
+restricted client's own batches run the general way, a command at a time, and each call
+is checked: on 10,000 keys, a GET of such a client costs 37,558 instructions and a SET
+36,396, ten times another client's, and among 1,000 other users 37,805 and 36,654, its
+user found by name in a trie too (the first builds walked the users: such a client's GET
+fell from 241,000 a second to 1,600 with 10,000 other users, the review's count). The
+check takes some 11,800 of a GET's (the functions of `src/acl.bend` and of the key specs,
+and what they call): 5,700 of them read the flags of the command's key spec as words, 14
+string compares a call (`key.need`, `K.has`). The rest is the general way's: each call
+goes through the session, the timing and the reply on its own (`bg.go`, `gen.step`,
+`ht.merge`), where the fast way does them once a batch, and its key is marked as it runs
+(below). Redis's check costs it about 20 instructions a call.
 
 **In time** (`tools/waiters_bench.sh`: GET and SET at pipeline 16 from 20 clients on
 100,000 keys, each server on one CPU, the median of three runs of a million; thousands of
@@ -7653,23 +7663,81 @@ GET of a restricted client on 10,000 keys 35,795 instructions where it was 36,14
 the check 12,668 of them where it was 13,007. The lists are short here (one user, one
 selector, one pattern, one key), so most of that is the copies.
 
-**`make perfcheck`** here: GET 3,454, SET 4,209 and INCR 4,556 instructions per request,
-against the baseline's 3,452, 4,214 and 4,552, with the misses and prefetches within 1.2% of
-it. With 100 clients in BLPOP, +3.1% and +3.8% (the limit is 5%), against +3.2% and +3.7%
+**On the way: the password's hash** (#96's review). The first build's SHA-256 took time
+quadratic in the password's length: `sha.byte` computed the padding at each byte (a
+`Bool.pick`, whose arms Bend evaluates both), and the padding's last arm counted down to
+the byte. AUTH hashed three times (for its reply, the connection and the server's
+login), so one AUTH of 256 KB, which any client may send before it authenticates, held
+the server 3.97 s, and one of 1 MB 63.3 s (`requirepass pw`, the review's counts).
+`src/sha.bend` reads a message's whole blocks in windows of 2,048 bytes, a chunk each,
+and pads a block or two of their own; the parser hashes once. AUTH of 256 KB takes 0.005
+s, and of 1 MB 0.02 to 0.1 s.
+
+**On the way: EXEC's arguments read once a batch.** While some client is restricted, EXEC
+checks each command it runs again, in case the rules changed since it was queued. A
+command queued while its client was not restricted kept its batch's bytes (`AvRaw`), and
+its check read the arguments of the whole batch again (`P.argvs`), then SORT's check once
+more: in time quadratic in the batch's commands. A queued command now keeps the number of
+its batch, and EXEC reads the arguments through a memo of the batch read last (`Xm`),
+when the check, the tracking or a monitor reads them. One pipeline of MULTI, an AUTH as a
+user that may not SET, N SETs and EXEC (two runs before, on a machine with other work):
+
+| N | 2b99006's build | now |
+|---:|---:|---:|
+| 1,000 | 1.3, 1.7 s | 0.08 s |
+| 2,000 | 6.3, 10.2 s | 0.12 s |
+| 4,000 | 14.7, 21.3 s | 0.25 s |
+| 8,000 | 25.6 s, more than 30 s | 0.39 s |
+
+Past a read's worth of commands the cost grew with N alone: it was a batch's commands times
+its length.
+
+**On the way: a restricted client's keys marked by its calls.** A batch's keys are marked
+used for LRU and LFU before it runs, by the parser's hints. A restricted client's batch is
+now marked by its calls, each key once its call's check lets the call through, so that a
+refused call marks nothing, as in Redis (`bg.marks`, `bg.hint`, `bg.mark.call`). With
+the one walk of a call's keys (below), these are the changes on such a client's path in
+this round: its GET counts 37,558 instructions, where 2b99006's build counted 34,885.
+
+**On the way: a call's keys in one walk.** The keys of a call, by its key specs, were each
+read from the start of its arguments, for ACL's check (`uses.keys`) and for the tracking of
+a read (`keys.names`, from #66): an MGET of n keys took n² / 2 steps of the actor. Both
+find each key by dropping to it from the one before now (`List.drop`), so that the
+arguments are walked once. One MGET of keys that do not exist, sent at once, timed to its
+reply's last byte (a range where runs differed, on a machine with other work, more of it
+during the runs before: a client neither restricted nor tracking shows how much):
+
+| keys | neither restricted nor tracking | restricted, before | restricted, now | tracking, before | tracking, now |
+|---:|---:|---:|---:|---:|---:|
+| 20,000 | 0.012 to 0.034 s | 0.92 to 1.7 s | 0.032 to 0.039 s | 0.9 to 2.2 s | 0.023 to 0.031 s |
+| 50,000 | 0.028 to 0.11 s | 6.0 to 13.5 s | 0.071 to 0.11 s | 5.6 to 16.5 s | 0.059 to 0.074 s |
+
+`tests/acl_test.py` and `tests/tracking_test.py` check 50,000 keys within 1.5 s. For a
+call of one key the walk costs more than the read from the start did: a restricted
+client's GET counts 37,558 instructions, where 36,784 read its key from the start. A first
+walk went down the arguments one at a time, comparing each index with the next key's, and
+cost 38,215.
+
+**`make perfcheck`** here: GET 3,459, SET 4,221 and INCR 4,564 instructions per request,
+against the baseline's 3,452, 4,214 and 4,552, with the misses and prefetches within 0.9% of
+it. With 100 clients in BLPOP, +3.1% and +3.6% (the limit is 5%), against +3.2% and +3.7%
 on #66's head.
 
 **What is left.**
 
-- A restricted client's batches run the general way, a command at a time: some 23,000
-  instructions of a GET's 35,800. Each call of a plain batch could be checked against its
+- A restricted client's batches run the general way, a command at a time: some 25,000
+  instructions of a GET's 37,558. Each call of a plain batch could be checked against its
   user in the gate (its INFO key and its keys, from the parsed command), and the batch
   could run the fast way when all pass, the general way when one is refused, to answer
-  NOPERM and log it.
+  NOPERM and log it. Its keys would then be marked with the batch's, as other batches'.
 - The key specs' flags are read as words at each call (`key.need`: 5,700 instructions of
   a GET's); the generator could write what each spec needs, as it writes the specs. The
-  client is looked for in a list of the restricted (`rcl.has`: 1,100 with 20 restricted
-  clients, the whole list each time), and its user by its name among the users; the
-  client's user could travel with its batch, as its id does.
+  client's user is found by its name in a trie at each call; it could travel with its
+  batch, as its id does.
+- One ACL SETUSER with 2,000 first-argument rules (`+select|N`) takes 1.47 s, and with 500
+  0.15 s, where Redis takes 0.03 s: each rule walks the rules and first arguments before
+  it (`rules.drop`, `firsts.add.at`, `acl.has.nc`). Only a client that may run SETUSER can
+  send it (#96's review).
 
 ## 71. The timing's runs not yet counted, one per command
 
