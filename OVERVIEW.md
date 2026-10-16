@@ -1138,12 +1138,14 @@ The translation the kernel reads can be dumped with
   INFO's fields and the saves of FLUSHALL and SHUTDOWN against Redis's transcripts;
   files that do not load, each stopping both starts with Redis's line (section 3zzzc of
   docs/FINDINGS.md).
-- **Background saves** (`tests/bgsave_test.py`): the count of changes of 170 writes of
+- **Background saves** (`tests/bgsave_test.py`): the count of changes of writes of
   every kind, alone, in a pipeline and in MULTI; BGSAVE's replies, INFO's fields while
   it runs and after it, the file and the log; BGSAVE and BGREWRITEAOF scheduled while
-  the other runs; the save points; MISCONF after a save that failed, and the cron's next
-  try; SHUTDOWN and FLUSHALL while a save runs; the default save points, all against
-  Redis's transcripts (section 3zzzk of docs/FINDINGS.md).
+  the other runs; the save points; MISCONF after a save that failed, for each command of
+  a pipeline, and the cron's next try; the parameters a save keeps from its start, and
+  its temporary file removed while it runs; SHUTDOWN and FLUSHALL while a save runs;
+  the default save points, all against Redis's transcripts (section 3zzzk of
+  docs/FINDINGS.md).
 - **The end of a connection** (`tests/conn_test.py`): connections end by every path —
   the client closes after a request and before one, QUIT, a protocol error, a reset
   before the server has read the request and while it sends a reply of a megabyte — 50

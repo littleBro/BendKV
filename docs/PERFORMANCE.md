@@ -7860,14 +7860,60 @@ same measure before the merge of CLIENT TRACKING, at another hour of the shared 
 BendKV 4.43 s, 13,000 SETs, 213 µs, 716 µs and 45 ms; Redis 2.31 s, 32,300 SETs, 56 µs,
 169 µs and 2.5 ms.)
 
+**After the review** (FINDINGS 3zzzk: the review of the pull request). The fixes add
+nothing to a request of GET, SET or INCR, and a batch of the fast way now looks its rule
+up once (`dirty.rule.tally`, in `fast.run`), where the check for weights, the walk of
+the replies and the count by the rule alone each looked up the rule of the batch's code
+(`R.code.class`, `R.stat.dirty`). `make perfcheck`, instructions per request:
+
+| | GET | SET | INCR |
+|---|---:|---:|---:|
+| the branch merged with main at afa98a7, before the fixes | 3,487 | 4,281 | 4,596 |
+| the fixes and the rule looked up once, on the same main | 3,485 | 4,276 | 4,597 |
+| merged with main at a92597d (#96), the fixes alone | 3,495 | 4,291 | 4,606 |
+| the same, the rule looked up once | 3,493 | 4,288 | 4,601 |
+| the same, and ZINCRBY's weight without its sum (below) | 3,490 | 4,286 | 4,597 |
+
+With 100 clients in BLPOP, the last counts GET 3,601 and SET 4,439, 3.2% and 3.6% more than
+without them (before the fixes, 3,593 and 4,436: 3.0% and 3.6%). The last two builds
+differ only where a GET, a SET or an INCR never goes, and their counts differ by 2 to 4
+instructions: the layout of the code moves them that much.
+
+ZINCRBY and ZADD with INCR now read, before they run, their member's score and their
+increment, to count none for a score they leave as it was (Redis's count). On a sorted
+set of 100,000 members, one request at a time (`tools/colls.sh`'s measure, the sorted set
+alone), instructions a command:
+
+| | ZADD of a member there | ZADD INCR 1 | ZINCRBY 1 | ZINCRBY 0 |
+|---|---:|---:|---:|---:|
+| before the fixes (on main at afa98a7) | 29,115 | 75,044 | 72,689 | 29,227 |
+| the fixes, the sum made for each | 29,391 | 83,392 | 82,811 | 33,620 |
+| on main at a92597d, the sum made for each | 29,217 | 83,331 | 82,744 | 33,555 |
+| the same, the sum made only when the doubles leave it open | 29,212 | 77,011 | 76,194 | 32,395 |
+
+The sum of the two doubles, of big numbers (`R.zadd.score`), was about 6,500 of the
+10,000 instructions the weight cost a ZINCRBY by 1; it is made now only when the
+increment is below the score's last place, or the score is not finite
+(`dw.zincr.kind`). What is left, about 2,000 to 3,500 instructions a call (5% of a
+ZINCRBY by 1 here, 3% of a ZADD INCR, 11% of a ZINCRBY by 0), is the lookup of the member
+and the parse of the increment, which the command makes again as it runs. A ZADD
+without INCR reads only its pairs, as before.
+
+A background save's writer (`bgw.loop`) takes nothing from a request: the actor sends it
+each 64 KB and waits for its answer, two operations of a channel and a switch of tasks
+for each 64 KB written.
+
 **What is left.** The walk of SET's replies (34 instructions a request) could go where the
 replies are already walked: the encoder, or the look for errors, which SET does not take.
 A slice of a background save is 32 entries of the trie while requests keep coming (64
 after a group, 256 once none has come for 10 ms, as the rewrite's), each written whole,
 as a large collection is: smaller slices would answer sooner, at the cost of a longer
-save. The syncs each 4 MB (`rdb-save-incremental-fsync`), the file's last sync, its
-rename and the directory's sync are made by the actor too, and a request that comes
-meanwhile waits for them, where Redis's child makes them alone.
+save. The writes and the syncs each 4 MB (`rdb-save-incremental-fsync`) and at the end,
+which the save's writer makes while the actor waits for its answer, and the rename and
+the directory's sync, which the actor makes, hold a request that comes meanwhile, where
+Redis's child makes them alone. ZINCRBY's weight reads the member and parses the
+increment, which the command does again as it runs: the core could give the count
+itself, a change of `src/redis.bend`, which the laws cover.
 
 ## 73. Small hashes in one string
 

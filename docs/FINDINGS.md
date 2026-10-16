@@ -6788,9 +6788,9 @@ increment of ZINCRBY (ZADD with INCR) changes the score, whether RESTORE's time 
 passed (then only a key it deleted counts), whether PFDEBUG GETREG or TODENSE makes a
 sparse HyperLogLog dense, and for an EVAL of BendKV's own scripts (a new collection
 where a key whose time had passed lay, a move to one) the key their DEL deletes and what
-the command they run changes (`dw.cmd`). The table of all 200 cases of
-`tests/bgsave_test.py` gives Redis's count for each write, alone, in a pipeline and in
-MULTI, and BendKV's matches it but where listed below.
+the command they run changes (`dw.cmd`). The table `CASES` of `tests/bgsave_test.py`
+(Tests, below) gives Redis's count for each write, alone, in a pipeline and in MULTI,
+and BendKV's matches it but where listed below.
 
 - The fast way counts a batch once it has run (`run_put`, `group_put`). A batch of one
   code costs a look at its rule: none for GET; for INCR, its calls less the errors the
@@ -6987,15 +6987,20 @@ and `make perfcheck` runs no BGSAVE. `tests/maxmemory_test.py` starts BendKV wit
 **What it costs** (PERFORMANCE.md, section 72): the count of changes on every batch, and
 the cron's look at the save points each 100 ms; while a background save runs, the
 actor's time between groups, a slice at a time, and the copies the writes make of the
-nodes they change that its snapshot shares.
+nodes they change that its snapshot shares. The review's fixes add nothing to GET, SET
+and INCR (a batch's rule is looked up once now); before each ZINCRBY and ZADD INCR, the
+lookup of its member and the parse of its increment, a few percent of the call (the sum
+of the doubles only when their fields leave it open: `dw.zincr.kind`).
 
 **The laws.** No law changed, and none states the count of changes or the saves: the
 rules, the weights and the background save are the shell's, tested against Redis. The
 account's new fields are `Info`'s (`src/info.bend`); `src/session.bend` gets wrappers
 for them (`srv.ran.d`, `srv.bg.*`, `srv.rdb.clean`, ...) and BGSAVE's reply when a
 session runs it alone, which the laws do not name: the three laws that enumerate a
-session's commands take BGSAVE as they take the other kinds of `SAdmin`. `make check`
-and `make verdict` pass.
+session's commands take BGSAVE as they take the other kinds of `SAdmin`. The review's
+fixes change `src/session.bend`'s `Mm` (the memory as the eviction sees it while a job
+runs, in place of the debt) and `srv.bg.go` (the parameters a save keeps), which no law
+names either. `make check` and `make verdict` pass.
 
 **Where BendKV differs.**
 
@@ -7047,9 +7052,9 @@ and `make verdict` pass.
 
 **Tests.** `tests/bgsave_test.py`, in `make test`, runs each part on a redis-server and
 a BendKV of their own, each in a fresh directory, and compares the transcripts line by
-line (1,255 checks):
+line (1,303 checks):
 
-- the count of changes of 195 writes of every kind (the table `CASES`, Redis's count and
+- the count of changes of 203 writes of every kind (the table `CASES`, Redis's count and
   BendKV's where they differ), each alone, in a pipeline between two PINGs, and in
   MULTI: byte for byte, Redis's counts checked against the table too;
 - BGSAVE: its replies (a syntax error, SCHEDULE, already in progress, SAVE and BGSAVE

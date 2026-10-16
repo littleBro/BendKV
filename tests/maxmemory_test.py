@@ -388,9 +388,9 @@ def snapshot_jobs(kc, rc):
     # room; it held 3% to 6% more, its hash table not growing while a child
     # runs, where the first N paid for its growth). Each within an eighth
     # of its own. Once the save has ended, BendKV evicts as its heap holds
-    # the keys (13,800 to 13,900 of them: FINDINGS.md, section 3zzzk), and
-    # Redis evicts a few more as its memory moves (about 150): neither
-    # holds more than during the save, nor fewer than before it.
+    # the keys (about 13,800 to 13,900 of them: FINDINGS.md, section
+    # 3zzzk), and Redis evicts a few more as its memory moves (about 150):
+    # neither holds more than during the save, nor fewer than before it.
     got = job_both(kc, rc, b"BGSAVE", "allkeys-random", True)
     bad = []
     for (_, ran, ev, ref, mid, left, per, room), name in zip(got, ("BendKV", "Redis")):
