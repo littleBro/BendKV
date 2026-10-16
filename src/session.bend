@@ -2848,7 +2848,9 @@ def sort.reply(+ds: R.Ds, +k: String, o: R.SortO) -> R.Reply:
 # is to save one (server.bend, The RDB file and SHUTDOWN): the shell
 # answers them once it has saved, or answers a SHUTDOWN whose save failed
 # as Redis does. A session alone writes nothing and stops nothing: it
-# answers OK for each.
+# answers OK for each. BGSAVE writes the file in the background, which
+# the shell runs too (server.bend, Background saves): a session alone
+# answers that the save started, as Redis does when nothing else runs.
 
 # SLOWLOG GET's count: none for 10, -1 for all
 def slow.get(+t: I.Tim, +args: List<&2, String>) -> R.Reply:
@@ -2908,6 +2910,8 @@ def admin.reply(+k: Nat, +args: List<&2, String>, +s: Srv, +ds: R.Ds) -> R.Reply
       R.RVerb{L.six(args, KV.mix(srv.rng(s)))}
     case 15n:
       R.r_ok()
+    case 16n:
+      R.RStatus{"Background saving started"}
     case _:
       latency.reply(k, args, s, ds)
 
