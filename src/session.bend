@@ -2029,6 +2029,8 @@ def obj.coll.enc(+c: KV.Coll, +cfg: List<&2, C.CItem>) -> String:
       obj.mems.enc(m, cfg)
     case KV.CZset{+z}:
       obj.zset.enc(z, cfg)
+    case KV.CStream{x}:
+      "stream"
 
 def obj.coll(+sub: Nat, +c: KV.Coll, +cfg: List<&2, C.CItem>, u: R.Reply) -> R.Reply:
   match sub:
@@ -2197,6 +2199,8 @@ def hr.one(m: Maybe<&2, KV.Item<KV.Val>>, +r: U32) -> R.Reply:
       R.e_wrongtype()
     case Some{KV.Item{KV.VColl{KV.CZset{z}}, e}}:
       R.e_wrongtype()
+    case Some{KV.Item{KV.VColl{KV.CStream{x}}, e}}:
+      R.e_wrongtype()
     case Some{KV.Item{KV.VStr{s}, e}}:
       R.e_wrongtype()
     case None{}:
@@ -2211,6 +2215,8 @@ def hr.many(m: Maybe<&2, KV.Item<KV.Val>>, +neg: Bool, +k: Nat, +wv: Bool, +r: U
     case Some{KV.Item{KV.VColl{KV.CMems{l}}, e}}:
       R.e_wrongtype()
     case Some{KV.Item{KV.VColl{KV.CZset{z}}, e}}:
+      R.e_wrongtype()
+    case Some{KV.Item{KV.VColl{KV.CStream{x}}, e}}:
       R.e_wrongtype()
     case Some{KV.Item{KV.VStr{s}, e}}:
       R.e_wrongtype()
@@ -2573,6 +2579,43 @@ def mem.zels(xs: List<&2, KV.ZEl>, +acc: Nat) -> Nat:
     case Con{KV.ZEl{+m, d}, rest}:
       mem.zels(rest, Nat.add(acc, Nat.add(24n, String.length(m))))
 
+# a stream's nodes (their listpacks' bytes and a radix tree's node
+# each), and its groups (each its pending entries and its consumers)
+def mem.xnodes(xs: List<&2, KV.XNode>, +acc: Nat) -> Nat:
+  match xs:
+    case Nil{}:
+      acc
+    case Con{+x, rest}:
+      mem.xnodes(rest, Nat.add(acc, Nat.add(64n, KV.xnode.bytes(x))))
+
+def mem.xcons(cs: List<&2, KV.XCon>, +acc: Nat) -> Nat:
+  match cs:
+    case Nil{}:
+      acc
+    case Con{KV.XCon{+name, seen, +ids}, rest}:
+      mem.xcons(rest, Nat.add(acc, Nat.add(Nat.add(48n, String.length(name)), Nat.mul(32n, KV.xis.size(ids)))))
+
+def mem.xgroup(+g: KV.XGroup) -> Nat:
+  match g:
+    case KV.XGrp{+name, last, read, +pel, +cons}:
+      mem.xcons(KV.xcs.list(cons, Nil{}), Nat.add(Nat.add(64n, String.length(name)), Nat.mul(80n, KV.xpl.size(pel))))
+    case KV.XGrpOf{+y}:
+      mem.xgroup(y)
+
+def mem.xgroups(gs: List<&2, KV.XGroup>, +acc: Nat) -> Nat:
+  match gs:
+    case Nil{}:
+      acc
+    case Con{+g, rest}:
+      mem.xgroups(rest, Nat.add(acc, mem.xgroup(g)))
+
+def mem.stream(+x: KV.XStream) -> Nat:
+  match x:
+    case KV.XStr{n, last, first, maxdel, added, +nodes, +groups}:
+      mem.xgroups(KV.xgs.list(groups, Nil{}), mem.xnodes(KV.xns.list(nodes, Nil{}), 112n))
+    case KV.XStrOf{+y}:
+      mem.stream(y)
+
 def mem.val(+v: KV.Val) -> Nat:
   match v:
     case KV.VStr{+s}:
@@ -2585,6 +2628,8 @@ def mem.val(+v: KV.Val) -> Nat:
       mem.elems(KV.mems.all(m), 48n)
     case KV.VColl{KV.CZset{+z}}:
       mem.zels(KV.zset.all(z), 48n)
+    case KV.VColl{KV.CStream{+x}}:
+      mem.stream(x)
 
 def mem.size(+k: String, m: Maybe<&2, KV.Item<KV.Val>>) -> R.Reply:
   match m:
