@@ -6536,6 +6536,19 @@ against a server it did not start; none passed on BendKV.
   - SCRIPT KILL makes the next tick end the script, unless it wrote (UNKILLABLE).
   - The clients that wait, and those the script's calls unblocked, are held aside
     meanwhile, as Redis serves neither while a script runs.
+  - At the first tick past the limit, the answers of the group's other commands go out,
+    after the clients CLIENT KILL took are cut off. This is what Redis's
+    `processEventsWhileBlocked` does with the replies of the commands it ran before a
+    script: it writes them, and holds only the script's caller, which is protected. They
+    still wait while a save or a SHUTDOWN waits for the group. With the append-only file,
+    the group's entries are written before the driver runs, so its answers never go out
+    before their entries. That is one more write, and with `always` one more fsync, for a
+    group whose commands wrote beside its scripts. Answers that follow an earlier script
+    of the same group wait for that script's entries, which are written after the driver.
+    A first version held every answer of the group until the script ended. A client whose
+    command came in one group with a long script then waited for its reply as long as the
+    script ran, and could not send SCRIPT KILL meanwhile. unit/scripting's test of a false
+    dead client hung on it when run on functions.
 
 **What Redis 7.0.15 does that a reader may not expect** (found by the test's scenarios,
 each kept as Redis does it):
@@ -6616,10 +6629,10 @@ code that a change far from the request's path can trigger:
 **Tests.**
 
 - `tests/script_test.py` runs 12 scenarios on BendKV and on Redis, each with clients of
-  its own, and compares the replies byte for byte (641 lines): EVAL's replies in RESP2 and
+  its own, and compares the replies byte for byte (643 lines): EVAL's replies in RESP2 and
   RESP3, `redis.call` and `redis.pcall`, error texts, the cache, the libraries, scripts
   in transactions and with WATCH, the statistics, a script past `lua-time-limit` (BUSY,
-  SCRIPT KILL, UNKILLABLE), the slow log and the latency monitor of scripts, scripts in
+  SCRIPT KILL, UNKILLABLE, another client's reply while the script runs), the slow log and the latency monitor of scripts, scripts in
   pipelines (each reply in its place, and a subscribed RESP3 client's pushes from its own
   script in Redis's order), scripts under a pause of writes by their flags, EXEC among
   them, and scripts with CLIENT TRACKING (the caller's invalidations after its script's

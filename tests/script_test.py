@@ -60,7 +60,9 @@ The scenarios:
    script that loops inside pcall too); a script that wrote before it
    loops: SCRIPT KILL answered UNKILLABLE, and the end of its loop (of a
    fixed count, one to two seconds on Redis) awaited rather than a
-   SHUTDOWN NOSAVE; then INFO's statistics. A server that answers no
+   SHUTDOWN NOSAVE; another client's command run with a script (a pause
+   of everything held both): its reply while the script runs; then INFO's
+   statistics. A server that answers no
    one while a script loops, or does not kill it, ends the scenario
    there. --no-busy leaves this one out.
 9. The slow log and the latency monitor of scripts (thresholds of 50 ms
@@ -890,6 +892,16 @@ def busy(port, log):
         log("8 unkillable", b.cmd("PING"), b.cmd("SCRIPT", "KILL"), b.cmd("GET", k("w")), b.cmd("SCRIPT", "KILL"),
             b.cmd("MULTI"), b.cmd("DISCARD"))
         log("8 loop ends", a.read(120.0), b.cmd("GET", k("w")), b.cmd("SCRIPT", "KILL"), a.cmd("PING"))
+        # another client's command run with the script's (a pause of
+        # everything holds both, and both go on as it ends): its reply goes
+        # out while the script runs, as Redis writes the replies of the
+        # commands it ran before a script once the script is busy
+        log("8 one group", r.cmd("CLIENT", "PAUSE", "300", "ALL"))
+        b.send("PING")
+        time.sleep(0.05)
+        a.send("EVAL", "while true do end", "0")
+        time.sleep(0.6)
+        log("8 one group's reply", b.read(1.0), b.cmd("PING"), b.cmd("SCRIPT", "KILL"), a.read(), b.cmd("PING"))
         log("8 stats", *stats(r))
         for x in (a, b, n, q):
             x.close()

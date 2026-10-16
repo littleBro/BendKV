@@ -7628,6 +7628,12 @@ def fni.fx.add(+e: List<&2, String>, f: Fni) -> Fni:
     case Fni{fns, nl, fx, fname, fa, fd}:
       Fni{fns, nl, e <> fx, fname, fa, fd}
 
+# whether no entry is kept (none not yet written)
+def fni.fx.none(+f: Fni) -> Bool:
+  match f:
+    case Fni{fns, nl, +fx, fname, fa, fd}:
+      List.is_empty(&2, List<&2, String>, fx)
+
 # the entries kept, oldest first, and the state without them
 def fni.fx.take(f: Fni) -> List<&2, List<&2, String>> & Fni:
   match f:
@@ -11937,9 +11943,10 @@ def sc.noticks(qs: List<&1, Req>) -> List<&1, Req>:
       q <> sc.noticks(rest)
 
 # a busy group run (group_at) with answers of its own; the group's
-# answers, the clients that wait and those unblocked meanwhile (by the
-# script's calls) held aside, as Redis serves neither while a script runs
-# (t: the clock as the requests were taken)
+# answers that wait still (sc.busy.out), the clients that wait and those
+# unblocked meanwhile (by the script's calls) held aside, as Redis serves
+# no client that waits while a script runs (t: the clock as the requests
+# were taken)
 type Bz is Data:
   Bz{outs: List<&2, Sigma<&2, &2, Chan(Ans), _ => Ans>>, ws: Waits, up: List<&2, Up>, g: Grp}
 
@@ -12054,16 +12061,49 @@ def sc.busy.groups(sc: Sc, +aof: Bool, +pid: U32, g: Grp, +reqs: Chan(Req)) -> I
     qs : List<&1, Req> <- Chan.drain(Req, reqs, group_max())
     sc.busy.run(qs, sc, aof, pid, g, reqs)
 
-# past lua-time-limit: the first time, Redis's warning, and ev's bit 16
-# on (every batch the general way, refused BUSY)
+# Once a script is busy, the group's answers go out, as Redis's
+# processEventsWhileBlocked writes the replies of the commands it ran
+# before the script (handleClientsWithPendingWrites; it holds the
+# script's caller's, its client protected: here they wait in its wait,
+# BlkScript), the clients CLIENT KILL took cut off first, as db_send cuts
+# them off. They wait while a save or a SHUTDOWN waits for the group (its
+# replies come after the save: ps.down). With the append-only file the
+# group's own entries were written before the driver ran
+# (aof_group.pre); those of the scripts it ran before this one were not,
+# nor those of the FUNCTION commands it ran (Fni's fx), so while they are
+# there every answer waits for them, after the driver (Redis writes its
+# file before the replies: flushAppendOnlyFile).
+def sc.busy.held(+aof: Bool, +sc: Sc, +g: Grp) -> Bool:
+  Bool.and(Nat.is_eq(grp.down(g), 0n), Bool.or(Bool.not(aof), Bool.and(List.is_empty(&2, A.Ent, sc.es.before(sc)), fni.fx.none(grp.fi(g)))))
+
+@unsafe
+def sc.busy.sent(p: List<&2, U32> & Ps, outs: List<&2, Sigma<&2, &2, Chan(Ans), _ => Ans>>, es: List<&2, A.Ent>, srv: S.Srv, ds: R.Ds, ws: Waits, up: List<&2, Up>, tx: Tx) -> IO(Grp):
+  (ks, pb) = p
+  do IO<Grp>:
+    Unit <- kill_all(ks)
+    Unit <- Chan.send_all(Ans, List.reverse(&2, Sigma<&2, &2, Chan(Ans), _ => Ans>, outs))
+    IO.pure(Grp, Grp{Nil{}, es, srv, ds, ws, up, tx, pb})
+
+@unsafe
+def sc.busy.out(go: Bool, g: Grp) -> IO(Grp):
+  match go g:
+    case True{} Grp{outs, es, srv, ds, ws, up, tx, pb}:
+      sc.busy.sent(ps.kills(pb), outs, es, srv, ds, ws, up, tx)
+    case _ g0:
+      IO.pure(Grp, g0)
+
+# past lua-time-limit: the first time, Redis's warning, ev's bit 16 on
+# (every batch the general way, refused BUSY), and the group's answers out
+# (sc.busy.out)
 @unsafe
 def sc.busy.if(first: Bool, +now: Nat, +sc: Sc, +aof: Bool, +pid: U32, g: Grp, +reqs: Chan(Req)) -> IO(Grp):
   match first:
     case True{}:
-      +x = g
+      +x = grp.sc.on(1, g)
       do IO<Grp>:
         Unit <- log(sc.lg(sc), 3, "Slow script detected: still in execution after " ++ Nat.show(Nat.sub(now, sc.t0(sc))) ++ " milliseconds. You can try killing the script using the " ++ Bool.pick(String, U32.is_ne(U32.and(grp.sc.st(x), 16), 0), "FUNCTION KILL", "SCRIPT KILL") ++ " command. Script name is: " ++ sc.sha(sc) ++ ".")
-        sc.busy.groups(sc, aof, pid, grp.sc.on(1, x), reqs)
+        g1 : Grp <- sc.busy.out(sc.busy.held(aof, sc, x), x)
+        sc.busy.groups(sc, aof, pid, g1, reqs)
     case False{}:
       sc.busy.groups(sc, aof, pid, g, reqs)
 
@@ -13002,19 +13042,81 @@ def aof_group(g: Grp, +sel: Nat, rw: Rw, f: File, +sync: Sync, +reqs: Chan(Req))
 
 # the waits for the engine run first, while one is in the chain
 # (Scripts), the driver's work timed in windows of its own (The driver:
-# Timing)
+# Timing), the group's entries written before it (aof_group.pre)
 @unsafe
 def aof_group.sc(any: Bool, g: Grp, +sel: Nat, rw: Rw, f: File, +sync: Sync, +reqs: Chan(Req)) -> IO(Unit):
   match any:
     case False{}:
       aof_group.go(g, sel, rw, f, sync, reqs)
     case True{}:
-      +w = rw
       do IO<Unit>:
-        t0 : U32 & U32 <- IO.clock()
-        g2 : Grp <- sc.drive(sc.fuel(), True{}, rw.pid(w), grp.at.set(clk.of(t0), g), reqs)
-        t1 : U32 & U32 <- IO.clock()
-        aof_group.fx(grp.fx.take(sc.window(clk.of(t1), g2)), sel, w, f, sync, reqs)
+        q : File & (Grp & (Nat & Rw)) <- aof_group.pre(g, sel, rw, f, sync)
+        aof_group.drive(q, sync, reqs)
+
+@unsafe
+def aof_group.drive.at(f: File, g: Grp, s: Nat & Rw, +sync: Sync, +reqs: Chan(Req)) -> IO(Unit):
+  (+sel, rw) = s
+  +w = rw
+  do IO<Unit>:
+    t0 : U32 & U32 <- IO.clock()
+    g2 : Grp <- sc.drive(sc.fuel(), True{}, rw.pid(w), grp.at.set(clk.of(t0), g), reqs)
+    t1 : U32 & U32 <- IO.clock()
+    aof_group.fx(grp.fx.take(sc.window(clk.of(t1), g2)), sel, w, f, sync, reqs)
+
+@unsafe
+def aof_group.drive.of(f: File, r: Grp & (Nat & Rw), +sync: Sync, +reqs: Chan(Req)) -> IO(Unit):
+  (g, s) = r
+  aof_group.drive.at(f, g, s, sync, reqs)
+
+@unsafe
+def aof_group.drive(q: File & (Grp & (Nat & Rw)), +sync: Sync, +reqs: Chan(Req)) -> IO(Unit):
+  (f, r) = q
+  aof_group.drive.of(f, r, sync, reqs)
+
+# the group's entries written (and synced, as the policy says) before the
+# driver runs, so that its answers may go out once a script is busy
+# (sc.busy.out); the driver's own entries go after it, with the answers
+# it leaves: one more write for a group whose commands wrote beside its
+# scripts
+@unsafe
+def aof_group.pre.synced(p: File & Result<&1, &1, U32 & String, Unit>, g: Grp, +sel: Nat, rw: Rw) -> IO(File & (Grp & (Nat & Rw))):
+  (f, r) = p
+  match r:
+    case Fail{e}:
+      IO.die(File & (Grp & (Nat & Rw)), 1, aof_fail(e))
+    case Done{u}:
+      IO.pure(File & (Grp & (Nat & Rw)), (f, (g, (sel, rw))))
+
+@unsafe
+def aof_group.pre.sync(+sync: Sync, f: File, g: Grp, +sel: Nat, rw: Rw) -> IO(File & (Grp & (Nat & Rw))):
+  match sync:
+    case Always{}:
+      do IO<File & (Grp & (Nat & Rw))>:
+        p : File & Result<&1, &1, U32 & String, Unit> <- File.sync(f)
+        aof_group.pre.synced(p, g, sel, rw)
+    case _:
+      IO.pure(File & (Grp & (Nat & Rw)), (f, (g, (sel, rw))))
+
+@unsafe
+def aof_group.pre.wrote(p: File & Result<&1, &1, U32 & String, Unit>, +sync: Sync, g: Grp, +sel: Nat, rw: Rw) -> IO(File & (Grp & (Nat & Rw))):
+  (f, r) = p
+  match r:
+    case Fail{e}:
+      IO.die(File & (Grp & (Nat & Rw)), 1, aof_fail(e))
+    case Done{u}:
+      aof_group.pre.sync(sync, f, g, sel, rw)
+
+@unsafe
+def aof_group.pre(g: Grp, +sel: Nat, rw: Rw, f: File, +sync: Sync) -> IO(File & (Grp & (Nat & Rw))):
+  match g:
+    case Grp{outs, Nil{}, srv, ds, ws, up, tx, pb}:
+      IO.pure(File & (Grp & (Nat & Rw)), (f, (Grp{outs, Nil{}, srv, ds, ws, up, tx, pb}, (sel, rw))))
+    case Grp{outs, Con{e, more}, srv, ds, ws, up, tx, pb}:
+      +es = List.reverse(&2, A.Ent, e <> more)
+      +bytes = A.encode(A.ents.args(es, sel))
+      do IO<File & (Grp & (Nat & Rw))>:
+        p : File & Result<&1, &1, U32 & String, Unit> <- File.write_raw(f, bytes)
+        aof_group.pre.wrote(p, sync, Grp{outs, Nil{}, S.srv.aof(srv, String.length(bytes)), ds, ws, up, tx, pb}, A.ents.sel(es, sel), rw.keep(rw, bytes))
 
 # the FUNCTION commands' entries the driver kept (Scripts: Fni), oldest
 # first, go to the file before the group's own, in the same write (a
