@@ -854,6 +854,8 @@ def coll.type(+c: KV.Coll) -> String:
       "set"
     case KV.CZset{z}:
       "zset"
+    case KV.CStream{x}:
+      "stream"
 
 def val.type(+v: KV.Val) -> String:
   match v:
@@ -16510,6 +16512,8 @@ def hread.coll(op: HRead, +cl: KV.Coll) -> Reply:
       e_wrongtype()
     case KV.CZset{+z}:
       e_wrongtype()
+    case KV.CStream{+x}:
+      e_wrongtype()
 
 # A list's reads.
 
@@ -16676,6 +16680,8 @@ def lread.coll(op: LRead, +cl: KV.Coll) -> Reply:
       e_wrongtype()
     case KV.CZset{+z}:
       e_wrongtype()
+    case KV.CStream{+x}:
+      e_wrongtype()
 
 # A set's reads. A key not there reads as an empty set, as in Redis
 # (SISMEMBER 0, SMISMEMBER's zeros, SCARD 0, SMEMBERS empty, an empty
@@ -16790,6 +16796,8 @@ def sread.coll(op: SRead, +cl: KV.Coll) -> Reply:
     case KV.CList{+l}:
       e_wrongtype()
     case KV.CZset{+z}:
+      e_wrongtype()
+    case KV.CStream{+x}:
       e_wrongtype()
 
 # A sorted set's reads. A key not there reads as an empty sorted set, as
@@ -18069,6 +18077,8 @@ def hwrite.coll(op: HWrite, +cl: KV.Coll) -> Out:
       hwrite.wrong(op)
     case KV.CZset{z}:
       hwrite.wrong(op)
+    case KV.CStream{x}:
+      hwrite.wrong(op)
 
 # A list's writes. A key not there is an empty list: LPUSH and RPUSH make
 # it, LPUSHX and RPUSHX answer 0, the others find nothing (LSET: no such
@@ -18401,6 +18411,8 @@ def lwrite.coll(op: LWrite, +cl: KV.Coll) -> Out:
       lwrite.wrong(op)
     case KV.CZset{z}:
       lwrite.wrong(op)
+    case KV.CStream{x}:
+      lwrite.wrong(op)
 
 # Members at random, by r (the server's random number, and the numbers of
 # its Weyl sequence after it, each scrambled by KV.mix): a member of an
@@ -18683,6 +18695,8 @@ def swrite.coll(op: SWrite, +cl: KV.Coll) -> Out:
     case KV.CList{l}:
       swrite.wrong(op)
     case KV.CZset{z}:
+      swrite.wrong(op)
+    case KV.CStream{x}:
       swrite.wrong(op)
 
 # A sorted set's writes. A key not there is an empty sorted set: ZADD
