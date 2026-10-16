@@ -11979,38 +11979,79 @@ def rdb.loaded(d: D.FLd, +t0: Nat, +lg: Log, info: I.Info, +more: Nat) -> IO(R.D
         Unit <- log(lg, 2, "DB loaded from disk: " ++ secs3(Nat.sub(t1, t0)) ++ " seconds")
         IO.pure(R.Ds & I.Info, (rdb.ds(dbs, more), I.info.rdb.loaded(info, ld, ex)))
 
-# the file's bytes, read until a read comes back empty; a read that fails
-# stops the start as a short read does
-@unsafe
-def rdb.read(f: File, got: List<&2, String>, +lg: Log) -> IO(File & String):
-  do IO<File & String>:
-    p : File & Result<&1, &1, U32 & String, String> <- File.read_raw(f, 16777216)
-    rdb.read.more(p, got, lg)
+# The file read in windows (issue #107): 1 MiB at a time, or as many bytes
+# as the window held when a value runs past it (the window doubles), so
+# that the start holds a window and the databases it fills, not the file
+# (the heap gives no memory back: a file read whole stayed resident). A
+# window's bytes the load has gone past go into the CRC64 before the next
+# one is read; its last bytes, up to EOF, once the load is done.
+def rdb.window() -> Nat:
+  1048576n
+
+def rdb.w.size(+left: Nat) -> U32:
+  U32.from_nat(Nat.max(rdb.window(), left))
+
+def rdb.w.crc(sum: Bool, +k: Nat, +w: String, c: D.C) -> D.C:
+  match sum:
+    case True{}:
+      D.crc.k(k, w, c)
+    case False{}:
+      c
 
 @unsafe
-def rdb.read.more(p: File & Result<&1, &1, U32 & String, String>, got: List<&2, String>, +lg: Log) -> IO(File & String):
+def rdb.w.more(eof: Bool, +x: String, f: File, r: D.FR, fail: D.FLd, c: D.C, +left: String, +base: Nat, +llen: Nat, +sum: Bool, +t0: Nat, +lg: Log, info: I.Info, +more: Nat) -> IO(R.Ds & I.Info):
+  match eof:
+    case True{}:
+      do IO<R.Ds & I.Info>:
+        Unit <- File.close(f)
+        rdb.loaded(fail, t0, lg, info, more)
+    case False{}:
+      +xlen = String.length(x)
+      +w = left ++ x
+      rdb.w.went(D.file.next(r, w, Nat.add(llen, xlen), xlen), f, c, w, base, Nat.add(llen, xlen), sum, t0, lg, info, more)
+
+@unsafe
+def rdb.w.read(p: File & Result<&1, &1, U32 & String, String>, r: D.FR, fail: D.FLd, c: D.C, +left: String, +base: Nat, +llen: Nat, +sum: Bool, +t0: Nat, +lg: Log, info: I.Info, +more: Nat) -> IO(R.Ds & I.Info):
+  (f, q) = p
+  match q:
+    case Fail{e}:
+      log.die(R.Ds & I.Info, lg, "Short read or OOM loading DB. Unrecoverable error, aborting now.")
+    case Done{+x}:
+      rdb.w.more(String.is_empty(x), x, f, r, fail, c, left, base, llen, sum, t0, lg, info, more)
+
+# the load s on the window w (wlen bytes, at the file's offset base), the
+# CRC64 of the bytes before it c
+@unsafe
+def rdb.w.went(s: D.FS, f: File, c: D.C, +w: String, +base: Nat, +wlen: Nat, +sum: Bool, +t0: Nat, +lg: Log, info: I.Info, +more: Nat) -> IO(R.Ds & I.Info):
+  match s:
+    case D.FEnd{d}:
+      do IO<R.Ds & I.Info>:
+        Unit <- File.close(f)
+        rdb.loaded(D.file.checked(d, c, w, base), t0, lg, info, more)
+    case D.FMore{+r, fail}:
+      +left = D.file.left(r)
+      +llen = String.length(left)
+      +used = Nat.sub(wlen, llen)
+      do IO<R.Ds & I.Info>:
+        p : File & Result<&1, &1, U32 & String, String> <- File.read_raw(f, rdb.w.size(llen))
+        rdb.w.read(p, r, fail, rdb.w.crc(sum, used, w, c), left, Nat.add(base, used), llen, sum, t0, lg, info, more)
+    case D.FGo{r}:
+      do IO<R.Ds & I.Info>:
+        Unit <- File.close(f)
+        rdb.loaded(D.file.end(D.FGo{r}), t0, lg, info, more)
+
+@unsafe
+def rdb.w.first(p: File & Result<&1, &1, U32 & String, String>, +t0: Nat, +lg: Log, +items: List<&2, C.CItem>, info: I.Info, +more: Nat) -> IO(R.Ds & I.Info):
   (f, r) = p
   match r:
     case Fail{e}:
-      log.die(File & String, lg, "Short read or OOM loading DB. Unrecoverable error, aborting now.")
+      log.die(R.Ds & I.Info, lg, "Short read or OOM loading DB. Unrecoverable error, aborting now.")
     case Done{+x}:
-      rdb.read.next(f, String.is_empty(x), x, got, lg)
-
-@unsafe
-def rdb.read.next(f: File, eof: Bool, x: String, got: List<&2, String>, +lg: Log) -> IO(File & String):
-  match eof:
-    case True{}:
-      IO.pure(File & String, (f, glue(got, SNil{})))
-    case False{}:
-      rdb.read(f, x <> got, lg)
-
-@unsafe
-def rdb.start.read(p: File & String, +t0: Nat, +lg: Log, +items: List<&2, C.CItem>, info: I.Info, +more: Nat) -> IO(R.Ds & I.Info):
-  (f, +s) = p
-  do IO<R.Ds & I.Info>:
-    Unit <- File.close(f)
-    t : U32 & U32 <- IO.clock()
-    rdb.loaded(D.file.load(s, 1n+more, clock.ms(t), String.eq(T.cfg(items, "rdbchecksum"), "yes")), t0, lg, info, more)
+      +xlen = String.length(x)
+      +sum = String.eq(T.cfg(items, "rdbchecksum"), "yes")
+      do IO<R.Ds & I.Info>:
+        t : U32 & U32 <- IO.clock()
+        rdb.w.went(D.file.first(x, xlen, 1n+more, clock.ms(t), sum), f, D.C{0, 0}, x, 0n, xlen, sum, t0, lg, info, more)
 
 @unsafe
 def rdb.start.none(none: Bool, +msg: String, +lg: Log, info: I.Info, +more: Nat) -> IO(R.Ds & I.Info):
@@ -12029,8 +12070,8 @@ def rdb.start.open(m: Result<&1, &1, U32 & String, File>, +lg: Log, +items: List
     case Done{f}:
       do IO<R.Ds & I.Info>:
         t0 : Nat <- IO.now()
-        p : File & String <- rdb.read(f, Nil{}, lg)
-        rdb.start.read(p, t0, lg, items, info, more)
+        p : File & Result<&1, &1, U32 & String, String> <- File.read_raw(f, U32.from_nat(rdb.window()))
+        rdb.w.first(p, t0, lg, items, info, more)
 
 # the databases at the start (1 + more of them), and the server's facts
 # with the keys the load loaded and found expired

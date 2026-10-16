@@ -7618,3 +7618,26 @@ parsed as before.
 **What is left.** One MSET of 300,000 keys takes 3.6 times Redis's time, and an SADD of
 as many members 3.8 times. A key of a long MSET costs 5,900 instructions, where a whole
 pipelined SET costs 4,181; where they go is not broken down here (FINDINGS 3zzzo).
+
+
+## 78. The start's RDB file in windows
+
+FINDINGS 3zzzt. One server at a time on the same machine, `--save ""`: N keys of 100
+bytes (`key:<i>`, the value its number on 100 digits) written by commands, 1,000 at a
+time in a pipeline, `used_memory_rss` read; SAVE; the server started again from the file,
+`used_memory_rss` read once it answers; the start's time from its log line (DB loaded
+from disk). Main's build is 013d9ac's, whose start is the one main has.
+
+| N | the file | server | RSS written | RSS after the start | the start |
+|---:|---:|---|---:|---:|---:|
+| 300,000 | 32.5 MB | main | 76.9 MB | 140.5 MB (1.83 times) | 0.504 s |
+| | | this change | 76.5 MB | 79.3 MB (1.04) | 0.297 s |
+| | 8.1 MB | Redis 7.0.15 | 69.7 MB | 67.8 MB (0.97) | 0.338 s |
+| 1,000,000 | 108.6 MB | main | 194.6 MB | 344.5 MB (1.77) | 2.019 s |
+| | | this change | 194.5 MB | 200.9 MB (1.03) | 1.659 s |
+| | 27.4 MB | Redis 7.0.15 | 191.0 MB | 191.3 MB (1.00) | 1.080 s |
+
+Redis's files are smaller: it writes these values, a digit repeated, with LZF, which
+BendKV does not write (3zzzc). `make perfcheck` on this change: GET 3,491, SET 4,235 and
+INCR 4,577 instructions per request (baseline 3,452, 4,214 and 4,552), with 100 clients
+in BLPOP 2.7% and 3.9% more.

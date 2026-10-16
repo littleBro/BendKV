@@ -566,7 +566,10 @@ translation stays in the trusted base.
   `rdb_saves`, `rdb_last_bgsave_status` and `rdb_last_load_keys_loaded` and `_expired`
   follow it. The start reads every version from 1 to 10, every encoding Redis 7.0.15
   reads but a stream's and a module's, AUX fields it does not know, and drops the keys
-  whose time has passed, counting them. Where BendKV differs: no BGSAVE and no save at
+  whose time has passed, counting them; it reads the file a window at a time (1 MiB, or
+  as long as a value that runs past the window), so that what it holds at once is a
+  window and the databases it builds (section 3zzzt of
+  [docs/FINDINGS.md](docs/FINDINGS.md)). Where BendKV differs: no BGSAVE and no save at
   the save points (BendKV's default `save` is empty, where Redis's is `3600 1 300 100 60
   10000`, and its start warns of save points set), nor on SIGTERM or SIGINT (above);
   `rdb_changes_since_last_save` stays 0; no LZF written; no IDLE or FREQ written, and
@@ -748,7 +751,9 @@ eviction that goes on alone, with the append-only file on and while a rewrite ru
 the RDB file (`tests/rdb_test.py`: files Redis wrote, with LZF and without, and files of
 the encodings Redis no longer writes, BendKV and Redis started from each and every key
 of every database compared; BendKV's SAVE, Redis started from its file; both ways with a
-database of 10,000 keys and a file past 16 MB; SAVE, LASTSAVE, INFO and the saves of
+database of 10,000 keys and a file past 16 MB; a file of values longer than the start's
+window, cut or with a byte changed past the first window, on both, and the resident
+memory after a start from a file of 300,000 keys; SAVE, LASTSAVE, INFO and the saves of
 FLUSHALL and SHUTDOWN against Redis's, with the append-only file and with another
 client's requests in the same group; files that do not load).
 `make suite` runs Redis's own test suite in its mode for a server already started, on

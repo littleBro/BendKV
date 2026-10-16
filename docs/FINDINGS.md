@@ -6669,6 +6669,57 @@ against 0.16 s), and a key of it 5,900 instructions, where a whole pipelined SET
 arguments go into a list, turned around once the request is whole and then read into the
 command, where GET, SET and INCR read theirs into the command directly.
 
+## 3zzzt. The start reads its RDB file in windows
+
+**What was left** (issue #107). The RDB file's start (3zzzc) read `dump.rdb` whole into
+one string, then parsed it. The heap gives no memory back to the system, so the server
+kept, for good, the file's bytes and the parse's peak beside the databases it built:
+344.5 MB resident after a start from a file of a million keys of 100 bytes (108.6 MB),
+where the same keys written by commands take 194.6 MB, and Redis 191.3 MB after its start
+(PERFORMANCE 78). A move from Redis goes through this file, and with save points so does
+every restart.
+
+**What changed** (`src/rdb.bend`: Reading the file; `src/server.bend`: The RDB file on
+the disk).
+- **A step that runs out of bytes** no longer ends the load. Each step reads an opcode
+  and what follows it from the bytes left; one that cannot gives back the load as it was
+  before it, `FMore{r, fail}`, to be run again from its start once more bytes are there,
+  with what the load comes to if the file has no more: the short read's lines, or a
+  value's "cut short" ones, as before. The steps of the times and of EOF are given the
+  time and the counts of the load for that, which they used to drop.
+- **The start** reads the file 1 MiB at a time (`rdb.window`). When a step stops for
+  more, the next read is of 1 MiB or of as many bytes as are left, whichever is more: a
+  value longer than a window (a string of 3 MiB, a set of 120,000 members) is read in as
+  many reads as it takes doublings, and parsed once it is whole. What the start holds at
+  once is a window and the databases it builds.
+- **The CRC64** is taken of each window's bytes the load went past, before the next read,
+  and of the last window's up to EOF once the load is done (`file.checked`): the same
+  bytes, so the same verdict and the same lines when it is wrong.
+- `file.load`, the load of a file read whole, stays, built on the same steps.
+
+**What it gives** (PERFORMANCE 78). Resident memory after the start is that of the keys
+written by commands, within 4%: 200.9 MB for the million keys (344.5 before), 79.3 MB for
+300,000 (140.5). The start is faster as well, the file no longer joined from its reads
+and walked whole for its checksum: 1.66 s for the million keys (2.02 s before, Redis
+1.08 s), 0.30 s for 300,000 (0.50 s, Redis 0.34 s).
+
+**Tests.** `tests/rdb_test.py`'s new scenario, of 15 checks:
+- a file Redis wrote of 10.1 MB, with a string of 3 MiB, a list of 60,000 elements, a set
+  of 120,000 members and a hash of 30,000 fields beside 20,000 small keys: both servers
+  start from it with the same databases;
+- the file cut a byte past the first window (inside the long string), cut half way, and
+  cut in its checksum; and a byte of the long string changed, so that only the CRC64
+  tells: both servers exit 1 with the same lines;
+- BendKV alone: 300,000 keys of 100 bytes written by commands, SAVE, a start from the
+  file: resident memory at most 1.3 times what it was. Main's build fails it: 140.5 MB
+  against 76.1 MB.
+
+The other 124 checks pass as before, among them the files of 16.9 MB both ways, which the
+start now reads in 17 windows.
+
+**What it costs.** Nothing on a request's path: `make perfcheck` gives GET 3,491, SET
+4,235 and INCR 4,577 instructions a request, within 1.1% of the baseline.
+
 ## 4. Where a request's time goes, and hiding the memory waits
 
 With the eight patches, BendKV ran fewer instructions on GET and SET than Redis, missed
