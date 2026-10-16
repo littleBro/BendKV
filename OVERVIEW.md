@@ -444,16 +444,26 @@ Databases: 16 of them, or as many as `databases` says, as in Redis: SELECT, MOVE
 key with its time), SWAPDB, FLUSHDB and FLUSHALL (with ASYNC/SYNC, which empty at once),
 with Redis's errors for a wrong number; INFO's keyspace has a line for each database
 with keys, and the sweep of expired keys goes over all databases.
-The connection: HELLO (2 or 3; with AUTH and SETNAME), AUTH (a password, or `default`
-and a password), SELECT, QUIT, RESET (selects database 0 again, and RESP2), CLIENT ID,
+The connection: HELLO (2 or 3; with AUTH and SETNAME), AUTH (a password, or a user and
+its password), SELECT, QUIT, RESET (selects database 0 again, RESP2 and the default
+user), CLIENT ID,
 GETNAME, SETNAME, REPLY ON/OFF/SKIP, NO-EVICT, TRACKING (client-side caching: the keys a
 client read, invalidated when they change, as Redis's tracking.c; section 3zzzb of
 FINDINGS.md), CACHING, GETREDIR, TRACKINGINFO, UNBLOCK (TIMEOUT or ERROR), LIST, INFO,
 KILL, HELP. A client must be authenticated where Redis requires it:
 after the check of the command's name and number of arguments and before it runs (a
 syntax error for an unauthenticated client is NOAUTH); a client is authenticated on
-connecting and on RESET if there is no password then, and after AUTH or AUTH in HELLO,
-and nothing else changes that.
+connecting and on RESET if the default user is on and takes no password then, and after
+AUTH or AUTH in HELLO, and nothing else changes that.
+ACL: users as Redis 7.0.15 keeps them, set by ACL SETUSER (selectors, key patterns with
+what each may do, channels, passwords kept as SHA-256, Redis's errors) and read by
+GETUSER, LIST, USERS, WHOAMI, CAT, DRYRUN, GENPASS, LOG and HELP. A call of a client whose
+user may not run every command, read and write every key and use every channel is
+checked as Redis's `processCommand` checks it, after NOAUTH and before the rest: refused,
+it answers NOPERM, counts as a refused call and adds an entry to ACL LOG; EXEC checks its
+commands again as it runs them. ACL DELUSER closes the clients of the users it removes,
+and ACL SETUSER that takes a channel away closes the subscribers that had it. While no
+client's user is restricted, nothing is checked (section 3zzzh of FINDINGS.md).
 Configuration: CONFIG GET (names, alias names, glob patterns), SET (several parameters
 at once, all or none), RESETSTAT, REWRITE, HELP over every parameter of Redis 7.0.15
 (counted in [README.md](README.md#in-numbers)):
@@ -524,10 +534,10 @@ same lines), and the log is written in Redis's form, to standard output or to
 `logfile`. The port, `bind` (IPv4), `requirepass`, `protected-mode`, the append-only
 file (`appendonly`, `appendfilename`, `appendfsync`, `aof-load-truncated`), `logfile`,
 `loglevel` and `pidfile` take effect; with `appendonly no` the RDB file is loaded, as
-Redis loads it; what BendKV cannot do (modules, ACL users, command renaming,
-daemonizing, cluster, replica, TLS, supervisor signaling, Redis 7's multi-part
-append-only file, or an RDB file that holds a stream or a module's data) stops the
-start with a line in the log.
+Redis loads it; what BendKV cannot do (modules, ACL users from the configuration or a
+file, command renaming, daemonizing, cluster, replica, TLS, supervisor signaling, Redis
+7's multi-part append-only file, or an RDB file that holds a stream or a module's data)
+stops the start with a line in the log.
 Pipelining, partial packets, inline commands (one can work through `nc`) and
 binary-safe values are supported. Requests are parsed as Redis 7.0.15 parses them: a
 length as `string2ll` reads it (no `0` before the first digit), a count of 0 or less
@@ -1535,7 +1545,7 @@ make clients BEND="$B" # redis-py's and go-redis's test suites on Redis and on B
    a model of time in the state for TTL; then the types one at a time, each with its own
    laws: hashes, lists, sets, sorted sets; then MULTI/EXEC/WATCH and pub/sub (done);
    then the rewrite of the append-only file and `maxmemory`. Out of scope: Lua and
-   functions, streams, cluster, replication, modules, ACLs beyond a password. Done:
+   functions, streams, cluster, replication, modules. Done:
    protocol edges, connection commands (sessions with laws), CONFIG by the full table of
    Redis's parameters (with laws), INFO with Redis's sections and fields, COMMAND with
    the command descriptions from Redis itself, statistics per command in INFO
@@ -1650,8 +1660,13 @@ make clients BEND="$B" # redis-py's and go-redis's test suites on Redis and on B
    and SCRIPT on Redis 7.0.15's own Lua, driven a step at a time from the actor, a
    script's calls run as EXEC runs its commands (section 3zzzd of FINDINGS.md); Lua's
    functions, FUNCTION and FCALL, on the same engine, their libraries in both files
-   (section 3zzzp); checked by tests against Redis byte for byte. What the client
-   libraries' suites find missing within the scope above (ACL's users) is the next step.
+   (section 3zzzp); checked by tests against Redis byte for byte. ACL users: Redis's
+   users, selectors, key patterns and channels, each call of a restricted client checked
+   as Redis checks it (a script's and a function's with its caller's user), ACL LOG, and
+   the clients ACL SETUSER and DELUSER close (section 3zzzh of FINDINGS.md); checked by
+   tests against Redis line by line. The client libraries' suites find nothing else
+   missing within the scope above but BGSAVE, an RDB file; the query buffer's limits are
+   the next step.
 2. **The append-only file, further.** A law of the rewrite: the rewritten file replays
    to the databases it was written from (key by key, not by the shape of the trie); it
    needs a law that a scan from the first bucket reads every key once (the invariant "a

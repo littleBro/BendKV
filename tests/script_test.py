@@ -90,6 +90,16 @@ The scenarios:
    remembers for its caller (its KEYS, not a key it reads without
    declaring it; under OPTIN only with CLIENT CACHING yes; EVAL_RO's own
    call none); a FLUSHALL in a script, its null after the reply.
+13. Scripts and ACL, as Redis 7.0.15 runs them, a script's calls checked
+   with its caller's user (scriptVerifyACL): redis.acl_check_cmd of a
+   command allowed, of one not allowed, of a key not allowed and of a
+   command not known; calls of a command, a key and a channel not
+   allowed (redis.call's error and redis.pcall's error table); EXEC of a
+   script whose command its user lost since it was queued (NOPERM in
+   EXEC's array, the commands after it run), and of a script whose call
+   is refused; ACL LOG's entries (context lua, the caller's line, its
+   command EVAL or EXEC; the volatile fields of the line left out), and
+   INFO's statistics before the transactions.
 
 Not tested: error() with a table that has no 'err' field (error({}))
 makes Redis 7.0.15 crash (sdscatfmt reads the message it does not have),
@@ -1120,10 +1130,80 @@ def tracking(port, log):
     r.close()
 
 
+# the fields of a client's line that differ from one server to the other,
+# or from one run to the next (as acl_test.py's)
+VOLATILE = (b"id", b"addr", b"laddr", b"fd", b"age", b"idle", b"qbuf", b"qbuf-free", b"argv-mem", b"multi-mem",
+            b"rbs", b"rbp", b"obl", b"oll", b"omem", b"tot-mem", b"events")
+
+
+def acl_log(c):
+    """ACL LOG's entries, newest first, each as its fields: its age left
+    out, its client's line without the volatile fields"""
+    rep = c.cmd("ACL", "LOG")
+    if not isinstance(rep, bytes) or rep[:1] != b"*":
+        return [repr(rep)]
+    out = []
+    for e in parse(rep)[0]:
+        f = []
+        for i in range(0, len(e), 2):
+            name, v = e[i], e[i + 1]
+            if name == b"age-seconds":
+                continue
+            if name == b"client-info":
+                v = b" ".join(x for x in v.split() if x.split(b"=", 1)[0] not in VOLATILE)
+            f.append((name, v))
+        out.append(f)
+    return out
+
+
+def acl(port, log):
+    r = fresh(port, log, "13")
+    u = "u" + TAG
+    log("13 reset", r.cmd("CONFIG", "RESETSTAT"), r.cmd("ACL", "LOG", "RESET"))
+    log("13 user", r.cmd("ACL", "SETUSER", u, "on", ">p", "+@scripting", "+set", "+multi", "+exec", "+publish",
+                         "resetchannels", "&ch*", "~x*"))
+    c = Client(port)
+    log("13 auth", c.cmd("AUTH", u, "p"))
+    # redis.acl_check_cmd: allowed, a command not allowed, a key not
+    # allowed (not one of the script's KEYS, which EVAL's own check reads),
+    # a command not known
+    log("13 check", ev(c, "return redis.acl_check_cmd('set', KEYS[1], 1)", [k("xa")]),
+        ev(c, "return redis.acl_check_cmd('hset', KEYS[1], 'f', 1)", [k("xa")]),
+        ev(c, "return redis.acl_check_cmd('set', ARGV[1], 1)", [], [k("ya")]),
+        ev(c, "return redis.acl_check_cmd('no-such-command', 'arg')"))
+    # a script's calls: allowed, a command, a key and a channel not allowed
+    log("13 calls", ev(c, "return redis.call('set', KEYS[1], '1')", [k("xa")]),
+        ev(c, "return redis.call('get', KEYS[1])", [k("xa")]),
+        ev(c, "return redis.call('set', ARGV[1], '1')", [], [k("ya")]),
+        ev(c, "return redis.pcall('set', ARGV[1], '1')", [], [k("ya")]),
+        ev(c, "local e = redis.pcall('get', KEYS[1]) return e['err']", [k("xa")]),
+        ev(c, "return redis.call('publish', 'chan', 'm')"),
+        ev(c, "return redis.call('publish', 'other', 'm')"))
+    log("13 stats", *stats(r))
+    # EXEC of a script whose command its user lost since it was queued:
+    # NOPERM in EXEC's array, the commands after it run. (Its statistics
+    # are left out: a command refused so is counted in
+    # total_commands_processed, which Redis does not count, and EXEC whose
+    # last command is refused so is a failed call in Redis, the NOPERM
+    # coming after its last call. Both are main's ACL's, for any command.)
+    log("13 multi", c.cmd("MULTI"), ev(c, "return redis.call('set', KEYS[1], '2')", [k("xb")]),
+        c.cmd("SET", k("xc"), "3"), ev(c, "return 1"), c.cmd("SET", k("xe"), "5"))
+    log("13 eval lost", r.cmd("ACL", "SETUSER", u, "-eval"))
+    log("13 exec", c.cmd("EXEC"), r.cmd("GET", k("xb")), r.cmd("GET", k("xc")))
+    # EXEC of a script whose call is refused
+    log("13 eval back", r.cmd("ACL", "SETUSER", u, "+eval"))
+    log("13 exec call", c.cmd("MULTI"), ev(c, "return redis.call('get', KEYS[1])", [k("xb")]), c.cmd("SET", k("xd"), "4"),
+        c.cmd("EXEC"))
+    log("13 log", *acl_log(r))
+    c.close()
+    log("13 deluser", r.cmd("ACL", "DELUSER", u), r.cmd("ACL", "LOG", "RESET"))
+    r.close()
+
+
 SCENARIOS = [("1 replies", replies), ("2 redis.call", calls), ("3 errors", errors), ("4 the cache", cache),
              ("5 libraries", libraries), ("6 transactions", transactions), ("7 statistics", statistics),
              ("8 BUSY", busy), ("9 the slow log", slow), ("10 pipelines", pipelines), ("11 paused", paused),
-             ("12 tracking", tracking)]
+             ("12 tracking", tracking), ("13 ACL", acl)]
 
 
 def transcript(port, scenario):

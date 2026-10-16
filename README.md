@@ -16,11 +16,11 @@ throughput of Redis 7.0.15 on the same machine, with half its memory for small v
 > lists, sets, sorted sets, HyperLogLogs, GEO and their times to live, DUMP and RESTORE, the
 > blocking commands, transactions, pub/sub and keyspace notifications, the keyspace, several databases,
 > connection commands, CLIENT LIST, INFO, KILL, PAUSE and UNPAUSE, MONITOR, the slow log
-> and the latency monitor, the server's administrative commands, an append-only file and
-> its rewrite, maxmemory and its eviction, Lua scripts and functions, RESP3). The goal
-> now is a drop-in replacement for a single Redis node, measured by Redis's own test
-> suite: of the 1,677 tests Redis 7.0.15 passes against a server it did not start,
-> BendKV passes 1,512, and 1,511 of the 1,565 in what it implements
+> and the latency monitor, ACL users, the server's administrative commands, an
+> append-only file and its rewrite, maxmemory and its eviction, Lua scripts and
+> functions, RESP3). The goal now is a drop-in replacement for a single Redis node,
+> measured by Redis's own test suite: of the 1,677 tests Redis 7.0.15 passes against a
+> server it did not start, BendKV passes 1,512, and 1,511 of the 1,565 in what it implements
 > ([docs/COMPATIBILITY.md](docs/COMPATIBILITY.md)). Do not use it for data you cannot
 > lose.
 
@@ -350,14 +350,15 @@ translation stays in the trusted base.
   once), with Redis's errors for a bad number; INFO's keyspace has a line for each
   database that holds keys, and the sweep of expired keys goes over every database.
 - **Connection:** PING, ECHO, TIME (the time the batch runs at, to the ms), HELLO (2 or 3,
-  with AUTH and SETNAME), AUTH, SELECT, QUIT, RESET (which selects database 0 again, and
-  RESP2),
+  with AUTH and SETNAME), AUTH (a password, or a user and its password), SELECT, QUIT,
+  RESET (which selects database 0 again, RESP2 and the default user),
   CLIENT (ID, GETNAME, SETNAME, REPLY ON/OFF/SKIP, NO-EVICT, TRACKING, CACHING, GETREDIR,
   TRACKINGINFO, UNBLOCK (TIMEOUT or ERROR), LIST, INFO, KILL, PAUSE, UNPAUSE, HELP). A
   client must authenticate where Redis asks it to: once a command's name and number of arguments
   are checked, before it runs (a syntax error is NOAUTH for a client that has not
-  authenticated); a client is authenticated as it connects, and at RESET, when there is
-  no password then, and by AUTH and HELLO's AUTH, and nothing else changes it.
+  authenticated); a client is authenticated as it connects, and at RESET, when the
+  default user is on and takes no password then, and by AUTH and HELLO's AUTH, and
+  nothing else changes it.
 - **Clients:** CLIENT LIST (all, of a TYPE, of IDs), CLIENT INFO and CLIENT KILL (the old
   form of an address, and the filters ID, TYPE, ADDR, LADDR, USER and SKIPME), as Redis
   7.0.15 runs them, with its errors. A client's line has Redis's fields in Redis's order:
@@ -374,8 +375,8 @@ translation stays in the trusted base.
   rbs, rbp, obl, oll, omem, tot-mem) and so is qbuf of another client (Redis's query buffer
   holds the commands after a blocking one; BendKV holds them as commands); idle counts
   from the client's last batch, where Redis also counts a reply written (to a subscriber
-  that gets messages, to a client that waited); user is `default`, redir the client its
-  invalidations go to (0 itself, -1 when it does not track), resp 2 or 3.
+  that gets messages, to a client that waited); user is the client's (ACL), redir the
+  client its invalidations go to (0 itself, -1 when it does not track), resp 2 or 3.
 - **Scripts:** EVAL, EVALSHA, EVAL_RO, EVALSHA_RO and SCRIPT (LOAD, EXISTS, FLUSH, KILL,
   HELP), on Redis 7.0.15's own Lua (its sandbox, `redis.call`, `redis.pcall` and the rest
   of its API, cjson, cmsgpack, struct, bit, the shebang and its flags, `redis.setresp`,
@@ -388,19 +389,22 @@ translation stays in the trusted base.
   script that has not written (UNKILLABLE otherwise), and SHUTDOWN NOSAVE stops the server.
   With CLIENT TRACKING a script's calls are its caller's, as in Redis: the caller's own
   invalidations come after the script's reply, and a read remembers the KEYS the script
-  declared. Where BendKV differs: a script runs once the group of requests that brought it has run
+  declared. With ACL a script's calls are checked with its caller's user, as in Redis, a
+  call refused going to ACL LOG in context lua, and `redis.acl_check_cmd` answers by
+  that user's rules. Where BendKV differs: a script runs once the group of requests that brought it has run
   (no client can tell the order of requests that came together), SCRIPT DEBUG is not
-  there, and the four fixed scripts of the file are read as commands (FINDINGS.md, section
-  3zzzd).
+  there, the four fixed scripts of the file are read as commands, and
+  `redis.acl_check_cmd` of a command with a number of arguments its arity does not allow
+  answers true (FINDINGS.md, section 3zzzd).
 - **Functions:** FUNCTION (LOAD, DELETE, FLUSH, LIST, STATS, KILL, DUMP, RESTORE, HELP),
   FCALL and FCALL_RO, on the same engine, as Redis 7.0.15 runs them:
   - **Libraries.** They are loaded as Redis loads them: the `#!lua name=` line, and
     `redis.register_function` with its positional and named arguments and its flags,
     with Redis's errors for each. The library API holds at load time, the globals are
     protected, and a load past 500 ms fails.
-  - **Running.** A function runs as a script runs: its calls, BUSY past
-    `busy-reply-threshold`, FUNCTION KILL, and FUNCTION STATS while it runs. FCALL_RO
-    refuses a function that may write.
+  - **Running.** A function runs as a script runs: its calls (with ACL, checked with
+    its caller's user), BUSY past `busy-reply-threshold`, FUNCTION KILL, and FUNCTION
+    STATS while it runs. FCALL_RO refuses a function that may write.
   - **DUMP and RESTORE.** FUNCTION DUMP writes the libraries in Redis's payload, without
     LZF, as DUMP does. FUNCTION RESTORE reads Redis's payloads, with LZF and the records
     of 7.0's release candidates, with APPEND, REPLACE and FLUSH.
@@ -419,6 +423,20 @@ translation stays in the trusted base.
   - INFO's `used_memory_vm_functions` is 0 until the first load, where Redis makes an
     empty Lua state at its start. It counts the functions' memory as of the last change
     of the libraries (FINDINGS.md, section 3zzzp).
+- **ACL:** users as Redis 7.0.15 keeps them (ACL SETUSER with selectors, key patterns
+  with what each may do, channels, passwords as SHA-256, and Redis's errors; GETUSER,
+  LIST, USERS, WHOAMI, CAT, DELUSER, DRYRUN, GENPASS, LOG, HELP), AUTH and HELLO's AUTH
+  as any user, and `requirepass` as the default user's password. A call of a client whose
+  user may not run every command is checked as Redis checks it, after NOAUTH and before
+  the rest: NOPERM for its command, a key or a channel, a refused call and an entry in ACL
+  LOG; EXEC checks its commands again; ACL DELUSER closes the users' clients, and ACL
+  SETUSER that takes a channel away closes the subscribers that had it. While no client's
+  user is restricted, nothing is checked (section 3zzzh of
+  [docs/FINDINGS.md](docs/FINDINGS.md)). Where BendKV differs: GETUSER and LIST describe
+  commands as Redis 7.2 does, the rules as they were given; users come from ACL SETUSER
+  only, not from the configuration or an ACL file; `%~pattern`, which 7.0.15 accepts and
+  then crashes on at the next GETUSER, is a syntax error; ACL CAT of a category lists its
+  commands by name, where Redis lists them in its table's hash order.
 - **CLIENT PAUSE and CLIENT UNPAUSE**, as Redis 7.0.15 runs them: a pause of the
   commands that write or may be replicated (WRITE: PFCOUNT and PUBLISH too, and an EXEC
   whose transaction queued one) or of every command (ALL), for a timeout in ms; a second
@@ -508,7 +526,7 @@ translation stays in the trusted base.
   Redis 7.0.15 (counted in [In numbers](#in-numbers)), taken from Redis's own table by
   `tools/gen_config.py`: every value is
   checked as Redis checks it and read back as Redis prints it. requirepass is the
-  password, hz is capped as in Redis and notify-keyspace-events picks the events
+  default user's password, hz is capped as in Redis and notify-keyspace-events picks the events
   published (above); the port, the addresses, TLS and the append-only
   file cannot change while BendKV runs (a new value fails as it does when Redis cannot
   apply it); maxmemory and its policy, samples, tenacity and LFU parameters limit the
@@ -573,9 +591,10 @@ translation stays in the trusted base.
   when it is there, as Redis loads it, with its log's lines; a file that does not load
   stops the start with Redis's reason. With `appendonly yes` the append-only file is
   loaded and the RDB file left aside, as in Redis. What BendKV cannot do (modules, ACL
-  users, renamed commands, the background, a cluster, a replica, TLS, a supervisor to
-  signal, Redis 7's multi-part append-only file, or an RDB file that holds a stream or a
-  module's data, to load) stops the start with a line saying so.
+  users from the configuration or a file, renamed commands, the background, a cluster, a
+  replica, TLS, a supervisor to signal, Redis 7's multi-part append-only file, or an RDB
+  file that holds a stream or a module's data, to load) stops the start with a line
+  saying so.
 - **Protocol:** pipelining, partial packets, inline commands with quoting,
   binary-safe values; requests framed as Redis 7.0.15 frames them (a length as `string2ll`
   reads it, with no `0` before its first digit, a count of 0 or less skipped down to
@@ -782,7 +801,10 @@ commands (`tests/admin_test.py`: LASTSAVE, ROLE, WAIT, MEMORY, LOLWUT's drawings
 byte and SHUTDOWN's errors on BendKV and on Redis, then SHUTDOWN on servers of their own,
 the append-only file and the pid file after it, and a SHUTDOWN while a rewrite runs), AUTH
 (`tests/auth_test.py`: scenarios on BendKV and on Redis of when a client must
-authenticate and what it is answered before it does), RESP3 (`tests/resp3_test.py`: 11
+authenticate and what it is answered before it does), ACL (`tests/acl_test.py`:
+scenarios on BendKV and on Redis of a user's calls allowed and refused, alone and
+pipelined behind AUTH, ACL LOG, MULTI and EXEC, the clients ACL SETUSER and DELUSER
+close, CLIENT LIST and CLIENT KILL USER, SORT's BY and GET, and the slow log), RESP3 (`tests/resp3_test.py`: 11
 scenarios on BendKV and on Redis compared byte for byte, of HELLO and the switch of
 protocol in a pipeline, the replies RESP3 types, EXEC, blocking commands and Pub/Sub's
 pushes; and the differential tests of keys, numbers, BITFIELD and the types again with
@@ -844,13 +866,15 @@ src/        the server
   resp.bend     RESP parser, RESP2 and RESP3 reply encoders         tested
   info.bend     INFO's sections and fields, SLOWLOG, LATENCY        tested
   command.bend  COMMAND, with Redis's table of BendKV's commands     tested
+  sha.bend      SHA-256, as Redis keeps a password's               tested
+  acl.bend      ACL users: rules, checks and the log, as Redis's   tested
   startup.bend  the command line and the configuration file        tested
   script.bend   the effects of the Lua engine (src/lua/engine.c)   tested
   server.bend   TCP, connections, the database actor, the log      tested
   lua/          the engine's C: Redis's Lua driven in steps         tested
 deps/redis/ Redis 7.0.15's Lua 5.1.5 with its libraries, and three of its helpers, as Redis ships them (NOTICE: their licenses, and the one change)
 proof/      LAWS.bend (the laws), PROOF.bend (their proofs), SPEC.bend (the commands on the trie alone)
-tests/      smoke (the pure checks), float, start, differential, expiry, protocol, session, the end of a connection, CONFIG, INFO, statistics per command, COMMAND, SCAN, numbers at their edges, BITFIELD, hash, list, set, sorted set, SORT, HyperLogLog, GEO, DUMP and RESTORE, blocking, transaction, Pub/Sub, CLIENT, MONITOR, timing of calls, CLIENT PAUSE, Lua scripts, administrative commands, AUTH, RESP3, maxmemory, robustness, stalled reader, concurrency, AOF, AOF crash, AOF rewrite and RDB file tests
+tests/      smoke (the pure checks), float, start, differential, expiry, protocol, session, the end of a connection, CONFIG, INFO, statistics per command, COMMAND, SCAN, numbers at their edges, BITFIELD, hash, list, set, sorted set, SORT, HyperLogLog, GEO, DUMP and RESTORE, blocking, transaction, Pub/Sub, CLIENT, MONITOR, timing of calls, CLIENT PAUSE, Lua scripts, administrative commands, AUTH, ACL, RESP3, maxmemory, robustness, stalled reader, concurrency, AOF, AOF crash, AOF rewrite and RDB file tests
 bench/      in-process benchmarks of the map, the core and channels, and `make bench` against Redis
 tools/      measurement scripts, the runners of Redis's test suite and of the client libraries'
             suites, and the generators of the trie, of the parameter table, of the command
@@ -881,9 +905,10 @@ away.
 | `src/redis.bend` | 18,000 | 7,400 | yes |
 | `src/batch.bend` | 84 |  | yes |
 | `src/aof.bend` | 1,200 |  | yes |
-| `src/session.bend` | 2,400 |  | yes |
+| `src/session.bend` | 2,700 |  | yes |
 | `src/config.bend` | 1,200 | 180 | yes |
-| `src/command.bend` | 1,900 | 1,300 | no |
+| `src/acl.bend` | 2,100 | 600 | no |
+| `src/command.bend` | 2,500 | 1,900 | no |
 | `src/float.bend` | 1,200 |  | no |
 | `src/geo.bend` | 870 |  | no |
 | `src/hll.bend` | 1,400 |  | no |
@@ -893,12 +918,13 @@ away.
 | `src/resp.bend` | 980 |  | no |
 | `src/script.bend` | 51 |  | no |
 | `src/server.bend` | 11,000 |  | no |
+| `src/sha.bend` | 120 |  | no |
 | `src/startup.bend` | 460 |  | no |
 | `proof/LAWS.bend` | 920 | 20 |  |
 | `proof/SPEC.bend` | 370 |  |  |
 | `proof/PROOF.bend` | 16,000 | 2,800 |  |
 | `src/`, the 6 files the laws import | 25,000 | 8,200 |  |
-| `src/`, the 11 others | 22,000 | 1,300 |  |
+| `src/`, the 13 others | 26,000 | 2,600 |  |
 | `proof/` | 18,000 | 2,800 |  |
 <!-- END gen_counts: numbers -->
 

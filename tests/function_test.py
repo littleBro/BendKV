@@ -55,6 +55,13 @@ The scenarios:
    function's client the error of a killed function; FUNCTION KILL
    refused for an EVAL; a function that wrote first: UNKILLABLE, its loop
    awaited. --no-busy leaves this one out.
+8. Functions and ACL: a function's calls checked with its caller's user
+   (a command and a key not allowed), redis.acl_check_cmd in a function,
+   FUNCTION's subcommands by what the user may run; EXEC of FCALLs that
+   the user lost since they were queued (NOPERM in EXEC's array), and of
+   a function whose call is refused; ACL LOG's entries (context lua with
+   the caller's line, its command FCALL or EXEC), and INFO's statistics
+   before the transactions (as in tests/script_test.py's scenario 13).
 
 Then the payloads both ways (when --redis-check is given or always: the
 two servers' clients together): Redis's FUNCTION DUMP with LZF
@@ -69,7 +76,7 @@ import sys
 import time
 
 from dump_test import crc64
-from script_test import Client, enc, info, k, parse, stats
+from script_test import TAG, Client, acl_log, enc, info, k, parse, stats
 
 LIB = "#!lua name=lib\nredis.register_function('f', function(keys, args) return 'hello' end)\n"
 
@@ -459,8 +466,45 @@ def busy(port, log):
         r.close()
 
 
+# 8. functions and ACL
+def acl(port, log):
+    r = fresh(port, log, "8")
+    u = "f" + TAG
+    log("8 reset", r.cmd("CONFIG", "RESETSTAT"), r.cmd("ACL", "LOG", "RESET"))
+    code = ("#!lua name=al\n"
+            "redis.register_function('g', function(keys, args) return redis.call('get', keys[1]) end)\n"
+            "redis.register_function('s', function(keys, args) return redis.call('set', keys[1], args[1]) end)\n"
+            "redis.register_function('sa', function(keys, args) return redis.call('set', args[1], args[2]) end)\n"
+            "redis.register_function('c', function(keys, args) if #args == 2 then "
+            "return redis.acl_check_cmd(args[1], args[2]) end return redis.acl_check_cmd(args[1], args[2], args[3]) end)\n")
+    log("8 load", r.cmd("FUNCTION", "LOAD", code))
+    log("8 user", r.cmd("ACL", "SETUSER", u, "on", ">p", "+fcall", "+set", "+multi", "+exec", "+function|list", "~x*"))
+    c = Client(port)
+    log("8 auth", c.cmd("AUTH", u, "p"))
+    # a function's calls: allowed, a command and a key not allowed;
+    # redis.acl_check_cmd; FUNCTION's subcommands
+    log("8 calls", fcall(c, "s", [k("xa")], ["1"]), fcall(c, "g", [k("xa")]), fcall(c, "sa", [], [k("ya"), "1"]),
+        fcall(c, "c", [], ["set", k("xa"), "1"]), fcall(c, "c", [], ["get", k("xa")]),
+        fcall(c, "c", [], ["set", k("ya"), "1"]), fcall(c, "c", [], ["nosuch", "x"]))
+    log("8 function", c.cmd("FUNCTION", "LIST", "LIBRARYNAME", "nosuch"), c.cmd("FUNCTION", "DELETE", "al"),
+        fcall(c, "g", [k("ya")]))
+    log("8 stats", *stats(r))
+    # EXEC of FCALLs that the user lost since they were queued (the
+    # transaction ends with a command that runs, as in script_test's 13)
+    log("8 multi", c.cmd("MULTI"), fcall(c, "s", [k("xb")], ["2"]), c.cmd("SET", k("xc"), "3"),
+        fcall(c, "s", [k("xd")], ["4"]), c.cmd("SET", k("xe"), "5"))
+    log("8 fcall lost", r.cmd("ACL", "SETUSER", u, "-fcall"))
+    log("8 exec", c.cmd("EXEC"), r.cmd("GET", k("xb")), r.cmd("GET", k("xc")))
+    log("8 fcall back", r.cmd("ACL", "SETUSER", u, "+fcall"))
+    log("8 exec call", c.cmd("MULTI"), fcall(c, "g", [k("xb")]), c.cmd("SET", k("xf"), "6"), c.cmd("EXEC"))
+    log("8 log", *acl_log(r))
+    c.close()
+    log("8 deluser", r.cmd("ACL", "DELUSER", u), r.cmd("ACL", "LOG", "RESET"))
+    r.close()
+
+
 SCENARIOS = [("1 FUNCTION LOAD", loads), ("2 FCALL", calls), ("3 LIST and the rest", lists), ("4 DUMP and RESTORE", dumps),
-             ("5 transactions", transactions), ("6 statistics", statistics), ("7 BUSY", busy)]
+             ("5 transactions", transactions), ("6 statistics", statistics), ("7 BUSY", busy), ("8 ACL", acl)]
 
 
 def transcript(port, scenario):

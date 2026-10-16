@@ -38,6 +38,7 @@ import ./resp.bend as P
 import ./batch.bend as B
 import ./aof.bend as A
 import ./session.bend as S
+import ./acl.bend as U
 import ./config.bend as C
 import ./startup.bend as T
 import ./info.bend as I
@@ -562,16 +563,44 @@ def waits.find(ws: Waits, m: Maybe<&2, String>, +ds: R.Ds, acc: Waits) -> Found:
 type Wk is Data:
   Wk{db: Nat, key: String, old: Bool}
 
+# a command queued in a transaction: the number of the batch it came in
+# (b) and its arguments as sent (an Av whose next request is the
+# command's)
+type Qa is Data:
+  Qa{b: Nat, a: Av}
+
+# the arguments of a transaction's commands (newest first), and how many
+# batches its client began since the transaction did (n: tx.front counts
+# them), so that EXEC reads the bytes of each batch once (bg.x.go)
+type Qs is Data:
+  Qs{n: Nat, avs: List<&2, Qa>}
+
 # the clients with a transaction or watched keys, a chain of them: each
 # with its id, whether it is in MULTI, whether a command was refused
 # while it queued (bad: EXECABORT), whether a key it watched was touched
 # (cas: EXEC answers a null array), the commands queued (newest first),
-# their codes and their arguments as sent (each an Av whose next request
-# is the command's), and the keys it watches. While a batch runs, its
-# client is the first of the chain, if it is in it (tx.front).
+# their codes and their arguments as sent (Qs), and the keys it watches.
+# While a batch runs, its client is the first of the chain, if it is in
+# it (tx.front).
 type Tx is Data:
   TxNone{}
-  TxOn{id: Nat, multi: Bool, bad: Bool, cas: Bool, cmds: List<&2, R.Cmd>, codes: List<&2, Nat>, avs: List<&2, Av>, keys: List<&2, Wk>, rest: Tx}
+  TxOn{id: Nat, multi: Bool, bad: Bool, cas: Bool, cmds: List<&2, R.Cmd>, codes: List<&2, Nat>, avs: Qs, keys: List<&2, Wk>, rest: Tx}
+
+def qs.put(a: Av, q: Qs) -> Qs:
+  match q:
+    case Qs{+n, xs}:
+      Qs{n, Qa{n, a} <> xs}
+
+def qs.next(q: Qs) -> Qs:
+  match q:
+    case Qs{n, xs}:
+      Qs{Nat.add(n, 1n), xs}
+
+# the commands' arguments in the order they were queued
+def qs.order(q: Qs) -> List<&2, Qa>:
+  match q:
+    case Qs{n, xs}:
+      List.reverse(&2, Qa, xs)
 
 def tx.on(+t: Tx) -> Bool:
   match t:
@@ -636,10 +665,20 @@ def tx.rest(p: Tx & Tx) -> Tx:
   (one, others) = p
   others
 
-# the client of id n first in t, if it is in it
+# the client taken out (tx.take) with one batch more begun
+def tx.next(p: Tx & Tx) -> Tx & Tx:
+  (one, others) = p
+  match one:
+    case TxOn{i, mu, bd, cs, qs, qc, qa, wk, r}:
+      (TxOn{i, mu, bd, cs, qs, qc, qs.next(qa), wk, r}, others)
+    case TxNone{}:
+      (TxNone{}, others)
+
+# the client of id n first in t, if it is in it, as a batch of its
+# begins (one more batch, Qs)
 def tx.front(+n: Nat, t: Tx) -> Tx:
   +x = t
-  tx.put(tx.take(x, tx.is(n, x), n, TxNone{}))
+  tx.put(tx.next(tx.take(x, tx.is(n, x), n, TxNone{})))
 
 # t without the client of id n (its connection closed)
 def tx.drop(+n: Nat, t: Tx) -> Tx:
@@ -652,7 +691,7 @@ def tx.open.of(mine: Bool, +n: Nat, t: Tx) -> Tx:
     case True{} TxOn{i, mu, bd, cs, qs, qc, qa, wk, r}:
       TxOn{i, True{}, bd, cs, qs, qc, qa, wk, r}
     case _ t0:
-      TxOn{n, True{}, False{}, False{}, Nil{}, Nil{}, Nil{}, Nil{}, t0}
+      TxOn{n, True{}, False{}, False{}, Nil{}, Nil{}, Qs{0n, Nil{}}, Nil{}, t0}
 
 def tx.open(+n: Nat, t: Tx) -> Tx:
   +x = t
@@ -672,12 +711,12 @@ def tx.close(+n: Nat, t: Tx) -> Tx:
 
 # a command queued by the client first in t (in MULTI); none once the
 # transaction is to fail, as Redis keeps none then
-def tx.queued(skip: Bool, i: Nat, mu: Bool, bd: Bool, cs: Bool, qs: List<&2, R.Cmd>, qc: List<&2, Nat>, qa: List<&2, Av>, wk: List<&2, Wk>, r: Tx, c: R.Cmd, +code: Nat, a: Av) -> Tx:
+def tx.queued(skip: Bool, i: Nat, mu: Bool, bd: Bool, cs: Bool, qs: List<&2, R.Cmd>, qc: List<&2, Nat>, qa: Qs, wk: List<&2, Wk>, r: Tx, c: R.Cmd, +code: Nat, a: Av) -> Tx:
   match skip:
     case True{}:
       TxOn{i, mu, bd, cs, qs, qc, qa, wk, r}
     case False{}:
-      TxOn{i, mu, bd, cs, c <> qs, code <> qc, a <> qa, wk, r}
+      TxOn{i, mu, bd, cs, c <> qs, code <> qc, qs.put(a, qa), wk, r}
 
 def tx.queue(c: R.Cmd, +code: Nat, a: Av, t: Tx) -> Tx:
   match t:
@@ -766,7 +805,7 @@ def tx.watch.of(mine: Bool, +n: Nat, +j: Nat, ks: List<&2, String>, +ds: R.Ds, t
     case True{} TxOn{i, mu, bd, False{}, qs, qc, qa, wk, r}:
       TxOn{i, mu, bd, False{}, qs, qc, qa, wk.add(ks, j, ds, R.ds.now(ds), wk), r}
     case _ t0:
-      TxOn{n, False{}, False{}, False{}, Nil{}, Nil{}, Nil{}, wk.add(ks, j, ds, R.ds.now(ds), Nil{}), t0}
+      TxOn{n, False{}, False{}, False{}, Nil{}, Nil{}, Qs{0n, Nil{}}, wk.add(ks, j, ds, R.ds.now(ds), Nil{}), t0}
 
 def tx.watch(+n: Nat, +j: Nat, ks: List<&2, String>, +ds: R.Ds, t: Tx) -> Tx:
   +x = t
@@ -828,7 +867,7 @@ def wk.touch(ks: List<&2, Wk>, +j: Nat, +k: String, +here: Bool) -> Maybe<&2, Li
       wk.touch.at(wk.hit(j, k, w), w, here, wk.touch(rest, j, k, here))
 
 # a client after a touch: its keys, or dirty with none
-def tx.touched(m: Maybe<&2, List<&2, Wk>>, i: Nat, mu: Bool, bd: Bool, cs: Bool, qs: List<&2, R.Cmd>, qc: List<&2, Nat>, qa: List<&2, Av>, r: Tx) -> Tx:
+def tx.touched(m: Maybe<&2, List<&2, Wk>>, i: Nat, mu: Bool, bd: Bool, cs: Bool, qs: List<&2, R.Cmd>, qc: List<&2, Nat>, qa: Qs, r: Tx) -> Tx:
   match m:
     case Some{ks}:
       TxOn{i, mu, bd, cs, qs, qc, qa, ks, r}
@@ -1464,7 +1503,7 @@ def trk.off(+id: Nat, +cur: Tk, t: Trk) -> Trk:
 # CLIENT PAUSE (The pause, below), and a SHUTDOWN asked for in the group
 # (down: SHUTDOWN, below).
 type Cl is Data:
-  Cl{id: Nat, back: Chan(Ans), fd: U32, addr: String, laddr: String, since: Nat, name: String, db: Nat, noev: Bool, r3: Bool, tk: Tk}
+  Cl{id: Nat, back: Chan(Ans), fd: U32, addr: String, laddr: String, since: Nat, name: String, db: Nat, noev: Bool, r3: Bool, tk: Tk, user: String}
 
 # CLIENT PAUSE's pause (The pause, below): none, or one of the commands
 # that write (all: of every command) until a time (ms since 1970)
@@ -1653,13 +1692,13 @@ def cls.killed(+id: Nat, +cs: Cls) -> Bool:
 # a client's tracking (Tracking), read and set
 def cl.tk(+c: Cl) -> Tk:
   match c:
-    case Cl{id, back, fd, addr, laddr, since, name, db, noev, r3, +kt}:
+    case Cl{id, back, fd, addr, laddr, since, name, db, noev, r3, +kt, user}:
       kt
 
 def cl.tk.set(kt: Tk, c: Cl) -> Cl:
   match c:
-    case Cl{id, back, fd, addr, laddr, since, name, db, noev, r3, t0}:
-      Cl{id, back, fd, addr, laddr, since, name, db, noev, r3, kt}
+    case Cl{id, back, fd, addr, laddr, since, name, db, noev, r3, t0, user}:
+      Cl{id, back, fd, addr, laddr, since, name, db, noev, r3, kt, user}
 
 def cl.tk.of(+m: Maybe<&2, Cl>) -> Tk:
   match m:
@@ -1684,6 +1723,40 @@ def cls.tk.set(+id: Nat, kt: Tk, cs: Cls) -> Cls:
   +c = cs
   cls.tk.put(id, kt, cls.get(id, c), c)
 
+# a client's user (ACL), read and set
+def cl.user(+c: Cl) -> String:
+  match c:
+    case Cl{id, back, fd, addr, laddr, since, name, db, noev, r3, kt, +user}:
+      user
+
+def cl.user.set(+u: String, c: Cl) -> Cl:
+  match c:
+    case Cl{id, back, fd, addr, laddr, since, name, db, noev, r3, kt, user}:
+      Cl{id, back, fd, addr, laddr, since, name, db, noev, r3, kt, u}
+
+def cl.user.of(+m: Maybe<&2, Cl>) -> String:
+  match m:
+    case Some{+c}:
+      cl.user(c)
+    case None{}:
+      "default"
+
+# the user of the client of id (default when there is none)
+def cls.user(+id: Nat, +cs: Cls) -> String:
+  cl.user.of(cls.get(id, cs))
+
+def cls.user.put(+id: Nat, +u: String, m: Maybe<&2, Cl>, cs: Cls) -> Cls:
+  match m:
+    case Some{c}:
+      cls.put(id, cl.user.set(u, c), cs)
+    case None{}:
+      cs
+
+# the client of id logged in as the user of name u
+def cls.user.set(+id: Nat, +u: String, cs: Cls) -> Cls:
+  +c = cs
+  cls.user.put(id, u, cls.get(id, c), c)
+
 # the client of id's connection ended: out of the registry, and of the
 # killed, its tracking off (Tracking: its ids stay in the table)
 def cls.left.of(+id: Nat, +kt: Tk, cs: Cls) -> Cls:
@@ -1704,13 +1777,13 @@ def cls.kills(cs: Cls) -> List<&2, U32> & Cls:
 # a client's name, database and protocol set from its connection
 def cl.conn(+cn: S.Conn, c: Cl) -> Cl:
   match c:
-    case Cl{id, back, fd, addr, laddr, since, name, db, noev, r3, kt}:
-      Cl{id, back, fd, addr, laddr, since, S.conn.name(cn), S.conn.db(cn), noev, S.conn.r3(cn), kt}
+    case Cl{id, back, fd, addr, laddr, since, name, db, noev, r3, kt, user}:
+      Cl{id, back, fd, addr, laddr, since, S.conn.name(cn), S.conn.db(cn), noev, S.conn.r3(cn), kt, user}
 
 def cl.noev(on: Bool, c: Cl) -> Cl:
   match c:
-    case Cl{id, back, fd, addr, laddr, since, name, db, noev, r3, kt}:
-      Cl{id, back, fd, addr, laddr, since, name, db, on, r3, kt}
+    case Cl{id, back, fd, addr, laddr, since, name, db, noev, r3, kt, user}:
+      Cl{id, back, fd, addr, laddr, since, name, db, on, r3, kt, user}
 
 def cls.with.if(+id: Nat, m: Maybe<&2, Cl>, +cn: S.Conn, cs: Cls) -> Cls:
   match m:
@@ -1857,15 +1930,17 @@ def ps.calm(+pb: Ps) -> Bool:
     case PsOf{+p}:
       ps.calm(p)
 
-# how a batch of a client with no subscription may run (group_job): 0 as
-# ps.calm lets it; 1 the fast way only when it writes no heeded key, while
-# the tracking has work but no client is in BCAST mode (Ps's bit 22 alone:
-# the keys of the tracking table are heeded keys, Tracking); 2 the
-# general way
+# how a batch of a client with no subscription may run (group_job), while
+# nothing else keeps the fast way off: 0 as ps.calm lets it; 1 the fast
+# way only when it writes no heeded key (heed.ok.of), while the tracking has
+# work but no client is in BCAST mode (Ps's bit 22: the keys of the
+# tracking table are heeded keys, Tracking); 3 as 0 and 4 as 1, but only
+# for a client that is not restricted, while some client is (bit 20:
+# ACL; bit 22 adds 1, bit 20 adds 3); 2 the general way
 def ps.gate(+pb: Ps) -> Nat:
   match pb:
     case Ps{reg, +ev, px, cs, own}:
-      Bool.pick(Nat, U32.is_eq(U32.and(ev, 3821010943), 0), Bool.pick(Nat, U32.is_eq(U32.and(ev, 4194304), 0), 0n, 1n), 2n)
+      Bool.pick(Nat, U32.is_eq(U32.and(ev, 3819962367), 0), Nat.add(Bool.pick(Nat, U32.is_eq(U32.and(ev, 4194304), 0), 0n, 1n), Bool.pick(Nat, U32.is_eq(U32.and(ev, 1048576), 0), 0n, 3n)), 2n)
     case PsOf{+p}:
       ps.gate(p)
 
@@ -2030,10 +2105,17 @@ def ps.heed.free(+cs: List<&2, R.Cmd>, +hs: List<&2, U32>, +pb: Ps) -> Bool:
     case PsOf{+p}:
       ps.heed.free(cs, hs, p)
 
+# whether the client of cn may run a batch the fast way while some
+# client is restricted (ACL): as S.ready lets it, and it is not
+# restricted (each of its calls is checked, the general way)
+def acl.ready(+cn: S.Conn, +srv: S.Srv) -> Bool:
+  Bool.and(S.ready(cn, srv), Bool.not(S.srv.restricted(srv, S.conn.id(cn))))
+
 # whether a batch of database commands may run the fast way while some
-# client waits or watches (group_job): its client may run it so, is in
-# no MULTI (looked for only while some client has a transaction or
-# watches keys) and none of its commands may write a heeded key
+# client waits or watches (group_job): its client may run it so (ready:
+# S.ready, or acl.ready while some client is restricted), is in no MULTI
+# (looked for only while some client has a transaction or watches keys)
+# and none of its commands may write a heeded key
 def heed.ok.of(ready: Bool, +n: Nat, +t: Tx, +cs: List<&2, R.Cmd>, +hs: List<&2, U32>, +pb: Ps) -> Bool:
   match ready t:
     case False{} _:
@@ -2042,9 +2124,6 @@ def heed.ok.of(ready: Bool, +n: Nat, +t: Tx, +cs: List<&2, R.Cmd>, +hs: List<&2,
       ps.heed.free(cs, hs, pb)
     case True{} t0:
       Bool.and(Bool.not(tx.in.multi(t0, n, False{})), ps.heed.free(cs, hs, pb))
-
-def heed.ok(+cn: S.Conn, +srv: S.Srv, +t: Tx, +cs: List<&2, R.Cmd>, +hs: List<&2, U32>, +pb: Ps) -> Bool:
-  heed.ok.of(S.ready(cn, srv), S.conn.id(cn), t, cs, hs, pb)
 
 def ps.heed.stir(+c: R.Cmd, +pb: Ps) -> Bool:
   match pb:
@@ -2566,7 +2645,7 @@ def reg.reproto.if(ch: Bool, +id: Nat, +back: Chan(Ans), +r3: Bool, r: Reg) -> R
 
 def ps.reproto(+cn: S.Conn, m: Maybe<&2, Cl>, r: Reg) -> Reg:
   match m:
-    case Some{Cl{id, +back, fd, addr, laddr, since, name, db, noev, +r3, kt}}:
+    case Some{Cl{id, +back, fd, addr, laddr, since, name, db, noev, +r3, kt, user}}:
       +now = S.conn.r3(cn)
       reg.reproto.if(Bool.xor(r3, now), S.conn.id(cn), back, now, r)
     case None{}:
@@ -2592,6 +2671,34 @@ def ps.cls(+pb: Ps) -> Cls:
       cs
     case PsOf{+p}:
       ps.cls(p)
+
+# the user of the client of id (ACL), and the client logged in as the
+# user of name u
+def ps.user(+id: Nat, +pb: Ps) -> String:
+  cls.user(id, ps.cls(pb))
+
+def ps.user.set(+id: Nat, +u: String, pb: Ps) -> Ps:
+  match pb:
+    case Ps{reg, ev, px, cs, own}:
+      Ps{reg, ev, px, cls.user.set(id, u, cs), own}
+    case PsOf{p}:
+      ps.user.set(id, u, p)
+
+# whether some client is restricted (Ps's bit 20: ACL), and that bit set
+# as the server's restricted clients are (on)
+def ps.acl.on(+pb: Ps) -> Bool:
+  match pb:
+    case Ps{reg, +ev, px, cs, own}:
+      U32.is_ne(U32.and(ev, 1048576), 0)
+    case PsOf{+p}:
+      ps.acl.on(p)
+
+def ps.acl.at(pb: Ps, on: Bool) -> Ps:
+  match pb:
+    case Ps{reg, ev, px, cs, own}:
+      Ps{reg, U32.or(U32.and(ev, 4293918719), Bool.pick(U32, on, 1048576, 0)), px, cs, own}
+    case PsOf{p}:
+      ps.acl.at(p, on)
 
 # The monitors in Pub/Sub's state (MONITOR, below): whether some client
 # monitors, whether the client of id does, the client of id made one
@@ -2635,7 +2742,7 @@ def ps.mon.push(+id: Nat, +out: String, pb: Ps) -> Ps:
 # the address of the client of id, as a line shows it
 def cl.addr.or(m: Maybe<&2, Cl>) -> String:
   match m:
-    case Some{Cl{id, back, fd, addr, laddr, since, name, db, noev, r3, kt}}:
+    case Some{Cl{id, back, fd, addr, laddr, since, name, db, noev, r3, kt, user}}:
       addr
     case None{}:
       "?:0"
@@ -2658,7 +2765,7 @@ def ps.addr(+id: Nat, +pb: Ps) -> String:
 # the name of the client of id (CLIENT SETNAME's), "" for none
 def cl.name.or(m: Maybe<&2, Cl>) -> String:
   match m:
-    case Some{Cl{id, back, fd, addr, laddr, since, name, db, noev, r3, kt}}:
+    case Some{Cl{id, back, fd, addr, laddr, since, name, db, noev, r3, kt, user}}:
       name
     case None{}:
       ""
@@ -2858,12 +2965,21 @@ def mem.bits(+srv: S.Srv, +ev: U32) -> U32:
   +m = S.srv.mm(srv)
   U32.or(U32.or(U32.or(U32.and(ev, 603979776), Bool.pick(U32, Nat.is_lt(0n, S.mm.max(m)), 268435456, 0)), Bool.pick(U32, S.mm.lfu(m), 134217728, 0)), Bool.pick(U32, S.mm.kick(m), 67108864, 0))
 
+# whether the server has restricted clients (ACL), and Ps's bit 20 for
+# them (the gate's classes 3 and 4: ps.gate), set at once when a client's
+# user changes (bg.user) and after each batch of the general way
+def acl.on(+srv: S.Srv) -> Bool:
+  S.srv.acl.any(srv)
+
+def acl.bit(+srv: S.Srv) -> U32:
+  Bool.pick(U32, acl.on(srv), 1048576, 0)
+
 def ps.tune(pb: Ps, +srv: S.Srv) -> Ps:
   match pb:
     case Ps{RegNone{}, +ev, px, +cs, own}:
-      Ps{RegNone{}, U32.or(cls.bit(cs), mem.bits(srv, ev)), px, cs, own}
+      Ps{RegNone{}, U32.or(U32.or(cls.bit(cs), mem.bits(srv, ev)), acl.bit(srv)), px, cs, own}
     case Ps{RegOn{c, p, sh, cl, n}, +ev, px, +cs, own}:
-      Ps{RegOn{c, p, sh, cl, n}, U32.or(U32.or(ev.of(srv), cls.bit(cs)), mem.bits(srv, ev)), px, cs, own}
+      Ps{RegOn{c, p, sh, cl, n}, U32.or(U32.or(U32.or(ev.of(srv), cls.bit(cs)), mem.bits(srv, ev)), acl.bit(srv)), px, cs, own}
     case PsOf{p}:
       ps.tune(p, srv)
 
@@ -3441,7 +3557,7 @@ def iv.broken(+id: Nat, +back: Chan(Ans), +r3: Bool, +rd: Nat, +cur: Nat, +out: 
 
 def iv.redir.of(m: Maybe<&2, Cl>, +rd: Nat, +id: Nat, +back: Chan(Ans), +r3: Bool, +p: Pl, +cur: Nat, +out: Maybe<&2, Nat>, v: Iv) -> Iv:
   match m:
-    case Some{Cl{+rid, +rback, fd, addr, laddr, since, name, db, noev, +rr3, kt}}:
+    case Some{Cl{+rid, +rback, fd, addr, laddr, since, name, db, noev, +rr3, kt, user}}:
       iv.put(True{}, rid, rback, rr3, p, id, cur, out, v)
     case None{}:
       iv.broken(id, back, r3, rd, cur, out, v)
@@ -3457,7 +3573,7 @@ def iv.to(+rd: Nat, +id: Nat, +back: Chan(Ans), +r3: Bool, +p: Pl, +cur: Nat, +o
 # command runs (0: none), out as iv.route reads it
 def iv.send(+c: Cl, +p: Pl, +cur: Nat, +out: Maybe<&2, Nat>, v: Iv) -> Iv:
   match c:
-    case Cl{+id, +back, fd, addr, laddr, since, name, db, noev, +r3, +kt}:
+    case Cl{+id, +back, fd, addr, laddr, since, name, db, noev, +r3, +kt, user}:
       iv.to(tk.redir(kt), id, back, r3, p, cur, out, v)
 
 # a key of the table that changed: each of its clients that hears of it
@@ -3549,7 +3665,7 @@ def iv.key(+k: String, +cur: Nat, +bc: Bool, v: Iv) -> Iv:
 # emptied (trackingInvalidateKeysOnFlush)
 def iv.null.of(m: Maybe<&2, Cl>, +cur: Nat, v: Iv) -> Iv:
   match m:
-    case Some{Cl{+id, +back, fd, addr, laddr, since, name, db, noev, +r3, +kt}}:
+    case Some{Cl{+id, +back, fd, addr, laddr, since, name, db, noev, +r3, +kt, user}}:
       iv.to(tk.redir(kt), id, back, r3, PlNull{r3}, cur, None{}, v)
     case None{}:
       v
@@ -5153,13 +5269,15 @@ def bg.unblock(+n: Nat, +err: Bool, +code: Nat, g: LRun) -> LRun:
 # transaction); or hold a command back while clients are paused (The
 # pause); stop the server (SHUTDOWN, after a save or not), or refuse
 # SHUTDOWN and SAVE in MULTI (SHUTDOWN); save (SAVE), or save once the
-# group has run (FLUSHALL with save points: The RDB file); a command that
-# does not run (after a QUIT, or before the client authenticates) runs as
-# the session runs it. A script command makes its client wait for the
-# engine (Scripts), SCRIPT KILL asks a script's end, and while a script
-# runs past lua-time-limit a command is refused BUSY (in MULTI, flagging
-# the transaction; a SHUTDOWN without NOSAVE as its own failed call), or
-# EXEC aborted with it.
+# group has run (FLUSHALL with save points: The RDB file); or refuse a
+# command its client's user may not run (in MULTI, flagging the
+# transaction), log its client in (AUTH, HELLO), or run a subcommand of
+# ACL that reaches the clients (ACL); a command that does not run (after
+# a QUIT, or before the client authenticates) runs as the session runs it.
+# A script command makes its client wait for the engine (Scripts), SCRIPT
+# KILL asks a script's end, and while a script runs past lua-time-limit a
+# command is refused BUSY (in MULTI, flagging the transaction; a SHUTDOWN
+# without NOSAVE as its own failed call), or EXEC aborted with it.
 type Sh is Data:
   ShRun{}
   ShWait{b: S.Blk}
@@ -5195,6 +5313,10 @@ type Sh is Data:
   ShBusy{inm: Bool, fail: Bool}
   ShBusyExec{}
   ShExecLua{}
+  ShNoPerm{v: U.Verdict, inm: Bool}
+  ShAuth{}
+  ShHello{}
+  ShAcl{k: Nat}
 
 def sh.blk(b: S.Blk, +ds: R.Ds) -> Sh:
   +x = b
@@ -5255,6 +5377,11 @@ def sh.script(+k: Nat) -> Sh:
       ShFnKill{}
     case _:
       ShScript{}
+# ACL's subcommands that reach the clients (ShAcl: ACL): DELUSER, SETUSER
+# and WHOAMI, by R.acl_id's numbers; the others run as the session runs
+# them
+def sh.acl(+k: Nat) -> Sh:
+  Bool.pick(Sh, Bool.or(Nat.is_eq(k, 2n), Bool.or(Nat.is_eq(k, 11n), Nat.is_eq(k, 13n))), ShAcl{k}, ShRun{})
 
 # a command of a client with no open transaction, that may run
 def sh.plain(+c: R.Cmd, +code: Nat, +ds: R.Ds) -> Sh:
@@ -5278,7 +5405,9 @@ def sh.plain(+c: R.Cmd, +code: Nat, +ds: R.Ds) -> Sh:
     case R.Own{R.SClientSetName{n}}:
       ShConn{}
     case R.Own{R.SHello{a}}:
-      ShConn{}
+      ShHello{}
+    case R.Own{R.SAuth{a}}:
+      ShAuth{}
     case R.Own{R.SSelect{d}}:
       ShConn{}
     case R.Own{R.SMonitor{}}:
@@ -5293,6 +5422,8 @@ def sh.plain(+c: R.Cmd, +code: Nat, +ds: R.Ds) -> Sh:
       sh.script(k)
     case R.Own{R.SFlushAll{}}:
       ShFlush{}
+    case R.Own{R.SAcl{+k, a}}:
+      sh.acl(k)
     case R.Own{R.SBad{R.RError{+m}}}:
       sh.abort.if(Nat.is_eq(R.code.key(code), R.stat.top(162n)), m)
     case _:
@@ -5534,21 +5665,32 @@ def sh.of.run(rej: Bool, may: Bool, subd: Bool, inm: Bool, mon: Bool, held: Bool
 def sh.nomulti(+code: Nat) -> Bool:
   Bool.and(R.stat.nomulti(R.code.key(code)), Bool.not(Nat.is_eq(R.code.class(code), 1n)))
 
-def sh.of.nm(nm: Bool, +m: Bool, subd: Bool, +i: Bool, mon: Bool, oom: Bool, held: Bool, +busy: Bool, +sf: U32, +c: R.Cmd, +code: Nat, +ds: R.Ds) -> Sh:
+# A command its client's user may not run (v: ACL, bg.acl.check) is refused
+# once the client may run commands and SHUTDOWN and SAVE in MULTI were
+# refused, before the rest, as processCommand checks ACL right after
+# NO_MULTI (and before a busy script's BUSY: busy)
+def sh.of.acl(v: U.Verdict, rej: Bool, may: Bool, subd: Bool, inm: Bool, mon: Bool, held: Bool, busy: Bool, +c: R.Cmd, +code: Nat, +ds: R.Ds) -> Sh:
+  match v:
+    case U.VOk{}:
+      sh.of.run(rej, may, subd, inm, mon, held, busy, c, code, ds)
+    case U.VNo{w, at, o}:
+      ShNoPerm{U.VNo{w, at, o}, inm}
+
+def sh.of.nm(nm: Bool, +m: Bool, subd: Bool, +i: Bool, mon: Bool, oom: Bool, held: Bool, +busy: Bool, +sf: U32, v: U.Verdict, +c: R.Cmd, +code: Nat, +ds: R.Ds) -> Sh:
   match nm:
     case True{}:
       ShNoMulti{}
     case False{}:
-      sh.of.run(Bool.and(m, Bool.and(oom, Bool.and(Bool.not(busy), sh.oomy(i, c, code, sf)))), m, subd, i, mon, held, busy, c, code, ds)
+      sh.of.acl(v, Bool.and(m, Bool.and(oom, Bool.and(Bool.not(busy), sh.oomy(i, c, code, sf)))), m, subd, i, mon, held, busy, c, code, ds)
 
-def sh.of(quit: Bool, may: Bool, inm: Bool, subd: Bool, mon: Bool, oom: Bool, held: Bool, busy: Bool, +sf: U32, +c: R.Cmd, +code: Nat, +ds: R.Ds) -> Sh:
+def sh.of(quit: Bool, may: Bool, inm: Bool, subd: Bool, mon: Bool, oom: Bool, held: Bool, busy: Bool, +sf: U32, v: U.Verdict, +c: R.Cmd, +code: Nat, +ds: R.Ds) -> Sh:
   match quit:
     case True{}:
       ShRun{}
     case False{}:
       +m = may
       +i = inm
-      sh.of.nm(Bool.and(m, Bool.and(i, sh.nomulti(code))), m, subd, i, mon, oom, held, busy, sf, c, code, ds)
+      sh.of.nm(Bool.and(m, Bool.and(i, sh.nomulti(code))), m, subd, i, mon, oom, held, busy, sf, v, c, code, ds)
 
 # the client's transaction state, changed (its client first in the chain)
 def bg.open(+id: Nat, g: LRun) -> LRun:
@@ -5721,12 +5863,13 @@ def red.put(st: Red, a: String) -> String:
     case _:
       a
 
-def red.hello.opts(xs: List<&2, String>, +st: Red) -> List<&2, String>:
+# HELLO's options from xs on, n of them, read in state st
+def red.hello.opts(xs: List<&2, String>, +n: Nat, +st: Red) -> List<&2, String>:
   match xs:
     case Nil{}:
       Nil{}
-    case Con{+a, +rest}:
-      red.put(st, a) <> red.hello.opts(rest, red.step(st, a, List.length(&2, String, rest)))
+    case Con{+a, rest}:
+      red.put(st, a) <> red.hello.opts(rest, Nat.sub(n, 1n), red.step(st, a, Nat.sub(n, 1n)))
 
 # whether HELLO's version is one Redis reads its options after: 2 or 3
 def red.ver(l: R.LL) -> Bool:
@@ -5739,7 +5882,8 @@ def red.ver(l: R.LL) -> Bool:
 def red.hello.ver(ok: Bool, h: String, v: String, rest: List<&2, String>) -> List<&2, String>:
   match ok:
     case True{}:
-      h <> v <> red.hello.opts(rest, RedOpt{})
+      +r = rest
+      h <> v <> red.hello.opts(r, List.length(&2, String, r), RedOpt{})
     case False{}:
       h <> v <> rest
 
@@ -5759,9 +5903,27 @@ def red.of(auth: Bool, hello: Bool, xs: List<&2, String>) -> List<&2, String>:
     case False{} False{}:
       xs
 
+# a command line with its arguments from the n-th on redacted
+def red.from(xs: List<&2, String>, +n: Nat) -> List<&2, String>:
+  match xs:
+    case Nil{}:
+      Nil{}
+    case Con{x, rest}:
+      Bool.pick(String, Nat.is_eq(n, 0n), red.word(), x) <> red.from(rest, Nat.sub(n, 1n))
+
+# ACL SETUSER's arguments redacted from its user on, as aclCommand
+# redacts them (on: ACL SETUSER; the slow log's, as ACL is administrative
+# and no monitor sees it)
+def red.setuser(on: Bool, +key: Nat, xs: List<&2, String>) -> List<&2, String>:
+  match on:
+    case True{}:
+      red.from(xs, 2n)
+    case False{}:
+      red.of(Nat.is_eq(key, R.stat.top(102n)), Nat.is_eq(key, R.stat.top(101n)), xs)
+
 # a call's arguments as a line shows them (key: its command's)
 def mon.redact(+key: Nat, xs: List<&2, String>) -> List<&2, String>:
-  red.of(Nat.is_eq(key, R.stat.top(102n)), Nat.is_eq(key, R.stat.top(101n)), xs)
+  red.setuser(Nat.is_eq(key, R.stat.sub.acl(11n)), key, xs)
 
 # CONFIG SET's parameters that Redis flags sensitive (SENSITIVE_CONFIG),
 # whose values it redacts, case aside
@@ -5835,6 +5997,8 @@ def mon.seen.sh(+may: Bool, +sh: Sh, +code: Nat) -> Bool:
       True{}
     case ShExecLua{}:
       False{}
+    case ShNoPerm{v, i}:
+      Nat.is_eq(R.code.key(code), R.stat.top(162n))
     case _:
       mon.ran(may, code)
 
@@ -6289,12 +6453,12 @@ def cl.line.of(m: Mine, +mo: Bool, +sub: Bool, +x: TxIs, +b: Bool, +wa: Nat, c: 
   match m:
     case Mine{+ch, +pa, +sh}:
       match c:
-        case Cl{id, back, fd, addr, laddr, +since, name, db, +noev, r3, +kt}:
+        case Cl{id, back, fd, addr, laddr, +since, name, db, +noev, r3, +kt, user}:
           match w:
             case Them{}:
-              R.client.line(R.ClLine{id, addr, laddr, U32.to_nat(fd), name, cl.secs(now, since), cl.secs(now, at), cl.flags(mo, sub, x, b, kt, noev), db, List.length(&2, String, ch), List.length(&2, String, pa), List.length(&2, String, sh), cl.multi(x), 0n, wa, cl.cmd.of(word), tk.line.redir(kt), r3})
+              R.client.line(R.ClLine{id, addr, laddr, U32.to_nat(fd), name, cl.secs(now, since), cl.secs(now, at), cl.flags(mo, sub, x, b, kt, noev), db, List.length(&2, String, ch), List.length(&2, String, pa), List.length(&2, String, sh), cl.multi(x), 0n, wa, cl.cmd.of(word), user, tk.line.redir(kt), r3})
             case Me{i, +cn, cmd, qbuf, argv, ex}:
-              R.client.line(R.ClLine{id, addr, laddr, U32.to_nat(fd), S.conn.name(cn), cl.secs(now, since), 0n, cl.flags(mo, sub, x, b, kt, noev), S.conn.db(cn), List.length(&2, String, ch), List.length(&2, String, pa), List.length(&2, String, sh), cl.multi(x), qbuf, argv, cmd, tk.line.redir(kt), S.conn.r3(cn)})
+              R.client.line(R.ClLine{id, addr, laddr, U32.to_nat(fd), S.conn.name(cn), cl.secs(now, since), 0n, cl.flags(mo, sub, x, b, kt, noev), S.conn.db(cn), List.length(&2, String, ch), List.length(&2, String, pa), List.length(&2, String, sh), cl.multi(x), qbuf, argv, cmd, user, tk.line.redir(kt), S.conn.r3(cn)})
 
 def cl.line.mk(m: Mine, +mo: Bool, +sub: Bool, +x: TxIs, +b: Bool, +wa: Nat, c: Cl, +now: Nat, mk: U32 & Nat, w: Who) -> String:
   (word, at) = mk
@@ -6320,12 +6484,12 @@ def cl.tx(+w: Who, +id: Nat, +tx: Tx) -> TxIs:
 # client c's line, ended by a newline
 def cl.line(c: Cl, +now: Nat, +w: Who, +ws: Waits, +tx: Tx, +pb: Ps) -> String:
   match c:
-    case Cl{+id, +back, fd, addr, laddr, since, name, db, noev, r3, kt}:
-      cl.line.mk(mine.or(ps.mine(id, pb)), ps.mon.is(id, pb), ps.has(id, pb), cl.tx(w, id, tx), waits.has(id, ws), waits.argv(id, ws), Cl{id, back, fd, addr, laddr, since, name, db, noev, r3, kt}, now, Chan.marked(Ans, back), w) ++ "\n"
+    case Cl{+id, +back, fd, addr, laddr, since, name, db, noev, r3, kt, user}:
+      cl.line.mk(mine.or(ps.mine(id, pb)), ps.mon.is(id, pb), ps.has(id, pb), cl.tx(w, id, tx), waits.has(id, ws), waits.argv(id, ws), Cl{id, back, fd, addr, laddr, since, name, db, noev, r3, kt, user}, now, Chan.marked(Ans, back), w) ++ "\n"
 
 def cl.id(+c: Cl) -> Nat:
   match c:
-    case Cl{+id, back, fd, addr, laddr, since, name, db, noev, r3, kt}:
+    case Cl{+id, back, fd, addr, laddr, since, name, db, noev, r3, kt, user}:
       id
 
 # the registry's clients, in the order of their ids (as Redis lists them
@@ -6465,12 +6629,12 @@ def id.is(m: Maybe<&2, Nat>, +n: Nat) -> Bool:
 # that kills)
 def cl.picked(f: R.Kill, c: Cl, +me: Nat, +pb: Ps) -> Bool:
   match f c:
-    case R.Kill{a, l, i, +ty, +skip} Cl{+id, back, fd, +addr, +laddr, since, name, db, noev, r3, kt}:
-      Bool.and(Bool.and(Bool.and(opt.is(a, addr), opt.is(l, laddr)), Bool.and(id.is(i, id), cl.typed(ty, id, pb))), Bool.not(Bool.and(skip, Nat.is_eq(id, me))))
+    case R.Kill{a, l, i, +ty, +skip, u} Cl{+id, back, fd, +addr, +laddr, since, name, db, noev, r3, kt, +user}:
+      Bool.and(Bool.and(Bool.and(Bool.and(opt.is(a, addr), opt.is(l, laddr)), Bool.and(id.is(i, id), cl.typed(ty, id, pb))), opt.is(u, user)), Bool.not(Bool.and(skip, Nat.is_eq(id, me))))
 
 def cl.fd(+c: Cl) -> U32:
   match c:
-    case Cl{id, back, +fd, addr, laddr, since, name, db, noev, r3, kt}:
+    case Cl{id, back, +fd, addr, laddr, since, name, db, noev, r3, kt, user}:
       fd
 
 # the clients a filter picks
@@ -7179,6 +7343,23 @@ def bg.x.trk(on: Bool, +id: Nat, +code: Nat, +a: Av, g: LRun) -> LRun:
     case _ g0:
       g0
 
+# CLIENT KILL with USER options: the error of the first user the server
+# does not keep, as Redis answers it when it reads that option; else the
+# error after the options (e), or the kill (f)
+def bg.kill.or(e: Maybe<&2, R.Reply>, f: R.Kill, +me: Nat, +code: Nat, g: LRun) -> LRun:
+  match e:
+    case Some{r}:
+      bg.say(r, code, g)
+    case None{}:
+      bg.kill(False{}, f, me, code, g)
+
+def bg.kill.users(m: Maybe<&2, String>, f: R.Kill, e: Maybe<&2, R.Reply>, +me: Nat, +code: Nat, g: LRun) -> LRun:
+  match m:
+    case Some{+u}:
+      bg.say(R.e_no_user(u), code, g)
+    case None{}:
+      bg.kill.or(e, f, me, code, g)
+
 def bg.client(+id: Nat, op: R.ClOp, +argv: Nat, +inb: Nat, +ex: Maybe<&2, Nat>, +code: Nat, g: LRun) -> LRun:
   match op:
     case R.CoList{+ty, ids}:
@@ -7188,7 +7369,13 @@ def bg.client(+id: Nat, op: R.ClOp, +argv: Nat, +inb: Nat, +ex: Maybe<&2, Nat>, 
     case R.CoKill{f}:
       bg.kill(False{}, f, id, code, g)
     case R.CoKillAddr{a}:
-      bg.kill(True{}, R.Kill{Some{a}, None{}, None{}, 0n, False{}}, id, code, g)
+      bg.kill(True{}, R.Kill{Some{a}, None{}, None{}, 0n, False{}, None{}}, id, code, g)
+    case R.CoKillUsers{us, f, e}:
+      match g:
+        case LRun{rs, es, conn, +srv, ds, ws, up, tx, pb}:
+          bg.kill.users(S.cl.user.miss(us, srv), f, e, id, code, LRun{rs, es, conn, srv, ds, ws, up, tx, pb})
+        case LHeld{h}:
+          LHeld{h}
     case R.CoNoEvict{on}:
       bg.noev(id, on, code, g)
     case R.CoPause{+hi, +lo, +all}:
@@ -7205,6 +7392,302 @@ def bg.client(+id: Nat, op: R.ClOp, +argv: Nat, +inb: Nat, +ex: Maybe<&2, Nat>, 
       bg.trk.say(id, True{}, code, g)
     case R.CoBad{+r}:
       bg.say(r, code, g)
+
+# ACL
+# ---
+# The users and their rules are the session's (acl.bend, session.bend);
+# the server knows each client's user (Cl.user: default from the start,
+# AUTH and HELLO's AUTH log a client in, RESET logs it out) and which
+# clients are restricted, their user not allowed every command, key and
+# channel (the session's Acl.rcl), so that it checks their calls as
+# Redis 7.0.15's processCommand does: after NOAUTH and NO_MULTI, before
+# the rest (bg.acl.check, sh.of: ShNoPerm). While some client is restricted
+# (Ps's bit 20), a batch of a restricted client runs the general way
+# (acl.ready), a command at a time; EXEC checks each command it runs again
+# (bg.x.go). A call refused, and an AUTH that failed, go to the ACL LOG
+# with the client's line. ACL WHOAMI answers the client's user; ACL
+# SETUSER sets which clients of its user are restricted, and closes those
+# subscribed to a channel the user may no longer have; ACL DELUSER closes
+# the clients of the users it removed, the client itself after its reply.
+
+# whether a call is checked before the shell decides what to do with it
+# (bg.go): while some client is restricted (on: Ps's bit 20), a call of a
+# restricted client that may make it (NOAUTH comes first) and that the
+# parser did not refuse (processCommand refuses those before); its
+# arguments are then read from the batch's bytes (av.if), so that the
+# calls after it find theirs read
+def bg.acl.on(on: Bool, +id: Nat, +k: Nat, +may: Bool, +srv: S.Srv) -> Bool:
+  match on:
+    case True{}:
+      Bool.and(may, Bool.and(Bool.not(Nat.is_eq(R.code.class(k), 1n)), S.srv.restricted(srv, id)))
+    case False{}:
+      False{}
+
+# the check: the user's verdict on the call of code k and its command line
+def bg.acl.check(on: Bool, +id: Nat, +srv: S.Srv, +pb: Ps, +k: Nat, +a: Av) -> U.Verdict:
+  match on:
+    case True{}:
+      S.srv.acl.check(srv, ps.user(id, pb), R.code.key(k), av.now(a))
+    case False{}:
+      U.VOk{}
+
+# a SORT (or SORT_RO) whose BY has a pattern or that has a GET, of a
+# client whose user may not read every key, runs as its error instead
+# (U.acl.sort.err), as sortCommandGeneric answers it: a call that failed
+def bg.acl.sort.of(m: Maybe<&2, String>, +c: R.Cmd) -> R.Cmd:
+  match m:
+    case Some{e}:
+      R.Own{R.SReply{R.RError{e}}}
+    case None{}:
+      c
+
+def bg.acl.sort(on: Bool, +id: Nat, +srv: S.Srv, +pb: Ps, +k: Nat, +a: Av, +c: R.Cmd) -> R.Cmd:
+  match on:
+    case True{}:
+      bg.acl.sort.of(S.srv.acl.sort(srv, ps.user(id, pb), R.code.key(k), av.now(a)), c)
+    case False{}:
+      c
+
+# An entry of the ACL LOG, as addACLLogEntry writes one: the context
+# (multi in MULTI, and while EXEC runs its transaction), and the client's
+# line then (client-info): its CLIENT LIST line, without the newline,
+# whose command is the call's, or EXEC while EXEC runs its transaction
+# (x: its commands queued; Redis keeps EXEC the last command then, and
+# EXEC's argument as the arguments' bytes)
+def maybe.is(+x: Maybe<&2, Nat>) -> Bool:
+  match x:
+    case Some{n}:
+      True{}
+    case None{}:
+      False{}
+
+def acl.ctx(+inm: Bool) -> String:
+  Bool.pick(String, inm, "multi", "toplevel")
+
+def acl.me(+id: Nat, +cn: S.Conn, +code: Nat, +inb: Nat, +a: Av, +x: Maybe<&2, Nat>) -> Who:
+  match x:
+    case Some{+n}:
+      Me{id, cn, "exec", inb, 4n, Some{n}}
+    case None{}:
+      Me{id, cn, cl.cmd.of(U32.from_nat(code)), inb, S.cl.argv(av.now(a), 0n), None{}}
+
+def acl.info(+id: Nat, +now: Nat, +me: Who, +ws: Waits, +tx: Tx, +pb: Ps) -> String:
+  +s = cl.line.or(cls.get(id, ps.cls(pb)), now, me, ws, tx, pb)
+  String.take(s, Nat.sub(String.length(s), 1n))
+
+# the entry for a call of the client of id that its user may not make (v:
+# the reason, and what it named), in MULTI or not (inm)
+def bg.acl.log(+id: Nat, +v: U.Verdict, +inm: Bool, +x: Maybe<&2, Nat>, +inb: Nat, +code: Nat, +a: Av, g: LRun) -> LRun:
+  match g:
+    case LRun{rs, es, +conn, srv, +ds, +ws, up, +tx, +pb}:
+      +now = R.ds.now(ds)
+      +info = acl.info(id, now, acl.me(id, conn, code, inb, a, x), ws, tx, pb)
+      LRun{rs, es, conn, S.srv.acl.log(srv, U.Ent{1n, U.verdict.why(v), acl.ctx(inm), U.verdict.obj(v), ps.user(id, pb), now, info}), ds, ws, up, tx, pb}
+    case LHeld{h}:
+      LHeld{h}
+
+# the entry for an AUTH that failed (reason auth, its command as the
+# client typed it, the user it tried), as ACLAuthenticateUser adds it
+def bg.auth.log(+id: Nat, +u: String, +x: Maybe<&2, Nat>, +inb: Nat, +code: Nat, +a: Av, g: LRun) -> LRun:
+  match g:
+    case LRun{rs, es, +conn, srv, +ds, +ws, up, +tx, +pb}:
+      +now = R.ds.now(ds)
+      +argv = av.now(a)
+      +info = acl.info(id, now, acl.me(id, conn, code, inb, a, x), ws, tx, pb)
+      LRun{rs, es, conn, S.srv.acl.log(srv, U.Ent{1n, "auth", acl.ctx(maybe.is(x)), S.arg.first(argv), u, now, info}), ds, ws, up, tx, pb}
+    case LHeld{h}:
+      LHeld{h}
+
+# a call its client's user may not make (ShNoPerm), refused as
+# processCommand refuses it: NOPERM, a refused call, and an entry; in
+# MULTI its transaction is flagged, and EXEC itself aborts it, as
+# rejectCommand calls execCommandAbort for EXEC
+def bg.noperm.say(exec: Bool, +id: Nat, +m: String, +inm: Bool, +code: Nat, g: LRun) -> LRun:
+  match exec:
+    case True{}:
+      bg.one(R.Own{R.SBad{R.RError{"EXECABORT Transaction discarded because of: " ++ abort.why(m)}}}, R.code.refused(code), bg.close(id, g))
+    case False{}:
+      bg.one(R.Own{R.SBad{R.RError{m}}}, R.code.refused(code), bg.oom.tx(inm, g))
+
+def bg.noperm(+id: Nat, +v: U.Verdict, +inm: Bool, +inb: Nat, +code: Nat, +a: Av, g: LRun) -> LRun:
+  bg.noperm.say(Nat.is_eq(R.code.key(code), R.stat.top(162n)), id, U.verdict.err(v), inm, code, bg.acl.log(id, v, inm, None{}, inb, code, a, g))
+
+# the client of id logged in as the user of name n (AUTH, HELLO's AUTH;
+# RESET: default): in the registry, among the restricted clients or not,
+# and Ps's bit 20 as the server's restricted clients are now, for the
+# commands after it in its batch and the batches after it
+def bg.user(+id: Nat, +n: String, g: LRun) -> LRun:
+  match g:
+    case LRun{rs, es, conn, srv, ds, ws, up, tx, pb}:
+      +s1 = S.srv.acl.client(srv, id, n)
+      LRun{rs, es, conn, s1, ds, ws, up, tx, ps.acl.at(ps.user.set(id, n, pb), acl.on(s1))}
+    case LHeld{h}:
+      LHeld{h}
+
+# what an AUTH did (S.Login): logged its client in as its user, failed
+# (an entry), or neither (its other errors); x: EXEC runs it
+def bg.login(+id: Nat, l: S.Login, +x: Maybe<&2, Nat>, +inb: Nat, +code: Nat, +a: Av, g: LRun) -> LRun:
+  match l:
+    case S.LgIn{+u}:
+      bg.user(id, u, g)
+    case S.LgFail{+u}:
+      bg.auth.log(id, u, x, inb, code, a, g)
+    case S.LgNone{}:
+      g
+
+def bg.logins(+id: Nat, ls: List<&2, S.Login>, +x: Maybe<&2, Nat>, +inb: Nat, +code: Nat, +a: Av, g: LRun) -> LRun:
+  match ls:
+    case Nil{}:
+      g
+    case Con{l, rest}:
+      bg.logins(id, rest, x, inb, code, a, bg.login(id, l, x, inb, code, a, g))
+
+# AUTH, run as the session runs it, then its login (the server before it
+# read for it, as AUTH changes no user)
+def bg.auth(+id: Nat, +c: R.Cmd, +code: Nat, +inb: Nat, +a: Av, +x: Maybe<&2, Nat>, g: LRun) -> LRun:
+  match c g:
+    case R.Own{R.SAuth{+args}} LRun{rs, es, conn, +srv, ds, ws, up, tx, pb}:
+      bg.login(id, S.auth.login(args, srv), x, inb, code, a, bg.one(c, code, LRun{rs, es, conn, srv, ds, ws, up, tx, pb}))
+    case _ g0:
+      bg.one(c, code, g0)
+
+# HELLO, run as the session runs it, then its AUTHs' logins in turn: each
+# logs its client in, one that failed (the last) adds an entry
+def bg.hello(+id: Nat, +c: R.Cmd, +code: Nat, +inb: Nat, +a: Av, +x: Maybe<&2, Nat>, g: LRun) -> LRun:
+  match c g:
+    case R.Own{R.SHello{+args}} LRun{rs, es, +conn, +srv, ds, ws, up, tx, pb}:
+      bg.logins(id, List.reverse(&2, S.Login, S.hello.logins(srv, conn, args)), x, inb, code, a, bg.conned(bg.one(c, code, LRun{rs, es, conn, srv, ds, ws, up, tx, pb})))
+    case _ g0:
+      bg.conned(bg.one(c, code, g0))
+
+# ACL WHOAMI: the client's user
+def bg.whoami(+id: Nat, +code: Nat, g: LRun) -> LRun:
+  match g:
+    case LRun{rs, es, conn, srv, ds, ws, up, tx, +pb}:
+      bg.say(R.RBulk{ps.user(id, pb)}, code, LRun{rs, es, conn, srv, ds, ws, up, tx, pb})
+    case LHeld{h}:
+      LHeld{h}
+
+# the clients of the user of name n, and of the users of names ns
+def cl.of.user(xs: List<&2, Cl>, +n: String) -> List<&2, Cl>:
+  match xs:
+    case Nil{}:
+      Nil{}
+    case Con{+c, rest}:
+      +r = cl.of.user(rest, n)
+      Bool.pick(List<&2, Cl>, String.eq(cl.user(c), n), c <> r, r)
+
+def name.in(+n: String, +ns: List<&2, String>) -> Bool:
+  match ns:
+    case Nil{}:
+      False{}
+    case Con{+x, +rest}:
+      Bool.or(String.eq(x, n), name.in(n, rest))
+
+def cl.of.users(xs: List<&2, Cl>, +ns: List<&2, String>) -> List<&2, Cl>:
+  match xs:
+    case Nil{}:
+      Nil{}
+    case Con{+c, rest}:
+      +r = cl.of.users(rest, ns)
+      Bool.pick(List<&2, Cl>, name.in(cl.user(c), ns), c <> r, r)
+
+# each of the clients cs of the user of name n restricted or not, as the
+# user is now
+def acl.clients(cs: List<&2, Cl>, +n: String, srv: S.Srv) -> S.Srv:
+  match cs:
+    case Nil{}:
+      srv
+    case Con{+c, rest}:
+      acl.clients(rest, n, S.srv.acl.client(srv, cl.id(c), n))
+
+# whether a client's subscriptions (m) are not all ones user u may keep
+def acl.lost(+u: U.User, m: Maybe<&2, Mine>) -> Bool:
+  match m:
+    case Some{Mine{ch, pa, sh}}:
+      Bool.not(U.acl.keeps(u, List.append(&2, String, ch, sh), pa))
+    case None{}:
+      False{}
+
+def acl.subs.lost(vs: List<&2, Cl>, +u: U.User, +pb: Ps) -> List<&2, Cl>:
+  match vs:
+    case Nil{}:
+      Nil{}
+    case Con{+c, rest}:
+      +r = acl.subs.lost(rest, u, pb)
+      Bool.pick(List<&2, Cl>, acl.lost(u, ps.mine(cl.id(c), pb)), c <> r, r)
+
+def acl.revoked.if(on: Bool, +u: U.User, vs: List<&2, Cl>, +pb: Ps) -> List<&2, Cl>:
+  match on:
+    case True{}:
+      acl.subs.lost(vs, u, pb)
+    case False{}:
+      Nil{}
+
+# the clients vs of a user that ACL SETUSER changed from old to new to
+# close: when the user may no longer have a channel it had, those with a
+# subscription it may not keep (ACLKillPubsubClientsIfNeeded)
+def acl.revoked(old: Maybe<&2, U.User>, new: Maybe<&2, U.User>, vs: List<&2, Cl>, +pb: Ps) -> List<&2, Cl>:
+  match old new:
+    case Some{+o} Some{+u}:
+      acl.revoked.if(U.acl.revokes(o, u), u, vs, pb)
+    case _ _:
+      Nil{}
+
+# after kills (bg.kills): the client itself, if it was one, closed after
+# its reply
+def bg.killed.self(p: Bool & LRun) -> LRun:
+  (self, g) = p
+  match self:
+    case True{}:
+      bg.self.kill(g)
+    case False{}:
+      g
+
+# the clients of the user of name n after ACL SETUSER changed it from
+# old (none: it made it): each restricted or not as the user is now, and
+# those subscribed to a channel it may no longer have closed
+def bg.set.user(+me: Nat, +n: String, old: Maybe<&2, U.User>, g: LRun) -> LRun:
+  match g:
+    case LRun{rs, es, conn, srv, ds, ws, up, tx, +pb}:
+      +vs = cl.of.user(cls.all(ps.cls(pb)), n)
+      +s1 = acl.clients(vs, n, srv)
+      bg.killed.self(bg.kills(acl.revoked(old, U.acl.user(S.srv.acl(s1), n), vs, pb), me, LRun{rs, es, conn, s1, ds, ws, up, tx, ps.acl.at(pb, acl.on(s1))}))
+    case LHeld{h}:
+      LHeld{h}
+
+def bg.setuser(+id: Nat, +c: R.Cmd, +code: Nat, g: LRun) -> LRun:
+  match c g:
+    case R.Own{R.SAcl{k, Con{+n, rules}}} LRun{rs, es, conn, +srv, ds, ws, up, tx, pb}:
+      bg.set.user(id, n, U.acl.user(S.srv.acl(srv), n), bg.one(c, code, LRun{rs, es, conn, srv, ds, ws, up, tx, pb}))
+    case _ g0:
+      bg.one(c, code, g0)
+
+# after ACL DELUSER: the clients of the users it removed closed (the
+# client itself after its reply), and the users forgotten
+def bg.users.gone(+me: Nat, g: LRun) -> LRun:
+  match g:
+    case LRun{rs, es, conn, +srv, ds, ws, up, tx, +pb}:
+      bg.killed.self(bg.kills(cl.of.users(cls.all(ps.cls(pb)), U.acl.gone(S.srv.acl(srv))), me, LRun{rs, es, conn, S.srv.acl.cleared(srv), ds, ws, up, tx, pb}))
+    case LHeld{h}:
+      LHeld{h}
+
+# ACL's subcommands that reach the clients (sh.acl, and in EXEC):
+# WHOAMI (13), SETUSER (11) and DELUSER (2); any other runs as the session
+# runs it
+def bg.acl.op(+id: Nat, +k: Nat, +c: R.Cmd, +code: Nat, g: LRun) -> LRun:
+  match k:
+    case 13n:
+      bg.whoami(id, code, g)
+    case 11n:
+      bg.setuser(id, c, code, g)
+    case 2n:
+      bg.users.gone(id, bg.one(c, code, g))
+    case _:
+      bg.one(c, code, g)
+
+# The commands of EXEC
+# --------------------
 
 # a command of EXEC: as it runs outside of a transaction, but that no
 # client waits (a blocking command answers as for a client that may not
@@ -7236,7 +7719,7 @@ def bg.x.echo(ping: Bool, +id: Nat, +m: String, +c: R.Cmd, +code: Nat, g: LRun) 
     case False{}:
       bg.one(c, code, g)
 
-def bg.x.cmd(may: Bool, +id: Nat, +back: Chan(Ans), +inb: Nat, +n: Nat, +c: R.Cmd, +code: Nat, g: LRun) -> LRun:
+def bg.x.cmd(may: Bool, +id: Nat, +back: Chan(Ans), +inb: Nat, +n: Nat, +c: R.Cmd, +code: Nat, +av: Av, g: LRun) -> LRun:
   match may c:
     case True{} R.Own{R.SUnblock{+n, +e}}:
       bg.unblock(n, e, code, g)
@@ -7260,15 +7743,115 @@ def bg.x.cmd(may: Bool, +id: Nat, +back: Chan(Ans), +inb: Nat, +n: Nat, +c: R.Cm
       bg.x.pong(id, "", c, code, g)
     case True{} R.Echo{+m}:
       bg.x.echo(Nat.is_eq(R.code.key(code), R.stat.top(1n)), id, m, c, code, g)
+    case True{} R.Own{R.SAuth{x}}:
+      bg.auth(id, c, code, inb, av, Some{n}, g)
+    case True{} R.Own{R.SHello{x}}:
+      bg.hello(id, c, code, inb, av, Some{n}, g)
+    case True{} R.Own{R.SAcl{+k, x}}:
+      bg.acl.op(id, k, c, code, g)
     case _ _:
       bg.one(c, code, g)
 
-def bg.x.go(+id: Nat, +back: Chan(Ans), +inb: Nat, +n: Nat, cmds: List<&2, R.Cmd>, codes: List<&2, Nat>, avs: List<&2, Av>, x: Xr) -> Xr:
-  match cmds codes avs x:
-    case Con{+c, rest} Con{+k, more} Con{+a, ar} Xr{LRun{rs, es, +conn, +srv, ds, ws, up, tx, +pb}, mine}:
+# a command of EXEC run (bg.x.go)
+def bg.x.one(+id: Nat, +back: Chan(Ans), +inb: Nat, +n: Nat, +c: R.Cmd, +k: Nat, +a: Av, x: Xr) -> Xr:
+  match x:
+    case Xr{LRun{rs, es, +conn, +srv, ds, ws, up, tx, +pb}, mine}:
       +may = S.may(S.kind(c), conn, srv)
       +rk = bg.x.rk(id, may, k, pb)
-      bg.x.go(id, back, inb, n, rest, more, ar, bg.x.feed(mon.ran(may, k), id, k, S.conn.mode(conn), a, bg.x.trk(rk, id, k, a, bg.x.cmd(may, id, back, inb, n, c, k, LRun{rs, es, conn, S.srv.call(srv, id, av.arg(a)), ds, ws, up, tx, pb})), mine))
+      bg.x.feed(mon.ran(may, k), id, k, S.conn.mode(conn), a, bg.x.trk(rk, id, k, a, bg.x.cmd(may, id, back, inb, n, c, k, a, LRun{rs, es, conn, S.srv.call(srv, id, av.arg(a)), ds, ws, up, tx, pb})), mine)
+    case Xr{LHeld{h}, mine}:
+      Xr{LHeld{h}, mine}
+
+# Exec's arguments. A queued command's arguments are read from the bytes
+# of its batch (P.argvs) only when something reads them: the check of a
+# restricted client (ACL), the tracking of a client that tracks keys, a
+# monitor. The memo keeps those of the batch read last, from its last
+# command read on (XmAt: the batch's number, the command's request in it,
+# and the arguments from that request on), so that the next command of
+# the same batch is a drop away, and a batch's bytes are read once: EXEC
+# of a transaction queued before its client was restricted read the
+# whole batch again for each of its commands, quadratic in their number.
+type Xm is Data:
+  XmNone{}
+  XmAt{b: Nat, n: Nat, xs: List<&2, List<&2, String>>}
+
+# whether the memo holds the arguments of request n of batch b, or of one
+# before it in that batch
+def xm.same(+m: Xm, +b: Nat, +n: Nat) -> Bool:
+  match m:
+    case XmAt{+b0, +n0, xs}:
+      Bool.and(Nat.is_eq(b0, b), Nat.is_le(n0, n))
+    case XmNone{}:
+      False{}
+
+def xm.of(same: Bool, m: Xm, +b: Nat, +raw: String, +n: Nat) -> Xm:
+  match same m:
+    case True{} XmAt{b0, n0, xs}:
+      XmAt{b, n, List.drop(&2, List<&2, String>, xs, Nat.sub(n, n0))}
+    case _ _:
+      XmAt{b, n, List.drop(&2, List<&2, String>, P.argvs(raw), n)}
+
+# the memo once the arguments of a command of batch b (a) are read
+def xm.read(m: Xm, +b: Nat, +a: Av) -> Xm:
+  match a:
+    case AvRaw{+raw, +n}:
+      +m0 = m
+      xm.of(xm.same(m0, b, n), m0, b, raw, n)
+    case AvArgs{xs}:
+      m
+
+# the arguments of that command, read
+def xm.av(+m: Xm, a: Av) -> Av:
+  match m a:
+    case XmAt{b, n, +xs} AvRaw{raw, k}:
+      AvArgs{xs}
+    case _ a0:
+      a0
+
+def xm.if(need: Bool, m: Xm, +b: Nat, +a: Av) -> Xm:
+  match need:
+    case True{}:
+      xm.read(m, b, a)
+    case False{}:
+      m
+
+def xm.av.if(need: Bool, +m: Xm, a: Av) -> Av:
+  match need:
+    case True{}:
+      xm.av(m, a)
+    case False{}:
+      a
+
+# a command of EXEC that its user may no longer run: NOPERM with why
+# (U.verdict.exec), an entry in context multi, and no call; the error
+# alone is counted (code 0, whose key has no entry)
+def bg.x.denied(+v: U.Verdict, +id: Nat, +inb: Nat, +n: Nat, +k: Nat, +a: Av, x: Xr) -> Xr:
+  match x:
+    case Xr{g, mine}:
+      Xr{bg.say(R.RError{U.verdict.exec(v)}, 0n, bg.acl.log(id, v, True{}, Some{n}, inb, k, a, g)), mine}
+
+def bg.x.acl(v: U.Verdict, +id: Nat, +back: Chan(Ans), +inb: Nat, +n: Nat, +c: R.Cmd, +k: Nat, +a: Av, x: Xr) -> Xr:
+  match v:
+    case U.VOk{}:
+      bg.x.one(id, back, inb, n, c, k, a, x)
+    case U.VNo{w, at, o}:
+      bg.x.denied(U.VNo{w, at, o}, id, inb, n, k, a, x)
+
+# EXEC's commands in turn, each checked again (ACL), as execCommand
+# checks each, in case the rules changed since it was queued: while some
+# client is restricted (Ps's bit 20) and its client is (ck), its user's
+# verdict. Its arguments are read when the check, the tracking or a
+# monitor reads them (Exec's arguments, m)
+def bg.x.go(+id: Nat, +back: Chan(Ans), +inb: Nat, +n: Nat, cmds: List<&2, R.Cmd>, codes: List<&2, Nat>, avs: List<&2, Qa>, m: Xm, x: Xr) -> Xr:
+  match cmds codes avs x:
+    case Con{+c, rest} Con{+k, more} Con{Qa{+b, a0}, ar} Xr{LRun{rs, es, +conn, +srv, ds, ws, up, tx, +pb}, mine}:
+      +ck = Bool.and(ps.acl.on(pb), S.srv.restricted(srv, id))
+      +may = S.may(S.kind(c), conn, srv)
+      +need = Bool.or(ck, Bool.or(bg.x.rk(id, may, k, pb), Bool.and(mon.ran(may, k), ps.mon.any(pb))))
+      +a1 = a0
+      +m1 = xm.if(need, m, b, a1)
+      +a = xm.av.if(need, m1, a1)
+      bg.x.go(id, back, inb, n, rest, more, ar, m1, bg.x.acl(bg.acl.check(ck, id, srv, pb, k, a), id, back, inb, n, bg.acl.sort(ck, id, srv, pb, k, a, c), k, a, Xr{LRun{rs, es, conn, srv, ds, ws, up, tx, pb}, mine}))
     case _ _ _ x0:
       x0
 
@@ -7299,26 +7882,33 @@ def codes.stop(+ks: List<&2, Nat>) -> Bool:
     case Nil{}:
       False{}
 
-# EXEC's commands run as bg.x.go runs them, until one that needs the
-# engine (stop: whether the next does), which the driver runs (Scripts):
-# the state after those that ran, and the commands left, from it
+# EXEC's commands run as bg.x.go runs them, each checked again (ACL),
+# until one that needs the engine (stop: whether the next does), which
+# the driver checks and runs (Scripts: sc.exec.at): the state after those
+# that ran, the commands left, from it, and the memo of their arguments
+# (Exec's arguments), which the commands after the engine's go on with
 type Xq is Data:
-  Xq{x: Xr, cmds: List<&2, R.Cmd>, codes: List<&2, Nat>, avs: List<&2, Av>}
+  Xq{x: Xr, cmds: List<&2, R.Cmd>, codes: List<&2, Nat>, avs: List<&2, Qa>, m: Xm}
 
-def bg.x.till(+id: Nat, +back: Chan(Ans), +inb: Nat, +n: Nat, cmds: List<&2, R.Cmd>, codes: List<&2, Nat>, avs: List<&2, Av>, x: Xr, stop: Bool) -> Xq:
+def bg.x.till(+id: Nat, +back: Chan(Ans), +inb: Nat, +n: Nat, cmds: List<&2, R.Cmd>, codes: List<&2, Nat>, avs: List<&2, Qa>, m: Xm, x: Xr, stop: Bool) -> Xq:
   match cmds codes avs x stop:
-    case Con{+c, rest} Con{+k, +more} Con{+a, ar} Xr{LRun{rs, es, +conn, +srv, ds, ws, up, tx, pb}, mine} False{}:
+    case Con{+c, rest} Con{+k, +more} Con{Qa{+b, a0}, ar} Xr{LRun{rs, es, +conn, +srv, ds, ws, up, tx, +pb}, mine} False{}:
+      +ck = Bool.and(ps.acl.on(pb), S.srv.restricted(srv, id))
       +may = S.may(S.kind(c), conn, srv)
-      bg.x.till(id, back, inb, n, rest, more, ar, bg.x.feed(mon.ran(may, k), id, k, S.conn.mode(conn), a, bg.x.cmd(may, id, back, inb, n, c, k, LRun{rs, es, conn, S.srv.call(srv, id, av.arg(a)), ds, ws, up, tx, pb}), mine), codes.stop(more))
+      +need = Bool.or(ck, Bool.or(bg.x.rk(id, may, k, pb), Bool.and(mon.ran(may, k), ps.mon.any(pb))))
+      +a1 = a0
+      +m1 = xm.if(need, m, b, a1)
+      +a = xm.av.if(need, m1, a1)
+      bg.x.till(id, back, inb, n, rest, more, ar, m1, bg.x.acl(bg.acl.check(ck, id, srv, pb, k, a), id, back, inb, n, bg.acl.sort(ck, id, srv, pb, k, a, c), k, a, Xr{LRun{rs, es, conn, srv, ds, ws, up, tx, pb}, mine}), codes.stop(more))
     case cs ks vs x0 st:
-      Xq{x0, cs, ks, vs}
+      Xq{x0, cs, ks, vs, m}
 
-def bg.exec.run(+id: Nat, +back: Chan(Ans), +inb: Nat, +code: Nat, +cmds: List<&2, R.Cmd>, codes: List<&2, Nat>, avs: List<&2, Av>, g: LRun) -> LRun:
+def bg.exec.run(+id: Nat, +back: Chan(Ans), +inb: Nat, +code: Nat, +cmds: List<&2, R.Cmd>, codes: List<&2, Nat>, avs: List<&2, Qa>, g: LRun) -> LRun:
   match g:
     case LRun{rs, es, +conn, srv, ds, ws, up, tx, pb}:
       +m0 = S.conn.mode(conn)
       +mi = exec.mode(m0)
-      bg.exec.done(rs, es, m0, mi, code, bg.x.go(id, back, inb, List.length(&2, R.Cmd, cmds), cmds, codes, avs, Xr{LRun{Nil{}, Nil{}, conn.mode.set(mi, conn), srv, ds, ws, up, tx, pb}, Nil{}}))
+      bg.exec.done(rs, es, m0, mi, code, bg.x.go(id, back, inb, List.length(&2, R.Cmd, cmds), cmds, codes, avs, XmNone{}, Xr{LRun{Nil{}, Nil{}, conn.mode.set(mi, conn), srv, ds, ws, up, tx, pb}, Nil{}}))
     case LHeld{h}:
       LHeld{h}
 
@@ -7328,14 +7918,14 @@ def bg.exec.run(+id: Nat, +back: Chan(Ans), +inb: Nat, +code: Nat, +cmds: List<&
 # or the driver's: Scripts)
 type Xg is Data:
   XgDone{g: LRun}
-  XgRun{g: LRun, cmds: List<&2, R.Cmd>, codes: List<&2, Nat>, avs: List<&2, Av>}
+  XgRun{g: LRun, cmds: List<&2, R.Cmd>, codes: List<&2, Nat>, avs: List<&2, Qa>}
 
-def bg.exec.if(late: Bool, +code: Nat, qs: List<&2, R.Cmd>, qc: List<&2, Nat>, qa: List<&2, Av>, g: LRun) -> Xg:
+def bg.exec.if(late: Bool, +code: Nat, qs: List<&2, R.Cmd>, qc: List<&2, Nat>, qa: Qs, g: LRun) -> Xg:
   match late:
     case True{}:
       XgDone{bg.say(R.RNullA{}, code, g)}
     case False{}:
-      XgRun{g, List.reverse(&2, R.Cmd, qs), List.reverse(&2, Nat, qc), List.reverse(&2, Av, qa)}
+      XgRun{g, List.reverse(&2, R.Cmd, qs), List.reverse(&2, Nat, qc), qs.order(qa)}
 
 # EXEC of a transaction taken out of the chain (mine): EXECABORT when a
 # command was refused while it queued, a null array when a watched key
@@ -7405,13 +7995,13 @@ type Xd is Data:
   XdDone{g: LRun}
   XdRun{rs: List<&2, R.Reply>, es: List<&2, A.Ent>, m0: S.Mute, mi: S.Mute, code: Nat, n: Nat, q: Xq}
 
-def bg.exec.drv.run(+id: Nat, +back: Chan(Ans), +code: Nat, +cmds: List<&2, R.Cmd>, +codes: List<&2, Nat>, avs: List<&2, Av>, g: LRun) -> Xd:
+def bg.exec.drv.run(+id: Nat, +back: Chan(Ans), +code: Nat, +cmds: List<&2, R.Cmd>, +codes: List<&2, Nat>, avs: List<&2, Qa>, g: LRun) -> Xd:
   match g:
     case LRun{rs, es, +conn, srv, ds, ws, up, tx, pb}:
       +m0 = S.conn.mode(conn)
       +mi = exec.mode(m0)
       +n = List.length(&2, R.Cmd, cmds)
-      XdRun{rs, es, m0, mi, code, n, bg.x.till(id, back, 0n, n, cmds, codes, avs, Xr{LRun{Nil{}, Nil{}, conn.mode.set(mi, conn), srv, ds, ws, up, tx, pb}, Nil{}}, codes.stop(codes))}
+      XdRun{rs, es, m0, mi, code, n, bg.x.till(id, back, 0n, n, cmds, codes, avs, XmNone{}, Xr{LRun{Nil{}, Nil{}, conn.mode.set(mi, conn), srv, ds, ws, up, tx, pb}, Nil{}}, codes.stop(codes))}
     case LHeld{h}:
       XdDone{LHeld{h}}
 
@@ -8408,7 +8998,7 @@ def bg.cmd(+id: Nat, +back: Chan(Ans), +inb: Nat, sh: Sh, +c: R.Cmd, +code: Nat,
     case ShUnwatch{}:
       bg.one(c, code, bg.unwatch(id, g))
     case ShReset{}:
-      bg.conned(bg.one(c, code, bg.trk.off(id, bg.unsub.all(id, bg.close(id, g)))))
+      bg.user(id, "default", bg.conned(bg.one(c, code, bg.trk.off(id, bg.unsub.all(id, bg.close(id, g))))))
     case ShQueue{}:
       bg.queue(c, code, a, g)
     case ShRefuse{}:
@@ -8454,13 +9044,72 @@ def bg.cmd(+id: Nat, +back: Chan(Ans), +inb: Nat, sh: Sh, +c: R.Cmd, +code: Nat,
       bg.busy.exec(id, code, g)
     case ShExecLua{}:
       bg.exec.wait(id, back, c, code, rest, more, a, g)
+    case ShNoPerm{v, +inm}:
+      bg.noperm(id, v, inm, inb, code, a, g)
+    case ShAuth{}:
+      bg.auth(id, c, code, inb, a, None{}, g)
+    case ShHello{}:
+      bg.hello(id, c, code, inb, a, None{}, g)
+    case ShAcl{+k}:
+      bg.acl.op(id, k, c, code, g)
+
+# the word a request of hash h leaves in its key's word w under an LFU
+# policy, at the minute min, r its random number
+def use.lfu.word(+h: U32, +w: U32, +min: U32, +r: U32, +lf: Nat, +dt: Nat) -> U32:
+  Bool.pick(U32, U32.is_eq(U32.and(h, 4293918720), R.stat.mark.restore()), S.lfu.word(min, 5), S.lfu.use(w, min, r, lf, dt))
+
+# whether a batch's keys are marked as its calls run, each once its
+# check lets it through, rather than before the batch runs (bg.used):
+# its client is restricted (ACL), as Redis marks a key only as the
+# command, which its user may run, looks it up
+def bg.marks(+cn: S.Conn, +srv: S.Srv, +pb: Ps) -> Bool:
+  Bool.and(ps.acl.on(pb), S.srv.restricted(srv, S.conn.id(cn)))
+
+# the hint of a call as the parser writes it (resp.bend, req.hash): the
+# hash of its first argument after its name (its arguments as sent come
+# name first) when its command touches its first key and it runs, under
+# its code
+def bg.hint(+k: Nat, +a: Av) -> U32:
+  R.stat.hash(Bool.pick(U32, Bool.and(Nat.is_eq(R.code.class(k), 0n), R.stat.touch(R.code.key(k))), B.args_hash(List.drop(&2, String, av.now(a), 1n)), 0), k)
+
+# the word a call of hint h leaves in its key's word at now, as use.lru
+# and use.lfu leave it
+def bg.mark.word(lfu: Bool, +h: U32, +now: Nat, +srv: S.Srv) -> U32:
+  match lfu srv:
+    case True{} S.Srv{pass, cfg, info, +mm}:
+      +w = Mem.cell(h)
+      use.lfu.word(h, w, S.acc.min(now), KV.mix(U32.xor(U32.xor(h, w), U32.from_nat(now))), S.mm.lfl(mm), S.mm.lfd(mm))
+    case False{} _:
+      S.acc.lru(now)
+
+# the channel of a batch marked again as it was, its key's word of hash
+# h set to v on the way (Mem.touch gives back the mark's word)
+def mark.again.of(+back: Chan(Ans), m: U32 & Nat, +h: U32, +v: U32) -> Chan(Ans):
+  (w, at) = m
+  Chan.mark(Ans, back, Mem.touch(w, h, v), at)
+
+def mark.again(+back: Chan(Ans), +h: U32, +v: U32) -> Chan(Ans):
+  mark.again.of(back, Chan.marked(Ans, back), h, v)
+
+# a call's key marked used as it runs (mk: its batch's keys are marked so,
+# and its check let it through), before it runs
+def bg.mark.call(mk: Bool, +back: Chan(Ans), +k: Nat, +a: Av, +srv: S.Srv, +ds: R.Ds, +pb: Ps) -> Chan(Ans):
+  match mk:
+    case True{}:
+      +h = bg.hint(k, a)
+      mark.again(back, h, bg.mark.word(ps.lfu(pb), h, R.ds.now(ds), srv))
+    case False{}:
+      back
 
 # a batch the general way: a command at a time, until its client waits;
 # after each, its line to the monitors (MONITOR), the arguments of the
 # batch's requests as sent (the Fed's Av) read once a line needs them.
-# The script client's calls (id 0: Scripts) are never refused BUSY nor
-# past maxmemory here: the driver makes a script's checks itself.
-def bg.go(+id: Nat, +back: Chan(Ans), +inb: Nat, cmds: List<&2, R.Cmd>, codes: List<&2, Nat>, f: Fed) -> LRun:
+# The script client's calls (id 0: Scripts) are never refused BUSY, past
+# maxmemory or by ACL here: the driver makes a script's checks itself,
+# with its caller's user (sc.call.why).
+# um: its keys are marked as its calls run, each once its check let it
+# through (bg.marks), its arguments then read
+def bg.go(+um: Bool, +id: Nat, +back: Chan(Ans), +inb: Nat, cmds: List<&2, R.Cmd>, codes: List<&2, Nat>, f: Fed) -> LRun:
   match cmds codes f:
     case Con{+c, +rest} Con{+k, +more} Fed{LRun{rs, es, +conn, +srv, +ds, ws, up, +tx, +pb}, +av}:
       +q = S.conn.quit(conn)
@@ -8468,12 +9117,17 @@ def bg.go(+id: Nat, +back: Chan(Ans), +inb: Nat, cmds: List<&2, R.Cmd>, codes: L
       +mo = ps.mon.is(id, pb)
       +lua = Nat.is_eq(id, 0n)
       +sf = sc.flags.at(code.engine(k), c, pb)
-      +sh = sh.lua(sh.of(q, may, tx.multi(id, tx), Bool.and(ps.has(id, pb), Bool.not(S.conn.r3(conn))), mo, Bool.and(ps.oom.is(pb), Bool.not(lua)), Bool.or(pause.holds(ps.pz(pb), mo, c, k, id, tx, sf, pb), Bool.and(down.holds(srv, pb, mo, k), Bool.not(lua))), Bool.and(ps.busy(pb), Bool.not(lua)), sf, c, k, ds), id, tx)
+      +ck = bg.acl.on(ps.acl.on(pb), id, k, may, srv)
+      +av1 = av.if(Bool.or(ck, um), av)
+      +c1 = bg.acl.sort(ck, id, srv, pb, k, av1, c)
+      +v = bg.acl.check(ck, id, srv, pb, k, av1)
+      +bk = bg.mark.call(Bool.and(um, Bool.and(may, U.verdict.ok(v))), back, k, av1, srv, ds, pb)
+      +sh = sh.lua(sh.of(q, may, tx.multi(id, tx), Bool.and(ps.has(id, pb), Bool.not(S.conn.r3(conn))), mo, Bool.and(ps.oom.is(pb), Bool.not(lua)), Bool.or(pause.holds(ps.pz(pb), mo, c, k, id, tx, sf, pb), Bool.and(down.holds(srv, pb, mo, k), Bool.not(lua))), Bool.and(ps.busy(pb), Bool.not(lua)), sf, v, c1, k, ds), id, tx)
       +pre = bg.trk.pre(id, k, sh, q, may, pb)
-      +a = trk.pre.av(pre, av)
+      +a = trk.pre.av(pre, av1)
       +ar = av.rest(a)
-      +g1 = bg.cmd(id, back, inb, sh, c, k, rest, more, a, ar, LRun{rs, es, conn, S.srv.call(srv, id, av.arg(a)), ds, ws, up, tx, pb})
-      bg.go(id, back, inb, rest, more, bg.feed(mon.seen(q, may, sh, k), id, k, S.conn.mode(conn), a, ar, bg.trk.after(pre, id, k, a, g1)))
+      +g1 = bg.cmd(id, bk, inb, sh, c1, k, rest, more, a, ar, LRun{rs, es, conn, S.srv.call(srv, id, av.arg(a)), ds, ws, up, tx, pb})
+      bg.go(um, id, back, inb, rest, more, bg.feed(mon.seen(q, may, sh, k), id, k, S.conn.mode(conn), a, ar, bg.trk.after(pre, id, k, a, g1)))
     case _ _ Fed{g0, av}:
       g0
 
@@ -8516,11 +9170,11 @@ def bg.put(+back: Chan(Ans), +inb: Nat, g: LRun, outs: List<&2, Sigma<&2, &2, Ch
     case LHeld{LHeld{h}}:
       bg.put(back, inb, h, outs)
 
-def bg.batch(+cn: S.Conn, +back: Chan(Ans), +inb: Nat, raw: String, cmds: List<&2, R.Cmd>, codes: List<&2, Nat>, g: Grp) -> Grp:
+def bg.batch(+um: Bool, +cn: S.Conn, +back: Chan(Ans), +inb: Nat, raw: String, cmds: List<&2, R.Cmd>, codes: List<&2, Nat>, g: Grp) -> Grp:
   match g:
     case Grp{outs, es, srv, ds, ws, up, tx, pb}:
       +id = S.conn.id(cn)
-      bg.put(back, inb, bg.go(id, back, inb, cmds, codes, Fed{LRun{Nil{}, es, cn, srv, ds, ws, up, tx.front(id, tx), pb}, AvRaw{raw, 0n}}), outs)
+      bg.put(back, inb, bg.go(um, id, back, inb, cmds, codes, Fed{LRun{Nil{}, es, cn, srv, ds, ws, up, tx.front(id, tx), pb}, AvRaw{raw, 0n}}), outs)
 
 # the last of codes, else k
 def codes.last(+ks: List<&2, Nat>, +k: Nat) -> Nat:
@@ -8543,9 +9197,9 @@ def mark.up(+back: Chan(Ans), +codes: List<&2, Nat>) -> Chan(Ans):
 # an unblocked client's batch, on: on its database, after its reply
 def bg.up(u: Up, g: Grp) -> Grp:
   match u g:
-    case Up{+back, +conn, rs, cmds, +codes, av} Grp{outs, es, srv, ds, ws, up, tx, pb}:
+    case Up{+back, +conn, rs, cmds, +codes, av} Grp{outs, es, +srv, ds, ws, up, tx, +pb}:
       +id = S.conn.id(conn)
-      bg.put(mark.up(back, codes), 0n, bg.go(id, back, 0n, cmds, codes, Fed{LRun{rs, es, conn, srv, R.ds.focus(S.conn.db(conn), ds), ws, up, tx.front(id, tx), pb}, av}), outs)
+      bg.put(mark.up(back, codes), 0n, bg.go(bg.marks(conn, srv, pb), id, back, 0n, cmds, codes, Fed{LRun{rs, es, conn, srv, R.ds.focus(S.conn.db(conn), ds), ws, up, tx.front(id, tx), pb}, av}), outs)
 
 def bg.ups.run(us: List<&2, Up>, g: Grp) -> Grp:
   match us:
@@ -8638,7 +9292,8 @@ def grp.end(g: Grp) -> Grp:
 # batch dropped, and its connection answered Bye, after any answer before
 def grp.gone(+id: Nat, +back: Chan(Ans), outs: List<&2, Sigma<&2, &2, Chan(Ans), _ => Ans>>, es: List<&2, A.Ent>, srv: S.Srv, ds: R.Ds, +ws: Waits, +up: List<&2, Up>, tx: Tx, pb: Ps) -> Grp:
   +left = waits.rest(waits.take(ws, waits.is(id, ws), id, WaitNone{}))
-  Grp{(back, Bye{}) <> outs, es, waits.count(left, S.srv.gone(srv, id)), ds, left, ups.drop(up, ups.is(id, up), id), tx.drop(id, tx), ps.drop(id, pb)}
+  +sv = S.srv.left(srv, id)
+  Grp{(back, Bye{}) <> outs, es, waits.count(left, sv), ds, left, ups.drop(up, ups.is(id, up), id), tx.drop(id, tx), ps.acl.at(ps.drop(id, pb), acl.on(sv))}
 
 # Memory
 # ------
@@ -9480,11 +10135,6 @@ def use.lru(+hs: List<&2, U32>, +w: U32, k: U32) -> U32:
     case Con{+h, +rest}:
       use.lru(rest, w, Mem.touch(k, h, w))
 
-# the word a request of hash h leaves in its key's word w under an LFU
-# policy, at the minute min, r its random number
-def use.lfu.word(+h: U32, +w: U32, +min: U32, +r: U32, +lf: Nat, +dt: Nat) -> U32:
-  Bool.pick(U32, U32.is_eq(U32.and(h, 4293918720), R.stat.mark.restore()), S.lfu.word(min, 5), S.lfu.use(w, min, r, lf, dt))
-
 def use.lfu(+hs: List<&2, U32>, +now: Nat, +min: U32, +lf: Nat, +dt: Nat, +i: U32, k: U32) -> U32:
   match hs:
     case Nil{}:
@@ -9493,16 +10143,36 @@ def use.lfu(+hs: List<&2, U32>, +now: Nat, +min: U32, +lf: Nat, +dt: Nat, +i: U3
       +w = Mem.cell(h)
       use.lfu(rest, now, min, lf, dt, U32.add(i, 2654435769), Mem.touch(k, h, use.lfu.word(h, w, min, KV.mix(U32.xor(U32.xor(h, w), U32.xor(U32.from_nat(now), i))), lf, dt)))
 
+# the batch's keys marked used before it runs, unless its calls mark
+# them (um)
+def use.lru.if(um: Bool, +hs: List<&2, U32>, +w: U32) -> U32:
+  match um:
+    case True{}:
+      0
+    case False{}:
+      use.lru(hs, w, 0)
+
+def use.lfu.if(um: Bool, +hs: List<&2, U32>, +now: Nat, +min: U32, +lf: Nat, +dt: Nat) -> U32:
+  match um:
+    case True{}:
+      0
+    case False{}:
+      use.lfu(hs, now, min, lf, dt, 0, 0)
+
 # a batch the general way, its keys marked used first (lfu: under an LFU
-# policy) and its client's channel marked with its last command (mark.hs)
+# policy), but those of a restricted client's batch, which its calls mark
+# (bg.marks), and its client's channel marked with its last command
+# (mark.hs)
 def bg.used(lfu: Bool, +cn: S.Conn, +back: Chan(Ans), +inb: Nat, raw: String, cmds: List<&2, R.Cmd>, +hs: List<&2, U32>, g: Grp) -> Grp:
   match lfu g:
-    case False{} Grp{outs, es, srv, +ds, ws, up, tx, pb}:
+    case False{} Grp{outs, es, +srv, +ds, ws, up, tx, +pb}:
       +now = R.ds.now(ds)
-      bg.batch(cn, mark.hs(back, hs, now, use.lru(hs, S.acc.lru(now), 0)), inb, raw, cmds, R.codes.of(hs), Grp{outs, es, srv, ds, ws, up, tx, pb})
-    case True{} Grp{outs, es, S.Srv{pass, cfg, info, +mm}, +ds, ws, up, tx, pb}:
+      +um = bg.marks(cn, srv, pb)
+      bg.batch(um, cn, mark.hs(back, hs, now, use.lru.if(um, hs, S.acc.lru(now))), inb, raw, cmds, R.codes.of(hs), Grp{outs, es, srv, ds, ws, up, tx, pb})
+    case True{} Grp{outs, es, S.Srv{pass, cfg, info, +mm}, +ds, ws, up, tx, +pb}:
       +now = R.ds.now(ds)
-      bg.batch(cn, mark.hs(back, hs, now, use.lfu(hs, now, S.acc.min(now), S.mm.lfl(mm), S.mm.lfd(mm), 0, 0)), inb, raw, cmds, R.codes.of(hs), Grp{outs, es, S.Srv{pass, cfg, info, mm}, ds, ws, up, tx, pb})
+      +um = Bool.and(ps.acl.on(pb), S.mm.restricted(mm, S.conn.id(cn)))
+      bg.batch(um, cn, mark.hs(back, hs, now, use.lfu.if(um, hs, now, S.acc.min(now), S.mm.lfl(mm), S.mm.lfd(mm))), inb, raw, cmds, R.codes.of(hs), Grp{outs, es, S.Srv{pass, cfg, info, mm}, ds, ws, up, tx, pb})
 
 # (after a SHUTDOWN that stops the server, every client's: SHUTDOWN)
 def ps.killed(+id: Nat, +pb: Ps) -> Bool:
@@ -9570,23 +10240,32 @@ def group.heeded(ok: Bool, +log: Bool, ws: Waits, tx: Tx, outs: List<&2, Sigma<&
     case False{}:
       job.slow(cn, back, inb, raw, cmds, hs, Grp{outs, es, srv, ds, ws, up, tx, pb})
 
-def group.heed(+log: Bool, ws: Waits, +tx: Tx, outs: List<&2, Sigma<&2, &2, Chan(Ans), _ => Ans>>, es: List<&2, A.Ent>, +cn: S.Conn, +cmds: List<&2, R.Cmd>, +hs: List<&2, U32>, back: Chan(Ans), +tl: U32, +inb: Nat, raw: String, +srv: S.Srv, ds: R.Ds, up: List<&2, Up>, +pb: Ps) -> Grp:
-  group.heeded(heed.ok(cn, srv, tx, cmds, hs, pb), log, ws, tx, outs, es, cn, cmds, hs, back, tl, inb, raw, srv, ds, up, pb)
+# (ready: whether its client may run it so, S.ready or acl.ready, which
+# group_job's arms give, so that group.heeded has this one caller)
+def group.heed(ready: Bool, +log: Bool, ws: Waits, +tx: Tx, outs: List<&2, Sigma<&2, &2, Chan(Ans), _ => Ans>>, es: List<&2, A.Ent>, +cn: S.Conn, +cmds: List<&2, R.Cmd>, +hs: List<&2, U32>, back: Chan(Ans), +tl: U32, +inb: Nat, raw: String, +srv: S.Srv, ds: R.Ds, up: List<&2, Up>, +pb: Ps) -> Grp:
+  group.heeded(heed.ok.of(ready, S.conn.id(cn), tx, cmds, hs, pb), log, ws, tx, outs, es, cn, cmds, hs, back, tl, inb, raw, srv, ds, up, pb)
 
 # a batch from a client with no subscription: the fast way while no
 # keyspace event is to be sent and no client waits, has a transaction or
 # watches a key (calm 0: ps.gate); while some client does, or the
 # tracking has work (calm 1), the fast way for a batch of database
 # commands that writes no heeded key, from a client in no MULTI
-# (group.heeded)
+# (group.heeded); while some client is restricted (calm 3 and 4), the
+# same for a client that is not (acl.ready)
 def group_job(+log: Bool, job: B.Job, ws: Waits, tx: Tx, calm: Nat, outs: List<&2, Sigma<&2, &2, Chan(Ans), _ => Ans>>, es: List<&2, A.Ent>, +cn: S.Conn, back: Chan(Ans), +tl: U32, +inb: Nat, raw: String, +srv: S.Srv, ds: R.Ds, up: List<&2, Up>, pb: Ps) -> Grp:
   match job ws tx calm:
     case B.Plain{cmds, hs} WaitNone{} TxNone{} 0n:
       fast(log, S.ready(cn, srv), outs, es, cn, cmds, hs, back, tl, inb, raw, srv, ds, up, pb)
+    case B.Plain{cmds, hs} WaitNone{} TxNone{} 3n:
+      fast(log, acl.ready(cn, srv), outs, es, cn, cmds, hs, back, tl, inb, raw, srv, ds, up, pb)
     case B.Plain{cmds, +hs} w t 2n:
       job.slow(cn, back, inb, raw, cmds, hs, Grp{outs, es, srv, ds, w, up, t, pb})
+    case B.Plain{cmds, hs} w t 3n:
+      group.heed(acl.ready(cn, srv), log, w, t, outs, es, cn, cmds, hs, back, tl, inb, raw, srv, ds, up, pb)
+    case B.Plain{cmds, hs} w t 4n:
+      group.heed(acl.ready(cn, srv), log, w, t, outs, es, cn, cmds, hs, back, tl, inb, raw, srv, ds, up, pb)
     case B.Plain{cmds, hs} w t c:
-      group.heed(log, w, t, outs, es, cn, cmds, hs, back, tl, inb, raw, srv, ds, up, pb)
+      group.heed(S.ready(cn, srv), log, w, t, outs, es, cn, cmds, hs, back, tl, inb, raw, srv, ds, up, pb)
     case B.Mixed{cmds, +hs} w t c:
       job.slow(cn, back, inb, raw, cmds, hs, Grp{outs, es, srv, ds, w, up, t, pb})
 
@@ -9729,10 +10408,12 @@ def group_req(+log: Bool, q: Req, g: Grp) -> Grp:
     case Gone{+id, +back} Grp{outs, es, srv, ds, +ws, +up, tx, pb}:
       grp.gone(id, back, outs, es, srv, ds, ws, up, tx, pb)
     case Left{+id, back} Grp{outs, es, srv, ds, ws, up, tx, pb}:
-      Grp{(back, Bye{}) <> outs, es, S.srv.gone(srv, id), ds, ws, up, tx.drop(id, tx), ps.left(id, ps.drop(id, pb))}
+      +sv = S.srv.left(srv, id)
+      Grp{(back, Bye{}) <> outs, es, sv, ds, ws, up, tx.drop(id, tx), ps.acl.at(ps.left(id, ps.drop(id, pb)), acl.on(sv))}
     case Join{+id, +back, fd, addr, laddr} Grp{outs, es, +srv, +ds, ws, up, tx, pb}:
       +now = R.ds.now(ds)
-      Grp{(back, Ans{None{}, S.conn_join(id, srv)}) <> outs, es, srv, ds, ws, up, tx, ps.join(id, Cl{id, Chan.mark(Ans, back, 0, now), fd, addr, laddr, now, "", 0n, False{}, False{}, TkOff{}}, pb)}
+      +sv = S.srv.acl.client(srv, id, "default")
+      Grp{(back, Ans{None{}, S.conn_join(id, srv)}) <> outs, es, sv, ds, ws, up, tx, ps.acl.at(ps.join(id, Cl{id, Chan.mark(Ans, back, 0, now), fd, addr, laddr, now, "", 0n, False{}, False{}, TkOff{}, "default"}, pb), acl.on(sv))}
 
 # the clock (IO.clock: s and us since 1970) in ms
 def clock.ms(t: U32 & U32) -> Nat:
@@ -11311,17 +11992,21 @@ def hex8.go(n: Nat, +x: U32, acc: String) -> String:
     case 1n+m:
       hex8.go(m, U32.div(x, 16), SCon{T.hex.digit(U32.and(x, 15)), acc})
 
-def hex.word(r: Result<&1, &1, U32 & String, U32>) -> String:
+# a random word in 8 hex digits; one that getrandom could not give is
+# made from the clock and the pid (alt), as Redis seeds its random bytes
+# from them when /dev/urandom cannot be read (getRandomBytes): weaker,
+# but neither zero nor the same from one start to the next
+def hex.word(r: Result<&1, &1, U32 & String, U32>, +alt: U32) -> String:
   match r:
     case Done{+x}:
       hex8.go(8n, x, "")
     case Fail{e}:
-      "00000000"
+      hex8.go(8n, alt, "")
 
-def boot.of(+o1: String, +o2: String, +o3: String, +mem: String, h: Nat & Nat, run: String, rep: String, t: U32 & U32, +pid: U32, exe: String, conf: String) -> I.Boot:
+def boot.of(+o1: String, +o2: String, +o3: String, +mem: String, h: Nat & Nat, run: String, rep: String, key: String, t: U32 & U32, +pid: U32, exe: String, conf: String) -> I.Boot:
   (heap, act) = h
   (secs, us) = t
-  I.IBoot{T.trim(o1) ++ " " ++ T.trim(o2) ++ " " ++ T.trim(o3), U32.show(pid), run, rep, exe, conf, Nat.mul(nat.of(nth(1n, words.of(T.first(String.split(mem, '\n'))))), 1024n), secs, heap}
+  I.IBoot{T.trim(o1) ++ " " ++ T.trim(o2) ++ " " ++ T.trim(o3), U32.show(pid), run, rep, exe, conf, Nat.mul(nat.of(nth(1n, words.of(T.first(String.split(mem, '\n'))))), 1024n), secs, heap, key}
 
 @unsafe
 def proc.got(m: Result<&1, &1, U32 & String, File>) -> IO(String):
@@ -11340,6 +12025,11 @@ def proc.text(+path: String) -> IO(String):
     m : Result<&1, &1, U32 & String, File> <- File.open(path, "r")
     proc.got(m)
 
+def hex40.of(a: Result<&1, &1, U32 & String, U32>, b: Result<&1, &1, U32 & String, U32>, c: Result<&1, &1, U32 & String, U32>, d: Result<&1, &1, U32 & String, U32>, e: Result<&1, &1, U32 & String, U32>, t: U32 & U32, +pid: U32) -> String:
+  (secs, us) = t
+  +x = U32.xor(U32.xor(secs, U32.mul(us, 2654435761)), pid)
+  hex.word(a, KV.mix(x)) ++ hex.word(b, KV.mix(U32.add(x, 1))) ++ hex.word(c, KV.mix(U32.add(x, 2))) ++ hex.word(d, KV.mix(U32.add(x, 3))) ++ hex.word(e, KV.mix(U32.add(x, 4)))
+
 # 40 hex digits at random, as Redis's run and replication ids
 @unsafe
 def hex40() -> IO(String):
@@ -11349,7 +12039,9 @@ def hex40() -> IO(String):
     c : Result<&1, &1, U32 & String, U32> <- IO.random_u32()
     d : Result<&1, &1, U32 & String, U32> <- IO.random_u32()
     e : Result<&1, &1, U32 & String, U32> <- IO.random_u32()
-    return hex.word(a) ++ hex.word(b) ++ hex.word(c) ++ hex.word(d) ++ hex.word(e)
+    t : U32 & U32 <- IO.clock()
+    pid : U32 <- IO.pid()
+    return hex40.of(a, b, c, d, e, t, pid)
 
 # the facts now (the main thread's id is the pid)
 @unsafe
@@ -11376,8 +12068,10 @@ def boot.read(+pid: U32, +exe: String, +conf: String) -> IO(I.Boot):
     h : Nat & Nat <- IO.heap()
     run : String <- hex40()
     rep : String <- hex40()
+    k1 : String <- hex40()
+    k2 : String <- hex40()
     t : U32 & U32 <- IO.clock()
-    return boot.of(o1, o2, o3, mem, h, run, rep, t, pid, exe, conf)
+    return boot.of(o1, o2, o3, mem, h, run, rep, k1 ++ k2, t, pid, exe, conf)
 
 # INFO's account at the start, before the append-only file is read
 @unsafe
@@ -11516,11 +12210,11 @@ type Ex is Data:
 # a command of an EXEC's that needs the engine, as it runs: the EXEC,
 # its replies so far (newest first), its client's connection in it, the
 # lines of its commands for its client (MONITOR: mine), the command's
-# code and arguments (for its call, counted at its end), and the
-# commands after it. ExrOf, never built, makes Exr a node
-# of its own, as ScOf makes Sc one (below).
+# code and arguments (for its call, counted at its end), the commands
+# after it and the memo of their arguments (Exec's arguments). ExrOf,
+# never built, makes Exr a node of its own, as ScOf makes Sc one (below).
 type Exr is Data:
-  Exr{ex: Ex, rs: List<&2, R.Reply>, conn: S.Conn, mine: List<&2, String>, k: Nat, arg: I.Arg, cmds: List<&2, R.Cmd>, codes: List<&2, Nat>, avs: List<&2, Av>}
+  Exr{ex: Ex, rs: List<&2, R.Reply>, conn: S.Conn, mine: List<&2, String>, k: Nat, arg: I.Arg, cmds: List<&2, R.Cmd>, codes: List<&2, Nat>, avs: List<&2, Qa>, m: Xm}
   ExrOf{x: Exr}
 
 # whose a command of the engine is: a client's wait's (its batch goes on
@@ -12004,15 +12698,95 @@ def sc.refused(+f: U32, +ro: Bool, +oom: Bool) -> String:
       Bool.pick(String, Bool.and(oom, U32.is_eq(U32.and(f, 3), 0)), "OOM allow-oom flag is not set on the script, can not run it when out of memory", "")))
 
 # why a call may not run (scriptCall): an unknown command, its arity, a
-# command not allowed from a script, a write from a read-only script, a
-# command that may take memory past maxmemory before the script wrote;
-# "" when it may
-def sc.call.why(unknown: Bool, arity: Bool, noscript: Bool, rowrite: Bool, oom: Bool) -> String:
+# command not allowed from a script, a command its caller's user may not
+# run (acl: sc.acl.why), a write from a read-only script, a command that
+# may take memory past maxmemory before the script wrote; "" when it may
+def sc.call.why(unknown: Bool, arity: Bool, noscript: Bool, +acl: String, rowrite: Bool, oom: Bool) -> String:
   Bool.pick(String, unknown, "ERR Unknown Redis command called from script",
     Bool.pick(String, arity, "ERR Wrong number of args calling Redis command from script",
       Bool.pick(String, noscript, "ERR This Redis command is not allowed from script",
-        Bool.pick(String, rowrite, "ERR Write commands are not allowed from read-only scripts.",
-          Bool.pick(String, oom, oom.msg(), "")))))
+        Bool.pick(String, Bool.not(String.is_empty(acl)), acl,
+          Bool.pick(String, rowrite, "ERR Write commands are not allowed from read-only scripts.",
+            Bool.pick(String, oom, oom.msg(), ""))))))
+
+# A script's calls and ACL. The script client runs as its caller's user
+# (scriptCall sets its user), so that a call of a script is checked with
+# that user's rules, as a call of its caller is (ACL), after the checks
+# of a command not known, its arity and a command not allowed from a
+# script (on), while some client is restricted and the caller is; its
+# arguments read from the call's bytes then. A call refused fails with
+# Redis's text (scriptVerifyACL) and goes to the ACL LOG, context lua.
+def grp.acl.call.on(on: Bool, +code: Nat, +raw: String, +srv: S.Srv, +pb: Ps) -> U.Verdict:
+  match on:
+    case True{}:
+      +id = ps.scr.who(pb)
+      bg.acl.check(S.srv.restricted(srv, id), id, srv, pb, code, AvRaw{raw, 0n})
+    case False{}:
+      U.VOk{}
+
+def grp.acl.call(on: Bool, +code: Nat, +raw: String, +g: Grp) -> U.Verdict:
+  match g:
+    case Grp{outs, es, +srv, ds, ws, up, tx, +pb}:
+      grp.acl.call.on(Bool.and(on, ps.acl.on(pb)), code, raw, srv, pb)
+
+def sc.acl.why(+v: U.Verdict) -> String:
+  match v:
+    case U.VOk{}:
+      ""
+    case U.VNo{+why, at, obj}:
+      "ERR The user executing the script " ++ Bool.pick(String, Nat.is_eq(why, 1n), "can't run this command or subcommand",
+        Bool.pick(String, Nat.is_eq(why, 2n), "can't access at least one of the keys mentioned in the command arguments", "can't publish to the channel mentioned in the command"))
+
+# the caller's line in the entry (addACLLogEntry's server.script_caller):
+# the client of the script command's wait, in its batch's connection,
+# its command the wait's, EXEC's while EXEC runs its transaction (Exm:
+# in MULTI, its commands queued)
+def ex.n(+e: Ex) -> Nat:
+  match e:
+    case Ex{w, id, back, rs, es, m0, mi, code, +n}:
+      n
+
+def exr.n(+x: Exr) -> Nat:
+  match x:
+    case Exr{+e, rs, conn, mine, k, arg, cmds, codes, avs, m}:
+      ex.n(e)
+    case ExrOf{+y}:
+      exr.n(y)
+
+def exm.n(+ex: Exm) -> Maybe<&2, Nat>:
+  match ex:
+    case ExNone{}:
+      None{}
+    case ExIn{+x}:
+      Some{exr.n(x)}
+
+def waits.who(+ws: Waits, +x: Maybe<&2, Nat>) -> Who:
+  match ws:
+    case WaitOn{+id, back, +c0, c1, b, +argv, +code, db, until, cmds, codes, av, rest}:
+      Me{id, c0, cl.cmd.of(U32.from_nat(code)), 0n, argv, x}
+    case WaitNone{}:
+      Them{}
+
+def sc.who(+s: Sc) -> Who:
+  match s:
+    case Sc{+w, back, cn, es0, t0, cf, ro, aoom, sha, +ex}:
+      waits.who(w, exm.n(ex))
+    case ScOf{+y}:
+      sc.who(y)
+
+def sc.acl.log.no(+v: U.Verdict, +me: Who, g: Grp) -> Grp:
+  match g:
+    case Grp{outs, es, srv, +ds, +ws, up, +tx, +pb}:
+      +id = ps.scr.who(pb)
+      +now = R.ds.now(ds)
+      Grp{outs, es, S.srv.acl.log(srv, U.Ent{1n, U.verdict.why(v), "lua", U.verdict.obj(v), ps.user(id, pb), now, acl.info(id, now, me, ws, tx, pb)}), ds, ws, up, tx, pb}
+
+def sc.acl.log(v: U.Verdict, +sc: Sc, g: Grp) -> Grp:
+  match v:
+    case U.VOk{}:
+      g
+    case U.VNo{w, at, o}:
+      sc.acl.log.no(U.VNo{w, at, o}, sc.who(sc), g)
 
 def sc.conn.r3(+r3: Bool, c: S.Conn) -> S.Conn:
   match c:
@@ -12056,7 +12830,7 @@ def sc.run.call.av(+c: R.Cmd, +code: Nat, +back: Chan(Ans), +a: Av, l: LRun) -> 
   match l:
     case LRun{rs, es, +conn, +srv, ds, ws, up, tx, pb}:
       +may = S.may(S.kind(c), conn, srv)
-      fed.run(bg.feed(mon.ran(may, code), 0n, code, S.conn.mode(conn), a, AvArgs{Nil{}}, bg.x.cmd(may, 0n, back, 0n, 1n, c, code, LRun{rs, es, conn, S.srv.call(srv, 0n, av.arg(a)), ds, ws, up, tx, pb})))
+      fed.run(bg.feed(mon.ran(may, code), 0n, code, S.conn.mode(conn), a, AvArgs{Nil{}}, bg.x.cmd(may, 0n, back, 0n, 1n, c, code, a, LRun{rs, es, conn, S.srv.call(srv, 0n, av.arg(a)), ds, ws, up, tx, pb})))
     case LHeld{h}:
       LHeld{h}
 
@@ -12155,12 +12929,21 @@ def sc.busy.group(qs: List<&1, Req>, t: U32 & U32, +aof: Bool, g: Grp) -> Bz:
       Bz{outs, ws, up, group_at(aof, sc.noticks(qs), s0, u0, Grp{Nil{}, es, srv, ds, WaitNone{}, Nil{}, tx, pb})}
 
 # whether the command of an ACL check is known (redis.acl_check_cmd)
-def sc.known(b: P.Batch) -> Bool:
+def sc.acl.ans(known: Bool, +k: Nat, +raw: String, +g: Grp) -> String:
+  match known g:
+    case True{} Grp{outs, es, +srv, ds, ws, up, tx, +pb}:
+      +id = ps.scr.who(pb)
+      Bool.pick(String, U.verdict.ok(bg.acl.check(S.srv.restricted(srv, id), id, srv, pb, k, AvRaw{raw, 0n})), ":1\r\n", ":0\r\n")
+    case _ g0:
+      "-"
+
+def sc.acl.of(b: P.Batch, +raw: String, +g: Grp) -> String:
   match b:
-    case P.Batch{Con{B.Req{c, +h}, Nil{}}, tl, rest, err, need, raw}:
-      Bool.not(Nat.is_eq(R.code.key(R.code.of(h)), 0n))
+    case P.Batch{Con{B.Req{c, +h}, Nil{}}, tl, rest, err, need, raw2}:
+      +k = R.code.of(h)
+      sc.acl.ans(Bool.not(Nat.is_eq(R.code.key(k), 0n)), k, raw, g)
     case _:
-      False{}
+      "-"
 
 def waits.id(+ws: Waits) -> Nat:
   match ws:
@@ -12208,7 +12991,7 @@ def sc.busy.ran(z: Bz, sc: Sc, +aof: Bool, +pid: U32, +reqs: Chan(Req)) -> IO(Gr
 # before the EXEC), the group's with them, the script's left out
 def exr.es(x: Exr) -> List<&2, A.Ent>:
   match x:
-    case Exr{Ex{w1, id, b1, rs, es, m0, mi, code, n}, rs1, conn, mine, k, arg, cmds, codes, avs}:
+    case Exr{Ex{w1, id, b1, rs, es, m0, mi, code, n}, rs1, conn, mine, k, arg, cmds, codes, avs, m}:
       es
     case ExrOf{y}:
       exr.es(y)
@@ -12418,12 +13201,16 @@ def sc.log(+level: U32, +msg: String, sc: Sc, +aof: Bool, +pid: U32, g: Grp, +re
   +x = g
   sc.log.at(level, msg, sc.need(sc, pid, x), aof, pid, x, reqs)
 
-# redis.acl_check_cmd's check: the command known or not (no ACL here)
+# redis.acl_check_cmd's check (luaRedisAclCheckCmdPermissionsCommand):
+# ":1" when its caller's user may run the command with its arguments,
+# ":0" when it may not (ACLCheckAllUserCommandPerm: no entry in the log),
+# "-" when the command is not known
 @unsafe
 def sc.acl(+raw: String, sc: Sc, +aof: Bool, +pid: U32, g: Grp, +reqs: Chan(Req)) -> IO(Grp):
+  +x = g
   do IO<Grp>:
-    st : L.Step <- L.Engine.next(0, Bool.pick(String, sc.known(P.parse(raw)), ":1\r\n", ":0\r\n"))
-    sc.loop(st, sc, aof, pid, g, reqs)
+    st : L.Step <- L.Engine.next(0, sc.acl.of(P.parse(raw), raw, x))
+    sc.loop(st, sc, aof, pid, x, reqs)
 
 @unsafe
 def sc.call.ran(p: Sc & (Grp & String), +aof: Bool, +pid: U32, +reqs: Chan(Req)) -> IO(Grp):
@@ -12453,7 +13240,11 @@ def sc.call.at(+why: String, +c: R.Cmd, +code: Nat, +r3: Bool, +raw: String, sc:
 def sc.call.run(+c: R.Cmd, +code: Nat, +r3: Bool, +raw: String, +sc: Sc, +aof: Bool, +pid: U32, g: Grp, +reqs: Chan(Req)) -> IO(Grp):
   +x = g
   +key = R.code.key(code)
-  sc.call.at(sc.call.why(Nat.is_eq(key, 0n), Nat.is_eq(R.code.class(code), 1n), R.stat.noscript(key), Bool.and(sc.ro(sc), R.stat.pausable(key)), Bool.and(Bool.not(sc.aoom(sc)), Bool.and(grp.oom(x), Bool.and(U32.is_eq(U32.and(grp.sc.st(x), 2), 0), R.stat.denyoom(key))))), c, code, r3, raw, sc, aof, pid, x, reqs)
+  +unknown = Nat.is_eq(key, 0n)
+  +arity = Nat.is_eq(R.code.class(code), 1n)
+  +noscript = R.stat.noscript(key)
+  +v = grp.acl.call(Bool.not(Bool.or(unknown, Bool.or(arity, noscript))), code, raw, x)
+  sc.call.at(sc.call.why(unknown, arity, noscript, sc.acl.why(v), Bool.and(sc.ro(sc), R.stat.pausable(key)), Bool.and(Bool.not(sc.aoom(sc)), Bool.and(grp.oom(x), Bool.and(U32.is_eq(U32.and(grp.sc.st(x), 2), 0), R.stat.denyoom(key))))), c, code, r3, raw, sc, aof, pid, sc.acl.log(v, sc, x), reqs)
 
 @unsafe
 def sc.call.of(b: P.Batch, +r3: Bool, +raw: String, sc: Sc, +aof: Bool, +pid: U32, g: Grp, +reqs: Chan(Req)) -> IO(Grp):
@@ -12947,19 +13738,51 @@ def sc.exec.on(x: Xd, outs: List<&2, Sigma<&2, &2, Chan(Ans), _ => Ans>>, w: Wai
 @unsafe
 def sc.exec.loop(ex: Ex, q: Xq, outs: List<&2, Sigma<&2, &2, Chan(Ans), _ => Ans>>, +aof: Bool, +pid: U32, +reqs: Chan(Req)) -> IO(Grp):
   match q:
-    case Xq{x, Con{+c, rest}, Con{+k, more}, Con{+a, ar}}:
-      sc.exec.at(code.engine(k), ex, x, c, k, a, rest, more, ar, outs, aof, pid, reqs)
-    case Xq{x, cs, ks, vs}:
+    case Xq{x, Con{+c, rest}, Con{+k, more}, Con{Qa{+b, +a}, ar}, m}:
+      sc.exec.at(code.engine(k), ex, x, c, k, b, a, rest, more, ar, m, outs, aof, pid, reqs)
+    case Xq{x, cs, ks, vs, m}:
       IO.pure(Grp, sc.exec.end(ex, x, outs))
 
 # (a run that stopped for another reason ends the EXEC as it is)
 @unsafe
-def sc.exec.at(eng: Bool, ex: Ex, x: Xr, +c: R.Cmd, +k: Nat, +a: Av, rest: List<&2, R.Cmd>, more: List<&2, Nat>, ar: List<&2, Av>, outs: List<&2, Sigma<&2, &2, Chan(Ans), _ => Ans>>, +aof: Bool, +pid: U32, +reqs: Chan(Req)) -> IO(Grp):
+def sc.exec.at(eng: Bool, ex: Ex, x: Xr, +c: R.Cmd, +k: Nat, +b: Nat, +a: Av, rest: List<&2, R.Cmd>, more: List<&2, Nat>, ar: List<&2, Qa>, m: Xm, outs: List<&2, Sigma<&2, &2, Chan(Ans), _ => Ans>>, +aof: Bool, +pid: U32, +reqs: Chan(Req)) -> IO(Grp):
   match eng:
     case False{}:
       IO.pure(Grp, sc.exec.end(ex, x, outs))
     case True{}:
-      sc.exec.eng(ex, x, c, k, a, rest, more, ar, outs, aof, pid, reqs)
+      sc.exec.acl(ex, x, c, k, b, a, rest, more, ar, m, outs, aof, pid, reqs)
+
+# a command of the EXEC's that needs the engine, checked again (ACL) as
+# bg.x.till checks the others, its arguments read from batch b's bytes
+# when the check or a monitor reads them (Exec's arguments): refused, its
+# error in EXEC's array (sc.exec.no); else the engine runs it
+@unsafe
+def sc.exec.acl(ex: Ex, x: Xr, +c: R.Cmd, +k: Nat, +b: Nat, +a0: Av, rest: List<&2, R.Cmd>, more: List<&2, Nat>, ar: List<&2, Qa>, m: Xm, outs: List<&2, Sigma<&2, &2, Chan(Ans), _ => Ans>>, +aof: Bool, +pid: U32, +reqs: Chan(Req)) -> IO(Grp):
+  match ex x:
+    case Ex{w, +id, back, rs0, es0, m0, mi, code, n} Xr{LRun{rs, es, conn, +srv, ds, ws, up, tx, +pb}, mine}:
+      +ck = Bool.and(ps.acl.on(pb), S.srv.restricted(srv, id))
+      +need = Bool.or(ck, Bool.and(mon.ran(True{}, k), ps.mon.any(pb)))
+      +m1 = xm.if(need, m, b, a0)
+      +a = xm.av.if(need, m1, a0)
+      sc.exec.v(bg.acl.check(ck, id, srv, pb, k, a), Ex{w, id, back, rs0, es0, m0, mi, code, n}, Xr{LRun{rs, es, conn, srv, ds, ws, up, tx, pb}, mine}, c, k, a, rest, more, ar, m1, outs, aof, pid, reqs)
+    case ex0 x0:
+      IO.pure(Grp, sc.exec.end(ex0, x0, outs))
+
+@unsafe
+def sc.exec.v(v: U.Verdict, ex: Ex, x: Xr, +c: R.Cmd, +k: Nat, +a: Av, rest: List<&2, R.Cmd>, more: List<&2, Nat>, ar: List<&2, Qa>, m: Xm, outs: List<&2, Sigma<&2, &2, Chan(Ans), _ => Ans>>, +aof: Bool, +pid: U32, +reqs: Chan(Req)) -> IO(Grp):
+  match v:
+    case U.VOk{}:
+      sc.exec.eng(ex, x, c, k, a, rest, more, ar, m, outs, aof, pid, reqs)
+    case U.VNo{w, at, o}:
+      sc.exec.no(U.VNo{w, at, o}, ex, x, k, a, rest, more, ar, m, outs, aof, pid, reqs)
+
+# (refused: NOPERM with why, as bg.x.denied answers the others, and the
+# EXEC goes on)
+@unsafe
+def sc.exec.no(+v: U.Verdict, ex: Ex, x: Xr, +k: Nat, +a: Av, rest: List<&2, R.Cmd>, +more: List<&2, Nat>, ar: List<&2, Qa>, m: Xm, outs: List<&2, Sigma<&2, &2, Chan(Ans), _ => Ans>>, +aof: Bool, +pid: U32, +reqs: Chan(Req)) -> IO(Grp):
+  match ex:
+    case Ex{w, +id, +back, rs0, es0, m0, mi, code, +n}:
+      sc.exec.loop(Ex{w, id, back, rs0, es0, m0, mi, code, n}, bg.x.till(id, back, 0n, n, rest, more, ar, m, bg.x.denied(v, id, 0n, n, k, a, x), codes.stop(more)), outs, aof, pid, reqs)
 
 # a command of the EXEC's that needs the engine: named and counted as
 # bg.x.go names and counts a command, its line to the monitors first
@@ -12968,20 +13791,20 @@ def sc.exec.at(eng: Bool, ex: Ex, x: Xr, +c: R.Cmd, +k: Nat, +a: Av, rest: List<
 # named and counted at its end, as a script command's is (The driver:
 # Timing)
 @unsafe
-def sc.exec.eng(ex: Ex, x: Xr, +c: R.Cmd, +k: Nat, +a: Av, rest: List<&2, R.Cmd>, more: List<&2, Nat>, ar: List<&2, Av>, outs: List<&2, Sigma<&2, &2, Chan(Ans), _ => Ans>>, +aof: Bool, +pid: U32, +reqs: Chan(Req)) -> IO(Grp):
+def sc.exec.eng(ex: Ex, x: Xr, +c: R.Cmd, +k: Nat, +a: Av, rest: List<&2, R.Cmd>, more: List<&2, Nat>, ar: List<&2, Qa>, m: Xm, outs: List<&2, Sigma<&2, &2, Chan(Ans), _ => Ans>>, +aof: Bool, +pid: U32, +reqs: Chan(Req)) -> IO(Grp):
   match ex x:
     case Ex{+w, +id, +back, rs0, es0, m0, mi, code, n} Xr{LRun{rs1, es1, +conn, +srv, ds, ws, up, tx, pb}, mine}:
-      sc.exec.eng.fed(bg.x.feed(mon.ran(True{}, k), id, k, S.conn.mode(conn), a, LRun{rs1, es1, conn, srv, ds, ws, up, tx, pb}, mine), w, Ex{w, id, back, rs0, es0, m0, mi, code, n}, c, k, av.arg(a), rest, more, ar, outs, aof, pid, reqs)
+      sc.exec.eng.fed(bg.x.feed(mon.ran(True{}, k), id, k, S.conn.mode(conn), a, LRun{rs1, es1, conn, srv, ds, ws, up, tx, pb}, mine), w, Ex{w, id, back, rs0, es0, m0, mi, code, n}, c, k, av.arg(a), rest, more, ar, m, outs, aof, pid, reqs)
     case ex0 x0:
       IO.pure(Grp, sc.exec.end(ex0, x0, outs))
 
 @unsafe
-def sc.exec.eng.fed(f: Xr, w: Waits, ex: Ex, +c: R.Cmd, +k: Nat, arg: I.Arg, rest: List<&2, R.Cmd>, more: List<&2, Nat>, ar: List<&2, Av>, outs: List<&2, Sigma<&2, &2, Chan(Ans), _ => Ans>>, +aof: Bool, +pid: U32, +reqs: Chan(Req)) -> IO(Grp):
+def sc.exec.eng.fed(f: Xr, w: Waits, ex: Ex, +c: R.Cmd, +k: Nat, arg: I.Arg, rest: List<&2, R.Cmd>, more: List<&2, Nat>, ar: List<&2, Qa>, m: Xm, outs: List<&2, Sigma<&2, &2, Chan(Ans), _ => Ans>>, +aof: Bool, +pid: U32, +reqs: Chan(Req)) -> IO(Grp):
   match f:
     case Xr{LRun{rs1, es1, +conn, srv, ds, ws, up, tx, pb}, mine}:
       do IO<Grp>:
         g2 : Grp <- sc.mark(Grp{outs, es1, srv, ds, ws, up, tx, pb})
-        sc.one.of(c, ExIn{Exr{ex, rs1, conn, mine, k, arg, rest, more, ar}}, S.conn.r3(conn), S.conn.db(conn), aof, pid, w, g2, reqs)
+        sc.one.of(c, ExIn{Exr{ex, rs1, conn, mine, k, arg, rest, more, ar, m}}, S.conn.r3(conn), S.conn.db(conn), aof, pid, w, g2, reqs)
     case x0:
       IO.pure(Grp, sc.exec.end(ex, x0, outs))
 
@@ -12993,8 +13816,8 @@ def sc.exec.went(x: Exr, +r: R.Reply, g: Grp, +aof: Bool, +pid: U32, +reqs: Chan
   match x g:
     case ExrOf{y} g0:
       sc.exec.went(y, r, g0, aof, pid, reqs)
-    case Exr{Ex{w, +id, +back, rs0, es0, m0, mi, code, +n}, rs1, +conn, mine, k, arg, cmds, +codes, avs} Grp{outs, es, srv, ds, ws, up, tx, pb}:
-      sc.exec.loop(Ex{w, id, back, rs0, es0, m0, mi, code, n}, bg.x.till(id, back, 0n, n, cmds, codes, avs, Xr{LRun{S.put(S.say(S.conn.mode(conn), r), rs1), es, conn, srv, R.ds.focus(S.conn.db(conn), ds), ws, up, tx, pb}, mine}, codes.stop(codes)), outs, aof, pid, reqs)
+    case Exr{Ex{w, +id, +back, rs0, es0, m0, mi, code, +n}, rs1, +conn, mine, k, arg, cmds, +codes, avs, m} Grp{outs, es, srv, ds, ws, up, tx, pb}:
+      sc.exec.loop(Ex{w, id, back, rs0, es0, m0, mi, code, n}, bg.x.till(id, back, 0n, n, cmds, codes, avs, m, Xr{LRun{S.put(S.say(S.conn.mode(conn), r), rs1), es, conn, srv, R.ds.focus(S.conn.db(conn), ds), ws, up, tx, pb}, mine}, codes.stop(codes)), outs, aof, pid, reqs)
 
 def ex.id(+e: Ex) -> Nat:
   match e:
@@ -13003,21 +13826,21 @@ def ex.id(+e: Ex) -> Nat:
 
 def exr.id(+x: Exr) -> Nat:
   match x:
-    case Exr{+e, rs, conn, mine, k, arg, cmds, codes, avs}:
+    case Exr{+e, rs, conn, mine, k, arg, cmds, codes, avs, m}:
       ex.id(e)
     case ExrOf{+y}:
       exr.id(y)
 
 def exr.k(+x: Exr) -> Nat:
   match x:
-    case Exr{e, rs, conn, mine, +k, arg, cmds, codes, avs}:
+    case Exr{e, rs, conn, mine, +k, arg, cmds, codes, avs, m}:
       k
     case ExrOf{+y}:
       exr.k(y)
 
 def exr.arg(+x: Exr) -> I.Arg:
   match x:
-    case Exr{e, rs, conn, mine, k, +arg, cmds, codes, avs}:
+    case Exr{e, rs, conn, mine, k, +arg, cmds, codes, avs, m}:
       arg
     case ExrOf{+y}:
       exr.arg(y)

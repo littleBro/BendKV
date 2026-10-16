@@ -9,6 +9,7 @@ import ./float.bend as F
 import ./hll.bend as H
 import ./geo.bend as G
 import ./rdb.bend as D
+import ./sha.bend as Sha
 
 # Types
 # -----
@@ -570,7 +571,12 @@ type SortO is Data:
 # and KILL NOTBUSY; the server runs the script on its engine and keeps the
 # cache, every call the script makes a command of its own (server.bend,
 # Scripts). The four scripts the append-only file writes parse to the
-# commands they run (parse_eval), as before.
+# commands they run (parse_eval), as before. ACL's subcommands are SAcl,
+# their number and arguments (ACL, below): the session keeps the users and
+# the log (session.bend, ACL), and the server answers WHOAMI from its
+# clients (server.bend, ACL). AUTH (SAuth) and HELLO (SHello) keep their
+# arguments with each password put as its SHA-256 (auth.hashed,
+# hello.hashed), which is all the session reads of one.
 
 type SessOp is Data:
   SHello{args: List<&2, String>}
@@ -623,6 +629,7 @@ type SessOp is Data:
   SEval{how: Nat, args: List<&2, String>}
   SScript{sub: Nat, args: List<&2, String>}
   SRestore{key: String, op: UpdOp}
+  SAcl{kind: Nat, args: List<&2, String>}
 
 # BITOP's operation
 type BitK is Data:
@@ -1236,12 +1243,16 @@ type TOpt is Data:
 # its options are read), with its options; CACHING yes (1), no (0) or
 # neither (2); GETREDIR; TRACKINGINFO. Errors in the arguments are found
 # here, in Redis's order (clientCommand), but those that depend on other
-# clients.
+# clients, and on the users the server keeps: KILL's USER options before
+# the first error, or all of them, are CoKillUsers, whose first user the
+# server does not keep answers its error, as Redis answers it when it
+# reads that option, else the error after them (err), or the kill.
 type ClOp is Data:
   CoList{ty: Nat, ids: Maybe<&2, List<&2, Nat>>}
   CoInfo{}
   CoKill{f: Kill}
   CoKillAddr{addr: String}
+  CoKillUsers{users: List<&2, String>, f: Kill, err: Maybe<&2, Reply>}
   CoNoEvict{on: Bool}
   CoPause{hi: Nat, lo: Nat, all: Bool}
   CoUnpause{}
@@ -1252,11 +1263,11 @@ type ClOp is Data:
   CoBad{r: Reply}
 
 # CLIENT KILL's filter: the client's address and its own (none: any), its
-# id (none: any; Some{0} names no client), its type (0: any) and whether
-# the client that kills is spared (SKIPME, yes unless told no). USER
-# default names every client: BendKV has no other user.
+# id (none: any; Some{0} names no client), its type (0: any), whether
+# the client that kills is spared (SKIPME, yes unless told no) and its
+# user (none: any).
 type Kill is Data:
-  Kill{addr: Maybe<&2, String>, laddr: Maybe<&2, String>, id: Maybe<&2, Nat>, ty: Nat, skip: Bool}
+  Kill{addr: Maybe<&2, String>, laddr: Maybe<&2, String>, id: Maybe<&2, Nat>, ty: Nat, skip: Bool, user: Maybe<&2, String>}
 
 # a client id as Redis reads one, a long long (string2ll): one that can
 # be a client's (14 digits at most, as int_read reads them; ids start at
@@ -1411,28 +1422,33 @@ def kill.word(+o: String) -> Nat:
 
 def kill.id(m: Maybe<&2, Nat>, f: Kill) -> Kill:
   match f:
-    case Kill{a, l, i, t, s}:
-      Kill{a, l, m, t, s}
+    case Kill{a, l, i, t, s, u}:
+      Kill{a, l, m, t, s, u}
 
 def kill.ty(+n: Nat, f: Kill) -> Kill:
   match f:
-    case Kill{a, l, i, t, s}:
-      Kill{a, l, i, n, s}
+    case Kill{a, l, i, t, s, u}:
+      Kill{a, l, i, n, s, u}
 
 def kill.addr(v: String, f: Kill) -> Kill:
   match f:
-    case Kill{a, l, i, t, s}:
-      Kill{Some{v}, l, i, t, s}
+    case Kill{a, l, i, t, s, u}:
+      Kill{Some{v}, l, i, t, s, u}
 
 def kill.laddr(v: String, f: Kill) -> Kill:
   match f:
-    case Kill{a, l, i, t, s}:
-      Kill{a, Some{v}, i, t, s}
+    case Kill{a, l, i, t, s, u}:
+      Kill{a, Some{v}, i, t, s, u}
 
 def kill.skip(b: Bool, f: Kill) -> Kill:
   match f:
-    case Kill{a, l, i, t, s}:
-      Kill{a, l, i, t, b}
+    case Kill{a, l, i, t, s, u}:
+      Kill{a, l, i, t, b, u}
+
+def kill.usr(v: String, f: Kill) -> Kill:
+  match f:
+    case Kill{a, l, i, t, s, u}:
+      Kill{a, l, i, t, s, Some{v}}
 
 # a step of CLIENT KILL's options: the filter so far, or the error that
 # ends them
@@ -1459,12 +1475,10 @@ def kill.tyv(+ty: Nat, +v: String, f: Kill) -> KSt:
     case _:
       KOk{kill.ty(ty, f)}
 
-def kill.user(ok: Bool, +v: String, f: Kill) -> KSt:
-  match ok:
-    case True{}:
-      KOk{f}
-    case False{}:
-      KErr{RError{no_newlines("ERR No such user '" ++ cstr(v) ++ "'")}}
+# CLIENT KILL's error for a USER option whose user the server does not
+# keep
+def e_no_user(+u: String) -> Reply:
+  RError{no_newlines("ERR No such user '" ++ cstr(u) ++ "'")}
 
 def kill.skipv(yes: Bool, no: Bool, f: Kill) -> KSt:
   match yes no:
@@ -1487,7 +1501,7 @@ def kill.opt(+k: Nat, +v: String, f: Kill) -> KSt:
     case 4n:
       KOk{kill.laddr(v, f)}
     case 5n:
-      kill.user(String.eq(v, "default"), v, f)
+      KOk{kill.usr(v, f)}
     case 6n:
       kill.skipv(is_word(v, "YES"), is_word(v, "NO"), f)
     case _:
@@ -1500,32 +1514,51 @@ def kill.step(st: KSt, +k: Nat, +v: String) -> KSt:
     case KErr{r}:
       KErr{r}
 
-def kill.end(st: KSt) -> ClOp:
+# the options read, an option left without its value: a syntax error,
+# unless an error came before
+def kill.odd(st: KSt) -> KSt:
   match st:
     case KOk{f}:
-      CoKill{f}
+      KErr{RError{"ERR syntax error"}}
     case KErr{r}:
-      CoBad{r}
+      KErr{r}
 
-def kill.odd(st: KSt) -> ClOp:
+# the users of USER options read before any error (us, newest first),
+# with the user of an option k read now
+def kill.users(+st: KSt, +k: Nat, +v: String, +us: List<&2, String>) -> List<&2, String>:
   match st:
     case KOk{f}:
-      e_client_syntax()
+      Bool.pick(List<&2, String>, Nat.is_eq(k, 5n), v <> us, us)
     case KErr{r}:
+      us
+
+# the options' outcome, after the users they named (CoKillUsers) when
+# they named some
+def kill.end(us: List<&2, String>, st: KSt) -> ClOp:
+  match us st:
+    case Nil{} KOk{f}:
+      CoKill{f}
+    case Nil{} KErr{r}:
       CoBad{r}
+    case Con{u, rest} KOk{f}:
+      CoKillUsers{List.reverse(&2, String, u <> rest), f, None{}}
+    case Con{u, rest} KErr{r}:
+      CoKillUsers{List.reverse(&2, String, u <> rest), Kill{None{}, None{}, None{}, 0n, True{}, None{}}, Some{r}}
 
 # The new form's options, each with its value, in order: the first error
 # ends them, as Redis's loop does; a later option of a name overrides an
 # earlier one. An option without a value, or one Redis does not know, is
-# a syntax error.
-def kill.args(args: List<&2, String>, st: KSt) -> ClOp:
+# a syntax error. Each USER option's user is looked up as Redis reads it
+# (us: kill.end).
+def kill.args(args: List<&2, String>, +st: KSt, us: List<&2, String>) -> ClOp:
   match args:
     case Nil{}:
-      kill.end(st)
+      kill.end(us, st)
     case Con{+o, Con{+v, rest}}:
-      kill.args(rest, kill.step(st, kill.word(o), v))
+      +k = kill.word(o)
+      kill.args(rest, kill.step(st, k, v), kill.users(st, k, v, us))
     case Con{o, Nil{}}:
-      kill.odd(st)
+      kill.end(us, kill.odd(st))
 
 # CLIENT KILL: one argument is the old form, an address; more are options
 def kill.of(args: List<&2, String>) -> ClOp:
@@ -1533,7 +1566,7 @@ def kill.of(args: List<&2, String>) -> ClOp:
     case Con{a, Nil{}}:
       CoKillAddr{a}
     case _:
-      kill.args(args, KOk{Kill{None{}, None{}, None{}, 0n, True{}}})
+      kill.args(args, KOk{Kill{None{}, None{}, None{}, 0n, True{}, None{}}}, Nil{})
 
 def no_evict.on(on: Bool, off: Bool) -> ClOp:
   match on off:
@@ -1556,13 +1589,13 @@ def no_evict.of(args: List<&2, String>) -> ClOp:
 # socket's fd, name, age and idle time (s), flags, database, the counts of
 # its channels, patterns and shard channels, the commands queued in its
 # MULTI (none: -1), the bytes of the batch it runs (qbuf) and of the
-# command's arguments (argv-mem), its last command (cmd), the client its
-# invalidations go to (redir: -1 when it does not track, 0 itself), and
+# command's arguments (argv-mem), its last command (cmd), its user (ACL),
+# the client its invalidations go to (redir: -1 when it does not track, 0 itself), and
 # whether it speaks RESP3 (resp). BendKV keeps no buffer of a client's own, so
 # qbuf-free, multi-mem, the reply buffer's size and peak, the output
 # lists and the memory are 0.
 type ClLine is Data:
-  ClLine{id: Nat, addr: String, laddr: String, fd: Nat, name: String, age: Nat, idle: Nat, flags: String, db: Nat, sub: Nat, psub: Nat, ssub: Nat, multi: Maybe<&2, Nat>, qbuf: Nat, argv: Nat, cmd: String, redir: String, r3: Bool}
+  ClLine{id: Nat, addr: String, laddr: String, fd: Nat, name: String, age: Nat, idle: Nat, flags: String, db: Nat, sub: Nat, psub: Nat, ssub: Nat, multi: Maybe<&2, Nat>, qbuf: Nat, argv: Nat, cmd: String, user: String, redir: String, r3: Bool}
 
 def line.multi(m: Maybe<&2, Nat>) -> String:
   match m:
@@ -1573,12 +1606,12 @@ def line.multi(m: Maybe<&2, Nat>) -> String:
 
 def client.line(l: ClLine) -> String:
   match l:
-    case ClLine{id, addr, laddr, fd, name, age, idle, flags, db, sub, psub, ssub, multi, qbuf, argv, cmd, redir, r3}:
+    case ClLine{id, addr, laddr, fd, name, age, idle, flags, db, sub, psub, ssub, multi, qbuf, argv, cmd, user, redir, r3}:
       a = "id=" ++ Nat.show(id) ++ " addr=" ++ addr ++ " laddr=" ++ laddr ++ " fd=" ++ Nat.show(fd) ++ " name=" ++ name
       b = " age=" ++ Nat.show(age) ++ " idle=" ++ Nat.show(idle) ++ " flags=" ++ flags ++ " db=" ++ Nat.show(db)
       c = " sub=" ++ Nat.show(sub) ++ " psub=" ++ Nat.show(psub) ++ " ssub=" ++ Nat.show(ssub) ++ " multi=" ++ line.multi(multi)
       d = " qbuf=" ++ Nat.show(qbuf) ++ " qbuf-free=0 argv-mem=" ++ Nat.show(argv) ++ " multi-mem=0 rbs=0 rbp=0 obl=0 oll=0 omem=0 tot-mem=0"
-      a ++ b ++ c ++ d ++ " events=r cmd=" ++ cmd ++ " user=default redir=" ++ redir ++ " resp=" ++ Bool.pick(String, r3, "3", "2")
+      a ++ b ++ c ++ d ++ " events=r cmd=" ++ cmd ++ " user=" ++ user ++ " redir=" ++ redir ++ " resp=" ++ Bool.pick(String, r3, "3", "2")
 
 def parse_client(id: Nat, sub: String, args: List<&2, String>) -> SessOp:
   match id:
@@ -6347,6 +6380,129 @@ def parse_latency(id: Nat, sub: String, args: List<&2, String>) -> SessOp:
     case _:
       e_unknown_sub(sub, "LATENCY")
 
+# ACL: its subcommands, as aclCommand reads them, are SAcl, their number
+# and arguments (session.bend, ACL): the users, the log and the
+# descriptions are the session's, and the server answers WHOAMI and
+# GENPASS, closes the clients of a user DELUSER removed, and logs
+# (server.bend, ACL). Redis checks the arity of each subcommand first; CAT,
+# GENPASS and LOG then refuse a second argument themselves. LOAD and SAVE
+# need an ACL file, which BendKV does not read yet: they answer as Redis
+# answers without aclfile.
+def acl_id(+n: String, len: Nat) -> Nat:
+  match len:
+    case 3n:
+      Bool.pick(Nat, String.eq(n, "CAT"), 1n, Bool.pick(Nat, String.eq(n, "LOG"), 9n, 0n))
+    case 4n:
+      Bool.pick(Nat, String.eq(n, "HELP"), 6n, Bool.pick(Nat, String.eq(n, "LIST"), 7n, Bool.pick(Nat, String.eq(n, "LOAD"), 8n, Bool.pick(Nat, String.eq(n, "SAVE"), 10n, 0n))))
+    case 5n:
+      Bool.pick(Nat, String.eq(n, "USERS"), 12n, 0n)
+    case 6n:
+      Bool.pick(Nat, String.eq(n, "DRYRUN"), 3n, Bool.pick(Nat, String.eq(n, "WHOAMI"), 13n, 0n))
+    case 7n:
+      Bool.pick(Nat, String.eq(n, "DELUSER"), 2n, Bool.pick(Nat, String.eq(n, "GENPASS"), 4n, Bool.pick(Nat, String.eq(n, "GETUSER"), 5n, Bool.pick(Nat, String.eq(n, "SETUSER"), 11n, 0n))))
+    case _:
+      0n
+
+def acl_help() -> List<&2, String>:
+  ["CAT [<category>]",
+   "    List all commands that belong to <category>, or all command categories",
+   "    when no category is specified.",
+   "DELUSER <username> [<username> ...]",
+   "    Delete a list of users.",
+   "DRYRUN <username> <command> [<arg> ...]",
+   "    Returns whether the user can execute the given command without executing the command.",
+   "GETUSER <username>",
+   "    Get the user's details.",
+   "GENPASS [<bits>]",
+   "    Generate a secure 256-bit user password. The optional `bits` argument can",
+   "    be used to specify a different size.",
+   "LIST",
+   "    Show users details in config file format.",
+   "LOAD",
+   "    Reload users from the ACL file.",
+   "LOG [<count> | RESET]",
+   "    Show the ACL log entries.",
+   "SAVE",
+   "    Save the current config to the ACL file.",
+   "SETUSER <username> <attribute> [<attribute> ...]",
+   "    Create or modify a user with the specified attributes.",
+   "USERS",
+   "    List all the registered usernames.",
+   "WHOAMI",
+   "    Return the current connection username."]
+
+def acl.nofile() -> SessOp:
+  SBad{RError{"ERR This Redis instance is not configured to use an ACL file. You may want to specify users via the ACL SETUSER command and then issue a CONFIG REWRITE (assuming you have a Redis configuration file set) in order to store users in the Redis configuration."}}
+
+# a subcommand that takes no argument, or at most one (opt: CAT, GENPASS
+# and LOG, which refuse a second themselves), or at least least
+def acl.none(+id: Nat, sub: String, args: List<&2, String>) -> SessOp:
+  match args:
+    case Nil{}:
+      SAcl{id, Nil{}}
+    case _:
+      s_arity("acl|" ++ String.to_lower(sub))
+
+def acl.opt(+id: Nat, sub: String, args: List<&2, String>) -> SessOp:
+  match args:
+    case Nil{}:
+      SAcl{id, Nil{}}
+    case Con{a, Nil{}}:
+      SAcl{id, [a]}
+    case _:
+      SBad{e_sub_syntax(sub, "ACL")}
+
+def acl.least(+id: Nat, +least: Nat, sub: String, args: List<&2, String>) -> SessOp:
+  +xs = args
+  Bool.pick(SessOp, Nat.is_le(least, List.length(&2, String, xs)), SAcl{id, xs}, s_arity("acl|" ++ String.to_lower(sub)))
+
+def parse_acl(id: Nat, sub: String, args: List<&2, String>) -> SessOp:
+  match id:
+    case 1n:  # CAT
+      acl.opt(1n, sub, args)
+    case 2n:  # DELUSER
+      acl.least(2n, 1n, sub, args)
+    case 3n:  # DRYRUN
+      acl.least(3n, 2n, sub, args)
+    case 4n:  # GENPASS
+      acl.opt(4n, sub, args)
+    case 5n:  # GETUSER
+      match args:
+        case Con{u, Nil{}}:
+          SAcl{5n, [u]}
+        case _:
+          s_arity("acl|getuser")
+    case 6n:  # HELP
+      match args:
+        case Nil{}:
+          help("ACL", acl_help())
+        case _:
+          s_arity("acl|help")
+    case 7n:  # LIST
+      acl.none(7n, sub, args)
+    case 8n:  # LOAD
+      match args:
+        case Nil{}:
+          acl.nofile()
+        case _:
+          s_arity("acl|load")
+    case 9n:  # LOG
+      acl.opt(9n, sub, args)
+    case 10n:  # SAVE
+      match args:
+        case Nil{}:
+          acl.nofile()
+        case _:
+          s_arity("acl|save")
+    case 11n:  # SETUSER
+      acl.least(11n, 1n, sub, args)
+    case 12n:  # USERS
+      acl.none(12n, sub, args)
+    case 13n:  # WHOAMI
+      acl.none(13n, sub, args)
+    case _:
+      e_unknown_sub(sub, "ACL")
+
 # ROLE: a master at the replication offset 0, with no replica
 # (roleCommand)
 def role.reply() -> Reply:
@@ -6542,6 +6698,8 @@ def lolwut.of(+args: List<&2, String>) -> Cmd:
 # BEGIN gen_commands: dispatch
 def cmd_id.l3(+n: String, c: Nat) -> Nat:
   match c:
+    case 1n:  # A
+      Bool.pick(Nat, String.eq(n, "ACL"), 210n, 0n)
     case 4n:  # D
       Bool.pick(Nat, String.eq(n, "DEL"), 7n, 0n)
     case 7n:  # G
@@ -7828,6 +7986,13 @@ def parse_id(id: Nat, name: String, args: List<&2, String>) -> Cmd:
           Own{SAdmin{15n, Nil{}}}
         case _:
           e_arity("save")
+    case 210n:  # ACL
+      match args:
+        case Nil{}:
+          e_arity("acl")
+        case Con{+sub, rest}:
+          +up = String.to_upper(sub)
+          Own{parse_acl(acl_id(up, String.length(up)), sub, rest)}
     case _:
       e_unknown(name, args)
 
@@ -7846,6 +8011,61 @@ def block.least(+id: Nat, +n: Nat, name: String, +args: List<&2, String>) -> Ses
 def block.just(+id: Nat, +n: Nat, name: String, +args: List<&2, String>) -> SessOp:
   block.of(Nat.is_eq(n, List.length(&2, String, args)), id, name, args)
 
+# AUTH's arguments, its password put as its SHA-256: the session
+# compares that with the users' hashes (session.bend, login_ok), so that a
+# call hashes its password once, here, however many of its reply, its
+# client's connection and the server's log in ask. More arguments are a
+# syntax error, which reads no password
+def auth.hashed(args: List<&2, String>) -> List<&2, String>:
+  match args:
+    case Con{p, Nil{}}:
+      [Sha.sha256(p)]
+    case Con{u, Con{p, Nil{}}}:
+      [u, Sha.sha256(p)]
+    case xs:
+      xs
+
+# what HELLO's next argument is, after an option x with n arguments from
+# it on: the user of an AUTH that has its two (1), the name of a SETNAME
+# that has its one (3), or none, past an option the session refuses (4)
+def hello.hashed.opt(au: Bool, sn: Bool) -> Nat:
+  match au sn:
+    case True{} _:
+      1n
+    case False{} True{}:
+      3n
+    case False{} False{}:
+      4n
+
+# HELLO's options from xs on, n of them, each AUTH's password put as its
+# SHA-256 (as AUTH's): they are read as the session reads them
+# (session.bend, hello.step), st saying what the next one is: an option
+# (0), the user of an AUTH (1), its password (2), the name of a SETNAME
+# (3); past an option the session refuses (4), the rest is as it was
+def hello.hashed.go(xs: List<&2, String>, +n: Nat, +st: Nat) -> List<&2, String>:
+  match xs st:
+    case Nil{} _:
+      Nil{}
+    case Con{+x, rest} 0n:
+      x <> hello.hashed.go(rest, Nat.sub(n, 1n), hello.hashed.opt(Bool.and(is_word(x, "AUTH"), Nat.is_le(3n, n)), Bool.and(is_word(x, "SETNAME"), Nat.is_le(2n, n))))
+    case Con{x, rest} 1n:
+      x <> hello.hashed.go(rest, Nat.sub(n, 1n), 2n)
+    case Con{x, rest} 2n:
+      Sha.sha256(x) <> hello.hashed.go(rest, Nat.sub(n, 1n), 0n)
+    case Con{x, rest} 3n:
+      x <> hello.hashed.go(rest, Nat.sub(n, 1n), 0n)
+    case Con{x, rest} _:
+      x <> rest
+
+# HELLO's arguments: its version, then its options with their passwords
+# hashed. A version the session refuses leaves the options unread
+def hello.hashed(args: List<&2, String>) -> List<&2, String>:
+  match args:
+    case Con{v, +rest}:
+      v <> hello.hashed.go(rest, List.length(&2, String, rest), 0n)
+    case Nil{}:
+      Nil{}
+
 # the session commands (cmd_own), parsed into their ops
 def parse_sess(id: Nat, name: String, args: List<&2, String>) -> SessOp:
   match id:
@@ -7856,13 +8076,13 @@ def parse_sess(id: Nat, name: String, args: List<&2, String>) -> SessOp:
         case _:
           s_arity("select")
     case 101n:  # HELLO
-      SHello{args}
+      SHello{hello.hashed(args)}
     case 102n:  # AUTH
       match args:
         case Nil{}:
           s_arity("auth")
         case Con{a, rest}:
-          SAuth{a <> rest}
+          SAuth{auth.hashed(a <> rest)}
     case 103n:  # QUIT
       SQuit{}
     case 104n:  # RESET
@@ -8547,6 +8767,8 @@ def stat.top(+id: Nat) -> Nat:
       208n
     case 209n:
       209n
+    case 210n:
+      210n
     case _:
       0n
 
@@ -8554,37 +8776,37 @@ def stat.top(+id: Nat) -> Nat:
 def stat.sub.client(+sub: Nat) -> Nat:
   match sub:
     case 1n:
-      210n
-    case 2n:
       211n
-    case 3n:
+    case 2n:
       212n
-    case 4n:
+    case 3n:
       213n
-    case 5n:
+    case 4n:
       214n
-    case 6n:
+    case 5n:
       215n
-    case 7n:
+    case 6n:
       216n
-    case 8n:
+    case 7n:
       217n
-    case 9n:
+    case 8n:
       218n
-    case 10n:
+    case 9n:
       219n
-    case 11n:
+    case 10n:
       220n
-    case 12n:
+    case 11n:
       221n
-    case 13n:
+    case 12n:
       222n
-    case 14n:
+    case 13n:
       223n
-    case 15n:
+    case 14n:
       224n
-    case 16n:
+    case 15n:
       225n
+    case 16n:
+      226n
     case _:
       0n
 
@@ -8592,23 +8814,23 @@ def stat.sub.client(+sub: Nat) -> Nat:
 def stat.sub.function(+sub: Nat) -> Nat:
   match sub:
     case 1n:
-      226n
-    case 2n:
       227n
-    case 3n:
+    case 2n:
       228n
-    case 4n:
+    case 3n:
       229n
-    case 5n:
+    case 4n:
       230n
-    case 6n:
+    case 5n:
       231n
-    case 7n:
+    case 6n:
       232n
-    case 8n:
+    case 7n:
       233n
-    case 9n:
+    case 8n:
       234n
+    case 9n:
+      235n
     case _:
       0n
 
@@ -8616,15 +8838,15 @@ def stat.sub.function(+sub: Nat) -> Nat:
 def stat.sub.config(+sub: Nat) -> Nat:
   match sub:
     case 1n:
-      235n
-    case 2n:
       236n
-    case 3n:
+    case 2n:
       237n
-    case 4n:
+    case 3n:
       238n
-    case 5n:
+    case 4n:
       239n
+    case 5n:
+      240n
     case _:
       0n
 
@@ -8632,19 +8854,19 @@ def stat.sub.config(+sub: Nat) -> Nat:
 def stat.sub.command(+sub: Nat) -> Nat:
   match sub:
     case 1n:
-      240n
-    case 2n:
       241n
-    case 3n:
+    case 2n:
       242n
-    case 4n:
+    case 3n:
       243n
-    case 5n:
+    case 4n:
       244n
-    case 6n:
+    case 5n:
       245n
-    case 7n:
+    case 6n:
       246n
+    case 7n:
+      247n
     case _:
       0n
 
@@ -8652,15 +8874,15 @@ def stat.sub.command(+sub: Nat) -> Nat:
 def stat.sub.object(+sub: Nat) -> Nat:
   match sub:
     case 1n:
-      247n
-    case 2n:
       248n
-    case 3n:
+    case 2n:
       249n
-    case 4n:
+    case 3n:
       250n
-    case 5n:
+    case 4n:
       251n
+    case 5n:
+      252n
     case _:
       0n
 
@@ -8668,17 +8890,17 @@ def stat.sub.object(+sub: Nat) -> Nat:
 def stat.sub.memory(+sub: Nat) -> Nat:
   match sub:
     case 1n:
-      252n
-    case 2n:
       253n
-    case 3n:
+    case 2n:
       254n
-    case 4n:
+    case 3n:
       255n
-    case 5n:
+    case 4n:
       256n
-    case 6n:
+    case 5n:
       257n
+    case 6n:
+      258n
     case _:
       0n
 
@@ -8686,17 +8908,17 @@ def stat.sub.memory(+sub: Nat) -> Nat:
 def stat.sub.pubsub(+sub: Nat) -> Nat:
   match sub:
     case 1n:
-      258n
-    case 2n:
       259n
-    case 3n:
+    case 2n:
       260n
-    case 4n:
+    case 3n:
       261n
-    case 5n:
+    case 4n:
       262n
-    case 6n:
+    case 5n:
       263n
+    case 6n:
+      264n
     case _:
       0n
 
@@ -8704,13 +8926,13 @@ def stat.sub.pubsub(+sub: Nat) -> Nat:
 def stat.sub.slowlog(+sub: Nat) -> Nat:
   match sub:
     case 1n:
-      264n
-    case 2n:
       265n
-    case 3n:
+    case 2n:
       266n
-    case 4n:
+    case 3n:
       267n
+    case 4n:
+      268n
     case _:
       0n
 
@@ -8718,19 +8940,19 @@ def stat.sub.slowlog(+sub: Nat) -> Nat:
 def stat.sub.latency(+sub: Nat) -> Nat:
   match sub:
     case 1n:
-      268n
-    case 2n:
       269n
-    case 3n:
+    case 2n:
       270n
-    case 4n:
+    case 3n:
       271n
-    case 5n:
+    case 4n:
       272n
-    case 6n:
+    case 5n:
       273n
-    case 7n:
+    case 6n:
       274n
+    case 7n:
+      275n
     case _:
       0n
 
@@ -8738,15 +8960,47 @@ def stat.sub.latency(+sub: Nat) -> Nat:
 def stat.sub.script(+sub: Nat) -> Nat:
   match sub:
     case 1n:
-      275n
-    case 2n:
       276n
-    case 3n:
+    case 2n:
       277n
-    case 4n:
+    case 3n:
       278n
-    case 5n:
+    case 4n:
       279n
+    case 5n:
+      280n
+    case _:
+      0n
+
+# a subcommand of ACL's key, by its number; 0 for none
+def stat.sub.acl(+sub: Nat) -> Nat:
+  match sub:
+    case 1n:
+      281n
+    case 2n:
+      282n
+    case 3n:
+      283n
+    case 4n:
+      284n
+    case 5n:
+      285n
+    case 6n:
+      286n
+    case 7n:
+      287n
+    case 8n:
+      288n
+    case 9n:
+      289n
+    case 10n:
+      290n
+    case 11n:
+      291n
+    case 12n:
+      292n
+    case 13n:
+      293n
     case _:
       0n
 
@@ -9172,145 +9426,173 @@ def stat.name(+key: Nat) -> String:
     case 209n:
       "fcall_ro"
     case 210n:
-      "client|id"
+      "acl"
     case 211n:
-      "client|help"
+      "client|id"
     case 212n:
-      "client|reply"
+      "client|help"
     case 213n:
-      "client|getname"
+      "client|reply"
     case 214n:
-      "client|setname"
+      "client|getname"
     case 215n:
-      "client|caching"
+      "client|setname"
     case 216n:
-      "client|unblock"
+      "client|caching"
     case 217n:
-      "client|getredir"
+      "client|unblock"
     case 218n:
-      "client|no-evict"
+      "client|getredir"
     case 219n:
-      "client|trackinginfo"
+      "client|no-evict"
     case 220n:
-      "client|list"
+      "client|trackinginfo"
     case 221n:
-      "client|info"
+      "client|list"
     case 222n:
-      "client|kill"
+      "client|info"
     case 223n:
-      "client|pause"
+      "client|kill"
     case 224n:
-      "client|unpause"
+      "client|pause"
     case 225n:
-      "client|tracking"
+      "client|unpause"
     case 226n:
-      "function|flush"
+      "client|tracking"
     case 227n:
-      "function|help"
+      "function|flush"
     case 228n:
-      "function|load"
+      "function|help"
     case 229n:
-      "function|delete"
+      "function|load"
     case 230n:
-      "function|list"
+      "function|delete"
     case 231n:
-      "function|stats"
+      "function|list"
     case 232n:
-      "function|kill"
+      "function|stats"
     case 233n:
-      "function|dump"
+      "function|kill"
     case 234n:
-      "function|restore"
+      "function|dump"
     case 235n:
-      "config|get"
+      "function|restore"
     case 236n:
-      "config|set"
+      "config|get"
     case 237n:
-      "config|resetstat"
+      "config|set"
     case 238n:
-      "config|rewrite"
+      "config|resetstat"
     case 239n:
-      "config|help"
+      "config|rewrite"
     case 240n:
-      "command|info"
+      "config|help"
     case 241n:
-      "command|docs"
+      "command|info"
     case 242n:
-      "command|list"
+      "command|docs"
     case 243n:
-      "command|help"
+      "command|list"
     case 244n:
-      "command|count"
+      "command|help"
     case 245n:
-      "command|getkeys"
+      "command|count"
     case 246n:
-      "command|getkeysandflags"
+      "command|getkeys"
     case 247n:
-      "object|help"
+      "command|getkeysandflags"
     case 248n:
-      "object|freq"
+      "object|help"
     case 249n:
-      "object|encoding"
+      "object|freq"
     case 250n:
-      "object|refcount"
+      "object|encoding"
     case 251n:
-      "object|idletime"
+      "object|refcount"
     case 252n:
-      "memory|help"
+      "object|idletime"
     case 253n:
-      "memory|usage"
+      "memory|help"
     case 254n:
-      "memory|stats"
+      "memory|usage"
     case 255n:
-      "memory|doctor"
+      "memory|stats"
     case 256n:
-      "memory|purge"
+      "memory|doctor"
     case 257n:
-      "memory|malloc-stats"
+      "memory|purge"
     case 258n:
-      "pubsub|channels"
+      "memory|malloc-stats"
     case 259n:
-      "pubsub|help"
+      "pubsub|channels"
     case 260n:
-      "pubsub|numpat"
+      "pubsub|help"
     case 261n:
-      "pubsub|numsub"
+      "pubsub|numpat"
     case 262n:
-      "pubsub|shardchannels"
+      "pubsub|numsub"
     case 263n:
-      "pubsub|shardnumsub"
+      "pubsub|shardchannels"
     case 264n:
-      "slowlog|get"
+      "pubsub|shardnumsub"
     case 265n:
-      "slowlog|len"
+      "slowlog|get"
     case 266n:
-      "slowlog|reset"
+      "slowlog|len"
     case 267n:
-      "slowlog|help"
+      "slowlog|reset"
     case 268n:
-      "latency|doctor"
+      "slowlog|help"
     case 269n:
-      "latency|graph"
+      "latency|doctor"
     case 270n:
-      "latency|help"
+      "latency|graph"
     case 271n:
-      "latency|histogram"
+      "latency|help"
     case 272n:
-      "latency|history"
+      "latency|histogram"
     case 273n:
-      "latency|latest"
+      "latency|history"
     case 274n:
-      "latency|reset"
+      "latency|latest"
     case 275n:
-      "script|load"
+      "latency|reset"
     case 276n:
-      "script|exists"
+      "script|load"
     case 277n:
-      "script|flush"
+      "script|exists"
     case 278n:
-      "script|kill"
+      "script|flush"
     case 279n:
+      "script|kill"
+    case 280n:
       "script|help"
+    case 281n:
+      "acl|cat"
+    case 282n:
+      "acl|deluser"
+    case 283n:
+      "acl|dryrun"
+    case 284n:
+      "acl|genpass"
+    case 285n:
+      "acl|getuser"
+    case 286n:
+      "acl|help"
+    case 287n:
+      "acl|list"
+    case 288n:
+      "acl|load"
+    case 289n:
+      "acl|log"
+    case 290n:
+      "acl|save"
+    case 291n:
+      "acl|setuser"
+    case 292n:
+      "acl|users"
+    case 293n:
+      "acl|whoami"
     case _:
       ""
 
@@ -9737,83 +10019,83 @@ def stat.arity(+key: Nat) -> Nat:
     case 209n:
       7n
     case 210n:
-      4n
+      5n
     case 211n:
       4n
     case 212n:
-      6n
-    case 213n:
       4n
-    case 214n:
+    case 213n:
       6n
+    case 214n:
+      4n
     case 215n:
       6n
     case 216n:
-      7n
-    case 217n:
-      4n
-    case 218n:
       6n
-    case 219n:
-      4n
-    case 220n:
-      5n
-    case 221n:
-      4n
-    case 222n:
+    case 217n:
       7n
+    case 218n:
+      4n
+    case 219n:
+      6n
+    case 220n:
+      4n
+    case 221n:
+      5n
+    case 222n:
+      4n
     case 223n:
       7n
     case 224n:
-      4n
+      7n
     case 225n:
-      7n
+      4n
     case 226n:
-      5n
-    case 227n:
-      4n
-    case 228n:
       7n
-    case 229n:
-      6n
-    case 230n:
+    case 227n:
       5n
-    case 231n:
+    case 228n:
       4n
+    case 229n:
+      7n
+    case 230n:
+      6n
+    case 231n:
+      5n
     case 232n:
       4n
     case 233n:
       4n
     case 234n:
-      7n
+      4n
     case 235n:
       7n
     case 236n:
-      9n
+      7n
     case 237n:
-      4n
+      9n
     case 238n:
       4n
     case 239n:
       4n
     case 240n:
-      5n
+      4n
     case 241n:
       5n
     case 242n:
       5n
     case 243n:
-      4n
+      5n
     case 244n:
       4n
     case 245n:
-      9n
+      4n
     case 246n:
       9n
     case 247n:
-      4n
+      9n
     case 248n:
-      6n
+      4n
     case 249n:
       6n
     case 250n:
@@ -9821,11 +10103,11 @@ def stat.arity(+key: Nat) -> Nat:
     case 251n:
       6n
     case 252n:
-      4n
+      6n
     case 253n:
-      7n
-    case 254n:
       4n
+    case 254n:
+      7n
     case 255n:
       4n
     case 256n:
@@ -9833,13 +10115,13 @@ def stat.arity(+key: Nat) -> Nat:
     case 257n:
       4n
     case 258n:
-      5n
-    case 259n:
       4n
+    case 259n:
+      5n
     case 260n:
       4n
     case 261n:
-      5n
+      4n
     case 262n:
       5n
     case 263n:
@@ -9847,7 +10129,7 @@ def stat.arity(+key: Nat) -> Nat:
     case 264n:
       5n
     case 265n:
-      4n
+      5n
     case 266n:
       4n
     case 267n:
@@ -9855,26 +10137,54 @@ def stat.arity(+key: Nat) -> Nat:
     case 268n:
       4n
     case 269n:
-      6n
+      4n
     case 270n:
-      4n
+      6n
     case 271n:
-      5n
+      4n
     case 272n:
-      6n
+      5n
     case 273n:
-      4n
-    case 274n:
-      5n
-    case 275n:
       6n
-    case 276n:
-      7n
-    case 277n:
-      5n
-    case 278n:
+    case 274n:
       4n
+    case 275n:
+      5n
+    case 276n:
+      6n
+    case 277n:
+      7n
+    case 278n:
+      5n
     case 279n:
+      4n
+    case 280n:
+      4n
+    case 281n:
+      5n
+    case 282n:
+      7n
+    case 283n:
+      9n
+    case 284n:
+      5n
+    case 285n:
+      6n
+    case 286n:
+      4n
+    case 287n:
+      4n
+    case 288n:
+      4n
+    case 289n:
+      5n
+    case 290n:
+      4n
+    case 291n:
+      7n
+    case 292n:
+      4n
+    case 293n:
       4n
     case _:
       1n
@@ -10116,11 +10426,11 @@ def stat.risky(+key: Nat) -> Bool:
       True{}
     case 200n:
       True{}
-    case 248n:
+    case 249n:
       True{}
-    case 251n:
+    case 252n:
       True{}
-    case 253n:
+    case 254n:
       True{}
     case _:
       False{}
@@ -10141,9 +10451,7 @@ def stat.engine(+key: Nat) -> Bool:
       True{}
     case 209n:
       True{}
-    case 226n:
-      True{}
-    case 228n:
+    case 227n:
       True{}
     case 229n:
       True{}
@@ -10151,15 +10459,17 @@ def stat.engine(+key: Nat) -> Bool:
       True{}
     case 231n:
       True{}
-    case 233n:
+    case 232n:
       True{}
     case 234n:
       True{}
-    case 275n:
+    case 235n:
       True{}
     case 276n:
       True{}
     case 277n:
+      True{}
+    case 278n:
       True{}
     case _:
       False{}
@@ -10183,19 +10493,17 @@ def stat.unseen(+key: Nat) -> Bool:
       True{}
     case 203n:
       True{}
-    case 216n:
+    case 217n:
       True{}
-    case 218n:
+    case 219n:
       True{}
-    case 220n:
-      True{}
-    case 222n:
+    case 221n:
       True{}
     case 223n:
       True{}
     case 224n:
       True{}
-    case 235n:
+    case 225n:
       True{}
     case 236n:
       True{}
@@ -10203,23 +10511,43 @@ def stat.unseen(+key: Nat) -> Bool:
       True{}
     case 238n:
       True{}
-    case 264n:
+    case 239n:
       True{}
     case 265n:
       True{}
     case 266n:
       True{}
-    case 268n:
+    case 267n:
       True{}
     case 269n:
       True{}
-    case 271n:
+    case 270n:
       True{}
     case 272n:
       True{}
     case 273n:
       True{}
     case 274n:
+      True{}
+    case 275n:
+      True{}
+    case 282n:
+      True{}
+    case 283n:
+      True{}
+    case 285n:
+      True{}
+    case 287n:
+      True{}
+    case 288n:
+      True{}
+    case 289n:
+      True{}
+    case 290n:
+      True{}
+    case 291n:
+      True{}
+    case 292n:
       True{}
     case _:
       False{}
@@ -10570,15 +10898,13 @@ def stat.keyspace(+key: Nat) -> Bool:
       True{}
     case 209n:
       True{}
-    case 226n:
-      True{}
-    case 228n:
+    case 227n:
       True{}
     case 229n:
       True{}
-    case 234n:
+    case 230n:
       True{}
-    case 248n:
+    case 235n:
       True{}
     case 249n:
       True{}
@@ -10586,7 +10912,9 @@ def stat.keyspace(+key: Nat) -> Bool:
       True{}
     case 251n:
       True{}
-    case 253n:
+    case 252n:
+      True{}
+    case 254n:
       True{}
     case _:
       False{}
@@ -10785,13 +11113,13 @@ def stat.pausable(+key: Nat) -> Bool:
       True{}
     case 208n:
       True{}
-    case 226n:
-      True{}
-    case 228n:
+    case 227n:
       True{}
     case 229n:
       True{}
-    case 234n:
+    case 230n:
+      True{}
+    case 235n:
       True{}
     case _:
       False{}
@@ -10978,13 +11306,13 @@ def stat.write(+key: Nat) -> Bool:
       True{}
     case 200n:
       True{}
-    case 226n:
-      True{}
-    case 228n:
+    case 227n:
       True{}
     case 229n:
       True{}
-    case 234n:
+    case 230n:
+      True{}
+    case 235n:
       True{}
     case _:
       False{}
@@ -11058,9 +11386,7 @@ def stat.noscript(+key: Nat) -> Bool:
       True{}
     case 209n:
       True{}
-    case 210n:
-      True{}
-    case 212n:
+    case 211n:
       True{}
     case 213n:
       True{}
@@ -11090,7 +11416,7 @@ def stat.noscript(+key: Nat) -> Bool:
       True{}
     case 226n:
       True{}
-    case 228n:
+    case 227n:
       True{}
     case 229n:
       True{}
@@ -11112,11 +11438,11 @@ def stat.noscript(+key: Nat) -> Bool:
       True{}
     case 238n:
       True{}
-    case 268n:
+    case 239n:
       True{}
     case 269n:
       True{}
-    case 271n:
+    case 270n:
       True{}
     case 272n:
       True{}
@@ -11131,6 +11457,32 @@ def stat.noscript(+key: Nat) -> Bool:
     case 277n:
       True{}
     case 278n:
+      True{}
+    case 279n:
+      True{}
+    case 281n:
+      True{}
+    case 282n:
+      True{}
+    case 283n:
+      True{}
+    case 284n:
+      True{}
+    case 285n:
+      True{}
+    case 287n:
+      True{}
+    case 288n:
+      True{}
+    case 289n:
+      True{}
+    case 290n:
+      True{}
+    case 291n:
+      True{}
+    case 292n:
+      True{}
+    case 293n:
       True{}
     case _:
       False{}
@@ -11157,11 +11509,11 @@ def stat.allow_busy(+key: Nat) -> Bool:
       True{}
     case 187n:
       True{}
-    case 231n:
-      True{}
     case 232n:
       True{}
-    case 278n:
+    case 233n:
+      True{}
+    case 279n:
       True{}
     case _:
       False{}
@@ -11274,9 +11626,9 @@ def stat.denyoom(+key: Nat) -> Bool:
       True{}
     case 200n:
       True{}
-    case 228n:
+    case 229n:
       True{}
-    case 234n:
+    case 235n:
       True{}
     case _:
       False{}
@@ -11644,15 +11996,15 @@ def stat.ro(+key: Nat) -> Bool:
       True{}
     case 209n:
       True{}
-    case 248n:
-      True{}
     case 249n:
       True{}
     case 250n:
       True{}
     case 251n:
       True{}
-    case 253n:
+    case 252n:
+      True{}
+    case 254n:
       True{}
     case _:
       False{}
@@ -13632,6 +13984,90 @@ def stat.cw(+code: Nat) -> U32:
       3536
     case 839n:
       3552
+    case 840n:
+      3591
+    case 841n:
+      3595
+    case 842n:
+      3597
+    case 843n:
+      3598
+    case 844n:
+      3603
+    case 845n:
+      3605
+    case 846n:
+      3606
+    case 847n:
+      3609
+    case 848n:
+      3610
+    case 849n:
+      3612
+    case 850n:
+      3619
+    case 851n:
+      3621
+    case 852n:
+      3622
+    case 853n:
+      3625
+    case 854n:
+      3626
+    case 855n:
+      3628
+    case 856n:
+      3633
+    case 857n:
+      3634
+    case 858n:
+      3636
+    case 859n:
+      3640
+    case 860n:
+      3651
+    case 861n:
+      3653
+    case 862n:
+      3654
+    case 863n:
+      3657
+    case 864n:
+      3658
+    case 865n:
+      3660
+    case 866n:
+      3665
+    case 867n:
+      3666
+    case 868n:
+      3668
+    case 869n:
+      3672
+    case 870n:
+      3681
+    case 871n:
+      3682
+    case 872n:
+      3684
+    case 873n:
+      3688
+    case 874n:
+      3696
+    case 875n:
+      3715
+    case 876n:
+      3717
+    case 877n:
+      3718
+    case 878n:
+      3721
+    case 879n:
+      3722
+    case 880n:
+      3724
+    case 881n:
+      3729
     case _:
       63
 
@@ -15595,6 +16031,105 @@ def stat.code.lo55(+lo: Nat) -> Nat:
     case _:
       0n
 
+def stat.code.lo56(+lo: Nat) -> Nat:
+  match lo:
+    case 7n:
+      840n
+    case 11n:
+      841n
+    case 13n:
+      842n
+    case 14n:
+      843n
+    case 19n:
+      844n
+    case 21n:
+      845n
+    case 22n:
+      846n
+    case 25n:
+      847n
+    case 26n:
+      848n
+    case 28n:
+      849n
+    case 35n:
+      850n
+    case 37n:
+      851n
+    case 38n:
+      852n
+    case 41n:
+      853n
+    case 42n:
+      854n
+    case 44n:
+      855n
+    case 49n:
+      856n
+    case 50n:
+      857n
+    case 52n:
+      858n
+    case 56n:
+      859n
+    case _:
+      0n
+
+def stat.code.lo57(+lo: Nat) -> Nat:
+  match lo:
+    case 3n:
+      860n
+    case 5n:
+      861n
+    case 6n:
+      862n
+    case 9n:
+      863n
+    case 10n:
+      864n
+    case 12n:
+      865n
+    case 17n:
+      866n
+    case 18n:
+      867n
+    case 20n:
+      868n
+    case 24n:
+      869n
+    case 33n:
+      870n
+    case 34n:
+      871n
+    case 36n:
+      872n
+    case 40n:
+      873n
+    case 48n:
+      874n
+    case _:
+      0n
+
+def stat.code.lo58(+lo: Nat) -> Nat:
+  match lo:
+    case 3n:
+      875n
+    case 5n:
+      876n
+    case 6n:
+      877n
+    case 9n:
+      878n
+    case 10n:
+      879n
+    case 12n:
+      880n
+    case 17n:
+      881n
+    case _:
+      0n
+
 def stat.code.hl(+hi: Nat, +lo: Nat) -> Nat:
   match hi:
     case 0n:
@@ -15709,6 +16244,12 @@ def stat.code.hl(+hi: Nat, +lo: Nat) -> Nat:
       stat.code.lo54(lo)
     case 55n:
       stat.code.lo55(lo)
+    case 56n:
+      stat.code.lo56(lo)
+    case 57n:
+      stat.code.lo57(lo)
+    case 58n:
+      stat.code.lo58(lo)
     case _:
       0n
 
@@ -15754,6 +16295,8 @@ def stat.sub.of(id: Nat, +up: String) -> Nat:
       stat.sub.latency(latency_id(up, String.length(up)))
     case 207n:
       stat.sub.script(script_id(up, String.length(up)))
+    case 210n:
+      stat.sub.acl(acl_id(up, String.length(up)))
     case _:
       stat.sub.command(command_id(up, String.length(up)))
 
@@ -15787,6 +16330,8 @@ def stat.key(+id: Nat, +args: List<&2, String>) -> Nat:
       stat.key.args(stat.top(202n), 202n, args)
     case 207n:
       stat.key.args(stat.top(207n), 207n, args)
+    case 210n:
+      stat.key.args(stat.top(210n), 210n, args)
     case _:
       stat.top(id)
 
