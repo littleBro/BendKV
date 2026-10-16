@@ -1305,8 +1305,8 @@ def is.read(+b: String) -> Maybe<&2, List<&2, String>>:
 # most 512 pairs of at most 64 bytes; a set an intset (MInts) when it
 # holds at most 512 members, all integers as Redis writes them, else a
 # hashtable, small (MSmall or MLong, its members in the payload's order)
-# when it holds at most 128 members of at most 64 bytes; a sorted set small
-# (ZSmall) when it came as a listpack or ziplist of at most 128
+# when it holds at most 128 members of at most 64 bytes; a sorted set
+# small (ZSmall) when it came as a listpack or ziplist of at most 128
 # elements, or as a skiplist of at most 128 whose members are of at most
 # 64 bytes. A collection with no element, or a member, field or element
 # of a sorted set twice, or a score that is no number (a NaN), is no

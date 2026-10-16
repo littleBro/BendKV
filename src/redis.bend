@@ -16207,9 +16207,9 @@ def sscan.rep(+next: Nat, xs: List<&2, String>, pat: Maybe<&2, String>) -> Reply
 
 # SSCAN: an intset answers all its members at once, with cursor 0, as
 # Redis answers one; a hashtable scans its trie as HSCAN scans a hash's
-# (the options as HSCAN reads them), a small one the trie of its members
-# made for the scan, so that it answers the same members at the same
-# cursors as the trie it was before it was a string (KV.Mems)
+# (the options as HSCAN reads them), a small one (KV.Mems) a trie of its
+# members made for the scan, so that it answers the cursors, and the
+# members a call, that a trie of them answers
 def sscan.big(sc: KV.Scan, pat: Maybe<&2, String>) -> Reply:
   match sc:
     case KV.Stop{+at, acc}:
@@ -18986,9 +18986,10 @@ def upd.put(t: KV.Trie<KV.Val>, +k: String, +h: U32, +n: Nat, +x: Nat, now: Nat,
 # whether an update of a key whose entry there at now is m takes the key's
 # value out of the keyspace while it changes it: an HSET of pairs to a
 # hash, or an SADD to a set that lacks its first member, which write the
-# collection over for sure (PROOF.bend: takes_over). The keyspace holding
-# the collection meanwhile would make the write copy the path it changes
-# in it, and the keyspace drop the old path after.
+# collection over for sure (PROOF.bend: takes_over); but not to a small
+# set in pieces (KV.MLong), whose test of the member walks them all. The
+# keyspace holding the collection meanwhile would make the write copy the
+# path it changes in it, and the keyspace drop the old path after.
 def upd.takes(+op: UpdOp, +m: Maybe<&2, KV.Item<KV.Val>>) -> Bool:
   match op m:
     case UHash{HWSet{Con{p, rest}, mset}} Some{KV.Item{KV.VColl{KV.CHash{h}}, e}}:
