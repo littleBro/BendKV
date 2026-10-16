@@ -10053,14 +10053,6 @@ def waits.saving(+ws: Waits) -> Bool:
     case WaitNone{}:
       False{}
 
-# whether a client waits for SAVE's save
-def waits.save.any(+ws: Waits) -> Bool:
-  match ws:
-    case WaitNone{}:
-      False{}
-    case WaitOn{id, back, c0, c1, +b, argv, +code, db, until, cmds, codes, av, +rest}:
-      Bool.or(Nat.is_eq(save.kind(b, code), 1n), waits.save.any(rest))
-
 # what a client that waited for a save is answered: SAVE OK, or -ERR when
 # the save failed (saveCommand's shared.err); SHUTDOWN, whose save failed
 # (its server stops otherwise), Redis's error

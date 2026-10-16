@@ -421,7 +421,10 @@ translation stays in the trusted base.
   error answered, but with FORCE), the pid file removed, the process ended with code 0.
   Where BendKV differs: SIGTERM and SIGINT end the process at once, without the
   shutdown Redis runs for them (`shutdown-on-sigterm`, `shutdown-on-sigint`: its save
-  with save points among it), as the runtime has no handler for them; MEMORY
+  with save points among it), as the runtime has no handler for them; a SHUTDOWN that
+  saves lets the other clients' requests in its group run before the save, so that what
+  they write reaches the append-only file and the RDB file and they get no reply, where
+  Redis ends inside the SHUTDOWN and runs none of them (issue #84); MEMORY
   MALLOC-STATS has no allocator's statistics; LOLWUT's large drawings take up to a
   hundred times Redis's time (FINDINGS.md, sections 3zzl and 3zzzc).
 - **Configuration:** CONFIG GET (names, aliases and glob patterns), SET (several
@@ -542,7 +545,13 @@ translation stays in the trusted base.
   those read set no word of use; SAVE's client waits through the rest of its group, so
   that the others in it see it blocked, the commands after SAVE in its pipeline run in a
   group of their own, the file holds the databases as the group left them, and SAVE's
-  call time leaves the save out; the start reads the whole file before it loads it, and
+  call time leaves the save out; after a start from the file, INFO's replication section
+  and ROLE give an offset of 0, where Redis counts into `master_repl_offset` a DEL for
+  each key whose time had passed, and keeps the file's `repl-id` and `repl-offset` as its
+  `master_replid2` and offset, which its next save writes again (BendKV drops them);
+  the log of a file that does not load gives the byte where the reading failed, where
+  Redis gives what it had read at its last report of progress, and leaves out Redis's
+  `function at rdb.c:N`; the start reads the whole file before it loads it, and
   takes several times Redis's time (PERFORMANCE.md, section 67; FINDINGS.md, section
   3zzzc).
 
@@ -710,8 +719,10 @@ and the `evicted` event against Redis's, Redis's own tests of the policies on bo
 eviction that goes on alone, with the append-only file on and while a rewrite runs), and
 the RDB file (`tests/rdb_test.py`: files Redis wrote, with LZF and without, and files of
 the encodings Redis no longer writes, BendKV and Redis started from each and every key
-of every database compared; BendKV's SAVE, Redis started from its file; SAVE, LASTSAVE,
-INFO and the saves of FLUSHALL and SHUTDOWN against Redis's; files that do not load).
+of every database compared; BendKV's SAVE, Redis started from its file; both ways with a
+database of 10,000 keys and a file past 16 MB; SAVE, LASTSAVE, INFO and the saves of
+FLUSHALL and SHUTDOWN against Redis's, with the append-only file and with another
+client's requests in the same group; files that do not load).
 `make suite` runs Redis's own test suite in its mode for a server already started, on
 Redis and on BendKV, and counts the tests Redis passes that BendKV passes
 ([docs/COMPATIBILITY.md](docs/COMPATIBILITY.md)). `make clients` runs the test suites of

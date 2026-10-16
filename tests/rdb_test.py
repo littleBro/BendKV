@@ -26,6 +26,9 @@ the same commands.
   and a checksum of 0: both start from it alike, logging the same lines.
 - The other way: BendKV runs the same commands, SAVEs, and Redis starts
   from its file (redis-check-rdb finds it whole), and so does BendKV.
+- Both ways again with a database of 10,000 keys (more than a slice of
+  BendKV's writer, 4,096) and a file past 16 MB (more than one read of
+  BendKV's start), and collections of 10,000 members.
 - SAVE, LASTSAVE and INFO's persistence fields (but
   rdb_changes_since_last_save, which BendKV does not keep yet), SAVE
   refused in MULTI and with arguments, COMMAND INFO and DOCS, a SAVE that
@@ -39,7 +42,9 @@ the same commands.
   a save that fails stops nothing but with FORCE (Redis's error, the
   batch going on, other clients served, the log's lines); with the
   append-only file both files are written, and the start reads the
-  append-only file and leaves the RDB file aside.
+  append-only file and leaves the RDB file aside; a SAVE with the
+  append-only file, what comes after it in its pipeline and in another
+  client's requests reaching the append-only file.
 - Files that do not load: cut short, a wrong checksum, version 11, 0 and
   -1, a wrong signature, a database past the server's, a type that is
   none, an empty file, a directory, a module's data and a module's value:
@@ -294,6 +299,46 @@ def fill(c, seed):
         r = run(c, *x)
         if r[0] == b"-":
             raise SystemExit("rdb_test.py: %r answered %r" % (x[:3], r))
+    run(c, "SELECT", 0)
+
+
+def big_cmds(seed):
+    """a database of 10,000 keys, more than the 4,096 a slice of BendKV's
+    writer holds (the slices after the first, without the header, the
+    checksum carried from one to the next), of 1,700 random bytes each,
+    which LZF leaves as they are, so that the file passes 16 MB (BendKV's
+    start reads it in several reads and joins them), some with times; and
+    collections of 10,000 members"""
+    rnd = random.Random(seed)
+    far = int(time.time() * 1000) + 10 ** 9
+    out = []
+    for i in range(10000):
+        out.append((0, cmd("SET", "big:%d" % i, rnd.randbytes(1700))))
+        if i % 97 == 0:
+            out.append((0, cmd("PEXPIREAT", "big:%d" % i, far + i)))
+    out += [(1, cmd("HSET", "h", *[x for j in range(10000) for x in ("f%d" % j, "v%d" % rnd.randrange(10 ** 6))])),
+            (1, cmd("SADD", "s", *["m%d" % j for j in range(10000)])),
+            (1, cmd("ZADD", "z", *[x for j in range(10000) for x in (rnd.randrange(10 ** 6) / 8, "z%d" % j)])),
+            (1, cmd("RPUSH", "l", *[rnd.randbytes(rnd.randrange(1, 40)) for _ in range(10000)])),
+            (2, cmd("SET", "after", "the big database"))]
+    return out
+
+
+def fill_big(c, seed):
+    """big_cmds, 500 at a time in a pipeline"""
+    xs, db = big_cmds(seed), None
+    for i in range(0, len(xs), 500):
+        cmds = []
+        for d, x in xs[i:i + 500]:
+            if d != db:
+                cmds.append(cmd("SELECT", d))
+                db = d
+            cmds.append(x)
+        c.send(cmds)
+        for x in cmds:
+            r = c.reply()
+            if r[0] == b"-":
+                raise SystemExit("rdb_test.py: %r answered %r" % (x[:2], r))
     run(c, "SELECT", 0)
 
 
@@ -573,6 +618,43 @@ def bendkv_writes(a, root):
         b2.kill()
 
 
+def big(a, root):
+    """a database of 10,000 keys and a file past 16 MB, both ways: Redis's
+    file read by both, and BendKV's read by Redis and by BendKV"""
+    d = os.path.join(root, "big")
+    for writer, exe, seed in (("redis", a.redis, 3), ("bendkv", a.bin, 4)):
+        w = Srv(exe, os.path.join(d, writer), "--save", "")
+        c = w.conn()
+        fill_big(c, seed)
+        same("SAVE (%s, a big file)" % writer, run(c, "SAVE"), (b"+", b"OK"))
+        live = unenc(dump_all(c, 3))
+        shut(c, "SHUTDOWN", "NOSAVE")
+        w.exit()
+        f = os.path.join(d, writer, "dump.rdb")
+        check("%s's big file is past 16 MB" % writer, os.path.getsize(f) > 16 << 20, os.path.getsize(f))
+        if writer == "bendkv" and shutil.which("redis-check-rdb"):
+            out = subprocess.run(["redis-check-rdb", f], capture_output=True, text=True).stdout
+            check("redis-check-rdb finds BendKV's big file whole", "RDB looks OK!" in out and "Checksum OK" in out, out[-800:])
+        for name in ("from-%s-b" % writer, "from-%s-r" % writer):
+            os.makedirs(os.path.join(d, name))
+            shutil.copy(f, os.path.join(d, name, "dump.rdb"))
+        b = Srv(a.bin, os.path.join(d, "from-%s-b" % writer), "--save", "")
+        r = Srv(a.redis, os.path.join(d, "from-%s-r" % writer), "--save", "")
+        try:
+            if b.code is not None or r.code is not None:
+                fail("both start from %s's big file: BendKV %s, Redis %s" % (writer, b.code, r.code),
+                     b.log()[-1500:], r.log()[-1500:])
+                continue
+            cb, cr = b.conn(), r.conn()
+            xb, xr = dump_all(cb, 3), dump_all(cr, 3)
+            same_dbs("BendKV and Redis from %s's big file" % writer, xb, xr)
+            same_dbs("BendKV from %s's big file holds what was saved" % writer, unenc(xb), live)
+            same("the keys loaded and expired from %s's big file" % writer, loads(cb), loads(cr))
+        finally:
+            b.kill()
+            r.kill()
+
+
 def temps(d):
     return sorted(f for f in os.listdir(d) if f.startswith("temp-"))
 
@@ -674,6 +756,17 @@ def unchecked(a, root):
         check("%s's x.rdb loads" % src, loaded[1][0] is None and loaded[1][2], loaded[1])
 
 
+def pause(s, ms=400):
+    """CLIENT PAUSE ALL for ms, from a connection of its own: the requests
+    that come meanwhile are held back, and at the first tick past its end
+    their clients go on in the order they came. BendKV runs them at the
+    end of one group of requests, so that what they do meets there; Redis
+    runs them one client after another, in that order too"""
+    c = s.conn()
+    run(c, "CLIENT", "PAUSE", ms, "ALL")
+    return c
+
+
 def shutdowns_on(exe, root, log):
     """the transcript of SHUTDOWN's cases on one server. A SHUTDOWN that
     stops the server sends no reply of its group (the commands before it
@@ -710,21 +803,20 @@ def shutdowns_on(exe, root, log):
     log("4 fails", talk(s.port, [["SET", "a", "1"], ["SHUTDOWN"], ["GET", "a"]]), s.p.poll())
     log("4 save fails", talk(s.port, [["SHUTDOWN", "SAVE"], ["PING"]]), s.p.poll())
     # another client's requests that come right after such a SHUTDOWN are
-    # served as if it had not come: a slow LOLWUT (0.4 s on BendKV) holds
-    # the server while both come, so that BendKV runs them in one group
+    # served as if it had not come: a pause holds both back, so that
+    # BendKV runs them in one group
     for r in range(3):
-        cc, ca, cb = s.conn(), s.conn(), s.conn()
-        cc.send([cmd("LOLWUT", "VERSION", 5, 200, 50, 50)])
-        time.sleep(0.02)
+        cc = pause(s)
+        ca, cb = s.conn(), s.conn()
         ca.send([cmd("SHUTDOWN")])
-        time.sleep(0.02)
+        time.sleep(0.05)
         cb.send([cmd("SET", "k%d" % i, i) for i in range(50)] + [cmd("DBSIZE")])
         try:
             rb = [cb.reply() for _ in range(51)]
             got = (rb[-1], all(x == (b"+", b"OK") for x in rb[:-1]))
         except (EOFError, ConnectionResetError) as e:
             got = "closed"
-        log("4 others go on", r, ca.reply(), got, cc.reply()[0], s.p.poll())
+        log("4 others go on", r, ca.reply(), got, s.p.poll())
         for c in (ca, cb, cc):
             c.sock.close()
     log("4 stats", re.sub(r"usec=\d+,usec_per_call=[0-9.]+,", "", info(s.conn(), "commandstats", "cmdstat_shutdown") or ""))
@@ -746,6 +838,28 @@ def shutdowns_on(exe, root, log):
     s = fresh("aof", "--save", "", "--appendonly", "yes")
     log("5 the RDB file left out", talk(s.port, [["GET", "a"], ["EXISTS", "t", "b"]]), talk(s.port, [["SHUTDOWN", "NOSAVE"]]),
         s.exit())
+    # SAVE with the append-only file: what comes after it, in its pipeline
+    # and in another client's requests of its group, reaches the
+    # append-only file after the save. A pause holds both back, so that
+    # BendKV runs them in one group (where the other client's APPEND runs
+    # between SAVE and the APPEND after it, and Redis runs it after both);
+    # the two APPENDs to s, in whichever order they ran, must come back
+    # from the file in that order
+    s = fresh("aofsave", "--save", "", "--appendonly", "yes")
+    hold = pause(s)
+    ca, cb = s.conn(), s.conn()
+    ca.send([cmd("SET", "a", "1"), cmd("SAVE"), cmd("SET", "b", "2"), cmd("APPEND", "s", "x")])
+    time.sleep(0.05)
+    cb.send([cmd("SET", "c", "3"), cmd("APPEND", "s", "y")])
+    ra, rb = [ca.reply() for _ in range(4)], [cb.reply() for _ in range(2)]
+    before = run(s.conn(), "MGET", "a", "b", "c", "s")
+    log("5 save", ra[:3], rb[0], sorted([ra[3], rb[1]]), os.path.exists(os.path.join(root, "aofsave", "dump.rdb")))
+    for c in (hold, ca, cb):
+        c.sock.close()
+    log("5 save stop", talk(s.port, [["SHUTDOWN", "NOSAVE"]]), s.exit())
+    s = fresh("aofsave", "--save", "", "--appendonly", "yes")
+    after = run(s.conn(), "MGET", "a", "b", "c", "s")
+    log("5 save restart", after == before, after[1][:3], talk(s.port, [["SHUTDOWN", "NOSAVE"]]), s.exit())
 
 
 def shutdowns(a, root):
@@ -768,32 +882,19 @@ def shutdowns(a, root):
 def races_on(exe, root, log):
     """the transcript of another client's CLIENT UNBLOCK or CLIENT KILL of
     a client whose SAVE (or failing SHUTDOWN SAVE) has run, in the same
-    group of requests: twelve SORT ... ALPHA of a list of 100,000 hold the
-    server while both come, so that BendKV runs them in one group. Redis
-    saves within the command: its client is never blocked, UNBLOCK
-    answers 0, and the save is made before a KILL can reach it"""
-    def busy(s):
-        c = s.conn()
-        c.send([cmd("SORT", "bl", "ALPHA", "LIMIT", 0, 1)] * 12)
-        time.sleep(0.1)
-        return c
-
-    def done(c):
-        for _ in range(12):
-            c.reply()
-        c.sock.close()
-
+    group of requests: a pause holds both back, so that BendKV runs them
+    in one group (pause). Redis saves within the command: its client is
+    never blocked, UNBLOCK answers 0, and the save is made before a KILL
+    can reach it"""
     for action in ("unblock", "kill"):
         name = "race-" + action
         s = Srv(exe, os.path.join(root, name), "--save", "")
-        run(s.conn(), "RPUSH", "bl", *[(i * 7919) % 100003 for i in range(100000)])
         a, b = s.conn(), s.conn()
         ida = run(a, "CLIENT", "ID")[1]
-        c = busy(s)
+        c = pause(s)
         a.send([cmd("SET", "newkey", 1), cmd("SAVE")])
         time.sleep(0.05)
         b.send([cmd("CLIENT", "UNBLOCK", ida) if action == "unblock" else cmd("CLIENT", "KILL", "ID", ida)])
-        done(c)
         got = []
         for _ in range(2):
             try:
@@ -801,19 +902,18 @@ def races_on(exe, root, log):
             except (EOFError, ConnectionResetError):
                 got.append("closed")
         log("6 %s" % action, got, b.reply(), talk(s.port, [["SHUTDOWN", "NOSAVE"]]), s.exit())
+        c.sock.close()
         s = Srv(exe, os.path.join(root, name), "--save", "")
         log("6 %s restart" % action, talk(s.port, [["GET", "newkey"]]), talk(s.port, [["SHUTDOWN", "NOSAVE"]]), s.exit())
     # a SHUTDOWN SAVE whose save fails, its client unblocked by another
     s = Srv(exe, os.path.join(root, "race-shut"), "--save", "")
     os.mkdir(os.path.join(root, "race-shut", "temp-%s.rdb" % s.pid()))
-    run(s.conn(), "RPUSH", "bl", *[(i * 7919) % 100003 for i in range(100000)])
     a, b = s.conn(), s.conn()
     ida = run(a, "CLIENT", "ID")[1]
-    c = busy(s)
+    c = pause(s)
     a.send([cmd("SHUTDOWN", "SAVE")])
     time.sleep(0.05)
     b.send([cmd("CLIENT", "UNBLOCK", ida)])
-    done(c)
     log("6 shutdown unblock", a.reply(), b.reply(), s.p.poll(), talk(s.port, [["SHUTDOWN", "NOSAVE"]]), s.exit())
 
 
@@ -973,7 +1073,7 @@ def main():
     shutil.rmtree(root, ignore_errors=True)
     os.makedirs(root)
     try:
-        for part in (redis_writes, lzf_values, written_here, bendkv_writes, scenarios, unchecked, shutdowns, races, corrupt, short_form):
+        for part in (redis_writes, lzf_values, written_here, bendkv_writes, big, scenarios, unchecked, shutdowns, races, corrupt, short_form):
             b0 = bad
             part(a, root)
             print("%s %s" % ("OK:  " if bad == b0 else "FAIL:", " ".join(part.__doc__.split())))
