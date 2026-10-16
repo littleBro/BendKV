@@ -307,10 +307,10 @@ translation stays in the trusted base.
   leaves an empty stream; a trim by `~` takes out the nodes Redis's takes out but in
   two rare cases, where the stream is what a Redis replica holds; the start refuses a
   Redis file that holds a trim by `~` with LIMIT, which Redis writes as `=` with LIMIT
-  (sections 3zzzu, 3zzzy and 3zzzz of [docs/FINDINGS.md](docs/FINDINGS.md)); XINFO
+  (sections 3zzzu, 3zzzy and 3zzzza of [docs/FINDINGS.md](docs/FINDINGS.md)); XINFO
   STREAM takes time with the stream's nodes, as it counts the radix tree's nodes where
   Redis keeps the count, the ranges take 3 to 7 times Redis's time, and the writes 3 to
-  12 times (sections 82 and 83 of [docs/PERFORMANCE.md](docs/PERFORMANCE.md)).
+  12 times (sections 82 and 84 of [docs/PERFORMANCE.md](docs/PERFORMANCE.md)).
 - **Clients that wait:** BLPOP, BRPOP, BLMOVE, BRPOPLPUSH, BLMPOP, BZPOPMIN, BZPOPMAX
   and BZMPOP, their timeouts (seconds, a double; 0 waits for ever) read as Redis reads
   them, with its errors. A command that finds nothing to pop makes its client wait, and

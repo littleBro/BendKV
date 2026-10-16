@@ -10,7 +10,7 @@ it made, without NOMKSTREAM; a stream made where a key whose time had
 passed still lay as the script that deletes the key and runs the XADD.
 Redis logs * and ~ alike, but keeps LIMIT after the = it writes for ~,
 which its load ignores: BendKV's start does not read it yet (FINDINGS
-3zzzz), so the test takes LIMIT out of Redis's file first. The IDs of *
+3zzzza), so the test takes LIMIT out of Redis's file first. The IDs of *
 are past the clock (a stream's last one is), so that both servers add
 the same ones.
 

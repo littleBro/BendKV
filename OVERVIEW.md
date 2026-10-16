@@ -321,7 +321,7 @@ REPLACE and ABSTTL (section 3zzu of docs/FINDINGS.md). A stream is a value BendK
 from RESTORE and the RDB file, its nodes Redis's listpacks byte for byte, with its groups
 (section 3zzzu of docs/FINDINGS.md); XLEN, XRANGE, XREVRANGE, XREAD, XINFO and XPENDING
 read it, and XADD, XTRIM, XDEL and XSETID write it, as Redis does (sections 3zzzy and
-3zzzz); the commands of groups and XREAD's wait are not there yet.
+3zzzza); the commands of groups and XREAD's wait are not there yet.
 The RDB file, as Redis 7.0.15 writes and reads it: SAVE writes it (`temp-<pid>.rdb`,
 synced, renamed onto `dbfilename`, the directory synced), SHUTDOWN saves it with SAVE or
 with save points, FLUSHALL with save points saves the emptied databases, and the start

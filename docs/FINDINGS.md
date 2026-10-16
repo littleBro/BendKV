@@ -8101,7 +8101,7 @@ time grows with the nodes: 3.5 times Redis's on 1 node, 19 times on 100, 100 tim
 - A walk of a node's entries that steps over their bytes without copying them (the
   ranges from the middle of a node), as section 3zzzu says for RESTORE.
 
-## 3zzzz. Streams: the commands that write one
+## 3zzzza. Streams: the commands that write one
 
 **What there is** (`src/stream.bend`, Writes; `src/redis.bend`, Stream writes). XADD,
 XTRIM, XDEL and XSETID change a stream as Redis 7.0.15's `t_stream.c` changes it, node
@@ -8220,7 +8220,7 @@ names words whose resolution is themselves.
   XREAD's wait or XGROUP, or set `stream-node-max-entries` (2 tests).
 - `stream_read_test.py` and `stream_dump_test.py` pass on the writes' build as before.
 
-**What it costs** (PERFORMANCE 83). Nothing on GET, SET and INCR. A write of a stream
+**What it costs** (PERFORMANCE 84). Nothing on GET, SET and INCR. A write of a stream
 takes a constant time whatever the stream's size, 6 to 12 times Redis's (XADD 7, XADD
 with an exact trim 12, XDEL 6, XSETID 3): the write runs on the stream the keyspace still
 holds, so each part it takes by value is copied and dropped after, XDEL's walk turns its
@@ -8238,7 +8238,7 @@ node's entries around, and the keyspace drops the old version.
   limits to 7,999 values: Redis would not load such an XADD of 8,000 words or more (4,000
   pairs). BendKV loads it.
 - The count of the rax's nodes kept with the stream, for XINFO STREAM (section 3zzzy).
-- The writes in place (PERFORMANCE 83): the stream taken out of the keyspace while a
+- The writes in place (PERFORMANCE 84): the stream taken out of the keyspace while a
   write runs, which needs every write of a stream to write its stream back, the writes
   that change nothing too, with no effect; XDEL's walk from the newest entry, in place.
 

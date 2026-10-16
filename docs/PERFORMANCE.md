@@ -8267,9 +8267,9 @@ per request, +0.8% to +0.9% from the baseline (3,452, 4,214 and 4,552), as #114'
 counted alike on this machine (3,480, 4,243 and 4,593); last-level misses 2.84, 3.15 and
 3.29; with 100 clients in BLPOP, +3.1% and +3.7%.
 
-## 83. The writes of a stream
+## 84. The writes of a stream
 
-**What changed** (FINDINGS 3zzzz). XADD, XTRIM, XDEL and XSETID write the stream of
+**What changed** (FINDINGS 3zzzza). XADD, XTRIM, XDEL and XSETID write the stream of
 section 3zzzu of FINDINGS: an entry is appended to its node's list of entries (the newest
 first) as the bytes Redis's listpack holds for it, and the node's counts and sizes are
 written again; a trim takes nodes out of the tree by master ID, and marks the entries of
