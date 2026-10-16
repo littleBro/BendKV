@@ -941,6 +941,19 @@ def tail.len(+t: Tail) -> Nat:
     case TailOf{+u}:
       tail.len(u)
 
+# the bytes a tail holds: none, those of a request not whole yet, or
+# those of a long request's bulk not whole yet
+def tail.bytes(t: Tail) -> String:
+  match t:
+    case TailNone{}:
+      SNil{}
+    case TailBytes{r}:
+      r
+    case TailPart{p, r}:
+      r
+    case TailOf{u}:
+      tail.bytes(u)
+
 # the window of w bytes at index at, of a buffer of l bytes, and its parse
 # (the window, a copy, dropped)
 def win.of(b: Batch, +at: Nat, +w: Nat, +l: Nat) -> Win:
