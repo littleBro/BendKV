@@ -7787,13 +7787,14 @@ def evict.pick(+pol: Nat, mm: S.Mm, +ds: R.Ds, +n: Nat, +now: Nat, +start: U32) 
       evict.pooled(pol, mm, ds, n, now, start)
 
 # eviction's state as it goes: the server, the databases, the DELs of the
-# keys it evicted (newest first), and how many
+# keys it evicted (newest first), how many, and the heap's used bytes at
+# its last reading
 type Evs is Data:
-  Evs{srv: S.Srv, ds: R.Ds, es: List<&2, A.Ent>, n: Nat}
+  Evs{srv: S.Srv, ds: R.Ds, es: List<&2, A.Ent>, n: Nat, last: Nat}
 
 def evs.n(+x: Evs) -> Nat:
   match x:
-    case Evs{srv, ds, es, +n}:
+    case Evs{srv, ds, es, +n, last}:
       n
 
 # a key evicted, or none the policy may evict
@@ -7837,18 +7838,18 @@ def evict.pick.of(+rws: Bool, mm: S.Mm, +ds: R.Ds, +start: U32) -> Ed:
   evict.debt(evict.pick(S.mm.pol(m), m, ds, dbs.count(ds), R.ds.now(ds), start), rws, ds)
 
 # the key picked deleted: its DEL with the others, the server's debt up
-def evict.done(p: Ed, pass: String, cfg: List<&2, C.CItem>, info: I.Info, ds: R.Ds, es: List<&2, A.Ent>, +n: Nat) -> Ev1:
+def evict.done(p: Ed, pass: String, cfg: List<&2, C.CItem>, info: I.Info, ds: R.Ds, es: List<&2, A.Ent>, +n: Nat, +last: Nat) -> Ev1:
   match p:
     case Ed{mm, Vic{+j, +k}, +debt}:
-      EvOne{Evs{S.Srv{pass, cfg, info, S.mm.owe(mm, debt)}, evict.del(j, k, ds), A.EOne{A.EDb{j, R.Del{[k]}}} <> es, 1n+n}}
+      EvOne{Evs{S.Srv{pass, cfg, info, S.mm.owe(mm, debt)}, evict.del(j, k, ds), A.EOne{A.EDb{j, R.Del{[k]}}} <> es, 1n+n, last}}
     case Ed{mm, VicNone{}, debt}:
-      EvNone{Evs{S.Srv{pass, cfg, info, mm}, ds, es, n}}
+      EvNone{Evs{S.Srv{pass, cfg, info, mm}, ds, es, n, last}}
 
 # one key evicted (rws: while a rewrite runs)
 def evict.one(x: Evs, +rws: Bool) -> Ev1:
   match x:
-    case Evs{S.Srv{pass, cfg, +info, mm}, +ds, es, +n}:
-      evict.done(evict.pick.of(rws, mm, ds, I.info.start(info)), pass, cfg, info, ds, es, n)
+    case Evs{S.Srv{pass, cfg, +info, mm}, +ds, es, +n, +last}:
+      evict.done(evict.pick.of(rws, mm, ds, I.info.start(info)), pass, cfg, info, ds, es, n, last)
 
 # whether the heap's used bytes, less the debt, are past maxmemory (none
 # with maxmemory 0)
@@ -7858,14 +7859,36 @@ def evict.over(+used: Nat, +srv: S.Srv) -> Bool:
 
 def evs.over(+used: Nat, +x: Evs) -> Bool:
   match x:
-    case Evs{+srv, ds, es, n}:
+    case Evs{+srv, ds, es, n, last}:
       evict.over(used, srv)
 
-# the heap's reading kept in the server's state, for INFO (S.srv.heap)
-def evs.heap(+used: Nat, +act: Nat, x: Evs) -> Evs:
+# the debt up by b: what the snapshot of a rewrite that runs holds of
+# what the eviction let go (S.mm.owe)
+def evs.owe(srv: S.Srv, +b: Nat) -> S.Srv:
+  match srv:
+    case S.Srv{pass, cfg, info, mm}:
+      S.Srv{pass, cfg, info, S.mm.owe(mm, b)}
+
+# while a rewrite runs, what the heap grew by since the eviction's last
+# reading: no client's command runs inside the eviction, so this is the
+# nodes its DELs copied on the way to their keys, whose old ones the
+# snapshot still holds, as it holds the keys (evict.est); counted as debt,
+# or the eviction, its own copies growing the heap as fast as its debt,
+# would go on until the rewrite ends (issue #100). Without a rewrite the
+# old nodes are let go, and nothing is owed (a match, not Bool.pick).
+def evs.grown(rws: Bool, +used: Nat, +last: Nat) -> Nat:
+  match rws:
+    case True{}:
+      Nat.sub(used, last)
+    case False{}:
+      0n
+
+# the heap's reading kept in the server's state, for INFO (S.srv.heap),
+# and as the eviction's last; its growth while a rewrite runs owed
+def evs.heap(+used: Nat, +act: Nat, rws: Bool, x: Evs) -> Evs:
   match x:
-    case Evs{srv, ds, es, n}:
-      Evs{S.srv.heap(srv, used, act), ds, es, n}
+    case Evs{srv, ds, es, n, +last}:
+      Evs{evs.owe(S.srv.heap(srv, used, act), evs.grown(rws, used, last)), ds, es, n, used}
 
 # an eviction's outcome: 0 the heap within maxmemory (EVICT_OK), 1 keys
 # left to evict when its time ran out (EVICT_RUNNING), 2 none left that
@@ -7919,7 +7942,7 @@ def evict.heap(x: Evs, +rws: Bool, +s0: U32, +u0: U32, +lim: Nat) -> IO(Evd):
 
 @unsafe
 def evict.heap.at(+used: Nat, +act: Nat, x: Evs, +rws: Bool, +s0: U32, +u0: U32, +lim: Nat) -> IO(Evd):
-  +y = evs.heap(used, act, x)
+  +y = evs.heap(used, act, rws, x)
   evict.loop(evs.over(used, y), y, rws, s0, u0, lim)
 
 # the heap's reading taken apart, for evict.heap.at
@@ -7971,7 +7994,7 @@ def mem.grp(p: Ps & List<&2, Sigma<&2, &2, Chan(Ans), _ => Ans>>, es: List<&2, A
 
 def mem.done(d: Evd, ws: Waits, tx: Tx, pb: Ps) -> Grp:
   match d:
-    case Evd{+res, Evs{srv, +ds, +es, +n}}:
+    case Evd{+res, Evs{srv, +ds, +es, +n, last}}:
       mem.grp(ps.flush(ps.evicted(es, ps.trk.gone(es, ds, ps.mem(pb, res))), Nil{}), es, S.srv.evicted(srv, n, Nat.is_lt(0n, res), R.ds.now(ds)), ds, ws, touch.ents(tx, es, None{}, ds))
 
 # Redis's warning for a CONFIG SET that set maxmemory below the memory in
@@ -7992,7 +8015,7 @@ def mem.ok(was: Bool, srv: S.Srv, ds: R.Ds, ws: Waits, tx: Tx, pb: Ps) -> Grp:
     case False{}:
       Grp{Nil{}, Nil{}, srv, ds, ws, Nil{}, tx, pb}
     case True{}:
-      mem.done(Evd{0n, Evs{srv, ds, Nil{}, 0n}}, ws, tx, pb)
+      mem.done(Evd{0n, Evs{srv, ds, Nil{}, 0n, 0n}}, ws, tx, pb)
 
 def ps.mem.was(+pb: Ps) -> Bool:
   match pb:
@@ -8019,7 +8042,7 @@ def mem.run.w(w: Nat, +used: Nat, +s0: U32, +u0: U32, srv: S.Srv, ds: R.Ds, ws: 
         mem.run.k(used, s0, u0, S.srv.kicked(sv), ds, ws, tx, pb, rws, pid)
     case _:
       +sv = srv
-      evict.go(S.srv.pol(sv), Evs{sv, ds, Nil{}, 0n}, ws, tx, pb, rws, s0, u0, evict.limit(S.srv.ten(sv)))
+      evict.go(S.srv.pol(sv), Evs{sv, ds, Nil{}, 0n, used}, ws, tx, pb, rws, s0, u0, evict.limit(S.srv.ten(sv)))
 
 @unsafe
 def mem.run.k(+used: Nat, +s0: U32, +u0: U32, srv: S.Srv, ds: R.Ds, ws: Waits, tx: Tx, pb: Ps, +rws: Bool, +pid: U32) -> IO(Grp):
