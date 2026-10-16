@@ -328,10 +328,10 @@ Where performance and proof meet: **batched execution under proved laws.**
    Streams are under way: a stream is a value BendKV holds (section 3zzzu), its reads
    and writes answer as Redis's (sections 3zzzy and 3zzzza), its groups and XREAD's wait
    next. Lua, cluster, replication and modules are out of scope. The suite's count: of the 1,677 tests
-   Redis 7.0.15 passes against a server it did not start, BendKV passes 1,305, 1,302 of
-   the 1,365 in what it has ([COMPATIBILITY.md](COMPATIBILITY.md)); most of the other 63
-   need commands BendKV does not have (replication's SYNC, Lua, streams) or run after a
-   test that left its client in MULTI on one of them.
+   Redis 7.0.15 passes against a server it did not start, BendKV passes 1,348, 1,306 of
+   the 1,365 in what it has ([COMPATIBILITY.md](COMPATIBILITY.md)); most of the other 59
+   need commands BendKV does not have (replication's SYNC, Lua, streams' groups) or run
+   after a test that left its client in MULTI on one of them.
    What maxmemory left to do (section 3zw): a delete takes the nodes it empties now
    (section 3zz), so the eviction gets within a limit with the keys Redis keeps, but its
    samples still walk the trie's empty buckets, and an eviction takes six times Redis's
