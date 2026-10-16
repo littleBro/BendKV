@@ -95,11 +95,11 @@ stop() {
 # swapcontext functions and may produce false positives". The switches
 # carry the fiber annotations it asks for instead, and the line is no
 # report: a file that holds it alone is set aside (warned/), and a file
-# with any other line fails the run
+# with any other line fails the run, as an empty one does
 WARN="^==[0-9]*==WARNING: ASan doesn't fully support makecontext/swapcontext functions and may produce false positives in some cases!\$"
 reports() {
   for f in "$REP"/*; do
-    if [ -f "$f" ] && ! grep -qv "$WARN" "$f"; then
+    if [ -s "$f" ] && ! grep -qv "$WARN" "$f"; then
       mkdir -p "$OUT/warned"
       mv "$f" "$OUT/warned/"
     fi
