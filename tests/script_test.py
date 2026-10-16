@@ -72,6 +72,11 @@ The scenarios:
    each reply in its place; a RESP3 client with a subscription whose
    script publishes to its own channel, its pushes and replies in
    Redis's order.
+11. Scripts under a pause of writes, by their flags as Redis reads them:
+   a script that declares no-writes, EVAL_RO without a shebang and an
+   EXEC of scripts that declare no-writes run at once; EVAL without a
+   shebang, EVALSHA, EVAL_RO whose shebang does not declare no-writes
+   and an EXEC that queued one are held back, then run.
 
 Not tested: error() with a table that has no 'err' field (error({}))
 makes Redis 7.0.15 crash (sdscatfmt reads the message it does not have),
@@ -954,9 +959,67 @@ def pipelines(port, log):
     r.close()
 
 
+def blocked(c, n):
+    """INFO's blocked_clients once it is n (or after 2 s), as a number"""
+    deadline = time.time() + 2.0
+    while True:
+        lines = [x for x in info(c, "clients") if x.startswith("blocked_clients:")]
+        got = int(lines[0].split(":")[1]) if lines else -1
+        if got == n or time.time() > deadline:
+            return got
+        time.sleep(0.02)
+
+
+def paused(port, log):
+    r = fresh(port, log, "11")
+    a, b = Client(port), Client(port)
+    try:
+        body = "return redis.call('INCR', KEYS[1])"
+        log("11 load", r.cmd("SCRIPT", "LOAD", body), r.cmd("CLIENT", "PAUSE", "100000", "WRITE"))
+        # a script that declares no-writes, and EVAL_RO without a
+        # shebang, run at once
+        log("11 run at once", ev(a, "#!lua flags=no-writes\nreturn redis.call('GET', KEYS[1])", [k("sc")]),
+            ev(a, "return redis.call('GET', KEYS[1])", [k("sc")], cmd="EVAL_RO"), a.cmd("SCRIPT", "EXISTS", sha(body)))
+        # a script that may write is held back, then runs: EVAL without a
+        # shebang, EVALSHA (by its script's flags)
+        a.send("EVAL", body, "1", k("sc"))
+        log("11 eval held", a.read(0.2), blocked(r, 1))
+        b.send("EVALSHA", sha(body), "1", k("sc"))
+        log("11 evalsha held", b.read(0.2), blocked(r, 2))
+        log("11 unpause", r.cmd("CLIENT", "UNPAUSE"), a.read(), b.read(), blocked(r, 0), r.cmd("GET", k("sc")))
+        # EVAL_RO whose shebang does not declare no-writes is held back
+        r.cmd("CLIENT", "PAUSE", "100000", "WRITE")
+        a.send("EVAL_RO", "#!lua\nreturn 1", "0")
+        log("11 eval_ro held", a.read(0.2), blocked(r, 1))
+        log("11 eval_ro", r.cmd("CLIENT", "UNPAUSE"), a.read())
+        # a transaction of scripts that declare no-writes runs at once
+        r.cmd("CLIENT", "PAUSE", "100000", "WRITE")
+        log("11 multi of no-writes", a.cmd("MULTI"), ev(a, "#!lua flags=no-writes\nreturn 12"),
+            ev(a, "#!lua flags=no-writes\nreturn 13"), a.cmd("EXEC"), blocked(r, 0))
+        r.cmd("CLIENT", "UNPAUSE")
+        # one that queued a script that may write before the pause has its
+        # EXEC held back; a script that may write, queued under the pause,
+        # is held back as it comes, and the transaction after it
+        log("11 multi of a write", a.cmd("MULTI"), ev(a, "#!lua flags=no-writes\nreturn 12"),
+            ev(a, "#!lua\nreturn 13"), r.cmd("CLIENT", "PAUSE", "100000", "WRITE"))
+        a.send("EXEC")
+        log("11 exec held", a.read(0.2), blocked(r, 1))
+        log("11 exec", r.cmd("CLIENT", "UNPAUSE"), a.read())
+        r.cmd("CLIENT", "PAUSE", "100000", "WRITE")
+        a.send("MULTI")
+        a.send("EVAL", "#!lua\nreturn 14", "0")
+        a.send("EXEC")
+        log("11 queued held", a.read(), a.read(0.2), blocked(r, 1))
+        log("11 queued", r.cmd("CLIENT", "UNPAUSE"), a.read(), a.read())
+    finally:
+        r.cmd("CLIENT", "UNPAUSE")
+        for x in (a, b, r):
+            x.close()
+
+
 SCENARIOS = [("1 replies", replies), ("2 redis.call", calls), ("3 errors", errors), ("4 the cache", cache),
              ("5 libraries", libraries), ("6 transactions", transactions), ("7 statistics", statistics),
-             ("8 BUSY", busy), ("9 the slow log", slow), ("10 pipelines", pipelines)]
+             ("8 BUSY", busy), ("9 the slow log", slow), ("10 pipelines", pipelines), ("11 paused", paused)]
 
 
 def transcript(port, scenario):

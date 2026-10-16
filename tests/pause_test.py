@@ -23,17 +23,13 @@ every command; a blocking command held back, then waiting once the pause
 ends, and one that waited before it, whose time ends while it holds; the
 order in which the clients held back go on; a client held back whose
 connection closes, and one killed; errors of the parser, answered at
-once; scripts under a pause of writes, by their flags as Redis reads
-them (a script that may write held back, then run: EVAL without a
-shebang, EVALSHA, EVAL_RO whose shebang does not declare no-writes; a
-script that declares no-writes and EVAL_RO without a shebang run at
-once).
+once.
 
 The checks of BendKV alone: CLIENT UNBLOCK of a client held back answers
 0 and leaves it held back (Redis 7.0.15 crashes on it). The checks under
 load: 100 clients held back, each with a write, all answered in order
 once the pause ends, and 100 more released by the end of a pause's
-time.
+time. Scripts under a pause are tests/script_test.py's (scenario 11).
 
     python3 tests/pause_test.py --bendkv 6380 --redis 6390
 """
@@ -211,24 +207,6 @@ def scenarios(port, log):
     m.cmd("CLIENT", "UNPAUSE")
     m.close()
     log("13 info", info_lines(r, "clients", ("blocked_clients",)))
-    # 14. scripts under a pause of writes, by their flags
-    sha = r.cmd("SCRIPT", "LOAD", "return redis.call('INCR', 'sc')")
-    r.cmd("CLIENT", "PAUSE", "100000", "WRITE")
-    log("14 run at once", a.cmd("EVAL", "#!lua flags=no-writes\nreturn redis.call('GET', 'sc')", "0"),
-        a.cmd("EVAL_RO", "return redis.call('GET', 'sc')", "0"), a.cmd("SCRIPT", "EXISTS", sha))
-    a.send("EVAL", "return redis.call('INCR', 'sc')", "0")
-    log("14 eval held", a.read(0.2), wait_blocked(r, 1))
-    b.send("EVALSHA", sha, "0")
-    log("14 evalsha held", b.read(0.2), wait_blocked(r, 2))
-    log("14 list", norm(r.cmd("CLIENT", "LIST", "ID", a.id), [a, b]))
-    r.cmd("CLIENT", "UNPAUSE")
-    log("14 scripts", a.read(), b.read(), wait_blocked(r, 0), r.cmd("GET", "sc"))
-    r.cmd("CLIENT", "PAUSE", "100000", "WRITE")
-    a.send("EVAL_RO", "#!lua\nreturn 1", "0")
-    log("14 eval_ro held", a.read(0.2), wait_blocked(r, 1))
-    r.cmd("CLIENT", "UNPAUSE")
-    log("14 eval_ro", a.read())
-    r.cmd("SCRIPT", "FLUSH")
     r.cmd("FLUSHALL")
     for c in (r, a, b):
         c.close()

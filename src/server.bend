@@ -5122,41 +5122,6 @@ def code.pausable(+code: Nat) -> Bool:
   +k = R.code.key(code)
   Bool.and(R.stat.pausable(k), Bool.not(Bool.and(Nat.is_eq(k, R.stat.top(65n)), Nat.is_eq(R.code.class(code), 2n))))
 
-# whether the codes of a transaction's queued commands hold one the
-# pause of writes holds back
-def codes.pausable(+ks: List<&2, Nat>) -> Bool:
-  match ks:
-    case Nil{}:
-      False{}
-    case Con{+k, rest}:
-      Bool.or(code.pausable(k), codes.pausable(rest))
-
-# a command that is EXEC, of a client whose transaction (the first of
-# the chain, its client's) queued a command the pause of writes holds back
-def pause.exec(+c: R.Cmd, +id: Nat, +t: Tx) -> Bool:
-  match c t:
-    case R.Own{R.SExec{}} TxOn{+i, mu, bd, cs, qs, +qc, qa, wk, r}:
-      Bool.and(Nat.is_eq(i, id), codes.pausable(qc))
-    case _ _:
-      False{}
-
-# whether the pause holds a command (code) of the client of id back: a
-# pause holds, the client is no monitor, the parser did not refuse the
-# command, and the pause is of every command or the command is one that
-# writes or may be replicated
-# (a script command of a script cached with a shebang writes unless the
-# script declares no-writes, by its flags, sf: Scripts, as Redis's
-# evalGetCommandFlags reads them; any other, by its own)
-def code.pausable.sf(+code: Nat, +sf: U32) -> Bool:
-  Bool.pick(Bool, U32.is_eq(U32.and(sf, 112), 32), U32.is_eq(U32.and(sf, 1), 0), code.pausable(code))
-
-def pause.holds(+p: Pz, +mon: Bool, +c: R.Cmd, +code: Nat, +id: Nat, +tx: Tx, +sf: U32) -> Bool:
-  match p:
-    case PzOff{}:
-      False{}
-    case PzOn{+all, end}:
-      Bool.and(Bool.not(Bool.or(mon, Nat.is_eq(R.code.class(code), 1n))), Bool.or(all, Bool.or(code.pausable.sf(code, sf), pause.exec(c, id, tx))))
-
 # the clients the pause held back (hit: whether the first of ws is one),
 # in the order they came, their batches to go on (up, newest first), from
 # the command held back; the others kept in order (keep: those before,
@@ -5767,6 +5732,42 @@ def sc.flags.at(eng: Bool, +c: R.Cmd, +pb: Ps) -> U32:
     case False{}:
       0
 
+# whether the pause holds a command (code) of the client of id back: a
+# pause holds, the client is no monitor, the parser did not refuse the
+# command, and the pause is of every command or the command is one that
+# writes or may be replicated
+# (a script command of a script cached with a shebang writes unless the
+# script declares no-writes, by its flags, sf: sc.flags, as Redis's
+# evalGetCommandFlags reads them; any other, by its own)
+def code.pausable.sf(+code: Nat, +sf: U32) -> Bool:
+  Bool.pick(Bool, U32.is_eq(U32.and(sf, 112), 32), U32.is_eq(U32.and(sf, 1), 0), code.pausable(code))
+
+# whether a transaction's queued commands (newest first, with their
+# codes) hold one the pause of writes holds back: a script command by its
+# script's flags, as Redis reads them when it queues one
+def queued.pausable(+cs: List<&2, R.Cmd>, +ks: List<&2, Nat>, +pb: Ps) -> Bool:
+  match cs ks:
+    case Con{+c, rest} Con{+k, more}:
+      Bool.or(code.pausable.sf(k, sc.flags.at(code.engine(k), c, pb)), queued.pausable(rest, more, pb))
+    case _ _:
+      False{}
+
+# a command that is EXEC, of a client whose transaction (the first of
+# the chain, its client's) queued a command the pause of writes holds back
+def pause.exec(+c: R.Cmd, +id: Nat, +t: Tx, +pb: Ps) -> Bool:
+  match c t:
+    case R.Own{R.SExec{}} TxOn{+i, mu, bd, cs, +qs, +qc, qa, wk, r}:
+      Bool.and(Nat.is_eq(i, id), queued.pausable(qs, qc, pb))
+    case _ _:
+      False{}
+
+def pause.holds(+p: Pz, +mon: Bool, +c: R.Cmd, +code: Nat, +id: Nat, +tx: Tx, +sf: U32, +pb: Ps) -> Bool:
+  match p:
+    case PzOff{}:
+      False{}
+    case PzOn{+all, end}:
+      Bool.and(Bool.not(Bool.or(mon, Nat.is_eq(R.code.class(code), 1n))), Bool.or(all, Bool.or(code.pausable.sf(code, sf), pause.exec(c, id, tx, pb))))
+
 # the error of a client refused while a script runs past lua-time-limit
 # (Redis's shared.slowevalerr and slowscripterr)
 def busy.msg(+fn: Bool) -> String:
@@ -6077,7 +6078,7 @@ def bg.go(+id: Nat, +back: Chan(Ans), +inb: Nat, cmds: List<&2, R.Cmd>, codes: L
       +mo = ps.mon.is(id, pb)
       +lua = Nat.is_eq(id, 0n)
       +sf = sc.flags.at(code.engine(k), c, pb)
-      +sh = sh.lua(sh.of(q, may, tx.multi(id, tx), Bool.and(ps.has(id, pb), Bool.not(S.conn.r3(conn))), mo, Bool.and(ps.oom.is(pb), Bool.not(lua)), pause.holds(ps.pz(pb), mo, c, k, id, tx, sf), Bool.and(ps.busy(pb), Bool.not(lua)), sf, c, k, ds), id, tx)
+      +sh = sh.lua(sh.of(q, may, tx.multi(id, tx), Bool.and(ps.has(id, pb), Bool.not(S.conn.r3(conn))), mo, Bool.and(ps.oom.is(pb), Bool.not(lua)), pause.holds(ps.pz(pb), mo, c, k, id, tx, sf, pb), Bool.and(ps.busy(pb), Bool.not(lua)), sf, c, k, ds), id, tx)
       +ar = av.rest(av)
       bg.go(id, back, inb, rest, more, bg.feed(mon.seen(q, may, sh, k), id, k, S.conn.mode(conn), av, ar, bg.cmd(id, back, inb, sh, c, k, rest, more, av, ar, LRun{rs, es, conn, S.srv.call(srv, id, av.arg(av)), ds, ws, up, tx, pb})))
     case _ _ Fed{g0, av}:
