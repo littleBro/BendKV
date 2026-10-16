@@ -435,7 +435,8 @@ translation stays in the trusted base.
   invalidates nothing, where Redis invalidates its key; a client that others redirect to
   gets the invalidation of a key its own command writes before that command's reply,
   where Redis writes it after the reply for the commands that reply before they signal
-  the key (ZADD, ZINCRBY, HSET, HINCRBY, LPUSH, RPUSH) (FINDINGS.md, section 3zzzb).
+  the key (ZADD, ZINCRBY, HSET, HINCRBY, LPUSH, RPUSH, a served BLMPOP), and inside the
+  reply of a served BZPOPMIN, BZPOPMAX or BZMPOP (FINDINGS.md, section 3zzzb).
 - **The server:** LASTSAVE (the last save that ended well, the start until one does), ROLE (a master
   with no replica), WAIT (0, as no replica acknowledges: at once when it asks for none,
   otherwise once its timeout ends, its client waiting as a blocking command's does),
@@ -505,7 +506,9 @@ translation stays in the trusted base.
   clock (seconds) or its LFU counter (logarithmic, with `lfu-log-factor`, decayed by
   `lfu-decay-time`), and OBJECT IDLETIME and FREQ answer from it. Where BendKV differs:
   the same maxmemory holds another number of keys, since a key takes other bytes in
-  BendKV's heap (with its share of the trie's nodes) than in Redis's allocator; the uses
+  BendKV's heap (with its share of the trie's nodes) than in Redis's allocator, and
+  about 8% fewer after a rewrite of the append-only file, until they are set again
+  (issue #102); the uses
   are kept in a table of 2^20 words by the key's hash, which keys whose hashes share
   their low 20 bits share, and a request marks its first key alone, before it runs
   (MGET's others are not marked); and evicting many keys at once is about ten times
@@ -809,7 +812,7 @@ away.
 
 | file | lines of code | of them written by a generator | the laws import it |
 |---|---:|---:|---|
-| `src/map.bend` | 2,000 | 640 | yes |
+| `src/map.bend` | 2,400 | 640 | yes |
 | `src/redis.bend` | 16,000 | 6,400 | yes |
 | `src/batch.bend` | 84 |  | yes |
 | `src/aof.bend` | 1,200 |  | yes |
@@ -822,7 +825,7 @@ away.
 | `src/info.bend` | 2,200 |  | no |
 | `src/lolwut.bend` | 470 |  | no |
 | `src/rdb.bend` | 2,100 |  | no |
-| `src/resp.bend` | 880 |  | no |
+| `src/resp.bend` | 980 |  | no |
 | `src/server.bend` | 8,900 |  | no |
 | `src/startup.bend` | 460 |  | no |
 | `proof/LAWS.bend` | 920 | 20 |  |

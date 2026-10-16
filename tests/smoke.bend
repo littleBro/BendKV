@@ -48,7 +48,7 @@ def replies(r: List<&2, R.Reply> & R.Db) -> List<&2, R.Reply>:
 def run(b: P.Batch) -> List<&2, String>:
   match b:
     case P.Batch{reqs, tl, rest, err, need, raw}:
-      lines(replies(R.exec_all(B.cmds_of(reqs, Nil{}), R.db.empty())), rest)
+      lines(replies(R.exec_all(B.cmds_of(reqs, Nil{}), R.db.empty())), P.tail.bytes(rest))
 
 def buf() -> String:
   "*3\r\n$3\r\nSET\r\n$3\r\nfoo\r\n$3\r\nbar\r\n" ++

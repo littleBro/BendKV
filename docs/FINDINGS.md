@@ -5978,7 +5978,9 @@ keys and eviction invalidate the keys they delete as no client's change.
 The client whose command runs gets its own invalidations after its reply: after EXEC's
 for EXEC's commands, and after its reply for a client that a blocking command serves.
 Redis keeps them for after the call. A served BLMOVE or BRPOPLPUSH changes its
-destination; a served BLMPOP, BZPOPMIN, BZPOPMAX or BZMPOP changes the key it popped from;
+destination, unless that holds another type: then it answers WRONGTYPE, changes nothing
+and invalidates nothing, as Redis serves it (`serveClientBlockedOnList` gives up before
+`lmoveHandlePush`); a served BLMPOP, BZPOPMIN, BZPOPMAX or BZMPOP changes the key it popped from;
 a served BLPOP or BRPOP changes nothing more, as Redis signals each (its push made the key
 ready). LMOVE's and RPOPLPUSH's destination goes before their source, as Redis signals
 them. One it gets as the client another redirects to comes before its
@@ -6047,7 +6049,10 @@ parameter by its name.
   writes before that command's reply. Redis writes it where the command signals the key:
   before the reply for SET, DEL, SADD, INCR, APPEND and SETRANGE, which signal first,
   and after it for the commands that reply first, as ZADD, ZINCRBY, HSET, HINCRBY, LPUSH
-  and RPUSH do (`addReply` before `signalModifiedKey`).
+  and RPUSH do (`addReply` before `signalModifiedKey`), and as a served BLMPOP does
+  (`listPopRangeAndReplyWithKey`). For a served BZPOPMIN, BZPOPMAX or BZMPOP, Redis writes
+  it inside the reply's array, after its header: `genericZpopCommand` signals the key as it
+  pops the first member, between the array's length and its elements.
 
 **What it costs** (PERFORMANCE 66).
 
@@ -6529,6 +6534,18 @@ this branch and 10,000 on main.
   not yet counted would end it, and with it most of what the eviction sees move: issue
   #79.
 
+**Follow-up, from #80's review.** With the actor's reading held, INFO's `used_memory` and
+`allocator_allocated` were of one moment and `allocator_active` of another: the shell's
+reading, which `info.live.held` kept. So `allocator_frag_ratio`, `allocator_frag_bytes`
+and the two `allocator_rss_*` fields mixed two readings, and `allocator_frag_bytes`
+could read 0 at `Nat.sub`'s floor. `IO.heap` gives the actor both numbers. Now
+`mem.run` and `evict.heap.at` pass the pair on (`S.srv.heap`, `I.info.heap`), and
+`info.live.held` keeps both. In 3,000 INFO samples taken while another client wrote,
+with maxmemory set, neither main's build nor this one showed `allocator_active` below
+`allocator_allocated`: the change makes the fields agree, it fixes no failure seen.
+`make perfcheck` gives GET 3,414, SET 4,179 and INCR 4,523 instructions per request,
+against 3,418, 4,180 and 4,520 for main fc28490.
+
 ## 3zzzj. The timing's runs not yet counted, one per command
 
 **What was left.** Each call's time goes to a run of calls of its command (section 3zzz).
@@ -6608,6 +6625,347 @@ then runs and is answered, on both. 132 checks.
 **What it cost.** Nothing measurable: the check runs only on a batch the general way
 (`bg.go`). `make perfcheck` gives GET 3,414, SET 4,181 and INCR 4,525 instructions per
 request, against 3,416, 4,177 and 4,518 for the build before the change: within 0.2%.
+
+## 3zzzm. Small hashes in one string, as a listpack
+
+**What was left** (section 3zg). A small hash was the list of its pairs: a cell of 16
+bytes, an `HP` node of 16, and a buffer of 16 bytes or more for each field or value
+longer than 6 bytes (one of up to 6 lives in the term's word). A value a write had shared
+also kept the reference count it got then, 8 bytes. A pair of a 2-byte field and an
+8-byte value took 56 bytes, where a listpack spends 14 (Redis's DUMP of `HSET k f0
+v1234567` holds a listpack of 21 bytes, and of 35 with a second such pair) and the string
+below 12.
+
+**What a string is in the runtime** (patches 1, 2, 4 and 8, in `bend2/comp.ts`). The
+design rests on this.
+
+- A string of up to 6 bytes lives in the term's word. A longer one is a buffer: a heap
+  block of 16 to 2,048 bytes, a power of two with no header, whose bytes end where the
+  block ends. Alone it is a blob, whose term is the buffer's own; otherwise it is a chunk
+  of a chain, each with a node of 16 bytes.
+- `String.take` and `String.slice` copy what they take into one new buffer of the
+  smallest class that holds it (into buffers of 2,048 bytes past that). `String.drop`
+  of a blob moves its start in its own word.
+- `a ++ b` writes a into the room before b's bytes when b's buffer is unshared and has
+  that much room. Otherwise it links a's last chunk to b with a new node, or copies a's
+  short tail into a new chunk with 256 bytes of room.
+- Nothing joins a chain into one buffer afterwards: the lazy seal of patch 1 is about
+  reference counts, not bytes. A chain reads a chunk at a time: `String.code_at`,
+  `String.slice` and `String.length` past its first chunk walk it from the start
+  (`str_code_at_far`, `str_slice_far`, `str_len_far`).
+- A buffer holds at most 2,048 bytes: a chunk's start in its buffer has 11 bits. So a
+  string past that is a chain, whatever wrote it.
+
+So a packed hash copies its string into one buffer at each write; left to `++`, a few
+writes would leave it a chain of small chunks. And a hash's string holds at most one
+buffer: past it, a read by index would walk the chain (*Past one buffer*, below).
+
+**The change** (`src/map.bend`, Hashes). `HSmall{n, b}`: b holds the pairs one after
+another, in the order they came.
+
+- A pair is its field's length, the field, its value's length and the value. A length
+  below 255 is one byte. A longer one (RESTORE keeps a listpack's pairs whatever their
+  lengths) is the byte 255 and four bytes, the high first.
+- A read walks the lengths, two a pair, and compares a field of the right length by its
+  last byte, then whole (`String.eq` of a slice). HGET slices the value out.
+- A write builds the new string from a take of the old one, the new pair or value, and a
+  drop of the rest, and copies it into one buffer (`String.take` of all of it), as Redis
+  writes a listpack anew. A hash that passes the limits becomes a trie, as before.
+- `hash.pairs` decodes the string in a walk that keeps no frame a pair, then turns the
+  list around.
+- The string holds at most 2,048 bytes (`hb.small`). Past that, the pairs are in pieces
+  (`HLong{n, ps}`, `HPc{k, s}`), each the pairs that fill one buffer, or one pair longer
+  than a buffer (RESTORE keeps those).
+  - A read goes through the pieces in order and finds in one (`hl.get`, `hl.has`); it
+    tells a find from the indices `hb.find` gives, not from the piece's length, which
+    walks a chain.
+  - A write changes one piece. A value set in place copies its piece; a piece it makes
+    longer than a buffer is dealt into pieces again (`hl.fix`). A new pair goes in the
+    last piece while it has room, else in a piece of its own (`hl.set`).
+  - A delete cuts one piece, and a piece it empties goes (`hl.cut`). One piece of no more
+    than a buffer left is a string again (`hl.hash`).
+  - RESTORE deals the pairs into pieces when they pass a buffer (`hash.of`).
+- Outside the section: RESTORE builds the string (`hash.of`, `src/rdb.bend`), DUMP and
+  HSCAN decode it (`src/rdb.bend`, `src/redis.bend`), and OBJECT ENCODING reads the
+  widest length from it (`src/session.bend`).
+
+No proof changed: the proofs name `hash.empty`, `len`, `get` and `has` alone, and `has`
+of the empty hash still reduces to False whatever the field (`hdel_empty`).
+
+**What it gives.** `used_memory` per key, less what the server held before, after
+200,000 hashes `k:0`, `k:1`, ... were loaded with one pipelined HSET each; fields `f0`,
+`f1`, ..., values of `v` and digits:
+
+| pairs a hash, value bytes | Redis 7.0.15 | before | packed |
+|---|---:|---:|---:|
+| 10, 8 | 234.5 | 721.9 | 289.9 |
+| 10, 20 | 394.5 | 881.9 | 417.9 |
+| 50, 8 | 842.5 | 2,961.9 | 1,185.9 |
+| 50, 20 | 1,610.5 | 3,761.9 | 2,209.9 |
+
+The rest of a key (its name, its entry in the trie, the nodes of its value) is about 162
+bytes. The string takes the power of two above its length: 120 bytes take 128, but 640
+take 1,024 and 1,240 take 2,048, most of what is left between BendKV and Redis at 50
+pairs.
+
+**What it costs.** Instructions and last-level data read misses per request (callgrind, a
+last level of 2 MiB, 20 clients at a pipeline depth of 16, 20,000 requests counted after
+20,000 more) on 100,000 such hashes of 8-byte values: HGET of `f3` (the fourth field),
+HGETALL, HSET of `f3`, which is there, and HSET of a new field of 13 bytes:
+
+| pairs a hash, command | instructions before | packed | misses before | packed |
+|---|---:|---:|---:|---:|
+| 10, HGET | 6,442 | 7,436 | 12.39 | 6.56 |
+| 10, HGETALL | 25,605 | 27,260 | 31.61 | 8.15 |
+| 10, HSET of a field there | 11,247 | 14,269 | 13.31 | 8.02 |
+| 10, HSET of a new field | 13,499 | 16,382 | 17.71 | 8.40 |
+| 50, HGET | 6,437 | 7,484 | 12.51 | 6.57 |
+| 50, HGETALL | 106,748 | 114,588 | 123.08 | 17.22 |
+| 50, HSET of a field there | 11,245 | 14,354 | 13.48 | 16.58 |
+| 50, HSET of a new field | 27,307 | 32,873 | 44.02 | 16.66 |
+
+GET, SET and INCR do not move (`make perfcheck`, locally: 3,416, 4,178 and 4,522
+instructions before, 3,414, 4,177 and 4,522 after; misses and prefetches as before).
+
+The misses outweigh the instructions: on 200,000 hashes of 10 pairs, HGET, HSET of a
+field there and HGETALL answer 1.4, 1.5 and 2.1 times the requests a second they did
+(PERFORMANCE.md, section 73).
+
+- A read misses less: the string is a few cache lines where the list was two nodes and a
+  buffer a pair.
+- It runs more instructions: each length is read by `hb.len`, `String.code_at` and a
+  test, which the C compiler keeps as a function of its own, about 50 instructions a call
+  and two calls a pair, where the list's walk read a cell.
+- A write copies the string where the list rebuilt its cells in place: the part before
+  the pair it changes into a take, then all of it into one buffer (1,049 instructions per
+  HSET of a field there for that last copy, with its walk of the chain). At 50 pairs the
+  copy reads and writes more lines than the list's write touched, so HSET of a field
+  there misses more.
+
+**Past one buffer** (found in review). The first version kept every small hash in one
+string. Past 2,048 bytes that string is a chain, and each length a lookup read walked it
+from its start, so a find cost the pairs times the chunks. At Redis's own limits (512
+pairs of 64 bytes: 66,560 bytes, 33 chunks) HGET of the last field ran 34 times main's
+instructions, and on a restored listpack of long values 100 to 600 times main's time.
+The pieces read each byte where it lies.
+
+The times of the cases above, and more, are in PERFORMANCE.md, section 73: with the
+pieces, HGET of the last of 512 pairs of 64 bytes takes 17.9 microseconds, where the one
+string took 141.5 and main 11.5.
+
+Instructions a request (callgrind; 100 hashes, 2,000 requests counted after 2,000 more,
+200 of HGETALL and of the one string's restored listpacks; 20 clients at a pipeline depth
+of 16):
+
+| hashes, command | main | one string | pieces |
+|---|---:|---:|---:|
+| 512 pairs of 64-byte fields and values: HGET of the last field | 70,443 | 2,372,557 | 308,852 |
+| the same, HGET of a field not there | 69,894 | 2,370,206 | 308,204 |
+| the same, HSET of a middle field there | 127,535 | 1,479,051 | 316,489 |
+| the same, HGETALL | 1,275,989 | 3,682,435 | 1,469,417 |
+| Redis's listpack of 512 values of 1,000 bytes, restored: HGET of the last field | 58,559 | 65,568,765 | 181,675 |
+| the same, HGET of a field not there | 56,841 | 64,472,020 | 172,641 |
+| the same, HSET of a middle field there | 94,138 | 13,598,199 | 189,231 |
+| the same, HGETALL | 1,720,190 | 49,996,002 | 1,661,369 |
+
+At 512 pairs of 64-byte fields, a find in the pieces runs about 600 instructions a pair,
+4.4 times main's walk, but it reads a few cache lines where main's read a cell, a node and
+a buffer a pair: the time is 1.6 times main's.
+
+The pieces still lose to main in two places.
+- Where every field has one length and one last byte, as in these shapes, each pair
+  passes the test of the last byte and is sliced out to be compared whole. Fields that
+  differ in length or in their last byte skip the slice.
+- A restored value longer than a buffer is read out of its piece's chain, where main kept
+  it as a string of its own.
+
+A first build of the pieces asked each piece's length to tell whether the find had found
+its field. `String.length` walks a chain, so each piece of one long pair cost a walk: 71.8
+microseconds for HGET of a field not there in a restored listpack of 100 values of 70,000
+bytes, 23.5 now. The find is now told from `hb.find`'s indices (`hl.found`).
+
+`used_memory` a key over 2,000 hashes (Redis, main, the one string, the pieces):
+
+| hashes | Redis | main | one string | pieces |
+|---|---:|---:|---:|---:|
+| 512 pairs, fields `f0` to `f511`, values of 64 bytes | 41,066 | 53,600 | 36,460 | 37,789 |
+| 512 pairs of 64-byte fields and values | 82,026 | 90,465 | 67,422 | 71,614 |
+| 128 pairs of 64-byte fields and values | 20,586 | 22,877 | 17,117 | 19,068 |
+
+The pieces cost 4% to 11% more than the one string (a cell and a node a piece, and buffers
+not filled to their end), and stay below Redis. A hash of no more than 2,048 bytes is the
+one string as before, in the same bytes. A write asks its length once more (`hb.small`):
+at 10 pairs, HGET takes 7,473 instructions where the one string took 7,461, HGETALL 27,291
+(27,285), HSET of a field there 14,396 (14,301) and HSET of a new field 16,470 (16,408),
+with the same misses (callgrind as in *What it costs*, on b1e6846 and on the pieces).
+
+**Two traps.**
+
+- *A call that gives `str_eq` a value of its own.* The first version compared a field
+  with `str_eq(String.slice(...), f)`. The slice is a value the call gives away, so the
+  compiler made `str_eq` own its first argument, and every key the trie compares with it
+  then had to be given one. GET, SET and INCR took 3.8%, 8.1% and 8.3% more instructions
+  and a quarter more last-level misses (`make perfcheck`). `String.eq`, which borrows
+  both its arguments, keeps `str_eq` as it was (section 7).
+- *A collection taken out of the keyspace comes shared.* `db.upd` reads the entry's code
+  (`ent.code`) with a borrowed match on `Maybe<Item<Val>>`, a type laid out without a box,
+  which keeps the value it binds (section 8). The match that then takes the collection
+  apart takes a shared node and seals its fields (`span_fade`), the hash's string among
+  them. The runtime writes into the room of an unshared buffer only, so an HSET never
+  writes into the old string's own buffer: it links a chain (two nodes and a chunk) and
+  copies it. Read without binding the value, the code would leave the string unshared;
+  the list of a small hash before this change paid the same seal on its first cell.
+
+**Where BendKV differs.** Nothing a client sees changes.
+
+**Tests.** `tests/hash_test.py` in RESP2 and RESP3, the differential tests (seeds 1 to 3,
+and 4 in RESP3), `tests/dump_test.py`, the tests of SORT, of the administrative commands
+(MEMORY USAGE), of the keyspace and of the sessions, the concurrency checks, and the
+append-only file (a restart, Redis's and BendKV's files both ways, the rewrite). A
+listpack of fields and values of 254 to 70,000 bytes, restored from Redis's DUMP, then
+read, cut and written, answers as Redis does (18 commands), and as the server before
+this change once a write passes the limits (35 commands). `make check`, `make verdict`,
+`make smoke` and `make gencheck` pass.
+
+For the pieces, `tests/hash_test.py` gains:
+- a hash grown past a buffer a field at a time, its values made longer (a piece past a
+  buffer is dealt again) and shorter, its fields taken out from its front, its end and
+  its middle until it is small again, then grown again;
+- Redis's listpacks of 1,000, 3,000 and 70,000-byte values restored on both, read and
+  written;
+- after each, BendKV's DUMP restored in Redis, which must give the hash BendKV holds, in
+  its order;
+- random commands on two hashes of up to 150 and 80 fields, which pass 2,048 bytes and
+  come back below it.
+
+It passes on main's build too.
+
+## 3zzzo. A long request read in part
+
+**What was slow** (issue #85). One MSET of 300,000 keys, sent at once, took BendKV 12.7 s,
+and Redis 7.0.15 0.16 s; every other client waited meanwhile. The same bytes trickled in,
+64 KB a millisecond, took 15.0 s. An SADD of 300,000 members took 5.0 s (Redis 0.12 s),
+and an RPUSH of 64 values of 512 KB 2.7 s (Redis 0.05 s). A pipeline of 300,000 SETs, the
+same keys in separate requests, took 0.22 s (PERFORMANCE.md, section 75).
+
+**Why.** Section 3zzn made one parse of a long request take time in proportion to its
+length, and left it parsed again from its start after each read. A request longer than
+a read (64 KB) comes in many reads. Its parse stopped at its first bulk not whole yet and
+asked for the bytes that bulk lacked, a few, so the next read set a parse going again
+(`need`). Each parse also copied the request's bytes so far, from its start, as the tail
+kept for the next read, and read its windows out of that copy: a String of chunks of
+2,048 bytes, which a slice past its first chunk walks from its start (`str_slice_far`).
+For a request of n bytes that is about n / 64 KB parses of up to n bytes each. Under
+callgrind (the issue's comment), four times the keys took 15.8 times the instructions,
+and `str_slice_far` 54 times.
+
+**What changed.** The parse keeps what it has read of a long request, as Redis keeps
+`multibulklen` and `bulklen` from one read to the next (`src/resp.bend`, Long requests in
+part).
+
+- When the arguments of a request read through windows (`wbulks`) stop at a bulk not
+  whole yet, the parse leaves a `Part`: the command's number and name, how many bulks
+  come after that one, the arguments read before it, and the bytes the request was read
+  from so far.
+- The tail the connection keeps is that bulk's bytes alone (`TailPart`), not the
+  request's from its start. The next parse goes on from that bulk, with the arguments
+  it kept (`parse_part`), so each read is parsed once.
+- Once the request is whole, the requests after it in the same read are parsed in
+  windows, as in any buffer.
+- MONITOR reads a batch's arguments again from its bytes. The batch a long request ends
+  in holds the bytes of the reads before it too, before its own (`part.raw`), so that
+  its line shows every argument.
+- A short request not whole yet is parsed again from its start, as before
+  (`TailBytes`): its bytes fit in a window, and only the windowed path keeps a part. GET,
+  SET and INCR read their arguments their own way and keep none either: a SET of a long
+  value waits for the value's bytes (`need`) and is parsed once they are in.
+- The connection's loops (`src/server.bend`, the `conn_*` and `conn_sub.*` steps) carry a
+  `P.Tail` where they carried a String: none, the bytes of a short request not whole
+  yet, or a request read in part. `Tail` and `Part` each have a variant that holds
+  itself and is never built, so the compiler makes each a node of its own, and the
+  loops' steps carry one word for it, as before (section 8).
+
+The bytes of every reply and the protocol's errors are as they were, and so is when an
+error is answered: the parse goes on at the bulk where it stopped, and a bulk's header
+is read as soon as its line has come.
+
+**Tests.** `tests/protocol_test.py` compares 22 new cases with Redis byte for byte: a
+long RPUSH cut at each place a bulk can be cut (at its `$`, after it, inside its length,
+at its header's CR and LF, at its data, inside it, at the CR and the LF after it), in its
+last bulk, in three pieces, with a first piece shorter than a window, with requests
+after it in the same read, two long requests each cut, a bulk that is not one, a bad
+length and a length past 512 MB after a cut, a bulk whose two bytes after its data are
+not CRLF, an unknown command, an MSET and one of an odd count, and a SET of a long value.
+Each passes on main's build too. Then it times, on BendKV alone, one MSET of 200,000
+keys sent at once against a pipeline of as many SETs: the MSET must take at most five
+times as long, plus half a second. Main's build took 5.3 to 5.6 s against 0.11 to 0.15
+s, and failed; this one 0.6 to 0.7 s against 0.12 s. `tests/monitor_test.py` sends a
+long RPUSH in three reads and compares MONITOR's line with Redis's.
+
+**What it costs.** Each read of a long request is parsed once (PERFORMANCE.md, section 75): one MSET of
+120,000 keys takes 709 million instructions under callgrind, against 7,561 million on
+main, and four times the keys cost 4.5 times the instructions, against 15.6 times. The
+requests a read holds whole are parsed as before: `make perfcheck` gives GET 3,420, SET
+4,181 and INCR 4,527 instructions per request, against 3,418, 4,180 and 4,520 for main
+fc28490's build, and LPUSH, HSET, SADD and a pipelined MSET of 10 keys stay within 0.4%
+of main's counts.
+
+**What is left.** One MSET of 300,000 keys still takes 3.6 times Redis's time (0.58 s
+against 0.16 s), and a key of it 5,900 instructions, where a whole pipelined SET takes
+4,181. Where they go is not broken down here. Its path differs from a SET's in that its
+arguments go into a list, turned around once the request is whole and then read into the
+command, where GET, SET and INCR read theirs into the command directly.
+
+## 3zzzr. An eviction while a rewrite runs stops near the excess
+
+**What was left** (issue #100). With `maxmemory` set just below the memory used, an
+eviction that ran while BGREWRITEAOF ran went on for as long as the rewrite did. In
+maxmemory_test's scenario (300,000 keys of 8 bytes, the limit a tenth of the keys'
+share below the memory used) it left 14% of the keys after 3 s, where Redis 7.0.15
+leaves 87% whatever the wait. The test read DBSIZE after 0.5 s and wanted more than
+150,000 (3zw), and a fast runner went below that (CI on #92's merge: 128,352 left).
+
+**Why.** While a rewrite runs, its snapshot holds the databases' nodes, so a key
+evicted frees nothing. The eviction counts each key's MEMORY USAGE estimate as a debt
+(`evict.est`), and stops once the heap's used bytes, less the debt, are within
+maxmemory (`evict.over`). But each DEL copies the trie's path down to its key, and the
+snapshot holds the old nodes as well: the heap grew about as fast as the debt, and the
+condition held until the rewrite ended. In Redis, a fork's copy-on-write grows the
+parent's resident memory, not its `used_memory`.
+
+**What changed** (`src/server.bend`: Eviction). The eviction's state, `Evs`, keeps the
+heap's used bytes at its last reading. At each reading while a rewrite runs, what the
+heap grew by since then is owed too (`evs.grown`, `evs.heap`): no client's command
+runs inside an eviction, so that growth is the nodes its DELs copied, whose old ones
+the snapshot still holds. Without a rewrite nothing more is owed, as before: the old
+nodes are let go. The debt is paid as before when the rewrite ends (`mm.paid`), and an
+eviction after it measures the heap as it then is.
+
+**What it gives.** The scenario, DBSIZE after the wait, and again 0.5 s after the
+rewrite ended (the limit still set):
+
+| wait | keys left | after the rewrite's end |
+|---:|---:|---:|
+| 0.5 s | 272,737 (91%) | 238,161 (79%) |
+| 1 s | 267,796 (89%) | 238,215 (79%) |
+| 3 s | 238,262 (79%), the rewrite over at 1.43 s | 238,262 (79%) |
+| 6 s | 238,435 (79%) | 238,435 (79%) |
+| Redis 7.0.15, 0.5 s and 3 s | 261,471 and 261,472 (87%) | 261,164 and 261,472 |
+
+The rewrite now ends in 1.1 to 1.4 s, where the eviction that went on stretched it to
+3.7 s. Once it has ended, the eviction goes on from 91% to 79%: after a rewrite the heap
+holds about 8% of the keys' share more than before it, for the same keys, until they are
+set again (issue #102, on main as well). Without a rewrite, the same limit leaves 87%,
+on main and with the fix.
+
+**Tests.** maxmemory_test's scenario reads DBSIZE after 3 s, then again once the
+rewrite has ended with the limit still set, and wants more than 200,000 both times, and
+no more at the end than at 3 s. With the fix: 238,325, 238,453 and
+238,171 in three runs; on #92's build without it: 44,471 and 41,840.
+
+**What it costs.** Nothing on a request's path: the eviction's loop compares one more
+number at each reading of the heap. `make perfcheck`: GET 3,440, SET 4,208 and INCR 4,562
+instructions a request, within 0.3% of the baseline.
 
 ## 4. Where a request's time goes, and hiding the memory waits
 
