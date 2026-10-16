@@ -7737,8 +7737,8 @@ needed.
   `iw.view`: the drop of the first takes the last buffer as it is, the take of the first
   copies it): the find runs 7,367, a member's text 1,098. The view's reads call copies of
   the readers of one buffer (`iw.key.w`, `iw.text.w`), so that the reads of one buffer
-  keep their callers (section 7); a request on an intset of one buffer runs at most 3% more instructions than before the
-  view (SREM, SADD of a new member), most within 1%.
+  keep their callers (section 7); a request on an intset of one buffer runs at most 3%
+  more instructions than before the view (SREM, SADD of a new member), most within 1%.
 - DUMP and the RDB file write the header and the string: Redis's own bytes, whatever the
   history. Before, DUMP made the width anew from the members, narrower than Redis's
   after its widest member was taken out: `dump_test`'s new case "set shrunk from 64
@@ -7860,9 +7860,11 @@ for each member of the other. Members of one length whose last bytes are alike, 
 are each sliced out and compared whole; members that differ in length or in their last
 byte are passed by two reads. The pieces read each byte where they lie, and the misses
 stay low: a set's members are a few lines where the trie's were a path of nodes each.
-Redis 7.2's listpack walks its entries the same way, with fewer instructions a step
-(`lpFind`). The limits are Redis 7.2's, which Redis 8 keeps; lower ones would make the
-worst find shorter and the memory less of a gain.
+In time a find of the middle member of 128 still serves more requests than main's, and of
+the last fewer; SINTER serves more than main's, and far fewer than Redis 7.0.15's, whose
+hashtable finds a member at once (PERFORMANCE 77). Redis 7.2's listpack walks its entries
+the same way, with fewer instructions a step (`lpFind`). The limits are Redis 7.2's, which
+Redis 8 keeps; lower ones would make the worst find shorter and the memory less of a gain.
 
 **SADD of many members.** Each member walks the members before it and makes the string
 anew, so an SADD of k new members runs about k² steps where the trie's ran k paths.

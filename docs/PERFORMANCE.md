@@ -8105,6 +8105,28 @@ twentieth of its memory. Against Redis it serves SISMEMBER, SMEMBERS and both SA
 more instructions than the trie's but misses the cache half as often, and the reads of a
 whole set run fewer of both (FINDINGS 3zzzs).
 
+**Sets of 128 members** (20,000 sets of 128 members of 15 bytes, `m0000000m000000` to
+`m0000127m000012`, one string of 2,048 bytes each here, loaded by pipelined SADDs; then
+redis-benchmark as above: 1,000,000 SISMEMBER of the 64th member and 1,000,000 of the
+last, 50,000 SMEMBERS and 20,000 SINTER of two sets; three rounds in turn, the median of
+each):
+
+| per second, and memory | main | this change | Redis 7.0.15 |
+|---|---:|---:|---:|
+| `used_memory` a key | 54,783.6 | 2,303.5 | 9,374.8 |
+| SISMEMBER of the 64th member | 292,997 | 339,328 | 400,962 |
+| SISMEMBER of the last | 312,989 | 278,940 | 490,436 |
+| SMEMBERS | 14,108 | 57,143 | 61,275 |
+| SINTER of two sets | 6,618 | 10,091 | 41,494 |
+
+A find of the 64th member runs twice main's instructions and still serves 16% more
+requests than main's, as it misses the cache less; a find of the last runs three times
+main's and serves 11% fewer. SMEMBERS serves 4 times main's requests and SINTER 1.5
+times, in a twenty-fourth of main's memory and a quarter of Redis's. Against Redis 7.0.15
+this change serves 85% of its rate for the 64th member, 57% for the last, 93% for
+SMEMBERS and 24% for SINTER, which finds each member of one set in the other by a walk,
+where Redis's hashtable finds it at once.
+
 **Instructions** (FINDINGS 3zzzs: callgrind per request): on these sets SISMEMBER runs
 11% more than main's and half its last-level misses, SMEMBERS 56% fewer, SINTER 30%
 fewer, SSCAN 76% fewer; on sets of 128 members a find runs twice main's instructions and
