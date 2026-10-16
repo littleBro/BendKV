@@ -3569,9 +3569,11 @@ def ps.pend.put(xs: List<&2, R.Reply>, pb: Ps) -> Ps:
 # whose command runs, as Redis serves it: BLMOVE and BRPOPLPUSH change
 # their destination (lmoveHandlePush signals it; the key they popped from
 # was signalled by the push that made it ready, as serveClientBlockedOnList
-# says); BLMPOP's pop (listElementsRemoved), BZPOPMIN's, BZPOPMAX's and
-# BZMPOP's (genericZpopCommand) signal the key they popped from, and
-# BLPOP's and BRPOP's (form 1) do not. The invalidations the served
+# says), unless it holds another type: then they answer WRONGTYPE, change
+# nothing and signal nothing (ok is False); BLMPOP's pop
+# (listElementsRemoved), BZPOPMIN's, BZPOPMAX's and BZMPOP's
+# (genericZpopCommand) signal the key they popped from, and BLPOP's and
+# BRPOP's (form 1) do not. The invalidations the served
 # client gets after its reply (pend, newest first); those it gets as
 # another's go on its channel, before its reply (iv.route). Those for the
 # client out, whose command served it, go after that client's reply, with
@@ -3587,10 +3589,17 @@ def ps.trk.popped(on: Bool, +ks: List<&2, String>, +id: Nat, +out: Maybe<&2, Nat
     case _ _:
       pb
 
-def ps.trk.served.go(+pc: R.Cmd, +form: Nat, +id: Nat, +out: Maybe<&2, Nat>, pb: Ps) -> Ps:
+def ps.trk.moved(on: Bool, +d: String, +id: Nat, +out: Maybe<&2, Nat>, pb: Ps) -> Ps:
+  match on:
+    case True{}:
+      iv.ps(iv.key.as(d, id, out, True{}, iv.of(pb)))
+    case False{}:
+      pb
+
+def ps.trk.served.go(+pc: R.Cmd, +form: Nat, ok: Bool, +id: Nat, +out: Maybe<&2, Nat>, pb: Ps) -> Ps:
   match pc:
     case R.LMove{s, +d, e}:
-      iv.ps(iv.key.as(d, id, out, True{}, iv.of(pb)))
+      ps.trk.moved(ok, d, id, out, pb)
     case R.LMPop{+ks, l, n}:
       ps.trk.popped(Bool.not(Nat.is_eq(form, 1n)), ks, id, out, pb)
     case R.ZMPop{+ks, m, n}:
@@ -3608,20 +3617,20 @@ def pd.mk(p: List<&2, R.Reply> & Ps, old: List<&2, R.Reply>) -> Pd:
   (late, pb) = p
   pd.of(ps.pend.take(pb), late, old)
 
-def pd.aside(p: List<&2, R.Reply> & Ps, +pc: R.Cmd, +form: Nat, +id: Nat, +out: Nat) -> Pd:
+def pd.aside(p: List<&2, R.Reply> & Ps, +pc: R.Cmd, +form: Nat, ok: Bool, +id: Nat, +out: Nat) -> Pd:
   (old, pb) = p
-  pd.mk(ps.own.take(ps.trk.served.go(pc, form, id, Some{out}, pb)), old)
+  pd.mk(ps.own.take(ps.trk.served.go(pc, form, ok, id, Some{out}, pb)), old)
 
-def ps.trk.served.if(on: Bool, +pc: R.Cmd, +form: Nat, +id: Nat, +out: Nat, pb: Ps) -> Pd:
+def ps.trk.served.if(on: Bool, +pc: R.Cmd, +form: Nat, ok: Bool, +id: Nat, +out: Nat, pb: Ps) -> Pd:
   match on:
     case True{}:
-      pd.aside(ps.pend.take(pb), pc, form, id, out)
+      pd.aside(ps.pend.take(pb), pc, form, ok, id, out)
     case False{}:
       Pd{Nil{}, pb}
 
-def ps.trk.served(+pc: R.Cmd, +form: Nat, +id: Nat, +out: Nat, pb: Ps) -> Pd:
+def ps.trk.served(+pc: R.Cmd, +form: Nat, ok: Bool, +id: Nat, +out: Nat, pb: Ps) -> Pd:
   +p = pb
-  ps.trk.served.if(ps.trk.hot(p), pc, form, id, out, p)
+  ps.trk.served.if(ps.trk.hot(p), pc, form, ok, id, out, p)
 
 # The end of a group (Redis's beforeSleep): the keys changed under each
 # BCAST prefix to the clients that listen to it, each of them but the
@@ -4797,7 +4806,7 @@ def bg.popped(w: Waits, r: R.Reply & (List<&2, A.Eff> & R.Ds), rs: List<&2, R.Re
       (e, ds) = q
       +y = S.blk.shape(S.blk.form(b), x)
       +left = ws
-      bg.popped.up(ps.trk.served(pc, S.blk.form(b), id, S.conn.id(conn), pb), back, c0, c1, y, cmds, codes, av, e, ds, rs, es, conn, waits.count(left, S.srv.served(bg.errs(srv, code, y), id)), left, up, tx, pc, pre)
+      bg.popped.up(ps.trk.served(pc, S.blk.form(b), Bool.not(R.r_is_err(y)), id, S.conn.id(conn), pb), back, c0, c1, y, cmds, codes, av, e, ds, rs, es, conn, waits.count(left, S.srv.served(bg.errs(srv, code, y), id)), left, up, tx, pc, pre)
     case WaitNone{}:
       (x, q) = r
       (e, ds) = q
@@ -6583,6 +6592,13 @@ def pause.holds(+p: Pz, +mon: Bool, +c: R.Cmd, +code: Nat, +id: Nat, +tx: Tx) ->
     case PzOn{+all, end}:
       Bool.and(Bool.not(Bool.or(mon, Nat.is_eq(R.code.class(code), 1n))), Bool.or(all, Bool.or(code.pausable(code), pause.exec(c, id, tx))))
 
+# whether a SHUTDOWN that saves ran earlier in the group (ps.down 1, the
+# server's S.srv.rdb.shut set) and holds a command (code) back until its
+# save's result is known, as a pause of every command would: but a
+# monitor's, and one the parser refused (The RDB file: SHUTDOWN)
+def down.holds(+srv: S.Srv, +pb: Ps, +mon: Bool, +code: Nat) -> Bool:
+  Bool.and(Bool.and(Nat.is_eq(ps.down(pb), 1n), S.srv.rdb.shut(srv)), Bool.not(Bool.or(mon, Nat.is_eq(R.code.class(code), 1n))))
+
 # the clients the pause held back (hit: whether the first of ws is one),
 # in the order they came, their batches to go on (up, newest first), from
 # the command held back; the others kept in order (keep: those before,
@@ -7087,13 +7103,15 @@ def bg.exec(+id: Nat, +back: Chan(Ans), +inb: Nat, +code: Nat, g: LRun) -> LRun:
 # "Errors trying to SHUTDOWN. Check logs.", the rest of its batch going
 # on (its client waited for the save, as SAVE's does). As that save may
 # fail, the group goes on after such a SHUTDOWN without FORCE, its end
-# and ticks too, as after a SAVE: when the save ends well and the server
-# stops, the replies of the requests after it are not sent, and what they
-# wrote is in the files, written and not acknowledged, as a crash may
-# leave a write (Redis would not have run them). The registry of clients
-# keeps what the group asked for (ps.down), and bits 23 and 24 of Ps's ev
-# keep the batches after it off the fast way; the shell acts on it once
-# the group is run (db_group, aof_reply).
+# and ticks too, but its other clients' commands after it are held back
+# as a pause of every command holds them (down.holds): Redis saves and
+# exits within SHUTDOWN, so none of them runs, and none of what they
+# would write reaches either file. When the save ends well the server
+# stops and they are never answered; when it fails, they go on after
+# SHUTDOWN's client, in the order they came (grp.saved.down). The
+# registry of clients keeps what the group asked for (ps.down), and bits
+# 23 and 24 of Ps's ev keep the batches after it off the fast way; the
+# shell acts on it once the group is run (db_group, aof_reply).
 def bg.down.at(+d: Nat, g: LRun) -> LRun:
   match g:
     case LRun{rs, es, conn, srv, ds, ws, up, tx, pb}:
@@ -7197,7 +7215,7 @@ def bg.go(+id: Nat, +back: Chan(Ans), +inb: Nat, cmds: List<&2, R.Cmd>, codes: L
       +q = S.conn.quit(conn)
       +may = S.may(S.kind(c), conn, srv)
       +mo = ps.mon.is(id, pb)
-      +sh = sh.of(q, may, tx.multi(id, tx), Bool.and(ps.has(id, pb), Bool.not(S.conn.r3(conn))), mo, ps.oom.is(pb), pause.holds(ps.pz(pb), mo, c, k, id, tx), c, k, ds)
+      +sh = sh.of(q, may, tx.multi(id, tx), Bool.and(ps.has(id, pb), Bool.not(S.conn.r3(conn))), mo, ps.oom.is(pb), Bool.or(pause.holds(ps.pz(pb), mo, c, k, id, tx), down.holds(srv, pb, mo, k)), c, k, ds)
       +pre = bg.trk.pre(id, k, sh, q, may, pb)
       +a = trk.pre.av(pre, av)
       +ar = av.rest(a)
@@ -7778,13 +7796,14 @@ def evict.pick(+pol: Nat, mm: S.Mm, +ds: R.Ds, +n: Nat, +now: Nat, +start: U32) 
       evict.pooled(pol, mm, ds, n, now, start)
 
 # eviction's state as it goes: the server, the databases, the DELs of the
-# keys it evicted (newest first), and how many
+# keys it evicted (newest first), how many, and the heap's used bytes at
+# its last reading
 type Evs is Data:
-  Evs{srv: S.Srv, ds: R.Ds, es: List<&2, A.Ent>, n: Nat}
+  Evs{srv: S.Srv, ds: R.Ds, es: List<&2, A.Ent>, n: Nat, last: Nat}
 
 def evs.n(+x: Evs) -> Nat:
   match x:
-    case Evs{srv, ds, es, +n}:
+    case Evs{srv, ds, es, +n, last}:
       n
 
 # a key evicted, or none the policy may evict
@@ -7828,18 +7847,18 @@ def evict.pick.of(+rws: Bool, mm: S.Mm, +ds: R.Ds, +start: U32) -> Ed:
   evict.debt(evict.pick(S.mm.pol(m), m, ds, dbs.count(ds), R.ds.now(ds), start), rws, ds)
 
 # the key picked deleted: its DEL with the others, the server's debt up
-def evict.done(p: Ed, pass: String, cfg: List<&2, C.CItem>, info: I.Info, ds: R.Ds, es: List<&2, A.Ent>, +n: Nat) -> Ev1:
+def evict.done(p: Ed, pass: String, cfg: List<&2, C.CItem>, info: I.Info, ds: R.Ds, es: List<&2, A.Ent>, +n: Nat, +last: Nat) -> Ev1:
   match p:
     case Ed{mm, Vic{+j, +k}, +debt}:
-      EvOne{Evs{S.Srv{pass, cfg, info, S.mm.owe(mm, debt)}, evict.del(j, k, ds), A.EOne{A.EDb{j, R.Del{[k]}}} <> es, 1n+n}}
+      EvOne{Evs{S.Srv{pass, cfg, info, S.mm.owe(mm, debt)}, evict.del(j, k, ds), A.EOne{A.EDb{j, R.Del{[k]}}} <> es, 1n+n, last}}
     case Ed{mm, VicNone{}, debt}:
-      EvNone{Evs{S.Srv{pass, cfg, info, mm}, ds, es, n}}
+      EvNone{Evs{S.Srv{pass, cfg, info, mm}, ds, es, n, last}}
 
 # one key evicted (rws: while a rewrite runs)
 def evict.one(x: Evs, +rws: Bool) -> Ev1:
   match x:
-    case Evs{S.Srv{pass, cfg, +info, mm}, +ds, es, +n}:
-      evict.done(evict.pick.of(rws, mm, ds, I.info.start(info)), pass, cfg, info, ds, es, n)
+    case Evs{S.Srv{pass, cfg, +info, mm}, +ds, es, +n, +last}:
+      evict.done(evict.pick.of(rws, mm, ds, I.info.start(info)), pass, cfg, info, ds, es, n, last)
 
 # whether the heap's used bytes, less the debt, are past maxmemory (none
 # with maxmemory 0)
@@ -7849,14 +7868,36 @@ def evict.over(+used: Nat, +srv: S.Srv) -> Bool:
 
 def evs.over(+used: Nat, +x: Evs) -> Bool:
   match x:
-    case Evs{+srv, ds, es, n}:
+    case Evs{+srv, ds, es, n, last}:
       evict.over(used, srv)
 
-# the heap's reading kept in the server's state, for INFO (S.srv.heap)
-def evs.heap(+used: Nat, +act: Nat, x: Evs) -> Evs:
+# the debt up by b: what the snapshot of a rewrite that runs holds of
+# what the eviction let go (S.mm.owe)
+def evs.owe(srv: S.Srv, +b: Nat) -> S.Srv:
+  match srv:
+    case S.Srv{pass, cfg, info, mm}:
+      S.Srv{pass, cfg, info, S.mm.owe(mm, b)}
+
+# while a rewrite runs, what the heap grew by since the eviction's last
+# reading: no client's command runs inside the eviction, so this is the
+# nodes its DELs copied on the way to their keys, whose old ones the
+# snapshot still holds, as it holds the keys (evict.est); counted as debt,
+# or the eviction, its own copies growing the heap as fast as its debt,
+# would go on until the rewrite ends (issue #100). Without a rewrite the
+# old nodes are let go, and nothing is owed (a match, not Bool.pick).
+def evs.grown(rws: Bool, +used: Nat, +last: Nat) -> Nat:
+  match rws:
+    case True{}:
+      Nat.sub(used, last)
+    case False{}:
+      0n
+
+# the heap's reading kept in the server's state, for INFO (S.srv.heap),
+# and as the eviction's last; its growth while a rewrite runs owed
+def evs.heap(+used: Nat, +act: Nat, rws: Bool, x: Evs) -> Evs:
   match x:
-    case Evs{srv, ds, es, n}:
-      Evs{S.srv.heap(srv, used, act), ds, es, n}
+    case Evs{srv, ds, es, n, +last}:
+      Evs{evs.owe(S.srv.heap(srv, used, act), evs.grown(rws, used, last)), ds, es, n, used}
 
 # an eviction's outcome: 0 the heap within maxmemory (EVICT_OK), 1 keys
 # left to evict when its time ran out (EVICT_RUNNING), 2 none left that
@@ -7910,7 +7951,7 @@ def evict.heap(x: Evs, +rws: Bool, +s0: U32, +u0: U32, +lim: Nat) -> IO(Evd):
 
 @unsafe
 def evict.heap.at(+used: Nat, +act: Nat, x: Evs, +rws: Bool, +s0: U32, +u0: U32, +lim: Nat) -> IO(Evd):
-  +y = evs.heap(used, act, x)
+  +y = evs.heap(used, act, rws, x)
   evict.loop(evs.over(used, y), y, rws, s0, u0, lim)
 
 # the heap's reading taken apart, for evict.heap.at
@@ -7962,7 +8003,7 @@ def mem.grp(p: Ps & List<&2, Sigma<&2, &2, Chan(Ans), _ => Ans>>, es: List<&2, A
 
 def mem.done(d: Evd, ws: Waits, tx: Tx, pb: Ps) -> Grp:
   match d:
-    case Evd{+res, Evs{srv, +ds, +es, +n}}:
+    case Evd{+res, Evs{srv, +ds, +es, +n, last}}:
       mem.grp(ps.flush(ps.evicted(es, ps.trk.gone(es, ds, ps.mem(pb, res))), Nil{}), es, S.srv.evicted(srv, n, Nat.is_lt(0n, res), R.ds.now(ds)), ds, ws, touch.ents(tx, es, None{}, ds))
 
 # Redis's warning for a CONFIG SET that set maxmemory below the memory in
@@ -7983,7 +8024,7 @@ def mem.ok(was: Bool, srv: S.Srv, ds: R.Ds, ws: Waits, tx: Tx, pb: Ps) -> Grp:
     case False{}:
       Grp{Nil{}, Nil{}, srv, ds, ws, Nil{}, tx, pb}
     case True{}:
-      mem.done(Evd{0n, Evs{srv, ds, Nil{}, 0n}}, ws, tx, pb)
+      mem.done(Evd{0n, Evs{srv, ds, Nil{}, 0n, 0n}}, ws, tx, pb)
 
 def ps.mem.was(+pb: Ps) -> Bool:
   match pb:
@@ -8010,7 +8051,7 @@ def mem.run.w(w: Nat, +used: Nat, +s0: U32, +u0: U32, srv: S.Srv, ds: R.Ds, ws: 
         mem.run.k(used, s0, u0, S.srv.kicked(sv), ds, ws, tx, pb, rws, pid)
     case _:
       +sv = srv
-      evict.go(S.srv.pol(sv), Evs{sv, ds, Nil{}, 0n}, ws, tx, pb, rws, s0, u0, evict.limit(S.srv.ten(sv)))
+      evict.go(S.srv.pol(sv), Evs{sv, ds, Nil{}, 0n, used}, ws, tx, pb, rws, s0, u0, evict.limit(S.srv.ten(sv)))
 
 @unsafe
 def mem.run.k(+used: Nat, +s0: U32, +u0: U32, srv: S.Srv, ds: R.Ds, ws: Waits, tx: Tx, pb: Ps, +rws: Bool, +pid: U32) -> IO(Grp):
@@ -8865,7 +8906,7 @@ def db_shut.end(ok: Bool, +force: Bool, +ok1: Bool, +srv: S.Srv, outs: List<&2, 
     case False{} False{}:
       do IO<Unit>:
         Unit <- down.cant(down.lg(srv, rw))
-        db_group(grp.saved(ok1, outs, S.srv.rw.stop(srv), ds, ws, tx, pb), rw.with(rw, None{}), reqs)
+        db_group(grp.saved.down(ok1, outs, S.srv.rw.stop(srv), ds, ws, tx, pb), rw.with(rw, None{}), reqs)
 
 @unsafe
 def db_shut(p: S.Srv & Bool, +force: Bool, outs: List<&2, Sigma<&2, &2, Chan(Ans), _ => Ans>>, +ds: R.Ds, ws: Waits, tx: Tx, pb: Ps, +rw: Rw, +reqs: Chan(Req)) -> IO(Unit):
@@ -10523,7 +10564,7 @@ def aof_shut.end(ok: Bool, +force: Bool, +ok1: Bool, +srv: S.Srv, outs: List<&2,
     case False{} False{}:
       do IO<Unit>:
         Unit <- down.cant(down.lg(srv, rw))
-        aof_group(grp.saved(ok1, List.reverse(&2, Sigma<&2, &2, Chan(Ans), _ => Ans>, outs), S.srv.rw.stop(srv), ds, ws, tx, pb), sel, rw.with(rw, None{}), f, sync, reqs)
+        aof_group(grp.saved.down(ok1, List.reverse(&2, Sigma<&2, &2, Chan(Ans), _ => Ans>, outs), S.srv.rw.stop(srv), ds, ws, tx, pb), sel, rw.with(rw, None{}), f, sync, reqs)
 
 @unsafe
 def aof_shut.go(p: S.Srv & Bool, +force: Bool, outs: List<&2, Sigma<&2, &2, Chan(Ans), _ => Ans>>, +ds: R.Ds, +sel: Nat, ws: Waits, tx: Tx, pb: Ps, +rw: Rw, f: File, +sync: Sync, +reqs: Chan(Req)) -> IO(Unit):
@@ -11918,6 +11959,25 @@ def grp.saved.of(p: Waits & (List<&2, Up> & S.Srv), outs: List<&2, Sigma<&2, &2,
 def grp.saved(+ok: Bool, outs: List<&2, Sigma<&2, &2, Chan(Ans), _ => Ans>>, srv: S.Srv, ds: R.Ds, +ws: Waits, tx: Tx, pb: Ps) -> Grp:
   grp.saved.of(waits.saved(ws, waits.saving(ws), ok, WaitNone{}, Nil{}, srv), outs, ds, tx, pb)
 
+# a SHUTDOWN's save failed: as grp.saved, and then the clients its save
+# held back (down.holds) go on after them, in the order they came; but
+# while a pause holds, they wait for its end, as the pause's own do
+def saved.free(p: Waits & List<&2, Up>, srv: S.Srv) -> Waits & (List<&2, Up> & S.Srv):
+  (ws, up) = p
+  (ws, (up, srv))
+
+def grp.saved.free(on: Bool, p: Waits & (List<&2, Up> & S.Srv), outs: List<&2, Sigma<&2, &2, Chan(Ans), _ => Ans>>, ds: R.Ds, tx: Tx, pb: Ps) -> Grp:
+  match on:
+    case True{}:
+      grp.saved.of(p, outs, ds, tx, pb)
+    case False{}:
+      (+ws, q) = p
+      (up, srv) = q
+      grp.saved.of(saved.free(waits.unpause(ws, waits.held(ws), WaitNone{}, up), srv), outs, ds, tx, pb)
+
+def grp.saved.down(+ok: Bool, outs: List<&2, Sigma<&2, &2, Chan(Ans), _ => Ans>>, srv: S.Srv, ds: R.Ds, +ws: Waits, tx: Tx, +pb: Ps) -> Grp:
+  grp.saved.free(pz.on(ps.pz(pb)), waits.saved(ws, waits.saving(ws), ok, WaitNone{}, Nil{}, srv), outs, ds, tx, pb)
+
 # The start: without an append-only file (and not in the short form), the
 # file loaded, as loadDataFromDisk loads it: a file not there is empty
 # databases; one that cannot be opened stops the start, as one that does
@@ -11970,38 +12030,79 @@ def rdb.loaded(d: D.FLd, +t0: Nat, +lg: Log, info: I.Info, +more: Nat) -> IO(R.D
         Unit <- log(lg, 2, "DB loaded from disk: " ++ secs3(Nat.sub(t1, t0)) ++ " seconds")
         IO.pure(R.Ds & I.Info, (rdb.ds(dbs, more), I.info.rdb.loaded(info, ld, ex)))
 
-# the file's bytes, read until a read comes back empty; a read that fails
-# stops the start as a short read does
-@unsafe
-def rdb.read(f: File, got: List<&2, String>, +lg: Log) -> IO(File & String):
-  do IO<File & String>:
-    p : File & Result<&1, &1, U32 & String, String> <- File.read_raw(f, 16777216)
-    rdb.read.more(p, got, lg)
+# The file read in windows (issue #107): 1 MiB at a time, or as many bytes
+# as the window held when a value runs past it (the window doubles), so
+# that the start holds a window and the databases it fills, not the file
+# (the heap gives no memory back: a file read whole stayed resident). A
+# window's bytes the load has gone past go into the CRC64 before the next
+# one is read; its last bytes, up to EOF, once the load is done.
+def rdb.window() -> Nat:
+  1048576n
+
+def rdb.w.size(+left: Nat) -> U32:
+  U32.from_nat(Nat.max(rdb.window(), left))
+
+def rdb.w.crc(sum: Bool, +k: Nat, +w: String, c: D.C) -> D.C:
+  match sum:
+    case True{}:
+      D.crc.k(k, w, c)
+    case False{}:
+      c
 
 @unsafe
-def rdb.read.more(p: File & Result<&1, &1, U32 & String, String>, got: List<&2, String>, +lg: Log) -> IO(File & String):
+def rdb.w.more(eof: Bool, +x: String, f: File, r: D.FR, fail: D.FLd, c: D.C, +left: String, +base: Nat, +llen: Nat, +sum: Bool, +t0: Nat, +lg: Log, info: I.Info, +more: Nat) -> IO(R.Ds & I.Info):
+  match eof:
+    case True{}:
+      do IO<R.Ds & I.Info>:
+        Unit <- File.close(f)
+        rdb.loaded(fail, t0, lg, info, more)
+    case False{}:
+      +xlen = String.length(x)
+      +w = left ++ x
+      rdb.w.went(D.file.next(r, w, Nat.add(llen, xlen), xlen), f, c, w, base, Nat.add(llen, xlen), sum, t0, lg, info, more)
+
+@unsafe
+def rdb.w.read(p: File & Result<&1, &1, U32 & String, String>, r: D.FR, fail: D.FLd, c: D.C, +left: String, +base: Nat, +llen: Nat, +sum: Bool, +t0: Nat, +lg: Log, info: I.Info, +more: Nat) -> IO(R.Ds & I.Info):
+  (f, q) = p
+  match q:
+    case Fail{e}:
+      log.die(R.Ds & I.Info, lg, "Short read or OOM loading DB. Unrecoverable error, aborting now.")
+    case Done{+x}:
+      rdb.w.more(String.is_empty(x), x, f, r, fail, c, left, base, llen, sum, t0, lg, info, more)
+
+# the load s on the window w (wlen bytes, at the file's offset base), the
+# CRC64 of the bytes before it c
+@unsafe
+def rdb.w.went(s: D.FS, f: File, c: D.C, +w: String, +base: Nat, +wlen: Nat, +sum: Bool, +t0: Nat, +lg: Log, info: I.Info, +more: Nat) -> IO(R.Ds & I.Info):
+  match s:
+    case D.FEnd{d}:
+      do IO<R.Ds & I.Info>:
+        Unit <- File.close(f)
+        rdb.loaded(D.file.checked(d, c, w, base), t0, lg, info, more)
+    case D.FMore{+r, fail}:
+      +left = D.file.left(r)
+      +llen = String.length(left)
+      +used = Nat.sub(wlen, llen)
+      do IO<R.Ds & I.Info>:
+        p : File & Result<&1, &1, U32 & String, String> <- File.read_raw(f, rdb.w.size(llen))
+        rdb.w.read(p, r, fail, rdb.w.crc(sum, used, w, c), left, Nat.add(base, used), llen, sum, t0, lg, info, more)
+    case D.FGo{r}:
+      do IO<R.Ds & I.Info>:
+        Unit <- File.close(f)
+        rdb.loaded(D.file.end(D.FGo{r}), t0, lg, info, more)
+
+@unsafe
+def rdb.w.first(p: File & Result<&1, &1, U32 & String, String>, +t0: Nat, +lg: Log, +items: List<&2, C.CItem>, info: I.Info, +more: Nat) -> IO(R.Ds & I.Info):
   (f, r) = p
   match r:
     case Fail{e}:
-      log.die(File & String, lg, "Short read or OOM loading DB. Unrecoverable error, aborting now.")
+      log.die(R.Ds & I.Info, lg, "Short read or OOM loading DB. Unrecoverable error, aborting now.")
     case Done{+x}:
-      rdb.read.next(f, String.is_empty(x), x, got, lg)
-
-@unsafe
-def rdb.read.next(f: File, eof: Bool, x: String, got: List<&2, String>, +lg: Log) -> IO(File & String):
-  match eof:
-    case True{}:
-      IO.pure(File & String, (f, glue(got, SNil{})))
-    case False{}:
-      rdb.read(f, x <> got, lg)
-
-@unsafe
-def rdb.start.read(p: File & String, +t0: Nat, +lg: Log, +items: List<&2, C.CItem>, info: I.Info, +more: Nat) -> IO(R.Ds & I.Info):
-  (f, +s) = p
-  do IO<R.Ds & I.Info>:
-    Unit <- File.close(f)
-    t : U32 & U32 <- IO.clock()
-    rdb.loaded(D.file.load(s, 1n+more, clock.ms(t), String.eq(T.cfg(items, "rdbchecksum"), "yes")), t0, lg, info, more)
+      +xlen = String.length(x)
+      +sum = String.eq(T.cfg(items, "rdbchecksum"), "yes")
+      do IO<R.Ds & I.Info>:
+        t : U32 & U32 <- IO.clock()
+        rdb.w.went(D.file.first(x, xlen, 1n+more, clock.ms(t), sum), f, D.C{0, 0}, x, 0n, xlen, sum, t0, lg, info, more)
 
 @unsafe
 def rdb.start.none(none: Bool, +msg: String, +lg: Log, info: I.Info, +more: Nat) -> IO(R.Ds & I.Info):
@@ -12020,8 +12121,8 @@ def rdb.start.open(m: Result<&1, &1, U32 & String, File>, +lg: Log, +items: List
     case Done{f}:
       do IO<R.Ds & I.Info>:
         t0 : Nat <- IO.now()
-        p : File & String <- rdb.read(f, Nil{}, lg)
-        rdb.start.read(p, t0, lg, items, info, more)
+        p : File & Result<&1, &1, U32 & String, String> <- File.read_raw(f, U32.from_nat(rdb.window()))
+        rdb.w.first(p, t0, lg, items, info, more)
 
 # the databases at the start (1 + more of them), and the server's facts
 # with the keys the load loaded and found expired

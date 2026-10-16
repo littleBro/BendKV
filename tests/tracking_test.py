@@ -27,7 +27,7 @@ LIST's lines cut to their ids, flags and redirects).
   the table's limit (tracking-table-max-keys: which keys go is random,
   so their number).
 - A client served by BLMOVE: its destination's invalidation after its
-  reply. Clients served by BLMPOP, BZPOPMIN and BZMPOP: the key they
+  reply, and none when the destination holds another type (WRONGTYPE). Clients served by BLMPOP, BZPOPMIN and BZMPOP: the key they
   popped from invalidated (BLPOP's and BRPOP's is not), after another
   client read it again in a transaction; in BCAST mode with NOLOOP, the
   served client's own change.
@@ -604,6 +604,14 @@ def blocked(r):
     r.do(t, "CLIENT", "TRACKING", "on", "NOLOOP")
     r.do(t, "BLMOVE", "src", "dst", "LEFT", "RIGHT", "0")
     r.do(b, "LPUSH", "src", "w")
+    # a served BLMOVE whose destination holds another type answers
+    # WRONGTYPE, changes nothing and invalidates nothing
+    r.do(b, "SET", "dstr", "x")
+    r.do(u, "GET", "dstr")
+    r.do(t, "BLMOVE", "src2", "dstr", "LEFT", "LEFT", "0")
+    r.do(b, "RPUSH", "src2", "a")
+    r.do(u, "GET", "dstr")
+    r.do(b, "LRANGE", "src2", "0", "-1")
 
 
 SCENARIOS = [("errors", errors), ("self, RESP3", self_resp3), ("keys of reads", reads), ("redirects", redirects),

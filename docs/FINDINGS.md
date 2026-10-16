@@ -5978,7 +5978,9 @@ keys and eviction invalidate the keys they delete as no client's change.
 The client whose command runs gets its own invalidations after its reply: after EXEC's
 for EXEC's commands, and after its reply for a client that a blocking command serves.
 Redis keeps them for after the call. A served BLMOVE or BRPOPLPUSH changes its
-destination; a served BLMPOP, BZPOPMIN, BZPOPMAX or BZMPOP changes the key it popped from;
+destination, unless that holds another type: then it answers WRONGTYPE, changes nothing
+and invalidates nothing, as Redis serves it (`serveClientBlockedOnList` gives up before
+`lmoveHandlePush`); a served BLMPOP, BZPOPMIN, BZPOPMAX or BZMPOP changes the key it popped from;
 a served BLPOP or BRPOP changes nothing more, as Redis signals each (its push made the key
 ready). LMOVE's and RPOPLPUSH's destination goes before their source, as Redis signals
 them. One it gets as the client another redirects to comes before its
@@ -6047,7 +6049,10 @@ parameter by its name.
   writes before that command's reply. Redis writes it where the command signals the key:
   before the reply for SET, DEL, SADD, INCR, APPEND and SETRANGE, which signal first,
   and after it for the commands that reply first, as ZADD, ZINCRBY, HSET, HINCRBY, LPUSH
-  and RPUSH do (`addReply` before `signalModifiedKey`).
+  and RPUSH do (`addReply` before `signalModifiedKey`), and as a served BLMPOP does
+  (`listPopRangeAndReplyWithKey`). For a served BZPOPMIN, BZPOPMAX or BZMPOP, Redis writes
+  it inside the reply's array, after its header: `genericZpopCommand` signals the key as it
+  pops the first member, between the array's length and its elements.
 
 **What it costs** (PERFORMANCE 66).
 
@@ -6366,11 +6371,10 @@ pass.
   a SHUTDOWN SAVE and another client's FLUSHALL in one group give Redis a file of the
   keys and BendKV an empty one. The databases are values that do not change, so the
   save could take them at SAVE's place in the group; that is left for later.
-- After a SHUTDOWN that saves, the other clients' requests of its group run before the
-  save (above). What they write reaches the append-only file and the RDB file, and they
-  get no reply, where Redis ends inside the SHUTDOWN and runs none of them. Holding them
-  until the save's result is known is issue #84. With Redis's default save points every
-  SHUTDOWN without NOSAVE saves, so this becomes the usual case.
+- After a SHUTDOWN that saves, the other clients' requests of its group ran before the
+  save (above): what they wrote reached the append-only file and the RDB file, and they
+  got no reply, where Redis ends inside the SHUTDOWN and runs none of them. Section
+  3zzzl holds them until the save's result is known (issue #84).
 - After a start from the file, INFO's replication section and ROLE give an offset of 0.
   Redis makes its backlog before it loads (`loadDataFromDisk`) and feeds it a SELECT and
   a DEL for each key whose time had passed, so its `master_repl_offset` counts their
@@ -6587,6 +6591,40 @@ order.
 
 **Tests.** `tests/timing_test.py`, `tests/stats_test.py` and `tests/info_test.py` against
 Redis: commandstats, latencystats, errorstats and the slow log, unchanged.
+
+## 3zzzl. A SHUTDOWN that saves holds the rest of its group
+
+**What failed** (issue #84, found by the review of #72). A SHUTDOWN that saves (SAVE,
+or save points without NOSAVE) asks the shell for its save once the group has run
+(`ps.down` 1), as the save may fail and the server must then go on. So the other
+clients' requests after it in the group ran: what they wrote reached the append-only
+file and the RDB file, and when the save ended well the server stopped without
+answering them. Redis saves and exits within SHUTDOWN (`finishShutdown`), and none of
+them runs. With save points, client A's SHUTDOWN and client B's FLUSHALL in one group
+left BendKV with no key after the restart, with and without the append-only file;
+Redis kept the key. No write that was acknowledged was lost, but the files were not
+Redis's, and with Redis's default save points every SHUTDOWN without NOSAVE saves.
+
+**The change** (`src/server.bend`: The RDB file, The pause). While such a SHUTDOWN
+waits for its save, the commands after it are held back as a pause of every command
+holds them (`down.holds`, next to `pause.holds`): each client waits from its command,
+with the rest of its batch, uncounted. A monitor's command and one the parser refused
+are not held, as a pause holds neither. When the save ends well, the server stops and
+the held clients are never answered, as Redis's. When it fails, SHUTDOWN's client is
+answered Redis's error and goes on, then the held clients go on, in the order they came
+(`grp.saved.down`, on both the path with the append-only file and the one without).
+While a pause holds, they wait for its end instead, as the pause's own clients do: a
+read that Redis would run at once after the failed SHUTDOWN then waits for the pause too.
+
+**Tests.** `tests/rdb_test.py` puts A's SHUTDOWN and B's FLUSHALL in one group with a
+pause (section 3zzzc). With save points, with the append-only file too, and with
+SHUTDOWN SAVE, the restart holds the key on both servers; before the change, all three
+held none on BendKV. With a save that fails, SHUTDOWN answers its error and the FLUSHALL
+then runs and is answered, on both. 132 checks.
+
+**What it cost.** Nothing measurable: the check runs only on a batch the general way
+(`bg.go`). `make perfcheck` gives GET 3,414, SET 4,181 and INCR 4,525 instructions per
+request, against 3,416, 4,177 and 4,518 for the build before the change: within 0.2%.
 
 ## 3zzzm. Small hashes in one string, as a listpack
 
@@ -6877,6 +6915,108 @@ against 0.16 s), and a key of it 5,900 instructions, where a whole pipelined SET
 4,181. Where they go is not broken down here. Its path differs from a SET's in that its
 arguments go into a list, turned around once the request is whole and then read into the
 command, where GET, SET and INCR read theirs into the command directly.
+
+## 3zzzr. An eviction while a rewrite runs stops near the excess
+
+**What was left** (issue #100). With `maxmemory` set just below the memory used, an
+eviction that ran while BGREWRITEAOF ran went on for as long as the rewrite did. In
+maxmemory_test's scenario (300,000 keys of 8 bytes, the limit a tenth of the keys'
+share below the memory used) it left 14% of the keys after 3 s, where Redis 7.0.15
+leaves 87% whatever the wait. The test read DBSIZE after 0.5 s and wanted more than
+150,000 (3zw), and a fast runner went below that (CI on #92's merge: 128,352 left).
+
+**Why.** While a rewrite runs, its snapshot holds the databases' nodes, so a key
+evicted frees nothing. The eviction counts each key's MEMORY USAGE estimate as a debt
+(`evict.est`), and stops once the heap's used bytes, less the debt, are within
+maxmemory (`evict.over`). But each DEL copies the trie's path down to its key, and the
+snapshot holds the old nodes as well: the heap grew about as fast as the debt, and the
+condition held until the rewrite ended. In Redis, a fork's copy-on-write grows the
+parent's resident memory, not its `used_memory`.
+
+**What changed** (`src/server.bend`: Eviction). The eviction's state, `Evs`, keeps the
+heap's used bytes at its last reading. At each reading while a rewrite runs, what the
+heap grew by since then is owed too (`evs.grown`, `evs.heap`): no client's command
+runs inside an eviction, so that growth is the nodes its DELs copied, whose old ones
+the snapshot still holds. Without a rewrite nothing more is owed, as before: the old
+nodes are let go. The debt is paid as before when the rewrite ends (`mm.paid`), and an
+eviction after it measures the heap as it then is.
+
+**What it gives.** The scenario, DBSIZE after the wait, and again 0.5 s after the
+rewrite ended (the limit still set):
+
+| wait | keys left | after the rewrite's end |
+|---:|---:|---:|
+| 0.5 s | 272,737 (91%) | 238,161 (79%) |
+| 1 s | 267,796 (89%) | 238,215 (79%) |
+| 3 s | 238,262 (79%), the rewrite over at 1.43 s | 238,262 (79%) |
+| 6 s | 238,435 (79%) | 238,435 (79%) |
+| Redis 7.0.15, 0.5 s and 3 s | 261,471 and 261,472 (87%) | 261,164 and 261,472 |
+
+The rewrite now ends in 1.1 to 1.4 s, where the eviction that went on stretched it to
+3.7 s. Once it has ended, the eviction goes on from 91% to 79%: after a rewrite the heap
+holds about 8% of the keys' share more than before it, for the same keys, until they are
+set again (issue #102, on main as well). Without a rewrite, the same limit leaves 87%,
+on main and with the fix.
+
+**Tests.** maxmemory_test's scenario reads DBSIZE after 3 s, then again once the
+rewrite has ended with the limit still set, and wants more than 200,000 both times, and
+no more at the end than at 3 s. With the fix: 238,325, 238,453 and
+238,171 in three runs; on #92's build without it: 44,471 and 41,840.
+
+**What it costs.** Nothing on a request's path: the eviction's loop compares one more
+number at each reading of the heap. `make perfcheck`: GET 3,440, SET 4,208 and INCR 4,562
+instructions a request, within 0.3% of the baseline.
+
+## 3zzzt. The start reads its RDB file in windows
+
+**What was left** (issue #107). The RDB file's start (3zzzc) read `dump.rdb` whole into
+one string, then parsed it. The heap gives no memory back to the system, so the server
+kept, for good, the file's bytes and the parse's peak beside the databases it built:
+344.5 MB resident after a start from a file of a million keys of 100 bytes (108.6 MB),
+where the same keys written by commands take 194.6 MB, and Redis 191.3 MB after its start
+(PERFORMANCE 78). A move from Redis goes through this file, and with save points so does
+every restart.
+
+**What changed** (`src/rdb.bend`: Reading the file; `src/server.bend`: The RDB file on
+the disk).
+- **A step that runs out of bytes** no longer ends the load. Each step reads an opcode
+  and what follows it from the bytes left; one that cannot gives back the load as it was
+  before it, `FMore{r, fail}`, to be run again from its start once more bytes are there,
+  with what the load comes to if the file has no more: the short read's lines, or a
+  value's "cut short" ones, as before. The steps of the times and of EOF are given the
+  time and the counts of the load for that, which they used to drop.
+- **The start** reads the file 1 MiB at a time (`rdb.window`). When a step stops for
+  more, the next read is of 1 MiB or of as many bytes as are left, whichever is more: a
+  value longer than a window (a string of 3 MiB, a set of 120,000 members) is read in as
+  many reads as it takes doublings, and parsed once it is whole. What the start holds at
+  once is a window and the databases it builds.
+- **The CRC64** is taken of each window's bytes the load went past, before the next read,
+  and of the last window's up to EOF once the load is done (`file.checked`): the same
+  bytes, so the same verdict and the same lines when it is wrong.
+- `file.load`, the load of a file read whole, stays, built on the same steps.
+
+**What it gives** (PERFORMANCE 78). Resident memory after the start is that of the keys
+written by commands, within 4%: 200.9 MB for the million keys (344.5 before), 79.3 MB for
+300,000 (140.5). The start is faster as well, the file no longer joined from its reads
+and walked whole for its checksum: 1.66 s for the million keys (2.02 s before, Redis
+1.08 s), 0.30 s for 300,000 (0.50 s, Redis 0.34 s).
+
+**Tests.** `tests/rdb_test.py`'s new scenario, of 15 checks:
+- a file Redis wrote of 10.1 MB, with a string of 3 MiB, a list of 60,000 elements, a set
+  of 120,000 members and a hash of 30,000 fields beside 20,000 small keys: both servers
+  start from it with the same databases;
+- the file cut a byte past the first window (inside the long string), cut half way, and
+  cut in its checksum; and a byte of the long string changed, so that only the CRC64
+  tells: both servers exit 1 with the same lines;
+- BendKV alone: 300,000 keys of 100 bytes written by commands, SAVE, a start from the
+  file: resident memory at most 1.3 times what it was. Main's build fails it: 140.5 MB
+  against 76.1 MB.
+
+The other 124 checks pass as before, among them the files of 16.9 MB both ways, which the
+start now reads in 17 windows.
+
+**What it costs.** Nothing on a request's path: `make perfcheck` gives GET 3,491, SET
+4,235 and INCR 4,577 instructions a request, within 1.1% of the baseline.
 
 ## 4. Where a request's time goes, and hiding the memory waits
 
