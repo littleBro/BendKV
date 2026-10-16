@@ -10665,12 +10665,16 @@ def hex8.go(n: Nat, +x: U32, acc: String) -> String:
     case 1n+m:
       hex8.go(m, U32.div(x, 16), SCon{T.hex.digit(U32.and(x, 15)), acc})
 
-def hex.word(r: Result<&1, &1, U32 & String, U32>) -> String:
+# a random word in 8 hex digits; one that getrandom could not give is
+# made from the clock and the pid (alt), as Redis seeds its random bytes
+# from them when /dev/urandom cannot be read (getRandomBytes): weaker,
+# but neither zero nor the same from one start to the next
+def hex.word(r: Result<&1, &1, U32 & String, U32>, +alt: U32) -> String:
   match r:
     case Done{+x}:
       hex8.go(8n, x, "")
     case Fail{e}:
-      "00000000"
+      hex8.go(8n, alt, "")
 
 def boot.of(+o1: String, +o2: String, +o3: String, +mem: String, h: Nat & Nat, run: String, rep: String, key: String, t: U32 & U32, +pid: U32, exe: String, conf: String) -> I.Boot:
   (heap, act) = h
@@ -10694,6 +10698,11 @@ def proc.text(+path: String) -> IO(String):
     m : Result<&1, &1, U32 & String, File> <- File.open(path, "r")
     proc.got(m)
 
+def hex40.of(a: Result<&1, &1, U32 & String, U32>, b: Result<&1, &1, U32 & String, U32>, c: Result<&1, &1, U32 & String, U32>, d: Result<&1, &1, U32 & String, U32>, e: Result<&1, &1, U32 & String, U32>, t: U32 & U32, +pid: U32) -> String:
+  (secs, us) = t
+  +x = U32.xor(U32.xor(secs, U32.mul(us, 2654435761)), pid)
+  hex.word(a, KV.mix(x)) ++ hex.word(b, KV.mix(U32.add(x, 1))) ++ hex.word(c, KV.mix(U32.add(x, 2))) ++ hex.word(d, KV.mix(U32.add(x, 3))) ++ hex.word(e, KV.mix(U32.add(x, 4)))
+
 # 40 hex digits at random, as Redis's run and replication ids
 @unsafe
 def hex40() -> IO(String):
@@ -10703,7 +10712,9 @@ def hex40() -> IO(String):
     c : Result<&1, &1, U32 & String, U32> <- IO.random_u32()
     d : Result<&1, &1, U32 & String, U32> <- IO.random_u32()
     e : Result<&1, &1, U32 & String, U32> <- IO.random_u32()
-    return hex.word(a) ++ hex.word(b) ++ hex.word(c) ++ hex.word(d) ++ hex.word(e)
+    t : U32 & U32 <- IO.clock()
+    pid : U32 <- IO.pid()
+    return hex40.of(a, b, c, d, e, t, pid)
 
 # the facts now (the main thread's id is the pid)
 @unsafe

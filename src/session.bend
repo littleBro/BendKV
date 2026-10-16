@@ -71,10 +71,12 @@ type Mm is Data:
   Mm{rng: U32, max: Nat, pol: Nat, smp: Nat, ten: Nat, lfl: Nat, lfd: Nat, kick: Bool, pool: List<&2, Pe>, next: Nat, debt: Nat, acl: U.Acl}
   MmOf{m: Mm}
 
-# the server, besides its database: its password (empty for none), its
-# parameters (config.bend), of which requirepass is the password, what
-# INFO shows of it that they do not (info.bend), and what it keeps for
-# maxmemory, with its random numbers (Mm)
+# the server, besides its database: the requirepass it was last given
+# (pass), its parameters (config.bend), what INFO shows of it that they
+# do not (info.bend), and what it keeps for maxmemory, with its random
+# numbers and its users (Mm). The users decide who must authenticate: a
+# client must when the default user is off, or on without nopass; and
+# requirepass is the default user's password (acl.bend)
 type Srv is Data:
   Srv{pass: String, cfg: List<&2, C.CItem>, info: I.Info, mm: Mm}
 
@@ -430,8 +432,8 @@ def acc.idle(+w: U32, +now: Nat, +start: U32) -> Nat:
 def srv.timing(i: I.Info, +cfg: List<&2, C.CItem>) -> I.Info:
   I.info.cfg(i, cfg)
 
-# the server with these parameters: its password is requirepass; its
-# random numbers start from its run id
+# the server with these parameters: its default user's password is
+# requirepass; its random numbers start from its run id
 def srv_of(+cfg: List<&2, C.CItem>, info: I.Info) -> Srv:
   +i = info
   +r = I.info.seed(i)

@@ -1566,7 +1566,7 @@ def acl.set.done(r: Applied, a: Acl, old: Maybe<&2, User>) -> SetR:
     case AOk{u}:
       SetOk{acl.put(a, u), old}
     case AErr{op, +e}:
-      SetErr{"ERR Error in ACL SETUSER modifier '" ++ acl.oneline(op) ++ "': " ++ acl.errno.text(e)}
+      SetErr{"ERR Error in ACL SETUSER modifier '" ++ acl.oneline(R.cstr(op)) ++ "': " ++ acl.errno.text(e)}
 
 def acl.set.base(m: Maybe<&2, User>, +n: String, +allch: Bool) -> User:
   match m:
@@ -1578,7 +1578,7 @@ def acl.set.base(m: Maybe<&2, User>, +n: String, +allch: Bool) -> User:
 def acl.set.merged(mg: Merge, a: Acl, +n: String, +allch: Bool) -> SetR:
   match mg:
     case MOut{rs, Some{x}, +start}:
-      SetErr{"ERR Unmatched parenthesis in acl selector starting at '" ++ acl.oneline(start) ++ "'."}
+      SetErr{"ERR Unmatched parenthesis in acl selector starting at '" ++ acl.oneline(R.cstr(start)) ++ "'."}
     case MOut{rs, None{}, start}:
       +a0 = a
       +old = acl.user(a0, n)

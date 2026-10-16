@@ -384,7 +384,9 @@ translation stays in the trusted base.
   user is restricted, nothing is checked (section 3zzzh of
   [docs/FINDINGS.md](docs/FINDINGS.md)). Where BendKV differs: GETUSER and LIST describe
   commands as Redis 7.2 does, the rules as they were given; users come from ACL SETUSER
-  only, not from the configuration or an ACL file.
+  only, not from the configuration or an ACL file; `%~pattern`, which 7.0.15 accepts and
+  then crashes on at the next GETUSER, is a syntax error; ACL CAT of a category lists its
+  commands by name, where Redis lists them in its table's hash order.
 - **CLIENT PAUSE and CLIENT UNPAUSE**, as Redis 7.0.15 runs them: a pause of the
   commands that write or may be replicated (WRITE: PFCOUNT and PUBLISH too, and an EXEC
   whose transaction queued one) or of every command (ALL), for a timeout in ms; a second
