@@ -1240,6 +1240,50 @@ def cmd.watch() -> Top:
     [R.RBulk{"summary"}, R.RBulk{"Watch the given keys to determine execution of the MULTI/EXEC block"}, R.RBulk{"since"}, R.RBulk{"2.2.0"}, R.RBulk{"group"}, R.RBulk{"transactions"}, R.RBulk{"complexity"}, R.RBulk{"O(1) for every key."}, R.RBulk{"arguments"}, R.RArray{[R.RMap{[R.RBulk{"name"}, R.RBulk{"key"}, R.RBulk{"type"}, R.RBulk{"key"}, R.RBulk{"key_spec_index"}, R.RInt{R.IPos{0n}}, R.RBulk{"flags"}, R.RSet{[R.RStatus{"multiple"}]}]}]}]},
   []}
 
+def cmd.xinfo() -> Top:
+  Top{Desc{"xinfo", R.INeg{1n}, ["slow"], [], KBySpecs{}, False{},
+    [R.RBulk{"xinfo"}, R.RInt{R.INeg{1n}}, R.RSet{[]}, R.RInt{R.IPos{0n}}, R.RInt{R.IPos{0n}}, R.RInt{R.IPos{0n}}, R.RSet{[R.RStatus{"@slow"}]}, R.RSet{[]}, R.RSet{[]}],
+    [R.RBulk{"summary"}, R.RBulk{"A container for stream introspection commands"}, R.RBulk{"since"}, R.RBulk{"5.0.0"}, R.RBulk{"group"}, R.RBulk{"stream"}, R.RBulk{"complexity"}, R.RBulk{"Depends on subcommand."}]},
+  [Desc{"xinfo|consumers", R.IPos{4n}, ["read", "stream", "slow"], [KSpec{["RO", "access"], 2n, R.IPos{0n}, 1n, 0n}], KBySpecs{}, False{},
+    [R.RBulk{"xinfo|consumers"}, R.RInt{R.IPos{4n}}, R.RSet{[R.RStatus{"readonly"}]}, R.RInt{R.IPos{2n}}, R.RInt{R.IPos{2n}}, R.RInt{R.IPos{1n}}, R.RSet{[R.RStatus{"@read"}, R.RStatus{"@stream"}, R.RStatus{"@slow"}]}, R.RSet{[R.RBulk{"nondeterministic_output"}]}, R.RSet{[R.RMap{[R.RBulk{"flags"}, R.RSet{[R.RStatus{"RO"}, R.RStatus{"access"}]}, R.RBulk{"begin_search"}, R.RMap{[R.RBulk{"type"}, R.RBulk{"index"}, R.RBulk{"spec"}, R.RMap{[R.RBulk{"index"}, R.RInt{R.IPos{2n}}]}]}, R.RBulk{"find_keys"}, R.RMap{[R.RBulk{"type"}, R.RBulk{"range"}, R.RBulk{"spec"}, R.RMap{[R.RBulk{"lastkey"}, R.RInt{R.IPos{0n}}, R.RBulk{"keystep"}, R.RInt{R.IPos{1n}}, R.RBulk{"limit"}, R.RInt{R.IPos{0n}}]}]}]}]}],
+    [R.RBulk{"summary"}, R.RBulk{"List the consumers in a consumer group"}, R.RBulk{"since"}, R.RBulk{"5.0.0"}, R.RBulk{"group"}, R.RBulk{"stream"}, R.RBulk{"complexity"}, R.RBulk{"O(1)"}, R.RBulk{"arguments"}, R.RArray{[R.RMap{[R.RBulk{"name"}, R.RBulk{"key"}, R.RBulk{"type"}, R.RBulk{"key"}, R.RBulk{"key_spec_index"}, R.RInt{R.IPos{0n}}]}, R.RMap{[R.RBulk{"name"}, R.RBulk{"groupname"}, R.RBulk{"type"}, R.RBulk{"string"}]}]}]}, Desc{"xinfo|groups", R.IPos{3n}, ["read", "stream", "slow"], [KSpec{["RO", "access"], 2n, R.IPos{0n}, 1n, 0n}], KBySpecs{}, False{},
+    [R.RBulk{"xinfo|groups"}, R.RInt{R.IPos{3n}}, R.RSet{[R.RStatus{"readonly"}]}, R.RInt{R.IPos{2n}}, R.RInt{R.IPos{2n}}, R.RInt{R.IPos{1n}}, R.RSet{[R.RStatus{"@read"}, R.RStatus{"@stream"}, R.RStatus{"@slow"}]}, R.RSet{[]}, R.RSet{[R.RMap{[R.RBulk{"flags"}, R.RSet{[R.RStatus{"RO"}, R.RStatus{"access"}]}, R.RBulk{"begin_search"}, R.RMap{[R.RBulk{"type"}, R.RBulk{"index"}, R.RBulk{"spec"}, R.RMap{[R.RBulk{"index"}, R.RInt{R.IPos{2n}}]}]}, R.RBulk{"find_keys"}, R.RMap{[R.RBulk{"type"}, R.RBulk{"range"}, R.RBulk{"spec"}, R.RMap{[R.RBulk{"lastkey"}, R.RInt{R.IPos{0n}}, R.RBulk{"keystep"}, R.RInt{R.IPos{1n}}, R.RBulk{"limit"}, R.RInt{R.IPos{0n}}]}]}]}]}],
+    [R.RBulk{"summary"}, R.RBulk{"List the consumer groups of a stream"}, R.RBulk{"since"}, R.RBulk{"5.0.0"}, R.RBulk{"group"}, R.RBulk{"stream"}, R.RBulk{"complexity"}, R.RBulk{"O(1)"}, R.RBulk{"history"}, R.RSet{[R.RArray{[R.RBulk{"7.0.0"}, R.RBulk{"Added the `entries-read` and `lag` fields"}]}]}, R.RBulk{"arguments"}, R.RArray{[R.RMap{[R.RBulk{"name"}, R.RBulk{"key"}, R.RBulk{"type"}, R.RBulk{"key"}, R.RBulk{"key_spec_index"}, R.RInt{R.IPos{0n}}]}]}]}, Desc{"xinfo|help", R.IPos{2n}, ["stream", "slow"], [], KBySpecs{}, False{},
+    [R.RBulk{"xinfo|help"}, R.RInt{R.IPos{2n}}, R.RSet{[R.RStatus{"loading"}, R.RStatus{"stale"}]}, R.RInt{R.IPos{0n}}, R.RInt{R.IPos{0n}}, R.RInt{R.IPos{0n}}, R.RSet{[R.RStatus{"@stream"}, R.RStatus{"@slow"}]}, R.RSet{[]}, R.RSet{[]}],
+    [R.RBulk{"summary"}, R.RBulk{"Show helpful text about the different subcommands"}, R.RBulk{"since"}, R.RBulk{"5.0.0"}, R.RBulk{"group"}, R.RBulk{"stream"}, R.RBulk{"complexity"}, R.RBulk{"O(1)"}]}, Desc{"xinfo|stream", R.INeg{2n}, ["read", "stream", "slow"], [KSpec{["RO", "access"], 2n, R.IPos{0n}, 1n, 0n}], KBySpecs{}, False{},
+    [R.RBulk{"xinfo|stream"}, R.RInt{R.INeg{2n}}, R.RSet{[R.RStatus{"readonly"}]}, R.RInt{R.IPos{2n}}, R.RInt{R.IPos{2n}}, R.RInt{R.IPos{1n}}, R.RSet{[R.RStatus{"@read"}, R.RStatus{"@stream"}, R.RStatus{"@slow"}]}, R.RSet{[]}, R.RSet{[R.RMap{[R.RBulk{"flags"}, R.RSet{[R.RStatus{"RO"}, R.RStatus{"access"}]}, R.RBulk{"begin_search"}, R.RMap{[R.RBulk{"type"}, R.RBulk{"index"}, R.RBulk{"spec"}, R.RMap{[R.RBulk{"index"}, R.RInt{R.IPos{2n}}]}]}, R.RBulk{"find_keys"}, R.RMap{[R.RBulk{"type"}, R.RBulk{"range"}, R.RBulk{"spec"}, R.RMap{[R.RBulk{"lastkey"}, R.RInt{R.IPos{0n}}, R.RBulk{"keystep"}, R.RInt{R.IPos{1n}}, R.RBulk{"limit"}, R.RInt{R.IPos{0n}}]}]}]}]}],
+    [R.RBulk{"summary"}, R.RBulk{"Get information about a stream"}, R.RBulk{"since"}, R.RBulk{"5.0.0"}, R.RBulk{"group"}, R.RBulk{"stream"}, R.RBulk{"complexity"}, R.RBulk{"O(1)"}, R.RBulk{"history"}, R.RSet{[R.RArray{[R.RBulk{"6.0.0"}, R.RBulk{"Added the `FULL` modifier."}]}, R.RArray{[R.RBulk{"7.0.0"}, R.RBulk{"Added the `max-deleted-entry-id`, `entries-added`, `recorded-first-entry-id`, `entries-read` and `lag` fields"}]}]}, R.RBulk{"arguments"}, R.RArray{[R.RMap{[R.RBulk{"name"}, R.RBulk{"key"}, R.RBulk{"type"}, R.RBulk{"key"}, R.RBulk{"key_spec_index"}, R.RInt{R.IPos{0n}}]}, R.RMap{[R.RBulk{"name"}, R.RBulk{"full"}, R.RBulk{"type"}, R.RBulk{"block"}, R.RBulk{"token"}, R.RBulk{"FULL"}, R.RBulk{"flags"}, R.RSet{[R.RStatus{"optional"}]}, R.RBulk{"arguments"}, R.RArray{[R.RMap{[R.RBulk{"name"}, R.RBulk{"count"}, R.RBulk{"type"}, R.RBulk{"integer"}, R.RBulk{"token"}, R.RBulk{"COUNT"}, R.RBulk{"flags"}, R.RSet{[R.RStatus{"optional"}]}]}]}]}]}]}]}
+
+def cmd.xlen() -> Top:
+  Top{Desc{"xlen", R.IPos{2n}, ["read", "stream", "fast"], [KSpec{["RO"], 1n, R.IPos{0n}, 1n, 0n}], KBySpecs{}, False{},
+    [R.RBulk{"xlen"}, R.RInt{R.IPos{2n}}, R.RSet{[R.RStatus{"readonly"}, R.RStatus{"fast"}]}, R.RInt{R.IPos{1n}}, R.RInt{R.IPos{1n}}, R.RInt{R.IPos{1n}}, R.RSet{[R.RStatus{"@read"}, R.RStatus{"@stream"}, R.RStatus{"@fast"}]}, R.RSet{[]}, R.RSet{[R.RMap{[R.RBulk{"flags"}, R.RSet{[R.RStatus{"RO"}]}, R.RBulk{"begin_search"}, R.RMap{[R.RBulk{"type"}, R.RBulk{"index"}, R.RBulk{"spec"}, R.RMap{[R.RBulk{"index"}, R.RInt{R.IPos{1n}}]}]}, R.RBulk{"find_keys"}, R.RMap{[R.RBulk{"type"}, R.RBulk{"range"}, R.RBulk{"spec"}, R.RMap{[R.RBulk{"lastkey"}, R.RInt{R.IPos{0n}}, R.RBulk{"keystep"}, R.RInt{R.IPos{1n}}, R.RBulk{"limit"}, R.RInt{R.IPos{0n}}]}]}]}]}],
+    [R.RBulk{"summary"}, R.RBulk{"Return the number of entries in a stream"}, R.RBulk{"since"}, R.RBulk{"5.0.0"}, R.RBulk{"group"}, R.RBulk{"stream"}, R.RBulk{"complexity"}, R.RBulk{"O(1)"}, R.RBulk{"arguments"}, R.RArray{[R.RMap{[R.RBulk{"name"}, R.RBulk{"key"}, R.RBulk{"type"}, R.RBulk{"key"}, R.RBulk{"key_spec_index"}, R.RInt{R.IPos{0n}}]}]}]},
+  []}
+
+def cmd.xpending() -> Top:
+  Top{Desc{"xpending", R.INeg{2n}, ["read", "stream", "slow"], [KSpec{["RO", "access"], 1n, R.IPos{0n}, 1n, 0n}], KBySpecs{}, False{},
+    [R.RBulk{"xpending"}, R.RInt{R.INeg{2n}}, R.RSet{[R.RStatus{"readonly"}]}, R.RInt{R.IPos{1n}}, R.RInt{R.IPos{1n}}, R.RInt{R.IPos{1n}}, R.RSet{[R.RStatus{"@read"}, R.RStatus{"@stream"}, R.RStatus{"@slow"}]}, R.RSet{[R.RBulk{"nondeterministic_output"}]}, R.RSet{[R.RMap{[R.RBulk{"flags"}, R.RSet{[R.RStatus{"RO"}, R.RStatus{"access"}]}, R.RBulk{"begin_search"}, R.RMap{[R.RBulk{"type"}, R.RBulk{"index"}, R.RBulk{"spec"}, R.RMap{[R.RBulk{"index"}, R.RInt{R.IPos{1n}}]}]}, R.RBulk{"find_keys"}, R.RMap{[R.RBulk{"type"}, R.RBulk{"range"}, R.RBulk{"spec"}, R.RMap{[R.RBulk{"lastkey"}, R.RInt{R.IPos{0n}}, R.RBulk{"keystep"}, R.RInt{R.IPos{1n}}, R.RBulk{"limit"}, R.RInt{R.IPos{0n}}]}]}]}]}],
+    [R.RBulk{"summary"}, R.RBulk{"Return information and entries from a stream consumer group pending entries list, that are messages fetched but never acknowledged."}, R.RBulk{"since"}, R.RBulk{"5.0.0"}, R.RBulk{"group"}, R.RBulk{"stream"}, R.RBulk{"complexity"}, R.RBulk{"O(N) with N being the number of elements returned, so asking for a small fixed number of entries per call is O(1). O(M), where M is the total number of entries scanned when used with the IDLE filter. When the command returns just the summary and the list of consumers is small, it runs in O(1) time; otherwise, an additional O(N) time for iterating every consumer."}, R.RBulk{"history"}, R.RSet{[R.RArray{[R.RBulk{"6.2.0"}, R.RBulk{"Added the `IDLE` option and exclusive range intervals."}]}]}, R.RBulk{"arguments"}, R.RArray{[R.RMap{[R.RBulk{"name"}, R.RBulk{"key"}, R.RBulk{"type"}, R.RBulk{"key"}, R.RBulk{"key_spec_index"}, R.RInt{R.IPos{0n}}]}, R.RMap{[R.RBulk{"name"}, R.RBulk{"group"}, R.RBulk{"type"}, R.RBulk{"string"}]}, R.RMap{[R.RBulk{"name"}, R.RBulk{"filters"}, R.RBulk{"type"}, R.RBulk{"block"}, R.RBulk{"flags"}, R.RSet{[R.RStatus{"optional"}]}, R.RBulk{"arguments"}, R.RArray{[R.RMap{[R.RBulk{"name"}, R.RBulk{"min-idle-time"}, R.RBulk{"type"}, R.RBulk{"integer"}, R.RBulk{"token"}, R.RBulk{"IDLE"}, R.RBulk{"since"}, R.RBulk{"6.2.0"}, R.RBulk{"flags"}, R.RSet{[R.RStatus{"optional"}]}]}, R.RMap{[R.RBulk{"name"}, R.RBulk{"start"}, R.RBulk{"type"}, R.RBulk{"string"}]}, R.RMap{[R.RBulk{"name"}, R.RBulk{"end"}, R.RBulk{"type"}, R.RBulk{"string"}]}, R.RMap{[R.RBulk{"name"}, R.RBulk{"count"}, R.RBulk{"type"}, R.RBulk{"integer"}]}, R.RMap{[R.RBulk{"name"}, R.RBulk{"consumer"}, R.RBulk{"type"}, R.RBulk{"string"}, R.RBulk{"flags"}, R.RSet{[R.RStatus{"optional"}]}]}]}]}]}]},
+  []}
+
+def cmd.xrange() -> Top:
+  Top{Desc{"xrange", R.INeg{3n}, ["read", "stream", "slow"], [KSpec{["RO", "access"], 1n, R.IPos{0n}, 1n, 0n}], KBySpecs{}, False{},
+    [R.RBulk{"xrange"}, R.RInt{R.INeg{3n}}, R.RSet{[R.RStatus{"readonly"}]}, R.RInt{R.IPos{1n}}, R.RInt{R.IPos{1n}}, R.RInt{R.IPos{1n}}, R.RSet{[R.RStatus{"@read"}, R.RStatus{"@stream"}, R.RStatus{"@slow"}]}, R.RSet{[]}, R.RSet{[R.RMap{[R.RBulk{"flags"}, R.RSet{[R.RStatus{"RO"}, R.RStatus{"access"}]}, R.RBulk{"begin_search"}, R.RMap{[R.RBulk{"type"}, R.RBulk{"index"}, R.RBulk{"spec"}, R.RMap{[R.RBulk{"index"}, R.RInt{R.IPos{1n}}]}]}, R.RBulk{"find_keys"}, R.RMap{[R.RBulk{"type"}, R.RBulk{"range"}, R.RBulk{"spec"}, R.RMap{[R.RBulk{"lastkey"}, R.RInt{R.IPos{0n}}, R.RBulk{"keystep"}, R.RInt{R.IPos{1n}}, R.RBulk{"limit"}, R.RInt{R.IPos{0n}}]}]}]}]}],
+    [R.RBulk{"summary"}, R.RBulk{"Return a range of elements in a stream, with IDs matching the specified IDs interval"}, R.RBulk{"since"}, R.RBulk{"5.0.0"}, R.RBulk{"group"}, R.RBulk{"stream"}, R.RBulk{"complexity"}, R.RBulk{"O(N) with N being the number of elements being returned. If N is constant (e.g. always asking for the first 10 elements with COUNT), you can consider it O(1)."}, R.RBulk{"history"}, R.RSet{[R.RArray{[R.RBulk{"6.2.0"}, R.RBulk{"Added exclusive ranges."}]}]}, R.RBulk{"arguments"}, R.RArray{[R.RMap{[R.RBulk{"name"}, R.RBulk{"key"}, R.RBulk{"type"}, R.RBulk{"key"}, R.RBulk{"key_spec_index"}, R.RInt{R.IPos{0n}}]}, R.RMap{[R.RBulk{"name"}, R.RBulk{"start"}, R.RBulk{"type"}, R.RBulk{"string"}]}, R.RMap{[R.RBulk{"name"}, R.RBulk{"end"}, R.RBulk{"type"}, R.RBulk{"string"}]}, R.RMap{[R.RBulk{"name"}, R.RBulk{"count"}, R.RBulk{"type"}, R.RBulk{"integer"}, R.RBulk{"token"}, R.RBulk{"COUNT"}, R.RBulk{"flags"}, R.RSet{[R.RStatus{"optional"}]}]}]}]},
+  []}
+
+def cmd.xread() -> Top:
+  Top{Desc{"xread", R.INeg{3n}, ["read", "stream", "slow", "blocking"], [KSpecKw{["RO", "access"], "STREAMS", 1n, R.INeg{0n}, 1n, 2n}], KBySpecs{}, False{},
+    [R.RBulk{"xread"}, R.RInt{R.INeg{3n}}, R.RSet{[R.RStatus{"readonly"}, R.RStatus{"blocking"}, R.RStatus{"movablekeys"}]}, R.RInt{R.IPos{0n}}, R.RInt{R.IPos{0n}}, R.RInt{R.IPos{0n}}, R.RSet{[R.RStatus{"@read"}, R.RStatus{"@stream"}, R.RStatus{"@slow"}, R.RStatus{"@blocking"}]}, R.RSet{[]}, R.RSet{[R.RMap{[R.RBulk{"flags"}, R.RSet{[R.RStatus{"RO"}, R.RStatus{"access"}]}, R.RBulk{"begin_search"}, R.RMap{[R.RBulk{"type"}, R.RBulk{"keyword"}, R.RBulk{"spec"}, R.RMap{[R.RBulk{"keyword"}, R.RBulk{"STREAMS"}, R.RBulk{"startfrom"}, R.RInt{R.IPos{1n}}]}]}, R.RBulk{"find_keys"}, R.RMap{[R.RBulk{"type"}, R.RBulk{"range"}, R.RBulk{"spec"}, R.RMap{[R.RBulk{"lastkey"}, R.RInt{R.INeg{0n}}, R.RBulk{"keystep"}, R.RInt{R.IPos{1n}}, R.RBulk{"limit"}, R.RInt{R.IPos{2n}}]}]}]}]}],
+    [R.RBulk{"summary"}, R.RBulk{"Return never seen elements in multiple streams, with IDs greater than the ones reported by the caller for each stream. Can block."}, R.RBulk{"since"}, R.RBulk{"5.0.0"}, R.RBulk{"group"}, R.RBulk{"stream"}, R.RBulk{"complexity"}, R.RBulk{"For each stream mentioned: O(N) with N being the number of elements being returned, it means that XREAD-ing with a fixed COUNT is O(1). Note that when the BLOCK option is used, XADD will pay O(M) time in order to serve the M clients blocked on the stream getting new data."}, R.RBulk{"arguments"}, R.RArray{[R.RMap{[R.RBulk{"name"}, R.RBulk{"count"}, R.RBulk{"type"}, R.RBulk{"integer"}, R.RBulk{"token"}, R.RBulk{"COUNT"}, R.RBulk{"flags"}, R.RSet{[R.RStatus{"optional"}]}]}, R.RMap{[R.RBulk{"name"}, R.RBulk{"milliseconds"}, R.RBulk{"type"}, R.RBulk{"integer"}, R.RBulk{"token"}, R.RBulk{"BLOCK"}, R.RBulk{"flags"}, R.RSet{[R.RStatus{"optional"}]}]}, R.RMap{[R.RBulk{"name"}, R.RBulk{"streams"}, R.RBulk{"type"}, R.RBulk{"block"}, R.RBulk{"token"}, R.RBulk{"STREAMS"}, R.RBulk{"arguments"}, R.RArray{[R.RMap{[R.RBulk{"name"}, R.RBulk{"key"}, R.RBulk{"type"}, R.RBulk{"key"}, R.RBulk{"key_spec_index"}, R.RInt{R.IPos{0n}}, R.RBulk{"flags"}, R.RSet{[R.RStatus{"multiple"}]}]}, R.RMap{[R.RBulk{"name"}, R.RBulk{"id"}, R.RBulk{"type"}, R.RBulk{"string"}, R.RBulk{"flags"}, R.RSet{[R.RStatus{"multiple"}]}]}]}]}]}]},
+  []}
+
+def cmd.xrevrange() -> Top:
+  Top{Desc{"xrevrange", R.INeg{3n}, ["read", "stream", "slow"], [KSpec{["RO", "access"], 1n, R.IPos{0n}, 1n, 0n}], KBySpecs{}, False{},
+    [R.RBulk{"xrevrange"}, R.RInt{R.INeg{3n}}, R.RSet{[R.RStatus{"readonly"}]}, R.RInt{R.IPos{1n}}, R.RInt{R.IPos{1n}}, R.RInt{R.IPos{1n}}, R.RSet{[R.RStatus{"@read"}, R.RStatus{"@stream"}, R.RStatus{"@slow"}]}, R.RSet{[]}, R.RSet{[R.RMap{[R.RBulk{"flags"}, R.RSet{[R.RStatus{"RO"}, R.RStatus{"access"}]}, R.RBulk{"begin_search"}, R.RMap{[R.RBulk{"type"}, R.RBulk{"index"}, R.RBulk{"spec"}, R.RMap{[R.RBulk{"index"}, R.RInt{R.IPos{1n}}]}]}, R.RBulk{"find_keys"}, R.RMap{[R.RBulk{"type"}, R.RBulk{"range"}, R.RBulk{"spec"}, R.RMap{[R.RBulk{"lastkey"}, R.RInt{R.IPos{0n}}, R.RBulk{"keystep"}, R.RInt{R.IPos{1n}}, R.RBulk{"limit"}, R.RInt{R.IPos{0n}}]}]}]}]}],
+    [R.RBulk{"summary"}, R.RBulk{"Return a range of elements in a stream, with IDs matching the specified IDs interval, in reverse order (from greater to smaller IDs) compared to XRANGE"}, R.RBulk{"since"}, R.RBulk{"5.0.0"}, R.RBulk{"group"}, R.RBulk{"stream"}, R.RBulk{"complexity"}, R.RBulk{"O(N) with N being the number of elements returned. If N is constant (e.g. always asking for the first 10 elements with COUNT), you can consider it O(1)."}, R.RBulk{"history"}, R.RSet{[R.RArray{[R.RBulk{"6.2.0"}, R.RBulk{"Added exclusive ranges."}]}]}, R.RBulk{"arguments"}, R.RArray{[R.RMap{[R.RBulk{"name"}, R.RBulk{"key"}, R.RBulk{"type"}, R.RBulk{"key"}, R.RBulk{"key_spec_index"}, R.RInt{R.IPos{0n}}]}, R.RMap{[R.RBulk{"name"}, R.RBulk{"end"}, R.RBulk{"type"}, R.RBulk{"string"}]}, R.RMap{[R.RBulk{"name"}, R.RBulk{"start"}, R.RBulk{"type"}, R.RBulk{"string"}]}, R.RMap{[R.RBulk{"name"}, R.RBulk{"count"}, R.RBulk{"type"}, R.RBulk{"integer"}, R.RBulk{"token"}, R.RBulk{"COUNT"}, R.RBulk{"flags"}, R.RSet{[R.RStatus{"optional"}]}]}]}]},
+  []}
+
 def cmd.zadd() -> Top:
   Top{Desc{"zadd", R.INeg{3n}, ["write", "sortedset", "fast"], [KSpec{["RW", "update"], 1n, R.IPos{0n}, 1n, 0n}], KBySpecs{}, False{},
     [R.RBulk{"zadd"}, R.RInt{R.INeg{3n}}, R.RSet{[R.RStatus{"write"}, R.RStatus{"denyoom"}, R.RStatus{"fast"}]}, R.RInt{R.IPos{1n}}, R.RInt{R.IPos{1n}}, R.RInt{R.IPos{1n}}, R.RSet{[R.RStatus{"@write"}, R.RStatus{"@sortedset"}, R.RStatus{"@fast"}]}, R.RSet{[]}, R.RSet{[R.RMap{[R.RBulk{"flags"}, R.RSet{[R.RStatus{"RW"}, R.RStatus{"update"}]}, R.RBulk{"begin_search"}, R.RMap{[R.RBulk{"type"}, R.RBulk{"index"}, R.RBulk{"spec"}, R.RMap{[R.RBulk{"index"}, R.RInt{R.IPos{1n}}]}]}, R.RBulk{"find_keys"}, R.RMap{[R.RBulk{"type"}, R.RBulk{"range"}, R.RBulk{"spec"}, R.RMap{[R.RBulk{"lastkey"}, R.RInt{R.IPos{0n}}, R.RBulk{"keystep"}, R.RInt{R.IPos{1n}}, R.RBulk{"limit"}, R.RInt{R.IPos{0n}}]}]}]}]}],
@@ -1434,7 +1478,7 @@ def cmd.zunionstore() -> Top:
 
 # the commands, by name
 def table() -> List<&2, Top>:
-  [cmd.acl(), cmd.append(), cmd.auth(), cmd.bgrewriteaof(), cmd.bitcount(), cmd.bitfield(), cmd.bitfield_ro(), cmd.bitop(), cmd.bitpos(), cmd.blmove(), cmd.blmpop(), cmd.blpop(), cmd.brpop(), cmd.brpoplpush(), cmd.bzmpop(), cmd.bzpopmax(), cmd.bzpopmin(), cmd.client(), cmd.command(), cmd.config(), cmd.copy(), cmd.dbsize(), cmd.decr(), cmd.decrby(), cmd.del(), cmd.discard(), cmd.dump(), cmd.echo(), cmd.eval(), cmd.exec(), cmd.exists(), cmd.expire(), cmd.expireat(), cmd.expiretime(), cmd.flushall(), cmd.flushdb(), cmd.function(), cmd.geoadd(), cmd.geodist(), cmd.geohash(), cmd.geopos(), cmd.georadius(), cmd.georadius_ro(), cmd.georadiusbymember(), cmd.georadiusbymember_ro(), cmd.geosearch(), cmd.geosearchstore(), cmd.get(), cmd.getbit(), cmd.getdel(), cmd.getex(), cmd.getrange(), cmd.getset(), cmd.hdel(), cmd.hello(), cmd.hexists(), cmd.hget(), cmd.hgetall(), cmd.hincrby(), cmd.hincrbyfloat(), cmd.hkeys(), cmd.hlen(), cmd.hmget(), cmd.hmset(), cmd.hrandfield(), cmd.hscan(), cmd.hset(), cmd.hsetnx(), cmd.hstrlen(), cmd.hvals(), cmd.incr(), cmd.incrby(), cmd.incrbyfloat(), cmd.info(), cmd.keys(), cmd.lastsave(), cmd.latency(), cmd.lcs(), cmd.lindex(), cmd.linsert(), cmd.llen(), cmd.lmove(), cmd.lmpop(), cmd.lolwut(), cmd.lpop(), cmd.lpos(), cmd.lpush(), cmd.lpushx(), cmd.lrange(), cmd.lrem(), cmd.lset(), cmd.ltrim(), cmd.memory(), cmd.mget(), cmd.monitor(), cmd.move(), cmd.mset(), cmd.msetnx(), cmd.multi(), cmd.object(), cmd.persist(), cmd.pexpire(), cmd.pexpireat(), cmd.pexpiretime(), cmd.pfadd(), cmd.pfcount(), cmd.pfdebug(), cmd.pfmerge(), cmd.pfselftest(), cmd.ping(), cmd.psetex(), cmd.psubscribe(), cmd.pttl(), cmd.publish(), cmd.pubsub(), cmd.punsubscribe(), cmd.quit(), cmd.randomkey(), cmd.rename(), cmd.renamenx(), cmd.reset(), cmd.restore(), cmd.role(), cmd.rpop(), cmd.rpoplpush(), cmd.rpush(), cmd.rpushx(), cmd.sadd(), cmd.save(), cmd.scan(), cmd.scard(), cmd.sdiff(), cmd.sdiffstore(), cmd.select(), cmd.set(), cmd.setbit(), cmd.setex(), cmd.setnx(), cmd.setrange(), cmd.shutdown(), cmd.sinter(), cmd.sintercard(), cmd.sinterstore(), cmd.sismember(), cmd.slowlog(), cmd.smembers(), cmd.smismember(), cmd.smove(), cmd.sort(), cmd.sort_ro(), cmd.spop(), cmd.spublish(), cmd.srandmember(), cmd.srem(), cmd.sscan(), cmd.ssubscribe(), cmd.strlen(), cmd.subscribe(), cmd.substr(), cmd.sunion(), cmd.sunionstore(), cmd.sunsubscribe(), cmd.swapdb(), cmd.time(), cmd.touch(), cmd.ttl(), cmd.type(), cmd.unlink(), cmd.unsubscribe(), cmd.unwatch(), cmd.wait(), cmd.watch(), cmd.zadd(), cmd.zcard(), cmd.zcount(), cmd.zdiff(), cmd.zdiffstore(), cmd.zincrby(), cmd.zinter(), cmd.zintercard(), cmd.zinterstore(), cmd.zlexcount(), cmd.zmpop(), cmd.zmscore(), cmd.zpopmax(), cmd.zpopmin(), cmd.zrandmember(), cmd.zrange(), cmd.zrangebylex(), cmd.zrangebyscore(), cmd.zrangestore(), cmd.zrank(), cmd.zrem(), cmd.zremrangebylex(), cmd.zremrangebyrank(), cmd.zremrangebyscore(), cmd.zrevrange(), cmd.zrevrangebylex(), cmd.zrevrangebyscore(), cmd.zrevrank(), cmd.zscan(), cmd.zscore(), cmd.zunion(), cmd.zunionstore()]
+  [cmd.acl(), cmd.append(), cmd.auth(), cmd.bgrewriteaof(), cmd.bitcount(), cmd.bitfield(), cmd.bitfield_ro(), cmd.bitop(), cmd.bitpos(), cmd.blmove(), cmd.blmpop(), cmd.blpop(), cmd.brpop(), cmd.brpoplpush(), cmd.bzmpop(), cmd.bzpopmax(), cmd.bzpopmin(), cmd.client(), cmd.command(), cmd.config(), cmd.copy(), cmd.dbsize(), cmd.decr(), cmd.decrby(), cmd.del(), cmd.discard(), cmd.dump(), cmd.echo(), cmd.eval(), cmd.exec(), cmd.exists(), cmd.expire(), cmd.expireat(), cmd.expiretime(), cmd.flushall(), cmd.flushdb(), cmd.function(), cmd.geoadd(), cmd.geodist(), cmd.geohash(), cmd.geopos(), cmd.georadius(), cmd.georadius_ro(), cmd.georadiusbymember(), cmd.georadiusbymember_ro(), cmd.geosearch(), cmd.geosearchstore(), cmd.get(), cmd.getbit(), cmd.getdel(), cmd.getex(), cmd.getrange(), cmd.getset(), cmd.hdel(), cmd.hello(), cmd.hexists(), cmd.hget(), cmd.hgetall(), cmd.hincrby(), cmd.hincrbyfloat(), cmd.hkeys(), cmd.hlen(), cmd.hmget(), cmd.hmset(), cmd.hrandfield(), cmd.hscan(), cmd.hset(), cmd.hsetnx(), cmd.hstrlen(), cmd.hvals(), cmd.incr(), cmd.incrby(), cmd.incrbyfloat(), cmd.info(), cmd.keys(), cmd.lastsave(), cmd.latency(), cmd.lcs(), cmd.lindex(), cmd.linsert(), cmd.llen(), cmd.lmove(), cmd.lmpop(), cmd.lolwut(), cmd.lpop(), cmd.lpos(), cmd.lpush(), cmd.lpushx(), cmd.lrange(), cmd.lrem(), cmd.lset(), cmd.ltrim(), cmd.memory(), cmd.mget(), cmd.monitor(), cmd.move(), cmd.mset(), cmd.msetnx(), cmd.multi(), cmd.object(), cmd.persist(), cmd.pexpire(), cmd.pexpireat(), cmd.pexpiretime(), cmd.pfadd(), cmd.pfcount(), cmd.pfdebug(), cmd.pfmerge(), cmd.pfselftest(), cmd.ping(), cmd.psetex(), cmd.psubscribe(), cmd.pttl(), cmd.publish(), cmd.pubsub(), cmd.punsubscribe(), cmd.quit(), cmd.randomkey(), cmd.rename(), cmd.renamenx(), cmd.reset(), cmd.restore(), cmd.role(), cmd.rpop(), cmd.rpoplpush(), cmd.rpush(), cmd.rpushx(), cmd.sadd(), cmd.save(), cmd.scan(), cmd.scard(), cmd.sdiff(), cmd.sdiffstore(), cmd.select(), cmd.set(), cmd.setbit(), cmd.setex(), cmd.setnx(), cmd.setrange(), cmd.shutdown(), cmd.sinter(), cmd.sintercard(), cmd.sinterstore(), cmd.sismember(), cmd.slowlog(), cmd.smembers(), cmd.smismember(), cmd.smove(), cmd.sort(), cmd.sort_ro(), cmd.spop(), cmd.spublish(), cmd.srandmember(), cmd.srem(), cmd.sscan(), cmd.ssubscribe(), cmd.strlen(), cmd.subscribe(), cmd.substr(), cmd.sunion(), cmd.sunionstore(), cmd.sunsubscribe(), cmd.swapdb(), cmd.time(), cmd.touch(), cmd.ttl(), cmd.type(), cmd.unlink(), cmd.unsubscribe(), cmd.unwatch(), cmd.wait(), cmd.watch(), cmd.xinfo(), cmd.xlen(), cmd.xpending(), cmd.xrange(), cmd.xread(), cmd.xrevrange(), cmd.zadd(), cmd.zcard(), cmd.zcount(), cmd.zdiff(), cmd.zdiffstore(), cmd.zincrby(), cmd.zinter(), cmd.zintercard(), cmd.zinterstore(), cmd.zlexcount(), cmd.zmpop(), cmd.zmscore(), cmd.zpopmax(), cmd.zpopmin(), cmd.zrandmember(), cmd.zrange(), cmd.zrangebylex(), cmd.zrangebyscore(), cmd.zrangestore(), cmd.zrank(), cmd.zrem(), cmd.zremrangebylex(), cmd.zremrangebyrank(), cmd.zremrangebyscore(), cmd.zrevrange(), cmd.zrevrangebylex(), cmd.zrevrangebyscore(), cmd.zrevrank(), cmd.zscan(), cmd.zscore(), cmd.zunion(), cmd.zunionstore()]
 
 # Redis's ACL categories (ACL CAT)
 def categories() -> List<&2, String>:
@@ -2337,16 +2381,32 @@ def ro.key(+key: Nat) -> Maybe<&2, Ro>:
       Some{Ro{R.INeg{6n}, [KSpec{["RO", "access"], 1n, R.IPos{0n}, 1n, 0n}], KBySpecs{}}}
     case 199n:
       Some{Ro{R.IPos{2n}, [KSpec{["RO", "access"], 1n, R.IPos{0n}, 1n, 0n}], KBySpecs{}}}
-    case 236n:
+    case 205n:
+      Some{Ro{R.IPos{2n}, [KSpec{["RO"], 1n, R.IPos{0n}, 1n, 0n}], KBySpecs{}}}
+    case 206n:
+      Some{Ro{R.INeg{3n}, [KSpec{["RO", "access"], 1n, R.IPos{0n}, 1n, 0n}], KBySpecs{}}}
+    case 207n:
+      Some{Ro{R.INeg{3n}, [KSpec{["RO", "access"], 1n, R.IPos{0n}, 1n, 0n}], KBySpecs{}}}
+    case 208n:
+      Some{Ro{R.INeg{3n}, [KSpecKw{["RO", "access"], "STREAMS", 1n, R.INeg{0n}, 1n, 2n}], KBySpecs{}}}
+    case 210n:
+      Some{Ro{R.INeg{2n}, [KSpec{["RO", "access"], 1n, R.IPos{0n}, 1n, 0n}], KBySpecs{}}}
+    case 242n:
       Some{Ro{R.IPos{3n}, [KSpec{["RO"], 2n, R.IPos{0n}, 1n, 0n}], KBySpecs{}}}
-    case 237n:
+    case 243n:
       Some{Ro{R.IPos{3n}, [KSpec{["RO"], 2n, R.IPos{0n}, 1n, 0n}], KBySpecs{}}}
-    case 238n:
+    case 244n:
       Some{Ro{R.IPos{3n}, [KSpec{["RO"], 2n, R.IPos{0n}, 1n, 0n}], KBySpecs{}}}
-    case 239n:
+    case 245n:
       Some{Ro{R.IPos{3n}, [KSpec{["RO"], 2n, R.IPos{0n}, 1n, 0n}], KBySpecs{}}}
-    case 241n:
+    case 247n:
       Some{Ro{R.INeg{2n}, [KSpec{["RO"], 2n, R.IPos{0n}, 1n, 0n}], KBySpecs{}}}
+    case 283n:
+      Some{Ro{R.INeg{2n}, [KSpec{["RO", "access"], 2n, R.IPos{0n}, 1n, 0n}], KBySpecs{}}}
+    case 284n:
+      Some{Ro{R.IPos{3n}, [KSpec{["RO", "access"], 2n, R.IPos{0n}, 1n, 0n}], KBySpecs{}}}
+    case 285n:
+      Some{Ro{R.IPos{4n}, [KSpec{["RO", "access"], 2n, R.IPos{0n}, 1n, 0n}], KBySpecs{}}}
     case _:
       None{}
 
@@ -2763,19 +2823,19 @@ def spec.key(+key: Nat) -> Maybe<&2, Ro>:
     case 204n:
       Some{Ro{R.INeg{1n}, [], KBySpecs{}}}
     case 205n:
-      Some{Ro{R.IPos{2n}, [], KBySpecs{}}}
+      Some{Ro{R.IPos{2n}, [KSpec{["RO"], 1n, R.IPos{0n}, 1n, 0n}], KBySpecs{}}}
     case 206n:
-      Some{Ro{R.IPos{2n}, [], KBySpecs{}}}
+      Some{Ro{R.INeg{3n}, [KSpec{["RO", "access"], 1n, R.IPos{0n}, 1n, 0n}], KBySpecs{}}}
     case 207n:
-      Some{Ro{R.IPos{3n}, [], KBySpecs{}}}
+      Some{Ro{R.INeg{3n}, [KSpec{["RO", "access"], 1n, R.IPos{0n}, 1n, 0n}], KBySpecs{}}}
     case 208n:
-      Some{Ro{R.IPos{2n}, [], KBySpecs{}}}
+      Some{Ro{R.INeg{3n}, [KSpecKw{["RO", "access"], "STREAMS", 1n, R.INeg{0n}, 1n, 2n}], KBySpecs{}}}
     case 209n:
-      Some{Ro{R.IPos{3n}, [], KBySpecs{}}}
+      Some{Ro{R.INeg{1n}, [], KBySpecs{}}}
     case 210n:
-      Some{Ro{R.IPos{3n}, [], KBySpecs{}}}
+      Some{Ro{R.INeg{2n}, [KSpec{["RO", "access"], 1n, R.IPos{0n}, 1n, 0n}], KBySpecs{}}}
     case 211n:
-      Some{Ro{R.INeg{2n}, [], KBySpecs{}}}
+      Some{Ro{R.IPos{2n}, [], KBySpecs{}}}
     case 212n:
       Some{Ro{R.IPos{2n}, [], KBySpecs{}}}
     case 213n:
@@ -2783,17 +2843,17 @@ def spec.key(+key: Nat) -> Maybe<&2, Ro>:
     case 214n:
       Some{Ro{R.IPos{2n}, [], KBySpecs{}}}
     case 215n:
-      Some{Ro{R.INeg{1n}, [], KBySpecs{}}}
+      Some{Ro{R.IPos{3n}, [], KBySpecs{}}}
     case 216n:
-      Some{Ro{R.IPos{2n}, [], KBySpecs{}}}
+      Some{Ro{R.IPos{3n}, [], KBySpecs{}}}
     case 217n:
       Some{Ro{R.INeg{2n}, [], KBySpecs{}}}
     case 218n:
-      Some{Ro{R.INeg{2n}, [], KBySpecs{}}}
-    case 219n:
       Some{Ro{R.IPos{2n}, [], KBySpecs{}}}
+    case 219n:
+      Some{Ro{R.IPos{3n}, [], KBySpecs{}}}
     case 220n:
-      Some{Ro{R.INeg{2n}, [], KBySpecs{}}}
+      Some{Ro{R.IPos{2n}, [], KBySpecs{}}}
     case 221n:
       Some{Ro{R.INeg{1n}, [], KBySpecs{}}}
     case 222n:
@@ -2801,61 +2861,61 @@ def spec.key(+key: Nat) -> Maybe<&2, Ro>:
     case 223n:
       Some{Ro{R.INeg{2n}, [], KBySpecs{}}}
     case 224n:
-      Some{Ro{R.INeg{3n}, [], KBySpecs{}}}
+      Some{Ro{R.INeg{2n}, [], KBySpecs{}}}
     case 225n:
       Some{Ro{R.IPos{2n}, [], KBySpecs{}}}
     case 226n:
-      Some{Ro{R.IPos{2n}, [], KBySpecs{}}}
+      Some{Ro{R.INeg{2n}, [], KBySpecs{}}}
     case 227n:
-      Some{Ro{R.IPos{2n}, [], KBySpecs{}}}
+      Some{Ro{R.INeg{1n}, [], KBySpecs{}}}
     case 228n:
-      Some{Ro{R.INeg{1n}, [], KBySpecs{}}}
+      Some{Ro{R.IPos{2n}, [], KBySpecs{}}}
     case 229n:
-      Some{Ro{R.INeg{1n}, [], KBySpecs{}}}
+      Some{Ro{R.INeg{2n}, [], KBySpecs{}}}
     case 230n:
-      Some{Ro{R.INeg{1n}, [], KBySpecs{}}}
+      Some{Ro{R.INeg{3n}, [], KBySpecs{}}}
     case 231n:
       Some{Ro{R.IPos{2n}, [], KBySpecs{}}}
     case 232n:
       Some{Ro{R.IPos{2n}, [], KBySpecs{}}}
     case 233n:
-      Some{Ro{R.INeg{3n}, [], KBySpecs{}}}
+      Some{Ro{R.IPos{2n}, [], KBySpecs{}}}
     case 234n:
-      Some{Ro{R.INeg{3n}, [], KBySpecs{}}}
-    case 235n:
-      Some{Ro{R.IPos{2n}, [], KBySpecs{}}}
-    case 236n:
-      Some{Ro{R.IPos{3n}, [KSpec{["RO"], 2n, R.IPos{0n}, 1n, 0n}], KBySpecs{}}}
-    case 237n:
-      Some{Ro{R.IPos{3n}, [KSpec{["RO"], 2n, R.IPos{0n}, 1n, 0n}], KBySpecs{}}}
-    case 238n:
-      Some{Ro{R.IPos{3n}, [KSpec{["RO"], 2n, R.IPos{0n}, 1n, 0n}], KBySpecs{}}}
-    case 239n:
-      Some{Ro{R.IPos{3n}, [KSpec{["RO"], 2n, R.IPos{0n}, 1n, 0n}], KBySpecs{}}}
-    case 240n:
-      Some{Ro{R.IPos{2n}, [], KBySpecs{}}}
-    case 241n:
-      Some{Ro{R.INeg{2n}, [KSpec{["RO"], 2n, R.IPos{0n}, 1n, 0n}], KBySpecs{}}}
-    case 242n:
-      Some{Ro{R.IPos{2n}, [], KBySpecs{}}}
-    case 243n:
-      Some{Ro{R.IPos{2n}, [], KBySpecs{}}}
-    case 244n:
-      Some{Ro{R.IPos{2n}, [], KBySpecs{}}}
-    case 245n:
-      Some{Ro{R.IPos{2n}, [], KBySpecs{}}}
-    case 246n:
       Some{Ro{R.INeg{1n}, [], KBySpecs{}}}
-    case 247n:
+    case 235n:
+      Some{Ro{R.INeg{1n}, [], KBySpecs{}}}
+    case 236n:
+      Some{Ro{R.INeg{1n}, [], KBySpecs{}}}
+    case 237n:
       Some{Ro{R.IPos{2n}, [], KBySpecs{}}}
+    case 238n:
+      Some{Ro{R.IPos{2n}, [], KBySpecs{}}}
+    case 239n:
+      Some{Ro{R.INeg{3n}, [], KBySpecs{}}}
+    case 240n:
+      Some{Ro{R.INeg{3n}, [], KBySpecs{}}}
+    case 241n:
+      Some{Ro{R.IPos{2n}, [], KBySpecs{}}}
+    case 242n:
+      Some{Ro{R.IPos{3n}, [KSpec{["RO"], 2n, R.IPos{0n}, 1n, 0n}], KBySpecs{}}}
+    case 243n:
+      Some{Ro{R.IPos{3n}, [KSpec{["RO"], 2n, R.IPos{0n}, 1n, 0n}], KBySpecs{}}}
+    case 244n:
+      Some{Ro{R.IPos{3n}, [KSpec{["RO"], 2n, R.IPos{0n}, 1n, 0n}], KBySpecs{}}}
+    case 245n:
+      Some{Ro{R.IPos{3n}, [KSpec{["RO"], 2n, R.IPos{0n}, 1n, 0n}], KBySpecs{}}}
+    case 246n:
+      Some{Ro{R.IPos{2n}, [], KBySpecs{}}}
+    case 247n:
+      Some{Ro{R.INeg{2n}, [KSpec{["RO"], 2n, R.IPos{0n}, 1n, 0n}], KBySpecs{}}}
     case 248n:
       Some{Ro{R.IPos{2n}, [], KBySpecs{}}}
     case 249n:
-      Some{Ro{R.INeg{1n}, [], KBySpecs{}}}
+      Some{Ro{R.IPos{2n}, [], KBySpecs{}}}
     case 250n:
-      Some{Ro{R.INeg{1n}, [], KBySpecs{}}}
+      Some{Ro{R.IPos{2n}, [], KBySpecs{}}}
     case 251n:
-      Some{Ro{R.INeg{1n}, [], KBySpecs{}}}
+      Some{Ro{R.IPos{2n}, [], KBySpecs{}}}
     case 252n:
       Some{Ro{R.INeg{1n}, [], KBySpecs{}}}
     case 253n:
@@ -2863,47 +2923,67 @@ def spec.key(+key: Nat) -> Maybe<&2, Ro>:
     case 254n:
       Some{Ro{R.IPos{2n}, [], KBySpecs{}}}
     case 255n:
-      Some{Ro{R.IPos{2n}, [], KBySpecs{}}}
-    case 256n:
-      Some{Ro{R.IPos{2n}, [], KBySpecs{}}}
-    case 257n:
-      Some{Ro{R.IPos{3n}, [], KBySpecs{}}}
-    case 258n:
-      Some{Ro{R.IPos{2n}, [], KBySpecs{}}}
-    case 259n:
       Some{Ro{R.INeg{1n}, [], KBySpecs{}}}
+    case 256n:
+      Some{Ro{R.INeg{1n}, [], KBySpecs{}}}
+    case 257n:
+      Some{Ro{R.INeg{1n}, [], KBySpecs{}}}
+    case 258n:
+      Some{Ro{R.INeg{1n}, [], KBySpecs{}}}
+    case 259n:
+      Some{Ro{R.IPos{2n}, [], KBySpecs{}}}
     case 260n:
-      Some{Ro{R.IPos{3n}, [], KBySpecs{}}}
+      Some{Ro{R.IPos{2n}, [], KBySpecs{}}}
     case 261n:
       Some{Ro{R.IPos{2n}, [], KBySpecs{}}}
     case 262n:
-      Some{Ro{R.INeg{1n}, [], KBySpecs{}}}
+      Some{Ro{R.IPos{2n}, [], KBySpecs{}}}
     case 263n:
-      Some{Ro{R.INeg{1n}, [], KBySpecs{}}}
-    case 264n:
-      Some{Ro{R.INeg{2n}, [], KBySpecs{}}}
-    case 265n:
-      Some{Ro{R.INeg{3n}, [], KBySpecs{}}}
-    case 266n:
-      Some{Ro{R.INeg{1n}, [], KBySpecs{}}}
-    case 267n:
       Some{Ro{R.IPos{3n}, [], KBySpecs{}}}
-    case 268n:
+    case 264n:
       Some{Ro{R.IPos{2n}, [], KBySpecs{}}}
-    case 269n:
-      Some{Ro{R.IPos{2n}, [], KBySpecs{}}}
-    case 270n:
-      Some{Ro{R.IPos{2n}, [], KBySpecs{}}}
-    case 271n:
+    case 265n:
       Some{Ro{R.INeg{1n}, [], KBySpecs{}}}
-    case 272n:
+    case 266n:
+      Some{Ro{R.IPos{3n}, [], KBySpecs{}}}
+    case 267n:
       Some{Ro{R.IPos{2n}, [], KBySpecs{}}}
-    case 273n:
+    case 268n:
+      Some{Ro{R.INeg{1n}, [], KBySpecs{}}}
+    case 269n:
+      Some{Ro{R.INeg{1n}, [], KBySpecs{}}}
+    case 270n:
       Some{Ro{R.INeg{2n}, [], KBySpecs{}}}
+    case 271n:
+      Some{Ro{R.INeg{3n}, [], KBySpecs{}}}
+    case 272n:
+      Some{Ro{R.INeg{1n}, [], KBySpecs{}}}
+    case 273n:
+      Some{Ro{R.IPos{3n}, [], KBySpecs{}}}
     case 274n:
       Some{Ro{R.IPos{2n}, [], KBySpecs{}}}
     case 275n:
       Some{Ro{R.IPos{2n}, [], KBySpecs{}}}
+    case 276n:
+      Some{Ro{R.IPos{2n}, [], KBySpecs{}}}
+    case 277n:
+      Some{Ro{R.INeg{1n}, [], KBySpecs{}}}
+    case 278n:
+      Some{Ro{R.IPos{2n}, [], KBySpecs{}}}
+    case 279n:
+      Some{Ro{R.INeg{2n}, [], KBySpecs{}}}
+    case 280n:
+      Some{Ro{R.IPos{2n}, [], KBySpecs{}}}
+    case 281n:
+      Some{Ro{R.IPos{2n}, [], KBySpecs{}}}
+    case 282n:
+      Some{Ro{R.IPos{2n}, [], KBySpecs{}}}
+    case 283n:
+      Some{Ro{R.INeg{2n}, [KSpec{["RO", "access"], 2n, R.IPos{0n}, 1n, 0n}], KBySpecs{}}}
+    case 284n:
+      Some{Ro{R.IPos{3n}, [KSpec{["RO", "access"], 2n, R.IPos{0n}, 1n, 0n}], KBySpecs{}}}
+    case 285n:
+      Some{Ro{R.IPos{4n}, [KSpec{["RO", "access"], 2n, R.IPos{0n}, 1n, 0n}], KBySpecs{}}}
     case _:
       None{}
 

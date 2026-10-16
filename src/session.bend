@@ -1402,6 +1402,10 @@ def blk.shape(+form: Nat, r: R.Reply) -> R.Reply:
       R.RPush{xs}
     case R.RSw{p, xs}:
       R.RSw{p, xs}
+    case R.RKMap{xs}:
+      R.RKMap{xs}
+    case R.RKPair{xs}:
+      R.RKPair{xs}
 
 # the pop run once on db: its reply as the blocking command's
 def blk.reply(b: Blk, db: R.Db) -> R.Reply:
@@ -3496,6 +3500,8 @@ def own_reply(+o: R.SessOp, +c: Conn, +s: Srv, +ds: R.Ds) -> Maybe<&2, R.Reply>:
       say(conn.mode(c), R.reply_of(R.exec(R.Upd{k, op}, R.ds.focused(ds))))
     case R.SAcl{+k, +a}:
       say(conn.mode(c), acl.reply(k, a, s, ds))
+    case R.SXRead{q}:
+      say(conn.mode(c), R.xread.many(q, R.ds.focused(ds)))
 
 # the connection after a session command
 def own_conn(+o: R.SessOp, +c: Conn, +s: Srv) -> Conn:
@@ -3597,6 +3603,8 @@ def own_conn(+o: R.SessOp, +c: Conn, +s: Srv) -> Conn:
     case R.SRestore{k, op}:
       step_conn(c, s)
     case R.SAcl{k, a}:
+      step_conn(c, s)
+    case R.SXRead{q}:
       step_conn(c, s)
 
 # what a session command does to the databases: SELECT and RESET move the
