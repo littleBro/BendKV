@@ -89,10 +89,9 @@ type Tail is Data:
 # together (R.tl.add: whether they all have one code, and which), the
 # unparsed tail (Tail), a protocol error that ends the connection, if
 # any, how many bytes the tail needs at least before a parse can make
-# progress,
-# and the buffer itself, whole (the server sends it to the actor with the
-# batch, for MONITOR: the parser takes the buffer and gives it back, so
-# that nothing shares it)
+# progress, and the buffer itself, whole (the server sends it to the
+# actor with the batch, for MONITOR: the parser takes the buffer and gives
+# it back, so that nothing shares it)
 type Batch is Data:
   Batch{reqs: List<&2, B.Req>, tl: U32, rest: Tail, err: Maybe<&2, String>, need: Nat, raw: String}
 

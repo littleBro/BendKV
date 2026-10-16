@@ -6288,6 +6288,82 @@ order.
 **Tests.** `tests/timing_test.py`, `tests/stats_test.py` and `tests/info_test.py` against
 Redis: commandstats, latencystats, errorstats and the slow log, unchanged.
 
+## 3zzzo. A long request read in part
+
+**What was slow** (issue #85). One MSET of 300,000 keys, sent at once, took BendKV 12.7 s,
+and Redis 7.0.15 0.16 s; every other client waited meanwhile. The same bytes trickled in,
+64 KB a millisecond, took 15.0 s. An SADD of 300,000 members took 5.0 s (Redis 0.12 s),
+and an RPUSH of 64 values of 512 KB 2.7 s (Redis 0.05 s). A pipeline of 300,000 SETs, the
+same keys in separate requests, took 0.22 s (PERFORMANCE.md, section 75).
+
+**Why.** Section 3zzn made one parse of a long request take time in proportion to its
+length, and left it parsed again from its start after each read. A request longer than
+a read (64 KB) comes in many reads. Its parse stopped at its first bulk not whole yet and
+asked for the bytes that bulk lacked, a few, so the next read set a parse going again
+(`need`). Each parse also copied the request's bytes so far, from its start, as the tail
+kept for the next read, and read its windows out of that copy: a String of chunks of
+2,048 bytes, which a slice past its first chunk walks from its start (`str_slice_far`).
+For a request of n bytes that is about n / 64 KB parses of up to n bytes each. Under
+callgrind (the issue's comment), four times the keys took 15.8 times the instructions,
+and `str_slice_far` 54 times.
+
+**What changed.** The parse keeps what it has read of a long request, as Redis keeps
+`multibulklen` and `bulklen` from one read to the next (`src/resp.bend`, Long requests in
+part).
+
+- When the arguments of a request read through windows (`wbulks`) stop at a bulk not
+  whole yet, the parse leaves a `Part`: the command's number and name, how many bulks
+  come after that one, the arguments read before it, and the bytes the request was read
+  from so far.
+- The tail the connection keeps is that bulk's bytes alone (`TailPart`), not the
+  request's from its start. The next parse goes on from that bulk, with the arguments
+  it kept (`parse_part`), so each read is parsed once.
+- Once the request is whole, the requests after it in the same read are parsed in
+  windows, as in any buffer.
+- MONITOR reads a batch's arguments again from its bytes. The batch a long request ends
+  in holds the bytes of the reads before it too, before its own (`part.raw`), so that
+  its line shows every argument.
+- A short request not whole yet is parsed again from its start, as before
+  (`TailBytes`): its bytes fit in a window, and only the windowed path keeps a part. GET,
+  SET and INCR read their arguments their own way and keep none either: a SET of a long
+  value waits for the value's bytes (`need`) and is parsed once they are in.
+- The connection's loops (`src/server.bend`, the `conn_*` and `conn_sub.*` steps) carry a
+  `P.Tail` where they carried a String: none, the bytes of a short request not whole
+  yet, or a request read in part. `Tail` and `Part` each have a variant that holds
+  itself and is never built, so the compiler makes each a node of its own, and the
+  loops' steps carry one word for it, as before (section 8).
+
+The bytes of every reply and the protocol's errors are as they were, and so is when an
+error is answered: the parse goes on at the bulk where it stopped, and a bulk's header
+is read as soon as its line has come.
+
+**Tests.** `tests/protocol_test.py` compares 22 new cases with Redis byte for byte: a
+long RPUSH cut at each place a bulk can be cut (at its `$`, after it, inside its length,
+at its header's CR and LF, at its data, inside it, at the CR and the LF after it), in its
+last bulk, in three pieces, with a first piece shorter than a window, with requests
+after it in the same read, two long requests each cut, a bulk that is not one, a bad
+length and a length past 512 MB after a cut, a bulk whose two bytes after its data are
+not CRLF, an unknown command, an MSET and one of an odd count, and a SET of a long value.
+Each passes on main's build too. Then it times, on BendKV alone, one MSET of 200,000
+keys sent at once against a pipeline of as many SETs: the MSET must take at most five
+times as long, plus half a second. Main's build took 5.3 to 5.6 s against 0.11 to 0.15
+s, and failed; this one 0.6 to 0.7 s against 0.12 s. `tests/monitor_test.py` sends a
+long RPUSH in three reads and compares MONITOR's line with Redis's.
+
+**What it costs.** Each read of a long request is parsed once (PERFORMANCE.md, section 75): one MSET of
+120,000 keys takes 709 million instructions under callgrind, against 7,561 million on
+main, and four times the keys cost 4.5 times the instructions, against 15.6 times. The
+requests a read holds whole are parsed as before: `make perfcheck` gives GET 3,420, SET
+4,181 and INCR 4,527 instructions per request, against 3,418, 4,180 and 4,520 for main
+fc28490's build, and LPUSH, HSET, SADD and a pipelined MSET of 10 keys stay within 0.4%
+of main's counts.
+
+**What is left.** One MSET of 300,000 keys still takes 3.6 times Redis's time (0.58 s
+against 0.16 s), and a key of it 5,900 instructions, where a whole pipelined SET takes
+4,181. Where they go is not broken down here. Its path differs from a SET's in that its
+arguments go into a list, turned around once the request is whole and then read into the
+command, where GET, SET and INCR read theirs into the command directly.
+
 ## 4. Where a request's time goes, and hiding the memory waits
 
 With the eight patches, BendKV ran fewer instructions on GET and SET than Redis, missed
