@@ -143,30 +143,31 @@ def ans.len(+a: Ans) -> Nat:
 # value grows, whether GETEX's key had a time to lose. A call refused or
 # failed changes nothing. The fast way counts a batch once it has run
 # (run_put): a batch of one code whose rule reads nothing (GET) or only
-# its calls and the errors its replies were looked at for anyway (INCR)
-# is counted without a walk of its replies (dirty.quick), any other with
-# one (dirty.batch); a batch with a code that takes a weight reads its
-# calls' weights before it runs, from the databases as the batch found
-# them (fast.run.w), and no other batch reads anything more before it
-# runs. The general way counts each call as it runs (gen.count.d). A client
-# served later by a push (Blocked clients) counts what Redis counts for
-# it: the elements BLMPOP and BZMPOP took, and BZPOPMIN's and BZPOPMAX's
-# one; BLPOP, BRPOP, BLMOVE and BRPOPLPUSH, served so, count none in
-# Redis 7.0.15. Where BendKV counts otherwise (README, "Where BendKV
-# differs"): SET with GET counts its reply (none for a key not there with
-# NX or without it, one for a key there with NX); ZADD and GEOADD without
-# NX or CH count each pair, those whose score was there unchanged too;
-# BITFIELD counts each SET and INCRBY that OVERFLOW FAIL did not refuse,
-# those that leave the bits as they were too; PFADD counts one where Redis
-# counts each register that changes, and one for a new key; PFCOUNT and
-# PFDEBUG count none; a call of the fast way reads the databases as its
-# batch found them, not as the calls before it in the batch left them.
+# its calls and the errors its replies were looked at for anyway (INCR) is
+# counted without a walk of its replies (dirty.quick), any other with one
+# (dirty.batch); a batch with a code that takes a weight reads its calls'
+# weights before it runs, from the databases as the batch found them
+# (fast.run.w, run_put.w), and no other batch reads anything more before
+# it runs. The general way counts each call as it runs (gen.count.d). A
+# client served later by a push (Blocked clients) counts what Redis counts
+# for it: the elements BLMPOP and BZMPOP took, and BZPOPMIN's and
+# BZPOPMAX's one; BLPOP, BRPOP, BLMOVE and BRPOPLPUSH, served so, count
+# none in Redis 7.0.15. Where BendKV counts otherwise (README, "Where
+# BendKV differs"): SET with GET counts its reply (none for a key not
+# there with NX or without it, one for a key there with NX); ZADD and
+# GEOADD without NX or CH count each pair, those whose score was there
+# unchanged too; BITFIELD counts each SET and INCRBY that OVERFLOW FAIL
+# did not refuse, those that leave the bits as they were too; PFADD counts
+# one where Redis counts each register that changes, and one for a new
+# key; PFCOUNT and PFDEBUG count none; a call of the fast way reads the
+# databases as its batch found them, not as the calls before it in the
+# batch left them.
 
 # a reply that is an error; the integer of one that is a positive one (0
 # for any other)
 def d.err(+r: R.Reply) -> Bool:
   match r:
-    case R.RError{m}:
+    case R.RError{+m}:
       True{}
     case _:
       False{}
@@ -178,20 +179,30 @@ def d.int(+r: R.Reply) -> Nat:
     case _:
       0n
 
+# the replies of a list (a loop: List.length is no loop, and the count of
+# a batch of one code is a loop of its own only when all it calls is one,
+# dirty.one)
+def d.len(+xs: List<&2, R.Reply>, +acc: Nat) -> Nat:
+  match xs:
+    case Nil{}:
+      acc
+    case Con{+x, +rest}:
+      d.len(rest, 1n+acc)
+
 # SET's: OK, or the value before (GET); none for a SET that NX or XX
 # refused
 def d.ok(+r: R.Reply) -> Nat:
   match r:
-    case R.RStatus{s}:
+    case R.RStatus{+s}:
       1n
-    case R.RBulk{s}:
+    case R.RBulk{+s}:
       1n
     case _:
       0n
 
 def d.bulk(+r: R.Reply) -> Nat:
   match r:
-    case R.RBulk{s}:
+    case R.RBulk{+s}:
       1n
     case _:
       0n
@@ -199,20 +210,20 @@ def d.bulk(+r: R.Reply) -> Nat:
 # a pop of a list or a set: an element, or those of a count
 def d.pop(+r: R.Reply) -> Nat:
   match r:
-    case R.RBulk{s}:
+    case R.RBulk{+s}:
       1n
     case R.RArray{+xs}:
-      List.length(&2, R.Reply, xs)
+      d.len(xs, 0n)
     case R.RSet{+xs}:
-      List.length(&2, R.Reply, xs)
+      d.len(xs, 0n)
     case _:
       0n
 
 # LMPOP and ZMPOP: the elements in the second item of [key, elements]
 def d.second(+xs: List<&2, R.Reply>) -> Nat:
   match xs:
-    case Con{k, Con{R.RArray{+ys}, rest}}:
-      List.length(&2, R.Reply, ys)
+    case Con{+k, Con{R.RArray{+ys}, +rest}}:
+      d.len(ys, 0n)
     case _:
       0n
 
@@ -228,16 +239,16 @@ def d.mpop(+r: R.Reply) -> Nat:
 def d.zpop(+r: R.Reply) -> Nat:
   match r:
     case R.RArray{+xs}:
-      Nat.div(List.length(&2, R.Reply, xs), 2n)
+      Nat.div(d.len(xs, 0n), 2n)
     case R.RPairs{+xs}:
-      List.length(&2, R.Reply, xs)
+      d.len(xs, 0n)
     case _:
       0n
 
 # BLPOP and BZPOPMIN that found an element at once
 def d.bpop(+r: R.Reply) -> Nat:
   match r:
-    case R.RArray{xs}:
+    case R.RArray{+xs}:
       1n
     case _:
       0n
@@ -265,26 +276,27 @@ def d.zadd(+r: R.Reply, +w: Nat) -> Nat:
   match r:
     case R.RInt{R.IPos{+n}}:
       Bool.pick(Nat, Nat.is_eq(w, 0n), n, w)
-    case R.RDbl{s}:
+    case R.RDbl{+s}:
       1n
-    case R.RBulk{s}:
+    case R.RBulk{+s}:
       1n
     case _:
       0n
 
-def d.nulls(+xs: List<&2, R.Reply>) -> Nat:
+# (a loop, as d.len)
+def d.nulls(+xs: List<&2, R.Reply>, +acc: Nat) -> Nat:
   match xs:
     case Nil{}:
-      0n
+      acc
     case Con{R.RNull{}, +rest}:
-      1n+d.nulls(rest)
-    case Con{x, +rest}:
-      d.nulls(rest)
+      d.nulls(rest, 1n+acc)
+    case Con{+x, +rest}:
+      d.nulls(rest, acc)
 
 def d.bitfield(+r: R.Reply, +w: Nat) -> Nat:
   match r:
     case R.RArray{+xs}:
-      Nat.sub(w, d.nulls(xs))
+      Nat.sub(w, d.nulls(xs, 0n))
     case _:
       0n
 
@@ -340,7 +352,7 @@ def dirty.call(+k: Nat, +r: R.Reply, +w: Nat) -> Nat:
 # of one)
 def dirty.first(+k: Nat, +rs: List<&2, R.Reply>, +w: Nat) -> Nat:
   match rs:
-    case Con{+r, rest}:
+    case Con{+r, +rest}:
       dirty.call(k, r, w)
     case Nil{}:
       0n
@@ -350,7 +362,7 @@ def dirty.first(+k: Nat, +rs: List<&2, R.Reply>, +w: Nat) -> Nat:
 # and BZPOPMAX's one (a key, a member and its score), none for the rest
 def d.three(+r: R.Reply) -> Nat:
   match r:
-    case R.RArray{Con{a, Con{b, Con{c, Nil{}}}}}:
+    case R.RArray{Con{+a, Con{+b, Con{+c, Nil{}}}}}:
       1n
     case _:
       0n
@@ -386,7 +398,7 @@ def dw.getex(+o: R.ExOpt, +m: Maybe<&2, KV.Item<KV.Val>>) -> Nat:
   match o m:
     case R.XPersist{} Some{KV.Item{v, +e}}:
       Bool.pick(Nat, Nat.is_eq(e, 0n), 0n, 1n)
-    case R.XAt{at, ms, v} Some{it}:
+    case R.XAt{+at, +ms, +v} Some{+it}:
       1n
     case _ _:
       0n
@@ -397,9 +409,9 @@ def dw.bit.at(+w: String, +off: Nat) -> Bool:
 # SETBIT: a value made or grown, or a bit that changes
 def dw.bit(+off: Nat, +on: Bool, +m: Maybe<&2, KV.Item<KV.Val>>) -> Nat:
   match m:
-    case Some{KV.Item{KV.VStr{+w}, e}}:
+    case Some{KV.Item{KV.VStr{+w}, +e}}:
       Bool.pick(Nat, Bool.or(Nat.is_le(String.length(w), Nat.div(off, 8n)), Bool.xor(dw.bit.at(w, off), on)), 1n, 0n)
-    case Some{it}:
+    case Some{+it}:
       0n
     case None{}:
       1n
@@ -409,9 +421,9 @@ def dw.bf(+ops: List<&2, R.BfOp>) -> Nat:
   match ops:
     case Nil{}:
       0n
-    case Con{R.BfGet{s, b, o}, +rest}:
+    case Con{R.BfGet{+s, +b, +o}, +rest}:
       dw.bf(rest)
-    case Con{x, +rest}:
+    case Con{+x, +rest}:
       1n+dw.bf(rest)
 
 # LTRIM: the elements out of its range, of the list there
@@ -431,16 +443,16 @@ def dw.span(+ma: Maybe<&2, R.Int>, +mb: Maybe<&2, R.Int>, +n: Nat) -> Nat:
 
 def dw.trim(+a: String, +b: String, +m: Maybe<&2, KV.Item<KV.Val>>) -> Nat:
   match m:
-    case Some{KV.Item{KV.VColl{KV.CList{+l}}, e}}:
+    case Some{KV.Item{KV.VColl{KV.CList{+l}}, +e}}:
       dw.span(R.lnum(a), R.lnum(b), KV.deq.len(l))
     case _:
       0n
 
 def dw.list(+l: R.LWrite, +k: String, +ds: R.Ds) -> Nat:
   match l:
-    case R.LWPush{left, +xs}:
+    case R.LWPush{+left, +xs}:
       List.length(&2, String, xs)
-    case R.LWPushX{left, +xs}:
+    case R.LWPushX{+left, +xs}:
       List.length(&2, String, xs)
     case R.LWTrim{+a, +b}:
       dw.trim(a, b, R.ds.ent(ds, k))
@@ -449,14 +461,14 @@ def dw.list(+l: R.LWrite, +k: String, +ds: R.Ds) -> Nat:
 
 def dw.zadd(+o: R.ZOpts, +ps: List<&2, R.ZPair>) -> Nat:
   match o:
-    case R.ZOpts{+nx, xx, gt, lt, +ch, incr}:
+    case R.ZOpts{+nx, +xx, +gt, +lt, +ch, +incr}:
       Bool.pick(Nat, Bool.or(nx, ch), 0n, List.length(&2, R.ZPair, ps))
 
 # SMOVE: the member taken from src, and added to dst when dst lacks it
 # (none when src is dst)
 def dw.has(+m: Maybe<&2, KV.Item<KV.Val>>, +x: String) -> Bool:
   match m:
-    case Some{KV.Item{KV.VColl{KV.CMems{+s}}, e}}:
+    case Some{KV.Item{KV.VColl{KV.CMems{+s}}, +e}}:
       KV.mems.has(x, s)
     case _:
       False{}
@@ -472,13 +484,13 @@ def dw.upd(+op: R.UpdOp, +k: String, +ds: R.Ds) -> Nat:
   match op:
     case R.UGetEx{+o}:
       dw.getex(o, R.ds.ent(ds, k))
-    case R.URange{off, +s}:
+    case R.URange{+off, +s}:
       Bool.pick(Nat, String.is_empty(s), 0n, 1n)
     case R.USetBit{+off, +on}:
       dw.bit(off, on, R.ds.ent(ds, k))
     case R.UBitfield{+ops}:
       dw.bf(ops)
-    case R.UHash{R.HWSet{+ps, mset}}:
+    case R.UHash{R.HWSet{+ps, +mset}}:
       List.length(&2, KV.HPair, ps)
     case R.UList{+l}:
       dw.list(l, k, ds)
@@ -498,7 +510,7 @@ def dw.own(+o: R.SessOp, +ds: R.Ds) -> Nat:
   match o:
     case R.SFlushAll{}:
       dw.dbs(R.ds.list(ds))
-    case R.SSortStore{k, R.SortStore{+d, so}}:
+    case R.SSortStore{+k, R.SortStore{+d, +so}}:
       dw.live(ds, d)
     case R.SGeoStore{+kind, +a}:
       dw.geo(R.geo.dst(kind, a), ds)
@@ -513,15 +525,15 @@ def dw.cmd(+c: R.Cmd, +ds: R.Ds) -> Nat:
       List.length(&2, R.KVPair, ps)
     case R.FlushDb{}:
       R.db.n(R.ds.focused(ds))
-    case R.Rename{+s, +d, nx}:
+    case R.Rename{+s, +d, +nx}:
       Bool.pick(Nat, String.eq(s, d), 0n, 1n)
-    case R.BitOp{op, +d, srcs}:
+    case R.BitOp{+op, +d, +srcs}:
       dw.live(ds, d)
-    case R.SStore{k, +d, srcs}:
+    case R.SStore{+k, +d, +srcs}:
       dw.live(ds, d)
-    case R.ZStore{k, +d, srcs}:
+    case R.ZStore{+k, +d, +srcs}:
       dw.live(ds, d)
-    case R.ZRangeStore{+d, src, q}:
+    case R.ZRangeStore{+d, +src, +q}:
       dw.live(ds, d)
     case R.SMv{+s, +d, +w}:
       dw.smove(ds, s, d, w)
@@ -548,19 +560,22 @@ def dw.if(on: Bool, +c: R.Cmd, +ds: R.Ds) -> Nat:
 def dw.call(+k: Nat, +c: R.Cmd, +ds: R.Ds) -> Nat:
   dw.if(dirty.weighs(k), c, ds)
 
-def dirty.weighs.runs(+rs: List<&2, Nat>) -> Bool:
+# (loops, as fast.run calls them before the batch runs: a call of one
+# that is no loop makes it keep its state across the call, FINDINGS.md,
+# section 7)
+def dirty.weighs.runs(+rs: List<&2, Nat>, +acc: Bool) -> Bool:
   match rs:
     case Nil{}:
-      False{}
+      acc
     case Con{+r, +rest}:
-      Bool.or(dirty.weighs(R.run.code(r)), dirty.weighs.runs(rest))
+      dirty.weighs.runs(rest, Bool.or(acc, dirty.weighs(R.run.code(r))))
 
 def dirty.weighs.t(+run: Nat, +runs: List<&2, Nat>) -> Bool:
   match runs:
     case Nil{}:
       dirty.weighs(R.run.code(run))
     case _:
-      dirty.weighs.runs(runs)
+      dirty.weighs.runs(runs, False{})
 
 # the weights of a batch's calls, in order, when one of its codes takes
 # one (else none: each is 0)
@@ -573,7 +588,7 @@ def dirty.ws.of(+cs: List<&2, R.Cmd>, +ds: R.Ds) -> List<&2, Nat>:
 
 def dirty.weighs.tally(+t: R.Tally) -> Bool:
   match t:
-    case R.Tally{calls, risky, +run, +runs}:
+    case R.Tally{+calls, +risky, +run, +runs}:
       dirty.weighs.t(run, runs)
 
 # whether a batch's count needs a look at its replies (dirty.batch): not
@@ -598,8 +613,16 @@ def dirty.walks.t(+run: Nat, +runs: List<&2, Nat>, +known: Bool) -> Bool:
 
 def dirty.walks.tally(+t: R.Tally) -> Bool:
   match t:
-    case R.Tally{calls, +risky, +run, +runs}:
+    case R.Tally{+calls, +risky, +run, +runs}:
       dirty.walks.t(run, runs, risky)
+
+# the errors found among a batch's replies (a loop, as d.len)
+def errs.len(+xs: List<&2, R.Erred>, +acc: Nat) -> Nat:
+  match xs:
+    case Nil{}:
+      acc
+    case Con{+x, +rest}:
+      errs.len(rest, 1n+acc)
 
 def dirty.quick.of(one: Bool, +calls: Nat, +errs: Nat) -> Nat:
   match one:
@@ -674,11 +697,17 @@ def dirty.one.if(ran: Bool, +k: Nat, +known: Bool, +calls: Nat, +errs: Nat, +rs:
     case False{}:
       0n
 
+# a batch of one code (run): a loop of its own, as all it calls is one
+# (FINDINGS.md, section 7: flat_of), so that run_put, which calls it,
+# saves no frame around it
+def dirty.one(+calls: Nat, +run: Nat, +known: Bool, +errs: Nat, +rs: List<&2, R.Reply>, +ws: List<&2, Nat>) -> Nat:
+  +k = R.run.code(run)
+  dirty.one.if(Nat.is_eq(R.code.class(k), 0n), k, known, calls, errs, rs, ws)
+
 def dirty.batch(+calls: Nat, +run: Nat, +runs: List<&2, Nat>, +known: Bool, +errs: Nat, +rs: List<&2, R.Reply>, +ws: List<&2, Nat>) -> Nat:
   match runs:
     case Nil{}:
-      +k = R.run.code(run)
-      dirty.one.if(Nat.is_eq(R.code.class(k), 0n), k, known, calls, errs, rs, ws)
+      dirty.one(calls, run, known, errs, rs, ws)
     case _:
       dirty.zip(R.codes.runs(runs, Nil{}), rs, ws, 0n)
 
@@ -7015,65 +7044,123 @@ def errs.put(xs: List<&2, R.Erred>, srv: S.Srv) -> S.Srv:
 # file, its effects put before the group's. Not in the encoded bytes: a
 # '-' also begins a line of a reply that is no error (a bulk "-5", a
 # negative score), and an answer of many chunks is read from its start
-# for each index of a line.
-def run_put(walk: Bool, outs: List<&2, Sigma<&2, &2, Chan(Ans), _ => Ans>>, es: List<&2, A.Ent>, back: Chan(Ans), t: R.Tally, +inb: Nat, ws: List<&2, Nat>, d: S.Fin, up: List<&2, Up>, pb: Ps) -> Grp:
+# for each index of a line. Its changes are counted by its rule alone
+# (dirty.quick), or by a walk of its replies (walk: dirty.one, a loop of
+# its own, for a batch of one code; dirty.batch for one of several); a
+# batch with a code that takes a weight goes to run_put.w with its
+# weights. Each has one caller (fast.run.w), whose segment it stays in: a
+# def called from two places is entered through the work loop
+# (FINDINGS.md, section 7; PERFORMANCE.md, section 72).
+def run_put(walk: Bool, outs: List<&2, Sigma<&2, &2, Chan(Ans), _ => Ans>>, es: List<&2, A.Ent>, back: Chan(Ans), t: R.Tally, +inb: Nat, d: S.Fin, up: List<&2, Up>, pb: Ps) -> Grp:
   match walk t d:
     case False{} R.Tally{+calls, False{}, +run, runs} S.Fin{rs, cn, srv, ds}:
       +n = dirty.quick(calls, run, 0n)
       +a = ans_of(rs, cn)
       +outb = ans.len(a)
       Grp{(back, a) <> outs, es, S.srv.ran.d(srv, calls, run, runs, inb, outb, n), ds, WaitNone{}, up, TxNone{}, pb}
+    case True{} R.Tally{+calls, False{}, +run, Nil{}} S.Fin{+rs, cn, srv, ds}:
+      +n = dirty.one(calls, run, False{}, 0n, rs, Nil{})
+      +a = ans_of(rs, cn)
+      +outb = ans.len(a)
+      Grp{(back, a) <> outs, es, S.srv.ran.d(srv, calls, run, Nil{}, inb, outb, n), ds, WaitNone{}, up, TxNone{}, pb}
     case True{} R.Tally{+calls, False{}, +run, +runs} S.Fin{+rs, cn, srv, ds}:
-      +n = dirty.batch(calls, run, runs, False{}, 0n, rs, ws)
+      +n = dirty.batch(calls, run, runs, False{}, 0n, rs, Nil{})
       +a = ans_of(rs, cn)
       +outb = ans.len(a)
       Grp{(back, a) <> outs, es, S.srv.ran.d(srv, calls, run, runs, inb, outb, n), ds, WaitNone{}, up, TxNone{}, pb}
     case False{} R.Tally{+calls, True{}, +run, Nil{}} S.Fin{+rs, cn, srv, ds}:
       +xs = R.errs.one(rs, R.run.code(run), Nil{})
-      +n = dirty.quick(calls, run, List.length(&2, R.Erred, xs))
+      +n = dirty.quick(calls, run, errs.len(xs, 0n))
       +a = ans_of(rs, cn)
       +outb = ans.len(a)
       Grp{(back, a) <> outs, es, errs.put(xs, S.srv.ran.d(srv, calls, run, Nil{}, inb, outb, n)), ds, WaitNone{}, up, TxNone{}, pb}
     case True{} R.Tally{+calls, True{}, +run, Nil{}} S.Fin{+rs, cn, srv, ds}:
       +xs = R.errs.one(rs, R.run.code(run), Nil{})
-      +n = dirty.batch(calls, run, Nil{}, True{}, List.length(&2, R.Erred, xs), rs, ws)
+      +n = dirty.one(calls, run, True{}, errs.len(xs, 0n), rs, Nil{})
       +a = ans_of(rs, cn)
       +outb = ans.len(a)
       Grp{(back, a) <> outs, es, errs.put(xs, S.srv.ran.d(srv, calls, run, Nil{}, inb, outb, n)), ds, WaitNone{}, up, TxNone{}, pb}
     case _ R.Tally{+calls, True{}, +run, +runs} S.Fin{+rs, cn, srv, ds}:
       +xs = R.errs.zip(rs, R.codes.runs(runs, Nil{}), Nil{})
-      +n = dirty.batch(calls, run, runs, True{}, List.length(&2, R.Erred, xs), rs, ws)
+      +n = dirty.batch(calls, run, runs, True{}, errs.len(xs, 0n), rs, Nil{})
       +a = ans_of(rs, cn)
       +outb = ans.len(a)
       Grp{(back, a) <> outs, es, errs.put(xs, S.srv.ran.d(srv, calls, run, runs, inb, outb, n)), ds, WaitNone{}, up, TxNone{}, pb}
 
-def group_put(walk: Bool, outs: List<&2, Sigma<&2, &2, Chan(Ans), _ => Ans>>, es: List<&2, A.Ent>, back: Chan(Ans), t: R.Tally, +inb: Nat, ws: List<&2, Nat>, d: S.Logged, up: List<&2, Up>, pb: Ps) -> Grp:
+# the same for a batch with a code that takes a weight, ws its calls'
+# weights (fast.run.w): its replies walked
+def run_put.w(outs: List<&2, Sigma<&2, &2, Chan(Ans), _ => Ans>>, es: List<&2, A.Ent>, back: Chan(Ans), t: R.Tally, +inb: Nat, ws: List<&2, Nat>, d: S.Fin, up: List<&2, Up>, pb: Ps) -> Grp:
+  match t d:
+    case R.Tally{+calls, False{}, +run, +runs} S.Fin{+rs, cn, srv, ds}:
+      +n = dirty.batch(calls, run, runs, False{}, 0n, rs, ws)
+      +a = ans_of(rs, cn)
+      +outb = ans.len(a)
+      Grp{(back, a) <> outs, es, S.srv.ran.d(srv, calls, run, runs, inb, outb, n), ds, WaitNone{}, up, TxNone{}, pb}
+    case R.Tally{+calls, True{}, +run, Nil{}} S.Fin{+rs, cn, srv, ds}:
+      +xs = R.errs.one(rs, R.run.code(run), Nil{})
+      +n = dirty.batch(calls, run, Nil{}, True{}, errs.len(xs, 0n), rs, ws)
+      +a = ans_of(rs, cn)
+      +outb = ans.len(a)
+      Grp{(back, a) <> outs, es, errs.put(xs, S.srv.ran.d(srv, calls, run, Nil{}, inb, outb, n)), ds, WaitNone{}, up, TxNone{}, pb}
+    case R.Tally{+calls, True{}, +run, +runs} S.Fin{+rs, cn, srv, ds}:
+      +xs = R.errs.zip(rs, R.codes.runs(runs, Nil{}), Nil{})
+      +n = dirty.batch(calls, run, runs, True{}, errs.len(xs, 0n), rs, ws)
+      +a = ans_of(rs, cn)
+      +outb = ans.len(a)
+      Grp{(back, a) <> outs, es, errs.put(xs, S.srv.ran.d(srv, calls, run, runs, inb, outb, n)), ds, WaitNone{}, up, TxNone{}, pb}
+
+def group_put(walk: Bool, outs: List<&2, Sigma<&2, &2, Chan(Ans), _ => Ans>>, es: List<&2, A.Ent>, back: Chan(Ans), t: R.Tally, +inb: Nat, d: S.Logged, up: List<&2, Up>, pb: Ps) -> Grp:
   match walk t d:
     case False{} R.Tally{+calls, False{}, +run, runs} S.Logged{rs, e, cn, srv, ds}:
       +n = dirty.quick(calls, run, 0n)
       +a = ans_of(rs, cn)
       +outb = ans.len(a)
       Grp{(back, a) <> outs, A.ents.onto(e, es), S.srv.ran.d(srv, calls, run, runs, inb, outb, n), ds, WaitNone{}, up, TxNone{}, pb}
+    case True{} R.Tally{+calls, False{}, +run, Nil{}} S.Logged{+rs, e, cn, srv, ds}:
+      +n = dirty.one(calls, run, False{}, 0n, rs, Nil{})
+      +a = ans_of(rs, cn)
+      +outb = ans.len(a)
+      Grp{(back, a) <> outs, A.ents.onto(e, es), S.srv.ran.d(srv, calls, run, Nil{}, inb, outb, n), ds, WaitNone{}, up, TxNone{}, pb}
     case True{} R.Tally{+calls, False{}, +run, +runs} S.Logged{+rs, e, cn, srv, ds}:
-      +n = dirty.batch(calls, run, runs, False{}, 0n, rs, ws)
+      +n = dirty.batch(calls, run, runs, False{}, 0n, rs, Nil{})
       +a = ans_of(rs, cn)
       +outb = ans.len(a)
       Grp{(back, a) <> outs, A.ents.onto(e, es), S.srv.ran.d(srv, calls, run, runs, inb, outb, n), ds, WaitNone{}, up, TxNone{}, pb}
     case False{} R.Tally{+calls, True{}, +run, Nil{}} S.Logged{+rs, e, cn, srv, ds}:
       +xs = R.errs.one(rs, R.run.code(run), Nil{})
-      +n = dirty.quick(calls, run, List.length(&2, R.Erred, xs))
+      +n = dirty.quick(calls, run, errs.len(xs, 0n))
       +a = ans_of(rs, cn)
       +outb = ans.len(a)
       Grp{(back, a) <> outs, A.ents.onto(e, es), errs.put(xs, S.srv.ran.d(srv, calls, run, Nil{}, inb, outb, n)), ds, WaitNone{}, up, TxNone{}, pb}
     case True{} R.Tally{+calls, True{}, +run, Nil{}} S.Logged{+rs, e, cn, srv, ds}:
       +xs = R.errs.one(rs, R.run.code(run), Nil{})
-      +n = dirty.batch(calls, run, Nil{}, True{}, List.length(&2, R.Erred, xs), rs, ws)
+      +n = dirty.one(calls, run, True{}, errs.len(xs, 0n), rs, Nil{})
       +a = ans_of(rs, cn)
       +outb = ans.len(a)
       Grp{(back, a) <> outs, A.ents.onto(e, es), errs.put(xs, S.srv.ran.d(srv, calls, run, Nil{}, inb, outb, n)), ds, WaitNone{}, up, TxNone{}, pb}
     case _ R.Tally{+calls, True{}, +run, +runs} S.Logged{+rs, e, cn, srv, ds}:
       +xs = R.errs.zip(rs, R.codes.runs(runs, Nil{}), Nil{})
-      +n = dirty.batch(calls, run, runs, True{}, List.length(&2, R.Erred, xs), rs, ws)
+      +n = dirty.batch(calls, run, runs, True{}, errs.len(xs, 0n), rs, Nil{})
+      +a = ans_of(rs, cn)
+      +outb = ans.len(a)
+      Grp{(back, a) <> outs, A.ents.onto(e, es), errs.put(xs, S.srv.ran.d(srv, calls, run, runs, inb, outb, n)), ds, WaitNone{}, up, TxNone{}, pb}
+
+def group_put.w(outs: List<&2, Sigma<&2, &2, Chan(Ans), _ => Ans>>, es: List<&2, A.Ent>, back: Chan(Ans), t: R.Tally, +inb: Nat, ws: List<&2, Nat>, d: S.Logged, up: List<&2, Up>, pb: Ps) -> Grp:
+  match t d:
+    case R.Tally{+calls, False{}, +run, +runs} S.Logged{+rs, e, cn, srv, ds}:
+      +n = dirty.batch(calls, run, runs, False{}, 0n, rs, ws)
+      +a = ans_of(rs, cn)
+      +outb = ans.len(a)
+      Grp{(back, a) <> outs, A.ents.onto(e, es), S.srv.ran.d(srv, calls, run, runs, inb, outb, n), ds, WaitNone{}, up, TxNone{}, pb}
+    case R.Tally{+calls, True{}, +run, Nil{}} S.Logged{+rs, e, cn, srv, ds}:
+      +xs = R.errs.one(rs, R.run.code(run), Nil{})
+      +n = dirty.batch(calls, run, Nil{}, True{}, errs.len(xs, 0n), rs, ws)
+      +a = ans_of(rs, cn)
+      +outb = ans.len(a)
+      Grp{(back, a) <> outs, A.ents.onto(e, es), errs.put(xs, S.srv.ran.d(srv, calls, run, Nil{}, inb, outb, n)), ds, WaitNone{}, up, TxNone{}, pb}
+    case R.Tally{+calls, True{}, +run, +runs} S.Logged{+rs, e, cn, srv, ds}:
+      +xs = R.errs.zip(rs, R.codes.runs(runs, Nil{}), Nil{})
+      +n = dirty.batch(calls, run, runs, True{}, errs.len(xs, 0n), rs, ws)
       +a = ans_of(rs, cn)
       +outb = ans.len(a)
       Grp{(back, a) <> outs, A.ents.onto(e, es), errs.put(xs, S.srv.ran.d(srv, calls, run, runs, inb, outb, n)), ds, WaitNone{}, up, TxNone{}, pb}
@@ -7184,19 +7271,19 @@ def job.slow(+cn: S.Conn, +back: Chan(Ans), +inb: Nat, raw: String, cmds: List<&
 def fast.run.w(w: Bool, +walk: Bool, log: Bool, outs: List<&2, Sigma<&2, &2, Chan(Ans), _ => Ans>>, es: List<&2, A.Ent>, back: Chan(Ans), t: R.Tally, +inb: Nat, cn: S.Conn, srv: S.Srv, cmds: List<&2, R.Cmd>, hs: List<&2, U32>, ds: R.Ds, up: List<&2, Up>, pb: Ps) -> Grp:
   match w log:
     case False{} True{}:
-      group_put(walk, outs, es, back, t, inb, Nil{}, S.run_log.plain(True{}, cn, srv, cmds, hs, ds), up, pb)
+      group_put(walk, outs, es, back, t, inb, S.run_log.plain(True{}, cn, srv, cmds, hs, ds), up, pb)
     case False{} False{}:
-      run_put(walk, outs, es, back, t, inb, Nil{}, S.run.plain(True{}, cn, srv, cmds, hs, ds), up, pb)
+      run_put(walk, outs, es, back, t, inb, S.run.plain(True{}, cn, srv, cmds, hs, ds), up, pb)
     case True{} True{}:
       +cs = cmds
       +d = ds
       +ws = dirty.ws.of(cs, d)
-      group_put(walk, outs, es, back, t, inb, ws, S.run_log.plain(True{}, cn, srv, cs, hs, d), up, pb)
+      group_put.w(outs, es, back, t, inb, ws, S.run_log.plain(True{}, cn, srv, cs, hs, d), up, pb)
     case True{} False{}:
       +cs = cmds
       +d = ds
       +ws = dirty.ws.of(cs, d)
-      run_put(walk, outs, es, back, t, inb, ws, S.run.plain(True{}, cn, srv, cs, hs, d), up, pb)
+      run_put.w(outs, es, back, t, inb, ws, S.run.plain(True{}, cn, srv, cs, hs, d), up, pb)
 
 def fast.run(+log: Bool, outs: List<&2, Sigma<&2, &2, Chan(Ans), _ => Ans>>, es: List<&2, A.Ent>, back: Chan(Ans), t: R.Tally, +inb: Nat, cn: S.Conn, srv: S.Srv, cmds: List<&2, R.Cmd>, hs: List<&2, U32>, ds: R.Ds, up: List<&2, Up>, pb: Ps) -> Grp:
   +tl = t
