@@ -368,9 +368,9 @@ def main():
         time.sleep(0.5)
         # the memory, the keys left and the eviction's counts of one moment:
         # DBSIZE and INFO in one transaction, as a request after another
-        # may set the eviction going again for a few keys (the heap's
-        # account moves with the requests in flight, by more than the
-        # eviction leaves under the limit)
+        # may set the eviction going again for a few keys (the heap moves
+        # between the cron's ticks by more than the eviction leaves under
+        # the limit: the calls' timing held until the tick, issue #79)
         seen = []
         def within():
             cmd(quiet, "MULTI")
