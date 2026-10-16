@@ -435,7 +435,8 @@ translation stays in the trusted base.
   invalidates nothing, where Redis invalidates its key; a client that others redirect to
   gets the invalidation of a key its own command writes before that command's reply,
   where Redis writes it after the reply for the commands that reply before they signal
-  the key (ZADD, ZINCRBY, HSET, HINCRBY, LPUSH, RPUSH) (FINDINGS.md, section 3zzzb).
+  the key (ZADD, ZINCRBY, HSET, HINCRBY, LPUSH, RPUSH, a served BLMPOP), and inside the
+  reply of a served BZPOPMIN, BZPOPMAX or BZMPOP (FINDINGS.md, section 3zzzb).
 - **The server:** LASTSAVE (the start, as BendKV writes no RDB snapshot), ROLE (a master
   with no replica), WAIT (0, as no replica acknowledges: at once when it asks for none,
   otherwise once its timeout ends, its client waiting as a blocking command's does),

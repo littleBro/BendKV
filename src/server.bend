@@ -3555,9 +3555,11 @@ def ps.pend.put(xs: List<&2, R.Reply>, pb: Ps) -> Ps:
 # whose command runs, as Redis serves it: BLMOVE and BRPOPLPUSH change
 # their destination (lmoveHandlePush signals it; the key they popped from
 # was signalled by the push that made it ready, as serveClientBlockedOnList
-# says); BLMPOP's pop (listElementsRemoved), BZPOPMIN's, BZPOPMAX's and
-# BZMPOP's (genericZpopCommand) signal the key they popped from, and
-# BLPOP's and BRPOP's (form 1) do not. The invalidations the served
+# says), unless it holds another type: then they answer WRONGTYPE, change
+# nothing and signal nothing (ok is False); BLMPOP's pop
+# (listElementsRemoved), BZPOPMIN's, BZPOPMAX's and BZMPOP's
+# (genericZpopCommand) signal the key they popped from, and BLPOP's and
+# BRPOP's (form 1) do not. The invalidations the served
 # client gets after its reply (pend, newest first); those it gets as
 # another's go on its channel, before its reply (iv.route). Those for the
 # client out, whose command served it, go after that client's reply, with
@@ -3573,10 +3575,17 @@ def ps.trk.popped(on: Bool, +ks: List<&2, String>, +id: Nat, +out: Maybe<&2, Nat
     case _ _:
       pb
 
-def ps.trk.served.go(+pc: R.Cmd, +form: Nat, +id: Nat, +out: Maybe<&2, Nat>, pb: Ps) -> Ps:
+def ps.trk.moved(on: Bool, +d: String, +id: Nat, +out: Maybe<&2, Nat>, pb: Ps) -> Ps:
+  match on:
+    case True{}:
+      iv.ps(iv.key.as(d, id, out, True{}, iv.of(pb)))
+    case False{}:
+      pb
+
+def ps.trk.served.go(+pc: R.Cmd, +form: Nat, ok: Bool, +id: Nat, +out: Maybe<&2, Nat>, pb: Ps) -> Ps:
   match pc:
     case R.LMove{s, +d, e}:
-      iv.ps(iv.key.as(d, id, out, True{}, iv.of(pb)))
+      ps.trk.moved(ok, d, id, out, pb)
     case R.LMPop{+ks, l, n}:
       ps.trk.popped(Bool.not(Nat.is_eq(form, 1n)), ks, id, out, pb)
     case R.ZMPop{+ks, m, n}:
@@ -3594,20 +3603,20 @@ def pd.mk(p: List<&2, R.Reply> & Ps, old: List<&2, R.Reply>) -> Pd:
   (late, pb) = p
   pd.of(ps.pend.take(pb), late, old)
 
-def pd.aside(p: List<&2, R.Reply> & Ps, +pc: R.Cmd, +form: Nat, +id: Nat, +out: Nat) -> Pd:
+def pd.aside(p: List<&2, R.Reply> & Ps, +pc: R.Cmd, +form: Nat, ok: Bool, +id: Nat, +out: Nat) -> Pd:
   (old, pb) = p
-  pd.mk(ps.own.take(ps.trk.served.go(pc, form, id, Some{out}, pb)), old)
+  pd.mk(ps.own.take(ps.trk.served.go(pc, form, ok, id, Some{out}, pb)), old)
 
-def ps.trk.served.if(on: Bool, +pc: R.Cmd, +form: Nat, +id: Nat, +out: Nat, pb: Ps) -> Pd:
+def ps.trk.served.if(on: Bool, +pc: R.Cmd, +form: Nat, ok: Bool, +id: Nat, +out: Nat, pb: Ps) -> Pd:
   match on:
     case True{}:
-      pd.aside(ps.pend.take(pb), pc, form, id, out)
+      pd.aside(ps.pend.take(pb), pc, form, ok, id, out)
     case False{}:
       Pd{Nil{}, pb}
 
-def ps.trk.served(+pc: R.Cmd, +form: Nat, +id: Nat, +out: Nat, pb: Ps) -> Pd:
+def ps.trk.served(+pc: R.Cmd, +form: Nat, ok: Bool, +id: Nat, +out: Nat, pb: Ps) -> Pd:
   +p = pb
-  ps.trk.served.if(ps.trk.hot(p), pc, form, id, out, p)
+  ps.trk.served.if(ps.trk.hot(p), pc, form, ok, id, out, p)
 
 # The end of a group (Redis's beforeSleep): the keys changed under each
 # BCAST prefix to the clients that listen to it, each of them but the
@@ -4783,7 +4792,7 @@ def bg.popped(w: Waits, r: R.Reply & (List<&2, A.Eff> & R.Ds), rs: List<&2, R.Re
       (e, ds) = q
       +y = S.blk.shape(S.blk.form(b), x)
       +left = ws
-      bg.popped.up(ps.trk.served(pc, S.blk.form(b), id, S.conn.id(conn), pb), back, c0, c1, y, cmds, codes, av, e, ds, rs, es, conn, waits.count(left, S.srv.served(bg.errs(srv, code, y), id)), left, up, tx, pc, pre)
+      bg.popped.up(ps.trk.served(pc, S.blk.form(b), Bool.not(R.r_is_err(y)), id, S.conn.id(conn), pb), back, c0, c1, y, cmds, codes, av, e, ds, rs, es, conn, waits.count(left, S.srv.served(bg.errs(srv, code, y), id)), left, up, tx, pc, pre)
     case WaitNone{}:
       (x, q) = r
       (e, ds) = q
