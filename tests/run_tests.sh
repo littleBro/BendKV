@@ -36,7 +36,8 @@
 # SCAN and RANDOMKEY, keys that expire, numbers at
 # their edges in every argument that is one, BITFIELD's fields at
 # random, hashes, lists, sets and sorted sets, SORT and SORT_RO,
-# HyperLogLogs and GEO (each in RESP2 and RESP3), DUMP and RESTORE, and
+# HyperLogLogs and GEO (each in RESP2 and RESP3), DUMP and RESTORE (of
+# streams too, which Redis makes), and
 # RESP3 (its
 # scenarios, and the differential tests again in RESP3); then stops
 # them. Then the append-only file: a
@@ -72,8 +73,14 @@
 # runs. Last, the RDB file (tests/rdb_test.py): files Redis wrote (with
 # LZF and without) and files of the encodings Redis no longer writes,
 # BendKV and Redis started from each; BendKV's SAVE, Redis started from
-# it; SAVE, LASTSAVE, INFO and the saves of FLUSHALL and SHUTDOWN against
-# Redis's; files that do not load, each stopping both starts.
+# it; files read in windows (values longer than a window, cuts and a
+# wrong checksum past the first one, and the resident memory after the
+# start); SAVE, LASTSAVE, INFO and the saves of FLUSHALL and SHUTDOWN
+# against Redis's; files that do not load, each stopping both starts. And
+# the background saves (tests/bgsave_test.py): the count of changes of
+# each write, BGSAVE and its fields in INFO, BGSAVE and BGREWRITEAOF, the
+# save points, MISCONF after a save that failed and the cron's next try,
+# and SHUTDOWN and FLUSHALL while a save runs, against Redis's.
 set -e
 cd "$(dirname "$0")/.."
 PORT=${PORT:-6380}
@@ -141,6 +148,7 @@ for n in "" post send "post build/test.aof everysec"; do
     python3 tests/admin_test.py --bendkv "$PORT" --redis "$REDIS_PORT"
   fi
   python3 tests/auth_test.py --bendkv "$PORT" --redis "$REDIS_PORT"
+  python3 tests/acl_test.py --bendkv "$PORT" --redis "$REDIS_PORT"
   if [ -z "$n" ]; then
     python3 tests/protocol_test.py --bendkv "$PORT" --redis "$REDIS_PORT"
     python3 tests/session_test.py --bendkv "$PORT" --redis "$REDIS_PORT"
@@ -162,6 +170,8 @@ for n in "" post send "post build/test.aof everysec"; do
     python3 tests/hll_test.py --bendkv "$PORT" --redis "$REDIS_PORT"
     python3 tests/geo_test.py --bendkv "$PORT" --redis "$REDIS_PORT"
     python3 tests/dump_test.py --bendkv "$PORT" --redis "$REDIS_PORT"
+    python3 tests/stream_dump_test.py --bendkv "$PORT" --redis "$REDIS_PORT"
+    python3 tests/stream_read_test.py --bendkv "$PORT" --redis "$REDIS_PORT"
     # RESP3: its scenarios, then the differential tests again with each
     # connection in RESP3 (HELLO 3)
     python3 tests/resp3_test.py --bendkv "$PORT" --redis "$REDIS_PORT"
@@ -237,3 +247,5 @@ echo "== maxmemory and eviction"
 python3 tests/maxmemory_test.py --bin build/bendkv --bendkv "$PORT" --redis "$((REDIS_PORT + 1))" --dir build/maxmemory
 echo "== the RDB file"
 python3 tests/rdb_test.py --bendkv build/bendkv --dir build/rdb
+echo "== background saves"
+python3 tests/bgsave_test.py --bendkv build/bendkv --dir build/bgsave

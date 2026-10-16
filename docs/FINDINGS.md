@@ -5948,7 +5948,10 @@ CLIENT CACHING yes, in OPTOUT mode unless after CLIENT CACHING no
 command's key specs (`ro.key`, which `tools/gen_commands.py` writes from Redis's command
 table: the arity, the key specs, and the way COMMAND GETKEYS reads them), as Redis's
 getKeysFromCommand finds them. The arguments are read from the batch's bytes once for
-the batch, when a call first needs its own (`av.if`). EXEC's calls read as any call does.
+the batch, when a call first needs its own (`av.if`), and walked once for the keys
+(`keys.names`): read from their start for each key, as the first build read them, an MGET
+of 20,000 keys by a client that tracks them took 1 to 2 s, and of 50,000 6 to 16 s; found
+by dropping from one key to the next, 0.03 and 0.07 s. EXEC's calls read as any call does.
 CLIENT CACHING's flag is cleared after each command but a CLIENT command, while its
 client is in no MULTI, as Redis's resetClient clears it.
 
@@ -5978,7 +5981,9 @@ keys and eviction invalidate the keys they delete as no client's change.
 The client whose command runs gets its own invalidations after its reply: after EXEC's
 for EXEC's commands, and after its reply for a client that a blocking command serves.
 Redis keeps them for after the call. A served BLMOVE or BRPOPLPUSH changes its
-destination; a served BLMPOP, BZPOPMIN, BZPOPMAX or BZMPOP changes the key it popped from;
+destination, unless that holds another type: then it answers WRONGTYPE, changes nothing
+and invalidates nothing, as Redis serves it (`serveClientBlockedOnList` gives up before
+`lmoveHandlePush`); a served BLMPOP, BZPOPMIN, BZPOPMAX or BZMPOP changes the key it popped from;
 a served BLPOP or BRPOP changes nothing more, as Redis signals each (its push made the key
 ready). LMOVE's and RPOPLPUSH's destination goes before their source, as Redis signals
 them. One it gets as the client another redirects to comes before its
@@ -6047,7 +6052,10 @@ parameter by its name.
   writes before that command's reply. Redis writes it where the command signals the key:
   before the reply for SET, DEL, SADD, INCR, APPEND and SETRANGE, which signal first,
   and after it for the commands that reply first, as ZADD, ZINCRBY, HSET, HINCRBY, LPUSH
-  and RPUSH do (`addReply` before `signalModifiedKey`).
+  and RPUSH do (`addReply` before `signalModifiedKey`), and as a served BLMPOP does
+  (`listPopRangeAndReplyWithKey`). For a served BZPOPMIN, BZPOPMAX or BZMPOP, Redis writes
+  it inside the reply's array, after its header: `genericZpopCommand` signals the key as it
+  pops the first member, between the array's length and its elements.
 
 **What it costs** (PERFORMANCE 66).
 
@@ -6313,8 +6321,9 @@ left aside, as Redis's `loadDataFromDisk` leaves it. The start no longer refuses
 - `Info`, of 63 words, would have been past 64 with the account's fields in it, and a
   node past 64 words is copied whole at every update (section 3zzz). The account is a
   node of its own (`Rdb`, with a constructor that holds its own type and is never built,
-  as `Tim` and `TRun` are), a word of `Info`, which is 64 words now: the next field it
-  takes must be a node's word too, or come out of it.
+  as `Tim` and `TRun` are), a word of `Info`, which is 64 words now (63 since #66 made
+  `Live`'s two counts of waiting clients one node, `Cn`): the next field it takes must
+  be a node's word too, or come out of it.
 
 **What it costs** (PERFORMANCE.md, section 67, which has the times and sizes against
 Redis's). A file of BendKV's is the size of Redis's when LZF gains nothing. SAVE takes
@@ -6361,16 +6370,19 @@ pass.
 - SAVE splits its own pipeline: the commands after it run in a group of their own, after
   the save, so another client's command can come between them (a WATCH before SAVE and
   an EXEC after it can see a key another client wrote), which Redis's SAVE cannot let
-  happen.
+  happen; and a client in BCAST tracking mode gets the keys the pipeline changes before
+  SAVE and those it changes after in two invalidation pushes, where Redis sends one.
+  BGSAVE splits nothing: it answers at once, and its save runs between groups (section
+  3zzzk).
 - The file holds the databases as the group left them, not as they were at SAVE (above):
   a SHUTDOWN SAVE and another client's FLUSHALL in one group give Redis a file of the
   keys and BendKV an empty one. The databases are values that do not change, so the
-  save could take them at SAVE's place in the group; that is left for later.
-- After a SHUTDOWN that saves, the other clients' requests of its group run before the
-  save (above). What they write reaches the append-only file and the RDB file, and they
-  get no reply, where Redis ends inside the SHUTDOWN and runs none of them. Holding them
-  until the save's result is known is issue #84. With Redis's default save points every
-  SHUTDOWN without NOSAVE saves, so this becomes the usual case.
+  save could take them at SAVE's place in the group; that is left for later (BGSAVE
+  takes its snapshot so: section 3zzzk).
+- After a SHUTDOWN that saves, the other clients' requests of its group ran before the
+  save (above): what they wrote reached the append-only file and the RDB file, and they
+  got no reply, where Redis ends inside the SHUTDOWN and runs none of them. Section
+  3zzzl holds them until the save's result is known (issue #84).
 - After a start from the file, INFO's replication section and ROLE give an offset of 0.
   Redis makes its backlog before it loads (`loadDataFromDisk`) and feeds it a SELECT and
   a DEL for each key whose time had passed, so its `master_repl_offset` counts their
@@ -6589,6 +6601,164 @@ them. The databases are the same. README.md and COMPATIBILITY.md list it.
 **What it costs.** 238 lines more in `src/aof.bend` and 77 in `src/server.bend`; with
 the proof, `make check` takes 14 s here and `make verdict` 1 min 40 s.
 
+## 3zzzh. ACL: users, what they may run, and the log
+
+**What was left.** ACL was an unknown command. AUTH took the one password, and a client
+was the default user or none. redis-py's tests of ACL, of AUTH with a user and of CLIENT
+KILL USER stopped there (34 in each protocol), and so did 39 of go-redis's.
+
+**The users** (`src/acl.bend`, kept in the session's `Mm`, so that `Srv` stays four words
+and no law's statement changes). A user is Redis 7.0.15's: on or off, its passwords (their
+SHA-256), nopass, its root selector and its other selectors, each with its commands (a bit
+for each command and subcommand, by Redis's ACL ids; categories by Redis's own table, which
+`tools/gen_commands.py` writes from ACL CAT), the first arguments it allows a command it
+does not allow (`+select|0`), its key patterns with what each may do (`%R~`, `%W~`, `~`),
+and its channels.
+
+- ACL SETUSER applies its rules in order to a copy, and the first that fails answers
+  Redis's error for it (`Error in ACL SETUSER modifier '...'`) and changes nothing.
+  Selectors in parentheses are joined first, as Redis joins the arguments. A new user is
+  off, with no password, no command, key or channel (`acl-pubsub-default`).
+- GETUSER, LIST, USERS, WHOAMI, CAT, DELUSER, DRYRUN, GENPASS (from a key the server reads
+  at its start, hashed with a counter, as getRandomHexChars makes them), LOG and HELP
+  answer as Redis's. LOAD and SAVE answer as Redis answers without `aclfile`.
+- A client must authenticate when the default user is off or takes only its passwords.
+  `requirepass` gives the default user its password, when the value changed (Redis applies
+  a parameter only then).
+- AUTH with a user and HELLO's AUTH log a client in as any user that is on and takes the
+  password. A failed one answers WRONGPASS. The parser hashes the password once, as it
+  reads the request (`src/sha.bend`: SHA-256, in time linear in the password's length).
+  The hash is compared with each of the user's in time that does not depend on where they
+  differ, as Redis's `time_independent_strcmp` compares them; a user that is off or
+  nopass compares none. The first build hashed in time quadratic in the length, three
+  times an AUTH: one AUTH of 1 MB, which any client may send before it authenticates,
+  held the server for 63 s (PERFORMANCE.md, section 70).
+
+**The check** (`src/server.bend`: ACL). The server knows each client's user (`Cl`'s `user`:
+default as it connects, set by AUTH and HELLO's AUTH, default again at RESET) and which
+clients are restricted: those whose user may not run every command, read and write every
+key, and use every channel. The session keeps their ids in a trie, with the users by name
+in another (`Acl.ix`), as a client's user changes, as SETUSER changes a user, and as a
+client goes, so that neither a batch nor a call walks a list. A call of a restricted
+client is checked as processCommand checks it, after NOAUTH and after the refusal of a
+command MULTI may not queue, before the rest:
+
+- its command or subcommand, then its keys (by the command's key specs, what each key
+  needs: read, write, or both), then its channels (PUBLISH's, the subscriptions'), against
+  each selector; one that allows it all lets it run;
+- refused, it answers NOPERM with the reason of the selector that got furthest (Redis's
+  order: command, key, channel, then the later argument), counts as a refused call and an
+  error, and in MULTI flags the transaction; EXEC refused aborts it;
+- EXEC checks each command again as it runs it, in case the rules changed since it was
+  queued (or an AUTH before it in the transaction changed the user): one refused then
+  answers `NOPERM ACLs rules changed between the moment the transaction was accumulated
+  and the EXEC call...` and is no call. Its error counts (`total_error_replies`, NOPERM
+  in errorstats), but not as a command processed or a call of its command, and EXEC
+  counts as failed when no command ran after the last one refused (Redis's
+  `prev_err_count`). The first build counted it as a call, and EXEC as never failed.
+  The arguments of the commands a batch queued are read from its bytes once: read again
+  for each command, an EXEC of 8,000 SETs queued before an AUTH inside the transaction
+  restricted its client took 26 s;
+- SORT with BY of a pattern, or GET, answers Redis's error unless a selector that allows it
+  may read every key;
+- a call refused marks no key used: a restricted client's batch marks each call's key for
+  LRU and LFU (OBJECT IDLETIME and FREQ) once the check lets the call through, where other
+  batches mark all their keys before they run;
+- a call's keys are found in one walk of its arguments (`uses.keys`), by dropping from
+  one key to the next: read from their start for each key, a restricted client's MGET of
+  20,000 keys took 1 to 2 s, and of 50,000 6 to 14 s, where the walk takes 0.04 and
+  0.11 s. It costs such a client's GET some 770 instructions more than the read from the
+  start of its one key did (PERFORMANCE 70).
+
+The keys checked are those of the command's key specs, as in Redis 7.0.15, with the same
+holes: `SORT src STORE BY STORE secret` checks `BY` as STORE's key and writes `secret`;
+`GEORADIUS ... STORE ok1 STORE secret2` checks the first STORE's key, where the command
+writes the last's; `PFMERGE dst` alone checks no key and creates `dst`. Both servers let a
+user that may not write `secret` write it so.
+
+AUTH, HELLO, QUIT and RESET always pass, as Redis's CMD_NO_AUTH commands. A blocking
+command is checked as it comes; a client that waits is served without a check, as in
+Redis. The call's command, arity and key specs are found by its INFO key, which the
+parser found (`acl.of.key`, `K.spec.key`), and the command's name only for a refusal:
+looked up by name in the table of commands, a check cost 464,000 instructions
+(PERFORMANCE.md, section 70).
+
+**The fast way.** While no client is restricted, nothing changes: the default user of a
+fresh server may run everything, and a free user's client is not checked. While some
+client is (Ps's bit 20), a batch of database commands goes to a class of the gate of its
+own: the fast way when its client is not restricted, else the general way, where each call
+is checked. While some client also waits or watches keys, or the tracking has work, the
+batch must also write no heeded key, as in the gate's class 1. The bit is set as soon as a
+client's user changes, so that the rest of a pipeline after AUTH is checked by its new
+user.
+
+**The log.** A call refused, and an AUTH or HELLO AUTH that failed, add an entry to ACL LOG:
+its reason (command, key, channel, auth), its context (toplevel, multi in MULTI and while
+EXEC runs its transaction), what it named (the command's full name, the key, the channel,
+or the command as typed for an AUTH), the user (the user tried, for an AUTH), and the
+client's CLIENT LIST line at that moment (its command is EXEC's while EXEC runs). An event
+like one of the 10 newest, within 60 s, counts in it, as Redis groups them;
+`acllog-max-len` bounds the log.
+
+**The clients.** CLIENT LIST and CLIENT INFO show each client's user. CLIENT KILL USER
+picks a user's clients, and answers `No such user` for a user the server does not keep,
+in Redis's order among the options' errors. ACL DELUSER closes the clients of the users it
+removes, the client itself after its reply (CLIENT_CLOSE_AFTER_COMMAND). ACL SETUSER that
+takes away a channel a user had closes its clients with a subscription it may no longer
+keep (ACLKillPubsubClientsIfNeeded). The slow log keeps SETUSER's arguments from the user
+on redacted, as Redis redacts them; a monitor sees CAT, GENPASS, HELP and WHOAMI, the
+subcommands Redis does not flag administrative, and no other.
+
+**Where BendKV differs.**
+
+- GETUSER and LIST describe a selector's commands in Redis 7.2's form, the rules as they
+  were given (`+@all -@geo`), where 7.0.15 rebuilds them from its bits. 7.0.15's form
+  depends on a hash order that changes with each process and on the whole command table,
+  so it cannot be matched; redis-py's test of GETUSER expects 7.2's.
+- The users come from ACL SETUSER only: a `user` line in the configuration, and
+  `aclfile`, stop the start with a line saying so; LOAD and SAVE answer as without a file.
+- 7.0.15 accepts `%~pattern` and then crashes at the next GETUSER; BendKV refuses it with
+  a syntax error.
+
+**Tests.** `tests/acl_test.py`: 60 lines of scenarios, as Redis 7.0.15 answers them: a
+user's calls allowed and refused, alone and pipelined behind AUTH, the log (grouped, its
+length, RESET), INFO's counts, MULTI and EXEC (refused at queueing, EXEC refused, the
+check again at EXEC, AUTH inside EXEC, commands queued before an AUTH inside the
+transaction), HELLO's AUTH, RESET, a blocking command refused, subscribers closed by
+SETUSER (channels and patterns), DELUSER (another client's user, the client's own, a
+client that waits), CLIENT LIST and CLIENT KILL USER with its errors, the default user
+restricted (its plain batches checked), SORT's BY and GET, the slow log, and OBJECT
+IDLETIME and FREQ after calls refused and allowed. Then checks of BendKV alone: AUTH and
+HELLO's AUTH with a password of 1 MB answer within a second, EXEC of 8,000 SETs queued
+before an AUTH inside the transaction within 3 s, and a restricted client's MGET of 50,000
+keys within 1.5 s (`tests/tracking_test.py` checks the same MGET by a client that tracks
+its keys). `make smoke` checks SHA-256 vectors at the edges of a block (0, 1, 55, 56, 63,
+64, 119 and 120 bytes) and of a window (2,047 to 2,049 bytes, and 5,000, also as a string
+of two chunks). The client suites: redis-py's 82 tests of ACL, AUTH and CLIENT KILL that
+Redis 7.0.15 passes, in each protocol, and go-redis's 8, pass; the other 10 of redis-py's
+fail on Redis 7.0.15 too, as they test Redis 7.2's (CLIENT SETINFO's log entries, its rule
+display, its log fields). Redis's own unit/acl and unit/acl-v2 are tagged `external:skip`;
+run in external mode with that tag taken off the blocks that need no server of their own,
+BendKV passes 64 of the 70 tests of unit/acl that Redis passes, and 27 of the 29 of
+unit/acl-v2. The others use commands BendKV does not have (XADD, XLEN, MIGRATE, SCRIPT,
+EVAL_RO), Lua's entries in the log, or Redis 7.0's description of a selector's commands
+(above); one more fails because the test before it, stopped at SCRIPT, leaves its client
+logged in as a user that may run nothing.
+
+**Found on the way, not changed here.** Redis 7.0 refuses a request of more than 10
+arguments, or with a bulk of more than 16 KB, from a client that must authenticate
+(networking.c, `unauthenticated multibulk length` and `unauthenticated bulk length`), and
+closes it. BendKV has never had these limits: unit/auth's test of them, which runs once
+its `external:skip` tag is taken off, waits for the error until its timeout.
+
+A command inside EXEC that closes its own client (CLIENT KILL of its own id, and now ACL
+DELUSER of its own user) loses EXEC's whole reply, and the commands after it do not run.
+Redis sends the array's header, the replies up to that command, runs the rest with their
+replies dropped (CLIENT_CLOSE_AFTER_REPLY), then closes. It predates this section, through
+CLIENT KILL (issue #101). And a call refused NOAUTH still marks its key used for LRU and
+LFU, as before this section: the batches of a client that must authenticate are marked
+before they run, where only a restricted client's are marked by their calls.
+
 ## 3zzzi. One reading of the heap for INFO and the eviction
 
 **What failed.** One check of `tests/maxmemory_test.py` failed now and then under load,
@@ -6694,6 +6864,18 @@ this branch and 10,000 on main.
   not yet counted would end it, and with it most of what the eviction sees move: issue
   #79.
 
+**Follow-up, from #80's review.** With the actor's reading held, INFO's `used_memory` and
+`allocator_allocated` were of one moment and `allocator_active` of another: the shell's
+reading, which `info.live.held` kept. So `allocator_frag_ratio`, `allocator_frag_bytes`
+and the two `allocator_rss_*` fields mixed two readings, and `allocator_frag_bytes`
+could read 0 at `Nat.sub`'s floor. `IO.heap` gives the actor both numbers. Now
+`mem.run` and `evict.heap.at` pass the pair on (`S.srv.heap`, `I.info.heap`), and
+`info.live.held` keeps both. In 3,000 INFO samples taken while another client wrote,
+with maxmemory set, neither main's build nor this one showed `allocator_active` below
+`allocator_allocated`: the change makes the fields agree, it fixes no failure seen.
+`make perfcheck` gives GET 3,414, SET 4,179 and INCR 4,523 instructions per request,
+against 3,418, 4,180 and 4,520 for main fc28490.
+
 ## 3zzzj. The timing's runs not yet counted, one per command
 
 **What was left.** Each call's time goes to a run of calls of its command (section 3zzz).
@@ -6726,6 +6908,13 @@ histogram merged into that run's), and goes last when there is none. Between two
 same: the tick counts the same calls, times and histograms into the entries, in another
 order.
 
+**The newest run's count** (#98). A run packs its count below its command's code
+(`R.run.of`: code × 2^32 + calls), and the tick keeps `cur`, which takes every call of a
+load of one command alone: after 2^32 calls, some 55 minutes of GETs at 1.3 million a
+second, its count carried into its code, and INFO gave those calls to the code of GET's
+refused calls. `cur` is now counted once it holds 2^31 calls (`trun.full`), so that its
+count never carries into its code; a check in `tests/smoke.bend` counts 2^32 + 5 GETs.
+
 **What it gives** (section 71 of [PERFORMANCE.md](PERFORMANCE.md)).
 
 - **Memory.** Under the same load, the heap's account moves by 16 KB at most.
@@ -6739,6 +6928,1342 @@ order.
 
 **Tests.** `tests/timing_test.py`, `tests/stats_test.py` and `tests/info_test.py` against
 Redis: commandstats, latencystats, errorstats and the slow log, unchanged.
+
+## 3zzzk. Background saves: BGSAVE, the save points, MISCONF and the count of changes
+
+**What was left.** Section 3zzzc wrote the RDB file at SAVE, SHUTDOWN and FLUSHALL and
+left the second part of issue 67: BGSAVE and the saves at the save points. BendKV's
+default `save` was empty, where Redis's is `3600 1 300 100 60 10000`, so a BendKV run
+with Redis's defaults kept nothing in `dump.rdb` until a SHUTDOWN; BGSAVE was an unknown
+command, `rdb_changes_since_last_save` stayed 0, and stop-writes-on-bgsave-error had
+nothing to stop.
+
+**The count of changes** (`src/server.bend`: The count of changes). Redis counts each
+change as the command makes it (`server.dirty`: a key set, an element pushed or popped,
+a member or a key removed, each key a FLUSHALL empties), and a save that ends well
+subtracts the changes it holds. BendKV's commands run in the pure core, which keeps no
+such count, so the shell counts a call's changes once it has run, from its reply, by the
+rule of its command: a table `stat.dirty` in `src/redis.bend`, generated from
+`DIRTY` in `tools/gen_commands.py`, whose check fails when a command Redis flags `write`
+has no rule. There are seventeen rules (none; one for a reply that is no error; the
+integer of the reply; OK or a value; a value; the elements of a pop; ...; the weight
+whatever the reply), and seven of them take a weight read before the call from its
+arguments and from the databases as they are: the pairs of MSET and HSET, the elements
+of a push, whether a STORE's destination is there, the keys FLUSHDB and FLUSHALL empty,
+the elements LTRIM drops, whether SETBIT's bit changes or its value grows, whether
+GETEX's key has a time to lose, whether SMOVE's member is in both sets, whether the
+increment of ZINCRBY (ZADD with INCR) changes the score, whether RESTORE's time has
+passed (then only a key it deleted counts), whether PFDEBUG GETREG or TODENSE makes a
+sparse HyperLogLog dense, and for an EVAL of BendKV's own scripts (a new collection
+where a key whose time had passed lay, a move to one) the key their DEL deletes and what
+the command they run changes (`dw.cmd`). The table `CASES` of `tests/bgsave_test.py`
+(Tests, below) gives Redis's count for each write, alone, in a pipeline and in MULTI,
+and BendKV's matches it but where listed below.
+
+- The fast way counts a batch once it has run (`run_put`, `group_put`). A batch of one
+  code costs a look at its rule: none for GET; for INCR, its calls less the errors the
+  risky look already counted (`dirty.quick`); for SET, a walk of its replies
+  (`dirty.one`, a loop of its own). A batch of several codes is counted a call at a time
+  (`dirty.batch`). A batch with a code that takes a weight reads the weights of all its
+  calls before it runs, from the databases as the batch found them (`fast.run.w`,
+  `dirty.ws.of`, `run_put.w`); no other batch reads anything more before it runs.
+- The general way counts each call as it runs (`gen.count.d`, `dirty.ran`): its reply
+  is there, and its weight was read just before it. A call whose replies CLIENT REPLY
+  holds back counts from the reply it would have had.
+- A client served later by a push counts what Redis 7.0.15 counts for it: the elements
+  BLMPOP and BZMPOP took, and one for BZPOPMIN and BZPOPMAX; BLPOP, BRPOP, BLMOVE and
+  BRPOPLPUSH count none there (`serveClientBlockedOnList` changes no count but for
+  BLMPOP's `listPopRangeAndReplyWithKey`).
+- SAVE that ends well leaves 0, as `rdbSave` does; FLUSHALL with save points takes away,
+  once its save has ended well, the changes counted until it ran, and leaves those of
+  the commands after it in its group, which Redis runs after the save; a background
+  save that ends well takes away the count when it started (`dirty_before_bgsave`).
+- The count lives in `Info`'s account of the RDB file (`Rdb`), added once a batch with
+  the other counts of a batch (`I.info.ran.d`), so it costs no rebuild of `Info` of its
+  own; the background saves' account is a node of `Rdb`'s (`Bgs`), and `Info` stays 63
+  words. It stops at 2^47 (four years of a million writes a second with no save that ends
+  well), as a Nat past 2^48 stops the process.
+
+**BGSAVE** (`src/server.bend`: Background saves). BGSAVE takes a snapshot of the
+databases at its place in its group, as Redis's fork takes one at the command. The
+databases are values, so the snapshot is a list of them that the writes after it do not
+change: they make new nodes where they change shared ones, as the child's pages are
+copied on write, which is what the rewrite of the append-only file does with its own
+(section 3zv). The snapshot waits in the account (`Bgs`) until the group is answered,
+and the actor writes it as it writes a rewrite: a slice of a database at a time, after
+the groups it answers and while no request waits, to `temp-<pid>.rdb`, 64 KB at a time,
+synced each 4 MB with `rdb-save-incremental-fsync yes`; then the file's end, the sync,
+the rename onto `dbfilename` and the directory's sync. The save keeps `dbfilename`,
+`rdbchecksum`, `rdb-key-save-delay` and `rdb-save-incremental-fsync` as they were at the
+BGSAVE (or at the cron's look that starts it), as Redis's child keeps them from its fork
+(`rdbSaveBackground` hands it `server.rdb_filename` then; no CONFIG SET changes
+`rdbchecksum`): they go into the account with the snapshot (`I.BgCf`, `S.srv.bg.go`),
+and a CONFIG SET in BGSAVE's own pipeline or while the save runs changes the next save,
+not this one. A writer task of its own holds
+the temporary file open from the save's start to its end (`bgw.loop`), as Redis's child
+holds its descriptor: the actor sends it the bytes and waits for its answer, as it waited
+for its own writes before, so that a file removed while the save runs is written all the
+same and the rename at the end fails, as Redis's does, where a file opened again by its
+name for each 64 KB would be made anew, without its head, and put in place of
+`dbfilename`. A FLUSHALL or a SHUTDOWN that drops the save closes the writer's channel,
+and the writer closes the file.
+The bytes are SAVE's, AUX fields and all (neither writes `repl-id` or `repl-offset`,
+which Redis keeps from a file it loaded: README.md, Persistence), `ctime` and `used-mem`
+taken when the actor starts the save. Its lines are Redis's parent's and child's, the
+child's with the role C and the server's pid: "Background saving started by pid N",
+"DB saved on disk" (C), "Background saving terminated with success"; a save that fails
+logs the child's line ("Failed opening the temp RDB file ...", "Write error saving DB
+on disk(...)", "Error moving temp DB file ...") and "Background saving error". One that
+ends well is the last save (LASTSAVE, `rdb_last_save_time`, status ok); one that fails
+makes the status err. INFO shows `rdb_bgsave_in_progress`, `rdb_current_bgsave_time_sec`
+and `rdb_last_bgsave_time_sec`, `rdb_saves` (counted at the command, as
+`rdbSaveBackground` counts it), `current_save_keys_total` (the snapshot's keys) and
+`_processed`, and `current_fork_perc` from them.
+
+BGSAVE answers as `bgsaveCommand` does: a syntax error for any argument but SCHEDULE
+(the parser's), "ERR Background save already in progress" while one runs, "ERR Another
+child process is active (AOF?): can't BGSAVE right now. Use BGSAVE SCHEDULE ..." while a
+rewrite runs, or "Background saving scheduled" with SCHEDULE, and in EXEC always; the
+cron starts what is scheduled. One job runs at a time, as one child does in Redis:
+BGREWRITEAOF while a save runs is scheduled, SAVE while one runs is refused, and the
+cron starts the scheduled one once the other has ended.
+
+A FLUSHALL drops the save that runs, as `killRDBChild` does, once its group is answered
+and after its own save with save points: its temporary file removed, "Background saving
+terminated by signal 10" (the line Redis's cron writes when it finds the child killed),
+the status as it was, its time counted. A SHUTDOWN drops it before its own save ("There
+is a child saving an .rdb. Killing it!", `finishShutdown`), and when that save fails and
+the server goes on, logs the child's end as Redis's next cron does.
+
+`rdb-key-save-delay` paces the job, a key at a time, as Redis's child sleeps after each
+key it writes: the next slice may go once the delay of the keys before it has passed
+(`pace.next`), a slice is one bucket of the trie, and an idle actor waits a millisecond
+at a time meanwhile, still taking requests. The rewrite of the append-only file is
+paced the same way, a command at a time, as Redis's child sleeps after each key it
+rewrites. The tests use it to have a save or a rewrite run for a second on both servers.
+
+**The save points and the cron** (The cron). The cron's look, every 100 ms while no job
+runs, follows `serverCron`'s order: a rewrite scheduled; else the first save point
+reached (as many changes since the last save, and more seconds since the last one that
+ended well), with "<changes> changes in <seconds> seconds. Saving..."; else the rewrite
+for the file's growth; else a BGSAVE scheduled. After a background save that failed, a
+save point or a scheduled BGSAVE waits until 5 seconds have passed since it was tried
+(`CONFIG_BGSAVE_RETRY_DELAY`). The save points are read from `save` into the account at
+the start and at each CONFIG SET (`rdb.cfg`), so the look reads no parameter (the first
+build read `save` at each look: What it found, below).
+
+**MISCONF.** After a background save that failed, with save points and
+`stop-writes-on-bgsave-error yes` (Redis's default), Redis refuses the commands flagged
+`write`, and PING, with "-MISCONF Redis is configured to save RDB snapshots, ..."
+(`writeCommandsDeniedByDiskError`) until a save ends well, or the parameters change.
+Each command of the general way reads the server's state for it (`srv.misconf`), as
+`processCommand` asks for each command, so that a CONFIG SET that lifts it or sets it
+again, alone or in MULTI, counts for the commands after it in its pipeline. The shell
+keeps the same in bit 19 of Ps's `ev` (`misconf.bit`: set by `ps.tune` after each batch
+of the general way and by the actor after each step and each save) only to keep the
+fast way off while the writes are refused, as the other bits past the events' do
+(`ps.calm`); `ps.loud`, whose bits say that keyspace events are to be computed, leaves
+it out. The refusal comes where
+`processCommand` makes it: after AUTH, NO_MULTI and the refusal past maxmemory, before a
+subscriber's and a monitor's refusals and before the pause holds the command
+(`sh.misconfy`); in MULTI it flags the transaction, and an EXEC whose transaction queued
+a write is aborted with "EXECABORT Transaction discarded because of: MISCONF ...". The
+calls are counted as refused, and the errors as MISCONF's. `stat.write`, the table of
+the commands Redis flags write, is generated with `stat.dirty`.
+
+**maxmemory while a job runs** (`src/server.bend`: Eviction, `mem.seen`;
+`src/session.bend`: `mm.snap`, `mm.view`). While a background save or a rewrite of the
+append-only file runs, its snapshot holds every value a write replaces or deletes, and
+the heap's reading (`IO.heap`) counts them all; Redis's eviction (`performEvictions`,
+`getMaxmemoryState`) reads its parent's `used_memory`, which the child's pages copied
+on write never reach. So the eviction, and the refusal of writes past maxmemory with
+noeviction and of the commands that may take memory, see the memory as the heap when
+the job started plus the change in the number of keys since then, each key at the
+average size then: when the actor starts the job (once the group of its BGSAVE or
+BGREWRITEAOF is answered, or at the cron's look), the eviction's state keeps the heap's
+used bytes (h0), the keys of all databases (k0) and their average (the heap past INFO's
+`used_memory_startup`, shared among the keys; none without keys); while it runs, the
+memory compared with maxmemory is the heap, or h0 and the keys made since at the
+average less those gone since if that is less. Values replaced by values of the same
+size cost nothing, a key made counts, and each key evicted or deleted counts less, so
+the eviction stops near the excess; a value that grows in place counts once the job has
+ended, when the heap is read as it is again (and so does a value that a write after the
+BGSAVE in its own group replaced: h0 is read after that group). This replaces section
+3zzzr's debt, which counted the keys the eviction itself deleted, and while a rewrite
+ran only: an evicted key now lowers the count of keys, and the debt would have counted
+it twice; its estimate of each evicted key (`AskEst`) and the heap's last reading in the
+eviction's state went with it. Section 3zzzr's scenario (300,000 keys, BGREWRITEAOF, the
+limit a tenth of the keys' share below the memory used) leaves about as many keys as with
+the debt: 238,044 and 238,170 after 3 s in two runs, 238,044 and 238,122 once the rewrite
+had ended (with the debt, 238,210 both times). INFO shows the heap as it is.
+
+**The defaults.** `save` is Redis's, `3600 1 300 100 60 10000` (`tools/gen_config.py`
+keeps only the loopback address apart from Redis's defaults). The start's warning that
+the save points saved nothing is now one that SIGTERM and SIGINT end BendKV without a
+save, which Redis makes for them with save points. The short form has no save points
+(`save ""`): it loads no RDB file, so a file its saves wrote would never be read back,
+and `make perfcheck` runs no BGSAVE. `tests/maxmemory_test.py` starts BendKV with
+`--save ""`, as it starts its Redis.
+
+**What it found.**
+
+- The first build cost every request of GET, SET and INCR more than the count needs:
+  the cron's look read `save` among the parameters each 100 ms, a cost callgrind spreads
+  over the few requests its slow run serves in 100 ms; the weights' check before each
+  batch made `fast.run` keep its state across a call; `run_put`, called from two places,
+  became a segment entered through the work loop, and the count's walks called
+  `List.length`, which is no loop, so that their callers kept their state across them
+  (the traps of section 7). PERFORMANCE.md, section 72, has what each cost.
+- On the fast way, the replies of GET, SET, GETSET and APPEND are not looked at for
+  errors (they are not in `RISKY`), so their WRONGTYPE errors go to no `errorstat_*` and
+  no `failed_calls`, where Redis counts them (5 WRONGTYPE errors of GET, APPEND, GETSET
+  and SET GET on a list: Redis's `errorstat_WRONGTYPE:count=5`, BendKV's none). This
+  change leaves it as it was. The count of changes does not rely on it: a batch whose
+  rule counts the replies that are no error walks them when they were not looked at
+  (`dirty.fine`).
+- The review of the pull request, with a harness of its own against Redis:
+  - *maxmemory during a job.* 200,000 keys of 100 bytes, maxmemory 10 MB above the
+    memory they took, a BGSAVE paced by `rdb-key-save-delay`, every key written again
+    with a value of the same size: BendKV evicted 117,462 keys, Redis none; under
+    noeviction BendKV refused 74,821 of 100,000 such writes with OOM, Redis none; and
+    main's BGREWRITEAOF did the same (section 3zzzr's debt counted only what the
+    eviction itself deleted). Now counted by the keys (maxmemory while a job runs,
+    above): none evicted and none refused in either.
+  - *MISCONF in a pipeline.* The refusal read the batch's flag, which is set once a
+    batch has run, so `MULTI`, `CONFIG SET save ""`, `EXEC`, `SET a 2` in one pipeline
+    was refused, and `CONFIG SET stop-writes-on-bgsave-error no`, `SET a 4` too, where
+    Redis checks each command. Now read from the server's state for each command.
+  - *The count of changes:* ZINCRBY and ZADD INCR that leave the score as it was
+    counted 1 (Redis 0), RESTORE with an ABSTTL in the past onto a missing key 1 (Redis
+    0), an EVAL of BendKV's own script of a new hash over a string 1 (Redis 4: its DEL
+    and its HSET's three pairs), PFDEBUG TODENSE of a sparse HyperLogLog 0 (Redis 1).
+    Each now takes a weight read before the call, and counts as Redis does. FLUSHDB
+    after a read of a key whose time had passed stays a difference (below).
+  - *The save's parameters.* `dbfilename` was read when the actor started writing, after
+    the group: with `enable-protected-configs yes`, `BGSAVE` and `CONFIG SET dbfilename
+    other.rdb` in one pipeline wrote `other.rdb` (Redis `dump.rdb`); and
+    `rdb-key-save-delay` and `rdb-save-incremental-fsync` were read at each slice. Now
+    kept from the BGSAVE (above).
+  - *The temporary file.* It was opened again by its name for each 64 KB: removed while
+    the save ran, it was made anew without its head, and renamed onto `dump.rdb`, a file
+    that does not load. Now its writer holds it open (above), and the rename fails as
+    Redis's does.
+  - *An INFO after a FLUSHALL with save points in one pipeline* gave the count before
+    that FLUSHALL's save, where Redis, which saves within FLUSHALL, gives the changes
+    made after it. Now the count less what the save takes away when it ends well.
+
+**What it costs** (PERFORMANCE.md, section 72): the count of changes on every batch, and
+the cron's look at the save points each 100 ms; while a background save runs, the
+actor's time between groups, a slice at a time, and the copies the writes make of the
+nodes they change that its snapshot shares. The review's fixes add nothing to GET, SET
+and INCR (a batch's rule is looked up once now); before each ZINCRBY and ZADD INCR, the
+lookup of its member and the parse of its increment, a few percent of the call (the sum
+of the doubles only when their fields leave it open: `dw.zincr.kind`).
+
+**The laws.** No law changed, and none states the count of changes or the saves: the
+rules, the weights and the background save are the shell's, tested against Redis. The
+account's new fields are `Info`'s (`src/info.bend`); `src/session.bend` gets wrappers
+for them (`srv.ran.d`, `srv.bg.*`, `srv.rdb.clean`, ...) and BGSAVE's reply when a
+session runs it alone, which the laws do not name: the three laws that enumerate a
+session's commands take BGSAVE as they take the other kinds of `SAdmin`. The review's
+fixes change `src/session.bend`'s `Mm` (the memory as the eviction sees it while a job
+runs, in place of the debt) and `srv.bg.go` (the parameters a save keeps), which no law
+names either. `make check` and `make verdict` pass.
+
+**Where BendKV differs.**
+
+- The count of changes, where its rule reads the reply rather than the change: SET with
+  GET counts its reply (none for a key not there, without NX or with it; one for a key
+  there with NX, which Redis does not set); ZADD and GEOADD without NX or CH count each
+  pair, those whose score was there already and is unchanged too (with XX, GT and LT as
+  well), where Redis counts the elements added and the scores changed; BITFIELD counts
+  each SET and INCRBY that OVERFLOW FAIL did not refuse, those that leave the bits as
+  they were too; PFADD counts one where Redis counts the registers that change, and one
+  for a new key; PFCOUNT, which Redis counts when it caches the cardinality, counts
+  none. FLUSHDB and FLUSHALL count a key whose time has passed until the sweep deletes
+  it, also when a read has found it missing, which Redis's read deletes
+  (`SET a 1 PX 1`, `SET b 1`, a read of a 50 ms later, FLUSHDB: Redis 1, BendKV 2), and
+  so does a background save's `current_save_keys_total`; the reads are pure, and the
+  count of keys of the databases is a number they keep, which a walk of every key with a
+  time would replace. A call of the fast way reads its weight from the databases as its
+  batch found them, not as the calls before it in the batch left them (SETBIT twice on
+  one bit, an LTRIM after a push, in one pipeline). An INFO after a FLUSHALL with save
+  points in its pipeline gives the count as that FLUSHALL's save leaves it when it ends
+  well (the save comes once the group has run); after one that fails, the count is the
+  whole count again, which Redis's INFO there would have given. After a start from the
+  append-only file, the count is 0, where Redis counts the changes the file replayed.
+- maxmemory while a background save or a rewrite runs is counted by the keys (above):
+  values that grow in place count once the job has ended, and keys made of another size
+  than the snapshot's average count at that average, where Redis's `used_memory` counts
+  each allocation as it is made. INFO's `used_memory` is the heap meanwhile, the
+  snapshot's values in it.
+- A rewrite of the append-only file reads `rdb-key-save-delay` and
+  `aof-rewrite-incremental-fsync` as they are at each slice, where Redis's child keeps
+  them from its fork (a background save keeps its own: above).
+- No fork: `total_forks` and `latest_fork_usec` stay 0, the copy on write is 0, and
+  there are no fork lines in the log ("Fork CoW for RDB: ..."). The child's lines have
+  the server's pid. `current_save_keys_processed` follows each slice written, where
+  Redis's child reports its count once a second at most (1 key for a small save), and
+  `current_fork_perc` follows it. A rewrite of the append-only file shows 0 in the three,
+  where Redis's show the keys at its fork and those its child has rewritten.
+- The save's "Background saving started" line comes when the actor starts it, once the
+  group is answered, not at BGSAVE; a SHUTDOWN or a FLUSHALL in the same group as the
+  BGSAVE then drops it before it wrote anything, with "There is a child saving an .rdb.
+  Killing it!" or "Background saving terminated by signal 10" but no line of its start.
+- A FLUSHALL's "Background saving terminated by signal 10" comes once its group is
+  answered (Redis's comes at its next cron, up to 100 ms later).
+- SAVE and the saves of SHUTDOWN and FLUSHALL ignore `rdb-key-save-delay`, which Redis's
+  `rdbSave` honors in them too (BendKV's are made whole, after their group).
+- SIGTERM and SIGINT still end BendKV at once (section 3zzzc): with save points there is
+  no save, as before, and a background save that runs leaves its temporary file, which
+  Redis's shutdown removes.
+
+**Tests.** `tests/bgsave_test.py`, in `make test`, runs each part on a redis-server and
+a BendKV of their own, each in a fresh directory, and compares the transcripts line by
+line (1,303 checks):
+
+- the count of changes of 203 writes of every kind (the table `CASES`, Redis's count and
+  BendKV's where they differ), each alone, in a pipeline between two PINGs, and in
+  MULTI: byte for byte, Redis's counts checked against the table too;
+- BGSAVE: its replies (a syntax error, SCHEDULE, already in progress, SAVE and BGSAVE
+  while one runs, in MULTI), INFO's fields before, during (slowed down by
+  `rdb-key-save-delay` 20,000 over 50 keys: about a second) and after it, LASTSAVE, the
+  file (the keys of the snapshot, not the writes made while it ran), no temporary file
+  left, the log's lines, CONFIG RESETSTAT; the counts after it;
+- BGSAVE and BGREWRITEAOF: each scheduled while the other runs, then run;
+- the save points: `save 1 1` saves within seconds of a change and not before, with
+  Redis's line, and not without save points;
+- a background save that fails (dump.rdb is a directory, so the rename fails): MISCONF
+  for writes and PING, not for reads, in MULTI and at EXEC, for a subscriber and a
+  monitor; errorstats and rejected calls; stop-writes-on-bgsave-error no, no save
+  points, and a save that ends well (BGSAVE, SAVE) lift it; a CONFIG SET that lifts it
+  or sets it again, alone or in MULTI, for the commands after it in its pipeline, and
+  for another client's pipeline of writes after it;
+- the cron's next try 5 to 8 seconds after a save that failed, and none before;
+- the parameters a save keeps from its start: CONFIG SET of `dbfilename` in BGSAVE's
+  own pipeline (the file is `dump.rdb`), of `rdb-key-save-delay` 0 while it runs (it
+  still takes its second);
+- the temporary file removed while a save runs: the save goes on, its rename fails with
+  Redis's line, the status is err, no `dump.rdb` is put in place, and the next save ends
+  well;
+- SHUTDOWN (with save points, NOSAVE, and a save that fails) and FLUSHALL (with save
+  points and without) while a save runs: the files after, the temporary file removed,
+  the log's lines, the status and the count;
+- Redis's defaults: CONFIG GET save, and a SHUTDOWN that saves with them.
+
+Where a line depends on time (a second's field, the progress of a save that runs), it
+holds what both must agree on: a range, or a test of order, as each part's comment
+says. `tests/rdb_test.py`'s scenario of SAVE and FLUSHALL now compares
+`rdb_changes_since_last_save` too, and the client suites start BendKV without save
+points, as they start Redis. `tests/maxmemory_test.py` compares maxmemory while a job
+runs on both servers: during a BGSAVE and during a BGREWRITEAOF, each paced to a few
+seconds, 50,000 keys of 100 bytes written again with values of the same size, the limit
+4 MB above the memory they take, evict nothing under allkeys-random and are refused
+nothing under noeviction; new keys during a BGSAVE are evicted on both as they pass the
+limit, each holding what the room left holds of its own keys at the bytes they took
+before the save, within an eighth (BendKV 0.1% more, Redis 3% to 6% more, its hash table
+not growing while a child runs: the numbers are in the test's comment), and once the
+save has ended BendKV evicts as its heap holds them, about 9% fewer.
+
+## 3zzzl. A SHUTDOWN that saves holds the rest of its group
+
+**What failed** (issue #84, found by the review of #72). A SHUTDOWN that saves (SAVE,
+or save points without NOSAVE) asks the shell for its save once the group has run
+(`ps.down` 1), as the save may fail and the server must then go on. So the other
+clients' requests after it in the group ran: what they wrote reached the append-only
+file and the RDB file, and when the save ended well the server stopped without
+answering them. Redis saves and exits within SHUTDOWN (`finishShutdown`), and none of
+them runs. With save points, client A's SHUTDOWN and client B's FLUSHALL in one group
+left BendKV with no key after the restart, with and without the append-only file;
+Redis kept the key. No write that was acknowledged was lost, but the files were not
+Redis's, and with Redis's default save points every SHUTDOWN without NOSAVE saves.
+
+**The change** (`src/server.bend`: The RDB file, The pause). While such a SHUTDOWN
+waits for its save, the commands after it are held back as a pause of every command
+holds them (`down.holds`, next to `pause.holds`): each client waits from its command,
+with the rest of its batch, uncounted. A monitor's command and one the parser refused
+are not held, as a pause holds neither. When the save ends well, the server stops and
+the held clients are never answered, as Redis's. When it fails, SHUTDOWN's client is
+answered Redis's error and goes on, then the held clients go on, in the order they came
+(`grp.saved.down`, on both the path with the append-only file and the one without).
+While a pause holds, they wait for its end instead, as the pause's own clients do: a
+read that Redis would run at once after the failed SHUTDOWN then waits for the pause too.
+
+**Tests.** `tests/rdb_test.py` puts A's SHUTDOWN and B's FLUSHALL in one group with a
+pause (section 3zzzc). With save points, with the append-only file too, and with
+SHUTDOWN SAVE, the restart holds the key on both servers; before the change, all three
+held none on BendKV. With a save that fails, SHUTDOWN answers its error and the FLUSHALL
+then runs and is answered, on both. 132 checks.
+
+**What it cost.** Nothing measurable: the check runs only on a batch the general way
+(`bg.go`). `make perfcheck` gives GET 3,414, SET 4,181 and INCR 4,525 instructions per
+request, against 3,416, 4,177 and 4,518 for the build before the change: within 0.2%.
+
+## 3zzzm. Small hashes in one string, as a listpack
+
+**What was left** (section 3zg). A small hash was the list of its pairs: a cell of 16
+bytes, an `HP` node of 16, and a buffer of 16 bytes or more for each field or value
+longer than 6 bytes (one of up to 6 lives in the term's word). A value a write had shared
+also kept the reference count it got then, 8 bytes. A pair of a 2-byte field and an
+8-byte value took 56 bytes, where a listpack spends 14 (Redis's DUMP of `HSET k f0
+v1234567` holds a listpack of 21 bytes, and of 35 with a second such pair) and the string
+below 12.
+
+**What a string is in the runtime** (patches 1, 2, 4 and 8, in `bend2/comp.ts`). The
+design rests on this.
+
+- A string of up to 6 bytes lives in the term's word. A longer one is a buffer: a heap
+  block of 16 to 2,048 bytes, a power of two with no header, whose bytes end where the
+  block ends. Alone it is a blob, whose term is the buffer's own; otherwise it is a chunk
+  of a chain, each with a node of 16 bytes.
+- `String.take` and `String.slice` copy what they take into one new buffer of the
+  smallest class that holds it (into buffers of 2,048 bytes past that). `String.drop`
+  of a blob moves its start in its own word.
+- `a ++ b` writes a into the room before b's bytes when b's buffer is unshared and has
+  that much room. Otherwise it links a's last chunk to b with a new node, or copies a's
+  short tail into a new chunk with 256 bytes of room.
+- Nothing joins a chain into one buffer afterwards: the lazy seal of patch 1 is about
+  reference counts, not bytes. A chain reads a chunk at a time: `String.code_at`,
+  `String.slice` and `String.length` past its first chunk walk it from the start
+  (`str_code_at_far`, `str_slice_far`, `str_len_far`).
+- A buffer holds at most 2,048 bytes: a chunk's start in its buffer has 11 bits. So a
+  string past that is a chain, whatever wrote it.
+
+So a packed hash copies its string into one buffer at each write; left to `++`, a few
+writes would leave it a chain of small chunks. And a hash's string holds at most one
+buffer: past it, a read by index would walk the chain (*Past one buffer*, below).
+
+**The change** (`src/map.bend`, Hashes). `HSmall{n, b}`: b holds the pairs one after
+another, in the order they came.
+
+- A pair is its field's length, the field, its value's length and the value. A length
+  below 255 is one byte. A longer one (RESTORE keeps a listpack's pairs whatever their
+  lengths) is the byte 255 and four bytes, the high first.
+- A read walks the lengths, two a pair, and compares a field of the right length by its
+  last byte, then whole (`String.eq` of a slice). HGET slices the value out.
+- A write builds the new string from a take of the old one, the new pair or value, and a
+  drop of the rest, and copies it into one buffer (`String.take` of all of it), as Redis
+  writes a listpack anew. A hash that passes the limits becomes a trie, as before.
+- `hash.pairs` decodes the string in a walk that keeps no frame a pair, then turns the
+  list around.
+- The string holds at most 2,048 bytes (`hb.small`). Past that, the pairs are in pieces
+  (`HLong{n, ps}`, `HPc{k, s}`), each the pairs that fill one buffer, or one pair longer
+  than a buffer (RESTORE keeps those).
+  - A read goes through the pieces in order and finds in one (`hl.get`, `hl.has`); it
+    tells a find from the indices `hb.find` gives, not from the piece's length, which
+    walks a chain.
+  - A write changes one piece. A value set in place copies its piece; a piece it makes
+    longer than a buffer is dealt into pieces again (`hl.fix`). A new pair goes in the
+    last piece while it has room, else in a piece of its own (`hl.set`).
+  - A delete cuts one piece, and a piece it empties goes (`hl.cut`). One piece of no more
+    than a buffer left is a string again (`hl.hash`).
+  - RESTORE deals the pairs into pieces when they pass a buffer (`hash.of`).
+- Outside the section: RESTORE builds the string (`hash.of`, `src/rdb.bend`), DUMP and
+  HSCAN decode it (`src/rdb.bend`, `src/redis.bend`), and OBJECT ENCODING reads the
+  widest length from it (`src/session.bend`).
+
+No proof changed: the proofs name `hash.empty`, `len`, `get` and `has` alone, and `has`
+of the empty hash still reduces to False whatever the field (`hdel_empty`).
+
+**What it gives.** `used_memory` per key, less what the server held before, after
+200,000 hashes `k:0`, `k:1`, ... were loaded with one pipelined HSET each; fields `f0`,
+`f1`, ..., values of `v` and digits:
+
+| pairs a hash, value bytes | Redis 7.0.15 | before | packed |
+|---|---:|---:|---:|
+| 10, 8 | 234.5 | 721.9 | 289.9 |
+| 10, 20 | 394.5 | 881.9 | 417.9 |
+| 50, 8 | 842.5 | 2,961.9 | 1,185.9 |
+| 50, 20 | 1,610.5 | 3,761.9 | 2,209.9 |
+
+The rest of a key (its name, its entry in the trie, the nodes of its value) is about 162
+bytes. The string takes the power of two above its length: 120 bytes take 128, but 640
+take 1,024 and 1,240 take 2,048, most of what is left between BendKV and Redis at 50
+pairs.
+
+**What it costs.** Instructions and last-level data read misses per request (callgrind, a
+last level of 2 MiB, 20 clients at a pipeline depth of 16, 20,000 requests counted after
+20,000 more) on 100,000 such hashes of 8-byte values: HGET of `f3` (the fourth field),
+HGETALL, HSET of `f3`, which is there, and HSET of a new field of 13 bytes:
+
+| pairs a hash, command | instructions before | packed | misses before | packed |
+|---|---:|---:|---:|---:|
+| 10, HGET | 6,442 | 7,436 | 12.39 | 6.56 |
+| 10, HGETALL | 25,605 | 27,260 | 31.61 | 8.15 |
+| 10, HSET of a field there | 11,247 | 14,269 | 13.31 | 8.02 |
+| 10, HSET of a new field | 13,499 | 16,382 | 17.71 | 8.40 |
+| 50, HGET | 6,437 | 7,484 | 12.51 | 6.57 |
+| 50, HGETALL | 106,748 | 114,588 | 123.08 | 17.22 |
+| 50, HSET of a field there | 11,245 | 14,354 | 13.48 | 16.58 |
+| 50, HSET of a new field | 27,307 | 32,873 | 44.02 | 16.66 |
+
+GET, SET and INCR do not move (`make perfcheck`, locally: 3,416, 4,178 and 4,522
+instructions before, 3,414, 4,177 and 4,522 after; misses and prefetches as before).
+
+The misses outweigh the instructions: on 200,000 hashes of 10 pairs, HGET, HSET of a
+field there and HGETALL answer 1.4, 1.5 and 2.1 times the requests a second they did
+(PERFORMANCE.md, section 73).
+
+- A read misses less: the string is a few cache lines where the list was two nodes and a
+  buffer a pair.
+- It runs more instructions: each length is read by `hb.len`, `String.code_at` and a
+  test, which the C compiler keeps as a function of its own, about 50 instructions a call
+  and two calls a pair, where the list's walk read a cell.
+- A write copies the string where the list rebuilt its cells in place: the part before
+  the pair it changes into a take, then all of it into one buffer (1,049 instructions per
+  HSET of a field there for that last copy, with its walk of the chain). At 50 pairs the
+  copy reads and writes more lines than the list's write touched, so HSET of a field
+  there misses more.
+
+**Past one buffer** (found in review). The first version kept every small hash in one
+string. Past 2,048 bytes that string is a chain, and each length a lookup read walked it
+from its start, so a find cost the pairs times the chunks. At Redis's own limits (512
+pairs of 64 bytes: 66,560 bytes, 33 chunks) HGET of the last field ran 34 times main's
+instructions, and on a restored listpack of long values 100 to 600 times main's time.
+The pieces read each byte where it lies.
+
+The times of the cases above, and more, are in PERFORMANCE.md, section 73: with the
+pieces, HGET of the last of 512 pairs of 64 bytes takes 17.9 microseconds, where the one
+string took 141.5 and main 11.5.
+
+Instructions a request (callgrind; 100 hashes, 2,000 requests counted after 2,000 more,
+200 of HGETALL and of the one string's restored listpacks; 20 clients at a pipeline depth
+of 16):
+
+| hashes, command | main | one string | pieces |
+|---|---:|---:|---:|
+| 512 pairs of 64-byte fields and values: HGET of the last field | 70,443 | 2,372,557 | 308,852 |
+| the same, HGET of a field not there | 69,894 | 2,370,206 | 308,204 |
+| the same, HSET of a middle field there | 127,535 | 1,479,051 | 316,489 |
+| the same, HGETALL | 1,275,989 | 3,682,435 | 1,469,417 |
+| Redis's listpack of 512 values of 1,000 bytes, restored: HGET of the last field | 58,559 | 65,568,765 | 181,675 |
+| the same, HGET of a field not there | 56,841 | 64,472,020 | 172,641 |
+| the same, HSET of a middle field there | 94,138 | 13,598,199 | 189,231 |
+| the same, HGETALL | 1,720,190 | 49,996,002 | 1,661,369 |
+
+At 512 pairs of 64-byte fields, a find in the pieces runs about 600 instructions a pair,
+4.4 times main's walk, but it reads a few cache lines where main's read a cell, a node and
+a buffer a pair: the time is 1.6 times main's.
+
+The pieces still lose to main in two places.
+- Where every field has one length and one last byte, as in these shapes, each pair
+  passes the test of the last byte and is sliced out to be compared whole. Fields that
+  differ in length or in their last byte skip the slice.
+- A restored value longer than a buffer is read out of its piece's chain, where main kept
+  it as a string of its own.
+
+A first build of the pieces asked each piece's length to tell whether the find had found
+its field. `String.length` walks a chain, so each piece of one long pair cost a walk: 71.8
+microseconds for HGET of a field not there in a restored listpack of 100 values of 70,000
+bytes, 23.5 now. The find is now told from `hb.find`'s indices (`hl.found`).
+
+`used_memory` a key over 2,000 hashes (Redis, main, the one string, the pieces):
+
+| hashes | Redis | main | one string | pieces |
+|---|---:|---:|---:|---:|
+| 512 pairs, fields `f0` to `f511`, values of 64 bytes | 41,066 | 53,600 | 36,460 | 37,789 |
+| 512 pairs of 64-byte fields and values | 82,026 | 90,465 | 67,422 | 71,614 |
+| 128 pairs of 64-byte fields and values | 20,586 | 22,877 | 17,117 | 19,068 |
+
+The pieces cost 4% to 11% more than the one string (a cell and a node a piece, and buffers
+not filled to their end), and stay below Redis. A hash of no more than 2,048 bytes is the
+one string as before, in the same bytes. A write asks its length once more (`hb.small`):
+at 10 pairs, HGET takes 7,473 instructions where the one string took 7,461, HGETALL 27,291
+(27,285), HSET of a field there 14,396 (14,301) and HSET of a new field 16,470 (16,408),
+with the same misses (callgrind as in *What it costs*, on b1e6846 and on the pieces).
+
+**Two traps.**
+
+- *A call that gives `str_eq` a value of its own.* The first version compared a field
+  with `str_eq(String.slice(...), f)`. The slice is a value the call gives away, so the
+  compiler made `str_eq` own its first argument, and every key the trie compares with it
+  then had to be given one. GET, SET and INCR took 3.8%, 8.1% and 8.3% more instructions
+  and a quarter more last-level misses (`make perfcheck`). `String.eq`, which borrows
+  both its arguments, keeps `str_eq` as it was (section 7).
+- *A collection taken out of the keyspace comes shared.* `db.upd` reads the entry's code
+  (`ent.code`) with a borrowed match on `Maybe<Item<Val>>`, a type laid out without a box,
+  which keeps the value it binds (section 8). The match that then takes the collection
+  apart takes a shared node and seals its fields (`span_fade`), the hash's string among
+  them. The runtime writes into the room of an unshared buffer only, so an HSET never
+  writes into the old string's own buffer: it links a chain (two nodes and a chunk) and
+  copies it. Read without binding the value, the code would leave the string unshared;
+  the list of a small hash before this change paid the same seal on its first cell.
+
+**Where BendKV differs.** Nothing a client sees changes.
+
+**Tests.** `tests/hash_test.py` in RESP2 and RESP3, the differential tests (seeds 1 to 3,
+and 4 in RESP3), `tests/dump_test.py`, the tests of SORT, of the administrative commands
+(MEMORY USAGE), of the keyspace and of the sessions, the concurrency checks, and the
+append-only file (a restart, Redis's and BendKV's files both ways, the rewrite). A
+listpack of fields and values of 254 to 70,000 bytes, restored from Redis's DUMP, then
+read, cut and written, answers as Redis does (18 commands), and as the server before
+this change once a write passes the limits (35 commands). `make check`, `make verdict`,
+`make smoke` and `make gencheck` pass.
+
+For the pieces, `tests/hash_test.py` gains:
+- a hash grown past a buffer a field at a time, its values made longer (a piece past a
+  buffer is dealt again) and shorter, its fields taken out from its front, its end and
+  its middle until it is small again, then grown again;
+- Redis's listpacks of 1,000, 3,000 and 70,000-byte values restored on both, read and
+  written;
+- after each, BendKV's DUMP restored in Redis, which must give the hash BendKV holds, in
+  its order;
+- random commands on two hashes of up to 150 and 80 fields, which pass 2,048 bytes and
+  come back below it.
+
+It passes on main's build too.
+
+## 3zzzn. Small sorted sets in one string, as a listpack
+
+**What was left** (sections 3zl and 3zzzm). A small sorted set was its weight-balanced
+tree alone: for each element a node of six words (its count, its member, its score's two
+words, its two sides) and, for a member longer than 6 bytes, the member's buffer. An
+element of an 8-byte member took about 92 bytes, where a listpack spends 12 with an
+integer score and 31 with another; 200,000 sorted sets of 10 such elements took 5.0
+times Redis's memory.
+
+**The change** (`src/map.bend`, Packed strings and Sorted sets). `ZSmall{n, b}`: b holds
+the n elements one after another in Redis's order, by score, then by member.
+
+- An element is its member's code (its length in one byte below 255, else 255 and four
+  bytes, as a hash's field), the member, and its score's 8 bytes: the double's bits as
+  they are, its high word first, each word its high byte first. They are exact, so a
+  `-0` that RESTORE keeps from a listpack's text stays `-0`, and a read converts nothing.
+- The helpers the packed hashes and sorted sets share left the hashes for a section of
+  their own (`pk.*`), as they were: the codes of lengths, the copy into one buffer, the
+  test of a coded string against a field or a member (its length, then its last byte,
+  then the whole), and the cut of a piece.
+- A member is found as a hash's field is (`zb.find`), with its index, its score's, and
+  how many elements follow it, so that ZRANK has the rank from the walk that finds the
+  member (it walked twice: to the score, then to the rank). ZADD, ZINCRBY and ZREM keep
+  the index that walk found (`zset.find`) for their write, which walks to the member no
+  more.
+- An element's place is found by its score, then, for the same score, by its member,
+  copied out only then (`zb.cmp`). Scores compare by their high words when those decide
+  (they differ, and not both hold no more than a sign, as those of 0, -0 and numbers
+  below 2^-1042 do), so that a low word is read for close scores alone. A score above
+  the last goes past the last at once, the string's last 8 bytes being the last score:
+  the pairs of a STORE, of the rewritten append-only file and of a ZADD of scores in
+  order come so.
+- A write builds the new string from the old one's pieces and copies it into one buffer,
+  as the hashes' writes do: ZADD of a new member puts it at its place; ZADD and ZINCRBY of
+  one there move it where its new score goes, in one copy of the pieces before, between
+  and after; ZREM, ZPOPMIN and ZPOPMAX cut an element out.
+- Ranges: by rank, a walk to the first and the elements decoded (`zb.slice`); by score
+  (ZRANGEBYSCORE, ZCOUNT, and GEO's cells), `zset.before` walks the string comparing
+  scores as above; by member, a small sorted set's walk from its first element, as before,
+  on the list of its elements decoded from the string, where it was the tree's.
+  ZRANDMEMBER picks an element by its rank in the string, or, for more than 32 picks of
+  each anew and for Redis's third way, from a tree made from the string once
+  (`zt.build`, moved from `src/rdb.bend`).
+- **One buffer at most.** A string past 2,048 bytes is a chain of buffers of at most
+  2,048 bytes each (`String.take` copies into one buffer that long at most), and every
+  read by index past the first buffer (`String.code_at`, `String.slice` and
+  `String.length`: `str_code_at_far`, `str_slice_far` and `str_len_far` in
+  `bend2/comp.ts`) walks the chain from its first buffer, so a walk of the elements
+  costs their number times the chain's length. A small sorted set's string therefore
+  holds at most 2,048 bytes: 120 elements of members of 8 bytes, 81 of 16, 28 of 64. One
+  whose string would pass that is kept as the tree of its elements, as before this
+  change (`ZWide{tr}`, read as the tree was: a member found along it, as along a
+  listpack), for good, until a write makes it large; RESTORE makes a tree of a listpack
+  past one buffer. Such a sorted set takes about the memory it took before: 10,483 bytes
+  a key for 128 members of 8 bytes, where it took 12,403, and Redis 1,883 (the table
+  below).
+- Outside `src/map.bend`: RESTORE makes the string from the elements in order (a
+  listpack's as they came, a skiplist's turned around, others through a tree: `zset.of`,
+  `zel.sorted`); DUMP, the RDB file and ZSCAN decode it; OBJECT ENCODING reads its
+  widest member (`zb.widest`, or the tree's); `tests/aof_check.bend` reads `zset.all`.
+
+No law changed, and no proof: the proofs name `zset.empty`, `zset.len` and `zset.dels`,
+and see the walks of ZADD and ZREM only through `zadd.go` and `zrem.go` of the empty
+sorted set, where `zset.find` still reduces to no element whatever the member
+(`zrem_empty`, `zadd_xx_go`).
+
+**What it gives.** `used_memory` per key, less what the server held before (main at
+fc28490, and this change before it merged main 013d9ac and the hashes' pieces), after
+200,000 sorted sets `zset:000000000000` to `zset:000000199999` were loaded with one
+pipelined ZADD each; members `m0000000`, `m0000001`, ... of 8 bytes, member j of score
+j (integers) or j + 0.1 (fractions, which Redis writes in 17 digits):
+
+| members, scores | Redis 7.0.15 | before | packed |
+|---|---:|---:|---:|
+| 10, integers | 218.9 | 1,099.2 | 435.2 |
+| 10, fractions | 410.9 | 1,099.2 | 435.2 |
+| 50, integers | 730.9 | 4,915.2 | 1,203.2 |
+| 128, integers | 1,882.9 | 12,403.2 | 10,483.2 |
+
+The rest of a key (its name of 17 bytes, its entry in the trie, its value's nodes) is
+about 179 bytes. The string takes the power of two above its length: 170 bytes take 256,
+850 take 1,024. Redis keeps an integer score in one to nine bytes and another as its text
+of up to 17 digits, BendKV 8 bytes for any: with fractions, the sorted set of 10 takes
+1.06 times Redis's memory, with integers 2.0 times. 128 members of 8 bytes take 2,176
+bytes, past one buffer: those sorted sets are trees, as before, 5.6 times Redis's
+memory.
+
+**What it costs.** Instructions and last-level data read misses per request (callgrind,
+a last level of 2 MiB, 20 clients at a pipeline depth of 16, 20,000 requests counted after
+20,000 more) on 100,000 sorted sets of 10 members `m0` to `m9` of scores 0 to 9, main at
+013d9ac and this change merged with it:
+
+| command | instructions before | packed | misses before | packed |
+|---|---:|---:|---:|---:|
+| ZSCORE of `m3` | 8,435 | 7,934 | 11.61 | 6.55 |
+| ZRANK of `m3` | 7,800 | 6,932 | 11.95 | 6.90 |
+| ZRANGE 0 -1 WITHSCORES | 35,787 | 38,685 | 19.16 | 8.19 |
+| ZRANGEBYSCORE 2 5 | 25,731 | 30,044 | 18.29 | 8.43 |
+| ZCOUNT 2 5 | 32,656 | 36,035 | 17.30 | 8.57 |
+| ZRANGEBYLEX [m2 [m5 | 19,311 | 23,730 | 19.49 | 8.65 |
+| ZRANDMEMBER 3 | 36,146 | 38,370 | 15.57 | 8.60 |
+| ZADD of `m3`, there (the first moves it) | 19,078 | 18,654 | 17.96 | 8.52 |
+| ZINCRBY of `m3` | 27,732 | 26,518 | 18.39 | 8.24 |
+| ZADD of a new member | 25,492 | 24,005 | 20.55 | 8.51 |
+| ZREM of a member not there and of `m9` | 21,346 | 13,014 | 20.32 | 8.95 |
+| ZPOPMIN | 13,786 | 11,713 | 14.16 | 8.62 |
+| ZPOPMAX | 14,797 | 14,532 | 14.57 | 8.54 |
+
+- Lookups and writes cost fewer instructions: no tree is walked, copied, rebalanced and
+  dropped (`term_drop`, the runtime's drop of what a request no longer holds, took 7,216
+  instructions a ZINCRBY before, 4,238 after, on main fc28490).
+- Reads that answer elements cost more: a score's 8 bytes are 8 calls of
+  `String.code_at`, each a test of the string's form and of its bounds, about 25
+  instructions a byte and 270 a score, where a node held the double; ZRANGE of 10 reads
+  10 of them, ZCOUNT compares about 10 high words.
+- Misses fall by half or more everywhere: the string is two to four cache lines where the
+  tree was a node and a buffer an element.
+
+The misses outweigh the instructions: on 200,000 sorted sets of 10 members, ZSCORE, ZADD
+of a member there, ZRANK and ZINCRBY answer 1.4, 1.5, 1.8 and 1.7 times the requests a
+second they did, and ZRANGE of the 10 with their scores 1.3 times (PERFORMANCE.md,
+section 74). Those were measured before this change merged main 013d9ac and the hashes'
+pieces, against main fc28490; for those five commands the ratio of this change's
+instructions to main's is the same within 0.5% on both bases.
+
+**Past one buffer, measured** (on main fc28490). 100 sorted sets of 128 elements, made
+by ZADD with members of 64 bytes (9,344 bytes of string, five buffers), or RESTOREd from
+Redis's listpack of members of 1,000 bytes (zset-max-listpack-value raised there:
+129,664 bytes of string, 64 buffers); instructions per request before this change, with
+the string past one buffer (a first version, a chain of buffers), and with the tree past
+one buffer (this one):
+
+| sorted sets, command | before | chain | this change |
+|---|---:|---:|---:|
+| 64 bytes, ZSCORE of the last member | 88,632 | 99,381 | 78,028 |
+| 64 bytes, ZRANK of the last member | 88,552 | 96,018 | 78,361 |
+| 64 bytes, ZADD of the 65th, a new score | 71,467 | 122,130 | 65,717 |
+| 64 bytes, ZRANGE 0 -1 | 191,473 | 502,564 | 191,298 |
+| 1,000 bytes, ZSCORE of the last member | 91,936 | 1,939,637 | 81,666 |
+| 1,000 bytes, ZRANK of the last member | 92,004 | 1,909,118 | 81,816 |
+| 1,000 bytes, ZADD of the 65th, a new score | 74,525 | 1,112,876 | 70,852 |
+| 1,000 bytes, ZRANGE 0 -1 | 324,272 | 3,794,551 | 324,635 |
+
+The chain made ZSCORE of the long members 21 times as dear, and it answered a twelfth of
+the requests a second the tree did (PERFORMANCE.md, section 74). The review of the
+packed hashes found the same of a hash of 512 pairs of 64 bytes, whose pairs are now in
+pieces of one buffer each (Hashes, in `src/map.bend`).
+
+**Two traps of the hashes, again, and three of this change.**
+
+- *A slice compared with `String.eq` and `String.order`*, natives that borrow both
+  arguments, never with `str_eq`, which a slice would make own its first argument
+  (section 3zzzm).
+- *A collection taken out of the keyspace comes shared* (`db.upd` binds `ent.code`), so
+  every write copies the string where it could write in place. Noted, not fixed here
+  (section 3zzzm).
+- *A tree made for one read costs more than the walk it saves.* The first version read a
+  small sorted set's range by member, and ZRANDMEMBER's picks, from a tree made from the
+  string (`zset.tree`), so that the rest of the code stayed the tree's: ZRANGEBYLEX took
+  59% more instructions than before, ZRANDMEMBER of 3 31% (the builder's jobs, 330
+  instructions an element, and the list of elements it builds from). Read from the
+  string and its list, they take 23% and 6% more.
+- *A test made flat reads what the nested one skips.* The first version tested a
+  string's length and its last byte at once, in one call where the hashes made three
+  nested ones, and read the last byte of every string of another length too: on the
+  hashes of *What it costs* in section 3zzzm, HSET of a new field of 13 bytes among
+  fields of 2 took 17,368 instructions where #88's took 16,406, and HGET of a field there
+  7,423 where it took 7,402. The nested test is back: HGET, HGETALL, HSET of a field there
+  and of a new one take 7,409, 27,193, 14,333 and 16,408 (#88 merged with main 013d9ac:
+  7,402, 27,168, 14,342 and 16,406), and ZADD of a new member and ZREM 2.0% and 3.9%
+  fewer than with the flat test.
+- *The bytes, not their sum, cost the instructions.* Assembling a score's bytes with
+  `U32`'s shifts and ors, which compile to C's own, in place of `Nat`'s checked products
+  and sums, cost the same (148 instructions a word, two words a score): the 25 a byte are
+  `String.code_at`'s. It was left out.
+
+**Where BendKV differs.** Nothing a client sees changes.
+
+**Tests.** `tests/zset_test.py` gains sorted sets on both sides of one buffer: members
+of 30, 47 and 64 bytes added one ZADD at a time up to 128 elements and read around the
+crossing (elements, scores, ranks, ranges by rank, score and member, ZRANDMEMBER, ZSCAN,
+OBJECT ENCODING), then written (ZINCRBY, ZADD CH, ZREM, ZPOPMIN, ZPOPMAX,
+ZREMRANGEBYRANK), RESTOREd from Redis's DUMP and made large; and Redis's listpack of
+members of 3,000, 1,500 and 254 bytes restored on both, read and written. It passes on
+main's build too. `make check`, `make verdict`, `make smoke`, `make gencheck`,
+`make test` and `tools/sanitize.sh` pass; and, run on their own, `tests/zset_test.py` and
+`tests/hash_test.py` in RESP2 and RESP3, the differential tests at 2,000 rounds (seeds 1
+to 3, and 4 in RESP3), the tests of DUMP, SORT, GEO, the keyspace, RESP3 and the
+administrative commands (MEMORY USAGE), the append-only file (a restart, a cut entry,
+Redis's and BendKV's files both ways, the rewrite) and the RDB file. Sorted sets grown
+past one buffer one ZADD at a time (2,330 commands), and Redis's listpacks of members of
+254 to 70,000 bytes restored, read, written and DUMPed (63), answer as Redis does, and
+as the server before this change once a write passes the limits (203 commands); the
+sorted-set, hash and DUMP tests pass on the build with AddressSanitizer and
+UndefinedBehaviorSanitizer, which reports nothing.
+
+**Next.** Integer scores in fewer bytes, as a listpack keeps them, would put 128 members
+of 8 bytes in one buffer and the sorted set of 10 at about 307 bytes a key. Pieces of one
+buffer each, an element never split across two (as the packed hashes keep a hash past
+one buffer, and a quicklist holds listpacks), would keep a sorted set past 2,048 bytes
+packed without the walks of a chain. A range by member read on the string, which decodes
+only the elements it answers, and ZRANDMEMBER with Redis's one walk over its sorted
+picks, would take the rest of their cost.
+
+## 3zzzo. A long request read in part
+
+**What was slow** (issue #85). One MSET of 300,000 keys, sent at once, took BendKV 12.7 s,
+and Redis 7.0.15 0.16 s; every other client waited meanwhile. The same bytes trickled in,
+64 KB a millisecond, took 15.0 s. An SADD of 300,000 members took 5.0 s (Redis 0.12 s),
+and an RPUSH of 64 values of 512 KB 2.7 s (Redis 0.05 s). A pipeline of 300,000 SETs, the
+same keys in separate requests, took 0.22 s (PERFORMANCE.md, section 75).
+
+**Why.** Section 3zzn made one parse of a long request take time in proportion to its
+length, and left it parsed again from its start after each read. A request longer than
+a read (64 KB) comes in many reads. Its parse stopped at its first bulk not whole yet and
+asked for the bytes that bulk lacked, a few, so the next read set a parse going again
+(`need`). Each parse also copied the request's bytes so far, from its start, as the tail
+kept for the next read, and read its windows out of that copy: a String of chunks of
+2,048 bytes, which a slice past its first chunk walks from its start (`str_slice_far`).
+For a request of n bytes that is about n / 64 KB parses of up to n bytes each. Under
+callgrind (the issue's comment), four times the keys took 15.8 times the instructions,
+and `str_slice_far` 54 times.
+
+**What changed.** The parse keeps what it has read of a long request, as Redis keeps
+`multibulklen` and `bulklen` from one read to the next (`src/resp.bend`, Long requests in
+part).
+
+- When the arguments of a request read through windows (`wbulks`) stop at a bulk not
+  whole yet, the parse leaves a `Part`: the command's number and name, how many bulks
+  come after that one, the arguments read before it, and the bytes the request was read
+  from so far.
+- The tail the connection keeps is that bulk's bytes alone (`TailPart`), not the
+  request's from its start. The next parse goes on from that bulk, with the arguments
+  it kept (`parse_part`), so each read is parsed once.
+- Once the request is whole, the requests after it in the same read are parsed in
+  windows, as in any buffer.
+- MONITOR reads a batch's arguments again from its bytes. The batch a long request ends
+  in holds the bytes of the reads before it too, before its own (`part.raw`), so that
+  its line shows every argument.
+- A short request not whole yet is parsed again from its start, as before
+  (`TailBytes`): its bytes fit in a window, and only the windowed path keeps a part. GET,
+  SET and INCR read their arguments their own way and keep none either: a SET of a long
+  value waits for the value's bytes (`need`) and is parsed once they are in.
+- The connection's loops (`src/server.bend`, the `conn_*` and `conn_sub.*` steps) carry a
+  `P.Tail` where they carried a String: none, the bytes of a short request not whole
+  yet, or a request read in part. `Tail` and `Part` each have a variant that holds
+  itself and is never built, so the compiler makes each a node of its own, and the
+  loops' steps carry one word for it, as before (section 8).
+
+The bytes of every reply and the protocol's errors are as they were, and so is when an
+error is answered: the parse goes on at the bulk where it stopped, and a bulk's header
+is read as soon as its line has come.
+
+**Tests.** `tests/protocol_test.py` compares 22 new cases with Redis byte for byte: a
+long RPUSH cut at each place a bulk can be cut (at its `$`, after it, inside its length,
+at its header's CR and LF, at its data, inside it, at the CR and the LF after it), in its
+last bulk, in three pieces, with a first piece shorter than a window, with requests
+after it in the same read, two long requests each cut, a bulk that is not one, a bad
+length and a length past 512 MB after a cut, a bulk whose two bytes after its data are
+not CRLF, an unknown command, an MSET and one of an odd count, and a SET of a long value.
+Each passes on main's build too. Then it times, on BendKV alone, one MSET of 200,000
+keys sent at once against a pipeline of as many SETs: the MSET must take at most five
+times as long, plus half a second. Main's build took 5.3 to 5.6 s against 0.11 to 0.15
+s, and failed; this one 0.6 to 0.7 s against 0.12 s. `tests/monitor_test.py` sends a
+long RPUSH in three reads and compares MONITOR's line with Redis's.
+
+**What it costs.** Each read of a long request is parsed once (PERFORMANCE.md, section 75): one MSET of
+120,000 keys takes 709 million instructions under callgrind, against 7,561 million on
+main, and four times the keys cost 4.5 times the instructions, against 15.6 times. The
+requests a read holds whole are parsed as before: `make perfcheck` gives GET 3,420, SET
+4,181 and INCR 4,527 instructions per request, against 3,418, 4,180 and 4,520 for main
+fc28490's build, and LPUSH, HSET, SADD and a pipelined MSET of 10 keys stay within 0.4%
+of main's counts.
+
+**What is left.** One MSET of 300,000 keys still takes 3.6 times Redis's time (0.58 s
+against 0.16 s), and a key of it 5,900 instructions, where a whole pipelined SET takes
+4,181. Where they go is not broken down here. Its path differs from a SET's in that its
+arguments go into a list, turned around once the request is whole and then read into the
+command, where GET, SET and INCR read theirs into the command directly.
+
+## 3zzzr. An eviction while a rewrite runs stops near the excess
+
+**What was left** (issue #100). With `maxmemory` set just below the memory used, an
+eviction that ran while BGREWRITEAOF ran went on for as long as the rewrite did. In
+maxmemory_test's scenario (300,000 keys of 8 bytes, the limit a tenth of the keys'
+share below the memory used) it left 14% of the keys after 3 s, where Redis 7.0.15
+leaves 87% whatever the wait. The test read DBSIZE after 0.5 s and wanted more than
+150,000 (3zw), and a fast runner went below that (CI on #92's merge: 128,352 left).
+
+**Why.** While a rewrite runs, its snapshot holds the databases' nodes, so a key
+evicted frees nothing. The eviction counts each key's MEMORY USAGE estimate as a debt
+(`evict.est`), and stops once the heap's used bytes, less the debt, are within
+maxmemory (`evict.over`). But each DEL copies the trie's path down to its key, and the
+snapshot holds the old nodes as well: the heap grew about as fast as the debt, and the
+condition held until the rewrite ended. In Redis, a fork's copy-on-write grows the
+parent's resident memory, not its `used_memory`.
+
+**What changed** (`src/server.bend`: Eviction). The eviction's state, `Evs`, keeps the
+heap's used bytes at its last reading. At each reading while a rewrite runs, what the
+heap grew by since then is owed too (`evs.grown`, `evs.heap`): no client's command
+runs inside an eviction, so that growth is the nodes its DELs copied, whose old ones
+the snapshot still holds. Without a rewrite nothing more is owed, as before: the old
+nodes are let go. The debt is paid as before when the rewrite ends (`mm.paid`), and an
+eviction after it measures the heap as it then is.
+
+**What it gives.** The scenario, DBSIZE after the wait, and again 0.5 s after the
+rewrite ended (the limit still set):
+
+| wait | keys left | after the rewrite's end |
+|---:|---:|---:|
+| 0.5 s | 272,737 (91%) | 238,161 (79%) |
+| 1 s | 267,796 (89%) | 238,215 (79%) |
+| 3 s | 238,262 (79%), the rewrite over at 1.43 s | 238,262 (79%) |
+| 6 s | 238,435 (79%) | 238,435 (79%) |
+| Redis 7.0.15, 0.5 s and 3 s | 261,471 and 261,472 (87%) | 261,164 and 261,472 |
+
+The rewrite now ends in 1.1 to 1.4 s, where the eviction that went on stretched it to
+3.7 s. Once it has ended, the eviction goes on from 91% to 79%: after a rewrite the heap
+holds about 8% of the keys' share more than before it, for the same keys, until they are
+set again (issue #102, on main as well). Without a rewrite, the same limit leaves 87%,
+on main and with the fix.
+
+**Tests.** maxmemory_test's scenario reads DBSIZE after 3 s, then again once the
+rewrite has ended with the limit still set, and wants more than 200,000 both times, and
+no more at the end than at 3 s. With the fix: 238,325, 238,453 and
+238,171 in three runs; on #92's build without it: 44,471 and 41,840.
+
+**What it costs.** Nothing on a request's path: the eviction's loop compares one more
+number at each reading of the heap. `make perfcheck`: GET 3,440, SET 4,208 and INCR 4,562
+instructions a request, within 0.3% of the baseline.
+
+## 3zzzt. The start reads its RDB file in windows
+
+**What was left** (issue #107). The RDB file's start (3zzzc) read `dump.rdb` whole into
+one string, then parsed it. The heap gives no memory back to the system, so the server
+kept, for good, the file's bytes and the parse's peak beside the databases it built:
+344.5 MB resident after a start from a file of a million keys of 100 bytes (108.6 MB),
+where the same keys written by commands take 194.6 MB, and Redis 191.3 MB after its start
+(PERFORMANCE 78). A move from Redis goes through this file, and with save points so does
+every restart.
+
+**What changed** (`src/rdb.bend`: Reading the file; `src/server.bend`: The RDB file on
+the disk).
+- **A step that runs out of bytes** no longer ends the load. Each step reads an opcode
+  and what follows it from the bytes left; one that cannot gives back the load as it was
+  before it, `FMore{r, fail}`, to be run again from its start once more bytes are there,
+  with what the load comes to if the file has no more: the short read's lines, or a
+  value's "cut short" ones, as before. The steps of the times and of EOF are given the
+  time and the counts of the load for that, which they used to drop.
+- **The start** reads the file 1 MiB at a time (`rdb.window`). When a step stops for
+  more, the next read is of 1 MiB or of as many bytes as are left, whichever is more: a
+  value longer than a window (a string of 3 MiB, a set of 120,000 members) is read in as
+  many reads as it takes doublings, and parsed once it is whole. What the start holds at
+  once is a window and the databases it builds.
+- **The CRC64** is taken of each window's bytes the load went past, before the next read,
+  and of the last window's up to EOF once the load is done (`file.checked`): the same
+  bytes, so the same verdict and the same lines when it is wrong.
+- `file.load`, the load of a file read whole, stays, built on the same steps.
+
+**What it gives** (PERFORMANCE 78). Resident memory after the start is that of the keys
+written by commands, within 4%: 200.9 MB for the million keys (344.5 before), 79.3 MB for
+300,000 (140.5). The start is faster as well, the file no longer joined from its reads
+and walked whole for its checksum: 1.66 s for the million keys (2.02 s before, Redis
+1.08 s), 0.30 s for 300,000 (0.50 s, Redis 0.34 s).
+
+**Tests.** `tests/rdb_test.py`'s new scenario, of 15 checks:
+- a file Redis wrote of 10.1 MB, with a string of 3 MiB, a list of 60,000 elements, a set
+  of 120,000 members and a hash of 30,000 fields beside 20,000 small keys: both servers
+  start from it with the same databases;
+- the file cut a byte past the first window (inside the long string), cut half way, and
+  cut in its checksum; and a byte of the long string changed, so that only the CRC64
+  tells: both servers exit 1 with the same lines;
+- BendKV alone: 300,000 keys of 100 bytes written by commands, SAVE, a start from the
+  file: resident memory at most 1.3 times what it was. Main's build fails it: 140.5 MB
+  against 76.1 MB.
+
+The other 124 checks pass as before, among them the files of 16.9 MB both ways, which the
+start now reads in 17 windows.
+
+**What it costs.** Nothing on a request's path: `make perfcheck` gives GET 3,491, SET
+4,235 and INCR 4,577 instructions a request, within 1.1% of the baseline.
+
+## 3zzzu. Streams as values: RESTORE, DUMP and the RDB file
+
+**What there is** (`src/map.bend`, Streams; `src/rdb.bend`, Streams). The first step of
+streams: a stream is a value BendKV holds, as Redis 7.0.15 holds one, though no command
+of its own reads or writes it yet.
+- **The value** (`XStream`): its count of live entries, last ID, first ID, greatest
+  deleted ID and count of entries ever added; its nodes, a weight-balanced tree by master
+  ID, each node Redis's listpack taken apart only so far: its master ID and fields, its
+  counts of live and deleted entries, its listpack's size in bytes and count of
+  elements, and its entries, the newest first, each the bytes Redis's listpack holds for
+  it; its groups, a tree by name, each its last ID, its count of entries read (`-1` too),
+  its pending entries by ID (the consumer each was last delivered to, the time and the
+  count of its deliveries) and its consumers by name (the time each was last seen, its
+  pending IDs). The trees are an intset's (section 3zzy), one shape for each kind,
+  written by `tools/gen_streams.py` (`make gencheck` checks them). The nodes, groups,
+  pending entries and the stream are each a node of their own (a variant that holds the
+  type, never built), so that `Coll` and `Val` are no wider: GET, SET and INCR count
+  3,483, 4,244 and 4,588 instructions, against 3,481, 4,246 and 4,587 for the build
+  before streams (that of #96), counted alike.
+- **Numbers of 64 bits** (`XN`): an ID's time and sequence, a count of deliveries or of
+  entries, split in decimal at 10^14, so that no Nat passes 2^48 (a time in ms, and
+  almost any sequence, is below 10^14, one Nat); added, negated (the differences of an
+  entry's ID from its master's are those of `uint64_t`s) and printed at run time only.
+- **RESTORE and the RDB file** read types 19 and 15. Of 15, written before Redis 7.0,
+  what it lacks is made as Redis's load makes it: the first ID the first live entry's
+  (max-max for none: `streamGetEdgeID`), no ID deleted, the entries ever added the
+  entries there, and each group's count of entries read estimated by
+  `streamEstimateDistanceFromFirstEverEntry` (0 for an empty stream, the count for the
+  last ID, 0 before the first live entry, 1 at it, -1 after it or past the last ID).
+- **What a read checks.** What Redis checks with `sanitize-dump-payload yes`
+  (`streamValidateListpackIntegrity` and `rdbLoadObject`): each node's key of 16 bytes,
+  its listpack's size, elements and back-lengths, its master entry and each entry's
+  fields, values and lp-count, a node's key, a group's name, a pending entry or a
+  consumer twice, a consumer's ID that is not pending, an ID pending with no consumer,
+  a count of entries with no node. And what Redis never writes: a node with no entry, or
+  whose counts of live and deleted entries or of elements (65535 for as many or more)
+  are not its entries', or whose master entry is not the one Redis writes for it (the
+  narrowest integers: so that DUMP gives back the bytes it read); flags other than
+  deleted and of the master's fields; an entry of no field; master IDs that do not
+  increase; live entries whose IDs do not increase from node to node; a count of
+  entries other than the live entries'; a last ID below the last live entry's; a count
+  of entries read past 2^63 - 1 (but -1); a time of delivery or of a consumer past 2^47
+  (Redis's are `mstime()` at most); an ID two consumers hold. Redis makes, and BendKV
+  takes, a node with no live entry left (XDEL of its last entry, then XTRIM by a MINID
+  of that entry's ID) and a live entry below its node's master ID (XSETID below the
+  last entry, deleted, then XADD).
+- **DUMP and SAVE** write type 19 as Redis does with `rdbcompression no`: the nodes from
+  their bytes, so that a payload Redis made comes back byte for byte.
+- **The generic commands:** TYPE and OBJECT ENCODING (`stream`), SCAN's TYPE, COPY,
+  RENAME, DEL, the times to live, MEMORY USAGE (its listpacks' bytes, and words for the
+  tree's nodes, the groups, their pending entries and consumers: Redis samples the
+  listpacks' allocations) take a stream, and the commands of the other kinds answer
+  WRONGTYPE, SORT too.
+- **The rewrite of the append-only file** writes a stream as the RESTORE of its payload
+  (and its time's PEXPIREAT), where Redis writes XADD, XSETID, XGROUP CREATE and XCLAIM:
+  BendKV has none of them yet.
+
+**Laws and proofs.** No law changed, nor `proof/SPEC.bend`: a stream comes only by
+RESTORE, whose change (`CRestore`) the laws already cover. `proof/PROOF.bend`'s 35 case
+splits over a collection's kind each got a stream's case, that of another kind there
+(WRONGTYPE, or a value replaced).
+
+**Tests.**
+- `tests/stream_dump_test.py` (new, in `make test`): Redis makes streams of 27 shapes at
+  several node limits (empty; of one entry; of the master's fields and of their own;
+  integers of each width and numbers' texts that are none as fields and values; values
+  of 0 to 70,000 bytes; 1,000 entries; nodes of one entry, of 3 entries and 100 bytes,
+  of no limit, of more than 65,535 elements; entries deleted and trimmed every way; IDs
+  near 2^64, sequences that go down from the master's; XSETID's ENTRIESADDED and
+  MAXDELETEDID; groups named by integers and empty, entries delivered, claimed with
+  RETRYCOUNT 2^63 - 1, acknowledged, consumers with none pending, 30 groups of 120
+  consumers) and one of 100,000 entries: each payload Redis DUMPs, RESTOREd on BendKV,
+  comes back from DUMP byte for byte; the generic commands answer as Redis's; each as
+  type 15 (made from the payload) is RESTOREd and DUMPed by both alike, byte for byte;
+  and payloads broken at random (2,000 of them): what Redis refuses BendKV refuses, what
+  both take both DUMP alike (372 of them in a run), and BendKV refuses some Redis takes
+  (232), ones changed where Redis does not look: a master ID, which moves its entries
+  past the last ID or out of order; a listpack's count of elements; a count of entries
+  read made negative. 2,980 checks.
+- `tests/rdb_test.py`: Redis's files with streams (with LZF and without) loaded by
+  both, and BendKV's file of streams it RESTOREd loaded by Redis and by itself, each
+  stream's DUMP the same; a file of a stream, which BendKV refused, loads on both. 150
+  checks.
+- `tests/rewrite_test.py`: streams RESTOREd, the file rewritten, BendKV started from it
+  holds them.
+
+**What it costs.** Nothing on a request's path (above). A RESTORE of a stream of 100,000
+entries (2.3 MB) takes 0.15 to 0.27 s, Redis's 0.008 to 0.017 s; of a million (24 MB),
+1.7 to 2.5 s against 0.10 to 0.14 s: BendKV reads every element of every entry, as its
+checks need, and copies each string it reads. DUMP: 0.08 s against 0.012 s, and 1.3 s
+against 0.57 s. A walk of a node that steps over a string's bytes without copying them
+is the first thing to try, with the stream commands.
+
+**Found on the way.** `rdb.bend`'s `rd.le` said it read up to six bytes: after a sixth,
+its weight is 2^48, past a Nat, and the server stops. Nothing read six; the first
+version of a stream's times did, and stopped at the first payload with a pending entry.
+The times are read as two words of four bytes, and the comment says five.
+
+## 3zzzw. Lists in pieces, as a quicklist of listpacks
+
+**What was left** (section 3zh). A list was a deque of two stacks of its elements: a cell
+of 16 bytes for each, and a buffer of 16 bytes or more for each element longer than 6
+bytes. An element of 8 bytes took 40 bytes, where Redis's quicklist spends 10 (a
+listpack's entry of 10 bytes in nodes of 8 KB): four times the memory for a list of small
+elements. And a read or a write in the middle went cell by cell: on a list of 200,000,
+LINDEX took 3.4 ms where Redis takes well under a tenth of one, LSET 6.8 ms
+(PERFORMANCE 79).
+
+**The change** (`src/map.bend`, Lists; MEMORY USAGE's estimate in `src/session.bend`).
+
+- **Pieces.** A list's elements are in pieces (`LPc{k, n, fw, s}`) of up to 2,048 bytes,
+  one buffer of the C runtime (3zzzm): the codes of k elements one after another in s, n
+  bytes in all, each an element's length as a small hash codes a field and the element's
+  bytes. An element longer than a buffer is a piece of its own.
+- **Two stacks of pieces** (`Deq{nf, pf, f, nb, pb, b}`): the front part's nf elements in
+  pf pieces in order, the back part's nb in pb pieces, the last first. When one stack
+  holds more than three times the other's pieces and one more, the pieces are dealt
+  again, half to each, as they are (`deq.fix`): what moves is pieces, not bytes.
+- **Which way a piece's string goes** (fw): in the list's order or the last first. Pushes
+  and pops at an end work on the start of the string of the piece at that end, so that
+  piece's string must start at that end (`lp.out`).
+  - A piece dealt to the other stack keeps its string as it is.
+  - The deal turns the first piece of each stack (`lp.head`, `lp.turn`): the reads near
+    an end then start where the elements they want are. Without it, LINDEX 0 of a list
+    made by RPUSH skipped every code of its first piece: 53,299 instructions where main
+    takes 20,143.
+  - A pop that meets a piece whose string starts at the other end codes it again the
+    other way first; a push onto one starts a piece.
+- **A push copies the piece it writes into one new buffer.**
+  - It puts the element's code before the piece's string and copies the two into one
+    buffer (`String.take`), as Redis writes a listpack anew at an insert.
+  - It cannot write in place: a write sees the list its key held as shared (`db.upd`
+    binds the entry, 3zzzm), so the room before the bytes is not its to fill, and a `++`
+    there links a new buffer before the old one.
+  - A first version left the pieces to `++` and copied a piece only when it filled. A
+    piece pushed one element at a time then became a chain of a buffer of 512 bytes for
+    each command: 49 bytes an element, more than main's 42, and a read by index walked
+    the chain from its start.
+  - The pushes of one command go in together (`deq.pushes`, `lp.onto`): one copy of the
+    piece for an RPUSH of a hundred elements.
+  - A push that would pass 2,048 bytes starts a piece.
+- **A pop** slices its element out and drops the code (`String.drop`), which moves the
+  string's start in its buffer: no copy.
+- **Reads.** LINDEX, LSET and LRANGE go from the end nearer to the index, past whole
+  pieces by their counts (`lp.find`, `lp.get`, `lp.slice`), then through the codes of one
+  piece, read in place.
+- **Writes in the middle.** LSET writes the one piece anew; a piece it makes longer than
+  a buffer is dealt into pieces. LTRIM drops whole pieces and cuts one (`lp.drop`,
+  `lp.keep`). LINSERT, LREM and LPOS read the list whole (`deq.all`), and LINSERT and LREM
+  build it again (`deq.of`), as before.
+- **The rest of the server** calls the `KV.deq.*` functions it called, with the names and
+  types they had. The RDB file writes `deq.all`'s elements as a quicklist and loads them
+  with `deq.of`; the rewrite and `tests/aof_check.bend` read `deq.all`. MEMORY USAGE
+  estimates a list from its pieces (`deq.bytes`), without decoding them.
+
+**The proofs.** No law and no line of `proof/` changed. The proofs reason about the
+deque's functions, not its shape: a push's change, replayed, is the same push, and a new
+list's change is its pushes on `deq.empty()`.
+
+**Tests.**
+- `tests/list_test.py` (in `make test`) has two new parts.
+  - Lists past one piece against Redis 7.0.15: grown an element at a time at either end,
+    read across their pieces, set to longer and shorter elements (a piece past a buffer
+    dealt again), trimmed inside pieces, emptied from the end they were not made from,
+    with elements longer than a piece among short ones. Each is dumped by BendKV and
+    restored in Redis.
+  - Random commands on two lists of elements of up to 400 bytes, with a DUMP every 500.
+- 23,261 list commands, each answered as Redis answers it (seeds 1 to 4, 6,000 rounds).
+  The test was first run with Redis on both sides.
+- A model of the deque against a plain list also agreed at every step: random pushes,
+  pops, LINDEX, LRANGE, LSET, LTRIM and rebuilds, with elements of 0 to 5,100 bytes, 2,600
+  to 4,200 steps, up to 1,126 elements. It is a script of this session, not in the
+  repository.
+
+**What it costs** (PERFORMANCE 79).
+- Memory a list element (8 bytes): 9.3 bytes in long lists, where main spends 40.0 and
+  Redis 10.1; 13.4 in lists of 100 (main 42.7, Redis 11.9). A list of one element costs
+  254 bytes with its key, against main's 230 and Redis's 202: its piece is a node and a
+  cell more than main's cell.
+- LINDEX, LSET and LRANGE in the middle of a list of 200,000 take 99% fewer
+  instructions.
+- A push copies its piece: LPUSH and RPUSH run 12% to 14% more instructions a command
+  (one client, one request at a time), a pop 4% to 5% more. Under redis-benchmark's
+  pipelines the pushes serve 5% to 10% fewer requests a second, and the pops and LRANGE
+  8% to 35% more.
+- LREM on a list of 200,000 takes twice main's time; LPOS and LINSERT, which read the
+  list whole too, take about main's.
+
+**What is left.**
+- LINSERT, LREM and LPOS by pieces, without decoding the list whole. The shape proofs
+  of LINSERT and LREM (`lins_m_shape`, `lrem_shape`) follow the code and change with it.
+- A list of one to a few elements in fewer nodes.
+- A push in place, which needs a write that owns the list it changes (3zzzm's `db.upd`).
+
+## 3zzzx. LPOS, LINSERT and LREM by pieces
+
+**What was left** (3zzzw). LPOS, LINSERT and LREM read the list whole: `deq.all` made
+every element a string of its own, LPOS and LINSERT's pivot then compared them one by
+one, and LINSERT and LREM built the whole list again (`deq.of`), whatever they changed.
+On a list of 200,000 in pieces, LREM took 7.9 times Redis's time, twice what it took
+when each element was a cell of its own, and LPOS and LINSERT 2.3 and 2.8 times Redis's
+(PERFORMANCE 79). LPOS of the first element read the whole list too.
+
+**The change** (`src/map.bend`, Lists: *Searches and writes along the list*).
+- **A comparison where the element lies.** An element is compared with a string in its
+  piece's string, as a small hash compares a field (`pk.hit`): the lengths first, then
+  the last bytes, then the bytes. Nothing is copied out.
+- **A walk in either direction.** In the list's order: the front stack's pieces in their
+  order, then the back stack's against theirs (a recursion that goes to the stack's end
+  first, so that no list is reversed); from the last element, the other way round. A
+  piece whose string goes the other way is read through the indices of its codes, the
+  last first (`lp.offs`).
+- **LPOS** (`deq.find`) stops at the matches it wants: the RANK-th without COUNT, the
+  COUNT-th from RANK on with it, or after MAXLEN elements. A RANK or a COUNT near 2^47 is
+  cut to the list's length first, so no larger number is made.
+- **LINSERT** (`deq.ins`) finds the pivot that way, then writes the one piece that holds
+  it, as LSET does (`lp.ins.p`, `lp.put.of`): v's code goes before or after the pivot's,
+  as the piece's string runs, and a piece made longer than a buffer is dealt into
+  pieces. The pieces before and after it are not copied.
+- **LREM** (`deq.rem`) counts the matches of each piece it meets while it still has
+  some to take; a piece with none is kept as it is. A piece with some is written anew
+  from the runs of bytes it keeps (`lp.runs`), dropping the matches the walk meets
+  first: the first ones of its string when the string goes the walk's way, else the
+  last. A piece left empty goes, and the stacks are dealt again when they tilt
+  (`deq.fix`). Once the count is taken, the rest of the pieces are not read.
+
+**The proofs.** No law changed. The shape proofs of LINSERT and LREM (`lins_m_shape`,
+`lrem_ch_shape`, `lrem_r_shape`, `lrem_shape`, `lw_shape`) follow the code: they now
+take the list `deq.ins` and `deq.rem` give.
+
+**Tests.**
+- `tests/list_test.py` adds `searches`: a list of 900 elements in both stacks, a third of
+  them five values that repeat (one of 2,500 bytes, longer than a piece), searched by
+  LPOS with RANK, COUNT and MAXLEN from either end, written by LINSERT on both sides of
+  pivots in both stacks (one insert of 1,900 bytes and one of 2,100 deal a piece again),
+  then LREM from either end with counts and with 0, each step read and the list dumped
+  by BendKV and restored in Redis; then pieces made of one value, taken whole, until the
+  key goes. The random commands on long elements get LPOS, LREM and LINSERT AFTER, with
+  values that repeat.
+- The test first ran with Redis on both sides: seeds 1 to 3 at 3,000 rounds, 18,619
+  commands each.
+- Against BendKV's build, seeds 1 to 4 at 6,000 rounds: 24,631 list commands each,
+  each answered as Redis answers it.
+- A model of the deque against a plain list (the one of 3zzzw, with LPOS, LINSERT and
+  LREM added, and values that repeat) agreed at every one of 4,000 steps. It is a script
+  of this session, not in the repository.
+
+**What it costs** (PERFORMANCE 81).
+- On a list of 200,000, the three commands now take about Redis's time: LPOS of the
+  last element 3.8 ms against Redis's 3.3 (main 6.2), LINSERT in the middle 3.7 against
+  3.2 (main 7.7), and LREM of one element in the middle 1.8 against 3.0 (main 22.9).
+- Near an end they take a fraction of a millisecond, as in Redis: LPOS of the 11th
+  element or with RANK -1, and LREM -1, read a piece or two, where main read the whole
+  list (7 to 56 ms).
+- On short lists they run fewer instructions than main: 4% to 17% for LPOS on lists of
+  20 to 400 elements, 42% to 55% for LREM with no match, 30% for LINSERT.
+- A search still builds a small node of its state for each element it reads (`LSeek`).
+  Threading its four fields through the walk would spare that node; it is left for
+  later.
+
+## 3zzzy. Streams: the commands that read one
+
+**What there is** (`src/stream.bend`, new; `src/redis.bend`, Streams and Reads of a
+stream). XLEN, XRANGE, XREVRANGE, XREAD, XINFO and XPENDING answer as Redis 7.0.15's
+`t_stream.c` does, on the stream of section 3zzzu. Each is a Peek of its key
+(`PStream`), so a batch of them runs the fast way; XREAD of several keys, or with
+BLOCK, is a session command (`SXRead`) that reads the client's database.
+- **IDs** are read as `streamGenericParseIDOrReply` reads them: none of 128 bytes or
+  more; the text ends at its first NUL, as Redis reads a C string; `-` and `+` alone,
+  but where the read is strict (XREAD's IDs, and an ID after `(`); the sequence after
+  the first `-`; each part as `string2ull` reads it, `string2ll`'s form first (which
+  must not be below 0), else `strtoull`'s: spaces, then a sign, then digits, the number
+  below 2^64, negated mod 2^64 after a `-`. So ` 8`, `+7` and `009-3` are IDs, and
+  `1--03` is 1-18446744073709551613, as on Redis. A bound after `(` is left out: the ID
+  after it for a start, before it for an end (`streamIncrID`, `streamDecrID`), with
+  Redis's errors past the last ID and before 0-0.
+- **Ranges** walk as `streamIterator` does: from the node `raxSeek` finds (the last
+  whose master ID is at most the start, else the first; backwards, the last at most the
+  end, else the last of all), through each node's entries, read from their bytes.
+  Forwards, an entry deleted or before the start is passed, and the first other one
+  past the end ends the walk; backwards the other way round. So an entry below its
+  node's master ID (section 3zzzu) is found where Redis finds it. COUNT is read as
+  `xrangeGenericCommand` reads it: the last one holds, one below 0 is 0, and 0 answers
+  a null array (a key not there, an empty array).
+- **XREAD** reads its options as `xreadCommand` does: BLOCK and COUNT in any order up to
+  STREAMS, the last of each holding; GROUP and NOACK are XREADGROUP's; as many keys as
+  IDs; Redis's errors in its order. Then each key in turn, WRONGTYPE or its ID (`$` its
+  last ID, 0-0 for a key not there; `>` an error), the first error before any key is
+  served. A key is served when its last live entry is past the ID, from the ID after
+  it. BendKV blocks on no stream yet: a BLOCK that serves no key answers "ERR BendKV
+  does not block on streams yet", from the shell (`sh.plain`, `ShNoBlock`). In MULTI,
+  the session answers it a null array, as Redis answers a client that may not wait.
+  That is why XREAD with BLOCK is `SXRead` even for one key: the shell sees it, and
+  EXEC runs it as the session does.
+- **XINFO STREAM** answers the stream's length, its count of nodes
+  (`radix-tree-keys`), the count of a rax's nodes over their master IDs
+  (`radix-tree-nodes`, below), its last, greatest deleted and first IDs, its count of
+  entries ever added, its count of groups, and its first and last entries. FULL
+  answers the entries (COUNT 10 by default, 0 for all, below 0 as 10) and each group
+  with its pending entries, and its consumers with theirs, as many as COUNT. **GROUPS**
+  answers each group's consumers, pending entries, last ID, count of entries read and
+  lag; **CONSUMERS** each consumer's pending entries and idle time (now less its seen
+  time, 0 for one past now); **HELP** its lines.
+- **The count of entries read and the lag** are Redis's
+  (`streamEstimateDistanceFromFirstEverEntry`, `streamReplyWithCGLag`): a null where
+  Redis cannot tell, such as an entry deleted after the group's last ID
+  (`streamRangeHasTombstones`). A count Redis keeps as a long long prints as one, its
+  64 bits as two's complement.
+- **The count of the radix tree's nodes** is a model of Redis's rax over the 16-byte
+  keys: a head; a node for each group of keys that branches, with a compressed node
+  before it for the bytes its keys share past their parent's branch; a leaf for each
+  key, with a compressed node before it for the bytes left. One pass over the master
+  IDs in order counts it, from each pair's common prefix, with a stack. The model
+  matched Redis's count on 1,244 states made by XADD, XDEL and XTRIM (a node an entry,
+  IDs small, huge and near powers of two), and the test compares it on each shape.
+- **XPENDING** takes 3 words, or 6 to 9, as `xpendingCommand` does: IDLE's time (a long
+  long) with 8 words at least, the count (a long long, below 0 as 0), then the bounds,
+  then the consumer. Its summary is the count, the smallest and greatest pending IDs,
+  and each consumer that has pending entries, with their count, in name order. Its
+  entries are each the ID, the consumer, the idle time (now less the time of delivery,
+  0 for one past now) and the count of deliveries; those idle less than IDLE's time are
+  left out. A key or a group not there answers "NOGROUP No such key ... or consumer
+  group ...".
+
+**What it changes elsewhere.**
+- **Replies.** XREAD's keys and a key with its entries are two new replies, `RKMap`
+  and `RKPair` (`src/resp.bend`): an array of arrays of two in RESP2, a map in RESP3.
+- **Tables.** COMMAND, COMMAND DOCS and the ACL categories come from
+  `tools/gen_commands.py`, whose table gets the six commands (XINFO with its four
+  subcommands).
+- **INFO.** Each call is counted by a code in a word of twelve bits with six set
+  (`tools/gen_commands.py`), three codes a key. The reads bring INFO's keys to 286
+  with BGSAVE's (section 3zzzk), 861 of the 924 words. The commands that write a
+  stream (15 more) will take 906, and 6 keys past them need wider words.
+- **Proofs.** `proof/PROOF.bend`'s three case splits over the session commands each
+  got `SXRead`'s case, that of another read of the session (`SPfCount`'s). No law
+  changed.
+
+**Tests.** `tests/stream_read_test.py` (new, in `make test`). Redis makes the 27 shapes
+of `stream_dump_test.py` and one of 100,000 entries. BendKV RESTOREs each payload, and
+both answer the same reads, in RESP2 and in RESP3, each reply compared whole:
+- XRANGE and XREVRANGE between the stream's IDs, their neighbours and the edges, each
+  as an ID, without its sequence and after `(`, with COUNT of none, 0, 1, 2, 7, -1 and
+  2^63 - 1;
+- XREAD after each, with `$`, with COUNT, of several keys, with BLOCK where an entry is
+  there, and with BLOCK in MULTI;
+- XINFO STREAM (FULL with COUNT none, 0, 1, 3 and -1), GROUPS and CONSUMERS;
+  XPENDING's summary of each group and its entries over ranges, counts, consumers and
+  IDLE times;
+- the errors: arity, syntax, IDs that are none, an interval past its edge, WRONGTYPE,
+  a key or a group not there, XREAD's options, XINFO's subcommands.
+
+An idle time is now less a time, read by each server at its own now: two that differ
+by less than 2 s count as the same. 28,806 checks at seed 1; seeds 2 to 5 pass too.
+BLOCK where Redis would wait is checked on BendKV alone.
+
+**What it costs** (PERFORMANCE 82). Nothing on GET, SET and INCR. On a stream of 100,000
+entries in 1,000 nodes, XLEN and XPENDING's summary answer as fast as Redis's, the
+ranges and XREAD 2.8 to 6.7 times slower, a whole range 3.9 times. XINFO STREAM counts
+the rax's nodes from the master IDs at each call, where Redis keeps the count, so its
+time grows with the nodes: 3.5 times Redis's on 1 node, 19 times on 100, 100 times on
+1,000.
+
+**What is left.**
+- The count of the rax's nodes kept with the stream, and moved by the writes as they
+  add and remove nodes, as Redis keeps `numnodes`.
+- XREAD that waits (BLOCK), with the writes that serve it.
+- A walk of a node's entries that steps over their bytes without copying them (the
+  ranges from the middle of a node), as section 3zzzu says for RESTORE.
 
 ## 4. Where a request's time goes, and hiding the memory waits
 

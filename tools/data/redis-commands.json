@@ -1,4 +1,1030 @@
 {
+ "acl": {
+  "admin": [
+   "acl|deluser",
+   "acl|dryrun",
+   "acl|getuser",
+   "acl|list",
+   "acl|load",
+   "acl|log",
+   "acl|save",
+   "acl|setuser",
+   "acl|users",
+   "bgrewriteaof",
+   "bgsave",
+   "client|kill",
+   "client|list",
+   "client|no-evict",
+   "client|pause",
+   "client|unblock",
+   "client|unpause",
+   "cluster|addslots",
+   "cluster|addslotsrange",
+   "cluster|bumpepoch",
+   "cluster|count-failure-reports",
+   "cluster|delslots",
+   "cluster|delslotsrange",
+   "cluster|failover",
+   "cluster|flushslots",
+   "cluster|forget",
+   "cluster|meet",
+   "cluster|replicas",
+   "cluster|replicate",
+   "cluster|reset",
+   "cluster|saveconfig",
+   "cluster|set-config-epoch",
+   "cluster|setslot",
+   "cluster|slaves",
+   "config|get",
+   "config|resetstat",
+   "config|rewrite",
+   "config|set",
+   "debug",
+   "failover",
+   "lastsave",
+   "latency|doctor",
+   "latency|graph",
+   "latency|histogram",
+   "latency|history",
+   "latency|latest",
+   "latency|reset",
+   "module|list",
+   "module|load",
+   "module|loadex",
+   "module|unload",
+   "monitor",
+   "pfdebug",
+   "pfselftest",
+   "psync",
+   "replconf",
+   "replicaof",
+   "role",
+   "save",
+   "shutdown",
+   "slaveof",
+   "slowlog|get",
+   "slowlog|len",
+   "slowlog|reset",
+   "sync"
+  ],
+  "bitmap": [
+   "bitcount",
+   "bitfield",
+   "bitfield_ro",
+   "bitop",
+   "bitpos",
+   "getbit",
+   "setbit"
+  ],
+  "blocking": [
+   "blmove",
+   "blmpop",
+   "blpop",
+   "brpop",
+   "brpoplpush",
+   "bzmpop",
+   "bzpopmax",
+   "bzpopmin",
+   "xread",
+   "xreadgroup"
+  ],
+  "connection": [
+   "asking",
+   "auth",
+   "client|caching",
+   "client|getname",
+   "client|getredir",
+   "client|help",
+   "client|id",
+   "client|info",
+   "client|kill",
+   "client|list",
+   "client|no-evict",
+   "client|pause",
+   "client|reply",
+   "client|setname",
+   "client|tracking",
+   "client|trackinginfo",
+   "client|unblock",
+   "client|unpause",
+   "command",
+   "command|count",
+   "command|docs",
+   "command|getkeys",
+   "command|getkeysandflags",
+   "command|help",
+   "command|info",
+   "command|list",
+   "echo",
+   "hello",
+   "ping",
+   "quit",
+   "readonly",
+   "readwrite",
+   "reset",
+   "select",
+   "wait"
+  ],
+  "dangerous": [
+   "acl|deluser",
+   "acl|dryrun",
+   "acl|getuser",
+   "acl|list",
+   "acl|load",
+   "acl|log",
+   "acl|save",
+   "acl|setuser",
+   "acl|users",
+   "bgrewriteaof",
+   "bgsave",
+   "client|kill",
+   "client|list",
+   "client|no-evict",
+   "client|pause",
+   "client|unblock",
+   "client|unpause",
+   "cluster|addslots",
+   "cluster|addslotsrange",
+   "cluster|bumpepoch",
+   "cluster|count-failure-reports",
+   "cluster|delslots",
+   "cluster|delslotsrange",
+   "cluster|failover",
+   "cluster|flushslots",
+   "cluster|forget",
+   "cluster|meet",
+   "cluster|replicas",
+   "cluster|replicate",
+   "cluster|reset",
+   "cluster|saveconfig",
+   "cluster|set-config-epoch",
+   "cluster|setslot",
+   "cluster|slaves",
+   "config|get",
+   "config|resetstat",
+   "config|rewrite",
+   "config|set",
+   "debug",
+   "failover",
+   "flushall",
+   "flushdb",
+   "info",
+   "keys",
+   "lastsave",
+   "latency|doctor",
+   "latency|graph",
+   "latency|histogram",
+   "latency|history",
+   "latency|latest",
+   "latency|reset",
+   "migrate",
+   "module|list",
+   "module|load",
+   "module|loadex",
+   "module|unload",
+   "monitor",
+   "pfdebug",
+   "pfselftest",
+   "psync",
+   "replconf",
+   "replicaof",
+   "restore",
+   "restore-asking",
+   "role",
+   "save",
+   "shutdown",
+   "slaveof",
+   "slowlog|get",
+   "slowlog|len",
+   "slowlog|reset",
+   "sort",
+   "sort_ro",
+   "swapdb",
+   "sync"
+  ],
+  "fast": [
+   "append",
+   "asking",
+   "auth",
+   "bitfield_ro",
+   "bzpopmax",
+   "bzpopmin",
+   "dbsize",
+   "decr",
+   "decrby",
+   "discard",
+   "echo",
+   "exists",
+   "expire",
+   "expireat",
+   "expiretime",
+   "get",
+   "getbit",
+   "getdel",
+   "getex",
+   "getset",
+   "hdel",
+   "hello",
+   "hexists",
+   "hget",
+   "hincrby",
+   "hincrbyfloat",
+   "hlen",
+   "hmget",
+   "hmset",
+   "hset",
+   "hsetnx",
+   "hstrlen",
+   "incr",
+   "incrby",
+   "incrbyfloat",
+   "lastsave",
+   "llen",
+   "lolwut",
+   "lpop",
+   "lpush",
+   "lpushx",
+   "mget",
+   "move",
+   "multi",
+   "persist",
+   "pexpire",
+   "pexpireat",
+   "pexpiretime",
+   "pfadd",
+   "ping",
+   "pttl",
+   "publish",
+   "quit",
+   "readonly",
+   "readwrite",
+   "renamenx",
+   "reset",
+   "role",
+   "rpop",
+   "rpush",
+   "rpushx",
+   "sadd",
+   "scard",
+   "select",
+   "setnx",
+   "sismember",
+   "smismember",
+   "smove",
+   "spop",
+   "spublish",
+   "srem",
+   "strlen",
+   "swapdb",
+   "time",
+   "touch",
+   "ttl",
+   "type",
+   "unlink",
+   "unwatch",
+   "watch",
+   "xack",
+   "xadd",
+   "xautoclaim",
+   "xclaim",
+   "xdel",
+   "xlen",
+   "xsetid",
+   "zadd",
+   "zcard",
+   "zcount",
+   "zincrby",
+   "zlexcount",
+   "zmscore",
+   "zpopmax",
+   "zpopmin",
+   "zrank",
+   "zrem",
+   "zrevrank",
+   "zscore"
+  ],
+  "geo": [
+   "geoadd",
+   "geodist",
+   "geohash",
+   "geopos",
+   "georadius",
+   "georadius_ro",
+   "georadiusbymember",
+   "georadiusbymember_ro",
+   "geosearch",
+   "geosearchstore"
+  ],
+  "hash": [
+   "hdel",
+   "hexists",
+   "hget",
+   "hgetall",
+   "hincrby",
+   "hincrbyfloat",
+   "hkeys",
+   "hlen",
+   "hmget",
+   "hmset",
+   "hrandfield",
+   "hscan",
+   "hset",
+   "hsetnx",
+   "hstrlen",
+   "hvals"
+  ],
+  "hyperloglog": [
+   "pfadd",
+   "pfcount",
+   "pfdebug",
+   "pfmerge",
+   "pfselftest"
+  ],
+  "keyspace": [
+   "copy",
+   "dbsize",
+   "del",
+   "dump",
+   "exists",
+   "expire",
+   "expireat",
+   "expiretime",
+   "flushall",
+   "flushdb",
+   "keys",
+   "migrate",
+   "move",
+   "object|encoding",
+   "object|freq",
+   "object|help",
+   "object|idletime",
+   "object|refcount",
+   "persist",
+   "pexpire",
+   "pexpireat",
+   "pexpiretime",
+   "pttl",
+   "randomkey",
+   "rename",
+   "renamenx",
+   "restore",
+   "restore-asking",
+   "scan",
+   "swapdb",
+   "touch",
+   "ttl",
+   "type",
+   "unlink"
+  ],
+  "list": [
+   "blmove",
+   "blmpop",
+   "blpop",
+   "brpop",
+   "brpoplpush",
+   "lindex",
+   "linsert",
+   "llen",
+   "lmove",
+   "lmpop",
+   "lpop",
+   "lpos",
+   "lpush",
+   "lpushx",
+   "lrange",
+   "lrem",
+   "lset",
+   "ltrim",
+   "rpop",
+   "rpoplpush",
+   "rpush",
+   "rpushx",
+   "sort",
+   "sort_ro"
+  ],
+  "pubsub": [
+   "psubscribe",
+   "publish",
+   "pubsub|channels",
+   "pubsub|numpat",
+   "pubsub|numsub",
+   "pubsub|shardchannels",
+   "pubsub|shardnumsub",
+   "punsubscribe",
+   "spublish",
+   "ssubscribe",
+   "subscribe",
+   "sunsubscribe",
+   "unsubscribe"
+  ],
+  "read": [
+   "bitcount",
+   "bitfield_ro",
+   "bitpos",
+   "dbsize",
+   "dump",
+   "exists",
+   "expiretime",
+   "geodist",
+   "geohash",
+   "geopos",
+   "georadius_ro",
+   "georadiusbymember_ro",
+   "geosearch",
+   "get",
+   "getbit",
+   "getrange",
+   "hexists",
+   "hget",
+   "hgetall",
+   "hkeys",
+   "hlen",
+   "hmget",
+   "hrandfield",
+   "hscan",
+   "hstrlen",
+   "hvals",
+   "keys",
+   "lcs",
+   "lindex",
+   "llen",
+   "lolwut",
+   "lpos",
+   "lrange",
+   "memory|usage",
+   "mget",
+   "object|encoding",
+   "object|freq",
+   "object|idletime",
+   "object|refcount",
+   "pexpiretime",
+   "pfcount",
+   "pttl",
+   "randomkey",
+   "scan",
+   "scard",
+   "sdiff",
+   "sinter",
+   "sintercard",
+   "sismember",
+   "smembers",
+   "smismember",
+   "sort_ro",
+   "srandmember",
+   "sscan",
+   "strlen",
+   "substr",
+   "sunion",
+   "touch",
+   "ttl",
+   "type",
+   "xinfo|consumers",
+   "xinfo|groups",
+   "xinfo|stream",
+   "xlen",
+   "xpending",
+   "xrange",
+   "xread",
+   "xrevrange",
+   "zcard",
+   "zcount",
+   "zdiff",
+   "zinter",
+   "zintercard",
+   "zlexcount",
+   "zmscore",
+   "zrandmember",
+   "zrange",
+   "zrangebylex",
+   "zrangebyscore",
+   "zrank",
+   "zrevrange",
+   "zrevrangebylex",
+   "zrevrangebyscore",
+   "zrevrank",
+   "zscan",
+   "zscore",
+   "zunion"
+  ],
+  "scripting": [
+   "eval",
+   "eval_ro",
+   "evalsha",
+   "evalsha_ro",
+   "fcall",
+   "fcall_ro",
+   "function|delete",
+   "function|dump",
+   "function|flush",
+   "function|help",
+   "function|kill",
+   "function|list",
+   "function|load",
+   "function|restore",
+   "function|stats",
+   "script|debug",
+   "script|exists",
+   "script|flush",
+   "script|help",
+   "script|kill",
+   "script|load"
+  ],
+  "set": [
+   "sadd",
+   "scard",
+   "sdiff",
+   "sdiffstore",
+   "sinter",
+   "sintercard",
+   "sinterstore",
+   "sismember",
+   "smembers",
+   "smismember",
+   "smove",
+   "sort",
+   "sort_ro",
+   "spop",
+   "srandmember",
+   "srem",
+   "sscan",
+   "sunion",
+   "sunionstore"
+  ],
+  "slow": [
+   "acl",
+   "acl|cat",
+   "acl|deluser",
+   "acl|dryrun",
+   "acl|genpass",
+   "acl|getuser",
+   "acl|help",
+   "acl|list",
+   "acl|load",
+   "acl|log",
+   "acl|save",
+   "acl|setuser",
+   "acl|users",
+   "acl|whoami",
+   "bgrewriteaof",
+   "bgsave",
+   "bitcount",
+   "bitfield",
+   "bitop",
+   "bitpos",
+   "blmove",
+   "blmpop",
+   "blpop",
+   "brpop",
+   "brpoplpush",
+   "bzmpop",
+   "client",
+   "client|caching",
+   "client|getname",
+   "client|getredir",
+   "client|help",
+   "client|id",
+   "client|info",
+   "client|kill",
+   "client|list",
+   "client|no-evict",
+   "client|pause",
+   "client|reply",
+   "client|setname",
+   "client|tracking",
+   "client|trackinginfo",
+   "client|unblock",
+   "client|unpause",
+   "cluster",
+   "cluster|addslots",
+   "cluster|addslotsrange",
+   "cluster|bumpepoch",
+   "cluster|count-failure-reports",
+   "cluster|countkeysinslot",
+   "cluster|delslots",
+   "cluster|delslotsrange",
+   "cluster|failover",
+   "cluster|flushslots",
+   "cluster|forget",
+   "cluster|getkeysinslot",
+   "cluster|help",
+   "cluster|info",
+   "cluster|keyslot",
+   "cluster|links",
+   "cluster|meet",
+   "cluster|myid",
+   "cluster|nodes",
+   "cluster|replicas",
+   "cluster|replicate",
+   "cluster|reset",
+   "cluster|saveconfig",
+   "cluster|set-config-epoch",
+   "cluster|setslot",
+   "cluster|shards",
+   "cluster|slaves",
+   "cluster|slots",
+   "command",
+   "command|count",
+   "command|docs",
+   "command|getkeys",
+   "command|getkeysandflags",
+   "command|help",
+   "command|info",
+   "command|list",
+   "config",
+   "config|get",
+   "config|help",
+   "config|resetstat",
+   "config|rewrite",
+   "config|set",
+   "copy",
+   "debug",
+   "del",
+   "dump",
+   "eval",
+   "eval_ro",
+   "evalsha",
+   "evalsha_ro",
+   "exec",
+   "failover",
+   "fcall",
+   "fcall_ro",
+   "flushall",
+   "flushdb",
+   "function",
+   "function|delete",
+   "function|dump",
+   "function|flush",
+   "function|help",
+   "function|kill",
+   "function|list",
+   "function|load",
+   "function|restore",
+   "function|stats",
+   "geoadd",
+   "geodist",
+   "geohash",
+   "geopos",
+   "georadius",
+   "georadius_ro",
+   "georadiusbymember",
+   "georadiusbymember_ro",
+   "geosearch",
+   "geosearchstore",
+   "getrange",
+   "hgetall",
+   "hkeys",
+   "hrandfield",
+   "hscan",
+   "hvals",
+   "info",
+   "keys",
+   "latency",
+   "latency|doctor",
+   "latency|graph",
+   "latency|help",
+   "latency|histogram",
+   "latency|history",
+   "latency|latest",
+   "latency|reset",
+   "lcs",
+   "lindex",
+   "linsert",
+   "lmove",
+   "lmpop",
+   "lpos",
+   "lrange",
+   "lrem",
+   "lset",
+   "ltrim",
+   "memory",
+   "memory|doctor",
+   "memory|help",
+   "memory|malloc-stats",
+   "memory|purge",
+   "memory|stats",
+   "memory|usage",
+   "migrate",
+   "module",
+   "module|help",
+   "module|list",
+   "module|load",
+   "module|loadex",
+   "module|unload",
+   "monitor",
+   "mset",
+   "msetnx",
+   "object",
+   "object|encoding",
+   "object|freq",
+   "object|help",
+   "object|idletime",
+   "object|refcount",
+   "pfcount",
+   "pfdebug",
+   "pfmerge",
+   "pfselftest",
+   "psetex",
+   "psubscribe",
+   "psync",
+   "pubsub",
+   "pubsub|channels",
+   "pubsub|help",
+   "pubsub|numpat",
+   "pubsub|numsub",
+   "pubsub|shardchannels",
+   "pubsub|shardnumsub",
+   "punsubscribe",
+   "randomkey",
+   "rename",
+   "replconf",
+   "replicaof",
+   "restore",
+   "restore-asking",
+   "rpoplpush",
+   "save",
+   "scan",
+   "script",
+   "script|debug",
+   "script|exists",
+   "script|flush",
+   "script|help",
+   "script|kill",
+   "script|load",
+   "sdiff",
+   "sdiffstore",
+   "set",
+   "setbit",
+   "setex",
+   "setrange",
+   "shutdown",
+   "sinter",
+   "sintercard",
+   "sinterstore",
+   "slaveof",
+   "slowlog",
+   "slowlog|get",
+   "slowlog|help",
+   "slowlog|len",
+   "slowlog|reset",
+   "smembers",
+   "sort",
+   "sort_ro",
+   "srandmember",
+   "sscan",
+   "ssubscribe",
+   "subscribe",
+   "substr",
+   "sunion",
+   "sunionstore",
+   "sunsubscribe",
+   "sync",
+   "unsubscribe",
+   "wait",
+   "xgroup",
+   "xgroup|create",
+   "xgroup|createconsumer",
+   "xgroup|delconsumer",
+   "xgroup|destroy",
+   "xgroup|help",
+   "xgroup|setid",
+   "xinfo",
+   "xinfo|consumers",
+   "xinfo|groups",
+   "xinfo|help",
+   "xinfo|stream",
+   "xpending",
+   "xrange",
+   "xread",
+   "xreadgroup",
+   "xrevrange",
+   "xtrim",
+   "zdiff",
+   "zdiffstore",
+   "zinter",
+   "zintercard",
+   "zinterstore",
+   "zmpop",
+   "zrandmember",
+   "zrange",
+   "zrangebylex",
+   "zrangebyscore",
+   "zrangestore",
+   "zremrangebylex",
+   "zremrangebyrank",
+   "zremrangebyscore",
+   "zrevrange",
+   "zrevrangebylex",
+   "zrevrangebyscore",
+   "zscan",
+   "zunion",
+   "zunionstore"
+  ],
+  "sortedset": [
+   "bzmpop",
+   "bzpopmax",
+   "bzpopmin",
+   "sort",
+   "sort_ro",
+   "zadd",
+   "zcard",
+   "zcount",
+   "zdiff",
+   "zdiffstore",
+   "zincrby",
+   "zinter",
+   "zintercard",
+   "zinterstore",
+   "zlexcount",
+   "zmpop",
+   "zmscore",
+   "zpopmax",
+   "zpopmin",
+   "zrandmember",
+   "zrange",
+   "zrangebylex",
+   "zrangebyscore",
+   "zrangestore",
+   "zrank",
+   "zrem",
+   "zremrangebylex",
+   "zremrangebyrank",
+   "zremrangebyscore",
+   "zrevrange",
+   "zrevrangebylex",
+   "zrevrangebyscore",
+   "zrevrank",
+   "zscan",
+   "zscore",
+   "zunion",
+   "zunionstore"
+  ],
+  "stream": [
+   "xack",
+   "xadd",
+   "xautoclaim",
+   "xclaim",
+   "xdel",
+   "xgroup|create",
+   "xgroup|createconsumer",
+   "xgroup|delconsumer",
+   "xgroup|destroy",
+   "xgroup|help",
+   "xgroup|setid",
+   "xinfo|consumers",
+   "xinfo|groups",
+   "xinfo|help",
+   "xinfo|stream",
+   "xlen",
+   "xpending",
+   "xrange",
+   "xread",
+   "xreadgroup",
+   "xrevrange",
+   "xsetid",
+   "xtrim"
+  ],
+  "string": [
+   "append",
+   "decr",
+   "decrby",
+   "get",
+   "getdel",
+   "getex",
+   "getrange",
+   "getset",
+   "incr",
+   "incrby",
+   "incrbyfloat",
+   "lcs",
+   "mget",
+   "mset",
+   "msetnx",
+   "psetex",
+   "set",
+   "setex",
+   "setnx",
+   "setrange",
+   "strlen",
+   "substr"
+  ],
+  "transaction": [
+   "discard",
+   "exec",
+   "multi",
+   "unwatch",
+   "watch"
+  ],
+  "write": [
+   "append",
+   "bitfield",
+   "bitop",
+   "blmove",
+   "blmpop",
+   "blpop",
+   "brpop",
+   "brpoplpush",
+   "bzmpop",
+   "bzpopmax",
+   "bzpopmin",
+   "copy",
+   "decr",
+   "decrby",
+   "del",
+   "expire",
+   "expireat",
+   "flushall",
+   "flushdb",
+   "function|delete",
+   "function|flush",
+   "function|load",
+   "function|restore",
+   "geoadd",
+   "georadius",
+   "georadiusbymember",
+   "geosearchstore",
+   "getdel",
+   "getex",
+   "getset",
+   "hdel",
+   "hincrby",
+   "hincrbyfloat",
+   "hmset",
+   "hset",
+   "hsetnx",
+   "incr",
+   "incrby",
+   "incrbyfloat",
+   "linsert",
+   "lmove",
+   "lmpop",
+   "lpop",
+   "lpush",
+   "lpushx",
+   "lrem",
+   "lset",
+   "ltrim",
+   "migrate",
+   "move",
+   "mset",
+   "msetnx",
+   "persist",
+   "pexpire",
+   "pexpireat",
+   "pfadd",
+   "pfdebug",
+   "pfmerge",
+   "psetex",
+   "rename",
+   "renamenx",
+   "restore",
+   "restore-asking",
+   "rpop",
+   "rpoplpush",
+   "rpush",
+   "rpushx",
+   "sadd",
+   "sdiffstore",
+   "set",
+   "setbit",
+   "setex",
+   "setnx",
+   "setrange",
+   "sinterstore",
+   "smove",
+   "sort",
+   "spop",
+   "srem",
+   "sunionstore",
+   "swapdb",
+   "unlink",
+   "xack",
+   "xadd",
+   "xautoclaim",
+   "xclaim",
+   "xdel",
+   "xgroup|create",
+   "xgroup|createconsumer",
+   "xgroup|delconsumer",
+   "xgroup|destroy",
+   "xgroup|setid",
+   "xreadgroup",
+   "xsetid",
+   "xtrim",
+   "zadd",
+   "zdiffstore",
+   "zincrby",
+   "zinterstore",
+   "zmpop",
+   "zpopmax",
+   "zpopmin",
+   "zrangestore",
+   "zrem",
+   "zremrangebylex",
+   "zremrangebyrank",
+   "zremrangebyscore",
+   "zunionstore"
+  ]
+ },
  "categories": [
   "keyspace",
   "read",
@@ -23,6 +1049,967 @@
   "scripting"
  ],
  "commands": {
+  "acl": {
+   "docs": {
+    "%": [
+     "summary",
+     "A container for Access List Control commands ",
+     "since",
+     "6.0.0",
+     "group",
+     "server",
+     "complexity",
+     "Depends on subcommand.",
+     "subcommands",
+     {
+      "%": [
+       "acl|cat",
+       {
+        "%": [
+         "summary",
+         "List the ACL categories or the commands inside a category",
+         "since",
+         "6.0.0",
+         "group",
+         "server",
+         "complexity",
+         "O(1) since the categories and commands are a fixed set.",
+         "arguments",
+         [
+          {
+           "%": [
+            "name",
+            "categoryname",
+            "type",
+            "string",
+            "flags",
+            {
+             "~": [
+              {
+               "+": "optional"
+              }
+             ]
+            }
+           ]
+          }
+         ]
+        ]
+       },
+       "acl|deluser",
+       {
+        "%": [
+         "summary",
+         "Remove the specified ACL users and the associated rules",
+         "since",
+         "6.0.0",
+         "group",
+         "server",
+         "complexity",
+         "O(1) amortized time considering the typical user.",
+         "arguments",
+         [
+          {
+           "%": [
+            "name",
+            "username",
+            "type",
+            "string",
+            "flags",
+            {
+             "~": [
+              {
+               "+": "multiple"
+              }
+             ]
+            }
+           ]
+          }
+         ]
+        ]
+       },
+       "acl|dryrun",
+       {
+        "%": [
+         "summary",
+         "Returns whether the user can execute the given command without executing the command.",
+         "since",
+         "7.0.0",
+         "group",
+         "server",
+         "complexity",
+         "O(1).",
+         "arguments",
+         [
+          {
+           "%": [
+            "name",
+            "username",
+            "type",
+            "string"
+           ]
+          },
+          {
+           "%": [
+            "name",
+            "command",
+            "type",
+            "string"
+           ]
+          },
+          {
+           "%": [
+            "name",
+            "arg",
+            "type",
+            "string",
+            "flags",
+            {
+             "~": [
+              {
+               "+": "optional"
+              },
+              {
+               "+": "multiple"
+              }
+             ]
+            }
+           ]
+          }
+         ]
+        ]
+       },
+       "acl|genpass",
+       {
+        "%": [
+         "summary",
+         "Generate a pseudorandom secure password to use for ACL users",
+         "since",
+         "6.0.0",
+         "group",
+         "server",
+         "complexity",
+         "O(1)",
+         "arguments",
+         [
+          {
+           "%": [
+            "name",
+            "bits",
+            "type",
+            "integer",
+            "flags",
+            {
+             "~": [
+              {
+               "+": "optional"
+              }
+             ]
+            }
+           ]
+          }
+         ]
+        ]
+       },
+       "acl|getuser",
+       {
+        "%": [
+         "summary",
+         "Get the rules for a specific ACL user",
+         "since",
+         "6.0.0",
+         "group",
+         "server",
+         "complexity",
+         "O(N). Where N is the number of password, command and pattern rules that the user has.",
+         "history",
+         {
+          "~": [
+           [
+            "6.2.0",
+            "Added Pub/Sub channel patterns."
+           ],
+           [
+            "7.0.0",
+            "Added selectors and changed the format of key and channel patterns from a list to their rule representation."
+           ]
+          ]
+         },
+         "arguments",
+         [
+          {
+           "%": [
+            "name",
+            "username",
+            "type",
+            "string"
+           ]
+          }
+         ]
+        ]
+       },
+       "acl|help",
+       {
+        "%": [
+         "summary",
+         "Show helpful text about the different subcommands",
+         "since",
+         "6.0.0",
+         "group",
+         "server",
+         "complexity",
+         "O(1)"
+        ]
+       },
+       "acl|list",
+       {
+        "%": [
+         "summary",
+         "List the current ACL rules in ACL config file format",
+         "since",
+         "6.0.0",
+         "group",
+         "server",
+         "complexity",
+         "O(N). Where N is the number of configured users."
+        ]
+       },
+       "acl|load",
+       {
+        "%": [
+         "summary",
+         "Reload the ACLs from the configured ACL file",
+         "since",
+         "6.0.0",
+         "group",
+         "server",
+         "complexity",
+         "O(N). Where N is the number of configured users."
+        ]
+       },
+       "acl|log",
+       {
+        "%": [
+         "summary",
+         "List latest events denied because of ACLs in place",
+         "since",
+         "6.0.0",
+         "group",
+         "server",
+         "complexity",
+         "O(N) with N being the number of entries shown.",
+         "arguments",
+         [
+          {
+           "%": [
+            "name",
+            "operation",
+            "type",
+            "oneof",
+            "flags",
+            {
+             "~": [
+              {
+               "+": "optional"
+              }
+             ]
+            },
+            "arguments",
+            [
+             {
+              "%": [
+               "name",
+               "count",
+               "type",
+               "integer"
+              ]
+             },
+             {
+              "%": [
+               "name",
+               "reset",
+               "type",
+               "pure-token",
+               "token",
+               "RESET"
+              ]
+             }
+            ]
+           ]
+          }
+         ]
+        ]
+       },
+       "acl|save",
+       {
+        "%": [
+         "summary",
+         "Save the current ACL rules in the configured ACL file",
+         "since",
+         "6.0.0",
+         "group",
+         "server",
+         "complexity",
+         "O(N). Where N is the number of configured users."
+        ]
+       },
+       "acl|setuser",
+       {
+        "%": [
+         "summary",
+         "Modify or create the rules for a specific ACL user",
+         "since",
+         "6.0.0",
+         "group",
+         "server",
+         "complexity",
+         "O(N). Where N is the number of rules provided.",
+         "history",
+         {
+          "~": [
+           [
+            "6.2.0",
+            "Added Pub/Sub channel patterns."
+           ],
+           [
+            "7.0.0",
+            "Added selectors and key based permissions."
+           ]
+          ]
+         },
+         "arguments",
+         [
+          {
+           "%": [
+            "name",
+            "username",
+            "type",
+            "string"
+           ]
+          },
+          {
+           "%": [
+            "name",
+            "rule",
+            "type",
+            "string",
+            "flags",
+            {
+             "~": [
+              {
+               "+": "optional"
+              },
+              {
+               "+": "multiple"
+              }
+             ]
+            }
+           ]
+          }
+         ]
+        ]
+       },
+       "acl|users",
+       {
+        "%": [
+         "summary",
+         "List the username of all the configured ACL rules",
+         "since",
+         "6.0.0",
+         "group",
+         "server",
+         "complexity",
+         "O(N). Where N is the number of configured users."
+        ]
+       },
+       "acl|whoami",
+       {
+        "%": [
+         "summary",
+         "Return the name of the user associated to the current connection",
+         "since",
+         "6.0.0",
+         "group",
+         "server",
+         "complexity",
+         "O(1)"
+        ]
+       }
+      ]
+     }
+    ]
+   },
+   "info": [
+    "acl",
+    -2,
+    {
+     "~": []
+    },
+    0,
+    0,
+    0,
+    {
+     "~": [
+      {
+       "+": "@slow"
+      }
+     ]
+    },
+    {
+     "~": []
+    },
+    {
+     "~": []
+    },
+    [
+     [
+      "acl|cat",
+      -2,
+      {
+       "~": [
+        {
+         "+": "noscript"
+        },
+        {
+         "+": "loading"
+        },
+        {
+         "+": "stale"
+        }
+       ]
+      },
+      0,
+      0,
+      0,
+      {
+       "~": [
+        {
+         "+": "@slow"
+        }
+       ]
+      },
+      {
+       "~": []
+      },
+      {
+       "~": []
+      },
+      {
+       "~": []
+      }
+     ],
+     [
+      "acl|deluser",
+      -3,
+      {
+       "~": [
+        {
+         "+": "admin"
+        },
+        {
+         "+": "noscript"
+        },
+        {
+         "+": "loading"
+        },
+        {
+         "+": "stale"
+        }
+       ]
+      },
+      0,
+      0,
+      0,
+      {
+       "~": [
+        {
+         "+": "@admin"
+        },
+        {
+         "+": "@slow"
+        },
+        {
+         "+": "@dangerous"
+        }
+       ]
+      },
+      {
+       "~": []
+      },
+      {
+       "~": []
+      },
+      {
+       "~": []
+      }
+     ],
+     [
+      "acl|dryrun",
+      -4,
+      {
+       "~": [
+        {
+         "+": "admin"
+        },
+        {
+         "+": "noscript"
+        },
+        {
+         "+": "loading"
+        },
+        {
+         "+": "stale"
+        }
+       ]
+      },
+      0,
+      0,
+      0,
+      {
+       "~": [
+        {
+         "+": "@admin"
+        },
+        {
+         "+": "@slow"
+        },
+        {
+         "+": "@dangerous"
+        }
+       ]
+      },
+      {
+       "~": []
+      },
+      {
+       "~": []
+      },
+      {
+       "~": []
+      }
+     ],
+     [
+      "acl|genpass",
+      -2,
+      {
+       "~": [
+        {
+         "+": "noscript"
+        },
+        {
+         "+": "loading"
+        },
+        {
+         "+": "stale"
+        }
+       ]
+      },
+      0,
+      0,
+      0,
+      {
+       "~": [
+        {
+         "+": "@slow"
+        }
+       ]
+      },
+      {
+       "~": []
+      },
+      {
+       "~": []
+      },
+      {
+       "~": []
+      }
+     ],
+     [
+      "acl|getuser",
+      3,
+      {
+       "~": [
+        {
+         "+": "admin"
+        },
+        {
+         "+": "noscript"
+        },
+        {
+         "+": "loading"
+        },
+        {
+         "+": "stale"
+        }
+       ]
+      },
+      0,
+      0,
+      0,
+      {
+       "~": [
+        {
+         "+": "@admin"
+        },
+        {
+         "+": "@slow"
+        },
+        {
+         "+": "@dangerous"
+        }
+       ]
+      },
+      {
+       "~": []
+      },
+      {
+       "~": []
+      },
+      {
+       "~": []
+      }
+     ],
+     [
+      "acl|help",
+      2,
+      {
+       "~": [
+        {
+         "+": "loading"
+        },
+        {
+         "+": "stale"
+        }
+       ]
+      },
+      0,
+      0,
+      0,
+      {
+       "~": [
+        {
+         "+": "@slow"
+        }
+       ]
+      },
+      {
+       "~": []
+      },
+      {
+       "~": []
+      },
+      {
+       "~": []
+      }
+     ],
+     [
+      "acl|list",
+      2,
+      {
+       "~": [
+        {
+         "+": "admin"
+        },
+        {
+         "+": "noscript"
+        },
+        {
+         "+": "loading"
+        },
+        {
+         "+": "stale"
+        }
+       ]
+      },
+      0,
+      0,
+      0,
+      {
+       "~": [
+        {
+         "+": "@admin"
+        },
+        {
+         "+": "@slow"
+        },
+        {
+         "+": "@dangerous"
+        }
+       ]
+      },
+      {
+       "~": []
+      },
+      {
+       "~": []
+      },
+      {
+       "~": []
+      }
+     ],
+     [
+      "acl|load",
+      2,
+      {
+       "~": [
+        {
+         "+": "admin"
+        },
+        {
+         "+": "noscript"
+        },
+        {
+         "+": "loading"
+        },
+        {
+         "+": "stale"
+        }
+       ]
+      },
+      0,
+      0,
+      0,
+      {
+       "~": [
+        {
+         "+": "@admin"
+        },
+        {
+         "+": "@slow"
+        },
+        {
+         "+": "@dangerous"
+        }
+       ]
+      },
+      {
+       "~": []
+      },
+      {
+       "~": []
+      },
+      {
+       "~": []
+      }
+     ],
+     [
+      "acl|log",
+      -2,
+      {
+       "~": [
+        {
+         "+": "admin"
+        },
+        {
+         "+": "noscript"
+        },
+        {
+         "+": "loading"
+        },
+        {
+         "+": "stale"
+        }
+       ]
+      },
+      0,
+      0,
+      0,
+      {
+       "~": [
+        {
+         "+": "@admin"
+        },
+        {
+         "+": "@slow"
+        },
+        {
+         "+": "@dangerous"
+        }
+       ]
+      },
+      {
+       "~": []
+      },
+      {
+       "~": []
+      },
+      {
+       "~": []
+      }
+     ],
+     [
+      "acl|save",
+      2,
+      {
+       "~": [
+        {
+         "+": "admin"
+        },
+        {
+         "+": "noscript"
+        },
+        {
+         "+": "loading"
+        },
+        {
+         "+": "stale"
+        }
+       ]
+      },
+      0,
+      0,
+      0,
+      {
+       "~": [
+        {
+         "+": "@admin"
+        },
+        {
+         "+": "@slow"
+        },
+        {
+         "+": "@dangerous"
+        }
+       ]
+      },
+      {
+       "~": []
+      },
+      {
+       "~": []
+      },
+      {
+       "~": []
+      }
+     ],
+     [
+      "acl|setuser",
+      -3,
+      {
+       "~": [
+        {
+         "+": "admin"
+        },
+        {
+         "+": "noscript"
+        },
+        {
+         "+": "loading"
+        },
+        {
+         "+": "stale"
+        }
+       ]
+      },
+      0,
+      0,
+      0,
+      {
+       "~": [
+        {
+         "+": "@admin"
+        },
+        {
+         "+": "@slow"
+        },
+        {
+         "+": "@dangerous"
+        }
+       ]
+      },
+      {
+       "~": []
+      },
+      {
+       "~": []
+      },
+      {
+       "~": []
+      }
+     ],
+     [
+      "acl|users",
+      2,
+      {
+       "~": [
+        {
+         "+": "admin"
+        },
+        {
+         "+": "noscript"
+        },
+        {
+         "+": "loading"
+        },
+        {
+         "+": "stale"
+        }
+       ]
+      },
+      0,
+      0,
+      0,
+      {
+       "~": [
+        {
+         "+": "@admin"
+        },
+        {
+         "+": "@slow"
+        },
+        {
+         "+": "@dangerous"
+        }
+       ]
+      },
+      {
+       "~": []
+      },
+      {
+       "~": []
+      },
+      {
+       "~": []
+      }
+     ],
+     [
+      "acl|whoami",
+      2,
+      {
+       "~": [
+        {
+         "+": "noscript"
+        },
+        {
+         "+": "loading"
+        },
+        {
+         "+": "stale"
+        }
+       ]
+      },
+      0,
+      0,
+      0,
+      {
+       "~": [
+        {
+         "+": "@slow"
+        }
+       ]
+      },
+      {
+       "~": []
+      },
+      {
+       "~": []
+      },
+      {
+       "~": []
+      }
+     ]
+    ]
+   ]
+  },
   "append": {
    "docs": {
     "%": [
@@ -264,6 +2251,94 @@
    "info": [
     "bgrewriteaof",
     1,
+    {
+     "~": [
+      {
+       "+": "admin"
+      },
+      {
+       "+": "noscript"
+      },
+      {
+       "+": "no_async_loading"
+      }
+     ]
+    },
+    0,
+    0,
+    0,
+    {
+     "~": [
+      {
+       "+": "@admin"
+      },
+      {
+       "+": "@slow"
+      },
+      {
+       "+": "@dangerous"
+      }
+     ]
+    },
+    {
+     "~": []
+    },
+    {
+     "~": []
+    },
+    {
+     "~": []
+    }
+   ]
+  },
+  "bgsave": {
+   "docs": {
+    "%": [
+     "summary",
+     "Asynchronously save the dataset to disk",
+     "since",
+     "1.0.0",
+     "group",
+     "server",
+     "complexity",
+     "O(1)",
+     "history",
+     {
+      "~": [
+       [
+        "3.2.2",
+        "Added the `SCHEDULE` option."
+       ]
+      ]
+     },
+     "arguments",
+     [
+      {
+       "%": [
+        "name",
+        "schedule",
+        "type",
+        "pure-token",
+        "token",
+        "SCHEDULE",
+        "since",
+        "3.2.2",
+        "flags",
+        {
+         "~": [
+          {
+           "+": "optional"
+          }
+         ]
+        }
+       ]
+      }
+     ]
+    ]
+   },
+   "info": [
+    "bgsave",
+    -1,
     {
      "~": [
       {
@@ -28756,6 +30831,1323 @@
            "%": [
             "lastkey",
             -1,
+            "keystep",
+            1,
+            "limit",
+            0
+           ]
+          }
+         ]
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "~": []
+    }
+   ]
+  },
+  "xinfo": {
+   "docs": {
+    "%": [
+     "summary",
+     "A container for stream introspection commands",
+     "since",
+     "5.0.0",
+     "group",
+     "stream",
+     "complexity",
+     "Depends on subcommand.",
+     "subcommands",
+     {
+      "%": [
+       "xinfo|consumers",
+       {
+        "%": [
+         "summary",
+         "List the consumers in a consumer group",
+         "since",
+         "5.0.0",
+         "group",
+         "stream",
+         "complexity",
+         "O(1)",
+         "arguments",
+         [
+          {
+           "%": [
+            "name",
+            "key",
+            "type",
+            "key",
+            "key_spec_index",
+            0
+           ]
+          },
+          {
+           "%": [
+            "name",
+            "groupname",
+            "type",
+            "string"
+           ]
+          }
+         ]
+        ]
+       },
+       "xinfo|groups",
+       {
+        "%": [
+         "summary",
+         "List the consumer groups of a stream",
+         "since",
+         "5.0.0",
+         "group",
+         "stream",
+         "complexity",
+         "O(1)",
+         "history",
+         {
+          "~": [
+           [
+            "7.0.0",
+            "Added the `entries-read` and `lag` fields"
+           ]
+          ]
+         },
+         "arguments",
+         [
+          {
+           "%": [
+            "name",
+            "key",
+            "type",
+            "key",
+            "key_spec_index",
+            0
+           ]
+          }
+         ]
+        ]
+       },
+       "xinfo|help",
+       {
+        "%": [
+         "summary",
+         "Show helpful text about the different subcommands",
+         "since",
+         "5.0.0",
+         "group",
+         "stream",
+         "complexity",
+         "O(1)"
+        ]
+       },
+       "xinfo|stream",
+       {
+        "%": [
+         "summary",
+         "Get information about a stream",
+         "since",
+         "5.0.0",
+         "group",
+         "stream",
+         "complexity",
+         "O(1)",
+         "history",
+         {
+          "~": [
+           [
+            "6.0.0",
+            "Added the `FULL` modifier."
+           ],
+           [
+            "7.0.0",
+            "Added the `max-deleted-entry-id`, `entries-added`, `recorded-first-entry-id`, `entries-read` and `lag` fields"
+           ]
+          ]
+         },
+         "arguments",
+         [
+          {
+           "%": [
+            "name",
+            "key",
+            "type",
+            "key",
+            "key_spec_index",
+            0
+           ]
+          },
+          {
+           "%": [
+            "name",
+            "full",
+            "type",
+            "block",
+            "token",
+            "FULL",
+            "flags",
+            {
+             "~": [
+              {
+               "+": "optional"
+              }
+             ]
+            },
+            "arguments",
+            [
+             {
+              "%": [
+               "name",
+               "count",
+               "type",
+               "integer",
+               "token",
+               "COUNT",
+               "flags",
+               {
+                "~": [
+                 {
+                  "+": "optional"
+                 }
+                ]
+               }
+              ]
+             }
+            ]
+           ]
+          }
+         ]
+        ]
+       }
+      ]
+     }
+    ]
+   },
+   "info": [
+    "xinfo",
+    -2,
+    {
+     "~": []
+    },
+    0,
+    0,
+    0,
+    {
+     "~": [
+      {
+       "+": "@slow"
+      }
+     ]
+    },
+    {
+     "~": []
+    },
+    {
+     "~": []
+    },
+    [
+     [
+      "xinfo|consumers",
+      4,
+      {
+       "~": [
+        {
+         "+": "readonly"
+        }
+       ]
+      },
+      2,
+      2,
+      1,
+      {
+       "~": [
+        {
+         "+": "@read"
+        },
+        {
+         "+": "@stream"
+        },
+        {
+         "+": "@slow"
+        }
+       ]
+      },
+      {
+       "~": [
+        "nondeterministic_output"
+       ]
+      },
+      {
+       "~": [
+        {
+         "%": [
+          "flags",
+          {
+           "~": [
+            {
+             "+": "RO"
+            },
+            {
+             "+": "access"
+            }
+           ]
+          },
+          "begin_search",
+          {
+           "%": [
+            "type",
+            "index",
+            "spec",
+            {
+             "%": [
+              "index",
+              2
+             ]
+            }
+           ]
+          },
+          "find_keys",
+          {
+           "%": [
+            "type",
+            "range",
+            "spec",
+            {
+             "%": [
+              "lastkey",
+              0,
+              "keystep",
+              1,
+              "limit",
+              0
+             ]
+            }
+           ]
+          }
+         ]
+        }
+       ]
+      },
+      {
+       "~": []
+      }
+     ],
+     [
+      "xinfo|groups",
+      3,
+      {
+       "~": [
+        {
+         "+": "readonly"
+        }
+       ]
+      },
+      2,
+      2,
+      1,
+      {
+       "~": [
+        {
+         "+": "@read"
+        },
+        {
+         "+": "@stream"
+        },
+        {
+         "+": "@slow"
+        }
+       ]
+      },
+      {
+       "~": []
+      },
+      {
+       "~": [
+        {
+         "%": [
+          "flags",
+          {
+           "~": [
+            {
+             "+": "RO"
+            },
+            {
+             "+": "access"
+            }
+           ]
+          },
+          "begin_search",
+          {
+           "%": [
+            "type",
+            "index",
+            "spec",
+            {
+             "%": [
+              "index",
+              2
+             ]
+            }
+           ]
+          },
+          "find_keys",
+          {
+           "%": [
+            "type",
+            "range",
+            "spec",
+            {
+             "%": [
+              "lastkey",
+              0,
+              "keystep",
+              1,
+              "limit",
+              0
+             ]
+            }
+           ]
+          }
+         ]
+        }
+       ]
+      },
+      {
+       "~": []
+      }
+     ],
+     [
+      "xinfo|help",
+      2,
+      {
+       "~": [
+        {
+         "+": "loading"
+        },
+        {
+         "+": "stale"
+        }
+       ]
+      },
+      0,
+      0,
+      0,
+      {
+       "~": [
+        {
+         "+": "@stream"
+        },
+        {
+         "+": "@slow"
+        }
+       ]
+      },
+      {
+       "~": []
+      },
+      {
+       "~": []
+      },
+      {
+       "~": []
+      }
+     ],
+     [
+      "xinfo|stream",
+      -3,
+      {
+       "~": [
+        {
+         "+": "readonly"
+        }
+       ]
+      },
+      2,
+      2,
+      1,
+      {
+       "~": [
+        {
+         "+": "@read"
+        },
+        {
+         "+": "@stream"
+        },
+        {
+         "+": "@slow"
+        }
+       ]
+      },
+      {
+       "~": []
+      },
+      {
+       "~": [
+        {
+         "%": [
+          "flags",
+          {
+           "~": [
+            {
+             "+": "RO"
+            },
+            {
+             "+": "access"
+            }
+           ]
+          },
+          "begin_search",
+          {
+           "%": [
+            "type",
+            "index",
+            "spec",
+            {
+             "%": [
+              "index",
+              2
+             ]
+            }
+           ]
+          },
+          "find_keys",
+          {
+           "%": [
+            "type",
+            "range",
+            "spec",
+            {
+             "%": [
+              "lastkey",
+              0,
+              "keystep",
+              1,
+              "limit",
+              0
+             ]
+            }
+           ]
+          }
+         ]
+        }
+       ]
+      },
+      {
+       "~": []
+      }
+     ]
+    ]
+   ]
+  },
+  "xlen": {
+   "docs": {
+    "%": [
+     "summary",
+     "Return the number of entries in a stream",
+     "since",
+     "5.0.0",
+     "group",
+     "stream",
+     "complexity",
+     "O(1)",
+     "arguments",
+     [
+      {
+       "%": [
+        "name",
+        "key",
+        "type",
+        "key",
+        "key_spec_index",
+        0
+       ]
+      }
+     ]
+    ]
+   },
+   "info": [
+    "xlen",
+    2,
+    {
+     "~": [
+      {
+       "+": "readonly"
+      },
+      {
+       "+": "fast"
+      }
+     ]
+    },
+    1,
+    1,
+    1,
+    {
+     "~": [
+      {
+       "+": "@read"
+      },
+      {
+       "+": "@stream"
+      },
+      {
+       "+": "@fast"
+      }
+     ]
+    },
+    {
+     "~": []
+    },
+    {
+     "~": [
+      {
+       "%": [
+        "flags",
+        {
+         "~": [
+          {
+           "+": "RO"
+          }
+         ]
+        },
+        "begin_search",
+        {
+         "%": [
+          "type",
+          "index",
+          "spec",
+          {
+           "%": [
+            "index",
+            1
+           ]
+          }
+         ]
+        },
+        "find_keys",
+        {
+         "%": [
+          "type",
+          "range",
+          "spec",
+          {
+           "%": [
+            "lastkey",
+            0,
+            "keystep",
+            1,
+            "limit",
+            0
+           ]
+          }
+         ]
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "~": []
+    }
+   ]
+  },
+  "xpending": {
+   "docs": {
+    "%": [
+     "summary",
+     "Return information and entries from a stream consumer group pending entries list, that are messages fetched but never acknowledged.",
+     "since",
+     "5.0.0",
+     "group",
+     "stream",
+     "complexity",
+     "O(N) with N being the number of elements returned, so asking for a small fixed number of entries per call is O(1). O(M), where M is the total number of entries scanned when used with the IDLE filter. When the command returns just the summary and the list of consumers is small, it runs in O(1) time; otherwise, an additional O(N) time for iterating every consumer.",
+     "history",
+     {
+      "~": [
+       [
+        "6.2.0",
+        "Added the `IDLE` option and exclusive range intervals."
+       ]
+      ]
+     },
+     "arguments",
+     [
+      {
+       "%": [
+        "name",
+        "key",
+        "type",
+        "key",
+        "key_spec_index",
+        0
+       ]
+      },
+      {
+       "%": [
+        "name",
+        "group",
+        "type",
+        "string"
+       ]
+      },
+      {
+       "%": [
+        "name",
+        "filters",
+        "type",
+        "block",
+        "flags",
+        {
+         "~": [
+          {
+           "+": "optional"
+          }
+         ]
+        },
+        "arguments",
+        [
+         {
+          "%": [
+           "name",
+           "min-idle-time",
+           "type",
+           "integer",
+           "token",
+           "IDLE",
+           "since",
+           "6.2.0",
+           "flags",
+           {
+            "~": [
+             {
+              "+": "optional"
+             }
+            ]
+           }
+          ]
+         },
+         {
+          "%": [
+           "name",
+           "start",
+           "type",
+           "string"
+          ]
+         },
+         {
+          "%": [
+           "name",
+           "end",
+           "type",
+           "string"
+          ]
+         },
+         {
+          "%": [
+           "name",
+           "count",
+           "type",
+           "integer"
+          ]
+         },
+         {
+          "%": [
+           "name",
+           "consumer",
+           "type",
+           "string",
+           "flags",
+           {
+            "~": [
+             {
+              "+": "optional"
+             }
+            ]
+           }
+          ]
+         }
+        ]
+       ]
+      }
+     ]
+    ]
+   },
+   "info": [
+    "xpending",
+    -3,
+    {
+     "~": [
+      {
+       "+": "readonly"
+      }
+     ]
+    },
+    1,
+    1,
+    1,
+    {
+     "~": [
+      {
+       "+": "@read"
+      },
+      {
+       "+": "@stream"
+      },
+      {
+       "+": "@slow"
+      }
+     ]
+    },
+    {
+     "~": [
+      "nondeterministic_output"
+     ]
+    },
+    {
+     "~": [
+      {
+       "%": [
+        "flags",
+        {
+         "~": [
+          {
+           "+": "RO"
+          },
+          {
+           "+": "access"
+          }
+         ]
+        },
+        "begin_search",
+        {
+         "%": [
+          "type",
+          "index",
+          "spec",
+          {
+           "%": [
+            "index",
+            1
+           ]
+          }
+         ]
+        },
+        "find_keys",
+        {
+         "%": [
+          "type",
+          "range",
+          "spec",
+          {
+           "%": [
+            "lastkey",
+            0,
+            "keystep",
+            1,
+            "limit",
+            0
+           ]
+          }
+         ]
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "~": []
+    }
+   ]
+  },
+  "xrange": {
+   "docs": {
+    "%": [
+     "summary",
+     "Return a range of elements in a stream, with IDs matching the specified IDs interval",
+     "since",
+     "5.0.0",
+     "group",
+     "stream",
+     "complexity",
+     "O(N) with N being the number of elements being returned. If N is constant (e.g. always asking for the first 10 elements with COUNT), you can consider it O(1).",
+     "history",
+     {
+      "~": [
+       [
+        "6.2.0",
+        "Added exclusive ranges."
+       ]
+      ]
+     },
+     "arguments",
+     [
+      {
+       "%": [
+        "name",
+        "key",
+        "type",
+        "key",
+        "key_spec_index",
+        0
+       ]
+      },
+      {
+       "%": [
+        "name",
+        "start",
+        "type",
+        "string"
+       ]
+      },
+      {
+       "%": [
+        "name",
+        "end",
+        "type",
+        "string"
+       ]
+      },
+      {
+       "%": [
+        "name",
+        "count",
+        "type",
+        "integer",
+        "token",
+        "COUNT",
+        "flags",
+        {
+         "~": [
+          {
+           "+": "optional"
+          }
+         ]
+        }
+       ]
+      }
+     ]
+    ]
+   },
+   "info": [
+    "xrange",
+    -4,
+    {
+     "~": [
+      {
+       "+": "readonly"
+      }
+     ]
+    },
+    1,
+    1,
+    1,
+    {
+     "~": [
+      {
+       "+": "@read"
+      },
+      {
+       "+": "@stream"
+      },
+      {
+       "+": "@slow"
+      }
+     ]
+    },
+    {
+     "~": []
+    },
+    {
+     "~": [
+      {
+       "%": [
+        "flags",
+        {
+         "~": [
+          {
+           "+": "RO"
+          },
+          {
+           "+": "access"
+          }
+         ]
+        },
+        "begin_search",
+        {
+         "%": [
+          "type",
+          "index",
+          "spec",
+          {
+           "%": [
+            "index",
+            1
+           ]
+          }
+         ]
+        },
+        "find_keys",
+        {
+         "%": [
+          "type",
+          "range",
+          "spec",
+          {
+           "%": [
+            "lastkey",
+            0,
+            "keystep",
+            1,
+            "limit",
+            0
+           ]
+          }
+         ]
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "~": []
+    }
+   ]
+  },
+  "xread": {
+   "docs": {
+    "%": [
+     "summary",
+     "Return never seen elements in multiple streams, with IDs greater than the ones reported by the caller for each stream. Can block.",
+     "since",
+     "5.0.0",
+     "group",
+     "stream",
+     "complexity",
+     "For each stream mentioned: O(N) with N being the number of elements being returned, it means that XREAD-ing with a fixed COUNT is O(1). Note that when the BLOCK option is used, XADD will pay O(M) time in order to serve the M clients blocked on the stream getting new data.",
+     "arguments",
+     [
+      {
+       "%": [
+        "name",
+        "count",
+        "type",
+        "integer",
+        "token",
+        "COUNT",
+        "flags",
+        {
+         "~": [
+          {
+           "+": "optional"
+          }
+         ]
+        }
+       ]
+      },
+      {
+       "%": [
+        "name",
+        "milliseconds",
+        "type",
+        "integer",
+        "token",
+        "BLOCK",
+        "flags",
+        {
+         "~": [
+          {
+           "+": "optional"
+          }
+         ]
+        }
+       ]
+      },
+      {
+       "%": [
+        "name",
+        "streams",
+        "type",
+        "block",
+        "token",
+        "STREAMS",
+        "arguments",
+        [
+         {
+          "%": [
+           "name",
+           "key",
+           "type",
+           "key",
+           "key_spec_index",
+           0,
+           "flags",
+           {
+            "~": [
+             {
+              "+": "multiple"
+             }
+            ]
+           }
+          ]
+         },
+         {
+          "%": [
+           "name",
+           "id",
+           "type",
+           "string",
+           "flags",
+           {
+            "~": [
+             {
+              "+": "multiple"
+             }
+            ]
+           }
+          ]
+         }
+        ]
+       ]
+      }
+     ]
+    ]
+   },
+   "info": [
+    "xread",
+    -4,
+    {
+     "~": [
+      {
+       "+": "readonly"
+      },
+      {
+       "+": "blocking"
+      },
+      {
+       "+": "movablekeys"
+      }
+     ]
+    },
+    0,
+    0,
+    0,
+    {
+     "~": [
+      {
+       "+": "@read"
+      },
+      {
+       "+": "@stream"
+      },
+      {
+       "+": "@slow"
+      },
+      {
+       "+": "@blocking"
+      }
+     ]
+    },
+    {
+     "~": []
+    },
+    {
+     "~": [
+      {
+       "%": [
+        "flags",
+        {
+         "~": [
+          {
+           "+": "RO"
+          },
+          {
+           "+": "access"
+          }
+         ]
+        },
+        "begin_search",
+        {
+         "%": [
+          "type",
+          "keyword",
+          "spec",
+          {
+           "%": [
+            "keyword",
+            "STREAMS",
+            "startfrom",
+            1
+           ]
+          }
+         ]
+        },
+        "find_keys",
+        {
+         "%": [
+          "type",
+          "range",
+          "spec",
+          {
+           "%": [
+            "lastkey",
+            -1,
+            "keystep",
+            1,
+            "limit",
+            2
+           ]
+          }
+         ]
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "~": []
+    }
+   ]
+  },
+  "xrevrange": {
+   "docs": {
+    "%": [
+     "summary",
+     "Return a range of elements in a stream, with IDs matching the specified IDs interval, in reverse order (from greater to smaller IDs) compared to XRANGE",
+     "since",
+     "5.0.0",
+     "group",
+     "stream",
+     "complexity",
+     "O(N) with N being the number of elements returned. If N is constant (e.g. always asking for the first 10 elements with COUNT), you can consider it O(1).",
+     "history",
+     {
+      "~": [
+       [
+        "6.2.0",
+        "Added exclusive ranges."
+       ]
+      ]
+     },
+     "arguments",
+     [
+      {
+       "%": [
+        "name",
+        "key",
+        "type",
+        "key",
+        "key_spec_index",
+        0
+       ]
+      },
+      {
+       "%": [
+        "name",
+        "end",
+        "type",
+        "string"
+       ]
+      },
+      {
+       "%": [
+        "name",
+        "start",
+        "type",
+        "string"
+       ]
+      },
+      {
+       "%": [
+        "name",
+        "count",
+        "type",
+        "integer",
+        "token",
+        "COUNT",
+        "flags",
+        {
+         "~": [
+          {
+           "+": "optional"
+          }
+         ]
+        }
+       ]
+      }
+     ]
+    ]
+   },
+   "info": [
+    "xrevrange",
+    -4,
+    {
+     "~": [
+      {
+       "+": "readonly"
+      }
+     ]
+    },
+    1,
+    1,
+    1,
+    {
+     "~": [
+      {
+       "+": "@read"
+      },
+      {
+       "+": "@stream"
+      },
+      {
+       "+": "@slow"
+      }
+     ]
+    },
+    {
+     "~": []
+    },
+    {
+     "~": [
+      {
+       "%": [
+        "flags",
+        {
+         "~": [
+          {
+           "+": "RO"
+          },
+          {
+           "+": "access"
+          }
+         ]
+        },
+        "begin_search",
+        {
+         "%": [
+          "type",
+          "index",
+          "spec",
+          {
+           "%": [
+            "index",
+            1
+           ]
+          }
+         ]
+        },
+        "find_keys",
+        {
+         "%": [
+          "type",
+          "range",
+          "spec",
+          {
+           "%": [
+            "lastkey",
+            0,
             "keystep",
             1,
             "limit",

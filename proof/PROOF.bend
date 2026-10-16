@@ -3486,6 +3486,8 @@ def zrs_of_frame(m: Maybe<&2, KV.Val>, q: R.ZQ, +d: String, +db: KV.Trie<KV.Val>
       {==}
     case Some{KV.VColl{KV.CMems{s}}}:
       {==}
+    case Some{KV.VColl{KV.CStream{s}}}:
+      {==}
     case Some{KV.VStr{w}}:
       {==}
 
@@ -4592,6 +4594,8 @@ def zrs_of_point(m: Maybe<&2, KV.Val>, q: R.ZQ, +d: String, +t: KV.Trie<KV.Val>,
       e => e
     case Some{KV.VColl{KV.CMems{s}}}:
       e => e
+    case Some{KV.VColl{KV.CStream{s}}}:
+      e => e
     case Some{KV.VStr{w}}:
       e => e
 
@@ -4924,6 +4928,8 @@ def zrs_of_rep(m: Maybe<&2, KV.Val>, q: R.ZQ, -d: String, -t: KV.Trie<KV.Val>, -
     case Some{KV.VColl{KV.CList{l}}}:
       {==}
     case Some{KV.VColl{KV.CMems{s}}}:
+      {==}
+    case Some{KV.VColl{KV.CStream{s}}}:
       {==}
     case Some{KV.VStr{w}}:
       {==}
@@ -5587,6 +5593,8 @@ def takes_coll(cl: KV.Coll, -e: Nat, +p: KV.HPair, +rest: List<&2, KV.HPair>, +m
       g => Empty.absurd({ch_over(ch_of(R.upd.v(R.UHash{R.HWSet{Con{p, rest}, mset}}, now, Some{KV.Item{KV.VColl{KV.CMems{a}}, e}}))) == True{} : Bool}, false_true(g))
     case KV.CZset{a}:
       g => Empty.absurd({ch_over(ch_of(R.upd.v(R.UHash{R.HWSet{Con{p, rest}, mset}}, now, Some{KV.Item{KV.VColl{KV.CZset{a}}, e}}))) == True{} : Bool}, false_true(g))
+    case KV.CStream{a}:
+      g => Empty.absurd({ch_over(ch_of(R.upd.v(R.UHash{R.HWSet{Con{p, rest}, mset}}, now, Some{KV.Item{KV.VColl{KV.CStream{a}}, e}}))) == True{} : Bool}, false_true(g))
 
 def takes_set(+p: KV.HPair, +rest: List<&2, KV.HPair>, +mset: Bool, lm: Maybe<&2, KV.Item<KV.Val>>, +now: Nat) -> {R.upd.takes(R.UHash{R.HWSet{Con{p, rest}, mset}}, lm) == True{} : Bool} -> {ch_over(ch_of(R.upd.v(R.UHash{R.HWSet{Con{p, rest}, mset}}, now, lm))) == True{} : Bool}:
   match lm:
@@ -5755,6 +5763,8 @@ def takes_madd_c(cl: KV.Coll, -e: Nat, +x: String, +rest: List<&2, String>, +now
       g => Empty.absurd({ch_over(ch_of(R.upd.v(R.UMems{R.SWAdd{Con{x, rest}}}, now, Some{KV.Item{KV.VColl{KV.CList{a}}, e}}))) == True{} : Bool}, false_true(g))
     case KV.CZset{a}:
       g => Empty.absurd({ch_over(ch_of(R.upd.v(R.UMems{R.SWAdd{Con{x, rest}}}, now, Some{KV.Item{KV.VColl{KV.CZset{a}}, e}}))) == True{} : Bool}, false_true(g))
+    case KV.CStream{a}:
+      g => Empty.absurd({ch_over(ch_of(R.upd.v(R.UMems{R.SWAdd{Con{x, rest}}}, now, Some{KV.Item{KV.VColl{KV.CStream{a}}, e}}))) == True{} : Bool}, false_true(g))
 
 def takes_madd_m(+x: String, +rest: List<&2, String>, lm: Maybe<&2, KV.Item<KV.Val>>, +now: Nat) -> {R.upd.takes(R.UMems{R.SWAdd{Con{x, rest}}}, lm) == True{} : Bool} -> {ch_over(ch_of(R.upd.v(R.UMems{R.SWAdd{Con{x, rest}}}, now, lm))) == True{} : Bool}:
   match lm:
@@ -6123,6 +6133,8 @@ def zrs_of_br(m: Maybe<&2, KV.Val>, q: R.ZQ, +d: String, +t: KV.Trie<KV.Val>, +n
       {==}
     case Some{KV.VColl{KV.CMems{s}}}:
       {==}
+    case Some{KV.VColl{KV.CStream{s}}}:
+      {==}
     case Some{KV.VStr{w}}:
       {==}
 
@@ -6400,6 +6412,8 @@ def zrs_of_now(m: Maybe<&2, KV.Val>, q: R.ZQ, +d: String, +t: KV.Trie<KV.Val>, +
     case Some{KV.VColl{KV.CList{l}}}:
       {==}
     case Some{KV.VColl{KV.CMems{s}}}:
+      {==}
+    case Some{KV.VColl{KV.CStream{s}}}:
       {==}
     case Some{KV.VStr{w}}:
       {==}
@@ -7887,6 +7901,8 @@ def zrs_split(m: Maybe<&2, KV.Val>, q: R.ZQ, +d: String, +db: R.Db) -> {(R.reply
       {==}
     case Some{KV.VColl{KV.CMems{s}}}:
       {==}
+    case Some{KV.VColl{KV.CStream{s}}}:
+      {==}
     case Some{KV.VStr{w}}:
       {==}
 
@@ -8207,6 +8223,8 @@ def GoodHashV(w: KV.Val, op: R.HWrite, hv: KV.Hash) -> Type:
       Empty
     case KV.VColl{KV.CZset{z0}}:
       Empty
+    case KV.VColl{KV.CStream{z0}}:
+      Empty
     case KV.VStr{u}:
       Empty
 
@@ -8260,6 +8278,8 @@ def GoodListV(w: KV.Val, op: R.LWrite, l: KV.Deq) -> Type:
       Empty
     case KV.VColl{KV.CZset{z0}}:
       Empty
+    case KV.VColl{KV.CStream{z0}}:
+      Empty
     case KV.VStr{u}:
       Empty
 
@@ -8292,6 +8312,8 @@ def GoodMemsV(w: KV.Val, op: R.SWrite, sv: KV.Mems) -> Type:
     case KV.VColl{KV.CMems{s0}}:
       {ch_of(R.swrite(op, False{}, s0)) == R.CMems{op, sv} : R.Change} & GoodSOp(op)
     case KV.VColl{KV.CZset{z0}}:
+      Empty
+    case KV.VColl{KV.CStream{z0}}:
       Empty
     case KV.VColl{KV.CHash{h0}}:
       Empty
@@ -8345,6 +8367,8 @@ def GoodZsetV(w: KV.Val, op: R.ZWrite, z: KV.Zset) -> Type:
     case KV.VColl{KV.CList{l0}}:
       Empty
     case KV.VColl{KV.CMems{s0}}:
+      Empty
+    case KV.VColl{KV.CStream{s0}}:
       Empty
     case KV.VStr{u}:
       Empty
@@ -8555,6 +8579,8 @@ def hash_replay_v(w: KV.Val, +t: KV.Trie<KV.Val>, +k: String, +n: Nat, +x: Nat, 
       eq => g => Empty.absurd({Laws.final(R.exec_all(A.ch.effect(k, 1n+e, R.CHash{op, hv}), R.Db{t, n, x, 0n, rr})) == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, 1n+e, r, R.CHash{op, hv}))) : R.Db}, g)
     case KV.VColl{KV.CZset{z0}}:
       eq => g => Empty.absurd({Laws.final(R.exec_all(A.ch.effect(k, 1n+e, R.CHash{op, hv}), R.Db{t, n, x, 0n, rr})) == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, 1n+e, r, R.CHash{op, hv}))) : R.Db}, g)
+    case KV.VColl{KV.CStream{z0}}:
+      eq => g => Empty.absurd({Laws.final(R.exec_all(A.ch.effect(k, 1n+e, R.CHash{op, hv}), R.Db{t, n, x, 0n, rr})) == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, 1n+e, r, R.CHash{op, hv}))) : R.Db}, g)
     case KV.VStr{u}:
       eq => g => Empty.absurd({Laws.final(R.exec_all(A.ch.effect(k, 1n+e, R.CHash{op, hv}), R.Db{t, n, x, 0n, rr})) == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, 1n+e, r, R.CHash{op, hv}))) : R.Db}, g)
 
@@ -8581,6 +8607,8 @@ def hnew_v(w: KV.Val, +ps: List<&2, KV.HPair>, +e: Nat) -> {R.hnew.out(R.hset.go
     case KV.VColl{KV.CMems{s0}}:
       {==}
     case KV.VColl{KV.CZset{z0}}:
+      {==}
+    case KV.VColl{KV.CStream{z0}}:
       {==}
 
 def hnew_eval(+t: KV.Trie<KV.Val>, +k: String, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>, +r: R.Reply, +ps: List<&2, KV.HPair>, +hv: KV.Hash, +w: KV.Val, +e: Nat, eq: {KV.entry.at(KV.Val, t, k, KV.hash(k)) == Some{KV.Item{w, e}} : Maybe<&2, KV.Item<KV.Val>>}, gn: {R.hset.ch(True{}, ps, hput.h(R.hset.go(ps, R.HPut{KV.hash.empty(), 0n}))) == R.CHashNew{ps, hv} : R.Change}) -> {Laws.final(R.exec_all([R.Upd{k, R.UHash{R.HWNew{ps}}}], R.Db{t, n, x, 0n, rr})) == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, 1n+e, r, R.CHashNew{ps, hv}))) : R.Db}:
@@ -8631,6 +8659,8 @@ def list_replay_v(w: KV.Val, +t: KV.Trie<KV.Val>, +k: String, +n: Nat, +x: Nat, 
       eq => g => Empty.absurd({Laws.final(R.exec_all(A.ch.effect(k, 1n+e, R.CList{op, l}), R.Db{t, n, x, 0n, rr})) == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, 1n+e, r, R.CList{op, l}))) : R.Db}, g)
     case KV.VColl{KV.CZset{z0}}:
       eq => g => Empty.absurd({Laws.final(R.exec_all(A.ch.effect(k, 1n+e, R.CList{op, l}), R.Db{t, n, x, 0n, rr})) == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, 1n+e, r, R.CList{op, l}))) : R.Db}, g)
+    case KV.VColl{KV.CStream{z0}}:
+      eq => g => Empty.absurd({Laws.final(R.exec_all(A.ch.effect(k, 1n+e, R.CList{op, l}), R.Db{t, n, x, 0n, rr})) == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, 1n+e, r, R.CList{op, l}))) : R.Db}, g)
     case KV.VStr{u}:
       eq => g => Empty.absurd({Laws.final(R.exec_all(A.ch.effect(k, 1n+e, R.CList{op, l}), R.Db{t, n, x, 0n, rr})) == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, 1n+e, r, R.CList{op, l}))) : R.Db}, g)
 
@@ -8662,6 +8692,8 @@ def lnew_v(w: KV.Val, +left: Bool, +xs: List<&2, String>, +e: Nat) -> {R.lnew.of
     case KV.VColl{KV.CMems{s0}}:
       {==}
     case KV.VColl{KV.CZset{z0}}:
+      {==}
+    case KV.VColl{KV.CStream{z0}}:
       {==}
 
 def lnew_eval(+t: KV.Trie<KV.Val>, +k: String, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>, +r: R.Reply, +left: Bool, +xs: List<&2, String>, +l: KV.Deq, +w: KV.Val, +e: Nat, eq: {KV.entry.at(KV.Val, t, k, KV.hash(k)) == Some{KV.Item{w, e}} : Maybe<&2, KV.Item<KV.Val>>}, gn: {KV.deq.pushes(left, xs, KV.deq.empty()) == l : KV.Deq}, ne: {List.is_empty(&2, String, xs) == False{} : Bool}) -> {Laws.final(R.exec_all([R.Upd{k, R.UList{R.LWNew{left, xs}}}], R.Db{t, n, x, 0n, rr})) == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, 1n+e, r, R.CListNew{left, xs, l}))) : R.Db}:
@@ -8708,6 +8740,8 @@ def mems_replay_v(w: KV.Val, +t: KV.Trie<KV.Val>, +k: String, +n: Nat, +x: Nat, 
       eq => g => mems_replay_g(t, k, n, x, now, rr, r, op, sv, s0, e, eq, g)
     case KV.VColl{KV.CZset{z0}}:
       eq => g => Empty.absurd({Laws.final(R.exec_all(A.ch.effect(k, 1n+e, R.CMems{op, sv}), R.Db{t, n, x, 0n, rr})) == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, 1n+e, r, R.CMems{op, sv}))) : R.Db}, g)
+    case KV.VColl{KV.CStream{z0}}:
+      eq => g => Empty.absurd({Laws.final(R.exec_all(A.ch.effect(k, 1n+e, R.CMems{op, sv}), R.Db{t, n, x, 0n, rr})) == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, 1n+e, r, R.CMems{op, sv}))) : R.Db}, g)
     case KV.VColl{KV.CHash{h0}}:
       eq => g => Empty.absurd({Laws.final(R.exec_all(A.ch.effect(k, 1n+e, R.CMems{op, sv}), R.Db{t, n, x, 0n, rr})) == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, 1n+e, r, R.CMems{op, sv}))) : R.Db}, g)
     case KV.VColl{KV.CList{l0}}:
@@ -8737,6 +8771,8 @@ def snew_v(w: KV.Val, +ms: List<&2, String>, +e: Nat) -> {R.snew.of(List.is_empt
     case KV.VColl{KV.CMems{s0}}:
       {==}
     case KV.VColl{KV.CZset{z0}}:
+      {==}
+    case KV.VColl{KV.CStream{z0}}:
       {==}
 
 def snew_eval(+t: KV.Trie<KV.Val>, +k: String, +n: Nat, +x: Nat, +now: Nat, +rr: Maybe<&2, R.Db>, +r: R.Reply, +ms: List<&2, String>, +sv: KV.Mems, +w: KV.Val, +e: Nat, eq: {KV.entry.at(KV.Val, t, k, KV.hash(k)) == Some{KV.Item{w, e}} : Maybe<&2, KV.Item<KV.Val>>}, gn: {KV.mems.of(ms) == sv : KV.Mems}, ne: {List.is_empty(&2, String, ms) == False{} : Bool}) -> {Laws.final(R.exec_all([R.Upd{k, R.UMems{R.SWNew{ms}}}], R.Db{t, n, x, 0n, rr})) == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, 1n+e, r, R.CMemsNew{ms, sv}))) : R.Db}:
@@ -8786,6 +8822,8 @@ def zset_replay_v(w: KV.Val, +t: KV.Trie<KV.Val>, +k: String, +n: Nat, +x: Nat, 
       eq => g => Empty.absurd({Laws.final(R.exec_all(A.ch.effect(k, 1n+e, R.CZset{op, z}), R.Db{t, n, x, 0n, rr})) == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, 1n+e, r, R.CZset{op, z}))) : R.Db}, g)
     case KV.VColl{KV.CMems{s0}}:
       eq => g => Empty.absurd({Laws.final(R.exec_all(A.ch.effect(k, 1n+e, R.CZset{op, z}), R.Db{t, n, x, 0n, rr})) == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, 1n+e, r, R.CZset{op, z}))) : R.Db}, g)
+    case KV.VColl{KV.CStream{s0}}:
+      eq => g => Empty.absurd({Laws.final(R.exec_all(A.ch.effect(k, 1n+e, R.CZset{op, z}), R.Db{t, n, x, 0n, rr})) == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, 1n+e, r, R.CZset{op, z}))) : R.Db}, g)
     case KV.VStr{u}:
       eq => g => Empty.absurd({Laws.final(R.exec_all(A.ch.effect(k, 1n+e, R.CZset{op, z}), R.Db{t, n, x, 0n, rr})) == R.db.at(0n, R.db_of(R.upd.ch(t, k, KV.hash(k), n, x, now, rr, 1n+e, r, R.CZset{op, z}))) : R.Db}, g)
 
@@ -8806,6 +8844,8 @@ def znew_v(w: KV.Val, +o: R.ZOpts, +ps: List<&2, R.ZPair>, +e: Nat) -> {R.znew.o
     case KV.VColl{KV.CList{l0}}:
       {==}
     case KV.VColl{KV.CMems{s0}}:
+      {==}
+    case KV.VColl{KV.CStream{s0}}:
       {==}
     case KV.VColl{KV.CZset{z0}}:
       {==}
@@ -9281,6 +9321,8 @@ def good_coll_hash(op: R.HWrite, c: KV.Coll, -e: Nat) -> Good(Some{KV.Item{KV.VC
       hw_wrong_good(op, Some{KV.Item{KV.VColl{KV.CMems{sv}}, e}})
     case KV.CZset{+z}:
       hw_wrong_good(op, Some{KV.Item{KV.VColl{KV.CZset{z}}, e}})
+    case KV.CStream{+z}:
+      hw_wrong_good(op, Some{KV.Item{KV.VColl{KV.CStream{z}}, e}})
 
 # A write of a list: of a key not there (an empty list made fresh) none
 # or a new list; of a key that holds another kind, none, or the new list
@@ -9507,14 +9549,14 @@ def lset_shape(mi: Maybe<&2, R.Int>, +i: String, +v: String, +l0: KV.Deq) -> LSh
     case None{}:
       {==}
 
-def lins_m_shape(m: Maybe<&2, List<&2, String>>, -n: Nat, -after: Bool, -p: String, -v: String, -op: R.LWrite) -> {R.lins.op(after, p, v) == op : R.LWrite} -> GoodLOp(R.lins.op(after, p, v)) -> LShape(op, ch_of(R.lins.of(m, n, after, p, v))):
+def lins_m_shape(m: Maybe<&2, KV.Deq>, -n: Nat, -after: Bool, -p: String, -v: String, -op: R.LWrite) -> {R.lins.op(after, p, v) == op : R.LWrite} -> GoodLOp(R.lins.op(after, p, v)) -> LShape(op, ch_of(R.lins.of(m, n, after, p, v))):
   match m:
-    case Some{xs}:
+    case Some{d}:
       eo => g => (eo, g)
     case None{}:
       eo => g => {==}
 
-def lrem_ch_shape(none: Bool, all: Bool, -gone: Nat, -n: Nat, -c: String, -v: String, -xs: List<&2, String>, ok: {R.lnum.ok(c) == True{} : Bool}) -> LShape(R.LWRem{c, v}, ch_of(R.lrem.ch(none, all, gone, n, c, v, xs))):
+def lrem_ch_shape(none: Bool, all: Bool, -gone: Nat, -n: Nat, -c: String, -v: String, -d: KV.Deq, ok: {R.lnum.ok(c) == True{} : Bool}) -> LShape(R.LWRem{c, v}, ch_of(R.lrem.ch(none, all, gone, n, c, v, d))):
   match none all:
     case True{} _:
       {==}
@@ -9523,17 +9565,17 @@ def lrem_ch_shape(none: Bool, all: Bool, -gone: Nat, -n: Nat, -c: String, -v: St
     case False{} False{}:
       ({==}, ok)
 
-def lrem_r_shape(r: R.LRem, +n: Nat, +c: String, +v: String, ok: {R.lnum.ok(c) == True{} : Bool}) -> LShape(R.LWRem{c, v}, ch_of(R.lrem.out(r, n, c, v))):
+def lrem_r_shape(r: KV.Rem, +n: Nat, +c: String, +v: String, ok: {R.lnum.ok(c) == True{} : Bool}) -> LShape(R.LWRem{c, v}, ch_of(R.lrem.out(r, n, c, v))):
   match r:
-    case R.LRem{+xs, +gone}:
-      lrem_ch_shape(Nat.is_eq(gone, 0n), Nat.is_eq(gone, n), gone, n, c, v, xs, ok)
+    case KV.Rem{+d, +gone}:
+      lrem_ch_shape(Nat.is_eq(gone, 0n), Nat.is_eq(gone, n), gone, n, c, v, d, ok)
 
 def lrem_shape(mi: Maybe<&2, R.Int>, +c: String, +v: String, +l0: KV.Deq) -> {R.lnum(c) == mi : Maybe<&2, R.Int>} -> LShape(R.LWRem{c, v}, ch_of(R.lrem.of(mi, c, v, l0))):
   match mi:
     case Some{R.IPos{+k}}:
-      e => lrem_r_shape(R.lrem.go(KV.deq.all(l0), v, k, 0n, Nil{}), KV.deq.len(l0), c, v, some_ok_i(R.lnum(c), R.IPos{k}, e))
+      e => lrem_r_shape(KV.deq.rem(v, k, False{}, l0), KV.deq.len(l0), c, v, some_ok_i(R.lnum(c), R.IPos{k}, e))
     case Some{R.INeg{+k}}:
-      e => lrem_r_shape(R.lrem.back(True{}, R.lrem.go(R.lrem.elems(True{}, l0), v, 1n+k, 0n, Nil{})), KV.deq.len(l0), c, v, some_ok_i(R.lnum(c), R.INeg{k}, e))
+      e => lrem_r_shape(KV.deq.rem(v, 1n+k, True{}, l0), KV.deq.len(l0), c, v, some_ok_i(R.lnum(c), R.INeg{k}, e))
     case None{}:
       e => {==}
 
@@ -9580,9 +9622,9 @@ def lw_shape(op: R.LWrite, +l0: KV.Deq) -> LShape(op, ch_of(R.lwrite(op, False{}
     case R.LWSet{+i, +v}:
       lset_shape(R.lnum(i), i, v, l0)
     case R.LWBefore{+p, +v}:
-      lins_m_shape(R.lins.go(KV.deq.all(l0), R.lins.head(p, KV.deq.all(l0)), False{}, p, v, Nil{}), KV.deq.len(l0), False{}, p, v, R.LWBefore{p, v})({==})({==})
+      lins_m_shape(KV.deq.ins(p, False{}, v, l0), KV.deq.len(l0), False{}, p, v, R.LWBefore{p, v})({==})({==})
     case R.LWAfter{+p, +v}:
-      lins_m_shape(R.lins.go(KV.deq.all(l0), R.lins.head(p, KV.deq.all(l0)), True{}, p, v, Nil{}), KV.deq.len(l0), True{}, p, v, R.LWAfter{p, v})({==})({==})
+      lins_m_shape(KV.deq.ins(p, True{}, v, l0), KV.deq.len(l0), True{}, p, v, R.LWAfter{p, v})({==})({==})
     case R.LWRem{+c, +v}:
       lrem_shape(R.lnum(c), c, v, l0)({==})
     case R.LWTrim{+a, +b}:
@@ -9604,6 +9646,8 @@ def good_coll_list(op: R.LWrite, c: KV.Coll, -e: Nat) -> Good(Some{KV.Item{KV.VC
       lw_wrong_good(op, Some{KV.Item{KV.VColl{KV.CMems{sv}}, e}})
     case KV.CZset{+z}:
       lw_wrong_good(op, Some{KV.Item{KV.VColl{KV.CZset{z}}, e}})
+    case KV.CStream{+z}:
+      lw_wrong_good(op, Some{KV.Item{KV.VColl{KV.CStream{z}}, e}})
 
 # A write of a set: of a key not there (an empty set made fresh) none or
 # a new set; of a key that holds another kind, none, or the new set of
@@ -9753,6 +9797,8 @@ def good_coll_set(op: R.SWrite, c: KV.Coll, -e: Nat) -> Good(Some{KV.Item{KV.VCo
       sw_wrong_good(op, Some{KV.Item{KV.VColl{KV.CList{l}}, e}})
     case KV.CZset{+z}:
       sw_wrong_good(op, Some{KV.Item{KV.VColl{KV.CZset{z}}, e}})
+    case KV.CStream{+z}:
+      sw_wrong_good(op, Some{KV.Item{KV.VColl{KV.CStream{z}}, e}})
 
 # A write of a sorted set: of a key not there (an empty sorted set made
 # fresh) none or a new sorted set (ZADD, or the script of one: never with
@@ -9990,6 +10036,8 @@ def good_coll_zset(op: R.ZWrite, c: KV.Coll, -e: Nat) -> Good(Some{KV.Item{KV.VC
       zw_wrong_good(op, Some{KV.Item{KV.VColl{KV.CList{l}}, e}})
     case KV.CMems{+s}:
       zw_wrong_good(op, Some{KV.Item{KV.VColl{KV.CMems{s}}, e}})
+    case KV.CStream{+s}:
+      zw_wrong_good(op, Some{KV.Item{KV.VColl{KV.CStream{s}}, e}})
 
 # PFADD of a key not there: a new HyperLogLog put (also when its walk
 # fails, as Redis adds the key first), or nothing; PFCOUNT and PFDEBUG
@@ -10912,6 +10960,8 @@ def zrs_at0(m: Maybe<&2, KV.Val>, q: R.ZQ, +d: String, +t: KV.Trie<KV.Val>, +n: 
       {==}
     case Some{KV.VColl{KV.CMems{s}}}:
       {==}
+    case Some{KV.VColl{KV.CStream{s}}}:
+      {==}
     case Some{KV.VStr{w}}:
       {==}
 
@@ -11031,6 +11081,8 @@ def go_same_v(v: KV.Val, -e: Nat, +md: Maybe<&2, KV.Item<KV.Val>>, +same: Bool, 
     case KV.VColl{KV.CMems{+sv}}:
       go_dst(same, KV.mems.has(m, sv), md)
     case KV.VColl{KV.CZset{z}}:
+      em => Empty.absurd({same == False{} : Bool}, false_true(em))
+    case KV.VColl{KV.CStream{z}}:
       em => Empty.absurd({same == False{} : Bool}, false_true(em))
     case KV.VColl{KV.CHash{h}}:
       em => Empty.absurd({same == False{} : Bool}, false_true(em))
@@ -11485,6 +11537,8 @@ def hash_args_v(w: KV.Val, +op: R.HWrite, -hv: KV.Hash, +k: String) -> GoodHashV
       g => Empty.absurd({[R.Upd{k, R.UHash{op}}] == A.parse_all(A.args_all([R.Upd{k, R.UHash{op}}])) : List<&2, R.Cmd>}, g)
     case KV.VColl{KV.CZset{z0}}:
       g => Empty.absurd({[R.Upd{k, R.UHash{op}}] == A.parse_all(A.args_all([R.Upd{k, R.UHash{op}}])) : List<&2, R.Cmd>}, g)
+    case KV.VColl{KV.CStream{z0}}:
+      g => Empty.absurd({[R.Upd{k, R.UHash{op}}] == A.parse_all(A.args_all([R.Upd{k, R.UHash{op}}])) : List<&2, R.Cmd>}, g)
 
 def hnew_args(b: Bool, +k: String, +ps: List<&2, KV.HPair>, ne: NeP(ps)) -> {A.hnew.effect(b, k, ps) == A.parse_all(A.args_all(A.hnew.effect(b, k, ps))) : List<&2, R.Cmd>}:
   match b:
@@ -11581,6 +11635,8 @@ def list_args_v(w: KV.Val, +op: R.LWrite, -l: KV.Deq, +k: String) -> GoodListV(w
       g => Empty.absurd({[R.Upd{k, R.UList{op}}] == A.parse_all(A.args_all([R.Upd{k, R.UList{op}}])) : List<&2, R.Cmd>}, g)
     case KV.VColl{KV.CZset{z0}}:
       g => Empty.absurd({[R.Upd{k, R.UList{op}}] == A.parse_all(A.args_all([R.Upd{k, R.UList{op}}])) : List<&2, R.Cmd>}, g)
+    case KV.VColl{KV.CStream{z0}}:
+      g => Empty.absurd({[R.Upd{k, R.UList{op}}] == A.parse_all(A.args_all([R.Upd{k, R.UList{op}}])) : List<&2, R.Cmd>}, g)
 
 def lnew_eval_args(left: Bool, +k: String, xs: List<&2, String>) -> NeS(xs) -> {[R.Upd{k, R.UList{R.LWNew{left, xs}}}] == A.parse_all(A.args_all([R.Upd{k, R.UList{R.LWNew{left, xs}}}])) : List<&2, R.Cmd>}:
   match left xs:
@@ -11649,6 +11705,8 @@ def mems_args_v(w: KV.Val, +op: R.SWrite, -sv: KV.Mems, +k: String) -> GoodMemsV
     case KV.VColl{KV.CMems{s0}}:
       g => mems_args(op, k)(gmems_op(op, sv, s0, g))
     case KV.VColl{KV.CZset{z0}}:
+      g => Empty.absurd({[R.Upd{k, R.UMems{op}}] == A.parse_all(A.args_all([R.Upd{k, R.UMems{op}}])) : List<&2, R.Cmd>}, g)
+    case KV.VColl{KV.CStream{z0}}:
       g => Empty.absurd({[R.Upd{k, R.UMems{op}}] == A.parse_all(A.args_all([R.Upd{k, R.UMems{op}}])) : List<&2, R.Cmd>}, g)
     case KV.VColl{KV.CHash{h0}}:
       g => Empty.absurd({[R.Upd{k, R.UMems{op}}] == A.parse_all(A.args_all([R.Upd{k, R.UMems{op}}])) : List<&2, R.Cmd>}, g)
@@ -12065,6 +12123,8 @@ def zset_args_v(w: KV.Val, +op: R.ZWrite, -z: KV.Zset, +k: String) -> GoodZsetV(
       g => Empty.absurd({[R.Upd{k, R.UZset{op}}] == A.parse_all(A.args_all([R.Upd{k, R.UZset{op}}])) : List<&2, R.Cmd>}, g)
     case KV.VColl{KV.CMems{s0}}:
       g => Empty.absurd({[R.Upd{k, R.UZset{op}}] == A.parse_all(A.args_all([R.Upd{k, R.UZset{op}}])) : List<&2, R.Cmd>}, g)
+    case KV.VColl{KV.CStream{s0}}:
+      g => Empty.absurd({[R.Upd{k, R.UZset{op}}] == A.parse_all(A.args_all([R.Upd{k, R.UZset{op}}])) : List<&2, R.Cmd>}, g)
     case KV.VStr{u}:
       g => Empty.absurd({[R.Upd{k, R.UZset{op}}] == A.parse_all(A.args_all([R.Upd{k, R.UZset{op}}])) : List<&2, R.Cmd>}, g)
 
@@ -12294,6 +12354,8 @@ def zrs_args(m: Maybe<&2, KV.Val>, q: R.ZQ, +d: String, +t: KV.Trie<KV.Val>, +n:
     case Some{KV.VColl{KV.CList{l}}}:
       {==}
     case Some{KV.VColl{KV.CMems{s}}}:
+      {==}
+    case Some{KV.VColl{KV.CStream{s}}}:
       {==}
     case Some{KV.VStr{w}}:
       {==}
@@ -12791,6 +12853,8 @@ def zrs_one(m: Maybe<&2, KV.Val>, q: R.ZQ, +d: String, +t: KV.Trie<KV.Val>, +n: 
     case Some{KV.VColl{KV.CList{l}}}:
       Inl{{==}}
     case Some{KV.VColl{KV.CMems{s}}}:
+      Inl{{==}}
+    case Some{KV.VColl{KV.CStream{s}}}:
       Inl{{==}}
     case Some{KV.VStr{w}}:
       Inl{{==}}
@@ -17605,12 +17669,16 @@ def srv_same.o(o: R.SessOp, +conn: S.Conn, +srv: S.Srv, +ef: {S.authed(conn, srv
       e => Empty.absurd({S.own_srv(R.SSortStore{y0, y1}, conn, srv) == srv : S.Srv}, true_false(Equal.trans(Bool, True{}, S.authed(conn, srv), False{}, e, ef)))
     case R.SPfCount{y0}:
       e => Empty.absurd({S.own_srv(R.SPfCount{y0}, conn, srv) == srv : S.Srv}, true_false(Equal.trans(Bool, True{}, S.authed(conn, srv), False{}, e, ef)))
+    case R.SXRead{y0}:
+      e => Empty.absurd({S.own_srv(R.SXRead{y0}, conn, srv) == srv : S.Srv}, true_false(Equal.trans(Bool, True{}, S.authed(conn, srv), False{}, e, ef)))
     case R.SPfMerge{y0, y1}:
       e => Empty.absurd({S.own_srv(R.SPfMerge{y0, y1}, conn, srv) == srv : S.Srv}, true_false(Equal.trans(Bool, True{}, S.authed(conn, srv), False{}, e, ef)))
     case R.SPfSelfTest{}:
       e => Empty.absurd({S.own_srv(R.SPfSelfTest{}, conn, srv) == srv : S.Srv}, true_false(Equal.trans(Bool, True{}, S.authed(conn, srv), False{}, e, ef)))
     case R.SAdmin{y0, y1}:
       e => Empty.absurd({S.own_srv(R.SAdmin{y0, y1}, conn, srv) == srv : S.Srv}, true_false(Equal.trans(Bool, True{}, S.authed(conn, srv), False{}, e, ef)))
+    case R.SAcl{y0, y1}:
+      e => Empty.absurd({S.own_srv(R.SAcl{y0, y1}, conn, srv) == srv : S.Srv}, true_false(Equal.trans(Bool, True{}, S.authed(conn, srv), False{}, e, ef)))
     case R.SGeoStore{y0, y1}:
       e => Empty.absurd({S.own_srv(R.SGeoStore{y0, y1}, conn, srv) == srv : S.Srv}, true_false(Equal.trans(Bool, True{}, S.authed(conn, srv), False{}, e, ef)))
     case R.SRestore{y0, y1}:
@@ -17798,6 +17866,10 @@ def own_bad(o: R.SessOp, +ps: List<&2, R.Act>, +id: Nat, +a: Bool, +n: String, +
       ih =>
         %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel, r3}, srv), False{}, ef) : {Laws.all_bad(List.append(&2, R.Act, S.acts.k(S.KSess{R.SPfCount{y0}}, _, R.Own{R.SPfCount{y0}}, S.Conn{id, a, n, m, False{}, sel, r3}, srv), ps)) == True{} : Bool}
         ih
+    case R.SXRead{y0}:
+      ih =>
+        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel, r3}, srv), False{}, ef) : {Laws.all_bad(List.append(&2, R.Act, S.acts.k(S.KSess{R.SXRead{y0}}, _, R.Own{R.SXRead{y0}}, S.Conn{id, a, n, m, False{}, sel, r3}, srv), ps)) == True{} : Bool}
+        ih
     case R.SPfMerge{y0, y1}:
       ih =>
         %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel, r3}, srv), False{}, ef) : {Laws.all_bad(List.append(&2, R.Act, S.acts.k(S.KSess{R.SPfMerge{y0, y1}}, _, R.Own{R.SPfMerge{y0, y1}}, S.Conn{id, a, n, m, False{}, sel, r3}, srv), ps)) == True{} : Bool}
@@ -17809,6 +17881,10 @@ def own_bad(o: R.SessOp, +ps: List<&2, R.Act>, +id: Nat, +a: Bool, +n: String, +
     case R.SAdmin{y0, y1}:
       ih =>
         %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel, r3}, srv), False{}, ef) : {Laws.all_bad(List.append(&2, R.Act, S.acts.k(S.KSess{R.SAdmin{y0, y1}}, _, R.Own{R.SAdmin{y0, y1}}, S.Conn{id, a, n, m, False{}, sel, r3}, srv), ps)) == True{} : Bool}
+        ih
+    case R.SAcl{y0, y1}:
+      ih =>
+        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel, r3}, srv), False{}, ef) : {Laws.all_bad(List.append(&2, R.Act, S.acts.k(S.KSess{R.SAcl{y0, y1}}, _, R.Own{R.SAcl{y0, y1}}, S.Conn{id, a, n, m, False{}, sel, r3}, srv), ps)) == True{} : Bool}
         ih
     case R.SGeoStore{y0, y1}:
       ih =>
@@ -18108,6 +18184,10 @@ def auth_own(o: R.SessOp, +id: Nat, +a: Bool, +n: String, +m: S.Mute, +sel: Nat,
       el =>
         %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel, r3}, srv), False{}, ef) : {S.conn.auth(S.next_conn.k(S.KSess{R.SPfCount{y0}}, _, S.Conn{id, a, n, m, False{}, sel, r3}, srv)) == False{} : Bool}
         or_false_l(a, S.nopass(srv))(ef)
+    case R.SXRead{y0}:
+      el =>
+        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel, r3}, srv), False{}, ef) : {S.conn.auth(S.next_conn.k(S.KSess{R.SXRead{y0}}, _, S.Conn{id, a, n, m, False{}, sel, r3}, srv)) == False{} : Bool}
+        or_false_l(a, S.nopass(srv))(ef)
     case R.SPfMerge{y0, y1}:
       el =>
         %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel, r3}, srv), False{}, ef) : {S.conn.auth(S.next_conn.k(S.KSess{R.SPfMerge{y0, y1}}, _, S.Conn{id, a, n, m, False{}, sel, r3}, srv)) == False{} : Bool}
@@ -18119,6 +18199,10 @@ def auth_own(o: R.SessOp, +id: Nat, +a: Bool, +n: String, +m: S.Mute, +sel: Nat,
     case R.SAdmin{y0, y1}:
       el =>
         %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel, r3}, srv), False{}, ef) : {S.conn.auth(S.next_conn.k(S.KSess{R.SAdmin{y0, y1}}, _, S.Conn{id, a, n, m, False{}, sel, r3}, srv)) == False{} : Bool}
+        or_false_l(a, S.nopass(srv))(ef)
+    case R.SAcl{y0, y1}:
+      el =>
+        %Equal.sym(Bool, S.authed(S.Conn{id, a, n, m, False{}, sel, r3}, srv), False{}, ef) : {S.conn.auth(S.next_conn.k(S.KSess{R.SAcl{y0, y1}}, _, S.Conn{id, a, n, m, False{}, sel, r3}, srv)) == False{} : Bool}
         or_false_l(a, S.nopass(srv))(ef)
     case R.SGeoStore{y0, y1}:
       el =>
@@ -19927,6 +20011,8 @@ def counted_zrs_of(m: Maybe<&2, KV.Val>, q: R.ZQ, +d: String, +db: R.Db) -> {Law
       ok => ok
     case Some{KV.VColl{KV.CMems{a}}}:
       ok => ok
+    case Some{KV.VColl{KV.CStream{a}}}:
+      ok => ok
     case Some{KV.VStr{a}}:
       ok => ok
 
@@ -20085,6 +20171,8 @@ def counted_mv_of(ms: Maybe<&2, KV.Item<KV.Val>>, same: Bool, md: Maybe<&2, KV.I
       ems => es => emd => ok => ok
     case Some{KV.Item{KV.VColl{KV.CList{l}}, se}} False{} Some{KV.Item{KV.VColl{KV.CZset{a}}, de}}:
       ems => es => emd => ok => ok
+    case Some{KV.Item{KV.VColl{KV.CList{l}}, se}} False{} Some{KV.Item{KV.VColl{KV.CStream{a}}, de}}:
+      ems => es => emd => ok => ok
     case Some{KV.Item{KV.VColl{KV.CList{l}}, se}} False{} Some{KV.Item{KV.VStr{a}, de}}:
       ems => es => emd => ok => ok
     case Some{KV.Item{KV.VColl{KV.CHash{a}}, se}} _ _:
@@ -20092,6 +20180,8 @@ def counted_mv_of(ms: Maybe<&2, KV.Item<KV.Val>>, same: Bool, md: Maybe<&2, KV.I
     case Some{KV.Item{KV.VColl{KV.CMems{a}}, se}} _ _:
       ems => es => emd => ok => ok
     case Some{KV.Item{KV.VColl{KV.CZset{a}}, se}} _ _:
+      ems => es => emd => ok => ok
+    case Some{KV.Item{KV.VColl{KV.CStream{a}}, se}} _ _:
       ems => es => emd => ok => ok
     case Some{KV.Item{KV.VStr{a}, se}} _ _:
       ems => es => emd => ok => ok
