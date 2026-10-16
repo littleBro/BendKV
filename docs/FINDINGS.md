@@ -5948,7 +5948,10 @@ CLIENT CACHING yes, in OPTOUT mode unless after CLIENT CACHING no
 command's key specs (`ro.key`, which `tools/gen_commands.py` writes from Redis's command
 table: the arity, the key specs, and the way COMMAND GETKEYS reads them), as Redis's
 getKeysFromCommand finds them. The arguments are read from the batch's bytes once for
-the batch, when a call first needs its own (`av.if`). EXEC's calls read as any call does.
+the batch, when a call first needs its own (`av.if`), and walked once for the keys
+(`keys.names`): read from their start for each key, as the first build read them, an MGET
+of 20,000 keys by a client that tracks them took 1 to 2 s, and of 50,000 6 to 16 s, where
+one walk takes 0.06 and 0.3 s. EXEC's calls read as any call does.
 CLIENT CACHING's flag is cleared after each command but a CLIENT command, while its
 client is in no MULTI, as Redis's resetClient clears it.
 
@@ -6483,7 +6486,10 @@ command MULTI may not queue, before the rest:
   may read every key;
 - a call refused marks no key used: a restricted client's batch marks each call's key for
   LRU and LFU (OBJECT IDLETIME and FREQ) once the check lets the call through, where other
-  batches mark all their keys before they run.
+  batches mark all their keys before they run;
+- a call's keys are found in one walk of its arguments (`uses.keys`): read from their
+  start for each key, a restricted client's MGET of 20,000 keys took 1 to 2 s, and of
+  50,000 6 to 14 s, where one walk takes 0.06 and 0.25 s.
 
 The keys checked are those of the command's key specs, as in Redis 7.0.15, with the same
 holes: `SORT src STORE BY STORE secret` checks `BY` as STORE's key and writes `secret`;
@@ -6537,20 +6543,21 @@ subcommands Redis does not flag administrative, and no other.
 
 **Tests.** `tests/acl_test.py`: 60 lines of scenarios, as Redis 7.0.15 answers them: a
 user's calls allowed and refused, alone and pipelined behind AUTH, the log (grouped, its
-length, RESET), INFO's counts, MULTI and EXEC (refused at queueing, EXEC refused, the check
-again at EXEC, AUTH inside EXEC, commands queued before an AUTH inside the transaction),
-HELLO's AUTH, RESET, a blocking command refused, subscribers closed by SETUSER (channels
-and patterns), DELUSER (another client's user, the client's own, a client that waits),
-CLIENT LIST and CLIENT KILL USER with its errors, the default user restricted (its plain
-batches checked), SORT's BY and GET, the slow log, and OBJECT IDLETIME and FREQ after
-calls refused and allowed. Then checks of BendKV alone: AUTH and HELLO's AUTH with a
-password of 1 MB answer within a second, and EXEC of 8,000 SETs queued before an AUTH
-inside the transaction within 3 s. `make smoke` checks SHA-256 vectors at the edges of a
-block (0, 1, 55, 56, 63, 64, 119 and 120 bytes) and of a window (2,047 to 2,049 bytes, and
-5,000, also as a string of two chunks).
-The client suites: redis-py's 82 tests of ACL, AUTH and CLIENT KILL that Redis 7.0.15
-passes, in each protocol, and go-redis's 8, pass; the other 10 of redis-py's fail on
-Redis 7.0.15 too, as they test Redis 7.2's (CLIENT SETINFO's log entries, its rule
+length, RESET), INFO's counts, MULTI and EXEC (refused at queueing, EXEC refused, the
+check again at EXEC, AUTH inside EXEC, commands queued before an AUTH inside the
+transaction), HELLO's AUTH, RESET, a blocking command refused, subscribers closed by
+SETUSER (channels and patterns), DELUSER (another client's user, the client's own, a
+client that waits), CLIENT LIST and CLIENT KILL USER with its errors, the default user
+restricted (its plain batches checked), SORT's BY and GET, the slow log, and OBJECT
+IDLETIME and FREQ after calls refused and allowed. Then checks of BendKV alone: AUTH and
+HELLO's AUTH with a password of 1 MB answer within a second, EXEC of 8,000 SETs queued
+before an AUTH inside the transaction within 3 s, and a restricted client's MGET of 50,000
+keys within 1.5 s (`tests/tracking_test.py` checks the same MGET by a client that tracks
+its keys). `make smoke` checks SHA-256 vectors at the edges of a block (0, 1, 55, 56, 63,
+64, 119 and 120 bytes) and of a window (2,047 to 2,049 bytes, and 5,000, also as a string
+of two chunks). The client suites: redis-py's 82 tests of ACL, AUTH and CLIENT KILL that
+Redis 7.0.15 passes, in each protocol, and go-redis's 8, pass; the other 10 of redis-py's
+fail on Redis 7.0.15 too, as they test Redis 7.2's (CLIENT SETINFO's log entries, its rule
 display, its log fields). Redis's own unit/acl and unit/acl-v2 are tagged `external:skip`;
 run in external mode with that tag taken off the blocks that need no server of their own,
 BendKV passes 64 of the 70 tests of unit/acl that Redis passes, and 27 of the 29 of

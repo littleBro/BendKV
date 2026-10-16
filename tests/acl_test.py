@@ -34,7 +34,9 @@ password of 1 MB answer within a second (a SHA-256 linear in the
 password's length; one that was not took a minute), and EXEC of 8,000
 SETs queued before an AUTH inside the transaction restricted its client
 answers within 3 s (each batch's bytes read once for the checks; read
-again for each command, it took 16 s).
+again for each command, it took 26 s), and a restricted client's MGET of
+50,000 keys within 1.5 s (its keys found in one walk of its arguments;
+read from the start for each key, it took 6 to 14 s).
 
     python3 tests/acl_test.py --bendkv 6380 --redis 6390
 """
@@ -326,6 +328,31 @@ def exec_time(port, n):
     return dt, len(arr) if isinstance(arr, list) else arr
 
 
+def mget_time(port, n):
+    """How long a restricted client's MGET of n missing keys took to come
+    back, and how many nulls it got: a call's keys are found in one walk
+    of its arguments."""
+    c = Client(port, db=None)
+    c.cmd("ACL", "SETUSER", "tmget", "on", ">pm", "~*", "+@all", "-debug")
+    x = Client(port, db=None)
+    x.cmd("AUTH", "tmget", "pm")
+    req = enc(["MGET"] + ["mg%d" % i for i in range(n)])
+    x.sock.settimeout(60.0)
+    buf = b""
+    t = time.time()
+    x.raw(req)
+    while buf.count(b"$-1\r\n") < n:
+        data = x.sock.recv(1 << 20)
+        if not data:
+            break
+        buf += data
+    dt = time.time() - t
+    x.close()
+    c.cmd("ACL", "DELUSER", "tmget")
+    c.close()
+    return dt, buf.count(b"$-1\r\n")
+
+
 def cleanup(port):
     """The users and the default user as a fresh server has them, after a
     scenario that failed half way."""
@@ -376,8 +403,12 @@ def main():
     if got != 8001 or dt > 3.0:
         print("FAIL: EXEC of 8,000 SETs after an AUTH inside took %.3f s (at most 3 s), answering %r" % (dt, got))
         sys.exit(1)
-    print("OK: %d lines of ACL scenarios as Redis answers them, AUTH of 1 MB in %.3f s, and EXEC of 8,000 SETs "
-          "checked again in %.3f s" % (len(outs[1]), worst, dt))
+    dm, got = mget_time(args.bendkv, 50000)
+    if got != 50000 or dm > 1.5:
+        print("FAIL: MGET of 50,000 keys from a restricted client took %.3f s (at most 1.5 s), answering %r" % (dm, got))
+        sys.exit(1)
+    print("OK: %d lines of ACL scenarios as Redis answers them, AUTH of 1 MB in %.3f s, EXEC of 8,000 SETs "
+          "checked again in %.3f s, and MGET of 50,000 keys checked in %.3f s" % (len(outs[1]), worst, dt, dm))
 
 
 if __name__ == "__main__":
