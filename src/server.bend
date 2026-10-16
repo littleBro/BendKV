@@ -1936,7 +1936,7 @@ def heed.ok.of(ready: Bool, +n: Nat, +t: Tx, +cs: List<&2, R.Cmd>, +hs: List<&2,
 
 def heed.ok(+cn: S.Conn, +srv: S.Srv, +t: Tx, +cs: List<&2, R.Cmd>, +hs: List<&2, U32>, +pb: Ps) -> Bool:
   +id = S.conn.id(cn)
-  heed.ok.of(Bool.and(S.ready(cn, srv), Bool.not(U.acl.restricted(S.srv.acl(srv), id))), id, t, cs, hs, pb)
+  heed.ok.of(Bool.and(S.ready(cn, srv), Bool.not(S.srv.restricted(srv, id))), id, t, cs, hs, pb)
 
 def ps.heed.stir(+c: R.Cmd, +pb: Ps) -> Bool:
   match pb:
@@ -2774,7 +2774,7 @@ def mem.bits(+srv: S.Srv, +ev: U32) -> U32:
 # them (the gate's class 1: ps.gate), set at once when a client's user
 # changes (bg.user) and after each batch of the general way
 def acl.on(+srv: S.Srv) -> Bool:
-  U.acl.any(S.srv.acl(srv))
+  S.srv.acl.any(srv)
 
 def acl.bit(+srv: S.Srv) -> U32:
   Bool.pick(U32, acl.on(srv), 1048576, 0)
@@ -7018,7 +7018,7 @@ def bg.client(+id: Nat, op: R.ClOp, +argv: Nat, +inb: Nat, +ex: Maybe<&2, Nat>, 
 def bg.acl.on(on: Bool, +id: Nat, +k: Nat, +may: Bool, +srv: S.Srv) -> Bool:
   match on:
     case True{}:
-      Bool.and(may, Bool.and(Bool.not(Nat.is_eq(R.code.class(k), 1n)), U.acl.restricted(S.srv.acl(srv), id)))
+      Bool.and(may, Bool.and(Bool.not(Nat.is_eq(R.code.class(k), 1n)), S.srv.restricted(srv, id)))
     case False{}:
       False{}
 
@@ -7026,7 +7026,7 @@ def bg.acl.on(on: Bool, +id: Nat, +k: Nat, +may: Bool, +srv: S.Srv) -> Bool:
 def bg.acl.check(on: Bool, +id: Nat, +srv: S.Srv, +pb: Ps, +a: Av) -> U.Verdict:
   match on:
     case True{}:
-      U.acl.check(S.srv.acl(srv), ps.user(id, pb), av.now(a))
+      S.srv.acl.check(srv, ps.user(id, pb), av.now(a))
     case False{}:
       U.VOk{}
 
@@ -7043,7 +7043,7 @@ def bg.acl.sort.of(m: Maybe<&2, String>, +c: R.Cmd) -> R.Cmd:
 def bg.acl.sort(on: Bool, +id: Nat, +srv: S.Srv, +pb: Ps, +a: Av, +c: R.Cmd) -> R.Cmd:
   match on:
     case True{}:
-      bg.acl.sort.of(U.acl.sort.err(S.srv.acl(srv), ps.user(id, pb), av.now(a)), c)
+      bg.acl.sort.of(S.srv.acl.sort(srv, ps.user(id, pb), av.now(a)), c)
     case False{}:
       c
 
@@ -7365,14 +7365,14 @@ def bg.x.one(+id: Nat, +back: Chan(Ans), +inb: Nat, +n: Nat, +c: R.Cmd, +k: Nat,
 def bg.x.verdict(on: Bool, +id: Nat, +srv: S.Srv, +pb: Ps, +a: Av) -> U.Verdict:
   match on:
     case True{}:
-      bg.acl.check(U.acl.restricted(S.srv.acl(srv), id), id, srv, pb, a)
+      bg.acl.check(S.srv.restricted(srv, id), id, srv, pb, a)
     case False{}:
       U.VOk{}
 
 def bg.x.sort(on: Bool, +id: Nat, +srv: S.Srv, +pb: Ps, +a: Av, +c: R.Cmd) -> R.Cmd:
   match on:
     case True{}:
-      bg.acl.sort(U.acl.restricted(S.srv.acl(srv), id), id, srv, pb, a, c)
+      bg.acl.sort(S.srv.restricted(srv, id), id, srv, pb, a, c)
     case False{}:
       c
 

@@ -1759,9 +1759,17 @@ def acl.needs.auth(+a: Acl) -> Bool:
 
 # whether a client is authenticated without AUTH: the default user is on
 # and takes any password
+def user.open(+u: User) -> Bool:
+  match u:
+    case User{name, +on, +nopass, pay, pass, sels}:
+      Bool.and(nopass, on)
+
+# (read in place: a getter's result would be shared with the server, and
+# its next change would copy its state; session.bend: mm.open)
 def acl.open(+a: Acl) -> Bool:
-  +d = acl.dflt(a)
-  Bool.and(user.nopass(d), user.on(d))
+  match a:
+    case Acl{+dflt, users, log, gone, rp, key, ctr, rcl}:
+      user.open(dflt)
 
 # whether the default user takes any password, on or off (AUTH with a
 # password alone then refuses)
@@ -1798,7 +1806,9 @@ def rcl.has(+id: Nat, +xs: List<&2, Nat>) -> Bool:
       Bool.or(Nat.is_eq(x, id), rcl.has(id, rest))
 
 def acl.restricted(+a: Acl, +id: Nat) -> Bool:
-  rcl.has(id, acl.rcl(a))
+  match a:
+    case Acl{dflt, users, log, gone, rp, key, ctr, +rcl}:
+      rcl.has(id, rcl)
 
 def rcl.any(+xs: List<&2, Nat>) -> Bool:
   match xs:
@@ -1809,7 +1819,9 @@ def rcl.any(+xs: List<&2, Nat>) -> Bool:
 
 # whether some client is restricted (server.bend: Ps's bit 20)
 def acl.any(+a: Acl) -> Bool:
-  rcl.any(acl.rcl(a))
+  match a:
+    case Acl{dflt, users, log, gone, rp, key, ctr, +rcl}:
+      rcl.any(rcl)
 
 def rcl.keep(same: Bool, +x: Nat, rest: List<&2, Nat>) -> List<&2, Nat>:
   match same:

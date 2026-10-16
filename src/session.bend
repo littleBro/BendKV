@@ -303,6 +303,47 @@ def mm.acl.set(m: Mm, a: U.Acl) -> Mm:
     case MmOf{n}:
       mm.acl.set(n, a)
 
+# The users read in place, for the checks of each batch and call. A
+# function that gives the users back (mm.acl, srv.acl) shares them with
+# the server, and the server's next change then copies its state: the
+# fast way's test that the default user is open cost a batch about 1,700
+# instructions so (PERFORMANCE 70). These go down the fields and give
+# back only what they read.
+def mm.open(+m: Mm) -> Bool:
+  match m:
+    case Mm{rng, max, pol, smp, ten, lfl, lfd, kick, pool, next, debt, +acl}:
+      U.acl.open(acl)
+    case MmOf{+n}:
+      mm.open(n)
+
+def mm.restricted(+m: Mm, +id: Nat) -> Bool:
+  match m:
+    case Mm{rng, max, pol, smp, ten, lfl, lfd, kick, pool, next, debt, +acl}:
+      U.acl.restricted(acl, id)
+    case MmOf{+n}:
+      mm.restricted(n, id)
+
+def mm.acl.any(+m: Mm) -> Bool:
+  match m:
+    case Mm{rng, max, pol, smp, ten, lfl, lfd, kick, pool, next, debt, +acl}:
+      U.acl.any(acl)
+    case MmOf{+n}:
+      mm.acl.any(n)
+
+def mm.acl.check(+m: Mm, +n: String, +argv: List<&2, String>) -> U.Verdict:
+  match m:
+    case Mm{rng, max, pol, smp, ten, lfl, lfd, kick, pool, next, debt, +acl}:
+      U.acl.check(acl, n, argv)
+    case MmOf{+x}:
+      mm.acl.check(x, n, argv)
+
+def mm.acl.sort(+m: Mm, +n: String, +argv: List<&2, String>) -> Maybe<&2, String>:
+  match m:
+    case Mm{rng, max, pol, smp, ten, lfl, lfd, kick, pool, next, debt, +acl}:
+      U.acl.sort.err(acl, n, argv)
+    case MmOf{+x}:
+      mm.acl.sort(x, n, argv)
+
 # Access
 # ------
 # When each key was last used, for OBJECT IDLETIME and FREQ and the
@@ -712,6 +753,34 @@ def srv.acl.set(s: Srv, a: U.Acl) -> Srv:
     case Srv{pass, cfg, info, mm}:
       Srv{pass, cfg, info, mm.acl.set(mm, a)}
 
+# the users read in place (mm.open): whether the default user is open,
+# whether the client of id is restricted, whether some client is, a call
+# of the user of name n checked, and SORT's check of its BY and GET
+def srv.open(+s: Srv) -> Bool:
+  match s:
+    case Srv{pass, cfg, info, +mm}:
+      mm.open(mm)
+
+def srv.restricted(+s: Srv, +id: Nat) -> Bool:
+  match s:
+    case Srv{pass, cfg, info, +mm}:
+      mm.restricted(mm, id)
+
+def srv.acl.any(+s: Srv) -> Bool:
+  match s:
+    case Srv{pass, cfg, info, +mm}:
+      mm.acl.any(mm)
+
+def srv.acl.check(+s: Srv, +n: String, +argv: List<&2, String>) -> U.Verdict:
+  match s:
+    case Srv{pass, cfg, info, +mm}:
+      mm.acl.check(mm, n, argv)
+
+def srv.acl.sort(+s: Srv, +n: String, +argv: List<&2, String>) -> Maybe<&2, String>:
+  match s:
+    case Srv{pass, cfg, info, +mm}:
+      mm.acl.sort(mm, n, argv)
+
 # the client of id now the user of name n, among the restricted clients or
 # not (acl.bend: Restricted clients), and the client of id gone
 def srv.acl.client(s: Srv, +id: Nat, +n: String) -> Srv:
@@ -736,7 +805,7 @@ def srv.acl.cleared(s: Srv) -> Srv:
 # whether the server has no password: its default user is on and takes
 # any password
 def nopass(+s: Srv) -> Bool:
-  U.acl.open(srv.acl(s))
+  srv.open(s)
 
 def authed(+c: Conn, +s: Srv) -> Bool:
   Bool.or(conn.auth(c), nopass(s))
