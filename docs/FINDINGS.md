@@ -7676,6 +7676,20 @@ An idle time is now less a time, read by each server at its own now: two that di
 by less than 2 s count as the same. 28,806 checks at seed 1; seeds 2 to 5 pass too.
 BLOCK where Redis would wait is checked on BendKV alone.
 
+**What it costs** (PERFORMANCE 82). Nothing on GET, SET and INCR. On a stream of 100,000
+entries in 1,000 nodes, XLEN and XPENDING's summary answer as fast as Redis's, the
+ranges and XREAD 2.8 to 6.7 times slower, a whole range 3.9 times. XINFO STREAM counts
+the rax's nodes from the master IDs at each call, where Redis keeps the count, so its
+time grows with the nodes: 3.5 times Redis's on 1 node, 19 times on 100, 100 times on
+1,000.
+
+**What is left.**
+- The count of the rax's nodes kept with the stream, and moved by the writes as they
+  add and remove nodes, as Redis keeps `numnodes`.
+- XREAD that waits (BLOCK), with the writes that serve it.
+- A walk of a node's entries that steps over their bytes without copying them (the
+  ranges from the middle of a node), as section 3zzzu says for RESTORE.
+
 ## 4. Where a request's time goes, and hiding the memory waits
 
 With the eight patches, BendKV ran fewer instructions on GET and SET than Redis, missed

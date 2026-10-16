@@ -295,7 +295,10 @@ translation stays in the trusted base.
   a time past 2^47, ...); the rewrite of the append-only file writes a stream as a
   RESTORE of its payload, where Redis writes XADD, XSETID, XGROUP and XCLAIM; MEMORY
   USAGE estimates otherwise (sections 3zzzu and 3zzzy of
-  [docs/FINDINGS.md](docs/FINDINGS.md)).
+  [docs/FINDINGS.md](docs/FINDINGS.md)); XINFO STREAM takes time with the stream's
+  nodes, as it counts the radix tree's nodes where Redis keeps the count, and the
+  ranges take 3 to 7 times Redis's time (section 82 of
+  [docs/PERFORMANCE.md](docs/PERFORMANCE.md)).
 - **Clients that wait:** BLPOP, BRPOP, BLMOVE, BRPOPLPUSH, BLMPOP, BZPOPMIN, BZPOPMAX
   and BZMPOP, their timeouts (seconds, a double; 0 waits for ever) read as Redis reads
   them, with its errors. A command that finds nothing to pop makes its client wait, and
