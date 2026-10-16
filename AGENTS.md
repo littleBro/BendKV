@@ -103,22 +103,15 @@ Every pull request passes all of these; CI runs the same.
 
 ## Merging
 
-While BendKV is pre-release, several sessions work on it and review each other's
-pull requests.
+While BendKV is pre-release, several sessions work on it at once.
 
-- **Who merges.** A pull request merges into `main` when two things hold:
-  - CI is green on its head;
-  - a session that did not write it has read the whole diff and approved it in a
-    comment on the pull request.
-
-  The author then merges it. All sessions post from the owner's account, so
-  GitHub's own approval is not available.
-- **Pushes after the approval.** The reviewer looks at what a later push adds. A
-  merge of `main` without a conflict needs no new look; after a merge with a
-  conflict, the reviewer looks at the merge commit alone.
+- **Who merges.** A pull request merges into `main` once CI is green on its head
+  and nothing in it waits for the owner (below). Its author merges it. For now,
+  at the owner's word, the sessions do not wait for each other's reviews; a
+  session may still ask another for one. All sessions post from the owner's
+  account, so GitHub's own approval is not available.
 - **When the owner decides.** Some pull requests merge only once the owner has
-  approved them in the pull request. That is a pull request that does any of
-  these:
+  approved them. That is a pull request that does any of these:
   - adds, removes or changes the statement of a law, or changes what
     `proof/SPEC.bend` means (rule 1);
   - skips or loosens a test, adds an entry to `tools/data/clients.json`, edits
@@ -128,5 +121,7 @@ pull requests.
 
   Such a pull request describes that change in a section of its own: for a law,
   its old and new statement; for the baseline, the old and new counts. Its author
-  also asks the owner in the session's own conversation. If you are not sure
+  also asks the owner in the session's own conversation. The owner approves in the
+  pull request, or in that conversation; then the author records the approval in
+  the pull request, in the owner's words, before merging. If you are not sure
   whether a change is one of these, ask the owner.
