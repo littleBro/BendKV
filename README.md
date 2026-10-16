@@ -780,7 +780,7 @@ away.
 | `src/info.bend` | 2,200 |  | no |
 | `src/lolwut.bend` | 470 |  | no |
 | `src/rdb.bend` | 1,500 |  | no |
-| `src/resp.bend` | 880 |  | no |
+| `src/resp.bend` | 980 |  | no |
 | `src/server.bend` | 8,200 |  | no |
 | `src/startup.bend` | 460 |  | no |
 | `proof/LAWS.bend` | 920 | 20 |  |
