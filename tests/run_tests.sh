@@ -65,8 +65,10 @@
 # runs. Last, the RDB file (tests/rdb_test.py): files Redis wrote (with
 # LZF and without) and files of the encodings Redis no longer writes,
 # BendKV and Redis started from each; BendKV's SAVE, Redis started from
-# it; SAVE, LASTSAVE, INFO and the saves of FLUSHALL and SHUTDOWN against
-# Redis's; files that do not load, each stopping both starts.
+# it; files read in windows (values longer than a window, cuts and a
+# wrong checksum past the first one, and the resident memory after the
+# start); SAVE, LASTSAVE, INFO and the saves of FLUSHALL and SHUTDOWN
+# against Redis's; files that do not load, each stopping both starts.
 set -e
 cd "$(dirname "$0")/.."
 PORT=${PORT:-6380}
@@ -134,6 +136,7 @@ for n in "" post send "post build/test.aof everysec"; do
     python3 tests/admin_test.py --bendkv "$PORT" --redis "$REDIS_PORT"
   fi
   python3 tests/auth_test.py --bendkv "$PORT" --redis "$REDIS_PORT"
+  python3 tests/acl_test.py --bendkv "$PORT" --redis "$REDIS_PORT"
   if [ -z "$n" ]; then
     python3 tests/protocol_test.py --bendkv "$PORT" --redis "$REDIS_PORT"
     python3 tests/session_test.py --bendkv "$PORT" --redis "$REDIS_PORT"

@@ -5948,7 +5948,10 @@ CLIENT CACHING yes, in OPTOUT mode unless after CLIENT CACHING no
 command's key specs (`ro.key`, which `tools/gen_commands.py` writes from Redis's command
 table: the arity, the key specs, and the way COMMAND GETKEYS reads them), as Redis's
 getKeysFromCommand finds them. The arguments are read from the batch's bytes once for
-the batch, when a call first needs its own (`av.if`). EXEC's calls read as any call does.
+the batch, when a call first needs its own (`av.if`), and walked once for the keys
+(`keys.names`): read from their start for each key, as the first build read them, an MGET
+of 20,000 keys by a client that tracks them took 1 to 2 s, and of 50,000 6 to 16 s; found
+by dropping from one key to the next, 0.03 and 0.07 s. EXEC's calls read as any call does.
 CLIENT CACHING's flag is cleared after each command but a CLIENT command, while its
 client is in no MULTI, as Redis's resetClient clears it.
 
@@ -6371,11 +6374,10 @@ pass.
   a SHUTDOWN SAVE and another client's FLUSHALL in one group give Redis a file of the
   keys and BendKV an empty one. The databases are values that do not change, so the
   save could take them at SAVE's place in the group; that is left for later.
-- After a SHUTDOWN that saves, the other clients' requests of its group run before the
-  save (above). What they write reaches the append-only file and the RDB file, and they
-  get no reply, where Redis ends inside the SHUTDOWN and runs none of them. Holding them
-  until the save's result is known is issue #84. With Redis's default save points every
-  SHUTDOWN without NOSAVE saves, so this becomes the usual case.
+- After a SHUTDOWN that saves, the other clients' requests of its group ran before the
+  save (above): what they wrote reached the append-only file and the RDB file, and they
+  got no reply, where Redis ends inside the SHUTDOWN and runs none of them. Section
+  3zzzl holds them until the save's result is known (issue #84).
 - After a start from the file, INFO's replication section and ROLE give an offset of 0.
   Redis makes its backlog before it loads (`loadDataFromDisk`) and feeds it a SELECT and
   a DEL for each key whose time had passed, so its `master_repl_offset` counts their
@@ -6429,6 +6431,160 @@ of their own, each in a fresh directory, 124 checks:
 
 `tests/admin_test.py` compares SHUTDOWN SAVE and a save that fails with Redis's;
 `tests/start_test.py` starts both servers on a dump.rdb, which BendKV refused before.
+
+## 3zzzh. ACL: users, what they may run, and the log
+
+**What was left.** ACL was an unknown command. AUTH took the one password, and a client
+was the default user or none. redis-py's tests of ACL, of AUTH with a user and of CLIENT
+KILL USER stopped there (34 in each protocol), and so did 39 of go-redis's.
+
+**The users** (`src/acl.bend`, kept in the session's `Mm`, so that `Srv` stays four words
+and no law's statement changes). A user is Redis 7.0.15's: on or off, its passwords (their
+SHA-256), nopass, its root selector and its other selectors, each with its commands (a bit
+for each command and subcommand, by Redis's ACL ids; categories by Redis's own table, which
+`tools/gen_commands.py` writes from ACL CAT), the first arguments it allows a command it
+does not allow (`+select|0`), its key patterns with what each may do (`%R~`, `%W~`, `~`),
+and its channels.
+
+- ACL SETUSER applies its rules in order to a copy, and the first that fails answers
+  Redis's error for it (`Error in ACL SETUSER modifier '...'`) and changes nothing.
+  Selectors in parentheses are joined first, as Redis joins the arguments. A new user is
+  off, with no password, no command, key or channel (`acl-pubsub-default`).
+- GETUSER, LIST, USERS, WHOAMI, CAT, DELUSER, DRYRUN, GENPASS (from a key the server reads
+  at its start, hashed with a counter, as getRandomHexChars makes them), LOG and HELP
+  answer as Redis's. LOAD and SAVE answer as Redis answers without `aclfile`.
+- A client must authenticate when the default user is off or takes only its passwords.
+  `requirepass` gives the default user its password, when the value changed (Redis applies
+  a parameter only then).
+- AUTH with a user and HELLO's AUTH log a client in as any user that is on and takes the
+  password. A failed one answers WRONGPASS. The parser hashes the password once, as it
+  reads the request (`src/sha.bend`: SHA-256, in time linear in the password's length).
+  The hash is compared with each of the user's in time that does not depend on where they
+  differ, as Redis's `time_independent_strcmp` compares them; a user that is off or
+  nopass compares none. The first build hashed in time quadratic in the length, three
+  times an AUTH: one AUTH of 1 MB, which any client may send before it authenticates,
+  held the server for 63 s (PERFORMANCE.md, section 70).
+
+**The check** (`src/server.bend`: ACL). The server knows each client's user (`Cl`'s `user`:
+default as it connects, set by AUTH and HELLO's AUTH, default again at RESET) and which
+clients are restricted: those whose user may not run every command, read and write every
+key, and use every channel. The session keeps their ids in a trie, with the users by name
+in another (`Acl.ix`), as a client's user changes, as SETUSER changes a user, and as a
+client goes, so that neither a batch nor a call walks a list. A call of a restricted
+client is checked as processCommand checks it, after NOAUTH and after the refusal of a
+command MULTI may not queue, before the rest:
+
+- its command or subcommand, then its keys (by the command's key specs, what each key
+  needs: read, write, or both), then its channels (PUBLISH's, the subscriptions'), against
+  each selector; one that allows it all lets it run;
+- refused, it answers NOPERM with the reason of the selector that got furthest (Redis's
+  order: command, key, channel, then the later argument), counts as a refused call and an
+  error, and in MULTI flags the transaction; EXEC refused aborts it;
+- EXEC checks each command again as it runs it, in case the rules changed since it was
+  queued (or an AUTH before it in the transaction changed the user): one refused then
+  answers `NOPERM ACLs rules changed between the moment the transaction was accumulated
+  and the EXEC call...` and is no call. The arguments of the commands a batch queued are
+  read from its bytes once: read again for each command, an EXEC of 8,000 SETs queued
+  before an AUTH inside the transaction restricted its client took 26 s;
+- SORT with BY of a pattern, or GET, answers Redis's error unless a selector that allows it
+  may read every key;
+- a call refused marks no key used: a restricted client's batch marks each call's key for
+  LRU and LFU (OBJECT IDLETIME and FREQ) once the check lets the call through, where other
+  batches mark all their keys before they run;
+- a call's keys are found in one walk of its arguments (`uses.keys`), by dropping from
+  one key to the next: read from their start for each key, a restricted client's MGET of
+  20,000 keys took 1 to 2 s, and of 50,000 6 to 14 s, where the walk takes 0.04 and
+  0.11 s. It costs such a client's GET some 770 instructions more than the read from the
+  start of its one key did (PERFORMANCE 70).
+
+The keys checked are those of the command's key specs, as in Redis 7.0.15, with the same
+holes: `SORT src STORE BY STORE secret` checks `BY` as STORE's key and writes `secret`;
+`GEORADIUS ... STORE ok1 STORE secret2` checks the first STORE's key, where the command
+writes the last's; `PFMERGE dst` alone checks no key and creates `dst`. Both servers let a
+user that may not write `secret` write it so.
+
+AUTH, HELLO, QUIT and RESET always pass, as Redis's CMD_NO_AUTH commands. A blocking
+command is checked as it comes; a client that waits is served without a check, as in
+Redis. The call's command, arity and key specs are found by its INFO key, which the
+parser found (`acl.of.key`, `K.spec.key`), and the command's name only for a refusal:
+looked up by name in the table of commands, a check cost 464,000 instructions
+(PERFORMANCE.md, section 70).
+
+**The fast way.** While no client is restricted, nothing changes: the default user of a
+fresh server may run everything, and a free user's client is not checked. While some
+client is (Ps's bit 20), a batch of database commands goes to a class of the gate of its
+own: the fast way when its client is not restricted, else the general way, where each call
+is checked. While some client also waits or watches keys, or the tracking has work, the
+batch must also write no heeded key, as in the gate's class 1. The bit is set as soon as a
+client's user changes, so that the rest of a pipeline after AUTH is checked by its new
+user.
+
+**The log.** A call refused, and an AUTH or HELLO AUTH that failed, add an entry to ACL LOG:
+its reason (command, key, channel, auth), its context (toplevel, multi in MULTI and while
+EXEC runs its transaction), what it named (the command's full name, the key, the channel,
+or the command as typed for an AUTH), the user (the user tried, for an AUTH), and the
+client's CLIENT LIST line at that moment (its command is EXEC's while EXEC runs). An event
+like one of the 10 newest, within 60 s, counts in it, as Redis groups them;
+`acllog-max-len` bounds the log.
+
+**The clients.** CLIENT LIST and CLIENT INFO show each client's user. CLIENT KILL USER
+picks a user's clients, and answers `No such user` for a user the server does not keep,
+in Redis's order among the options' errors. ACL DELUSER closes the clients of the users it
+removes, the client itself after its reply (CLIENT_CLOSE_AFTER_COMMAND). ACL SETUSER that
+takes away a channel a user had closes its clients with a subscription it may no longer
+keep (ACLKillPubsubClientsIfNeeded). The slow log keeps SETUSER's arguments from the user
+on redacted, as Redis redacts them; a monitor sees CAT, GENPASS, HELP and WHOAMI, the
+subcommands Redis does not flag administrative, and no other.
+
+**Where BendKV differs.**
+
+- GETUSER and LIST describe a selector's commands in Redis 7.2's form, the rules as they
+  were given (`+@all -@geo`), where 7.0.15 rebuilds them from its bits. 7.0.15's form
+  depends on a hash order that changes with each process and on the whole command table,
+  so it cannot be matched; redis-py's test of GETUSER expects 7.2's.
+- The users come from ACL SETUSER only: a `user` line in the configuration, and
+  `aclfile`, stop the start with a line saying so; LOAD and SAVE answer as without a file.
+- 7.0.15 accepts `%~pattern` and then crashes at the next GETUSER; BendKV refuses it with
+  a syntax error.
+
+**Tests.** `tests/acl_test.py`: 60 lines of scenarios, as Redis 7.0.15 answers them: a
+user's calls allowed and refused, alone and pipelined behind AUTH, the log (grouped, its
+length, RESET), INFO's counts, MULTI and EXEC (refused at queueing, EXEC refused, the
+check again at EXEC, AUTH inside EXEC, commands queued before an AUTH inside the
+transaction), HELLO's AUTH, RESET, a blocking command refused, subscribers closed by
+SETUSER (channels and patterns), DELUSER (another client's user, the client's own, a
+client that waits), CLIENT LIST and CLIENT KILL USER with its errors, the default user
+restricted (its plain batches checked), SORT's BY and GET, the slow log, and OBJECT
+IDLETIME and FREQ after calls refused and allowed. Then checks of BendKV alone: AUTH and
+HELLO's AUTH with a password of 1 MB answer within a second, EXEC of 8,000 SETs queued
+before an AUTH inside the transaction within 3 s, and a restricted client's MGET of 50,000
+keys within 1.5 s (`tests/tracking_test.py` checks the same MGET by a client that tracks
+its keys). `make smoke` checks SHA-256 vectors at the edges of a block (0, 1, 55, 56, 63,
+64, 119 and 120 bytes) and of a window (2,047 to 2,049 bytes, and 5,000, also as a string
+of two chunks). The client suites: redis-py's 82 tests of ACL, AUTH and CLIENT KILL that
+Redis 7.0.15 passes, in each protocol, and go-redis's 8, pass; the other 10 of redis-py's
+fail on Redis 7.0.15 too, as they test Redis 7.2's (CLIENT SETINFO's log entries, its rule
+display, its log fields). Redis's own unit/acl and unit/acl-v2 are tagged `external:skip`;
+run in external mode with that tag taken off the blocks that need no server of their own,
+BendKV passes 64 of the 70 tests of unit/acl that Redis passes, and 27 of the 29 of
+unit/acl-v2. The others use commands BendKV does not have (XADD, XLEN, MIGRATE, SCRIPT,
+EVAL_RO), Lua's entries in the log, or Redis 7.0's description of a selector's commands
+(above); one more fails because the test before it, stopped at SCRIPT, leaves its client
+logged in as a user that may run nothing.
+
+**Found on the way, not changed here.** Redis 7.0 refuses a request of more than 10
+arguments, or with a bulk of more than 16 KB, from a client that must authenticate
+(networking.c, `unauthenticated multibulk length` and `unauthenticated bulk length`), and
+closes it. BendKV has never had these limits: unit/auth's test of them, which runs once
+its `external:skip` tag is taken off, waits for the error until its timeout.
+
+A command inside EXEC that closes its own client (CLIENT KILL of its own id, and now ACL
+DELUSER of its own user) loses EXEC's whole reply, and the commands after it do not run.
+Redis sends the array's header, the replies up to that command, runs the rest with their
+replies dropped (CLIENT_CLOSE_AFTER_REPLY), then closes. It predates this section, through
+CLIENT KILL (issue #101). And a call refused NOAUTH still marks its key used for LRU and
+LFU, as before this section: the batches of a client that must authenticate are marked
+before they run, where only a restricted client's are marked by their calls.
 
 ## 3zzzi. One reading of the heap for INFO and the eviction
 
@@ -6579,6 +6735,13 @@ histogram merged into that run's), and goes last when there is none. Between two
 same: the tick counts the same calls, times and histograms into the entries, in another
 order.
 
+**The newest run's count** (#98). A run packs its count below its command's code
+(`R.run.of`: code × 2^32 + calls), and the tick keeps `cur`, which takes every call of a
+load of one command alone: after 2^32 calls, some 55 minutes of GETs at 1.3 million a
+second, its count carried into its code, and INFO gave those calls to the code of GET's
+refused calls. `cur` is now counted once it holds 2^31 calls (`trun.full`), so that its
+count never carries into its code; a check in `tests/smoke.bend` counts 2^32 + 5 GETs.
+
 **What it gives** (section 71 of [PERFORMANCE.md](PERFORMANCE.md)).
 
 - **Memory.** Under the same load, the heap's account moves by 16 KB at most.
@@ -6592,6 +6755,40 @@ order.
 
 **Tests.** `tests/timing_test.py`, `tests/stats_test.py` and `tests/info_test.py` against
 Redis: commandstats, latencystats, errorstats and the slow log, unchanged.
+
+## 3zzzl. A SHUTDOWN that saves holds the rest of its group
+
+**What failed** (issue #84, found by the review of #72). A SHUTDOWN that saves (SAVE,
+or save points without NOSAVE) asks the shell for its save once the group has run
+(`ps.down` 1), as the save may fail and the server must then go on. So the other
+clients' requests after it in the group ran: what they wrote reached the append-only
+file and the RDB file, and when the save ended well the server stopped without
+answering them. Redis saves and exits within SHUTDOWN (`finishShutdown`), and none of
+them runs. With save points, client A's SHUTDOWN and client B's FLUSHALL in one group
+left BendKV with no key after the restart, with and without the append-only file;
+Redis kept the key. No write that was acknowledged was lost, but the files were not
+Redis's, and with Redis's default save points every SHUTDOWN without NOSAVE saves.
+
+**The change** (`src/server.bend`: The RDB file, The pause). While such a SHUTDOWN
+waits for its save, the commands after it are held back as a pause of every command
+holds them (`down.holds`, next to `pause.holds`): each client waits from its command,
+with the rest of its batch, uncounted. A monitor's command and one the parser refused
+are not held, as a pause holds neither. When the save ends well, the server stops and
+the held clients are never answered, as Redis's. When it fails, SHUTDOWN's client is
+answered Redis's error and goes on, then the held clients go on, in the order they came
+(`grp.saved.down`, on both the path with the append-only file and the one without).
+While a pause holds, they wait for its end instead, as the pause's own clients do: a
+read that Redis would run at once after the failed SHUTDOWN then waits for the pause too.
+
+**Tests.** `tests/rdb_test.py` puts A's SHUTDOWN and B's FLUSHALL in one group with a
+pause (section 3zzzc). With save points, with the append-only file too, and with
+SHUTDOWN SAVE, the restart holds the key on both servers; before the change, all three
+held none on BendKV. With a save that fails, SHUTDOWN answers its error and the FLUSHALL
+then runs and is answered, on both. 132 checks.
+
+**What it cost.** Nothing measurable: the check runs only on a batch the general way
+(`bg.go`). `make perfcheck` gives GET 3,414, SET 4,181 and INCR 4,525 instructions per
+request, against 3,416, 4,177 and 4,518 for the build before the change: within 0.2%.
 
 ## 3zzzm. Small hashes in one string, as a listpack
 
@@ -7137,6 +7334,57 @@ no more at the end than at 3 s. With the fix: 238,325, 238,453 and
 **What it costs.** Nothing on a request's path: the eviction's loop compares one more
 number at each reading of the heap. `make perfcheck`: GET 3,440, SET 4,208 and INCR 4,562
 instructions a request, within 0.3% of the baseline.
+
+## 3zzzt. The start reads its RDB file in windows
+
+**What was left** (issue #107). The RDB file's start (3zzzc) read `dump.rdb` whole into
+one string, then parsed it. The heap gives no memory back to the system, so the server
+kept, for good, the file's bytes and the parse's peak beside the databases it built:
+344.5 MB resident after a start from a file of a million keys of 100 bytes (108.6 MB),
+where the same keys written by commands take 194.6 MB, and Redis 191.3 MB after its start
+(PERFORMANCE 78). A move from Redis goes through this file, and with save points so does
+every restart.
+
+**What changed** (`src/rdb.bend`: Reading the file; `src/server.bend`: The RDB file on
+the disk).
+- **A step that runs out of bytes** no longer ends the load. Each step reads an opcode
+  and what follows it from the bytes left; one that cannot gives back the load as it was
+  before it, `FMore{r, fail}`, to be run again from its start once more bytes are there,
+  with what the load comes to if the file has no more: the short read's lines, or a
+  value's "cut short" ones, as before. The steps of the times and of EOF are given the
+  time and the counts of the load for that, which they used to drop.
+- **The start** reads the file 1 MiB at a time (`rdb.window`). When a step stops for
+  more, the next read is of 1 MiB or of as many bytes as are left, whichever is more: a
+  value longer than a window (a string of 3 MiB, a set of 120,000 members) is read in as
+  many reads as it takes doublings, and parsed once it is whole. What the start holds at
+  once is a window and the databases it builds.
+- **The CRC64** is taken of each window's bytes the load went past, before the next read,
+  and of the last window's up to EOF once the load is done (`file.checked`): the same
+  bytes, so the same verdict and the same lines when it is wrong.
+- `file.load`, the load of a file read whole, stays, built on the same steps.
+
+**What it gives** (PERFORMANCE 78). Resident memory after the start is that of the keys
+written by commands, within 4%: 200.9 MB for the million keys (344.5 before), 79.3 MB for
+300,000 (140.5). The start is faster as well, the file no longer joined from its reads
+and walked whole for its checksum: 1.66 s for the million keys (2.02 s before, Redis
+1.08 s), 0.30 s for 300,000 (0.50 s, Redis 0.34 s).
+
+**Tests.** `tests/rdb_test.py`'s new scenario, of 15 checks:
+- a file Redis wrote of 10.1 MB, with a string of 3 MiB, a list of 60,000 elements, a set
+  of 120,000 members and a hash of 30,000 fields beside 20,000 small keys: both servers
+  start from it with the same databases;
+- the file cut a byte past the first window (inside the long string), cut half way, and
+  cut in its checksum; and a byte of the long string changed, so that only the CRC64
+  tells: both servers exit 1 with the same lines;
+- BendKV alone: 300,000 keys of 100 bytes written by commands, SAVE, a start from the
+  file: resident memory at most 1.3 times what it was. Main's build fails it: 140.5 MB
+  against 76.1 MB.
+
+The other 124 checks pass as before, among them the files of 16.9 MB both ways, which the
+start now reads in 17 windows.
+
+**What it costs.** Nothing on a request's path: `make perfcheck` gives GET 3,491, SET
+4,235 and INCR 4,577 instructions a request, within 1.1% of the baseline.
 
 ## 4. Where a request's time goes, and hiding the memory waits
 

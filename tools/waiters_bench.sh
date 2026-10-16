@@ -11,7 +11,9 @@
 # as in Redis; so should a client that tracks, but one in BCAST mode sends
 # every batch the general way (FINDINGS.md 3zzzb). TEST (get) is the
 # command measured, MODES the idle clients of each run, as mode:count
-# (tools/idle_clients.py's modes; none:0 for none).
+# (tools/idle_clients.py's modes; none:0 for none), RB_FLAGS more flags of
+# the measured run (--user bench -a pw: as the restricted user of mode
+# acluser).
 here=$(cd "$(dirname "$0")" && pwd)
 SERVER=${1:-build/bendkv}
 KEYS=${KEYS:-100000}; N=${N:-200000}; TRIALS=${TRIALS:-2}; PORT=${PORT:-6653}; TEST=${TEST:-get}
@@ -37,7 +39,7 @@ one() { # server mode count
     for i in $(seq 1 100); do grep -q READY "$out" && break; sleep 0.1; done
     rm -f "$out"
   fi
-  rps=$(taskset -c 1 redis-benchmark -p "$PORT" -t "$TEST" -r "$KEYS" -n "$N" -c 20 -P 16 --csv 2>/dev/null | tail -1 | cut -d, -f2 | tr -d '"')
+  rps=$(taskset -c 1 redis-benchmark -p "$PORT" -t "$TEST" -r "$KEYS" -n "$N" -c 20 -P 16 $RB_FLAGS --csv 2>/dev/null | tail -1 | cut -d, -f2 | tr -d '"')
   printf "%-7s %-9s %5s  %12s %s/s\n" "$1" "$2" "$3" "$rps" "$TEST"
   [ -n "$ip" ] && kill "$ip" 2> /dev/null
   kill "$sp"; wait "$sp" 2> /dev/null; sleep 0.3
