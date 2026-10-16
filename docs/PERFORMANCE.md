@@ -7551,11 +7551,11 @@ pipelining 16 deep, 100,000 keys):
 
 | request | the first build | now |
 |---|---:|---:|
-| `EVAL "return 1" 0` | 438,703 | 56,360 |
-| EVALSHA of it | 457,958 | 51,726 |
-| a script that calls GET | 490,836 | 83,105 |
-| a script that calls SET | 512,055 | 99,294 |
-| GET, beside them | 3,438 | 3,465 |
+| `EVAL "return 1" 0` | 438,703 | 56,824 |
+| EVALSHA of it | 457,958 | 52,221 |
+| a script that calls GET | 490,836 | 83,773 |
+| a script that calls SET | 512,055 | 99,871 |
+| GET, beside them | 3,438 | 3,492 |
 
 On main's build (fc28490) the same EVALs are answered with an error, at 500 to 1,250
 instructions, and GET beside them costs 3,466.
@@ -7574,6 +7574,7 @@ with something other than the script. Each step was measured again:
 | main merged in (its timing's runs bounded, section 71); the casts of numbers defined (FINDINGS 3zzzd) | 53,985 |
 | main merged in again, with CLIENT TRACKING and the RDB file; the scripts' state a node of its own; a busy group's answers at its first tick | 61,711 |
 | the scripts' state changed and read in place | 56,360 |
+| main merged in again (afa98a7) | 56,824 |
 
 - *Three walks of the parameter table per script.* Each script read lua-time-limit,
   logfile and loglevel at its start. `config.get_value` walks the table of 180
@@ -7630,21 +7631,23 @@ On the slower machine of the first measurements (one run each), the first build 
 the build before main was merged in at 57,604 and 74,349. One at a time, the network
 takes much of a request's time on either server, and a script that calls a command runs at
 0.53 to 0.60 of Redis's throughput, for its call (What is left, below). Pipelined, the
-actor's instructions bound a script, about 56,000 of them; writing the replies once per
+actor's instructions bound a script, about 57,000 of them; writing the replies once per
 batch spared the connections' threads 19 of 20 writes but not the actor's time.
 
 **`make perfcheck`**: GET 3,438, SET 4,206 and INCR 4,550 instructions per request,
 where main (013d9ac, with the RDB file) gives 3,439, 4,201 and 4,545, all within 1% of
 the baseline; with 100 clients in BLPOP, GET and SET 3.1% and 3.6% above those (main
 3.2% and 3.7%). With the scripts' state changed and read in place, 3,440, 4,207 and
-4,547, and 3.2% and 3.6% with the clients in BLPOP. Before main was merged in again,
-against 998e76f, it was 3,447, 4,207 and 4,548 against 3,443, 4,206 and 4,550; before
-the scripts' state was a node of its own (`ScrOf`: FINDINGS 3zzzd), 3,482, 4,243 and
-4,584. The counts with clients in BLPOP move from one run to the next by up to 2% (3,552
-to 3,621 for one build), more than the others' 0.05%.
+4,547, and 3.2% and 3.6% with the clients in BLPOP; with main merged in again (afa98a7),
+3,472, 4,241 and 4,583, within 0.7% of the baseline, and 3.6% and 3.4%, where main's
+last change gives 3,491, 4,235 and 4,577 (FINDINGS 3zzzt). Before main was merged in
+again, against 998e76f, it was 3,447, 4,207 and 4,548 against 3,443, 4,206 and 4,550;
+before the scripts' state was a node of its own (`ScrOf`: FINDINGS 3zzzd), 3,482, 4,243
+and 4,584. The counts with clients in BLPOP move from one run to the next by up to 2%
+(3,552 to 3,621 for one build), more than the others' 0.05%.
 
-**What is left.** A call of a script costs about 26,700 instructions (83,105 against
-56,360), where Redis's `scriptCall` takes a few thousand. The call runs the general way
+**What is left.** A call of a script costs about 26,900 instructions (83,773 against
+56,824), where Redis's `scriptCall` takes a few thousand. The call runs the general way
 of EXEC's commands: naming, statistics, MONITOR's lines, keyspace events, the keys for
 WATCH, the entry for the file. Its window is timed as any call's (`info.window`, the
 histogram's merge), and its request and reply cross the engine as RESP bytes. The rest
