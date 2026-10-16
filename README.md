@@ -507,7 +507,9 @@ translation stays in the trusted base.
   clock (seconds) or its LFU counter (logarithmic, with `lfu-log-factor`, decayed by
   `lfu-decay-time`), and OBJECT IDLETIME and FREQ answer from it. Where BendKV differs:
   the same maxmemory holds another number of keys, since a key takes other bytes in
-  BendKV's heap (with its share of the trie's nodes) than in Redis's allocator; the uses
+  BendKV's heap (with its share of the trie's nodes) than in Redis's allocator, and
+  about 8% fewer after a rewrite of the append-only file, until they are set again
+  (issue #102); the uses
   are kept in a table of 2^20 words by the key's hash, which keys whose hashes share
   their low 20 bits share, and a request marks its first key alone, before it runs
   (MGET's others are not marked); and evicting many keys at once is about ten times
@@ -816,7 +818,7 @@ away.
 
 | file | lines of code | of them written by a generator | the laws import it |
 |---|---:|---:|---|
-| `src/map.bend` | 2,000 | 640 | yes |
+| `src/map.bend` | 2,400 | 640 | yes |
 | `src/redis.bend` | 16,000 | 6,400 | yes |
 | `src/batch.bend` | 84 |  | yes |
 | `src/aof.bend` | 1,200 |  | yes |

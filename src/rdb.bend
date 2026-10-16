@@ -1349,7 +1349,7 @@ def all.ints(xs: List<&2, String>) -> Bool:
 def val.hash.of(small: Bool, +n: Nat, ps: List<&2, KV.HPair>, t: KV.Trie<String>) -> KV.Val:
   match small:
     case True{}:
-      KV.VColl{KV.CHash{KV.HSmall{n, ps}}}
+      KV.VColl{KV.CHash{KV.hash.of(n, ps)}}
     case False{}:
       KV.VColl{KV.CHash{KV.HBig{n, t}}}
 
@@ -2014,8 +2014,10 @@ def hps.words(ps: List<&2, KV.HPair>) -> List<&2, String>:
 
 def put.hash(h: KV.Hash, rest: String) -> String:
   match h:
-    case KV.HSmall{+n, ps}:
-      put.blob(lp.blob(hps.words(ps), Nat.mul(2n, n)), rest)
+    case KV.HSmall{+n, +b}:
+      put.blob(lp.blob(hps.words(KV.hb.pairs(n, b, 0n)), Nat.mul(2n, n)), rest)
+    case KV.HLong{+n, +ps}:
+      put.blob(lp.blob(hps.words(KV.hl.pairs(ps)), Nat.mul(2n, n)), rest)
     case KV.HBig{+n, +t}:
       len.put(n, put.strs(hps.words(KV.hash.kv(t, KV.keys(String, t, 0n))), rest))
 
@@ -2147,10 +2149,12 @@ def put.body(v: KV.Val, rest: String) -> String:
 # (2), a sorted set in a listpack (17) or in a skiplist (5)
 def put.hash.kind(+h: KV.Hash) -> U32:
   match h:
-    case KV.HSmall{n, ps}:
+    case KV.HSmall{n, b}:
       16
     case KV.HBig{n, t}:
       4
+    case KV.HLong{n, ps}:
+      16
 
 def put.mems.kind(+m: KV.Mems) -> U32:
   match m:
