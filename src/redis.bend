@@ -18985,11 +18985,13 @@ def upd.put(t: KV.Trie<KV.Val>, +k: String, +h: U32, +n: Nat, +x: Nat, now: Nat,
 
 # whether an update of a key whose entry there at now is m takes the key's
 # value out of the keyspace while it changes it: an HSET of pairs to a
-# hash, or an SADD to a set that lacks its first member, which write the
-# collection over for sure (PROOF.bend: takes_over); but not to a small
-# set in pieces (KV.MLong), whose test of the member walks them all. The
-# keyspace holding the collection meanwhile would make the write copy the
-# path it changes in it, and the keyspace drop the old path after.
+# hash, or an SADD to an intset or a trie of members that lacks its first
+# member, which write the collection over for sure (PROOF.bend:
+# takes_over). The keyspace holding the collection meanwhile would make
+# the write copy the path it changes in it, and the keyspace drop the old
+# path after. A small set of strings (KV.MSmall, KV.MLong) is not taken:
+# its write makes its string anew whatever holds it, so the take would
+# save nothing and its test cost a find (FINDINGS.md, section 3zzzs).
 def upd.takes(+op: UpdOp, +m: Maybe<&2, KV.Item<KV.Val>>) -> Bool:
   match op m:
     case UHash{HWSet{Con{p, rest}, mset}} Some{KV.Item{KV.VColl{KV.CHash{h}}, e}}:
@@ -18998,8 +19000,6 @@ def upd.takes(+op: UpdOp, +m: Maybe<&2, KV.Item<KV.Val>>) -> Bool:
       Bool.not(KV.has(Unit, t, x))
     case UMems{SWAdd{Con{+x, rest}}} Some{KV.Item{KV.VColl{KV.CMems{KV.MInts{n, +xs}}}, e}}:
       Bool.not(KV.mems.ints.has(KV.ints.ok(x), x, xs))
-    case UMems{SWAdd{Con{+x, rest}}} Some{KV.Item{KV.VColl{KV.CMems{KV.MSmall{+n, +b}}}, e}}:
-      Bool.not(KV.ms.has(x, b, n))
     case _ _:
       False{}
 

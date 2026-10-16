@@ -5643,12 +5643,12 @@ def le_refl(n: Nat) -> {le(n, n) == True{} : Bool}:
 # An SADD to a set that lacks its first member writes the set over
 # (takes_mems, for takes_over): the members added to a set leave it no
 # smaller (le_add_mem, len_adds_ge), a member it lacks makes it one
-# larger (le_big_new, le_ints_new, le_small_new), and a size one or more
-# larger, less the old size, is not 0 (sub_pos), so SADD adds one or
-# more. An intset that grows into a hashtable (le_grow, le_grow_n) and a
-# small hashtable that grows (le_small_put, le_small_putn, le_long_put)
-# are one larger as a string of members, as pieces of them (le_set,
-# le_set_n) and as a trie alike.
+# larger (le_big_new, le_ints_new), and a size one or more larger, less
+# the old size, is not 0 (sub_pos), so SADD adds one or more. A small set
+# of strings is not taken (R.upd.takes). An intset that grows into a
+# hashtable (le_grow, le_grow_n) and a small set that grows (le_small_put,
+# le_long_put) are one larger as a string of members, as pieces of them
+# (le_set, le_set_n) and as a trie alike.
 def le_set_of(+m: Nat, +n: Nat, -k: Nat, -s: String, rest: List<&2, KV.MPiece>) -> {le(m, n) == True{} : Bool} -> {le(m, KV.mems.len(KV.ml.set.of(1n+n, k, s, rest))) == True{} : Bool}:
   match rest:
     case Nil{}:
@@ -5795,27 +5795,6 @@ def le_ints_new(had: Bool, int: Bool, +n: Nat, +xs: KV.ITree, +y: String) -> {Bo
     case False{} False{}:
       e => le_grow_n(KV.ms.fits(1n+n, y), n, xs, y)
 
-def le_push_n(room: Bool, +n: Nat, -b: String, -y: String) -> {le(1n+n, KV.mems.len(KV.ms.push.of(room, n, b, y, String.length(y)))) == True{} : Bool}:
-  match room:
-    case True{}:
-      le_refl(n)
-    case False{}:
-      le_refl(n)
-
-def le_small_putn(fits: Bool, +n: Nat, +b: String, +y: String) -> {le(1n+n, KV.mems.len(KV.mems.small.put(fits, n, b, y))) == True{} : Bool}:
-  match fits:
-    case True{}:
-      le_push_n(Nat.is_le(Nat.add(String.length(b), Nat.add(1n, String.length(y))), 2048n), n, b, y)
-    case False{}:
-      le_refl(n)
-
-def le_small_new(had: Bool, +n: Nat, +b: String, +y: String) -> {Bool.not(had) == True{} : Bool} -> {le(1n+n, KV.mems.len(KV.mems.small.add(had, n, b, y))) == True{} : Bool}:
-  match had:
-    case True{}:
-      e => Empty.absurd({le(1n+n, KV.mems.len(KV.mems.small.add(True{}, n, b, y))) == True{} : Bool}, false_true(e))
-    case False{}:
-      e => le_small_putn(KV.ms.fits(1n+n, y), n, b, y)
-
 def sub_pos(a: Nat, b: Nat) -> {le(1n+b, a) == True{} : Bool} -> {Nat.is_eq(Nat.sub(a, b), 0n) == False{} : Bool}:
   match a b:
     case 0n _:
@@ -5831,9 +5810,6 @@ def sadd_adds(+x: String, +rest: List<&2, String>, +n: Nat, +t: KV.Trie<Unit>) -
 def sadd_adds_ints(+x: String, +rest: List<&2, String>, +n: Nat, +xs: KV.ITree) -> {Bool.not(KV.mems.ints.has(KV.ints.ok(x), x, xs)) == True{} : Bool} -> {Nat.is_eq(Nat.sub(KV.mems.len(KV.mems.adds(rest, KV.mems.add(KV.MInts{n, xs}, x))), n), 0n) == False{} : Bool}:
   g => sub_pos(KV.mems.len(KV.mems.adds(rest, KV.mems.add(KV.MInts{n, xs}, x))), n)(len_adds_ge(rest, KV.mems.add(KV.MInts{n, xs}, x), 1n+n)(le_ints_new(KV.mems.ints.has(KV.ints.ok(x), x, xs), KV.ints.ok(x), n, xs, x)(g)))
 
-def sadd_adds_small(+x: String, +rest: List<&2, String>, +n: Nat, +b: String) -> {Bool.not(KV.ms.has(x, b, n)) == True{} : Bool} -> {Nat.is_eq(Nat.sub(KV.mems.len(KV.mems.adds(rest, KV.mems.add(KV.MSmall{n, b}, x))), n), 0n) == False{} : Bool}:
-  g => sub_pos(KV.mems.len(KV.mems.adds(rest, KV.mems.add(KV.MSmall{n, b}, x))), n)(len_adds_ge(rest, KV.mems.add(KV.MSmall{n, b}, x), 1n+n)(le_small_new(KV.ms.has(x, b, n), n, b, x)(g)))
-
 def sadd_of_over(b: Bool, +ms: List<&2, String>, -t: KV.Mems, -added: Nat) -> {b == False{} : Bool} -> {ch_over(ch_of(R.sadd.of(b, False{}, ms, t, added))) == True{} : Bool}:
   match b:
     case True{}:
@@ -5847,9 +5823,6 @@ def takes_madd(+x: String, +rest: List<&2, String>, +n: Nat, +t: KV.Trie<Unit>, 
 def takes_madd_ints(+x: String, +rest: List<&2, String>, +n: Nat, +xs: KV.ITree, -e: Nat, +now: Nat) -> {R.upd.takes(R.UMems{R.SWAdd{Con{x, rest}}}, Some{KV.Item{KV.VColl{KV.CMems{KV.MInts{n, xs}}}, e}}) == True{} : Bool} -> {ch_over(ch_of(R.upd.v(R.UMems{R.SWAdd{Con{x, rest}}}, now, Some{KV.Item{KV.VColl{KV.CMems{KV.MInts{n, xs}}}, e}}))) == True{} : Bool}:
   g => sadd_of_over(Nat.is_eq(Nat.sub(KV.mems.len(KV.mems.adds(rest, KV.mems.add(KV.MInts{n, xs}, x))), n), 0n), Con{x, rest}, KV.mems.adds(rest, KV.mems.add(KV.MInts{n, xs}, x)), Nat.sub(KV.mems.len(KV.mems.adds(rest, KV.mems.add(KV.MInts{n, xs}, x))), n))(sadd_adds_ints(x, rest, n, xs)(g))
 
-def takes_madd_small(+x: String, +rest: List<&2, String>, +n: Nat, +b: String, -e: Nat, +now: Nat) -> {R.upd.takes(R.UMems{R.SWAdd{Con{x, rest}}}, Some{KV.Item{KV.VColl{KV.CMems{KV.MSmall{n, b}}}, e}}) == True{} : Bool} -> {ch_over(ch_of(R.upd.v(R.UMems{R.SWAdd{Con{x, rest}}}, now, Some{KV.Item{KV.VColl{KV.CMems{KV.MSmall{n, b}}}, e}}))) == True{} : Bool}:
-  g => sadd_of_over(Nat.is_eq(Nat.sub(KV.mems.len(KV.mems.adds(rest, KV.mems.add(KV.MSmall{n, b}, x))), n), 0n), Con{x, rest}, KV.mems.adds(rest, KV.mems.add(KV.MSmall{n, b}, x)), Nat.sub(KV.mems.len(KV.mems.adds(rest, KV.mems.add(KV.MSmall{n, b}, x))), n))(sadd_adds_small(x, rest, n, b)(g))
-
 def takes_madd_s(s: KV.Mems, -e: Nat, +x: String, +rest: List<&2, String>, +now: Nat) -> {R.upd.takes(R.UMems{R.SWAdd{Con{x, rest}}}, Some{KV.Item{KV.VColl{KV.CMems{s}}, e}}) == True{} : Bool} -> {ch_over(ch_of(R.upd.v(R.UMems{R.SWAdd{Con{x, rest}}}, now, Some{KV.Item{KV.VColl{KV.CMems{s}}, e}}))) == True{} : Bool}:
   match s:
     case KV.MBig{n, t}:
@@ -5857,7 +5830,7 @@ def takes_madd_s(s: KV.Mems, -e: Nat, +x: String, +rest: List<&2, String>, +now:
     case KV.MInts{n, xs}:
       takes_madd_ints(x, rest, n, xs, e, now)
     case KV.MSmall{n, b}:
-      takes_madd_small(x, rest, n, b, e, now)
+      g => Empty.absurd({ch_over(ch_of(R.upd.v(R.UMems{R.SWAdd{Con{x, rest}}}, now, Some{KV.Item{KV.VColl{KV.CMems{KV.MSmall{n, b}}}, e}}))) == True{} : Bool}, false_true(g))
     case KV.MLong{n, ps}:
       g => Empty.absurd({ch_over(ch_of(R.upd.v(R.UMems{R.SWAdd{Con{x, rest}}}, now, Some{KV.Item{KV.VColl{KV.CMems{KV.MLong{n, ps}}}, e}}))) == True{} : Bool}, false_true(g))
 
