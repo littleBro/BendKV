@@ -6294,7 +6294,9 @@ Redis: commandstats, latencystats, errorstats and the slow log, unchanged.
 bytes, an `HP` node of 16, and a buffer of 16 bytes or more for each field or value
 longer than 6 bytes (one of up to 6 lives in the term's word). A value a write had shared
 also kept the reference count it got then, 8 bytes. A pair of a 2-byte field and an
-8-byte value took 56 bytes, where a listpack spends 12.
+8-byte value took 56 bytes, where a listpack spends 14 (Redis's DUMP of `HSET k f0
+v1234567` holds a listpack of 21 bytes, and of 35 with a second such pair) and the string
+below 12.
 
 **What a string is in the runtime** (patches 1, 2, 4 and 8, in `bend2/comp.ts`). The
 design rests on this.
@@ -6310,11 +6312,15 @@ design rests on this.
   that much room. Otherwise it links a's last chunk to b with a new node, or copies a's
   short tail into a new chunk with 256 bytes of room.
 - Nothing joins a chain into one buffer afterwards: the lazy seal of patch 1 is about
-  reference counts, not bytes. A chain reads a chunk at a time: `String.code_at` past its
-  first chunk walks it from the start.
+  reference counts, not bytes. A chain reads a chunk at a time: `String.code_at`,
+  `String.slice` and `String.length` past its first chunk walk it from the start
+  (`str_code_at_far`, `str_slice_far`, `str_len_far`).
+- A buffer holds at most 2,048 bytes: a chunk's start in its buffer has 11 bits. So a
+  string past that is a chain, whatever wrote it.
 
 So a packed hash copies its string into one buffer at each write; left to `++`, a few
-writes would leave it a chain of small chunks.
+writes would leave it a chain of small chunks. And a hash's string holds at most one
+buffer: past it, a read by index would walk the chain (*Past one buffer*, below).
 
 **The change** (`src/map.bend`, Hashes). `HSmall{n, b}`: b holds the pairs one after
 another, in the order they came.
@@ -6329,6 +6335,18 @@ another, in the order they came.
   writes a listpack anew. A hash that passes the limits becomes a trie, as before.
 - `hash.pairs` decodes the string in a walk that keeps no frame a pair, then turns the
   list around.
+- The string holds at most 2,048 bytes (`hb.small`). Past that, the pairs are in pieces
+  (`HLong{n, ps}`, `HPc{k, s}`), each the pairs that fill one buffer, or one pair longer
+  than a buffer (RESTORE keeps those).
+  - A read goes through the pieces in order and finds in one (`hl.get`, `hl.has`); it
+    tells a find from the indices `hb.find` gives, not from the piece's length, which
+    walks a chain.
+  - A write changes one piece. A value set in place copies its piece; a piece it makes
+    longer than a buffer is dealt into pieces again (`hl.fix`). A new pair goes in the
+    last piece while it has room, else in a piece of its own (`hl.set`).
+  - A delete cuts one piece, and a piece it empties goes (`hl.cut`). One piece of no more
+    than a buffer left is a string again (`hl.hash`).
+  - RESTORE deals the pairs into pieces when they pass a buffer (`hash.of`).
 - Outside the section: RESTORE builds the string (`hash.of`, `src/rdb.bend`), DUMP and
   HSCAN decode it (`src/rdb.bend`, `src/redis.bend`), and OBJECT ENCODING reads the
   widest length from it (`src/session.bend`).
@@ -6386,6 +6404,63 @@ field there and HGETALL answer 1.4, 1.5 and 2.1 times the requests a second they
   copy reads and writes more lines than the list's write touched, so HSET of a field
   there misses more.
 
+**Past one buffer** (found in review). The first version kept every small hash in one
+string. Past 2,048 bytes that string is a chain, and each length a lookup read walked it
+from its start, so a find cost the pairs times the chunks. At Redis's own limits (512
+pairs of 64 bytes: 66,560 bytes, 33 chunks) HGET of the last field ran 34 times main's
+instructions, and on a restored listpack of long values 100 to 600 times main's time.
+The pieces read each byte where it lies.
+
+The times of the cases above, and more, are in PERFORMANCE.md, section 73: with the
+pieces, HGET of the last of 512 pairs of 64 bytes takes 17.9 microseconds, where the one
+string took 141.5 and main 11.5.
+
+Instructions a request (callgrind; 100 hashes, 2,000 requests counted after 2,000 more,
+200 of HGETALL and of the one string's restored listpacks; 20 clients at a pipeline depth
+of 16):
+
+| hashes, command | main | one string | pieces |
+|---|---:|---:|---:|
+| 512 pairs of 64-byte fields and values: HGET of the last field | 70,443 | 2,372,557 | 308,852 |
+| the same, HGET of a field not there | 69,894 | 2,370,206 | 308,204 |
+| the same, HSET of a middle field there | 127,535 | 1,479,051 | 316,489 |
+| the same, HGETALL | 1,275,989 | 3,682,435 | 1,469,417 |
+| Redis's listpack of 512 values of 1,000 bytes, restored: HGET of the last field | 58,559 | 65,568,765 | 181,675 |
+| the same, HGET of a field not there | 56,841 | 64,472,020 | 172,641 |
+| the same, HSET of a middle field there | 94,138 | 13,598,199 | 189,231 |
+| the same, HGETALL | 1,720,190 | 49,996,002 | 1,661,369 |
+
+At 512 pairs of 64-byte fields, a find in the pieces runs about 600 instructions a pair,
+4.4 times main's walk, but it reads a few cache lines where main's read a cell, a node and
+a buffer a pair: the time is 1.6 times main's.
+
+The pieces still lose to main in two places.
+- Where every field has one length and one last byte, as in these shapes, each pair
+  passes the test of the last byte and is sliced out to be compared whole. Fields that
+  differ in length or in their last byte skip the slice.
+- A restored value longer than a buffer is read out of its piece's chain, where main kept
+  it as a string of its own.
+
+A first build of the pieces asked each piece's length to tell whether the find had found
+its field. `String.length` walks a chain, so each piece of one long pair cost a walk: 71.8
+microseconds for HGET of a field not there in a restored listpack of 100 values of 70,000
+bytes, 23.5 now. The find is now told from `hb.find`'s indices (`hl.found`).
+
+`used_memory` a key over 2,000 hashes (Redis, main, the one string, the pieces):
+
+| hashes | Redis | main | one string | pieces |
+|---|---:|---:|---:|---:|
+| 512 pairs, fields `f0` to `f511`, values of 64 bytes | 41,066 | 53,600 | 36,460 | 37,789 |
+| 512 pairs of 64-byte fields and values | 82,026 | 90,465 | 67,422 | 71,614 |
+| 128 pairs of 64-byte fields and values | 20,586 | 22,877 | 17,117 | 19,068 |
+
+The pieces cost 4% to 11% more than the one string (a cell and a node a piece, and buffers
+not filled to their end), and stay below Redis. A hash of no more than 2,048 bytes is the
+one string as before, in the same bytes. A write asks its length once more (`hb.small`):
+at 10 pairs, HGET takes 7,473 instructions where the one string took 7,461, HGETALL 27,291
+(27,285), HSET of a field there 14,396 (14,301) and HSET of a new field 16,470 (16,408),
+with the same misses (callgrind as in *What it costs*, on b1e6846 and on the pieces).
+
 **Two traps.**
 
 - *A call that gives `str_eq` a value of its own.* The first version compared a field
@@ -6413,6 +6488,19 @@ listpack of fields and values of 254 to 70,000 bytes, restored from Redis's DUMP
 read, cut and written, answers as Redis does (18 commands), and as the server before
 this change once a write passes the limits (35 commands). `make check`, `make verdict`,
 `make smoke` and `make gencheck` pass.
+
+For the pieces, `tests/hash_test.py` gains:
+- a hash grown past a buffer a field at a time, its values made longer (a piece past a
+  buffer is dealt again) and shorter, its fields taken out from its front, its end and
+  its middle until it is small again, then grown again;
+- Redis's listpacks of 1,000, 3,000 and 70,000-byte values restored on both, read and
+  written;
+- after each, BendKV's DUMP restored in Redis, which must give the hash BendKV holds, in
+  its order;
+- random commands on two hashes of up to 150 and 80 fields, which pass 2,048 bytes and
+  come back below it.
+
+It passes on main's build too.
 
 ## 4. Where a request's time goes, and hiding the memory waits
 

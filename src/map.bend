@@ -1722,15 +1722,17 @@ def hb.del(+b: String, p: Nat & Nat) -> String:
   hb.cut(Nat.is_lt(i, String.length(b)), b, i, vi)
 
 # hb.find's indices, as data a walk reads more than once; whether it
-# found its field in s; the index of the pair; of its value's code
+# found its field (the index of the value's code is past the pair's then,
+# and the same index twice else: no String.length, which walks a chain);
+# the index of the pair; of its value's code
 def hl.at(p: Nat & Nat) -> HAt:
   (i, vi) = p
   HAt{i, vi}
 
-def hl.found(+s: String, q: HAt) -> Bool:
+def hl.found(q: HAt) -> Bool:
   match q:
     case HAt{i, vi}:
-      Nat.is_lt(i, String.length(s))
+      Nat.is_lt(i, vi)
 
 def hl.i(q: HAt) -> Nat:
   match q:
@@ -1815,12 +1817,13 @@ def hl.widest.in(+p: HPiece, +m: Nat) -> Nat:
 def hl.get.in(+f: String, +p: HPiece) -> Maybe<&2, String>:
   match p:
     case HPc{+k, +s}:
-      hb.get(s, hb.find(f, s, k))
+      +q = hl.at(hb.find(f, s, k))
+      hb.get.of(hl.found(q), s, hl.vi(q))
 
 def hl.has.in(+f: String, +p: HPiece) -> Bool:
   match p:
     case HPc{+k, +s}:
-      hb.has(s, hb.find(f, s, k))
+      hl.found(hl.at(hb.find(f, s, k)))
 
 # the pairs of the pieces ps, the last first, before acc
 def hl.pairs.rev(+ps: List<&2, HPiece>, acc: List<&2, HPair>) -> List<&2, HPair>:
@@ -1908,7 +1911,7 @@ def hl.set.go(+f: String, +v: String, rest: List<&2, HPiece>, had: Bool, +k: Nat
       (True{}, hl.fix(k, hb.reset(s, vi, v), Con{HPc{j, r}, more}))
     case Con{HPc{+j, +r}, more} False{}:
       +q = hl.at(hb.find(f, r, j))
-      hl.set.on(k, s, hl.set.go(f, v, more, hl.found(r, q), j, r, hl.vi(q)))
+      hl.set.on(k, s, hl.set.go(f, v, more, hl.found(q), j, r, hl.vi(q)))
 
 # whether f is there, and the pieces ps with f's value set to v: in its
 # place when f is there, else after the last pair
@@ -1918,7 +1921,7 @@ def hl.set(+f: String, +v: String, ps: List<&2, HPiece>) -> Bool & List<&2, HPie
       (False{}, [HPc{1n, hb.set(False{}, "", 0n, f, v)}])
     case Con{HPc{+k, +s}, rest}:
       +q = hl.at(hb.find(f, s, k))
-      hl.set.go(f, v, rest, hl.found(s, q), k, s, hl.vi(q))
+      hl.set.go(f, v, rest, hl.found(q), k, s, hl.vi(q))
 
 # the piece of k pairs s before rest, none when k is 0
 def hl.drop(k: Nat, +s: String, rest: List<&2, HPiece>) -> List<&2, HPiece>:
@@ -1941,7 +1944,7 @@ def hl.cut.go(+f: String, rest: List<&2, HPiece>, had: Bool, +k: Nat, +s: String
       hl.drop(Nat.sub(k, 1n), hb.cut(True{}, s, i, vi), Con{HPc{j, r}, more})
     case Con{HPc{+j, +r}, more} False{}:
       +q = hl.at(hb.find(f, r, j))
-      Con{HPc{k, s}, hl.cut.go(f, more, hl.found(r, q), j, r, hl.i(q), hl.vi(q))}
+      Con{HPc{k, s}, hl.cut.go(f, more, hl.found(q), j, r, hl.i(q), hl.vi(q))}
 
 # the pieces ps with f's pair taken out
 def hl.cut(+f: String, ps: List<&2, HPiece>) -> List<&2, HPiece>:
@@ -1950,7 +1953,7 @@ def hl.cut(+f: String, ps: List<&2, HPiece>) -> List<&2, HPiece>:
       Nil{}
     case Con{HPc{+k, +s}, rest}:
       +q = hl.at(hb.find(f, s, k))
-      hl.cut.go(f, rest, hl.found(s, q), k, s, hl.i(q), hl.vi(q))
+      hl.cut.go(f, rest, hl.found(q), k, s, hl.i(q), hl.vi(q))
 
 # a hash of n pairs whose string is s: small while s fills no more than
 # a buffer, else in pieces

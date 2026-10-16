@@ -7536,9 +7536,37 @@ The medians of the rounds' ratios: against main, 2.4 times less memory a key, an
 HGETALL 2.11 times (2.00 to 2.13). Against Redis, 1.22 times its memory, and 0.96, 0.84
 and 0.70 times its throughput, where main had 0.66, 0.54 and 0.35.
 
-**Instructions** rise all the same (FINDINGS 3zzzm: callgrind per request, 7% to 27%
-more on the hash commands), and last-level misses fall by half or more: the string is a
-few cache lines where the list was two nodes and a buffer a pair.
+**Instructions** rise all the same (FINDINGS 3zzzm: callgrind per request, 6.5% to
+27.6% more on the hash commands), and last-level misses fall by half or more: the string
+is a few cache lines where the list was two nodes and a buffer a pair.
 
 **`make perfcheck`**: GET, SET and INCR unchanged (3,414, 4,177 and 4,522 instructions
 per request, against main's 3,416, 4,178 and 4,522).
+
+**Past one buffer** (FINDINGS 3zzzm). Past 2,048 bytes a small hash's pairs are in pieces
+of one buffer each; the first version kept them in one string, a chain past a buffer, and
+a find walked it from its start for every length it read.
+
+Microseconds a request: one client, each round's requests (2,000, or 200 of HGETALL and
+of the pairs, 50 of the last row's) sent at once over 100 hashes, the median of three
+rounds. Redis 7.0.15, main (fc28490), the one string (b1e6846) and the pieces, in turn on
+the same machine:
+
+| hashes, command | Redis | main | one string | pieces |
+|---|---:|---:|---:|---:|
+| 512 pairs of 64-byte fields and values: HGET of the last field | 10.0 | 11.5 | 141.5 | 17.9 |
+| the same, HGET of a field not there | 8.7 | 10.0 | 148.0 | 16.4 |
+| the same, HSET of a middle field there | 5.5 | 11.9 | 94.2 | 17.1 |
+| the same, HDEL then HSET of the last field (a pair) | 16.6 | 94.1 | 710.7 | 73.4 |
+| the same, DEL then one HSET of the 512 pairs (a pair) | 1,749 | 4,374 | 57,214 | 8,541 |
+| 128 pairs of 64-byte fields and values: HGET of the last field | 3.0 | 2.3 | 16.2 | 5.1 |
+| 512 pairs of 4-byte fields and 8-byte values: HGET of the last field | 4.4 | 8.5 | 21.3 | 7.6 |
+| the same, HSET of a middle field there | 2.5 | 15.9 | 17.6 | 8.0 |
+| Redis's listpack of 512 values of 1,000 bytes, restored: HGET of the last field | 25.8 | 9.8 | 1,384.6 | 29.1 |
+| the same, HGET of a field not there | 22.3 | 8.2 | 1,356.3 | 23.7 |
+| Redis's listpack of 100 values of 70,000 bytes, restored: HGET of a field not there | 18.5 | 4.7 | 3,637.9 | 23.5 |
+| the same, HSET of a middle field there | 10.1 | 3.6 | 3,967.1 | 16.7 |
+
+**`make perfcheck`** with the pieces (dc04a07): GET 3,439, SET 4,200 and INCR 4,544
+instructions per request, against the baseline's 3,452, 4,214 and 4,552; with 100 clients
+in BLPOP, +3.1% and +3.8%.
