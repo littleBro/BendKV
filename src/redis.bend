@@ -16722,15 +16722,23 @@ def sscan.rep(+next: Nat, xs: List<&2, String>, pat: Maybe<&2, String>) -> Reply
 
 # SSCAN: an intset answers all its members at once, with cursor 0, as
 # Redis answers one; a hashtable scans its trie as HSCAN scans a hash's
-# (the options as HSCAN reads them), a small one (KV.Mems) a trie of its
-# members made for the scan, so that it answers the cursors, and the
-# members a call, that a trie of them answers
+# (the options as HSCAN reads them), and a small one (KV.Mems) answers
+# the cursors, and the members a call, that a trie of its members
+# answers (KV.ss.scan, which makes none)
 def sscan.big(sc: KV.Scan, pat: Maybe<&2, String>) -> Reply:
   match sc:
     case KV.Stop{+at, acc}:
       sscan.rep(Bool.pick(Nat, Nat.is_lt(at, 1048576n), at, 0n), List.reverse(&2, String, acc), pat)
     case KV.Scan{w, acc}:
       sscan.rep(0n, List.reverse(&2, String, acc), pat)
+
+# a small set's scan, its members in the order read
+def sscan.small(sc: KV.Scan, pat: Maybe<&2, String>) -> Reply:
+  match sc:
+    case KV.Stop{+at, xs}:
+      sscan.rep(Bool.pick(Nat, Nat.is_lt(at, 1048576n), at, 0n), xs, pat)
+    case KV.Scan{w, xs}:
+      sscan.rep(0n, xs, pat)
 
 def sscan.go(+s: KV.Mems, +cur: Nat, +n: Nat, pat: Maybe<&2, String>) -> Reply:
   match s:
@@ -16739,9 +16747,9 @@ def sscan.go(+s: KV.Mems, +cur: Nat, +n: Nat, pat: Maybe<&2, String>) -> Reply:
     case KV.MBig{m, +t}:
       sscan.big(KV.scan(Unit, t, cur, n, 0n), pat)
     case KV.MSmall{+m, +b}:
-      sscan.big(KV.scan(Unit, KV.ms.trie(m, b, 0n, KV.empty(Unit)), cur, n, 0n), pat)
+      sscan.small(KV.ss.scan(m, b, cur, n), pat)
     case KV.MLong{m, +ps}:
-      sscan.big(KV.scan(Unit, KV.ml.trie(ps, KV.empty(Unit)), cur, n, 0n), pat)
+      sscan.small(KV.ss.scan.ps(ps, cur, n), pat)
 
 def sscan.of(a: ScanArgs, +s: KV.Mems) -> Reply:
   match a:

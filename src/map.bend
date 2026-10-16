@@ -3045,6 +3045,188 @@ def ml.set(+n: Nat, ps: List<&2, MPiece>) -> Mems:
 def ms.make(+n: Nat, xs: List<&2, String>) -> Mems:
   ml.set(n, ml.of(xs))
 
+# A small set's scan (SSCAN) answers what a scan of a trie of its members
+# answers (Scans, above), without the trie: the members of the buckets
+# from the cursor on, the buckets by their indices and a bucket's members
+# in the set's order, each bucket read whole, until want members are
+# read; then Stop with the index of the next bucket, or Scan when the
+# buckets ran out first. A member's bucket is its hash's path (ss.at),
+# the hash read where the member lies (String.hash_at). The scan reads
+# each member as a key, its bucket's index, then where it lies (its
+# piece's rank, the index of its code there), so that the keys sort in
+# the scan's order: the want lowest of those from the cursor on end in
+# the last bucket the scan reads, and the keys after them in that bucket
+# join them (ss.pick). A key is below 2^44.
+
+# the index of the bucket of the hash h (hex, shr4): h's five lowest hex
+# digits, the lowest the highest digit of the index
+def ss.at(+h: U32) -> Nat:
+  +a = U32.shln(U32.and(h, 15), 16n)
+  +b = U32.shln(U32.and(U32.shrn(h, 4n), 15), 12n)
+  +c = U32.shln(U32.and(U32.shrn(h, 8n), 15), 8n)
+  +d = U32.shln(U32.and(U32.shrn(h, 12n), 15), 4n)
+  +e = U32.and(U32.shrn(h, 16n), 15)
+  U32.to_nat(U32.or(U32.or(U32.or(a, b), U32.or(c, d)), e))
+
+# x before acc when ok
+def ss.put(ok: Bool, +x: Nat, acc: List<&2, Nat>) -> List<&2, Nat>:
+  match ok:
+    case True{}:
+      x <> acc
+    case False{}:
+      acc
+
+# the keys of the k members from index i of s (the piece of rank p) on
+# whose bucket is from or past it, the last first, before acc
+def ss.keys(k: Nat, +s: String, +i: Nat, +p: Nat, +from: Nat, acc: List<&2, Nat>) -> List<&2, Nat>:
+  match k:
+    case 0n:
+      acc
+    case 1n+j:
+      +n = hb.byte(s, i)
+      +at = ss.at(String.hash_at(s, Nat.add(i, 1n), n))
+      +x = Nat.add(Nat.mul(at, 16777216n), Nat.add(Nat.mul(p, 2048n), i))
+      ss.keys(j, s, Nat.add(i, Nat.add(1n, n)), p, from, ss.put(Nat.is_le(from, at), x, acc))
+
+def ss.keys.in(+q: MPiece, +p: Nat, +from: Nat, acc: List<&2, Nat>) -> List<&2, Nat>:
+  match q:
+    case MPc{+k, +s}:
+      ss.keys(k, s, 0n, p, from, acc)
+
+# the keys of the pieces ps (the first of rank p) from the bucket from on
+def ss.keys.ps(+ps: List<&2, MPiece>, +p: Nat, +from: Nat, acc: List<&2, Nat>) -> List<&2, Nat>:
+  match ps:
+    case Nil{}:
+      acc
+    case Con{+q, +rest}:
+      ss.keys.ps(rest, Nat.add(p, 1n), from, ss.keys.in(q, p, from, acc))
+
+# whether the first of xs is above x
+def ss.gt(+xs: List<&2, Nat>, +x: Nat) -> Bool:
+  match xs:
+    case Con{+y, +rest}:
+      Nat.is_lt(x, y)
+    case Nil{}:
+      False{}
+
+def ss.first(+xs: List<&2, Nat>) -> Nat:
+  match xs:
+    case Con{+x, +rest}:
+      x
+    case Nil{}:
+      0n
+
+# the keys xs (the highest first) with x; gt: the first of xs is above x
+def ss.ins(+x: Nat, xs: List<&2, Nat>, gt: Bool) -> List<&2, Nat>:
+  match xs gt:
+    case Con{y, +rest} True{}:
+      y <> ss.ins(x, rest, ss.gt(rest, x))
+    case other _:
+      x <> other
+
+# the keys top (the highest first) with x while they are fewer than the
+# scan wants (full False), else with x for the highest when x is below
+# it (low)
+def ss.keep(full: Bool, low: Bool, +x: Nat, top: List<&2, Nat>) -> List<&2, Nat>:
+  match full low top:
+    case False{} lo t:
+      ss.ins(x, t, lo)
+    case True{} True{} Con{y, +rest}:
+      ss.ins(x, rest, ss.gt(rest, x))
+    case True{} _ t:
+      t
+
+# the want lowest of the keys xs and top (the s lowest so far, the
+# highest first)
+def ss.top(xs: List<&2, Nat>, +top: List<&2, Nat>, +s: Nat, +want: Nat) -> List<&2, Nat>:
+  match xs:
+    case Nil{}:
+      top
+    case Con{+x, rest}:
+      ss.top(rest, ss.keep(Nat.is_le(want, s), ss.gt(top, x), x, top), Nat.min(Nat.add(s, 1n), want), want)
+
+def ss.tie(ok: Bool, +x: Nat, +top: List<&2, Nat>) -> List<&2, Nat>:
+  match ok:
+    case True{}:
+      ss.ins(x, top, ss.gt(top, x))
+    case False{}:
+      top
+
+# top with the keys of xs above lo and below hi
+def ss.ties(xs: List<&2, Nat>, +lo: Nat, +hi: Nat, top: List<&2, Nat>) -> List<&2, Nat>:
+  match xs:
+    case Nil{}:
+      top
+    case Con{+x, rest}:
+      ss.ties(rest, lo, hi, ss.tie(Bool.and(Nat.is_lt(lo, x), Nat.is_lt(x, hi)), x, top))
+
+# the keys a scan reads of the keys ks, the highest first: the want
+# lowest, and the others of the last one's bucket
+def ss.pick(+ks: List<&2, Nat>, +want: Nat) -> List<&2, Nat>:
+  +top = ss.top(ks, Nil{}, 0n, want)
+  +t = ss.first(top)
+  ss.ties(ks, t, Nat.mul(Nat.add(Nat.div(t, 16777216n), 1n), 16777216n), top)
+
+# the members of the keys xs (the highest first) of the string s, the
+# lowest first, before acc
+def ss.mems(xs: List<&2, Nat>, +s: String, acc: List<&2, String>) -> List<&2, String>:
+  match xs:
+    case Nil{}:
+      acc
+    case Con{+x, rest}:
+      +i = Nat.mod(x, 2048n)
+      ss.mems(rest, s, String.slice(s, Nat.add(i, 1n), hb.byte(s, i)) <> acc)
+
+def ss.mem.in(+q: MPiece, +i: Nat) -> String:
+  match q:
+    case MPc{+k, +s}:
+      String.slice(s, Nat.add(i, 1n), hb.byte(s, i))
+
+# the member whose code is at index i of the piece of rank p of ps
+def ss.mem(+ps: List<&2, MPiece>, p: Nat, +i: Nat) -> String:
+  match ps p:
+    case Con{+q, +rest} 0n:
+      ss.mem.in(q, i)
+    case Con{+q, +rest} 1n+r:
+      ss.mem(rest, r, i)
+    case Nil{} _:
+      ""
+
+# the members of the keys xs (the highest first) of the pieces ps, the
+# lowest first, before acc
+def ss.mems.ps(xs: List<&2, Nat>, +ps: List<&2, MPiece>, acc: List<&2, String>) -> List<&2, String>:
+  match xs:
+    case Nil{}:
+      acc
+    case Con{+x, rest}:
+      ss.mems.ps(rest, ps, ss.mem(ps, Nat.mod(Nat.div(x, 2048n), 8192n), Nat.mod(x, 2048n)) <> acc)
+
+# the scan's end: Stop at the bucket after the last one read (that of the
+# key t) when want members were read of the c from the cursor on, else
+# Scan
+def ss.end(full: Bool, +t: Nat, +want: Nat, +c: Nat, xs: List<&2, String>) -> Scan:
+  match full:
+    case True{}:
+      Stop{Nat.add(Nat.div(t, 16777216n), 1n), xs}
+    case False{}:
+      Scan{Nat.sub(want, c), xs}
+
+# a scan of the small set of k members b from the bucket from on, until
+# want members are read: a trie of them scanned (scan), its members in
+# the order read
+def ss.scan(+k: Nat, +b: String, +from: Nat, +want: Nat) -> Scan:
+  +ks = ss.keys(k, b, 0n, 0n, from, Nil{})
+  +c = List.length(&2, Nat, ks)
+  +xs = ss.pick(ks, want)
+  ss.end(Nat.is_le(want, c), ss.first(xs), want, c, ss.mems(xs, b, Nil{}))
+
+# the same of the pieces ps
+def ss.scan.ps(+ps: List<&2, MPiece>, +from: Nat, +want: Nat) -> Scan:
+  +ks = ss.keys.ps(ps, 0n, from, Nil{})
+  +c = List.length(&2, Nat, ks)
+  +xs = ss.pick(ks, want)
+  ss.end(Nat.is_le(want, c), ss.first(xs), want, c, ss.mems.ps(xs, ps, Nil{}))
+
 def mems.empty() -> Mems:
   MInts{0n, ITip{}}
 
