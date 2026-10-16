@@ -7590,29 +7590,35 @@ OK, or a value with GET, and none for a SET that NX or XX refused. Only a batch 
 code that takes a weight (MSET, HSET, a push, a STORE, ...) reads anything before it
 runs.
 
-**Measured** (`make perfcheck`, instructions per request; #72 at 32b0cc1, the branch this
-one starts from, built here and counted in turn with this one):
+**Measured** (`make perfcheck`, instructions per request; main at 013d9ac, where this
+branch starts (#72 at 41c987d, with CLIENT TRACKING), built here and counted in turn with
+this change, twice each):
 
 | | GET | SET | INCR |
 |---|---:|---:|---:|
-| before | 3,415 | 4,177 | 4,521 |
-| with background saves | 3,434 (+0.6%) | 4,222 (+1.1%) | 4,539 (+0.4%) |
+| before | 3,439 | 4,204 | 4,548 |
+| with background saves | 3,455 (+0.5%) | 4,250 (+1.1%) | 4,563 (+0.3%) |
 
-With 100 clients in BLPOP, GET 3,538 and SET 4,367, 3.0% and 3.4% above the counts without
-them (before: 3.0% and 3.4%). The base counted the same in three runs (within 2
-instructions), and this change the same in two runs and in `tools/callgrind_req.sh`
-(3,432, 4,228 and 4,540), but for the GET of one run: 3,502, with 1.99 last-level misses
-and 4.00 prefetches where every other run had 2.81 and 3.68. Another job's load on the
-machine had changed how the requests came in batches, and `make perfcheck` failed that
-run on its misses and prefetches.
+The second runs counted 3,436, 4,204 and 4,544 before, and 3,454, 4,248 and 4,565 with
+this change. With 100 clients in BLPOP, GET 3,567 and SET 4,405, 3.2% and 3.6% above the
+counts without them (before: 3.2% and 3.6%).
 
-Where the 17, 50 and 20 instructions go (`tools/callgrind_req.sh`, each function's own
-instructions against the base's): `fast.run` 6 to 7 for each (the checks of the batch's
-rule before it runs, and the flags it keeps across the run), the functions compiled
-inline 6 for GET and 8 for INCR (the count by the rule, and the count passed into
-`Info`), and 34 for SET, whose replies are walked; the rest in reference counts.
+Before the merge of CLIENT TRACKING, against #72 at 32b0cc1 (3,415, 4,177 and 4,521 in
+three runs, within 2 instructions), this change counted 3,434, 4,222 and 4,539, the
+same in another run and in `tools/callgrind_req.sh` (3,432, 4,228 and 4,540), but for
+the GET of one run: 3,502, with 1.99 last-level misses and 4.00 prefetches where every
+other run had 2.81 and 3.68. Another job's load on the machine had changed how the
+requests came in batches, and `make perfcheck` failed that run on its misses and
+prefetches.
 
-**On the way.**
+Where the 17, 50 and 20 instructions go (`tools/callgrind_req.sh` against 32b0cc1, each
+function's own instructions against the base's): `fast.run` 6 to 7 for each (the checks
+of the batch's rule before it runs, and the flags it keeps across the run), the
+functions compiled inline 6 for GET and 8 for INCR (the count by the rule, and the count
+passed into `Info`), and 34 for SET, whose replies are walked; the rest in reference
+counts.
+
+**On the way** (against #72's heads of the time).
 
 - *The first build* took 3,579, 4,404 and 4,735 instructions (161, 228 and 212 more than
   its base then, 3,418, 4,176 and 4,523): `make perfcheck` failed. Its cron read `save`

@@ -590,16 +590,18 @@ translation stays in the trusted base.
   FLUSHALL ignore `rdb-key-save-delay`; no LZF written; no IDLE or FREQ written, and
   those read set no word of use; SAVE's client waits through the rest of its group, so
   that the others in it see it blocked, the commands after SAVE in its pipeline run in a
-  group of their own, the file holds the databases as the group left them, and SAVE's
-  call time leaves the save out; after a start from the file, INFO's replication section
-  and ROLE give an offset of 0, where Redis counts into `master_repl_offset` a DEL for
-  each key whose time had passed, and keeps the file's `repl-id` and `repl-offset` as
-  its `master_replid2` and offset, which its next save writes again (BendKV drops them);
-  the log of a file that does not load gives the byte where the reading failed, where
-  Redis gives what it had read at its last report of progress, and leaves out Redis's
-  `function at rdb.c:N`; the start reads the whole file before it loads it, and takes
-  several times Redis's time (PERFORMANCE.md, sections 67 and 72; FINDINGS.md, sections
-  3zzzc and 3zzzk).
+  group of their own (a client in BCAST tracking mode gets the keys they change in an
+  invalidation push after the one of the keys changed before SAVE, where Redis sends
+  one; BGSAVE splits nothing), the file holds the databases as the group left them, and
+  SAVE's call time leaves the save out; after a start from the file, INFO's replication
+  section and ROLE give an offset of 0, where Redis counts into `master_repl_offset` a
+  DEL for each key whose time had passed, and keeps the file's `repl-id` and
+  `repl-offset` as its `master_replid2` and offset, which its next save writes again
+  (BendKV drops them); the log of a file that does not load gives the byte where the
+  reading failed, where Redis gives what it had read at its last report of progress, and
+  leaves out Redis's `function at rdb.c:N`; the start reads the whole file before it
+  loads it, and takes several times Redis's time (PERFORMANCE.md, sections 67 and 72;
+  FINDINGS.md, sections 3zzzc and 3zzzk).
 
 Not yet: streams, Lua
 scripts, CONFIG REWRITE (it answers as Redis does without a configuration file).

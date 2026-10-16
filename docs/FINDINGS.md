@@ -6313,8 +6313,9 @@ left aside, as Redis's `loadDataFromDisk` leaves it. The start no longer refuses
 - `Info`, of 63 words, would have been past 64 with the account's fields in it, and a
   node past 64 words is copied whole at every update (section 3zzz). The account is a
   node of its own (`Rdb`, with a constructor that holds its own type and is never built,
-  as `Tim` and `TRun` are), a word of `Info`, which is 64 words now: the next field it
-  takes must be a node's word too, or come out of it.
+  as `Tim` and `TRun` are), a word of `Info`, which is 64 words now (63 since #66 made
+  `Live`'s two counts of waiting clients one node, `Cn`): the next field it takes must
+  be a node's word too, or come out of it.
 
 **What it costs** (PERFORMANCE.md, section 67, which has the times and sizes against
 Redis's). A file of BendKV's is the size of Redis's when LZF gains nothing. SAVE takes
@@ -6361,11 +6362,15 @@ pass.
 - SAVE splits its own pipeline: the commands after it run in a group of their own, after
   the save, so another client's command can come between them (a WATCH before SAVE and
   an EXEC after it can see a key another client wrote), which Redis's SAVE cannot let
-  happen.
+  happen; and a client in BCAST tracking mode gets the keys the pipeline changes before
+  SAVE and those it changes after in two invalidation pushes, where Redis sends one.
+  BGSAVE splits nothing: it answers at once, and its save runs between groups (section
+  3zzzk).
 - The file holds the databases as the group left them, not as they were at SAVE (above):
   a SHUTDOWN SAVE and another client's FLUSHALL in one group give Redis a file of the
   keys and BendKV an empty one. The databases are values that do not change, so the
-  save could take them at SAVE's place in the group; that is left for later.
+  save could take them at SAVE's place in the group; that is left for later (BGSAVE
+  takes its snapshot so: section 3zzzk).
 - After a SHUTDOWN that saves, the other clients' requests of its group run before the
   save (above). What they write reaches the append-only file and the RDB file, and they
   get no reply, where Redis ends inside the SHUTDOWN and runs none of them. Holding them
@@ -6622,7 +6627,8 @@ MULTI, and BendKV's matches it but where listed below.
   save that ends well takes away the count when it started (`dirty_before_bgsave`).
 - The count lives in `Info`'s account of the RDB file (`Rdb`), added once a batch with
   the other counts of a batch (`I.info.ran.d`), so it costs no rebuild of `Info` of its
-  own. It stops at 2^47 (four years of a million writes a second with no save that ends
+  own; the background saves' account is a node of `Rdb`'s (`Bgs`), and `Info` stays 63
+  words. It stops at 2^47 (four years of a million writes a second with no save that ends
   well), as a Nat past 2^48 stops the process.
 
 **BGSAVE** (`src/server.bend`: Background saves). BGSAVE takes a snapshot of the

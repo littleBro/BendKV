@@ -1838,10 +1838,12 @@ def bgs.cleaned(b: Bgs, +d: Nat) -> Bgs:
 # server stops (the shell saves once the group has run), whether a SAVE
 # owes one, the count of changes since the last save (Redis's
 # server.dirty: rdb_changes_since_last_save; server.bend, The count of
-# changes), and the background saves (Bgs). IRdbOf,
-# a record that holds a record, is never built: it makes Rdb a node of its
-# own, a word in Info, which is 64 words with it (a wider node is copied
-# whole at every update: section 3zzz of FINDINGS.md)
+# changes), and the background saves (Bgs, a node of its own in Rdb).
+# IRdbOf, a record that holds a record, is never built: it makes Rdb a
+# node of its own, a word in Info, which is 63 words (since #66 took
+# Live's blk and tmo into one word, Cn; the background saves left it so),
+# where a node wider than 64 words is copied whole at every update
+# (section 3zzz of FINDINGS.md)
 type Rdb is Data:
   IRdb{last: Nat, saves: Nat, ok: Bool, loaded: Nat, expired: Nat, flush: Bool, shut: Bool, owed: Bool, dirty: Nat, bg: Bgs, pts: List<&2, Nat>, stop: Bool}
   IRdbOf{r: Rdb}
