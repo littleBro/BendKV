@@ -1572,12 +1572,15 @@ static void sc_ensure(void) {
 // -------------------------
 
 // sdssplitargs: a line split into arguments as a REPL splits them, with
-// "..." and '...' and their escapes; NULL on unbalanced quotes
-static char** sc_split(const char* line, int* argc) {
+// "..." and '...' and their escapes; NULL on unbalanced quotes. Each one
+// ends with a NUL; with lens, *lens holds their lengths, which count the
+// bytes after a NUL that an escape put in one ("\x00")
+static char** sc_split(const char* line, int* argc, size_t** lens) {
   const char* p = line;
   ScBuf current = { 0 };
   int have = 0;
   char** vector = NULL;
+  size_t* lv = NULL;
   *argc = 0;
   for (;;) {
     while (*p && isspace((unsigned char)*p)) p++;
@@ -1648,17 +1651,27 @@ static char** sc_split(const char* line, int* argc) {
         if (*p) p++;
       }
       vector = io_mem(realloc(vector, ((size_t)*argc + 1) * sizeof(char*)));
-      vector[*argc] = sc_strdup(current.p);
+      lv = io_mem(realloc(lv, ((size_t)*argc + 1) * sizeof(size_t)));
+      vector[*argc] = io_mem(malloc(current.n + 1));
+      memcpy(vector[*argc], current.p, current.n);
+      vector[*argc][current.n] = '\0';
+      lv[*argc] = current.n;
       (*argc)++;
     } else {
       free(current.p);
       if (vector == NULL) vector = io_mem(malloc(sizeof(void*)));
+      if (lens != NULL) {
+        *lens = lv;
+      } else {
+        free(lv);
+      }
       return vector;
     }
   }
 err:
   while ((*argc)--) free(vector[*argc]);
   free(vector);
+  free(lv);
   if (have) free(current.p);
   *argc = 0;
   return NULL;
@@ -1691,7 +1704,7 @@ static int sc_shebang_flags(const char* body, size_t len, uint32_t* out_flags,
   size_t shebang_len = 0;
   uint32_t flags = SC_FLAG_EVAL_COMPAT_MODE;
   if (len >= 2 && strncmp(body, "#!", 2) == 0) {
-    const char* end = memchr(body, '\n', len);
+    const char* end = memchr(body, '\n', strnlen(body, len));
     if (end == NULL) {
       sc_buf_str(err, "Invalid script shebang");
       return 0;
@@ -1701,7 +1714,7 @@ static int sc_shebang_flags(const char* body, size_t len, uint32_t* out_flags,
     memcpy(shebang, body, shebang_len);
     shebang[shebang_len] = '\0';
     int numparts;
-    char** parts = sc_split(shebang, &numparts);
+    char** parts = sc_split(shebang, &numparts, NULL);
     free(shebang);
     if (parts == NULL || numparts == 0) {
       sc_buf_str(err, "Invalid engine in script shebang");
@@ -2110,20 +2123,26 @@ static int fn_read_flags(lua_State* L, uint32_t* out) {
   return 1;
 }
 
-static char* fn_lua_string(lua_State* L, int index) {
+// a Lua string as bytes (luaGetStringSds), its length in len; NULL for
+// a value that is no string
+static char* fn_lua_string(lua_State* L, int index, size_t* len) {
   if (!lua_isstring(L, index)) {
     return NULL;
   }
-  size_t len;
-  const char* str = lua_tolstring(L, index, &len);
-  char* out = io_mem(malloc(len + 1));
-  memcpy(out, str, len);
-  out[len] = '\0';
+  size_t n;
+  const char* str = lua_tolstring(L, index, &n);
+  char* out = io_mem(malloc(n + 1));
+  memcpy(out, str, n);
+  out[n] = '\0';
+  if (len != NULL) {
+    *len = n;
+  }
   return out;
 }
 
 typedef struct {
   char* name;
+  size_t name_len;     // its bytes, a NUL among them (functionsVerifyName)
   char* desc;
   int ref;             // LUA_NOREF for none
   uint32_t flags;
@@ -2153,12 +2172,12 @@ static const char* fn_read_named(lua_State* L, FnArgs* a) {
     const char* key = lua_tostring(L, -2);
     if (!strcasecmp(key, "function_name")) {
       free(a->name);
-      if (!(a->name = fn_lua_string(L, -1))) {
+      if (!(a->name = fn_lua_string(L, -1, &a->name_len))) {
         return "function_name argument given to redis.register_function must be a string";
       }
     } else if (!strcasecmp(key, "description")) {
       free(a->desc);
-      if (!(a->desc = fn_lua_string(L, -1))) {
+      if (!(a->desc = fn_lua_string(L, -1, NULL))) {
         return "description argument given to redis.register_function must be a string";
       }
     } else if (!strcasecmp(key, "callback")) {
@@ -2191,7 +2210,7 @@ static const char* fn_read_named(lua_State* L, FnArgs* a) {
 
 // luaRegisterFunctionReadPositionalArgs: redis.register_function(name, f)
 static const char* fn_read_positional(lua_State* L, FnArgs* a) {
-  if (!(a->name = fn_lua_string(L, 1))) {
+  if (!(a->name = fn_lua_string(L, 1, &a->name_len))) {
     return "first argument to redis.register_function must be a string";
   }
   if (!lua_isfunction(L, 2)) {
@@ -2208,7 +2227,7 @@ static int fn_register(lua_State* L) {
     sc_push_error(L, "redis.register_function can only be called on FUNCTION LOAD command");
     return lua_error(L);
   }
-  FnArgs a = { NULL, NULL, LUA_NOREF, 0 };
+  FnArgs a = { NULL, 0, NULL, LUA_NOREF, 0 };
   int argc = lua_gettop(L);
   const char* err = NULL;
   if (argc < 1 || argc > 2) {
@@ -2218,7 +2237,7 @@ static int fn_register(lua_State* L) {
   } else {
     err = fn_read_positional(L, &a);
   }
-  if (err == NULL && !fn_name_ok(a.name, strlen(a.name))) {
+  if (err == NULL && !fn_name_ok(a.name, a.name_len)) {
     err = "Library names can only contain letters, numbers, or underscores(_) and must be at least one character long";
   }
   if (err == NULL) {
@@ -2383,7 +2402,7 @@ static int fn_create(const char* code, size_t n, int replace, FnCtx* ctx, int ti
     sc_buf_str(err, "Missing library metadata");
     return 0;
   }
-  const char* end = memchr(code, '\n', n);
+  const char* end = memchr(code, '\n', strnlen(code, n));
   if (end == NULL) {
     sc_buf_str(err, "Invalid library metadata");
     return 0;
@@ -2393,14 +2412,17 @@ static int fn_create(const char* code, size_t n, int replace, FnCtx* ctx, int ti
   memcpy(shebang, code, shebang_len);
   shebang[shebang_len] = '\0';
   int numparts = 0;
-  char** parts = sc_split(shebang, &numparts);
+  size_t* lens = NULL;
+  char** parts = sc_split(shebang, &numparts, &lens);
   free(shebang);
   if (parts == NULL || numparts == 0) {
     sc_buf_str(err, "Invalid library metadata");
     sc_split_free(parts, numparts);
+    free(lens);
     return 0;
   }
   char* name = NULL;
+  size_t name_len = 0;
   int ok = 0;
   for (int i = 1; i < numparts; i += 1) {
     if (strncasecmp(parts[i], "name=", 5) == 0) {
@@ -2409,6 +2431,7 @@ static int fn_create(const char* code, size_t n, int replace, FnCtx* ctx, int ti
         goto out;
       }
       name = sc_strdup(parts[i] + 5);
+      name_len = lens[i] - 5;
       continue;
     }
     sc_buf_fmt(err, "Invalid metadata value given: %s", parts[i]);
@@ -2418,7 +2441,7 @@ static int fn_create(const char* code, size_t n, int replace, FnCtx* ctx, int ti
     sc_buf_str(err, "Library name was not given");
     goto out;
   }
-  if (!fn_name_ok(name, strlen(name))) {
+  if (!fn_name_ok(name, name_len)) {
     sc_buf_str(err, "Library names can only contain letters, numbers, or underscores(_) and must be at least one character long");
     goto out;
   }
@@ -2465,6 +2488,7 @@ fail:
 out:
   free(name);
   sc_split_free(parts, numparts);
+  free(lens);
   return ok;
 }
 
