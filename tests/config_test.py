@@ -8,7 +8,11 @@ values for every parameter that changes, each set and read back on both;
 then every parameter is put back as it was.
 
 The reference Redis runs as run_tests.sh starts it: no snapshots, on
-the loopback (--save '' --bind 127.0.0.1).
+the loopback (--save '' --bind 127.0.0.1). The save points the cases set
+are a day off: Redis's cron forks a snapshot as soon as a point's changes
+are made and its seconds gone, and INFO counts the child's time
+(used_cpu_sys_children, which tests/info_test.py compares). By the time
+this test runs, the shared Redis has had minutes and thousands of changes.
 Parameters whose new value Redis would act on in a way that disturbs the
 test or the machine (the port, the addresses, the append-only file, the
 password, the client limits, the snapshots) are left out of the random
@@ -151,16 +155,16 @@ CASES = [
     ["CONFIG", "SET", "maxmemory", "10000002"],
     ["CONFIG", "SET", "maxmemory", "10000001", "maxmemory-clients", "200%", "client-query-buffer-limit", "invalid"],
     ["CONFIG", "GET", "maxmemory", "maxmemory-clients", "client-query-buffer-limit"],
-    ["CONFIG", "SET", "maxmemory", "10000001", "repl-backlog-size", "10000002", "save", "3000 5"],
+    ["CONFIG", "SET", "maxmemory", "10000001", "repl-backlog-size", "10000002", "save", "86400 5"],
     ["CONFIG", "GET", "maxmemory", "repl-backlog-size", "save"],
     ["CONFIG", "SET", "save", ""],
-    ["CONFIG", "SET", "save", "3600 1 300 100 60 10000"],
+    ["CONFIG", "SET", "save", "100000 1 90000 100 86400 10000"],
     ["CONFIG", "SET", "save", "3600 1 300"],
     ["CONFIG", "SET", "save", "0 1"],
     ["CONFIG", "SET", "save", "1 -1"],
-    ["CONFIG", "SET", "save", "+0100 007"],
+    ["CONFIG", "SET", "save", "+086400 007"],
     ["CONFIG", "GET", "save"],
-    ["CONFIG", "SET", "save", "3600 "],
+    ["CONFIG", "SET", "save", "86400 "],
     ["CONFIG", "GET", "save"],
     ["CONFIG", "SET", "save", "3600  1"],
     ["CONFIG", "SET", "save", ""],
