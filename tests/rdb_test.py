@@ -44,7 +44,9 @@ the same commands.
   append-only file both files are written, and the start reads the
   append-only file and leaves the RDB file aside; a SAVE with the
   append-only file, what comes after it in its pipeline and in another
-  client's requests reaching the append-only file.
+  client's requests reaching the append-only file; another client's
+  FLUSHALL in the group of a SHUTDOWN that saves, which never runs (the
+  files keep the key) unless the save fails.
 - Files that do not load: cut short, a wrong checksum, version 11, 0 and
   -1, a wrong signature, a database past the server's, a type that is
   none, an empty file, a directory, a module's data and a module's value:
@@ -655,6 +657,90 @@ def big(a, root):
             r.kill()
 
 
+def windows(a, root):
+    """a file read in windows of 1 MiB: values longer than a window, and
+    cuts and a wrong checksum past the first window, alike on both; and
+    BendKV's resident memory after a start from a file of 300,000 keys,
+    at most 1.3 times that of the same keys written by commands"""
+    d = os.path.join(root, "windows")
+    rnd = random.Random(11)
+    w = Srv(a.redis, os.path.join(d, "src"), "--save", "")
+    c = w.conn()
+    run(c, "SET", "a:first", "a key before the long values")
+    run(c, "SET", "s:long", rnd.randbytes(3 << 20))
+    for i in range(0, 60000, 1000):
+        run(c, "RPUSH", "l:long", *[rnd.randbytes(40) for _ in range(1000)])
+    for i in range(0, 120000, 2000):
+        run(c, "SADD", "set:long", *["member:%d" % j for j in range(i, i + 2000)])
+    for i in range(0, 30000, 1000):
+        run(c, "HSET", "h:long", *[x for j in range(i, i + 1000) for x in ("f%d" % j, rnd.randbytes(30))])
+    for i in range(0, 20000, 1000):
+        c.send([cmd("SET", "k:%d" % j, rnd.randbytes(rnd.randrange(1, 200))) for j in range(i, i + 1000)])
+        for _ in range(1000):
+            c.reply()
+    same("SAVE (the long values)", run(c, "SAVE"), (b"+", b"OK"))
+    live = unenc(dump_all(c, 1))
+    shut(c, "SHUTDOWN", "NOSAVE")
+    w.exit()
+    good = read(os.path.join(d, "src", "dump.rdb"))
+    check("the file of the long values runs past six windows", len(good) > 6 << 20, len(good))
+    got = []
+    for who, exe in (("bendkv", a.bin), ("redis", a.redis)):
+        dd = os.path.join(d, "whole", who)
+        os.makedirs(dd)
+        with open(os.path.join(dd, "dump.rdb"), "wb") as f:
+            f.write(good)
+        s = Srv(exe, dd, "--save", "")
+        got.append(s.code is None and dump_all(s.conn(), 1))
+        s.kill()
+    if got[0] is False or got[1] is False:
+        fail("both start from the file of the long values", got[0] is not False, got[1] is not False)
+    else:
+        same_dbs("BendKV and Redis from the file of the long values", got[0], got[1])
+        same_dbs("BendKV from it holds what was saved", unenc(got[0]), live)
+    at = good.index(b"s:long") + 1000000
+    short = ["Short read or OOM loading DB. Unrecoverable error, aborting now."]
+    for name, data, lines in (
+            ("cut a byte past the first window, in a long value", good[:(1 << 20) + 1], short),
+            ("cut half way", good[:len(good) // 2], short),
+            ("cut in its checksum", good[:-4], short),
+            ("a byte of a long value changed", good[:at] + bytes([good[at] ^ 0x5a]) + good[at + 1:],
+             ["Wrong RDB checksum expected: (", ") but got (", "). Aborting now."])):
+        res = []
+        for who, exe in (("bendkv", a.bin), ("redis", a.redis)):
+            dd = os.path.join(d, name.replace(" ", "-").replace(",", ""), who)
+            os.makedirs(dd)
+            with open(os.path.join(dd, "dump.rdb"), "wb") as f:
+                f.write(data)
+            s = Srv(exe, dd, "--save", "")
+            code = s.code if s.code is not None else "running"
+            log = s.log()
+            s.kill()
+            res.append((code, [l for l in lines if l in log], re.findall(r"Wrong RDB checksum expected: \(\w+\) but got \(\w+\)", log)))
+        same("a file %s: exit and log" % name, res[0], res[1])
+        check("a file %s: exit 1" % name, res[1][0] == 1, res[1])
+    # resident memory: the same keys written by commands, then loaded
+    dm = os.path.join(d, "memory")
+    m = Srv(a.bin, dm, "--save", "")
+    c = m.conn()
+    for i in range(0, 300000, 1000):
+        c.send([cmd("SET", "key:%d" % j, b"%0100d" % j) for j in range(i, i + 1000)])
+        for _ in range(1000):
+            c.reply()
+    written = int(info(c, "memory", "used_memory_rss"))
+    same("SAVE (300,000 keys)", run(c, "SAVE"), (b"+", b"OK"))
+    shut(c, "SHUTDOWN", "NOSAVE")
+    m.exit()
+    m = Srv(a.bin, dm, "--save", "")
+    c = m.conn()
+    started = int(info(c, "memory", "used_memory_rss"))
+    keys = run(c, "DBSIZE")
+    m.kill()
+    same("the 300,000 keys loaded", keys, (b":", b"300000"))
+    check("BendKV's resident memory after the start from the file: %.1f MB, against %.1f MB written" % (started / 2 ** 20, written / 2 ** 20),
+          started <= written * 1.3, (started, written))
+
+
 def temps(d):
     return sorted(f for f in os.listdir(d) if f.startswith("temp-"))
 
@@ -860,6 +946,41 @@ def shutdowns_on(exe, root, log):
     s = fresh("aofsave", "--save", "", "--appendonly", "yes")
     after = run(s.conn(), "MGET", "a", "b", "c", "s")
     log("5 save restart", after == before, after[1][:3], talk(s.port, [["SHUTDOWN", "NOSAVE"]]), s.exit())
+    # a SHUTDOWN that saves and another client's FLUSHALL in one group (a
+    # pause holds both back): Redis saves and exits within SHUTDOWN, so the
+    # FLUSHALL never runs, and both files keep the key; with save points,
+    # with the append-only file too, and with SHUTDOWN SAVE
+    for name, args, down in (("hold", ("--save", "3600 1"), ["SHUTDOWN"]),
+                             ("hold-aof", ("--save", "3600 1", "--appendonly", "yes"), ["SHUTDOWN"]),
+                             ("hold-save", ("--save", ""), ["SHUTDOWN", "SAVE"])):
+        s = fresh(name, *args)
+        run(s.conn(), "SET", "k", "v")
+        ca, cb = s.conn(), s.conn()
+        hold = pause(s)
+        ca.send([cmd(*down)])
+        time.sleep(0.05)
+        cb.send([cmd("FLUSHALL")])
+        try:
+            rb = cb.reply()
+        except (EOFError, ConnectionResetError):
+            rb = "closed"
+        log("7 %s" % name, rb, s.exit())
+        s = fresh(name, *args)
+        log("7 %s restart" % name, talk(s.port, [["DBSIZE"]]), talk(s.port, [["SHUTDOWN", "NOSAVE"]]), s.exit())
+    # the same with a save that fails: SHUTDOWN answers its error, then the
+    # FLUSHALL runs and is answered
+    s = fresh("hold-fails", "--save", "3600 1")
+    os.mkdir(os.path.join(root, "hold-fails", "temp-%s.rdb" % s.pid()))
+    run(s.conn(), "SET", "k", "v")
+    ca, cb = s.conn(), s.conn()
+    hold = pause(s)
+    ca.send([cmd("SHUTDOWN")])
+    time.sleep(0.05)
+    cb.send([cmd("FLUSHALL")])
+    log("7 hold-fails", ca.reply(), cb.reply(), talk(s.port, [["DBSIZE"]]), s.p.poll())
+    for c in (hold, ca, cb):
+        c.sock.close()
+    log("7 hold-fails stop", talk(s.port, [["SHUTDOWN", "NOSAVE"]]), s.exit())
 
 
 def shutdowns(a, root):
@@ -1073,7 +1194,7 @@ def main():
     shutil.rmtree(root, ignore_errors=True)
     os.makedirs(root)
     try:
-        for part in (redis_writes, lzf_values, written_here, bendkv_writes, big, scenarios, unchecked, shutdowns, races, corrupt, short_form):
+        for part in (redis_writes, lzf_values, written_here, bendkv_writes, big, windows, scenarios, unchecked, shutdowns, races, corrupt, short_form):
             b0 = bad
             part(a, root)
             print("%s %s" % ("OK:  " if bad == b0 else "FAIL:", " ".join(part.__doc__.split())))

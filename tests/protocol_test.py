@@ -11,9 +11,12 @@ count from -2^63 up), a count of 0 or less skipped, a line ended by its
 '\\r' and whatever byte follows it, no line until its '\\r' comes (a NUL
 before it hides it), 64 KB at most without one, a bulk's two bytes after
 its data skipped unread; errors on one line, a CR or LF in them sent as
-a space, an argument quoted in them up to its first NUL; and a protocol
+a space, an argument quoted in them up to its first NUL; a protocol
 error under CLIENT REPLY OFF or SKIP, which Redis does not answer, nor
-close the connection after, nor read on.
+close the connection after, nor read on; and a long request in several
+reads, cut at each place a bulk can be cut, with requests after it and
+protocol errors in it. Then, on BendKV alone, one MSET of 200,000 keys
+sent at once is timed against a pipeline of as many SETs.
 
 Whether the server closed a connection is not taken from a quiet
 socket: a server that keeps one open shows it in INFO's
@@ -131,6 +134,57 @@ CASES = [
     ("requests after an unanswered protocol error", [reply_off(b"OFF") + b"*1\r\nX\r\n", resp(b"SET", b"after", b"1"),
                                                     reply_off(b"ON") + resp(b"PING")]),
     ("CLIENT REPLY ON, then a protocol error", [reply_off(b"OFF") + reply_off(b"ON"), b"*x\r\n"]),
+]
+
+
+# A long request in several reads (issue #85): the parse of a request
+# longer than a run (2,048 bytes) goes on from the bulk the last read
+# stopped in, with the arguments it read before. Each case sends its
+# pieces with a pause between them, so that the server reads them one at
+# a time, and then reads back what the request wrote. A bulk of LONG is
+# 19 bytes: "$12\r\n", 12 bytes of data, "\r\n".
+def long_req(cmd, key, n):
+    return resp(cmd, key, *[b"e" + str(i).zfill(11).encode() for i in range(n)])
+
+
+# the index of the first bulk of data that starts past index at
+def bulk_past(data, at):
+    return data.index(b"\r\n$", at) + 2
+
+
+LONG = long_req(b"RPUSH", b"L", 400)
+LONG2 = long_req(b"RPUSH", b"M", 300)
+B0, B1, B2 = bulk_past(LONG, 2100), bulk_past(LONG, 5000), bulk_past(LONG2, 2500)
+READ, READ2 = resp(b"LRANGE", b"L", b"0", b"-1"), resp(b"LRANGE", b"M", b"0", b"-1")
+NOPE = long_req(b"NOPE", b"x", 300)
+PAIRS = [b"key:%04d" % (i // 2) if i % 2 == 0 else b"value-%07d" % i for i in range(400)]
+MSET, ODD = resp(b"MSET", *PAIRS), resp(b"MSET", *PAIRS[:399])
+VALUE = resp(b"SET", b"k", b"v" * 5000)
+CASES += [("long request split %s" % what, [LONG[:B0 + d], LONG[B0 + d:] + READ]) for what, d in [
+    ("at a bulk's $", 0),
+    ("after a bulk's $", 1),
+    ("inside a bulk's length", 2),
+    ("at a bulk length's CR", 3),
+    ("at a bulk length's LF", 4),
+    ("at a bulk's data", 5),
+    ("inside a bulk's data", 10),
+    ("at the CR after a bulk's data", 17),
+    ("at the LF after a bulk's data", 18),
+]] + [
+    ("long request in its last bulk", [LONG[:-5], LONG[-5:] + READ]),
+    ("long request in three pieces", [LONG[:B0 + 7], LONG[B0 + 7:B1 + 3], LONG[B1 + 3:] + READ]),
+    ("long request, first piece within a run", [LONG[:1500], LONG[1500:B0 + 7], LONG[B0 + 7:] + READ]),
+    ("requests after a long request split", [LONG[:B0 + 7], LONG[B0 + 7:] + resp(b"SET", b"after", b"1") + b"PING\r\n" + READ]),
+    ("two long requests split", [LONG[:B0 + 7], LONG[B0 + 7:] + LONG2[:B2 + 9], LONG2[B2 + 9:] + READ + READ2]),
+    ("long request split, then not a bulk", [LONG[:B0], b"x\r\n" + resp(b"SET", b"after", b"1")]),
+    ("long request split, then a bad bulk length", [LONG[:B0], b"$abc\r\n" + resp(b"SET", b"after", b"1")]),
+    ("long request split, then a bulk past 512 MB", [LONG[:B0], b"$536870913\r\n" + resp(b"SET", b"after", b"1")]),
+    ("long request split, its bulk's trailer not CRLF", [LONG[:B0 + 17], b"xy" + LONG[B0 + 19:] + READ]),
+    ("unknown command, long, split", [NOPE[:bulk_past(NOPE, 2100) + 7], NOPE[bulk_past(NOPE, 2100) + 7:] + b"PING\r\n"]),
+    ("MSET split", [MSET[:bulk_past(MSET, 2100) + 3], MSET[bulk_past(MSET, 2100) + 3:] +
+                    resp(b"MGET", b"key:0000", b"key:0105", b"key:0199", b"key:0200")]),
+    ("MSET of an odd count, split", [ODD[:bulk_past(ODD, 2100) + 3], ODD[bulk_past(ODD, 2100) + 3:] + b"PING\r\n"]),
+    ("SET of a long value, split", [VALUE[:3000], VALUE[3000:] + resp(b"STRLEN", b"k")]),
 ]
 
 
@@ -274,6 +328,46 @@ def parses(data):
     return None
 
 
+def timed(port, data, replies):
+    """Seconds from sending data at once to its replies' end (each reply
+    here is one line: its LF is counted, which a read never splits)."""
+    s = socket.create_connection(("127.0.0.1", port), timeout=60)
+    t0 = time.time()
+    s.sendall(data)
+    got = 0
+    while got < replies:
+        chunk = s.recv(1 << 20)
+        if not chunk:
+            break
+        got += chunk.count(b"\n")
+    s.close()
+    return time.time() - t0
+
+
+def long_time(port, ctl, n=200000):
+    """BendKV alone: one MSET of n keys, sent at once, takes about as long
+    as a pipeline of n SETs of the same keys (Redis: 0.13 s and 0.10 s
+    for 200,000 here). Parsed again from its start after each read of 64
+    KB, the MSET took time in proportion to the square of its size: 4.9
+    s, against 0.13 s for the SETs (issue #85). Each is timed twice, the
+    better time kept."""
+    keys = [b"key:%d" % i for i in range(n)]
+    mset = b"*%d\r\n$4\r\nMSET\r\n" % (1 + 2 * n) + b"".join(b"$%d\r\n%s\r\n$1\r\nv\r\n" % (len(k), k) for k in keys)
+    sets = b"".join(resp(b"SET", k, b"v") for k in keys)
+    best = []
+    for data, replies in ((mset, 1), (sets, n)):
+        t = []
+        for _ in range(2):
+            ctl.ask(resp(b"FLUSHALL"))
+            t.append(timed(port, data, replies))
+        best.append(min(t))
+    ctl.ask(resp(b"FLUSHALL"))
+    ok = best[0] <= 5 * best[1] + 0.5
+    print("%s one MSET of %d keys at once: %.2f s, a pipeline of as many SETs: %.2f s" %
+          ("ok  " if ok else "FAIL", n, best[0], best[1]))
+    return ok
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--bendkv", type=int, default=6380)
@@ -300,6 +394,7 @@ def main():
             print("     redis:  %r" % (theirs,))
             if bad:
                 print("     BendKV's reply is not RESP: %s" % bad)
+    ok &= long_time(a.bendkv, ctls[a.bendkv])
     print("ALL OK" if ok else "SOME CHECKS FAILED")
     return ok
 

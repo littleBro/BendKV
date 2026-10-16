@@ -458,7 +458,8 @@ translation stays in the trusted base.
   invalidates nothing, where Redis invalidates its key; a client that others redirect to
   gets the invalidation of a key its own command writes before that command's reply,
   where Redis writes it after the reply for the commands that reply before they signal
-  the key (ZADD, ZINCRBY, HSET, HINCRBY, LPUSH, RPUSH) (FINDINGS.md, section 3zzzb).
+  the key (ZADD, ZINCRBY, HSET, HINCRBY, LPUSH, RPUSH, a served BLMPOP), and inside the
+  reply of a served BZPOPMIN, BZPOPMAX or BZMPOP (FINDINGS.md, section 3zzzb).
 - **The server:** LASTSAVE (the last save that ended well, the start until one does), ROLE (a master
   with no replica), WAIT (0, as no replica acknowledges: at once when it asks for none,
   otherwise once its timeout ends, its client waiting as a blocking command's does),
@@ -468,13 +469,12 @@ translation stays in the trusted base.
   and SHUTDOWN [NOSAVE|SAVE] [NOW] [FORCE] [ABORT], read as Redis 7.0.15 reads it: the
   append-only file written and synced, a rewrite that runs stopped, the RDB file saved
   with save points or SAVE and not with NOSAVE (a save that fails stops nothing, Redis's
-  error answered, but with FORCE), the pid file removed, the process ended with code 0.
+  error answered, but with FORCE; other clients' commands after a SHUTDOWN that saves
+  wait for its save, and run only if it fails), the pid file removed, the process ended
+  with code 0.
   Where BendKV differs: SIGTERM and SIGINT end the process at once, without the
   shutdown Redis runs for them (`shutdown-on-sigterm`, `shutdown-on-sigint`: its save
-  with save points among it), as the runtime has no handler for them; a SHUTDOWN that
-  saves lets the other clients' requests in its group run before the save, so that what
-  they write reaches the append-only file and the RDB file and they get no reply, where
-  Redis ends inside the SHUTDOWN and runs none of them (issue #84); MEMORY
+  with save points among it), as the runtime has no handler for them; MEMORY
   MALLOC-STATS has no allocator's statistics; LOLWUT's large drawings take up to a
   hundred times Redis's time (FINDINGS.md, sections 3zzl and 3zzzc).
 - **Configuration:** CONFIG GET (names, aliases and glob patterns), SET (several
@@ -530,7 +530,9 @@ translation stays in the trusted base.
   clock (seconds) or its LFU counter (logarithmic, with `lfu-log-factor`, decayed by
   `lfu-decay-time`), and OBJECT IDLETIME and FREQ answer from it. Where BendKV differs:
   the same maxmemory holds another number of keys, since a key takes other bytes in
-  BendKV's heap (with its share of the trie's nodes) than in Redis's allocator; the uses
+  BendKV's heap (with its share of the trie's nodes) than in Redis's allocator, and
+  about 8% fewer after a rewrite of the append-only file, until they are set again
+  (issue #102); the uses
   are kept in a table of 2^20 words by the key's hash, which keys whose hashes share
   their low 20 bits share, and a request marks its first key alone, before it runs
   (MGET's others are not marked); and evicting many keys at once is about ten times
@@ -589,7 +591,10 @@ translation stays in the trusted base.
   `rdb_saves`, `rdb_last_bgsave_status` and `rdb_last_load_keys_loaded` and `_expired`
   follow it. The start reads every version from 1 to 10, every encoding Redis 7.0.15
   reads but a stream's and a module's, AUX fields it does not know, and drops the keys
-  whose time has passed, counting them. Where BendKV differs: no BGSAVE and no save at
+  whose time has passed, counting them; it reads the file a window at a time (1 MiB, or
+  as long as a value that runs past the window), so that what it holds at once is a
+  window and the databases it builds (section 3zzzt of
+  [docs/FINDINGS.md](docs/FINDINGS.md)). Where BendKV differs: no BGSAVE and no save at
   the save points (BendKV's default `save` is empty, where Redis's is `3600 1 300 100 60
   10000`, and its start warns of save points set), nor on SIGTERM or SIGINT (above);
   `rdb_changes_since_last_save` stays 0; no LZF written; no IDLE or FREQ written, and
@@ -778,7 +783,9 @@ eviction that goes on alone, with the append-only file on and while a rewrite ru
 the RDB file (`tests/rdb_test.py`: files Redis wrote, with LZF and without, and files of
 the encodings Redis no longer writes, BendKV and Redis started from each and every key
 of every database compared; BendKV's SAVE, Redis started from its file; both ways with a
-database of 10,000 keys and a file past 16 MB; SAVE, LASTSAVE, INFO and the saves of
+database of 10,000 keys and a file past 16 MB; a file of values longer than the start's
+window, cut or with a byte changed past the first window, on both, and the resident
+memory after a start from a file of 300,000 keys; SAVE, LASTSAVE, INFO and the saves of
 FLUSHALL and SHUTDOWN against Redis's, with the append-only file and with another
 client's requests in the same group; files that do not load).
 `make suite` runs Redis's own test suite in its mode for a server already started, on
@@ -844,7 +851,7 @@ away.
 
 | file | lines of code | of them written by a generator | the laws import it |
 |---|---:|---:|---|
-| `src/map.bend` | 2,000 | 640 | yes |
+| `src/map.bend` | 2,400 | 640 | yes |
 | `src/redis.bend` | 18,000 | 7,400 | yes |
 | `src/batch.bend` | 84 |  | yes |
 | `src/aof.bend` | 1,200 |  | yes |
@@ -857,7 +864,7 @@ away.
 | `src/info.bend` | 2,200 |  | no |
 | `src/lolwut.bend` | 470 |  | no |
 | `src/rdb.bend` | 2,100 |  | no |
-| `src/resp.bend` | 880 |  | no |
+| `src/resp.bend` | 980 |  | no |
 | `src/script.bend` | 27 |  | no |
 | `src/server.bend` | 9,900 |  | no |
 | `src/startup.bend` | 460 |  | no |
