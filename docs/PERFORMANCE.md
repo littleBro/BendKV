@@ -7706,3 +7706,48 @@ caches missed, and the tick counted them all at once.
 (baseline 3,452, 4,214 and 4,552); with 100 clients in BLPOP, 2.7% and 2.7% above the
 counts without them. Each of those loads runs one command, whose calls all go to the
 newest run, as before.
+
+## 75. A long request read in part
+
+**What changed** (FINDINGS 3zzzo). The arguments a parse has read of a long request are
+kept from one read to the next, and each read is parsed once, where a request longer than
+a read was parsed again from its start after each.
+
+**In time** (`tools/long_requests.py`: one client sends each request at once and times
+it to its reply, the server emptied before it; each case twice, the better time kept;
+main's build, this one and Redis 7.0.15 in turn on the same machine):
+
+| | main | this change | Redis |
+|---|---:|---:|---:|
+| MSET of 30,000 keys | 0.15 s | 0.02 s | 0.01 s |
+| MSET of 100,000 keys | 1.18 s | 0.11 s | 0.04 s |
+| MSET of 300,000 keys | 12.74 s | 0.58 s | 0.16 s |
+| the same, in pieces of 64 KB 1 ms apart | 15.01 s | 0.78 s | 0.27 s |
+| SADD of 300,000 members | 5.02 s | 0.45 s | 0.12 s |
+| RPUSH of 64 values of 512 KB | 2.67 s | 0.04 s | 0.05 s |
+| 300,000 SETs, pipelined | 0.22 s | 0.24 s | 0.25 s |
+
+**Instructions** (callgrind, one MSET sent at once, from the zeroed counters to its
+reply):
+
+| | main | this change |
+|---|---:|---:|
+| MSET of 30,000 keys | 484 M | 159 M |
+| MSET of 120,000 keys | 7,561 M | 709 M |
+| a key, at 120,000 | 63,000 | 5,900 |
+
+Four times the keys took 15.6 times the instructions on main, 4.5 times now.
+
+**The other requests** (`tools/callgrind_req.sh`: 20 clients at pipeline depth 16,
+instructions per request, main's build and this one): LPUSH 7,180 and 7,194, HSET 10,724
+and 10,769, SADD 7,781 and 7,757, and MSET of 10 keys, whose pipelined reads are longer
+than a window, 31,103 and 31,132.
+
+**`make perfcheck`**: GET 3,420, SET 4,181 and INCR 4,527 instructions per request,
+against 3,418, 4,180 and 4,520 for main fc28490's build; with 100 clients in BLPOP, 3.1%
+and 3.4% above the counts without them. Their reads are shorter than a window, and are
+parsed as before.
+
+**What is left.** One MSET of 300,000 keys takes 3.6 times Redis's time, and an SADD of
+as many members 3.8 times. A key of a long MSET costs 5,900 instructions, where a whole
+pipelined SET costs 4,181; where they go is not broken down here (FINDINGS 3zzzo).
