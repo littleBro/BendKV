@@ -6740,6 +6740,133 @@ order.
 **Tests.** `tests/timing_test.py`, `tests/stats_test.py` and `tests/info_test.py` against
 Redis: commandstats, latencystats, errorstats and the slow log, unchanged.
 
+## 3zzzq. Redis 7's multi-part append-only file
+
+**What was left** (issue #74). With `appendonly yes`, Redis 7 keeps its append-only file
+as a directory, `appenddirname` (`appendonlydir`) in `dir`: a manifest,
+`<appendfilename>.manifest`, a line per file (`file appendonly.aof.2.base.rdb seq 2 type
+b`), a base (the databases as the last rewrite wrote them: an RDB file with
+`aof-use-rdb-preamble yes`, its default, or commands), the incremental files of the
+commands since, and history files a rewrite leaves for removal. BendKV wrote one file,
+`appendfilename` in `dir`, the layout of Redis 6, and refused to start on a directory
+with a manifest. So a Redis 7 server with `appendonly yes` could not be replaced by
+BendKV on its own directory; going back worked once, through Redis's upgrade of an old
+single file, but where a directory was still there Redis loaded it and not BendKV's
+newer file.
+
+**What changed** (`src/aofdir.bend`, new; `src/server.bend`: The manifest on the disk,
+The rewrite of the append-only file, The append-only directory, Serving).
+
+- **The manifest** is read and written as Redis 7.0.15 reads and writes it
+  (`aofLoadManifestFromFile`, `getAofManifestAsString`): a line at a time as `fgets`
+  reads it into 1,025 bytes (so a line of 1,024 bytes or more, and a last line without
+  its newline, is "too long"), comments skipped, the rest trimmed and split as
+  `sdssplitargs` splits it, keys in any case, `seq` as `atoll` reads it. Each refusal
+  is Redis's, with its lines: the fatal block, the line's number, the line, and why.
+  A name that needs quoting is written as `sdscatrepr` quotes it.
+- **The start**, in the configuration's form (the short form keeps its one file), goes
+  as Redis's `main` goes when `appenddirname` is there:
+  - the manifest read, whatever `appendonly` says (a manifest Redis refuses stops the
+    start either way);
+  - with `appendonly yes`, an old single file in `dir` moved into the directory as its
+    base when Redis would move it (`aofUpgradePrepare`: no base and no incremental
+    file named, or a base of that name alone that the directory does not hold), the
+    manifest written first;
+  - each file the manifest names checked to be there before any is loaded, then the
+    base and each incremental file loaded in turn, each on the databases the files
+    before it left and from database 0: the base as an RDB file when it starts with
+    `REDIS` (through the RDB file's reader, `src/rdb.bend`), the others as commands,
+    read in windows as the single file is (3zzzg), with Redis's lines ("DB loaded from
+    base file ...", "... incr file ...", "DB loaded from append only file ...");
+  - a file cut short, or ending inside a transaction, cut back as the single file is;
+    when it is not the last file, the start then stops, as Redis's does ("Fatal error:
+    the truncated file is not the last file");
+  - the last incremental file opened to append to, or a new one when the manifest names
+    none, after an empty base when it names no file at all
+    (`aofOpenIfNeededOnServerStart`), the manifest written when it changed;
+  - the history files removed (`aofDelHistoryFiles`), unless `aof-disable-auto-gc` is
+    yes.
+- **The actor** appends to the incremental file, its first entry after a SELECT, as
+  Redis's first after its start is (`aof_selected_db` starts at -1; the single file's
+  start goes on from the database its replay left selected, as before). everysec's
+  syncer syncs the file at its path, which a rewrite changes: the actor hands it the
+  new path through a channel (`RDir`'s `pc`), and it opens the file to read for the
+  sync, so that a path a rewrite made history and removed is not made again.
+- **A rewrite** (BGREWRITEAOF, and the cron's) in the directory goes as
+  `rewriteAppendOnlyFileBackground` goes: at its start a new incremental file, opened
+  empty, the manifest written with it, the old file synced and closed, and the actor
+  appending to the new one, its first entry after a SELECT; the snapshot written a slice
+  at a time, as before, to `temp-rewriteaof-bg-<pid>.aof` in `dir`; at its end
+  (`backgroundRewriteDoneHandler`) the temporary file renamed into the directory as the
+  next base, the old base and all incremental files but the current one made history,
+  the manifest written, then the history removed. Nothing is kept for after the
+  snapshot (Redis 6's rewrite buffer): the writes meanwhile are in the new incremental
+  file. A failure leaves the manifest as it was and the incremental file the rewrite
+  began, as in Redis, so the directory may hold several. With `appendonly no` the
+  rewrite writes its base into the directory too, and all incremental files become
+  history.
+- **INFO**: `aof_current_size` is the files' size, `aof_base_size` the base's at the
+  start (as Redis takes `aof_rewrite_base_size`), and both are the files' size after a
+  rewrite.
+
+**Where BendKV differs.**
+
+- The runtime has no effect that makes a directory. Without `appenddirname` there,
+  BendKV keeps Redis 6's single file, as before (Redis 7 makes the directory, and moves
+  such a file into it when it starts); with it there, the layout is Redis 7's. A
+  directory made for it once (`mkdir appendonlydir`) is enough.
+- BendKV writes its bases as commands, `<appendfilename>.<n>.base.aof`, whatever
+  `aof-use-rdb-preamble` says (Redis writes an RDB file, `.base.rdb`, by default). It
+  reads both.
+- An RDB base followed by commands (an old single file of Redis 4 to 6 with an RDB
+  preamble, moved in as the base) stops the start, saying so, rather than leave the
+  commands out.
+- A sequence number below 1, or of 10^13 or more, on a base or history line is refused as
+  a line of a bad format; Redis takes any (none of its own manifests holds one).
+- Only a base is read as an RDB file when it starts with `REDIS`; Redis reads any file
+  that does so.
+- A base that is an RDB file and does not load stops the start with the RDB file's
+  lines, the file left as it was. Redis 7.0.15 goes on as for a file cut short: when the
+  RDB part ended early and `aof-load-truncated` is yes, it cuts the base to nothing.
+- A BGREWRITEAOF whose new incremental file cannot be opened, or whose manifest cannot
+  be written, is answered as started, then fails as a rewrite that failed; Redis
+  answers it with an error.
+
+**Tests.** `tests/aofdir_test.py` (in `make test`) runs each scenario on BendKV and on
+Redis 7.0.15, each on a copy of the same directory, and compares the databases, the
+manifests, the files, the entries of the incremental files and the lines logged: 99
+checks, all as Redis's. The scenarios:
+- Redis's directory, written, rewritten and written again, with `aof-use-rdb-preamble`
+  yes (an RDB base) and no;
+- an empty directory: both make their files, write, rewrite and write more, then each
+  starts on the other's directory;
+- an old single file moved in, with an empty directory and with an upgrade that
+  stopped half way;
+- 22 manifests Redis refuses, and one with `appendonly no`;
+- the last incremental file cut short, one before the last cut short, and a file the
+  manifest names that is not there;
+- history files removed, and kept with `aof-disable-auto-gc yes`;
+- BGREWRITEAOF with `appendonly no`.
+
+Validated first with Redis on both sides. The entries compared put BendKV's SET of an
+INCR's value as Redis's INCR (BendKV logs effects: section 10). `tests/start_test.py`'s
+case of a manifest that BendKV refused is gone: such a directory is read now, and the
+manifest it held (a file named that is not there) stops both starts, as
+`tests/aofdir_test.py` checks. The single file's tests pass as before: start, aof_redis,
+aof_window, rewrite, crash (20 rounds), rdb, admin, config, info and diff.
+
+**What is left.**
+- An effect that makes a directory (a patch to the runtime, for the owner), so that a
+  start without `appenddirname` makes it, as Redis's does, and moves a single file in.
+- Bases written as RDB files with `aof-use-rdb-preamble yes`, through the RDB file's
+  writer (`src/rdb.bend`), and the commands after an RDB part read.
+- The laws: `src/aof.bend`'s are about one file. The directory is tested only; a law
+  of the files loaded in turn, each from database 0, would be the owner's to state.
+
+**What it costs.** 360 lines of code in `src/aofdir.bend` and about 700 more in
+`src/server.bend`; nothing on a request's path. `make perfcheck`: GET 3,455, SET 4,205
+and INCR 4,557 instructions a request, within 0.2% of the baseline.
+
 ## 4. Where a request's time goes, and hiding the memory waits
 
 With the eight patches, BendKV ran fewer instructions on GET and SET than Redis, missed

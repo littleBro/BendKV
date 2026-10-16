@@ -170,6 +170,7 @@ src/hll.bend     HyperLogLogs on a string's bytes, as Redis's (checked by tests)
 src/geo.bend     geohashes, cells, distances and sorts, as Redis's (checked by tests)
 src/lolwut.bend  LOLWUT's drawings, as Redis draws them (checked by tests)
 src/rdb.bend     the RDB format: DUMP, RESTORE and the file, as Redis's (checked by tests)
+src/aofdir.bend  the manifest of Redis 7's append-only directory, as Redis's (checked by tests)
 ```
 
 **Commands:** PING, ECHO, GET, SET, SETNX, GETSET, DEL/UNLINK, EXISTS, INCR, DECR, INCRBY,
@@ -519,11 +520,11 @@ Start-up is as for `redis-server`: a configuration file, `--name value` paramete
 which changes the directory at once; `save` points, which add up; the same errors on the
 same lines), and the log is written in Redis's form, to standard output or to
 `logfile`. The port, `bind` (IPv4), `requirepass`, `protected-mode`, the append-only
-file (`appendonly`, `appendfilename`, `appendfsync`, `aof-load-truncated`), `logfile`,
-`loglevel` and `pidfile` take effect; with `appendonly no` the RDB file is loaded, as
-Redis loads it; what BendKV cannot do (modules, ACL users, command renaming,
-daemonizing, cluster, replica, TLS, supervisor signaling, Redis 7's multi-part
-append-only file, or an RDB file that holds a stream, a module's data or functions)
+file (`appendonly`, `appendfilename`, `appenddirname`, `appendfsync`,
+`aof-load-truncated`, `aof-disable-auto-gc`), `logfile`, `loglevel` and `pidfile` take
+effect; with `appendonly no` the RDB file is loaded, as Redis loads it; what BendKV
+cannot do (modules, ACL users, command renaming, daemonizing, cluster, replica, TLS,
+supervisor signaling, or an RDB file that holds a stream, a module's data or functions)
 stops the start with a line in the log.
 Pipelining, partial packets, inline commands (one can work through `nc`) and
 binary-safe values are supported. Requests are parsed as Redis 7.0.15 parses them: a
@@ -639,7 +640,13 @@ appended meanwhile, into a temporary file that is then put in place of the file
 (`File.rename`, the twenty-eighth patch), and the directory is synced. Without `fork`:
 the databases are values, and the actor keeps a snapshot of them and writes it a slice
 at a time between the groups of requests it serves meanwhile (section 47 of
-PERFORMANCE.md).
+PERFORMANCE.md). Where `appenddirname` is there in `dir`, the files are Redis 7's: a
+manifest, read and written as Redis 7.0.15 does, a base (an RDB file or commands) and
+the incremental files since, loaded in turn; the last incremental file is appended to,
+and a rewrite starts a new one, then renames its temporary file into the directory as
+the next base and makes the files before it history, which it removes (section 3zzzq
+of docs/FINDINGS.md, with where BendKV differs: without the directory, which the
+runtime cannot make, BendKV keeps Redis 6's single file; its bases are commands).
 
 **The store** is a 16-child trie over 5 hex digits of the FNV-1a hash (2^20 buckets).
 A bucket is a chain of entries right in the trie, for collisions; an entry holds the
@@ -1116,6 +1123,13 @@ The translation the kernel reads can be dumped with
   old file with all the acknowledged writes; `appendonly no`; the cron's rewrites on the
   file's growth; failed rewrites, their count, the log and the cron's limit after three
   in a row (section 47 of docs/PERFORMANCE.md).
+- **Redis 7's directory of files** (`tests/aofdir_test.py`): BendKV and Redis each start
+  on a copy of the same `appendonlydir`, and their databases, manifests, files and the
+  lines they log are compared: Redis's directory, with an RDB base and with one of
+  commands; an empty directory, then writes and rewrites on both; an old single file
+  moved in, with an empty directory and with an upgrade stopped half way; manifests
+  Redis refuses; files cut short, last or not, and a file not there; history files,
+  removed or kept (`aof-disable-auto-gc`); a rewrite with `appendonly no`.
 - **maxmemory and eviction** (`tests/maxmemory_test.py`): the transcripts of BendKV and
   Redis are compared line by line — the OOM refusals past `maxmemory` under noeviction,
   and in MULTI (the transaction flagged, EXEC aborted, a transaction of reads and DISCARD
@@ -1388,13 +1402,14 @@ The proofs cover `map.bend`, `redis.bend`, `batch.bend`, `aof.bend`, `session.be
    types, no law helpers named like Base's constructors, no name clashes through a colon
    and a dot), but the translation stays in the trusted base.
 2. **`resp.bend`, `info.bend`, `command.bend`, `server.bend`, `startup.bend`,
-   `float.bend`, `hll.bend`, `geo.bend`, `lolwut.bend` and `rdb.bend`** — the protocol,
-   INFO, COMMAND, the network, start-up, the doubles in software, what HyperLogLogs, GEO
-   and LOLWUT compute and DUMP's payloads; they are checked only by tests (start-up
-   against `redis-server`, `tests/start_test.py`, INFO by `tests/info_test.py`, COMMAND
-   by `tests/command_test.py`, the doubles against glibc by `tests/float_test.py`, the
+   `float.bend`, `hll.bend`, `geo.bend`, `lolwut.bend`, `rdb.bend` and `aofdir.bend`** —
+   the protocol, INFO, COMMAND, the network, start-up, the doubles in software, what
+   HyperLogLogs, GEO and LOLWUT compute, DUMP's payloads and the manifest of Redis 7's
+   append-only directory; they are checked only by tests (start-up against
+   `redis-server`, `tests/start_test.py`, INFO by `tests/info_test.py`, COMMAND by
+   `tests/command_test.py`, the doubles against glibc by `tests/float_test.py`, the
    others against Redis by `tests/hll_test.py`, `tests/geo_test.py`,
-   `tests/admin_test.py` and `tests/dump_test.py`).
+   `tests/admin_test.py`, `tests/dump_test.py` and `tests/aofdir_test.py`).
    With the append-only file, it is also trusted that the server appends to the file
    exactly the effects of each batch (a group of batches is written as one write: that
    the `encode` of a concatenation is the concatenation of `encode`s is a lemma of the

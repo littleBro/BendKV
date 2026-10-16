@@ -64,8 +64,13 @@
 # against Redis's, the rewritten file against Redis's base, command for
 # command, writes while it runs (and a kill while it runs), BendKV and
 # Redis started from the new file, the rewrite with appendonly no, the
-# cron's rewrites as the file grows, and rewrites that fail. Then
-# maxmemory and eviction: the refusals past maxmemory (OOM), OBJECT
+# cron's rewrites as the file grows, and rewrites that fail. Then Redis
+# 7's directory of files, appendonlydir (tests/aofdir_test.py): BendKV
+# and Redis each started on a copy of the same directory (Redis's, with
+# an RDB base and with one of commands; an empty one; an old single file
+# to move in; manifests Redis refuses; files cut short or not there;
+# history files) and rewriting in it, with the same databases, manifests
+# and lines logged. Then maxmemory and eviction: the refusals past maxmemory (OOM), OBJECT
 # IDLETIME and FREQ and the evicted event against Redis's, Redis's own
 # tests of the policies on both, and BendKV's warnings, an eviction that
 # goes on alone, one with the append-only file on and one while a rewrite
@@ -233,6 +238,8 @@ echo "== resident memory after a restart from the append-only file"
 PORT="$PORT" sh tools/restore_mem.sh build/bendkv
 echo "== the rewrite of the append-only file"
 python3 tests/rewrite_test.py --bin build/bendkv --bendkv "$PORT" --redis "$((REDIS_PORT + 1))" --dir build/rewrite
+echo "== Redis 7's multi-part append-only file, against Redis"
+python3 tests/aofdir_test.py --bin build/bendkv --bendkv "$PORT" --redis "$((REDIS_PORT + 1))" --dir build/aofdir
 echo "== maxmemory and eviction"
 python3 tests/maxmemory_test.py --bin build/bendkv --bendkv "$PORT" --redis "$((REDIS_PORT + 1))" --dir build/maxmemory
 echo "== the RDB file"
