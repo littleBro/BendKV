@@ -5921,6 +5921,225 @@ need Lua: one fills a set with a script, and the next resets the events that set
 expiry would have given. unit/slowlog passes 7 of its 9. The other two use ACL and
 MIGRATE.
 
+## 3zzzb. CLIENT TRACKING: client-side caching
+
+**What was left.** CLIENT TRACKING was an unknown subcommand. CLIENT CACHING, GETREDIR
+and TRACKINGINFO answered as Redis answers a client that does not track, and INFO's
+tracking counts were 0. The client-side caches of go-redis and redis-py stopped there:
+eleven of their tests (`tools/data/clients.json`).
+
+**What is kept** (`src/server.bend`: Tracking, Tracking in the actor, Tracking in the
+shell).
+
+- A client's tracking, in its record of the registry (`Cl`'s `tk`): the client its
+  invalidations go to, its mode (BCAST, OPTIN, OPTOUT, NOLOOP), CLIENT CACHING's flag,
+  whether its redirect was found gone, and its prefixes.
+- The tracking table, with the heeded keys (`Hd`'s `trk`): each key a tracking client
+  read, with the ids of the clients that read it, whatever their database (Redis's table
+  has no database either), and its counts of keys and ids.
+- The tracking clients, the clients that others redirect to, and the BCAST prefixes, each
+  prefix with the keys changed under it since the end of the last group and the client
+  that changed each last.
+
+**A read.** After a call that only reads (Redis's `readonly` flag), the call's keys go to
+the table when its client tracks and is not in BCAST mode: in OPTIN mode only after
+CLIENT CACHING yes, in OPTOUT mode unless after CLIENT CACHING no
+(trackingRememberKeys). The keys come from the call's arguments as sent, by the
+command's key specs (`ro.key`, which `tools/gen_commands.py` writes from Redis's command
+table: the arity, the key specs, and the way COMMAND GETKEYS reads them), as Redis's
+getKeysFromCommand finds them. The arguments are read from the batch's bytes once for
+the batch, when a call first needs its own (`av.if`). EXEC's calls read as any call does.
+CLIENT CACHING's flag is cleared after each command but a CLIENT command, while its
+client is in no MULTI, as Redis's resetClient clears it.
+
+**A write.** The keys a command changed come from its effects, as Touches finds them for
+WATCH (Redis's signalModifiedKey does both): the keys its writes name that were there
+before it or are after it, SMOVE's destination when it gained the member, MOVE's key,
+COPY's destination. For each key, in the order the command changed them:
+
+- under each BCAST prefix the key starts with, the key is kept with the client whose
+  command changed it;
+- each client that read the key is told, but one that no longer tracks, one in BCAST
+  mode, and one in NOLOOP mode for its own change; then the key leaves the table.
+
+FLUSHDB and FLUSHALL send every tracking client a null and empty the table, even an empty
+one (trackingInvalidateKeysOnFlush). SWAPDB invalidates nothing. The sweep of expired
+keys and eviction invalidate the keys they delete as no client's change.
+
+**Where a message goes**, as Redis's sendTrackingMessage sends it:
+
+- to the client itself in RESP3, a push;
+- to the client it redirects to: a push in RESP3, or to a client of RESP2 with a
+  subscription a message of the channel `__redis__:invalidate`; to any other client of
+  RESP2, nothing;
+- a redirect gone: the client's flag R (CLIENT LIST, TRACKINGINFO's
+  `broken_redirect`), and in RESP3 the push `tracking-redir-broken`.
+
+The client whose command runs gets its own invalidations after its reply: after EXEC's
+for EXEC's commands, and after its reply for a client that a blocking command serves.
+Redis keeps them for after the call. A served BLMOVE or BRPOPLPUSH changes its
+destination; a served BLMPOP, BZPOPMIN, BZPOPMAX or BZMPOP changes the key it popped from;
+a served BLPOP or BRPOP changes nothing more, as Redis signals each (its push made the key
+ready). LMOVE's and RPOPLPUSH's destination goes before their source, as Redis signals
+them. One it gets as the client another redirects to comes before its
+reply, as Redis writes it when the command signals the key, for most commands before
+their reply (Where BendKV differs). The client whose command served a
+blocked client gets that pop's invalidations after its own reply (and after its own
+invalidations), as Redis writes them once its call is over, with the served client as
+the one whose command runs: NOLOOP leaves them out for the served client, not for the
+client whose command served it. At the end of each group (Redis's
+beforeSleep), each prefix's keys go to its clients, in the order of their bytes, one
+push per prefix. A NOLOOP client gets them without the keys its own commands changed
+last, and nothing when none is left.
+
+**Pushes at once.** A connection waits on its socket alone, except while its client has
+a subscription or monitors: then it waits on the actor's pushes as well (A subscribed
+client). A client that tracks now waits so too, and so does a client whose batch ran the
+general way while another redirects to it. Their batches then run as a subscribed
+client's do, a command at a time, the general way: that is how a client's reads reach the
+table.
+
+**The fast way.** The table's keys are heeded keys (Heeded keys): a batch that may write
+one runs the general way, as a batch that writes a key a client waits on or watches.
+Every other batch of a client that does not track keeps the fast way. The heeded keys'
+checks look in the table itself, a second lookup per key written; a read adds its keys to
+the table alone, and the set a tick makes anew holds the keys of the clients that wait and
+watch, never the table's (Found in review). While a client is in BCAST mode, every batch
+runs the general way: any key written may be under a prefix. Its keys are kept as they
+come, and sorted once at the end of the group.
+
+**The rest.** CLIENT TRACKING reads its options in order, as Redis does, before it looks
+at ON or OFF. A REDIRECT's id is read as a long long, and its client looked for there;
+an error ends the reading. ON then checks, in Redis's order, a PREFIX without BCAST, a
+switch of BCAST, OPTIN or OPTOUT with BCAST, both of them, a switch of OPTIN or OPTOUT,
+and prefixes that overlap. CLIENT CACHING, GETREDIR, TRACKINGINFO, CLIENT LIST's flags (t,
+R, B) and `redir`, and INFO's tracking_clients, tracking_total_keys, tracking_total_items
+and tracking_total_prefixes answer as Redis's. RESET and a connection's end stop the
+client's tracking, and its ids stay in the table, as Redis leaves them; so does CLIENT
+KILL. At each tick, while some client tracks and the table holds more than
+`tracking-table-max-keys`, keys picked at random leave it, each invalidated under no
+prefix, 100 at most for each tick in a row that found it over the limit (the count
+starting anew at a tick that finds it within it), as Redis's trackingLimitUsedSlots
+bounds its effort. The limit is kept with the table, read again
+from the parameters after CONFIG SET, EXEC and CLIENT TRACKING, so that a tick reads no
+parameter by its name.
+
+**Where BendKV differs.**
+
+- A key that expired is invalidated when the sweep deletes it, or a write meets it. Redis
+  invalidates it also when a read finds it expired (lazy expiry), as with the `expired`
+  event.
+- `tracking-table-max-keys` applies at each tick (every 100 ms). Redis applies it before
+  each command too, so it reaches the limit sooner under load.
+- Redis 7.0.15 answers an overlap of two given prefixes past the first with the error and
+  then OK, and tracks (checkPrefixCollisionsOrReply returns the prefix's index). BendKV
+  answers the error alone and leaves the client as it was.
+- A client in RESP3 that others redirect to, with no subscription and whose batches all
+  run the fast way, waits for its socket alone: its invalidations come with its next
+  reply, where Redis writes them at once.
+- A command's and an eviction's invalidations come before their keyspace events, and the
+  sweep's after them, as Redis orders them for each key; but where Redis sends them key by
+  key, each key's invalidation next to its event, BendKV sends all of one kind first.
+- An LTRIM that removes nothing invalidates nothing. Redis signals its key all the same
+  (`ltrimCommand` calls signalModifiedKey with nothing removed), as it touches it for WATCH
+  (section 3zp).
+- A client that others redirect to gets the invalidation of a key its own command
+  writes before that command's reply. Redis writes it where the command signals the key:
+  before the reply for SET, DEL, SADD, INCR, APPEND and SETRANGE, which signal first,
+  and after it for the commands that reply first, as ZADD, ZINCRBY, HSET, HINCRBY, LPUSH
+  and RPUSH do (`addReply` before `signalModifiedKey`).
+
+**What it costs** (PERFORMANCE 66).
+
+- With no client tracking, a request of the fast way pays for the tracking's two bits in
+  the test that picks the way, and a command of the general way for the checks after it.
+- A client that tracks costs the batches of other clients what clients that wait cost
+  them: their hashes are looked for in the heeded keys. Its own batches, and the batches
+  that may write a key it read, run the general way, a command at a time.
+- While a client is in BCAST mode, every batch runs the general way. That is a cliff, as
+  the clients that waited were before section 3zzo.
+
+**Found on the way.**
+
+- `ps.loud`, the test of whether keyspace events are to be sent, counted bits 0 to 25 of
+  `Ps`'s word as classes of events: the tracking's two bits, and on main a SHUTDOWN asked
+  for and a pause. While one of them was on, the general way built each command's events
+  and dropped them; with the SHUTDOWN or the pause, it also kept the databases from before
+  each command, which only the events and the tracking read. `ps.loud` reads the classes
+  alone now, and the general way looks at a command's effects (`ps.looks`) when events are
+  to be sent or the tracking has work.
+- The general way's loop (`bg.go`) read a command's tracking with eight calls, each saving
+  and loading its frame, whether a client tracked or not. One value (`TkPre`) carries a
+  call's tracking now, read with one call, and INFO's counts of the tracking are set where
+  INFO runs.
+- Eviction did not invalidate the keys it deleted (`mem.done`). It does now, as the sweep
+  does, and `tracking_test.py` has a scenario for it.
+
+**Found in review.**
+
+- BCAST hung the server. The keys a client in NOLOOP mode is told were picked by a
+  function that called itself in both arms of a `Bool.pick`, which evaluates both: a
+  group's keys under a prefix took time exponential in their number (24 keys took 361
+  ms; a benchmark's writes under a prefix never finished). A `match` picks them now. A
+  group's keys were also each put in their place as they came, quadratic in their
+  number; they are kept as they come now and sorted once at the end of the group, by a
+  merge sort. A batch of 24 SETs under the prefix takes 1.1 ms now, of 10,000 81 ms,
+  of 100,000 838 ms (Redis: 0.6, 12 and 132 ms).
+- CLIENT KILL left the client's tracking on: its id among the tracking clients (INFO's
+  count, and the bit that sends batches the general way), its BCAST prefixes (every
+  batch the general way, for good) and a redirect to it. CLIENT KILL turns the client's
+  tracking off now, as a connection's end does.
+- The heeded keys copied the table. The set a tick made anew held the table's keys too,
+  and a tick made it after any client that waited or watched stopped, and each time the
+  table had grown by its own size: with 300,000 keys, ticks stalled for 120 to 366 ms,
+  and a tracked key took 163 bytes. The checks look in the table itself now, by the hash
+  they look in the set by, and the set holds the keys of the clients that wait and watch
+  alone: with 300,000 keys and a client in a loop of WATCH, MULTI, SET and EXEC, PING's
+  99th percentile is 2.6 ms and its longest 7.3 ms, and a tracked key takes 102 bytes
+  (Redis: 0.7 ms, 7.5 ms and, with the same key names, 99 bytes).
+- A served BLMPOP, BZPOPMIN, BZPOPMAX or BZMPOP did not invalidate the key it popped
+  from, LMOVE and RPOPLPUSH invalidated their source before their destination, CLIENT
+  CACHING yes inside a transaction lasted past EXEC, CLIENT alone (an error of arity)
+  kept CLIENT CACHING's flag, and `tracking-table-max-keys` lowered from a million to ten
+  emptied the table in one tick (6.7 s with no answer). Each is as Redis has it now, and
+  `tracking_test.py` has a scenario for each. The limit lowered so under 300,000 keys now
+  trims the table in about 6.7 s of ticks, PING's 99th percentile 82 ms and its longest
+  200 ms (Redis: 11 and 29 ms, as it trims before each command too, and an eviction
+  costs it less).
+- The scenario of the served pops found one more: the client whose command served a
+  blocked client got that pop's invalidations before its own reply. A client that caches
+  what its EXEC read would cache it after its invalidation came, and keep it stale. They
+  come after its reply now, as Redis writes them.
+
+**Tests.** `tests/tracking_test.py` runs scenarios on BendKV and Redis, each with clients
+of its own, and compares what each client received after each step:
+
+- CLIENT TRACKING's options and errors, CLIENT CACHING, GETREDIR and TRACKINGINFO, in
+  RESP2 and RESP3;
+- invalidations of the keys a client read: by another client, by itself (after its reply
+  and EXEC's), in NOLOOP mode, of another database, by the reads' key specs (SINTER,
+  ZUNION, SORT_RO, LCS, GEOSEARCH, PFCOUNT, BITFIELD_RO, OBJECT, DUMP and more), and
+  none for writes that change nothing;
+- redirects: to a client of RESP2 subscribed to the channel, to one of RESP3, to one of
+  RESP2 without a subscription; a redirect's own write; a redirect gone, in RESP3 and
+  RESP2;
+- OPTIN and OPTOUT with CLIENT CACHING, in MULTI and after a CLIENT command;
+- BCAST: prefixes, NOLOOP, the empty prefix, a redirect, the writes of one batch in one
+  push;
+- FLUSHDB and FLUSHALL (in MULTI too), SWAPDB, MOVE, COPY, RENAME;
+- INFO's counts as clients start and stop tracking and go; RESET; CLIENT REPLY OFF;
+- a key that expires, a key evicted past maxmemory, the table's limit, and a client
+  BLMOVE serves;
+- the key a served BLMPOP, BZPOPMIN or BZMPOP popped from, and none for BLPOP, after
+  another client read it in a transaction, and in BCAST mode with NOLOOP; LMOVE's and
+  RPOPLPUSH's order; CLIENT CACHING inside a transaction and CLIENT alone; CLIENT KILL of
+  a client that tracks and of one in BCAST mode; 200 keys under a prefix in one batch.
+
+Redis's suite: unit/tracking passes the 10 of its 13 tests that Redis passes, and
+unit/other its test of RESET clearing a client's state (COMPATIBILITY.md). The client
+libraries' tests of their caches pass as on Redis: redis-py's `test_client_tracking` in
+RESP2 and RESP3, and go-redis's specs of its client-side cache and of ClientTracking.
+
 ## 3zzze. A unix socket, IPv6 and systemd: the start of a stock configuration
 
 **What was left.** Redis's own `redis.conf` binds `127.0.0.1 -::1`; the configuration
@@ -6016,6 +6235,156 @@ alone: locally GET is 3,420 (main 3,419), SET 4,186 (4,183), INCR 4,528 (4,527).
 - Protected mode is still BendKV's: it listens on the loopback alone, where Redis
   listens on every address and answers a client from elsewhere with a DENIED error.
 
+## 3zzzi. One reading of the heap for INFO and the eviction
+
+**What failed.** One check of `tests/maxmemory_test.py` failed now and then under load,
+in CI and here: an eviction that runs out of time and goes on with no request. With two
+busy loops beside it on four cores, a build of #72 with #70 merged in (main's memory
+code) failed 3 runs of 20, and #75's build, the same with SIGTERM, 1 of 20. It failed in
+two ways:
+
+- INFO's `used_memory` stayed a few hundred bytes past maxmemory for the 30 s the test
+  waits (10,712,200 against 10,711,556), and no key was evicted any more;
+- INFO showed the heap within the limit, and DBSIZE, the next request, found 5 to 11
+  keys fewer than INFO's `evicted_keys` had counted.
+
+**Why.** The heap was read in two places for two purposes.
+
+- The eviction goes by the actor's reading: before each group, and after each key it
+  frees (`mem.run`, `evict.heap`). It stops once that reading is within maxmemory, a
+  few hundred bytes under it: what the last key freed.
+- INFO's `used_memory` was the shell's reading. The connection's thread reads the heap
+  with INFO's other facts (`live.read`), before the request reaches the actor.
+
+The two readings differ by what changed in the heap between them, and the heap's
+account does not move with the keys alone.
+
+- On a server with no other client, a loop of INFO and DBSIZE over 200,000 keys moved it
+  between 19 KB and 69 KB above its first reading.
+- With maxmemory 100 KB above an empty server's memory and `noeviction`, every SET past
+  the limit was refused, so no key was added or deleted. The account still climbed by
+  about 390 bytes for each refused SET and INFO, and fell by 35 to 50 KB at once every 60
+  to 100 requests.
+
+The account itself is exact. What climbs is the timing of the calls (section 3zzz). Each
+run of calls goes, with a histogram of its own, to the runs not yet counted (`Stats`'
+`cur` and `pend`). They are counted in the entries at the cron's tick, every 100 ms, so
+a run is held until then. With `latency-tracking` on, that is about 300 bytes a call
+(#79).
+
+So:
+
+- the shell's reading could stay past maxmemory while the actor's was within. INFO then
+  showed the heap past the limit with no eviction going on, and nothing changed it;
+- a later group's reading could be past the limit again by more than the eviction had
+  left under it, and the actor evicted a few more keys between INFO and DBSIZE. In the 3
+  s after INFO first showed the heap within, a loop of INFO and DBSIZE saw about 80 more
+  keys evicted, in 4 runs of 5.
+
+Redis reads one counter (`zmalloc_used_memory`) in one thread for both, so its INFO does
+not show the memory past maxmemory while its eviction finds it within. Its memory in
+flight (query buffers, replies not yet written) counts too, and sets its eviction going
+again when it grows, but it moves by much less.
+
+**What changed.**
+
+- With maxmemory set, INFO's `used_memory` is the actor's reading for the group the
+  request runs in: the one before the group, or the one after the last key the group's
+  eviction freed (`S.srv.heap`, `I.info.heap`). The peak, MEMORY STATS and MEMORY
+  DOCTOR read the same field. The shell's facts give every other value
+  (`I.info.live.held`, `srv.facts`).
+- The actor reads the heap only when maxmemory is set and no pause holds (`mem.need`
+  2). Without maxmemory, and during a pause, INFO shows the shell's reading as before.
+  In a group where a pause ends, INFO shows the reading from before it: the actor's
+  last, or the shell's last. The pause kept the dataset as it was meanwhile. After a
+  CONFIG SET of maxmemory (Mm's `kick`), the shell's reading stands until the next group
+  reads the heap (`facts.held`).
+- The test reads DBSIZE and INFO in one MULTI/EXEC, so that the memory, the keys left
+  and the eviction's counts are of one moment. It waits on that for the memory to be
+  within the limit. The check is the same: `evicted_keys` and DBSIZE add up to 200,000,
+  `current_eviction_exceeded_time` is 0 and `total_eviction_exceeded_time` is past 0.
+
+**What it costs.** With maxmemory, each group rebuilds three records with its reading (the
+server's, INFO's and the facts'), and so does each key an eviction frees. Under callgrind
+(`tools/callgrind_req.sh`: 20 clients at pipeline depth 16), main's GET and SET took
+3,475 and 4,231 instructions a request without maxmemory, and 3,504 and 4,254 with it (1
+GB, nothing evicted). This branch took 3,486 and 4,228, then 3,503 and 4,260: the same,
+within the counts' spread.
+
+**Result.** In 20 runs under load (a busy loop, another run of the test and other probes
+beside it), the check failed in none. The test's change alone, on main's server, failed
+in none of 20 either. Likely, the requests of the test's own wait keep moving the heap's
+account, so the shell's reading does not stay past the limit. With the server's change,
+INFO shows the heap within exactly when the eviction found it within, whatever the
+requests do.
+
+Snapshots taken as the test takes them (MULTI, DBSIZE, INFO, EXEC), in the 3 s after the
+first one within the limit, held both invariants: a heap within had no eviction running,
+and `evicted_keys` and DBSIZE added up to 200,000. That was about 9,500 snapshots on
+this branch and 10,000 on main.
+
+**What is left.**
+
+- After an eviction, a key or a few more are evicted whenever the heap's account goes
+  past what the eviction left under the limit, as in Redis. `evicted_keys` grows by a
+  few keys with no write, where Redis's would rarely grow.
+- The same moves of the heap's account make another check of the test fail now and
+  then: Redis's own test that only the allkeys policies evict keys with no time
+  (unit/maxmemory.tcl). It sets maxmemory 100 KB above the memory used, adds keys until
+  INFO shows the memory within 4 KB of the limit, then adds as many again and expects a
+  volatile policy to refuse one with OOM. When the account falls by 60 to 80 KB during
+  the second half, the keys never take the heap past the limit. The test's three
+  volatile policies, run alone 25 times on a server of their own, failed 3 times of 75
+  with this change and 5 times of 75 on main. Two of the 20 runs above failed on it
+  (volatile-ttl), as one of main's CI runs did (volatile-random). Bounding the runs
+  not yet counted would end it, and with it most of what the eviction sees move: issue
+  #79.
+
+## 3zzzj. The timing's runs not yet counted, one per command
+
+**What was left.** Each call's time goes to a run of calls of its command (section 3zzz).
+The newest run (`cur`) takes the calls of its command. A call of another command starts a
+new run, and `cur` goes to the runs not yet counted (`pend`), which the cron's tick counts
+in the entries every 100 ms. Each run has a histogram of its own: four nodes of eight
+words from its first call, about 300 bytes with the run. Under a load of mixed commands,
+where the command changes from one call to the next, `pend` held a run for nearly each
+call until the tick (issue #79).
+
+- **Memory.** Under `tools/loadgen.c -g 0.5` (GETs and SETs of 10,000 keys at random, 20
+  connections at depth 16), the heap's account went between 2.3 MB and 16 MB from one
+  tick to the next.
+- **Throughput.** Making and dropping those runs cost far more time than their
+  instructions: with `latency-tracking no` the same load ran 1.6 to 1.9 times as fast,
+  and main ran it at 0.79 times Redis's throughput.
+- **The eviction** goes by the account. Before each group it found the heap past
+  maxmemory by what the runs held, and evicted keys that the next tick would have made
+  room for.
+- **The tests.** Redis's test of the volatile policies (unit/maxmemory.tcl) works on 100 KB
+  past the memory used. Between two ticks, its own SETs and INFOs put up to 80 KB of runs
+  in that budget, and when a tick let them go during the test's second half, the keys
+  never reached the limit. Run alone 25 times, its three volatile checks failed 5 times
+  of 75.
+
+**What changed** (`src/info.bend`: `truns.put`). A run that leaves `cur` is added to the run
+of its command in `pend` when there is one (`trun.join`: its calls, its time and its
+histogram merged into that run's), and goes last when there is none. Between two ticks,
+`pend` so holds a run of each command at most. What INFO, LATENCY and SLOWLOG show is the
+same: the tick counts the same calls, times and histograms into the entries, in another
+order.
+
+**What it gives** (section 71 of [PERFORMANCE.md](PERFORMANCE.md)).
+
+- **Memory.** Under the same load, the heap's account moves by 16 KB at most.
+- **Throughput.** The mixed load runs 1.45 times as fast, 1.15 times Redis's. Instructions
+  per call fall by 4%, so most of the gain is in the cache: the heap no longer runs
+  through 14 MB of fresh nodes every 100 ms.
+- **Single-command loads.** There `cur` takes every call, as before, and `make perfcheck`'s
+  counts are main's.
+- **The volatile policies' test.** It failed in none of 75 checks. Its first half now
+  adds about 250 keys, where it added 91, the rest of the 100 KB having been the runs.
+
+**Tests.** `tests/timing_test.py`, `tests/stats_test.py` and `tests/info_test.py` against
+Redis: commandstats, latencystats, errorstats and the slow log, unchanged.
 ## 4. Where a request's time goes, and hiding the memory waits
 
 With the eight patches, BendKV ran fewer instructions on GET and SET than Redis, missed
