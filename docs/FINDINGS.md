@@ -5978,7 +5978,9 @@ keys and eviction invalidate the keys they delete as no client's change.
 The client whose command runs gets its own invalidations after its reply: after EXEC's
 for EXEC's commands, and after its reply for a client that a blocking command serves.
 Redis keeps them for after the call. A served BLMOVE or BRPOPLPUSH changes its
-destination; a served BLMPOP, BZPOPMIN, BZPOPMAX or BZMPOP changes the key it popped from;
+destination, unless that holds another type: then it answers WRONGTYPE, changes nothing
+and invalidates nothing, as Redis serves it (`serveClientBlockedOnList` gives up before
+`lmoveHandlePush`); a served BLMPOP, BZPOPMIN, BZPOPMAX or BZMPOP changes the key it popped from;
 a served BLPOP or BRPOP changes nothing more, as Redis signals each (its push made the key
 ready). LMOVE's and RPOPLPUSH's destination goes before their source, as Redis signals
 them. One it gets as the client another redirects to comes before its
@@ -6047,7 +6049,10 @@ parameter by its name.
   writes before that command's reply. Redis writes it where the command signals the key:
   before the reply for SET, DEL, SADD, INCR, APPEND and SETRANGE, which signal first,
   and after it for the commands that reply first, as ZADD, ZINCRBY, HSET, HINCRBY, LPUSH
-  and RPUSH do (`addReply` before `signalModifiedKey`).
+  and RPUSH do (`addReply` before `signalModifiedKey`), and as a served BLMPOP does
+  (`listPopRangeAndReplyWithKey`). For a served BZPOPMIN, BZPOPMAX or BZMPOP, Redis writes
+  it inside the reply's array, after its header: `genericZpopCommand` signals the key as it
+  pops the first member, between the array's length and its elements.
 
 **What it costs** (PERFORMANCE 66).
 
