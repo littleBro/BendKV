@@ -320,8 +320,9 @@ Where performance and proof meet: **batched execution under proved laws.**
    GEO (done, section 3zzm), DUMP and RESTORE (done, section 3zzu), the slow log and
    the latency monitor (done, section 3zzz), the RDB file with SAVE, the saves of
    SHUTDOWN and FLUSHALL and its load at the start (done, section 3zzzc; BGSAVE and the
-   save points next), and Lua scripts on Redis's own Lua (done, section 3zzzd; Lua's
-   functions, FUNCTION and FCALL, next, on the same engine), measured by Redis's
+   save points next), CLIENT TRACKING (done, section 3zzzb), ACL users (done, section
+   3zzzh) and Lua scripts on Redis's own Lua (done, section 3zzzd; Lua's functions,
+   FUNCTION and FCALL, next, on the same engine), measured by Redis's
    own test suite run against BendKV and by client libraries' test suites (redis-py's and
    go-redis's, in CI: done, section 3zy).
    Streams, cluster, replication and modules are out of scope. The suite's count: of the 1,677 tests
@@ -378,8 +379,11 @@ Where performance and proof meet: **batched execution under proved laws.**
    window's check and update take about 1,300 (PERFORMANCE.md, section 64). CLIENT
    TRACKING leaves the batches on keys no client tracks the fast way (section 3zzzb); a
    tracking client's own commands, and every batch while a client is in BCAST mode, run
-   the general way, a command at a time (PERFORMANCE.md, section 66). Next within the
-   scope: ACL's users.
+   the general way, a command at a time (PERFORMANCE.md, section 66). ACL users cost
+   nothing while no client's user is restricted (section 3zzzh); while one is, its
+   batches run the general way, each call checked against its user's selectors, and the
+   client of each other batch is looked up by its id in a trie of the restricted
+   (PERFORMANCE.md, section 70). Next within the scope: the query buffer's limits.
 
 After that comes proving the native strings (section 5, step 1): a small piece of
 work that makes the word "verified" much stronger.

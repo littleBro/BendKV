@@ -1527,14 +1527,15 @@ def stats.served(m: Maybe<&2, Wt>, st: Stats, +cf: TCfg, +id: Nat) -> Stats:
 # the server at its start: the operating system (as uname names it), the
 # pid, the run id and the replication id (40 hex digits each), the
 # program and the configuration file (absolute paths, "" for none), the
-# machine's memory, the time it started (seconds since 1970) and the bytes
-# its heap's live values held then (IO.heap)
+# machine's memory, the time it started (seconds since 1970), the bytes
+# its heap's live values held then (IO.heap), and a secret of 80 random
+# hex digits, which nothing shows (ACL GENPASS's key)
 type Boot is Data:
-  IBoot{os: String, pid: String, run: String, replid: String, exe: String, conf: String, sysmem: Nat, start: U32, heap0: Nat}
+  IBoot{os: String, pid: String, run: String, replid: String, exe: String, conf: String, sysmem: Nat, start: U32, heap0: Nat, key: String}
 
 def boot.start(+b: Boot) -> U32:
   match b:
-    case IBoot{os, pid, run, replid, exe, conf, sysmem, start, heap0}:
+    case IBoot{os, pid, run, replid, exe, conf, sysmem, start, heap0, key}:
       start
 
 # the clients the actor counts: those that wait (blk), those of them with
@@ -2551,7 +2552,7 @@ def flag(b: Bool) -> String:
 
 def sec.server(+items: List<&2, C.CItem>, +b: Boot, +l: Live) -> String:
   match b l:
-    case IBoot{+os, +pid, +run, +replid, +exe, +conf, sysmem, +start, heap0} ILive{+secs, +usec, ut, st, mut, mst, rss, heap, act, conns, clients, cn}:
+    case IBoot{+os, +pid, +run, +replid, +exe, +conf, sysmem, +start, heap0, key} ILive{+secs, +usec, ut, st, mut, mst, rss, heap, act, conns, clients, cn}:
       +up = Bool.pick(U32, U32.is_le(start, secs), U32.sub(secs, start), 0)
       "# Server\r\n" ++ kv("redis_version", "7.0.15") ++ kv("redis_git_sha1", "00000000") ++ kv("redis_git_dirty", "0") ++
       kv("redis_build_id", "0000000000000000") ++ kv("redis_mode", "standalone") ++ kv("os", os) ++ kv("arch_bits", "64") ++
@@ -2611,7 +2612,7 @@ def sec.memory.go(+items: List<&2, C.CItem>, +used: Nat, +pk: Nat, +used0: Nat, 
 
 def sec.memory(+items: List<&2, C.CItem>, +b: Boot, +l: Live, +pk: Nat) -> String:
   match b:
-    case IBoot{os, pid, run, replid, exe, conf, +sysmem, start, +heap0}:
+    case IBoot{os, pid, run, replid, exe, conf, +sysmem, start, +heap0, key}:
       sec.memory.go(items, live.heap(l), Nat.max(pk, live.heap(l)), heap0, live.rss(l), live.act(l), sysmem, live.cn(l, 7n), live.cn(l, 8n), live.cn(l, 6n))
 
 def sec.aof(on: Bool, +a0: Nat, +a: Nat, +sched: Bool) -> String:
@@ -2802,12 +2803,12 @@ def on.memory(on: Bool, +items: List<&2, C.CItem>, +i: Info) -> String:
 
 def boot.heap0(+b: Boot) -> Nat:
   match b:
-    case IBoot{os, pid, run, replid, exe, conf, sysmem, start, heap0}:
+    case IBoot{os, pid, run, replid, exe, conf, sysmem, start, heap0, key}:
       heap0
 
 def boot.replid(+b: Boot) -> String:
   match b:
-    case IBoot{os, pid, run, replid, exe, conf, sysmem, start, heap0}:
+    case IBoot{os, pid, run, replid, exe, conf, sysmem, start, heap0, key}:
       replid
 
 # the second the server started at (since 1970)
@@ -2816,12 +2817,20 @@ def info.start(+i: Info) -> U32:
     case IInfo{+b, l, c, inst, pk, c0, a0, a, st, ex, rw, tm, rf}:
       boot.start(b)
 
+# the secret of the start (ACL GENPASS's key)
+def info.key(+i: Info) -> String:
+  match i:
+    case IInfo{b, l, c, inst, pk, c0, a0, a, st, ex, rw, tm, rf}:
+      match b:
+        case IBoot{os, pid, run, replid, exe, conf, sysmem, start, heap0, +key}:
+          key
+
 # a seed for the server's random numbers: its run id hashed
 def info.seed(+i: Info) -> U32:
   match i:
     case IInfo{b, l, c, inst, pk, c0, a0, a, st, ex, rw, tm, rf}:
       match b:
-        case IBoot{os, pid, +run, replid, exe, conf, sysmem, start, heap0}:
+        case IBoot{os, pid, +run, replid, exe, conf, sysmem, start, heap0, key}:
           String.hash(run)
 
 def on.persistence(on: Bool, +items: List<&2, C.CItem>, +i: Info, +now: Nat) -> String:

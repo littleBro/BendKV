@@ -39,6 +39,9 @@ LIST's lines cut to their ids, flags and redirects).
 - BCAST with many keys under a prefix in one batch (a group's keys sent
   in the order of their bytes, each once).
 
+Then a check of BendKV alone: an MGET of 50,000 keys by a client that
+tracks them answers within 1.5 s.
+
     python3 tests/tracking_test.py --bendkv 6380 --redis 6390
 """
 import argparse
@@ -50,11 +53,11 @@ import time
 
 
 def enc(args):
-    out = b"*%d\r\n" % len(args)
+    out = [b"*%d\r\n" % len(args)]
     for a in args:
         a = a.encode() if isinstance(a, str) else a
-        out += b"$%d\r\n%s\r\n" % (len(a), a)
-    return out
+        out.append(b"$%d\r\n%s\r\n" % (len(a), a))
+    return b"".join(out)
 
 
 class Conn:
@@ -621,6 +624,33 @@ SCENARIOS = [("errors", errors), ("self, RESP3", self_resp3), ("keys of reads", 
              ("bcast keys", many)]
 
 
+def mget_time(port, n):
+    """How long a RESP3 client that tracks keys took to MGET n missing
+    keys, and how many nulls it got: a call's keys are read in one walk of
+    its arguments (read from the start for each key, an MGET of 50,000
+    keys took 6 to 16 s)."""
+    s = socket.create_connection(("127.0.0.1", port))
+    s.settimeout(60)
+
+    def until(done):
+        buf = b""
+        while not done(buf):
+            d = s.recv(1 << 20)
+            if not d:
+                break
+            buf += d
+        return buf
+    s.sendall(enc(["HELLO", "3"]) + enc(["CLIENT", "TRACKING", "on"]))
+    until(lambda b: b.endswith(b"+OK\r\n"))
+    req = enc(["MGET"] + ["trkmget:%d" % i for i in range(n)])
+    t = time.time()
+    s.sendall(req)
+    buf = until(lambda b: b.count(b"_\r\n") >= n)
+    dt = time.time() - t
+    s.close()
+    return dt, buf.count(b"_\r\n")
+
+
 def run(port, scenario):
     r = Run(port)
     try:
@@ -652,6 +682,13 @@ def main():
                 print("  line %d\n    bendkv: %s\n    redis:  %s" % (i, g[:400], w[:400]))
         else:
             print("ok   %s: %d lines" % (name, len(want)))
+    if not a.only:
+        dt, got = mget_time(a.bendkv, 50000)
+        if got != 50000 or dt > 1.5:
+            fails += 1
+            print("FAIL MGET of 50,000 keys by a client that tracks them: %.3f s (at most 1.5 s), %d nulls" % (dt, got))
+        else:
+            print("ok   MGET of 50,000 keys by a client that tracks them: %.3f s" % dt)
     if fails:
         sys.exit(1)
     print("TRACKING TESTS PASSED")

@@ -27,7 +27,8 @@
 //   kind 3, a log line of redis.log (its level in bits 12 to 15), answered
 //     with Engine.next(1, "");
 //   kind 4, redis.acl_check_cmd's arguments as a request, answered with
-//     ":1" when the command is known or ":0" when it is not.
+//     ":1" when the caller's user may run the command, ":0" when it may
+//     not, or "-" when the command is not known.
 //
 // The word of a step: bits 0 to 3 its kind; 4 to 7 the script client's
 // protocol (redis.setresp: 2 or 3), in which Bend encodes the reply to a
@@ -1143,8 +1144,8 @@ static int sc_acl_check_cmd(lua_State* L) {
   }
   r->kind = SC_ACL;
   sc_yield(r);
-  if (r->in[0] == ':' && r->in[1] == '1') {
-    lua_pushboolean(L, 1);
+  if (r->in_len >= 2 && r->in[0] == ':' && (r->in[1] == '1' || r->in[1] == '0')) {
+    lua_pushboolean(L, r->in[1] == '1');
     return 1;
   }
   sc_push_error(L, "Invalid command passed to redis.acl_check_cmd()");
