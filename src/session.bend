@@ -529,6 +529,61 @@ def srv.rw.failed(s: Srv, +ms: Nat) -> Srv:
     case Srv{pass, cfg, info, mm}:
       Srv{pass, cfg, I.info.rw.failed(info, ms), mm.paid(mm)}
 
+# the rewrite that runs stopped (a SHUTDOWN whose save failed)
+def srv.rw.stop(s: Srv) -> Srv:
+  match s:
+    case Srv{pass, cfg, info, mm}:
+      Srv{pass, cfg, I.info.rw.stop(info), mm.paid(mm)}
+
+# The RDB file (info.bend: Rdb; server.bend: The RDB file): a SAVE
+# counted as it runs; a save that ended, well or not, at the second secs;
+# the keys the start loaded and those it found expired; a FLUSHALL's save
+# asked for (on) or done, and whether one is; a SHUTDOWN's save, the same
+def srv.rdb.save(s: Srv) -> Srv:
+  match s:
+    case Srv{pass, cfg, info, mm}:
+      Srv{pass, cfg, I.info.rdb.save(info), mm}
+
+def srv.rdb.saved(s: Srv, +well: Bool, +secs: Nat) -> Srv:
+  match s:
+    case Srv{pass, cfg, info, mm}:
+      Srv{pass, cfg, I.info.rdb.saved(info, well, secs), mm}
+
+def srv.rdb.loaded(s: Srv, +ld: Nat, +ex: Nat) -> Srv:
+  match s:
+    case Srv{pass, cfg, info, mm}:
+      Srv{pass, cfg, I.info.rdb.loaded(info, ld, ex), mm}
+
+def srv.rdb.flushed(s: Srv, +on: Bool) -> Srv:
+  match s:
+    case Srv{pass, cfg, info, mm}:
+      Srv{pass, cfg, I.info.rdb.flushed(info, on), mm}
+
+def srv.rdb.flush(+s: Srv) -> Bool:
+  match s:
+    case Srv{pass, cfg, +info, mm}:
+      I.info.rdb.flush(info)
+
+def srv.rdb.owed(+s: Srv) -> Bool:
+  match s:
+    case Srv{pass, cfg, +info, mm}:
+      I.info.rdb.owed(info)
+
+def srv.rdb.paid(s: Srv) -> Srv:
+  match s:
+    case Srv{pass, cfg, info, mm}:
+      Srv{pass, cfg, I.info.rdb.paid(info), mm}
+
+def srv.rdb.shutting(s: Srv, +on: Bool) -> Srv:
+  match s:
+    case Srv{pass, cfg, info, mm}:
+      Srv{pass, cfg, I.info.rdb.shutting(info, on), mm}
+
+def srv.rdb.shut(+s: Srv) -> Bool:
+  match s:
+    case Srv{pass, cfg, +info, mm}:
+      I.info.rdb.shut(info)
+
 # an eviction at now that deleted k keys and left the heap past
 # maxmemory or not (over)
 def srv.evicted(s: Srv, +k: Nat, +over: Bool, +now: Nat) -> Srv:
@@ -2850,17 +2905,16 @@ def sort.reply(+ds: R.Ds, +k: String, o: R.SortO) -> R.Reply:
 
 # The administrative commands
 # ---------------------------
-# LASTSAVE answers the time of the last save, which is the start, as
-# BendKV writes no RDB snapshot (Redis's lastsave is its start until it
-# saves one); MEMORY STATS and MEMORY DOCTOR the numbers INFO's memory
-# section shows (info.bend, MEMORY STATS and MEMORY DOCTOR); LOLWUT
-# VERSION 5 and 6 their drawings (lolwut.bend), from the server's random
-# numbers. SHUTDOWN stops the server (server.bend, SHUTDOWN) but when it
-# is to save (SAVE without FORCE): BendKV writes no RDB snapshot, and
-# answers as Redis answers when its save fails. A session alone stops
-# nothing, and answers OK for a SHUTDOWN that would stop the server.
-def admin.down(+sd: R.Sd) -> R.Reply:
-  Bool.pick(R.Reply, Bool.and(R.sd.save(sd), Bool.not(R.sd.force(sd))), R.RError{"ERR Errors trying to SHUTDOWN. Check logs."}, R.r_ok())
+# LASTSAVE answers the time of the last save that ended well, the start
+# until one does (Redis's lastsave; server.bend, The RDB file); MEMORY
+# STATS and MEMORY DOCTOR the numbers INFO's memory section shows
+# (info.bend, MEMORY STATS and MEMORY DOCTOR); LOLWUT VERSION 5 and 6
+# their drawings (lolwut.bend), from the server's random numbers. SAVE
+# writes the RDB file, and SHUTDOWN stops the server, after a save when it
+# is to save one (server.bend, The RDB file and SHUTDOWN): the shell
+# answers them once it has saved, or answers a SHUTDOWN whose save failed
+# as Redis does. A session alone writes nothing and stops nothing: it
+# answers OK for each.
 
 # SLOWLOG GET's count: none for 10, -1 for all
 def slow.get(+t: I.Tim, +args: List<&2, String>) -> R.Reply:
@@ -2907,7 +2961,7 @@ def latency.reply(+k: Nat, +args: List<&2, String>, +s: Srv, +ds: R.Ds) -> R.Rep
 def admin.reply(+k: Nat, +args: List<&2, String>, +s: Srv, +ds: R.Ds) -> R.Reply:
   match k:
     case 0n:
-      R.r_int(U32.to_nat(I.info.start(srv.info(s))))
+      R.r_int(I.info.lastsave(srv.info(s)))
     case 1n:
       I.mem.stats(srv.info(s), R.ds.list(ds))
     case 2n:
@@ -2915,9 +2969,11 @@ def admin.reply(+k: Nat, +args: List<&2, String>, +s: Srv, +ds: R.Ds) -> R.Reply
     case 3n:
       R.RVerb{L.five(args, KV.mix(srv.rng(s)))}
     case 4n:
-      admin.down(R.sd.flags(args))
+      R.r_ok()
     case 5n:
       R.RVerb{L.six(args, KV.mix(srv.rng(s)))}
+    case 15n:
+      R.r_ok()
     case _:
       latency.reply(k, args, s, ds)
 
