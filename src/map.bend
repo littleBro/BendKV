@@ -88,14 +88,26 @@ type Coll is Data:
 type HPair is Data:
   HP{f: String, v: String}
 
+# k pairs of a small hash past one buffer, coded as in a small hash's
+# string (Hashes, below)
+type HPiece is Data:
+  HPc{k: Nat, s: String}
+
+# where hb.find found a field in a piece: the index of its pair and of its
+# value's code (Hashes, below)
+type HAt is Data:
+  HAt{i: Nat, vi: Nat}
+
 # A hash, as Redis 7.0 keeps one: a small one (n fields, each of at most
 # hash-max-listpack-value bytes, n at most hash-max-listpack-entries) as
 # the string of its pairs in the order they came (a listpack: HGETALL
-# answers them so; Hashes, below), a larger one as a trie of its fields
-# (a hashtable, in no order), which it stays.
+# answers them so; Hashes, below), in pieces of one buffer each past one
+# buffer (HLong), a larger one as a trie of its fields (a hashtable, in no
+# order), which it stays.
 type Hash is Data:
   HSmall{n: Nat, b: String}
   HBig{n: Nat, t: Trie<String>}
+  HLong{n: Nat, ps: List<&2, HPiece>}
 
 # A list, as a deque of two stacks: its first nf elements in order (f),
 # then the other nb in reverse (b), so the list is f and then b reversed
@@ -1520,6 +1532,16 @@ def pk.cut(+b: String, +i: Nat, +end: Nat) -> String:
 # they came (Packed strings, above): a pair is its field's code and its
 # value's code. A read walks the lengths, two a pair, to the pair it
 # wants, and copies a field or a value out with String.slice.
+#
+# A buffer holds at most 2,048 bytes: a longer string is a chain of them,
+# and String.code_at past the first walks the chain from its start, so a
+# read by index would cost the pairs times the buffers. A small hash's
+# string therefore holds at most 2,048 bytes (hb.small); past that, its
+# pairs are in pieces (HLong), each the pairs that fill one buffer (or one
+# pair longer than that, which RESTORE may give), and a read or a write
+# goes through them in order and reads or writes in one. A write that
+# makes a piece longer than a buffer deals its pairs into pieces again
+# (hl.fix), and a piece a delete empties goes.
 
 # whether the first pair of ps is f's
 def hps.head(+f: String, ps: List<&2, HPair>) -> Bool:
@@ -1699,19 +1721,294 @@ def hb.del(+b: String, p: Nat & Nat) -> String:
   (+i, vi) = p
   hb.cut(Nat.is_lt(i, String.length(b)), b, i, vi)
 
+# hb.find's indices, as data a walk reads more than once; whether it
+# found its field in s; the index of the pair; of its value's code
+def hl.at(p: Nat & Nat) -> HAt:
+  (i, vi) = p
+  HAt{i, vi}
+
+def hl.found(+s: String, q: HAt) -> Bool:
+  match q:
+    case HAt{i, vi}:
+      Nat.is_lt(i, String.length(s))
+
+def hl.i(q: HAt) -> Nat:
+  match q:
+    case HAt{i, vi}:
+      i
+
+def hl.vi(q: HAt) -> Nat:
+  match q:
+    case HAt{i, vi}:
+      vi
+
+# how many bytes the pair of the field f and its value v takes
+def hb.size(+f: String, +v: String) -> Nat:
+  +lf = String.length(f)
+  +lv = String.length(v)
+  Nat.add(Nat.add(pk.hdr(lf), lf), Nat.add(pk.hdr(lv), lv))
+
+# how many bytes the pairs ps take in a small hash's string, after n
+def hb.bytes(ps: List<&2, HPair>, +n: Nat) -> Nat:
+  match ps:
+    case Nil{}:
+      n
+    case Con{HP{+f, +v}, more}:
+      hb.bytes(more, Nat.add(n, hb.size(f, v)))
+
+# the pairs ps (the last first) as a small hash's string, before acc
+def hl.enc.rev(ps: List<&2, HPair>, acc: String) -> String:
+  match ps:
+    case Nil{}:
+      acc
+    case Con{HP{f, v}, more}:
+      hl.enc.rev(more, hb.pair(f, v, acc))
+
+# the piece of the k pairs cur (the last first), len bytes, before rest
+# (none when k is 0)
+def hl.close(k: Nat, cur: List<&2, HPair>, +len: Nat, rest: List<&2, HPiece>) -> List<&2, HPiece>:
+  match k:
+    case 0n:
+      rest
+    case 1n+j:
+      Con{HPc{1n+j, pk.flat(hl.enc.rev(cur, ""), len)}, rest}
+
+# whether the first pair of ps goes in a piece of len bytes: it fills no
+# more than a buffer, or the piece is empty
+def hl.room(ps: List<&2, HPair>, +len: Nat) -> Bool:
+  match ps:
+    case Nil{}:
+      True{}
+    case Con{HP{+f, +v}, more}:
+      Bool.or(Nat.is_eq(len, 0n), Nat.is_le(Nat.add(len, hb.size(f, v)), 2048n))
+
+# the pairs ps in pieces before the pieces tail, after the k pairs cur
+# (the last first, len bytes) of the piece being filled; room is
+# hl.room(ps, len)
+def hl.fill(ps: List<&2, HPair>, room: Bool, cur: List<&2, HPair>, +k: Nat, +len: Nat, tail: List<&2, HPiece>) -> List<&2, HPiece>:
+  match ps room:
+    case Nil{} _:
+      hl.close(k, cur, len, tail)
+    case Con{HP{+f, +v}, +more} True{}:
+      +l = Nat.add(len, hb.size(f, v))
+      hl.fill(more, hl.room(more, l), Con{HP{f, v}, cur}, 1n+k, l, tail)
+    case Con{HP{+f, +v}, +more} False{}:
+      +l = hb.size(f, v)
+      hl.close(k, cur, len, hl.fill(more, hl.room(more, l), [HP{f, v}], 1n, l, tail))
+
+# the pairs ps, in their order, in pieces of one buffer each
+def hl.of(ps: List<&2, HPair>) -> List<&2, HPiece>:
+  hl.fill(ps, True{}, Nil{}, 0n, 0n, Nil{})
+
+# a piece's pairs, the last first, before acc; its longest field or
+# value, at least m; f's value in it; whether f is in it
+def hl.pairs.in(+p: HPiece, acc: List<&2, HPair>) -> List<&2, HPair>:
+  match p:
+    case HPc{+k, +s}:
+      hb.pairs.rev(k, s, 0n, acc)
+
+def hl.widest.in(+p: HPiece, +m: Nat) -> Nat:
+  match p:
+    case HPc{+k, +s}:
+      hb.widest(k, s, 0n, m)
+
+def hl.get.in(+f: String, +p: HPiece) -> Maybe<&2, String>:
+  match p:
+    case HPc{+k, +s}:
+      hb.get(s, hb.find(f, s, k))
+
+def hl.has.in(+f: String, +p: HPiece) -> Bool:
+  match p:
+    case HPc{+k, +s}:
+      hb.has(s, hb.find(f, s, k))
+
+# the pairs of the pieces ps, the last first, before acc
+def hl.pairs.rev(+ps: List<&2, HPiece>, acc: List<&2, HPair>) -> List<&2, HPair>:
+  match ps:
+    case Nil{}:
+      acc
+    case Con{+p, +rest}:
+      hl.pairs.rev(rest, hl.pairs.in(p, acc))
+
+# the pairs of the pieces ps, in their order
+def hl.pairs(+ps: List<&2, HPiece>) -> List<&2, HPair>:
+  List.reverse(&2, HPair, hl.pairs.rev(ps, Nil{}))
+
+# the length of the longest field or value of the pieces ps, at least m
+def hl.widest(+ps: List<&2, HPiece>, +m: Nat) -> Nat:
+  match ps:
+    case Nil{}:
+      m
+    case Con{+p, +rest}:
+      hl.widest(rest, hl.widest.in(p, m))
+
+# f's value in the pieces ps, unless m already holds it
+def hl.get(+f: String, +ps: List<&2, HPiece>, m: Maybe<&2, String>) -> Maybe<&2, String>:
+  match ps m:
+    case Nil{} Some{v}:
+      Some{v}
+    case Nil{} None{}:
+      None{}
+    case Con{+p, +rest} Some{v}:
+      Some{v}
+    case Con{+p, +rest} None{}:
+      hl.get(f, rest, hl.get.in(f, p))
+
+# whether f is in the pieces ps, unless had already says so
+def hl.has(+f: String, +ps: List<&2, HPiece>, had: Bool) -> Bool:
+  match ps had:
+    case Nil{} True{}:
+      True{}
+    case Nil{} False{}:
+      False{}
+    case Con{+p, +rest} True{}:
+      True{}
+    case Con{+p, +rest} False{}:
+      hl.has(f, rest, hl.has.in(f, p))
+
+# the piece of k pairs s before rest, dealt into pieces again when a write
+# made it longer than a buffer
+def hl.fix.of(long: Bool, +k: Nat, +s: String, rest: List<&2, HPiece>) -> List<&2, HPiece>:
+  match long:
+    case True{}:
+      hl.fill(hb.pairs(k, s, 0n), True{}, Nil{}, 0n, 0n, rest)
+    case False{}:
+      Con{HPc{k, s}, rest}
+
+def hl.fix(+k: Nat, +s: String, rest: List<&2, HPiece>) -> List<&2, HPiece>:
+  hl.fix.of(Bool.and(Nat.is_lt(1n, k), Nat.is_lt(2048n, String.length(s))), k, s, rest)
+
+# the last piece, of k pairs s, with the pair of f and v after its last:
+# in it while it fills no more than a buffer, else in a piece of its own
+def hl.add.of(room: Bool, +k: Nat, +s: String, +f: String, +v: String) -> List<&2, HPiece>:
+  match room:
+    case True{}:
+      [HPc{1n+k, hb.set(False{}, s, 0n, f, v)}]
+    case False{}:
+      [HPc{k, s}, HPc{1n, hb.set(False{}, "", 0n, f, v)}]
+
+def hl.add(+k: Nat, +s: String, +f: String, +v: String) -> List<&2, HPiece>:
+  hl.add.of(Nat.is_le(Nat.add(String.length(s), hb.size(f, v)), 2048n), k, s, f, v)
+
+# whether f was there, and the pieces q holds after the piece of k pairs
+# s
+def hl.set.on(+k: Nat, +s: String, q: Bool & List<&2, HPiece>) -> Bool & List<&2, HPiece>:
+  (had, qs) = q
+  (had, Con{HPc{k, s}, qs})
+
+# whether f is there, and the pieces with f's value set to v: the piece
+# of k pairs s, then rest; had: f is in s, its value's code at index vi
+def hl.set.go(+f: String, +v: String, rest: List<&2, HPiece>, had: Bool, +k: Nat, +s: String, +vi: Nat) -> Bool & List<&2, HPiece>:
+  match rest had:
+    case Nil{} True{}:
+      (True{}, hl.fix(k, hb.reset(s, vi, v), Nil{}))
+    case Nil{} False{}:
+      (False{}, hl.add(k, s, f, v))
+    case Con{HPc{j, r}, more} True{}:
+      (True{}, hl.fix(k, hb.reset(s, vi, v), Con{HPc{j, r}, more}))
+    case Con{HPc{+j, +r}, more} False{}:
+      +q = hl.at(hb.find(f, r, j))
+      hl.set.on(k, s, hl.set.go(f, v, more, hl.found(r, q), j, r, hl.vi(q)))
+
+# whether f is there, and the pieces ps with f's value set to v: in its
+# place when f is there, else after the last pair
+def hl.set(+f: String, +v: String, ps: List<&2, HPiece>) -> Bool & List<&2, HPiece>:
+  match ps:
+    case Nil{}:
+      (False{}, [HPc{1n, hb.set(False{}, "", 0n, f, v)}])
+    case Con{HPc{+k, +s}, rest}:
+      +q = hl.at(hb.find(f, s, k))
+      hl.set.go(f, v, rest, hl.found(s, q), k, s, hl.vi(q))
+
+# the piece of k pairs s before rest, none when k is 0
+def hl.drop(k: Nat, +s: String, rest: List<&2, HPiece>) -> List<&2, HPiece>:
+  match k:
+    case 0n:
+      rest
+    case 1n+j:
+      Con{HPc{1n+j, s}, rest}
+
+# the pieces with f's pair taken out: the piece of k pairs s, then rest;
+# had: f's pair is in s, at index i, its value's code at index vi. A
+# piece left with no pair goes
+def hl.cut.go(+f: String, rest: List<&2, HPiece>, had: Bool, +k: Nat, +s: String, +i: Nat, +vi: Nat) -> List<&2, HPiece>:
+  match rest had:
+    case Nil{} True{}:
+      hl.drop(Nat.sub(k, 1n), hb.cut(True{}, s, i, vi), Nil{})
+    case Nil{} False{}:
+      [HPc{k, s}]
+    case Con{HPc{j, r}, more} True{}:
+      hl.drop(Nat.sub(k, 1n), hb.cut(True{}, s, i, vi), Con{HPc{j, r}, more})
+    case Con{HPc{+j, +r}, more} False{}:
+      +q = hl.at(hb.find(f, r, j))
+      Con{HPc{k, s}, hl.cut.go(f, more, hl.found(r, q), j, r, hl.i(q), hl.vi(q))}
+
+# the pieces ps with f's pair taken out
+def hl.cut(+f: String, ps: List<&2, HPiece>) -> List<&2, HPiece>:
+  match ps:
+    case Nil{}:
+      Nil{}
+    case Con{HPc{+k, +s}, rest}:
+      +q = hl.at(hb.find(f, s, k))
+      hl.cut.go(f, rest, hl.found(s, q), k, s, hl.i(q), hl.vi(q))
+
+# a hash of n pairs whose string is s: small while s fills no more than
+# a buffer, else in pieces
+def hb.small.of(fits: Bool, +n: Nat, +s: String) -> Hash:
+  match fits:
+    case True{}:
+      HSmall{n, s}
+    case False{}:
+      HLong{n, hl.of(hb.pairs(n, s, 0n))}
+
+def hb.small(+n: Nat, +s: String) -> Hash:
+  hb.small.of(Nat.is_le(String.length(s), 2048n), n, s)
+
+# a hash of n pairs in the pieces ps: back in one string when one piece
+# of no more than a buffer is left
+def hl.one.of(fits: Bool, +n: Nat, +k: Nat, +s: String) -> Hash:
+  match fits:
+    case True{}:
+      HSmall{n, s}
+    case False{}:
+      HLong{n, [HPc{k, s}]}
+
+def hl.hash.of(+n: Nat, +k: Nat, +s: String, rest: List<&2, HPiece>) -> Hash:
+  match rest:
+    case Nil{}:
+      hl.one.of(Nat.is_le(String.length(s), 2048n), n, k, s)
+    case Con{q, more}:
+      HLong{n, Con{HPc{k, s}, Con{q, more}}}
+
+def hl.hash(+n: Nat, ps: List<&2, HPiece>) -> Hash:
+  match ps:
+    case Nil{}:
+      HSmall{n, ""}
+    case Con{HPc{+k, +s}, rest}:
+      hl.hash.of(n, k, s, rest)
+
 def hash.empty() -> Hash:
   HSmall{0n, ""}
 
+def hash.of.at(fits: Bool, +n: Nat, ps: List<&2, HPair>) -> Hash:
+  match fits:
+    case True{}:
+      +s = hb.enc(ps, "")
+      HSmall{n, pk.flat(s, String.length(s))}
+    case False{}:
+      HLong{n, hl.of(ps)}
+
 # a small hash of the n pairs ps, in their order (RESTORE)
-def hash.of(+n: Nat, ps: List<&2, HPair>) -> Hash:
-  +s = hb.enc(ps, "")
-  HSmall{n, pk.flat(s, String.length(s))}
+def hash.of(+n: Nat, +ps: List<&2, HPair>) -> Hash:
+  hash.of.at(Nat.is_le(hb.bytes(ps, 0n), 2048n), n, ps)
 
 def hash.len(+h: Hash) -> Nat:
   match h:
     case HSmall{+n, b}:
       n
     case HBig{+n, t}:
+      n
+    case HLong{+n, ps}:
       n
 
 def hash.get(+f: String, +h: Hash) -> Maybe<&2, String>:
@@ -1720,6 +2017,8 @@ def hash.get(+f: String, +h: Hash) -> Maybe<&2, String>:
       hb.get(b, hb.find(f, b, n))
     case HBig{n, +t}:
       get(String, t, f)
+    case HLong{n, +ps}:
+      hl.get(f, ps, None{})
 
 def hash.has(+f: String, +h: Hash) -> Bool:
   match h:
@@ -1727,17 +2026,34 @@ def hash.has(+f: String, +h: Hash) -> Bool:
       hb.has(b, hb.find(f, b, n))
     case HBig{n, +t}:
       Maybe.is_some(&2, String, get(String, t, f))
+    case HLong{n, +ps}:
+      hl.has(f, ps, False{})
 
 # whether a small hash of m pairs, one of them f and v, stays small
 def hash.fits(+m: Nat, +f: String, +v: String) -> Bool:
   Bool.and(Nat.is_le(m, 512n), Bool.and(Nat.is_le(String.length(f), 64n), Nat.is_le(String.length(v), 64n)))
+
+# a hash of m pairs in the pieces ps, large when it no longer fits
+def hl.put(fits: Bool, +m: Nat, ps: List<&2, HPiece>) -> Hash:
+  match fits:
+    case True{}:
+      HLong{m, ps}
+    case False{}:
+      HBig{m, hps.trie(hl.pairs(ps), empty(String))}
+
+# a hash of n pairs in pieces with f's value set to v, as hl.set gave
+# them (q)
+def hl.put.at(+n: Nat, q: Bool & List<&2, HPiece>, +f: String, +v: String) -> Hash:
+  (had, qs) = q
+  +m = Bool.pick(Nat, had, n, 1n+n)
+  hl.put(hash.fits(m, f, v), m, qs)
 
 # a small hash of n pairs b with f's value set to v (had: f is there, its
 # value's code at index vi): small with m pairs when it fits, else large
 def hb.put(fits: Bool, had: Bool, +m: Nat, +n: Nat, b: String, +vi: Nat, +f: String, +v: String) -> Hash:
   match fits:
     case True{}:
-      HSmall{m, hb.set(had, b, vi, f, v)}
+      hb.small(m, hb.set(had, b, vi, f, v))
     case False{}:
       HBig{m, hps.trie(hps.put(f, v, hb.pairs(n, b, 0n)), empty(String))}
 
@@ -1761,6 +2077,8 @@ def hash.put(h: Hash, +f: String, +v: String) -> Hash:
     case HBig{+n, +t}:
       +had = has(String, t, f)
       HBig{Bool.pick(Nat, had, n, 1n+n), set(String, t, f, v)}
+    case HLong{+n, ps}:
+      hl.put.at(n, hl.set(f, v, ps), f, v)
 
 # h without f, which it holds
 def hash.del(h: Hash, +f: String) -> Hash:
@@ -1770,6 +2088,8 @@ def hash.del(h: Hash, +f: String) -> Hash:
       HSmall{Nat.sub(n, 1n), hb.del(b, p)}
     case HBig{+n, t}:
       HBig{Nat.sub(n, 1n), del(String, t, f)}
+    case HLong{+n, ps}:
+      hl.hash(Nat.sub(n, 1n), hl.cut(f, ps))
 
 # the pairs of h, in its order (a small hash's, the order they came)
 def hash.pairs(+h: Hash) -> List<&2, HPair>:
@@ -1778,6 +2098,8 @@ def hash.pairs(+h: Hash) -> List<&2, HPair>:
       hb.pairs(n, b, 0n)
     case HBig{n, +t}:
       hash.kv(t, keys(String, t, 0n))
+    case HLong{n, +ps}:
+      hl.pairs(ps)
 
 # the length of h's longest field or value
 def hash.widest(+h: Hash) -> Nat:
