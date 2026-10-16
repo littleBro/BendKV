@@ -203,12 +203,25 @@ def sizes(b, r):
             same(b, r, cmd)
 
 
+# BendKV's DUMP of key, restored in Redis, gives Redis the hash BendKV
+# holds, in its order
+def dumped(b, r, key):
+    global n
+    n += 1
+    payload = run(b, [b"DUMP", key])[1]
+    run(r, [b"RESTORE", key + b".b", b"0", payload, b"REPLACE"])
+    x, y = run(b, [b"HGETALL", key]), run(r, [b"HGETALL", key + b".b"])
+    if x != y:
+        fail([b"DUMP", key], x, y)
+
+
 # a hash past one buffer (2,048 bytes in BendKV, which keeps its pairs in
 # pieces): grown a field at a time, its values made longer (a piece past
 # a buffer is dealt again) and shorter, its fields taken out from the
 # front, the end and the middle until it is small again, then grown
 # again; then Redis's listpacks of long values (restored, they stay
-# listpacks on both), read and written. Each in its order.
+# listpacks on both), read and written. Each in its order, and each
+# dumped by BendKV and restored in Redis.
 def pieces(b, r):
     look = lambda key: ([b"HGETALL", key], [b"HLEN", key], [b"OBJECT", b"ENCODING", key])
     for i in range(60):
@@ -222,6 +235,7 @@ def pieces(b, r):
         same(b, r, [b"HSET", b"p", b"field%02d" % i, b""])
     for cmd in look(b"p") + ([b"HGET", b"p", b"field59"], [b"HGET", b"p", b"field00"], [b"HEXISTS", b"p", b"nope"]):
         same(b, r, cmd)
+    dumped(b, r, b"p")
     order = [0, 59, 30, 1, 58, 31, 29, 2] + list(range(3, 29)) + list(range(32, 58))
     for k, i in enumerate(order[:-3]):
         same(b, r, [b"HDEL", b"p", b"field%02d" % i])
@@ -234,6 +248,7 @@ def pieces(b, r):
         same(b, r, [b"HSET", b"p", b"field%d" % i, b"x" * (i % 65)])
     for cmd in look(b"p") + ([b"HINCRBY", b"p", b"field100", b"7"], [b"HGET", b"p", b"field159"]):
         same(b, r, cmd)
+    dumped(b, r, b"p")
     run(r, [b"CONFIG", b"SET", b"hash-max-listpack-value", b"1000000"])
     for key, k, vl in ((b"lp1", 120, 1000), (b"lp2", 5, 70000), (b"lp3", 3, 3000)):
         run(r, [b"DEL", key])
@@ -245,6 +260,7 @@ def pieces(b, r):
                 [b"HGET", key, b"f%d" % (k - 1)], [b"HEXISTS", key, b"nope"], [b"HSET", key, b"f1", b"short"],
                 [b"HGET", key, b"f1"], [b"HDEL", key, b"f0"], [b"HSET", key, b"new", b"1"]) + look(key):
             same(b, r, cmd)
+        dumped(b, r, key)
     run(r, [b"CONFIG", b"SET", b"hash-max-listpack-value", b"64"])
 
 
