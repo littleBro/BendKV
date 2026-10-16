@@ -1556,12 +1556,6 @@ type Cls is Data:
 def cls.new() -> Cls:
   Cls{KV.empty(Cl), Nil{}, Nil{}, Nil{}, PzOff{}, 0n, Hd{KV.empty(Nat), 0n, 0n, 0n, trk.new()}, scr.new()}
 
-# the scripts' state, lent
-def cls.scr(+cs: Cls) -> Scr:
-  match cs:
-    case Cls{tab, kd, ks, ms, pz, dn, hd, +scr}:
-      scr
-
 # the bits of Ps's ev that keep the fast way off while a killed client's
 # connection has not ended (the 31st), a client monitors (the 30th),
 # clients are paused (the 25th), or a SHUTDOWN stops the server (the
@@ -3027,15 +3021,15 @@ def ps.trk(+pb: Ps) -> Trk:
 # the caller of the script that runs (0: none), and the KEYS it declared
 def ps.scr.who(+pb: Ps) -> Nat:
   match pb:
-    case Ps{reg, ev, px, +cs, own}:
-      scr.who(cls.scr(cs))
+    case Ps{reg, ev, px, Cls{tab, kd, ks, ms, pz, dn, hd, +scr}, own}:
+      scr.who(scr)
     case PsOf{+p}:
       ps.scr.who(p)
 
 def ps.scr.ks(+pb: Ps) -> List<&2, String>:
   match pb:
-    case Ps{reg, ev, px, +cs, own}:
-      scr.ks(cls.scr(cs))
+    case Ps{reg, ev, px, Cls{tab, kd, ks, ms, pz, dn, hd, +scr}, own}:
+      scr.ks(scr)
     case PsOf{+p}:
       ps.scr.ks(p)
 
@@ -3385,7 +3379,9 @@ def iv.late(+id: Nat, +out: Maybe<&2, Nat>) -> Bool:
 # none (iv.by), as Redis keeps the script's own client for it
 # (trackingRememberKeyToBroadcast), which no client in NOLOOP mode is
 def iv.lua(+cur: Nat, +cs: Cls) -> Bool:
-  Bool.and(Nat.is_lt(0n, cur), Nat.is_eq(scr.who(cls.scr(cs)), cur))
+  match cs:
+    case Cls{tab, kd, ks, ms, pz, dn, hd, +scr}:
+      Bool.and(Nat.is_lt(0n, cur), Nat.is_eq(scr.who(scr), cur))
 
 def iv.by(+cur: Nat, +cs: Cls) -> Nat:
   Bool.pick(Nat, iv.lua(cur, cs), 0n, cur)
@@ -7453,22 +7449,6 @@ def sha.lower(+s: String) -> String:
     case SCon{c, rest}:
       SCon{Char.to_lower(c), sha.lower(rest)}
 
-def ps.scr(+pb: Ps) -> Scr:
-  match pb:
-    case Ps{reg, ev, px, Cls{tab, kd, ks, ms, pz, dn, hd, +scr}, own}:
-      scr
-    case PsOf{+p}:
-      ps.scr(p)
-
-# the scripts' state set, with ev's bits 16 and 17 as it has them
-def ps.scr.set(scr: Scr, pb: Ps) -> Ps:
-  match pb:
-    case Ps{reg, ev, px, Cls{tab, kd, ks, ms, pz, dn, hd, s0}, own}:
-      +x = scr
-      Ps{reg, U32.or(U32.and(ev, 4294770687), scr.bit(x)), px, Cls{tab, kd, ks, ms, pz, dn, hd, x}, own}
-    case PsOf{p}:
-      ps.scr.set(scr, p)
-
 def scr.st(+s: Scr) -> U32:
   match s:
     case Scr{shas, n, +st, at, who, ks}:
@@ -7551,12 +7531,73 @@ def scr.exists(+xs: List<&2, String>, +s: Scr) -> List<&2, R.Reply>:
     case Con{+x, +rest}:
       R.RInt{R.IPos{Bool.pick(Nat, Maybe.is_some(&2, Nat, scr.get(x, s)), 1n, 0n)}} <> scr.exists(rest, s)
 
+# The scripts' state read in place: each reader computes its answer
+# inside the match of Ps. An accessor that returned the Scr of a Ps lent
+# to it owned that Ps (FINDINGS 8): each read kept the node and copied
+# it, about 400 instructions, eight reads an EVAL (PERFORMANCE 68).
 def ps.sc.st(+pb: Ps) -> U32:
-  scr.st(ps.scr(pb))
+  match pb:
+    case Ps{reg, ev, px, Cls{tab, kd, ks, ms, pz, dn, hd, +scr}, own}:
+      scr.st(scr)
+    case PsOf{+p}:
+      ps.sc.st(p)
 
+def ps.scr.find(+sha: String, +pb: Ps) -> Maybe<&2, Nat>:
+  match pb:
+    case Ps{reg, ev, px, Cls{tab, kd, ks, ms, pz, dn, hd, +scr}, own}:
+      scr.find(sha, scr)
+    case PsOf{+p}:
+      ps.scr.find(sha, p)
+
+def ps.scr.get(+sha: String, +pb: Ps) -> Maybe<&2, Nat>:
+  match pb:
+    case Ps{reg, ev, px, Cls{tab, kd, ks, ms, pz, dn, hd, +scr}, own}:
+      scr.get(sha, scr)
+    case PsOf{+p}:
+      ps.scr.get(sha, p)
+
+def ps.scr.exists(+xs: List<&2, String>, +pb: Ps) -> List<&2, R.Reply>:
+  match pb:
+    case Ps{reg, ev, px, Cls{tab, kd, ks, ms, pz, dn, hd, +scr}, own}:
+      scr.exists(xs, scr)
+    case PsOf{+p}:
+      ps.scr.exists(xs, p)
+
+# The scripts' state changes in place: each change takes Scr out of Ps
+# and puts it back, as ps.at.set does. A change of ps.scr's Scr, lent,
+# copied the node, its fields shared, and the old node was dropped:
+# about 400 instructions a change, six changes an EVAL (PERFORMANCE 68).
+
+# the run's bits (st) set, with ev's bits 16 and 17 as they have them
 def ps.sc.st.set(+st: U32, pb: Ps) -> Ps:
-  +p = pb
-  ps.scr.set(scr.st.set(st, ps.scr(p)), p)
+  match pb:
+    case Ps{reg, ev, px, Cls{tab, kd, ks, ms, pz, dn, hd, s0}, own}:
+      +x = scr.st.set(st, s0)
+      Ps{reg, U32.or(U32.and(ev, 4294770687), scr.bit(x)), px, Cls{tab, kd, ks, ms, pz, dn, hd, x}, own}
+    case PsOf{p}:
+      ps.sc.st.set(st, p)
+
+# the caller of the script that runs and its KEYS (scr.run.set)
+def ps.scr.run.set(+id: Nat, ks: List<&2, String>, pb: Ps) -> Ps:
+  match pb:
+    case Ps{reg, ev, px, Cls{tab, kd, k0, ms, pz, dn, hd, s0}, own}:
+      Ps{reg, ev, px, Cls{tab, kd, k0, ms, pz, dn, hd, scr.run.set(id, ks, s0)}, own}
+    case PsOf{p}:
+      ps.scr.run.set(id, ks, p)
+
+def ps.scr.add(+sha: String, +f: Nat, pb: Ps) -> Ps:
+  match pb:
+    case Ps{reg, ev, px, Cls{tab, kd, ks, ms, pz, dn, hd, s0}, own}:
+      Ps{reg, ev, px, Cls{tab, kd, ks, ms, pz, dn, hd, scr.add(sha, f, s0)}, own}
+    case PsOf{p}:
+      ps.scr.add(sha, f, p)
+
+def ps.scr.flush(pb: Ps) -> Ps:
+  match pb:
+    case Ps{reg, ev, px, Cls{tab, kd, ks, ms, pz, dn, hd, s0}, own}:
+      Ps{reg, ev, px, Cls{tab, kd, ks, ms, pz, dn, hd, scr.flush(s0)}, own}
+    case PsOf{p}:
+      ps.scr.flush(p)
 
 # the run's bits set, and cleared
 def ps.sc.on(+bits: U32, pb: Ps) -> Ps:
@@ -7678,7 +7719,7 @@ def sc.flags.of(sha: Bool, +s: String, +pb: Ps) -> U32:
     case False{}:
       U32.or(32, eval.shebang(s))
     case True{}:
-      sc.flags.found(scr.get(s, ps.scr(pb)))
+      sc.flags.found(ps.scr.get(s, pb))
 
 # the script of SEval's arguments (its body, or its sha), and the keys
 # and arguments after it
@@ -7823,7 +7864,7 @@ def bg.script.kill(+code: Nat, g: LRun) -> LRun:
 def sc.noscript.if(sha: Bool, +xs: List<&2, String>, +pb: Ps) -> Bool:
   match sha:
     case True{}:
-      Maybe.is_none(&2, Nat, scr.get(eval.script(xs), ps.scr(pb)))
+      Maybe.is_none(&2, Nat, ps.scr.get(eval.script(xs), pb))
     case False{}:
       False{}
 
@@ -7839,7 +7880,7 @@ def sc.exists.if(pend: Bool, +xs: List<&2, String>, +pb: Ps) -> Maybe<&2, R.Repl
     case True{}:
       None{}
     case False{}:
-      Some{R.RArray{scr.exists(xs, ps.scr(pb))}}
+      Some{R.RArray{ps.scr.exists(xs, pb)}}
 
 def sc.exists(+c: R.Cmd, +pb: Ps) -> Maybe<&2, R.Reply>:
   match c:
@@ -7853,8 +7894,7 @@ def sc.exists(+c: R.Cmd, +pb: Ps) -> Maybe<&2, R.Reply>:
 def bg.script.flush(+c: R.Cmd, g: LRun) -> LRun:
   match c g:
     case R.Own{R.SScript{3n, xs}} LRun{rs, es, conn, srv, ds, ws, up, tx, pb}:
-      +p = pb
-      LRun{rs, es, conn, srv, ds, ws, up, tx, ps.scr.set(scr.flush(ps.scr(p)), p)}
+      LRun{rs, es, conn, srv, ds, ws, up, tx, ps.scr.flush(pb)}
     case _ g0:
       g0
 
@@ -11333,15 +11373,14 @@ def grp.oom(+g: Grp) -> Bool:
 def grp.sc.find(+sha: String, +g: Grp) -> Maybe<&2, Nat>:
   match g:
     case Grp{outs, es, srv, ds, ws, up, tx, +pb}:
-      scr.find(sha, ps.scr(pb))
+      ps.scr.find(sha, pb)
 
 # the caller of the script that starts and its KEYS (Scr's who and ks),
 # and none at its end
 def grp.sc.run(+id: Nat, ks: List<&2, String>, g: Grp) -> Grp:
   match g:
     case Grp{outs, es, srv, ds, ws, up, tx, pb}:
-      +p = pb
-      Grp{outs, es, srv, ds, ws, up, tx, ps.scr.set(scr.run.set(id, ks, ps.scr(p)), p)}
+      Grp{outs, es, srv, ds, ws, up, tx, ps.scr.run.set(id, ks, pb)}
 
 def grp.sc.on(+bits: U32, g: Grp) -> Grp:
   match g:
@@ -11364,14 +11403,12 @@ def grp.sc.wrote(write: Bool, g: Grp) -> Grp:
 def grp.sc.add(+sha: String, +f: Nat, g: Grp) -> Grp:
   match g:
     case Grp{outs, es, srv, ds, ws, up, tx, pb}:
-      +p = pb
-      Grp{outs, es, srv, ds, ws, up, tx, ps.scr.set(scr.add(sha, f, ps.scr(p)), p)}
+      Grp{outs, es, srv, ds, ws, up, tx, ps.scr.add(sha, f, pb)}
 
 def grp.sc.flush(g: Grp) -> Grp:
   match g:
     case Grp{outs, es, srv, ds, ws, up, tx, pb}:
-      +p = pb
-      Grp{outs, es, srv, ds, ws, up, tx, ps.scr.set(scr.flush(ps.scr(p)), p)}
+      Grp{outs, es, srv, ds, ws, up, tx, ps.scr.flush(pb)}
 
 # the engine's facts for INFO (n scripts cached, the Lua state's bytes,
 # the cache's)
@@ -12181,7 +12218,7 @@ def sc.loaded(ld: L.Step, ex: Exm, w: Waits, g: Grp, +aof: Bool, +pid: U32, +req
 def sc.exists.now(+xs: List<&2, String>, +g: Grp) -> R.Reply:
   match g:
     case Grp{outs, es, srv, ds, ws, up, tx, +pb}:
-      R.RArray{scr.exists(xs, ps.scr(pb))}
+      R.RArray{ps.scr.exists(xs, pb)}
 
 # SCRIPT LOAD, EXISTS and FLUSH (k: 1, 2, 3) in their turn
 @unsafe

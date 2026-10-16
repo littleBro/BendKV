@@ -6626,6 +6626,17 @@ code that a change far from the request's path can trigger:
   `ScrOf` makes `Scr` a node of its own: one word, a bank of 49 against main's 48, and
   the counts main's within 5 instructions (PERFORMANCE 68).
 
+**The scripts' state copied at each change and read.** Measured again on 6b360de,
+`EVAL "return 1" 0` cost 61,711 instructions a request, where PERFORMANCE 68 had 53,985
+before the merge of CLIENT TRACKING. Once `ScrOf` made `Scr` a node, a change of it was
+written as `ps.scr.set` of a change of `ps.scr`'s `Scr`. `ps.scr` returned a field of the
+`Ps` lent to it, so it owned that `Ps` (section 8), and the change got a shared copy of
+the node, the old one dropped after it: about 400 instructions, six times an EVAL. Each
+read of the run's bits through it kept and copied the node too, eight times an EVAL.
+Each change and each read now goes through the match of `Ps` (`ps.sc.st.set`,
+`ps.scr.run.set`, `ps.sc.st`, `ps.scr.get` and their kin): 56,360. The other 2,400 are
+spread over what came since, the tracking's work for each script among them (about 500).
+
 **Tests.**
 
 - `tests/script_test.py` runs 12 scenarios on BendKV and on Redis, each with clients of
