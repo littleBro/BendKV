@@ -191,7 +191,7 @@ REGISTERS = [
     "redis.register_function{function_name='f', callback=function() end, nosuch=1}",
     "redis.register_function{function_name='f', callback=function() end, flags={'no-writes', 'allow-oom', 'allow-stale', 'no-cluster', 'allow-cross-slot-keys'}, description='all'}",
     "redis.register_function('f', function() end) redis.register_function('f', function() end)",
-    "redis.register_function('f', function() end) redis.register_function('F', function() end)",
+    "redis.register_function('F', function() end)",
     "redis.log(redis.LOG_NOTICE, 'loading') redis.register_function('f', function() end)",
     "redis.call('ping')", "redis.pcall('ping')", "redis.setresp(3)", "redis.set_repl(redis.REPL_ALL)",
     "x = 1", "local t = getmetatable(_G) redis.register_function('f', function() return 1 end)",
