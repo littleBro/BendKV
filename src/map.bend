@@ -1484,11 +1484,10 @@ def pk.code(+n: Nat, rest: String) -> String:
 def pk.flat(s: String, +n: Nat) -> String:
   String.take(s, n)
 
-# whether the n bytes from index i of b are f, when same says the
-# lengths and the last bytes agree. String.eq, not str_eq: a call that
-# gives str_eq a value of its own (the slice) makes str_eq own its first
-# argument, and every key the trie compares with it be given one
-# (FINDINGS.md, section 7)
+# whether the n bytes from index i of b are f, when same says their last
+# bytes agree. String.eq, not str_eq: a call that gives str_eq a value of
+# its own (the slice) makes str_eq own its first argument, and every key
+# the trie compares with it be given one (FINDINGS.md, section 7)
 def pk.is.whole(same: Bool, +f: String, +b: String, +i: Nat, +n: Nat) -> Bool:
   match same:
     case True{}:
@@ -1496,18 +1495,35 @@ def pk.is.whole(same: Bool, +f: String, +b: String, +i: Nat, +n: Nat) -> Bool:
     case False{}:
       False{}
 
+# whether the n bytes from index i of b are f, as many as f's, whose last
+# is lb: an empty one is, and a longer one's last byte is compared before
+# the whole
+def pk.hit.last(n: Nat, +f: String, +lb: U32, +b: String, +i: Nat) -> Bool:
+  match n:
+    case 0n:
+      True{}
+    case 1n++m:
+      pk.is.whole(U32.is_eq(String.code_at(b, Nat.add(i, m)), lb), f, b, i, 1n+m)
+
+def pk.hit.of(same: Bool, +f: String, +lb: U32, +b: String, +i: Nat, +n: Nat) -> Bool:
+  match same:
+    case True{}:
+      pk.hit.last(n, f, lb, b, i)
+    case False{}:
+      False{}
+
 # whether the string whose code starts at index i of b, the first of k
 # strings from there on, n bytes long, is f (lf bytes long, its last
-# byte lb): the lengths and the last bytes first, both at once (an empty
-# string has no last byte, and is f when f is empty), then the bytes
+# byte lb): the lengths first, then the last bytes, then the bytes (a
+# test of the lengths and the last bytes at once, in one call, reads the
+# last byte of every string of another length too, and costs more than
+# the calls it saves: FINDINGS.md, section 3zzzn)
 def pk.hit(k: Nat, +f: String, +lf: Nat, +lb: U32, +b: String, +i: Nat, +n: Nat) -> Bool:
   match k:
     case 0n:
       False{}
     case 1n+j:
-      +s = Nat.add(i, pk.hdr(n))
-      +last = Bool.or(Nat.is_eq(n, 0n), U32.is_eq(String.code_at(b, Nat.sub(Nat.add(s, n), 1n)), lb))
-      pk.is.whole(Bool.and(Nat.is_eq(n, lf), last), f, b, s, n)
+      pk.hit.of(Nat.is_eq(n, lf), f, lb, b, Nat.add(i, pk.hdr(n)), n)
 
 # b without its bytes from index i to index end
 def pk.cut(+b: String, +i: Nat, +end: Nat) -> String:
