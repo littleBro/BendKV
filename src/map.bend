@@ -76,13 +76,16 @@ type Val is Data:
   VColl{c: Coll}
 
 # a collection: a hash, its fields and their values (Hash), a list, its
-# elements in order (Deq), a set, its members (Mems), or a sorted set,
-# its members and their scores (Zset)
+# elements in order (Deq), a set, its members (Mems), a sorted set, its
+# members and their scores (Zset), or a stream, its entries and its
+# consumer groups (XStream). CStream comes last, so that the others keep
+# their tags.
 type Coll is Data:
   CHash{h: Hash}
   CList{l: Deq}
   CMems{s: Mems}
   CZset{z: Zset}
+  CStream{x: XStream}
 
 # a hash: a field and its value
 type HPair is Data:
@@ -147,6 +150,89 @@ type ZTree is Data:
 type Zset is Data:
   ZSmall{tr: ZTree}
   ZBig{tr: ZTree, t: Trie<F.F64>}
+
+# A number of a stream below 2^64 (an ID's time or sequence, a count),
+# split in decimal so that no Nat passes 2^48: one below 10^14 (every
+# time in ms, almost every sequence and count) as itself (XS), any other
+# as hi * 10^14 + lo, hi from 1 to 184467 and lo below 10^14 (XL)
+# (Streams, below)
+type XN is Data:
+  XS{n: Nat}
+  XL{hi: Nat, lo: Nat}
+
+# a stream entry's ID: its time in ms and its sequence
+type XId is Data:
+  XId{ms: XN, seq: XN}
+
+# A node of a stream, one listpack of Redis's radix tree: its master ID
+# (the radix tree's key) and fields, its live and deleted entries, its
+# listpack's size in bytes and its count of elements, and its entries,
+# the newest first, each the bytes Redis's listpack holds for it (flags,
+# ms delta, seq delta, [num-fields, fields], values, lp-count, each
+# element with its backlen). XNdOf, a node that holds a node, is never
+# built: it makes XNode a node of its own, one word (a type travels as
+# wide as its widest form).
+type XNode is Data:
+  XNd{mid: XId, mfs: List<&2, String>, live: Nat, dead: Nat, bytes: Nat, nel: Nat, es: List<&2, String>}
+  XNdOf{x: XNode}
+
+# a stream's nodes by master ID, as a weight-balanced tree (a tip, or a
+# node of n nodes, x's after those of l and before those of r)
+type XNodes is Data:
+  XNTip{}
+  XNBin{n: Nat, x: XNode, l: XNodes, r: XNodes}
+
+# an entry pending in a group (Redis's NACK): its ID, the consumer it was
+# last delivered to, the time of that delivery (ms) and how many times it
+# was delivered (XNkOf is never built, as XNdOf)
+type XNack is Data:
+  XNk{id: XId, owner: String, time: Nat, count: XN}
+  XNkOf{x: XNack}
+
+# a group's pending entries by ID, as a weight-balanced tree
+type XPel is Data:
+  XPTip{}
+  XPBin{n: Nat, x: XNack, l: XPel, r: XPel}
+
+# the IDs pending for a consumer, as a weight-balanced tree
+type XIds is Data:
+  XITip{}
+  XIBin{n: Nat, x: XId, l: XIds, r: XIds}
+
+# a consumer: its name, the time it was last seen (ms), its pending IDs
+type XCon is Data:
+  XCon{name: String, seen: Nat, ids: XIds}
+
+# a group's consumers by name (bytes, as memcmp orders them, a prefix
+# first), as a weight-balanced tree
+type XCons is Data:
+  XCTip{}
+  XCBin{n: Nat, x: XCon, l: XCons, r: XCons}
+
+# a group's count of entries read (entries_read): unknown (-1), or one
+type XRd is Data:
+  XRdNone{}
+  XRdN{n: XN}
+
+# a consumer group: its name, the last ID delivered to it, its count of
+# entries read, its pending entries and its consumers (XGrpOf is never
+# built, as XNdOf)
+type XGroup is Data:
+  XGrp{name: String, last: XId, read: XRd, pel: XPel, cons: XCons}
+  XGrpOf{x: XGroup}
+
+# a stream's groups by name, as a weight-balanced tree
+type XGroups is Data:
+  XGTip{}
+  XGBin{n: Nat, x: XGroup, l: XGroups, r: XGroups}
+
+# A stream, as Redis 7.0 keeps one: its count of live entries, the last
+# ID added, its first live entry's ID, the greatest ID deleted, how many
+# entries were ever added, its nodes and its groups (XStrOf is never
+# built, as XNdOf) (Streams, below)
+type XStream is Data:
+  XStr{len: Nat, last: XId, first: XId, maxdel: XId, added: XN, nodes: XNodes, groups: XGroups}
+  XStrOf{x: XStream}
 
 # Keys
 # ----
@@ -3385,3 +3471,890 @@ def zset.dels(xs: List<&2, ZEl>, z: Zset) -> Zset:
       z
     case Con{ZEl{+m, +d}, rest}:
       zset.dels(rest, zset.del(z, m, d))
+
+# Streams
+# -------
+# A stream (XStream, above) as Redis 7.0 keeps one: its entries in nodes
+# of a radix tree by master ID, each node a listpack (here a tree by
+# master ID, each node the bytes of its entries), and its consumer groups
+# by name, each with its pending entries by ID and its consumers by name.
+# Its numbers are 64-bit, and each is split in decimal at 10^14, so that
+# no Nat passes 2^48 (XN, above); their arithmetic runs at run time only
+# (no proof computes 10^14: the checker counts in unary).
+
+# 10^14 (a literal stops at 2^32 - 1)
+def xn.e14() -> Nat:
+  Nat.mul(100000000n, 1000000n)
+
+# the low part of 2^64 = 184467 * 10^14 + 44073709551616
+def xn.top.lo() -> Nat:
+  Nat.add(Nat.mul(4407370n, 10000000n), 9551616n)
+
+# hi * 10^14 + lo (lo below 10^14) in its one form
+def xn.of2(+hi: Nat, +lo: Nat) -> XN:
+  match hi:
+    case 0n:
+      XS{lo}
+    case 1n+h:
+      XL{1n+h, lo}
+
+# n (below 2^48)
+def xn.of(+n: Nat) -> XN:
+  +e = xn.e14()
+  xn.of2(Nat.div(n, e), Nat.mod(n, e))
+
+def xn.hi(+a: XN) -> Nat:
+  match a:
+    case XS{n}:
+      0n
+    case XL{+h, l}:
+      h
+
+def xn.lo(+a: XN) -> Nat:
+  match a:
+    case XS{+n}:
+      n
+    case XL{h, +l}:
+      l
+
+def xn.cmp.lo(c: Cmp, +a: Nat, +b: Nat) -> Cmp:
+  match c:
+    case EQ{}:
+      Nat.cmp(a, b)
+    case LT{}:
+      LT{}
+    case GT{}:
+      GT{}
+
+# how a compares with b (XS below XL: each number has one form)
+def xn.cmp(+a: XN, +b: XN) -> Cmp:
+  match a b:
+    case XS{+x} XS{+y}:
+      Nat.cmp(x, y)
+    case XS{x} XL{h, l}:
+      LT{}
+    case XL{h, l} XS{y}:
+      GT{}
+    case XL{+h, +l} XL{+g, +k}:
+      xn.cmp.lo(Nat.cmp(h, g), l, k)
+
+def xn.is_eq(+a: XN, +b: XN) -> Bool:
+  match a b:
+    case XS{+x} XS{+y}:
+      Nat.is_eq(x, y)
+    case XL{+h, +l} XL{+g, +k}:
+      Bool.and(Nat.is_eq(h, g), Nat.is_eq(l, k))
+    case _ _:
+      False{}
+
+# hi * 10^14 + lo mod 2^64 (lo below 10^14, the number below 2^65)
+def xn.wrap.of(ge: Bool, +hi: Nat, +lo: Nat) -> XN:
+  match ge:
+    case False{}:
+      xn.of2(hi, lo)
+    case True{}:
+      +t = xn.top.lo()
+      +b = Nat.is_lt(lo, t)
+      xn.of2(Nat.sub(Nat.sub(hi, 184467n), Bool.pick(Nat, b, 1n, 0n)), Nat.sub(Nat.add(lo, Bool.pick(Nat, b, xn.e14(), 0n)), t))
+
+def xn.wrap(+hi: Nat, +lo: Nat) -> XN:
+  xn.wrap.of(Bool.or(Nat.is_lt(184467n, hi), Bool.and(Nat.is_eq(hi, 184467n), Nat.is_le(xn.top.lo(), lo))), hi, lo)
+
+def xn.add.of(+hi: Nat, +lo: Nat) -> XN:
+  +e = xn.e14()
+  +c = Nat.is_le(e, lo)
+  xn.wrap(Nat.add(hi, Bool.pick(Nat, c, 1n, 0n)), Bool.pick(Nat, c, Nat.sub(lo, e), lo))
+
+# a + b mod 2^64
+def xn.add(+a: XN, +b: XN) -> XN:
+  xn.add.of(Nat.add(xn.hi(a), xn.hi(b)), Nat.add(xn.lo(a), xn.lo(b)))
+
+def xn.neg.of(le: Bool, +h: Nat, +l: Nat) -> XN:
+  match le:
+    case True{}:
+      xn.wrap(Nat.sub(184467n, h), Nat.sub(xn.top.lo(), l))
+    case False{}:
+      xn.wrap(Nat.sub(184466n, h), Nat.sub(Nat.add(xn.top.lo(), xn.e14()), l))
+
+# 2^64 - a mod 2^64: the two's complement of a, as a uint64_t negates
+def xn.neg(+a: XN) -> XN:
+  +l = xn.lo(a)
+  xn.neg.of(Nat.is_le(l, xn.top.lo()), xn.hi(a), l)
+
+# s with zeros before it, k of them
+def xn.pad(k: Nat, +s: String) -> String:
+  match k:
+    case 0n:
+      s
+    case 1n+j:
+      xn.pad(j, "0" ++ s)
+
+# a's digits, as Redis prints a uint64_t (%llu)
+def xn.show(+a: XN) -> String:
+  match a:
+    case XS{+n}:
+      Nat.show(n)
+    case XL{+h, +l}:
+      +s = Nat.show(l)
+      Nat.show(h) ++ xn.pad(Nat.sub(14n, String.length(s)), s)
+
+def xn.dec.of(short: Bool, +s: String, +a: Nat, +d: Nat) -> XN:
+  match short:
+    case True{}:
+      XS{String.dec_at(s, a, d)}
+    case False{}:
+      +k = Nat.sub(d, 14n)
+      xn.of2(String.dec_at(s, a, k), String.dec_at(s, Nat.add(a, k), 14n))
+
+# the number of the d digits of s from index a on (d at most 20, the
+# number below 2^64)
+def xn.dec(+s: String, +a: Nat, +d: Nat) -> XN:
+  xn.dec.of(Nat.is_le(d, 14n), s, a, d)
+
+def xn.of_int.of(neg: Bool, +s: String, +n: Nat) -> XN:
+  match neg:
+    case True{}:
+      xn.neg(xn.dec(s, 1n, Nat.sub(n, 1n)))
+    case False{}:
+      xn.dec(s, 0n, n)
+
+# the 64 bits of the integer whose text is s (a long long's, as
+# ll2string writes one), as a uint64_t holds them
+def xn.of_int(+s: String) -> XN:
+  xn.of_int.of(U32.is_eq(String.code_at(s, 0n), 45), s, String.length(s))
+
+def xid.cmp.of(c: Cmp, +a: XN, +b: XN) -> Cmp:
+  match c:
+    case EQ{}:
+      xn.cmp(a, b)
+    case LT{}:
+      LT{}
+    case GT{}:
+      GT{}
+
+# how ID a compares with ID b: by time, then by sequence
+def xid.cmp(+a: XId, +b: XId) -> Cmp:
+  match a b:
+    case XId{+am, +aq} XId{+bm, +bq}:
+      xid.cmp.of(xn.cmp(am, bm), aq, bq)
+
+# the keys of the trees below
+def xnode.mid(+x: XNode) -> XId:
+  match x:
+    case XNd{+mid, mfs, live, dead, bytes, nel, es}:
+      mid
+    case XNdOf{+y}:
+      xnode.mid(y)
+
+def xnack.id(+x: XNack) -> XId:
+  match x:
+    case XNk{+id, owner, time, count}:
+      id
+    case XNkOf{+y}:
+      xnack.id(y)
+
+# a node's listpack's size in bytes
+def xnode.bytes(+x: XNode) -> Nat:
+  match x:
+    case XNd{mid, mfs, live, dead, +bytes, nel, es}:
+      bytes
+    case XNdOf{+y}:
+      xnode.bytes(y)
+
+# a stream's count of live entries
+def xstream.len(+x: XStream) -> Nat:
+  match x:
+    case XStr{+n, last, first, maxdel, added, nodes, groups}:
+      n
+    case XStrOf{+y}:
+      xstream.len(y)
+
+def xid.self(+x: XId) -> XId:
+  x
+
+def xcon.name(+x: XCon) -> String:
+  match x:
+    case XCon{+name, seen, ids}:
+      name
+
+def xgroup.name(+x: XGroup) -> String:
+  match x:
+    case XGrp{+name, last, read, pel, cons}:
+      name
+    case XGrpOf{+y}:
+      xgroup.name(y)
+
+# The trees of a stream: weight-balanced, as an intset's (ITree, Sets,
+# above), one shape for each kind of element and its key (written by
+# tools/gen_streams.py)
+# BEGIN gen_streams: trees
+# XNodes, by ID (xns)
+
+def xns.size(+t: XNodes) -> Nat:
+  match t:
+    case XNTip{}:
+      0n
+    case XNBin{n, x, l, r}:
+      n
+
+def xns.bin(+x: XNode, +l: XNodes, +r: XNodes) -> XNodes:
+  XNBin{Nat.add(Nat.add(xns.size(l), xns.size(r)), 1n), x, l, r}
+
+# how the key k compares with t's root's (GT for a tip)
+def xns.at(+t: XNodes, +k: XId) -> Cmp:
+  match t:
+    case XNTip{}:
+      GT{}
+    case XNBin{n, +x, l, r}:
+      xid.cmp(k, xnode.mid(x))
+
+def xns.dbll(+x: XNode, l: XNodes, +rx: XNode, rr: XNodes, rl: XNodes) -> XNodes:
+  match rl:
+    case XNTip{}:
+      xns.bin(rx, xns.bin(x, l, XNTip{}), rr)
+    case XNBin{n, +y, +yl, +yr}:
+      xns.bin(y, xns.bin(x, l, yl), xns.bin(rx, yr, rr))
+
+def xns.rotl.of(single: Bool, +x: XNode, l: XNodes, +rx: XNode, rl: XNodes, rr: XNodes) -> XNodes:
+  match single:
+    case True{}:
+      xns.bin(rx, xns.bin(x, l, rl), rr)
+    case False{}:
+      xns.dbll(x, l, rx, rr, rl)
+
+def xns.rotl(+x: XNode, l: XNodes, r: XNodes) -> XNodes:
+  match r:
+    case XNTip{}:
+      xns.bin(x, l, XNTip{})
+    case XNBin{n, +rx, +rl, +rr}:
+      xns.rotl.of(Nat.is_lt(xns.size(rl), Nat.mul(2n, xns.size(rr))), x, l, rx, rl, rr)
+
+def xns.dblr(+x: XNode, r: XNodes, +lx: XNode, ll: XNodes, lr: XNodes) -> XNodes:
+  match lr:
+    case XNTip{}:
+      xns.bin(lx, ll, xns.bin(x, XNTip{}, r))
+    case XNBin{n, +y, +yl, +yr}:
+      xns.bin(y, xns.bin(lx, ll, yl), xns.bin(x, yr, r))
+
+def xns.rotr.of(single: Bool, +x: XNode, r: XNodes, +lx: XNode, ll: XNodes, lr: XNodes) -> XNodes:
+  match single:
+    case True{}:
+      xns.bin(lx, ll, xns.bin(x, lr, r))
+    case False{}:
+      xns.dblr(x, r, lx, ll, lr)
+
+def xns.rotr(+x: XNode, l: XNodes, r: XNodes) -> XNodes:
+  match l:
+    case XNTip{}:
+      xns.bin(x, XNTip{}, r)
+    case XNBin{n, +lx, +ll, +lr}:
+      xns.rotr.of(Nat.is_lt(xns.size(lr), Nat.mul(2n, xns.size(ll))), x, r, lx, ll, lr)
+
+def xns.bal.of(few: Bool, rh: Bool, lh: Bool, +x: XNode, l: XNodes, r: XNodes) -> XNodes:
+  match few rh lh:
+    case True{} _ _:
+      xns.bin(x, l, r)
+    case False{} True{} _:
+      xns.rotl(x, l, r)
+    case False{} False{} True{}:
+      xns.rotr(x, l, r)
+    case False{} False{} False{}:
+      xns.bin(x, l, r)
+
+def xns.balance(+x: XNode, +l: XNodes, +r: XNodes) -> XNodes:
+  +sl = xns.size(l)
+  +sr = xns.size(r)
+  xns.bal.of(Nat.is_le(Nat.add(sl, sr), 1n), Nat.is_lt(Nat.mul(3n, sl), sr), Nat.is_lt(Nat.mul(3n, sr), sl), x, l, r)
+
+# the element of key k in t; c is how k compares with t's root's
+def xns.find(+t: XNodes, c: Cmp, +k: XId) -> Maybe<&2, XNode>:
+  match t c:
+    case XNTip{} _:
+      None{}
+    case XNBin{n, x, +l, r} LT{}:
+      xns.find(l, xns.at(l, k), k)
+    case XNBin{n, x, l, +r} GT{}:
+      xns.find(r, xns.at(r, k), k)
+    case XNBin{n, +x, l, r} EQ{}:
+      Some{x}
+
+# t with x in its place (t holds no element of x's key); c is how x's key
+# compares with t's root's
+def xns.ins(t: XNodes, c: Cmp, +x: XNode) -> XNodes:
+  match t c:
+    case XNTip{} _:
+      XNBin{1n, x, XNTip{}, XNTip{}}
+    case XNBin{n, +y, +l, +r} LT{}:
+      xns.balance(y, xns.ins(l, xns.at(l, xnode.mid(x)), x), r)
+    case XNBin{n, +y, +l, +r} _:
+      xns.balance(y, l, xns.ins(r, xns.at(r, xnode.mid(x)), x))
+
+def xns.put(+x: XNode, +t: XNodes) -> XNodes:
+  xns.ins(t, xns.at(t, xnode.mid(x)), x)
+
+# t with x in the place of the element of x's key, which t holds; c is
+# how x's key compares with t's root's
+def xns.rep(t: XNodes, c: Cmp, +x: XNode) -> XNodes:
+  match t c:
+    case XNTip{} _:
+      XNTip{}
+    case XNBin{+n, +y, +l, +r} LT{}:
+      XNBin{n, y, xns.rep(l, xns.at(l, xnode.mid(x)), x), r}
+    case XNBin{+n, +y, +l, +r} GT{}:
+      XNBin{n, y, l, xns.rep(r, xns.at(r, xnode.mid(x)), x)}
+    case XNBin{+n, y, +l, +r} EQ{}:
+      XNBin{n, x, l, r}
+
+def xns.set(+x: XNode, +t: XNodes) -> XNodes:
+  xns.rep(t, xns.at(t, xnode.mid(x)), x)
+
+# a node's element, made before the walk goes on (as it.el)
+def xns.el(+x: XNode) -> XNode:
+  x
+
+# the elements of t in order, before acc
+def xns.list(+t: XNodes, acc: List<&2, XNode>) -> List<&2, XNode>:
+  match t:
+    case XNTip{}:
+      acc
+    case XNBin{n, +x, +l, +r}:
+      y = xns.el(x)
+      acc2 = xns.list(r, acc)
+      xns.list(l, y <> acc2)
+
+# XPel, by ID (xpl)
+
+def xpl.size(+t: XPel) -> Nat:
+  match t:
+    case XPTip{}:
+      0n
+    case XPBin{n, x, l, r}:
+      n
+
+def xpl.bin(+x: XNack, +l: XPel, +r: XPel) -> XPel:
+  XPBin{Nat.add(Nat.add(xpl.size(l), xpl.size(r)), 1n), x, l, r}
+
+# how the key k compares with t's root's (GT for a tip)
+def xpl.at(+t: XPel, +k: XId) -> Cmp:
+  match t:
+    case XPTip{}:
+      GT{}
+    case XPBin{n, +x, l, r}:
+      xid.cmp(k, xnack.id(x))
+
+def xpl.dbll(+x: XNack, l: XPel, +rx: XNack, rr: XPel, rl: XPel) -> XPel:
+  match rl:
+    case XPTip{}:
+      xpl.bin(rx, xpl.bin(x, l, XPTip{}), rr)
+    case XPBin{n, +y, +yl, +yr}:
+      xpl.bin(y, xpl.bin(x, l, yl), xpl.bin(rx, yr, rr))
+
+def xpl.rotl.of(single: Bool, +x: XNack, l: XPel, +rx: XNack, rl: XPel, rr: XPel) -> XPel:
+  match single:
+    case True{}:
+      xpl.bin(rx, xpl.bin(x, l, rl), rr)
+    case False{}:
+      xpl.dbll(x, l, rx, rr, rl)
+
+def xpl.rotl(+x: XNack, l: XPel, r: XPel) -> XPel:
+  match r:
+    case XPTip{}:
+      xpl.bin(x, l, XPTip{})
+    case XPBin{n, +rx, +rl, +rr}:
+      xpl.rotl.of(Nat.is_lt(xpl.size(rl), Nat.mul(2n, xpl.size(rr))), x, l, rx, rl, rr)
+
+def xpl.dblr(+x: XNack, r: XPel, +lx: XNack, ll: XPel, lr: XPel) -> XPel:
+  match lr:
+    case XPTip{}:
+      xpl.bin(lx, ll, xpl.bin(x, XPTip{}, r))
+    case XPBin{n, +y, +yl, +yr}:
+      xpl.bin(y, xpl.bin(lx, ll, yl), xpl.bin(x, yr, r))
+
+def xpl.rotr.of(single: Bool, +x: XNack, r: XPel, +lx: XNack, ll: XPel, lr: XPel) -> XPel:
+  match single:
+    case True{}:
+      xpl.bin(lx, ll, xpl.bin(x, lr, r))
+    case False{}:
+      xpl.dblr(x, r, lx, ll, lr)
+
+def xpl.rotr(+x: XNack, l: XPel, r: XPel) -> XPel:
+  match l:
+    case XPTip{}:
+      xpl.bin(x, XPTip{}, r)
+    case XPBin{n, +lx, +ll, +lr}:
+      xpl.rotr.of(Nat.is_lt(xpl.size(lr), Nat.mul(2n, xpl.size(ll))), x, r, lx, ll, lr)
+
+def xpl.bal.of(few: Bool, rh: Bool, lh: Bool, +x: XNack, l: XPel, r: XPel) -> XPel:
+  match few rh lh:
+    case True{} _ _:
+      xpl.bin(x, l, r)
+    case False{} True{} _:
+      xpl.rotl(x, l, r)
+    case False{} False{} True{}:
+      xpl.rotr(x, l, r)
+    case False{} False{} False{}:
+      xpl.bin(x, l, r)
+
+def xpl.balance(+x: XNack, +l: XPel, +r: XPel) -> XPel:
+  +sl = xpl.size(l)
+  +sr = xpl.size(r)
+  xpl.bal.of(Nat.is_le(Nat.add(sl, sr), 1n), Nat.is_lt(Nat.mul(3n, sl), sr), Nat.is_lt(Nat.mul(3n, sr), sl), x, l, r)
+
+# the element of key k in t; c is how k compares with t's root's
+def xpl.find(+t: XPel, c: Cmp, +k: XId) -> Maybe<&2, XNack>:
+  match t c:
+    case XPTip{} _:
+      None{}
+    case XPBin{n, x, +l, r} LT{}:
+      xpl.find(l, xpl.at(l, k), k)
+    case XPBin{n, x, l, +r} GT{}:
+      xpl.find(r, xpl.at(r, k), k)
+    case XPBin{n, +x, l, r} EQ{}:
+      Some{x}
+
+# t with x in its place (t holds no element of x's key); c is how x's key
+# compares with t's root's
+def xpl.ins(t: XPel, c: Cmp, +x: XNack) -> XPel:
+  match t c:
+    case XPTip{} _:
+      XPBin{1n, x, XPTip{}, XPTip{}}
+    case XPBin{n, +y, +l, +r} LT{}:
+      xpl.balance(y, xpl.ins(l, xpl.at(l, xnack.id(x)), x), r)
+    case XPBin{n, +y, +l, +r} _:
+      xpl.balance(y, l, xpl.ins(r, xpl.at(r, xnack.id(x)), x))
+
+def xpl.put(+x: XNack, +t: XPel) -> XPel:
+  xpl.ins(t, xpl.at(t, xnack.id(x)), x)
+
+# t with x in the place of the element of x's key, which t holds; c is
+# how x's key compares with t's root's
+def xpl.rep(t: XPel, c: Cmp, +x: XNack) -> XPel:
+  match t c:
+    case XPTip{} _:
+      XPTip{}
+    case XPBin{+n, +y, +l, +r} LT{}:
+      XPBin{n, y, xpl.rep(l, xpl.at(l, xnack.id(x)), x), r}
+    case XPBin{+n, +y, +l, +r} GT{}:
+      XPBin{n, y, l, xpl.rep(r, xpl.at(r, xnack.id(x)), x)}
+    case XPBin{+n, y, +l, +r} EQ{}:
+      XPBin{n, x, l, r}
+
+def xpl.set(+x: XNack, +t: XPel) -> XPel:
+  xpl.rep(t, xpl.at(t, xnack.id(x)), x)
+
+# a node's element, made before the walk goes on (as it.el)
+def xpl.el(+x: XNack) -> XNack:
+  x
+
+# the elements of t in order, before acc
+def xpl.list(+t: XPel, acc: List<&2, XNack>) -> List<&2, XNack>:
+  match t:
+    case XPTip{}:
+      acc
+    case XPBin{n, +x, +l, +r}:
+      y = xpl.el(x)
+      acc2 = xpl.list(r, acc)
+      xpl.list(l, y <> acc2)
+
+# XIds, by ID (xis)
+
+def xis.size(+t: XIds) -> Nat:
+  match t:
+    case XITip{}:
+      0n
+    case XIBin{n, x, l, r}:
+      n
+
+def xis.bin(+x: XId, +l: XIds, +r: XIds) -> XIds:
+  XIBin{Nat.add(Nat.add(xis.size(l), xis.size(r)), 1n), x, l, r}
+
+# how the key k compares with t's root's (GT for a tip)
+def xis.at(+t: XIds, +k: XId) -> Cmp:
+  match t:
+    case XITip{}:
+      GT{}
+    case XIBin{n, +x, l, r}:
+      xid.cmp(k, xid.self(x))
+
+def xis.dbll(+x: XId, l: XIds, +rx: XId, rr: XIds, rl: XIds) -> XIds:
+  match rl:
+    case XITip{}:
+      xis.bin(rx, xis.bin(x, l, XITip{}), rr)
+    case XIBin{n, +y, +yl, +yr}:
+      xis.bin(y, xis.bin(x, l, yl), xis.bin(rx, yr, rr))
+
+def xis.rotl.of(single: Bool, +x: XId, l: XIds, +rx: XId, rl: XIds, rr: XIds) -> XIds:
+  match single:
+    case True{}:
+      xis.bin(rx, xis.bin(x, l, rl), rr)
+    case False{}:
+      xis.dbll(x, l, rx, rr, rl)
+
+def xis.rotl(+x: XId, l: XIds, r: XIds) -> XIds:
+  match r:
+    case XITip{}:
+      xis.bin(x, l, XITip{})
+    case XIBin{n, +rx, +rl, +rr}:
+      xis.rotl.of(Nat.is_lt(xis.size(rl), Nat.mul(2n, xis.size(rr))), x, l, rx, rl, rr)
+
+def xis.dblr(+x: XId, r: XIds, +lx: XId, ll: XIds, lr: XIds) -> XIds:
+  match lr:
+    case XITip{}:
+      xis.bin(lx, ll, xis.bin(x, XITip{}, r))
+    case XIBin{n, +y, +yl, +yr}:
+      xis.bin(y, xis.bin(lx, ll, yl), xis.bin(x, yr, r))
+
+def xis.rotr.of(single: Bool, +x: XId, r: XIds, +lx: XId, ll: XIds, lr: XIds) -> XIds:
+  match single:
+    case True{}:
+      xis.bin(lx, ll, xis.bin(x, lr, r))
+    case False{}:
+      xis.dblr(x, r, lx, ll, lr)
+
+def xis.rotr(+x: XId, l: XIds, r: XIds) -> XIds:
+  match l:
+    case XITip{}:
+      xis.bin(x, XITip{}, r)
+    case XIBin{n, +lx, +ll, +lr}:
+      xis.rotr.of(Nat.is_lt(xis.size(lr), Nat.mul(2n, xis.size(ll))), x, r, lx, ll, lr)
+
+def xis.bal.of(few: Bool, rh: Bool, lh: Bool, +x: XId, l: XIds, r: XIds) -> XIds:
+  match few rh lh:
+    case True{} _ _:
+      xis.bin(x, l, r)
+    case False{} True{} _:
+      xis.rotl(x, l, r)
+    case False{} False{} True{}:
+      xis.rotr(x, l, r)
+    case False{} False{} False{}:
+      xis.bin(x, l, r)
+
+def xis.balance(+x: XId, +l: XIds, +r: XIds) -> XIds:
+  +sl = xis.size(l)
+  +sr = xis.size(r)
+  xis.bal.of(Nat.is_le(Nat.add(sl, sr), 1n), Nat.is_lt(Nat.mul(3n, sl), sr), Nat.is_lt(Nat.mul(3n, sr), sl), x, l, r)
+
+# the element of key k in t; c is how k compares with t's root's
+def xis.find(+t: XIds, c: Cmp, +k: XId) -> Maybe<&2, XId>:
+  match t c:
+    case XITip{} _:
+      None{}
+    case XIBin{n, x, +l, r} LT{}:
+      xis.find(l, xis.at(l, k), k)
+    case XIBin{n, x, l, +r} GT{}:
+      xis.find(r, xis.at(r, k), k)
+    case XIBin{n, +x, l, r} EQ{}:
+      Some{x}
+
+# t with x in its place (t holds no element of x's key); c is how x's key
+# compares with t's root's
+def xis.ins(t: XIds, c: Cmp, +x: XId) -> XIds:
+  match t c:
+    case XITip{} _:
+      XIBin{1n, x, XITip{}, XITip{}}
+    case XIBin{n, +y, +l, +r} LT{}:
+      xis.balance(y, xis.ins(l, xis.at(l, xid.self(x)), x), r)
+    case XIBin{n, +y, +l, +r} _:
+      xis.balance(y, l, xis.ins(r, xis.at(r, xid.self(x)), x))
+
+def xis.put(+x: XId, +t: XIds) -> XIds:
+  xis.ins(t, xis.at(t, xid.self(x)), x)
+
+# t with x in the place of the element of x's key, which t holds; c is
+# how x's key compares with t's root's
+def xis.rep(t: XIds, c: Cmp, +x: XId) -> XIds:
+  match t c:
+    case XITip{} _:
+      XITip{}
+    case XIBin{+n, +y, +l, +r} LT{}:
+      XIBin{n, y, xis.rep(l, xis.at(l, xid.self(x)), x), r}
+    case XIBin{+n, +y, +l, +r} GT{}:
+      XIBin{n, y, l, xis.rep(r, xis.at(r, xid.self(x)), x)}
+    case XIBin{+n, y, +l, +r} EQ{}:
+      XIBin{n, x, l, r}
+
+def xis.set(+x: XId, +t: XIds) -> XIds:
+  xis.rep(t, xis.at(t, xid.self(x)), x)
+
+# a node's element, made before the walk goes on (as it.el)
+def xis.el(+x: XId) -> XId:
+  x
+
+# the elements of t in order, before acc
+def xis.list(+t: XIds, acc: List<&2, XId>) -> List<&2, XId>:
+  match t:
+    case XITip{}:
+      acc
+    case XIBin{n, +x, +l, +r}:
+      y = xis.el(x)
+      acc2 = xis.list(r, acc)
+      xis.list(l, y <> acc2)
+
+# XCons, by name (xcs)
+
+def xcs.size(+t: XCons) -> Nat:
+  match t:
+    case XCTip{}:
+      0n
+    case XCBin{n, x, l, r}:
+      n
+
+def xcs.bin(+x: XCon, +l: XCons, +r: XCons) -> XCons:
+  XCBin{Nat.add(Nat.add(xcs.size(l), xcs.size(r)), 1n), x, l, r}
+
+# how the key k compares with t's root's (GT for a tip)
+def xcs.at(+t: XCons, +k: String) -> Cmp:
+  match t:
+    case XCTip{}:
+      GT{}
+    case XCBin{n, +x, l, r}:
+      String.order(k, xcon.name(x))
+
+def xcs.dbll(+x: XCon, l: XCons, +rx: XCon, rr: XCons, rl: XCons) -> XCons:
+  match rl:
+    case XCTip{}:
+      xcs.bin(rx, xcs.bin(x, l, XCTip{}), rr)
+    case XCBin{n, +y, +yl, +yr}:
+      xcs.bin(y, xcs.bin(x, l, yl), xcs.bin(rx, yr, rr))
+
+def xcs.rotl.of(single: Bool, +x: XCon, l: XCons, +rx: XCon, rl: XCons, rr: XCons) -> XCons:
+  match single:
+    case True{}:
+      xcs.bin(rx, xcs.bin(x, l, rl), rr)
+    case False{}:
+      xcs.dbll(x, l, rx, rr, rl)
+
+def xcs.rotl(+x: XCon, l: XCons, r: XCons) -> XCons:
+  match r:
+    case XCTip{}:
+      xcs.bin(x, l, XCTip{})
+    case XCBin{n, +rx, +rl, +rr}:
+      xcs.rotl.of(Nat.is_lt(xcs.size(rl), Nat.mul(2n, xcs.size(rr))), x, l, rx, rl, rr)
+
+def xcs.dblr(+x: XCon, r: XCons, +lx: XCon, ll: XCons, lr: XCons) -> XCons:
+  match lr:
+    case XCTip{}:
+      xcs.bin(lx, ll, xcs.bin(x, XCTip{}, r))
+    case XCBin{n, +y, +yl, +yr}:
+      xcs.bin(y, xcs.bin(lx, ll, yl), xcs.bin(x, yr, r))
+
+def xcs.rotr.of(single: Bool, +x: XCon, r: XCons, +lx: XCon, ll: XCons, lr: XCons) -> XCons:
+  match single:
+    case True{}:
+      xcs.bin(lx, ll, xcs.bin(x, lr, r))
+    case False{}:
+      xcs.dblr(x, r, lx, ll, lr)
+
+def xcs.rotr(+x: XCon, l: XCons, r: XCons) -> XCons:
+  match l:
+    case XCTip{}:
+      xcs.bin(x, XCTip{}, r)
+    case XCBin{n, +lx, +ll, +lr}:
+      xcs.rotr.of(Nat.is_lt(xcs.size(lr), Nat.mul(2n, xcs.size(ll))), x, r, lx, ll, lr)
+
+def xcs.bal.of(few: Bool, rh: Bool, lh: Bool, +x: XCon, l: XCons, r: XCons) -> XCons:
+  match few rh lh:
+    case True{} _ _:
+      xcs.bin(x, l, r)
+    case False{} True{} _:
+      xcs.rotl(x, l, r)
+    case False{} False{} True{}:
+      xcs.rotr(x, l, r)
+    case False{} False{} False{}:
+      xcs.bin(x, l, r)
+
+def xcs.balance(+x: XCon, +l: XCons, +r: XCons) -> XCons:
+  +sl = xcs.size(l)
+  +sr = xcs.size(r)
+  xcs.bal.of(Nat.is_le(Nat.add(sl, sr), 1n), Nat.is_lt(Nat.mul(3n, sl), sr), Nat.is_lt(Nat.mul(3n, sr), sl), x, l, r)
+
+# the element of key k in t; c is how k compares with t's root's
+def xcs.find(+t: XCons, c: Cmp, +k: String) -> Maybe<&2, XCon>:
+  match t c:
+    case XCTip{} _:
+      None{}
+    case XCBin{n, x, +l, r} LT{}:
+      xcs.find(l, xcs.at(l, k), k)
+    case XCBin{n, x, l, +r} GT{}:
+      xcs.find(r, xcs.at(r, k), k)
+    case XCBin{n, +x, l, r} EQ{}:
+      Some{x}
+
+# t with x in its place (t holds no element of x's key); c is how x's key
+# compares with t's root's
+def xcs.ins(t: XCons, c: Cmp, +x: XCon) -> XCons:
+  match t c:
+    case XCTip{} _:
+      XCBin{1n, x, XCTip{}, XCTip{}}
+    case XCBin{n, +y, +l, +r} LT{}:
+      xcs.balance(y, xcs.ins(l, xcs.at(l, xcon.name(x)), x), r)
+    case XCBin{n, +y, +l, +r} _:
+      xcs.balance(y, l, xcs.ins(r, xcs.at(r, xcon.name(x)), x))
+
+def xcs.put(+x: XCon, +t: XCons) -> XCons:
+  xcs.ins(t, xcs.at(t, xcon.name(x)), x)
+
+# t with x in the place of the element of x's key, which t holds; c is
+# how x's key compares with t's root's
+def xcs.rep(t: XCons, c: Cmp, +x: XCon) -> XCons:
+  match t c:
+    case XCTip{} _:
+      XCTip{}
+    case XCBin{+n, +y, +l, +r} LT{}:
+      XCBin{n, y, xcs.rep(l, xcs.at(l, xcon.name(x)), x), r}
+    case XCBin{+n, +y, +l, +r} GT{}:
+      XCBin{n, y, l, xcs.rep(r, xcs.at(r, xcon.name(x)), x)}
+    case XCBin{+n, y, +l, +r} EQ{}:
+      XCBin{n, x, l, r}
+
+def xcs.set(+x: XCon, +t: XCons) -> XCons:
+  xcs.rep(t, xcs.at(t, xcon.name(x)), x)
+
+# a node's element, made before the walk goes on (as it.el)
+def xcs.el(+x: XCon) -> XCon:
+  x
+
+# the elements of t in order, before acc
+def xcs.list(+t: XCons, acc: List<&2, XCon>) -> List<&2, XCon>:
+  match t:
+    case XCTip{}:
+      acc
+    case XCBin{n, +x, +l, +r}:
+      y = xcs.el(x)
+      acc2 = xcs.list(r, acc)
+      xcs.list(l, y <> acc2)
+
+# XGroups, by name (xgs)
+
+def xgs.size(+t: XGroups) -> Nat:
+  match t:
+    case XGTip{}:
+      0n
+    case XGBin{n, x, l, r}:
+      n
+
+def xgs.bin(+x: XGroup, +l: XGroups, +r: XGroups) -> XGroups:
+  XGBin{Nat.add(Nat.add(xgs.size(l), xgs.size(r)), 1n), x, l, r}
+
+# how the key k compares with t's root's (GT for a tip)
+def xgs.at(+t: XGroups, +k: String) -> Cmp:
+  match t:
+    case XGTip{}:
+      GT{}
+    case XGBin{n, +x, l, r}:
+      String.order(k, xgroup.name(x))
+
+def xgs.dbll(+x: XGroup, l: XGroups, +rx: XGroup, rr: XGroups, rl: XGroups) -> XGroups:
+  match rl:
+    case XGTip{}:
+      xgs.bin(rx, xgs.bin(x, l, XGTip{}), rr)
+    case XGBin{n, +y, +yl, +yr}:
+      xgs.bin(y, xgs.bin(x, l, yl), xgs.bin(rx, yr, rr))
+
+def xgs.rotl.of(single: Bool, +x: XGroup, l: XGroups, +rx: XGroup, rl: XGroups, rr: XGroups) -> XGroups:
+  match single:
+    case True{}:
+      xgs.bin(rx, xgs.bin(x, l, rl), rr)
+    case False{}:
+      xgs.dbll(x, l, rx, rr, rl)
+
+def xgs.rotl(+x: XGroup, l: XGroups, r: XGroups) -> XGroups:
+  match r:
+    case XGTip{}:
+      xgs.bin(x, l, XGTip{})
+    case XGBin{n, +rx, +rl, +rr}:
+      xgs.rotl.of(Nat.is_lt(xgs.size(rl), Nat.mul(2n, xgs.size(rr))), x, l, rx, rl, rr)
+
+def xgs.dblr(+x: XGroup, r: XGroups, +lx: XGroup, ll: XGroups, lr: XGroups) -> XGroups:
+  match lr:
+    case XGTip{}:
+      xgs.bin(lx, ll, xgs.bin(x, XGTip{}, r))
+    case XGBin{n, +y, +yl, +yr}:
+      xgs.bin(y, xgs.bin(lx, ll, yl), xgs.bin(x, yr, r))
+
+def xgs.rotr.of(single: Bool, +x: XGroup, r: XGroups, +lx: XGroup, ll: XGroups, lr: XGroups) -> XGroups:
+  match single:
+    case True{}:
+      xgs.bin(lx, ll, xgs.bin(x, lr, r))
+    case False{}:
+      xgs.dblr(x, r, lx, ll, lr)
+
+def xgs.rotr(+x: XGroup, l: XGroups, r: XGroups) -> XGroups:
+  match l:
+    case XGTip{}:
+      xgs.bin(x, XGTip{}, r)
+    case XGBin{n, +lx, +ll, +lr}:
+      xgs.rotr.of(Nat.is_lt(xgs.size(lr), Nat.mul(2n, xgs.size(ll))), x, r, lx, ll, lr)
+
+def xgs.bal.of(few: Bool, rh: Bool, lh: Bool, +x: XGroup, l: XGroups, r: XGroups) -> XGroups:
+  match few rh lh:
+    case True{} _ _:
+      xgs.bin(x, l, r)
+    case False{} True{} _:
+      xgs.rotl(x, l, r)
+    case False{} False{} True{}:
+      xgs.rotr(x, l, r)
+    case False{} False{} False{}:
+      xgs.bin(x, l, r)
+
+def xgs.balance(+x: XGroup, +l: XGroups, +r: XGroups) -> XGroups:
+  +sl = xgs.size(l)
+  +sr = xgs.size(r)
+  xgs.bal.of(Nat.is_le(Nat.add(sl, sr), 1n), Nat.is_lt(Nat.mul(3n, sl), sr), Nat.is_lt(Nat.mul(3n, sr), sl), x, l, r)
+
+# the element of key k in t; c is how k compares with t's root's
+def xgs.find(+t: XGroups, c: Cmp, +k: String) -> Maybe<&2, XGroup>:
+  match t c:
+    case XGTip{} _:
+      None{}
+    case XGBin{n, x, +l, r} LT{}:
+      xgs.find(l, xgs.at(l, k), k)
+    case XGBin{n, x, l, +r} GT{}:
+      xgs.find(r, xgs.at(r, k), k)
+    case XGBin{n, +x, l, r} EQ{}:
+      Some{x}
+
+# t with x in its place (t holds no element of x's key); c is how x's key
+# compares with t's root's
+def xgs.ins(t: XGroups, c: Cmp, +x: XGroup) -> XGroups:
+  match t c:
+    case XGTip{} _:
+      XGBin{1n, x, XGTip{}, XGTip{}}
+    case XGBin{n, +y, +l, +r} LT{}:
+      xgs.balance(y, xgs.ins(l, xgs.at(l, xgroup.name(x)), x), r)
+    case XGBin{n, +y, +l, +r} _:
+      xgs.balance(y, l, xgs.ins(r, xgs.at(r, xgroup.name(x)), x))
+
+def xgs.put(+x: XGroup, +t: XGroups) -> XGroups:
+  xgs.ins(t, xgs.at(t, xgroup.name(x)), x)
+
+# t with x in the place of the element of x's key, which t holds; c is
+# how x's key compares with t's root's
+def xgs.rep(t: XGroups, c: Cmp, +x: XGroup) -> XGroups:
+  match t c:
+    case XGTip{} _:
+      XGTip{}
+    case XGBin{+n, +y, +l, +r} LT{}:
+      XGBin{n, y, xgs.rep(l, xgs.at(l, xgroup.name(x)), x), r}
+    case XGBin{+n, +y, +l, +r} GT{}:
+      XGBin{n, y, l, xgs.rep(r, xgs.at(r, xgroup.name(x)), x)}
+    case XGBin{+n, y, +l, +r} EQ{}:
+      XGBin{n, x, l, r}
+
+def xgs.set(+x: XGroup, +t: XGroups) -> XGroups:
+  xgs.rep(t, xgs.at(t, xgroup.name(x)), x)
+
+# a node's element, made before the walk goes on (as it.el)
+def xgs.el(+x: XGroup) -> XGroup:
+  x
+
+# the elements of t in order, before acc
+def xgs.list(+t: XGroups, acc: List<&2, XGroup>) -> List<&2, XGroup>:
+  match t:
+    case XGTip{}:
+      acc
+    case XGBin{n, +x, +l, +r}:
+      y = xgs.el(x)
+      acc2 = xgs.list(r, acc)
+      xgs.list(l, y <> acc2)
+# END gen_streams: trees

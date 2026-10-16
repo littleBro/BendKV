@@ -7182,6 +7182,104 @@ start now reads in 17 windows.
 **What it costs.** Nothing on a request's path: `make perfcheck` gives GET 3,491, SET
 4,235 and INCR 4,577 instructions a request, within 1.1% of the baseline.
 
+## 3zzzu. Streams as values: RESTORE, DUMP and the RDB file
+
+**What there is** (`src/map.bend`, Streams; `src/rdb.bend`, Streams). The first step of
+streams: a stream is a value BendKV holds, as Redis 7.0.15 holds one, though no command
+of its own reads or writes it yet.
+- **The value** (`XStream`): its count of live entries, last ID, first ID, greatest
+  deleted ID and count of entries ever added; its nodes, a weight-balanced tree by master
+  ID, each node Redis's listpack taken apart only so far: its master ID and fields, its
+  counts of live and deleted entries, its listpack's size in bytes and count of
+  elements, and its entries, the newest first, each the bytes Redis's listpack holds for
+  it; its groups, a tree by name, each its last ID, its count of entries read (`-1` too),
+  its pending entries by ID (the consumer each was last delivered to, the time and the
+  count of its deliveries) and its consumers by name (the time each was last seen, its
+  pending IDs). The trees are an intset's (section 3zzy), one shape for each kind,
+  written by `tools/gen_streams.py` (`make gencheck` checks them). The nodes, groups,
+  pending entries and the stream are each a node of their own (a variant that holds the
+  type, never built), so that `Coll` and `Val` are no wider: GET, SET and INCR count
+  3,483, 4,244 and 4,588 instructions, against 3,481, 4,246 and 4,587 for the build
+  before streams (that of #96), counted alike.
+- **Numbers of 64 bits** (`XN`): an ID's time and sequence, a count of deliveries or of
+  entries, split in decimal at 10^14, so that no Nat passes 2^48 (a time in ms, and
+  almost any sequence, is below 10^14, one Nat); added, negated (the differences of an
+  entry's ID from its master's are those of `uint64_t`s) and printed at run time only.
+- **RESTORE and the RDB file** read types 19 and 15. Of 15, written before Redis 7.0,
+  what it lacks is made as Redis's load makes it: the first ID the first live entry's
+  (max-max for none: `streamGetEdgeID`), no ID deleted, the entries ever added the
+  entries there, and each group's count of entries read estimated by
+  `streamEstimateDistanceFromFirstEverEntry` (0 for an empty stream, the count for the
+  last ID, 0 before the first live entry, 1 at it, -1 after it or past the last ID).
+- **What a read checks.** What Redis checks with `sanitize-dump-payload yes`
+  (`streamValidateListpackIntegrity` and `rdbLoadObject`): each node's key of 16 bytes,
+  its listpack's size, elements and back-lengths, its master entry and each entry's
+  fields, values and lp-count, a node's key, a group's name, a pending entry or a
+  consumer twice, a consumer's ID that is not pending, an ID pending with no consumer,
+  a count of entries with no node. And what Redis never writes: a node with no entry, or
+  whose counts of live and deleted entries or of elements (65535 for as many or more)
+  are not its entries', or whose master entry is not the one Redis writes for it (the
+  narrowest integers: so that DUMP gives back the bytes it read); flags other than
+  deleted and of the master's fields; an entry of no field; master IDs that do not
+  increase; live entries whose IDs do not increase from node to node; a count of
+  entries other than the live entries'; a last ID below the last live entry's; a count
+  of entries read past 2^63 - 1 (but -1); a time of delivery or of a consumer past 2^47
+  (Redis's are `mstime()` at most); an ID two consumers hold. Redis makes, and BendKV
+  takes, a node with no live entry left (XDEL of its last entry, then XTRIM by a MINID
+  of that entry's ID) and a live entry below its node's master ID (XSETID below the
+  last entry, deleted, then XADD).
+- **DUMP and SAVE** write type 19 as Redis does with `rdbcompression no`: the nodes from
+  their bytes, so that a payload Redis made comes back byte for byte.
+- **The generic commands:** TYPE and OBJECT ENCODING (`stream`), SCAN's TYPE, COPY,
+  RENAME, DEL, the times to live, MEMORY USAGE (its listpacks' bytes, and words for the
+  tree's nodes, the groups, their pending entries and consumers: Redis samples the
+  listpacks' allocations) take a stream, and the commands of the other kinds answer
+  WRONGTYPE, SORT too.
+- **The rewrite of the append-only file** writes a stream as the RESTORE of its payload
+  (and its time's PEXPIREAT), where Redis writes XADD, XSETID, XGROUP CREATE and XCLAIM:
+  BendKV has none of them yet.
+
+**Laws and proofs.** No law changed, nor `proof/SPEC.bend`: a stream comes only by
+RESTORE, whose change (`CRestore`) the laws already cover. `proof/PROOF.bend`'s 35 case
+splits over a collection's kind each got a stream's case, that of another kind there
+(WRONGTYPE, or a value replaced).
+
+**Tests.**
+- `tests/stream_dump_test.py` (new, in `make test`): Redis makes streams of 27 shapes at
+  several node limits (empty; of one entry; of the master's fields and of their own;
+  integers of each width and numbers' texts that are none as fields and values; values
+  of 0 to 70,000 bytes; 1,000 entries; nodes of one entry, of 3 entries and 100 bytes,
+  of no limit, of more than 65,535 elements; entries deleted and trimmed every way; IDs
+  near 2^64, sequences that go down from the master's; XSETID's ENTRIESADDED and
+  MAXDELETEDID; groups named by integers and empty, entries delivered, claimed with
+  RETRYCOUNT 2^63 - 1, acknowledged, consumers with none pending, 30 groups of 120
+  consumers) and one of 100,000 entries: each payload Redis DUMPs, RESTOREd on BendKV,
+  comes back from DUMP byte for byte; the generic commands answer as Redis's; each as
+  type 15 (made from the payload) is RESTOREd and DUMPed by both alike, byte for byte;
+  and payloads broken at random (2,000 of them): what Redis refuses BendKV refuses, what
+  both take both DUMP alike (372 of them in a run), and BendKV refuses some Redis takes
+  (232), ones changed where Redis does not look: a master ID, which moves its entries
+  past the last ID or out of order; a listpack's count of elements; a count of entries
+  read made negative. 2,980 checks.
+- `tests/rdb_test.py`: Redis's files with streams (with LZF and without) loaded by
+  both, and BendKV's file of streams it RESTOREd loaded by Redis and by itself, each
+  stream's DUMP the same; a file of a stream, which BendKV refused, loads on both. 150
+  checks.
+- `tests/rewrite_test.py`: streams RESTOREd, the file rewritten, BendKV started from it
+  holds them.
+
+**What it costs.** Nothing on a request's path (above). A RESTORE of a stream of 100,000
+entries (2.3 MB) takes 0.15 to 0.27 s, Redis's 0.008 to 0.017 s; of a million (24 MB),
+1.7 to 2.5 s against 0.10 to 0.14 s: BendKV reads every element of every entry, as its
+checks need, and copies each string it reads. DUMP: 0.08 s against 0.012 s, and 1.3 s
+against 0.57 s. A walk of a node that steps over a string's bytes without copying them
+is the first thing to try, with the stream commands.
+
+**Found on the way.** `rdb.bend`'s `rd.le` said it read up to six bytes: after a sixth,
+its weight is 2^48, past a Nat, and the server stops. Nothing read six; the first
+version of a stream's times did, and stopped at the first payload with a pending entry.
+The times are read as two words of four bytes, and the comment says five.
+
 ## 4. Where a request's time goes, and hiding the memory waits
 
 With the eight patches, BendKV ran fewer instructions on GET and SET than Redis, missed
