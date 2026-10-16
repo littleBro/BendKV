@@ -6605,7 +6605,7 @@ each kept as Redis does it):
 
 **What it costs** (section 68 of [PERFORMANCE.md](PERFORMANCE.md)). Nothing for the
 commands that are not scripts: `make perfcheck`'s counts are main's. A script costs
-about sixteen GETs' instructions, and a call of a script about eight more. The first
+about seventeen GETs' instructions, and a call of a script about eight more. The first
 build cost eight times that, in costs that each scaled with something other than the
 script:
 
@@ -6661,6 +6661,19 @@ Each change and each read now goes through the match of `Ps` (`ps.sc.st.set`,
 `ps.scr.run.set`, `ps.sc.st`, `ps.scr.get` and their kin): 56,360. The other 2,400 are
 spread over what came since, the tracking's work for each script among them (about 500).
 
+**The general way's end, with ACL users.** With main merged in again (a92597d), EVAL
+costs 61,241 instructions a request, 4,417 more, though no client is restricted. Each
+script ends a run of the general way, whose end tunes the actor's bits (`ps.tune`, from
+`bg.out`): 3,800 instructions a script. Its reads of maxmemory and of the eviction's state
+(`mem.bits`: `mm.max`, `mm.kick`) and ACL's new read of whether some client is restricted
+(`acl.bit`: `acl.on`) each copy the session's memory state (`Mm`, 593 instructions
+apiece). `srv.max` passes `mm.max` a state it computes (`srv.mm`), so `mm.max` owns its
+parameter in every call (section 8 again), and `srv.mm` returns a field of the `Srv` lent
+to it. The general way's ACL steps (`bg.acl.sort`, `bg.mark.call` and `av.if` give back
+what they were lent) add the rest. This is main's code, paid by every batch of the
+general way; reading those fields in the matches of `Srv` and `Mm`, as ACL's checks read
+theirs (section 3zzzh), would take the copies out.
+
 **Tests.**
 
 - `tests/script_test.py` runs 12 scenarios on BendKV and on Redis, each with clients of
@@ -6687,6 +6700,7 @@ spread over what came since, the tracking's work for each script among them (abo
   looping the script FUNCTION KILL would have ended. unit/scripting runs its tests of
   functions first and stops there; its tests of EVAL, run alone, pass 103 of the 110
   Redis passes, and each of the other seven needs replication, streams, ACL or CLUSTER.
+
 ## 3zzzh. ACL: users, what they may run, and the log
 
 **What was left.** ACL was an unknown command. AUTH took the one password, and a client
