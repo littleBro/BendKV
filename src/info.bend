@@ -1507,6 +1507,42 @@ def stats.served(m: Maybe<&2, Wt>, st: Stats, +cf: TCfg, +id: Nat) -> Stats:
 type Boot is Data:
   IBoot{os: String, pid: String, run: String, replid: String, exe: String, conf: String, sysmem: Nat, start: U32, heap0: Nat}
 
+# the clients the actor counts: those that wait (blk), those of them with
+# a time (tmo), those that track keys (tc), and the tracking table's keys,
+# its clients' ids and the BCAST prefixes (CLIENT TRACKING). CnOf, a count
+# that holds a count, is never built: it makes Cn a node of its own, one
+# word of Info.
+type Cn is Data:
+  Cn{blk: Nat, tmo: Nat, tc: Nat, tk: Nat, ti: Nat, tp: Nat}
+  CnOf{c: Cn}
+
+def cn.zero() -> Cn:
+  Cn{0n, 0n, 0n, 0n, 0n, 0n}
+
+def cn.waits(c: Cn, +n: Nat, +t: Nat) -> Cn:
+  match c:
+    case Cn{b, o, tc, tk, ti, tp}:
+      Cn{n, t, tc, tk, ti, tp}
+    case CnOf{x}:
+      cn.waits(x, n, t)
+
+def cn.trk(c: Cn, +a: Nat, +b: Nat, +d: Nat, +e: Nat) -> Cn:
+  match c:
+    case Cn{n, t, tc, tk, ti, tp}:
+      Cn{n, t, a, b, d, e}
+    case CnOf{x}:
+      cn.trk(x, a, b, d, e)
+
+# a count of c: 0 the clients that wait, 1 those with a time, 2 those
+# that track, 3 the table's keys, 4 its ids, 5 the prefixes
+def cn.at(+c: Cn, +i: Nat) -> Nat:
+  match c:
+    case Cn{+n, +t, +tc, +tk, +ti, +tp}:
+      Bool.pick(Nat, Nat.is_eq(i, 0n), n, Bool.pick(Nat, Nat.is_eq(i, 1n), t, Bool.pick(Nat, Nat.is_eq(i, 2n), tc,
+      Bool.pick(Nat, Nat.is_eq(i, 3n), tk, Bool.pick(Nat, Nat.is_eq(i, 4n), ti, tp)))))
+    case CnOf{+x}:
+      cn.at(x, i)
+
 # what the shell saw last: the wall clock (seconds since 1970 and
 # microseconds), the processor time of the process and of its main
 # thread (user, system; clock ticks of 10 ms), the resident memory, the
@@ -1516,7 +1552,7 @@ type Boot is Data:
 # wait (blocked) and those of them with a timeout, as the actor counts
 # them (a connection's facts leave them as they were)
 type Live is Data:
-  ILive{secs: U32, usec: U32, ut: Nat, st: Nat, mut: Nat, mst: Nat, rss: Nat, heap: Nat, act: Nat, conns: Nat, clients: Nat, blk: Nat, tmo: Nat}
+  ILive{secs: U32, usec: U32, ut: Nat, st: Nat, mut: Nat, mst: Nat, rss: Nat, heap: Nat, act: Nat, conns: Nat, clients: Nat, cn: Cn}
 
 # commands run, bytes read and bytes sent
 type Count is Data:
@@ -1601,7 +1637,7 @@ def rws.reset(r: Rws) -> Rws:
 # append-only file at the start (or after its last rewrite: Redis's
 # aof_rewrite_base_size) and now, the statistics per command and per
 # error, the sweep of expired keys, the rewrite of the file, and the
-# timing (Timing). Info is a node of 63 words: the compiler rebuilds a
+# timing (Timing). Info is a node of 62 words: the compiler rebuilds a
 # node of 64 words or fewer in place, where it copies a wider one whole
 # at every update (once a batch: srv.ran), so the timing's state and the
 # runs not yet counted are nodes of their own (Tim, TRun)
@@ -1657,27 +1693,27 @@ def samples.zero() -> List<&2, Nat>:
 
 def live.ms(+l: Live) -> Nat:
   match l:
-    case ILive{+secs, +usec, ut, st, mut, mst, rss, heap, act, conns, clients, b, t}:
+    case ILive{+secs, +usec, ut, st, mut, mst, rss, heap, act, conns, clients, cn}:
       Nat.add(Nat.mul(U32.to_nat(secs), 1000n), U32.to_nat(U32.div(usec, 1000)))
 
 def live.rss(+l: Live) -> Nat:
   match l:
-    case ILive{secs, usec, ut, st, mut, mst, rss, heap, act, conns, clients, b, t}:
+    case ILive{secs, usec, ut, st, mut, mst, rss, heap, act, conns, clients, cn}:
       rss
 
 def live.heap(+l: Live) -> Nat:
   match l:
-    case ILive{secs, usec, ut, st, mut, mst, rss, heap, act, conns, clients, b, t}:
+    case ILive{secs, usec, ut, st, mut, mst, rss, heap, act, conns, clients, cn}:
       heap
 
 def live.act(+l: Live) -> Nat:
   match l:
-    case ILive{secs, usec, ut, st, mut, mst, rss, heap, act, conns, clients, b, t}:
+    case ILive{secs, usec, ut, st, mut, mst, rss, heap, act, conns, clients, cn}:
       act
 
 def live.conns(+l: Live) -> Nat:
   match l:
-    case ILive{secs, usec, ut, st, mut, mst, rss, heap, act, conns, clients, b, t}:
+    case ILive{secs, usec, ut, st, mut, mst, rss, heap, act, conns, clients, cn}:
       conns
 
 # the server's facts at its start
@@ -1766,13 +1802,23 @@ def info.aof.base(+i: Info) -> Nat:
 # new facts, the clients that wait as the actor counted them
 def live.keep(l: Live, old: Live) -> Live:
   match l old:
-    case ILive{secs, usec, ut, st, mut, mst, rss, heap, act, conns, clients, b0, t0} ILive{s1, u1, ut1, st1, mu1, ms1, r1, h1, a1, n1, c1, blk, tmo}:
-      ILive{secs, usec, ut, st, mut, mst, rss, heap, act, conns, clients, blk, tmo}
+    case ILive{secs, usec, ut, st, mut, mst, rss, heap, act, conns, clients, c0} ILive{s1, u1, ut1, st1, mu1, ms1, r1, h1, a1, n1, c1, cn}:
+      ILive{secs, usec, ut, st, mut, mst, rss, heap, act, conns, clients, cn}
 
 def live.waits(l: Live, +n: Nat, +t: Nat) -> Live:
   match l:
-    case ILive{secs, usec, ut, st, mut, mst, rss, heap, act, conns, clients, b0, t0}:
-      ILive{secs, usec, ut, st, mut, mst, rss, heap, act, conns, clients, n, t}
+    case ILive{secs, usec, ut, st, mut, mst, rss, heap, act, conns, clients, cn}:
+      ILive{secs, usec, ut, st, mut, mst, rss, heap, act, conns, clients, cn.waits(cn, n, t)}
+
+def live.trk(l: Live, +a: Nat, +b: Nat, +d: Nat, +e: Nat) -> Live:
+  match l:
+    case ILive{secs, usec, ut, st, mut, mst, rss, heap, act, conns, clients, cn}:
+      ILive{secs, usec, ut, st, mut, mst, rss, heap, act, conns, clients, cn.trk(cn, a, b, d, e)}
+
+def live.cn(+l: Live, +i: Nat) -> Nat:
+  match l:
+    case ILive{secs, usec, ut, st, mut, mst, rss, heap, act, conns, clients, +cn}:
+      cn.at(cn, i)
 
 def info.live(i: Info, +l: Live) -> Info:
   match i:
@@ -1787,8 +1833,8 @@ def info.live(i: Info, +l: Live) -> Info:
 # peak follows
 def live.heap.at(l: Live, +h: Nat, +ac: Nat) -> Live:
   match l:
-    case ILive{secs, usec, ut, st, mut, mst, rss, heap, act, conns, clients, b, t}:
-      ILive{secs, usec, ut, st, mut, mst, rss, h, ac, conns, clients, b, t}
+    case ILive{secs, usec, ut, st, mut, mst, rss, heap, act, conns, clients, cn}:
+      ILive{secs, usec, ut, st, mut, mst, rss, h, ac, conns, clients, cn}
 
 def info.heap(i: Info, +h: Nat, +ac: Nat) -> Info:
   match i:
@@ -1807,6 +1853,13 @@ def info.blocked(i: Info, +n: Nat, +t: Nat) -> Info:
   match i:
     case IInfo{b, l, c, inst, pk, c0, a0, a, st, ex, rw, tm}:
       IInfo{b, live.waits(l, n, t), c, inst, pk, c0, a0, a, st, ex, rw, tm}
+
+# the tracking's counts (CLIENT TRACKING): the clients that track, the
+# table's keys and its clients' ids, the BCAST prefixes
+def info.tracking(i: Info, +a: Nat, +b: Nat, +d: Nat, +e: Nat) -> Info:
+  match i:
+    case IInfo{b0, l, c, inst, pk, c0, a0, a1, st, ex, rw, tm}:
+      IInfo{b0, live.trk(l, a, b, d, e), c, inst, pk, c0, a0, a1, st, ex, rw, tm}
 
 # a call of code k that failed after it was counted: a blocked client
 # that CLIENT UNBLOCK unblocked (Redis's updateStatsOnUnblock)
@@ -2274,7 +2327,7 @@ def flag(b: Bool) -> String:
 
 def sec.server(+items: List<&2, C.CItem>, +b: Boot, +l: Live) -> String:
   match b l:
-    case IBoot{+os, +pid, +run, +replid, +exe, +conf, sysmem, +start, heap0} ILive{+secs, +usec, ut, st, mut, mst, rss, heap, act, conns, clients, bk, tm}:
+    case IBoot{+os, +pid, +run, +replid, +exe, +conf, sysmem, +start, heap0} ILive{+secs, +usec, ut, st, mut, mst, rss, heap, act, conns, clients, cn}:
       +up = Bool.pick(U32, U32.is_le(start, secs), U32.sub(secs, start), 0)
       "# Server\r\n" ++ kv("redis_version", "7.0.15") ++ kv("redis_git_sha1", "00000000") ++ kv("redis_git_dirty", "0") ++
       kv("redis_build_id", "0000000000000000") ++ kv("redis_mode", "standalone") ++ kv("os", os) ++ kv("arch_bits", "64") ++
@@ -2287,11 +2340,11 @@ def sec.server(+items: List<&2, C.CItem>, +b: Boot, +l: Live) -> String:
 
 def sec.clients(+items: List<&2, C.CItem>, +l: Live) -> String:
   match l:
-    case ILive{secs, usec, ut, st, mut, mst, rss, heap, act, conns, +clients, +blk, +tmo}:
+    case ILive{secs, usec, ut, st, mut, mst, rss, heap, act, conns, +clients, +cn}:
       "# Clients\r\n" ++ kv("connected_clients", Nat.show(clients)) ++ kv("cluster_connections", "0") ++
       kv("maxclients", cfg(items, "maxclients")) ++ kv("client_recent_max_input_buffer", "0") ++
-      kv("client_recent_max_output_buffer", "0") ++ kv("blocked_clients", Nat.show(blk)) ++ kv("tracking_clients", "0") ++
-      kv("clients_in_timeout_table", Nat.show(tmo))
+      kv("client_recent_max_output_buffer", "0") ++ kv("blocked_clients", Nat.show(cn.at(cn, 0n))) ++ kv("tracking_clients", Nat.show(cn.at(cn, 2n))) ++
+      kv("clients_in_timeout_table", Nat.show(cn.at(cn, 1n)))
 
 # memory: used_memory is what the heap's live values hold (IO.heap, as
 # zmalloc counts what Redis allocated), from which maxmemory evicts;
@@ -2380,7 +2433,7 @@ def sec.persistence(+items: List<&2, C.CItem>, +start: U32, +a0: Nat, +a: Nat, +
   kv("aof_last_cow_size", "0") ++ kv("module_fork_in_progress", "0") ++ kv("module_fork_last_cow_size", "0") ++
   sec.aof(on, a0, a, rws.sched(rw))
 
-def sec.stats.go(c: Count, inst: Inst, +conns: Nat, +errs: String, +expired: Nat, +ex: Exp, +now: Nat) -> String:
+def sec.stats.go(c: Count, inst: Inst, +conns: Nat, +errs: String, +expired: Nat, +ex: Exp, +now: Nat, +l: Live) -> String:
   match c inst:
     case ICount{+cmds, +inb, +outb} IInst{ms, last, +sc, +si, +so}:
       "# Stats\r\n" ++ kv("total_connections_received", Nat.show(conns)) ++ kv("total_commands_processed", big.show(cmds)) ++
@@ -2396,8 +2449,8 @@ def sec.stats.go(c: Count, inst: Inst, +conns: Nat, +errs: String, +expired: Nat
       kv("pubsubshard_channels", "0") ++ kv("latest_fork_usec", "0") ++ kv("total_forks", "0") ++
       kv("migrate_cached_sockets", "0") ++ kv("slave_expires_tracked_keys", "0") ++ kv("active_defrag_hits", "0") ++
       kv("active_defrag_misses", "0") ++ kv("active_defrag_key_hits", "0") ++ kv("active_defrag_key_misses", "0") ++
-      kv("total_active_defrag_time", "0") ++ kv("current_active_defrag_time", "0") ++ kv("tracking_total_keys", "0") ++
-      kv("tracking_total_items", "0") ++ kv("tracking_total_prefixes", "0") ++ kv("unexpected_error_replies", "0") ++
+      kv("total_active_defrag_time", "0") ++ kv("current_active_defrag_time", "0") ++ kv("tracking_total_keys", Nat.show(live.cn(l, 3n))) ++
+      kv("tracking_total_items", Nat.show(live.cn(l, 4n))) ++ kv("tracking_total_prefixes", Nat.show(live.cn(l, 5n))) ++ kv("unexpected_error_replies", "0") ++
       kv("total_error_replies", errs) ++ kv("dump_payload_sanitizations", "0") ++ kv("total_reads_processed", "0") ++
       kv("total_writes_processed", "0") ++ kv("io_threaded_reads_processed", "0") ++ kv("io_threaded_writes_processed", "0") ++
       kv("reply_buffer_shrinks", "0") ++ kv("reply_buffer_expands", "0")
@@ -2419,7 +2472,7 @@ def sec.replication(+items: List<&2, C.CItem>, +replid: String) -> String:
 
 def sec.cpu(+l: Live) -> String:
   match l:
-    case ILive{secs, usec, +ut, +st, +mut, +mst, rss, heap, act, conns, clients, b, t}:
+    case ILive{secs, usec, +ut, +st, +mut, +mst, rss, heap, act, conns, clients, cn}:
       "# CPU\r\n" ++ kv("used_cpu_sys", cpu(st)) ++ kv("used_cpu_user", cpu(ut)) ++ kv("used_cpu_sys_children", "0.000000") ++
       kv("used_cpu_user_children", "0.000000") ++ kv("used_cpu_sys_main_thread", cpu(mst)) ++ kv("used_cpu_user_main_thread", cpu(mut))
 
@@ -2553,7 +2606,7 @@ def on.persistence(on: Bool, +items: List<&2, C.CItem>, +i: Info, +now: Nat) -> 
 def on.stats(on: Bool, +i: Info, +now: Nat) -> String:
   match on i:
     case True{} IInfo{b, +l, +c, +inst, pk, +c0, a0, a, +st, +ex, rw, tm}:
-      sec.stats.go(c, inst, Nat.sub(live.conns(l), c0), stats.total(st), exp.n(ex), ex, now)
+      sec.stats.go(c, inst, Nat.sub(live.conns(l), c0), stats.total(st), exp.n(ex), ex, now, l)
     case False{} _:
       ""
 
