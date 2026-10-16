@@ -441,8 +441,9 @@ Databases: 16 of them, or as many as `databases` says, as in Redis: SELECT, MOVE
 key with its time), SWAPDB, FLUSHDB and FLUSHALL (with ASYNC/SYNC, which empty at once),
 with Redis's errors for a wrong number; INFO's keyspace has a line for each database
 with keys, and the sweep of expired keys goes over all databases.
-The connection: HELLO (2 or 3; with AUTH and SETNAME), AUTH (a password, or `default`
-and a password), SELECT, QUIT, RESET (selects database 0 again, and RESP2), CLIENT ID,
+The connection: HELLO (2 or 3; with AUTH and SETNAME), AUTH (a password, or a user and
+its password), SELECT, QUIT, RESET (selects database 0 again, RESP2 and the default
+user), CLIENT ID,
 GETNAME, SETNAME, REPLY ON/OFF/SKIP, NO-EVICT, TRACKING (client-side caching: the keys a
 client read, invalidated when they change, as Redis's tracking.c; section 3zzzb of
 FINDINGS.md), CACHING, GETREDIR, TRACKINGINFO, UNBLOCK (TIMEOUT or ERROR), LIST, INFO,
@@ -450,8 +451,17 @@ KILL, HELP, FUNCTION FLUSH (there are no
 functions, nothing to flush). A client must be authenticated where Redis requires it:
 after the check of the command's name and number of arguments and before it runs (a
 syntax error for an unauthenticated client is NOAUTH); a client is authenticated on
-connecting and on RESET if there is no password then, and after AUTH or AUTH in HELLO,
-and nothing else changes that.
+connecting and on RESET if the default user is on and takes no password then, and after
+AUTH or AUTH in HELLO, and nothing else changes that.
+ACL: users as Redis 7.0.15 keeps them, set by ACL SETUSER (selectors, key patterns with
+what each may do, channels, passwords kept as SHA-256, Redis's errors) and read by
+GETUSER, LIST, USERS, WHOAMI, CAT, DRYRUN, GENPASS, LOG and HELP. A call of a client whose
+user may not run every command, read and write every key and use every channel is
+checked as Redis's `processCommand` checks it, after NOAUTH and before the rest: refused,
+it answers NOPERM, counts as a refused call and adds an entry to ACL LOG; EXEC checks its
+commands again as it runs them. ACL DELUSER closes the clients of the users it removes,
+and ACL SETUSER that takes a channel away closes the subscribers that had it. While no
+client's user is restricted, nothing is checked (section 3zzzh of FINDINGS.md).
 Configuration: CONFIG GET (names, alias names, glob patterns), SET (several parameters
 at once, all or none), RESETSTAT, REWRITE, HELP over every parameter of Redis 7.0.15
 (counted in [README.md](README.md#in-numbers)):
@@ -521,10 +531,10 @@ same lines), and the log is written in Redis's form, to standard output or to
 `logfile`. The port, `bind` (IPv4), `requirepass`, `protected-mode`, the append-only
 file (`appendonly`, `appendfilename`, `appendfsync`, `aof-load-truncated`), `logfile`,
 `loglevel` and `pidfile` take effect; with `appendonly no` the RDB file is loaded, as
-Redis loads it; what BendKV cannot do (modules, ACL users, command renaming,
-daemonizing, cluster, replica, TLS, supervisor signaling, Redis 7's multi-part
-append-only file, or an RDB file that holds a stream, a module's data or functions)
-stops the start with a line in the log.
+Redis loads it; what BendKV cannot do (modules, ACL users from the configuration or a
+file, command renaming, daemonizing, cluster, replica, TLS, supervisor signaling, Redis
+7's multi-part append-only file, or an RDB file that holds a stream, a module's data or
+functions) stops the start with a line in the log.
 Pipelining, partial packets, inline commands (one can work through `nc`) and
 binary-safe values are supported. Requests are parsed as Redis 7.0.15 parses them: a
 length as `string2ll` reads it (no `0` before the first digit), a count of 0 or less
@@ -882,18 +892,18 @@ The translation the kernel reads can be dumped with
   skipped. The reference is the same run on redis-server 7.0.15 with default settings,
   each unit on a freshly started server instance: in this mode 1,757 tests run, and
   Redis passes 1,677 (almost all the others need DEBUG, off by default in 7.0). BendKV
-  passes 1,303 of them (77.7%), and in the units of what it has (the protocol, the
+  passes 1,305 of them (77.8%), and in the units of what it has (the protocol, the
   connection and clients and their pause, the keyspace and databases, strings with
   ranges, bits and fields, counters, hashes, lists, sets, sorted sets, SORT, HyperLogLogs,
   GEO, DUMP and RESTORE, times to live, lazy freeing, transactions, Pub/Sub and keyspace
   notifications, introspection, the slow log and the latency monitor, client-side
-  caching), 1,300 of 1,365 (95%): `unit/tracking` all 10, `unit/latency-monitor` 11 of 13
-  (the others need Lua), `unit/slowlog` 7 of 9 (the others use ACL and MIGRATE),
+  caching, ACL users), 1,302 of 1,365 (95%): `unit/tracking` all 10, `unit/latency-monitor`
+  11 of 13 (the others need Lua), `unit/slowlog` 8 of 9 (the other uses MIGRATE),
   `unit/dump` all 11,
   `unit/geo` all 59, `unit/introspection-2` 37 of 43 (the others need Lua, streams, MIGRATE
   and COMMAND's entries of commands BendKV does not have),
   `unit/introspection` 25 of 28 (the two others need Lua, and the third MIGRATE),
-  `unit/other` 16 of 19, `unit/multi` 28 of 53 (the others read the replication stream,
+  `unit/other` 17 of 19, `unit/multi` 28 of 53 (the others read the replication stream,
   need Lua or XGROUP, or run after a test that left the client in MULTI),
   `unit/pubsub` 29 of 30 (the other needs streams), `unit/expire` 57 of 59 (the others
   need replication), `unit/type/string` 74 of 77 (two others need replication, the third
@@ -943,9 +953,9 @@ The translation the kernel reads can be dumped with
   CI on every pull request): redis-py 8.1.0's tests of its sync and asyncio clients, in
   RESP2 and in RESP3, and go-redis v9.23.0's specs, in RESP3, each against Redis 7.0.15
   and against BendKV, each on a server started for it, without their tests of modules,
-  clusters, sentinels and TLS. Of the tests Redis passes, BendKV passes 2,526 of 2,753 in
-  redis-py, the same tests in RESP2 and in RESP3, and 418 of 460 in go-redis; every other
-  one fails on what BendKV does not have (Lua, streams, ACL, and COMMAND's entries of
+  clusters, sentinels and TLS. Of the tests Redis passes, BendKV passes 2,560 of 2,753 in
+  redis-py, the same tests in RESP2 and in RESP3, and 419 of 460 in go-redis; every other
+  one fails on what BendKV does not have (Lua, streams, and COMMAND's entries of
   those), none on a command BendKV has. A test Redis passes that BendKV fails, and that is not among the
   known failures of `tools/data/clients.json`, fails CI.
 - **Differential testing against Redis 7.0.15** (`tests/diff_test.py`). Random streams
@@ -1506,7 +1516,7 @@ make clients BEND="$B" # redis-py's and go-redis's test suites on Redis and on B
    a model of time in the state for TTL; then the types one at a time, each with its own
    laws: hashes, lists, sets, sorted sets; then MULTI/EXEC/WATCH and pub/sub (done);
    then the rewrite of the append-only file and `maxmemory`. Out of scope: Lua and
-   functions, streams, cluster, replication, modules, ACLs beyond a password. Done:
+   functions, streams, cluster, replication, modules. Done:
    protocol edges, connection commands (sessions with laws), CONFIG by the full table of
    Redis's parameters (with laws), INFO with Redis's sections and fields, COMMAND with
    the command descriptions from Redis itself, statistics per command in INFO
@@ -1516,8 +1526,8 @@ make clients BEND="$B" # redis-py's and go-redis's test suites on Redis and on B
    FLUSHDB, FLUSHALL, keyspace lines per database — with laws and recovery of all the
    databases from the append-only file), the ranges and bits of strings (GETRANGE,
    SETRANGE, GETBIT, SETBIT, BITCOUNT, BITPOS — with a law of SETRANGE and recovery from
-   the append-only file). Redis's suite in external mode: BendKV passes 1,303 of the
-   1,677 tests Redis itself passes, and 1,300 of 1,365 in the units of what it has
+   the append-only file). Redis's suite in external mode: BendKV passes 1,305 of the
+   1,677 tests Redis itself passes, and 1,302 of 1,365 in the units of what it has
    ([docs/COMPATIBILITY.md](docs/COMPATIBILITY.md)). Start-up as for redis-server (the
    command line and the configuration file). The database as a record with a count of
    keys (DBSIZE in O(1)).
@@ -1617,8 +1627,12 @@ make clients BEND="$B" # redis-py's and go-redis's test suites on Redis and on B
    TRACKING: client-side caching as Redis's `tracking.c` keeps it, its invalidations
    pushed at once but to a client of RESP3 that others redirect to and that sends
    nothing, which gets them with its next reply (section 3zzzb of FINDINGS.md); checked
-   by tests against Redis byte for byte. What the client libraries' suites find missing within the scope above (ACL's
-   users) is the next step.
+   by tests against Redis byte for byte. ACL users: Redis's users, selectors, key
+   patterns and channels, each call of a restricted client checked as Redis checks it,
+   ACL LOG, and the clients ACL SETUSER and DELUSER close (section 3zzzh of FINDINGS.md);
+   checked by tests against Redis line by line. The client libraries' suites find nothing
+   else missing within the scope above but BGSAVE, an RDB file; the query buffer's
+   limits are the next step.
 2. **The append-only file, further.** A law of the rewrite: the rewritten file replays
    to the databases it was written from (key by key, not by the shape of the trie); it
    needs a law that a scan from the first bucket reads every key once (the invariant "a

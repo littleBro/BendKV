@@ -37,11 +37,11 @@ import time
 
 
 def enc(args):
-    out = b"*%d\r\n" % len(args)
+    out = [b"*%d\r\n" % len(args)]
     for a in args:
         a = a.encode() if isinstance(a, str) else a
-        out += b"$%d\r\n%s\r\n" % (len(a), a)
-    return out
+        out.append(b"$%d\r\n%s\r\n" % (len(a), a))
+    return b"".join(out)
 
 
 class Client:
