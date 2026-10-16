@@ -58,6 +58,14 @@ def expired(r):
     return int(info_lines(r, "stats", "expired_keys:")[0].split(":")[1])
 
 
+def listed(r, c, cs):
+    """c's line of CLIENT LIST as client_test reads it, its age put aside:
+    the scenarios before scenario 4 take about two seconds, so c's age falls
+    on either side of client_test's mark of 2 on either server."""
+    got = norm(r.cmd("CLIENT", "LIST", "ID", c.id), cs)
+    return [re.sub(r"\bage=\S+", "age=X", l) for l in got] if isinstance(got, list) else got
+
+
 # a line a monitor is fed: "+<time> [<db> <addr>] <command>"
 FEED = re.compile(r"^\+\d+\.\d+ \[")
 
@@ -102,7 +110,7 @@ def scenarios(port, log, mon):
     log("2 reads", a.cmd("GET", "z"), a.cmd("EXISTS", "z"), a.cmd("PING"), a.cmd("CLIENT", "GETNAME"))
     a.send("SET", "x", "1")
     log("2 held", wait_blocked(r, 1), a.read(0.2))
-    log("2 list", norm(r.cmd("CLIENT", "LIST", "ID", a.id), [a, b]))
+    log("2 list", listed(r, a, [a, b]))
     log("2 stats", stats(r))
     b.send("PFCOUNT", "h")
     log("2 pfcount", wait_blocked(r, 2))
@@ -136,7 +144,7 @@ def scenarios(port, log, mon):
     log("4 multi", a.cmd("MULTI"), a.cmd("GET", "x"))
     a.send("SET", "x", "2")
     log("4 set held", a.read(0.2), wait_blocked(r, 1))
-    log("4 list", norm(r.cmd("CLIENT", "LIST", "ID", a.id), [a, b]))
+    log("4 list", listed(r, a, [a, b]))
     r.cmd("CLIENT", "UNPAUSE")
     log("4 set queued", a.read())
     r.cmd("CLIENT", "PAUSE", "100000", "WRITE")
