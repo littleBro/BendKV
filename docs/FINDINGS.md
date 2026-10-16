@@ -6415,6 +6415,25 @@ The times of the cases above, and more, are in PERFORMANCE.md, section 73: with 
 pieces, HGET of the last of 512 pairs of 64 bytes takes 17.9 microseconds, where the one
 string took 141.5 and main 11.5.
 
+Instructions a request (callgrind; 100 hashes, 2,000 requests counted after 2,000 more,
+200 of HGETALL and of the one string's restored listpacks; 20 clients at a pipeline depth
+of 16):
+
+| hashes, command | main | one string | pieces |
+|---|---:|---:|---:|
+| 512 pairs of 64-byte fields and values: HGET of the last field | 70,443 | 2,372,557 | 308,852 |
+| the same, HGET of a field not there | 69,894 | 2,370,206 | 308,204 |
+| the same, HSET of a middle field there | 127,535 | 1,479,051 | 316,489 |
+| the same, HGETALL | 1,275,989 | 3,682,435 | 1,469,417 |
+| Redis's listpack of 512 values of 1,000 bytes, restored: HGET of the last field | 58,559 | 65,568,765 | 181,675 |
+| the same, HGET of a field not there | 56,841 | 64,472,020 | 172,641 |
+| the same, HSET of a middle field there | 94,138 | 13,598,199 | 189,231 |
+| the same, HGETALL | 1,720,190 | 49,996,002 | 1,661,369 |
+
+At 512 pairs of 64-byte fields, a find in the pieces runs about 600 instructions a pair,
+4.4 times main's walk, but it reads a few cache lines where main's read a cell, a node and
+a buffer a pair: the time is 1.6 times main's.
+
 The pieces still lose to main in two places.
 - Where every field has one length and one last byte, as in these shapes, each pair
   passes the test of the last byte and is sliced out to be compared whole. Fields that
