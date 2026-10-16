@@ -7393,3 +7393,86 @@ caches missed, and the tick counted them all at once.
 (baseline 3,452, 4,214 and 4,552); with 100 clients in BLPOP, 2.7% and 2.7% above the
 counts without them. Each of those loads runs one command, whose calls all go to the
 newest run, as before.
+
+## 72. Background saves
+
+**What was added** (FINDINGS 3zzzk). Each batch counts its changes for
+`rdb_changes_since_last_save` and the save points; the cron looks at the save points each
+100 ms; BGSAVE and the cron's saves write the RDB file a slice at a time between the
+groups the server answers.
+
+**The count of changes.** A batch of the fast way is counted once it has run, from its
+command's rule and its replies (`run_put`, `group_put`), and the count goes into `Info`
+with the batch's other counts, in the same rebuild (`S.srv.ran.d`). A batch of GET has
+nothing to count (its rule is none). A batch of INCR counts its calls less the errors
+that the look at its replies for errors found anyway. A batch of SET walks its replies:
+OK, or a value with GET, and none for a SET that NX or XX refused. Only a batch with a
+code that takes a weight (MSET, HSET, a push, a STORE, ...) reads anything before it
+runs.
+
+**Measured** (`make perfcheck`, instructions per request; #72 at 32b0cc1, the branch this
+one starts from, built here and counted in turn with this one):
+
+| | GET | SET | INCR |
+|---|---:|---:|---:|
+| before | 3,415 | 4,177 | 4,521 |
+| with background saves | 3,434 (+0.6%) | 4,222 (+1.1%) | 4,539 (+0.4%) |
+
+With 100 clients in BLPOP, GET 3,538 and SET 4,367, 3.0% and 3.4% above the counts without
+them (before: 3.0% and 3.4%). The base counted the same in three runs (within 2
+instructions), and this change the same in two runs and in `tools/callgrind_req.sh`
+(3,432, 4,228 and 4,540), but for the GET of one run: 3,502, with 1.99 last-level misses
+and 4.00 prefetches where every other run had 2.81 and 3.68. Another job's load on the
+machine had changed how the requests came in batches, and `make perfcheck` failed that
+run on its misses and prefetches.
+
+Where the 17, 50 and 20 instructions go (`tools/callgrind_req.sh`, each function's own
+instructions against the base's): `fast.run` 6 to 7 for each (the checks of the batch's
+rule before it runs, and the flags it keeps across the run), the functions compiled
+inline 6 for GET and 8 for INCR (the count by the rule, and the count passed into
+`Info`), and 34 for SET, whose replies are walked; the rest in reference counts.
+
+**On the way.**
+
+- *The first build* took 3,579, 4,404 and 4,735 instructions (161, 228 and 212 more than
+  its base then, 3,418, 4,176 and 4,523): `make perfcheck` failed. Its cron read `save`
+  among the parameters at each look, every 100 ms, and split and parsed it. Under
+  callgrind the server runs so slowly that 100 ms hold few requests, and the look
+  weighed about 125 instructions on each GET of callgrind's profile. And the check before
+  each batch for a code that takes a weight made `fast.run` keep its state, 27 words, and
+  the databases across that call.
+- *The save points read once*, into the account, at the start and at each CONFIG SET
+  (`rdb.cfg`), and *two tails* for `fast.run` (`fast.run.w`: only a batch that takes a
+  weight reads anything before it runs): 3,443, 4,236 and 4,557.
+- *One caller each, and loops* (FINDINGS.md, section 7). `run_put` and `group_put`,
+  called from two arms of `fast.run.w`, had become segments of their own, entered
+  through the work loop (in callgrind's profile, 18 instructions of each GET went to
+  them: their entry, and work that had been `fast.run`'s). Each now has one caller, and
+  `run_put.w` and `group_put.w` take the batches with weights. The count of a batch of
+  one code, `dirty.one`, and the check for weights became loops of their own (lengths
+  counted by a loop, not by `List.length`, which recurses outside a tail), so that their
+  callers save no frame around them: 3,434, 4,222 and 4,539.
+
+**A BGSAVE** (`tools/rdb_cost.py --bgsave`: each server in a fresh directory, filled with
+a million keys of 100 bytes, then a BGSAVE while one client sends SETs of random keys of
+the million, one at a time, each awaited; medians of three rounds, the servers in turn):
+
+| | BGSAVE | SETs served meanwhile | SET's latency: median, 99th percentile, highest | resident memory: before, highest | Redis's copy on write |
+|---|---:|---:|---:|---:|---:|
+| BendKV | 4.43 s | 13,000 | 213 µs, 716 µs, 45 ms | 203 MB, 234 MB | |
+| Redis 7.0.15 | 2.31 s | 32,300 | 56 µs, 169 µs, 2.5 ms | 205 MB, 205 MB | 140 MB |
+
+Redis's child writes the file on a core of its own while the parent answers; BendKV's
+actor writes it a slice at a time between the requests it answers, so a request that
+comes while a slice is written waits for it, and the save takes longer than a SAVE of
+the same keys (3.36 s, section 67). The snapshot costs BendKV the nodes the writes copy:
+31 MB for 13,000 SETs, where Redis's child had 140 MB of pages copied for 32,300.
+
+**What is left.** The walk of SET's replies (34 instructions a request) could go where the
+replies are already walked: the encoder, or the look for errors, which SET does not take.
+A slice of a background save is 32 entries of the trie while requests keep coming (64
+after a group, 256 once none has come for 10 ms, as the rewrite's), each written whole,
+as a large collection is: smaller slices would answer sooner, at the cost of a longer
+save. The syncs each 4 MB (`rdb-save-incremental-fsync`), the file's last sync, its
+rename and the directory's sync are made by the actor too, and a request that comes
+meanwhile waits for them, where Redis's child makes them alone.

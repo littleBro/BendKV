@@ -416,9 +416,10 @@ translation stays in the trusted base.
   numbers INFO's memory section shows), LOLWUT (Redis 7.0.15's line, and the drawings of
   VERSION 5 and 6, those that take no random number byte for byte as Redis draws them),
   and SHUTDOWN [NOSAVE|SAVE] [NOW] [FORCE] [ABORT], read as Redis 7.0.15 reads it: the
-  append-only file written and synced, a rewrite that runs stopped, the RDB file saved
-  with save points or SAVE and not with NOSAVE (a save that fails stops nothing, Redis's
-  error answered, but with FORCE), the pid file removed, the process ended with code 0.
+  append-only file written and synced, a rewrite or a background save that runs
+  stopped, the RDB file saved with save points or SAVE and not with NOSAVE (a save that
+  fails stops nothing, Redis's error answered, but with FORCE), the pid file removed,
+  the process ended with code 0.
   Where BendKV differs: SIGTERM and SIGINT end the process at once, without the shutdown
   Redis runs for them (`shutdown-on-sigterm`, `shutdown-on-sigint`: its save with save
   points among it, and the removal of a background save's temporary file), as the

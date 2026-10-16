@@ -429,10 +429,10 @@ blocking command's does), MEMORY STATS, DOCTOR, PURGE and MALLOC-STATS (Redis's 
 and advice from the numbers of INFO's memory section; no allocator's statistics), LOLWUT
 (Redis 7.0.15's line, and VERSION 5's and 6's drawings, byte for byte those that take
 no random number), and SHUTDOWN with its flags: the append-only file written and synced,
-a rewrite that runs stopped, the RDB file saved with SAVE or with save points and not
-with NOSAVE (a save that fails stops nothing, Redis's error answered, but with FORCE),
-the pid file removed, the process ended with code 0 (sections 3zzl and 3zzzc of
-docs/FINDINGS.md).
+a rewrite or a background save that runs stopped, the RDB file saved with SAVE or with
+save points and not with NOSAVE (a save that fails stops nothing, Redis's error
+answered, but with FORCE), the pid file removed, the process ended with code 0 (sections
+3zzl, 3zzzc and 3zzzk of docs/FINDINGS.md).
 Times to live: EXPIRE, PEXPIRE, EXPIREAT and PEXPIREAT (with NX, XX, GT, LT), TTL, PTTL,
 EXPIRETIME, PEXPIRETIME, PERSIST; SET with NX, XX, GET, EX, PX, EXAT, PXAT and KEEPTTL;
 SETEX, PSETEX, GETEX (EX, PX, EXAT, PXAT, PERSIST) and GETDEL. Times are read as Redis
