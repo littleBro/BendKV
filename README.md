@@ -19,8 +19,8 @@ throughput of Redis 7.0.15 on the same machine, with half its memory for small v
 > and the latency monitor, the server's administrative commands, an append-only file and
 > its rewrite, maxmemory and its eviction, RESP3). The goal now is a
 > drop-in replacement for a single Redis node, measured by Redis's own test suite: of the
-> 1,677 tests Redis 7.0.15 passes against a server it did not start, BendKV passes 1,292,
-> and 1,289 of the 1,355 in what it implements
+> 1,677 tests Redis 7.0.15 passes against a server it did not start, BendKV passes 1,303,
+> and 1,300 of the 1,365 in what it implements
 > ([docs/COMPATIBILITY.md](docs/COMPATIBILITY.md)). Do not use it for data you cannot
 > lose.
 
@@ -347,9 +347,9 @@ translation stays in the trusted base.
 - **Connection:** PING, ECHO, TIME (the time the batch runs at, to the ms), HELLO (2 or 3,
   with AUTH and SETNAME), AUTH, SELECT, QUIT, RESET (which selects database 0 again, and
   RESP2),
-  CLIENT (ID, GETNAME, SETNAME, REPLY ON/OFF/SKIP, NO-EVICT, GETREDIR, TRACKINGINFO,
-  CACHING, UNBLOCK (TIMEOUT or ERROR), LIST, INFO, KILL, PAUSE, UNPAUSE, HELP), FUNCTION
-  FLUSH. A client
+  CLIENT (ID, GETNAME, SETNAME, REPLY ON/OFF/SKIP, NO-EVICT, TRACKING, CACHING, GETREDIR,
+  TRACKINGINFO, UNBLOCK (TIMEOUT or ERROR), LIST, INFO, KILL, PAUSE, UNPAUSE, HELP),
+  FUNCTION FLUSH. A client
   must authenticate where Redis asks it to: once a command's name and number of arguments
   are checked, before it runs (a syntax error is NOAUTH for a client that has not
   authenticated); a client is authenticated as it connects, and at RESET, when there is
@@ -358,8 +358,8 @@ translation stays in the trusted base.
   form of an address, and the filters ID, TYPE, ADDR, LADDR, USER and SKIPME), as Redis
   7.0.15 runs them, with its errors. A client's line has Redis's fields in Redis's order:
   its id, address and local address, its socket's fd, its name, age and idle time, its
-  flags (P subscribed, x in MULTI, b waiting, d a watched key touched, e NO-EVICT on, N
-  none), database, counts of subscriptions, its queued commands, the bytes of the batch
+  flags (P subscribed, x in MULTI, b waiting, d a watched key touched, e NO-EVICT on, t
+  tracking keys, R its redirect gone, B in BCAST mode, N none), database, counts of subscriptions, its queued commands, the bytes of the batch
   and of the arguments of the command that runs (of the blocking command, for a client
   that waits), and the full name of its last command (the blocking one while it waits;
   EXEC, with the client in MULTI, while EXEC runs). A client killed is cut off at once,
@@ -370,7 +370,8 @@ translation stays in the trusted base.
   rbs, rbp, obl, oll, omem, tot-mem) and so is qbuf of another client (Redis's query buffer
   holds the commands after a blocking one; BendKV holds them as commands); idle counts
   from the client's last batch, where Redis also counts a reply written (to a subscriber
-  that gets messages, to a client that waited); user is `default`, redir -1, resp 2.
+  that gets messages, to a client that waited); user is `default`, redir the client its
+  invalidations go to (0 itself, -1 when it does not track), resp 2 or 3.
 - **CLIENT PAUSE and CLIENT UNPAUSE**, as Redis 7.0.15 runs them: a pause of the
   commands that write or may be replicated (WRITE: PFCOUNT and PUBLISH too, and an EXEC
   whose transaction queued one) or of every command (ALL), for a timeout in ms; a second
@@ -409,6 +410,32 @@ translation stays in the trusted base.
   slow log when it ends, so a SLOWLOG GET in the same pipeline does not see them; there
   are no events of the append-only file, of eviction or of fork (FINDINGS.md, section
   3zzz).
+- **CLIENT TRACKING**, as Redis 7.0.15 runs it (server-assisted client-side caching):
+  after a call that only reads, its keys (by the command's key specs) are kept for its
+  client, and a command that changes one, as WATCH counts a change, sends each client
+  that read it an invalidation, and the key is forgotten; FLUSHDB and FLUSHALL send
+  every tracking client a null, and keys the sweep deletes or eviction takes are
+  invalidated too. REDIRECT sends the invalidations to another client (a push in RESP3,
+  a message of `__redis__:invalidate` to a client of RESP2 subscribed to it), BCAST
+  sends after each group of requests the actor runs every key changed under the
+  client's prefixes, OPTIN and OPTOUT with CLIENT CACHING choose the reads that count,
+  NOLOOP leaves out the client's own changes, and `tracking-table-max-keys` bounds the
+  keys kept. CLIENT CACHING, GETREDIR and TRACKINGINFO, CLIENT LIST's flags and redir,
+  and INFO's tracking fields answer as Redis's. Batches on keys no client tracks keep the
+  fast way; a client that tracks runs its own commands one at a time, as a subscribed
+  client does, and while a client is in BCAST mode every command runs so (PERFORMANCE.md,
+  section 66). Where BendKV differs: an expired key is invalidated when the sweep deletes
+  it, not when a read finds it; the table's limit is applied at each tick of the cron, not
+  before each command; an overlap of two given prefixes past the first gets the error
+  alone (Redis 7.0.15 answers the error, then OK, and tracks with all the prefixes); a
+  client of RESP3 that others redirect to, with no subscription and whose batches all run
+  the fast way, gets its invalidations with its next reply, where Redis pushes them at
+  once; a command's invalidations go out before all its keyspace events, where Redis
+  sends them key by key, each next to its event; an LTRIM that removes nothing
+  invalidates nothing, where Redis invalidates its key; a client that others redirect to
+  gets the invalidation of a key its own command writes before that command's reply,
+  where Redis writes it after the reply for the commands that reply before they signal
+  the key (ZADD, ZINCRBY, HSET, HINCRBY, LPUSH, RPUSH) (FINDINGS.md, section 3zzzb).
 - **The server:** LASTSAVE (the last save that ended well, the start until one does), ROLE (a master
   with no replica), WAIT (0, as no replica acknowledges: at once when it asks for none,
   otherwise once its timeout ends, its client waiting as a blocking command's does),
@@ -555,7 +582,7 @@ translation stays in the trusted base.
   3zzzc).
 
 Not yet: streams, Lua
-scripts, CLIENT TRACKING, CONFIG REWRITE (it answers as Redis does without a configuration file),
+scripts, CONFIG REWRITE (it answers as Redis does without a configuration file),
 BGSAVE and saves at the save points. Times in ms are limited to 14 digits.
 
 ## Performance
@@ -788,7 +815,7 @@ away.
 | `src/aof.bend` | 1,200 |  | yes |
 | `src/session.bend` | 2,400 |  | yes |
 | `src/config.bend` | 1,200 | 180 | yes |
-| `src/command.bend` | 1,700 | 1,100 | no |
+| `src/command.bend` | 1,900 | 1,300 | no |
 | `src/float.bend` | 1,200 |  | no |
 | `src/geo.bend` | 870 |  | no |
 | `src/hll.bend` | 1,400 |  | no |
@@ -796,13 +823,13 @@ away.
 | `src/lolwut.bend` | 470 |  | no |
 | `src/rdb.bend` | 2,100 |  | no |
 | `src/resp.bend` | 880 |  | no |
-| `src/server.bend` | 7,600 |  | no |
+| `src/server.bend` | 8,900 |  | no |
 | `src/startup.bend` | 460 |  | no |
 | `proof/LAWS.bend` | 920 | 20 |  |
 | `proof/SPEC.bend` | 370 |  |  |
 | `proof/PROOF.bend` | 16,000 | 2,800 |  |
-| `src/`, the 6 files the laws import | 23,000 | 7,100 |  |
-| `src/`, the 10 others | 18,000 | 1,100 |  |
+| `src/`, the 6 files the laws import | 25,000 | 7,900 |  |
+| `src/`, the 10 others | 19,000 | 1,300 |  |
 | `proof/` | 18,000 | 2,800 |  |
 <!-- END gen_counts: numbers -->
 
