@@ -6082,6 +6082,157 @@ them. The databases are the same. README.md and COMPATIBILITY.md list it.
 **What it costs.** 238 lines more in `src/aof.bend` and 77 in `src/server.bend`; with
 the proof, `make check` takes 14 s here and `make verdict` 1 min 40 s.
 
+## 3zzzi. One reading of the heap for INFO and the eviction
+
+**What failed.** One check of `tests/maxmemory_test.py` failed now and then under load,
+in CI and here: an eviction that runs out of time and goes on with no request. With two
+busy loops beside it on four cores, a build of #72 with #70 merged in (main's memory
+code) failed 3 runs of 20, and #75's build, the same with SIGTERM, 1 of 20. It failed in
+two ways:
+
+- INFO's `used_memory` stayed a few hundred bytes past maxmemory for the 30 s the test
+  waits (10,712,200 against 10,711,556), and no key was evicted any more;
+- INFO showed the heap within the limit, and DBSIZE, the next request, found 5 to 11
+  keys fewer than INFO's `evicted_keys` had counted.
+
+**Why.** The heap was read in two places for two purposes.
+
+- The eviction goes by the actor's reading: before each group, and after each key it
+  frees (`mem.run`, `evict.heap`). It stops once that reading is within maxmemory, a
+  few hundred bytes under it: what the last key freed.
+- INFO's `used_memory` was the shell's reading. The connection's thread reads the heap
+  with INFO's other facts (`live.read`), before the request reaches the actor.
+
+The two readings differ by what changed in the heap between them, and the heap's
+account does not move with the keys alone.
+
+- On a server with no other client, a loop of INFO and DBSIZE over 200,000 keys moved it
+  between 19 KB and 69 KB above its first reading.
+- With maxmemory 100 KB above an empty server's memory and `noeviction`, every SET past
+  the limit was refused, so no key was added or deleted. The account still climbed by
+  about 390 bytes for each refused SET and INFO, and fell by 35 to 50 KB at once every 60
+  to 100 requests.
+
+The account itself is exact. What climbs is the timing of the calls (section 3zzz). Each
+run of calls goes, with a histogram of its own, to the runs not yet counted (`Stats`'
+`cur` and `pend`). They are counted in the entries at the cron's tick, every 100 ms, so
+a run is held until then. With `latency-tracking` on, that is about 300 bytes a call
+(#79).
+
+So:
+
+- the shell's reading could stay past maxmemory while the actor's was within. INFO then
+  showed the heap past the limit with no eviction going on, and nothing changed it;
+- a later group's reading could be past the limit again by more than the eviction had
+  left under it, and the actor evicted a few more keys between INFO and DBSIZE. In the 3
+  s after INFO first showed the heap within, a loop of INFO and DBSIZE saw about 80 more
+  keys evicted, in 4 runs of 5.
+
+Redis reads one counter (`zmalloc_used_memory`) in one thread for both, so its INFO does
+not show the memory past maxmemory while its eviction finds it within. Its memory in
+flight (query buffers, replies not yet written) counts too, and sets its eviction going
+again when it grows, but it moves by much less.
+
+**What changed.**
+
+- With maxmemory set, INFO's `used_memory` is the actor's reading for the group the
+  request runs in: the one before the group, or the one after the last key the group's
+  eviction freed (`S.srv.heap`, `I.info.heap`). The peak, MEMORY STATS and MEMORY
+  DOCTOR read the same field. The shell's facts give every other value
+  (`I.info.live.held`, `srv.facts`).
+- The actor reads the heap only when maxmemory is set and no pause holds (`mem.need`
+  2). Without maxmemory, and during a pause, INFO shows the shell's reading as before.
+  In a group where a pause ends, INFO shows the reading from before it: the actor's
+  last, or the shell's last. The pause kept the dataset as it was meanwhile. After a
+  CONFIG SET of maxmemory (Mm's `kick`), the shell's reading stands until the next group
+  reads the heap (`facts.held`).
+- The test reads DBSIZE and INFO in one MULTI/EXEC, so that the memory, the keys left
+  and the eviction's counts are of one moment. It waits on that for the memory to be
+  within the limit. The check is the same: `evicted_keys` and DBSIZE add up to 200,000,
+  `current_eviction_exceeded_time` is 0 and `total_eviction_exceeded_time` is past 0.
+
+**What it costs.** With maxmemory, each group rebuilds three records with its reading (the
+server's, INFO's and the facts'), and so does each key an eviction frees. Under callgrind
+(`tools/callgrind_req.sh`: 20 clients at pipeline depth 16), main's GET and SET took
+3,475 and 4,231 instructions a request without maxmemory, and 3,504 and 4,254 with it (1
+GB, nothing evicted). This branch took 3,486 and 4,228, then 3,503 and 4,260: the same,
+within the counts' spread.
+
+**Result.** In 20 runs under load (a busy loop, another run of the test and other probes
+beside it), the check failed in none. The test's change alone, on main's server, failed
+in none of 20 either. Likely, the requests of the test's own wait keep moving the heap's
+account, so the shell's reading does not stay past the limit. With the server's change,
+INFO shows the heap within exactly when the eviction found it within, whatever the
+requests do.
+
+Snapshots taken as the test takes them (MULTI, DBSIZE, INFO, EXEC), in the 3 s after the
+first one within the limit, held both invariants: a heap within had no eviction running,
+and `evicted_keys` and DBSIZE added up to 200,000. That was about 9,500 snapshots on
+this branch and 10,000 on main.
+
+**What is left.**
+
+- After an eviction, a key or a few more are evicted whenever the heap's account goes
+  past what the eviction left under the limit, as in Redis. `evicted_keys` grows by a
+  few keys with no write, where Redis's would rarely grow.
+- The same moves of the heap's account make another check of the test fail now and
+  then: Redis's own test that only the allkeys policies evict keys with no time
+  (unit/maxmemory.tcl). It sets maxmemory 100 KB above the memory used, adds keys until
+  INFO shows the memory within 4 KB of the limit, then adds as many again and expects a
+  volatile policy to refuse one with OOM. When the account falls by 60 to 80 KB during
+  the second half, the keys never take the heap past the limit. The test's three
+  volatile policies, run alone 25 times on a server of their own, failed 3 times of 75
+  with this change and 5 times of 75 on main. Two of the 20 runs above failed on it
+  (volatile-ttl), as one of main's CI runs did (volatile-random). Bounding the runs
+  not yet counted would end it, and with it most of what the eviction sees move: issue
+  #79.
+
+## 3zzzj. The timing's runs not yet counted, one per command
+
+**What was left.** Each call's time goes to a run of calls of its command (section 3zzz).
+The newest run (`cur`) takes the calls of its command. A call of another command starts a
+new run, and `cur` goes to the runs not yet counted (`pend`), which the cron's tick counts
+in the entries every 100 ms. Each run has a histogram of its own: four nodes of eight
+words from its first call, about 300 bytes with the run. Under a load of mixed commands,
+where the command changes from one call to the next, `pend` held a run for nearly each
+call until the tick (issue #79).
+
+- **Memory.** Under `tools/loadgen.c -g 0.5` (GETs and SETs of 10,000 keys at random, 20
+  connections at depth 16), the heap's account went between 2.3 MB and 16 MB from one
+  tick to the next.
+- **Throughput.** Making and dropping those runs cost far more time than their
+  instructions: with `latency-tracking no` the same load ran 1.6 to 1.9 times as fast,
+  and main ran it at 0.79 times Redis's throughput.
+- **The eviction** goes by the account. Before each group it found the heap past
+  maxmemory by what the runs held, and evicted keys that the next tick would have made
+  room for.
+- **The tests.** Redis's test of the volatile policies (unit/maxmemory.tcl) works on 100 KB
+  past the memory used. Between two ticks, its own SETs and INFOs put up to 80 KB of runs
+  in that budget, and when a tick let them go during the test's second half, the keys
+  never reached the limit. Run alone 25 times, its three volatile checks failed 5 times
+  of 75.
+
+**What changed** (`src/info.bend`: `truns.put`). A run that leaves `cur` is added to the run
+of its command in `pend` when there is one (`trun.join`: its calls, its time and its
+histogram merged into that run's), and goes last when there is none. Between two ticks,
+`pend` so holds a run of each command at most. What INFO, LATENCY and SLOWLOG show is the
+same: the tick counts the same calls, times and histograms into the entries, in another
+order.
+
+**What it gives** (section 71 of [PERFORMANCE.md](PERFORMANCE.md)).
+
+- **Memory.** Under the same load, the heap's account moves by 16 KB at most.
+- **Throughput.** The mixed load runs 1.45 times as fast, 1.15 times Redis's. Instructions
+  per call fall by 4%, so most of the gain is in the cache: the heap no longer runs
+  through 14 MB of fresh nodes every 100 ms.
+- **Single-command loads.** There `cur` takes every call, as before, and `make perfcheck`'s
+  counts are main's.
+- **The volatile policies' test.** It failed in none of 75 checks. Its first half now
+  adds about 250 keys, where it added 91, the rest of the 100 KB having been the runs.
+
+**Tests.** `tests/timing_test.py`, `tests/stats_test.py` and `tests/info_test.py` against
+Redis: commandstats, latencystats, errorstats and the slow log, unchanged.
+
 ## 4. Where a request's time goes, and hiding the memory waits
 
 With the eight patches, BendKV ran fewer instructions on GET and SET than Redis, missed
