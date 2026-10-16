@@ -577,6 +577,18 @@ def srv.live(s: Srv, l: I.Live) -> Srv:
     case Srv{pass, cfg, info, mm}:
       Srv{pass, cfg, I.info.live(info, l), mm}
 
+# the heap's used bytes as the actor read them (I.info.heap); and new
+# facts from the shell that leave that reading as it is
+def srv.heap(s: Srv, +h: Nat) -> Srv:
+  match s:
+    case Srv{pass, cfg, info, mm}:
+      Srv{pass, cfg, I.info.heap(info, h), mm}
+
+def srv.live.held(s: Srv, l: I.Live) -> Srv:
+  match s:
+    case Srv{pass, cfg, info, mm}:
+      Srv{pass, cfg, I.info.live.held(info, l), mm}
+
 def srv.tick(s: Srv, +ms: Nat) -> Srv:
   match s:
     case Srv{pass, cfg, info, mm}:

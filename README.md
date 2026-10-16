@@ -478,7 +478,9 @@ translation stays in the trusted base.
   descriptions from Redis itself.
 - **Memory:** maxmemory and its eviction, as Redis 7.0.15 runs them. With maxmemory set,
   BendKV reads what its heap's live values hold before each group of requests, as Redis
-  measures before each command, and while that is past maxmemory it evicts keys by
+  measures before each command, and INFO's `used_memory` is that reading, the one the
+  eviction goes by (section 3zzzi of [docs/FINDINGS.md](docs/FINDINGS.md)); while it is
+  past maxmemory, BendKV evicts keys by
   `maxmemory-policy`: the LRU, LFU and volatile-ttl policies from a pool of the 16 best
   candidates of their samples (`maxmemory-samples` keys of each database), kept from one
   eviction to the next, the random ones a key of each database in turn, the volatile ones
