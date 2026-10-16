@@ -39,6 +39,14 @@
 // The C side never calls Bend: a run only swaps stacks, and every call a
 // script makes runs through the server's own exec. One script runs at a
 // time, as in Redis.
+//
+// FUNCTION and FCALL (Redis's functions.c and function_lua.c) run on the
+// same machinery, in a Lua state of their own (Functions, below): an
+// FCALL is a run of a function, its keys and arguments its parameters
+// rather than KEYS and ARGV; FUNCTION LOAD and RESTORE are runs of loads,
+// whose only steps are log lines and done, since a library's code runs
+// once, at its load, with nothing of the server's but
+// redis.register_function, redis.log and the version.
 
 #include <ctype.h>
 #include <errno.h>
@@ -49,6 +57,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/mman.h>
+#include <time.h>
 #include <ucontext.h>
 
 #include <lauxlib.h>
@@ -95,6 +104,20 @@ void __tsan_switch_to_fiber(void* fiber, unsigned flags);
 #define SC_FLAG_NO_CLUSTER       (1u << 3)
 #define SC_FLAG_EVAL_COMPAT_MODE (1u << 4)
 #define SC_FLAG_ALLOW_CROSS_SLOT (1u << 5)
+
+// What a run runs: an EVAL's script, an FCALL's function, or the loads of
+// FUNCTION LOAD and RESTORE (and of the libraries a start reads)
+#define SC_MODE_SCRIPT   0
+#define SC_MODE_FUNCTION 1
+#define SC_MODE_LOAD     2
+
+// How a load takes its libraries in: FUNCTION LOAD's, with REPLACE or not,
+// and FUNCTION RESTORE's three policies
+#define FN_LOAD         0
+#define FN_LOAD_REPLACE 1
+#define FN_APPEND       2
+#define FN_REPLACE      3
+#define FN_FLUSH        4
 
 // The kinds of a step
 #define SC_CALL 0
@@ -343,6 +366,13 @@ typedef struct {
   char* args;          // ARGV as a RESP array
   size_t args_len;
   uint32_t flags;      // the script's flags
+  int mode;            // what runs: SC_MODE_SCRIPT, _FUNCTION or _LOAD
+  int fref;            // a function's callback, in the functions' registry
+  char* fname;         // the function's name, as it was registered
+  char* codes;         // a load's libraries: a RESP array of their codes
+  size_t codes_len;
+  int policy;          // how a load takes them in: FN_LOAD to FN_FLUSH
+  int timed;           // a load held to FUNCTION LOAD's 500 ms
 #ifdef SC_ASAN
   void* host_fake;
   void* me_fake;
@@ -1435,7 +1465,10 @@ static void sc_set_field_num(lua_State* L, const char* name, lua_Number n) {
 #define SC_REDIS_VERSION "7.0.15"
 #define SC_REDIS_VERSION_NUM 0x0007000f
 
-static void sc_register_redis_api(lua_State* L) {
+// luaRegisterRedisAPI, and with eval scriptingInit's additions (the
+// debugger's breakpoint and debug, replicate_commands), which the
+// functions' state has not
+static void sc_register_redis_api(lua_State* L, int eval) {
   lua_pushvalue(L, LUA_GLOBALSINDEX);
   sc_set_allow_list_protection(L);
   lua_pop(L, 1);
@@ -1468,10 +1501,12 @@ static void sc_register_redis_api(lua_State* L) {
   sc_set_field_num(L, "REPL_REPLICA", SC_REPL_REPLICA);
   sc_set_field_num(L, "REPL_ALL", SC_REPL_AOF | SC_REPL_REPLICA);
   sc_set_field_fn(L, "acl_check_cmd", sc_acl_check_cmd);
-  // eval.c's additions
-  sc_set_field_fn(L, "breakpoint", sc_breakpoint);
-  sc_set_field_fn(L, "debug", sc_debug);
-  sc_set_field_fn(L, "replicate_commands", sc_replicate_commands);
+  if (eval) {
+    // eval.c's additions
+    sc_set_field_fn(L, "breakpoint", sc_breakpoint);
+    sc_set_field_fn(L, "debug", sc_debug);
+    sc_set_field_fn(L, "replicate_commands", sc_replicate_commands);
+  }
   lua_setglobal(L, "redis");
 
   lua_getglobal(L, "math");
@@ -1485,7 +1520,7 @@ static void sc_register_redis_api(lua_State* L) {
 // globals locked
 static void sc_init_state(void) {
   lua_State* L = lua_open();
-  sc_register_redis_api(L);
+  sc_register_redis_api(L, 1);
   {
     const char* errh_func =
       "local dbg = debug\n"
@@ -1803,27 +1838,12 @@ static void sc_set_global_array(lua_State* L, const char* name, const char* p,
   lua_enablereadonlytable(L, LUA_GLOBALSINDEX, 1);
 }
 
-// the body of a run, on the script's stack: luaCallFunction
-static void sc_main(void) {
-  ScRun* r = &sc_run;
-#ifdef SC_ASAN
-  __sanitizer_finish_switch_fiber(NULL, &r->host_bottom, &r->host_size);
-#endif
-  lua_State* L = sc_lua;
-  r->err = 0;
-  r->nostats = 0;
-  lua_getglobal(L, "__redis__err__handler");
-  lua_getfield(L, LUA_REGISTRYINDEX, r->funcname);
-  if (lua_isnil(L, -1)) {
-    lua_pop(L, 2);
-    sc_buf_clear(&r->out);
-    sc_buf_str(&r->out, "NOSCRIPT No matching script. Please use EVAL.");
-    r->err = 1;
-  } else {
-    lua_sethook(L, sc_hook, LUA_MASKCOUNT, 100000);
-    sc_set_global_array(L, "KEYS", r->keys, r->keys_len);
-    sc_set_global_array(L, "ARGV", r->args, r->args_len);
-    int err = lua_pcall(L, 0, 1, -2);
+// the end of a run of a script or a function (luaCallFunction's): Lua's
+// stack holds the error handler and the run's result or error, which
+// become the reply in the caller's protocol, or an error in Redis's
+// words, with name the script's sha or the function's name
+static void sc_finish(ScRun* r, lua_State* L, int err, const char* name) {
+  {
     sc_gc_count += 1;
     if (sc_gc_count == 50) {
       lua_gc(L, LUA_GCSTEP, 50);
@@ -1837,13 +1857,13 @@ static void sc_main(void) {
         if (lua_isstring(L, -1)) {
           msg = lua_tostring(L, -1);
         }
-        sc_buf_fmt(&r->out, "ERR Error running script %s, %.100s", r->funcname + 2, msg);
+        sc_buf_fmt(&r->out, "ERR Error running script %s, %.100s", name, msg);
       } else {
         ScErrInfo info;
         sc_err_info(L, &info);
         sc_buf_str(&r->out, info.msg != NULL ? info.msg : "ERR execution failure");
         if (info.line != NULL && info.source != NULL) {
-          sc_buf_fmt(&r->out, " script: %s, on ", r->funcname + 2);
+          sc_buf_fmt(&r->out, " script: %s, on ", name);
           sc_buf_str(&r->out, info.source);
           sc_buf_add(&r->out, ":", 1);
           sc_buf_str(&r->out, info.line);
@@ -1874,6 +1894,749 @@ static void sc_main(void) {
     }
     lua_pop(L, 1);
     lua_sethook(L, NULL, 0, 0);
+  }
+}
+
+// a run of an EVAL's script, on the script's stack: evalGenericCommand's
+// part of luaCallFunction
+static void sc_main_script(ScRun* r) {
+  lua_State* L = sc_lua;
+  r->err = 0;
+  r->nostats = 0;
+  lua_getglobal(L, "__redis__err__handler");
+  lua_getfield(L, LUA_REGISTRYINDEX, r->funcname);
+  if (lua_isnil(L, -1)) {
+    lua_pop(L, 2);
+    sc_buf_clear(&r->out);
+    sc_buf_str(&r->out, "NOSCRIPT No matching script. Please use EVAL.");
+    r->err = 1;
+    return;
+  }
+  lua_sethook(L, sc_hook, LUA_MASKCOUNT, 100000);
+  sc_set_global_array(L, "KEYS", r->keys, r->keys_len);
+  sc_set_global_array(L, "ARGV", r->args, r->args_len);
+  int err = lua_pcall(L, 0, 1, -2);
+  sc_finish(r, L, err, r->funcname + 2);
+}
+
+// Functions
+// ---------
+// FUNCTION and FCALL, as Redis 7.0.15 has them (functions.c and
+// function_lua.c). A library is its code, whose first line names it
+// ("#!lua name=<library>"), and the functions its code registered with
+// redis.register_function when FUNCTION LOAD ran it; FCALL calls a
+// function by its name, which no two libraries share (case set aside).
+// The libraries live in a Lua state of their own (fn_lua), with the
+// scripts' API but for EVAL's debugger. A library's code runs once, at
+// its load, with the globals' lookups sent to the library API (a table of
+// redis.register_function, redis.log and the version alone) and FUNCTION
+// LOAD's 500 ms limit; a function runs as a script does, with the real
+// globals, its keys and arguments as its two parameters. Redis keeps the
+// libraries and functions in dicts, which it walks in the order of their
+// hashes, under a seed drawn at its start: BendKV keeps them in the order
+// they were loaded and registered, one of the orders Redis can give.
+
+typedef struct FnLib FnLib;
+
+typedef struct {
+  char* name;          // as it was registered
+  char* desc;          // NULL for none
+  uint32_t flags;      // SC_FLAG_* of its flags
+  int ref;             // its callback, in fn_lua's registry
+  FnLib* lib;
+} FnFunc;
+
+struct FnLib {
+  char* name;
+  char* code;          // the whole payload, its first line included
+  size_t code_len;
+  FnFunc** fs;
+  int n;
+};
+
+// a set of libraries (functionsLibCtx): the server's, or one a RESTORE
+// fills before it takes it in
+typedef struct {
+  FnLib** libs;
+  int n;
+} FnCtx;
+
+#define FN_LIBRARY_API "__LIBRARY_API__"
+#define FN_GLOBALS_API "__GLOBALS_API__"
+#define FN_ERROR_HANDLER "__ERROR_HANDLER__"
+#define FN_LOAD_TIMEOUT_MS 500
+
+static lua_State* fn_lua;
+static FnCtx      fn_cur;
+static FnLib*     fn_loading;      // the library a load runs the code of
+static uint64_t   fn_load_start;   // when it started, in ms
+static int        fn_load_timed;   // whether FUNCTION LOAD's limit holds it
+
+static uint64_t fn_now_ms(void) {
+  struct timespec ts;
+  clock_gettime(CLOCK_MONOTONIC, &ts);
+  return (uint64_t)ts.tv_sec * 1000 + (uint64_t)ts.tv_nsec / 1000000;
+}
+
+static void fn_func_free(lua_State* L, FnFunc* f) {
+  if (L != NULL) {
+    lua_unref(L, f->ref);
+  }
+  free(f->name);
+  free(f->desc);
+  free(f);
+}
+
+static void fn_lib_free(FnLib* li) {
+  if (li == NULL) {
+    return;
+  }
+  for (int j = 0; j < li->n; j += 1) {
+    fn_func_free(fn_lua, li->fs[j]);
+  }
+  free(li->fs);
+  free(li->name);
+  free(li->code);
+  free(li);
+}
+
+static void fn_ctx_clear(FnCtx* ctx) {
+  for (int i = 0; i < ctx->n; i += 1) {
+    fn_lib_free(ctx->libs[i]);
+  }
+  free(ctx->libs);
+  ctx->libs = NULL;
+  ctx->n = 0;
+}
+
+// the library of this name (exactly: Redis's librariesDictType)
+static FnLib* fn_lib_find(FnCtx* ctx, const char* name, size_t len) {
+  for (int i = 0; i < ctx->n; i += 1) {
+    FnLib* li = ctx->libs[i];
+    if (strlen(li->name) == len && memcmp(li->name, name, len) == 0) {
+      return li;
+    }
+  }
+  return NULL;
+}
+
+// the function of this name, in any case (functionDictType)
+static FnFunc* fn_find(FnCtx* ctx, const char* name, size_t len) {
+  for (int i = 0; i < ctx->n; i += 1) {
+    FnLib* li = ctx->libs[i];
+    for (int j = 0; j < li->n; j += 1) {
+      FnFunc* f = li->fs[j];
+      if (strlen(f->name) == len && strncasecmp(f->name, name, len) == 0) {
+        return f;
+      }
+    }
+  }
+  return NULL;
+}
+
+static int fn_count(FnCtx* ctx) {
+  int n = 0;
+  for (int i = 0; i < ctx->n; i += 1) {
+    n += ctx->libs[i]->n;
+  }
+  return n;
+}
+
+// libraryLink and libraryUnlink: a library taken in and out of a set
+static void fn_link(FnCtx* ctx, FnLib* li) {
+  ctx->libs = io_mem(realloc(ctx->libs, ((size_t)ctx->n + 1) * sizeof(FnLib*)));
+  ctx->libs[ctx->n] = li;
+  ctx->n += 1;
+}
+
+static void fn_unlink(FnCtx* ctx, FnLib* li) {
+  for (int i = 0; i < ctx->n; i += 1) {
+    if (ctx->libs[i] == li) {
+      memmove(ctx->libs + i, ctx->libs + i + 1, (size_t)(ctx->n - i - 1) * sizeof(FnLib*));
+      ctx->n -= 1;
+      return;
+    }
+  }
+}
+
+// functionsVerifyName: [a-zA-Z0-9_]+
+static int fn_name_ok(const char* s, size_t n) {
+  if (n == 0) {
+    return 0;
+  }
+  for (size_t i = 0; i < n; i += 1) {
+    char c = s[i];
+    if (!((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_')) {
+      return 0;
+    }
+  }
+  return 1;
+}
+
+// The library API
+// ...............
+
+// luaRegisterFunctionReadFlags: the flags of the table on the top
+static int fn_read_flags(lua_State* L, uint32_t* out) {
+  int j = 1;
+  uint32_t flags = 0;
+  for (;;) {
+    lua_pushnumber(L, j++);
+    lua_gettable(L, -2);
+    int t = lua_type(L, -1);
+    if (t == LUA_TNIL) {
+      lua_pop(L, 1);
+      break;
+    }
+    if (!lua_isstring(L, -1)) {
+      lua_pop(L, 1);
+      return 0;
+    }
+    const char* str = lua_tostring(L, -1);
+    int found = 0;
+    for (const ScFlagDef* flag = sc_flags_def; flag->str; ++flag) {
+      if (!strcasecmp(flag->str, str)) {
+        flags |= flag->flag;
+        found = 1;
+        break;
+      }
+    }
+    lua_pop(L, 1);
+    if (!found) {
+      return 0;
+    }
+  }
+  *out = flags;
+  return 1;
+}
+
+static char* fn_lua_string(lua_State* L, int index) {
+  if (!lua_isstring(L, index)) {
+    return NULL;
+  }
+  size_t len;
+  const char* str = lua_tolstring(L, index, &len);
+  char* out = io_mem(malloc(len + 1));
+  memcpy(out, str, len);
+  out[len] = '\0';
+  return out;
+}
+
+typedef struct {
+  char* name;
+  char* desc;
+  int ref;             // LUA_NOREF for none
+  uint32_t flags;
+} FnArgs;
+
+static void fn_args_free(lua_State* L, FnArgs* a) {
+  free(a->name);
+  free(a->desc);
+  if (a->ref != LUA_NOREF) {
+    lua_unref(L, a->ref);
+  }
+  a->name = NULL;
+  a->desc = NULL;
+  a->ref = LUA_NOREF;
+}
+
+// luaRegisterFunctionReadNamedArgs: redis.register_function{...}
+static const char* fn_read_named(lua_State* L, FnArgs* a) {
+  if (!lua_istable(L, 1)) {
+    return "calling redis.register_function with a single argument is only applicable to Lua table (representing named arguments).";
+  }
+  lua_pushnil(L);
+  while (lua_next(L, -2)) {
+    if (!lua_isstring(L, -2)) {
+      return "named argument key given to redis.register_function is not a string";
+    }
+    const char* key = lua_tostring(L, -2);
+    if (!strcasecmp(key, "function_name")) {
+      free(a->name);
+      if (!(a->name = fn_lua_string(L, -1))) {
+        return "function_name argument given to redis.register_function must be a string";
+      }
+    } else if (!strcasecmp(key, "description")) {
+      free(a->desc);
+      if (!(a->desc = fn_lua_string(L, -1))) {
+        return "description argument given to redis.register_function must be a string";
+      }
+    } else if (!strcasecmp(key, "callback")) {
+      if (!lua_isfunction(L, -1)) {
+        return "callback argument given to redis.register_function must be a function";
+      }
+      // Redis keeps the last callback's ref and leaks the one before
+      a->ref = luaL_ref(L, LUA_REGISTRYINDEX);
+      continue;
+    } else if (!strcasecmp(key, "flags")) {
+      if (!lua_istable(L, -1)) {
+        return "flags argument to redis.register_function must be a table representing function flags";
+      }
+      if (!fn_read_flags(L, &a->flags)) {
+        return "unknown flag given";
+      }
+    } else {
+      return "unknown argument given to redis.register_function";
+    }
+    lua_pop(L, 1);
+  }
+  if (a->name == NULL) {
+    return "redis.register_function must get a function name argument";
+  }
+  if (a->ref == LUA_NOREF) {
+    return "redis.register_function must get a callback argument";
+  }
+  return NULL;
+}
+
+// luaRegisterFunctionReadPositionalArgs: redis.register_function(name, f)
+static const char* fn_read_positional(lua_State* L, FnArgs* a) {
+  if (!(a->name = fn_lua_string(L, 1))) {
+    return "first argument to redis.register_function must be a string";
+  }
+  if (!lua_isfunction(L, 2)) {
+    return "second argument to redis.register_function must be a function";
+  }
+  a->ref = luaL_ref(L, LUA_REGISTRYINDEX);
+  return NULL;
+}
+
+// redis.register_function (luaRegisterFunction, functionLibCreateFunction)
+static int fn_register(lua_State* L) {
+  FnLib* li = fn_loading;
+  if (li == NULL) {
+    sc_push_error(L, "redis.register_function can only be called on FUNCTION LOAD command");
+    return lua_error(L);
+  }
+  FnArgs a = { NULL, NULL, LUA_NOREF, 0 };
+  int argc = lua_gettop(L);
+  const char* err = NULL;
+  if (argc < 1 || argc > 2) {
+    err = "wrong number of arguments to redis.register_function";
+  } else if (argc == 1) {
+    err = fn_read_named(L, &a);
+  } else {
+    err = fn_read_positional(L, &a);
+  }
+  if (err == NULL && !fn_name_ok(a.name, strlen(a.name))) {
+    err = "Library names can only contain letters, numbers, or underscores(_) and must be at least one character long";
+  }
+  if (err == NULL) {
+    for (int j = 0; j < li->n; j += 1) {
+      if (strcmp(li->fs[j]->name, a.name) == 0) {
+        err = "Function already exists in the library";
+        break;
+      }
+    }
+  }
+  if (err != NULL) {
+    fn_args_free(L, &a);
+    sc_push_error(L, err);
+    return lua_error(L);
+  }
+  FnFunc* f = io_mem(malloc(sizeof(FnFunc)));
+  f->name = a.name;
+  f->desc = a.desc;
+  f->flags = a.flags;
+  f->ref = a.ref;
+  f->lib = li;
+  li->fs = io_mem(realloc(li->fs, ((size_t)li->n + 1) * sizeof(FnFunc*)));
+  li->fs[li->n] = f;
+  li->n += 1;
+  return 0;
+}
+
+// luaEngineLoadHook: FUNCTION LOAD's limit
+static void fn_load_hook(lua_State* L, lua_Debug* ar) {
+  (void)ar;
+  uint64_t duration = fn_now_ms() - fn_load_start;
+  if (fn_load_timed && duration > FN_LOAD_TIMEOUT_MS) {
+    lua_sethook(L, fn_load_hook, LUA_MASKLINE, 0);
+    sc_push_error(L, "FUNCTION LOAD timeout");
+    lua_error(L);
+  }
+}
+
+// luaEngineInitEngine: the state, the library API, the error handler and
+// the globals, made readonly behind a table of globals of their own
+static void fn_init_state(void) {
+  lua_State* L = lua_open();
+  sc_register_redis_api(L, 0);
+
+  lua_newtable(L);  // the library API's globals
+  lua_newtable(L);  // its redis table
+  lua_pushstring(L, "register_function");
+  lua_pushcfunction(L, fn_register);
+  lua_settable(L, -3);
+  sc_set_field_fn(L, "log", sc_log);
+  sc_set_field_num(L, "LOG_DEBUG", SC_LL_DEBUG);
+  sc_set_field_num(L, "LOG_VERBOSE", SC_LL_VERBOSE);
+  sc_set_field_num(L, "LOG_NOTICE", SC_LL_NOTICE);
+  sc_set_field_num(L, "LOG_WARNING", SC_LL_WARNING);
+  sc_set_field_num(L, "REDIS_VERSION_NUM", SC_REDIS_VERSION_NUM);
+  lua_pushstring(L, "REDIS_VERSION");
+  lua_pushstring(L, SC_REDIS_VERSION);
+  lua_settable(L, -3);
+  sc_set_error_metatable(L);
+  lua_setfield(L, -2, "redis");
+  sc_set_error_metatable(L);
+  sc_set_table_protection_recursively(L);
+  lua_setfield(L, LUA_REGISTRYINDEX, FN_LIBRARY_API);
+
+  lua_pushstring(L, FN_ERROR_HANDLER);
+  const char* errh_func =
+    "local dbg = debug\n"
+    "debug = nil\n"
+    "local error_handler = function (err)\n"
+    "  local i = dbg.getinfo(2,'nSl')\n"
+    "  if i and i.what == 'C' then\n"
+    "    i = dbg.getinfo(3,'nSl')\n"
+    "  end\n"
+    "  if type(err) ~= 'table' then\n"
+    "    err = {err='ERR ' .. tostring(err)}"
+    "  end"
+    "  if i then\n"
+    "    err['source'] = i.source\n"
+    "    err['line'] = i.currentline\n"
+    "  end"
+    "  return err\n"
+    "end\n"
+    "return error_handler";
+  luaL_loadbuffer(L, errh_func, strlen(errh_func), "@err_handler_def");
+  lua_pcall(L, 0, 1, 0);
+  lua_settable(L, LUA_REGISTRYINDEX);
+
+  lua_pushvalue(L, LUA_GLOBALSINDEX);
+  sc_set_error_metatable(L);
+  sc_set_table_protection_recursively(L);
+  lua_pop(L, 1);
+
+  lua_pushvalue(L, LUA_GLOBALSINDEX);
+  lua_setfield(L, LUA_REGISTRYINDEX, FN_GLOBALS_API);
+
+  lua_newtable(L);  // the new globals
+  lua_newtable(L);  // and their metatable
+  lua_pushvalue(L, LUA_GLOBALSINDEX);
+  lua_setfield(L, -2, "__index");
+  lua_enablereadonlytable(L, -1, 1);
+  lua_setmetatable(L, -2);
+  lua_enablereadonlytable(L, -1, 1);
+  lua_replace(L, LUA_GLOBALSINDEX);
+  fn_lua = L;
+}
+
+static void fn_ensure(void) {
+  if (fn_lua == NULL) {
+    fn_init_state();
+  }
+}
+
+// the globals' lookups sent to the library API (or the real globals
+// again), as luaEngineCreate sends them: it lifts the protection of the
+// globals' metatable and sets it on the globals, which have it already,
+// so the metatable stays writable after a first load, as in Redis
+static void fn_globals_to(lua_State* L, const char* api) {
+  lua_getmetatable(L, LUA_GLOBALSINDEX);
+  lua_enablereadonlytable(L, -1, 0);
+  lua_getfield(L, LUA_REGISTRYINDEX, api);
+  lua_setfield(L, -2, "__index");
+  lua_enablereadonlytable(L, LUA_GLOBALSINDEX, 1);
+  lua_pop(L, 1);
+}
+
+// luaEngineCreate: the library's code compiled and run, its functions
+// registered into li; 1, or 0 and the error's text
+static int fn_engine_create(FnLib* li, const char* body, size_t len, int timed, ScBuf* err) {
+  lua_State* L = fn_lua;
+  int ok = 0;
+  fn_globals_to(L, FN_LIBRARY_API);
+  if (luaL_loadbuffer(L, body, len, "@user_function")) {
+    sc_buf_fmt(err, "Error compiling function: %s", lua_tostring(L, -1));
+    lua_pop(L, 1);
+    goto done;
+  }
+  fn_loading = li;
+  fn_load_start = fn_now_ms();
+  fn_load_timed = timed;
+  lua_sethook(L, fn_load_hook, LUA_MASKCOUNT, 100000);
+  if (lua_pcall(L, 0, 0, 0)) {
+    ScErrInfo info;
+    sc_err_info(L, &info);
+    sc_buf_fmt(err, "Error registering functions: %s", info.msg != NULL ? info.msg : "");
+    sc_err_info_free(&info);
+    lua_pop(L, 1);
+    goto done;
+  }
+  ok = 1;
+done:
+  fn_globals_to(L, FN_GLOBALS_API);
+  lua_sethook(L, NULL, 0, 0);
+  fn_loading = NULL;
+  return ok;
+}
+
+// functionExtractLibMetaData and functionsCreateWithLibraryCtx: a library
+// made from its payload into ctx, the one of the same name there replaced
+// if replace; 1, or 0 and the error's text, ctx as it was
+static int fn_create(const char* code, size_t n, int replace, FnCtx* ctx, int timed, ScBuf* err) {
+  if (n < 2 || strncmp(code, "#!", 2) != 0) {
+    sc_buf_str(err, "Missing library metadata");
+    return 0;
+  }
+  const char* end = memchr(code, '\n', n);
+  if (end == NULL) {
+    sc_buf_str(err, "Invalid library metadata");
+    return 0;
+  }
+  size_t shebang_len = (size_t)(end - code);
+  char* shebang = io_mem(malloc(shebang_len + 1));
+  memcpy(shebang, code, shebang_len);
+  shebang[shebang_len] = '\0';
+  int numparts = 0;
+  char** parts = sc_split(shebang, &numparts);
+  free(shebang);
+  if (parts == NULL || numparts == 0) {
+    sc_buf_str(err, "Invalid library metadata");
+    sc_split_free(parts, numparts);
+    return 0;
+  }
+  char* name = NULL;
+  int ok = 0;
+  for (int i = 1; i < numparts; i += 1) {
+    if (strncasecmp(parts[i], "name=", 5) == 0) {
+      if (name != NULL) {
+        sc_buf_str(err, "Invalid metadata value, name argument was given multiple times");
+        goto out;
+      }
+      name = sc_strdup(parts[i] + 5);
+      continue;
+    }
+    sc_buf_fmt(err, "Invalid metadata value given: %s", parts[i]);
+    goto out;
+  }
+  if (name == NULL) {
+    sc_buf_str(err, "Library name was not given");
+    goto out;
+  }
+  if (!fn_name_ok(name, strlen(name))) {
+    sc_buf_str(err, "Library names can only contain letters, numbers, or underscores(_) and must be at least one character long");
+    goto out;
+  }
+  if (strcasecmp(parts[0] + 2, "lua") != 0) {
+    sc_buf_fmt(err, "Engine '%s' not found", parts[0] + 2);
+    goto out;
+  }
+  FnLib* old = fn_lib_find(ctx, name, strlen(name));
+  if (old != NULL && !replace) {
+    sc_buf_fmt(err, "Library '%s' already exists", name);
+    goto out;
+  }
+  if (old != NULL) {
+    fn_unlink(ctx, old);
+  }
+  FnLib* li = io_mem(calloc(1, sizeof(FnLib)));
+  li->name = sc_strdup(name);
+  li->code = io_mem(malloc(n + 1));
+  memcpy(li->code, code, n);
+  li->code[n] = '\0';
+  li->code_len = n;
+  if (!fn_engine_create(li, end, n - shebang_len, timed, err)) {
+    goto fail;
+  }
+  if (li->n == 0) {
+    sc_buf_str(err, "No functions registered");
+    goto fail;
+  }
+  for (int j = 0; j < li->n; j += 1) {
+    if (fn_find(ctx, li->fs[j]->name, strlen(li->fs[j]->name)) != NULL) {
+      sc_buf_fmt(err, "Function %s already exists", li->fs[j]->name);
+      goto fail;
+    }
+  }
+  fn_link(ctx, li);
+  fn_lib_free(old);
+  ok = 1;
+  goto out;
+fail:
+  fn_lib_free(li);
+  if (old != NULL) {
+    fn_link(ctx, old);
+  }
+out:
+  free(name);
+  sc_split_free(parts, numparts);
+  return ok;
+}
+
+// libraryJoin: src's libraries taken into dst, those of the same names
+// replaced if replace; 1, or 0 and the error's text, dst as it was
+static int fn_join(FnCtx* dst, FnCtx* src, int replace, ScBuf* err) {
+  FnCtx old = { NULL, 0 };
+  int ok = 0;
+  for (int i = 0; i < src->n; i += 1) {
+    FnLib* li = src->libs[i];
+    FnLib* had = fn_lib_find(dst, li->name, strlen(li->name));
+    if (had != NULL) {
+      if (!replace) {
+        sc_buf_fmt(err, "Library %s already exists", li->name);
+        goto done;
+      }
+      fn_unlink(dst, had);
+      fn_link(&old, had);
+    }
+  }
+  for (int i = 0; i < src->n; i += 1) {
+    FnLib* li = src->libs[i];
+    for (int j = 0; j < li->n; j += 1) {
+      if (fn_find(dst, li->fs[j]->name, strlen(li->fs[j]->name)) != NULL) {
+        sc_buf_fmt(err, "Function %s already exists", li->fs[j]->name);
+        goto done;
+      }
+    }
+  }
+  for (int i = 0; i < src->n; i += 1) {
+    fn_link(dst, src->libs[i]);
+  }
+  free(src->libs);
+  src->libs = NULL;
+  src->n = 0;
+  fn_ctx_clear(&old);
+  ok = 1;
+done:
+  if (!ok) {
+    for (int i = 0; i < old.n; i += 1) {
+      fn_link(dst, old.libs[i]);
+    }
+    free(old.libs);
+  }
+  return ok;
+}
+
+// the libraries' codes of a RESP array of bulk strings
+typedef struct {
+  const char** p;
+  size_t* n;
+  int count;
+} FnCodes;
+
+static int fn_codes_read(const char* p, size_t n, FnCodes* out) {
+  out->p = NULL;
+  out->n = NULL;
+  out->count = 0;
+  const char* end = p + n;
+  if (n == 0 || p[0] != '*') {
+    return 0;
+  }
+  long long count = 0;
+  const char* q = memchr(p, '\r', n);
+  if (q == NULL || !string2ll(p + 1, (size_t)(q - p - 1), &count) || count < 0) {
+    return 0;
+  }
+  p = q + 2;
+  out->p = io_mem(calloc((size_t)count + 1, sizeof(char*)));
+  out->n = io_mem(calloc((size_t)count + 1, sizeof(size_t)));
+  for (long long j = 0; j < count; j += 1) {
+    long long len;
+    if (p >= end || p[0] != '$') {
+      return 0;
+    }
+    q = memchr(p, '\r', (size_t)(end - p));
+    if (q == NULL || !string2ll(p + 1, (size_t)(q - p - 1), &len) || len < 0 || q + 2 + len + 2 > end) {
+      return 0;
+    }
+    out->p[j] = q + 2;
+    out->n[j] = (size_t)len;
+    out->count += 1;
+    p = q + 2 + len + 2;
+  }
+  return 1;
+}
+
+static void fn_codes_free(FnCodes* c) {
+  free((void*)c->p);
+  free(c->n);
+}
+
+// a run of loads, on the script's stack: FUNCTION LOAD's library made in
+// the server's set, or FUNCTION RESTORE's in a set of their own, taken in
+// by its policy (functionRestoreCommand); done with the library's name
+// (LOAD) or nothing, or an error's text
+static void fn_load_main(ScRun* r) {
+  r->err = 0;
+  r->nostats = 0;
+  sc_buf_clear(&r->out);
+  FnCodes codes;
+  ScBuf err = { 0 };
+  if (!fn_codes_read(r->codes, r->codes_len, &codes)) {
+    fn_codes_free(&codes);
+    sc_buf_str(&r->out, "ERR the libraries came in no array");
+    r->err = 1;
+    return;
+  }
+  if (r->policy == FN_LOAD || r->policy == FN_LOAD_REPLACE) {
+    if (codes.count == 1 && fn_create(codes.p[0], codes.n[0], r->policy == FN_LOAD_REPLACE, &fn_cur, r->timed, &err)) {
+      FnLib* li = fn_cur.libs[fn_cur.n - 1];
+      sc_buf_str(&r->out, li->name);
+    } else {
+      sc_buf_str(&r->out, "ERR ");
+      sc_buf_add(&r->out, err.p == NULL ? "" : err.p, err.n);
+      r->err = 1;
+    }
+  } else {
+    FnCtx tmp = { NULL, 0 };
+    int ok = 1;
+    for (int j = 0; j < codes.count && ok; j += 1) {
+      ok = fn_create(codes.p[j], codes.n[j], 0, &tmp, r->timed, &err);
+    }
+    if (ok && r->policy == FN_FLUSH) {
+      fn_ctx_clear(&fn_cur);
+      fn_cur = tmp;
+      tmp.libs = NULL;
+      tmp.n = 0;
+    } else if (ok) {
+      ok = fn_join(&fn_cur, &tmp, r->policy == FN_REPLACE, &err);
+    }
+    if (!ok) {
+      sc_buf_str(&r->out, "ERR ");
+      sc_buf_add(&r->out, err.p == NULL ? "" : err.p, err.n);
+      r->err = 1;
+    }
+    fn_ctx_clear(&tmp);
+  }
+  free(err.p);
+  fn_codes_free(&codes);
+}
+
+// a run of an FCALL's function, on the script's stack: luaEngineCall
+static void fn_main(ScRun* r) {
+  lua_State* L = fn_lua;
+  r->err = 0;
+  r->nostats = 0;
+  lua_getfield(L, LUA_REGISTRYINDEX, FN_ERROR_HANDLER);
+  lua_rawgeti(L, LUA_REGISTRYINDEX, r->fref);
+  lua_sethook(L, sc_hook, LUA_MASKCOUNT, 100000);
+  sc_push_array(L, r->keys, r->keys_len);
+  sc_push_array(L, r->args, r->args_len);
+  int err = lua_pcall(L, 2, 1, -4);
+  sc_finish(r, L, err, r->fname);
+}
+
+// the body of a run, on the script's stack
+static void sc_main(void) {
+  ScRun* r = &sc_run;
+#ifdef SC_ASAN
+  __sanitizer_finish_switch_fiber(NULL, &r->host_bottom, &r->host_size);
+#endif
+  switch (r->mode) {
+  case SC_MODE_FUNCTION:
+    fn_main(r);
+    break;
+  case SC_MODE_LOAD:
+    fn_load_main(r);
+    break;
+  default:
+    sc_main_script(r);
+    break;
   }
   r->kind = SC_DONE;
   r->live = 0;
@@ -1970,10 +2733,11 @@ static void __attribute__((constructor)) engine_find_use(void) {
 
 #ifdef CID(Engine.start)
 
-// Engine.start(sha, keys, args, word): the run's first step. keys and
-// args are RESP arrays; word holds the caller's protocol (bits 0 to 3),
-// whether the command was EVAL_RO or EVALSHA_RO (bit 4) and whether it
-// is EVAL rather than FCALL (bit 5).
+// Engine.start(name, keys, args, word): the run's first step, of the
+// script of the sha name (EVAL and its kin) or of the function of that
+// name (FCALL, FCALL_RO). keys and args are RESP arrays; word holds the
+// caller's protocol (bits 0 to 3), whether the command was one of the
+// read-only ones (bit 4) and whether it is EVAL rather than FCALL (bit 5).
 Term engine_start_run(Env e, Term* f, IoWork* w) {
   (void)w;
   sc_ensure();
@@ -1981,34 +2745,51 @@ Term engine_start_run(Env e, Term* f, IoWork* w) {
   if (r->live) {
     return sc_done_error(e, r, "ERR a script is running already");
   }
+  u64 word = (u64)f[3];
   u64 n = 0;
-  char* hex = io_craw(e, f[0], &n);
-  uint8_t bin[20];
-  if (hex == NULL || !sc_hex_to_bin(hex, n, bin)) {
-    free(hex);
-    return sc_done_error(e, r, "NOSCRIPT No matching script. Please use EVAL.");
+  char* name = io_craw(e, f[0], &n);
+  uint32_t flags;
+  if ((word >> 5) & 1) {
+    uint8_t bin[20];
+    if (name == NULL || !sc_hex_to_bin(name, n, bin)) {
+      free(name);
+      return sc_done_error(e, r, "NOSCRIPT No matching script. Please use EVAL.");
+    }
+    ScScript* s = sc_script_find(bin);
+    if (s == NULL) {
+      free(name);
+      return sc_done_error(e, r, "NOSCRIPT No matching script. Please use EVAL.");
+    }
+    r->funcname[0] = 'f';
+    r->funcname[1] = '_';
+    sc_bin_to_hex(bin, r->funcname + 2);
+    r->mode = SC_MODE_SCRIPT;
+    flags = s->flags;
+  } else {
+    fn_ensure();
+    FnFunc* fn = name == NULL ? NULL : fn_find(&fn_cur, name, n);
+    if (fn == NULL) {
+      free(name);
+      return sc_done_error(e, r, "ERR Function not found");
+    }
+    r->mode = SC_MODE_FUNCTION;
+    r->fref = fn->ref;
+    free(r->fname);
+    r->fname = sc_strdup(fn->name);
+    flags = fn->flags;
   }
-  ScScript* s = sc_script_find(bin);
-  if (s == NULL) {
-    free(hex);
-    return sc_done_error(e, r, "NOSCRIPT No matching script. Please use EVAL.");
-  }
-  r->funcname[0] = 'f';
-  r->funcname[1] = '_';
-  sc_bin_to_hex(bin, r->funcname + 2);
-  free(hex);
+  free(name);
   free(r->keys);
   free(r->args);
   r->keys = io_craw(e, f[1], &r->keys_len);
   r->args = io_craw(e, f[2], &r->args_len);
-  u64 word = (u64)f[3];
   r->caller_resp = (int)(word & 15) == 3 ? 3 : 2;
   r->ro = (int)((word >> 4) & 1);
   r->eval = (int)((word >> 5) & 1);
   r->resp = 2;
   r->repl = SC_REPL_AOF | SC_REPL_REPLICA;
   r->killed = 0;
-  r->flags = s->flags;
+  r->flags = flags;
   r->level = 0;
   r->err = 0;
   r->nostats = 0;
@@ -2138,6 +2919,465 @@ Term engine_cache_mem_run(Env e, Term* f, IoWork* w) {
 
 static void __attribute__((constructor)) engine_cache_mem_use(void) {
   io_eff(CID(Engine.cache_mem), engine_cache_mem_run);
+}
+
+#endif
+
+// Functions' effects
+// ------------------
+
+// stringmatchlen, with the bound on nesting of Redis's fix for
+// CVE-2024-31228 (in the 7.0.15 the tests run against): FUNCTION LIST's
+// LIBRARYNAME pattern, which matches in any case
+static int fn_match_impl(const char* pattern, int patternLen, const char* string,
+  int stringLen, int nocase, int* skipLongerMatches, int nesting) {
+  if (nesting > 1000) {
+    return 0;
+  }
+  while (patternLen && stringLen) {
+    switch (pattern[0]) {
+    case '*':
+      while (patternLen && pattern[1] == '*') {
+        pattern++;
+        patternLen--;
+      }
+      if (patternLen == 1) {
+        return 1;
+      }
+      while (stringLen) {
+        if (fn_match_impl(pattern + 1, patternLen - 1, string, stringLen, nocase,
+            skipLongerMatches, nesting + 1)) {
+          return 1;
+        }
+        if (*skipLongerMatches) {
+          return 0;
+        }
+        string++;
+        stringLen--;
+      }
+      *skipLongerMatches = 1;
+      return 0;
+    case '?':
+      string++;
+      stringLen--;
+      break;
+    case '[': {
+      int not, match;
+      pattern++;
+      patternLen--;
+      not = pattern[0] == '^';
+      if (not) {
+        pattern++;
+        patternLen--;
+      }
+      match = 0;
+      while (1) {
+        if (pattern[0] == '\\' && patternLen >= 2) {
+          pattern++;
+          patternLen--;
+          if (pattern[0] == string[0]) {
+            match = 1;
+          }
+        } else if (pattern[0] == ']') {
+          break;
+        } else if (patternLen == 0) {
+          pattern--;
+          patternLen++;
+          break;
+        } else if (patternLen >= 3 && pattern[1] == '-') {
+          int start = pattern[0];
+          int end = pattern[2];
+          int c = string[0];
+          if (start > end) {
+            int t = start;
+            start = end;
+            end = t;
+          }
+          if (nocase) {
+            start = tolower(start);
+            end = tolower(end);
+            c = tolower(c);
+          }
+          pattern += 2;
+          patternLen -= 2;
+          if (c >= start && c <= end) {
+            match = 1;
+          }
+        } else {
+          if (!nocase) {
+            if (pattern[0] == string[0]) {
+              match = 1;
+            }
+          } else {
+            if (tolower((int)pattern[0]) == tolower((int)string[0])) {
+              match = 1;
+            }
+          }
+        }
+        pattern++;
+        patternLen--;
+      }
+      if (not) {
+        match = !match;
+      }
+      if (!match) {
+        return 0;
+      }
+      string++;
+      stringLen--;
+      break;
+    }
+    case '\\':
+      if (patternLen >= 2) {
+        pattern++;
+        patternLen--;
+      }
+      // fall through
+    default:
+      if (!nocase) {
+        if (pattern[0] != string[0]) {
+          return 0;
+        }
+      } else {
+        if (tolower((int)pattern[0]) != tolower((int)string[0])) {
+          return 0;
+        }
+      }
+      string++;
+      stringLen--;
+      break;
+    }
+    pattern++;
+    patternLen--;
+    if (stringLen == 0) {
+      while (*pattern == '*') {
+        pattern++;
+        patternLen--;
+      }
+      break;
+    }
+  }
+  if (patternLen == 0 && stringLen == 0) {
+    return 1;
+  }
+  return 0;
+}
+
+static int fn_match(const char* pattern, size_t plen, const char* s, size_t slen) {
+  int skip = 0;
+  return fn_match_impl(pattern, (int)plen, s, (int)slen, 1, &skip, 0);
+}
+
+// the bytes of a reply in a protocol (2 or 3)
+static void fn_map_len(ScBuf* b, int resp, long n) {
+  if (resp == 3) {
+    sc_buf_fmt(b, "%%%ld\r\n", n);
+  } else {
+    sc_buf_fmt(b, "*%ld\r\n", 2 * n);
+  }
+}
+
+static void fn_set_len(ScBuf* b, int resp, long n) {
+  sc_buf_fmt(b, resp == 3 ? "~%ld\r\n" : "*%ld\r\n", n);
+}
+
+static void fn_null(ScBuf* b, int resp) {
+  sc_buf_str(b, resp == 3 ? "_\r\n" : "$-1\r\n");
+}
+
+static void fn_bulk_str(ScBuf* b, const char* s) {
+  sc_bulk(b, s, strlen(s));
+}
+
+// functionListCommand's reply for a library
+static void fn_list_lib(ScBuf* b, int resp, FnLib* li, int with_code) {
+  fn_map_len(b, resp, with_code ? 4 : 3);
+  fn_bulk_str(b, "library_name");
+  fn_bulk_str(b, li->name);
+  fn_bulk_str(b, "engine");
+  fn_bulk_str(b, "LUA");
+  fn_bulk_str(b, "functions");
+  sc_buf_fmt(b, "*%d\r\n", li->n);
+  for (int j = 0; j < li->n; j += 1) {
+    FnFunc* f = li->fs[j];
+    fn_map_len(b, resp, 3);
+    fn_bulk_str(b, "name");
+    fn_bulk_str(b, f->name);
+    fn_bulk_str(b, "description");
+    if (f->desc != NULL) {
+      fn_bulk_str(b, f->desc);
+    } else {
+      fn_null(b, resp);
+    }
+    fn_bulk_str(b, "flags");
+    int count = 0;
+    for (const ScFlagDef* flag = sc_flags_def; flag->str; ++flag) {
+      if (f->flags & flag->flag) {
+        count += 1;
+      }
+    }
+    fn_set_len(b, resp, count);
+    for (const ScFlagDef* flag = sc_flags_def; flag->str; ++flag) {
+      if (f->flags & flag->flag) {
+        sc_buf_fmt(b, "+%s\r\n", flag->str);
+      }
+    }
+  }
+  if (with_code) {
+    fn_bulk_str(b, "library_code");
+    sc_bulk(b, li->code, li->code_len);
+  }
+}
+
+// the libraries' codes, as a RESP array (DUMP, the RDB file, the rewrite)
+static void fn_codes_out(ScBuf* b) {
+  sc_buf_fmt(b, "*%d\r\n", fn_cur.n);
+  for (int i = 0; i < fn_cur.n; i += 1) {
+    sc_bulk(b, fn_cur.libs[i]->code, fn_cur.libs[i]->code_len);
+  }
+}
+
+static Term fn_buf_term(Env e, ScBuf* b) {
+  Term t = io_raw(e, b->p == NULL ? "" : b->p, b->n);
+  free(b->p);
+  return t;
+}
+
+#ifdef CID(Engine.fload)
+
+// Engine.fload(codes, word): a run of loads, its libraries' codes a RESP
+// array; word: how to take them in (bits 0 to 2: FN_LOAD to FN_FLUSH) and
+// whether FUNCTION LOAD's limit of 500 ms holds them (bit 3). Its steps
+// are log lines and done, with the library's name (FN_LOAD and
+// FN_LOAD_REPLACE) or nothing, or an error's text.
+Term engine_fload_run(Env e, Term* f, IoWork* w) {
+  (void)w;
+  sc_ensure();
+  fn_ensure();
+  ScRun* r = &sc_run;
+  if (r->live) {
+    return sc_done_error(e, r, "ERR a script is running already");
+  }
+  free(r->codes);
+  r->codes = io_craw(e, f[0], &r->codes_len);
+  if (r->codes == NULL) {
+    r->codes = sc_strdup("");
+    r->codes_len = 0;
+  }
+  u64 word = (u64)f[1];
+  r->mode = SC_MODE_LOAD;
+  r->policy = (int)(word & 7);
+  r->timed = (int)((word >> 3) & 1);
+  r->resp = 2;
+  r->repl = SC_REPL_AOF | SC_REPL_REPLICA;
+  r->killed = 0;
+  r->flags = 0;
+  r->level = 0;
+  r->err = 0;
+  r->nostats = 0;
+  r->live = 1;
+  getcontext(&r->me);
+  r->me.uc_stack.ss_sp = r->stack;
+  r->me.uc_stack.ss_size = r->stack_size;
+  r->me.uc_link = NULL;
+  makecontext(&r->me, sc_main, 0);
+#ifdef SC_TSAN
+  r->tsan_host = __tsan_get_current_fiber();
+  r->tsan_me = __tsan_create_fiber(0);
+#endif
+  sc_enter(r);
+#ifdef SC_TSAN
+  if (!r->live) {
+    __tsan_destroy_fiber(r->tsan_me);
+    r->tsan_me = NULL;
+  }
+#endif
+  return sc_step(e, r);
+}
+
+static void __attribute__((constructor)) engine_fload_use(void) {
+  io_eff(CID(Engine.fload), engine_fload_run);
+}
+
+#endif
+
+#ifdef CID(Engine.fdelete)
+
+// Engine.fdelete(name): FUNCTION DELETE; 1 when the library was there
+Term engine_fdelete_run(Env e, Term* f, IoWork* w) {
+  (void)w;
+  fn_ensure();
+  u64 n = 0;
+  char* name = io_craw(e, f[0], &n);
+  Term out = (Term)0;
+  if (name != NULL) {
+    FnLib* li = fn_lib_find(&fn_cur, name, n);
+    if (li != NULL) {
+      fn_unlink(&fn_cur, li);
+      fn_lib_free(li);
+      out = (Term)1;
+    }
+  }
+  free(name);
+  return out;
+}
+
+static void __attribute__((constructor)) engine_fdelete_use(void) {
+  io_eff(CID(Engine.fdelete), engine_fdelete_run);
+}
+
+#endif
+
+#ifdef CID(Engine.fflush)
+
+// Engine.fflush(): FUNCTION FLUSH, every library gone
+Term engine_fflush_run(Env e, Term* f, IoWork* w) {
+  (void)e; (void)f; (void)w;
+  fn_ensure();
+  fn_ctx_clear(&fn_cur);
+  return term_pak(CID(Unit), 0);
+}
+
+static void __attribute__((constructor)) engine_fflush_use(void) {
+  io_eff(CID(Engine.fflush), engine_fflush_run);
+}
+
+#endif
+
+#ifdef CID(Engine.flist)
+
+// Engine.flist(pattern, word): FUNCTION LIST's reply; word: WITHCODE
+// (bit 0), LIBRARYNAME given (bit 1), the protocol (bits 4 to 7)
+Term engine_flist_run(Env e, Term* f, IoWork* w) {
+  (void)w;
+  fn_ensure();
+  u64 n = 0;
+  char* pat = io_craw(e, f[0], &n);
+  u64 word = (u64)f[1];
+  int with_code = (int)(word & 1);
+  int has_pat = (int)((word >> 1) & 1);
+  int resp = (int)((word >> 4) & 15) == 3 ? 3 : 2;
+  int count = 0;
+  for (int i = 0; i < fn_cur.n; i += 1) {
+    FnLib* li = fn_cur.libs[i];
+    if (!has_pat || pat == NULL || fn_match(pat, n, li->name, strlen(li->name))) {
+      count += 1;
+    }
+  }
+  ScBuf b = { 0 };
+  sc_buf_fmt(&b, "*%d\r\n", count);
+  for (int i = 0; i < fn_cur.n; i += 1) {
+    FnLib* li = fn_cur.libs[i];
+    if (!has_pat || pat == NULL || fn_match(pat, n, li->name, strlen(li->name))) {
+      fn_list_lib(&b, resp, li, with_code);
+    }
+  }
+  free(pat);
+  return fn_buf_term(e, &b);
+}
+
+static void __attribute__((constructor)) engine_flist_use(void) {
+  io_eff(CID(Engine.flist), engine_flist_run);
+}
+
+#endif
+
+#ifdef CID(Engine.fcodes)
+
+// Engine.fcodes(): the libraries' codes, a RESP array
+Term engine_fcodes_run(Env e, Term* f, IoWork* w) {
+  (void)f; (void)w;
+  fn_ensure();
+  ScBuf b = { 0 };
+  fn_codes_out(&b);
+  return fn_buf_term(e, &b);
+}
+
+static void __attribute__((constructor)) engine_fcodes_use(void) {
+  io_eff(CID(Engine.fcodes), engine_fcodes_run);
+}
+
+#endif
+
+#ifdef CID(Engine.ffuncs)
+
+// Engine.ffuncs(): the functions, for the actor's mirror: a RESP array
+// of each one's name in lower case and its flags in decimal
+Term engine_ffuncs_run(Env e, Term* f, IoWork* w) {
+  (void)f; (void)w;
+  fn_ensure();
+  ScBuf b = { 0 };
+  sc_buf_fmt(&b, "*%d\r\n", 2 * fn_count(&fn_cur));
+  for (int i = 0; i < fn_cur.n; i += 1) {
+    FnLib* li = fn_cur.libs[i];
+    for (int j = 0; j < li->n; j += 1) {
+      size_t len = strlen(li->fs[j]->name);
+      char* low = io_mem(malloc(len + 1));
+      for (size_t k = 0; k < len; k += 1) {
+        low[k] = (char)tolower((unsigned char)li->fs[j]->name[k]);
+      }
+      low[len] = '\0';
+      sc_bulk(&b, low, len);
+      free(low);
+      char num[16];
+      int m = snprintf(num, sizeof(num), "%u", li->fs[j]->flags);
+      sc_bulk(&b, num, (size_t)m);
+    }
+  }
+  return fn_buf_term(e, &b);
+}
+
+static void __attribute__((constructor)) engine_ffuncs_use(void) {
+  io_eff(CID(Engine.ffuncs), engine_ffuncs_run);
+}
+
+#endif
+
+#ifdef CID(Engine.fcount)
+
+// Engine.fcount(which): the libraries (0) or the functions (1)
+Term engine_fcount_run(Env e, Term* f, IoWork* w) {
+  (void)e; (void)w;
+  fn_ensure();
+  u64 which = (u64)f[0];
+  return (Term)(u64)(which == 0 ? fn_cur.n : fn_count(&fn_cur));
+}
+
+static void __attribute__((constructor)) engine_fcount_use(void) {
+  io_eff(CID(Engine.fcount), engine_fcount_run);
+}
+
+#endif
+
+#ifdef CID(Engine.fmem)
+
+// Engine.fmem(which): INFO's bytes of the functions: the Lua state's
+// (0: used_memory_vm_functions, luaEngineGetUsedMemoy), or their
+// structures' (1: used_memory_functions, functionsMemoryOverhead's, here
+// the bytes of their names, descriptions and codes and of the records
+// that hold them)
+Term engine_fmem_run(Env e, Term* f, IoWork* w) {
+  (void)e; (void)w;
+  fn_ensure();
+  u64 which = (u64)f[0];
+  u64 out = 0;
+  if (which == 0) {
+    out = (u64)lua_gc(fn_lua, LUA_GCCOUNT, 0) * 1024 + (u64)lua_gc(fn_lua, LUA_GCCOUNTB, 0);
+  } else {
+    for (int i = 0; i < fn_cur.n; i += 1) {
+      FnLib* li = fn_cur.libs[i];
+      out += sizeof(FnLib) + strlen(li->name) + 1 + li->code_len + 1;
+      for (int j = 0; j < li->n; j += 1) {
+        FnFunc* fn = li->fs[j];
+        out += sizeof(FnFunc) + strlen(fn->name) + 1 + (fn->desc != NULL ? strlen(fn->desc) + 1 : 0);
+      }
+    }
+  }
+  return (Term)(out & 0xFFFFFFFFu);
+}
+
+static void __attribute__((constructor)) engine_fmem_use(void) {
+  io_eff(CID(Engine.fmem), engine_fmem_run);
 }
 
 #endif

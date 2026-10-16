@@ -19,6 +19,11 @@
 #   an ACL check (kind 4): a command's arguments as a request, answered
 #     with ":1" when the command is known and ":0" when it is not.
 #
+# FUNCTION and FCALL run on the same engine, in a Lua state of their own:
+# an FCALL is a run of a function (Engine.start), FUNCTION LOAD and
+# RESTORE are runs of loads (Engine.fload), whose steps are log lines and
+# done, and the other subcommands are effects of their own.
+#
 # Only src/server.bend runs scripts; the proofs never see these effects.
 import Base
 
@@ -39,10 +44,10 @@ def Engine.find(sha: String) -> IO(U32):
   import "./lua/engine.c"
   import "./lua/engine.js"
 
-# the first step of a run of the script of sha, with KEYS and ARGV as
-# RESP arrays; word: the caller's protocol (bits 0 to 3), whether the
-# command was EVAL_RO or EVALSHA_RO (bit 4), EVAL rather than FCALL
-# (bit 5)
+# the first step of a run of the script of sha (EVAL rather than FCALL,
+# bit 5), or of the function of that name (FCALL, FCALL_RO), with its
+# keys and arguments as RESP arrays; word: the caller's protocol (bits 0
+# to 3), whether the command was one of the read-only ones (bit 4)
 def Engine.start(sha: String, keys: String, args: String, word: U32) -> IO(Step):
   import "./lua/engine.c"
   import "./lua/engine.js"
@@ -70,5 +75,55 @@ def Engine.mem() -> IO(U32):
 
 # the bytes the cache of scripts holds (INFO's used_memory_scripts)
 def Engine.cache_mem() -> IO(U32):
+  import "./lua/engine.c"
+  import "./lua/engine.js"
+
+# Functions
+# ---------
+
+# the first step of a run of loads, the libraries' codes a RESP array;
+# word: how to take them in (bits 0 to 2: 0 FUNCTION LOAD, 1 with REPLACE,
+# 2 RESTORE's APPEND, 3 its REPLACE, 4 its FLUSH) and whether FUNCTION
+# LOAD's limit of 500 ms holds them (bit 3); done with the library's name
+# (LOAD) or nothing, or with bit 8 an error's text
+def Engine.fload(codes: String, word: U32) -> IO(Step):
+  import "./lua/engine.c"
+  import "./lua/engine.js"
+
+# FUNCTION DELETE: 1 when the library of the name was there
+def Engine.fdelete(name: String) -> IO(U32):
+  import "./lua/engine.c"
+  import "./lua/engine.js"
+
+# FUNCTION FLUSH: every library gone
+def Engine.fflush() -> IO(Unit):
+  import "./lua/engine.c"
+  import "./lua/engine.js"
+
+# FUNCTION LIST's reply as RESP bytes; word: WITHCODE (bit 0), LIBRARYNAME
+# given (bit 1, its pattern the string), the protocol (bits 4 to 7)
+def Engine.flist(pat: String, word: U32) -> IO(String):
+  import "./lua/engine.c"
+  import "./lua/engine.js"
+
+# the libraries' codes as a RESP array (FUNCTION DUMP, the RDB file, the
+# rewrite of the append-only file)
+def Engine.fcodes() -> IO(String):
+  import "./lua/engine.c"
+  import "./lua/engine.js"
+
+# the functions as a RESP array of each one's name in lower case and its
+# flags in decimal, for the actor's mirror
+def Engine.ffuncs() -> IO(String):
+  import "./lua/engine.c"
+  import "./lua/engine.js"
+
+# how many libraries (0) or functions (1) there are
+def Engine.fcount(which: U32) -> IO(U32):
+  import "./lua/engine.c"
+  import "./lua/engine.js"
+
+# the bytes of the functions' Lua state (0) or of their records (1)
+def Engine.fmem(which: U32) -> IO(U32):
   import "./lua/engine.c"
   import "./lua/engine.js"

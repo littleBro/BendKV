@@ -53,7 +53,8 @@ COMMANDS = {
     "unblock", "unpause"], "command": ["count", "docs",
     "getkeys", "getkeysandflags", "help", "info", "list"], "config": ["get", "help",
     "resetstat", "rewrite", "set"], "dbsize": [], "decr": [], "decrby": [], "del": [],
-    "echo": [], "exists": [], "flushall": [], "flushdb": [], "function": ["flush", "help"],
+    "echo": [], "exists": [], "flushall": [], "flushdb": [], "function": ["delete", "dump",
+    "flush", "help", "kill", "list", "load", "restore", "stats"],
     "get": [], "getset": [], "hello": [], "incr": [], "incrby": [], "info": [], "keys": [],
     "mget": [], "mset": [], "ping": [], "quit": [], "reset": [], "select": [], "set": [],
     "randomkey": [], "scan": [], "setnx": [], "strlen": [], "type": [], "unlink": [],
@@ -67,6 +68,7 @@ COMMANDS = {
     "hdel": [], "hlen": [], "hstrlen": [], "hexists": [], "hkeys": [], "hvals": [],
     "hgetall": [], "hincrby": [], "hscan": [], "hrandfield": [], "eval": [],
     "evalsha": [], "eval_ro": [], "evalsha_ro": [], "script": ["exists", "flush", "help", "kill", "load"],
+    "fcall": [], "fcall_ro": [],
     "memory": ["doctor", "help", "malloc-stats", "purge", "stats", "usage"], "lpush": [], "rpush": [], "lpushx": [], "rpushx": [],
     "lpop": [], "rpop": [], "llen": [], "lindex": [], "lrange": [], "lset": [],
     "linsert": [], "lrem": [], "ltrim": [], "lpos": [], "lmove": [], "rpoplpush": [],
@@ -238,6 +240,7 @@ GETKEYS = {"set": "KBySet{}", "bitfield": "KByBitfield{}"}
 # destination first (OW, update) and then the keys, or, by their function,
 # the keys and then the destination
 KEYNUM = {"eval": "KByEval{}", "evalsha": "KByEval{}", "eval_ro": "KByEval{}", "evalsha_ro": "KByEval{}",
+          "fcall": "KByEval{}", "fcall_ro": "KByEval{}",
           "lmpop": "KByLmpop{}", "sintercard": "KBySintercard{}",
           "zunion": "KBySintercard{}", "zinter": "KBySintercard{}", "zdiff": "KBySintercard{}",
           "zintercard": "KBySintercard{}", "zmpop": "KByLmpop{}", "zunionstore": "KByZstore{}",
@@ -452,13 +455,16 @@ RISKY = {"incr", "decr", "incrby", "decrby", "expire", "pexpire", "setex", "pset
 # src/commands/*.json), a flag COMMAND INFO hides: a monitor may not run
 # them, as it may not run a command that reads or writes a key, and
 # CLIENT PAUSE WRITE holds them back, as it holds back those that write
-MAY_REPLICATE = {"publish", "spublish", "eval", "evalsha", "pfcount"}
-# the commands of scripts, which feed the monitors themselves (stat.unseen)
-EVALS = {"eval", "evalsha", "eval_ro", "evalsha_ro"}
+MAY_REPLICATE = {"publish", "spublish", "eval", "evalsha", "fcall", "pfcount"}
+# the commands of scripts and functions, which feed the monitors
+# themselves (stat.unseen)
+EVALS = {"eval", "evalsha", "eval_ro", "evalsha_ro", "fcall", "fcall_ro"}
 # the commands that need the engine of scripts (stat.engine): the server
 # runs them once the group is run (server.bend, Scripts), EXEC with one
-# queued too
-ENGINE = EVALS | {"script|load", "script|exists", "script|flush"}
+# queued too; FUNCTION KILL and HELP alone of FUNCTION's do not
+ENGINE = EVALS | {"script|load", "script|exists", "script|flush", "function|load",
+                  "function|delete", "function|list", "function|stats", "function|dump",
+                  "function|restore", "function|flush"}
 
 # the parser's commands with subcommands, by the function that numbers
 # their subcommands

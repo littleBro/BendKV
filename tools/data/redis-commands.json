@@ -7685,6 +7685,348 @@
     }
    ]
   },
+  "fcall": {
+   "docs": {
+    "%": [
+     "summary",
+     "Invoke a function",
+     "since",
+     "7.0.0",
+     "group",
+     "scripting",
+     "complexity",
+     "Depends on the function that is executed.",
+     "arguments",
+     [
+      {
+       "%": [
+        "name",
+        "function",
+        "type",
+        "string"
+       ]
+      },
+      {
+       "%": [
+        "name",
+        "numkeys",
+        "type",
+        "integer"
+       ]
+      },
+      {
+       "%": [
+        "name",
+        "key",
+        "type",
+        "key",
+        "key_spec_index",
+        0,
+        "flags",
+        {
+         "~": [
+          {
+           "+": "optional"
+          },
+          {
+           "+": "multiple"
+          }
+         ]
+        }
+       ]
+      },
+      {
+       "%": [
+        "name",
+        "arg",
+        "type",
+        "string",
+        "flags",
+        {
+         "~": [
+          {
+           "+": "optional"
+          },
+          {
+           "+": "multiple"
+          }
+         ]
+        }
+       ]
+      }
+     ]
+    ]
+   },
+   "info": [
+    "fcall",
+    -3,
+    {
+     "~": [
+      {
+       "+": "noscript"
+      },
+      {
+       "+": "stale"
+      },
+      {
+       "+": "skip_monitor"
+      },
+      {
+       "+": "no_mandatory_keys"
+      },
+      {
+       "+": "movablekeys"
+      }
+     ]
+    },
+    0,
+    0,
+    0,
+    {
+     "~": [
+      {
+       "+": "@slow"
+      },
+      {
+       "+": "@scripting"
+      }
+     ]
+    },
+    {
+     "~": []
+    },
+    {
+     "~": [
+      {
+       "%": [
+        "notes",
+        "We cannot tell how the keys will be used so we assume the worst, RW and UPDATE",
+        "flags",
+        {
+         "~": [
+          {
+           "+": "RW"
+          },
+          {
+           "+": "access"
+          },
+          {
+           "+": "update"
+          }
+         ]
+        },
+        "begin_search",
+        {
+         "%": [
+          "type",
+          "index",
+          "spec",
+          {
+           "%": [
+            "index",
+            2
+           ]
+          }
+         ]
+        },
+        "find_keys",
+        {
+         "%": [
+          "type",
+          "keynum",
+          "spec",
+          {
+           "%": [
+            "keynumidx",
+            0,
+            "firstkey",
+            1,
+            "keystep",
+            1
+           ]
+          }
+         ]
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "~": []
+    }
+   ]
+  },
+  "fcall_ro": {
+   "docs": {
+    "%": [
+     "summary",
+     "Invoke a read-only function",
+     "since",
+     "7.0.0",
+     "group",
+     "scripting",
+     "complexity",
+     "Depends on the function that is executed.",
+     "arguments",
+     [
+      {
+       "%": [
+        "name",
+        "function",
+        "type",
+        "string"
+       ]
+      },
+      {
+       "%": [
+        "name",
+        "numkeys",
+        "type",
+        "integer"
+       ]
+      },
+      {
+       "%": [
+        "name",
+        "key",
+        "type",
+        "key",
+        "key_spec_index",
+        0,
+        "flags",
+        {
+         "~": [
+          {
+           "+": "optional"
+          },
+          {
+           "+": "multiple"
+          }
+         ]
+        }
+       ]
+      },
+      {
+       "%": [
+        "name",
+        "arg",
+        "type",
+        "string",
+        "flags",
+        {
+         "~": [
+          {
+           "+": "optional"
+          },
+          {
+           "+": "multiple"
+          }
+         ]
+        }
+       ]
+      }
+     ]
+    ]
+   },
+   "info": [
+    "fcall_ro",
+    -3,
+    {
+     "~": [
+      {
+       "+": "readonly"
+      },
+      {
+       "+": "noscript"
+      },
+      {
+       "+": "stale"
+      },
+      {
+       "+": "skip_monitor"
+      },
+      {
+       "+": "no_mandatory_keys"
+      },
+      {
+       "+": "movablekeys"
+      }
+     ]
+    },
+    0,
+    0,
+    0,
+    {
+     "~": [
+      {
+       "+": "@slow"
+      },
+      {
+       "+": "@scripting"
+      }
+     ]
+    },
+    {
+     "~": []
+    },
+    {
+     "~": [
+      {
+       "%": [
+        "notes",
+        "We cannot tell how the keys will be used so we assume the worst, RO and ACCESS",
+        "flags",
+        {
+         "~": [
+          {
+           "+": "RO"
+          },
+          {
+           "+": "access"
+          }
+         ]
+        },
+        "begin_search",
+        {
+         "%": [
+          "type",
+          "index",
+          "spec",
+          {
+           "%": [
+            "index",
+            2
+           ]
+          }
+         ]
+        },
+        "find_keys",
+        {
+         "%": [
+          "type",
+          "keynum",
+          "spec",
+          {
+           "%": [
+            "keynumidx",
+            0,
+            "firstkey",
+            1,
+            "keystep",
+            1
+           ]
+          }
+         ]
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "~": []
+    }
+   ]
+  },
   "flushall": {
    "docs": {
     "%": [
@@ -7929,6 +8271,43 @@
      "subcommands",
      {
       "%": [
+       "function|delete",
+       {
+        "%": [
+         "summary",
+         "Delete a function by name",
+         "since",
+         "7.0.0",
+         "group",
+         "scripting",
+         "complexity",
+         "O(1)",
+         "arguments",
+         [
+          {
+           "%": [
+            "name",
+            "library-name",
+            "type",
+            "string"
+           ]
+          }
+         ]
+        ]
+       },
+       "function|dump",
+       {
+        "%": [
+         "summary",
+         "Dump all functions into a serialized binary payload",
+         "since",
+         "7.0.0",
+         "group",
+         "scripting",
+         "complexity",
+         "O(N) where N is the number of functions"
+        ]
+       },
        "function|flush",
        {
         "%": [
@@ -7996,6 +8375,199 @@
          "complexity",
          "O(1)"
         ]
+       },
+       "function|kill",
+       {
+        "%": [
+         "summary",
+         "Kill the function currently in execution.",
+         "since",
+         "7.0.0",
+         "group",
+         "scripting",
+         "complexity",
+         "O(1)"
+        ]
+       },
+       "function|list",
+       {
+        "%": [
+         "summary",
+         "List information about all the functions",
+         "since",
+         "7.0.0",
+         "group",
+         "scripting",
+         "complexity",
+         "O(N) where N is the number of functions",
+         "arguments",
+         [
+          {
+           "%": [
+            "name",
+            "library-name-pattern",
+            "type",
+            "string",
+            "token",
+            "LIBRARYNAME",
+            "flags",
+            {
+             "~": [
+              {
+               "+": "optional"
+              }
+             ]
+            }
+           ]
+          },
+          {
+           "%": [
+            "name",
+            "withcode",
+            "type",
+            "pure-token",
+            "token",
+            "WITHCODE",
+            "flags",
+            {
+             "~": [
+              {
+               "+": "optional"
+              }
+             ]
+            }
+           ]
+          }
+         ]
+        ]
+       },
+       "function|load",
+       {
+        "%": [
+         "summary",
+         "Create a function with the given arguments (name, code, description)",
+         "since",
+         "7.0.0",
+         "group",
+         "scripting",
+         "complexity",
+         "O(1) (considering compilation time is redundant)",
+         "arguments",
+         [
+          {
+           "%": [
+            "name",
+            "replace",
+            "type",
+            "pure-token",
+            "token",
+            "REPLACE",
+            "flags",
+            {
+             "~": [
+              {
+               "+": "optional"
+              }
+             ]
+            }
+           ]
+          },
+          {
+           "%": [
+            "name",
+            "function-code",
+            "type",
+            "string"
+           ]
+          }
+         ]
+        ]
+       },
+       "function|restore",
+       {
+        "%": [
+         "summary",
+         "Restore all the functions on the given payload",
+         "since",
+         "7.0.0",
+         "group",
+         "scripting",
+         "complexity",
+         "O(N) where N is the number of functions on the payload",
+         "arguments",
+         [
+          {
+           "%": [
+            "name",
+            "serialized-value",
+            "type",
+            "string"
+           ]
+          },
+          {
+           "%": [
+            "name",
+            "policy",
+            "type",
+            "oneof",
+            "flags",
+            {
+             "~": [
+              {
+               "+": "optional"
+              }
+             ]
+            },
+            "arguments",
+            [
+             {
+              "%": [
+               "name",
+               "flush",
+               "type",
+               "pure-token",
+               "token",
+               "FLUSH"
+              ]
+             },
+             {
+              "%": [
+               "name",
+               "append",
+               "type",
+               "pure-token",
+               "token",
+               "APPEND"
+              ]
+             },
+             {
+              "%": [
+               "name",
+               "replace",
+               "type",
+               "pure-token",
+               "token",
+               "REPLACE"
+              ]
+             }
+            ]
+           ]
+          }
+         ]
+        ]
+       },
+       "function|stats",
+       {
+        "%": [
+         "summary",
+         "Return information about the function currently running (name, description, duration)",
+         "since",
+         "7.0.0",
+         "group",
+         "scripting",
+         "complexity",
+         "O(1)"
+        ]
        }
       ]
      }
@@ -8024,6 +8596,81 @@
      "~": []
     },
     [
+     [
+      "function|delete",
+      3,
+      {
+       "~": [
+        {
+         "+": "write"
+        },
+        {
+         "+": "noscript"
+        }
+       ]
+      },
+      0,
+      0,
+      0,
+      {
+       "~": [
+        {
+         "+": "@write"
+        },
+        {
+         "+": "@slow"
+        },
+        {
+         "+": "@scripting"
+        }
+       ]
+      },
+      {
+       "~": [
+        "request_policy:all_shards",
+        "response_policy:all_succeeded"
+       ]
+      },
+      {
+       "~": []
+      },
+      {
+       "~": []
+      }
+     ],
+     [
+      "function|dump",
+      2,
+      {
+       "~": [
+        {
+         "+": "noscript"
+        }
+       ]
+      },
+      0,
+      0,
+      0,
+      {
+       "~": [
+        {
+         "+": "@slow"
+        },
+        {
+         "+": "@scripting"
+        }
+       ]
+      },
+      {
+       "~": []
+      },
+      {
+       "~": []
+      },
+      {
+       "~": []
+      }
+     ],
      [
       "function|flush",
       -2,
@@ -8094,6 +8741,210 @@
       },
       {
        "~": []
+      },
+      {
+       "~": []
+      },
+      {
+       "~": []
+      }
+     ],
+     [
+      "function|kill",
+      2,
+      {
+       "~": [
+        {
+         "+": "noscript"
+        },
+        {
+         "+": "allow_busy"
+        }
+       ]
+      },
+      0,
+      0,
+      0,
+      {
+       "~": [
+        {
+         "+": "@slow"
+        },
+        {
+         "+": "@scripting"
+        }
+       ]
+      },
+      {
+       "~": [
+        "request_policy:all_shards",
+        "response_policy:one_succeeded"
+       ]
+      },
+      {
+       "~": []
+      },
+      {
+       "~": []
+      }
+     ],
+     [
+      "function|list",
+      -2,
+      {
+       "~": [
+        {
+         "+": "noscript"
+        }
+       ]
+      },
+      0,
+      0,
+      0,
+      {
+       "~": [
+        {
+         "+": "@slow"
+        },
+        {
+         "+": "@scripting"
+        }
+       ]
+      },
+      {
+       "~": [
+        "nondeterministic_output_order"
+       ]
+      },
+      {
+       "~": []
+      },
+      {
+       "~": []
+      }
+     ],
+     [
+      "function|load",
+      -3,
+      {
+       "~": [
+        {
+         "+": "write"
+        },
+        {
+         "+": "denyoom"
+        },
+        {
+         "+": "noscript"
+        }
+       ]
+      },
+      0,
+      0,
+      0,
+      {
+       "~": [
+        {
+         "+": "@write"
+        },
+        {
+         "+": "@slow"
+        },
+        {
+         "+": "@scripting"
+        }
+       ]
+      },
+      {
+       "~": [
+        "request_policy:all_shards",
+        "response_policy:all_succeeded"
+       ]
+      },
+      {
+       "~": []
+      },
+      {
+       "~": []
+      }
+     ],
+     [
+      "function|restore",
+      -3,
+      {
+       "~": [
+        {
+         "+": "write"
+        },
+        {
+         "+": "denyoom"
+        },
+        {
+         "+": "noscript"
+        }
+       ]
+      },
+      0,
+      0,
+      0,
+      {
+       "~": [
+        {
+         "+": "@write"
+        },
+        {
+         "+": "@slow"
+        },
+        {
+         "+": "@scripting"
+        }
+       ]
+      },
+      {
+       "~": [
+        "request_policy:all_shards",
+        "response_policy:all_succeeded"
+       ]
+      },
+      {
+       "~": []
+      },
+      {
+       "~": []
+      }
+     ],
+     [
+      "function|stats",
+      2,
+      {
+       "~": [
+        {
+         "+": "noscript"
+        },
+        {
+         "+": "allow_busy"
+        }
+       ]
+      },
+      0,
+      0,
+      0,
+      {
+       "~": [
+        {
+         "+": "@slow"
+        },
+        {
+         "+": "@scripting"
+        }
+       ]
+      },
+      {
+       "~": [
+        "nondeterministic_output",
+        "request_policy:all_shards",
+        "response_policy:special"
+       ]
       },
       {
        "~": []

@@ -555,18 +555,20 @@ type SortO is Data:
 # the session runs the update on its database, and the server, which
 # keeps when each key was last used, sets the key's word as the option
 # says once the update restored the key (server.bend, Access). EVAL,
-# EVALSHA, EVAL_RO and EVALSHA_RO are SEval, with their mode (0 to 3 in
-# that order) plus four times their number of keys, and their script (its
-# body, or its sha) followed by their keys and their arguments, their
-# numbers of keys read and checked as Redis checks them (eval.op): two
-# fields, so that Own is no wider than it was, as every request travels
-# in as many words as the widest form of Cmd (FINDINGS 3zzv); SCRIPT
-# LOAD, EXISTS, FLUSH and KILL are SScript, with the
-# subcommand (1 to 4 in that order) and its arguments. A session alone
-# runs no script and keeps none: it answers SEval and SCRIPT LOAD that it
-# has no engine, SCRIPT EXISTS that it knows none, FLUSH OK and KILL
-# NOTBUSY; the server runs the script on its engine and keeps the cache,
-# every call the script makes a command of its own (server.bend,
+# EVALSHA, EVAL_RO, EVALSHA_RO, FCALL and FCALL_RO are SEval, with their
+# mode (0 to 5 in that order; 6 and 7 an FCALL and an FCALL_RO whose
+# number of keys Redis would refuse: fcall.count) plus eight times their
+# number of keys, and their script (its body, or its sha) or function
+# followed by their keys and their arguments, their numbers of keys read
+# and checked as Redis checks them (eval.op): two fields, so that Own is
+# no wider than it was, as every request travels in as many words as the
+# widest form of Cmd (FINDINGS 3zzv); SCRIPT LOAD, EXISTS, FLUSH and KILL
+# are SScript, with the subcommand (1 to 4 in that order) and its
+# arguments, and so are FUNCTION's but HELP, from 11 (parse_function). A
+# session alone runs no script and keeps none: it answers SEval and SCRIPT
+# LOAD that it has no engine, SCRIPT EXISTS that it knows none, FLUSH OK
+# and KILL NOTBUSY; the server runs the script on its engine and keeps the
+# cache, every call the script makes a command of its own (server.bend,
 # Scripts). The four scripts the append-only file writes parse to the
 # commands they run (parse_eval), as before.
 
@@ -1061,12 +1063,43 @@ def client_help() -> List<&2, String>:
    "    Protect current client connection from eviction."]
 
 def function_help() -> List<&2, String>:
-  ["FLUSH [ASYNC|SYNC]",
+  ["LOAD [REPLACE] <FUNCTION CODE>",
+   "    Create a new library with the given library name and code.",
+   "DELETE <LIBRARY NAME>",
+   "    Delete the given library.",
+   "LIST [LIBRARYNAME PATTERN] [WITHCODE]",
+   "    Return general information on all the libraries:",
+   "    * Library name",
+   "    * The engine used to run the Library",
+   "    * Library description",
+   "    * Functions list",
+   "    * Library code (if WITHCODE is given)",
+   "    It also possible to get only function that matches a pattern using LIBRARYNAME argument.",
+   "STATS",
+   "    Return information about the current function running:",
+   "    * Function name",
+   "    * Command used to run the function",
+   "    * Duration in MS that the function is running",
+   "    If no function is running, return nil",
+   "    In addition, returns a list of available engines.",
+   "KILL",
+   "    Kill the current running function.",
+   "FLUSH [ASYNC|SYNC]",
    "    Delete all the libraries.",
    "    When called without the optional mode argument, the behavior is determined by the",
    "    lazyfree-lazy-user-flush configuration directive. Valid modes are:",
    "    * ASYNC: Asynchronously flush the libraries.",
-   "    * SYNC: Synchronously flush the libraries."]
+   "    * SYNC: Synchronously flush the libraries.",
+   "DUMP",
+   "    Return a serialized payload representing the current libraries, can be restored using FUNCTION RESTORE command",
+   "RESTORE <PAYLOAD> [FLUSH|APPEND|REPLACE]",
+   "    Restore the libraries represented by the given payload, it is possible to give a restore policy to",
+   "    control how to handle existing libraries (default APPEND):",
+   "    * FLUSH: delete all existing libraries.",
+   "    * APPEND: appends the restored libraries to the existing libraries. On collision, abort.",
+   "    * REPLACE: appends the restored libraries to the existing libraries, On collision, replace the old",
+   "      libraries with the new libraries (notice that even on this option there is a chance of failure",
+   "      in case of functions name collision with another library)."]
 
 def sess_reply(r: Reply) -> SessOp:
   SReply{r}
@@ -1645,24 +1678,123 @@ def parse_client(id: Nat, sub: String, args: List<&2, String>) -> SessOp:
     case _:
       e_unknown_sub(sub, "CLIENT")
 
-# FUNCTION: BendKV runs no functions, so there are none to flush
+# FUNCTION: its subcommands as Redis 7.0.15's functions.c reads them.
+# Those that need the engine are SScript, with 10 and the subcommand's
+# number (FLUSH 11, LOAD 13, DELETE 14, LIST 15, STATS 16, KILL 17, DUMP
+# 18, RESTORE 19) and their arguments as read here: the server answers
+# them (server.bend, Scripts); HELP is answered here
 def function_id(+n: String, len: Nat) -> Nat:
   match len:
     case 4n:
-      Bool.pick(Nat, String.eq(n, "HELP"), 2n, 0n)
+      Bool.pick(Nat, String.eq(n, "HELP"), 2n,
+      Bool.pick(Nat, String.eq(n, "LOAD"), 3n,
+      Bool.pick(Nat, String.eq(n, "LIST"), 5n,
+      Bool.pick(Nat, String.eq(n, "KILL"), 7n,
+      Bool.pick(Nat, String.eq(n, "DUMP"), 8n, 0n)))))
     case 5n:
-      Bool.pick(Nat, String.eq(n, "FLUSH"), 1n, 0n)
+      Bool.pick(Nat, String.eq(n, "FLUSH"), 1n,
+      Bool.pick(Nat, String.eq(n, "STATS"), 6n, 0n))
+    case 6n:
+      Bool.pick(Nat, String.eq(n, "DELETE"), 4n, 0n)
+    case 7n:
+      Bool.pick(Nat, String.eq(n, "RESTORE"), 9n, 0n)
     case _:
       0n
 
 def function_flush(sub: String, args: List<&2, String>) -> SessOp:
   match args:
     case Nil{}:
-      sess_reply(r_ok())
+      SScript{11n, Nil{}}
     case Con{+m, Nil{}}:
-      sess_reply(Bool.pick(Reply, Bool.or(is_word(m, "SYNC"), is_word(m, "ASYNC")), r_ok(), RError{"ERR FUNCTION FLUSH only supports SYNC|ASYNC option"}))
+      Bool.pick(SessOp, Bool.or(is_word(m, "SYNC"), is_word(m, "ASYNC")), SScript{11n, [m]}, SFail{RError{"ERR FUNCTION FLUSH only supports SYNC|ASYNC option"}})
     case _:
       sess_reply(e_sub_syntax(sub, "FUNCTION"))
+
+# FUNCTION LOAD [REPLACE] code: REPLACE any number of times, the code
+# last (functionLoadCommand): SScript{13, [r, code]}, r "1" with REPLACE
+def function_load.opt(ok: Bool, +o: String, next: SessOp) -> SessOp:
+  match ok:
+    case True{}:
+      next
+    case False{}:
+      SFail{RError{no_newlines("ERR Unknown option given: " ++ cstr(o))}}
+
+def function_load(args: List<&2, String>, +r: Bool) -> SessOp:
+  match args:
+    case Nil{}:
+      SFail{RError{"ERR Function code is missing"}}
+    case Con{+code, Nil{}}:
+      SScript{13n, [Bool.pick(String, r, "1", "0"), code]}
+    case Con{+o, rest}:
+      function_load.opt(is_word(o, "REPLACE"), o, function_load(rest, True{}))
+
+# FUNCTION LIST [LIBRARYNAME pattern] [WITHCODE], each once and in either
+# order (functionListCommand), read an argument at a time: WITHCODE, the
+# pattern's turn after LIBRARYNAME (want), or an error that ends them;
+# SScript{15, [w, pattern]}, w's bit 0 WITHCODE, its bit 1 a pattern
+type FlSt is Data:
+  FlSt{code: Bool, pat: Maybe<&2, String>, want: Bool}
+  FlErr{m: String}
+
+def function_list.word(want: Bool, +code: Bool, +pat: Maybe<&2, String>, +a: String) -> FlSt:
+  match want:
+    case True{}:
+      FlSt{code, Some{a}, False{}}
+    case False{}:
+      Bool.pick(FlSt, Bool.and(Bool.not(code), is_word(a, "WITHCODE")), FlSt{True{}, pat, False{}},
+      Bool.pick(FlSt, Bool.and(Maybe.is_none(&2, String, pat), is_word(a, "LIBRARYNAME")), FlSt{code, pat, True{}},
+        FlErr{no_newlines("ERR Unknown argument " ++ cstr(a))}))
+
+def function_list.step(st: FlSt, +a: String) -> FlSt:
+  match st:
+    case FlSt{+code, +pat, +want}:
+      function_list.word(want, code, pat, a)
+    case FlErr{m}:
+      FlErr{m}
+
+def function_list.opts(args: List<&2, String>, st: FlSt) -> FlSt:
+  match args:
+    case Nil{}:
+      st
+    case Con{+a, rest}:
+      function_list.opts(rest, function_list.step(st, a))
+
+def function_list.fin(want: Bool, +code: Bool, +pat: Maybe<&2, String>) -> SessOp:
+  match want:
+    case True{}:
+      SFail{RError{"ERR library name argument was not given"}}
+    case False{}:
+      SScript{15n, [Nat.show(Nat.add(Bool.pick(Nat, code, 1n, 0n), Bool.pick(Nat, Maybe.is_some(&2, String, pat), 2n, 0n))), Maybe.default(&2, String, pat, "")]}
+
+def function_list(st: FlSt) -> SessOp:
+  match st:
+    case FlSt{+code, +pat, +want}:
+      function_list.fin(want, code, pat)
+    case FlErr{+m}:
+      SFail{RError{m}}
+
+# FUNCTION RESTORE payload [FLUSH|APPEND|REPLACE] (functionRestoreCommand):
+# SScript{19, [payload, policy]}, the policy 2 APPEND (by default), 3
+# REPLACE, 4 FLUSH
+def function_restore(sub: String, args: List<&2, String>) -> SessOp:
+  match args:
+    case Con{+p, Nil{}}:
+      SScript{19n, [p, "2"]}
+    case Con{+p, Con{+m, Nil{}}}:
+      Bool.pick(SessOp, is_word(m, "APPEND"), SScript{19n, [p, "2"]},
+      Bool.pick(SessOp, is_word(m, "REPLACE"), SScript{19n, [p, "3"]},
+      Bool.pick(SessOp, is_word(m, "FLUSH"), SScript{19n, [p, "4"]},
+        SFail{RError{"ERR Wrong restore policy given, value should be either FLUSH, APPEND or REPLACE."}})))
+    case _:
+      sess_reply(e_sub_syntax(sub, "FUNCTION"))
+
+# a subcommand of no arguments: SScript{k}, or its arity's error
+def function_none(+k: Nat, +name: String, args: List<&2, String>) -> SessOp:
+  match args:
+    case Nil{}:
+      SScript{k, Nil{}}
+    case _:
+      s_arity(name)
 
 def parse_function(id: Nat, sub: String, args: List<&2, String>) -> SessOp:
   match id:
@@ -1674,6 +1806,32 @@ def parse_function(id: Nat, sub: String, args: List<&2, String>) -> SessOp:
           help("FUNCTION", function_help())
         case _:
           s_arity("function|help")
+    case 3n:  # LOAD
+      match args:
+        case Nil{}:
+          s_arity("function|load")
+        case Con{+a, rest}:
+          function_load(a <> rest, False{})
+    case 4n:  # DELETE
+      match args:
+        case Con{+lib, Nil{}}:
+          SScript{14n, [lib]}
+        case _:
+          s_arity("function|delete")
+    case 5n:  # LIST
+      function_list(function_list.opts(args, FlSt{False{}, None{}, False{}}))
+    case 6n:  # STATS
+      function_none(16n, "function|stats", args)
+    case 7n:  # KILL
+      function_none(17n, "function|kill", args)
+    case 8n:  # DUMP
+      function_none(18n, "function|dump", args)
+    case 9n:  # RESTORE
+      match args:
+        case Nil{}:
+          s_arity("function|restore")
+        case Con{+a, rest}:
+          function_restore(sub, a <> rest)
     case _:
       e_unknown_sub(sub, "FUNCTION")
 
@@ -4323,7 +4481,7 @@ def eval.split(+n: Nat, xs: List<&2, String>, acc: List<&2, String>) -> List<&2,
       (List.reverse(&2, String, acc), Nil{})
 
 def eval.keys(+mode: Nat, s: String, +nk: Nat, rest: List<&2, String>) -> Cmd:
-  Own{SEval{Nat.add(mode, Nat.mul(nk, 4n)), s <> rest}}
+  Own{SEval{Nat.add(mode, Nat.mul(nk, 8n)), s <> rest}}
 
 def eval.fail(+m: String) -> Cmd:
   Bad{RError{m}}
@@ -4391,6 +4549,43 @@ def parse_evalx(mode: Nat, +name: String, args: List<&2, String>) -> Cmd:
   match args:
     case Con{+s, Con{+nk, rest}}:
       eval.op(mode, s, nk, rest)
+    case _:
+      e_arity(name)
+
+# FCALL and FCALL_RO (modes 4 and 5): the function's name, then its number
+# of keys, which Redis reads once it has found the function
+# (fcallCommandGeneric). A number of keys it would refuse is kept for the
+# server as modes 6 and 7, the refusal's kind in the place of the number
+# (1 not a number, 2 more keys than arguments, 3 negative), so that the
+# server answers "Function not found" first, as Redis does
+def fcall.bad(+mode: Nat, +why: Nat, s: String, rest: List<&2, String>) -> Cmd:
+  Own{SEval{Nat.add(Nat.add(mode, 2n), Nat.mul(why, 8n)), s <> rest}}
+
+def fcall.count.at(+mode: Nat, s: String, more: Bool, +lo: Nat, rest: List<&2, String>) -> Cmd:
+  match more:
+    case True{}:
+      fcall.bad(mode, 2n, s, rest)
+    case False{}:
+      eval.keys(mode, s, lo, rest)
+
+def fcall.count.of(+mode: Nat, s: String, +neg: Bool, +hi: Nat, +lo: Nat, +rest: List<&2, String>) -> Cmd:
+  match neg:
+    case True{}:
+      fcall.bad(mode, 3n, s, rest)
+    case False{}:
+      fcall.count.at(mode, s, Bool.or(Nat.is_lt(0n, hi), Nat.is_lt(List.length(&2, String, rest), lo)), lo, rest)
+
+def fcall.count(+mode: Nat, s: String, m: LL, rest: List<&2, String>) -> Cmd:
+  match m:
+    case LLBad{}:
+      fcall.bad(mode, 1n, s, rest)
+    case LL{+neg, +hi, +lo}:
+      fcall.count.of(mode, s, neg, hi, lo, rest)
+
+def parse_fcall(+mode: Nat, +name: String, args: List<&2, String>) -> Cmd:
+  match args:
+    case Con{+s, Con{+nk, rest}}:
+      fcall.count(mode, s, ll.read(nk), rest)
     case _:
       e_arity(name)
 
@@ -6422,6 +6617,8 @@ def cmd_id.l5(+n: String, c: Nat) -> Nat:
       Bool.pick(Nat, String.eq(n, "BITOP"), 48n,
       Bool.pick(Nat, String.eq(n, "BLPOP"), 153n,
       Bool.pick(Nat, String.eq(n, "BRPOP"), 154n, 0n)))
+    case 6n:  # F
+      Bool.pick(Nat, String.eq(n, "FCALL"), 208n, 0n)
     case 7n:  # G
       Bool.pick(Nat, String.eq(n, "GETEX"), 26n, 0n)
     case 8n:  # H
@@ -6584,7 +6781,8 @@ def cmd_id.l8(+n: String, c: Nat) -> Nat:
       Bool.pick(Nat, String.eq(n, "EXPIREAT"), 30n, 0n)
     case 6n:  # F
       Bool.pick(Nat, String.eq(n, "FLUSHALL"), 19n,
-      Bool.pick(Nat, String.eq(n, "FUNCTION"), 106n, 0n))
+      Bool.pick(Nat, String.eq(n, "FUNCTION"), 106n,
+      Bool.pick(Nat, String.eq(n, "FCALL_RO"), 209n, 0n)))
     case 7n:  # G
       Bool.pick(Nat, String.eq(n, "GETRANGE"), 37n, 0n)
     case 12n:  # L
@@ -7267,6 +7465,10 @@ def parse_id(id: Nat, name: String, args: List<&2, String>) -> Cmd:
       parse_evalx(2n, "eval_ro", args)
     case 206n:  # EVALSHA_RO
       parse_evalx(3n, "evalsha_ro", args)
+    case 208n:  # FCALL
+      parse_fcall(4n, "fcall", args)
+    case 209n:  # FCALL_RO
+      parse_fcall(5n, "fcall_ro", args)
     case 66n:  # LPUSH
       parse_lpush(args, True{}, False{}, "lpush")
     case 67n:  # RPUSH
@@ -8338,6 +8540,10 @@ def stat.top(+id: Nat) -> Nat:
       206n
     case 207n:
       207n
+    case 208n:
+      208n
+    case 209n:
+      209n
     case _:
       0n
 
@@ -8345,52 +8551,42 @@ def stat.top(+id: Nat) -> Nat:
 def stat.sub.client(+sub: Nat) -> Nat:
   match sub:
     case 1n:
-      208n
-    case 2n:
-      209n
-    case 3n:
       210n
-    case 4n:
+    case 2n:
       211n
-    case 5n:
+    case 3n:
       212n
-    case 6n:
+    case 4n:
       213n
-    case 7n:
+    case 5n:
       214n
-    case 8n:
+    case 6n:
       215n
-    case 9n:
+    case 7n:
       216n
-    case 10n:
+    case 8n:
       217n
-    case 11n:
+    case 9n:
       218n
-    case 12n:
+    case 10n:
       219n
-    case 13n:
+    case 11n:
       220n
-    case 14n:
+    case 12n:
       221n
-    case 15n:
+    case 13n:
       222n
-    case 16n:
+    case 14n:
       223n
+    case 15n:
+      224n
+    case 16n:
+      225n
     case _:
       0n
 
 # a subcommand of FUNCTION's key, by its number; 0 for none
 def stat.sub.function(+sub: Nat) -> Nat:
-  match sub:
-    case 1n:
-      224n
-    case 2n:
-      225n
-    case _:
-      0n
-
-# a subcommand of CONFIG's key, by its number; 0 for none
-def stat.sub.config(+sub: Nat) -> Nat:
   match sub:
     case 1n:
       226n
@@ -8402,6 +8598,30 @@ def stat.sub.config(+sub: Nat) -> Nat:
       229n
     case 5n:
       230n
+    case 6n:
+      231n
+    case 7n:
+      232n
+    case 8n:
+      233n
+    case 9n:
+      234n
+    case _:
+      0n
+
+# a subcommand of CONFIG's key, by its number; 0 for none
+def stat.sub.config(+sub: Nat) -> Nat:
+  match sub:
+    case 1n:
+      235n
+    case 2n:
+      236n
+    case 3n:
+      237n
+    case 4n:
+      238n
+    case 5n:
+      239n
     case _:
       0n
 
@@ -8409,19 +8629,19 @@ def stat.sub.config(+sub: Nat) -> Nat:
 def stat.sub.command(+sub: Nat) -> Nat:
   match sub:
     case 1n:
-      231n
+      240n
     case 2n:
-      232n
+      241n
     case 3n:
-      233n
+      242n
     case 4n:
-      234n
+      243n
     case 5n:
-      235n
+      244n
     case 6n:
-      236n
+      245n
     case 7n:
-      237n
+      246n
     case _:
       0n
 
@@ -8429,15 +8649,15 @@ def stat.sub.command(+sub: Nat) -> Nat:
 def stat.sub.object(+sub: Nat) -> Nat:
   match sub:
     case 1n:
-      238n
+      247n
     case 2n:
-      239n
+      248n
     case 3n:
-      240n
+      249n
     case 4n:
-      241n
+      250n
     case 5n:
-      242n
+      251n
     case _:
       0n
 
@@ -8445,17 +8665,17 @@ def stat.sub.object(+sub: Nat) -> Nat:
 def stat.sub.memory(+sub: Nat) -> Nat:
   match sub:
     case 1n:
-      243n
+      252n
     case 2n:
-      244n
+      253n
     case 3n:
-      245n
+      254n
     case 4n:
-      246n
+      255n
     case 5n:
-      247n
+      256n
     case 6n:
-      248n
+      257n
     case _:
       0n
 
@@ -8463,17 +8683,17 @@ def stat.sub.memory(+sub: Nat) -> Nat:
 def stat.sub.pubsub(+sub: Nat) -> Nat:
   match sub:
     case 1n:
-      249n
+      258n
     case 2n:
-      250n
+      259n
     case 3n:
-      251n
+      260n
     case 4n:
-      252n
+      261n
     case 5n:
-      253n
+      262n
     case 6n:
-      254n
+      263n
     case _:
       0n
 
@@ -8481,13 +8701,13 @@ def stat.sub.pubsub(+sub: Nat) -> Nat:
 def stat.sub.slowlog(+sub: Nat) -> Nat:
   match sub:
     case 1n:
-      255n
+      264n
     case 2n:
-      256n
+      265n
     case 3n:
-      257n
+      266n
     case 4n:
-      258n
+      267n
     case _:
       0n
 
@@ -8495,19 +8715,19 @@ def stat.sub.slowlog(+sub: Nat) -> Nat:
 def stat.sub.latency(+sub: Nat) -> Nat:
   match sub:
     case 1n:
-      259n
+      268n
     case 2n:
-      260n
+      269n
     case 3n:
-      261n
+      270n
     case 4n:
-      262n
+      271n
     case 5n:
-      263n
+      272n
     case 6n:
-      264n
+      273n
     case 7n:
-      265n
+      274n
     case _:
       0n
 
@@ -8515,15 +8735,15 @@ def stat.sub.latency(+sub: Nat) -> Nat:
 def stat.sub.script(+sub: Nat) -> Nat:
   match sub:
     case 1n:
-      266n
+      275n
     case 2n:
-      267n
+      276n
     case 3n:
-      268n
+      277n
     case 4n:
-      269n
+      278n
     case 5n:
-      270n
+      279n
     case _:
       0n
 
@@ -8945,130 +9165,148 @@ def stat.name(+key: Nat) -> String:
     case 207n:
       "script"
     case 208n:
-      "client|id"
+      "fcall"
     case 209n:
-      "client|help"
+      "fcall_ro"
     case 210n:
-      "client|reply"
+      "client|id"
     case 211n:
-      "client|getname"
+      "client|help"
     case 212n:
-      "client|setname"
+      "client|reply"
     case 213n:
-      "client|caching"
+      "client|getname"
     case 214n:
-      "client|unblock"
+      "client|setname"
     case 215n:
-      "client|getredir"
+      "client|caching"
     case 216n:
-      "client|no-evict"
+      "client|unblock"
     case 217n:
-      "client|trackinginfo"
+      "client|getredir"
     case 218n:
-      "client|list"
+      "client|no-evict"
     case 219n:
-      "client|info"
+      "client|trackinginfo"
     case 220n:
-      "client|kill"
+      "client|list"
     case 221n:
-      "client|pause"
+      "client|info"
     case 222n:
-      "client|unpause"
+      "client|kill"
     case 223n:
-      "client|tracking"
+      "client|pause"
     case 224n:
-      "function|flush"
+      "client|unpause"
     case 225n:
-      "function|help"
+      "client|tracking"
     case 226n:
-      "config|get"
+      "function|flush"
     case 227n:
-      "config|set"
+      "function|help"
     case 228n:
-      "config|resetstat"
+      "function|load"
     case 229n:
-      "config|rewrite"
+      "function|delete"
     case 230n:
-      "config|help"
+      "function|list"
     case 231n:
-      "command|info"
+      "function|stats"
     case 232n:
-      "command|docs"
+      "function|kill"
     case 233n:
-      "command|list"
+      "function|dump"
     case 234n:
-      "command|help"
+      "function|restore"
     case 235n:
-      "command|count"
+      "config|get"
     case 236n:
-      "command|getkeys"
+      "config|set"
     case 237n:
-      "command|getkeysandflags"
+      "config|resetstat"
     case 238n:
-      "object|help"
+      "config|rewrite"
     case 239n:
-      "object|freq"
+      "config|help"
     case 240n:
-      "object|encoding"
+      "command|info"
     case 241n:
-      "object|refcount"
+      "command|docs"
     case 242n:
-      "object|idletime"
+      "command|list"
     case 243n:
-      "memory|help"
+      "command|help"
     case 244n:
-      "memory|usage"
+      "command|count"
     case 245n:
-      "memory|stats"
+      "command|getkeys"
     case 246n:
-      "memory|doctor"
+      "command|getkeysandflags"
     case 247n:
-      "memory|purge"
+      "object|help"
     case 248n:
-      "memory|malloc-stats"
+      "object|freq"
     case 249n:
-      "pubsub|channels"
+      "object|encoding"
     case 250n:
-      "pubsub|help"
+      "object|refcount"
     case 251n:
-      "pubsub|numpat"
+      "object|idletime"
     case 252n:
-      "pubsub|numsub"
+      "memory|help"
     case 253n:
-      "pubsub|shardchannels"
+      "memory|usage"
     case 254n:
-      "pubsub|shardnumsub"
+      "memory|stats"
     case 255n:
-      "slowlog|get"
+      "memory|doctor"
     case 256n:
-      "slowlog|len"
+      "memory|purge"
     case 257n:
-      "slowlog|reset"
+      "memory|malloc-stats"
     case 258n:
-      "slowlog|help"
+      "pubsub|channels"
     case 259n:
-      "latency|doctor"
+      "pubsub|help"
     case 260n:
-      "latency|graph"
+      "pubsub|numpat"
     case 261n:
-      "latency|help"
+      "pubsub|numsub"
     case 262n:
-      "latency|histogram"
+      "pubsub|shardchannels"
     case 263n:
-      "latency|history"
+      "pubsub|shardnumsub"
     case 264n:
-      "latency|latest"
+      "slowlog|get"
     case 265n:
-      "latency|reset"
+      "slowlog|len"
     case 266n:
-      "script|load"
+      "slowlog|reset"
     case 267n:
-      "script|exists"
+      "slowlog|help"
     case 268n:
-      "script|flush"
+      "latency|doctor"
     case 269n:
-      "script|kill"
+      "latency|graph"
     case 270n:
+      "latency|help"
+    case 271n:
+      "latency|histogram"
+    case 272n:
+      "latency|history"
+    case 273n:
+      "latency|latest"
+    case 274n:
+      "latency|reset"
+    case 275n:
+      "script|load"
+    case 276n:
+      "script|exists"
+    case 277n:
+      "script|flush"
+    case 278n:
+      "script|kill"
+    case 279n:
       "script|help"
     case _:
       ""
@@ -9492,130 +9730,148 @@ def stat.arity(+key: Nat) -> Nat:
     case 207n:
       5n
     case 208n:
-      4n
+      7n
     case 209n:
-      4n
+      7n
     case 210n:
-      6n
+      4n
     case 211n:
       4n
     case 212n:
       6n
     case 213n:
-      6n
-    case 214n:
-      7n
-    case 215n:
       4n
-    case 216n:
+    case 214n:
       6n
+    case 215n:
+      6n
+    case 216n:
+      7n
     case 217n:
       4n
     case 218n:
-      5n
+      6n
     case 219n:
       4n
     case 220n:
-      7n
+      5n
     case 221n:
-      7n
-    case 222n:
       4n
+    case 222n:
+      7n
     case 223n:
       7n
     case 224n:
-      5n
+      4n
     case 225n:
-      4n
-    case 226n:
       7n
+    case 226n:
+      5n
     case 227n:
-      9n
+      4n
     case 228n:
-      4n
+      7n
     case 229n:
-      4n
+      6n
     case 230n:
-      4n
+      5n
     case 231n:
-      5n
+      4n
     case 232n:
-      5n
+      4n
     case 233n:
-      5n
+      4n
     case 234n:
-      4n
+      7n
     case 235n:
-      4n
+      7n
     case 236n:
       9n
     case 237n:
-      9n
+      4n
     case 238n:
       4n
     case 239n:
-      6n
+      4n
     case 240n:
-      6n
+      5n
     case 241n:
-      6n
+      5n
     case 242n:
-      6n
+      5n
     case 243n:
       4n
     case 244n:
-      7n
+      4n
     case 245n:
-      4n
+      9n
     case 246n:
-      4n
+      9n
     case 247n:
       4n
     case 248n:
-      4n
+      6n
     case 249n:
-      5n
+      6n
     case 250n:
-      4n
+      6n
     case 251n:
-      4n
+      6n
     case 252n:
-      5n
+      4n
     case 253n:
-      5n
+      7n
     case 254n:
-      5n
+      4n
     case 255n:
-      5n
+      4n
     case 256n:
       4n
     case 257n:
       4n
     case 258n:
-      4n
+      5n
     case 259n:
       4n
     case 260n:
-      6n
-    case 261n:
       4n
+    case 261n:
+      5n
     case 262n:
       5n
     case 263n:
-      6n
+      5n
     case 264n:
-      4n
+      5n
     case 265n:
-      5n
-    case 266n:
-      6n
-    case 267n:
-      7n
-    case 268n:
-      5n
-    case 269n:
       4n
+    case 266n:
+      4n
+    case 267n:
+      4n
+    case 268n:
+      4n
+    case 269n:
+      6n
     case 270n:
+      4n
+    case 271n:
+      5n
+    case 272n:
+      6n
+    case 273n:
+      4n
+    case 274n:
+      5n
+    case 275n:
+      6n
+    case 276n:
+      7n
+    case 277n:
+      5n
+    case 278n:
+      4n
+    case 279n:
       4n
     case _:
       1n
@@ -9857,11 +10113,11 @@ def stat.risky(+key: Nat) -> Bool:
       True{}
     case 200n:
       True{}
-    case 239n:
+    case 248n:
       True{}
-    case 242n:
+    case 251n:
       True{}
-    case 244n:
+    case 253n:
       True{}
     case _:
       False{}
@@ -9878,11 +10134,29 @@ def stat.engine(+key: Nat) -> Bool:
       True{}
     case 206n:
       True{}
-    case 266n:
+    case 208n:
       True{}
-    case 267n:
+    case 209n:
       True{}
-    case 268n:
+    case 226n:
+      True{}
+    case 228n:
+      True{}
+    case 229n:
+      True{}
+    case 230n:
+      True{}
+    case 231n:
+      True{}
+    case 233n:
+      True{}
+    case 234n:
+      True{}
+    case 275n:
+      True{}
+    case 276n:
+      True{}
+    case 277n:
       True{}
     case _:
       False{}
@@ -9906,43 +10180,43 @@ def stat.unseen(+key: Nat) -> Bool:
       True{}
     case 203n:
       True{}
-    case 214n:
-      True{}
     case 216n:
       True{}
     case 218n:
       True{}
     case 220n:
       True{}
-    case 221n:
-      True{}
     case 222n:
       True{}
-    case 226n:
+    case 223n:
       True{}
-    case 227n:
+    case 224n:
       True{}
-    case 228n:
+    case 235n:
       True{}
-    case 229n:
+    case 236n:
       True{}
-    case 255n:
+    case 237n:
       True{}
-    case 256n:
-      True{}
-    case 257n:
-      True{}
-    case 259n:
-      True{}
-    case 260n:
-      True{}
-    case 262n:
-      True{}
-    case 263n:
+    case 238n:
       True{}
     case 264n:
       True{}
     case 265n:
+      True{}
+    case 266n:
+      True{}
+    case 268n:
+      True{}
+    case 269n:
+      True{}
+    case 271n:
+      True{}
+    case 272n:
+      True{}
+    case 273n:
+      True{}
+    case 274n:
       True{}
     case _:
       False{}
@@ -10289,17 +10563,27 @@ def stat.keyspace(+key: Nat) -> Bool:
       True{}
     case 206n:
       True{}
-    case 224n:
+    case 208n:
       True{}
-    case 239n:
+    case 209n:
       True{}
-    case 240n:
+    case 226n:
       True{}
-    case 241n:
+    case 228n:
       True{}
-    case 242n:
+    case 229n:
       True{}
-    case 244n:
+    case 234n:
+      True{}
+    case 248n:
+      True{}
+    case 249n:
+      True{}
+    case 250n:
+      True{}
+    case 251n:
+      True{}
+    case 253n:
       True{}
     case _:
       False{}
@@ -10496,7 +10780,15 @@ def stat.pausable(+key: Nat) -> Bool:
       True{}
     case 204n:
       True{}
-    case 224n:
+    case 208n:
+      True{}
+    case 226n:
+      True{}
+    case 228n:
+      True{}
+    case 229n:
+      True{}
+    case 234n:
       True{}
     case _:
       False{}
@@ -10683,7 +10975,13 @@ def stat.write(+key: Nat) -> Bool:
       True{}
     case 200n:
       True{}
-    case 224n:
+    case 226n:
+      True{}
+    case 228n:
+      True{}
+    case 229n:
+      True{}
+    case 234n:
       True{}
     case _:
       False{}
@@ -10755,9 +11053,9 @@ def stat.noscript(+key: Nat) -> Bool:
       True{}
     case 208n:
       True{}
-    case 210n:
+    case 209n:
       True{}
-    case 211n:
+    case 210n:
       True{}
     case 212n:
       True{}
@@ -10785,33 +11083,51 @@ def stat.noscript(+key: Nat) -> Bool:
       True{}
     case 224n:
       True{}
-    case 226n:
+    case 225n:
       True{}
-    case 227n:
+    case 226n:
       True{}
     case 228n:
       True{}
     case 229n:
       True{}
-    case 259n:
+    case 230n:
       True{}
-    case 260n:
+    case 231n:
       True{}
-    case 262n:
+    case 232n:
       True{}
-    case 263n:
+    case 233n:
       True{}
-    case 264n:
+    case 234n:
       True{}
-    case 265n:
+    case 235n:
       True{}
-    case 266n:
+    case 236n:
       True{}
-    case 267n:
+    case 237n:
+      True{}
+    case 238n:
       True{}
     case 268n:
       True{}
     case 269n:
+      True{}
+    case 271n:
+      True{}
+    case 272n:
+      True{}
+    case 273n:
+      True{}
+    case 274n:
+      True{}
+    case 275n:
+      True{}
+    case 276n:
+      True{}
+    case 277n:
+      True{}
+    case 278n:
       True{}
     case _:
       False{}
@@ -10838,7 +11154,11 @@ def stat.allow_busy(+key: Nat) -> Bool:
       True{}
     case 187n:
       True{}
-    case 269n:
+    case 231n:
+      True{}
+    case 232n:
+      True{}
+    case 278n:
       True{}
     case _:
       False{}
@@ -10950,6 +11270,10 @@ def stat.denyoom(+key: Nat) -> Bool:
     case 198n:
       True{}
     case 200n:
+      True{}
+    case 228n:
+      True{}
+    case 234n:
       True{}
     case _:
       False{}
@@ -11315,15 +11639,17 @@ def stat.ro(+key: Nat) -> Bool:
       True{}
     case 206n:
       True{}
-    case 239n:
+    case 209n:
       True{}
-    case 240n:
+    case 248n:
       True{}
-    case 241n:
+    case 249n:
       True{}
-    case 242n:
+    case 250n:
       True{}
-    case 244n:
+    case 251n:
+      True{}
+    case 253n:
       True{}
     case _:
       False{}
@@ -13249,6 +13575,60 @@ def stat.cw(+code: Nat) -> U32:
       3410
     case 812n:
       3412
+    case 813n:
+      3416
+    case 814n:
+      3425
+    case 815n:
+      3426
+    case 816n:
+      3428
+    case 817n:
+      3432
+    case 818n:
+      3440
+    case 819n:
+      3459
+    case 820n:
+      3461
+    case 821n:
+      3462
+    case 822n:
+      3465
+    case 823n:
+      3466
+    case 824n:
+      3468
+    case 825n:
+      3473
+    case 826n:
+      3474
+    case 827n:
+      3476
+    case 828n:
+      3480
+    case 829n:
+      3489
+    case 830n:
+      3490
+    case 831n:
+      3492
+    case 832n:
+      3496
+    case 833n:
+      3504
+    case 834n:
+      3521
+    case 835n:
+      3522
+    case 836n:
+      3524
+    case 837n:
+      3528
+    case 838n:
+      3536
+    case 839n:
+      3552
     case _:
       63
 
@@ -15145,6 +15525,70 @@ def stat.code.lo53(+lo: Nat) -> Nat:
       811n
     case 20n:
       812n
+    case 24n:
+      813n
+    case 33n:
+      814n
+    case 34n:
+      815n
+    case 36n:
+      816n
+    case 40n:
+      817n
+    case 48n:
+      818n
+    case _:
+      0n
+
+def stat.code.lo54(+lo: Nat) -> Nat:
+  match lo:
+    case 3n:
+      819n
+    case 5n:
+      820n
+    case 6n:
+      821n
+    case 9n:
+      822n
+    case 10n:
+      823n
+    case 12n:
+      824n
+    case 17n:
+      825n
+    case 18n:
+      826n
+    case 20n:
+      827n
+    case 24n:
+      828n
+    case 33n:
+      829n
+    case 34n:
+      830n
+    case 36n:
+      831n
+    case 40n:
+      832n
+    case 48n:
+      833n
+    case _:
+      0n
+
+def stat.code.lo55(+lo: Nat) -> Nat:
+  match lo:
+    case 1n:
+      834n
+    case 2n:
+      835n
+    case 4n:
+      836n
+    case 8n:
+      837n
+    case 16n:
+      838n
+    case 32n:
+      839n
     case _:
       0n
 
@@ -15258,6 +15702,10 @@ def stat.code.hl(+hi: Nat, +lo: Nat) -> Nat:
       stat.code.lo52(lo)
     case 53n:
       stat.code.lo53(lo)
+    case 54n:
+      stat.code.lo54(lo)
+    case 55n:
+      stat.code.lo55(lo)
     case _:
       0n
 

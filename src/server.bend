@@ -1487,11 +1487,27 @@ type Mon is Data:
 type Hd is Data:
   Hd{keys: KV.Trie<Nat>, soon: Nat, adds: Nat, base: Nat, trk: Trk}
 
+# the functions' state (FUNCTION and FCALL: Scripts, below): a mirror of
+# the engine's functions (fns: each one's name in lower case, with its
+# flags) and how many libraries hold them (nl); the entries for the
+# append-only file of the FUNCTION commands that changed the libraries
+# since the group's entries were last written (fx, newest first: they go
+# to the file with the group's, as Redis propagates such a command as it
+# is); and while a function runs, its name ("" for none), its caller's
+# command as it came (fa: read only when FUNCTION STATS asks) and how
+# long it has run (fd, in ms, the driver's last reading at a tick)
+type Fni is Data:
+  Fni{fns: KV.Trie<Nat>, nl: Nat, fx: List<&2, List<&2, String>>, fname: String, fa: Av, fd: Nat}
+
+def fni.new() -> Fni:
+  Fni{KV.empty(Nat), 0n, Nil{}, "", AvArgs{Nil{}}, 0n}
+
 # the scripts' state (Scripts, below): the cache's shas, each with its
 # script's flags (Redis's SCRIPT_FLAG_*: 1 no-writes, 2 allow-oom, 4
 # allow-stale, 8 no-cluster, 16 a script without a shebang, 32
-# allow-cross-slot-keys), a mirror of the engine's cache, how many, and
-# the run's state (st): 1 while a script runs past lua-time-limit (busy:
+# allow-cross-slot-keys), a mirror of the engine's cache, the functions'
+# (fi: Fni, above), how many scripts the cache holds, and the run's state
+# (st): 1 while a script runs past lua-time-limit (busy:
 # ev's bit 16), 2 once it wrote, 4 once SCRIPT KILL asked for its end, 8
 # while a script's wait is in the chain (ev's bit 17), 16 while the
 # script is a function's (FCALL); the clock's reading the driver's
@@ -1504,7 +1520,7 @@ type Hd is Data:
 # taken apart (Iv), in segments as wide as the work loop's register bank
 # (WL_BANK: FINDINGS 3zzzd), where Scr's own seven words widened them
 type Scr is Data:
-  Scr{shas: KV.Trie<Nat>, n: Nat, st: U32, at: Clk, who: Nat, ks: List<&2, String>}
+  Scr{shas: KV.Trie<Nat>, fi: Fni, n: Nat, st: U32, at: Clk, who: Nat, ks: List<&2, String>}
   ScrOf{s: Scr}
 
 # a reading of the wall clock (IO.clock): s and us since 1970
@@ -1512,34 +1528,34 @@ type Clk is Data:
   Clk{s: U32, u: U32}
 
 def scr.new() -> Scr:
-  Scr{KV.empty(Nat), 0n, 0, Clk{0, 0}, 0n, Nil{}}
+  Scr{KV.empty(Nat), fni.new(), 0n, 0, Clk{0, 0}, 0n, Nil{}}
 
 # the caller of the script that runs (0: none), and its KEYS
 def scr.who(+s: Scr) -> Nat:
   match s:
-    case Scr{shas, n, st, at, +who, ks}:
+    case Scr{shas, fi, n, st, at, +who, ks}:
       who
     case ScrOf{+x}:
       scr.who(x)
 
 def scr.ks(+s: Scr) -> List<&2, String>:
   match s:
-    case Scr{shas, n, st, at, who, +ks}:
+    case Scr{shas, fi, n, st, at, who, +ks}:
       ks
     case ScrOf{+x}:
       scr.ks(x)
 
 def scr.run.set(+id: Nat, ks: List<&2, String>, s: Scr) -> Scr:
   match s:
-    case Scr{shas, n, st, at, w0, k0}:
-      Scr{shas, n, st, at, id, ks}
+    case Scr{shas, fi, n, st, at, w0, k0}:
+      Scr{shas, fi, n, st, at, id, ks}
     case ScrOf{x}:
       scr.run.set(id, ks, x)
 
 # ev's bits 16 and 17 (busy, a script waits), from st
 def scr.bit(+s: Scr) -> U32:
   match s:
-    case Scr{shas, n, +st, at, who, ks}:
+    case Scr{shas, fi, n, +st, at, who, ks}:
       U32.or(U32.shln(U32.and(st, 1), 16n), U32.shln(U32.and(st, 8), 14n))
     case ScrOf{+x}:
       scr.bit(x)
@@ -5170,6 +5186,7 @@ type Sh is Data:
   ShFlush{}
   ShScript{}
   ShScriptKill{}
+  ShFnKill{}
   ShBusy{inm: Bool, fail: Bool}
   ShBusyExec{}
   ShExecLua{}
@@ -5223,12 +5240,14 @@ def sh.admin(+k: Nat, +a: List<&2, String>) -> Sh:
     case _:
       ShRun{}
 
-# SCRIPT's subcommands: KILL at once (bg.script.kill), the others through
-# the engine (Scripts)
+# SCRIPT's subcommands, and FUNCTION's: KILL at once (bg.script.kill,
+# bg.fn.kill), the others through the engine (Scripts)
 def sh.script(+k: Nat) -> Sh:
   match k:
     case 4n:
       ShScriptKill{}
+    case 17n:
+      ShFnKill{}
     case _:
       ShScript{}
 
@@ -7471,35 +7490,35 @@ def ps.scr.set(scr: Scr, pb: Ps) -> Ps:
 
 def scr.st(+s: Scr) -> U32:
   match s:
-    case Scr{shas, n, +st, at, who, ks}:
+    case Scr{shas, fi, n, +st, at, who, ks}:
       st
     case ScrOf{+x}:
       scr.st(x)
 
 def scr.st.set(+st: U32, s: Scr) -> Scr:
   match s:
-    case Scr{shas, n, s0, at, who, ks}:
-      Scr{shas, n, st, at, who, ks}
+    case Scr{shas, fi, n, s0, at, who, ks}:
+      Scr{shas, fi, n, st, at, who, ks}
     case ScrOf{x}:
       scr.st.set(st, x)
 
 def scr.at(+s: Scr) -> Clk:
   match s:
-    case Scr{shas, n, st, +at, who, ks}:
+    case Scr{shas, fi, n, st, +at, who, ks}:
       at
     case ScrOf{+x}:
       scr.at(x)
 
 def scr.at.set(t: Clk, s: Scr) -> Scr:
   match s:
-    case Scr{shas, n, st, a0, who, ks}:
-      Scr{shas, n, st, t, who, ks}
+    case Scr{shas, fi, n, st, a0, who, ks}:
+      Scr{shas, fi, n, st, t, who, ks}
     case ScrOf{x}:
       scr.at.set(t, x)
 
 def scr.find(+sha: String, +s: Scr) -> Maybe<&2, Nat>:
   match s:
-    case Scr{+shas, n, st, at, who, ks}:
+    case Scr{+shas, fi, n, st, at, who, ks}:
       KV.get(Nat, shas, sha)
     case ScrOf{+x}:
       scr.find(sha, x)
@@ -7519,26 +7538,26 @@ def scr.find.or(m: Maybe<&2, Nat>, +sha: String, +s: Scr) -> Maybe<&2, Nat>:
 def scr.get(+sha: String, +s: Scr) -> Maybe<&2, Nat>:
   scr.find.or(scr.find(sha, s), sha, s)
 
-def scr.add.if(absent: Bool, +sha: String, +f: Nat, shas: KV.Trie<Nat>, +n: Nat, +st: U32, at: Clk, +who: Nat, ks: List<&2, String>) -> Scr:
+def scr.add.if(absent: Bool, +sha: String, +f: Nat, shas: KV.Trie<Nat>, fi: Fni, +n: Nat, +st: U32, at: Clk, +who: Nat, ks: List<&2, String>) -> Scr:
   match absent:
     case True{}:
-      Scr{KV.set(Nat, shas, sha, f), 1n+n, st, at, who, ks}
+      Scr{KV.set(Nat, shas, sha, f), fi, 1n+n, st, at, who, ks}
     case False{}:
-      Scr{shas, n, st, at, who, ks}
+      Scr{shas, fi, n, st, at, who, ks}
 
 # a script cached under its sha, with its flags
 def scr.add(+sha: String, +f: Nat, s: Scr) -> Scr:
   match s:
-    case Scr{shas, +n, +st, at, +who, ks}:
+    case Scr{shas, fi, +n, +st, at, +who, ks}:
       +t = shas
-      scr.add.if(Maybe.is_none(&2, Nat, KV.get(Nat, t, sha)), sha, f, t, n, st, at, who, ks)
+      scr.add.if(Maybe.is_none(&2, Nat, KV.get(Nat, t, sha)), sha, f, t, fi, n, st, at, who, ks)
     case ScrOf{x}:
       scr.add(sha, f, x)
 
 def scr.flush(s: Scr) -> Scr:
   match s:
-    case Scr{shas, n, st, at, who, ks}:
-      Scr{KV.empty(Nat), 0n, st, at, who, ks}
+    case Scr{shas, fi, n, st, at, who, ks}:
+      Scr{KV.empty(Nat), fi, 0n, st, at, who, ks}
     case ScrOf{x}:
       scr.flush(x)
 
@@ -7550,6 +7569,111 @@ def scr.exists(+xs: List<&2, String>, +s: Scr) -> List<&2, R.Reply>:
       Nil{}
     case Con{+x, +rest}:
       R.RInt{R.IPos{Bool.pick(Nat, Maybe.is_some(&2, Nat, scr.get(x, s)), 1n, 0n)}} <> scr.exists(rest, s)
+
+# the functions' state, lent, and set
+def scr.fi(+s: Scr) -> Fni:
+  match s:
+    case Scr{shas, +fi, n, st, at, who, ks}:
+      fi
+    case ScrOf{+x}:
+      scr.fi(x)
+
+def scr.fi.set(fi: Fni, s: Scr) -> Scr:
+  match s:
+    case Scr{shas, f0, n, st, at, who, ks}:
+      Scr{shas, fi, n, st, at, who, ks}
+    case ScrOf{x}:
+      scr.fi.set(fi, x)
+
+def ps.fi(+pb: Ps) -> Fni:
+  scr.fi(ps.scr(pb))
+
+def ps.fi.set(fi: Fni, pb: Ps) -> Ps:
+  +p = pb
+  ps.scr.set(scr.fi.set(fi, ps.scr(p)), p)
+
+# the flags of the function of a name, in any case, as Redis's dictionary
+# of functions compares names (functionDictType)
+def fni.fn(+name: String, +f: Fni) -> Maybe<&2, Nat>:
+  match f:
+    case Fni{+fns, nl, fx, fname, fa, fd}:
+      KV.get(Nat, fns, String.to_lower(name))
+
+# the mirror made anew from the engine's functions (Engine.ffuncs: each
+# one's name in lower case and its flags in decimal, in turn) and the
+# count of the libraries
+def fni.flag(m: R.LL) -> Nat:
+  match m:
+    case R.LL{neg, hi, +lo}:
+      lo
+    case R.LLBad{}:
+      0n
+
+def fni.fns.of(xs: List<&2, String>, t: KV.Trie<Nat>) -> KV.Trie<Nat>:
+  match xs:
+    case Con{+n, Con{+f, rest}}:
+      fni.fns.of(rest, KV.set(Nat, t, n, fni.flag(R.ll.read(f))))
+    case _:
+      t
+
+def fni.mirror(fns: KV.Trie<Nat>, +nl: Nat, f: Fni) -> Fni:
+  match f:
+    case Fni{f0, n0, fx, fname, fa, fd}:
+      Fni{fns, nl, fx, fname, fa, fd}
+
+# a FUNCTION command's entry for the append-only file, kept for the
+# group's write (aof_put)
+def fni.fx.add(+e: List<&2, String>, f: Fni) -> Fni:
+  match f:
+    case Fni{fns, nl, fx, fname, fa, fd}:
+      Fni{fns, nl, e <> fx, fname, fa, fd}
+
+# the entries kept, oldest first, and the state without them
+def fni.fx.take(f: Fni) -> List<&2, List<&2, String>> & Fni:
+  match f:
+    case Fni{fns, nl, fx, fname, fa, fd}:
+      (List.reverse(&2, List<&2, String>, fx), Fni{fns, nl, Nil{}, fname, fa, fd})
+
+# the function that runs: its name, its caller's command as it came, and
+# how long it has run
+def fni.run(+name: String, a: Av, f: Fni) -> Fni:
+  match f:
+    case Fni{fns, nl, fx, f0, a0, d0}:
+      Fni{fns, nl, fx, name, a, 0n}
+
+def fni.ran(+d: Nat, f: Fni) -> Fni:
+  match f:
+    case Fni{fns, nl, fx, fname, fa, d0}:
+      Fni{fns, nl, fx, fname, fa, d}
+
+def fni.done(f: Fni) -> Fni:
+  match f:
+    case Fni{fns, nl, fx, f0, a0, d0}:
+      Fni{fns, nl, fx, "", AvArgs{Nil{}}, 0n}
+
+# the arguments of the first request of a as its client sent them
+def av.args(+a: Av) -> List<&2, String>:
+  match a:
+    case AvRaw{+raw, +n}:
+      av.first(List.drop(&2, List<&2, String>, P.argvs(raw), n))
+    case AvArgs{+xs}:
+      av.first(xs)
+
+# FUNCTION STATS (functionStatsCommand): the function that runs past
+# lua-time-limit (on: a command runs only then while one does), its name,
+# its caller's command and how long it has run, or null; and the engine's
+# counts of libraries and functions
+def fni.running(on: Bool, +name: String, +a: Av, +d: Nat) -> R.Reply:
+  match on:
+    case False{}:
+      R.RNull{}
+    case True{}:
+      R.RMap{[R.RBulk{"name"}, R.RBulk{name}, R.RBulk{"command"}, R.RArray{pl.bulks(av.args(a))}, R.RBulk{"duration_ms"}, R.r_int(d)]}
+
+def fni.stats(+on: Bool, +f: Fni) -> R.Reply:
+  match f:
+    case Fni{+fns, +nl, fx, +fname, +fa, +fd}:
+      R.RMap{[R.RBulk{"running_script"}, fni.running(Bool.and(on, Bool.not(String.is_empty(fname))), fname, fa, fd), R.RBulk{"engines"}, R.RMap{[R.RBulk{"LUA"}, R.RMap{[R.RBulk{"libraries_count"}, R.r_int(nl), R.RBulk{"functions_count"}, R.r_int(KV.size(Nat, fns))]}]}]}
 
 def ps.sc.st(+pb: Ps) -> U32:
   scr.st(ps.scr(pb))
@@ -7696,10 +7820,21 @@ def eval.rest(+xs: List<&2, String>) -> List<&2, String>:
     case Nil{}:
       Nil{}
 
+# (FCALL's and FCALL_RO's, SEval's modes 4 to 7: its function's flags in
+# the mirror, as fcallGetCommandFlags reads them; 96 for a function not
+# there)
+def sc.flags.ev(fn: Bool, +m: Nat, +s: String, +pb: Ps) -> U32:
+  match fn:
+    case True{}:
+      sc.flags.found(fni.fn(s, ps.fi(pb)))
+    case False{}:
+      sc.flags.of(Nat.is_eq(Nat.mod(m, 2n), 1n), s, pb)
+
 def sc.flags(+c: R.Cmd, +pb: Ps) -> U32:
   match c:
     case R.Own{R.SEval{+how, +xs}}:
-      sc.flags.of(Nat.is_eq(Nat.mod(how, 2n), 1n), eval.script(xs), pb)
+      +m = Nat.mod(how, 8n)
+      sc.flags.ev(Nat.is_le(4n, m), m, eval.script(xs), pb)
     case _:
       0
 
@@ -7815,6 +7950,29 @@ def bg.script.kill(+code: Nat, g: LRun) -> LRun:
     case LHeld{h}:
       LHeld{h}
 
+# FUNCTION KILL: as SCRIPT KILL, but an EVAL that runs answers the
+# script's error (scriptKill with is_eval 0)
+def bg.fn.kill.at(idle: Bool, wrote: Bool, fn: Bool, +code: Nat, g: LRun) -> LRun:
+  match idle wrote fn:
+    case True{} _ _:
+      bg.script.fail("NOTBUSY No scripts in execution right now.", code, g)
+    case False{} True{} _:
+      bg.script.fail("UNKILLABLE Sorry the script already executed write commands against the dataset. You can either wait the script termination or kill the server in a hard way using the SHUTDOWN NOSAVE command.", code, g)
+    case False{} False{} False{}:
+      bg.script.fail(busy.msg(False{}), code, g)
+    case False{} False{} True{}:
+      bg.say(R.r_ok(), code, bg.sc.on(4, g))
+
+def bg.fn.kill.of(+st: U32, +code: Nat, g: LRun) -> LRun:
+  bg.fn.kill.at(U32.is_eq(U32.and(st, 1), 0), U32.is_ne(U32.and(st, 2), 0), U32.is_ne(U32.and(st, 16), 0), code, g)
+
+def bg.fn.kill(+code: Nat, g: LRun) -> LRun:
+  match g:
+    case LRun{rs, es, conn, srv, ds, ws, up, tx, +pb}:
+      bg.fn.kill.of(ps.sc.st(pb), code, LRun{rs, es, conn, srv, ds, ws, up, tx, pb})
+    case LHeld{h}:
+      LHeld{h}
+
 # whether EVALSHA's script is not cached (NOSCRIPT at once), and SCRIPT
 # EXISTS's reply, from the mirror, unless a script's wait is in the chain
 # (the mirror looked at for EVALSHA alone: Bool.and takes both its
@@ -7830,7 +7988,8 @@ def sc.noscript.if(sha: Bool, +xs: List<&2, String>, +pb: Ps) -> Bool:
 def sc.noscript(+c: R.Cmd, +pb: Ps) -> Bool:
   match c:
     case R.Own{R.SEval{+how, +xs}}:
-      sc.noscript.if(Bool.and(Nat.is_eq(Nat.mod(how, 2n), 1n), Bool.not(ps.sc.pending(pb))), xs, pb)
+      +m = Nat.mod(how, 8n)
+      sc.noscript.if(Bool.and(Bool.and(Nat.is_lt(m, 4n), Nat.is_eq(Nat.mod(m, 2n), 1n)), Bool.not(ps.sc.pending(pb))), xs, pb)
     case _:
       False{}
 
@@ -7841,10 +8000,55 @@ def sc.exists.if(pend: Bool, +xs: List<&2, String>, +pb: Ps) -> Maybe<&2, R.Repl
     case False{}:
       Some{R.RArray{scr.exists(xs, ps.scr(pb))}}
 
+# FUNCTION STATS from the mirror: at once while a script runs past its
+# time limit (the libraries cannot change meanwhile), or while no wait of
+# the engine is in the chain, which may change them
+def sc.fstats.if(+busy: Bool, +pend: Bool, +pb: Ps) -> Maybe<&2, R.Reply>:
+  Bool.pick(Maybe<&2, R.Reply>, Bool.and(pend, Bool.not(busy)), None{}, Some{fni.stats(busy, ps.fi(pb))})
+
 def sc.exists(+c: R.Cmd, +pb: Ps) -> Maybe<&2, R.Reply>:
   match c:
     case R.Own{R.SScript{2n, +xs}}:
       sc.exists.if(ps.sc.pending(pb), xs, pb)
+    case R.Own{R.SScript{16n, xs}}:
+      sc.fstats.if(ps.busy(pb), ps.sc.pending(pb), pb)
+    case _:
+      None{}
+
+# FCALL's and FCALL_RO's errors from the mirror, unless a wait of the
+# engine is in the chain: "Function not found", then a number of keys
+# Redis refuses (modes 6 and 7, fcall.count's kind in the place of the
+# number), as fcallCommandGeneric checks them; and FUNCTION STATS's while
+# an EVAL runs past its time limit (functionStatsCommand)
+def fcall.why(+k: Nat) -> String:
+  match k:
+    case 1n:
+      "ERR Bad number of keys provided"
+    case 2n:
+      "ERR Number of keys can't be greater than number of args"
+    case _:
+      "ERR Number of keys can't be negative"
+
+def sc.fcall.early.of(found: Bool, +m: Nat, +k: Nat) -> Maybe<&2, String>:
+  match found:
+    case False{}:
+      Some{"ERR Function not found"}
+    case True{}:
+      Bool.pick(Maybe<&2, String>, Nat.is_le(6n, m), Some{fcall.why(k)}, None{})
+
+def sc.fcall.early.if(on: Bool, +how: Nat, +xs: List<&2, String>, +pb: Ps) -> Maybe<&2, String>:
+  match on:
+    case True{}:
+      sc.fcall.early.of(Maybe.is_some(&2, Nat, fni.fn(eval.script(xs), ps.fi(pb))), Nat.mod(how, 8n), Nat.div(how, 8n))
+    case False{}:
+      None{}
+
+def sc.early(+c: R.Cmd, +pb: Ps) -> Maybe<&2, String>:
+  match c:
+    case R.Own{R.SEval{+how, +xs}}:
+      sc.fcall.early.if(Bool.and(Nat.is_le(4n, Nat.mod(how, 8n)), Bool.not(ps.sc.pending(pb))), how, xs, pb)
+    case R.Own{R.SScript{16n, xs}}:
+      Bool.pick(Maybe<&2, String>, Bool.and(ps.busy(pb), Bool.not(ps.sc.fn(pb))), Some{busy.msg(False{})}, None{})
     case _:
       None{}
 
@@ -7901,6 +8105,14 @@ def bg.script.of(noscript: Bool, ex: Maybe<&2, R.Reply>, +id: Nat, +back: Chan(A
     case False{} None{}:
       bg.script.wait(id, back, c, code, rest, more, a, ar, bg.script.flush(c, g))
 
+# (an error the mirror finds, a failed call)
+def bg.script.err(m: Maybe<&2, String>, noscript: Bool, ex: Maybe<&2, R.Reply>, +id: Nat, +back: Chan(Ans), +c: R.Cmd, +code: Nat, rest: List<&2, R.Cmd>, more: List<&2, Nat>, a: Av, ar: Av, g: LRun) -> LRun:
+  match m:
+    case Some{+e}:
+      bg.script.fail(e, code, g)
+    case None{}:
+      bg.script.of(noscript, ex, id, back, c, code, rest, more, a, ar, g)
+
 # a script command (ShScript): answered from the mirror when it can be,
 # else its client waits for the driver; the script client's (id 0, a
 # call of a script: the driver refuses them before) is refused
@@ -7909,7 +8121,7 @@ def bg.script.at(lua: Bool, +id: Nat, +back: Chan(Ans), +c: R.Cmd, +code: Nat, r
     case True{} g0:
       bg.one(R.Own{R.SBad{R.RError{"ERR This Redis command is not allowed from script"}}}, R.code.refused(code), g0)
     case False{} LRun{rs, es, conn, srv, ds, ws, up, tx, +pb}:
-      bg.script.of(sc.noscript(c, pb), sc.exists(c, pb), id, back, c, code, rest, more, a, ar, LRun{rs, es, conn, srv, ds, ws, up, tx, pb})
+      bg.script.err(sc.early(c, pb), sc.noscript(c, pb), sc.exists(c, pb), id, back, c, code, rest, more, a, ar, LRun{rs, es, conn, srv, ds, ws, up, tx, pb})
     case False{} LHeld{h}:
       LHeld{h}
 
@@ -8069,6 +8281,8 @@ def bg.cmd(+id: Nat, +back: Chan(Ans), +inb: Nat, sh: Sh, +c: R.Cmd, +code: Nat,
       bg.script(id, back, c, code, rest, more, a, ar, g)
     case ShScriptKill{}:
       bg.script.kill(code, g)
+    case ShFnKill{}:
+      bg.fn.kill(code, g)
     case ShBusy{inm, fail}:
       bg.busy(inm, fail, code, g)
     case ShBusyExec{}:
@@ -11343,6 +11557,16 @@ def grp.sc.run(+id: Nat, ks: List<&2, String>, g: Grp) -> Grp:
       +p = pb
       Grp{outs, es, srv, ds, ws, up, tx, ps.scr.set(scr.run.set(id, ks, ps.scr(p)), p)}
 
+def grp.fi(+g: Grp) -> Fni:
+  match g:
+    case Grp{outs, es, srv, ds, ws, up, tx, +pb}:
+      ps.fi(pb)
+
+def grp.fi.set(fi: Fni, g: Grp) -> Grp:
+  match g:
+    case Grp{outs, es, srv, ds, ws, up, tx, pb}:
+      Grp{outs, es, srv, ds, ws, up, tx, ps.fi.set(fi, pb)}
+
 def grp.sc.on(+bits: U32, g: Grp) -> Grp:
   match g:
     case Grp{outs, es, srv, ds, ws, up, tx, pb}:
@@ -11394,7 +11618,8 @@ def grp.es.take(g: Grp) -> List<&2, A.Ent> & Grp:
 def grp.sc.end(es0: List<&2, A.Ent>, g: Grp) -> Grp:
   match g:
     case Grp{outs, es, srv, ds, ws, up, tx, pb}:
-      grp.sc.run(0n, Nil{}, Grp{outs, tx.effs(es, es0), srv, ds, ws, up, tx, ps.sc.off(21, pb)})
+      +p = pb
+      grp.sc.run(0n, Nil{}, Grp{outs, tx.effs(es, es0), srv, ds, ws, up, tx, ps.fi.set(fni.done(ps.fi(p)), ps.sc.off(21, p))})
 
 # a state of the general way as a group's, with the group's answers
 def lrun.grp(outs: List<&2, Sigma<&2, &2, Chan(Ans), _ => Ans>>, l: LRun) -> Grp:
@@ -11546,6 +11771,13 @@ def waits.c0(+ws: Waits) -> S.Conn:
 
 # the channel of the first client of ws (a wait for the engine: there is
 # one); a channel of none, never sent on, else
+def waits.av(+ws: Waits) -> Av:
+  match ws:
+    case WaitOn{id, back, c0, c1, b, argv, code, db, until, cmds, codes, +av, rest}:
+      av
+    case WaitNone{}:
+      AvArgs{Nil{}}
+
 def waits.back.of(+ws: Waits) -> Maybe<&2, Chan(Ans)>:
   match ws:
     case WaitOn{id, +back, c0, c1, b, argv, code, db, until, cmds, codes, av, rest}:
@@ -11828,16 +12060,18 @@ def sc.busy.groups(sc: Sc, +aof: Bool, +pid: U32, g: Grp, +reqs: Chan(Req)) -> I
 def sc.busy.if(first: Bool, +now: Nat, +sc: Sc, +aof: Bool, +pid: U32, g: Grp, +reqs: Chan(Req)) -> IO(Grp):
   match first:
     case True{}:
+      +x = g
       do IO<Grp>:
-        Unit <- log(sc.lg(sc), 3, "Slow script detected: still in execution after " ++ Nat.show(Nat.sub(now, sc.t0(sc))) ++ " milliseconds. You can try killing the script using the SCRIPT KILL command. Script name is: " ++ sc.sha(sc) ++ ".")
-        sc.busy.groups(sc, aof, pid, grp.sc.on(1, g), reqs)
+        Unit <- log(sc.lg(sc), 3, "Slow script detected: still in execution after " ++ Nat.show(Nat.sub(now, sc.t0(sc))) ++ " milliseconds. You can try killing the script using the " ++ Bool.pick(String, U32.is_ne(U32.and(grp.sc.st(x), 16), 0), "FUNCTION KILL", "SCRIPT KILL") ++ " command. Script name is: " ++ sc.sha(sc) ++ ".")
+        sc.busy.groups(sc, aof, pid, grp.sc.on(1, x), reqs)
     case False{}:
       sc.busy.groups(sc, aof, pid, g, reqs)
 
 @unsafe
 def sc.busy(+now: Nat, sc: Sc, +aof: Bool, +pid: U32, g: Grp, +reqs: Chan(Req)) -> IO(Grp):
   +x = g
-  sc.busy.if(U32.is_eq(U32.and(grp.sc.st(x), 1), 0), now, sc, aof, pid, x, reqs)
+  +s = sc
+  sc.busy.if(U32.is_eq(U32.and(grp.sc.st(x), 1), 0), now, s, aof, pid, grp.fi.set(fni.ran(Nat.sub(now, sc.t0(s)), grp.fi(x)), x), reqs)
 
 @unsafe
 def sc.tick.if(late: Bool, +now: Nat, sc: Sc, +aof: Bool, +pid: U32, g: Grp, +reqs: Chan(Req)) -> IO(Grp):
@@ -12042,32 +12276,42 @@ def sc.begin(st: L.Step, p: Sc & Grp, +aof: Bool, +pid: U32, +reqs: Chan(Req)) -
 # (allow-oom with a shebang); the script client's database is its
 # caller's
 @unsafe
-def sc.start.run(m: Maybe<&2, Chan(Ans)>, +sha: String, +f: U32, +ro: Bool, +aof: Bool, +pid: U32, +ks: List<&2, String>, xs: List<&2, String>, ex: Exm, +r3: Bool, +db: Nat, +w: Waits, g: Grp, +reqs: Chan(Req)) -> IO(Grp):
+def grp.fn.on(fn: Bool, +name: String, +w: Waits, g: Grp) -> Grp:
+  match fn:
+    case False{}:
+      g
+    case True{}:
+      +x = g
+      grp.sc.on(16, grp.fi.set(fni.run(name, waits.av(w), grp.fi(x)), x))
+
+def sc.start.run(m: Maybe<&2, Chan(Ans)>, +fn: Bool, +sha: String, +f: U32, +ro: Bool, +aof: Bool, +pid: U32, +ks: List<&2, String>, xs: List<&2, String>, ex: Exm, +r3: Bool, +db: Nat, +w: Waits, g: Grp, +reqs: Chan(Req)) -> IO(Grp):
   match m:
     case None{}:
       IO.pure(Grp, g)
     case Some{+back}:
       do IO<Grp>:
-        st : L.Step <- L.Engine.start(sha, sc.array(ks), sc.array(xs), U32.or(Bool.pick(U32, r3, 3, 2), U32.or(Bool.pick(U32, ro, 16, 0), 32)))
-        sc.begin(st, sc.make(w, back, db, ro, f, sha, ex, ks, g), aof, pid, reqs)
+        st : L.Step <- L.Engine.start(sha, sc.array(ks), sc.array(xs), U32.or(Bool.pick(U32, r3, 3, 2), U32.or(Bool.pick(U32, ro, 16, 0), Bool.pick(U32, fn, 0, 32))))
+        sc.begin(st, sc.make(w, back, db, ro, f, sha, ex, ks, grp.fn.on(fn, sha, w, g)), aof, pid, reqs)
 
 @unsafe
-def sc.start.go(+sha: String, +f: U32, +ro: Bool, +aof: Bool, +pid: U32, ks: List<&2, String>, xs: List<&2, String>, ex: Exm, +r3: Bool, +db: Nat, +w: Waits, g: Grp, +reqs: Chan(Req)) -> IO(Grp):
-  sc.start.run(waits.back.of(w), sha, f, ro, aof, pid, ks, xs, ex, r3, db, w, g, reqs)
+def sc.start.go(+fn: Bool, +sha: String, +f: U32, +ro: Bool, +aof: Bool, +pid: U32, ks: List<&2, String>, xs: List<&2, String>, ex: Exm, +r3: Bool, +db: Nat, +w: Waits, g: Grp, +reqs: Chan(Req)) -> IO(Grp):
+  sc.start.run(waits.back.of(w), fn, sha, f, ro, aof, pid, ks, xs, ex, r3, db, w, g, reqs)
 
 @unsafe
-def sc.start.at(ok: Bool, +why: String, +sha: String, +f: U32, +ro: Bool, +aof: Bool, +pid: U32, ks: List<&2, String>, xs: List<&2, String>, ex: Exm, +r3: Bool, +db: Nat, w: Waits, g: Grp, +reqs: Chan(Req)) -> IO(Grp):
+def sc.start.at(ok: Bool, +why: String, +fn: Bool, +sha: String, +f: U32, +ro: Bool, +aof: Bool, +pid: U32, ks: List<&2, String>, xs: List<&2, String>, ex: Exm, +r3: Bool, +db: Nat, w: Waits, g: Grp, +reqs: Chan(Req)) -> IO(Grp):
   match ok:
     case False{}:
       sc.fin(ex, w, R.RError{why}, False{}, g, aof, pid, reqs)
     case True{}:
-      sc.start.go(sha, f, ro, aof, pid, ks, xs, ex, r3, db, w, g, reqs)
+      sc.start.go(fn, sha, f, ro, aof, pid, ks, xs, ex, r3, db, w, g, reqs)
 
+# a run of a script (fn: of a function, FCALL's), once Redis's checks of
+# its flags pass (scriptPrepareForRun)
 @unsafe
-def sc.start(+sha: String, +f: U32, +ro: Bool, +aof: Bool, +pid: U32, ks: List<&2, String>, xs: List<&2, String>, ex: Exm, +r3: Bool, +db: Nat, w: Waits, g: Grp, +reqs: Chan(Req)) -> IO(Grp):
+def sc.start(+fn: Bool, +sha: String, +f: U32, +ro: Bool, +aof: Bool, +pid: U32, ks: List<&2, String>, xs: List<&2, String>, ex: Exm, +r3: Bool, +db: Nat, w: Waits, g: Grp, +reqs: Chan(Req)) -> IO(Grp):
   +x = g
   +why = sc.refused(f, ro, grp.oom(x))
-  sc.start.at(String.is_empty(why), why, sha, f, ro, aof, pid, ks, xs, ex, r3, db, w, x, reqs)
+  sc.start.at(String.is_empty(why), why, fn, sha, f, ro, aof, pid, ks, xs, ex, r3, db, w, x, reqs)
 
 # EVAL's body loaded: an error of the engine's ("ERR Error compiling
 # script..."), or the script cached, in the mirror too, and started
@@ -12077,7 +12321,7 @@ def sc.eval.ld.if(err: Bool, +f: U32, +sha: String, +ro: Bool, +aof: Bool, +pid:
     case True{}:
       sc.fin(ex, w, R.RError{sha}, False{}, g, aof, pid, reqs)
     case False{}:
-      sc.start(sha, f, ro, aof, pid, ks, xs, ex, r3, db, w, grp.sc.add(sha, U32.to_nat(f), g), reqs)
+      sc.start(False{}, sha, f, ro, aof, pid, ks, xs, ex, r3, db, w, grp.sc.add(sha, U32.to_nat(f), g), reqs)
 
 @unsafe
 def sc.eval.ld(ld: L.Step, +ro: Bool, +aof: Bool, +pid: U32, ks: List<&2, String>, xs: List<&2, String>, ex: Exm, +r3: Bool, +db: Nat, w: Waits, g: Grp, +reqs: Chan(Req)) -> IO(Grp):
@@ -12093,7 +12337,7 @@ def sc.eval.sha(m: Maybe<&2, Nat>, +h: String, +ro: Bool, +aof: Bool, +pid: U32,
     case None{}:
       sc.fin(ex, w, R.RError{R.noscript.msg()}, False{}, g, aof, pid, reqs)
     case Some{+f}:
-      sc.start(h, U32.from_nat(f), ro, aof, pid, ks, xs, ex, r3, db, w, g, reqs)
+      sc.start(False{}, h, U32.from_nat(f), ro, aof, pid, ks, xs, ex, r3, db, w, g, reqs)
 
 # EVALSHA's sha as the cache has it: as given when the cache has it so,
 # lowered otherwise (scr.get)
@@ -12149,9 +12393,114 @@ def sc.exists.now(+xs: List<&2, String>, +g: Grp) -> R.Reply:
     case Grp{outs, es, srv, ds, ws, up, tx, +pb}:
       R.RArray{scr.exists(xs, ps.scr(pb))}
 
-# SCRIPT LOAD, EXISTS and FLUSH (k: 1, 2, 3) in their turn
+# The functions in the driver
+# ...........................
+# The mirror made anew from the engine after a FUNCTION command that
+# changed the libraries, and the command's entry kept for the file (aof:
+# the server has one)
+def grp.fx.add(+aof: Bool, +e: List<&2, String>, g: Grp) -> Grp:
+  match aof:
+    case False{}:
+      g
+    case True{}:
+      +x = g
+      grp.fi.set(fni.fx.add(e, grp.fi(x)), x)
+
+def fn.items(p: List<&2, List<&2, String>> & String) -> List<&2, String>:
+  (reqs, rest) = p
+  av.first(reqs)
+
 @unsafe
-def sc.script(+k: Nat, +xs: List<&2, String>, ex: Exm, w: Waits, g: Grp, +aof: Bool, +pid: U32, +reqs: Chan(Req)) -> IO(Grp):
+def sc.fn.sync(g: Grp) -> IO(Grp):
+  +x = g
+  do IO<Grp>:
+    fs : String <- L.Engine.ffuncs()
+    nl : U32 <- L.Engine.fcount(0)
+    IO.pure(Grp, grp.fi.set(fni.mirror(fni.fns.of(fn.items(A.load(fs)), KV.empty(Nat)), U32.to_nat(nl), grp.fi(x)), x))
+
+# a run of loads (FUNCTION LOAD, RESTORE): its log lines, then its end,
+# an error, or the libraries taken in (the library's name for LOAD, OK
+# for RESTORE: load), the mirror made anew and the command's entry e kept
+@unsafe
+def sc.floaded(err: Bool, +s: String, +load: Bool, +e: List<&2, String>, ex: Exm, w: Waits, g: Grp, +aof: Bool, +pid: U32, +reqs: Chan(Req)) -> IO(Grp):
+  match err:
+    case True{}:
+      sc.fin(ex, w, R.RError{s}, False{}, g, aof, pid, reqs)
+    case False{}:
+      do IO<Grp>:
+        g2 : Grp <- sc.fn.sync(grp.fx.add(aof, e, g))
+        sc.fin(ex, w, Bool.pick(R.Reply, load, R.RBulk{s}, R.r_ok()), False{}, g2, aof, pid, reqs)
+
+@unsafe
+def sc.fload.at(+k: Nat, +lw: U32, +s: String, +load: Bool, +e: List<&2, String>, ex: Exm, w: Waits, g: Grp, +aof: Bool, +pid: U32, +reqs: Chan(Req)) -> IO(Grp):
+  match k:
+    case 3n:
+      +x = g
+      do IO<Grp>:
+        Unit <- log(grp.lg(pid, x), U32.and(U32.shrn(lw, 12n), 15), s)
+        st : L.Step <- L.Engine.next(1, "")
+        sc.fload(st, load, e, ex, w, x, aof, pid, reqs)
+    case _:
+      sc.floaded(U32.is_ne(U32.and(lw, 256), 0), s, load, e, ex, w, g, aof, pid, reqs)
+
+@unsafe
+def sc.fload(st: L.Step, +load: Bool, +e: List<&2, String>, ex: Exm, w: Waits, g: Grp, +aof: Bool, +pid: U32, +reqs: Chan(Req)) -> IO(Grp):
+  match st:
+    case L.Step{+lw, +s}:
+      sc.fload.at(U32.to_nat(U32.and(lw, 15)), lw, s, load, e, ex, w, g, aof, pid, reqs)
+
+# FUNCTION DELETE: OK and the mirror made anew, or "Library not found"
+@unsafe
+def sc.fdeleted(ok: Bool, +e: List<&2, String>, ex: Exm, w: Waits, g: Grp, +aof: Bool, +pid: U32, +reqs: Chan(Req)) -> IO(Grp):
+  match ok:
+    case False{}:
+      sc.fin(ex, w, R.RError{"ERR Library not found"}, False{}, g, aof, pid, reqs)
+    case True{}:
+      do IO<Grp>:
+        g2 : Grp <- sc.fn.sync(grp.fx.add(aof, e, g))
+        sc.fin(ex, w, R.r_ok(), False{}, g2, aof, pid, reqs)
+
+# FUNCTION LIST's word for the engine (Engine.flist): WITHCODE and a
+# pattern (w, as the parser reads them), the caller's protocol
+def flist.word(+w: String, +r3: Bool) -> U32:
+  U32.or(U32.from_nat(fni.flag(R.ll.read(w))), Bool.pick(U32, r3, 48, 32))
+
+# FUNCTION's subcommands that need the engine, in their turn (k: 11 FLUSH,
+# 13 LOAD, 14 DELETE, 15 LIST, 16 STATS, 18 DUMP, 19 RESTORE: the parser's
+# arguments, parse_function), r3 the caller's protocol
+@unsafe
+def sc.function(+k: Nat, +xs: List<&2, String>, ex: Exm, +r3: Bool, w: Waits, g: Grp, +aof: Bool, +pid: U32, +reqs: Chan(Req)) -> IO(Grp):
+  match k:
+    case 11n:
+      do IO<Grp>:
+        Unit <- L.Engine.fflush()
+        g2 : Grp <- sc.fn.sync(grp.fx.add(aof, List.append(&2, String, ["FUNCTION", "FLUSH"], xs), g))
+        sc.fin(ex, w, R.r_ok(), False{}, g2, aof, pid, reqs)
+    case 13n:
+      +r = T.first(xs)
+      +code = T.first(List.drop(&2, String, xs, 1n))
+      do IO<Grp>:
+        st : L.Step <- L.Engine.fload(sc.array([code]), U32.or(Bool.pick(U32, String.eq(r, "1"), 1, 0), 8))
+        sc.fload(st, True{}, Bool.pick(List<&2, String>, String.eq(r, "1"), ["FUNCTION", "LOAD", "REPLACE", code], ["FUNCTION", "LOAD", code]), ex, w, g, aof, pid, reqs)
+    case 14n:
+      +lib = T.first(xs)
+      do IO<Grp>:
+        ok : U32 <- L.Engine.fdelete(lib)
+        sc.fdeleted(U32.is_ne(ok, 0), ["FUNCTION", "DELETE", lib], ex, w, g, aof, pid, reqs)
+    case 15n:
+      do IO<Grp>:
+        bytes : String <- L.Engine.flist(T.first(List.drop(&2, String, xs, 1n)), flist.word(T.first(xs), r3))
+        sc.fin(ex, w, R.RRaw{bytes}, False{}, g, aof, pid, reqs)
+    case 16n:
+      +x = g
+      sc.fin(ex, w, fni.stats(False{}, grp.fi(x)), False{}, x, aof, pid, reqs)
+    case _:
+      sc.fin(ex, w, R.RError{"ERR a wait of no function command"}, False{}, g, aof, pid, reqs)
+
+# SCRIPT LOAD, EXISTS and FLUSH (k: 1, 2, 3) in their turn, and FUNCTION's
+# subcommands (from 11)
+@unsafe
+def sc.script(+k: Nat, +xs: List<&2, String>, ex: Exm, +r3: Bool, w: Waits, g: Grp, +aof: Bool, +pid: U32, +reqs: Chan(Req)) -> IO(Grp):
   match k:
     case 1n:
       do IO<Grp>:
@@ -12165,7 +12514,48 @@ def sc.script(+k: Nat, +xs: List<&2, String>, ex: Exm, w: Waits, g: Grp, +aof: B
         Unit <- L.Engine.flush()
         sc.fin(ex, w, R.r_ok(), False{}, grp.sc.flush(g), aof, pid, reqs)
     case _:
-      sc.fin(ex, w, R.RError{"ERR a wait of no script command"}, False{}, g, aof, pid, reqs)
+      sc.function(k, xs, ex, r3, w, g, aof, pid, reqs)
+
+# FCALL and FCALL_RO (m: 4 and 5; 6 and 7 with a number of keys Redis
+# refuses, its kind n): the function looked up in the mirror (current in
+# the driver), "Function not found" or the number's error, as
+# fcallCommandGeneric answers them, else its keys and arguments taken
+# apart (n keys) and its run started by its flags
+@unsafe
+def sc.fcall.split(p: List<&2, String> & List<&2, String>, +ro: Bool, +fl: U32, +name: String, ex: Exm, +r3: Bool, +db: Nat, +aof: Bool, +pid: U32, w: Waits, g: Grp, +reqs: Chan(Req)) -> IO(Grp):
+  (ks, xs) = p
+  sc.start(True{}, name, fl, ro, aof, pid, ks, xs, ex, r3, db, w, g, reqs)
+
+@unsafe
+def sc.fcall.keys(bad: Bool, +ro: Bool, +n: Nat, +fl: U32, +name: String, rest: List<&2, String>, ex: Exm, +r3: Bool, +db: Nat, +aof: Bool, +pid: U32, w: Waits, g: Grp, +reqs: Chan(Req)) -> IO(Grp):
+  match bad:
+    case True{}:
+      sc.fin(ex, w, R.RError{fcall.why(n)}, False{}, g, aof, pid, reqs)
+    case False{}:
+      sc.fcall.split(R.eval.split(n, rest, Nil{}), ro, fl, name, ex, r3, db, aof, pid, w, g, reqs)
+
+@unsafe
+def sc.fcall.of(f: Maybe<&2, Nat>, +m: Nat, +n: Nat, +name: String, rest: List<&2, String>, ex: Exm, +r3: Bool, +db: Nat, +aof: Bool, +pid: U32, w: Waits, g: Grp, +reqs: Chan(Req)) -> IO(Grp):
+  match f:
+    case None{}:
+      sc.fin(ex, w, R.RError{"ERR Function not found"}, False{}, g, aof, pid, reqs)
+    case Some{+fl}:
+      sc.fcall.keys(Nat.is_le(6n, m), Nat.is_eq(Nat.mod(m, 2n), 1n), n, U32.from_nat(fl), name, rest, ex, r3, db, aof, pid, w, g, reqs)
+
+@unsafe
+def sc.fcall(+m: Nat, +n: Nat, +name: String, rest: List<&2, String>, ex: Exm, +r3: Bool, +db: Nat, +aof: Bool, +pid: U32, w: Waits, g: Grp, +reqs: Chan(Req)) -> IO(Grp):
+  +x = g
+  sc.fcall.of(fni.fn(name, grp.fi(x)), m, n, name, rest, ex, r3, db, aof, pid, w, x, reqs)
+
+# SEval by its mode: EVAL and its kin (m below 4), their n keys taken
+# apart (R.eval.split), or FCALL and FCALL_RO
+@unsafe
+def sc.ev(fn: Bool, +m: Nat, +n: Nat, +xs: List<&2, String>, ex: Exm, +r3: Bool, +db: Nat, +aof: Bool, +pid: U32, w: Waits, g: Grp, +reqs: Chan(Req)) -> IO(Grp):
+  match fn:
+    case False{}:
+      sc.eval.split(R.eval.split(n, eval.rest(xs), Nil{}), aof, pid, m, eval.script(xs), ex, r3, db, w, g, reqs)
+    case True{}:
+      sc.fcall(m, n, eval.script(xs), eval.rest(xs), ex, r3, db, aof, pid, w, g, reqs)
 
 # a command of the engine: of a client's wait, or of an EXEC's (ex); r3
 # and db: its caller's protocol and database
@@ -12173,9 +12563,10 @@ def sc.script(+k: Nat, +xs: List<&2, String>, ex: Exm, w: Waits, g: Grp, +aof: B
 def sc.one.of(+c: R.Cmd, ex: Exm, +r3: Bool, +db: Nat, +aof: Bool, +pid: U32, w: Waits, g: Grp, +reqs: Chan(Req)) -> IO(Grp):
   match c:
     case R.Own{R.SEval{+how, +xs}}:
-      sc.eval.split(R.eval.split(Nat.div(how, 4n), eval.rest(xs), Nil{}), aof, pid, Nat.mod(how, 4n), eval.script(xs), ex, r3, db, w, g, reqs)
+      +m = Nat.mod(how, 8n)
+      sc.ev(Nat.is_le(4n, m), m, Nat.div(how, 8n), xs, ex, r3, db, aof, pid, w, g, reqs)
     case R.Own{R.SScript{+k, +xs}}:
-      sc.script(k, xs, ex, w, g, aof, pid, reqs)
+      sc.script(k, xs, ex, r3, w, g, aof, pid, reqs)
     case R.Own{R.SExec{}}:
       sc.exec(aof, pid, w, g, reqs)
     case _:
