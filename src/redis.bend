@@ -1717,7 +1717,7 @@ def function_load.opt(ok: Bool, +o: String, next: SessOp) -> SessOp:
     case True{}:
       next
     case False{}:
-      SFail{RError{no_newlines("ERR Unknown option given: " ++ cstr(o))}}
+      SFail{RError{e_fmt("ERR Unknown option given: " ++ cstr(o))}}
 
 def function_load(args: List<&2, String>, +r: Bool) -> SessOp:
   match args:

@@ -7886,7 +7886,7 @@ def pause.holds(+p: Pz, +mon: Bool, +c: R.Cmd, +code: Nat, +id: Nat, +tx: Tx, +s
 # the error of a client refused while a script runs past lua-time-limit
 # (Redis's shared.slowevalerr and slowscripterr)
 def busy.msg(+fn: Bool) -> String:
-  Bool.pick(String, fn, "BUSY Redis is busy running a function. You can only call FUNCTION KILL or SHUTDOWN NOSAVE.", "BUSY Redis is busy running a script. You can only call SCRIPT KILL or SHUTDOWN NOSAVE.")
+  Bool.pick(String, fn, "BUSY Redis is busy running a script. You can only call FUNCTION KILL or SHUTDOWN NOSAVE.", "BUSY Redis is busy running a script. You can only call SCRIPT KILL or SHUTDOWN NOSAVE.")
 
 def bg.fn(+g: LRun) -> Bool:
   match g:
@@ -12406,17 +12406,44 @@ def grp.fx.add(+aof: Bool, +e: List<&2, String>, g: Grp) -> Grp:
       +x = g
       grp.fi.set(fni.fx.add(e, grp.fi(x)), x)
 
+# the entries kept, oldest first, and the group without them (taken once
+# the driver has run: aof_group.fx)
+def grp.fx.took(p: List<&2, List<&2, String>> & Fni, g: Grp) -> List<&2, List<&2, String>> & Grp:
+  (fx, fi) = p
+  (fx, grp.fi.set(fi, g))
+
+def grp.fx.take(g: Grp) -> List<&2, List<&2, String>> & Grp:
+  +x = g
+  grp.fx.took(fni.fx.take(grp.fi(x)), x)
+
 def fn.items(p: List<&2, List<&2, String>> & String) -> List<&2, String>:
   (reqs, rest) = p
   av.first(reqs)
 
+# the mirror made anew from the engine's functions (fs: Engine.ffuncs, in
+# nl libraries), and INFO's facts of them (vm and mo: Engine.fmem)
+def fn.facts(+fs: String, +nl: Nat, +vm: Nat, +mo: Nat, srv: S.Srv, pb: Ps) -> S.Srv & Ps:
+  +its = fn.items(A.load(fs))
+  +p = pb
+  (S.srv.funcs(srv, Nat.div(List.length(&2, String, its), 2n), nl, vm, mo), ps.fi.set(fni.mirror(fni.fns.of(its, KV.empty(Nat)), nl, ps.fi(p)), p))
+
+def grp.fn.of(p: S.Srv & Ps, outs: List<&2, Sigma<&2, &2, Chan(Ans), _ => Ans>>, es: List<&2, A.Ent>, ds: R.Ds, ws: Waits, up: List<&2, Up>, tx: Tx) -> Grp:
+  (s2, p2) = p
+  Grp{outs, es, s2, ds, ws, up, tx, p2}
+
+def grp.fn.synced(+fs: String, +nl: Nat, +vm: Nat, +mo: Nat, g: Grp) -> Grp:
+  match g:
+    case Grp{outs, es, srv, ds, ws, up, tx, pb}:
+      grp.fn.of(fn.facts(fs, nl, vm, mo, srv, pb), outs, es, ds, ws, up, tx)
+
 @unsafe
 def sc.fn.sync(g: Grp) -> IO(Grp):
-  +x = g
   do IO<Grp>:
     fs : String <- L.Engine.ffuncs()
     nl : U32 <- L.Engine.fcount(0)
-    IO.pure(Grp, grp.fi.set(fni.mirror(fni.fns.of(fn.items(A.load(fs)), KV.empty(Nat)), U32.to_nat(nl), grp.fi(x)), x))
+    vm : U32 <- L.Engine.fmem(0)
+    mo : U32 <- L.Engine.fmem(1)
+    IO.pure(Grp, grp.fn.synced(fs, U32.to_nat(nl), U32.to_nat(vm), U32.to_nat(mo), g))
 
 # a run of loads (FUNCTION LOAD, RESTORE): its log lines, then its end,
 # an error, or the libraries taken in (the library's name for LOAD, OK
@@ -12460,6 +12487,44 @@ def sc.fdeleted(ok: Bool, +e: List<&2, String>, ex: Exm, w: Waits, g: Grp, +aof:
         g2 : Grp <- sc.fn.sync(grp.fx.add(aof, e, g))
         sc.fin(ex, w, R.r_ok(), False{}, g2, aof, pid, reqs)
 
+# FUNCTION RESTORE: the payload's version and checksum checked
+# (D.verify), its libraries read (D.lib.read: Libraries of functions) and
+# given to the engine with the policy (the parser's "2", "3" or "4":
+# APPEND, REPLACE, FLUSH) and, when the read failed after them, its error
+# (bit 4 and the last code: the engine makes those read first, as Redis
+# makes each library it reads); the run of loads answers OK, its entry
+# for the file the command with its policy named
+def restore.word(+pol: String, +err: String) -> U32:
+  U32.or(Bool.pick(U32, String.eq(pol, "4"), 4, Bool.pick(U32, String.eq(pol, "3"), 3, 2)), Bool.pick(U32, String.is_empty(err), 0, 16))
+
+def restore.name(+pol: String) -> String:
+  Bool.pick(String, String.eq(pol, "4"), "FLUSH", Bool.pick(String, String.eq(pol, "3"), "REPLACE", "APPEND"))
+
+def restore.codes.of(none: Bool, cs: List<&2, String>, +err: String) -> List<&2, String>:
+  match none:
+    case True{}:
+      cs
+    case False{}:
+      List.append(&2, String, cs, [err])
+
+def restore.codes(cs: List<&2, String>, +err: String) -> List<&2, String>:
+  restore.codes.of(String.is_empty(err), cs, err)
+
+@unsafe
+def sc.restore.go(r: List<&2, String> & String, +p: String, +pol: String, ex: Exm, w: Waits, g: Grp, +aof: Bool, +pid: U32, +reqs: Chan(Req)) -> IO(Grp):
+  (cs, +err) = r
+  do IO<Grp>:
+    st : L.Step <- L.Engine.fload(sc.array(restore.codes(cs, err)), restore.word(pol, err))
+    sc.fload(st, False{}, ["FUNCTION", "RESTORE", p, restore.name(pol)], ex, w, g, aof, pid, reqs)
+
+@unsafe
+def sc.restore(ok: Bool, +p: String, +pol: String, ex: Exm, w: Waits, g: Grp, +aof: Bool, +pid: U32, +reqs: Chan(Req)) -> IO(Grp):
+  match ok:
+    case False{}:
+      sc.fin(ex, w, R.RError{"ERR DUMP payload version or checksum are wrong"}, False{}, g, aof, pid, reqs)
+    case True{}:
+      sc.restore.go(D.lib.read(p), p, pol, ex, w, g, aof, pid, reqs)
+
 # FUNCTION LIST's word for the engine (Engine.flist): WITHCODE and a
 # pattern (w, as the parser reads them), the caller's protocol
 def flist.word(+w: String, +r3: Bool) -> U32:
@@ -12494,6 +12559,14 @@ def sc.function(+k: Nat, +xs: List<&2, String>, ex: Exm, +r3: Bool, w: Waits, g:
     case 16n:
       +x = g
       sc.fin(ex, w, fni.stats(False{}, grp.fi(x)), False{}, x, aof, pid, reqs)
+    case 18n:
+      do IO<Grp>:
+        cs : String <- L.Engine.fcodes()
+        sc.fin(ex, w, R.RBulk{D.lib.dump(fn.items(A.load(cs)))}, False{}, g, aof, pid, reqs)
+    case 19n:
+      +p = T.first(xs)
+      +pol = T.first(List.drop(&2, String, xs, 1n))
+      sc.restore(D.verify(p), p, pol, ex, w, g, aof, pid, reqs)
     case _:
       sc.fin(ex, w, R.RError{"ERR a wait of no function command"}, False{}, g, aof, pid, reqs)
 
@@ -12941,7 +13014,36 @@ def aof_group.sc(any: Bool, g: Grp, +sel: Nat, rw: Rw, f: File, +sync: Sync, +re
         t0 : U32 & U32 <- IO.clock()
         g2 : Grp <- sc.drive(sc.fuel(), True{}, rw.pid(w), grp.at.set(clk.of(t0), g), reqs)
         t1 : U32 & U32 <- IO.clock()
-        aof_group.go(sc.window(clk.of(t1), g2), sel, w, f, sync, reqs)
+        aof_group.fx(grp.fx.take(sc.window(clk.of(t1), g2)), sel, w, f, sync, reqs)
+
+# the FUNCTION commands' entries the driver kept (Scripts: Fni), oldest
+# first, go to the file before the group's own, in the same write (a
+# FUNCTION command in a transaction before the transaction, not in it:
+# the libraries are no database's state, and a replay of one command
+# changes nothing a replay of the transaction reads)
+@unsafe
+def aof_group.fx(p: List<&2, List<&2, String>> & Grp, +sel: Nat, rw: Rw, f: File, +sync: Sync, +reqs: Chan(Req)) -> IO(Unit):
+  (fx, g) = p
+  match g:
+    case Grp{outs, es, srv, ds, ws, up, tx, pb}:
+      aof_put.fx(List.reverse(&2, Sigma<&2, &2, Chan(Ans), _ => Ans>, outs), fx, List.reverse(&2, A.Ent, es), St{srv, ds, sel, ws, tx, pb, rw}, f, sync, reqs)
+
+@unsafe
+def aof_put.fx(outs: List<&2, Sigma<&2, &2, Chan(Ans), _ => Ans>>, fx: List<&2, List<&2, String>>, es: List<&2, A.Ent>, st: St, f: File, +sync: Sync, +reqs: Chan(Req)) -> IO(Unit):
+  match fx:
+    case Nil{}:
+      aof_put(outs, es, st, f, sync, reqs)
+    case Con{x, more}:
+      aof_write.fx(outs, x <> more, es, st, f, sync, reqs)
+
+@unsafe
+def aof_write.fx(outs: List<&2, Sigma<&2, &2, Chan(Ans), _ => Ans>>, +fx: List<&2, List<&2, String>>, +es: List<&2, A.Ent>, st: St, f: File, +sync: Sync, +reqs: Chan(Req)) -> IO(Unit):
+  +x = st
+  +sel = st.sel(x)
+  +bytes = A.encode(fx) ++ A.encode(A.ents.args(es, sel))
+  do IO<Unit>:
+    p : File & Result<&1, &1, U32 & String, Unit> <- File.write_raw(f, bytes)
+    aof_wrote(p, outs, st.aof(x, bytes, A.ents.sel(es, sel)), sync, reqs)
 
 @unsafe
 def aof_group.go(g: Grp, +sel: Nat, rw: Rw, f: File, +sync: Sync, +reqs: Chan(Req)) -> IO(Unit):
@@ -13585,11 +13687,21 @@ def rx.lg(+x: Rx) -> Log:
 # a rewrite begun: the snapshot of the databases as they are, its
 # temporary file (made empty), and the database the file has selected one
 # that is not there, so that the file's next entry comes after a SELECT
-# of its own (Redis's aof_selected_db = -1)
-def rx.begin(x: Rx, +tmp: String) -> Rx:
+# of its own (Redis's aof_selected_db = -1); the file starts with the
+# FUNCTION LOAD of each library (fl: their entries' bytes), as Redis's
+# rewriteFunctions writes them before the databases
+def rx.begin(x: Rx, +tmp: String, +fl: String) -> Rx:
   match x:
     case Rx{srv, +ds, sel, rw}:
-      Rx{srv, ds, R.ds.count(ds), rw.with(rw, Some{RwRun{Some{A.snap.of(ds)}, tmp, 0n, Nil{}, 0n, Nil{}}})}
+      Rx{srv, ds, R.ds.count(ds), rw.with(rw, Some{RwRun{Some{A.snap.of(ds)}, tmp, 0n, Bool.pick(List<&2, String>, String.is_empty(fl), Nil{}, [fl]), String.length(fl), Nil{}}})}
+
+# the FUNCTION LOAD of each library's code
+def rw.fn.loads(cs: List<&2, String>) -> List<&2, List<&2, String>>:
+  match cs:
+    case Nil{}:
+      Nil{}
+    case Con{c, rest}:
+      ["FUNCTION", "LOAD", c] <> rw.fn.loads(rest)
 
 def rx.slice(x: Rx, +want: Nat) -> Rx:
   match x:
@@ -13782,7 +13894,8 @@ def step.opened(m: Result<&1, &1, U32 & String, File>, +tmp: String, +x: Rx, f: 
       do IO<Maybe<&1, File> & Rx>:
         Unit <- File.close(t)
         Unit <- step.say(x, 2, "Background append only file rewriting started by pid " ++ U32.show(rx.pid(x)))
-        return (f, rx.begin(x, tmp))
+        cs : String <- L.Engine.fcodes()
+        return (f, rx.begin(x, tmp, A.encode(rw.fn.loads(fn.items(A.load(cs))))))
     case Fail{e}:
       step.fail(x, f, tmp, "Can't open the temporary file " ++ tmp ++ " for the AOF rewrite: " ++ err.msg(e))
 
@@ -14021,6 +14134,267 @@ def file.end(m: Maybe<&1, File>) -> IO(Unit):
     case None{}:
       IO.pure(Unit, Unit{})
 
+# The libraries at the start
+# --------------------------
+# A start from the append-only file runs its FUNCTION commands (LOAD,
+# DELETE, FLUSH and RESTORE, which the file holds as the server ran them:
+# Fni) in the engine, in the file's order, before it replays the other
+# entries; a refused entry's number counts them all. One that fails logs
+# Redis's line for an error to the client that loads the file
+# (afterErrorReply), and the start goes on; a load is held to no time,
+# as Redis holds no client it must obey. A start from the RDB file makes
+# the libraries the file held (D.FOk's libs) in turn, as FUNCTION LOAD
+# makes one without REPLACE and without its time (rdbFunctionLoad); one
+# that fails stops the start with Redis's lines, the offset after its
+# code the load's, and Redis's exit code (fn.start.fail). The actor starts with the mirror of the functions made
+# and INFO's facts of them (fn.start.state).
+
+# an entry the engine runs at the start: FUNCTION LOAD, DELETE, FLUSH or
+# RESTORE, as the parser reads it; any other, FUNCTION's other
+# subcommands too, is the replay's (and the check refuses those it must)
+type Fe is Data:
+  FeOn{k: Nat, xs: List<&2, String>}
+  FeOff{}
+
+def fe.of(c: R.Cmd) -> Fe:
+  match c:
+    case R.Own{R.SScript{+k, xs}}:
+      Bool.pick(Fe, Bool.or(Nat.is_eq(k, 11n), Bool.or(Nat.is_eq(k, 13n), Bool.or(Nat.is_eq(k, 14n), Nat.is_eq(k, 19n)))), FeOn{k, xs}, FeOff{})
+    case _:
+      FeOff{}
+
+def fe.at(on: Bool, +req: List<&2, String>) -> Fe:
+  match on:
+    case True{}:
+      fe.of(R.parse(req))
+    case False{}:
+      FeOff{}
+
+def fe(+req: List<&2, String>) -> Fe:
+  fe.at(R.is_word(T.first(req), "FUNCTION"), req)
+
+def fe.on(f: Fe) -> Bool:
+  match f:
+    case FeOn{k, xs}:
+      True{}
+    case FeOff{}:
+      False{}
+
+# the FUNCTION commands among the entries, oldest first
+def fe.keep(f: Fe, acc: List<&2, Fe>) -> List<&2, Fe>:
+  match f:
+    case FeOn{k, xs}:
+      FeOn{k, xs} <> acc
+    case FeOff{}:
+      acc
+
+def fe.list.go(reqs: List<&2, List<&2, String>>, acc: List<&2, Fe>) -> List<&2, Fe>:
+  match reqs:
+    case Nil{}:
+      List.reverse(&2, Fe, acc)
+    case Con{r, rest}:
+      fe.list.go(rest, fe.keep(fe(r), acc))
+
+def fe.list(reqs: List<&2, List<&2, String>>) -> List<&2, Fe>:
+  fe.list.go(reqs, Nil{})
+
+# whether any entry is one
+def fe.any(reqs: List<&2, List<&2, String>>, found: Bool) -> Bool:
+  match reqs found:
+    case _ True{}:
+      True{}
+    case Nil{} False{}:
+      False{}
+    case Con{r, rest} False{}:
+      fe.any(rest, fe.on(fe(r)))
+
+# the entries but the FUNCTION commands
+def fe.drop.at(on: Bool, r: List<&2, String>, acc: List<&2, List<&2, String>>) -> List<&2, List<&2, String>>:
+  match on:
+    case True{}:
+      acc
+    case False{}:
+      r <> acc
+
+def fe.drop.go(reqs: List<&2, List<&2, String>>, acc: List<&2, List<&2, String>>) -> List<&2, List<&2, String>>:
+  match reqs:
+    case Nil{}:
+      List.reverse(&2, List<&2, String>, acc)
+    case Con{+r, rest}:
+      fe.drop.go(rest, fe.drop.at(fe.on(fe(r)), r, acc))
+
+# the number among all the entries of the one i of those but the FUNCTION
+# commands (on: whether the first is one)
+def fe.head(reqs: List<&2, List<&2, String>>) -> Bool:
+  match reqs:
+    case Nil{}:
+      False{}
+    case Con{r, rest}:
+      fe.on(fe(r))
+
+def fe.index(reqs: List<&2, List<&2, String>>, on: Bool, i: Nat, +at: Nat) -> Nat:
+  match reqs on i:
+    case Nil{} _ _:
+      at
+    case Con{r, +rest} True{} j:
+      fe.index(rest, fe.head(rest), j, 1n+at)
+    case Con{r, rest} False{} 0n:
+      at
+    case Con{r, +rest} False{} 1n+j:
+      fe.index(rest, fe.head(rest), j, 1n+at)
+
+def fe.refused(+reqs: List<&2, List<&2, String>>, r: A.Replay) -> A.Replay:
+  match r:
+    case A.Replayed{ds}:
+      A.Replayed{ds}
+    case A.Refused{i, why}:
+      A.Refused{fe.index(reqs, fe.head(reqs), i, 0n), why}
+
+def fe.checked.if(any: Bool, +reqs: List<&2, List<&2, String>>, +n: Nat) -> A.Replay:
+  match any:
+    case False{}:
+      A.checked(reqs, n)
+    case True{}:
+      fe.refused(reqs, A.checked(fe.drop.go(reqs, Nil{}), n))
+
+# the start's replay (aof.bend: checked) of the entries but the FUNCTION
+# commands, which the engine ran (fn.start.aof), a refused entry numbered
+# among them all
+def fe.checked(+reqs: List<&2, List<&2, String>>, +n: Nat) -> A.Replay:
+  fe.checked.if(fe.any(reqs, False{}), reqs, n)
+
+# an error's text as Redis's line gives it: without the code ERR
+def fn.start.why(+s: String) -> String:
+  Bool.pick(String, String.eq(String.take(s, 4n), "ERR "), String.drop(s, 4n), s)
+
+# a run of loads at the start: its log lines written, then whether it
+# failed, and its text
+@unsafe
+def fn.start.run(st: L.Step, +lg: Log) -> IO(Bool & String):
+  match st:
+    case L.Step{+lw, +s}:
+      fn.start.run.at(U32.to_nat(U32.and(lw, 15)), lw, s, lg)
+
+@unsafe
+def fn.start.run.at(+k: Nat, +lw: U32, +s: String, +lg: Log) -> IO(Bool & String):
+  match k:
+    case 3n:
+      do IO<Bool & String>:
+        Unit <- log(lg, U32.and(U32.shrn(lw, 12n), 15), s)
+        st : L.Step <- L.Engine.next(1, "")
+        fn.start.run(st, lg)
+    case _:
+      IO.pure(Bool & String, (U32.is_ne(U32.and(lw, 256), 0), s))
+
+# a command of the file that failed: Redis's line (the error's first 4096
+# bytes), and the start goes on
+@unsafe
+def fn.start.said(fail: Bool, +lg: Log, +s: String, +cmd: String) -> IO(Unit):
+  match fail:
+    case False{}:
+      IO.pure(Unit, Unit{})
+    case True{}:
+      log(lg, 3, "== CRITICAL == This server is sending an error to its AOF-loading-client: '" ++ String.take(fn.start.why(s), 4096n) ++ "' after processing the command '" ++ cmd ++ "'")
+
+@unsafe
+def fn.start.done(r: Bool & String, +lg: Log, +cmd: String) -> IO(Unit):
+  (fail, +s) = r
+  fn.start.said(fail, lg, s, cmd)
+
+@unsafe
+def fn.start.loads(+lg: Log, +codes: List<&2, String>, +word: U32, +cmd: String) -> IO(Unit):
+  do IO<Unit>:
+    st : L.Step <- L.Engine.fload(sc.array(codes), word)
+    r : Bool & String <- fn.start.run(st, lg)
+    fn.start.done(r, lg, cmd)
+
+@unsafe
+def fn.start.lib(r: List<&2, String> & String, +lg: Log, +pol: String) -> IO(Unit):
+  (cs, +err) = r
+  fn.start.loads(lg, restore.codes(cs, err), restore.word(pol, err), "function|restore")
+
+@unsafe
+def fn.start.restore(ok: Bool, +lg: Log, +p: String, +pol: String) -> IO(Unit):
+  match ok:
+    case False{}:
+      fn.start.said(True{}, lg, "DUMP payload version or checksum are wrong", "function|restore")
+    case True{}:
+      fn.start.lib(D.lib.read(p), lg, pol)
+
+# a FUNCTION command of the file (k and xs as the parser reads it: fe)
+@unsafe
+def fn.start.one(+lg: Log, +k: Nat, +xs: List<&2, String>) -> IO(Unit):
+  match k:
+    case 11n:
+      L.Engine.fflush()
+    case 13n:
+      fn.start.loads(lg, [T.first(List.drop(&2, String, xs, 1n))], Bool.pick(U32, String.eq(T.first(xs), "1"), 1, 0), "function|load")
+    case 14n:
+      do IO<Unit>:
+        ok : U32 <- L.Engine.fdelete(T.first(xs))
+        fn.start.said(U32.is_eq(ok, 0), lg, "Library not found", "function|delete")
+    case _:
+      fn.start.restore(D.verify(T.first(xs)), lg, T.first(xs), T.first(List.drop(&2, String, xs, 1n)))
+
+@unsafe
+def fn.start.aof(+lg: Log, fs: List<&2, Fe>) -> IO(Unit):
+  match fs:
+    case Nil{}:
+      IO.pure(Unit, Unit{})
+    case Con{FeOn{+k, xs}, rest}:
+      do IO<Unit>:
+        Unit <- fn.start.one(lg, k, xs)
+        fn.start.aof(lg, rest)
+    case Con{FeOff{}, rest}:
+      fn.start.aof(lg, rest)
+
+# a library of the RDB file made, or the start stopped (at: the offset
+# after its code). Redis stops as it does for a read that fails
+# (rdbReportReadError), which runs redis-check-rdb on the file; the
+# check reads the libraries without making them, finds the file whole
+# and exits 0: so does the start
+@unsafe
+def fn.start.fail(d: D.FLd, +lg: Log) -> IO(Unit):
+  match d:
+    case D.FFail{ls}:
+      do IO<Unit>:
+        Unit <- rdb.log(lg, List.reverse(&2, D.FLine, ls))
+        IO.die(Unit, 0, "")
+    case D.FOk{dbs, ld, ex, em, libs, ls, sm}:
+      IO.pure(Unit, Unit{})
+
+@unsafe
+def fn.start.made(r: Bool & String, +lg: Log, +at: Nat) -> IO(Unit):
+  (fail, +s) = r
+  match fail:
+    case False{}:
+      IO.pure(Unit, Unit{})
+    case True{}:
+      fn.start.fail(D.fl.short(at, [D.FLine{3, "Failed loading library, " ++ fn.start.why(s)}]), lg)
+
+@unsafe
+def fn.start.rdb(+lg: Log, +len: Nat, libs: List<&2, D.FLib>) -> IO(Unit):
+  match libs:
+    case Nil{}:
+      IO.pure(Unit, Unit{})
+    case Con{D.FLib{code, +left}, rest}:
+      do IO<Unit>:
+        st : L.Step <- L.Engine.fload(sc.array([code]), 0)
+        r : Bool & String <- fn.start.run(st, lg)
+        Unit <- fn.start.made(r, lg, Nat.sub(len, String.length(left)))
+        fn.start.rdb(lg, len, rest)
+
+# the actor's state at its start: the mirror of the functions the start
+# made, and INFO's facts of them
+@unsafe
+def fn.start.state(srv: S.Srv, pb: Ps) -> IO(S.Srv & Ps):
+  do IO<S.Srv & Ps>:
+    fs : String <- L.Engine.ffuncs()
+    nl : U32 <- L.Engine.fcount(0)
+    vm : U32 <- L.Engine.fmem(0)
+    mo : U32 <- L.Engine.fmem(1)
+    IO.pure(S.Srv & Ps, fn.facts(fs, U32.to_nat(nl), U32.to_nat(vm), U32.to_nat(mo), srv, pb))
+
 # Restoring
 # ---------
 
@@ -14176,7 +14550,7 @@ def restore_revert(trunc: Bool, +lg: Log, +path: String, +size: Nat, +more: Nat,
     case True{}:
       do IO<R.Ds & Nat>:
         Unit <- log(lg, 3, "Revert incomplete MULTI/EXEC transaction in AOF file " ++ path)
-        restore_reverted(lg, path, size, String.length(A.encode(keep)), k, A.checked(keep, more))
+        restore_reverted(lg, path, size, String.length(A.encode(keep)), k, fe.checked(keep, more))
     case False{}:
       log.die(R.Ds & Nat, lg, uxeof(path))
 
@@ -14184,7 +14558,7 @@ def restore_revert(trunc: Bool, +lg: Log, +path: String, +size: Nat, +more: Nat,
 def restore_tx(open: Bool, ok: Bool, +lg: Log, +trunc: Bool, +path: String, +size: Nat, +more: Nat, +reqs: List<&2, List<&2, String>>, +kept: List<&2, List<&2, String>>, +k: Nat, +rest: String) -> IO(R.Ds & Nat):
   match open ok:
     case False{} _:
-      restore_checked(lg, trunc, path, size, List.length(&2, List<&2, String>, reqs), A.checked(reqs, more), rest)
+      restore_checked(lg, trunc, path, size, List.length(&2, List<&2, String>, reqs), fe.checked(reqs, more), rest)
     case True{} True{}:
       restore_revert(trunc, lg, path, size, more, kept, k)
     case True{} False{}:
@@ -14195,7 +14569,9 @@ def restore_load(+lg: Log, +trunc: Bool, +path: String, +size: Nat, +more: Nat, 
   (+reqs, +rest) = l
   +kept = A.untx(reqs)
   +k = List.length(&2, List<&2, String>, kept)
-  restore_tx(Nat.is_lt(k, List.length(&2, List<&2, String>, reqs)), Bool.or(String.is_empty(rest), cut_short(rest)), lg, trunc, path, size, more, reqs, kept, k, rest)
+  do IO<R.Ds & Nat>:
+    Unit <- fn.start.aof(lg, fe.list(kept))
+    restore_tx(Nat.is_lt(k, List.length(&2, List<&2, String>, reqs)), Bool.or(String.is_empty(rest), cut_short(rest)), lg, trunc, path, size, more, reqs, kept, k, rest)
 
 @unsafe
 def restore_read(+lg: Log, +trunc: Bool, +path: String, +more: Nat, p: File & String) -> IO(R.Ds & Nat):
@@ -14251,6 +14627,19 @@ def st.new(+srv: S.Srv, ds: R.Ds, rw: Rw) -> St:
   +x = ds
   St{srv, x, R.ds.index(x), WaitNone{}, TxNone{}, ps.tune(ps.new(), srv), rw}
 
+# and with the functions the start made (The libraries at the start)
+def st.fn.of(p: S.Srv & Ps, ds: R.Ds, +sel: Nat, ws: Waits, tx: Tx, rw: Rw) -> St:
+  (s2, pb) = p
+  St{s2, ds, sel, ws, tx, pb, rw}
+
+@unsafe
+def st.fn(st: St) -> IO(St):
+  match st:
+    case St{srv, ds, sel, ws, tx, pb, rw}:
+      do IO<St>:
+        p : S.Srv & Ps <- fn.start.state(srv, pb)
+        IO.pure(St, st.fn.of(p, ds, sel, ws, tx, rw))
+
 # the directory that holds the file synced, so that the file's name is on
 # the disk before the first write to it is acknowledged: File.open may
 # have just made the file, and a sync of the file does not make its
@@ -14276,7 +14665,8 @@ def open_aof(+path: String, +sync: Sync, srv: S.Srv, ds: R.Ds, +lg: Log, +pid: U
     Unit <- dir_synced(r, path, lg)
     Unit <- syncer(sync, path)
     +reqs : Chan(Req) <- Chan.new(Req, 1024)
-    Unit <- IO.spawn(Unit, aof_loop(st.new(srv, ds, rw.new(path, True{}, pid)), f, sync, reqs))
+    st : St <- st.fn(st.new(srv, ds, rw.new(path, True{}, pid)))
+    Unit <- IO.spawn(Unit, aof_loop(st, f, sync, reqs))
     return reqs
 
 # The RDB file on the disk
@@ -14429,7 +14819,8 @@ def rdb.opened(m: Result<&1, &1, U32 & String, File>, +lg: Log, +tmp: String, +n
       do IO<Bool>:
         t : U32 & U32 <- IO.clock()
         h : Nat & Nat <- IO.heap()
-        p : File & RdbW <- rdb.write(f, D.FSl{D.file.head(clock.secs(t), Pair.fst(Nat, Nat, h)), Some{D.FW{dbs, 0n, None{}}}}, sum, D.C{0, 0})
+        cs : String <- L.Engine.fcodes()
+        p : File & RdbW <- rdb.write(f, D.FSl{D.file.head(clock.secs(t), Pair.fst(Nat, Nat, h)) ++ D.lib.put(fn.items(A.load(cs)), ""), Some{D.FW{dbs, 0n, None{}}}}, sum, D.C{0, 0})
         rdb.written(p, lg, tmp, name)
 
 # the save of the databases dbs, as the parameters items say: whether it
@@ -14562,16 +14953,20 @@ def rdb.log(+lg: Log, ls: List<&2, D.FLine>) -> IO(Unit):
         Unit <- log(lg, level, msg)
         rdb.log(lg, rest)
 
+# (len: the file's length; the libraries are made before the load's last
+# line, Done loading RDB, as Redis makes each as it reads it)
 @unsafe
-def rdb.loaded(d: D.FLd, +t0: Nat, +lg: Log, info: I.Info, +more: Nat) -> IO(R.Ds & I.Info):
+def rdb.loaded(d: D.FLd, +t0: Nat, +lg: Log, info: I.Info, +more: Nat, +len: Nat) -> IO(R.Ds & I.Info):
   match d:
     case D.FFail{ls}:
       do IO<R.Ds & I.Info>:
         Unit <- rdb.log(lg, List.reverse(&2, D.FLine, ls))
         IO.die(R.Ds & I.Info, 1, "")
-    case D.FOk{dbs, +ld, +ex, em, ls, sm}:
+    case D.FOk{dbs, +ld, +ex, em, libs, +ls, sm}:
       do IO<R.Ds & I.Info>:
-        Unit <- rdb.log(lg, List.reverse(&2, D.FLine, ls))
+        Unit <- rdb.log(lg, List.reverse(&2, D.FLine, List.drop(&2, D.FLine, ls, 1n)))
+        Unit <- fn.start.rdb(lg, len, libs)
+        Unit <- rdb.log(lg, List.take(&2, D.FLine, ls, 1n))
         t1 : Nat <- IO.now()
         Unit <- log(lg, 2, "DB loaded from disk: " ++ secs3(Nat.sub(t1, t0)) ++ " seconds")
         IO.pure(R.Ds & I.Info, (rdb.ds(dbs, more), I.info.rdb.loaded(info, ld, ex)))
@@ -14607,7 +15002,7 @@ def rdb.start.read(p: File & String, +t0: Nat, +lg: Log, +items: List<&2, C.CIte
   do IO<R.Ds & I.Info>:
     Unit <- File.close(f)
     t : U32 & U32 <- IO.clock()
-    rdb.loaded(D.file.load(s, 1n+more, clock.ms(t), String.eq(T.cfg(items, "rdbchecksum"), "yes")), t0, lg, info, more)
+    rdb.loaded(D.file.load(s, 1n+more, clock.ms(t), String.eq(T.cfg(items, "rdbchecksum"), "yes")), t0, lg, info, more, String.length(s))
 
 @unsafe
 def rdb.start.none(none: Bool, +msg: String, +lg: Log, info: I.Info, +more: Nat) -> IO(R.Ds & I.Info):
@@ -14692,10 +15087,18 @@ def serve.aof(p: R.Ds & Nat, +path: String, +sync: Sync, +items: List<&2, C.CIte
     +reqs : Chan(Req) <- open_aof(path, sync, S.srv_of(items, I.info.restored(info, size)), ds, lg, pid)
     accept_all(ls, reqs, post, lg, tl, items)
 
-# the actor without a file, its Pub/Sub's state told of maxmemory
+# the actor without a file, its Pub/Sub's state told of maxmemory, with
+# the functions the start made (The libraries at the start)
+@unsafe
+def db_start.go(p: S.Srv & Ps, ds: R.Ds, rw: Rw, +reqs: Chan(Req)) -> IO(Unit):
+  (s2, pb) = p
+  db_loop(s2, ds, WaitNone{}, TxNone{}, pb, rw, reqs)
+
 @unsafe
 def db_start(+srv: S.Srv, ds: R.Ds, rw: Rw, +reqs: Chan(Req)) -> IO(Unit):
-  db_loop(srv, ds, WaitNone{}, TxNone{}, ps.tune(ps.new(), srv), rw, reqs)
+  do IO<Unit>:
+    p : S.Srv & Ps <- fn.start.state(srv, ps.tune(ps.new(), srv))
+    db_start.go(p, ds, rw, reqs)
 
 # the databases after the first (databases less one)
 def dbs.more(+items: List<&2, C.CItem>) -> Nat:

@@ -1517,45 +1517,59 @@ def boot.start(+b: Boot) -> U32:
 # its clients' ids and the BCAST prefixes (CLIENT TRACKING); and the
 # engine's facts of scripts, as the actor read them last (server.bend,
 # Scripts): the scripts cached (scn), the Lua state's bytes (scm) and the
-# cache's (scc). CnOf, a count that holds a count, is never built: it
-# makes Cn a node of its own, one word of Info.
+# cache's (scc); and of functions, as the actor read them after the last
+# change of the libraries (FUNCTION LOAD, DELETE, FLUSH, RESTORE, or the
+# start): how many functions (fnn) and libraries (fnl), the bytes of the
+# functions' Lua state (fvm) and of their records (fmo). CnOf, a count
+# that holds a count, is never built: it makes Cn a node of its own, one
+# word of Info.
 type Cn is Data:
-  Cn{blk: Nat, tmo: Nat, tc: Nat, tk: Nat, ti: Nat, tp: Nat, scn: Nat, scm: Nat, scc: Nat}
+  Cn{blk: Nat, tmo: Nat, tc: Nat, tk: Nat, ti: Nat, tp: Nat, scn: Nat, scm: Nat, scc: Nat, fnn: Nat, fnl: Nat, fvm: Nat, fmo: Nat}
   CnOf{c: Cn}
 
 def cn.zero() -> Cn:
-  Cn{0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n}
+  Cn{0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n}
 
 def cn.waits(c: Cn, +n: Nat, +t: Nat) -> Cn:
   match c:
-    case Cn{b, o, tc, tk, ti, tp, sn, sm, sc}:
-      Cn{n, t, tc, tk, ti, tp, sn, sm, sc}
+    case Cn{b, o, tc, tk, ti, tp, sn, sm, sc, fn, fl, fv, fm}:
+      Cn{n, t, tc, tk, ti, tp, sn, sm, sc, fn, fl, fv, fm}
     case CnOf{x}:
       cn.waits(x, n, t)
 
 def cn.trk(c: Cn, +a: Nat, +b: Nat, +d: Nat, +e: Nat) -> Cn:
   match c:
-    case Cn{n, t, tc, tk, ti, tp, sn, sm, sc}:
-      Cn{n, t, a, b, d, e, sn, sm, sc}
+    case Cn{n, t, tc, tk, ti, tp, sn, sm, sc, fn, fl, fv, fm}:
+      Cn{n, t, a, b, d, e, sn, sm, sc, fn, fl, fv, fm}
     case CnOf{x}:
       cn.trk(x, a, b, d, e)
 
 def cn.scripts(c: Cn, +k: Nat, +m: Nat, +e: Nat) -> Cn:
   match c:
-    case Cn{n, t, tc, tk, ti, tp, sn, sm, sc}:
-      Cn{n, t, tc, tk, ti, tp, k, m, e}
+    case Cn{n, t, tc, tk, ti, tp, sn, sm, sc, fn, fl, fv, fm}:
+      Cn{n, t, tc, tk, ti, tp, k, m, e, fn, fl, fv, fm}
     case CnOf{x}:
       cn.scripts(x, k, m, e)
 
+def cn.funcs(c: Cn, +a: Nat, +b: Nat, +d: Nat, +e: Nat) -> Cn:
+  match c:
+    case Cn{n, t, tc, tk, ti, tp, sn, sm, sc, fn, fl, fv, fm}:
+      Cn{n, t, tc, tk, ti, tp, sn, sm, sc, a, b, d, e}
+    case CnOf{x}:
+      cn.funcs(x, a, b, d, e)
+
 # a count of c: 0 the clients that wait, 1 those with a time, 2 those
 # that track, 3 the table's keys, 4 its ids, 5 the prefixes, 6 the
-# scripts cached, 7 the Lua state's bytes, 8 the cache's
+# scripts cached, 7 the Lua state's bytes, 8 the cache's, 9 the
+# functions, 10 the libraries, 11 the functions' Lua state's bytes, 12
+# their records'
 def cn.at(+c: Cn, +i: Nat) -> Nat:
   match c:
-    case Cn{+n, +t, +tc, +tk, +ti, +tp, +sn, +sm, +sc}:
+    case Cn{+n, +t, +tc, +tk, +ti, +tp, +sn, +sm, +sc, +fn, +fl, +fv, +fm}:
       Bool.pick(Nat, Nat.is_eq(i, 0n), n, Bool.pick(Nat, Nat.is_eq(i, 1n), t, Bool.pick(Nat, Nat.is_eq(i, 2n), tc,
       Bool.pick(Nat, Nat.is_eq(i, 3n), tk, Bool.pick(Nat, Nat.is_eq(i, 4n), ti, Bool.pick(Nat, Nat.is_eq(i, 5n), tp,
-      Bool.pick(Nat, Nat.is_eq(i, 6n), sn, Bool.pick(Nat, Nat.is_eq(i, 7n), sm, sc))))))))
+      Bool.pick(Nat, Nat.is_eq(i, 6n), sn, Bool.pick(Nat, Nat.is_eq(i, 7n), sm, Bool.pick(Nat, Nat.is_eq(i, 8n), sc,
+      Bool.pick(Nat, Nat.is_eq(i, 9n), fn, Bool.pick(Nat, Nat.is_eq(i, 10n), fl, Bool.pick(Nat, Nat.is_eq(i, 11n), fv, fm))))))))))))
     case CnOf{+x}:
       cn.at(x, i)
 
@@ -2013,6 +2027,13 @@ def live.scripts(l: Live, +n: Nat, +m: Nat, +c: Nat) -> Live:
     case ILive{secs, usec, ut, st, mut, mst, rss, heap, act, conns, clients, cn}:
       ILive{secs, usec, ut, st, mut, mst, rss, heap, act, conns, clients, cn.scripts(cn, n, m, c)}
 
+# the engine's facts of functions: a functions in b libraries, the bytes
+# of their Lua state (d) and of their records (e)
+def live.funcs(l: Live, +a: Nat, +b: Nat, +d: Nat, +e: Nat) -> Live:
+  match l:
+    case ILive{secs, usec, ut, st, mut, mst, rss, heap, act, conns, clients, cn}:
+      ILive{secs, usec, ut, st, mut, mst, rss, heap, act, conns, clients, cn.funcs(cn, a, b, d, e)}
+
 def info.live(i: Info, +l: Live) -> Info:
   match i:
     case IInfo{b, old, c, inst, pk, c0, a0, a, st, ex, rw, tm, rf}:
@@ -2057,6 +2078,12 @@ def info.scripts(i: Info, +n: Nat, +m: Nat, +c: Nat) -> Info:
   match i:
     case IInfo{b0, l, c0, inst, pk, d0, a0, a1, st, ex, rw, tm, rf}:
       IInfo{b0, live.scripts(l, n, m, c), c0, inst, pk, d0, a0, a1, st, ex, rw, tm, rf}
+
+# and of functions (live.funcs)
+def info.funcs(i: Info, +a: Nat, +b: Nat, +d: Nat, +e: Nat) -> Info:
+  match i:
+    case IInfo{b0, l, c0, inst, pk, d0, a0, a1, st, ex, rw, tm, rf}:
+      IInfo{b0, live.funcs(l, a, b, d, e), c0, inst, pk, d0, a0, a1, st, ex, rw, tm, rf}
 
 # a call of code k that failed after it was counted: a blocked client
 # that CLIENT UNBLOCK unblocked (Redis's updateStatsOnUnblock)
@@ -2555,8 +2582,9 @@ def ratio(+a: Nat, +b: Nat) -> String:
   fix2(Nat.show(a), Nat.max(b, 1n))
 
 # (lua: the Lua state's bytes, scripts: the cache's, n: the scripts
-# cached; functions are none)
-def sec.memory.go(+items: List<&2, C.CItem>, +used: Nat, +pk: Nat, +used0: Nat, +rss: Nat, +act: Nat, +sysmem: Nat, +lua: Nat, +scripts: Nat, +n: Nat) -> String:
+# cached; nf functions in nl libraries, the bytes of their Lua state, fvm,
+# and of their records, fmo)
+def sec.memory.go(+items: List<&2, C.CItem>, +used: Nat, +pk: Nat, +used0: Nat, +rss: Nat, +act: Nat, +sysmem: Nat, +lua: Nat, +scripts: Nat, +n: Nat, +nf: Nat, +nl: Nat, +fvm: Nat, +fmo: Nat) -> String:
   +data = Nat.sub(used, used0)
   +net = Bool.pick(Nat, Nat.is_lt(used0, used), Nat.sub(used, used0), 1n)
   "# Memory\r\n" ++ kv("used_memory", Nat.show(used)) ++ kv("used_memory_human", human(Nat.show(used))) ++
@@ -2568,10 +2596,10 @@ def sec.memory.go(+items: List<&2, C.CItem>, +used: Nat, +pk: Nat, +used0: Nat, 
   kv("allocator_allocated", Nat.show(used)) ++ kv("allocator_active", Nat.show(act)) ++ kv("allocator_resident", Nat.show(rss)) ++
   kv("total_system_memory", Nat.show(sysmem)) ++ kv("total_system_memory_human", human(Nat.show(sysmem))) ++
   kv("used_memory_lua", Nat.show(lua)) ++ kv("used_memory_vm_eval", Nat.show(lua)) ++ kv("used_memory_lua_human", human(Nat.show(lua))) ++
-  kv("used_memory_scripts_eval", Nat.show(scripts)) ++ kv("number_of_cached_scripts", Nat.show(n)) ++ kv("number_of_functions", "0") ++
-  kv("number_of_libraries", "0") ++ kv("used_memory_vm_functions", "0") ++ kv("used_memory_vm_total", Nat.show(lua)) ++
-  kv("used_memory_vm_total_human", human(Nat.show(lua))) ++ kv("used_memory_functions", "0") ++ kv("used_memory_scripts", Nat.show(scripts)) ++
-  kv("used_memory_scripts_human", human(Nat.show(scripts))) ++ kv("maxmemory", signed64(cfg(items, "maxmemory"))) ++
+  kv("used_memory_scripts_eval", Nat.show(scripts)) ++ kv("number_of_cached_scripts", Nat.show(n)) ++ kv("number_of_functions", Nat.show(nf)) ++
+  kv("number_of_libraries", Nat.show(nl)) ++ kv("used_memory_vm_functions", Nat.show(fvm)) ++ kv("used_memory_vm_total", Nat.show(Nat.add(lua, fvm))) ++
+  kv("used_memory_vm_total_human", human(Nat.show(Nat.add(lua, fvm)))) ++ kv("used_memory_functions", Nat.show(fmo)) ++ kv("used_memory_scripts", Nat.show(Nat.add(scripts, fmo))) ++
+  kv("used_memory_scripts_human", human(Nat.show(Nat.add(scripts, fmo)))) ++ kv("maxmemory", signed64(cfg(items, "maxmemory"))) ++
   kv("maxmemory_human", human(cfg(items, "maxmemory"))) ++ kv("maxmemory_policy", cfg(items, "maxmemory-policy")) ++
   kv("allocator_frag_ratio", ratio(act, used)) ++ kv("allocator_frag_bytes", Nat.show(Nat.sub(act, used))) ++
   kv("allocator_rss_ratio", ratio(rss, act)) ++ kv("allocator_rss_bytes", sdiff(rss, act)) ++
@@ -2585,7 +2613,7 @@ def sec.memory.go(+items: List<&2, C.CItem>, +used: Nat, +pk: Nat, +used0: Nat, 
 def sec.memory(+items: List<&2, C.CItem>, +b: Boot, +l: Live, +pk: Nat) -> String:
   match b:
     case IBoot{os, pid, run, replid, exe, conf, +sysmem, start, +heap0}:
-      sec.memory.go(items, live.heap(l), Nat.max(pk, live.heap(l)), heap0, live.rss(l), live.act(l), sysmem, live.cn(l, 7n), live.cn(l, 8n), live.cn(l, 6n))
+      sec.memory.go(items, live.heap(l), Nat.max(pk, live.heap(l)), heap0, live.rss(l), live.act(l), sysmem, live.cn(l, 7n), live.cn(l, 8n), live.cn(l, 6n), live.cn(l, 9n), live.cn(l, 10n), live.cn(l, 11n), live.cn(l, 12n))
 
 def sec.aof(on: Bool, +a0: Nat, +a: Nat, +sched: Bool) -> String:
   match on:

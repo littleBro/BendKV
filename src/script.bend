@@ -83,9 +83,11 @@ def Engine.cache_mem() -> IO(U32):
 
 # the first step of a run of loads, the libraries' codes a RESP array;
 # word: how to take them in (bits 0 to 2: 0 FUNCTION LOAD, 1 with REPLACE,
-# 2 RESTORE's APPEND, 3 its REPLACE, 4 its FLUSH) and whether FUNCTION
-# LOAD's limit of 500 ms holds them (bit 3); done with the library's name
-# (LOAD) or nothing, or with bit 8 an error's text
+# 2 RESTORE's APPEND, 3 its REPLACE, 4 its FLUSH), whether FUNCTION LOAD's
+# limit of 500 ms holds them (bit 3), and whether the last code is the
+# error's text of RESTORE's read that failed after the others (bit 4);
+# done with the library's name (LOAD) or nothing, or with bit 8 an error's
+# text
 def Engine.fload(codes: String, word: U32) -> IO(Step):
   import "./lua/engine.c"
   import "./lua/engine.js"

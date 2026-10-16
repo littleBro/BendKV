@@ -373,6 +373,7 @@ typedef struct {
   size_t codes_len;
   int policy;          // how a load takes them in: FN_LOAD to FN_FLUSH
   int timed;           // a load held to FUNCTION LOAD's 500 ms
+  int tail;            // its last code the error of a read that failed
 #ifdef SC_ASAN
   void* host_fake;
   void* me_fake;
@@ -2597,8 +2598,11 @@ static void fn_load_main(ScRun* r) {
     r->err = 1;
     return;
   }
+  // (a library's redis.log leaves its line in out: each answer clears it)
   if (r->policy == FN_LOAD || r->policy == FN_LOAD_REPLACE) {
-    if (codes.count == 1 && fn_create(codes.p[0], codes.n[0], r->policy == FN_LOAD_REPLACE, &fn_cur, r->timed, &err)) {
+    int ok = codes.count == 1 && fn_create(codes.p[0], codes.n[0], r->policy == FN_LOAD_REPLACE, &fn_cur, r->timed, &err);
+    sc_buf_clear(&r->out);
+    if (ok) {
       FnLib* li = fn_cur.libs[fn_cur.n - 1];
       sc_buf_str(&r->out, li->name);
     } else {
@@ -2607,10 +2611,19 @@ static void fn_load_main(ScRun* r) {
       r->err = 1;
     }
   } else {
+    // RESTORE's libraries made in a set of their own, in turn; a read of
+    // the payload that failed after them (the last code, its error's
+    // text: tail) fails it once they are made, as Redis's loop makes each
+    // library it reads before it reads the next
     FnCtx tmp = { NULL, 0 };
     int ok = 1;
-    for (int j = 0; j < codes.count && ok; j += 1) {
+    int made = codes.count - (r->tail && codes.count > 0 ? 1 : 0);
+    for (int j = 0; j < made && ok; j += 1) {
       ok = fn_create(codes.p[j], codes.n[j], 0, &tmp, r->timed, &err);
+    }
+    if (ok && made < codes.count) {
+      sc_buf_add(&err, codes.p[made], codes.n[made]);
+      ok = 0;
     }
     if (ok && r->policy == FN_FLUSH) {
       fn_ctx_clear(&fn_cur);
@@ -2620,6 +2633,7 @@ static void fn_load_main(ScRun* r) {
     } else if (ok) {
       ok = fn_join(&fn_cur, &tmp, r->policy == FN_REPLACE, &err);
     }
+    sc_buf_clear(&r->out);
     if (!ok) {
       sc_buf_str(&r->out, "ERR ");
       sc_buf_add(&r->out, err.p == NULL ? "" : err.p, err.n);
@@ -2949,6 +2963,11 @@ static void __attribute__((constructor)) engine_cache_mem_use(void) {
 
 // Functions' effects
 // ------------------
+// Only a load makes the functions' Lua state (fn_ensure); the others read
+// or change the libraries there are, none before the first load, so that
+// a server that runs no function, and a start that finds none to load,
+// make no state (Redis makes it at its start: an empty one, whose bytes
+// INFO shows as used_memory_vm_functions; BendKV's is 0 until a load)
 
 // stringmatchlen, with the bound on nesting of Redis's fix for
 // CVE-2024-31228 (in the 7.0.15 the tests run against): FUNCTION LIST's
@@ -3170,10 +3189,12 @@ static Term fn_buf_term(Env e, ScBuf* b) {
 #ifdef CID(Engine.fload)
 
 // Engine.fload(codes, word): a run of loads, its libraries' codes a RESP
-// array; word: how to take them in (bits 0 to 2: FN_LOAD to FN_FLUSH) and
-// whether FUNCTION LOAD's limit of 500 ms holds them (bit 3). Its steps
-// are log lines and done, with the library's name (FN_LOAD and
-// FN_LOAD_REPLACE) or nothing, or an error's text.
+// array; word: how to take them in (bits 0 to 2: FN_LOAD to FN_FLUSH),
+// whether FUNCTION LOAD's limit of 500 ms holds them (bit 3), and whether
+// the last code is the error's text of RESTORE's read that failed after
+// the others (bit 4). Its steps are log lines and done, with the
+// library's name (FN_LOAD and FN_LOAD_REPLACE) or nothing, or an error's
+// text.
 Term engine_fload_run(Env e, Term* f, IoWork* w) {
   (void)w;
   sc_ensure();
@@ -3192,6 +3213,7 @@ Term engine_fload_run(Env e, Term* f, IoWork* w) {
   r->mode = SC_MODE_LOAD;
   r->policy = (int)(word & 7);
   r->timed = (int)((word >> 3) & 1);
+  r->tail = (int)((word >> 4) & 1);
   r->resp = 2;
   r->repl = SC_REPL_AOF | SC_REPL_REPLICA;
   r->killed = 0;
@@ -3230,7 +3252,6 @@ static void __attribute__((constructor)) engine_fload_use(void) {
 // Engine.fdelete(name): FUNCTION DELETE; 1 when the library was there
 Term engine_fdelete_run(Env e, Term* f, IoWork* w) {
   (void)w;
-  fn_ensure();
   u64 n = 0;
   char* name = io_craw(e, f[0], &n);
   Term out = (Term)0;
@@ -3257,7 +3278,6 @@ static void __attribute__((constructor)) engine_fdelete_use(void) {
 // Engine.fflush(): FUNCTION FLUSH, every library gone
 Term engine_fflush_run(Env e, Term* f, IoWork* w) {
   (void)e; (void)f; (void)w;
-  fn_ensure();
   fn_ctx_clear(&fn_cur);
   return term_pak(CID(Unit), 0);
 }
@@ -3274,7 +3294,6 @@ static void __attribute__((constructor)) engine_fflush_use(void) {
 // (bit 0), LIBRARYNAME given (bit 1), the protocol (bits 4 to 7)
 Term engine_flist_run(Env e, Term* f, IoWork* w) {
   (void)w;
-  fn_ensure();
   u64 n = 0;
   char* pat = io_craw(e, f[0], &n);
   u64 word = (u64)f[1];
@@ -3311,7 +3330,6 @@ static void __attribute__((constructor)) engine_flist_use(void) {
 // Engine.fcodes(): the libraries' codes, a RESP array
 Term engine_fcodes_run(Env e, Term* f, IoWork* w) {
   (void)f; (void)w;
-  fn_ensure();
   ScBuf b = { 0 };
   fn_codes_out(&b);
   return fn_buf_term(e, &b);
@@ -3329,7 +3347,6 @@ static void __attribute__((constructor)) engine_fcodes_use(void) {
 // of each one's name in lower case and its flags in decimal
 Term engine_ffuncs_run(Env e, Term* f, IoWork* w) {
   (void)f; (void)w;
-  fn_ensure();
   ScBuf b = { 0 };
   sc_buf_fmt(&b, "*%d\r\n", 2 * fn_count(&fn_cur));
   for (int i = 0; i < fn_cur.n; i += 1) {
@@ -3362,7 +3379,6 @@ static void __attribute__((constructor)) engine_ffuncs_use(void) {
 // Engine.fcount(which): the libraries (0) or the functions (1)
 Term engine_fcount_run(Env e, Term* f, IoWork* w) {
   (void)e; (void)w;
-  fn_ensure();
   u64 which = (u64)f[0];
   return (Term)(u64)(which == 0 ? fn_cur.n : fn_count(&fn_cur));
 }
@@ -3382,11 +3398,12 @@ static void __attribute__((constructor)) engine_fcount_use(void) {
 // that hold them)
 Term engine_fmem_run(Env e, Term* f, IoWork* w) {
   (void)e; (void)w;
-  fn_ensure();
   u64 which = (u64)f[0];
   u64 out = 0;
   if (which == 0) {
-    out = (u64)lua_gc(fn_lua, LUA_GCCOUNT, 0) * 1024 + (u64)lua_gc(fn_lua, LUA_GCCOUNTB, 0);
+    if (fn_lua != NULL) {
+      out = (u64)lua_gc(fn_lua, LUA_GCCOUNT, 0) * 1024 + (u64)lua_gc(fn_lua, LUA_GCCOUNTB, 0);
+    }
   } else {
     for (int i = 0; i < fn_cur.n; i += 1) {
       FnLib* li = fn_cur.libs[i];

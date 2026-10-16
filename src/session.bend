@@ -669,6 +669,13 @@ def srv.scripts(s: Srv, +n: Nat, +m: Nat, +c: Nat) -> Srv:
     case Srv{pass, cfg, info, mm}:
       Srv{pass, cfg, I.info.scripts(info, n, m, c), mm}
 
+# the engine's facts of functions (server.bend, Scripts): a functions in
+# b libraries, the bytes of their Lua state (d) and of their records (e)
+def srv.funcs(s: Srv, +a: Nat, +b: Nat, +d: Nat, +e: Nat) -> Srv:
+  match s:
+    case Srv{pass, cfg, info, mm}:
+      Srv{pass, cfg, I.info.funcs(info, a, b, d, e), mm}
+
 # the tracking's counts, for INFO (server.bend: Tracking)
 def srv.tracking(s: Srv, +a: Nat, +b: Nat, +d: Nat, +e: Nat) -> Srv:
   match s:
