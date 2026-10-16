@@ -223,9 +223,10 @@ optimizations*. What is "risky" in C becomes a theorem:
   section 7). Each shard owned its event loop; a heap of its own, as BEAM processes
   have, would also keep terms from crossing cores.
 - **Snapshots for free.** The trie is persistent, so an old root is a consistent
-  snapshot. That gives BGSAVE without `fork()`, rollback for MULTI/EXEC, and readers
-  on other threads without locks. Nodes shared across threads need atomic reference
-  counts; Lean marks such objects and keeps plain counts for the rest.
+  snapshot. That gives BGSAVE without `fork()` (done, [FINDINGS.md](FINDINGS.md),
+  section 3zzzk), rollback for MULTI/EXEC, and readers on other threads without locks.
+  Nodes shared across threads need atomic reference counts; Lean marks such objects
+  and keeps plain counts for the rest.
 - **Interleaving in the runtime.** Bend's runtime already runs code as segments with
   explicit continuations, which are coroutines in all but name. At a load that will
   probably miss, the runtime could issue a prefetch and switch to another pure task.
@@ -317,13 +318,17 @@ Where performance and proof meet: **batched execution under proved laws.**
    RESP3 (done, section 3zx), SORT and SORT_RO (done, section 3zzh), HyperLogLogs (done,
    section 3zzj), CLIENT PAUSE and UNPAUSE (done, section 3zzk), the administrative
    commands LASTSAVE, ROLE, WAIT, SHUTDOWN, MEMORY and LOLWUT (done, section 3zzl),
-   GEO (done, section 3zzm), DUMP and RESTORE (done, section 3zzu), and the slow log and
-   the latency monitor (done, section 3zzz), measured by Redis's
+   GEO (done, section 3zzm), DUMP and RESTORE (done, section 3zzu), the slow log and
+   the latency monitor (done, section 3zzz), the RDB file with SAVE, the saves of
+   SHUTDOWN and FLUSHALL and its load at the start (done, section 3zzzc), CLIENT TRACKING
+   (done, section 3zzzb), ACL users (done, section 3zzzh), BGSAVE and the save points
+   (done, section 3zzzk), measured by Redis's
    own test suite run against BendKV and by client libraries' test suites (redis-py's and
    go-redis's, in CI: done, section 3zy).
-   Lua, streams, cluster, replication and modules are out of scope. The suite's count: of the 1,677 tests
-   Redis 7.0.15 passes against a server it did not start, BendKV passes 1,292, 1,289 of
-   the 1,355 in what it has ([COMPATIBILITY.md](COMPATIBILITY.md)); most of the other 66
+   Streams are under way: a stream is a value BendKV holds (section 3zzzu), its commands
+   next. Lua, cluster, replication and modules are out of scope. The suite's count: of the 1,677 tests
+   Redis 7.0.15 passes against a server it did not start, BendKV passes 1,305, 1,302 of
+   the 1,365 in what it has ([COMPATIBILITY.md](COMPATIBILITY.md)); most of the other 63
    need commands BendKV does not have (replication's SYNC, Lua, streams) or run after a
    test that left its client in MULTI on one of them.
    What maxmemory left to do (section 3zw): a delete takes the nodes it empties now
@@ -372,8 +377,14 @@ Where performance and proof meet: **batched execution under proved laws.**
    each copying a path and dropping the old one, and the read of a request of a large
    value counts its pieces' bytes one at a time (PERFORMANCE.md, section 62). The timing
    of calls costs a request without a pipeline 13% more instructions (section 3zzz): a
-   window's check and update take about 1,300 (PERFORMANCE.md, section 64). Next within
-   the scope: CLIENT TRACKING, and ACL's users.
+   window's check and update take about 1,300 (PERFORMANCE.md, section 64). CLIENT
+   TRACKING leaves the batches on keys no client tracks the fast way (section 3zzzb); a
+   tracking client's own commands, and every batch while a client is in BCAST mode, run
+   the general way, a command at a time (PERFORMANCE.md, section 66). ACL users cost
+   nothing while no client's user is restricted (section 3zzzh); while one is, its
+   batches run the general way, each call checked against its user's selectors, and the
+   client of each other batch is looked up by its id in a trie of the restricted
+   (PERFORMANCE.md, section 70). Next within the scope: the query buffer's limits.
 
 After that comes proving the native strings (section 5, step 1): a small piece of
 work that makes the word "verified" much stronger.

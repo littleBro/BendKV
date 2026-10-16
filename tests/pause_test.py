@@ -25,6 +25,15 @@ order in which the clients held back go on; a client held back whose
 connection closes, and one killed; errors of the parser, answered at
 once.
 
+A monitor made before a pause of every command ends it (Mon): no pause
+holds a monitor back, while a client made during such a pause would have
+its SELECT, and its MONITOR, held back with the rest. A monitor turns
+BendKV's fast way off for every client, so one is connected only around
+the three pauses of every command that no client of a scenario can end
+(scenarios 8, 9 and 13): the other scenarios run the fast way.
+A scenario that raises fails the test, on either server: one that raised
+on both used to end both transcripts alike after the second scenario.
+
 The checks of BendKV alone: CLIENT UNBLOCK of a client held back answers
 0 and leaves it held back (Redis 7.0.15 crashes on it); EVAL of a script
 BendKV does not run is answered at once under a pause of writes (Redis
@@ -54,13 +63,49 @@ def expired(r):
     return int(info_lines(r, "stats", "expired_keys:")[0].split(":")[1])
 
 
-def unpause(port):
-    """The pause ended whatever it is: a monitor's CLIENT UNPAUSE, which
-    no pause holds back."""
-    m = Client(port, None)
-    m.cmd("MONITOR")
-    m.cmd("CLIENT", "UNPAUSE")
-    m.close()
+def listed(r, c, cs):
+    """c's line of CLIENT LIST as client_test reads it, its age put aside:
+    the scenarios before scenario 4 take about two seconds, so c's age falls
+    on either side of client_test's mark of 2 on either server."""
+    got = norm(r.cmd("CLIENT", "LIST", "ID", c.id), cs)
+    return [re.sub(r"\bage=\S+", "age=X", l) for l in got] if isinstance(got, list) else got
+
+
+# a line a monitor is fed: "+<time> [<db> <addr>] <command>"
+FEED = re.compile(r"^\+\d+\.\d+ \[")
+
+
+class Mon:
+    """A monitor, made before a pause of every command: no pause holds a
+    monitor back (Redis never pauses a replica), so its CLIENT UNPAUSE ends
+    such a pause, which holds back a new client's MONITOR too. Its replies
+    are read past the lines it is fed. It is used in a with statement: an
+    exception in it ends the pause before the monitor closes."""
+
+    def __init__(self, port):
+        self.c = Client(port, None)
+        self.first = self.c.cmd("MONITOR")
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, kind, value, tb):
+        if kind is not None:
+            self.cmd("CLIENT", "UNPAUSE")
+        self.close()
+        return False
+
+    def cmd(self, *args):
+        while self.c.read(0.05) != "TIMEOUT":
+            pass
+        self.c.send(*args)
+        while True:
+            x = self.c.read()
+            if not (isinstance(x, str) and FEED.match(x)):
+                return x
+
+    def close(self):
+        self.c.close()
 
 
 def scenarios(port, log):
@@ -79,7 +124,7 @@ def scenarios(port, log):
     log("2 reads", a.cmd("GET", "z"), a.cmd("EXISTS", "z"), a.cmd("PING"), a.cmd("CLIENT", "GETNAME"))
     a.send("SET", "x", "1")
     log("2 held", wait_blocked(r, 1), a.read(0.2))
-    log("2 list", norm(r.cmd("CLIENT", "LIST", "ID", a.id), [a, b]))
+    log("2 list", listed(r, a, [a, b]))
     log("2 stats", stats(r))
     b.send("PFCOUNT", "h")
     log("2 pfcount", wait_blocked(r, 2))
@@ -93,12 +138,13 @@ def scenarios(port, log):
     r.cmd("CLIENT", "UNPAUSE")
     log("2 publish", a.read(), wait_blocked(r, 1))
     log("2 push", r.cmd("RPUSH", "bl", "v"), b.read())
-    # 3. a pause of every command, to its end
+    # 3. a pause of every command, to its end (the client that QUITs made
+    # before it, as the pause would hold its SELECT back)
+    q = Client(port, None)
     t0 = time.time()
     log("3 pause", r.cmd("CLIENT", "PAUSE", "500", "ALL"))
     a.send("PING")
     b.send("CLIENT", "UNPAUSE")
-    q = Client(port)
     q.send("QUIT")
     log("3 held", a.read(0.1), b.read(0.1), q.read(0.1))
     log("3 ended", a.read(), b.read(), q.read(), 0.4 < time.time() - t0 < 2.0)
@@ -112,7 +158,7 @@ def scenarios(port, log):
     log("4 multi", a.cmd("MULTI"), a.cmd("GET", "x"))
     a.send("SET", "x", "2")
     log("4 set held", a.read(0.2), wait_blocked(r, 1))
-    log("4 list", norm(r.cmd("CLIENT", "LIST", "ID", a.id), [a, b]))
+    log("4 list", listed(r, a, [a, b]))
     r.cmd("CLIENT", "UNPAUSE")
     log("4 set queued", a.read())
     r.cmd("CLIENT", "PAUSE", "100000", "WRITE")
@@ -146,16 +192,15 @@ def scenarios(port, log):
     # 8. a client with a subscription; PUBLISH
     s = Client(port)
     log("8 subscribe", s.cmd("SUBSCRIBE", "ch"))
-    r.cmd("CLIENT", "PAUSE", "100000", "ALL")
-    log("8 get", s.cmd("GET", "x"))
-    s.send("SUBSCRIBE", "ch2")
-    log("8 held", s.read(0.2))
-    s.send("PING")
-    m = Client(port)
-    log("8 monitor", m.cmd("MONITOR"))
-    log("8 unpause", m.cmd("CLIENT", "UNPAUSE"), s.read(), s.read())
-    log("8 monitor get", m.cmd("GET", "x"))
-    m.close()
+    with Mon(port) as mon:
+        log("8 monitor", mon.first)
+        r.cmd("CLIENT", "PAUSE", "100000", "ALL")
+        log("8 get", s.cmd("GET", "x"))
+        s.send("SUBSCRIBE", "ch2")
+        log("8 held", s.read(0.2))
+        s.send("PING")
+        log("8 unpause", mon.cmd("CLIENT", "UNPAUSE"), s.read(), s.read())
+        log("8 monitor get", mon.cmd("GET", "x"))
     r.cmd("CLIENT", "PAUSE", "100000", "WRITE")
     a.send("PUBLISH", "ch", "hello")
     log("8 publish held", a.read(0.2), s.read(0.2))
@@ -165,13 +210,11 @@ def scenarios(port, log):
     # 9. a pause of writes made one of every command
     r.cmd("CLIENT", "PAUSE", "100000", "WRITE")
     log("9 read", a.cmd("GET", "x"))
-    log("9 all", r.cmd("CLIENT", "PAUSE", "0", "ALL"))
-    a.send("GET", "x")
-    log("9 read held", a.read(0.2))
-    m = Client(port)
-    m.cmd("MONITOR")
-    log("9 unpause", m.cmd("CLIENT", "UNPAUSE"), a.read())
-    m.close()
+    with Mon(port) as mon:
+        log("9 all", r.cmd("CLIENT", "PAUSE", "0", "ALL"))
+        a.send("GET", "x")
+        log("9 read held", a.read(0.2))
+        log("9 unpause", mon.cmd("CLIENT", "UNPAUSE"), a.read())
     # 10. a blocking command that waited before the pause times out
     a.send("BLPOP", "nokey", "0.3")
     wait_blocked(r, 1)
@@ -202,12 +245,10 @@ def scenarios(port, log):
     log("12 never written", r.cmd("EXISTS", "gone", "killed"))
     k.close()
     # 13. errors of the parser are answered at once
-    r.cmd("CLIENT", "PAUSE", "100000", "ALL")
-    log("13 errors", a.cmd("SET", "x"), a.cmd("NOSUCHCOMMAND"), a.cmd("CLIENT", "NOSUCH"))
-    m = Client(port)
-    m.cmd("MONITOR")
-    m.cmd("CLIENT", "UNPAUSE")
-    m.close()
+    with Mon(port) as mon:
+        r.cmd("CLIENT", "PAUSE", "100000", "ALL")
+        log("13 errors", a.cmd("SET", "x"), a.cmd("NOSUCHCOMMAND"), a.cmd("CLIENT", "NOSUCH"))
+        log("13 unpause", mon.cmd("CLIENT", "UNPAUSE"))
     log("13 info", info_lines(r, "clients", ("blocked_clients",)))
     r.cmd("FLUSHALL")
     for c in (r, a, b):
@@ -271,8 +312,20 @@ def main():
             scenarios(port, lambda *x: lines.append(" ".join(repr(v) for v in x)))
         except Exception as e:
             lines.append("EXCEPTION %r" % (e,))
-            unpause(port)
+            # a pause of every command was ended on leaving its Mon; a
+            # pause of writes holds no CLIENT UNPAUSE back
+            c = Client(port, None)
+            c.cmd("CLIENT", "UNPAUSE")
+            c.close()
         outs.append(lines)
+    # a scenario that raises on both servers ends both transcripts alike,
+    # and the scenarios after it never run: that fails too
+    stopped = 0
+    for name, lines in zip(("BendKV", "Redis"), outs):
+        for l in lines:
+            if l.startswith("EXCEPTION"):
+                stopped += 1
+                print("FAIL: %s's scenarios stopped: %s" % (name, l))
     bad = 0
     for i in range(max(len(outs[0]), len(outs[1]))):
         x = outs[0][i] if i < len(outs[0]) else "<none>"
@@ -284,8 +337,9 @@ def main():
     fails = alone(args.bendkv)
     for f in fails:
         print("FAIL: BendKV alone:", f)
-    if bad or fails:
-        print("FAIL: %d of %d lines of the scenarios differ, %d checks of BendKV alone fail" % (bad, len(outs[1]), len(fails)))
+    if bad or stopped or fails:
+        print("FAIL: %d of %d lines of the scenarios differ, %d transcripts stopped, %d checks of BendKV alone fail"
+              % (bad, len(outs[1]), stopped, len(fails)))
         sys.exit(1)
     print("OK: %d lines of pause scenarios as Redis answers them, and 3 checks of BendKV alone" % len(outs[1]))
 
