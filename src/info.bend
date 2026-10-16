@@ -1669,82 +1669,336 @@ def rws.reset(r: Rws) -> Rws:
     case IRws{on, sched, start, last, ok, n, fails}:
       IRws{on, sched, start, last, ok, 0n, 0n}
 
+# The parameters a background save keeps from its start, as Redis's
+# child keeps those of its fork (rdbSaveBackground hands it
+# server.rdb_filename then): dbfilename, rdbchecksum yes,
+# rdb-key-save-delay (us a key; 0 for none, as for a value below 1) and
+# rdb-save-incremental-fsync yes
+type BgCf is Data:
+  BgCf{name: String, sum: Bool, delay: Nat, auto: Bool}
+
+def bgcf.none() -> BgCf:
+  BgCf{"", False{}, 0n, False{}}
+
+def bgcf.delay.of(+v: String) -> Nat:
+  Bool.pick(Nat, C.text.digits(v), C.dec.small(v, 0n), 0n)
+
+def bgcf.of(+items: List<&2, C.CItem>) -> BgCf:
+  BgCf{C.config.get_value(items, "dbfilename"), String.eq(C.config.get_value(items, "rdbchecksum"), "yes"), bgcf.delay.of(C.config.get_value(items, "rdb-key-save-delay")), String.eq(C.config.get_value(items, "rdb-save-incremental-fsync"), "yes")}
+
+def bgcf.name(+c: BgCf) -> String:
+  match c:
+    case BgCf{+name, sum, delay, auto}:
+      name
+
+def bgcf.sum(+c: BgCf) -> Bool:
+  match c:
+    case BgCf{name, +sum, delay, auto}:
+      sum
+
+def bgcf.delay(+c: BgCf) -> Nat:
+  match c:
+    case BgCf{name, sum, +delay, auto}:
+      delay
+
+def bgcf.auto(+c: BgCf) -> Bool:
+  match c:
+    case BgCf{name, sum, delay, +auto}:
+      auto
+
+# A background save (BGSAVE, and the cron's: server.bend, Background
+# saves), as INFO shows it and the cron reads it: whether one runs (from
+# the BGSAVE or the cron's look that starts it to its end: Redis's
+# child_type RDB), when it started (s since 1970: rdb_save_time_start),
+# the count of changes then (dirty_before_bgsave), when the last one was
+# tried (lastbgsave_try), whether one is scheduled (BGSAVE SCHEDULE, or in
+# EXEC: rdb_bgsave_scheduled), how long the last one took (s;
+# rdb_last_bgsave_time_sec, none before the first), the keys of its
+# snapshot and those it wrote so far (current_save_keys_total and
+# _processed), the databases a group's BGSAVE took for the actor to write
+# (the snapshot, until the actor takes it), whether a FLUSHALL of the
+# group dropped the save (killRDBChild: the actor drops it once the group
+# is answered), and the count of changes when a FLUSHALL of the group
+# emptied the databases, which its save subtracts. IBgsOf is never built:
+# it makes Bgs a node of its own.
+type Bgs is Data:
+  IBgs{on: Bool, start: Nat, before: Nat, try: Nat, sched: Bool, last: Maybe<&2, Nat>, total: Nat, done: Nat, snap: Maybe<&2, List<&2, R.Db>>, kill: Bool, fl: Nat, cf: BgCf}
+  IBgsOf{b: Bgs}
+
+def bgs.new() -> Bgs:
+  IBgs{False{}, 0n, 0n, 0n, False{}, None{}, 0n, 0n, None{}, False{}, 0n, bgcf.none()}
+
+def bgs.on(+b: Bgs) -> Bool:
+  match b:
+    case IBgs{+on, start, before, try, sched, last, total, done, snap, kill, fl, cf}:
+      on
+    case IBgsOf{+x}:
+      bgs.on(x)
+
+def bgs.sched(+b: Bgs) -> Bool:
+  match b:
+    case IBgs{on, start, before, try, +sched, last, total, done, snap, kill, fl, cf}:
+      sched
+    case IBgsOf{+x}:
+      bgs.sched(x)
+
+def bgs.try(+b: Bgs) -> Nat:
+  match b:
+    case IBgs{on, start, before, +try, sched, last, total, done, snap, kill, fl, cf}:
+      try
+    case IBgsOf{+x}:
+      bgs.try(x)
+
+def bgs.kill(+b: Bgs) -> Bool:
+  match b:
+    case IBgs{on, start, before, try, sched, last, total, done, snap, +kill, fl, cf}:
+      kill
+    case IBgsOf{+x}:
+      bgs.kill(x)
+
+def bgs.start(+b: Bgs) -> Nat:
+  match b:
+    case IBgs{on, +start, before, try, sched, last, total, done, snap, kill, fl, cf}:
+      start
+    case IBgsOf{+x}:
+      bgs.start(x)
+
+def bgs.total(+b: Bgs) -> Nat:
+  match b:
+    case IBgs{on, start, before, try, sched, last, +total, done, snap, kill, fl, cf}:
+      total
+    case IBgsOf{+x}:
+      bgs.total(x)
+
+def bgs.has.snap(+m: Maybe<&2, List<&2, R.Db>>) -> Bool:
+  match m:
+    case Some{x}:
+      True{}
+    case None{}:
+      False{}
+
+# whether a group's BGSAVE left a snapshot for the actor to write
+def bgs.pending(+b: Bgs) -> Bool:
+  match b:
+    case IBgs{on, start, before, try, sched, last, total, done, +snap, kill, fl, cf}:
+      bgs.has.snap(snap)
+    case IBgsOf{+x}:
+      bgs.pending(x)
+
+# what the save asks of the actor once a group is answered: 0 nothing
+# (none runs, or the actor writes the one that runs), 1 start the one a
+# group's BGSAVE took a snapshot for, 2 drop the one that runs (a FLUSHALL
+# of the group: killRDBChild)
+def bgs.ask.of(on: Bool, kill: Bool, snap: Bool) -> Nat:
+  match on kill snap:
+    case True{} True{} _:
+      2n
+    case True{} False{} True{}:
+      1n
+    case _ _ _:
+      0n
+
+def bgs.ask(+b: Bgs) -> Nat:
+  match b:
+    case IBgs{+on, start, before, try, sched, last, total, done, +snap, +kill, fl, cf}:
+      bgs.ask.of(on, kill, bgs.has.snap(snap))
+    case IBgsOf{+x}:
+      bgs.ask(x)
+
+# one starts at the second now, with the count of changes dirty, a
+# snapshot of total keys (taken by a group's BGSAVE for the actor: snap;
+# none when the actor takes it itself) and the parameters cf, as
+# rdbSaveBackground and redisFork start one; none is scheduled any more
+# once it starts from the schedule (sched: whether it does)
+def bgs.go(b: Bgs, +now: Nat, +dirty: Nat, +total: Nat, snap: Maybe<&2, List<&2, R.Db>>, +unsched: Bool, cf: BgCf) -> Bgs:
+  match b:
+    case IBgs{on, start, before, try, +sched, last, t0, d0, s0, kill, fl, c0}:
+      IBgs{True{}, now, dirty, now, Bool.and(sched, Bool.not(unsched)), last, total, 0n, snap, False{}, fl, cf}
+    case IBgsOf{x}:
+      bgs.go(x, now, dirty, total, snap, unsched, cf)
+
+# the parameters the save that runs (or the last one) kept from its start
+def bgs.cf(+b: Bgs) -> BgCf:
+  match b:
+    case IBgs{on, start, before, try, sched, last, total, done, snap, kill, fl, +cf}:
+      cf
+    case IBgsOf{+x}:
+      bgs.cf(x)
+
+# BGSAVE SCHEDULE, or BGSAVE in EXEC, while another job runs
+def bgs.later(b: Bgs) -> Bgs:
+  match b:
+    case IBgs{on, start, before, try, sched, last, total, done, snap, kill, fl, cf}:
+      IBgs{on, start, before, try, True{}, last, total, done, snap, kill, fl, cf}
+    case IBgsOf{x}:
+      bgs.later(x)
+
+# the snapshot taken by the actor, which writes it
+def bgs.taken(b: Bgs) -> Maybe<&2, List<&2, R.Db>> & Bgs:
+  match b:
+    case IBgs{on, start, before, try, sched, last, total, done, snap, kill, fl, cf}:
+      (snap, IBgs{on, start, before, try, sched, last, total, done, None{}, kill, fl, cf})
+    case IBgsOf{x}:
+      bgs.taken(x)
+
+# k keys written
+def bgs.wrote(b: Bgs, +k: Nat) -> Bgs:
+  match b:
+    case IBgs{on, start, before, try, sched, last, total, +done, snap, kill, fl, cf}:
+      IBgs{on, start, before, try, sched, last, total, Nat.add(done, k), snap, kill, fl, cf}
+    case IBgsOf{x}:
+      bgs.wrote(x, k)
+
+# a FLUSHALL drops the save that runs, once the group is answered
+def bgs.killing(b: Bgs) -> Bgs:
+  match b:
+    case IBgs{+on, start, before, try, sched, last, total, done, snap, kill, fl, cf}:
+      IBgs{on, start, before, try, sched, last, total, done, snap, on, fl, cf}
+    case IBgsOf{x}:
+      bgs.killing(x)
+
+# the save that ran ended at the second now (backgroundSaveDoneHandler):
+# how long it took, the counts of its keys forgotten (resetChildState)
+def bgs.end(b: Bgs, +now: Nat) -> Bgs:
+  match b:
+    case IBgs{on, +start, before, try, sched, last, total, done, snap, kill, fl, cf}:
+      IBgs{False{}, start, before, try, sched, Some{Nat.sub(now, start)}, 0n, 0n, None{}, False{}, fl, cf}
+    case IBgsOf{x}:
+      bgs.end(x, now)
+
+def bgs.before(+b: Bgs) -> Nat:
+  match b:
+    case IBgs{on, start, +before, try, sched, last, total, done, snap, kill, fl, cf}:
+      before
+    case IBgsOf{+x}:
+      bgs.before(x)
+
+def bgs.fl(+b: Bgs) -> Nat:
+  match b:
+    case IBgs{on, start, before, try, sched, last, total, done, snap, kill, +fl, cf}:
+      fl
+    case IBgsOf{+x}:
+      bgs.fl(x)
+
+# the count of changes when a FLUSHALL emptied the databases; and the one
+# a save that ran after it subtracts from the count when the save started
+def bgs.flushing(b: Bgs, +d: Nat) -> Bgs:
+  match b:
+    case IBgs{on, start, before, try, sched, last, total, done, snap, kill, fl, cf}:
+      IBgs{on, start, before, try, sched, last, total, done, snap, kill, d, cf}
+    case IBgsOf{x}:
+      bgs.flushing(x, d)
+
+def bgs.cleaned(b: Bgs, +d: Nat) -> Bgs:
+  match b:
+    case IBgs{on, start, +before, try, sched, last, total, done, snap, kill, fl, cf}:
+      IBgs{on, start, Nat.sub(before, d), try, sched, last, total, done, snap, kill, fl, cf}
+    case IBgsOf{x}:
+      bgs.cleaned(x, d)
+
 # the RDB file (server.bend, The RDB file), as INFO shows it: when the
 # last save that ended well ended (s since 1970; the start until one
-# does, as Redis's lastsave, which LASTSAVE answers), the SAVEs run
-# (rdb_saves: CONFIG RESETSTAT counts them again), whether the last save
-# ended well (rdb_last_bgsave_status: a save that fails leaves it as it
-# was, as Redis's rdbSave does), the keys the start loaded from the file
-# and those it dropped as their time had passed
+# does, as Redis's lastsave, which LASTSAVE answers), the saves started
+# (SAVE and the background saves: rdb_saves; CONFIG RESETSTAT counts them
+# again), whether the last save ended well (rdb_last_bgsave_status: a
+# SAVE that fails leaves it as it was, as Redis's rdbSave does, a
+# background save that fails makes it err), the keys the start loaded
+# from the file and those it dropped as their time had passed
 # (rdb_last_load_keys_loaded and _expired), whether a FLUSHALL in the
-# group asked for a save, and whether a SHUTDOWN asked for one before the
-# server stops (the shell saves once the group has run). IRdbOf,
-# a record that holds a record, is never built: it makes Rdb a node of its
-# own, a word in Info, which is 64 words with it (a wider node is copied
-# whole at every update: section 3zzz of FINDINGS.md)
+# group asked for a save, whether a SHUTDOWN asked for one before the
+# server stops (the shell saves once the group has run), whether a SAVE
+# owes one, the count of changes since the last save (Redis's
+# server.dirty: rdb_changes_since_last_save; server.bend, The count of
+# changes), and the background saves (Bgs, a node of its own in Rdb).
+# IRdbOf, a record that holds a record, is never built: it makes Rdb a
+# node of its own, a word in Info, which is 63 words (since #66 took
+# Live's blk and tmo into one word, Cn; the background saves left it so),
+# where a node wider than 64 words is copied whole at every update
+# (section 3zzz of FINDINGS.md)
 type Rdb is Data:
-  IRdb{last: Nat, saves: Nat, ok: Bool, loaded: Nat, expired: Nat, flush: Bool, shut: Bool, owed: Bool}
+  IRdb{last: Nat, saves: Nat, ok: Bool, loaded: Nat, expired: Nat, flush: Bool, shut: Bool, owed: Bool, dirty: Nat, bg: Bgs, pts: List<&2, Nat>, stop: Bool}
   IRdbOf{r: Rdb}
 
 def rdb.new(+secs: Nat) -> Rdb:
-  IRdb{secs, 0n, True{}, 0n, 0n, False{}, False{}, False{}}
+  IRdb{secs, 0n, True{}, 0n, 0n, False{}, False{}, False{}, 0n, bgs.new(), Nil{}, True{}}
 
 def rdb.last(+r: Rdb) -> Nat:
   match r:
-    case IRdb{+last, saves, ok, loaded, expired, flush, shut, owed}:
+    case IRdb{+last, saves, ok, loaded, expired, flush, shut, owed, dirty, bg, pts, stop}:
       last
     case IRdbOf{+x}:
       rdb.last(x)
 
 def rdb.flush(+r: Rdb) -> Bool:
   match r:
-    case IRdb{last, saves, ok, loaded, expired, +flush, shut, owed}:
+    case IRdb{last, saves, ok, loaded, expired, +flush, shut, owed, dirty, bg, pts, stop}:
       flush
     case IRdbOf{+x}:
       rdb.flush(x)
 
 def rdb.shut(+r: Rdb) -> Bool:
   match r:
-    case IRdb{last, saves, ok, loaded, expired, flush, +shut, owed}:
+    case IRdb{last, saves, ok, loaded, expired, flush, +shut, owed, dirty, bg, pts, stop}:
       shut
     case IRdbOf{+x}:
       rdb.shut(x)
+
+def rdb.ok(+r: Rdb) -> Bool:
+  match r:
+    case IRdb{last, saves, +ok, loaded, expired, flush, shut, owed, dirty, bg, pts, stop}:
+      ok
+    case IRdbOf{+x}:
+      rdb.ok(x)
+
+def rdb.dirty(+r: Rdb) -> Nat:
+  match r:
+    case IRdb{last, saves, ok, loaded, expired, flush, shut, owed, +dirty, bg, pts, stop}:
+      dirty
+    case IRdbOf{+x}:
+      rdb.dirty(x)
+
+def rdb.bg(+r: Rdb) -> Bgs:
+  match r:
+    case IRdb{last, saves, ok, loaded, expired, flush, shut, owed, dirty, +bg, pts, stop}:
+      bg
+    case IRdbOf{+x}:
+      rdb.bg(x)
 
 # a save that ended well at the second secs; one that failed changes
 # nothing
 def rdb.saved(r: Rdb, +well: Bool, +secs: Nat) -> Rdb:
   match r:
-    case IRdb{+last, saves, +ok, loaded, expired, flush, shut, owed}:
-      IRdb{Bool.pick(Nat, well, secs, last), saves, Bool.or(ok, well), loaded, expired, flush, shut, owed}
+    case IRdb{+last, saves, +ok, loaded, expired, flush, shut, owed, dirty, bg, pts, stop}:
+      IRdb{Bool.pick(Nat, well, secs, last), saves, Bool.or(ok, well), loaded, expired, flush, shut, owed, dirty, bg, pts, stop}
     case IRdbOf{x}:
       rdb.saved(x, well, secs)
 
 # a SAVE, counted as it runs (saveCommand)
 def rdb.save(r: Rdb) -> Rdb:
   match r:
-    case IRdb{last, +saves, ok, loaded, expired, flush, shut, owed}:
-      IRdb{last, 1n+saves, ok, loaded, expired, flush, shut, True{}}
+    case IRdb{last, +saves, ok, loaded, expired, flush, shut, owed, dirty, bg, pts, stop}:
+      IRdb{last, 1n+saves, ok, loaded, expired, flush, shut, True{}, dirty, bg, pts, stop}
     case IRdbOf{x}:
       rdb.save(x)
 
 def rdb.loaded(r: Rdb, +ld: Nat, +ex: Nat) -> Rdb:
   match r:
-    case IRdb{last, saves, ok, loaded, expired, flush, shut, owed}:
-      IRdb{last, saves, ok, ld, ex, flush, shut, owed}
+    case IRdb{last, saves, ok, loaded, expired, flush, shut, owed, dirty, bg, pts, stop}:
+      IRdb{last, saves, ok, ld, ex, flush, shut, owed, dirty, bg, pts, stop}
     case IRdbOf{x}:
       rdb.loaded(x, ld, ex)
 
 def rdb.flushed(r: Rdb, +on: Bool) -> Rdb:
   match r:
-    case IRdb{last, saves, ok, loaded, expired, flush, shut, owed}:
-      IRdb{last, saves, ok, loaded, expired, on, shut, owed}
+    case IRdb{last, saves, ok, loaded, expired, flush, shut, owed, dirty, bg, pts, stop}:
+      IRdb{last, saves, ok, loaded, expired, on, shut, owed, dirty, bg, pts, stop}
     case IRdbOf{x}:
       rdb.flushed(x, on)
 
 def rdb.shutting(r: Rdb, +on: Bool) -> Rdb:
   match r:
-    case IRdb{last, saves, ok, loaded, expired, flush, shut, owed}:
-      IRdb{last, saves, ok, loaded, expired, flush, on, owed}
+    case IRdb{last, saves, ok, loaded, expired, flush, shut, owed, dirty, bg, pts, stop}:
+      IRdb{last, saves, ok, loaded, expired, flush, on, owed, dirty, bg, pts, stop}
     case IRdbOf{x}:
       rdb.shutting(x, on)
 
@@ -1752,24 +2006,237 @@ def rdb.shutting(r: Rdb, +on: Bool) -> Rdb:
 # save made
 def rdb.owed(+r: Rdb) -> Bool:
   match r:
-    case IRdb{last, saves, ok, loaded, expired, flush, shut, +owed}:
+    case IRdb{last, saves, ok, loaded, expired, flush, shut, +owed, dirty, bg, pts, stop}:
       owed
     case IRdbOf{+x}:
       rdb.owed(x)
 
 def rdb.paid(r: Rdb) -> Rdb:
   match r:
-    case IRdb{last, saves, ok, loaded, expired, flush, shut, owed}:
-      IRdb{last, saves, ok, loaded, expired, flush, shut, False{}}
+    case IRdb{last, saves, ok, loaded, expired, flush, shut, owed, dirty, bg, pts, stop}:
+      IRdb{last, saves, ok, loaded, expired, flush, shut, False{}, dirty, bg, pts, stop}
     case IRdbOf{x}:
       rdb.paid(x)
 
 def rdb.reset(r: Rdb) -> Rdb:
   match r:
-    case IRdb{last, saves, ok, loaded, expired, flush, shut, owed}:
-      IRdb{last, 0n, ok, loaded, expired, flush, shut, owed}
+    case IRdb{last, saves, ok, loaded, expired, flush, shut, owed, dirty, bg, pts, stop}:
+      IRdb{last, 0n, ok, loaded, expired, flush, shut, owed, dirty, bg, pts, stop}
     case IRdbOf{x}:
       rdb.reset(x)
+
+# d more changes (a batch's, a call's: the shell counts them), up to 2^47
+# (a Nat stops the process past 2^48, where Redis's long long goes on:
+# 2^47 is four years of a million writes a second with no save that ends
+# well)
+def dirty.cap() -> Nat:
+  Nat.mul(Nat.mul(65536n, 65536n), 32768n)
+
+def rdb.dirtied(r: Rdb, +d: Nat) -> Rdb:
+  match r:
+    case IRdb{last, saves, ok, loaded, expired, flush, shut, owed, +dirty, bg, pts, stop}:
+      IRdb{last, saves, ok, loaded, expired, flush, shut, owed, Nat.min(Nat.add(dirty, d), dirty.cap()), bg, pts, stop}
+    case IRdbOf{x}:
+      rdb.dirtied(x, d)
+
+def rdb.dirty.if(r: Rdb, +d: Nat) -> Rdb:
+  match d:
+    case 0n:
+      r
+    case _:
+      rdb.dirtied(r, d)
+
+# a save of the databases as they were when the count was d ended well:
+# the changes since then are the ones left (a SAVE's, of the databases as
+# the group left them, leaves none: rdbSave's server.dirty = 0; a
+# FLUSHALL's those made after it in its group), and a background save
+# that runs subtracts from the count when it started those the save took
+# (none past 0: its own may take some of them as well)
+def rdb.cleaned(r: Rdb, +d: Nat) -> Rdb:
+  match r:
+    case IRdb{last, saves, ok, loaded, expired, flush, shut, owed, +dirty, bg, pts, stop}:
+      IRdb{last, saves, ok, loaded, expired, flush, shut, owed, Nat.sub(dirty, d), bgs.cleaned(bg, d), pts, stop}
+    case IRdbOf{x}:
+      rdb.cleaned(x, d)
+
+# a SAVE that ended (well: the count is 0, as after rdbSave)
+def rdb.clean(r: Rdb, +well: Bool) -> Rdb:
+  match r well:
+    case IRdb{last, saves, ok, loaded, expired, flush, shut, owed, +dirty, bg, pts, stop} True{}:
+      IRdb{last, saves, ok, loaded, expired, flush, shut, owed, 0n, bgs.cleaned(bg, dirty), pts, stop}
+    case IRdbOf{x} True{}:
+      rdb.clean(x, True{})
+    case r0 False{}:
+      r0
+
+def rdb.bg.set(r: Rdb, b: Bgs) -> Rdb:
+  match r:
+    case IRdb{last, saves, ok, loaded, expired, flush, shut, owed, dirty, old, pts, stop}:
+      IRdb{last, saves, ok, loaded, expired, flush, shut, owed, dirty, b, pts, stop}
+    case IRdbOf{x}:
+      rdb.bg.set(x, b)
+
+# a background save starts at the second now (rdbSaveBackground): counted
+# (stat_rdb_saves), the count of changes kept, a snapshot of total keys
+def rdb.bg.go(r: Rdb, +now: Nat, +total: Nat, snap: Maybe<&2, List<&2, R.Db>>, +unsched: Bool, cf: BgCf) -> Rdb:
+  match r:
+    case IRdb{last, +saves, ok, loaded, expired, flush, shut, owed, +dirty, bg, pts, stop}:
+      IRdb{last, 1n+saves, ok, loaded, expired, flush, shut, owed, dirty, bgs.go(bg, now, dirty, total, snap, unsched, cf), pts, stop}
+    case IRdbOf{x}:
+      rdb.bg.go(x, now, total, snap, unsched, cf)
+
+def rdb.bg.later(r: Rdb) -> Rdb:
+  match r:
+    case IRdb{last, saves, ok, loaded, expired, flush, shut, owed, dirty, bg, pts, stop}:
+      IRdb{last, saves, ok, loaded, expired, flush, shut, owed, dirty, bgs.later(bg), pts, stop}
+    case IRdbOf{x}:
+      rdb.bg.later(x)
+
+def rdb.bg.wrote(r: Rdb, +k: Nat) -> Rdb:
+  match r:
+    case IRdb{last, saves, ok, loaded, expired, flush, shut, owed, dirty, bg, pts, stop}:
+      IRdb{last, saves, ok, loaded, expired, flush, shut, owed, dirty, bgs.wrote(bg, k), pts, stop}
+    case IRdbOf{x}:
+      rdb.bg.wrote(x, k)
+
+def rdb.bg.killing(r: Rdb) -> Rdb:
+  match r:
+    case IRdb{last, saves, ok, loaded, expired, flush, shut, owed, dirty, bg, pts, stop}:
+      IRdb{last, saves, ok, loaded, expired, flush, shut, owed, dirty, bgs.killing(bg), pts, stop}
+    case IRdbOf{x}:
+      rdb.bg.killing(x)
+
+def rdb.bg.taken.of(p: Maybe<&2, List<&2, R.Db>> & Bgs, r: Rdb) -> Maybe<&2, List<&2, R.Db>> & Rdb:
+  (m, b) = p
+  (m, rdb.bg.set(r, b))
+
+# the snapshot a group's BGSAVE took, which the actor writes
+def rdb.bg.taken(r: Rdb) -> Maybe<&2, List<&2, R.Db>> & Rdb:
+  +x = r
+  rdb.bg.taken.of(bgs.taken(rdb.bg(x)), x)
+
+# the background save that ran ended at the second now, well or not
+# (backgroundSaveDoneHandlerDisk): one that ended well is the last save,
+# and leaves the changes made while it ran; one that failed makes the
+# status err
+def rdb.bg.end(r: Rdb, +well: Bool, +now: Nat) -> Rdb:
+  match r:
+    case IRdb{+last, saves, ok, loaded, expired, flush, shut, owed, +dirty, +bg, pts, stop}:
+      +d = Bool.pick(Nat, well, Nat.sub(dirty, bgs.before(bg)), dirty)
+      IRdb{Bool.pick(Nat, well, now, last), saves, well, loaded, expired, flush, shut, owed, d, bgs.end(bg, now), pts, stop}
+    case IRdbOf{x}:
+      rdb.bg.end(x, well, now)
+
+# the background save dropped at the second now (a SHUTDOWN, a FLUSHALL:
+# killRDBChild), which neither ends well nor fails: the status as it was
+def rdb.bg.drop(r: Rdb, +now: Nat) -> Rdb:
+  match r:
+    case IRdb{last, saves, ok, loaded, expired, flush, shut, owed, dirty, bg, pts, stop}:
+      IRdb{last, saves, ok, loaded, expired, flush, shut, owed, dirty, bgs.end(bg, now), pts, stop}
+    case IRdbOf{x}:
+      rdb.bg.drop(x, now)
+
+# a FLUSHALL that saves: the count when it emptied the databases, which
+# its save subtracts once made (rdb.cleaned)
+def rdb.flush.mark(r: Rdb) -> Rdb:
+  match r:
+    case IRdb{last, saves, ok, loaded, expired, flush, shut, owed, +dirty, bg, pts, stop}:
+      IRdb{last, saves, ok, loaded, expired, flush, shut, owed, dirty, bgs.flushing(bg, dirty), pts, stop}
+    case IRdbOf{x}:
+      rdb.flush.mark(x)
+
+def rdb.flush.done(r: Rdb, +well: Bool) -> Rdb:
+  match r well:
+    case IRdb{last, saves, ok, loaded, expired, flush, shut, owed, dirty, +bg, pts, stop} True{}:
+      +f = bgs.fl(bg)
+      rdb.cleaned(IRdb{last, saves, ok, loaded, expired, flush, shut, owed, dirty, bgs.flushing(bg, 0n), pts, stop}, f)
+    case IRdb{last, saves, ok, loaded, expired, flush, shut, owed, dirty, bg, pts, stop} False{}:
+      IRdb{last, saves, ok, loaded, expired, flush, shut, owed, dirty, bgs.flushing(bg, 0n), pts, stop}
+    case IRdbOf{x} w:
+      rdb.flush.done(x, w)
+
+# The save points (save: pairs of seconds and changes, kept as numbers
+# from the parameters at the start and at each CONFIG SET, so that the
+# cron reads no parameter: server.bend, The cron) and
+# stop-writes-on-bgsave-error (stop)
+def pts.word(empty: Bool, +w: String, rest: List<&2, Nat>) -> List<&2, Nat>:
+  match empty:
+    case True{}:
+      rest
+    case False{}:
+      C.dec.small(w, 0n) <> rest
+
+def pts.of(ws: List<&2, String>) -> List<&2, Nat>:
+  match ws:
+    case Nil{}:
+      Nil{}
+    case Con{+w, rest}:
+      pts.word(String.is_empty(w), w, pts.of(rest))
+
+def rdb.cfg(r: Rdb, +items: List<&2, C.CItem>) -> Rdb:
+  match r:
+    case IRdb{last, saves, ok, loaded, expired, flush, shut, owed, dirty, bg, pts, stop}:
+      IRdb{last, saves, ok, loaded, expired, flush, shut, owed, dirty, bg, pts.of(String.split(C.config.get_value(items, "save"), ' ')), String.eq(C.config.get_value(items, "stop-writes-on-bgsave-error"), "yes")}
+    case IRdbOf{x}:
+      rdb.cfg(x, items)
+
+def pts.any(+ps: List<&2, Nat>) -> Bool:
+  match ps:
+    case Nil{}:
+      False{}
+    case _:
+      True{}
+
+# whether the writes are refused (MISCONF): the last background save
+# failed, save points are set, and stop-writes-on-bgsave-error is yes
+# (writeCommandsDeniedByDiskError)
+def rdb.misconf(+r: Rdb) -> Bool:
+  match r:
+    case IRdb{last, saves, +ok, loaded, expired, flush, shut, owed, dirty, bg, +pts, +stop}:
+      Bool.and(Bool.not(ok), Bool.and(stop, pts.any(pts)))
+    case IRdbOf{+x}:
+      rdb.misconf(x)
+
+# a save point: its seconds and its changes
+type Pt is Data:
+  Pt{secs: Nat, ch: Nat}
+
+# the first save point reached, with dirty changes and age seconds since
+# the last save that ended well (serverCron's: as many changes, and more
+# seconds)
+def pts.hit(+ps: List<&2, Nat>, +dirty: Nat, +age: Nat) -> Maybe<&2, Pt>:
+  match ps:
+    case Con{+secs, Con{+ch, +rest}}:
+      Bool.pick(Maybe<&2, Pt>, Bool.and(Nat.is_le(ch, dirty), Nat.is_lt(secs, age)), Some{Pt{secs, ch}}, pts.hit(rest, dirty, age))
+    case _:
+      None{}
+
+# whether a background save may start at the second s: the last one
+# ended well, or was tried more than 5 seconds before
+# (CONFIG_BGSAVE_RETRY_DELAY)
+def rdb.retry(+r: Rdb, +s: Nat) -> Bool:
+  match r:
+    case IRdb{last, saves, +ok, loaded, expired, flush, shut, owed, dirty, +bg, pts, stop}:
+      Bool.or(ok, Nat.is_lt(5n, Nat.sub(s, bgs.try(bg))))
+    case IRdbOf{+x}:
+      rdb.retry(x, s)
+
+def rdb.point.if(retry: Bool, +r: Rdb, +s: Nat) -> Maybe<&2, Pt>:
+  match retry r:
+    case True{} IRdb{+last, saves, ok, loaded, expired, flush, shut, owed, +dirty, bg, +pts, stop}:
+      pts.hit(pts, dirty, Nat.sub(s, last))
+    case True{} IRdbOf{+x}:
+      rdb.point.if(True{}, x, s)
+    case False{} _:
+      None{}
+
+# the save point the cron's look at the second s reaches, if any
+def rdb.point(+r: Rdb, +s: Nat) -> Maybe<&2, Pt>:
+  rdb.point.if(rdb.retry(r, s), r, s)
+
+# whether the BGSAVE scheduled starts at the second s
+def rdb.sched.go(+r: Rdb, +s: Nat) -> Bool:
+  Bool.and(bgs.sched(rdb.bg(r)), rdb.retry(r, s))
 
 # everything INFO shows that the parameters and the keys do not: the
 # start, the last facts, the counts, the rates, the peak of memory, the
@@ -1881,6 +2348,12 @@ def info.ran(i: Info, +calls: Nat, +r: Nat, rs: List<&2, Nat>, +inb: Nat, +outb:
     case IInfo{b, l, c, inst, pk, c0, a0, a, st, ex, rw, tm, rf}:
       IInfo{b, l, count.add(c, calls, inb, outb), inst, pk, c0, a0, a, stats.add(st, r, rs), ex, rw, tm, rf}
 
+# the same, with the batch's d changes (the count of changes: Rdb)
+def info.ran.d(i: Info, +calls: Nat, +r: Nat, rs: List<&2, Nat>, +inb: Nat, +outb: Nat, +d: Nat) -> Info:
+  match i:
+    case IInfo{b, l, c, inst, pk, c0, a0, a, st, ex, rw, tm, rf}:
+      IInfo{b, l, count.add(c, calls, inb, outb), inst, pk, c0, a0, a, stats.add(st, r, rs), ex, rw, tm, rdb.dirty.if(rf, d)}
+
 # a batch's error replies
 def info.errs(i: Info, xs: List<&2, R.Erred>) -> Info:
   match i:
@@ -1987,6 +2460,78 @@ def info.rdb.shutting(i: Info, +on: Bool) -> Info:
   match i:
     case IInfo{b, l, c, inst, pk, c0, a0, a, st, ex, rw, tm, rf}:
       IInfo{b, l, c, inst, pk, c0, a0, a, st, ex, rw, tm, rdb.shutting(rf, on)}
+
+# the count of changes and the background saves (Rdb, Bgs): the record,
+# lent; d more changes (a call's, as info.ran.d adds a batch's); a SAVE
+# that ended; a FLUSHALL's save asked for, and made; a background save
+# started at the second now, of a snapshot of total keys (a group's
+# BGSAVE takes it for the actor: snap; unsched: it is the one scheduled);
+# one scheduled; the snapshot taken by the actor; k keys written; the save
+# dropped once the group is answered (FLUSHALL); the save ended, well or
+# not, or dropped, at the second now
+def info.rdb(+i: Info) -> Rdb:
+  match i:
+    case IInfo{b, l, c, inst, pk, c0, a0, a, st, ex, rw, tm, +rf}:
+      rf
+
+def info.dirtied(i: Info, +d: Nat) -> Info:
+  match i:
+    case IInfo{b, l, c, inst, pk, c0, a0, a, st, ex, rw, tm, rf}:
+      IInfo{b, l, c, inst, pk, c0, a0, a, st, ex, rw, tm, rdb.dirty.if(rf, d)}
+
+def info.rdb.clean(i: Info, +well: Bool) -> Info:
+  match i:
+    case IInfo{b, l, c, inst, pk, c0, a0, a, st, ex, rw, tm, rf}:
+      IInfo{b, l, c, inst, pk, c0, a0, a, st, ex, rw, tm, rdb.clean(rf, well)}
+
+def info.rdb.flush.mark(i: Info) -> Info:
+  match i:
+    case IInfo{b, l, c, inst, pk, c0, a0, a, st, ex, rw, tm, rf}:
+      IInfo{b, l, c, inst, pk, c0, a0, a, st, ex, rw, tm, rdb.flush.mark(rf)}
+
+def info.rdb.flush.done(i: Info, +well: Bool) -> Info:
+  match i:
+    case IInfo{b, l, c, inst, pk, c0, a0, a, st, ex, rw, tm, rf}:
+      IInfo{b, l, c, inst, pk, c0, a0, a, st, ex, rw, tm, rdb.flush.done(rf, well)}
+
+def info.bg.go(i: Info, +now: Nat, +total: Nat, snap: Maybe<&2, List<&2, R.Db>>, +unsched: Bool, cf: BgCf) -> Info:
+  match i:
+    case IInfo{b, l, c, inst, pk, c0, a0, a, st, ex, rw, tm, rf}:
+      IInfo{b, l, c, inst, pk, c0, a0, a, st, ex, rw, tm, rdb.bg.go(rf, now, total, snap, unsched, cf)}
+
+def info.bg.later(i: Info) -> Info:
+  match i:
+    case IInfo{b, l, c, inst, pk, c0, a0, a, st, ex, rw, tm, rf}:
+      IInfo{b, l, c, inst, pk, c0, a0, a, st, ex, rw, tm, rdb.bg.later(rf)}
+
+def info.bg.taken.of(p: Maybe<&2, List<&2, R.Db>> & Rdb, b: Boot, l: Live, c: Count, inst: Inst, +pk: Nat, +c0: Nat, +a0: Nat, +a: Nat, st: Stats, ex: Exp, rw: Rws, tm: Tim) -> Maybe<&2, List<&2, R.Db>> & Info:
+  (m, rf) = p
+  (m, IInfo{b, l, c, inst, pk, c0, a0, a, st, ex, rw, tm, rf})
+
+def info.bg.taken(i: Info) -> Maybe<&2, List<&2, R.Db>> & Info:
+  match i:
+    case IInfo{b, l, c, inst, +pk, +c0, +a0, +a, st, ex, rw, tm, rf}:
+      info.bg.taken.of(rdb.bg.taken(rf), b, l, c, inst, pk, c0, a0, a, st, ex, rw, tm)
+
+def info.bg.wrote(i: Info, +k: Nat) -> Info:
+  match i:
+    case IInfo{b, l, c, inst, pk, c0, a0, a, st, ex, rw, tm, rf}:
+      IInfo{b, l, c, inst, pk, c0, a0, a, st, ex, rw, tm, rdb.bg.wrote(rf, k)}
+
+def info.bg.killing(i: Info) -> Info:
+  match i:
+    case IInfo{b, l, c, inst, pk, c0, a0, a, st, ex, rw, tm, rf}:
+      IInfo{b, l, c, inst, pk, c0, a0, a, st, ex, rw, tm, rdb.bg.killing(rf)}
+
+def info.bg.end(i: Info, +well: Bool, +now: Nat) -> Info:
+  match i:
+    case IInfo{b, l, c, inst, pk, c0, a0, a, st, ex, rw, tm, rf}:
+      IInfo{b, l, c, inst, pk, c0, a0, a, st, ex, rw, tm, rdb.bg.end(rf, well, now)}
+
+def info.bg.drop(i: Info, +now: Nat) -> Info:
+  match i:
+    case IInfo{b, l, c, inst, pk, c0, a0, a, st, ex, rw, tm, rf}:
+      IInfo{b, l, c, inst, pk, c0, a0, a, st, ex, rw, tm, rdb.bg.drop(rf, now)}
 
 # the size of the file now and at the start or the last rewrite
 def info.aof.size(+i: Info) -> Nat:
@@ -2158,7 +2703,7 @@ def info.evicted(i: Info, +k: Nat, +over: Bool, +now: Nat) -> Info:
 def info.cfg(i: Info, +items: List<&2, C.CItem>) -> Info:
   match i:
     case IInfo{b, l, c, inst, pk, c0, a0, a, st, ex, rw, tm, rf}:
-      IInfo{b, l, c, inst, pk, c0, a0, a, st, ex, rw, tim.cfg(tm, items), rf}
+      IInfo{b, l, c, inst, pk, c0, a0, a, st, ex, rw, tim.cfg(tm, items), rdb.cfg(rf, items)}
 
 def info.tim(+i: Info) -> Tim:
   match i:
@@ -2622,21 +3167,53 @@ def sec.rewrite(r: Rws, +now: Nat) -> String:
       kv("aof_last_bgrewrite_status", Bool.pick(String, ok, "ok", "err")) ++ kv("aof_rewrites", Nat.show(n)) ++
       kv("aof_rewrites_consecutive_failures", Nat.show(fails))
 
-def rdb.lines(+r: Rdb) -> String:
-  match r:
-    case IRdb{+last, +saves, +ok, +loaded, +expired, flush, shut, owed}:
-      kv("rdb_last_save_time", Nat.show(last)) ++ kv("rdb_last_bgsave_status", Bool.pick(String, ok, "ok", "err")) ++
-      kv("rdb_last_bgsave_time_sec", "-1") ++ kv("rdb_current_bgsave_time_sec", "-1") ++ kv("rdb_saves", Nat.show(saves)) ++
+# the background save in INFO's persistence section: its progress (the
+# keys written, in percent of its snapshot's, as %.2f writes the ratio),
+# the keys written and those of its snapshot (0 and 0 while none runs, as
+# resetChildState leaves them), whether one runs, how long the last one
+# took (-1 before the first) and the one that runs so far at now (ms; -1
+# while none runs), in seconds as Redis counts them (the difference of the
+# two times in whole seconds); the count of changes less those a FLUSHALL
+# of the group takes away once its save with save points has ended well
+# (fl, none once the group is answered), as Redis's FLUSHALL saves before
+# the commands after it run
+def bgs.perc(+done: Nat, +total: Nat) -> String:
+  match total:
+    case 0n:
+      "0.00"
+    case _:
+      fix2(Nat.show(Nat.mul(done, 100n)), total)
+
+def bgs.cur(on: Bool, +start: Nat, +now: Nat) -> String:
+  match on:
+    case True{}:
+      Nat.show(Nat.sub(Nat.div(now, 1000n), start))
+    case False{}:
+      "-1"
+
+def bgs.lines(+b: Bgs, +dirty: Nat, +last: Nat, +ok: Bool, +saves: Nat, +loaded: Nat, +expired: Nat, +now: Nat) -> String:
+  match b:
+    case IBgs{+on, +start, before, try, sched, +lt, +total, +done, snap, kill, +fl, cf}:
+      kv("current_fork_perc", bgs.perc(done, total)) ++ kv("current_save_keys_processed", Nat.show(done)) ++
+      kv("current_save_keys_total", Nat.show(total)) ++ kv("rdb_changes_since_last_save", Nat.show(Nat.sub(dirty, fl))) ++
+      kv("rdb_bgsave_in_progress", flag(on)) ++ kv("rdb_last_save_time", Nat.show(last)) ++
+      kv("rdb_last_bgsave_status", Bool.pick(String, ok, "ok", "err")) ++ kv("rdb_last_bgsave_time_sec", rw.last(lt)) ++
+      kv("rdb_current_bgsave_time_sec", bgs.cur(on, start, now)) ++ kv("rdb_saves", Nat.show(saves)) ++
       kv("rdb_last_cow_size", "0") ++ kv("rdb_last_load_keys_expired", Nat.show(expired)) ++ kv("rdb_last_load_keys_loaded", Nat.show(loaded))
+    case IBgsOf{+x}:
+      bgs.lines(x, dirty, last, ok, saves, loaded, expired, now)
+
+def rdb.lines(+r: Rdb, +now: Nat) -> String:
+  match r:
+    case IRdb{+last, +saves, +ok, +loaded, +expired, flush, shut, owed, +dirty, +bg, pts, stop}:
+      bgs.lines(bg, dirty, last, ok, saves, loaded, expired, now)
     case IRdbOf{+x}:
-      rdb.lines(x)
+      rdb.lines(x, now)
 
 def sec.persistence(+items: List<&2, C.CItem>, +rf: Rdb, +a0: Nat, +a: Nat, +rw: Rws, +now: Nat) -> String:
   +on = String.eq(cfg(items, "appendonly"), "yes")
   "# Persistence\r\n" ++ kv("loading", "0") ++ kv("async_loading", "0") ++ kv("current_cow_peak", "0") ++
-  kv("current_cow_size", "0") ++ kv("current_cow_size_age", "0") ++ kv("current_fork_perc", "0.00") ++
-  kv("current_save_keys_processed", "0") ++ kv("current_save_keys_total", "0") ++ kv("rdb_changes_since_last_save", "0") ++
-  kv("rdb_bgsave_in_progress", "0") ++ rdb.lines(rf) ++
+  kv("current_cow_size", "0") ++ kv("current_cow_size_age", "0") ++ rdb.lines(rf, now) ++
   kv("aof_enabled", flag(on)) ++ sec.rewrite(rw, now) ++ kv("aof_last_write_status", "ok") ++
   kv("aof_last_cow_size", "0") ++ kv("module_fork_in_progress", "0") ++ kv("module_fork_last_cow_size", "0") ++
   sec.aof(on, a0, a, rws.sched(rw))
@@ -2784,6 +3361,12 @@ def boot.replid(+b: Boot) -> String:
   match b:
     case IBoot{os, pid, run, replid, exe, conf, sysmem, start, heap0, key}:
       replid
+
+# the heap's used bytes at the start (used_memory_startup)
+def info.heap0(+i: Info) -> Nat:
+  match i:
+    case IInfo{+b, l, c, inst, pk, c0, a0, a, st, ex, rw, tm, rf}:
+      boot.heap0(b)
 
 # the second the server started at (since 1970)
 def info.start(+i: Info) -> U32:

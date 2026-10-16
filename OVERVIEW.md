@@ -325,9 +325,13 @@ synced, renamed onto `dbfilename`, the directory synced), SHUTDOWN saves it with
 with save points, FLUSHALL with save points saves the emptied databases, and the start
 loads it with `appendonly no`: every version from 1 to 10 and every encoding the codec
 reads, keys whose time has passed dropped and counted, Redis's lines for a file that does
-not load. No BGSAVE and no save at the save points yet, no LZF or IDLE and FREQ written,
-and no save on SIGTERM, which the runtime does not catch (section 3zzzc of
-docs/FINDINGS.md).
+not load. BGSAVE writes it in the background, from a snapshot of the databases at the
+command, a slice at a time between the groups the server answers (the databases are
+values: no fork), and so does the cron at the save points, Redis's by default
+(`3600 1 300 100 60 10000`), counting the changes since the last save as Redis counts
+them; a background save that fails stops the writes (MISCONF) until a save ends well.
+No LZF or IDLE and FREQ written, and no save on SIGTERM, which the runtime does not catch
+(sections 3zzzc and 3zzzk of docs/FINDINGS.md).
 Clients that wait: BLPOP, BRPOP, BLMOVE, BRPOPLPUSH, BLMPOP, BZPOPMIN, BZPOPMAX and
 BZMPOP; their timeout (seconds, a double; 0 means wait forever) is read as Redis reads
 it, with its errors. A command that has nothing to pop makes the client wait, and its
@@ -429,10 +433,10 @@ blocking command's does), MEMORY STATS, DOCTOR, PURGE and MALLOC-STATS (Redis's 
 and advice from the numbers of INFO's memory section; no allocator's statistics), LOLWUT
 (Redis 7.0.15's line, and VERSION 5's and 6's drawings, byte for byte those that take
 no random number), and SHUTDOWN with its flags: the append-only file written and synced,
-a rewrite that runs stopped, the RDB file saved with SAVE or with save points and not
-with NOSAVE (a save that fails stops nothing, Redis's error answered, but with FORCE),
-the pid file removed, the process ended with code 0 (sections 3zzl and 3zzzc of
-docs/FINDINGS.md).
+a rewrite or a background save that runs stopped, the RDB file saved with SAVE or with
+save points and not with NOSAVE (a save that fails stops nothing, Redis's error
+answered, but with FORCE), the pid file removed, the process ended with code 0 (sections
+3zzl, 3zzzc and 3zzzk of docs/FINDINGS.md).
 Times to live: EXPIRE, PEXPIRE, EXPIREAT and PEXPIREAT (with NX, XX, GT, LT), TTL, PTTL,
 EXPIRETIME, PEXPIRETIME, PERSIST; SET with NX, XX, GET, EX, PX, EXAT, PXAT and KEEPTTL;
 SETEX, PSETEX, GETEX (EX, PX, EXAT, PXAT, PERSIST) and GETDEL. Times are read as Redis
@@ -524,7 +528,10 @@ long the memory was past the limit (`total_eviction_exceeded_time`,
 LRU clock (seconds) or the LFU counter (logarithmic, with `lfu-log-factor`, decaying by
 `lfu-decay-time`); OBJECT IDLETIME and FREQ answer by them. Where BendKV differs: the same
 `maxmemory` holds another number of keys, a key taking another number of bytes in BendKV's
-heap (with its share of the trie's nodes) than in Redis's allocator; the marks are kept in
+heap (with its share of the trie's nodes) than in Redis's allocator; while a rewrite or a
+background save runs, the eviction counts the dataset's change by its number of keys, each
+at the average size when the job started, as its snapshot holds the values the writes
+replace where Redis's parent counts no page its child keeps; the marks are kept in
 a table of 2^20 words by the key's hash, and keys whose hashes have the same low 20 bits
 share a word; a request marks only its first key, and before it runs (the other keys of
 MGET are not marked); evicting many keys at once is about ten times slower than in Redis.
@@ -1134,6 +1141,14 @@ The translation the kernel reads can be dumped with
   which `redis-check-rdb` finds whole, loaded by Redis and by BendKV; SAVE, LASTSAVE,
   INFO's fields and the saves of FLUSHALL and SHUTDOWN against Redis's transcripts;
   files that do not load, each stopping both starts with Redis's line (section 3zzzc of
+  docs/FINDINGS.md).
+- **Background saves** (`tests/bgsave_test.py`): the count of changes of writes of
+  every kind, alone, in a pipeline and in MULTI; BGSAVE's replies, INFO's fields while
+  it runs and after it, the file and the log; BGSAVE and BGREWRITEAOF scheduled while
+  the other runs; the save points; MISCONF after a save that failed, for each command of
+  a pipeline, and the cron's next try; the parameters a save keeps from its start, and
+  its temporary file removed while it runs; SHUTDOWN and FLUSHALL while a save runs;
+  the default save points, all against Redis's transcripts (section 3zzzk of
   docs/FINDINGS.md).
 - **The end of a connection** (`tests/conn_test.py`): connections end by every path —
   the client closes after a request and before one, QUIT, a protocol error, a reset

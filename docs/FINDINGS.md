@@ -6321,8 +6321,9 @@ left aside, as Redis's `loadDataFromDisk` leaves it. The start no longer refuses
 - `Info`, of 63 words, would have been past 64 with the account's fields in it, and a
   node past 64 words is copied whole at every update (section 3zzz). The account is a
   node of its own (`Rdb`, with a constructor that holds its own type and is never built,
-  as `Tim` and `TRun` are), a word of `Info`, which is 64 words now: the next field it
-  takes must be a node's word too, or come out of it.
+  as `Tim` and `TRun` are), a word of `Info`, which is 64 words now (63 since #66 made
+  `Live`'s two counts of waiting clients one node, `Cn`): the next field it takes must
+  be a node's word too, or come out of it.
 
 **What it costs** (PERFORMANCE.md, section 67, which has the times and sizes against
 Redis's). A file of BendKV's is the size of Redis's when LZF gains nothing. SAVE takes
@@ -6369,11 +6370,15 @@ pass.
 - SAVE splits its own pipeline: the commands after it run in a group of their own, after
   the save, so another client's command can come between them (a WATCH before SAVE and
   an EXEC after it can see a key another client wrote), which Redis's SAVE cannot let
-  happen.
+  happen; and a client in BCAST tracking mode gets the keys the pipeline changes before
+  SAVE and those it changes after in two invalidation pushes, where Redis sends one.
+  BGSAVE splits nothing: it answers at once, and its save runs between groups (section
+  3zzzk).
 - The file holds the databases as the group left them, not as they were at SAVE (above):
   a SHUTDOWN SAVE and another client's FLUSHALL in one group give Redis a file of the
   keys and BendKV an empty one. The databases are values that do not change, so the
-  save could take them at SAVE's place in the group; that is left for later.
+  save could take them at SAVE's place in the group; that is left for later (BGSAVE
+  takes its snapshot so: section 3zzzk).
 - After a SHUTDOWN that saves, the other clients' requests of its group ran before the
   save (above): what they wrote reached the append-only file and the RDB file, and they
   got no reply, where Redis ends inside the SHUTDOWN and runs none of them. Section
@@ -6755,6 +6760,342 @@ count never carries into its code; a check in `tests/smoke.bend` counts 2^32 + 5
 
 **Tests.** `tests/timing_test.py`, `tests/stats_test.py` and `tests/info_test.py` against
 Redis: commandstats, latencystats, errorstats and the slow log, unchanged.
+
+## 3zzzk. Background saves: BGSAVE, the save points, MISCONF and the count of changes
+
+**What was left.** Section 3zzzc wrote the RDB file at SAVE, SHUTDOWN and FLUSHALL and
+left the second part of issue 67: BGSAVE and the saves at the save points. BendKV's
+default `save` was empty, where Redis's is `3600 1 300 100 60 10000`, so a BendKV run
+with Redis's defaults kept nothing in `dump.rdb` until a SHUTDOWN; BGSAVE was an unknown
+command, `rdb_changes_since_last_save` stayed 0, and stop-writes-on-bgsave-error had
+nothing to stop.
+
+**The count of changes** (`src/server.bend`: The count of changes). Redis counts each
+change as the command makes it (`server.dirty`: a key set, an element pushed or popped,
+a member or a key removed, each key a FLUSHALL empties), and a save that ends well
+subtracts the changes it holds. BendKV's commands run in the pure core, which keeps no
+such count, so the shell counts a call's changes once it has run, from its reply, by the
+rule of its command: a table `stat.dirty` in `src/redis.bend`, generated from
+`DIRTY` in `tools/gen_commands.py`, whose check fails when a command Redis flags `write`
+has no rule. There are seventeen rules (none; one for a reply that is no error; the
+integer of the reply; OK or a value; a value; the elements of a pop; ...; the weight
+whatever the reply), and seven of them take a weight read before the call from its
+arguments and from the databases as they are: the pairs of MSET and HSET, the elements
+of a push, whether a STORE's destination is there, the keys FLUSHDB and FLUSHALL empty,
+the elements LTRIM drops, whether SETBIT's bit changes or its value grows, whether
+GETEX's key has a time to lose, whether SMOVE's member is in both sets, whether the
+increment of ZINCRBY (ZADD with INCR) changes the score, whether RESTORE's time has
+passed (then only a key it deleted counts), whether PFDEBUG GETREG or TODENSE makes a
+sparse HyperLogLog dense, and for an EVAL of BendKV's own scripts (a new collection
+where a key whose time had passed lay, a move to one) the key their DEL deletes and what
+the command they run changes (`dw.cmd`). The table `CASES` of `tests/bgsave_test.py`
+(Tests, below) gives Redis's count for each write, alone, in a pipeline and in MULTI,
+and BendKV's matches it but where listed below.
+
+- The fast way counts a batch once it has run (`run_put`, `group_put`). A batch of one
+  code costs a look at its rule: none for GET; for INCR, its calls less the errors the
+  risky look already counted (`dirty.quick`); for SET, a walk of its replies
+  (`dirty.one`, a loop of its own). A batch of several codes is counted a call at a time
+  (`dirty.batch`). A batch with a code that takes a weight reads the weights of all its
+  calls before it runs, from the databases as the batch found them (`fast.run.w`,
+  `dirty.ws.of`, `run_put.w`); no other batch reads anything more before it runs.
+- The general way counts each call as it runs (`gen.count.d`, `dirty.ran`): its reply
+  is there, and its weight was read just before it. A call whose replies CLIENT REPLY
+  holds back counts from the reply it would have had.
+- A client served later by a push counts what Redis 7.0.15 counts for it: the elements
+  BLMPOP and BZMPOP took, and one for BZPOPMIN and BZPOPMAX; BLPOP, BRPOP, BLMOVE and
+  BRPOPLPUSH count none there (`serveClientBlockedOnList` changes no count but for
+  BLMPOP's `listPopRangeAndReplyWithKey`).
+- SAVE that ends well leaves 0, as `rdbSave` does; FLUSHALL with save points takes away,
+  once its save has ended well, the changes counted until it ran, and leaves those of
+  the commands after it in its group, which Redis runs after the save; a background
+  save that ends well takes away the count when it started (`dirty_before_bgsave`).
+- The count lives in `Info`'s account of the RDB file (`Rdb`), added once a batch with
+  the other counts of a batch (`I.info.ran.d`), so it costs no rebuild of `Info` of its
+  own; the background saves' account is a node of `Rdb`'s (`Bgs`), and `Info` stays 63
+  words. It stops at 2^47 (four years of a million writes a second with no save that ends
+  well), as a Nat past 2^48 stops the process.
+
+**BGSAVE** (`src/server.bend`: Background saves). BGSAVE takes a snapshot of the
+databases at its place in its group, as Redis's fork takes one at the command. The
+databases are values, so the snapshot is a list of them that the writes after it do not
+change: they make new nodes where they change shared ones, as the child's pages are
+copied on write, which is what the rewrite of the append-only file does with its own
+(section 3zv). The snapshot waits in the account (`Bgs`) until the group is answered,
+and the actor writes it as it writes a rewrite: a slice of a database at a time, after
+the groups it answers and while no request waits, to `temp-<pid>.rdb`, 64 KB at a time,
+synced each 4 MB with `rdb-save-incremental-fsync yes`; then the file's end, the sync,
+the rename onto `dbfilename` and the directory's sync. The save keeps `dbfilename`,
+`rdbchecksum`, `rdb-key-save-delay` and `rdb-save-incremental-fsync` as they were at the
+BGSAVE (or at the cron's look that starts it), as Redis's child keeps them from its fork
+(`rdbSaveBackground` hands it `server.rdb_filename` then; no CONFIG SET changes
+`rdbchecksum`): they go into the account with the snapshot (`I.BgCf`, `S.srv.bg.go`),
+and a CONFIG SET in BGSAVE's own pipeline or while the save runs changes the next save,
+not this one. A writer task of its own holds
+the temporary file open from the save's start to its end (`bgw.loop`), as Redis's child
+holds its descriptor: the actor sends it the bytes and waits for its answer, as it waited
+for its own writes before, so that a file removed while the save runs is written all the
+same and the rename at the end fails, as Redis's does, where a file opened again by its
+name for each 64 KB would be made anew, without its head, and put in place of
+`dbfilename`. A FLUSHALL or a SHUTDOWN that drops the save closes the writer's channel,
+and the writer closes the file.
+The bytes are SAVE's, AUX fields and all (neither writes `repl-id` or `repl-offset`,
+which Redis keeps from a file it loaded: README.md, Persistence), `ctime` and `used-mem`
+taken when the actor starts the save. Its lines are Redis's parent's and child's, the
+child's with the role C and the server's pid: "Background saving started by pid N",
+"DB saved on disk" (C), "Background saving terminated with success"; a save that fails
+logs the child's line ("Failed opening the temp RDB file ...", "Write error saving DB
+on disk(...)", "Error moving temp DB file ...") and "Background saving error". One that
+ends well is the last save (LASTSAVE, `rdb_last_save_time`, status ok); one that fails
+makes the status err. INFO shows `rdb_bgsave_in_progress`, `rdb_current_bgsave_time_sec`
+and `rdb_last_bgsave_time_sec`, `rdb_saves` (counted at the command, as
+`rdbSaveBackground` counts it), `current_save_keys_total` (the snapshot's keys) and
+`_processed`, and `current_fork_perc` from them.
+
+BGSAVE answers as `bgsaveCommand` does: a syntax error for any argument but SCHEDULE
+(the parser's), "ERR Background save already in progress" while one runs, "ERR Another
+child process is active (AOF?): can't BGSAVE right now. Use BGSAVE SCHEDULE ..." while a
+rewrite runs, or "Background saving scheduled" with SCHEDULE, and in EXEC always; the
+cron starts what is scheduled. One job runs at a time, as one child does in Redis:
+BGREWRITEAOF while a save runs is scheduled, SAVE while one runs is refused, and the
+cron starts the scheduled one once the other has ended.
+
+A FLUSHALL drops the save that runs, as `killRDBChild` does, once its group is answered
+and after its own save with save points: its temporary file removed, "Background saving
+terminated by signal 10" (the line Redis's cron writes when it finds the child killed),
+the status as it was, its time counted. A SHUTDOWN drops it before its own save ("There
+is a child saving an .rdb. Killing it!", `finishShutdown`), and when that save fails and
+the server goes on, logs the child's end as Redis's next cron does.
+
+`rdb-key-save-delay` paces the job, a key at a time, as Redis's child sleeps after each
+key it writes: the next slice may go once the delay of the keys before it has passed
+(`pace.next`), a slice is one bucket of the trie, and an idle actor waits a millisecond
+at a time meanwhile, still taking requests. The rewrite of the append-only file is
+paced the same way, a command at a time, as Redis's child sleeps after each key it
+rewrites. The tests use it to have a save or a rewrite run for a second on both servers.
+
+**The save points and the cron** (The cron). The cron's look, every 100 ms while no job
+runs, follows `serverCron`'s order: a rewrite scheduled; else the first save point
+reached (as many changes since the last save, and more seconds since the last one that
+ended well), with "<changes> changes in <seconds> seconds. Saving..."; else the rewrite
+for the file's growth; else a BGSAVE scheduled. After a background save that failed, a
+save point or a scheduled BGSAVE waits until 5 seconds have passed since it was tried
+(`CONFIG_BGSAVE_RETRY_DELAY`). The save points are read from `save` into the account at
+the start and at each CONFIG SET (`rdb.cfg`), so the look reads no parameter (the first
+build read `save` at each look: What it found, below).
+
+**MISCONF.** After a background save that failed, with save points and
+`stop-writes-on-bgsave-error yes` (Redis's default), Redis refuses the commands flagged
+`write`, and PING, with "-MISCONF Redis is configured to save RDB snapshots, ..."
+(`writeCommandsDeniedByDiskError`) until a save ends well, or the parameters change.
+Each command of the general way reads the server's state for it (`srv.misconf`), as
+`processCommand` asks for each command, so that a CONFIG SET that lifts it or sets it
+again, alone or in MULTI, counts for the commands after it in its pipeline. The shell
+keeps the same in bit 19 of Ps's `ev` (`misconf.bit`: set by `ps.tune` after each batch
+of the general way and by the actor after each step and each save) only to keep the
+fast way off while the writes are refused, as the other bits past the events' do
+(`ps.calm`); `ps.loud`, whose bits say that keyspace events are to be computed, leaves
+it out. The refusal comes where
+`processCommand` makes it: after AUTH, NO_MULTI and the refusal past maxmemory, before a
+subscriber's and a monitor's refusals and before the pause holds the command
+(`sh.misconfy`); in MULTI it flags the transaction, and an EXEC whose transaction queued
+a write is aborted with "EXECABORT Transaction discarded because of: MISCONF ...". The
+calls are counted as refused, and the errors as MISCONF's. `stat.write`, the table of
+the commands Redis flags write, is generated with `stat.dirty`.
+
+**maxmemory while a job runs** (`src/server.bend`: Eviction, `mem.seen`;
+`src/session.bend`: `mm.snap`, `mm.view`). While a background save or a rewrite of the
+append-only file runs, its snapshot holds every value a write replaces or deletes, and
+the heap's reading (`IO.heap`) counts them all; Redis's eviction (`performEvictions`,
+`getMaxmemoryState`) reads its parent's `used_memory`, which the child's pages copied
+on write never reach. So the eviction, and the refusal of writes past maxmemory with
+noeviction and of the commands that may take memory, see the memory as the heap when
+the job started plus the change in the number of keys since then, each key at the
+average size then: when the actor starts the job (once the group of its BGSAVE or
+BGREWRITEAOF is answered, or at the cron's look), the eviction's state keeps the heap's
+used bytes (h0), the keys of all databases (k0) and their average (the heap past INFO's
+`used_memory_startup`, shared among the keys; none without keys); while it runs, the
+memory compared with maxmemory is the heap, or h0 and the keys made since at the
+average less those gone since if that is less. Values replaced by values of the same
+size cost nothing, a key made counts, and each key evicted or deleted counts less, so
+the eviction stops near the excess; a value that grows in place counts once the job has
+ended, when the heap is read as it is again (and so does a value that a write after the
+BGSAVE in its own group replaced: h0 is read after that group). This replaces section
+3zzzr's debt, which counted the keys the eviction itself deleted, and while a rewrite
+ran only: an evicted key now lowers the count of keys, and the debt would have counted
+it twice; its estimate of each evicted key (`AskEst`) and the heap's last reading in the
+eviction's state went with it. Section 3zzzr's scenario (300,000 keys, BGREWRITEAOF, the
+limit a tenth of the keys' share below the memory used) leaves about as many keys as with
+the debt: 238,044 and 238,170 after 3 s in two runs, 238,044 and 238,122 once the rewrite
+had ended (with the debt, 238,210 both times). INFO shows the heap as it is.
+
+**The defaults.** `save` is Redis's, `3600 1 300 100 60 10000` (`tools/gen_config.py`
+keeps only the loopback address apart from Redis's defaults). The start's warning that
+the save points saved nothing is now one that SIGTERM and SIGINT end BendKV without a
+save, which Redis makes for them with save points. The short form has no save points
+(`save ""`): it loads no RDB file, so a file its saves wrote would never be read back,
+and `make perfcheck` runs no BGSAVE. `tests/maxmemory_test.py` starts BendKV with
+`--save ""`, as it starts its Redis.
+
+**What it found.**
+
+- The first build cost every request of GET, SET and INCR more than the count needs:
+  the cron's look read `save` among the parameters each 100 ms, a cost callgrind spreads
+  over the few requests its slow run serves in 100 ms; the weights' check before each
+  batch made `fast.run` keep its state across a call; `run_put`, called from two places,
+  became a segment entered through the work loop, and the count's walks called
+  `List.length`, which is no loop, so that their callers kept their state across them
+  (the traps of section 7). PERFORMANCE.md, section 72, has what each cost.
+- On the fast way, the replies of GET, SET, GETSET and APPEND are not looked at for
+  errors (they are not in `RISKY`), so their WRONGTYPE errors go to no `errorstat_*` and
+  no `failed_calls`, where Redis counts them (5 WRONGTYPE errors of GET, APPEND, GETSET
+  and SET GET on a list: Redis's `errorstat_WRONGTYPE:count=5`, BendKV's none). This
+  change leaves it as it was. The count of changes does not rely on it: a batch whose
+  rule counts the replies that are no error walks them when they were not looked at
+  (`dirty.fine`).
+- The review of the pull request, with a harness of its own against Redis:
+  - *maxmemory during a job.* 200,000 keys of 100 bytes, maxmemory 10 MB above the
+    memory they took, a BGSAVE paced by `rdb-key-save-delay`, every key written again
+    with a value of the same size: BendKV evicted 117,462 keys, Redis none; under
+    noeviction BendKV refused 74,821 of 100,000 such writes with OOM, Redis none; and
+    main's BGREWRITEAOF did the same (section 3zzzr's debt counted only what the
+    eviction itself deleted). Now counted by the keys (maxmemory while a job runs,
+    above): none evicted and none refused in either.
+  - *MISCONF in a pipeline.* The refusal read the batch's flag, which is set once a
+    batch has run, so `MULTI`, `CONFIG SET save ""`, `EXEC`, `SET a 2` in one pipeline
+    was refused, and `CONFIG SET stop-writes-on-bgsave-error no`, `SET a 4` too, where
+    Redis checks each command. Now read from the server's state for each command.
+  - *The count of changes:* ZINCRBY and ZADD INCR that leave the score as it was
+    counted 1 (Redis 0), RESTORE with an ABSTTL in the past onto a missing key 1 (Redis
+    0), an EVAL of BendKV's own script of a new hash over a string 1 (Redis 4: its DEL
+    and its HSET's three pairs), PFDEBUG TODENSE of a sparse HyperLogLog 0 (Redis 1).
+    Each now takes a weight read before the call, and counts as Redis does. FLUSHDB
+    after a read of a key whose time had passed stays a difference (below).
+  - *The save's parameters.* `dbfilename` was read when the actor started writing, after
+    the group: with `enable-protected-configs yes`, `BGSAVE` and `CONFIG SET dbfilename
+    other.rdb` in one pipeline wrote `other.rdb` (Redis `dump.rdb`); and
+    `rdb-key-save-delay` and `rdb-save-incremental-fsync` were read at each slice. Now
+    kept from the BGSAVE (above).
+  - *The temporary file.* It was opened again by its name for each 64 KB: removed while
+    the save ran, it was made anew without its head, and renamed onto `dump.rdb`, a file
+    that does not load. Now its writer holds it open (above), and the rename fails as
+    Redis's does.
+  - *An INFO after a FLUSHALL with save points in one pipeline* gave the count before
+    that FLUSHALL's save, where Redis, which saves within FLUSHALL, gives the changes
+    made after it. Now the count less what the save takes away when it ends well.
+
+**What it costs** (PERFORMANCE.md, section 72): the count of changes on every batch, and
+the cron's look at the save points each 100 ms; while a background save runs, the
+actor's time between groups, a slice at a time, and the copies the writes make of the
+nodes they change that its snapshot shares. The review's fixes add nothing to GET, SET
+and INCR (a batch's rule is looked up once now); before each ZINCRBY and ZADD INCR, the
+lookup of its member and the parse of its increment, a few percent of the call (the sum
+of the doubles only when their fields leave it open: `dw.zincr.kind`).
+
+**The laws.** No law changed, and none states the count of changes or the saves: the
+rules, the weights and the background save are the shell's, tested against Redis. The
+account's new fields are `Info`'s (`src/info.bend`); `src/session.bend` gets wrappers
+for them (`srv.ran.d`, `srv.bg.*`, `srv.rdb.clean`, ...) and BGSAVE's reply when a
+session runs it alone, which the laws do not name: the three laws that enumerate a
+session's commands take BGSAVE as they take the other kinds of `SAdmin`. The review's
+fixes change `src/session.bend`'s `Mm` (the memory as the eviction sees it while a job
+runs, in place of the debt) and `srv.bg.go` (the parameters a save keeps), which no law
+names either. `make check` and `make verdict` pass.
+
+**Where BendKV differs.**
+
+- The count of changes, where its rule reads the reply rather than the change: SET with
+  GET counts its reply (none for a key not there, without NX or with it; one for a key
+  there with NX, which Redis does not set); ZADD and GEOADD without NX or CH count each
+  pair, those whose score was there already and is unchanged too (with XX, GT and LT as
+  well), where Redis counts the elements added and the scores changed; BITFIELD counts
+  each SET and INCRBY that OVERFLOW FAIL did not refuse, those that leave the bits as
+  they were too; PFADD counts one where Redis counts the registers that change, and one
+  for a new key; PFCOUNT, which Redis counts when it caches the cardinality, counts
+  none. FLUSHDB and FLUSHALL count a key whose time has passed until the sweep deletes
+  it, also when a read has found it missing, which Redis's read deletes
+  (`SET a 1 PX 1`, `SET b 1`, a read of a 50 ms later, FLUSHDB: Redis 1, BendKV 2), and
+  so does a background save's `current_save_keys_total`; the reads are pure, and the
+  count of keys of the databases is a number they keep, which a walk of every key with a
+  time would replace. A call of the fast way reads its weight from the databases as its
+  batch found them, not as the calls before it in the batch left them (SETBIT twice on
+  one bit, an LTRIM after a push, in one pipeline). An INFO after a FLUSHALL with save
+  points in its pipeline gives the count as that FLUSHALL's save leaves it when it ends
+  well (the save comes once the group has run); after one that fails, the count is the
+  whole count again, which Redis's INFO there would have given. After a start from the
+  append-only file, the count is 0, where Redis counts the changes the file replayed.
+- maxmemory while a background save or a rewrite runs is counted by the keys (above):
+  values that grow in place count once the job has ended, and keys made of another size
+  than the snapshot's average count at that average, where Redis's `used_memory` counts
+  each allocation as it is made. INFO's `used_memory` is the heap meanwhile, the
+  snapshot's values in it.
+- A rewrite of the append-only file reads `rdb-key-save-delay` and
+  `aof-rewrite-incremental-fsync` as they are at each slice, where Redis's child keeps
+  them from its fork (a background save keeps its own: above).
+- No fork: `total_forks` and `latest_fork_usec` stay 0, the copy on write is 0, and
+  there are no fork lines in the log ("Fork CoW for RDB: ..."). The child's lines have
+  the server's pid. `current_save_keys_processed` follows each slice written, where
+  Redis's child reports its count once a second at most (1 key for a small save), and
+  `current_fork_perc` follows it. A rewrite of the append-only file shows 0 in the three,
+  where Redis's show the keys at its fork and those its child has rewritten.
+- The save's "Background saving started" line comes when the actor starts it, once the
+  group is answered, not at BGSAVE; a SHUTDOWN or a FLUSHALL in the same group as the
+  BGSAVE then drops it before it wrote anything, with "There is a child saving an .rdb.
+  Killing it!" or "Background saving terminated by signal 10" but no line of its start.
+- A FLUSHALL's "Background saving terminated by signal 10" comes once its group is
+  answered (Redis's comes at its next cron, up to 100 ms later).
+- SAVE and the saves of SHUTDOWN and FLUSHALL ignore `rdb-key-save-delay`, which Redis's
+  `rdbSave` honors in them too (BendKV's are made whole, after their group).
+- SIGTERM and SIGINT still end BendKV at once (section 3zzzc): with save points there is
+  no save, as before, and a background save that runs leaves its temporary file, which
+  Redis's shutdown removes.
+
+**Tests.** `tests/bgsave_test.py`, in `make test`, runs each part on a redis-server and
+a BendKV of their own, each in a fresh directory, and compares the transcripts line by
+line (1,303 checks):
+
+- the count of changes of 203 writes of every kind (the table `CASES`, Redis's count and
+  BendKV's where they differ), each alone, in a pipeline between two PINGs, and in
+  MULTI: byte for byte, Redis's counts checked against the table too;
+- BGSAVE: its replies (a syntax error, SCHEDULE, already in progress, SAVE and BGSAVE
+  while one runs, in MULTI), INFO's fields before, during (slowed down by
+  `rdb-key-save-delay` 20,000 over 50 keys: about a second) and after it, LASTSAVE, the
+  file (the keys of the snapshot, not the writes made while it ran), no temporary file
+  left, the log's lines, CONFIG RESETSTAT; the counts after it;
+- BGSAVE and BGREWRITEAOF: each scheduled while the other runs, then run;
+- the save points: `save 1 1` saves within seconds of a change and not before, with
+  Redis's line, and not without save points;
+- a background save that fails (dump.rdb is a directory, so the rename fails): MISCONF
+  for writes and PING, not for reads, in MULTI and at EXEC, for a subscriber and a
+  monitor; errorstats and rejected calls; stop-writes-on-bgsave-error no, no save
+  points, and a save that ends well (BGSAVE, SAVE) lift it; a CONFIG SET that lifts it
+  or sets it again, alone or in MULTI, for the commands after it in its pipeline, and
+  for another client's pipeline of writes after it;
+- the cron's next try 5 to 8 seconds after a save that failed, and none before;
+- the parameters a save keeps from its start: CONFIG SET of `dbfilename` in BGSAVE's
+  own pipeline (the file is `dump.rdb`), of `rdb-key-save-delay` 0 while it runs (it
+  still takes its second);
+- the temporary file removed while a save runs: the save goes on, its rename fails with
+  Redis's line, the status is err, no `dump.rdb` is put in place, and the next save ends
+  well;
+- SHUTDOWN (with save points, NOSAVE, and a save that fails) and FLUSHALL (with save
+  points and without) while a save runs: the files after, the temporary file removed,
+  the log's lines, the status and the count;
+- Redis's defaults: CONFIG GET save, and a SHUTDOWN that saves with them.
+
+Where a line depends on time (a second's field, the progress of a save that runs), it
+holds what both must agree on: a range, or a test of order, as each part's comment
+says. `tests/rdb_test.py`'s scenario of SAVE and FLUSHALL now compares
+`rdb_changes_since_last_save` too, and the client suites start BendKV without save
+points, as they start Redis. `tests/maxmemory_test.py` compares maxmemory while a job
+runs on both servers: during a BGSAVE and during a BGREWRITEAOF, each paced to a few
+seconds, 50,000 keys of 100 bytes written again with values of the same size, the limit
+4 MB above the memory they take, evict nothing under allkeys-random and are refused
+nothing under noeviction; new keys during a BGSAVE are evicted on both as they pass the
+limit, each holding what the room left holds of its own keys at the bytes they took
+before the save, within an eighth (BendKV 0.1% more, Redis 3% to 6% more, its hash table
+not growing while a child runs: the numbers are in the test's comment), and once the
+save has ended BendKV evicts as its heap holds them, about 9% fewer.
 
 ## 3zzzl. A SHUTDOWN that saves holds the rest of its group
 
