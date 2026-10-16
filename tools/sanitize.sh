@@ -38,6 +38,8 @@
 # conventions ("Stack realignment in presence of dynamic allocas is not
 # supported with this calling convention"). UBSan and TSan run whole, with
 # no check left out and nothing suppressed: neither reports anything here.
+# A line of ASan's that is no report, its note that it does not fully
+# support swapcontext, is set aside (reports, below).
 #
 #   BEND="bun ../bend-patched/bend2/main.ts" PORT=6380 REDIS_PORT=6390 sh tools/sanitize.sh
 #
@@ -86,8 +88,22 @@ stop() {
     BKV=
   fi
 }
-# fails if a sanitizer reported, and shows what it reported
+# fails if a sanitizer reported, and shows what it reported. ASan writes
+# one line to each process's file the first time the process switches
+# stacks with swapcontext, as the engine of scripts does
+# (src/lua/engine.c): that it "doesn't fully support makecontext/
+# swapcontext functions and may produce false positives". The switches
+# carry the fiber annotations it asks for instead, and the line is no
+# report: a file that holds it alone is set aside (warned/), and a file
+# with any other line fails the run
+WARN="^==[0-9]*==WARNING: ASan doesn't fully support makecontext/swapcontext functions and may produce false positives in some cases!\$"
 reports() {
+  for f in "$REP"/*; do
+    if [ -f "$f" ] && ! grep -qv "$WARN" "$f"; then
+      mkdir -p "$OUT/warned"
+      mv "$f" "$OUT/warned/"
+    fi
+  done
   if [ -n "$(ls "$REP")" ]; then
     for f in "$REP"/*; do
       echo "== $f"
@@ -164,4 +180,4 @@ for san in asan tsan; do
 done
 trap - EXIT
 finish
-echo "OK: no sanitizer reported"
+echo "OK: no sanitizer reported ($(ls "$OUT/warned" 2> /dev/null | wc -l) processes with ASan's line of swapcontext alone, in $OUT/warned)"
