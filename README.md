@@ -294,7 +294,7 @@ translation stays in the trusted base.
   entries', live entries out of order, a pending entry no consumer holds or two hold,
   a time past 2^47, ...); the rewrite of the append-only file writes a stream as a
   RESTORE of its payload, where Redis writes XADD, XSETID, XGROUP and XCLAIM; MEMORY
-  USAGE estimates otherwise (sections 3zzzu and 3zzzx of
+  USAGE estimates otherwise (sections 3zzzu and 3zzzy of
   [docs/FINDINGS.md](docs/FINDINGS.md)).
 - **Clients that wait:** BLPOP, BRPOP, BLMOVE, BRPOPLPUSH, BLMPOP, BZPOPMIN, BZPOPMAX
   and BZMPOP, their timeouts (seconds, a double; 0 waits for ever) read as Redis reads

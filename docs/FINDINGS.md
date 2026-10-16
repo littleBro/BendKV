@@ -7580,7 +7580,7 @@ list's change is its pushes on `deq.empty()`.
 - A list of one to a few elements in fewer nodes.
 - A push in place, which needs a write that owns the list it changes (3zzzm's `db.upd`).
 
-## 3zzzx. Streams: the commands that read one
+## 3zzzy. Streams: the commands that read one
 
 **What there is** (`src/stream.bend`, new; `src/redis.bend`, Streams and Reads of a
 stream). XLEN, XRANGE, XREVRANGE, XREAD, XINFO and XPENDING answer as Redis 7.0.15's
