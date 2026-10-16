@@ -1737,6 +1737,8 @@ def obj.hash.enc(+h: KV.Hash, +cfg: List<&2, C.CItem>) -> String:
       Bool.pick(String, Bool.and(Nat.is_le(n, cfg.nat(cfg, "hash-max-listpack-entries")), obj.wide.ok(KV.hb.widest(n, b, 0n, 0n), cfg.nat(cfg, "hash-max-listpack-value"))), "listpack", "hashtable")
     case KV.HBig{n, t}:
       "hashtable"
+    case KV.HLong{+n, +ps}:
+      Bool.pick(String, Bool.and(Nat.is_le(n, cfg.nat(cfg, "hash-max-listpack-entries")), obj.wide.ok(KV.hl.widest(ps, 0n), cfg.nat(cfg, "hash-max-listpack-value"))), "listpack", "hashtable")
 
 def obj.mems.enc(+m: KV.Mems, +cfg: List<&2, C.CItem>) -> String:
   match m:

@@ -767,7 +767,7 @@ away.
 
 | file | lines of code | of them written by a generator | the laws import it |
 |---|---:|---:|---|
-| `src/map.bend` | 2,000 | 640 | yes |
+| `src/map.bend` | 2,400 | 640 | yes |
 | `src/redis.bend` | 16,000 | 6,400 | yes |
 | `src/batch.bend` | 84 |  | yes |
 | `src/aof.bend` | 1,200 |  | yes |

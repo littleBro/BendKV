@@ -11,6 +11,12 @@ its picks by what they must be (how many, from the hash, different ones
 for a positive count, each field with its value). MEMORY USAGE is an
 estimate on each server: compared by kind (a number, a nil, an error).
 A hash whose key's time has passed is made anew by a write, as in Redis.
+Past 2,048 bytes BendKV keeps a small hash's pairs in pieces: a hash
+grown past that a field at a time, its values made longer and shorter,
+its fields taken out until it is small again, and Redis's listpacks of
+long values restored on both, each read in its order; then random
+commands on hashes of up to 150 and 80 fields that grow past it and
+shrink.
 
     python3 tests/hash_test.py --bendkv 6380 --redis 6390 [--rounds 3000] [--seed 1]
 """
@@ -197,6 +203,51 @@ def sizes(b, r):
             same(b, r, cmd)
 
 
+# a hash past one buffer (2,048 bytes in BendKV, which keeps its pairs in
+# pieces): grown a field at a time, its values made longer (a piece past
+# a buffer is dealt again) and shorter, its fields taken out from the
+# front, the end and the middle until it is small again, then grown
+# again; then Redis's listpacks of long values (restored, they stay
+# listpacks on both), read and written. Each in its order.
+def pieces(b, r):
+    look = lambda key: ([b"HGETALL", key], [b"HLEN", key], [b"OBJECT", b"ENCODING", key])
+    for i in range(60):
+        same(b, r, [b"HSET", b"p", b"field%02d" % i, b"v" * 40])
+        if i % 10 == 9:
+            for cmd in look(b"p"):
+                same(b, r, cmd)
+    for i in range(0, 60, 3):
+        same(b, r, [b"HSET", b"p", b"field%02d" % i, b"w" * 64])
+    for i in range(1, 60, 3):
+        same(b, r, [b"HSET", b"p", b"field%02d" % i, b""])
+    for cmd in look(b"p") + ([b"HGET", b"p", b"field59"], [b"HGET", b"p", b"field00"], [b"HEXISTS", b"p", b"nope"]):
+        same(b, r, cmd)
+    order = [0, 59, 30, 1, 58, 31, 29, 2] + list(range(3, 29)) + list(range(32, 58))
+    for k, i in enumerate(order[:-3]):
+        same(b, r, [b"HDEL", b"p", b"field%02d" % i])
+        if k % 8 == 7:
+            for cmd in look(b"p"):
+                same(b, r, cmd)
+    for cmd in look(b"p"):
+        same(b, r, cmd)
+    for i in range(100, 160):
+        same(b, r, [b"HSET", b"p", b"field%d" % i, b"x" * (i % 65)])
+    for cmd in look(b"p") + ([b"HINCRBY", b"p", b"field100", b"7"], [b"HGET", b"p", b"field159"]):
+        same(b, r, cmd)
+    run(r, [b"CONFIG", b"SET", b"hash-max-listpack-value", b"1000000"])
+    for key, k, vl in ((b"lp1", 120, 1000), (b"lp2", 5, 70000), (b"lp3", 3, 3000)):
+        run(r, [b"DEL", key])
+        for i in range(k):
+            run(r, [b"HSET", key, b"f%d" % i, (b"f%d:" % i).ljust(vl, b"y")])
+        payload = run(r, [b"DUMP", key])[1]
+        run(r, [b"DEL", key])
+        for cmd in ([b"RESTORE", key, b"0", payload],) + look(key) + (
+                [b"HGET", key, b"f%d" % (k - 1)], [b"HEXISTS", key, b"nope"], [b"HSET", key, b"f1", b"short"],
+                [b"HGET", key, b"f1"], [b"HDEL", key, b"f0"], [b"HSET", key, b"new", b"1"]) + look(key):
+            same(b, r, cmd)
+    run(r, [b"CONFIG", b"SET", b"hash-max-listpack-value", b"64"])
+
+
 # a hash whose time passed: a read finds nothing, a write makes it anew
 def expired(b, r):
     for c in (b, r):
@@ -238,6 +289,26 @@ def rand_cmd(r):
                      [b"TYPE", key], [b"OBJECT", b"ENCODING", key]])
 
 
+# random commands on two hashes, values of up to 64 bytes: one of up to
+# 150 fields, mostly past 2,048 bytes in several pieces, and one of up to
+# 80, about that size, which passes it both ways
+def rand_wide(r):
+    key = r.choice([b"w1", b"w2"])
+    top = 149 if key == b"w1" else 79
+    f = lambda: b"f%d" % r.randint(0, top)
+    k = r.random()
+    if k < 0.55:
+        return [b"HSET", key] + [x for _ in range(r.randint(1, 3)) for x in (f(), b"v" * r.randint(0, 64))]
+    if k < 0.8:
+        return [b"HDEL", key] + [f() for _ in range(r.randint(1, 6))]
+    if k < 0.85:
+        return [b"HINCRBY", key, f(), b"1"]
+    if k < 0.9:
+        return [b"HGETALL", key]
+    return r.choice([[b"HGET", key, f()], [b"HEXISTS", key, f()], [b"HLEN", key], [b"HSTRLEN", key, f()],
+                     [b"HMGET", key, f(), f(), f()], [b"OBJECT", b"ENCODING", key]])
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--bendkv", type=int, default=6380)
@@ -251,10 +322,15 @@ def main():
     for cmd in SCRIPT:
         same(b, rd, cmd)
     sizes(b, rd)
+    pieces(b, rd)
     expired(b, rd)
     r = random.Random(a.seed)
     for _ in range(a.rounds):
         same(b, rd, rand_cmd(r))
+    for _ in range(a.rounds):
+        same(b, rd, rand_wide(r))
+    for key in (b"w1", b"w2"):
+        same(b, rd, [b"HGETALL", key])
     for c in (b, rd):
         run(c, [b"FLUSHALL"])
     if bad:
