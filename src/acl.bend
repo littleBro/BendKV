@@ -2170,34 +2170,74 @@ def kpat.ok(+p: KPat, +k: KeyUse) -> Bool:
     case KPat{+rw, +pat} KeyUse{+key, +need, at}:
       Bool.and(Bool.or(Nat.is_eq(need, 0n), Bool.or(Nat.is_eq(rw, 3n), Nat.is_eq(rw, need))), R.stringmatch(pat, key, False{}))
 
-def kpats.ok(ps: List<&2, KPat>, +k: KeyUse) -> Bool:
-  match ps:
-    case Nil{}:
+# whether one of the patterns ps allows the key k, read in place: ok says
+# whether the pattern before ps did
+def kpats.ok.go(+ps: List<&2, KPat>, ok: Bool, +k: KeyUse) -> Bool:
+  match ps ok:
+    case _ True{}:
+      True{}
+    case Nil{} False{}:
       False{}
-    case Con{+p, rest}:
-      Bool.or(kpat.ok(p, k), kpats.ok(rest, k))
+    case Con{+p, +rest} False{}:
+      kpats.ok.go(rest, kpat.ok(p, k), k)
 
-# the first key the selector's patterns do not allow
-def keys.fail(ks: List<&2, KeyUse>, +ps: List<&2, KPat>) -> Maybe<&2, KeyUse>:
-  match ks:
-    case Nil{}:
+def kpats.ok(+ps: List<&2, KPat>, +k: KeyUse) -> Bool:
+  kpats.ok.go(ps, False{}, k)
+
+# the first of the keys ks the patterns ps do not allow, read in place: ok
+# says whether the key before ks, last, was allowed
+def keys.fail.go(+ks: List<&2, KeyUse>, ok: Bool, +last: KeyUse, +ps: List<&2, KPat>) -> Maybe<&2, KeyUse>:
+  match ks ok:
+    case _ False{}:
+      Some{last}
+    case Nil{} True{}:
       None{}
-    case Con{+k, rest}:
-      Bool.pick(Maybe<&2, KeyUse>, kpats.ok(ps, k), keys.fail(rest, ps), Some{k})
+    case Con{+k, +rest} True{}:
+      keys.fail.go(rest, kpats.ok(ps, k), k, ps)
 
-def chan.ok(+lit: Bool, +ch: String, ps: List<&2, String>) -> Bool:
-  match ps:
-    case Nil{}:
+def keys.fail(+ks: List<&2, KeyUse>, +ps: List<&2, KPat>) -> Maybe<&2, KeyUse>:
+  keys.fail.go(ks, True{}, KeyUse{"", 0n, 0n}, ps)
+
+# whether the pattern p (the name p, lit) allows the channel ch
+def chan.one(lit: Bool, +p: String, +ch: String) -> Bool:
+  match lit:
+    case True{}:
+      String.eq(p, ch)
+    case False{}:
+      R.stringmatch(p, ch, False{})
+
+# whether one of ps allows the channel ch, read in place: ok says whether
+# the one before ps did
+def chan.ok.go(+ps: List<&2, String>, ok: Bool, +lit: Bool, +ch: String) -> Bool:
+  match ps ok:
+    case _ True{}:
+      True{}
+    case Nil{} False{}:
       False{}
-    case Con{+p, rest}:
-      Bool.or(Bool.pick(Bool, lit, String.eq(p, ch), R.stringmatch(p, ch, False{})), chan.ok(lit, ch, rest))
+    case Con{+p, +rest} False{}:
+      chan.ok.go(rest, chan.one(lit, p, ch), lit, ch)
 
-def chans.fail(cs: List<&2, ChanUse>, +ps: List<&2, String>) -> Maybe<&2, ChanUse>:
-  match cs:
-    case Nil{}:
+def chan.ok(+lit: Bool, +ch: String, +ps: List<&2, String>) -> Bool:
+  chan.ok.go(ps, False{}, lit, ch)
+
+def chan.use.ok(+c: ChanUse, +ps: List<&2, String>) -> Bool:
+  match c:
+    case ChanUse{+ch, +lit, at}:
+      chan.ok(lit, ch, ps)
+
+# the first of the channels cs the patterns ps do not allow, read in
+# place: ok says whether the channel before cs, last, was allowed
+def chans.fail.go(+cs: List<&2, ChanUse>, ok: Bool, +last: ChanUse, +ps: List<&2, String>) -> Maybe<&2, ChanUse>:
+  match cs ok:
+    case _ False{}:
+      Some{last}
+    case Nil{} True{}:
       None{}
-    case Con{ChanUse{+ch, +lit, +at}, rest}:
-      Bool.pick(Maybe<&2, ChanUse>, chan.ok(lit, ch, ps), chans.fail(rest, ps), Some{ChanUse{ch, lit, at}})
+    case Con{+c, +rest} True{}:
+      chans.fail.go(rest, chan.use.ok(c, ps), c, ps)
+
+def chans.fail(+cs: List<&2, ChanUse>, +ps: List<&2, String>) -> Maybe<&2, ChanUse>:
+  chans.fail.go(cs, True{}, ChanUse{"", False{}, 0n}, ps)
 
 def sel.check.chan(m: Maybe<&2, ChanUse>) -> Verdict:
   match m:
@@ -2262,13 +2302,20 @@ def verdict.ok(+v: Verdict) -> Bool:
     case VNo{w, at, o}:
       False{}
 
-def sels.check(ss: List<&2, Sel>, +c: Call, worst: Verdict) -> Verdict:
-  match ss:
-    case Nil{}:
+# a call against the selectors ss, read in place, with the worst verdict
+# of those that refused it: done says whether the one before ss allowed it
+def sels.check.go(+ss: List<&2, Sel>, done: Bool, +c: Call, worst: Verdict) -> Verdict:
+  match ss done:
+    case _ True{}:
+      VOk{}
+    case Nil{} False{}:
       worst
-    case Con{+s, rest}:
+    case Con{+s, +rest} False{}:
       +v = sel.check(s, c)
-      Bool.pick(Verdict, verdict.ok(v), VOk{}, sels.check(rest, c, verdict.max(worst, v)))
+      sels.check.go(rest, verdict.ok(v), c, verdict.max(worst, v))
+
+def sels.check(+ss: List<&2, Sel>, +c: Call, worst: Verdict) -> Verdict:
+  sels.check.go(ss, False{}, c, worst)
 
 # a call against a user: allowed when one of its selectors allows it.
 # The worst verdict starts below every reason (0), so that the command's
@@ -2515,13 +2562,19 @@ def gone.call.check(+r: CallR) -> Verdict:
     case _:
       VOk{}
 
-# where the user of name n is among us, from i (past the last when none)
-def users.idx(+us: List<&2, User>, +n: String, +i: Nat) -> Nat:
-  match us:
-    case Nil{}:
+# where the user of name n is among us, from i (past the last when none):
+# hit says whether the user before us, at i - 1, was it
+def users.idx.go(+us: List<&2, User>, hit: Bool, +n: String, +i: Nat) -> Nat:
+  match us hit:
+    case _ True{}:
+      Nat.sub(i, 1n)
+    case Nil{} False{}:
       i
-    case Con{+u, +rest}:
-      Bool.pick(Nat, String.eq(user.name(u), n), i, users.idx(rest, n, Nat.add(i, 1n)))
+    case Con{+u, +rest} False{}:
+      users.idx.go(rest, String.eq(user.name(u), n), n, Nat.add(i, 1n))
+
+def users.idx(+us: List<&2, User>, +n: String, +i: Nat) -> Nat:
+  users.idx.go(us, False{}, n, i)
 
 # the call checked against the user at i among us, read in place
 def users.call.at(+us: List<&2, User>, +i: Nat, +r: CallR) -> Verdict:
