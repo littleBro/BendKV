@@ -5918,6 +5918,128 @@ need Lua: one fills a set with a script, and the next resets the events that set
 expiry would have given. unit/slowlog passes 7 of its 9. The other two use ACL and
 MIGRATE.
 
+## 3zzzp. Small hashes in one string, as a listpack
+
+**What was left** (section 3zg). A small hash was the list of its pairs: a cell of 16
+bytes, an `HP` node of 16, and a buffer of 16 bytes or more for each field or value
+longer than 6 bytes (one of up to 6 lives in the term's word). A value a write had shared
+also kept the reference count it got then, 8 bytes. A pair of a 2-byte field and an
+8-byte value took 56 bytes, where a listpack spends 12.
+
+**What a string is in the runtime** (patches 1, 2, 4 and 8, in `bend2/comp.ts`). The
+design rests on this.
+
+- A string of up to 6 bytes lives in the term's word. A longer one is a buffer: a heap
+  block of 16 to 2,048 bytes, a power of two with no header, whose bytes end where the
+  block ends. Alone it is a blob, whose term is the buffer's own; otherwise it is a chunk
+  of a chain, each with a node of 16 bytes.
+- `String.take` and `String.slice` copy what they take into one new buffer of the
+  smallest class that holds it (into buffers of 2,048 bytes past that). `String.drop`
+  of a blob moves its start in its own word.
+- `a ++ b` writes a into the room before b's bytes when b's buffer is unshared and has
+  that much room. Otherwise it links a's last chunk to b with a new node, or copies a's
+  short tail into a new chunk with 256 bytes of room.
+- Nothing joins a chain into one buffer afterwards: the lazy seal of patch 1 is about
+  reference counts, not bytes. A chain reads a chunk at a time: `String.code_at` past its
+  first chunk walks it from the start.
+
+So a packed hash copies its string into one buffer at each write; left to `++`, a few
+writes would leave it a chain of small chunks.
+
+**The change** (`src/map.bend`, Hashes). `HSmall{n, b}`: b holds the pairs one after
+another, in the order they came.
+
+- A pair is its field's length, the field, its value's length and the value. A length
+  below 255 is one byte. A longer one (RESTORE keeps a listpack's pairs whatever their
+  lengths) is the byte 255 and four bytes, the high first.
+- A read walks the lengths, two a pair, and compares a field of the right length by its
+  last byte, then whole (`String.eq` of a slice). HGET slices the value out.
+- A write builds the new string from a take of the old one, the new pair or value, and a
+  drop of the rest, and copies it into one buffer (`String.take` of all of it), as Redis
+  writes a listpack anew. A hash that passes the limits becomes a trie, as before.
+- `hash.pairs` decodes the string in a walk that keeps no frame a pair, then turns the
+  list around.
+- Outside the section: RESTORE builds the string (`hash.of`, `src/rdb.bend`), DUMP and
+  HSCAN decode it (`src/rdb.bend`, `src/redis.bend`), and OBJECT ENCODING reads the
+  widest length from it (`src/session.bend`).
+
+No proof changed: the proofs name `hash.empty`, `len`, `get` and `has` alone, and `has`
+of the empty hash still reduces to False whatever the field (`hdel_empty`).
+
+**What it gives.** `used_memory` per key, less what the server held before, after
+200,000 hashes `k:0`, `k:1`, ... were loaded with one pipelined HSET each; fields `f0`,
+`f1`, ..., values of `v` and digits:
+
+| pairs a hash, value bytes | Redis 7.0.15 | before | packed |
+|---|---:|---:|---:|
+| 10, 8 | 234.5 | 721.9 | 289.9 |
+| 10, 20 | 394.5 | 881.9 | 417.9 |
+| 50, 8 | 842.5 | 2,961.9 | 1,185.9 |
+| 50, 20 | 1,610.5 | 3,761.9 | 2,209.9 |
+
+The rest of a key (its name, its entry in the trie, the nodes of its value) is about 162
+bytes. The string takes the power of two above its length: 120 bytes take 128, but 640
+take 1,024 and 1,240 take 2,048, most of what is left between BendKV and Redis at 50
+pairs.
+
+**What it costs.** Instructions and last-level data read misses per request (callgrind, a
+last level of 2 MiB, 20 clients at a pipeline depth of 16, 20,000 requests counted after
+20,000 more) on 100,000 such hashes of 8-byte values: HGET of `f3` (the fourth field),
+HGETALL, HSET of `f3`, which is there, and HSET of a new field of 13 bytes:
+
+| pairs a hash, command | instructions before | packed | misses before | packed |
+|---|---:|---:|---:|---:|
+| 10, HGET | 6,442 | 7,436 | 12.39 | 6.56 |
+| 10, HGETALL | 25,605 | 27,260 | 31.61 | 8.15 |
+| 10, HSET of a field there | 11,247 | 14,269 | 13.31 | 8.02 |
+| 10, HSET of a new field | 13,499 | 16,382 | 17.71 | 8.40 |
+| 50, HGET | 6,437 | 7,484 | 12.51 | 6.57 |
+| 50, HGETALL | 106,748 | 114,588 | 123.08 | 17.22 |
+| 50, HSET of a field there | 11,245 | 14,354 | 13.48 | 16.58 |
+| 50, HSET of a new field | 27,307 | 32,873 | 44.02 | 16.66 |
+
+GET, SET and INCR do not move (`make perfcheck`, locally: 3,416, 4,178 and 4,522
+instructions before, 3,414, 4,177 and 4,522 after; misses and prefetches as before).
+
+- A read misses less: the string is a few cache lines where the list was two nodes and a
+  buffer a pair.
+- It runs more instructions: each length is read by `hb.len`, `String.code_at` and a
+  test, which the C compiler keeps as a function of its own, about 50 instructions a call
+  and two calls a pair, where the list's walk read a cell.
+- A write copies the string where the list rebuilt its cells in place: the part before
+  the pair it changes into a take, then all of it into one buffer (1,049 instructions per
+  HSET of a field there for that last copy, with its walk of the chain). At 50 pairs the
+  copy reads and writes more lines than the list's write touched, so HSET of a field
+  there misses more.
+
+**Two traps.**
+
+- *A call that gives `str_eq` a value of its own.* The first version compared a field
+  with `str_eq(String.slice(...), f)`. The slice is a value the call gives away, so the
+  compiler made `str_eq` own its first argument, and every key the trie compares with it
+  then had to be given one. GET, SET and INCR took 3.8%, 8.1% and 8.3% more instructions
+  and a quarter more last-level misses (`make perfcheck`). `String.eq`, which borrows
+  both its arguments, keeps `str_eq` as it was (section 7).
+- *A collection taken out of the keyspace comes shared.* `db.upd` reads the entry's code
+  (`ent.code`) with a borrowed match on `Maybe<Item<Val>>`, a type laid out without a box,
+  which keeps the value it binds (section 8). The match that then takes the collection
+  apart takes a shared node and seals its fields (`span_fade`), the hash's string among
+  them. The runtime writes into the room of an unshared buffer only, so an HSET never
+  writes into the old string's own buffer: it links a chain (two nodes and a chunk) and
+  copies it. Read without binding the value, the code would leave the string unshared;
+  the list of a small hash before this change paid the same seal on its first cell.
+
+**Where BendKV differs.** Nothing a client sees changes.
+
+**Tests.** `tests/hash_test.py` in RESP2 and RESP3, the differential tests (seeds 1 to 3,
+and 4 in RESP3), `tests/dump_test.py`, the tests of SORT, of the administrative commands
+(MEMORY USAGE), of the keyspace and of the sessions, the concurrency checks, and the
+append-only file (a restart, Redis's and BendKV's files both ways, the rewrite). A
+listpack of fields and values of 254 to 70,000 bytes, restored from Redis's DUMP, then
+read, cut and written, answers as Redis does (18 commands), and as the server before
+this change once a write passes the limits (35 commands). `make check`, `make verdict`,
+`make smoke` and `make gencheck` pass.
+
 ## 4. Where a request's time goes, and hiding the memory waits
 
 With the eight patches, BendKV ran fewer instructions on GET and SET than Redis, missed
