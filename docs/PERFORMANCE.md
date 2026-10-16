@@ -7549,13 +7549,13 @@ it queued.
 **Measured** (`tools/script_cost.sh`: callgrind, instructions per request, 20 clients
 pipelining 16 deep, 100,000 keys):
 
-| request | the first build | now |
-|---|---:|---:|
-| `EVAL "return 1" 0` | 438,703 | 56,824 |
-| EVALSHA of it | 457,958 | 52,221 |
-| a script that calls GET | 490,836 | 83,773 |
-| a script that calls SET | 512,055 | 99,871 |
-| GET, beside them | 3,438 | 3,492 |
+| request | the first build | main merged in again (afa98a7) | now, with ACL users (a92597d) |
+|---|---:|---:|---:|
+| `EVAL "return 1" 0` | 438,703 | 56,824 | 61,241 |
+| EVALSHA of it | 457,958 | 52,221 | 56,571 |
+| a script that calls GET | 490,836 | 83,773 | 89,395 |
+| a script that calls SET | 512,055 | 99,871 | 102,853 |
+| GET, beside them | 3,438 | 3,492 | 3,561 |
 
 On main's build (fc28490) the same EVALs are answered with an error, at 500 to 1,250
 instructions, and GET beside them costs 3,466.
@@ -7575,6 +7575,7 @@ with something other than the script. Each step was measured again:
 | main merged in again, with CLIENT TRACKING and the RDB file; the scripts' state a node of its own; a busy group's answers at its first tick | 61,711 |
 | the scripts' state changed and read in place | 56,360 |
 | main merged in again (afa98a7) | 56,824 |
+| main merged in again (a92597d: ACL users) | 61,241 |
 
 - *Three walks of the parameter table per script.* Each script read lua-time-limit,
   logfile and loglevel at its start. `config.get_value` walks the table of 180
@@ -7640,14 +7641,31 @@ the baseline; with 100 clients in BLPOP, GET and SET 3.1% and 3.6% above those (
 3.2% and 3.7%). With the scripts' state changed and read in place, 3,440, 4,207 and
 4,547, and 3.2% and 3.6% with the clients in BLPOP; with main merged in again (afa98a7),
 3,472, 4,241 and 4,583, within 0.7% of the baseline, and 3.6% and 3.4%, where main's
-last change gives 3,491, 4,235 and 4,577 (FINDINGS 3zzzt). Before main was merged in
+last change gives 3,491, 4,235 and 4,577 (FINDINGS 3zzzt); with ACL users merged in
+(a92597d), 3,480, 4,244 and 4,586, within 0.8% of the baseline, and 3.2% and 3.6%, where
+main gives 3,459, 4,221 and 4,564 (section 70). Before main was merged in
 again, against 998e76f, it was 3,447, 4,207 and 4,548 against 3,443, 4,206 and 4,550;
 before the scripts' state was a node of its own (`ScrOf`: FINDINGS 3zzzd), 3,482, 4,243
 and 4,584. The counts with clients in BLPOP move from one run to the next by up to 2%
 (3,552 to 3,621 for one build), more than the others' 0.05%.
 
-**What is left.** A call of a script costs about 26,900 instructions (83,773 against
-56,824), where Redis's `scriptCall` takes a few thousand. The call runs the general way
+**ACL users merged in.** EVAL costs 4,417 instructions more than before (61,241 against
+56,824), and a call of a script about 1,200 more, though no client is restricted and
+nothing is checked. A script's command runs the general way, and each script ends a run
+of it: its batch's end tunes the actor's bits (`ps.tune`, from `bg.out`), which costs
+3,800 instructions a script now. The memory bits read maxmemory and the eviction's state
+(`mem.bits`: `mm.max`, `mm.kick`), and ACL's bit 20 reads whether some client is
+restricted (`acl.bit`: `acl.on`); each read copies the session's memory state (`Mm`,
+twelve words with ACL's), about 593 instructions apiece, three a script
+(`tools/phases.py callers` of `ctr_own_slow`). `srv.max` passes `mm.max` the state it
+computes (`srv.mm`), so `mm.max` owns its parameter for every call (section 38), and
+`srv.mm` returns a field of a lent `Srv`. The general way's ACL steps for each command
+(`bg.acl.sort`, `bg.mark.call` and `av.if`, each giving back what it was lent) add the
+rest. All of it is main's code, and it is paid by every batch of the general way (a
+client in MULTI, a blocking command), not by scripts alone; FINDINGS 3zzzd.
+
+**What is left.** A call of a script costs about 28,100 instructions (89,395 against
+61,241), where Redis's `scriptCall` takes a few thousand. The call runs the general way
 of EXEC's commands: naming, statistics, MONITOR's lines, keyspace events, the keys for
 WATCH, the entry for the file. Its window is timed as any call's (`info.window`, the
 histogram's merge), and its request and reply cross the engine as RESP bytes. The rest
@@ -7658,6 +7676,7 @@ it. Each switch of stacks also costs a system call: `swapcontext` sets the signa
 three `rt_sigprocmask` per script (`getcontext` once, a switch in and one back), two
 more per call; a switch written for the purpose would not, at the price of code for each
 processor in the trusted base.
+
 ## 70. ACL users
 
 **What was added** (FINDINGS 3zzzh). A call of a client whose user is restricted (may
