@@ -7567,11 +7567,23 @@ def scr.exists(+xs: List<&2, String>, +s: Scr) -> List<&2, R.Reply>:
       R.RInt{R.IPos{Bool.pick(Nat, Maybe.is_some(&2, Nat, scr.get(x, s)), 1n, 0n)}} <> scr.exists(rest, s)
 
 # the flags of the function of a name, in any case, as Redis's dictionary
-# of functions compares names (functionDictType)
+# of functions compares names (functionDictType): the mirror has each name
+# in lower case, and a name is looked up as given first, as clients send
+# it, and lowered only when the mirror has it not as given (as EVALSHA's
+# sha is: scr.get). A name lowered is a string made again, about 300
+# instructions, and an FCALL looks its function up three times
+# (PERFORMANCE 76).
+def fni.fn.or(m: Maybe<&2, Nat>, +name: String, +fns: KV.Trie<Nat>) -> Maybe<&2, Nat>:
+  match m:
+    case Some{x}:
+      Some{x}
+    case None{}:
+      KV.get(Nat, fns, String.to_lower(name))
+
 def fni.fn(+name: String, +f: Fni) -> Maybe<&2, Nat>:
   match f:
     case Fni{+fns, nl, fx, fname, fa, fd}:
-      KV.get(Nat, fns, String.to_lower(name))
+      fni.fn.or(KV.get(Nat, fns, name), name, fns)
 
 # the mirror made anew from the engine's functions (Engine.ffuncs: each
 # one's name in lower case and its flags in decimal, in turn) and the
