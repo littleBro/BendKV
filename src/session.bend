@@ -1975,22 +1975,19 @@ def obj.mems.enc(+m: KV.Mems, +cfg: List<&2, C.CItem>) -> String:
     case KV.MBig{n, t}:
       "hashtable"
 
-# the longest member of the elements xs, at least m
-def obj.zwidest(xs: List<&2, KV.ZEl>, +m: Nat) -> Nat:
-  match xs:
-    case Nil{}:
-      m
-    case Con{KV.ZEl{+k, d}, rest}:
-      obj.zwidest(rest, Nat.max(m, String.length(k)))
-
 # a sorted set is a listpack while it is small (KV.Zset: as Redis turns
 # one into a skiplist at the parameters' defaults) and within
 # zset-max-listpack-entries and zset-max-listpack-value as they are now,
 # as a hash
+def obj.zset.small(+n: Nat, +w: Nat, +cfg: List<&2, C.CItem>) -> String:
+  Bool.pick(String, Bool.and(Nat.is_le(n, cfg.nat(cfg, "zset-max-listpack-entries")), obj.wide.ok(w, cfg.nat(cfg, "zset-max-listpack-value"))), "listpack", "skiplist")
+
 def obj.zset.enc(+z: KV.Zset, +cfg: List<&2, C.CItem>) -> String:
   match z:
-    case KV.ZSmall{+tr}:
-      Bool.pick(String, Bool.and(Nat.is_le(KV.zt.size(tr), cfg.nat(cfg, "zset-max-listpack-entries")), obj.wide.ok(obj.zwidest(KV.zt.all(tr), 0n), cfg.nat(cfg, "zset-max-listpack-value"))), "listpack", "skiplist")
+    case KV.ZSmall{+n, +b}:
+      obj.zset.small(n, KV.zb.widest(n, b, 0n, 0n), cfg)
+    case KV.ZWide{+tr}:
+      obj.zset.small(KV.zt.size(tr), KV.zt.widest(tr, 0n), cfg)
     case KV.ZBig{tr, t}:
       "skiplist"
 
@@ -2310,8 +2307,10 @@ def sp.acts(a: SrArgs, +k: String, +r: U32) -> List<&2, R.Act>:
 
 # ZRANDMEMBER key [count [WITHSCORES]]: elements of a sorted set at
 # random, by r (as HRANDFIELD's), the count read as HRANDFIELD reads its
-# own (WITHSCORES for WITHVALUES). An element is picked by its rank (the
-# tree finds it in O(log n)). A negative count picks that many elements,
+# own (WITHSCORES for WITHVALUES). An element is picked by its rank: a
+# large sorted set's tree finds it in O(log n), a small one's string in a
+# walk to it, and more than 32 picks of a small one walk a tree made from
+# its string (ZrSrc). A negative count picks that many elements,
 # each anew; a positive one that many different elements, all of them
 # from the last when it is at least the sorted set's size (Redis reads a
 # sorted set from its last element there); else, when it is more
@@ -2342,9 +2341,39 @@ def zr.args(args: List<&2, String>) -> HrArgs:
     case Con{+c, rest}:
       zr.count(R.ll.read(c), rest)
 
+# where the picks are made: a tree (a large sorted set's own, or one
+# made from a small one's string), or the sorted set as it is
+type ZrSrc is Data:
+  ZrTree{t: KV.ZTree}
+  ZrZset{z: KV.Zset}
+
+# the element at rank i of s
+def zr.at(+s: ZrSrc, +i: Nat) -> KV.ZEl:
+  match s:
+    case ZrTree{+t}:
+      KV.zt.nth(t, i)
+    case ZrZset{+z}:
+      KV.zset.nth(z, i)
+
+# the elements of s, of n, from the last
+def zr.rev(+s: ZrSrc, +n: Nat) -> List<&2, KV.ZEl>:
+  match s:
+    case ZrTree{+t}:
+      KV.zt.rslice(t, 0n, n)
+    case ZrZset{+z}:
+      KV.zset.slice(True{}, z, 0n, n)
+
+# s's elements as a tree
+def zr.tree(+s: ZrSrc) -> KV.ZTree:
+  match s:
+    case ZrTree{+t}:
+      t
+    case ZrZset{+z}:
+      KV.zset.tree(z)
+
 # the element at a rank r picks
-def zr.el(+t: KV.ZTree, +r: U32, +n: Nat) -> KV.ZEl:
-  KV.zt.nth(t, hr.at(r, n))
+def zr.el(+s: ZrSrc, +r: U32, +n: Nat) -> KV.ZEl:
+  zr.at(s, hr.at(r, n))
 
 def zr.out(e: KV.ZEl, +ws: Bool, rest: List<&2, R.Reply>) -> List<&2, R.Reply>:
   match e:
@@ -2352,13 +2381,13 @@ def zr.out(e: KV.ZEl, +ws: Bool, rest: List<&2, R.Reply>) -> List<&2, R.Reply>:
       R.zels.one(ws, m, d, rest)
 
 # k elements, each anew
-def zr.rep(k: Nat, +t: KV.ZTree, +n: Nat, +r: U32, +ws: Bool) -> List<&2, R.Reply>:
+def zr.rep(k: Nat, +s: ZrSrc, +n: Nat, +r: U32, +ws: Bool) -> List<&2, R.Reply>:
   match k:
     case 0n:
       Nil{}
     case 1n+j:
       +q = hr.next(r)
-      zr.out(zr.el(t, q, n), ws, zr.rep(j, t, n, q, ws))
+      zr.out(zr.el(s, q, n), ws, zr.rep(j, s, n, q, ws))
 
 # t without c elements taken at random
 def zr.cut(e: KV.ZEl, +t: KV.ZTree) -> KV.ZTree:
@@ -2372,7 +2401,7 @@ def zr.drop(c: Nat, +t: KV.ZTree, +r: U32) -> KV.ZTree:
       t
     case 1n+j:
       +q = hr.next(r)
-      zr.drop(j, zr.cut(zr.el(t, q, KV.zt.size(t)), t), q)
+      zr.drop(j, zr.cut(KV.zt.nth(t, hr.at(q, KV.zt.size(t))), t), q)
 
 # picks until k different elements come: the members taken, the reply so
 # far, how many
@@ -2401,7 +2430,7 @@ def zr.outs(g: ZrG) -> List<&2, R.Reply>:
     case ZrG{acc, out, c}:
       out
 
-def zr.gather(fuel: Nat, done: Bool, g: ZrG, +k: Nat, +t: KV.ZTree, +n: Nat, +r: U32, +ws: Bool) -> List<&2, R.Reply>:
+def zr.gather(fuel: Nat, done: Bool, g: ZrG, +k: Nat, +s: ZrSrc, +n: Nat, +r: U32, +ws: Bool) -> List<&2, R.Reply>:
   match fuel done:
     case _ True{}:
       zr.outs(g)
@@ -2409,34 +2438,43 @@ def zr.gather(fuel: Nat, done: Bool, g: ZrG, +k: Nat, +t: KV.ZTree, +n: Nat, +r:
       zr.outs(g)
     case 1n+f False{}:
       +q = hr.next(r)
-      +g2 = zr.step(zr.el(t, q, n), g, ws)
-      zr.gather(f, zr.done(g2, k), g2, k, t, n, q, ws)
+      +g2 = zr.step(zr.el(s, q, n), g, ws)
+      zr.gather(f, zr.done(g2, k), g2, k, s, n, q, ws)
 
-def zr.uniq(third: Bool, +k: Nat, +t: KV.ZTree, +n: Nat, +r: U32, +ws: Bool) -> List<&2, R.Reply>:
+def zr.uniq(third: Bool, +k: Nat, +s: ZrSrc, +n: Nat, +r: U32, +ws: Bool) -> List<&2, R.Reply>:
   match third:
     case True{}:
-      R.zels(KV.zt.drain(zr.drop(Nat.sub(n, k), t, r), Nil{}), ws)
+      R.zels(KV.zt.drain(zr.drop(Nat.sub(n, k), zr.tree(s), r), Nil{}), ws)
     case False{}:
-      zr.gather(Nat.add(Nat.mul(k, 16n), 64n), Nat.is_eq(k, 0n), ZrG{KV.empty(Unit), Nil{}, 0n}, k, t, n, r, ws)
+      zr.gather(Nat.add(Nat.mul(k, 16n), 64n), Nat.is_eq(k, 0n), ZrG{KV.empty(Unit), Nil{}, 0n}, k, s, n, r, ws)
 
-def zr.pos(all: Bool, +k: Nat, +t: KV.ZTree, +n: Nat, +r: U32, +ws: Bool) -> List<&2, R.Reply>:
+def zr.pos(all: Bool, +k: Nat, +s: ZrSrc, +n: Nat, +r: U32, +ws: Bool) -> List<&2, R.Reply>:
   match all:
     case True{}:
-      R.zels(KV.zt.rslice(t, 0n, n), ws)
+      R.zels(zr.rev(s, n), ws)
     case False{}:
-      zr.uniq(Nat.is_lt(n, Nat.mul(k, 3n)), k, t, n, r, ws)
+      zr.uniq(Nat.is_lt(n, Nat.mul(k, 3n)), k, s, n, r, ws)
 
-def zr.of(neg: Bool, +k: Nat, +ws: Bool, +t: KV.ZTree, +n: Nat, +r: U32) -> List<&2, R.Reply>:
+def zr.of(neg: Bool, +k: Nat, +ws: Bool, +s: ZrSrc, +n: Nat, +r: U32) -> List<&2, R.Reply>:
   match neg:
     case True{}:
-      zr.rep(k, t, n, r, ws)
+      zr.rep(k, s, n, r, ws)
     case False{}:
-      zr.pos(Nat.is_le(n, k), k, t, n, r, ws)
+      zr.pos(Nat.is_le(n, k), k, s, n, r, ws)
+
+# where k picks of z are made: z as it is, or, for more than 32 picks of
+# each anew (many), a tree of its elements
+def zr.src(many: Bool, +z: KV.Zset) -> ZrSrc:
+  match many:
+    case True{}:
+      ZrTree{KV.zset.tree(z)}
+    case False{}:
+      ZrZset{z}
 
 def zr.one(m: Maybe<&2, KV.Item<KV.Val>>, +r: U32) -> R.Reply:
   match m:
     case Some{KV.Item{KV.VColl{KV.CZset{+z}}, e}}:
-      R.RBulk{R.zel.m(zr.el(KV.zset.tree(z), hr.next(r), KV.zset.len(z)))}
+      R.RBulk{R.zel.m(KV.zset.nth(z, hr.at(hr.next(r), KV.zset.len(z))))}
     case None{}:
       R.RNull{}
     case _:
@@ -2445,7 +2483,7 @@ def zr.one(m: Maybe<&2, KV.Item<KV.Val>>, +r: U32) -> R.Reply:
 def zr.many(m: Maybe<&2, KV.Item<KV.Val>>, +neg: Bool, +k: Nat, +ws: Bool, +r: U32) -> R.Reply:
   match m:
     case Some{KV.Item{KV.VColl{KV.CZset{+z}}, e}}:
-      R.zels.wrap(ws, zr.of(neg, k, ws, KV.zset.tree(z), KV.zset.len(z), r))
+      R.zels.wrap(ws, zr.of(neg, k, ws, zr.src(Bool.and(neg, Nat.is_lt(32n, k)), z), KV.zset.len(z), r))
     case None{}:
       R.RArray{Nil{}}
     case _:

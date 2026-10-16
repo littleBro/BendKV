@@ -16828,10 +16828,9 @@ def zmscore.none(ms: List<&2, String>) -> List<&2, Reply>:
       RNull{} <> zmscore.none(rest)
 
 # a member's rank, from the first element (from the last when rev)
-def zrank.of(m: Maybe<&2, F.F64>, +rev: Bool, +k: String, +z: KV.Zset) -> Reply:
+def zrank.of(m: Maybe<&2, Nat>, +rev: Bool, +z: KV.Zset) -> Reply:
   match m:
-    case Some{+d}:
-      +r = KV.zset.rank(z, k, d)
+    case Some{+r}:
       r_int(Bool.pick(Nat, rev, Nat.sub(Nat.sub(KV.zset.len(z), r), 1n), r))
     case None{}:
       RNull{}
@@ -16879,7 +16878,7 @@ def zels.flat(xs: List<&2, KV.ZEl>) -> List<&2, Reply>:
 
 # How a range's elements are found. By rank, as LRANGE reads its range
 # (lspan); from the last element when reversed. By score (in order, so a
-# walk down the tree finds where a bound falls, KV.zt.before): the ranks
+# walk finds where a bound falls, KV.zset.before): the ranks
 # lo, of the first element in the range, and hi, past its last; then
 # LIMIT as Redis reads it (genericZrangebyscoreCommand): an offset above
 # 0 and at least the size of the sorted set, or below 0, keeps none, a
@@ -17011,9 +17010,9 @@ def zel.ok(e: KV.ZEl, +p: KV.ZP) -> Bool:
 
 # whether a small sorted set's range of members can hold an element
 # (zzlIsInLexRange)
-def zlex.in(+t: KV.ZTree, +lo: KV.ZLB, +hi: KV.ZLB) -> Bool:
-  +n = KV.zt.size(t)
-  Bool.and(Bool.not(zlb.empty(lo, hi)), Bool.and(Nat.is_lt(0n, n), Bool.and(zel.ok(KV.zt.nth(t, Nat.sub(n, 1n)), KV.ZGeL{lo}), zel.ok(KV.zt.nth(t, 0n), KV.ZLeL{hi}))))
+def zlex.in(+z: KV.Zset, +lo: KV.ZLB, +hi: KV.ZLB) -> Bool:
+  +n = KV.zset.len(z)
+  Bool.and(Bool.not(zlb.empty(lo, hi)), Bool.and(Nat.is_lt(0n, n), Bool.and(zel.ok(KV.zset.nth(z, Nat.sub(n, 1n)), KV.ZGeL{lo}), zel.ok(KV.zset.nth(z, 0n), KV.ZLeL{hi}))))
 
 def zlex.take(ok: Bool, +s: List<&2, KV.ZEl>, +o: Nat, +p: KV.ZP, +c: Nat) -> List<&2, KV.ZEl>:
   match ok:
@@ -17022,32 +17021,31 @@ def zlex.take(ok: Bool, +s: List<&2, KV.ZEl>, +o: Nat, +p: KV.ZP, +c: Nat) -> Li
     case False{}:
       Nil{}
 
-def zlex.small.in(ok: Bool, rev: Bool, +t: KV.ZTree, +lo: KV.ZLB, +hi: KV.ZLB, +o: Nat, +c: Nat) -> List<&2, KV.ZEl>:
+def zlex.small.in(ok: Bool, rev: Bool, +z: KV.Zset, +lo: KV.ZLB, +hi: KV.ZLB, +o: Nat, +c: Nat) -> List<&2, KV.ZEl>:
   match ok rev:
     case False{} _:
       Nil{}
     case True{} False{}:
-      +s = zl.from(KV.zt.all(t), KV.ZGeL{lo})
+      +s = zl.from(KV.zset.all(z), KV.ZGeL{lo})
       zlex.take(zl.ok(s, KV.ZLeL{hi}), s, o, KV.ZLeL{hi}, c)
     case True{} True{}:
-      +s = zl.from(KV.zt.rslice(t, 0n, KV.zt.size(t)), KV.ZLeL{hi})
+      +s = zl.from(KV.zset.slice(True{}, z, 0n, KV.zset.len(z)), KV.ZLeL{hi})
       zlex.take(zl.ok(s, KV.ZGeL{lo}), s, o, KV.ZGeL{lo}, c)
 
-def zlex.small(off: Int, +rev: Bool, +t: KV.ZTree, +lo: KV.ZLB, +hi: KV.ZLB, +c: Nat) -> List<&2, KV.ZEl>:
+def zlex.small(off: Int, +rev: Bool, +z: KV.Zset, +lo: KV.ZLB, +hi: KV.ZLB, +c: Nat) -> List<&2, KV.ZEl>:
   match off:
     case INeg{x}:
       Nil{}
     case IPos{+o}:
-      zlex.small.in(zlex.in(t, lo, hi), rev, t, lo, hi, o, c)
+      zlex.small.in(zlex.in(z, lo, hi), rev, z, lo, hi, o, c)
 
 def zlex.of(small: Bool, +lo: KV.ZLB, +hi: KV.ZLB, +rev: Bool, +off: Int, +cnt: Int, +z: KV.Zset) -> List<&2, KV.ZEl>:
   match small:
     case True{}:
-      zlex.small(off, rev, KV.zset.tree(z), lo, hi, zcnt(cnt, KV.zset.len(z)))
+      zlex.small(off, rev, z, lo, hi, zcnt(cnt, KV.zset.len(z)))
     case False{}:
-      +t = KV.zset.tree(z)
       +n = KV.zset.len(z)
-      zwin.slice(zwin(off, rev, KV.zt.before(t, KV.ZGeL{lo}), KV.zt.before(t, KV.ZGtL{hi}), zcnt(cnt, n), n), rev, z)
+      zwin.slice(zwin(off, rev, KV.zset.before(z, KV.ZGeL{lo}), KV.zset.before(z, KV.ZGtL{hi}), zcnt(cnt, n), n), rev, z)
 
 # a range's elements, in the order Redis answers them
 def zrange.of(r: ZRng, +rev: Bool, +off: Int, +cnt: Int, +z: KV.Zset) -> List<&2, KV.ZEl>:
@@ -17055,9 +17053,8 @@ def zrange.of(r: ZRng, +rev: Bool, +off: Int, +cnt: Int, +z: KV.Zset) -> List<&2
     case ZRankR{+a, +b}:
       zrank.range(lspan(a, b, KV.zset.len(z)), rev, z)
     case ZScoreR{+lo, +hi}:
-      +t = KV.zset.tree(z)
       +n = KV.zset.len(z)
-      zwin.slice(zwin(off, rev, KV.zt.before(t, KV.ZGeS{lo}), KV.zt.before(t, KV.ZGtS{hi}), zcnt(cnt, n), n), rev, z)
+      zwin.slice(zwin(off, rev, KV.zset.before(z, KV.ZGeS{lo}), KV.zset.before(z, KV.ZGtS{hi}), zcnt(cnt, n), n), rev, z)
     case ZLexR{+lo, +hi}:
       zlex.of(KV.zset.is_small(z), lo, hi, rev, off, cnt, z)
 
@@ -17087,16 +17084,14 @@ def zq.reply(+q: ZQ, +z: KV.Zset) -> Reply:
 # small sorted set, those its range by member holds (as above), of a
 # large one, those between the ranks of its bounds
 def zcount(+lo: KV.ZSB, +hi: KV.ZSB, +z: KV.Zset) -> Nat:
-  +t = KV.zset.tree(z)
-  Nat.sub(KV.zt.before(t, KV.ZGtS{hi}), KV.zt.before(t, KV.ZGeS{lo}))
+  Nat.sub(KV.zset.before(z, KV.ZGtS{hi}), KV.zset.before(z, KV.ZGeS{lo}))
 
 def zlexcount.of(small: Bool, +lo: KV.ZLB, +hi: KV.ZLB, +z: KV.Zset) -> Nat:
   match small:
     case True{}:
-      List.length(&2, KV.ZEl, zlex.small(IPos{0n}, False{}, KV.zset.tree(z), lo, hi, KV.zset.len(z)))
+      List.length(&2, KV.ZEl, zlex.small(IPos{0n}, False{}, z, lo, hi, KV.zset.len(z)))
     case False{}:
-      +t = KV.zset.tree(z)
-      Nat.sub(KV.zt.before(t, KV.ZGtL{hi}), KV.zt.before(t, KV.ZGeL{lo}))
+      Nat.sub(KV.zset.before(z, KV.ZGtL{hi}), KV.zset.before(z, KV.ZGeL{lo}))
 
 # ZCOUNT's range (k 2) or ZLEXCOUNT's (k 3), read again as it runs: the
 # count, or the error of a range that does not read
@@ -17150,7 +17145,9 @@ def zscan.big(+t: KV.Trie<F.F64>, sc: KV.Scan, pat: Maybe<&2, String>) -> Reply:
 
 def zscan.go(+z: KV.Zset, +cur: Nat, +n: Nat, pat: Maybe<&2, String>) -> Reply:
   match z:
-    case KV.ZSmall{+tr}:
+    case KV.ZSmall{+k, +b}:
+      hscan.rep(0n, zscan.lp(KV.zb.all(k, b)), pat)
+    case KV.ZWide{+tr}:
       hscan.rep(0n, zscan.lp(KV.zt.all(tr)), pat)
     case KV.ZBig{tr, +t}:
       zscan.big(t, KV.scan(F.F64, t, cur, n, 0n), pat)
@@ -17172,9 +17169,9 @@ def zread(op: ZRead, +z: KV.Zset) -> Reply:
     case ZRMScore{ms}:
       RArray{zmscore(ms, z)}
     case ZRRank{+m}:
-      zrank.of(KV.zset.score(m, z), False{}, m, z)
+      zrank.of(KV.zset.rank(m, z), False{}, z)
     case ZRRevRank{+m}:
-      zrank.of(KV.zset.score(m, z), True{}, m, z)
+      zrank.of(KV.zset.rank(m, z), True{}, z)
     case ZRCount{args}:
       zcount.args(2n, args, z)
     case ZRLexCount{args}:
@@ -18746,7 +18743,7 @@ def zadd.new(xx: Bool, +d: F.F64, +m: String, z: KV.Zset, +added: Nat, +upd: Nat
     case False{}:
       ZAdd{KV.zset.add(z, m, d), Nat.add(added, 1n), upd, Nat.add(done, 1n), d}
 
-def zadd.old.of(nx: Bool, nan: Bool, keep: Bool, same: Bool, +sc: F.F64, +c: F.F64, +m: String, z: KV.Zset, +added: Nat, +upd: Nat, +done: Nat, last: F.F64) -> ZAdd:
+def zadd.old.of(nx: Bool, nan: Bool, keep: Bool, same: Bool, +sc: F.F64, +c: F.F64, +i: Nat, +m: String, z: KV.Zset, +added: Nat, +upd: Nat, +done: Nat, last: F.F64) -> ZAdd:
   match nx nan keep same:
     case True{} _ _ _:
       ZAdd{z, added, upd, done, last}
@@ -18757,21 +18754,21 @@ def zadd.old.of(nx: Bool, nan: Bool, keep: Bool, same: Bool, +sc: F.F64, +c: F.F
     case False{} False{} False{} True{}:
       ZAdd{z, added, upd, Nat.add(done, 1n), sc}
     case False{} False{} False{} False{}:
-      ZAdd{KV.zset.set(z, m, c, sc), added, Nat.add(upd, 1n), Nat.add(done, 1n), sc}
+      ZAdd{KV.zset.set(z, i, m, c, sc), added, Nat.add(upd, 1n), Nat.add(done, 1n), sc}
 
-# a member there, of score c
-def zadd.old(+o: ZOpts, +c: F.F64, +d: F.F64, +m: String, z: KV.Zset, +added: Nat, +upd: Nat, +done: Nat, last: F.F64) -> ZAdd:
+# a member there, of score c (i: where KV.zset.find found it)
+def zadd.old(+o: ZOpts, +c: F.F64, +i: Nat, +d: F.F64, +m: String, z: KV.Zset, +added: Nat, +upd: Nat, +done: Nat, last: F.F64) -> ZAdd:
   match o:
     case ZOpts{+nx, xx, +gt, +lt, ch, +incr}:
       +sc = zadd.score(incr, c, d)
       +cmp = F.f64.cmp(sc, c)
-      zadd.old.of(nx, F.f64.is_nan(sc), Bool.or(Bool.and(lt, Bool.not(Cmp.is_lt(cmp))), Bool.and(gt, Bool.not(Cmp.is_gt(cmp)))), Cmp.is_eq(cmp), sc, c, m, z, added, upd, done, last)
+      zadd.old.of(nx, F.f64.is_nan(sc), Bool.or(Bool.and(lt, Bool.not(Cmp.is_lt(cmp))), Bool.and(gt, Bool.not(Cmp.is_gt(cmp)))), Cmp.is_eq(cmp), sc, c, i, m, z, added, upd, done, last)
 
-def zadd.at(cur: Maybe<&2, F.F64>, +o: ZOpts, +d: F.F64, +m: String, z: KV.Zset, +added: Nat, +upd: Nat, +done: Nat, last: F.F64) -> ZAdd:
+def zadd.at(cur: KV.ZHit, +o: ZOpts, +d: F.F64, +m: String, z: KV.Zset, +added: Nat, +upd: Nat, +done: Nat, last: F.F64) -> ZAdd:
   match cur:
-    case Some{+c}:
-      zadd.old(o, c, d, m, z, added, upd, done, last)
-    case None{}:
+    case KV.ZYes{+c, +i}:
+      zadd.old(o, c, i, d, m, z, added, upd, done, last)
+    case KV.ZNo{}:
       zadd.new(zopts.xx(o), d, m, z, added, upd, done, last)
 
 def zadd.step(+o: ZOpts, p: ZPair, st: ZAdd) -> ZAdd:
@@ -18779,7 +18776,7 @@ def zadd.step(+o: ZOpts, p: ZPair, st: ZAdd) -> ZAdd:
     case _ ZAddNaN{}:
       ZAddNaN{}
     case ZPair{+s, +m} ZAdd{+z, added, upd, done, last}:
-      zadd.at(KV.zset.score(m, z), o, zadd.num(F.f64.parse(s)), m, z, added, upd, done, last)
+      zadd.at(KV.zset.find(m, z), o, zadd.num(F.f64.parse(s)), m, z, added, upd, done, last)
 
 def zadd.go(ps: List<&2, ZPair>, +o: ZOpts, st: ZAdd) -> ZAdd:
   match ps:
@@ -18859,11 +18856,11 @@ def zdels.out(+xs: List<&2, KV.ZEl>, +op: ZWrite, z: KV.Zset, r: Reply) -> Out:
 type ZDel is Data:
   ZDel{z: KV.Zset, gone: Nat}
 
-def zrem.one(m: Maybe<&2, F.F64>, z: KV.Zset, +k: String, +gone: Nat) -> ZDel:
+def zrem.one(m: KV.ZHit, z: KV.Zset, +k: String, +gone: Nat) -> ZDel:
   match m:
-    case Some{+d}:
-      ZDel{KV.zset.del(z, k, d), Nat.add(gone, 1n)}
-    case None{}:
+    case KV.ZYes{+d, +i}:
+      ZDel{KV.zset.del.at(z, i, k, d), Nat.add(gone, 1n)}
+    case KV.ZNo{}:
       ZDel{z, gone}
 
 def zrem.go(ms: List<&2, String>, st: ZDel) -> ZDel:
@@ -18871,7 +18868,7 @@ def zrem.go(ms: List<&2, String>, st: ZDel) -> ZDel:
     case Nil{} acc:
       acc
     case Con{+m, rest} ZDel{+z, +gone}:
-      zrem.go(rest, zrem.one(KV.zset.score(m, z), z, m, gone))
+      zrem.go(rest, zrem.one(KV.zset.find(m, z), z, m, gone))
 
 def zrem.of(none: Bool, empty: Bool, +ms: List<&2, String>, z: KV.Zset, +gone: Nat) -> Out:
   match none empty:

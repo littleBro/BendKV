@@ -125,7 +125,7 @@ def dump.val(v: KV.Val) -> String:
     case KV.VColl{KV.CMems{+m}}:
       "<set" ++ dump.elems(KV.mems.all(m)) ++ ">"
     case KV.VColl{KV.CZset{+z}}:
-      "<zset" ++ dump.zels(KV.zt.all(KV.zset.tree(z))) ++ ">"
+      "<zset" ++ dump.zels(KV.zset.all(z)) ++ ">"
     case KV.VColl{KV.CStream{+x}}:
       "<stream " ++ Nat.show(KV.xstream.len(x)) ++ ">"
 
