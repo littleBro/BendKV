@@ -60,19 +60,21 @@ build: build/bendkv
 
 # The emitted C is compiled here rather than by Bend, with the Lua engine
 # beside it: Redis 7.0.15's Lua and three of its helpers (deps/redis,
-# vendored as they are, built once into build/deps with Redis's flags),
+# vendored as Redis ships them but for their casts of numbers: NOTICE,
+# built once into build/deps with Redis's flags),
 # whose headers src/lua/engine.c includes (tools/sanitize.sh and
 # tools/pgo_build.sh build the same sources with their own flags)
 DEPS_SRC = $(wildcard deps/redis/deps/lua/src/*.c) $(wildcard deps/redis/src/*.c)
 DEPS_OBJ = $(patsubst %.c,build/deps/%.o,$(notdir $(DEPS_SRC)))
+DEPS_H = $(wildcard deps/redis/deps/lua/src/*.h) $(wildcard deps/redis/src/*.h)
 DEPS_INC = -I deps/redis/deps/lua/src -I deps/redis/src
 DEPS_FLAGS = $(DEPS_INC) -DENABLE_CJSON_GLOBAL -DREDIS_STATIC= -DLUA_USE_MKSTEMP -D_GNU_SOURCE
 
-build/deps/%.o: deps/redis/deps/lua/src/%.c
+build/deps/%.o: deps/redis/deps/lua/src/%.c $(DEPS_H)
 	mkdir -p build/deps
 	$(BEND_CC) -std=c11 -O3 -c $< $(DEPS_FLAGS) -o $@
 
-build/deps/%.o: deps/redis/src/%.c
+build/deps/%.o: deps/redis/src/%.c $(DEPS_H)
 	mkdir -p build/deps
 	$(BEND_CC) -std=c11 -O3 -c $< $(DEPS_FLAGS) -o $@
 

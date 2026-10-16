@@ -777,7 +777,9 @@ static void sc_lua_to_reply(ScRun* r, lua_State* L, ScBuf* b) {
     }
     break;
   case LUA_TNUMBER:
-    sc_buf_fmt(b, ":%lld\r\n", (long long)lua_tonumber(L, -1));
+    // Redis casts with (long long): past the range, x86-64 gives the least
+    // one (luaconf.h's luai_num2long, defined in C), as for 2^63
+    sc_buf_fmt(b, ":%lld\r\n", (long long)luai_num2long(lua_tonumber(L, -1)));
     break;
   case LUA_TTABLE: {
     // an error
@@ -1121,7 +1123,7 @@ static int sc_set_repl(lua_State* L) {
     sc_push_error(L, "redis.set_repl() requires two arguments.");
     return lua_error(L);
   }
-  int flags = (int)lua_tonumber(L, -1);
+  int flags = luai_num2int(lua_tonumber(L, -1));
   if ((flags & ~(SC_REPL_AOF | SC_REPL_REPLICA)) != 0) {
     sc_push_error(L, "Invalid replication flags. Use REPL_AOF, REPL_REPLICA, REPL_ALL or REPL_NONE.");
     return lua_error(L);
@@ -1159,7 +1161,7 @@ static int sc_log(lua_State* L) {
     sc_push_error(L, "First argument must be a number (log level).");
     return lua_error(L);
   }
-  int level = (int)lua_tonumber(L, -argc);
+  int level = luai_num2int(lua_tonumber(L, -argc));
   if (level < SC_LL_DEBUG || level > SC_LL_WARNING) {
     sc_push_error(L, "Invalid debug level.");
     return lua_error(L);
@@ -1195,7 +1197,7 @@ static int sc_setresp(lua_State* L) {
     sc_push_error(L, "redis.setresp() requires one argument.");
     return lua_error(L);
   }
-  int resp = (int)lua_tonumber(L, -argc);
+  int resp = luai_num2int(lua_tonumber(L, -argc));
   if (resp != 2 && resp != 3) {
     sc_push_error(L, "RESP version must be 2 or 3.");
     return lua_error(L);

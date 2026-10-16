@@ -18,11 +18,11 @@
     #define LUACMSGPACK_MAX_NESTING  16 /* Max tables nesting. */
 #endif
 
-/* Check if float or double can be an integer without loss of precision */
-#define IS_INT_TYPE_EQUIVALENT(x, T) (!isinf(x) && (T)(x) == (x))
-
-#define IS_INT64_EQUIVALENT(x) IS_INT_TYPE_EQUIVALENT(x, int64_t)
-#define IS_INT_EQUIVALENT(x) IS_INT_TYPE_EQUIVALENT(x, int)
+/* Check if float or double can be an integer without loss of precision
+ * (BendKV: converted by luaconf.h's luai_num2long and luai_num2int, which
+ * C defines past the integer's range, with x86-64's results) */
+#define IS_INT64_EQUIVALENT(x) (!isinf(x) && luai_num2long(x) == (x))
+#define IS_INT_EQUIVALENT(x) (!isinf(x) && luai_num2int(x) == (x))
 
 /* If size of pointer is equal to a 4 byte integer, we're on 32 bits. */
 #if UINTPTR_MAX == UINT_MAX

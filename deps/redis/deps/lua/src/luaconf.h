@@ -577,10 +577,38 @@ union luai_Cast { double l_d; long l_l; };
 
 /* this option always works, but may be slow */
 #else
-#define lua_number2int(i,d)	((i)=(int)(d))
-#define lua_number2integer(i,d)	((i)=(lua_Integer)(d))
+#define lua_number2int(i,d)	((i)=luai_num2int(d))
+#define lua_number2integer(i,d)	((i)=(lua_Integer)luai_num2long(d))
 
 #endif
+
+/*
+@@ luai_num2int, luai_num2long and luai_num2ulong convert a number to
+** an int, a long and an unsigned long.
+** BendKV: every such conversion of the sources here goes through them.
+** C leaves a plain cast undefined past the integer's range (UBSan:
+** float-cast-overflow), and Redis's x86-64 builds (gcc) give there: the
+** integer's smallest value for an int or a long, and for an unsigned
+** long, what gcc's code gives, which converts d - 2^63 when d is 2^63 or
+** more and puts the bit back (0 from 2^64). These give the same results,
+** defined in C; clang's code gives another past 2^64.
+*/
+static inline int luai_num2int (double d) {
+  return d > (double)INT_MIN - 1.0 && d < (double)INT_MAX + 1.0 ? (int)d : INT_MIN;
+}
+
+static inline long luai_num2long (double d) {
+  return d >= (double)LONG_MIN && d < -(double)LONG_MIN ? (long)d : LONG_MIN;
+}
+
+static inline unsigned long luai_num2ulong (double d) {
+  if (d >= -(double)LONG_MIN) {
+    d -= -(double)LONG_MIN;
+    return d < -(double)LONG_MIN ?
+           (unsigned long)(long)d ^ ((unsigned long)LONG_MAX + 1) : 0;
+  }
+  return (unsigned long)luai_num2long(d);
+}
 
 /* }================================================================== */
 

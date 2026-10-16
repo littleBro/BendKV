@@ -606,6 +606,14 @@ LIBS = [
     ("return {struct.unpack('<i4i2', struct.pack('<i4i2', -7, 300))}", []),
     ("return struct.pack('>q', 1)", []),
     ("return struct.unpack('>I4', 'ab')", []),
+    # numbers past an integer's range, converted as Redis's x86-64 builds
+    # (gcc) convert them; clang's code gave other bytes from 2^64
+    ("return {struct.pack('>L', 2^70), struct.pack('<I8', 2^64), struct.pack('>l', 2^65), "
+     "struct.pack('>l', -2^70), struct.pack('<i8', 2^63), struct.pack('>T', 1/0), struct.pack('>L', 0/0)}", []),
+    ("return {string.format('%x|%o|%u|%X', 2^65, 2^64, 2^64, 1/0), string.format('%x|%u', -1, -2^70), "
+     "string.format('%d|%i', 2^70, 0/0), string.format('%5.2x', 2^66), string.format('%c', 2^40)}", []),
+    ("return {cjson.encode({[2^40]=1}), cjson.encode({[3e9]='a', [1]='b'}), cmsgpack.pack(1e30, -1e30, 2^63, 0/0), "
+     "cmsgpack.pack({[2^40]=1})}", []),
     # string, table, math and tostring (%.14g)
     ("return {string.format('%5.2f|%d|%s|%q|%x|%g|%e|%05d|%-4s|', 3.14159, 42, 'hi', 'a\\nb\\0', 255, 1e20, "
      "12345.678, -42, 'ab'), string.format('%c%c', 72, 105), string.format('%q', '\\r\\0\\255'), "
@@ -657,9 +665,11 @@ LIBS = [
     ("return redis.log(redis.LOG_NOTICE)", []),
     ("return redis.log('x', 'y')", []),
     ("return redis.log(99, 'y')", []),
+    ("return redis.log(2^40, 'y')", []),
     ("return {redis.REPL_NONE, redis.REPL_AOF, redis.REPL_REPLICA, redis.REPL_SLAVE, redis.REPL_ALL}", []),
     ("redis.set_repl(redis.REPL_ALL) return redis.call('SET', KEYS[1], 'repl')", []),
     ("return redis.set_repl(99)", []),
+    ("return redis.set_repl(2^40)", []),
     ("return redis.set_repl()", []),
     ("return redis.replicate_commands()", []),
 ]
@@ -692,6 +702,8 @@ SETRESP = [
     "return redis.call('HGETALL', KEYS[1])",
     "redis.setresp('3') return redis.call('ZSCORE', KEYS[2], 'b')",
     "redis.setresp(4)",
+    "redis.setresp(2^40)",
+    "redis.setresp(0/0)",
     "redis.setresp()",
 ]
 

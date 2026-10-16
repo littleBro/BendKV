@@ -172,9 +172,9 @@ static void putinteger (lua_State *L, luaL_Buffer *b, int arg, int endian,
   Uinttype value;
   char buff[MAXINTSIZE];
   if (n < 0)
-    value = (Uinttype)(Inttype)n;
+    value = (Uinttype)(Inttype)luai_num2long(n);
   else
-    value = (Uinttype)n;
+    value = (Uinttype)luai_num2ulong(n);
   if (endian == LITTLE) {
     int i;
     for (i = 0; i < size; i++) {
@@ -338,7 +338,7 @@ static int b_unpack (lua_State *L) {
         if (size == 0) {
           if (n == 0 || !lua_isnumber(L, -1))
             luaL_error(L, "format 'c0' needs a previous size");
-          size = lua_tonumber(L, -1);
+          size = luai_num2ulong(lua_tonumber(L, -1));
           lua_pop(L, 1); n--;
           luaL_argcheck(L, size <= ld && pos <= ld - size,
                            2, "data string too short");
