@@ -39,7 +39,10 @@ make suite REDIS_SRC=../redis      # both runs and the table, in build/suite/
 ## The result
 
 Redis 7.0.15, October 2026. Of the 1,677 tests Redis passes in this mode, BendKV passes
-**1,316 (78.5%)**; of the 1,365 in the units of what BendKV has, 1,314 (96%).
+**1,318 (78.6%)**; of the 1,365 in the units of what BendKV has, 1,316 (96%).
+The RDB file (section 3zzzc of [FINDINGS.md](FINDINGS.md)) brought 2: unit/other's SAVE
+of a database with a value of every type, and its final SAVE (18 of its 19; its BGSAVE
+and its reload with DEBUG RELOAD need what BendKV does not have yet).
 Lua scripts (section 3zzzd of [FINDINGS.md](FINDINGS.md)) brought 13, each a test of
 another unit that runs a script: unit/pause passes 13 of its 14 tests (its four of
 scripts under a pause, by their flags and in transactions; the fourteenth loads a
@@ -223,7 +226,7 @@ need MULTI and WATCH, Lua or lists (then).
 
 | area | units | Redis passes | BendKV passes |
 |---|---|---:|---:|
-| what BendKV has: the protocol, connections and clients and their pause, the keyspace and its databases, strings and their ranges, bits and fields, counters and floats, hashes, lists, sets, sorted sets and the commands that wait on them, SORT, HyperLogLogs, GEO, DUMP and RESTORE, times to live, lazy freeing, transactions, pub/sub and keyspace notifications, introspection, the slow log and the latency monitor, client-side caching, and the scripts these units run | protocol, quit, keyspace, type/string, type/incr, type/hash, type/list, list-2, list-3, type/set, type/zset, sort, hyperloglog, geo, dump, scan, bitops, bitfield, expire, lazyfree, violations, multi, pubsub, pause, introspection, introspection-2, other, info-command, latency-monitor, slowlog, tracking | 1365 | **1314** |
+| what BendKV has: the protocol, connections and clients and their pause, the keyspace and its databases, strings and their ranges, bits and fields, counters and floats, hashes, lists, sets, sorted sets and the commands that wait on them, SORT, HyperLogLogs, GEO, DUMP and RESTORE, times to live, lazy freeing, transactions, pub/sub and keyspace notifications, introspection, the slow log and the latency monitor, client-side caching, and the scripts these units run | protocol, quit, keyspace, type/string, type/incr, type/hash, type/list, list-2, list-3, type/set, type/zset, sort, hyperloglog, geo, dump, scan, bitops, bitfield, expire, lazyfree, violations, multi, pubsub, pause, introspection, introspection-2, other, info-command, latency-monitor, slowlog, tracking | 1365 | **1316** |
 | Lua: scripts (EVAL and its kin) done, functions (FUNCTION, FCALL) not yet; unit/scripting runs its tests of functions first and stops there | scripting, functions | 200 | 1 |
 | the query buffer, not yet | querybuf | 2 | 0 |
 | out of scope: streams | type/stream, type/stream-cgroups | 110 | 1 |
@@ -254,7 +257,7 @@ pubsubshard, shutdown, tls, type/list-common, wait):
 | unit/latency-monitor | 14 | 13 | 13 |
 | unit/lazyfree | 4 | 4 | 2 |
 | unit/multi | 60 | 53 | 32 |
-| unit/other | 22 | 19 | 16 |
+| unit/other | 22 | 19 | 18 |
 | unit/pause | 14 | 14 | 13 |
 | unit/protocol | 25 | 17 | 17 |
 | unit/pubsub | 30 | 30 | 29 |
@@ -277,13 +280,13 @@ pubsubshard, shutdown, tls, type/list-common, wait):
 | unit/type/string | 77 | 77 | 74 |
 | unit/type/zset | 291 | 289 | 287 |
 | unit/violations | 1 | 1 | 1 |
-| **all** | **1757** | **1677** | **1316 (78.5%)** |
+| **all** | **1757** | **1677** | **1318 (78.6%)** |
 
-## Why the other 361 fail
+## Why the other 359 fail
 
-- **204 stop on a command BendKV does not have.** By the number of tests each one stops:
+- **202 stop on a command BendKV does not have.** By the number of tests each one stops:
   FUNCTION LOAD 77, XADD 61, SYNC 20 (tests that read the replication stream, 12 of them
-  unit/multi's of what a transaction propagates), XGROUP 13, and 14 more below nine (33
+  unit/multi's of what a transaction propagates), XGROUP 13, and 13 more below nine (31
   tests).
 - **128 never ran**: their unit ended before them, on a command outside any test:
   `CONFIG SET appendonly yes` (type/stream; BendKV turns its append-only file on only at

@@ -6628,17 +6628,17 @@ code that a change far from the request's path can trigger:
 - `tests/pause_test.py`'s check of BendKV alone, that an EVAL BendKV did not run was
   answered at once under a pause, is gone with the difference it checked; scripts under
   a pause are scenario 11's.
-- Redis's suite ([COMPATIBILITY.md](COMPATIBILITY.md)): 1,316 of the 1,677 tests Redis
-  passes (78.5%; 1,303 on main, with CLIENT TRACKING), 1,314 of the 1,365 in what BendKV
-  has (96%). The 14 tests of other units that run a script pass: unit/pause's four of
-  scripts under a pause, unit/multi's four of a transaction and a script past its time
-  limit, unit/latency-monitor's two of a set a script fills, unit/introspection-2's
-  statistics of scripts and COMMAND LIST FILTERBY ACLCAT, unit/introspection's monitor of
-  a script's calls, and unit/sort's SORT from a script. unit/functions passes one fewer: its test of
-  FUNCTION KILL leaves looping the script FUNCTION KILL would have ended. unit/scripting
-  runs its tests of functions first and stops there; its tests of EVAL, run alone, pass
-  103 of the 110 Redis passes, and each of the other seven needs replication, streams,
-  ACL or CLUSTER.
+- Redis's suite ([COMPATIBILITY.md](COMPATIBILITY.md)): 1,318 of the 1,677 tests Redis
+  passes (78.6%; 1,303 on main with CLIENT TRACKING, and 2 more with the RDB file,
+  merged in since), 1,316 of the 1,365 in what BendKV has (96%). The 14 tests of other
+  units that run a script pass: unit/pause's four of scripts under a pause, unit/multi's
+  four of a transaction and a script past its time limit, unit/latency-monitor's two of
+  a set a script fills, unit/introspection-2's statistics of scripts and COMMAND LIST
+  FILTERBY ACLCAT, unit/introspection's monitor of a script's calls, and unit/sort's
+  SORT from a script. unit/functions passes one fewer: its test of FUNCTION KILL leaves
+  looping the script FUNCTION KILL would have ended. unit/scripting runs its tests of
+  functions first and stops there; its tests of EVAL, run alone, pass 103 of the 110
+  Redis passes, and each of the other seven needs replication, streams, ACL or CLUSTER.
 
 ## 3zzzi. One reading of the heap for INFO and the eviction
 

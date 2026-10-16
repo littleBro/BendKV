@@ -7626,11 +7626,12 @@ about half of Redis's throughput, for its call (What is left, below). Pipelined,
 actor's instructions bound a script, about 54,000 of them; writing the replies once per
 batch spared the connections' threads 19 of 20 writes but not the actor's time.
 
-**`make perfcheck`**: GET 3,447, SET 4,207 and INCR 4,548 instructions per request,
-where main (998e76f, with CLIENT TRACKING) gives 3,443, 4,206 and 4,550, all within 1%
-of the baseline; with 100 clients in BLPOP, GET and SET 3.0% and 3.7% above those (main
-3.2% and 3.7%). Before the scripts' state was a node of its own (`ScrOf`: FINDINGS
-3zzzd) it was 3,482, 4,243 and 4,584. The counts with clients in BLPOP move from one run
+**`make perfcheck`**: GET 3,438, SET 4,206 and INCR 4,550 instructions per request,
+where main (013d9ac, with the RDB file) gives 3,439, 4,201 and 4,545, all within 1% of
+the baseline; with 100 clients in BLPOP, GET and SET 3.1% and 3.6% above those (main
+3.2% and 3.7%). Before main was merged in again, against 998e76f, it was 3,447, 4,207
+and 4,548 against 3,443, 4,206 and 4,550; before the scripts' state was a node of its
+own (`ScrOf`: FINDINGS 3zzzd), 3,482, 4,243 and 4,584. The counts with clients in BLPOP move from one run
 to the next by up to 2% (3,552 to 3,621 for one build), more than the others' 0.05%.
 
 **What is left.** A call of a script costs about 26,200 instructions (80,177 against

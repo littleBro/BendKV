@@ -885,12 +885,12 @@ The translation the kernel reads can be dumped with
   skipped. The reference is the same run on redis-server 7.0.15 with default settings,
   each unit on a freshly started server instance: in this mode 1,757 tests run, and
   Redis passes 1,677 (almost all the others need DEBUG, off by default in 7.0). BendKV
-  passes 1,316 of them (78.5%), and in the units of what it has (the protocol, the
+  passes 1,318 of them (78.6%), and in the units of what it has (the protocol, the
   connection and clients and their pause, the keyspace and databases, strings with
   ranges, bits and fields, counters, hashes, lists, sets, sorted sets, SORT, HyperLogLogs,
   GEO, DUMP and RESTORE, times to live, lazy freeing, transactions, Pub/Sub and keyspace
   notifications, introspection, the slow log and the latency monitor, client-side
-  caching), 1,314 of 1,365 (96%): `unit/tracking` all 10, `unit/latency-monitor` all 13,
+  caching), 1,316 of 1,365 (96%): `unit/tracking` all 10, `unit/latency-monitor` all 13,
   `unit/slowlog` 7 of 9 (the others use ACL and MIGRATE), `unit/dump` all 11,
   `unit/geo` all 59, `unit/introspection-2` 39 of 43 (the others need streams, MIGRATE
   and COMMAND's entries of commands BendKV does not have),
@@ -1531,8 +1531,8 @@ make clients BEND="$B" # redis-py's and go-redis's test suites on Redis and on B
    FLUSHDB, FLUSHALL, keyspace lines per database — with laws and recovery of all the
    databases from the append-only file), the ranges and bits of strings (GETRANGE,
    SETRANGE, GETBIT, SETBIT, BITCOUNT, BITPOS — with a law of SETRANGE and recovery from
-   the append-only file). Redis's suite in external mode: BendKV passes 1,316 of the
-   1,677 tests Redis itself passes, and 1,314 of 1,365 in the units of what it has
+   the append-only file). Redis's suite in external mode: BendKV passes 1,318 of the
+   1,677 tests Redis itself passes, and 1,316 of 1,365 in the units of what it has
    ([docs/COMPATIBILITY.md](docs/COMPATIBILITY.md)). Start-up as for redis-server (the
    command line and the configuration file). The database as a record with a count of
    keys (DBSIZE in O(1)).
