@@ -325,7 +325,8 @@ Where performance and proof meet: **batched execution under proved laws.**
    FUNCTION and FCALL, next, on the same engine), measured by Redis's
    own test suite run against BendKV and by client libraries' test suites (redis-py's and
    go-redis's, in CI: done, section 3zy).
-   Streams, cluster, replication and modules are out of scope. The suite's count: of the 1,677 tests
+   Streams are under way: a stream is a value BendKV holds (section 3zzzu), its commands
+   next. Cluster, replication and modules are out of scope. The suite's count: of the 1,677 tests
    Redis 7.0.15 passes against a server it did not start, BendKV passes 1,320, 1,318 of
    the 1,365 in what it has ([COMPATIBILITY.md](COMPATIBILITY.md)); most of the other 47
    need commands BendKV does not have (replication's SYNC, functions, streams) or run

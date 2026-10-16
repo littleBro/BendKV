@@ -44,6 +44,9 @@ def value(c, k, v):
         kind, xs = c.reply()
         enc = c.reply()[1].decode()
         return "zset:" + enc + ":" + ",".join(x.hex() for _, x in xs)
+    if t == b"stream":
+        c.send([[b"DUMP", k]])
+        return "stream:" + c.reply()[1].hex()
     c.send([[b"HGETALL", k]])
     kind, xs = c.reply()
     xs = [x for _, x in xs]

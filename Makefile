@@ -145,6 +145,7 @@ gencheck:
 	python3 tools/gen_config.py --check
 	python3 tools/gen_commands.py --check
 	python3 tools/gen_counts.py --check
+	python3 tools/gen_streams.py --check
 
 clean:
 	rm -rf build

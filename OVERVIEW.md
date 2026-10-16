@@ -314,11 +314,13 @@ sorted set, or delete it when they find nothing (section 3zzm of docs/FINDINGS.m
 DUMP and RESTORE: a value's payload as Redis 7.0.15 writes it with `rdbcompression no`
 (the value as RDB encodes it, version 10 of the format, the CRC64), byte for byte
 Redis's where both hold the value alike; RESTORE reads every type Redis 7.0.15 reads but
-streams' and modules' (LZF's strings, ziplists, zipmaps and quicklists of ziplists too),
+modules' (LZF's strings, ziplists, zipmaps, quicklists of ziplists and streams too),
 makes the value of the kind Redis's load makes, checks a payload as deep as Redis does
 with `sanitize-dump-payload yes`, and takes REPLACE, ABSTTL, IDLETIME and FREQ, its
 errors in Redis's order and its keyspace events Redis's. It is logged as a RESTORE with
-REPLACE and ABSTTL (section 3zzu of docs/FINDINGS.md).
+REPLACE and ABSTTL (section 3zzu of docs/FINDINGS.md). A stream is a value BendKV holds,
+from RESTORE and the RDB file, its nodes Redis's listpacks byte for byte, with its groups;
+the stream commands are not there yet (section 3zzzu of docs/FINDINGS.md).
 The RDB file, as Redis 7.0.15 writes and reads it: SAVE writes it (`temp-<pid>.rdb`,
 synced, renamed onto `dbfilename`, the directory synced), SHUTDOWN saves it with SAVE or
 with save points, FLUSHALL with save points saves the emptied databases, and the start
@@ -538,7 +540,7 @@ file (`appendonly`, `appendfilename`, `appendfsync`, `aof-load-truncated`), `log
 `loglevel` and `pidfile` take effect; with `appendonly no` the RDB file is loaded, as
 Redis loads it; what BendKV cannot do (modules, ACL users from the configuration or a
 file, command renaming, daemonizing, cluster, replica, TLS, supervisor signaling, Redis
-7's multi-part append-only file, or an RDB file that holds a stream, a module's data or
+7's multi-part append-only file, or an RDB file that holds a module's data or
 functions) stops the start with a line in the log.
 Pipelining, partial packets, inline commands (one can work through `nc`) and
 binary-safe values are supported. Requests are parsed as Redis 7.0.15 parses them: a

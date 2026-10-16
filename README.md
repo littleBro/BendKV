@@ -269,8 +269,8 @@ translation stays in the trusted base.
   no` (the value as RDB encodes it, a listpack, an intset or a quicklist of listpacks
   where Redis keeps one, then version 10 of the format and the CRC64), so that a payload
   is Redis's byte for byte where both hold the value alike; RESTORE reads every type
-  Redis 7.0.15 reads but streams' and modules' (LZF's strings, ziplists, zipmaps and
-  quicklists of ziplists too), checks a payload as deep as Redis does with
+  Redis 7.0.15 reads but modules' (LZF's strings, ziplists, zipmaps, quicklists of
+  ziplists and streams too), checks a payload as deep as Redis does with
   `sanitize-dump-payload yes`, and takes REPLACE, ABSTTL, IDLETIME and FREQ, with
   Redis's errors in Redis's order and its keyspace events. The append-only file logs a
   RESTORE with REPLACE and ABSTTL. Where BendKV differs: DUMP writes no LZF; a hashtable's
@@ -279,6 +279,19 @@ translation stays in the trusted base.
   takes 3 to 38 times Redis's time to dump or restore, less than the commands that make
   it (section 3zzu of [docs/FINDINGS.md](docs/FINDINGS.md), section 62 of
   [docs/PERFORMANCE.md](docs/PERFORMANCE.md)).
+- **Streams, as values:** a stream as Redis 7.0.15 keeps one, its entries in nodes that
+  are Redis's listpacks byte for byte, its groups with their pending entries and their
+  consumers, from RESTORE and the RDB file (types 19 and 15, what 15 lacks estimated as
+  Redis estimates it); DUMP and SAVE write it as Redis does, a stream Redis made
+  byte for byte; TYPE, OBJECT ENCODING, SCAN's TYPE, COPY, RENAME, the times to live
+  and MEMORY USAGE take it, and the other kinds' commands answer WRONGTYPE. The stream
+  commands (XADD, XRANGE, XREAD, the groups') are not there yet. Where BendKV differs:
+  RESTORE and the start refuse payloads Redis takes but never writes (a node with no
+  entry, or whose counts or master entry are not its entries', live entries out of
+  order, a pending entry no consumer holds or two hold, a time past 2^47, ...); the
+  rewrite of the append-only file writes a stream as a RESTORE of its payload, where
+  Redis writes XADD, XSETID, XGROUP and XCLAIM; MEMORY USAGE estimates otherwise
+  (section 3zzzu of [docs/FINDINGS.md](docs/FINDINGS.md)).
 - **Clients that wait:** BLPOP, BRPOP, BLMOVE, BRPOPLPUSH, BLMPOP, BZPOPMIN, BZPOPMAX
   and BZMPOP, their timeouts (seconds, a double; 0 waits for ever) read as Redis reads
   them, with its errors. A command that finds nothing to pop makes its client wait, and
@@ -572,8 +585,8 @@ translation stays in the trusted base.
   loaded and the RDB file left aside, as in Redis. What BendKV cannot do (modules, ACL
   users from the configuration or a file, renamed commands, the background, a cluster, a
   replica, TLS, a supervisor to signal, Redis 7's multi-part append-only file, or an RDB
-  file that holds a stream, a module's data or functions, to load) stops the start with
-  a line saying so.
+  file that holds a module's data or functions, to load) stops the start with a line
+  saying so.
 - **Protocol:** pipelining, partial packets, inline commands with quoting,
   binary-safe values; requests framed as Redis 7.0.15 frames them (a length as `string2ll`
   reads it, with no `0` before its first digit, a count of 0 or less skipped down to
@@ -614,7 +627,7 @@ translation stays in the trusted base.
   databases, as Redis 7.0's does; LASTSAVE and INFO's `rdb_last_save_time`,
   `rdb_saves`, `rdb_last_bgsave_status` and `rdb_last_load_keys_loaded` and `_expired`
   follow it. The start reads every version from 1 to 10, every encoding Redis 7.0.15
-  reads but a stream's and a module's, AUX fields it does not know, and drops the keys
+  reads but a module's, AUX fields it does not know, and drops the keys
   whose time has passed, counting them; it reads the file a window at a time (1 MiB, or
   as long as a value that runs past the window), so that what it holds at once is a
   window and the databases it builds (section 3zzzt of
@@ -635,7 +648,7 @@ translation stays in the trusted base.
   takes several times Redis's time (PERFORMANCE.md, section 67; FINDINGS.md, section
   3zzzc).
 
-Not yet: streams, Lua
+Not yet: the stream commands, Lua
 functions (FUNCTION, FCALL), CONFIG REWRITE (it answers as Redis does without a configuration file),
 BGSAVE and saves at the save points. Times in ms are limited to 14 digits.
 
@@ -880,7 +893,7 @@ away.
 
 | file | lines of code | of them written by a generator | the laws import it |
 |---|---:|---:|---|
-| `src/map.bend` | 3,200 | 640 | yes |
+| `src/map.bend` | 3,900 | 1,200 | yes |
 | `src/redis.bend` | 18,000 | 7,400 | yes |
 | `src/batch.bend` | 84 |  | yes |
 | `src/aof.bend` | 1,200 |  | yes |
@@ -893,7 +906,7 @@ away.
 | `src/hll.bend` | 1,400 |  | no |
 | `src/info.bend` | 2,200 |  | no |
 | `src/lolwut.bend` | 470 |  | no |
-| `src/rdb.bend` | 2,100 |  | no |
+| `src/rdb.bend` | 3,100 |  | no |
 | `src/resp.bend` | 980 |  | no |
 | `src/script.bend` | 27 |  | no |
 | `src/server.bend` | 11,000 |  | no |
@@ -902,7 +915,7 @@ away.
 | `proof/LAWS.bend` | 920 | 20 |  |
 | `proof/SPEC.bend` | 370 |  |  |
 | `proof/PROOF.bend` | 16,000 | 2,800 |  |
-| `src/`, the 6 files the laws import | 25,000 | 8,200 |  |
+| `src/`, the 6 files the laws import | 28,000 | 9,300 |  |
 | `src/`, the 13 others | 26,000 | 2,600 |  |
 | `proof/` | 18,000 | 2,800 |  |
 <!-- END gen_counts: numbers -->

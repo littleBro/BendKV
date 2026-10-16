@@ -126,6 +126,8 @@ def dump.val(v: KV.Val) -> String:
       "<set" ++ dump.elems(KV.mems.all(m)) ++ ">"
     case KV.VColl{KV.CZset{+z}}:
       "<zset" ++ dump.zels(KV.zset.all(z)) ++ ">"
+    case KV.VColl{KV.CStream{+x}}:
+      "<stream " ++ Nat.show(KV.xstream.len(x)) ++ ">"
 
 def dump.ent(m: Maybe<&2, KV.Item<KV.Val>>) -> String:
   match m:
