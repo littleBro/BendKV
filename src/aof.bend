@@ -132,6 +132,17 @@ def znew.effect(gone: Bool, +k: String, o: R.ZOpts, ps: List<&2, R.ZPair>) -> Li
     case False{}:
       [R.Upd{k, R.UZset{R.ZWNew{o, ps}}}]
 
+# a new stream, made by the XADD of the words ws (resolved): the XADD
+# where the trie held no entry for the key (gone), else the script that
+# deletes the key and runs the XADD (R.XWNew), one entry, as for a new
+# hash
+def xnew.effect(gone: Bool, +k: String, ws: List<&2, String>) -> List<&2, R.Cmd>:
+  match gone:
+    case True{}:
+      [R.Upd{k, R.UStream{R.XWAdd{ws}}}]
+    case False{}:
+      [R.Upd{k, R.UStream{R.XWNew{ws}}}]
+
 # the effects of an update, from the change it made to its key, whose
 # code was c (R.ent.code)
 def ch.effect(+k: String, +c: Nat, +ch: R.Change) -> List<&2, R.Cmd>:
@@ -168,6 +179,10 @@ def ch.effect(+k: String, +c: Nat, +ch: R.Change) -> List<&2, R.Cmd>:
       znew.effect(Nat.is_eq(c, 0n), k, o, ps)
     case R.CRestore{p, v, +e}:
       restore.effect(k, p, e)
+    case R.CStream{op, x}:
+      [R.Upd{k, R.UStream{op}}]
+    case R.CStreamNew{ws, x}:
+      xnew.effect(Nat.is_eq(c, 0n), k, ws)
 
 def upd.effect(+k: String, +c: Nat, +o: R.Out) -> List<&2, R.Cmd>:
   match o:
@@ -760,6 +775,22 @@ def zset.args(+k: String, op: R.ZWrite) -> List<&2, String>:
     case R.ZWPopN{max, c}:
       [zpop.name(max), k, c]
 
+# a stream's write as the file logs it: its command with the words it
+# keeps (resolved: R.xwrite), or the script of a new stream
+# (R.xnew.script)
+def stream.args(+k: String, op: R.XWrite) -> List<&2, String>:
+  match op:
+    case R.XWAdd{ws}:
+      "XADD" <> k <> ws
+    case R.XWTrim{ws}:
+      "XTRIM" <> k <> ws
+    case R.XWDel{ids}:
+      "XDEL" <> k <> ids
+    case R.XWSetId{ws}:
+      "XSETID" <> k <> ws
+    case R.XWNew{ws}:
+      "EVAL" <> R.xnew.script() <> "1" <> k <> ws
+
 # RESTORE as the file logs it: with REPLACE, and ABSTTL with a time
 def restore.args(+k: String, p: String, t: R.TmR) -> List<&2, String>:
   match t:
@@ -792,6 +823,8 @@ def upd.args(+k: String, op: R.UpdOp) -> List<&2, String>:
       zset.args(k, op)
     case R.URestore{p, t, rep, ac}:
       restore.args(k, p, t)
+    case R.UStream{op}:
+      stream.args(k, op)
     case _:
       Nil{}
 
