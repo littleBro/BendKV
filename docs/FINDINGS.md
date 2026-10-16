@@ -6220,6 +6220,20 @@ against a server it did not start; none passed on BendKV.
   EVAL. A first version timed all of the driver's work as one window: the script's time
   went to its calls and to the commands its client's batch ran after it. A fast GET after
   a slow script landed in the slow log, and the slow script did not.
+- With CLIENT TRACKING (3zzzb), a script's calls are its caller's, as Redis's
+  `current_client` is the script's caller while it runs. An invalidation a call makes for
+  the caller waits for the script's reply (the tracking's pend, taken once the script
+  ends), and none goes to it in NOLOOP mode. One for a tracking client that redirects to
+  the caller goes out at once, before the script's reply, as Redis writes it to the
+  caller while the script runs. A key under a BCAST prefix that a call changes is changed
+  by no client, as Redis keeps the script's own client for it, so a caller in BCAST and
+  NOLOOP mode hears of its own script's writes. A call that only reads remembers the
+  script's KEYS for the caller (Redis's `call()` remembers its script caller's, by the
+  caller's command), under its OPTIN, OPTOUT and CACHING; CLIENT CACHING holds for the
+  script's calls and is cleared at its end. The caller and its KEYS ride in the scripts'
+  state while the script runs (`Scr`'s `who` and `ks`). A client that tracks, or that a
+  tracking client redirects to, gets its replies before its script at once, as a
+  subscribed client does.
 - The actor keeps a mirror of the engine's cache: the shas with their scripts' flags.
   EVALSHA of a script not cached answers NOSCRIPT at once, and SCRIPT EXISTS answers from
   it. The pause of writes and maxmemory read a script's flags as Redis's
@@ -6306,14 +6320,16 @@ code that a change far from the request's path can trigger:
 
 **Tests.**
 
-- `tests/script_test.py` runs 11 scenarios on BendKV and on Redis, each with clients of
-  its own, and compares the replies byte for byte (617 lines): EVAL's replies in RESP2 and
+- `tests/script_test.py` runs 12 scenarios on BendKV and on Redis, each with clients of
+  its own, and compares the replies byte for byte (641 lines): EVAL's replies in RESP2 and
   RESP3, `redis.call` and `redis.pcall`, error texts, the cache, the libraries, scripts
   in transactions and with WATCH, the statistics, a script past `lua-time-limit` (BUSY,
   SCRIPT KILL, UNKILLABLE), the slow log and the latency monitor of scripts, scripts in
   pipelines (each reply in its place, and a subscribed RESP3 client's pushes from its own
-  script in Redis's order), and scripts under a pause of writes by their flags, EXEC
-  among them.
+  script in Redis's order), scripts under a pause of writes by their flags, EXEC among
+  them, and scripts with CLIENT TRACKING (the caller's invalidations after its script's
+  reply, NOLOOP, BCAST, a client redirected to, the KEYS a read remembers under OPTIN and
+  CACHING, a FLUSHALL's null).
 - `tests/pause_test.py`'s check of BendKV alone, that an EVAL BendKV did not run was
   answered at once under a pause, is gone with the difference it checked; scripts under
   a pause are scenario 11's.

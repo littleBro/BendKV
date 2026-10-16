@@ -387,7 +387,9 @@ translation stays in the trusted base.
   errors byte for byte as Redis's, in RESP2 and RESP3. Past `lua-time-limit` every other
   client is answered BUSY but for the commands Redis lets run then; SCRIPT KILL ends a
   script that has not written (UNKILLABLE otherwise), and SHUTDOWN NOSAVE stops the server.
-  Where BendKV differs: a script runs once the group of requests that brought it has run
+  With CLIENT TRACKING a script's calls are its caller's, as in Redis: the caller's own
+  invalidations come after the script's reply, and a read remembers the KEYS the script
+  declared. Where BendKV differs: a script runs once the group of requests that brought it has run
   (no client can tell the order of requests that came together), SCRIPT DEBUG is not
   there, and the four fixed scripts of the file are read as commands (FINDINGS.md, section
   3zzzd). FUNCTION and FCALL are not there yet.

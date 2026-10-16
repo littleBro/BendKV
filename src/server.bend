@@ -1482,22 +1482,42 @@ type Hd is Data:
 # the run's state (st): 1 while a script runs past lua-time-limit (busy:
 # ev's bit 16), 2 once it wrote, 4 once SCRIPT KILL asked for its end, 8
 # while a script's wait is in the chain (ev's bit 17), 16 while the
-# script is a function's (FCALL); and the clock's reading the driver's
-# window started at, while the driver runs (at: Timing, in The driver)
+# script is a function's (FCALL); the clock's reading the driver's
+# window started at, while the driver runs (at: Timing, in The driver);
+# and while a script runs, its caller (who: 0 for none) and the keys it
+# declared (ks: its KEYS), for the tracking: its calls' changes are its
+# caller's, and a call that only reads remembers its KEYS for the caller
+# (Tracking, in The driver, below)
 type Scr is Data:
-  Scr{shas: KV.Trie<Nat>, n: Nat, st: U32, at: Clk}
+  Scr{shas: KV.Trie<Nat>, n: Nat, st: U32, at: Clk, who: Nat, ks: List<&2, String>}
 
 # a reading of the wall clock (IO.clock): s and us since 1970
 type Clk is Data:
   Clk{s: U32, u: U32}
 
 def scr.new() -> Scr:
-  Scr{KV.empty(Nat), 0n, 0, Clk{0, 0}}
+  Scr{KV.empty(Nat), 0n, 0, Clk{0, 0}, 0n, Nil{}}
+
+# the caller of the script that runs (0: none), and its KEYS
+def scr.who(+s: Scr) -> Nat:
+  match s:
+    case Scr{shas, n, st, at, +who, ks}:
+      who
+
+def scr.ks(+s: Scr) -> List<&2, String>:
+  match s:
+    case Scr{shas, n, st, at, who, +ks}:
+      ks
+
+def scr.run.set(+id: Nat, ks: List<&2, String>, s: Scr) -> Scr:
+  match s:
+    case Scr{shas, n, st, at, w0, k0}:
+      Scr{shas, n, st, at, id, ks}
 
 # ev's bits 16 and 17 (busy, a script waits), from st
 def scr.bit(+s: Scr) -> U32:
   match s:
-    case Scr{shas, n, +st, at}:
+    case Scr{shas, n, +st, at, who, ks}:
       U32.or(U32.shln(U32.and(st, 1), 16n), U32.shln(U32.and(st, 8), 14n))
 
 # whether a script command's script, by its flags as sc.flags gives them
@@ -1511,6 +1531,12 @@ type Cls is Data:
 
 def cls.new() -> Cls:
   Cls{KV.empty(Cl), Nil{}, Nil{}, Nil{}, PzOff{}, 0n, Hd{KV.empty(Nat), 0n, 0n, 0n, trk.new()}, scr.new()}
+
+# the scripts' state, lent
+def cls.scr(+cs: Cls) -> Scr:
+  match cs:
+    case Cls{tab, kd, ks, ms, pz, dn, hd, +scr}:
+      scr
 
 # the bits of Ps's ev that keep the fast way off while a killed client's
 # connection has not ended (the 31st), a client monitors (the 30th),
@@ -2972,6 +2998,21 @@ def ps.trk(+pb: Ps) -> Trk:
     case PsOf{+p}:
       ps.trk(p)
 
+# the caller of the script that runs (0: none), and the KEYS it declared
+def ps.scr.who(+pb: Ps) -> Nat:
+  match pb:
+    case Ps{reg, ev, px, +cs, own}:
+      scr.who(cls.scr(cs))
+    case PsOf{+p}:
+      ps.scr.who(p)
+
+def ps.scr.ks(+pb: Ps) -> List<&2, String>:
+  match pb:
+    case Ps{reg, ev, px, +cs, own}:
+      scr.ks(cls.scr(cs))
+    case PsOf{+p}:
+      ps.scr.ks(p)
+
 # the tracking clients and the redirects, read: whether the client of id
 # tracks, or is a redirect's client (its pushes must go out at once)
 def trk.waits(+id: Nat, +t: Trk) -> Bool:
@@ -3309,17 +3350,31 @@ def iv.late(+id: Nat, +out: Maybe<&2, Nat>) -> Bool:
     case None{}:
       False{}
 
-def iv.put.as(go: Bool, +did: Nat, +dback: Chan(Ans), +dr3: Bool, +p: Pl, +tid: Nat, +cur: Nat, +out: Maybe<&2, Nat>, v: Iv) -> Iv:
+# whether cur is the caller of the script that runs (Scr's who): the
+# script's calls' changes are its caller's (Redis's current_client while
+# the script runs: trk.cur), and what the caller gets of them as another
+# client's invalidation (a client that redirects to it) goes out at once,
+# as Redis writes it to the caller while its script runs, before the
+# script's reply; a key under a BCAST prefix they change is changed by
+# none (iv.by), as Redis keeps the script's own client for it
+# (trackingRememberKeyToBroadcast), which no client in NOLOOP mode is
+def iv.lua(+cur: Nat, +cs: Cls) -> Bool:
+  Bool.and(Nat.is_lt(0n, cur), Nat.is_eq(scr.who(cls.scr(cs)), cur))
+
+def iv.by(+cur: Nat, +cs: Cls) -> Nat:
+  Bool.pick(Nat, iv.lua(cur, cs), 0n, cur)
+
+def iv.put.as(go: Bool, +did: Nat, +dback: Chan(Ans), +dr3: Bool, +p: Pl, +tid: Nat, +cur: Nat, +out: Maybe<&2, Nat>, +lua: Bool, v: Iv) -> Iv:
   match go:
     case True{}:
-      iv.route(Nat.is_eq(did, cur), Nat.is_eq(tid, cur), iv.late(did, out), Maybe.is_some(&2, Nat, out), dback, dr3, p, v)
+      iv.route(Nat.is_eq(did, cur), Nat.is_eq(tid, cur), iv.late(did, out), Bool.or(Maybe.is_some(&2, Nat, out), lua), dback, dr3, p, v)
     case False{}:
       v
 
 def iv.put(red: Bool, +did: Nat, +dback: Chan(Ans), +dr3: Bool, +p: Pl, +tid: Nat, +cur: Nat, +out: Maybe<&2, Nat>, v: Iv) -> Iv:
   match v:
-    case Iv{+reg, ev, px, cs, own, t}:
-      iv.put.as(Bool.or(dr3, Bool.and(red, Maybe.is_some(&2, Mine, reg.mine(did, reg)))), did, dback, dr3, p, tid, cur, out, Iv{reg, ev, px, cs, own, t})
+    case Iv{+reg, ev, px, +cs, own, t}:
+      iv.put.as(Bool.or(dr3, Bool.and(red, Maybe.is_some(&2, Mine, reg.mine(did, reg)))), did, dback, dr3, p, tid, cur, out, iv.lua(cur, cs), Iv{reg, ev, px, cs, own, t})
 
 # a client whose redirect is gone: flagged broken, and told so in RESP3
 # (after its reply when its own command runs, or when its command served
@@ -3445,8 +3500,8 @@ def iv.key.of(p: List<&2, Nat> & Trk, +k: String, +cur: Nat, +out: Maybe<&2, Nat
 # then to the clients in the table (out as iv.route reads it)
 def iv.key.as(+k: String, +cur: Nat, +out: Maybe<&2, Nat>, +bc: Bool, v: Iv) -> Iv:
   match v:
-    case Iv{reg, ev, px, cs, own, t}:
-      iv.key.of(trk.take(k, trk.mark(bc, k, cur, t)), k, cur, out, reg, ev, px, cs, own)
+    case Iv{reg, ev, px, +cs, own, t}:
+      iv.key.of(trk.take(k, trk.mark(bc, k, iv.by(cur, cs), t)), k, cur, out, reg, ev, px, cs, own)
 
 def iv.key(+k: String, +cur: Nat, +bc: Bool, v: Iv) -> Iv:
   iv.key.as(k, cur, None{}, bc, v)
@@ -3603,6 +3658,19 @@ def ps.trk.cmd.if(on: Bool, +c: R.Cmd, +xs: List<&2, A.Ent>, +pre: Maybe<&2, R.D
 def ps.trk.cmd(+c: R.Cmd, +xs: List<&2, A.Ent>, +pre: Maybe<&2, R.Ds>, +post: R.Ds, +cur: Nat, pb: Ps) -> Ps:
   +p = pb
   ps.trk.cmd.if(ps.trk.hot(p), c, xs, pre, post, cur, p)
+
+# the client a command's changes are of, for the tracking: a call of a
+# script (the script client's, 0) its caller's, as Redis's current_client
+# is the script's caller while the script runs (trackingInvalidateKey)
+def trk.cur.of(lua: Bool, +me: Nat, +pb: Ps) -> Nat:
+  match lua:
+    case True{}:
+      ps.scr.who(pb)
+    case False{}:
+      me
+
+def trk.cur(+me: Nat, +pb: Ps) -> Nat:
+  trk.cur.of(Nat.is_eq(me, 0n), me, pb)
 
 # the keys the sweep of expired keys or eviction deleted (their DELs),
 # invalidated as no client's
@@ -4707,7 +4775,8 @@ def bg.touched(+pre: Maybe<&2, R.Ds>, +c: R.Cmd, es: List<&2, A.Ent>, g: LRun) -
   match g:
     case LRun{rs, +e1, +conn, srv, +ds, ws, up, tx, pb}:
       +me = S.conn.id(conn)
-      bg.touched.of(rs, List.append(&2, A.Ent, e1, es), conn, srv, ds, ws, up, touch.by(c, tx, e1, pre, ds), ps.own.take(ps.cmd(c, e1, pre, ds, me, ps.trk.cmd(c, e1, pre, ds, me, pb))))
+      +p = pb
+      bg.touched.of(rs, List.append(&2, A.Ent, e1, es), conn, srv, ds, ws, up, touch.by(c, tx, e1, pre, ds), ps.own.take(ps.cmd(c, e1, pre, ds, me, ps.trk.cmd(c, e1, pre, ds, trk.cur(me, p), p))))
     case LHeld{h}:
       LHeld{h}
 
@@ -6886,6 +6955,12 @@ def bg.trk.max(on: Bool, g: LRun) -> LRun:
     case _ g0:
       g0
 
+# a held command's tracking, for its step: a script command's without
+# CLIENT CACHING, which holds for its script's calls and is cleared at the
+# script's end (sc.pend), as Redis clears it once the call is over
+def trk.kt.held(+code: Nat, +kt: Tk) -> Tk:
+  Bool.pick(Tk, Bool.and(Nat.is_eq(R.code.class(code), 0n), R.stat.engine(R.code.key(code))), tk.caching.set(False{}, kt), kt)
+
 def bg.trk.after.go(g: LRun, +rk: Bool, +id: Nat, +code: Nat, +kt: Tk, +a: Av) -> LRun:
   match g:
     case LRun{rs, es, conn, srv, ds, ws, up, +tx, pb}:
@@ -6893,7 +6968,7 @@ def bg.trk.after.go(g: LRun, +rk: Bool, +id: Nat, +code: Nat, +kt: Tk, +a: Av) -
       +clear = Bool.and(Bool.or(tk.caching(kt), Nat.is_eq(key, R.stat.top(162n))), Bool.and(Bool.not(trk.client.key(key)), Bool.not(tx.multi(id, tx))))
       bg.trk.max(trk.max.key(R.code.key(code)), bg.trk.pend(ps.pend.take(bg.trk.cache.if(clear, id, bg.trk.read.if(rk, id, code, a, pb))), rs, es, conn, srv, ds, ws, up, tx))
     case LHeld{h}:
-      LHeld{bg.trk.after.go(h, False{}, id, code, kt, a)}
+      LHeld{bg.trk.after.go(h, False{}, id, code, trk.kt.held(code, kt), a)}
 
 # whether the tracking has work after a command (Ps's bit 22)
 def bg.trk.hot(+g: LRun) -> Bool:
@@ -7290,27 +7365,27 @@ def ps.scr.set(scr: Scr, pb: Ps) -> Ps:
 
 def scr.st(+s: Scr) -> U32:
   match s:
-    case Scr{shas, n, +st, at}:
+    case Scr{shas, n, +st, at, who, ks}:
       st
 
 def scr.st.set(+st: U32, s: Scr) -> Scr:
   match s:
-    case Scr{shas, n, s0, at}:
-      Scr{shas, n, st, at}
+    case Scr{shas, n, s0, at, who, ks}:
+      Scr{shas, n, st, at, who, ks}
 
 def scr.at(+s: Scr) -> Clk:
   match s:
-    case Scr{shas, n, st, +at}:
+    case Scr{shas, n, st, +at, who, ks}:
       at
 
 def scr.at.set(t: Clk, s: Scr) -> Scr:
   match s:
-    case Scr{shas, n, st, a0}:
-      Scr{shas, n, st, t}
+    case Scr{shas, n, st, a0, who, ks}:
+      Scr{shas, n, st, t, who, ks}
 
 def scr.find(+sha: String, +s: Scr) -> Maybe<&2, Nat>:
   match s:
-    case Scr{+shas, n, st, at}:
+    case Scr{+shas, n, st, at, who, ks}:
       KV.get(Nat, shas, sha)
 
 def scr.find.or(m: Maybe<&2, Nat>, +sha: String, +s: Scr) -> Maybe<&2, Nat>:
@@ -7328,24 +7403,24 @@ def scr.find.or(m: Maybe<&2, Nat>, +sha: String, +s: Scr) -> Maybe<&2, Nat>:
 def scr.get(+sha: String, +s: Scr) -> Maybe<&2, Nat>:
   scr.find.or(scr.find(sha, s), sha, s)
 
-def scr.add.if(absent: Bool, +sha: String, +f: Nat, shas: KV.Trie<Nat>, +n: Nat, +st: U32, at: Clk) -> Scr:
+def scr.add.if(absent: Bool, +sha: String, +f: Nat, shas: KV.Trie<Nat>, +n: Nat, +st: U32, at: Clk, +who: Nat, ks: List<&2, String>) -> Scr:
   match absent:
     case True{}:
-      Scr{KV.set(Nat, shas, sha, f), 1n+n, st, at}
+      Scr{KV.set(Nat, shas, sha, f), 1n+n, st, at, who, ks}
     case False{}:
-      Scr{shas, n, st, at}
+      Scr{shas, n, st, at, who, ks}
 
 # a script cached under its sha, with its flags
 def scr.add(+sha: String, +f: Nat, s: Scr) -> Scr:
   match s:
-    case Scr{shas, +n, +st, at}:
+    case Scr{shas, +n, +st, at, +who, ks}:
       +t = shas
-      scr.add.if(Maybe.is_none(&2, Nat, KV.get(Nat, t, sha)), sha, f, t, n, st, at)
+      scr.add.if(Maybe.is_none(&2, Nat, KV.get(Nat, t, sha)), sha, f, t, n, st, at, who, ks)
 
 def scr.flush(s: Scr) -> Scr:
   match s:
-    case Scr{shas, n, st, at}:
-      Scr{KV.empty(Nat), 0n, st, at}
+    case Scr{shas, n, st, at, who, ks}:
+      Scr{KV.empty(Nat), 0n, st, at, who, ks}
 
 # SCRIPT EXISTS's replies: 1 for each sha cached (in either case, as
 # Redis's dictionary of scripts compares shas), 0 for the others
@@ -7667,8 +7742,9 @@ def bg.script.flush(+c: R.Cmd, g: LRun) -> LRun:
 # first), as Redis writes a script's caller's replies once the script
 # ends (sent at once as Hold, each script of a pipeline cost a write of
 # its own: FINDINGS 3zzzd); or sent before it (the second) by a client
-# with a subscription, which the script's calls may send pushes that
-# Redis writes after them
+# with a subscription, or one that tracks keys or that a tracking client
+# redirects to (ps.trk.waits), which the script's calls may send pushes
+# that Redis writes after them
 def sc.hold(sub: Bool, rs: List<&2, R.Reply>) -> List<&2, R.Reply> & List<&2, R.Reply>:
   match sub:
     case True{}:
@@ -7692,7 +7768,7 @@ def bg.script.held(p: List<&2, R.Reply> & List<&2, R.Reply>, +id: Nat, +back: Ch
 def bg.script.wait(+id: Nat, +back: Chan(Ans), +c: R.Cmd, +code: Nat, rest: List<&2, R.Cmd>, more: List<&2, Nat>, a: Av, ar: Av, g: LRun) -> LRun:
   match g:
     case LRun{rs, es, +conn, +srv, +ds, ws, up, tx, +pb}:
-      bg.script.held(sc.hold(ps.has(id, pb), rs), id, back, c, code, rest, more, a, es, conn, srv, ds, ws, up, tx, pb)
+      bg.script.held(sc.hold(Bool.or(ps.has(id, pb), ps.trk.waits(id, pb)), rs), id, back, c, code, rest, more, a, es, conn, srv, ds, ws, up, tx, pb)
     case LHeld{h}:
       LHeld{h}
 
@@ -11050,6 +11126,14 @@ def grp.sc.find(+sha: String, +g: Grp) -> Maybe<&2, Nat>:
     case Grp{outs, es, srv, ds, ws, up, tx, +pb}:
       scr.find(sha, ps.scr(pb))
 
+# the caller of the script that starts and its KEYS (Scr's who and ks),
+# and none at its end
+def grp.sc.run(+id: Nat, ks: List<&2, String>, g: Grp) -> Grp:
+  match g:
+    case Grp{outs, es, srv, ds, ws, up, tx, pb}:
+      +p = pb
+      Grp{outs, es, srv, ds, ws, up, tx, ps.scr.set(scr.run.set(id, ks, ps.scr(p)), p)}
+
 def grp.sc.on(+bits: U32, g: Grp) -> Grp:
   match g:
     case Grp{outs, es, srv, ds, ws, up, tx, pb}:
@@ -11097,11 +11181,11 @@ def grp.es.take(g: Grp) -> List<&2, A.Ent> & Grp:
 # the script's entries wrapped as one transaction after those before it
 # (es0), and the run's state cleared but whether it wrote (bit 2, which
 # sc.done.at reads and clears; a script's wait may still be in the
-# chain)
+# chain), its caller and KEYS with it
 def grp.sc.end(es0: List<&2, A.Ent>, g: Grp) -> Grp:
   match g:
     case Grp{outs, es, srv, ds, ws, up, tx, pb}:
-      Grp{outs, tx.effs(es, es0), srv, ds, ws, up, tx, ps.sc.off(21, pb)}
+      grp.sc.run(0n, Nil{}, Grp{outs, tx.effs(es, es0), srv, ds, ws, up, tx, ps.sc.off(21, pb)})
 
 # a state of the general way as a group's, with the group's answers
 def lrun.grp(outs: List<&2, Sigma<&2, &2, Chan(Ans), _ => Ans>>, l: LRun) -> Grp:
@@ -11160,10 +11244,51 @@ def blk.replies(b: S.Blk) -> List<&2, R.Reply>:
     case _:
       Nil{}
 
+# Tracking
+# --------
+# With CLIENT TRACKING, a script's calls are its caller's, as Redis's
+# current_client is the script's caller while the script runs. The
+# caller and the KEYS the script declared ride in the scripts' state
+# while it runs (Scr's who and ks: set by sc.make, cleared by
+# grp.sc.end). A call's changes are the caller's (trk.cur): an
+# invalidation they make for the caller waits in the tracking's pend for
+# the script's reply (sc.pend), and none comes in NOLOOP mode; one for a
+# client that redirects to the caller goes out at once (iv.lua), as Redis
+# writes it to the caller while the script runs; a key under a BCAST
+# prefix is changed by none (iv.by). A call that only reads remembers the
+# KEYS for the caller (sc.trk.read), under its OPTIN, OPTOUT and CACHING,
+# which holds for the script's calls (trk.kt.held) and is cleared at the
+# script's end (sc.pend). A caller that tracks, or that a tracking client
+# redirects to, gets its replies before its script at once (sc.hold), as
+# a subscribed one does.
+
+# after a script, or an EXEC the driver ran, the invalidations its calls
+# kept for its client (the tracking's pend: Tracking, above), to
+# go after its reply, as Redis sends them once the call is over; and the
+# client's CLIENT CACHING cleared, which held for the script's calls
+# (trk.kt.held)
+def sc.pend.of(hot: Bool, +id: Nat, pb: Ps) -> List<&2, R.Reply> & Ps:
+  match hot:
+    case True{}:
+      ps.pend.take(ps.trk.caching(id, False{}, pb))
+    case False{}:
+      (Nil{}, pb)
+
+def sc.pend(+id: Nat, pb: Ps) -> List<&2, R.Reply> & Ps:
+  +p = pb
+  sc.pend.of(ps.trk.hot(p), id, p)
+
+# the update of a client the driver answered (Up: its replies, rs, and
+# the rest of its batch), with the invalidations kept for it after them
+# (sc.pend)
+def sc.up(p: List<&2, R.Reply> & Ps, +back: Chan(Ans), c1: S.Conn, rs: List<&2, R.Reply>, cmds: List<&2, R.Cmd>, codes: List<&2, Nat>, av: Av, outs: List<&2, Sigma<&2, &2, Chan(Ans), _ => Ans>>, es: List<&2, A.Ent>, srv: S.Srv, ds: R.Ds, ws: Waits, up: List<&2, Up>, tx: Tx) -> Grp:
+  (xs, pb) = p
+  Grp{outs, es, srv, ds, ws, Up{back, c1, List.append(&2, R.Reply, xs, rs), cmds, codes, av} <> up, tx, pb}
+
 def sc.resume(w: Waits, +r: R.Reply, +nostats: Bool, +d: Nat, +now: Nat, g: Grp) -> Grp:
   match w g:
-    case WaitOn{id, back, +c0, c1, b, argv, +code, db, until, cmds, codes, +av, rest} Grp{outs, es, srv, ds, ws, up, tx, pb}:
-      grp.timed(0n, "", d, now, Grp{outs, es, sc.took(id, code, av.arg(av), r, nostats, srv), ds, ws, Up{back, c1, S.put(S.say(S.conn.mode(c0), r), blk.replies(b)), List.drop(&2, R.Cmd, cmds, 1n), List.drop(&2, Nat, codes, 1n), av.rest(av)} <> up, tx, pb})
+    case WaitOn{+id, back, +c0, c1, b, argv, +code, db, until, cmds, codes, +av, rest} Grp{outs, es, srv, ds, ws, up, tx, pb}:
+      grp.timed(0n, "", d, now, sc.up(sc.pend(id, pb), back, c1, S.put(S.say(S.conn.mode(c0), r), blk.replies(b)), List.drop(&2, R.Cmd, cmds, 1n), List.drop(&2, Nat, codes, 1n), av.rest(av), outs, es, sc.took(id, code, av.arg(av), r, nostats, srv), ds, ws, up, tx))
     case WaitNone{} g0:
       g0
 
@@ -11322,12 +11447,41 @@ def sc.sort.at(c: R.Cmd, +d: R.Db) -> R.Cmd:
 def sc.sort(c: R.Cmd, +d: R.Ds) -> R.Cmd:
   sc.sort.at(c, R.ds.focused(d))
 
+# after a call of a script that only reads, of a caller that tracks keys
+# (Scr's who), the KEYS the script declared remembered for the caller, as
+# Redis's call() remembers its script caller's (trackingRememberKeys of
+# the caller's command, under the caller's OPTIN, OPTOUT and CACHING:
+# trk.wants); a key the script reads without declaring it is not
+def sc.trk.read.at(on: Bool, +id: Nat, pb: Ps) -> Ps:
+  match on:
+    case True{}:
+      +p = pb
+      ps.trk.read(id, ps.scr.ks(p), p)
+    case False{}:
+      pb
+
+def sc.trk.read.if(on: Bool, +code: Nat, pb: Ps) -> Ps:
+  match on:
+    case True{}:
+      +p = pb
+      +id = ps.scr.who(p)
+      sc.trk.read.at(trk.wants(ps.tk(id, p), code, True{}), id, p)
+    case False{}:
+      pb
+
+def sc.trk.read(+code: Nat, l: LRun) -> LRun:
+  match l:
+    case LRun{rs, es, conn, srv, ds, ws, up, tx, +pb}:
+      LRun{rs, es, conn, srv, ds, ws, up, tx, sc.trk.read.if(ps.trk.hot(pb), code, pb)}
+    case LHeld{h}:
+      LHeld{h}
+
 def sc.batch(+c: R.Cmd, +code: Nat, +r3: Bool, +raw: String, sc: Sc, g: Grp) -> Sc & (Grp & String):
   match sc g:
     case Sc{w, +back, cn, es0, t0, cf, ro, aoom, sha, ex} Grp{outs, es, srv, ds, ws, up, tx, pb}:
       +c0 = sc.conn.r3(r3, cn)
       +fd = R.ds.focus(S.conn.db(c0), ds)
-      sc.batch.of(sc.run.call(sc.sort(c, fd), code, back, raw, LRun{Nil{}, es, c0, srv, fd, ws, up, tx.front(0n, tx), pb}), outs, w, back, es0, t0, cf, ro, aoom, sha, ex)
+      sc.batch.of(sc.trk.read(code, sc.run.call(sc.sort(c, fd), code, back, raw, LRun{Nil{}, es, c0, srv, fd, ws, up, tx.front(0n, tx), pb})), outs, w, back, es0, t0, cf, ro, aoom, sha, ex)
     case ScOf{x} g0:
       sc.batch(c, code, r3, raw, x, g0)
 
@@ -11662,9 +11816,10 @@ def sc.make.of(p: List<&2, A.Ent> & Grp, w: Waits, +back: Chan(Ans), +db: Nat, t
   (es0, g) = p
   (Sc{w, back, conn.lua(db), es0, t0, ScfNone{}, ro, aoom, sha, ex}, g)
 
-# (its start: its command's, the driver's last reading, sc.mark)
-def sc.make(+w: Waits, +back: Chan(Ans), +db: Nat, +ro: Bool, +f: U32, +sha: String, ex: Exm, g: Grp) -> Sc & Grp:
-  +x = g
+# (its start: its command's, the driver's last reading, sc.mark; its
+# caller, the wait's client, and its KEYS kept for the tracking)
+def sc.make(+w: Waits, +back: Chan(Ans), +db: Nat, +ro: Bool, +f: U32, +sha: String, ex: Exm, ks: List<&2, String>, g: Grp) -> Sc & Grp:
+  +x = grp.sc.run(waits.id(w), ks, g)
   sc.make.of(grp.es.take(x), w, back, db, grp.at(x), Bool.or(ro, U32.is_eq(U32.and(f, 17), 1)), U32.is_eq(U32.and(f, 18), 2), sha, ex)
 
 @unsafe
@@ -11678,14 +11833,14 @@ def sc.begin(st: L.Step, p: Sc & Grp, +aof: Bool, +pid: U32, +reqs: Chan(Req)) -
 # (allow-oom with a shebang); the script client's database is its
 # caller's
 @unsafe
-def sc.start.run(m: Maybe<&2, Chan(Ans)>, +sha: String, +f: U32, +ro: Bool, +aof: Bool, +pid: U32, ks: List<&2, String>, xs: List<&2, String>, ex: Exm, +r3: Bool, +db: Nat, +w: Waits, g: Grp, +reqs: Chan(Req)) -> IO(Grp):
+def sc.start.run(m: Maybe<&2, Chan(Ans)>, +sha: String, +f: U32, +ro: Bool, +aof: Bool, +pid: U32, +ks: List<&2, String>, xs: List<&2, String>, ex: Exm, +r3: Bool, +db: Nat, +w: Waits, g: Grp, +reqs: Chan(Req)) -> IO(Grp):
   match m:
     case None{}:
       IO.pure(Grp, g)
     case Some{+back}:
       do IO<Grp>:
         st : L.Step <- L.Engine.start(sha, sc.array(ks), sc.array(xs), U32.or(Bool.pick(U32, r3, 3, 2), U32.or(Bool.pick(U32, ro, 16, 0), 32)))
-        sc.begin(st, sc.make(w, back, db, ro, f, sha, ex, g), aof, pid, reqs)
+        sc.begin(st, sc.make(w, back, db, ro, f, sha, ex, ks, g), aof, pid, reqs)
 
 @unsafe
 def sc.start.go(+sha: String, +f: U32, +ro: Bool, +aof: Bool, +pid: U32, ks: List<&2, String>, xs: List<&2, String>, ex: Exm, +r3: Bool, +db: Nat, +w: Waits, g: Grp, +reqs: Chan(Req)) -> IO(Grp):
@@ -11849,8 +12004,8 @@ def sc.exec(+aof: Bool, +pid: U32, w: Waits, g: Grp, +reqs: Chan(Req)) -> IO(Grp
 # commands after it, its answer the replies so far
 def sc.exec.up(+back: Chan(Ans), cmds: List<&2, R.Cmd>, codes: List<&2, Nat>, outs: List<&2, Sigma<&2, &2, Chan(Ans), _ => Ans>>, f: Fed) -> Grp:
   match f:
-    case Fed{LRun{rs, es, conn, srv, ds, ws, up, tx, pb}, ar}:
-      Grp{outs, es, srv, ds, ws, Up{back, conn, rs, List.drop(&2, R.Cmd, cmds, 1n), List.drop(&2, Nat, codes, 1n), ar} <> up, tx, pb}
+    case Fed{LRun{rs, es, +conn, srv, ds, ws, up, tx, pb}, ar}:
+      sc.up(sc.pend(S.conn.id(conn), pb), back, conn, rs, List.drop(&2, R.Cmd, cmds, 1n), List.drop(&2, Nat, codes, 1n), ar, outs, es, srv, ds, ws, up, tx)
     case Fed{g, ar}:
       lrun.grp(outs, g)
 

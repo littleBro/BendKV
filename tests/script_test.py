@@ -78,6 +78,16 @@ The scenarios:
    EXEC of scripts that declare no-writes run at once; EVAL without a
    shebang, EVALSHA, EVAL_RO whose shebang does not declare no-writes
    and an EXEC that queued one are held back, then run.
+12. Scripts and CLIENT TRACKING (RESP3), as Redis 7.0.15 runs them, a
+   script's calls its caller's (current_client): the caller's own
+   invalidation after its script's reply, after its replies before the
+   script in a pipeline, and none in NOLOOP mode; in BCAST mode after the
+   reply, NOLOOP or not (Redis keeps the script's own client as the key's
+   changer); a client that a tracking client redirects to, which runs the
+   script, told before the script's reply; the keys a script that reads
+   remembers for its caller (its KEYS, not a key it reads without
+   declaring it; under OPTIN only with CLIENT CACHING yes; EVAL_RO's own
+   call none); a FLUSHALL in a script, its null after the reply.
 
 Not tested: error() with a table that has no 'err' field (error({}))
 makes Redis 7.0.15 crash (sdscatfmt reads the message it does not have),
@@ -1039,9 +1049,69 @@ def paused(port, log):
             x.close()
 
 
+def drain(c, n=6):
+    """the replies and pushes of c up to a PING's reply"""
+    c.send("PING")
+    out = []
+    for _ in range(n):
+        x = c.read(timeout=2.0)
+        out.append(x)
+        if x in (b"+PONG\r\n", "TIMEOUT", "CLOSED"):
+            break
+    return out
+
+
+def tracking(port, log):
+    r = fresh(port, log, "12")
+    w = "redis.call('SET', KEYS[1], 'v') return 1"
+    # the caller's own key, written by its script: its invalidation after
+    # the script's reply, after the replies before it in the pipeline
+    for mode in ([], ["NOLOOP"], ["BCAST"], ["BCAST", "NOLOOP"]):
+        c = Client(port, resp3=True)
+        log("12 on", mode, c.cmd("CLIENT", "TRACKING", "ON", *mode))
+        log("12 read", c.cmd("GET", k("t")))
+        if "BCAST" in mode:
+            log("12 script", mode, ev(c, w, [k("t")]), *drain(c))
+        else:
+            c.sock.sendall(enc(["PING"]) + enc(["EVAL", w, "1", k("t")]))
+            log("12 pipeline", mode, c.read(), c.read(), *drain(c))
+        c.close()
+    # a tracking client a that redirects to b, which runs the script: b
+    # told before the script's reply, after its replies before it
+    b = Client(port, resp3=True)
+    bid = b.cmd("CLIENT", "ID")
+    a = Client(port, resp3=True)
+    log("12 redirect", a.cmd("CLIENT", "TRACKING", "ON", "REDIRECT", bid[1:-2].decode()), a.cmd("GET", k("u")))
+    b.sock.sendall(enc(["PING"]) + enc(["EVAL", w, "1", k("u")]))
+    log("12 redirected", b.read(), b.read(), b.read(), *drain(b))
+    a.close()
+    b.close()
+    # the keys a script's read remembers for its caller: its KEYS, not a
+    # key it reads undeclared, EVAL_RO's own call none; OPTIN with and
+    # without CLIENT CACHING yes
+    c = Client(port, resp3=True)
+    log("12 on", c.cmd("CLIENT", "TRACKING", "ON"))
+    log("12 reads", ev(c, "return redis.call('GET', KEYS[1])", [k("d")]), ev(c, "return redis.call('GET', ARGV[1])", [], [k("x")]),
+        ev(c, "return 1", [k("n")], cmd="EVAL_RO"), ev(c, "return redis.call('GET', KEYS[1])", [k("ro")], cmd="EVAL_RO"))
+    log("12 writes", r.cmd("SET", k("d"), "1"), r.cmd("SET", k("x"), "1"), r.cmd("SET", k("n"), "1"), r.cmd("SET", k("ro"), "1"))
+    log("12 heard", *drain(c))
+    c.close()
+    c = Client(port, resp3=True)
+    log("12 optin", c.cmd("CLIENT", "TRACKING", "ON", "OPTIN"), ev(c, "return redis.call('GET', KEYS[1])", [k("o1")]),
+        c.cmd("CLIENT", "CACHING", "YES"), ev(c, "return redis.call('GET', KEYS[1])", [k("o2")]))
+    log("12 optin writes", r.cmd("SET", k("o1"), "1"), r.cmd("SET", k("o2"), "1"))
+    log("12 optin heard", *drain(c))
+    # a FLUSHALL in a script: the caller's null after the script's reply
+    log("12 flush read", c.cmd("CLIENT", "CACHING", "YES"), c.cmd("GET", k("f")))
+    log("12 flush", ev(c, "redis.call('FLUSHALL') return 1"), *drain(c))
+    c.close()
+    r.close()
+
+
 SCENARIOS = [("1 replies", replies), ("2 redis.call", calls), ("3 errors", errors), ("4 the cache", cache),
              ("5 libraries", libraries), ("6 transactions", transactions), ("7 statistics", statistics),
-             ("8 BUSY", busy), ("9 the slow log", slow), ("10 pipelines", pipelines), ("11 paused", paused)]
+             ("8 BUSY", busy), ("9 the slow log", slow), ("10 pipelines", pipelines), ("11 paused", paused),
+             ("12 tracking", tracking)]
 
 
 def transcript(port, scenario):
