@@ -604,9 +604,9 @@ def warn.if(c: Bool, +w: String, ws: List<&2, String>) -> List<&2, String>:
     case False{}:
       ws
 
-# what BendKV keeps and does nothing with
+# what BendKV keeps and does less with than Redis, or nothing
 def warnings(+items: List<&2, C.CItem>) -> List<&2, String>:
-  warn.if(Bool.not(String.is_empty(cfg(items, "save"))), "BendKV writes no RDB snapshots: save is kept but saves nothing (appendonly yes keeps the data)",
+  warn.if(Bool.not(String.is_empty(cfg(items, "save"))), "BendKV does not save at the save points yet: with them SHUTDOWN and FLUSHALL save the RDB file, and SAVE saves it (appendonly yes keeps every write)",
   warn.if(Bool.not(String.is_empty(cfg(items, "unixsocket"))), "BendKV listens on TCP only: unixsocket " ++ cfg(items, "unixsocket") ++ " is ignored",
   warn.if(String.eq(cfg(items, "syslog-enabled"), "yes"), "BendKV does not log to syslog", Nil{})))
 

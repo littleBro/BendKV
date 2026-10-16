@@ -26,9 +26,10 @@ each in a fresh directory): it stops the server (exit code 0, the
 connection closed, the commands after it in the pipeline not run), the
 append-only file synced (a restart holds what came before it), the pid
 file removed, a rewrite that runs stopped and its temporary file
-removed; SAVE, which BendKV cannot do, fails as Redis's SHUTDOWN does when
-its save fails (the server goes on, the log says why), and SAVE FORCE
-stops it all the same.
+removed; SAVE writes the RDB file, and a save that fails (a directory
+where its temporary file goes) stops nothing (the server goes on, the
+log says why) but with FORCE. tests/rdb_test.py has the rest of the
+saves.
 
     python3 tests/admin_test.py --bendkv 6380 --redis 6390 [--bin build/bendkv]
 """
@@ -304,9 +305,11 @@ def shutdowns(exe, root, log):
     # before it in the pipeline are not sent (Redis writes a group's
     # replies after it, and exits within it), the commands after it do
     # not run
-    for flags in ([], ["NOSAVE"], ["now"], ["FORCE"], ["NOSAVE", "NOW", "FORCE"]):
-        s = Srv(exe, fresh("plain" + "".join(flags)))
-        log("1 shutdown", flags, s.talk(enc(["PING"]) + enc(["SHUTDOWN"] + flags) + enc(["PING"])), s.exit())
+    for flags in ([], ["NOSAVE"], ["now"], ["FORCE"], ["NOSAVE", "NOW", "FORCE"], ["SAVE"]):
+        d = fresh("plain" + "".join(flags))
+        s = Srv(exe, d)
+        log("1 shutdown", flags, s.talk(enc(["PING"]) + enc(["SHUTDOWN"] + flags) + enc(["PING"])), s.exit(),
+            os.path.exists(os.path.join(d, "dump.rdb")))
     # 2. the append-only file: what came before SHUTDOWN is there after a
     # restart, what came after it in the pipeline is not
     d = fresh("aof")
@@ -321,25 +324,22 @@ def shutdowns(exe, root, log):
     s = Srv(exe, fresh("multi"))
     log("3 multi", s.talk(enc(["MULTI"]) + enc(["SHUTDOWN"]) + enc(["EXEC"]) + enc(["SHUTDOWN", "x"]) + enc(["PING"])))
     log("3 then", s.talk(enc(["SHUTDOWN"])), s.exit())
+    # 4. a save that fails (a directory where its temporary file goes):
+    # SHUTDOWN SAVE answers an error, the server and the pipeline go on,
+    # the log says why; FORCE stops it all the same
+    d = fresh("save")
+    s = Srv(exe, d)
+    os.mkdir(os.path.join(d, "temp-%d.rdb" % s.p.pid))
+    log("4 save fails", s.talk(enc(["SET", "s", "1"]) + enc(["SHUTDOWN", "SAVE"]) + enc(["GET", "s"])))
+    log("4 log", [line in s.log() for line in ("User requested shutdown...", "Saving the final RDB snapshot before exiting.",
+                                               "Error trying to save the DB, can't exit.",
+                                               "Errors trying to shut down the server. Check the logs for more information.")])
+    log("4 force", s.talk(enc(["SHUTDOWN", "SAVE", "FORCE"])), s.exit(), "Error trying to save the DB. Exit anyway." in s.log())
 
 
 def shutdowns_alone(exe, root):
-    """SHUTDOWN SAVE fails on BendKV (no RDB snapshot), SAVE FORCE stops it;
-    a rewrite that runs is stopped, its temporary file removed"""
+    """a rewrite that runs is stopped, its temporary file removed"""
     fails = []
-    d = os.path.join(root, "save")
-    os.makedirs(d)
-    s = Srv(exe, d)
-    out = s.talk(enc(["SET", "s", "1"]) + enc(["SHUTDOWN", "SAVE"]) + enc(["GET", "s"]))
-    if out != (b"+OK\r\n-ERR Errors trying to SHUTDOWN. Check logs.\r\n$1\r\n1\r\n", "open"):
-        fails.append("SHUTDOWN SAVE answers %r" % (out,))
-    for line in ("User requested shutdown...", "Saving the final RDB snapshot before exiting.",
-                 "Error trying to save the DB, can't exit.", "Errors trying to shut down the server. Check the logs for more information."):
-        if line not in s.log():
-            fails.append("the log lacks %r" % line)
-    out = s.talk(enc(["SHUTDOWN", "SAVE", "FORCE"]))
-    if out != (b"", "closed") or s.exit() != 0 or "Error trying to save the DB. Exit anyway." not in s.log():
-        fails.append("SHUTDOWN SAVE FORCE: %r" % (out,))
     d = os.path.join(root, "rewrite")
     os.makedirs(d)
     s = Srv(exe, d, "--appendonly", "yes")

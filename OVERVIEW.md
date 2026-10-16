@@ -169,7 +169,7 @@ src/float.bend   double and long double in software (checked against glibc)
 src/hll.bend     HyperLogLogs on a string's bytes, as Redis's (checked by tests)
 src/geo.bend     geohashes, cells, distances and sorts, as Redis's (checked by tests)
 src/lolwut.bend  LOLWUT's drawings, as Redis draws them (checked by tests)
-src/rdb.bend     DUMP's payloads and RESTORE's reading, as Redis's (checked by tests)
+src/rdb.bend     the RDB format: DUMP, RESTORE and the file, as Redis's (checked by tests)
 ```
 
 **Commands:** PING, ECHO, GET, SET, SETNX, GETSET, DEL/UNLINK, EXISTS, INCR, DECR, INCRBY,
@@ -317,6 +317,14 @@ makes the value of the kind Redis's load makes, checks a payload as deep as Redi
 with `sanitize-dump-payload yes`, and takes REPLACE, ABSTTL, IDLETIME and FREQ, its
 errors in Redis's order and its keyspace events Redis's. It is logged as a RESTORE with
 REPLACE and ABSTTL (section 3zzu of docs/FINDINGS.md).
+The RDB file, as Redis 7.0.15 writes and reads it: SAVE writes it (`temp-<pid>.rdb`,
+synced, renamed onto `dbfilename`, the directory synced), SHUTDOWN saves it with SAVE or
+with save points, FLUSHALL with save points saves the emptied databases, and the start
+loads it with `appendonly no`: every version from 1 to 10 and every encoding the codec
+reads, keys whose time has passed dropped and counted, Redis's lines for a file that does
+not load. No BGSAVE and no save at the save points yet, no LZF or IDLE and FREQ written,
+and no save on SIGTERM, which the runtime does not catch (section 3zzzc of
+docs/FINDINGS.md).
 Clients that wait: BLPOP, BRPOP, BLMOVE, BRPOPLPUSH, BLMPOP, BZPOPMIN, BZPOPMAX and
 BZMPOP; their timeout (seconds, a double; 0 means wait forever) is read as Redis reads
 it, with its errors. A command that has nothing to pop makes the client wait, and its
@@ -414,15 +422,16 @@ time of the actor's group, in ms (the microseconds end in 000), and a monitor ge
 lines of the calls EXEC runs after EXEC's array, whereas Redis writes them between its
 replies.
 The server's administrative commands, as Redis 7.0.15 answers them on a master with no
-replica: LASTSAVE (the start, as BendKV writes no RDB snapshot), ROLE, WAIT (0: at once
+replica: LASTSAVE (the last save that ended well, the start until one does), ROLE, WAIT (0: at once
 when it asks for no replica, otherwise when its timeout ends, its client waiting as a
 blocking command's does), MEMORY STATS, DOCTOR, PURGE and MALLOC-STATS (Redis's fields
 and advice from the numbers of INFO's memory section; no allocator's statistics), LOLWUT
 (Redis 7.0.15's line, and VERSION 5's and 6's drawings, byte for byte those that take
 no random number), and SHUTDOWN with its flags: the append-only file written and synced,
-a rewrite that runs stopped, the pid file removed, the process ended with code 0.
-SHUTDOWN SAVE fails, as Redis's does when it cannot save, since BendKV writes no RDB
-snapshot; SAVE FORCE stops it all the same (section 3zzl of docs/FINDINGS.md).
+a rewrite that runs stopped, the RDB file saved with SAVE or with save points and not
+with NOSAVE (a save that fails stops nothing, Redis's error answered, but with FORCE),
+the pid file removed, the process ended with code 0 (sections 3zzl and 3zzzc of
+docs/FINDINGS.md).
 Times to live: EXPIRE, PEXPIRE, EXPIREAT and PEXPIREAT (with NX, XX, GT, LT), TTL, PTTL,
 EXPIRETIME, PEXPIRETIME, PERSIST; SET with NX, XX, GET, EX, PX, EXAT, PXAT and KEEPTTL;
 SETEX, PSETEX, GETEX (EX, PX, EXAT, PXAT, PERSIST) and GETDEL. Times are read as Redis
@@ -514,9 +523,11 @@ which changes the directory at once; `save` points, which add up; the same error
 same lines), and the log is written in Redis's form, to standard output or to
 `logfile`. The port, `bind` (IPv4), `requirepass`, `protected-mode`, the append-only
 file (`appendonly`, `appendfilename`, `appendfsync`, `aof-load-truncated`), `logfile`,
-`loglevel` and `pidfile` take effect; what BendKV cannot do (modules, ACL users,
-command renaming, daemonizing, cluster, replica, TLS, supervisor signaling, an RDB file
-or Redis 7's multi-part append-only file) stops the start with a line in the log.
+`loglevel` and `pidfile` take effect; with `appendonly no` the RDB file is loaded, as
+Redis loads it; what BendKV cannot do (modules, ACL users, command renaming,
+daemonizing, cluster, replica, TLS, supervisor signaling, Redis 7's multi-part
+append-only file, or an RDB file that holds a stream, a module's data or functions)
+stops the start with a line in the log.
 Pipelining, partial packets, inline commands (one can work through `nc`) and
 binary-safe values are supported. Requests are parsed as Redis 7.0.15 parses them: a
 length as `string2ll` reads it (no `0` before the first digit), a count of 0 or less
@@ -1053,9 +1064,9 @@ The translation the kernel reads can be dumped with
   text, errors and eleven drawings of VERSION 5 byte for byte, the shapes of random ones
   and of VERSION 6; SHUTDOWN's errors and its refusal in MULTI; the statistics); then
   SHUTDOWN and its forms on a redis-server and a BendKV of their own (the exit code, the
-  closed connection, the append-only file and the pid file after it), and BendKV alone:
-  MEMORY STATS's numbers as INFO's, SHUTDOWN SAVE failing and SAVE FORCE stopping, a
-  SHUTDOWN while a rewrite of 200,000 keys runs (section 3zzl of docs/FINDINGS.md).
+  closed connection, the append-only file and the pid file after it, SHUTDOWN SAVE and
+  a save that fails), and BendKV alone: MEMORY STATS's numbers as INFO's, a SHUTDOWN
+  while a rewrite of 200,000 keys runs (section 3zzl of docs/FINDINGS.md).
 - **GEO** (`tests/geo_test.py`, with the server's defaults): the same commands on BendKV and on
   Redis, in RESP2 and RESP3, every reply compared byte for byte and, after each write,
   the sorted set it leaves and its time to live: the cases of Redis's unit/geo and of
@@ -1117,6 +1128,14 @@ The translation the kernel reads can be dumped with
   the append-only file on are gone from the file too (a restart holds what is left); an
   eviction while the append-only file is rewritten counts the keys the snapshot holds as
   freed and does not evict all the keys (section 48 of docs/PERFORMANCE.md).
+- **The RDB file** (`tests/rdb_test.py`): files Redis writes, with LZF and without, of
+  keys of every kind and encoding in several databases, and a file of the encodings
+  Redis no longer writes: BendKV and Redis start from each, and every key of every
+  database reads back the same, with the counts and lines of the load; BendKV's SAVE,
+  which `redis-check-rdb` finds whole, loaded by Redis and by BendKV; SAVE, LASTSAVE,
+  INFO's fields and the saves of FLUSHALL and SHUTDOWN against Redis's transcripts;
+  files that do not load, each stopping both starts with Redis's line (section 3zzzc of
+  docs/FINDINGS.md).
 - **The end of a connection** (`tests/conn_test.py`): connections end by every path —
   the client closes after a request and before one, QUIT, a protocol error, a reset
   before the server has read the request and while it sends a reply of a megabyte — 50

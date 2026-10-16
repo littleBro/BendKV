@@ -954,6 +954,12 @@ def cmd.sadd() -> Top:
     [R.RBulk{"summary"}, R.RBulk{"Add one or more members to a set"}, R.RBulk{"since"}, R.RBulk{"1.0.0"}, R.RBulk{"group"}, R.RBulk{"set"}, R.RBulk{"complexity"}, R.RBulk{"O(1) for each element added, so O(N) to add N elements when the command is called with multiple arguments."}, R.RBulk{"history"}, R.RSet{[R.RArray{[R.RBulk{"2.4.0"}, R.RBulk{"Accepts multiple `member` arguments."}]}]}, R.RBulk{"arguments"}, R.RArray{[R.RMap{[R.RBulk{"name"}, R.RBulk{"key"}, R.RBulk{"type"}, R.RBulk{"key"}, R.RBulk{"key_spec_index"}, R.RInt{R.IPos{0n}}]}, R.RMap{[R.RBulk{"name"}, R.RBulk{"member"}, R.RBulk{"type"}, R.RBulk{"string"}, R.RBulk{"flags"}, R.RSet{[R.RStatus{"multiple"}]}]}]}]},
   []}
 
+def cmd.save() -> Top:
+  Top{Desc{"save", R.IPos{1n}, ["admin", "slow", "dangerous"], [], KBySpecs{}, False{},
+    [R.RBulk{"save"}, R.RInt{R.IPos{1n}}, R.RSet{[R.RStatus{"admin"}, R.RStatus{"noscript"}, R.RStatus{"no_async_loading"}, R.RStatus{"no_multi"}]}, R.RInt{R.IPos{0n}}, R.RInt{R.IPos{0n}}, R.RInt{R.IPos{0n}}, R.RSet{[R.RStatus{"@admin"}, R.RStatus{"@slow"}, R.RStatus{"@dangerous"}]}, R.RSet{[]}, R.RSet{[]}],
+    [R.RBulk{"summary"}, R.RBulk{"Synchronously save the dataset to disk"}, R.RBulk{"since"}, R.RBulk{"1.0.0"}, R.RBulk{"group"}, R.RBulk{"server"}, R.RBulk{"complexity"}, R.RBulk{"O(N) where N is the total number of keys in all databases"}]},
+  []}
+
 def cmd.scan() -> Top:
   Top{Desc{"scan", R.INeg{1n}, ["keyspace", "read", "slow"], [], KBySpecs{}, False{},
     [R.RBulk{"scan"}, R.RInt{R.INeg{1n}}, R.RSet{[R.RStatus{"readonly"}]}, R.RInt{R.IPos{0n}}, R.RInt{R.IPos{0n}}, R.RInt{R.IPos{0n}}, R.RSet{[R.RStatus{"@keyspace"}, R.RStatus{"@read"}, R.RStatus{"@slow"}]}, R.RSet{[R.RBulk{"nondeterministic_output"}, R.RBulk{"request_policy:special"}]}, R.RSet{[]}],
@@ -1430,7 +1436,7 @@ def cmd.zunionstore() -> Top:
 
 # the commands, by name
 def table() -> List<&2, Top>:
-  [cmd.append(), cmd.auth(), cmd.bgrewriteaof(), cmd.bitcount(), cmd.bitfield(), cmd.bitfield_ro(), cmd.bitop(), cmd.bitpos(), cmd.blmove(), cmd.blmpop(), cmd.blpop(), cmd.brpop(), cmd.brpoplpush(), cmd.bzmpop(), cmd.bzpopmax(), cmd.bzpopmin(), cmd.client(), cmd.command(), cmd.config(), cmd.copy(), cmd.dbsize(), cmd.decr(), cmd.decrby(), cmd.del(), cmd.discard(), cmd.dump(), cmd.echo(), cmd.eval(), cmd.eval_ro(), cmd.evalsha(), cmd.evalsha_ro(), cmd.exec(), cmd.exists(), cmd.expire(), cmd.expireat(), cmd.expiretime(), cmd.flushall(), cmd.flushdb(), cmd.function(), cmd.geoadd(), cmd.geodist(), cmd.geohash(), cmd.geopos(), cmd.georadius(), cmd.georadius_ro(), cmd.georadiusbymember(), cmd.georadiusbymember_ro(), cmd.geosearch(), cmd.geosearchstore(), cmd.get(), cmd.getbit(), cmd.getdel(), cmd.getex(), cmd.getrange(), cmd.getset(), cmd.hdel(), cmd.hello(), cmd.hexists(), cmd.hget(), cmd.hgetall(), cmd.hincrby(), cmd.hincrbyfloat(), cmd.hkeys(), cmd.hlen(), cmd.hmget(), cmd.hmset(), cmd.hrandfield(), cmd.hscan(), cmd.hset(), cmd.hsetnx(), cmd.hstrlen(), cmd.hvals(), cmd.incr(), cmd.incrby(), cmd.incrbyfloat(), cmd.info(), cmd.keys(), cmd.lastsave(), cmd.latency(), cmd.lcs(), cmd.lindex(), cmd.linsert(), cmd.llen(), cmd.lmove(), cmd.lmpop(), cmd.lolwut(), cmd.lpop(), cmd.lpos(), cmd.lpush(), cmd.lpushx(), cmd.lrange(), cmd.lrem(), cmd.lset(), cmd.ltrim(), cmd.memory(), cmd.mget(), cmd.monitor(), cmd.move(), cmd.mset(), cmd.msetnx(), cmd.multi(), cmd.object(), cmd.persist(), cmd.pexpire(), cmd.pexpireat(), cmd.pexpiretime(), cmd.pfadd(), cmd.pfcount(), cmd.pfdebug(), cmd.pfmerge(), cmd.pfselftest(), cmd.ping(), cmd.psetex(), cmd.psubscribe(), cmd.pttl(), cmd.publish(), cmd.pubsub(), cmd.punsubscribe(), cmd.quit(), cmd.randomkey(), cmd.rename(), cmd.renamenx(), cmd.reset(), cmd.restore(), cmd.role(), cmd.rpop(), cmd.rpoplpush(), cmd.rpush(), cmd.rpushx(), cmd.sadd(), cmd.scan(), cmd.scard(), cmd.script(), cmd.sdiff(), cmd.sdiffstore(), cmd.select(), cmd.set(), cmd.setbit(), cmd.setex(), cmd.setnx(), cmd.setrange(), cmd.shutdown(), cmd.sinter(), cmd.sintercard(), cmd.sinterstore(), cmd.sismember(), cmd.slowlog(), cmd.smembers(), cmd.smismember(), cmd.smove(), cmd.sort(), cmd.sort_ro(), cmd.spop(), cmd.spublish(), cmd.srandmember(), cmd.srem(), cmd.sscan(), cmd.ssubscribe(), cmd.strlen(), cmd.subscribe(), cmd.substr(), cmd.sunion(), cmd.sunionstore(), cmd.sunsubscribe(), cmd.swapdb(), cmd.time(), cmd.touch(), cmd.ttl(), cmd.type(), cmd.unlink(), cmd.unsubscribe(), cmd.unwatch(), cmd.wait(), cmd.watch(), cmd.zadd(), cmd.zcard(), cmd.zcount(), cmd.zdiff(), cmd.zdiffstore(), cmd.zincrby(), cmd.zinter(), cmd.zintercard(), cmd.zinterstore(), cmd.zlexcount(), cmd.zmpop(), cmd.zmscore(), cmd.zpopmax(), cmd.zpopmin(), cmd.zrandmember(), cmd.zrange(), cmd.zrangebylex(), cmd.zrangebyscore(), cmd.zrangestore(), cmd.zrank(), cmd.zrem(), cmd.zremrangebylex(), cmd.zremrangebyrank(), cmd.zremrangebyscore(), cmd.zrevrange(), cmd.zrevrangebylex(), cmd.zrevrangebyscore(), cmd.zrevrank(), cmd.zscan(), cmd.zscore(), cmd.zunion(), cmd.zunionstore()]
+  [cmd.append(), cmd.auth(), cmd.bgrewriteaof(), cmd.bitcount(), cmd.bitfield(), cmd.bitfield_ro(), cmd.bitop(), cmd.bitpos(), cmd.blmove(), cmd.blmpop(), cmd.blpop(), cmd.brpop(), cmd.brpoplpush(), cmd.bzmpop(), cmd.bzpopmax(), cmd.bzpopmin(), cmd.client(), cmd.command(), cmd.config(), cmd.copy(), cmd.dbsize(), cmd.decr(), cmd.decrby(), cmd.del(), cmd.discard(), cmd.dump(), cmd.echo(), cmd.eval(), cmd.eval_ro(), cmd.evalsha(), cmd.evalsha_ro(), cmd.exec(), cmd.exists(), cmd.expire(), cmd.expireat(), cmd.expiretime(), cmd.flushall(), cmd.flushdb(), cmd.function(), cmd.geoadd(), cmd.geodist(), cmd.geohash(), cmd.geopos(), cmd.georadius(), cmd.georadius_ro(), cmd.georadiusbymember(), cmd.georadiusbymember_ro(), cmd.geosearch(), cmd.geosearchstore(), cmd.get(), cmd.getbit(), cmd.getdel(), cmd.getex(), cmd.getrange(), cmd.getset(), cmd.hdel(), cmd.hello(), cmd.hexists(), cmd.hget(), cmd.hgetall(), cmd.hincrby(), cmd.hincrbyfloat(), cmd.hkeys(), cmd.hlen(), cmd.hmget(), cmd.hmset(), cmd.hrandfield(), cmd.hscan(), cmd.hset(), cmd.hsetnx(), cmd.hstrlen(), cmd.hvals(), cmd.incr(), cmd.incrby(), cmd.incrbyfloat(), cmd.info(), cmd.keys(), cmd.lastsave(), cmd.latency(), cmd.lcs(), cmd.lindex(), cmd.linsert(), cmd.llen(), cmd.lmove(), cmd.lmpop(), cmd.lolwut(), cmd.lpop(), cmd.lpos(), cmd.lpush(), cmd.lpushx(), cmd.lrange(), cmd.lrem(), cmd.lset(), cmd.ltrim(), cmd.memory(), cmd.mget(), cmd.monitor(), cmd.move(), cmd.mset(), cmd.msetnx(), cmd.multi(), cmd.object(), cmd.persist(), cmd.pexpire(), cmd.pexpireat(), cmd.pexpiretime(), cmd.pfadd(), cmd.pfcount(), cmd.pfdebug(), cmd.pfmerge(), cmd.pfselftest(), cmd.ping(), cmd.psetex(), cmd.psubscribe(), cmd.pttl(), cmd.publish(), cmd.pubsub(), cmd.punsubscribe(), cmd.quit(), cmd.randomkey(), cmd.rename(), cmd.renamenx(), cmd.reset(), cmd.restore(), cmd.role(), cmd.rpop(), cmd.rpoplpush(), cmd.rpush(), cmd.rpushx(), cmd.sadd(), cmd.save(), cmd.scan(), cmd.scard(), cmd.script(), cmd.sdiff(), cmd.sdiffstore(), cmd.select(), cmd.set(), cmd.setbit(), cmd.setex(), cmd.setnx(), cmd.setrange(), cmd.shutdown(), cmd.sinter(), cmd.sintercard(), cmd.sinterstore(), cmd.sismember(), cmd.slowlog(), cmd.smembers(), cmd.smismember(), cmd.smove(), cmd.sort(), cmd.sort_ro(), cmd.spop(), cmd.spublish(), cmd.srandmember(), cmd.srem(), cmd.sscan(), cmd.ssubscribe(), cmd.strlen(), cmd.subscribe(), cmd.substr(), cmd.sunion(), cmd.sunionstore(), cmd.sunsubscribe(), cmd.swapdb(), cmd.time(), cmd.touch(), cmd.ttl(), cmd.type(), cmd.unlink(), cmd.unsubscribe(), cmd.unwatch(), cmd.wait(), cmd.watch(), cmd.zadd(), cmd.zcard(), cmd.zcount(), cmd.zdiff(), cmd.zdiffstore(), cmd.zincrby(), cmd.zinter(), cmd.zintercard(), cmd.zinterstore(), cmd.zlexcount(), cmd.zmpop(), cmd.zmscore(), cmd.zpopmax(), cmd.zpopmin(), cmd.zrandmember(), cmd.zrange(), cmd.zrangebylex(), cmd.zrangebyscore(), cmd.zrangestore(), cmd.zrank(), cmd.zrem(), cmd.zremrangebylex(), cmd.zremrangebyrank(), cmd.zremrangebyscore(), cmd.zrevrange(), cmd.zrevrangebylex(), cmd.zrevrangebyscore(), cmd.zrevrank(), cmd.zscan(), cmd.zscore(), cmd.zunion(), cmd.zunionstore()]
 
 # Redis's ACL categories (ACL CAT)
 def categories() -> List<&2, String>:
@@ -2333,19 +2339,19 @@ def ro.key(+key: Nat) -> Maybe<&2, Ro>:
       Some{Ro{R.INeg{6n}, [KSpec{["RO", "access"], 1n, R.IPos{0n}, 1n, 0n}], KBySpecs{}}}
     case 199n:
       Some{Ro{R.IPos{2n}, [KSpec{["RO", "access"], 1n, R.IPos{0n}, 1n, 0n}], KBySpecs{}}}
-    case 204n:
-      Some{Ro{R.INeg{2n}, [], KByEval{}}}
     case 205n:
       Some{Ro{R.INeg{2n}, [], KByEval{}}}
-    case 238n:
-      Some{Ro{R.IPos{3n}, [KSpec{["RO"], 2n, R.IPos{0n}, 1n, 0n}], KBySpecs{}}}
+    case 206n:
+      Some{Ro{R.INeg{2n}, [], KByEval{}}}
     case 239n:
       Some{Ro{R.IPos{3n}, [KSpec{["RO"], 2n, R.IPos{0n}, 1n, 0n}], KBySpecs{}}}
     case 240n:
       Some{Ro{R.IPos{3n}, [KSpec{["RO"], 2n, R.IPos{0n}, 1n, 0n}], KBySpecs{}}}
     case 241n:
       Some{Ro{R.IPos{3n}, [KSpec{["RO"], 2n, R.IPos{0n}, 1n, 0n}], KBySpecs{}}}
-    case 243n:
+    case 242n:
+      Some{Ro{R.IPos{3n}, [KSpec{["RO"], 2n, R.IPos{0n}, 1n, 0n}], KBySpecs{}}}
+    case 244n:
       Some{Ro{R.INeg{2n}, [KSpec{["RO"], 2n, R.IPos{0n}, 1n, 0n}], KBySpecs{}}}
     case _:
       None{}
