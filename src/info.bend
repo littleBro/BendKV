@@ -2025,26 +2025,28 @@ def info.live(i: Info, +l: Live) -> Info:
     case IInfo{b, old, c, inst, pk, c0, a0, a, st, ex, rw, tm, rf}:
       IInfo{b, live.keep(l, old), c, inst, Nat.max(pk, live.heap(l)), c0, a0, a, st, ex, rw, tm, rf}
 
-# the heap's used bytes as the actor read them (IO.heap, before a group
-# and after each key an eviction freed: the server's mem.run), which with
-# maxmemory INFO shows, as Redis's INFO and performEvictions read one
-# counter (zmalloc_used_memory); the peak follows
-def live.heap.at(l: Live, +h: Nat) -> Live:
+# the heap's used bytes as the actor read them, and what the heap has
+# taken (IO.heap, before a group and after each key an eviction freed: the
+# server's mem.run), which with maxmemory INFO shows, as Redis's INFO and
+# performEvictions read one counter (zmalloc_used_memory): its
+# allocator_active and the ratios read with it at the same moment; the
+# peak follows
+def live.heap.at(l: Live, +h: Nat, +ac: Nat) -> Live:
   match l:
     case ILive{secs, usec, ut, st, mut, mst, rss, heap, act, conns, clients, cn}:
-      ILive{secs, usec, ut, st, mut, mst, rss, h, act, conns, clients, cn}
+      ILive{secs, usec, ut, st, mut, mst, rss, h, ac, conns, clients, cn}
 
-def info.heap(i: Info, +h: Nat) -> Info:
+def info.heap(i: Info, +h: Nat, +ac: Nat) -> Info:
   match i:
     case IInfo{b, l, c, inst, pk, c0, a0, a, st, ex, rw, tm, rf}:
-      IInfo{b, live.heap.at(l, h), c, inst, Nat.max(pk, h), c0, a0, a, st, ex, rw, tm, rf}
+      IInfo{b, live.heap.at(l, h, ac), c, inst, Nat.max(pk, h), c0, a0, a, st, ex, rw, tm, rf}
 
 # new facts from the shell, the heap's reading left for the actor's own
 # (info.heap), which the eviction went by
 def info.live.held(i: Info, +l: Live) -> Info:
   match i:
     case IInfo{b, +old, c, inst, pk, c0, a0, a, st, ex, rw, tm, rf}:
-      IInfo{b, live.heap.at(live.keep(l, old), live.heap(old)), c, inst, pk, c0, a0, a, st, ex, rw, tm, rf}
+      IInfo{b, live.heap.at(live.keep(l, old), live.heap(old), live.act(old)), c, inst, pk, c0, a0, a, st, ex, rw, tm, rf}
 
 # the clients that wait, n of them, t of them with a timeout
 def info.blocked(i: Info, +n: Nat, +t: Nat) -> Info:

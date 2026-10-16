@@ -7853,10 +7853,10 @@ def evs.over(+used: Nat, +x: Evs) -> Bool:
       evict.over(used, srv)
 
 # the heap's reading kept in the server's state, for INFO (S.srv.heap)
-def evs.heap(+used: Nat, x: Evs) -> Evs:
+def evs.heap(+used: Nat, +act: Nat, x: Evs) -> Evs:
   match x:
     case Evs{srv, ds, es, n}:
-      Evs{S.srv.heap(srv, used), ds, es, n}
+      Evs{S.srv.heap(srv, used, act), ds, es, n}
 
 # an eviction's outcome: 0 the heap within maxmemory (EVICT_OK), 1 keys
 # left to evict when its time ran out (EVICT_RUNNING), 2 none left that
@@ -7906,16 +7906,18 @@ def evict.timed(up: Bool, x: Evs, +rws: Bool, +s0: U32, +u0: U32, +lim: Nat) -> 
 def evict.heap(x: Evs, +rws: Bool, +s0: U32, +u0: U32, +lim: Nat) -> IO(Evd):
   do IO<Evd>:
     h : Nat & Nat <- IO.heap()
-    evict.heap.at(heap.used(h), x, rws, s0, u0, lim)
+    evict.heap.of(h, x, rws, s0, u0, lim)
 
 @unsafe
-def evict.heap.at(+used: Nat, x: Evs, +rws: Bool, +s0: U32, +u0: U32, +lim: Nat) -> IO(Evd):
-  +y = evs.heap(used, x)
+def evict.heap.at(+used: Nat, +act: Nat, x: Evs, +rws: Bool, +s0: U32, +u0: U32, +lim: Nat) -> IO(Evd):
+  +y = evs.heap(used, act, x)
   evict.loop(evs.over(used, y), y, rws, s0, u0, lim)
 
-def heap.used(h: Nat & Nat) -> Nat:
-  (used, act) = h
-  used
+# the heap's reading taken apart, for evict.heap.at
+@unsafe
+def evict.heap.of(h: Nat & Nat, x: Evs, +rws: Bool, +s0: U32, +u0: U32, +lim: Nat) -> IO(Evd):
+  (u, a) = h
+  evict.heap.at(u, a, x, rws, s0, u0, lim)
 
 # the evicted keys' events (expired's: ps.swept)
 def ev.e() -> U32:
@@ -8028,9 +8030,10 @@ def evict.go(+pol: Nat, x: Evs, ws: Waits, tx: Tx, pb: Ps, +rws: Bool, +s0: U32,
 
 @unsafe
 def mem.run(h: Nat & Nat, +s0: U32, +u0: U32, srv: S.Srv, ds: R.Ds, ws: Waits, tx: Tx, pb: Ps, +rws: Bool, +pid: U32) -> IO(Grp):
-  (u, act) = h
+  (u, a) = h
   +used = u
-  mem.run.k(used, s0, u0, S.srv.heap(srv, used), ds, ws, tx, pb, rws, pid)
+  +act = a
+  mem.run.k(used, s0, u0, S.srv.heap(srv, used, act), ds, ws, tx, pb, rws, pid)
 
 # a group of requests taken at t, its memory seen to (w: mem.need): with
 # maxmemory, the heap read and the eviction (mem.run); without it, the

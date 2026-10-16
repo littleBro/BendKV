@@ -6530,6 +6530,18 @@ this branch and 10,000 on main.
   not yet counted would end it, and with it most of what the eviction sees move: issue
   #79.
 
+**Follow-up, from #80's review.** With the actor's reading held, INFO's `used_memory` and
+`allocator_allocated` were of one moment and `allocator_active` of another: the shell's
+reading, which `info.live.held` kept. So `allocator_frag_ratio`, `allocator_frag_bytes`
+and the two `allocator_rss_*` fields mixed two readings, and `allocator_frag_bytes`
+could read 0 at `Nat.sub`'s floor. `IO.heap` gives the actor both numbers. Now
+`mem.run` and `evict.heap.at` pass the pair on (`S.srv.heap`, `I.info.heap`), and
+`info.live.held` keeps both. In 3,000 INFO samples taken while another client wrote,
+with maxmemory set, neither main's build nor this one showed `allocator_active` below
+`allocator_allocated`: the change makes the fields agree, it fixes no failure seen.
+`make perfcheck` gives GET 3,414, SET 4,179 and INCR 4,523 instructions per request,
+against 3,418, 4,180 and 4,520 for main fc28490.
+
 ## 3zzzj. The timing's runs not yet counted, one per command
 
 **What was left.** Each call's time goes to a run of calls of its command (section 3zzz).
