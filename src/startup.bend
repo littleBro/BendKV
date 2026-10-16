@@ -397,7 +397,7 @@ def conf.other(k: Nat, args: List<&2, String>, +t: String, st: Load) -> Act:
     case 3n:
       AErr{"BendKV cannot rename commands yet", t}
     case 4n:
-      AErr{"BendKV has no ACL users yet", t}
+      AErr{"BendKV cannot read ACL users from its configuration yet: set them with ACL SETUSER", t}
     case 5n:
       AOk{load.module(st, first(args))}
     case 6n:
@@ -595,7 +595,8 @@ def refusal(+items: List<&2, C.CItem>, +sup: Bool) -> String:
   Bool.pick(String, Bool.and(String.eq(cfg(items, "daemonize"), "yes"), Bool.not(sup)), "BendKV cannot run in the background (daemonize yes): run it in the foreground, or under a supervisor",
   Bool.pick(String, String.eq(cfg(items, "cluster-enabled"), "yes"), "BendKV has no cluster mode: set cluster-enabled no",
   Bool.pick(String, Bool.not(String.is_empty(cfg(items, "replicaof"))), "BendKV cannot be a replica: replicaof must be no one",
-  Bool.pick(String, Bool.not(String.eq(cfg(items, "tls-port"), "0")), "BendKV has no TLS: set tls-port 0", ""))))
+  Bool.pick(String, Bool.not(String.eq(cfg(items, "tls-port"), "0")), "BendKV has no TLS: set tls-port 0",
+  Bool.pick(String, Bool.not(String.is_empty(cfg(items, "aclfile"))), "BendKV cannot load an ACL file yet: leave aclfile empty, and set the users with ACL SETUSER", "")))))
 
 def warn.if(c: Bool, +w: String, ws: List<&2, String>) -> List<&2, String>:
   match c:

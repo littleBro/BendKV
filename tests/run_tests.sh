@@ -140,6 +140,7 @@ for n in "" post send "post build/test.aof everysec"; do
     python3 tests/admin_test.py --bendkv "$PORT" --redis "$REDIS_PORT"
   fi
   python3 tests/auth_test.py --bendkv "$PORT" --redis "$REDIS_PORT"
+  python3 tests/acl_test.py --bendkv "$PORT" --redis "$REDIS_PORT"
   if [ -z "$n" ]; then
     python3 tests/protocol_test.py --bendkv "$PORT" --redis "$REDIS_PORT"
     python3 tests/session_test.py --bendkv "$PORT" --redis "$REDIS_PORT"

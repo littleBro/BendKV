@@ -754,6 +754,18 @@ def sp.run(fuel: Nat, st: Step) -> Maybe<&2, List<&2, String>>:
     case _ other:
       None{}
 
+def split.rev(m: Maybe<&2, List<&2, String>>) -> Maybe<&2, List<&2, String>>:
+  match m:
+    case Some{ws}:
+      Some{List.reverse(&2, String, ws)}
+    case None{}:
+      None{}
+
+# s split into words as Redis's sdssplitargs splits a line (ACL's
+# selectors read theirs so), or none when a quote is left open
+def split.args(+s: String) -> Maybe<&2, List<&2, String>>:
+  split.rev(sp.run(Nat.mul(2n, 1n+String.length(s)), Go{MBlank{}, s, SNil{}, Nil{}}))
+
 def inline.words(ws: List<&2, String>, +next: Nat) -> One:
   match ws:
     case Nil{}:
