@@ -25,10 +25,16 @@ since it was queued; HELLO's AUTH; RESET; a blocking command refused;
 SUBSCRIBE and PUBLISH refused, and subscribers closed by SETUSER;
 DELUSER of another client's user and of the client's own; CLIENT KILL
 USER and its errors; CLIENT LIST's user; the default user restricted,
-whose plain batches are checked too; and the slow log's SETUSER. Then
-a check of BendKV alone: AUTH and HELLO's AUTH with a password of 1 MB
-answer within a second (a SHA-256 linear in the password's length; one
-that was not took a minute).
+whose plain batches are checked too; the slow log's SETUSER; SORT's BY
+and GET; a refused call's key left unmarked and an allowed call's marked
+(OBJECT IDLETIME, and FREQ under an LFU policy); and EXEC checking again
+the commands queued before an AUTH inside the transaction restricted its
+client. Then checks of BendKV alone: AUTH and HELLO's AUTH with a
+password of 1 MB answer within a second (a SHA-256 linear in the
+password's length; one that was not took a minute), and EXEC of 8,000
+SETs queued before an AUTH inside the transaction restricted its client
+answers within 3 s (each batch's bytes read once for the checks; read
+again for each command, it took 16 s).
 
     python3 tests/acl_test.py --bendkv 6380 --redis 6390
 """
@@ -252,6 +258,34 @@ def scenarios(port, log):
     log("18 full", v.cmd("SORT", "slist", "BY", "w_*", "GET", "#"), v.cmd("SORT", "slist", "GET", "#", "STORE", "s3"))
     log("18 counts", [x for x in counts(r) if x.startswith(("cmdstat_sort", "errorstat_ERR"))], log_of(r))
     r.cmd("DEL", "slist", "s3")
+    # 19. a call refused leaves its key's mark as it was (OBJECT IDLETIME,
+    # and FREQ under an LFU policy), and a call allowed marks its key:
+    # Redis marks a key only as a command its user may run looks it up
+    r.cmd("SET", "secret", "v")
+    r.cmd("SET", "pub1", "v")
+    r.cmd("ACL", "SETUSER", "carol", "on", ">pc", "~pub*", "+@all")
+    x = Client(port, db=None)
+    log("19 auth", x.cmd("AUTH", "carol", "pc"), x.cmd("SELECT", "9"))
+    time.sleep(2.2)
+    log("19 refused", x.cmd("GET", "secret"), x.cmd("GET", "secret"), x.cmd("GET", "pub1"))
+    idle = [r.cmd("OBJECT", "IDLETIME", k) for k in ("secret", "pub1")]
+    log("19 idle", [int(i[1:]) >= 2 if i.startswith(":") else i for i in idle])
+    r.cmd("CONFIG", "SET", "maxmemory-policy", "allkeys-lfu")
+    r.cmd("SET", "secret2", "v")
+    r.cmd("SET", "pub2", "v")
+    f0 = [r.cmd("OBJECT", "FREQ", k) for k in ("secret2", "pub2")]
+    log("19 refused lfu", x.cmd("GET", "secret2"), x.cmd("GET", "secret2"), x.cmd("GET", "secret2"),
+        x.cmd("GET", "pub2"))
+    log("19 freq", f0, [r.cmd("OBJECT", "FREQ", k) for k in ("secret2", "pub2")])
+    r.cmd("CONFIG", "SET", "maxmemory-policy", "noeviction")
+    r.cmd("DEL", "secret", "secret2", "pub1", "pub2")
+    # 20. EXEC checks again the commands of a transaction queued before its
+    # client was restricted, here by an AUTH inside it
+    r.cmd("ACL", "SETUSER", "dave", "on", ">pd", "~*", "+@all", "-set")
+    y = Client(port, db=None)
+    y.raw(b"".join(enc(c) for c in [["MULTI"], ["AUTH", "dave", "pd"], ["SET", "e1", "1"], ["GET", "e1"],
+                                    ["SET", "e2", "2"], ["EXEC"]]))
+    log("20 auth inside", [y.read() for _ in range(6)], r.cmd("EXISTS", "e1", "e2"))
     users(r, "alice", "bob", "carol", "dave", "erin", "fred")
     r.cmd("ACL", "LOG", "RESET")
 
@@ -273,6 +307,25 @@ def auth_time(port):
     return worst, replies
 
 
+def exec_time(port, n):
+    """How long EXEC of n SETs, queued before an AUTH inside the
+    transaction restricted its client, took, and its reply's length."""
+    c = Client(port, db=None)
+    c.cmd("ACL", "SETUSER", "texec", "on", ">pt", "~*", "+@all", "-set")
+    cmds = [["MULTI"], ["AUTH", "texec", "pt"]] + [["SET", "tx%d" % i, "v"] for i in range(n)] + [["EXEC"]]
+    t = time.time()
+    c.raw(b"".join(enc(x) for x in cmds))
+    for _ in range(n + 2):
+        c.read(30.0)
+    arr = c.read(30.0)
+    dt = time.time() - t
+    c.close()
+    r = Client(port, db=None)
+    r.cmd("ACL", "DELUSER", "texec")
+    r.close()
+    return dt, len(arr) if isinstance(arr, list) else arr
+
+
 def cleanup(port):
     """The users and the default user as a fresh server has them, after a
     scenario that failed half way."""
@@ -281,6 +334,7 @@ def cleanup(port):
         c.cmd("ACL", "SETUSER", "default", "reset", "on", "nopass", "~*", "&*", "+@all")
         users(c, "alice", "bob", "carol", "dave", "erin", "fred")
         c.cmd("CONFIG", "SET", "acllog-max-len", "128")
+        c.cmd("CONFIG", "SET", "maxmemory-policy", "noeviction")
         c.cmd("CONFIG", "SET", "slowlog-log-slower-than", "10000")
         c.close()
     except Exception:
@@ -318,7 +372,11 @@ def main():
     if replies != want or worst > 1.0:
         print("FAIL: AUTH of 1 MB took %.3f s (at most 1 s), answering %r" % (worst, replies))
         sys.exit(1)
-    print("OK: %d lines of ACL scenarios as Redis answers them, and AUTH of 1 MB in %.3f s" % (len(outs[1]), worst))
+    dt, got = exec_time(args.bendkv, 8000)
+    if got != 8001 or dt > 3.0:
+        print("FAIL: EXEC of 8,000 SETs after an AUTH inside took %.3f s (at most 3 s), answering %r" % (dt, got))
+        sys.exit(1)
+    print("OK: %d lines of ACL scenarios as Redis answers them, AUTH of 1 MB in %.3f s, and EXEC of 8,000 SETs checked again in %.3f s" % (len(outs[1]), worst, dt))
 
 
 if __name__ == "__main__":

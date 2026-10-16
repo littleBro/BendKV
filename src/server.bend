@@ -508,16 +508,44 @@ def waits.find(ws: Waits, m: Maybe<&2, String>, +ds: R.Ds, acc: Waits) -> Found:
 type Wk is Data:
   Wk{db: Nat, key: String, old: Bool}
 
+# a command queued in a transaction: the number of the batch it came in
+# (b) and its arguments as sent (an Av whose next request is the
+# command's)
+type Qa is Data:
+  Qa{b: Nat, a: Av}
+
+# the arguments of a transaction's commands (newest first), and how many
+# batches its client began since the transaction did (n: tx.front counts
+# them), so that EXEC reads the bytes of each batch once (bg.x.go)
+type Qs is Data:
+  Qs{n: Nat, avs: List<&2, Qa>}
+
 # the clients with a transaction or watched keys, a chain of them: each
 # with its id, whether it is in MULTI, whether a command was refused
 # while it queued (bad: EXECABORT), whether a key it watched was touched
 # (cas: EXEC answers a null array), the commands queued (newest first),
-# their codes and their arguments as sent (each an Av whose next request
-# is the command's), and the keys it watches. While a batch runs, its
-# client is the first of the chain, if it is in it (tx.front).
+# their codes and their arguments as sent (Qs), and the keys it watches.
+# While a batch runs, its client is the first of the chain, if it is in
+# it (tx.front).
 type Tx is Data:
   TxNone{}
-  TxOn{id: Nat, multi: Bool, bad: Bool, cas: Bool, cmds: List<&2, R.Cmd>, codes: List<&2, Nat>, avs: List<&2, Av>, keys: List<&2, Wk>, rest: Tx}
+  TxOn{id: Nat, multi: Bool, bad: Bool, cas: Bool, cmds: List<&2, R.Cmd>, codes: List<&2, Nat>, avs: Qs, keys: List<&2, Wk>, rest: Tx}
+
+def qs.put(a: Av, q: Qs) -> Qs:
+  match q:
+    case Qs{+n, xs}:
+      Qs{n, Qa{n, a} <> xs}
+
+def qs.next(q: Qs) -> Qs:
+  match q:
+    case Qs{n, xs}:
+      Qs{Nat.add(n, 1n), xs}
+
+# the commands' arguments in the order they were queued
+def qs.order(q: Qs) -> List<&2, Qa>:
+  match q:
+    case Qs{n, xs}:
+      List.reverse(&2, Qa, xs)
 
 def tx.on(+t: Tx) -> Bool:
   match t:
@@ -582,10 +610,20 @@ def tx.rest(p: Tx & Tx) -> Tx:
   (one, others) = p
   others
 
-# the client of id n first in t, if it is in it
+# the client taken out (tx.take) with one batch more begun
+def tx.next(p: Tx & Tx) -> Tx & Tx:
+  (one, others) = p
+  match one:
+    case TxOn{i, mu, bd, cs, qs, qc, qa, wk, r}:
+      (TxOn{i, mu, bd, cs, qs, qc, qs.next(qa), wk, r}, others)
+    case TxNone{}:
+      (TxNone{}, others)
+
+# the client of id n first in t, if it is in it, as a batch of its
+# begins (one more batch, Qs)
 def tx.front(+n: Nat, t: Tx) -> Tx:
   +x = t
-  tx.put(tx.take(x, tx.is(n, x), n, TxNone{}))
+  tx.put(tx.next(tx.take(x, tx.is(n, x), n, TxNone{})))
 
 # t without the client of id n (its connection closed)
 def tx.drop(+n: Nat, t: Tx) -> Tx:
@@ -598,7 +636,7 @@ def tx.open.of(mine: Bool, +n: Nat, t: Tx) -> Tx:
     case True{} TxOn{i, mu, bd, cs, qs, qc, qa, wk, r}:
       TxOn{i, True{}, bd, cs, qs, qc, qa, wk, r}
     case _ t0:
-      TxOn{n, True{}, False{}, False{}, Nil{}, Nil{}, Nil{}, Nil{}, t0}
+      TxOn{n, True{}, False{}, False{}, Nil{}, Nil{}, Qs{0n, Nil{}}, Nil{}, t0}
 
 def tx.open(+n: Nat, t: Tx) -> Tx:
   +x = t
@@ -618,12 +656,12 @@ def tx.close(+n: Nat, t: Tx) -> Tx:
 
 # a command queued by the client first in t (in MULTI); none once the
 # transaction is to fail, as Redis keeps none then
-def tx.queued(skip: Bool, i: Nat, mu: Bool, bd: Bool, cs: Bool, qs: List<&2, R.Cmd>, qc: List<&2, Nat>, qa: List<&2, Av>, wk: List<&2, Wk>, r: Tx, c: R.Cmd, +code: Nat, a: Av) -> Tx:
+def tx.queued(skip: Bool, i: Nat, mu: Bool, bd: Bool, cs: Bool, qs: List<&2, R.Cmd>, qc: List<&2, Nat>, qa: Qs, wk: List<&2, Wk>, r: Tx, c: R.Cmd, +code: Nat, a: Av) -> Tx:
   match skip:
     case True{}:
       TxOn{i, mu, bd, cs, qs, qc, qa, wk, r}
     case False{}:
-      TxOn{i, mu, bd, cs, c <> qs, code <> qc, a <> qa, wk, r}
+      TxOn{i, mu, bd, cs, c <> qs, code <> qc, qs.put(a, qa), wk, r}
 
 def tx.queue(c: R.Cmd, +code: Nat, a: Av, t: Tx) -> Tx:
   match t:
@@ -712,7 +750,7 @@ def tx.watch.of(mine: Bool, +n: Nat, +j: Nat, ks: List<&2, String>, +ds: R.Ds, t
     case True{} TxOn{i, mu, bd, False{}, qs, qc, qa, wk, r}:
       TxOn{i, mu, bd, False{}, qs, qc, qa, wk.add(ks, j, ds, R.ds.now(ds), wk), r}
     case _ t0:
-      TxOn{n, False{}, False{}, False{}, Nil{}, Nil{}, Nil{}, wk.add(ks, j, ds, R.ds.now(ds), Nil{}), t0}
+      TxOn{n, False{}, False{}, False{}, Nil{}, Nil{}, Qs{0n, Nil{}}, wk.add(ks, j, ds, R.ds.now(ds), Nil{}), t0}
 
 def tx.watch(+n: Nat, +j: Nat, ks: List<&2, String>, +ds: R.Ds, t: Tx) -> Tx:
   +x = t
@@ -774,7 +812,7 @@ def wk.touch(ks: List<&2, Wk>, +j: Nat, +k: String, +here: Bool) -> Maybe<&2, Li
       wk.touch.at(wk.hit(j, k, w), w, here, wk.touch(rest, j, k, here))
 
 # a client after a touch: its keys, or dirty with none
-def tx.touched(m: Maybe<&2, List<&2, Wk>>, i: Nat, mu: Bool, bd: Bool, cs: Bool, qs: List<&2, R.Cmd>, qc: List<&2, Nat>, qa: List<&2, Av>, r: Tx) -> Tx:
+def tx.touched(m: Maybe<&2, List<&2, Wk>>, i: Nat, mu: Bool, bd: Bool, cs: Bool, qs: List<&2, R.Cmd>, qc: List<&2, Nat>, qa: Qs, r: Tx) -> Tx:
   match m:
     case Some{ks}:
       TxOn{i, mu, bd, cs, qs, qc, qa, ks, r}
@@ -7458,22 +7496,65 @@ def bg.x.one(+id: Nat, +back: Chan(Ans), +inb: Nat, +n: Nat, +c: R.Cmd, +k: Nat,
     case Xr{LHeld{h}, mine}:
       Xr{LHeld{h}, mine}
 
-# a command of EXEC checked again (ACL), as execCommand checks each, in
-# case the rules changed since it was queued: while some client is
-# restricted (on) and its client is, its user's verdict
-def bg.x.verdict(on: Bool, +id: Nat, +srv: S.Srv, +pb: Ps, +k: Nat, +a: Av) -> U.Verdict:
-  match on:
-    case True{}:
-      bg.acl.check(S.srv.restricted(srv, id), id, srv, pb, k, a)
-    case False{}:
-      U.VOk{}
+# Exec's arguments. A queued command's arguments are read from the bytes
+# of its batch (P.argvs) only when something reads them: the check of a
+# restricted client (ACL), the tracking of a client that tracks keys, a
+# monitor. The memo keeps those of the batch read last, from its last
+# command read on (XmAt: the batch's number, the command's request in it,
+# and the arguments from that request on), so that the next command of
+# the same batch is a drop away, and a batch's bytes are read once: EXEC
+# of a transaction queued before its client was restricted read the
+# whole batch again for each of its commands, quadratic in their number.
+type Xm is Data:
+  XmNone{}
+  XmAt{b: Nat, n: Nat, xs: List<&2, List<&2, String>>}
 
-def bg.x.sort(on: Bool, +id: Nat, +srv: S.Srv, +pb: Ps, +k: Nat, +a: Av, +c: R.Cmd) -> R.Cmd:
-  match on:
+# whether the memo holds the arguments of request n of batch b, or of one
+# before it in that batch
+def xm.same(+m: Xm, +b: Nat, +n: Nat) -> Bool:
+  match m:
+    case XmAt{+b0, +n0, xs}:
+      Bool.and(Nat.is_eq(b0, b), Nat.is_le(n0, n))
+    case XmNone{}:
+      False{}
+
+def xm.of(same: Bool, m: Xm, +b: Nat, +raw: String, +n: Nat) -> Xm:
+  match same m:
+    case True{} XmAt{b0, n0, xs}:
+      XmAt{b, n, List.drop(&2, List<&2, String>, xs, Nat.sub(n, n0))}
+    case _ _:
+      XmAt{b, n, List.drop(&2, List<&2, String>, P.argvs(raw), n)}
+
+# the memo once the arguments of a command of batch b (a) are read
+def xm.read(m: Xm, +b: Nat, +a: Av) -> Xm:
+  match a:
+    case AvRaw{+raw, +n}:
+      +m0 = m
+      xm.of(xm.same(m0, b, n), m0, b, raw, n)
+    case AvArgs{xs}:
+      m
+
+# the arguments of that command, read
+def xm.av(+m: Xm, a: Av) -> Av:
+  match m a:
+    case XmAt{b, n, +xs} AvRaw{raw, k}:
+      AvArgs{xs}
+    case _ a0:
+      a0
+
+def xm.if(need: Bool, m: Xm, +b: Nat, +a: Av) -> Xm:
+  match need:
     case True{}:
-      bg.acl.sort(S.srv.restricted(srv, id), id, srv, pb, k, a, c)
+      xm.read(m, b, a)
     case False{}:
-      c
+      m
+
+def xm.av.if(need: Bool, +m: Xm, a: Av) -> Av:
+  match need:
+    case True{}:
+      xm.av(m, a)
+    case False{}:
+      a
 
 # a command of EXEC that its user may no longer run: NOPERM with why
 # (U.verdict.exec), an entry in context multi, and no call; the error
@@ -7490,29 +7571,39 @@ def bg.x.acl(v: U.Verdict, +id: Nat, +back: Chan(Ans), +inb: Nat, +n: Nat, +c: R
     case U.VNo{w, at, o}:
       bg.x.denied(U.VNo{w, at, o}, id, inb, n, k, a, x)
 
-def bg.x.go(+id: Nat, +back: Chan(Ans), +inb: Nat, +n: Nat, cmds: List<&2, R.Cmd>, codes: List<&2, Nat>, avs: List<&2, Av>, x: Xr) -> Xr:
+# EXEC's commands in turn, each checked again (ACL), as execCommand
+# checks each, in case the rules changed since it was queued: while some
+# client is restricted (Ps's bit 20) and its client is (ck), its user's
+# verdict. Its arguments are read when the check, the tracking or a
+# monitor reads them (Exec's arguments, m)
+def bg.x.go(+id: Nat, +back: Chan(Ans), +inb: Nat, +n: Nat, cmds: List<&2, R.Cmd>, codes: List<&2, Nat>, avs: List<&2, Qa>, m: Xm, x: Xr) -> Xr:
   match cmds codes avs x:
-    case Con{+c, rest} Con{+k, more} Con{+a, ar} Xr{LRun{rs, es, conn, +srv, ds, ws, up, tx, +pb}, mine}:
-      +on = ps.acl.on(pb)
-      bg.x.go(id, back, inb, n, rest, more, ar, bg.x.acl(bg.x.verdict(on, id, srv, pb, k, a), id, back, inb, n, bg.x.sort(on, id, srv, pb, k, a, c), k, a, Xr{LRun{rs, es, conn, srv, ds, ws, up, tx, pb}, mine}))
+    case Con{+c, rest} Con{+k, more} Con{Qa{+b, a0}, ar} Xr{LRun{rs, es, +conn, +srv, ds, ws, up, tx, +pb}, mine}:
+      +ck = Bool.and(ps.acl.on(pb), S.srv.restricted(srv, id))
+      +may = S.may(S.kind(c), conn, srv)
+      +need = Bool.or(ck, Bool.or(bg.x.rk(id, may, k, pb), Bool.and(mon.ran(may, k), ps.mon.any(pb))))
+      +a1 = a0
+      +m1 = xm.if(need, m, b, a1)
+      +a = xm.av.if(need, m1, a1)
+      bg.x.go(id, back, inb, n, rest, more, ar, m1, bg.x.acl(bg.acl.check(ck, id, srv, pb, k, a), id, back, inb, n, bg.acl.sort(ck, id, srv, pb, k, a, c), k, a, Xr{LRun{rs, es, conn, srv, ds, ws, up, tx, pb}, mine}))
     case _ _ _ x0:
       x0
 
-def bg.exec.run(+id: Nat, +back: Chan(Ans), +inb: Nat, +code: Nat, +cmds: List<&2, R.Cmd>, codes: List<&2, Nat>, avs: List<&2, Av>, g: LRun) -> LRun:
+def bg.exec.run(+id: Nat, +back: Chan(Ans), +inb: Nat, +code: Nat, +cmds: List<&2, R.Cmd>, codes: List<&2, Nat>, avs: List<&2, Qa>, g: LRun) -> LRun:
   match g:
     case LRun{rs, es, +conn, srv, ds, ws, up, tx, pb}:
       +m0 = S.conn.mode(conn)
       +mi = exec.mode(m0)
-      bg.exec.done(rs, es, m0, mi, code, bg.x.go(id, back, inb, List.length(&2, R.Cmd, cmds), cmds, codes, avs, Xr{LRun{Nil{}, Nil{}, conn.mode.set(mi, conn), srv, ds, ws, up, tx, pb}, Nil{}}))
+      bg.exec.done(rs, es, m0, mi, code, bg.x.go(id, back, inb, List.length(&2, R.Cmd, cmds), cmds, codes, avs, XmNone{}, Xr{LRun{Nil{}, Nil{}, conn.mode.set(mi, conn), srv, ds, ws, up, tx, pb}, Nil{}}))
     case LHeld{h}:
       LHeld{h}
 
-def bg.exec.if(late: Bool, +id: Nat, +back: Chan(Ans), +inb: Nat, +code: Nat, qs: List<&2, R.Cmd>, qc: List<&2, Nat>, qa: List<&2, Av>, g: LRun) -> LRun:
+def bg.exec.if(late: Bool, +id: Nat, +back: Chan(Ans), +inb: Nat, +code: Nat, qs: List<&2, R.Cmd>, qc: List<&2, Nat>, qa: Qs, g: LRun) -> LRun:
   match late:
     case True{}:
       bg.say(R.RNullA{}, code, g)
     case False{}:
-      bg.exec.run(id, back, inb, code, List.reverse(&2, R.Cmd, qs), List.reverse(&2, Nat, qc), List.reverse(&2, Av, qa), g)
+      bg.exec.run(id, back, inb, code, List.reverse(&2, R.Cmd, qs), List.reverse(&2, Nat, qc), qs.order(qa), g)
 
 # EXEC of a transaction taken out of the chain (mine): EXECABORT when a
 # command was refused while it queued, a null array when a watched key
@@ -7689,24 +7780,76 @@ def bg.cmd(+id: Nat, +back: Chan(Ans), +inb: Nat, sh: Sh, +c: R.Cmd, +code: Nat,
     case ShAcl{+k}:
       bg.acl.op(id, k, c, code, g)
 
+# the word a request of hash h leaves in its key's word w under an LFU
+# policy, at the minute min, r its random number
+def use.lfu.word(+h: U32, +w: U32, +min: U32, +r: U32, +lf: Nat, +dt: Nat) -> U32:
+  Bool.pick(U32, U32.is_eq(U32.and(h, 4293918720), R.stat.mark.restore()), S.lfu.word(min, 5), S.lfu.use(w, min, r, lf, dt))
+
+# whether a batch's keys are marked as its calls run, each once its
+# check lets it through, rather than before the batch runs (bg.used):
+# its client is restricted (ACL), as Redis marks a key only as the
+# command, which its user may run, looks it up
+def bg.marks(+cn: S.Conn, +srv: S.Srv, +pb: Ps) -> Bool:
+  Bool.and(ps.acl.on(pb), S.srv.restricted(srv, S.conn.id(cn)))
+
+# the hint of a call as the parser writes it (resp.bend, req.hash): the
+# hash of its first argument after its name (its arguments as sent come
+# name first) when its command touches its first key and it runs, under
+# its code
+def bg.hint(+k: Nat, +a: Av) -> U32:
+  R.stat.hash(Bool.pick(U32, Bool.and(Nat.is_eq(R.code.class(k), 0n), R.stat.touch(R.code.key(k))), B.args_hash(List.drop(&2, String, av.now(a), 1n)), 0), k)
+
+# the word a call of hint h leaves in its key's word at now, as use.lru
+# and use.lfu leave it
+def bg.mark.word(lfu: Bool, +h: U32, +now: Nat, +srv: S.Srv) -> U32:
+  match lfu srv:
+    case True{} S.Srv{pass, cfg, info, +mm}:
+      +w = Mem.cell(h)
+      use.lfu.word(h, w, S.acc.min(now), KV.mix(U32.xor(U32.xor(h, w), U32.from_nat(now))), S.mm.lfl(mm), S.mm.lfd(mm))
+    case False{} _:
+      S.acc.lru(now)
+
+# the channel of a batch marked again as it was, its key's word of hash
+# h set to v on the way (Mem.touch gives back the mark's word)
+def mark.again.of(+back: Chan(Ans), m: U32 & Nat, +h: U32, +v: U32) -> Chan(Ans):
+  (w, at) = m
+  Chan.mark(Ans, back, Mem.touch(w, h, v), at)
+
+def mark.again(+back: Chan(Ans), +h: U32, +v: U32) -> Chan(Ans):
+  mark.again.of(back, Chan.marked(Ans, back), h, v)
+
+# a call's key marked used as it runs (mk: its batch's keys are marked so,
+# and its check let it through), before it runs
+def bg.mark.call(mk: Bool, +back: Chan(Ans), +k: Nat, +a: Av, +srv: S.Srv, +ds: R.Ds, +pb: Ps) -> Chan(Ans):
+  match mk:
+    case True{}:
+      +h = bg.hint(k, a)
+      mark.again(back, h, bg.mark.word(ps.lfu(pb), h, R.ds.now(ds), srv))
+    case False{}:
+      back
+
 # a batch the general way: a command at a time, until its client waits;
 # after each, its line to the monitors (MONITOR), the arguments of the
-# batch's requests as sent (the Fed's Av) read once a line needs them
-def bg.go(+id: Nat, +back: Chan(Ans), +inb: Nat, cmds: List<&2, R.Cmd>, codes: List<&2, Nat>, f: Fed) -> LRun:
+# batch's requests as sent (the Fed's Av) read once a line needs them.
+# um: its keys are marked as its calls run, each once its check let it
+# through (bg.marks), its arguments then read
+def bg.go(+um: Bool, +id: Nat, +back: Chan(Ans), +inb: Nat, cmds: List<&2, R.Cmd>, codes: List<&2, Nat>, f: Fed) -> LRun:
   match cmds codes f:
     case Con{+c, +rest} Con{+k, +more} Fed{LRun{rs, es, +conn, +srv, +ds, ws, up, +tx, +pb}, +av}:
       +q = S.conn.quit(conn)
       +may = S.may(S.kind(c), conn, srv)
       +mo = ps.mon.is(id, pb)
       +ck = bg.acl.on(ps.acl.on(pb), id, k, may, srv)
-      +av1 = av.if(ck, av)
+      +av1 = av.if(Bool.or(ck, um), av)
       +c1 = bg.acl.sort(ck, id, srv, pb, k, av1, c)
-      +sh = sh.of(q, may, tx.multi(id, tx), Bool.and(ps.has(id, pb), Bool.not(S.conn.r3(conn))), mo, ps.oom.is(pb), pause.holds(ps.pz(pb), mo, c, k, id, tx), bg.acl.check(ck, id, srv, pb, k, av1), c1, k, ds)
+      +v = bg.acl.check(ck, id, srv, pb, k, av1)
+      +bk = bg.mark.call(Bool.and(um, Bool.and(may, U.verdict.ok(v))), back, k, av1, srv, ds, pb)
+      +sh = sh.of(q, may, tx.multi(id, tx), Bool.and(ps.has(id, pb), Bool.not(S.conn.r3(conn))), mo, ps.oom.is(pb), pause.holds(ps.pz(pb), mo, c, k, id, tx), v, c1, k, ds)
       +pre = bg.trk.pre(id, k, sh, q, may, pb)
       +a = trk.pre.av(pre, av1)
       +ar = av.rest(a)
-      +g1 = bg.cmd(id, back, inb, sh, c1, k, rest, more, a, ar, LRun{rs, es, conn, S.srv.call(srv, id, av.arg(a)), ds, ws, up, tx, pb})
-      bg.go(id, back, inb, rest, more, bg.feed(mon.seen(q, may, sh, k), id, k, S.conn.mode(conn), a, ar, bg.trk.after(pre, id, k, a, g1)))
+      +g1 = bg.cmd(id, bk, inb, sh, c1, k, rest, more, a, ar, LRun{rs, es, conn, S.srv.call(srv, id, av.arg(a)), ds, ws, up, tx, pb})
+      bg.go(um, id, back, inb, rest, more, bg.feed(mon.seen(q, may, sh, k), id, k, S.conn.mode(conn), a, ar, bg.trk.after(pre, id, k, a, g1)))
     case _ _ Fed{g0, av}:
       g0
 
@@ -7749,11 +7892,11 @@ def bg.put(+back: Chan(Ans), +inb: Nat, g: LRun, outs: List<&2, Sigma<&2, &2, Ch
     case LHeld{LHeld{h}}:
       bg.put(back, inb, h, outs)
 
-def bg.batch(+cn: S.Conn, +back: Chan(Ans), +inb: Nat, raw: String, cmds: List<&2, R.Cmd>, codes: List<&2, Nat>, g: Grp) -> Grp:
+def bg.batch(+um: Bool, +cn: S.Conn, +back: Chan(Ans), +inb: Nat, raw: String, cmds: List<&2, R.Cmd>, codes: List<&2, Nat>, g: Grp) -> Grp:
   match g:
     case Grp{outs, es, srv, ds, ws, up, tx, pb}:
       +id = S.conn.id(cn)
-      bg.put(back, inb, bg.go(id, back, inb, cmds, codes, Fed{LRun{Nil{}, es, cn, srv, ds, ws, up, tx.front(id, tx), pb}, AvRaw{raw, 0n}}), outs)
+      bg.put(back, inb, bg.go(um, id, back, inb, cmds, codes, Fed{LRun{Nil{}, es, cn, srv, ds, ws, up, tx.front(id, tx), pb}, AvRaw{raw, 0n}}), outs)
 
 # the last of codes, else k
 def codes.last(+ks: List<&2, Nat>, +k: Nat) -> Nat:
@@ -7776,9 +7919,9 @@ def mark.up(+back: Chan(Ans), +codes: List<&2, Nat>) -> Chan(Ans):
 # an unblocked client's batch, on: on its database, after its reply
 def bg.up(u: Up, g: Grp) -> Grp:
   match u g:
-    case Up{+back, +conn, rs, cmds, +codes, av} Grp{outs, es, srv, ds, ws, up, tx, pb}:
+    case Up{+back, +conn, rs, cmds, +codes, av} Grp{outs, es, +srv, ds, ws, up, tx, +pb}:
       +id = S.conn.id(conn)
-      bg.put(mark.up(back, codes), 0n, bg.go(id, back, 0n, cmds, codes, Fed{LRun{rs, es, conn, srv, R.ds.focus(S.conn.db(conn), ds), ws, up, tx.front(id, tx), pb}, av}), outs)
+      bg.put(mark.up(back, codes), 0n, bg.go(bg.marks(conn, srv, pb), id, back, 0n, cmds, codes, Fed{LRun{rs, es, conn, srv, R.ds.focus(S.conn.db(conn), ds), ws, up, tx.front(id, tx), pb}, av}), outs)
 
 def bg.ups.run(us: List<&2, Up>, g: Grp) -> Grp:
   match us:
@@ -8688,11 +8831,6 @@ def use.lru(+hs: List<&2, U32>, +w: U32, k: U32) -> U32:
     case Con{+h, +rest}:
       use.lru(rest, w, Mem.touch(k, h, w))
 
-# the word a request of hash h leaves in its key's word w under an LFU
-# policy, at the minute min, r its random number
-def use.lfu.word(+h: U32, +w: U32, +min: U32, +r: U32, +lf: Nat, +dt: Nat) -> U32:
-  Bool.pick(U32, U32.is_eq(U32.and(h, 4293918720), R.stat.mark.restore()), S.lfu.word(min, 5), S.lfu.use(w, min, r, lf, dt))
-
 def use.lfu(+hs: List<&2, U32>, +now: Nat, +min: U32, +lf: Nat, +dt: Nat, +i: U32, k: U32) -> U32:
   match hs:
     case Nil{}:
@@ -8701,16 +8839,36 @@ def use.lfu(+hs: List<&2, U32>, +now: Nat, +min: U32, +lf: Nat, +dt: Nat, +i: U3
       +w = Mem.cell(h)
       use.lfu(rest, now, min, lf, dt, U32.add(i, 2654435769), Mem.touch(k, h, use.lfu.word(h, w, min, KV.mix(U32.xor(U32.xor(h, w), U32.xor(U32.from_nat(now), i))), lf, dt)))
 
+# the batch's keys marked used before it runs, unless its calls mark
+# them (um)
+def use.lru.if(um: Bool, +hs: List<&2, U32>, +w: U32) -> U32:
+  match um:
+    case True{}:
+      0
+    case False{}:
+      use.lru(hs, w, 0)
+
+def use.lfu.if(um: Bool, +hs: List<&2, U32>, +now: Nat, +min: U32, +lf: Nat, +dt: Nat) -> U32:
+  match um:
+    case True{}:
+      0
+    case False{}:
+      use.lfu(hs, now, min, lf, dt, 0, 0)
+
 # a batch the general way, its keys marked used first (lfu: under an LFU
-# policy) and its client's channel marked with its last command (mark.hs)
+# policy), but those of a restricted client's batch, which its calls mark
+# (bg.marks), and its client's channel marked with its last command
+# (mark.hs)
 def bg.used(lfu: Bool, +cn: S.Conn, +back: Chan(Ans), +inb: Nat, raw: String, cmds: List<&2, R.Cmd>, +hs: List<&2, U32>, g: Grp) -> Grp:
   match lfu g:
-    case False{} Grp{outs, es, srv, +ds, ws, up, tx, pb}:
+    case False{} Grp{outs, es, +srv, +ds, ws, up, tx, +pb}:
       +now = R.ds.now(ds)
-      bg.batch(cn, mark.hs(back, hs, now, use.lru(hs, S.acc.lru(now), 0)), inb, raw, cmds, R.codes.of(hs), Grp{outs, es, srv, ds, ws, up, tx, pb})
-    case True{} Grp{outs, es, S.Srv{pass, cfg, info, +mm}, +ds, ws, up, tx, pb}:
+      +um = bg.marks(cn, srv, pb)
+      bg.batch(um, cn, mark.hs(back, hs, now, use.lru.if(um, hs, S.acc.lru(now))), inb, raw, cmds, R.codes.of(hs), Grp{outs, es, srv, ds, ws, up, tx, pb})
+    case True{} Grp{outs, es, S.Srv{pass, cfg, info, +mm}, +ds, ws, up, tx, +pb}:
       +now = R.ds.now(ds)
-      bg.batch(cn, mark.hs(back, hs, now, use.lfu(hs, now, S.acc.min(now), S.mm.lfl(mm), S.mm.lfd(mm), 0, 0)), inb, raw, cmds, R.codes.of(hs), Grp{outs, es, S.Srv{pass, cfg, info, mm}, ds, ws, up, tx, pb})
+      +um = Bool.and(ps.acl.on(pb), S.mm.restricted(mm, S.conn.id(cn)))
+      bg.batch(um, cn, mark.hs(back, hs, now, use.lfu.if(um, hs, now, S.acc.min(now), S.mm.lfl(mm), S.mm.lfd(mm))), inb, raw, cmds, R.codes.of(hs), Grp{outs, es, S.Srv{pass, cfg, info, mm}, ds, ws, up, tx, pb})
 
 # (after a SHUTDOWN that stops the server, every client's: SHUTDOWN)
 def ps.killed(+id: Nat, +pb: Ps) -> Bool:
