@@ -6883,6 +6883,57 @@ against 0.16 s), and a key of it 5,900 instructions, where a whole pipelined SET
 arguments go into a list, turned around once the request is whole and then read into the
 command, where GET, SET and INCR read theirs into the command directly.
 
+## 3zzzr. An eviction while a rewrite runs stops near the excess
+
+**What was left** (issue #100). With `maxmemory` set just below the memory used, an
+eviction that ran while BGREWRITEAOF ran went on for as long as the rewrite did. In
+maxmemory_test's scenario (300,000 keys of 8 bytes, the limit a tenth of the keys'
+share below the memory used) it left 14% of the keys after 3 s, where Redis 7.0.15
+leaves 87% whatever the wait. The test read DBSIZE after 0.5 s and wanted more than
+150,000 (3zw), and a fast runner went below that (CI on #92's merge: 128,352 left).
+
+**Why.** While a rewrite runs, its snapshot holds the databases' nodes, so a key
+evicted frees nothing. The eviction counts each key's MEMORY USAGE estimate as a debt
+(`evict.est`), and stops once the heap's used bytes, less the debt, are within
+maxmemory (`evict.over`). But each DEL copies the trie's path down to its key, and the
+snapshot holds the old nodes as well: the heap grew about as fast as the debt, and the
+condition held until the rewrite ended. In Redis, a fork's copy-on-write grows the
+parent's resident memory, not its `used_memory`.
+
+**What changed** (`src/server.bend`: Eviction). The eviction's state, `Evs`, keeps the
+heap's used bytes at its last reading. At each reading while a rewrite runs, what the
+heap grew by since then is owed too (`evs.grown`, `evs.heap`): no client's command
+runs inside an eviction, so that growth is the nodes its DELs copied, whose old ones
+the snapshot still holds. Without a rewrite nothing more is owed, as before: the old
+nodes are let go. The debt is paid as before when the rewrite ends (`mm.paid`), and an
+eviction after it measures the heap as it then is.
+
+**What it gives.** The scenario, DBSIZE after the wait, and again 0.5 s after the
+rewrite ended (the limit still set):
+
+| wait | keys left | after the rewrite's end |
+|---:|---:|---:|
+| 0.5 s | 272,737 (91%) | 238,161 (79%) |
+| 1 s | 267,796 (89%) | 238,215 (79%) |
+| 3 s | 238,262 (79%), the rewrite over at 1.43 s | 238,262 (79%) |
+| 6 s | 238,435 (79%) | 238,435 (79%) |
+| Redis 7.0.15, 0.5 s and 3 s | 261,471 and 261,472 (87%) | 261,164 and 261,472 |
+
+The rewrite now ends in 1.1 to 1.4 s, where the eviction that went on stretched it to
+3.7 s. Once it has ended, the eviction goes on from 91% to 79%: after a rewrite the heap
+holds about 8% of the keys' share more than before it, for the same keys, until they are
+set again (issue #102, on main as well). Without a rewrite, the same limit leaves 87%,
+on main and with the fix.
+
+**Tests.** maxmemory_test's scenario reads DBSIZE after 3 s, then again once the
+rewrite has ended with the limit still set, and wants more than 200,000 both times, and
+no more at the end than at 3 s. With the fix: 238,325, 238,453 and
+238,171 in three runs; on #92's build without it: 44,471 and 41,840.
+
+**What it costs.** Nothing on a request's path: the eviction's loop compares one more
+number at each reading of the heap. `make perfcheck`: GET 3,440, SET 4,208 and INCR 4,562
+instructions a request, within 0.3% of the baseline.
+
 ## 4. Where a request's time goes, and hiding the memory waits
 
 With the eight patches, BendKV ran fewer instructions on GET and SET than Redis, missed
