@@ -79,7 +79,7 @@ well), what HyperLogLogs, GEO and LOLWUT compute (`src/hll.bend`, `src/geo.bend`
 `src/lolwut.bend`) and DUMP's payloads (`src/rdb.bend`), all tested against
 `redis-server`; the Lua engine of scripts: Redis 7.0.15's own Lua 5.1.5 and its libraries
 (`deps/redis`, C, as Redis ships them but for their casts of numbers to integers, which
-give Redis's results defined in C, and two fixes of CVEs that the reference carries: NOTICE) and the glue that drives it (`src/lua/engine.c`,
+give Redis's results defined in C, two fixes of CVEs that the reference carries, and Redis 7.2's test of a table's index, defined in C: NOTICE) and the glue that drives it (`src/lua/engine.c`,
 ported from Redis's `script_lua.c`, `eval.c` and `script.c`, behind the effects of
 `src/script.bend`); clang, libc and the OS. This is not
 end-to-end verification in the sense of CompCert or seL4; see

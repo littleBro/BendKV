@@ -6488,6 +6488,13 @@ against a server it did not start; none passed on BendKV.
   glue: SCRIPT FLUSH collects in full before it closes the state (CVE-2024-46981, Redis's
   `scriptingRelease`). Without the first, `bit.tohex(65535, -2147483648)` answered 8 bytes
   of the C stack where Redis answers `0000FFFF`; `script_test` has the line now.
+- The third change to the vendored sources is Redis 7.2's: `luaH_getnum` (`ltable.c`),
+  which looks an integer key up in a table, tested it against the table's array as
+  `(unsigned)(key-1) < (unsigned)sizearray`, and `key-1` overflows for the smallest int,
+  which C leaves undefined. The parser looks each number constant up so, in its table of
+  constants: that line's -2147483648 reached it, and UBSan stopped the sanitize job
+  there. Redis 7.2 writes the test as the comparison it stood for, `1 <= key && key <=
+  sizearray`, which answers the same for every key, and so does the copy here.
 - Bend drives a run as an automaton of steps (`src/script.bend`):
   - a call: the request's bytes out, the reply's bytes in;
   - a tick, every 100,000 Lua instructions: go on, or end the script;
