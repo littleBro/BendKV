@@ -29,7 +29,8 @@ writes acknowledged: started again, from its file as it was, it holds
 them all.
 
 And BendKV alone: with appendonly no, BGREWRITEAOF writes appendfilename
-all the same, which a server with appendonly yes then reads; the cron's
+all the same (with streams RESTOREd from Redis's payloads, which it
+writes as RESTOREs), which a server with appendonly yes then reads; the cron's
 rewrites as the file grows (auto-aof-rewrite-percentage,
 auto-aof-rewrite-min-size), with the size after a rewrite as the base
 the growth is measured from; and a rewrite that fails (its temporary
@@ -609,11 +610,27 @@ def main():
         stop(pb)
     same("BendKV killed while a rewrite ran restores every write acknowledged", k, kr)
 
+    # a stream, which BendKV, having no stream command yet, RESTOREs from
+    # Redis's payload, its rewrite writing it as that RESTORE
+    os.makedirs(sub("rstream"))
+    pr, cr = start(redis(a.redis, sub("rstream"), "--rdbcompression", "no"), a.redis, sub("rstream.log"))
+    try:
+        for x in ([b"XADD", b"st", b"1-1", b"f", b"v"], [b"XADD", b"st", b"1-2", b"f", b"w", b"g", b"x"],
+                  [b"XGROUP", b"CREATE", b"st", b"g", b"0"], [b"XREADGROUP", b"GROUP", b"g", b"c", b"STREAMS", b"st", b">"],
+                  [b"XDEL", b"st", b"1-1"]):
+            cmd(cr, *x)
+        stp = cmd(cr, b"DUMP", b"st")[1]
+    finally:
+        stop(pr)
+
     # appendonly no: the rewrite writes appendfilename all the same
     os.makedirs(sub("off"))
     pb, cb = bendkv(a, None, None, sub("off.log"), cwd=sub("off"))
     try:
         fill(cb)
+        for x in ([b"SELECT", b"3"], [b"RESTORE", b"st", b"0", stp], [b"RESTORE", b"st2", b"%d" % T, stp, b"ABSTTL"], [b"SELECT", b"0"]):
+            if cmd(cb, *x)[0] != b"+":
+                sys.exit("FAIL: %r on BendKV" % (x[:2],))
         time.sleep(0.01)
         kb = keyspace(a.bendkv)
         if cmd(cb, b"BGREWRITEAOF") != (b"+", b"Background append only file rewriting started"):
