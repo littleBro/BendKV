@@ -323,6 +323,17 @@ def waits.held(+ws: Waits) -> Bool:
     case WaitNone{}:
       False{}
 
+# whether the client of id waits for a save (save.hold: SAVE's, or a
+# SHUTDOWN's that saves): Redis saves within the command, so no client of
+# theirs is ever blocked, and CLIENT UNBLOCK answers 0 for it
+def waits.saving.is(+n: Nat, +ws: Waits) -> Bool:
+  match ws:
+    case WaitOn{+id, back, c0, c1, b, argv, +code, db, until, cmds, codes, av, +rest}:
+      +k = R.code.key(code)
+      Bool.or(Bool.and(Nat.is_eq(id, n), Bool.or(Nat.is_eq(k, R.stat.top(203n)), Nat.is_eq(k, R.stat.top(187n)))), waits.saving.is(n, rest))
+    case WaitNone{}:
+      False{}
+
 # whether the client of id waits held back by the pause
 def waits.held.is(+n: Nat, +ws: Waits) -> Bool:
   match ws:
@@ -4951,7 +4962,7 @@ def bg.unblock.at(held: Bool, +n: Nat, +err: Bool, +code: Nat, g: LRun) -> LRun:
 def bg.unblock(+n: Nat, +err: Bool, +code: Nat, g: LRun) -> LRun:
   match g:
     case LRun{rs, es, conn, srv, ds, +ws, up, tx, pb}:
-      bg.unblock.at(waits.held.is(n, ws), n, err, code, LRun{rs, es, conn, srv, ds, ws, up, tx, pb})
+      bg.unblock.at(Bool.or(waits.held.is(n, ws), waits.saving.is(n, ws)), n, err, code, LRun{rs, es, conn, srv, ds, ws, up, tx, pb})
     case LHeld{h}:
       LHeld{h}
 
@@ -8905,13 +8916,13 @@ def db_down(+d: Nat, +pb: Ps, outs: List<&2, Sigma<&2, &2, Chan(Ans), _ => Ans>>
       +v = ws
       +w = rw
       do IO<Unit>:
-        p : S.Srv & Bool <- rdb.saves(down.lg(x, w), x, y, waits.save.any(v), rw.pid(w))
+        p : S.Srv & Bool <- rdb.saves(down.lg(x, w), x, y, S.srv.rdb.owed(x), rw.pid(w))
         db_saved(p, outs, y, v, tx, pb, w, reqs)
     case 2n:
       +x = srv
       +w = rw
       do IO<Unit>:
-        p : S.Srv & Bool <- rdb.saves(down.lg(x, w), x, ds, Bool.or(waits.save.any(ws), S.srv.rdb.shut(x)), rw.pid(w))
+        p : S.Srv & Bool <- rdb.saves(down.lg(x, w), x, ds, Bool.or(S.srv.rdb.owed(x), S.srv.rdb.shut(x)), rw.pid(w))
         down.stop.p(p, w, None{})
     case _:
       +x = srv
@@ -8919,7 +8930,7 @@ def db_down(+d: Nat, +pb: Ps, outs: List<&2, Sigma<&2, &2, Chan(Ans), _ => Ans>>
       +v = ws
       +w = rw
       do IO<Unit>:
-        p : S.Srv & Bool <- rdb.saves(down.lg(x, w), x, y, waits.save.any(v), rw.pid(w))
+        p : S.Srv & Bool <- rdb.saves(down.lg(x, w), x, y, S.srv.rdb.owed(x), rw.pid(w))
         db_shut(p, True{}, outs, y, v, tx, pb, w, reqs)
 
 # the saves made: the clients that waited for them go on, in a group of
@@ -10570,7 +10581,7 @@ def st.down(+st: St) -> Nat:
 def aof_saves(+shut: Bool, +st: St) -> IO(S.Srv & Bool):
   match st:
     case St{+srv, +ds, sel, +ws, tx, pb, +rw}:
-      rdb.saves(down.lg(srv, rw), srv, ds, Bool.or(waits.save.any(ws), Bool.and(shut, S.srv.rdb.shut(srv))), rw.pid(rw))
+      rdb.saves(down.lg(srv, rw), srv, ds, Bool.or(S.srv.rdb.owed(srv), Bool.and(shut, S.srv.rdb.shut(srv))), rw.pid(rw))
 
 # the clients that waited for the saves go on, as db_saved has them go on,
 # their effects appended to the file (the group's answers, oldest first,
@@ -11980,7 +11991,7 @@ def rdb.save.want(want: Bool, +lg: Log, +srv: S.Srv, +ds: R.Ds, +pid: U32) -> IO
       do IO<S.Srv & Bool>:
         +ok : Bool <- rdb.save(lg, pid, S.srv.cfg(srv), rdb.fdbs(R.ds.list(ds)))
         t : U32 & U32 <- IO.clock()
-        IO.pure(S.Srv & Bool, (S.srv.rdb.saved(srv, ok, clock.secs(t)), ok))
+        IO.pure(S.Srv & Bool, (S.srv.rdb.paid(S.srv.rdb.saved(srv, ok, clock.secs(t))), ok))
 
 @unsafe
 def rdb.saves(+lg: Log, +srv: S.Srv, +ds: R.Ds, +want: Bool, +pid: U32) -> IO(S.Srv & Bool):
@@ -12004,14 +12015,6 @@ def waits.saving(+ws: Waits) -> Bool:
       Nat.is_lt(0n, save.kind(b, code))
     case WaitNone{}:
       False{}
-
-# whether a client waits for SAVE's save
-def waits.save.any(+ws: Waits) -> Bool:
-  match ws:
-    case WaitNone{}:
-      False{}
-    case WaitOn{id, back, c0, c1, +b, argv, +code, db, until, cmds, codes, av, +rest}:
-      Bool.or(Nat.is_eq(save.kind(b, code), 1n), waits.save.any(rest))
 
 # what a client that waited for a save is answered: SAVE OK, or -ERR when
 # the save failed (saveCommand's shared.err); SHUTDOWN, whose save failed

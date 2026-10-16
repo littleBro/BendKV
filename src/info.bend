@@ -1657,29 +1657,29 @@ def rws.reset(r: Rws) -> Rws:
 # own, a word in Info, which is 64 words with it (a wider node is copied
 # whole at every update: section 3zzz of FINDINGS.md)
 type Rdb is Data:
-  IRdb{last: Nat, saves: Nat, ok: Bool, loaded: Nat, expired: Nat, flush: Bool, shut: Bool}
+  IRdb{last: Nat, saves: Nat, ok: Bool, loaded: Nat, expired: Nat, flush: Bool, shut: Bool, owed: Bool}
   IRdbOf{r: Rdb}
 
 def rdb.new(+secs: Nat) -> Rdb:
-  IRdb{secs, 0n, True{}, 0n, 0n, False{}, False{}}
+  IRdb{secs, 0n, True{}, 0n, 0n, False{}, False{}, False{}}
 
 def rdb.last(+r: Rdb) -> Nat:
   match r:
-    case IRdb{+last, saves, ok, loaded, expired, flush, shut}:
+    case IRdb{+last, saves, ok, loaded, expired, flush, shut, owed}:
       last
     case IRdbOf{+x}:
       rdb.last(x)
 
 def rdb.flush(+r: Rdb) -> Bool:
   match r:
-    case IRdb{last, saves, ok, loaded, expired, +flush, shut}:
+    case IRdb{last, saves, ok, loaded, expired, +flush, shut, owed}:
       flush
     case IRdbOf{+x}:
       rdb.flush(x)
 
 def rdb.shut(+r: Rdb) -> Bool:
   match r:
-    case IRdb{last, saves, ok, loaded, expired, flush, +shut}:
+    case IRdb{last, saves, ok, loaded, expired, flush, +shut, owed}:
       shut
     case IRdbOf{+x}:
       rdb.shut(x)
@@ -1688,44 +1688,60 @@ def rdb.shut(+r: Rdb) -> Bool:
 # nothing
 def rdb.saved(r: Rdb, +well: Bool, +secs: Nat) -> Rdb:
   match r:
-    case IRdb{+last, saves, +ok, loaded, expired, flush, shut}:
-      IRdb{Bool.pick(Nat, well, secs, last), saves, Bool.or(ok, well), loaded, expired, flush, shut}
+    case IRdb{+last, saves, +ok, loaded, expired, flush, shut, owed}:
+      IRdb{Bool.pick(Nat, well, secs, last), saves, Bool.or(ok, well), loaded, expired, flush, shut, owed}
     case IRdbOf{x}:
       rdb.saved(x, well, secs)
 
 # a SAVE, counted as it runs (saveCommand)
 def rdb.save(r: Rdb) -> Rdb:
   match r:
-    case IRdb{last, +saves, ok, loaded, expired, flush, shut}:
-      IRdb{last, 1n+saves, ok, loaded, expired, flush, shut}
+    case IRdb{last, +saves, ok, loaded, expired, flush, shut, owed}:
+      IRdb{last, 1n+saves, ok, loaded, expired, flush, shut, True{}}
     case IRdbOf{x}:
       rdb.save(x)
 
 def rdb.loaded(r: Rdb, +ld: Nat, +ex: Nat) -> Rdb:
   match r:
-    case IRdb{last, saves, ok, loaded, expired, flush, shut}:
-      IRdb{last, saves, ok, ld, ex, flush, shut}
+    case IRdb{last, saves, ok, loaded, expired, flush, shut, owed}:
+      IRdb{last, saves, ok, ld, ex, flush, shut, owed}
     case IRdbOf{x}:
       rdb.loaded(x, ld, ex)
 
 def rdb.flushed(r: Rdb, +on: Bool) -> Rdb:
   match r:
-    case IRdb{last, saves, ok, loaded, expired, flush, shut}:
-      IRdb{last, saves, ok, loaded, expired, on, shut}
+    case IRdb{last, saves, ok, loaded, expired, flush, shut, owed}:
+      IRdb{last, saves, ok, loaded, expired, on, shut, owed}
     case IRdbOf{x}:
       rdb.flushed(x, on)
 
 def rdb.shutting(r: Rdb, +on: Bool) -> Rdb:
   match r:
-    case IRdb{last, saves, ok, loaded, expired, flush, shut}:
-      IRdb{last, saves, ok, loaded, expired, flush, on}
+    case IRdb{last, saves, ok, loaded, expired, flush, shut, owed}:
+      IRdb{last, saves, ok, loaded, expired, flush, on, owed}
     case IRdbOf{x}:
       rdb.shutting(x, on)
 
+# whether a SAVE asked for a save the shell has not made yet; and that
+# save made
+def rdb.owed(+r: Rdb) -> Bool:
+  match r:
+    case IRdb{last, saves, ok, loaded, expired, flush, shut, +owed}:
+      owed
+    case IRdbOf{+x}:
+      rdb.owed(x)
+
+def rdb.paid(r: Rdb) -> Rdb:
+  match r:
+    case IRdb{last, saves, ok, loaded, expired, flush, shut, owed}:
+      IRdb{last, saves, ok, loaded, expired, flush, shut, False{}}
+    case IRdbOf{x}:
+      rdb.paid(x)
+
 def rdb.reset(r: Rdb) -> Rdb:
   match r:
-    case IRdb{last, saves, ok, loaded, expired, flush, shut}:
-      IRdb{last, 0n, ok, loaded, expired, flush, shut}
+    case IRdb{last, saves, ok, loaded, expired, flush, shut, owed}:
+      IRdb{last, 0n, ok, loaded, expired, flush, shut, owed}
     case IRdbOf{x}:
       rdb.reset(x)
 
@@ -1925,6 +1941,16 @@ def info.rdb.flushed(i: Info, +on: Bool) -> Info:
   match i:
     case IInfo{b, l, c, inst, pk, c0, a0, a, st, ex, rw, tm, rf}:
       IInfo{b, l, c, inst, pk, c0, a0, a, st, ex, rw, tm, rdb.flushed(rf, on)}
+
+def info.rdb.owed(+i: Info) -> Bool:
+  match i:
+    case IInfo{b, l, c, inst, pk, c0, a0, a, st, ex, rw, tm, +rf}:
+      rdb.owed(rf)
+
+def info.rdb.paid(i: Info) -> Info:
+  match i:
+    case IInfo{b, l, c, inst, pk, c0, a0, a, st, ex, rw, tm, rf}:
+      IInfo{b, l, c, inst, pk, c0, a0, a, st, ex, rw, tm, rdb.paid(rf)}
 
 def info.rdb.shut(+i: Info) -> Bool:
   match i:
@@ -2570,7 +2596,7 @@ def sec.rewrite(r: Rws, +now: Nat) -> String:
 
 def rdb.lines(+r: Rdb) -> String:
   match r:
-    case IRdb{+last, +saves, +ok, +loaded, +expired, flush, shut}:
+    case IRdb{+last, +saves, +ok, +loaded, +expired, flush, shut, owed}:
       kv("rdb_last_save_time", Nat.show(last)) ++ kv("rdb_last_bgsave_status", Bool.pick(String, ok, "ok", "err")) ++
       kv("rdb_last_bgsave_time_sec", "-1") ++ kv("rdb_current_bgsave_time_sec", "-1") ++ kv("rdb_saves", Nat.show(saves)) ++
       kv("rdb_last_cow_size", "0") ++ kv("rdb_last_load_keys_expired", Nat.show(expired)) ++ kv("rdb_last_load_keys_loaded", Nat.show(loaded))

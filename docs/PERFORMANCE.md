@@ -7479,7 +7479,6 @@ as above, on the build of 479e46e):
   210,000 instructions a batch under callgrind (13,500 a request at depth 16).
   Kept in `Ps`'s bits and read again after CONFIG SET, as the table's limit now is, it
   would cost nothing.
-
 ## 67. The RDB file
 
 **What was added** (FINDINGS 3zzzc). SAVE writes the RDB file, SHUTDOWN and FLUSHALL save
@@ -7541,6 +7540,7 @@ up, would take the drops out of SAVE, and of the rewrite of the append-only file
 instructions per request (3,419, 4,183 and 4,527 on main, built here and counted in
 turn); with 100 clients in BLPOP, GET 3,525 and SET 4,310, 3.0% and 3.1% above (main
 3.1% and 3.4%).
+
 ## 71. The timing's runs not yet counted, one per command
 
 **What changed** (FINDINGS 3zzzj). A run of calls that leaves the newest is added to the
