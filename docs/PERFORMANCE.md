@@ -8028,14 +8028,19 @@ maxmemory.
 **Measured** (`tools/script_cost.sh`, as in section 68: callgrind, instructions per
 request, 20 clients pipelining 16 deep, 100,000 keys; Redis 7.0.15 under the same load):
 
-| request | BendKV | Redis |
-|---|---:|---:|
-| `FCALL one 0`, a function that returns 1 | 50,060 | 7,784 |
-| `FCALL get1 1 <key>`, a function that calls GET | 78,250 | 13,530 |
-| `EVAL "return 1" 0` | 57,815 | 15,087 |
-| EVALSHA of it | 53,117 | 9,834 |
-| a script that calls GET | 84,867 | 19,133 |
-| GET, beside them | 3,495 | 3,538 |
+| request | BendKV | with ACL users merged in (a92597d) | Redis |
+|---|---:|---:|---:|
+| `FCALL one 0`, a function that returns 1 | 50,060 | 54,425 | 7,784 |
+| `FCALL get1 1 <key>`, a function that calls GET | 78,250 | 83,820 | 13,530 |
+| `EVAL "return 1" 0` | 57,815 | 62,139 | 15,087 |
+| EVALSHA of it | 53,117 | 57,498 | 9,834 |
+| a script that calls GET | 84,867 | 90,500 | 19,133 |
+| GET, beside them | 3,495 | 3,565 | 3,538 |
+
+With ACL users merged in, a function and a script each cost about 4,400 instructions
+more, and a call of either about 1,200 more, though no client is restricted: each ends a
+run of the general way, whose end now copies the session's memory state three times
+(`ps.tune`), and the general way's ACL steps copy what they were lent (section 68).
 
 FCALL costs 3,100 instructions less than EVALSHA. A sha is 40 bytes, which the parser
 and the mirror hash and compare, and which the engine converts for its cache and makes a
@@ -8076,7 +8081,8 @@ at 1.12 times EVALSHA's rate, as their instructions say.
 **`make perfcheck`**: GET 3,471, SET 4,236 and INCR 4,580 instructions per request,
 within 0.6% of the baseline, and 3.1% and 3.7% above those with 100 clients in BLPOP:
 #99's counts (section 68: 3,472, 4,241 and 4,583), with the work loop's bank of 49
-words. One run of the same build beside other work (a callgrind run of the scripts and
+words. With ACL users merged in, 3,483, 4,245 and 4,585, and 3.1% and 3.6%, as #99's
+head then (3,480, 4,244 and 4,586; 3.2% and 3.6%). One run of the same build beside other work (a callgrind run of the scripts and
 a check of the proofs) gave GET 3,506 and INCR 4,607, 1% more: the counts move with the
 load of the machine, so they are compared on a quiet one.
 
