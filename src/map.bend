@@ -76,13 +76,16 @@ type Val is Data:
   VColl{c: Coll}
 
 # a collection: a hash, its fields and their values (Hash), a list, its
-# elements in order (Deq), a set, its members (Mems), or a sorted set,
-# its members and their scores (Zset)
+# elements in order (Deq), a set, its members (Mems), a sorted set, its
+# members and their scores (Zset), or a stream, its entries and its
+# consumer groups (XStream). CStream comes last, so that the others keep
+# their tags.
 type Coll is Data:
   CHash{h: Hash}
   CList{l: Deq}
   CMems{s: Mems}
   CZset{z: Zset}
+  CStream{x: XStream}
 
 # a hash: a field and its value
 type HPair is Data:
@@ -114,11 +117,17 @@ type Hash is Data:
   HBig{n: Nat, t: Trie<String>}
   HLong{n: Nat, ps: List<&2, HPiece>}
 
-# A list, as a deque of two stacks: its first nf elements in order (f),
-# then the other nb in reverse (b), so the list is f and then b reversed
-# (Lists, below)
+# k elements of a list in n bytes of s, each its length's code and its
+# bytes (Packed strings, below): in the list's order (fw), or the last
+# first (Lists, below)
+type LPiece is Data:
+  LPc{k: Nat, n: Nat, fw: Bool, s: String}
+
+# A list, as a deque of two stacks of pieces: the nf elements of its front
+# part in pf pieces, in order (f), then the nb of its back part in pb
+# pieces, the last first (b) (Lists, below)
 type Deq is Data:
-  Deq{nf: Nat, f: List<&2, String>, nb: Nat, b: List<&2, String>}
+  Deq{nf: Nat, pf: Nat, f: List<&2, LPiece>, nb: Nat, pb: Nat, b: List<&2, LPiece>}
 
 # An integer of an intset (Sets, below): its sign, and its magnitude's
 # high and low 32 bits; and a key, an integer's bits in some width with
@@ -153,13 +162,98 @@ type ZTree is Data:
   ZBin{n: Nat, m: String, d: F.F64, l: ZTree, r: ZTree}
 
 # A sorted set, as Redis 7.0 keeps one: a small one (at most 128
-# elements, each member of at most 64 bytes) as a listpack, its tree
-# alone; any other as a skiplist with a hashtable of its members, its
-# tree and a trie of its members' scores, which it stays (Sorted sets,
-# below)
+# elements, each member of at most 64 bytes) as a listpack, the string of
+# its n elements in order while that fits one buffer (2,048 bytes), else
+# its tree alone, which it stays (ZWide); any other as a skiplist with a
+# hashtable of its members, its tree and a trie of its members' scores,
+# which it stays (Sorted sets, below)
 type Zset is Data:
-  ZSmall{tr: ZTree}
+  ZSmall{n: Nat, b: String}
+  ZWide{tr: ZTree}
   ZBig{tr: ZTree, t: Trie<F.F64>}
+
+# A number of a stream below 2^64 (an ID's time or sequence, a count),
+# split in decimal so that no Nat passes 2^48: one below 10^14 (every
+# time in ms, almost every sequence and count) as itself (XS), any other
+# as hi * 10^14 + lo, hi from 1 to 184467 and lo below 10^14 (XL)
+# (Streams, below)
+type XN is Data:
+  XS{n: Nat}
+  XL{hi: Nat, lo: Nat}
+
+# a stream entry's ID: its time in ms and its sequence
+type XId is Data:
+  XId{ms: XN, seq: XN}
+
+# A node of a stream, one listpack of Redis's radix tree: its master ID
+# (the radix tree's key) and fields, its live and deleted entries, its
+# listpack's size in bytes and its count of elements, and its entries,
+# the newest first, each the bytes Redis's listpack holds for it (flags,
+# ms delta, seq delta, [num-fields, fields], values, lp-count, each
+# element with its backlen). XNdOf, a node that holds a node, is never
+# built: it makes XNode a node of its own, one word (a type travels as
+# wide as its widest form).
+type XNode is Data:
+  XNd{mid: XId, mfs: List<&2, String>, live: Nat, dead: Nat, bytes: Nat, nel: Nat, es: List<&2, String>}
+  XNdOf{x: XNode}
+
+# a stream's nodes by master ID, as a weight-balanced tree (a tip, or a
+# node of n nodes, x's after those of l and before those of r)
+type XNodes is Data:
+  XNTip{}
+  XNBin{n: Nat, x: XNode, l: XNodes, r: XNodes}
+
+# an entry pending in a group (Redis's NACK): its ID, the consumer it was
+# last delivered to, the time of that delivery (ms) and how many times it
+# was delivered (XNkOf is never built, as XNdOf)
+type XNack is Data:
+  XNk{id: XId, owner: String, time: Nat, count: XN}
+  XNkOf{x: XNack}
+
+# a group's pending entries by ID, as a weight-balanced tree
+type XPel is Data:
+  XPTip{}
+  XPBin{n: Nat, x: XNack, l: XPel, r: XPel}
+
+# the IDs pending for a consumer, as a weight-balanced tree
+type XIds is Data:
+  XITip{}
+  XIBin{n: Nat, x: XId, l: XIds, r: XIds}
+
+# a consumer: its name, the time it was last seen (ms), its pending IDs
+type XCon is Data:
+  XCon{name: String, seen: Nat, ids: XIds}
+
+# a group's consumers by name (bytes, as memcmp orders them, a prefix
+# first), as a weight-balanced tree
+type XCons is Data:
+  XCTip{}
+  XCBin{n: Nat, x: XCon, l: XCons, r: XCons}
+
+# a group's count of entries read (entries_read): unknown (-1), or one
+type XRd is Data:
+  XRdNone{}
+  XRdN{n: XN}
+
+# a consumer group: its name, the last ID delivered to it, its count of
+# entries read, its pending entries and its consumers (XGrpOf is never
+# built, as XNdOf)
+type XGroup is Data:
+  XGrp{name: String, last: XId, read: XRd, pel: XPel, cons: XCons}
+  XGrpOf{x: XGroup}
+
+# a stream's groups by name, as a weight-balanced tree
+type XGroups is Data:
+  XGTip{}
+  XGBin{n: Nat, x: XGroup, l: XGroups, r: XGroups}
+
+# A stream, as Redis 7.0 keeps one: its count of live entries, the last
+# ID added, its first live entry's ID, the greatest ID deleted, how many
+# entries were ever added, its nodes and its groups (XStrOf is never
+# built, as XNdOf) (Streams, below)
+type XStream is Data:
+  XStr{len: Nat, last: XId, first: XId, maxdel: XId, added: XN, nodes: XNodes, groups: XGroups}
+  XStrOf{x: XStream}
 
 # Keys
 # ----
@@ -1406,6 +1500,143 @@ def sample.go(-V: Data, +t: Trie<V>, left: Nat, done: Bool, +b: Nat, +now: Nat, 
 def sample(-V: Data, +t: Trie<V>, +r: U32, +want: Nat, +now: Nat, +mode: Nat, win: Nat) -> List<&2, String>:
   sample.go(V, t, win, False{}, U32.to_nat(U32.and(r, 1048575)), now, mode, want, Nil{})
 
+# Packed strings
+# --------------
+# A small hash and a small sorted set keep their elements one after
+# another in one string, as Redis keeps them in a listpack, one
+# allocation (Hashes and Sorted sets, below); a list keeps its elements so
+# in pieces of one buffer (Lists, below). A string among them is
+# coded as its length and its bytes. A length below 255 takes one byte; a
+# longer one (RESTORE keeps a listpack's elements whatever their lengths)
+# takes the byte 255 and then its four bytes, the high first. A read
+# walks the lengths from the start to the element it wants, comparing a
+# string of the right length by its last byte, then whole, and copies
+# one out with String.slice. A write makes the string anew: in the C
+# runtime, a ++ whose right side has no room before its bytes links the
+# two into a chain of chunks, and a chain reads a chunk at a time, so the
+# pieces a write puts together are copied into one buffer (pk.flat), as a
+# listpack is written anew in its allocation.
+
+# the byte at index i of b (255 past its end, so that a read past it
+# stays below 2^32)
+def pk.byte(+b: String, +i: Nat) -> Nat:
+  U32.to_nat(U32.and(String.code_at(b, i), 255))
+
+# the k bytes from index i of b, the high first, after the number acc
+def pk.long(k: Nat, +b: String, +i: Nat, +acc: Nat) -> Nat:
+  match k:
+    case 0n:
+      acc
+    case 1n+j:
+      pk.long(j, b, Nat.add(i, 1n), Nat.add(Nat.mul(acc, 256n), pk.byte(b, i)))
+
+def pk.len.of(short: Bool, +b: String, +i: Nat, x: Nat) -> Nat:
+  match short:
+    case True{}:
+      x
+    case False{}:
+      pk.long(4n, b, Nat.add(i, 1n), 0n)
+
+# the length whose code starts at index i of b
+def pk.len(+b: String, +i: Nat) -> Nat:
+  +x = pk.byte(b, i)
+  pk.len.of(Nat.is_lt(x, 255n), b, i, x)
+
+# the length whose code starts at index i of b, of the first of k
+# strings from there on (0 when there is none)
+def pk.len.if(k: Nat, +b: String, +i: Nat) -> Nat:
+  match k:
+    case 0n:
+      0n
+    case 1n+j:
+      pk.len(b, i)
+
+# how many bytes code the length n: one below 255, else five (255 - n,
+# cut at 0, is at least 1 exactly when n is below 255)
+def pk.hdr(+n: Nat) -> Nat:
+  Nat.sub(5n, Nat.mul(4n, Nat.min(Nat.sub(255n, n), 1n)))
+
+# the index just past the string whose code starts at index i of b
+def pk.end(+b: String, +i: Nat) -> Nat:
+  +n = pk.len(b, i)
+  Nat.add(i, Nat.add(pk.hdr(n), n))
+
+# the byte x (below 256) before rest
+def pk.byte.put(+x: Nat, rest: String) -> String:
+  SCon{Chr{U32.from_nat(x)}, rest}
+
+# the k low bytes of n, the high first, before rest
+def pk.long.put(k: Nat, +n: Nat, rest: String) -> String:
+  match k:
+    case 0n:
+      rest
+    case 1n+j:
+      pk.long.put(j, Nat.div(n, 256n), pk.byte.put(Nat.mod(n, 256n), rest))
+
+def pk.code.of(short: Bool, +n: Nat, rest: String) -> String:
+  match short:
+    case True{}:
+      pk.byte.put(n, rest)
+    case False{}:
+      pk.byte.put(255n, pk.long.put(4n, n, rest))
+
+# the code of the length n before rest
+def pk.code(+n: Nat, rest: String) -> String:
+  pk.code.of(Nat.is_lt(n, 255n), n, rest)
+
+# the string s, of n bytes, as one buffer: String.take copies a String
+# into one buffer in the C runtime (into a chain of 2,048 bytes a buffer
+# past 2,048), and the take of all n bytes is s itself
+def pk.flat(s: String, +n: Nat) -> String:
+  String.take(s, n)
+
+# whether the n bytes from index i of b are f, when same says their last
+# bytes agree. String.eq, not str_eq: a call that gives str_eq a value of
+# its own (the slice) makes str_eq own its first argument, and every key
+# the trie compares with it be given one (FINDINGS.md, section 7)
+def pk.is.whole(same: Bool, +f: String, +b: String, +i: Nat, +n: Nat) -> Bool:
+  match same:
+    case True{}:
+      String.eq(String.slice(b, i, n), f)
+    case False{}:
+      False{}
+
+# whether the n bytes from index i of b are f, as many as f's, whose last
+# is lb: an empty one is, and a longer one's last byte is compared before
+# the whole
+def pk.hit.last(n: Nat, +f: String, +lb: U32, +b: String, +i: Nat) -> Bool:
+  match n:
+    case 0n:
+      True{}
+    case 1n++m:
+      pk.is.whole(U32.is_eq(String.code_at(b, Nat.add(i, m)), lb), f, b, i, 1n+m)
+
+def pk.hit.of(same: Bool, +f: String, +lb: U32, +b: String, +i: Nat, +n: Nat) -> Bool:
+  match same:
+    case True{}:
+      pk.hit.last(n, f, lb, b, i)
+    case False{}:
+      False{}
+
+# whether the string whose code starts at index i of b, the first of k
+# strings from there on, n bytes long, is f (lf bytes long, its last
+# byte lb): the lengths first, then the last bytes, then the bytes (a
+# test of the lengths and the last bytes at once, in one call, reads the
+# last byte of every string of another length too, and costs more than
+# the calls it saves: FINDINGS.md, section 3zzzn)
+def pk.hit(k: Nat, +f: String, +lf: Nat, +lb: U32, +b: String, +i: Nat, +n: Nat) -> Bool:
+  match k:
+    case 0n:
+      False{}
+    case 1n+j:
+      pk.hit.of(Nat.is_eq(n, lf), f, lb, b, Nat.add(i, pk.hdr(n)), n)
+
+# b without its bytes from index i to index end
+def pk.cut(+b: String, +i: Nat, +end: Nat) -> String:
+  +n = Nat.sub(String.length(b), Nat.sub(end, i))
+  +pre = String.take(b, i)
+  pk.flat(pre ++ String.drop(b, end), n)
+
 # Hashes
 # ------
 # A hash's fields and values (Hash, above): a small one is the string of
@@ -1419,18 +1650,10 @@ def sample(-V: Data, +t: Trie<V>, +r: U32, +want: Nat, +now: Nat, +mode: Nat, wi
 # append-only file makes it again on any server); OBJECT ENCODING reads
 # the parameters as they are (session.bend).
 #
-# A small hash's string holds its pairs one after another, as a listpack
-# holds them in one allocation: a pair is its field's length, the field,
-# its value's length and the value. A length below 255 takes one byte; a
-# longer one (RESTORE keeps a listpack's pairs whatever their lengths)
-# takes the byte 255 and then its four bytes, the high first. A read
-# walks the lengths from the start to the pair it wants, comparing a
-# field of the right length by its last byte, then whole, and copies a
-# field or a value out with String.slice. A write makes the string anew:
-# in the C runtime, a ++ whose right side has no room before its bytes
-# links the two into a chain of chunks, and a chain reads a chunk at a
-# time, so the pieces a write puts together are copied into one buffer
-# (hb.flat), as a listpack is written anew in its allocation.
+# A small hash's string holds its pairs one after another, in the order
+# they came (Packed strings, above): a pair is its field's code and its
+# value's code. A read walks the lengths, two a pair, to the pair it
+# wants, and copies a field or a value out with String.slice.
 #
 # A buffer holds at most 2,048 bytes: a longer string is a chain of them,
 # and String.code_at past the first walks the chain from its start, so a
@@ -1497,68 +1720,9 @@ def hash.kv(+t: Trie<String>, ks: List<&2, String>) -> List<&2, HPair>:
     case Con{+k, rest}:
       HP{k, hash.or(get(String, t, k))} <> hash.kv(t, rest)
 
-# the byte at index i of a small hash's string b (255 past its end, so
-# that a read past it stays below 2^32)
-def hb.byte(+b: String, +i: Nat) -> Nat:
-  U32.to_nat(U32.and(String.code_at(b, i), 255))
-
-# the k bytes from index i of b, the high first, after the number acc
-def hb.long(k: Nat, +b: String, +i: Nat, +acc: Nat) -> Nat:
-  match k:
-    case 0n:
-      acc
-    case 1n+j:
-      hb.long(j, b, Nat.add(i, 1n), Nat.add(Nat.mul(acc, 256n), hb.byte(b, i)))
-
-def hb.len.of(short: Bool, +b: String, +i: Nat, x: Nat) -> Nat:
-  match short:
-    case True{}:
-      x
-    case False{}:
-      hb.long(4n, b, Nat.add(i, 1n), 0n)
-
-# the length whose code starts at index i of b
-def hb.len(+b: String, +i: Nat) -> Nat:
-  +x = hb.byte(b, i)
-  hb.len.of(Nat.is_lt(x, 255n), b, i, x)
-
-# how many bytes code the length n: one below 255, else five (255 - n,
-# cut at 0, is at least 1 exactly when n is below 255)
-def hb.hdr(+n: Nat) -> Nat:
-  Nat.sub(5n, Nat.mul(4n, Nat.min(Nat.sub(255n, n), 1n)))
-
-# the byte x (below 256) before rest
-def hb.byte.put(+x: Nat, rest: String) -> String:
-  SCon{Chr{U32.from_nat(x)}, rest}
-
-# the k low bytes of n, the high first, before rest
-def hb.long.put(k: Nat, +n: Nat, rest: String) -> String:
-  match k:
-    case 0n:
-      rest
-    case 1n+j:
-      hb.long.put(j, Nat.div(n, 256n), hb.byte.put(Nat.mod(n, 256n), rest))
-
-def hb.code.of(short: Bool, +n: Nat, rest: String) -> String:
-  match short:
-    case True{}:
-      hb.byte.put(n, rest)
-    case False{}:
-      hb.byte.put(255n, hb.long.put(4n, n, rest))
-
-# the code of the length n before rest
-def hb.code(+n: Nat, rest: String) -> String:
-  hb.code.of(Nat.is_lt(n, 255n), n, rest)
-
 # the pair of the field f and its value v, before rest
 def hb.pair(+f: String, +v: String, rest: String) -> String:
-  hb.code(String.length(f), f ++ hb.code(String.length(v), v ++ rest))
-
-# the string s, of n bytes, as one buffer: String.take copies a String
-# into one buffer in the C runtime (into a chain of 2,048 bytes a buffer
-# past 2,048), and the take of all n bytes is s itself
-def hb.flat(s: String, +n: Nat) -> String:
-  String.take(s, n)
+  pk.code(String.length(f), f ++ pk.code(String.length(v), v ++ rest))
 
 # the pairs ps as a small hash's string, before rest
 def hb.enc(ps: List<&2, HPair>, rest: String) -> String:
@@ -1568,76 +1732,30 @@ def hb.enc(ps: List<&2, HPair>, rest: String) -> String:
     case Con{HP{f, v}, more}:
       hb.pair(f, v, hb.enc(more, rest))
 
-# String.eq, not str_eq: a call that gives str_eq a value of its own (the
-# slice) makes str_eq own its first argument, and every key the trie
-# compares with it be given one (FINDINGS.md, section 7)
-def hb.hit.eq(same: Bool, +f: String, +b: String, +i: Nat, +n: Nat) -> Bool:
-  match same:
-    case True{}:
-      String.eq(String.slice(b, i, n), f)
-    case False{}:
-      False{}
-
-# whether the n bytes from index i of b are f, as many as f's, whose last
-# is lb: an empty one is, and a longer one's last byte is compared before
-# the whole
-def hb.hit.last(n: Nat, +f: String, +lb: U32, +b: String, +i: Nat) -> Bool:
-  match n:
-    case 0n:
-      True{}
-    case 1n++m:
-      hb.hit.eq(U32.is_eq(String.code_at(b, Nat.add(i, m)), lb), f, b, i, 1n+m)
-
-def hb.hit.of(same: Bool, +f: String, +lb: U32, +b: String, +i: Nat, +n: Nat) -> Bool:
-  match same:
-    case True{}:
-      hb.hit.last(n, f, lb, b, i)
-    case False{}:
-      False{}
-
-# whether the pair at index i of b, one of k pairs from there on, whose
-# field is n bytes long, is the field f's (lf bytes long, its last byte
-# lb): the lengths first, then the last bytes, then the bytes
-def hb.hit(k: Nat, +f: String, +lf: Nat, +lb: U32, +b: String, +i: Nat, +n: Nat) -> Bool:
-  match k:
-    case 0n:
-      False{}
-    case 1n+j:
-      hb.hit.of(Nat.is_eq(n, lf), f, lb, b, Nat.add(i, hb.hdr(n)), n)
-
-# the length of the field of the pair at index i of b, one of k pairs
-# from there on (0 when there is none)
-def hb.flen(k: Nat, +b: String, +i: Nat) -> Nat:
-  match k:
-    case 0n:
-      0n
-    case 1n+j:
-      hb.len(b, i)
-
 # f's pair among the k pairs from index i of b on, the first of them with
 # a field of n bytes: the index of the pair and of its value's code, or
-# the index past the pairs twice; hit is hb.hit(k, f, lf, lb, b, i, n),
+# the index past the pairs twice; hit is pk.hit(k, f, lf, lb, b, i, n),
 # computed before b is passed on
 def hb.find.go(+f: String, +lf: Nat, +lb: U32, +b: String, k: Nat, hit: Bool, +i: Nat, +n: Nat) -> Nat & Nat:
   match k hit:
     case 0n _:
       (i, i)
     case 1n++j True{}:
-      (i, Nat.add(i, Nat.add(hb.hdr(n), n)))
+      (i, Nat.add(i, Nat.add(pk.hdr(n), n)))
     case 1n++j False{}:
-      +vi = Nat.add(i, Nat.add(hb.hdr(n), n))
-      +vl = hb.len(b, vi)
-      +x = Nat.add(vi, Nat.add(hb.hdr(vl), vl))
-      +xn = hb.flen(j, b, x)
-      hb.find.go(f, lf, lb, b, j, hb.hit(j, f, lf, lb, b, x, xn), x, xn)
+      +vi = Nat.add(i, Nat.add(pk.hdr(n), n))
+      +vl = pk.len(b, vi)
+      +x = Nat.add(vi, Nat.add(pk.hdr(vl), vl))
+      +xn = pk.len.if(j, b, x)
+      hb.find.go(f, lf, lb, b, j, pk.hit(j, f, lf, lb, b, x, xn), x, xn)
 
 # f's pair in the string b of a small hash of k pairs: the index of the
 # pair and of its value's code, or b's length twice when f is not there
 def hb.find(+f: String, +b: String, +k: Nat) -> Nat & Nat:
   +lf = String.length(f)
   +lb = String.code_at(f, Nat.sub(lf, 1n))
-  +n = hb.flen(k, b, 0n)
-  hb.find.go(f, lf, lb, b, k, hb.hit(k, f, lf, lb, b, 0n, n), 0n, n)
+  +n = pk.len.if(k, b, 0n)
+  hb.find.go(f, lf, lb, b, k, pk.hit(k, f, lf, lb, b, 0n, n), 0n, n)
 
 # whether hb.find found its field in b
 def hb.has(+b: String, p: Nat & Nat) -> Bool:
@@ -1646,8 +1764,8 @@ def hb.has(+b: String, p: Nat & Nat) -> Bool:
 
 # the value whose code starts at index vi of b
 def hb.val(+b: String, +vi: Nat) -> String:
-  +n = hb.len(b, vi)
-  String.slice(b, Nat.add(vi, hb.hdr(n)), n)
+  +n = pk.len(b, vi)
+  String.slice(b, Nat.add(vi, pk.hdr(n)), n)
 
 def hb.get.of(had: Bool, +b: String, +vi: Nat) -> Maybe<&2, String>:
   match had:
@@ -1667,11 +1785,11 @@ def hb.pairs.rev(k: Nat, +b: String, +i: Nat, acc: List<&2, HPair>) -> List<&2, 
     case 0n:
       acc
     case 1n+j:
-      +fl = hb.len(b, i)
-      +fi = Nat.add(i, hb.hdr(fl))
+      +fl = pk.len(b, i)
+      +fi = Nat.add(i, pk.hdr(fl))
       +vi = Nat.add(fi, fl)
-      +vl = hb.len(b, vi)
-      +vj = Nat.add(vi, hb.hdr(vl))
+      +vl = pk.len(b, vi)
+      +vj = Nat.add(vi, pk.hdr(vl))
       hb.pairs.rev(j, b, Nat.add(vj, vl), HP{String.slice(b, fi, fl), String.slice(b, vj, vl)} <> acc)
 
 # the k pairs from index i of b on, in their order: a walk that keeps no
@@ -1686,23 +1804,18 @@ def hb.widest(k: Nat, +b: String, +i: Nat, +m: Nat) -> Nat:
     case 0n:
       m
     case 1n+j:
-      +fl = hb.len(b, i)
-      +vi = Nat.add(i, Nat.add(hb.hdr(fl), fl))
-      +vl = hb.len(b, vi)
-      hb.widest(j, b, Nat.add(vi, Nat.add(hb.hdr(vl), vl)), Nat.max(m, Nat.max(fl, vl)))
-
-# the index just past the value whose code starts at index vi of b
-def hb.end(+b: String, +vi: Nat) -> Nat:
-  +n = hb.len(b, vi)
-  Nat.add(vi, Nat.add(hb.hdr(n), n))
+      +fl = pk.len(b, i)
+      +vi = Nat.add(i, Nat.add(pk.hdr(fl), fl))
+      +vl = pk.len(b, vi)
+      hb.widest(j, b, Nat.add(vi, Nat.add(pk.hdr(vl), vl)), Nat.max(m, Nat.max(fl, vl)))
 
 # b with the value whose code starts at index vi set to v, in its place
 def hb.reset(+b: String, +vi: Nat, +v: String) -> String:
-  +end = hb.end(b, vi)
+  +end = pk.end(b, vi)
   +lv = String.length(v)
-  +n = Nat.add(Nat.sub(String.length(b), Nat.sub(end, vi)), Nat.add(hb.hdr(lv), lv))
+  +n = Nat.add(Nat.sub(String.length(b), Nat.sub(end, vi)), Nat.add(pk.hdr(lv), lv))
   +pre = String.take(b, vi)
-  hb.flat(pre ++ hb.code(lv, v ++ String.drop(b, end)), n)
+  pk.flat(pre ++ pk.code(lv, v ++ String.drop(b, end)), n)
 
 # b with f's value set to v: in its place when f is there (had: its
 # value's code at index vi), else in a pair after the last
@@ -1713,18 +1826,15 @@ def hb.set(had: Bool, +b: String, +vi: Nat, +f: String, +v: String) -> String:
     case False{}:
       +lf = String.length(f)
       +lv = String.length(v)
-      +n = Nat.add(String.length(b), Nat.add(Nat.add(hb.hdr(lf), lf), Nat.add(hb.hdr(lv), lv)))
-      hb.flat(b ++ hb.pair(f, v, ""), n)
+      +n = Nat.add(String.length(b), Nat.add(Nat.add(pk.hdr(lf), lf), Nat.add(pk.hdr(lv), lv)))
+      pk.flat(b ++ hb.pair(f, v, ""), n)
 
 # b without its pair at index i, whose value's code is at index vi (b as
 # it is when had is False: the pair is not there)
 def hb.cut(had: Bool, +b: String, +i: Nat, +vi: Nat) -> String:
   match had:
     case True{}:
-      +end = hb.end(b, vi)
-      +n = Nat.sub(String.length(b), Nat.sub(end, i))
-      +pre = String.take(b, i)
-      hb.flat(pre ++ String.drop(b, end), n)
+      pk.cut(b, i, pk.end(b, vi))
     case False{}:
       b
 
@@ -1760,7 +1870,7 @@ def hl.vi(q: HAt) -> Nat:
 def hb.size(+f: String, +v: String) -> Nat:
   +lf = String.length(f)
   +lv = String.length(v)
-  Nat.add(Nat.add(hb.hdr(lf), lf), Nat.add(hb.hdr(lv), lv))
+  Nat.add(Nat.add(pk.hdr(lf), lf), Nat.add(pk.hdr(lv), lv))
 
 # how many bytes the pairs ps take in a small hash's string, after n
 def hb.bytes(ps: List<&2, HPair>, +n: Nat) -> Nat:
@@ -1785,7 +1895,7 @@ def hl.close(k: Nat, cur: List<&2, HPair>, +len: Nat, rest: List<&2, HPiece>) ->
     case 0n:
       rest
     case 1n+j:
-      Con{HPc{1n+j, hb.flat(hl.enc.rev(cur, ""), len)}, rest}
+      Con{HPc{1n+j, pk.flat(hl.enc.rev(cur, ""), len)}, rest}
 
 # whether the first pair of ps goes in a piece of len bytes: it fills no
 # more than a buffer, or the piece is empty
@@ -2009,7 +2119,7 @@ def hash.of.at(fits: Bool, +n: Nat, ps: List<&2, HPair>) -> Hash:
   match fits:
     case True{}:
       +s = hb.enc(ps, "")
-      HSmall{n, hb.flat(s, String.length(s))}
+      HSmall{n, pk.flat(s, String.length(s))}
     case False{}:
       HLong{n, hl.of(ps)}
 
@@ -2123,120 +2233,477 @@ def hash.widest(+h: Hash) -> Nat:
 # Lists
 # -----
 # A list's elements, first to last, as Redis 7.0 keeps them in a
-# quicklist (OBJECT ENCODING answers quicklist for every list). BendKV
-# keeps them in two stacks (Deq): the front part in order, the back part
-# reversed, so a push or a pop at either end adds or takes the head of
-# one of them. When one part holds more than three times the other's
-# elements and one more, the elements are dealt again, half to each
-# (deq.fix): a push or a pop then costs O(1) amortized, and LINDEX and
-# LRANGE walk only from the end nearer to what they read. A key never
-# holds an empty list: a write that takes its last element deletes it.
+# quicklist (OBJECT ENCODING answers quicklist for every list): a chain
+# of listpacks of up to 8 KB, each its elements one after another.
+# BendKV keeps them in pieces (LPiece) of up to 2,048 bytes, a buffer of
+# the C runtime (FINDINGS.md, section 3zzzm), each its elements' codes
+# one after another, and the pieces in two stacks (Deq): those of the
+# front part in order, those of the back part the last first.
+#
+# A piece's string holds its elements in the list's order (fw) or the
+# last first. A push or a pop at an end works on the start of the string
+# of the piece at that end, when that start is at the end (lp.out). A
+# push puts the element's code before the string, which a write then
+# copies into one buffer (String.take): a write sees the list a key held
+# as shared, so a ++ there links buffers into a chain, which a read by
+# index walks from its start, and Redis too writes a listpack anew at
+# each insert. The pushes of one command go in together, the piece
+# copied once (lp.onto). A push past 2,048 bytes, or onto a piece whose
+# string starts at the other end, starts a piece. A pop drops the first
+# code, which moves the string's start in its buffer (String.drop); one
+# that meets a piece whose string starts at the other end first codes it
+# again the other way (lp.turn).
+#
+# When one stack holds more than three times the other's pieces and one
+# more, the pieces are dealt again, half to each, as they are (deq.fix):
+# a push copies one piece at most, a pop none, each O(1) amortized in the
+# pieces, and LINDEX, LSET and LRANGE go from the end nearer to what they
+# read, past whole pieces by their counts, then through the codes of one
+# piece. A key never holds an empty list: a write that takes its last
+# element deletes it.
 
 def deq.empty() -> Deq:
-  Deq{0n, Nil{}, 0n, Nil{}}
+  Deq{0n, 0n, Nil{}, 0n, 0n, Nil{}}
 
 def deq.len(+d: Deq) -> Nat:
   match d:
-    case Deq{+nf, f, +nb, b}:
+    case Deq{+nf, pf, f, +nb, pb, b}:
       Nat.add(nf, nb)
 
-# the elements, in order
-def deq.all(+d: Deq) -> List<&2, String>:
-  match d:
-    case Deq{nf, +f, nb, +b}:
-      List.append(&2, String, f, List.reverse(&2, String, b))
+# the bytes a piece of more than one element holds at most: a buffer of
+# the C runtime
+def lp.cap() -> Nat:
+  2048n
 
-# the first n elements of xs reversed before acc, and the others
-def deq.cut(n: Nat, xs: List<&2, String>, acc: List<&2, String>) -> List<&2, String> & List<&2, String>:
-  match n xs:
-    case 0n ys:
-      (acc, ys)
-    case 1n+m Con{x, rest}:
-      deq.cut(m, rest, x <> acc)
-    case 1n+m Nil{}:
+# how many bytes x's code takes
+def lp.size(+x: String) -> Nat:
+  +m = String.length(x)
+  Nat.add(pk.hdr(m), m)
+
+# x's code before rest
+def lp.code(+x: String, rest: String) -> String:
+  pk.code(String.length(x), x ++ rest)
+
+# the index past the code that starts at index i of s
+def lp.past(+s: String, +i: Nat) -> Nat:
+  +m = pk.len(s, i)
+  Nat.add(i, Nat.add(pk.hdr(m), m))
+
+# the index past j codes from index i of s on
+def lp.skip(j: Nat, +s: String, +i: Nat) -> Nat:
+  match j:
+    case 0n:
+      i
+    case 1n+t:
+      lp.skip(t, s, lp.past(s, i))
+
+# the element whose code starts at index i of s
+def lp.at(+s: String, +i: Nat) -> String:
+  +m = pk.len(s, i)
+  String.slice(s, Nat.add(i, pk.hdr(m)), m)
+
+# the k elements whose codes start at index i of s, the last first,
+# before acc
+def lp.rev(k: Nat, +s: String, +i: Nat, acc: List<&2, String>) -> List<&2, String>:
+  match k:
+    case 0n:
+      acc
+    case 1n+j:
+      +m = pk.len(s, i)
+      +at = Nat.add(i, pk.hdr(m))
+      lp.rev(j, s, Nat.add(at, m), String.slice(s, at, m) <> acc)
+
+# the k codes from index i of s on, each put before acc in turn: their
+# elements the other way
+def lp.turn.go(k: Nat, +s: String, +i: Nat, acc: String) -> String:
+  match k:
+    case 0n:
+      acc
+    case 1n+j:
+      +m = pk.len(s, i)
+      +at = Nat.add(i, pk.hdr(m))
+      lp.turn.go(j, s, Nat.add(at, m), pk.code(m, String.slice(s, at, m) ++ acc))
+
+def lp.close.of(one: Bool, +k: Nat, +n: Nat, fw: Bool, s: String) -> LPiece:
+  match one:
+    case True{}:
+      LPc{k, n, fw, pk.flat(s, n)}
+    case False{}:
+      LPc{k, n, fw, s}
+
+# the piece of k elements in n bytes of s, s copied into one buffer when
+# it fits in one (an element longer than that keeps its own chain)
+def lp.close(+k: Nat, +n: Nat, fw: Bool, s: String) -> LPiece:
+  lp.close.of(Nat.is_le(n, lp.cap()), k, n, fw, s)
+
+# the piece with its elements the other way in its string
+def lp.turn(p: LPiece) -> LPiece:
+  match p:
+    case LPc{+k, +n, fw, +s}:
+      lp.close(k, n, Bool.not(fw), lp.turn.go(k, s, 0n, ""))
+
+# whether the string of a piece (fw) of the stack rv starts at the end
+# that stack is read from: the front stack's (rv False) from the list's
+# first element on, the back stack's (rv True) from its last
+def lp.out(fw: Bool, rv: Bool) -> Bool:
+  Bool.xor(fw, rv)
+
+# the index in a piece's string of its element at index j of its stack's
+# order, of its k elements: from the string's start when it starts at
+# that end (out), else from its end
+def lp.idx(out: Bool, +k: Nat, +j: Nat) -> Nat:
+  match out:
+    case True{}:
+      j
+    case False{}:
+      Nat.sub(Nat.sub(k, 1n), j)
+
+def lp.k(+p: LPiece) -> Nat:
+  match p:
+    case LPc{+k, n, fw, s}:
+      k
+
+def lp.n(+p: LPiece) -> Nat:
+  match p:
+    case LPc{k, +n, fw, s}:
+      n
+
+# how many elements the pieces ps hold, after c
+def lp.count(+ps: List<&2, LPiece>, +c: Nat) -> Nat:
+  match ps:
+    case Nil{}:
+      c
+    case Con{+p, +rest}:
+      lp.count(rest, Nat.add(c, lp.k(p)))
+
+# the first h pieces of ps reversed before acc, and the others
+def lp.cut(h: Nat, ps: List<&2, LPiece>, acc: List<&2, LPiece>) -> List<&2, LPiece> & List<&2, LPiece>:
+  match h ps:
+    case 0n qs:
+      (acc, qs)
+    case 1n+j Con{p, rest}:
+      lp.cut(j, rest, p <> acc)
+    case 1n+j Nil{}:
       (acc, Nil{})
 
-def deq.deal.of(+h: Nat, +n: Nat, p: List<&2, String> & List<&2, String>) -> Deq:
-  (rf, rest) = p
-  Deq{h, List.reverse(&2, String, rf), Nat.sub(n, h), List.reverse(&2, String, rest)}
-
-# the n elements xs, in order, dealt half to each part
-def deq.deal(+n: Nat, xs: List<&2, String>) -> Deq:
-  +h = Nat.div(n, 2n)
-  deq.deal.of(h, n, deq.cut(h, xs, Nil{}))
-
-# whether one part holds more than three times the other's elements and
+# whether one stack holds more than three times the other's pieces and
 # one more
-def deq.tilted(+nf: Nat, +nb: Nat) -> Bool:
-  Bool.or(Nat.is_lt(Nat.add(Nat.mul(3n, nb), 1n), nf), Nat.is_lt(Nat.add(Nat.mul(3n, nf), 1n), nb))
+def deq.tilted(+pf: Nat, +pb: Nat) -> Bool:
+  Bool.or(Nat.is_lt(Nat.add(Nat.mul(3n, pb), 1n), pf), Nat.is_lt(Nat.add(Nat.mul(3n, pf), 1n), pb))
+
+def lp.outward.of(out: Bool, p: LPiece) -> LPiece:
+  match out:
+    case True{}:
+      p
+    case False{}:
+      lp.turn(p)
+
+# the piece p of the stack rv with its string starting at the end that
+# stack is read from
+def lp.outward(+rv: Bool, p: LPiece) -> LPiece:
+  match p:
+    case LPc{k, n, +fw, s}:
+      lp.outward.of(lp.out(fw, rv), LPc{k, n, fw, s})
+
+# the stack ps of the part rv with its first piece's string starting at
+# the stack's end: the piece that pushes, pops and the reads near that end
+# meet
+def lp.head(+rv: Bool, ps: List<&2, LPiece>) -> List<&2, LPiece>:
+  match ps:
+    case Con{p, rest}:
+      lp.outward(rv, p) <> rest
+    case Nil{}:
+      Nil{}
+
+# a list of n elements in p pieces: the first h (q's first, reversed) in
+# the front stack, the others in the back stack; the first piece of each
+# turned to start at its end, when it came from the other stack
+def deq.deal.of(+n: Nat, +p: Nat, +h: Nat, q: List<&2, LPiece> & List<&2, LPiece>) -> Deq:
+  (rf, +rest) = q
+  +m = lp.count(rest, 0n)
+  Deq{Nat.sub(n, m), h, lp.head(False{}, List.reverse(&2, LPiece, rf)), m, Nat.sub(p, h), lp.head(True{}, List.reverse(&2, LPiece, rest))}
+
+# the n elements of the p pieces ps, in order, dealt half to each stack,
+# the pieces as they are
+def deq.deal(+n: Nat, +p: Nat, ps: List<&2, LPiece>) -> Deq:
+  +h = Nat.div(p, 2n)
+  deq.deal.of(n, p, h, lp.cut(h, ps, Nil{}))
+
+def deq.redeal(d: Deq) -> Deq:
+  match d:
+    case Deq{+nf, +pf, f, +nb, +pb, b}:
+      deq.deal(Nat.add(nf, nb), Nat.add(pf, pb), List.append(&2, LPiece, f, List.reverse(&2, LPiece, b)))
 
 def deq.fix.if(tilted: Bool, d: Deq) -> Deq:
   match tilted:
     case True{}:
-      +x = d
-      deq.deal(deq.len(x), deq.all(x))
+      deq.redeal(d)
     case False{}:
       d
 
 def deq.fix(d: Deq) -> Deq:
   match d:
-    case Deq{+nf, f, +nb, b}:
-      deq.fix.if(deq.tilted(nf, nb), Deq{nf, f, nb, b})
+    case Deq{nf, +pf, f, nb, +pb, b}:
+      deq.fix.if(deq.tilted(pf, pb), Deq{nf, pf, f, nb, pb, b})
+
+# a piece being packed (k elements in n bytes of s), and the c pieces
+# packed before it, the last first
+type LPack is Data:
+  LPack{k: Nat, n: Nat, s: String, ps: List<&2, LPiece>, c: Nat}
+
+def lp.pack.put(fits: Bool, +fw: Bool, +x: String, +k: Nat, +n: Nat, s: String, ps: List<&2, LPiece>, +c: Nat) -> LPack:
+  match fits:
+    case True{}:
+      LPack{1n+k, Nat.add(n, lp.size(x)), lp.code(x, s), ps, c}
+    case False{}:
+      LPack{1n, lp.size(x), lp.code(x, ""), lp.close(k, n, fw, s) <> ps, 1n+c}
+
+# x's code put before the piece st packs, or in a new piece when it does
+# not fit
+def lp.pack.step(+fw: Bool, +x: String, st: LPack) -> LPack:
+  match st:
+    case LPack{+k, +n, s, ps, c}:
+      lp.pack.put(Bool.or(Nat.is_eq(k, 0n), Nat.is_le(Nat.add(n, lp.size(x)), lp.cap())), fw, x, k, n, s, ps, c)
+
+def lp.pack.last(k: Nat, +n: Nat, +fw: Bool, s: String, ps: List<&2, LPiece>, +c: Nat) -> Nat & List<&2, LPiece>:
+  match k:
+    case 0n:
+      (c, ps)
+    case 1n+j:
+      (1n+c, lp.close(1n+j, n, fw, s) <> ps)
+
+def lp.pack.end(+fw: Bool, st: LPack) -> Nat & List<&2, LPiece>:
+  match st:
+    case LPack{k, n, s, ps, c}:
+      lp.pack.last(k, n, fw, s, ps, c)
+
+# the elements xs packed into pieces (fw) after the piece st packs: each
+# code put before those packed before it, so that a piece's string holds
+# them the other way, and each piece closed in one buffer; how many
+# pieces, and they, the last packed first
+def lp.pack(xs: List<&2, String>, +fw: Bool, st: LPack) -> Nat & List<&2, LPiece>:
+  match xs:
+    case Nil{}:
+      lp.pack.end(fw, st)
+    case Con{x, rest}:
+      lp.pack(rest, fw, lp.pack.step(fw, x, st))
+
+# a stack's start, for pushes onto it: its first piece taken in (a 1)
+# when its string starts at the stack's end, else a piece begun; and the
+# rest of the stack
+type LOnto is Data:
+  LOnto{a: Nat, st: LPack, rest: List<&2, LPiece>}
+
+def lp.start.of(out: Bool, +k: Nat, +n: Nat, fw: Bool, s: String, rest: List<&2, LPiece>) -> LOnto:
+  match out:
+    case True{}:
+      LOnto{1n, LPack{k, n, s, Nil{}, 0n}, rest}
+    case False{}:
+      LOnto{0n, LPack{0n, 0n, "", Nil{}, 0n}, LPc{k, n, fw, s} <> rest}
+
+def lp.start(+rv: Bool, ps: List<&2, LPiece>) -> LOnto:
+  match ps:
+    case Con{LPc{k, n, +fw, s}, rest}:
+      lp.start.of(lp.out(fw, rv), k, n, fw, s, rest)
+    case Nil{}:
+      LOnto{0n, LPack{0n, 0n, "", Nil{}, 0n}, Nil{}}
+
+# a stack after pushes: the pieces it took in (a) and made (c), and its
+# pieces
+type LGrow is Data:
+  LGrow{a: Nat, c: Nat, ps: List<&2, LPiece>}
+
+def lp.grow.of(+a: Nat, q: Nat & List<&2, LPiece>, rest: List<&2, LPiece>) -> LGrow:
+  (c, ps) = q
+  LGrow{a, c, List.append(&2, LPiece, ps, rest)}
+
+# the elements xs pushed in turn onto the stack rv, each before those
+# before it: packed onto the stack's start (lp.start), so that a write
+# copies the piece it writes into one buffer once, as Redis writes a
+# listpack anew, whatever the pushes
+def lp.onto(+rv: Bool, xs: List<&2, String>, o: LOnto) -> LGrow:
+  match o:
+    case LOnto{+a, st, rest}:
+      lp.grow.of(a, lp.pack(xs, Bool.not(rv), st), rest)
+
+# how many elements xs holds, after c, read in place
+def lp.len(+xs: List<&2, String>, +c: Nat) -> Nat:
+  match xs:
+    case Nil{}:
+      c
+    case Con{+x, +rest}:
+      lp.len(rest, 1n+c)
+
+def deq.grow.f(+nf: Nat, +pf: Nat, g: LGrow, nb: Nat, pb: Nat, b: List<&2, LPiece>) -> Deq:
+  match g:
+    case LGrow{+a, +c, ps}:
+      Deq{nf, Nat.sub(Nat.add(pf, c), a), ps, nb, pb, b}
+
+def deq.grow.b(nf: Nat, pf: Nat, f: List<&2, LPiece>, +nb: Nat, +pb: Nat, g: LGrow) -> Deq:
+  match g:
+    case LGrow{+a, +c, ps}:
+      Deq{nf, pf, f, nb, Nat.sub(Nat.add(pb, c), a), ps}
+
+# the elements xs pushed in turn, each first (left) or last, together
+def deq.pushes.n(+left: Bool, +xs: List<&2, String>, d: Deq) -> Deq:
+  match left d:
+    case True{} Deq{+nf, pf, f, nb, pb, b}:
+      deq.fix(deq.grow.f(Nat.add(nf, lp.len(xs, 0n)), pf, lp.onto(False{}, xs, lp.start(False{}, f)), nb, pb, b))
+    case False{} Deq{nf, pf, f, +nb, pb, b}:
+      deq.fix(deq.grow.b(nf, pf, f, Nat.add(nb, lp.len(xs, 0n)), pb, lp.onto(True{}, xs, lp.start(True{}, b))))
+
+# x put first: its code before the front stack's first piece's string
+# (of k elements in n bytes of s, m with x), the piece copied into one
+# buffer, when that string starts at the list's first element and x fits;
+# else in a piece of its own
+def deq.pushl.of(room: Bool, +x: String, +m: Nat, +nf: Nat, +pf: Nat, +k: Nat, +n: Nat, fw: Bool, s: String, f: List<&2, LPiece>, nb: Nat, pb: Nat, b: List<&2, LPiece>) -> Deq:
+  match room:
+    case True{}:
+      Deq{1n+nf, pf, LPc{1n+k, m, fw, pk.flat(lp.code(x, s), m)} <> f, nb, pb, b}
+    case False{}:
+      deq.fix(Deq{1n+nf, 1n+pf, lp.close(1n, lp.size(x), True{}, lp.code(x, "")) <> (LPc{k, n, fw, s} <> f), nb, pb, b})
+
+def deq.pushl(+x: String, +nf: Nat, +pf: Nat, f: List<&2, LPiece>, nb: Nat, pb: Nat, b: List<&2, LPiece>) -> Deq:
+  match f:
+    case Con{LPc{+k, +n, +fw, s}, rest}:
+      +m = Nat.add(n, lp.size(x))
+      deq.pushl.of(Bool.and(fw, Nat.is_le(m, lp.cap())), x, m, nf, pf, k, n, fw, s, rest, nb, pb, b)
+    case Nil{}:
+      deq.fix(Deq{1n+nf, 1n+pf, [lp.close(1n, lp.size(x), True{}, lp.code(x, ""))], nb, pb, b})
+
+# x put last, as deq.pushl puts it first
+def deq.pushr.of(room: Bool, +x: String, +m: Nat, nf: Nat, pf: Nat, f: List<&2, LPiece>, +nb: Nat, +pb: Nat, +k: Nat, +n: Nat, fw: Bool, s: String, b: List<&2, LPiece>) -> Deq:
+  match room:
+    case True{}:
+      Deq{nf, pf, f, 1n+nb, pb, LPc{1n+k, m, fw, pk.flat(lp.code(x, s), m)} <> b}
+    case False{}:
+      deq.fix(Deq{nf, pf, f, 1n+nb, 1n+pb, lp.close(1n, lp.size(x), False{}, lp.code(x, "")) <> (LPc{k, n, fw, s} <> b)})
+
+def deq.pushr(+x: String, nf: Nat, pf: Nat, f: List<&2, LPiece>, +nb: Nat, +pb: Nat, b: List<&2, LPiece>) -> Deq:
+  match b:
+    case Con{LPc{+k, +n, +fw, s}, rest}:
+      +m = Nat.add(n, lp.size(x))
+      deq.pushr.of(Bool.and(Bool.not(fw), Nat.is_le(m, lp.cap())), x, m, nf, pf, f, nb, pb, k, n, fw, s, rest)
+    case Nil{}:
+      deq.fix(Deq{nf, pf, f, 1n+nb, 1n+pb, [lp.close(1n, lp.size(x), False{}, lp.code(x, ""))]})
 
 # x put first (left) or last
 def deq.push(+left: Bool, x: String, d: Deq) -> Deq:
   match left d:
-    case True{} Deq{+nf, f, nb, b}:
-      deq.fix(Deq{1n+nf, x <> f, nb, b})
-    case False{} Deq{nf, f, +nb, b}:
-      deq.fix(Deq{nf, f, 1n+nb, x <> b})
+    case True{} Deq{nf, pf, f, nb, pb, b}:
+      deq.pushl(x, nf, pf, f, nb, pb, b)
+    case False{} Deq{nf, pf, f, nb, pb, b}:
+      deq.pushr(x, nf, pf, f, nb, pb, b)
 
-# the elements xs pushed in turn, each first (left) or last
+# the elements xs pushed in turn, each first (left) or last: one alone as
+# deq.push puts it, more together (deq.pushes.n)
 def deq.pushes(+left: Bool, xs: List<&2, String>, d: Deq) -> Deq:
   match xs:
-    case Nil{}:
-      d
-    case Con{x, rest}:
-      deq.pushes(left, rest, deq.push(left, x, d))
+    case Con{x, Nil{}}:
+      deq.push(left, x, d)
+    case ys:
+      deq.pushes.n(left, ys, d)
 
 # a list's first (or last) element and the others; none for an empty one
 type Pop is Data:
   Pop{x: String, d: Deq}
   PopNone{}
 
-# the first element of n elements xs, in order, and the rest
-def deq.pop.all(+n: Nat, xs: List<&2, String>) -> Pop:
-  match xs:
-    case Con{x, rest}:
-      Pop{x, deq.deal(Nat.sub(n, 1n), rest)}
+# the element x taken from the front stack's first piece, whose string s
+# (of 1+j elements, n bytes) loses its first code, of b0 bytes; the piece
+# goes with its last element
+def deq.popl.k(j: Nat, x: String, +b0: Nat, +n: Nat, fw: Bool, s: String, +nf: Nat, +pf: Nat, f: List<&2, LPiece>, nb: Nat, pb: Nat, b: List<&2, LPiece>) -> Pop:
+  match j:
+    case 0n:
+      Pop{x, deq.fix(Deq{Nat.sub(nf, 1n), Nat.sub(pf, 1n), f, nb, pb, b})}
+    case 1n+i:
+      Pop{x, Deq{Nat.sub(nf, 1n), pf, LPc{1n+i, Nat.sub(n, b0), fw, String.drop(s, b0)} <> f, nb, pb, b}}
+
+# the first element, from the front stack's first piece, whose string
+# starts at it
+def deq.popl.out(k: Nat, +n: Nat, fw: Bool, +s: String, nf: Nat, pf: Nat, f: List<&2, LPiece>, nb: Nat, pb: Nat, b: List<&2, LPiece>) -> Pop:
+  +m = pk.len(s, 0n)
+  +h = pk.hdr(m)
+  deq.popl.k(Nat.sub(k, 1n), String.slice(s, h, m), Nat.add(h, m), n, fw, s, nf, pf, f, nb, pb, b)
+
+def deq.popl.turned(p: LPiece, nf: Nat, pf: Nat, f: List<&2, LPiece>, nb: Nat, pb: Nat, b: List<&2, LPiece>) -> Pop:
+  match p:
+    case LPc{k, n, fw, s}:
+      deq.popl.out(k, n, fw, s, nf, pf, f, nb, pb, b)
+
+def deq.popl.p(out: Bool, k: Nat, n: Nat, fw: Bool, s: String, nf: Nat, pf: Nat, f: List<&2, LPiece>, nb: Nat, pb: Nat, b: List<&2, LPiece>) -> Pop:
+  match out:
+    case True{}:
+      deq.popl.out(k, n, fw, s, nf, pf, f, nb, pb, b)
+    case False{}:
+      deq.popl.turned(lp.turn(LPc{k, n, fw, s}), nf, pf, f, nb, pb, b)
+
+def deq.popl.go(f: List<&2, LPiece>, nf: Nat, pf: Nat, nb: Nat, pb: Nat, b: List<&2, LPiece>) -> Pop:
+  match f:
+    case Con{LPc{k, n, +fw, s}, rest}:
+      deq.popl.p(fw, k, n, fw, s, nf, pf, rest, nb, pb, b)
     case Nil{}:
       PopNone{}
 
-# the first element and the rest: the front part's first, else the
-# back part's last (the back part then holds one element, while the
-# parts are dealt as deq.fix keeps them)
+# the first element and the rest: from the front stack, else from the
+# back stack's pieces, moved to the front (one at most, while the stacks
+# are dealt as deq.fix keeps them)
+def deq.popl.f(f: List<&2, LPiece>, nf: Nat, pf: Nat, nb: Nat, pb: Nat, b: List<&2, LPiece>) -> Pop:
+  match f:
+    case Con{LPc{k, n, +fw, s}, rest}:
+      deq.popl.p(fw, k, n, fw, s, nf, pf, rest, nb, pb, b)
+    case Nil{}:
+      deq.popl.go(List.reverse(&2, LPiece, b), nb, pb, 0n, 0n, Nil{})
+
 def deq.popl(d: Deq) -> Pop:
   match d:
-    case Deq{+nf, Con{x, f}, nb, b}:
-      Pop{x, deq.fix(Deq{Nat.sub(nf, 1n), f, nb, b})}
-    case Deq{nf, Nil{}, +nb, b}:
-      deq.pop.all(nb, List.reverse(&2, String, b))
+    case Deq{nf, pf, f, nb, pb, b}:
+      deq.popl.f(f, nf, pf, nb, pb, b)
 
-# the first element of n elements xs, in reverse, and the rest in order
-def deq.pop.rev(+n: Nat, xs: List<&2, String>) -> Pop:
-  match xs:
-    case Con{x, rest}:
-      Pop{x, deq.deal(Nat.sub(n, 1n), List.reverse(&2, String, rest))}
+# the element x taken from the back stack's first piece (as deq.popl.k)
+def deq.popr.k(j: Nat, x: String, +b0: Nat, +n: Nat, fw: Bool, s: String, nf: Nat, pf: Nat, f: List<&2, LPiece>, +nb: Nat, +pb: Nat, b: List<&2, LPiece>) -> Pop:
+  match j:
+    case 0n:
+      Pop{x, deq.fix(Deq{nf, pf, f, Nat.sub(nb, 1n), Nat.sub(pb, 1n), b})}
+    case 1n+i:
+      Pop{x, Deq{nf, pf, f, Nat.sub(nb, 1n), pb, LPc{1n+i, Nat.sub(n, b0), fw, String.drop(s, b0)} <> b}}
+
+def deq.popr.out(k: Nat, +n: Nat, fw: Bool, +s: String, nf: Nat, pf: Nat, f: List<&2, LPiece>, nb: Nat, pb: Nat, b: List<&2, LPiece>) -> Pop:
+  +m = pk.len(s, 0n)
+  +h = pk.hdr(m)
+  deq.popr.k(Nat.sub(k, 1n), String.slice(s, h, m), Nat.add(h, m), n, fw, s, nf, pf, f, nb, pb, b)
+
+def deq.popr.turned(p: LPiece, nf: Nat, pf: Nat, f: List<&2, LPiece>, nb: Nat, pb: Nat, b: List<&2, LPiece>) -> Pop:
+  match p:
+    case LPc{k, n, fw, s}:
+      deq.popr.out(k, n, fw, s, nf, pf, f, nb, pb, b)
+
+def deq.popr.p(out: Bool, k: Nat, n: Nat, fw: Bool, s: String, nf: Nat, pf: Nat, f: List<&2, LPiece>, nb: Nat, pb: Nat, b: List<&2, LPiece>) -> Pop:
+  match out:
+    case True{}:
+      deq.popr.out(k, n, fw, s, nf, pf, f, nb, pb, b)
+    case False{}:
+      deq.popr.turned(lp.turn(LPc{k, n, fw, s}), nf, pf, f, nb, pb, b)
+
+def deq.popr.go(b: List<&2, LPiece>, nf: Nat, pf: Nat, f: List<&2, LPiece>, nb: Nat, pb: Nat) -> Pop:
+  match b:
+    case Con{LPc{k, n, +fw, s}, rest}:
+      deq.popr.p(Bool.not(fw), k, n, fw, s, nf, pf, f, nb, pb, rest)
     case Nil{}:
       PopNone{}
+
+def deq.popr.b(b: List<&2, LPiece>, nf: Nat, pf: Nat, f: List<&2, LPiece>, nb: Nat, pb: Nat) -> Pop:
+  match b:
+    case Con{LPc{k, n, +fw, s}, rest}:
+      deq.popr.p(Bool.not(fw), k, n, fw, s, nf, pf, f, nb, pb, rest)
+    case Nil{}:
+      deq.popr.go(List.reverse(&2, LPiece, f), 0n, 0n, Nil{}, nf, pf)
 
 # the last element and the rest
 def deq.popr(d: Deq) -> Pop:
   match d:
-    case Deq{nf, f, +nb, Con{x, b}}:
-      Pop{x, deq.fix(Deq{nf, f, Nat.sub(nb, 1n), b})}
-    case Deq{+nf, f, nb, Nil{}}:
-      deq.pop.rev(nf, List.reverse(&2, String, f))
+    case Deq{nf, pf, f, nb, pb, b}:
+      deq.popr.b(b, nf, pf, f, nb, pb)
 
 def deq.pop(+left: Bool, d: Deq) -> Pop:
   match left:
@@ -2270,103 +2737,381 @@ def deq.pops(c: Nat, +left: Bool, st: Pops) -> Pops:
     case 1n+k:
       deq.pops(k, left, deq.pop.step(left, st))
 
-# the i-th element of xs, read in place
-def deq.nth(+xs: List<&2, String>, i: Nat) -> Maybe<&2, String>:
-  match xs i:
-    case Con{+x, +rest} 0n:
-      Some{x}
-    case Con{+x, +rest} 1n+j:
-      deq.nth(rest, j)
-    case Nil{} _:
+def lp.elems.of(fw: Bool, +k: Nat, +s: String, acc: List<&2, String>) -> List<&2, String>:
+  match fw:
+    case True{}:
+      List.reverse.go(&2, String, lp.rev(k, s, 0n, Nil{}), acc)
+    case False{}:
+      lp.rev(k, s, 0n, acc)
+
+# the elements of piece p in the list's order, before acc
+def lp.elems(+p: LPiece, acc: List<&2, String>) -> List<&2, String>:
+  match p:
+    case LPc{+k, n, +fw, +s}:
+      lp.elems.of(fw, k, s, acc)
+
+# the elements of the front stack's pieces ps, before acc
+def lp.all.f(+ps: List<&2, LPiece>, acc: List<&2, String>) -> List<&2, String>:
+  match ps:
+    case Nil{}:
+      acc
+    case Con{+p, +rest}:
+      lp.elems(p, lp.all.f(rest, acc))
+
+# the elements of the back stack's pieces ps (the last piece first), in
+# the list's order, before acc
+def lp.all.b(+ps: List<&2, LPiece>, acc: List<&2, String>) -> List<&2, String>:
+  match ps:
+    case Nil{}:
+      acc
+    case Con{+p, +rest}:
+      lp.all.b(rest, lp.elems(p, acc))
+
+# the elements, in order
+def deq.all(+d: Deq) -> List<&2, String>:
+  match d:
+    case Deq{nf, pf, +f, nb, pb, +b}:
+      lp.all.f(f, lp.all.b(b, Nil{}))
+
+# the first n elements of xs reversed before acc, and the others
+def deq.cut(n: Nat, xs: List<&2, String>, acc: List<&2, String>) -> List<&2, String> & List<&2, String>:
+  match n xs:
+    case 0n ys:
+      (acc, ys)
+    case 1n+m Con{x, rest}:
+      deq.cut(m, rest, x <> acc)
+    case 1n+m Nil{}:
+      (acc, Nil{})
+
+# where an index of a stack's order falls among its pieces: t pieces
+# wholly before it, at o in the next (done: found)
+type LAt is Data:
+  LAt{t: Nat, o: Nat, done: Bool}
+
+def lp.find.at(inside: Bool, +k: Nat, +t: Nat, +o: Nat) -> LAt:
+  match inside:
+    case True{}:
+      LAt{t, o, True{}}
+    case False{}:
+      LAt{1n+t, Nat.sub(o, k), False{}}
+
+# where the index of at falls among the pieces ps, past those at passed
+def lp.find(+ps: List<&2, LPiece>, at: LAt) -> LAt:
+  match ps at:
+    case _ LAt{t, o, True{}}:
+      LAt{t, o, True{}}
+    case Nil{} LAt{t, o, False{}}:
+      LAt{t, o, False{}}
+    case Con{+p, +rest} LAt{+t, +o, False{}}:
+      +k = lp.k(p)
+      lp.find(rest, lp.find.at(Nat.is_lt(o, k), k, t, o))
+
+# the element at index o of the stack rv's order in piece p, below its k
+def lp.get.in(+p: LPiece, +rv: Bool, +o: Nat) -> String:
+  match p:
+    case LPc{+k, n, +fw, +s}:
+      lp.at(s, lp.skip(lp.idx(lp.out(fw, rv), k, o), s, 0n))
+
+def lp.get.if(has: Bool, +p: LPiece, +rv: Bool, +o: Nat) -> Maybe<&2, String>:
+  match has:
+    case True{}:
+      Some{lp.get.in(p, rv, o)}
+    case False{}:
       None{}
 
-def deq.get.of(front: Bool, +i: Nat, +nf: Nat, +f: List<&2, String>, +nb: Nat, +b: List<&2, String>) -> Maybe<&2, String>:
+# the element at index o of the stack rv's order in the pieces ps, unless
+# m holds it already: read in place
+def lp.get(+ps: List<&2, LPiece>, +rv: Bool, +o: Nat, m: Maybe<&2, String>) -> Maybe<&2, String>:
+  match ps m:
+    case _ Some{x}:
+      Some{x}
+    case Nil{} None{}:
+      None{}
+    case Con{+p, +rest} None{}:
+      +k = lp.k(p)
+      lp.get(rest, rv, Nat.sub(o, k), lp.get.if(Nat.is_lt(o, k), p, rv, o))
+
+def deq.get.of(front: Bool, +i: Nat, +nf: Nat, +f: List<&2, LPiece>, +nb: Nat, +b: List<&2, LPiece>) -> Maybe<&2, String>:
   match front:
     case True{}:
-      deq.nth(f, i)
+      lp.get(f, False{}, i, None{})
     case False{}:
-      deq.nth(b, Nat.sub(Nat.sub(nb, 1n), Nat.sub(i, nf)))
+      lp.get(b, True{}, Nat.sub(Nat.sub(nb, 1n), Nat.sub(i, nf)), None{})
 
 # the element at position i, below the list's length
 def deq.get(+i: Nat, +d: Deq) -> Maybe<&2, String>:
   match d:
-    case Deq{+nf, +f, +nb, +b}:
+    case Deq{+nf, pf, +f, +nb, pb, +b}:
       deq.get.of(Nat.is_lt(i, nf), i, nf, f, nb, b)
 
-def deq.set.of(front: Bool, +i: Nat, v: String, +nf: Nat, f: List<&2, String>, +nb: Nat, b: List<&2, String>) -> Deq:
-  match front:
+# c elements of a piece's string t of k elements, from index s of its
+# stack's order on, reversed before acc: from the string's start when it
+# starts at that end (out), else from its end
+def lp.slice.of(out: Bool, +k: Nat, +t: String, +s: Nat, +c: Nat, acc: List<&2, String>) -> List<&2, String>:
+  match out:
     case True{}:
-      Deq{nf, List.set(&2, String, f, i, v), nb, b}
+      lp.rev(c, t, lp.skip(s, t, 0n), acc)
     case False{}:
-      Deq{nf, f, nb, List.set(&2, String, b, Nat.sub(Nat.sub(nb, 1n), Nat.sub(i, nf)), v)}
+      List.reverse.go(&2, String, lp.rev(c, t, lp.skip(Nat.sub(k, Nat.add(s, c)), t, 0n), Nil{}), acc)
 
-# the list with the element at position i, below its length, set to v
-def deq.set(+i: Nat, v: String, d: Deq) -> Deq:
-  match d:
-    case Deq{+nf, f, +nb, b}:
-      deq.set.of(Nat.is_lt(i, nf), i, v, nf, f, nb, b)
+def lp.slice.p(+p: LPiece, +rv: Bool, +s: Nat, +c: Nat, acc: List<&2, String>) -> List<&2, String>:
+  match p:
+    case LPc{+k, n, +fw, +t}:
+      lp.slice.of(lp.out(fw, rv), k, t, s, Nat.min(c, Nat.sub(k, s)), acc)
 
-# k elements of xs from the s-th on, read in place, reversed before acc
-def deq.slice(+xs: List<&2, String>, s: Nat, k: Nat, acc: List<&2, String>) -> List<&2, String>:
-  match xs s k:
-    case Con{+x, +rest} 1n+t k:
-      deq.slice(rest, t, k, acc)
-    case Con{+x, +rest} 0n 1n+j:
-      deq.slice(rest, 0n, j, x <> acc)
-    case _ _ _:
-      acc
-
-def deq.range.f(ok: Bool, +s: Nat, +e: Nat, +f: List<&2, String>, acc: List<&2, String>) -> List<&2, String>:
-  match ok:
+def lp.slice.in(has: Bool, +p: LPiece, +rv: Bool, +s: Nat, +c: Nat, acc: List<&2, String>) -> List<&2, String>:
+  match has:
     case True{}:
-      List.reverse.go(&2, String, deq.slice(f, s, 1n+Nat.sub(e, s), Nil{}), acc)
+      lp.slice.p(p, rv, s, c, acc)
     case False{}:
       acc
 
-def deq.range.b(ok: Bool, +lo: Nat, +e: Nat, +n: Nat, +b: List<&2, String>) -> List<&2, String>:
+# c elements of the pieces ps from index s of the stack rv's order on,
+# read in place, reversed before acc
+def lp.slice(+ps: List<&2, LPiece>, +rv: Bool, +s: Nat, c: Nat, acc: List<&2, String>) -> List<&2, String>:
+  match ps c:
+    case _ 0n:
+      acc
+    case Nil{} 1n+j:
+      acc
+    case Con{+p, +rest} 1n+j:
+      +k = lp.k(p)
+      +c1 = Nat.add(1n, j)
+      lp.slice(rest, rv, Nat.sub(s, k), Nat.sub(c1, Nat.min(c1, Nat.sub(k, s))), lp.slice.in(Nat.is_lt(s, k), p, rv, s, c1, acc))
+
+def deq.range.f(ok: Bool, +s: Nat, +e: Nat, +f: List<&2, LPiece>, acc: List<&2, String>) -> List<&2, String>:
   match ok:
     case True{}:
-      deq.slice(b, Nat.sub(Nat.sub(n, 1n), e), 1n+Nat.sub(e, lo), Nil{})
+      List.reverse.go(&2, String, lp.slice(f, False{}, s, 1n+Nat.sub(e, s), Nil{}), acc)
+    case False{}:
+      acc
+
+def deq.range.b(ok: Bool, +lo: Nat, +e: Nat, +n: Nat, +b: List<&2, LPiece>) -> List<&2, String>:
+  match ok:
+    case True{}:
+      lp.slice(b, True{}, Nat.sub(Nat.sub(n, 1n), e), 1n+Nat.sub(e, lo), Nil{})
     case False{}:
       Nil{}
 
 # the elements at positions s to e, in order, s <= e below the length
 def deq.range(+s: Nat, +e: Nat, +d: Deq) -> List<&2, String>:
   match d:
-    case Deq{+nf, +f, +nb, +b}:
+    case Deq{+nf, pf, +f, +nb, pb, +b}:
       deq.range.f(Nat.is_lt(s, nf), s, Nat.min(e, Nat.sub(nf, 1n)), f, deq.range.b(Nat.is_le(nf, e), Nat.max(s, nf), e, Nat.add(nf, nb), b))
 
-# the list without its first k elements, k at most its length
-def deq.dropl.of(front: Bool, +k: Nat, +nf: Nat, f: List<&2, String>, +nb: Nat, b: List<&2, String>) -> Deq:
+# the k elements of a piece's string t, from the end farther from where
+# its stack is read on: t's last first when t starts at that end (out)
+def lp.inner(out: Bool, +k: Nat, +t: String) -> List<&2, String>:
+  match out:
+    case True{}:
+      lp.rev(k, t, 0n, Nil{})
+    case False{}:
+      List.reverse(&2, String, lp.rev(k, t, 0n, Nil{}))
+
+# a piece of k elements in m bytes of t, after an LSET: dealt into
+# pieces of a buffer each when it grew past one (and holds more than one
+# element); how many pieces, and they in the stack rv's order
+def lp.put.of(long: Bool, +rv: Bool, +k: Nat, +m: Nat, +fw: Bool, t: String) -> Nat & List<&2, LPiece>:
+  match long:
+    case False{}:
+      (1n, [lp.close(k, m, fw, t)])
+    case True{}:
+      lp.pack(lp.inner(lp.out(fw, rv), k, t), Bool.not(rv), LPack{0n, 0n, "", Nil{}, 0n})
+
+# piece p of the stack rv with its element at index o of that stack's
+# order set to v: the bytes before the old code, v's code and the bytes
+# after it
+def lp.put(+rv: Bool, +o: Nat, +v: String, p: LPiece) -> Nat & List<&2, LPiece>:
+  match p:
+    case LPc{+k, +n, +fw, +s}:
+      +i = lp.skip(lp.idx(lp.out(fw, rv), k, o), s, 0n)
+      +j = lp.past(s, i)
+      +m = Nat.add(Nat.sub(n, Nat.sub(j, i)), lp.size(v))
+      lp.put.of(Bool.and(Nat.is_lt(lp.cap(), m), Nat.is_lt(1n, k)), rv, k, m, fw, String.slice(s, 0n, i) ++ lp.code(v, String.drop(s, j)))
+
+def lp.set.put(+pc: Nat, pre: List<&2, LPiece>, q: Nat & List<&2, LPiece>, rest: List<&2, LPiece>) -> Nat & List<&2, LPiece>:
+  (c, qs) = q
+  (Nat.sub(Nat.add(pc, c), 1n), List.reverse.go(&2, LPiece, pre, List.append(&2, LPiece, qs, rest)))
+
+def lp.set.in(+rv: Bool, +o: Nat, v: String, +pc: Nat, pre: List<&2, LPiece>, post: List<&2, LPiece>) -> Nat & List<&2, LPiece>:
+  match post:
+    case Con{p, rest}:
+      lp.set.put(pc, pre, lp.put(rv, o, v, p), rest)
+    case Nil{}:
+      (pc, List.reverse(&2, LPiece, pre))
+
+def lp.set.of(+rv: Bool, +o: Nat, v: String, +pc: Nat, q: List<&2, LPiece> & List<&2, LPiece>) -> Nat & List<&2, LPiece>:
+  (pre, post) = q
+  lp.set.in(rv, o, v, pc, pre, post)
+
+def lp.set.at(+rv: Bool, v: String, +pc: Nat, at: LAt, ps: List<&2, LPiece>) -> Nat & List<&2, LPiece>:
+  match at:
+    case LAt{t, +o, done}:
+      lp.set.of(rv, o, v, pc, lp.cut(t, ps, Nil{}))
+
+# the stack ps of pc pieces (rv) with its element at index j of its order
+# set to v: how many pieces, and the stack
+def lp.set(+rv: Bool, +j: Nat, v: String, +pc: Nat, +ps: List<&2, LPiece>) -> Nat & List<&2, LPiece>:
+  lp.set.at(rv, v, pc, lp.find(ps, LAt{0n, j, False{}}), ps)
+
+# the list with its front stack (of pf pieces) given by q
+def deq.with.f(+nf: Nat, q: Nat & List<&2, LPiece>, nb: Nat, pb: Nat, b: List<&2, LPiece>) -> Deq:
+  (pf, f) = q
+  Deq{nf, pf, f, nb, pb, b}
+
+# the list with its back stack (of pb pieces) given by q
+def deq.with.b(nf: Nat, pf: Nat, f: List<&2, LPiece>, +nb: Nat, q: Nat & List<&2, LPiece>) -> Deq:
+  (pb, b) = q
+  Deq{nf, pf, f, nb, pb, b}
+
+def deq.set.of(front: Bool, +i: Nat, v: String, +nf: Nat, +pf: Nat, f: List<&2, LPiece>, +nb: Nat, +pb: Nat, b: List<&2, LPiece>) -> Deq:
   match front:
     case True{}:
-      deq.fix(Deq{Nat.sub(nf, k), List.drop(&2, String, f, k), nb, b})
+      deq.fix(deq.with.f(nf, lp.set(False{}, i, v, pf, f), nb, pb, b))
+    case False{}:
+      deq.fix(deq.with.b(nf, pf, f, nb, lp.set(True{}, Nat.sub(Nat.sub(nb, 1n), Nat.sub(i, nf)), v, pb, b)))
+
+# the list with the element at position i, below its length, set to v
+def deq.set(+i: Nat, v: String, d: Deq) -> Deq:
+  match d:
+    case Deq{+nf, +pf, f, +nb, +pb, b}:
+      deq.set.of(Nat.is_lt(i, nf), i, v, nf, pf, f, nb, pb, b)
+
+# piece p of its stack without its first o elements of the stack's order
+# (0 < o < its k): its string's first codes dropped when it starts at
+# that end (out), the buffer kept, else its first codes copied
+def lp.cut.out.of(out: Bool, +o: Nat, +k: Nat, +n: Nat, fw: Bool, +s: String) -> LPiece:
+  match out:
+    case True{}:
+      +i = lp.skip(o, s, 0n)
+      LPc{Nat.sub(k, o), Nat.sub(n, i), fw, String.drop(s, i)}
+    case False{}:
+      +i = lp.skip(Nat.sub(k, o), s, 0n)
+      LPc{Nat.sub(k, o), i, fw, String.take(s, i)}
+
+def lp.cut.out(+rv: Bool, +o: Nat, p: LPiece) -> LPiece:
+  match p:
+    case LPc{+k, +n, +fw, +s}:
+      lp.cut.out.of(lp.out(fw, rv), o, k, n, fw, s)
+
+# piece p of its stack with only its first o elements of the stack's
+# order (0 < o < its k)
+def lp.keep.out.of(out: Bool, +o: Nat, +k: Nat, +n: Nat, fw: Bool, +s: String) -> LPiece:
+  match out:
+    case True{}:
+      +i = lp.skip(o, s, 0n)
+      LPc{o, i, fw, String.take(s, i)}
+    case False{}:
+      +i = lp.skip(Nat.sub(k, o), s, 0n)
+      LPc{o, Nat.sub(n, i), fw, String.drop(s, i)}
+
+def lp.keep.out(+rv: Bool, +o: Nat, p: LPiece) -> LPiece:
+  match p:
+    case LPc{+k, +n, +fw, +s}:
+      lp.keep.out.of(lp.out(fw, rv), o, k, n, fw, s)
+
+def lp.cut.zero(zero: Bool, +rv: Bool, +o: Nat, p: LPiece) -> LPiece:
+  match zero:
+    case True{}:
+      p
+    case False{}:
+      lp.cut.out(rv, o, p)
+
+def lp.drop.head(+rv: Bool, +o: Nat, +pc: Nat, ps: List<&2, LPiece>) -> Nat & List<&2, LPiece>:
+  match ps:
+    case Con{p, rest}:
+      (pc, lp.cut.zero(Nat.is_eq(o, 0n), rv, o, p) <> rest)
+    case Nil{}:
+      (pc, Nil{})
+
+def lp.drop.at(+rv: Bool, +pc: Nat, at: LAt, ps: List<&2, LPiece>) -> Nat & List<&2, LPiece>:
+  match at:
+    case LAt{+t, +o, done}:
+      lp.drop.head(rv, o, Nat.sub(pc, t), List.drop(&2, LPiece, ps, t))
+
+# the stack ps of pc pieces (rv) without its first j elements of its
+# order: how many pieces, and the stack
+def lp.drop(+rv: Bool, +j: Nat, +pc: Nat, +ps: List<&2, LPiece>) -> Nat & List<&2, LPiece>:
+  lp.drop.at(rv, pc, lp.find(ps, LAt{0n, j, False{}}), ps)
+
+def lp.keep.last(zero: Bool, +rv: Bool, +t: Nat, +o: Nat, pre: List<&2, LPiece>, p: LPiece) -> Nat & List<&2, LPiece>:
+  match zero:
+    case True{}:
+      (t, List.reverse(&2, LPiece, pre))
+    case False{}:
+      (1n+t, List.reverse.go(&2, LPiece, pre, [lp.keep.out(rv, o, p)]))
+
+def lp.keep.tail(+rv: Bool, +t: Nat, +o: Nat, pre: List<&2, LPiece>, post: List<&2, LPiece>) -> Nat & List<&2, LPiece>:
+  match post:
+    case Con{p, rest}:
+      lp.keep.last(Nat.is_eq(o, 0n), rv, t, o, pre, p)
+    case Nil{}:
+      (t, List.reverse(&2, LPiece, pre))
+
+def lp.keep.of(+rv: Bool, +t: Nat, +o: Nat, q: List<&2, LPiece> & List<&2, LPiece>) -> Nat & List<&2, LPiece>:
+  (pre, post) = q
+  lp.keep.tail(rv, t, o, pre, post)
+
+def lp.keep.at(+rv: Bool, at: LAt, ps: List<&2, LPiece>) -> Nat & List<&2, LPiece>:
+  match at:
+    case LAt{+t, +o, done}:
+      lp.keep.of(rv, t, o, lp.cut(t, ps, Nil{}))
+
+# the stack ps (rv) with only its first m elements of its order: how many
+# pieces, and the stack
+def lp.keep(+rv: Bool, +m: Nat, +ps: List<&2, LPiece>) -> Nat & List<&2, LPiece>:
+  lp.keep.at(rv, lp.find(ps, LAt{0n, m, False{}}), ps)
+
+def deq.dropl.of(front: Bool, +k: Nat, +nf: Nat, +pf: Nat, f: List<&2, LPiece>, +nb: Nat, +pb: Nat, b: List<&2, LPiece>) -> Deq:
+  match front:
+    case True{}:
+      deq.fix(deq.with.f(Nat.sub(nf, k), lp.drop(False{}, k, pf, f), nb, pb, b))
     case False{}:
       +m = Nat.sub(nb, Nat.sub(k, nf))
-      deq.deal(m, List.reverse(&2, String, List.take(&2, String, b, m)))
+      deq.fix(deq.with.b(0n, 0n, Nil{}, m, lp.keep(True{}, m, b)))
 
+# the list without its first k elements, k at most its length
 def deq.dropl(+k: Nat, d: Deq) -> Deq:
   match d:
-    case Deq{+nf, f, +nb, b}:
-      deq.dropl.of(Nat.is_le(k, nf), k, nf, f, nb, b)
+    case Deq{+nf, +pf, f, +nb, +pb, b}:
+      deq.dropl.of(Nat.is_le(k, nf), k, nf, pf, f, nb, pb, b)
 
-# the list without its last k elements, k at most its length
-def deq.dropr.of(back: Bool, +k: Nat, +nf: Nat, f: List<&2, String>, +nb: Nat, b: List<&2, String>) -> Deq:
+def deq.dropr.of(back: Bool, +k: Nat, +nf: Nat, +pf: Nat, f: List<&2, LPiece>, +nb: Nat, +pb: Nat, b: List<&2, LPiece>) -> Deq:
   match back:
     case True{}:
-      deq.fix(Deq{nf, f, Nat.sub(nb, k), List.drop(&2, String, b, k)})
+      deq.fix(deq.with.b(nf, pf, f, Nat.sub(nb, k), lp.drop(True{}, k, pb, b)))
     case False{}:
       +m = Nat.sub(nf, Nat.sub(k, nb))
-      deq.deal(m, List.take(&2, String, f, m))
+      deq.fix(deq.with.f(m, lp.keep(False{}, m, f), 0n, 0n, Nil{}))
 
+# the list without its last k elements, k at most its length
 def deq.dropr(+k: Nat, d: Deq) -> Deq:
   match d:
-    case Deq{+nf, f, +nb, b}:
-      deq.dropr.of(Nat.is_le(k, nb), k, nf, f, nb, b)
+    case Deq{+nf, +pf, f, +nb, +pb, b}:
+      deq.dropr.of(Nat.is_le(k, nb), k, nf, pf, f, nb, pb, b)
 
-# the list of n elements xs, in order
+# the list of n elements xs, in order: packed the last first, the pieces
+# then dealt to both stacks
+def deq.of.at(+n: Nat, q: Nat & List<&2, LPiece>) -> Deq:
+  (c, b) = q
+  deq.fix(Deq{0n, 0n, Nil{}, n, c, b})
+
 def deq.of(+n: Nat, xs: List<&2, String>) -> Deq:
-  deq.deal(n, xs)
+  deq.of.at(n, lp.pack(xs, False{}, LPack{0n, 0n, "", Nil{}, 0n}))
+
+# MEMORY USAGE's estimate of a list's bytes past its key's entry: its
+# pieces' bytes, and 72 for each piece's nodes
+def lp.bytes(+ps: List<&2, LPiece>, +acc: Nat) -> Nat:
+  match ps:
+    case Nil{}:
+      acc
+    case Con{+p, +rest}:
+      lp.bytes(rest, Nat.add(acc, Nat.add(72n, lp.n(p))))
+
+def deq.bytes(+d: Deq) -> Nat:
+  match d:
+    case Deq{nf, pf, +f, nb, pb, +b}:
+      lp.bytes(f, lp.bytes(b, 48n))
 
 # Sets
 # ----
@@ -2500,7 +3245,7 @@ def iv.key(+w: Nat, +v: IVal) -> IKey:
 
 # the 2 and 4 bytes of b from index at on, the low first
 def is.u16(+b: String, +at: Nat) -> Nat:
-  Nat.add(hb.byte(b, at), Nat.mul(256n, hb.byte(b, Nat.add(at, 1n))))
+  Nat.add(pk.byte(b, at), Nat.mul(256n, pk.byte(b, Nat.add(at, 1n))))
 
 def is.u32(+b: String, +at: Nat) -> Nat:
   Nat.add(is.u16(b, at), Nat.mul(65536n, is.u16(b, Nat.add(at, 2n))))
@@ -2557,7 +3302,7 @@ def is.bytes(k: Nat, +u: Nat, rest: String) -> String:
     case 0n:
       rest
     case 1n+j:
-      hb.byte.put(Nat.mod(u, 256n), is.bytes(j, Nat.div(u, 256n), rest))
+      pk.byte.put(Nat.mod(u, 256n), is.bytes(j, Nat.div(u, 256n), rest))
 
 def is.enc.w(w: Nat, +neg: Bool, +hi: Nat, +lo: Nat, rest: String) -> String:
   match w:
@@ -2642,7 +3387,7 @@ def is.fill(k: Nat, +x: Nat, rest: String) -> String:
     case 0n:
       rest
     case 1n+j:
-      hb.byte.put(x, is.fill(j, x, rest))
+      pk.byte.put(x, is.fill(j, x, rest))
 
 # the k members of b from index i on (w bytes each) in x bytes each, x
 # at least w, each sign-extended, before rest
@@ -2652,7 +3397,7 @@ def is.widen(k: Nat, +b: String, +w: Nat, +x: Nat, +i: Nat, rest: String) -> Str
       rest
     case 1n+j:
       +at = Nat.mul(i, w)
-      +top = Nat.is_le(128n, hb.byte(b, Nat.add(at, Nat.sub(w, 1n))))
+      +top = Nat.is_le(128n, pk.byte(b, Nat.add(at, Nat.sub(w, 1n))))
       String.slice(b, at, w) ++ is.fill(Nat.sub(x, w), Bool.pick(Nat, top, 255n, 0n), is.widen(j, b, w, x, Nat.add(i, 1n), rest))
 
 # the width of the members of the intset b of n members
@@ -2693,16 +3438,16 @@ def ints.put.of(fits: Bool, +v: IVal, +b: String, +w: Nat, +n: Nat) -> String:
   match fits:
     case True{}:
       +at = Nat.mul(is.find(b, w, n, iv.key(w, v)), w)
-      hb.flat(String.take(b, at) ++ is.enc(w, v, String.drop(b, at)), Nat.mul(Nat.add(n, 1n), w))
+      pk.flat(String.take(b, at) ++ is.enc(w, v, String.drop(b, at)), Nat.mul(Nat.add(n, 1n), w))
     case False{}:
       +x = iv.w(v)
-      hb.flat(ints.put.wide(iv.neg(v), v, x, is.widen(n, b, w, x, 0n, "")), Nat.mul(Nat.add(n, 1n), x))
+      pk.flat(ints.put.wide(iv.neg(v), v, x, is.widen(n, b, w, x, 0n, "")), Nat.mul(Nat.add(n, 1n), x))
 
 def ints.put.go(n: Nat, +v: IVal, +b: String) -> String:
   match n:
     case 0n:
       +x = iv.w(v)
-      hb.flat(is.enc(x, v, ""), x)
+      pk.flat(is.enc(x, v, ""), x)
     case 1n++p:
       +w = ints.w(b, 1n+p)
       ints.put.of(Nat.is_le(iv.w(v), w), v, b, w, 1n+p)
@@ -2716,7 +3461,7 @@ def ints.put(+m: String, +b: String, +n: Nat) -> String:
 def ints.del(+m: String, +b: String, +n: Nat) -> String:
   +w = ints.w(b, n)
   +at = Nat.mul(is.find(b, w, n, iv.key(w, iv.of(m))), w)
-  hb.flat(String.take(b, at) ++ String.drop(b, Nat.add(at, w)), Nat.mul(Nat.sub(n, 1n), w))
+  pk.flat(String.take(b, at) ++ String.drop(b, Nat.add(at, w)), Nat.mul(Nat.sub(n, 1n), w))
 
 def ints.nth.of(ok: Bool, +b: String, +w: Nat, +i: Nat) -> Maybe<&2, String>:
   match ok:
@@ -2761,8 +3506,8 @@ def ints.of(xs: List<&2, String>, +b: String, +n: Nat) -> String:
 # its length, one byte (a member of a small set has at most 64 bytes),
 # then its bytes. A read walks the lengths from the start to the member
 # it wants, comparing a member of the right length by its last byte, then
-# whole (hb.hit.of, as a small hash compares a field); a write makes the
-# string anew in one buffer (hb.flat), as a small hash's write does. The
+# whole (pk.hit.of, as a small hash compares a field); a write makes the
+# string anew in one buffer (pk.flat), as a small hash's write does. The
 # string holds at most a buffer, 2,048 bytes: past one, String.code_at
 # walks a chain from its start (Hashes, above), and 128 members of 64
 # bytes take 8,320. Past that, the members are in pieces (MLong), each
@@ -2778,7 +3523,7 @@ def ms.flen(k: Nat, +b: String, +i: Nat) -> Nat:
     case 0n:
       0n
     case 1n+j:
-      hb.byte(b, i)
+      pk.byte(b, i)
 
 # whether the member at index i of b, one of k from there on, n bytes
 # long, is m (lm bytes long, its last byte lb): the lengths first, then
@@ -2788,7 +3533,7 @@ def ms.hit(k: Nat, +m: String, +lm: Nat, +lb: U32, +b: String, +i: Nat, +n: Nat)
     case 0n:
       False{}
     case 1n+j:
-      hb.hit.of(Nat.is_eq(n, lm), m, lb, b, Nat.add(i, 1n), n)
+      pk.hit.of(Nat.is_eq(n, lm), m, lb, b, Nat.add(i, 1n), n)
 
 # the index of m's code among the k members from index i of b on, the
 # first of them n bytes long, or the index past them when m is not one;
@@ -2822,7 +3567,7 @@ def ms.all.rev(k: Nat, +b: String, +i: Nat, acc: List<&2, String>) -> List<&2, S
     case 0n:
       acc
     case 1n+j:
-      +n = hb.byte(b, i)
+      +n = pk.byte(b, i)
       ms.all.rev(j, b, Nat.add(i, Nat.add(1n, n)), String.slice(b, Nat.add(i, 1n), n) <> acc)
 
 # the k members of the small set b, in its order: a walk that keeps no
@@ -2837,12 +3582,12 @@ def ms.skip(r: Nat, +b: String, +i: Nat) -> Nat:
     case 0n:
       i
     case 1n+q:
-      ms.skip(q, b, Nat.add(i, Nat.add(1n, hb.byte(b, i))))
+      ms.skip(q, b, Nat.add(i, Nat.add(1n, pk.byte(b, i))))
 
 def ms.nth.of(ok: Bool, +b: String, +i: Nat) -> Maybe<&2, String>:
   match ok:
     case True{}:
-      Some{String.slice(b, Nat.add(i, 1n), hb.byte(b, i))}
+      Some{String.slice(b, Nat.add(i, 1n), pk.byte(b, i))}
     case False{}:
       None{}
 
@@ -2854,14 +3599,14 @@ def ms.nth(+k: Nat, +b: String, +r: Nat) -> Maybe<&2, String>:
 # b, of l bytes, with the member m (lm bytes) after its last, in one
 # buffer
 def ms.push(+b: String, +l: Nat, +m: String, +lm: Nat) -> String:
-  hb.flat(b ++ hb.byte.put(lm, m), Nat.add(l, Nat.add(1n, lm)))
+  pk.flat(b ++ pk.byte.put(lm, m), Nat.add(l, Nat.add(1n, lm)))
 
 # b without the member whose code is at index i, in one buffer
 def ms.cut(+b: String, +i: Nat) -> String:
-  +end = Nat.add(i, Nat.add(1n, hb.byte(b, i)))
+  +end = Nat.add(i, Nat.add(1n, pk.byte(b, i)))
   +n = Nat.sub(String.length(b), Nat.sub(end, i))
   +pre = String.take(b, i)
-  hb.flat(pre ++ String.drop(b, end), n)
+  pk.flat(pre ++ String.drop(b, end), n)
 
 # the k members from index i of b on added to the trie t
 def ms.trie(k: Nat, +b: String, +i: Nat, t: Trie<Unit>) -> Trie<Unit>:
@@ -2869,7 +3614,7 @@ def ms.trie(k: Nat, +b: String, +i: Nat, t: Trie<Unit>) -> Trie<Unit>:
     case 0n:
       t
     case 1n+j:
-      +n = hb.byte(b, i)
+      +n = pk.byte(b, i)
       ms.trie(j, b, Nat.add(i, Nat.add(1n, n)), set(Unit, t, String.slice(b, Nat.add(i, 1n), n), Unit{}))
 
 # whether a small set of n members, one of them m, stays small
@@ -2878,7 +3623,7 @@ def ms.fits(+n: Nat, +m: String) -> Bool:
 
 # the member m (lm bytes) alone, as a small set's string
 def ms.one(+m: String, +lm: Nat) -> String:
-  hb.flat(hb.byte.put(lm, m), Nat.add(1n, lm))
+  pk.flat(pk.byte.put(lm, m), Nat.add(1n, lm))
 
 # the members xs (the last first) as a small set's string, before acc
 def ms.enc.rev(xs: List<&2, String>, acc: String) -> String:
@@ -2886,7 +3631,7 @@ def ms.enc.rev(xs: List<&2, String>, acc: String) -> String:
     case Nil{}:
       acc
     case Con{+x, more}:
-      ms.enc.rev(more, hb.byte.put(String.length(x), x ++ acc))
+      ms.enc.rev(more, pk.byte.put(String.length(x), x ++ acc))
 
 # Pieces (MLong, above): each the k members of its string s.
 
@@ -3025,7 +3770,7 @@ def ml.close(k: Nat, cur: List<&2, String>, +len: Nat, rest: List<&2, MPiece>) -
     case 0n:
       rest
     case 1n+j:
-      Con{MPc{1n+j, hb.flat(ms.enc.rev(cur, ""), len)}, rest}
+      Con{MPc{1n+j, pk.flat(ms.enc.rev(cur, ""), len)}, rest}
 
 # whether the first member of xs goes in a piece of len bytes: it fills
 # no more than a buffer, or the piece is empty
@@ -3216,7 +3961,7 @@ def ss.keys(k: Nat, +s: String, +i: Nat, +p: Nat, +from: Nat, +st: SSel, +want: 
     case 0n:
       st
     case 1n+j:
-      +n = hb.byte(s, i)
+      +n = pk.byte(s, i)
       +at = ss.at(String.hash_at(s, Nat.add(i, 1n), n))
       +x = Nat.add(Nat.mul(at, 16777216n), Nat.add(Nat.mul(p, 2048n), i))
       ss.keys(j, s, Nat.add(i, Nat.add(1n, n)), p, from, ss.take(Bool.or(Nat.is_lt(at, from), Nat.is_le(ss.hi(st), x)), st, x, want), want)
@@ -3242,12 +3987,12 @@ def ss.mems(xs: List<&2, Nat>, +s: String, acc: List<&2, String>) -> List<&2, St
       acc
     case Con{+x, rest}:
       +i = Nat.mod(x, 2048n)
-      ss.mems(rest, s, String.slice(s, Nat.add(i, 1n), hb.byte(s, i)) <> acc)
+      ss.mems(rest, s, String.slice(s, Nat.add(i, 1n), pk.byte(s, i)) <> acc)
 
 def ss.mem.in(+q: MPiece, +i: Nat) -> String:
   match q:
     case MPc{+k, +s}:
-      String.slice(s, Nat.add(i, 1n), hb.byte(s, i))
+      String.slice(s, Nat.add(i, 1n), pk.byte(s, i))
 
 # the member whose code is at index i of the piece of rank p of ps
 def ss.mem(+ps: List<&2, MPiece>, p: Nat, +i: Nat) -> String:
@@ -3469,23 +4214,45 @@ def mems.all(+s: Mems) -> List<&2, String>:
 # -----------
 # A sorted set's elements (Zset, above), each a member and its score (a
 # double, never a NaN), in order of score (-0 the same as +0), then of
-# member (bytes, as memcmp orders them, a prefix first: String.order), in
-# a weight-balanced tree: each node keeps how many elements it holds, so
-# that the element at a rank, and the rank of an element, are found in
-# O(log n), and no side of a node holds more than 3 times the other (as
-# Adams's trees, and Haskell's Data.Map, keep them). Redis 7.0 keeps a
-# sorted set as a listpack while it holds at most
+# member (bytes, as memcmp orders them, a prefix first: String.order).
+# Redis 7.0 keeps a sorted set as a listpack while it holds at most
 # zset-max-listpack-entries elements (128), each member of at most
 # zset-max-listpack-value bytes (64), and as a skiplist with a hashtable
 # of its members from the first write that passes either, for good.
-# BendKV keeps a small one as its tree alone (a member is looked for along
-# it, as along a listpack) and a large one with a trie of its members'
-# scores as well, turning one into the other at those defaults, whatever
-# the parameters say, as it does a hash (Hashes, above); OBJECT ENCODING
-# reads the parameters as they are (session.bend). A listpack keeps an
-# integral score as an integer, so -0 reads back from it as 0: a small
-# sorted set keeps 0 for a score of -0, as Redis does. A key never holds
-# an empty sorted set: a write that takes its last element deletes it.
+# BendKV keeps a small one as the string of its elements in order, and a
+# large one as a tree with a trie of its members' scores, turning one
+# into the other at those defaults, whatever the parameters say, as it
+# does a hash (Hashes, above); OBJECT ENCODING reads the parameters as
+# they are (session.bend). A listpack keeps an integral score as an
+# integer, so -0 reads back from it as 0: a small sorted set keeps 0 for
+# a score of -0, as Redis does. A key never holds an empty sorted set: a
+# write that takes its last element deletes it.
+#
+# A small sorted set's string holds its elements one after another in
+# order (Packed strings, above): an element is its member's code, then
+# its score's 8 bytes, the double's bits as they are (the high word
+# first, each word its high byte first). A read walks the elements from
+# the first: to a member as to a hash's field, comparing lengths, then
+# last bytes, then bytes; to an element's place by its score, then, for
+# the same score, by its member, copied out only then. A write builds the
+# string from the pieces of the old one around the element it adds,
+# takes or moves, and copies it into one buffer, as a listpack is written
+# anew.
+#
+# The string is one buffer of the C runtime, of at most 2,048 bytes: a
+# longer String is a chain of such buffers, and a read by index past the
+# first (String.code_at, String.slice, String.length) walks the chain
+# from its start, so each walk of the elements would cost their number
+# times the chain's length. A small sorted set whose string would pass
+# 2,048 bytes is kept as the tree of its elements instead (ZWide), and
+# stays so, read as the tree was read before (a member found along it,
+# as along a listpack), until it turns large.
+#
+# The tree (a large sorted set's, and ZWide's) is weight-balanced: each
+# node keeps how many elements it holds, so that the element at a rank,
+# and the rank of an element, are found in O(log n), and no side of a
+# node holds more than 3 times the other (as Adams's trees, and
+# Haskell's Data.Map, keep them).
 
 # an element of a sorted set: its member and its score
 type ZEl is Data:
@@ -3788,13 +4555,19 @@ def zlb.ex(+b: ZLB) -> Bool:
     case _:
       True{}
 
-def zlb.ge(+m: String, +b: ZLB) -> Bool:
-  +c = zlb.cmp(m, b)
+# whether a member that compares with a bound of members as c is at
+# least the bound (at most it)
+def zlb.ge.of(+c: Cmp, +b: ZLB) -> Bool:
   Bool.pick(Bool, zlb.ex(b), Cmp.is_gt(c), Bool.not(Cmp.is_lt(c)))
 
-def zlb.le(+m: String, +b: ZLB) -> Bool:
-  +c = zlb.cmp(m, b)
+def zlb.le.of(+c: Cmp, +b: ZLB) -> Bool:
   Bool.pick(Bool, zlb.ex(b), Cmp.is_lt(c), Bool.not(Cmp.is_gt(c)))
+
+def zlb.ge(+m: String, +b: ZLB) -> Bool:
+  zlb.ge.of(zlb.cmp(m, b), b)
+
+def zlb.le(+m: String, +b: ZLB) -> Bool:
+  zlb.le.of(zlb.cmp(m, b), b)
 
 def zp.ok(+p: ZP, +m: String, +d: F.F64) -> Bool:
   match p:
@@ -3906,7 +4679,8 @@ def zt.drain(t: ZTree, acc: List<&2, ZEl>) -> List<&2, ZEl>:
       zt.drain(l, ZEl{m, d} <> zt.drain(r, acc))
 
 # m's score, when t holds m (got: the score found so far): a walk along
-# all its elements in order, as along a listpack
+# all its elements in order, as along a listpack (a small sorted set's
+# tree, ZWide)
 def zt.find.node(got: Maybe<&2, F.F64>, +m: String, +k: String, +e: F.F64) -> Maybe<&2, F.F64>:
   match got:
     case Some{x}:
@@ -3926,6 +4700,14 @@ def zt.find.go(+t: ZTree, got: Maybe<&2, F.F64>, +m: String) -> Maybe<&2, F.F64>
 def zt.find(+t: ZTree, +m: String) -> Maybe<&2, F.F64>:
   zt.find.go(t, None{}, m)
 
+# the length of the longest member of t, at least m
+def zt.widest(+t: ZTree, +m: Nat) -> Nat:
+  match t:
+    case ZTip{}:
+      m
+    case ZBin{n, +k, e, +l, +r}:
+      zt.widest(r, zt.widest(l, Nat.max(m, String.length(k))))
+
 # the elements of t added to the trie s, each member with its score
 def zt.trie(+t: ZTree, s: Trie<F.F64>) -> Trie<F.F64>:
   match t:
@@ -3934,6 +4716,392 @@ def zt.trie(+t: ZTree, s: Trie<F.F64>) -> Trie<F.F64>:
     case ZBin{n, +k, +e, +l, +r}:
       zt.trie(r, set(F.F64, zt.trie(l, s), k, e))
 
+# The tree of n elements that come in order, made at once: as balanced as
+# a tree of them can be, each node made once, where adding the elements
+# one at a time copies a path and drops the old one for each (a small
+# sorted set turned large, or read as a tree, and RESTORE of a large
+# one). A walk with a list of jobs: build a tree of n elements (its left
+# side first); take the next element as the root of a node of n whose
+# left side is the tree just made (a its size), then build its right
+# side; join that node.
+type ZJob is Data:
+  ZJBuild{n: Nat}
+  ZJRoot{n: Nat, a: Nat}
+  ZJJoin{n: Nat, e: ZEl, l: ZTree}
+
+def zt.join(+n: Nat, l: ZTree, e: ZEl, r: ZTree) -> ZTree:
+  match e:
+    case ZEl{m, d}:
+      ZBin{n, m, d, l, r}
+
+# the jobs js run on the elements es, t the tree last made (f bounds the
+# steps: four for each element and one)
+def zt.mach(f: Nat, js: List<&2, ZJob>, es: List<&2, ZEl>, t: ZTree) -> ZTree:
+  match f js:
+    case 1n+g Con{ZJBuild{n}, rest}:
+      match n:
+        case 0n:
+          zt.mach(g, rest, es, t)
+        case 1n+(+k):
+          +a = Nat.div(k, 2n)
+          zt.mach(g, ZJBuild{a} <> (ZJRoot{1n+k, a} <> rest), es, t)
+    case 1n+g Con{ZJRoot{+n, +a}, rest}:
+      match es:
+        case Con{e, more}:
+          zt.mach(g, ZJBuild{Nat.sub(Nat.sub(n, 1n), a)} <> (ZJJoin{n, e, t} <> rest), more, ZTip{})
+        case Nil{}:
+          t
+    case 1n+g Con{ZJJoin{+n, e, l}, rest}:
+      zt.mach(g, rest, es, zt.join(n, l, e, t))
+    case _ _:
+      t
+
+def zt.build(+n: Nat, es: List<&2, ZEl>) -> ZTree:
+  zt.mach(Nat.add(Nat.mul(4n, n), 4n), [ZJBuild{n}], es, ZTip{})
+
+# A small sorted set's string (zb): its elements in order, each its
+# member's code and its score's 8 bytes (Sorted sets, above).
+
+# the score whose 8 bytes start at index j of b: its high word, then its
+# low word, each the high byte first
+def zb.score(+b: String, +j: Nat) -> F.F64:
+  F.F64{pk.long(4n, b, j, 0n), pk.long(4n, b, Nat.add(j, 4n), 0n)}
+
+# the 8 bytes of the score d, before rest
+def zb.score.put(+d: F.F64, rest: String) -> String:
+  match d:
+    case F.F64{+hi, +lo}:
+      pk.long.put(4n, hi, pk.long.put(4n, lo, rest))
+
+# the element of the member m and the score d, before rest
+def zb.el(+m: String, +d: F.F64, rest: String) -> String:
+  pk.code(String.length(m), m ++ zb.score.put(d, rest))
+
+# the elements es as a small sorted set's string, before rest
+def zb.enc(es: List<&2, ZEl>, rest: String) -> String:
+  match es:
+    case Nil{}:
+      rest
+    case Con{ZEl{m, +d}, more}:
+      zb.el(m, d, zb.enc(more, rest))
+
+# the index past the element at index i of b: past its member, then its
+# score
+def zb.next(+b: String, +i: Nat) -> Nat:
+  Nat.add(pk.end(b, i), 8n)
+
+# How a score d compares with one of the string: by their high words
+# when those decide, so that the low word is read only when they do not.
+# They decide when they differ, unless both hold no more than a sign (0,
+# -0 and numbers below 2^-1042 do): the one with no sign is the greater,
+# else the one with the greater high word, or, of two below 0, the less.
+
+# how d, of high word dh, compares with a score of high word eh, EQ when
+# they do not decide (open); dneg and eneg: whether they have a sign
+def zb.hcmp.of(open: Bool, dneg: Bool, eneg: Bool, +dh: Nat, +eh: Nat) -> Cmp:
+  match open dneg eneg:
+    case True{} _ _:
+      EQ{}
+    case False{} True{} False{}:
+      LT{}
+    case False{} False{} True{}:
+      GT{}
+    case False{} False{} False{}:
+      Nat.cmp(dh, eh)
+    case False{} True{} True{}:
+      Nat.cmp(eh, dh)
+
+def zb.hcmp(+dh: Nat, +eh: Nat) -> Cmp:
+  +tiny = Bool.and(Nat.is_eq(Nat.mod(dh, 2147483648n), 0n), Nat.is_eq(Nat.mod(eh, 2147483648n), 0n))
+  zb.hcmp.of(Bool.or(Nat.is_eq(dh, eh), tiny), Nat.is_le(2147483648n, dh), Nat.is_le(2147483648n, eh), dh, eh)
+
+def zb.dcmp.of(c: Cmp, +d: F.F64, +b: String, +j: Nat, +eh: Nat) -> Cmp:
+  match c:
+    case EQ{}:
+      F.f64.cmp(d, F.F64{eh, pk.long(4n, b, Nat.add(j, 4n), 0n)})
+    case LT{}:
+      LT{}
+    case GT{}:
+      GT{}
+
+def zb.hi(+d: F.F64) -> Nat:
+  match d:
+    case F.F64{+hi, lo}:
+      hi
+
+# how d compares with the score whose 8 bytes start at index j of b
+def zb.dcmp(+d: F.F64, +b: String, +j: Nat) -> Cmp:
+  +eh = pk.long(4n, b, j, 0n)
+  zb.dcmp.of(zb.hcmp(zb.hi(d), eh), d, b, j, eh)
+
+# how (d, m) compares with an element whose score compares with d as c,
+# its member the n bytes from index mi of b: by score, then by member
+def zb.cmp.of(c: Cmp, +m: String, +b: String, +mi: Nat, +n: Nat) -> Cmp:
+  match c:
+    case EQ{}:
+      String.order(m, String.slice(b, mi, n))
+    case LT{}:
+      LT{}
+    case GT{}:
+      GT{}
+
+# how (d, m) compares with the element at index i of b, the first of k
+# elements from there on, whose member is n bytes long (GT for none)
+def zb.cmp(k: Nat, +d: F.F64, +m: String, +b: String, +i: Nat, +n: Nat) -> Cmp:
+  match k:
+    case 0n:
+      GT{}
+    case 1n+j:
+      +mi = Nat.add(i, pk.hdr(n))
+      zb.cmp.of(zb.dcmp(d, b, Nat.add(mi, n)), m, b, mi, n)
+
+# the index of the first of the k elements from index i of b on that
+# comes after (d, m), past them all when none does; c is how (d, m)
+# compares with the element at i, whose member is n bytes long
+def zb.pos.go(+d: F.F64, +m: String, +b: String, k: Nat, c: Cmp, +i: Nat, +n: Nat) -> Nat:
+  match k c:
+    case 0n _:
+      i
+    case 1n+j LT{}:
+      i
+    case 1n++j _:
+      +x = Nat.add(Nat.add(i, Nat.add(pk.hdr(n), n)), 8n)
+      +xn = pk.len.if(j, b, x)
+      zb.pos.go(d, m, b, j, zb.cmp(j, d, m, b, x, xn), x, xn)
+
+def zb.pos.of(last: Bool, +d: F.F64, +m: String, +b: String, +k: Nat) -> Nat:
+  match last:
+    case True{}:
+      String.length(b)
+    case False{}:
+      +n = pk.len.if(k, b, 0n)
+      zb.pos.go(d, m, b, k, zb.cmp(k, d, m, b, 0n, n), 0n, n)
+
+# where (d, m) goes among the k elements of b: the index of the first
+# element after it (m's own, when it is there, has another score). Past
+# them all at once when d is above the last score, b's last 8 bytes:
+# elements that come in order of score each go there, as those of an
+# append-only file or of a STORE do.
+def zb.pos(+d: F.F64, +m: String, +b: String, +k: Nat) -> Nat:
+  zb.pos.of(Bool.and(Nat.is_lt(0n, k), Cmp.is_gt(zb.dcmp(d, b, Nat.sub(String.length(b), 8n)))), d, m, b, k)
+
+# Where an element is in b (zb.find): the index it starts at, the index
+# its score starts at, and how many elements there are from it on; when
+# there is none, the index past the elements twice, and 0.
+type ZAt is Data:
+  ZAt{i: Nat, s: Nat, k: Nat}
+
+# m's element among the k elements from index i of b on, the first of
+# them with a member of n bytes (m: lm bytes long, its last byte lb); hit
+# is pk.hit(k, m, lm, lb, b, i, n), computed before b is passed on
+def zb.find.go(+m: String, +lm: Nat, +lb: U32, +b: String, k: Nat, hit: Bool, +i: Nat, +n: Nat) -> ZAt:
+  match k hit:
+    case 0n _:
+      ZAt{i, i, 0n}
+    case 1n+j True{}:
+      ZAt{i, Nat.add(i, Nat.add(pk.hdr(n), n)), 1n+j}
+    case 1n++j False{}:
+      +x = Nat.add(Nat.add(i, Nat.add(pk.hdr(n), n)), 8n)
+      +xn = pk.len.if(j, b, x)
+      zb.find.go(m, lm, lb, b, j, pk.hit(j, m, lm, lb, b, x, xn), x, xn)
+
+# m's element in the string b of a small sorted set of k elements, found
+# as a hash's field is (Hashes, above)
+def zb.find(+m: String, +b: String, +k: Nat) -> ZAt:
+  +lm = String.length(m)
+  +lb = String.code_at(m, Nat.sub(lm, 1n))
+  +n = pk.len.if(k, b, 0n)
+  zb.find.go(m, lm, lb, b, k, pk.hit(k, m, lm, lb, b, 0n, n), 0n, n)
+
+def zb.get.of(k: Nat, +b: String, +s: Nat) -> Maybe<&2, F.F64>:
+  match k:
+    case 0n:
+      None{}
+    case 1n+j:
+      Some{zb.score(b, s)}
+
+# the score of the element zb.find found
+def zb.get(+b: String, at: ZAt) -> Maybe<&2, F.F64>:
+  match at:
+    case ZAt{i, +s, k}:
+      zb.get.of(k, b, s)
+
+def zb.rank.of(k: Nat, +n: Nat) -> Maybe<&2, Nat>:
+  match k:
+    case 0n:
+      None{}
+    case 1n+j:
+      Some{Nat.sub(n, 1n+j)}
+
+# the rank of the element zb.find found, one of n
+def zb.rank(+n: Nat, at: ZAt) -> Maybe<&2, Nat>:
+  match at:
+    case ZAt{i, s, k}:
+      zb.rank.of(k, n)
+
+def zb.del.of(k: Nat, +b: String, +i: Nat, +s: Nat) -> String:
+  match k:
+    case 0n:
+      b
+    case 1n+j:
+      pk.cut(b, i, Nat.add(s, 8n))
+
+# b without the element zb.find found (b when it found none)
+def zb.del(+b: String, at: ZAt) -> String:
+  match at:
+    case ZAt{+i, +s, k}:
+      zb.del.of(k, b, i, s)
+
+# b with the element (m, d) at index p
+def zb.ins(+b: String, +p: Nat, +m: String, +d: F.F64) -> String:
+  +lm = String.length(m)
+  +n = Nat.add(String.length(b), Nat.add(Nat.add(pk.hdr(lm), lm), 8n))
+  +pre = String.take(b, p)
+  pk.flat(pre ++ zb.el(m, d, String.drop(b, p)), n)
+
+# b with its element from index i to index e, m's, taken out and (m, d)
+# put at index p, where it goes: before it (p at most i), or after it (p
+# at least e). The element keeps its length, and b its own.
+def zb.move.of(before: Bool, +b: String, +i: Nat, +e: Nat, +p: Nat, +m: String, +d: F.F64) -> String:
+  match before:
+    case True{}:
+      +pre = String.take(b, p)
+      pk.flat(pre ++ zb.el(m, d, String.slice(b, p, Nat.sub(i, p)) ++ String.drop(b, e)), String.length(b))
+    case False{}:
+      +pre = String.take(b, i)
+      pk.flat(pre ++ (String.slice(b, e, Nat.sub(p, e)) ++ zb.el(m, d, String.drop(b, p))), String.length(b))
+
+# b, of k elements, with m's score set to d, m's element at index i:
+# moved where (d, m) goes, in one copy
+def zb.set(+b: String, +k: Nat, +i: Nat, +m: String, +d: F.F64) -> String:
+  +p = zb.pos(d, m, b, k)
+  zb.move.of(Nat.is_le(p, i), b, i, zb.next(b, i), p, m, d)
+
+# the index of the element a elements on from the one at index i of b
+def zb.skip(a: Nat, +b: String, +i: Nat) -> Nat:
+  match a:
+    case 0n:
+      i
+    case 1n+j:
+      zb.skip(j, b, zb.next(b, i))
+
+# the element at index i of b
+def zb.at(+b: String, +i: Nat) -> ZEl:
+  +l = pk.len(b, i)
+  +mi = Nat.add(i, pk.hdr(l))
+  ZEl{String.slice(b, mi, l), zb.score(b, Nat.add(mi, l))}
+
+# the k elements from index i of b on, the last first, before acc
+def zb.els.rev(k: Nat, +b: String, +i: Nat, acc: List<&2, ZEl>) -> List<&2, ZEl>:
+  match k:
+    case 0n:
+      acc
+    case 1n+j:
+      +l = pk.len(b, i)
+      +mi = Nat.add(i, pk.hdr(l))
+      +s = Nat.add(mi, l)
+      zb.els.rev(j, b, Nat.add(s, 8n), ZEl{String.slice(b, mi, l), zb.score(b, s)} <> acc)
+
+# the n elements of b, in order: a walk that keeps no frame for each
+# element, then the list turned around
+def zb.all(+n: Nat, +b: String) -> List<&2, ZEl>:
+  List.reverse(&2, ZEl, zb.els.rev(n, b, 0n, Nil{}))
+
+def zb.slice.of(rev: Bool, xs: List<&2, ZEl>) -> List<&2, ZEl>:
+  match rev:
+    case True{}:
+      xs
+    case False{}:
+      List.reverse(&2, ZEl, xs)
+
+# the elements of b, of n, at the ranks from a to c - 1, in order (last
+# first when rev)
+def zb.slice(rev: Bool, +n: Nat, +b: String, +a: Nat, +c: Nat) -> List<&2, ZEl>:
+  +e = Nat.min(c, n)
+  +s = Nat.min(a, e)
+  zb.slice.of(rev, zb.els.rev(Nat.sub(e, s), b, zb.skip(s, b, 0n), Nil{}))
+
+# whether the score whose 8 bytes start at index j of b is at least a
+# bound of scores (zsb.ge), or at most one (zsb.le)
+def zb.sge(+b: String, +j: Nat, +bd: ZSB) -> Bool:
+  match bd:
+    case ZSB{+d, +ex}:
+      +c = zb.dcmp(d, b, j)
+      Bool.pick(Bool, ex, Cmp.is_lt(c), Bool.not(Cmp.is_gt(c)))
+
+def zb.sle(+b: String, +j: Nat, +bd: ZSB) -> Bool:
+  match bd:
+    case ZSB{+d, +ex}:
+      +c = zb.dcmp(d, b, j)
+      Bool.pick(Bool, ex, Cmp.is_gt(c), Bool.not(Cmp.is_lt(c)))
+
+# how the member whose code starts at index i of b compares with a bound
+# of members (zlb.cmp)
+def zb.lcmp.of(+b: String, +mi: Nat, +n: Nat, +bd: ZLB) -> Cmp:
+  match bd:
+    case ZLNeg{}:
+      GT{}
+    case ZLPos{}:
+      LT{}
+    case ZLIn{+s}:
+      String.order(String.slice(b, mi, n), s)
+    case ZLEx{+s}:
+      String.order(String.slice(b, mi, n), s)
+
+def zb.lcmp(+b: String, +i: Nat, +bd: ZLB) -> Cmp:
+  +n = pk.len(b, i)
+  zb.lcmp.of(b, Nat.add(i, pk.hdr(n)), n, bd)
+
+# whether p holds of the element at index i of b (zp.ok): of its score,
+# or of its member, which is copied out only for a test of members
+def zb.ok(+p: ZP, +b: String, +i: Nat) -> Bool:
+  match p:
+    case ZGeS{+bd}:
+      zb.sge(b, pk.end(b, i), bd)
+    case ZLeS{+bd}:
+      zb.sle(b, pk.end(b, i), bd)
+    case ZGeL{+bd}:
+      zlb.ge.of(zb.lcmp(b, i, bd), bd)
+    case ZLeL{+bd}:
+      zlb.le.of(zb.lcmp(b, i, bd), bd)
+    case ZGtS{+bd}:
+      Bool.not(zb.sle(b, pk.end(b, i), bd))
+    case ZGtL{+bd}:
+      Bool.not(zlb.le.of(zb.lcmp(b, i, bd), bd))
+
+def zb.ok.if(k: Nat, +p: ZP, +b: String, +i: Nat) -> Bool:
+  match k:
+    case 0n:
+      True{}
+    case 1n+j:
+      zb.ok(p, b, i)
+
+# how many of the k elements from index i of b on come before the first
+# that p holds of, after acc, when p holds of none of the first and of
+# all the others (zt.before); ok is whether p holds of the element at i
+def zb.before.go(+b: String, k: Nat, ok: Bool, +p: ZP, +i: Nat, +acc: Nat) -> Nat:
+  match k ok:
+    case 0n _:
+      acc
+    case 1n+j True{}:
+      acc
+    case 1n++j False{}:
+      +x = zb.next(b, i)
+      zb.before.go(b, j, zb.ok.if(j, p, b, x), p, x, Nat.add(acc, 1n))
+
+def zb.before(+n: Nat, +b: String, +p: ZP) -> Nat:
+  zb.before.go(b, n, zb.ok.if(n, p, b, 0n), p, 0n, 0n)
+
+# the length of the longest member of the k elements from index i of b
+# on, at least m
+def zb.widest(k: Nat, +b: String, +i: Nat, +m: Nat) -> Nat:
+  match k:
+    case 0n:
+      m
+    case 1n+j:
+      +l = pk.len(b, i)
+      zb.widest(j, b, Nat.add(Nat.add(i, Nat.add(pk.hdr(l), l)), 8n), Nat.max(m, l))
+
 # the score a listpack keeps for d: 0 for -0
 def zset.norm(+d: F.F64) -> F.F64:
   match d:
@@ -3941,11 +5109,39 @@ def zset.norm(+d: F.F64) -> F.F64:
       Bool.pick(F.F64, Bool.and(Nat.is_eq(hi, 2147483648n), Nat.is_eq(lo, 0n)), F.F64{0n, 0n}, F.F64{hi, lo})
 
 def zset.empty() -> Zset:
-  ZSmall{ZTip{}}
+  ZSmall{0n, ""}
 
+# how many bytes the elements es take in a small sorted set's string,
+# after acc
+def zb.size(+es: List<&2, ZEl>, +acc: Nat) -> Nat:
+  match es:
+    case Nil{}:
+      acc
+    case Con{ZEl{+m, d}, rest}:
+      +l = String.length(m)
+      zb.size(rest, Nat.add(acc, Nat.add(Nat.add(pk.hdr(l), l), 8n)))
+
+def zset.of.at(room: Bool, +n: Nat, +l: Nat, es: List<&2, ZEl>) -> Zset:
+  match room:
+    case True{}:
+      ZSmall{n, pk.flat(zb.enc(es, ""), l)}
+    case False{}:
+      ZWide{zt.build(n, es)}
+
+# a small sorted set of the n elements es, which come in order (RESTORE):
+# their string when it fits one buffer, else their tree
+def zset.of(+n: Nat, +es: List<&2, ZEl>) -> Zset:
+  +l = zb.size(es, 0n)
+  zset.of.at(Nat.is_le(l, 2048n), n, l, es)
+
+# z's elements as a tree: a large one's own, a small one's (ZWide), or
+# one made from a small one's string (ZRANDMEMBER's many picks and its
+# third way read them as a tree)
 def zset.tree(+z: Zset) -> ZTree:
   match z:
-    case ZSmall{+tr}:
+    case ZSmall{+n, +b}:
+      zt.build(n, zb.all(n, b))
+    case ZWide{+tr}:
       tr
     case ZBig{+tr, t}:
       tr
@@ -3955,14 +5151,18 @@ def zset.tree(+z: Zset) -> ZTree:
 # the node it reads, and copy it when the tree shares it)
 def zset.len(+z: Zset) -> Nat:
   match z:
-    case ZSmall{tr}:
+    case ZSmall{+n, b}:
+      n
+    case ZWide{tr}:
       zt.size(tr)
     case ZBig{tr, t}:
       zt.size(tr)
 
 def zset.is_small(+z: Zset) -> Bool:
   match z:
-    case ZSmall{tr}:
+    case ZSmall{n, b}:
+      True{}
+    case ZWide{tr}:
       True{}
     case ZBig{tr, t}:
       False{}
@@ -3970,40 +5170,130 @@ def zset.is_small(+z: Zset) -> Bool:
 # m's score, when z holds m
 def zset.score(+m: String, +z: Zset) -> Maybe<&2, F.F64>:
   match z:
-    case ZSmall{+tr}:
+    case ZSmall{+n, +b}:
+      zb.get(b, zb.find(m, b, n))
+    case ZWide{+tr}:
       zt.find(tr, m)
     case ZBig{tr, +t}:
       get(F.F64, t, m)
 
+# m's score, when z holds m, and where a small one's string holds m's
+# element (0 for a tree): zset.set and zset.del take it, so that a write
+# walks to m once
+type ZHit is Data:
+  ZNo{}
+  ZYes{d: F.F64, i: Nat}
+
+def zb.hit.of(k: Nat, +b: String, +i: Nat, +s: Nat) -> ZHit:
+  match k:
+    case 0n:
+      ZNo{}
+    case 1n+j:
+      ZYes{zb.score(b, s), i}
+
+def zb.hit(+b: String, at: ZAt) -> ZHit:
+  match at:
+    case ZAt{+i, +s, k}:
+      zb.hit.of(k, b, i, s)
+
+def zset.hit.big(m: Maybe<&2, F.F64>) -> ZHit:
+  match m:
+    case Some{d}:
+      ZYes{d, 0n}
+    case None{}:
+      ZNo{}
+
+def zset.find(+m: String, +z: Zset) -> ZHit:
+  match z:
+    case ZSmall{+n, +b}:
+      zb.hit(b, zb.find(m, b, n))
+    case ZWide{+tr}:
+      zset.hit.big(zt.find(tr, m))
+    case ZBig{tr, +t}:
+      zset.hit.big(get(F.F64, t, m))
+
+def zt.rank.at(s: Maybe<&2, F.F64>, +t: ZTree, +m: String) -> Maybe<&2, Nat>:
+  match s:
+    case Some{+d}:
+      Some{zt.rank(t, m, d)}
+    case None{}:
+      None{}
+
+# how many elements of z come before m's, when z holds m: a small one's
+# in the walk that finds m
+def zset.rank(+m: String, +z: Zset) -> Maybe<&2, Nat>:
+  match z:
+    case ZSmall{+n, +b}:
+      zb.rank(n, zb.find(m, b, n))
+    case ZWide{+tr}:
+      zt.rank.at(zt.find(tr, m), tr, m)
+    case ZBig{+tr, +t}:
+      zt.rank.at(get(F.F64, t, m), tr, m)
+
 # z with m of score d added (z does not hold m): a small one turns large
-# when it would pass 128 elements, or m passes 64 bytes
-def zset.add.small(fits: Bool, +tr: ZTree, +m: String, +d: F.F64) -> Zset:
+# when it would pass 128 elements, or m passes 64 bytes, and a small
+# one's string turns its tree when it would pass one buffer
+def zset.add.packed(room: Bool, +n: Nat, +b: String, +m: String, +e: F.F64) -> Zset:
+  match room:
+    case True{}:
+      ZSmall{1n+n, zb.ins(b, zb.pos(e, m, b, n), m, e)}
+    case False{}:
+      ZWide{zt.add(zt.build(n, zb.all(n, b)), m, e)}
+
+def zset.add.small(fits: Bool, +n: Nat, +b: String, +m: String, +d: F.F64) -> Zset:
   match fits:
     case True{}:
-      ZSmall{zt.add(tr, m, zset.norm(d))}
+      +lm = String.length(m)
+      zset.add.packed(Nat.is_le(Nat.add(String.length(b), Nat.add(Nat.add(pk.hdr(lm), lm), 8n)), 2048n), n, b, m, zset.norm(d))
+    case False{}:
+      +tr = zt.build(n, zb.all(n, b))
+      ZBig{zt.add(tr, m, d), set(F.F64, zt.trie(tr, empty(F.F64)), m, d)}
+
+def zset.add.wide(fits: Bool, +tr: ZTree, +m: String, +d: F.F64) -> Zset:
+  match fits:
+    case True{}:
+      ZWide{zt.add(tr, m, zset.norm(d))}
     case False{}:
       ZBig{zt.add(tr, m, d), set(F.F64, zt.trie(tr, empty(F.F64)), m, d)}
 
 def zset.add(z: Zset, +m: String, +d: F.F64) -> Zset:
   match z:
-    case ZSmall{+tr}:
-      zset.add.small(Bool.and(Nat.is_lt(zt.size(tr), 128n), Nat.is_le(String.length(m), 64n)), tr, m, d)
+    case ZSmall{+n, +b}:
+      zset.add.small(Bool.and(Nat.is_lt(n, 128n), Nat.is_le(String.length(m), 64n)), n, b, m, d)
+    case ZWide{+tr}:
+      zset.add.wide(Bool.and(Nat.is_lt(zt.size(tr), 128n), Nat.is_le(String.length(m), 64n)), tr, m, d)
     case ZBig{+tr, +t}:
       ZBig{zt.add(tr, m, d), set(F.F64, t, m, d)}
 
 # z without m, which it holds with score d
 def zset.del(z: Zset, +m: String, +d: F.F64) -> Zset:
   match z:
-    case ZSmall{+tr}:
-      ZSmall{zt.del(tr, m, d)}
+    case ZSmall{+n, +b}:
+      ZSmall{Nat.sub(n, 1n), zb.del(b, zb.find(m, b, n))}
+    case ZWide{+tr}:
+      ZWide{zt.del(tr, m, d)}
     case ZBig{+tr, +t}:
       ZBig{zt.del(tr, m, d), del(F.F64, t, m)}
 
-# z with m's score, old, set to d
-def zset.set(z: Zset, +m: String, +old: F.F64, +d: F.F64) -> Zset:
+# z without m, which it holds with score d, its element at index i of a
+# small one's string (zset.find)
+def zset.del.at(z: Zset, +i: Nat, +m: String, +d: F.F64) -> Zset:
   match z:
-    case ZSmall{+tr}:
-      ZSmall{zt.add(zt.del(tr, m, old), m, zset.norm(d))}
+    case ZSmall{+n, +b}:
+      ZSmall{Nat.sub(n, 1n), pk.cut(b, i, zb.next(b, i))}
+    case ZWide{+tr}:
+      ZWide{zt.del(tr, m, d)}
+    case ZBig{+tr, +t}:
+      ZBig{zt.del(tr, m, d), del(F.F64, t, m)}
+
+# z with m's score, old, set to d, m's element at index i of a small
+# one's string (zset.find)
+def zset.set(z: Zset, +i: Nat, +m: String, +old: F.F64, +d: F.F64) -> Zset:
+  match z:
+    case ZSmall{+n, +b}:
+      ZSmall{n, zb.set(b, n, i, m, zset.norm(d))}
+    case ZWide{+tr}:
+      ZWide{zt.add(zt.del(tr, m, old), m, zset.norm(d))}
     case ZBig{+tr, +t}:
       ZBig{zt.add(zt.del(tr, m, old), m, d), set(F.F64, t, m, d)}
 
@@ -4018,7 +5308,9 @@ def zset.slice.of(rev: Bool, +t: ZTree, +a: Nat, +b: Nat) -> List<&2, ZEl>:
 
 def zset.slice(rev: Bool, +z: Zset, +a: Nat, +b: Nat) -> List<&2, ZEl>:
   match z:
-    case ZSmall{tr}:
+    case ZSmall{+n, +s}:
+      zb.slice(rev, n, s, a, b)
+    case ZWide{tr}:
       zset.slice.of(rev, tr, a, b)
     case ZBig{tr, t}:
       zset.slice.of(rev, tr, a, b)
@@ -4026,18 +5318,33 @@ def zset.slice(rev: Bool, +z: Zset, +a: Nat, +b: Nat) -> List<&2, ZEl>:
 # all the elements of z, in order
 def zset.all(+z: Zset) -> List<&2, ZEl>:
   match z:
-    case ZSmall{tr}:
+    case ZSmall{+n, +b}:
+      zb.all(n, b)
+    case ZWide{tr}:
       zt.all(tr)
     case ZBig{tr, t}:
       zt.all(tr)
 
-# how many elements of z come before (d, m), which it holds
-def zset.rank(+z: Zset, +m: String, +d: F.F64) -> Nat:
+# how many elements of z come before the first that p holds of, when p
+# holds of none of the first elements and of all the others (zt.before)
+def zset.before(+z: Zset, +p: ZP) -> Nat:
   match z:
-    case ZSmall{tr}:
-      zt.rank(tr, m, d)
+    case ZSmall{+n, +b}:
+      zb.before(n, b, p)
+    case ZWide{tr}:
+      zt.before(tr, p)
     case ZBig{tr, t}:
-      zt.rank(tr, m, d)
+      zt.before(tr, p)
+
+# the element at rank i of z (i below its size)
+def zset.nth(+z: Zset, +i: Nat) -> ZEl:
+  match z:
+    case ZSmall{n, +b}:
+      zb.at(b, zb.skip(i, b, 0n))
+    case ZWide{tr}:
+      zt.nth(tr, i)
+    case ZBig{tr, t}:
+      zt.nth(tr, i)
 
 # z without the elements xs, which it holds
 def zset.dels(xs: List<&2, ZEl>, z: Zset) -> Zset:
@@ -4046,3 +5353,890 @@ def zset.dels(xs: List<&2, ZEl>, z: Zset) -> Zset:
       z
     case Con{ZEl{+m, +d}, rest}:
       zset.dels(rest, zset.del(z, m, d))
+
+# Streams
+# -------
+# A stream (XStream, above) as Redis 7.0 keeps one: its entries in nodes
+# of a radix tree by master ID, each node a listpack (here a tree by
+# master ID, each node the bytes of its entries), and its consumer groups
+# by name, each with its pending entries by ID and its consumers by name.
+# Its numbers are 64-bit, and each is split in decimal at 10^14, so that
+# no Nat passes 2^48 (XN, above); their arithmetic runs at run time only
+# (no proof computes 10^14: the checker counts in unary).
+
+# 10^14 (a literal stops at 2^32 - 1)
+def xn.e14() -> Nat:
+  Nat.mul(100000000n, 1000000n)
+
+# the low part of 2^64 = 184467 * 10^14 + 44073709551616
+def xn.top.lo() -> Nat:
+  Nat.add(Nat.mul(4407370n, 10000000n), 9551616n)
+
+# hi * 10^14 + lo (lo below 10^14) in its one form
+def xn.of2(+hi: Nat, +lo: Nat) -> XN:
+  match hi:
+    case 0n:
+      XS{lo}
+    case 1n+h:
+      XL{1n+h, lo}
+
+# n (below 2^48)
+def xn.of(+n: Nat) -> XN:
+  +e = xn.e14()
+  xn.of2(Nat.div(n, e), Nat.mod(n, e))
+
+def xn.hi(+a: XN) -> Nat:
+  match a:
+    case XS{n}:
+      0n
+    case XL{+h, l}:
+      h
+
+def xn.lo(+a: XN) -> Nat:
+  match a:
+    case XS{+n}:
+      n
+    case XL{h, +l}:
+      l
+
+def xn.cmp.lo(c: Cmp, +a: Nat, +b: Nat) -> Cmp:
+  match c:
+    case EQ{}:
+      Nat.cmp(a, b)
+    case LT{}:
+      LT{}
+    case GT{}:
+      GT{}
+
+# how a compares with b (XS below XL: each number has one form)
+def xn.cmp(+a: XN, +b: XN) -> Cmp:
+  match a b:
+    case XS{+x} XS{+y}:
+      Nat.cmp(x, y)
+    case XS{x} XL{h, l}:
+      LT{}
+    case XL{h, l} XS{y}:
+      GT{}
+    case XL{+h, +l} XL{+g, +k}:
+      xn.cmp.lo(Nat.cmp(h, g), l, k)
+
+def xn.is_eq(+a: XN, +b: XN) -> Bool:
+  match a b:
+    case XS{+x} XS{+y}:
+      Nat.is_eq(x, y)
+    case XL{+h, +l} XL{+g, +k}:
+      Bool.and(Nat.is_eq(h, g), Nat.is_eq(l, k))
+    case _ _:
+      False{}
+
+# hi * 10^14 + lo mod 2^64 (lo below 10^14, the number below 2^65)
+def xn.wrap.of(ge: Bool, +hi: Nat, +lo: Nat) -> XN:
+  match ge:
+    case False{}:
+      xn.of2(hi, lo)
+    case True{}:
+      +t = xn.top.lo()
+      +b = Nat.is_lt(lo, t)
+      xn.of2(Nat.sub(Nat.sub(hi, 184467n), Bool.pick(Nat, b, 1n, 0n)), Nat.sub(Nat.add(lo, Bool.pick(Nat, b, xn.e14(), 0n)), t))
+
+def xn.wrap(+hi: Nat, +lo: Nat) -> XN:
+  xn.wrap.of(Bool.or(Nat.is_lt(184467n, hi), Bool.and(Nat.is_eq(hi, 184467n), Nat.is_le(xn.top.lo(), lo))), hi, lo)
+
+def xn.add.of(+hi: Nat, +lo: Nat) -> XN:
+  +e = xn.e14()
+  +c = Nat.is_le(e, lo)
+  xn.wrap(Nat.add(hi, Bool.pick(Nat, c, 1n, 0n)), Bool.pick(Nat, c, Nat.sub(lo, e), lo))
+
+# a + b mod 2^64
+def xn.add(+a: XN, +b: XN) -> XN:
+  xn.add.of(Nat.add(xn.hi(a), xn.hi(b)), Nat.add(xn.lo(a), xn.lo(b)))
+
+def xn.neg.of(le: Bool, +h: Nat, +l: Nat) -> XN:
+  match le:
+    case True{}:
+      xn.wrap(Nat.sub(184467n, h), Nat.sub(xn.top.lo(), l))
+    case False{}:
+      xn.wrap(Nat.sub(184466n, h), Nat.sub(Nat.add(xn.top.lo(), xn.e14()), l))
+
+# 2^64 - a mod 2^64: the two's complement of a, as a uint64_t negates
+def xn.neg(+a: XN) -> XN:
+  +l = xn.lo(a)
+  xn.neg.of(Nat.is_le(l, xn.top.lo()), xn.hi(a), l)
+
+# s with zeros before it, k of them
+def xn.pad(k: Nat, +s: String) -> String:
+  match k:
+    case 0n:
+      s
+    case 1n+j:
+      xn.pad(j, "0" ++ s)
+
+# a's digits, as Redis prints a uint64_t (%llu)
+def xn.show(+a: XN) -> String:
+  match a:
+    case XS{+n}:
+      Nat.show(n)
+    case XL{+h, +l}:
+      +s = Nat.show(l)
+      Nat.show(h) ++ xn.pad(Nat.sub(14n, String.length(s)), s)
+
+def xn.dec.of(short: Bool, +s: String, +a: Nat, +d: Nat) -> XN:
+  match short:
+    case True{}:
+      XS{String.dec_at(s, a, d)}
+    case False{}:
+      +k = Nat.sub(d, 14n)
+      xn.of2(String.dec_at(s, a, k), String.dec_at(s, Nat.add(a, k), 14n))
+
+# the number of the d digits of s from index a on (d at most 20, the
+# number below 2^64)
+def xn.dec(+s: String, +a: Nat, +d: Nat) -> XN:
+  xn.dec.of(Nat.is_le(d, 14n), s, a, d)
+
+def xn.of_int.of(neg: Bool, +s: String, +n: Nat) -> XN:
+  match neg:
+    case True{}:
+      xn.neg(xn.dec(s, 1n, Nat.sub(n, 1n)))
+    case False{}:
+      xn.dec(s, 0n, n)
+
+# the 64 bits of the integer whose text is s (a long long's, as
+# ll2string writes one), as a uint64_t holds them
+def xn.of_int(+s: String) -> XN:
+  xn.of_int.of(U32.is_eq(String.code_at(s, 0n), 45), s, String.length(s))
+
+def xid.cmp.of(c: Cmp, +a: XN, +b: XN) -> Cmp:
+  match c:
+    case EQ{}:
+      xn.cmp(a, b)
+    case LT{}:
+      LT{}
+    case GT{}:
+      GT{}
+
+# how ID a compares with ID b: by time, then by sequence
+def xid.cmp(+a: XId, +b: XId) -> Cmp:
+  match a b:
+    case XId{+am, +aq} XId{+bm, +bq}:
+      xid.cmp.of(xn.cmp(am, bm), aq, bq)
+
+# the keys of the trees below
+def xnode.mid(+x: XNode) -> XId:
+  match x:
+    case XNd{+mid, mfs, live, dead, bytes, nel, es}:
+      mid
+    case XNdOf{+y}:
+      xnode.mid(y)
+
+def xnack.id(+x: XNack) -> XId:
+  match x:
+    case XNk{+id, owner, time, count}:
+      id
+    case XNkOf{+y}:
+      xnack.id(y)
+
+# a node's listpack's size in bytes
+def xnode.bytes(+x: XNode) -> Nat:
+  match x:
+    case XNd{mid, mfs, live, dead, +bytes, nel, es}:
+      bytes
+    case XNdOf{+y}:
+      xnode.bytes(y)
+
+# a stream's count of live entries
+def xstream.len(+x: XStream) -> Nat:
+  match x:
+    case XStr{+n, last, first, maxdel, added, nodes, groups}:
+      n
+    case XStrOf{+y}:
+      xstream.len(y)
+
+def xid.self(+x: XId) -> XId:
+  x
+
+def xcon.name(+x: XCon) -> String:
+  match x:
+    case XCon{+name, seen, ids}:
+      name
+
+def xgroup.name(+x: XGroup) -> String:
+  match x:
+    case XGrp{+name, last, read, pel, cons}:
+      name
+    case XGrpOf{+y}:
+      xgroup.name(y)
+
+# The trees of a stream: weight-balanced, as a large sorted set's (ZTree,
+# Sorted sets, above), one shape for each kind of element and its key
+# (written by tools/gen_streams.py)
+# BEGIN gen_streams: trees
+# XNodes, by ID (xns)
+
+def xns.size(+t: XNodes) -> Nat:
+  match t:
+    case XNTip{}:
+      0n
+    case XNBin{n, x, l, r}:
+      n
+
+def xns.bin(+x: XNode, +l: XNodes, +r: XNodes) -> XNodes:
+  XNBin{Nat.add(Nat.add(xns.size(l), xns.size(r)), 1n), x, l, r}
+
+# how the key k compares with t's root's (GT for a tip)
+def xns.at(+t: XNodes, +k: XId) -> Cmp:
+  match t:
+    case XNTip{}:
+      GT{}
+    case XNBin{n, +x, l, r}:
+      xid.cmp(k, xnode.mid(x))
+
+def xns.dbll(+x: XNode, l: XNodes, +rx: XNode, rr: XNodes, rl: XNodes) -> XNodes:
+  match rl:
+    case XNTip{}:
+      xns.bin(rx, xns.bin(x, l, XNTip{}), rr)
+    case XNBin{n, +y, +yl, +yr}:
+      xns.bin(y, xns.bin(x, l, yl), xns.bin(rx, yr, rr))
+
+def xns.rotl.of(single: Bool, +x: XNode, l: XNodes, +rx: XNode, rl: XNodes, rr: XNodes) -> XNodes:
+  match single:
+    case True{}:
+      xns.bin(rx, xns.bin(x, l, rl), rr)
+    case False{}:
+      xns.dbll(x, l, rx, rr, rl)
+
+def xns.rotl(+x: XNode, l: XNodes, r: XNodes) -> XNodes:
+  match r:
+    case XNTip{}:
+      xns.bin(x, l, XNTip{})
+    case XNBin{n, +rx, +rl, +rr}:
+      xns.rotl.of(Nat.is_lt(xns.size(rl), Nat.mul(2n, xns.size(rr))), x, l, rx, rl, rr)
+
+def xns.dblr(+x: XNode, r: XNodes, +lx: XNode, ll: XNodes, lr: XNodes) -> XNodes:
+  match lr:
+    case XNTip{}:
+      xns.bin(lx, ll, xns.bin(x, XNTip{}, r))
+    case XNBin{n, +y, +yl, +yr}:
+      xns.bin(y, xns.bin(lx, ll, yl), xns.bin(x, yr, r))
+
+def xns.rotr.of(single: Bool, +x: XNode, r: XNodes, +lx: XNode, ll: XNodes, lr: XNodes) -> XNodes:
+  match single:
+    case True{}:
+      xns.bin(lx, ll, xns.bin(x, lr, r))
+    case False{}:
+      xns.dblr(x, r, lx, ll, lr)
+
+def xns.rotr(+x: XNode, l: XNodes, r: XNodes) -> XNodes:
+  match l:
+    case XNTip{}:
+      xns.bin(x, XNTip{}, r)
+    case XNBin{n, +lx, +ll, +lr}:
+      xns.rotr.of(Nat.is_lt(xns.size(lr), Nat.mul(2n, xns.size(ll))), x, r, lx, ll, lr)
+
+def xns.bal.of(few: Bool, rh: Bool, lh: Bool, +x: XNode, l: XNodes, r: XNodes) -> XNodes:
+  match few rh lh:
+    case True{} _ _:
+      xns.bin(x, l, r)
+    case False{} True{} _:
+      xns.rotl(x, l, r)
+    case False{} False{} True{}:
+      xns.rotr(x, l, r)
+    case False{} False{} False{}:
+      xns.bin(x, l, r)
+
+def xns.balance(+x: XNode, +l: XNodes, +r: XNodes) -> XNodes:
+  +sl = xns.size(l)
+  +sr = xns.size(r)
+  xns.bal.of(Nat.is_le(Nat.add(sl, sr), 1n), Nat.is_lt(Nat.mul(3n, sl), sr), Nat.is_lt(Nat.mul(3n, sr), sl), x, l, r)
+
+# the element of key k in t; c is how k compares with t's root's
+def xns.find(+t: XNodes, c: Cmp, +k: XId) -> Maybe<&2, XNode>:
+  match t c:
+    case XNTip{} _:
+      None{}
+    case XNBin{n, x, +l, r} LT{}:
+      xns.find(l, xns.at(l, k), k)
+    case XNBin{n, x, l, +r} GT{}:
+      xns.find(r, xns.at(r, k), k)
+    case XNBin{n, +x, l, r} EQ{}:
+      Some{x}
+
+# t with x in its place (t holds no element of x's key); c is how x's key
+# compares with t's root's
+def xns.ins(t: XNodes, c: Cmp, +x: XNode) -> XNodes:
+  match t c:
+    case XNTip{} _:
+      XNBin{1n, x, XNTip{}, XNTip{}}
+    case XNBin{n, +y, +l, +r} LT{}:
+      xns.balance(y, xns.ins(l, xns.at(l, xnode.mid(x)), x), r)
+    case XNBin{n, +y, +l, +r} _:
+      xns.balance(y, l, xns.ins(r, xns.at(r, xnode.mid(x)), x))
+
+def xns.put(+x: XNode, +t: XNodes) -> XNodes:
+  xns.ins(t, xns.at(t, xnode.mid(x)), x)
+
+# t with x in the place of the element of x's key, which t holds; c is
+# how x's key compares with t's root's
+def xns.rep(t: XNodes, c: Cmp, +x: XNode) -> XNodes:
+  match t c:
+    case XNTip{} _:
+      XNTip{}
+    case XNBin{+n, +y, +l, +r} LT{}:
+      XNBin{n, y, xns.rep(l, xns.at(l, xnode.mid(x)), x), r}
+    case XNBin{+n, +y, +l, +r} GT{}:
+      XNBin{n, y, l, xns.rep(r, xns.at(r, xnode.mid(x)), x)}
+    case XNBin{+n, y, +l, +r} EQ{}:
+      XNBin{n, x, l, r}
+
+def xns.set(+x: XNode, +t: XNodes) -> XNodes:
+  xns.rep(t, xns.at(t, xnode.mid(x)), x)
+
+# a node's element, made before the walk goes on (as it.el)
+def xns.el(+x: XNode) -> XNode:
+  x
+
+# the elements of t in order, before acc
+def xns.list(+t: XNodes, acc: List<&2, XNode>) -> List<&2, XNode>:
+  match t:
+    case XNTip{}:
+      acc
+    case XNBin{n, +x, +l, +r}:
+      y = xns.el(x)
+      acc2 = xns.list(r, acc)
+      xns.list(l, y <> acc2)
+
+# XPel, by ID (xpl)
+
+def xpl.size(+t: XPel) -> Nat:
+  match t:
+    case XPTip{}:
+      0n
+    case XPBin{n, x, l, r}:
+      n
+
+def xpl.bin(+x: XNack, +l: XPel, +r: XPel) -> XPel:
+  XPBin{Nat.add(Nat.add(xpl.size(l), xpl.size(r)), 1n), x, l, r}
+
+# how the key k compares with t's root's (GT for a tip)
+def xpl.at(+t: XPel, +k: XId) -> Cmp:
+  match t:
+    case XPTip{}:
+      GT{}
+    case XPBin{n, +x, l, r}:
+      xid.cmp(k, xnack.id(x))
+
+def xpl.dbll(+x: XNack, l: XPel, +rx: XNack, rr: XPel, rl: XPel) -> XPel:
+  match rl:
+    case XPTip{}:
+      xpl.bin(rx, xpl.bin(x, l, XPTip{}), rr)
+    case XPBin{n, +y, +yl, +yr}:
+      xpl.bin(y, xpl.bin(x, l, yl), xpl.bin(rx, yr, rr))
+
+def xpl.rotl.of(single: Bool, +x: XNack, l: XPel, +rx: XNack, rl: XPel, rr: XPel) -> XPel:
+  match single:
+    case True{}:
+      xpl.bin(rx, xpl.bin(x, l, rl), rr)
+    case False{}:
+      xpl.dbll(x, l, rx, rr, rl)
+
+def xpl.rotl(+x: XNack, l: XPel, r: XPel) -> XPel:
+  match r:
+    case XPTip{}:
+      xpl.bin(x, l, XPTip{})
+    case XPBin{n, +rx, +rl, +rr}:
+      xpl.rotl.of(Nat.is_lt(xpl.size(rl), Nat.mul(2n, xpl.size(rr))), x, l, rx, rl, rr)
+
+def xpl.dblr(+x: XNack, r: XPel, +lx: XNack, ll: XPel, lr: XPel) -> XPel:
+  match lr:
+    case XPTip{}:
+      xpl.bin(lx, ll, xpl.bin(x, XPTip{}, r))
+    case XPBin{n, +y, +yl, +yr}:
+      xpl.bin(y, xpl.bin(lx, ll, yl), xpl.bin(x, yr, r))
+
+def xpl.rotr.of(single: Bool, +x: XNack, r: XPel, +lx: XNack, ll: XPel, lr: XPel) -> XPel:
+  match single:
+    case True{}:
+      xpl.bin(lx, ll, xpl.bin(x, lr, r))
+    case False{}:
+      xpl.dblr(x, r, lx, ll, lr)
+
+def xpl.rotr(+x: XNack, l: XPel, r: XPel) -> XPel:
+  match l:
+    case XPTip{}:
+      xpl.bin(x, XPTip{}, r)
+    case XPBin{n, +lx, +ll, +lr}:
+      xpl.rotr.of(Nat.is_lt(xpl.size(lr), Nat.mul(2n, xpl.size(ll))), x, r, lx, ll, lr)
+
+def xpl.bal.of(few: Bool, rh: Bool, lh: Bool, +x: XNack, l: XPel, r: XPel) -> XPel:
+  match few rh lh:
+    case True{} _ _:
+      xpl.bin(x, l, r)
+    case False{} True{} _:
+      xpl.rotl(x, l, r)
+    case False{} False{} True{}:
+      xpl.rotr(x, l, r)
+    case False{} False{} False{}:
+      xpl.bin(x, l, r)
+
+def xpl.balance(+x: XNack, +l: XPel, +r: XPel) -> XPel:
+  +sl = xpl.size(l)
+  +sr = xpl.size(r)
+  xpl.bal.of(Nat.is_le(Nat.add(sl, sr), 1n), Nat.is_lt(Nat.mul(3n, sl), sr), Nat.is_lt(Nat.mul(3n, sr), sl), x, l, r)
+
+# the element of key k in t; c is how k compares with t's root's
+def xpl.find(+t: XPel, c: Cmp, +k: XId) -> Maybe<&2, XNack>:
+  match t c:
+    case XPTip{} _:
+      None{}
+    case XPBin{n, x, +l, r} LT{}:
+      xpl.find(l, xpl.at(l, k), k)
+    case XPBin{n, x, l, +r} GT{}:
+      xpl.find(r, xpl.at(r, k), k)
+    case XPBin{n, +x, l, r} EQ{}:
+      Some{x}
+
+# t with x in its place (t holds no element of x's key); c is how x's key
+# compares with t's root's
+def xpl.ins(t: XPel, c: Cmp, +x: XNack) -> XPel:
+  match t c:
+    case XPTip{} _:
+      XPBin{1n, x, XPTip{}, XPTip{}}
+    case XPBin{n, +y, +l, +r} LT{}:
+      xpl.balance(y, xpl.ins(l, xpl.at(l, xnack.id(x)), x), r)
+    case XPBin{n, +y, +l, +r} _:
+      xpl.balance(y, l, xpl.ins(r, xpl.at(r, xnack.id(x)), x))
+
+def xpl.put(+x: XNack, +t: XPel) -> XPel:
+  xpl.ins(t, xpl.at(t, xnack.id(x)), x)
+
+# t with x in the place of the element of x's key, which t holds; c is
+# how x's key compares with t's root's
+def xpl.rep(t: XPel, c: Cmp, +x: XNack) -> XPel:
+  match t c:
+    case XPTip{} _:
+      XPTip{}
+    case XPBin{+n, +y, +l, +r} LT{}:
+      XPBin{n, y, xpl.rep(l, xpl.at(l, xnack.id(x)), x), r}
+    case XPBin{+n, +y, +l, +r} GT{}:
+      XPBin{n, y, l, xpl.rep(r, xpl.at(r, xnack.id(x)), x)}
+    case XPBin{+n, y, +l, +r} EQ{}:
+      XPBin{n, x, l, r}
+
+def xpl.set(+x: XNack, +t: XPel) -> XPel:
+  xpl.rep(t, xpl.at(t, xnack.id(x)), x)
+
+# a node's element, made before the walk goes on (as it.el)
+def xpl.el(+x: XNack) -> XNack:
+  x
+
+# the elements of t in order, before acc
+def xpl.list(+t: XPel, acc: List<&2, XNack>) -> List<&2, XNack>:
+  match t:
+    case XPTip{}:
+      acc
+    case XPBin{n, +x, +l, +r}:
+      y = xpl.el(x)
+      acc2 = xpl.list(r, acc)
+      xpl.list(l, y <> acc2)
+
+# XIds, by ID (xis)
+
+def xis.size(+t: XIds) -> Nat:
+  match t:
+    case XITip{}:
+      0n
+    case XIBin{n, x, l, r}:
+      n
+
+def xis.bin(+x: XId, +l: XIds, +r: XIds) -> XIds:
+  XIBin{Nat.add(Nat.add(xis.size(l), xis.size(r)), 1n), x, l, r}
+
+# how the key k compares with t's root's (GT for a tip)
+def xis.at(+t: XIds, +k: XId) -> Cmp:
+  match t:
+    case XITip{}:
+      GT{}
+    case XIBin{n, +x, l, r}:
+      xid.cmp(k, xid.self(x))
+
+def xis.dbll(+x: XId, l: XIds, +rx: XId, rr: XIds, rl: XIds) -> XIds:
+  match rl:
+    case XITip{}:
+      xis.bin(rx, xis.bin(x, l, XITip{}), rr)
+    case XIBin{n, +y, +yl, +yr}:
+      xis.bin(y, xis.bin(x, l, yl), xis.bin(rx, yr, rr))
+
+def xis.rotl.of(single: Bool, +x: XId, l: XIds, +rx: XId, rl: XIds, rr: XIds) -> XIds:
+  match single:
+    case True{}:
+      xis.bin(rx, xis.bin(x, l, rl), rr)
+    case False{}:
+      xis.dbll(x, l, rx, rr, rl)
+
+def xis.rotl(+x: XId, l: XIds, r: XIds) -> XIds:
+  match r:
+    case XITip{}:
+      xis.bin(x, l, XITip{})
+    case XIBin{n, +rx, +rl, +rr}:
+      xis.rotl.of(Nat.is_lt(xis.size(rl), Nat.mul(2n, xis.size(rr))), x, l, rx, rl, rr)
+
+def xis.dblr(+x: XId, r: XIds, +lx: XId, ll: XIds, lr: XIds) -> XIds:
+  match lr:
+    case XITip{}:
+      xis.bin(lx, ll, xis.bin(x, XITip{}, r))
+    case XIBin{n, +y, +yl, +yr}:
+      xis.bin(y, xis.bin(lx, ll, yl), xis.bin(x, yr, r))
+
+def xis.rotr.of(single: Bool, +x: XId, r: XIds, +lx: XId, ll: XIds, lr: XIds) -> XIds:
+  match single:
+    case True{}:
+      xis.bin(lx, ll, xis.bin(x, lr, r))
+    case False{}:
+      xis.dblr(x, r, lx, ll, lr)
+
+def xis.rotr(+x: XId, l: XIds, r: XIds) -> XIds:
+  match l:
+    case XITip{}:
+      xis.bin(x, XITip{}, r)
+    case XIBin{n, +lx, +ll, +lr}:
+      xis.rotr.of(Nat.is_lt(xis.size(lr), Nat.mul(2n, xis.size(ll))), x, r, lx, ll, lr)
+
+def xis.bal.of(few: Bool, rh: Bool, lh: Bool, +x: XId, l: XIds, r: XIds) -> XIds:
+  match few rh lh:
+    case True{} _ _:
+      xis.bin(x, l, r)
+    case False{} True{} _:
+      xis.rotl(x, l, r)
+    case False{} False{} True{}:
+      xis.rotr(x, l, r)
+    case False{} False{} False{}:
+      xis.bin(x, l, r)
+
+def xis.balance(+x: XId, +l: XIds, +r: XIds) -> XIds:
+  +sl = xis.size(l)
+  +sr = xis.size(r)
+  xis.bal.of(Nat.is_le(Nat.add(sl, sr), 1n), Nat.is_lt(Nat.mul(3n, sl), sr), Nat.is_lt(Nat.mul(3n, sr), sl), x, l, r)
+
+# the element of key k in t; c is how k compares with t's root's
+def xis.find(+t: XIds, c: Cmp, +k: XId) -> Maybe<&2, XId>:
+  match t c:
+    case XITip{} _:
+      None{}
+    case XIBin{n, x, +l, r} LT{}:
+      xis.find(l, xis.at(l, k), k)
+    case XIBin{n, x, l, +r} GT{}:
+      xis.find(r, xis.at(r, k), k)
+    case XIBin{n, +x, l, r} EQ{}:
+      Some{x}
+
+# t with x in its place (t holds no element of x's key); c is how x's key
+# compares with t's root's
+def xis.ins(t: XIds, c: Cmp, +x: XId) -> XIds:
+  match t c:
+    case XITip{} _:
+      XIBin{1n, x, XITip{}, XITip{}}
+    case XIBin{n, +y, +l, +r} LT{}:
+      xis.balance(y, xis.ins(l, xis.at(l, xid.self(x)), x), r)
+    case XIBin{n, +y, +l, +r} _:
+      xis.balance(y, l, xis.ins(r, xis.at(r, xid.self(x)), x))
+
+def xis.put(+x: XId, +t: XIds) -> XIds:
+  xis.ins(t, xis.at(t, xid.self(x)), x)
+
+# t with x in the place of the element of x's key, which t holds; c is
+# how x's key compares with t's root's
+def xis.rep(t: XIds, c: Cmp, +x: XId) -> XIds:
+  match t c:
+    case XITip{} _:
+      XITip{}
+    case XIBin{+n, +y, +l, +r} LT{}:
+      XIBin{n, y, xis.rep(l, xis.at(l, xid.self(x)), x), r}
+    case XIBin{+n, +y, +l, +r} GT{}:
+      XIBin{n, y, l, xis.rep(r, xis.at(r, xid.self(x)), x)}
+    case XIBin{+n, y, +l, +r} EQ{}:
+      XIBin{n, x, l, r}
+
+def xis.set(+x: XId, +t: XIds) -> XIds:
+  xis.rep(t, xis.at(t, xid.self(x)), x)
+
+# a node's element, made before the walk goes on (as it.el)
+def xis.el(+x: XId) -> XId:
+  x
+
+# the elements of t in order, before acc
+def xis.list(+t: XIds, acc: List<&2, XId>) -> List<&2, XId>:
+  match t:
+    case XITip{}:
+      acc
+    case XIBin{n, +x, +l, +r}:
+      y = xis.el(x)
+      acc2 = xis.list(r, acc)
+      xis.list(l, y <> acc2)
+
+# XCons, by name (xcs)
+
+def xcs.size(+t: XCons) -> Nat:
+  match t:
+    case XCTip{}:
+      0n
+    case XCBin{n, x, l, r}:
+      n
+
+def xcs.bin(+x: XCon, +l: XCons, +r: XCons) -> XCons:
+  XCBin{Nat.add(Nat.add(xcs.size(l), xcs.size(r)), 1n), x, l, r}
+
+# how the key k compares with t's root's (GT for a tip)
+def xcs.at(+t: XCons, +k: String) -> Cmp:
+  match t:
+    case XCTip{}:
+      GT{}
+    case XCBin{n, +x, l, r}:
+      String.order(k, xcon.name(x))
+
+def xcs.dbll(+x: XCon, l: XCons, +rx: XCon, rr: XCons, rl: XCons) -> XCons:
+  match rl:
+    case XCTip{}:
+      xcs.bin(rx, xcs.bin(x, l, XCTip{}), rr)
+    case XCBin{n, +y, +yl, +yr}:
+      xcs.bin(y, xcs.bin(x, l, yl), xcs.bin(rx, yr, rr))
+
+def xcs.rotl.of(single: Bool, +x: XCon, l: XCons, +rx: XCon, rl: XCons, rr: XCons) -> XCons:
+  match single:
+    case True{}:
+      xcs.bin(rx, xcs.bin(x, l, rl), rr)
+    case False{}:
+      xcs.dbll(x, l, rx, rr, rl)
+
+def xcs.rotl(+x: XCon, l: XCons, r: XCons) -> XCons:
+  match r:
+    case XCTip{}:
+      xcs.bin(x, l, XCTip{})
+    case XCBin{n, +rx, +rl, +rr}:
+      xcs.rotl.of(Nat.is_lt(xcs.size(rl), Nat.mul(2n, xcs.size(rr))), x, l, rx, rl, rr)
+
+def xcs.dblr(+x: XCon, r: XCons, +lx: XCon, ll: XCons, lr: XCons) -> XCons:
+  match lr:
+    case XCTip{}:
+      xcs.bin(lx, ll, xcs.bin(x, XCTip{}, r))
+    case XCBin{n, +y, +yl, +yr}:
+      xcs.bin(y, xcs.bin(lx, ll, yl), xcs.bin(x, yr, r))
+
+def xcs.rotr.of(single: Bool, +x: XCon, r: XCons, +lx: XCon, ll: XCons, lr: XCons) -> XCons:
+  match single:
+    case True{}:
+      xcs.bin(lx, ll, xcs.bin(x, lr, r))
+    case False{}:
+      xcs.dblr(x, r, lx, ll, lr)
+
+def xcs.rotr(+x: XCon, l: XCons, r: XCons) -> XCons:
+  match l:
+    case XCTip{}:
+      xcs.bin(x, XCTip{}, r)
+    case XCBin{n, +lx, +ll, +lr}:
+      xcs.rotr.of(Nat.is_lt(xcs.size(lr), Nat.mul(2n, xcs.size(ll))), x, r, lx, ll, lr)
+
+def xcs.bal.of(few: Bool, rh: Bool, lh: Bool, +x: XCon, l: XCons, r: XCons) -> XCons:
+  match few rh lh:
+    case True{} _ _:
+      xcs.bin(x, l, r)
+    case False{} True{} _:
+      xcs.rotl(x, l, r)
+    case False{} False{} True{}:
+      xcs.rotr(x, l, r)
+    case False{} False{} False{}:
+      xcs.bin(x, l, r)
+
+def xcs.balance(+x: XCon, +l: XCons, +r: XCons) -> XCons:
+  +sl = xcs.size(l)
+  +sr = xcs.size(r)
+  xcs.bal.of(Nat.is_le(Nat.add(sl, sr), 1n), Nat.is_lt(Nat.mul(3n, sl), sr), Nat.is_lt(Nat.mul(3n, sr), sl), x, l, r)
+
+# the element of key k in t; c is how k compares with t's root's
+def xcs.find(+t: XCons, c: Cmp, +k: String) -> Maybe<&2, XCon>:
+  match t c:
+    case XCTip{} _:
+      None{}
+    case XCBin{n, x, +l, r} LT{}:
+      xcs.find(l, xcs.at(l, k), k)
+    case XCBin{n, x, l, +r} GT{}:
+      xcs.find(r, xcs.at(r, k), k)
+    case XCBin{n, +x, l, r} EQ{}:
+      Some{x}
+
+# t with x in its place (t holds no element of x's key); c is how x's key
+# compares with t's root's
+def xcs.ins(t: XCons, c: Cmp, +x: XCon) -> XCons:
+  match t c:
+    case XCTip{} _:
+      XCBin{1n, x, XCTip{}, XCTip{}}
+    case XCBin{n, +y, +l, +r} LT{}:
+      xcs.balance(y, xcs.ins(l, xcs.at(l, xcon.name(x)), x), r)
+    case XCBin{n, +y, +l, +r} _:
+      xcs.balance(y, l, xcs.ins(r, xcs.at(r, xcon.name(x)), x))
+
+def xcs.put(+x: XCon, +t: XCons) -> XCons:
+  xcs.ins(t, xcs.at(t, xcon.name(x)), x)
+
+# t with x in the place of the element of x's key, which t holds; c is
+# how x's key compares with t's root's
+def xcs.rep(t: XCons, c: Cmp, +x: XCon) -> XCons:
+  match t c:
+    case XCTip{} _:
+      XCTip{}
+    case XCBin{+n, +y, +l, +r} LT{}:
+      XCBin{n, y, xcs.rep(l, xcs.at(l, xcon.name(x)), x), r}
+    case XCBin{+n, +y, +l, +r} GT{}:
+      XCBin{n, y, l, xcs.rep(r, xcs.at(r, xcon.name(x)), x)}
+    case XCBin{+n, y, +l, +r} EQ{}:
+      XCBin{n, x, l, r}
+
+def xcs.set(+x: XCon, +t: XCons) -> XCons:
+  xcs.rep(t, xcs.at(t, xcon.name(x)), x)
+
+# a node's element, made before the walk goes on (as it.el)
+def xcs.el(+x: XCon) -> XCon:
+  x
+
+# the elements of t in order, before acc
+def xcs.list(+t: XCons, acc: List<&2, XCon>) -> List<&2, XCon>:
+  match t:
+    case XCTip{}:
+      acc
+    case XCBin{n, +x, +l, +r}:
+      y = xcs.el(x)
+      acc2 = xcs.list(r, acc)
+      xcs.list(l, y <> acc2)
+
+# XGroups, by name (xgs)
+
+def xgs.size(+t: XGroups) -> Nat:
+  match t:
+    case XGTip{}:
+      0n
+    case XGBin{n, x, l, r}:
+      n
+
+def xgs.bin(+x: XGroup, +l: XGroups, +r: XGroups) -> XGroups:
+  XGBin{Nat.add(Nat.add(xgs.size(l), xgs.size(r)), 1n), x, l, r}
+
+# how the key k compares with t's root's (GT for a tip)
+def xgs.at(+t: XGroups, +k: String) -> Cmp:
+  match t:
+    case XGTip{}:
+      GT{}
+    case XGBin{n, +x, l, r}:
+      String.order(k, xgroup.name(x))
+
+def xgs.dbll(+x: XGroup, l: XGroups, +rx: XGroup, rr: XGroups, rl: XGroups) -> XGroups:
+  match rl:
+    case XGTip{}:
+      xgs.bin(rx, xgs.bin(x, l, XGTip{}), rr)
+    case XGBin{n, +y, +yl, +yr}:
+      xgs.bin(y, xgs.bin(x, l, yl), xgs.bin(rx, yr, rr))
+
+def xgs.rotl.of(single: Bool, +x: XGroup, l: XGroups, +rx: XGroup, rl: XGroups, rr: XGroups) -> XGroups:
+  match single:
+    case True{}:
+      xgs.bin(rx, xgs.bin(x, l, rl), rr)
+    case False{}:
+      xgs.dbll(x, l, rx, rr, rl)
+
+def xgs.rotl(+x: XGroup, l: XGroups, r: XGroups) -> XGroups:
+  match r:
+    case XGTip{}:
+      xgs.bin(x, l, XGTip{})
+    case XGBin{n, +rx, +rl, +rr}:
+      xgs.rotl.of(Nat.is_lt(xgs.size(rl), Nat.mul(2n, xgs.size(rr))), x, l, rx, rl, rr)
+
+def xgs.dblr(+x: XGroup, r: XGroups, +lx: XGroup, ll: XGroups, lr: XGroups) -> XGroups:
+  match lr:
+    case XGTip{}:
+      xgs.bin(lx, ll, xgs.bin(x, XGTip{}, r))
+    case XGBin{n, +y, +yl, +yr}:
+      xgs.bin(y, xgs.bin(lx, ll, yl), xgs.bin(x, yr, r))
+
+def xgs.rotr.of(single: Bool, +x: XGroup, r: XGroups, +lx: XGroup, ll: XGroups, lr: XGroups) -> XGroups:
+  match single:
+    case True{}:
+      xgs.bin(lx, ll, xgs.bin(x, lr, r))
+    case False{}:
+      xgs.dblr(x, r, lx, ll, lr)
+
+def xgs.rotr(+x: XGroup, l: XGroups, r: XGroups) -> XGroups:
+  match l:
+    case XGTip{}:
+      xgs.bin(x, XGTip{}, r)
+    case XGBin{n, +lx, +ll, +lr}:
+      xgs.rotr.of(Nat.is_lt(xgs.size(lr), Nat.mul(2n, xgs.size(ll))), x, r, lx, ll, lr)
+
+def xgs.bal.of(few: Bool, rh: Bool, lh: Bool, +x: XGroup, l: XGroups, r: XGroups) -> XGroups:
+  match few rh lh:
+    case True{} _ _:
+      xgs.bin(x, l, r)
+    case False{} True{} _:
+      xgs.rotl(x, l, r)
+    case False{} False{} True{}:
+      xgs.rotr(x, l, r)
+    case False{} False{} False{}:
+      xgs.bin(x, l, r)
+
+def xgs.balance(+x: XGroup, +l: XGroups, +r: XGroups) -> XGroups:
+  +sl = xgs.size(l)
+  +sr = xgs.size(r)
+  xgs.bal.of(Nat.is_le(Nat.add(sl, sr), 1n), Nat.is_lt(Nat.mul(3n, sl), sr), Nat.is_lt(Nat.mul(3n, sr), sl), x, l, r)
+
+# the element of key k in t; c is how k compares with t's root's
+def xgs.find(+t: XGroups, c: Cmp, +k: String) -> Maybe<&2, XGroup>:
+  match t c:
+    case XGTip{} _:
+      None{}
+    case XGBin{n, x, +l, r} LT{}:
+      xgs.find(l, xgs.at(l, k), k)
+    case XGBin{n, x, l, +r} GT{}:
+      xgs.find(r, xgs.at(r, k), k)
+    case XGBin{n, +x, l, r} EQ{}:
+      Some{x}
+
+# t with x in its place (t holds no element of x's key); c is how x's key
+# compares with t's root's
+def xgs.ins(t: XGroups, c: Cmp, +x: XGroup) -> XGroups:
+  match t c:
+    case XGTip{} _:
+      XGBin{1n, x, XGTip{}, XGTip{}}
+    case XGBin{n, +y, +l, +r} LT{}:
+      xgs.balance(y, xgs.ins(l, xgs.at(l, xgroup.name(x)), x), r)
+    case XGBin{n, +y, +l, +r} _:
+      xgs.balance(y, l, xgs.ins(r, xgs.at(r, xgroup.name(x)), x))
+
+def xgs.put(+x: XGroup, +t: XGroups) -> XGroups:
+  xgs.ins(t, xgs.at(t, xgroup.name(x)), x)
+
+# t with x in the place of the element of x's key, which t holds; c is
+# how x's key compares with t's root's
+def xgs.rep(t: XGroups, c: Cmp, +x: XGroup) -> XGroups:
+  match t c:
+    case XGTip{} _:
+      XGTip{}
+    case XGBin{+n, +y, +l, +r} LT{}:
+      XGBin{n, y, xgs.rep(l, xgs.at(l, xgroup.name(x)), x), r}
+    case XGBin{+n, +y, +l, +r} GT{}:
+      XGBin{n, y, l, xgs.rep(r, xgs.at(r, xgroup.name(x)), x)}
+    case XGBin{+n, y, +l, +r} EQ{}:
+      XGBin{n, x, l, r}
+
+def xgs.set(+x: XGroup, +t: XGroups) -> XGroups:
+  xgs.rep(t, xgs.at(t, xgroup.name(x)), x)
+
+# a node's element, made before the walk goes on (as it.el)
+def xgs.el(+x: XGroup) -> XGroup:
+  x
+
+# the elements of t in order, before acc
+def xgs.list(+t: XGroups, acc: List<&2, XGroup>) -> List<&2, XGroup>:
+  match t:
+    case XGTip{}:
+      acc
+    case XGBin{n, +x, +l, +r}:
+      y = xgs.el(x)
+      acc2 = xgs.list(r, acc)
+      xgs.list(l, y <> acc2)
+# END gen_streams: trees
